@@ -19,10 +19,6 @@
 mod acceptor_conf;
 mod ap_rep;
 mod ap_req;
-#[allow(
-    clippy::disallowed_methods,
-    reason = "a client operation reads its own profile (CF-4)"
-)]
 mod as_ex;
 mod auth_con;
 mod builders;
@@ -36,20 +32,12 @@ mod ccache_dir;
 mod ccache_mem;
 mod ccmarshal;
 mod chpw;
-#[allow(
-    clippy::disallowed_methods,
-    reason = "a client operation reads its own profile (CF-4)"
-)]
 mod clpreauth;
 #[cfg(any(test, feature = "diff"))]
 #[cfg_attr(not(feature = "diff"), allow(dead_code))]
 mod diff;
 mod error;
 mod framing;
-#[allow(
-    clippy::disallowed_methods,
-    reason = "a client operation reads its own profile (CF-4)"
-)]
 mod kcm;
 mod keytab;
 mod localaddr;
@@ -60,21 +48,9 @@ mod safe_priv;
 mod secret_file;
 #[cfg(target_os = "linux")]
 mod selabel;
-#[allow(
-    clippy::disallowed_methods,
-    reason = "a client operation reads its own profile (CF-4)"
-)]
 mod tgs;
 pub mod trace;
-#[allow(
-    clippy::disallowed_methods,
-    reason = "a client operation reads its own profile (CF-4)"
-)]
 mod transport;
-#[allow(
-    clippy::disallowed_methods,
-    reason = "a client operation reads its own profile (CF-4)"
-)]
 mod vfy_increds;
 
 pub use acceptor_conf::AcceptorConfig;
@@ -92,8 +68,8 @@ pub use as_ex::{
     as_exchange_prompted_defer_fast, as_exchange_with_keys, as_exchange_with_keys_defer_fast,
     as_exchange_with_unreadable_keytab, as_exchange_with_unreadable_keytab_defer_fast,
     as_identify_realm, as_init_creds_options, check_as_rep_times, conf_etypes,
-    conf_preferred_preauth_types, insert_module_padata_before_info_pa, sort_krb5_padata_sequence,
-    verify_as_reply_req_times, verify_as_reply_server,
+    insert_module_padata_before_info_pa, sort_krb5_padata_sequence, verify_as_reply_req_times,
+    verify_as_reply_server,
 };
 #[cfg(feature = "test-hooks")]
 pub use auth_con::set_test_seq_random;

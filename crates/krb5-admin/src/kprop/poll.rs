@@ -8,7 +8,7 @@ use std::path::Path;
 use std::sync::{Condvar, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use krb5_config::{IpropParams, Krb5Conf};
+use krb5_config::{ClientContext, IpropParams};
 use krb5_kdc::{IpropRole, PrincipalStore, Ulog};
 use krb5_log::klog::{self, Severity};
 use krb5_protocol::trace::{ERROR_TABLE_BASE_KRB5, error_message};
@@ -51,8 +51,9 @@ pub struct KpropdIprop<'a> {
     pub runonce: bool,
     /// `-d`: the debug lines on standard error, and `com_err` there instead of syslog.
     pub debug: bool,
-    /// kpropd's profile, the KDC context's, read when kpropd started.
-    pub profile: &'a Krb5Conf,
+    /// kpropd's context: the KDC context's profile and the environment's names, read when
+    /// kpropd started.
+    pub ctx: &'a ClientContext,
 }
 
 /// What ends the poller's wait early: SIGUSR1, or the listener after a full propagation.
@@ -143,7 +144,7 @@ pub fn kpropd_do_iprop(cfg: &KpropdIprop<'_>, wake: &IpropWake) -> i32 {
         0 => 10,
         t => t,
     };
-    let conf = cfg.profile;
+    let conf = &cfg.ctx.profile;
     // MIT `sn2princ_realm` (`kprop/kprop_util.c:35-57`): `kiprop` and this host, host-based, in kpropd's realm.
     let me = krb5_config::local_host_name(conf);
     let Ok(client) =
@@ -165,7 +166,7 @@ pub fn kpropd_do_iprop(cfg: &KpropdIprop<'_>, wake: &IpropWake) -> i32 {
     let mut frrequested: Option<i64> = None;
     'reinit: loop {
         log.debug(&format!("Initializing kadm5 as client {client_name}"));
-        let mut handle = match kiprop_init(cfg, conf, &client) {
+        let mut handle = match kiprop_init(cfg, &client) {
             Ok(h) => h,
             // MIT `do_iprop` (`kprop/kpropd.c:701-741`): a failed init is retried after a backoff, and an RPC failure is told apart.
             Err(InitFailure { rpc, text }) => {
@@ -381,17 +382,13 @@ impl InitFailure {
 /// MIT `init_any` (`lib/kadm5/clnt/client_init.c:172-361`): the admin server is required; the credentials come first, then the connection to `iprop_port`, then the context, and a kiprop handle makes no init call.
 /// MIT `kadm5_get_kiprop_host_srv_name` (`kprop/kpropd.c:1617-1630`): the service is `kiprop/` and the admin server.
 /// MIT `get_init_creds` (`lib/kadm5/clnt/client_init.c:366-434`): a decrypt failure is `KADM5_BAD_PASSWORD`, an unknown service `KADM5_SECURE_PRINC_MISSING`.
-fn kiprop_init(
-    cfg: &KpropdIprop<'_>,
-    conf: &Krb5Conf,
-    client: &PrincipalName,
-) -> Result<IpropClient, InitFailure> {
+fn kiprop_init(cfg: &KpropdIprop<'_>, client: &PrincipalName) -> Result<IpropClient, InitFailure> {
     let admin = cfg
         .admin_server
         .ok_or_else(|| InitFailure::kadm5(KADM5_MISSING_KRB5_CONF_PARAMS))?;
     let service = format!("{KIPROP_SVC_NAME}/{admin}");
     let creds =
-        init_creds_keytab(conf, cfg.realm, client, &service, cfg.keytab, true).map_err(|e| {
+        init_creds_keytab(cfg.ctx, cfg.realm, client, &service, cfg.keytab, true).map_err(|e| {
             let text = e.com_err.and_then(|(code, _)| code).unwrap_or_default();
             let is = |n: i64| text == error_message(ERROR_TABLE_BASE_KRB5 + n);
             if is(31) {

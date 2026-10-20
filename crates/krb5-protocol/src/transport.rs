@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use krb5_asn1::decode;
 use krb5_types::{KrbError, err};
 
-use krb5_config::KdcTransport;
+use krb5_config::{KdcTransport, Krb5Conf};
 
 use crate::error::Error;
 use crate::trace::{self, RemoteAddr, Transport};
@@ -61,8 +61,8 @@ pub(crate) enum SendKind {
 /// short, or a TCP length of 0 or over 1 MiB. TCP is tried for a request above
 /// `udp_preference_limit`, after a `RESPONSE_TOO_BIG` reply, or after UDP fails; when both
 /// fail, a UDP timeout yields the TCP error and any other UDP failure the UDP error.
-pub fn exchange(addr: &KdcAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
-    exchange_with_failover(std::slice::from_ref(addr), request)
+pub fn exchange(profile: &Krb5Conf, addr: &KdcAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
+    exchange_with_failover(profile, std::slice::from_ref(addr), request)
 }
 
 /// [`exchange`] of an AS or TGS request to `realm`'s KDC, traced as MIT traces it.
@@ -73,6 +73,7 @@ pub fn exchange(addr: &KdcAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
 /// two seconds, then two UDP passes at four and eight seconds. One KDC keeps [`exchange_one`]'s
 /// waits. An explicit address that is not that first KDC is contacted alone. HTTPS is not used.
 pub(crate) fn sendto_kdc(
+    profile: &Krb5Conf,
     addr: &KdcAddr,
     realm: &str,
     request: &[u8],
@@ -82,13 +83,13 @@ pub(crate) fn sendto_kdc(
     // MIT `k5_locate_server` (`lib/krb5/os/locate_kdc.c:853-878`): once per send. A caller that
     // already located `realm` handed that list down; this send does not query again.
     let found = krb5_config::take_handed_kdcs(realm, &addr.host, addr.port)
-        .unwrap_or_else(|| krb5_config::discover_kdc(realm));
+        .unwrap_or_else(|| profile.kdcs_for(realm).unwrap_or_default());
     let walk = found.len() > 1
         && found
             .first()
             .is_some_and(|ep| ep.host == addr.host && ep.port == addr.port);
     if !walk {
-        return exchange_one(addr, request, Some((realm, kind)));
+        return exchange_one(addr, request, profile.udp_limit(), Some((realm, kind)));
     }
     let addrs: Vec<(KdcAddr, KdcTransport)> = found
         .into_iter()
@@ -102,7 +103,7 @@ pub(crate) fn sendto_kdc(
             )
         })
         .collect();
-    exchange_passes(&addrs, request, Some((realm, kind)))
+    exchange_passes(&addrs, request, profile.udp_limit(), Some((realm, kind)))
 }
 
 /// One located KDC, resolved once. A name that does not resolve has no socket.
@@ -290,11 +291,12 @@ impl<'a> Passes<'a> {
 fn exchange_passes(
     addrs: &[(KdcAddr, KdcTransport)],
     request: &[u8],
+    udp_limit: usize,
     traced: Option<(&str, SendKind)>,
 ) -> Result<Vec<u8>, Error> {
     crate::capture_pdu("client-req", request);
     let mut walk = Passes::new(addrs, request, traced);
-    let udp_first = request.len() <= krb5_config::udp_preference_limit();
+    let udp_first = request.len() <= udp_limit;
     if let Some(reply) = walk.first_pass(udp_first) {
         return Ok(reply);
     }
@@ -463,10 +465,14 @@ pub fn exchange_on_tcp(addr: &KdcAddr, request: &[u8]) -> Result<Vec<u8>, Error>
 /// [`exchange`]: the first failure that is not retryable (a UDP send or receive error other
 /// than a timeout, refusal, reset, or interrupt) is returned at once, else the last KDC's
 /// [`Error::Io`].
-pub fn exchange_with_failover(addrs: &[KdcAddr], request: &[u8]) -> Result<Vec<u8>, Error> {
+pub fn exchange_with_failover(
+    profile: &Krb5Conf,
+    addrs: &[KdcAddr],
+    request: &[u8],
+) -> Result<Vec<u8>, Error> {
     let mut last = Error::transport_msg("no KDC addresses");
     for addr in addrs {
-        match exchange_one(addr, request, None) {
+        match exchange_one(addr, request, profile.udp_limit(), None) {
             Ok(r) => return Ok(r),
             Err(e) if e.is_retryable() => last = e,
             Err(e) => return Err(e),
@@ -483,11 +489,12 @@ pub fn exchange_with_failover(addrs: &[KdcAddr], request: &[u8]) -> Result<Vec<u
 fn exchange_one(
     addr: &KdcAddr,
     request: &[u8],
+    udp_limit: usize,
     traced: Option<(&str, SendKind)>,
 ) -> Result<Vec<u8>, Error> {
     crate::capture_pdu("client-req", request);
     let dest = dest_addr(addr)?;
-    if request.len() > krb5_config::udp_preference_limit() {
+    if request.len() > udp_limit {
         let reply = exchange_tcp(dest, request);
         if let Ok(bytes) = &reply {
             crate::capture_pdu("client-rep", bytes);
@@ -772,18 +779,11 @@ mod kdc_list {
     use std::thread;
     use std::time::{Duration, Instant};
 
+    use krb5_config::Krb5Conf;
+
     use super::{KdcAddr, SendKind, sendto_kdc};
 
-    struct ClearPaths;
-    impl Drop for ClearPaths {
-        fn drop(&mut self) {
-            krb5_config::set_test_krb5_paths(None);
-        }
-    }
-
-    fn pin(kdcs: &[&str]) -> ClearPaths {
-        let dir = krb5_testkit::scratch_dir("kl-kdc-list");
-        let path = dir.join("krb5.conf");
+    fn pin(kdcs: &[&str]) -> Krb5Conf {
         let mut body = String::from(
             "[libdefaults]\n    dns_lookup_kdc = false\n[realms]\n    KERBER.TEST = {\n",
         );
@@ -793,9 +793,7 @@ mod kdc_list {
             body.push('\n');
         }
         body.push_str("    }\n");
-        std::fs::write(&path, body).unwrap();
-        krb5_config::set_test_krb5_paths(Some(vec![path]));
-        ClearPaths
+        Krb5Conf::parse(&body).unwrap()
     }
 
     fn serve(stop_after: usize, reply_at: Option<usize>) -> (String, Arc<Mutex<Vec<Instant>>>) {
@@ -819,8 +817,9 @@ mod kdc_list {
         (format!("127.0.0.1:{port}"), hits)
     }
 
-    fn send(host: &str, port: u16) -> Result<Vec<u8>, super::Error> {
+    fn send(profile: &Krb5Conf, host: &str, port: u16) -> Result<Vec<u8>, super::Error> {
         sendto_kdc(
+            profile,
             &KdcAddr {
                 host: host.to_owned(),
                 port,
@@ -835,10 +834,10 @@ mod kdc_list {
     fn a_dead_first_profile_kdc_is_skipped_for_the_live_one() {
         let (dead, dead_hits) = serve(2, None);
         let (live, live_hits) = serve(1, Some(1));
-        let _pin = pin(&[&dead, &live]);
+        let profile = pin(&[&dead, &live]);
         let port: u16 = dead.rsplit_once(':').unwrap().1.parse().unwrap();
         let started = Instant::now();
-        let reply = send("127.0.0.1", port).unwrap();
+        let reply = send(&profile, "127.0.0.1", port).unwrap();
         let elapsed = started.elapsed();
         assert_eq!(reply, b"kdc-reply");
         assert!(elapsed > Duration::from_millis(700), "{elapsed:?}");
@@ -855,9 +854,9 @@ mod kdc_list {
     #[test]
     fn a_root_target_is_tried_and_the_next_kdc_answers() {
         let (live, hits) = serve(1, Some(1));
-        let _pin = pin(&["..", &live]);
+        let profile = pin(&["..", &live]);
         let started = Instant::now();
-        let reply = send("..", 88).unwrap();
+        let reply = send(&profile, "..", 88).unwrap();
         assert_eq!(reply, b"kdc-reply");
         assert!(started.elapsed() < Duration::from_secs(2));
         assert_eq!(hits.lock().unwrap().len(), 1);
@@ -866,9 +865,9 @@ mod kdc_list {
     #[test]
     fn a_single_kdc_retransmits_after_half_a_second() {
         let (only, hits) = serve(2, Some(2));
-        let _pin = pin(&[&only]);
+        let profile = pin(&[&only]);
         let port: u16 = only.rsplit_once(':').unwrap().1.parse().unwrap();
-        let reply = send("127.0.0.1", port).unwrap();
+        let reply = send(&profile, "127.0.0.1", port).unwrap();
         assert_eq!(reply, b"kdc-reply");
         let at = hits.lock().unwrap().clone();
         assert_eq!(at.len(), 2, "{at:?}");
@@ -882,9 +881,9 @@ mod kdc_list {
         let (dead, dead_hits) = serve(1, None);
         let (live, live_hits) = serve(1, Some(1));
         let (mock, mock_hits) = serve(1, Some(1));
-        let _pin = pin(&[&dead, &live]);
+        let profile = pin(&[&dead, &live]);
         let port: u16 = mock.rsplit_once(':').unwrap().1.parse().unwrap();
-        let reply = send("127.0.0.1", port).unwrap();
+        let reply = send(&profile, "127.0.0.1", port).unwrap();
         assert_eq!(reply, b"kdc-reply");
         assert!(dead_hits.lock().unwrap().is_empty());
         assert!(live_hits.lock().unwrap().is_empty());
@@ -895,10 +894,10 @@ mod kdc_list {
     fn every_profile_kdc_dead_is_an_unreachable_kdc() {
         let (first, first_hits) = serve(3, None);
         let (second, second_hits) = serve(3, None);
-        let _pin = pin(&[&first, &second]);
+        let profile = pin(&[&first, &second]);
         let port: u16 = first.rsplit_once(':').unwrap().1.parse().unwrap();
         let started = Instant::now();
-        let err = send("127.0.0.1", port).unwrap_err();
+        let err = send(&profile, "127.0.0.1", port).unwrap_err();
         let elapsed = started.elapsed();
         assert!(err.is_retryable(), "{err}");
         assert!(elapsed > Duration::from_secs(16), "{elapsed:?}");
@@ -957,7 +956,8 @@ mod kdc_list {
             ),
         ];
         let started = Instant::now();
-        let result = super::exchange_passes(&servers, b"ping", Some(("KERBER.TEST", SendKind::As)));
+        let result =
+            super::exchange_passes(&servers, b"ping", 1465, Some(("KERBER.TEST", SendKind::As)));
         let elapsed = started.elapsed();
         assert!(result.is_err(), "{result:?}");
         assert!(elapsed < Duration::from_millis(1500), "{elapsed:?}");

@@ -30,7 +30,9 @@ use krb5_client::{
     kinit_prompted, kinit_with, kt_client_default_name, kt_default_name, kt_resolve,
     mit_error_code, store_ccache_keep_default,
 };
-use krb5_config::{CcSpec, env_new_password, env_password, parse_ccspec, resolve_ccspec};
+use krb5_config::{
+    CcSpec, ClientContext, env_new_password, env_password, parse_ccspec, resolve_ccspec,
+};
 use krb5_protocol::{AsTicketOpts, KdcAddr, Keytab};
 use krb5_types::PrincipalName;
 use zeroize::Zeroize;
@@ -76,6 +78,8 @@ fn main() {
 
 /// What `k5_begin` chose.
 struct K5 {
+    /// The program's context, made at start.
+    ctx: ClientContext,
     /// The client.
     me: Princ,
     /// Its unparsed name.
@@ -101,9 +105,10 @@ fn k5_begin(prog: &str, opts: &KinitArgs) -> Option<K5> {
         eprintln!("{prog}: {e} {doing}");
         None
     };
-    if let Err(e) = krb5_client::init_context() {
-        return fail(&e, "while initializing Kerberos 5 library");
-    }
+    let ctx = match krb5_client::init_context() {
+        Ok(ctx) => ctx,
+        Err(e) => return fail(&e, "while initializing Kerberos 5 library"),
+    };
     let mut out: Option<Cache> = None;
     let mut out_spec: Option<CcSpec> = None;
     let mut defcache: Option<(CcSpec, Cache)> = None;
@@ -111,7 +116,7 @@ fn k5_begin(prog: &str, opts: &KinitArgs) -> Option<K5> {
     if let Some(name) = out_cache_name(opts) {
         match parse_ccspec(&name)
             .map_err(|e| Krb5Error::from_ccname(&e))
-            .and_then(|s| resolve(&s).map(|c| (s, c)))
+            .and_then(|s| resolve(&ctx, &s).map(|c| (s, c)))
         {
             Ok((s, c)) => {
                 out_spec = Some(store_spec(&s, &c));
@@ -123,12 +128,12 @@ fn k5_begin(prog: &str, opts: &KinitArgs) -> Option<K5> {
             eprintln!("Using specified cache: {name}");
         }
     } else {
-        let resolved = resolve_ccspec(None)
+        let resolved = resolve_ccspec(&ctx, None)
             .map_err(|e| Krb5Error::from_ccname(&e))
-            .and_then(|spec| resolve(&spec).map(|c| (spec, c)));
+            .and_then(|spec| resolve(&ctx, &spec).map(|c| (spec, c)));
         match resolved {
             Ok((spec, c)) => {
-                defcache_princ = c.principal().ok();
+                defcache_princ = c.principal(&ctx).ok();
                 defcache = Some((spec, c));
             }
             Err(e) => return fail(&e, "while getting default ccache"),
@@ -136,12 +141,12 @@ fn k5_begin(prog: &str, opts: &KinitArgs) -> Option<K5> {
     }
     let mut me: Option<Princ> = None;
     if let Some(name) = &opts.principal {
-        match parse_name(name, opts.enterprise) {
+        match parse_name(&ctx, name, opts.enterprise) {
             Ok(p) => me = Some(p),
             Err(e) => return fail(&e, &format!("when parsing name {name}")),
         }
     } else if opts.anonymous {
-        match default_realm() {
+        match default_realm(&ctx) {
             Some(r) => {
                 let anon =
                     PrincipalName::new(PrincipalName::NT_WELLKNOWN, ["WELLKNOWN", "ANONYMOUS"]);
@@ -155,14 +160,14 @@ fn k5_begin(prog: &str, opts: &KinitArgs) -> Option<K5> {
             }
         }
     } else if opts.keytab && opts.client_keytab {
-        match client_keytab_principal() {
+        match client_keytab_principal(&ctx) {
             Ok(p) => me = Some(p),
             Err((e, doing)) => return fail(&e, doing),
         }
     } else if opts.keytab {
-        me = Some(default_host_principal());
+        me = Some(default_host_principal(&ctx));
     } else if let Some(c) = &out {
-        me = c.principal().ok();
+        me = c.principal(&ctx).ok();
     } else if defcache_princ.is_some() {
         if let Some((s, c)) = defcache.take() {
             out_spec = Some(store_spec(&s, &c));
@@ -177,7 +182,7 @@ fn k5_begin(prog: &str, opts: &KinitArgs) -> Option<K5> {
             eprintln!("Unable to identify user");
             return None;
         };
-        match parse_name(&user, opts.enterprise) {
+        match parse_name(&ctx, &user, opts.enterprise) {
             Ok(p) => p,
             Err(e) => return fail(&e, &format!("when parsing name {user}")),
         }
@@ -187,7 +192,7 @@ fn k5_begin(prog: &str, opts: &KinitArgs) -> Option<K5> {
         && let Some((spec, defc)) = &defcache
         && defc.supports_switch()
     {
-        match cache_match(spec, &me) {
+        match cache_match(&ctx, spec, &me) {
             Ok(c) => {
                 if opts.verbose {
                     eprintln!("Using existing cache: {}", c.name());
@@ -198,7 +203,7 @@ fn k5_begin(prog: &str, opts: &KinitArgs) -> Option<K5> {
             }
             Err(e) if e.code == Code::CcNotfound => {
                 if defcache_princ.is_some() {
-                    match new_unique(spec) {
+                    match new_unique(&ctx, spec) {
                         Ok(c) => {
                             if opts.verbose {
                                 eprintln!("Using new cache: {}", c.name());
@@ -241,7 +246,7 @@ fn k5_begin(prog: &str, opts: &KinitArgs) -> Option<K5> {
                 if opts.verbose {
                     eprintln!("Using specified input cache: {n}");
                 }
-                krb5_client::load_ccache(&spec).ok()
+                krb5_client::load_ccache(&ctx, &spec).ok()
             }
         },
     };
@@ -250,6 +255,7 @@ fn k5_begin(prog: &str, opts: &KinitArgs) -> Option<K5> {
         eprintln!("Using principal: {name}");
     }
     Some(K5 {
+        ctx,
         me,
         name,
         out,
@@ -269,10 +275,10 @@ fn out_cache_name(opts: &KinitArgs) -> Option<String> {
 }
 
 /// MIT `k5_kt_get_principal` of `krb5_kt_client_default`: the client keytab's first principal.
-fn client_keytab_principal() -> Result<Princ, (Krb5Error, &'static str)> {
+fn client_keytab_principal(ctx: &ClientContext) -> Result<Princ, (Krb5Error, &'static str)> {
     let resolving = "When resolving the default client keytab";
     let determining = "When determining client principal name from keytab";
-    let name = kt_client_default_name();
+    let name = kt_client_default_name(ctx);
     let KeytabName::File(path) = kt_resolve(&name).map_err(|e| (e, resolving))? else {
         return Err((Krb5Error::of(Code::Other), determining));
     };
@@ -297,13 +303,15 @@ fn client_keytab_principal() -> Result<Princ, (Krb5Error, &'static str)> {
 
 /// MIT `krb5_sname_to_principal(NULL, NULL, KRB5_NT_SRV_HST)`: `host/<this host, lowercased>` in
 /// the host's realm (`[domain_realm]`), else the default realm.
-fn default_host_principal() -> Princ {
+fn default_host_principal(ctx: &ClientContext) -> Princ {
     let host = nix::unistd::gethostname()
         .map(|h| h.to_string_lossy().to_ascii_lowercase())
         .unwrap_or_default();
-    let realm = krb5_config::load_krb5_conf()
-        .and_then(|c| c.realm_for_host(&host).map(str::to_owned))
-        .or_else(default_realm)
+    let realm = ctx
+        .profile
+        .realm_for_host(&host)
+        .map(str::to_owned)
+        .or_else(|| default_realm(ctx))
         .unwrap_or_default();
     (
         krb5_protocol::realm(&realm),
@@ -346,7 +354,7 @@ fn k5_kinit(prog: &str, opts: &KinitArgs, k5: &K5) -> bool {
         Err(Failure::Reported) => return false,
     }
     if k5.switch_to_cache
-        && let Err(e) = k5.out.switch_to()
+        && let Err(e) = k5.out.switch_to(&k5.ctx)
     {
         eprintln!("{prog}: {e} while switching to new ccache");
         return false;
@@ -368,6 +376,7 @@ enum Failure {
 /// contents under the client (the credential's own with `-C`).
 fn valrenew(prog: &str, opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
     let cred = get_valrenewed_creds(
+        &k5.ctx,
         &k5.out.spec(),
         &k5.me,
         opts.service.as_deref(),
@@ -388,7 +397,7 @@ fn valrenew(prog: &str, opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
     if krb5_protocol::trace::enabled() {
         krb5_protocol::trace::write_out_ccache(&k5.out.full_name(), &cc);
     }
-    if let Err(e) = store_ccache_keep_default(&k5.out_spec, cc) {
+    if let Err(e) = store_ccache_keep_default(&k5.ctx, &k5.out_spec, cc) {
         let name = opts.ccache.as_deref().unwrap_or("");
         let e = krb5_client::store_error(e.as_ref());
         eprintln!("{prog}: {e} while saving to cache {name}");
@@ -414,21 +423,15 @@ fn armor_ccache_spec(name: &str) -> Result<CcSpec, Krb5Error> {
 #[expect(clippy::too_many_lines, reason = "one MIT function, kept whole")]
 fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
     let realm = String::from_utf8_lossy(k5.me.0.as_bytes()).into_owned();
-    let addr = kdc(opts, &realm).map_err(Failure::Error)?;
-    let conf = krb5_config::load_krb5_conf();
+    let addr = kdc(&k5.ctx, opts, &realm).map_err(Failure::Error)?;
+    let conf = &k5.ctx.profile;
     let mut ticket = AsTicketOpts {
-        lifetime: opts
-            .lifetime
-            .or_else(|| conf.as_ref().and_then(|c| c.ticket_lifetime_for(&realm))),
-        rlife: opts
-            .rlife
-            .or_else(|| conf.as_ref().and_then(|c| c.renew_lifetime_for(&realm))),
+        lifetime: opts.lifetime.or_else(|| conf.ticket_lifetime_for(&realm)),
+        rlife: opts.rlife.or_else(|| conf.renew_lifetime_for(&realm)),
         forwardable: opts
             .forwardable
-            .unwrap_or_else(|| conf.as_ref().is_none_or(|c| c.forwardable_for(&realm))),
-        proxiable: opts
-            .proxiable
-            .unwrap_or_else(|| conf.as_ref().is_none_or(|c| c.proxiable_for(&realm))),
+            .unwrap_or_else(|| conf.forwardable_for(&realm)),
+        proxiable: opts.proxiable.unwrap_or_else(|| conf.proxiable_for(&realm)),
         addresses: None,
         anonymous: opts.anonymous,
         starttime: opts.starttime,
@@ -451,17 +454,15 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
         },
         Some(false) => {}
         None => {
-            ticket.addresses = krb5_protocol::init_creds_addresses(
-                conf.as_ref().and_then(|c| c.noaddresses_for(&realm)),
-            )
-            .map_err(|e| Failure::Error(Krb5Error::from_local_addresses(&e)))?;
+            ticket.addresses = krb5_protocol::init_creds_addresses(conf.noaddresses_for(&realm))
+                .map_err(|e| Failure::Error(Krb5Error::from_local_addresses(&e)))?;
         }
     }
     let keytab = if opts.keytab {
         let name = match (&opts.keytab_path, opts.client_keytab) {
             (Some(n), _) => n.clone(),
-            (None, true) => kt_client_default_name(),
-            (None, false) => kt_default_name(),
+            (None, true) => kt_client_default_name(&k5.ctx),
+            (None, false) => kt_default_name(&k5.ctx),
         };
         match kt_resolve(&name) {
             Ok(KeytabName::File(p)) => Some(p),
@@ -528,9 +529,7 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
         keytab: keytab.as_deref(),
         ticket,
         anonymous: opts.anonymous,
-        canonicalize: opts.canonicalize
-            || opts.enterprise
-            || conf.as_ref().is_some_and(|c| c.canonicalize_for(&realm)),
+        canonicalize: opts.canonicalize || opts.enterprise || conf.canonicalize_for(&realm),
         new_password: new_password.as_deref(),
         prompter: (!opts.keytab).then_some(NewPasswordPrompter(&prompter)),
         key_exp_notice: Some(KeyExpNotice(&key_exp_notice)),
@@ -539,9 +538,11 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
     };
     let spec = &k5.out_spec;
     let result = match given {
-        Some(mut p) => kinit_with(&addr, &k5.name, &mut p, spec, params),
-        None if pw_auth => kinit_prompted(&addr, &k5.name, &mut read_password, spec, params),
-        None => kinit_with(&addr, &k5.name, &mut [], spec, params),
+        Some(mut p) => kinit_with(&k5.ctx, &addr, &k5.name, &mut p, spec, params),
+        None if pw_auth => {
+            kinit_prompted(&k5.ctx, &addr, &k5.name, &mut read_password, spec, params)
+        }
+        None => kinit_with(&k5.ctx, &addr, &k5.name, &mut [], spec, params),
     };
     if let Some(mut n) = new_password {
         n.zeroize();
@@ -588,13 +589,13 @@ fn init_error(
 }
 
 /// The KDC of the client's realm, or the gates' KDC host in a `test-hooks` build.
-fn kdc(opts: &KinitArgs, realm: &str) -> Result<KdcAddr, Krb5Error> {
+fn kdc(ctx: &ClientContext, opts: &KinitArgs, realm: &str) -> Result<KdcAddr, Krb5Error> {
     #[cfg(feature = "test-hooks")]
     if let Some(host) = &opts.gate.kdc_host {
         return Ok(gate::parse_host(host));
     }
     let _ = opts;
-    kdc_for_realm(realm)
+    kdc_for_realm(&ctx.profile, realm)
 }
 
 /// `-S`: the initial ticket's service, MIT's `in_tkt_service`. A `test-hooks` build keeps the

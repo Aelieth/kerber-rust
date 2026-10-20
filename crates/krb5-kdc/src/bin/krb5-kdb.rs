@@ -335,6 +335,7 @@ fn take_password(args: &[String]) -> (Option<Zeroizing<String>>, Vec<String>) {
 fn run(progname: String, args: &[String]) -> u8 {
     // MIT `main` (`kadmin/dbutil/kdb5_util.c:214-218`): the KDC context before the options; a
     // profile it refuses ends kdb5_util.
+    let _profile_read = krb5_config::ReadOnce::start();
     if let Err(e) = krb5_config::init_kdc_profile() {
         err_line(&format!(
             "{progname}: {} while initializing Kerberos code",

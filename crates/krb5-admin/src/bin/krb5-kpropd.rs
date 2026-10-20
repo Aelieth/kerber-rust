@@ -94,6 +94,7 @@ fn main() {
         .to_owned();
     // MIT `parse_args` (`kprop/kpropd.c:1056-1062`): the KDC context before the options; a
     // profile it refuses ends kpropd, named as invoked.
+    let profile_read = krb5_config::ReadOnce::start();
     if let Err(e) = krb5_config::init_kdc_profile() {
         let argv0 = argv.first().map_or("kpropd", String::as_str);
         eprintln!("{argv0}: {} while initializing krb5", e.init_text());
@@ -147,10 +148,10 @@ fn main() {
         std::process::exit(1);
     });
     let conf = Arc::new(AcceptorConfig::from_profile(&profile));
-    let kdc_context = Arc::new(profile.kdc_context);
+    let kdc_context = Arc::new(krb5_config::ClientContext::new(profile.kdc_context));
     let (db, stash) = (paths.database_name, paths.key_stash_file);
     // MIT `parse_args` (`kprop/kpropd.c:1147-1153`): kpropd's own principal, `host` and this host in its realm, is made once; a name that cannot be made ends kpropd.
-    let server = kpropd_server_name(&kdc_context).unwrap_or_else(|_| {
+    let server = kpropd_server_name(&kdc_context.profile).unwrap_or_else(|_| {
         let argv0 = argv.first().map_or("kpropd", String::as_str);
         eprintln!(
             "{argv0}: Illegal character in component name while trying to construct my service name"
@@ -159,6 +160,7 @@ fn main() {
     });
     // MIT `parse_args` (`kprop/kpropd.c:1170-1177`): with iprop enabled the replica's update log is mapped at the start, and one that cannot be is fatal.
     let iprop = krb5_config::IpropParams::load(&realm, &db);
+    drop(profile_read);
     if iprop.enabled
         && let Err(e) = krb5_kdc::Ulog::map(&iprop.logfile, iprop.ulogsize)
     {
@@ -184,7 +186,7 @@ fn main() {
             stash: stash.clone(),
             runonce,
             debug,
-            profile: Arc::clone(&kdc_context),
+            ctx: Arc::clone(&kdc_context),
         })
     });
     let stop = Arc::new(AtomicBool::new(false));
@@ -430,7 +432,7 @@ struct Poll {
     stash: PathBuf,
     runonce: bool,
     debug: bool,
-    profile: Arc<krb5_config::Krb5Conf>,
+    ctx: Arc<krb5_config::ClientContext>,
 }
 
 /// Start the iprop poll beside the listener, SIGUSR1 ending its wait; kpropd exits when the poll
@@ -452,7 +454,7 @@ fn start_iprop(poll: Poll) -> Arc<IpropWake> {
                 stash: &poll.stash,
                 runonce: poll.runonce,
                 debug: poll.debug,
-                profile: &poll.profile,
+                ctx: &poll.ctx,
             },
             &poke,
         );
@@ -523,9 +525,9 @@ fn host_keys(
     progname: &str,
     keytab: Option<&str>,
     server: &PrincipalName,
-    profile: &krb5_config::Krb5Conf,
+    ctx: &krb5_config::ClientContext,
 ) -> Option<KpropdKeys> {
-    match kpropd_keytab_keys(keytab, Some(server), profile) {
+    match kpropd_keytab_keys(keytab, Some(server), ctx) {
         Ok(keys) => Some(keys),
         Err(e) => {
             eprintln!("{progname}: Error in krb5_kt_resolve: {e}");

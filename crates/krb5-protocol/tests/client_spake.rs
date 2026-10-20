@@ -7,7 +7,6 @@
 mod common;
 
 use std::net::UdpSocket;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -51,21 +50,13 @@ fn run_with(
     rewrite: fn(Vec<u8>) -> Vec<u8>,
 ) -> (Result<AsOutcome, Error>, Vec<Sent>) {
     isolate_host_krb5();
-    if let Some(groups) = client_groups {
-        let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!(
-            "client-spake-{}-{}.conf",
-            std::process::id(),
-            groups.replace(' ', "_")
-        ));
-        std::fs::write(
-            &path,
-            format!(
-                "[libdefaults]\n    default_realm = {TEST_REALM}\n    dns_lookup_kdc = false\n    spake_preauth_groups = {groups}\n"
-            ),
-        )
-        .unwrap();
-        krb5_config::set_test_krb5_paths(Some(vec![path]));
-    }
+    let profile = match client_groups {
+        Some(groups) => krb5_config::Krb5Conf::parse(&format!(
+            "[libdefaults]\n    default_realm = {TEST_REALM}\n    dns_lookup_kdc = false\n    spake_preauth_groups = {groups}\n"
+        ))
+        .unwrap(),
+        None => krb5_config::isolated_profile(),
+    };
     let seen: Arc<Mutex<Vec<Sent>>> = Arc::new(Mutex::new(Vec::new()));
     let record = Arc::clone(&seen);
     let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
@@ -97,6 +88,7 @@ fn run_with(
             host: "127.0.0.1".into(),
             port,
         },
+        profile: &profile,
         want_spake: false,
         fast_armor: None,
         pkinit: None,

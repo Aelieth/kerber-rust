@@ -89,22 +89,23 @@ fn parse(args: &[String]) -> Result<Which, UsageError> {
 /// MIT `main` (`kswitch.c:92-127`): the library's profile, then the named cache resolved, or the
 /// principal's found in the default collection, and switched to.
 fn run(which: &Which) -> Result<(), (Krb5Error, String)> {
-    krb5_client::init_context().map_err(|e| (e, "while initializing krb5".to_owned()))?;
+    let ctx = krb5_client::init_context().map_err(|e| (e, "while initializing krb5".to_owned()))?;
+    let ctx = &ctx;
     let cache: Cache = match which {
         Which::Cache(name) => parse_ccspec(name)
             .map_err(|e| Krb5Error::from_ccname(&e))
-            .and_then(|spec| resolve(&spec))
+            .and_then(|spec| resolve(ctx, &spec))
             .map_err(|e| (e, format!("while resolving {name}")))?,
         Which::Principal(name) => {
-            let princ = parse_name(name, false)
+            let princ = parse_name(ctx, name, false)
                 .map_err(|e| (e, format!("while parsing principal name {name}")))?;
-            resolve_ccspec(None)
+            resolve_ccspec(ctx, None)
                 .map_err(|e| Krb5Error::from_ccname(&e))
-                .and_then(|default| cache_match(&default, &princ))
+                .and_then(|default| cache_match(ctx, &default, &princ))
                 .map_err(|e| (e, format!("while searching for ccache for {name}")))?
         }
     };
     cache
-        .switch_to()
+        .switch_to(ctx)
         .map_err(|e| (e, "while switching to credential cache".to_owned()))
 }

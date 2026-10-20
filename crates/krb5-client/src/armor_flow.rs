@@ -9,7 +9,7 @@ use std::thread;
 use std::time::Duration;
 
 use krb5_asn1::{decode, encode};
-use krb5_config::CcSpec;
+use krb5_config::{CcSpec, ClientContext, Krb5Conf};
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented};
 use krb5_kdc::{serve, shared_store};
 use krb5_protocol::KdcAddr;
@@ -24,18 +24,13 @@ struct Captured {
     reqs: Arc<Mutex<Vec<Vec<i32>>>>,
 }
 
-fn pin_conf(extra_realms: &str) {
-    krb5_config::isolate_test_krb5();
-    let dir = krb5_testkit::scratch_dir("p6g-r5-conf");
-    let path = dir.join("krb5.conf");
-    std::fs::write(
-        &path,
-        format!(
+fn pin_conf(extra_realms: &str) -> ClientContext {
+    ClientContext::new(
+        Krb5Conf::parse(&format!(
             "[libdefaults]\n    default_realm = {TEST_REALM}\n    dns_lookup_kdc = false\n    dns_lookup_realm = false\n    udp_preference_limit = 60000\n    spake_preauth_groups = nosuch\n{extra_realms}"
-        ),
+        ))
+        .unwrap(),
     )
-    .unwrap();
-    krb5_config::set_test_krb5_paths(Some(vec![path]));
 }
 
 fn boot(strip_fx_fast: bool) -> Captured {
@@ -189,7 +184,7 @@ fn out_spec(name: &str) -> CcSpec {
 
 #[test]
 fn disable_encrypted_timestamp_does_not_prompt_and_fails() {
-    pin_conf(&format!(
+    let ctx = pin_conf(&format!(
         "[realms]\n    {TEST_REALM} = {{\n        disable_encrypted_timestamp = true\n    }}\n"
     ));
     let cap = boot(false);
@@ -199,6 +194,7 @@ fn disable_encrypted_timestamp_does_not_prompt_and_fails() {
         Ok(zeroize::Zeroizing::new(TEST_USER_PASSWORD.to_vec()))
     };
     let result = kinit_prompted(
+        &ctx,
         &cap.addr,
         &format!("{TEST_USER}@{TEST_REALM}"),
         &mut prompt,

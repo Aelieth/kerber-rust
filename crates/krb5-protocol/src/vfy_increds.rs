@@ -8,6 +8,8 @@ use krb5_types::{
     EncKdcRepPart, EncryptionKey, KerberosTime, PrincipalName, Realm, Ticket, TicketFlags,
 };
 
+use krb5_config::Krb5Conf;
+
 use crate::acceptor_conf::AcceptorConfig;
 use crate::ap_req::{ApVerifyParams, build_ap_req, verify_ap_req_ex};
 use crate::as_ex::AsOutcome;
@@ -74,6 +76,7 @@ pub fn host_princs_from_keytab(keytab: &Keytab) -> Vec<(Realm, PrincipalName)> {
 /// [`Error::KrbError`] `NOKEY`, `BADKEYVER` or `TKT_EXPIRED`, or [`Error::Crypto`] for a wrong
 /// key).
 pub fn verify_init_creds(
+    profile: &Krb5Conf,
     creds: &CcacheCred,
     server: Option<(&Realm, &PrincipalName)>,
     keytab: Option<&Keytab>,
@@ -81,16 +84,13 @@ pub fn verify_init_creds(
     nofail: bool,
 ) -> Result<(), Error> {
     // MIT `get_vfy_cred` (`lib/krb5/krb/vfy_increds.c:151-151`): `krb5_rd_req` on the caller's own context, whose profile is krb5.conf.
-    let profile = krb5_config::load_krb5_conf();
-    let conf = profile
-        .as_ref()
-        .map_or_else(AcceptorConfig::default, AcceptorConfig::from_krb5_conf);
+    let conf = AcceptorConfig::from_krb5_conf(profile);
     let mut last = Err(no_verify_keys());
     let mut have_keys = false;
     if let Some((realm, name)) = server {
         if let Some(kt) = keytab.filter(|kt| keytab_has_server(kt, realm, name)) {
             have_keys = true;
-            last = get_vfy_cred(creds, realm, name, kt, kdc, &conf);
+            last = get_vfy_cred(profile, creds, realm, name, kt, kdc, &conf);
         }
     } else if let Some(kt) = keytab {
         let hosts = host_princs_from_keytab(kt);
@@ -98,7 +98,7 @@ pub fn verify_init_creds(
             have_keys = true;
             last = Err(no_verify_keys());
             for (realm, name) in &hosts {
-                last = get_vfy_cred(creds, realm, name, kt, kdc, &conf);
+                last = get_vfy_cred(profile, creds, realm, name, kt, kdc, &conf);
                 if last.is_ok() {
                     break;
                 }
@@ -126,6 +126,7 @@ fn princ_eq(a: &(Realm, PrincipalName), realm: &Realm, name: &PrincipalName) -> 
 /// builds the AP-REQ. Any other server is reached by a TGS exchange first, and the AP-REQ is
 /// checked only against that server's keytab entries.
 fn get_vfy_cred(
+    profile: &Krb5Conf,
     creds: &CcacheCred,
     realm: &Realm,
     name: &PrincipalName,
@@ -145,7 +146,7 @@ fn get_vfy_cred(
     } else {
         let tgt = cred_as_outcome(creds, &session, ticket);
         let realm_s = String::from_utf8_lossy(realm.as_bytes()).into_owned();
-        let tgs = tgs_exchange(kdc, &tgt, name.clone(), &realm_s)?;
+        let tgs = tgs_exchange(profile, kdc, &tgt, name.clone(), &realm_s)?;
         (tgs.ticket, tgs.session_key, tgt.crealm, tgt.cname)
     };
     let ap = build_ap_req(ticket, &session, &crealm, &cname)?;

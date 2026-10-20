@@ -2,7 +2,7 @@
 //! runs them: the cache is asked first, then the KDC, and what the KDC issued is stored back.
 
 use krb5_asn1::decode;
-use krb5_config::{CanonPrinc, CcSpec};
+use krb5_config::{CanonPrinc, CcSpec, ClientContext, Krb5Conf};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt_enc_data};
 use krb5_protocol::{
     AsOutcome, AsRequest, AsTicketOpts, CcacheCred, FileCcache, IdentifyReply, KdcAddr, Keytab,
@@ -38,8 +38,8 @@ fn realm_str(r: &Realm) -> String {
 
 /// `[libdefaults] default_realm`.
 #[must_use]
-pub fn default_realm() -> Option<String> {
-    krb5_config::load_krb5_conf().and_then(|c| c.default_realm)
+pub fn default_realm(ctx: &ClientContext) -> Option<String> {
+    ctx.profile.default_realm.clone()
 }
 
 /// MIT `krb5_parse_name_flags`: `name` in the default realm unless it names one, as one
@@ -49,13 +49,13 @@ pub fn default_realm() -> Option<String> {
 ///
 /// [`Krb5Error`] `KRB5_PARSE_MALFORMED` for a malformed name, `KRB5_CONFIG_NODEFREALM` for a name
 /// with no realm when the profile names no default realm.
-pub fn parse_name(name: &str, enterprise: bool) -> Result<Princ, Krb5Error> {
+pub fn parse_name(ctx: &ClientContext, name: &str, enterprise: bool) -> Result<Princ, Krb5Error> {
     let p = krb5_types::parse_name_ex(name, "", enterprise)
         .map_err(|_| Krb5Error::of(Code::ParseMalformed))?;
     let realm = if p.has_realm {
         p.realm
     } else {
-        default_realm().ok_or_else(|| Krb5Error::of(Code::NoDefRealm))?
+        default_realm(ctx).ok_or_else(|| Krb5Error::of(Code::NoDefRealm))?
     };
     let (n, _) = krb5_types::principal_from_unparsed_ex(name, &realm, enterprise)
         .map_err(|_| Krb5Error::of(Code::ParseMalformed))?;
@@ -112,24 +112,26 @@ impl MatchCreds<'_> {
 
 /// One cache, open: its contents as read, and each credential [`OpenCache::store`] has stored
 /// since.
-pub struct OpenCache {
+pub struct OpenCache<'c> {
+    /// The context the cache was opened in.
+    pub ctx: &'c ClientContext,
     /// The resolved name.
     pub spec: CcSpec,
     /// Its contents.
     pub cc: FileCcache,
 }
 
-impl OpenCache {
+impl<'c> OpenCache<'c> {
     /// Read `spec`.
     ///
     /// # Errors
     ///
     /// [`Krb5Error`] as MIT's `krb5_cc_get_principal` reports a cache that cannot be read: no
     /// cache is `KRB5_FCC_NOFILE` (with the file name for a FILE or DIR cache).
-    pub fn open(spec: CcSpec) -> Result<Self, Krb5Error> {
-        let cc =
-            crate::load_ccache(&spec).map_err(|e| crate::cache_read_error(&spec, e.as_ref()))?;
-        Ok(Self { spec, cc })
+    pub fn open(ctx: &'c ClientContext, spec: CcSpec) -> Result<Self, Krb5Error> {
+        let cc = crate::load_ccache(ctx, &spec)
+            .map_err(|e| crate::cache_read_error(ctx, &spec, e.as_ref()))?;
+        Ok(Self { ctx, spec, cc })
     }
 
     /// The cache's default principal.
@@ -189,14 +191,16 @@ impl OpenCache {
     /// file name (`KRB5_FCC_NOFILE` for a file gone since it was read, the lock's errno text for
     /// a refused lock); for KCM, as [`Krb5Error::from_kcm`].
     pub fn store(&mut self, cred: CcacheCred) -> Result<(), Krb5Error> {
-        crate::trace::store(&self.spec, &cred);
+        crate::trace::store(self.ctx, &self.spec, &cred);
         let stored = match &self.spec {
-            CcSpec::Kcm(n) => krb5_protocol::kcm_store_creds(n, std::slice::from_ref(&cred))
-                .map_err(|e| Krb5Error::from_kcm(&e)),
+            CcSpec::Kcm(n) => {
+                krb5_protocol::kcm_store_creds(&self.ctx.profile, n, std::slice::from_ref(&cred))
+                    .map_err(|e| Krb5Error::from_kcm(&e))
+            }
             CcSpec::Memory(_) => {
                 let mut cc = self.cc.clone();
                 cc.creds.push(cred.clone());
-                crate::store_ccache_keep_default(&self.spec, cc)
+                crate::store_ccache_keep_default(self.ctx, &self.spec, cc)
                     .map_err(|e| Krb5Error::new(Code::Other, e.to_string()))
             }
             CcSpec::File(_) | CcSpec::Dir(_) => match crate::cache_file_path(&self.spec) {
@@ -249,8 +253,8 @@ impl OpenCache {
 /// # Errors
 ///
 /// [`Krb5Error`] `KRB5_REALM_UNKNOWN` when neither `krb5.conf` nor DNS names a KDC.
-pub fn kdc_for_realm(realm: &str) -> Result<KdcAddr, Krb5Error> {
-    let found = krb5_config::discover_kdc(realm);
+pub fn kdc_for_realm(profile: &Krb5Conf, realm: &str) -> Result<KdcAddr, Krb5Error> {
+    let found = profile.kdcs_for(realm).unwrap_or_default();
     let Some(ep) = found.first() else {
         krb5_config::clear_handed();
         return Err(Krb5Error::new(
@@ -349,12 +353,12 @@ impl GetCredsOptions {
             reason = "the override exists in a test-hooks build only"
         )
     )]
-    fn kdc(&self, realm: &str) -> Result<KdcAddr, Krb5Error> {
+    fn kdc(&self, profile: &Krb5Conf, realm: &str) -> Result<KdcAddr, Krb5Error> {
         #[cfg(feature = "test-hooks")]
         if let Some(k) = &self.kdc {
             return Ok(k.clone());
         }
-        kdc_for_realm(realm)
+        kdc_for_realm(profile, realm)
     }
 }
 
@@ -396,8 +400,8 @@ pub fn get_credentials(
         now,
     };
     crate::trace::tkt_creds_begin(cache, me, server);
-    let conf = krb5_config::load_krb5_conf().unwrap_or_default();
-    let mut candidates = CanonPrinc::new(&conf, server);
+    let ctx = cache.ctx;
+    let mut candidates = CanonPrinc::new(&ctx.profile, server);
     let mut candidate = candidates
         .next_candidate()
         .map_err(|e| Krb5Error::from_sname(&e))?
@@ -467,10 +471,17 @@ fn request_service(
     }
     crate::trace::tgt_for(cache, &srealm);
     let (presented, hop) = cache.tgt_for(&srealm)?;
-    let kdc = opts.kdc(&hop)?;
+    let kdc = opts.kdc(&cache.ctx.profile, &hop)?;
     let tgt = outcome_from_cred(&presented)?;
-    tgs_exchange_path(&kdc, &tgt, server.1.clone(), &srealm, &tgs)
-        .map_err(|e| Krb5Error::from_tgs(&e, &hop))
+    tgs_exchange_path(
+        &cache.ctx.profile,
+        &kdc,
+        &tgt,
+        server.1.clone(),
+        &srealm,
+        &tgs,
+    )
+    .map_err(|e| Krb5Error::from_tgs(&e, &hop))
 }
 
 /// MIT `krb5_get_credentials_for_user` (`s4u_creds.c:663-692`): a matching cached credential, else an AS realm probe for an enterprise name, a second cache lookup of that principal, else S4U2Self in the realm the probe identified.
@@ -501,7 +512,7 @@ pub fn get_credentials_for_user(
     if opts.cached_only {
         return Err(cache.not_found());
     }
-    let user = s4u_identify_user(for_user, self_sname, opts)?;
+    let user = s4u_identify_user(&cache.ctx.profile, for_user, self_sname, opts)?;
     if for_user.1.name_type == PrincipalName::NT_ENTERPRISE {
         crate::trace::tkt_creds_begin(cache, &user, self_sname);
         let identified = MatchCreds {
@@ -521,9 +532,10 @@ pub fn get_credentials_for_user(
     let srealm = realm_str(&self_sname.0);
     crate::trace::tgt_creds(cache, &srealm);
     let (presented, hop) = cache.tgt_for(&srealm)?;
-    let kdc = opts.kdc(&hop)?;
+    let kdc = opts.kdc(&cache.ctx.profile, &hop)?;
     let tgt = outcome_from_cred(&presented)?;
     let out = tgs_s4u(
+        &cache.ctx.profile,
         &kdc,
         &tgt,
         self_sname.1.clone(),
@@ -562,6 +574,7 @@ pub fn get_credentials_for_user(
 /// MIT `s4u_identify_user` (`lib/krb5/krb/s4u_creds.c:54-73`): a name that is not an enterprise name is the user, or the service for the anonymous principal; an enterprise name is looked for from the service's realm.
 /// MIT `s4u_identify_user` (`lib/krb5/krb/s4u_creds.c:78-87`): a certificate and no client name is an empty NT-X500 principal in the service realm. This request always names a client, so that path is not taken.
 fn s4u_identify_user(
+    profile: &Krb5Conf,
     user: &Princ,
     server: &Princ,
     opts: &GetCredsOptions,
@@ -576,7 +589,7 @@ fn s4u_identify_user(
                 .eq([&b"WELLKNOWN"[..], &b"ANONYMOUS"[..]]);
         return Ok(if anonymous { server } else { user }.clone());
     }
-    identify_realm(&user.1, &realm_str(&server.0), opts)
+    identify_realm(profile, &user.1, &realm_str(&server.0), opts)
 }
 
 /// The realm `client` exists in, starting from `realm`: one AS request per realm, following a
@@ -584,20 +597,22 @@ fn s4u_identify_user(
 /// MIT `k5_identify_realm` (`lib/krb5/krb/get_in_tkt.c:2062-2083`): the request asks for a 15-second ticket, neither renewable nor forwardable nor proxiable, canonicalized, and the realm it ends in is the client's.
 /// MIT `init_creds_step_request` (`lib/krb5/krb/get_in_tkt.c:1268-1271`): sixteen requests at most, then `KRB5_GET_IN_TKT_LOOP`.
 fn identify_realm(
+    profile: &Krb5Conf,
     client: &PrincipalName,
     realm: &str,
     opts: &GetCredsOptions,
 ) -> Result<Princ, Krb5Error> {
-    let etypes = krb5_protocol::conf_etypes(false);
+    let etypes = krb5_protocol::conf_etypes(profile, false);
     let mut realm = realm.to_owned();
     crate::trace::init_creds(client, &realm, None);
     for _ in 0..16 {
-        let kdc = opts.kdc(&realm)?;
+        let kdc = opts.kdc(profile, &realm)?;
         let req = AsRequest {
             cname: client.clone(),
             realm: &realm,
             password: b"",
             kdc: &kdc,
+            profile,
             want_spake: false,
             fast_armor: None,
             pkinit: None,
@@ -676,12 +691,19 @@ pub fn get_credentials_for_proxy(
     } else {
         let srealm = realm_str(&server.0);
         let (presented, hop) = cache.tgt_for(&srealm)?;
-        let kdc = opts.kdc(&hop)?;
+        let kdc = opts.kdc(&cache.ctx.profile, &hop)?;
         let tgt = outcome_from_cred(&presented)?;
         let ticket: Ticket =
             decode(&evidence.ticket).map_err(|e| Krb5Error::new(Code::Other, e.to_string()))?;
-        let out = tgs_s4u2proxy(&kdc, &tgt, server.1.clone(), &hop, ticket)
-            .map_err(|e| Krb5Error::from_tgs(&e, &hop))?;
+        let out = tgs_s4u2proxy(
+            &cache.ctx.profile,
+            &kdc,
+            &tgt,
+            server.1.clone(),
+            &hop,
+            ticket,
+        )
+        .map_err(|e| Krb5Error::from_tgs(&e, &hop))?;
         let mut cred = cred_from_tgs(&(out.crealm.clone(), out.cname.clone()), &out)?;
         cred.server = server.clone();
         cred.second_ticket.clone_from(&evidence.ticket);
@@ -708,6 +730,7 @@ pub fn get_credentials_for_proxy(
 /// (`KRB5_CC_NOTFOUND`, with the file name for a file cache), or the KDC refuses or cannot be
 /// reached.
 pub fn get_valrenewed_creds(
+    ctx: &ClientContext,
     spec: &CcSpec,
     client: &Princ,
     service: Option<&str>,
@@ -715,7 +738,7 @@ pub fn get_valrenewed_creds(
 ) -> Result<CcacheCred, Krb5Error> {
     let server = match service {
         Some(s) => {
-            let (_, name) = parse_name(s, false)?;
+            let (_, name) = parse_name(ctx, s, false)?;
             (client.0.clone(), name)
         }
         None => (
@@ -723,7 +746,7 @@ pub fn get_valrenewed_creds(
             PrincipalName::krbtgt(&realm_str(&client.0)),
         ),
     };
-    let cache = OpenCache::open(spec.clone())?;
+    let cache = OpenCache::open(ctx, spec.clone())?;
     let old = cache.cc.creds.iter().find(|c| {
         !c.is_config()
             && !c.is_removed()
@@ -734,12 +757,12 @@ pub fn get_valrenewed_creds(
     let old =
         crate::trace::retrieved(&cache, client, &server, old).ok_or_else(|| cache.not_found())?;
     let realm = realm_str(&old.server.0);
-    let kdc = kdc_for_realm(&realm)?;
+    let kdc = kdc_for_realm(&ctx.profile, &realm)?;
     let tgt = outcome_from_cred(old)?;
     let out = if validate {
-        krb5_protocol::tgs_validate(&kdc, &tgt)
+        krb5_protocol::tgs_validate(&ctx.profile, &kdc, &tgt)
     } else {
-        krb5_protocol::tgs_renew(&kdc, &tgt)
+        krb5_protocol::tgs_renew(&ctx.profile, &kdc, &tgt)
     }
     .map_err(|e| Krb5Error::from_tgs(&e, &realm))?;
     cred_from_tgs(client, &out)
@@ -751,8 +774,8 @@ pub fn get_valrenewed_creds(
 /// # Errors
 ///
 /// [`Krb5Error`] when the cache cannot be read or holds no `krbtgt/<realm>@<realm>`.
-pub fn get_u2u_ticket(spec: CcSpec) -> Result<Ticket, Krb5Error> {
-    let cache = OpenCache::open(spec)?;
+pub fn get_u2u_ticket(ctx: &ClientContext, spec: CcSpec) -> Result<Ticket, Krb5Error> {
+    let cache = OpenCache::open(ctx, spec)?;
     let me = cache.principal();
     let tgs = (me.0.clone(), PrincipalName::krbtgt(&realm_str(&me.0)));
     let m = MatchCreds {

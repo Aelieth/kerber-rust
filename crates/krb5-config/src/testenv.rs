@@ -59,6 +59,14 @@ pub fn set_test_kdc_profile(path: Option<PathBuf>) {
     TEST_KDC_PROFILE.with(|c| *c.borrow_mut() = path);
 }
 
+const ISOLATED_KRB5: &str = "[libdefaults]\n    default_realm = KERBER.TEST\n    dns_lookup_kdc = false\n    dns_lookup_realm = false\n";
+
+/// The profile [`isolate_test_krb5`] pins, for a client operation a test runs.
+#[must_use]
+pub fn isolated_profile() -> crate::Krb5Conf {
+    crate::Krb5Conf::parse(ISOLATED_KRB5).unwrap_or_else(|_| crate::Krb5Conf::new())
+}
+
 /// Pin a realm-only krb5.conf, so a host's `udp_preference_limit` cannot force TCP, and an empty
 /// KDC profile, so neither file brings in a host's `[libdefaults]` (`permitted_enctypes`, say),
 /// on this thread.
@@ -72,10 +80,7 @@ pub fn isolate_test_krb5() {
     );
     let krb5 = dir.join(format!("kerber-test-krb5-{stem}.conf"));
     let kdc = dir.join(format!("kerber-test-kdc-{stem}.conf"));
-    let _ = std::fs::write(
-        &krb5,
-        "[libdefaults]\n    default_realm = KERBER.TEST\n    dns_lookup_kdc = false\n    dns_lookup_realm = false\n",
-    );
+    let _ = std::fs::write(&krb5, ISOLATED_KRB5);
     let _ = std::fs::write(&kdc, "");
     set_test_krb5_paths(Some(vec![krb5.clone()]));
     set_test_kdc_profile(Some(kdc.clone()));

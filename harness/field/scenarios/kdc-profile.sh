@@ -30,7 +30,11 @@
 #         MIT leg, else runs/mit-latest; with neither, a FAIL);
 #   CF.e0: strace on kadmind while client2 changes cfpw's password and runs a kadmin session, and on a second kpropd
 #         (port 7754, its own kdc.conf, database, keytab and ACL) while kdc's kprop sends it the realm: neither opens
-#         krb5.conf or kdc.conf for a request (lib/profile-opens.sh). strace is installed when kdc lacks it.
+#         krb5.conf or kdc.conf for a request (lib/profile-opens.sh). strace is installed when kdc lacks it;
+#   CF.4: strace on kdc's kinit (a keytab's principal), kvno and kadmin.local -q getprinc, MIT's on the mit leg and
+#         the ref's build on the rust leg (its kinit and kvno from the checkout's target/release), and on the start of
+#         krb5kdc, kadmind and a kpropd on port 7754 (each unit stopped while its daemon runs under strace for 4 s):
+#         each opens each profile file once, as MIT's context reads it (lib/client-opens.sh).
 # Graded on both legs, MIT's first.
 # vms: kdc client2
 # legs: mit rust
@@ -55,6 +59,8 @@ CF="export KRB5_CONFIG=\$HOME/cf/krb5.conf"
 cleanup() {
     timeout -k 5 60 "$LAB" ssh kdc -- "sudo rm -f /etc/krb5-rep2a.conf; [ -e $SC.cf ] && sudo mv $SC.cf $SC; [ -e $KC.cf ] && sudo mv $KC.cf $KC && sudo systemctl reset-failed krb5kdc kadmin && sudo systemctl restart krb5kdc kadmin; for p in cfskew cfpw; do sudo kadmin.local -q \"delprinc -force \$p\"; done; sudo rm -f $KC.inc; sudo pkill -x strace; true" < /dev/null > /dev/null 2>&1
     timeout -k 5 60 "$LAB" ssh kdc -- "sudo sh -s -- kpropd-stop $REALM" < "$FIELD_LIB/profile-opens.sh" > /dev/null 2>&1
+    timeout -k 5 60 "$LAB" ssh kdc -- "sudo sh -s -- teardown" < "$FIELD_LIB/client-opens.sh" > /dev/null 2>&1
+    timeout -k 5 60 "$LAB" ssh kdc -- "sudo pkill -x strace; sudo systemctl reset-failed krb5kdc kadmin; sudo systemctl start krb5kdc kadmin" < /dev/null > /dev/null 2>&1
     timeout -k 5 60 "$LAB" ssh client2 -- 'sudo systemctl start chronyd; rm -rf ~/cf; true' < /dev/null > /dev/null 2>&1
 }
 trap cleanup EXIT
@@ -254,4 +260,36 @@ check CF.e0.kprop 'SUCCEEDED$' run kdc "sudo kprop -r $REALM -f /var/tmp/cf-e0/d
 check CF.e0.kpropd.loaded '^loaded$' run kdc "for i in \$(seq 1 40); do sudo test -e /var/tmp/cf-e0/replica/principal && break; sleep 0.25; done; sleep 1; sudo test -e /var/tmp/cf-e0/replica/principal && echo loaded"
 opened kpropd
 check CF.e0.kpropd.stop '^kpropd stopped' runin kdc "lib/profile-opens.sh" "sudo sh -s -- kpropd-stop $REALM" < "$FIELD_LIB/profile-opens.sh"
+
+# client <name> <program> <args>: the program under strace on kdc; it ran, and opened no profile file twice.
+client() {
+    local name=$1
+    shift
+    check "CF.4.$name.rc" "^$name rc=0\$" runin kdc "lib/client-opens.sh" "sudo sh -s -- run $name $*" < "$FIELD_LIB/client-opens.sh"
+    checklast "CF.4.$name.opens" "^$name most opens of one profile file: 1\$"
+}
+
+# daemon <name> <unit> <daemon> <args>: the daemon's start under strace on kdc; it listened, and opened no profile file
+# twice.
+daemon() {
+    local name=$1
+    shift
+    check "CF.4.$name.listening" "^$name listening: [1-9][0-9]*\$" runin kdc "lib/client-opens.sh" "sudo sh -s -- start $name $*" < "$FIELD_LIB/client-opens.sh"
+    checklast "CF.4.$name.opens" "^$name most opens of one profile file: 1\$"
+}
+
+section "CF.4 kinit, kvno, kadmin.local and the daemons' starts each open each profile file once (MIT and ours)"
+if [ "$LEG" = rust ]; then
+    BIN="\$HOME/kerber-rust-${FIELD_SHA:0:12}/target/release/krb5-"
+else
+    BIN=/usr/bin/
+fi
+check CF.4.setup '^cf4 keytab written$' runin kdc "lib/client-opens.sh" "sudo sh -s -- setup $REALM" < "$FIELD_LIB/client-opens.sh"
+client kinit "${BIN}kinit -k -t /var/tmp/cf-4/cf4.kt -c FILE:/var/tmp/cf-4/cc cf4@$REALM"
+client kvno "${BIN}kvno -c FILE:/var/tmp/cf-4/cc cf4@$REALM"
+client kadmin.local "/usr/sbin/kadmin.local -q 'getprinc cf4'"
+daemon krb5kdc krb5kdc /usr/sbin/krb5kdc -n
+daemon kadmind kadmin /usr/sbin/kadmind -nofork
+daemon kpropd - /usr/sbin/kpropd -D -P 7754 -r "$REALM"
+check CF.4.teardown '^cf4 removed$' runin kdc "lib/client-opens.sh" "sudo sh -s -- teardown" < "$FIELD_LIB/client-opens.sh"
 finish

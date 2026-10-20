@@ -10,7 +10,7 @@ use krb5_client::ccol::{cache_match, collection, resolve};
 use krb5_client::cli::{UsageError, UsageLine, getopt_each, own, progname};
 use krb5_client::creds::parse_name;
 use krb5_client::errmsg::{Code, Krb5Error};
-use krb5_config::{CcSpec, parse_ccspec, resolve_ccspec};
+use krb5_config::{CcSpec, ClientContext, parse_ccspec, resolve_ccspec};
 
 fn main() {
     let argv: Vec<String> = std::env::args().collect();
@@ -121,20 +121,24 @@ fn parse(args: &[String]) -> Result<Args, Parsed> {
 /// failure; any other failure is "Ticket cache NOT destroyed!" and exit 1. A remaining cache in the
 /// collection is warned of.
 fn run(prog: &str, args: &Args) -> i32 {
-    if let Err(e) = krb5_client::init_context() {
-        krb5_client::com_err!(prog, e, "while initializing krb5");
-        return 1;
-    }
+    let ctx = match krb5_client::init_context() {
+        Ok(ctx) => ctx,
+        Err(e) => {
+            krb5_client::com_err!(prog, e, "while initializing krb5");
+            return 1;
+        }
+    };
+    let ctx = &ctx;
     let default = match &args.cache {
         Some(name) => parse_ccspec(name),
-        None => resolve_ccspec(None),
+        None => resolve_ccspec(ctx, None),
     }
     .map_err(|e| Krb5Error::from_ccname(&e));
     if args.all {
         let Ok(default) = default else {
             return 0;
         };
-        let caches = match collection(&default) {
+        let caches = match collection(ctx, &default) {
             Ok(c) => c,
             Err(e) => {
                 krb5_client::com_err!(prog, e, "while listing credential caches");
@@ -142,7 +146,7 @@ fn run(prog: &str, args: &Args) -> i32 {
             }
         };
         for cache in caches {
-            if let Err(e) = cache.destroy()
+            if let Err(e) = cache.destroy(ctx)
                 && e.code != Code::FccNofile
             {
                 krb5_client::com_err!(prog, e, "while destroying cache {}", cache.full_name());
@@ -152,7 +156,7 @@ fn run(prog: &str, args: &Args) -> i32 {
     }
     let cache = match &args.princ {
         Some(name) => {
-            let princ = match parse_name(name, false) {
+            let princ = match parse_name(ctx, name, false) {
                 Ok(p) => p,
                 Err(e) => {
                     krb5_client::com_err!(prog, e, "while parsing principal name {name}");
@@ -162,7 +166,7 @@ fn run(prog: &str, args: &Args) -> i32 {
             match default
                 .as_ref()
                 .map_err(Clone::clone)
-                .and_then(|d| cache_match(d, &princ))
+                .and_then(|d| cache_match(ctx, d, &princ))
             {
                 Ok(c) => c,
                 Err(e) => {
@@ -171,7 +175,11 @@ fn run(prog: &str, args: &Args) -> i32 {
                 }
             }
         }
-        None => match default.as_ref().map_err(Clone::clone).and_then(resolve) {
+        None => match default
+            .as_ref()
+            .map_err(Clone::clone)
+            .and_then(|d| resolve(ctx, d))
+        {
             Ok(c) => c,
             Err(e) => {
                 krb5_client::com_err!(prog, e, "while resolving ccache");
@@ -180,7 +188,7 @@ fn run(prog: &str, args: &Args) -> i32 {
         },
     };
     let mut errflg = 0;
-    if let Err(e) = cache.destroy() {
+    if let Err(e) = cache.destroy(ctx) {
         krb5_client::com_err!(prog, e, "while destroying cache");
         if e.code != Code::FccNofile {
             if args.quiet {
@@ -196,15 +204,15 @@ fn run(prog: &str, args: &Args) -> i32 {
         && args.princ.is_none()
         && let Ok(default) = default
     {
-        return remaining_cc_warning(prog, &default);
+        return remaining_cc_warning(ctx, prog, &default);
     }
     errflg
 }
 
 /// MIT `print_remaining_cc_warning` (`kdestroy.c:62-83`): a cache left in the collection is
 /// warned of.
-fn remaining_cc_warning(prog: &str, default: &CcSpec) -> i32 {
-    match collection(default) {
+fn remaining_cc_warning(ctx: &ClientContext, prog: &str, default: &CcSpec) -> i32 {
+    match collection(ctx, default) {
         Ok(caches) => {
             if !caches.is_empty() {
                 eprintln!("Other credential caches present, use -A to destroy all");

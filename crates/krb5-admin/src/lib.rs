@@ -15,10 +15,6 @@
 
 mod getdate;
 mod kadm5;
-#[allow(
-    clippy::disallowed_methods,
-    reason = "a client operation reads its own profile (CF-4)"
-)]
 mod kadmin_cli;
 mod kadmind;
 mod kprop;
@@ -42,8 +38,8 @@ pub use kprop::{
     IpropPoll, IpropWake, KPROP_SERVICE, KpropAuth, KpropCreds, KpropDump, KpropError,
     KpropdConfig, KpropdIprop, KpropdKeys, KpropdKeytabError, KpropdLookup, RemoteError,
     iprop_dump_last, iprop_poll_once, is_iprop_dump, kprop_dump_bytes, kprop_expired_ap_req,
-    kprop_get_tickets, kprop_keytab_file, kprop_load_bytes, kprop_load_with_stash,
-    kprop_open_connection, kprop_send_dump, kprop_send_store, kprop_sendauth, kprop_service_port,
+    kprop_get_tickets, kprop_load_bytes, kprop_load_with_stash, kprop_open_connection,
+    kprop_send_dump, kprop_send_store, kprop_sendauth, kprop_service_port,
     kprop_update_last_prop_file, kprop_xmit_database, kpropd_do_iprop, kpropd_handle_conn,
     kpropd_keytab_keys, kpropd_recv_dump, kpropd_recvauth, kpropd_send_ack, kpropd_server_name,
     kpropd_server_name_for, load_replica,

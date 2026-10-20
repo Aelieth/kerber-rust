@@ -1,7 +1,7 @@
 //! The client tools' halves of MIT's trace points ([`krb5_protocol::trace`]): cache names as MIT
 //! prints them, and the cache reads and writes of a credentials request.
 
-use krb5_config::CcSpec;
+use krb5_config::{CcSpec, ClientContext};
 use krb5_protocol::{CcacheCred, trace};
 use krb5_types::PrincipalName;
 
@@ -10,7 +10,7 @@ use crate::creds::{OpenCache, Princ};
 /// MIT `krb5_cc_get_type` and `krb5_cc_get_name` as `{ccache}` prints them: `TYPE:name`, a DIR
 /// collection's cache as `DIR::<file>`, the default KCM cache under its primary's name.
 #[must_use]
-pub fn ccname(spec: &CcSpec) -> String {
+pub fn ccname(ctx: &ClientContext, spec: &CcSpec) -> String {
     match spec {
         CcSpec::File(p) => format!("FILE:{}", p.display()),
         CcSpec::Dir(r) if r.starts_with(':') => format!("DIR:{r}"),
@@ -19,7 +19,7 @@ pub fn ccname(spec: &CcSpec) -> String {
         CcSpec::Memory(n) => format!("MEMORY:{n}"),
         CcSpec::Kcm(n) if n.is_empty() => format!(
             "KCM:{}",
-            krb5_protocol::kcm_primary_name().unwrap_or_default()
+            krb5_protocol::kcm_primary_name(&ctx.profile).unwrap_or_default()
         ),
         CcSpec::Kcm(n) => format!("KCM:{n}"),
     }
@@ -65,20 +65,25 @@ pub fn keytab_lookup_failed(e: &std::io::Error, path: &std::path::Path) {
 /// `fast_avail` entry for the realm's TGS read, and FAST chosen when it is there.
 /// MIT `fast_armor_ap_request` (`lib/krb5/krb/fast.c:52-108`): the armor TGT is then got from that
 /// cache as a credentials request.
-pub fn fast_armor(spec: &CcSpec, realm: &str, armor: &krb5_protocol::FastArmor) {
+pub fn fast_armor(
+    ctx: &ClientContext,
+    spec: &CcSpec,
+    realm: &str,
+    armor: &krb5_protocol::FastArmor,
+) {
     if !trace::enabled() {
         return;
     }
     // A FILE armor name stays the residual path already traced for `-T FILE:`.
     let traced = match spec {
         CcSpec::File(p) => p.display().to_string(),
-        other => ccname(other),
+        other => ccname(ctx, other),
     };
     trace::fast_armor_ccache(&traced);
-    let Ok(cache) = OpenCache::open(spec.clone()) else {
+    let Ok(cache) = OpenCache::open(ctx, spec.clone()) else {
         return;
     };
-    let name = ccname(&cache.spec);
+    let name = ccname(cache.ctx, &cache.spec);
     let Some((realm_ks, tgs)) = static_tgt(realm) else {
         return;
     };
@@ -112,7 +117,7 @@ pub fn tkt_creds_begin(cache: &OpenCache, me: &Princ, server: &Princ) {
     if !trace::enabled() {
         return;
     }
-    let name = ccname(&cache.spec);
+    let name = ccname(cache.ctx, &cache.spec);
     trace::tkt_creds(princ(me), princ(server), &name);
     let start_realm = cache.cc.creds.iter().find(|c| {
         c.is_config()
@@ -143,7 +148,7 @@ pub fn retrieve(cache: &OpenCache, client: Option<&Princ>, server: &Princ, found
         (trace::KRB5_CC_NOTFOUND, Some(msg.as_str()))
     };
     trace::cc_retrieve(
-        &ccname(&cache.spec),
+        &ccname(cache.ctx, &cache.spec),
         client.map(princ),
         princ(server),
         code,
@@ -247,9 +252,9 @@ pub fn proxy_lookup(cache: &OpenCache, server: &Princ, found: bool, srealm: &str
 }
 
 /// MIT `krb5_cc_store_cred` (`lib/krb5/ccache/ccfns.c:80-85`): a credential stored in the cache.
-pub fn store(spec: &CcSpec, cred: &CcacheCred) {
+pub fn store(ctx: &ClientContext, spec: &CcSpec, cred: &CcacheCred) {
     if trace::enabled() {
-        trace::store_creds(&ccname(spec), std::slice::from_ref(cred));
+        trace::store_creds(&ccname(ctx, spec), std::slice::from_ref(cred));
     }
 }
 

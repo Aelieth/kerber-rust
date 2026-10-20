@@ -204,14 +204,16 @@ fn main() {
     );
     let kdc_host = std::env::var("KRB5_KDC").unwrap_or_else(|_| "127.0.0.1".into());
     let kdc = krb5_protocol::KdcAddr::new(kdc_host);
-    let as_out = as_exchange_key(ent.name.clone(), &realm, &keys, &kdc).unwrap_or_else(|e| {
-        eprintln!("krb5-iprop-pull: AS: {e}");
-        std::process::exit(1);
-    });
+    let profile = krb5_config::init_profile().unwrap_or_else(|_| krb5_config::Krb5Conf::new());
+    let as_out =
+        as_exchange_key(&profile, ent.name.clone(), &realm, &keys, &kdc).unwrap_or_else(|e| {
+            eprintln!("krb5-iprop-pull: AS: {e}");
+            std::process::exit(1);
+        });
     let host = std::env::var("KRB5_IPROP_HOST")
         .unwrap_or_else(|_| krb5_kdc::testrealm::TEST_HOST.to_owned());
     let sname = PrincipalName::new(PrincipalName::NT_SRV_HST, ["kiprop", host.as_str()]);
-    let tgs = tgs_exchange(&kdc, &as_out, sname, &realm).unwrap_or_else(|e| {
+    let tgs = tgs_exchange(&profile, &kdc, &as_out, sname, &realm).unwrap_or_else(|e| {
         eprintln!("krb5-iprop-pull: TGS: {e}");
         std::process::exit(1);
     });

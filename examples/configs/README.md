@@ -47,7 +47,7 @@ file` writes its pid file.
 
 `krb5.conf`, parsed by `crates/krb5-config/src/profile.rs`: every
 `[libdefaults]` key here (`parse_libdefaults`), the realm's `kdc`
-(`parse_realm_line`, then `discover_kdc`), and `[domain_realm]`
+(`parse_realm_line`, then `Krb5Conf::kdcs_for`), and `[domain_realm]`
 (`host_to_realm`). Three keys are parsed but no Rust tool uses them yet; they
 stay for MIT clients: `dns_lookup_realm` and `rdns` (MIT `krb5_get_host_realm`,
 `krb5_sname_to_principal`), and `admin_server` (there is no remote `kadmin`

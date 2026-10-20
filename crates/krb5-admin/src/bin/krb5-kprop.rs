@@ -68,8 +68,9 @@ fn main() {
     };
     // MIT `main` (`kprop/kprop.c:106-120`): tickets, the dump, the connection, sendauth, the
     // transfer, the `.last_prop` mark, the line on standard output, then the dump's unlock.
+    let ctx = krb5_config::ClientContext::new(conf);
     let creds = kprop_get_tickets(
-        &conf,
+        &ctx,
         &args.realm,
         &args.replica_host,
         args.keytab.as_deref(),

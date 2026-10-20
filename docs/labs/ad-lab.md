@@ -66,8 +66,8 @@ kvno host/svc.ad.kerber.test
 
 Never `realm join`, `adcli join`, or edit `/etc/krb5.conf` /
 `/etc/sssd/sssd.conf`. Never write tickets to the default KCM/KEYRING
-cache. Rust `discover_kdc` appends `/etc/krb5.conf` after `KRB5_CONFIG`;
-omit the env var and you will hit the home realm.
+cache. The Rust tools read `KRB5_CONFIG`, else `/etc/krb5.conf`, when they
+start; omit the env var and you will hit the home realm.
 
 `kbrsvc` is trusted-to-authenticate-for-delegation with
 `msDS-AllowedToDelegateTo` = `host/svc.ad.kerber.test`. Gate:

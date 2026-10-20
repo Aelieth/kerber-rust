@@ -132,9 +132,10 @@ the tool stops as MIT's does), else MIT's defaults under `KDC_DIR`
 (`/var/kerberos/krb5kdc`, set at build time by `KERBER_KDC_DIR`); only a
 `test-hooks` build puts the gates' `KRB5_KDC_CONF` / `KRB5_KDC_DB` /
 `KRB5_KDC_STASH` / `KRB5_ACL_FILE` / `KRB5_MASTER_ETYPE` on top. The KDC also
-takes ticket policy, `db_library` and listen ports from that file. `kinit` and
-TGS referral chase call `discover_kdc` (`KRB5_CONFIG` then `/etc/krb5.conf`);
-argv remains the fallback.
+takes ticket policy, `db_library` and listen ports from that file. A client
+program reads its profile once, at start (`KRB5_CONFIG`, else
+`/etc/krb5.conf`, into a `ClientContext`), and `kinit` and the TGS referral
+chase take a realm's KDCs from it; argv remains the fallback.
 
 **`krb5-cli`** is MIT's command-line shapes and password prompts for the
 tools: glibc `getopt` (with the leading `+` that stops at the first operand),

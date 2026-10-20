@@ -97,6 +97,7 @@ fn options_of(
         realm: "KERBER.TEST",
         password: b"x",
         kdc: &kdc,
+        profile: &krb5_config::isolated_profile(),
         want_spake: false,
         fast_armor: None,
         pkinit: None,

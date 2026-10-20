@@ -187,6 +187,7 @@ fn tgs_unwrapped_fast_is_accepted() {
     });
     let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "testhost.kerber.test"]);
     let out = tgs_exchange(
+        &krb5_config::isolated_profile(),
         &KdcAddr {
             host: "127.0.0.1".into(),
             port: addr.port(),

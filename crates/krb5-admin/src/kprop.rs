@@ -29,10 +29,6 @@ use krb5_types::{
 use crate::Error;
 
 mod poll;
-#[allow(
-    clippy::disallowed_methods,
-    reason = "a client operation reads its own profile (CF-4)"
-)]
 mod send;
 
 pub use poll::{IpropWake, KpropdIprop, kpropd_do_iprop};
@@ -1094,23 +1090,6 @@ pub fn kpropd_send_ack(
     Ok(())
 }
 
-/// kprop's keytab file: the keytab `keytab` names (`-s`), else the default keytab (`KRB5_KTNAME`,
-/// else krb5.conf's `default_keytab_name`, else `FILE:/etc/krb5.keytab`); `None` for a `MEMORY:`
-/// keytab, which a new process holds empty.
-/// MIT `get_tickets` (`kprop/kprop.c:195-208`): `-s` is resolved, else a NULL keytab makes `krb5_get_init_creds_keytab` read the default one through kprop's context, whose profile is krb5.conf alone.
-///
-/// # Errors
-///
-/// `krb5_kt_resolve`'s text for a name of a type it does not know ("Unknown Key table type"), or
-/// "Invalid argument" for a default name that is not UTF-8 or whose parameters do not expand.
-#[allow(
-    clippy::disallowed_methods,
-    reason = "kprop, the client, names its keytab once per run"
-)]
-pub fn kprop_keytab_file(keytab: Option<&str>) -> Result<Option<std::path::PathBuf>, &'static str> {
-    crate::kadmin_cli::keytab_file_in(keytab, krb5_config::krb5_conf_paths())
-}
-
 /// kpropd's keytab for one connection, from which kprop's ticket's key is chosen as MIT's
 /// `krb5_rd_req` chooses it.
 #[derive(Debug, Default)]
@@ -1160,8 +1139,9 @@ pub enum KpropdKeytabError {
 pub fn kpropd_keytab_keys(
     keytab: Option<&str>,
     server: Option<&PrincipalName>,
-    profile: &krb5_config::Krb5Conf,
+    ctx: &krb5_config::ClientContext,
 ) -> Result<KpropdKeys, &'static str> {
+    let profile = &ctx.profile;
     let fallback = profile.dns_canonicalize_hostname == krb5_config::CanonHost::Fallback;
     let lookup = server.map_or(KpropdLookup::Server, |s| {
         kpropd_lookup_name(s, fallback, |h| krb5_config::expand_hostname(h, profile))
@@ -1171,7 +1151,7 @@ pub fn kpropd_keytab_keys(
         lookup,
         ..KpropdKeys::default()
     };
-    let path = match crate::kadmin_cli::keytab_file_of(keytab, profile) {
+    let path = match crate::kadmin_cli::keytab_file_of(keytab, ctx) {
         Ok(Some(path)) => path,
         Ok(None) => return Ok(empty),
         Err(e) if keytab.is_none() => {
@@ -1535,14 +1515,16 @@ mod tests {
         );
         let p = path.display().to_string();
         for name in [p.clone(), format!("FILE:{p}"), format!("WRFILE:{p}")] {
-            let k = kpropd_keytab_keys(Some(&name), None, &krb5_config::Krb5Conf::new()).unwrap();
+            let k = kpropd_keytab_keys(Some(&name), None, &krb5_config::ClientContext::default())
+                .unwrap();
             let kvnos: Vec<_> = k.entries.iter().map(|e| e.kvno).collect();
             assert_eq!(kvnos, [2, 3, 4], "{name}");
             assert_eq!(k.entries[1].key.as_bytes(), [2u8; 32], "{name}");
             assert_eq!(k.error, None, "{name}");
         }
         let missing = dir.join("absent.keytab").display().to_string();
-        let k = kpropd_keytab_keys(Some(&missing), None, &krb5_config::Krb5Conf::new()).unwrap();
+        let k = kpropd_keytab_keys(Some(&missing), None, &krb5_config::ClientContext::default())
+            .unwrap();
         assert!(k.entries.is_empty() && k.error.is_none());
         for (file, bytes) in [
             ("junk.keytab", b"not a keytab".as_slice()),
@@ -1550,7 +1532,8 @@ mod tests {
         ] {
             std::fs::write(dir.join(file), bytes).unwrap();
             let junk = dir.join(file).display().to_string();
-            let k = kpropd_keytab_keys(Some(&junk), None, &krb5_config::Krb5Conf::new()).unwrap();
+            let k = kpropd_keytab_keys(Some(&junk), None, &krb5_config::ClientContext::default())
+                .unwrap();
             assert!(k.entries.is_empty());
             assert_eq!(
                 k.error,
@@ -1560,11 +1543,16 @@ mod tests {
                 "{file}"
             );
         }
-        let k =
-            kpropd_keytab_keys(Some("MEMORY:kpropd"), None, &krb5_config::Krb5Conf::new()).unwrap();
+        let k = kpropd_keytab_keys(
+            Some("MEMORY:kpropd"),
+            None,
+            &krb5_config::ClientContext::default(),
+        )
+        .unwrap();
         assert!(k.entries.is_empty() && k.error.is_none());
         assert_eq!(
-            kpropd_keytab_keys(Some("KDB:"), None, &krb5_config::Krb5Conf::new()).unwrap_err(),
+            kpropd_keytab_keys(Some("KDB:"), None, &krb5_config::ClientContext::default())
+                .unwrap_err(),
             "Unknown Key table type"
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -1647,9 +1635,13 @@ mod tests {
 
     /// The KDC context's profile as kpropd reads it when it starts: kdc.conf, then the krb5.conf
     /// files, as the environment names them.
-    fn kdc_profile() -> krb5_config::Krb5Conf {
-        krb5_config::load_krb5_conf_paths(crate::kadmin_cli::krb5_conf_paths_with_kdc())
-            .unwrap_or_else(|_| krb5_config::Krb5Conf::new())
+    fn kdc_profile() -> krb5_config::ClientContext {
+        let mut paths = vec![krb5_config::kdc_conf_path()];
+        paths.extend(krb5_config::krb5_conf_paths());
+        krb5_config::ClientContext::new(
+            krb5_config::load_krb5_conf_paths(paths)
+                .unwrap_or_else(|_| krb5_config::Krb5Conf::new()),
+        )
     }
 
     /// The keytab `kpropd_keytab_keys(None, ..)` reads, printed by a child of the next test.
@@ -1731,7 +1723,7 @@ mod tests {
     #[test]
     fn kpropd_server_name_child() {
         if std::env::var_os("KERBER_KPROPD_NAME_CHILD").is_some() {
-            let profile = kdc_profile();
+            let profile = kdc_profile().profile;
             for host in ["kdc2", "KDC2"] {
                 match kpropd_server_name_for(host, &profile) {
                     Ok(name) => println!("{host}=[{}]", name.components_joined()),

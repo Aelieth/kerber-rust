@@ -64,6 +64,7 @@ fn probe(port: u16) -> Result<IdentifyReply, krb5_protocol::Error> {
         realm: "KERBER.TEST",
         password: b"",
         kdc: &kdc,
+        profile: &krb5_config::isolated_profile(),
         want_spake: false,
         fast_armor: None,
         pkinit: None,

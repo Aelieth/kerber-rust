@@ -6,15 +6,11 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
-#![allow(
-    clippy::disallowed_methods,
-    reason = "the client library reads its own profile per operation; the client context is in embed-deferred.md"
-)]
 
 use std::path::Path;
 
 use krb5_asn1::decode;
-use krb5_config::CcSpec;
+use krb5_config::{CcSpec, ClientContext, Krb5Conf};
 use krb5_protocol::{
     AsOutcome, AsPrompt, AsRequest, AsTicketOpts, FastArmor, KdcAddr, KeytabFailure, PkinitClient,
     PreauthPrompt, TgsOutcome, as_exchange, as_exchange_defer_fast, as_exchange_interactive,
@@ -91,6 +87,7 @@ pub fn dir_read_path(residual: &str) -> std::io::Result<std::path::PathBuf> {
 /// daemon is its errno, printed as `strerror` ([`Krb5Error::from_kcm`]).
 #[must_use]
 pub fn cache_read_error(
+    ctx: &ClientContext,
     spec: &CcSpec,
     e: &(dyn std::error::Error + Send + Sync + 'static),
 ) -> Krb5Error {
@@ -102,7 +99,7 @@ pub fn cache_read_error(
         }
         CcSpec::Kcm(n) if missing => {
             let name = if n.is_empty() {
-                krb5_protocol::kcm_primary_name().unwrap_or_default()
+                krb5_protocol::kcm_primary_name(&ctx.profile).unwrap_or_default()
             } else {
                 n.clone()
             };
@@ -134,17 +131,20 @@ pub fn cache_read_error(
 /// [`Krb5Error`] with MIT's text when the profile does not load: an include that cannot be read,
 /// an `includedir` that does not list, a syntax error, or a file that cannot be read (its
 /// `strerror`).
-pub fn init_context() -> Result<(), Krb5Error> {
-    let profile = match krb5_config::load_krb5_conf_paths(krb5_config::krb5_conf_paths()) {
-        Ok(_) => Ok(()),
-        Err(krb5_config::Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(krb5_config::Error::Io(e)) => Err(Krb5Error::from_os(&e)),
-        Err(krb5_config::Error::Profile(p, _)) => Err(Krb5Error::of(Code::Profile(p))),
-        Err(e) => Err(Krb5Error::new(Code::Other, e.to_string())),
-    };
+#[allow(
+    clippy::disallowed_methods,
+    reason = "MIT krb5_init_context: the program's one read of its profile and environment"
+)]
+pub fn init_context() -> Result<ClientContext, Krb5Error> {
+    let ctx = ClientContext::from_env().map_err(|e| match e {
+        krb5_config::Error::Io(e) => Krb5Error::from_os(&e),
+        krb5_config::Error::Profile(p, _) => Krb5Error::of(Code::Profile(p)),
+        e => Krb5Error::new(Code::Other, e.to_string()),
+    })?;
     // MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:209-217`): `KRB5_TRACE` opens
     // once the profile has loaded.
-    profile.map(|()| krb5_protocol::trace::init())
+    krb5_protocol::trace::init();
+    Ok(ctx)
 }
 
 /// The compiled-in default keytab (MIT's `DEFKTNAME`).
@@ -155,23 +155,27 @@ pub const DEFCKTNAME: &str = "FILE:/var/kerberos/krb5/user/%{euid}/client.keytab
 /// MIT `kt_default_name` (`ktdefname.c:35-57`): `KRB5_KTNAME`, else
 /// `[libdefaults] default_keytab_name` with its tokens expanded, else [`DEFKTNAME`].
 #[must_use]
-pub fn kt_default_name() -> String {
-    if let Some(v) = std::env::var_os("KRB5_KTNAME") {
-        return v.to_string_lossy().into_owned();
+pub fn kt_default_name(ctx: &ClientContext) -> String {
+    if let Some(v) = ctx.ktname() {
+        return v;
     }
-    let conf = krb5_config::load_krb5_conf().and_then(|c| c.default_keytab_name);
-    expand_name(conf.as_deref().unwrap_or(DEFKTNAME))
+    expand_name(
+        ctx.profile
+            .default_keytab_name
+            .as_deref()
+            .unwrap_or(DEFKTNAME),
+    )
 }
 
 /// MIT `k5_kt_client_default_name` (`ktdefname.c:59-78`): `KRB5_CLIENT_KTNAME`, else
 /// `[libdefaults] default_client_keytab_name` with its tokens expanded, else [`DEFCKTNAME`].
 #[must_use]
-pub fn kt_client_default_name() -> String {
-    if let Some(v) = std::env::var_os("KRB5_CLIENT_KTNAME") {
-        return v.to_string_lossy().into_owned();
+pub fn kt_client_default_name(ctx: &ClientContext) -> String {
+    if let Some(v) = ctx.client_ktname() {
+        return v;
     }
-    let conf = krb5_config::load_krb5_conf().and_then(|c| c.default_client_keytab_name);
-    expand_name(conf.as_deref().unwrap_or(DEFCKTNAME))
+    let conf = ctx.profile.default_client_keytab_name.as_deref();
+    expand_name(conf.unwrap_or(DEFCKTNAME))
 }
 
 fn expand_name(name: &str) -> String {
@@ -385,6 +389,7 @@ pub struct KinitResult {
 /// unparsable, or the TGS-REQ for `service` fails (then nothing is stored). The password
 /// buffer is zeroized before return.
 pub fn kinit(
+    ctx: &ClientContext,
     kdc: &KdcAddr,
     principal: &str,
     password: &mut [u8],
@@ -392,6 +397,7 @@ pub fn kinit(
     service: Option<&str>,
 ) -> Result<KinitResult, Box<dyn std::error::Error + Send + Sync>> {
     kinit_ex(
+        ctx,
         kdc,
         principal,
         password,
@@ -444,6 +450,7 @@ pub struct InitCredsOpt<'a> {
 /// TGT, PKINIT pair or PEM) or the service TGS-REQ fails (then nothing is stored). The password
 /// buffer is zeroized before return.
 pub fn kinit_ex(
+    ctx: &ClientContext,
     kdc: &KdcAddr,
     principal: &str,
     password: &mut [u8],
@@ -468,7 +475,7 @@ pub fn kinit_ex(
         enterprise,
         ..KinitParams::default()
     };
-    kinit_with(kdc, principal, password, &spec, params)
+    kinit_with(ctx, kdc, principal, password, &spec, params)
 }
 
 /// [`kinit_ex`] storing into [`CcSpec`] (FILE, MEMORY, or DIR).
@@ -483,6 +490,7 @@ pub fn kinit_ex(
 /// realm, armor TGT, PKINIT pair or PEM) or the service TGS-REQ fails (then nothing is
 /// stored). The password buffer is zeroized before return.
 pub fn kinit_to_spec(
+    ctx: &ClientContext,
     kdc: &KdcAddr,
     principal: &str,
     password: &mut [u8],
@@ -498,6 +506,7 @@ pub fn kinit_to_spec(
         enterprise,
     } = *opts;
     kinit_with(
+        ctx,
         kdc,
         principal,
         password,
@@ -531,6 +540,7 @@ pub fn kinit_to_spec(
 /// or the service TGS-REQ fails (then nothing is stored). The password buffer is zeroized before
 /// return.
 pub fn kinit_with(
+    ctx: &ClientContext,
     kdc: &KdcAddr,
     principal: &str,
     password: &mut [u8],
@@ -544,9 +554,9 @@ pub fn kinit_with(
         failed: None,
         otp: params.preauth_prompter,
     };
-    let built = kinit_inner(kdc, principal, &mut lazy, params);
+    let built = kinit_inner(ctx, kdc, principal, &mut lazy, params);
     let result = match built {
-        Ok((r, cc)) => write_out_ccache(spec, cc).map(|()| r),
+        Ok((r, cc)) => write_out_ccache(ctx, spec, cc).map(|()| r),
         Err(e) => Err(e),
     };
     password.zeroize();
@@ -557,13 +567,14 @@ pub fn kinit_with(
 /// MIT `init_creds_step_reply` (`get_in_tkt.c:1846-1848`): a failed write is "Failed to store
 /// credentials: \<message\>".
 fn write_out_ccache(
+    ctx: &ClientContext,
     spec: &CcSpec,
     cc: FileCcache,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if krb5_protocol::trace::enabled() {
-        krb5_protocol::trace::write_out_ccache(&trace::ccname(spec), &cc);
+        krb5_protocol::trace::write_out_ccache(&trace::ccname(ctx, spec), &cc);
     }
-    store_ccache_keep_default(spec, cc).map_err(|e| {
+    store_ccache_keep_default(ctx, spec, cc).map_err(|e| {
         let e = store_error(e.as_ref());
         Krb5Error::new(
             e.code,
@@ -604,6 +615,7 @@ fn chpw_error(e: ProtocolError) -> Box<dyn std::error::Error + Send + Sync> {
 ///
 /// As [`kinit_with`], and the error `prompt` returns.
 pub fn kinit_prompted(
+    ctx: &ClientContext,
     kdc: &KdcAddr,
     principal: &str,
     prompt: &mut dyn FnMut() -> Result<Zeroizing<Vec<u8>>, Krb5Error>,
@@ -617,8 +629,8 @@ pub fn kinit_prompted(
         failed: None,
         otp: params.preauth_prompter,
     };
-    match kinit_inner(kdc, principal, &mut lazy, params) {
-        Ok((r, cc)) => write_out_ccache(spec, cc).map(|()| r),
+    match kinit_inner(ctx, kdc, principal, &mut lazy, params) {
+        Ok((r, cc)) => write_out_ccache(ctx, spec, cc).map(|()| r),
         Err(e) => Err(e),
     }
 }
@@ -767,7 +779,10 @@ pub fn mit_error_code(e: &(dyn std::error::Error + Send + Sync + 'static)) -> Op
 /// [`krb5_protocol::FccFailure`] when its lock is refused) or parsed (`InvalidData`,
 /// `UnexpectedEof`), or when [`dir_read_path`] or [`kcm_load`] fails; the message `No credentials
 /// cache found` when no MEMORY cache has that name.
-pub fn load_ccache(spec: &CcSpec) -> Result<FileCcache, Box<dyn std::error::Error + Send + Sync>> {
+pub fn load_ccache(
+    ctx: &ClientContext,
+    spec: &CcSpec,
+) -> Result<FileCcache, Box<dyn std::error::Error + Send + Sync>> {
     match spec {
         CcSpec::File(p) => Ok(FileCcache::parse(&krb5_protocol::read_cache_file(p)?)?),
         CcSpec::Memory(n) => memory_retrieve(n).ok_or_else(|| "No credentials cache found".into()),
@@ -775,7 +790,7 @@ pub fn load_ccache(spec: &CcSpec) -> Result<FileCcache, Box<dyn std::error::Erro
             let p = dir_read_path(r)?;
             Ok(FileCcache::parse(&krb5_protocol::read_cache_file(&p)?)?)
         }
-        CcSpec::Kcm(n) => kcm_load(n).map_err(Into::into),
+        CcSpec::Kcm(n) => kcm_load(&ctx.profile, n).map_err(Into::into),
     }
 }
 
@@ -787,6 +802,7 @@ pub fn load_ccache(spec: &CcSpec) -> Result<FileCcache, Box<dyn std::error::Erro
 /// create, write, sync, or rename), or when [`dir_cache_path_for_store`] or [`kcm_store`]
 /// fails. A MEMORY store does not fail.
 pub fn store_ccache(
+    ctx: &ClientContext,
     spec: &CcSpec,
     cc: FileCcache,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -800,7 +816,7 @@ pub fn store_ccache(
             let p = dir_cache_path_for_store(r)?;
             cc.write_file(p).map_err(Into::into)
         }
-        CcSpec::Kcm(n) => kcm_store(n, &cc).map_err(Into::into),
+        CcSpec::Kcm(n) => kcm_store(&ctx.profile, n, &cc).map_err(Into::into),
     }
 }
 
@@ -812,12 +828,13 @@ pub fn store_ccache(
 /// create, write, sync, or rename), or when [`dir_cache_path_for_store`] or
 /// [`kcm_store_keep_default`] fails. A MEMORY store does not fail.
 pub fn store_ccache_keep_default(
+    ctx: &ClientContext,
     spec: &CcSpec,
     cc: FileCcache,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     match spec {
-        CcSpec::Kcm(n) => kcm_store_keep_default(n, &cc).map_err(Into::into),
-        _ => store_ccache(spec, cc),
+        CcSpec::Kcm(n) => kcm_store_keep_default(&ctx.profile, n, &cc).map_err(Into::into),
+        _ => store_ccache(ctx, spec, cc),
     }
 }
 
@@ -829,7 +846,10 @@ pub fn store_ccache_keep_default(
 /// if missing, `InvalidInput` if not a regular file), or when [`dir_read_path`] or
 /// [`kcm_destroy`] fails; the message `No credentials cache found` when no MEMORY cache has
 /// that name.
-pub fn destroy_ccache(spec: &CcSpec) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub fn destroy_ccache(
+    ctx: &ClientContext,
+    spec: &CcSpec,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     match spec {
         CcSpec::File(p) => krb5_protocol::destroy_secret_file(p).map_err(Into::into),
         CcSpec::Memory(n) => {
@@ -843,14 +863,17 @@ pub fn destroy_ccache(spec: &CcSpec) -> Result<(), Box<dyn std::error::Error + S
             let p = dir_read_path(r)?;
             krb5_protocol::destroy_secret_file(&p).map_err(Into::into)
         }
-        CcSpec::Kcm(n) => kcm_destroy(n).map_err(Into::into),
+        CcSpec::Kcm(n) => kcm_destroy(&ctx.profile, n).map_err(Into::into),
     }
 }
 
 /// The armor TGT `spec` names, once FAST will be used.
 /// MIT `fast_armor_ap_request` (`lib/krb5/krb/fast.c:52-108`): the armor cache's TGT is read when the request is armored.
-fn load_fast_armor(spec: &CcSpec) -> Result<FastArmor, Box<dyn std::error::Error + Send + Sync>> {
-    let cc = load_ccache(spec).map_err(|e| cache_read_error(spec, e.as_ref()))?;
+fn load_fast_armor(
+    ctx: &ClientContext,
+    spec: &CcSpec,
+) -> Result<FastArmor, Box<dyn std::error::Error + Send + Sync>> {
+    let cc = load_ccache(ctx, spec).map_err(|e| cache_read_error(ctx, spec, e.as_ref()))?;
     let cred = cc
         .creds
         .iter()
@@ -869,8 +892,8 @@ fn strip_file_spec(s: &str) -> &str {
     s.strip_prefix("FILE:").unwrap_or(s)
 }
 
-fn conf_default_realm() -> Option<String> {
-    krb5_config::load_krb5_conf().and_then(|c| c.default_realm)
+fn conf_default_realm(ctx: &ClientContext) -> Option<String> {
+    ctx.profile.default_realm.clone()
 }
 
 fn load_pkinit(
@@ -908,10 +931,10 @@ fn load_pkinit_anchors(
     })
 }
 
-fn pkinit_from_conf(realm: &str) -> (Option<std::path::PathBuf>, Option<std::path::PathBuf>) {
-    let Some(conf) = krb5_config::load_krb5_conf() else {
-        return (None, None);
-    };
+fn pkinit_from_conf(
+    conf: &Krb5Conf,
+    realm: &str,
+) -> (Option<std::path::PathBuf>, Option<std::path::PathBuf>) {
     let id = conf
         .pkinit_identities
         .get(realm)
@@ -952,22 +975,24 @@ fn cache_has_fast_avail(cc: &FileCcache, realm: &str) -> bool {
 /// MIT `krb5int_fast_as_armor` (`lib/krb5/krb/fast.c:185-203`): a cache that cannot be read is not an error yet, and leaves the first request unarmored.
 /// MIT `krb5int_fast_as_armor` (`lib/krb5/krb/fast.c:198-212`): `fast_avail` for the realm TGS arms that first request.
 fn initial_armor(
+    ctx: &ClientContext,
     spec: Option<&CcSpec>,
     realm: &str,
 ) -> Result<Option<FastArmor>, Box<dyn std::error::Error + Send + Sync>> {
     let Some(spec) = spec else {
         return Ok(None);
     };
-    let Ok(cc) = load_ccache(spec) else {
+    let Ok(cc) = load_ccache(ctx, spec) else {
         return Ok(None);
     };
     if !cache_has_fast_avail(&cc, realm) {
         return Ok(None);
     }
-    let armor = load_fast_armor(spec).map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
-        Box::new(armor_build_error(e.as_ref()))
-    })?;
-    trace::fast_armor(spec, realm, &armor);
+    let armor =
+        load_fast_armor(ctx, spec).map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+            Box::new(armor_build_error(e.as_ref()))
+        })?;
+    trace::fast_armor(ctx, spec, realm, &armor);
     Ok(Some(armor))
 }
 
@@ -1027,6 +1052,7 @@ struct AsShape<'a> {
     cname: krb5_types::PrincipalName,
     realm: &'a str,
     kdc: &'a KdcAddr,
+    profile: &'a Krb5Conf,
     want_spake: bool,
     pkinit: Option<&'a PkinitClient>,
     canonicalize: bool,
@@ -1042,6 +1068,7 @@ impl AsShape<'_> {
             realm: self.realm,
             password,
             kdc: self.kdc,
+            profile: self.profile,
             want_spake: self.want_spake,
             fast_armor: armor,
             pkinit: self.pkinit,
@@ -1055,6 +1082,7 @@ impl AsShape<'_> {
 
 /// MIT `krb5int_fast_as_armor` (`lib/krb5/krb/fast.c:210-216`): the upgrade builds the armor AP-REQ, and a failure is prefixed.
 fn load_armor_for_upgrade(
+    ctx: &ClientContext,
     armor: &mut Option<FastArmor>,
     spec: Option<&CcSpec>,
     realm: &str,
@@ -1063,10 +1091,10 @@ fn load_armor_for_upgrade(
         return Err(ProtocolError::FastUpgrade.into());
     };
     let loaded =
-        load_fast_armor(spec).map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+        load_fast_armor(ctx, spec).map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
             Box::new(armor_build_error(e.as_ref()))
         })?;
-    trace::fast_armor(spec, realm, &loaded);
+    trace::fast_armor(ctx, spec, realm, &loaded);
     *armor = Some(loaded);
     Ok(())
 }
@@ -1074,6 +1102,7 @@ fn load_armor_for_upgrade(
 /// One AS exchange. With an armor cache and no armor key yet, a PA-FX-FAST error loads the armor and retries once.
 /// MIT `restart_init_creds_loop` (`lib/krb5/krb/get_in_tkt.c:800-801`): the upgrade sets FAST for the restarted request.
 fn exchange_shape(
+    ctx: &ClientContext,
     password: &mut LazyPassword<'_>,
     keytab: Option<KeytabArg<'_>>,
     armor: &mut Option<FastArmor>,
@@ -1088,13 +1117,14 @@ fn exchange_shape(
     if !matches!(first, Err(ProtocolError::FastUpgrade)) {
         return Ok(first);
     }
-    load_armor_for_upgrade(armor, spec, shape.realm)?;
+    load_armor_for_upgrade(ctx, armor, spec, shape.realm)?;
     let req = shape.request(armor.as_ref(), b"");
     dispatch_as(password, keytab, &req, false)
 }
 
 /// [`as_exchange`] with the same one-shot FAST upgrade, using `password` already in hand.
 fn exchange_shape_direct(
+    ctx: &ClientContext,
     armor: &mut Option<FastArmor>,
     spec: Option<&CcSpec>,
     shape: &AsShape<'_>,
@@ -1111,7 +1141,7 @@ fn exchange_shape_direct(
     };
     match first {
         Err(ProtocolError::FastUpgrade) => {
-            load_armor_for_upgrade(armor, spec, shape.realm)?;
+            load_armor_for_upgrade(ctx, armor, spec, shape.realm)?;
             let req = shape.request(armor.as_ref(), password);
             as_exchange(&req).map_err(Into::into)
         }
@@ -1127,6 +1157,7 @@ fn exchange_shape_direct(
 /// password AS takes the password from `password` when it first needs the key. This function
 /// builds the credentials; `kinit_with` writes the cache only when they come back.
 fn kinit_inner(
+    ctx: &ClientContext,
     kdc: &KdcAddr,
     principal: &str,
     password: &mut LazyPassword<'_>,
@@ -1134,14 +1165,14 @@ fn kinit_inner(
 ) -> Result<(KinitResult, FileCcache), Box<dyn std::error::Error + Send + Sync>> {
     let (cname, mut realm_s) = parse_principal_ex(principal, params.enterprise)?;
     if realm_s.is_empty() {
-        realm_s = conf_default_realm().ok_or("Cannot find KDC for requested realm")?;
+        realm_s = conf_default_realm(ctx).ok_or("Cannot find KDC for requested realm")?;
     }
     trace::init_creds(&cname, &realm_s, params.in_tkt_service);
-    let resolved = resolve_kdc(&realm_s, kdc);
-    let mut armor = initial_armor(params.armor_ccache, &realm_s)?;
+    let resolved = resolve_kdc(&ctx.profile, &realm_s, kdc);
+    let mut armor = initial_armor(ctx, params.armor_ccache, &realm_s)?;
     let (conf_id, conf_an) = if params.pkinit_identity.is_none() || params.pkinit_anchors.is_none()
     {
-        pkinit_from_conf(&realm_s)
+        pkinit_from_conf(&ctx.profile, &realm_s)
     } else {
         (None, None)
     };
@@ -1158,7 +1189,7 @@ fn kinit_inner(
         (None, None, true) => return Err("anonymous PKINIT requires pkinit_anchors".into()),
         (None, _, false) => None,
     };
-    let mut etypes = krb5_protocol::conf_etypes(false);
+    let mut etypes = krb5_protocol::conf_etypes(&ctx.profile, false);
     let mut ticket = params.ticket;
     ticket.anonymous |= params.anonymous;
     // MIT `krb5_init_creds_set_keytab` (`gic_keytab.c:209-213`): a keytab that cannot be read is traced and is no error yet; the request is made, and a key asked of the keytab fails with that error.
@@ -1229,6 +1260,7 @@ fn kinit_inner(
         cname: cname.clone(),
         realm: &realm_s,
         kdc: &resolved,
+        profile: &ctx.profile,
         want_spake: params.want_spake,
         pkinit: pkinit.as_ref(),
         canonicalize: params.canonicalize || params.enterprise,
@@ -1236,7 +1268,14 @@ fn kinit_inner(
         etypes: &etypes,
         ticket,
     };
-    let as_out = match exchange_shape(password, keytab, &mut armor, params.armor_ccache, &shape)? {
+    let as_out = match exchange_shape(
+        ctx,
+        password,
+        keytab,
+        &mut armor,
+        params.armor_ccache,
+        &shape,
+    )? {
         Ok(o) => o,
         // MIT `krb5_get_init_creds_password` (`gic_pwd.c:205-240`): a typed KDC_ERR_KEY_EXP
         // from a password AS (not keytab — `krb5_get_init_creds_keytab` has no change flow)
@@ -1268,7 +1307,7 @@ fn kinit_inner(
                 // MIT `make_chpw_options` (`lib/krb5/krb/gic_pwd.c:163-163`): this request drops the address list the caller set.
                 // MIT `krb5_init_creds_init` (`lib/krb5/krb/get_in_tkt.c:998-1005`): so `noaddresses` decides, as for any request; false sends `krb5_os_localaddr`'s list.
                 addresses: krb5_protocol::init_creds_addresses(
-                    krb5_config::load_krb5_conf().and_then(|c| c.noaddresses_for(&realm_s)),
+                    ctx.profile.noaddresses_for(&realm_s),
                 )
                 .map_err(|e| Krb5Error::from_local_addresses(&e))?,
                 anonymous: false,
@@ -1281,6 +1320,7 @@ fn kinit_inner(
                 cname: cname.clone(),
                 realm: &realm_s,
                 kdc: &resolved,
+                profile: &ctx.profile,
                 want_spake: false,
                 pkinit: None,
                 canonicalize: params.canonicalize || params.enterprise,
@@ -1288,8 +1328,14 @@ fn kinit_inner(
                 etypes: &etypes,
                 ticket: chpw_ticket,
             };
-            let chpw_as =
-                exchange_shape(password, None, &mut armor, params.armor_ccache, &chpw_shape)??;
+            let chpw_as = exchange_shape(
+                ctx,
+                password,
+                None,
+                &mut armor,
+                params.armor_ccache,
+                &chpw_shape,
+            )??;
             let new_pw = match (params.new_password, params.prompter) {
                 (Some(p), _) => {
                     krb5_protocol::trace::gic_pwd_changepw(3);
@@ -1306,7 +1352,7 @@ fn kinit_inner(
             // the new password, is traced as a request of its own.
             krb5_protocol::trace::gic_pwd_changed();
             trace::init_creds(&cname, &realm_s, params.in_tkt_service);
-            exchange_shape_direct(&mut armor, params.armor_ccache, &shape, &new_pw)?
+            exchange_shape_direct(ctx, &mut armor, params.armor_ccache, &shape, &new_pw)?
         }
         Err(e) => return Err(e.into()),
     };
@@ -1323,6 +1369,7 @@ fn kinit_inner(
         let (sname, svc_realm) =
             krb5_types::principal_from_unparsed(svc, &realm_s).map_err(|e| e.to_string())?;
         match tgs_exchange_path(
+            &ctx.profile,
             &resolved,
             &as_out,
             sname,
@@ -1450,12 +1497,12 @@ fn prompt_and_change(
     Err(ret.into())
 }
 
-fn resolve_kdc(realm: &str, argv: &KdcAddr) -> KdcAddr {
+fn resolve_kdc(profile: &Krb5Conf, realm: &str, argv: &KdcAddr) -> KdcAddr {
     // `kdc_for_realm` already located this realm and handed the list to the send.
     if krb5_config::handed_matches(realm, &argv.host, argv.port) {
         return argv.clone();
     }
-    let found = krb5_config::discover_kdc(realm);
+    let found = profile.kdcs_for(realm).unwrap_or_default();
     let Some(ep) = found.first() else {
         krb5_config::clear_handed();
         return argv.clone();

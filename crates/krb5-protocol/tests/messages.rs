@@ -285,6 +285,7 @@ fn exchange_tcp_and_udp_round_trip_local_kdc() {
         s.write_all(&reply_t).unwrap();
     });
     let got = exchange(
+        &krb5_config::isolated_profile(),
         &KdcAddr {
             host: "127.0.0.1".into(),
             port: udp_port,
@@ -335,6 +336,7 @@ fn non_ascii_realm_as_exchange_is_err() {
             host: "127.0.0.1".into(),
             port: 1,
         },
+        profile: &krb5_config::isolated_profile(),
         want_spake: false,
         fast_armor: None,
         pkinit: None,
@@ -398,6 +400,7 @@ fn first_bare_as_req_skew_is_the_kdcs_error_like_mit() {
             host: "127.0.0.1".into(),
             port,
         },
+        profile: &krb5_config::isolated_profile(),
         want_spake: false,
         fast_armor: None,
         pkinit: None,
@@ -432,6 +435,7 @@ fn spake_as_req_carries_pa_spake() {
                 host: "127.0.0.1".into(),
                 port,
             },
+            profile: &krb5_config::isolated_profile(),
             want_spake: true,
             fast_armor: None,
             pkinit: None,
@@ -502,6 +506,7 @@ fn want_spake_rejects_non_preauth_as_rep() {
             host: "127.0.0.1".into(),
             port,
         },
+        profile: &krb5_config::isolated_profile(),
         want_spake: true,
         fast_armor: None,
         pkinit: None,
@@ -539,6 +544,7 @@ fn want_spake_rejects_fast_and_pkinit() {
         realm: "KERBER.TEST",
         password: b"x",
         kdc: &kdc,
+        profile: &krb5_config::isolated_profile(),
         want_spake: true,
         fast_armor: None,
         pkinit: Some(&pk),
@@ -572,6 +578,7 @@ fn want_spake_rejects_fast_and_pkinit() {
         realm: "KERBER.TEST",
         password: b"x",
         kdc: &kdc,
+        profile: &krb5_config::isolated_profile(),
         want_spake: true,
         fast_armor: Some(&armor),
         pkinit: None,
@@ -619,6 +626,7 @@ fn fast_preauth_retry_carries_fx_fast() {
                 host: "127.0.0.1".into(),
                 port,
             },
+            profile: &krb5_config::isolated_profile(),
             want_spake: false,
             fast_armor: Some(&armor),
             pkinit: None,
@@ -700,6 +708,7 @@ fn fast_client_continue_uses_etype20_from_info2() {
             host: "127.0.0.1".into(),
             port,
         },
+        profile: &krb5_config::isolated_profile(),
         want_spake: false,
         fast_armor: Some(&armor),
         pkinit: None,
@@ -769,6 +778,7 @@ fn pkinit_as_req_carries_pa_pk_as_req() {
                 host: "127.0.0.1".into(),
                 port,
             },
+            profile: &krb5_config::isolated_profile(),
             want_spake: false,
             fast_armor: None,
             pkinit: Some(&pk),
@@ -818,6 +828,7 @@ fn enterprise_as_req_sets_name_type_and_canonicalize() {
                 host: "127.0.0.1".into(),
                 port,
             },
+            profile: &krb5_config::isolated_profile(),
             want_spake: false,
             fast_armor: None,
             pkinit: None,
@@ -874,7 +885,10 @@ fn golden_application_tags() {
 /// A KDC that answers the first AS-REQ with PREAUTH_REQUIRED at `kdc_time` (hint: ETYPE-INFO2
 /// aes256-cts with the user's salt, and PA-ENC-TIMESTAMP), and the second with PREAUTH_FAILED;
 /// returns both requests.
-fn preauth_at(kdc_time: u32) -> (krb5_types::AsReq, krb5_types::AsReq) {
+fn preauth_at(
+    profile: &krb5_config::Krb5Conf,
+    kdc_time: u32,
+) -> (krb5_types::AsReq, krb5_types::AsReq) {
     use krb5_types::{
         AsReq, EtypeInfo2Entry, KerberosTime, KrbError, Microseconds, PaData, err, pa,
     };
@@ -938,6 +952,7 @@ fn preauth_at(kdc_time: u32) -> (krb5_types::AsReq, krb5_types::AsReq) {
             host: "127.0.0.1".into(),
             port,
         },
+        profile,
         want_spake: false,
         fast_armor: None,
         pkinit: None,
@@ -983,7 +998,7 @@ fn after_preauth_required_the_timestamp_and_times_are_the_kdcs() {
     isolate_host_krb5();
     let now = i64::from(krb5_types::KerberosTime::now().unix_seconds());
     let kdc = u32::try_from(now + 3600).unwrap();
-    let (first, second) = preauth_at(kdc);
+    let (first, second) = preauth_at(&krb5_config::isolated_profile(), kdc);
     let near = |a: i64, b: i64| (a - b).abs() <= 5;
     assert!(
         near(
@@ -1010,20 +1025,14 @@ fn after_preauth_required_the_timestamp_and_times_are_the_kdcs() {
 #[test]
 fn kdc_timesync_off_keeps_the_local_time_in_the_timestamp() {
     isolate_host_krb5();
-    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
-    std::fs::create_dir_all(&dir).unwrap();
-    let conf = dir.join(format!("timesync-off-{}.conf", std::process::id()));
-    std::fs::write(
-        &conf,
+    let profile = krb5_config::Krb5Conf::parse(
         "[libdefaults]\n    default_realm = KERBER.TEST\n    dns_lookup_kdc = false\n    kdc_timesync = 0\n",
     )
     .unwrap();
-    krb5_config::set_test_krb5_paths(Some(vec![conf.clone()]));
     let now = i64::from(krb5_types::KerberosTime::now().unix_seconds());
-    let (_, second) = preauth_at(u32::try_from(now + 3600).unwrap());
+    let (_, second) = preauth_at(&profile, u32::try_from(now + 3600).unwrap());
     let ts = timestamp_of(&second);
     assert!((i64::from(ts.patimestamp.unix_seconds()) - now).abs() <= 5);
-    let _ = std::fs::remove_file(&conf);
 }
 
 /// MIT `krb5_us_timeofday` (`lib/krb5/os/ustime.c:66-82`): a client authenticator and an encrypted timestamp carry the time to the microsecond.
@@ -1113,15 +1122,10 @@ fn an_as_request_with_no_etype_list_asks_for_krb5_confs_order() {
     use std::thread;
 
     isolate_host_krb5();
-    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
-    std::fs::create_dir_all(&dir).unwrap();
-    let conf = dir.join(format!("tkt-enctypes-{}.conf", std::process::id()));
-    std::fs::write(
-        &conf,
+    let profile = krb5_config::Krb5Conf::parse(
         "[libdefaults]\n    default_realm = KERBER.TEST\n    dns_lookup_kdc = false\n    default_tkt_enctypes = aes256-cts-hmac-sha384-192 aes128-cts-hmac-sha1-96\n",
     )
     .unwrap();
-    krb5_config::set_test_krb5_paths(Some(vec![conf.clone()]));
     let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
     let port = udp.local_addr().unwrap().port();
     let (tx, rx) = mpsc::channel();
@@ -1157,6 +1161,7 @@ fn an_as_request_with_no_etype_list_asks_for_krb5_confs_order() {
             host: "127.0.0.1".into(),
             port,
         },
+        profile: &profile,
         want_spake: false,
         fast_armor: None,
         pkinit: None,
@@ -1168,7 +1173,6 @@ fn an_as_request_with_no_etype_list_asks_for_krb5_confs_order() {
     assert!(out.is_err());
     let req: AsReq = decode(&rx.recv().unwrap()).unwrap();
     assert_eq!(req.0.req_body.etype, vec![20, 17], "krb5.conf's order");
-    let _ = std::fs::remove_file(&conf);
 }
 
 /// MIT `krb5int_parse_enctype_list` (`lib/krb5/krb/init_ctx.c:447-502`): `aes` is the four AES types, and `DEFAULT` is the eight-type default list.
@@ -1176,32 +1180,24 @@ fn an_as_request_with_no_etype_list_asks_for_krb5_confs_order() {
 #[test]
 fn conf_etypes_expands_default_and_family_words() {
     isolate_host_krb5();
-    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
-    std::fs::create_dir_all(&dir).unwrap();
-    let conf = dir.join(format!("family-etypes-{}.conf", std::process::id()));
-    std::fs::write(
-        &conf,
+    let aes = krb5_config::Krb5Conf::parse(
         "[libdefaults]\n    default_realm = KERBER.TEST\n    dns_lookup_kdc = false\n    default_tkt_enctypes = aes\n",
     )
     .unwrap();
-    krb5_config::set_test_krb5_paths(Some(vec![conf.clone()]));
     assert_eq!(
-        krb5_protocol::conf_etypes(false),
+        krb5_protocol::conf_etypes(&aes, false),
         vec![18, 17, 20, 19],
         "aes is the four AES enctypes"
     );
-    std::fs::write(
-        &conf,
+    let default = krb5_config::Krb5Conf::parse(
         "[libdefaults]\n    default_realm = KERBER.TEST\n    dns_lookup_kdc = false\n    default_tkt_enctypes = DEFAULT\n",
     )
     .unwrap();
-    krb5_config::set_test_krb5_paths(Some(vec![conf.clone()]));
     assert_eq!(
-        krb5_protocol::conf_etypes(false),
+        krb5_protocol::conf_etypes(&default, false),
         vec![18, 17, 20, 19, 16, 23, 25, 26],
         "DEFAULT keeps deprecated rc4-hmac; only ETYPE_WEAK is filtered"
     );
-    let _ = std::fs::remove_file(&conf);
 }
 
 /// MIT `note_req_timestamp` (`lib/krb5/krb/get_in_tkt.c:1427-1438`): the offset is the error's time less the time the error arrives, so a slow password prompt is not skew.
@@ -1275,6 +1271,7 @@ fn a_delayed_prompt_is_not_added_to_the_kdc_offset() {
                 host: "127.0.0.1".into(),
                 port,
             },
+            profile: &krb5_config::isolated_profile(),
             want_spake: false,
             fast_armor: None,
             pkinit: None,
@@ -1356,6 +1353,7 @@ fn a_hint_without_enc_ts_fails_without_prompting() {
                 host: "127.0.0.1".into(),
                 port,
             },
+            profile: &krb5_config::isolated_profile(),
             want_spake: false,
             fast_armor: None,
             pkinit: None,

@@ -240,12 +240,17 @@ fn store_without_preauth(spake: Spake) -> PrincipalStore {
     store
 }
 
-fn request<'a>(kdc: &'a KdcAddr, armor: Option<&'a FastArmor>) -> AsRequest<'a> {
+fn request<'a>(
+    profile: &'a krb5_config::Krb5Conf,
+    kdc: &'a KdcAddr,
+    armor: Option<&'a FastArmor>,
+) -> AsRequest<'a> {
     AsRequest {
         cname: user(),
         realm: TEST_REALM,
         password: TEST_USER_PASSWORD,
         kdc,
+        profile,
         want_spake: false,
         fast_armor: armor,
         pkinit: None,
@@ -257,8 +262,9 @@ fn request<'a>(kdc: &'a KdcAddr, armor: Option<&'a FastArmor>) -> AsRequest<'a> 
 }
 
 /// An armor ticket for the user, from a password exchange.
-fn armor(kdc: &KdcAddr) -> FastArmor {
-    let plain = as_exchange(&request(kdc, None)).expect("password AS for the armor ticket");
+fn armor(profile: &krb5_config::Krb5Conf, kdc: &KdcAddr) -> FastArmor {
+    let plain =
+        as_exchange(&request(profile, kdc, None)).expect("password AS for the armor ticket");
     FastArmor {
         ticket: plain.ticket,
         session: plain.session_key,
@@ -268,8 +274,13 @@ fn armor(kdc: &KdcAddr) -> FastArmor {
 }
 
 /// A login that asks for the password through `ui`.
-fn login(kdc: &KdcAddr, armor: Option<&FastArmor>, ui: &mut Ui) -> Result<AsOutcome, Error> {
-    let mut req = request(kdc, armor);
+fn login(
+    profile: &krb5_config::Krb5Conf,
+    kdc: &KdcAddr,
+    armor: Option<&FastArmor>,
+    ui: &mut Ui,
+) -> Result<AsOutcome, Error> {
+    let mut req = request(profile, kdc, armor);
     req.password = b"";
     as_exchange_interactive(&req, ui, false)
 }
@@ -280,47 +291,53 @@ fn is_cant_read(e: &Error) -> bool {
 
 #[test]
 fn spake_and_encrypted_challenge_each_read_the_password_under_fast() {
+    let profile = krb5_config::isolated_profile();
     let kdc = kdc(Spake::Challenge);
-    let armor = armor(&kdc);
+    let armor = armor(&profile, &kdc);
     let mut ui = Ui::new(&[Read::Eof, Read::Eof]);
-    let e = login(&kdc, Some(&armor), &mut ui).expect_err("no password can be read");
+    let e = login(&profile, &kdc, Some(&armor), &mut ui).expect_err("no password can be read");
     assert_eq!(ui.passwords, 2, "SPAKE asked, then encrypted challenge");
     assert!(is_cant_read(&e), "{e}");
 }
 
 #[test]
 fn a_failed_read_leaves_the_next_mechanism_to_ask_again_under_fast() {
+    let profile = krb5_config::isolated_profile();
     let kdc = kdc(Spake::Challenge);
-    let armor = armor(&kdc);
+    let armor = armor(&profile, &kdc);
     let mut ui = Ui::new(&[Read::Eof, RIGHT]);
-    let out = login(&kdc, Some(&armor), &mut ui).expect("encrypted challenge reads the password");
+    let out = login(&profile, &kdc, Some(&armor), &mut ui)
+        .expect("encrypted challenge reads the password");
     assert_eq!(out.pa_type, Some(pa::ENCRYPTED_CHALLENGE));
     assert_eq!(ui.passwords, 2);
 }
 
 #[test]
 fn a_support_first_kdc_reads_after_the_challenge_and_encrypted_challenge_reads_again() {
+    let profile = krb5_config::isolated_profile();
     let kdc = kdc(Spake::Support);
-    let armor = armor(&kdc);
+    let armor = armor(&profile, &kdc);
     let mut ui = Ui::new(&[Read::Eof, Read::Eof]);
-    let e = login(&kdc, Some(&armor), &mut ui).expect_err("no password can be read");
+    let e = login(&profile, &kdc, Some(&armor), &mut ui).expect_err("no password can be read");
     assert_eq!(ui.passwords, 2);
     assert!(is_cant_read(&e), "{e}");
     let mut ui = Ui::new(&[Read::Eof, RIGHT]);
-    let out = login(&kdc, Some(&armor), &mut ui).expect("encrypted challenge reads the password");
+    let out = login(&profile, &kdc, Some(&armor), &mut ui)
+        .expect("encrypted challenge reads the password");
     assert_eq!(out.pa_type, Some(pa::ENCRYPTED_CHALLENGE));
     assert_eq!(ui.passwords, 2);
 }
 
 #[test]
 fn spake_and_encrypted_timestamp_each_read_the_password_without_fast() {
+    let profile = krb5_config::isolated_profile();
     let kdc = kdc(Spake::Challenge);
     let mut ui = Ui::new(&[Read::Eof, Read::Eof]);
-    let e = login(&kdc, None, &mut ui).expect_err("no password can be read");
+    let e = login(&profile, &kdc, None, &mut ui).expect_err("no password can be read");
     assert_eq!(ui.passwords, 2, "SPAKE asked, then encrypted timestamp");
     assert!(is_cant_read(&e), "{e}");
     let mut ui = Ui::new(&[Read::Eof, RIGHT]);
-    let out = login(&kdc, None, &mut ui).expect("encrypted timestamp reads the password");
+    let out = login(&profile, &kdc, None, &mut ui).expect("encrypted timestamp reads the password");
     assert_eq!(out.pa_type, Some(pa::ENC_TIMESTAMP));
     assert_eq!(ui.passwords, 2);
 }
@@ -329,11 +346,12 @@ fn spake_and_encrypted_timestamp_each_read_the_password_without_fast() {
 fn a_wrong_password_after_the_response_ends_the_exchange() {
     // SPAKE answers with what was read and allows no fallback: the refusal is the error, and
     // encrypted challenge never asks.
+    let profile = krb5_config::isolated_profile();
     let kdc = kdc(Spake::Challenge);
-    let armor = armor(&kdc);
+    let armor = armor(&profile, &kdc);
     for armor in [Some(&armor), None] {
         let mut ui = Ui::new(&[Read::Text(b"wrongpw"), RIGHT]);
-        let e = login(&kdc, armor, &mut ui).expect_err("a wrong password");
+        let e = login(&profile, &kdc, armor, &mut ui).expect_err("a wrong password");
         assert!(
             matches!(e, Error::KrbError { code, .. } if code == err::PREAUTH_FAILED),
             "{e}"
@@ -344,11 +362,12 @@ fn a_wrong_password_after_the_response_ends_the_exchange() {
 
 #[test]
 fn an_interrupt_ends_the_exchange_at_once() {
+    let profile = krb5_config::isolated_profile();
     let kdc = kdc(Spake::Challenge);
-    let armor = armor(&kdc);
+    let armor = armor(&profile, &kdc);
     for armor in [Some(&armor), None] {
         let mut ui = Ui::new(&[Read::Interrupt, RIGHT]);
-        let e = login(&kdc, armor, &mut ui).expect_err("interrupted");
+        let e = login(&profile, &kdc, armor, &mut ui).expect_err("interrupted");
         assert!(
             matches!(&e, Error::File(io) if io.kind() == ErrorKind::Interrupted),
             "{e}"
@@ -356,7 +375,7 @@ fn an_interrupt_ends_the_exchange_at_once() {
         assert_eq!(ui.passwords, 1, "no other mechanism asks");
         // An interrupt after a failed read ends it too.
         let mut ui = Ui::new(&[Read::Eof, Read::Interrupt, RIGHT]);
-        let e = login(&kdc, armor, &mut ui).expect_err("interrupted");
+        let e = login(&profile, &kdc, armor, &mut ui).expect_err("interrupted");
         assert!(
             matches!(&e, Error::File(io) if io.kind() == ErrorKind::Interrupted),
             "{e}"
@@ -369,11 +388,12 @@ fn an_interrupt_ends_the_exchange_at_once() {
 fn a_refused_support_message_is_the_error_when_the_next_read_fails() {
     // The client's edwards25519 is not the KDC's P-256: the support message is refused, and
     // MIT keeps that refusal as the error when the mechanism after it fails too.
+    let profile = krb5_config::isolated_profile();
     let kdc = kdc(Spake::Refuses);
-    let armor = armor(&kdc);
+    let armor = armor(&profile, &kdc);
     for armor in [Some(&armor), None] {
         let mut ui = Ui::new(&[Read::Eof]);
-        let e = login(&kdc, armor, &mut ui).expect_err("no password can be read");
+        let e = login(&profile, &kdc, armor, &mut ui).expect_err("no password can be read");
         assert!(
             matches!(e, Error::KrbError { code, .. } if code == err::PREAUTH_FAILED),
             "{e}"
@@ -414,14 +434,16 @@ fn challenge_with_a_bad_point(reply: Vec<u8>) -> Vec<u8> {
 fn a_password_that_was_read_is_kept_for_the_next_mechanism() {
     // SPAKE reads the password and fails on the challenge's public value before it answers
     // (MIT `group_result`, EINVAL); encrypted timestamp then uses what was read.
+    let profile = krb5_config::isolated_profile();
     let kdc = kdc_rewriting(Spake::Challenge, challenge_with_a_bad_point);
     let mut ui = Ui::new(&[RIGHT]);
-    let out = login(&kdc, None, &mut ui).expect("encrypted timestamp reuses the password");
+    let out =
+        login(&profile, &kdc, None, &mut ui).expect("encrypted timestamp reuses the password");
     assert_eq!(out.pa_type, Some(pa::ENC_TIMESTAMP));
     assert_eq!(ui.passwords, 1, "the second mechanism did not ask");
     // A wrong one is kept too; the KDC's refusal ends it, and a later line would not be read.
     let mut ui = Ui::new(&[Read::Text(b"wrongpw"), RIGHT]);
-    let e = login(&kdc, None, &mut ui).expect_err("a wrong password");
+    let e = login(&profile, &kdc, None, &mut ui).expect_err("a wrong password");
     assert!(
         matches!(e, Error::KrbError { code, .. } if code == err::PREAUTH_FAILED),
         "{e}"
@@ -430,12 +452,8 @@ fn a_password_that_was_read_is_kept_for_the_next_mechanism() {
 }
 
 /// This test process's client configuration: `body` as krb5.conf.
-fn client_conf(body: &str) {
-    krb5_config::isolate_test_krb5();
-    let dir = krb5_testkit::scratch_dir("password-per-mechanism-conf");
-    let path = dir.join("krb5.conf");
-    std::fs::write(&path, body).unwrap();
-    krb5_config::set_test_krb5_paths(Some(vec![path]));
+fn client_conf(body: &str) -> krb5_config::Krb5Conf {
+    krb5_config::Krb5Conf::parse(body).unwrap()
 }
 
 /// `[plugins] clpreauth` without `module`: the client has no such mechanism.
@@ -454,10 +472,11 @@ fn passwords_asked(calls: &Calls) -> Vec<Vec<String>> {
 #[test]
 fn spake_alone_asks_the_responder_for_the_password_under_fast() {
     let kdc = kdc(Spake::Challenge);
-    let armor = armor(&kdc);
-    client_conf(&without("encrypted_challenge"));
+    let armor = armor(&krb5_config::isolated_profile(), &kdc);
+    let profile = client_conf(&without("encrypted_challenge"));
     let (mut ui, calls) = Ui::answering();
-    let out = login(&kdc, Some(&armor), &mut ui).expect("SPAKE takes the responder's answer");
+    let out =
+        login(&profile, &kdc, Some(&armor), &mut ui).expect("SPAKE takes the responder's answer");
     assert_eq!(out.pa_type, Some(pa::SPAKE));
     assert_eq!(passwords_asked(&calls), [["password"]]);
     assert_eq!(ui.passwords, 0, "the answer is the password: no prompt");
@@ -466,10 +485,11 @@ fn spake_alone_asks_the_responder_for_the_password_under_fast() {
 #[test]
 fn a_support_message_asks_nothing_and_the_challenge_that_follows_asks_once() {
     let kdc = kdc(Spake::Support);
-    let armor = armor(&kdc);
-    client_conf(&without("encrypted_challenge"));
+    let armor = armor(&krb5_config::isolated_profile(), &kdc);
+    let profile = client_conf(&without("encrypted_challenge"));
     let (mut ui, calls) = Ui::answering();
-    let out = login(&kdc, Some(&armor), &mut ui).expect("SPAKE takes the responder's answer");
+    let out =
+        login(&profile, &kdc, Some(&armor), &mut ui).expect("SPAKE takes the responder's answer");
     assert_eq!(out.pa_type, Some(pa::SPAKE));
     assert_eq!(
         passwords_asked(&calls),
@@ -482,13 +502,14 @@ fn a_support_message_asks_nothing_and_the_challenge_that_follows_asks_once() {
 #[test]
 fn a_challenge_in_a_group_the_client_does_not_permit_asks_nothing() {
     let kdc = kdc(Spake::Challenge);
-    let armor = armor(&kdc);
-    client_conf(&format!(
+    let armor = armor(&krb5_config::isolated_profile(), &kdc);
+    let profile = client_conf(&format!(
         "[libdefaults]\n    spake_preauth_groups = P-256\n{}",
         without("encrypted_challenge")
     ));
     let (mut ui, calls) = Ui::answering();
-    let e = login(&kdc, Some(&armor), &mut ui).expect_err("no mechanism the KDC would take");
+    let e =
+        login(&profile, &kdc, Some(&armor), &mut ui).expect_err("no mechanism the KDC would take");
     assert!(
         matches!(e, Error::KrbError { code, .. } if code == err::PREAUTH_FAILED),
         "{e}"
@@ -499,11 +520,11 @@ fn a_challenge_in_a_group_the_client_does_not_permit_asks_nothing() {
 #[test]
 fn a_responder_that_answers_nothing_leaves_the_prompt_to_ask() {
     let kdc = kdc(Spake::Challenge);
-    let armor = armor(&kdc);
-    client_conf(&without("encrypted_challenge"));
+    let armor = armor(&krb5_config::isolated_profile(), &kdc);
+    let profile = client_conf(&without("encrypted_challenge"));
     let (mut ui, calls) = Ui::listening();
     ui.reads.push_back(RIGHT);
-    let out = login(&kdc, Some(&armor), &mut ui).expect("SPAKE prompts");
+    let out = login(&profile, &kdc, Some(&armor), &mut ui).expect("SPAKE prompts");
     assert_eq!(out.pa_type, Some(pa::SPAKE));
     assert_eq!(passwords_asked(&calls), [["password"]]);
     assert_eq!(ui.passwords, 1);
@@ -511,10 +532,11 @@ fn a_responder_that_answers_nothing_leaves_the_prompt_to_ask() {
 
 #[test]
 fn spake_and_encrypted_challenge_put_the_password_question_once() {
+    let profile = krb5_config::isolated_profile();
     let kdc = kdc(Spake::Challenge);
-    let armor = armor(&kdc);
+    let armor = armor(&profile, &kdc);
     let (mut ui, calls) = Ui::answering();
-    let out = login(&kdc, Some(&armor), &mut ui).expect("SPAKE takes the answer");
+    let out = login(&profile, &kdc, Some(&armor), &mut ui).expect("SPAKE takes the answer");
     assert_eq!(out.pa_type, Some(pa::SPAKE));
     assert_eq!(passwords_asked(&calls), [["password"]]);
 }
@@ -522,9 +544,9 @@ fn spake_and_encrypted_challenge_put_the_password_question_once() {
 #[test]
 fn without_fast_spake_asks_the_responder_for_the_password() {
     let kdc = kdc(Spake::Challenge);
-    client_conf(&without("encrypted_timestamp"));
+    let profile = client_conf(&without("encrypted_timestamp"));
     let (mut ui, calls) = Ui::answering();
-    let out = login(&kdc, None, &mut ui).expect("SPAKE takes the responder's answer");
+    let out = login(&profile, &kdc, None, &mut ui).expect("SPAKE takes the responder's answer");
     assert_eq!(out.pa_type, Some(pa::SPAKE));
     assert_eq!(passwords_asked(&calls), [["password"]]);
     assert_eq!(ui.passwords, 0);
@@ -533,9 +555,9 @@ fn without_fast_spake_asks_the_responder_for_the_password() {
 #[test]
 fn without_fast_encrypted_timestamp_asks_the_responder_for_the_password() {
     let kdc = kdc(Spake::Challenge);
-    client_conf(&without("spake"));
+    let profile = client_conf(&without("spake"));
     let (mut ui, calls) = Ui::answering();
-    let out = login(&kdc, None, &mut ui).expect("encrypted timestamp takes the answer");
+    let out = login(&profile, &kdc, None, &mut ui).expect("encrypted timestamp takes the answer");
     assert_eq!(out.pa_type, Some(pa::ENC_TIMESTAMP));
     assert_eq!(passwords_asked(&calls), [["password"]]);
     assert_eq!(ui.passwords, 0);
@@ -545,9 +567,11 @@ fn without_fast_encrypted_timestamp_asks_the_responder_for_the_password() {
 fn a_password_that_a_module_holds_is_not_asked_for_again_in_the_next_walk() {
     // Encrypted timestamp asks at the hint, SPAKE at the challenge; SPAKE gets the answer and fails
     // on the challenge's public value, and the new walk finds the password held: two calls, not three.
+    let profile = krb5_config::isolated_profile();
     let kdc = kdc_rewriting(Spake::Support, challenge_with_a_bad_point);
     let (mut ui, calls) = Ui::answering();
-    let out = login(&kdc, None, &mut ui).expect("encrypted timestamp uses the held password");
+    let out =
+        login(&profile, &kdc, None, &mut ui).expect("encrypted timestamp uses the held password");
     assert_eq!(out.pa_type, Some(pa::ENC_TIMESTAMP));
     assert_eq!(passwords_asked(&calls), [["password"], ["password"]]);
     assert_eq!(ui.passwords, 0);
@@ -559,8 +583,9 @@ fn a_password_that_a_module_holds_is_not_asked_for_again_in_the_next_walk() {
 
 #[test]
 fn with_no_prompter_and_no_password_every_mechanism_fails_with_eio_and_nothing_is_answered() {
+    let profile = krb5_config::isolated_profile();
     let (kdc, seen) = kdc_counting(store(Spake::Challenge));
-    let mut req = request(&kdc, None);
+    let mut req = request(&profile, &kdc, None);
     req.password = b"";
     let e = as_exchange(&req).expect_err("there is no password to make a key from");
     assert!(
@@ -578,8 +603,9 @@ fn with_no_prompter_and_no_password_every_mechanism_fails_with_eio_and_nothing_i
 fn a_refused_support_message_stays_the_error_when_the_next_mechanism_has_no_password() {
     // SPAKE's support message needs no key and the KDC refuses it with PREAUTH_FAILED; encrypted
     // timestamp then has no password, fails with EIO, and the refusal is what is reported.
+    let profile = krb5_config::isolated_profile();
     let (kdc, seen) = kdc_counting(store(Spake::Refuses));
-    let mut req = request(&kdc, None);
+    let mut req = request(&profile, &kdc, None);
     req.password = b"";
     let e = as_exchange(&req).expect_err("nothing can answer");
     assert!(
@@ -595,8 +621,9 @@ fn a_refused_support_message_stays_the_error_when_the_next_mechanism_has_no_pass
 
 #[test]
 fn a_reply_that_needs_a_key_and_has_no_password_is_eio_not_a_guess_at_the_empty_password() {
+    let profile = krb5_config::isolated_profile();
     let (kdc, _) = kdc_counting(store_without_preauth(Spake::Challenge));
-    let mut req = request(&kdc, None);
+    let mut req = request(&profile, &kdc, None);
     req.password = b"";
     let e = as_exchange(&req).expect_err("the reply cannot be decrypted");
     assert_eq!(e.to_string(), "Input/output error", "{e:?}");
@@ -605,9 +632,10 @@ fn a_reply_that_needs_a_key_and_has_no_password_is_eio_not_a_guess_at_the_empty_
 #[test]
 fn a_reply_no_module_answered_asks_the_responder_for_the_password() {
     // MIT `decrypt_as_reply` (`lib/krb5/krb/get_in_tkt.c:96-111`): with a responder the password question is put before the key is got, whatever the mechanism.
+    let profile = krb5_config::isolated_profile();
     let (kdc, _) = kdc_counting(store_without_preauth(Spake::Challenge));
     let (mut ui, calls) = Ui::answering();
-    let mut req = request(&kdc, None);
+    let mut req = request(&profile, &kdc, None);
     req.password = b"";
     as_exchange_interactive(&req, &mut ui, false).expect("the responder's answer is the password");
     assert_eq!(passwords_asked(&calls), [["password"]]);
@@ -616,10 +644,11 @@ fn a_reply_no_module_answered_asks_the_responder_for_the_password() {
 
 #[test]
 fn a_fast_reply_no_module_answered_asks_the_responder_for_the_password() {
+    let profile = krb5_config::isolated_profile();
     let (kdc, _) = kdc_counting(store_without_preauth(Spake::Challenge));
-    let armor = armor(&kdc);
+    let armor = armor(&profile, &kdc);
     let (mut ui, calls) = Ui::answering();
-    let mut req = request(&kdc, Some(&armor));
+    let mut req = request(&profile, &kdc, Some(&armor));
     req.password = b"";
     as_exchange_interactive(&req, &mut ui, false).expect("the responder's answer is the password");
     assert_eq!(passwords_asked(&calls), [["password"]]);
@@ -628,10 +657,11 @@ fn a_fast_reply_no_module_answered_asks_the_responder_for_the_password() {
 
 #[test]
 fn a_responder_with_no_answer_leaves_the_reply_key_to_the_prompt() {
+    let profile = krb5_config::isolated_profile();
     let (kdc, _) = kdc_counting(store_without_preauth(Spake::Challenge));
     let (mut ui, calls) = Ui::listening();
     ui.reads.push_back(RIGHT);
-    let mut req = request(&kdc, None);
+    let mut req = request(&profile, &kdc, None);
     req.password = b"";
     as_exchange_interactive(&req, &mut ui, false).expect("the prompt reads the password");
     assert_eq!(passwords_asked(&calls), [["password"]]);

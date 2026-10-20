@@ -174,6 +174,7 @@ fn main() {
 
     // MIT `main` (`kadmin/server/ovsec_kadmd.c:437-442`): the KDC context once the options are
     // read; a profile it refuses ends kadmind.
+    let profile_read = krb5_config::ReadOnce::start();
     if let Err(e) = krb5_config::init_kdc_profile() {
         eprintln!(
             "{progname}: {} while initializing context, aborting",
@@ -224,6 +225,7 @@ fn main() {
     // MIT `main` (`kadmin/server/ovsec_kadmd.c:446-457`): `kadm5_init` and `kadm5_get_config_params` read the realm's profile, kdc.conf before krb5.conf; here it is read once and applied in the KDC's order.
     let profile = krb5_config::ProfileSet::from_env_files(&paths)
         .unwrap_or_else(|e| fail_to_start(&progname, Some(&e.init_text()), "initializing context"));
+    drop(profile_read);
     if let Err(e) = store.apply_profile(&profile) {
         fail_to_start(&progname, Some(&e.to_string()), "getting config parameters");
     }

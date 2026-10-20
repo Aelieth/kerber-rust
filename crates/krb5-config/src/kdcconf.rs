@@ -750,7 +750,7 @@ pub(super) fn kdc_conf_path_in(env: &dyn Fn(&str) -> Option<OsString>) -> PathBu
 /// MIT `profile_init_flags` (`prof_init.c:198-206`): a missing (`ENOENT`) or unreadable
 /// (`EACCES` / `EPERM`) file is skipped, so its defaults apply; any other failure is fatal.
 fn read_kdc_profile(path: &Path) -> Result<Option<String>, Error> {
-    match std::fs::read(path) {
+    match super::files::read(path) {
         Ok(bytes) => Ok(Some(with_includes(path, &bytes)?)),
         Err(e)
             if matches!(
@@ -769,7 +769,7 @@ fn read_kdc_profile(path: &Path) -> Result<Option<String>, Error> {
 
 /// The text of the kdc.conf at `path`, its includes followed.
 fn read_with_includes(path: &Path) -> Result<String, Error> {
-    with_includes(path, &std::fs::read(path)?)
+    with_includes(path, &super::files::read(path)?)
 }
 
 /// `bytes`, read from the kdc.conf at `path`, as text with its includes followed: the KDC profile

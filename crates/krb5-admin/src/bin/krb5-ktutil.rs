@@ -20,6 +20,7 @@ use std::io::{self, BufRead, IsTerminal as _, Write};
 use std::path::Path;
 
 use krb5_cli::{LineEnd, Prompter, Signal, SignalCatch, Stdin, fgets, line_mode, take_caught};
+use krb5_config::Krb5Conf;
 use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};
 use krb5_protocol::{Keytab, KeytabEntry, KeytabSlot, parse_principal};
 use zeroize::Zeroizing;
@@ -33,11 +34,11 @@ const BUFSIZ: usize = 8192;
 fn main() {
     let argv: Vec<String> = std::env::args().collect();
     // MIT `main` (`kadmin/ktutil/ktutil.c:49-53`): `krb5_init_context` fails with the program name and "while initializing krb5", then exits 1.
-    if let Err(e) = krb5_config::init_profile() {
+    let profile = krb5_config::init_profile().unwrap_or_else(|e| {
         let prog = argv.first().map_or(WHOAMI, String::as_str);
         eprintln!("{prog}: {} while initializing krb5", e.init_text());
         std::process::exit(1);
-    }
+    });
     // MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:209-217`): the context's `KRB5_TRACE` opens with it; no ktutil request traces.
     krb5_protocol::trace::init();
     let mut kt = empty_list();
@@ -47,7 +48,7 @@ fn main() {
     } else {
         FullyBuffered::stdout()
     };
-    let status = run_ktutil(&argv, &mut kt, &mut Stdin::unbuffered(), &mut out);
+    let status = run_ktutil(&argv, &mut kt, &profile, &mut Stdin::unbuffered(), &mut out);
     drop(out);
     std::process::exit(status);
 }
@@ -57,11 +58,12 @@ fn main() {
 fn run_ktutil(
     _argv: &[String],
     kt: &mut Keytab,
+    profile: &Krb5Conf,
     input: &mut dyn BufRead,
     out: &mut dyn Write,
 ) -> i32 {
     // MIT `main` (`kadmin/ktutil/ktutil.c:43-62`): `argc` is unused, `ss_listen` runs, and the process exits 0.
-    listen(kt, input, out);
+    listen(kt, profile, input, out);
     0
 }
 
@@ -143,7 +145,13 @@ enum Flow {
 
 /// A request's handler: the list, the request's words, stdin for its replies, stdout. An error is
 /// the line MIT prints on stderr for it, without its newline.
-type Run = fn(&mut Keytab, &[String], &mut dyn BufRead, &mut dyn Write) -> Result<Flow, Vec<u8>>;
+type Run = fn(
+    &mut Keytab,
+    &Krb5Conf,
+    &[String],
+    &mut dyn BufRead,
+    &mut dyn Write,
+) -> Result<Flow, Vec<u8>>;
 
 /// One request: its names, its one-line description, and what runs it.
 struct Request {
@@ -208,7 +216,7 @@ const REQUESTS: &[Request] = &[
 
 /// The prompt, then one request line, until `quit` or the end of input. `SIGINT` is caught through
 /// the loop and `SIGCONT` while the prompt waits: either prints a newline and prompts again.
-fn listen(kt: &mut Keytab, input: &mut dyn BufRead, out: &mut dyn Write) {
+fn listen(kt: &mut Keytab, profile: &Krb5Conf, input: &mut dyn BufRead, out: &mut dyn Write) {
     // MIT `ss_listen` (`util/ss/listen.c:99-108`): `SIGINT` is caught for the whole loop.
     let _sigint = SignalCatch::new(&[Signal::SIGINT]);
     let mut raw = Vec::new();
@@ -241,7 +249,7 @@ fn listen(kt: &mut Keytab, input: &mut dyn BufRead, out: &mut dyn Write) {
             .iter()
             .position(|&b| b == b'\r' || b == b'\n' || b == 0)
             .unwrap_or(raw.len());
-        match execute_line(kt, &raw[..end], input, out) {
+        match execute_line(kt, profile, &raw[..end], input, out) {
             Ok(Flow::Next) => {}
             Ok(Flow::Quit) => break,
             Err(mut line) => {
@@ -257,6 +265,7 @@ fn listen(kt: &mut Keytab, input: &mut dyn BufRead, out: &mut dyn Write) {
 /// not UTF-8 is refused when its first word names a request; an unknown one is reported byte for byte.
 fn execute_line(
     kt: &mut Keytab,
+    profile: &Krb5Conf,
     line: &[u8],
     input: &mut dyn BufRead,
     out: &mut dyn Write,
@@ -280,7 +289,7 @@ fn execute_line(
         return Ok(Flow::Next);
     };
     match REQUESTS.iter().find(|r| r.names.contains(&name.as_str())) {
-        Some(r) => (r.run)(kt, &argv, input, out),
+        Some(r) => (r.run)(kt, profile, &argv, input, out),
         None => {
             // MIT `ss_listen` (`util/ss/listen.c:143-155`): an unknown request is named by its first word, cut at the first blank.
             Err(unknown_request(trimmed))
@@ -319,6 +328,7 @@ fn not_utf8(trimmed: &[u8]) -> Result<Flow, Vec<u8>> {
 /// `clear_list`: the list emptied.
 fn clear_list(
     kt: &mut Keytab,
+    _profile: &Krb5Conf,
     argv: &[String],
     _input: &mut dyn BufRead,
     _out: &mut dyn Write,
@@ -334,6 +344,7 @@ fn clear_list(
 /// `read_kt`: a keytab's entries added to the list.
 fn read_kt(
     kt: &mut Keytab,
+    _profile: &Krb5Conf,
     argv: &[String],
     _input: &mut dyn BufRead,
     _out: &mut dyn Write,
@@ -355,6 +366,7 @@ fn read_kt(
 /// `read_st`: srvtabs are no longer read.
 fn read_st(
     _kt: &mut Keytab,
+    _profile: &Krb5Conf,
     argv: &[String],
     _input: &mut dyn BufRead,
     _out: &mut dyn Write,
@@ -366,6 +378,7 @@ fn read_st(
 /// `write_kt`: each entry added to a keytab.
 fn write_kt(
     kt: &mut Keytab,
+    _profile: &Krb5Conf,
     argv: &[String],
     _input: &mut dyn BufRead,
     _out: &mut dyn Write,
@@ -384,6 +397,7 @@ fn write_kt(
 /// `write_st`: srvtabs are no longer written.
 fn write_st(
     _kt: &mut Keytab,
+    _profile: &Krb5Conf,
     argv: &[String],
     _input: &mut dyn BufRead,
     _out: &mut dyn Write,
@@ -395,12 +409,13 @@ fn write_st(
 /// `add_entry`: one entry from a password or a hex key ([`addent`]).
 fn add_entry(
     kt: &mut Keytab,
+    profile: &Krb5Conf,
     argv: &[String],
     input: &mut dyn BufRead,
     out: &mut dyn Write,
 ) -> Result<Flow, Vec<u8>> {
     let args: Vec<&str> = argv[1..].iter().map(String::as_str).collect();
-    addent(kt, &argv[0], &args, input, out)
+    addent(kt, profile, &argv[0], &args, input, out)
         .map(|()| Flow::Next)
         .map_err(String::into_bytes)
 }
@@ -408,6 +423,7 @@ fn add_entry(
 /// `delete_entry`: the entry at a slot taken out of the list.
 fn delete_entry(
     kt: &mut Keytab,
+    _profile: &Krb5Conf,
     argv: &[String],
     _input: &mut dyn BufRead,
     _out: &mut dyn Write,
@@ -427,6 +443,7 @@ fn delete_entry(
 /// `list`: the list, `-t` adding each entry's timestamp, `-e` its enctype and `-k` its key.
 fn list(
     kt: &mut Keytab,
+    _profile: &Krb5Conf,
     argv: &[String],
     _input: &mut dyn BufRead,
     out: &mut dyn Write,
@@ -524,6 +541,7 @@ fn format_list(
 #[allow(clippy::unnecessary_wraps)]
 fn list_requests(
     _kt: &mut Keytab,
+    _profile: &Krb5Conf,
     _argv: &[String],
     _input: &mut dyn BufRead,
     out: &mut dyn Write,
@@ -550,6 +568,7 @@ fn list_requests(
 #[allow(clippy::unnecessary_wraps)]
 fn quit(
     _kt: &mut Keytab,
+    _profile: &Krb5Conf,
     _argv: &[String],
     _input: &mut dyn BufRead,
     _out: &mut dyn Write,
@@ -591,6 +610,7 @@ fn atoi(s: &str) -> i32 {
 /// `addent`: one keytab entry from a password or a hex key, `cmd` the name the request was given.
 fn addent(
     kt: &mut Keytab,
+    profile: &Krb5Conf,
     cmd: &str,
     args: &[&str],
     input: &mut dyn BufRead,
@@ -634,7 +654,7 @@ fn addent(
     // MIT `ktutil_add_entry` (`kadmin/ktutil/ktutil.c:173-176`): a failure of the entry is reported "while adding new entry".
     let fail = |e: &dyn std::fmt::Display| format!("{cmd}: {e} while adding new entry");
     // MIT `ktutil_add` (`kadmin/ktutil/ktutil_funcs.c:159-172`): the name takes the default realm, and an unknown enctype is `KRB5_BAD_ENCTYPE`.
-    let (name, realm) = with_default_realm(spec)
+    let (name, realm) = with_default_realm(spec, profile)
         .and_then(|spec| parse_principal(&spec))
         .map_err(|e| fail(&e))?;
     // MIT `KRB5_BAD_ENCTYPE` (`lib/krb5/error_tables/krb5_err.et:254-254`): the text is "Bad encryption type".
@@ -738,14 +758,15 @@ fn hex_nibble(c: u8) -> Option<u8> {
 }
 
 /// `spec`, with krb5.conf's `default_realm` when it names no realm.
-fn with_default_realm(spec: &str) -> Result<String, String> {
+fn with_default_realm(spec: &str, profile: &Krb5Conf) -> Result<String, String> {
     // MIT `krb5_parse_name_flags` (`lib/krb5/krb/parse.c:198-211`): a name with no realm takes the default realm.
     let parsed = krb5_types::parse_name_ex(spec, "", false).map_err(|e| e.to_string())?;
     if parsed.has_realm {
         return Ok(spec.to_owned());
     }
-    let realm = krb5_config::load_krb5_conf()
-        .and_then(|c| c.default_realm)
+    let realm = profile
+        .default_realm
+        .clone()
         .ok_or_else(|| krb5_config::Error::NoDefaultRealm.to_string())?;
     Ok(format!("{spec}@{realm}"))
 }
@@ -759,7 +780,12 @@ mod tests {
     /// `input` run through the request loop: what it printed on stdout.
     fn run_lines(kt: &mut Keytab, input: &[u8]) -> String {
         let mut out = Vec::new();
-        listen(kt, &mut io::Cursor::new(input), &mut out);
+        listen(
+            kt,
+            &krb5_config::isolated_profile(),
+            &mut io::Cursor::new(input),
+            &mut out,
+        );
         String::from_utf8(out).unwrap()
     }
 
@@ -767,6 +793,7 @@ mod tests {
     fn fails(kt: &mut Keytab, line: &str, input: &[u8]) -> Option<String> {
         execute_line(
             kt,
+            &krb5_config::isolated_profile(),
             line.as_bytes(),
             &mut io::Cursor::new(input),
             &mut Vec::new(),
@@ -795,6 +822,7 @@ mod tests {
         let rc = run_ktutil(
             &["ktutil".to_owned(), "clear".to_owned()],
             &mut kt,
+            &krb5_config::isolated_profile(),
             &mut io::Cursor::new(b"bogus word\n"),
             &mut out,
         );
@@ -892,7 +920,14 @@ mod tests {
             Some("ktutil: Unbalanced quotes in command line".into())
         );
         let raw = |line: &[u8]| {
-            execute_line(&mut empty_list(), line, &mut io::empty(), &mut Vec::new()).err()
+            execute_line(
+                &mut empty_list(),
+                &krb5_config::isolated_profile(),
+                line,
+                &mut io::empty(),
+                &mut Vec::new(),
+            )
+            .err()
         };
         assert_eq!(
             raw(b"\xff x"),
@@ -1033,6 +1068,7 @@ mod tests {
         let mut out = Vec::new();
         listen(
             &mut kt,
+            &krb5_config::isolated_profile(),
             &mut io::BufReader::new(InjectedErr {
                 kind: io::ErrorKind::Other,
                 n: 0,
@@ -1141,6 +1177,7 @@ mod tests {
         assert_eq!(
             execute_line(
                 &mut kt,
+                &krb5_config::isolated_profile(),
                 add.as_bytes(),
                 &mut io::Cursor::new(digits),
                 &mut out

@@ -145,7 +145,8 @@ fn main() {
                     }
                 },
             );
-        let fwd = tgs_forward(&kdc, &as_out).unwrap_or_else(|e| {
+        let profile = krb5_config::init_profile().unwrap_or_else(|_| krb5_config::Krb5Conf::new());
+        let fwd = tgs_forward(&profile, &kdc, &as_out).unwrap_or_else(|e| {
             eprintln!("tgs_forward: {e}");
             std::process::exit(1);
         });

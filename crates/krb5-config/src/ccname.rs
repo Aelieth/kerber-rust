@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use super::CcSpec;
 use super::Error;
-use super::profile::load_krb5_conf;
+use super::{ClientContext, Krb5Conf};
 
 /// MIT `KRB5_CC_UNKNOWN_TYPE`.
 pub const KRB5_CC_UNKNOWN_TYPE: &str = "Unknown credential cache type";
@@ -90,33 +90,31 @@ fn unix_username() -> String {
     }
 }
 
-/// `-c` flag, else `KRB5CCNAME`, else conf `default_ccache_name`, else builtin.
+/// `-c` flag, else the context's `KRB5CCNAME`, else its profile's name, else builtin.
 ///
 /// # Errors
 ///
 /// [`Error::Ccache`]: [`KRB5_CC_UNKNOWN_TYPE`] when the chosen name's type prefix is not
 /// `FILE`, `MEMORY`, `DIR`, or `KCM`, or (for the conf default only) an unknown or
 /// unterminated `%{token}`.
-pub fn resolve_ccspec(flag: Option<&str>) -> Result<CcSpec, Error> {
-    if let Some(s) = flag {
-        return parse_ccspec(s);
+pub fn resolve_ccspec(ctx: &ClientContext, flag: Option<&str>) -> Result<CcSpec, Error> {
+    match flag.or(ctx.ccname()) {
+        Some(s) => parse_ccspec(s),
+        None => default_ccspec(&ctx.profile),
     }
-    if let Some(v) = std::env::var_os("KRB5CCNAME") {
-        return parse_ccspec(&v.to_string_lossy());
-    }
-    default_ccspec()
 }
 
-/// Conf `default_ccache_name` after token expansion, else builtin FILE.
+/// The profile's `default_ccache_name` after token expansion, else builtin FILE.
 ///
 /// # Errors
 ///
 /// [`Error::Ccache`] when `default_ccache_name` has an unknown or unterminated `%{token}`, or
 /// carrying [`KRB5_CC_UNKNOWN_TYPE`] when its type prefix is not `FILE`, `MEMORY`, `DIR`, or
 /// `KCM`.
-pub fn default_ccspec() -> Result<CcSpec, Error> {
-    let raw = load_krb5_conf()
-        .and_then(|c| c.default_ccache_name)
+pub fn default_ccspec(profile: &Krb5Conf) -> Result<CcSpec, Error> {
+    let raw = profile
+        .default_ccache_name
+        .clone()
         .unwrap_or_else(|| BUILTIN_CCACHE.to_owned());
     parse_ccspec(&expand_ccache_params(&raw)?)
 }

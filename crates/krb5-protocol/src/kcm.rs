@@ -14,6 +14,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 
+use krb5_config::Krb5Conf;
 use krb5_types::{PrincipalName, Realm};
 
 use crate::ccache::FileCcache;
@@ -55,14 +56,18 @@ const SUN_PATH_LEN: usize = 108;
 
 struct KcmIo {
     stream: UnixStream,
+    path: PathBuf,
 }
 
 impl KcmIo {
     /// MIT `kcmio_unix_socket_connect` (`cc_kcm.c:313-330`): a `kcm_socket` of `-`, or a socket
     /// that is not there, is `KRB5_KCM_NO_SERVER`; any other failure to connect is its errno.
     /// The path is cut to `sun_path`, as MIT's `strlcpy` cuts it.
-    fn connect() -> io::Result<Self> {
-        let path = kcm_socket_path();
+    fn connect(profile: &Krb5Conf) -> io::Result<Self> {
+        Self::connect_to(kcm_socket_path(profile))
+    }
+
+    fn connect_to(path: PathBuf) -> io::Result<Self> {
         if path.as_os_str() == "-" {
             return Err(kcm_status(KRB5_KCM_NO_SERVER));
         }
@@ -83,11 +88,11 @@ impl KcmIo {
         })?;
         stream.set_read_timeout(Some(std::time::Duration::from_secs(10)))?;
         stream.set_write_timeout(Some(std::time::Duration::from_secs(10)))?;
-        Ok(Self { stream })
+        Ok(Self { stream, path })
     }
 
     fn reconnect(&mut self) -> io::Result<()> {
-        *self = Self::connect()?;
+        *self = Self::connect_to(self.path.clone())?;
         Ok(())
     }
 
@@ -210,12 +215,12 @@ thread_local! {
 /// MIT `kcmio_unix_socket_connect` (`cc_kcm.c:308-310`): the profile's `kcm_socket`, with
 /// `DEFAULT_KCM_SOCKET_PATH` its default; no environment variable is read.
 #[must_use]
-pub fn kcm_socket_path() -> PathBuf {
+pub fn kcm_socket_path(profile: &Krb5Conf) -> PathBuf {
     #[cfg(test)]
     if let Some(p) = SOCKET_OVERRIDE.with(|s| s.borrow().clone()) {
         return p;
     }
-    socket_path_from(krb5_config::load_krb5_conf().and_then(|c| c.kcm_socket))
+    socket_path_from(profile.kcm_socket.clone())
 }
 
 fn socket_path_from(kcm_socket: Option<String>) -> PathBuf {
@@ -247,8 +252,8 @@ fn connect_unnamed() -> io::Result<UnixStream> {
 /// # Errors
 ///
 /// As the connection's: `KRB5_KCM_NO_SERVER` ([`kcm_no_server`]) or the connect's errno.
-pub fn kcm_reachable() -> io::Result<()> {
-    KcmIo::connect().map(drop)
+pub fn kcm_reachable(profile: &Krb5Conf) -> io::Result<()> {
+    KcmIo::connect(profile).map(drop)
 }
 
 fn request_frame(opcode: u16, args: &[u8]) -> Vec<u8> {
@@ -366,8 +371,8 @@ fn get_principal(io: &mut KcmIo, name: &str) -> io::Result<(Realm, PrincipalName
 /// `ErrorKind::Other` for any other nonzero status; `ErrorKind::InvalidData` or
 /// `UnexpectedEof` for a reply over 10 MiB, a non-UTF-8 default name, or a malformed or
 /// truncated principal or credential list.
-pub fn kcm_load(residual: &str) -> io::Result<FileCcache> {
-    let mut io = KcmIo::connect()?;
+pub fn kcm_load(profile: &Krb5Conf, residual: &str) -> io::Result<FileCcache> {
+    let mut io = KcmIo::connect(profile)?;
     let name = default_or(&mut io, residual)?;
     let primary = get_principal(&mut io, &name)?;
     let creds = match creds_via_list(&mut io, &name) {
@@ -390,8 +395,8 @@ pub fn kcm_load(residual: &str) -> io::Result<FileCcache> {
 /// status on GEN_NEW, INITIALIZE, STORE, or the default-cache lookup (a missing default is
 /// created); `ErrorKind::InvalidData` for a reply over 10 MiB or a non-UTF-8 cache name. A
 /// failed SET_DEFAULT_CACHE is ignored.
-pub fn kcm_store(residual: &str, cc: &FileCcache) -> io::Result<()> {
-    kcm_put(residual, cc, true)
+pub fn kcm_store(profile: &Krb5Conf, residual: &str, cc: &FileCcache) -> io::Result<()> {
+    kcm_put(profile, residual, cc, true)
 }
 
 /// [`kcm_store`] without `SET_DEFAULT_CACHE` (kvno store-back).
@@ -402,8 +407,12 @@ pub fn kcm_store(residual: &str, cc: &FileCcache) -> io::Result<()> {
 /// times out; `ErrorKind::NotFound` (`KRB5_FCC_NOFILE`) or `ErrorKind::Other` for a nonzero
 /// status on GEN_NEW, INITIALIZE, STORE, or the default-cache lookup (a missing default is
 /// created); `ErrorKind::InvalidData` for a reply over 10 MiB or a non-UTF-8 cache name.
-pub fn kcm_store_keep_default(residual: &str, cc: &FileCcache) -> io::Result<()> {
-    kcm_put(residual, cc, false)
+pub fn kcm_store_keep_default(
+    profile: &Krb5Conf,
+    residual: &str,
+    cc: &FileCcache,
+) -> io::Result<()> {
+    kcm_put(profile, residual, cc, false)
 }
 
 /// The collection's primary cache name.
@@ -414,8 +423,8 @@ pub fn kcm_store_keep_default(residual: &str, cc: &FileCcache) -> io::Result<()>
 /// The OS error when the KCM socket cannot be connected or a read or write on it fails or
 /// times out; `ErrorKind::NotFound` or `ErrorKind::Other` for a nonzero status;
 /// `ErrorKind::InvalidData` for a reply over 10 MiB or a non-UTF-8 name.
-pub fn kcm_primary_name() -> io::Result<String> {
-    let mut io = KcmIo::connect()?;
+pub fn kcm_primary_name(profile: &Krb5Conf) -> io::Result<String> {
+    let mut io = KcmIo::connect(profile)?;
     cstring(&io.call(OP_GET_DEFAULT_CACHE, &[])?)
 }
 
@@ -428,8 +437,8 @@ pub fn kcm_primary_name() -> io::Result<String> {
 /// times out; `ErrorKind::NotFound` (`KRB5_FCC_NOFILE`) or `ErrorKind::Other` for a nonzero
 /// status on the default-cache lookup or a STORE; `ErrorKind::InvalidData` for a reply over
 /// 10 MiB or a non-UTF-8 cache name.
-pub fn kcm_store_creds(residual: &str, creds: &[CcacheCred]) -> io::Result<()> {
-    let mut io = KcmIo::connect()?;
+pub fn kcm_store_creds(profile: &Krb5Conf, residual: &str, creds: &[CcacheCred]) -> io::Result<()> {
+    let mut io = KcmIo::connect(profile)?;
     let name = default_or(&mut io, residual)?;
     for c in creds {
         store_one(&mut io, &name, c)?;
@@ -437,8 +446,13 @@ pub fn kcm_store_creds(residual: &str, creds: &[CcacheCred]) -> io::Result<()> {
     Ok(())
 }
 
-fn kcm_put(residual: &str, cc: &FileCcache, set_default: bool) -> io::Result<()> {
-    let mut io = KcmIo::connect()?;
+fn kcm_put(
+    profile: &Krb5Conf,
+    residual: &str,
+    cc: &FileCcache,
+    set_default: bool,
+) -> io::Result<()> {
+    let mut io = KcmIo::connect(profile)?;
     let name = default_or_create(&mut io, residual)?;
     initialize(&mut io, &name, cc)?;
     for c in cc.creds.iter().filter(|c| !c.is_removed()) {
@@ -458,8 +472,8 @@ fn kcm_put(residual: &str, cc: &FileCcache, set_default: bool) -> io::Result<()>
 /// times out; `ErrorKind::NotFound` when the cache (or, for an empty residual, a default)
 /// does not exist (`KRB5_FCC_NOFILE`) and `ErrorKind::Other` for any other nonzero status;
 /// `ErrorKind::InvalidData` for a reply over 10 MiB or a non-UTF-8 default name.
-pub fn kcm_destroy(residual: &str) -> io::Result<()> {
-    let mut io = KcmIo::connect()?;
+pub fn kcm_destroy(profile: &Krb5Conf, residual: &str) -> io::Result<()> {
+    let mut io = KcmIo::connect(profile)?;
     let name = default_or(&mut io, residual)?;
     io.call(OP_DESTROY, &zname(&name)).map(|_| ())
 }
@@ -472,14 +486,14 @@ pub fn kcm_destroy(residual: &str) -> io::Result<()> {
 /// be connected or a read or write on it fails or times out; `ErrorKind::NotFound` for a
 /// `KRB5_FCC_NOFILE` status and `ErrorKind::Other` for any other nonzero status;
 /// `ErrorKind::InvalidData` for a reply over 10 MiB.
-pub fn kcm_switch(residual: &str) -> io::Result<()> {
+pub fn kcm_switch(profile: &Krb5Conf, residual: &str) -> io::Result<()> {
     if residual.is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "kswitch -c needs KCM:name",
         ));
     }
-    let mut io = KcmIo::connect()?;
+    let mut io = KcmIo::connect(profile)?;
     io.call(OP_SET_DEFAULT_CACHE, &zname(residual)).map(|_| ())
 }
 
@@ -491,8 +505,8 @@ pub fn kcm_switch(residual: &str) -> io::Result<()> {
 /// times out; `ErrorKind::Other` for a nonzero status other than `KRB5_FCC_NOFILE` (a missing
 /// list reads as empty, a missing cache is skipped); `ErrorKind::InvalidData` for a reply over
 /// 10 MiB, a UUID list that is not a multiple of 16 bytes, or a non-UTF-8 cache name.
-pub fn kcm_cache_names() -> io::Result<Vec<String>> {
-    let mut io = KcmIo::connect()?;
+pub fn kcm_cache_names(profile: &Krb5Conf) -> io::Result<Vec<String>> {
+    let mut io = KcmIo::connect(profile)?;
     let uuids = match io.call(OP_GET_CACHE_UUID_LIST, &[]) {
         Ok(u) => u,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -525,8 +539,8 @@ pub fn kcm_cache_names() -> io::Result<Vec<String>> {
 /// times out; `ErrorKind::NotFound` (`KRB5_FCC_NOFILE`, also for an empty answer) or
 /// `ErrorKind::Other` for a nonzero status; `ErrorKind::InvalidData` or `UnexpectedEof` for a
 /// malformed principal.
-pub fn kcm_principal(name: &str) -> io::Result<(Realm, PrincipalName)> {
-    let mut io = KcmIo::connect()?;
+pub fn kcm_principal(profile: &Krb5Conf, name: &str) -> io::Result<(Realm, PrincipalName)> {
+    let mut io = KcmIo::connect(profile)?;
     let raw = io.call(OP_GET_PRINCIPAL, &zname(name))?;
     if raw.is_empty() {
         return Err(kcm_status(KRB5_FCC_NOFILE));
@@ -543,8 +557,8 @@ pub fn kcm_principal(name: &str) -> io::Result<(Realm, PrincipalName)> {
 /// The OS error when the KCM socket cannot be connected or a read or write on it fails or
 /// times out; `ErrorKind::NotFound` or `ErrorKind::Other` for a nonzero status;
 /// `ErrorKind::InvalidData` for a reply over 10 MiB or a non-UTF-8 name.
-pub fn kcm_gen_new() -> io::Result<String> {
-    let mut io = KcmIo::connect()?;
+pub fn kcm_gen_new(profile: &Krb5Conf) -> io::Result<String> {
+    let mut io = KcmIo::connect(profile)?;
     cstring(&io.call(OP_GEN_NEW, &[])?)
 }
 
@@ -636,9 +650,9 @@ mod tests {
         SOCKET_OVERRIDE.with(|s| *s.borrow_mut() = Some(path.clone()));
         let cc = dummy_cc();
         if set_default {
-            kcm_store("t", &cc).unwrap();
+            kcm_store(&Krb5Conf::new(), "t", &cc).unwrap();
         } else {
-            kcm_store_keep_default("t", &cc).unwrap();
+            kcm_store_keep_default(&Krb5Conf::new(), "t", &cc).unwrap();
         }
         SOCKET_OVERRIDE.with(|s| *s.borrow_mut() = None);
         drop(th.join());
@@ -790,7 +804,7 @@ mod tests {
             }
         });
         SOCKET_OVERRIDE.with(|s| *s.borrow_mut() = Some(path.clone()));
-        let loaded = kcm_load("arm");
+        let loaded = kcm_load(&Krb5Conf::new(), "arm");
         SOCKET_OVERRIDE.with(|s| *s.borrow_mut() = None);
         drop(th.join());
         let _ = std::fs::remove_file(&path);

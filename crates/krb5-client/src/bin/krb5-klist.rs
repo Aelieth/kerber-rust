@@ -23,7 +23,7 @@ use krb5_client::errmsg::{Code, Krb5Error};
 use krb5_client::{
     KeytabName, keytab_read_error, kt_client_default_name, kt_default_name, kt_resolve, load_ccache,
 };
-use krb5_config::{CcSpec, parse_ccspec, resolve_ccspec};
+use krb5_config::{CcSpec, ClientContext, parse_ccspec, resolve_ccspec};
 use krb5_crypto::EncryptionType;
 use krb5_protocol::{CcacheCred, Keytab, KeytabSlot};
 use krb5_types::{Ticket, TicketFlags};
@@ -77,36 +77,45 @@ fn main() {
 /// `-k`; then the collection list (`-l`), every cache (`-A`), the default cache, or the keytab.
 fn run(prog: &str, args: &KlistArgs) -> i32 {
     let now = unix_now();
-    if let Err(e) = krb5_client::init_context() {
-        eprintln!("{prog}: {e} while initializing krb5");
-        return 1;
-    }
+    let ctx = match krb5_client::init_context() {
+        Ok(ctx) => ctx,
+        Err(e) => {
+            eprintln!("{prog}: {e} while initializing krb5");
+            return 1;
+        }
+    };
+    let ctx = &ctx;
     if args.keytab {
-        return do_keytab(prog, args, args.ccache.as_deref());
+        return do_keytab(ctx, prog, args, args.ccache.as_deref());
     }
     let default = match &args.ccache {
         Some(name) => parse_ccspec(name),
-        None => resolve_ccspec(None),
+        None => resolve_ccspec(ctx, None),
     }
     .map_err(|e| Krb5Error::from_ccname(&e));
     let mut out = String::new();
     let status = if args.list_all {
-        list_all_ccaches(prog, &mut out, default.ok(), now)
+        list_all_ccaches(ctx, prog, &mut out, default.ok(), now)
     } else if args.show_all {
-        show_all_ccaches(prog, &mut out, args, default.ok(), now)
+        show_all_ccaches(ctx, prog, &mut out, args, default.ok(), now)
     } else {
-        do_ccache(prog, &mut out, args, default, now)
+        do_ccache(ctx, prog, &mut out, args, default, now)
     };
     print!("{out}");
     status
 }
 
 /// The caches of the default's collection; a default of an unknown type has none.
-fn caches(prog: &str, default: Option<CcSpec>, silent: bool) -> Result<Vec<Cache>, i32> {
+fn caches(
+    ctx: &ClientContext,
+    prog: &str,
+    default: Option<CcSpec>,
+    silent: bool,
+) -> Result<Vec<Cache>, i32> {
     let Some(default) = default else {
         return Ok(Vec::new());
     };
-    collection(&default).map_err(|e| {
+    collection(ctx, &default).map_err(|e| {
         if !silent {
             eprintln!("{prog}: {e} while listing ccache collection");
         }
@@ -116,8 +125,14 @@ fn caches(prog: &str, default: Option<CcSpec>, silent: bool) -> Result<Vec<Cache
 
 /// MIT `list_all_ccaches` (`klist.c:360-386`): one line per initialized cache, its principal and
 /// full name, ` (Expired)` when it holds no current ticket; exit 0 when any was listed.
-fn list_all_ccaches(prog: &str, out: &mut String, default: Option<CcSpec>, now: u32) -> i32 {
-    let caches = match caches(prog, default, false) {
+fn list_all_ccaches(
+    ctx: &ClientContext,
+    prog: &str,
+    out: &mut String,
+    default: Option<CcSpec>,
+    now: u32,
+) -> i32 {
+    let caches = match caches(ctx, prog, default, false) {
         Ok(c) => c,
         Err(code) => return code,
     };
@@ -125,7 +140,7 @@ fn list_all_ccaches(prog: &str, out: &mut String, default: Option<CcSpec>, now: 
     let _ = writeln!(out, "{:<30} ----------", "--------------");
     let mut status = 1;
     for cache in caches {
-        if list_ccache(out, &cache, now) == 0 {
+        if list_ccache(ctx, out, &cache, now) == 0 {
             status = 0;
         }
     }
@@ -133,8 +148,8 @@ fn list_all_ccaches(prog: &str, out: &mut String, default: Option<CcSpec>, now: 
 }
 
 /// MIT `list_ccache` (`klist.c:388-420`): a cache that is not initialized is skipped.
-fn list_ccache(out: &mut String, cache: &Cache, now: u32) -> i32 {
-    let Ok(cc) = load_ccache(&cache.spec()) else {
+fn list_ccache(ctx: &ClientContext, out: &mut String, cache: &Cache, now: u32) -> i32 {
+    let Ok(cc) = load_ccache(ctx, &cache.spec()) else {
         return 1;
     };
     let _ = write!(out, "{:<30.30} {}", unparse(&cc.primary), cache.full_name());
@@ -148,13 +163,14 @@ fn list_ccache(out: &mut String, cache: &Cache, now: u32) -> i32 {
 /// MIT `show_all_ccaches` (`klist.c:422-450`): each cache of the collection as `show_ccache`
 /// prints it, a blank line between; with `-s`, only the status; exit 0 when any cache passed.
 fn show_all_ccaches(
+    ctx: &ClientContext,
     prog: &str,
     out: &mut String,
     args: &KlistArgs,
     default: Option<CcSpec>,
     now: u32,
 ) -> i32 {
-    let caches = match caches(prog, default, args.silent) {
+    let caches = match caches(ctx, prog, default, args.silent) {
         Ok(c) => c,
         Err(code) => return code,
     };
@@ -164,9 +180,9 @@ fn show_all_ccaches(
             out.push('\n');
         }
         let st = if args.silent {
-            check(cache, now)
+            check(ctx, cache, now)
         } else {
-            show_ccache(prog, out, args, cache)
+            show_ccache(ctx, prog, out, args, cache)
         };
         if st == 0 {
             status = 0;
@@ -177,13 +193,14 @@ fn show_all_ccaches(
 
 /// MIT `do_ccache` (`klist.c:452-465`): the default cache, shown or (`-s`) checked.
 fn do_ccache(
+    ctx: &ClientContext,
     prog: &str,
     out: &mut String,
     args: &KlistArgs,
     default: Result<CcSpec, Krb5Error>,
     now: u32,
 ) -> i32 {
-    let cache = match default.and_then(|d| resolve(&d)) {
+    let cache = match default.and_then(|d| resolve(ctx, &d)) {
         Ok(c) => c,
         Err(e) => {
             if !args.silent {
@@ -193,27 +210,33 @@ fn do_ccache(
         }
     };
     if args.silent {
-        check(&cache, now)
+        check(ctx, &cache, now)
     } else {
-        show_ccache(prog, out, args, &cache)
+        show_ccache(ctx, prog, out, args, &cache)
     }
 }
 
 /// MIT `check_ccache` (`klist.c:532-576`): 0 when the cache holds a current local TGT, or holds
 /// no local TGT but a current ticket.
-fn check(cache: &Cache, now: u32) -> i32 {
-    load_ccache(&cache.spec()).map_or(1, |cc| check_ccache(&cc, now))
+fn check(ctx: &ClientContext, cache: &Cache, now: u32) -> i32 {
+    load_ccache(ctx, &cache.spec()).map_or(1, |cc| check_ccache(&cc, now))
 }
 
 /// MIT `show_ccache` (`klist.c:468-529`): the cache's name and default principal, the header, then
 /// each credential (configuration entries only with `-C`).
-fn show_ccache(prog: &str, out: &mut String, args: &KlistArgs, cache: &Cache) -> i32 {
-    let cc = match load_ccache(&cache.spec()) {
+fn show_ccache(
+    ctx: &ClientContext,
+    prog: &str,
+    out: &mut String,
+    args: &KlistArgs,
+    cache: &Cache,
+) -> i32 {
+    let cc = match load_ccache(ctx, &cache.spec()) {
         Ok(cc) => cc,
         Err(e) => {
             eprintln!(
                 "{prog}: {}",
-                krb5_client::cache_read_error(&cache.spec(), e.as_ref())
+                krb5_client::cache_read_error(ctx, &cache.spec(), e.as_ref())
             );
             return 1;
         }
@@ -409,14 +432,17 @@ fn printtime(t: u32) -> String {
 /// only then, from the keytab's own bytes; the file's bytes are wiped right after parsing, and the
 /// listing, sized before it is written so that no reallocation leaves a key's hex behind, once
 /// it is printed.
-fn do_keytab(prog: &str, args: &KlistArgs, name: Option<&str>) -> i32 {
+fn do_keytab(ctx: &ClientContext, prog: &str, args: &KlistArgs, name: Option<&str>) -> i32 {
     let (ktname, doing) = match name {
         Some(n) => (n.to_owned(), format!("while resolving keytab {n}")),
         None if args.client_keytab => (
-            kt_client_default_name(),
+            kt_client_default_name(ctx),
             "while getting default client keytab".to_owned(),
         ),
-        None => (kt_default_name(), "while getting default keytab".to_owned()),
+        None => (
+            kt_default_name(ctx),
+            "while getting default keytab".to_owned(),
+        ),
     };
     let kt = match kt_resolve(&ktname) {
         Ok(k) => k,

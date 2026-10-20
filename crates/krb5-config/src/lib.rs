@@ -34,6 +34,8 @@
 )]
 
 mod ccname;
+mod context;
+mod files;
 mod hostname;
 mod iprop_params;
 mod kdcconf;
@@ -560,6 +562,8 @@ pub use ccname::{
     KRB5_CC_UNKNOWN_TYPE, default_ccache_name, default_ccspec, expand_ccache_params, parse_ccname,
     parse_ccspec, resolve_ccspec,
 };
+pub use context::ClientContext;
+pub use files::ReadOnce;
 pub use hostname::{
     CanonPrinc, HostPrinc, SnameError, expand_hostname, expand_hostname_no_dns,
     fallback_host_realm, local_host_name, sname_to_principal, this_host,
@@ -577,11 +581,10 @@ pub use plugin_profile::{
     PluginProfile, PluginRelations, filter_plugin_modules, kdc_plugin_relations,
 };
 pub use profile::{
-    client_realm_path, discover_kdc, discover_kdc_in, env_ktname, env_new_password, env_password,
-    host_to_realm, init_kdc_profile, init_profile, is_numeric_address, join_subsection_braces,
-    krb5_conf_paths, load_krb5_conf, load_krb5_conf_paths, parse_deltat, split_krb5_config_paths,
-    udp_preference_limit,
+    client_realm_path, discover_kdc_in, env_ktname, env_new_password, env_password, host_to_realm,
+    init_kdc_profile, init_profile, is_numeric_address, join_subsection_braces, krb5_conf_paths,
+    load_krb5_conf, load_krb5_conf_paths, parse_deltat, split_krb5_config_paths,
 };
 pub use profile_set::ProfileSet;
 pub use srv::lookup_srv_kdc;
-pub use testenv::{isolate_test_krb5, set_test_kdc_profile, set_test_krb5_paths};
+pub use testenv::{isolate_test_krb5, isolated_profile, set_test_kdc_profile, set_test_krb5_paths};

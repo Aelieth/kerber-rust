@@ -51,18 +51,18 @@ fn authtime_outside_skew_is_rejected() {
         .clone()
         .add_hours(10)
         .unwrap_or_else(|_| now_t.clone());
-    super::check_as_rep_times_sync(&part, now, 300, false).unwrap();
+    super::check_as_rep_times(&part, now, 300, false).unwrap();
     part.authtime = kerberos_time_from_utc_z("20000101000000Z").expect("old");
     part.starttime = Some(part.authtime.clone());
     part.endtime = now_t.clone().add_hours(10).unwrap_or(now_t);
-    let err = super::check_as_rep_times_sync(&part, now, 300, false).unwrap_err();
+    let err = super::check_as_rep_times(&part, now, 300, false).unwrap_err();
     assert!(
         err.to_string()
             .contains("Clock skew too great in KDC reply"),
         "MIT get_in_tkt.c:266-269, got {err}"
     );
-    super::check_as_rep_times_sync(&part, now, 300, true).unwrap();
+    super::check_as_rep_times(&part, now, 300, true).unwrap();
     part.endtime = kerberos_time_from_utc_z("20000101010000Z").expect("old end");
-    super::check_as_rep_times_sync(&part, now, 300, true).unwrap();
-    assert!(super::check_as_rep_times_sync(&part, now, 300, false).is_err());
+    super::check_as_rep_times(&part, now, 300, true).unwrap();
+    assert!(super::check_as_rep_times(&part, now, 300, false).is_err());
 }

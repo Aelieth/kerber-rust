@@ -7,6 +7,7 @@
 //! the exchange to the next mechanism; after it there is no fallback.
 
 use krb5_asn1::{decode, encode};
+use krb5_config::Krb5Conf;
 use krb5_crypto::{
     ProtocolKey, SPAKE_DEFAULT_GROUPS_CLIENT, SpakeGroup, spake_parse_groups, string_to_key,
 };
@@ -33,9 +34,10 @@ const SPAKE_MODULE: &str = "spake";
 /// The groups the client permits, in configuration order; none means no SPAKE module.
 ///
 /// MIT `group_init_state` (`groups.c:213-239`): `[libdefaults] spake_preauth_groups`, the client default when unset; no permitted group fails the module's init.
-pub(super) fn client_groups() -> Vec<SpakeGroup> {
-    let value = krb5_config::load_krb5_conf()
-        .and_then(|c| c.spake_preauth_groups)
+pub(super) fn client_groups(profile: &Krb5Conf) -> Vec<SpakeGroup> {
+    let value = profile
+        .spake_preauth_groups
+        .as_ref()
         .map(|words| words.join(" "));
     spake_parse_groups(value.as_deref().unwrap_or(SPAKE_DEFAULT_GROUPS_CLIENT))
 }
@@ -238,7 +240,7 @@ impl FastSpake {
     ) -> Result<Self, Error> {
         Ok(Self {
             st: SpakeState {
-                groups: client_groups(),
+                groups: client_groups(req.profile),
                 support: None,
                 responded: false,
             },
@@ -325,14 +327,14 @@ impl FastSpake {
 /// responder for the password. An empty one is a support message, and one that does not decode asks
 /// nothing; a challenge needs it when its group is one the client permits and its factors list SF-NONE.
 /// MIT `spake_prep_questions` (`plugins/preauth/spake/spake_client.c:119-141`): `need_as_key` for a challenge in a permitted group with SF-NONE, no question otherwise.
-pub(super) fn prep_needs_key(pa_in: &[u8]) -> bool {
+pub(super) fn prep_needs_key(profile: &Krb5Conf, pa_in: &[u8]) -> bool {
     if pa_in.is_empty() {
         return false;
     }
     let Ok(PaSpake::Challenge(ch)) = decode::<PaSpake>(pa_in) else {
         return false;
     };
-    SpakeGroup::from_number(ch.group).is_some_and(|g| client_groups().contains(&g))
+    SpakeGroup::from_number(ch.group).is_some_and(|g| client_groups(profile).contains(&g))
         && spake_contains_sf_none(&ch)
 }
 
@@ -352,7 +354,10 @@ pub(super) fn trace_round(
         Some(_) if trace::enabled() => {
             trace::init_creds_preauth();
             trace_preauth_input(
-                &sort_krb5_padata_sequence(method, &conf_preferred_preauth_types_for(req.realm)),
+                &sort_krb5_padata_sequence(
+                    method,
+                    &conf_preferred_preauth_types_for(req.profile, req.realm),
+                ),
                 etypes,
             );
         }
@@ -472,6 +477,7 @@ pub(super) fn continue_spake(
                     zeroize::Zeroizing::new(Vec::new())
                 };
                 return finish_as_rep(
+                    req.profile,
                     rep,
                     nonce,
                     key,
@@ -537,7 +543,7 @@ pub(super) fn spake_forced(
     clock: &Clock,
     pw: &mut PasswordCell<'_, '_>,
 ) -> Result<AsOutcome, Error> {
-    let groups = client_groups();
+    let groups = client_groups(req.profile);
     if groups.is_empty() {
         return Err(Error::ReplyMismatch("SPAKE required".into()));
     }

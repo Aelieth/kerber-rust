@@ -177,7 +177,13 @@ fn the_subkey_of_a_tgs_request_under_a_des3_tgt_has_odd_parity() {
         let service =
             PrincipalName::try_new(PrincipalName::NT_SRV_HST, ["host", "des3.kerber.test"])
                 .unwrap();
-        let _ = tgs_exchange(&kdc, &tgt(&session), service, "KERBER.TEST");
+        let _ = tgs_exchange(
+            &krb5_config::isolated_profile(),
+            &kdc,
+            &tgt(&session),
+            service,
+            "KERBER.TEST",
+        );
         let raw = shots.lock().unwrap().first().cloned().expect("a TGS-REQ");
         let req: TgsReq = decode(&raw).expect("TGS-REQ");
         let pa_tgs = req
@@ -212,6 +218,7 @@ fn the_subkey_of_a_fast_armor_under_a_des3_session_key_has_odd_parity() {
             realm: "KERBER.TEST",
             password: b"x",
             kdc: &kdc,
+            profile: &krb5_config::isolated_profile(),
             want_spake: false,
             fast_armor: Some(&armor),
             pkinit: None,
@@ -255,7 +262,13 @@ fn a_tgt_whose_session_key_has_bad_parity_is_refused_before_the_tgs_request_is_s
     let (kdc, shots) = recorder();
     let service =
         PrincipalName::try_new(PrincipalName::NT_SRV_HST, ["host", "des3.kerber.test"]).unwrap();
-    let r = tgs_exchange(&kdc, &tgt(&session), service, "KERBER.TEST");
+    let r = tgs_exchange(
+        &krb5_config::isolated_profile(),
+        &kdc,
+        &tgt(&session),
+        service,
+        "KERBER.TEST",
+    );
     assert!(
         matches!(r, Err(krb5_protocol::Error::DesBadParity)),
         "{r:?}"
@@ -281,6 +294,7 @@ fn an_armor_session_key_of_bad_parity_is_refused_before_the_as_request_is_sent()
         realm: "KERBER.TEST",
         password: b"x",
         kdc: &kdc,
+        profile: &krb5_config::isolated_profile(),
         want_spake: false,
         fast_armor: Some(&armor),
         pkinit: None,

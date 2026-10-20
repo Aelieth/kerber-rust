@@ -143,6 +143,7 @@ impl Rig {
             store,
             realm: TEST_REALM.to_owned(),
             caller: format!("root/admin@{TEST_REALM}"),
+            ctx: krb5_config::ClientContext::default(),
         };
         Self {
             out,
@@ -1026,7 +1027,15 @@ fn default_principal_from_the_ccache_is_its_first_name_slash_admin() {
     let cc = krb5_config::CcSpec::File(path);
     let o = Opts::default();
     assert_eq!(
-        default_princstr(&o, TEST_REALM, Some(&cc), None).as_deref(),
+        default_princstr(
+            &o,
+            TEST_REALM,
+            Some(&cc),
+            None,
+            &krb5_config::Krb5Conf::new(),
+            None
+        )
+        .as_deref(),
         Some("alice/admin@OTHER.TEST")
     );
     let anon = Opts {
@@ -1034,7 +1043,15 @@ fn default_principal_from_the_ccache_is_its_first_name_slash_admin() {
         ..Opts::default()
     };
     assert_eq!(
-        default_princstr(&anon, TEST_REALM, Some(&cc), None).as_deref(),
+        default_princstr(
+            &anon,
+            TEST_REALM,
+            Some(&cc),
+            None,
+            &krb5_config::Krb5Conf::new(),
+            None
+        )
+        .as_deref(),
         Some("WELLKNOWN/ANONYMOUS@KERBER.TEST")
     );
     let _ = std::fs::remove_dir_all(&dir);

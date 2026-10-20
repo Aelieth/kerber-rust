@@ -196,6 +196,7 @@ fn main() {
     let progname = progname(argv.first());
     // MIT `main` (`kdc/main.c:917-921`): the KDC context first, its profile kdc.conf ahead of
     // krb5.conf; a profile it refuses ends krb5kdc, named as invoked.
+    let profile_read = krb5_config::ReadOnce::start();
     if let Err(e) = krb5_config::init_kdc_profile() {
         let argv0 = argv.first().map_or("krb5kdc", String::as_str);
         eprintln!("{argv0}: {} while initializing krb5", e.init_text());
@@ -285,6 +286,7 @@ fn main() {
         eprintln!("{argv0}: {} while initializing krb5", e.init_text());
         std::process::exit(1);
     });
+    drop(profile_read);
     if let Err(e) = store.apply_profile(&profile) {
         eprintln!("{progname}: kdc.conf: {e}");
         std::process::exit(2);

@@ -233,15 +233,7 @@ fn pausec_is_encoded_only_when_it_is_not_zero() {
 
 #[test]
 fn under_armor_encrypted_timestamp_runs_only_when_the_kdc_offers_it_first() {
-    krb5_config::isolate_test_krb5();
-    let dir = krb5_testkit::scratch_dir("pg3-fast-mech-order");
-    let path = dir.join("krb5.conf");
-    std::fs::write(
-        &path,
-        "[libdefaults]\n    default_realm = KERBER.TEST\n    dns_lookup_kdc = false\n    dns_lookup_realm = false\n",
-    )
-    .unwrap();
-    krb5_config::set_test_krb5_paths(Some(vec![path]));
+    let profile = krb5_config::isolated_profile();
     let list = |types: &[i32]| -> Vec<PaData> {
         types
             .iter()
@@ -253,18 +245,22 @@ fn under_armor_encrypted_timestamp_runs_only_when_the_kdc_offers_it_first() {
     };
     // MIT's KDC under FAST when it does not offer SPAKE (live, kinit -T): 136, 19, 138, 133, 137.
     assert_eq!(
-        super::super::fast::fast_mechanism(&list(&[136, 19, 138, 133, 137]), &[]).unwrap(),
+        super::super::fast::fast_mechanism(&profile, &list(&[136, 19, 138, 133, 137]), &[])
+            .unwrap(),
         pa::ENCRYPTED_CHALLENGE
     );
     // Live lab, disable = encrypted_timestamp and kinit -T: the hint lists SPAKE before
     // encrypted challenge, and MIT's kinit answers SPAKE.
     assert_eq!(
-        super::super::fast::fast_mechanism(&list(&[136, 19, 151, 138, 133, 137]), &[]).unwrap(),
+        super::super::fast::fast_mechanism(&profile, &list(&[136, 19, 151, 138, 133, 137]), &[])
+            .unwrap(),
         pa::SPAKE
     );
     assert_eq!(
-        super::super::fast::fast_mechanism(&list(&[2, 138]), &[]).unwrap(),
+        super::super::fast::fast_mechanism(&profile, &list(&[2, 138]), &[]).unwrap(),
         pa::ENC_TIMESTAMP
     );
-    assert!(super::super::fast::fast_mechanism(&list(&[136, 19, 133, 137]), &[]).is_err());
+    assert!(
+        super::super::fast::fast_mechanism(&profile, &list(&[136, 19, 133, 137]), &[]).is_err()
+    );
 }

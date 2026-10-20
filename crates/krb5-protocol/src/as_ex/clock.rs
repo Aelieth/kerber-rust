@@ -32,8 +32,8 @@ pub(super) struct Clock {
 impl Clock {
     /// A clock with no KDC time yet, syncing as `kdc_timesync` says.
     /// MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:268-270`): `kdc_timesync` is on unless set to 0.
-    pub(super) fn new() -> Self {
-        Self::with_sync(krb5_config::load_krb5_conf().is_none_or(|c| c.kdc_timesync))
+    pub(super) fn new(profile: &krb5_config::Krb5Conf) -> Self {
+        Self::with_sync(profile.kdc_timesync)
     }
 
     /// A clock with no KDC time yet; `sync` is `kdc_timesync`.

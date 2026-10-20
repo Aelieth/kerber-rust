@@ -1,6 +1,8 @@
 //! RFC 6113 FAST armor on the AS exchange (`lib/krb5/krb/fast.c`
 //! `krb5int_fast_process_response` / `krb5int_fast_process_error`).
 
+use krb5_config::Krb5Conf;
+
 use super::clock::Clock;
 use super::ec::{EC_MODULE, client_challenge, reply_code};
 use super::otp::{self, OTP_MODULE, OtpState};
@@ -141,11 +143,12 @@ pub(super) fn continue_fast(
             'rounds: loop {
                 let mut method = sort_krb5_padata_sequence(
                     &method_from_error(&current).unwrap_or_default(),
-                    &super::conf_preferred_preauth_types_for(req.realm),
+                    &super::conf_preferred_preauth_types_for(req.profile, req.realm),
                 );
                 // MIT `pa_type_allowed` (`lib/krb5/krb/preauth2.c:627-631`): a type the input cache does not allow is not tried.
                 method.retain(|p| req.ticket.preauth_allowed(p.padata_type));
-                if fast_mechanism(&method, &skip).is_err() && !saved_method.is_empty() {
+                if fast_mechanism(req.profile, &method, &skip).is_err() && !saved_method.is_empty()
+                {
                     method.clone_from(&saved_method);
                 }
                 if trace::enabled() {
@@ -165,7 +168,7 @@ pub(super) fn continue_fast(
                 // the list's order; one that fails is traced and the next one is tried, and a
                 // keyboard interrupt ends the walk.
                 loop {
-                    let mech = match fast_mechanism(&method, &skip) {
+                    let mech = match fast_mechanism(req.profile, &method, &skip) {
                         Ok(mech) => mech,
                         Err(e) => {
                             return match (last_fail, first_failure) {
@@ -291,7 +294,7 @@ fn fast_key_mechanism(
         ENCTS_MODULE
     };
     // MIT `encts_process` (`lib/krb5/krb/preauth_encts.c:68-73`): the realm's disable fails the module before it asks for the key.
-    if mech == pa::ENC_TIMESTAMP && encrypted_timestamp_disabled(req.realm) {
+    if mech == pa::ENC_TIMESTAMP && encrypted_timestamp_disabled(req.profile, req.realm) {
         let f = ModuleFail::encts_disabled();
         f.trace(name, mech);
         return Ok(Err(f));
@@ -386,11 +389,12 @@ pub(super) fn ask_responder(
 ) -> Result<ResponderItems, Error> {
     let mut items = ResponderItems::default();
     fill_response_items(
+        req.profile,
         &mut items,
         otp,
         method,
         pw.asks_question(),
-        encrypted_timestamp_disabled(req.realm),
+        encrypted_timestamp_disabled(req.profile, req.realm),
     )?;
     call_responder(pw, &mut items)?;
     Ok(items)
@@ -432,16 +436,17 @@ pub(super) fn ask_gak_question(pw: &mut PasswordCell<'_, '_>) -> Result<(), Erro
 /// MIT `spake_prep_questions` (`plugins/preauth/spake/spake_client.c:119-141`): SPAKE asks it for a challenge it can answer, and for nothing else.
 /// MIT `krb5_get_as_key_password` (`lib/krb5/krb/gic_pwd.c:30-38`): the question is asked only when the caller gave neither a password nor a keytab, and no module holds the password yet.
 fn fill_response_items(
+    profile: &Krb5Conf,
     items: &mut ResponderItems,
     mut otp: Option<(&mut OtpState, Option<&Value>)>,
     method: &[PaData],
     ask_password: bool,
     encts_off: bool,
 ) -> Result<(), Error> {
-    let otp_on = crate::clpreauth::loaded(OTP_MODULE);
-    let ec_on = ask_password && crate::clpreauth::loaded(EC_MODULE);
-    let encts_on = ask_password && !encts_off && crate::clpreauth::loaded(ENCTS_MODULE);
-    let spake_on = ask_password && crate::clpreauth::loaded("spake");
+    let otp_on = crate::clpreauth::loaded(profile, OTP_MODULE);
+    let ec_on = ask_password && crate::clpreauth::loaded(profile, EC_MODULE);
+    let encts_on = ask_password && !encts_off && crate::clpreauth::loaded(profile, ENCTS_MODULE);
+    let spake_on = ask_password && crate::clpreauth::loaded(profile, "spake");
     for p in method {
         match p.padata_type {
             pa::OTP_CHALLENGE if otp_on => {
@@ -455,7 +460,9 @@ fn fill_response_items(
             pa::ENC_TIMESTAMP if encts_on => {
                 items.ask_question(QUESTION_PASSWORD, Some(b"".as_slice()));
             }
-            pa::SPAKE if spake_on && super::spake::prep_needs_key(p.padata_value.as_ref()) => {
+            pa::SPAKE
+                if spake_on && super::spake::prep_needs_key(profile, p.padata_value.as_ref()) =>
+            {
                 items.ask_question(QUESTION_PASSWORD, Some(b"".as_slice()));
             }
             _ => {}
@@ -711,6 +718,7 @@ fn finish_fast_as(
     rep.0.cname = finished.cname.clone();
     rep.0.padata = Some(fast.padata.clone());
     finish_as_rep(
+        req.profile,
         rep,
         nonce,
         Some(reply_key),
@@ -741,14 +749,18 @@ fn finish_fast_as(
 ///
 /// [`Error::ReplyMismatch`] "Generic preauthentication failure" (MIT `KRB5_PREAUTH_FAILED`) when
 /// the list offers none of those loaded modules.
-pub(super) fn fast_mechanism(method: &[PaData], skip: &[i32]) -> Result<i32, Error> {
+pub(super) fn fast_mechanism(
+    profile: &Krb5Conf,
+    method: &[PaData],
+    skip: &[i32],
+) -> Result<i32, Error> {
     method
         .iter()
         .map(|p| p.padata_type)
         .find(|&t| {
             !skip.contains(&t)
                 && matches!(
-                    crate::clpreauth::owner_of(t),
+                    crate::clpreauth::owner_of(profile, t),
                     Some(
                         crate::clpreauth::Owner::Spake
                             | crate::clpreauth::Owner::EncChallenge
@@ -909,30 +921,24 @@ mod tests {
         }
     }
 
-    fn pin(extra: &str) {
-        krb5_config::isolate_test_krb5();
-        let dir = krb5_testkit::scratch_dir("pg3-fast-mech");
-        let path = dir.join("krb5.conf");
-        std::fs::write(
-            &path,
-            format!(
-                "[libdefaults]\n    default_realm = KERBER.TEST\n    dns_lookup_kdc = false\n    dns_lookup_realm = false\n{extra}"
-            ),
-        )
-        .unwrap();
-        krb5_config::set_test_krb5_paths(Some(vec![path]));
+    fn pin(extra: &str) -> krb5_config::Krb5Conf {
+        krb5_config::Krb5Conf::parse(&format!(
+            "[libdefaults]\n    default_realm = KERBER.TEST\n    dns_lookup_kdc = false\n    dns_lookup_realm = false\n{extra}"
+        ))
+        .unwrap()
     }
 
     #[test]
     fn disable_encrypted_timestamp_leaves_encrypted_challenge() {
-        pin("[plugins]\n    clpreauth = {\n        disable = encrypted_timestamp\n    }\n");
+        let profile =
+            pin("[plugins]\n    clpreauth = {\n        disable = encrypted_timestamp\n    }\n");
         let method = vec![pa_of(pa::ENC_TIMESTAMP), pa_of(pa::ENCRYPTED_CHALLENGE)];
         assert_eq!(
-            fast_mechanism(&method, &[]).unwrap(),
+            fast_mechanism(&profile, &method, &[]).unwrap(),
             pa::ENCRYPTED_CHALLENGE
         );
         let only_ts = vec![pa_of(pa::ENC_TIMESTAMP)];
-        let err = fast_mechanism(&only_ts, &[]).unwrap_err();
+        let err = fast_mechanism(&profile, &only_ts, &[]).unwrap_err();
         assert!(
             err.to_string()
                 .contains("Generic preauthentication failure"),
@@ -942,38 +948,41 @@ mod tests {
 
     #[test]
     fn a_loaded_encrypted_timestamp_is_still_chosen_first() {
-        pin("");
+        let profile = pin("");
         let method = vec![pa_of(pa::ENC_TIMESTAMP), pa_of(pa::ENCRYPTED_CHALLENGE)];
-        assert_eq!(fast_mechanism(&method, &[]).unwrap(), pa::ENC_TIMESTAMP);
+        assert_eq!(
+            fast_mechanism(&profile, &method, &[]).unwrap(),
+            pa::ENC_TIMESTAMP
+        );
     }
 
     #[test]
     fn spake_listed_before_encrypted_challenge_is_the_fast_mechanism() {
-        pin("");
+        let profile = pin("");
         let method = vec![
             pa_of(pa::FX_FAST),
             pa_of(pa::SPAKE),
             pa_of(pa::ENCRYPTED_CHALLENGE),
         ];
-        assert_eq!(fast_mechanism(&method, &[]).unwrap(), pa::SPAKE);
+        assert_eq!(fast_mechanism(&profile, &method, &[]).unwrap(), pa::SPAKE);
     }
 
     #[test]
     fn a_disabled_spake_lets_encrypted_challenge_run_under_armor() {
-        pin("[plugins]\n    clpreauth = {\n        disable = spake\n    }\n");
+        let profile = pin("[plugins]\n    clpreauth = {\n        disable = spake\n    }\n");
         let method = vec![pa_of(pa::SPAKE), pa_of(pa::ENCRYPTED_CHALLENGE)];
         assert_eq!(
-            fast_mechanism(&method, &[]).unwrap(),
+            fast_mechanism(&profile, &method, &[]).unwrap(),
             pa::ENCRYPTED_CHALLENGE
         );
     }
 
     #[test]
     fn a_failed_spake_is_not_chosen_again() {
-        pin("");
+        let profile = pin("");
         let method = vec![pa_of(pa::SPAKE), pa_of(pa::ENCRYPTED_CHALLENGE)];
         assert_eq!(
-            super::fast_mechanism(&method, &[pa::SPAKE]).unwrap(),
+            super::fast_mechanism(&profile, &method, &[pa::SPAKE]).unwrap(),
             pa::ENCRYPTED_CHALLENGE
         );
     }

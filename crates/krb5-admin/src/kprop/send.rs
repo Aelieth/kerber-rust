@@ -12,7 +12,7 @@ use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs};
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
 
 use krb5_asn1::{decode, encode};
-use krb5_config::Krb5Conf;
+use krb5_config::{ClientContext, Krb5Conf};
 use krb5_crypto::{CipherState, ProtocolKey};
 use krb5_kdc::HeldFileLock;
 use krb5_protocol::trace::{self, ERROR_TABLE_BASE_KRB5, error_message, kdc_code};
@@ -231,13 +231,14 @@ fn init_creds_ticket_opts(conf: &Krb5Conf, realm: &str) -> Result<AsTicketOpts, 
 /// does not resolve, cannot be read, is no keytab or holds no key for the client, a realm with
 /// no KDC, and the AS exchange's failure, each with its `krb5` table text.
 pub fn kprop_get_tickets(
-    conf: &Krb5Conf,
+    ctx: &ClientContext,
     realm: &str,
     replica_host: &str,
     keytab: Option<&str>,
 ) -> Result<KpropCreds, KpropError> {
     krb5_types::try_ascii(realm)
         .map_err(|_| KpropError::new(None, "while setting client principal name"))?;
+    let conf = &ctx.profile;
     let me = krb5_config::local_host_name(conf);
     let client = PrincipalName::try_new(PrincipalName::NT_SRV_HST, ["host", me.as_str()])
         .map_err(|_| KpropError::new(None, "while setting client principal name"))?;
@@ -245,7 +246,7 @@ pub fn kprop_get_tickets(
     let server = PrincipalName::try_new(PrincipalName::NT_SRV_HST, ["host", replica.as_str()])
         .map_err(|_| KpropError::new(None, "while setting server principal name"))?;
     init_creds_keytab(
-        conf,
+        ctx,
         realm,
         &client,
         &server.unparse_no_realm(),
@@ -265,7 +266,7 @@ pub fn kprop_get_tickets(
 ///
 /// As [`kprop_get_tickets`], from the keytab on.
 pub(crate) fn init_creds_keytab(
-    conf: &Krb5Conf,
+    ctx: &ClientContext,
     realm: &str,
     client: &PrincipalName,
     service: &str,
@@ -273,7 +274,8 @@ pub(crate) fn init_creds_keytab(
     unforwardable: bool,
 ) -> Result<KpropCreds, KpropError> {
     // MIT `krb5_get_init_creds_keytab` (`lib/krb5/krb/gic_keytab.c:287-292`): a NULL keytab is the default one, resolved there.
-    let path = crate::kprop::kprop_keytab_file(keytab).map_err(|text| {
+    let conf = &ctx.profile;
+    let path = crate::kadmin_cli::keytab_file_of(keytab, ctx).map_err(|text| {
         let during = if keytab.is_some() {
             "while resolving keytab"
         } else {
@@ -317,7 +319,7 @@ pub(crate) fn init_creds_keytab(
         None => return Err(KpropError::code(KT_NOTFOUND, GETTING_CREDS)),
     };
     // MIT `k5_locate_server` (`lib/krb5/os/locate_kdc.c:853-878`): a realm with no KDC is `KRB5_REALM_UNKNOWN`; the located list is handed to the send, which walks it.
-    let found = krb5_config::discover_kdc(realm);
+    let found = conf.kdcs_for(realm).unwrap_or_default();
     let Some(first) = found.first() else {
         krb5_config::clear_handed();
         return Err(KpropError::code(REALM_UNKNOWN, GETTING_CREDS));
@@ -327,13 +329,14 @@ pub(crate) fn init_creds_keytab(
         port: first.port,
     };
     krb5_config::hand_kdcs(realm, found);
-    let mut etypes = krb5_protocol::conf_etypes(false);
+    let mut etypes = krb5_protocol::conf_etypes(conf, false);
     krb5_protocol::sort_etypes_keytab_first(&mut etypes, &kt_etypes);
     let req = AsRequest {
         cname: client.clone(),
         realm,
         password: b"",
         kdc: &kdc,
+        profile: conf,
         want_spake: false,
         fast_armor: None,
         pkinit: None,

@@ -3,6 +3,7 @@
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
+use krb5_config::ClientContext;
 use krb5_crypto::EncryptionType;
 use krb5_kdc::Error;
 use krb5_protocol::{Keytab, KeytabEntry};
@@ -18,29 +19,16 @@ struct Kt {
 }
 
 /// MIT `kt_default_name` (`lib/krb5/os/ktdefname.c:35-57`): `KRB5_KTNAME`, else
-/// `[libdefaults] default_keytab_name` from the KDC profile (kdc.conf, then the krb5.conf files,
-/// with their includes and quoting), else `FILE:/etc/krb5.keytab`, the profile's value and the
-/// default with their `%{…}` parameters expanded. `None` for a name that is not UTF-8 or whose
-/// parameters do not expand.
-fn default_keytab_name() -> Option<String> {
-    default_keytab_name_in(super::krb5_conf_paths_with_kdc())
-}
-
-/// [`default_keytab_name`] over the profile files `paths`: the KDC profile's for the KDC-side
-/// programs, krb5.conf's for kprop, whose context opens no KDC profile.
-fn default_keytab_name_in(paths: Vec<PathBuf>) -> Option<String> {
-    default_keytab_name_of(krb5_config::load_krb5_conf_paths(paths).ok().as_ref())
-}
-
-/// [`default_keytab_name`] with its profile already read (`None`, a profile that did not load).
-fn default_keytab_name_of(conf: Option<&krb5_config::Krb5Conf>) -> Option<String> {
-    match std::env::var("KRB5_KTNAME") {
-        Ok(name) => return Some(name),
-        Err(std::env::VarError::NotUnicode(_)) => return None,
-        Err(std::env::VarError::NotPresent) => {}
+/// the context's `default_keytab_name`, else `FILE:/etc/krb5.keytab`, with `%{…}` parameters
+/// expanded; `None` when they do not expand.
+fn default_keytab_name_of(ctx: &ClientContext) -> Option<String> {
+    if let Some(name) = ctx.ktname() {
+        return Some(name);
     }
-    let name = conf
-        .and_then(|conf| conf.default_keytab_name.clone())
+    let name = ctx
+        .profile
+        .default_keytab_name
+        .clone()
         .unwrap_or_else(|| "FILE:/etc/krb5.keytab".to_owned());
     krb5_config::expand_ccache_params(&name).ok()
 }
@@ -84,30 +72,16 @@ pub(super) fn resolve(name: &str) -> Result<(KtType, &str), &'static str> {
     }
 }
 
-/// The file of the keytab `name` names, else of the default keytab ([`default_keytab_name`]) as
-/// the profile files `paths` name it, as `krb5_kt_resolve` resolves it; `Ok(None)` for a
-/// `MEMORY:` keytab, which a new process holds empty.
-pub(crate) fn keytab_file_in(
-    name: Option<&str>,
-    paths: Vec<PathBuf>,
-) -> Result<Option<PathBuf>, &'static str> {
-    let name = match name {
-        Some(n) => n.to_owned(),
-        None => default_keytab_name_in(paths).ok_or("Invalid argument")?,
-    };
-    let (ty, residual) = resolve(&name)?;
-    Ok(file_of(ty, residual))
-}
-
-/// [`keytab_file_in`] with the default keytab named in the profile `conf`, already read: kpropd's
-/// `-s` and its default keytab.
+/// The file of the keytab `name` names, else of the context's default keytab
+/// ([`default_keytab_name_of`]), as `krb5_kt_resolve` resolves it; `Ok(None)` for a `MEMORY:`
+/// keytab, which a new process holds empty.
 pub(crate) fn keytab_file_of(
     name: Option<&str>,
-    conf: &krb5_config::Krb5Conf,
+    ctx: &ClientContext,
 ) -> Result<Option<PathBuf>, &'static str> {
     let name = match name {
         Some(n) => n.to_owned(),
-        None => default_keytab_name_of(Some(conf)).ok_or("Invalid argument")?,
+        None => default_keytab_name_of(ctx).ok_or("Invalid argument")?,
     };
     let (ty, residual) = resolve(&name)?;
     Ok(file_of(ty, residual))
@@ -117,7 +91,7 @@ pub(crate) fn keytab_file_of(
 /// `WRFILE`), printed as given; else the default keytab, printed as `krb5_kt_get_name` names it.
 fn process_keytab(s: &mut Session<'_>, keytab_str: Option<&str>) -> Option<Kt> {
     let Some(given) = keytab_str else {
-        let resolved = default_keytab_name()
+        let resolved = default_keytab_name_of(&s.h.ctx)
             .ok_or("Invalid argument")
             .and_then(|name| {
                 resolve(&name).map(|(ty, residual)| Kt {

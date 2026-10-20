@@ -42,6 +42,7 @@ any other `###` heading.
 - **protocol/gss.** `AcceptorConfig` holds an acceptor's profile values; the GSS accept calls, kpasswd and kpropd take it, and `use_kdc_context` is gone.
 - **kdc.** One store can serve the KDC and kadmind: a `SharedDump` is a `SharedStore` (`Arc<RwLock<dyn Store>>`); `PrincipalStore::try_new` returns a CSPRNG failure.
 - **kdc.** A principal change is appended to the database and flushed; readers take only the appended changes, a torn one is cut, and replaced records are compacted away.
+- **client.** A client program reads its profile once, at start: `init_context` returns a `ClientContext`, which the AS, TGS, KCM, ccache and keytab calls take.
 
 ### Tests and CI
 

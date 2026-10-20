@@ -22,7 +22,7 @@
 use std::io::{self, BufRead, Write};
 
 use krb5_cli::Prompter;
-use krb5_config::{CcSpec, Endpoint, Krb5Conf};
+use krb5_config::{CcSpec, ClientContext, Endpoint, Krb5Conf};
 use krb5_protocol::{
     AsOutcome, AsRequest, AsTicketOpts, Error, FileCcache, KPASSWD_PORT, KPASSWD_SUCCESS, KdcAddr,
     as_exchange, as_exchange_prompted, change_password_result, format_chpw_failure,
@@ -58,17 +58,18 @@ fn run<R: BufRead, W: Write>(
     prompter: &mut Prompter<R, W>,
 ) -> i32 {
     // MIT `main` (`kpasswd.c:70-74`): `com_err` of `krb5_init_context`'s code, then exit 1.
-    let conf = match krb5_config::init_profile() {
-        Ok(conf) => conf,
+    let ctx = match krb5_config::ClientContext::from_env() {
+        Ok(ctx) => ctx,
         Err(e) => {
             eprintln!("{prog}: {} initializing kerberos library", e.init_text());
             return 1;
         }
     };
+    let conf = &ctx.profile;
     // MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:209-217`): `KRB5_TRACE` opens
     // once the profile has loaded.
     krb5_protocol::trace::init();
-    let client = match client(prog, pname, &conf) {
+    let client = match client(prog, pname, &ctx) {
         Ok(client) => client,
         Err(line) => {
             eprintln!("{line}");
@@ -125,6 +126,7 @@ fn run<R: BufRead, W: Write>(
         realm: &client.realm,
         password: given.as_deref().map_or(&[][..], Vec::as_slice),
         kdc: &kdc,
+        profile: conf,
         want_spake: false,
         fast_armor: None,
         pkinit: None,
@@ -197,7 +199,7 @@ fn run<R: BufRead, W: Write>(
             }
         },
     };
-    let servers = kpasswd_servers(&conf, &client.realm);
+    let servers = kpasswd_servers(conf, &client.realm);
     if servers.is_empty() {
         eprintln!("{prog}: Cannot find KDC for requested realm changing password");
         return 1;
@@ -257,9 +259,11 @@ fn initial_ticket_text(e: &Error) -> String {
 /// MIT `main` (`kpasswd.c:91-122`): the default ccache is opened and its principal read whether
 /// or not a name is given, either failure (other than no cache or no principal) ending kpasswd;
 /// then the argument, else that principal, else the login name.
-fn client(prog: &str, pname: Option<&str>, conf: &Krb5Conf) -> Result<Client, String> {
-    let spec = open_default_ccache().map_err(|e| format!("{prog}: {e} opening default ccache"))?;
-    let cached = ccache_principal(&spec).map_err(|e| {
+fn client(prog: &str, pname: Option<&str>, ctx: &ClientContext) -> Result<Client, String> {
+    let conf = &ctx.profile;
+    let spec =
+        open_default_ccache(ctx).map_err(|e| format!("{prog}: {e} opening default ccache"))?;
+    let cached = ccache_principal(&spec, conf).map_err(|e| {
         format!(
             "{prog}: {} getting principal from ccache",
             cache_text(&spec, &e)
@@ -314,14 +318,14 @@ fn with_default_realm(name: &str, conf: &Krb5Conf) -> Result<String, String> {
 /// daemon, and `KCM:` asks for the name of the default cache.
 /// MIT `kcm_resolve` (`cc_kcm.c:750-759`): the connection first, then for `KCM:` the primary
 /// name; either failure fails the resolve.
-fn open_default_ccache() -> Result<CcSpec, String> {
-    let spec = krb5_config::resolve_ccspec(None).map_err(|e| e.to_string())?;
+fn open_default_ccache(ctx: &ClientContext) -> Result<CcSpec, String> {
+    let spec = krb5_config::resolve_ccspec(ctx, None).map_err(|e| e.to_string())?;
     let kcm_text = |e: io::Error| strerror(&e);
     match spec {
-        CcSpec::Kcm(n) if n.is_empty() => krb5_protocol::kcm_primary_name()
+        CcSpec::Kcm(n) if n.is_empty() => krb5_protocol::kcm_primary_name(&ctx.profile)
             .map(CcSpec::Kcm)
             .map_err(kcm_text),
-        CcSpec::Kcm(n) => krb5_protocol::kcm_reachable()
+        CcSpec::Kcm(n) => krb5_protocol::kcm_reachable(&ctx.profile)
             .map(|()| CcSpec::Kcm(n))
             .map_err(kcm_text),
         spec => Ok(spec),
@@ -378,13 +382,16 @@ fn parse_cache_file(b: &[u8]) -> io::Result<FileCcache> {
 /// The default ccache's principal; `None` when that cache does not exist.
 /// MIT `main` (`kpasswd.c:96-97`): a missing cache (`KRB5_FCC_NOFILE`, also `ENOTDIR`, `ELOOP` and
 /// `ENAMETOOLONG`) or principal (`KRB5_CC_NOTFOUND`) is no error.
-fn ccache_principal(spec: &CcSpec) -> io::Result<Option<(krb5_types::Realm, PrincipalName)>> {
+fn ccache_principal(
+    spec: &CcSpec,
+    profile: &Krb5Conf,
+) -> io::Result<Option<(krb5_types::Realm, PrincipalName)>> {
     let loaded = match spec {
         CcSpec::File(path) => std::fs::read(path).and_then(|b| parse_cache_file(&b)),
         CcSpec::Dir(residual) => krb5_protocol::dir_cache_path(residual)
             .and_then(std::fs::read)
             .and_then(|b| parse_cache_file(&b)),
-        CcSpec::Kcm(residual) => krb5_protocol::kcm_load(residual),
+        CcSpec::Kcm(residual) => krb5_protocol::kcm_load(profile, residual),
         CcSpec::Memory(_) => return Ok(None),
     };
     let nofile = |e: &io::Error| {
@@ -570,11 +577,14 @@ mod tests {
     fn a_missing_file_ccache_has_no_principal() {
         let dir = krb5_testkit::scratch_dir("kpasswd-cc");
         let missing = CcSpec::File(dir.join("no-such-cache"));
-        assert_eq!(ccache_principal(&missing).unwrap(), None);
+        assert_eq!(ccache_principal(&missing, &Krb5Conf::new()).unwrap(), None);
         let junk = dir.join("junk");
         std::fs::write(&junk, b"not a ccache").unwrap();
-        assert!(ccache_principal(&CcSpec::File(junk)).is_err());
-        assert_eq!(ccache_principal(&CcSpec::Memory("m".into())).unwrap(), None);
+        assert!(ccache_principal(&CcSpec::File(junk), &Krb5Conf::new()).is_err());
+        assert_eq!(
+            ccache_principal(&CcSpec::Memory("m".into()), &Krb5Conf::new()).unwrap(),
+            None
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

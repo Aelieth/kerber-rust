@@ -109,6 +109,7 @@ fn s4u_tgs_outer_padata_is_1_136_130_129() {
         }
     });
     let _ = tgs_s4u(
+        &krb5_config::isolated_profile(),
         &KdcAddr {
             host: "127.0.0.1".into(),
             port,

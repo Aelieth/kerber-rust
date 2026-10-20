@@ -183,6 +183,13 @@ impl Krb5Conf {
         host_to_realm(&self.domain_realm, host)
     }
 
+    /// `udp_preference_limit`, 1465 when unset: a larger message goes TCP first.
+    #[must_use]
+    pub fn udp_limit(&self) -> usize {
+        self.udp_preference_limit
+            .map_or(1465, |n| usize::try_from(n).unwrap_or(1465))
+    }
+
     /// KDCs for `realm`, possibly via DNS SRV when enabled.
     ///
     /// # Errors
@@ -410,7 +417,7 @@ fn include_file_text(path: &Path, stack: &mut Vec<PathBuf>) -> Result<String, Er
     if stack.iter().any(|p| p == &canon) {
         return Err(include("include cycle".into()));
     }
-    let bytes = std::fs::read(&canon).map_err(unread)?;
+    let bytes = super::files::read(&canon).map_err(unread)?;
     stack.push(canon);
     let text = resolve_includes(&String::from_utf8_lossy(&bytes), stack);
     stack.pop();
@@ -428,8 +435,7 @@ fn include_dir_text(dir: &Path, stack: &mut Vec<PathBuf>) -> Result<String, Erro
     }
     let list = |e: std::io::Error| unlisted(format!("includedir {}: {e}", dir.display()));
     let mut names = Vec::new();
-    for ent in std::fs::read_dir(dir).map_err(list)? {
-        let name = ent.map_err(list)?.file_name();
+    for name in super::files::dir_names(dir).map_err(list)? {
         if let Some(s) = name.to_str()
             && valid_include_name(s)
         {
@@ -674,7 +680,7 @@ fn load_file_into(
         return Err(include("include cycle".into()));
     }
     // MIT `parse_file` reads the file's bytes: a profile need not be UTF-8.
-    let bytes = std::fs::read(&canon).map_err(unread)?;
+    let bytes = super::files::read(&canon).map_err(unread)?;
     let text = String::from_utf8_lossy(&bytes);
     stack.push(canon);
     let result = parse_into(conf, seen, &text, Some(stack), plugin_profile);
@@ -700,9 +706,7 @@ fn load_dir_into(
     }
     let list = |e: std::io::Error| unlisted(format!("includedir {}: {e}", dir.display()));
     let mut names = Vec::new();
-    for ent in std::fs::read_dir(dir).map_err(list)? {
-        let ent = ent.map_err(list)?;
-        let name = ent.file_name();
+    for name in super::files::dir_names(dir).map_err(list)? {
         let Some(s) = name.to_str() else {
             continue;
         };
@@ -1367,24 +1371,10 @@ pub fn discover_kdc_in<P: AsRef<Path>>(
     conf.kdcs_for(realm).unwrap_or_default()
 }
 
-/// KDCs for `realm` from [`krb5_conf_paths`], as [`discover_kdc_in`].
-#[must_use]
-pub fn discover_kdc(realm: &str) -> Vec<Endpoint> {
-    discover_kdc_in(krb5_conf_paths(), realm)
-}
-
 /// Merged `krb5.conf` from [`krb5_conf_paths`].
 #[must_use]
 pub fn load_krb5_conf() -> Option<Krb5Conf> {
     load_krb5_conf_paths(krb5_conf_paths()).ok()
-}
-
-/// MIT `udp_preference_limit` (default 1465). Messages larger go TCP first.
-#[must_use]
-pub fn udp_preference_limit() -> usize {
-    load_krb5_conf()
-        .and_then(|c| c.udp_preference_limit)
-        .map_or(1465, |n| usize::try_from(n).unwrap_or(1465))
 }
 
 /// The gates' password, `KRB5_PASSWORD`, in a `test-hooks` build. A release build reads no

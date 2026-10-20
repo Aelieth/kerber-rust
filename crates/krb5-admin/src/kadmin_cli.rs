@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use krb5_kdc::{Error, PrincipalStore};
 use krb5_types::PrincipalName;
 
-pub(crate) use kt_cmds::{keytab_file_in, keytab_file_of};
+pub(crate) use kt_cmds::keytab_file_of;
 pub(crate) use stdio::{Io, LineRead, Stdout};
 
 /// The name every message is prefixed with: MIT's `whoami`, the program's base name, which an
@@ -88,6 +88,8 @@ pub(crate) struct Handle {
     pub(crate) realm: String,
     /// `current_caller`: the principal name the session runs as, with its realm.
     pub(crate) caller: String,
+    /// The KDC context and the environment's names, read at start.
+    pub(crate) ctx: krb5_config::ClientContext,
 }
 
 /// How the database is opened.
@@ -95,6 +97,7 @@ struct Open {
     db: PathBuf,
     stash: PathBuf,
     conf: Option<krb5_config::KdcConf>,
+    krb5: Option<krb5_config::Krb5Conf>,
     keysalts: Vec<krb5_crypto::EncryptionType>,
     /// `-m`: the master key derived from the password typed at startup. The database is read
     /// and written under it, and the stash is never opened.
@@ -154,7 +157,7 @@ impl Open {
         };
         // MIT `kadm5_init` (`lib/kadm5/srv/server_init.c:202-205`): the realm's profile, kdc.conf before krb5.conf, in the KDC's order.
         // `Krb5Conf::new`, not `default`: no krb5.conf leaves MIT's defaults (clockskew 300).
-        let krb5 = match krb5_config::load_krb5_conf() {
+        let krb5 = match self.krb5.clone() {
             Some(conf) => conf,
             None => krb5_config::Krb5Conf::new(),
         };
@@ -204,7 +207,10 @@ struct Startup {
 
 /// MIT `main` (`ss_wrapper.c:41-77`): start up, run the one command or the command loop, quit.
 pub(crate) fn run(argv: &[String], io: &mut Io) -> i32 {
-    let Some(start) = startup(argv, io) else {
+    let once = krb5_config::ReadOnce::start();
+    let started = startup(argv, io);
+    drop(once);
+    let Some(start) = started else {
         return 1;
     };
     let Startup {
@@ -292,6 +298,10 @@ fn getopt_prog(argv0: &str) -> &str {
 /// MIT `kadmin_startup` (`kadmin.c:288-607`): the options, the principal to run as, the
 /// `Authenticating as principal …` line and the database. `None` after printing why the
 /// program exits 1.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "kadmin.local's start: MIT kadmin_startup reads its context once"
+)]
 fn startup(argv: &[String], io: &mut Io) -> Option<Startup> {
     // MIT `kadmin_startup` (`kadmin.c:309-313`): the KDC context before the options; a profile
     // it refuses ends kadmin.local.
@@ -356,7 +366,14 @@ fn startup(argv: &[String], io: &mut Io) -> Option<Startup> {
         io.error(&format!("{WHOAMI}: unable to get default realm\n"));
         return None;
     };
-    let ccache = match resolve_ccache(o.ccache_name.as_deref(), krb5_conf.as_ref()) {
+    let mut kdc_paths = vec![krb5_config::kdc_conf_path()];
+    kdc_paths.extend(krb5_config::krb5_conf_paths());
+    let kdc_ctx = krb5_config::ClientContext::new(
+        krb5_config::load_krb5_conf_paths(kdc_paths)
+            .unwrap_or_else(|_| krb5_config::Krb5Conf::new()),
+    );
+    let env_ccname = std::env::var("KRB5CCNAME").ok();
+    let ccache = match resolve_ccache(o.ccache_name.as_deref(), env_ccname, krb5_conf.as_ref()) {
         Ok(cc) => cc,
         Err(msg) => {
             let what = o.ccache_name.as_ref().map_or_else(
@@ -367,18 +384,19 @@ fn startup(argv: &[String], io: &mut Io) -> Option<Startup> {
             return None;
         }
     };
+    let user = std::env::var_os("USER");
+    let cc = ccache.as_ref();
     let princstr = match o.princstr.clone() {
         Some(p) => p,
-        None => {
-            default_princstr(&o, &realm, ccache.as_ref(), krb5_conf.as_ref()).or_else(|| {
+        None => default_princstr(&o, &realm, cc, krb5_conf.as_ref(), &kdc_ctx.profile, user)
+            .or_else(|| {
                 io.error(&format!(
                     "{WHOAMI}: unable to figure out a principal name\n"
                 ));
                 None
-            })?
-        }
+            })?,
     };
-    klog_init();
+    klog_init(&krb5_config::LogSpecs::load("admin_server"));
     if o.ccache_name.is_some() {
         io.info(&format!(
             "Authenticating as principal {princstr} with existing credentials.\n"
@@ -401,7 +419,7 @@ fn startup(argv: &[String], io: &mut Io) -> Option<Startup> {
             "Authenticating as principal {princstr} with password.\n"
         ));
     }
-    let (mut handle, iprop) = match kadm5_init(io, &o, &realm, &princstr) {
+    let (mut handle, iprop) = match kadm5_init(io, &o, &realm, &princstr, krb5_conf, kdc_ctx) {
         Ok(h) => h,
         Err((msg, bad_params)) => {
             io.com_err(
@@ -438,12 +456,12 @@ fn startup(argv: &[String], io: &mut Io) -> Option<Startup> {
 /// cannot read (`KEYRING`), which has no principal for it either.
 fn resolve_ccache(
     name: Option<&str>,
+    env_ccname: Option<String>,
     conf: Option<&krb5_config::Krb5Conf>,
 ) -> Result<Option<krb5_config::CcSpec>, String> {
     let raw = match name {
         Some(n) => n.to_owned(),
-        None => std::env::var("KRB5CCNAME")
-            .ok()
+        None => env_ccname
             .filter(|s| !s.is_empty())
             .or_else(|| conf.and_then(|c| c.default_ccache_name.clone()))
             .unwrap_or_else(|| "FILE:/tmp/krb5cc_%{uid}".to_owned()),
@@ -464,7 +482,7 @@ fn resolve_ccache(
 }
 
 /// `krb5_cc_get_principal`: the ccache's default principal, `None` when it has none to give.
-fn ccache_principal(cc: &krb5_config::CcSpec) -> Option<String> {
+fn ccache_principal(cc: &krb5_config::CcSpec, profile: &krb5_config::Krb5Conf) -> Option<String> {
     let parsed = match cc {
         krb5_config::CcSpec::File(p) => {
             krb5_protocol::FileCcache::parse(&std::fs::read(p).ok()?).ok()?
@@ -473,7 +491,7 @@ fn ccache_principal(cc: &krb5_config::CcSpec) -> Option<String> {
             let p = krb5_protocol::dir_cache_path(r).ok()?;
             krb5_protocol::FileCcache::parse(&std::fs::read(p).ok()?).ok()?
         }
-        krb5_config::CcSpec::Kcm(n) => krb5_protocol::kcm_load(n).ok()?,
+        krb5_config::CcSpec::Kcm(n) => krb5_protocol::kcm_load(profile, n).ok()?,
         krb5_config::CcSpec::Memory(_) => return None,
     };
     let (realm, name) = parsed.primary;
@@ -492,11 +510,13 @@ fn default_princstr(
     realm: &str,
     ccache: Option<&krb5_config::CcSpec>,
     conf: Option<&krb5_config::Krb5Conf>,
+    profile: &krb5_config::Krb5Conf,
+    user: Option<std::ffi::OsString>,
 ) -> Option<String> {
     if o.use_anonymous {
         return Some(format!("WELLKNOWN/ANONYMOUS@{realm}"));
     }
-    let cc_princ = ccache.and_then(ccache_principal);
+    let cc_princ = ccache.and_then(|cc| ccache_principal(cc, profile));
     if o.ccache_name.is_some()
         && let Some(p) = &cc_princ
     {
@@ -519,7 +539,7 @@ fn default_princstr(
             None => format!("{primary}/admin"),
         });
     }
-    if let Some(user) = std::env::var_os("USER") {
+    if let Some(user) = user {
         return Some(format!("{}/admin@{realm}", user.to_string_lossy()));
     }
     let pw = nix::unistd::User::from_uid(nix::unistd::getuid()).ok()??;
@@ -539,18 +559,10 @@ fn host_princstr(conf: Option<&krb5_config::Krb5Conf>) -> String {
     format!("host/{host}@{realm}")
 }
 
-/// kdc.conf, then the krb5.conf files: the profile a KDC-side context reads.
-pub(crate) fn krb5_conf_paths_with_kdc() -> Vec<PathBuf> {
-    let mut paths = vec![krb5_config::kdc_conf_path()];
-    paths.extend(krb5_config::krb5_conf_paths());
-    paths
-}
-
 /// MIT `krb5_klog_init` (`lib/kadm5/logger.c:232-522`): for `admin_server`, the `[logging]`
 /// destinations of kdc.conf and the krb5.conf files open as kadmind's do, and one that cannot
 /// is reported; the password-quality dictionary's notice goes there as MIT's does.
-fn klog_init() {
-    let specs = krb5_config::LogSpecs::load("admin_server");
+fn klog_init(specs: &krb5_config::LogSpecs) {
     krb5_log::klog::init(WHOAMI, &specs.specs, specs.debug);
 }
 
@@ -559,11 +571,17 @@ fn klog_init() {
 /// the realm's iprop parameters, which `iprop_port` must complete when iprop is enabled. The
 /// error is the `com_err` text, and whether MIT also prints the usage
 /// (`KADM5_BAD_SERVER_PARAMS`).
+#[allow(
+    clippy::disallowed_methods,
+    reason = "kadmin.local's start: MIT kadm5_init reads the realm's parameters once"
+)]
 fn kadm5_init(
     io: &mut Io,
     o: &Opts,
     realm: &str,
     princstr: &str,
+    krb5: Option<krb5_config::Krb5Conf>,
+    ctx: krb5_config::ClientContext,
 ) -> Result<(Handle, krb5_config::IpropParams), (String, bool)> {
     if o.mkey_from_kbd && (o.ccache_name.is_some() || o.use_keytab) {
         return Err((
@@ -596,6 +614,7 @@ fn kadm5_init(
         db,
         stash: paths.key_stash_file.clone(),
         conf: paths.conf.clone(),
+        krb5,
         keysalts: o.keysalts.clone(),
         typed: None,
     };
@@ -634,6 +653,7 @@ fn kadm5_init(
             store,
             realm: realm.to_owned(),
             caller,
+            ctx,
         },
         iprop,
     ))

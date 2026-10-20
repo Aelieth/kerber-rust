@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use krb5_config::CcSpec;
+use krb5_config::{CcSpec, ClientContext};
 
 use crate::creds::{Princ, princ_eq};
 use crate::errmsg::{Code, Krb5Error};
@@ -68,9 +68,9 @@ impl Cache {
     ///
     /// [`Krb5Error`] `KRB5_FCC_NOFILE` for a cache that does not exist or is not initialized,
     /// with MIT's message for its type, or the read error.
-    pub fn principal(&self) -> Result<Princ, Krb5Error> {
+    pub fn principal(&self, ctx: &ClientContext) -> Result<Princ, Krb5Error> {
         if let Self::Kcm(n) = self {
-            return krb5_protocol::kcm_principal(n).map_err(|e| {
+            return krb5_protocol::kcm_principal(&ctx.profile, n).map_err(|e| {
                 if e.kind() == std::io::ErrorKind::NotFound {
                     Krb5Error::new(
                         Code::FccNofile,
@@ -82,9 +82,9 @@ impl Cache {
             });
         }
         let spec = self.spec();
-        crate::load_ccache(&spec)
+        crate::load_ccache(ctx, &spec)
             .map(|cc| cc.primary)
-            .map_err(|e| crate::cache_read_error(&spec, e.as_ref()))
+            .map_err(|e| crate::cache_read_error(ctx, &spec, e.as_ref()))
     }
 
     /// MIT `krb5_cc_destroy`.
@@ -93,12 +93,12 @@ impl Cache {
     ///
     /// [`Krb5Error`] `KRB5_FCC_NOFILE` "No credentials cache found" when there is no such cache,
     /// or the error of the removal.
-    pub fn destroy(&self) -> Result<(), Krb5Error> {
+    pub fn destroy(&self, ctx: &ClientContext) -> Result<(), Krb5Error> {
         // MIT `krb5_cc_destroy` (`lib/krb5/ccache/ccfns.c:66-71`): traced before the destroy.
         if krb5_protocol::trace::enabled() {
             krb5_protocol::trace::cc_destroy(&self.full_name());
         }
-        crate::destroy_ccache(&self.spec()).map_err(|e| {
+        crate::destroy_ccache(ctx, &self.spec()).map_err(|e| {
             let missing = e
                 .downcast_ref::<std::io::Error>()
                 .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
@@ -126,11 +126,13 @@ impl Cache {
     /// # Errors
     ///
     /// [`Krb5Error`] with the error of the `primary` write or the KCM request.
-    pub fn switch_to(&self) -> Result<(), Krb5Error> {
+    pub fn switch_to(&self, ctx: &ClientContext) -> Result<(), Krb5Error> {
         let other = |e: std::io::Error| Krb5Error::new(Code::Other, e.to_string());
         match self {
             Self::Dir(p) => krb5_protocol::dir_switch(&format!(":{}", p.display())).map_err(other),
-            Self::Kcm(n) => krb5_protocol::kcm_switch(n).map_err(|e| Krb5Error::from_kcm(&e)),
+            Self::Kcm(n) => {
+                krb5_protocol::kcm_switch(&ctx.profile, n).map_err(|e| Krb5Error::from_kcm(&e))
+            }
             Self::File(_) | Self::Memory(_) => Ok(()),
         }
     }
@@ -147,7 +149,7 @@ impl Cache {
 ///
 /// [`Krb5Error`] when a DIR collection cannot be read, or the KCM daemon cannot be asked
 /// (`KRB5_KCM_NO_SERVER` "No KCM server found" when there is none).
-pub fn resolve(spec: &CcSpec) -> Result<Cache, Krb5Error> {
+pub fn resolve(ctx: &ClientContext, spec: &CcSpec) -> Result<Cache, Krb5Error> {
     let other = |e: std::io::Error| Krb5Error::new(Code::Other, e.to_string());
     let kcm = |e: std::io::Error| Krb5Error::from_kcm(&e);
     Ok(match spec {
@@ -155,10 +157,10 @@ pub fn resolve(spec: &CcSpec) -> Result<Cache, Krb5Error> {
         CcSpec::Memory(n) => Cache::Memory(n.clone()),
         CcSpec::Dir(r) => Cache::Dir(crate::dir_read_path(r).map_err(other)?),
         CcSpec::Kcm(n) if n.is_empty() => {
-            Cache::Kcm(krb5_protocol::kcm_primary_name().map_err(kcm)?)
+            Cache::Kcm(krb5_protocol::kcm_primary_name(&ctx.profile).map_err(kcm)?)
         }
         CcSpec::Kcm(n) => {
-            krb5_protocol::kcm_reachable().map_err(kcm)?;
+            krb5_protocol::kcm_reachable(&ctx.profile).map_err(kcm)?;
             Cache::Kcm(n.clone())
         }
     })
@@ -187,7 +189,7 @@ pub fn store_spec(name: &CcSpec, cache: &Cache) -> CcSpec {
 /// # Errors
 ///
 /// [`Krb5Error`] when a DIR collection cannot be listed or the KCM daemon cannot be asked.
-pub fn collection(default: &CcSpec) -> Result<Vec<Cache>, Krb5Error> {
+pub fn collection(ctx: &ClientContext, default: &CcSpec) -> Result<Vec<Cache>, Krb5Error> {
     let other = |e: std::io::Error| Krb5Error::new(Code::Other, e.to_string());
     match default {
         CcSpec::File(p) => Ok(if p.exists() {
@@ -221,8 +223,8 @@ pub fn collection(default: &CcSpec) -> Result<Vec<Cache>, Krb5Error> {
         CcSpec::Kcm(n) if !n.is_empty() => {
             // MIT `kcm_ptcursor_new` (`cc_kcm.c:1155-1157`): the cursor connects first, for a
             // named default too.
-            krb5_protocol::kcm_reachable().map_err(|e| Krb5Error::from_kcm(&e))?;
-            Ok(if krb5_protocol::kcm_principal(n).is_ok() {
+            krb5_protocol::kcm_reachable(&ctx.profile).map_err(|e| Krb5Error::from_kcm(&e))?;
+            Ok(if krb5_protocol::kcm_principal(&ctx.profile, n).is_ok() {
                 vec![Cache::Kcm(n.clone())]
             } else {
                 Vec::new()
@@ -230,13 +232,13 @@ pub fn collection(default: &CcSpec) -> Result<Vec<Cache>, Krb5Error> {
         }
         CcSpec::Kcm(_) => {
             let kcm = |e: std::io::Error| Krb5Error::from_kcm(&e);
-            let names = krb5_protocol::kcm_cache_names().map_err(kcm)?;
+            let names = krb5_protocol::kcm_cache_names(&ctx.profile).map_err(kcm)?;
             if names.is_empty() {
                 return Ok(Vec::new());
             }
-            let primary = krb5_protocol::kcm_primary_name().map_err(kcm)?;
+            let primary = krb5_protocol::kcm_primary_name(&ctx.profile).map_err(kcm)?;
             let mut out = Vec::new();
-            if krb5_protocol::kcm_principal(&primary).is_ok() {
+            if krb5_protocol::kcm_principal(&ctx.profile, &primary).is_ok() {
                 out.push(Cache::Kcm(primary.clone()));
             }
             out.extend(names.into_iter().filter(|n| *n != primary).map(Cache::Kcm));
@@ -253,10 +255,14 @@ pub fn collection(default: &CcSpec) -> Result<Vec<Cache>, Krb5Error> {
 ///
 /// [`Krb5Error`] `KRB5_CC_NOTFOUND` "Matching credential not found" when no cache is for `princ`,
 /// or the collection's error.
-pub fn cache_match(default: &CcSpec, princ: &Princ) -> Result<Cache, Krb5Error> {
-    let found = collection(default)?
+pub fn cache_match(
+    ctx: &ClientContext,
+    default: &CcSpec,
+    princ: &Princ,
+) -> Result<Cache, Krb5Error> {
+    let found = collection(ctx, default)?
         .into_iter()
-        .find(|c| c.principal().is_ok_and(|p| princ_eq(&p, princ)));
+        .find(|c| c.principal(ctx).is_ok_and(|p| princ_eq(&p, princ)));
     crate::trace::cache_match(princ, found.is_some());
     found.ok_or_else(|| Krb5Error::of(Code::CcNotfound))
 }
@@ -270,7 +276,7 @@ pub fn cache_match(default: &CcSpec, princ: &Princ) -> Result<Cache, Krb5Error> 
 ///
 /// [`Krb5Error`] `KRB5_DCC_CANNOT_CREATE` for a default that is not a DIR collection, or the error
 /// of the file creation or the KCM request.
-pub fn new_unique(default: &CcSpec) -> Result<Cache, Krb5Error> {
+pub fn new_unique(ctx: &ClientContext, default: &CcSpec) -> Result<Cache, Krb5Error> {
     let other = |e: std::io::Error| Krb5Error::new(Code::Other, e.to_string());
     // MIT `krb5_cc_new_unique` (`lib/krb5/ccache/ccbase.c:289-307`): traced with the type.
     krb5_protocol::trace::cc_new_unique(match default {
@@ -283,7 +289,7 @@ pub fn new_unique(default: &CcSpec) -> Result<Cache, Krb5Error> {
         CcSpec::Dir(r) if !r.starts_with(':') => krb5_protocol::dir_gen_new(Path::new(r))
             .map(Cache::Dir)
             .map_err(other),
-        CcSpec::Kcm(_) => krb5_protocol::kcm_gen_new()
+        CcSpec::Kcm(_) => krb5_protocol::kcm_gen_new(&ctx.profile)
             .map(Cache::Kcm)
             .map_err(|e| Krb5Error::from_kcm(&e)),
         _ => Err(Krb5Error::new(

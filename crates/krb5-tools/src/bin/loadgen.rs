@@ -60,6 +60,10 @@ fn main() {
     let start = Instant::now();
     let deadline = seconds.map(|s| start + Duration::from_secs(s));
 
+    let ctx = krb5_client::init_context().unwrap_or_else(|e| {
+        eprintln!("loadgen: {e} while initializing krb5");
+        std::process::exit(1);
+    });
     thread::scope(|scope| {
         for w in 0..workers {
             let addr = addr.clone();
@@ -68,6 +72,7 @@ fn main() {
             let service = service.clone();
             let ok = &ok;
             let err = &err;
+            let ctx = &ctx;
             scope.spawn(move || {
                 let mut i = 0u32;
                 loop {
@@ -86,7 +91,7 @@ fn main() {
                         i
                     ));
                     let mut pw = password.clone().into_bytes();
-                    match kinit(&addr, &principal, &mut pw, &cc, service.as_deref()) {
+                    match kinit(ctx, &addr, &principal, &mut pw, &cc, service.as_deref()) {
                         Ok(_) => {
                             ok.fetch_add(1, Ordering::Relaxed);
                         }
