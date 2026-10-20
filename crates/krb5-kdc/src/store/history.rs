@@ -165,4 +165,13 @@ impl PrincipalStore {
             resolve_history(p, hist.as_ref());
         }
     }
+
+    pub(crate) fn resolve_history_of(&mut self, ids: &[String]) {
+        let hist = self.history_key();
+        for id in ids {
+            if let Some(p) = self.map.get_mut_unlogged(id) {
+                resolve_history(p, hist.as_ref());
+            }
+        }
+    }
 }

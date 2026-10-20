@@ -71,8 +71,12 @@ const fn crc_table() -> [u32; 256] {
 
 /// The checksum a record carries: the CRC-32 of its attributes' digits, a space and its name.
 fn checksum(values: &[u8], name: &[u8]) -> u32 {
+    crc32(values.iter().chain(b" ").chain(name))
+}
+
+pub(crate) fn crc32<'a>(bytes: impl IntoIterator<Item = &'a u8>) -> u32 {
     let mut c = !0u32;
-    for &b in values.iter().chain(b" ").chain(name) {
+    for &b in bytes {
         c = CRC_TABLE[usize::from(c.to_le_bytes()[0] ^ b)] ^ (c >> 8);
     }
     !c
@@ -556,6 +560,30 @@ pub(crate) fn ensure(db: &Path) -> io::Result<()> {
 /// # Errors
 ///
 /// As [`write_loaded`].
+pub(crate) fn reconcile_ids(store: &PrincipalStore, db: &Path, ids: &[String]) -> io::Result<()> {
+    let Some(mut side) = open_for_writing(db)? else {
+        return Ok(());
+    };
+    if side.ix.foreign {
+        return Ok(());
+    }
+    for id in ids {
+        match store.principal_by_id(id) {
+            Some(p) => {
+                let l = Lockout::of(p);
+                if side.ix.records.get(id).map(|&(_, have)| have) != Some(l) {
+                    side.put(id, l)?;
+                }
+            }
+            None => side.delete(id)?,
+        }
+    }
+    if side.ix.dead > side.ix.records.len() {
+        side.rewrite(&store_records(store))?;
+    }
+    Ok(())
+}
+
 pub(crate) fn reconcile(store: &PrincipalStore, db: &Path, make_missing: bool) -> io::Result<()> {
     let want = store_records(store);
     let Some(mut side) = open_for_writing(db)? else {

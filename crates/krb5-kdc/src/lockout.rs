@@ -19,7 +19,8 @@ use crate::status;
 use crate::store::{KDB_REQUIRES_PRE_AUTH, Principal};
 
 pub(crate) use file::{
-    LockoutState, check_writable, ensure, reconcile, store_records, write_loaded,
+    LockoutState, check_writable, crc32, ensure, reconcile, reconcile_ids, store_records,
+    write_loaded,
 };
 pub use file::{SUFFIX_LOCKOUT, lockout_path, lockout_records, merge_lockout_file};
 

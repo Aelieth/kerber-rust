@@ -112,29 +112,129 @@ impl From<crate::kdb_dump::DumpError> for PersistError {
     }
 }
 
-/// What a store last read of its database: the database's age and the database file's identity
-/// and change time. A writer moves the age (when it may set `principal.ok`'s times) and replaces
-/// the file, whose change time is new even when its inode number is a freed one reused, so a
-/// different stamp means another read.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// A writer moves the age and replaces the file (a new change time even for a reused inode) or
+/// appends to it; a reader of an appended file reads past its bytes once their tail checks.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DbStamp {
     age: Option<DbAge>,
     dev: u64,
     ino: u64,
     ctime: (i64, i64),
+    len: u64,
+    pub(crate) base: u64,
+    pub(crate) applied: u64,
+    tail: u32,
+    tail_len: u64,
+    pub(crate) dump: bool,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Freshness {
+    Same,
+    Grown,
+    Other,
+}
+
+const TAIL: u64 = 64;
 
 impl DbStamp {
     /// The stamp of the database at `db` now; read it holding the lock.
     pub(crate) fn now(lock: &DbLock, db: &Path) -> Option<Self> {
-        let meta = fs::metadata(db).ok()?;
+        let len = fs::metadata(db).ok()?.len();
+        Self::holding(lock, db, len, len)
+    }
+
+    pub(crate) fn holding(lock: &DbLock, db: &Path, base: u64, applied: u64) -> Option<Self> {
+        use std::os::unix::fs::FileExt as _;
+        let file = fs::File::open(db).ok()?;
+        let meta = file.metadata().ok()?;
+        let tail_len = applied.min(TAIL);
+        let mut buf = vec![0; usize::try_from(tail_len).ok()?];
+        file.read_exact_at(&mut buf, applied - tail_len).ok()?;
         Some(Self {
             age: lock.age(),
             dev: meta.dev(),
             ino: meta.ino(),
             ctime: (meta.ctime(), meta.ctime_nsec()),
+            len: meta.len(),
+            base,
+            applied,
+            tail: crate::lockout::crc32(&buf),
+            tail_len,
+            dump: true,
         })
     }
+
+    pub(crate) fn same(&self, lock: &DbLock, db: &Path) -> bool {
+        fs::metadata(db).is_ok_and(|m| self.saw(lock, &m))
+    }
+
+    fn saw(&self, lock: &DbLock, m: &fs::Metadata) -> bool {
+        (m.dev(), m.ino(), (m.ctime(), m.ctime_nsec()), m.len())
+            == (self.dev, self.ino, self.ctime, self.len)
+            && lock.age() == self.age
+    }
+
+    pub(crate) fn freshness(&self, lock: &DbLock, db: &Path) -> Freshness {
+        use std::os::unix::fs::FileExt as _;
+        let Ok(m) = fs::metadata(db) else {
+            return Freshness::Other;
+        };
+        if (m.dev(), m.ino()) != (self.dev, self.ino) || m.len() < self.applied {
+            return Freshness::Other;
+        }
+        if self.saw(lock, &m) {
+            return Freshness::Same;
+        }
+        let Ok(file) = fs::File::open(db) else {
+            return Freshness::Other;
+        };
+        let mut buf = vec![0; usize::try_from(self.tail_len).unwrap_or_default()];
+        match file.read_exact_at(&mut buf, self.applied - self.tail_len) {
+            Ok(()) if crate::lockout::crc32(&buf) == self.tail => Freshness::Grown,
+            _ => Freshness::Other,
+        }
+    }
+}
+
+pub(crate) fn read_appended(db: &Path, at: u64) -> std::io::Result<Vec<u8>> {
+    use std::io::{Seek as _, SeekFrom};
+    let mut file = fs::File::open(db)?;
+    file.seek(SeekFrom::Start(at))?;
+    let mut out = Vec::new();
+    file.read_to_end(&mut out)?;
+    Ok(out)
+}
+
+/// Hold the exclusive lock: a torn change past `at` is cut, and the change is flushed.
+pub(crate) fn append_change(
+    store: &PrincipalStore,
+    db: &Path,
+    master: &ProtocolKey,
+    at: u64,
+    ids: &[String],
+) -> Result<u64, PersistError> {
+    use std::os::unix::fs::{FileExt as _, OpenOptionsExt as _};
+    check_writable(db, DbWrite::InPlace)?;
+    let batch = crate::kdb_dump::journal_batch(store, master, ids)?;
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .custom_flags(nix::libc::O_NOFOLLOW)
+        .open(db)?;
+    let len = file.metadata()?.len();
+    if len < at {
+        return Err(PersistError::Format(format!(
+            "{}: shorter than the database read",
+            db.display()
+        )));
+    }
+    if len > at {
+        file.set_len(at)?;
+    }
+    file.write_all_at(batch.as_bytes(), at)?;
+    file.sync_data()?;
+    crate::lockout::reconcile_ids(store, db, ids)?;
+    Ok(u64::try_from(batch.len()).unwrap_or(u64::MAX))
 }
 
 /// What a database file holds, by its first bytes.
@@ -331,9 +431,24 @@ pub(crate) fn read_store(
     };
     crate::lockout::merge_lockout_file(&mut store, db_path);
     store.persist_paths = Some((db_path.to_path_buf(), stash_path.to_path_buf()));
-    store.db_stamp = DbStamp::now(lock, db_path);
+    store.db_stamp = stamp_read(&mut store, lock, db_path, &blob);
     store.dblock = Some(Arc::clone(lock));
     Ok(store)
+}
+
+fn stamp_read(
+    store: &mut PrincipalStore,
+    lock: &DbLock,
+    db: &Path,
+    blob: &[u8],
+) -> Option<DbStamp> {
+    let all = u64::try_from(blob.len()).ok()?;
+    let span = store.loaded_span.take();
+    let (base, applied) = span.unwrap_or((all, all));
+    DbStamp::holding(lock, db, base, applied).map(|s| DbStamp {
+        dump: span.is_some(),
+        ..s
+    })
 }
 
 /// Load a store from `db_path` with every key unwrapped under `master`, holding the database's
@@ -377,7 +492,7 @@ pub(crate) fn read_store_with_master(
     }
     let mut store = crate::kdb_dump::load_dump_with_key(dump_text(&blob)?, master)?;
     crate::lockout::merge_lockout_file(&mut store, db_path);
-    store.db_stamp = DbStamp::now(lock, db_path);
+    store.db_stamp = stamp_read(&mut store, lock, db_path, &blob);
     store.dblock = Some(Arc::clone(lock));
     store.persist_master = Some((db_path.to_path_buf(), master.clone()));
     Ok(store)
@@ -796,7 +911,7 @@ impl DbUpdate {
                 let store = load_kdb_blob(&blob, version, stash)?;
                 Ok(Some(write_dump(&store, &stash_master(stash)?)?))
             }
-            DbFormat::Dump => Ok(Some(dump_text(&blob)?.to_owned())),
+            DbFormat::Dump => Ok(Some(crate::kdb_dump::parse_dump(dump_text(&blob)?)?.text())),
             format => Err(refused(&self.db, format)),
         }
     }

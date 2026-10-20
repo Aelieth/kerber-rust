@@ -88,7 +88,11 @@ impl PrincipalMap {
     }
 
     /// A replica's delete: no change of this store's.
-    fn remove_unlogged(&mut self, id: &str) {
+    pub(crate) fn get_mut_unlogged(&mut self, id: &str) -> Option<&mut Principal> {
+        self.map.get_mut(id)
+    }
+
+    pub(crate) fn remove_unlogged(&mut self, id: &str) {
         self.lose_undo();
         self.map.remove(id);
     }
@@ -116,6 +120,15 @@ impl PrincipalMap {
     pub(crate) fn begin_change(&mut self) {
         self.logged.clear();
         self.undo = Undo::On(HashMap::new());
+    }
+
+    pub(crate) fn touched(&self) -> Option<Vec<String>> {
+        let Undo::On(before) = &self.undo else {
+            return None;
+        };
+        let mut ids: Vec<String> = before.keys().cloned().collect();
+        ids.sort();
+        Some(ids)
     }
 
     /// The change stands.

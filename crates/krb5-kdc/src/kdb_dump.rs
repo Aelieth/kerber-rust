@@ -11,6 +11,7 @@
 //! MIT 1.22.2 default dump is version **7** (`-r18` is version 6; princ
 //! records are the same). Field-count/order/hex mismatches fail parse.
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
@@ -125,6 +126,8 @@ pub struct DumpFile {
     pub princs: Vec<DumpPrincipal>,
     /// `policy\t…` rest (name + MIT numeric fields). Golden dumps have none.
     pub policies: Vec<String>,
+    pub(crate) base_len: usize,
+    pub(crate) applied_len: usize,
 }
 
 /// One `princ` record (encrypted `key_data` still wrapped).
@@ -179,6 +182,19 @@ pub struct DumpKeySlot {
 }
 
 impl DumpFile {
+    #[must_use]
+    pub(crate) fn text(&self) -> String {
+        let mut out = format!("kdb5_util load_dump version {}\n", self.version);
+        for p in &self.princs {
+            out.push_str(&p.record());
+            out.push('\n');
+        }
+        for rest in &self.policies {
+            let _ = writeln!(out, "policy\t{rest}");
+        }
+        out
+    }
+
     /// The dump's policies as the version 7 records a load stores, in dump order.
     #[must_use]
     pub fn policy_records(&self) -> Vec<String> {
@@ -267,6 +283,10 @@ impl DumpFile {
         }
         let realm = self.realm()?.to_owned();
         let mut store = PrincipalStore::try_new(realm.clone())?;
+        store.loaded_span = Some((
+            u64::try_from(self.base_len).unwrap_or(u64::MAX),
+            u64::try_from(self.applied_len).unwrap_or(u64::MAX),
+        ));
         let mut domain: Option<RpcSid> = None;
         for p in self.princs {
             let is_km = p.name.starts_with("K/M@");
@@ -356,7 +376,10 @@ impl DumpPrincipal {
     /// record does not decode; this port also takes the policy from the legacy `0x4B02` record of
     /// older Rust dumps, and fails the load when `KRB5_TL_KADM_DATA` does not decode.
     /// The master-key principal is refused when its key does not match the derived master key.
-    fn into_principal(self, mkey: &ProtocolKey) -> Result<(Principal, Option<RpcSid>), DumpError> {
+    pub(crate) fn into_principal(
+        self,
+        mkey: &ProtocolKey,
+    ) -> Result<(Principal, Option<RpcSid>), DumpError> {
         let (name, realm) = parse_unparsed(&self.name)?;
         let mut keys = Vec::new();
         for kd in &self.keys {
@@ -452,35 +475,206 @@ impl DumpPrincipal {
 /// dump header, a line is neither `princ` nor `policy`, or a `princ` record has a missing, extra
 /// or malformed field.
 pub fn parse_dump(text: &str) -> Result<DumpFile, DumpError> {
-    let mut lines = text.lines();
+    let mut lines = text_lines(text, 0);
     let header = lines
         .next()
         .ok_or_else(|| DumpError::Format("empty dump".into()))?;
-    let version = parse_header(header)?;
-    let mut princs = Vec::new();
-    let mut policies = Vec::new();
-    for (idx, line) in lines.enumerate() {
-        let lineno = idx + 2;
-        if line.is_empty() {
+    let version = parse_header(header.text)?;
+    let mut fold = Fold::default();
+    let (mut base_len, mut applied_len) = (text.len(), text.len());
+    while let Some(line) = lines.next() {
+        if line.text != JOURNAL_BEGIN {
+            fold.record(&line)?;
             continue;
         }
-        if let Some(rest) = line.strip_prefix("policy\t") {
-            policies.push(rest.to_owned());
-            continue;
+        base_len = base_len.min(line.start);
+        match read_batch(text, &line, &mut lines) {
+            Some((records, end)) => {
+                for r in &records {
+                    fold.record(r)?;
+                }
+                applied_len = end;
+            }
+            None if lines.any(|l| l.text == JOURNAL_BEGIN) => {
+                return Err(DumpError::Format(format!(
+                    "line {}: appended change does not check",
+                    line.no
+                )));
+            }
+            None => {
+                applied_len = line.start;
+                break;
+            }
         }
-        if let Some(rest) = line.strip_prefix("princ\t") {
-            princs.push(parse_princ_line(rest, lineno)?);
-            continue;
-        }
-        return Err(DumpError::Format(format!(
-            "line {lineno}: unknown record type"
-        )));
     }
     Ok(DumpFile {
         version,
-        princs,
-        policies,
+        princs: fold.princs.into_iter().flatten().collect(),
+        policies: fold.policies.into_iter().flatten().collect(),
+        base_len,
+        applied_len,
     })
+}
+
+// A change: `begin`, its `princ` and `del<TAB>name` lines, then `end<TAB>` and their CRC-32 in
+// eight hex digits. A change is read whole or not at all.
+const JOURNAL_BEGIN: &str = "begin";
+const JOURNAL_END: &str = "end\t";
+const JOURNAL_DEL: &str = "del\t";
+
+struct Line<'a> {
+    text: &'a str,
+    no: usize,
+    start: usize,
+    end: usize,
+    whole: bool,
+}
+
+fn text_lines(text: &str, from: usize) -> impl Iterator<Item = Line<'_>> {
+    let mut at = from;
+    let mut no = 0;
+    std::iter::from_fn(move || {
+        if at >= text.len() {
+            return None;
+        }
+        let rest = &text[at..];
+        let (raw, whole) = rest
+            .find('\n')
+            .map_or((rest, false), |i| (&rest[..i], true));
+        let start = at;
+        at += raw.len() + usize::from(whole);
+        no += 1;
+        Some(Line {
+            text: raw.strip_suffix('\r').unwrap_or(raw),
+            no,
+            start,
+            end: at,
+            whole,
+        })
+    })
+}
+
+fn read_batch<'a>(
+    text: &'a str,
+    begin: &Line<'a>,
+    lines: &mut impl Iterator<Item = Line<'a>>,
+) -> Option<(Vec<Line<'a>>, usize)> {
+    let mut records = Vec::new();
+    for line in lines.by_ref() {
+        if !line.whole {
+            return None;
+        }
+        if let Some(crc) = line.text.strip_prefix(JOURNAL_END) {
+            let body = text.get(begin.end..line.start)?.as_bytes();
+            let ok = u32::from_str_radix(crc, 16).ok() == Some(crate::lockout::crc32(body));
+            return ok.then_some((records, line.end));
+        }
+        records.push(line);
+    }
+    None
+}
+
+#[derive(Default)]
+struct Fold {
+    princs: Vec<Option<DumpPrincipal>>,
+    princ_at: HashMap<String, usize>,
+    policies: Vec<Option<String>>,
+    policy_at: HashMap<String, usize>,
+}
+
+impl Fold {
+    fn record(&mut self, line: &Line<'_>) -> Result<(), DumpError> {
+        let text = line.text;
+        if text.is_empty() {
+            return Ok(());
+        }
+        if let Some(rest) = text.strip_prefix("policy\t") {
+            let name = rest.split('\t').next().unwrap_or_default().to_owned();
+            put_last(
+                &mut self.policies,
+                &mut self.policy_at,
+                name,
+                rest.to_owned(),
+            );
+            return Ok(());
+        }
+        if let Some(rest) = text.strip_prefix("princ\t") {
+            let p = parse_princ_line(rest, line.no)?;
+            put_last(&mut self.princs, &mut self.princ_at, p.name.clone(), p);
+            return Ok(());
+        }
+        if let Some(name) = text.strip_prefix(JOURNAL_DEL) {
+            if let Some(i) = self.princ_at.remove(name) {
+                self.princs[i] = None;
+            }
+            return Ok(());
+        }
+        Err(DumpError::Format(format!(
+            "line {}: unknown record type",
+            line.no
+        )))
+    }
+}
+
+fn put_last<T>(items: &mut Vec<Option<T>>, at: &mut HashMap<String, usize>, name: String, v: T) {
+    if let Some(&i) = at.get(&name) {
+        items[i] = Some(v);
+    } else {
+        at.insert(name, items.len());
+        items.push(Some(v));
+    }
+}
+
+pub(crate) fn journal_batch(
+    store: &PrincipalStore,
+    mkey: &ProtocolKey,
+    ids: &[String],
+) -> Result<String, DumpError> {
+    let mut body = String::new();
+    for id in ids {
+        match store.principal_by_id(id) {
+            Some(p) => write_princ_record(&mut body, p, mkey, store, false)?,
+            None => {
+                let _ = writeln!(body, "{JOURNAL_DEL}{id}");
+            }
+        }
+    }
+    let crc = crate::lockout::crc32(body.as_bytes());
+    Ok(format!("{JOURNAL_BEGIN}\n{body}{JOURNAL_END}{crc:08x}\n"))
+}
+
+pub(crate) enum JournalOp {
+    Put(Box<DumpPrincipal>),
+    Del(String),
+}
+
+/// `None` sends the reader to the whole database; only a torn last change is skipped.
+pub(crate) fn parse_journal_tail(tail: &str) -> Result<Option<(Vec<JournalOp>, usize)>, DumpError> {
+    let mut ops = Vec::new();
+    let mut used = 0;
+    let mut lines = text_lines(tail, 0);
+    while let Some(line) = lines.next() {
+        if line.text != JOURNAL_BEGIN {
+            return Ok(None);
+        }
+        let Some((records, end)) = read_batch(tail, &line, &mut lines) else {
+            if lines.any(|l| l.text == JOURNAL_BEGIN) {
+                return Ok(None);
+            }
+            break;
+        };
+        for r in records {
+            if let Some(rest) = r.text.strip_prefix("princ\t") {
+                ops.push(JournalOp::Put(Box::new(parse_princ_line(rest, r.no)?)));
+            } else if let Some(name) = r.text.strip_prefix(JOURNAL_DEL) {
+                ops.push(JournalOp::Del(name.to_owned()));
+            } else if !r.text.is_empty() {
+                return Ok(None);
+            }
+        }
+        used = end;
+    }
+    Ok(Some((ops, used)))
 }
 
 /// Load a dump: parse, derive the master key, decrypt `key_data`.

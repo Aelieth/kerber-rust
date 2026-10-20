@@ -35,7 +35,7 @@ use krb5_types::pkinit::PkinitCa;
 
 use crate::dblock::{DbLock, DbLockHold, DbLockMode};
 use crate::error::Error;
-use crate::persist::{DbStamp, PersistError};
+use crate::persist::{DbStamp, Freshness, PersistError};
 use iprop_ulog::{LogContext, LogNote, PrincipalMap};
 use principal::default_mod_actor;
 use rid::generate_domain_sid;
@@ -100,6 +100,7 @@ pub struct PrincipalStore {
     pub(crate) persist_master: Option<(std::path::PathBuf, krb5_crypto::ProtocolKey)>,
     /// The database's age and identity as this store last read it.
     pub(crate) db_stamp: Option<DbStamp>,
+    pub(crate) loaded_span: Option<(u64, u64)>,
     /// The database's lock files, opened once with the database.
     pub(crate) dblock: Option<Arc<DbLock>>,
     /// Whether a mutation asked for a save during the current [`Self::change`].
@@ -214,6 +215,7 @@ impl PrincipalStore {
             persist_paths: None,
             persist_master: None,
             db_stamp: None,
+            loaded_span: None,
             dblock: None,
             changed: ChangeMark::default(),
             wrote_through: ChangeMark::default(),
@@ -253,10 +255,78 @@ impl PrincipalStore {
         let _held = lock
             .hold(DbLockMode::Shared)
             .map_err(|e| Error::from(PersistError::from(e)))?;
-        if self.db_stamp.is_some() && self.db_stamp == DbStamp::now(&lock, &db) {
-            return Ok(());
+        self.catch_up(&lock, &db).map(|_| ())
+    }
+
+    fn catch_up(&mut self, lock: &Arc<DbLock>, db: &std::path::Path) -> Result<Freshness, Error> {
+        let fresh = self
+            .db_stamp
+            .as_ref()
+            .map_or(Freshness::Other, |s| s.freshness(lock, db));
+        match fresh {
+            Freshness::Same => Ok(fresh),
+            Freshness::Grown if self.take_appended(lock, db) => Ok(fresh),
+            _ => self.reread(lock).map(|()| Freshness::Other),
         }
-        self.reread(&lock)
+    }
+
+    /// False, the store unchanged, for `K/M` or `kadmin/history`, a bad key, or no master key.
+    fn take_appended(&mut self, lock: &Arc<DbLock>, db: &std::path::Path) -> bool {
+        use crate::kdb_dump::JournalOp;
+        let (Some(stamp), Some(mkey)) = (self.db_stamp.clone(), self.journal_key()) else {
+            return false;
+        };
+        let Ok(bytes) = crate::persist::read_appended(db, stamp.applied) else {
+            return false;
+        };
+        let Ok(Ok(Some((ops, used)))) =
+            std::str::from_utf8(&bytes).map(crate::kdb_dump::parse_journal_tail)
+        else {
+            return false;
+        };
+        let realm = self.realm.clone();
+        let mut taken = Vec::with_capacity(ops.len());
+        for op in ops {
+            match op {
+                JournalOp::Put(dp) => {
+                    if dp.name == format!("K/M@{realm}")
+                        || dp.name == format!("kadmin/history@{realm}")
+                    {
+                        return false;
+                    }
+                    match dp.into_principal(&mkey) {
+                        Ok((p, _)) => taken.push(Ok(p)),
+                        Err(_) => return false,
+                    }
+                }
+                JournalOp::Del(id) => taken.push(Err(id)),
+            }
+        }
+        let mut ids = Vec::with_capacity(taken.len());
+        for op in taken {
+            match op {
+                Ok(p) => {
+                    ids.push(p.id());
+                    self.debug_insert(p);
+                }
+                Err(id) => self.debug_remove(&id),
+            }
+        }
+        self.resolve_history_of(&ids);
+        crate::lockout::merge_lockout_file(self, db);
+        let applied = stamp.applied + u64::try_from(used).unwrap_or_default();
+        self.db_stamp = DbStamp::holding(lock, db, stamp.base, applied);
+        true
+    }
+
+    /// `kadmin.local -m`'s key, else `K/M`'s, which a load checked against the stash.
+    fn journal_key(&self) -> Option<krb5_crypto::ProtocolKey> {
+        if let Some((_, master)) = &self.persist_master {
+            return Some(master.clone());
+        }
+        self.get(&format!("K/M@{}", self.realm))
+            .and_then(|km| km.keys.first())
+            .map(|k| k.key.clone())
     }
 
     /// Read the database again, whatever its stamp says, so a change whose save failed does not
@@ -353,7 +423,7 @@ impl PrincipalStore {
         let held = lock
             .hold(DbLockMode::Shared)
             .map_err(|e| Error::from(PersistError::from(e)))?;
-        let stale = self.db_stamp.is_none() || self.db_stamp != DbStamp::now(lock, db);
+        let stale = !self.db_stamp.as_ref().is_some_and(|s| s.same(lock, db));
         Ok(Some((held, stale)))
     }
 
@@ -473,16 +543,32 @@ impl PrincipalStore {
         };
         let out = match done {
             Ok(v) if self.changed.0.load(Ordering::Relaxed) => {
+                let append = self.append_plan(&before);
+                let mut appended = 0;
                 let written = self
                     .prepare_log()
                     .map_err(LoggedWrite::Before)
                     .and_then(|p| {
-                        self.write_logged(p, || self.write_database().map_err(Error::from))
+                        self.write_logged(p, || match &append {
+                            Some((ids, _, _)) if ids.is_empty() => Ok(()),
+                            Some((ids, master, at)) => {
+                                appended =
+                                    crate::persist::append_change(self, &db, master, *at, ids)?;
+                                lock.update_age();
+                                Ok(())
+                            }
+                            None => self.write_database().map_err(Error::from),
+                        })
                     });
                 match written {
                     Ok(()) | Err(LoggedWrite::After(_)) => {
                         self.map.end_change();
-                        self.db_stamp = DbStamp::now(&lock, &db);
+                        self.db_stamp = match (&append, &self.db_stamp) {
+                            (Some((_, _, at)), Some(s)) => {
+                                DbStamp::holding(&lock, &db, s.base, at + appended)
+                            }
+                            _ => DbStamp::now(&lock, &db),
+                        };
                         tracing::info!(
                             event = krb5_log::events::ADMIN,
                             component = "krb5-kdc",
@@ -513,6 +599,22 @@ impl PrincipalStore {
         out
     }
 
+    /// `None` writes the whole database: a policy or SID change, a write-through, a database
+    /// not read as dump text, or a journal past its base's size.
+    fn append_plan(&self, before: &Before) -> Option<(Vec<String>, krb5_crypto::ProtocolKey, u64)> {
+        if self.wrote_through.0.load(Ordering::Relaxed)
+            || before.policies != self.policies
+            || before.domain_sid != self.domain_sid
+        {
+            return None;
+        }
+        let stamp = self.db_stamp.as_ref().filter(|s| s.dump)?;
+        if stamp.applied - stamp.base > stamp.base {
+            return None;
+        }
+        Some((self.map.touched()?, self.journal_key()?, stamp.applied))
+    }
+
     /// Under a change's exclusive lock, the store as the database holds it now. The database is
     /// read again when another writer moved its stamp, when the stamp is unknown (a panic, or a
     /// failed read), or when notes of an unwritten change are pending. Otherwise the store is
@@ -530,10 +632,12 @@ impl PrincipalStore {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .is_empty();
-        if pending || self.db_stamp.is_none() || self.db_stamp != DbStamp::now(lock, db) {
+        if pending {
             return self.reread(lock);
         }
-        crate::lockout::merge_lockout_file(self, db);
+        if self.catch_up(lock, db)? == Freshness::Same {
+            crate::lockout::merge_lockout_file(self, db);
+        }
         Ok(())
     }
 
@@ -741,6 +845,14 @@ impl PrincipalStore {
     pub(crate) fn debug_insert(&mut self, mut p: Principal) {
         self.settle_rid(&mut p);
         self.map.insert_unlogged(p.id(), p);
+    }
+
+    pub(crate) fn principal_by_id(&self, id: &str) -> Option<&Principal> {
+        self.map.get(id)
+    }
+
+    pub(crate) fn debug_remove(&mut self, id: &str) {
+        self.map.remove_unlogged(id);
     }
 }
 
