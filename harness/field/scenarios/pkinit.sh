@@ -17,6 +17,9 @@
 #          failure: Client name mismatch" in the KDC log (75);
 #   PK.ca: client2's alice-unknownca.pem, issued by unknown-cacert.pem, which client2 trusts and the KDC does not:
 #          "Failed to verify received certificate (depth 0): unable to get local issuer certificate" (70);
+#   PK.refuse: with alice's password on stdin, a refusal that carries e-data goes on to the password and a TGT
+#          (alice-unknownca's 70, and the <SUBJECT>( rule's 24 in PK.dbmatch); alice-wrongsan's 75 carries none and
+#          ends with rc 1; each refusal's code as the kinit's trace gives it;
 #   PK.rsacert: client2's alice-rsa.pem (an RSA 2048 key, issued by rsa-cacert.pem, which kdc's pkinit_anchors and
 #          client2 both trust) gets a TGT, from MIT's kinit and, in the rust leg, ours (it signs with the RSA key);
 #   PK.dbmatch: alice's pkinit_cert_match rule decides her alice.pem kinit: "<KU>digitalSignature" and "<SAN>^alice@"
@@ -64,6 +67,7 @@ KC=/var/kerberos/krb5kdc/kdc.conf
 D=${PK_KDC_DIR:-/var/kerberos/krb5kdc/pkinit}
 C=${PK_CLIENT_DIR:-/home/lab/pkinit}
 BIG=/var/kerberos/krb5kdc/pkbig
+legset ALICE
 ANON=0
 PREAUTH=0
 DBMATCH=0
@@ -86,6 +90,12 @@ pkkdc() {
 certkinit() {
     local id=${3:-alice}
     check "$1" "$2" run client2 "mkdir -p ~/pk && kdestroy -c FILE:\$HOME/pk/a.cc 2> /dev/null; kinit -X X509_anchors=FILE:$C/cacert.pem -X X509_user_identity=FILE:$C/$id.pem,$C/$id.key -c FILE:\$HOME/pk/a.cc alice < /dev/null 2>&1; echo \"kinit rc=\$?\"; klist -c FILE:\$HOME/pk/a.cc 2>&1 | grep -E '^Default principal|krbtgt/'"
+}
+# pwkinit <check> <kinit> <identity> <ERE for the rc line> <code>: <identity>'s certificate kinit, trusting client2's two
+# CAs, alice's password on stdin; the KDC's refusal in the trace is <code> (the com_err code, from -1765328384).
+pwkinit() {
+    check "$1" "$4" runin client2 "alice's password ($ALICE)" "mkdir -p ~/pk && kdestroy -c FILE:\$HOME/pk/p.cc 2> /dev/null; rm -f \$HOME/pk/p.trace; KRB5_TRACE=\$HOME/pk/p.trace $2 -X X509_anchors=FILE:$C/cacert.pem -X X509_anchors=FILE:$C/unknown-cacert.pem -X X509_user_identity=FILE:$C/$3.pem,$C/$3.key -c FILE:\$HOME/pk/p.cc alice > \$HOME/pk/p.out 2>&1; echo \"kinit rc=\$?\"; grep -E 'kinit: ' \$HOME/pk/p.out; klist -c FILE:\$HOME/pk/p.cc 2>&1 | grep -E '^Default principal'; grep -oE 'Received error from KDC: -?[0-9]+' \$HOME/pk/p.trace | sort -u" < <(once "$ALICE")
+    checklast "$1.code" "^Received error from KDC: $(($5 - 1765328384))\$"
 }
 
 section "pkinit --leg $LEG: PKINIT as the $LEG KDC serves it from kdc.conf, MIT kinit from client2"
@@ -150,6 +160,16 @@ observelast obs.PK.ca.kinit 'kinit: .*'
 kdcsince PK.ca.as 'verify failure'
 checklast PK.ca.line 'preauth \(pkinit\) verify failure: Failed to verify received certificate \(depth 0\): unable to get local issuer certificate$'
 
+section "PK.refuse a refused certificate with alice's password: 70 goes on to the password, 75 stops (MIT and ours)"
+for k in mit ${OURS:+ours}; do
+    kinit=kinit
+    [ "$k" = ours ] && kinit=$OURS
+    pwkinit "PK.refuse.ca.$k" "$kinit" alice-unknownca '^kinit rc=0$' 70
+    checklast "PK.refuse.ca.$k.tgt" "^Default principal: alice@$R\$"
+    pwkinit "PK.refuse.san.$k" "$kinit" alice-wrongsan '^kinit rc=1$' 75
+    observelast "obs.PK.refuse.san.$k" 'kinit: .*'
+done
+
 section "PK.rsacert alice's RSA certificate from the RSA CA both trust: a TGT (MIT and ours)"
 pkkdc PK.rsacert.kdc "\n[kdcdefaults]\n    pkinit_identity = FILE:$D/kdc.pem,$D/kdc.key\n    pkinit_anchors = FILE:$D/cacert.pem\n    pkinit_anchors = FILE:$D/rsa-cacert.pem\n"
 check PK.rsacert.kinit '^kinit rc=0$' run client2 "mkdir -p ~/pk && kinit -X X509_anchors=FILE:$C/cacert.pem -X X509_anchors=FILE:$C/rsa-cacert.pem -X X509_user_identity=FILE:$C/alice-rsa.pem,$C/alice-rsa.key -c FILE:\$HOME/pk/r.cc alice < /dev/null 2>&1; echo \"kinit rc=\$?\"; klist -c FILE:\$HOME/pk/r.cc 2>&1 | grep -E '^Default principal'"
@@ -176,6 +196,12 @@ dbmatch PK.dbmatch.ku '<KU>digitalSignature' '^kinit rc=0$'
 dbmatch PK.dbmatch.san '<SAN>^alice@' '^kinit rc=0$'
 dbmatch PK.dbmatch.miss '&&<KU>digitalSignature<SAN>^bob@' '^kinit rc=1$' 'preauth \(pkinit\) verify failure: Certificate mismatch$'
 dbmatch PK.dbmatch.bad '<SUBJECT>(' '^kinit rc=1$' 'preauth \(pkinit\) verify failure: Exec format error$'
+for k in mit ${OURS:+ours}; do
+    kinit=kinit
+    [ "$k" = ours ] && kinit=$OURS
+    pwkinit "PK.refuse.rule.$k" "$kinit" alice '^kinit rc=0$' 24
+    checklast "PK.refuse.rule.$k.tgt" "^Default principal: alice@$R\$"
+done
 run kdc "sudo kadmin.local -q 'delstr alice pkinit_cert_match' 2>&1"
 DBMATCH=0
 
@@ -232,7 +258,6 @@ fi
 
 section "PK.fallback an identity that does not load: kinit goes on to the password; PK.twoid a second identity is refused (MIT's kinit, then ours)"
 pkkdc PK.fallback.kdc "\n[kdcdefaults]\n    pkinit_identity = FILE:$D/kdc.pem,$D/kdc.key\n    pkinit_anchors = FILE:$D/cacert.pem\n"
-legset ALICE
 # fbkinit <check> <kinit> [nopw]: alice's kinit naming a certificate file that is not there, her password on stdin
 # (with nopw, none)
 fbkinit() {

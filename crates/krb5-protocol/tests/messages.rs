@@ -747,10 +747,16 @@ fn pkinit_as_req_carries_pa_pk_as_req() {
         ca_cert: ca.ca_cert.clone(),
     };
 
-    let hint = encode(&vec![krb5_types::PaData {
-        padata_type: pa::AS_FRESHNESS,
-        padata_value: vec![0u8; 20].into(),
-    }])
+    let hint = encode(&vec![
+        krb5_types::PaData {
+            padata_type: pa::PK_AS_REQ,
+            padata_value: Vec::new().into(),
+        },
+        krb5_types::PaData {
+            padata_type: pa::AS_FRESHNESS,
+            padata_value: vec![0u8; 20].into(),
+        },
+    ])
     .unwrap();
     let reply = encode(&KrbError {
         pvno: KrbError::PVNO,
