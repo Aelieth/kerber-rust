@@ -30,7 +30,7 @@ any other `###` heading.
 - **gss/protocol.** GSS's receive window is MIT's 64-number bitmap; the replay cache keeps MIT's tag for the clock skew, and a full cache refuses a new tag, not a live one.
 - **admin.** The iprop client checks the primary's INIT reply MIC whatever its verifier, as MIT's `authgss_refresh`; an empty or non-GSS verifier skipped the check.
 - **kdc.** PKINIT trusts kdc.conf's `pkinit_anchors` and signs with `pkinit_identity`, not a CA it made, now test-only. KDC identity P-256 only. Lab beside MIT.
-- **kdc.** A client with a `pkinit_cert_match` string is refused PKINIT (66): the matcher is not ported.
+- **kdc.** PKINIT checks a client's `pkinit_cert_match` rule as MIT's dbmatch (`<KU>`, `<EKU>`, `<SAN>`, `<ISSUER>`, `<SUBJECT>`, `&&`, `||`); a miss is 66. Lab beside MIT.
 
 ### Added
 

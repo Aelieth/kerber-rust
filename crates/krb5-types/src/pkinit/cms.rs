@@ -1542,7 +1542,8 @@ pub fn cert_sans(cert: &[u8], upns: bool) -> Option<CertSans> {
 }
 
 /// id-ms-kp-sc-logon 1.3.6.1.4.1.311.20.2.2 (OID body).
-const OID_MS_SC_LOGON: &[u8] = &[0x2b, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x14, 0x02, 0x02];
+pub(super) const OID_MS_SC_LOGON: &[u8] =
+    &[0x2b, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x14, 0x02, 0x02];
 
 /// Whether a client certificate may authenticate with PKINIT: its extended key usage names
 /// id-pkinit-KPClientAuth (or, when `accept_secondary`, Microsoft's smart-card logon), and its
@@ -1569,18 +1570,18 @@ pub fn client_eku_ok(cert: &[u8], accept_secondary: bool) -> bool {
     digital_signature
 }
 
-struct TbsWalk<'a> {
-    issuer: &'a [u8],
+pub(super) struct TbsWalk<'a> {
+    pub(super) issuer: &'a [u8],
     validity: &'a [u8],
-    subject: &'a [u8],
-    extensions: Option<&'a [u8]>,
+    pub(super) subject: &'a [u8],
+    pub(super) extensions: Option<&'a [u8]>,
 }
 
 /// Locate the issuer, validity, subject and extensions of a DER certificate. MIT has no walker of
 /// its own: its PKINIT reads these fields through OpenSSL.
 /// A certificate that is not a sequence yields no issuer or validity, and an optional version is
 /// skipped rather than read as the serial.
-fn walk_tbs(cert: &[u8]) -> Option<TbsWalk<'_>> {
+pub(super) fn walk_tbs(cert: &[u8]) -> Option<TbsWalk<'_>> {
     let (t, body, _) = take_tlv(cert)?;
     if t != 0x30 {
         return None;
@@ -1628,7 +1629,7 @@ fn walk_tbs(cert: &[u8]) -> Option<TbsWalk<'_>> {
     })
 }
 
-fn each_ext(extensions: &[u8], mut visit: impl FnMut(&[u8], &[u8]) -> bool) {
+pub(super) fn each_ext(extensions: &[u8], mut visit: impl FnMut(&[u8], &[u8]) -> bool) {
     let mut cur = extensions;
     while let Some((_, ext, rest)) = take_tlv(cur) {
         if let Some((t, oid, after)) = take_tlv(ext)
@@ -1673,7 +1674,7 @@ fn cert_key_cert_sign_ok(cert: &[u8]) -> bool {
     !saw_ku || ok
 }
 
-fn bitstring_has(der: &[u8], bit: usize) -> bool {
+pub(super) fn bitstring_has(der: &[u8], bit: usize) -> bool {
     let Some((t, body, _)) = take_tlv(der) else {
         return false;
     };

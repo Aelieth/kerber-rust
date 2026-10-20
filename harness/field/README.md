@@ -385,12 +385,13 @@ would remove it.
   verify-failure line), and with `pkinit_eku_checking = none` it gets a TGT. `alice-wrongsan` (another
   principal's SAN) is refused with `Client name mismatch` (75); `alice-unknownca`, from a CA client2
   trusts and the KDC does not, with `Failed to verify received certificate (depth 0): unable to get
-  local issuer certificate` (70). With alice's `pkinit_cert_match` set to a rule `alice.pem`
-  matches, the outcome is recorded, not graded: MIT issues a TGT, kerber-rust refuses with 66.
-  `alice-rsa`, an RSA 2048 certificate from an RSA CA both sides trust, gets a TGT. The RSA KDC
-  identity's startup line is recorded, not graded: MIT serves with it, and kerber-rust's KDC
-  identity is P-256 only. kdc.conf is
-  restored with krb5kdc restarted at the end, also when the scenario stops early.
+  local issuer certificate` (70). alice's `pkinit_cert_match` rule decides her `alice.pem` kinit:
+  `<KU>digitalSignature` and `<SAN>^alice@` get a TGT, `&&<KU>digitalSignature<SAN>^bob@` is
+  refused with `Certificate mismatch` (66), and `<SUBJECT>(`, which `regcomp` refuses, with `Exec
+  format error` (24). `alice-rsa`, an RSA 2048 certificate from an RSA CA both sides trust, gets a
+  TGT. The RSA KDC identity's startup line is recorded, not graded: MIT serves with it, and
+  kerber-rust's KDC identity is P-256 only. kdc.conf is restored with krb5kdc restarted at the
+  end, also when the scenario stops early.
 - **`kdc-profile.sh`** (CF, client2's MIT kinit against kdc): with kdc.conf's
   `[libdefaults] clockskew = 60` and client2's clock 120 s ahead (chronyd stopped,
   then started again to step it back) cfskew's AS-REQ is refused for skew, and

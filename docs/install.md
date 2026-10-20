@@ -447,13 +447,16 @@ MIT's (`doc/admin/pkinit.rst`):
   usage: `pkinit_eku_checking = scLogin` also takes Microsoft's smart-card logon usage, and `none`
   checks neither.
 - `pkinit_require_freshness`, `pkinit_indicator` and `pkinit_allow_upn` work as MIT's.
-  `pkinit_revoke`, `pkinit_require_crl_checking` and `pkinit_kdc_ocsp` are refused, and a principal
-  with a `pkinit_cert_match` string attribute cannot log in with a certificate.
+  `pkinit_revoke`, `pkinit_require_crl_checking` and `pkinit_kdc_ocsp` are refused.
+- A principal's `pkinit_cert_match` string attribute (`kadmin setstr`) is a rule its certificate must
+  match, as MIT's, else the login is refused (66). A regular expression with a back-reference
+  (`\1` to `\9`) is refused (24).
 - If the identity or the anchors do not load, the KDC starts without PKINIT and logs MIT's line, for
   example `preauth pkinit failed to initialize: PKINIT initialization failed: No pkinit_identity
   supplied for realm EXAMPLE.COM`.
 
-A client needs the CA as `pkinit_anchors` in the realm's `krb5.conf` stanza. Anonymous PKINIT
+A client needs the CA as `pkinit_anchors` in the realm's `krb5.conf` stanza. kerber-rust's kinit
+takes one `FILE:` identity and does not read krb5.conf's `pkinit_cert_match`. Anonymous PKINIT
 (`kinit -n`) uses the same KDC identity.
 
 ## Upgrading an MIT realm

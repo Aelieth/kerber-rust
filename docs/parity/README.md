@@ -111,8 +111,8 @@ wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 
 Counts:
 **568** = A1 131 + A2 94 + A3 116 + A4 66 + A5 34 + B1 127.
-exact 442 · stricter-documented 23 · deviation 37 ·
-absent 2 · deferred 64.
+exact 442 · stricter-documented 22 · deviation 37 ·
+absent 2 · deferred 65.
 
 When the ledger was split into these files, the one-file A4 (153 rows,
 kadm5 plus the client library) was re-cut by subject: A4 58, A5 25 and

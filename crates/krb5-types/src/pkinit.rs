@@ -11,6 +11,7 @@ use rasn::prelude::*;
 mod ca;
 mod cms;
 mod identity;
+mod matching;
 
 #[cfg(any(test, feature = "test-ca"))]
 pub use ca::{PkinitCa, cms_wrap};
@@ -23,6 +24,7 @@ pub use cms::{
     require_kdc_pkinit_cert, verify_chain,
 };
 pub use identity::{PkinitIdentity, load_ca_certs, load_identity};
+pub use matching::{CertMatchError, cert_match};
 
 /// PA-PK-AS-REQ ::= SEQUENCE { signedAuthPack, trustedCertifiers, kdcPkId }
 ///

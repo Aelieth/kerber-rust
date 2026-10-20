@@ -19,8 +19,10 @@
 #          "Failed to verify received certificate (depth 0): unable to get local issuer certificate" (70);
 #   PK.rsacert: client2's alice-rsa.pem (an RSA 2048 key, issued by rsa-cacert.pem, which kdc's pkinit_anchors and
 #          client2 both trust) gets a TGT;
-#   obs.PK.dbmatch (INFO): with alice's pkinit_cert_match set to "<KU>digitalSignature", which alice.pem matches,
-#          MIT issues a TGT and kerber-rust refuses with 66 (its matcher is not ported; documented);
+#   PK.dbmatch: alice's pkinit_cert_match rule decides her alice.pem kinit: "<KU>digitalSignature" and "<SAN>^alice@"
+#          match and get a TGT; "&&<KU>digitalSignature<SAN>^bob@" misses: "preauth (pkinit) verify failure:
+#          Certificate mismatch" (66); "<SUBJECT>(" does not compile (regcomp's REG_EPAREN, 8, which the KDC reports
+#          as an errno): "preauth (pkinit) verify failure: Exec format error" (24);
 #   PK.6:  kinit -n with client2's anchors: a WELLKNOWN/ANONYMOUS ticket (the principal is made for the cell);
 #   PK.7b: pkinit_identity names a file that is not there: the line ends "Cannot read certificate file '<file>':
 #          (null)", OpenSSL 3 giving no reason for a system error;
@@ -134,14 +136,22 @@ check PK.rsacert.kinit '^kinit rc=0$' run client2 "mkdir -p ~/pk && kinit -X X50
 checklast PK.rsacert.tgt "^Default principal: alice@$R\$"
 pkkdc PK.rsacert.back "\n[kdcdefaults]\n    pkinit_identity = FILE:$D/kdc.pem,$D/kdc.key\n    pkinit_anchors = FILE:$D/cacert.pem\n"
 
-section "obs.PK.dbmatch alice's pkinit_cert_match: MIT matches it, kerber-rust refuses with 66 (INFO)"
-run kdc "sudo kadmin.local -q 'setstr alice pkinit_cert_match \"<KU>digitalSignature\"' 2>&1"
+section "PK.dbmatch alice's pkinit_cert_match rule decides her certificate kinit (MIT and ours)"
+# dbmatch <check> <rule> <ERE for the kinit line> [<ERE for the KDC's verify-failure line>]
+dbmatch() {
+    check "$1.set" '^Attribute set' run kdc "sudo kadmin.local -q 'setstr alice pkinit_cert_match \"$2\"' 2>&1 | sed 's/^Attribute set for principal.*/Attribute set/'"
+    kdcmark "$1.as"
+    certkinit "$1.kinit" "$3"
+    if [ -n "${4:-}" ]; then
+        kdcsince "$1.as" 'verify failure'
+        checklast "$1.line" "$4"
+    fi
+}
 DBMATCH=1
-kdcmark PK.dbmatch.as
-run client2 "mkdir -p ~/pk && kinit -X X509_anchors=FILE:$C/cacert.pem -X X509_user_identity=FILE:$C/alice.pem,$C/alice.key -c FILE:\$HOME/pk/d.cc alice < /dev/null 2>&1; echo \"kinit rc=\$?\""
-observelast obs.PK.dbmatch.kinit 'kinit rc=[0-9]+'
-kdcsince PK.dbmatch.as 'verify failure'
-observelast obs.PK.dbmatch.line 'verify failure: .*'
+dbmatch PK.dbmatch.ku '<KU>digitalSignature' '^kinit rc=0$'
+dbmatch PK.dbmatch.san '<SAN>^alice@' '^kinit rc=0$'
+dbmatch PK.dbmatch.miss '&&<KU>digitalSignature<SAN>^bob@' '^kinit rc=1$' 'preauth \(pkinit\) verify failure: Certificate mismatch$'
+dbmatch PK.dbmatch.bad '<SUBJECT>(' '^kinit rc=1$' 'preauth \(pkinit\) verify failure: Exec format error$'
 run kdc "sudo kadmin.local -q 'delstr alice pkinit_cert_match' 2>&1"
 DBMATCH=0
 

@@ -767,7 +767,7 @@ fn cms_fault(
 /// MIT `authorize_cert` (`plugins/preauth/pkinit/pkinit_srv.c:319-388`): the built-in certauth modules in their order, and a certificate none of them accepted is a name mismatch.
 /// MIT `pkinit_san_authorize` (`plugins/preauth/pkinit/pkinit_srv.c:1143-1168`): a SAN naming the client accepts, SANs that name another refuse, and none passes.
 /// MIT `pkinit_eku_authorize` (`plugins/preauth/pkinit/pkinit_srv.c:1171-1192`): the key purpose, unless `pkinit_eku_checking = none`.
-/// MIT `dbmatch_authorize` (`plugins/preauth/pkinit/pkinit_srv.c:1230-1258`): the client's `pkinit_cert_match` string decides. Its matcher is not ported, so a client that has one is refused.
+/// MIT `dbmatch_authorize` (`plugins/preauth/pkinit/pkinit_srv.c:1230-1258`): a client's `pkinit_cert_match` rule accepts a certificate it matches and refuses one it does not (66); a rule or certificate the matcher cannot read is that error.
 fn authorize_cert(
     store: &dyn PrincipalRead,
     kdc: &crate::pkinit::PkinitKdc,
@@ -817,12 +817,27 @@ fn authorize_cert(
     if kdc.require_eku && !krb5_types::pkinit::client_eku_ok(cert, kdc.accept_secondary_eku) {
         return Err(denied(err::INCONSISTENT_KEY_PURPOSE, "pkinit client eku"));
     }
-    if client
+    if let Some((_, rule)) = client
         .string_attrs
         .iter()
-        .any(|(k, _)| k == "pkinit_cert_match")
+        .find(|(k, _)| k == "pkinit_cert_match")
     {
-        return Err(denied(err::CERTIFICATE_MISMATCH, "pkinit_cert_match"));
+        match krb5_types::pkinit::cert_match(rule, cert) {
+            Ok(true) => accepted = true,
+            Ok(false) => return Err(denied(err::CERTIFICATE_MISMATCH, "pkinit_cert_match")),
+            Err(e) => {
+                tracing::info!(
+                    event = krb5_log::events::KDC_PKINIT,
+                    component = "krb5-kdc",
+                    outcome = "denied",
+                    error = %e
+                );
+                return Err(Error::PreauthModule {
+                    code: err::PREAUTH_FAILED,
+                    message: e.to_string(),
+                });
+            }
+        }
     }
     if accepted {
         Ok(())
