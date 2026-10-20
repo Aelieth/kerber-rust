@@ -178,3 +178,16 @@ pub fn admin_server_port(server: &str) -> Option<u16> {
     };
     port.trim().parse::<u16>().ok().filter(|p| *p != 0)
 }
+
+/// The host an `admin_server` value names: the name or address inside brackets, else the value
+/// up to its first colon.
+/// MIT `parse_admin_server_port` (`lib/kadm5/alt_prof.c:395-417`): brackets are taken off, else the name ends at the first colon.
+#[must_use]
+pub fn admin_server_host(server: &str) -> &str {
+    if let Some(rest) = server.strip_prefix('[')
+        && let Some(close) = rest.find(']')
+    {
+        return &rest[..close];
+    }
+    server.split(':').next().unwrap_or(server)
+}

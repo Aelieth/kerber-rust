@@ -686,9 +686,12 @@ update log and lock files, the stash, `kdc.conf` and `kadm5.acl`.
   MIT realm moves over with dump and load.
 - Replica KDCs: Fedora's `kprop.service` and MIT's `kpropd` daemon. `kprop` and `kpropd` are
   installed; `kpropd` opens the dump with the stash. `kpropd` takes MIT's `-r`, `-s` (else the
-  default keytab) and `-a` (else `kpropd.acl` in the KDC directory) and an address (without one
-  it listens on port 754 of every address, as MIT's does), not MIT's other options (`-f`, `-P`,
-  `--pid-file`, `-D`), and it does not detach. As MIT's, it accepts a ticket for its own
+  default keytab), `-a` (else `kpropd.acl` in the KDC directory), `-P` (else port 754, on every
+  address, as MIT's), `-A`, `-t`, `-d`, `-D` and `-S`, and an address of its own, not MIT's
+  `-f`, `-F`, `-p`, `-x` or `--pid-file`, and it does not detach. With `iprop_enable` it polls
+  the primary (`-A`, else `admin_server`) at `iprop_port` as `kiprop/<this host>`, with that
+  principal's keys from the same keytab, every `iprop_replica_poll`, as MIT's iprop mode does;
+  `-d` prints the poll's lines, not the listener's. As MIT's, it accepts a ticket for its own
   `host/<this host>` only, its name as MIT makes it without DNS: a hostname without a dot gains
   `qualify_shortname`, else the resolver's first search domain, and is lowercased. MIT's DNS
   canonicalization (`dns_canonicalize_hostname = true`, its default, and the second step of

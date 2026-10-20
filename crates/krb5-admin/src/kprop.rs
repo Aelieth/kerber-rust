@@ -28,13 +28,16 @@ use krb5_types::{
 
 use crate::Error;
 
+mod poll;
 #[allow(
     clippy::disallowed_methods,
     reason = "a client operation reads its own profile (CF-4)"
 )]
 mod send;
 
+pub use poll::{IpropWake, KpropdIprop, kpropd_do_iprop};
 pub(crate) use send::is_app_tag;
+pub use send::service_port as kprop_service_port;
 pub use send::{
     KPROP_SERVICE, KpropCreds, KpropDump, KpropError, RemoteError, kprop_get_tickets,
     kprop_open_connection, kprop_sendauth, kprop_update_last_prop_file, kprop_xmit_database,

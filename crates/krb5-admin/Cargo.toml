@@ -23,6 +23,7 @@ krb5-log.workspace = true
 krb5-protocol.workspace = true
 krb5-types.workspace = true
 nix = { workspace = true, features = ["fs"] }
+signal-hook.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

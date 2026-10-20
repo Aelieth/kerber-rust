@@ -63,11 +63,11 @@ kpropd-start)
     printf '[realms]\n    %s = {\n        database_name = %s/replica/principal\n        key_stash_file = %s\n    }\n' \
         "$realm" "$D" "${stash:-/var/kerberos/krb5kdc/.k5.$realm}" > "$D/kdc.conf"
     kdb5_util dump "$D/dump"
-    # MIT's kpropd takes its port with -P and stays in the foreground with -D; this port's takes host:port.
+    # MIT's kpropd writes what it receives to -f's file (else the KDC directory's) for kdb5_util load;
+    # this port's loads it itself.
+    set -- -D -P 7754 -r "$realm" -s "$D/kt" -a "$D/kpropd.acl"
     if [ "$leg" = mit ]; then
-        set -- -D -P 7754 -r "$realm" -s "$D/kt" -a "$D/kpropd.acl" -f "$D/from_primary"
-    else
-        set -- -r "$realm" -s "$D/kt" -a "$D/kpropd.acl" 0.0.0.0:7754
+        set -- "$@" -f "$D/from_primary"
     fi
     KRB5_KDC_PROFILE=$D/kdc.conf nohup /usr/sbin/kpropd "$@" > "$D/kpropd.out" 2>&1 < /dev/null &
     echo $! > "$D/kpropd.pid"

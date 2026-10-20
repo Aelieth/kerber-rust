@@ -12,7 +12,8 @@
 //! without it, a version 7 dump. `KRB5_MASTER_PASSWORD` opens it instead when set, and a missing
 //! stash is then written. A host argument then pulls serial-delta.
 //!
-//! The pull is kpropd's iprop half and needs `iprop_enable`: the replica's update log (mapped as a
+//! The pull is one call of kpropd's iprop client ([`krb5_admin::IpropClient`], the handle
+//! `krb5-kpropd` polls with) and needs `iprop_enable`: the replica's update log (mapped as a
 //! replica's) gives the serial and time asked from, unless `--last-sno` gives them, and keeps each
 //! update applied, as MIT's `ulog_replay` keeps it.
 //!
@@ -32,7 +33,7 @@
 use std::net::TcpStream;
 use std::path::PathBuf;
 
-use krb5_admin::{iprop_dump_last, iprop_fullresync, iprop_pull, is_iprop_dump, load_replica};
+use krb5_admin::{IpropClient, iprop_dump_last, is_iprop_dump, load_replica};
 use krb5_kdc::{IpropRole, load_dump_with_stash, load_store};
 use krb5_protocol::{Keytab, as_exchange_key, tgs_exchange};
 use krb5_types::PrincipalName;
@@ -212,53 +213,59 @@ fn main() {
         eprintln!("krb5-iprop-pull: TGS: {e}");
         std::process::exit(1);
     });
-    let mut stream = TcpStream::connect(&target).unwrap_or_else(|e| {
+    let stream = TcpStream::connect(&target).unwrap_or_else(|e| {
         eprintln!("krb5-iprop-pull: connect {target}: {e}");
         std::process::exit(1);
     });
+    let mut client = IpropClient::establish(
+        stream,
+        tgs.ticket,
+        &tgs.session_key,
+        &krb5_types::ascii(&realm),
+        &ent.name,
+    )
+    .unwrap_or_else(|e| {
+        eprintln!("krb5-iprop-pull: {e}");
+        std::process::exit(1);
+    });
     if full_resync {
-        let status = iprop_fullresync(
-            &mut stream,
-            tgs.ticket,
-            &tgs.session_key,
-            &krb5_types::ascii(&realm),
-            &ent.name,
-        )
-        .unwrap_or_else(|e| {
-            eprintln!("krb5-iprop-pull: full-resync: {e}");
+        let status = client.full_resync().unwrap_or_else(|f| {
+            eprintln!("krb5-iprop-pull: {}", f.sperror("full-resync"));
             std::process::exit(1);
         });
         println!("fullresync_status={status}");
         std::process::exit(i32::from(status != krb5_kdc::IPROP_OK));
     }
-    let pulled = iprop_pull(
-        &mut stream,
-        tgs.ticket,
-        &tgs.session_key,
-        &krb5_types::ascii(&realm),
-        &ent.name,
-        krb5_admin::IpropLast {
-            last_sno: mylast.sno,
-            last_sec: mylast.time.seconds,
-            last_usec: mylast.time.useconds,
-        },
-        &mut store,
-    )
-    .unwrap_or_else(|e| {
-        eprintln!("krb5-iprop-pull: pull: {e}");
+    let reply = client.get_updates(mylast).unwrap_or_else(|f| {
+        eprintln!("krb5-iprop-pull: {}", f.sperror("pull"));
         std::process::exit(1);
     });
-    if pulled.status == krb5_kdc::IPROP_FULL_RESYNC {
-        println!("iprop full-resync last_sno={}", pulled.last_sno);
+    let mut applied = 0;
+    if reply.status == krb5_kdc::IPROP_OK && reply.count > 0 {
+        let updates = reply
+            .updates(store.iprop_master_key().as_ref())
+            .unwrap_or_else(|e| {
+                eprintln!("krb5-iprop-pull: pull: {e}");
+                std::process::exit(1);
+            });
+        // MIT `ulog_replay` (`lib/kdb/kdb_log.c:430-467`): each update is put into the database, which locks it.
+        if let Err(e) = store.change(|s| s.apply_updates(&updates)).and_then(|r| r) {
+            eprintln!("krb5-iprop-pull: pull: {e}");
+            std::process::exit(1);
+        }
+        applied = reply.count;
+    }
+    if reply.status == krb5_kdc::IPROP_FULL_RESYNC {
+        println!("iprop full-resync last_sno={}", reply.last.sno);
         std::process::exit(1);
     }
-    if pulled.status != krb5_kdc::IPROP_OK && pulled.status != krb5_kdc::IPROP_NIL {
-        eprintln!("krb5-iprop-pull: status {}", pulled.status);
+    if reply.status != krb5_kdc::IPROP_OK && reply.status != krb5_kdc::IPROP_NIL {
+        eprintln!("krb5-iprop-pull: status {}", reply.status);
         std::process::exit(1);
     }
     println!(
-        "iprop pull ok last_sno={} last_time={} {} applied={}",
-        pulled.last_sno, pulled.last_sec, pulled.last_usec, pulled.applied
+        "iprop pull ok last_sno={} last_time={} {} applied={applied}",
+        reply.last.sno, reply.last.time.seconds, reply.last.time.useconds
     );
 }
 

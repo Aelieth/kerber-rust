@@ -508,6 +508,7 @@ dependencies = [
  "krb5-testkit",
  "krb5-types",
  "nix",
+ "signal-hook",
  "thiserror",
  "tracing",
  "tracing-subscriber",

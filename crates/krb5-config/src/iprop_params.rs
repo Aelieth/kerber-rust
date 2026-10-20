@@ -24,6 +24,14 @@ pub struct IpropParams {
     /// `iprop_ulogsize`, else `iprop_master_ulogsize`, when positive; else
     /// [`DEF_ULOGENTRIES`].
     pub ulogsize: u32,
+    /// `iprop_replica_poll`, else `iprop_slave_poll`, else two minutes: the seconds between a
+    /// replica's requests for updates.
+    pub poll_time: i32,
+    /// `iprop_resync_timeout`, else five minutes: the seconds a replica waits for a full resync
+    /// it asked for.
+    pub resync_timeout: i32,
+    /// The host of the realm's last `admin_server`: the primary a replica polls.
+    pub admin_server: Option<String>,
 }
 
 impl IpropParams {
@@ -34,6 +42,9 @@ impl IpropParams {
     /// MIT `kadm5_get_config_params` (`lib/kadm5/alt_prof.c:690-697`): `iprop_logfile`, else the database name with `.ulog` added.
     /// MIT `kadm5_get_config_params` (`lib/kadm5/alt_prof.c:699-700`): `iprop_port` has no default, so only a value that reads as a number sets it.
     /// MIT `kadm5_get_config_params` (`lib/kadm5/alt_prof.c:706-724`): `iprop_ulogsize`, else `iprop_master_ulogsize`, when positive; else `DEF_ULOGENTRIES`.
+    /// MIT `kadm5_get_config_params` (`lib/kadm5/alt_prof.c:703-704`): `iprop_resync_timeout` is a delta time, five minutes by default.
+    /// MIT `kadm5_get_config_params` (`lib/kadm5/alt_prof.c:726-731`): `iprop_replica_poll`, and only when it is absent or no delta time, `iprop_slave_poll` or two minutes.
+    /// MIT `kadm5_get_config_params` (`lib/kadm5/alt_prof.c:496-502`): `admin_server`'s last value, its port taken off.
     #[must_use]
     pub fn for_realm(profile: Option<&Krb5Conf>, realm: &str, dbname: &Path) -> Self {
         let relations = profile
@@ -52,6 +63,7 @@ impl IpropParams {
                 .and_then(|n| u32::try_from(n).ok())
                 .filter(|&n| n > 0)
         };
+        let deltat = |name: &str| last(name).and_then(|v| krb5_types::deltat::parse(v).ok());
         let mut logfile = dbname.as_os_str().to_os_string();
         logfile.push(".ulog");
         Self {
@@ -61,6 +73,15 @@ impl IpropParams {
             ulogsize: positive("iprop_ulogsize")
                 .or_else(|| positive("iprop_master_ulogsize"))
                 .unwrap_or(DEF_ULOGENTRIES),
+            poll_time: match deltat("iprop_replica_poll").unwrap_or(-1) {
+                -1 => deltat("iprop_slave_poll").unwrap_or(2 * 60),
+                t => t,
+            },
+            resync_timeout: deltat("iprop_resync_timeout").unwrap_or(60 * 5),
+            admin_server: profile
+                .and_then(|p| p.admin_servers.get(realm))
+                .and_then(|v| v.last())
+                .map(|e| crate::listen::admin_server_host(&e.host).to_owned()),
         }
     }
 

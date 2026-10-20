@@ -1,12 +1,13 @@
-//! MIT-wire kpropd (TCP 754) wrapping dump version 7: a replica's full propagation.
+//! MIT-wire kpropd (TCP 754) wrapping dump version 7: a replica's full propagation, and with
+//! `iprop_enable` its incremental propagation.
 //!
 //! ```text
-//! kpropd [-r realm] [-s keytab] [-a acl_file] [host:port]
+//! kpropd [-r realm] [-s keytab] [-d] [-D] [-S] [-t] [-P port] [-a acl_file] [-A admin_server] [host:port]
 //! ```
 //!
 //! The options are MIT's, read as its `getopt` reads them, the last of each one winning; MIT's
-//! others (`-A`, `-d`, `-D`, `-f`, `-F`, `-p`, `-P`, `-S`, `-t`, `-x`, `--pid-file`) print the
-//! usage. kpropd reads no environment of its own: MIT's reads none.
+//! others (`-f`, `-F`, `-p`, `-x`, `--pid-file`) print the usage. kpropd reads no environment of
+//! its own: MIT's reads none.
 //! - `-r` names the realm, else krb5.conf's `default_realm`.
 //! - `-s` names the keytab, else the default keytab (`KRB5_KTNAME`, else the KDC profile's
 //!   `default_keytab_name`, else `/etc/krb5.keytab`), read for each connection, as MIT's is.
@@ -21,6 +22,13 @@
 //!   connection, as MIT's. A name of its own that is not ASCII stops kpropd at its start.
 //! - `-a` names the `kpropd.acl` file, else `kpropd.acl` in the KDC directory. It is read for
 //!   each connection, as MIT's is; one that cannot be opened refuses every peer.
+//! - `-P` names the port to listen on, a number or a services name, else 754.
+//! - `-A` names the primary for iprop, else the realm's `admin_server`; a port written in either
+//!   is not the iprop port, which is `iprop_port`.
+//! - `-t` stops kpropd after one exchange: the first full propagation, or with iprop the first
+//!   answer to a poll that is not "full resync needed" (MIT's undocumented test option).
+//! - `-d` sends the iprop poll's debug lines and `com_err` messages to standard error instead of
+//!   syslog. `-D` and `-S` change nothing: kpropd never detaches and is always standalone.
 //! - The one operand, `host:port`, is this kpropd's own (MIT's takes none): the address to
 //!   listen on.
 //!
@@ -35,6 +43,13 @@
 //! whose serial and time the log then keeps (MIT's `load -i`); without it, an iprop dump is
 //! refused as a plain `load` refuses it.
 //!
+//! With `iprop_enable`, kpropd also polls the primary's kadmind as `kiprop/<this host>`
+//! ([`kpropd_do_iprop`]): every `iprop_replica_poll` it asks for the updates after its update
+//! log and applies them. When the primary needs a full resync, kpropd asks for one and the dump
+//! comes to the listener, which ends the poll's wait after each connection, as SIGUSR1 does. The
+//! poll's lines go to syslog as `kpropd`, facility daemon. kpropd exits when the poll stops: 1 on
+//! an error the primary answers, 0 with `-t`.
+//!
 //! With the `test-hooks` feature, the realm falls back to `KRB5_TEST_REALM`, else the documented
 //! test realm, before the default realm, and `KRB5_MASTER_PASSWORD` opens the dump instead of the
 //! stash when set.
@@ -47,8 +62,10 @@
     reason = "a program reads its profile and environment when it starts"
 )]
 
+use std::io::{self, Read as _};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, ToSocketAddrs};
 use std::os::fd::AsRawFd as _;
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -56,10 +73,10 @@ use std::thread;
 use std::time::Duration;
 
 use krb5_admin::{
-    KPROP_PORT, KpropdConfig, KpropdKeys, kpropd_handle_conn, kpropd_keytab_keys,
-    kpropd_server_name,
+    IpropWake, KPROP_PORT, KpropdConfig, KpropdIprop, KpropdKeys, kprop_service_port,
+    kpropd_do_iprop, kpropd_handle_conn, kpropd_keytab_keys, kpropd_server_name,
 };
-use krb5_log::klog::{JsonLog, os_error_text};
+use krb5_log::klog::{self, JsonLog, Severity, os_error_text};
 use nix::sys::socket::{
     AddressFamily, Backlog, SockFlag, SockType, SockaddrStorage, bind, listen, setsockopt, socket,
     sockopt,
@@ -100,7 +117,13 @@ fn main() {
         keytab,
         acl_file,
         address,
+        port,
+        admin_server,
+        runonce,
+        debug,
     } = parse_options(&progname, argv.get(1..).unwrap_or_default());
+    // MIT `parse_args` (`kprop/kpropd.c:1128-1130`): syslog as `kpropd`, facility daemon, and `com_err` there unless `-d`.
+    klog::init("kpropd", &["SYSLOG:INFO:DAEMON".to_owned()], false);
     #[cfg(feature = "test-hooks")]
     let master = std::env::var("KRB5_MASTER_PASSWORD")
         .ok()
@@ -143,10 +166,27 @@ fn main() {
         std::process::exit(1);
     }
     let iprop = iprop.enabled.then_some(iprop);
-    let addr = listen_addr(&progname, address.as_deref());
+    let addr = listen_addr(&progname, address.as_deref(), port.as_deref());
     let listener = standalone_listener(&progname, addr);
     listener.set_nonblocking(true).ok();
     println!("listening {}", listener.local_addr().unwrap_or(addr));
+    let wake = iprop.clone().map(|params| {
+        start_iprop(Poll {
+            argv0: argv.first().cloned().unwrap_or_else(|| "kpropd".to_owned()),
+            realm: realm.clone(),
+            keytab: keytab.clone(),
+            admin_server: admin_server
+                .as_deref()
+                .map(|a| krb5_config::listen::admin_server_host(a).to_owned())
+                .or_else(|| params.admin_server.clone()),
+            params,
+            db: db.clone(),
+            stash: stash.clone(),
+            runonce,
+            debug,
+            profile: Arc::clone(&kdc_context),
+        })
+    });
     let stop = Arc::new(AtomicBool::new(false));
     let replay = ReplayCache::new();
     loop {
@@ -166,34 +206,45 @@ fn main() {
                 let allowed = kpropd_acl(&acl_file);
                 let replay = replay.clone();
                 let iprop = iprop.clone();
+                let poll = wake.clone();
+                let alone = poll.is_none();
                 let conf = Arc::clone(&conf);
                 let kdc_context = Arc::clone(&kdc_context);
-                thread::spawn(move || {
-                    let Some(keys) = host_keys(&progname, keytab.as_deref(), &server, &kdc_context)
-                    else {
-                        return;
-                    };
-                    match kpropd_handle_conn(
-                        &mut stream,
-                        &KpropdConfig {
-                            host_keys: &[],
-                            keytab: Some(&keys),
-                            // MIT `kerberos_authenticate` (`kprop/kpropd.c:1258-1259`): recvauth takes kpropd's own principal as the server, so a ticket for another one is refused.
-                            expected_server: Some(&server),
-                            expected_realm: Some(realm.as_str()),
-                            master_password: master.as_deref().map(String::as_bytes),
-                            db: &db,
-                            stash: &stash,
-                            allowed_clients: allowed.as_deref(),
-                            iprop: iprop.as_ref(),
-                            conf: &conf,
-                        },
-                        &replay,
-                    ) {
-                        Ok(_) => println!("kprop ok"),
-                        Err(e) => eprintln!("krb5-kpropd: {e}"),
+                let mut conn = move || {
+                    if let Some(keys) =
+                        host_keys(&progname, keytab.as_deref(), &server, &kdc_context)
+                    {
+                        match kpropd_handle_conn(
+                            &mut stream,
+                            &KpropdConfig {
+                                host_keys: &[],
+                                keytab: Some(&keys),
+                                // MIT `kerberos_authenticate` (`kprop/kpropd.c:1258-1259`): recvauth takes kpropd's own principal as the server, so a ticket for another one is refused.
+                                expected_server: Some(&server),
+                                expected_realm: Some(realm.as_str()),
+                                master_password: master.as_deref().map(String::as_bytes),
+                                db: &db,
+                                stash: &stash,
+                                allowed_clients: allowed.as_deref(),
+                                iprop: iprop.as_ref(),
+                                conf: &conf,
+                            },
+                            &replay,
+                        ) {
+                            Ok(_) => println!("kprop ok"),
+                            Err(e) => eprintln!("krb5-kpropd: {e}"),
+                        }
                     }
-                });
+                    // MIT `do_standalone` (`kprop/kpropd.c:466-472`): when a connection is done the iprop poll is woken; without iprop, `-t` ends kpropd.
+                    if let Some(w) = &poll {
+                        w.poke();
+                    }
+                };
+                if runonce && alone {
+                    conn();
+                    std::process::exit(0);
+                }
+                thread::spawn(conn);
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 thread::sleep(Duration::from_millis(20));
@@ -217,25 +268,34 @@ struct Options {
     acl_file: PathBuf,
     /// The `host:port` operand, this kpropd's own.
     address: Option<String>,
+    /// `-P`: the port to listen on.
+    port: Option<String>,
+    /// `-A`: the primary for iprop.
+    admin_server: Option<String>,
+    /// `-t`.
+    runonce: bool,
+    /// `-d`.
+    debug: bool,
 }
 
 /// kpropd's options; a bad option, or more than one operand, prints the usage.
 /// MIT `parse_args` (`kprop/kpropd.c:1065-1126`): glibc getopt over the options, a value attached or apart; a bad option is the usage.
 fn parse_options(progname: &str, args: &[String]) -> Options {
-    let (opts, operands) = match krb5_cli::getopt(args, "r:s:a:", &[]) {
+    let (opts, operands) = match krb5_cli::getopt(args, "A:P:r:s:a:DdSt", &[]) {
         Ok(parsed) => parsed,
         Err(e) => {
             eprintln!("{progname}: {e}");
             usage(progname);
         }
     };
-    // MIT `parse_args` (`kprop/kpropd.c:1084-1101`): `-r` the realm, `-s` the keytab, `-a` the ACL file, each option's last value kept.
+    // MIT `parse_args` (`kprop/kpropd.c:1065-1106`): `-r` the realm, `-s` the keytab, `-a` the ACL file, `-P` the port, `-A` the admin server, each option's last value kept; `-d` debug, `-t` once, `-D` and `-S` no change here.
     let last = |flag: char| {
         opts.iter()
             .rev()
             .find(|o| o.flag == flag)
             .and_then(|o| o.arg.clone())
     };
+    let has = |flag: char| opts.iter().any(|o| o.flag == flag);
     // The one operand, `host:port`, is this kpropd's own; MIT's takes none.
     if operands.len() > 1 {
         usage(progname);
@@ -246,13 +306,18 @@ fn parse_options(progname: &str, args: &[String]) -> Options {
         // MIT `acl_file_name` (`kprop/kpropd.c:137-137`): `KPROPD_ACL_FILE` unless `-a` names another.
         acl_file: last('a').map_or_else(krb5_config::default_kpropd_acl, PathBuf::from),
         address: operands.into_iter().next(),
+        port: last('P'),
+        admin_server: last('A'),
+        runonce: has('t'),
+        debug: has('d'),
     }
 }
 
-/// The address to listen on: the operand, else the wildcard of [`wildcard_addr`]; one that cannot
-/// be had ends kpropd.
+/// The address to listen on: the operand, else the wildcard of [`wildcard_addr`] at `-P`'s port
+/// or 754; one that cannot be had ends kpropd.
 /// MIT `do_standalone` (`kprop/kpropd.c:389-393`): with no wildcard address `getaddrinfo` fails (`EAI_NONAME`), and kpropd exits.
-fn listen_addr(progname: &str, operand: Option<&str>) -> SocketAddr {
+/// MIT `get_wildcard_addr` (`kprop/kpropd.c:362-377`): the service is `-P`'s, a services name or a number.
+fn listen_addr(progname: &str, operand: Option<&str>, port: Option<&str>) -> SocketAddr {
     if let Some(op) = operand {
         match op.to_socket_addrs().map(|mut a| a.next()) {
             Ok(Some(a)) => return a,
@@ -261,8 +326,14 @@ fn listen_addr(progname: &str, operand: Option<&str>) -> SocketAddr {
         }
         std::process::exit(1);
     }
+    let port = port.map_or(KPROP_PORT, |p| {
+        kprop_service_port(p).unwrap_or_else(|| {
+            eprintln!("getaddrinfo: Servname not supported for ai_socktype");
+            std::process::exit(1);
+        })
+    });
     let (v4, v6) = configured_families();
-    wildcard_addr(v4, v6, KPROP_PORT).unwrap_or_else(|| {
+    wildcard_addr(v4, v6, port).unwrap_or_else(|| {
         eprintln!("getaddrinfo: Name or service not known");
         std::process::exit(1);
     })
@@ -341,8 +412,84 @@ fn standalone_listener(progname: &str, addr: SocketAddr) -> TcpListener {
 /// The usage text on stderr, exit status 1.
 /// MIT `usage` (`kprop/kpropd.c:168-177`): the text, then `exit(1)`.
 fn usage(progname: &str) -> ! {
-    eprintln!("\nUsage: {progname} [-r realm] [-s keytab] [-a acl_file] [host:port]");
+    eprintln!(
+        "\nUsage: {progname} [-r realm] [-s keytab] [-d] [-D] [-S]\n\t[-P port] [-a acl_file] [-A admin_server] [host:port]"
+    );
     std::process::exit(1);
+}
+
+/// What the iprop poll's thread owns.
+struct Poll {
+    /// The name kpropd was run as.
+    argv0: String,
+    realm: String,
+    keytab: Option<String>,
+    admin_server: Option<String>,
+    params: krb5_config::IpropParams,
+    db: PathBuf,
+    stash: PathBuf,
+    runonce: bool,
+    debug: bool,
+    profile: Arc<krb5_config::Krb5Conf>,
+}
+
+/// Start the iprop poll beside the listener, SIGUSR1 ending its wait; kpropd exits when the poll
+/// stops.
+/// MIT `main` (`kprop/kpropd.c:317-357`): with iprop the parent polls and a child listens, SIGUSR1 forces a poll, and when the poll returns the child is killed and kpropd exits, 1 after "do_iprop failed." unless the poll returned 0.
+fn start_iprop(poll: Poll) -> Arc<IpropWake> {
+    let wake = Arc::new(IpropWake::default());
+    usr1_wakes(Arc::clone(&wake));
+    let poke = Arc::clone(&wake);
+    thread::spawn(move || {
+        let ret = kpropd_do_iprop(
+            &KpropdIprop {
+                progname: &poll.argv0,
+                realm: &poll.realm,
+                keytab: poll.keytab.as_deref(),
+                admin_server: poll.admin_server.as_deref(),
+                params: &poll.params,
+                db: &poll.db,
+                stash: &poll.stash,
+                runonce: poll.runonce,
+                debug: poll.debug,
+                profile: &poll.profile,
+            },
+            &poke,
+        );
+        if ret == 0 {
+            std::process::exit(0);
+        }
+        // MIT `main` (`kprop/kpropd.c:350-353`): the poll's return goes to `com_err` as its code, so 1 is read as `EPERM`'s text.
+        let line = format!(
+            "{}: {} do_iprop failed.",
+            poll.argv0,
+            os_error_text(&io::Error::from_raw_os_error(1))
+        );
+        if poll.debug {
+            eprintln!("{line}");
+        } else {
+            klog::syslog(Severity::Err, &line);
+        }
+        std::process::exit(1);
+    });
+    wake
+}
+
+/// SIGUSR1 ends the poll's wait; when it cannot be caught it keeps its default.
+/// MIT `main` (`kprop/kpropd.c:334-334`): with iprop, SIGUSR1 is caught so that it interrupts the poll's `sleep`.
+fn usr1_wakes(wake: Arc<IpropWake>) {
+    let Ok((mut rx, tx)) = UnixStream::pair() else {
+        return;
+    };
+    if signal_hook::low_level::pipe::register(signal_hook::consts::SIGUSR1, tx).is_err() {
+        return;
+    }
+    thread::spawn(move || {
+        let mut buf = [0u8; 16];
+        while rx.read(&mut buf).is_ok_and(|n| n > 0) {
+            wake.poke();
+        }
+    });
 }
 
 /// The realm's paths: `-r`, else (with the `test-hooks` feature) `KRB5_TEST_REALM` or the
@@ -411,6 +558,10 @@ mod tests {
                 keytab: Some("/k2".into()),
                 acl_file: PathBuf::from("/a2"),
                 address: Some("h:1".into()),
+                port: None,
+                admin_server: None,
+                runonce: false,
+                debug: false,
             }
         );
     }
@@ -426,6 +577,10 @@ mod tests {
                 keytab: None,
                 acl_file: Path::new(krb5_config::KDC_DIR).join("kpropd.acl"),
                 address: None,
+                port: None,
+                admin_server: None,
+                runonce: false,
+                debug: false,
             }
         );
     }

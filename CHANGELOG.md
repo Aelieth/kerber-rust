@@ -27,6 +27,11 @@ any other `###` heading.
 - **admin.** kpasswd checks an AP-REQ's time against the profile's `clockskew`, kdc.conf's first, not a fixed 300 s; a negative one is kept, as MIT's. Lab beside MIT.
 - **admin/gss.** kadmind and kpropd read the profile once, kdc.conf first: no request opens krb5.conf or kdc.conf, and kpropd's skew is the profile's. Lab beside MIT.
 - **gss/protocol.** GSS's receive window is MIT's 64-number bitmap; the replay cache keeps MIT's tag for the clock skew, and a full cache refuses a new tag, not a live one.
+- **admin.** The iprop client checks the primary's INIT reply MIC whatever its verifier, as MIT's `authgss_refresh`; an empty or non-GSS verifier skipped the check.
+
+### Added
+
+- **kpropd.** With `iprop_enable` a replica polls its primary as `kiprop/<host>`, applies updates, asks for a full resync and backs off, as MIT's `do_iprop`; `-A`, `-P`, `-t`.
 
 ### Changed
 

@@ -32,20 +32,21 @@ use thiserror::Error;
 
 pub use getdate::{DateError, get_date_rel, parse_date, parse_interval};
 pub use kadm5::{
-    IpropLast, IpropPull, Kadm5RpcSession, RpcCtx, RpcPeer, UnhandledRpc, acceptor_names_served,
-    changepw_acceptor, check_auth_gssapi_names, check_iprop_rpcsec_auth, check_rpcsec_auth,
-    glob_pattern_ok, iprop_fullresync, iprop_pull, kadm5_handle_rpc, kdb_rd_req, serve_kadm5_conn,
+    IncrReply, IpropClient, Kadm5RpcSession, RpcCtx, RpcFailure, RpcPeer, UnhandledRpc,
+    acceptor_names_served, changepw_acceptor, check_auth_gssapi_names, check_iprop_rpcsec_auth,
+    check_rpcsec_auth, glob_pattern_ok, kadm5_handle_rpc, kdb_rd_req, serve_kadm5_conn,
 };
 pub use kadmin_cli::{kadmin_local_main, ss_parse};
 pub use kadmind::{Kadmind, serve_kadmind, serve_kadmind_until};
 pub use kprop::{
-    IpropPoll, KPROP_SERVICE, KpropAuth, KpropCreds, KpropDump, KpropError, KpropdConfig,
-    KpropdKeys, KpropdKeytabError, KpropdLookup, RemoteError, iprop_dump_last, iprop_poll_once,
-    is_iprop_dump, kprop_dump_bytes, kprop_expired_ap_req, kprop_get_tickets, kprop_keytab_file,
-    kprop_load_bytes, kprop_load_with_stash, kprop_open_connection, kprop_send_dump,
-    kprop_send_store, kprop_sendauth, kprop_update_last_prop_file, kprop_xmit_database,
-    kpropd_handle_conn, kpropd_keytab_keys, kpropd_recv_dump, kpropd_recvauth, kpropd_send_ack,
-    kpropd_server_name, kpropd_server_name_for, load_replica,
+    IpropPoll, IpropWake, KPROP_SERVICE, KpropAuth, KpropCreds, KpropDump, KpropError,
+    KpropdConfig, KpropdIprop, KpropdKeys, KpropdKeytabError, KpropdLookup, RemoteError,
+    iprop_dump_last, iprop_poll_once, is_iprop_dump, kprop_dump_bytes, kprop_expired_ap_req,
+    kprop_get_tickets, kprop_keytab_file, kprop_load_bytes, kprop_load_with_stash,
+    kprop_open_connection, kprop_send_dump, kprop_send_store, kprop_sendauth, kprop_service_port,
+    kprop_update_last_prop_file, kprop_xmit_database, kpropd_do_iprop, kpropd_handle_conn,
+    kpropd_keytab_keys, kpropd_recv_dump, kpropd_recvauth, kpropd_send_ack, kpropd_server_name,
+    kpropd_server_name_for, load_replica,
 };
 pub use listen::{
     ChangepwAccepted, ChangepwRefused, KADMIND_PORT, KPASSWD_PORT, KPROP_PORT, changepw_accept,

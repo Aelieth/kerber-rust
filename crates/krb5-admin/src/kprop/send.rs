@@ -244,7 +244,34 @@ pub fn kprop_get_tickets(
     let replica = krb5_config::expand_hostname(replica_host, conf);
     let server = PrincipalName::try_new(PrincipalName::NT_SRV_HST, ["host", replica.as_str()])
         .map_err(|_| KpropError::new(None, "while setting server principal name"))?;
-    let service = server.unparse_no_realm();
+    init_creds_keytab(
+        conf,
+        realm,
+        &client,
+        &server.unparse_no_realm(),
+        keytab,
+        false,
+    )
+}
+
+/// Initial credentials for `client` from a keytab: one AS exchange with the KDCs of `realm` that
+/// krb5.conf names, asking for `service` (an unparsed name without its realm), with
+/// `client`'s keys from the keytab `keytab` names, else the default keytab. The request's options
+/// are `krb5_init_creds_init`'s defaults from krb5.conf; `unforwardable` turns forwardable and
+/// proxiable off, as a kadm5 client's credentials are asked for.
+/// MIT `gic_iter` (`lib/kadm5/clnt/client_init.c:439-517`): a kadm5 client's keytab credentials are neither forwardable nor proxiable.
+///
+/// # Errors
+///
+/// As [`kprop_get_tickets`], from the keytab on.
+pub(crate) fn init_creds_keytab(
+    conf: &Krb5Conf,
+    realm: &str,
+    client: &PrincipalName,
+    service: &str,
+    keytab: Option<&str>,
+    unforwardable: bool,
+) -> Result<KpropCreds, KpropError> {
     // MIT `krb5_get_init_creds_keytab` (`lib/krb5/krb/gic_keytab.c:287-292`): a NULL keytab is the default one, resolved there.
     let path = crate::kprop::kprop_keytab_file(keytab).map_err(|text| {
         let during = if keytab.is_some() {
@@ -256,11 +283,15 @@ pub fn kprop_get_tickets(
     })?;
     // MIT `krb5_init_creds_init` (`lib/krb5/krb/get_in_tkt.c:850-1054`): the request is traced with its client.
     // MIT `krb5_init_creds_set_service` (`lib/krb5/krb/get_in_tkt.c:1055-1071`): then with its service.
-    trace::init_creds(trace::Princ::new(&client, realm.as_bytes()));
-    let ticket = init_creds_ticket_opts(conf, realm)?;
-    trace::init_creds_service(&service);
+    trace::init_creds(trace::Princ::new(client, realm.as_bytes()));
+    let mut ticket = init_creds_ticket_opts(conf, realm)?;
+    if unforwardable {
+        ticket.forwardable = false;
+        ticket.proxiable = false;
+    }
+    trace::init_creds_service(service);
     // MIT `build_in_tkt_name` (`lib/krb5/krb/get_in_tkt.c:484-495`): the service is parsed back from its unparsed name, so its type is `krb5_parse_name`'s (NT-PRINCIPAL for `host/<replica>`), in the client's realm.
-    let in_tkt_service = krb5_types::principal_from_unparsed(&service, realm)
+    let in_tkt_service = krb5_types::principal_from_unparsed(service, realm)
         .map_err(|_| KpropError::new(Some(PARSE_MALFORMED_TEXT.to_owned()), GETTING_CREDS))?
         .0;
     // MIT `krb5_init_creds_set_keytab` (`lib/krb5/krb/gic_keytab.c:209-213`): a keytab that cannot be read is traced and is no error yet: the request is made, and a key asked of the keytab fails with that error, as the preauth module's or as the reply's.
@@ -273,12 +304,12 @@ pub fn kprop_get_tickets(
             // MIT `krb5_init_creds_set_keytab` (`lib/krb5/krb/gic_keytab.c:216-224`): no key for the client is `KRB5_KT_NOTFOUND`, whose table text kprop's `com_err` prints.
             let Some((keys, kt_etypes)) = Keytab::parse(&bytes)
                 .ok()
-                .and_then(|kt| krb5_protocol::keytab_init_creds_keys(&kt, &client, realm))
+                .and_then(|kt| krb5_protocol::keytab_init_creds_keys(&kt, client, realm))
             else {
                 return Err(KpropError::code(KT_NOTFOUND, GETTING_CREDS));
             };
             trace::init_creds_keytab_lookup(
-                trace::Princ::new(&client, realm.as_bytes()),
+                trace::Princ::new(client, realm.as_bytes()),
                 &kt_etypes,
             );
             (keys, kt_etypes, None)
@@ -440,7 +471,8 @@ impl KpropDump {
 /// number (glibc's `strtoul`, so leading blanks and a sign are taken, and the port is its low 16
 /// bits), else a `tcp` entry of `/etc/services` by name or alias; `None` when there is none.
 /// MIT `open_connection` (`kprop/kprop.c:227-235`): the port goes to `getaddrinfo` as a service name, `krb5_prop` when `-P` names none.
-fn service_port(service: &str) -> Option<u16> {
+#[must_use]
+pub fn service_port(service: &str) -> Option<u16> {
     if service.is_empty() {
         return Some(0);
     }

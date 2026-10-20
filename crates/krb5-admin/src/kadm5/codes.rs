@@ -46,11 +46,13 @@ pub(super) const PROG_UNAVAIL: u32 = 1;
 pub(super) const PROG_MISMATCH: u32 = 2;
 pub(super) const PROC_UNAVAIL: u32 = 3;
 pub(super) const GARBAGE_ARGS: u32 = 4;
+pub(super) const REJECT_RPC_MISMATCH: u32 = 0;
 pub(super) const REJECT_AUTH_ERROR: u32 = 1;
 pub(super) const AUTH_TOOWEAK: u32 = 5;
 pub(super) const AUTH_BADCRED: u32 = 1;
 pub(super) const AUTH_BADVERF: u32 = 3;
 pub(super) const AUTH_REJECTEDVERF: u32 = 4;
+pub(super) const AUTH_INVALIDRESP: u32 = 6;
 pub(super) const AUTH_FAILED: u32 = 7;
 /// MIT `gssrpc/auth.h` `MAX_AUTH_BYTES`: a call whose credential or verifier is longer does not
 /// decode.
@@ -59,7 +61,10 @@ pub(super) const MAX_AUTH_BYTES: usize = 400;
 pub(super) const FLAVOR_UNIX: u32 = 1;
 pub(super) const MAX_MACHINE_NAME: usize = 255;
 pub(super) const NGRPS: u32 = 16;
-/// GSS-API major statuses (RFC 2744) an AUTH_GSSAPI init_res carries for a failed context.
+/// GSS-API major statuses (RFC 2744): an init_res's for a context made or under way, and those an
+/// AUTH_GSSAPI init_res carries for a failed context.
+pub(super) const GSS_S_COMPLETE: u32 = 0;
+pub(super) const GSS_S_CONTINUE_NEEDED: u32 = 1;
 pub(super) const GSS_S_BAD_BINDINGS: u32 = 0x0004_0000;
 pub(super) const GSS_S_DEFECTIVE_TOKEN: u32 = 0x0009_0000;
 pub(super) const GSS_S_FAILURE: u32 = 0x000d_0000;
@@ -123,6 +128,15 @@ pub(super) const OSA_ADB_DUP: u32 = 28_810_241;
 pub(super) const OSA_ADB_NOENT: u32 = 28_810_242;
 /// MIT `KADM5_FAILURE`.
 pub(super) const KADM5_FAILURE: u32 = 43_787_520;
+/// MIT `kadm_err.et` codes a kadm5 client's init returns: `KADM5_RPC_ERROR` (`:15`),
+/// `KADM5_BAD_PASSWORD` (`:36`), `KADM5_SECURE_PRINC_MISSING` (`:47`), `KADM5_GSS_ERROR` (`:53`),
+/// `KADM5_MISSING_KRB5_CONF_PARAMS` (`:61`) and `KADM5_CANT_RESOLVE` (`:63`).
+pub(crate) const KADM5_RPC_ERROR: u32 = KADM5_FAILURE + 8;
+pub(crate) const KADM5_BAD_PASSWORD: u32 = KADM5_FAILURE + 29;
+pub(crate) const KADM5_SECURE_PRINC_MISSING: u32 = KADM5_FAILURE + 40;
+pub(crate) const KADM5_GSS_ERROR: u32 = KADM5_FAILURE + 46;
+pub(crate) const KADM5_MISSING_KRB5_CONF_PARAMS: u32 = KADM5_FAILURE + 54;
+pub(crate) const KADM5_CANT_RESOLVE: u32 = KADM5_FAILURE + 56;
 /// MIT `ovk` 22 (`kadm_err.et`; base `43787520`).
 pub(super) const KADM5_PASS_Q_TOOSHORT: u32 = 43_787_542;
 /// MIT `ovk` 23.
