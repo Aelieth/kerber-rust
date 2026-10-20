@@ -36,16 +36,18 @@ pub fn push_tlv(out: &mut Vec<u8>, tag: u8, value: &[u8]) {
 #[must_use]
 pub fn read_len(input: &[u8]) -> Option<(usize, usize)> {
     let first = *input.first()?;
-    if first < 0x80 {
-        return Some((usize::from(first), 1));
-    }
-    let llen = usize::from(first & 0x7F);
-    if llen == 0 || llen > std::mem::size_of::<usize>() {
-        return None;
-    }
-    let octets = input.get(1..=llen)?;
-    let len = octets
-        .iter()
-        .fold(0usize, |len, &b| (len << 8) | usize::from(b));
-    Some((len, 1 + llen))
+    let (len, hlen) = if first < 0x80 {
+        (usize::from(first), 1)
+    } else {
+        let llen = usize::from(first & 0x7F);
+        if llen == 0 || llen > std::mem::size_of::<usize>() {
+            return None;
+        }
+        let octets = input.get(1..=llen)?;
+        let len = octets
+            .iter()
+            .fold(0usize, |len, &b| (len << 8) | usize::from(b));
+        (len, 1 + llen)
+    };
+    (len <= input.len() - hlen).then_some((len, hlen))
 }

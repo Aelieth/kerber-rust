@@ -436,6 +436,25 @@ fn hostile_gss_oid_length_is_truncated_not_panic() {
 }
 
 #[test]
+fn eight_octet_length_is_truncated_not_panic() {
+    let ff = [0xff; 8];
+    let outer = [&[0x60, 0x88][..], &ff, &[0x06]].concat();
+    let oid = [&[0x60, 0x0a, 0x06, 0x88][..], &ff].concat();
+    let key = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x5a; 32]).unwrap();
+    let (rc, conf) = (ReplayCache::new(), AcceptorConfig::default());
+    assert!(matches!(spnego_inner(&outer), Err(Error::Truncated)));
+    assert!(matches!(
+        spnego_accept(&outer, &[], None, None, None, &rc, &conf),
+        Err(Error::Truncated)
+    ));
+    assert!(matches!(gss_unwrap_app(&oid), Err(Error::Truncated)));
+    assert!(matches!(
+        GssContext::accept_sec_context(&oid, &[key], None, None, None, &rc, &conf),
+        Err(Error::Truncated)
+    ));
+}
+
+#[test]
 fn process_ap_rep_acceptor_subkey_unwrap() {
     use krb5_types::{EncApRepPart, EncryptedData, EncryptionKey};
 
