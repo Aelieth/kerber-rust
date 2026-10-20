@@ -10,21 +10,21 @@ use super::password::{ModuleFail, PasswordCell};
 use super::responder::{QUESTION_PASSWORD, ResponderItems};
 use super::spake::{FastRound, trace_round};
 use super::{
-    AsOutcome, AsPrompt, AsReqTimes, AsRequest, ENCTS_MODULE, KdcMsg, Pkinit, allowed_padata,
-    build_as_req_from, classify_kdc_error, encrypted_timestamp_disabled, find_pa, finish_as_rep,
-    first_etype, gak_found, kdc_error, method_from_error, pa_enc_timestamp_at, pick_info2,
-    pick_key, req_sname, request_times, salt_cname, select_s2k, send_as, sort_krb5_padata_sequence,
-    trace_keytab_gak, trace_preauth_input, trace_reply_padata,
+    AsOutcome, AsPrompt, AsReqTimes, AsRequest, ENCTS_MODULE, KdcMsg, Pkinit, PkinitClient,
+    allowed_padata, build_as_req_from, classify_kdc_error, encrypted_timestamp_disabled, find_pa,
+    finish_as_rep, first_etype, gak_found, kdc_error, method_from_error, pa_enc_timestamp_at,
+    pick_info2, pick_key, req_sname, request_times, salt_cname, select_s2k, send_as,
+    sort_krb5_padata_sequence, trace_keytab_gak, trace_preauth_input, trace_reply_padata,
 };
 use crate::error::Error;
 use crate::keytab::KeytabFailure;
 use crate::preauth::{
-    apply_strengthen, armor_key, attach_fast, build_fast_armor, unwrap_fast_rep_checked,
-    verify_fast_finished,
+    apply_strengthen, armor_key, attach_fast, build_fast_armor, pkinit_reply_key_agile,
+    unwrap_fast_rep_checked, verify_fast_finished,
 };
 use crate::trace;
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};
+use krb5_crypto::{EncryptionType, ProtocolKey, p256_generate, string_to_key};
 use krb5_types::k5json::{self, Value};
 use krb5_types::{AsRep, EtypeInfo2, KrbError, MethodData, PaData, PrincipalName, err, pa};
 
@@ -140,7 +140,7 @@ pub(super) fn continue_fast(
             let mut skip: Vec<i32> = Vec::new();
             let mut saved_method: Vec<PaData> = Vec::new();
             let mut last_fail: Option<KrbError> = None;
-            let pkinit_fails = matches!(req.pkinit, Some(Pkinit::Failed(_)));
+            let pkinit = req.pkinit.is_some();
             let mut prepared = false;
             'rounds: loop {
                 let mut method = sort_krb5_padata_sequence(
@@ -149,7 +149,7 @@ pub(super) fn continue_fast(
                 );
                 // MIT `pa_type_allowed` (`lib/krb5/krb/preauth2.c:627-631`): a type the input cache does not allow is not tried.
                 method.retain(|p| req.ticket.preauth_allowed(p.padata_type));
-                if fast_mechanism(req.profile, &method, &skip, pkinit_fails).is_err()
+                if fast_mechanism(req.profile, &method, &skip, pkinit).is_err()
                     && !saved_method.is_empty()
                 {
                     method.clone_from(&saved_method);
@@ -172,7 +172,7 @@ pub(super) fn continue_fast(
                 // the list's order; one that fails is traced and the next one is tried, and a
                 // keyboard interrupt ends the walk.
                 loop {
-                    let mech = match fast_mechanism(req.profile, &method, &skip, pkinit_fails) {
+                    let mech = match fast_mechanism(req.profile, &method, &skip, pkinit) {
                         Ok(mech) => mech,
                         Err(e) => {
                             return match (last_fail, first_failure) {
@@ -185,7 +185,21 @@ pub(super) fn continue_fast(
                     let (fail, new_walk) = match mech {
                         pa::PK_AS_REQ => match req.pkinit {
                             Some(Pkinit::Failed(f)) => (super::pkinit_fails(f), false),
-                            _ => {
+                            Some(Pkinit::Client(pk)) => {
+                                return finish_fast_pkinit(
+                                    req,
+                                    nonce,
+                                    etypes,
+                                    clock,
+                                    armor,
+                                    &sub,
+                                    &akey,
+                                    &current,
+                                    cookie_slot.as_ref(),
+                                    pk,
+                                );
+                            }
+                            None => {
                                 return Err(Error::ReplyMismatch(
                                     "Generic preauthentication failure".into(),
                                 ));
@@ -666,6 +680,64 @@ enum ReplyKey<'a, 'p, 'g> {
     Preauth(ProtocolKey, i32),
     /// No module answered: `gak_fct` makes it, from the password.
     Gak(&'a mut PasswordCell<'p, 'g>),
+    Pkinit(&'a [u8; 32], &'a PkinitClient),
+}
+
+// MIT pkinit_client_process; see docs/parity/b1-client-preauth.md
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the FAST retry's existing locals"
+)]
+fn finish_fast_pkinit(
+    req: &AsRequest<'_>,
+    nonce: u32,
+    etypes: &[i32],
+    clock: &Clock,
+    armor: &FastArmor,
+    sub: &ProtocolKey,
+    akey: &ProtocolKey,
+    current: &KrbError,
+    cookie: Option<&PaData>,
+    pk: &PkinitClient,
+) -> Result<AsOutcome, Error> {
+    let kp = p256_generate()?;
+    let method = method_from_error(current).unwrap_or_default();
+    let token = find_pa(&method, pa::AS_FRESHNESS)
+        .map(|p| p.padata_value.as_ref())
+        .filter(|v| !v.is_empty());
+    let bound = &request_times(req, clock);
+    let mut req2 = build_as_req_from(req, nonce, bound, None, etypes)?;
+    let mut inner_pa: Vec<PaData> = cookie.into_iter().cloned().collect();
+    inner_pa.push(super::pkinit_padata(
+        req,
+        pk,
+        &kp,
+        nonce,
+        &req2.0.req_body,
+        token,
+        clock,
+    )?);
+    trace::preauth_process(super::PKINIT_MODULE, pa::PK_AS_REQ, true, 0, None);
+    trace::preauth_output(&inner_pa);
+    let ap = fast_armor_ap(armor, sub)?;
+    attach_fast(&mut req2, &ap, akey, inner_pa)?;
+    trace::fast_encode();
+    let wire = encode(&req2)?;
+    match send_as(req, &wire)? {
+        KdcMsg::AsRep(rep) => finish_fast_as(
+            req,
+            &[],
+            nonce,
+            etypes,
+            akey,
+            ReplyKey::Pkinit(&kp.secret, pk),
+            rep,
+            &wire,
+            bound,
+        ),
+        KdcMsg::Error(e) => classify_kdc_error(&fast_error_material(akey, &e, nonce)?.err),
+        KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
+    }
 }
 
 /// MIT `krb5int_fast_process_response` (`fast.c:548-556`): once the finished checksum holds, the
@@ -689,21 +761,34 @@ fn finish_fast_as(
 ) -> Result<AsOutcome, Error> {
     trace::fast_decode();
     let fast = unwrap_fast_rep_checked(akey, &rep.0.padata, nonce)?;
-    let ec = match &reply_key {
-        ReplyKey::Preauth(k, pa::ENCRYPTED_CHALLENGE) => reply_code(&fast.padata, akey, k),
+    let module = match &reply_key {
+        ReplyKey::Preauth(k, pa::ENCRYPTED_CHALLENGE) => {
+            reply_code(&fast.padata, akey, k).map(|code| (EC_MODULE, pa::ENCRYPTED_CHALLENGE, code))
+        }
+        ReplyKey::Pkinit(..) => Some((super::PKINIT_MODULE, pa::PK_AS_REP, 0)),
         _ => None,
     };
-    trace_reply_padata(
-        Some(&fast.padata),
-        etypes,
-        ec.map(|code| (EC_MODULE, pa::ENCRYPTED_CHALLENGE, code)),
-    );
+    trace_reply_padata(Some(&fast.padata), etypes, module);
     let pa_type = match &reply_key {
         ReplyKey::Preauth(_, mech) => Some(*mech),
+        ReplyKey::Pkinit(..) => Some(pa::PK_AS_REQ),
         ReplyKey::Gak(_) => None,
     };
     let client_key = match reply_key {
         ReplyKey::Preauth(k, _) => {
+            trace::init_creds_as_key_preauth((&k).into());
+            k
+        }
+        ReplyKey::Pkinit(secret, pk) => {
+            let k = pkinit_reply_key_agile(
+                secret,
+                &Some(fast.padata.clone()),
+                EncryptionType::known(rep.0.enc_part.etype)?,
+                &pk.ca_cert,
+                wire,
+                &req.cname,
+                req.realm,
+            )?;
             trace::init_creds_as_key_preauth((&k).into());
             k
         }
@@ -765,7 +850,7 @@ pub(super) fn fast_mechanism(
     profile: &Krb5Conf,
     method: &[PaData],
     skip: &[i32],
-    pkinit_fails: bool,
+    pkinit: bool,
 ) -> Result<i32, Error> {
     method
         .iter()
@@ -773,7 +858,7 @@ pub(super) fn fast_mechanism(
         .find(|&t| {
             !skip.contains(&t)
                 && match crate::clpreauth::owner_of(profile, t) {
-                    Some(crate::clpreauth::Owner::Pkinit) => pkinit_fails,
+                    Some(crate::clpreauth::Owner::Pkinit) => pkinit,
                     Some(
                         crate::clpreauth::Owner::Spake
                         | crate::clpreauth::Owner::EncChallenge

@@ -12,8 +12,8 @@ use crate::transport::{KdcAddr, SendKind, sendto_kdc};
 use krb5_asn1::{decode, encode};
 use krb5_config::Krb5Conf;
 use krb5_crypto::{
-    EncryptionType, KeyUsage, ProtocolKey, decrypt_enc_data, encrypt, krb_fx_cf2, p256_generate,
-    parse_enctype_list, string_to_key,
+    EncryptionType, KeyUsage, P256Keypair, ProtocolKey, decrypt_enc_data, encrypt, krb_fx_cf2,
+    p256_generate, parse_enctype_list, string_to_key,
 };
 use krb5_types::{
     AsRep, AsReq, EncKdcRepPart, EncryptedData, EncryptionKey, EtypeInfo, EtypeInfo2, KdcOptions,
@@ -1335,25 +1335,15 @@ fn continue_pkinit(
     }
     let bound = &request_times(req, clock);
     let mut req2 = build_as_req_from(req, nonce, bound, Some(extra), etypes)?;
-    let body_der = encode(&req2.0.req_body)?;
-    let mut h = Sha1::new();
-    h.update(&body_der);
-    let sha1 = h.finalize();
-    let anonymous = req.ticket.anonymous || krb5_types::pkinit::is_anonymous_principal(&req.cname);
-    let now = clock.now(true);
-    let pa = if anonymous {
-        crate::preauth::pa_pk_as_req_unsigned_at(&kp.public, nonce, &sha1, token.as_deref(), now)?
-    } else {
-        pa_pk_as_req_signed_at(
-            &kp.public,
-            &pk.cert,
-            &pk.key,
-            nonce,
-            &sha1,
-            token.as_deref(),
-            now,
-        )?
-    };
+    let pa = pkinit_padata(
+        req,
+        pk,
+        &kp,
+        nonce,
+        &req2.0.req_body,
+        token.as_deref(),
+        clock,
+    )?;
     insert_module_padata_before_info_pa(req2.0.padata.get_or_insert_with(Vec::new), pa);
     // MIT `process_pa_data` (`preauth2.c:668-686`): what the pkinit module returned, then the
     // cookie and its padata.
@@ -1413,6 +1403,25 @@ fn continue_pkinit(
         }
         KdcMsg::Error(e) => pkinit_refused(e, hint),
         KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
+    }
+}
+
+// MIT pa_pkinit_gen_req; see docs/parity/b1-client-preauth.md
+fn pkinit_padata(
+    req: &AsRequest<'_>,
+    pk: &PkinitClient,
+    kp: &P256Keypair,
+    nonce: u32,
+    body: &KdcReqBody,
+    token: Option<&[u8]>,
+    clock: &Clock,
+) -> Result<PaData, Error> {
+    let sha1 = Sha1::digest(encode(body)?);
+    let now = clock.now(true);
+    if req.ticket.anonymous || krb5_types::pkinit::is_anonymous_principal(&req.cname) {
+        crate::preauth::pa_pk_as_req_unsigned_at(&kp.public, nonce, &sha1, token, now)
+    } else {
+        pa_pk_as_req_signed_at(&kp.public, &pk.cert, &pk.key, nonce, &sha1, token, now)
     }
 }
 

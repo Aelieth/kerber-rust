@@ -113,6 +113,7 @@ any other `###` heading.
 - **kdc.** A PKINIT CMS that does not decode or verify gets MIT's code and text: `Failed to decode CMS message: <reason>`, `wrong oid`, or 80.
 - **client.** kinit goes on to the password when its PKINIT identity, choice or anchor does not load, and refuses a second `X509_user_identity`, as MIT's kinit does.
 - **client.** A KDC refusal of kinit's PKINIT request that carries e-data (24, 70-72) goes on to the next mechanism, as MIT's; one without e-data (75, 77) ends it.
+- **client.** Under FAST armor (`kinit -T`) kinit runs PKINIT inside the armored request, as MIT's; it skipped a loaded certificate there.
 
 ## [1.1.0] - 2026-10-14
 

@@ -27,6 +27,8 @@
 #          Certificate mismatch" (66); "<SUBJECT>(" does not compile (regcomp's REG_EPAREN, 8, which the KDC reports
 #          as an errno): "preauth (pkinit) verify failure: Exec format error" (24);
 #   PK.6:  kinit -n with client2's anchors: a WELLKNOWN/ANONYMOUS ticket (the principal is made for the cell);
+#   PK.fast: with that anonymous ticket as FAST armor (-T), alice's certificate kinit runs pkinit inside the armored
+#          request: a TGT, the trace's pkinit, FAST-encoding and FAST reply key lines;
 #   PK.7b: pkinit_identity names a file that is not there: the line ends "Cannot read certificate file '<file>':
 #          (null)", OpenSSL 3 giving no reason for a system error;
 #   PK.7c: the realm's pkinit_identity wins over [kdcdefaults]' missing one: alice's certificate kinit gets a TGT;
@@ -208,6 +210,18 @@ DBMATCH=0
 section "PK.6 kinit -n with client2's anchors: an anonymous ticket (MIT and ours)"
 check PK.6.kinit '^Default principal: WELLKNOWN/ANONYMOUS@WELLKNOWN:ANONYMOUS$' run client2 "mkdir -p ~/pk && kinit -n -X X509_anchors=FILE:$C/cacert.pem -c FILE:\$HOME/pk/n.cc < /dev/null 2>&1; echo \"kinit rc=\$?\"; klist -c FILE:\$HOME/pk/n.cc 2>&1 | grep -E '^Default principal|krbtgt/'"
 checklast PK.6.rc '^kinit rc=0$'
+
+section "PK.fast PKINIT inside FAST: an anonymous armor ticket, then alice's certificate under -T (MIT and ours)"
+check PK.fast.armor '^armor rc=0$' run client2 "mkdir -p ~/pk && kinit -n -X X509_anchors=FILE:$C/cacert.pem -c FILE:\$HOME/pk/armor.cc < /dev/null > /dev/null 2>&1; echo \"armor rc=\$?\""
+for k in mit ${OURS:+ours}; do
+    kinit=kinit
+    [ "$k" = ours ] && kinit=$OURS
+    check "PK.fast.$k" '^kinit rc=0$' run client2 "kdestroy -c FILE:\$HOME/pk/fast.cc 2> /dev/null; rm -f \$HOME/pk/fast.trace; KRB5_TRACE=\$HOME/pk/fast.trace $kinit -T FILE:\$HOME/pk/armor.cc -X X509_anchors=FILE:$C/cacert.pem -X X509_user_identity=FILE:$C/alice.pem,$C/alice.key -c FILE:\$HOME/pk/fast.cc alice < /dev/null > /dev/null 2>&1; echo \"kinit rc=\$?\"; klist -c FILE:\$HOME/pk/fast.cc 2>&1 | grep -E '^Default principal'; grep -oE 'Preauth module pkinit \\(16\\) \\(real\\) returned: 0/Success|Encoding request body and padata into FAST request|FAST reply key' \$HOME/pk/fast.trace | sort -u"
+    checklast "PK.fast.$k.tgt" "^Default principal: alice@$R\$"
+    checklast "PK.fast.$k.pkinit" '^Preauth module pkinit \(16\) \(real\) returned: 0/Success$'
+    checklast "PK.fast.$k.armored" '^Encoding request body and padata into FAST request$'
+    checklast "PK.fast.$k.reply" '^FAST reply key$'
+done
 
 section "PK.7b pkinit_identity names a file that is not there: MIT's line (MIT and ours)"
 pkkdc PK.7b.kdc "\n[kdcdefaults]\n    pkinit_identity = FILE:/nonexistent/kdc.pem\n    pkinit_anchors = FILE:$D/cacert.pem\n"

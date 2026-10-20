@@ -394,7 +394,9 @@ would remove it.
   (`scripts/lib/pkinit-rsa-certs.sh`), each kinit gets a TGT and its time is recorded. With alice's
   password on stdin, a certificate the KDC refuses with e-data (`alice-unknownca`'s 70, the `<SUBJECT>(`
   rule's 24) goes on to the password and a TGT, and `alice-wrongsan`'s 75, which carries none, ends with
-  rc 1. kdc.conf is restored with krb5kdc restarted at the end, also when the scenario stops early.
+  rc 1. Under FAST armor (an anonymous ticket, `-T`) alice's certificate kinit runs pkinit inside the
+  armored request and gets a TGT. kdc.conf is restored with krb5kdc restarted at the end, also when the
+  scenario stops early.
 - **`kdc-profile.sh`** (CF, client2's MIT kinit against kdc): with kdc.conf's
   `[libdefaults] clockskew = 60` and client2's clock 120 s ahead (chronyd stopped,
   then started again to step it back) cfskew's AS-REQ is refused for skew, and
