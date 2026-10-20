@@ -141,7 +141,7 @@ fn getprinc_omits_password_history_kvnos() {
         let mut g = store.write().unwrap();
         let mut pol = krb5_kdc::NamedPolicy::new("e3hist");
         pol.history = 2;
-        g.put_policy(pol);
+        g.put_policy(pol).unwrap();
         g.create_password(&acl, &actor, &name, b"hist-secret")
             .unwrap();
         g.set_principal_policy(&name, Some("e3hist".into()))

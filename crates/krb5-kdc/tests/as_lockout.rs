@@ -80,7 +80,7 @@ fn zero_last_failed(dump: &str, princ: &str) -> String {
 fn absent_unlock_tl_stamp_zero_does_not_lock_last_failed_zero() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    store.put_policy(lock_policy("lock", 1));
+    store.put_policy(lock_policy("lock", 1)).unwrap();
     store
         .set_principal_policy(&user, Some("lock".into()))
         .unwrap();
@@ -166,7 +166,7 @@ fn as_success_clears_failcount_only_with_requires_preauth() {
 fn last_failed_nonzero_without_unlock_tl_still_locks() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    store.put_policy(lock_policy("lock", 1));
+    store.put_policy(lock_policy("lock", 1)).unwrap();
     store
         .set_principal_policy(&user, Some("lock".into()))
         .unwrap();
@@ -192,7 +192,7 @@ fn last_failed_nonzero_without_unlock_tl_still_locks() {
 fn unpermitted_spake_support_counts_toward_lockout() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    store.put_policy(lock_policy("lock", 1));
+    store.put_policy(lock_policy("lock", 1)).unwrap();
     store
         .set_principal_policy(&user, Some("lock".into()))
         .unwrap();

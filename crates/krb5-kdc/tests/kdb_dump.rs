@@ -441,7 +441,7 @@ fn merge_tl_db_args_leaves_entry_and_file_unchanged() {
     let before = store.get_name(&user).unwrap().clone();
     let file_before = std::fs::read(&db).unwrap();
     let err = store
-        .merge_tl_data_in(&user, TEST_REALM, &[db_arg(true)])
+        .merge_tl_data_in(&user, TEST_REALM, &[db_arg(true)], "admin/admin")
         .unwrap_err();
     assert!(err.to_string().contains("foo=bar"), "{err}");
     let three = store
@@ -449,11 +449,12 @@ fn merge_tl_db_args_leaves_entry_and_file_unchanged() {
             &user,
             TEST_REALM,
             &[db_arg(true), db_arg(true), db_arg(true)],
+            "admin/admin",
         )
         .unwrap_err();
     assert!(three.to_string().contains("foo=bar"), "{three}");
     let nul = store
-        .merge_tl_data_in(&user, TEST_REALM, &[db_arg(false)])
+        .merge_tl_data_in(&user, TEST_REALM, &[db_arg(false)], "admin/admin")
         .unwrap_err();
     assert!(nul.to_string().contains("Invalid argument"), "{nul}");
     let after = store.get_name(&user).unwrap();

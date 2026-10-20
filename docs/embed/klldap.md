@@ -79,7 +79,7 @@ kerber-rust's `PrincipalStore`, so the directory stays the writer:
 | `ready` | the embedded listener's own state | KLLDAP probes TCP to the KDC port today |
 | `sync_principal` (chpass, else create) | `set_password`; `create_principal_3_in` for a new user | `user@REALM`, keys per `supported_enctypes` |
 | `delete_principal` (missing is Ok) | `remove_in` | the ACL-gated `delete` is for kadmind |
-| `set_principal_enabled` | `set_status` (sets / clears `KDB_DISALLOW_ALL_TIX`) | it also writes `pw_expire`: pass the current value |
+| `set_principal_enabled` | `set_status` (sets / clears `KDB_DISALLOW_ALL_TIX`) | it also writes `pw_expire`: pass the current value, and the directory's admin as the actor |
 | `export_keytab_for_keycloak` | `insert_new_randkey` when missing, then `ktadd_local_atomic` / `chrand_etypes_keepold_in` with aes256 + aes128, and `Keytab::write_file` | MIT's `ktadd` re-keys, so the kvno moves on every export |
 | persistence | `load_store` / `save_store` (dump-v7 text + a stash in MIT keytab form) | an existing KLLDAP volume is MIT db2: migrate once with MIT `kdb5_util dump`, then `krb5-kdb load` |
 | the KDC | `bind_udp_listeners` / `bind_tcp_listeners` on `KdcConf::kdc_udp_listeners` / `kdc_tcp_listeners`, then `serve_all_until` with the embedder's shutdown flag | not `serve` / `serve_all`: those install SIGTERM / SIGINT handlers; `serve_all_until` runs MIT's one loop on the thread that calls it, and a plugin module set for that thread alone does not apply while it runs |
@@ -109,8 +109,11 @@ kerber-rust point release:
   methods of the concrete `PrincipalStore`, which a `SharedDump`
   (`Arc<RwLock<PrincipalStore>>`) holds. A `SharedDump` is a `SharedStore`
   too (`let kdc: SharedStore = dump.clone();`), so the KDC's loop and
-  kadmind's share one store and one lock. The trait writes still need their
-  autocommit and the kadm5 hooks their post-commit order (SS-2).
+  kadmind's share one store and one lock. The trait writes and
+  `put_policy` / `delete_policy` commit themselves; every other write runs
+  inside `PrincipalStore::change` and is refused outside it before it touches
+  the store. A kadm5 hook runs after the write and must not take the store's
+  write guard.
 - **kadmind as a library.** `Kadmind` and `serve_kadmind_until` run
   kadmind's loop (kpasswd over UDP and TCP, kadm5 on its RPC listeners) on
   the caller's thread over a `SharedDump`, as `krb5-kadmind` does; the

@@ -1789,18 +1789,20 @@ mod tests {
         set_thread_policy(Arc::new(DemoPolicy::default()));
         let (mut store, _) = bootstrap_documented().unwrap();
         let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-        store.put_policy(NamedPolicy {
-            name: "lock".into(),
-            min_length: 0,
-            min_classes: 0,
-            history: 0,
-            max_fail: 1,
-            pw_failcnt_interval: 0,
-            pw_lockout_duration: 0,
-            pw_min_life: 0,
-            pw_max_life: 0,
-            allowed_keysalts: None,
-        });
+        store
+            .put_policy(NamedPolicy {
+                name: "lock".into(),
+                min_length: 0,
+                min_classes: 0,
+                history: 0,
+                max_fail: 1,
+                pw_failcnt_interval: 0,
+                pw_lockout_duration: 0,
+                pw_min_life: 0,
+                pw_max_life: 0,
+                allowed_keysalts: None,
+            })
+            .unwrap();
         store
             .set_principal_policy(&user, Some("lock".into()))
             .unwrap();

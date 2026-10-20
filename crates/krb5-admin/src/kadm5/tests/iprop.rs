@@ -253,7 +253,7 @@ fn iprop_add_sends_mits_attributes_with_policy_history_and_strings_in_tl_data() 
         let mut g = store.write().unwrap();
         let mut pol = krb5_kdc::NamedPolicy::new("g4apol");
         pol.history = 2;
-        g.put_policy(pol);
+        g.put_policy(pol).unwrap();
         g.create_password(&acl, &actor, &name, b"g4-secret")
             .unwrap();
         g.set_principal_policy(&name, Some("g4apol".into()))

@@ -246,7 +246,7 @@ mod tests {
     fn realm(pol: NamedPolicy, attrs: u32, state: Lockout) -> (crate::PrincipalStore, Principal) {
         let (mut store, _) = bootstrap_documented().unwrap();
         let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-        store.put_policy(pol);
+        store.put_policy(pol).unwrap();
         store
             .set_principal_policy(&user, Some("lock".into()))
             .unwrap();

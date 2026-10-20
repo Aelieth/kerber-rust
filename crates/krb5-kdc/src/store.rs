@@ -37,6 +37,7 @@ use crate::dblock::{DbLock, DbLockHold, DbLockMode};
 use crate::error::Error;
 use crate::persist::{DbStamp, Freshness, PersistError};
 use iprop_ulog::{LogContext, LogNote, PrincipalMap};
+use kadm5_hook::Post;
 use principal::default_mod_actor;
 use rid::generate_domain_sid;
 
@@ -122,6 +123,7 @@ pub struct PrincipalStore {
     /// Set while [`Self::change`] runs `f`: a mutation's own save is only noted, and the change
     /// writes the database once at its end.
     saves_held: bool,
+    post: Option<Vec<Post>>,
 }
 
 /// Whether a mutation asked for a save; cloned with the store as a fresh flag of the same value.
@@ -151,6 +153,21 @@ impl Drop for HeldSaves<'_> {
         if std::thread::panicking() {
             self.0.db_stamp = None;
         }
+    }
+}
+
+struct PostQueue<'a>(&'a mut PrincipalStore);
+
+impl<'a> PostQueue<'a> {
+    fn new(store: &'a mut PrincipalStore) -> Self {
+        store.post = Some(Vec::new());
+        Self(store)
+    }
+}
+
+impl Drop for PostQueue<'_> {
+    fn drop(&mut self) {
+        self.0.post = None;
     }
 }
 
@@ -226,6 +243,7 @@ impl PrincipalStore {
             log: None,
             pending: Arc::new(Mutex::new(Vec::new())),
             saves_held: false,
+            post: None,
         })
     }
 
@@ -378,6 +396,7 @@ impl PrincipalStore {
         loaded.env = std::mem::take(&mut self.env);
         loaded.log = self.log.take();
         loaded.saves_held = self.saves_held;
+        loaded.post = self.post.take();
         *self = loaded;
         Ok(())
     }
@@ -521,6 +540,35 @@ impl PrincipalStore {
     /// MIT's text, and the store is read back), or the log cannot be written after the database
     /// was (the change stays, as MIT's put does); the inner result is `f`'s.
     pub fn change<T, E>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> Result<T, E>,
+    ) -> Result<Result<T, E>, Error> {
+        if self.post.is_some() {
+            return Ok(f(self));
+        }
+        let queue = PostQueue::new(self);
+        let out = queue.0.change_locked(f);
+        let calls = queue.0.post.take().unwrap_or_default();
+        drop(queue);
+        let committed = matches!(out, Ok(Ok(_)));
+        for call in calls {
+            if committed || call.always() {
+                call.run(self);
+            }
+        }
+        out
+    }
+
+    /// A postcommit call: kept until the running change has ended, else made now.
+    pub(crate) fn postcommit(&mut self, call: Post) {
+        if let Some(calls) = self.post.as_mut() {
+            calls.push(call);
+        } else {
+            call.run(self);
+        }
+    }
+
+    fn change_locked<T, E>(
         &mut self,
         f: impl FnOnce(&mut Self) -> Result<T, E>,
     ) -> Result<Result<T, E>, Error> {

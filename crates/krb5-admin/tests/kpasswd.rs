@@ -686,7 +686,7 @@ fn kpasswd_logs_the_code_text_for_an_empty_password_and_the_module_sentence_for_
     // A policy whose floor is 0 lets the empty module refuse: the reply names the floor.
     {
         let mut g = shared.write().unwrap();
-        g.put_policy(krb5_kdc::NamedPolicy::new("floor0"));
+        g.put_policy(krb5_kdc::NamedPolicy::new("floor0")).unwrap();
         g.set_principal_policy(&user, Some("floor0".into()))
             .unwrap();
     }
@@ -918,18 +918,20 @@ fn kpasswd_policy_rejection_is_softerror() {
 
     let (mut store, acl) = bootstrap_documented().unwrap();
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    store.put_policy(NamedPolicy {
-        name: "short8".into(),
-        min_length: 8,
-        min_classes: 0,
-        history: 0,
-        max_fail: 0,
-        pw_failcnt_interval: 0,
-        pw_lockout_duration: 0,
-        pw_min_life: 0,
-        pw_max_life: 0,
-        allowed_keysalts: None,
-    });
+    store
+        .put_policy(NamedPolicy {
+            name: "short8".into(),
+            min_length: 8,
+            min_classes: 0,
+            history: 0,
+            max_fail: 0,
+            pw_failcnt_interval: 0,
+            pw_lockout_duration: 0,
+            pw_min_life: 0,
+            pw_max_life: 0,
+            allowed_keysalts: None,
+        })
+        .unwrap();
     store
         .set_principal_policy(&user, Some("short8".into()))
         .unwrap();
@@ -985,7 +987,7 @@ fn kpasswd_refuses_a_dictionary_word_after_the_database_is_read_again() {
     std::fs::write(&words, "zebra\ncorrecthorse\n").expect("words");
     let (mut store, acl) = bootstrap_documented().expect("bootstrap");
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    store.put_policy(krb5_kdc::NamedPolicy::new("pq"));
+    store.put_policy(krb5_kdc::NamedPolicy::new("pq")).unwrap();
     store
         .set_principal_policy(&user, Some("pq".into()))
         .expect("bind pq");

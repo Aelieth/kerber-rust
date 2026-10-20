@@ -281,7 +281,7 @@ fn failed_chpass_keeps_the_history_principal() {
         p.min_length = 8;
         p.history = 2;
         p.allowed_keysalts = keysalts.map(str::to_owned);
-        store.put_policy(p);
+        store.put_policy(p).unwrap();
         let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [user]);
         store
             .create_password(&acl, &actor, &name, b"hist-initial-secret")
@@ -497,13 +497,13 @@ fn a_policy_write_overtaken_after_kadminds_look_gets_mits_locked_answer() {
         KADM5_POLICY | KADM5_PW_MAX_LIFE,
     );
     let code = overtaken_policy_call(&kadmind, &acl, &mut local, (CREATE_POLICY, create), |s| {
-        s.put_policy_and_save(life("racepol", 7200))
+        s.put_policy(life("racepol", 7200))
     });
     assert_eq!(code, OSA_ADB_DUP);
     let on_disk = load_store(&db, &stash).unwrap();
     assert_eq!(on_disk.policies().get("racepol").unwrap().pw_max_life, 7200);
     local
-        .change(|s| s.put_policy_and_save(life("racepol2", 0)))
+        .change(|s| s.put_policy(life("racepol2", 0)))
         .unwrap()
         .unwrap();
     let modify = encode_cpol(API_V2, &life("racepol2", 10800), KADM5_PW_MAX_LIFE);

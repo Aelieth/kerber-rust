@@ -866,7 +866,7 @@ impl<'a> AdminSession<'a> {
         let exists = self.store.policies().contains_key(&a.name);
         let pol =
             crate::kadm5::create_policy_local(exists, a).map_err(|t| Error::Inner(t.to_owned()))?;
-        self.change(|s, _, _| s.put_policy_and_save(pol))
+        self.change(|s, _, _| s.put_policy(pol))
             .map_err(Error::from)
     }
 
@@ -890,7 +890,7 @@ impl<'a> AdminSession<'a> {
             .ok_or_else(|| Error::Inner("Policy does not exist".into()))?;
         let pol = crate::kadm5::modify_policy_local(&existing, a)
             .map_err(|t| Error::Inner(t.to_owned()))?;
-        self.change(|s, _, _| s.put_policy_and_save(pol))
+        self.change(|s, _, _| s.put_policy(pol))
             .map_err(Error::from)
     }
 

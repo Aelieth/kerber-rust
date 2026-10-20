@@ -703,8 +703,12 @@ pub fn load_dump(text: &str, master_password: &[u8]) -> Result<PrincipalStore, D
 /// policy is created or replaced. The principals go in `order` (the dump's), any not named there
 /// after them; a primary's update log records each put and then starts over for the policies.
 /// MIT `process_k5beta7_princ` (`kadmin/dbutil/dump.c:775-779`): each record is put into the open database.
-/// MIT `process_k5beta7_policy` (`kadmin/dbutil/dump.c:820-822`): a policy is created, else replaced.
-pub fn update_store(store: &mut PrincipalStore, loaded: &PrincipalStore, order: &[&str]) {
+/// MIT `process_k5beta7_policy` (`kadmin/dbutil/dump.c:820-825`): a policy is created, else replaced, and a failed put stops the load.
+pub fn update_store(
+    store: &mut PrincipalStore,
+    loaded: &PrincipalStore,
+    order: &[&str],
+) -> Result<(), KdcError> {
     let mut put = std::collections::HashSet::new();
     for name in order {
         if let Some(p) = loaded.get_raw(name)
@@ -721,8 +725,9 @@ pub fn update_store(store: &mut PrincipalStore, loaded: &PrincipalStore, order: 
         }
     }
     for pol in loaded.policies().values() {
-        store.put_policy(pol.clone());
+        store.put_policy(pol.clone())?;
     }
+    Ok(())
 }
 
 /// Load dump text whose keys are wrapped under `mkey`.
@@ -1682,18 +1687,20 @@ mod tests {
         use krb5_types::PrincipalName;
 
         let (mut store, _) = bootstrap_documented().unwrap();
-        store.put_policy(NamedPolicy {
-            name: "strict".into(),
-            min_length: 8,
-            min_classes: 2,
-            history: 1,
-            max_fail: 3,
-            pw_failcnt_interval: 30,
-            pw_lockout_duration: 60,
-            pw_min_life: 3600,
-            pw_max_life: 86400,
-            allowed_keysalts: Some("aes256-cts:normal".into()),
-        });
+        store
+            .put_policy(NamedPolicy {
+                name: "strict".into(),
+                min_length: 8,
+                min_classes: 2,
+                history: 1,
+                max_fail: 3,
+                pw_failcnt_interval: 30,
+                pw_lockout_duration: 60,
+                pw_min_life: 3600,
+                pw_max_life: 86400,
+                allowed_keysalts: Some("aes256-cts:normal".into()),
+            })
+            .unwrap();
         let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
         store
             .set_principal_policy(&user, Some("strict".into()))

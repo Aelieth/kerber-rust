@@ -950,7 +950,7 @@ mod hooks {
                 eprintln!("krb5-kdc: locked user: {e}");
                 std::process::exit(1);
             }
-            if let Err(e) = store.set_status(&locked, true, 0) {
+            if let Err(e) = store.set_status(&locked, true, 0, "db_creation") {
                 eprintln!("krb5-kdc: lock user: {e}");
                 std::process::exit(1);
             }

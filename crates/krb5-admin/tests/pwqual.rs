@@ -100,7 +100,7 @@ fn kadm5_create_empty_password_is_pass_q_tooshort_and_creates_nothing() {
 #[test]
 fn kadm5_create_principal_name_password_is_pass_q_dict_only_with_policy() {
     let (mut store, _) = bootstrap_documented().unwrap();
-    store.put_policy(NamedPolicy::new("pq"));
+    store.put_policy(NamedPolicy::new("pq")).unwrap();
     let acl = Acl::parse("admin@KERBER.TEST *\n").unwrap();
     let store = shared_dump(store);
     let mut c = init_client(

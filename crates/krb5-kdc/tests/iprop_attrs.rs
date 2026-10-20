@@ -388,7 +388,7 @@ fn a_replica_fed_by_this_primary_matches_it_after_each_change() {
     let (mut primary, acl, _) = primary();
     let (mut replica, _) = bootstrap_documented().unwrap();
     map_memory_ulog(&mut replica, 1000, IpropRole::Replica).unwrap();
-    primary.put_policy(NamedPolicy::new("p11pol"));
+    primary.put_policy(NamedPolicy::new("p11pol")).unwrap();
     let actor = documented_admin_id();
     let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["p11mirror"]);
     // The replica stands where a full resync after the policy left it.

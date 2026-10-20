@@ -55,7 +55,9 @@ principals (256 at least) and the next write rewrites it; readers take only what
 with a cleartext `int16_LE` length prefix; protocol `KeyUsage::new(0)`
 stays rejected. The KDC serves a `SharedStore` (`Arc<RwLock<dyn Store>>`); kadmind and kpasswd
 hold a `SharedDump` (`Arc<RwLock<PrincipalStore>>`), which is one too, so one process can serve
-both from one store and one lock, and their mutations reach `save_store`. The `krb5-kdc` daemon
+both from one store and one lock, and their mutations reach `save_store`. Each write is one
+`PrincipalStore::change` (the exclusive database lock, one write, then the kadm5 postcommit
+hooks); kadm5 reads take the read guard (`read_fresh`). The `krb5-kdc` daemon
 takes MIT `krb5kdc`'s options, listens where kdc.conf says (every local
 address by default), detaches unless `-n`, and writes MIT's text log
 where `[logging]` says ([logging.md](logging.md)). It always serves a

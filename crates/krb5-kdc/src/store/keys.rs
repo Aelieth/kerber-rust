@@ -363,6 +363,7 @@ impl PrincipalStore {
         keepold: u32,
         actor: &str,
     ) -> Result<Vec<KeyEntry>, Error> {
+        self.inside_change()?;
         let id = self.canonical_id(name, princ_realm)?;
         let existing = self.map.get(&id).ok_or(Error::NotFound)?;
         let next_kvno = existing
@@ -415,15 +416,13 @@ impl PrincipalStore {
             return Err(Error::Crypto("injected chrand save fail".into()));
         }
         self.save_if_configured()?;
-        super::kadm5_hook::hook_chpass(
-            self,
-            super::kadm5_hook::HookStage::Postcommit,
-            name,
-            princ_realm,
+        self.postcommit(super::kadm5_hook::Post::Chpass {
+            princ: name.clone(),
+            realm: princ_realm.to_owned(),
             keepold,
-            None,
-            &use_etypes,
-        )?;
+            password: None,
+            etypes: use_etypes,
+        });
         Ok(new_keys)
     }
 
@@ -474,6 +473,7 @@ impl PrincipalStore {
         keepkvno: i32,
         actor: &str,
     ) -> Result<(), Error> {
+        self.inside_change()?;
         let id = self.canonical_id(name, princ_realm)?;
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
         let keep = if keepkvno <= 0 {
@@ -524,6 +524,7 @@ impl PrincipalStore {
         keepold: u32,
         actor: &str,
     ) -> Result<(), Error> {
+        self.inside_change()?;
         if keys.is_empty() {
             return Err(Error::Crypto("setkey empty".into()));
         }

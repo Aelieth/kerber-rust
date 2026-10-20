@@ -219,18 +219,20 @@ fn reload_if_stale_keeps_lockout() {
     let stash = dir.join("stash");
     let (mut writer, acl) = bootstrap_documented().unwrap();
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    writer.put_policy(NamedPolicy {
-        name: "lock".into(),
-        min_length: 0,
-        min_classes: 0,
-        history: 0,
-        max_fail: 3,
-        pw_failcnt_interval: 0,
-        pw_lockout_duration: 0,
-        pw_min_life: 0,
-        pw_max_life: 0,
-        allowed_keysalts: None,
-    });
+    writer
+        .put_policy(NamedPolicy {
+            name: "lock".into(),
+            min_length: 0,
+            min_classes: 0,
+            history: 0,
+            max_fail: 3,
+            pw_failcnt_interval: 0,
+            pw_lockout_duration: 0,
+            pw_min_life: 0,
+            pw_max_life: 0,
+            allowed_keysalts: None,
+        })
+        .unwrap();
     writer
         .set_principal_policy(&user, Some("lock".into()))
         .unwrap();
@@ -294,7 +296,7 @@ fn persist_paths_saves_password_lock_and_expiry() {
     store
         .change(|s| {
             s.change_password(&acl, &documented_admin_id(), &user, b"rotated-secret")?;
-            s.set_status(&user, true, 1_700_000_123)
+            s.set_status(&user, true, 1_700_000_123, "admin/admin")
         })
         .unwrap()
         .unwrap();

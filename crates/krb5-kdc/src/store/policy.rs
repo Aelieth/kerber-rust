@@ -12,7 +12,7 @@ use krb5_types::pac::RpcSid;
 
 use super::PrincipalStore;
 use super::keys::{KeyEntry, KeyLookup, default_supported_enctypes};
-use super::principal::{Principal, refresh_kadm_tl};
+use super::principal::{Principal, default_mod_actor, refresh_kadm_tl, stamp_admin_tl};
 use super::transit::permitted_transited;
 use crate::error::Error;
 
@@ -596,22 +596,13 @@ impl PrincipalStore {
         &self.policies
     }
 
-    /// Insert or replace a named policy; a failed save is not reported (see
-    /// [`Self::put_policy_and_save`]).
-    pub fn put_policy(&mut self, pol: NamedPolicy) {
-        let _ = self.put_policy_and_save(pol);
-    }
-
-    /// Insert or replace a named policy and save the store when it persists.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Db`] when the store cannot be saved, a writer that may not write the database
-    /// included; the policy stays in memory and nothing on disk changes.
-    pub fn put_policy_and_save(&mut self, pol: NamedPolicy) -> Result<(), Error> {
-        self.note_ulog_reset();
-        self.policies.insert(pol.name.clone(), pol);
-        self.save_if_configured()
+    /// Insert or replace a named policy, in a change of its own unless one is running.
+    pub fn put_policy(&mut self, pol: NamedPolicy) -> Result<(), Error> {
+        self.change(|s| {
+            s.note_ulog_reset();
+            s.policies.insert(pol.name.clone(), pol);
+            s.save_if_configured()
+        })?
     }
 
     /// Load a dump policy without logging (dump/iprop apply).
@@ -626,9 +617,11 @@ impl PrincipalStore {
     /// [`Error::NotFound`] when no policy is named `name`; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn delete_policy(&mut self, name: &str) -> Result<(), Error> {
-        self.policies.remove(name).ok_or(Error::NotFound)?;
-        self.note_ulog_reset();
-        self.save_if_configured()
+        self.change(|s| {
+            s.policies.remove(name).ok_or(Error::NotFound)?;
+            s.note_ulog_reset();
+            s.save_if_configured()
+        })?
     }
 
     /// Bind `princ` to `policy` (None unbinds).
@@ -643,7 +636,7 @@ impl PrincipalStore {
         policy: Option<String>,
     ) -> Result<(), Error> {
         let realm = self.realm.clone();
-        self.set_principal_policy_in(name, &realm, policy)
+        self.set_principal_policy_in(name, &realm, policy, &default_mod_actor(&realm))
     }
 
     /// [`Self::set_principal_policy`] for `name@princ_realm`.
@@ -657,12 +650,15 @@ impl PrincipalStore {
         name: &PrincipalName,
         princ_realm: &str,
         policy: Option<String>,
+        actor: &str,
     ) -> Result<(), Error> {
+        self.inside_change()?;
         let id = self.canonical_id(name, princ_realm)?;
         {
             let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
             p.pw_policy = policy;
             refresh_kadm_tl(p);
+            stamp_admin_tl(p, false, actor);
         }
         self.apply_pw_max_life_in(name, princ_realm)?;
         let snap = self.map.get(&id).cloned();

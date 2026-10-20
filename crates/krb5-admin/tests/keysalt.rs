@@ -113,7 +113,7 @@ fn create3_ks_tuple_outside_allowed_keysalts_is_bad_keysalts() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let mut pol = NamedPolicy::new("ksonly");
     pol.allowed_keysalts = Some("aes256-cts-hmac-sha1-96:normal".into());
-    store.put_policy(pol);
+    store.put_policy(pol).unwrap();
     let acl = Acl::parse("admin@KERBER.TEST *\n").unwrap();
     let store = shared_dump(store);
     let mut client = init_client(&store, &acl, &n(TEST_ADMIN), &kadmin_admin(), GSS_INTEGRITY);
@@ -266,7 +266,7 @@ fn chpass3_outside_allowed_keysalts_is_bad_keysalts() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let mut pol = NamedPolicy::new("ksonly");
     pol.allowed_keysalts = Some("aes256-cts-hmac-sha1-96:normal".into());
-    store.put_policy(pol);
+    store.put_policy(pol).unwrap();
     let acl = Acl::parse("admin@KERBER.TEST *\n").unwrap();
     store
         .create_password(&acl, "admin@KERBER.TEST", &n("z72pol"), b"z72-pol-secret")

@@ -23,7 +23,7 @@ fn replica() -> (PrincipalStore, PrincipalName) {
     let (mut store, acl) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
     let actor = krb5_kdc::testrealm::documented_admin_id();
     let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["p11user"]);
-    store.put_policy(NamedPolicy::new("p11pol"));
+    store.put_policy(NamedPolicy::new("p11pol")).unwrap();
     store
         .create_password(&acl, &actor, &name, b"p11-Secret1")
         .unwrap();

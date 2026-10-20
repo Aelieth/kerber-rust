@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use krb5_crypto::EncryptionType;
 use krb5_types::PrincipalName;
+use zeroize::Zeroizing;
 
 use super::PrincipalStore;
 use crate::error::Error;
@@ -289,6 +290,115 @@ pub(super) fn hook_alias(
     walk(store, stage, "alias", |module| {
         module.alias(stage, alias_name, alias_realm, target, target_realm)
     })
+}
+
+#[derive(Clone)]
+pub(crate) enum Post {
+    Chpass {
+        princ: PrincipalName,
+        realm: String,
+        keepold: u32,
+        password: Option<Zeroizing<Vec<u8>>>,
+        etypes: Vec<EncryptionType>,
+    },
+    Create {
+        princ: PrincipalName,
+        realm: String,
+        mask: u32,
+        password: Option<Zeroizing<Vec<u8>>>,
+        etypes: Vec<EncryptionType>,
+    },
+    Modify {
+        princ: PrincipalName,
+        realm: String,
+        mask: u32,
+    },
+    Rename {
+        old: PrincipalName,
+        old_realm: String,
+        new: PrincipalName,
+        new_realm: String,
+    },
+    Remove {
+        princ: PrincipalName,
+        realm: String,
+    },
+    Alias {
+        alias: PrincipalName,
+        alias_realm: String,
+        target: PrincipalName,
+        target_realm: String,
+    },
+}
+
+impl Post {
+    // MIT kadm5_create_principal_3; see docs/parity/a4-kadmin.md
+    pub(crate) fn always(&self) -> bool {
+        matches!(self, Self::Create { .. })
+    }
+
+    pub(crate) fn run(&self, store: &PrincipalStore) {
+        let stage = HookStage::Postcommit;
+        let _ = match self {
+            Self::Chpass {
+                princ,
+                realm,
+                keepold,
+                password,
+                etypes,
+            } => hook_chpass(
+                store,
+                stage,
+                princ,
+                realm,
+                *keepold,
+                password.as_deref().map(Vec::as_slice),
+                etypes,
+            ),
+            Self::Create {
+                princ,
+                realm,
+                mask,
+                password,
+                etypes,
+            } => hook_create(
+                store,
+                stage,
+                princ,
+                realm,
+                *mask,
+                password.as_deref().map(Vec::as_slice),
+                etypes,
+            ),
+            Self::Modify { princ, realm, mask } => hook_modify(store, stage, princ, realm, *mask),
+            Self::Rename {
+                old,
+                old_realm,
+                new,
+                new_realm,
+            } => hook_rename(store, stage, old, old_realm, new, new_realm),
+            Self::Remove { princ, realm } => hook_remove(store, stage, princ, realm),
+            Self::Alias {
+                alias,
+                alias_realm,
+                target,
+                target_realm,
+            } => hook_alias(store, stage, alias, alias_realm, target, target_realm),
+        };
+    }
+}
+
+impl std::fmt::Debug for Post {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Chpass { .. } => "chpass",
+            Self::Create { .. } => "create",
+            Self::Modify { .. } => "modify",
+            Self::Rename { .. } => "rename",
+            Self::Remove { .. } => "remove",
+            Self::Alias { .. } => "alias",
+        })
+    }
 }
 
 #[cfg(test)]

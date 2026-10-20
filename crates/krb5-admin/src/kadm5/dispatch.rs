@@ -66,11 +66,6 @@ pub(super) fn kadm5_or_iprop(
     dispatch_kadm5_ticket(store, acl, actor, proc, args, initial, changepw)
 }
 
-/// The store, read again first when another process (kadmin.local, kdb5_util) changed the
-/// database since kadmind read it, holding the database's lock shared; every kadm5 read and
-/// change goes through it, so a list sees new principals. kadmind's own store lock is taken
-/// first and kept by the caller, so its threads go one at a time and none waits on another's
-/// database lock.
 fn write_store(
     store: &SharedStore,
     proc: u32,
@@ -82,6 +77,17 @@ fn write_store(
     if let Err(e) = g.reload_if_stale() {
         return Err(generic_ret(api, store_code(proc, &e)));
     }
+    Ok(g)
+}
+
+/// [`write_store`] for a read: the store's read guard, so a KDC sharing the store is not held up.
+fn read_store(
+    store: &SharedStore,
+    proc: u32,
+    api: u32,
+) -> Result<std::sync::RwLockReadGuard<'_, krb5_kdc::PrincipalStore>, Vec<u8>> {
+    let (g, read) = krb5_kdc::read_fresh(store);
+    read.map_err(|e| generic_ret(api, store_code(proc, &e)))?;
     Ok(g)
 }
 
@@ -218,7 +224,7 @@ pub(super) fn dispatch_kadm5_ticket(
         GET_PRINCIPAL => {
             let (name, prealm, _mask) = parse_get(args)?;
             let req = req_realm(&prealm, &realm);
-            let g = match write_store(store, proc, API_V2) {
+            let g = match read_store(store, proc, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
@@ -253,7 +259,7 @@ pub(super) fn dispatch_kadm5_ticket(
                 return Ok(generic_ret(API_V2, KADM5_AUTH_LIST));
             }
             let expr = parse_gprincs(args)?;
-            let g = match write_store(store, proc, API_V2) {
+            let g = match read_store(store, proc, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
@@ -371,13 +377,13 @@ pub(super) fn dispatch_kadm5_ticket(
                     actor,
                 )?;
                 if mask & KADM5_KVNO != 0 {
-                    s.set_kvno_in(&name, &req, fields.kvno)?;
+                    s.set_kvno_in(&name, &req, fields.kvno, actor)?;
                 }
                 if mask & KADM5_TL_DATA != 0 {
-                    s.merge_tl_data_in(&name, &req, &fields.tl_data)?;
+                    s.merge_tl_data_in(&name, &req, &fields.tl_data, actor)?;
                 }
                 if mask & KADM5_FAIL_AUTH_COUNT != 0 {
-                    s.clear_fail_auth_count_in(&name, &req)?;
+                    s.clear_fail_auth_count_in(&name, &req, actor)?;
                 }
                 Ok(())
             });
@@ -438,7 +444,7 @@ pub(super) fn dispatch_kadm5_ticket(
             let changed = commit(&mut g, proc, API_V2, |s| {
                 s.create_principal_3_in(&c.name, &req, c.pass.as_deref(), &c.ks, &c.ent, actor)?;
                 if c.ent.mask & KADM5_TL_DATA != 0 {
-                    s.merge_tl_data_in(&c.name, &req, &c.tl_data)?;
+                    s.merge_tl_data_in(&c.name, &req, &c.tl_data, actor)?;
                 }
                 Ok(())
             });
@@ -571,7 +577,7 @@ pub(super) fn dispatch_kadm5_ticket(
                 if s.policies().contains_key(&pol.name) {
                     return Ok(Err(OSA_ADB_DUP));
                 }
-                s.put_policy_and_save(pol).map(Ok)
+                s.put_policy(pol).map(Ok)
             }))
         }
         DELETE_POLICY => {
@@ -629,12 +635,12 @@ pub(super) fn dispatch_kadm5_ticket(
                 if !s.policies().contains_key(&merged.name) {
                     return Ok(Err(OSA_ADB_NOENT));
                 }
-                s.put_policy_and_save(merged).map(Ok)
+                s.put_policy(merged).map(Ok)
             }))
         }
         GET_POLICY => {
             let (api, name) = parse_policy_name(args)?;
-            let g = match write_store(store, proc, api) {
+            let g = match read_store(store, proc, api) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
@@ -655,7 +661,7 @@ pub(super) fn dispatch_kadm5_ticket(
             if changepw || acl.check(actor, krb5_kdc::AdminOp::List, None).is_err() {
                 return Ok(generic_ret(api, KADM5_AUTH_LIST));
             }
-            let g = match write_store(store, proc, api) {
+            let g = match read_store(store, proc, api) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
@@ -714,7 +720,7 @@ pub(super) fn dispatch_kadm5_ticket(
         EXTRACT_KEYS => {
             let (api, name, prealm, kvno) = parse_extract(args)?;
             let req = req_realm(&prealm, &realm);
-            let g = match write_store(store, proc, api) {
+            let g = match read_store(store, proc, api) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
@@ -809,7 +815,7 @@ pub(super) fn dispatch_kadm5_ticket(
         GET_STRINGS => {
             let (api, name, prealm) = parse_gstrings(args)?;
             let req = req_realm(&prealm, &realm);
-            let g = match write_store(store, proc, api) {
+            let g = match read_store(store, proc, api) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };

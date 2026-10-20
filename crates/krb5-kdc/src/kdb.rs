@@ -235,7 +235,7 @@ pub trait PrincipalWrite: PrincipalRead {
     ///
     /// [`Error::InvalidArgument`] when `p.tl_data` holds a `KRB5_TL_DB_ARGS` entry, which neither
     /// [`PrincipalStore`] nor [`MemoryStore`] accepts; [`Error::Db`] when a [`PrincipalStore`]
-    /// with a database is not inside a change; other backends may add their own [`Error`].
+    /// cannot lock, read or write its database; other backends may add their own [`Error`].
     fn put_principal(&mut self, p: Principal) -> Result<(), Error>;
     /// Delete by `name@REALM`.
     ///
@@ -261,13 +261,6 @@ pub trait StoreLifecycle {
     /// [`Error::Db`] when [`PrincipalStore`] finds its store file changed and cannot read it,
     /// [`Error::Crypto`] when its stash key does not decrypt it; [`MemoryStore`] never fails.
     fn reload_if_stale(&mut self) -> Result<(), Error>;
-    /// Write through when persist paths are set.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Db`] when [`PrincipalStore`] cannot write its configured store file;
-    /// [`MemoryStore`] never fails.
-    fn save_if_configured(&self) -> Result<(), Error>;
     /// The database's shared lock for one request, and whether the database changed since this
     /// store read it; `None` for a store with no database file.
     ///
@@ -471,9 +464,6 @@ impl StoreLifecycle for MemoryStore {
     fn reload_if_stale(&mut self) -> Result<(), Error> {
         Ok(())
     }
-    fn save_if_configured(&self) -> Result<(), Error> {
-        Ok(())
-    }
 }
 
 impl Store for MemoryStore {}
@@ -534,11 +524,13 @@ impl PrincipalWrite for PrincipalStore {
     /// MIT `krb5_db_put_principal` (`lib/kdb/kdb5.c:987-1007`): every put is recorded in the update log.
     fn put_principal(&mut self, mut p: Principal) -> Result<(), Error> {
         strip_db_args(&mut p.tl_data)?;
-        PrincipalStore::put_principal(self, p);
-        self.save_configured()
+        self.change(|s| {
+            PrincipalStore::put_principal(s, p);
+            s.save_configured()
+        })?
     }
     fn remove_id(&mut self, id: &str) -> Result<(), Error> {
-        self.remove_id_inner(id)
+        self.change(|s| s.remove_id_inner(id))?
     }
     fn enable_pkinit_ca(&mut self) -> Result<&PkinitCa, Error> {
         PrincipalStore::enable_pkinit_ca(self)
@@ -548,9 +540,6 @@ impl PrincipalWrite for PrincipalStore {
 impl StoreLifecycle for PrincipalStore {
     fn reload_if_stale(&mut self) -> Result<(), Error> {
         PrincipalStore::reload_if_stale(self)
-    }
-    fn save_if_configured(&self) -> Result<(), Error> {
-        self.save_configured()
     }
     fn read_hold(&self) -> Result<Option<(DbLockHold, bool)>, Error> {
         PrincipalStore::read_hold(self)
@@ -620,7 +609,8 @@ mod tests {
             pw_min_life: 0,
             pw_max_life: 0,
             allowed_keysalts: None,
-        });
+        })
+        .unwrap();
         dump.set_principal_policy(&user, Some("strict".into()))
             .unwrap();
         let mem = MemoryStore::from_dump(&dump);

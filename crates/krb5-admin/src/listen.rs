@@ -622,12 +622,9 @@ pub(crate) fn handle_kpasswd_from(
     }
     let priv_raw = &raw[6 + ap_len..];
     let (store_realm, changepw) = {
-        let mut g = store
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // The kadmin/changepw entry as the database holds it now, whoever changed it; a database
         // that does not read leaves the KDB keytab without it, so the AP-REQ is refused.
-        let read = g.reload_if_stale();
+        let (g, read) = krb5_kdc::read_fresh(store);
         (
             g.realm().to_owned(),
             read.ok().and_then(|()| {
@@ -1242,7 +1239,9 @@ mod tests {
             super::empty_policy(&store, &name),
             super::EmptyPolicy::Missing
         ));
-        store.put_policy(krb5_kdc::NamedPolicy::new("keep"));
+        store
+            .put_policy(krb5_kdc::NamedPolicy::new("keep"))
+            .unwrap();
         store
             .apply_admin_fields_in(
                 &name,

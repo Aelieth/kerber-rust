@@ -95,7 +95,7 @@ fn changepw_service_own_policy_getpol_is_ok() {
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
     {
         let mut g = store.write().unwrap();
-        g.put_policy(krb5_kdc::NamedPolicy::new("userpol"));
+        g.put_policy(krb5_kdc::NamedPolicy::new("userpol")).unwrap();
         g.set_principal_policy(&user, Some("userpol".into()))
             .unwrap();
     }

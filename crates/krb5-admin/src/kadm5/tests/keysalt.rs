@@ -47,7 +47,7 @@ fn extract_keys_omits_password_history() {
         let mut g = store.write().unwrap();
         let mut pol = krb5_kdc::NamedPolicy::new("exhistpol");
         pol.history = 2;
-        g.put_policy(pol);
+        g.put_policy(pol).unwrap();
         g.create_password(&acl, &actor, &name, b"ex-secret")
             .unwrap();
         g.set_principal_policy(&name, Some("exhistpol".into()))
@@ -228,7 +228,7 @@ fn purgekeys_drops_old_kvnos() {
         let mut g = store.write().unwrap();
         let mut pol = krb5_kdc::NamedPolicy::new("g3bhist");
         pol.history = 2;
-        g.put_policy(pol);
+        g.put_policy(pol).unwrap();
         g.create_password(&acl, &actor, &name, b"purge-secret")
             .unwrap();
         g.set_principal_policy(&name, Some("g3bhist".into()))

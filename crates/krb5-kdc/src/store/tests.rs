@@ -767,7 +767,7 @@ fn pwqual_dict_reads_the_fstat_size_so_dev_zero_is_empty() {
         .init_pwqual_noting(Some(&dict_conf(zero)), &mut note)
         .unwrap();
     assert!(notes.is_empty(), "{notes:?}");
-    store.put_policy(NamedPolicy::new("pq"));
+    store.put_policy(NamedPolicy::new("pq")).unwrap();
     let u = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["dictu"]);
     store.check_new_password(&u, Some("pq"), b"zebra").unwrap();
 }
@@ -784,8 +784,8 @@ fn passwd_check_logs_a_module_refusal_and_not_a_policy_floor() {
     let mut floors = NamedPolicy::new("floors");
     floors.min_length = 4;
     floors.min_classes = 2;
-    store.put_policy(floors);
-    store.put_policy(NamedPolicy::new("open"));
+    store.put_policy(floors).unwrap();
+    store.put_policy(NamedPolicy::new("open")).unwrap();
     let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["sam"]);
     let notes = std::cell::RefCell::new(Vec::<(Severity, String)>::new());
     let mut note = |severity: Severity, text: &str| {
@@ -880,7 +880,7 @@ fn passwd_check_logs_a_module_refusal_and_not_a_policy_floor() {
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::testrealm::TEST_USER]);
     let mut hist = NamedPolicy::new("hist");
     hist.history = 1;
-    live.put_policy(hist);
+    live.put_policy(hist).unwrap();
     live.set_principal_policy(&user, Some("hist".into()))
         .unwrap();
     live.set_password(&user, b"Fresh-secret-1").unwrap();
@@ -937,7 +937,7 @@ fn a_reread_moves_the_dictionary_and_ticket_policy_never_copies_them() {
     let (db, stash, words) = (dir.join("principal"), dir.join("stash"), dir.join("words"));
     std::fs::write(&words, "zebra\ncorrecthorse\n").unwrap();
     let (mut store, acl) = crate::testrealm::bootstrap_documented().unwrap();
-    store.put_policy(NamedPolicy::new("pq"));
+    store.put_policy(NamedPolicy::new("pq")).unwrap();
     crate::persist::save_store(&store, &db, &stash).unwrap();
     store.persist_paths = Some((db.clone(), stash.clone()));
     store.init_pwqual(Some(&dict_conf(&words))).unwrap();
@@ -1247,18 +1247,20 @@ fn last_admin_unlock_skips_failcount_lockout() {
     use krb5_protocol::{as_req, pa_enc_timestamp};
     let (mut store, _) = crate::testrealm::bootstrap_documented().unwrap();
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::testrealm::TEST_USER]);
-    store.put_policy(NamedPolicy {
-        name: "lock".into(),
-        min_length: 1,
-        min_classes: 1,
-        history: 0,
-        max_fail: 1,
-        pw_failcnt_interval: 0,
-        pw_lockout_duration: 0,
-        pw_min_life: 0,
-        pw_max_life: 0,
-        allowed_keysalts: None,
-    });
+    store
+        .put_policy(NamedPolicy {
+            name: "lock".into(),
+            min_length: 1,
+            min_classes: 1,
+            history: 0,
+            max_fail: 1,
+            pw_failcnt_interval: 0,
+            pw_lockout_duration: 0,
+            pw_min_life: 0,
+            pw_max_life: 0,
+            allowed_keysalts: None,
+        })
+        .unwrap();
     store
         .set_principal_policy(&user, Some("lock".into()))
         .unwrap();

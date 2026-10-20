@@ -1293,7 +1293,10 @@ fn load(util: &mut Util, args: &[String]) -> u8 {
         }
         // MIT `process_k5beta7_princ` (`kadmin/dbutil/dump.c:691-694`): a loaded record carries its lockout attributes, which the update writes; the others keep theirs.
         let order: Vec<&str> = dump.princs.iter().map(|p| p.name.as_str()).collect();
-        update_store(&mut store, &loaded, &order);
+        if let Err(e) = update_store(&mut store, &loaded, &order) {
+            util.com_err(&e.to_string(), "while creating policy");
+            return 1;
+        }
         let first = dump.princs.first().map_or("", |p| p.name.as_str());
         // MIT `krb5_db_put_principal` (`lib/kdb/kdb5.c:987-999`): each update is converted, its keys wrapped, before its put; one that cannot be fails the load before the database is written.
         let prepared = match store.prepare_log() {
@@ -1871,18 +1874,20 @@ mod hooks {
             return Err((2, "empty policy name".into()));
         }
         with_store(util, |store| {
-            store.put_policy(NamedPolicy {
-                name: name.to_owned(),
-                min_length: 8,
-                min_classes: 2,
-                history: 1,
-                max_fail: 1,
-                pw_failcnt_interval: 0,
-                pw_lockout_duration: 0,
-                pw_min_life: 0,
-                pw_max_life: 0,
-                allowed_keysalts: None,
-            });
+            store
+                .put_policy(NamedPolicy {
+                    name: name.to_owned(),
+                    min_length: 8,
+                    min_classes: 2,
+                    history: 1,
+                    max_fail: 1,
+                    pw_failcnt_interval: 0,
+                    pw_lockout_duration: 0,
+                    pw_min_life: 0,
+                    pw_max_life: 0,
+                    allowed_keysalts: None,
+                })
+                .map_err(|e| (1, format!("put policy: {e}")))?;
             let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
             if store.get_name(&user).is_some() {
                 store

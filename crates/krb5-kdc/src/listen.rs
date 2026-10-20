@@ -6,7 +6,7 @@ use std::io::{self, IoSlice, IoSliceMut};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, UdpSocket};
 use std::os::fd::{AsRawFd as _, OwnedFd};
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, PoisonError, RwLock};
+use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard};
 use std::time::Duration;
 
 use crate::Error;
@@ -79,6 +79,34 @@ pub(crate) fn read_store<R>(store: &SharedStore, f: impl FnOnce(&dyn PrincipalRe
         Ok(()) => f(&*g),
         Err(e) => f(&Unreadable::new(&*g, &e)),
     }
+}
+
+/// kadmind's reads: the read guard, after a reread when another process changed the database.
+pub fn read_fresh(
+    store: &SharedDump,
+) -> (
+    RwLockReadGuard<'_, crate::store::PrincipalStore>,
+    Result<(), Error>,
+) {
+    {
+        let g = store.read().unwrap_or_else(PoisonError::into_inner);
+        let stale = match g.read_hold() {
+            Ok(None) => false,
+            Ok(Some((held, stale))) => {
+                drop(held);
+                stale
+            }
+            Err(e) => return (g, Err(e)),
+        };
+        if !stale {
+            return (g, Ok(()));
+        }
+    }
+    let reread = store
+        .write()
+        .unwrap_or_else(PoisonError::into_inner)
+        .reload_if_stale();
+    (store.read().unwrap_or_else(PoisonError::into_inner), reread)
 }
 
 /// The store, without its database lock, for a reply that needs no lookup (an error built from

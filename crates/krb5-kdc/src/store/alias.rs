@@ -54,6 +54,7 @@ impl PrincipalStore {
         target_realm: &str,
         actor: &str,
     ) -> Result<(), Error> {
+        self.inside_change()?;
         if alias_realm != target_realm {
             return Err(Error::AliasRealm);
         }
@@ -99,13 +100,12 @@ impl PrincipalStore {
         self.note_ulog(id.clone(), false, Some(p.clone()));
         self.map.insert(id, p);
         self.save_if_configured()?;
-        super::kadm5_hook::hook_alias(
-            self,
-            super::kadm5_hook::HookStage::Postcommit,
-            alias,
-            alias_realm,
-            target,
-            target_realm,
-        )
+        self.postcommit(super::kadm5_hook::Post::Alias {
+            alias: alias.clone(),
+            alias_realm: alias_realm.to_owned(),
+            target: target.clone(),
+            target_realm: target_realm.to_owned(),
+        });
+        Ok(())
     }
 }

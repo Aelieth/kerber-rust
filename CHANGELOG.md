@@ -91,6 +91,8 @@ any other `###` heading.
 - **gss/admin.** The GSS initiator takes its caller's flags, as MIT's; the iprop client asks for MUTUAL|REPLAY, so MIT's kadmind takes its later calls after a gap.
 - **kdc.** A database the KDC cannot read again answers the request under the store's read lock, not its write lock, so other requests no longer wait on it.
 - **kdb.** `kdb5_util dump`'s name filter is glibc's ERE, as MIT's `regcomp(REG_EXTENDED)`, matched against the whole name, with `regerror`'s text for a bad name.
+- **kdc.** A store write commits in a change of its own or is refused outside one before it touches the store; a status, kvno, TL-data or policy write stamps `Last modified`.
+- **kdc/admin.** kadm5 postcommit hooks run after the write, the database unlocked, create's also on a failed write, as MIT's; kadm5 reads take the store's read guard.
 
 ## [1.1.0] - 2026-10-14
 

@@ -109,7 +109,8 @@ fn create_runs_pwqual_modules_before_the_entry_exists() {
     store
         .write()
         .unwrap()
-        .put_policy(krb5_kdc::NamedPolicy::new("pq"));
+        .put_policy(krb5_kdc::NamedPolicy::new("pq"))
+        .unwrap();
     let empty = dispatch_kadm5(
         &store,
         &acl,

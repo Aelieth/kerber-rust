@@ -476,6 +476,7 @@ pub struct AdminFields {
 
 impl PrincipalStore {
     pub(crate) fn remove_id_inner(&mut self, id: &str) -> Result<(), Error> {
+        self.inside_change()?;
         let (name, realm) = {
             let principal = self.map.get(id).ok_or(Error::NotFound)?;
             (principal.name.clone(), principal.realm.clone())
@@ -489,12 +490,8 @@ impl PrincipalStore {
         self.map.remove(id).ok_or(Error::NotFound)?;
         self.note_ulog(id.to_owned(), true, None);
         self.save_if_configured()?;
-        super::kadm5_hook::hook_remove(
-            self,
-            super::kadm5_hook::HookStage::Postcommit,
-            &name,
-            &realm,
-        )
+        self.postcommit(super::kadm5_hook::Post::Remove { princ: name, realm });
+        Ok(())
     }
 
     /// Permit `from` to S4U2Proxy to `name` (RBCD). A bare name is the local realm.
@@ -688,6 +685,7 @@ impl PrincipalStore {
         ent: &AdminEnt,
         actor: &str,
     ) -> Result<(), Error> {
+        self.inside_change()?;
         let password = password.map(c_password);
         let id = crate::kdb::lookup_principal_id(name, princ_realm);
         if self.get(&id).is_some() {
@@ -789,15 +787,14 @@ impl PrincipalStore {
         )?;
         self.put_principal(p);
         self.save_if_configured()?;
-        super::kadm5_hook::hook_create(
-            self,
-            super::kadm5_hook::HookStage::Postcommit,
-            name,
-            princ_realm,
-            ent.mask,
-            password,
-            &use_etypes,
-        )
+        self.postcommit(super::kadm5_hook::Post::Create {
+            princ: name.clone(),
+            realm: princ_realm.to_owned(),
+            mask: ent.mask,
+            password: password.map(|p| zeroize::Zeroizing::new(p.to_vec())),
+            etypes: use_etypes,
+        });
+        Ok(())
     }
 
     /// ACL-gated create of a random-key host (or other) principal.
@@ -831,6 +828,7 @@ impl PrincipalStore {
         name: &PrincipalName,
         etypes: &[EncryptionType],
     ) -> Result<(), Error> {
+        self.inside_change()?;
         let id = crate::kdb::lookup_principal_id(name, &self.realm);
         acl.check(actor, AdminOp::Create, Some(&id))?;
         if self.get(&id).is_some() {
@@ -849,6 +847,7 @@ impl PrincipalStore {
     /// A created `kadmin/changepw` gets `PWCHANGE_SERVICE` by its name (`docs/mit-deviations.md`,
     /// "Create-time name special-casing"), a change the update log records.
     fn mark_pwchange_service(&mut self, name: &PrincipalName, id: &str) -> Result<(), Error> {
+        self.inside_change()?;
         if name.components_joined() != "kadmin/changepw" {
             return Ok(());
         }
@@ -901,7 +900,7 @@ impl PrincipalStore {
         Ok(())
     }
 
-    /// Set lockout and password-expiry, then persist when `persist_paths` is set.
+    /// Set lockout and password-expiry, stamped as `actor`'s change.
     ///
     /// # Errors
     ///
@@ -912,7 +911,9 @@ impl PrincipalStore {
         name: &PrincipalName,
         locked: bool,
         pw_expire: u32,
+        actor: &str,
     ) -> Result<(), Error> {
+        self.inside_change()?;
         let id = self.canonical_id(name, &self.realm)?;
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
         p.locked = locked;
@@ -922,6 +923,7 @@ impl PrincipalStore {
         } else {
             p.attributes &= !KDB_DISALLOW_ALL_TIX;
         }
+        stamp_admin_tl(p, false, actor);
         let snap = p.clone();
         self.note_ulog(id, false, Some(snap));
         self.save_if_configured()
@@ -957,6 +959,7 @@ impl PrincipalStore {
         princ_realm: &str,
         actor: &str,
     ) -> Result<(), Error> {
+        self.inside_change()?;
         let id = self.canonical_id(name, princ_realm)?;
         let now = unix_now();
         {
@@ -975,7 +978,7 @@ impl PrincipalStore {
         self.save_if_configured()
     }
 
-    /// Zero `fail_auth_count` without rewriting TL data (`kadm5_modify_principal`).
+    /// Zero `fail_auth_count` (`kadm5_modify_principal`), stamped as `actor`'s change.
     ///
     /// # Errors
     ///
@@ -985,11 +988,14 @@ impl PrincipalStore {
         &mut self,
         name: &PrincipalName,
         princ_realm: &str,
+        actor: &str,
     ) -> Result<(), Error> {
+        self.inside_change()?;
         let id = self.canonical_id(name, princ_realm)?;
         {
             let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
             p.fail_auth_count = 0;
+            stamp_admin_tl(p, false, actor);
         }
         self.clear_as_fail_count(name);
         let snap = self.map.get(&id).cloned();
@@ -1011,13 +1017,16 @@ impl PrincipalStore {
         name: &PrincipalName,
         princ_realm: &str,
         kvno: u32,
+        actor: &str,
     ) -> Result<(), Error> {
+        self.inside_change()?;
         let id = self.canonical_id(name, princ_realm)?;
         {
             let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
             for k in &mut p.keys {
                 k.kvno = kvno;
             }
+            stamp_admin_tl(p, false, actor);
         }
         let snap = self.map.get(&id).cloned();
         self.note_ulog(id, false, snap);
@@ -1036,6 +1045,7 @@ impl PrincipalStore {
         name: &PrincipalName,
         princ_realm: &str,
         tls: &[TlData],
+        actor: &str,
     ) -> Result<(), Error> {
         let id = self.canonical_id(name, princ_realm)?;
         let mut p = self.map.get(&id).ok_or(Error::NotFound)?.clone();
@@ -1046,6 +1056,8 @@ impl PrincipalStore {
             p.tl_data.push(tl.clone());
         }
         strip_db_args(&mut p.tl_data)?;
+        stamp_admin_tl(&mut p, false, actor);
+        self.inside_change()?;
         self.put_principal(p);
         self.save_if_configured()
     }
@@ -1155,6 +1167,7 @@ impl PrincipalStore {
         new_realm: &str,
         actor: &str,
     ) -> Result<(), Error> {
+        self.inside_change()?;
         let old_id = crate::kdb::lookup_principal_id(old, old_realm);
         let new_id = crate::kdb::lookup_principal_id(new, new_realm);
         if self.get(&new_id).is_some() {
@@ -1188,14 +1201,13 @@ impl PrincipalStore {
         self.note_ulog(p.id(), false, Some(p.clone()));
         self.map.insert(p.id(), p);
         self.save_if_configured()?;
-        super::kadm5_hook::hook_rename(
-            self,
-            super::kadm5_hook::HookStage::Postcommit,
-            old,
-            old_realm,
-            new,
-            new_realm,
-        )
+        self.postcommit(super::kadm5_hook::Post::Rename {
+            old: old.clone(),
+            old_realm: old_realm.to_owned(),
+            new: new.clone(),
+            new_realm: new_realm.to_owned(),
+        });
+        Ok(())
     }
 
     pub(super) fn insert_password(
@@ -1258,6 +1270,7 @@ impl PrincipalStore {
         fields: AdminFields,
         actor: &str,
     ) -> Result<(), Error> {
+        self.inside_change()?;
         let AdminFields {
             attributes,
             max_life,
@@ -1332,13 +1345,12 @@ impl PrincipalStore {
         let snap = self.map.get(&id).cloned();
         self.note_ulog(id, false, snap);
         self.save_if_configured()?;
-        super::kadm5_hook::hook_modify(
-            self,
-            super::kadm5_hook::HookStage::Postcommit,
-            name,
-            princ_realm,
+        self.postcommit(super::kadm5_hook::Post::Modify {
+            princ: name.clone(),
+            realm: princ_realm.to_owned(),
             mask,
-        )
+        });
+        Ok(())
     }
 
     /// Impose kadm5.acl restrictions after create/modify (`auth.c` `impose_restrictions`).
@@ -1368,6 +1380,7 @@ impl PrincipalStore {
         princ_realm: &str,
         rs: &Restrictions,
     ) -> Result<(), Error> {
+        self.inside_change()?;
         let id = self.canonical_id(name, princ_realm)?;
         self.apply_acl_restrictions(&id, rs)?;
         self.save_if_configured()
@@ -1379,6 +1392,7 @@ impl PrincipalStore {
     /// lands as its cap. The RPC paths call [`Restrictions::impose`] on the
     /// parsed request instead.
     fn apply_acl_restrictions(&mut self, id: &str, rs: &Restrictions) -> Result<(), Error> {
+        self.inside_change()?;
         let mut ent = AdminEnt::default();
         rs.impose(&mut ent, unix_now());
         let p = self.map.get_mut(id).ok_or(Error::NotFound)?;
@@ -1470,6 +1484,7 @@ impl PrincipalStore {
         value: Option<&str>,
         actor: &str,
     ) -> Result<(), Error> {
+        self.inside_change()?;
         let id = self.canonical_id(name, princ_realm)?;
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
         p.string_attrs.retain(|(k, _)| k != key);

@@ -89,7 +89,7 @@ pub(crate) fn addpol(s: &mut Session<'_>, argv: &[String]) {
         let exists = st.policies().contains_key(&a.args.name);
         let pol = crate::kadm5::create_policy_local(exists, &a.args)
             .map_err(|t| Error::InvalidArgument(t.to_owned()))?;
-        st.put_policy_and_save(pol)
+        st.put_policy(pol)
     });
     if let Err(e) = done {
         s.io.com_err(
@@ -118,7 +118,7 @@ pub(crate) fn modpol(s: &mut Session<'_>, argv: &[String]) {
         if a.clear_keysalts {
             pol.allowed_keysalts = None;
         }
-        st.put_policy_and_save(pol)
+        st.put_policy(pol)
     });
     if let Err(e) = done {
         s.io.com_err(

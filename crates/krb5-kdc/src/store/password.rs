@@ -317,6 +317,7 @@ impl PrincipalStore {
         actor: &str,
         etypes: &[EncryptionType],
     ) -> Result<(), Error> {
+        self.inside_change()?;
         // MIT `add_key_pwd` (`lib/kdb/kdb_cpw.c:315-315`): the key is made from the password as a C string, the bytes before its first NUL that the checks and the hooks see.
         let password = c_password(password);
         let id = self.canonical_id(name, princ_realm)?;
@@ -369,15 +370,14 @@ impl PrincipalStore {
         let snap = self.map.get(&id).cloned();
         self.note_ulog(id, false, snap);
         self.save_if_configured()?;
-        super::kadm5_hook::hook_chpass(
-            self,
-            super::kadm5_hook::HookStage::Postcommit,
-            name,
-            princ_realm,
+        self.postcommit(super::kadm5_hook::Post::Chpass {
+            princ: name.clone(),
+            realm: princ_realm.to_owned(),
             keepold,
-            Some(password),
-            &use_etypes,
-        )
+            password: Some(zeroize::Zeroizing::new(password.to_vec())),
+            etypes: use_etypes,
+        });
+        Ok(())
     }
 
     pub(super) fn apply_pw_max_life_in(
@@ -457,6 +457,7 @@ impl PrincipalStore {
     /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when the store has a
     /// database and this is not inside a change.
     pub fn set_last_pwd_unix(&mut self, name: &PrincipalName, ts: u32) -> Result<(), Error> {
+        self.inside_change()?;
         let id = self.canonical_id(name, &self.realm)?;
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
         p.tl_data.retain(|t| t.ty != TL_LAST_PWD_CHANGE);

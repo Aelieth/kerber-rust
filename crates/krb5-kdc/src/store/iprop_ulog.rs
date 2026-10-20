@@ -396,6 +396,7 @@ impl PrincipalStore {
     /// As [`conv_2dbentry`], for the update that fails, or [`Error::InvalidArgument`] for one
     /// that carries database arguments; the caller's change then reads the database back.
     pub fn apply_updates(&mut self, updates: &[IpropUpdate]) -> Result<(), Error> {
+        self.inside_change()?;
         for u in updates {
             if !u.commit {
                 break;

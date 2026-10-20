@@ -35,18 +35,20 @@ fn saved(tag: &str) -> (PathBuf, PathBuf, Acl) {
     let dir = scratch_dir(tag);
     let (db, stash) = (dir.join("principal"), dir.join("stash"));
     let (mut store, acl) = bootstrap_documented().unwrap();
-    store.put_policy(NamedPolicy {
-        name: "lock3".into(),
-        min_length: 1,
-        min_classes: 1,
-        history: 0,
-        max_fail: 3,
-        pw_failcnt_interval: 0,
-        pw_lockout_duration: 0,
-        pw_min_life: 0,
-        pw_max_life: 0,
-        allowed_keysalts: None,
-    });
+    store
+        .put_policy(NamedPolicy {
+            name: "lock3".into(),
+            min_length: 1,
+            min_classes: 1,
+            history: 0,
+            max_fail: 3,
+            pw_failcnt_interval: 0,
+            pw_lockout_duration: 0,
+            pw_min_life: 0,
+            pw_max_life: 0,
+            allowed_keysalts: None,
+        })
+        .unwrap();
     store
         .set_principal_policy(&name(TEST_USER), Some("lock3".into()))
         .unwrap();

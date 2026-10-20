@@ -5,7 +5,6 @@
 //! the database holds for another principal, enctype or key version.
 
 use std::io;
-use std::sync::PoisonError;
 
 use krb5_crypto::{EncryptionType, ProtocolKey};
 use krb5_gss::{ChannelBindings, GssContext};
@@ -28,8 +27,8 @@ fn kdb_keytab_entry(
     etype: i32,
     permitted: &[EncryptionType],
 ) -> Result<ProtocolKey, KeytabLookup> {
-    let mut g = store.write().unwrap_or_else(PoisonError::into_inner);
-    if let Err(e) = g.reload_if_stale() {
+    let (g, read) = krb5_kdc::read_fresh(store);
+    if let Err(e) = read {
         klog::syslog(Severity::Err, &format!("{e} while reloading database"));
         return Err(KeytabLookup::Other(krb5_protocol::Error::Io {
             message: e.to_string(),

@@ -195,7 +195,7 @@ fn kadm5_create_without_mask_bits_takes_realm_defaults() {
     let mut r = rig("admin@KERBER.TEST *\n", |s| {
         let mut pol = NamedPolicy::new("z1pw");
         pol.pw_max_life = 30 * 86400;
-        s.put_policy(pol);
+        s.put_policy(pol).unwrap();
     });
     let (realm_max_life, realm_max_rlife) = {
         let g = r.store.read().unwrap();
@@ -246,7 +246,7 @@ fn acl_policy_restriction_is_enforced_on_create() {
         |s| {
             let mut pol = NamedPolicy::new("shortpol");
             pol.min_length = 8;
-            s.put_policy(pol);
+            s.put_policy(pol).unwrap();
         },
     );
     let args = ent_args(

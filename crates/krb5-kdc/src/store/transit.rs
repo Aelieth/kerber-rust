@@ -96,6 +96,7 @@ impl PrincipalStore {
         foreign_realm: &str,
         password: &[u8],
     ) -> Result<(), Error> {
+        self.inside_change()?;
         let name = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", foreign_realm]);
         let id = crate::kdb::lookup_principal_id(&name, &self.realm);
         acl.check(actor, AdminOp::Create, Some(&id))?;
@@ -128,6 +129,7 @@ impl PrincipalStore {
         foreign_realm: &str,
         key: ProtocolKey,
     ) -> Result<(), Error> {
+        self.inside_change()?;
         let name = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", foreign_realm]);
         let id = crate::kdb::lookup_principal_id(&name, &self.realm);
         acl.check(actor, AdminOp::Create, Some(&id))?;
@@ -201,6 +203,7 @@ impl PrincipalStore {
         key: ProtocolKey,
         replace: bool,
     ) -> Result<(), Error> {
+        self.inside_change()?;
         let name = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", self.realm.as_str()]);
         let id = crate::kdb::lookup_principal_id(&name, foreign_realm);
         acl.check(actor, AdminOp::Create, Some(&id))?;
