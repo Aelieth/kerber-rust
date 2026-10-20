@@ -616,6 +616,7 @@ dependencies = [
  "p256",
  "pure-rust-locales",
  "rasn",
+ "regex-automata",
  "sha1",
  "sha2",
  "subtle",
