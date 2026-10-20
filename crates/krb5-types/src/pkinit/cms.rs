@@ -315,7 +315,7 @@ fn parse_ec_scalar(der: &[u8]) -> Option<[u8; 32]> {
     None
 }
 
-fn unbase64(s: &str) -> Option<Vec<u8>> {
+pub(super) fn unbase64(s: &str) -> Option<Vec<u8>> {
     const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut bytes = Wiped(Vec::with_capacity(s.len()));
     bytes.extend(s.bytes().filter(|b| *b != b'=' && !b.is_ascii_whitespace()));
@@ -458,7 +458,7 @@ pub struct CmsVerified {
 /// The embedded leaf must be issued by the trust anchor; the SignerInfo
 /// ECDSA-SHA256 signature is then checked with the leaf public key.
 /// There is no unverified fallback. Role checks (KDC vs client EKU/SAN)
-/// are separate: [`require_kdc_pkinit_cert`] / [`require_client_pkinit_cert`].
+/// are separate: [`require_kdc_pkinit_cert`] / [`require_client_pkinit_san`].
 ///
 /// # Errors
 ///
@@ -485,6 +485,34 @@ pub fn cms_verify(der: &[u8], trust_anchor: &[u8]) -> Result<Vec<u8>, &'static s
 pub fn cms_verify_full(der: &[u8], trust_anchor: &[u8]) -> Result<CmsVerified, &'static str> {
     let p = cms_parts(der)?;
     cert_path_ok(&p.cert, trust_anchor)?;
+    signer_verified(p)
+}
+
+/// The KDC's [`cms_verify_full`]: the signer's chain reaches one of `anchors` through
+/// `intermediates` and the SignedData's other certificates.
+/// MIT `cms_signeddata_verify` (`pkinit_crypto_openssl.c:2087-2105`): the untrusted certificates are `pkinit_pool`'s, then the message's.
+/// MIT `cms_signeddata_verify` (`pkinit_crypto_openssl.c:2151-2187`): the chain is verified before the signature.
+///
+/// # Errors
+///
+/// MIT's text for a chain that does not verify, else [`cms_verify_full`]'s strings.
+pub fn cms_verify_anchored(
+    der: &[u8],
+    anchors: &[Vec<u8>],
+    intermediates: &[Vec<u8>],
+) -> Result<CmsVerified, String> {
+    let p = cms_parts(der).map_err(str::to_owned)?;
+    let pool: Vec<&[u8]> = intermediates
+        .iter()
+        .chain(&p.others)
+        .map(Vec::as_slice)
+        .collect();
+    verify_chain(&p.cert, anchors, &pool)
+        .map_err(|e| format!("Failed to verify received certificate {e}"))?;
+    signer_verified(p).map_err(str::to_owned)
+}
+
+fn signer_verified(p: CmsParts) -> Result<CmsVerified, &'static str> {
     let public = spki_uncompressed(&p.cert).ok_or("cms spki")?;
     // RFC 5652 §5.3: signedAttrs MUST be present when eContentType ≠ id-data.
     let sa = p.signed_attrs.as_ref().ok_or("cms signedAttrs")?;
@@ -527,21 +555,17 @@ pub fn require_kdc_pkinit_cert(cert: &[u8], realm: &str) -> Result<(), &'static 
     Ok(())
 }
 
-/// RFC 4556 §3.2.2: signer is a client cert bound to `cname` (KPClientAuth + SAN).
+/// RFC 4556 §3.2.2: signer is a client cert bound to `cname` by its SAN.
 ///
 /// # Errors
 ///
-/// `"pkinit client eku"` when `cert` lacks the id-pkinit-KPClientAuth extended key usage;
-/// `"pkinit client san"` when it has no PKINIT SAN, or the SAN realm is not `realm` or its name
-/// is not `cname` (an enterprise `cname` compares the part before its last `@`).
-pub fn require_client_pkinit_cert(
+/// `"pkinit client san"` when `cert` has no PKINIT SAN, or the SAN realm is not `realm` or its
+/// name is not `cname` (an enterprise `cname` compares the part before its last `@`).
+pub fn require_client_pkinit_san(
     cert: &[u8],
     cname: &crate::PrincipalName,
     realm: &str,
 ) -> Result<(), &'static str> {
-    if !cert_has_eku(cert, OID_KP_CLIENT_AUTH) {
-        return Err("pkinit client eku");
-    }
     let (san_realm, parts) = cert_pkinit_san(cert).ok_or("pkinit client san")?;
     if san_realm != realm {
         return Err("pkinit client san");
@@ -668,6 +692,251 @@ fn cert_path_ok(leaf: &[u8], ca: &[u8]) -> Result<(), &'static str> {
         return Err("cms ca expired");
     }
     Ok(())
+}
+
+/// Where a certificate chain failed: the depth of the certificate (0 is the end entity) and
+/// OpenSSL's `X509_verify_cert_error_string` for the error.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChainError {
+    /// Depth of the certificate the error is about.
+    pub depth: usize,
+    /// OpenSSL's text for the error.
+    pub reason: &'static str,
+}
+
+impl std::fmt::Display for ChainError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "(depth {}): {}", self.depth, self.reason)
+    }
+}
+
+/// OpenSSL's default verify depth.
+const MAX_CHAIN: usize = 100;
+
+/// `leaf`'s chain, leaf first, to one of `anchors` through `intermediates`, as OpenSSL's
+/// `X509_verify_cert` builds and checks it: issuers found by subject name, trusted ones first;
+/// each issuer a CA; then, from the anchor down, each issuer's key usage, each signature, each
+/// validity period.
+/// MIT `cms_signeddata_create` (`pkinit_crypto_openssl.c:1758-1782`): the KDC's own chain is built against its `pkinit_anchors` and `pkinit_pool`, and sent without the anchor.
+///
+/// # Errors
+///
+/// The depth and OpenSSL's text where the chain failed. Signatures are P-256 ECDSA only.
+pub fn verify_chain(
+    leaf: &[u8],
+    anchors: &[Vec<u8>],
+    intermediates: &[&[u8]],
+) -> Result<Vec<Vec<u8>>, ChainError> {
+    let fail = |depth, reason| ChainError { depth, reason };
+    let subject = |c: &[u8]| cert_name_der(c, false);
+    let mut chain = vec![leaf.to_vec()];
+    loop {
+        let depth = chain.len() - 1;
+        let current = &chain[depth];
+        let issuer = cert_name_der(current, true);
+        let signs = |c: &&[u8]| {
+            spki_uncompressed(c)
+                .zip(cert_tbs_sig(current))
+                .is_some_and(|(key, (tbs, sig))| p256_verify(&key, &tbs, &sig))
+        };
+        let named = |c: &&[u8]| issuer.is_some() && subject(c) == issuer;
+        let trusted: Vec<&[u8]> = anchors.iter().map(Vec::as_slice).filter(named).collect();
+        if let Some(a) = trusted
+            .iter()
+            .copied()
+            .find(signs)
+            .or(trusted.first().copied())
+        {
+            if a != current.as_slice() {
+                chain.push(a.to_vec());
+            }
+            break;
+        }
+        let untrusted: Vec<&[u8]> = intermediates
+            .iter()
+            .copied()
+            .filter(|c| named(c) && !chain.iter().any(|x| x == c))
+            .collect();
+        let Some(next) = untrusted
+            .iter()
+            .copied()
+            .find(signs)
+            .or(untrusted.first().copied())
+        else {
+            let self_signed = issuer.is_some() && issuer == subject(current);
+            return Err(fail(
+                depth,
+                match (self_signed, depth) {
+                    (true, 0) => "self-signed certificate",
+                    (true, _) => "self-signed certificate in certificate chain",
+                    _ => "unable to get local issuer certificate",
+                },
+            ));
+        };
+        if chain.len() > MAX_CHAIN {
+            return Err(fail(depth, "certificate chain too long"));
+        }
+        chain.push(next.to_vec());
+    }
+    let top = chain.len() - 1;
+    let mut path_len = 0u64;
+    for (depth, cert) in chain.iter().enumerate() {
+        if cert_unhandled_critical(cert) {
+            return Err(fail(depth, "unhandled critical extension"));
+        }
+        if depth == 0 {
+            continue;
+        }
+        if !(cert_basic_constraints_ca(cert) || (depth == top && cert_v1(cert))) {
+            return Err(fail(depth, "invalid CA certificate"));
+        }
+        if depth > 1 && cert_path_len(cert).is_some_and(|max| path_len > max) {
+            return Err(fail(depth, "path length constraint exceeded"));
+        }
+        if cert_name_der(cert, true) != cert_name_der(cert, false) {
+            path_len += 1;
+        }
+    }
+    let now = chrono::Utc::now();
+    for depth in (0..=top).rev() {
+        let cert = &chain[depth];
+        if depth < top {
+            let issuer = &chain[depth + 1];
+            if !cert_key_cert_sign_ok(issuer) {
+                return Err(fail(
+                    depth + 1,
+                    "key usage does not include certificate signing",
+                ));
+            }
+            let signed = spki_uncompressed(issuer)
+                .zip(cert_tbs_sig(cert))
+                .is_some_and(|(key, (tbs, sig))| p256_verify(&key, &tbs, &sig));
+            if !signed {
+                return Err(fail(depth, "certificate signature failure"));
+            }
+        }
+        let (not_before, not_after) = cert_time_window(cert)
+            .ok_or_else(|| fail(depth, "format error in certificate's notBefore field"))?;
+        if now < not_before {
+            return Err(fail(depth, "certificate is not yet valid"));
+        }
+        if now > not_after {
+            return Err(fail(depth, "certificate has expired"));
+        }
+    }
+    Ok(chain)
+}
+
+/// A critical extension other than the four this verifier reads. OpenSSL refuses a critical one
+/// it does not handle; this refuses every other, name constraints and policies included.
+fn cert_unhandled_critical(cert: &[u8]) -> bool {
+    let Some(mut cur) = walk_tbs(cert).and_then(|w| w.extensions) else {
+        return false;
+    };
+    while let Some((_, ext, rest)) = take_tlv(cur) {
+        if let Some((t, oid, after)) = take_tlv(ext)
+            && t == 0x06
+            && after.first() == Some(&0x01)
+            && take_tlv(after).is_some_and(|(_, flag, _)| flag.first().is_some_and(|b| *b != 0))
+            && ![OID_BC, OID_KU, OID_EKU, OID_SAN].contains(&oid)
+        {
+            return true;
+        }
+        cur = rest;
+    }
+    false
+}
+
+/// The `pathLenConstraint` of a certificate's basic constraints.
+fn cert_path_len(cert: &[u8]) -> Option<u64> {
+    let exts = walk_tbs(cert)?.extensions?;
+    let mut max = None;
+    each_ext(exts, |oid, val| {
+        if oid != OID_BC {
+            return false;
+        }
+        let mut cur = take_tlv(val).map_or(&[][..], |(_, seq, _)| seq);
+        while let Some((t, v, rest)) = take_tlv(cur) {
+            if t == 0x02 && v.len() <= 8 {
+                max = Some(v.iter().fold(0u64, |n, b| (n << 8) | u64::from(*b)));
+            }
+            cur = rest;
+        }
+        true
+    });
+    max
+}
+
+/// A version 1 certificate: OpenSSL's `X509_check_ca` takes a self-signed one as a CA.
+fn cert_v1(cert: &[u8]) -> bool {
+    let Some((_, body, _)) = take_tlv(cert) else {
+        return false;
+    };
+    let Some((_, tbs, _)) = take_tlv(body) else {
+        return false;
+    };
+    tbs.first() != Some(&0xa0) && cert_name_der(cert, true) == cert_name_der(cert, false)
+}
+
+/// CMS SignedData of `e_content` signed with `leaf`'s P-256 key `secret`, carrying `certs` in
+/// order.
+/// MIT `cms_signeddata_create` (`pkinit_crypto_openssl.c:1784-1811`): the chain without its trust anchor rides in the message, and the signer is named by its issuer and serial number.
+///
+/// # Errors
+///
+/// `"cms issuer"` when `leaf`'s issuer and serial number do not read; `"cms ecdsa"` when
+/// `secret` is not a valid P-256 private scalar.
+pub fn cms_sign_chain(
+    e_content: &[u8],
+    leaf: &[u8],
+    certs: &[Vec<u8>],
+    secret: &[u8; 32],
+    econtent_oid: &[u8],
+) -> Result<Vec<u8>, &'static str> {
+    let (issuer, serial) = cert_issuer_serial(leaf).ok_or("cms issuer")?;
+    let sattrs = signed_attrs_set(econtent_oid, e_content);
+    let signature = p256_sign(secret, &sattrs).ok_or("cms ecdsa")?;
+    let mut implicit = sattrs;
+    if implicit.first() == Some(&0x31) {
+        implicit[0] = 0xa0;
+    }
+    Ok(cms_wrap_signed(
+        e_content,
+        &certs.concat(),
+        &signature,
+        &issuer,
+        &serial,
+        econtent_oid,
+        Some(&implicit),
+    ))
+}
+
+/// id-ms-kp-sc-logon 1.3.6.1.4.1.311.20.2.2 (OID body).
+const OID_MS_SC_LOGON: &[u8] = &[0x2b, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x14, 0x02, 0x02];
+
+/// Whether a client certificate may authenticate with PKINIT: its extended key usage names
+/// id-pkinit-KPClientAuth (or, when `accept_secondary`, Microsoft's smart-card logon), and its
+/// key usage is present and allows digital signatures.
+/// MIT `crypto_check_cert_eku` (`pkinit_crypto_openssl.c:2499-2571`): the EKU, then the digitalSignature key usage, which must be there.
+#[must_use]
+pub fn client_eku_ok(cert: &[u8], accept_secondary: bool) -> bool {
+    let eku = cert_has_eku(cert, OID_KP_CLIENT_AUTH)
+        || (accept_secondary && cert_has_eku(cert, OID_MS_SC_LOGON));
+    if !eku {
+        return false;
+    }
+    let Some(exts) = walk_tbs(cert).and_then(|w| w.extensions) else {
+        return false;
+    };
+    let mut digital_signature = false;
+    each_ext(exts, |oid, val| {
+        if oid != OID_KU {
+            return false;
+        }
+        digital_signature = bitstring_has(val, 0);
+        true
+    });
+    digital_signature
 }
 
 struct TbsWalk<'a> {
@@ -987,6 +1256,7 @@ fn parse_x509_time(tag: u8, body: &[u8]) -> Option<chrono::DateTime<chrono::Utc>
 struct CmsParts {
     e_content: Vec<u8>,
     cert: Vec<u8>,
+    others: Vec<Vec<u8>>,
     signature: Vec<u8>,
     signed_attrs: Option<Vec<u8>>,
     e_content_type: Vec<u8>,
@@ -1037,12 +1307,18 @@ fn cms_parts(der: &[u8]) -> Result<CmsParts, &'static str> {
     if t != 0xa0 {
         return Err("certs tag");
     }
-    // IMPLICIT SET OF Certificate: body is the Certificate SEQUENCE
-    let cert = if cert_set.first() == Some(&0x30) {
-        let (tt, body, _) = take_tlv(cert_set).ok_or("cert")?;
-        tlv(tt, body)
-    } else {
+    // IMPLICIT SET OF Certificate: the signer's first, then any that complete its chain
+    let mut others = Vec::new();
+    let mut certs = cert_set;
+    while certs.first() == Some(&0x30) {
+        let (tt, body, rest) = take_tlv(certs).ok_or("cert")?;
+        others.push(tlv(tt, body));
+        certs = rest;
+    }
+    let cert = if others.is_empty() {
         cert_set.to_vec()
+    } else {
+        others.remove(0)
     };
     let (t, signers, _) = take_tlv(rest).ok_or("signers")?;
     if t != 0x31 {
@@ -1072,12 +1348,14 @@ fn cms_parts(der: &[u8]) -> Result<CmsParts, &'static str> {
     Ok(CmsParts {
         e_content,
         cert,
+        others,
         signature: sig.to_vec(),
         signed_attrs,
         e_content_type,
     })
 }
 
+#[cfg(any(test, feature = "test-ca"))]
 pub(super) fn pem(kind: &str, der: &[u8]) -> String {
     let b = base64(der);
     let mut out = format!("-----BEGIN {kind}-----\n");
@@ -1091,6 +1369,7 @@ pub(super) fn pem(kind: &str, der: &[u8]) -> String {
     out
 }
 
+#[cfg(any(test, feature = "test-ca"))]
 fn base64(data: &[u8]) -> String {
     const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::new();

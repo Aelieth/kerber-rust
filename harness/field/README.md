@@ -159,6 +159,7 @@ harness/field/run.sh ad-trust --ref plan-12 --leg both   # the real AD DC: upgra
 harness/field/run.sh --profile weekly --ref plan-12 --only upgrade,kpasswd --leg both   # 464's cells, on demand
 harness/field/run.sh --profile weekly --ref plan-12 --only upgrade,kdc-profile --leg both   # kdc.conf's cells, on demand
 harness/field/run.sh --profile weekly --ref plan-12 --only upgrade,kdb-writes --leg both   # the store's write cells, on demand
+harness/field/run.sh --profile weekly --ref plan-12 --only upgrade,pkinit --leg both   # PKINIT's cells (the L6 certificates), on demand
 harness/field/run.sh --profile weekly --ref plan-12 --only upgrade,replica --leg both   # the replica cells (lab.sh up kdc2 first), on demand
 harness/field/run.sh --profile weekly --ref plan-12 --only upgrade,rollback --leg both   # "Going back to MIT", on demand (leaves kdc on MIT)
 harness/field/run.sh --profile kill-loop --ref plan-12   # SW-3's kill loop (lab.sh up kdc2 first), on demand: upgrade, then kill-loop
@@ -272,6 +273,7 @@ harness/field/run.sh --profile kill-loop --ref plan-12   # SW-3's kill loop (lab
 | `klldap-swap` | nightly, weekly | mit, rust | none: this host's docker | f-F3-mit (mit leg), f-F3 (rust leg) | about 4 min (mit) and 8 min (rust) with BuildKit's cache warm; much longer cold (see below) |
 | `kdc-profile` | weekly; on demand with `--only upgrade,kdc-profile` for a change to how kdc.conf is read | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it, its kdc.conf restored after each cell | none: the CF cells' first record | about 6 / 6 min |
 | `kdb-writes` | weekly; on demand with `--only upgrade,kdb-writes` for a change to how the store writes | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it, its scratch principals and policies removed at the end | none: the SW cells' first record | about 1 / 1 min |
+| `pkinit` | weekly; on demand with `--only upgrade,pkinit` for a change to PKINIT | mit, rust | client2: `$PK_SNAPSHOT_CLIENT2` when set (reset), else as it stands; kdc as `upgrade` left it, from a snapshot with the L6 certificates, its kdc.conf restored after | none: the PK cells' first record | about 2 / 2 min |
 | `kpasswd` | weekly, last but `replica` (on a leg that allows it, it changes krbtgt's and kadmin/changepw's keys); on demand with `--only upgrade,kpasswd` for a change to kpasswd or chpass | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it | none: the KH cells' first record | about 2 / 2 min |
 | `rollback` | weekly, last but `replica` (it leaves kdc on MIT, and `replica` resets it); on demand with `--only upgrade,rollback` | mit, rust | kdc as `upgrade` left it, on MIT afterwards; client2: `f4-mit` / `rust-ssh` as the run left it | none: SW-2's export bar, docs/install.md "Going back to MIT" | about 1 / 3 min (estimate; the rust leg's dnf install from the mirrors) |
 | `replica` | weekly, last: kdc is reset to the MIT primary; on demand with `--only upgrade,replica`, and `FIELD_REPLICA_BAKED=1 --only replica --leg rust` for the parent's baked programs | mit, rust | kdc: `f4-mit` in both legs (reset); kdc2: `f4-mit-f44` / `rust-replica-f44` (up for the preflight, reset at the start and the end, then parked); client2: `f4-mit` (reset) | none: the REP cells' first record | about 6 / 7 min |
@@ -372,6 +374,17 @@ would remove it.
   (the TGT is issued, the account is denied); the kit's own `--validate`. Every
   realm and directory change is undone, also when the scenario stops early.
   Recorded: the cache's size.
+- **`pkinit.sh`** (PK, client2's MIT kinit against kdc, the L6 certificates, P-256): with no
+  `pkinit_identity` both KDCs start and log MIT's `preauth pkinit failed to initialize:` line, and
+  alice's certificate kinit is not offered PKINIT; with `[kdcdefaults]` `pkinit_identity` and
+  `pkinit_anchors` there is no such line and alice's certificate gets a TGT; `kinit -n` gets an
+  anonymous ticket (`WELLKNOWN/ANONYMOUS` is made for the cell when missing, and deleted after); an
+  identity file that is not there gives MIT's `Cannot read certificate file '<file>': (null)`; the
+  realm's `pkinit_identity` wins over `[kdcdefaults]`'. When client2 also holds `alice-noeku` (alice's
+  SAN, no extended key usage), its kinit is refused with 77 (`Inconsistent key purpose` in the KDC's
+  verify-failure line), and with `pkinit_eku_checking = none` it gets a TGT. The RSA KDC identity's startup line is
+  recorded, not graded: MIT serves with it, and kerber-rust's KDC identity is P-256 only. kdc.conf is
+  restored with krb5kdc restarted at the end, also when the scenario stops early.
 - **`kdc-profile.sh`** (CF, client2's MIT kinit against kdc): with kdc.conf's
   `[libdefaults] clockskew = 60` and client2's clock 120 s ahead (chronyd stopped,
   then started again to step it back) cfskew's AS-REQ is refused for skew, and

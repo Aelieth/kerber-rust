@@ -122,14 +122,17 @@ fn tgs_part(store: &PrincipalStore, issued: &krb5_kdc::IssuedTgs) -> EncTicketPa
     .unwrap()
 }
 
-fn pkinit_as(store: &PrincipalStore, nonce: u32) -> Result<krb5_kdc::IssuedAs, Error> {
-    let ca = store.pkinit_ca().expect("CA").clone();
+fn pkinit_as(
+    store: &PrincipalStore,
+    ca: &krb5_types::pkinit::PkinitCa,
+    nonce: u32,
+) -> Result<krb5_kdc::IssuedAs, Error> {
     let kp = p256_generate().unwrap();
     let mut req = as_req(user(), TEST_REALM, nonce, None).unwrap();
     let body = encode(&req.0.req_body).unwrap();
     let cksum = krb5_types::pkinit::kdc_req_body_checksum(&body);
     req.0.padata = Some(vec![
-        pa_pk_as_req(&kp.public, &ca, Some(cksum.as_slice())).unwrap(),
+        pa_pk_as_req(&kp.public, ca, Some(cksum.as_slice())).unwrap(),
     ]);
     krb5_kdc::issue_as(store, &req)
 }
@@ -137,8 +140,8 @@ fn pkinit_as(store: &PrincipalStore, nonce: u32) -> Result<krb5_kdc::IssuedAs, E
 #[test]
 fn pkinit_tgt_has_no_hw_authent() {
     let (mut store, _) = bootstrap_documented().unwrap();
-    store.enable_pkinit_ca().unwrap();
-    let part = tgt_part_a3_r32(&store, &pkinit_as(&store, 32001).unwrap());
+    let ca = krb5_testkit::enable_pkinit(&mut store);
+    let part = tgt_part_a3_r32(&store, &pkinit_as(&store, &ca, 32001).unwrap());
     assert!(part.flags.bit(flag_bit::PRE_AUTHENT));
     assert!(!part.flags.bit(flag_bit::HW_AUTHENT));
 }
@@ -146,9 +149,9 @@ fn pkinit_tgt_has_no_hw_authent() {
 #[test]
 fn pkinit_client_requires_hwauth_is_needed_hw_preauth() {
     let (mut store, _) = bootstrap_documented().unwrap();
-    store.enable_pkinit_ca().unwrap();
+    let ca = krb5_testkit::enable_pkinit(&mut store);
     or_attr(&mut store, &user(), KDB_REQUIRES_HW_AUTH);
-    match pkinit_as(&store, 32002).unwrap_err() {
+    match pkinit_as(&store, &ca, 32002).unwrap_err() {
         Error::Protocol {
             code,
             text,
@@ -177,10 +180,10 @@ fn pkinit_client_requires_hwauth_is_needed_hw_preauth() {
 // oracle: differential-gate.sh tgs-hw-preauth-flag
 fn pkinit_tgs_requires_hwauth_is_no_hw_preauth() {
     let (mut store, _) = bootstrap_documented().unwrap();
-    store.enable_pkinit_ca().unwrap();
+    let ca = krb5_testkit::enable_pkinit(&mut store);
     let host = documented_host();
     or_attr(&mut store, &host, KDB_REQUIRES_HW_AUTH);
-    let issued = pkinit_as(&store, 32003).unwrap();
+    let issued = pkinit_as(&store, &ca, 32003).unwrap();
     let tgs = TgsReqBuilder::new(
         issued.rep.0.ticket.clone(),
         &issued.session_key,

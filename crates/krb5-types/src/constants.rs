@@ -132,6 +132,8 @@ pub mod err {
     pub const WRONG_REALM: i32 = 68;
     /// KRB_AP_ERR_USER_TO_USER_REQUIRED
     pub const USER_TO_USER_REQUIRED: i32 = 69;
+    /// KDC_ERR_INCONSISTENT_KEY_PURPOSE (PKINIT)
+    pub const INCONSISTENT_KEY_PURPOSE: i32 = 77;
     /// KRB5KRB_AP_ERR_TKT_INVALID (`krb5_err.et` offset 145): "Ticket has
     /// invalid flag set". A library-local code, not an RFC 4120 wire number.
     /// MIT `errcode_to_protocol` (`kdc_util.c:691-697`): clamps offsets over 128 to `GENERIC`

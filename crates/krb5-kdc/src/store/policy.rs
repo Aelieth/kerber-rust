@@ -392,7 +392,6 @@ impl PrincipalStore {
         self.policy.disable_lockout = conf.disable_lockout;
         self.policy.disable_pac = conf.disable_pac;
         self.policy.restrict_anon = conf.restrict_anon;
-        self.policy.pkinit_require_freshness = conf.pkinit_require_freshness;
         self.policy
             .host_based_services
             .clone_from(&conf.host_based_services);
@@ -402,9 +401,6 @@ impl PrincipalStore {
         self.policy
             .encrypted_challenge_indicator
             .clone_from(&conf.encrypted_challenge_indicator);
-        self.policy
-            .pkinit_indicators
-            .clone_from(&conf.pkinit_indicators);
         self.policy
             .spake_preauth_indicators
             .clone_from(&conf.spake_preauth_indicators);
@@ -556,6 +552,9 @@ impl PrincipalStore {
         if let Some(conf) = kdc {
             self.apply_kdc_conf(conf)?;
         }
+        let pkinit = krb5_config::PkinitParams::for_realm(&profile.kdc_context, &self.realm);
+        self.policy.pkinit_require_freshness = pkinit.require_freshness;
+        self.policy.pkinit_indicators = pkinit.indicators;
         self.apply_kdcpreauth_plugins(kdc, krb5);
         self.apply_otp(kdc, krb5);
         self.apply_kdcpolicy_plugins(kdc, krb5);
@@ -563,6 +562,30 @@ impl PrincipalStore {
         self.apply_pwqual_plugins(kdc, krb5);
         self.apply_kadm5_hook_plugins(kdc, krb5);
         Ok(())
+    }
+
+    /// Initialize the realm's PKINIT context from the KDC profile when `[plugins] kdcpreauth`
+    /// loads the module; `Some` is MIT's message when it does not initialize, and the realm then
+    /// serves without PKINIT.
+    /// MIT `load_preauth_plugins` (`kdc/kdc_preauth.c:207-219`): only a loaded module initializes, and one whose init fails is left out.
+    pub fn init_pkinit(&mut self, profile: &krb5_config::ProfileSet) -> Option<String> {
+        self.env.pkinit = None;
+        if !crate::plugins::startup_module_loaded(&self.policy.kdcpreauth, "pkinit") {
+            return None;
+        }
+        let params = krb5_config::PkinitParams::for_realm(&profile.kdc_context, &self.realm);
+        match crate::pkinit::PkinitKdc::init(&params, &self.realm) {
+            Ok(kdc) => {
+                self.env.pkinit = Some(std::sync::Arc::new(kdc));
+                None
+            }
+            Err(msg) => Some(msg),
+        }
+    }
+
+    /// Set the realm's PKINIT context, or clear it.
+    pub fn set_pkinit(&mut self, pkinit: Option<crate::pkinit::PkinitKdc>) {
+        self.env.pkinit = pkinit.map(std::sync::Arc::new);
     }
 
     /// Overlay `[libdefaults]` `allow_rc4` / `allow_des3` / `permitted_enctypes`.

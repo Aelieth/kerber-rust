@@ -120,7 +120,7 @@ fn verify_support_unpermitted_offer_is_preauth_failed() {
 #[test]
 fn pkinit_hint_is_16_147() {
     let (mut store, _) = bootstrap_documented().unwrap();
-    store.enable_pkinit_ca().unwrap();
+    let _ca = krb5_testkit::enable_pkinit(&mut store);
     let req = as_req(user(), TEST_REALM, 30004, None).unwrap();
     let err = krb5_kdc::issue_as(&store, &req).unwrap_err();
     let Error::PreauthRequired { e_data } = err else {

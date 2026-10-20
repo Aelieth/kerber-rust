@@ -120,12 +120,13 @@ pub use localaddr::{host_addresses_from, init_creds_addresses, os_localaddr};
 pub use lock_file::{FileLock, lock_file, lock_file_how};
 pub use preauth::{
     apply_strengthen, armor_key, attach_fast, attach_fast_with_options, build_fast_armor,
-    fx_fast_padata, fx_fast_padata_over, pa_for_user, pa_pac_options, pa_pk_as_req,
-    pa_pk_as_req_agile, pa_pk_as_req_cn, pa_pk_as_req_signed, pa_pk_as_req_spki,
+    fx_fast_padata, fx_fast_padata_over, pa_for_user, pa_pac_options, pa_pk_as_req_signed,
     pa_pk_as_req_unsigned, pa_s4u_x509_user, pa_spake_response, pa_spake_support, pkinit_reply_key,
     pkinit_reply_key_agile, unwrap_fast_rep, unwrap_fast_rep_checked, verify_fast_finished,
     verify_req_enc_pa_rep, verify_s4u2self_reply,
 };
+#[cfg(any(test, feature = "test-ca"))]
+pub use preauth::{pa_pk_as_req, pa_pk_as_req_agile, pa_pk_as_req_cn, pa_pk_as_req_spki};
 pub use replay::{ReplayCache, ReplayKey};
 pub use safe_priv::{
     build_krb_cred, build_krb_priv, build_krb_priv_chained, build_krb_priv_chained_from,

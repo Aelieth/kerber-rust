@@ -189,20 +189,17 @@ fn realm_booleans_win_over_later_kdcdefaults() {
 [realms]
     KERBER.TEST = {
         restrict_anonymous_to_tgt = false
-        pkinit_require_freshness = false
         disable_pac = false
         reject_bad_transit = false
     }
 [kdcdefaults]
     restrict_anonymous_to_tgt = true
-    pkinit_require_freshness = true
     disable_pac = true
     reject_bad_transit = true
 ",
     )
     .unwrap();
     assert!(!conf.restrict_anon);
-    assert!(!conf.pkinit_require_freshness);
     assert!(!conf.disable_pac);
     assert!(!conf.reject_bad_transit);
 }

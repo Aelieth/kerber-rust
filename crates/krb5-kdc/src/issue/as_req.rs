@@ -992,7 +992,7 @@ fn preauth_hint_edata(
     // asked and the request advertised the type.
     // MIT `hint_list_finish` (`kdc_preauth.c:895-898`): that token goes last in the hint list;
     // cookie is still last.
-    if store.pkinit_ca().is_some()
+    if store.pkinit().is_some()
         && request_padata
             .into_iter()
             .flatten()

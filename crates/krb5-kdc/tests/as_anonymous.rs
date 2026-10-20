@@ -116,8 +116,7 @@ fn restrict_anon_as_to_local_tgt() {
 #[test]
 fn anonymous_pkinit_issues_kx() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    store.enable_pkinit_ca().expect("PKINIT CA");
-    let ca = store.pkinit_ca().expect("CA").clone();
+    let ca = krb5_testkit::enable_pkinit(&mut store);
     store.policy.pkinit_indicators = vec!["pkinit".into()];
     insert_anonymous(&mut store);
     let kp = p256_generate().expect("client ECDH");
@@ -185,7 +184,7 @@ fn anonymous_pkinit_issues_kx() {
 #[test]
 fn restrict_anon_tgs_to_host() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    store.enable_pkinit_ca().expect("PKINIT CA");
+    let _ca = krb5_testkit::enable_pkinit(&mut store);
     insert_anonymous(&mut store);
     let issued = unsigned_anon_as(&store, 462);
     store.policy.restrict_anon = true;
@@ -210,7 +209,7 @@ fn restrict_anon_tgs_to_host() {
 #[test]
 fn anonymous_tgt_fast_armor() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    store.enable_pkinit_ca().expect("PKINIT CA");
+    let _ca = krb5_testkit::enable_pkinit(&mut store);
     insert_anonymous(&mut store);
     let issued = unsigned_anon_as(&store, 464);
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -235,7 +234,7 @@ fn anonymous_tgt_fast_armor() {
 #[test]
 fn anon_unsigned_authpack_named_client_is_preauth_failed() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    store.enable_pkinit_ca().expect("PKINIT CA");
+    let _ca = krb5_testkit::enable_pkinit(&mut store);
     insert_anonymous(&mut store);
     let kp = p256_generate().expect("client ECDH");
     let mut req = as_req(wellknown_anonymous(), TEST_REALM, 466, None).unwrap();
@@ -260,7 +259,7 @@ fn anon_unsigned_authpack_named_client_is_preauth_failed() {
 #[test]
 fn unsigned_pkinit_named_is_preauth_failed() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    store.enable_pkinit_ca().expect("PKINIT CA");
+    let _ca = krb5_testkit::enable_pkinit(&mut store);
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let kp = p256_generate().expect("client ECDH");
     let mut req = as_req(cname, TEST_REALM, 461, None).unwrap();
@@ -288,7 +287,7 @@ fn unsigned_pkinit_named_is_preauth_failed() {
 #[test]
 fn an_anonymous_reply_stamps_the_anonymous_principals_last_success() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    store.enable_pkinit_ca().expect("PKINIT CA");
+    let _ca = krb5_testkit::enable_pkinit(&mut store);
     insert_anonymous(&mut store);
     let attributes = store
         .get_name(&wellknown_anonymous())

@@ -1,4 +1,5 @@
-//! Test CA used as a MIT `pkinit_anchors` FILE trust anchor.
+//! Test CA used as a MIT `pkinit_anchors` FILE trust anchor. Only test builds carry it (the
+//! `test-ca` feature): a release KDC trusts the operator's `pkinit_anchors`.
 //!
 //! `cms_wrap` lives here (it names [`PkinitCa`]) so `cms` does not
 //! import this module.
@@ -233,12 +234,11 @@ fn pem_ec_key(secret: &[u8; 32], public: &[u8]) -> String {
     pem("EC PRIVATE KEY", &tlv(0x30, &body))
 }
 
-/// Test CA used as a MIT `pkinit_anchors` FILE trust anchor. `Debug` never shows the private
-/// scalar.
-#[derive(Clone)]
+/// Test CA used as a MIT `pkinit_anchors` FILE trust anchor. Its private scalar is wiped on drop,
+/// and `Debug` never shows it.
 pub struct PkinitCa {
     /// CA private scalar.
-    pub ca_secret: [u8; 32],
+    pub(crate) ca_secret: zeroize::Zeroizing<[u8; 32]>,
     /// CA certificate (DER).
     pub ca_cert: Vec<u8>,
     /// Uncompressed P-256 public key.
@@ -278,7 +278,7 @@ impl PkinitCa {
             not_after,
         )?;
         Some(Self {
-            ca_secret,
+            ca_secret: zeroize::Zeroizing::new(ca_secret),
             ca_cert,
             ca_public,
         })
@@ -298,7 +298,7 @@ impl PkinitCa {
             "KERBER.TEST",
         )?;
         Some(Self {
-            ca_secret,
+            ca_secret: zeroize::Zeroizing::new(ca_secret),
             ca_cert,
             ca_public,
         })
@@ -318,7 +318,7 @@ impl PkinitCa {
             "KERBER.TEST",
         )?;
         Some(Self {
-            ca_secret,
+            ca_secret: zeroize::Zeroizing::new(ca_secret),
             ca_cert,
             ca_public,
         })
@@ -476,6 +476,13 @@ impl PkinitCa {
             realm,
         )?;
         Some((cert, s, p))
+    }
+
+    /// A KDC identity for `realm` issued by this CA (EKU KPKdc, SAN `krbtgt/REALM@REALM`).
+    #[must_use]
+    pub fn kdc_pkinit_identity(&self, realm: &str) -> Option<super::PkinitIdentity> {
+        let (cert, key, _) = self.kdc_identity_for(realm)?;
+        Some(super::PkinitIdentity::from_key(cert, key))
     }
 
     /// Client cert + scalar (EKU KPClientAuth, SAN from `cn`).

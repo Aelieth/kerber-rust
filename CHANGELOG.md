@@ -29,10 +29,12 @@ any other `###` heading.
 - **admin/gss.** kadmind and kpropd read the profile once, kdc.conf first: no request opens krb5.conf or kdc.conf, and kpropd's skew is the profile's. Lab beside MIT.
 - **gss/protocol.** GSS's receive window is MIT's 64-number bitmap; the replay cache keeps MIT's tag for the clock skew, and a full cache refuses a new tag, not a live one.
 - **admin.** The iprop client checks the primary's INIT reply MIC whatever its verifier, as MIT's `authgss_refresh`; an empty or non-GSS verifier skipped the check.
+- **kdc.** PKINIT trusts kdc.conf's `pkinit_anchors` and signs with `pkinit_identity`, not a CA it made, now test-only. KDC identity P-256 only. Lab beside MIT.
 
 ### Added
 
 - **kpropd.** With `iprop_enable` a replica polls its primary as `kiprop/<host>`, applies updates, asks for a full resync and backs off, as MIT's `do_iprop`; `-A`, `-P`, `-t`.
+- **config/kdc.** PKINIT reads `pkinit_identity`, `pkinit_anchors`, `pkinit_pool` and `pkinit_eku_checking` as MIT's; a failure leaves it off with MIT's line. Lab beside MIT.
 
 ### Changed
 
@@ -45,6 +47,7 @@ any other `###` heading.
 - **kdc.** One store can serve the KDC and kadmind: a `SharedDump` is a `SharedStore` (`Arc<RwLock<dyn Store>>`); `PrincipalStore::try_new` returns a CSPRNG failure.
 - **kdc.** A principal change is appended to the database and flushed; readers take only the appended changes, a torn one is cut, and replaced records are compacted away.
 - **client.** A client program reads its profile once, at start: `init_context` returns a `ClientContext`, which the AS, TGS, KCM, ccache and keytab calls take.
+- **kdc.** A PKINIT client chain is built through `pkinit_pool` as OpenSSL builds it, and a key purpose `pkinit_eku_checking` refuses is error 77, as MIT's.
 
 ### Tests and CI
 

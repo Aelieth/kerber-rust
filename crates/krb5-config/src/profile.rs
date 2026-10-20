@@ -509,6 +509,7 @@ fn parse_into(
     let mut libdefaults_exact = false;
     let mut libdefaults_depth = 0usize;
     let mut libdefaults_realm: Option<String> = None;
+    let mut kdcdefaults_depth = 0usize;
     let mut realm: Option<String> = None;
     let mut capaths_client: Option<String> = None;
     let text = join_subsection_braces(text)?;
@@ -551,6 +552,7 @@ fn parse_into(
             libdefaults_exact = s == "libdefaults";
             libdefaults_depth = 0;
             libdefaults_realm = None;
+            kdcdefaults_depth = 0;
             realm = None;
             capaths_client = None;
             plugins.observe_header(plugin_profile, s, false);
@@ -561,6 +563,7 @@ fn parse_into(
             libdefaults_exact = false;
             libdefaults_depth = 0;
             libdefaults_realm = None;
+            kdcdefaults_depth = 0;
             realm = None;
             capaths_client = None;
             plugins.observe_header(plugin_profile, "plugins", true);
@@ -601,6 +604,18 @@ fn parse_into(
                 None
             };
             parse_libdefaults(conf, seen, line, top, node);
+        }
+        if section == "kdcdefaults" {
+            if opens_subsection(line) {
+                kdcdefaults_depth += 1;
+            } else if line.starts_with('}') {
+                kdcdefaults_depth = kdcdefaults_depth.saturating_sub(1);
+            } else if kdcdefaults_depth == 0
+                && let Some((k, v)) = split_kv(line)
+                && k.starts_with("pkinit_")
+            {
+                conf.kdcdefaults_pkinit.push((k.to_owned(), v));
+            }
         }
         if section == "domain_realm"
             && let Some((d, r)) = split_kv(line)
@@ -1021,6 +1036,12 @@ fn parse_realm_line(conf: &mut Krb5Conf, realm: &str, line: &str) {
     let Some((k, v)) = split_kv(line) else {
         return;
     };
+    if k.starts_with("pkinit_") {
+        conf.pkinit
+            .entry(realm.to_owned())
+            .or_default()
+            .push((k.to_owned(), v.clone()));
+    }
     let ep = parse_endpoint(&v);
     match k.to_ascii_lowercase().as_str() {
         "kdc" => conf.kdcs.entry(realm.to_owned()).or_default().push(ep),

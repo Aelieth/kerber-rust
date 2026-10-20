@@ -1,22 +1,27 @@
 //! RFC 4556 PKINIT PA-DATA types (AuthPack / PA-PK-AS-REQ / PA-PK-AS-REP).
 //!
 //! CMS SignedData lives in `cms` (`pkinit_crypto_openssl.c`
-//! `cms_signeddata_create` / `cms_signeddata_verify`); the test CA
-//! lives in `ca`.
+//! `cms_signeddata_create` / `cms_signeddata_verify`); identities and CA files are loaded in
+//! `identity` (`pkinit_identity.c`); the test CA, which only test builds carry, lives in `ca`.
 
 use crate::{Checksum, KerberosTime, Microseconds, OctetString};
 use rasn::prelude::*;
 
+#[cfg(any(test, feature = "test-ca"))]
 mod ca;
 mod cms;
+mod identity;
 
+#[cfg(any(test, feature = "test-ca"))]
 pub use ca::{PkinitCa, cms_wrap};
 pub use cms::{
-    CmsAlgorithmIdentifier, CmsContentInfo, CmsEncapContentInfo, CmsSignedData, CmsSignerInfo,
-    CmsVerified, cms_extract_unsigned, cms_sign_leaf, cms_sign_leaf_oids, cms_unwrap, cms_verify,
-    cms_verify_full, cms_wrap_signed, cms_wrap_unsigned, parse_identity_pem, parse_pem,
-    require_client_pkinit_cert, require_kdc_pkinit_cert,
+    ChainError, CmsAlgorithmIdentifier, CmsContentInfo, CmsEncapContentInfo, CmsSignedData,
+    CmsSignerInfo, CmsVerified, client_eku_ok, cms_extract_unsigned, cms_sign_chain, cms_sign_leaf,
+    cms_sign_leaf_oids, cms_unwrap, cms_verify, cms_verify_anchored, cms_verify_full,
+    cms_wrap_signed, cms_wrap_unsigned, parse_identity_pem, parse_pem, require_client_pkinit_san,
+    require_kdc_pkinit_cert, verify_chain,
 };
+pub use identity::{PkinitIdentity, load_ca_certs, load_identity};
 
 /// PA-PK-AS-REQ ::= SEQUENCE { signedAuthPack, trustedCertifiers, kdcPkId }
 ///

@@ -11,7 +11,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use krb5_types::PrincipalName;
 use krb5_types::pac::{PacIdentity, RpcSid};
-use krb5_types::pkinit::PkinitCa;
 
 use crate::dblock::DbLockHold;
 use crate::error::Error;
@@ -67,7 +66,7 @@ pub fn resolve_alias_id<'a>(
     Some(id)
 }
 
-/// Process-local KDC state (the PKINIT CA). Not dump/persist rows.
+/// Process-local KDC state (the PKINIT context). Not dump/persist rows.
 ///
 /// The KDC keeps no replay cache of its own: a retransmit is answered by the lookaside, and a
 /// replay it no longer holds is processed again.
@@ -75,8 +74,8 @@ pub fn resolve_alias_id<'a>(
 /// MIT `enc_ts_verify` (`kdc/kdc_preauth_encts.c:47-118`): a timestamp inside the skew verifies again.
 #[derive(Clone, Debug)]
 pub struct KdcEnv {
-    /// PKINIT test CA.
-    pub pkinit_ca: Option<PkinitCa>,
+    /// The realm's PKINIT context, when the module initialized.
+    pub pkinit: Option<std::sync::Arc<crate::pkinit::PkinitKdc>>,
 }
 
 impl Default for KdcEnv {
@@ -86,10 +85,10 @@ impl Default for KdcEnv {
 }
 
 impl KdcEnv {
-    /// No PKINIT CA.
+    /// No PKINIT context.
     #[must_use]
     pub fn new() -> Self {
-        Self { pkinit_ca: None }
+        Self { pkinit: None }
     }
 }
 
@@ -147,9 +146,9 @@ pub trait PrincipalRead: Send + Sync {
     /// locked database (MIT `KRB5_KDB_CANTLOCK_DB`). [`PrincipalStore`] and [`MemoryStore`] never
     /// fail.
     fn list_principals(&self) -> Result<Vec<Principal>, Error>;
-    /// PKINIT CA if provisioned.
-    fn pkinit_ca(&self) -> Option<&PkinitCa> {
-        self.env().pkinit_ca.as_ref()
+    /// The realm's PKINIT context, when the module initialized.
+    fn pkinit(&self) -> Option<&crate::pkinit::PkinitKdc> {
+        self.env().pkinit.as_deref()
     }
     /// Give `p`, an entry this store returned, its lockout attributes as they are now: the KDC
     /// records them after the entry was read. A backend that keeps them in the entry has
@@ -244,12 +243,6 @@ pub trait PrincipalWrite: PrincipalRead {
     /// [`Error::NotFound`] when no principal is stored under `id`, and [`Error::Db`] when
     /// [`PrincipalStore`] then cannot write its configured store file.
     fn remove_id(&mut self, id: &str) -> Result<(), Error>;
-    /// Provision a PKINIT CA on the process-local env.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Crypto`] when the P-256 CA key cannot be generated.
-    fn enable_pkinit_ca(&mut self) -> Result<&PkinitCa, Error>;
 }
 
 /// Reload / persist gate.
@@ -371,6 +364,7 @@ impl MemoryStore {
         m.domain_sid = store.domain_sid().clone();
         m.next_rid = store.next_rid();
         m.policies.clone_from(store.policies());
+        m.env = store.env().clone();
         for p in store.debug_principals() {
             m.map.insert(p.id(), p.clone());
         }
@@ -449,15 +443,6 @@ impl PrincipalWrite for MemoryStore {
         self.map.remove(id).ok_or(Error::NotFound)?;
         Ok(())
     }
-    fn enable_pkinit_ca(&mut self) -> Result<&PkinitCa, Error> {
-        if self.env.pkinit_ca.is_none() {
-            self.env.pkinit_ca = PkinitCa::generate();
-        }
-        self.env
-            .pkinit_ca
-            .as_ref()
-            .ok_or_else(|| Error::Crypto("pkinit CA generate failed".into()))
-    }
 }
 
 impl StoreLifecycle for MemoryStore {
@@ -531,9 +516,6 @@ impl PrincipalWrite for PrincipalStore {
     }
     fn remove_id(&mut self, id: &str) -> Result<(), Error> {
         self.change(|s| s.remove_id_inner(id))?
-    }
-    fn enable_pkinit_ca(&mut self) -> Result<&PkinitCa, Error> {
-        PrincipalStore::enable_pkinit_ca(self)
     }
 }
 

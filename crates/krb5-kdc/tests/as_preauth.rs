@@ -958,8 +958,7 @@ fn edata_int_types(ed: &[u8]) -> Vec<i32> {
 #[test]
 fn pkinit_unknown_dh_is_typed_edata_with_cookie() {
     let (mut store, _) = bootstrap_documented().unwrap();
-    store.enable_pkinit_ca().expect("PKINIT CA");
-    let ca = store.pkinit_ca().expect("CA").clone();
+    let ca = krb5_testkit::enable_pkinit(&mut store);
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let p = vec![0xffu8; 64];
     let y = vec![0x02];

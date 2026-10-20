@@ -499,10 +499,13 @@ pub(crate) fn wrap_fast_rep(
 /// [`Error::Protocol`] with `PREAUTH_EXPIRED` when the AuthPack's freshness token is short,
 /// expired, or does not verify under a local krbtgt key; `SKEW` when the AuthPack ctime is outside
 /// the clock skew; `DH_KEY_PARAMETERS_NOT_ACCEPTED` when a signed request has no DH public value,
-/// or its group or value is not accepted; `PREAUTH_FAILED` for every other check that fails (the
-/// request encoding, a KDC with no PKINIT CA, the CMS signature, the client certificate, the
-/// eContentType, the paChecksum, a required freshness token, the ctime, an unsigned
-/// request from a client that is not anonymous, the reply signature). [`Error::Crypto`] when the
+/// or its group or value is not accepted; `INCONSISTENT_KEY_PURPOSE` when the client
+/// certificate's key purpose is not one `pkinit_eku_checking` accepts; `PREAUTH_FAILED` for every
+/// other check that fails (the request encoding, a KDC with no PKINIT context, the CMS signature,
+/// the client certificate's chain or name, the eContentType, the paChecksum, a required freshness
+/// token, the ctime, an unsigned request from a client that is not anonymous, the reply
+/// signature); [`Error::PreauthModule`] with MIT's text when the KDC's own certificate does not
+/// verify. [`Error::Crypto`] when the
 /// key agreement or the reply-key derivation fails, and [`Error::Asn1`] when the reply does not
 /// encode. A request without PA-PK-AS-REQ is `Ok(None)`.
 pub(crate) fn process_pkinit(
@@ -522,66 +525,79 @@ pub(crate) fn process_pkinit(
         // MIT `pkinit_server_verify_padata` (`pkinit_srv.c:479-483`): a strict decode. No lenient fallback.
         Err(_) => return Err(crate::asn1_text::preauth_decode_failure(raw, false)),
     };
-    let ca = store
-        .pkinit_ca()
+    let kdc = store
+        .pkinit()
         .ok_or_else(|| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
     let req_cname = decode::<AsReq>(as_req_der)
         .ok()
         .and_then(|r| r.0.req_body.cname)
         .unwrap_or_else(|| cname.clone());
-    let (inner, is_signed) = match krb5_types::pkinit::cms_verify_full(&cms, &ca.ca_cert) {
-        Ok(verified) => {
-            if verified.e_content_type.as_slice() != krb5_types::pkinit::ECONTENT_AUTHDATA {
-                tracing::info!(
-                    event = krb5_log::events::KDC_PKINIT,
-                    component = "krb5-kdc",
-                    outcome = "denied",
-                    error = "pkinit eContentType"
-                );
-                return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
+    let (inner, is_signed) =
+        match krb5_types::pkinit::cms_verify_anchored(&cms, &kdc.anchors, &kdc.pool) {
+            Ok(verified) => {
+                if verified.e_content_type.as_slice() != krb5_types::pkinit::ECONTENT_AUTHDATA {
+                    tracing::info!(
+                        event = krb5_log::events::KDC_PKINIT,
+                        component = "krb5-kdc",
+                        outcome = "denied",
+                        error = "pkinit eContentType"
+                    );
+                    return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
+                }
+                if let Err(e) =
+                    krb5_types::pkinit::require_client_pkinit_san(&verified.cert, cname, realm)
+                {
+                    tracing::info!(
+                        event = krb5_log::events::KDC_PKINIT,
+                        component = "krb5-kdc",
+                        outcome = "denied",
+                        error = e
+                    );
+                    return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
+                }
+                // MIT `pkinit_eku_authorize` (`plugins/preauth/pkinit/pkinit_srv.c:1171-1192`): after the name, the key purpose, unless `pkinit_eku_checking = none`.
+                if kdc.require_eku
+                    && !krb5_types::pkinit::client_eku_ok(&verified.cert, kdc.accept_secondary_eku)
+                {
+                    tracing::info!(
+                        event = krb5_log::events::KDC_PKINIT,
+                        component = "krb5-kdc",
+                        outcome = "denied",
+                        error = "pkinit client eku"
+                    );
+                    return Err(proto(err::INCONSISTENT_KEY_PURPOSE, status::PREAUTH_FAILED));
+                }
+                (verified.e_content, true)
             }
-            if let Err(e) =
-                krb5_types::pkinit::require_client_pkinit_cert(&verified.cert, cname, realm)
-            {
-                tracing::info!(
-                    event = krb5_log::events::KDC_PKINIT,
-                    component = "krb5-kdc",
-                    outcome = "denied",
-                    error = e
-                );
-                return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
+            Err(e) => {
+                let Some(inner) = krb5_types::pkinit::cms_extract_unsigned(&cms) else {
+                    tracing::info!(
+                        event = krb5_log::events::KDC_PKINIT,
+                        component = "krb5-kdc",
+                        outcome = "denied",
+                        error = e.as_str(),
+                        cms_len = cms.len()
+                    );
+                    return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
+                };
+                // MIT `pkinit_server_verify_padata` (`pkinit_srv.c:508-516`): an unsigned request
+                // must name the anonymous principal WITH realm, after the rewrite below.
+                // MIT `process_as_req` (`do_as_req.c:718-734`): the rewrite makes
+                // `request->client` WELLKNOWN/ANONYMOUS@WELLKNOWN:ANONYMOUS.
+                // Rewrite runs only for REQUEST_ANONYMOUS + an anonymous name.
+                let rewritten = decode::<KdcReqBody>(body_der)
+                    .is_ok_and(|b| b.kdc_options.bit(flag_bit::ANONYMOUS))
+                    && krb5_types::pkinit::is_anonymous_principal(cname);
+                if !rewritten {
+                    return Err(proto_d(
+                        err::PREAUTH_FAILED,
+                        status::PREAUTH_FAILED,
+                        "Pkinit request not signed, but client not anonymous.",
+                    ));
+                }
+                (inner, false)
             }
-            (verified.e_content, true)
-        }
-        Err(e) => {
-            let Some(inner) = krb5_types::pkinit::cms_extract_unsigned(&cms) else {
-                tracing::info!(
-                    event = krb5_log::events::KDC_PKINIT,
-                    component = "krb5-kdc",
-                    outcome = "denied",
-                    error = e,
-                    cms_len = cms.len()
-                );
-                return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
-            };
-            // MIT `pkinit_server_verify_padata` (`pkinit_srv.c:508-516`): an unsigned request
-            // must name the anonymous principal WITH realm, after the rewrite below.
-            // MIT `process_as_req` (`do_as_req.c:718-734`): the rewrite makes
-            // `request->client` WELLKNOWN/ANONYMOUS@WELLKNOWN:ANONYMOUS.
-            // Rewrite runs only for REQUEST_ANONYMOUS + an anonymous name.
-            let rewritten = decode::<KdcReqBody>(body_der)
-                .is_ok_and(|b| b.kdc_options.bit(flag_bit::ANONYMOUS))
-                && krb5_types::pkinit::is_anonymous_principal(cname);
-            if !rewritten {
-                return Err(proto_d(
-                    err::PREAUTH_FAILED,
-                    status::PREAUTH_FAILED,
-                    "Pkinit request not signed, but client not anonymous.",
-                ));
-            }
-            (inner, false)
-        }
-    };
+        };
     if let Err(e) = krb5_types::pkinit::authpack_pa_checksum_ok(&inner, body_der) {
         tracing::info!(
             event = krb5_log::events::KDC_PKINIT,
@@ -701,9 +717,18 @@ pub(crate) fn process_pkinit(
         );
         return Err(dh_params_not_accepted(store, cname));
     };
-    let wrapped_pub = ca
-        .sign_cms_typed(&info, "krbtgt", krb5_types::pkinit::ECONTENT_DHKEY, realm)
-        .ok_or_else(|| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
+    let certs = kdc.own_chain().map_err(|message| Error::PreauthModule {
+        code: err::PREAUTH_FAILED,
+        message,
+    })?;
+    let wrapped_pub = krb5_types::pkinit::cms_sign_chain(
+        &info,
+        &kdc.identity.cert,
+        &certs,
+        kdc.identity.key(),
+        krb5_types::pkinit::ECONTENT_DHKEY,
+    )
+    .map_err(|_| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
     let rep = krb5_types::pkinit::PaPkAsRep::DhInfo(krb5_types::pkinit::DhRepInfo {
         dh_signed_data: wrapped_pub.into(),
         server_dh_nonce: None,

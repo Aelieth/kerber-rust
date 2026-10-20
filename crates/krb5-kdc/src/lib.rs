@@ -40,6 +40,7 @@ mod mkey;
 pub mod net_server;
 mod osa;
 mod persist;
+mod pkinit;
 mod plugins;
 mod preauth;
 pub mod principals;
@@ -113,6 +114,7 @@ pub use persist::{
     read_db_locked, read_stash, save_dump_text, save_store, save_store_fresh,
     save_store_legacy_kdb3, save_store_with_master, stash_keys, write_stash,
 };
+pub use pkinit::PkinitKdc;
 pub use plugins::{
     KdcAuthdata, KdcPolicy, KdcPreauth, OtpVerdict, OtpVerifier, OtpVerifyRequest,
     PolicyAdjustment, PreauthAction, PreauthHint, PreauthRock, apply_policy_times,

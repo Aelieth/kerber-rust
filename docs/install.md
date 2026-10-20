@@ -238,7 +238,7 @@ restart (SIGHUP reopens the logs only). As MIT's, `kdc.conf`'s `[libdefaults]` v
 before `krb5.conf`'s, its `include` and `includedir` lines are followed, and section and relation
 names match only as written. `clockskew` there is both the KDC's and kpasswd's allowance for a
 client's clock (300 seconds by default). A relation MIT reads that kerber-rust does not, such as
-`master_key_name` or a `pkinit_*` one, is named in the log when the daemon starts.
+`master_key_name` or `pkinit_dh_min_bits`, is named in the log when the daemon starts.
 
 `[plugins] kdcpreauth` `disable` and `enable_only` select the KDC's preauth
 modules by MIT's names (`encrypted_timestamp`, `encrypted_challenge`, `spake`,
@@ -417,6 +417,38 @@ sudo kadmin.local -q "setstr host/files.$DOMAIN require_auth mfa"
 ```
 
 A ticket-granting ticket from a password login then cannot get a ticket for that service (`KDC policy rejects request`), nor can one if the OTP module is left out. On `krbtgt` the rule applies to every login, and the host-keytab login that fetches the armor ticket has no indicator either, so set it there only when the armor comes another way. A principal made keyless (`addprinc -nokey`) has no password to fall back on, and its verifier has to check any password itself. For some users only, an embedder's `KdcPolicy` checks the indicators in `check_as`.
+
+### PKINIT
+
+A user can log in with a certificate instead of a password: MIT `kinit -X
+X509_user_identity=FILE:alice.pem,alice.key alice`. The KDC uses your PKI, configured in kdc.conf as
+MIT's (`doc/admin/pkinit.rst`):
+
+```ini
+[kdcdefaults]
+    pkinit_identity = FILE:/var/kerberos/krb5kdc/kdc.pem,/var/kerberos/krb5kdc/kdc.key
+    pkinit_anchors = FILE:/var/kerberos/krb5kdc/cacert.pem
+```
+
+- **KDC identity P-256 only.** The KDC's key, its CA and the client certificates it verifies are
+  P-256 EC keys: make each one with `openssl ecparam -name prime256v1 -genkey -noout` where MIT's
+  guide runs `openssl genrsa`. An RSA key leaves PKINIT off.
+- `pkinit_identity` is `FILE:cert[,key]`, `DIR:` (one `NAME.crt` with its `NAME.key`) or `ENV:`;
+  `pkinit_anchors` and `pkinit_pool` (the intermediate CAs) are `FILE:` or `DIR:`. A relation under
+  `[realms] REALM` wins over `[kdcdefaults]`.
+- The KDC certificate has the `id-pkinit-KPKdc` extended key usage and the PKINIT SAN
+  `krbtgt/REALM@REALM`, and chains to `pkinit_anchors`. A client certificate's PKINIT SAN names the
+  user, and it has the `id-pkinit-KPClientAuth` extended key usage and the digitalSignature key
+  usage: `pkinit_eku_checking = scLogin` also takes Microsoft's smart-card logon usage, and `none`
+  checks neither.
+- `pkinit_require_freshness` and `pkinit_indicator` work as MIT's. `pkinit_revoke`,
+  `pkinit_require_crl_checking` and `pkinit_kdc_ocsp` are refused.
+- If the identity or the anchors do not load, the KDC starts without PKINIT and logs MIT's line, for
+  example `preauth pkinit failed to initialize: PKINIT initialization failed: No pkinit_identity
+  supplied for realm EXAMPLE.COM`.
+
+A client needs the CA as `pkinit_anchors` in the realm's `krb5.conf` stanza. Anonymous PKINIT
+(`kinit -n`) uses the same KDC identity.
 
 ## Upgrading an MIT realm
 
@@ -705,7 +737,8 @@ update log and lock files, the stash, `kdc.conf` and `kadm5.acl`.
   `make install` installs no `kprop.service`.
 - SPAKE groups P-384 and P-521 (MIT's OpenSSL groups). `edwards25519`, the group Fedora's
   `krb5.conf` names and its `kdc.conf` challenges with, and P-256 work as MIT's.
-- RADIUS-backed OTP preauthentication (OTP works through an embedder's verifier: [OTP preauth](#otp-preauth)), PKINIT configured in `kdc.conf`, master key rollover
+- RADIUS-backed OTP preauthentication (OTP works through an embedder's verifier: [OTP preauth](#otp-preauth)), PKINIT
+  with RSA keys, `PKCS11:` or `PKCS12:` identities, or revocation lists ([PKINIT](#pkinit)), master key rollover
   (`kdb5_util add_mkey` and the other `*_mkey` commands), `kproplog`, `sclient` / `sserver`, and
   plugin modules (plugins are Rust traits: [plugins.md](plugins.md)).
 - `KEYRING:` credential caches in the tools `make install-clients` installs. `KCM:` (Fedora's

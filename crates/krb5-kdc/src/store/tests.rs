@@ -311,9 +311,7 @@ fn apply_kdc_conf_sets_ticket_policy() {
         max_renewable_life = 2d 0h 0m 0s
         requires_preauth = no
         restrict_anonymous_to_tgt = true
-        pkinit_require_freshness = true
         encrypted_challenge_indicator = encrypted_challenge
-        pkinit_indicator = pkinit
         spake_preauth_indicator = spake
         host_based_services = host
         no_host_referral = imap
@@ -329,12 +327,10 @@ fn apply_kdc_conf_sets_ticket_policy() {
     assert_eq!(store.policy.realm_max_renewable_life, 2 * 86400);
     assert!(!store.policy.requires_preauth);
     assert!(store.policy.restrict_anon);
-    assert!(store.policy.pkinit_require_freshness);
     assert_eq!(
         store.policy.encrypted_challenge_indicator.as_deref(),
         Some("encrypted_challenge")
     );
-    assert_eq!(store.policy.pkinit_indicators, vec!["pkinit".to_string()]);
     assert_eq!(
         store.policy.spake_preauth_indicators,
         vec!["spake".to_string()]

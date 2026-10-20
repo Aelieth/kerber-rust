@@ -207,6 +207,19 @@ fn as_tgt(
 }
 
 #[must_use]
+pub fn enable_pkinit(store: &mut PrincipalStore) -> krb5_types::pkinit::PkinitCa {
+    let ca = krb5_types::pkinit::PkinitCa::generate().expect("PKINIT CA");
+    let identity = ca
+        .kdc_pkinit_identity(store.realm())
+        .expect("PKINIT KDC identity");
+    store.set_pkinit(Some(krb5_kdc::PkinitKdc::new(
+        identity,
+        vec![ca.ca_cert.clone()],
+    )));
+    ca
+}
+
+#[must_use]
 pub fn issue_tgt(store: &PrincipalStore, name: &str, nonce: u32) -> IssuedAs {
     let key = store_key(store, name);
     as_tgt(store, name, nonce, &key, false)

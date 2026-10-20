@@ -464,9 +464,9 @@ fn pkinit_cms_wrap_unwrap() {
     assert!(pkinit::require_kdc_pkinit_cert(&kcert, "OTHER.TEST").is_err());
     assert!(pkinit::require_kdc_pkinit_cert(&cert, "KERBER.TEST").is_err());
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
-    pkinit::require_client_pkinit_cert(&cert, &user, "KERBER.TEST").expect("client SAN");
+    pkinit::require_client_pkinit_san(&cert, &user, "KERBER.TEST").expect("client SAN");
     let other = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["other"]);
-    assert!(pkinit::require_client_pkinit_cert(&cert, &other, "KERBER.TEST").is_err());
+    assert!(pkinit::require_client_pkinit_san(&cert, &other, "KERBER.TEST").is_err());
 
     let split = pkinit::cms_sign_leaf_oids(
         inner,
@@ -779,7 +779,7 @@ fn a_pkinit_cas_debug_shows_no_private_scalar() {
     let ca = pkinit::PkinitCa::generate().unwrap();
     let debug = format!("{ca:?}");
     assert!(
-        !shows(&debug, &ca.ca_secret),
+        !shows(&debug, ca.ca_secret.as_slice()),
         "the CA scalar is in its Debug"
     );
     assert!(debug.contains("ca_secret: <redacted>"), "{debug}");

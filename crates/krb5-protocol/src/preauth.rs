@@ -431,6 +431,7 @@ pub fn pa_spake_response(
     ))
 }
 
+#[cfg(any(test, feature = "test-ca"))]
 /// PA-PK-AS-REQ: AuthPack inside CMS SignedData (`signedAuthPack`).
 ///
 /// # Errors
@@ -449,6 +450,7 @@ pub fn pa_pk_as_req(
     )
 }
 
+#[cfg(any(test, feature = "test-ca"))]
 /// PA-PK-AS-REQ whose `clientPublicValue` is an already-encoded SPKI
 /// (ECDH P-256 or MODP DH).
 ///
@@ -464,6 +466,7 @@ pub fn pa_pk_as_req_spki(
     pa_pk_as_req_spki_cn(spki, ca, "user", body_sha1)
 }
 
+#[cfg(any(test, feature = "test-ca"))]
 /// PA-PK-AS-REQ signed as `cn` (SAN / EKU follow that identity).
 ///
 /// # Errors
@@ -484,6 +487,7 @@ pub fn pa_pk_as_req_cn(
     )
 }
 
+#[cfg(any(test, feature = "test-ca"))]
 fn pa_pk_as_req_spki_cn(
     spki: &[u8],
     ca: &krb5_types::pkinit::PkinitCa,
@@ -516,6 +520,7 @@ fn pa_pk_as_req_spki_cn(
     })
 }
 
+#[cfg(any(test, feature = "test-ca"))]
 /// PA-PK-AS-REQ advertising RFC 8636 SHA-256 `supportedKDFs`.
 ///
 /// # Errors

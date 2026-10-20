@@ -13,7 +13,9 @@ autotests = false
 default = ["diff"]
 diff = []
 # The gates' raw PDU capture (`KERBER_CAPTURE_DIR`); off by default.
-test-hooks = []
+test-hooks = ["test-ca"]
+# PA-PK-AS-REQ builders signed under the generated test CA: test builds only.
+test-ca = ["krb5-types/test-ca"]
 
 [[test]]
 name = "golden_traces"

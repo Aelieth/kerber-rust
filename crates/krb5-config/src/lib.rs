@@ -3,7 +3,8 @@
 //! There is no C FFI. DNS SRV is a minimal RFC 2782 UDP client.
 //!
 //! One module per MIT source family: `profile` (krb5.conf), `plugin_profile` (`[plugins]`),
-//! `otp_profile` (`[otp]`), `kdcconf`, `iprop_params`, `ccname`, `srv`, `testenv`. In-src tests stay under `tests`.
+//! `otp_profile` (`[otp]`), `kdcconf`, `iprop_params`, `pkinit_params`, `ccname`, `srv`, `testenv`. In-src tests stay
+//! under `tests`.
 //!
 //! # Examples
 //!
@@ -42,6 +43,7 @@ mod kdcconf;
 pub mod listen;
 mod logging;
 mod otp_profile;
+mod pkinit_params;
 mod plugin_profile;
 mod profile;
 mod profile_set;
@@ -388,6 +390,12 @@ pub struct Krb5Conf {
     /// and value, in file order (includes followed); read by [`IpropParams`] and
     /// [`KadmindListen`].
     pub kadm5: BTreeMap<String, Vec<(String, String)>>,
+    /// Realm → its stanza's `pkinit_*` relations, name and value, in file order (includes
+    /// followed); read by [`PkinitParams`].
+    pub pkinit: BTreeMap<String, Vec<(String, String)>>,
+    /// `[kdcdefaults]`'s `pkinit_*` relations at the section's top, name and value, in file order;
+    /// read by [`PkinitParams`].
+    pub kdcdefaults_pkinit: Vec<(String, String)>,
     /// Realm → its `[libdefaults]` subsection for the eight per-realm keys.
     /// MIT `krb5int_libdefault_string` (`lib/krb5/krb/libdef_parse.c:87-117`): that node is read before the top-level relation.
     pub realm_libdefaults: BTreeMap<String, RealmLibdefaults>,
@@ -500,16 +508,12 @@ pub struct KdcConf {
     pub disable_pac: bool,
     /// MIT `restrict_anonymous_to_tgt` (default false).
     pub restrict_anon: bool,
-    /// MIT `pkinit_require_freshness` (default false).
-    pub pkinit_require_freshness: bool,
     /// MIT `host_based_services` (space/comma-separated).
     pub host_based_services: String,
     /// MIT `no_host_referral` (space/comma-separated).
     pub no_host_referral: String,
     /// `[realms] encrypted_challenge_indicator`.
     pub encrypted_challenge_indicator: Option<String>,
-    /// `[realms] pkinit_indicator` (repeatable).
-    pub pkinit_indicators: Vec<String>,
     /// `[realms] spake_preauth_indicator` (repeatable).
     pub spake_preauth_indicators: Vec<String>,
     /// `[libdefaults] spake_preauth_groups`, the first one. `None` = omitted.
@@ -577,6 +581,7 @@ pub use logging::LogSpecs;
 pub use otp_profile::{
     DEFAULT_OTP_TYPE, OtpInitError, OtpProfile, OtpTree, OtpType, kdc_otp_types, token_types_decode,
 };
+pub use pkinit_params::PkinitParams;
 pub use plugin_profile::{
     PluginProfile, PluginRelations, filter_plugin_modules, kdc_plugin_relations,
 };

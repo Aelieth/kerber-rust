@@ -22,5 +22,9 @@ subtle.workspace = true
 thiserror.workspace = true
 zeroize.workspace = true
 
+[features]
+# The generated PKINIT test CA (`pkinit::PkinitCa`): test builds only, never a release one.
+test-ca = []
+
 [lints]
 workspace = true

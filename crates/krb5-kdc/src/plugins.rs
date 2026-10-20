@@ -245,7 +245,7 @@ impl KdcPreauth for PkinitMod {
         _armor: bool,
         _requested: &[i32],
     ) -> Vec<PaData> {
-        if store.pkinit_ca().is_none() {
+        if store.pkinit().is_none() {
             return Vec::new();
         }
         let mut out = vec![PaData {
@@ -275,7 +275,7 @@ impl KdcPreauth for PkinitMod {
             cname,
         } = *rock;
         // MIT `load_preauth_plugins` (`kdc_preauth.c:207-219`): no identity, so the module is not loaded.
-        if store.pkinit_ca().is_none() {
+        if store.pkinit().is_none() {
             return Ok(None);
         }
         let Some(etype) = etype else {
@@ -842,27 +842,24 @@ pub(crate) fn kdcpreauth_loaded(store: &dyn PrincipalRead, name: &str) -> bool {
 ///
 /// MIT `kdcpreauth_otp_initvt` (`plugins/preauth/otp/main.c:387-388`): code 0 logs Loaded at info when the vtable is installed.
 /// MIT `pkinit_server_plugin_init` (`plugins/preauth/pkinit/pkinit_srv.c:1384-1390`): one realm's failure is prefixed with PKINIT initialization failed.
-/// MIT `pkinit_init_kdc_profile` (`plugins/preauth/pkinit/pkinit_srv.c:960-964`): a missing identity is No pkinit_identity supplied for realm.
 /// MIT `load_preauth_plugins` (`kdc/kdc_preauth.c:213-216`): a failed module init is logged and that module is left out.
 ///
-/// `pkinit_ready` is true when this process already holds a PKINIT identity (the test CA).
-/// A disabled module is absent, as `disable` / `enable_only` leave it out of the load.
+/// `pkinit_failure` is the message of a PKINIT init that failed
+/// ([`crate::PrincipalStore::init_pkinit`]). A disabled module is absent, as `disable` /
+/// `enable_only` leave it out of the load.
 #[must_use]
 pub fn preauth_startup_lines(
-    realm: &str,
     relations: &krb5_config::PluginRelations,
-    pkinit_ready: bool,
+    pkinit_failure: Option<&str>,
 ) -> Vec<(&'static str, String)> {
     let mut lines = Vec::new();
     if startup_module_loaded(relations, "otp") {
         lines.push(("info", "Loaded".to_owned()));
     }
-    if startup_module_loaded(relations, "pkinit") && !pkinit_ready {
+    if let Some(msg) = pkinit_failure.filter(|_| startup_module_loaded(relations, "pkinit")) {
         lines.push((
             "error",
-            format!(
-                "preauth pkinit failed to initialize: PKINIT initialization failed: No pkinit_identity supplied for realm {realm}"
-            ),
+            format!("preauth pkinit failed to initialize: PKINIT initialization failed: {msg}"),
         ));
     }
     lines
@@ -894,7 +891,7 @@ pub fn otp_startup_lines(policy: &Policy) -> Vec<(&'static str, String)> {
 }
 
 /// Whether MIT would install `name` under these `[plugins] kdcpreauth` relations.
-fn startup_module_loaded(relations: &krb5_config::PluginRelations, name: &str) -> bool {
+pub(crate) fn startup_module_loaded(relations: &krb5_config::PluginRelations, name: &str) -> bool {
     krb5_config::filter_plugin_modules(relations, &[name])
         .iter()
         .any(|kept| kept == name)
@@ -1923,11 +1920,8 @@ mod tests {
     /// Startup logs Loaded, then the pkinit identity error when no identity is configured. A ready identity logs Loaded only.
     #[test]
     fn startup_lines_match_the_mit_kdc_log() {
-        let lines = preauth_startup_lines(
-            "KERBER.TEST",
-            &krb5_config::PluginRelations::default(),
-            false,
-        );
+        let missing = "No pkinit_identity supplied for realm KERBER.TEST";
+        let lines = preauth_startup_lines(&krb5_config::PluginRelations::default(), Some(missing));
         assert_eq!(
             lines,
             vec![
@@ -1938,18 +1932,14 @@ mod tests {
                 ),
             ]
         );
-        let ready = preauth_startup_lines(
-            "KERBER.TEST",
-            &krb5_config::PluginRelations::default(),
-            true,
-        );
+        let ready = preauth_startup_lines(&krb5_config::PluginRelations::default(), None);
         assert_eq!(ready, vec![("info", "Loaded".to_owned())]);
         let off = krb5_config::PluginRelations {
             disable: Some(vec!["otp".to_owned(), "pkinit".to_owned()]),
             ..krb5_config::PluginRelations::default()
         };
         assert_eq!(
-            preauth_startup_lines("KERBER.TEST", &off, false),
+            preauth_startup_lines(&off, Some(missing)),
             Vec::<(&str, String)>::new()
         );
         let only_pkinit = krb5_config::PluginRelations {
@@ -1957,10 +1947,10 @@ mod tests {
             ..krb5_config::PluginRelations::default()
         };
         assert_eq!(
-            preauth_startup_lines("R", &only_pkinit, false),
+            preauth_startup_lines(&only_pkinit, Some(missing)),
             vec![(
                 "error",
-                "preauth pkinit failed to initialize: PKINIT initialization failed: No pkinit_identity supplied for realm R".to_owned(),
+                "preauth pkinit failed to initialize: PKINIT initialization failed: No pkinit_identity supplied for realm KERBER.TEST".to_owned(),
             )]
         );
     }

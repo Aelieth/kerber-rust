@@ -105,11 +105,10 @@ fn main() {
     }
     krb5_kdc::register_kdcpolicy_test_if_selected(&store.policy().kdcpolicy);
     let kdc_conf = paths.conf;
-    for (level, line) in krb5_kdc::preauth_startup_lines(
-        store.realm(),
-        &store.policy.kdcpreauth,
-        store.pkinit_ca().is_some(),
-    ) {
+    let pkinit_failure = store.init_pkinit(&profile);
+    for (level, line) in
+        krb5_kdc::preauth_startup_lines(&store.policy.kdcpreauth, pkinit_failure.as_deref())
+    {
         let severity = if level == "error" {
             Severity::Err
         } else {

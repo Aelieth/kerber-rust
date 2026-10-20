@@ -301,14 +301,14 @@ fn main() {
     }
     // MIT `plugins/kdcpolicy/test` has no `.so` here. `enable_only = test` registers it.
     krb5_kdc::register_kdcpolicy_test_if_selected(&store.policy().kdcpolicy);
+    let pkinit_failure = store.init_pkinit(&profile);
     #[cfg(feature = "test-hooks")]
     hooks::before_serving(&mut store, &opts.hooks);
+    let pkinit_failure = pkinit_failure.filter(|_| store.pkinit().is_none());
     // MIT `load_preauth_plugins` (`kdc/kdc_preauth.c:207-219`): a module whose init fails is logged at error and left out.
-    for (level, line) in krb5_kdc::preauth_startup_lines(
-        store.realm(),
-        &store.policy.kdcpreauth,
-        store.pkinit_ca().is_some(),
-    ) {
+    for (level, line) in
+        krb5_kdc::preauth_startup_lines(&store.policy.kdcpreauth, pkinit_failure.as_deref())
+    {
         let severity = if level == "error" {
             Severity::Err
         } else {
@@ -666,7 +666,7 @@ mod hooks {
         (vec![udp], vec![tcp])
     }
 
-    /// The test policy, audit sink, PKINIT CA and key exports.
+    /// The test policy, audit sink, PKINIT test CA and key exports.
     pub(super) fn before_serving(store: &mut PrincipalStore, args: &Args) {
         if std::env::var("KRB5_KDCPOLICY").ok().as_deref() == Some("test") {
             krb5_kdc::set_policy(std::sync::Arc::new(krb5_kdc::testrealm::TestPolicy));
@@ -683,10 +683,7 @@ mod hooks {
         }
         let enable_pkinit = args.export_pkinit.is_some()
             || std::env::var("KRB5_ENABLE_PKINIT").ok().as_deref() == Some("1");
-        if enable_pkinit && let Err(e) = store.enable_pkinit_ca() {
-            eprintln!("krb5-kdc: PKINIT CA: {e}");
-            std::process::exit(1);
-        }
+        let pkinit_ca = enable_pkinit.then(|| test_pkinit(store));
         let export_keytab = args
             .export_keytab
             .clone()
@@ -723,9 +720,26 @@ mod hooks {
             let tgt = krb5_types::PrincipalName::krbtgt(store.realm());
             export(store, &tgt, path, "export-krbtgt-keytab", "krbtgt-keytab");
         }
-        if let Some(dir) = args.export_pkinit.as_ref() {
-            export_pkinit(store, dir);
+        if let (Some(dir), Some(ca)) = (args.export_pkinit.as_ref(), pkinit_ca.as_ref()) {
+            export_pkinit(store, ca, dir);
         }
+    }
+
+    /// A generated CA, and the realm's PKINIT context: a KDC identity it issues, trusting it.
+    fn test_pkinit(store: &mut PrincipalStore) -> krb5_types::pkinit::PkinitCa {
+        let ca = krb5_types::pkinit::PkinitCa::generate();
+        let identity = ca
+            .as_ref()
+            .and_then(|c| c.kdc_pkinit_identity(store.realm()));
+        let (Some(ca), Some(identity)) = (ca, identity) else {
+            eprintln!("krb5-kdc: PKINIT CA: pkinit CA generate failed");
+            std::process::exit(1);
+        };
+        store.set_pkinit(Some(krb5_kdc::PkinitKdc::new(
+            identity,
+            vec![ca.ca_cert.clone()],
+        )));
+        ca
     }
 
     fn export(
@@ -750,28 +764,23 @@ mod hooks {
         }
     }
 
-    fn export_pkinit(store: &PrincipalStore, dir: &str) {
+    fn export_pkinit(store: &PrincipalStore, ca: &krb5_types::pkinit::PkinitCa, dir: &str) {
         let _ = std::fs::create_dir_all(dir);
-        if let Some(pem) = store.pkinit_anchor_pem() {
-            let _ = std::fs::write(format!("{dir}/ca.pem"), pem);
-            println!("pkinit-ca {dir}/ca.pem");
-        }
-        if let Some(pem) = store.pkinit_user_pem("user@KERBER.TEST") {
+        let _ = std::fs::write(format!("{dir}/ca.pem"), ca.cert_pem());
+        println!("pkinit-ca {dir}/ca.pem");
+        if let Some(pem) = ca.user_identity_pem("user@KERBER.TEST") {
             let _ = std::fs::write(format!("{dir}/user.pem"), pem);
             println!("pkinit-user {dir}/user.pem");
         }
-        if let Some(pem) = store.pkinit_user_pem("other@KERBER.TEST") {
+        if let Some(pem) = ca.user_identity_pem("other@KERBER.TEST") {
             let _ = std::fs::write(format!("{dir}/other.pem"), pem);
             println!("pkinit-other {dir}/other.pem");
         }
-        if let Some(pem) = store.pkinit_kdc_pem() {
+        if let Some(pem) = ca.kdc_identity_pem_for(store.realm()) {
             let _ = std::fs::write(format!("{dir}/kdc.pem"), pem);
             println!("pkinit-kdc {dir}/kdc.pem");
         }
-        if let Some(pem) = store
-            .pkinit_ca()
-            .and_then(|c| c.kdc_identity_pem_for("OTHER.TEST"))
-        {
+        if let Some(pem) = ca.kdc_identity_pem_for("OTHER.TEST") {
             let _ = std::fs::write(format!("{dir}/kdc-wrong-realm.pem"), pem);
             println!("pkinit-kdc-wrong-realm {dir}/kdc-wrong-realm.pem");
         }

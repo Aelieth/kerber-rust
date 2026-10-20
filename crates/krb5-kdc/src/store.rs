@@ -31,7 +31,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use krb5_types::PrincipalName;
 use krb5_types::pac::RpcSid;
-use krb5_types::pkinit::PkinitCa;
 
 use crate::dblock::{DbLock, DbLockHold, DbLockMode};
 use crate::error::Error;
@@ -460,12 +459,6 @@ impl PrincipalStore {
         &self.env
     }
 
-    /// PKINIT CA if provisioned.
-    #[must_use]
-    pub fn pkinit_ca(&self) -> Option<&PkinitCa> {
-        self.env.pkinit_ca.as_ref()
-    }
-
     pub(crate) fn save_configured(&self) -> Result<(), Error> {
         self.save_if_configured()
     }
@@ -729,20 +722,10 @@ impl PrincipalStore {
             .map_err(|e| Error::from(PersistError::from(e)))
     }
 
-    /// Provision a PKINIT test CA. Off by default so a KDC without an
-    /// operator-supplied trust anchor does not mint untrusted CMS.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Crypto`] when P-256 key generation fails.
-    pub fn enable_pkinit_ca(&mut self) -> Result<&PkinitCa, Error> {
-        if self.env.pkinit_ca.is_none() {
-            self.env.pkinit_ca = PkinitCa::generate();
-        }
-        self.env
-            .pkinit_ca
-            .as_ref()
-            .ok_or_else(|| Error::Crypto("pkinit CA generate failed".into()))
+    /// The realm's PKINIT context, when the module initialized.
+    #[must_use]
+    pub fn pkinit(&self) -> Option<&crate::pkinit::PkinitKdc> {
+        self.env.pkinit.as_deref()
     }
 
     /// Realm name.
@@ -857,30 +840,6 @@ impl PrincipalStore {
     #[must_use]
     pub fn get_in_realm(&self, name: &PrincipalName, princ_realm: &str) -> Option<&Principal> {
         self.get(&crate::kdb::lookup_principal_id(name, princ_realm))
-    }
-
-    /// PEM of the PKINIT test CA for MIT `pkinit_anchors = FILE:`.
-    #[must_use]
-    pub fn pkinit_anchor_pem(&self) -> Option<String> {
-        self.env.pkinit_ca.as_ref().map(PkinitCa::cert_pem)
-    }
-
-    /// User identity PEM (cert+key) for MIT `X509_user_identity=FILE:`.
-    #[must_use]
-    pub fn pkinit_user_pem(&self, cn: &str) -> Option<String> {
-        self.env
-            .pkinit_ca
-            .as_ref()
-            .and_then(|c| c.user_identity_pem(cn))
-    }
-
-    /// KDC identity PEM (cert+key) for MIT `pkinit_identity = FILE:`.
-    #[must_use]
-    pub fn pkinit_kdc_pem(&self) -> Option<String> {
-        self.env
-            .pkinit_ca
-            .as_ref()
-            .and_then(|c| c.kdc_identity_pem_for(&self.realm))
     }
 
     /// Principal ids (`name@REALM`), sorted.

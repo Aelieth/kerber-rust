@@ -84,11 +84,9 @@ impl Default for KdcConf {
             reject_bad_transit: true,
             disable_pac: false,
             restrict_anon: false,
-            pkinit_require_freshness: false,
             host_based_services: String::new(),
             no_host_referral: String::new(),
             encrypted_challenge_indicator: None,
-            pkinit_indicators: Vec::new(),
             spake_preauth_indicators: Vec::new(),
             spake_preauth_groups: None,
             spake_preauth_kdc_challenge: None,
@@ -393,9 +391,7 @@ fn parse_kdcdefaults(conf: &mut KdcConf, line: &str) {
         "spake_preauth_kdc_challenge" if conf.spake_preauth_kdc_challenge.is_none() => {
             conf.spake_preauth_kdc_challenge = Some(v);
         }
-        k if k.starts_with("pkinit_") && k != "pkinit_require_freshness" => {
-            note_unsupported(conf, k);
-        }
+        "pkinit_dh_min_bits" | "pkinit_allow_upn" => note_unsupported(conf, k),
         _ => {}
     }
 }
@@ -436,16 +432,14 @@ fn parse_kdc_libdefaults(conf: &mut KdcConf, seen: &mut Vec<String>, line: &str)
 }
 
 /// The KDC booleans as written: the realm stanza's last `reject_bad_transit`, `disable_pac` and
-/// `restrict_anonymous_to_tgt`, `[kdcdefaults]`'s last `restrict_anonymous_to_tgt`, and the
-/// first `pkinit_require_freshness` of each. Their names are matched exactly, as the profile's.
+/// `restrict_anonymous_to_tgt`, and `[kdcdefaults]`'s last `restrict_anonymous_to_tgt`. Their
+/// names are matched exactly, as the profile's.
 #[derive(Default)]
 struct RealmBooleans {
     reject_bad_transit: Option<String>,
     disable_pac: Option<String>,
     restrict_anon: Option<String>,
     restrict_anon_default: Option<String>,
-    freshness: Option<String>,
-    freshness_default: Option<String>,
 }
 
 impl RealmBooleans {
@@ -458,9 +452,6 @@ impl RealmBooleans {
             "reject_bad_transit" => self.reject_bad_transit = Some(v),
             "disable_pac" => self.disable_pac = Some(v),
             "restrict_anonymous_to_tgt" => self.restrict_anon = Some(v),
-            "pkinit_require_freshness" => {
-                self.freshness.get_or_insert(v);
-            }
             _ => return false,
         }
         true
@@ -474,9 +465,6 @@ impl RealmBooleans {
         };
         match k {
             "restrict_anonymous_to_tgt" => self.restrict_anon_default = Some(v),
-            "pkinit_require_freshness" => {
-                self.freshness_default.get_or_insert(v);
-            }
             _ => return false,
         }
         true
@@ -485,7 +473,6 @@ impl RealmBooleans {
     /// MIT `init_realm` (`kdc/main.c:292-295`): a realm `restrict_anonymous_to_tgt` that does not read as a boolean leaves `[kdcdefaults]`'s.
     /// MIT `init_realm` (`kdc/main.c:306-309`): a `reject_bad_transit` that does not read as a boolean is TRUE.
     /// MIT `init_realm` (`kdc/main.c:338-341`): a `disable_pac` that does not read as a boolean is FALSE.
-    /// MIT `pkinit_kdcdefault_boolean` (`plugins/preauth/pkinit/pkinit_profile.c:170-184`): the realm's first value, else `[kdcdefaults]`'s, read as a yes word.
     fn apply(self, conf: &mut KdcConf) {
         let read = |v: Option<String>| v.as_deref().and_then(aprof_boolean);
         conf.reject_bad_transit = read(self.reject_bad_transit).unwrap_or(true);
@@ -493,10 +480,6 @@ impl RealmBooleans {
         conf.restrict_anon = read(self.restrict_anon)
             .or_else(|| read(self.restrict_anon_default))
             .unwrap_or(false);
-        conf.pkinit_require_freshness = self
-            .freshness
-            .or(self.freshness_default)
-            .is_some_and(|v| truthy(&v));
     }
 }
 
@@ -603,11 +586,9 @@ fn parse_kdc_realm_line(conf: &mut KdcConf, line: &str) {
         "encrypted_challenge_indicator" => {
             conf.encrypted_challenge_indicator = Some(v);
         }
-        "pkinit_indicator" => conf.pkinit_indicators.push(v),
         "spake_preauth_indicator" => conf.spake_preauth_indicators.push(v),
         "dict_file" => conf.dict_file = Some(PathBuf::from(v)),
-        "master_key_name" => note_unsupported(conf, k),
-        k if k.starts_with("pkinit_") && k != "pkinit_require_freshness" => {
+        "master_key_name" | "pkinit_dh_min_bits" | "pkinit_allow_upn" => {
             note_unsupported(conf, k);
         }
         _ => {}
