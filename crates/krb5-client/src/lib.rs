@@ -952,7 +952,11 @@ fn load_pkinit(
         Err(e) => return fail(e.code, e.text, true),
     };
     let certs: Vec<&[u8]> = creds.iter().map(|c| c.cert.as_slice()).collect();
-    let pick = match krb5_types::pkinit::select_cert(rules, &certs) {
+    let pick = match krb5_types::pkinit::select_cert(
+        rules,
+        &certs,
+        &mut krb5_protocol::trace::pkinit_match,
+    ) {
         Ok(i) => i,
         Err(e @ CertMatchError::Code(c)) => return fail(i64::from(c), e.to_string(), true),
         Err(e) => return fail(base + 24, e.to_string(), true),

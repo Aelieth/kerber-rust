@@ -373,6 +373,63 @@ pub fn pkinit_client_no_identity() {
     krb5int_trace("PKINIT client has no configured identity; giving up", &[]);
 }
 
+// MIT TRACE_PKINIT_CERT_RULE; see docs/parity/a3-preauth.md
+pub fn pkinit_cert_rule(rule: &str) {
+    krb5int_trace(
+        "PKINIT client matching rule '{str}' against certificates",
+        &[Arg::Str(Some(rule.as_bytes()))],
+    );
+}
+
+pub fn pkinit_cert_rule_invalid(rule: &str) {
+    krb5int_trace(
+        "PKINIT client ignoring invalid rule '{str}'",
+        &[Arg::Str(Some(rule.as_bytes()))],
+    );
+}
+
+pub fn pkinit_regexp_match(keyword: &str, rule: &[u8], value: &[u8], cert: i64) {
+    krb5int_trace(
+        "PKINIT matched {str} rule '{str}' with value '{str}' in cert #{int}",
+        &[
+            Arg::Str(Some(keyword.as_bytes())),
+            Arg::Str(Some(rule)),
+            Arg::Str(Some(value)),
+            Arg::Int(cert),
+        ],
+    );
+}
+
+pub fn pkinit_regexp_nomatch(keyword: &str, rule: &[u8], value: &[u8], cert: i64) {
+    krb5int_trace(
+        "PKINIT didn't match {str} rule '{str}' with value '{str}' in cert #{int}",
+        &[
+            Arg::Str(Some(keyword.as_bytes())),
+            Arg::Str(Some(rule)),
+            Arg::Str(Some(value)),
+            Arg::Int(cert),
+        ],
+    );
+}
+
+pub fn pkinit_cert_num_matching(total: i64, matches: i64) {
+    krb5int_trace(
+        "PKINIT client checked {int} certs, found {int} matches",
+        &[Arg::Int(total), Arg::Int(matches)],
+    );
+}
+
+pub fn pkinit_no_matching_cert() {
+    krb5int_trace("PKINIT no matching certificate found", &[]);
+}
+
+pub fn pkinit_no_default_cert(count: i64) {
+    krb5int_trace(
+        "PKINIT error: There are {int} certs, but there must be exactly one.",
+        &[Arg::Int(count)],
+    );
+}
+
 /// MIT `TRACE_PREAUTH_ENC_TS_DISABLED` (`include/k5-trace.h:320-321`): encrypted timestamp was offered and the realm disables it.
 pub fn preauth_enc_ts_disabled() {
     krb5int_trace("Ignoring encrypted timestamp because it is disabled", &[]);

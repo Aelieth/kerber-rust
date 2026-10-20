@@ -822,7 +822,7 @@ fn authorize_cert(
         .iter()
         .find(|(k, _)| k == "pkinit_cert_match")
     {
-        match krb5_types::pkinit::cert_match(rule, cert) {
+        match krb5_types::pkinit::cert_match(rule, cert, &mut krb5_protocol::trace::pkinit_match) {
             Ok(true) => accepted = true,
             Ok(false) => return Err(denied(err::CERTIFICATE_MISMATCH, "pkinit_cert_match")),
             Err(e) => {

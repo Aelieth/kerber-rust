@@ -43,7 +43,7 @@ impl PkinitKdc {
                 "pkinit_require_crl_checking is not supported: (realm: {realm})"
             ));
         }
-        let identity = load_identity(identity)?;
+        let identity = load_identity(identity, &mut krb5_protocol::trace::pkinit_match)?;
         Ok(Self {
             identity,
             anchors: load_some(&params.anchors)?,

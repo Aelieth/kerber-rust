@@ -27,6 +27,38 @@ enum Keyword {
     Subject,
 }
 
+impl Keyword {
+    // MIT keyword2string; see docs/parity/a3-preauth.md
+    fn name(self) -> &'static str {
+        match self {
+            Self::Ku => "KU",
+            Self::Eku => "EKU",
+            Self::San => "SAN",
+            Self::Issuer => "ISSUER",
+            Self::Subject => "SUBJECT",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum MatchTrace<'a> {
+    Rule(&'a str),
+    RuleInvalid(&'a str),
+    Regexp {
+        matched: bool,
+        keyword: &'static str,
+        rule: &'a [u8],
+        value: &'a [u8],
+        cert: usize,
+    },
+    Checked {
+        certs: usize,
+        matches: usize,
+    },
+    NoMatch,
+    NoDefault(usize),
+}
+
 /// The five keywords of MIT's `matching_keywords` table (`pkinit_matching.c`), matched as written.
 const KEYWORDS: [(&[u8], Keyword); 5] = [
     (b"<KU>", Keyword::Ku),
@@ -50,7 +82,7 @@ const EKU_WORDS: [(&[u8], u32); 4] = [
 ];
 
 enum Component {
-    Regexp(Keyword, Ere),
+    Regexp(Keyword, Ere, Vec<u8>),
     Bits(Keyword, u32),
 }
 
@@ -89,13 +121,17 @@ impl std::fmt::Display for CertMatchError {
 ///
 /// # Errors
 /// MIT's code for a rule or certificate it cannot read, or a back-reference.
-pub fn cert_match(rule: &str, cert: &[u8]) -> Result<bool, CertMatchError> {
+pub fn cert_match(
+    rule: &str,
+    cert: &[u8],
+    trace: &mut dyn FnMut(MatchTrace<'_>),
+) -> Result<bool, CertMatchError> {
     let rule = rule.split('\0').next().unwrap_or_default();
     let (relation, components) = parse_rule_set(rule.as_bytes()).map_err(CertMatchError::Code)?;
     let md = matching_data(cert).map_err(CertMatchError::Code)?;
     let mut matched = false;
     for c in &components {
-        matched = component_match(c, &md)?;
+        matched = component_match(c, &md, 0, trace)?;
         if (matched && relation == Relation::Or) || (!matched && relation == Relation::And) {
             break;
         }
@@ -112,20 +148,28 @@ pub fn cert_match(rule: &str, cert: &[u8]) -> Result<bool, CertMatchError> {
 ///
 /// `EINVAL` for no rule and not one certificate, `ENOENT` when no rule picks one, a rule's other
 /// parse error, or a back-reference.
-pub fn select_cert(rules: &[String], certs: &[&[u8]]) -> Result<usize, CertMatchError> {
+pub fn select_cert(
+    rules: &[String],
+    certs: &[&[u8]],
+    trace: &mut dyn FnMut(MatchTrace<'_>),
+) -> Result<usize, CertMatchError> {
     if rules.is_empty() {
-        return if certs.len() == 1 {
-            Ok(0)
-        } else {
-            Err(CertMatchError::Code(EINVAL))
-        };
+        if certs.len() == 1 {
+            return Ok(0);
+        }
+        trace(MatchTrace::NoDefault(certs.len()));
+        return Err(CertMatchError::Code(EINVAL));
     }
     let mut data: Option<Vec<MatchData>> = None;
     for rule in rules {
         let rule = rule.split('\0').next().unwrap_or_default();
+        trace(MatchTrace::Rule(rule));
         let (relation, components) = match parse_rule_set(rule.as_bytes()) {
             Ok(rs) => rs,
-            Err(EINVAL) => continue,
+            Err(EINVAL) => {
+                trace(MatchTrace::RuleInvalid(rule));
+                continue;
+            }
             Err(code) => return Err(CertMatchError::Code(code)),
         };
         if data.is_none() {
@@ -133,10 +177,11 @@ pub fn select_cert(rules: &[String], certs: &[&[u8]]) -> Result<usize, CertMatch
             data = Some(md.map_err(|_| CertMatchError::Code(ENOENT))?);
         }
         let mds = data.as_deref().unwrap_or_default();
-        if let Some(i) = check_all_certs(&relation, &components, mds)? {
+        if let Some(i) = check_all_certs(&relation, &components, mds, trace)? {
             return Ok(i);
         }
     }
+    trace(MatchTrace::NoMatch);
     Err(CertMatchError::Code(ENOENT))
 }
 
@@ -146,13 +191,14 @@ fn check_all_certs(
     relation: &Relation,
     components: &[Component],
     mds: &[MatchData],
+    trace: &mut dyn FnMut(MatchTrace<'_>),
 ) -> Result<Option<usize>, CertMatchError> {
     let mut matched = false;
     let (mut total, mut save) = (0, 0);
     for (i, md) in mds.iter().enumerate() {
         let mut decided = false;
         for c in components {
-            matched = component_match(c, md)?;
+            matched = component_match(c, md, i, trace)?;
             if matched && *relation == Relation::Or {
                 (total, save) = (total + 1, i);
                 decided = true;
@@ -167,6 +213,10 @@ fn check_all_certs(
             (total, save) = (total + 1, i);
         }
     }
+    trace(MatchTrace::Checked {
+        certs: mds.len(),
+        matches: total,
+    });
     Ok((total == 1).then_some(save))
 }
 
@@ -214,7 +264,7 @@ fn parse_rule_component(rule: &mut &[u8]) -> Result<Component, i32> {
     *rule = &after[len..];
     match kw {
         Keyword::Ku | Keyword::Eku => parse_list_value(kw, value).map(|b| Component::Bits(kw, b)),
-        _ => Ere::new(value).map(|re| Component::Regexp(kw, re)),
+        _ => Ere::new(value).map(|re| Component::Regexp(kw, re, value.to_vec())),
     }
 }
 
@@ -282,21 +332,37 @@ fn matching_data(cert: &[u8]) -> Result<MatchData, i32> {
 
 /// MIT `component_match` (`pkinit_matching.c:468-535`): a list's words must all be set.
 /// MIT `component_match` (`pkinit_matching.c:484-497`): the UPN loop runs after the SAN loop, so with any UPN its outcome is the SAN keyword's.
-fn component_match(c: &Component, md: &MatchData) -> Result<bool, CertMatchError> {
-    let is = |re: &Ere, s: &[u8]| re.is_match(s).ok_or(CertMatchError::BackReference);
+fn component_match(
+    c: &Component,
+    md: &MatchData,
+    cert: usize,
+    trace: &mut dyn FnMut(MatchTrace<'_>),
+) -> Result<bool, CertMatchError> {
+    // MIT regexp_match; see docs/parity/a3-preauth.md
+    let mut is = |kw: &Keyword, re: &Ere, rule: &[u8], value: &[u8]| {
+        let matched = re.is_match(value).ok_or(CertMatchError::BackReference)?;
+        trace(MatchTrace::Regexp {
+            matched,
+            keyword: kw.name(),
+            rule,
+            value,
+            cert,
+        });
+        Ok::<bool, CertMatchError>(matched)
+    };
     Ok(match c {
-        Component::Regexp(Keyword::Subject, re) => is(re, &md.subject)?,
-        Component::Regexp(Keyword::Issuer, re) => is(re, &md.issuer)?,
-        Component::Regexp(_, re) => {
+        Component::Regexp(kw @ Keyword::Subject, re, rule) => is(kw, re, rule, &md.subject)?,
+        Component::Regexp(kw @ Keyword::Issuer, re, rule) => is(kw, re, rule, &md.issuer)?,
+        Component::Regexp(kw, re, rule) => {
             let mut matched = false;
             for s in &md.sans {
-                matched = is(re, s.as_bytes())?;
+                matched = is(kw, re, rule, s.as_bytes())?;
                 if matched {
                     break;
                 }
             }
             for u in &md.upns {
-                matched = is(re, u.as_bytes())?;
+                matched = is(kw, re, rule, u.as_bytes())?;
                 if matched {
                     break;
                 }

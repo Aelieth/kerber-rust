@@ -37,7 +37,9 @@
 #          pkinit_eku_checking = none it gets a TGT;
 #   PK.dir: a DIR: identity holding both, as NAME.crt and NAME.key links: with pkinit_cert_match = <EKU>pkinit (a
 #          profile ahead of /etc/krb5.conf in KRB5_CONFIG) kinit chooses alice's certificate and gets a TGT (the
-#          no-EKU one would be refused with 77); with no rule it chooses neither (rc 1);
+#          no-EKU one would be refused with 77); with no rule it chooses neither (rc 1); each kinit's trace gives
+#          MIT's matching lines (the rule, then 2 certs checked and 1 match; with no rule, 2 certs where one must be),
+#          ours the same lines as MIT's;
 #   PK.fallback: an identity file that is not there fails the PKINIT mechanism, and kinit goes on to alice's
 #          password on stdin and gets a TGT; with no password it fails (rc 1, the text observed);
 #   PK.twoid: a second X509_user_identity is refused before any request: "kinit: Preauth module pkinit:
@@ -249,15 +251,20 @@ if grep -q 'alice-noeku present' "$LAST_OUT"; then
     section "PK.dir a DIR: identity holding alice's certificate and her no-EKU one: <EKU>pkinit picks hers (MIT's kinit, then ours)"
     pkkdc PK.dir.kdc "\n[kdcdefaults]\n    pkinit_identity = FILE:$D/kdc.pem,$D/kdc.key\n    pkinit_anchors = FILE:$D/cacert.pem\n"
     check PK.dir.setup '^dir: alice-noeku\.crt alice-noeku\.key alice\.crt alice\.key$' run client2 "rm -rf ~/pk/dir && mkdir -p ~/pk/dir && for n in alice alice-noeku; do ln -s $C/\$n.pem ~/pk/dir/\$n.crt && ln -s $C/\$n.key ~/pk/dir/\$n.key || exit 1; done && printf '[libdefaults]\n    pkinit_cert_match = <EKU>pkinit\n' > ~/pk/match.conf && echo \"dir: \$(ls ~/pk/dir | LC_ALL=C sort | paste -sd' ' -)\""
-    # dirkinit <check> <kinit> [match]: alice's kinit with the DIR: identity, the <EKU>pkinit profile first when asked
+    # dirkinit <check> <kinit> [match]: alice's kinit with the DIR: identity, the <EKU>pkinit profile first when asked;
+    # the trace's certificate-matching lines after, kept for the comparison
     dirkinit() {
         local env='' rc=1
         [ -n "${3:-}" ] && env="KRB5_CONFIG=\$HOME/pk/match.conf:/etc/krb5.conf " rc=0
-        check "$1" "^kinit rc=$rc\$" run client2 "kdestroy -c FILE:\$HOME/pk/d.cc 2> /dev/null; $env$2 -X X509_anchors=FILE:$C/cacert.pem -X X509_user_identity=DIR:\$HOME/pk/dir -c FILE:\$HOME/pk/d.cc alice < /dev/null 2>&1; echo \"kinit rc=\$?\"; klist -c FILE:\$HOME/pk/d.cc 2>&1 | grep -E '^Default principal'"
+        check "$1" "^kinit rc=$rc\$" run client2 "kdestroy -c FILE:\$HOME/pk/d.cc 2> /dev/null; rm -f \$HOME/pk/d.trace; ${env}KRB5_TRACE=\$HOME/pk/d.trace $2 -X X509_anchors=FILE:$C/cacert.pem -X X509_user_identity=DIR:\$HOME/pk/dir -c FILE:\$HOME/pk/d.cc alice < /dev/null 2>&1; echo \"kinit rc=\$?\"; klist -c FILE:\$HOME/pk/d.cc 2>&1 | grep -E '^Default principal'; grep -oE 'PKINIT (client matching rule|client ignoring invalid rule|matched|didn.t match|client checked|no matching certificate|error: There are) .*' \$HOME/pk/d.trace"
+        grep -E '^PKINIT ' "$LAST_OUT" > "$STATE/$1.lines"
         if [ -n "${3:-}" ]; then
             checklast "$1.tgt" "^Default principal: alice@$R\$"
+            checklast "$1.rule" "^PKINIT client matching rule '<EKU>pkinit' against certificates\$"
+            checklast "$1.checked" '^PKINIT client checked 2 certs, found 1 matches$'
         else
             observelast "obs.$1" 'kinit: .*'
+            checklast "$1.default" '^PKINIT error: There are 2 certs, but there must be exactly one\.$'
         fi
     }
     for k in mit ${OURS:+ours}; do
@@ -266,6 +273,11 @@ if grep -q 'alice-noeku present' "$LAST_OUT"; then
         dirkinit "PK.dir.rule.$k" "$kinit" match
         dirkinit "PK.dir.norule.$k" "$kinit"
     done
+    if [ -n "${OURS:-}" ]; then
+        rule=$(printf '%q ' "$STATE/PK.dir.rule.mit.lines" "$STATE/PK.dir.rule.ours.lines")
+        norule=$(printf '%q ' "$STATE/PK.dir.norule.mit.lines" "$STATE/PK.dir.norule.ours.lines")
+        check PK.dir.lines '^matching lines: as MIT.s$' host "diff $rule && diff $norule && echo \"matching lines: as MIT's\""
+    fi
 else
     note "client2 holds no alice-noeku certificate: the PK.eku and PK.dir cells are not run"
 fi

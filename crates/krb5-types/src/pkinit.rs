@@ -27,7 +27,7 @@ pub use cms::{
 pub use identity::{
     IdentityError, IdentityKey, PkinitIdentity, load_ca_certs, load_identities, load_identity,
 };
-pub use matching::{CertMatchError, cert_match, select_cert};
+pub use matching::{CertMatchError, MatchTrace, cert_match, select_cert};
 pub use rsa::RsaKey;
 
 /// PA-PK-AS-REQ ::= SEQUENCE { signedAuthPack, trustedCertifiers, kdcPkId }

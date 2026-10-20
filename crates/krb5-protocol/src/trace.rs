@@ -695,6 +695,34 @@ fn strerror(e: i32) -> String {
         .map_or_else(|| s.clone(), str::to_owned)
 }
 
+pub fn pkinit_match(t: krb5_types::pkinit::MatchTrace<'_>) {
+    use krb5_types::pkinit::MatchTrace;
+    let count = |n: usize| i64::try_from(n).unwrap_or(i64::MAX);
+    match t {
+        MatchTrace::Rule(rule) => pkinit_cert_rule(rule),
+        MatchTrace::RuleInvalid(rule) => pkinit_cert_rule_invalid(rule),
+        MatchTrace::Regexp {
+            matched,
+            keyword,
+            rule,
+            value,
+            cert,
+        } => {
+            let number = count(cert).saturating_add(1);
+            if matched {
+                pkinit_regexp_match(keyword, rule, value, number);
+            } else {
+                pkinit_regexp_nomatch(keyword, rule, value, number);
+            }
+        }
+        MatchTrace::Checked { certs, matches } => {
+            pkinit_cert_num_matching(count(certs), count(matches));
+        }
+        MatchTrace::NoMatch => pkinit_no_matching_cert(),
+        MatchTrace::NoDefault(n) => pkinit_no_default_cert(count(n)),
+    }
+}
+
 /// The MIT code of a KDC error number (`ERROR_TABLE_BASE_krb5 + code`).
 #[must_use]
 pub fn kdc_code(code: i32) -> i64 {

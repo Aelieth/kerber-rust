@@ -8,6 +8,7 @@ use std::path::Path;
 use zeroize::{Zeroize, Zeroizing};
 
 use super::cms::{OID_ECDSA_SHA256, OID_RSA_SHA256, p256_sign, unbase64};
+use super::matching::{MatchTrace, select_cert};
 use super::rsa::RsaKey;
 use super::take_tlv;
 
@@ -149,12 +150,14 @@ impl std::fmt::Debug for PkinitIdentity {
 /// # Errors
 ///
 /// MIT's message for the value that does not load.
-pub fn load_identity(value: &str) -> Result<PkinitIdentity, IdentityError> {
+pub fn load_identity(
+    value: &str,
+    trace: &mut dyn FnMut(MatchTrace<'_>),
+) -> Result<PkinitIdentity, IdentityError> {
     let mut found = load_identities(value)?;
-    match found.len() {
-        1 => found.pop().ok_or_else(IdentityError::enoent),
-        _ => Err(IdentityError::einval()),
-    }
+    let certs: Vec<&[u8]> = found.iter().map(|c| c.cert.as_slice()).collect();
+    select_cert(&[], &certs, trace).map_err(|_| IdentityError::einval())?;
+    found.pop().ok_or_else(IdentityError::enoent)
 }
 
 /// Every certificate and key an identity value names, for a client to choose from: one for
