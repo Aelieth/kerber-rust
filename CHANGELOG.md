@@ -46,6 +46,7 @@ any other `###` heading.
 
 ### Tests and CI
 
+- **ci.** The audit job installs prebuilt cargo-audit 0.22.2 and runs `cargo audit --deny warnings`. It does not file issues.
 - **ci.** ci-policy prints the product and per-crate comment and test ratios and does not fail on them.
 - **ci.** Cap `[Unreleased]` at 24,000 bytes and pin CI to `ubuntu-24.04` with upload-artifact 7.0.2. Released sections are frozen. ci-policy enforces the cap.
 - **ci.** The docs size cap is 100 KiB. `docs/testing.md` names the same cap.

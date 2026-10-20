@@ -98,8 +98,8 @@ measure itself. No workflow runs that check on a schedule.
 ### CI lanes (which job runs which gates)
 
 Per-push (`.github/workflows/ci.yml`). Every workflow grants `permissions:
-contents: read` at the top (the `audit` job adds `checks`/`issues: write`
-for `rustsec/audit-check`). `ci.yml` cancels a superseded run
+contents: read` at the top. The `audit` job does too, and does not grant
+`checks` or `issues: write`. `ci.yml` cancels a superseded run
 (`concurrency`). Every third-party `uses:` is pinned to a commit SHA
 with the tag in a comment, and `.github/dependabot.yml` moves the pins.
 The toolchain, lld, and `rust-cache` steps are one composite,
@@ -111,7 +111,7 @@ The toolchain, lld, and `rust-cache` steps are one composite,
 | `doc` | `cargo doc --workspace --no-deps` under `RUSTDOCFLAGS=-D warnings`, then `cargo check --locked --manifest-path fuzz/Cargo.toml --bins` |
 | `shellcheck` | `shellcheck -S style` on `scripts/*.sh`, `scripts/lib/*.sh`, `harness/*.sh`, `dist/*.sh`, `harness/field/*.sh`, `harness/field/lib/*.sh`, and `harness/field/scenarios/*.sh`. ShellCheck is v0.11.0, checked by sha256. `.shellcheckrc` sets `external-sources=true` and disables `SC2329` |
 | `msrv` | `cargo build --workspace --all-targets --locked` on Rust 1.95, with the test-hooks features and without |
-| `audit` | `cargo audit`, `cargo deny`, `cargo vet --locked` (cargo-vet 0.10.0) |
+| `audit` | `cargo audit --deny warnings` (cargo-audit 0.22.2), `cargo deny`, `cargo vet --locked` (cargo-vet 0.10.0) |
 | `mit-smoke` | `run-harness.sh`, `client-gate.sh`, then a stock MIT KDC and `kdc-gate.sh`, `differential-gate.sh` |
 
 `nightly.yml` (cron `17 4 * * *`, manual, the `nightly` label on a pull request, and `v*` tags) runs four jobs on the schedule and the label. `moving` is one job, `fail-fast: false`, four groups. Each group is its own runner: it loads the MIT image, boots a shell and a stock MIT KDC, and runs only its gates. A gate step runs when its group matches and the job has not been cancelled. Cleanup is `if: always()`.

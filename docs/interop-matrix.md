@@ -61,7 +61,7 @@ from that tree by one test-only change, the version, the docs and the CHANGELOG.
 
 | Check | Drives | Asserts | CI |
 | --- | --- | --- | --- |
-| cargo-audit | `rustsec/audit-check` | known advisories fail red | audit |
+| cargo-audit | `cargo audit --deny warnings` (cargo-audit 0.22.2) | known advisories fail red | audit |
 | cargo-deny | `deny.toml` licenses/advisories/sources | allowlist only; crates.io sources | audit |
 | `cargo vet --locked` | `supply-chain/` (Google / Mozilla / Bytecode Alliance) | every third-party crate imported, locally audited, or exempt; cargo-vet **0.10.0** | audit |
 

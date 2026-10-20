@@ -136,18 +136,18 @@ jobs:
   audit:
     runs-on: ubuntu-26.04
     timeout-minutes: 20
-    # rustsec/audit-check writes a check run and files advisory issues.
+    # Prebuilt cargo-audit. No check run and no advisory issues.
     permissions:
       contents: read
-      checks: write
-      issues: write
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - uses: ./.github/actions/rust-preamble
-      - name: cargo-audit
-        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2.87.14
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          tool: cargo-audit@0.22.2
+      - name: cargo-audit
+        run: cargo audit --deny warnings
       - name: cargo-deny
         uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
       - name: Install cargo-vet
