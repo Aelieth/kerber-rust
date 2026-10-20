@@ -323,9 +323,10 @@ not check (a unit test, or "not asserted").
   `krb5-kdb load` of MIT's `kdb5_util dump` of
   `tests/traces/kdb/mit-dump-v7.txt` (taken after an MIT `alias a1 user`
   and a password history), Rust KDC, MIT `kinit user` / `kinit pauser`.
-  Half B: MIT `kdb5_util load` of the **running KDC at-rest file**
-  (`kdb5_util load_dump version 7`, not KDB3), MIT `krb5kdc`, MIT `kinit`
-  with `renew until` in `klist`. The database oracle is MIT `kdb5_util`
+  Half B: MIT `kdb5_util load` of `krb5-kdb dump`'s dump of the running
+  KDC's database (`kdb5_util load_dump version 7`, not KDB3; the database
+  appends each change, so it is dumped first, as MIT's DB2 file is), MIT
+  `krb5kdc`, MIT `kinit` with `renew until` in `klist`. The database oracle is MIT `kdb5_util`
   dump/load: MIT dump → Rust load → Rust KDC → MIT `kinit`, and Rust dump →
   MIT `kdb5_util load` → MIT `krb5kdc` → MIT `kinit`. Promotion is MIT
   `kinit` + `klist`, never a Rust-vs-Rust round-trip. Golden dump:

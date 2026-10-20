@@ -38,8 +38,9 @@ appendix A.4 output). Single-DES is not implemented.
 `KRB5_CONFIG` then `/etc/krb5.conf` `[realms]` (argv is the fallback).
 The KDC database oracle is MIT `kdb5_util` dump/load (`krb5-kdb`,
 version 7): the live at-rest file is dump text (`kdb5_util load_dump
-version 7`); MIT `kinit` both directions (`scripts/kdb-dump-gate.sh`
-loads the running KDC db file). Legacy KDB3 still loads for one
+version 7`) plus an append journal compacted on rewrite; MIT `kinit` both
+directions (`scripts/kdb-dump-gate.sh` loads `krb5-kdb dump`'s dump of the
+running KDC's database). Legacy KDB3 still loads for one
 release. MIT-wire kprop/kpropd on 754 wraps dump version 7 both
 directions (`scripts/kprop-gate.sh` MIT→Rust; `scripts/kprop-reverse-gate.sh`
 `krb5-kdb dump` + Rust `krb5-kprop -f` → MIT `kpropd` then MIT `kinit`,

@@ -69,8 +69,9 @@ names each gate's job and lane (the `kadmin-gate` / `kpasswd-gate` wrappers stan
 | **Samba 4 AD DC** *(live)* | AD PAC (NDR golden) · live `AD.KERBER.TEST`↔`KERBER.TEST` trust via real `samba-tool domain trust create` | `samba-pac-verify-gate`, `samba-pac-l2-gate`, `samba-crossrealm-gate`, `samba-realtrust-gate` |
 | **Heimdal 7.8** *(live)* | Both directions (Heimdal client ↔ Rust KDC; Rust client ↔ Heimdal KDC), with AES256-SHA1 configured | `heimdal-gate` |
 
-The KDC's live at-rest file is MIT dump **version 7** (the stash holds the
-master key); `krb5-kadmind` speaks ONC RPC program 2112 with AUTH_GSSAPI
+The KDC's live at-rest file is MIT dump **version 7** text plus an append
+journal compacted on rewrite, which MIT reads through `krb5-kdb dump` (the
+stash holds the master key); `krb5-kadmind` speaks ONC RPC program 2112 with AUTH_GSSAPI
 flavor 300001. `krb5-config` is consumed end to end: the KDC applies
 `kdc.conf` ticket policy, and `kinit` / TGS referral chasing read
 `KRB5_CONFIG` then `/etc/krb5.conf`. An omitted `max_renewable_life`

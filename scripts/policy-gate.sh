@@ -7,7 +7,7 @@ cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
 . "$ROOT/scripts/lib/kadmin-q.sh"
-need_bins krb5-kdc krb5-kadmind
+need_bins krb5-kdc krb5-kadmind krb5-kdb
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-policy-gate"
@@ -21,7 +21,8 @@ shell_container
 
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kadmind" "$NAME":/tmp/krb5-kadmind
-docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kadmind
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdb" "$NAME":/tmp/krb5-kdb
+docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kadmind /tmp/krb5-kdb
 
 docker exec -d \
     -e KRB5_TEST_USER_PASSWORD=userpassword \
@@ -295,14 +296,17 @@ echo "$DELGET" | grep -qiE 'does not exist|not found|UNK|unknown policy'
 echo "==== MIT kdb5_util load of history-N dump (KRB5_TL_KADM_DATA under kadmin/history) ===="
 # The history lives in MIT's own record (tl_data type 3, osa_princ_ent_rec
 # with old_keys under the kadmin/history key), not a private type.
-HISTLINE="$(docker exec "$NAME" grep -E $'^princ\t[0-9]+\t[0-9]+\t[0-9]+\t[0-9]+\t[0-9]+\thistuser@KERBER.TEST\t' /tmp/principal)"
+# The database appends each change, so the greps and MIT's load read krb5-kdb dump's dump of it.
+docker exec -e KRB5_MASTER_PASSWORD=masterpassword -e KRB5_KDC_DB=/tmp/principal -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kdb dump /tmp/rust.dump
+HISTLINE="$(docker exec "$NAME" grep -E $'^princ\t[0-9]+\t[0-9]+\t[0-9]+\t[0-9]+\t[0-9]+\thistuser@KERBER.TEST\t' /tmp/rust.dump)"
 echo "$HISTLINE" | cut -c1-160
 echo "$HISTLINE" | grep -q $'\t3\t'
-if docker exec "$NAME" grep -q $'\t19204\t' /tmp/principal; then
+if docker exec "$NAME" grep -q $'\t19204\t' /tmp/rust.dump; then
     log "policy.gate" "error" ',"error":"rust dump still carries the private TL_KERBER_HIST 0x4B04"'
     exit 1
 fi
-docker exec "$NAME" grep -q 'kadmin/history@KERBER.TEST' /tmp/principal
+docker exec "$NAME" grep -q 'kadmin/history@KERBER.TEST' /tmp/rust.dump
 # Stop rust KDC/kadmind so MIT krb5kdc can bind :88 and load the dump.
 docker exec "$NAME" sh -c '
 for comm in /proc/[0-9]*/comm; do
@@ -332,7 +336,7 @@ fi
 docker exec "$NAME" sh -c 'kdb5_util destroy -f >/dev/null 2>&1 || true'
 docker exec "$NAME" kdb5_util create -s -P masterpassword >/dev/null
 LOADRC=0
-LOADH="$(docker exec "$NAME" kdb5_util load /tmp/principal 2>&1)" || LOADRC=$?
+LOADH="$(docker exec "$NAME" kdb5_util load /tmp/rust.dump 2>&1)" || LOADRC=$?
 echo "$LOADH"
 if [ "$LOADRC" -ne 0 ] || echo "$LOADH" | grep -qiE 'error|fail|cannot parse'; then
     log "policy.gate" "error" ',"error":"MIT kdb5_util load rejected history dump"'
