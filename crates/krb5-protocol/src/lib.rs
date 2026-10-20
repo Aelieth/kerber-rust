@@ -62,14 +62,14 @@ pub use ap_req::{
 };
 pub use as_ex::{
     AsOutcome, AsPrompt, AsRequest, AsTicketOpts, DEFAULT_PREFERRED_PREAUTH_TYPES, FastArmor,
-    IdentifyReply, OtpChallengeView, OtpTokenView, PasswordPrompt, PkinitClient, PreauthPrompt,
-    PromptType, QUESTION_OTP, QUESTION_PASSWORD, Responder, ResponderItems, as_exchange,
-    as_exchange_defer_fast, as_exchange_interactive, as_exchange_key, as_exchange_prompted,
-    as_exchange_prompted_defer_fast, as_exchange_with_keys, as_exchange_with_keys_defer_fast,
-    as_exchange_with_unreadable_keytab, as_exchange_with_unreadable_keytab_defer_fast,
-    as_identify_realm, as_init_creds_options, check_as_rep_times, conf_etypes,
-    insert_module_padata_before_info_pa, sort_krb5_padata_sequence, verify_as_reply_req_times,
-    verify_as_reply_server,
+    IdentifyReply, OtpChallengeView, OtpTokenView, PasswordPrompt, Pkinit, PkinitClient,
+    PkinitFailure, PreauthPrompt, PromptType, QUESTION_OTP, QUESTION_PASSWORD, Responder,
+    ResponderItems, as_exchange, as_exchange_defer_fast, as_exchange_interactive, as_exchange_key,
+    as_exchange_prompted, as_exchange_prompted_defer_fast, as_exchange_with_keys,
+    as_exchange_with_keys_defer_fast, as_exchange_with_unreadable_keytab,
+    as_exchange_with_unreadable_keytab_defer_fast, as_identify_realm, as_init_creds_options,
+    check_as_rep_times, conf_etypes, insert_module_padata_before_info_pa,
+    sort_krb5_padata_sequence, verify_as_reply_req_times, verify_as_reply_server,
 };
 #[cfg(feature = "test-hooks")]
 pub use auth_con::set_test_seq_random;
@@ -99,7 +99,10 @@ pub use chpw::{
     chpw_result_code_string, format_chpw_failure, key_exp_should_changepw, parse_chpw_rep,
     parse_chpw_result, set_password,
 };
-pub use clpreauth::{ClPreauth, clear_thread_clpreauth, register_clpreauth, set_thread_clpreauth};
+pub use clpreauth::{
+    ClPreauth, clear_thread_clpreauth, loaded as clpreauth_loaded, register_clpreauth,
+    set_thread_clpreauth,
+};
 #[cfg(feature = "diff")]
 pub use diff::{
     DiffError, StableKrbError, StableRep, compare_krb_error, compare_preauth_e_data,

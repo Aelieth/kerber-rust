@@ -33,6 +33,10 @@
 #   PK.dir: a DIR: identity holding both, as NAME.crt and NAME.key links: with pkinit_cert_match = <EKU>pkinit (a
 #          profile ahead of /etc/krb5.conf in KRB5_CONFIG) kinit chooses alice's certificate and gets a TGT (the
 #          no-EKU one would be refused with 77); with no rule it chooses neither (rc 1);
+#   PK.fallback: an identity file that is not there fails the PKINIT mechanism, and kinit goes on to alice's
+#          password on stdin and gets a TGT; with no password it fails (rc 1, the text observed);
+#   PK.twoid: a second X509_user_identity is refused before any request: "kinit: Preauth module pkinit:
+#          X509_user_identity can not be given twice", then " while setting 'X509_user_identity'='<value>'" (rc 1);
 #   obs.PK.rsa: the RSA KDC identity's startup line (INFO): MIT serves with it; kerber-rust's KDC identity is P-256
 #          only, so its line is the documented "Cannot use key file ...: only P-256 EC keys are supported".
 # Graded on both legs, MIT's first. In the rust leg the client cells run twice: MIT's kinit, then ours, kdc's
@@ -217,6 +221,35 @@ if grep -q 'alice-noeku present' "$LAST_OUT"; then
 else
     note "client2 holds no alice-noeku certificate: the PK.eku and PK.dir cells are not run"
 fi
+
+section "PK.fallback an identity that does not load: kinit goes on to the password; PK.twoid a second identity is refused (MIT's kinit, then ours)"
+pkkdc PK.fallback.kdc "\n[kdcdefaults]\n    pkinit_identity = FILE:$D/kdc.pem,$D/kdc.key\n    pkinit_anchors = FILE:$D/cacert.pem\n"
+legset ALICE
+# fbkinit <check> <kinit> [nopw]: alice's kinit naming a certificate file that is not there, her password on stdin
+# (with nopw, none)
+fbkinit() {
+    local cmd="mkdir -p ~/pk && kdestroy -c FILE:\$HOME/pk/f.cc 2> /dev/null; $2 -X X509_anchors=FILE:$C/cacert.pem -X X509_user_identity=FILE:/nonexistent -c FILE:\$HOME/pk/f.cc alice"
+    if [ -z "${3:-}" ]; then
+        check "$1" '^kinit rc=0$' runin client2 "alice's password ($ALICE)" "$cmd > /dev/null 2>&1; echo \"kinit rc=\$?\"; klist -c FILE:\$HOME/pk/f.cc 2>&1 | grep -E '^Default principal'" < <(once "$ALICE")
+        checklast "$1.tgt" "^Default principal: alice@$R\$"
+    else
+        check "$1" '^kinit rc=1$' run client2 "$cmd < /dev/null 2>&1; echo \"kinit rc=\$?\""
+        observelast "obs.$1" 'kinit: .*'
+    fi
+}
+# twoid <check> <kinit>: two X509_user_identity options
+twoid() {
+    check "$1" '^kinit rc=1$' run client2 "$2 -X X509_user_identity=FILE:$C/alice.pem,$C/alice.key -X X509_user_identity=FILE:/nonexistent -c FILE:\$HOME/pk/t.cc alice < /dev/null 2>&1; echo \"kinit rc=\$?\""
+    checklast "$1.text" '^kinit: Preauth module pkinit: X509_user_identity can not be given twice$'
+    checklast "$1.while" "^ while setting 'X509_user_identity'='FILE:/nonexistent'\$"
+}
+for k in mit ${OURS:+ours}; do
+    kinit=kinit
+    [ "$k" = ours ] && kinit=$OURS
+    fbkinit "PK.fallback.$k" "$kinit"
+    fbkinit "PK.fallback.nopw.$k" "$kinit" nopw
+    twoid "PK.twoid.$k" "$kinit"
+done
 
 section "obs.PK.rsa an RSA KDC identity: MIT serves with it; kerber-rust's KDC identity is P-256 only (INFO)"
 pkkdc PK.rsa.kdc "\n[kdcdefaults]\n    pkinit_identity = FILE:$D/kdc-rsa.pem,$D/kdc-rsa.key\n    pkinit_anchors = FILE:$D/cacert.pem\n    pkinit_anchors = FILE:$D/rsa-cacert.pem\n"

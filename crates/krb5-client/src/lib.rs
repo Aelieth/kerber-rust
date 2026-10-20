@@ -12,14 +12,16 @@ use std::path::Path;
 use krb5_asn1::decode;
 use krb5_config::{CcSpec, ClientContext, Krb5Conf};
 use krb5_protocol::{
-    AsOutcome, AsPrompt, AsRequest, AsTicketOpts, FastArmor, KdcAddr, KeytabFailure, PkinitClient,
-    PreauthPrompt, TgsOutcome, as_exchange, as_exchange_defer_fast, as_exchange_interactive,
-    as_exchange_with_keys, as_exchange_with_keys_defer_fast, as_exchange_with_unreadable_keytab,
-    as_exchange_with_unreadable_keytab_defer_fast, dir_cache_path, dir_cache_path_for_store,
-    kcm_destroy, kcm_load, kcm_store, kcm_store_keep_default, memory_destroy, memory_retrieve,
-    memory_store, parse_principal_ex, read_keytab_file, tgs_exchange_path,
+    AsOutcome, AsPrompt, AsRequest, AsTicketOpts, FastArmor, KdcAddr, KeytabFailure, Pkinit,
+    PkinitClient, PkinitFailure, PreauthPrompt, TgsOutcome, as_exchange, as_exchange_defer_fast,
+    as_exchange_interactive, as_exchange_with_keys, as_exchange_with_keys_defer_fast,
+    as_exchange_with_unreadable_keytab, as_exchange_with_unreadable_keytab_defer_fast,
+    dir_cache_path, dir_cache_path_for_store, kcm_destroy, kcm_load, kcm_store,
+    kcm_store_keep_default, memory_destroy, memory_retrieve, memory_store, parse_principal_ex,
+    read_keytab_file, tgs_exchange_path,
 };
 use krb5_types::Ticket;
+use krb5_types::pkinit::{CertMatchError, IdentityError};
 use zeroize::{Zeroize, Zeroizing};
 
 pub use krb5_protocol::{
@@ -896,37 +898,76 @@ fn conf_default_realm(ctx: &ClientContext) -> Option<String> {
     ctx.profile.default_realm.clone()
 }
 
-/// The client's PKINIT identity: the first of `identities` that loads, the certificate `rules`
-/// pick among its certificates, and the anchor.
-/// MIT `pkinit_identity_initialize` (`plugins/preauth/pkinit/pkinit_identity.c:509-562`): `X509_user_identity`, else each `pkinit_identities` value until one loads.
-/// MIT `pkinit_identity_prompt` (`plugins/preauth/pkinit/pkinit_identity.c:571-606`): a client picks its certificate by `pkinit_cert_match`.
-fn load_pkinit(
-    identities: &[String],
-    anchors: &Path,
-    rules: &[String],
-) -> Result<PkinitClient, Box<dyn std::error::Error + Send + Sync>> {
-    let mut failed = String::from("No user identity options specified");
-    let mut creds = None;
-    for value in identities {
-        match krb5_types::pkinit::load_identities(value) {
-            Ok(c) => {
-                creds = Some(c);
-                break;
-            }
-            Err(e) => failed = e,
+/// The client's PKINIT: an identity and anchor that loaded, or the `pkinit` module's failure.
+enum ClientPkinit {
+    Ready(PkinitClient),
+    Failed(PkinitFailure),
+}
+
+impl ClientPkinit {
+    fn arg(&self) -> Pkinit<'_> {
+        match self {
+            Self::Ready(c) => Pkinit::Client(c),
+            Self::Failed(f) => Pkinit::Failed(f),
         }
     }
-    let creds = creds.ok_or(failed)?;
+}
+
+/// The client's PKINIT: the first of `identities` that loads, the certificate `rules` pick among
+/// its certificates, and the anchor; else the failure MIT's module meets first, in its code and
+/// message, so the walk passes over PKINIT to the next mechanism.
+/// MIT `pkinit_identity_initialize` (`plugins/preauth/pkinit/pkinit_identity.c:509-562`): `X509_user_identity`, else each `pkinit_identities` value until one loads; none is "No user identity options specified".
+/// MIT `pkinit_client_process` (`plugins/preauth/pkinit/pkinit_clnt.c:950-998`): no anchors fails the module first, then `pkinit_identity_prompt`'s failure.
+/// MIT `pkinit_identity_prompt` (`plugins/preauth/pkinit/pkinit_identity.c:571-660`): the certificates (with no identity, `crypto_load_certs` is `EINVAL`), the choice by `pkinit_cert_match`, then the anchors.
+fn load_pkinit(
+    identities: &[String],
+    anchors: Option<&Path>,
+    rules: &[String],
+) -> Result<ClientPkinit, Box<dyn std::error::Error + Send + Sync>> {
+    let mut found = Err(IdentityError {
+        code: 22,
+        text: "Invalid argument".into(),
+    });
+    for value in identities {
+        found = krb5_types::pkinit::load_identities(value);
+        if found.is_ok() {
+            break;
+        }
+    }
+    let no_identity = found.is_err();
+    let fail = |code, text, prompted| {
+        Ok(ClientPkinit::Failed(PkinitFailure {
+            code,
+            text,
+            no_identity,
+            prompted,
+        }))
+    };
+    let base = krb5_protocol::trace::ERROR_TABLE_BASE_KRB5;
+    let Some(anchors) = anchors else {
+        return fail(base + 210, "No pkinit_anchors supplied".into(), false);
+    };
+    let creds = match found {
+        Ok(c) => c,
+        Err(e) => return fail(e.code, e.text, true),
+    };
     let certs: Vec<&[u8]> = creds.iter().map(|c| c.cert.as_slice()).collect();
-    let pick = krb5_types::pkinit::select_cert(rules, &certs).map_err(|e| e.to_string())?;
+    let pick = match krb5_types::pkinit::select_cert(rules, &certs) {
+        Ok(i) => i,
+        Err(e @ CertMatchError::Code(c)) => return fail(i64::from(c), e.to_string(), true),
+        Err(e) => return fail(base + 24, e.to_string(), true),
+    };
     let chosen = creds.get(pick).ok_or("pkinit identity")?;
-    let anc = std::fs::read_to_string(anchors)?;
-    let ca_cert = krb5_types::pkinit::parse_pem("CERTIFICATE", &anc).ok_or("pkinit anchors PEM")?;
-    Ok(PkinitClient {
+    // MIT `load_cas_and_crls` (`plugins/preauth/pkinit/pkinit_crypto_openssl.c:5044-5053`): a file that does not open or read fails with `oerr`'s default code.
+    let ca = match krb5_types::pkinit::load_ca_certs(&format!("FILE:{}", anchors.display())) {
+        Ok(certs) => certs.into_iter().next().ok_or("pkinit anchors PEM")?,
+        Err(text) => return fail(base + 24, text, true),
+    };
+    Ok(ClientPkinit::Ready(PkinitClient {
         cert: chosen.cert.clone(),
         key: *chosen.key(),
-        ca_cert,
-    })
+        ca_cert: ca,
+    }))
 }
 
 fn load_pkinit_anchors(
@@ -1065,7 +1106,7 @@ struct AsShape<'a> {
     kdc: &'a KdcAddr,
     profile: &'a Krb5Conf,
     want_spake: bool,
-    pkinit: Option<&'a PkinitClient>,
+    pkinit: Option<Pkinit<'a>>,
     canonicalize: bool,
     sname: Option<&'a krb5_types::PrincipalName>,
     etypes: &'a [i32],
@@ -1191,14 +1232,10 @@ fn kinit_inner(
     let an_path = params.pkinit_anchors.map(Path::to_path_buf).or(conf_an);
     // Live MIT 1.22.2 `kinit -X X509_anchors=… alice`: anchors
     // without an identity leave the password AS as it was.
-    let pkinit = match (identities.is_empty(), an_path.as_deref(), params.anonymous) {
-        (false, Some(a), _) => Some(load_pkinit(&identities, a, &rules)?),
-        (true, Some(a), true) => Some(load_pkinit_anchors(a)?),
-        (false, None, _) => {
-            return Err("pkinit requires identity and anchors".into());
-        }
-        (true, None, true) => return Err("anonymous PKINIT requires pkinit_anchors".into()),
-        (true, _, false) => None,
+    let pkinit = match (an_path.as_deref(), params.anonymous) {
+        (Some(a), true) => ClientPkinit::Ready(load_pkinit_anchors(a)?),
+        (None, true) => return Err("anonymous PKINIT requires pkinit_anchors".into()),
+        (a, false) => load_pkinit(&identities, a, &rules)?,
     };
     let mut etypes = krb5_protocol::conf_etypes(&ctx.profile, false);
     let mut ticket = params.ticket;
@@ -1273,7 +1310,7 @@ fn kinit_inner(
         kdc: &resolved,
         profile: &ctx.profile,
         want_spake: params.want_spake,
-        pkinit: pkinit.as_ref(),
+        pkinit: Some(pkinit.arg()),
         canonicalize: params.canonicalize || params.enterprise,
         sname: in_tkt_sname.as_ref(),
         etypes: &etypes,

@@ -56,8 +56,9 @@ pub struct KinitArgs {
     pub anonymous: bool,
     /// `-C`.
     pub canonicalize: bool,
-    /// `-X` values.
-    pub pa_attrs: Vec<String>,
+    /// `-X attr[=value]`, in order, a bare attribute's value `yes`.
+    /// MIT `add_preauth_opt` (`clients/kinit/kinit.c:196-219`): the attribute is what precedes the first `=`.
+    pub pa_opts: Vec<(String, String)>,
     /// `-T armor_ccache`.
     pub armor_ccache: Option<String>,
     /// `-I input_ccache`.
@@ -281,8 +282,10 @@ pub fn parse_kinit(args: &[String]) -> Result<KinitArgs, KinitParseError> {
             'I' if out.in_ccache.is_some() => lines.push(own("Only one -I option allowed")),
             'I' => out.in_ccache = Some(arg),
             'X' => {
-                apply_x_attr(&mut out, &arg);
-                out.pa_attrs.push(arg);
+                let (attr, value) = arg.split_once('=').unwrap_or((&arg, "yes"));
+                let opt = (attr.to_owned(), value.to_owned());
+                apply_x_attr(&mut out, &opt.0, &opt.1);
+                out.pa_opts.push(opt);
             }
             'C' => out.canonicalize = true,
             'E' => out.enterprise = true,
@@ -366,18 +369,14 @@ fn kinit_positionals(out: &mut KinitArgs, rest: Vec<String>) -> Vec<String> {
     }
 }
 
-fn apply_x_attr(out: &mut KinitArgs, v: &str) {
-    if let Some(p) = v
-        .strip_prefix("X509_user_identity=")
-        .or_else(|| v.strip_prefix("X509_user_identity"))
-    {
-        let p = p.strip_prefix('=').unwrap_or(p);
-        if !p.is_empty() {
-            out.pkinit_identity = Some(p.to_owned());
+/// MIT `handle_gic_opt` (`plugins/preauth/pkinit/pkinit_clnt.c:1307-1335`): the first `X509_user_identity` is the identity, a second is refused when the options are set; `X509_anchors` adds an anchor.
+fn apply_x_attr(out: &mut KinitArgs, attr: &str, value: &str) {
+    match attr {
+        "X509_user_identity" if out.pkinit_identity.is_none() => {
+            out.pkinit_identity = Some(value.to_owned());
         }
-    }
-    if let Some(p) = v.strip_prefix("X509_anchors=") {
-        out.pkinit_anchors = Some(strip_file_spec(p));
+        "X509_anchors" => out.pkinit_anchors = Some(strip_file_spec(value)),
+        _ => {}
     }
 }
 

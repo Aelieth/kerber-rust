@@ -89,8 +89,9 @@ pub struct AsRequest<'a> {
     /// FAST armor (PA-FX-FAST). The inner preauth is the first loaded real mechanism in the
     /// hint: SPAKE, then encrypted challenge, then encrypted timestamp.
     pub fast_armor: Option<&'a FastArmor>,
-    /// PKINIT identity. Empty 150 first; PA-16 on the retry with the hint token.
-    pub pkinit: Option<&'a PkinitClient>,
+    /// PKINIT: an identity that loaded (empty 150 first; PA-16 on the retry with the hint token),
+    /// or one that cannot run.
+    pub pkinit: Option<Pkinit<'a>>,
     /// RFC 6806 canonicalize (NT-ENTERPRISE client names).
     pub canonicalize: bool,
     /// Optional AS sname (default `krbtgt/REALM`). `kadmin/changepw` for kpasswd.
@@ -167,6 +168,30 @@ impl AsTicketOpts {
     pub fn preauth_allowed(&self, pa_type: i32) -> bool {
         self.allowed_preauth_type.is_none_or(|t| t == pa_type)
     }
+}
+
+/// The PKINIT of a request.
+#[derive(Clone, Copy)]
+pub enum Pkinit<'a> {
+    /// An identity and anchor that loaded.
+    Client(&'a PkinitClient),
+    /// The `pkinit` module cannot run: when the hint offers PA-PK-AS-REQ it fails there, and the
+    /// next mechanism runs.
+    Failed(&'a PkinitFailure),
+}
+
+/// Why the client's `pkinit` module fails, in MIT's code and message.
+/// MIT `pkinit_client_process` (`plugins/preauth/pkinit/pkinit_clnt.c:950-998`): no anchors, else `pkinit_identity_prompt`'s failure: the certificates, the choice among them, the anchors.
+#[derive(Clone, Debug)]
+pub struct PkinitFailure {
+    /// MIT's `krb5_error_code`.
+    pub code: i64,
+    /// The message MIT sets for it.
+    pub text: String,
+    /// `pkinit_identity_initialize` failed, which the module traces when it prepares.
+    pub no_identity: bool,
+    /// The failure is `pkinit_identity_prompt`'s, which the module traces too.
+    pub prompted: bool,
 }
 
 /// RFC 4556 client certificate + trust anchor for PKINIT.
@@ -499,7 +524,7 @@ fn as_exchange_inner(
     // MIT `k5_init_preauth_context` (`lib/krb5/krb/preauth2.c:133-146`): pkinit answers only when
     // that clpreauth module loaded. Anonymous has no other mechanism.
     if crate::clpreauth::loaded(req.profile, "pkinit")
-        && (req.pkinit.is_some() || req.ticket.anonymous)
+        && (matches!(req.pkinit, Some(Pkinit::Client(_))) || req.ticket.anonymous)
     {
         return continue_pkinit(req, nonce, &bound, &etypes, &clock);
     }
@@ -800,6 +825,7 @@ fn continue_from_hint(
     // MIT `init_creds_step_request` (`lib/krb5/krb/get_in_tkt.c:1315-1317`): a `PREAUTH_FAILED` the KDC sent ends the mechanism that was answered, and its code is the error saved.
     // MIT `init_creds_step_request` (`lib/krb5/krb/get_in_tkt.c:1349-1352`): if the mechanisms after it fail too, the saved error is the one reported.
     let mut refused: Option<KrbError> = None;
+    let mut prepared = false;
     let mut hint = err.clone();
     loop {
         let method = method_from_error(&hint)?;
@@ -810,7 +836,9 @@ fn continue_from_hint(
         trace_preauth_input(&sorted, etypes);
         // MIT `k5_preauth` (`lib/krb5/krb/preauth2.c:1004-1016`): the modules prepare their
         // questions and the responder answers them before the walk.
-        ask_responder(req, pw, None, &allowed_padata(req, &sorted))?;
+        let allowed = allowed_padata(req, &sorted);
+        pkinit_prepare(req, &allowed, &mut prepared);
+        ask_responder(req, pw, None, &allowed)?;
         // MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:667-723`): one walk over the list in
         // its order. A real mechanism that fails is traced and the next one runs, with no new
         // request between them; a walk that ends in a request is followed by a new one on the
@@ -823,9 +851,14 @@ fn continue_from_hint(
                 if !req.ticket.preauth_allowed(p.padata_type) {
                     return None;
                 }
-                unarmored_mech(req.profile, p.padata_type, &failed)
+                unarmored_mech(req, p.padata_type, &failed)
             });
             match next {
+                Some(Unarmored::Pkinit(f)) => {
+                    let fail = pkinit_fails(f);
+                    failed.push(pa::PK_AS_REQ);
+                    first_failure.get_or_insert(fail.error);
+                }
                 Some(Unarmored::Spake) => {
                     match continue_spake(req, keys, nonce, etypes, &hint, &groups, clock, pw)? {
                         SpakeEnd::Done(out) => return Ok(*out),
@@ -888,7 +921,8 @@ fn continue_from_hint(
 }
 
 /// The first unarmored real mechanism a loaded clpreauth module will run.
-enum Unarmored {
+enum Unarmored<'a> {
+    Pkinit(&'a PkinitFailure),
     Spake,
     Encts,
     Embedder(std::sync::Arc<dyn crate::clpreauth::ClPreauth>, i32),
@@ -897,11 +931,15 @@ enum Unarmored {
 /// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:669-674`): a pa-type with no loaded module is
 /// skipped. Encrypted challenge runs only under armor (`fast_mechanism`).
 /// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:675-677`): a real type that failed earlier in the authentication (`failed`) is not tried again.
-fn unarmored_mech(profile: &Krb5Conf, pa_type: i32, failed: &[i32]) -> Option<Unarmored> {
+fn unarmored_mech<'a>(req: &AsRequest<'a>, pa_type: i32, failed: &[i32]) -> Option<Unarmored<'a>> {
     if failed.contains(&pa_type) {
         return None;
     }
-    match crate::clpreauth::owner_of(profile, pa_type) {
+    match crate::clpreauth::owner_of(req.profile, pa_type) {
+        Some(crate::clpreauth::Owner::Pkinit) => match req.pkinit {
+            Some(Pkinit::Failed(f)) => Some(Unarmored::Pkinit(f)),
+            _ => None,
+        },
         Some(crate::clpreauth::Owner::Spake) => Some(Unarmored::Spake),
         Some(crate::clpreauth::Owner::EncTs) => Some(Unarmored::Encts),
         Some(crate::clpreauth::Owner::Embedder(module)) if module.real(pa_type) => {
@@ -1095,7 +1133,7 @@ fn hint_offers_real_mechanism(req: &AsRequest<'_>, err: &KrbError) -> bool {
     }
     method.iter().any(|p| {
         req.ticket.preauth_allowed(p.padata_type)
-            && unarmored_mech(req.profile, p.padata_type, &[]).is_some()
+            && unarmored_mech(req, p.padata_type, &[]).is_some()
     })
 }
 
@@ -1126,6 +1164,38 @@ const ENCTS_MODULE: &str = "encrypted_timestamp";
 
 /// MIT's name of the PKINIT module (`pkinit_clnt.c`).
 const PKINIT_MODULE: &str = "pkinit";
+
+/// The `pkinit` module prepares once, when a hint first offers PA-PK-AS-REQ, and traces an
+/// identity that did not load.
+/// MIT `pkinit_client_prep_questions` (`plugins/preauth/pkinit/pkinit_clnt.c:766-783`): `pkinit_identity_initialize` runs once per request.
+fn pkinit_prepare(req: &AsRequest<'_>, method: &[PaData], prepared: &mut bool) {
+    if *prepared
+        || !method.iter().any(|p| p.padata_type == pa::PK_AS_REQ)
+        || !matches!(
+            crate::clpreauth::owner_of(req.profile, pa::PK_AS_REQ),
+            Some(crate::clpreauth::Owner::Pkinit)
+        )
+    {
+        return;
+    }
+    *prepared = true;
+    if let Some(Pkinit::Failed(f)) = req.pkinit
+        && f.no_identity
+    {
+        trace::pkinit_client_no_identity();
+    }
+}
+
+/// A `pkinit` module that cannot run fails as MIT's does, traced, and the walk goes on.
+/// MIT `pkinit_client_process` (`plugins/preauth/pkinit/pkinit_clnt.c:950-998`): no anchors, or `pkinit_identity_prompt`'s failure, which it traces.
+fn pkinit_fails(f: &PkinitFailure) -> ModuleFail {
+    if f.prompted {
+        trace::pkinit_client_no_identity();
+    }
+    let fail = ModuleFail::new(f.code, &f.text);
+    fail.trace(PKINIT_MODULE, pa::PK_AS_REQ);
+    fail
+}
 
 /// MIT `init_creds_step_request` (`get_in_tkt.c:1316-1328`): an error other than preauth-required
 /// is retried through the selected mechanism.
@@ -1178,9 +1248,9 @@ fn continue_pkinit(
     etypes: &[i32],
     clock: &Clock,
 ) -> Result<AsOutcome, Error> {
-    let pk = req
-        .pkinit
-        .ok_or_else(|| Error::ReplyMismatch("PKINIT identity missing".into()))?;
+    let Some(Pkinit::Client(pk)) = req.pkinit else {
+        return Err(Error::ReplyMismatch("PKINIT identity missing".into()));
+    };
     let kp = p256_generate()?;
     // MIT get_in_tkt: empty 150 first, then copy the hint token into AuthPack.
     let first = build_as_req_from(req, nonce, bound, None, etypes)?;

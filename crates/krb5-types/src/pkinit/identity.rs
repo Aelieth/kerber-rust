@@ -13,6 +13,11 @@ use super::take_tlv;
 const EINVAL: &str = "Invalid argument";
 const ENOENT: &str = "No such file or directory";
 const ENOTSUP: &str = "Operation not supported";
+const EIO: i64 = 5;
+/// `KRB5_PREAUTH_FAILED`, which `process_option_identity` returns for an unknown type.
+const PREAUTH_FAILED: i64 = -1_765_328_174;
+/// `KRB5KDC_ERR_PREAUTH_FAILED`, what `oerr` makes of a code of 0.
+const KDC_PREAUTH_FAILED: i64 = -1_765_328_360;
 /// `ERR_reason_error_string` of a system error is NULL, which glibc prints so.
 const NO_REASON: &str = "(null)";
 /// MIT `MAX_CREDS_ALLOWED` (`pkinit.h`): the most identities a `DIR:` yields.
@@ -49,6 +54,44 @@ impl PkinitIdentity {
     }
 }
 
+/// Why an identity did not load: MIT's code and the message it sets.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IdentityError {
+    /// MIT's `krb5_error_code`: an errno, or a Kerberos code.
+    pub code: i64,
+    /// The message `krb5_get_error_message` gives for it.
+    pub text: String,
+}
+
+impl IdentityError {
+    fn new(code: i64, text: impl Into<String>) -> Self {
+        Self {
+            code,
+            text: text.into(),
+        }
+    }
+
+    fn einval() -> Self {
+        Self::new(22, EINVAL)
+    }
+
+    fn enoent() -> Self {
+        Self::new(2, ENOENT)
+    }
+}
+
+impl std::fmt::Display for IdentityError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.text)
+    }
+}
+
+impl From<IdentityError> for String {
+    fn from(e: IdentityError) -> Self {
+        e.text
+    }
+}
+
 impl std::fmt::Debug for PkinitIdentity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PkinitIdentity")
@@ -67,11 +110,11 @@ impl std::fmt::Debug for PkinitIdentity {
 /// # Errors
 ///
 /// MIT's message for the value that does not load.
-pub fn load_identity(value: &str) -> Result<PkinitIdentity, String> {
+pub fn load_identity(value: &str) -> Result<PkinitIdentity, IdentityError> {
     let mut found = load_identities(value)?;
     match found.len() {
-        1 => found.pop().ok_or_else(|| ENOENT.into()),
-        _ => Err(EINVAL.into()),
+        1 => found.pop().ok_or_else(IdentityError::enoent),
+        _ => Err(IdentityError::einval()),
     }
 }
 
@@ -82,24 +125,27 @@ pub fn load_identity(value: &str) -> Result<PkinitIdentity, String> {
 /// # Errors
 ///
 /// As [`load_identity`]; a `DIR:` holding no pair that loads is `ENOENT`'s text.
-pub fn load_identities(value: &str) -> Result<Vec<PkinitIdentity>, String> {
+pub fn load_identities(value: &str) -> Result<Vec<PkinitIdentity>, IdentityError> {
     load_identities_at(value, 0)
 }
 
-fn load_identities_at(value: &str, depth: usize) -> Result<Vec<PkinitIdentity>, String> {
+fn load_identities_at(value: &str, depth: usize) -> Result<Vec<PkinitIdentity>, IdentityError> {
     let (kind, residual) = value.split_once(':').unwrap_or(("FILE", value));
     match kind {
         "FILE" => {
-            let (cert, key) = parse_fs_options(residual).ok_or(EINVAL)?;
+            let (cert, key) = parse_fs_options(residual).ok_or_else(IdentityError::einval)?;
             Ok(vec![load_cert_and_key(cert, key)?])
         }
         "DIR" => load_identity_dir(residual),
         "ENV" if depth < 8 => match std::env::var(residual) {
             Ok(v) => load_identities_at(&v, depth + 1),
-            Err(_) => Err(EINVAL.into()),
+            Err(_) => Err(IdentityError::einval()),
         },
-        "ENV" => Err(EINVAL.into()),
-        _ => Err(format!("Unsupported type while processing '{value}'\n")),
+        "ENV" => Err(IdentityError::einval()),
+        _ => Err(IdentityError::new(
+            PREAUTH_FAILED,
+            format!("Unsupported type while processing '{value}'\n"),
+        )),
     }
 }
 
@@ -114,21 +160,28 @@ fn parse_fs_options(residual: &str) -> Option<(&str, &str)> {
 }
 
 /// MIT `pkinit_load_fs_cert_and_key` (`plugins/preauth/pkinit/pkinit_crypto_openssl.c:4210-4268`): the certificate file, then the key file, each with its own message.
-fn load_cert_and_key(cert_file: &str, key_file: &str) -> Result<PkinitIdentity, String> {
+fn load_cert_and_key(cert_file: &str, key_file: &str) -> Result<PkinitIdentity, IdentityError> {
     let fsname = format!("FILE:{cert_file},{key_file}");
-    let cert = read_cert(cert_file)
-        .map_err(|why| format!("Cannot read certificate file '{cert_file}': {why}"))?;
+    let cert = read_cert(cert_file).map_err(|(code, why)| {
+        IdentityError::new(
+            code,
+            format!("Cannot read certificate file '{cert_file}': {why}"),
+        )
+    })?;
     let key = read_key(key_file).map_err(|fault| match fault {
-        KeyFault::Read(why) => format!("Cannot read key file '{fsname}': {why}"),
-        KeyFault::NotP256 => {
-            format!("Cannot use key file '{fsname}': only P-256 EC keys are supported")
+        KeyFault::Read(code, why) => {
+            IdentityError::new(code, format!("Cannot read key file '{fsname}': {why}"))
         }
+        KeyFault::NotP256 => IdentityError::new(
+            KDC_PREAUTH_FAILED,
+            format!("Cannot use key file '{fsname}': only P-256 EC keys are supported"),
+        ),
     })?;
     Ok(PkinitIdentity::new(cert, key))
 }
 
 /// MIT `pkinit_get_certs_dir` (`plugins/preauth/pkinit/pkinit_crypto_openssl.c:4298-4366`): each `NAME.crt` not starting with a dot, with `NAME.key`; a pair that does not load is skipped.
-fn load_identity_dir(dir: &str) -> Result<Vec<PkinitIdentity>, String> {
+fn load_identity_dir(dir: &str) -> Result<Vec<PkinitIdentity>, IdentityError> {
     let mut found = Vec::new();
     for name in dir_names(dir)? {
         let Some(stem) = name.strip_suffix(".crt") else {
@@ -147,7 +200,7 @@ fn load_identity_dir(dir: &str) -> Result<Vec<PkinitIdentity>, String> {
         }
     }
     if found.is_empty() {
-        return Err(ENOENT.into());
+        return Err(IdentityError::enoent());
     }
     Ok(found)
 }
@@ -167,7 +220,7 @@ pub fn load_ca_certs(value: &str) -> Result<Vec<Vec<u8>>, String> {
         "FILE" => load_ca_file(residual),
         "DIR" => {
             let mut certs = Vec::new();
-            for name in dir_names(residual)? {
+            for name in dir_names(residual).map_err(String::from)? {
                 for cert in load_ca_file(&join(residual, &name))? {
                     if !certs.contains(&cert) {
                         certs.push(cert);
@@ -202,14 +255,15 @@ fn load_ca_file(path: &str) -> Result<Vec<Vec<u8>>, String> {
 }
 
 /// The first certificate in `path`, as `PEM_read_bio_X509` reads it.
-fn read_cert(path: &str) -> Result<Vec<u8>, &'static str> {
-    let bytes = std::fs::read(path).map_err(|_| NO_REASON)?;
+/// MIT `get_cert` (`plugins/preauth/pkinit/pkinit_crypto_openssl.c:1311-1345`): a file that does not open is its errno, one with no certificate `EIO`.
+fn read_cert(path: &str) -> Result<Vec<u8>, (i64, &'static str)> {
+    let bytes = std::fs::read(path).map_err(|e| (errno(&e), NO_REASON))?;
     let text = String::from_utf8_lossy(&bytes);
     let block = pem_blocks(&text)
         .into_iter()
         .find(|b| matches!(b.label, "CERTIFICATE" | "X509 CERTIFICATE"))
-        .ok_or("no start line")?;
-    block_cert(&block)
+        .ok_or((EIO, "no start line"))?;
+    block_cert(&block).map_err(|why| (EIO, why))
 }
 
 fn block_cert(block: &PemBlock<'_>) -> Result<Vec<u8>, &'static str> {
@@ -224,8 +278,8 @@ fn block_cert(block: &PemBlock<'_>) -> Result<Vec<u8>, &'static str> {
 }
 
 enum KeyFault {
-    /// OpenSSL's reason the key does not read.
-    Read(&'static str),
+    /// MIT's code and OpenSSL's reason the key does not read.
+    Read(i64, &'static str),
     /// A key MIT reads that this KDC cannot use.
     NotP256,
 }
@@ -234,20 +288,24 @@ enum KeyFault {
 /// finds it; an encrypted key cannot be read, as the KDC has no prompter.
 /// MIT `get_key` (`plugins/preauth/pkinit/pkinit_crypto_openssl.c:1406-1444`): the KDC's password callback fails, so an encrypted key is an error.
 fn read_key(path: &str) -> Result<Zeroizing<[u8; 32]>, KeyFault> {
-    let bytes = Zeroizing::new(std::fs::read(path).map_err(|_| KeyFault::Read(NO_REASON))?);
+    let bytes =
+        Zeroizing::new(std::fs::read(path).map_err(|e| KeyFault::Read(errno(&e), NO_REASON))?);
     let text = Zeroizing::new(String::from_utf8_lossy(&bytes).into_owned());
     for block in pem_blocks(&text) {
         let pkcs8 = match block.label {
-            "ENCRYPTED PRIVATE KEY" => return Err(KeyFault::Read("interrupted or cancelled")),
+            "ENCRYPTED PRIVATE KEY" => {
+                return Err(KeyFault::Read(EIO, "interrupted or cancelled"));
+            }
             "PRIVATE KEY" => true,
             "EC PRIVATE KEY" => false,
             "RSA PRIVATE KEY" | "DSA PRIVATE KEY" => return Err(KeyFault::NotP256),
             _ => continue,
         };
         if block.encrypted {
-            return Err(KeyFault::Read("interrupted or cancelled"));
+            return Err(KeyFault::Read(EIO, "interrupted or cancelled"));
         }
-        let der = Zeroizing::new(unbase64(block.body).ok_or(KeyFault::Read("bad base64 decode"))?);
+        let der =
+            Zeroizing::new(unbase64(block.body).ok_or(KeyFault::Read(EIO, "bad base64 decode"))?);
         let scalar = if pkcs8 {
             pkcs8_p256(&der)
         } else {
@@ -255,7 +313,7 @@ fn read_key(path: &str) -> Result<Zeroizing<[u8; 32]>, KeyFault> {
         };
         return scalar.ok_or(KeyFault::NotP256);
     }
-    Err(KeyFault::Read("unsupported"))
+    Err(KeyFault::Read(EIO, "unsupported"))
 }
 
 /// RFC 5208 PrivateKeyInfo of an id-ecPublicKey prime256v1 key.
@@ -334,8 +392,9 @@ fn pem_blocks(text: &str) -> Vec<PemBlock<'_>> {
 
 /// The names in `dir` not starting with a dot, sorted.
 /// MIT `k5_dir_filenames` (`util/support/dir_filenames.c`): the directory's names, sorted; a directory that does not open is its errno.
-fn dir_names(dir: &str) -> Result<Vec<String>, String> {
-    let entries = std::fs::read_dir(dir).map_err(|e| sys_text(&e))?;
+fn dir_names(dir: &str) -> Result<Vec<String>, IdentityError> {
+    let entries =
+        std::fs::read_dir(dir).map_err(|e| IdentityError::new(errno(&e), sys_text(&e)))?;
     let mut names: Vec<String> = entries
         .filter_map(Result::ok)
         .filter_map(|e| e.file_name().into_string().ok())
@@ -347,6 +406,11 @@ fn dir_names(dir: &str) -> Result<Vec<String>, String> {
 
 fn join(dir: &str, name: &str) -> String {
     Path::new(dir).join(name).to_string_lossy().into_owned()
+}
+
+/// The errno of an I/O error, `EIO` when it has none.
+fn errno(e: &std::io::Error) -> i64 {
+    e.raw_os_error().map_or(EIO, i64::from)
 }
 
 /// `strerror` of an I/O error: its text without Rust's " (os error N)".

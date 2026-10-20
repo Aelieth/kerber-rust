@@ -110,6 +110,7 @@ any other `###` heading.
 - **kdc.** PKINIT logs MIT's freshness lines and checks the AuthPack in MIT's order; a signed one without DH is `Unsupported PKINIT RSA request`.
 - **kdc.** A PKINIT certificate from an unknown CA is 70 with TD-TRUSTED-CERTIFIERS, and another chain failure 71 with TD-INVALID-CERTIFICATES, as MIT's.
 - **kdc.** A PKINIT CMS that does not decode or verify gets MIT's code and text: `Failed to decode CMS message: <reason>`, `wrong oid`, or 80.
+- **client.** kinit goes on to the password when its PKINIT identity, choice or anchor does not load, and refuses a second `X509_user_identity`, as MIT's kinit does.
 
 ## [1.1.0] - 2026-10-14
 

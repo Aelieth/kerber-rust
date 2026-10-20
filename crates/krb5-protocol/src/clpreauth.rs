@@ -220,7 +220,7 @@ fn selected(profile: &Krb5Conf) -> Vec<Slot> {
 
 /// Whether `[plugins] clpreauth` left `name` loaded.
 #[must_use]
-pub(crate) fn loaded(profile: &Krb5Conf, name: &str) -> bool {
+pub fn loaded(profile: &Krb5Conf, name: &str) -> bool {
     selected(profile).iter().any(|slot| slot.name == name)
 }
 

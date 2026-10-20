@@ -368,6 +368,11 @@ pub fn preauth_cookie(cookie: &[u8]) {
     krb5int_trace("Received cookie: {lenstr}", &[Arg::LenStr(Some(cookie))]);
 }
 
+/// MIT `TRACE_PKINIT_CLIENT_NO_IDENTITY` (`plugins/preauth/pkinit/pkinit_trace.h:46-47`): the client's PKINIT has no identity.
+pub fn pkinit_client_no_identity() {
+    krb5int_trace("PKINIT client has no configured identity; giving up", &[]);
+}
+
 /// MIT `TRACE_PREAUTH_ENC_TS_DISABLED` (`include/k5-trace.h:320-321`): encrypted timestamp was offered and the realm disables it.
 pub fn preauth_enc_ts_disabled() {
     krb5int_trace("Ignoring encrypted timestamp because it is disabled", &[]);

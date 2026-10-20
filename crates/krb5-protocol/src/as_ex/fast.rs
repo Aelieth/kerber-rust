@@ -10,7 +10,7 @@ use super::password::{ModuleFail, PasswordCell};
 use super::responder::{QUESTION_PASSWORD, ResponderItems};
 use super::spake::{FastRound, trace_round};
 use super::{
-    AsOutcome, AsPrompt, AsReqTimes, AsRequest, ENCTS_MODULE, KdcMsg, allowed_padata,
+    AsOutcome, AsPrompt, AsReqTimes, AsRequest, ENCTS_MODULE, KdcMsg, Pkinit, allowed_padata,
     build_as_req_from, classify_kdc_error, encrypted_timestamp_disabled, find_pa, finish_as_rep,
     first_etype, gak_found, kdc_error, method_from_error, pa_enc_timestamp_at, pick_info2,
     pick_key, req_sname, request_times, salt_cname, select_s2k, send_as, sort_krb5_padata_sequence,
@@ -140,6 +140,8 @@ pub(super) fn continue_fast(
             let mut skip: Vec<i32> = Vec::new();
             let mut saved_method: Vec<PaData> = Vec::new();
             let mut last_fail: Option<KrbError> = None;
+            let pkinit_fails = matches!(req.pkinit, Some(Pkinit::Failed(_)));
+            let mut prepared = false;
             'rounds: loop {
                 let mut method = sort_krb5_padata_sequence(
                     &method_from_error(&current).unwrap_or_default(),
@@ -147,7 +149,8 @@ pub(super) fn continue_fast(
                 );
                 // MIT `pa_type_allowed` (`lib/krb5/krb/preauth2.c:627-631`): a type the input cache does not allow is not tried.
                 method.retain(|p| req.ticket.preauth_allowed(p.padata_type));
-                if fast_mechanism(req.profile, &method, &skip).is_err() && !saved_method.is_empty()
+                if fast_mechanism(req.profile, &method, &skip, pkinit_fails).is_err()
+                    && !saved_method.is_empty()
                 {
                     method.clone_from(&saved_method);
                 }
@@ -158,6 +161,7 @@ pub(super) fn continue_fast(
                 // MIT `k5_preauth` (`lib/krb5/krb/preauth2.c:1004-1016`): every module with a padata
                 // in the list prepares first, and the responder answers what was asked, before a
                 // mechanism is chosen; a failure there ends the exchange.
+                super::pkinit_prepare(req, &method, &mut prepared);
                 let items = ask_responder(
                     req,
                     &mut pw,
@@ -168,7 +172,7 @@ pub(super) fn continue_fast(
                 // the list's order; one that fails is traced and the next one is tried, and a
                 // keyboard interrupt ends the walk.
                 loop {
-                    let mech = match fast_mechanism(req.profile, &method, &skip) {
+                    let mech = match fast_mechanism(req.profile, &method, &skip, pkinit_fails) {
                         Ok(mech) => mech,
                         Err(e) => {
                             return match (last_fail, first_failure) {
@@ -179,6 +183,14 @@ pub(super) fn continue_fast(
                         }
                     };
                     let (fail, new_walk) = match mech {
+                        pa::PK_AS_REQ => match req.pkinit {
+                            Some(Pkinit::Failed(f)) => (super::pkinit_fails(f), false),
+                            _ => {
+                                return Err(Error::ReplyMismatch(
+                                    "Generic preauthentication failure".into(),
+                                ));
+                            }
+                        },
                         pa::OTP_CHALLENGE => {
                             match otp::process(&otp_state, &items, pw.ui(), &akey) {
                                 Ok((pa142, config)) => {
@@ -753,21 +765,23 @@ pub(super) fn fast_mechanism(
     profile: &Krb5Conf,
     method: &[PaData],
     skip: &[i32],
+    pkinit_fails: bool,
 ) -> Result<i32, Error> {
     method
         .iter()
         .map(|p| p.padata_type)
         .find(|&t| {
             !skip.contains(&t)
-                && matches!(
-                    crate::clpreauth::owner_of(profile, t),
+                && match crate::clpreauth::owner_of(profile, t) {
+                    Some(crate::clpreauth::Owner::Pkinit) => pkinit_fails,
                     Some(
                         crate::clpreauth::Owner::Spake
-                            | crate::clpreauth::Owner::EncChallenge
-                            | crate::clpreauth::Owner::EncTs
-                            | crate::clpreauth::Owner::Otp
-                    )
-                )
+                        | crate::clpreauth::Owner::EncChallenge
+                        | crate::clpreauth::Owner::EncTs
+                        | crate::clpreauth::Owner::Otp,
+                    ) => true,
+                    _ => false,
+                }
         })
         .ok_or_else(|| Error::ReplyMismatch("Generic preauthentication failure".into()))
 }
@@ -934,11 +948,11 @@ mod tests {
             pin("[plugins]\n    clpreauth = {\n        disable = encrypted_timestamp\n    }\n");
         let method = vec![pa_of(pa::ENC_TIMESTAMP), pa_of(pa::ENCRYPTED_CHALLENGE)];
         assert_eq!(
-            fast_mechanism(&profile, &method, &[]).unwrap(),
+            fast_mechanism(&profile, &method, &[], false).unwrap(),
             pa::ENCRYPTED_CHALLENGE
         );
         let only_ts = vec![pa_of(pa::ENC_TIMESTAMP)];
-        let err = fast_mechanism(&profile, &only_ts, &[]).unwrap_err();
+        let err = fast_mechanism(&profile, &only_ts, &[], false).unwrap_err();
         assert!(
             err.to_string()
                 .contains("Generic preauthentication failure"),
@@ -951,7 +965,7 @@ mod tests {
         let profile = pin("");
         let method = vec![pa_of(pa::ENC_TIMESTAMP), pa_of(pa::ENCRYPTED_CHALLENGE)];
         assert_eq!(
-            fast_mechanism(&profile, &method, &[]).unwrap(),
+            fast_mechanism(&profile, &method, &[], false).unwrap(),
             pa::ENC_TIMESTAMP
         );
     }
@@ -964,7 +978,10 @@ mod tests {
             pa_of(pa::SPAKE),
             pa_of(pa::ENCRYPTED_CHALLENGE),
         ];
-        assert_eq!(fast_mechanism(&profile, &method, &[]).unwrap(), pa::SPAKE);
+        assert_eq!(
+            fast_mechanism(&profile, &method, &[], false).unwrap(),
+            pa::SPAKE
+        );
     }
 
     #[test]
@@ -972,7 +989,7 @@ mod tests {
         let profile = pin("[plugins]\n    clpreauth = {\n        disable = spake\n    }\n");
         let method = vec![pa_of(pa::SPAKE), pa_of(pa::ENCRYPTED_CHALLENGE)];
         assert_eq!(
-            fast_mechanism(&profile, &method, &[]).unwrap(),
+            fast_mechanism(&profile, &method, &[], false).unwrap(),
             pa::ENCRYPTED_CHALLENGE
         );
     }
@@ -982,7 +999,7 @@ mod tests {
         let profile = pin("");
         let method = vec![pa_of(pa::SPAKE), pa_of(pa::ENCRYPTED_CHALLENGE)];
         assert_eq!(
-            super::fast_mechanism(&profile, &method, &[pa::SPAKE]).unwrap(),
+            super::fast_mechanism(&profile, &method, &[pa::SPAKE], false).unwrap(),
             pa::ENCRYPTED_CHALLENGE
         );
     }

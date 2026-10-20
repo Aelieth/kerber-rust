@@ -62,9 +62,8 @@ checks run on them as on MIT's. They are **not yet a drop-in** for MIT's in thes
   to `kpasswd_server`, else `admin_server`; `kpasswd` ignores a port given in `kpasswd_server`.
 - With no enctypes in `krb5.conf` the default list is the four AES types; MIT's also has DES3, RC4
   and Camellia, so the two agree only where `krb5.conf` or Fedora's crypto-policies sets the list.
-- Of `kinit -X`'s attributes only `X509_user_identity` and `X509_anchors` act (one anchors file;
-  a second `X509_user_identity` replaces the first, which MIT's kinit refuses); the rest,
-  `disable_freshness` among them, are accepted and ignored.
+- Of `kinit -X`'s attributes only `X509_user_identity` and `X509_anchors` act (one anchors file);
+  the rest, `disable_freshness` among them, are accepted and ignored.
 
 Scripts that need one of these need MIT's `krb5-workstation`. With the default `PREFIX`,
 `BINDIR` is `/usr/local/bin`, which comes before `/usr/bin` in `PATH` and in sudo's

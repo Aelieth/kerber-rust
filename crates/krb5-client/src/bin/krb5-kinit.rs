@@ -423,7 +423,6 @@ fn armor_ccache_spec(name: &str) -> Result<CcSpec, Krb5Error> {
 #[expect(clippy::too_many_lines, reason = "one MIT function, kept whole")]
 fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
     let realm = String::from_utf8_lossy(k5.me.0.as_bytes()).into_owned();
-    let addr = kdc(&k5.ctx, opts, &realm).map_err(Failure::Error)?;
     let conf = &k5.ctx.profile;
     let mut ticket = AsTicketOpts {
         lifetime: opts.lifetime.or_else(|| conf.ticket_lifetime_for(&realm)),
@@ -480,7 +479,28 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
     } else {
         None
     };
-    let pw_auth = !(opts.keytab || opts.anonymous || opts.pkinit_identity.is_some());
+    // MIT `k5_kinit` (`clients/kinit/kinit.c:723-736`): each `-X` option goes to the preauth
+    // modules in order, one they refuse ends the command, and `-V` names each one set.
+    // MIT `handle_gic_opt` (`plugins/preauth/pkinit/pkinit_clnt.c:1307-1335`): the pkinit module refuses a second `X509_user_identity`.
+    let pkinit = krb5_protocol::clpreauth_loaded(&k5.ctx.profile, "pkinit");
+    let mut identity = false;
+    for (attr, value) in &opts.pa_opts {
+        if pkinit && attr == "X509_user_identity" {
+            if identity {
+                eprintln!(
+                    "kinit: Preauth module pkinit: X509_user_identity can not be given twice\n while setting '{attr}'='{value}'"
+                );
+                return Err(Failure::Reported);
+            }
+            identity = true;
+        }
+        if opts.verbose {
+            eprintln!("PA Option {attr} = {value}");
+        }
+    }
+    // MIT `kinit_prompter` (`clients/kinit/kinit.c:622-636`): the prompter is there for any
+    // mechanism, so a PKINIT that cannot run can go on to the password.
+    let pw_auth = !(opts.keytab || opts.anonymous);
     let given = if pw_auth { env_password() } else { None };
     // MIT `kinit_prompter` (`kinit.c:629-633`): a password prompt is noted; the gates' password
     // stands for one.
@@ -536,6 +556,7 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
         in_ccache: k5.in_cc.as_ref().map(krb5_client::InputCcache),
         preauth_prompter: (!opts.keytab).then_some(krb5_client::PreauthPrompter(&preauth_prompt)),
     };
+    let addr = kdc(&k5.ctx, opts, &realm).map_err(Failure::Error)?;
     let spec = &k5.out_spec;
     let result = match given {
         Some(mut p) => kinit_with(&k5.ctx, &addr, &k5.name, &mut p, spec, params),
