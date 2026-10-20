@@ -29,14 +29,15 @@ any other `###` heading.
 - **admin/gss.** kadmind and kpropd read the profile once, kdc.conf first: no request opens krb5.conf or kdc.conf, and kpropd's skew is the profile's. Lab beside MIT.
 - **gss/protocol.** GSS's receive window is MIT's 64-number bitmap; the replay cache keeps MIT's tag for the clock skew, and a full cache refuses a new tag, not a live one.
 - **admin.** The iprop client checks the primary's INIT reply MIC whatever its verifier, as MIT's `authgss_refresh`; an empty or non-GSS verifier skipped the check.
-- **kdc.** PKINIT trusts kdc.conf's `pkinit_anchors` and signs with `pkinit_identity`, not a CA it made, now test-only. KDC identity P-256 only. Lab beside MIT.
+- **kdc.** PKINIT trusts kdc.conf's `pkinit_anchors` and signs with `pkinit_identity`, not a CA it made, now test-only. Lab beside MIT.
 - **kdc.** PKINIT checks a client's `pkinit_cert_match` rule as MIT's dbmatch (`<KU>`, `<EKU>`, `<SAN>`, `<ISSUER>`, `<SUBJECT>`, `&&`, `||`); a miss is 66. Lab beside MIT.
 
 ### Added
 
 - **kpropd.** With `iprop_enable` a replica polls its primary as `kiprop/<host>`, applies updates, asks for a full resync and backs off, as MIT's `do_iprop`; `-A`, `-P`, `-t`.
 - **config/kdc.** PKINIT reads `pkinit_identity`, `pkinit_anchors`, `pkinit_pool` and `pkinit_eku_checking` as MIT's; a failure leaves it off with MIT's line. Lab beside MIT.
-- **kdc.** PKINIT verifies RSA client certificates, chains and signatures (PKCS#1 v1.5, SHA-256/384/512); the KDC identity stays P-256 only.
+- **kdc.** PKINIT verifies RSA client certificates, chains and signatures (PKCS#1 v1.5, SHA-256/384/512).
+- **pkinit.** The KDC and kinit sign PKINIT with an RSA key as MIT does (PKCS#1 v1.5, SHA-256): up to 16384 bits and five primes, constant-time and blinded.
 - **client.** kinit takes `DIR:` and `ENV:` PKINIT identities and `FILE:cert,key`, tries `pkinit_identities` in order, and picks a certificate by `pkinit_cert_match` as MIT.
 
 ### Changed

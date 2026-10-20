@@ -12,6 +12,7 @@ mod ca;
 mod cms;
 mod identity;
 mod matching;
+mod rsa;
 
 #[cfg(any(test, feature = "test-ca"))]
 pub use ca::{PkinitCa, cms_wrap};
@@ -23,8 +24,11 @@ pub use cms::{
     encode_td_certifiers, parse_identity_pem, parse_pem, require_client_pkinit_san,
     require_kdc_pkinit_cert, verify_chain,
 };
-pub use identity::{IdentityError, PkinitIdentity, load_ca_certs, load_identities, load_identity};
+pub use identity::{
+    IdentityError, IdentityKey, PkinitIdentity, load_ca_certs, load_identities, load_identity,
+};
 pub use matching::{CertMatchError, cert_match, select_cert};
+pub use rsa::RsaKey;
 
 /// PA-PK-AS-REQ ::= SEQUENCE { signedAuthPack, trustedCertifiers, kdcPkId }
 ///

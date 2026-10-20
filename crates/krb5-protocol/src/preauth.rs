@@ -568,12 +568,12 @@ pub fn pa_pk_as_req_agile(
 /// # Errors
 ///
 /// [`Error::ReplyMismatch`] when the PKAuthenticator does not encode or the CMS signature fails
-/// (`cert_der` has no issuer and serial, or `leaf_secret` cannot sign), and [`Error::Asn1`] when
+/// (`cert_der` has no issuer and serial, or `leaf_key` cannot sign), and [`Error::Asn1`] when
 /// the PA-PK-AS-REQ does not encode.
 pub fn pa_pk_as_req_signed(
     client_public: &[u8],
     cert_der: &[u8],
-    leaf_secret: &[u8; 32],
+    leaf_key: &krb5_types::pkinit::IdentityKey,
     nonce: u32,
     body_sha1: &[u8],
     freshness: Option<&[u8]>,
@@ -581,7 +581,7 @@ pub fn pa_pk_as_req_signed(
     pa_pk_as_req_signed_at(
         client_public,
         cert_der,
-        leaf_secret,
+        leaf_key,
         nonce,
         body_sha1,
         freshness,
@@ -593,7 +593,7 @@ pub fn pa_pk_as_req_signed(
 pub(crate) fn pa_pk_as_req_signed_at(
     client_public: &[u8],
     cert_der: &[u8],
-    leaf_secret: &[u8; 32],
+    leaf_key: &krb5_types::pkinit::IdentityKey,
     nonce: u32,
     body_sha1: &[u8],
     freshness: Option<&[u8]>,
@@ -613,7 +613,7 @@ pub(crate) fn pa_pk_as_req_signed_at(
     let signed = krb5_types::pkinit::cms_sign_leaf(
         &inner,
         cert_der,
-        leaf_secret,
+        leaf_key,
         krb5_types::pkinit::ECONTENT_AUTHDATA,
     )
     .map_err(|e| Error::ReplyMismatch(format!("PKINIT CMS wrap: {e}")))?;

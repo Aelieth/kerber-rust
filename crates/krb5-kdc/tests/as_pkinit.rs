@@ -88,6 +88,10 @@ fn inject_pkauth_freshness(authpack: &[u8], token: &[u8]) -> Vec<u8> {
     tlv(0x30, &out)
 }
 
+fn p256(k: [u8; 32]) -> krb5_types::pkinit::IdentityKey {
+    krb5_types::pkinit::IdentityKey::P256(zeroize::Zeroizing::new(k))
+}
+
 #[test]
 fn empty_150_hint_carries_populated_token() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
@@ -131,7 +135,7 @@ fn stale_freshness_req(ca: &krb5_types::pkinit::PkinitCa) -> krb5_types::AsReq {
     stale.extend_from_slice(&1u32.to_be_bytes());
     stale.extend_from_slice(&[0u8; 12]);
     let inner = inject_pkauth_freshness(&inner, &stale);
-    let cms = cms_sign_leaf(&inner, &cert, &key, ECONTENT_AUTHDATA).expect("CMS");
+    let cms = cms_sign_leaf(&inner, &cert, &p256(key), ECONTENT_AUTHDATA).expect("CMS");
     let pa = PaPkAsReq {
         signed_auth_pack: cms.into(),
         trusted_certifiers: None,
@@ -232,7 +236,7 @@ fn require_freshness_signed_without_token_is_preauth_failed() {
     let body = encode(&req.0.req_body).expect("body");
     let ck = kdc_req_body_checksum(&body);
     req.0.padata = Some(vec![
-        pa_pk_as_req_signed(&kp.public, &cert, &key, 1712, &ck, None).expect("signed"),
+        pa_pk_as_req_signed(&kp.public, &cert, &p256(key), 1712, &ck, None).expect("signed"),
         PaData {
             padata_type: pa::AS_FRESHNESS,
             padata_value: Vec::<u8>::new().into(),
@@ -258,7 +262,8 @@ fn require_freshness_signed_with_token_issues() {
     let mut req = as_req(user(), TEST_REALM, 1713, None).unwrap();
     let body = encode(&req.0.req_body).expect("body");
     let ck = kdc_req_body_checksum(&body);
-    let pa = pa_pk_as_req_signed(&kp.public, &cert, &key, 1713, &ck, Some(&token)).expect("signed");
+    let pa = pa_pk_as_req_signed(&kp.public, &cert, &p256(key), 1713, &ck, Some(&token))
+        .expect("signed");
     let cms = krb5_types::pkinit::parse_pa_pk_as_req_cms(pa.padata_value.as_ref()).expect("cms");
     let inner = krb5_types::pkinit::cms_verify(&cms, &ca.ca_cert).expect("inner");
     assert_eq!(
@@ -671,7 +676,7 @@ fn pkinit_client_rejects_non_kdc_signer() {
     let rogue = krb5_types::pkinit::cms_sign_leaf(
         &inner,
         &ccert,
-        &ckey,
+        &p256(ckey),
         krb5_types::pkinit::ECONTENT_DHKEY,
     )
     .expect("rogue cms");
@@ -690,7 +695,7 @@ fn pkinit_client_rejects_non_kdc_signer() {
     let wrong = krb5_types::pkinit::cms_sign_leaf(
         &inner,
         &wcert,
-        &wkey,
+        &p256(wkey),
         krb5_types::pkinit::ECONTENT_DHKEY,
     )
     .expect("wrong cms");
@@ -709,7 +714,7 @@ fn pkinit_client_rejects_non_kdc_signer() {
     let bad_ct = krb5_types::pkinit::cms_sign_leaf(
         &inner,
         &kcert,
-        &kkey,
+        &p256(kkey),
         krb5_types::pkinit::ECONTENT_AUTHDATA,
     )
     .expect("authdata cms");
@@ -800,7 +805,7 @@ fn pkinit_signed_content_type_mismatch_is_refused() {
     let bad = krb5_types::pkinit::cms_sign_leaf_oids(
         &inner,
         &cert,
-        &key,
+        &p256(key),
         krb5_types::pkinit::ECONTENT_AUTHDATA,
         krb5_types::pkinit::ECONTENT_DHKEY,
     )

@@ -1,5 +1,9 @@
 use super::*;
 
+fn p256_key(k: [u8; 32]) -> crate::pkinit::IdentityKey {
+    crate::pkinit::IdentityKey::P256(zeroize::Zeroizing::new(k))
+}
+
 #[test]
 fn principal_compare_ignores_name_type_and_checks_realm() {
     let a = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
@@ -444,8 +448,8 @@ fn pkinit_cms_wrap_unwrap() {
             .any(|w| w == [0x2b, 0x06, 0x01, 0x05, 0x02, 0x02]),
         "client cert must carry id-pkinit-san 1.3.6.1.5.2.2"
     );
-    let signed =
-        pkinit::cms_sign_leaf(inner, &cert, &key, pkinit::ECONTENT_AUTHDATA).expect("leaf cms");
+    let signed = pkinit::cms_sign_leaf(inner, &cert, &p256_key(key), pkinit::ECONTENT_AUTHDATA)
+        .expect("leaf cms");
     assert_eq!(
         pkinit::cms_verify(&signed, &ca.ca_cert).expect("leaf verify"),
         inner
@@ -454,8 +458,8 @@ fn pkinit_cms_wrap_unwrap() {
     assert!(kdc_pem.contains("BEGIN CERTIFICATE"));
     assert!(kdc_pem.contains("BEGIN EC PRIVATE KEY"));
     let (kcert, kkey) = pkinit::parse_identity_pem(&kdc_pem).expect("kdc identity");
-    let ksigned =
-        pkinit::cms_sign_leaf(inner, &kcert, &kkey, pkinit::ECONTENT_DHKEY).expect("kdc cms");
+    let ksigned = pkinit::cms_sign_leaf(inner, &kcert, &p256_key(kkey), pkinit::ECONTENT_DHKEY)
+        .expect("kdc cms");
     assert_eq!(
         pkinit::cms_verify(&ksigned, &ca.ca_cert).expect("kdc leaf verify"),
         inner
@@ -471,7 +475,7 @@ fn pkinit_cms_wrap_unwrap() {
     let split = pkinit::cms_sign_leaf_oids(
         inner,
         &cert,
-        &key,
+        &p256_key(key),
         pkinit::ECONTENT_AUTHDATA,
         pkinit::ECONTENT_DHKEY,
     )
@@ -520,7 +524,7 @@ fn pkinit_cms_path_validation() {
     let (expired, ekey) = ca
         .client_identity_window("user@KERBER.TEST", b"200101000000Z", b"210101000000Z")
         .expect("expired");
-    let cms = pkinit::cms_sign_leaf(inner, &expired, &ekey, pkinit::ECONTENT_AUTHDATA)
+    let cms = pkinit::cms_sign_leaf(inner, &expired, &p256_key(ekey), pkinit::ECONTENT_AUTHDATA)
         .expect("expired cms");
     assert_eq!(
         pkinit::cms_verify(&cms, &ca.ca_cert).expect_err("expired"),
@@ -528,7 +532,8 @@ fn pkinit_cms_path_validation() {
     );
 
     let (ee, ek) = pkinit::PkinitCa::self_signed_end_entity().expect("ee");
-    let cms = pkinit::cms_sign_leaf(inner, &ee, &ek, pkinit::ECONTENT_AUTHDATA).expect("ee cms");
+    let cms = pkinit::cms_sign_leaf(inner, &ee, &p256_key(ek), pkinit::ECONTENT_AUTHDATA)
+        .expect("ee cms");
     assert_eq!(
         pkinit::cms_verify(&cms, &ee).expect_err("non-CA anchor"),
         "cms ca"
@@ -537,8 +542,8 @@ fn pkinit_cms_path_validation() {
     let (wrong, wkey) = ca
         .client_identity_wrong_issuer("user@KERBER.TEST")
         .expect("wrong issuer");
-    let cms =
-        pkinit::cms_sign_leaf(inner, &wrong, &wkey, pkinit::ECONTENT_AUTHDATA).expect("wrong cms");
+    let cms = pkinit::cms_sign_leaf(inner, &wrong, &p256_key(wkey), pkinit::ECONTENT_AUTHDATA)
+        .expect("wrong cms");
     assert_eq!(
         pkinit::cms_verify(&cms, &ca.ca_cert).expect_err("DN mismatch"),
         "cms chain"

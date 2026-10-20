@@ -430,9 +430,9 @@ MIT's (`doc/admin/pkinit.rst`):
     pkinit_anchors = FILE:/var/kerberos/krb5kdc/cacert.pem
 ```
 
-- **KDC identity P-256 only.** The KDC's key is a P-256 EC key: make it with
-  `openssl ecparam -name prime256v1 -genkey -noout` where MIT's guide runs `openssl genrsa`. An RSA
-  KDC key leaves PKINIT off. Client certificates and their CAs may be RSA or P-256, signed with
+- **Keys.** The KDC's key, and a user's for kinit, is a P-256 EC key or an RSA key, as MIT's guide
+  makes it with `openssl genrsa`; RSA signs up to 16384 bits and five primes, as OpenSSL does.
+  Another key leaves PKINIT off. Client certificates and their CAs may be RSA or P-256, signed with
   SHA-256, SHA-384 or SHA-512.
 - Not supported in a client's certificate, its CAs or its signature, though MIT takes them through
   OpenSSL: RSASSA-PSS, and P-384 or P-521 keys. Such a chain is refused with 71 (`certificate
@@ -457,8 +457,8 @@ MIT's (`doc/admin/pkinit.rst`):
 
 A client needs the CA as `pkinit_anchors` in the realm's `krb5.conf` stanza. kerber-rust's kinit
 takes `FILE:`, `DIR:` and `ENV:` identities (`X509_user_identity`, else `pkinit_identities` in
-order) and picks the certificate by `pkinit_cert_match`, as MIT's does; its keys are P-256, and
-only the first anchor is used. Anonymous PKINIT
+order) and picks the certificate by `pkinit_cert_match`, as MIT's does; its keys are P-256 EC or
+RSA, and only the first anchor is used. Anonymous PKINIT
 (`kinit -n`) uses the same KDC identity.
 
 ## Upgrading an MIT realm

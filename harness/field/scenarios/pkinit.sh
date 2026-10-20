@@ -18,7 +18,7 @@
 #   PK.ca: client2's alice-unknownca.pem, issued by unknown-cacert.pem, which client2 trusts and the KDC does not:
 #          "Failed to verify received certificate (depth 0): unable to get local issuer certificate" (70);
 #   PK.rsacert: client2's alice-rsa.pem (an RSA 2048 key, issued by rsa-cacert.pem, which kdc's pkinit_anchors and
-#          client2 both trust) gets a TGT;
+#          client2 both trust) gets a TGT, from MIT's kinit and, in the rust leg, ours (it signs with the RSA key);
 #   PK.dbmatch: alice's pkinit_cert_match rule decides her alice.pem kinit: "<KU>digitalSignature" and "<SAN>^alice@"
 #          match and get a TGT; "&&<KU>digitalSignature<SAN>^bob@" misses: "preauth (pkinit) verify failure:
 #          Certificate mismatch" (66); "<SUBJECT>(" does not compile (regcomp's REG_EPAREN, 8, which the KDC reports
@@ -37,8 +37,11 @@
 #          password on stdin and gets a TGT; with no password it fails (rc 1, the text observed);
 #   PK.twoid: a second X509_user_identity is refused before any request: "kinit: Preauth module pkinit:
 #          X509_user_identity can not be given twice", then " while setting 'X509_user_identity'='<value>'" (rc 1);
-#   obs.PK.rsa: the RSA KDC identity's startup line (INFO): MIT serves with it; kerber-rust's KDC identity is P-256
-#          only, so its line is the documented "Cannot use key file ...: only P-256 EC keys are supported".
+#   PK.rsakdc: the RSA KDC identity (kdc-rsa.pem, kdc-rsa.key): the KDC signs its reply with the RSA key, and
+#          alice's certificate kinit, trusting both CAs, gets a TGT;
+#   PK.rsabig: made on kdc for the cell by scripts/lib/pkinit-rsa-certs.sh, an RSA CA, a KDC identity with an
+#          8192-bit key and alice's certificate with a 3-prime key, alice's piped to client2: her kinit gets a TGT,
+#          each kinit's time observed (ms, the AS exchange with both signatures);
 # Graded on both legs, MIT's first. In the rust leg the client cells run twice: MIT's kinit, then ours, kdc's
 # build of krb5-kinit piped to client2's ~/pk/kinit (no host file) and run by path, so MIT's stays the one on PATH.
 # vms: kdc client2
@@ -60,11 +63,12 @@ R=${REALM//./\\.}
 KC=/var/kerberos/krb5kdc/kdc.conf
 D=${PK_KDC_DIR:-/var/kerberos/krb5kdc/pkinit}
 C=${PK_CLIENT_DIR:-/home/lab/pkinit}
+BIG=/var/kerberos/krb5kdc/pkbig
 ANON=0
 PREAUTH=0
 DBMATCH=0
 cleanup() {
-    timeout -k 5 60 "$LAB" ssh kdc -- "[ -e $KC.pk ] && sudo mv $KC.pk $KC && sudo systemctl restart krb5kdc; [ $ANON = 1 ] && sudo kadmin.local -q 'delprinc -force WELLKNOWN/ANONYMOUS'; [ $PREAUTH = 1 ] && sudo kadmin.local -q 'modprinc -requires_preauth alice'; [ $DBMATCH = 1 ] && sudo kadmin.local -q 'delstr alice pkinit_cert_match'; true" < /dev/null > /dev/null 2>&1
+    timeout -k 5 60 "$LAB" ssh kdc -- "[ -e $KC.pk ] && sudo mv $KC.pk $KC && sudo systemctl restart krb5kdc; [ $ANON = 1 ] && sudo kadmin.local -q 'delprinc -force WELLKNOWN/ANONYMOUS'; [ $PREAUTH = 1 ] && sudo kadmin.local -q 'modprinc -requires_preauth alice'; [ $DBMATCH = 1 ] && sudo kadmin.local -q 'delstr alice pkinit_cert_match'; sudo rm -rf $BIG; true" < /dev/null > /dev/null 2>&1
     timeout -k 5 60 "$LAB" ssh client2 -- 'rm -rf ~/pk; true' < /dev/null > /dev/null 2>&1
 }
 trap cleanup EXIT
@@ -150,6 +154,10 @@ section "PK.rsacert alice's RSA certificate from the RSA CA both trust: a TGT (M
 pkkdc PK.rsacert.kdc "\n[kdcdefaults]\n    pkinit_identity = FILE:$D/kdc.pem,$D/kdc.key\n    pkinit_anchors = FILE:$D/cacert.pem\n    pkinit_anchors = FILE:$D/rsa-cacert.pem\n"
 check PK.rsacert.kinit '^kinit rc=0$' run client2 "mkdir -p ~/pk && kinit -X X509_anchors=FILE:$C/cacert.pem -X X509_anchors=FILE:$C/rsa-cacert.pem -X X509_user_identity=FILE:$C/alice-rsa.pem,$C/alice-rsa.key -c FILE:\$HOME/pk/r.cc alice < /dev/null 2>&1; echo \"kinit rc=\$?\"; klist -c FILE:\$HOME/pk/r.cc 2>&1 | grep -E '^Default principal'"
 checklast PK.rsacert.tgt "^Default principal: alice@$R\$"
+if [ -n "${OURS:-}" ]; then
+    check PK.rsacert.ours '^kinit rc=0$' run client2 "kdestroy -c FILE:\$HOME/pk/r.cc 2> /dev/null; $OURS -X X509_anchors=FILE:$C/cacert.pem -X X509_anchors=FILE:$C/rsa-cacert.pem -X X509_user_identity=FILE:$C/alice-rsa.pem,$C/alice-rsa.key -c FILE:\$HOME/pk/r.cc alice < /dev/null 2>&1; echo \"kinit rc=\$?\"; klist -c FILE:\$HOME/pk/r.cc 2>&1 | grep -E '^Default principal'"
+    checklast PK.rsacert.ours.tgt "^Default principal: alice@$R\$"
+fi
 pkkdc PK.rsacert.back "\n[kdcdefaults]\n    pkinit_identity = FILE:$D/kdc.pem,$D/kdc.key\n    pkinit_anchors = FILE:$D/cacert.pem\n"
 
 section "PK.dbmatch alice's pkinit_cert_match rule decides her certificate kinit (MIT and ours)"
@@ -251,10 +259,22 @@ for k in mit ${OURS:+ours}; do
     twoid "PK.twoid.$k" "$kinit"
 done
 
-section "obs.PK.rsa an RSA KDC identity: MIT serves with it; kerber-rust's KDC identity is P-256 only (INFO)"
-pkkdc PK.rsa.kdc "\n[kdcdefaults]\n    pkinit_identity = FILE:$D/kdc-rsa.pem,$D/kdc-rsa.key\n    pkinit_anchors = FILE:$D/cacert.pem\n    pkinit_anchors = FILE:$D/rsa-cacert.pem\n"
-kdcsince PK.rsa.kdc 'preauth pkinit'
-observelast obs.PK.rsa.line 'preauth pkinit .*'
+section "PK.rsakdc an RSA KDC identity: alice's certificate kinit gets a TGT (MIT and ours)"
+pkkdc PK.rsakdc.kdc "\n[kdcdefaults]\n    pkinit_identity = FILE:$D/kdc-rsa.pem,$D/kdc-rsa.key\n    pkinit_anchors = FILE:$D/cacert.pem\n    pkinit_anchors = FILE:$D/rsa-cacert.pem\n"
+check PK.rsakdc.kinit '^kinit rc=0$' run client2 "mkdir -p ~/pk && kdestroy -c FILE:\$HOME/pk/k.cc 2> /dev/null; kinit -X X509_anchors=FILE:$C/cacert.pem -X X509_anchors=FILE:$C/rsa-cacert.pem -X X509_user_identity=FILE:$C/alice.pem,$C/alice.key -c FILE:\$HOME/pk/k.cc alice < /dev/null 2>&1; echo \"kinit rc=\$?\"; klist -c FILE:\$HOME/pk/k.cc 2>&1 | grep -E '^Default principal'"
+checklast PK.rsakdc.tgt "^Default principal: alice@$R\$"
+
+section "PK.rsabig an 8192-bit RSA KDC key and alice's 3-prime RSA key, made for the cell: a TGT, timed (MIT and ours)"
+check PK.rsabig.make "^rsa certs in $BIG\$" runin kdc "scripts/lib/pkinit-rsa-certs.sh" "sudo sh -s -- $BIG $REALM alice 8192 3" < "$HERE/../../../scripts/lib/pkinit-rsa-certs.sh"
+check PK.rsabig.copy '^client2: 3 files$' host "$LABQ ssh kdc -- 'sudo tar -C $BIG -cf - ca.pem client.pem client.key' | $LABQ ssh client2 -- 'install -d -m 0700 ~/pk/big && tar -C ~/pk/big -xf - && echo \"client2: \$(ls ~/pk/big | wc -l) files\"'"
+pkkdc PK.rsabig.kdc "\n[kdcdefaults]\n    pkinit_identity = FILE:$BIG/kdc.pem,$BIG/kdc.key\n    pkinit_anchors = FILE:$BIG/ca.pem\n"
+for k in mit ${OURS:+ours}; do
+    kinit=kinit
+    [ "$k" = ours ] && kinit=$OURS
+    check "PK.rsabig.$k" '^kinit rc=0 ms=[0-9]+$' run client2 "kdestroy -c FILE:\$HOME/pk/b.cc 2> /dev/null; t=\$(date +%s%N); $kinit -X X509_anchors=FILE:\$HOME/pk/big/ca.pem -X X509_user_identity=FILE:\$HOME/pk/big/client.pem,\$HOME/pk/big/client.key -c FILE:\$HOME/pk/b.cc alice < /dev/null 2>&1; echo \"kinit rc=\$? ms=\$(( (\$(date +%s%N) - t) / 1000000 ))\"; klist -c FILE:\$HOME/pk/b.cc 2>&1 | grep -E '^Default principal'"
+    checklast "PK.rsabig.$k.tgt" "^Default principal: alice@$R\$"
+    observelast "obs.PK.rsabig.$k.ms" 'ms=[0-9]+'
+done
 
 section "kdc.conf restored"
 check kdc.conf.restored '^restored, krb5kdc active$' run kdc "sudo mv $KC.pk $KC && sudo systemctl restart krb5kdc && systemctl is-active krb5kdc > /dev/null && ! sudo grep -qE '^[[:space:]]*pkinit_identity' $KC && echo 'restored, krb5kdc active'"

@@ -110,8 +110,8 @@ wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
 Counts:
-**568** = A1 131 + A2 94 + A3 116 + A4 66 + A5 34 + B1 127.
-exact 442 · stricter-documented 22 · deviation 37 ·
+**569** = A1 131 + A2 94 + A3 117 + A4 66 + A5 34 + B1 127.
+exact 443 · stricter-documented 22 · deviation 37 ·
 absent 2 · deferred 65.
 
 When the ledger was split into these files, the one-file A4 (153 rows,

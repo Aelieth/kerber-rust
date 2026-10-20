@@ -536,7 +536,7 @@ fn want_spake_rejects_fast_and_pkinit() {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
     let pk = PkinitClient {
         cert: vec![1],
-        key: [2u8; 32],
+        key: krb5_types::pkinit::IdentityKey::P256(zeroize::Zeroizing::new([2u8; 32])),
         ca_cert: vec![3],
     };
     let err = krb5_protocol::as_exchange(&krb5_protocol::AsRequest {
@@ -743,7 +743,7 @@ fn pkinit_as_req_carries_pa_pk_as_req() {
     let (cert, key) = pkinit::parse_identity_pem(&pem).expect("parse identity");
     let pk = PkinitClient {
         cert,
-        key,
+        key: krb5_types::pkinit::IdentityKey::P256(zeroize::Zeroizing::new(key)),
         ca_cert: ca.ca_cert.clone(),
     };
 

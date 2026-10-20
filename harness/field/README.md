@@ -389,9 +389,10 @@ would remove it.
   `<KU>digitalSignature` and `<SAN>^alice@` get a TGT, `&&<KU>digitalSignature<SAN>^bob@` is
   refused with `Certificate mismatch` (66), and `<SUBJECT>(`, which `regcomp` refuses, with `Exec
   format error` (24). `alice-rsa`, an RSA 2048 certificate from an RSA CA both sides trust, gets a
-  TGT. The RSA KDC identity's startup line is recorded, not graded: MIT serves with it, and
-  kerber-rust's KDC identity is P-256 only. kdc.conf is restored with krb5kdc restarted at the
-  end, also when the scenario stops early.
+  TGT, from MIT's kinit and, in the rust leg, ours. With the RSA KDC identity alice's certificate
+  kinit gets a TGT. With an 8192-bit KDC key and a 3-prime key for alice, both made on kdc for the cell
+  (`scripts/lib/pkinit-rsa-certs.sh`), each kinit gets a TGT and its time is recorded. kdc.conf is
+  restored with krb5kdc restarted at the end, also when the scenario stops early.
 - **`kdc-profile.sh`** (CF, client2's MIT kinit against kdc): with kdc.conf's
   `[libdefaults] clockskew = 60` and client2's clock 120 s ahead (chronyd stopped,
   then started again to step it back) cfskew's AS-REQ is refused for skew, and

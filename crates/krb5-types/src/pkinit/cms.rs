@@ -2,6 +2,7 @@
 //! `cms_signeddata_create` / `cms_signeddata_verify`): wrap, verify,
 //! and the RFC 5652 certificate walk.
 
+use super::identity::IdentityKey;
 use super::{
     ECONTENT_AUTHDATA, OID_BC, OID_EKU, OID_KP_CLIENT_AUTH, OID_KP_KDC, OID_KU, OID_PKINIT_SAN,
     OID_SAN, oid_der, take_tlv, tlv,
@@ -145,14 +146,16 @@ fn decompress_p256(pt: &[u8]) -> Option<Vec<u8>> {
     Some(aff.to_sec1_point(false).as_bytes().to_vec())
 }
 
-/// CMS SignedData with an explicit certificate and ECDSA signature.
-///
 /// Encoded by hand so the Certificate SET uses IMPLICIT `[0]` (RFC 5652).
 /// SignerInfo uses **issuerAndSerialNumber** (CMS version 1), matching MIT
 /// OpenSSL `PKCS7_SIGNER_INFO`. `signed_attrs` if present is the
 /// `[0] IMPLICIT SET` encoding; the signature is over the corresponding
 /// `SET` (tag 0x31).
 #[must_use]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a SignerInfo's fields, as MIT's cms_signeddata_create sets them"
+)]
 pub fn cms_wrap_signed(
     e_content: &[u8],
     cert_der: &[u8],
@@ -161,13 +164,14 @@ pub fn cms_wrap_signed(
     serial: &[u8],
     econtent_oid: &[u8],
     signed_attrs: Option<&[u8]>,
+    sig_alg: &[u8],
 ) -> Vec<u8> {
     let sha256 = oid_der(&[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01]);
-    let ecdsa = oid_der(&[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02]);
     let signed_data = oid_der(&[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x07, 0x02]);
     let ectype = oid_der(econtent_oid);
     let sha256_alg = tlv(0x30, &[sha256.clone(), tlv(0x05, &[])].concat());
-    let ecdsa_alg = tlv(0x30, &ecdsa);
+    // MIT cms_signeddata_create; see docs/parity/a3-preauth.md
+    let sig_alg = tlv(0x30, &[oid_der(sig_alg), tlv(0x05, &[])].concat());
     let digest_algs = tlv(0x31, &sha256_alg);
     let econt = tlv(0xa0, &tlv(0x04, e_content));
     let encap = tlv(0x30, &[ectype, econt].concat());
@@ -179,7 +183,7 @@ pub fn cms_wrap_signed(
     if let Some(sa) = signed_attrs {
         signer_body.push(sa.to_vec());
     }
-    signer_body.push(ecdsa_alg);
+    signer_body.push(sig_alg);
     signer_body.push(tlv(0x04, signature));
     let signer = tlv(0x30, &signer_body.concat());
     let signers = tlv(0x31, &signer);
@@ -190,37 +194,26 @@ pub fn cms_wrap_signed(
     tlv(0x30, &[signed_data, tlv(0xa0, &sd)].concat())
 }
 
-/// CMS SignedData of `e_content` using an existing leaf cert and P-256 key.
-///
-/// # Errors
-///
-/// `"cms issuer"` when the issuer and serial number cannot be read from `cert_der`;
-/// `"cms ecdsa"` when `secret` is not a valid P-256 private scalar.
 pub fn cms_sign_leaf(
     e_content: &[u8],
     cert_der: &[u8],
-    secret: &[u8; 32],
+    key: &IdentityKey,
     econtent_oid: &[u8],
 ) -> Result<Vec<u8>, &'static str> {
-    cms_sign_leaf_oids(e_content, cert_der, secret, econtent_oid, econtent_oid)
+    cms_sign_leaf_oids(e_content, cert_der, key, econtent_oid, econtent_oid)
 }
 
 /// CMS SignedData with independent encap and signed `content-type` OIDs.
-///
-/// # Errors
-///
-/// `"cms issuer"` when the issuer and serial number cannot be read from `cert_der`;
-/// `"cms ecdsa"` when `secret` is not a valid P-256 private scalar.
 pub fn cms_sign_leaf_oids(
     e_content: &[u8],
     cert_der: &[u8],
-    secret: &[u8; 32],
+    key: &IdentityKey,
     encap_oid: &[u8],
     signed_oid: &[u8],
 ) -> Result<Vec<u8>, &'static str> {
     let (issuer, serial) = cert_issuer_serial(cert_der).ok_or("cms issuer")?;
     let sattrs = signed_attrs_set(signed_oid, e_content);
-    let signature = p256_sign(secret, &sattrs).ok_or("cms ecdsa")?;
+    let (signature, sig_alg) = key.sign_sha256(&sattrs).ok_or("cms sign")?;
     let mut implicit = sattrs;
     if implicit.first() == Some(&0x31) {
         implicit[0] = 0xa0;
@@ -233,6 +226,7 @@ pub fn cms_sign_leaf_oids(
         &serial,
         encap_oid,
         Some(&implicit),
+        sig_alg,
     ))
 }
 
@@ -673,13 +667,13 @@ fn cert_path_ok(leaf: &[u8], ca: &[u8]) -> Result<(), &'static str> {
 /// rsaEncryption 1.2.840.113549.1.1.1 (OID body).
 const OID_RSA: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01];
 /// sha256WithRSAEncryption 1.2.840.113549.1.1.11 (OID body).
-const OID_RSA_SHA256: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0b];
+pub(super) const OID_RSA_SHA256: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0b];
 /// sha384WithRSAEncryption 1.2.840.113549.1.1.12 (OID body).
 const OID_RSA_SHA384: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0c];
 /// sha512WithRSAEncryption 1.2.840.113549.1.1.13 (OID body).
 const OID_RSA_SHA512: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0d];
 /// ecdsa-with-SHA256 1.2.840.10045.4.3.2 (OID body).
-const OID_ECDSA_SHA256: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02];
+pub(super) const OID_ECDSA_SHA256: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02];
 /// ecdsa-with-SHA384 1.2.840.10045.4.3.3 (OID body).
 const OID_ECDSA_SHA384: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x03];
 /// ecdsa-with-SHA512 1.2.840.10045.4.3.4 (OID body).
@@ -1448,24 +1442,17 @@ fn cert_v1(cert: &[u8]) -> bool {
     tbs.first() != Some(&0xa0) && cert_name_der(cert, true) == cert_name_der(cert, false)
 }
 
-/// CMS SignedData of `e_content` signed with `leaf`'s P-256 key `secret`, carrying `certs` in
-/// order.
 /// MIT `cms_signeddata_create` (`pkinit_crypto_openssl.c:1784-1811`): the chain without its trust anchor rides in the message, and the signer is named by its issuer and serial number.
-///
-/// # Errors
-///
-/// `"cms issuer"` when `leaf`'s issuer and serial number do not read; `"cms ecdsa"` when
-/// `secret` is not a valid P-256 private scalar.
 pub fn cms_sign_chain(
     e_content: &[u8],
     leaf: &[u8],
     certs: &[Vec<u8>],
-    secret: &[u8; 32],
+    key: &IdentityKey,
     econtent_oid: &[u8],
 ) -> Result<Vec<u8>, &'static str> {
     let (issuer, serial) = cert_issuer_serial(leaf).ok_or("cms issuer")?;
     let sattrs = signed_attrs_set(econtent_oid, e_content);
-    let signature = p256_sign(secret, &sattrs).ok_or("cms ecdsa")?;
+    let (signature, sig_alg) = key.sign_sha256(&sattrs).ok_or("cms sign")?;
     let mut implicit = sattrs;
     if implicit.first() == Some(&0x31) {
         implicit[0] = 0xa0;
@@ -1478,6 +1465,7 @@ pub fn cms_sign_chain(
         &serial,
         econtent_oid,
         Some(&implicit),
+        sig_alg,
     ))
 }
 

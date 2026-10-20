@@ -430,6 +430,7 @@ impl PkinitCa {
             &[2],
             econtent_oid,
             Some(&implicit),
+            super::cms::OID_ECDSA_SHA256,
         ))
     }
 

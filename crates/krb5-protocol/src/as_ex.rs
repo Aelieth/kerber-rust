@@ -198,8 +198,7 @@ pub struct PkinitFailure {
 pub struct PkinitClient {
     /// Leaf certificate (DER).
     pub cert: Vec<u8>,
-    /// P-256 scalar matching `cert`.
-    pub key: [u8; 32],
+    pub key: krb5_types::pkinit::IdentityKey,
     /// CA certificate used to verify the KDC CMS (DER).
     pub ca_cert: Vec<u8>,
 }
@@ -208,7 +207,9 @@ impl Drop for PkinitClient {
     fn drop(&mut self) {
         self.key.zeroize();
         #[cfg(test)]
-        let _ = pkinit_client_drop_tests::DROPPED.try_with(|d| d.borrow_mut().push(self.key));
+        if let krb5_types::pkinit::IdentityKey::P256(k) = &self.key {
+            let _ = pkinit_client_drop_tests::DROPPED.try_with(|d| d.borrow_mut().push(**k));
+        }
     }
 }
 

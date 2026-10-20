@@ -965,7 +965,7 @@ fn load_pkinit(
     };
     Ok(ClientPkinit::Ready(PkinitClient {
         cert: chosen.cert.clone(),
-        key: *chosen.key(),
+        key: chosen.key().clone(),
         ca_cert: ca,
     }))
 }
@@ -977,7 +977,7 @@ fn load_pkinit_anchors(
     let ca_cert = krb5_types::pkinit::parse_pem("CERTIFICATE", &anc).ok_or("pkinit anchors PEM")?;
     Ok(PkinitClient {
         cert: Vec::new(),
-        key: [0u8; 32],
+        key: krb5_types::pkinit::IdentityKey::P256(Zeroizing::new([0u8; 32])),
         ca_cert,
     })
 }

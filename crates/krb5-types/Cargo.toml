@@ -12,6 +12,7 @@ publish.workspace = true
 bytes.workspace = true
 chrono.workspace = true
 pure-rust-locales.workspace = true
+crypto-bigint.workspace = true
 getrandom.workspace = true
 num-bigint.workspace = true
 p256.workspace = true

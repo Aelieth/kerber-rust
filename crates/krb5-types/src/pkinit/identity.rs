@@ -5,9 +5,10 @@
 
 use std::path::Path;
 
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
-use super::cms::unbase64;
+use super::cms::{OID_ECDSA_SHA256, OID_RSA_SHA256, p256_sign, unbase64};
+use super::rsa::RsaKey;
 use super::take_tlv;
 
 const EINVAL: &str = "Invalid argument";
@@ -27,29 +28,67 @@ const OID_EC_PUBLIC_KEY: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01];
 /// prime256v1 1.2.840.10045.3.1.7 (OID body).
 const OID_P256: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07];
 
-/// A certificate and its P-256 private scalar; the scalar is wiped on drop.
+#[derive(Clone)]
+pub enum IdentityKey {
+    P256(Zeroizing<[u8; 32]>),
+    Rsa(Box<RsaKey>),
+}
+
+impl IdentityKey {
+    #[must_use]
+    pub fn p256(scalar: [u8; 32]) -> Self {
+        Self::P256(Zeroizing::new(scalar))
+    }
+
+    // MIT cert_sig_alg; see docs/parity/a3-preauth.md
+    #[must_use]
+    pub fn sign_sha256(&self, msg: &[u8]) -> Option<(Vec<u8>, &'static [u8])> {
+        match self {
+            Self::P256(k) => Some((p256_sign(k, msg)?, OID_ECDSA_SHA256)),
+            Self::Rsa(k) => Some((k.sign_sha256(msg)?, OID_RSA_SHA256)),
+        }
+    }
+}
+
+impl std::fmt::Debug for IdentityKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::P256(_) => f.write_str("IdentityKey::P256"),
+            Self::Rsa(k) => write!(f, "IdentityKey::Rsa({k:?})"),
+        }
+    }
+}
+
+impl Zeroize for IdentityKey {
+    fn zeroize(&mut self) {
+        match self {
+            Self::P256(k) => k.zeroize(),
+            Self::Rsa(k) => k.zeroize(),
+        }
+    }
+}
+
+/// A certificate and its private key; the key is wiped on drop.
 pub struct PkinitIdentity {
     /// The certificate (DER).
     pub cert: Vec<u8>,
-    key: Zeroizing<[u8; 32]>,
+    key: IdentityKey,
 }
 
 impl PkinitIdentity {
-    /// The identity of `cert` and its private scalar `key`.
     #[must_use]
-    pub fn new(cert: Vec<u8>, key: Zeroizing<[u8; 32]>) -> Self {
+    pub fn new(cert: Vec<u8>, key: IdentityKey) -> Self {
         Self { cert, key }
     }
 
     /// The identity of `cert` and a copy of `key`.
     #[must_use]
     pub fn from_key(cert: Vec<u8>, key: [u8; 32]) -> Self {
-        Self::new(cert, Zeroizing::new(key))
+        Self::new(cert, IdentityKey::P256(Zeroizing::new(key)))
     }
 
-    /// The private scalar.
     #[must_use]
-    pub fn key(&self) -> &[u8; 32] {
+    pub fn key(&self) -> &IdentityKey {
         &self.key
     }
 }
@@ -103,7 +142,7 @@ impl std::fmt::Debug for PkinitIdentity {
 
 /// The KDC's identity from `pkinit_identity`: `FILE:cert[,key]` (a value with no type is one),
 /// `DIR:` holding one `NAME.crt` with its `NAME.key`, or `ENV:VAR` naming another value. Keys
-/// are P-256; `PKCS11:` and `PKCS12:` are refused as unsupported types.
+/// are P-256 EC or RSA; `PKCS11:` and `PKCS12:` are refused as unsupported types.
 /// MIT `process_option_identity` (`plugins/preauth/pkinit/pkinit_identity.c:378-465`): the type before the first colon, else FILE.
 /// MIT `crypto_cert_select_default` (`plugins/preauth/pkinit/pkinit_crypto_openssl.c:4986-4991`): the KDC's identity is the only certificate loaded.
 ///
@@ -172,9 +211,9 @@ fn load_cert_and_key(cert_file: &str, key_file: &str) -> Result<PkinitIdentity, 
         KeyFault::Read(code, why) => {
             IdentityError::new(code, format!("Cannot read key file '{fsname}': {why}"))
         }
-        KeyFault::NotP256 => IdentityError::new(
+        KeyFault::Unsupported => IdentityError::new(
             KDC_PREAUTH_FAILED,
-            format!("Cannot use key file '{fsname}': only P-256 EC keys are supported"),
+            format!("Cannot use key file '{fsname}': only P-256 EC and RSA keys are supported"),
         ),
     })?;
     Ok(PkinitIdentity::new(cert, key))
@@ -281,37 +320,39 @@ enum KeyFault {
     /// MIT's code and OpenSSL's reason the key does not read.
     Read(i64, &'static str),
     /// A key MIT reads that this KDC cannot use.
-    NotP256,
+    Unsupported,
 }
 
-/// The P-256 private scalar of the first private key in `path`, as `PEM_read_bio_PrivateKey`
+/// The first private key in `path`, P-256 EC or RSA, as `PEM_read_bio_PrivateKey`
 /// finds it; an encrypted key cannot be read, as the KDC has no prompter.
 /// MIT `get_key` (`plugins/preauth/pkinit/pkinit_crypto_openssl.c:1406-1444`): the KDC's password callback fails, so an encrypted key is an error.
-fn read_key(path: &str) -> Result<Zeroizing<[u8; 32]>, KeyFault> {
+fn read_key(path: &str) -> Result<IdentityKey, KeyFault> {
     let bytes =
         Zeroizing::new(std::fs::read(path).map_err(|e| KeyFault::Read(errno(&e), NO_REASON))?);
     let text = Zeroizing::new(String::from_utf8_lossy(&bytes).into_owned());
     for block in pem_blocks(&text) {
-        let pkcs8 = match block.label {
+        match block.label {
             "ENCRYPTED PRIVATE KEY" => {
                 return Err(KeyFault::Read(EIO, "interrupted or cancelled"));
             }
-            "PRIVATE KEY" => true,
-            "EC PRIVATE KEY" => false,
-            "RSA PRIVATE KEY" | "DSA PRIVATE KEY" => return Err(KeyFault::NotP256),
+            "PRIVATE KEY" | "EC PRIVATE KEY" | "RSA PRIVATE KEY" => {}
+            "DSA PRIVATE KEY" => return Err(KeyFault::Unsupported),
             _ => continue,
-        };
+        }
         if block.encrypted {
             return Err(KeyFault::Read(EIO, "interrupted or cancelled"));
         }
         let der =
             Zeroizing::new(unbase64(block.body).ok_or(KeyFault::Read(EIO, "bad base64 decode"))?);
-        let scalar = if pkcs8 {
-            pkcs8_p256(&der)
-        } else {
-            sec1_p256(&der, true)
+        let rsa = |k: RsaKey| IdentityKey::Rsa(Box::new(k));
+        let key = match block.label {
+            "PRIVATE KEY" => pkcs8_p256(&der)
+                .map(IdentityKey::P256)
+                .or_else(|| RsaKey::from_pkcs8(&der).map(rsa)),
+            "EC PRIVATE KEY" => sec1_p256(&der, true).map(IdentityKey::P256),
+            _ => RsaKey::from_pkcs1(&der).map(rsa),
         };
-        return scalar.ok_or(KeyFault::NotP256);
+        return key.ok_or(KeyFault::Unsupported);
     }
     Err(KeyFault::Read(EIO, "unsupported"))
 }

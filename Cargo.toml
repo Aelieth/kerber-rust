@@ -51,6 +51,7 @@ chrono = { version = "0.4", default-features = false, features = ["alloc", "cloc
 # glibc LC_TIME tables. krb5-types formats dates with them; defmt stays off.
 pure-rust-locales = { version = "0.8.2", default-features = false }
 cmac = "0.8"
+crypto-bigint = { version = "0.7", default-features = false, features = ["zeroize"] }
 # SPAKE edwards25519 (MIT `edwards25519.c`). 5.0 shares cpufeatures 0.3 with the RustCrypto
 # crates; 4.1 would add cpufeatures 0.2. No `alloc`: no multiscalar API is used.
 curve25519-dalek = { version = "5.0.0", default-features = false, features = ["precomputed-tables", "zeroize"] }

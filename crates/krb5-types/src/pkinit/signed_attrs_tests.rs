@@ -16,6 +16,7 @@ fn cms_verify_refuses_missing_signed_attrs() {
         &serial,
         ECONTENT_AUTHDATA,
         None,
+        super::cms::OID_ECDSA_SHA256,
     );
     assert_eq!(
         cms_verify_full(&cms, &ca.ca_cert).expect_err("bare"),

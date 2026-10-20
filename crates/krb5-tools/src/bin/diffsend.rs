@@ -5146,6 +5146,7 @@ fn run() -> Result<(), String> {
         fs::read_to_string(&pem_path).map_err(|e| format!("pkinit user pem {pem_path}: {e}"))?;
     let (cert, leaf) =
         krb5_types::pkinit::parse_identity_pem(&pem).ok_or_else(|| format!("parse {pem_path}"))?;
+    let leaf = krb5_types::pkinit::IdentityKey::p256(leaf);
     let stale_kp = p256_generate().map_err(|e| e.to_string())?;
     let mut stale_req =
         as_req(user.clone(), realm, 0x1000_0093, None).map_err(|e| e.to_string())?;
