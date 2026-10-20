@@ -10,7 +10,6 @@ mod derive;
 mod error;
 mod etype;
 mod key;
-mod modp;
 mod nfold;
 mod ops;
 mod prf;
@@ -31,9 +30,6 @@ pub use etype::{
     cksumtype_is_unkeyed, default_enctype_list, parse_enctype_list, parse_keysalt_list,
 };
 pub use key::ProtocolKey;
-pub use modp::{
-    DhGroup, DhKeypair, OAKLEY_2048, OAKLEY_4096, dh_generate, dh_group_for_prime, dh_shared,
-};
 pub use ops::{
     CipherState, ENCTYPE_UNKNOWN, check_enc_data_etype, checksum, checksum_output_size, decrypt,
     decrypt_cts, decrypt_enc_data, decrypt_enc_data_with_state, decrypt_with_state, encrypt,

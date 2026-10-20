@@ -31,6 +31,7 @@ any other `###` heading.
 - **admin.** The iprop client checks the primary's INIT reply MIC whatever its verifier, as MIT's `authgss_refresh`; an empty or non-GSS verifier skipped the check.
 - **kdc.** PKINIT trusts kdc.conf's `pkinit_anchors` and signs with `pkinit_identity`, not a CA it made, now test-only. Lab beside MIT.
 - **kdc.** PKINIT checks a client's `pkinit_cert_match` rule as MIT's dbmatch (`<KU>`, `<EKU>`, `<SAN>`, `<ISSUER>`, `<SUBJECT>`, `&&`, `||`); a miss is 66. Lab beside MIT.
+- **pkinit.** MODP Diffie-Hellman exponentiates in constant time, with crypto-bigint; it used num-bigint's variable-time `modpow`.
 
 ### Added
 
@@ -52,6 +53,7 @@ any other `###` heading.
 - **kdc.** A principal change is appended to the database and flushed; readers take only the appended changes, a torn one is cut, and replaced records are compacted away.
 - **client.** A client program reads its profile once, at start: `init_context` returns a `ClientContext`, which the AS, TGS, KCM, ccache and keytab calls take.
 - **kdc.** A PKINIT client chain is built through `pkinit_pool` as OpenSSL builds it, and a key purpose `pkinit_eku_checking` refuses is error 77, as MIT's.
+- **gss.** An exported context is version 2, which carries the receive window and the acceptor's skew; a version-1 token, as 1.1 exported, is refused.
 
 ### Tests and CI
 
@@ -118,6 +120,8 @@ any other `###` heading.
 - **pkinit.** kpasswd, kprop and kinit's expired-password request take PKINIT from the profile, as MIT's do, and a reply to the bare request is no error with an identity.
 - **client.** kinit verifies an RSA-signed PKINIT reply, against every anchor and `pkinit_pool`, as MIT's; a reply that does not verify falls to the password, as MIT's.
 - **pkinit.** The KDC and kinit sign with P-224, P-384, P-521 and secp256k1 keys, SHA-256 on each as MIT's, and verify ECDSA on those curves in chains and signatures.
+- **pkinit.** kinit and the KDC take MIT's key-exchange groups, MODP 1024 to 4096 and P-256 to P-521, by `pkinit_dh_min_bits`; kinit retries a 65 in the KDC's group, as MIT's.
+- **kdc.** A PKINIT DH value the key derivation refuses is 60 under `KDC_RETURN_PADATA`, as MIT's; it was 65 at the check.
 
 ## [1.1.0] - 2026-10-14
 

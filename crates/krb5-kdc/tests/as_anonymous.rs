@@ -153,7 +153,7 @@ fn anonymous_pkinit_issues_kx() {
     assert!(types.contains(&pa::PKINIT_KX), "PA-PKINIT-KX: {types:?}");
     assert!(types.contains(&pa::PK_AS_REP), "PA-PK-AS-REP: {types:?}");
     let reply = pkinit_reply_key_agile(
-        &kp.secret,
+        &p256_kx(&kp.secret),
         &issued.rep.0.padata,
         EncryptionType::Aes256CtsHmacSha196,
         krb5_protocol::KdcTrust::anchor(&ca.ca_cert),
@@ -312,4 +312,9 @@ fn an_anonymous_reply_stamps_the_anonymous_principals_last_success() {
     );
     let stamped = store.last_success_of(anon);
     assert!(stamped >= before, "last success {stamped}, before {before}");
+}
+
+fn p256_kx(secret: &[u8; 32]) -> krb5_types::pkinit::KxKey {
+    krb5_types::pkinit::KxKey::from_secret(krb5_types::pkinit::KxGroup::P256, secret)
+        .expect("P-256 key")
 }

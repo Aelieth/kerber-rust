@@ -1006,8 +1006,16 @@ pub fn run_as_preauth(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, E
 /// [`run_as_preauth`] and the encrypted challenge, which the AS path checks inside FAST.
 /// Cases whose text is not MIT's are named in `docs/parity/a3-preauth.md`.
 pub(crate) fn finish_verify_padata(module: &str, e: Error) -> Error {
+    if is_return_padata(&e) {
+        return e;
+    }
     log_verify_failure(module, &verify_failure_text(&e));
     filter_preauth_error(e)
+}
+
+/// MIT `finish_process_as_req` (`kdc/do_as_req.c:251-256`): a `return_padata` failure, which our PKINIT module meets during verify, goes out unfiltered under `KDC_RETURN_PADATA`, with no verify failure logged.
+fn is_return_padata(e: &Error) -> bool {
+    matches!(e, Error::Protocol { text: Some(t), .. } if t == status::KDC_RETURN_PADATA)
 }
 
 /// `krb5_get_error_message` of the code a module failed with.

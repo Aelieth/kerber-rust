@@ -14,6 +14,7 @@ pub struct PkinitKdc {
     pub(crate) require_eku: bool,
     pub(crate) accept_secondary_eku: bool,
     pub(crate) allow_upn: bool,
+    pub(crate) dh_min_bits: u32,
 }
 
 impl PkinitKdc {
@@ -43,6 +44,11 @@ impl PkinitKdc {
                 "pkinit_require_crl_checking is not supported: (realm: {realm})"
             ));
         }
+        let dh_min_bits = krb5_types::pkinit::parse_dh_min_bits(params.dh_min_bits.as_deref())
+            .unwrap_or_else(|v| {
+                krb5_protocol::trace::pkinit_dh_invalid_min_bits(&v);
+                2048
+            });
         let identity = load_identity(identity, &mut krb5_protocol::trace::pkinit_match)?;
         Ok(Self {
             identity,
@@ -51,6 +57,7 @@ impl PkinitKdc {
             require_eku: params.require_eku,
             accept_secondary_eku: params.accept_secondary_eku,
             allow_upn: params.allow_upn,
+            dh_min_bits,
         })
     }
 
@@ -64,6 +71,7 @@ impl PkinitKdc {
             require_eku: true,
             accept_secondary_eku: false,
             allow_upn: false,
+            dh_min_bits: 2048,
         }
     }
 

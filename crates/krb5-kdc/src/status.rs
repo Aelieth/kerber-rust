@@ -31,6 +31,7 @@ pub(crate) const HANDLE_AUTHDATA: &str = "HANDLE_AUTHDATA";
 /// MIT `finish_process_as_req` (`kdc/do_as_req.c:316-322`): the status of a `return_enc_padata` failure.
 /// MIT `tgs_issue_ticket` (`kdc/do_tgs_req.c:1098-1105`): the same status for a TGS.
 pub(crate) const KDC_RETURN_ENC_PADATA: &str = "KDC_RETURN_ENC_PADATA";
+pub(crate) const KDC_RETURN_PADATA: &str = "KDC_RETURN_PADATA";
 pub(crate) const INVALID_AS_OPTIONS: &str = "INVALID AS OPTIONS";
 pub(crate) const INVALID_LINEAGE: &str = "INVALID LINEAGE";
 pub(crate) const INVALID_S4U2PROXY_OPTIONS: &str = "INVALID_S4U2PROXY_OPTIONS";

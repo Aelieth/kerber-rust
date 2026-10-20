@@ -238,7 +238,7 @@ restart (SIGHUP reopens the logs only). As MIT's, `kdc.conf`'s `[libdefaults]` v
 before `krb5.conf`'s, its `include` and `includedir` lines are followed, and section and relation
 names match only as written. `clockskew` there is both the KDC's and kpasswd's allowance for a
 client's clock (300 seconds by default). A relation MIT reads that kerber-rust does not, such as
-`master_key_name` or `pkinit_dh_min_bits`, is named in the log when the daemon starts.
+`master_key_name`, is named in the log when the daemon starts.
 
 `[plugins] kdcpreauth` `disable` and `enable_only` select the KDC's preauth
 modules by MIT's names (`encrypted_timestamp`, `encrypted_challenge`, `spake`,

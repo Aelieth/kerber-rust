@@ -12,7 +12,7 @@
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
     EncryptionType, KeyUsage, ProtocolKey, SpakeGroup, checksum, cksumtype_is_keyed,
-    decrypt_enc_data, encrypt, hmac_md5_arcfour_checksum, krb_fx_cf2, octetstring2key, p256_shared,
+    decrypt_enc_data, encrypt, hmac_md5_arcfour_checksum, krb_fx_cf2, octetstring2key,
     pkinit_kdf_agile, spake_derive_key, spake_keygen, spake_result, spake_thash_update,
     spake_wbytes, verify_checksum_type,
 };
@@ -21,6 +21,8 @@ use krb5_types::{
     KerberosFlags, KerberosTime, Microseconds, PaData, PrincipalName, Realm, Ticket, err, ku, pa,
     principal_compare,
 };
+
+use krb5_types::pkinit::KxKey;
 
 use crate::error::Error;
 use crate::trace;
@@ -580,7 +582,7 @@ pub fn pa_pk_as_req_signed(
     freshness: Option<&[u8]>,
 ) -> Result<PaData, Error> {
     pa_pk_as_req_signed_at(
-        client_public,
+        &krb5_types::pkinit::encode_ec_spki(client_public),
         cert_der,
         leaf_key,
         nonce,
@@ -592,7 +594,7 @@ pub fn pa_pk_as_req_signed(
 
 /// [`pa_pk_as_req_signed`] with the authenticator's time given: the AS exchange's clock.
 pub(crate) fn pa_pk_as_req_signed_at(
-    client_public: &[u8],
+    spki: &[u8],
     cert_der: &[u8],
     leaf_key: &krb5_types::pkinit::IdentityKey,
     nonce: u32,
@@ -608,8 +610,7 @@ pub(crate) fn pa_pk_as_req_signed_at(
         pa_checksum: Some(body_sha1.to_vec().into()),
         freshness_token: freshness.map(|t| t.to_vec().into()),
     };
-    let spki = krb5_types::pkinit::encode_ec_spki(client_public);
-    let inner = krb5_types::pkinit::encode_client_authpack(&pk_auth, &spki)
+    let inner = krb5_types::pkinit::encode_client_authpack(&pk_auth, spki)
         .ok_or_else(|| Error::ReplyMismatch("AuthPack kdf".into()))?;
     let signed = krb5_types::pkinit::cms_sign_leaf(
         &inner,
@@ -642,7 +643,7 @@ pub fn pa_pk_as_req_unsigned(
     freshness: Option<&[u8]>,
 ) -> Result<PaData, Error> {
     pa_pk_as_req_unsigned_at(
-        client_public,
+        &krb5_types::pkinit::encode_ec_spki(client_public),
         nonce,
         body_sha1,
         freshness,
@@ -652,7 +653,7 @@ pub fn pa_pk_as_req_unsigned(
 
 /// [`pa_pk_as_req_unsigned`] with the authenticator's time given: the AS exchange's clock.
 pub(crate) fn pa_pk_as_req_unsigned_at(
-    client_public: &[u8],
+    spki: &[u8],
     nonce: u32,
     body_sha1: &[u8],
     freshness: Option<&[u8]>,
@@ -666,8 +667,7 @@ pub(crate) fn pa_pk_as_req_unsigned_at(
         pa_checksum: Some(body_sha1.to_vec().into()),
         freshness_token: freshness.map(|t| t.to_vec().into()),
     };
-    let spki = krb5_types::pkinit::encode_ec_spki(client_public);
-    let inner = krb5_types::pkinit::encode_client_authpack(&pk_auth, &spki)
+    let inner = krb5_types::pkinit::encode_client_authpack(&pk_auth, spki)
         .ok_or_else(|| Error::ReplyMismatch("AuthPack kdf".into()))?;
     let wrapped = krb5_types::pkinit::cms_wrap_unsigned(&inner);
     let req = krb5_types::pkinit::PaPkAsReq {
@@ -729,7 +729,7 @@ fn verify_kdc_pkinit_cms(cms: &[u8], trust: KdcTrust<'_>, realm: &str) -> Result
 /// and `realm`, its DH value does not decode, or the reply names the RFC 8636 SHA-256 KDF;
 /// [`Error::Asn1`] when the PA-PK-AS-REP does not decode; [`Error::Crypto`] when the ECDH fails.
 pub fn pkinit_reply_key(
-    client_secret: &[u8; 32],
+    key: &KxKey,
     padata: &Option<Vec<PaData>>,
     etype: EncryptionType,
     trust: KdcTrust<'_>,
@@ -748,9 +748,10 @@ pub fn pkinit_reply_key(
     };
     let inner = verify_kdc_pkinit_cms(pub_kdc.dh_signed_data.as_ref(), trust, realm)?;
     let kdc_pub = krb5_types::pkinit::decode_kdc_dh_point(&inner)
-        .or_else(|| krb5_types::pkinit::decode_ec_spki(&inner))
         .ok_or_else(|| Error::ReplyMismatch("PKINIT KDC DH".into()))?;
-    let shared = p256_shared(client_secret, &kdc_pub)?;
+    let shared = key
+        .shared(&kdc_pub)
+        .ok_or_else(|| Error::Crypto("PKINIT key exchange".into()))?;
     if let Some(oid) = krb5_types::pkinit::pa_pk_as_rep_kdf_oid(raw.padata_value.as_ref())
         && oid.as_slice() == krb5_types::pkinit::KDF_AH_SHA256_OID
     {
@@ -770,7 +771,7 @@ pub fn pkinit_reply_key(
 /// and `realm`, its DH value does not decode, or the reply names a KDF other than SHA-256;
 /// [`Error::Crypto`] when the ECDH fails.
 pub fn pkinit_reply_key_agile(
-    client_secret: &[u8; 32],
+    key: &KxKey,
     padata: &Option<Vec<PaData>>,
     etype: EncryptionType,
     trust: KdcTrust<'_>,
@@ -786,9 +787,10 @@ pub fn pkinit_reply_key_agile(
         .ok_or_else(|| Error::ReplyMismatch("PKINIT dhSignedData".into()))?;
     let inner = verify_kdc_pkinit_cms(&cms, trust, realm)?;
     let kdc_pub = krb5_types::pkinit::decode_kdc_dh_point(&inner)
-        .or_else(|| krb5_types::pkinit::decode_ec_spki(&inner))
         .ok_or_else(|| Error::ReplyMismatch("PKINIT KDC DH".into()))?;
-    let shared = p256_shared(client_secret, &kdc_pub)?;
+    let shared = key
+        .shared(&kdc_pub)
+        .ok_or_else(|| Error::Crypto("PKINIT key exchange".into()))?;
     let Some(oid) = krb5_types::pkinit::pa_pk_as_rep_kdf_oid(raw.padata_value.as_ref()) else {
         return octetstring2key(etype, &shared).map_err(Into::into);
     };

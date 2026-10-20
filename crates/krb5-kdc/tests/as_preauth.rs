@@ -880,7 +880,11 @@ fn issue_as_and_tgs_with_etype_20_mint_sha2_tickets() {
 }
 
 fn first_ctx_tag(der: &[u8]) -> Option<u8> {
-    der.iter().copied().find(|b| b & 0xc0 == 0x80)
+    let inner = |b: &[u8]| {
+        let (len, hlen) = krb5_types::der::read_len(b.get(1..)?)?;
+        b.get(1 + hlen..1 + hlen + len).map(<[u8]>::to_vec)
+    };
+    inner(&inner(der)?)?.first().copied()
 }
 
 fn pkinit_as_req(
@@ -960,9 +964,10 @@ fn pkinit_unknown_dh_is_typed_edata_with_cookie() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let ca = krb5_testkit::enable_pkinit(&mut store);
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let p = vec![0xffu8; 64];
-    let y = vec![0x02];
-    let spki = krb5_types::pkinit::encode_dh_spki(&p, &y);
+    let mut spki = krb5_types::pkinit::KxKey::generate(krb5_types::pkinit::KxGroup::Modp2048)
+        .expect("DH key")
+        .spki();
+    spki[64] ^= 0x01;
     let req = pkinit_as_req(cname, 901, |ck| {
         pa_pk_as_req_spki(&spki, &ca, Some(ck)).expect("PA-PK-AS-REQ")
     });

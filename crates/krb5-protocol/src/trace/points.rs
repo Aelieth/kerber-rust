@@ -381,6 +381,52 @@ pub fn pkinit_client_rep_dh_fail() {
     krb5int_trace("PKINIT client could not verify DH reply", &[]);
 }
 
+// MIT TRACE_PKINIT_DH_PROPOSING_GROUP; see docs/parity/a3-preauth.md
+pub fn pkinit_dh_proposing_group(desc: &str) {
+    krb5int_trace(
+        "PKINIT using {str} key exchange group",
+        &[Arg::Str(Some(desc.as_bytes()))],
+    );
+}
+
+pub fn pkinit_dh_negotiated_group(desc: &str) {
+    krb5int_trace(
+        "PKINIT accepting KDC key exchange group preference {str}",
+        &[Arg::Str(Some(desc.as_bytes()))],
+    );
+}
+
+pub fn pkinit_client_tryagain() {
+    krb5int_trace(
+        "PKINIT client trying again with KDC-provided parameters",
+        &[],
+    );
+}
+
+pub fn pkinit_dh_invalid_min_bits(value: &str) {
+    krb5int_trace(
+        "Invalid pkinit_dh_min_bits value {str}, using default",
+        &[Arg::Str(Some(value.as_bytes()))],
+    );
+}
+
+pub fn pkinit_dh_received_group(desc: &str) {
+    krb5int_trace(
+        "PKINIT received {str} key from client for key exchange",
+        &[Arg::Str(Some(desc.as_bytes()))],
+    );
+}
+
+pub fn pkinit_dh_rejecting_group(desc: &str, min: &str) {
+    krb5int_trace(
+        "PKINIT client key has group {str}, need at least {str}",
+        &[
+            Arg::Str(Some(desc.as_bytes())),
+            Arg::Str(Some(min.as_bytes())),
+        ],
+    );
+}
+
 // MIT TRACE_PKINIT_CERT_RULE; see docs/parity/a3-preauth.md
 pub fn pkinit_cert_rule(rule: &str) {
     krb5int_trace(

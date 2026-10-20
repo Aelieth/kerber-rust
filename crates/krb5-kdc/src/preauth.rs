@@ -7,10 +7,10 @@
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
     EncryptionType, KeyUsage, ProtocolKey, checksum, cksumtype_is_keyed, decrypt, decrypt_enc_data,
-    derive_prfplus, dh_generate, dh_group_for_prime, dh_shared, encrypt, krb_fx_cf2,
-    octetstring2key, p256_generate, p256_shared, pkinit_kdf_agile, verify_checksum_type,
+    derive_prfplus, encrypt, krb_fx_cf2, octetstring2key, pkinit_kdf_agile, verify_checksum_type,
 };
 use krb5_log::klog::{self, Severity};
+use krb5_types::pkinit::{KxGroup, KxKey, group_desc};
 use krb5_types::{
     AsReq, EncryptedData, EncryptionKey, KdcReqBody, KerberosTime, MethodData, Microseconds,
     PaData, PrincipalName, TypedData, TypedDataList, err, flag_bit, ku, pa,
@@ -588,7 +588,7 @@ pub(crate) fn process_pkinit(
         proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED)
     })?;
     let peer = match spki.as_deref() {
-        Some(spki) => Some(dh_peer(store, cname, spki)?),
+        Some(spki) => Some(server_check_dh(store, cname, spki, kdc.dh_min_bits)?),
         None if !is_signed => {
             return Err(proto_d(
                 err::PREAUTH_FAILED,
@@ -623,24 +623,18 @@ pub(crate) fn process_pkinit(
         });
     };
     let agile = krb5_types::pkinit::authpack_wants_sha256_kdf(&inner);
-    let (z, info) = match peer {
-        DhPeer::Ec(peer) => {
-            let kp = p256_generate()?;
-            let shared = Zeroizing::new(p256_shared(&kp.secret, &peer)?);
-            let info = krb5_types::pkinit::encode_kdc_dh_key_info(&kp.public, nonce);
-            (Zeroizing::new(shared.to_vec()), info)
-        }
-        DhPeer::Modp(group, y, modulus_len) => {
-            let kp = dh_generate(group)?;
-            let shared =
-                Zeroizing::new(dh_shared(group, &kp.secret, &y).map_err(|_| {
-                    proto(err::DH_KEY_PARAMETERS_NOT_ACCEPTED, status::PREAUTH_FAILED)
-                })?);
-            let z = Zeroizing::new(pad_z(&shared, modulus_len));
-            let info = krb5_types::pkinit::encode_kdc_dh_key_info(&kp.public_der, nonce);
-            (z, info)
-        }
-    };
+    let (group, client_public) = peer;
+    let kp =
+        KxKey::generate(group).ok_or_else(|| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
+    // MIT server_process_dh; see docs/parity/a3-preauth.md
+    let z = kp.shared(&client_public).ok_or_else(|| {
+        proto_d(
+            err::GENERIC,
+            status::KDC_RETURN_PADATA,
+            "Cannot allocate memory",
+        )
+    })?;
+    let info = krb5_types::pkinit::encode_kdc_dh_key_info(kp.public(), nonce);
     let certs = kdc.own_chain().map_err(|message| Error::PreauthModule {
         code: err::PREAUTH_FAILED,
         message,
@@ -873,48 +867,34 @@ fn match_client(
         .is_some_and(|entry| (entry.realm.as_bytes().to_vec(), parts(&entry.name)) == own)
 }
 
-/// The client's DH public value, in a group the KDC takes.
-enum DhPeer {
-    /// A P-256 point.
-    Ec(Vec<u8>),
-    /// A MODP group, the client's value, and the modulus length.
-    Modp(&'static krb5_crypto::DhGroup, Vec<u8>, usize),
-}
-
-/// MIT `server_check_dh` (`plugins/preauth/pkinit/pkinit_crypto_openssl.c:3010-3044`): a DH value in a group the KDC does not take is 65, with the groups it does.
-fn dh_peer(store: &dyn PrincipalRead, cname: &PrincipalName, spki: &[u8]) -> Result<DhPeer, Error> {
-    if let Some(peer) = krb5_types::pkinit::decode_ec_spki(spki) {
-        return Ok(DhPeer::Ec(peer));
-    }
-    if let Some((p, y)) = krb5_types::pkinit::parse_dh_spki(spki) {
-        let group = dh_group_for_prime(&p).ok_or_else(|| {
+// MIT server_check_dh; see docs/parity/a3-preauth.md
+fn server_check_dh(
+    store: &dyn PrincipalRead,
+    cname: &PrincipalName,
+    spki: &[u8],
+    min_bits: u32,
+) -> Result<(KxGroup, Vec<u8>), Error> {
+    let Some((group, public)) = krb5_types::pkinit::decode_spki(spki) else {
+        return Err(dh_params_not_accepted(store, cname, min_bits));
+    };
+    match group {
+        Some(g) if g.bits() >= min_bits => {
+            krb5_protocol::trace::pkinit_dh_received_group(g.desc());
+            Ok((g, public))
+        }
+        g => {
+            let desc = g.map_or("(unknown)", KxGroup::desc);
+            krb5_protocol::trace::pkinit_dh_rejecting_group(desc, group_desc(min_bits));
             tracing::info!(
                 event = krb5_log::events::KDC_PKINIT,
                 component = "krb5-kdc",
                 outcome = "denied",
-                error = "unknown DH prime",
-                p_len = p.len()
+                group = desc,
+                min_bits
             );
-            dh_params_not_accepted(store, cname)
-        })?;
-        tracing::info!(
-            event = krb5_log::events::KDC_PKINIT,
-            component = "krb5-kdc",
-            outcome = "ok",
-            group = group.name,
-            bits = group.bits
-        );
-        return Ok(DhPeer::Modp(group, y, p.len()));
+            Err(dh_params_not_accepted(store, cname, min_bits))
+        }
     }
-    tracing::info!(
-        event = krb5_log::events::KDC_PKINIT,
-        component = "krb5-kdc",
-        outcome = "denied",
-        error = "SPKI",
-        spki_len = spki.len(),
-        spki_tag = spki.first().copied().unwrap_or(0)
-    );
-    Err(dh_params_not_accepted(store, cname))
 }
 
 /// The freshness line of a signed request, and its refusal when a token is required and none
@@ -941,15 +921,6 @@ fn check_log_freshness(
     };
     klog::syslog(Severity::Info, &format!("PKINIT: {what} from {name}"));
     Ok(())
-}
-
-fn pad_z(shared: &[u8], modulus_len: usize) -> Vec<u8> {
-    if shared.len() >= modulus_len {
-        return shared.to_vec();
-    }
-    let mut z = vec![0u8; modulus_len];
-    z[modulus_len - shared.len()..].copy_from_slice(shared);
-    z
 }
 
 pub(crate) fn find_pa(padata: Option<&[PaData]>, ty: i32) -> Option<&[u8]> {
@@ -1001,10 +972,14 @@ fn map_fast_unwrap(err: Error) -> Error {
     }
 }
 
-fn dh_params_not_accepted(store: &dyn PrincipalRead, client: &PrincipalName) -> Error {
+fn dh_params_not_accepted(
+    store: &dyn PrincipalRead,
+    client: &PrincipalName,
+    min_bits: u32,
+) -> Error {
     let mut method: MethodData = vec![PaData {
         padata_type: pa::TD_DH_PARAMETERS,
-        padata_value: krb5_types::pkinit::encode_td_dh_p256().into(),
+        padata_value: krb5_types::pkinit::encode_td_dh_parameters(min_bits).into(),
     }];
     method = with_fx_cookie(store, Some(client), method);
     proto_e(

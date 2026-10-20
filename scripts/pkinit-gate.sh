@@ -130,7 +130,7 @@ if [ "$rc" -eq 0 ]; then
     fi
     echo "$KDCLOG" | grep 'pkinit client san'
 
-    echo "==== rust_kdc unsupported group P-384 → 65 TYPED-DATA shape (MIT accepts P-384 — item 17) ===="
+    echo "==== rust_kdc MIT kinit pkinit_dh_min_bits=1024: 1024-bit DH → 65 TYPED-DATA + cookie, as MIT's KDC below its 2048 minimum ===="
     rust_kdc_pkinit_dh1024() {
         local proxy=1888
         docker cp "$ROOT/scripts/lib/kdc-error-proxy.py" "$NAME":/tmp/kdc-error-proxy.py
@@ -146,14 +146,15 @@ if [ "$rc" -eq 0 ]; then
     preferred_preauth_types = 16
     pkinit_eku_checking = none
     pkinit_kdc_hostname = kerber.test
-    pkinit_dh_min_bits = P-384
+    pkinit_dh_min_bits = 1024
+    udp_preference_limit = 32700
 [realms]
     KERBER.TEST = {
         kdc = 127.0.0.1:${proxy}
         pkinit_anchors = FILE:/tmp/pkinit/ca.pem
         pkinit_eku_checking = none
         pkinit_kdc_hostname = kerber.test
-        pkinit_dh_min_bits = P-384
+        pkinit_dh_min_bits = 1024
     }
 EOF"
         set +e
@@ -167,7 +168,7 @@ EOF"
         out="$(docker exec "$NAME" cat /tmp/pkinit-65.txt 2>/dev/null || true)"
         echo "$out"
         echo "$out" | grep -F 'error_code=65' || {
-            echo "rust_kdc PKINIT DH-min P-384 did not return protocol 65: $out" >&2
+            echo "rust_kdc PKINIT 1024-bit DH did not return protocol 65: $out" >&2
             exit 1
         }
         echo "$out" | grep -F 'e_data_encoding=typed' || {

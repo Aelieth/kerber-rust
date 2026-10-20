@@ -921,6 +921,7 @@ fn load_pkinit(
     anchors: &[String],
     pool: &[String],
     rules: &[String],
+    dh_min_bits: Option<String>,
 ) -> Result<ClientPkinit, Box<dyn std::error::Error + Send + Sync>> {
     let mut found = Err(IdentityError {
         code: 22,
@@ -969,6 +970,7 @@ fn load_pkinit(
         key: chosen.key().clone(),
         anchors,
         pool,
+        dh_min_bits,
     }))
 }
 
@@ -988,12 +990,14 @@ fn ca_certs(values: &[String]) -> Result<Vec<Vec<u8>>, String> {
 fn load_pkinit_anchors(
     anchors: &[String],
     pool: &[String],
+    dh_min_bits: Option<String>,
 ) -> Result<PkinitClient, Box<dyn std::error::Error + Send + Sync>> {
     Ok(PkinitClient {
         cert: Vec::new(),
         key: krb5_types::pkinit::IdentityKey::P256(Zeroizing::new([0u8; 32])),
         anchors: ca_certs(anchors)?,
         pool: ca_certs(pool)?,
+        dh_min_bits,
     })
 }
 
@@ -1002,6 +1006,7 @@ struct PkinitConf {
     anchors: Vec<String>,
     pool: Vec<String>,
     rules: Vec<String>,
+    dh_min_bits: Option<String>,
 }
 
 /// MIT `pkinit_client_profile` (`plugins/preauth/pkinit/pkinit_clnt.c:670-711`): each read with `pkinit_libdefault_strings`.
@@ -1012,6 +1017,7 @@ fn pkinit_from_conf(conf: &Krb5Conf, realm: &str) -> PkinitConf {
         anchors: strings("pkinit_anchors"),
         pool: strings("pkinit_pool"),
         rules: strings("pkinit_cert_match"),
+        dh_min_bits: strings("pkinit_dh_min_bits").into_iter().next(),
     }
 }
 
@@ -1021,7 +1027,13 @@ pub fn profile_pkinit(
     realm: &str,
 ) -> Result<ClientPkinit, Box<dyn std::error::Error + Send + Sync>> {
     let pk = pkinit_from_conf(conf, realm);
-    load_pkinit(&pk.identities, &pk.anchors, &pk.pool, &pk.rules)
+    load_pkinit(
+        &pk.identities,
+        &pk.anchors,
+        &pk.pool,
+        &pk.rules,
+        pk.dh_min_bits,
+    )
 }
 
 /// MIT `krb5int_fast_as_armor` (`lib/krb5/krb/fast.c:214-216`): a failure while building the armor AP-REQ keeps its text under this prefix.
@@ -1251,6 +1263,7 @@ fn kinit_inner(
         anchors: conf_an,
         pool,
         rules,
+        dh_min_bits,
     } = pkinit_from_conf(&ctx.profile, &realm_s);
     // MIT `pkinit_identity_initialize` loads no identity for the anonymous principal.
     let identities = match params.pkinit_identity {
@@ -1266,9 +1279,9 @@ fn kinit_inner(
     // Live MIT 1.22.2 `kinit -X X509_anchors=… alice`: anchors
     // without an identity leave the password AS as it was.
     let pkinit = match (anchors.is_empty(), params.anonymous) {
-        (false, true) => ClientPkinit::Ready(load_pkinit_anchors(anchors, &pool)?),
+        (false, true) => ClientPkinit::Ready(load_pkinit_anchors(anchors, &pool, dh_min_bits)?),
         (true, true) => return Err("anonymous PKINIT requires pkinit_anchors".into()),
-        (_, false) => load_pkinit(&identities, anchors, &pool, &rules)?,
+        (_, false) => load_pkinit(&identities, anchors, &pool, &rules, dh_min_bits)?,
     };
     let mut etypes = krb5_protocol::conf_etypes(&ctx.profile, false);
     let mut ticket = params.ticket;

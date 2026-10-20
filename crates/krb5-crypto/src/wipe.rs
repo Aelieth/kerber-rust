@@ -42,9 +42,7 @@ impl DerefMut for Wiped {
 pub(crate) mod tests {
     use std::cell::RefCell;
 
-    use crate::{
-        EncryptionType, KeyUsage, OAKLEY_2048, ProtocolKey, derive_keys, dh_generate, p256_generate,
-    };
+    use crate::{EncryptionType, KeyUsage, ProtocolKey, derive_keys, p256_generate};
 
     thread_local! {
         pub(super) static WIPED: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
@@ -91,17 +89,6 @@ pub(crate) mod tests {
         let wiped = take_wiped();
         assert_eq!(addresses(&wiped), at, "a drop wiped a copy, or nothing");
         assert_eq!(wiped, [[0; 32]; 3]);
-    }
-
-    #[test]
-    fn a_dropped_dh_keypair_wipes_its_exponent() {
-        let kp = dh_generate(&OAKLEY_2048).unwrap();
-        let at = kp.secret.as_ptr();
-        take_wiped();
-        drop(kp);
-        let wiped = take_wiped();
-        assert_eq!(addresses(&wiped), [at], "the drop wiped a copy, or nothing");
-        assert_eq!(wiped, [[0; 32]]);
     }
 
     #[test]

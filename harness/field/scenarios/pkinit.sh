@@ -58,6 +58,10 @@
 #   PK.ec224, PK.ec384, PK.ec521, PK.k256: made on kdc by scripts/lib/pkinit-ec-certs.sh, a CA, a KDC identity and
 #          alice's certificate, each with a P-224 key, then P-384, P-521 and secp256k1, alice's piped to client2:
 #          her kinit gets a TGT;
+#   PK.dh: the KDC's realm has pkinit_dh_min_bits = 4096 and client2's kinit 2048 (~/pk/dh.conf first): the KDC
+#          refuses its 2048-bit DH with 65 and its groups, and kinit tries again with P-384 and gets a TGT;
+#   PK.dh1024: client2's kinit at pkinit_dh_min_bits = 1024 (~/pk/dh1024.conf first): the KDC's realm at 1024
+#          takes its 1024-bit DH for a TGT; at the default 2048 it is 65, and kinit tries again with P-256;
 # Graded on both legs, MIT's first. In the rust leg the client cells run twice: MIT's kinit, then ours, kdc's
 # build of krb5-kinit piped to client2's ~/pk/kinit (no host file) and run by path, so MIT's stays the one on PATH.
 # vms: kdc client2
@@ -386,6 +390,46 @@ for curve in P-224 P-384 P-521 secp256k1; do
         [ "$k" = ours ] && kinit=$OURS
         check "PK.$n.$k" '^kinit rc=0$' run client2 "kdestroy -c FILE:\$HOME/pk/e.cc 2> /dev/null; $kinit -X X509_anchors=FILE:\$HOME/pk/$n/ca.pem -X X509_user_identity=FILE:\$HOME/pk/$n/client.pem,\$HOME/pk/$n/client.key -c FILE:\$HOME/pk/e.cc alice < /dev/null 2>&1; echo \"kinit rc=\$?\"; klist -c FILE:\$HOME/pk/e.cc 2>&1 | grep -E '^Default principal'"
         checklast "PK.$n.$k.tgt" "^Default principal: alice@$R\$"
+    done
+done
+
+section "PK.dh the KDC's pkinit_dh_min_bits = 4096: kinit's 2048-bit DH gets 65 and the KDC's groups, and kinit tries again with P-384 for a TGT (MIT and ours)"
+pkkdc PK.dh.kdc "\n[kdcdefaults]\n    pkinit_identity = FILE:$D/kdc.pem,$D/kdc.key\n    pkinit_anchors = FILE:$D/cacert.pem\n\n[realms]\n    $REALM = {\n        pkinit_dh_min_bits = 4096\n    }\n"
+check PK.dh.conf '^    pkinit_dh_min_bits = 2048$' run client2 "mkdir -p ~/pk && printf '[libdefaults]\\n    pkinit_dh_min_bits = 2048\\n' > ~/pk/dh.conf && cat ~/pk/dh.conf"
+for k in mit ${OURS:+ours}; do
+    kinit=kinit
+    [ "$k" = ours ] && kinit=$OURS
+    check "PK.dh.$k" '^kinit rc=0$' run client2 "kdestroy -c FILE:\$HOME/pk/dh.cc 2> /dev/null; rm -f \$HOME/pk/dh.trace; KRB5_CONFIG=\$HOME/pk/dh.conf:/etc/krb5.conf KRB5_TRACE=\$HOME/pk/dh.trace $kinit -X X509_anchors=FILE:$C/cacert.pem -X X509_user_identity=FILE:$C/alice.pem,$C/alice.key -c FILE:\$HOME/pk/dh.cc alice < /dev/null 2>&1; echo \"kinit rc=\$?\"; klist -c FILE:\$HOME/pk/dh.cc 2>&1 | grep -E '^Default principal'; grep -oE 'PKINIT using [^ ]+( DH)? key exchange group|Key parameters not accepted|Preauth tryagain input types \\(16\\): .*|PKINIT accepting KDC key exchange group preference .*|PKINIT client trying again with KDC-provided parameters|Preauth module pkinit \\(16\\) tryagain returned: .*' \$HOME/pk/dh.trace"
+    checklast "PK.dh.$k.tgt" "^Default principal: alice@$R\$"
+    checklast "PK.dh.$k.first" '^PKINIT using 2048-bit DH key exchange group$'
+    checklast "PK.dh.$k.refused" '^Key parameters not accepted$'
+    checklast "PK.dh.$k.input" '^Preauth tryagain input types \(16\): 109, PA-FX-COOKIE \(133\)$'
+    checklast "PK.dh.$k.chosen" '^PKINIT accepting KDC key exchange group preference P-384$'
+    checklast "PK.dh.$k.again" '^PKINIT client trying again with KDC-provided parameters$'
+    checklast "PK.dh.$k.second" '^PKINIT using P-384 key exchange group$'
+    checklast "PK.dh.$k.tryagain" '^Preauth module pkinit \(16\) tryagain returned: 0/Success$'
+done
+
+section "PK.dh1024 kinit at pkinit_dh_min_bits = 1024: the KDC's floor of 1024 takes its 1024-bit DH, and the default 2048 refuses it with 65, then P-256 (MIT and ours)"
+check PK.dh1024.conf '^    pkinit_dh_min_bits = 1024$' run client2 "mkdir -p ~/pk && printf '[libdefaults]\\n    pkinit_dh_min_bits = 1024\\n' > ~/pk/dh1024.conf && cat ~/pk/dh1024.conf"
+for floor in 1024 2048; do
+    realm="\n[realms]\n    $REALM = {\n        pkinit_dh_min_bits = 1024\n    }\n"
+    [ "$floor" = 2048 ] && realm=
+    pkkdc "PK.dh1024.kdc$floor.kdc" "\n[kdcdefaults]\n    pkinit_identity = FILE:$D/kdc.pem,$D/kdc.key\n    pkinit_anchors = FILE:$D/cacert.pem\n$realm"
+    for k in mit ${OURS:+ours}; do
+        kinit=kinit
+        [ "$k" = ours ] && kinit=$OURS
+        n=PK.dh1024.kdc$floor.$k
+        check "$n" '^kinit rc=0$' run client2 "kdestroy -c FILE:\$HOME/pk/dh.cc 2> /dev/null; rm -f \$HOME/pk/dh.trace; KRB5_CONFIG=\$HOME/pk/dh1024.conf:/etc/krb5.conf KRB5_TRACE=\$HOME/pk/dh.trace $kinit -X X509_anchors=FILE:$C/cacert.pem -X X509_user_identity=FILE:$C/alice.pem,$C/alice.key -c FILE:\$HOME/pk/dh.cc alice < /dev/null 2>&1; echo \"kinit rc=\$?\"; klist -c FILE:\$HOME/pk/dh.cc 2>&1 | grep -E '^Default principal'; grep -oE 'PKINIT using [^ ]+( DH)? key exchange group|Key parameters not accepted|PKINIT accepting KDC key exchange group preference .*' \$HOME/pk/dh.trace"
+        checklast "$n.tgt" "^Default principal: alice@$R\$"
+        checklast "$n.first" '^PKINIT using 1024-bit DH key exchange group$'
+        if [ "$floor" = 1024 ]; then
+            countlast "$n.taken" 'Key parameters not accepted' 0
+        else
+            checklast "$n.refused" '^Key parameters not accepted$'
+            checklast "$n.chosen" '^PKINIT accepting KDC key exchange group preference P-256$'
+            checklast "$n.second" '^PKINIT using P-256 key exchange group$'
+        fi
     done
 done
 

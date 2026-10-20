@@ -11,6 +11,7 @@ use rasn::prelude::*;
 mod ca;
 mod cms;
 mod identity;
+mod kx;
 mod matching;
 mod rsa;
 
@@ -26,6 +27,10 @@ pub use cms::{
 };
 pub use identity::{
     IdentityError, IdentityKey, PkinitIdentity, load_ca_certs, load_identities, load_identity,
+};
+pub use kx::{
+    KxGroup, KxKey, choose_td_group, decode_spki, encode_td_dh_parameters, group_desc,
+    parse_dh_min_bits,
 };
 pub use matching::{CertMatchError, MatchTrace, cert_match, select_cert};
 pub use rsa::RsaKey;
@@ -186,42 +191,8 @@ pub fn encode_ec_spki(uncompressed: &[u8]) -> Vec<u8> {
     tlv(0x30, &[spki_alg, tlv(0x03, &bit)].concat())
 }
 
-/// Decode [`encode_ec_spki`] or accept a raw uncompressed SEC1 point.
-#[must_use]
-pub fn decode_ec_spki(der: &[u8]) -> Option<Vec<u8>> {
-    if der.first() == Some(&0x04) && der.len() == 65 {
-        return Some(der.to_vec());
-    }
-    let (t, body, _) = take_tlv(der)?;
-    if t != 0x30 {
-        return None;
-    }
-    let (_, _, rest) = take_tlv(body)?;
-    let (t, bit, _) = take_tlv(rest)?;
-    if t != 0x03 {
-        return None;
-    }
-    let pt = if bit.first() == Some(&0) {
-        bit.get(1..)?.to_vec()
-    } else {
-        bit.to_vec()
-    };
-    if pt.first() == Some(&0x04) && pt.len() == 65 {
-        Some(pt)
-    } else {
-        None
-    }
-}
-
 /// dhpublicnumber 1.2.840.10046.2.1 (RFC 3279 DomainParameters).
 const OID_DHPUBLICNUMBER: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3e, 0x02, 0x01];
-
-/// PKCS#3 dhKeyAgreement 1.2.840.113549.1.3.1.
-const OID_DHKEYAGREEMENT: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x03, 0x01];
-
-fn is_dh_oid(oid_body: &[u8]) -> bool {
-    oid_body == OID_DHPUBLICNUMBER || oid_body == OID_DHKEYAGREEMENT
-}
 
 fn strip_leading_zeros(n: &[u8]) -> Vec<u8> {
     let skip = n.iter().take_while(|b| **b == 0).count();
@@ -238,71 +209,6 @@ fn der_unsigned(be: &[u8]) -> Vec<u8> {
         n.insert(0, 0);
     }
     tlv(0x02, &n)
-}
-
-/// RFC 3279 DH `SubjectPublicKeyInfo` (`DomainParameters` + `DHPublicKey`).
-#[must_use]
-pub fn encode_dh_spki(p: &[u8], y: &[u8]) -> Vec<u8> {
-    let params = tlv(0x30, &[der_unsigned(p), der_unsigned(&[2])].concat());
-    let alg = tlv(0x30, &[oid_der(OID_DHPUBLICNUMBER), params].concat());
-    let mut bit = vec![0u8];
-    bit.extend(der_unsigned(y));
-    tlv(0x30, &[alg, tlv(0x03, &bit)].concat())
-}
-
-/// Parse a MODP DH SPKI: `(p, y)` as unsigned big-endian integers.
-///
-/// Accepts RFC 3279 `dhpublicnumber` and PKCS#3 `dhKeyAgreement`. `y` may
-/// be a DER `INTEGER` inside the BIT STRING (MIT / OpenSSL) or raw bytes.
-#[must_use]
-pub fn parse_dh_spki(der: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
-    let (t, body, _) = take_tlv(der)?;
-    if t != 0x30 {
-        return None;
-    }
-    let (t, alg, rest) = take_tlv(body)?;
-    if t != 0x30 {
-        return None;
-    }
-    let (t, oid, params) = take_tlv(alg)?;
-    if t != 0x06 || !is_dh_oid(oid) {
-        return None;
-    }
-    let (t, pbody, _) = take_tlv(params)?;
-    if t != 0x30 {
-        return None;
-    }
-    let (t, p_int, _) = take_tlv(pbody)?;
-    if t != 0x02 {
-        return None;
-    }
-    let p = strip_leading_zeros(p_int);
-    let (t, bit, _) = take_tlv(rest)?;
-    if t != 0x03 {
-        return None;
-    }
-    let payload = if bit.first() == Some(&0) {
-        bit.get(1..)?
-    } else {
-        bit
-    };
-    let y = if payload.first() == Some(&0x02) {
-        let (_, yb, _) = take_tlv(payload)?;
-        strip_leading_zeros(yb)
-    } else {
-        strip_leading_zeros(payload)
-    };
-    Some((p, y))
-}
-
-/// Unsigned integer from a DER `INTEGER` (or already-unsigned bytes).
-#[must_use]
-pub fn der_integer_unsigned(der: &[u8]) -> Option<Vec<u8>> {
-    if der.first() == Some(&0x02) {
-        let (_, body, _) = take_tlv(der)?;
-        return Some(strip_leading_zeros(body));
-    }
-    Some(strip_leading_zeros(der))
 }
 
 /// RFC 4556 `KdcDHKeyInfo` DER wrapping a BIT STRING payload.
@@ -760,15 +666,6 @@ pub fn parse_pa_pk_as_req_cms(der: &[u8]) -> Option<Vec<u8>> {
         0x80 | 0xa0 => Some(inner.to_vec()),
         _ => None,
     }
-}
-
-/// RFC 4556 `TD-DH-PARAMETERS` advertising ECDH P-256 (`id-ecPublicKey` + secp256r1).
-#[must_use]
-pub fn encode_td_dh_p256() -> Vec<u8> {
-    let ec = oid_der(&[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01]);
-    let p256 = oid_der(&[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07]);
-    let alg = tlv(0x30, &[ec, p256].concat());
-    tlv(0x30, &alg)
 }
 
 /// MIT `KRB5_ANONYMOUS_REALMSTR`.

@@ -24,8 +24,9 @@ use crate::preauth::{
 };
 use crate::trace;
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{EncryptionType, ProtocolKey, p256_generate, string_to_key};
+use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};
 use krb5_types::k5json::{self, Value};
+use krb5_types::pkinit::{KxGroup, KxKey};
 use krb5_types::{AsRep, EtypeInfo2, KrbError, MethodData, PaData, PrincipalName, err, pa};
 
 /// Ticket used as RFC 6113 FAST AP-REQUEST armor.
@@ -680,7 +681,7 @@ enum ReplyKey<'a, 'p, 'g> {
     Preauth(ProtocolKey, i32),
     /// No module answered: `gak_fct` makes it, from the password.
     Gak(&'a mut PasswordCell<'p, 'g>),
-    Pkinit(&'a [u8; 32], &'a PkinitClient),
+    Pkinit(&'a KxKey, &'a PkinitClient),
 }
 
 // MIT pkinit_client_process; see docs/parity/b1-client-preauth.md
@@ -700,44 +701,82 @@ fn finish_fast_pkinit(
     cookie: Option<&PaData>,
     pk: &PkinitClient,
 ) -> Result<AsOutcome, Error> {
-    let kp = p256_generate()?;
+    let mut dh_size = pk.dh_size();
     let method = method_from_error(current).unwrap_or_default();
     let token = find_pa(&method, pa::AS_FRESHNESS)
         .map(|p| p.padata_value.as_ref())
         .filter(|v| !v.is_empty());
-    let bound = &request_times(req, clock);
-    let mut req2 = build_as_req_from(req, nonce, bound, None, etypes)?;
-    let mut inner_pa: Vec<PaData> = cookie.into_iter().cloned().collect();
-    inner_pa.push(super::pkinit_padata(
-        req,
-        pk,
-        &kp,
-        nonce,
-        &req2.0.req_body,
-        token,
-        clock,
-    )?);
-    trace::preauth_process(super::PKINIT_MODULE, pa::PK_AS_REQ, true, 0, None);
-    trace::preauth_output(&inner_pa);
-    let ap = fast_armor_ap(armor, sub)?;
-    attach_fast(&mut req2, &ap, akey, inner_pa)?;
-    trace::fast_encode();
-    let wire = encode(&req2)?;
-    match send_as(req, &wire)? {
-        KdcMsg::AsRep(rep) => finish_fast_as(
+    let mut nonce = nonce;
+    let mut tryagain: Option<super::Retry> = None;
+    for _ in 1..super::MAX_IN_TKT_LOOPS {
+        let group = KxGroup::for_bits(dh_size).unwrap_or(KxGroup::Modp2048);
+        let bound = &request_times(req, clock);
+        let mut req2 = build_as_req_from(req, nonce, bound, None, etypes)?;
+        let mut inner_pa: Vec<PaData> = match &tryagain {
+            None => cookie.into_iter().cloned().collect(),
+            Some(_) => Vec::new(),
+        };
+        trace::pkinit_dh_proposing_group(group.desc());
+        let kp =
+            KxKey::generate(group).ok_or_else(|| Error::Crypto("PKINIT key exchange".into()))?;
+        inner_pa.push(super::pkinit_padata(
             req,
-            &[],
+            pk,
+            &kp,
             nonce,
-            etypes,
-            akey,
-            ReplyKey::Pkinit(&kp.secret, pk),
-            rep,
-            &wire,
-            bound,
-        ),
-        KdcMsg::Error(e) => classify_kdc_error(&fast_error_material(akey, &e, nonce)?.err),
-        KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
+            &req2.0.req_body,
+            token,
+            clock,
+        )?);
+        if let Some(super::Retry(cookie)) = &tryagain {
+            inner_pa.extend(cookie.iter().cloned());
+            trace::preauth_tryagain(super::PKINIT_MODULE, pa::PK_AS_REQ, 0, None);
+            trace::preauth_tryagain_output(&inner_pa);
+        } else {
+            trace::preauth_process(super::PKINIT_MODULE, pa::PK_AS_REQ, true, 0, None);
+            trace::preauth_output(&inner_pa);
+        }
+        let ap = fast_armor_ap(armor, sub)?;
+        attach_fast(&mut req2, &ap, akey, inner_pa)?;
+        trace::fast_encode();
+        let wire = encode(&req2)?;
+        match send_as(req, &wire)? {
+            KdcMsg::AsRep(rep) => {
+                return finish_fast_as(
+                    req,
+                    &[],
+                    nonce,
+                    etypes,
+                    akey,
+                    ReplyKey::Pkinit(&kp, pk),
+                    rep,
+                    &wire,
+                    bound,
+                );
+            }
+            KdcMsg::Error(e) => {
+                let mat = fast_error_material(akey, &e, nonce)?;
+                let tried = !matches!(
+                    mat.err.error_code,
+                    err::PREAUTH_REQUIRED | err::PREAUTH_FAILED | err::MORE_PREAUTH_DATA_REQUIRED
+                );
+                match (mat.retry && tried)
+                    .then(|| super::pkinit_tryagain(&mat.err, &mut dh_size))
+                    .flatten()
+                {
+                    Some(retry) => {
+                        tryagain = Some(retry);
+                        nonce = super::random_nonce()?;
+                    }
+                    None => return classify_kdc_error(&mat.err),
+                }
+            }
+            KdcMsg::TgsRep => return Err(Error::UnexpectedPdu),
+        }
     }
+    Err(Error::Message(
+        "Looping detected inside krb5_get_in_tkt".into(),
+    ))
 }
 
 /// MIT `krb5int_fast_process_response` (`fast.c:548-556`): once the finished checksum holds, the
@@ -779,9 +818,9 @@ fn finish_fast_as(
             trace::init_creds_as_key_preauth((&k).into());
             k
         }
-        ReplyKey::Pkinit(secret, pk) => {
+        ReplyKey::Pkinit(kp, pk) => {
             let k = pkinit_reply_key_agile(
-                secret,
+                kp,
                 &Some(fast.padata.clone()),
                 EncryptionType::known(rep.0.enc_part.etype)?,
                 crate::preauth::KdcTrust {

@@ -8,8 +8,8 @@ mod common;
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    EncryptionType, KeyUsage, OAKLEY_2048, ProtocolKey, checksum, decrypt, dh_generate, dh_shared,
-    encrypt, octetstring2key, p256_generate,
+    EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt, encrypt, octetstring2key,
+    p256_generate,
 };
 use krb5_kdc::Error;
 use krb5_kdc::testrealm::{
@@ -336,8 +336,7 @@ fn kdc_dh_public_from_rep(padata: Option<&[krb5_types::PaData]>, trust: &[u8]) -
     };
     let inner =
         krb5_types::pkinit::cms_verify(info.dh_signed_data.as_ref(), trust).expect("KDC CMS");
-    let payload = krb5_types::pkinit::decode_kdc_dh_point(&inner).expect("KdcDHKeyInfo");
-    krb5_types::pkinit::der_integer_unsigned(&payload).expect("DH INTEGER")
+    krb5_types::pkinit::decode_kdc_dh_point(&inner).expect("KdcDHKeyInfo")
 }
 
 fn pkinit_rep_from_cms(cms: Vec<u8>) -> Option<Vec<krb5_types::PaData>> {
@@ -499,7 +498,7 @@ fn pkinit_ecdh_reply_key() {
     let issued = krb5_kdc::issue_as(&store, &req).expect("PKINIT AS");
     let et = EncryptionType::Aes256CtsHmacSha196;
     let reply = pkinit_reply_key(
-        &kp.secret,
+        &p256_kx(&kp.secret),
         &issued.rep.0.padata,
         et,
         krb5_protocol::KdcTrust::anchor(&ca.ca_cert),
@@ -537,7 +536,7 @@ fn pkinit_ecdh_rfc8636_sha256_kdf() {
     );
     let et = EncryptionType::Aes256CtsHmacSha196;
     let reply = pkinit_reply_key_agile(
-        &kp.secret,
+        &p256_kx(&kp.secret),
         &issued.rep.0.padata,
         et,
         krb5_protocol::KdcTrust::anchor(&ca.ca_cert),
@@ -548,7 +547,7 @@ fn pkinit_ecdh_rfc8636_sha256_kdf() {
     .expect("agile ECDH key");
     assert_eq!(reply.as_bytes(), issued.as_rep_key.as_bytes());
     let o2k = pkinit_reply_key(
-        &kp.secret,
+        &p256_kx(&kp.secret),
         &issued.rep.0.padata,
         et,
         krb5_protocol::KdcTrust::anchor(&ca.ca_cert),
@@ -566,14 +565,15 @@ fn pkinit_modp14_reply_key() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     let ca = krb5_testkit::enable_pkinit(&mut store);
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let kp = dh_generate(&OAKLEY_2048).expect("client DH");
-    let spki = krb5_types::pkinit::encode_dh_spki(&OAKLEY_2048.prime_bytes(), &kp.public);
+    let kp = krb5_types::pkinit::KxKey::generate(krb5_types::pkinit::KxGroup::Modp2048)
+        .expect("client DH");
+    let spki = kp.spki();
     let req = pkinit_as_req(cname, 404, |ck| {
         pa_pk_as_req_spki(&spki, &ca, Some(ck)).expect("PA-PK-AS-REQ")
     });
     let issued = krb5_kdc::issue_as(&store, &req).expect("PKINIT DH AS");
     let kdc_y = kdc_dh_public_from_rep(issued.rep.0.padata.as_deref(), &ca.ca_cert);
-    let shared = dh_shared(&OAKLEY_2048, &kp.secret, &kdc_y).expect("DH");
+    let shared = kp.shared(&kdc_y).expect("DH");
     let et = EncryptionType::Aes256CtsHmacSha196;
     let reply = octetstring2key(et, &shared).expect("o2k");
     assert_eq!(reply.as_bytes(), issued.as_rep_key.as_bytes());
@@ -648,7 +648,7 @@ fn pkinit_client_rejects_non_kdc_signer() {
     let issued = krb5_kdc::issue_as(&store, &req).expect("PKINIT AS");
     let et = EncryptionType::Aes256CtsHmacSha196;
     let ok = pkinit_reply_key_agile(
-        &kp.secret,
+        &p256_kx(&kp.secret),
         &issued.rep.0.padata,
         et,
         krb5_protocol::KdcTrust::anchor(&ca.ca_cert),
@@ -681,7 +681,7 @@ fn pkinit_client_rejects_non_kdc_signer() {
     )
     .expect("rogue cms");
     let err = pkinit_reply_key_agile(
-        &kp.secret,
+        &p256_kx(&kp.secret),
         &pkinit_rep_from_cms(rogue),
         et,
         krb5_protocol::KdcTrust::anchor(&ca.ca_cert),
@@ -700,7 +700,7 @@ fn pkinit_client_rejects_non_kdc_signer() {
     )
     .expect("wrong cms");
     let err = pkinit_reply_key_agile(
-        &kp.secret,
+        &p256_kx(&kp.secret),
         &pkinit_rep_from_cms(wrong),
         et,
         krb5_protocol::KdcTrust::anchor(&ca.ca_cert),
@@ -719,7 +719,7 @@ fn pkinit_client_rejects_non_kdc_signer() {
     )
     .expect("authdata cms");
     let err = pkinit_reply_key_agile(
-        &kp.secret,
+        &p256_kx(&kp.secret),
         &pkinit_rep_from_cms(bad_ct),
         et,
         krb5_protocol::KdcTrust::anchor(&ca.ca_cert),
@@ -1047,4 +1047,9 @@ fn unsigned_pkinit_for_a_client_that_is_not_anonymous_logs_its_message() {
             "AS_REQ PREAUTH_FAILED, Pkinit request not signed, but client not anonymous.",
         ]
     );
+}
+
+fn p256_kx(secret: &[u8; 32]) -> krb5_types::pkinit::KxKey {
+    krb5_types::pkinit::KxKey::from_secret(krb5_types::pkinit::KxGroup::P256, secret)
+        .expect("P-256 key")
 }

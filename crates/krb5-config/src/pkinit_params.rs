@@ -31,6 +31,8 @@ pub struct PkinitParams {
     pub allow_upn: bool,
     /// `pkinit_indicator`, every value.
     pub indicators: Vec<String>,
+    /// `pkinit_dh_min_bits`, the first value.
+    pub dh_min_bits: Option<String>,
 }
 
 impl PkinitParams {
@@ -76,6 +78,7 @@ impl PkinitParams {
             accept_secondary_eku,
             allow_upn: boolean("pkinit_allow_upn"),
             indicators: values("pkinit_indicator"),
+            dh_min_bits: first("pkinit_dh_min_bits"),
         }
     }
 }

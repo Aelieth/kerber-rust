@@ -394,7 +394,10 @@ would remove it.
   and a 3-prime key for alice, both made on kdc for the cell
   (`scripts/lib/pkinit-rsa-certs.sh`), each kinit gets a TGT and its time is recorded. With the KDC's
   and alice's keys on P-224, then P-384, P-521 and secp256k1 (`scripts/lib/pkinit-ec-certs.sh`), each kinit
-  gets a TGT. With alice's
+  gets a TGT. With the KDC's realm at `pkinit_dh_min_bits = 4096`, each kinit's 2048-bit DH gets 65 and the
+  KDC's groups, and it tries again with P-384 for a TGT, tracing MIT's lines. A kinit at `pkinit_dh_min_bits =
+  1024` gets a TGT with 1024-bit DH from a KDC whose floor is 1024, and from the default 2048 it gets 65 and tries
+  again with P-256. With alice's
   password on stdin, a certificate the KDC refuses with e-data (`alice-unknownca`'s 70, the `<SUBJECT>(`
   rule's 24) goes on to the password and a TGT, and `alice-wrongsan`'s 75, which carries none, ends with
   rc 1. Under FAST armor (an anonymous ticket, `-T`) alice's certificate kinit runs pkinit inside the

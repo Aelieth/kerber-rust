@@ -20,6 +20,7 @@ fn a_dropped_pkinit_client_wipes_its_scalar_in_place() {
         key: krb5_types::pkinit::IdentityKey::P256(zeroize::Zeroizing::new([0x5a; 32])),
         anchors: Vec::new(),
         pool: Vec::new(),
+        dh_min_bits: None,
     });
     assert_eq!(DROPPED.with(|d| d.borrow().clone()), [[0; 32]]);
 }

@@ -12,9 +12,10 @@ use crate::transport::{KdcAddr, SendKind, sendto_kdc};
 use krb5_asn1::{decode, encode};
 use krb5_config::Krb5Conf;
 use krb5_crypto::{
-    EncryptionType, KeyUsage, P256Keypair, ProtocolKey, decrypt_enc_data, encrypt, krb_fx_cf2,
-    p256_generate, parse_enctype_list, string_to_key,
+    EncryptionType, KeyUsage, ProtocolKey, decrypt_enc_data, encrypt, krb_fx_cf2,
+    parse_enctype_list, string_to_key,
 };
+use krb5_types::pkinit::{KxGroup, KxKey};
 use krb5_types::{
     AsRep, AsReq, EncKdcRepPart, EncryptedData, EncryptionKey, EtypeInfo, EtypeInfo2, KdcOptions,
     KdcReq, KdcReqBody, KerberosTime, KrbError, MethodData, PaData, PrincipalName, TypedDataList,
@@ -202,6 +203,17 @@ pub struct PkinitClient {
     /// CA certificates used to verify the KDC CMS (DER): the anchors, and `pkinit_pool`'s.
     pub anchors: Vec<Vec<u8>>,
     pub pool: Vec<Vec<u8>>,
+    pub dh_min_bits: Option<String>,
+}
+
+impl PkinitClient {
+    // MIT pkinit_client_profile; see docs/parity/b1-client-preauth.md
+    fn dh_size(&self) -> u32 {
+        krb5_types::pkinit::parse_dh_min_bits(self.dh_min_bits.as_deref()).unwrap_or_else(|v| {
+            trace::pkinit_dh_invalid_min_bits(&v);
+            2048
+        })
+    }
 }
 
 impl Drop for PkinitClient {
@@ -1214,6 +1226,7 @@ const ENCTS_MODULE: &str = "encrypted_timestamp";
 
 /// MIT's name of the PKINIT module (`pkinit_clnt.c`).
 const PKINIT_MODULE: &str = "pkinit";
+const MAX_IN_TKT_LOOPS: usize = 16;
 
 /// The `pkinit` module prepares once, when a hint first offers PA-PK-AS-REQ, and traces an
 /// identity that did not load.
@@ -1319,7 +1332,6 @@ fn continue_pkinit(
     let Some(Pkinit::Client(pk)) = req.pkinit else {
         return Err(Error::ReplyMismatch("PKINIT identity missing".into()));
     };
-    let kp = p256_generate()?;
     // MIT get_in_tkt: empty 150 first, then copy the hint token into AuthPack.
     let first = build_as_req_from(req, nonce, bound, None, etypes)?;
     let first_wire = encode(&first)?;
@@ -1365,105 +1377,130 @@ fn continue_pkinit(
         }
         KdcMsg::TgsRep => return Err(Error::UnexpectedPdu),
     };
-    let mut extra = Vec::new();
-    if let Some(c) = cookie {
-        extra.push(c);
-    }
-    let bound = &request_times(req, clock);
-    let mut req2 = build_as_req_from(req, nonce, bound, Some(extra), etypes)?;
-    let pa = pkinit_padata(
-        req,
-        pk,
-        &kp,
-        nonce,
-        &req2.0.req_body,
-        token.as_deref(),
-        clock,
-    )?;
-    insert_module_padata_before_info_pa(req2.0.padata.get_or_insert_with(Vec::new), pa);
-    // MIT `process_pa_data` (`preauth2.c:668-686`): what the pkinit module returned, then the
-    // cookie and its padata.
-    if trace::enabled() {
-        trace::preauth_process(PKINIT_MODULE, pa::PK_AS_REQ, true, 0, None);
-        if let Some(list) = &req2.0.padata {
+    let mut dh_size = pk.dh_size();
+    let mut nonce = nonce;
+    let mut tryagain: Option<Retry> = None;
+    for _ in 1..MAX_IN_TKT_LOOPS {
+        let group = KxGroup::for_bits(dh_size).unwrap_or(KxGroup::Modp2048);
+        let bound = &request_times(req, clock);
+        let extra = match &tryagain {
+            None => cookie.iter().cloned().collect(),
+            Some(_) => Vec::new(),
+        };
+        let mut req2 = build_as_req_from(req, nonce, bound, Some(extra), etypes)?;
+        trace::pkinit_dh_proposing_group(group.desc());
+        let kp =
+            KxKey::generate(group).ok_or_else(|| Error::Crypto("PKINIT key exchange".into()))?;
+        let pa = pkinit_padata(
+            req,
+            pk,
+            &kp,
+            nonce,
+            &req2.0.req_body,
+            token.as_deref(),
+            clock,
+        )?;
+        let list = req2.0.padata.get_or_insert_with(Vec::new);
+        insert_module_padata_before_info_pa(list, pa);
+        if let Some(Retry(Some(c))) = &tryagain {
+            insert_module_padata_before_info_pa(list, c.clone());
+        }
+        // MIT `process_pa_data` (`preauth2.c:668-686`): what the module returned, then its padata.
+        // MIT k5_preauth_tryagain; see docs/parity/b1-client-preauth.md
+        if trace::enabled() {
             let produced: Vec<PaData> = list
                 .iter()
                 .filter(|p| p.padata_type == pa::FX_COOKIE || p.padata_type == pa::PK_AS_REQ)
                 .cloned()
                 .collect();
-            trace::preauth_output(&produced);
-        }
-    }
-    let wire = encode(&req2)?;
-    tracing::info!(
-        event = krb5_log::events::CLIENT_PKINIT,
-        component = "krb5-protocol",
-        outcome = "ok",
-        pa_type = pa::PK_AS_REQ,
-        freshness = token.is_some(),
-    );
-    match send_as(req, &wire)? {
-        KdcMsg::AsRep(rep) => {
-            let etype = EncryptionType::known(rep.0.enc_part.etype)?;
-            let padata = rep.0.padata.as_deref().unwrap_or_default();
-            trace_preauth_input(padata, etypes);
-            let trust = KdcTrust {
-                anchors: &pk.anchors,
-                pool: &pk.pool,
-            };
-            let reply_key = match pkinit_reply_key_agile(
-                &kp.secret,
-                &rep.0.padata,
-                etype,
-                trust,
-                &wire,
-                &req.cname,
-                req.realm,
-            ) {
-                Ok(key) => key,
-                Err(Error::PkinitReply { code, text }) => {
-                    ModuleFail::new(code, &text).trace(PKINIT_MODULE, pa::PK_AS_REP);
-                    trace::preauth_output(&[]);
-                    return Ok(PkinitEnd::Reply {
-                        rep: Box::new(rep),
-                        wire,
-                        traced: true,
-                    });
-                }
-                Err(e) => return Err(e),
-            };
-            if padata.iter().any(|p| p.padata_type == pa::PK_AS_REP) {
-                trace::preauth_process(PKINIT_MODULE, pa::PK_AS_REP, true, 0, None);
+            if tryagain.is_some() {
+                trace::preauth_tryagain(PKINIT_MODULE, pa::PK_AS_REQ, 0, None);
+                trace::preauth_tryagain_output(&produced);
+            } else {
+                trace::preauth_process(PKINIT_MODULE, pa::PK_AS_REQ, true, 0, None);
+                trace::preauth_output(&produced);
             }
-            trace::preauth_output(&[]);
-            trace::init_creds_as_key_preauth((&reply_key).into());
-            finish_as_rep(
-                req.profile,
-                rep,
-                nonce,
-                Some(reply_key),
-                req.password,
-                &req.cname,
-                req.realm,
-                Some(pa::PK_AS_REQ),
-                req.canonicalize,
-                &req_sname(req),
-                bound,
-                Some(&wire),
-                false,
-            )
-            .map(|o| PkinitEnd::Done(Box::new(o)))
         }
-        KdcMsg::Error(e) => pkinit_refused(e, hint),
-        KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
+        let wire = encode(&req2)?;
+        tracing::info!(
+            event = krb5_log::events::CLIENT_PKINIT,
+            component = "krb5-protocol",
+            outcome = "ok",
+            pa_type = pa::PK_AS_REQ,
+            freshness = token.is_some(),
+        );
+        match send_as(req, &wire)? {
+            KdcMsg::AsRep(rep) => {
+                let etype = EncryptionType::known(rep.0.enc_part.etype)?;
+                let padata = rep.0.padata.as_deref().unwrap_or_default();
+                trace_preauth_input(padata, etypes);
+                let trust = KdcTrust {
+                    anchors: &pk.anchors,
+                    pool: &pk.pool,
+                };
+                let reply_key = match pkinit_reply_key_agile(
+                    &kp,
+                    &rep.0.padata,
+                    etype,
+                    trust,
+                    &wire,
+                    &req.cname,
+                    req.realm,
+                ) {
+                    Ok(key) => key,
+                    Err(Error::PkinitReply { code, text }) => {
+                        ModuleFail::new(code, &text).trace(PKINIT_MODULE, pa::PK_AS_REP);
+                        trace::preauth_output(&[]);
+                        return Ok(PkinitEnd::Reply {
+                            rep: Box::new(rep),
+                            wire,
+                            traced: true,
+                        });
+                    }
+                    Err(e) => return Err(e),
+                };
+                if padata.iter().any(|p| p.padata_type == pa::PK_AS_REP) {
+                    trace::preauth_process(PKINIT_MODULE, pa::PK_AS_REP, true, 0, None);
+                }
+                trace::preauth_output(&[]);
+                trace::init_creds_as_key_preauth((&reply_key).into());
+                return finish_as_rep(
+                    req.profile,
+                    rep,
+                    nonce,
+                    Some(reply_key),
+                    req.password,
+                    &req.cname,
+                    req.realm,
+                    Some(pa::PK_AS_REQ),
+                    req.canonicalize,
+                    &req_sname(req),
+                    bound,
+                    Some(&wire),
+                    false,
+                )
+                .map(|o| PkinitEnd::Done(Box::new(o)));
+            }
+            KdcMsg::Error(e) => match pkinit_refused(e, hint.clone(), &mut dh_size)? {
+                Refusal::End(end) => return Ok(end),
+                Refusal::Retry(retry) => {
+                    tryagain = Some(retry);
+                    nonce = random_nonce()?;
+                }
+            },
+            KdcMsg::TgsRep => return Err(Error::UnexpectedPdu),
+        }
     }
+    Err(Error::Message(
+        "Looping detected inside krb5_get_in_tkt".into(),
+    ))
 }
 
 // MIT pa_pkinit_gen_req; see docs/parity/b1-client-preauth.md
 fn pkinit_padata(
     req: &AsRequest<'_>,
     pk: &PkinitClient,
-    kp: &P256Keypair,
+    kp: &KxKey,
     nonce: u32,
     body: &KdcReqBody,
     token: Option<&[u8]>,
@@ -1472,9 +1509,9 @@ fn pkinit_padata(
     let sha1 = Sha1::digest(encode(body)?);
     let now = clock.now(true);
     if req.ticket.anonymous || krb5_types::pkinit::is_anonymous_principal(&req.cname) {
-        crate::preauth::pa_pk_as_req_unsigned_at(&kp.public, nonce, &sha1, token, now)
+        crate::preauth::pa_pk_as_req_unsigned_at(&kp.spki(), nonce, &sha1, token, now)
     } else {
-        pa_pk_as_req_signed_at(&kp.public, &pk.cert, &pk.key, nonce, &sha1, token, now)
+        pa_pk_as_req_signed_at(&kp.spki(), &pk.cert, &pk.key, nonce, &sha1, token, now)
     }
 }
 
@@ -1491,8 +1528,15 @@ enum PkinitEnd {
     },
 }
 
+enum Refusal {
+    End(PkinitEnd),
+    Retry(Retry),
+}
+
+pub(crate) struct Retry(Option<PaData>);
+
 // MIT init_creds_step_reply; see docs/parity/b1-client-preauth.md
-fn pkinit_refused(e: KrbError, hint: KrbError) -> Result<PkinitEnd, Error> {
+fn pkinit_refused(e: KrbError, hint: KrbError, dh_size: &mut u32) -> Result<Refusal, Error> {
     if !retried(&e)
         || matches!(
             e.error_code,
@@ -1507,26 +1551,38 @@ fn pkinit_refused(e: KrbError, hint: KrbError) -> Result<PkinitEnd, Error> {
         } else {
             hint
         };
-        return Ok(PkinitEnd::Walk {
+        return Ok(Refusal::End(PkinitEnd::Walk {
             hint: Box::new(hint),
             refusal: Some(Box::new(e)),
-        });
+        }));
     }
-    // MIT pkinit_client_tryagain; see docs/parity/b1-client-preauth.md
-    if trace::enabled() {
-        trace_tryagain_input(&e, pa::PK_AS_REQ);
-        let code = trace::ERROR_TABLE_BASE_KRB5 + i64::from(err::PREAUTH_FAILED);
-        trace::preauth_tryagain(
-            PKINIT_MODULE,
-            pa::PK_AS_REQ,
-            code,
-            Some(&trace::error_message(code)),
-        );
+    if let Some(retry) = pkinit_tryagain(&e, dh_size) {
+        return Ok(Refusal::Retry(retry));
     }
-    Ok(PkinitEnd::Walk {
+    Ok(Refusal::End(PkinitEnd::Walk {
         hint: Box::new(hint),
         refusal: Some(Box::new(e)),
-    })
+    }))
+}
+
+// MIT pkinit_client_tryagain; see docs/parity/b1-client-preauth.md
+fn pkinit_tryagain(e: &KrbError, dh_size: &mut u32) -> Option<Retry> {
+    trace_tryagain_input(e, pa::PK_AS_REQ);
+    let padata = error_padata(e);
+    let group = padata
+        .iter()
+        .filter(|p| p.padata_type == pa::TD_DH_PARAMETERS)
+        .find_map(|p| krb5_types::pkinit::choose_td_group(p.padata_value.as_ref(), *dh_size)?);
+    let Some(group) = group else {
+        trace::preauth_tryagain(PKINIT_MODULE, pa::PK_AS_REQ, 0, None);
+        return None;
+    };
+    trace::pkinit_dh_negotiated_group(group.desc());
+    trace::pkinit_client_tryagain();
+    *dh_size = group.bits();
+    Some(Retry(
+        padata.into_iter().find(|p| p.padata_type == pa::FX_COOKIE),
+    ))
 }
 
 /// MIT `k5_upgrade_to_fast_p` (`lib/krb5/krb/fast.c:686-687`): the error's padata lists PA-FX-FAST.

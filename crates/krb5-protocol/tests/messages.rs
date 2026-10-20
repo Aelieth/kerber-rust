@@ -539,6 +539,7 @@ fn want_spake_rejects_fast_and_pkinit() {
         key: krb5_types::pkinit::IdentityKey::P256(zeroize::Zeroizing::new([2u8; 32])),
         anchors: vec![vec![3]],
         pool: Vec::new(),
+        dh_min_bits: None,
     };
     let err = krb5_protocol::as_exchange(&krb5_protocol::AsRequest {
         cname: cname.clone(),
@@ -747,6 +748,7 @@ fn pkinit_as_req_carries_pa_pk_as_req() {
         key: krb5_types::pkinit::IdentityKey::P256(zeroize::Zeroizing::new(key)),
         anchors: vec![ca.ca_cert.clone()],
         pool: Vec::new(),
+        dh_min_bits: Some("P-256".into()),
     };
 
     let hint = encode(&vec![

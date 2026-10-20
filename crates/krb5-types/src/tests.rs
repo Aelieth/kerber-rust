@@ -683,17 +683,6 @@ fn typed_data_uses_rfc6113_tags_not_padata() {
     );
 }
 
-#[test]
-fn parse_dh_spki_round_trips_p_and_y() {
-    let p = vec![0xff, 0xff, 0xff, 0xfd];
-    let y = vec![0x03];
-    let spki = pkinit::encode_dh_spki(&p, &y);
-    let (got_p, got_y) = pkinit::parse_dh_spki(&spki).expect("DH SPKI");
-    assert_eq!(got_p, p);
-    assert_eq!(got_y, y);
-    assert!(pkinit::decode_ec_spki(&spki).is_none());
-}
-
 /// Key octets with a quote, a backslash, a newline and a NUL, so each rendering differs.
 const SECRET: [u8; 16] = [
     0x13, 0x37, 0xc0, 0xde, 0x22, 0x5c, 0x0a, 0xa5, 0x9e, 0x41, 0x42, 0x43, 0x7f, 0x00, 0xfe, 0x5a,
