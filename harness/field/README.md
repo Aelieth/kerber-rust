@@ -160,10 +160,11 @@ harness/field/run.sh --profile weekly --ref plan-12 --only upgrade,kpasswd --leg
 harness/field/run.sh --profile weekly --ref plan-12 --only upgrade,kdc-profile --leg both   # kdc.conf's cells, on demand
 harness/field/run.sh --profile weekly --ref plan-12 --only upgrade,kdb-writes --leg both   # the store's write cells, on demand
 harness/field/run.sh --profile weekly --ref plan-12 --only upgrade,replica --leg both   # the replica cells (lab.sh up kdc2 first), on demand
+harness/field/run.sh --profile kill-loop --ref plan-12   # SW-3's kill loop (lab.sh up kdc2 first), on demand: upgrade, then kill-loop
 ```
 
 - **Options:**
-  - `--profile nightly|weekly` picks the scenarios, in the order of the table
+  - `--profile nightly|weekly|kill-loop` picks the scenarios, in the order of the table
     under [Scenarios](#scenarios);
   - `--only a,b` runs some of them;
   - `--leg mit|rust|both` picks the realm (default `rust`). `both` runs one
@@ -256,6 +257,7 @@ harness/field/run.sh --profile weekly --ref plan-12 --only upgrade,replica --leg
 | `ad.sh`, `ad/*.ps1`, `dc-ps.py` | `ad-trust`'s DC: each PowerShell script run over WinRM (`dc-ps.py`, the AD secrets from `FIELD_ADLAB_ENV`) and shown whole in the record; the DC's state against `ad/baseline.txt` before and after; every change logged before it is made and undone by `ad/undo.ps1`, which touches only those changes |
 | `ptydrive.py` | R2's pty driver: `su`, `passwd` and `pamtester` on a pseudo-terminal, their prompts answered from stdin |
 | `setpw.py`, `udp-send.py` | `kpasswd`'s drivers on client2: one set-password request through MIT's libkrb5 (ctypes; `krb5_set_password_using_ccache`, or with `--frame` the request built from `krb5_mk_req_extended` and `krb5_mk_priv` so the password may hold a NUL), and kpasswd's own error frame sent back to it |
+| `kill-loop.py` | `kill-loop`'s driver, run as root: `drive` on kdc (the ops, the kills, a dump after each kill, `expect.jsonl` of what the acknowledged ops left) and `judge` on kdc2 (each dump through MIT's `kdb5_util load`, then MIT's `listprincs` and `getprinc`) |
 
 ## Scenarios
 
@@ -271,6 +273,7 @@ harness/field/run.sh --profile weekly --ref plan-12 --only upgrade,replica --leg
 | `kdb-writes` | weekly; on demand with `--only upgrade,kdb-writes` for a change to how the store writes | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it, its scratch principals and policies removed at the end | none: the SW cells' first record | about 1 / 1 min |
 | `kpasswd` | weekly, last but `replica` (on a leg that allows it, it changes krbtgt's and kadmin/changepw's keys); on demand with `--only upgrade,kpasswd` for a change to kpasswd or chpass | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it | none: the KH cells' first record | about 2 / 2 min |
 | `replica` | weekly, last: kdc is reset to the MIT primary; on demand with `--only upgrade,replica`, and `FIELD_REPLICA_BAKED=1 --only replica --leg rust` for the parent's baked programs | mit, rust | kdc: `f4-mit` in both legs (reset); kdc2: `f4-mit-f44` / `rust-replica-f44` (up for the preflight, reset at the start and the end, then parked); client2: `f4-mit` (reset) | none: the REP cells' first record | about 6 / 7 min |
+| `kill-loop` | none: `run.sh --profile kill-loop` (upgrade, then kill-loop), the 1.2 cut's crash proof (plan-SW, SW-3) | rust (MIT is the judge) | kdc as `upgrade` left it, its kl principals and stale `.principal.tmp-*` removed at the end; kdc2: `f4-mit-f44` in the rust leg (up for the preflight, reset at the start and the end, then parked) | none: SW-3's first record | about 10 min (estimate) |
 
 With `--leg both`, the four take 15 to 16 minutes (2026-10-02, every VM reset by the run).
 

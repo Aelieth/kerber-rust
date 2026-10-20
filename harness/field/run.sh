@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # harness/field/run.sh: one field run on the lab (harness/field/README.md, "Field runs" and "Scenarios").
 #
-#   run.sh --profile nightly|weekly [--ref <git ref>] [--only <scenario,...>] [--leg mit|rust|both]
+#   run.sh --profile nightly|weekly|kill-loop [--ref <git ref>] [--only <scenario,...>] [--leg mit|rust|both]
 #   run.sh ad-trust [--ref <git ref>] [--leg mit|rust|both]   (upgrade, then the real AD DC: scenarios/ad-trust.sh)
 #
 # The tree under test is `git archive <ref>` of the repository run.sh lives in (read-only, GIT_OPTIONAL_LOCKS=0;
@@ -32,7 +32,7 @@ KEEP=30
 # The scenarios of each profile, in order; upgrade is first: it puts the leg's KDC on kdc (MIT's baseline, or the ref
 # under test), and the other scenarios use the kdc it left.
 declare -A PROFILES=([nightly]="upgrade services nfs-client sssd-login klldap-swap" [weekly]="upgrade services nfs-client sssd-login klldap-swap kdc-profile kdb-writes kpasswd replica"
-    [ad-trust]="upgrade ad-trust")
+    [ad-trust]="upgrade ad-trust" [kill-loop]="upgrade kill-loop")
 
 die() { printf 'run.sh: %s\n' "$*" >&2; exit 1; }
 usage() { sed -n '4,5p' "${BASH_SOURCE[0]}" | sed 's/^# *//'; }
@@ -168,7 +168,7 @@ wrapup() {
         if [ "$i" -lt $(( ${#ids[@]} - KEEP )) ] && [ "${results[$i]}" = PASS ]; then drop+=("${ids[$i]}"); fi
     done
     for id in "${drop[@]}"; do
-        [[ $id =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}-(nightly|weekly|ad-trust)$ ]] || continue
+        [[ $id =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}-(nightly|weekly|ad-trust|kill-loop)$ ]] || continue
         rm -rf -- "${RUNS:?}/$id"
         awk -F'\t' -v id="$id" '$1 != id' "$RUNS/index.tsv" > "$RUNS/index.tsv.new" && mv "$RUNS/index.tsv.new" "$RUNS/index.tsv"
     done
