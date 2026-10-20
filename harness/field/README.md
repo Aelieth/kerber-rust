@@ -159,6 +159,7 @@ harness/field/run.sh ad-trust --ref plan-12 --leg both   # the real AD DC: upgra
 harness/field/run.sh --profile weekly --ref plan-12 --only upgrade,kpasswd --leg both   # 464's cells, on demand
 harness/field/run.sh --profile weekly --ref plan-12 --only upgrade,kdc-profile --leg both   # kdc.conf's cells, on demand
 harness/field/run.sh --profile weekly --ref plan-12 --only upgrade,kdb-writes --leg both   # the store's write cells, on demand
+harness/field/run.sh --profile weekly --ref plan-12 --only upgrade,replica --leg both   # the replica cells (lab.sh up kdc2 first), on demand
 ```
 
 - **Options:**
@@ -268,7 +269,8 @@ harness/field/run.sh --profile weekly --ref plan-12 --only upgrade,kdb-writes --
 | `klldap-swap` | nightly, weekly | mit, rust | none: this host's docker | f-F3-mit (mit leg), f-F3 (rust leg) | about 4 min (mit) and 8 min (rust) with BuildKit's cache warm; much longer cold (see below) |
 | `kdc-profile` | weekly; on demand with `--only upgrade,kdc-profile` for a change to how kdc.conf is read | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it, its kdc.conf restored after each cell | none: the CF cells' first record | about 6 / 6 min |
 | `kdb-writes` | weekly; on demand with `--only upgrade,kdb-writes` for a change to how the store writes | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it, its scratch principals and policies removed at the end | none: the SW cells' first record | about 1 / 1 min |
-| `kpasswd` | weekly, last (on a leg that allows it, it changes krbtgt's and kadmin/changepw's keys); on demand with `--only upgrade,kpasswd` for a change to kpasswd or chpass | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it | none: the KH cells' first record | about 2 / 2 min |
+| `kpasswd` | weekly, last but `replica` (on a leg that allows it, it changes krbtgt's and kadmin/changepw's keys); on demand with `--only upgrade,kpasswd` for a change to kpasswd or chpass | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it | none: the KH cells' first record | about 2 / 2 min |
+| `replica` | weekly, last: kdc is reset to the MIT primary; on demand with `--only upgrade,replica`, and `FIELD_REPLICA_BAKED=1 --only replica --leg rust` for the parent's baked programs | mit, rust | kdc: `f4-mit` in both legs (reset); kdc2: `f4-mit-f44` / `rust-replica-f44` (up for the preflight, reset at the start and the end, then parked); client2: `f4-mit` (reset) | none: the REP cells' first record | about 6 / 7 min |
 
 With `--leg both`, the four take 15 to 16 minutes (2026-10-02, every VM reset by the run).
 
@@ -413,6 +415,27 @@ would remove it.
   both, ours answers 5 with the kvno kept. MIT's answers to those three are INFO
   lines (`scenarios/kpasswd.expect`); the rest are graded on both legs. The
   database is unmounted and moved back, also when the scenario stops early.
+- **`replica.sh`** (REP legs 1 and 2: an MIT primary on kdc, the leg's replica on
+  kdc2): iprop is turned on in kdc's realm for the run, on port 754 (on 749 MIT's
+  kadmind keeps only its own program, and Fedora's SELinux lets kadmind bind
+  754), with `kiprop/kdc2` given `p`; kdc2 gets its keytab and the primary's
+  stash by an ssh pipe from kdc to kdc2, never a file on this host, and its
+  kpropd runs with `-d` from the ssh session. In the rust leg the ref's krb5kdc,
+  kpropd, kdb5_util and kadmin.local come from kdc, where `upgrade` built them,
+  before kdc is reset (without them the leg stops there), and MIT's `kproplog`
+  reads kdc2's update log. Graded on both legs: the first sync, the full resync
+  kpropd asks for at its start, then `kprop -f` of a plain `kdb5_util dump`
+  refused, as MIT's iprop replica loads only an iprop dump, and a kinit through
+  kdc2 alone (REP.1); a `kpropd.acl` without the primary refused as MIT's
+  (REP.4); six changes arriving within two polls, with equal `getprinc` lines and
+  one `kproplog -h` serial (REP.2); each KDC keeping its own lockout count (REP.6)
+  and kdc2 keeping it through a `setstr` (REP.7); `get_updates permission denied`
+  without `p`, after which kpropd bails and exits (REP.5); a restarted kpropd
+  asking from its last serial, with no full resync (REP.8). REP.3 (a policy) is
+  recorded on the MIT leg: whether kpropd asked for a full resync, and whether the
+  policy and the principal under it reached kdc2. The rust leg must say the same
+  as this run's MIT leg, else `runs/mit-latest`; with neither it fails, so give
+  `--leg both`.
 
 `scenarios/klldap-swap.sh` runs KLLDAP on this host's docker, never on a lab VM
 (run.sh still holds the lab lock while it runs). It needs, from `field.env`:
