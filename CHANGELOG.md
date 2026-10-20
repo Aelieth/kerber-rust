@@ -18,6 +18,7 @@ any other `###` heading.
 
 ### Security
 
+- **crypto.** AES, DES, Camellia, RC4, HMAC and the hashes wipe key and hash state on drop, via each crate's `zeroize` feature, as MIT's `aes_key_cleanup`.
 - **gss.** A DER length past the end of its token is refused, as MIT's `get_tag`; an eight-octet one overflowed, and SPNEGO and the acceptor panicked.
 - **crypto.** Encrypt keeps the confounder and plaintext, including the RC4 copy, in a buffer that is wiped on drop.
 - **admin.** kpasswd refuses a `LOCKDOWN_KEYS` principal's keys (5; MIT's 464 allows it), answers no kpasswd reply or error, and names no path. Lab beside MIT.

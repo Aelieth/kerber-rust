@@ -42,11 +42,11 @@ krb5-config = { path = "crates/krb5-config" }
 krb5-gss = { path = "crates/krb5-gss" }
 krb5-admin = { path = "crates/krb5-admin" }
 krb5-testkit = { path = "crates/krb5-testkit" }
-aes = "0.9"
+aes = { version = "0.9", features = ["zeroize"] }
 # rasn's `OctetString` buffer; `try_into_mut` lets the last handle on a key, or on a secret copy
 # made to be encoded (`safe_priv::wipe_octets`), wipe it in place.
 bytes = "1.12"
-camellia = "0.2"
+camellia = { version = "0.2", features = ["zeroize"] }
 chrono = { version = "0.4", default-features = false, features = ["alloc", "clock", "std"] }
 # glibc LC_TIME tables. krb5-types formats dates with them; defmt stays off.
 pure-rust-locales = { version = "0.8.2", default-features = false }
@@ -54,11 +54,11 @@ cmac = "0.8"
 # SPAKE edwards25519 (MIT `edwards25519.c`). 5.0 shares cpufeatures 0.3 with the RustCrypto
 # crates; 4.1 would add cpufeatures 0.2. No `alloc`: no multiscalar API is used.
 curve25519-dalek = { version = "5.0.0", default-features = false, features = ["precomputed-tables", "zeroize"] }
-des = "0.9"
+des = { version = "0.9", features = ["zeroize"] }
 getrandom = "0.2"
-hmac = "0.13"
-md-5 = "0.11"
-md4 = "0.11"
+hmac = { version = "0.13", features = ["zeroize"] }
+md-5 = { version = "0.11", features = ["zeroize"] }
+md4 = { version = "0.11", features = ["zeroize"] }
 nix = { version = "0.31", default-features = false, features = ["net", "uio", "user"] }
 num-bigint = { version = "0.4", default-features = false, features = ["std"] }
 signal-hook = { version = "0.3", default-features = false }
@@ -66,12 +66,12 @@ p256 = { version = "0.14", default-features = false, features = ["arithmetic", "
 pbkdf2 = { version = "0.13", default-features = false, features = ["hmac"] }
 # Pinned: the build takes rasn from vendor/rasn (`[patch.crates-io]` below).
 rasn = "=0.28.14"
-rc4 = "0.2"
+rc4 = { version = "0.2", features = ["zeroize"] }
 regex-automata = { version = "0.4", default-features = false, features = ["std", "meta", "unicode"] }
 # The xattr reads of the SELinux labeler (`security.selinux`), behind a safe API.
 rustix = { version = "1.1", default-features = false, features = ["fs", "std"] }
-sha1 = "0.11"
-sha2 = "0.11"
+sha1 = { version = "0.11", features = ["zeroize"] }
+sha2 = { version = "0.11", features = ["zeroize"] }
 subtle = "2.6"
 thiserror = "2"
 tracing = { version = "0.1", default-features = false, features = ["std", "attributes"] }
