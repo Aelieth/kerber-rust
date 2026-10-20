@@ -126,12 +126,16 @@ pub mod err {
     pub const INVALID_SIG: i32 = 64;
     /// KDC_ERR_DH_KEY_PARAMETERS_NOT_ACCEPTED (PKINIT)
     pub const DH_KEY_PARAMETERS_NOT_ACCEPTED: i32 = 65;
+    /// KDC_ERR_CERTIFICATE_MISMATCH (PKINIT)
+    pub const CERTIFICATE_MISMATCH: i32 = 66;
     /// KRB_AP_ERR_NO_TGT
     pub const NO_TGT: i32 = 67;
     /// KDC_ERR_WRONG_REALM
     pub const WRONG_REALM: i32 = 68;
     /// KRB_AP_ERR_USER_TO_USER_REQUIRED
     pub const USER_TO_USER_REQUIRED: i32 = 69;
+    /// KDC_ERR_CLIENT_NAME_MISMATCH (PKINIT)
+    pub const CLIENT_NAME_MISMATCH: i32 = 75;
     /// KDC_ERR_INCONSISTENT_KEY_PURPOSE (PKINIT)
     pub const INCONSISTENT_KEY_PURPOSE: i32 = 77;
     /// KRB5KRB_AP_ERR_TKT_INVALID (`krb5_err.et` offset 145): "Ticket has

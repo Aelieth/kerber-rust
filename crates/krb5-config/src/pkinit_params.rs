@@ -27,6 +27,8 @@ pub struct PkinitParams {
     pub require_eku: bool,
     /// Microsoft's smart-card logon key usage is acceptable too (default false).
     pub accept_secondary_eku: bool,
+    /// `pkinit_allow_upn`: a client certificate's UPN may name the client (default false).
+    pub allow_upn: bool,
     /// `pkinit_indicator`, every value.
     pub indicators: Vec<String>,
 }
@@ -72,6 +74,7 @@ impl PkinitParams {
             require_freshness: boolean("pkinit_require_freshness"),
             require_eku,
             accept_secondary_eku,
+            allow_upn: boolean("pkinit_allow_upn"),
             indicators: values("pkinit_indicator"),
         }
     }

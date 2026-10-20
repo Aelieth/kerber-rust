@@ -13,6 +13,7 @@ pub struct PkinitKdc {
     pub(crate) pool: Vec<Vec<u8>>,
     pub(crate) require_eku: bool,
     pub(crate) accept_secondary_eku: bool,
+    pub(crate) allow_upn: bool,
 }
 
 impl PkinitKdc {
@@ -49,6 +50,7 @@ impl PkinitKdc {
             pool: load_some(&params.pool)?,
             require_eku: params.require_eku,
             accept_secondary_eku: params.accept_secondary_eku,
+            allow_upn: params.allow_upn,
         })
     }
 
@@ -61,6 +63,7 @@ impl PkinitKdc {
             pool: Vec::new(),
             require_eku: true,
             accept_secondary_eku: false,
+            allow_upn: false,
         }
     }
 

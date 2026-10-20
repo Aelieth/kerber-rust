@@ -15,11 +15,11 @@ mod identity;
 #[cfg(any(test, feature = "test-ca"))]
 pub use ca::{PkinitCa, cms_wrap};
 pub use cms::{
-    ChainError, CmsAlgorithmIdentifier, CmsContentInfo, CmsEncapContentInfo, CmsSignedData,
-    CmsSignerInfo, CmsVerified, client_eku_ok, cms_extract_unsigned, cms_sign_chain, cms_sign_leaf,
-    cms_sign_leaf_oids, cms_unwrap, cms_verify, cms_verify_anchored, cms_verify_full,
-    cms_wrap_signed, cms_wrap_unsigned, parse_identity_pem, parse_pem, require_client_pkinit_san,
-    require_kdc_pkinit_cert, verify_chain,
+    CertSans, ChainError, CmsAlgorithmIdentifier, CmsContentInfo, CmsEncapContentInfo,
+    CmsSignedData, CmsSignerInfo, CmsVerified, cert_sans, client_eku_ok, cms_extract_unsigned,
+    cms_sign_chain, cms_sign_leaf, cms_sign_leaf_oids, cms_unwrap, cms_verify, cms_verify_anchored,
+    cms_verify_full, cms_wrap_signed, cms_wrap_unsigned, parse_identity_pem, parse_pem,
+    require_client_pkinit_san, require_kdc_pkinit_cert, verify_chain,
 };
 pub use identity::{PkinitIdentity, load_ca_certs, load_identity};
 

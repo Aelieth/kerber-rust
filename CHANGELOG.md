@@ -30,6 +30,7 @@ any other `###` heading.
 - **gss/protocol.** GSS's receive window is MIT's 64-number bitmap; the replay cache keeps MIT's tag for the clock skew, and a full cache refuses a new tag, not a live one.
 - **admin.** The iprop client checks the primary's INIT reply MIC whatever its verifier, as MIT's `authgss_refresh`; an empty or non-GSS verifier skipped the check.
 - **kdc.** PKINIT trusts kdc.conf's `pkinit_anchors` and signs with `pkinit_identity`, not a CA it made, now test-only. KDC identity P-256 only. Lab beside MIT.
+- **kdc.** A client with a `pkinit_cert_match` string is refused PKINIT (66): the matcher is not ported.
 
 ### Added
 
@@ -103,6 +104,8 @@ any other `###` heading.
 - **kdb.** `kdb5_util dump`'s name filter is glibc's ERE, as MIT's `regcomp(REG_EXTENDED)`, matched against the whole name, with `regerror`'s text for a bad name.
 - **kdc.** A store write commits in a change of its own or is refused outside one before it touches the store; a status, kvno, TL-data or policy write stamps `Last modified`.
 - **kdc/admin.** kadm5 postcommit hooks run after the write, the database unlocked, create's also on a failed write, as MIT's; kadm5 reads take the store's read guard.
+- **kdc.** A PKINIT certificate whose SAN names another client is error 75, `Client name mismatch`, as MIT's; `pkinit_allow_upn` is read.
+- **kdc.** PKINIT logs MIT's freshness lines and checks the AuthPack in MIT's order; a signed one without DH is `Unsupported PKINIT RSA request`.
 
 ## [1.1.0] - 2026-10-14
 

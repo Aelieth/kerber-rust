@@ -739,8 +739,8 @@ fn pkinit_san_mismatch_is_refused() {
     });
     let err = krb5_kdc::issue_as(&store, &req).expect_err("SAN mismatch");
     match err {
-        Error::Protocol { code, .. } => assert_eq!(code, err::PREAUTH_FAILED),
-        other => panic!("expected PREAUTH_FAILED, got {other}"),
+        Error::Protocol { code, .. } => assert_eq!(code, err::CLIENT_NAME_MISMATCH),
+        other => panic!("expected CLIENT_NAME_MISMATCH, got {other}"),
     }
     let req_ok = pkinit_as_req(cname, 423, |ck| {
         pa_pk_as_req(&kp.public, &ca, Some(ck)).expect("user")
@@ -969,8 +969,8 @@ fn pkinit_enterprise_san_binds_issued_cname() {
     });
     let err = krb5_kdc::issue_as(&store, &req).expect_err("SAN vs issued cname");
     match err {
-        Error::Protocol { code, .. } => assert_eq!(code, err::PREAUTH_FAILED),
-        other => panic!("expected PREAUTH_FAILED, got {other}"),
+        Error::Protocol { code, .. } => assert_eq!(code, err::CLIENT_NAME_MISMATCH),
+        other => panic!("expected CLIENT_NAME_MISMATCH, got {other}"),
     }
     let req_ok = pkinit_as_req(ent, 429, |ck| {
         pa_pk_as_req_cn(&kp.public, &ca, "user@OTHER.TEST@KERBER.TEST", Some(ck))

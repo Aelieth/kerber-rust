@@ -391,7 +391,7 @@ fn parse_kdcdefaults(conf: &mut KdcConf, line: &str) {
         "spake_preauth_kdc_challenge" if conf.spake_preauth_kdc_challenge.is_none() => {
             conf.spake_preauth_kdc_challenge = Some(v);
         }
-        "pkinit_dh_min_bits" | "pkinit_allow_upn" => note_unsupported(conf, k),
+        "pkinit_dh_min_bits" => note_unsupported(conf, k),
         _ => {}
     }
 }
@@ -588,7 +588,7 @@ fn parse_kdc_realm_line(conf: &mut KdcConf, line: &str) {
         }
         "spake_preauth_indicator" => conf.spake_preauth_indicators.push(v),
         "dict_file" => conf.dict_file = Some(PathBuf::from(v)),
-        "master_key_name" | "pkinit_dh_min_bits" | "pkinit_allow_upn" => {
+        "master_key_name" | "pkinit_dh_min_bits" => {
             note_unsupported(conf, k);
         }
         _ => {}

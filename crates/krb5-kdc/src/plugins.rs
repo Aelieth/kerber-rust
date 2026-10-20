@@ -265,7 +265,7 @@ impl KdcPreauth for PkinitMod {
     fn process_as(&self, rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, Error> {
         let PreauthRock {
             store,
-            client: _client,
+            client,
             padata,
             ikey: _ikey,
             etype,
@@ -291,15 +291,7 @@ impl KdcPreauth for PkinitMod {
                 Ok(None)
             };
         };
-        let done = process_pkinit(
-            store,
-            padata,
-            etype,
-            as_req_der,
-            body_der,
-            cname,
-            store.realm(),
-        )?;
+        let done = process_pkinit(store, client, padata, etype, as_req_der, body_der, cname)?;
         Ok(done.map(|(key, pa, signed)| PreauthAction::Pkinit { key, pa, signed }))
     }
 }

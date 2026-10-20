@@ -441,8 +441,9 @@ MIT's (`doc/admin/pkinit.rst`):
   user, and it has the `id-pkinit-KPClientAuth` extended key usage and the digitalSignature key
   usage: `pkinit_eku_checking = scLogin` also takes Microsoft's smart-card logon usage, and `none`
   checks neither.
-- `pkinit_require_freshness` and `pkinit_indicator` work as MIT's. `pkinit_revoke`,
-  `pkinit_require_crl_checking` and `pkinit_kdc_ocsp` are refused.
+- `pkinit_require_freshness`, `pkinit_indicator` and `pkinit_allow_upn` work as MIT's.
+  `pkinit_revoke`, `pkinit_require_crl_checking` and `pkinit_kdc_ocsp` are refused, and a principal
+  with a `pkinit_cert_match` string attribute cannot log in with a certificate.
 - If the identity or the anchors do not load, the KDC starts without PKINIT and logs MIT's line, for
   example `preauth pkinit failed to initialize: PKINIT initialization failed: No pkinit_identity
   supplied for realm EXAMPLE.COM`.

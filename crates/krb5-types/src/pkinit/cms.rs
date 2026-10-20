@@ -911,6 +911,66 @@ pub fn cms_sign_chain(
     ))
 }
 
+/// id-ms-san-upn 1.3.6.1.4.1.311.20.2.3 (OID body): Microsoft's UPN otherName.
+const OID_MS_SAN_UPN: &[u8] = &[0x2b, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x14, 0x02, 0x03];
+
+/// The PKINIT names in a certificate's subjectAltName.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CertSans {
+    /// The id-pkinit-san principals: realm, name type, components.
+    pub principals: Vec<(String, i32, Vec<String>)>,
+    /// The Microsoft UPNs, when asked for.
+    pub upns: Vec<String>,
+}
+
+/// The PKINIT principals of `cert`'s subjectAltName and, with `upns`, its UPNs; `None` when the
+/// extension is not a sequence of general names. A certificate without the extension has none.
+/// MIT `crypto_retrieve_X509_sans` (`pkinit_crypto_openssl.c:2343-2440`): an extension that does not decode is an error; a principal name that does not decode, and a UPN holding a NUL, are skipped.
+#[must_use]
+pub fn cert_sans(cert: &[u8], upns: bool) -> Option<CertSans> {
+    let mut out = CertSans::default();
+    let Some(exts) = walk_tbs(cert).and_then(|w| w.extensions) else {
+        return Some(out);
+    };
+    let mut san = None;
+    each_ext(exts, |oid, val| {
+        if oid == OID_SAN {
+            san = Some(val.to_vec());
+            return true;
+        }
+        false
+    });
+    let Some(san) = san else {
+        return Some(out);
+    };
+    let (t, mut names, _) = take_tlv(&san)?;
+    if t != 0x30 {
+        return None;
+    }
+    while !names.is_empty() {
+        let (tag, name, rest) = take_tlv(names)?;
+        names = rest;
+        let Some((0x06, oid, value)) = (tag == 0xa0).then(|| take_tlv(name)).flatten() else {
+            continue;
+        };
+        let Some((0xa0, value, _)) = take_tlv(value) else {
+            continue;
+        };
+        if oid == OID_PKINIT_SAN {
+            out.principals
+                .extend(parse_krb5_principal_name_typed(value));
+        } else if upns
+            && oid == OID_MS_SAN_UPN
+            && let Some((_, upn, _)) = take_tlv(value)
+            && !upn.contains(&0)
+            && let Ok(upn) = std::str::from_utf8(upn)
+        {
+            out.upns.push(upn.to_owned());
+        }
+    }
+    Some(out)
+}
+
 /// id-ms-kp-sc-logon 1.3.6.1.4.1.311.20.2.2 (OID body).
 const OID_MS_SC_LOGON: &[u8] = &[0x2b, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x14, 0x02, 0x02];
 
@@ -1140,6 +1200,11 @@ fn cert_pkinit_san(cert: &[u8]) -> Option<(String, Vec<String>)> {
 /// SEQUENCE of `realm [0]` and `principalName [1]`, not RFC 4120's PrincipalName.
 /// A realm that is not a string, or a name that is not the principal-name tag, is not a principal.
 fn parse_krb5_principal_name(der: &[u8]) -> Option<(String, Vec<String>)> {
+    parse_krb5_principal_name_typed(der).map(|(realm, _, parts)| (realm, parts))
+}
+
+/// A KRB5PrincipalName's realm, name type and components.
+fn parse_krb5_principal_name_typed(der: &[u8]) -> Option<(String, i32, Vec<String>)> {
     let seq = if der.first() == Some(&0x30) {
         take_tlv(der)?.1
     } else {
@@ -1165,7 +1230,17 @@ fn parse_krb5_principal_name(der: &[u8]) -> Option<(String, Vec<String>)> {
     };
     let mut cur = pname_seq;
     let mut parts = Vec::new();
+    let mut name_type = 0;
     while let Some((t, inner, rest)) = take_tlv(cur) {
+        if t == 0xa0
+            && let Some((0x02, n, _)) = take_tlv(inner)
+            && (1..=4).contains(&n.len())
+        {
+            let fill = if n[0] & 0x80 == 0 { 0 } else { 0xff };
+            let mut be = [fill; 4];
+            be[4 - n.len()..].copy_from_slice(n);
+            name_type = i32::from_be_bytes(be);
+        }
         if t == 0xa1 {
             let names = if inner.first() == Some(&0x30) {
                 take_tlv(inner)?.1
@@ -1188,7 +1263,7 @@ fn parse_krb5_principal_name(der: &[u8]) -> Option<(String, Vec<String>)> {
             break;
         }
     }
-    Some((realm, parts))
+    Some((realm, name_type, parts))
 }
 
 fn cert_basic_constraints_ca(cert: &[u8]) -> bool {

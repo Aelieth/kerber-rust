@@ -10,6 +10,7 @@ use krb5_crypto::{
     derive_prfplus, dh_generate, dh_group_for_prime, dh_shared, encrypt, krb_fx_cf2,
     octetstring2key, p256_generate, p256_shared, pkinit_kdf_agile, verify_checksum_type,
 };
+use krb5_log::klog::{self, Severity};
 use krb5_types::{
     AsReq, EncryptedData, EncryptionKey, KdcReqBody, KerberosTime, MethodData, Microseconds,
     PaData, PrincipalName, TypedData, TypedDataList, err, flag_bit, ku, pa,
@@ -510,13 +511,14 @@ pub(crate) fn wrap_fast_rep(
 /// encode. A request without PA-PK-AS-REQ is `Ok(None)`.
 pub(crate) fn process_pkinit(
     store: &dyn PrincipalRead,
+    client: &Principal,
     padata: Option<&[PaData]>,
     etype: EncryptionType,
     as_req_der: &[u8],
     body_der: &[u8],
     cname: &PrincipalName,
-    realm: &str,
 ) -> Result<Option<(ProtocolKey, PaData, bool)>, Error> {
+    let realm = store.realm();
     let Some(raw) = find_pa(padata, pa::PK_AS_REQ) else {
         return Ok(None);
     };
@@ -544,29 +546,7 @@ pub(crate) fn process_pkinit(
                     );
                     return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
                 }
-                if let Err(e) =
-                    krb5_types::pkinit::require_client_pkinit_san(&verified.cert, cname, realm)
-                {
-                    tracing::info!(
-                        event = krb5_log::events::KDC_PKINIT,
-                        component = "krb5-kdc",
-                        outcome = "denied",
-                        error = e
-                    );
-                    return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
-                }
-                // MIT `pkinit_eku_authorize` (`plugins/preauth/pkinit/pkinit_srv.c:1171-1192`): after the name, the key purpose, unless `pkinit_eku_checking = none`.
-                if kdc.require_eku
-                    && !krb5_types::pkinit::client_eku_ok(&verified.cert, kdc.accept_secondary_eku)
-                {
-                    tracing::info!(
-                        event = krb5_log::events::KDC_PKINIT,
-                        component = "krb5-kdc",
-                        outcome = "denied",
-                        error = "pkinit client eku"
-                    );
-                    return Err(proto(err::INCONSISTENT_KEY_PURPOSE, status::PREAUTH_FAILED));
-                }
+                authorize_cert(store, kdc, &verified.cert, client, &req_cname, realm)?;
                 (verified.e_content, true)
             }
             Err(e) => {
@@ -598,46 +578,6 @@ pub(crate) fn process_pkinit(
                 (inner, false)
             }
         };
-    if let Err(e) = krb5_types::pkinit::authpack_pa_checksum_ok(&inner, body_der) {
-        tracing::info!(
-            event = krb5_log::events::KDC_PKINIT,
-            component = "krb5-kdc",
-            outcome = "denied",
-            error = e
-        );
-        return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
-    }
-    let mut valid_freshness = false;
-    if let Some(tok) = krb5_types::pkinit::parse_authpack_freshness_token(&inner) {
-        check_freshness_token(store, &tok, KerberosTime::now().unix_seconds())?;
-        valid_freshness = true;
-    }
-    if is_signed && store.policy().pkinit_require_freshness && !valid_freshness {
-        tracing::info!(
-            event = krb5_log::events::KDC_PKINIT,
-            component = "krb5-kdc",
-            outcome = "error",
-            detail = "no freshness token, rejecting auth"
-        );
-        return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
-    }
-    if is_signed {
-        if valid_freshness {
-            tracing::info!(
-                event = krb5_log::events::KDC_PKINIT,
-                component = "krb5-kdc",
-                outcome = "ok",
-                detail = "freshness token received"
-            );
-        } else {
-            tracing::info!(
-                event = krb5_log::events::KDC_PKINIT,
-                component = "krb5-kdc",
-                outcome = "ok",
-                detail = "no freshness token received"
-            );
-        }
-    }
     let (ctime, _) = krb5_types::pkinit::parse_authpack_freshness(&inner).ok_or_else(|| {
         tracing::info!(
             event = krb5_log::events::KDC_PKINIT,
@@ -663,59 +603,59 @@ pub(crate) fn process_pkinit(
         );
         proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED)
     })?;
-    let Some(spki) = spki else {
-        return Err(if is_signed {
-            dh_params_not_accepted(store, cname)
-        } else {
-            proto_d(
+    let peer = match spki.as_deref() {
+        Some(spki) => Some(dh_peer(store, cname, spki)?),
+        None if !is_signed => {
+            return Err(proto_d(
                 err::PREAUTH_FAILED,
                 status::PREAUTH_FAILED,
                 "Anonymous pkinit without DH public value not supported.",
-            )
-        });
+            ));
+        }
+        None => None,
     };
-    let agile = krb5_types::pkinit::authpack_wants_sha256_kdf(&inner);
-    let (z, info) = if let Some(peer) = krb5_types::pkinit::decode_ec_spki(&spki) {
-        let kp = p256_generate()?;
-        let shared = Zeroizing::new(p256_shared(&kp.secret, &peer)?);
-        let info = krb5_types::pkinit::encode_kdc_dh_key_info(&kp.public, nonce);
-        (Zeroizing::new(shared.to_vec()), info)
-    } else if let Some((p, y)) = krb5_types::pkinit::parse_dh_spki(&spki) {
-        let group = dh_group_for_prime(&p).ok_or_else(|| {
-            tracing::info!(
-                event = krb5_log::events::KDC_PKINIT,
-                component = "krb5-kdc",
-                outcome = "denied",
-                error = "unknown DH prime",
-                p_len = p.len()
-            );
-            dh_params_not_accepted(store, cname)
-        })?;
-        tracing::info!(
-            event = krb5_log::events::KDC_PKINIT,
-            component = "krb5-kdc",
-            outcome = "ok",
-            group = group.name,
-            bits = group.bits
-        );
-        let kp = dh_generate(group)?;
-        let shared = Zeroizing::new(
-            dh_shared(group, &kp.secret, &y)
-                .map_err(|_| proto(err::DH_KEY_PARAMETERS_NOT_ACCEPTED, status::PREAUTH_FAILED))?,
-        );
-        let z = Zeroizing::new(pad_z(&shared, p.len()));
-        let info = krb5_types::pkinit::encode_kdc_dh_key_info(&kp.public_der, nonce);
-        (z, info)
-    } else {
+    if let Err(e) = krb5_types::pkinit::authpack_pa_checksum_ok(&inner, body_der) {
         tracing::info!(
             event = krb5_log::events::KDC_PKINIT,
             component = "krb5-kdc",
             outcome = "denied",
-            error = "SPKI",
-            spki_len = spki.len(),
-            spki_tag = spki.first().copied().unwrap_or(0)
+            error = e
         );
-        return Err(dh_params_not_accepted(store, cname));
+        return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
+    }
+    let mut valid_freshness = false;
+    if let Some(tok) = krb5_types::pkinit::parse_authpack_freshness_token(&inner) {
+        check_freshness_token(store, &tok, KerberosTime::now().unix_seconds())?;
+        valid_freshness = true;
+    }
+    if is_signed {
+        check_log_freshness(store, &req_cname, realm, valid_freshness)?;
+    }
+    // MIT `pkinit_server_return_padata` (`plugins/preauth/pkinit/pkinit_srv.c:804-809`): a signed AuthPack without a DH value asks for RSA key transport.
+    let Some(peer) = peer else {
+        return Err(Error::PreauthModule {
+            code: err::PREAUTH_FAILED,
+            message: "Unsupported PKINIT RSA request".to_owned(),
+        });
+    };
+    let agile = krb5_types::pkinit::authpack_wants_sha256_kdf(&inner);
+    let (z, info) = match peer {
+        DhPeer::Ec(peer) => {
+            let kp = p256_generate()?;
+            let shared = Zeroizing::new(p256_shared(&kp.secret, &peer)?);
+            let info = krb5_types::pkinit::encode_kdc_dh_key_info(&kp.public, nonce);
+            (Zeroizing::new(shared.to_vec()), info)
+        }
+        DhPeer::Modp(group, y, modulus_len) => {
+            let kp = dh_generate(group)?;
+            let shared =
+                Zeroizing::new(dh_shared(group, &kp.secret, &y).map_err(|_| {
+                    proto(err::DH_KEY_PARAMETERS_NOT_ACCEPTED, status::PREAUTH_FAILED)
+                })?);
+            let z = Zeroizing::new(pad_z(&shared, modulus_len));
+            let info = krb5_types::pkinit::encode_kdc_dh_key_info(&kp.public_der, nonce);
+            (z, info)
+        }
     };
     let certs = kdc.own_chain().map_err(|message| Error::PreauthModule {
         code: err::PREAUTH_FAILED,
@@ -771,6 +711,183 @@ pub(crate) fn process_pkinit(
         padata_value: pa_bytes.into(),
     };
     Ok(Some((reply_key, pa, is_signed)))
+}
+
+/// MIT `authorize_cert` (`plugins/preauth/pkinit/pkinit_srv.c:319-388`): the built-in certauth modules in their order, and a certificate none of them accepted is a name mismatch.
+/// MIT `pkinit_san_authorize` (`plugins/preauth/pkinit/pkinit_srv.c:1143-1168`): a SAN naming the client accepts, SANs that name another refuse, and none passes.
+/// MIT `pkinit_eku_authorize` (`plugins/preauth/pkinit/pkinit_srv.c:1171-1192`): the key purpose, unless `pkinit_eku_checking = none`.
+/// MIT `dbmatch_authorize` (`plugins/preauth/pkinit/pkinit_srv.c:1230-1258`): the client's `pkinit_cert_match` string decides. Its matcher is not ported, so a client that has one is refused.
+fn authorize_cert(
+    store: &dyn PrincipalRead,
+    kdc: &crate::pkinit::PkinitKdc,
+    cert: &[u8],
+    client: &Principal,
+    req_client: &PrincipalName,
+    realm: &str,
+) -> Result<(), Error> {
+    let denied = |code, error: &'static str| {
+        tracing::info!(
+            event = krb5_log::events::KDC_PKINIT,
+            component = "krb5-kdc",
+            outcome = "denied",
+            error = error
+        );
+        proto(code, status::PREAUTH_FAILED)
+    };
+    let sans = krb5_types::pkinit::cert_sans(cert, kdc.allow_upn)
+        .ok_or_else(|| denied(err::CLIENT_NAME_MISMATCH, "pkinit client san"))?;
+    let mut accepted = false;
+    if !sans.principals.is_empty() || !sans.upns.is_empty() {
+        let named =
+            |p: &PrincipalName, r: &str| match_client(store, client, req_client, realm, p, r);
+        let by_san = sans.principals.iter().any(|(r, name_type, parts)| {
+            named(
+                &PrincipalName::new(*name_type, parts.iter().map(String::as_str)),
+                r,
+            )
+        });
+        // MIT `verify_client_san` (`plugins/preauth/pkinit/pkinit_srv.c:240-258`): a UPN is read as an enterprise name.
+        let by_upn = || {
+            sans.upns.iter().any(|upn| {
+                krb5_types::parse_name_ex(upn, realm, true).is_ok_and(|p| {
+                    let parts = p.components.iter().map(String::as_str);
+                    named(
+                        &PrincipalName::new(PrincipalName::NT_ENTERPRISE, parts),
+                        &p.realm,
+                    )
+                })
+            })
+        };
+        if !(by_san || by_upn()) {
+            return Err(denied(err::CLIENT_NAME_MISMATCH, "pkinit client san"));
+        }
+        accepted = true;
+    }
+    if kdc.require_eku && !krb5_types::pkinit::client_eku_ok(cert, kdc.accept_secondary_eku) {
+        return Err(denied(err::INCONSISTENT_KEY_PURPOSE, "pkinit client eku"));
+    }
+    if client
+        .string_attrs
+        .iter()
+        .any(|(k, _)| k == "pkinit_cert_match")
+    {
+        return Err(denied(err::CERTIFICATE_MISMATCH, "pkinit_cert_match"));
+    }
+    if accepted {
+        Ok(())
+    } else {
+        Err(denied(err::CLIENT_NAME_MISMATCH, "pkinit client san"))
+    }
+}
+
+/// Whether `name@realm` names the client: the request's name (an enterprise name read as the
+/// principal it names), the client entry's name, or a name the database resolves to that entry.
+/// MIT `match_client` (`kdc/kdc_preauth.c:477-497`): `krb5_principal_compare_flags` with `KRB5_PRINCIPAL_COMPARE_ENTERPRISE`, then `krb5_principal_compare`, then a client lookup.
+fn match_client(
+    store: &dyn PrincipalRead,
+    client: &Principal,
+    req_client: &PrincipalName,
+    req_realm: &str,
+    name: &PrincipalName,
+    realm: &str,
+) -> bool {
+    let parts = |n: &PrincipalName| -> Vec<Vec<u8>> {
+        n.name_string
+            .iter()
+            .map(|c| c.as_bytes().to_vec())
+            .collect()
+    };
+    let read = |n: &PrincipalName, r: &str| -> (Vec<u8>, Vec<Vec<u8>>) {
+        if n.name_type == PrincipalName::NT_ENTERPRISE
+            && let Ok(p) = krb5_types::parse_name_ex(&n.unparse_no_realm(), r, false)
+        {
+            let comps = p.components.into_iter().map(String::into_bytes).collect();
+            return (p.realm.into_bytes(), comps);
+        }
+        (r.as_bytes().to_vec(), parts(n))
+    };
+    let own = (client.realm.as_bytes().to_vec(), parts(&client.name));
+    if read(name, realm) == read(req_client, req_realm)
+        || (realm.as_bytes().to_vec(), parts(name)) == own
+    {
+        return true;
+    }
+    let id = crate::kdb::lookup_principal_id(name, realm);
+    store
+        .fetch(&id)
+        .ok()
+        .flatten()
+        .is_some_and(|entry| (entry.realm.as_bytes().to_vec(), parts(&entry.name)) == own)
+}
+
+/// The client's DH public value, in a group the KDC takes.
+enum DhPeer {
+    /// A P-256 point.
+    Ec(Vec<u8>),
+    /// A MODP group, the client's value, and the modulus length.
+    Modp(&'static krb5_crypto::DhGroup, Vec<u8>, usize),
+}
+
+/// MIT `server_check_dh` (`plugins/preauth/pkinit/pkinit_crypto_openssl.c:3010-3044`): a DH value in a group the KDC does not take is 65, with the groups it does.
+fn dh_peer(store: &dyn PrincipalRead, cname: &PrincipalName, spki: &[u8]) -> Result<DhPeer, Error> {
+    if let Some(peer) = krb5_types::pkinit::decode_ec_spki(spki) {
+        return Ok(DhPeer::Ec(peer));
+    }
+    if let Some((p, y)) = krb5_types::pkinit::parse_dh_spki(spki) {
+        let group = dh_group_for_prime(&p).ok_or_else(|| {
+            tracing::info!(
+                event = krb5_log::events::KDC_PKINIT,
+                component = "krb5-kdc",
+                outcome = "denied",
+                error = "unknown DH prime",
+                p_len = p.len()
+            );
+            dh_params_not_accepted(store, cname)
+        })?;
+        tracing::info!(
+            event = krb5_log::events::KDC_PKINIT,
+            component = "krb5-kdc",
+            outcome = "ok",
+            group = group.name,
+            bits = group.bits
+        );
+        return Ok(DhPeer::Modp(group, y, p.len()));
+    }
+    tracing::info!(
+        event = krb5_log::events::KDC_PKINIT,
+        component = "krb5-kdc",
+        outcome = "denied",
+        error = "SPKI",
+        spki_len = spki.len(),
+        spki_tag = spki.first().copied().unwrap_or(0)
+    );
+    Err(dh_params_not_accepted(store, cname))
+}
+
+/// The freshness line of a signed request, and its refusal when a token is required and none
+/// verified.
+/// MIT `check_log_freshness` (`plugins/preauth/pkinit/pkinit_srv.c:392-412`): one `com_err` line at info naming the request's client.
+fn check_log_freshness(
+    store: &dyn PrincipalRead,
+    req_client: &PrincipalName,
+    realm: &str,
+    valid: bool,
+) -> Result<(), Error> {
+    let name = req_client.unparse_with_realm(realm);
+    if store.policy().pkinit_require_freshness && !valid {
+        klog::syslog(
+            Severity::Info,
+            &format!("PKINIT: no freshness token, rejecting auth from {name}"),
+        );
+        return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
+    }
+    let what = if valid {
+        "freshness token received"
+    } else {
+        "no freshness token received"
+    };
+    klog::syslog(Severity::Info, &format!("PKINIT: {what} from {name}"));
+    Ok(())
 }
 
 fn pad_z(shared: &[u8], modulus_len: usize) -> Vec<u8> {
