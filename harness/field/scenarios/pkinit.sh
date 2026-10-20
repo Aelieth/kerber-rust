@@ -34,6 +34,8 @@
 #          the password is taken (stdin), which cannot open a PKINIT reply;
 #   PK.kpasswd: with pkinit_identities and pkinit_anchors in a profile of its own, alice's kpasswd gets its
 #          kadmin/changepw ticket by pkinit (the trace's module line) and stops at the new password (stdin empty);
+#          with alice's TGT in the default ccache, each kpasswd arms its request with it as MIT's does: the trace
+#          names the cache in full (FILE:...), and its FAST negotiation and FAST-encoding lines follow;
 #          in the rust leg kdc's build of krb5-kpasswd runs from client2's ~/pk/kpasswd too;
 #   PK.7b: pkinit_identity names a file that is not there: the line ends "Cannot read certificate file '<file>':
 #          (null)", OpenSSL 3 giving no reason for a system error;
@@ -62,6 +64,12 @@
 #          refuses its 2048-bit DH with 65 and its groups, and kinit tries again with P-384 and gets a TGT;
 #   PK.dh1024: client2's kinit at pkinit_dh_min_bits = 1024 (~/pk/dh1024.conf first): the KDC's realm at 1024
 #          takes its 1024-bit DH for a TGT; at the default 2048 it is 65, and kinit tries again with P-256;
+#   PK.kdccert: made on kdc by scripts/lib/pkinit-kdc-certs.sh, a CA, alice's certificate and four KDC identities,
+#          the CA and alice's piped to client2; kinit checks the KDC's certificate as MIT's verify_kdc_san and
+#          verify_kdc_eku do: an id-pkinit-san naming another realm's krbtgt is 76 (KDC name mismatch), with or
+#          without pkinit_kdc_hostname; a dNSName that pkinit_kdc_hostname names gets a TGT, another name 76; a
+#          serverAuth EKU is 77 (Inconsistent key purpose) unless pkinit_eku_checking is kpServerAuth or none; a
+#          certificate without the digitalSignature KU is 77; the trace's SAN and EKU lines and module 17's code;
 # Graded on both legs, MIT's first. In the rust leg the client cells run twice: MIT's kinit, then ours, kdc's
 # build of krb5-kinit piped to client2's ~/pk/kinit (no host file) and run by path, so MIT's stays the one on PATH.
 # vms: kdc client2
@@ -85,12 +93,13 @@ D=${PK_KDC_DIR:-/var/kerberos/krb5kdc/pkinit}
 C=${PK_CLIENT_DIR:-/home/lab/pkinit}
 BIG=/var/kerberos/krb5kdc/pkbig
 EC=/var/kerberos/krb5kdc/pkec
+KDCC=/var/kerberos/krb5kdc/pkkdc
 legset ALICE
 ANON=0
 PREAUTH=0
 DBMATCH=0
 cleanup() {
-    timeout -k 5 60 "$LAB" ssh kdc -- "[ -e $KC.pk ] && sudo mv $KC.pk $KC && sudo systemctl restart krb5kdc; [ $ANON = 1 ] && sudo kadmin.local -q 'delprinc -force WELLKNOWN/ANONYMOUS'; [ $PREAUTH = 1 ] && sudo kadmin.local -q 'modprinc -requires_preauth alice'; [ $DBMATCH = 1 ] && sudo kadmin.local -q 'delstr alice pkinit_cert_match'; sudo rm -rf $BIG $EC; true" < /dev/null > /dev/null 2>&1
+    timeout -k 5 60 "$LAB" ssh kdc -- "[ -e $KC.pk ] && sudo mv $KC.pk $KC && sudo systemctl restart krb5kdc; [ $ANON = 1 ] && sudo kadmin.local -q 'delprinc -force WELLKNOWN/ANONYMOUS'; [ $PREAUTH = 1 ] && sudo kadmin.local -q 'modprinc -requires_preauth alice'; [ $DBMATCH = 1 ] && sudo kadmin.local -q 'delstr alice pkinit_cert_match'; sudo rm -rf $BIG $EC $KDCC; true" < /dev/null > /dev/null 2>&1
     timeout -k 5 60 "$LAB" ssh client2 -- 'rm -rf ~/pk; true' < /dev/null > /dev/null 2>&1
 }
 trap cleanup EXIT
@@ -103,11 +112,11 @@ pkkdc() {
     kdcmark "$1"
     check "$1" '^krb5kdc: active, 88 listening$' run kdc "sudo cp -p $KC.pk $KC && printf '%b' '$2' | sudo tee -a $KC > /dev/null && sudo systemctl restart krb5kdc && for i in \$(seq 1 40); do ss -Hlun 'sport = :88' | grep -q . && break; sleep 0.25; done; sudo tail -n 8 $KC; echo \"krb5kdc: \$(systemctl is-active krb5kdc), 88 \$(ss -Hlun 'sport = :88' | grep -q . && echo listening)\""
 }
-# certkinit <check> <ERE> [<identity>]: alice's kinit from client2 with a certificate of hers (alice, or the name
+# certkinit <check> <kinit> <ERE> [<identity>]: alice's kinit from client2 with a certificate of hers (alice, or the name
 # given) and client2's anchors, stdin empty (no password to fall back on), then the ticket cache listed.
 certkinit() {
-    local id=${3:-alice}
-    check "$1" "$2" run client2 "mkdir -p ~/pk && kdestroy -c FILE:\$HOME/pk/a.cc 2> /dev/null; kinit -X X509_anchors=FILE:$C/cacert.pem -X X509_user_identity=FILE:$C/$id.pem,$C/$id.key -c FILE:\$HOME/pk/a.cc alice < /dev/null 2>&1; echo \"kinit rc=\$?\"; klist -c FILE:\$HOME/pk/a.cc 2>&1 | grep -E '^Default principal|krbtgt/'"
+    local id=${4:-alice}
+    check "$1" "$3" run client2 "mkdir -p ~/pk && kdestroy -c FILE:\$HOME/pk/a.cc 2> /dev/null; $2 -X X509_anchors=FILE:$C/cacert.pem -X X509_user_identity=FILE:$C/$id.pem,$C/$id.key -c FILE:\$HOME/pk/a.cc alice < /dev/null 2>&1; echo \"kinit rc=\$?\"; klist -c FILE:\$HOME/pk/a.cc 2>&1 | grep -E '^Default principal|krbtgt/'"
 }
 # pwkinit <check> <kinit> <identity> <ERE for the rc line> <code>: <identity>'s certificate kinit, trusting client2's two
 # CAs, alice's password on stdin; the KDC's refusal in the trace is <code> (the com_err code, from -1765328384).
@@ -154,35 +163,52 @@ section "PK.7a no pkinit_identity: the KDC starts without PKINIT and says why (M
 pkkdc PK.7a.kdc ''
 kdcsince PK.7a.kdc 'preauth pkinit'
 checklast PK.7a.line "preauth pkinit failed to initialize: PKINIT initialization failed: No pkinit_identity supplied for realm $R\$"
-certkinit PK.7a.kinit '^kinit rc=1$'
-observelast obs.PK.7a.kinit 'kinit: .*'
+for k in mit ${OURS:+ours}; do
+    kinit=kinit
+    [ "$k" = ours ] && kinit=$OURS
+    certkinit "PK.7a.$k" "$kinit" '^kinit rc=1$'
+    observelast "obs.PK.7a.$k" 'kinit: .*'
+done
 
 section "PK.1 [kdcdefaults] pkinit_identity and pkinit_anchors: alice's certificate gets a TGT (MIT and ours)"
 pkkdc PK.1.kdc "\n[kdcdefaults]\n    pkinit_identity = FILE:$D/kdc.pem,$D/kdc.key\n    pkinit_anchors = FILE:$D/cacert.pem\n"
 kdcsince PK.1.kdc 'preauth pkinit'
 countlast PK.1.no-line 'preauth pkinit failed' 0
-certkinit PK.1.kinit '^kinit rc=0$'
-checklast PK.1.tgt "^Default principal: alice@$R\$"
-kdcsince PK.1.kdc 'PKINIT: '
-checklast PK.1.fresh "PKINIT: freshness token received from alice@$R\$"
-kdcmark PK.1.as
-certkinit PK.1.again '^kinit rc=0$'
-kdcsince PK.1.as 'AS_REQ'
-observelast obs.PK.1.as_req 'AS_REQ .*'
+for k in mit ${OURS:+ours}; do
+    kinit=kinit
+    [ "$k" = ours ] && kinit=$OURS
+    kdcmark "PK.1.$k.as0"
+    certkinit "PK.1.$k" "$kinit" '^kinit rc=0$'
+    checklast "PK.1.$k.tgt" "^Default principal: alice@$R\$"
+    kdcsince "PK.1.$k.as0" 'PKINIT: '
+    checklast "PK.1.$k.fresh" "PKINIT: freshness token received from alice@$R\$"
+    kdcmark "PK.1.$k.as"
+    certkinit "PK.1.$k.again" "$kinit" '^kinit rc=0$'
+    kdcsince "PK.1.$k.as" 'AS_REQ'
+    observelast "obs.PK.1.$k.as_req" 'AS_REQ .*'
+done
 
 section "PK.san alice's certificate with another principal's SAN: refused, Client name mismatch (MIT and ours)"
-kdcmark PK.san.as
-certkinit PK.san.kinit '^kinit rc=1$' alice-wrongsan
-observelast obs.PK.san.kinit 'kinit: .*'
-kdcsince PK.san.as 'verify failure'
-checklast PK.san.line 'preauth \(pkinit\) verify failure: Client name mismatch$'
+for k in mit ${OURS:+ours}; do
+    kinit=kinit
+    [ "$k" = ours ] && kinit=$OURS
+    kdcmark "PK.san.$k.as"
+    certkinit "PK.san.$k" "$kinit" '^kinit rc=1$' alice-wrongsan
+    observelast "obs.PK.san.$k" 'kinit: .*'
+    kdcsince "PK.san.$k.as" 'verify failure'
+    checklast "PK.san.$k.line" 'preauth \(pkinit\) verify failure: Client name mismatch$'
+done
 
 section "PK.ca alice's certificate from a CA the KDC does not trust: 70 (MIT and ours)"
-kdcmark PK.ca.as
-check PK.ca.kinit '^kinit rc=1$' run client2 "mkdir -p ~/pk && kinit -X X509_anchors=FILE:$C/cacert.pem -X X509_anchors=FILE:$C/unknown-cacert.pem -X X509_user_identity=FILE:$C/alice-unknownca.pem,$C/alice-unknownca.key -c FILE:\$HOME/pk/u.cc alice < /dev/null 2>&1; echo \"kinit rc=\$?\""
-observelast obs.PK.ca.kinit 'kinit: .*'
-kdcsince PK.ca.as 'verify failure'
-checklast PK.ca.line 'preauth \(pkinit\) verify failure: Failed to verify received certificate \(depth 0\): unable to get local issuer certificate$'
+for k in mit ${OURS:+ours}; do
+    kinit=kinit
+    [ "$k" = ours ] && kinit=$OURS
+    kdcmark "PK.ca.$k.as"
+    check "PK.ca.$k" '^kinit rc=1$' run client2 "mkdir -p ~/pk && $kinit -X X509_anchors=FILE:$C/cacert.pem -X X509_anchors=FILE:$C/unknown-cacert.pem -X X509_user_identity=FILE:$C/alice-unknownca.pem,$C/alice-unknownca.key -c FILE:\$HOME/pk/u.cc alice < /dev/null 2>&1; echo \"kinit rc=\$?\""
+    observelast "obs.PK.ca.$k" 'kinit: .*'
+    kdcsince "PK.ca.$k.as" 'verify failure'
+    checklast "PK.ca.$k.line" 'preauth \(pkinit\) verify failure: Failed to verify received certificate \(depth 0\): unable to get local issuer certificate$'
+done
 
 section "PK.refuse a refused certificate with alice's password: 70 goes on to the password, 75 stops (MIT and ours)"
 for k in mit ${OURS:+ours}; do
@@ -207,13 +233,18 @@ pkkdc PK.rsacert.back "\n[kdcdefaults]\n    pkinit_identity = FILE:$D/kdc.pem,$D
 section "PK.dbmatch alice's pkinit_cert_match rule decides her certificate kinit (MIT and ours)"
 # dbmatch <check> <rule> <ERE for the kinit line> [<ERE for the KDC's verify-failure line>]
 dbmatch() {
+    local k kinit
     check "$1.set" '^Attribute set' run kdc "sudo kadmin.local -q 'setstr alice pkinit_cert_match \"$2\"' 2>&1 | sed 's/^Attribute set for principal.*/Attribute set/'"
-    kdcmark "$1.as"
-    certkinit "$1.kinit" "$3"
-    if [ -n "${4:-}" ]; then
-        kdcsince "$1.as" 'verify failure'
-        checklast "$1.line" "$4"
-    fi
+    for k in mit ${OURS:+ours}; do
+        kinit=kinit
+        [ "$k" = ours ] && kinit=$OURS
+        kdcmark "$1.$k.as"
+        certkinit "$1.$k" "$kinit" "$3"
+        if [ -n "${4:-}" ]; then
+            kdcsince "$1.$k.as" 'verify failure'
+            checklast "$1.$k.line" "$4"
+        fi
+    done
 }
 DBMATCH=1
 dbmatch PK.dbmatch.ku '<KU>digitalSignature' '^kinit rc=0$'
@@ -230,15 +261,19 @@ run kdc "sudo kadmin.local -q 'delstr alice pkinit_cert_match' 2>&1"
 DBMATCH=0
 
 section "PK.6 kinit -n with client2's anchors: an anonymous ticket (MIT and ours)"
-check PK.6.kinit '^Default principal: WELLKNOWN/ANONYMOUS@WELLKNOWN:ANONYMOUS$' run client2 "mkdir -p ~/pk && kinit -n -X X509_anchors=FILE:$C/cacert.pem -c FILE:\$HOME/pk/n.cc < /dev/null 2>&1; echo \"kinit rc=\$?\"; klist -c FILE:\$HOME/pk/n.cc 2>&1 | grep -E '^Default principal|krbtgt/'"
-checklast PK.6.rc '^kinit rc=0$'
-
-section "PK.fast PKINIT inside FAST: an anonymous armor ticket, then alice's certificate under -T (MIT and ours)"
-check PK.fast.armor '^armor rc=0$' run client2 "mkdir -p ~/pk && kinit -n -X X509_anchors=FILE:$C/cacert.pem -c FILE:\$HOME/pk/armor.cc < /dev/null > /dev/null 2>&1; echo \"armor rc=\$?\""
 for k in mit ${OURS:+ours}; do
     kinit=kinit
     [ "$k" = ours ] && kinit=$OURS
-    check "PK.fast.$k" '^kinit rc=0$' run client2 "kdestroy -c FILE:\$HOME/pk/fast.cc 2> /dev/null; rm -f \$HOME/pk/fast.trace; KRB5_TRACE=\$HOME/pk/fast.trace $kinit -T FILE:\$HOME/pk/armor.cc -X X509_anchors=FILE:$C/cacert.pem -X X509_user_identity=FILE:$C/alice.pem,$C/alice.key -c FILE:\$HOME/pk/fast.cc alice < /dev/null > /dev/null 2>&1; echo \"kinit rc=\$?\"; klist -c FILE:\$HOME/pk/fast.cc 2>&1 | grep -E '^Default principal'; grep -oE 'Preauth module pkinit \\(16\\) \\(real\\) returned: 0/Success|Encoding request body and padata into FAST request|FAST reply key' \$HOME/pk/fast.trace | sort -u"
+    check "PK.6.$k" '^Default principal: WELLKNOWN/ANONYMOUS@WELLKNOWN:ANONYMOUS$' run client2 "mkdir -p ~/pk && kdestroy -c FILE:\$HOME/pk/n.cc 2> /dev/null; $kinit -n -X X509_anchors=FILE:$C/cacert.pem -c FILE:\$HOME/pk/n.cc < /dev/null 2>&1; echo \"kinit rc=\$?\"; klist -c FILE:\$HOME/pk/n.cc 2>&1 | grep -E '^Default principal|krbtgt/'"
+    checklast "PK.6.$k.rc" '^kinit rc=0$'
+done
+
+section "PK.fast PKINIT inside FAST: an anonymous armor ticket, then alice's certificate under -T (MIT and ours)"
+for k in mit ${OURS:+ours}; do
+    kinit=kinit
+    [ "$k" = ours ] && kinit=$OURS
+    check "PK.fast.armor.$k" '^armor rc=0$' run client2 "mkdir -p ~/pk && $kinit -n -X X509_anchors=FILE:$C/cacert.pem -c FILE:\$HOME/pk/armor.$k.cc < /dev/null > /dev/null 2>&1; echo \"armor rc=\$?\""
+    check "PK.fast.$k" '^kinit rc=0$' run client2 "kdestroy -c FILE:\$HOME/pk/fast.cc 2> /dev/null; rm -f \$HOME/pk/fast.trace; KRB5_TRACE=\$HOME/pk/fast.trace $kinit -T FILE:\$HOME/pk/armor.$k.cc -X X509_anchors=FILE:$C/cacert.pem -X X509_user_identity=FILE:$C/alice.pem,$C/alice.key -c FILE:\$HOME/pk/fast.cc alice < /dev/null > /dev/null 2>&1; echo \"kinit rc=\$?\"; klist -c FILE:\$HOME/pk/fast.cc 2>&1 | grep -E '^Default principal'; grep -oE 'Preauth module pkinit \\(16\\) \\(real\\) returned: 0/Success|Encoding request body and padata into FAST request|FAST reply key' \$HOME/pk/fast.trace | sort -u"
     checklast "PK.fast.$k.tgt" "^Default principal: alice@$R\$"
     checklast "PK.fast.$k.pkinit" '^Preauth module pkinit \(16\) \(real\) returned: 0/Success$'
     checklast "PK.fast.$k.armored" '^Encoding request body and padata into FAST request$'
@@ -255,6 +290,19 @@ for k in mit ${OURSPW:+ours}; do
     checklast "PK.kpasswd.$k.pkinit" '^Preauth module pkinit \(16\) \(real\) returned: 0/Success$'
     checklast "PK.kpasswd.$k.ticket" '^Decrypted AS reply$'
     checklast "PK.kpasswd.$k.newpw" '^Cannot read password while reading password$'
+done
+check PK.kpasswd.tgt "^Default principal: alice@$R\$" run client2 "kdestroy -c FILE:\$HOME/pk/kpf.cc 2> /dev/null; kinit -X X509_anchors=FILE:$C/cacert.pem -X X509_user_identity=FILE:$C/alice.pem,$C/alice.key -c FILE:\$HOME/pk/kpf.cc alice < /dev/null > /dev/null 2>&1; klist -C -c FILE:\$HOME/pk/kpf.cc 2>&1 | grep -E '^Default principal|fast_avail'"
+checklast PK.kpasswd.tgt.fast_avail "^config: fast_avail\\(krbtgt/$R@$R\\) = yes\$"
+for k in mit ${OURSPW:+ours}; do
+    kpw=kpasswd
+    [ "$k" = ours ] && kpw=$OURSPW
+    check "PK.kpasswd.fast.$k" '^kpasswd rc=1$' run client2 "rm -f \$HOME/pk/kpf.trace; KRB5CCNAME=FILE:\$HOME/pk/kpf.cc KRB5_CONFIG=\$HOME/pk/kp.conf:/etc/krb5.conf KRB5_TRACE=\$HOME/pk/kpf.trace $kpw alice < /dev/null > \$HOME/pk/kpf.out 2>&1; echo \"kpasswd rc=\$?\"; grep -oE 'Cannot read password while reading password' \$HOME/pk/kpf.out; grep -oE 'FAST armor ccache: .*|Using FAST due to armor ccache negotiation result|Encoding request body and padata into FAST request|Preauth module pkinit \\(16\\) \\(real\\) returned: [^ ]+|Decrypted AS reply' \$HOME/pk/kpf.trace | sort -u"
+    checklast "PK.kpasswd.fast.$k.ccache" '^FAST armor ccache: FILE:/.*/pk/kpf\.cc$'
+    checklast "PK.kpasswd.fast.$k.negotiated" '^Using FAST due to armor ccache negotiation result$'
+    checklast "PK.kpasswd.fast.$k.armored" '^Encoding request body and padata into FAST request$'
+    checklast "PK.kpasswd.fast.$k.pkinit" '^Preauth module pkinit \(16\) \(real\) returned: 0/Success$'
+    checklast "PK.kpasswd.fast.$k.ticket" '^Decrypted AS reply$'
+    checklast "PK.kpasswd.fast.$k.newpw" '^Cannot read password while reading password$'
 done
 
 section "PK.anchors every pkinit_anchors value, and an anchors file with no certificate (MIT and ours)"
@@ -280,19 +328,31 @@ section "PK.7c the realm's pkinit_identity wins over [kdcdefaults]' (MIT and our
 pkkdc PK.7c.kdc "\n[kdcdefaults]\n    pkinit_identity = FILE:/nonexistent/kdc.pem\n    pkinit_anchors = FILE:$D/cacert.pem\n\n[realms]\n    $REALM = {\n        pkinit_identity = FILE:$D/kdc.pem,$D/kdc.key\n    }\n"
 kdcsince PK.7c.kdc 'preauth pkinit'
 countlast PK.7c.no-line 'preauth pkinit failed' 0
-certkinit PK.7c.kinit '^kinit rc=0$'
+for k in mit ${OURS:+ours}; do
+    kinit=kinit
+    [ "$k" = ours ] && kinit=$OURS
+    certkinit "PK.7c.$k" "$kinit" '^kinit rc=0$'
+done
 
 run client2 "test -r $C/alice-noeku.pem && test -r $C/alice-noeku.key && echo 'alice-noeku present'; true"
 if grep -q 'alice-noeku present' "$LAST_OUT"; then
     section "PK.eku alice's certificate without the client EKU: 77, and a TGT with pkinit_eku_checking = none (MIT and ours)"
     pkkdc PK.eku.kdc "\n[kdcdefaults]\n    pkinit_identity = FILE:$D/kdc.pem,$D/kdc.key\n    pkinit_anchors = FILE:$D/cacert.pem\n"
-    kdcmark PK.eku.as
-    certkinit PK.eku.kinit '^kinit rc=1$' alice-noeku
-    observelast obs.PK.eku.kinit 'kinit: .*'
-    kdcsince PK.eku.as 'verify failure'
-    checklast PK.eku.line 'preauth \(pkinit\) verify failure: Inconsistent key purpose$'
+    for k in mit ${OURS:+ours}; do
+        kinit=kinit
+        [ "$k" = ours ] && kinit=$OURS
+        kdcmark "PK.eku.$k.as"
+        certkinit "PK.eku.$k" "$kinit" '^kinit rc=1$' alice-noeku
+        observelast "obs.PK.eku.$k" 'kinit: .*'
+        kdcsince "PK.eku.$k.as" 'verify failure'
+        checklast "PK.eku.$k.line" 'preauth \(pkinit\) verify failure: Inconsistent key purpose$'
+    done
     pkkdc PK.eku.none.kdc "\n[kdcdefaults]\n    pkinit_identity = FILE:$D/kdc.pem,$D/kdc.key\n    pkinit_anchors = FILE:$D/cacert.pem\n    pkinit_eku_checking = none\n"
-    certkinit PK.eku.none '^kinit rc=0$' alice-noeku
+    for k in mit ${OURS:+ours}; do
+        kinit=kinit
+        [ "$k" = ours ] && kinit=$OURS
+        certkinit "PK.eku.none.$k" "$kinit" '^kinit rc=0$' alice-noeku
+    done
 
     section "PK.dir a DIR: identity holding alice's certificate and her no-EKU one: <EKU>pkinit picks hers (MIT's kinit, then ours)"
     pkkdc PK.dir.kdc "\n[kdcdefaults]\n    pkinit_identity = FILE:$D/kdc.pem,$D/kdc.key\n    pkinit_anchors = FILE:$D/cacert.pem\n"
@@ -430,6 +490,65 @@ for floor in 1024 2048; do
             checklast "$n.chosen" '^PKINIT accepting KDC key exchange group preference P-256$'
             checklast "$n.second" '^PKINIT using P-256 key exchange group$'
         fi
+    done
+done
+
+section "PK.kdccert the KDC's certificate as kinit checks it: its id-pkinit-san, else a dNSName pkinit_kdc_hostname names, then its EKU and KU (MIT and ours)"
+KH=kdc.${REALM,,}
+KHR=${KH//./\\.}
+check PK.kdccert.make "^kdc certs in $KDCC\$" runin kdc "scripts/lib/pkinit-kdc-certs.sh" "sudo sh -s -- $KDCC $REALM alice $KH" < "$HERE/../../../scripts/lib/pkinit-kdc-certs.sh"
+check PK.kdccert.copy '^client2: 3 files$' host "$LABQ ssh kdc -- 'sudo tar -C $KDCC -cf - ca.pem client.pem client.key' | $LABQ ssh client2 -- 'install -d -m 0700 ~/pk/kc && tar -C ~/pk/kc -xf - && echo \"client2: \$(ls ~/pk/kc | wc -l) files\"'"
+check PK.kdccert.conf "^    pkinit_kdc_hostname = $KHR\$" run client2 "cd ~/pk/kc && printf '[libdefaults]\n' > none.conf && printf '[libdefaults]\n    pkinit_kdc_hostname = %s\n' $KH > host.conf && printf '[libdefaults]\n    pkinit_kdc_hostname = other.%s\n' $KH > other.conf && printf '[libdefaults]\n    pkinit_kdc_hostname = %s\n    pkinit_eku_checking = kpServerAuth\n' $KH > sa.conf && printf '[libdefaults]\n    pkinit_kdc_hostname = %s\n    pkinit_eku_checking = none\n' $KH > noeku.conf && cat host.conf"
+# kckinit <check> <kinit> <profile> <ERE for the rc line>: alice's kinit with the cell's certificate and CA, ~/pk/kc/<profile>.conf
+# ahead of /etc/krb5.conf, stdin empty; then the trace's KDC SAN and EKU lines and module 17's code.
+kckinit() {
+    check "$1" "$4" run client2 "kdestroy -c FILE:\$HOME/pk/kc.cc 2> /dev/null; rm -f \$HOME/pk/kc.trace; KRB5_CONFIG=\$HOME/pk/kc/$3.conf:/etc/krb5.conf KRB5_TRACE=\$HOME/pk/kc.trace $2 -X X509_anchors=FILE:\$HOME/pk/kc/ca.pem -X X509_user_identity=FILE:\$HOME/pk/kc/client.pem,\$HOME/pk/kc/client.key -c FILE:\$HOME/pk/kc.cc alice < /dev/null > \$HOME/pk/kc.out 2>&1; echo \"kinit rc=\$?\"; grep -E 'kinit: ' \$HOME/pk/kc.out; klist -c FILE:\$HOME/pk/kc.cc 2>&1 | grep -E '^Default principal'; grep -oE 'PKINIT client (config accepts|found|matched|skipping) .*|PKINIT found acceptable EKU .*|Preauth module pkinit \\(17\\) \\(real\\) returned: -?[0-9]+' \$HOME/pk/kc.trace"
+}
+for v in othersan dns dns_serverauth dns_noku; do
+    pkkdc "PK.kdccert.$v.kdc" "\n[kdcdefaults]\n    pkinit_identity = FILE:$KDCC/$v.pem,$KDCC/$v.key\n    pkinit_anchors = FILE:$KDCC/ca.pem\n"
+    for k in mit ${OURS:+ours}; do
+        kinit=kinit
+        [ "$k" = ours ] && kinit=$OURS
+        case $v in
+            othersan)
+                for prof in none host; do
+                    kckinit "PK.kdccert.othersan.$prof.$k" "$kinit" $prof '^kinit rc=1$'
+                    checklast "PK.kdccert.othersan.$prof.$k.san" '^PKINIT client found id-pkinit-san in KDC cert: krbtgt/OTHER\.TEST@OTHER\.TEST$'
+                    checklast "PK.kdccert.othersan.$prof.$k.code" '^Preauth module pkinit \(17\) \(real\) returned: -1765328308$'
+                    countlast "PK.kdccert.othersan.$prof.$k.nomatch" 'no acceptable SAN' 0
+                    observelast "obs.PK.kdccert.othersan.$prof.$k" 'kinit: .*'
+                done
+                checklast "PK.kdccert.othersan.host.$k.config" "^PKINIT client config accepts KDC dNSName SAN $KHR\$"
+                ;;
+            dns)
+                kckinit "PK.kdccert.dns.host.$k" "$kinit" host '^kinit rc=0$'
+                checklast "PK.kdccert.dns.host.$k.tgt" "^Default principal: alice@$R\$"
+                checklast "PK.kdccert.dns.host.$k.match" "^PKINIT client matched KDC hostname $KHR against dNSName SAN; EKU check still required\$"
+                checklast "PK.kdccert.dns.host.$k.eku" '^PKINIT client found acceptable EKU in KDC cert$'
+                kckinit "PK.kdccert.dns.other.$k" "$kinit" other '^kinit rc=1$'
+                checklast "PK.kdccert.dns.other.$k.nomatch" '^PKINIT client found no acceptable SAN in KDC cert$'
+                checklast "PK.kdccert.dns.other.$k.code" '^Preauth module pkinit \(17\) \(real\) returned: -1765328308$'
+                observelast "obs.PK.kdccert.dns.other.$k" 'kinit: .*'
+                ;;
+            dns_serverauth)
+                kckinit "PK.kdccert.serverauth.$k" "$kinit" host '^kinit rc=1$'
+                checklast "PK.kdccert.serverauth.$k.reject" '^PKINIT client found no acceptable EKU in KDC cert$'
+                checklast "PK.kdccert.serverauth.$k.code" '^Preauth module pkinit \(17\) \(real\) returned: -1765328307$'
+                observelast "obs.PK.kdccert.serverauth.$k" 'kinit: .*'
+                kckinit "PK.kdccert.serverauth.sa.$k" "$kinit" sa '^kinit rc=0$'
+                checklast "PK.kdccert.serverauth.sa.$k.tgt" "^Default principal: alice@$R\$"
+                checklast "PK.kdccert.serverauth.sa.$k.eku" '^PKINIT found acceptable EKU and digitalSignature KU$'
+                kckinit "PK.kdccert.serverauth.none.$k" "$kinit" noeku '^kinit rc=0$'
+                checklast "PK.kdccert.serverauth.none.$k.tgt" "^Default principal: alice@$R\$"
+                checklast "PK.kdccert.serverauth.none.$k.skip" '^PKINIT client skipping EKU check due to configuration$'
+                ;;
+            dns_noku)
+                kckinit "PK.kdccert.noku.$k" "$kinit" host '^kinit rc=1$'
+                checklast "PK.kdccert.noku.$k.ku" '^PKINIT found acceptable EKU but no digitalSignature KU$'
+                checklast "PK.kdccert.noku.$k.code" '^Preauth module pkinit \(17\) \(real\) returned: -1765328307$'
+                observelast "obs.PK.kdccert.noku.$k" 'kinit: .*'
+                ;;
+        esac
     done
 done
 

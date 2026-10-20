@@ -464,9 +464,6 @@ fn pkinit_cms_wrap_unwrap() {
         pkinit::cms_verify(&ksigned, &ca.ca_cert).expect("kdc leaf verify"),
         inner
     );
-    pkinit::require_kdc_pkinit_cert(&kcert, "KERBER.TEST").expect("KPKdc SAN");
-    assert!(pkinit::require_kdc_pkinit_cert(&kcert, "OTHER.TEST").is_err());
-    assert!(pkinit::require_kdc_pkinit_cert(&cert, "KERBER.TEST").is_err());
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
     pkinit::require_client_pkinit_san(&cert, &user, "KERBER.TEST").expect("client SAN");
     let other = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["other"]);
@@ -569,12 +566,6 @@ fn pkinit_cms_path_validation() {
         pkinit::cms_verify(&cms, &absent.ca_cert).expect("RFC 5280 absent KU"),
         inner
     );
-
-    let kcert = {
-        let (c, _, _) = ca.kdc_identity_for("KERBER.TEST").expect("kdc");
-        c
-    };
-    assert!(pkinit::require_kdc_pkinit_cert(&kcert, "kerber.test").is_err());
 }
 
 #[test]

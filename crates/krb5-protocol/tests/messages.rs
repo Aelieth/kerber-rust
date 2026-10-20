@@ -540,6 +540,8 @@ fn want_spake_rejects_fast_and_pkinit() {
         anchors: vec![vec![3]],
         pool: Vec::new(),
         dh_min_bits: None,
+        kdc_hostnames: Vec::new(),
+        eku_checking: None,
     };
     let err = krb5_protocol::as_exchange(&krb5_protocol::AsRequest {
         cname: cname.clone(),
@@ -749,6 +751,8 @@ fn pkinit_as_req_carries_pa_pk_as_req() {
         anchors: vec![ca.ca_cert.clone()],
         pool: Vec::new(),
         dh_min_bits: Some("P-256".into()),
+        kdc_hostnames: Vec::new(),
+        eku_checking: None,
     };
 
     let hint = encode(&vec![

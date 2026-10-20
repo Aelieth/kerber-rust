@@ -21,6 +21,8 @@ fn a_dropped_pkinit_client_wipes_its_scalar_in_place() {
         anchors: Vec::new(),
         pool: Vec::new(),
         dh_min_bits: None,
+        kdc_hostnames: Vec::new(),
+        eku_checking: None,
     });
     assert_eq!(DROPPED.with(|d| d.borrow().clone()), [[0; 32]]);
 }

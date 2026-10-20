@@ -26,8 +26,8 @@ use krb5_client::creds::{
 };
 use krb5_client::errmsg::{Code, Krb5Error};
 use krb5_client::{
-    FileCcache, KeyExpNotice, KeytabName, KinitParams, NewPasswordPrompter, PromptReply,
-    kinit_prompted, kinit_with, kt_client_default_name, kt_default_name, kt_resolve,
+    ArmorCcache, FileCcache, KeyExpNotice, KeytabName, KinitParams, NewPasswordPrompter,
+    PromptReply, kinit_prompted, kinit_with, kt_client_default_name, kt_default_name, kt_resolve,
     mit_error_code, store_ccache_keep_default,
 };
 use krb5_config::{
@@ -535,7 +535,10 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
     };
     let service = gate_service(opts);
     let armor_spec = match opts.armor_ccache.as_deref() {
-        Some(name) => Some(armor_ccache_spec(name).map_err(Failure::Error)?),
+        Some(name) => Some(ArmorCcache {
+            name: name.to_owned(),
+            spec: armor_ccache_spec(name).map_err(Failure::Error)?,
+        }),
         None => None,
     };
     let params = KinitParams {

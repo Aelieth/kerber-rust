@@ -67,20 +67,15 @@ pub fn keytab_lookup_failed(e: &std::io::Error, path: &std::path::Path) {
 /// cache as a credentials request.
 pub fn fast_armor(
     ctx: &ClientContext,
-    spec: &CcSpec,
+    cc: &crate::ArmorCcache,
     realm: &str,
-    armor: &krb5_protocol::FastArmor,
+    armor: Option<&krb5_protocol::FastArmor>,
 ) {
     if !trace::enabled() {
         return;
     }
-    // A FILE armor name stays the residual path already traced for `-T FILE:`.
-    let traced = match spec {
-        CcSpec::File(p) => p.display().to_string(),
-        other => ccname(ctx, other),
-    };
-    trace::fast_armor_ccache(&traced);
-    let Ok(cache) = OpenCache::open(ctx, spec.clone()) else {
+    trace::fast_armor_ccache(&cc.name);
+    let Ok(cache) = OpenCache::open(ctx, cc.spec.clone()) else {
         return;
     };
     let name = ccname(cache.ctx, &cache.spec);
@@ -105,6 +100,9 @@ pub fn fast_armor(
     if avail.is_some() {
         trace::fast_ccache_config();
     }
+    let Some(armor) = armor else {
+        return;
+    };
     let me = (armor.crealm.clone(), armor.cname.clone());
     let server = (realm_ks, tgs);
     tkt_creds_begin(&cache, &me, &server);

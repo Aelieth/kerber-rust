@@ -122,6 +122,9 @@ any other `###` heading.
 - **pkinit.** The KDC and kinit sign with P-224, P-384, P-521 and secp256k1 keys, SHA-256 on each as MIT's, and verify ECDSA on those curves in chains and signatures.
 - **pkinit.** kinit and the KDC take MIT's key-exchange groups, MODP 1024 to 4096 and P-256 to P-521, by `pkinit_dh_min_bits`; kinit retries a 65 in the KDC's group, as MIT's.
 - **kdc.** A PKINIT DH value the key derivation refuses is 60 under `KDC_RETURN_PADATA`, as MIT's; it was 65 at the check.
+- **client.** kinit checks the KDC's PKINIT certificate as MIT's: the realm's krbtgt SAN, else a dNSName `pkinit_kdc_hostname` names, then EKU and key usage; else 76 or 77.
+- **client.** Under FAST, a PKINIT reply that does not verify falls to the password, and a PKINIT request upgrades to FAST on a PA-FX-FAST error, traced, as MIT's.
+- **admin.** kpasswd arms its request with the default ccache when that holds a principal, tracing its full name, as MIT's; kinit traces `-T` as given.
 
 ## [1.1.0] - 2026-10-14
 

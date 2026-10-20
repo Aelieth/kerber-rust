@@ -10,7 +10,7 @@ use krb5_crypto::{
     derive_prfplus, encrypt, krb_fx_cf2, octetstring2key, pkinit_kdf_agile, verify_checksum_type,
 };
 use krb5_log::klog::{self, Severity};
-use krb5_types::pkinit::{KxGroup, KxKey, group_desc};
+use krb5_types::pkinit::{EkuCheck, KxGroup, KxKey, group_desc};
 use krb5_types::{
     AsReq, EncryptedData, EncryptionKey, KdcReqBody, KerberosTime, MethodData, Microseconds,
     PaData, PrincipalName, TypedData, TypedDataList, err, flag_bit, ku, pa,
@@ -795,8 +795,16 @@ fn authorize_cert(
         }
         accepted = true;
     }
-    if kdc.require_eku && !krb5_types::pkinit::client_eku_ok(cert, kdc.accept_secondary_eku) {
-        return Err(denied(err::INCONSISTENT_KEY_PURPOSE, "pkinit client eku"));
+    if kdc.require_eku {
+        match krb5_types::pkinit::cert_eku(cert, false, kdc.accept_secondary_eku) {
+            EkuCheck::Accepted => krb5_protocol::trace::pkinit_eku(),
+            found => {
+                if found == EkuCheck::NoDigitalSignature {
+                    krb5_protocol::trace::pkinit_eku_no_ku();
+                }
+                return Err(denied(err::INCONSISTENT_KEY_PURPOSE, "pkinit client eku"));
+            }
+        }
     }
     if let Some((_, rule)) = client
         .string_attrs

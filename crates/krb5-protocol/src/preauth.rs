@@ -685,6 +685,9 @@ pub(crate) fn pa_pk_as_req_unsigned_at(
 pub struct KdcTrust<'a> {
     pub anchors: &'a [Vec<u8>],
     pub pool: &'a [Vec<u8>],
+    pub hostnames: &'a [String],
+    pub require_eku: bool,
+    pub accept_secondary_eku: bool,
 }
 
 impl<'a> KdcTrust<'a> {
@@ -693,6 +696,9 @@ impl<'a> KdcTrust<'a> {
         Self {
             anchors: std::slice::from_ref(cert),
             pool: &[],
+            hostnames: &[],
+            require_eku: true,
+            accept_secondary_eku: false,
         }
     }
 }
@@ -715,9 +721,76 @@ fn verify_kdc_pkinit_cms(cms: &[u8], trust: KdcTrust<'_>, realm: &str) -> Result
         }
     })?;
     trace::pkinit_client_rep_dh();
-    krb5_types::pkinit::require_kdc_pkinit_cert(&pack.signer.unwrap_or_default(), realm)
-        .map_err(|e| Error::ReplyMismatch(format!("PKINIT KDC CMS: {e}")))?;
+    verify_kdc_cert(&pack.signer.unwrap_or_default(), trust, realm)?;
     Ok(pack.e_content)
+}
+
+// MIT verify_kdc_san; see docs/parity/b1-client-preauth.md
+fn verify_kdc_cert(cert: &[u8], trust: KdcTrust<'_>, realm: &str) -> Result<(), Error> {
+    let refuse = |code: i32| {
+        let code = trace::kdc_code(code);
+        Error::PkinitReply {
+            code,
+            text: trace::error_message(code),
+        }
+    };
+    for host in trust.hostnames {
+        trace::pkinit_client_san_config_dnsname(host);
+    }
+    let Some(sans) = krb5_types::pkinit::cert_sans(cert, false) else {
+        trace::pkinit_client_san_err();
+        return Err(refuse(err::KDC_NAME_MISMATCH));
+    };
+    let tgs = PrincipalName::krbtgt(realm);
+    let mut named = false;
+    for (san_realm, name_type, parts) in &sans.principals {
+        let san = PrincipalName::new(*name_type, parts.iter().map(String::as_str));
+        trace::pkinit_client_san_kdccert_princ(trace::Princ::new(&san, san_realm.as_bytes()));
+        named |= san_realm == realm && san.name_string == tgs.name_string;
+    }
+    let hosts: &[String] = if trust.hostnames.is_empty() {
+        &[]
+    } else {
+        &sans.dns_names
+    };
+    for host in hosts {
+        trace::pkinit_client_san_kdccert_dnsname(host);
+    }
+    if named {
+        trace::pkinit_client_san_match_princ(trace::Princ::new(&tgs, realm.as_bytes()));
+        return Ok(());
+    }
+    if hosts.is_empty() {
+        return Err(refuse(err::KDC_NAME_MISMATCH));
+    }
+    let Some(host) = hosts
+        .iter()
+        .find(|h| trust.hostnames.iter().any(|c| c.eq_ignore_ascii_case(h)))
+    else {
+        trace::pkinit_client_san_match_none();
+        return Err(refuse(err::KDC_NAME_MISMATCH));
+    };
+    trace::pkinit_client_san_match_dnsname(host);
+    // MIT verify_kdc_eku; see docs/parity/b1-client-preauth.md
+    if !trust.require_eku {
+        trace::pkinit_client_eku_skip();
+        trace::pkinit_client_eku_accept();
+        return Ok(());
+    }
+    match krb5_types::pkinit::cert_eku(cert, true, trust.accept_secondary_eku) {
+        krb5_types::pkinit::EkuCheck::Accepted => {
+            trace::pkinit_eku();
+            trace::pkinit_client_eku_accept();
+            Ok(())
+        }
+        found => {
+            if found == krb5_types::pkinit::EkuCheck::NoDigitalSignature {
+                trace::pkinit_eku_no_ku();
+            }
+            trace::pkinit_client_eku_reject();
+            Err(refuse(err::INCONSISTENT_KEY_PURPOSE))
+        }
+    }
 }
 
 /// Derive the PKINIT reply key from PA-PK-AS-REP `dh_signed_data` (CMS or raw P-256).

@@ -381,6 +381,73 @@ pub fn pkinit_client_rep_dh_fail() {
     krb5int_trace("PKINIT client could not verify DH reply", &[]);
 }
 
+// MIT TRACE_PKINIT_CLIENT_SAN_MATCH_PRINC; see docs/parity/b1-client-preauth.md
+pub fn pkinit_client_san_config_dnsname(host: &str) {
+    krb5int_trace(
+        "PKINIT client config accepts KDC dNSName SAN {str}",
+        &[Arg::Str(Some(host.as_bytes()))],
+    );
+}
+
+pub fn pkinit_client_san_err() {
+    krb5int_trace("PKINIT client failed to decode SANs in KDC cert", &[]);
+}
+
+pub fn pkinit_client_san_kdccert_princ(princ: Princ<'_>) {
+    krb5int_trace(
+        "PKINIT client found id-pkinit-san in KDC cert: {princ}",
+        &[Arg::Princ(Some(princ))],
+    );
+}
+
+pub fn pkinit_client_san_kdccert_dnsname(host: &str) {
+    krb5int_trace(
+        "PKINIT client found dNSName SAN in KDC cert: {str}",
+        &[Arg::Str(Some(host.as_bytes()))],
+    );
+}
+
+pub fn pkinit_client_san_match_princ(princ: Princ<'_>) {
+    krb5int_trace(
+        "PKINIT client matched KDC principal {princ} against id-pkinit-san; no EKU check required",
+        &[Arg::Princ(Some(princ))],
+    );
+}
+
+pub fn pkinit_client_san_match_dnsname(host: &str) {
+    krb5int_trace(
+        "PKINIT client matched KDC hostname {str} against dNSName SAN; EKU check still required",
+        &[Arg::Str(Some(host.as_bytes()))],
+    );
+}
+
+pub fn pkinit_client_san_match_none() {
+    krb5int_trace("PKINIT client found no acceptable SAN in KDC cert", &[]);
+}
+
+pub fn pkinit_client_eku_accept() {
+    krb5int_trace("PKINIT client found acceptable EKU in KDC cert", &[]);
+}
+
+pub fn pkinit_client_eku_reject() {
+    krb5int_trace("PKINIT client found no acceptable EKU in KDC cert", &[]);
+}
+
+pub fn pkinit_client_eku_skip() {
+    krb5int_trace("PKINIT client skipping EKU check due to configuration", &[]);
+}
+
+pub fn pkinit_eku() {
+    krb5int_trace("PKINIT found acceptable EKU and digitalSignature KU", &[]);
+}
+
+pub fn pkinit_eku_no_ku() {
+    krb5int_trace(
+        "PKINIT found acceptable EKU but no digitalSignature KU",
+        &[],
+    );
+}
+
 // MIT TRACE_PKINIT_DH_PROPOSING_GROUP; see docs/parity/a3-preauth.md
 pub fn pkinit_dh_proposing_group(desc: &str) {
     krb5int_trace(

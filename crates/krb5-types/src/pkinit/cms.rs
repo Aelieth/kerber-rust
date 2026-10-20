@@ -501,7 +501,7 @@ pub struct CmsVerified {
 /// The embedded leaf must be issued by the trust anchor; the SignerInfo
 /// ECDSA-SHA256 signature is then checked with the leaf public key.
 /// There is no unverified fallback. Role checks (KDC vs client EKU/SAN)
-/// are separate: [`require_kdc_pkinit_cert`] / [`require_client_pkinit_san`].
+/// are separate: [`cert_sans`], [`cert_eku`] and [`require_client_pkinit_san`].
 ///
 /// # Errors
 ///
@@ -555,23 +555,6 @@ fn signer_verified(p: CmsParts) -> Result<CmsVerified, &'static str> {
         cert: p.cert,
         e_content_type: p.e_content_type,
     })
-}
-
-/// RFC 4556 §3.2.4: signer is a KDC cert for `realm` (KPKdc + SAN krbtgt/REALM@REALM).
-///
-/// # Errors
-///
-/// `"pkinit kdc eku"` when `cert` lacks the id-pkinit-KPKdc extended key usage;
-/// `"pkinit kdc san"` when it has no PKINIT SAN or the SAN is not `krbtgt/<realm>@<realm>`.
-pub fn require_kdc_pkinit_cert(cert: &[u8], realm: &str) -> Result<(), &'static str> {
-    if !cert_has_eku(cert, OID_KP_KDC) {
-        return Err("pkinit kdc eku");
-    }
-    let (san_realm, parts) = cert_pkinit_san(cert).ok_or("pkinit kdc san")?;
-    if san_realm != realm || parts.len() != 2 || parts[0] != "krbtgt" || parts[1] != realm {
-        return Err("pkinit kdc san");
-    }
-    Ok(())
 }
 
 /// RFC 4556 §3.2.2: signer is a client cert bound to `cname` by its SAN.
@@ -1610,6 +1593,7 @@ pub struct CertSans {
     pub principals: Vec<(String, i32, Vec<String>)>,
     /// The Microsoft UPNs, when asked for.
     pub upns: Vec<String>,
+    pub dns_names: Vec<String>,
 }
 
 /// The PKINIT principals of `cert`'s subjectAltName and, with `upns`, its UPNs; `None` when the
@@ -1639,6 +1623,14 @@ pub fn cert_sans(cert: &[u8], upns: bool) -> Option<CertSans> {
     while !names.is_empty() {
         let (tag, name, rest) = take_tlv(names)?;
         names = rest;
+        if tag == 0x82 {
+            if let Ok(dns) = std::str::from_utf8(name)
+                && !name.contains(&0)
+            {
+                out.dns_names.push(dns.to_owned());
+            }
+            continue;
+        }
         let Some((0x06, oid, value)) = (tag == 0xa0).then(|| take_tlv(name)).flatten() else {
             continue;
         };
@@ -1664,29 +1656,43 @@ pub fn cert_sans(cert: &[u8], upns: bool) -> Option<CertSans> {
 pub(super) const OID_MS_SC_LOGON: &[u8] =
     &[0x2b, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x14, 0x02, 0x02];
 
-/// Whether a client certificate may authenticate with PKINIT: its extended key usage names
-/// id-pkinit-KPClientAuth (or, when `accept_secondary`, Microsoft's smart-card logon), and its
-/// key usage is present and allows digital signatures.
-/// MIT `crypto_check_cert_eku` (`pkinit_crypto_openssl.c:2499-2571`): the EKU, then the digitalSignature key usage, which must be there.
+/// What a certificate's extended key usage and key usage allow.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EkuCheck {
+    Accepted,
+    NoDigitalSignature,
+    Rejected,
+}
+
+const OID_KP_SERVER_AUTH: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01];
+
+// MIT crypto_check_cert_eku; see docs/parity/a3-preauth.md
 #[must_use]
-pub fn client_eku_ok(cert: &[u8], accept_secondary: bool) -> bool {
-    let eku = cert_has_eku(cert, OID_KP_CLIENT_AUTH)
-        || (accept_secondary && cert_has_eku(cert, OID_MS_SC_LOGON));
-    if !eku {
-        return false;
+pub fn cert_eku(cert: &[u8], kdc: bool, accept_secondary: bool) -> EkuCheck {
+    let (main, secondary) = if kdc {
+        (OID_KP_KDC, OID_KP_SERVER_AUTH)
+    } else {
+        (OID_KP_CLIENT_AUTH, OID_MS_SC_LOGON)
+    };
+    if !(cert_has_eku(cert, main) || (accept_secondary && cert_has_eku(cert, secondary))) {
+        return EkuCheck::Rejected;
     }
     let Some(exts) = walk_tbs(cert).and_then(|w| w.extensions) else {
-        return false;
+        return EkuCheck::Rejected;
     };
-    let mut digital_signature = false;
+    let mut usage = None;
     each_ext(exts, |oid, val| {
         if oid != OID_KU {
             return false;
         }
-        digital_signature = bitstring_has(val, 0);
+        usage = Some(bitstring_has(val, 0));
         true
     });
-    digital_signature
+    match usage {
+        Some(true) => EkuCheck::Accepted,
+        Some(false) => EkuCheck::NoDigitalSignature,
+        None => EkuCheck::Rejected,
+    }
 }
 
 pub(super) struct TbsWalk<'a> {

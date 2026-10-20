@@ -352,7 +352,7 @@ if [ "$ok" != 1 ]; then
 fi
 docker exec "$NAME" sh -c 'cat /dev/null > /tmp/mit-kdc-rogue.trace' || true
 set +e
-ROGUE="$(docker exec -e KRB5_PASSWORD= "$NAME" \
+ROGUE="$(docker exec -e KRB5_PASSWORD= -e KRB5_TRACE=/tmp/rust-rogue.trace "$NAME" \
     /tmp/krb5-kinit --pkinit FILE:/tmp/pkinit/user.pem --pkinit-anchors FILE:/tmp/pkinit/ca.pem \
     -c /tmp/krb5cc_pkinit_rogue user@KERBER.TEST 2>&1)"
 rrc=$?
@@ -364,9 +364,10 @@ if [ "$rrc" -eq 0 ]; then
     log "pkinit.client.gate" "error" ',"error":"rust kinit accepted client-cert KDC CMS"'
     exit 1
 fi
-if ! echo "$ROGUE" | grep -q 'pkinit kdc eku'; then
-    echo "$ROGUE" >&2
-    log "pkinit.client.gate" "error" ',"error":"rogue KDC refused without pkinit kdc eku","rc":'"$rrc"
+RTRACE="$(docker exec "$NAME" cat /tmp/rust-rogue.trace 2>/dev/null || true)"
+if ! grep -qF 'Preauth module pkinit (17) (real) returned: -1765328308/KDC name mismatch' <<< "$RTRACE"; then
+    echo "$RTRACE" >&2
+    log "pkinit.client.gate" "error" ',"error":"rogue KDC refused without KDC name mismatch","rc":'"$rrc"
     exit 1
 fi
 log "pkinit.client.gate" "ok" ',"mode":"rust-kinit-rogue","refused":"client-cert-kdc","rc":'"$rrc"

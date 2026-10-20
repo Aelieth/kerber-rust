@@ -19,11 +19,11 @@ mod rsa;
 pub use ca::{PkinitCa, cms_wrap};
 pub use cms::{
     CertSans, ChainError, CmsAlgorithmIdentifier, CmsAuthPack, CmsContentInfo, CmsEncapContentInfo,
-    CmsFault, CmsSignedData, CmsSigner, CmsSignerInfo, CmsVerified, cert_sans, client_eku_ok,
+    CmsFault, CmsSignedData, CmsSigner, CmsSignerInfo, CmsVerified, EkuCheck, cert_eku, cert_sans,
     cms_extract_unsigned, cms_sign_chain, cms_sign_leaf, cms_sign_leaf_oids, cms_signeddata_verify,
     cms_unwrap, cms_verify, cms_verify_full, cms_wrap_signed, cms_wrap_unsigned,
     encode_td_certifiers, parse_identity_pem, parse_pem, require_client_pkinit_san,
-    require_kdc_pkinit_cert, spki_signature_ok, verify_chain,
+    spki_signature_ok, verify_chain,
 };
 pub use identity::{
     IdentityError, IdentityKey, PkinitIdentity, load_ca_certs, load_identities, load_identity,

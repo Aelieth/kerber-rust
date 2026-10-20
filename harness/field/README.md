@@ -374,7 +374,7 @@ would remove it.
   (the TGT is issued, the account is denied); the kit's own `--validate`. Every
   realm and directory change is undone, also when the scenario stops early.
   Recorded: the cache's size.
-- **`pkinit.sh`** (PK, client2's MIT kinit against kdc, the L6 certificates, P-256): with no
+- **`pkinit.sh`** (PK, client2's MIT kinit and, in the rust leg, ours after it, against kdc, the L6 certificates, P-256): with no
   `pkinit_identity` both KDCs start and log MIT's `preauth pkinit failed to initialize:` line, and
   alice's certificate kinit is not offered PKINIT; with `[kdcdefaults]` `pkinit_identity` and
   `pkinit_anchors` there is no such line and alice's certificate gets a TGT; `kinit -n` gets an
@@ -397,7 +397,11 @@ would remove it.
   gets a TGT. With the KDC's realm at `pkinit_dh_min_bits = 4096`, each kinit's 2048-bit DH gets 65 and the
   KDC's groups, and it tries again with P-384 for a TGT, tracing MIT's lines. A kinit at `pkinit_dh_min_bits =
   1024` gets a TGT with 1024-bit DH from a KDC whose floor is 1024, and from the default 2048 it gets 65 and tries
-  again with P-256. With alice's
+  again with P-256. With four KDC certificates made
+  on kdc for the cell (`scripts/lib/pkinit-kdc-certs.sh`), each kinit checks the KDC's certificate as MIT's
+  does: another realm's krbtgt SAN is 76 (`KDC name mismatch`), a dNSName that `pkinit_kdc_hostname` names gets
+  a TGT and another name 76, serverAuth is 77 unless `pkinit_eku_checking` is `kpServerAuth` or `none`, and a
+  certificate without the digitalSignature key usage is 77. With alice's
   password on stdin, a certificate the KDC refuses with e-data (`alice-unknownca`'s 70, the `<SUBJECT>(`
   rule's 24) goes on to the password and a TGT, and `alice-wrongsan`'s 75, which carries none, ends with
   rc 1. Under FAST armor (an anonymous ticket, `-T`) alice's certificate kinit runs pkinit inside the
@@ -405,7 +409,8 @@ would remove it.
   alice's certificate kinit gets a TGT; with an anchors file holding no certificate the KDC's reply does
   not verify, and the password is taken. With `pkinit_identities` and `pkinit_anchors` in a profile of its own,
   alice's `kpasswd` gets its `kadmin/changepw` ticket by pkinit, MIT's and, in the rust leg, ours (kdc's
-  build of `krb5-kpasswd` piped to client2's `~/pk/kpasswd`). kdc.conf is restored with krb5kdc
+  build of `krb5-kpasswd` piped to client2's `~/pk/kpasswd`); with alice's TGT in the default ccache each
+  kpasswd arms its request with it, the trace naming the cache in full. kdc.conf is restored with krb5kdc
   restarted at the end, also when the scenario stops early.
 - **`kdc-profile.sh`** (CF, client2's MIT kinit against kdc): with kdc.conf's
   `[libdefaults] clockskew = 60` and client2's clock 120 s ahead (chronyd stopped,

@@ -36,6 +36,7 @@ mod spake;
 use clock::Clock;
 pub use fast::FastArmor;
 pub(crate) use fast::fast_error_material;
+pub use fast::set_service_restart;
 use fast::{ask_gak_question, ask_responder, continue_fast};
 pub use otp::{OtpChallengeView, OtpTokenView};
 use password::{ModuleFail, PasswordCell};
@@ -74,6 +75,7 @@ pub struct AsOutcome {
 }
 
 /// Parameters for an AS-REQ.
+#[derive(Clone)]
 pub struct AsRequest<'a> {
     /// Client name (without realm).
     pub cname: PrincipalName,
@@ -204,9 +206,26 @@ pub struct PkinitClient {
     pub anchors: Vec<Vec<u8>>,
     pub pool: Vec<Vec<u8>>,
     pub dh_min_bits: Option<String>,
+    pub kdc_hostnames: Vec<String>,
+    pub eku_checking: Option<String>,
 }
 
 impl PkinitClient {
+    fn trust(&self) -> KdcTrust<'_> {
+        let (require_eku, accept_secondary_eku) = match self.eku_checking.as_deref() {
+            Some(v) if v.eq_ignore_ascii_case("kpServerAuth") => (true, true),
+            Some(v) if v.eq_ignore_ascii_case("none") => (false, false),
+            _ => (true, false),
+        };
+        KdcTrust {
+            anchors: &self.anchors,
+            pool: &self.pool,
+            hostnames: &self.kdc_hostnames,
+            require_eku,
+            accept_secondary_eku,
+        }
+    }
+
     // MIT pkinit_client_profile; see docs/parity/b1-client-preauth.md
     fn dh_size(&self) -> u32 {
         krb5_types::pkinit::parse_dh_min_bits(self.dh_min_bits.as_deref()).unwrap_or_else(|v| {
@@ -540,18 +559,19 @@ fn as_exchange_inner(
     if crate::clpreauth::loaded(req.profile, "pkinit")
         && (matches!(req.pkinit, Some(Pkinit::Client(_))) || req.ticket.anonymous)
     {
-        let (hint, refusal) = match continue_pkinit(req, nonce, &bound, &etypes, &clock)? {
-            PkinitEnd::Done(out) => return Ok(*out),
-            PkinitEnd::Reply { rep, wire, traced } if !req.ticket.anonymous => {
-                return finish_bare_reply(
-                    req, keys, unreadable, prompt, *rep, nonce, &etypes, &bound, &wire, traced,
-                );
-            }
-            PkinitEnd::Reply { .. } => {
-                return Err(Error::ReplyMismatch("PKINIT expected METHOD-DATA".into()));
-            }
-            PkinitEnd::Walk { hint, refusal } => (*hint, refusal.map(|r| *r)),
-        };
+        let (hint, refusal) =
+            match continue_pkinit(req, nonce, &bound, &etypes, &clock, defer_fast)? {
+                PkinitEnd::Done(out) => return Ok(*out),
+                PkinitEnd::Reply { rep, wire, traced } if !req.ticket.anonymous => {
+                    return finish_bare_reply(
+                        req, keys, unreadable, prompt, *rep, nonce, &etypes, &bound, &wire, traced,
+                    );
+                }
+                PkinitEnd::Reply { .. } => {
+                    return Err(Error::ReplyMismatch("PKINIT expected METHOD-DATA".into()));
+                }
+                PkinitEnd::Walk { hint, refusal } => (*hint, refusal.map(|r| *r)),
+            };
         if req.ticket.anonymous {
             return Err(refusal.as_ref().map_or_else(preauth_failed, kdc_error));
         }
@@ -589,9 +609,7 @@ fn as_exchange_inner(
         clock.note(e, false);
     }
     // MIT `k5_upgrade_to_fast_p` (`lib/krb5/krb/fast.c:677-688`): an error that carries PA-FX-FAST, with armor available and no armor key yet, restarts before preauth.
-    if defer_fast && req.fast_armor.is_none() && error_offers_fx_fast(&msg) {
-        return Err(Error::FastUpgrade);
-    }
+    upgrade_to_fast(&msg, defer_fast)?;
     // MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:648-728`): no listed mechanism means `KRB5_PREAUTH_FAILED`, and the password prompter is not called.
     if let KdcMsg::Error(e) = &msg
         && e.error_code == err::PREAUTH_REQUIRED
@@ -1328,6 +1346,7 @@ fn continue_pkinit(
     bound: &AsReqTimes,
     etypes: &[i32],
     clock: &Clock,
+    defer_fast: bool,
 ) -> Result<PkinitEnd, Error> {
     let Some(Pkinit::Client(pk)) = req.pkinit else {
         return Err(Error::ReplyMismatch("PKINIT identity missing".into()));
@@ -1336,7 +1355,9 @@ fn continue_pkinit(
     let first = build_as_req_from(req, nonce, bound, None, etypes)?;
     let first_wire = encode(&first)?;
     trace::init_creds_preauth_none();
-    let (token, cookie, hint) = match send_as(req, &first_wire)? {
+    let msg = send_as(req, &first_wire)?;
+    upgrade_to_fast(&msg, defer_fast)?;
+    let (token, cookie, hint) = match msg {
         KdcMsg::Error(e)
             if e.error_code == err::PREAUTH_REQUIRED || e.error_code == err::PREAUTH_FAILED =>
         {
@@ -1434,15 +1455,11 @@ fn continue_pkinit(
                 let etype = EncryptionType::known(rep.0.enc_part.etype)?;
                 let padata = rep.0.padata.as_deref().unwrap_or_default();
                 trace_preauth_input(padata, etypes);
-                let trust = KdcTrust {
-                    anchors: &pk.anchors,
-                    pool: &pk.pool,
-                };
                 let reply_key = match pkinit_reply_key_agile(
                     &kp,
                     &rep.0.padata,
                     etype,
-                    trust,
+                    pk.trust(),
                     &wire,
                     &req.cname,
                     req.realm,
@@ -1586,11 +1603,17 @@ fn pkinit_tryagain(e: &KrbError, dh_size: &mut u32) -> Option<Retry> {
 }
 
 /// MIT `k5_upgrade_to_fast_p` (`lib/krb5/krb/fast.c:686-687`): the error's padata lists PA-FX-FAST.
-fn error_offers_fx_fast(msg: &KdcMsg) -> bool {
+fn upgrade_to_fast(msg: &KdcMsg, defer_fast: bool) -> Result<(), Error> {
     let KdcMsg::Error(e) = msg else {
-        return false;
+        return Ok(());
     };
-    method_from_error(e).is_ok_and(|m| m.iter().any(|p| p.padata_type == pa::FX_FAST))
+    if defer_fast
+        && method_from_error(e).is_ok_and(|m| m.iter().any(|p| p.padata_type == pa::FX_FAST))
+    {
+        trace::fast_padata_upgrade();
+        return Err(Error::FastUpgrade);
+    }
+    Ok(())
 }
 
 /// MIT `encts_disabled` (`lib/krb5/krb/get_in_tkt.c:757-772`): the client realm's boolean, default false.

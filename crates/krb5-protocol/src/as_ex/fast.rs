@@ -63,19 +63,8 @@ pub(super) fn continue_fast(
     let armor = req
         .fast_armor
         .ok_or_else(|| Error::ReplyMismatch("FAST armor missing".into()))?;
-    let sub = ProtocolKey::random(armor.session.etype())?;
-    let akey = armor_key(&armor.session, Some(&sub))?;
+    let (sub, akey, ap) = armor_ap_request(armor)?;
     // RFC 6113 reply-key base is the PA-ETYPE-INFO2 long-term key, not preferred()[0].
-    let ap = fast_armor_ap(armor, &sub)?;
-    trace::fast_armor_ccache_key((&armor.session).into());
-    trace::mk_req(
-        trace::Princ::new(&armor.cname, armor.crealm.as_bytes()),
-        trace::Princ::new(&armor.ticket.sname, armor.ticket.realm.as_bytes()),
-        0,
-        Some((&sub).into()),
-        (&armor.session).into(),
-    );
-    trace::fast_armor_key((&akey).into());
     let mut probe = build_as_req_from(req, nonce, bound, None, etypes)?;
     trace::init_creds_preauth_none();
     attach_fast(&mut probe, &ap, &akey, Vec::new())?;
@@ -189,6 +178,8 @@ pub(super) fn continue_fast(
                             Some(Pkinit::Client(pk)) => {
                                 return finish_fast_pkinit(
                                     req,
+                                    keys,
+                                    &mut pw,
                                     nonce,
                                     etypes,
                                     clock,
@@ -681,7 +672,8 @@ enum ReplyKey<'a, 'p, 'g> {
     Preauth(ProtocolKey, i32),
     /// No module answered: `gak_fct` makes it, from the password.
     Gak(&'a mut PasswordCell<'p, 'g>),
-    Pkinit(&'a KxKey, &'a PkinitClient),
+    /// PKINIT's key, else, when its module fails on the reply, the password's.
+    Pkinit(&'a KxKey, &'a PkinitClient, &'a mut PasswordCell<'p, 'g>),
 }
 
 // MIT pkinit_client_process; see docs/parity/b1-client-preauth.md
@@ -691,6 +683,8 @@ enum ReplyKey<'a, 'p, 'g> {
 )]
 fn finish_fast_pkinit(
     req: &AsRequest<'_>,
+    keys: &[ProtocolKey],
+    pw: &mut PasswordCell<'_, '_>,
     nonce: u32,
     etypes: &[i32],
     clock: &Clock,
@@ -744,11 +738,11 @@ fn finish_fast_pkinit(
             KdcMsg::AsRep(rep) => {
                 return finish_fast_as(
                     req,
-                    &[],
+                    keys,
                     nonce,
                     etypes,
                     akey,
-                    ReplyKey::Pkinit(&kp, pk),
+                    ReplyKey::Pkinit(&kp, pk, pw),
                     rep,
                     &wire,
                     bound,
@@ -804,10 +798,13 @@ fn finish_fast_as(
         ReplyKey::Preauth(k, pa::ENCRYPTED_CHALLENGE) => {
             reply_code(&fast.padata, akey, k).map(|code| (EC_MODULE, pa::ENCRYPTED_CHALLENGE, code))
         }
-        ReplyKey::Pkinit(..) => Some((super::PKINIT_MODULE, pa::PK_AS_REP, 0)),
         _ => None,
     };
-    trace_reply_padata(Some(&fast.padata), etypes, module);
+    if matches!(reply_key, ReplyKey::Pkinit(..)) {
+        trace_preauth_input(&fast.padata, etypes);
+    } else {
+        trace_reply_padata(Some(&fast.padata), etypes, module);
+    }
     let pa_type = match &reply_key {
         ReplyKey::Preauth(_, mech) => Some(*mech),
         ReplyKey::Pkinit(..) => Some(pa::PK_AS_REQ),
@@ -818,22 +815,31 @@ fn finish_fast_as(
             trace::init_creds_as_key_preauth((&k).into());
             k
         }
-        ReplyKey::Pkinit(kp, pk) => {
-            let k = pkinit_reply_key_agile(
-                kp,
-                &Some(fast.padata.clone()),
-                EncryptionType::known(rep.0.enc_part.etype)?,
-                crate::preauth::KdcTrust {
-                    anchors: &pk.anchors,
-                    pool: &pk.pool,
-                },
-                wire,
-                &req.cname,
-                req.realm,
-            )?;
-            trace::init_creds_as_key_preauth((&k).into());
-            k
-        }
+        // MIT pkinit_as_rep_parse; see docs/parity/b1-client-preauth.md
+        ReplyKey::Pkinit(kp, pk, pw) => match pkinit_reply_key_agile(
+            kp,
+            &Some(fast.padata.clone()),
+            EncryptionType::known(rep.0.enc_part.etype)?,
+            pk.trust(),
+            wire,
+            &req.cname,
+            req.realm,
+        ) {
+            Ok(k) => {
+                if fast.padata.iter().any(|p| p.padata_type == pa::PK_AS_REP) {
+                    trace::preauth_process(super::PKINIT_MODULE, pa::PK_AS_REP, true, 0, None);
+                }
+                trace::preauth_output(&[]);
+                trace::init_creds_as_key_preauth((&k).into());
+                k
+            }
+            Err(Error::PkinitReply { code, text }) => {
+                super::ModuleFail::new(code, &text).trace(super::PKINIT_MODULE, pa::PK_AS_REP);
+                trace::preauth_output(&[]);
+                fast_base_key(req, keys, etypes, &fast, rep.0.enc_part.etype, pw)?
+            }
+            Err(e) => return Err(e),
+        },
         ReplyKey::Gak(pw) => fast_base_key(req, keys, etypes, &fast, rep.0.enc_part.etype, pw)?,
     };
     let reply_key = match &fast.strengthen_key {
@@ -955,6 +961,29 @@ fn fast_base_key(
         trace::init_creds_as_key_gak((&key).into());
     }
     Ok(key)
+}
+
+fn armor_ap_request(
+    armor: &FastArmor,
+) -> Result<(ProtocolKey, ProtocolKey, krb5_types::ApReq), Error> {
+    let sub = ProtocolKey::random(armor.session.etype())?;
+    let akey = armor_key(&armor.session, Some(&sub))?;
+    let ap = fast_armor_ap(armor, &sub)?;
+    trace::fast_armor_ccache_key((&armor.session).into());
+    trace::mk_req(
+        trace::Princ::new(&armor.cname, armor.crealm.as_bytes()),
+        trace::Princ::new(&armor.ticket.sname, armor.ticket.realm.as_bytes()),
+        0,
+        Some((&sub).into()),
+        (&armor.session).into(),
+    );
+    trace::fast_armor_key((&akey).into());
+    Ok((sub, akey, ap))
+}
+
+/// MIT `krb5_init_creds_set_service` (`lib/krb5/krb/get_in_tkt.c:1057-1072`): naming the service restarts the loop, which makes the armor before the first request makes it again.
+pub fn set_service_restart(armor: &FastArmor) -> Result<(), Error> {
+    armor_ap_request(armor).map(|_| ())
 }
 
 fn fast_armor_ap(armor: &FastArmor, sub: &ProtocolKey) -> Result<krb5_types::ApReq, Error> {

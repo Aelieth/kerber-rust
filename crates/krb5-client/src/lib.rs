@@ -236,6 +236,13 @@ pub fn keytab_read_error(e: &std::io::Error, path: &str) -> Krb5Error {
     }
 }
 
+/// A FAST armor cache and the name it was set by, which MIT's trace prints as given.
+#[derive(Debug)]
+pub struct ArmorCcache {
+    pub name: String,
+    pub spec: CcSpec,
+}
+
 /// Flags for [`kinit_with`].
 #[derive(Clone, Debug, Default)]
 pub struct KinitParams<'a> {
@@ -247,7 +254,7 @@ pub struct KinitParams<'a> {
     /// PA-SPAKE.
     pub want_spake: bool,
     /// FAST armor ccache (`-T`), a name resolved as `-c` resolves one.
-    pub armor_ccache: Option<&'a CcSpec>,
+    pub armor_ccache: Option<&'a ArmorCcache>,
     /// PKINIT identity: an `X509_user_identity` value, `FILE:`, `DIR:` or `ENV:`.
     pub pkinit_identity: Option<&'a Path>,
     /// PKINIT anchors PEM.
@@ -431,7 +438,7 @@ pub struct InitCredsOpt<'a> {
     /// PA-SPAKE.
     pub want_spake: bool,
     /// FAST armor ccache (`-T`), a name resolved as `-c` resolves one.
-    pub armor_ccache: Option<&'a CcSpec>,
+    pub armor_ccache: Option<&'a ArmorCcache>,
     /// PKINIT identity: an `X509_user_identity` value, `FILE:`, `DIR:` or `ENV:`.
     pub pkinit_identity: Option<&'a Path>,
     /// PKINIT anchors PEM.
@@ -921,7 +928,7 @@ fn load_pkinit(
     anchors: &[String],
     pool: &[String],
     rules: &[String],
-    dh_min_bits: Option<String>,
+    opts: PkinitOpts,
 ) -> Result<ClientPkinit, Box<dyn std::error::Error + Send + Sync>> {
     let mut found = Err(IdentityError {
         code: 22,
@@ -970,7 +977,9 @@ fn load_pkinit(
         key: chosen.key().clone(),
         anchors,
         pool,
-        dh_min_bits,
+        dh_min_bits: opts.dh_min_bits,
+        kdc_hostnames: opts.kdc_hostnames,
+        eku_checking: opts.eku_checking,
     }))
 }
 
@@ -990,14 +999,16 @@ fn ca_certs(values: &[String]) -> Result<Vec<Vec<u8>>, String> {
 fn load_pkinit_anchors(
     anchors: &[String],
     pool: &[String],
-    dh_min_bits: Option<String>,
+    opts: PkinitOpts,
 ) -> Result<PkinitClient, Box<dyn std::error::Error + Send + Sync>> {
     Ok(PkinitClient {
         cert: Vec::new(),
         key: krb5_types::pkinit::IdentityKey::P256(Zeroizing::new([0u8; 32])),
         anchors: ca_certs(anchors)?,
         pool: ca_certs(pool)?,
-        dh_min_bits,
+        dh_min_bits: opts.dh_min_bits,
+        kdc_hostnames: opts.kdc_hostnames,
+        eku_checking: opts.eku_checking,
     })
 }
 
@@ -1006,7 +1017,13 @@ struct PkinitConf {
     anchors: Vec<String>,
     pool: Vec<String>,
     rules: Vec<String>,
+    opts: PkinitOpts,
+}
+
+struct PkinitOpts {
     dh_min_bits: Option<String>,
+    kdc_hostnames: Vec<String>,
+    eku_checking: Option<String>,
 }
 
 /// MIT `pkinit_client_profile` (`plugins/preauth/pkinit/pkinit_clnt.c:670-711`): each read with `pkinit_libdefault_strings`.
@@ -1017,7 +1034,11 @@ fn pkinit_from_conf(conf: &Krb5Conf, realm: &str) -> PkinitConf {
         anchors: strings("pkinit_anchors"),
         pool: strings("pkinit_pool"),
         rules: strings("pkinit_cert_match"),
-        dh_min_bits: strings("pkinit_dh_min_bits").into_iter().next(),
+        opts: PkinitOpts {
+            dh_min_bits: strings("pkinit_dh_min_bits").into_iter().next(),
+            kdc_hostnames: strings("pkinit_kdc_hostname"),
+            eku_checking: strings("pkinit_eku_checking").into_iter().next(),
+        },
     }
 }
 
@@ -1027,13 +1048,7 @@ pub fn profile_pkinit(
     realm: &str,
 ) -> Result<ClientPkinit, Box<dyn std::error::Error + Send + Sync>> {
     let pk = pkinit_from_conf(conf, realm);
-    load_pkinit(
-        &pk.identities,
-        &pk.anchors,
-        &pk.pool,
-        &pk.rules,
-        pk.dh_min_bits,
-    )
+    load_pkinit(&pk.identities, &pk.anchors, &pk.pool, &pk.rules, pk.opts)
 }
 
 /// MIT `krb5int_fast_as_armor` (`lib/krb5/krb/fast.c:214-216`): a failure while building the armor AP-REQ keeps its text under this prefix.
@@ -1064,23 +1079,29 @@ fn cache_has_fast_avail(cc: &FileCcache, realm: &str) -> bool {
 /// MIT `krb5int_fast_as_armor` (`lib/krb5/krb/fast.c:198-212`): `fast_avail` for the realm TGS arms that first request.
 fn initial_armor(
     ctx: &ClientContext,
-    spec: Option<&CcSpec>,
+    cc: Option<&ArmorCcache>,
     realm: &str,
+    service: bool,
 ) -> Result<Option<FastArmor>, Box<dyn std::error::Error + Send + Sync>> {
-    let Some(spec) = spec else {
+    let Some(cc) = cc else {
         return Ok(None);
     };
-    let Ok(cc) = load_ccache(ctx, spec) else {
-        return Ok(None);
-    };
-    if !cache_has_fast_avail(&cc, realm) {
+    if !load_ccache(ctx, &cc.spec).is_ok_and(|cache| cache_has_fast_avail(&cache, realm)) {
+        for _ in 0..=u8::from(service) {
+            trace::fast_armor(ctx, cc, realm, None);
+        }
         return Ok(None);
     }
-    let armor =
-        load_fast_armor(ctx, spec).map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
-            Box::new(armor_build_error(e.as_ref()))
-        })?;
-    trace::fast_armor(ctx, spec, realm, &armor);
+    let armor = load_fast_armor(ctx, &cc.spec).map_err(
+        |e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(armor_build_error(e.as_ref())) },
+    )?;
+    if service {
+        trace::fast_armor(ctx, cc, realm, Some(&armor));
+        krb5_protocol::set_service_restart(&armor).map_err(
+            |e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(armor_build_error(&e)) },
+        )?;
+    }
+    trace::fast_armor(ctx, cc, realm, Some(&armor));
     Ok(Some(armor))
 }
 
@@ -1172,19 +1193,35 @@ impl AsShape<'_> {
 fn load_armor_for_upgrade(
     ctx: &ClientContext,
     armor: &mut Option<FastArmor>,
-    spec: Option<&CcSpec>,
+    cc: Option<&ArmorCcache>,
     realm: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let Some(spec) = spec else {
+    let Some(cc) = cc else {
         return Err(ProtocolError::FastUpgrade.into());
     };
-    let loaded =
-        load_fast_armor(ctx, spec).map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
-            Box::new(armor_build_error(e.as_ref()))
-        })?;
-    trace::fast_armor(ctx, spec, realm, &loaded);
+    let loaded = load_fast_armor(ctx, &cc.spec).map_err(
+        |e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(armor_build_error(e.as_ref())) },
+    )?;
+    trace::fast_armor(ctx, cc, realm, Some(&loaded));
     *armor = Some(loaded);
     Ok(())
+}
+
+/// An AS exchange with `cc` as its FAST armor cache, as kinit's `-T`: `exchange` is told whether to stop at a PA-FX-FAST error.
+pub fn as_with_fast_ccache(
+    ctx: &ClientContext,
+    cc: Option<&ArmorCcache>,
+    realm: &str,
+    service: bool,
+    mut exchange: impl FnMut(Option<&FastArmor>, bool) -> Result<AsOutcome, ProtocolError>,
+) -> Result<Result<AsOutcome, ProtocolError>, Box<dyn std::error::Error + Send + Sync>> {
+    let mut armor = initial_armor(ctx, cc, realm, service)?;
+    let first = exchange(armor.as_ref(), cc.is_some() && armor.is_none());
+    if !matches!(first, Err(ProtocolError::FastUpgrade)) {
+        return Ok(first);
+    }
+    load_armor_for_upgrade(ctx, &mut armor, cc, realm)?;
+    Ok(exchange(armor.as_ref(), false))
 }
 
 /// One AS exchange. With an armor cache and no armor key yet, a PA-FX-FAST error loads the armor and retries once.
@@ -1194,10 +1231,10 @@ fn exchange_shape(
     password: &mut LazyPassword<'_>,
     keytab: Option<KeytabArg<'_>>,
     armor: &mut Option<FastArmor>,
-    spec: Option<&CcSpec>,
+    cc: Option<&ArmorCcache>,
     shape: &AsShape<'_>,
 ) -> Result<Result<AsOutcome, ProtocolError>, Box<dyn std::error::Error + Send + Sync>> {
-    let defer = spec.is_some() && armor.is_none();
+    let defer = cc.is_some() && armor.is_none();
     let first = {
         let req = shape.request(armor.as_ref(), b"");
         dispatch_as(password, keytab, &req, defer)?
@@ -1205,7 +1242,7 @@ fn exchange_shape(
     if !matches!(first, Err(ProtocolError::FastUpgrade)) {
         return Ok(first);
     }
-    load_armor_for_upgrade(ctx, armor, spec, shape.realm)?;
+    load_armor_for_upgrade(ctx, armor, cc, shape.realm)?;
     let req = shape.request(armor.as_ref(), b"");
     dispatch_as(password, keytab, &req, false)
 }
@@ -1214,11 +1251,11 @@ fn exchange_shape(
 fn exchange_shape_direct(
     ctx: &ClientContext,
     armor: &mut Option<FastArmor>,
-    spec: Option<&CcSpec>,
+    cc: Option<&ArmorCcache>,
     shape: &AsShape<'_>,
     password: &[u8],
 ) -> Result<AsOutcome, Box<dyn std::error::Error + Send + Sync>> {
-    let defer = spec.is_some() && armor.is_none();
+    let defer = cc.is_some() && armor.is_none();
     let first = {
         let req = shape.request(armor.as_ref(), password);
         if defer {
@@ -1229,7 +1266,7 @@ fn exchange_shape_direct(
     };
     match first {
         Err(ProtocolError::FastUpgrade) => {
-            load_armor_for_upgrade(ctx, armor, spec, shape.realm)?;
+            load_armor_for_upgrade(ctx, armor, cc, shape.realm)?;
             let req = shape.request(armor.as_ref(), password);
             as_exchange(&req).map_err(Into::into)
         }
@@ -1257,13 +1294,18 @@ fn kinit_inner(
     }
     trace::init_creds(&cname, &realm_s, params.in_tkt_service);
     let resolved = resolve_kdc(&ctx.profile, &realm_s, kdc);
-    let mut armor = initial_armor(ctx, params.armor_ccache, &realm_s)?;
+    let mut armor = initial_armor(
+        ctx,
+        params.armor_ccache,
+        &realm_s,
+        params.in_tkt_service.is_some(),
+    )?;
     let PkinitConf {
         identities: conf_ids,
         anchors: conf_an,
         pool,
         rules,
-        dh_min_bits,
+        opts,
     } = pkinit_from_conf(&ctx.profile, &realm_s);
     // MIT `pkinit_identity_initialize` loads no identity for the anonymous principal.
     let identities = match params.pkinit_identity {
@@ -1279,9 +1321,9 @@ fn kinit_inner(
     // Live MIT 1.22.2 `kinit -X X509_anchors=… alice`: anchors
     // without an identity leave the password AS as it was.
     let pkinit = match (anchors.is_empty(), params.anonymous) {
-        (false, true) => ClientPkinit::Ready(load_pkinit_anchors(anchors, &pool, dh_min_bits)?),
+        (false, true) => ClientPkinit::Ready(load_pkinit_anchors(anchors, &pool, opts)?),
         (true, true) => return Err("anonymous PKINIT requires pkinit_anchors".into()),
-        (_, false) => load_pkinit(&identities, anchors, &pool, &rules, dh_min_bits)?,
+        (_, false) => load_pkinit(&identities, anchors, &pool, &rules, opts)?,
     };
     let mut etypes = krb5_protocol::conf_etypes(&ctx.profile, false);
     let mut ticket = params.ticket;

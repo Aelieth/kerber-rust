@@ -22,11 +22,12 @@
 use std::io::{self, BufRead, Write};
 
 use krb5_cli::Prompter;
+use krb5_client::ArmorCcache;
 use krb5_config::{CcSpec, ClientContext, Endpoint, Krb5Conf};
 use krb5_protocol::{
     AsOutcome, AsRequest, AsTicketOpts, Error, FileCcache, KPASSWD_PORT, KPASSWD_SUCCESS, KdcAddr,
-    as_exchange, as_exchange_prompted, change_password_result, format_chpw_failure,
-    parse_principal, set_password,
+    as_exchange, as_exchange_defer_fast, as_exchange_prompted, as_exchange_prompted_defer_fast,
+    change_password_result, format_chpw_failure, parse_principal, set_password,
 };
 use krb5_types::PrincipalName;
 use zeroize::Zeroizing;
@@ -69,7 +70,7 @@ fn run<R: BufRead, W: Write>(
     // MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:209-217`): `KRB5_TRACE` opens
     // once the profile has loaded.
     krb5_protocol::trace::init();
-    let client = match client(prog, pname, &ctx) {
+    let (client, armor_cc) = match client(prog, pname, &ctx) {
         Ok(client) => client,
         Err(line) => {
             eprintln!("{line}");
@@ -151,21 +152,42 @@ fn run<R: BufRead, W: Write>(
     };
     // MIT `main` (`kpasswd.c:129-131`): `krb5_get_init_creds_password` is given no password, so the KDC is asked first and the prompter runs only when a reply needs the key.
     let mut unread: Option<krb5_cli::PromptError> = None;
-    let out = if given.is_some() {
-        as_exchange(&req)
-    } else {
-        let asked = format!("Password for {}", client.display);
-        as_exchange_prompted(&req, &mut || {
-            prompter.hidden(&asked).map_err(|e| {
-                unread = Some(e);
-                let kind = if e == krb5_cli::PromptError::Interrupted {
-                    io::ErrorKind::Interrupted
-                } else {
-                    io::ErrorKind::Other
-                };
-                Error::File(io::Error::new(kind, e.to_string()))
-            })
-        })
+    let asked = format!("Password for {}", client.display);
+    let out = krb5_client::as_with_fast_ccache(
+        &ctx,
+        armor_cc.as_ref(),
+        &client.realm,
+        true,
+        |fast_armor, defer| {
+            let req = AsRequest {
+                fast_armor,
+                ..req.clone()
+            };
+            let mut prompt = || {
+                prompter.hidden(&asked).map_err(|e| {
+                    unread = Some(e);
+                    let kind = if e == krb5_cli::PromptError::Interrupted {
+                        io::ErrorKind::Interrupted
+                    } else {
+                        io::ErrorKind::Other
+                    };
+                    Error::File(io::Error::new(kind, e.to_string()))
+                })
+            };
+            match (given.is_some(), defer) {
+                (true, false) => as_exchange(&req),
+                (true, true) => as_exchange_defer_fast(&req),
+                (false, false) => as_exchange_prompted(&req, &mut prompt),
+                (false, true) => as_exchange_prompted_defer_fast(&req, &mut prompt),
+            }
+        },
+    );
+    let out = match out {
+        Ok(out) => out,
+        Err(e) => {
+            eprintln!("{prog}: {e} getting initial ticket");
+            return 1;
+        }
     };
     let as_out = match out {
         Ok(out) => out,
@@ -266,7 +288,11 @@ fn initial_ticket_text(e: &Error) -> String {
 /// MIT `main` (`kpasswd.c:91-122`): the default ccache is opened and its principal read whether
 /// or not a name is given, either failure (other than no cache or no principal) ending kpasswd;
 /// then the argument, else that principal, else the login name.
-fn client(prog: &str, pname: Option<&str>, ctx: &ClientContext) -> Result<Client, String> {
+fn client(
+    prog: &str,
+    pname: Option<&str>,
+    ctx: &ClientContext,
+) -> Result<(Client, Option<ArmorCcache>), String> {
     let conf = &ctx.profile;
     let spec =
         open_default_ccache(ctx).map_err(|e| format!("{prog}: {e} opening default ccache"))?;
@@ -276,17 +302,25 @@ fn client(prog: &str, pname: Option<&str>, ctx: &ClientContext) -> Result<Client
             cache_text(&spec, &e)
         )
     })?;
+    // MIT `main` (`kpasswd.c:96-106`): a default ccache with a principal is the FAST ccache, set by its full name.
+    let armor = cached.is_some().then(|| ArmorCcache {
+        name: krb5_client::trace::ccname(ctx, &spec),
+        spec,
+    });
     if let Some(name) = pname {
-        return parse_client(name, conf).map_err(|e| format!("{prog}: {e} parsing client name"));
+        return parse_client(name, conf)
+            .map(|c| (c, armor))
+            .map_err(|e| format!("{prog}: {e} parsing client name"));
     }
     if let Some((realm, name)) = cached {
         let realm = String::from_utf8_lossy(realm.as_bytes()).into_owned();
         let display = name.unparse_with_realm(&realm);
-        return Ok(Client {
+        let client = Client {
             name,
             realm,
             display,
-        });
+        };
+        return Ok((client, armor));
     }
     // MIT `get_name_from_passwd_file` (`kpasswd.c:19-37`): the real uid's user name, as a principal.
     let user = nix::unistd::User::from_uid(nix::unistd::Uid::current())
@@ -294,6 +328,7 @@ fn client(prog: &str, pname: Option<&str>, ctx: &ClientContext) -> Result<Client
         .flatten()
         .ok_or_else(|| "Unable to identify user from password file".to_owned())?;
     parse_client(&user.name, conf)
+        .map(|c| (c, armor))
         .map_err(|e| format!("{prog}: {e} when parsing name {}", user.name))
 }
 
