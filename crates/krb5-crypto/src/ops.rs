@@ -499,9 +499,10 @@ fn checksum_inner(key: &ProtocolKey, usage: KeyUsage, message: &[u8]) -> Result<
 }
 
 fn hmac_md5_simple(key: &[u8], data: &[u8]) -> Result<Vec<u8>, Error> {
-    use hmac::{Hmac, Mac};
+    use hmac::{Hmac, KeyInit, Mac};
     use md5::Md5;
-    let mut mac = <Hmac<Md5> as Mac>::new_from_slice(key).map_err(|_| Error::InvalidKeyLength)?;
+    let mut mac =
+        <Hmac<Md5> as KeyInit>::new_from_slice(key).map_err(|_| Error::InvalidKeyLength)?;
     mac.update(data);
     Ok(mac.finalize().into_bytes().to_vec())
 }

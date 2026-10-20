@@ -1,9 +1,9 @@
 use des::TdesEde3;
-use des::cipher::{BlockDecrypt, BlockEncrypt, KeyInit};
+use des::cipher::{BlockCipherDecrypt, BlockCipherEncrypt, KeyInit};
 use hmac::{Hmac, Mac};
 use md4::{Digest, Md4};
 use md5::Md5;
-use rc4::{KeyInit as Rc4KeyInit, StreamCipher};
+use rc4::StreamCipher;
 use sha1::Sha1;
 use zeroize::{Zeroize, Zeroizing};
 
@@ -77,7 +77,8 @@ pub(crate) fn rc4_decrypt(
 }
 
 fn hmac_md5(key: &[u8], data: &[u8]) -> Result<Vec<u8>, Error> {
-    let mut mac = <Hmac<Md5> as Mac>::new_from_slice(key).map_err(|_| Error::InvalidKeyLength)?;
+    let mut mac =
+        <Hmac<Md5> as KeyInit>::new_from_slice(key).map_err(|_| Error::InvalidKeyLength)?;
     mac.update(data);
     Ok(mac.finalize().into_bytes().to_vec())
 }
@@ -96,9 +97,11 @@ fn rc4_usage(usage: KeyUsage) -> u32 {
 }
 
 fn apply_rc4(key: &[u8], data: &mut [u8]) -> Result<(), Error> {
-    type Rc4 = rc4::Rc4<rc4::consts::U16>;
+    if key.len() != 16 {
+        return Err(Error::InvalidKeyLength);
+    }
     let mut cipher =
-        <Rc4 as Rc4KeyInit>::new_from_slice(key).map_err(|_| Error::InvalidKeyLength)?;
+        <rc4::Rc4 as KeyInit>::new_from_slice(key).map_err(|_| Error::InvalidKeyLength)?;
     cipher.apply_keystream(data);
     Ok(())
 }
@@ -241,7 +244,8 @@ pub(crate) fn hmac_sha1_export(key: &[u8], data: &[u8], n: usize) -> Result<Vec<
 }
 
 fn hmac_sha1_trunc(key: &[u8], data: &[u8], n: usize) -> Result<Vec<u8>, Error> {
-    let mut mac = <Hmac<Sha1> as Mac>::new_from_slice(key).map_err(|_| Error::InvalidKeyLength)?;
+    let mut mac =
+        <Hmac<Sha1> as KeyInit>::new_from_slice(key).map_err(|_| Error::InvalidKeyLength)?;
     mac.update(data);
     let mut v = mac.finalize().into_bytes().to_vec();
     v.truncate(n);
@@ -394,13 +398,13 @@ pub(crate) fn cmac_camellia(key: &[u8], data: &[u8]) -> Result<Vec<u8>, Error> {
     use cmac::{Cmac, Mac};
     match key.len() {
         16 => {
-            let mut mac = <Cmac<Camellia128> as Mac>::new_from_slice(key)
+            let mut mac = <Cmac<Camellia128> as KeyInit>::new_from_slice(key)
                 .map_err(|_| Error::InvalidKeyLength)?;
             mac.update(data);
             Ok(mac.finalize().into_bytes().to_vec())
         }
         32 => {
-            let mut mac = <Cmac<Camellia256> as Mac>::new_from_slice(key)
+            let mut mac = <Cmac<Camellia256> as KeyInit>::new_from_slice(key)
                 .map_err(|_| Error::InvalidKeyLength)?;
             mac.update(data);
             Ok(mac.finalize().into_bytes().to_vec())

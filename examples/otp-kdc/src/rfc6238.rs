@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::{Mutex, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use krb5_kdc::{OtpVerdict, OtpVerifier, OtpVerifyRequest};
 use sha1::Sha1;
 use subtle::ConstantTimeEq;

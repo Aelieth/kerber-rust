@@ -39,11 +39,11 @@ impl Drop for P256Keypair {
 
 pub fn p256_generate() -> Result<P256Keypair, Error> {
     use p256::elliptic_curve::PrimeField;
-    use p256::elliptic_curve::sec1::ToEncodedPoint;
+    use p256::elliptic_curve::sec1::ToSec1Point;
     use p256::{AffinePoint, ProjectivePoint};
     let scalar = random_scalar()?;
     let point = ProjectivePoint::GENERATOR * scalar;
-    let enc = AffinePoint::from(point).to_encoded_point(false);
+    let enc = AffinePoint::from(point).to_sec1_point(false);
     let mut secret = [0u8; 32];
     secret.copy_from_slice(scalar.to_repr().as_ref());
     Ok(P256Keypair {
@@ -53,14 +53,14 @@ pub fn p256_generate() -> Result<P256Keypair, Error> {
 }
 
 pub fn p256_shared(secret: &[u8; 32], peer_public: &[u8]) -> Result<[u8; 32], Error> {
-    use p256::elliptic_curve::sec1::{FromEncodedPoint, ToEncodedPoint};
-    use p256::{AffinePoint, EncodedPoint, ProjectivePoint};
+    use p256::elliptic_curve::sec1::{FromSec1Point, ToSec1Point};
+    use p256::{AffinePoint, ProjectivePoint, Sec1Point};
     let sc = scalar_from_bytes32(secret)?;
-    let ep = EncodedPoint::from_bytes(peer_public).map_err(|_| Error::Integrity)?;
-    let aff = Option::<AffinePoint>::from(AffinePoint::from_encoded_point(&ep))
-        .ok_or(Error::Integrity)?;
+    let ep = Sec1Point::from_bytes(peer_public).map_err(|_| Error::Integrity)?;
+    let aff =
+        Option::<AffinePoint>::from(AffinePoint::from_sec1_point(&ep)).ok_or(Error::Integrity)?;
     let shared = ProjectivePoint::from(aff) * sc;
-    let out_pt = AffinePoint::from(shared).to_encoded_point(false);
+    let out_pt = AffinePoint::from(shared).to_sec1_point(false);
     let bytes = out_pt.as_bytes();
     if bytes.len() < 33 {
         return Err(Error::Integrity);

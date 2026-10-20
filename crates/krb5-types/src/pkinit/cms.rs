@@ -138,11 +138,11 @@ fn spki_uncompressed(cert: &[u8]) -> Option<Vec<u8>> {
 }
 
 fn decompress_p256(pt: &[u8]) -> Option<Vec<u8>> {
-    use p256::elliptic_curve::sec1::{FromEncodedPoint, ToEncodedPoint};
-    use p256::{AffinePoint, EncodedPoint};
-    let ep = EncodedPoint::from_bytes(pt).ok()?;
-    let aff = Option::<AffinePoint>::from(AffinePoint::from_encoded_point(&ep))?;
-    Some(aff.to_encoded_point(false).as_bytes().to_vec())
+    use p256::elliptic_curve::sec1::{FromSec1Point, ToSec1Point};
+    use p256::{AffinePoint, Sec1Point};
+    let ep = Sec1Point::from_bytes(pt).ok()?;
+    let aff = Option::<AffinePoint>::from(AffinePoint::from_sec1_point(&ep))?;
+    Some(aff.to_sec1_point(false).as_bytes().to_vec())
 }
 
 /// CMS SignedData with an explicit certificate and ECDSA signature.

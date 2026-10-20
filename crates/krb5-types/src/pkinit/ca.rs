@@ -20,7 +20,7 @@ fn generate_p256() -> Option<([u8; 32], Vec<u8>)> {
         getrandom::getrandom(&mut secret).ok()?;
         secret[0] &= 0x7f;
         if let Ok(sk) = SigningKey::from_bytes((&secret).into()) {
-            let pt = sk.verifying_key().to_encoded_point(false);
+            let pt = sk.verifying_key().to_sec1_point(false);
             return Some((secret, pt.as_bytes().to_vec()));
         }
     }

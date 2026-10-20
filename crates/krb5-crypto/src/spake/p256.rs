@@ -1,6 +1,6 @@
 use p256::elliptic_curve::ops::Reduce;
-use p256::elliptic_curve::sec1::{FromEncodedPoint, ToEncodedPoint};
-use p256::{AffinePoint, EncodedPoint, ProjectivePoint, Scalar, U256};
+use p256::elliptic_curve::sec1::{FromSec1Point, ToSec1Point};
+use p256::{AffinePoint, ProjectivePoint, Scalar, Sec1Point, U256};
 use zeroize::Zeroizing;
 
 use crate::error::Error;
@@ -21,8 +21,8 @@ pub(super) const N: [u8; 33] = [
 ];
 
 pub(super) fn element(bytes: &[u8]) -> Result<ProjectivePoint, Error> {
-    let encoded = EncodedPoint::from_bytes(bytes).map_err(|_| Error::Integrity)?;
-    let affine = Option::<AffinePoint>::from(AffinePoint::from_encoded_point(&encoded))
+    let encoded = Sec1Point::from_bytes(bytes).map_err(|_| Error::Integrity)?;
+    let affine = Option::<AffinePoint>::from(AffinePoint::from_sec1_point(&encoded))
         .ok_or(Error::Integrity)?;
     Ok(ProjectivePoint::from(affine))
 }
@@ -37,12 +37,12 @@ fn reduce(bytes: &[u8]) -> Result<Zeroizing<Scalar>, Error> {
         return Err(Error::Integrity);
     }
     let wide = Zeroizing::new(U256::from_be_slice(bytes));
-    Ok(Zeroizing::new(<Scalar as Reduce<U256>>::reduce(*wide)))
+    Ok(Zeroizing::new(<Scalar as Reduce<U256>>::reduce(&wide)))
 }
 
 fn encode(point: &ProjectivePoint) -> Result<Vec<u8>, Error> {
     let affine = Zeroizing::new(AffinePoint::from(*point));
-    let encoded = Zeroizing::new(affine.to_encoded_point(true));
+    let encoded = Zeroizing::new(affine.to_sec1_point(true));
     if encoded.len() != M.len() {
         return Err(Error::Integrity);
     }

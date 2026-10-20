@@ -36,6 +36,7 @@ any other `###` heading.
 
 ### Changed
 
+- **crypto.** RustCrypto moves to the 0.14 generation (`aes` 0.9, `sha2` 0.11, `p256` 0.14 and the rest) and curve25519-dalek to 5.0; every enctype and SPAKE vector holds.
 - **examples.** Comments are the preauth-plugin pointer and the two invariants the code does not state.
 - **kdc.** A database change skips the whole-realm reread when no other writer moved the database, merging only the KDC's lockout records; a failed change is undone in memory.
 - **config.** The KDC, kadmind and kadmin.local read their profile once and apply it in one order, kdc.conf over krb5.conf; kadmind let krb5.conf win.
