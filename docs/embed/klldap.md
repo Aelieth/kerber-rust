@@ -28,7 +28,7 @@ kerber-rust stays Apache-2.0 OR MIT; `publish = false`.
 | --- | --- |
 | `nix` | **0.31** on both sides (klldap resolves 0.31.3) |
 | chrono 0.4, thiserror 2, tracing 0.1, sha2/hmac/md-5 0.10, zeroize 1, getrandom 0.2, serde 1 | already the same major |
-| rasn, aes/des/rc4/camellia/cmac, p256, md4 | kerber-only (additive) |
+| rasn, aes/des/rc4/camellia/cmac, p256, md4, pbkdf2 | kerber-only (additive) |
 
 `rasn` is a normal `0.28` requirement (resolved **0.28.14**). MIT golden DER
 (`crates/krb5-protocol/tests/golden_traces.rs`) still byte-matches

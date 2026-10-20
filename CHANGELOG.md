@@ -18,7 +18,6 @@ any other `###` heading.
 
 ### Security
 
-- **crypto.** String-to-key's PBKDF2 keys each HMAC afresh, as MIT's builtin `F()`; a copied keyed state moved its time by a cycle with the password. Every s2k vector holds.
 - **gss.** A DER length past the end of its token is refused, as MIT's `get_tag`; an eight-octet one overflowed, and SPNEGO and the acceptor panicked.
 - **crypto.** Encrypt keeps the confounder and plaintext, including the RC4 copy, in a buffer that is wiped on drop.
 - **admin.** kpasswd refuses a `LOCKDOWN_KEYS` principal's keys (5; MIT's 464 allows it), answers no kpasswd reply or error, and names no path. Lab beside MIT.

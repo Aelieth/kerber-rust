@@ -612,6 +612,7 @@ dependencies = [
  "md4",
  "num-bigint",
  "p256",
+ "pbkdf2",
  "rc4",
  "sha1",
  "sha2",
@@ -905,6 +906,16 @@ dependencies = [
  "primefield",
  "primeorder",
  "sha2",
+]
+
+[[package]]
+name = "pbkdf2"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "112d82ceb8c5bf524d9af484d4e4970c9fd5a0cc15ba14ad93dccd28873b0629"
+dependencies = [
+ "digest",
+ "hmac",
 ]
 
 [[package]]

@@ -274,6 +274,10 @@ criteria = "safe-to-deploy"
 version = "0.14.0"
 criteria = "safe-to-deploy"
 
+[[exemptions.pbkdf2]]
+version = "0.13.0"
+criteria = "safe-to-deploy"
+
 [[exemptions.pin-project-lite]]
 version = "0.2.17"
 criteria = "safe-to-deploy"
