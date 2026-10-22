@@ -25,6 +25,7 @@ use crate::kdb::PrincipalRead;
 use crate::status;
 use crate::store::{KtkdbError, Principal, ktkdb_get_entry};
 
+/// After armor, inner_body and inner_padata are the request; MIT frees the outer one.
 pub(crate) struct FastOk {
     pub(crate) armor_key: ProtocolKey,
     pub(crate) inner_padata: Vec<PaData>,
