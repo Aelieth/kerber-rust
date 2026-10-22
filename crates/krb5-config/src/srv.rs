@@ -1,10 +1,6 @@
-//! DNS SRV for KDC location.
-//!
-//! MIT `dns_locate_server_srv` (`lib/krb5/os/locate_kdc.c:756-797`): `_kerberos._udp` then
-//! `_kerberos._tcp` when the profile names no KDC.
-//! MIT `krb5int_make_srv_query_realm` (`lib/krb5/os/dnssrv.c:258-347`): the query name ends in
-//! `.`, and SRV records are kept in priority order. Weight does not reorder them.
-//! MIT `krb5int_dns_init` (`lib/krb5/os/dnsglue.c:120-194`): `res_ninit` then `res_nsearch`.
+// MIT `dns_locate_server_srv` (`lib/krb5/os/locate_kdc.c:756-797`): `_kerberos._udp` then
+// MIT `krb5int_make_srv_query_realm` (`lib/krb5/os/dnssrv.c:258-347`): the query name ends in
+// MIT `krb5int_dns_init` (`lib/krb5/os/dnsglue.c:120-194`): `res_ninit` then `res_nsearch`.
 
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, UdpSocket};
@@ -20,7 +16,6 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_ATTEMPTS: u32 = 2;
 const DEFAULT_NDOTS: usize = 1;
 
-/// One `res_ninit` state: nameservers (port 53), timeout, attempts, ndots, search.
 #[derive(Clone, Debug)]
 struct Resolv {
     servers: Vec<SocketAddr>,
@@ -42,11 +37,6 @@ impl Resolv {
     }
 }
 
-/// `_kerberos._udp` then `_kerberos._tcp` for `realm`.
-///
-/// # Errors
-///
-/// [`Error::Dns`] when neither name yields an SRV target.
 pub fn lookup_srv_kdc(realm: &str) -> Result<Vec<Endpoint>, Error> {
     locate_kdc_srv(realm, &load_resolv())
 }
@@ -75,7 +65,6 @@ enum Find {
 
 fn query_service(realm: &str, proto: &str, resolv: &Resolv) -> Find {
     // MIT `make_lookup_name` (`lib/krb5/os/dnssrv.c:50-78`): the name ends in `.` so the
-    // search list is not appended.
     let name = format!("_kerberos.{proto}.{realm}.");
     let transport = if proto == "_tcp" {
         super::KdcTransport::Tcp
@@ -167,7 +156,6 @@ fn apply_options(resolv: &mut Resolv, text: &str) {
     }
 }
 
-/// `res_nsearch` for a name. A trailing dot returns the as-is answer, including NXDOMAIN.
 fn search(name: &str, qtype: u16, resolv: &Resolv) -> Result<Vec<u8>, Error> {
     let trailing = name.ends_with('.');
     let bare = name.trim_end_matches('.');
@@ -217,7 +205,6 @@ fn query(name: &str, qtype: u16, resolv: &Resolv) -> Result<Vec<u8>, Error> {
         match send_server(*server, &msg, id, name, qtype, resolv) {
             Ok(buf) => {
                 let rc = rcode(&buf);
-                // SERVFAIL, NOTIMP, REFUSED: try the next nameserver.
                 if rc == 2 || rc == 4 || rc == 5 {
                     last = Error::Dns(format!("rcode {rc}"));
                     continue;
@@ -378,7 +365,6 @@ fn eq_name(got: &str, want: &str) -> bool {
 
 fn mit_host(host: &str) -> String {
     // MIT `locate_srv_dns_1` (`lib/krb5/os/locate_kdc.c:379-382`): a sole empty host is no service.
-    // Live MIT 1.22.2 expands a root target to `.` and stores `..`, so that test does not fire.
     if host.is_empty() || host == "." || host == ".." {
         "..".to_string()
     } else {
@@ -394,8 +380,7 @@ fn srv_targets(msg: &[u8], transport: super::KdcTransport) -> Find {
     for rec in &mut recs {
         rec.0 = mit_host(&rec.0);
     }
-    // MIT `place_srv_entry` (`lib/krb5/os/dnssrv.c:81-100`): lower priority first; weight is
-    // not used. Equal priorities stay in answer order.
+    // MIT place_srv_entry; see docs/parity/b1-client.md
     let mut order: Vec<usize> = (0..recs.len()).collect();
     order.sort_by(|&a, &b| recs[a].1.cmp(&recs[b].1).then(a.cmp(&b)));
     Find::Hit(
@@ -410,7 +395,6 @@ fn srv_targets(msg: &[u8], transport: super::KdcTransport) -> Find {
     )
 }
 
-/// (host, priority, port) in answer order. Weight is parsed and dropped.
 fn parse_srv(msg: &[u8]) -> Vec<(String, u16, u16)> {
     if msg.len() < 12 {
         return Vec::new();

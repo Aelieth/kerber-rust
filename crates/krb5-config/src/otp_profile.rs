@@ -1,30 +1,18 @@
-//! `[otp]` (`plugins/preauth/otp/otp_state.c`): the token types MIT's otp module reads from the KDC
-//! context's profile, kdc.conf first, then krb5.conf.
-//!
-//! Two halves. The tree: `[otp]` of one file as MIT's profile library keeps it (`util/profile`),
-//! and the lookups the module makes over the files in order. The decode: `token_types_decode`. The
-//! RADIUS `server` and `secret` are refused, so the module does not initialize (`docs/mit-deviations.md`).
-
 use std::collections::BTreeMap;
 
 use super::plugin_profile::{PluginLine, parse_plugin_line};
 use super::profile::{c_isspace, mit_boolean, parse_profile_int};
 use super::{KdcConf, Krb5Conf};
 
-/// MIT `DEFAULT_TYPE_NAME` (`plugins/preauth/otp/otp_state.c:42-42`): the token type a token names when it names none.
+// MIT `DEFAULT_TYPE_NAME` (`plugins/preauth/otp/otp_state.c:42-42`): the token type a token names when it names none.
 pub const DEFAULT_OTP_TYPE: &str = "DEFAULT";
 
-/// MIT `PROF_BAD_BOOLEAN` (`util/profile/prof_err.et:60-60`): the text of a value that is no boolean.
 const BAD_BOOLEAN: &str = "Invalid boolean value";
-/// MIT `PROF_BAD_INTEGER` (`util/profile/prof_err.et:61-61`): the text of a value that is no integer.
+// MIT `PROF_BAD_INTEGER` (`util/profile/prof_err.et:61-61`): the text of a value that is no integer.
 const BAD_INTEGER: &str = "Invalid integer value";
-/// `strerror(EINVAL)`, the code MIT's module fails a section with.
 const EINVAL: &str = "Invalid argument";
 
-/// `[otp]` of one profile file: the subsections in `strcmp` order, a repeated one merged into the first,
-/// each with its relations in file order.
-///
-/// MIT `profile_add_node` (`util/profile/prof_tree.c:197-250`): a node goes after the last node whose name is not greater, a repeated subsection is the first one, and a relation is dropped when a final relation of that name is already there.
+// MIT `profile_add_node` (`util/profile/prof_tree.c:197-250`): a node goes after the last node whose name is not greater, a repeated subsection is the first one, and a relation is dropped when a final relation of that name is already there.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct OtpTree {
     section_final: bool,
@@ -45,23 +33,19 @@ struct Relation {
 }
 
 impl OtpTree {
-    /// The node of `ty`, and whether a final node was passed on the way to it.
-    ///
-    /// MIT `profile_node_iterator` (`util/profile/prof_tree.c:518-653`): a final section or subsection stops the walk at the end of its file.
+    // MIT `profile_node_iterator` (`util/profile/prof_tree.c:518-653`): a final section or subsection stops the walk at the end of its file.
     fn node(&self, ty: &str) -> (Option<&TypeNode>, bool) {
         let node = self.types.get(ty);
         (node, self.section_final || node.is_some_and(|n| n.is_final))
     }
 }
 
-/// The KDC context's profile as the otp module reads it: the `[otp]` of each file, first file first.
 #[derive(Clone, Debug, Default)]
 pub struct OtpProfile<'a> {
     files: Vec<&'a OtpTree>,
 }
 
 impl<'a> OtpProfile<'a> {
-    /// A profile of these files, in lookup order.
     #[must_use]
     pub fn new(files: &[&'a OtpTree]) -> Self {
         Self {
@@ -69,9 +53,7 @@ impl<'a> OtpProfile<'a> {
         }
     }
 
-    /// The names under `[otp]`: each file's in ascending order, then the next file's, none removed.
-    ///
-    /// MIT `profile_get_subsection_names` (`util/profile/prof_get.c:405-436`): every subsection the iterator returns is listed, repeats included.
+    // MIT profile_get_subsection_names; see docs/parity/a3-preauth.md
     #[must_use]
     pub fn subsection_names(&self) -> Vec<&'a str> {
         let mut out = Vec::new();
@@ -88,9 +70,7 @@ impl<'a> OtpProfile<'a> {
         out
     }
 
-    /// The first value of `relation` in `ty`, from the first file that has one.
-    ///
-    /// MIT `profile_get_value` (`util/profile/prof_get.c:219-249`): the first value the iterator yields. A final node ends the walk at the end of its file.
+    // MIT profile_get_value; see docs/parity/a3-preauth.md
     #[must_use]
     pub fn value(&self, ty: &str, relation: &str) -> Option<&'a str> {
         for file in &self.files {
@@ -105,9 +85,7 @@ impl<'a> OtpProfile<'a> {
         None
     }
 
-    /// Every value of `relation` in `ty`, each file's in file order, kdc.conf's first.
-    ///
-    /// MIT `profile_get_values` (`util/profile/prof_get.c:156-193`): all the values the iterator yields, across the files.
+    // MIT profile_get_values; see docs/parity/a3-preauth.md
     #[must_use]
     pub fn values(&self, ty: &str, relation: &str) -> Vec<&'a str> {
         let mut out = Vec::new();
@@ -129,25 +107,17 @@ impl<'a> OtpProfile<'a> {
     }
 }
 
-/// One token type of `[otp]`, as MIT's `token_type_decode` reads it, without the RADIUS `server` and `secret`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OtpType {
-    /// The name a token's `type` selects. It also names the embedder verifier.
     pub name: String,
-    /// Whether the username of a token that names none leaves the realm out.
     pub strip_realm: bool,
-    /// The indicators a token of this type adds when it has none of its own, in profile order.
     pub indicators: Vec<String>,
-    /// MIT's `timeout` in milliseconds. Read, unused: the verifier is in process.
     pub timeout_ms: i32,
-    /// MIT's `retries`. Read, unused.
     pub retries: i32,
 }
 
 impl OtpType {
-    /// The built-in type of that name.
-    ///
-    /// MIT `token_type_default` (`plugins/preauth/otp/otp_state.c:152-166`): the realm stays in the username, there are no indicators, the timeout is 5 s and there are 3 retries.
+    // MIT `token_type_default` (`plugins/preauth/otp/otp_state.c:152-166`): the realm stays in the username, there are no indicators, the timeout is 5 s and there are 3 retries.
     #[must_use]
     pub fn builtin(name: &str) -> Self {
         Self {
@@ -160,14 +130,10 @@ impl OtpType {
     }
 }
 
-/// Why the otp module does not initialize.
-///
-/// MIT `load_preauth_plugins` (`kdc/kdc_preauth.c:207-219`): the module is left out and the KDC starts.
+// MIT load_preauth_plugins; see docs/parity/a3-preauth.md
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OtpInitError {
-    /// MIT's message for the failing code, which ends the `preauth otp failed to initialize` line.
     pub emsg: String,
-    /// The `com_err` text MIT logs before that line, when it logs one.
     pub detail: Option<String>,
 }
 
@@ -178,7 +144,6 @@ fn init_error(emsg: &str) -> OtpInitError {
     }
 }
 
-/// MIT `profile_get_integer` (`util/profile/prof_get.c:309-334`): a relation that is absent is the default, one that is no integer fails.
 fn integer(
     profile: &OtpProfile<'_>,
     ty: &str,
@@ -191,16 +156,12 @@ fn integer(
     }
 }
 
-/// MIT `token_type_decode` (`plugins/preauth/otp/otp_state.c:178-279`): one type from the profile.
-/// The order is MIT's: `strip_realm`, `server`, `secret`, `timeout`, `retries`, `indicator`. A
-/// `server` or `secret` fails the section, where MIT reads the RADIUS socket and the secret file.
+// MIT token_type_decode; see docs/parity/a3-preauth.md
 fn token_type_decode(profile: &OtpProfile<'_>, name: &str) -> Result<OtpType, OtpInitError> {
-    // MIT `token_type_decode` (`plugins/preauth/otp/otp_state.c:194-197`): `strip_realm` is a boolean, true when absent, and a value that is none fails.
     let strip_realm = match profile.value(name, "strip_realm") {
         None => true,
         Some(v) => mit_boolean(v).ok_or_else(|| init_error(BAD_BOOLEAN))?,
     };
-    // MIT `token_type_decode` (`plugins/preauth/otp/otp_state.c:200-237`): `server` and `secret` name the RADIUS socket and its secret file.
     for relation in ["server", "secret"] {
         if profile.value(name, relation).is_some() {
             return Err(OtpInitError {
@@ -211,10 +172,8 @@ fn token_type_decode(profile: &OtpProfile<'_>, name: &str) -> Result<OtpType, Ot
             });
         }
     }
-    // MIT `token_type_decode` (`plugins/preauth/otp/otp_state.c:240-250`): `timeout` is seconds, stored in milliseconds, and `retries` is a count.
     let timeout = integer(profile, name, "timeout", 5)?;
     let retries = integer(profile, name, "retries", 3)?;
-    // MIT `token_type_decode` (`plugins/preauth/otp/otp_state.c:253-262`): every `indicator`, in order.
     let indicators = profile
         .values(name, "indicator")
         .into_iter()
@@ -229,15 +188,6 @@ fn token_type_decode(profile: &OtpProfile<'_>, name: &str) -> Result<OtpType, Ot
     })
 }
 
-/// MIT `token_types_decode` (`plugins/preauth/otp/otp_state.c:298-344`): the built-in DEFAULT when no
-/// section is named DEFAULT, then one type per name `[otp]` lists. A repeat of a name is a second,
-/// identical type, as in MIT.
-///
-/// # Errors
-///
-/// The first section that fails, in listing order: [`OtpInitError`] with MIT's message for a
-/// `strip_realm` that is no boolean or a `timeout` or `retries` that is no integer, and for a
-/// `server` or `secret`, which are refused.
 pub fn token_types_decode(profile: &OtpProfile<'_>) -> Result<Vec<OtpType>, OtpInitError> {
     let names = profile.subsection_names();
     let mut types = Vec::with_capacity(names.len() + 1);
@@ -250,21 +200,12 @@ pub fn token_types_decode(profile: &OtpProfile<'_>) -> Result<Vec<OtpType>, OtpI
     Ok(types)
 }
 
-/// The token types for a KDC with this kdc.conf and krb5.conf.
-///
-/// MIT `otp_state_new` (`plugins/preauth/otp/otp_state.c:579-585`): the types come from the KDC context's profile, whose files are kdc.conf, then krb5.conf.
-///
-/// # Errors
-///
-/// As [`token_types_decode`].
+// MIT `otp_state_new` (`plugins/preauth/otp/otp_state.c:579-585`): the types come from the KDC context's profile, whose files are kdc.conf, then krb5.conf.
 pub fn kdc_otp_types(kdc: &KdcConf, krb5: &Krb5Conf) -> Result<Vec<OtpType>, OtpInitError> {
     token_types_decode(&OtpProfile::new(&[&kdc.otp, &krb5.otp]))
 }
 
-/// A section header line: its name and whether a `*` follows the `]`. A `[otp]` header enters the
-/// section, and any other leaves it, starred or not.
-///
-/// MIT `parse_std_line` (`util/profile/prof_parse.c:92-124`): the name is the text up to the first `]`, a `*` after it marks the section final, and only blanks may follow.
+// MIT `parse_std_line` (`util/profile/prof_parse.c:92-124`): the name is the text up to the first `]`, a `*` after it marks the section final, and only blanks may follow.
 pub(crate) fn section_header(line: &str) -> Option<(&str, bool)> {
     let rest = line.strip_prefix('[')?;
     let (body, after) = rest.split_once(']')?;
@@ -275,7 +216,6 @@ pub(crate) fn section_header(line: &str) -> Option<(&str, bool)> {
     tail.chars().all(c_isspace).then_some((body, starred))
 }
 
-/// Reads `[otp]` out of one file's lines. The tree is shared with the file's includes and is not cleared.
 pub(crate) struct Cursor {
     depth: usize,
     discard: usize,
@@ -293,9 +233,6 @@ impl Cursor {
         }
     }
 
-    /// `body` is the text between `[` and `]`, not lower-cased.
-    ///
-    /// MIT `parse_std_line` (`util/profile/prof_parse.c:76-212`): a repeated section is the same node, and one seen with the final flag discards its later values until the next section.
     pub(crate) fn observe_header(&mut self, tree: &mut OtpTree, body: &str, starred: bool) {
         if body == "otp" {
             self.in_otp = true;
@@ -401,7 +338,6 @@ mod tests {
         )
     }
 
-    /// The deviation: a `server` or `secret` anywhere fails the section as EINVAL, in MIT's order of reads.
     #[test]
     fn server_and_secret_are_refused() {
         let refused = |relation: &str, name: &str| OtpInitError {
@@ -429,12 +365,10 @@ mod tests {
             types("[otp]\n A = {\n  secret = f\n  server = h\n }\n", "").unwrap_err(),
             refused("server", "A")
         );
-        // From krb5.conf too, and in a later type.
         assert_eq!(
             types("[otp]\n A = {\n }\n", "[otp]\n B = {\n  server = h\n }\n").unwrap_err(),
             refused("server", "B")
         );
-        // MIT's order: strip_realm is read before server, and server before timeout.
         let e = types(
             "[otp]\n A = {\n  strip_realm = maybe\n  server = h\n }\n",
             "",

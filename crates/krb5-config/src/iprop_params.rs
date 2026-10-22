@@ -1,53 +1,24 @@
-//! A realm's incremental-propagation parameters, read as MIT's `kadm5_get_config_params` reads
-//! them (`lib/kadm5/alt_prof.c`) from the profile a KDC-side program opens: kdc.conf, then the
-//! krb5.conf files.
-
 use std::path::{Path, PathBuf};
 
 use super::{Krb5Conf, kdc_conf_path, krb5_conf_paths, load_krb5_conf_paths};
 
-/// MIT `DEF_ULOGENTRIES` (`include/kdb_log.h:42-42`): the update log's entries when no size is configured.
+// MIT `DEF_ULOGENTRIES` (`include/kdb_log.h:42-42`): the update log's entries when no size is configured.
 pub const DEF_ULOGENTRIES: u32 = 1000;
 
-/// One realm's iprop parameters: whether its programs keep the update log, where, how many
-/// entries it holds, and whether `iprop_port` is set.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IpropParams {
-    /// `iprop_enable`: the primary keeps an update log and serves the iprop program, a replica
-    /// pulls from it. False unless the last value is one of MIT's yes words.
     pub enabled: bool,
-    /// `iprop_port`, when a value is there that reads as a number; `kadm5_init` requires one
-    /// whenever iprop is enabled ([`Self::missing_required`]).
     pub port: Option<i32>,
-    /// `iprop_logfile`, else the database name with `.ulog` added.
     pub logfile: PathBuf,
-    /// `iprop_ulogsize`, else `iprop_master_ulogsize`, when positive; else
-    /// [`DEF_ULOGENTRIES`].
     pub ulogsize: u32,
-    /// `iprop_replica_poll`, else `iprop_slave_poll`, else two minutes: the seconds between a
-    /// replica's requests for updates.
     pub poll_time: i32,
-    /// `iprop_resync_timeout`, else five minutes: the seconds a replica waits for a full resync
-    /// it asked for.
     pub resync_timeout: i32,
-    /// The host of the realm's last `admin_server`: the primary a replica polls.
     pub admin_server: Option<String>,
-    /// `iprop_listen`, the primary's iprop listeners; none is the wildcard on `iprop_port`.
     pub listen: Option<String>,
 }
 
 impl IpropParams {
-    /// The parameters of `realm` in `profile` (kdc.conf's relations first, then krb5.conf's, as
-    /// [`load_krb5_conf_paths`] merges them), for the database named `dbname`. Each relation's
-    /// last value counts.
-    /// MIT `kadm5_get_config_params` (`lib/kadm5/alt_prof.c:674-688`): `iprop_enable` is the last value read as a boolean, and false when there is none or it is not one.
-    /// MIT `kadm5_get_config_params` (`lib/kadm5/alt_prof.c:690-697`): `iprop_logfile`, else the database name with `.ulog` added.
-    /// MIT `kadm5_get_config_params` (`lib/kadm5/alt_prof.c:699-700`): `iprop_port` has no default, so only a value that reads as a number sets it.
-    /// MIT `kadm5_get_config_params` (`lib/kadm5/alt_prof.c:706-724`): `iprop_ulogsize`, else `iprop_master_ulogsize`, when positive; else `DEF_ULOGENTRIES`.
-    /// MIT `kadm5_get_config_params` (`lib/kadm5/alt_prof.c:703-704`): `iprop_resync_timeout` is a delta time, five minutes by default.
-    /// MIT `kadm5_get_config_params` (`lib/kadm5/alt_prof.c:726-731`): `iprop_replica_poll`, and only when it is absent or no delta time, `iprop_slave_poll` or two minutes.
-    /// MIT `kadm5_get_config_params` (`lib/kadm5/alt_prof.c:496-502`): `admin_server`'s last value, its port taken off.
-    /// MIT `kadm5_get_config_params` (`lib/kadm5/alt_prof.c:521-522`): `iprop_listen`, the last value.
+    // MIT kadm5_get_config_params; see docs/parity/a4-kadmin.md
     #[must_use]
     pub fn for_realm(profile: Option<&Krb5Conf>, realm: &str, dbname: &Path) -> Self {
         let last = |name: &str| last_value(profile, realm, name);
@@ -80,9 +51,6 @@ impl IpropParams {
         }
     }
 
-    /// The parameters of `realm` in this process's KDC profile ([`kdc_conf_path`], then the
-    /// krb5.conf files), for the database named `dbname`. A profile that does not load counts as
-    /// empty, so iprop is off.
     #[must_use]
     pub fn load(realm: &str, dbname: &Path) -> Self {
         let mut paths = vec![kdc_conf_path()];
@@ -91,37 +59,23 @@ impl IpropParams {
         Self::for_realm(profile.as_ref(), realm, dbname)
     }
 
-    /// Whether `kadm5_init` refuses these parameters: iprop is enabled and `iprop_port` is not
-    /// set. The caller reports MIT's `KADM5_MISSING_CONF_PARAMS` text,
-    /// [`MISSING_CONF_PARAMS`].
-    /// MIT `kadm5_init` (`lib/kadm5/srv/server_init.c:222-228`): with iprop enabled, the log file and the port are required parameters.
+    // MIT kadm5_init; see docs/parity/a4-kadmin.md
     #[must_use]
     pub fn missing_required(&self) -> bool {
         self.enabled && self.port.is_none()
     }
 }
 
-/// kadmind's listeners for a realm: its kadm5 and kpasswd ports and lists, read from the same
-/// profile as [`IpropParams`], each relation's last value.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KadmindListen {
-    /// The kadm5 port: one written in the last `admin_server`, else kadmind's `-port`, else the
-    /// last `kadmind_port` that reads as a number, else 749.
     pub kadmind_port: i32,
-    /// The last `kpasswd_port` that reads as a number, else 464.
     pub kpasswd_port: i32,
-    /// `kadmind_listen`; none is the wildcard on [`Self::kadmind_port`].
     pub kadmind_listen: Option<String>,
-    /// `kpasswd_listen`; none is the wildcard on [`Self::kpasswd_port`].
     pub kpasswd_listen: Option<String>,
 }
 
 impl KadmindListen {
-    /// The listeners of `realm` in `profile` (kdc.conf's relations first, then krb5.conf's),
-    /// `port_arg` being kadmind's `-port`.
-    /// MIT `kadm5_get_config_params` (`lib/kadm5/alt_prof.c:496-502`): a port written in the last `admin_server` sets kadmind's port (`parse_admin_server_port`, read with `atoi`).
-    /// MIT `get_port_param` (`lib/kadm5/alt_prof.c:342-362`): a port already set stays; else the caller's, else the last value that scans as `%d`, else the default.
-    /// MIT `kadm5_get_config_params` (`lib/kadm5/alt_prof.c:517-520`): `kadmind_listen` and `kpasswd_listen`, the last values.
+    // MIT `get_port_param` (`lib/kadm5/alt_prof.c:342-362`): a port already set stays; else the caller's, else the last value that scans as `%d`, else the default.
     #[must_use]
     pub fn for_realm(profile: Option<&Krb5Conf>, realm: &str, port_arg: Option<i32>) -> Self {
         let last = |name: &str| last_value(profile, realm, name);
@@ -141,9 +95,8 @@ impl KadmindListen {
     }
 }
 
-/// The last value of the realm stanza relation `name` in `profile`, the files in order.
-/// MIT `krb5_aprof_get_string` (`lib/kadm5/alt_prof.c:184-211`): with `uselast`, the last of the values.
-/// MIT `krb5_aprof_get_int32` (`lib/kadm5/alt_prof.c:277-299`): with `uselast`, the last of the values.
+// MIT `krb5_aprof_get_string` (`lib/kadm5/alt_prof.c:184-211`): with `uselast`, the last of the values.
+// MIT `krb5_aprof_get_int32` (`lib/kadm5/alt_prof.c:277-299`): with `uselast`, the last of the values.
 fn last_value<'a>(profile: Option<&'a Krb5Conf>, realm: &str, name: &str) -> Option<&'a str> {
     profile
         .and_then(|p| p.kadm5.get(realm))?
@@ -153,19 +106,16 @@ fn last_value<'a>(profile: Option<&'a Krb5Conf>, realm: &str, name: &str) -> Opt
         .map(|(_, v)| v.as_str())
 }
 
-/// MIT `KADM5_MISSING_CONF_PARAMS` (`lib/kadm5/kadm_err.et:55-55`): the text of a required parameter that is not set.
+// MIT KADM5_MISSING_CONF_PARAMS; see docs/parity/a4-kadmin.md
 pub const MISSING_CONF_PARAMS: &str = "Required parameters in kdc.conf missing";
 
-/// MIT `string_to_boolean` (`lib/kadm5/alt_prof.c:82-101`): the yes words, in any case; every other value is no, or not a boolean.
+// MIT string_to_boolean; see docs/parity/a2-as.md
 fn yes_word(v: &str) -> bool {
     ["y", "yes", "true", "t", "1", "on"]
         .iter()
         .any(|w| w.eq_ignore_ascii_case(v))
 }
 
-/// C `sscanf(s, "%d")`: optional blanks and a sign, then at least one digit, up to the first
-/// other character; `None` when there is no digit or the number is past an `int`.
-/// MIT `krb5_aprof_get_int32` (`lib/kadm5/alt_prof.c:277-299`): a value that does not scan as `%d` is not a number.
 fn sscanf_int(s: &str) -> Option<i32> {
     let t = s.trim_start_matches([' ', '\t', '\n', '\r', '\x0b', '\x0c']);
     let (neg, rest) = match t.as_bytes().first() {

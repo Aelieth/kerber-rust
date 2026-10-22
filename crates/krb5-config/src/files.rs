@@ -14,13 +14,10 @@ thread_local! {
     static READ: RefCell<Option<Read>> = const { RefCell::new(None) };
 }
 
-/// While it lives, each profile file and include directory this thread reads is read once: a
-/// later load of one takes what was read then. A program's start holds one over its loads.
 // MIT profile_open_file; see docs/parity/b1-client.md
 pub struct ReadOnce(Option<Read>);
 
 impl ReadOnce {
-    /// Start one on this thread.
     #[must_use]
     pub fn start() -> Self {
         Self(READ.with(|r| r.borrow_mut().replace(Read::default())))

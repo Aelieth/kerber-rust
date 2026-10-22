@@ -1,10 +1,3 @@
-//! kdc.conf (`kadm5/alt_prof.c` `GET_DELTAT_PARAM` / `dict_file` /
-//! `KADM5_CONFIG_FLAGS`; `kdc/main.c` `kdc_ports` / `kdc_tcp_ports` /
-//! `realm_maxrlife` / `reject_bad_transit`): realm stanza,
-//! `[kdcdefaults]`, `[libdefaults]` enctype knobs; and where the KDC-side
-//! tools find kdc.conf and the database (`os/init_os_ctx.c`
-//! `add_kdc_config_file`, `kadm5/alt_prof.c` `kadm5_get_config_params`).
-
 use std::ffi::OsString;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -16,7 +9,6 @@ use super::profile::{
 };
 use super::{Error, KdcConf};
 
-/// The four KDC listener relations of one profile section, as written.
 #[derive(Default)]
 struct ListenRelations {
     listen: Option<String>,
@@ -26,8 +18,6 @@ struct ListenRelations {
 }
 
 impl ListenRelations {
-    /// Record `line` if it is one of the four; the first value wins, as
-    /// `krb5_aprof_get_string` returns the first.
     fn take(&mut self, line: &str) -> bool {
         let Some((k, v)) = split_kv(line) else {
             return false;
@@ -101,13 +91,11 @@ impl Default for KdcConf {
     }
 }
 
-/// MIT `MAX_DGRAM_SIZE` (`include/osconf.hin:113-113`): the largest UDP reply by default.
+// MIT `MAX_DGRAM_SIZE` (`include/osconf.hin:113-113`): the largest UDP reply by default.
 pub const MAX_DGRAM_SIZE: i32 = 65_536;
-/// MIT `DEFAULT_TCP_LISTEN_BACKLOG` (`include/osconf.hin:100-100`): MIT's TCP listen backlog is 5; the KDC's default here is 128 (`docs/mit-deviations.md`). The name is kept for the `kdc_tcp_listen_backlog` profile lookup.
+// MIT `DEFAULT_TCP_LISTEN_BACKLOG` (`include/osconf.hin:100-100`): MIT's TCP listen backlog is 5; the KDC's default here is 128 (`docs/mit-deviations.md`). The name is kept for the `kdc_tcp_listen_backlog` profile lookup.
 pub const DEFAULT_TCP_LISTEN_BACKLOG: i32 = 128;
 
-/// A profile value read as C's `sscanf("%d")` reads it: blanks, an optional sign, then at least
-/// one digit; a value past `long` stops there and is cut to `int` as glibc stores it.
 pub(crate) fn sscanf_int(v: &str) -> Option<i32> {
     let t = v.trim_start_matches([' ', '\t', '\n', '\r', '\x0b', '\x0c']);
     let (neg, digits) = match t.as_bytes().first() {
@@ -128,15 +116,6 @@ pub(crate) fn sscanf_int(v: &str) -> Option<i32> {
 }
 
 impl KdcConf {
-    /// Parse `kdc.conf` text with at most one realm stanza, read by MIT's one profile parser as
-    /// krb5.conf is (`join_subsection_braces`).
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Profile`] with [`crate::ProfileError::Syntax`] when a relation with no value is
-    /// not followed by a line that starts with `{` (MIT's `PROF_MISSING_OBRACE`); every other
-    /// malformed or unknown line is skipped. [`Error::Parse`] when `[realms]` holds stanzas for
-    /// more than one realm: such a file is read for one realm, [`Self::parse_for_realm`].
     pub fn parse(text: &str) -> Result<Self, Error> {
         let text = join_subsection_braces(text)?;
         let names = stanza_names(&text);
@@ -149,43 +128,21 @@ impl KdcConf {
         Ok(Self::parse_joined(&text))
     }
 
-    /// The settings of `text` that apply to `realm`: every section but `[realms]`, and only
-    /// `realm`'s own stanza there, so another realm's relations are never lent to this one.
-    /// MIT `get_string_param` (`lib/kadm5/alt_prof.c:310-336`): a realm parameter is read from that realm's stanza, else it takes the default.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Profile`] as [`Self::parse`].
+    // MIT `get_string_param` (`lib/kadm5/alt_prof.c:310-336`): a realm parameter is read from that realm's stanza, else it takes the default.
     pub fn parse_for_realm(text: &str, realm: &str) -> Result<Self, Error> {
         let text = join_subsection_braces(text)?;
         Ok(Self::parse_joined(&stanza_of(&text, Some(realm))))
     }
 
-    /// The settings of `text` that belong to no realm, such as `[logging]` and `[libdefaults]`;
-    /// every realm stanza is left out.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Profile`] as [`Self::parse`].
     pub fn parse_without_realms(text: &str) -> Result<Self, Error> {
         let text = join_subsection_braces(text)?;
         Ok(Self::parse_joined(&stanza_of(&text, None)))
     }
 
-    /// [`Self::parse_without_realms`] of the file at `path`, its includes followed.
-    ///
-    /// # Errors
-    ///
-    /// As [`Self::load_file`].
     pub fn load_file_without_realms(path: impl AsRef<Path>) -> Result<Self, Error> {
         Self::parse_without_realms(&read_with_includes(path.as_ref())?)
     }
 
-    /// [`Self::parse_for_realm`] of the file at `path`, its includes followed.
-    ///
-    /// # Errors
-    ///
-    /// As [`Self::load_file`].
     pub fn load_file_for_realm(path: impl AsRef<Path>, realm: &str) -> Result<Self, Error> {
         Self::parse_for_realm(&read_with_includes(path.as_ref())?, realm)
     }
@@ -324,7 +281,6 @@ impl KdcConf {
         }
         conf.disable_last_success = flag("disable_last_success");
         conf.disable_lockout = flag("disable_lockout");
-        // MIT `krb5_aprof_get_int32` (`lib/kadm5/alt_prof.c:284-298`): the last value, read with `sscanf("%d")`; one that does not read leaves the caller's default.
         conf.kdc_max_dgram_reply_size = max_dgram
             .as_deref()
             .and_then(sscanf_int)
@@ -338,43 +294,22 @@ impl KdcConf {
         conf
     }
 
-    /// Apply `krb5kdc -p`: it replaces the default listener list (`[kdcdefaults]`, else 88) but
-    /// not a realm stanza's own, and TCP follows it when no TCP list is written.
-    /// MIT `initialize_realms` (`kdc/main.c:766-773`): `-p` replaces the default list.
-    /// MIT `init_realm` (`kdc/main.c:257-263`): the realm stanza's list wins over that default.
     pub fn apply_port_option(&mut self, ports: &str) {
         if !self.kdc_listen_in_realm {
             ports.clone_into(&mut self.kdc_listen);
         }
     }
 
-    /// The KDC's UDP listeners.
-    /// MIT `main` (`kdc/main.c:961-965`): UDP listens on the realm's `kdc_listen` list.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Parse`] for an entry [`listen::parse_host_string`] refuses.
+    // MIT main; see docs/parity/a4-kadmin.md
     pub fn kdc_udp_listeners(&self) -> Result<Vec<ListenAddr>, Error> {
         listen::listen_addrs(Some(&self.kdc_listen), listen::KDC_PORT)
     }
 
-    /// The KDC's TCP listeners: [`Self::kdc_tcp_listen`], else the UDP list.
-    /// MIT `main` (`kdc/main.c:969-973`): TCP falls back to the UDP list.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Parse`] for an entry [`listen::parse_host_string`] refuses.
     pub fn kdc_tcp_listeners(&self) -> Result<Vec<ListenAddr>, Error> {
         let list = self.kdc_tcp_listen.as_deref().unwrap_or(&self.kdc_listen);
         listen::listen_addrs(Some(list), listen::KDC_PORT)
     }
 
-    /// Load from a path.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Io`] when `path` cannot be read (its bytes need not be UTF-8, as MIT's need not
-    /// be); [`Error::Profile`] as [`KdcConf::parse`], and when an included file does not read.
     pub fn load_file(path: impl AsRef<Path>) -> Result<Self, Error> {
         Self::parse(&read_with_includes(path.as_ref())?)
     }
@@ -395,12 +330,7 @@ fn parse_kdcdefaults(conf: &mut KdcConf, line: &str) {
     }
 }
 
-/// MIT reads the enctype policy knobs from `[libdefaults]` only
-/// (`krb/init_ctx.c get_boolean`, `krb5_get_permitted_enctypes`); a copy under
-/// `[kdcdefaults]` or a realm stanza is ignored, so the KDC's own context
-/// sees what every krb5 library on the host sees. Each relation is the first one written: `seen`
-/// holds the names taken.
-/// MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:218-232`): the KDC context reads `allow_weak_crypto`, `allow_des3` and `allow_rc4` with `get_boolean`, so the first value.
+// MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:218-232`): the KDC context reads `allow_weak_crypto`, `allow_des3` and `allow_rc4` with `get_boolean`, so the first value.
 fn parse_kdc_libdefaults(conf: &mut KdcConf, seen: &mut Vec<String>, line: &str) {
     let Some((k, v)) = split_kv(line) else {
         return;
@@ -414,25 +344,14 @@ fn parse_kdc_libdefaults(conf: &mut KdcConf, seen: &mut Vec<String>, line: &str)
         "allow_weak_crypto" => conf.allow_weak_crypto = Some(truthy(&v)),
         "allow_rc4" => conf.allow_rc4 = Some(truthy(&v)),
         "allow_des3" => conf.allow_des3 = Some(truthy(&v)),
-        // MIT `krb5_get_permitted_enctypes` (`lib/krb5/krb/init_ctx.c:585-587`): `profile_get_string`, so the first value.
+        // MIT krb5_get_permitted_enctypes; see docs/parity/a2-as.md
         "permitted_enctypes" => conf.permitted_enctypes = Some(split_ws(&v)),
-        // MIT `group_init_state` (`groups.c:227-229`): `profile_get_string`, so the first value.
         "spake_preauth_groups" => conf.spake_preauth_groups = Some(split_ws(&v)),
-        // MIT reads kdc_ports/kdc_tcp_ports/reject_bad_transit only from
-        // [kdcdefaults] or a realm stanza, never [libdefaults]; no fallthrough,
-        // so a kdcdefaults knob placed under [libdefaults] is ignored like MIT.
-        // MIT `init_realm` (`kdc/main.c:257-261`): the realm stanza's `kdc_listen`, then
-        // `kdc_ports`.
-        // MIT `initialize_realms` (`kdc/main.c:622-626`): the `[kdcdefaults]` `kdc_listen`,
-        // then `kdc_ports`.
         _ => return,
     }
     seen.push(k.to_owned());
 }
 
-/// The KDC booleans as written: the realm stanza's last `reject_bad_transit`, `disable_pac` and
-/// `restrict_anonymous_to_tgt`, and `[kdcdefaults]`'s last `restrict_anonymous_to_tgt`. Their
-/// names are matched exactly, as the profile's.
 #[derive(Default)]
 struct RealmBooleans {
     reject_bad_transit: Option<String>,
@@ -442,7 +361,6 @@ struct RealmBooleans {
 }
 
 impl RealmBooleans {
-    /// Record `line` of the realm stanza if it is one of them.
     fn realm(&mut self, line: &str) -> bool {
         let Some((k, v)) = split_kv(line) else {
             return false;
@@ -456,8 +374,6 @@ impl RealmBooleans {
         true
     }
 
-    /// Record `line` of `[kdcdefaults]` if it is one of them. MIT reads neither
-    /// `reject_bad_transit` nor `disable_pac` there.
     fn defaults(&mut self, line: &str) -> bool {
         let Some((k, v)) = split_kv(line) else {
             return false;
@@ -469,9 +385,6 @@ impl RealmBooleans {
         true
     }
 
-    /// MIT `init_realm` (`kdc/main.c:292-295`): a realm `restrict_anonymous_to_tgt` that does not read as a boolean leaves `[kdcdefaults]`'s.
-    /// MIT `init_realm` (`kdc/main.c:306-309`): a `reject_bad_transit` that does not read as a boolean is TRUE.
-    /// MIT `init_realm` (`kdc/main.c:338-341`): a `disable_pac` that does not read as a boolean is FALSE.
     fn apply(self, conf: &mut KdcConf) {
         let read = |v: Option<String>| v.as_deref().and_then(aprof_boolean);
         conf.reject_bad_transit = read(self.reject_bad_transit).unwrap_or(true);
@@ -482,7 +395,6 @@ impl RealmBooleans {
     }
 }
 
-/// The realm a `[realms]` stanza's opening line `NAME = {` names.
 fn stanza_name(line: &str) -> &str {
     line.trim_end_matches('{')
         .trim()
@@ -490,7 +402,6 @@ fn stanza_name(line: &str) -> &str {
         .trim()
 }
 
-/// The names of `[realms]`' stanzas in `text` (subsection braces joined), each once, in order.
 fn stanza_names(text: &str) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
     let mut section = String::new();
@@ -518,8 +429,6 @@ fn stanza_names(text: &str) -> Vec<String> {
     names
 }
 
-/// `text` (subsection braces joined) with every section but `[realms]`, and of `[realms]` only
-/// the stanza of `realm`; none with `None`.
 fn stanza_of(text: &str, realm: Option<&str>) -> String {
     let mut kept = String::with_capacity(text.len());
     let mut section = String::new();
@@ -592,7 +501,6 @@ fn parse_kdc_realm_line(conf: &mut KdcConf, line: &str) {
     }
 }
 
-/// Record that the relation `k` is there and read past.
 fn note_unsupported(conf: &mut KdcConf, k: &str) {
     if !conf.unsupported.iter().any(|u| u == k) {
         conf.unsupported.push(k.to_owned());
@@ -600,11 +508,7 @@ fn note_unsupported(conf: &mut KdcConf, k: &str) {
 }
 
 impl KdcConf {
-    /// One line for each relation MIT's programs read that this port reads past, for the startup
-    /// log: the relations [`Self::unsupported`] names, a `supported_enctypes` salt type other
-    /// than `normal`, and a UNIX-domain socket in a listen list.
-    /// MIT `init_realm` (`kdc/main.c:247-250`): `master_key_name` names the master key principal.
-    /// MIT `krb5_string_to_keysalts` (`lib/kadm5/str_conv.c:319-366`): a tuple's salt type is kept.
+    // MIT krb5_string_to_keysalts; see docs/parity/a4-kadmin.md
     #[must_use]
     pub fn unsupported_lines(&self) -> Vec<String> {
         let mut lines: Vec<String> = self
@@ -643,58 +547,48 @@ impl KdcConf {
     }
 }
 
-/// The directory the KDC profile, database, stash and ACL default to: `KERBER_KDC_DIR` at
-/// build time, else `/var/kerberos/krb5kdc` (the Fedora / RHEL / KLLDAP layout).
-/// MIT `KDC_DIR` (`osconf.hin:72-72`): `$(localstatedir)/krb5kdc` in MIT's own build.
+// MIT KDC_DIR; see docs/parity/b1-client.md
 pub const KDC_DIR: &str = match option_env!("KERBER_KDC_DIR") {
     Some(dir) => dir,
     None => "/var/kerberos/krb5kdc",
 };
 
-/// `KDC_DIR/kdc.conf`.
-/// MIT `DEFAULT_KDC_PROFILE` (`osconf.hin:81-81`): the KDC profile when `KRB5_KDC_PROFILE` is unset.
+// MIT `DEFAULT_KDC_PROFILE` (`osconf.hin:81-81`): the KDC profile when `KRB5_KDC_PROFILE` is unset.
 #[must_use]
 pub fn default_kdc_profile() -> PathBuf {
     Path::new(KDC_DIR).join("kdc.conf")
 }
 
-/// `KDC_DIR/principal`.
-/// MIT `DEFAULT_KDB_FILE` (`osconf.hin:74-74`): `database_name` when kdc.conf has none.
+// MIT `DEFAULT_KDB_FILE` (`osconf.hin:74-74`): `database_name` when kdc.conf has none.
 #[must_use]
 pub fn default_kdb_file() -> PathBuf {
     Path::new(KDC_DIR).join("principal")
 }
 
-/// `KDC_DIR/kadm5.acl`.
-/// MIT `DEFAULT_KADM5_ACL_FILE` (`osconf.hin:106-106`): `acl_file` when kdc.conf has none.
+// MIT `DEFAULT_KADM5_ACL_FILE` (`osconf.hin:106-106`): `acl_file` when kdc.conf has none.
 #[must_use]
 pub fn default_acl_file() -> PathBuf {
     Path::new(KDC_DIR).join("kadm5.acl")
 }
 
-/// `KDC_DIR/kpropd.acl`.
-/// MIT `KPROPD_ACL_FILE` (`osconf.hin:132-132`): kpropd's ACL file when `-a` names none.
+// MIT `KPROPD_ACL_FILE` (`osconf.hin:132-132`): kpropd's ACL file when `-a` names none.
 #[must_use]
 pub fn default_kpropd_acl() -> PathBuf {
     Path::new(KDC_DIR).join("kpropd.acl")
 }
 
-/// `KDC_DIR/replica_datatrans`.
-/// MIT `KPROP_DEFAULT_FILE` (`osconf.hin:127-127`): the dump kprop sends when `-f` names none.
+// MIT `KPROP_DEFAULT_FILE` (`osconf.hin:127-127`): the dump kprop sends when `-f` names none.
 #[must_use]
 pub fn default_kprop_file() -> PathBuf {
     Path::new(KDC_DIR).join("replica_datatrans")
 }
 
-/// `KDC_DIR/.k5.<realm>`.
-/// MIT `krb5_def_store_mkey_list` (`kdb_default.c:126-129`): `DEFAULT_KEYFILE_STUB` plus the
-/// realm when no `key_stash_file` is set.
+// MIT krb5_def_store_mkey_list; see docs/parity/a4-kdb.md
 #[must_use]
 pub fn default_stash_file(realm: &str) -> PathBuf {
     Path::new(KDC_DIR).join(format!(".k5.{realm}"))
 }
 
-/// `KRB5_KDC_PROFILE`; in a `test-hooks` build, else the gates' `KRB5_KDC_CONF` alias.
 #[must_use]
 pub fn env_kdc_config() -> Option<PathBuf> {
     env_kdc_config_in(&|name| std::env::var_os(name))
@@ -707,10 +601,7 @@ fn env_kdc_config_in(env: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf> 
     profile.map(PathBuf::from)
 }
 
-/// The KDC profile path: [`env_kdc_config`], else [`default_kdc_profile`], whether or not the
-/// file exists; on a thread a test pinned with [`crate::set_test_kdc_profile`], that path.
-/// MIT `add_kdc_config_file` (`init_os_ctx.c:340-366`): `KRB5_KDC_PROFILE`, else
-/// `DEFAULT_KDC_PROFILE`, put ahead of the krb5.conf files.
+// MIT `add_kdc_config_file` (`init_os_ctx.c:340-366`): `KRB5_KDC_PROFILE`, else
 #[must_use]
 pub fn kdc_conf_path() -> PathBuf {
     if let Some(path) = super::testenv::TEST_KDC_PROFILE.with(|c| c.borrow().clone()) {
@@ -723,10 +614,7 @@ pub(super) fn kdc_conf_path_in(env: &dyn Fn(&str) -> Option<OsString>) -> PathBu
     env_kdc_config_in(env).unwrap_or_else(default_kdc_profile)
 }
 
-/// The KDC profile's text, its bytes taken as lossy UTF-8 since MIT's need not be UTF-8; `None`
-/// when the file is missing, unreadable or a directory.
-/// MIT `profile_init_flags` (`prof_init.c:198-206`): a missing (`ENOENT`) or unreadable
-/// (`EACCES` / `EPERM`) file is skipped, so its defaults apply; any other failure is fatal.
+// MIT profile_init_flags; see docs/parity/b1-client.md
 fn read_kdc_profile(path: &Path) -> Result<Option<String>, Error> {
     match super::files::read(path) {
         Ok(bytes) => Ok(Some(with_includes(path, &bytes)?)),
@@ -745,19 +633,15 @@ fn read_kdc_profile(path: &Path) -> Result<Option<String>, Error> {
     }
 }
 
-/// The text of the kdc.conf at `path`, its includes followed.
 fn read_with_includes(path: &Path) -> Result<String, Error> {
     with_includes(path, &super::files::read(path)?)
 }
 
-/// `bytes`, read from the kdc.conf at `path`, as text with its includes followed: the KDC profile
-/// is one profile file, and MIT's parser follows a file's includes wherever it is read.
 fn with_includes(path: &Path, bytes: &[u8]) -> Result<String, Error> {
     let mut stack = vec![std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())];
     super::profile::resolve_includes(&String::from_utf8_lossy(bytes), &mut stack)
 }
 
-/// The path relations of one realm's `[realms]` stanza.
 #[derive(Default)]
 struct RealmPaths {
     database_name: Option<PathBuf>,
@@ -767,11 +651,6 @@ struct RealmPaths {
 }
 
 impl RealmPaths {
-    /// `realm`'s stanza in `text` (its subsection braces joined, `join_subsection_braces`),
-    /// empty when the profile has none, so that MIT's defaults apply; no other realm's stanza is
-    /// read. A relation written twice takes its last value.
-    /// MIT `get_string_param` (`alt_prof.c:310-336`): `krb5_aprof_get_string(…, TRUE, …)`, the
-    /// last value under `[realms]` → realm, else the default.
     fn stanza(text: &str, realm: &str) -> Self {
         let mut out = Self::default();
         let mut section = String::new();
@@ -815,8 +694,6 @@ impl RealmPaths {
     }
 }
 
-/// The gates' overrides of a realm's paths and master key type, read from the environment only
-/// in a `test-hooks` build: MIT's tools take these from kdc.conf and argv alone.
 #[derive(Default)]
 struct EnvOverrides {
     database_name: Option<PathBuf>,
@@ -844,50 +721,18 @@ impl EnvOverrides {
     }
 }
 
-/// Where a KDC-side tool finds its profile, database, master-key stash and ACL, and which master
-/// key type it uses.
-///
-/// Each path is the relation in the realm's own kdc.conf stanza, else MIT's default under
-/// [`KDC_DIR`]; a `test-hooks` build puts the gates' environment overrides on top. With no realm
-/// known the resolver fails, as MIT's tools do, unless (in a `test-hooks` build) `KRB5_KDC_DB`
-/// and `KRB5_KDC_STASH` name both files.
-/// MIT `kadm5_get_config_params` (`alt_prof.c:447-560`): the realm is the caller's, else
-/// `krb5_get_default_realm`; `database_name` / `acl_file` / `master_key_type` /
-/// `key_stash_file` come from that realm's stanza, with `DEFAULT_KDB_FILE` /
-/// `DEFAULT_KADM5_ACL_FILE` defaults.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KdcPaths {
-    /// The KDC profile ([`kdc_conf_path`]).
     pub profile: PathBuf,
-    /// The profile, parsed; `None` when the file is missing or unreadable.
     pub conf: Option<KdcConf>,
-    /// The realm the paths are for: the caller's, else krb5.conf's `default_realm`.
     pub realm: Option<String>,
-    /// `database_name`, else [`default_kdb_file`]; a `test-hooks` build's `KRB5_KDC_DB` first.
     pub database_name: PathBuf,
-    /// `key_stash_file`, else [`default_stash_file`]; a `test-hooks` build's `KRB5_KDC_STASH`
-    /// first.
     pub key_stash_file: PathBuf,
-    /// `acl_file`, else [`default_acl_file`]; a `test-hooks` build's `KRB5_ACL_FILE` first, and
-    /// its default beside the stash when `KRB5_KDC_STASH` moved it. `None` when the value chosen
-    /// is empty: no ACL file, self-service only.
-    /// MIT `main` (`ovsec_kadmd.c:497-497`): an empty `acl_file` becomes NULL.
     pub acl_file: Option<PathBuf>,
-    /// `master_key_type`, as written; a `test-hooks` build's `KRB5_MASTER_ETYPE` first. `None`
-    /// leaves the tool's default.
     pub master_key_type: Option<String>,
 }
 
 impl KdcPaths {
-    /// Resolve the paths for `realm`, else for krb5.conf's `default_realm`.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Io`] when the KDC profile exists but cannot be read (a missing or unreadable one
-    /// is skipped, as MIT skips it); [`Error::Profile`] when it has a relation with
-    /// no value not followed by a line that starts with `{`; [`Error::NoDefaultRealm`] when neither
-    /// `realm` nor krb5.conf's `default_realm` names a realm and the gates' overrides do not name
-    /// both the database and the stash.
     pub fn resolve(realm: Option<&str>) -> Result<Self, Error> {
         Self::resolve_in(&|name| std::env::var_os(name), realm, || {
             crate::load_krb5_conf().and_then(|c| c.default_realm)
@@ -906,7 +751,6 @@ impl KdcPaths {
             .transpose()?;
         let over = EnvOverrides::read(env);
         let realm = realm.map(str::to_owned).or_else(default_realm);
-        // MIT `init_realm` (`kdc/main.c:229-231`): the realm's relations are read under `[realms]` → that realm only.
         let conf = text
             .as_deref()
             .map(|t| match realm.as_deref() {
@@ -914,8 +758,6 @@ impl KdcPaths {
                 None => KdcConf::parse(t),
             })
             .transpose()?;
-        // MIT `main` (`kdb5_util.c:304-312`): no realm is fatal before any path is read. Only the
-        // gates' KRB5_KDC_DB and KRB5_KDC_STASH, naming both files, stand in for one.
         let relations = match realm.as_deref() {
             Some(realm) => RealmPaths::stanza(text.as_deref().unwrap_or_default(), realm),
             None if over.database_name.is_some() && over.key_stash_file.is_some() => {

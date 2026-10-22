@@ -1,46 +1,27 @@
-//! A realm's KDC PKINIT parameters, read as MIT's `pkinit_init_kdc_profile` reads them
-//! (`plugins/preauth/pkinit/pkinit_srv.c`) from the KDC's profile: kdc.conf, then the krb5.conf
-//! files.
-
 use super::Krb5Conf;
 use super::profile::truthy;
 
-/// One realm's KDC PKINIT options. `identity` and `anchors` are required for the module to
-/// initialize; the KDC checks that, as MIT's init does.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PkinitParams {
-    /// `pkinit_identity`, the first value.
     pub identity: Option<String>,
-    /// `pkinit_anchors`, every value.
     pub anchors: Vec<String>,
-    /// `pkinit_pool`, every value.
     pub pool: Vec<String>,
-    /// `pkinit_revoke`, every value.
     pub revoke: Vec<String>,
-    /// `pkinit_kdc_ocsp`, the first value.
     pub kdc_ocsp: Option<String>,
-    /// `pkinit_require_crl_checking` (default false).
     pub require_crl_checking: bool,
-    /// `pkinit_require_freshness` (default false).
     pub require_freshness: bool,
-    /// The client certificate needs an acceptable extended key usage (default true).
     pub require_eku: bool,
-    /// Microsoft's smart-card logon key usage is acceptable too (default false).
     pub accept_secondary_eku: bool,
-    /// `pkinit_allow_upn`: a client certificate's UPN may name the client (default false).
     pub allow_upn: bool,
-    /// `pkinit_indicator`, every value.
     pub indicators: Vec<String>,
-    /// `pkinit_dh_min_bits`, the first value.
     pub dh_min_bits: Option<String>,
 }
 
 impl PkinitParams {
-    /// The options of `realm` in `profile`, kdc.conf's relations first, then krb5.conf's.
-    /// MIT `pkinit_kdcdefault_strings` (`plugins/preauth/pkinit/pkinit_profile.c:90-144`): the realm's values, else `[kdcdefaults]`'s.
-    /// MIT `pkinit_kdcdefault_string` (`plugins/preauth/pkinit/pkinit_profile.c:147-167`): the first of those values.
-    /// MIT `pkinit_kdcdefault_boolean` (`plugins/preauth/pkinit/pkinit_profile.c:170-185`): that value read as a yes word, else the default.
-    /// MIT `pkinit_init_kdc_profile` (`plugins/preauth/pkinit/pkinit_srv.c:1016-1034`): `pkinit_eku_checking` is `kpClientAuth`, `scLogin` or `none` in any case; another value keeps the default.
+    // MIT `pkinit_kdcdefault_strings` (`plugins/preauth/pkinit/pkinit_profile.c:90-144`): the realm's values, else `[kdcdefaults]`'s.
+    // MIT `pkinit_kdcdefault_string` (`plugins/preauth/pkinit/pkinit_profile.c:147-167`): the first of those values.
+    // MIT pkinit_kdcdefault_boolean; see docs/parity/a2-as.md
+    // MIT pkinit_init_kdc_profile; see docs/parity/a3-preauth.md
     #[must_use]
     pub fn for_realm(profile: &Krb5Conf, realm: &str) -> Self {
         let realm_relations = profile.pkinit.get(realm).map_or(&[][..], Vec::as_slice);
@@ -84,8 +65,7 @@ impl PkinitParams {
 }
 
 impl Krb5Conf {
-    /// A client's PKINIT option for `realm`, every value of the first place that has one.
-    /// MIT `pkinit_libdefault_strings` (`plugins/preauth/pkinit/pkinit_profile.c:222-302`): `[libdefaults] REALM = { option }`, else `[realms] REALM`'s, else `[libdefaults]`'s.
+    // MIT pkinit_libdefault_strings; see docs/parity/b1-client-preauth.md
     #[must_use]
     pub fn pkinit_libdefault_strings(&self, realm: &str, option: &str) -> Vec<String> {
         let values = |rels: Option<&Vec<(String, String)>>| -> Vec<String> {

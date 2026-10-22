@@ -1,31 +1,14 @@
-//! `[plugins]` `disable` and `enable_only` (`lib/krb5/krb/plugin.c`).
-//!
-//! `module` is not read. kdcpreauth, clpreauth, kdcpolicy, audit, pwqual and kadm5_hook ask this profile by name.
-
 use std::collections::BTreeMap;
 
 use super::profile::{c_isspace, relation_value};
 use super::{KdcConf, Krb5Conf};
 
-/// `disable` and `enable_only` for one interface, in profile order.
-///
-/// MIT `get_profile_var` (`lib/krb5/krb/plugin.c:188-203`): a missing relation is absent, not an empty list.
-/// MIT `profile_get_values` (`util/profile/prof_get.c:155-195`): each relation value is one string, in file order.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PluginRelations {
-    /// Values of `disable`, or absent when that relation is not set.
     pub disable: Option<Vec<String>>,
-    /// Values of `enable_only`, or absent when that relation is not set.
     pub enable_only: Option<Vec<String>>,
 }
 
-/// `[plugins]` from one profile tree: every interface's `disable` and `enable_only`.
-///
-/// A `[plugins]*` section, a final interface, or a final relation blocks later profile files.
-/// An `include` is part of this tree, not a later file.
-///
-/// MIT `parse_std_line` (`util/profile/prof_parse.c:75-212`): a `*` ends a name and marks that node final.
-/// MIT `profile_add_node` (`util/profile/prof_tree.c:196-250`): a later value of a final relation is not stored.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PluginProfile {
     section_final: bool,
@@ -44,7 +27,6 @@ struct IfaceRelations {
 }
 
 impl PluginProfile {
-    /// The relations for `interface`, matched by exact name.
     #[must_use]
     pub fn relations(&self, interface: &str) -> PluginRelations {
         let Some(iface) = self.ifaces.get(interface) else {
@@ -56,11 +38,6 @@ impl PluginProfile {
         }
     }
 
-    /// This profile, then `later`, as a second profile file after this one.
-    ///
-    /// For a KDC, pass kdc.conf's profile as `self`: that file is first.
-    ///
-    /// MIT `add_kdc_config_file` (`lib/krb5/os/init_os_ctx.c:339-366`): kdc.conf is inserted ahead of the krb5.conf files.
     #[must_use]
     pub fn followed_by(&self, later: &Self) -> Self {
         if self.section_final {
@@ -103,11 +80,6 @@ fn merge_iface(dest: &mut IfaceRelations, later: &IfaceRelations) {
     dest.iface_final |= later.iface_final;
 }
 
-/// Modules left after `disable`, then `enable_only`, in MIT's order.
-///
-/// The caller supplies the named modules, built-in and embedder-registered. `module` is not
-/// applied here, and a name in the caller list is not removed except by these two relations.
-///
 /// ```
 /// use krb5_config::{Krb5Conf, filter_plugin_modules};
 /// let conf = Krb5Conf::parse(
@@ -118,11 +90,9 @@ fn merge_iface(dest: &mut IfaceRelations, later: &IfaceRelations) {
 /// assert_eq!(left, vec!["profile".to_string()]);
 /// Ok::<(), krb5_config::Error>(())
 /// ```
-///
-/// MIT `configure_interface` (`lib/krb5/krb/plugin.c:301-347`): `disable` runs, then `enable_only`.
-/// MIT `remove_disabled_modules` (`lib/krb5/krb/plugin.c:255-269`): named modules are dropped and the rest keep their order.
-/// MIT `filter_enabled_modules` (`lib/krb5/krb/plugin.c:271-299`): each enabled name takes the first remaining match.
-/// MIT `k5_plugin_load_all` (`lib/krb5/krb/plugin.c:421-455`): the configured names are what a caller walks.
+// MIT `remove_disabled_modules` (`lib/krb5/krb/plugin.c:255-269`): named modules are dropped and the rest keep their order.
+// MIT `filter_enabled_modules` (`lib/krb5/krb/plugin.c:271-299`): each enabled name takes the first remaining match.
+// MIT k5_plugin_load_all; see docs/parity/a4-kadmin.md
 #[must_use]
 pub fn filter_plugin_modules<S: AsRef<str>>(
     relations: &PluginRelations,
@@ -148,18 +118,12 @@ pub fn filter_plugin_modules<S: AsRef<str>>(
     kept
 }
 
-/// `interface` from kdc.conf's `[plugins]`, then krb5.conf's.
-///
-/// MIT `add_kdc_config_file` (`lib/krb5/os/init_os_ctx.c:339-366`): the KDC profile is the first file.
 #[must_use]
 pub fn kdc_plugin_relations(kdc: &KdcConf, krb5: &Krb5Conf, interface: &str) -> PluginRelations {
     kdc.plugins.followed_by(&krb5.plugins).relations(interface)
 }
 
 impl Krb5Conf {
-    /// `[plugins]` relations for `interface` in this profile.
-    ///
-    /// MIT `get_profile_var` (`lib/krb5/krb/plugin.c:188-203`): the path is `plugins`, the interface, then the relation.
     #[must_use]
     pub fn plugin_relations(&self, interface: &str) -> PluginRelations {
         self.plugins.relations(interface)
@@ -167,18 +131,12 @@ impl Krb5Conf {
 }
 
 impl KdcConf {
-    /// This kdc.conf file's `[plugins]` relations for `interface`.
-    ///
-    /// MIT `get_profile_var` (`lib/krb5/krb/plugin.c:188-203`): the path is `plugins`, the interface, then the relation.
     #[must_use]
     pub fn plugin_relations(&self, interface: &str) -> PluginRelations {
         self.plugins.relations(interface)
     }
 }
 
-/// Whether `line` is a `[plugins]*` header, optional blanks after the star.
-///
-/// MIT `parse_std_line` (`util/profile/prof_parse.c:92-124`): `*` after `]` marks the section final, and only blanks may follow.
 #[must_use]
 pub(crate) fn starred_plugins_header(line: &str) -> bool {
     let Some(rest) = line.strip_prefix('[') else {
@@ -196,7 +154,6 @@ pub(crate) fn starred_plugins_header(line: &str) -> bool {
     tail.chars().all(c_isspace)
 }
 
-/// Cursor for one file or include. The profile tree is shared and is not cleared.
 pub(crate) struct Cursor {
     depth: usize,
     discard: usize,
@@ -214,7 +171,6 @@ impl Cursor {
         }
     }
 
-    /// `body` is the text between `[` and `]`, not lower-cased.
     pub(crate) fn observe_header(
         &mut self,
         profile: &mut PluginProfile,
@@ -355,8 +311,6 @@ pub(crate) enum PluginLine {
     },
 }
 
-/// One relation or subsection. A tag with whitespace and then more text is skipped.
-/// A quoted value is not a subsection, and the value is not split on whitespace.
 pub(crate) fn parse_plugin_line(line: &str) -> Option<PluginLine> {
     let eq = line.find('=')?;
     if eq == 0 {

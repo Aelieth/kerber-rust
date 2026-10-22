@@ -1,7 +1,3 @@
-//! Test overlays for `krb5_conf_paths` and `kdc_conf_path` (isolation from the host's
-//! `/etc/krb5.conf`, `KRB5_KDC_PROFILE` and kdc.conf). Per thread: `TEST_KRB5_PATHS`,
-//! `TEST_KDC_PROFILE`, `TEST_KRB5_ISOLATION`; process-global: `ISOLATE_SEQ`.
-
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -48,28 +44,21 @@ fn isolate_scratch_dir() -> PathBuf {
     ))
 }
 
-/// Test overlay for [`crate::krb5_conf_paths`] (avoids the host `/etc/krb5.conf`).
 pub fn set_test_krb5_paths(paths: Option<Vec<PathBuf>>) {
     TEST_KRB5_PATHS.with(|c| *c.borrow_mut() = paths);
 }
 
-/// Test overlay for [`crate::kdc_conf_path`] (avoids the host's `KRB5_KDC_PROFILE` and
-/// kdc.conf).
 pub fn set_test_kdc_profile(path: Option<PathBuf>) {
     TEST_KDC_PROFILE.with(|c| *c.borrow_mut() = path);
 }
 
 const ISOLATED_KRB5: &str = "[libdefaults]\n    default_realm = KERBER.TEST\n    dns_lookup_kdc = false\n    dns_lookup_realm = false\n";
 
-/// The profile [`isolate_test_krb5`] pins, for a client operation a test runs.
 #[must_use]
 pub fn isolated_profile() -> crate::Krb5Conf {
     crate::Krb5Conf::parse(ISOLATED_KRB5).unwrap_or_else(|_| crate::Krb5Conf::new())
 }
 
-/// Pin a realm-only krb5.conf, so a host's `udp_preference_limit` cannot force TCP, and an empty
-/// KDC profile, so neither file brings in a host's `[libdefaults]` (`permitted_enctypes`, say),
-/// on this thread.
 pub fn isolate_test_krb5() {
     let dir = isolate_scratch_dir();
     let _ = std::fs::create_dir_all(&dir);

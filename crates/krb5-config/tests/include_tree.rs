@@ -1,5 +1,3 @@
-//! On-disk include-tree integration tests.
-
 #![allow(
     clippy::disallowed_methods,
     reason = "a test sets up its own profile and environment"

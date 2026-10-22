@@ -1,5 +1,3 @@
-//! In-crate config tests (private-bound; moved out of `lib.rs`).
-
 use super::*;
 
 #[test]
@@ -123,7 +121,6 @@ fn parse_kdc_conf_policy() {
     );
 }
 
-/// A fake environment for [`KdcPaths::resolve_in`]: tests cannot set process variables.
 fn fake_env(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<std::ffi::OsString> {
     let vars: Vec<(String, String)> = vars
         .iter()
@@ -146,13 +143,6 @@ fn resolve_paths(
 
 #[test]
 fn libdefaults_does_not_honour_kdcdefaults_knobs() {
-    // MIT reads kdc_ports/kdc_tcp_ports only from [kdcdefaults] or a realm
-    // stanza, and reject_bad_transit from a realm stanza only; a copy under
-    // [libdefaults] is ignored (no fallthrough).
-    // MIT `init_realm` (`kdc/main.c:257-261`): the realm stanza's `kdc_listen`, then
-    // `kdc_ports`.
-    // MIT `initialize_realms` (`kdc/main.c:622-626`): the `[kdcdefaults]` `kdc_listen`,
-    // then `kdc_ports`.
     let lib = KdcConf::parse(
         r"
 [libdefaults]
@@ -163,13 +153,10 @@ fn libdefaults_does_not_honour_kdcdefaults_knobs() {
 ",
     )
     .unwrap();
-    // The kdcdefaults knobs under [libdefaults] are ignored: defaults kept.
     assert_eq!(lib.kdc_listen, "88");
     assert_eq!(lib.kdc_tcp_listen, None);
     assert!(lib.reject_bad_transit, "reject_bad_transit default kept");
-    // The four enctype knobs under [libdefaults] are still honoured.
     assert_eq!(lib.allow_rc4, Some(true));
-    // kdc_ports under [kdcdefaults] is honoured; reject_bad_transit there is not.
     let kdc = KdcConf::parse(
         r"
 [kdcdefaults]
@@ -237,7 +224,6 @@ fn disable_pac_from_kdcdefaults_and_realm() {
     assert!(!lib.disable_pac);
 }
 
-/// MIT `get_tristate` (`lib/krb5/krb/init_ctx.c:107-120`): `dns_canonicalize_hostname` is a profile boolean or `fallback` (case aside), `true` when unset.
 #[test]
 fn dns_canonicalize_hostname_is_mits_tristate() {
     use crate::CanonHost;
@@ -259,13 +245,11 @@ fn dns_canonicalize_hostname_is_mits_tristate() {
     for v in ["false", "nil", "no", "n", "0", "off"] {
         assert_eq!(set(v), CanonHost::False, "{v}");
     }
-    // `f` is no MIT boolean and not `fallback`: the profile is refused, the mode left the default.
     assert_eq!(set("f"), CanonHost::True);
     let bad = Krb5Conf::parse("[libdefaults]\n    dns_canonicalize_hostname = f\n").unwrap();
     assert_eq!(bad.context_refusal, Some(crate::ProfileError::BadTristate));
 }
 
-/// MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:219-248`): a boolean the context reads that is none refuses the profile with `PROF_BAD_BOOLEAN`, ahead of a `dns_canonicalize_hostname` that is neither a boolean nor `fallback` (`EINVAL`); `y` and `t` are true.
 #[test]
 fn the_context_refuses_a_profile_as_mits_does() {
     use crate::ProfileError;
@@ -312,7 +296,6 @@ fn the_context_refuses_a_profile_as_mits_does() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:219-281`): the first check that fails is the context's error: the booleans, then `dns_canonicalize_hostname`, then `request_timeout`, then `plugin_base_dir`.
 #[test]
 fn the_contexts_first_failing_check_names_the_refusal() {
     use crate::ProfileError;
@@ -350,7 +333,6 @@ fn the_contexts_first_failing_check_names_the_refusal() {
     }
 }
 
-/// MIT `profile_node_iterator` (`util/profile/prof_tree.c:586-616`): the context reads `[libdefaults]` relations at the section's top and by their exact names, so one inside a realm's subsection, one spelled otherwise, or one in `[LibDefaults]` is not read and refuses nothing.
 #[test]
 fn the_context_reads_only_top_level_relations_by_name() {
     let parse = |s: &str| Krb5Conf::parse(s).unwrap();
@@ -376,7 +358,6 @@ fn the_context_reads_only_top_level_relations_by_name() {
     assert_eq!(after.qualify_shortname, None);
 }
 
-/// MIT `parse_std_line` (`util/profile/prof_parse.c:75-212`): only a lone, unquoted `{` (blanks after it aside) opens a subsection, so a context relation after `= {aes}`, `= "{"` or `= { # c` is at the section's top and refuses the profile; a `*` ends a tag, so `allow_weak_crypto*` is that relation.
 #[test]
 fn only_a_lone_brace_opens_a_subsection_and_a_star_ends_a_name() {
     let parse = |s: &str| Krb5Conf::parse(s).unwrap();
@@ -418,12 +399,9 @@ fn at(host: &str, port: u16) -> crate::listen::ListenAddr {
 
 #[test]
 fn kdc_ports_list_binds_every_port_on_the_wildcard_like_mit() {
-    // The three cases MIT krb5kdc / kadmind 1.22.2 bind, read from their sockets.
-    // Case 1, KLLDAP's kdc.template.conf: `kdc_ports = 750,88` and nothing else.
     let c = KdcConf::parse("[kdcdefaults]\n    kdc_ports = 750,88\n").unwrap();
     assert_eq!(c.kdc_udp_listeners().unwrap(), vec![wild(750), wild(88)]);
     assert_eq!(c.kdc_tcp_listeners().unwrap(), vec![wild(750), wild(88)]);
-    // Case 2: the realm stanza's lists beat [kdcdefaults], UDP and TCP apart.
     let c = KdcConf::parse(
         "[kdcdefaults]\n    kdc_ports = 750,88\n[realms]\n    R = {\n        kdc_listen = 127.0.0.2:8888 3333\n        kdc_tcp_listen = 9999\n    }\n",
     )
@@ -433,11 +411,9 @@ fn kdc_ports_list_binds_every_port_on_the_wildcard_like_mit() {
         vec![at("127.0.0.2", 8888), wild(3333)]
     );
     assert_eq!(c.kdc_tcp_listeners().unwrap(), vec![wild(9999)]);
-    // Case 3: a TCP-only list leaves UDP on the default.
     let c = KdcConf::parse("[kdcdefaults]\n    kdc_tcp_ports = 7777\n").unwrap();
     assert_eq!(c.kdc_udp_listeners().unwrap(), vec![wild(88)]);
     assert_eq!(c.kdc_tcp_listeners().unwrap(), vec![wild(7777)]);
-    // No kdc.conf listener relation at all: MIT DEFAULT_KDC_PORTLIST on the wildcard.
     let c = KdcConf::default();
     assert_eq!(c.kdc_udp_listeners().unwrap(), vec![wild(88)]);
     assert_eq!(c.kdc_tcp_listeners().unwrap(), vec![wild(88)]);
@@ -445,8 +421,6 @@ fn kdc_ports_list_binds_every_port_on_the_wildcard_like_mit() {
 
 #[test]
 fn kadmind_port_follows_admin_server_then_kadmind_port() {
-    // MIT `kadm5_get_config_params`: a port written in the last admin_server (kdc.conf's
-    // relations, then krb5.conf's) sets kadmind's port before -port and kadmind_port are read.
     use crate::KadmindListen;
     let p = Krb5Conf::parse_files(&["[realms]\n    R = {\n        kadmind_port = 7749\n    }\n"])
         .unwrap();
@@ -470,10 +444,6 @@ fn kadmind_port_follows_admin_server_then_kadmind_port() {
     assert_eq!(KadmindListen::for_realm(None, "R", None).kadmind_port, 749);
 }
 
-/// MIT `parse_std_line` / `parse_line` (`prof_parse.c`), live MIT 1.22.2: a relation with no
-/// value (`kcm_socket =`) opens a subsection whose `{` must start the next line, else every tool
-/// fails with "Improper format of Kerberos configuration file"; a quoted empty value is a value;
-/// a CRLF file has an empty line between the two, so its brace never comes next.
 #[test]
 fn a_relation_with_no_value_needs_its_brace_on_the_next_line() {
     let bad = Krb5Conf::parse("[libdefaults]\n    kcm_socket =\n    default_realm = X.TEST\n");
@@ -487,7 +457,6 @@ fn a_relation_with_no_value_needs_its_brace_on_the_next_line() {
     let realms = "[realms]\n    X.TEST =\n    {\n        kdc = k.x.test\n    }\n";
     let c = Krb5Conf::parse(realms).unwrap();
     assert_eq!(c.kdcs_for("X.TEST").unwrap()[0].host, "k.x.test");
-    // Off Apple MIT reads a CRLF file's lines whole, their `\r\n` stripped: the `{` comes next.
     let crlf = Krb5Conf::parse(&realms.replace('\n', "\r\n")).unwrap();
     assert_eq!(crlf.kdcs_for("X.TEST").unwrap()[0].host, "k.x.test");
     let bare_crlf = "[libdefaults]\r\n    kcm_socket =\r\n    default_realm = X.TEST\r\n";
@@ -504,8 +473,6 @@ fn a_relation_with_no_value_needs_its_brace_on_the_next_line() {
     assert_eq!(before.default_realm.as_deref(), Some("X.TEST"));
 }
 
-/// MIT's one profile parser reads kdc.conf too: a realm stanza whose `{` starts the next line is a
-/// stanza, and one whose next line is no `{` refuses the file.
 #[test]
 fn kdc_conf_takes_the_subsection_brace_rule() {
     let two_line = "[realms]\n    R =\n    {\n        max_life = 2h\n    }\n";
@@ -520,8 +487,6 @@ fn kdc_conf_takes_the_subsection_brace_rule() {
     ));
 }
 
-/// MIT reads a profile's bytes, so a file that is not UTF-8 loads: a Latin-1 comment in
-/// krb5.conf, in an included file, and in kdc.conf read whole or for the KDC's paths.
 #[test]
 fn a_profile_that_is_not_utf8_loads() {
     let dir = krb5_testkit::scratch_dir("profile-latin1");
@@ -547,8 +512,6 @@ fn a_profile_that_is_not_utf8_loads() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// MIT `profile_init_flags`, live MIT 1.22.2 as uid 1000: a `KRB5_CONFIG` file that cannot be
-/// read is skipped when another loads, and is the error when none does, even beside a missing one.
 #[test]
 fn an_unreadable_file_is_skipped_unless_no_file_loads() {
     use std::os::unix::fs::PermissionsExt as _;
@@ -587,9 +550,6 @@ fn an_unreadable_file_is_skipped_unless_no_file_loads() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A `[libdefaults]` realm subsection is that realm's node: its relations do not write the
-/// top-level fields.
-/// MIT `krb5int_libdefault_string` (`lib/krb5/krb/libdef_parse.c:87-117`): the realm subsection is looked up under the realm name, not as a top-level relation.
 #[test]
 fn pl_realm_subsection_does_not_write_the_top_level() {
     let c = Krb5Conf::parse(
@@ -632,8 +592,6 @@ fn pl_realm_subsection_does_not_write_the_top_level() {
     );
 }
 
-/// A miscased relation is ignored, so it does not take the slot of the exact name.
-/// MIT `profile_node_iterator` (`util/profile/prof_tree.c:586-616`): a relation name matches by `strcmp`.
 #[test]
 fn pl_miscased_relation_does_not_shadow_the_exact_name() {
     let c = Krb5Conf::parse(
@@ -655,16 +613,12 @@ fn pl_miscased_relation_does_not_shadow_the_exact_name() {
     );
 }
 
-/// A relation value keeps a trailing comma.
-/// MIT `parse_std_line` (`util/profile/prof_parse.c:169-183`): trailing whitespace is cut, and a comma is not whitespace.
 #[test]
 fn pl_trailing_comma_stays_in_the_value() {
     let c = Krb5Conf::parse("[libdefaults]\n    default_realm = EXAMPLE.COM,\n").unwrap();
     assert_eq!(c.default_realm.as_deref(), Some("EXAMPLE.COM,"));
 }
 
-/// The eight per-realm keys read the client realm's node, then the top level.
-/// MIT `krb5int_libdefault_string` (`lib/krb5/krb/libdef_parse.c:87-117`): the realm subsection, then the top-level relation.
 #[test]
 fn pl_per_realm_keys_read_the_realm_then_the_top_level() {
     let c = Krb5Conf::parse(
