@@ -743,37 +743,44 @@ fn cert_signed_by(cert: &[u8], issuer: &[u8]) -> bool {
 }
 
 fn signature_ok(spki: &[u8], alg: &[u8], digest: Option<Digest>, msg: &[u8], sig: &[u8]) -> bool {
+    signature_check(spki, alg, digest, msg, sig, true).is_ok()
+}
+
+const PROVIDER_FAILURE: &str = "provider signature failure";
+
+/// Ok, or OpenSSL 3's first `CMS_verify` reason. `attrs` picks its path: the signed attributes
+/// (`EVP_DigestVerify`) or the content (`EVP_PKEY_verify`), which name a bad ECDSA DER differently.
+fn signature_check(
+    spki: &[u8],
+    alg: &[u8],
+    digest: Option<Digest>,
+    msg: &[u8],
+    sig: &[u8],
+    attrs: bool,
+) -> Result<(), &'static str> {
     let digest = match alg {
         OID_ECDSA_SHA256 | OID_RSA_SHA256 => Some(Digest::Sha256),
         OID_ECDSA_SHA384 | OID_RSA_SHA384 => Some(Digest::Sha384),
         OID_ECDSA_SHA512 | OID_RSA_SHA512 => Some(Digest::Sha512),
         OID_RSA | OID_EC_KEY => digest,
         _ => None,
-    };
-    let Some(digest) = digest else {
-        return false;
-    };
-    let Some((_, spki_body, _)) = take_tlv(spki) else {
-        return false;
-    };
-    let Some((_, key_alg, rest)) = take_tlv(spki_body) else {
-        return false;
-    };
-    let Some((_, key_oid, params)) = take_tlv(key_alg) else {
-        return false;
-    };
+    }
+    .ok_or(PROVIDER_FAILURE)?;
+    let (_, spki_body, _) = take_tlv(spki).ok_or(PROVIDER_FAILURE)?;
+    let (_, key_alg, rest) = take_tlv(spki_body).ok_or(PROVIDER_FAILURE)?;
+    let (_, key_oid, params) = take_tlv(key_alg).ok_or(PROVIDER_FAILURE)?;
     let Some((0x03, bits, _)) = take_tlv(rest) else {
-        return false;
+        return Err(PROVIDER_FAILURE);
     };
-    let Some(key) = bits.get(1..) else {
-        return false;
-    };
+    let key = bits.get(1..).ok_or(PROVIDER_FAILURE)?;
     let hash = digest.of(msg);
-    if key_oid == OID_RSA {
-        rsa_pkcs1_ok(key, digest, &hash, sig)
-    } else {
-        key_oid == OID_EC_KEY
-            && take_tlv(params).is_some_and(|(_, curve, _)| ecdsa_ok(curve, key, &hash, sig))
+    match key_oid {
+        OID_RSA => rsa_pkcs1_check(key, digest, &hash, sig),
+        OID_EC_KEY => {
+            let (_, curve, _) = take_tlv(params).ok_or(PROVIDER_FAILURE)?;
+            ecdsa_check(curve, key, &hash, sig, attrs)
+        }
+        _ => Err(PROVIDER_FAILURE),
     }
 }
 
@@ -782,95 +789,155 @@ pub fn spki_signature_ok(spki: &[u8], alg: &[u8], msg: &[u8], sig: &[u8]) -> boo
     signature_ok(spki, alg, None, msg, sig)
 }
 
-macro_rules! ecdsa_verify {
-    ($curve:ty, $key:expr, $hash:expr, $sig:expr) => {
-        ecdsa::VerifyingKey::<$curve>::from_sec1_bytes($key)
-            .ok()
-            .zip(ecdsa::Signature::<$curve>::from_der($sig).ok())
-            .is_some_and(|(vk, s)| vk.verify_prehash($hash, &s).is_ok())
+fn ecdsa_check(
+    curve: &[u8],
+    key: &[u8],
+    hash: &[u8],
+    sig: &[u8],
+    attrs: bool,
+) -> Result<(), &'static str> {
+    if sig.is_empty() {
+        return Err(PROVIDER_FAILURE);
+    }
+    // Not exactly its own DER: "verification failure" over attributes, else "provider signature failure".
+    let Some((r, s)) = ecdsa_der(sig) else {
+        return Err(if attrs {
+            "verification failure"
+        } else {
+            PROVIDER_FAILURE
+        });
     };
-}
-
-fn ecdsa_ok(curve: &[u8], key: &[u8], hash: &[u8], sig: &[u8]) -> bool {
-    use ecdsa::signature::hazmat::PrehashVerifier;
     match curve {
-        OID_P256_CURVE => p256::ecdsa::VerifyingKey::from_sec1_bytes(key)
-            .ok()
-            .zip(p256::ecdsa::Signature::from_der(sig).ok())
-            .is_some_and(|(vk, s)| vk.verify_prehash(hash, &s).is_ok()),
+        OID_P256_CURVE => ecdsa_on::<p256::NistP256>(key, hash, r, s),
         #[cfg(p384_backend = "fiat")]
-        OID_P384_CURVE => p384::ecdsa::VerifyingKey::from_sec1_bytes(key)
-            .ok()
-            .zip(p384::ecdsa::Signature::from_der(sig).ok())
-            .is_some_and(|(vk, s)| vk.verify_prehash(hash, &s).is_ok()),
-        #[cfg(not(p384_backend = "fiat"))]
-        OID_P384_CURVE => false,
+        OID_P384_CURVE => ecdsa_on::<p384::NistP384>(key, hash, r, s),
         OID_P521_CURVE => {
             let mut prehash = vec![0u8; 33usize.saturating_sub(hash.len())];
             prehash.extend_from_slice(hash);
-            p521::ecdsa::VerifyingKey::from_sec1_bytes(key)
-                .ok()
-                .zip(p521::ecdsa::Signature::from_der(sig).ok())
-                .is_some_and(|(vk, s)| vk.verify_prehash(&prehash, &s).is_ok())
+            ecdsa_on::<p521::NistP521>(key, &prehash, r, s)
         }
-        OID_P224_CURVE => p224::ecdsa::VerifyingKey::from_sec1_bytes(key)
-            .ok()
-            .zip(p224::ecdsa::Signature::from_der(sig).ok())
-            .is_some_and(|(vk, s)| vk.verify_prehash(hash, &s).is_ok()),
-        OID_K256_CURVE => k256::ecdsa::VerifyingKey::from_sec1_bytes(key)
-            .ok()
-            .zip(k256::ecdsa::Signature::from_der(sig).ok())
-            .is_some_and(|(vk, s)| vk.verify_prehash(hash, &s.normalize_s()).is_ok()),
-        OID_BP256R1_CURVE => ecdsa_verify!(bp256::r1::BrainpoolP256r1, key, hash, sig),
-        OID_BP256T1_CURVE => ecdsa_verify!(bp256::t1::BrainpoolP256t1, key, hash, sig),
-        OID_BP384R1_CURVE => ecdsa_verify!(bp384::r1::BrainpoolP384r1, key, hash, sig),
-        OID_BP384T1_CURVE => ecdsa_verify!(bp384::t1::BrainpoolP384t1, key, hash, sig),
+        OID_P224_CURVE => ecdsa_on::<p224::NistP224>(key, hash, r, s),
+        OID_K256_CURVE => ecdsa_on::<k256::Secp256k1>(key, hash, r, s),
+        OID_BP256R1_CURVE => ecdsa_on::<bp256::r1::BrainpoolP256r1>(key, hash, r, s),
+        OID_BP256T1_CURVE => ecdsa_on::<bp256::t1::BrainpoolP256t1>(key, hash, r, s),
+        OID_BP384R1_CURVE => ecdsa_on::<bp384::r1::BrainpoolP384r1>(key, hash, r, s),
+        OID_BP384T1_CURVE => ecdsa_on::<bp384::t1::BrainpoolP384t1>(key, hash, r, s),
         #[cfg(target_pointer_width = "64")]
-        OID_BP512R1_CURVE => {
-            ecdsa_verify!(krb5_brainpool::p512::r1::BrainpoolP512r1, key, hash, sig)
-        }
+        OID_BP512R1_CURVE => ecdsa_on::<krb5_brainpool::p512::r1::BrainpoolP512r1>(key, hash, r, s),
         #[cfg(target_pointer_width = "64")]
-        OID_BP512T1_CURVE => {
-            ecdsa_verify!(krb5_brainpool::p512::t1::BrainpoolP512t1, key, hash, sig)
-        }
-        #[cfg(not(target_pointer_width = "64"))]
-        OID_BP512R1_CURVE | OID_BP512T1_CURVE => false,
-        _ => false,
+        OID_BP512T1_CURVE => ecdsa_on::<krb5_brainpool::p512::t1::BrainpoolP512t1>(key, hash, r, s),
+        _ => Err(PROVIDER_FAILURE),
     }
 }
 
-fn rsa_pkcs1_ok(key: &[u8], digest: Digest, hash: &[u8], sig: &[u8]) -> bool {
-    use num_bigint::BigUint;
-    let Some((_, body, _)) = take_tlv(key) else {
-        return false;
+/// r and s of an ECDSA-Sig-Value that is exactly its own DER.
+pub(super) fn ecdsa_der(sig: &[u8]) -> Option<(&[u8], &[u8])> {
+    let (0x30, body, []) = take_tlv(sig)? else {
+        return None;
     };
+    let (0x02, r, rest) = take_tlv(body)? else {
+        return None;
+    };
+    let (0x02, s, []) = take_tlv(rest)? else {
+        return None;
+    };
+    let magnitude = |v: &[u8]| v.iter().take_while(|b| **b == 0).count();
+    let (r, s) = (&r[magnitude(r)..], &s[magnitude(s)..]);
+    let int = |m: &[u8]| {
+        let pad = m.first().is_none_or(|b| b & 0x80 != 0);
+        tlv(0x02, &[&[0][..usize::from(pad)], m].concat())
+    };
+    (tlv(0x30, &[int(r), int(s)].concat()) == sig).then_some((r, s))
+}
+
+fn ecdsa_on<C>(key: &[u8], hash: &[u8], r: &[u8], s: &[u8]) -> Result<(), &'static str>
+where
+    C: ecdsa::EcdsaCurve + ecdsa::elliptic_curve::CurveArithmetic,
+    ecdsa::elliptic_curve::AffinePoint<C>:
+        ecdsa::elliptic_curve::sec1::FromSec1Point<C> + ecdsa::elliptic_curve::sec1::ToSec1Point<C>,
+    ecdsa::elliptic_curve::FieldBytesSize<C>: ecdsa::elliptic_curve::sec1::ModulusSize,
+{
+    use ecdsa::signature::hazmat::PrehashVerifier;
+    let field = |v: &[u8]| {
+        let mut b = ecdsa::elliptic_curve::FieldBytes::<C>::default();
+        let at = b.len().checked_sub(v.len())?;
+        b[at..].copy_from_slice(v);
+        Some(b)
+    };
+    let sig = field(r)
+        .zip(field(s))
+        .and_then(|(r, s)| ecdsa::Signature::<C>::from_scalars(r, s).ok())
+        .ok_or("bad signature")?;
+    // secp256k1's verifier takes only low-s; normalize so OpenSSL's "take both" holds everywhere.
+    ecdsa::VerifyingKey::<C>::from_sec1_bytes(key)
+        .ok()
+        .filter(|vk| vk.verify_prehash(hash, &sig.normalize_s()).is_ok())
+        .map(|_| ())
+        .ok_or(PROVIDER_FAILURE)
+}
+
+/// Ok, or OpenSSL 3's first reason: length, key/value, PKCS#1 padding, then DigestInfo.
+fn rsa_pkcs1_check(
+    key: &[u8],
+    digest: Digest,
+    hash: &[u8],
+    sig: &[u8],
+) -> Result<(), &'static str> {
+    use num_bigint::BigUint;
+    let (_, body, _) = take_tlv(key).ok_or(PROVIDER_FAILURE)?;
     let Some((0x02, n, rest)) = take_tlv(body) else {
-        return false;
+        return Err(PROVIDER_FAILURE);
     };
     let Some((0x02, e, _)) = take_tlv(rest) else {
-        return false;
+        return Err(PROVIDER_FAILURE);
     };
-    let n_bytes = n.iter().skip_while(|b| **b == 0).count();
+    let k = n.iter().skip_while(|b| **b == 0).count();
+    if sig.len() != k {
+        return Err("wrong signature length");
+    }
     let (n, e, s) = (
         BigUint::from_bytes_be(n),
         BigUint::from_bytes_be(e),
         BigUint::from_bytes_be(sig),
     );
-    if sig.len() != n_bytes
-        || s >= n
-        || n_bytes < 11 + digest.digest_info_prefix().len() + hash.len()
-    {
-        return false;
+    if n.bits() > 16384 {
+        return Err("modulus too large");
     }
-    let em = s.modpow(&e, &n).to_bytes_be();
-    let info_len = digest.digest_info_prefix().len() + hash.len();
-    let mut want = vec![0xff; n_bytes];
-    want[0] = 0x00;
-    want[1] = 0x01;
-    want[n_bytes - info_len - 1] = 0x00;
-    want[n_bytes - info_len..n_bytes - hash.len()].copy_from_slice(digest.digest_info_prefix());
-    want[n_bytes - hash.len()..].copy_from_slice(hash);
-    em.len() == n_bytes - 1 && em[..] == want[1..]
+    if n <= e || (n.bits() > 3072 && e.bits() > 64) {
+        return Err("bad e value");
+    }
+    if s >= n {
+        return Err("data too large for modulus");
+    }
+    let raw = s.modpow(&e, &n).to_bytes_be();
+    let mut em = vec![0u8; k.saturating_sub(raw.len())];
+    em.extend_from_slice(&raw);
+    if k < 11 {
+        return Err("padding check failed");
+    }
+    if em[0] != 0 {
+        return Err("invalid padding");
+    }
+    if em[1] != 1 {
+        return Err("block type is not 01");
+    }
+    let ff = em[2..].iter().take_while(|b| **b == 0xff).count();
+    match em.get(2 + ff) {
+        None => return Err("null before block missing"),
+        Some(0) => {}
+        Some(_) => return Err("bad fixed header decrypt"),
+    }
+    if ff < 8 {
+        return Err("bad pad byte count");
+    }
+    let info = &em[3 + ff..];
+    if info.is_empty() {
+        return Err("RSA lib");
+    }
+    if info != [digest.digest_info_prefix(), hash].concat() {
+        return Err("bad signature");
+    }
+    Ok(())
 }
 
 const OID_DATA: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x07, 0x01];
@@ -992,28 +1059,35 @@ pub fn cms_signeddata_verify(
     })?;
     let e_content = sd.e_content.clone().unwrap_or_default();
     let digest = Digest::from_oid(&signer_info.digest_alg);
-    let verified = signer_info.signed_attrs.as_ref().is_some_and(|sa| {
-        let mut set = sa.clone();
-        set[0] = 0x31;
-        cert_spki(&signer).is_some_and(|spki| {
-            signature_ok(
+    // With no signed attributes CMS_verify signs over the content; with them, over the DER SET.
+    let signed = match &signer_info.signed_attrs {
+        Some(sa) => {
+            let mut set = sa.clone();
+            set[0] = 0x31;
+            set
+        }
+        None => e_content.clone(),
+    };
+    cert_spki(&signer)
+        .ok_or(PROVIDER_FAILURE)
+        .and_then(|spki| {
+            signature_check(
                 spki,
                 &signer_info.signature_alg,
                 digest,
-                &set,
+                &signed,
                 &signer_info.signature,
+                signer_info.signed_attrs.is_some(),
             )
         })
-    });
-    if !verified {
-        return Err(CmsFault::Signature("provider signature failure"));
-    }
-    let sa = signer_info.signed_attrs.as_deref().unwrap_or_default();
-    if !digest.is_some_and(|d| signed_attrs_digest_ok(sa, &d.of(&e_content))) {
-        return Err(CmsFault::Signature("verification failure"));
-    }
-    if signed_attrs_content_type(sa).as_deref() != Some(sd.e_content_type.as_slice()) {
-        return Err(CmsFault::ContentType);
+        .map_err(CmsFault::Signature)?;
+    if let Some(sa) = signer_info.signed_attrs.as_deref() {
+        if !digest.is_some_and(|d| signed_attrs_digest_ok(sa, &d.of(&e_content))) {
+            return Err(CmsFault::Signature("verification failure"));
+        }
+        if signed_attrs_content_type(sa).as_deref() != Some(sd.e_content_type.as_slice()) {
+            return Err(CmsFault::ContentType);
+        }
     }
     if sd.e_content_type != content_type {
         return Err(CmsFault::WrongOid);
