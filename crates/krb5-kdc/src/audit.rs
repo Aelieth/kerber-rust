@@ -452,6 +452,7 @@ pub fn current_audit() -> Arc<dyn KdcAudit> {
         .unwrap_or_else(|| Arc::new(JsonAudit))
 }
 
+/// Reached only when set_thread_audit, set_thread_audits, and set_audit are unset.
 pub fn register_audit(module: Arc<dyn KdcAudit>) {
     NAMED_AUDITS
         .lock()
