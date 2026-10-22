@@ -1,9 +1,5 @@
-//! The store's side of the update log (`lib/kdb/kdb5.c`'s `logging()` sites, `kdb_log.c`'s
-//! `ulog_replay`): which changes a primary logs, when, and in what order; what a replica keeps of
-//! what it applies; and what `IPROP_GET_UPDATES` answers. The log itself is [`crate::ulog`].
-//!
-//! A process logs only when it has mapped the realm's update log in the primary role, as MIT's
-//! kadmind, kadmin.local and kdb5_util do when `iprop_enable` is set; the KDC never maps it.
+//! The store's side of the update log (`lib/kdb/kdb5.c`'s `logging()` sites, `kdb_log.c`'s `ulog_replay`): which changes a primary logs, when, and in what order; what a replica keeps of what it applies; and what `IPROP_GET_UPDATES` answers. The log itself is [`crate::ulog`].
+//! A process logs only when it has mapped the realm's update log in the primary role, as MIT's kadmind, kadmin.local and kdb5_util do when `iprop_enable` is set; the KDC never maps it.
 //! Without a mapped log no change is logged and no file is touched.
 
 use std::collections::HashMap;
@@ -18,12 +14,7 @@ use super::principal::{Principal, strip_db_args};
 use crate::error::Error;
 use crate::ulog::{Ulog, UlogBatch, UlogError, UlogLast, UlogUpdates};
 
-/// The principals by `name@REALM`, and for each one changed since the update log last recorded
-/// it, that recorded record: the one read from the database, or none for a new principal.
 /// MIT `ulog_conv_2logentry` (`lib/kdb/kdb_convert.c:332-360`): a change is compared with the record the database holds before the put.
-/// A change goes through `get_mut`, `insert` or `remove`, which keep the record they find first.
-/// The journal holds one whole record, keys included, per principal touched: a store with a
-/// database starts it again at every change, and one without grows it to every principal touched.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PrincipalMap {
     map: HashMap<String, Principal>,
@@ -31,16 +22,11 @@ pub(crate) struct PrincipalMap {
     undo: Undo,
 }
 
-/// What puts a change of a store with a database back when it fails.
 #[derive(Clone, Debug, Default)]
 enum Undo {
-    /// No change is under way.
     #[default]
     Off,
-    /// Each record as it was before the change first touched it, none for a new one.
     On(HashMap<String, Option<Principal>>),
-    /// The change wrote a record past the journal (a replica's apply): only a read of the
-    /// database puts it back.
     Lost,
 }
 
@@ -119,8 +105,7 @@ impl PrincipalMap {
         }
     }
 
-    /// A change of a store with a database starts: the previous change's journal goes, as a read
-    /// of the database would drop it, and each record is kept as the change first touches it.
+    /// A change of a store with a database starts: the previous change's journal goes, as a read of the database would drop it, and each record is kept as the change first touches it.
     pub(crate) fn begin_change(&mut self) {
         self.logged.clear();
         self.undo = Undo::On(HashMap::new());
@@ -141,7 +126,6 @@ impl PrincipalMap {
     }
 
     /// The change failed: every record it touched as it was before, and its journal dropped.
-    /// False when it went past the journal, which only a read of the database puts back.
     pub(crate) fn undo_change(&mut self) -> bool {
         let Undo::On(before) = std::mem::take(&mut self.undo) else {
             return false;
@@ -160,7 +144,6 @@ impl PrincipalMap {
         true
     }
 
-    /// The record the update log compares a change of `id` with, which `now` replaces.
     fn log(&mut self, id: &str, now: Option<&Principal>) -> Option<Principal> {
         let before = self
             .logged
@@ -186,44 +169,32 @@ pub const IPROP_NIL: u32 = 4;
 /// MIT `UPDATE_PERM_DENIED`.
 pub const IPROP_PERM_DENIED: u32 = 5;
 
-/// Whose update log a process maps.
 /// MIT `enum iprop_role` (`include/iprop_hdr.h:32-36`): a primary logs its changes; a replica keeps what it replays.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IpropRole {
-    /// kadmind, kadmin.local and kdb5_util on the primary: every principal put or delete is
-    /// logged, and a policy change starts the log over.
     Primary,
-    /// kpropd's side on a replica: the log keeps the updates it applies, as they came.
     Replica,
 }
 
-/// The update log this process mapped and its role (MIT's `kdb_log_context`), shared by the
-/// store's clones and kept across its rereads.
 #[derive(Debug)]
 pub(crate) struct LogContext {
     pub(crate) ulog: Ulog,
     pub(crate) role: IpropRole,
 }
 
-/// A change waiting for the database write that makes it real, in the order made.
 #[derive(Clone, Debug)]
 pub(crate) enum LogNote {
-    /// A principal put (with its record after the change and the attributes the change listed)
-    /// or deleted.
     Put {
         name: String,
         deleted: bool,
         princ: Option<Box<Principal>>,
         attrs: u32,
     },
-    /// A policy created, changed or deleted.
     Reset,
-    /// An update a replica applied, as it came from its primary.
     Replay(Vec<u8>),
 }
 
-/// Changes made ready for the update log before the database write that holds them
-/// ([`PrincipalStore::prepare_log`]), appended once it is made ([`PrincipalStore::write_logged`]).
+/// Changes made ready for the update log before the database write that holds them ([`PrincipalStore::prepare_log`]), appended once it is made ([`PrincipalStore::write_logged`]).
 pub struct PreparedLog(Vec<Ready>);
 
 /// Why a logged write ([`PrincipalStore::write_logged`]) failed.
@@ -233,13 +204,11 @@ pub enum LoggedWrite<E> {
     Before(Error),
     /// The database write failed; nothing was logged.
     Write(E),
-    /// The database holds the change, but the log could not take it; the log is left unstable,
-    /// so its next user starts it over and the replicas resynchronize in full.
+    /// The database holds the change, but the log could not take it; the log is left unstable, so its next user starts it over and the replicas resynchronize in full.
     After(Error),
 }
 
 impl LoggedWrite<Error> {
-    /// The error, whichever step it came from.
     #[must_use]
     pub fn into_error(self) -> Error {
         match self {
@@ -270,8 +239,7 @@ fn log_error(e: &UlogError) -> Error {
 }
 
 impl PrincipalStore {
-    /// Master key for iprop `AT_KEYDATA`: the stash's, else (with the `test-hooks` feature)
-    /// one derived from `KRB5_MASTER_PASSWORD`, else the `K/M` principal's.
+    /// Master key for iprop `AT_KEYDATA`: the stash's, else (with the `test-hooks` feature) one derived from `KRB5_MASTER_PASSWORD`, else the `K/M` principal's.
     #[must_use]
     pub fn iprop_master_key(&self) -> Option<krb5_crypto::ProtocolKey> {
         if let Some((_, stash)) = &self.persist_paths
@@ -313,13 +281,8 @@ impl PrincipalStore {
             .map(|k| k.key.clone())
     }
 
-    /// Map the realm's update log at `path`, holding `entries` entries, in `role`: from now on
-    /// this process logs (a primary) or keeps (a replica) updates there.
+    /// Map the realm's update log at `path`, holding `entries` entries, in `role`: from now on this process logs (a primary) or keeps (a replica) updates there.
     /// MIT `ulog_set_role` (`lib/kdb/kdb_log.c:651-658`): the role is recorded before the log is mapped.
-    ///
-    /// # Errors
-    ///
-    /// As [`Ulog::map`].
     pub fn map_ulog(
         &mut self,
         path: &std::path::Path,
@@ -331,19 +294,16 @@ impl PrincipalStore {
         Ok(())
     }
 
-    /// Use `ulog` as this store's update log, in `role` (in tests, one in memory for a store with
-    /// no database).
+    /// Use `ulog` as this store's update log, in `role` (in tests, one in memory for a store with no database).
     pub fn set_ulog(&mut self, ulog: Ulog, role: IpropRole) {
         self.log = Some(Arc::new(LogContext { ulog, role }));
     }
 
-    /// The update log this store's process mapped, when it mapped one.
     #[must_use]
     pub fn ulog(&self) -> Option<&Ulog> {
         self.log.as_deref().map(|c| &c.ulog)
     }
 
-    /// Whether this store logs its changes: its update log is mapped, as a primary's.
     /// MIT `logging` (`lib/kdb/kdb5.c:107-114`): the log is mapped and the role is the primary's.
     #[must_use]
     pub fn logging(&self) -> bool {
@@ -352,21 +312,17 @@ impl PrincipalStore {
             .is_some_and(|c| c.role == IpropRole::Primary)
     }
 
-    /// The update log's last serial: 0 when no log is mapped.
     #[must_use]
     pub fn serial(&self) -> u32 {
         self.ulog_last().map_or(0, |l| l.sno)
     }
 
-    /// The update log's last serial and time; `None` when no log is mapped or it does not read.
     #[must_use]
     pub fn ulog_last(&self) -> Option<UlogLast> {
         self.ulog().and_then(|u| u.get_last().ok())
     }
 
-    /// MIT iprop `GET_UPDATES` for a replica that has applied `last`: the status and the
-    /// updates it lacks, as the log holds them. A log that does not read, or none mapped, is
-    /// `UPDATE_ERROR`.
+    /// MIT iprop `GET_UPDATES` for a replica that has applied `last`: the status and the updates it lacks, as the log holds them. A log that does not read, or none mapped, is `UPDATE_ERROR`.
     /// MIT `iprop_get_updates_1_svc` (`kadmin/server/ipropd_svc.c:203-205`): the answer is `ulog_get_entries`'s.
     #[must_use]
     pub fn ulog_get_entries(&self, last: UlogLast) -> UlogUpdates {
@@ -380,21 +336,13 @@ impl PrincipalStore {
         }
     }
 
-    /// Apply a replica's updates, each in turn deleting its principal or putting the replica's
-    /// record with the update applied; an update that carries nothing changes nothing, and one
-    /// not committed ends the batch there, as MIT's loop never moves past it. A replica that
-    /// mapped its update log keeps each update there once the database holds it, and starts the
-    /// log over when an update does not apply (one whose tagged data holds database arguments
+    /// Apply a replica's updates, each in turn deleting its principal or putting the replica's record with the update applied; an update that carries nothing changes nothing, and one not committed ends the batch there, as MIT's loop never moves past it. A replica that mapped its update log keeps each update there once the database holds it, and starts the log over when an update does not apply (one whose tagged data holds database arguments
     /// included, which db2 refuses), so its next request is a full resync.
     /// MIT `ulog_replay` (`lib/kdb/kdb_log.c:423-454`): each update in turn deletes its principal or puts the replica's record with the update applied.
-    /// MIT `ulog_replay` (`lib/kdb/kdb_log.c:423-425`): an update not committed is skipped without moving to the next, so none after it applies.
     /// MIT `krb5int_put_principal_no_log` (`lib/kdb/kdb5.c:970-975`): database arguments in the tagged data are taken out, and db2 refuses any.
+    /// MIT `ulog_replay` (`lib/kdb/kdb_log.c:423-425`): an update not committed is skipped without moving to the next, so none after it applies.
     /// MIT `ulog_replay` (`lib/kdb/kdb_log.c:474-476`): an update that fails resets the log.
-    ///
-    /// # Errors
-    ///
-    /// As [`conv_2dbentry`], for the update that fails, or [`Error::InvalidArgument`] for one
-    /// that carries database arguments; the caller's change then reads the database back.
+    /// As [`conv_2dbentry`], for the update that fails, or [`Error::InvalidArgument`] for one that carries database arguments; the caller's change then reads the database back.
     pub fn apply_updates(&mut self, updates: &[IpropUpdate]) -> Result<(), Error> {
         self.inside_change()?;
         for u in updates {
@@ -430,8 +378,7 @@ impl PrincipalStore {
         self.save_if_configured()
     }
 
-    /// Incremental kdbe has no SID (vendor `0x4B0x` is stripped). A new
-    /// replica row with `rid==0` must not PAC as `RID_FIRST_USER`.
+    /// Incremental kdbe has no SID (vendor `0x4B0x` is stripped). A new replica row with `rid==0` must not PAC as `RID_FIRST_USER`.
     fn assign_iprop_rid(&mut self, mut p: Principal) -> Principal {
         self.settle_rid(&mut p);
         p
@@ -445,7 +392,6 @@ impl PrincipalStore {
     }
 
     /// Record a change of `name` for the update log, with the attributes MIT's primary lists.
-    /// MIT `ulog_conv_2logentry` (`lib/kdb/kdb_convert.c:338-360`): a new principal lists every attribute up to `AT_LEN`, a change what `find_changed_attrs` finds but the lockout ones.
     pub(super) fn note_ulog(&mut self, name: String, deleted: bool, princ: Option<Principal>) {
         let now = princ.as_ref().filter(|_| !deleted);
         let attrs = match (self.map.log(&name, now), now) {
@@ -461,8 +407,7 @@ impl PrincipalStore {
         });
     }
 
-    /// Record a policy change, which starts the update log over: iprop does not carry policies,
-    /// so replicas take them with a full resync.
+    /// Record a policy change, which starts the update log over: iprop does not carry policies, so replicas take them with a full resync.
     /// MIT `krb5_db_create_policy` (`lib/kdb/kdb5.c:2440-2457`): after a policy is created, a primary's log is reinitialized.
     /// MIT `krb5_db_put_policy` (`lib/kdb/kdb5.c:2473-2490`): after a policy is changed, a primary's log is reinitialized.
     /// MIT `krb5_db_delete_policy` (`lib/kdb/kdb5.c:2507-2524`): after a policy is deleted, a primary's log is reinitialized.
@@ -470,9 +415,7 @@ impl PrincipalStore {
         self.push_note(LogNote::Reset);
     }
 
-    /// The changes noted so far, made ready for the log: a primary's puts encoded with their keys
-    /// wrapped under the master key, before the database is written. A store that does not log
-    /// drops its notes (a replica keeps its replays).
+    /// The changes noted so far, made ready for the log: a primary's puts encoded with their keys wrapped under the master key, before the database is written. A store that does not log drops its notes (a replica keeps its replays).
     /// MIT `krb5_db_put_principal` (`lib/kdb/kdb5.c:987-999`): the update is converted before the put, and a conversion failure fails the put.
     pub(super) fn ready_notes(&self) -> Result<Vec<Ready>, Error> {
         let notes: Vec<LogNote> = self
@@ -537,9 +480,6 @@ impl PrincipalStore {
         Ok(ready)
     }
 
-    /// Append `ready` to the run `batch`, in order, then end it: the database holds the changes.
-    /// A replica whose log cannot keep an update leaves it unstable, so its next request is a full
-    /// resync.
     /// MIT `krb5_db_put_principal` (`lib/kdb/kdb5.c:1006-1007`): the update is logged after the put, and a logging failure is the put's error.
     /// MIT `krb5_db_delete_principal` (`lib/kdb/kdb5.c:1037-1049`): a delete is logged after it is made, with no values.
     fn append_notes(mut batch: UlogBatch<'_>, ready: Vec<Ready>) -> Result<(), UlogError> {
@@ -557,18 +497,7 @@ impl PrincipalStore {
         batch.finish()
     }
 
-    /// Run `write`, the database's, with `prepared` logged around it: the update log marked
-    /// unstable before the write ([`Ulog::begin`]), the updates appended after it, then marked
-    /// stable. A process stopped between the write and the last append leaves the log unstable,
-    /// and its next user starts it over, so a replica resynchronizes in full instead of skipping
-    /// the updates the log never took. With nothing to log, `write` runs alone.
-    ///
-    /// # Errors
-    ///
-    /// [`LoggedWrite::Before`] when the log cannot be marked (nothing is written);
-    /// [`LoggedWrite::Write`] with `write`'s error (nothing is logged; a replica's log starts
-    /// over); [`LoggedWrite::After`] when the database holds the change but the log could not
-    /// take it.
+    /// Run `write`, the database's, with `prepared` logged around it: the update log marked unstable before the write ([`Ulog::begin`]), the updates appended after it, then marked stable. A process stopped between the write and the last append leaves the log unstable, and its next user starts it over, so a replica resynchronizes in full instead of skipping the updates the log never took. With nothing to log, `write` runs alone.
     pub fn write_logged<E>(
         &self,
         prepared: PreparedLog,
@@ -597,37 +526,21 @@ impl PrincipalStore {
         }
     }
 
-    /// Log the changes noted so far now: for a store with no database, whose change is made when
-    /// it is noted.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Db`] when an update cannot be encoded (no master key) or the log cannot be
-    /// written.
+    /// Log the changes noted so far now: for a store with no database, whose change is made when it is noted.
+    /// [`Error::Db`] when an update cannot be encoded (no master key) or the log cannot be written.
     pub fn log_pending(&self) -> Result<(), Error> {
         let prepared = self.prepare_log()?;
         self.write_logged(prepared, || Ok::<(), Error>(()))
             .map_err(LoggedWrite::into_error)
     }
 
-    /// The changes noted so far, made ready for the log before a writer that saves the database
-    /// itself writes it (`kdb5_util load -update`): each update encoded with its keys wrapped
-    /// under the master key, so a change that cannot be logged is refused before anything is
-    /// written. [`Self::write_logged`] appends them around the database write.
-    /// MIT `krb5_db_put_principal` (`lib/kdb/kdb5.c:987-999`): the update is converted before the put, and a conversion failure fails the put.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Db`] when an update cannot be encoded (no master key, or a key that does not
-    /// wrap).
+    /// The changes noted so far, made ready for the log before a writer that saves the database itself writes it (`kdb5_util load -update`): each update encoded with its keys wrapped under the master key, so a change that cannot be logged is refused before anything is written. [`Self::write_logged`] appends them around the database write.
+    /// [`Error::Db`] when an update cannot be encoded (no master key, or a key that does not wrap).
     pub fn prepare_log(&self) -> Result<PreparedLog, Error> {
         self.ready_notes().map(PreparedLog)
     }
 
-    /// Ready the noted changes, run `write` (the database's), then log them: what each MIT put
-    /// does around its write ([`Self::write_logged`]). Nothing is logged when `write` fails, and
-    /// a replica whose applied updates were not written starts its log over
-    /// ([`Self::write_failed`]).
+    /// Ready the noted changes, run `write` (the database's), then log them: what each MIT put does around its write ([`Self::write_logged`]). Nothing is logged when `write` fails, and a replica whose applied updates were not written starts its log over ([`Self::write_failed`]).
     pub(super) fn logged_write<E>(&self, write: impl FnOnce() -> Result<(), E>) -> Result<(), Error>
     where
         Error: From<E>,
@@ -639,9 +552,7 @@ impl PrincipalStore {
         })
     }
 
-    /// The database write that would have held `ready` failed: a replica whose updates did not
-    /// apply starts its log over, so its next request is a full resync.
-    /// MIT `ulog_replay` (`lib/kdb/kdb_log.c:451-454`): a put that fails ends the replay, and the log is reinitialized.
+    /// The database write that would have held `ready` failed: a replica whose updates did not apply starts its log over, so its next request is a full resync.
     pub(super) fn write_failed(&self, ready: &[Ready]) {
         if ready.iter().any(|r| matches!(r, Ready::Replay(_)))
             && let Some(ctx) = self.log.as_deref()
