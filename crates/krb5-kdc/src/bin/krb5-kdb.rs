@@ -1,18 +1,4 @@
 //! MIT `kdb5_util`: create, stash, dump, load and destroy the KDC database.
-//!
-//! `kdb5_util [-r realm] [-d dbname] [-k mkeytype] [-kv mkeyVNO] [-M mkeyname] [-m] [-sf stashfilename] [-P password] [-x db_args]* cmd [cmd_options]`, the global options anywhere on the line as MIT's `main` (`kadmin/dbutil/kdb5_util.c`) takes them. The realm is `-r`, else krb5.conf's `default_realm`; the database, stash and master key type are kdc.conf's for that realm ([`krb5_config::KdcPaths`]), `-d` / `-sf` / `-k` name others. Messages, prompts and exit statuses are MIT's.
-//!
-//! - `create [-s] [-W]`: `K/M` and `krbtgt`, then `kadm5_create`'s `kadmin/admin` and `kadmin/changepw`. A `dict_file` that cannot be read fails in that init, after the database and an `-s` stash exist. The master password is `-P`, else asked twice on the terminal (one line each from a pipe). `-s` keeps the stash; without it no stash is left.
-//! - `stash [-f keyfile]`: a new stash file from the stashed (or typed) master key.
-//! - `dump [-r18] [-i[N] [-c]] [-verbose] [-rev] [-recurse] [filename [principals...]]`: the database as stored, keys still wrapped; principals are whole-name regular expressions. With iprop enabled, `-i` / `-i1` write an iprop dump headed by the update log's last serial and time, and `-c` keeps an iprop dump whose serial the log still holds.
-//! - `load [-r18] [-i] [-hash] [-verbose] [-update] filename`: a full load replaces the database with a new file; `-update` merges the records into it. The dump's keys are opened with `-P`, else (`-m`) a typed master password, else the stash. With iprop enabled a full load starts the update log over (`-i`: at the iprop dump's serial and time), and `-update` logs each record it puts.
-//! - `destroy [-f]`.
-//!
-//! With `iprop_enable` set for the realm ([`krb5_config::IpropParams`]), `create` makes the update log, the commands that open the database map it, and `destroy` removes it; without it no command touches an update log.
-//!
-//! Of db2's `-x` arguments, `dbname=` and `temporary` name the database file, and `hash=`, `merge_nra`, `lockiter` and `unlockiter` change nothing this store keeps. MIT's other commands, `-b7` / `-r13` dumps, master key conversion, `-M` other than `K/M` and `-kv` outside `create` are refused.
-//!
-//! With the `test-hooks` feature the gates' commands `addpol`, `setstr`, `alias` and `setlastpwd` are added, `KRB5_MASTER_PASSWORD` stands in for `-P` on `create` and for a missing stash on `load` (which then writes it), and `create` seeds `user@`, `admin@` and the test hosts when `KRB5_TEST_USER_PASSWORD` and `KRB5_TEST_ADMIN_PASSWORD` are set.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -40,7 +26,6 @@ use krb5_kdc::{
 use zeroize::{Zeroize as _, Zeroizing};
 
 // MIT: `usage` (kadmin/dbutil/kdb5_util.c:77-107)
-/// the text, on stderr, then exit status 1.
 const USAGE: &str = "Usage: kdb5_util [-r realm] [-d dbname] [-k mkeytype] [-kv mkeyVNO]
 \t        [-M mkeyname] [-m] [-sf stashfilename] [-P password]
 \t        [-x db_args]* cmd [cmd_options]
@@ -65,7 +50,6 @@ where,
 ";
 
 // MIT: `main` (kadmin/dbutil/kdb5_util.c:228-296)
-/// the global options, taken wherever they stand.
 const GLOBALS: &[MitOpt] = &[
     MitOpt::value("-P"),
     MitOpt::value("-d"),
@@ -79,13 +63,10 @@ const GLOBALS: &[MitOpt] = &[
 ];
 
 // MIT: `KRB5_KDC_MKEY_1` (include/kdb.h:312-312)
-/// the master password prompt.
 const MKEY_PROMPT: &str = "Enter KDC database master key";
 // MIT: `KRB5_KDC_MKEY_2` (include/kdb.h:313-313)
-/// the prompt that verifies it.
 const MKEY_VERIFY: &str = "Re-enter KDC database master key to verify";
 // MIT: `krb5_def_fetch_mkey_list` (lib/kdb/kdb_default.c:455-458)
-/// the message for a master key that opens no `K/M` key.
 const BAD_MASTER_KEY: &str = "Unable to decrypt latest master key with the provided master key\n";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -128,7 +109,6 @@ struct Util {
     paths: KdcPaths,
     db_args: DbArgs,
     etype: Option<EncryptionType>,
-    /// `-P`, wiped when dropped.
     password: Option<Zeroizing<String>>,
     manual: bool,
     kvno: Option<u32>,
@@ -145,7 +125,7 @@ struct DbArgs {
 
 impl DbArgs {
     // MIT: `configure_context` (plugins/kdb/db2/kdb_db2.c:221-246)
-    /// `dbname=` and `temporary` name the file; `hash=`, `merge_nra`, `lockiter` and `unlockiter` set what db2 alone keeps; any other is refused by its option name.
+    /// An unknown `-x` argument is refused by its option name.
     fn parse(opts: &[(&str, Option<String>)], configured: &Path) -> Self {
         let mut args = Self {
             file: configured.to_path_buf(),
@@ -172,9 +152,7 @@ impl DbArgs {
         args
     }
 
-    /// The file db2 opens: the temporary one when `temporary` was given.
     // MIT: `ctx_dbsuffix` (plugins/kdb/db2/kdb_db2.c:292-303)
-    /// a temporary database's files carry a `~`.
     fn open_file(&self) -> PathBuf {
         if self.temporary {
             with_suffix(&self.file, "~")
@@ -186,12 +164,10 @@ impl DbArgs {
 
 impl Util {
     // MIT: `extended_com_err_fn` (kadmin/dbutil/kdb5_util.c:165-179)
-    /// `progname: message context`.
     fn com_err(&self, message: &str, context: &str) {
         err_line(&format!("{}: {message} {context}", self.progname));
     }
 
-    /// The same with no error code: `progname: context`.
     fn com_err0(&self, context: &str) {
         err_line(&format!("{}: {context}", self.progname));
     }
@@ -233,7 +209,6 @@ fn usage() -> u8 {
     1
 }
 
-/// The OS error text as C `strerror` gives it, without Rust's `(os error N)`.
 fn strerror(e: &io::Error) -> String {
     let s = e.to_string();
     s.rfind(" (os error ")
@@ -247,9 +222,8 @@ fn persist_text(e: &PersistError) -> String {
     }
 }
 
-/// Why a stash could not be written.
 // MIT: `krb5_def_store_mkey_list` (lib/kdb/kdb_default.c:143-147)
-/// the keytab is written to `<keyfile>_tmp`, so a missing directory is that file not found.
+/// The keytab is written to `<keyfile>_tmp`, so a missing directory names that file.
 fn stash_write_text(path: &Path, e: &PersistError) -> String {
     match e {
         PersistError::Io(io) if io.kind() == io::ErrorKind::NotFound => {
@@ -259,7 +233,7 @@ fn stash_write_text(path: &Path, e: &PersistError) -> String {
     }
 }
 
-/// C `atoi`: leading blanks, a sign, then digits up to the first other character.
+/// C `atoi` wraps: blanks, a sign, then digits.
 fn c_atoi(s: &str) -> u32 {
     let t = s.trim_start();
     let (neg, digits) = match t.as_bytes().first() {
@@ -274,7 +248,7 @@ fn c_atoi(s: &str) -> u32 {
     if neg { n.wrapping_neg() } else { n }
 }
 
-/// `-P`'s password, taken before the option table reads the line: it is held so that it is wiped when dropped, and the table is handed the line with an empty value in its place, so no other copy of it is made. The scan is the table's own: an option the table names takes the next argument as its value, wherever it stands. With several `-P`, the last one counts and the others are wiped.
+/// The last `-P` is kept; the table sees an empty value, so no other copy remains.
 fn take_password(args: &[String]) -> (Option<Zeroizing<String>>, Vec<String>) {
     let mut password = None;
     let mut line = Vec::with_capacity(args.len());
@@ -302,7 +276,6 @@ fn take_password(args: &[String]) -> (Option<Zeroizing<String>>, Vec<String>) {
 
 fn run(progname: String, args: &[String]) -> u8 {
     // MIT: `main` (kadmin/dbutil/kdb5_util.c:214-218)
-    // the KDC context before the options; a profile it refuses ends kdb5_util.
     let _profile_read = krb5_config::ReadOnce::start();
     if let Err(e) = krb5_config::init_kdc_profile() {
         err_line(&format!(
@@ -364,7 +337,6 @@ fn run(progname: String, args: &[String]) -> u8 {
         return usage();
     }
     // MIT: `kadm5_get_config_params` (lib/kadm5/alt_prof.c:546-551)
-    // a `master_key_type` that names no enctype leaves the type 0.
     let etype = if let Some(k) = parsed.value("-k") {
         string_to_enctype(k).ok()
     } else {
@@ -410,7 +382,6 @@ fn run(progname: String, args: &[String]) -> u8 {
     }
 }
 
-/// glibc `getopt` over a command's own arguments; a bad option is reported under the command's name, then MIT's usage.
 fn sub_options(args: &[String], optstring: &str) -> Result<Vec<krb5_cli::Opt>, u8> {
     let name = args.first().map_or("", String::as_str);
     match getopt(args.get(1..).unwrap_or_default(), optstring, &[]) {
@@ -423,7 +394,6 @@ fn sub_options(args: &[String], optstring: &str) -> Result<Vec<krb5_cli::Opt>, u
 }
 
 // MIT: `kdb5_create` (kadmin/dbutil/kdb5_create.c:142-336)
-/// a new database for the realm.
 fn create(util: &mut Util, args: &[String]) -> u8 {
     let opts = match sub_options(args, "sW") {
         Ok(o) => o,
@@ -443,7 +413,6 @@ fn create(util: &mut Util, args: &[String]) -> u8 {
         db.display()
     ));
     // MIT: `kadm5_init` (lib/kadm5/srv/server_init.c:222-228)
-    // with iprop enabled and no `iprop_port`, the admin interface does not start.
     if util.iprop.missing_required()
         || krb5_kdc::realm_kadm5_params_missing(&util.paths, &realm, false)
     {
@@ -566,7 +535,6 @@ fn create(util: &mut Util, args: &[String]) -> u8 {
 }
 
 // MIT: `kadm5_create_magic_princs` (kadmin/dbutil/kadm5_create.c:91-116)
-/// the admin log opens, `kadm5_init` reads the dictionary, then the two `kadmin/` principals are created and saved. `false` when that fails; the error is already on stderr.
 fn kadm5_create(
     util: &Util,
     store: &mut PrincipalStore,
@@ -605,13 +573,11 @@ fn kadm5_create(
     true
 }
 
-/// The master key from a password, of the configured type; `None` when that type is unset because kdc.conf named no enctype, or the key cannot be made.
 fn derive_master(util: &Util, realm: &str, password: &[u8]) -> Option<ProtocolKey> {
     util.etype
         .and_then(|etype| master_key_from_password(realm, password, etype).ok())
 }
 
-/// kdc.conf's settings for `realm` alone; `None` when there is no KDC profile.
 fn realm_kdc_conf(util: &Util, realm: &str) -> Result<Option<krb5_config::KdcConf>, String> {
     if util.paths.conf.is_none() {
         return Ok(None);
@@ -631,7 +597,6 @@ struct OpenDb {
 }
 
 // MIT: `open_db_and_mkey` (kadmin/dbutil/kdb5_util.c:369-485)
-/// open the database and find its master entry, then fetch the master key from `-P`, the keyboard (`-m`) or the stash and check it against that entry. A key that cannot be fetched or does not match is a warning: the command still runs, without it, and the exit status is raised.
 fn open_db_and_mkey(util: &mut Util) -> Result<OpenDb, u8> {
     let db = util.db_args.open_file();
     if let Some(arg) = &util.db_args.unsupported {
@@ -679,9 +644,7 @@ fn open_db_and_mkey(util: &mut Util) -> Result<OpenDb, u8> {
     Ok(OpenDb { realm, km, mkey })
 }
 
-/// The database file as dump text, and each principal's record in `principal.lockout`, read holding the database's lock shared; a legacy ciphertext database is opened with the stash and written out as dump text, its lockout attributes already in it. The error is the whole text.
 // MIT: `krb5_db2_open` (plugins/kdb/db2/kdb_db2.c:1194-1198)
-/// a database that does not open is named; then a missing lock file is the system's or the policy lock's own text.
 fn read_db_text(util: &Util, db: &Path) -> Result<(String, HashMap<String, Lockout>), String> {
     let cannot_open = |why: &str| format!("Cannot open DB2 database '{}': {why}", db.display());
     krb5_kdc::check_openable(db).map_err(|e| open_text(db, &e))?;
@@ -701,9 +664,7 @@ fn read_db_text(util: &Util, db: &Path) -> Result<(String, HashMap<String, Locko
     Ok((text, HashMap::new()))
 }
 
-/// The text of a database `db` that does not open: one that is no database this store reads is MIT's own text, which names the file; any other failure is named with its reason.
 // MIT: `open_db` (plugins/kdb/db2/kdb_db2.c:386-389)
-/// a database that does not open is named, with why.
 fn open_text(db: &Path, e: &PersistError) -> String {
     match e {
         PersistError::Unopenable { .. } => e.to_string(),
@@ -771,7 +732,6 @@ fn fetch_mkey(util: &mut Util, realm: &str, km: &DumpPrincipal) -> Result<Option
     Ok(Some(key))
 }
 
-/// The stash's master key: the one that opens `km` when the stash holds several candidates (a legacy raw stash), else the first.
 fn read_stash_key(path: &Path, km: &DumpPrincipal) -> Result<ProtocolKey, String> {
     let bytes = krb5_protocol::read_secret_file(path).map_err(|e| strerror(&e))?;
     let keys = stash_keys(&bytes);
@@ -782,7 +742,6 @@ fn read_stash_key(path: &Path, km: &DumpPrincipal) -> Result<ProtocolKey, String
 }
 
 // MIT: `kdb5_stash` (kadmin/dbutil/kdb5_stash.c:65-137)
-/// write the master key to the stash file (or `-f keyfile`), typing it when the database's could not be fetched.
 fn stash(util: &mut Util, args: &[String], db: OpenDb) -> u8 {
     let opts = match sub_options(args, "f:") {
         Ok(o) => o,
@@ -831,7 +790,6 @@ fn stash(util: &mut Util, args: &[String], db: OpenDb) -> u8 {
 }
 
 // MIT: `dump_db` (kadmin/dbutil/dump.c:1137-1361)
-/// write the database's records, as stored, to a new file (with its `.dump_ok` mark) or to standard output.
 fn dump(util: &mut Util, args: &[String]) -> u8 {
     let mut version = KDB_DUMP_VERSION;
     let (mut verbose, mut rev, mut conditional) = (false, false, false);
@@ -849,7 +807,7 @@ fn dump(util: &mut Util, args: &[String]) -> u8 {
             "-verbose" => verbose = true,
             "-rev" => rev = true,
             "-recurse" => {}
-            // `-i` with iprop enabled is an iprop dump, `-iN` past 0 an ipropx one; without iprop it is refused.
+            // `-i` without iprop enabled is refused.
             s if s.starts_with("-i") => {
                 if !util.iprop.enabled {
                     err_line("Iprop not enabled");
@@ -904,9 +862,7 @@ fn dump(util: &mut Util, args: &[String]) -> u8 {
     let current = match read_db_text(util, &util.db_args.open_file()).and_then(|(text, lockout)| {
         let mut dump = parse_dump(&text).map_err(|e| e.to_string())?;
         // MIT: `klmdb_iterate` (plugins/kdb/lmdb/kdb_lmdb.c:841-888)
-        // each dumped entry carries its lockout record.
         // MIT: `k5beta7_common` (kadmin/dbutil/dump.c:340-344)
-        // an iprop dump omits the non-replicated attributes.
         for p in &mut dump.princs {
             if iprop.is_some() {
                 p.last_success = 0;
@@ -932,7 +888,6 @@ fn dump(util: &mut Util, args: &[String]) -> u8 {
         .filter(|p| name_matches(util, &p.name, names))
         .collect();
     // MIT: `ctx_iterate` (plugins/kdb/db2/kdb_db2.c:1109-1137)
-    // the db2 cursor walks the btree in key order, the unparsed names' bytes; `-rev` walks it back.
     princs.sort_by(|a, b| a.name.as_bytes().cmp(b.name.as_bytes()));
     if rev {
         princs.reverse();
@@ -952,7 +907,6 @@ fn dump(util: &mut Util, args: &[String]) -> u8 {
         text.push('\n');
     }
     // MIT: `iprop_version` (kadmin/dbutil/dump.c:1046-1055)
-    // an iprop dump's policies are in the oldest format.
     let policy_version = if iprop == Some(Iprop::V0) { 5 } else { version };
     if names.is_empty() {
         for pol in &current.policies {
@@ -983,9 +937,7 @@ enum Iprop {
     X1,
 }
 
-/// Whether the iprop dump already at `file` is one a replica can catch up from: its header's serial and time are in the update log (or are its last).
 // MIT: `current_dump_sno_in_ulog` (kadmin/dbutil/dump.c:1111-1134)
-/// a dump that does not open, or whose header is no iprop one, is not current.
 fn current_dump_sno_in_ulog(util: &Util, file: &Path) -> bool {
     let Ok(text) = fs::read(file) else {
         return false;
@@ -999,9 +951,7 @@ fn current_dump_sno_in_ulog(util: &Util, file: &Path) -> bool {
         .is_some_and(|log| matches!(log.sno_status_of(last), IPROP_OK | IPROP_NIL))
 }
 
-/// An iprop dump's header ([`krb5_kdc::parse_iprop_header`]): the serial and time it carries, or `None` with MIT's message printed.
 // MIT: `parse_iprop_header` (kadmin/dbutil/dump.c:1089-1101)
-/// an unknown version and a line that is no iprop header are reported on standard error.
 fn iprop_header_last(util: &Util, line: &str) -> Option<UlogLast> {
     match krb5_kdc::parse_iprop_header(line) {
         Ok((_, last)) => Some(last),
@@ -1020,15 +970,10 @@ fn iprop_header_last(util: &Util, line: &str) -> Option<UlogLast> {
     }
 }
 
-/// The dump to a named file.
 // MIT: `prep_ok_file` (kadmin/dbutil/dump.c:171-208)
-/// the `.dump_ok` mark is opened first, mode 0600.
 // MIT: `create_ofile` (kadmin/dbutil/dump.c:133-155)
-/// the dump is written to a new temporary file.
 // MIT: `finish_ofile` (kadmin/dbutil/dump.c:159-167)
-/// the temporary file is renamed into place.
 // MIT: `update_ok_file` (kadmin/dbutil/dump.c:214-219)
-/// then the mark gets its one byte.
 fn write_dump_file(util: &mut Util, path: &Path, text: &str) -> Result<(), u8> {
     let mut ok_name = path.as_os_str().to_os_string();
     ok_name.push(".dump_ok");
@@ -1038,7 +983,7 @@ fn write_dump_file(util: &mut Util, path: &Path, text: &str) -> Result<(), u8> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
-        // Never through a symlink a non-root owner of the dump's directory planted: MIT's `O_CREAT | O_TRUNC` empties its target.
+        // `O_NOFOLLOW`, so a planted symlink is not emptied; MIT's `O_TRUNC` would.
         opts.mode(0o600).custom_flags(nix::libc::O_NOFOLLOW);
     }
     let ok = match krb5_protocol::create_labeled(&ok_path, || opts.open(&ok_path)) {
@@ -1071,7 +1016,6 @@ fn write_dump_file(util: &mut Util, path: &Path, text: &str) -> Result<(), u8> {
 }
 
 // MIT: `name_matches` (kadmin/dbutil/dump.c:221-257)
-/// a name is dumped when one pattern's leftmost-longest match is all of it.
 fn name_matches(util: &Util, name: &str, patterns: &[String]) -> bool {
     if patterns.is_empty() {
         return true;
@@ -1097,11 +1041,8 @@ fn name_matches(util: &Util, name: &str, patterns: &[String]) -> bool {
     false
 }
 
-/// The name of the dump format that failed to load.
 // MIT: `r1_8_version` (kadmin/dbutil/dump.c:1026-1035)
-/// version 6 is `Kerberos version 5 release 1.8`.
 // MIT: `r1_11_version` (kadmin/dbutil/dump.c:1036-1045)
-/// version 7 is `Kerberos version 5 release 1.11`.
 fn version_name(version: u32) -> &'static str {
     if version == KDB_DUMP_VERSION {
         "Kerberos version 5 release 1.11"
@@ -1111,8 +1052,6 @@ fn version_name(version: u32) -> &'static str {
 }
 
 // MIT: `load_db` (kadmin/dbutil/dump.c:1382-1610)
-/// load a dump file into a new database that replaces the live one, or (`-update`) into the live one.
-/// MIT copies the records with their keys still wrapped; this port opens them, so it needs the master key that opens the dump: `-P`'s, else (`-m`) a typed one, else the stash's. A dump with no principal record has no key to open. No lock is held while the key is read: `-update` opens the database first, so a database that does not open is reported before any prompt, as MIT reports it, and takes its permanent lock after; a full load makes its temporary database after, where MIT, which reads no key, makes it first.
 fn load(util: &mut Util, args: &[String]) -> u8 {
     let mut want: Option<u32> = None;
     let (mut verbose, mut update, mut iprop_load) = (false, false, false);
@@ -1235,7 +1174,7 @@ fn load(util: &mut Util, args: &[String]) -> u8 {
             store.set_ulog(log, IpropRole::Primary);
         }
         // MIT: `process_k5beta7_princ` (kadmin/dbutil/dump.c:691-694)
-        // a loaded record carries its lockout attributes, which the update writes; the others keep theirs.
+        // A loaded record's lockout is written; the others keep theirs.
         let order: Vec<&str> = dump.princs.iter().map(|p| p.name.as_str()).collect();
         if let Err(e) = update_store(&mut store, &loaded, &order) {
             util.com_err(&e.to_string(), "while creating policy");
@@ -1243,7 +1182,7 @@ fn load(util: &mut Util, args: &[String]) -> u8 {
         }
         let first = dump.princs.first().map_or("", |p| p.name.as_str());
         // MIT: `krb5_db_put_principal` (lib/kdb/kdb5.c:987-999)
-        // each update is converted, its keys wrapped, before its put; one that cannot be fails the load before the database is written.
+        // A record that cannot be converted fails the load before the database is written.
         let prepared = match store.prepare_log() {
             Ok(p) => p,
             Err(e) => {
@@ -1297,9 +1236,7 @@ fn load(util: &mut Util, args: &[String]) -> u8 {
     0
 }
 
-/// A dump with no principal record: a full load leaves a database that holds only the dump's policies (none for a header alone), and `-update` creates or replaces each of them in the live database (an empty database file gets a database of those policies, as MIT's empty file becomes an empty database). No key is opened, so no master key is fetched.
 // MIT: `restore_dump` (kadmin/dbutil/dump.c:1364-1379)
-/// the records are read to the end of the file, however few.
 fn load_policies_only(
     util: &mut Util,
     target: Option<DbUpdate>,
@@ -1332,7 +1269,6 @@ fn load_policies_only(
             return 1;
         }
         // MIT: `krb5_db_create_policy` (lib/kdb/kdb5.c:2440-2457)
-        // a primary's log starts over after a policy is created.
         if !records.is_empty()
             && let Some(log) = &util.ulog
             && let Err(e) = log.init_header()
@@ -1366,18 +1302,15 @@ fn load_policies_only(
     0
 }
 
-/// The update log a full load keeps when iprop is enabled (the load maps it first), and the serial and time an iprop dump's header gave.
 // MIT: `load_db` (kadmin/dbutil/dump.c:1529-1532)
-/// a full load's own puts are not logged; the log is reinitialized around the promotion instead.
+/// A full load's puts are not logged; the log restarts around the promotion.
 fn load_log(util: &Util, last: Option<UlogLast>) -> Option<krb5_kdc::LoadLog<'_>> {
     util.ulog
         .as_ref()
         .map(|ulog| krb5_kdc::LoadLog { ulog, last })
 }
 
-/// The database `-update` merges into, opened (its lock files and what it holds judged, nothing locked yet) before any record is read or any key fetched; `None` once the failure is reported.
 // MIT: `load_db` (kadmin/dbutil/dump.c:1509-1516)
-/// an update opens the database, and a failure is reported while opening it.
 fn open_update(util: &Util) -> Option<DbUpdate> {
     let db = util.db_args.open_file();
     match DbUpdate::open(&db) {
@@ -1393,9 +1326,8 @@ fn open_update(util: &Util) -> Option<DbUpdate> {
     }
 }
 
-/// A full load's temporary database, made once the dump and its master key are read, so that no lock is held while a typed key is waited for (MIT's load reads no key, and makes it first); `None` once the failure is reported.
+/// The temporary database is made after the key is read, so the prompt holds no lock.
 // MIT: `load_db` (kadmin/dbutil/dump.c:1492-1508)
-/// a full load creates its temporary database, and a failure is reported while creating the database.
 fn create_temporary(util: &Util) -> Option<FullLoad> {
     match FullLoad::create(&util.db_args.file) {
         Ok(full) => Some(full),
@@ -1406,9 +1338,8 @@ fn create_temporary(util: &Util) -> Option<FullLoad> {
     }
 }
 
-/// The stash's bytes when the database `-update` opened is a legacy KDB blob, which opens with them as every reader opens one, read before the permanent lock; the exit status once a stash that cannot be read is reported with MIT's text for a master key it cannot fetch.
+/// A legacy database's stash is read before the permanent lock.
 // MIT: `krb5_db_def_fetch_mkey` (lib/kdb/kdb_default.c:384-390)
-/// a stash that cannot be read is "Can not fetch master key (error: …)."
 fn legacy_stash(util: &Util, update: &DbUpdate) -> Result<Option<Zeroizing<Vec<u8>>>, u8> {
     if !update.legacy() {
         return Ok(None);
@@ -1425,7 +1356,7 @@ fn legacy_stash(util: &Util, update: &DbUpdate) -> Result<Option<Zeroizing<Vec<u
     }
 }
 
-/// Lock the database `-update` opened permanently: `principal.kadm5.lock` is removed until the lock is let go, so no other program opens the database meanwhile. A refused lock is reported and changes nothing; once held, every way out of the update lets it go ([`DbUpdate`]). MIT `load_db` (`kadmin/dbutil/dump.c:1518-1526`): the opened database is locked permanently, and a refused lock is reported.
+/// `principal.kadm5.lock` stays removed until the update's lock is released.
 fn lock_permanently(util: &Util, update: &mut DbUpdate) -> bool {
     match update.lock_permanently() {
         Ok(()) => true,
@@ -1436,9 +1367,7 @@ fn lock_permanently(util: &Util, update: &mut DbUpdate) -> bool {
     }
 }
 
-/// Let go of `load -update`'s permanent lock: `principal.kadm5.lock` is made again.
 // MIT: `load_db` (kadmin/dbutil/dump.c:1546-1549)
-/// the permanent lock is let go once the records are in.
 fn update_unlock(util: &Util, update: DbUpdate) -> bool {
     match update.unlock() {
         Ok(()) => true,
@@ -1449,15 +1378,10 @@ fn update_unlock(util: &Util, update: DbUpdate) -> bool {
     }
 }
 
-/// A full load that failed: making its temporary database, making that database live, or starting the update log over around it.
 // MIT: `load_db` (kadmin/dbutil/dump.c:1503-1507)
-/// a temporary database that cannot be made is reported while creating the database.
 // MIT: `load_db` (kadmin/dbutil/dump.c:1562-1568)
-/// one that cannot be made live is reported while making the newly loaded database live.
 // MIT: `load_db` (kadmin/dbutil/dump.c:1554-1559)
-/// a log that cannot start over is reported while reinitializing the update log.
 // MIT: `load_db` (kadmin/dbutil/dump.c:1579-1585)
-/// one that cannot take the iprop dump's serial and time is reported while writing the update log header.
 fn load_failed(util: &Util, e: &LoadError) {
     match e {
         LoadError::Create(e) => util.com_err(&persist_text(e), "while creating database"),
@@ -1469,9 +1393,7 @@ fn load_failed(util: &Util, e: &LoadError) {
     }
 }
 
-/// `current` dump text with each of `records` in place of the policy of its name, else added.
 // MIT: `process_k5beta7_policy` (kadmin/dbutil/dump.c:820-822)
-/// a policy is created, else replaced.
 fn merge_policy_records(current: &str, records: &[String]) -> String {
     let name = |line: &str| {
         line.strip_prefix("policy\t")
@@ -1492,7 +1414,6 @@ fn merge_policy_records(current: &str, records: &[String]) -> String {
 }
 
 // MIT: `load_db` (kadmin/dbutil/dump.c:1447-1475)
-/// the header names the dump's format, or must be the one `-r18` asks for, or (`-i`) begin with `iprop`. Only the r1.8 and r1.11 formats and the iprop ones load here.
 fn dump_version(
     util: &Util,
     bytes: &[u8],
@@ -1535,11 +1456,8 @@ fn dump_error_text(e: &DumpError) -> String {
     }
 }
 
-/// A dump that does not load: the record's own message, the line it was on, and the format.
 // MIT: `restore_dump` (kadmin/dbutil/dump.c:1364-1379)
-/// a record that fails is reported with its line number.
 // MIT: `load_db` (kadmin/dbutil/dump.c:1540-1543)
-/// then the format that failed to restore.
 fn restore_failed(util: &Util, file: &str, version: u32, why: &str) {
     let progname = &util.progname;
     let (line, detail) = why
@@ -1560,7 +1478,6 @@ fn restore_failed(util: &Util, file: &str, version: u32, why: &str) {
     ));
 }
 
-/// The master key that opens the dump being loaded, and whether it came from the test hook (which also writes the missing stash). `None` after the failure is reported. MIT `open_db_and_mkey` (`kadmin/dbutil/kdb5_util.c:411-452`): a `-P` password, else one typed for `-m`, else the stash.
 fn load_master_key(util: &mut Util, dump: &DumpFile) -> Option<(ProtocolKey, bool)> {
     let realm = dump.realm().map(str::to_owned).unwrap_or_default();
     let km = dump.princ(&format!("K/M@{realm}"));
@@ -1623,7 +1540,6 @@ fn load_master_key(util: &mut Util, dump: &DumpFile) -> Option<(ProtocolKey, boo
 }
 
 // MIT: `kdb5_destroy` (kadmin/dbutil/kdb5_destroy.c:41-92)
-/// delete the database, after a typed `yes` unless `-f`.
 fn destroy(util: &mut Util, args: &[String]) -> u8 {
     let opts = match sub_options(args, "f") {
         Ok(o) => o,
@@ -1660,11 +1576,8 @@ fn destroy(util: &mut Util, args: &[String]) -> u8 {
     util.exit_status
 }
 
-/// Remove the database: the file itself zeroed and unlinked, then the lock and policy files db2 keeps beside it should any be there (this store keeps neither), then `principal.lockout` zeroed and unlinked when it is there.
 // MIT: `krb5_db2_destroy` (plugins/kdb/db2/kdb_db2.c:1227-1271)
-/// `destroy_file` on the database, then the lock file and the policy database and its lock are unlinked.
 // MIT: `klmdb_destroy` (plugins/kdb/lmdb/kdb_lmdb.c:683-709)
-/// the lockout environment is destroyed with the database.
 fn destroy_database(file: &Path) -> io::Result<()> {
     let lockout = krb5_kdc::lockout_path(file);
     for zeroed in [file, lockout.as_path()] {
@@ -1686,15 +1599,13 @@ fn destroy_database(file: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// `path`'s refusal of a symlink a destroy would zero through: `ELOOP`, the path named.
 fn link_refused(path: &Path) -> io::Error {
     let e = io::Error::from_raw_os_error(nix::libc::ELOOP);
     io::Error::new(e.kind(), format!("{}: {}", path.display(), strerror(&e)))
 }
 
-/// Zero `path` and unlink it: each block that is not all zeros already is overwritten with zeros, and the file is synced before it is removed. The open never follows a symlink (`O_NOFOLLOW`), where MIT's zeroes the link's target. MIT `destroy_file` (`plugins/kdb/db2/kdb_db2.c:619-682`): `BUFSIZ` blocks are read, those with a nonzero byte written over with zeros, then `fsync` and `unlink`.
+/// `O_NOFOLLOW`: a symlink is not zeroed; MIT zeroes the link's target.
 // MIT: `destroy_file` (plugins/kdb/db2/kdb_db2.c:619-682)
-/// `BUFSIZ` blocks are read, those with a nonzero byte written over with zeros, then `fsync` and `unlink`.
 fn destroy_file(path: &Path) -> io::Result<()> {
     use std::os::unix::fs::OpenOptionsExt as _;
     const BUFSIZ: usize = 8192;
@@ -1728,7 +1639,6 @@ fn destroy_file(path: &Path) -> io::Result<()> {
     fs::remove_file(path)
 }
 
-/// `path` with `suffix` appended to its last component.
 fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
     let mut name = path.as_os_str().to_os_string();
     name.push(suffix);
@@ -1744,14 +1654,13 @@ mod hooks {
 
     use super::{Util, err_line, out_line, usage};
 
-    /// `KRB5_MASTER_PASSWORD`: the master password `create` takes instead of a `-P` or the prompts, and `load` takes when there is no stash.
+    /// `KRB5_MASTER_PASSWORD` stands in for `-P` only in a test-hooks build.
     pub(super) fn master_password() -> Option<Zeroizing<String>> {
         std::env::var("KRB5_MASTER_PASSWORD")
             .ok()
             .map(Zeroizing::new)
     }
 
-    /// The gates' principals beside a new realm, when `KRB5_TEST_USER_PASSWORD` and `KRB5_TEST_ADMIN_PASSWORD` are set.
     pub(super) fn seed(store: &mut PrincipalStore) -> Result<(), krb5_kdc::Error> {
         match (
             std::env::var("KRB5_TEST_USER_PASSWORD"),
@@ -1802,7 +1711,6 @@ mod hooks {
             .map_err(|e| (1, format!("save store: {e}")))?
     }
 
-    /// A named policy, bound to `user` when that principal exists.
     fn addpol(util: &Util, name: &str) -> Hook {
         if name.is_empty() {
             return Err((2, "empty policy name".into()));
@@ -1833,7 +1741,6 @@ mod hooks {
         Ok(format!("ok addpol name={name}"))
     }
 
-    /// A string attribute (`KRB5_TL_STRING_ATTRS`).
     fn setstr(util: &Util, princ: &str, key: &str, value: &str) -> Hook {
         if key.is_empty() {
             return Err((2, "empty setstr key".into()));
@@ -1848,7 +1755,6 @@ mod hooks {
         Ok(format!("ok setstr {princ} {key}"))
     }
 
-    /// An alias stub naming `target`.
     fn alias(util: &Util, alias: &str, target: &str) -> Hook {
         with_store(util, |store| {
             let realm = store.realm().to_owned();
@@ -1864,7 +1770,6 @@ mod hooks {
         Ok(format!("ok alias {alias} {target}"))
     }
 
-    /// Backdate `KRB5_TL_LAST_PWD_CHANGE`.
     fn setlastpwd(util: &Util, princ: &str, secs: &str) -> Hook {
         let ts: u32 = secs
             .parse()
