@@ -1,13 +1,5 @@
-//! Client padata for FAST, SPAKE, PKINIT, and S4U, and the client checks
-//! on the KDC's reply.
-//!
-//! The builders make padata. They do not send it. The AS and TGS
-//! exchanges do. A builder that fails returns the error. It does not
-//! emit an empty padata list and continue. The verifiers
-//! (`verify_fast_finished`, `verify_req_enc_pa_rep`,
-//! `unwrap_fast_rep_checked`, `pkinit_reply_key`,
-//! `pkinit_reply_key_agile`, `verify_s4u2self_reply`) return an error for
-//! a reply that fails its check, so the exchange does not use it.
+//! Client padata for FAST, SPAKE, PKINIT, and S4U, and the client checks on the KDC's reply.
+//! The builders make padata. They do not send it. The AS and TGS exchanges do. A builder that fails returns the error. It does not emit an empty padata list and continue. The verifiers (`verify_fast_finished`, `verify_req_enc_pa_rep`, `unwrap_fast_rep_checked`, `pkinit_reply_key`,
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
@@ -27,14 +19,9 @@ use krb5_types::pkinit::KxKey;
 use crate::error::Error;
 use crate::trace;
 
-/// MIT `CKSUMTYPE_HMAC_MD5_ARCFOUR` (`krb5.hin`): RFC 4757's HMAC-MD5, -138.
 const CKSUMTYPE_HMAC_MD5_ARCFOUR: i32 = -138;
 
 /// Mix a FAST subkey with the armor ticket session key (RFC 6113).
-///
-/// # Errors
-///
-/// [`Error::Crypto`] when the KRB-FX-CF2 of `subkey` and `session` fails.
 pub fn armor_key(
     session: &ProtocolKey,
     subkey: Option<&ProtocolKey>,
@@ -46,11 +33,6 @@ pub fn armor_key(
 }
 
 /// AP-REQ used as FAST AP-REQUEST armor, with an optional authenticator subkey.
-///
-/// # Errors
-///
-/// [`Error::Asn1`] when the authenticator does not encode, and [`Error::Crypto`] when encrypting
-/// it under `session` fails.
 pub fn build_fast_armor(
     ticket: Ticket,
     session: &ProtocolKey,
@@ -92,11 +74,6 @@ pub fn build_fast_armor(
 }
 
 /// Replace outer padata with PA-FX-FAST wrapping `inner_padata`.
-///
-/// # Errors
-///
-/// [`Error::Asn1`] when the outer body, the FAST request, the armor, or the PA-FX-FAST does not
-/// encode, and [`Error::Crypto`] when the checksum or the encryption under `armor_key` fails.
 pub fn attach_fast(
     req: &mut AsReq,
     armor: &ApReq,
@@ -112,14 +89,7 @@ pub fn attach_fast(
     )
 }
 
-/// [`attach_fast`] with an explicit `FastOptions` (RFC 6113 bit 1
-/// hide-client-names, etc.). The KDC honours hide-client-names by returning
-/// the anonymous principal as the outer reply client (MIT `kdc_fast_hide_client`).
-///
-/// # Errors
-///
-/// [`Error::Asn1`] when the outer body, the FAST request, the armor, or the PA-FX-FAST does not
-/// encode, and [`Error::Crypto`] when the checksum or the encryption under `armor_key` fails.
+/// [`attach_fast`] with an explicit `FastOptions` (RFC 6113 bit 1 hide-client-names, etc.). The KDC honours hide-client-names by returning the anonymous principal as the outer reply client (MIT `kdc_fast_hide_client`).
 pub fn attach_fast_with_options(
     req: &mut AsReq,
     armor: &ApReq,
@@ -127,23 +97,10 @@ pub fn attach_fast_with_options(
     inner_padata: Vec<PaData>,
     fast_options: &krb5_types::fast::FastOptions,
 ) -> Result<(), Error> {
-    // MIT krb5int_fast_prep_req: the whole request, padata included (the
-    // modules' padata first, then the info_pa_permitted pair 150/149 the
-    // builder already appended), becomes the FAST-REQ; the outer carries
-    // only PA-FX-FAST. The KDC swaps the inner request in (kdc_find_fast),
-    // so the enc-pa-rep negotiation works through the armor too.
-    //
-    // Outer times stay at the `krb5int_fast_prep_req_body` snapshot taken before
-    // `set_request_times`: required `till` is epoch (`19700101`); optional `from`/`rtime` stay
-    // omitted. The inner FAST-REQ body keeps the live times.
-    // MIT `restart_init_creds_loop` (`get_in_tkt.c:836-838`): takes the
-    // `krb5int_fast_prep_req_body` snapshot of the outer body.
-    // MIT `krb5int_fast_prep_req_body` (`fast.c:157-161`): the snapshot is the request without
-    // its padata.
-    // MIT `init_creds_step_request` (`get_in_tkt.c:1278-1280`): resets the request times with
-    // `set_request_times` on each step, after that snapshot.
-    // MIT `krb5int_fast_prep_req` (`fast.c:310-313`): `req_checksum` is over the snapshotted
-    // outer body.
+    // MIT `restart_init_creds_loop` (`get_in_tkt.c:836-838`): takes the `krb5int_fast_prep_req_body` snapshot of the outer body.
+    // MIT `krb5int_fast_prep_req_body` (`fast.c:157-161`): the snapshot is the request without its padata.
+    // MIT `init_creds_step_request` (`get_in_tkt.c:1278-1280`): resets the request times with `set_request_times` on each step, after that snapshot.
+    // MIT `krb5int_fast_prep_req` (`fast.c:310-313`): `req_checksum` is over the snapshotted outer body.
     let mut inner = inner_padata;
     inner.extend(req.0.padata.take().unwrap_or_default());
     let inner_body = req.0.req_body.clone();
@@ -163,13 +120,6 @@ pub fn attach_fast_with_options(
 }
 
 /// PA-FX-FAST wrapping `inner_padata` and a copy of `req_body`.
-///
-/// TGS FAST omits `armor` when PA-TGS-REQ is present (RFC 6113).
-///
-/// # Errors
-///
-/// [`Error::Asn1`] when `req_body`, the FAST request, the armor, or the PA-FX-FAST does not
-/// encode, and [`Error::Crypto`] when the checksum or the encryption under `armor_key` fails.
 pub fn fx_fast_padata(
     armor: Option<&ApReq>,
     armor_key: &ProtocolKey,
@@ -189,16 +139,8 @@ pub fn fx_fast_padata(
 }
 
 /// [`fx_fast_padata`] with an explicit FAST req_checksum input.
-///
-/// TGS FAST checksums the PA-TGS-REQ AP-REQ.
-/// MIT `krb5int_fast_prep_req` (`fast.c:279-279`): the FAST encode path, whose req_checksum is
-/// over the caller's `to_be_checksummed` bytes.
+/// the FAST encode path, whose req_checksum is over the caller's `to_be_checksummed` bytes.
 /// MIT `k5_make_tgs_req` (`send_tgs.c:279-279`): passes the PA-TGS-REQ AP-REQ as those bytes.
-///
-/// # Errors
-///
-/// [`Error::Asn1`] when the FAST request, the armor, or the PA-FX-FAST does not encode, and
-/// [`Error::Crypto`] when the checksum or the encryption under `armor_key` fails.
 pub fn fx_fast_padata_over(
     armor: Option<&ApReq>,
     armor_key: &ProtocolKey,
@@ -243,12 +185,7 @@ pub fn fx_fast_padata_over(
 }
 
 /// Verify `KrbFastFinished.ticket_checksum` over the ticket DER.
-/// MIT `krb5int_fast_process_response` (`fast.c:543-551`): the ticket checksum is verified
-/// under the armor key over the encoded ticket; a mismatch is "Ticket modified in KDC reply".
-///
-/// # Errors
-///
-/// [`Error::ReplyMismatch`] when the ticket checksum does not verify under `armor_key`.
+/// MIT `krb5int_fast_process_response` (`fast.c:543-551`): the ticket checksum is verified under the armor key over the encoded ticket; a mismatch is "Ticket modified in KDC reply".
 pub fn verify_fast_finished(
     armor_key: &ProtocolKey,
     ticket: &Ticket,
@@ -267,13 +204,7 @@ pub fn verify_fast_finished(
 }
 
 /// PA-REQ-ENC-PA-REP over the AS-REQ when `enc-pa-rep` is set.
-/// MIT `krb5int_fast_verify_nego` (`fast.c:648-664`): with `enc-pa-rep` set, a missing or bad
-/// PA-REQ-ENC-PA-REP checksum over the AS-REQ is `KRB5_KDCREP_MODIFIED`.
-///
-/// # Errors
-///
-/// [`Error::ReplyMismatch`] (`KRB5_KDCREP_MODIFIED`) on a missing or bad checksum;
-/// [`Error::Asn1`] when the PA-REQ-ENC-PA-REP value is not a Checksum.
+/// MIT `krb5int_fast_verify_nego` (`fast.c:648-664`): with `enc-pa-rep` set, a missing or bad PA-REQ-ENC-PA-REP checksum over the AS-REQ is `KRB5_KDCREP_MODIFIED`.
 pub fn verify_req_enc_pa_rep(
     enc: &EncKdcRepPart,
     key: &ProtocolKey,
@@ -294,12 +225,6 @@ pub fn verify_req_enc_pa_rep(
 }
 
 /// Decrypt PA-FX-FAST on an AS-REP into [`krb5_types::fast::KrbFastResponse`].
-///
-/// # Errors
-///
-/// [`Error::ReplyMismatch`] when `padata` has no PA-FX-FAST, [`Error::Asn1`] when it or the
-/// decrypted response does not decode, and [`Error::Crypto`] when it does not decrypt under
-/// `armor_key`.
 pub fn unwrap_fast_rep(
     armor_key: &ProtocolKey,
     padata: &Option<Vec<PaData>>,
@@ -322,14 +247,7 @@ pub fn unwrap_fast_rep(
     decode(&plain).map_err(Error::from)
 }
 
-/// MIT `decrypt_fast_reply` (`fast.c:397-402`): `local_resp->nonce != state->nonce` is
-/// `KRB5_KDCREP_MODIFIED` ("nonce modified in FAST response").
-///
-/// # Errors
-///
-/// [`Error::ReplyMismatch`] when `padata` has no PA-FX-FAST or the response nonce is not
-/// `expected_nonce`, [`Error::Asn1`] when the PA-FX-FAST or the decrypted response does not
-/// decode, and [`Error::Crypto`] when it does not decrypt under `armor_key`.
+/// MIT `decrypt_fast_reply` (`fast.c:397-402`): `local_resp->nonce != state->nonce` is `KRB5_KDCREP_MODIFIED` ("nonce modified in FAST response").
 pub fn unwrap_fast_rep_checked(
     armor_key: &ProtocolKey,
     padata: &Option<Vec<PaData>>,
@@ -345,11 +263,6 @@ pub fn unwrap_fast_rep_checked(
 }
 
 /// Mix the FAST strengthen-key with the base reply key.
-///
-/// # Errors
-///
-/// [`Error::Crypto`] when the strengthen key's etype is unknown, its length does not fit that
-/// etype, or the KRB-FX-CF2 with `base` fails.
 pub fn apply_strengthen(
     strengthen: &EncryptionKey,
     base: &ProtocolKey,
@@ -359,8 +272,6 @@ pub fn apply_strengthen(
     krb_fx_cf2(&sk, base, b"strengthenkey", b"replykey").map_err(Into::into)
 }
 
-/// PA-SPAKE support message naming `groups` in order.
-///
 /// MIT `send_support` (`spake_client.c:155-167`): the client's permitted groups, in configuration order.
 #[must_use]
 pub fn pa_spake_support(groups: &[SpakeGroup]) -> PaData {
@@ -374,18 +285,7 @@ pub fn pa_spake_support(groups: &[SpakeGroup]) -> PaData {
 }
 
 /// A PA-SPAKE response to a challenge in `group`, and the reply key `K'[0]`.
-///
-/// `support_der` is the client's PA-SPAKE support encoding (empty if none).
-/// `challenge_der` is the KDC PA-SPAKE challenge encoding. `body_der` is
-/// the KDC-REQ-BODY of the response AS-REQ.
-///
 /// MIT `process_challenge` (`spake_client.c:210-282`): the transcript is the support message, the challenge and the client's element; the SF-NONE factor is encrypted in `K'[1]`.
-///
-/// # Errors
-///
-/// [`Error::Crypto`] when `challenge_pubkey` is not an element of `group`, or the key
-/// generation, a SPAKE derivation, or the factor encryption fails; [`Error::Asn1`] when the
-/// second factor or the response does not encode.
 pub fn pa_spake_response(
     ikey: &ProtocolKey,
     group: SpakeGroup,
@@ -399,13 +299,10 @@ pub fn pa_spake_response(
     // MIT `group_keygen` (`plugins/preauth/spake/groups.c:333-371`): the public value is traced.
     crate::trace::spake_keygen(&pub_x);
     let result = spake_result(group, &wbytes, &secret, challenge_pubkey, false)?;
-    // MIT `group_result` (`plugins/preauth/spake/groups.c:374-412`): the result is traced, which
-    // `trace::spake_result` prints as a hash only.
+    // MIT `group_result` (`plugins/preauth/spake/groups.c:374-412`): the result is traced, which `trace::spake_result` prints as a hash only.
     crate::trace::spake_result(&result);
     let thash = spake_thash_update(group, &[], support_der, challenge_der);
     let thash = spake_thash_update(group, &thash, &pub_x, &[]);
-    // MIT `process_challenge` (`plugins/preauth/spake/spake_client.c:181-298`): the transcript
-    // hash, a hash of the public values, is traced before the keys are derived from it.
     crate::trace::spake_client_thash(&thash);
     let k0 = spake_derive_key(ikey, group, &wbytes, &result, &thash, body_der, 0)?;
     let k1 = spake_derive_key(ikey, group, &wbytes, &result, &thash, body_der, 1)?;
@@ -436,11 +333,6 @@ pub fn pa_spake_response(
 
 #[cfg(any(test, feature = "test-ca"))]
 /// PA-PK-AS-REQ: AuthPack inside CMS SignedData (`signedAuthPack`).
-///
-/// # Errors
-///
-/// [`Error::ReplyMismatch`] when `ca` cannot sign the AuthPack, and [`Error::Asn1`] when the
-/// AuthPack or the PA-PK-AS-REQ does not encode.
 pub fn pa_pk_as_req(
     client_public: &[u8],
     ca: &krb5_types::pkinit::PkinitCa,
@@ -454,13 +346,7 @@ pub fn pa_pk_as_req(
 }
 
 #[cfg(any(test, feature = "test-ca"))]
-/// PA-PK-AS-REQ whose `clientPublicValue` is an already-encoded SPKI
-/// (ECDH P-256 or MODP DH).
-///
-/// # Errors
-///
-/// [`Error::ReplyMismatch`] when `ca` cannot sign the AuthPack, and [`Error::Asn1`] when the
-/// AuthPack or the PA-PK-AS-REQ does not encode.
+/// PA-PK-AS-REQ whose `clientPublicValue` is an already-encoded SPKI (ECDH P-256 or MODP DH).
 pub fn pa_pk_as_req_spki(
     spki: &[u8],
     ca: &krb5_types::pkinit::PkinitCa,
@@ -471,11 +357,6 @@ pub fn pa_pk_as_req_spki(
 
 #[cfg(any(test, feature = "test-ca"))]
 /// PA-PK-AS-REQ signed as `cn` (SAN / EKU follow that identity).
-///
-/// # Errors
-///
-/// [`Error::ReplyMismatch`] when `ca` cannot sign the AuthPack as `cn`, and [`Error::Asn1`] when
-/// the AuthPack or the PA-PK-AS-REQ does not encode.
 pub fn pa_pk_as_req_cn(
     client_public: &[u8],
     ca: &krb5_types::pkinit::PkinitCa,
@@ -525,11 +406,6 @@ fn pa_pk_as_req_spki_cn(
 
 #[cfg(any(test, feature = "test-ca"))]
 /// PA-PK-AS-REQ advertising RFC 8636 SHA-256 `supportedKDFs`.
-///
-/// # Errors
-///
-/// [`Error::ReplyMismatch`] when the SHA-256 KDF cannot be appended to the encoded AuthPack or
-/// `ca` cannot sign it, and [`Error::Asn1`] when the AuthPack or the PA-PK-AS-REQ does not encode.
 pub fn pa_pk_as_req_agile(
     client_public: &[u8],
     ca: &krb5_types::pkinit::PkinitCa,
@@ -565,14 +441,6 @@ pub fn pa_pk_as_req_agile(
 }
 
 /// PA-PK-AS-REQ signed with a client identity (RFC 4556 + RFC 8636 SHA-256 KDF).
-///
-/// `body_sha1` is the SHA-1 of the encoded KDC-REQ-BODY (`paChecksum`).
-///
-/// # Errors
-///
-/// [`Error::ReplyMismatch`] when the PKAuthenticator does not encode or the CMS signature fails
-/// (`cert_der` has no issuer and serial, or `leaf_key` cannot sign), and [`Error::Asn1`] when
-/// the PA-PK-AS-REQ does not encode.
 pub fn pa_pk_as_req_signed(
     client_public: &[u8],
     cert_der: &[u8],
@@ -631,11 +499,6 @@ pub(crate) fn pa_pk_as_req_signed_at(
 }
 
 /// Unsigned AuthPack (RFC 6112 anonymous PKINIT ContentInfo).
-///
-/// # Errors
-///
-/// [`Error::ReplyMismatch`] when the PKAuthenticator does not encode, and [`Error::Asn1`] when
-/// the PA-PK-AS-REQ does not encode.
 pub fn pa_pk_as_req_unsigned(
     client_public: &[u8],
     nonce: u32,
@@ -703,9 +566,7 @@ impl<'a> KdcTrust<'a> {
     }
 }
 
-/// Verify the KDC CMS, then require KPKdc + SAN `krbtgt/REALM@REALM` and
-/// `id-pkinit-DHKeyData` before any ECDH.
-// MIT pkinit_as_rep_parse; see docs/parity/b1-client-preauth.md
+/// Verifies the KDC's CMS, then requires the id-pkinit-KPKdc EKU, the SAN `krbtgt/REALM@REALM` and `id-pkinit-DHKeyData`, all before any ECDH (MIT `pkinit_as_rep_parse`).
 fn verify_kdc_pkinit_cms(cms: &[u8], trust: KdcTrust<'_>, realm: &str) -> Result<Vec<u8>, Error> {
     let pack = krb5_types::pkinit::cms_signeddata_verify(
         cms,
@@ -725,7 +586,7 @@ fn verify_kdc_pkinit_cms(cms: &[u8], trust: KdcTrust<'_>, realm: &str) -> Result
     Ok(pack.e_content)
 }
 
-// MIT verify_kdc_san; see docs/parity/b1-client-preauth.md
+// MIT verify_kdc_san; see docs/parity/b1-client-preauth.md. The KDC's SAN must name `krbtgt/<realm>@<realm>`, or `pkinit_kdc_hostname`'s host when that's set.
 fn verify_kdc_cert(cert: &[u8], trust: KdcTrust<'_>, realm: &str) -> Result<(), Error> {
     let refuse = |code: i32| {
         let code = trace::kdc_code(code);
@@ -771,7 +632,7 @@ fn verify_kdc_cert(cert: &[u8], trust: KdcTrust<'_>, realm: &str) -> Result<(), 
         return Err(refuse(err::KDC_NAME_MISMATCH));
     };
     trace::pkinit_client_san_match_dnsname(host);
-    // MIT verify_kdc_eku; see docs/parity/b1-client-preauth.md
+    // MIT verify_kdc_eku; see docs/parity/b1-client-preauth.md. id-pkinit-KPKdc unless `pkinit_eku_checking` relaxes it.
     if !trust.require_eku {
         trace::pkinit_client_eku_skip();
         trace::pkinit_client_eku_accept();
@@ -794,13 +655,6 @@ fn verify_kdc_cert(cert: &[u8], trust: KdcTrust<'_>, realm: &str) -> Result<(), 
 }
 
 /// Derive the PKINIT reply key from PA-PK-AS-REP `dh_signed_data` (CMS or raw P-256).
-///
-/// # Errors
-///
-/// [`Error::ReplyMismatch`] when `padata` has no PA-PK-AS-REP, the reply is an encKeyPack, the
-/// KDC's CMS signature, certificate, or content type does not verify against `trust`
-/// and `realm`, its DH value does not decode, or the reply names the RFC 8636 SHA-256 KDF;
-/// [`Error::Asn1`] when the PA-PK-AS-REP does not decode; [`Error::Crypto`] when the ECDH fails.
 pub fn pkinit_reply_key(
     key: &KxKey,
     padata: &Option<Vec<PaData>>,
@@ -836,13 +690,6 @@ pub fn pkinit_reply_key(
 }
 
 /// Derive the PKINIT reply key using RFC 8636 when `kdf` is in PA-PK-AS-REP.
-///
-/// # Errors
-///
-/// [`Error::ReplyMismatch`] when `padata` has no PA-PK-AS-REP or it carries no dhSignedData, the
-/// KDC's CMS signature, certificate, or content type does not verify against `trust`
-/// and `realm`, its DH value does not decode, or the reply names a KDF other than SHA-256;
-/// [`Error::Crypto`] when the ECDH fails.
 pub fn pkinit_reply_key_agile(
     key: &KxKey,
     padata: &Option<Vec<PaData>>,
@@ -891,12 +738,6 @@ pub fn pkinit_reply_key_agile(
 
 /// PA-FOR-USER (S4U2Self) checksummed with the TGT session key (usage 17).
 /// MIT `make_pa_for_user_checksum` (`lib/krb5/krb/s4u_creds.c:130-133`): the checksum is HMAC-MD5 (`CKSUMTYPE_HMAC_MD5_ARCFOUR`, -138) whatever the key's type, as MS-SFU specifies.
-///
-/// # Errors
-///
-/// [`Error::ReplyMismatch`] when `realm` is not a GeneralString, [`Error::Crypto`] when the
-/// checksum under `session` cannot be computed, and [`Error::Asn1`] when the PA-FOR-USER does
-/// not encode.
 pub fn pa_for_user(
     session: &ProtocolKey,
     user: PrincipalName,
@@ -928,12 +769,6 @@ pub fn pa_for_user(
 }
 
 /// PA-S4U-X509-USER (padata 130). Checksum is ku 26 over the encoded user-id.
-///
-/// # Errors
-///
-/// [`Error::ReplyMismatch`] when `realm` is not a GeneralString, [`Error::Asn1`] when the user-id
-/// or the padata does not encode, and [`Error::Crypto`] when the checksum under `key` cannot be
-/// computed.
 pub fn pa_s4u_x509_user(
     key: &ProtocolKey,
     user: PrincipalName,
@@ -974,18 +809,7 @@ fn s4u_not_newer(etype: EncryptionType) -> bool {
     matches!(etype, EncryptionType::Des3CbcSha1 | EncryptionType::Rc4Hmac)
 }
 
-/// MIT `verify_s4u2self_reply` (`s4u_creds.c:273-397`): missing 130 on both the (FAST-swapped)
-/// reply padata and enc-padata is accepted. Enc-only 130, a nonce/user/checksum mismatch, or an
-/// unkeyed reply checksum on a modern etype is refused.
-///
-/// # Errors
-///
-/// [`Error::ReplyMismatch`] (`KRB5_KDCREP_MODIFIED`) when the reply's PA-S4U-X509-USER is only in
-/// `enc_padata`, its checksum does not verify under `subkey`, its nonce or user does not match
-/// `req`, or, under a DES3 or RC4 `subkey`, its encrypted-padata binding does not hold;
-/// [`Error::KrbError`] `INAPP_CKSUM` for an unkeyed reply checksum under a newer etype;
-/// [`Error::Asn1`] when the reply's PA-S4U-X509-USER does not decode or its user-id does not
-/// re-encode.
+/// MIT `verify_s4u2self_reply` (`s4u_creds.c:273-397`): missing 130 on both the (FAST-swapped) reply padata and enc-padata is accepted. Enc-only 130, a nonce/user/checksum mismatch, or an unkeyed reply checksum on a modern etype is refused.
 pub fn verify_s4u2self_reply(
     subkey: &ProtocolKey,
     req: &krb5_types::s4u::PaS4uX509User,
@@ -1057,10 +881,6 @@ pub fn verify_s4u2self_reply(
 }
 
 /// PA-PAC-OPTIONS (padata 167). `rbcd` sets MS-KILE bit 3.
-///
-/// # Errors
-///
-/// [`Error::Asn1`] when the PA-PAC-OPTIONS does not encode.
 pub fn pa_pac_options(rbcd: bool) -> Result<PaData, Error> {
     let body = if rbcd {
         krb5_types::s4u::PaPacOptions::rbcd()
