@@ -1,5 +1,4 @@
-//! What `krb5kdc` and `kadmind` share as daemons (`kdc/main.c`, `kadmin/server/ovsec_kadmd.c`,
-//! `lib/apputils/net-server.c`): leaving the terminal, the pid file, and the signals.
+//! What `krb5kdc` and `kadmind` share as daemons (`kdc/main.c`, `kadmin/server/ovsec_kadmd.c`, `lib/apputils/net-server.c`): leaving the terminal, the pid file, and the signals.
 
 use std::fs::File;
 use std::io::{self, Write as _};
@@ -22,13 +21,7 @@ pub enum OpenFailure {
 }
 
 /// The database file the `-d` / `-x` arguments name, else `default`.
-/// MIT `configure_context` (`plugins/kdb/db2/kdb_db2.c:226-276`): `dbname=` names the file,
-/// `temporary` is that name with `~`, `merge_nra` and `hash=` are accepted, and anything else is
-/// an unsupported argument.
-///
-/// # Errors
-///
-/// MIT's message for the first argument it does not take.
+/// MIT `configure_context` (`plugins/kdb/db2/kdb_db2.c:226-276`): `dbname=` names the file, `temporary` is that name with `~`, `merge_nra` and `hash=` are accepted, and anything else is an unsupported argument.
 pub fn database_path(default: &Path, db_args: &[String]) -> Result<PathBuf, String> {
     let mut db = default.to_path_buf();
     let mut temporary = false;
@@ -50,19 +43,10 @@ pub fn database_path(default: &Path, db_args: &[String]) -> Result<PathBuf, Stri
     Ok(db)
 }
 
-/// Open the realm's database as MIT's daemons do: the database arguments, the database file
-/// (one that is no database this store reads is refused, as [`crate::check_openable`] judges
-/// it) and its lock files, then the master key from the stash; `mkey_name` is the master key
-/// principal (`-M`).
-/// MIT `open_db` (`plugins/kdb/db2/kdb_db2.c:386-389`): a database that will not open is named
-/// in the error.
+/// Open the realm's database as MIT's daemons do: the database arguments, the database file (one that is no database this store reads is refused, as [`crate::check_openable`] judges it) and its lock files, then the master key from the stash; `mkey_name` is the master key principal (`-M`).
+/// MIT `open_db` (`plugins/kdb/db2/kdb_db2.c:386-389`): a database that will not open is named in the error.
 /// MIT `krb5_db2_open` (`plugins/kdb/db2/kdb_db2.c:1181-1199`): the lock files open with the database, before any master key is fetched.
-/// MIT `krb5_db_def_fetch_mkey` (`lib/kdb/kdb_default.c:384-390`): a stash that cannot be read
-/// is "Can not fetch master key (error: …)."
-///
-/// # Errors
-///
-/// [`OpenFailure`] with MIT's message.
+/// MIT `krb5_db_def_fetch_mkey` (`lib/kdb/kdb_default.c:384-390`): a stash that cannot be read is "Can not fetch master key (error: …)."
 pub fn open_database(
     paths: &krb5_config::KdcPaths,
     db_args: &[String],
@@ -127,7 +111,6 @@ fn open_prepared(db: &Path, key: &krb5_crypto::ProtocolKey) -> Result<PrincipalS
 /// MIT `krb5_def_fetch_mkey_list` (`lib/kdb/kdb_default.c:454-458`): the provided key did not decrypt the latest master key.
 const BAD_MASTER_KEY: &str = "Unable to decrypt latest master key with the provided master key";
 
-/// The `com_err` context for a master-key open failure.
 /// MIT `init_realm` (`kdc/main.c:393-396`): a key that does not decrypt is `while fetching master keys list for realm`.
 #[must_use]
 pub fn mkey_log_context(error: &str, realm: &str, mkey_name: &str) -> String {
@@ -138,8 +121,6 @@ pub fn mkey_log_context(error: &str, realm: &str, mkey_name: &str) -> String {
     }
 }
 
-/// Whether `-m` reads the master key from the keyboard.
-/// MIT `init_realm` (`kdc/main.c:285-290`): `-m` counts only when kdc.conf names no stash.
 #[must_use]
 pub fn manual_master_key(manual: bool, paths: &krb5_config::KdcPaths) -> bool {
     if !manual {
@@ -156,7 +137,6 @@ pub fn manual_master_key(manual: bool, paths: &krb5_config::KdcPaths) -> bool {
         .is_none_or(|c| c.key_stash_file.is_none())
 }
 
-/// Whether kadmind `-m` reads the master key from the keyboard.
 /// MIT `main` (`kadmin/server/ovsec_kadmd.c:386-388`): `-m` sets `mkey_from_kbd` with or without a stash.
 #[must_use]
 pub fn kadmind_mkey_from_kbd(manual: bool) -> bool {
@@ -170,22 +150,14 @@ pub fn kadmind_mkey_from_kbd(manual: bool) -> bool {
     true
 }
 
-/// The master key [`open_database_with_password`] stored on `store`, for a second open after
-/// `daemon()` that must not prompt again.
+/// The master key [`open_database_with_password`] stored on `store`, for a second open after `daemon()` that must not prompt again.
 #[must_use]
 pub fn copy_persist_master(store: &PrincipalStore) -> Option<krb5_crypto::ProtocolKey> {
     store.persist_master.as_ref().map(|(_, key)| key.clone())
 }
 
-/// Open as [`open_database`] does, with the master key typed once at the keyboard. The stash is
-/// not opened.
-/// MIT `krb5_db_fetch_mkey` (`lib/kdb/kdb_default.c`) with `-m`: one prompt, `Enter KDC database
-/// master key`, then `string_to_key` over the `K/M` salt.
-///
-/// # Errors
-///
-/// [`OpenFailure`], as [`open_database`]. A prompt that gets no password is
-/// [`OpenFailure::MasterKey`].
+/// Open as [`open_database`] does, with the master key typed once at the keyboard. The stash is not opened.
+/// [`OpenFailure`], as [`open_database`]. A prompt that gets no password is [`OpenFailure::MasterKey`].
 pub fn open_database_with_password(
     paths: &krb5_config::KdcPaths,
     db_args: &[String],
@@ -204,9 +176,6 @@ pub fn open_database_with_password(
 }
 
 /// [`open_database_with_password`] for a process that already holds `key` and has no terminal.
-///
-/// # Errors
-///
 /// [`OpenFailure`], as [`open_database_with_password`] short of the prompt.
 pub fn open_database_with_key(
     paths: &krb5_config::KdcPaths,
@@ -219,9 +188,7 @@ pub fn open_database_with_key(
     open_prepared(&db, key)
 }
 
-/// Whether the realm's database or stash is named relative to the current directory, so that a
-/// daemon must open it again once [`detach`] has moved it to `/`: the name then means what it
-/// means to MIT's daemons, which open the realm after `daemon()`.
+/// Whether the realm's database or stash is named relative to the current directory, so that a daemon must open it again once [`detach`] has moved it to `/`: the name then means what it means to MIT's daemons, which open the realm after `daemon()`.
 /// MIT `main` (`kdc/main.c:1016-1016`): the realms are initialized again after `daemon(0, 0)`.
 #[must_use]
 pub fn names_relative_database(paths: &krb5_config::KdcPaths, db_args: &[String]) -> bool {
@@ -229,24 +196,15 @@ pub fn names_relative_database(paths: &krb5_config::KdcPaths, db_args: &[String]
         || paths.key_stash_file.is_relative()
 }
 
-/// Leave the terminal: fork, the parent exits 0, the child starts a new session in `/` with its
-/// standard streams on `/dev/null`. Call it before any thread is started.
+/// Leave the terminal: fork, the parent exits 0, the child starts a new session in `/` with its standard streams on `/dev/null`. Call it before any thread is started.
 /// MIT `main` (`kdc/main.c:996-999`): `daemon(0, 0)` unless `-n`, after the sockets are bound.
-///
-/// # Errors
-///
 /// The OS error of `daemon(3)`; the process has not forked.
 pub fn detach() -> io::Result<()> {
     nix::unistd::daemon(false, false).map_err(io::Error::from)
 }
 
-/// Write the process id and a newline to `path`, replacing what was there, never through a
-/// symlink (`O_NOFOLLOW`): MIT's `fopen(path, "w")` empties a link's target.
-/// MIT `write_pid_file` (`kdc/main.c:834-847`): `fopen(path, "w")`, `"%ld\n"`, the open, write
-/// or close error returned.
-///
-/// # Errors
-///
+/// Write the process id and a newline to `path`, replacing what was there, never through a symlink (`O_NOFOLLOW`): MIT's `fopen(path, "w")` empties a link's target.
+/// MIT `write_pid_file` (`kdc/main.c:834-847`): `fopen(path, "w")`, `"%ld\n"`, the open, write or close error returned.
 /// The OS error of creating, writing or closing `path`; `ELOOP` for a symlink there.
 pub fn write_pid_file(path: &Path) -> io::Result<()> {
     use std::os::unix::fs::OpenOptionsExt as _;
@@ -260,9 +218,7 @@ pub fn write_pid_file(path: &Path) -> io::Result<()> {
     f.flush()
 }
 
-/// The filter of a program's JSON log (`[logging] json`, a stream MIT's programs do not have):
-/// `default`, the program's own. A `test-hooks` build (the gates') takes `RUST_LOG` first; a release
-/// build reads no such variable, as MIT's `krb5kdc`, `kadmind`, `kprop` and `kpropd` read none.
+/// The filter of a program's JSON log (`[logging] json`, a stream MIT's programs do not have): `default`, the program's own. A `test-hooks` build (the gates') takes `RUST_LOG` first; a release build reads no such variable, as MIT's `krb5kdc`, `kadmind`, `kprop` and `kpropd` read none.
 #[must_use]
 pub fn json_log_filter(default: &str) -> tracing_subscriber::EnvFilter {
     #[cfg(feature = "test-hooks")]
@@ -272,11 +228,8 @@ pub fn json_log_filter(default: &str) -> tracing_subscriber::EnvFilter {
     tracing_subscriber::EnvFilter::new(default)
 }
 
-/// The signals a daemon answers: SIGINT, SIGTERM and SIGQUIT end its loop, SIGHUP reopens its
-/// log files, and SIGPIPE stays ignored, as the Rust runtime sets it. Each also writes a byte to
-/// a pipe the daemon's loop waits on, as verto's signal events wake MIT's loop.
-/// MIT `loop_setup_signals` (`lib/apputils/net-server.c:263-286`): the three end the loop, SIGPIPE
-/// is ignored and SIGHUP resets, all set up before the network.
+/// The signals a daemon answers: SIGINT, SIGTERM and SIGQUIT end its loop, SIGHUP reopens its log files, and SIGPIPE stays ignored, as the Rust runtime sets it. Each also writes a byte to a pipe the daemon's loop waits on, as verto's signal events wake MIT's loop.
+/// MIT `loop_setup_signals` (`lib/apputils/net-server.c:263-286`): the three end the loop, SIGPIPE is ignored and SIGHUP resets, all set up before the network.
 #[derive(Clone)]
 pub struct Signals {
     stop: Arc<AtomicBool>,
@@ -286,10 +239,7 @@ pub struct Signals {
 }
 
 impl Signals {
-    /// Install the handlers, before the sockets are bound; they stay in place across [`detach`].
-    /// A handler that cannot be installed leaves that signal's default; a wake pipe that cannot
-    /// be made, or that a signal cannot write to, leaves the loop looking at the flags each
-    /// second instead.
+    /// Install the handlers, before the sockets are bound; they stay in place across [`detach`]. A handler that cannot be installed leaves that signal's default; a wake pipe that cannot be made, or that a signal cannot write to, leaves the loop looking at the flags each second instead.
     #[must_use]
     pub fn install() -> Self {
         let stop = Arc::new(AtomicBool::new(false));
@@ -353,7 +303,6 @@ mod tests {
     use krb5_log::klog::{self, Severity};
     use std::time::{Duration, Instant};
 
-    /// The JSON log's filter, printed by a child of this test that runs with `RUST_LOG` set.
     #[test]
     fn json_log_filter_child() {
         if std::env::var_os("KERBER_JSON_FILTER_CHILD").is_some() {
@@ -361,8 +310,6 @@ mod tests {
         }
     }
 
-    /// `RUST_LOG` filters the JSON log only in a `test-hooks` build; a release build keeps the
-    /// program's own filter whatever the environment says.
     #[test]
     fn json_log_filter_reads_rust_log_only_in_a_test_hooks_build() {
         let out = std::process::Command::new(std::env::current_exe().unwrap())
@@ -384,8 +331,7 @@ mod tests {
         assert!(text.contains(want), "{want} not in {text}");
     }
 
-    /// MIT's `fopen(path, "w")` empties a symlink's target; the pid file is never written through
-    /// one, which stays, its target as it was.
+    /// MIT's `fopen(path, "w")` empties a symlink's target; the pid file is never written through one, which stays, its target as it was.
     #[test]
     fn a_pid_file_is_never_written_through_a_symlink() {
         let dir = krb5_testkit::scratch_dir("krb5-pid-link");
@@ -451,9 +397,7 @@ mod tests {
         ));
     }
 
-    /// A database file that is no database stops the daemon with MIT's open text (settled live
-    /// on MIT 1.22.2), before the stash is looked at; a missing one with the system's text, and
-    /// an MIT db2 one with the way over.
+    /// A database file that is no database stops the daemon with MIT's open text (settled live on MIT 1.22.2), before the stash is looked at; a missing one with the system's text, and an MIT db2 one with the way over.
     #[test]
     fn a_database_file_that_is_no_database_stops_the_daemon_with_mit_s_text() {
         let dir = krb5_testkit::scratch_dir("daemon-open-db");
@@ -477,7 +421,6 @@ mod tests {
         assert_eq!(open(), refused("No such file or directory"));
         std::fs::write(&db, "not a database\n").unwrap();
         assert_eq!(open(), refused("Invalid argument"));
-        // MIT 1.22.2's btree header (settled live): named with the way over.
         let mut db2 = vec![0x62, 0x31, 0x05, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x10];
         db2.resize(8192, 0);
         std::fs::write(&db, &db2).unwrap();
@@ -491,9 +434,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The database's lock files open with it, before the stash is looked at, as MIT's daemons
-    /// open them (settled live on MIT 1.22.2 with no stash either: `No such file or directory`,
-    /// `KADM5 administration database lock file missing`, while initializing the database).
+    /// The database's lock files open with it, before the stash is looked at, as MIT's daemons open them (settled live on MIT 1.22.2 with no stash either: `No such file or directory`, `KADM5 administration database lock file missing`, while initializing the database).
     #[test]
     fn a_database_without_its_lock_files_stops_the_daemon_before_the_stash() {
         let dir = krb5_testkit::scratch_dir("daemon-open-locks");
@@ -527,8 +468,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The loop on a daemon's signals: SIGHUP reopens the log and leaves it serving, SIGTERM ends
-    /// it with MIT's line.
+    /// The loop on a daemon's signals: SIGHUP reopens the log and leaves it serving, SIGTERM ends it with MIT's line.
     #[test]
     fn sighup_reopens_the_log_and_leaves_the_daemon_running() {
         use crate::net_server::{Dispatch, Klog, Log, Reply, Sockets, Wake, run};
