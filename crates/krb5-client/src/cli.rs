@@ -713,6 +713,7 @@ pub fn read_password_line(
     krb5_cli::prompt_hidden(&format!("Password for {principal}"))
 }
 
+/// The reply is wiped when dropped.
 pub fn read_prompt_line(prompt: &str) -> Result<zeroize::Zeroizing<Vec<u8>>, String> {
     krb5_cli::prompt_hidden(prompt).map_err(|e| e.to_string())
 }

@@ -412,6 +412,7 @@ pub fn kinit_with(
         Ok((r, cc)) => write_out_ccache(ctx, spec, cc).map(|()| r),
         Err(e) => Err(e),
     };
+    // The kinit password buffer and the two new-password replies are wiped.
     password.zeroize();
     result
 }

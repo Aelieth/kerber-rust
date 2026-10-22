@@ -428,6 +428,7 @@ fn do_keytab(ctx: &ClientContext, prog: &str, args: &KlistArgs, name: Option<&st
             let read = krb5_protocol::read_secret_file(path)
                 .map_err(|e| keytab_read_error(&e, &path.display().to_string()))
                 .and_then(|b| {
+                    // `klist -k` wipes the keytab's bytes after parsing.
                     Keytab::parse(&b).map_err(|e| Krb5Error::new(Code::Other, e.to_string()))
                 });
             match read {
