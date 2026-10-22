@@ -1,6 +1,4 @@
-//! An iprop update in XDR (`lib/kdb/iprop_xdr.c`): `kdb_incr_update_t` as the update log stores
-//! it and as `IPROP_GET_UPDATES` sends it. Keys go wrapped under the master key: a record is
-//! encoded with a wrap, and read back with the master key that opens it, or walked without one.
+//! An iprop update in XDR (`lib/kdb/iprop_xdr.c`): `kdb_incr_update_t` as the update log stores it and as `IPROP_GET_UPDATES` sends it. Keys go wrapped under the master key: a record is encoded with a wrap, and read back with the master key that opens it, or walked without one.
 
 use krb5_crypto::{EncryptionType, ProtocolKey, kdb_decrypt_key};
 use krb5_types::PrincipalName;
@@ -15,8 +13,7 @@ use super::keys::KeyEntry;
 use super::principal::TlData;
 use crate::osa::OsaKeyData;
 
-/// How a key is wrapped as it is encoded: under the master key, or refused, so that no key is
-/// ever encoded in the clear.
+/// How a key is wrapped as it is encoded: under the master key, or refused, so that no key is ever encoded in the clear.
 pub type KeyWrap<'a, E> = dyn Fn(&[u8]) -> Result<Vec<u8>, E> + 'a;
 
 /// Why an update does not read.
@@ -112,8 +109,7 @@ impl<'a> XdrIn<'a> {
         Ok(s)
     }
 
-    /// An array's count, refused when the bytes left cannot hold that many items of at least
-    /// `min` bytes each, so a hostile count allocates nothing.
+    /// An array's count, refused when the bytes left cannot hold that many items of at least `min` bytes each, so a hostile count allocates nothing.
     fn count(&mut self, min: usize) -> Result<usize, XdrError> {
         let n = usize::try_from(self.u32()?).map_err(|_| XdrError::Short)?;
         let left = self.b.len().saturating_sub(self.at);
@@ -126,7 +122,6 @@ impl<'a> XdrIn<'a> {
 
 /// MIT `xdr_kdbe_key_t` (`lib/kdb/iprop_xdr.c:75-90`): each key's version, kvno, then as many types and contents as its version.
 /// MIT `ulog_conv_2logentry` (`lib/kdb/kdb_convert.c:415-462`): each key goes as stored, its version deciding how many types and contents follow.
-/// A key is stored at version 2 when it has a salt type and salt, as the dump writes it.
 fn encode_keydata<E>(w: &mut XdrOut, keys: &[KeyEntry], wrap: &KeyWrap<'_, E>) -> Result<(), E> {
     w.count(keys.len());
     for k in keys {
@@ -153,8 +148,6 @@ fn encode_keydata<E>(w: &mut XdrOut, keys: &[KeyEntry], wrap: &KeyWrap<'_, E>) -
     Ok(())
 }
 
-/// `kdbe_key_t` of stored key data (history entries stay under the history key, as MIT ships
-/// them).
 fn encode_keydata_raw(w: &mut XdrOut, keys: &[OsaKeyData]) {
     w.count(keys.len());
     for k in keys {
@@ -186,9 +179,6 @@ fn encode_princ(w: &mut XdrOut, name: &PrincipalName, realm: &str) {
 
 /// MIT `xdr_kdbe_t` (`lib/kdb/iprop_xdr.c:252-260`): the update's values, counted, each in its type's shape; keys wrapped by `wrap`.
 /// MIT `xdr_kdbe_val_t` (`lib/kdb/iprop_xdr.c:153-249`): each attribute's type, then its value in that type's shape.
-///
-/// # Errors
-///
 /// A key `wrap` refuses.
 pub fn encode_kdbe<E>(vals: &[KdbeVal], wrap: &KeyWrap<'_, E>) -> Result<Vec<u8>, E> {
     let mut w = XdrOut::default();
@@ -232,9 +222,7 @@ pub fn encode_kdbe<E>(vals: &[KdbeVal], wrap: &KeyWrap<'_, E>) -> Result<Vec<u8>
     Ok(w.0)
 }
 
-/// One update as the log stores it and the wire carries it: the principal's name, its serial,
-/// its time, the encoded values `kdbe` ([`encode_kdbe`]), whether it deletes, whether it is
-/// committed, and no KDCs seen and no futures.
+/// One update as the log stores it and the wire carries it: the principal's name, its serial, its time, the encoded values `kdbe` ([`encode_kdbe`]), whether it deletes, whether it is committed, and no KDCs seen and no futures.
 /// MIT `xdr_kdb_incr_update_t` (`lib/kdb/iprop_xdr.c:263-285`): the name, serial, time, the update, the deleted and committed flags, the KDCs seen and the futures.
 #[must_use]
 pub fn encode_incr_update(
@@ -281,7 +269,6 @@ pub struct IncrLayout {
     pub len: usize,
 }
 
-/// Skip one `kdbe_key_t`.
 fn skip_key(r: &mut XdrIn<'_>) -> Result<(), XdrError> {
     r.u32()?;
     r.u32()?;
@@ -296,7 +283,6 @@ fn skip_key(r: &mut XdrIn<'_>) -> Result<(), XdrError> {
     Ok(())
 }
 
-/// Skip one `kdbe_princ_t`.
 fn skip_princ(r: &mut XdrIn<'_>) -> Result<(), XdrError> {
     r.opaque()?;
     let n = r.count(8)?;
@@ -308,17 +294,8 @@ fn skip_princ(r: &mut XdrIn<'_>) -> Result<(), XdrError> {
     Ok(())
 }
 
-/// Walk an encoded `kdb_incr_update_t` without opening its keys: its name, serial, time, flags,
-/// where its commit flag lies and which attributes it carries. An update that does not read to
-/// its end, or with bytes past it, is refused, as `xdr_kdb_incr_update_t` failing to decode is
-/// `KRB5_LOG_CONV`.
-/// MIT `xdr_kdbe_val_t` (`lib/kdb/iprop_xdr.c:153-249`): a type MIT does not name is one opaque value.
+/// Walk an encoded `kdb_incr_update_t` without opening its keys: its name, serial, time, flags, where its commit flag lies and which attributes it carries. An update that does not read to its end, or with bytes past it, is refused, as `xdr_kdb_incr_update_t` failing to decode is `KRB5_LOG_CONV`.
 /// MIT `ulog_get_entries` (`lib/kdb/kdb_log.c:625-631`): an update that does not decode is a conversion error.
-///
-/// # Errors
-///
-/// [`XdrError::Short`] when the bytes end inside it; [`XdrError::Invalid`] when its name is not
-/// UTF-8 or bytes follow it.
 pub fn walk_incr_update(b: &[u8]) -> Result<IncrLayout, XdrError> {
     let mut r = XdrIn::new(b);
     let name = std::str::from_utf8(r.opaque()?)
@@ -442,8 +419,6 @@ fn decode_princ(r: &mut XdrIn<'_>) -> Result<(PrincipalName, String), XdrError> 
 
 /// MIT `krb5_dbe_def_decrypt_key_data` (`lib/kdb/decrypt_key.c:91-93`): a master-key decrypt failure is not a usable key.
 /// MIT `ulog_conv_2dbentry` (`lib/kdb/kdb_convert.c:678-683`): a key of a version past 2 is not a key, and the update does not apply.
-/// An etype this build does not know, or a plaintext of the wrong length, is omitted and the other
-/// keys in the entry are kept.
 fn decode_keydata(
     r: &mut XdrIn<'_>,
     mkey: Option<&ProtocolKey>,
@@ -499,14 +474,7 @@ fn decode_keydata(
     Ok(keys)
 }
 
-/// MIT `xdr_kdbe_val_t` (`lib/kdb/iprop_xdr.c:153-249`): each attribute's value is read in its type's shape, and a type MIT does not name is one opaque value.
-/// The update keeps which attributes it carried; none stands in for one it did not. Keys open
-/// under `mkey`, or stay as they came without one.
-///
-/// # Errors
-///
-/// [`XdrError::Short`] when the bytes end inside a value; [`XdrError::Invalid`] when a name does
-/// not parse, a key's version is past 2 or a key does not open under `mkey`.
+/// The update keeps which attributes it carried; none stands in for one it did not. Keys open under `mkey`, or stay as they came without one.
 pub(crate) fn decode_kdbe(
     r: &mut XdrIn<'_>,
     mkey: Option<&ProtocolKey>,
@@ -564,13 +532,7 @@ pub(crate) fn decode_kdbe(
     Ok(vals)
 }
 
-/// One `kdb_incr_update_t` read at the start of `b`, its keys opened under `mkey`: the update, and
-/// how many bytes it took.
-///
-/// # Errors
-///
-/// [`XdrError::Short`] when the bytes end inside the update; [`XdrError::Invalid`] when a name
-/// does not parse, a key's version is past 2 or a key does not open under `mkey`.
+/// One `kdb_incr_update_t` read at the start of `b`, its keys opened under `mkey`: the update, and how many bytes it took.
 pub fn decode_incr_update(
     b: &[u8],
     mkey: Option<&ProtocolKey>,
@@ -604,12 +566,6 @@ pub fn decode_incr_update(
 }
 
 /// The values of an encoded `kdbe_t` (as [`encode_kdbe`] writes it), keys opened under `mkey`.
-///
-/// # Errors
-///
-/// [`XdrError::Short`] when the bytes end inside a value; [`XdrError::Invalid`] when a name does
-/// not parse, a key's version is past 2, a key does not open under `mkey`, or bytes follow the
-/// values.
 pub fn decode_kdbe_bytes(b: &[u8], mkey: Option<&ProtocolKey>) -> Result<Vec<KdbeVal>, XdrError> {
     let mut r = XdrIn::new(b);
     let vals = decode_kdbe(&mut r, mkey)?;
@@ -623,9 +579,7 @@ pub fn decode_kdbe_bytes(b: &[u8], mkey: Option<&ProtocolKey>) -> Result<Vec<Kdb
 mod tests {
     use super::*;
 
-    /// The bytes of MIT 1.22.2's delete entry for `u1@P18U.TEST` (settled live, `kproplog -v`:
-    /// "Update size : 48"): name, serial, time, no values, deleted, not committed in the record,
-    /// no KDCs seen, no futures.
+    /// The bytes of MIT 1.22.2's delete entry for `u1@P18U.TEST` (settled live, `kproplog -v`: "Update size : 48"): name, serial, time, no values, deleted, not committed in the record, no KDCs seen, no futures.
     #[test]
     fn a_delete_is_mits_48_bytes() {
         let t = UlogTime {
@@ -643,9 +597,7 @@ mod tests {
         assert_eq!(&b[l.commit_at..l.commit_at + 4], &[0, 0, 0, 0]);
     }
 
-    /// The head of MIT 1.22.2's entry 2 (`addprinc admin/admin`, settled live with `od`): the
-    /// name's length and bytes padded to four, the serial, the time, the count of values (MIT's
-    /// twelve, two here), then `AT_ATTRFLAGS` 0 as MIT's first value.
+    /// The head of MIT 1.22.2's entry 2 (`addprinc admin/admin`, settled live with `od`): the name's length and bytes padded to four, the serial, the time, the count of values (MIT's twelve, two here), then `AT_ATTRFLAGS` 0 as MIT's first value.
     #[test]
     fn an_add_starts_as_mits_does() {
         let t = UlogTime {
