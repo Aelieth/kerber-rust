@@ -19,24 +19,18 @@ use crate::store::{
 };
 use crate::ulog::UlogLast;
 
-/// MIT 1.22.2 default (`kdb5_util load_dump version 7`).
 pub const KDB_DUMP_VERSION: u32 = 7;
-/// Older `-r18` header. Princ records match version 7.
 pub(crate) const KDB_DUMP_VERSION_R18: u32 = 6;
 
-/// `KRB5_TL_DB_ARGS` (`kdb.h`); stripped at put.
 // MIT: `extract_db_args_from_tl_data` (kdb5.c:893-945)
-/// every `KRB5_TL_DB_ARGS` entry is removed from the tagged data and passed on as a DB argument instead.
+/// Every `KRB5_TL_DB_ARGS` entry is removed and passed on as a database argument.
 pub const TL_DB_ARGS: i32 = 0x7fff;
-/// `KRB5_TL_LAST_PWD_CHANGE`.
 pub const TL_LAST_PWD_CHANGE: i32 = 1;
-/// `KRB5_TL_LAST_ADMIN_UNLOCK` (0x0700): 4-byte LE unix timestamp.
 pub const TL_LAST_ADMIN_UNLOCK: i32 = 0x0700;
-/// `KRB5_TL_MOD_PRINC`.
 pub const TL_MOD_PRINC: i32 = 2;
 
 // MIT: `krb5_dbe_lookup_mod_princ_data` (kdb5.c:1637-1663)
-/// 4-byte LE timestamp + NUL-terminated unparsed principal.
+/// `KRB5_TL_MOD_PRINC` is a 4-byte LE time and a NUL-terminated principal.
 #[must_use]
 pub(crate) fn tl_mod_princ(contents: &[u8]) -> Option<(u32, String)> {
     if contents.len() < 5 || contents.last() != Some(&0) {
@@ -49,34 +43,24 @@ pub(crate) fn tl_mod_princ(contents: &[u8]) -> Option<(u32, String)> {
     Some((ts, name))
 }
 
-/// The unparsed modifier in `KRB5_TL_MOD_PRINC`, when the TL is well-formed.
 #[must_use]
 pub fn tl_mod_princ_name(tl: &[TlData]) -> Option<String> {
     tl.iter()
         .find(|t| t.ty == TL_MOD_PRINC)
         .and_then(|t| tl_mod_princ(&t.contents).map(|(_, n)| n))
 }
-/// `KRB5_TL_KADM_DATA`.
 pub const TL_KADM_DATA: i32 = 3;
-/// `KRB5_TL_MKVNO`.
 pub(crate) const TL_MKVNO: i32 = 8;
-/// `KRB5_TL_STRING_ATTRS`.
 pub const TL_STRING_ATTRS: i32 = 0x000b;
-/// `KRB5_TL_ALIAS_TARGET`: NUL-terminated unparsed target of an alias stub.
+/// `KRB5_TL_ALIAS_TARGET` is a NUL-terminated target name.
 pub const TL_ALIAS_TARGET: i32 = 0x000c;
-/// `KRB5_TL_ACTKVNO`.
 pub(crate) const TL_ACTKVNO: i32 = 9;
-/// Private `tl_data` type: domain SID + RID (MIT has no SID; opaque round-trip).
+/// The private SID type is ours; MIT has no domain SID.
 pub const TL_KERBER_SID: i32 = 0x4B01;
-/// Private `tl_data` type: bound named-policy name (UTF-8).
 pub(crate) const TL_KERBER_POLICY: i32 = 0x4B02;
-/// Private `tl_data` type: the iprop serial kerber-rust 1.0 kept on `K/M` (4-byte BE). The serial is the update log's now; a record that still carries this type loses it when written.
 pub const TL_KERBER_SERIAL: i32 = 0x4B03;
-/// Private `tl_data` type: password history keys (MIT preserves unknown types).
 pub const TL_KERBER_HIST: i32 = 0x4B04;
-/// `KRB5_KDB_SALTTYPE_NORMAL`.
 pub const SALTTYPE_NORMAL: i32 = 0;
-/// `KRB5_KDB_SALTTYPE_SPECIAL`.
 pub(crate) const SALTTYPE_SPECIAL: i32 = 4;
 
 #[derive(Debug, thiserror::Error)]
@@ -103,11 +87,8 @@ impl From<krb5_crypto::Error> for DumpError {
 
 #[derive(Clone, Debug)]
 pub struct DumpFile {
-    /// Header version (`6` or `7`).
     pub version: u32,
-    /// Principal records in file order.
     pub princs: Vec<DumpPrincipal>,
-    /// `policy\t…` rest (name + MIT numeric fields). Golden dumps have none.
     pub policies: Vec<String>,
     pub(crate) records: usize,
     pub(crate) applied_len: usize,
@@ -115,49 +96,32 @@ pub struct DumpFile {
 
 #[derive(Clone, Debug)]
 pub struct DumpPrincipal {
-    /// MIT `entry->len` (`KRB5_KDB_V1_BASE_LENGTH` = 38).
     pub db_len: u32,
-    /// Unparsed `name@REALM`.
     pub name: String,
-    /// KDB attributes bitfield.
     pub attributes: u32,
-    /// Max ticket life seconds.
     pub max_life: u32,
-    /// Max renewable life seconds.
     pub max_renewable_life: u32,
-    /// Expiration unix seconds (0 = never).
+    /// Unix seconds; 0 is never.
     pub expiration: u32,
-    /// Password expiration unix seconds.
     pub pw_expiration: u32,
-    /// Last success unix seconds.
     pub last_success: u32,
-    /// Last failure unix seconds.
     pub last_failed: u32,
-    /// Failed password attempts.
     pub fail_auth_count: u32,
-    /// Tagged list.
     pub tl_data: Vec<TlData>,
-    /// Encrypted key blocks.
     pub keys: Vec<DumpKeyData>,
-    /// Extra data (`-1` when empty).
     pub e_data: Vec<u8>,
 }
 
 #[derive(Clone, Debug)]
 pub struct DumpKeyData {
-    /// `key_data_ver`.
     pub ver: i32,
-    /// Key version number.
     pub kvno: u32,
-    /// `ver` slots: type + contents.
     pub slots: Vec<DumpKeySlot>,
 }
 
 #[derive(Clone, Debug)]
 pub struct DumpKeySlot {
-    /// `key_data_type[i]` (enctype or salt type).
     pub ty: i32,
-    /// Encrypted key bytes or salt bytes.
     pub contents: Vec<u8>,
 }
 
@@ -175,7 +139,6 @@ impl DumpFile {
         out
     }
 
-    /// The dump's policies as the version 7 records a load stores, in dump order.
     #[must_use]
     pub fn policy_records(&self) -> Vec<String> {
         self.policies
@@ -184,7 +147,6 @@ impl DumpFile {
             .collect()
     }
 
-    /// Realm taken from the first principal name.
     pub fn realm(&self) -> Result<&str, DumpError> {
         let name = self
             .princs
@@ -197,15 +159,13 @@ impl DumpFile {
             .ok_or_else(|| DumpError::Format(format!("missing realm in {name}")))
     }
 
-    /// Find a principal by unparsed name.
     #[must_use]
     pub fn princ(&self, unparsed: &str) -> Option<&DumpPrincipal> {
         self.princs.iter().find(|p| p.name == unparsed)
     }
 
-    /// The enctype of the master key: that of `K/M@realm`'s first key, where the realm is the first principal's. `None` when the dump has no such entry or its type is not one this port knows.
     // MIT: `add_principal` (kadmin/dbutil/kdb5_create.c:409-424)
-    /// `K/M`'s one key is the master key itself.
+    /// `K/M`'s one key is the master key.
     #[must_use]
     pub fn master_etype(&self) -> Option<EncryptionType> {
         let realm = self.realm().ok()?;
@@ -214,17 +174,13 @@ impl DumpFile {
         EncryptionType::known(ty).ok()
     }
 
-    /// Decrypt every `key_data` under `mkey` into a [`PrincipalStore`].
-    /// As [`load_dump_with_key`].
     pub fn into_store_with_key(self, mkey: &ProtocolKey) -> Result<PrincipalStore, DumpError> {
         self.into_store(mkey)
     }
 
-    /// One policy record as the dump `version` writes it: version 7 (`-r18` is version 6) carries the r1.11 fields; version 6 keeps the first ten (the r1.8 record); version 5 and below, an `iprop` dump's, the name, five counters and a zero.
+    /// Version 7 is the r1.11 record; version 6 keeps the r1.8 nine counters.
     // MIT: `dump_r1_8_policy` (kadmin/dbutil/dump.c:404-413)
-    /// the r1.8 record is the name and nine counters.
     // MIT: `dump_k5beta7_policy` (kadmin/dbutil/dump.c:394-401)
-    /// the oldest record is the name, five counters and a zero reference count.
     #[must_use]
     pub fn policy_record(rest: &str, version: u32) -> String {
         if version == KDB_DUMP_VERSION {
@@ -238,8 +194,6 @@ impl DumpFile {
         format!("policy\t{}", fields.join("\t"))
     }
 
-    /// Decrypt `key_data` into a [`PrincipalStore`].
-    /// [`DumpError::Format`] when a record carries `KRB5_TL_DB_ARGS`, the first name has no realm, or a name, a key block, or the SID, history or `KRB5_TL_KADM_DATA` tl-data is malformed; [`DumpError::Crypto`] when a key or history key has an unknown enctype, does not decrypt under `mkey` or has the wrong length, or the `K/M` key is not `mkey`.
     pub(crate) fn into_store(self, mkey: &ProtocolKey) -> Result<PrincipalStore, DumpError> {
         for p in &self.princs {
             if let Some(e) = crate::store::db_args_put_error(&p.tl_data) {
@@ -277,9 +231,7 @@ impl DumpFile {
 }
 
 impl DumpPrincipal {
-    /// The record as `kdb5_util dump` writes it, `key_data` still wrapped, without the newline.
     // MIT: `k5beta7_common` (kadmin/dbutil/dump.c:334-368)
-    /// the header, the eight attribute fields, the tagged data, the keys, the extra data and `;`.
     #[must_use]
     pub fn record(&self) -> String {
         let mut out = format!(
@@ -325,9 +277,7 @@ impl DumpPrincipal {
         out
     }
 
-    /// Whether `mkey` opens this entry's first key: the enctypes agree and the key decrypts.
     // MIT: `krb5_def_fetch_mkey_list` (lib/kdb/kdb_default.c:431-437)
-    /// the master key is checked by decrypting `K/M`'s first key with it.
     #[must_use]
     pub fn opens_with(&self, mkey: &ProtocolKey) -> bool {
         self.keys
@@ -339,7 +289,7 @@ impl DumpPrincipal {
     }
 
     // MIT: `process_k5beta7_princ` (dump.c:702-723)
-    /// MIT binds a policy only from a `KRB5_TL_KADM_DATA` record that decodes and names one, and loads the principal when that record does not decode; this port also takes the policy from the legacy `0x4B02` record of older Rust dumps, and fails the load when `KRB5_TL_KADM_DATA` does not decode. The master-key principal is refused when its key does not match the derived master key.
+    /// A policy binds only from a `KRB5_TL_KADM_DATA` that decodes and names one.
     pub(crate) fn into_principal(
         self,
         mkey: &ProtocolKey,
@@ -386,7 +336,6 @@ impl DumpPrincipal {
         let requires_preauth = self.attributes & KDB_REQUIRES_PRE_AUTH != 0;
         let locked = self.attributes & KDB_DISALLOW_ALL_TIX != 0;
         let (sid, rid) = parse_sid_tl(&self.tl_data)?;
-        // MIT keeps the policy binding and the password history in `KRB5_TL_KADM_DATA`; the private 0x4B02/0x4B04 types are older Rust dumps.
         let osa = OsaPrincEnt::from_tl(&self.tl_data)
             .map_err(|e| DumpError::Format(format!("{}: {e}", self.name)))?;
         let pw_policy = osa
@@ -428,9 +377,7 @@ impl DumpPrincipal {
     }
 }
 
-/// Parse a MIT dump (header + `princ` / `policy` records).
 // MIT: `restore_dump` (kadmin/dbutil/dump.c:1364-1379)
-/// records are read until the end of the file, so a dump with none (the header alone) is a dump.
 pub fn parse_dump(text: &str) -> Result<DumpFile, DumpError> {
     let mut lines = text_lines(text, 0);
     let header = lines
@@ -605,7 +552,7 @@ pub(crate) enum JournalOp {
     Del(String),
 }
 
-/// `None` sends the reader to the whole database; only a torn last change is skipped.
+/// A torn last change is skipped.
 pub(crate) fn parse_journal_tail(tail: &str) -> Result<Option<(Vec<JournalOp>, usize)>, DumpError> {
     let mut ops = Vec::new();
     let mut used = 0;
@@ -634,9 +581,6 @@ pub(crate) fn parse_journal_tail(tail: &str) -> Result<Option<(Vec<JournalOp>, u
     Ok(Some((ops, used)))
 }
 
-/// Load a dump: parse, derive the master key, decrypt `key_data`.
-/// The master key has the enctype of the dump's own `K/M` entry ([`DumpFile::master_etype`]), else [`default_master_etype`].
-/// [`DumpError::Format`] when the text does not parse or a record cannot be stored (a missing realm, a malformed name, key block or tl-data, or `KRB5_TL_DB_ARGS`); [`DumpError::Crypto`] when the master key cannot be derived from `master_password`, a key does not decrypt under it into a usable key, or the `K/M` key is not the derived key.
 pub fn load_dump(text: &str, master_password: &[u8]) -> Result<PrincipalStore, DumpError> {
     let dump = parse_dump(text)?;
     let realm = dump.realm()?.to_owned();
@@ -645,11 +589,8 @@ pub fn load_dump(text: &str, master_password: &[u8]) -> Result<PrincipalStore, D
     dump.into_store(&mkey)
 }
 
-/// Merge the entries of `loaded` into `store`, as `kdb5_util load -update` puts each record of a dump into the live database: a principal replaces the entry of the same name, and a policy is created or replaced. The principals go in `order` (the dump's), any not named there after them; a primary's update log records each put and then starts over for the policies.
 // MIT: `process_k5beta7_princ` (kadmin/dbutil/dump.c:775-779)
-/// each record is put into the open database.
 // MIT: `process_k5beta7_policy` (kadmin/dbutil/dump.c:820-825)
-/// a policy is created, else replaced, and a failed put stops the load.
 pub fn update_store(
     store: &mut PrincipalStore,
     loaded: &PrincipalStore,
@@ -676,12 +617,10 @@ pub fn update_store(
     Ok(())
 }
 
-/// Load dump text whose keys are wrapped under `mkey`.
 pub fn load_dump_with_key(text: &str, mkey: &ProtocolKey) -> Result<PrincipalStore, DumpError> {
     load_dump_mkey(text, mkey)
 }
 
-/// [`load_dump`] with an explicit master-key etype.
 pub fn load_dump_etype(
     text: &str,
     master_password: &[u8],
@@ -693,19 +632,15 @@ pub fn load_dump_etype(
     dump.into_store(&mkey)
 }
 
-/// Load dump text with an already-derived master key.
 pub(crate) fn load_dump_mkey(text: &str, mkey: &ProtocolKey) -> Result<PrincipalStore, DumpError> {
     parse_dump(text)?.into_store(mkey)
 }
 
-/// Load from a path.
 pub fn load_dump_path(path: &Path, master_password: &[u8]) -> Result<PrincipalStore, DumpError> {
     let text = fs::read_to_string(path)?;
     load_dump(&text, master_password)
 }
 
-/// Write a version-7 dump, re-encrypting keys under the derived master key.
-/// The master key has the enctype of the store's `K/M` key, else [`default_master_etype`]. Missing `K/M` is synthesized. Empty `tl_data` is filled with `KRB5_TL_LAST_PWD_CHANGE` and `KRB5_TL_MOD_PRINC` (and `KRB5_TL_MKVNO`).
 pub fn dump_store(store: &PrincipalStore, master_password: &[u8]) -> Result<String, DumpError> {
     let etype = store
         .get(&format!("K/M@{}", store.realm()))
@@ -714,7 +649,6 @@ pub fn dump_store(store: &PrincipalStore, master_password: &[u8]) -> Result<Stri
     dump_store_etype(store, master_password, etype)
 }
 
-/// Dump text of `store` with every key wrapped under `mkey`.
 pub fn dump_store_with_key(
     store: &PrincipalStore,
     mkey: &ProtocolKey,
@@ -722,7 +656,6 @@ pub fn dump_store_with_key(
     write_dump(store, mkey)
 }
 
-/// [`dump_store`] with an explicit master-key etype.
 pub(crate) fn dump_store_etype(
     store: &PrincipalStore,
     master_password: &[u8],
@@ -732,14 +665,12 @@ pub(crate) fn dump_store_etype(
     write_dump(store, &mkey)
 }
 
-/// Write dump text from an already-derived master key.
 pub(crate) fn write_dump(store: &PrincipalStore, mkey: &ProtocolKey) -> Result<String, DumpError> {
     write_dump_nra(store, mkey, false)
 }
 
-/// [`write_dump`], the three lockout attributes written as 0 with `omit_nra`, as an iprop dump writes them: they are not replicated.
 // MIT: `k5beta7_common` (kadmin/dbutil/dump.c:342-344)
-/// with `omit_nra` the last success, last failure and failure count are written as 0.
+/// With `omit_nra` the three lockout attributes are written as 0.
 fn write_dump_nra(
     store: &PrincipalStore,
     mkey: &ProtocolKey,
@@ -779,7 +710,6 @@ fn write_dump_nra(
     Ok(out)
 }
 
-/// One version 7 `policy` record: MIT dump version 7 is r1.11, the r1.8 nine counters, then attributes, max_life, max_renewable, allowed_keysalts and n_tl_data.
 fn policy_line(pol: &NamedPolicy) -> String {
     let ks = pol.allowed_keysalts.as_deref().unwrap_or("-");
     format!(
@@ -796,7 +726,6 @@ fn policy_line(pol: &NamedPolicy) -> String {
     )
 }
 
-/// Write a dump file with an explicit master-key etype: a new 0600 file owned by the writer, whatever it replaces, as MIT `kdb5_util dump` leaves one.
 pub fn write_dump_path_etype(
     store: &PrincipalStore,
     path: &Path,
@@ -857,9 +786,7 @@ pub enum IpropHeaderError {
     Short,
 }
 
-/// An iprop dump's first line: `ipropx <version> <sno> <sec> <usec>` (version 0 or 1) or `iprop <sno> <sec> <usec>`. Returns whether it is an `ipropx 1` dump, and the serial and time the update log takes when it is loaded.
 // MIT: `parse_iprop_header` (kadmin/dbutil/dump.c:1069-1107)
-/// the header's word, the version an ipropx header carries, then the serial and the time.
 pub fn parse_iprop_header(line: &str) -> Result<(bool, UlogLast), IpropHeaderError> {
     let mut words = line.split_whitespace();
     let head = words.next().ok_or(IpropHeaderError::NotIprop)?;
@@ -886,11 +813,9 @@ pub fn parse_iprop_header(line: &str) -> Result<(bool, UlogLast), IpropHeaderErr
     ))
 }
 
-/// MIT `kdb5_util dump -i1` (`ipropx 1 <sno> <sec> <usec>`), its lockout attributes 0, its serial and time `last`: the update log's last entry as it was read before `store` was, so the dump holds at least what its header says and a change made in between reaches a replica as an update.
 // MIT: `dump_db` (kadmin/dbutil/dump.c:1176-1188)
-/// an iprop dump omits the non-replicated attributes.
 // MIT: `dump_db` (kadmin/dbutil/dump.c:1318-1333)
-/// the update log's last serial and time are read before the database is iterated.
+/// The log's last serial is read before the database is iterated.
 pub fn dump_store_iprop(
     store: &PrincipalStore,
     master_password: &[u8],
@@ -904,7 +829,6 @@ pub fn dump_store_iprop(
     Ok(iprop_header(last, &write_dump_nra(store, &mkey, true)?))
 }
 
-/// [`dump_store_iprop`] with every key wrapped under `mkey`.
 pub fn dump_store_iprop_with_key(
     store: &PrincipalStore,
     mkey: &ProtocolKey,
@@ -913,9 +837,7 @@ pub fn dump_store_iprop_with_key(
     Ok(iprop_header(last, &write_dump_nra(store, mkey, true)?))
 }
 
-/// `text` with the version 7 header replaced by `ipropx 1 <sno> <sec> <usec>`, `last`'s serial and time.
 // MIT: `dump_db` (kadmin/dbutil/dump.c:1318-1329)
-/// the header takes the update log's last serial and time.
 fn iprop_header(last: UlogLast, text: &str) -> String {
     let header = format!(
         "ipropx 1 {} {} {}\n",
@@ -928,19 +850,13 @@ fn iprop_header(last: UlogLast, text: &str) -> String {
     )
 }
 
-/// One `princ` record, with MIT's message for the part that does not read.
 // MIT: `process_k5beta7_princ` (dump.c:615-628)
-/// the five size tokens.
 // MIT: `process_k5beta7_princ` (dump.c:666-674)
-/// a name that cannot be read is not a principal.
 // MIT: `process_k5beta7_princ` (dump.c:676-690)
-/// eight attribute fields are required, and a short record is not a principal.
 // MIT: `process_tl_data` (dump.c:566-594)
-/// each tagged datum's type and length, then its contents.
 // MIT: `process_k5beta7_princ` (dump.c:729-762)
-/// each key's version and kvno, then each slot's type, length and contents.
 // MIT: `process_k5beta7_princ` (dump.c:766-770)
-/// the extra data. The name's length must equal the header count, so a truncated name does not consume the attribute fields.
+/// A name whose length is not the header count is not a principal.
 fn parse_princ_line(rest: &str, lineno: usize) -> Result<DumpPrincipal, DumpError> {
     let mut raw: Vec<&str> = rest.split('\t').collect();
     if let Some(last) = raw.last_mut() {
@@ -1136,7 +1052,6 @@ fn parse_unparsed(s: &str) -> Result<(PrincipalName, String), DumpError> {
     Ok((name, realm))
 }
 
-/// The salt a principal's keys were made with, which the KDC offers in `ETYPE-INFO2`: the first key's stored normal or special salt, else the name's default salt.
 pub(crate) fn salt_of_keys(keys: &[KeyEntry], name: &PrincipalName, realm: &str) -> Vec<u8> {
     keys.iter()
         .find_map(|k| match (k.salt_type, k.kdb_salt.as_ref()) {
@@ -1179,9 +1094,9 @@ pub(crate) fn dump_attributes(p: &Principal) -> u32 {
 }
 
 // MIT: `k5beta7_common` (dump.c:327-331)
-/// a tagged-data count that does not match the list is an error and the record is not written. The count written here is the length of the list that follows it, so it always matches. An alias is written with zero lifetimes, and the database-arguments tag is stripped before the record is emitted.
+/// A tagged-data count that does not match the list is not written.
 // MIT: `k5beta7_common` (kadmin/dbutil/dump.c:338-339)
-/// the entry's own `max_life` and `max_renewable_life` are written; a `max_life` of 0 is no limit of the principal's own (the realm's still applies when a ticket is issued), so it stays 0.
+/// A `max_life` of 0 is no limit of the principal's own.
 fn write_princ_record(
     out: &mut String,
     p: &Principal,
@@ -1334,7 +1249,6 @@ pub(crate) fn attrs_from_tl(tl: &[TlData]) -> Vec<(String, String)> {
     out
 }
 
-/// A principal with a policy or a history record carries `KRB5_TL_KADM_DATA` (`kdb_put_entry`); one that never had either keeps whatever it loaded with.
 pub(crate) fn merge_kadm_tl(tl: &mut Vec<TlData>, p: &Principal) {
     let has_kadm = tl.iter().any(|t| t.ty == TL_KADM_DATA);
     if has_kadm || p.pw_policy.is_none() && p.kadm.old_keys.is_empty() {
