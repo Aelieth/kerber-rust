@@ -1,11 +1,4 @@
-//! MIT 1.22.2's PACs, byte for byte: [`mit_ticket_pac`] given what MIT's KDC had.
-//!
-//! Each vector is the decrypted EncTicketPart of a ticket MIT 1.22.2's db2 KDC issued in a
-//! scratch realm, PACA.TEST, or in PACB.TEST, trusted from it. Every key is a throwaway password
-//! under the default salt (AES256, 4096 iterations): `user` `userpassword`, `krbtgt/PACA.TEST`
-//! `krbtgt-a-password`, `host/svc.paca.test` `svc-a-password`, `krbtgt/PACB.TEST@PACA.TEST`
-//! `crosspassword`, `krbtgt/PACB.TEST` `krbtgt-b-password`, `host/svc.pacb.test` `svc-b-password`,
-//! and for the cross-realm S4U2Self, `svc@PACA.TEST` `svc-password`.
+//! MIT 1.22.2's PACs, byte for byte: [`mit_ticket_pac`] given what MIT's KDC had. Each vector is the decrypted EncTicketPart of a ticket MIT 1.22.2's db2 KDC issued in PACA.TEST, or in PACB.TEST trusted from it. Every key is a throwaway password under the default salt (AES256, 4096 iterations): `user` `userpassword`, `krbtgt/PACA.TEST` `krbtgt-a-password`, `host/svc.paca.test` `svc-a-password`, `krbtgt/PACB.TEST@PACA.TEST` `crosspassword`, `krbtgt/PACB.TEST` `krbtgt-b-password`, `host/svc.pacb.test` `svc-b-password`, and for the cross-realm S4U2Self, `svc@PACA.TEST` `svc-password`.
 
 use super::*;
 use krb5_crypto::{EncryptionType, string_to_key};
@@ -140,8 +133,7 @@ const L7B_CROSS_SVC: &str = "
     764661cbec1931151a25100000000c619b7338592ab5f590a5d910000000bdd99a555a30827fe017800c
 ";
 
-/// The final hop of a cross-realm S4U2Self, `kvno -I user@PACB.TEST svc@PACA.TEST` with svc's
-/// TGT, PACB referring the request back by a db2 alias (a separate run of the same realms).
+/// The final hop of a cross-realm S4U2Self, `kvno -I user@PACB.TEST svc@PACA.TEST` with svc's TGT, PACB referring the request back by a db2 alias (a separate run of the same realms).
 const XS4U_FINAL: &str = "
     6382017630820172a00703050040890000a12b3029a003020112a1220420759b4d6b91ef9db868ab49e57ca446d153c4
     2becd996350dbb622287f812cd90a20b1b09504143422e54455354a311300fa003020101a10830061b0475736572a40b
@@ -325,10 +317,7 @@ fn foreign_service_ticket_is_mits_pac() {
 
 #[test]
 fn cross_realm_s4u2self_final_hop_is_mits_pac() {
-    // The header is PACB's referral TGT back to PACA, which MIT's client does not store in its
-    // ccache, so its bytes are not captured. MIT's S4U referral PAC names the user with the realm
-    // and holds no DELEGATION_INFO, and the final hop names the user anew without the realm, so
-    // nothing else of that PAC reaches the ticket.
+    // The header is PACB's referral TGT, which MIT's client does not store, so its bytes are not captured. That PAC names the user with the realm and holds no DELEGATION_INFO, and the final hop names the user anew without the realm.
     let mit = part(XS4U_FINAL);
     let want = pac_from_ticket_part(&mit).unwrap();
     assert_eq!(kinds(&want), [16, 10, 6, 7, 19]);
