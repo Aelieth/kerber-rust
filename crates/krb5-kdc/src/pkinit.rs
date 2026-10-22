@@ -1,11 +1,8 @@
-//! The realm's PKINIT context: the KDC's identity, the anchors and intermediates it verifies
-//! client certificates with, and its client-certificate options, initialized when the KDC starts,
-//! as MIT's pkinit module initializes a realm.
+//! The realm's PKINIT context: the KDC's identity, the anchors and intermediates it verifies client certificates with, and its client-certificate options, initialized when the KDC starts, as MIT's pkinit module initializes a realm.
 
 use krb5_config::PkinitParams;
 use krb5_types::pkinit::{PkinitIdentity, load_ca_certs, load_identity, verify_chain};
 
-/// One realm's PKINIT context.
 #[derive(Debug)]
 pub struct PkinitKdc {
     pub(crate) identity: PkinitIdentity,
@@ -18,14 +15,10 @@ pub struct PkinitKdc {
 }
 
 impl PkinitKdc {
-    /// The context of `realm` from its options: the identity, then the anchors, then the pool.
-    /// Certificate revocation is not supported, so a realm that asks for it does not initialize.
+    /// The context of `realm` from its options: the identity, then the anchors, then the pool. Certificate revocation is not supported, so a realm that asks for it does not initialize.
     /// MIT `pkinit_init_kdc_profile` (`plugins/preauth/pkinit/pkinit_srv.c:950-1043`): an identity and anchors are required, and `pkinit_kdc_ocsp` is refused.
     /// MIT `pkinit_server_plugin_init_realm` (`plugins/preauth/pkinit/pkinit_srv.c:1076-1140`): the options, then `pkinit_identity_initialize` and `pkinit_identity_prompt`.
-    ///
-    /// # Errors
-    ///
-    /// MIT's message, which the KDC logs after "PKINIT initialization failed: ".
+    /// Fails with MIT's message, which the KDC logs after "PKINIT initialization failed: ".
     pub fn init(params: &PkinitParams, realm: &str) -> Result<Self, String> {
         let Some(identity) = params.identity.as_deref() else {
             return Err(format!("No pkinit_identity supplied for realm {realm}"));
@@ -83,8 +76,7 @@ impl PkinitKdc {
         }
     }
 
-    /// The certificates the KDC's signed reply carries: its own chain without the anchor, which
-    /// leaves none when its certificate is itself an anchor.
+    /// The certificates the KDC's signed reply carries: its own chain without the anchor, which leaves none when its certificate is itself an anchor.
     /// MIT `cms_signeddata_create` (`plugins/preauth/pkinit/pkinit_crypto_openssl.c:1758-1782`): a chain that does not verify is "Failed to verify own certificate (depth N): <reason>".
     pub(crate) fn own_chain(&self) -> Result<Vec<Vec<u8>>, String> {
         let pool: Vec<&[u8]> = self.pool.iter().map(Vec::as_slice).collect();
@@ -95,8 +87,7 @@ impl PkinitKdc {
     }
 }
 
-/// The certificates of `values`; when values are given, at least one loads, else the error is
-/// the last one's.
+/// The certificates of `values`; when values are given, at least one loads, else the error is the last one's.
 /// MIT `pkinit_identity_prompt` (`plugins/preauth/pkinit/pkinit_identity.c:635-662`): one anchor or intermediate value that loads is enough.
 fn load_some(values: &[String]) -> Result<Vec<Vec<u8>>, String> {
     let mut certs: Vec<Vec<u8>> = Vec::new();
