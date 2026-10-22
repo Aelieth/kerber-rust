@@ -1,5 +1,4 @@
 //! MIT `kdc_log.c` ISSUE tuple and `kdc_audit.c` plugin registry.
-//!
 //! The success and error paths emit the tuple and then call the plugin.
 //! The tuple records the decision. It is not the reply.
 
@@ -26,16 +25,14 @@ pub const SRVC_PRINC: i32 = 2;
 /// Encrypt reply.
 pub const ENCR_REP: i32 = 5;
 
-/// MIT `REQID_LEN`: C buffer including the NUL that `krb5int_random_string`
-/// writes, so the printable id is 31 alphanumeric characters.
+/// MIT `REQID_LEN`: C buffer including the NUL that `krb5int_random_string` writes, so the printable id is 31 alphanumeric characters.
 pub const REQID_LEN: usize = 32;
 const REQID_CHARS: usize = REQID_LEN - 1;
 
 const RAND_ALPHANUM: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 const HEX_UP: &[u8; 16] = b"0123456789ABCDEF";
 
-/// SHA-256 of `ticket.enc_part.ciphertext` as 64 uppercase hex digits
-/// (`kau_make_tkt_id`).
+/// SHA-256 of `ticket.enc_part.ciphertext` as 64 uppercase hex digits (`kau_make_tkt_id`).
 #[must_use]
 pub fn make_tkt_id(ciphertext: &[u8]) -> String {
     let hash = Sha256::digest(ciphertext);
@@ -47,7 +44,6 @@ pub fn make_tkt_id(ciphertext: &[u8]) -> String {
     out
 }
 
-/// MIT `krb5int_random_string` over a `REQID_LEN` buffer (31 chars + NUL).
 #[must_use]
 pub fn new_req_id() -> String {
     let mut bytes = [0u8; REQID_CHARS];
@@ -59,11 +55,8 @@ pub fn new_req_id() -> String {
     out
 }
 
-/// MIT `kdc_util.c` `enctype_name` (short name + DEPRECATED/UNSUPPORTED).
 #[must_use]
 pub fn enctype_name(etype: i32) -> String {
-    // MIT `etypes.c` lists these as `ETYPE_DEPRECATED` but Rust `known()`
-    // does not implement them (`enctype_util.c` `krb5int_c_deprecated_enctype`).
     match etype {
         6 => return "DEPRECATED:des3-cbc-raw".into(),
         24 => return "DEPRECATED:arcfour-hmac-exp".into(),
@@ -85,7 +78,6 @@ pub fn enctype_name(etype: i32) -> String {
     }
 }
 
-/// MIT `ktypes2str`: `"%d etypes {%s(%ld), ...}"`.
 #[must_use]
 pub fn ktypes2str(etypes: &[i32]) -> String {
     let mut out = format!("{} etypes {{", etypes.len());
@@ -99,7 +91,6 @@ pub fn ktypes2str(etypes: &[i32]) -> String {
     out
 }
 
-/// MIT `rep_etypes2str`: `"etypes {rep=%s(%ld), tkt=%s(%ld), ses=%s(%ld)}"`.
 #[must_use]
 pub fn rep_etypes2str(rep: i32, tkt: Option<i32>, ses: Option<i32>) -> String {
     let mut out = format!("etypes {{rep={}({rep})", enctype_name(rep));
@@ -113,9 +104,7 @@ pub fn rep_etypes2str(rep: i32, tkt: Option<i32>, ses: Option<i32>) -> String {
     out
 }
 
-/// A name for a log line: 128 bytes or more keep their first 124 and end in `...`.
-/// MIT `limit_string` (`kdc/kdc_util.c:1120-1135`): long names are cut so they do not crowd out
-/// the rest of the entry.
+/// MIT `limit_string` (`kdc/kdc_util.c:1120-1135`): long names are cut so they do not crowd out the rest of the entry.
 fn limit_string(name: &str) -> String {
     if name.len() < 128 {
         return name.to_owned();
@@ -127,8 +116,6 @@ fn limit_string(name: &str) -> String {
     format!("{}...", &name[..end])
 }
 
-/// The message of a KDC error code: the texts of MIT's `lib/krb5/error_tables/krb5_err.et`, whose
-/// unnamed slots read `KRB5 error code N`.
 #[must_use]
 pub fn kdc_error_message(code: i32) -> String {
     let text = match code {
@@ -217,9 +204,7 @@ pub fn kdc_error_message(code: i32) -> String {
     text.to_owned()
 }
 
-/// Whether a TGS failure with `status` happened before the subject ticket was known.
-/// MIT `gather_tgs_req_info` (`kdc/do_tgs_req.c:727-754`): the logged authtime is set from the
-/// subject ticket only here, so an earlier failure logs authtime 0.
+/// MIT `gather_tgs_req_info` (`kdc/do_tgs_req.c:727-754`): the logged authtime is set from the subject ticket only here, so an earlier failure logs authtime 0.
 fn tgs_failed_before_authtime(status: &str) -> bool {
     matches!(
         status,
@@ -243,7 +228,6 @@ fn tgs_failed_before_authtime(status: &str) -> bool {
     )
 }
 
-/// How a request ended, for its MIT log line.
 enum MitOutcome<'a> {
     /// A ticket was issued.
     Issue { authtime: u32, etypes: &'a str },
@@ -256,9 +240,7 @@ enum MitOutcome<'a> {
     },
 }
 
-/// The AS line for the `[logging]` destinations.
-/// MIT `log_as_req` (`kdc/kdc_log.c:57-97`): `AS_REQ (etypes) from: ISSUE: authtime, reply etypes,
-/// client for server`, or the status, the names and the error's message.
+/// MIT `log_as_req` (`kdc/kdc_log.c:57-97`): `AS_REQ (etypes) from: ISSUE: authtime, reply etypes, client for server`, or the status, the names and the error's message.
 fn as_req_line(
     req_etypes: &str,
     from: &str,
@@ -280,11 +262,7 @@ fn as_req_line(
     }
 }
 
-/// The TGS line, and the S4U line after it, for the `[logging]` destinations.
-/// MIT `log_tgs_req` (`kdc/kdc_log.c:117-173`): a server mismatch logs the second ticket's client
-/// instead of the etypes; otherwise the line has the reply etypes on success and the error's
-/// message on a failure, followed by `... PROTOCOL-TRANSITION` or `... CONSTRAINED-DELEGATION`
-/// with the S4U client.
+/// MIT `log_tgs_req` (`kdc/kdc_log.c:117-173`): a server mismatch logs the second ticket's client instead of the etypes; otherwise the line has the reply etypes on success and the error's message on a failure, followed by `... PROTOCOL-TRANSITION` or `... CONSTRAINED-DELEGATION` with the S4U client.
 fn tgs_req_lines(
     req_etypes: &str,
     from: &str,
@@ -350,47 +328,36 @@ fn klog_tgs_req(
 }
 
 /// KDC audit plugin (`kdc_audit.c` `kau_*`).
-///
-/// Several modules may be registered by [`name`](KdcAudit::name). `[plugins] audit` `disable`
-/// then `enable_only` select which of them run. [`set_audit`] and [`set_thread_audit`] install
-/// one module and skip that stanza. With no module selected, [`JsonAudit`] is the fallback.
+/// Several modules may be registered by [`name`](KdcAudit::name). `[plugins] audit` `disable` then `enable_only` select which of them run. [`set_audit`] and [`set_thread_audit`] install one module and skip that stanza. With no module selected, [`JsonAudit`] is the fallback.
 pub trait KdcAudit: Send + Sync {
     /// Module name for `[plugins] audit`. The default is empty, which is not a built-in name.
     fn name(&self) -> &'static str {
         ""
     }
 
-    /// KDC process start.
     fn kdc_start(&self, success: bool) {
         let _ = success;
     }
-    /// KDC process stop.
     fn kdc_stop(&self, success: bool) {
         let _ = success;
     }
-    /// AS-REQ.
     fn as_req(&self, success: bool, state: &AuditState) {
         let _ = (success, state);
     }
-    /// TGS-REQ.
     fn tgs_req(&self, success: bool, state: &AuditState) {
         let _ = (success, state);
     }
-    /// S4U2Self.
     fn s4u2self(&self, success: bool, state: &AuditState) {
         let _ = (success, state);
     }
-    /// S4U2Proxy.
     fn s4u2proxy(&self, success: bool, state: &AuditState) {
         let _ = (success, state);
     }
-    /// User-to-user.
     fn u2u(&self, success: bool, state: &AuditState) {
         let _ = (success, state);
     }
 }
 
-/// MIT `krb5_audit_state` fields the JSON sink emits.
 #[derive(Clone, Debug, Default)]
 pub struct AuditState {
     /// `event_name` (`AS_REQ` / `TGS_REQ` / `S4U2SELF` / `S4U2PROXY` / `U2U`).
@@ -498,7 +465,6 @@ pub(crate) fn restore_thread_audit(a: Option<Arc<dyn KdcAudit>>) {
     THREAD_AUDIT.with(|t| *t.borrow_mut() = a);
 }
 
-/// Current audit module (default [`JsonAudit`]).
 #[must_use]
 pub fn current_audit() -> Arc<dyn KdcAudit> {
     if let Some(a) = THREAD_AUDIT.with(|t| t.borrow().clone()) {
@@ -512,9 +478,7 @@ pub fn current_audit() -> Arc<dyn KdcAudit> {
 }
 
 /// Register one named audit module for every thread that has not set its own list.
-///
-/// [`JsonAudit`] stays the built-in named `json`. [`set_audit`] still installs one module and
-/// skips this list.
+/// [`JsonAudit`] stays the built-in named `json`. [`set_audit`] still installs one module and skips this list.
 pub fn register_audit(module: Arc<dyn KdcAudit>) {
     NAMED_AUDITS
         .lock()
@@ -523,9 +487,7 @@ pub fn register_audit(module: Arc<dyn KdcAudit>) {
 }
 
 /// Install this thread's named audit modules, used in place of the process-wide list (tests).
-///
-/// An empty list records nothing. The list is filtered by `[plugins] audit`. It is not used
-/// while [`set_thread_audit`] is set.
+/// An empty list records nothing. The list is filtered by `[plugins] audit`. It is not used while [`set_thread_audit`] is set.
 pub fn set_thread_audits(modules: Vec<Arc<dyn KdcAudit>>) {
     THREAD_AUDITS.with(|slot| *slot.borrow_mut() = Some(modules));
 }
@@ -545,10 +507,7 @@ pub(crate) fn restore_thread_audits(modules: Option<Vec<Arc<dyn KdcAudit>>>) {
     THREAD_AUDITS.with(|slot| *slot.borrow_mut() = modules);
 }
 
-/// Named modules after `[plugins] audit` `disable` and `enable_only`.
-///
-/// MIT `filter_enabled_modules` (`lib/krb5/krb/plugin.c:271-299`): each enabled name takes the first
-/// remaining match.
+/// MIT `filter_enabled_modules` (`lib/krb5/krb/plugin.c:271-299`): each enabled name takes the first remaining match.
 fn selected_audits(
     relations: &krb5_config::PluginRelations,
     modules: Vec<Arc<dyn KdcAudit>>,
@@ -565,12 +524,7 @@ fn selected_audits(
     out
 }
 
-/// Modules for this event.
-///
-/// A thread slot or the process slot is that one module, not filtered. Otherwise the thread's
-/// named list, if set, or [`JsonAudit`] plus [`register_audit`], after the profile.
-/// MIT `kau_as_req` (`kdc/kdc_audit.c:260-272`): every loaded module is called, and none means
-/// the call returns without a record.
+/// MIT `kau_as_req` (`kdc/kdc_audit.c:260-272`): every loaded module is called, and none means the call returns without a record.
 fn active_audits(store: &dyn PrincipalRead) -> Vec<Arc<dyn KdcAudit>> {
     if let Some(module) = THREAD_AUDIT.with(|slot| slot.borrow().clone()) {
         return vec![module];
@@ -595,10 +549,7 @@ fn active_audits(store: &dyn PrincipalRead) -> Vec<Arc<dyn KdcAudit>> {
     selected_audits(&store.policy().audit, modules)
 }
 
-/// Call `call` for every loaded audit module.
-///
-/// MIT `kau_as_req` (`kdc/kdc_audit.c:260-272`): a null method is skipped; a module error is not
-/// defined, and the next module still runs.
+/// MIT `kau_as_req` (`kdc/kdc_audit.c:260-272`): a null method is skipped; a module error is not defined, and the next module still runs.
 fn each_audit(store: &dyn PrincipalRead, mut call: impl FnMut(&dyn KdcAudit)) {
     for module in active_audits(store) {
         call(module.as_ref());
@@ -659,9 +610,6 @@ fn seed_tgs_req(store: &dyn PrincipalRead, req: &TgsReq, sender: Option<&HostAdd
     each_audit(store, |module| module.tgs_req(true, &state));
 }
 
-/// Unknown-server words after MIT `SRVC_PRINC`.
-/// MIT `gather_tgs_req_info` (`do_tgs_req.c:667-667`): the audit stage becomes `SRVC_PRINC`
-/// before the server principal is looked up.
 fn tgs_fail_stage(e_text: &str) -> i32 {
     match e_text {
         status::LOOKING_UP_SERVER
@@ -672,8 +620,6 @@ fn tgs_fail_stage(e_text: &str) -> i32 {
     }
 }
 
-/// MIT `log_as_req` (`kdc/kdc_log.c:87-89`): a failure appends the context message when one was set.
-/// MIT `log_tgs_req` (`kdc/kdc_log.c:146-152`): the same message follows the client and server.
 /// MIT `armor_ap_request` (`kdc/fast_util.c:57-58`): an armor failure's message is that error plus while handling ap-request armor.
 fn failure_emsg(code: i32, setmsg: &str) -> String {
     if setmsg.is_empty() {
@@ -702,11 +648,8 @@ fn transit_via(transited: &TransitedEncoding) -> (String, &'static str) {
     (String::from_utf8_lossy(shown).into_owned(), dots)
 }
 
-/// An error other than a refused path while checking the transited realms: logged, then the
-/// path counts as unchecked. `crealm` / `srealm` are the realms checked, `cname` / `sname` the
-/// request's client and server.
-/// MIT `log_tgs_badtrans` (`kdc/kdc_log.c:176-212`): an unexpected error is logged at error
-/// severity with the client and server names and the path.
+/// An error other than a refused path while checking the transited realms: logged, then the path counts as unchecked. `crealm` / `srealm` are the realms checked, `cname` / `sname` the request's client and server.
+/// MIT `log_tgs_badtrans` (`kdc/kdc_log.c:176-212`): an unexpected error is logged at error severity with the client and server names and the path.
 #[must_use]
 pub fn unexpected_transit_false(
     err: TransitError,
@@ -741,8 +684,7 @@ pub fn unexpected_transit_false(
 }
 
 /// A transited path the realms do not allow: logged, and the ticket is not marked checked.
-/// MIT `log_tgs_badtrans` (`kdc/kdc_log.c:176-212`): a refused path is logged at info with the
-/// client and server names and the path.
+/// MIT `log_tgs_badtrans` (`kdc/kdc_log.c:176-212`): a refused path is logged at info with the client and server names and the path.
 pub fn log_bad_transit(cname: &str, sname: &str, transited: &TransitedEncoding) {
     let (via, dots) = transit_via(transited);
     krb5_log::klog::syslog(
@@ -904,9 +846,6 @@ fn as_failure(
     clear_req_id();
 }
 
-/// MIT `log_tgs_req` (`kdc_log.c:132-135`): a missing client or server name is logged as
-/// unknown, not omitted.
-/// A body that does not decode as a TGS-REP is not logged as a success.
 fn tgs_success(
     store: &dyn PrincipalRead,
     req: &TgsReq,
@@ -990,9 +929,6 @@ fn tgs_success(
     clear_req_id();
 }
 
-/// MIT `log_tgs_req` (`kdc_log.c:142-148`): a server-mismatch is not logged on the normal
-/// status line.
-/// An empty status is recorded as unknown rather than as a success.
 fn tgs_failure(
     store: &dyn PrincipalRead,
     req: &TgsReq,
@@ -1077,9 +1013,6 @@ fn tgs_failure(
     clear_req_id();
 }
 
-/// MIT `log_as_req` (`kdc_log.c:76-83`): a null status is the issue line, and that line is
-/// not the reply.
-/// A missing client or server name is logged as unknown rather than omitted.
 #[expect(clippy::too_many_arguments, reason = "kau state, not a params struct")]
 fn emit_issue(
     kind: &str,
@@ -1532,7 +1465,6 @@ mod tests {
         assert_eq!(enctype_name(24), "DEPRECATED:arcfour-hmac-exp");
     }
 
-    /// The etype list MIT 1.22.2 `kinit` sent in the live settle.
     const KINIT_ETYPES: [i32; 8] = [18, 17, 20, 19, 16, 23, 25, 26];
 
     #[test]
@@ -1689,7 +1621,6 @@ mod tests {
         assert_eq!(make_tkt_id(cipher), expect);
     }
 
-    /// A cross-realm TGS logs LOOKING_UP_SERVER with the header ticket's client and that client's realm.
     #[test]
     fn cross_realm_header_client_is_logged_with_its_own_realm() {
         use krb5_asn1::encode;
