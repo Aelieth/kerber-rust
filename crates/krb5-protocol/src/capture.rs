@@ -1,11 +1,8 @@
 //! The gates' raw PDU capture (`KERBER_CAPTURE_DIR`), in a `test-hooks` build only.
 //!
-//! Writes each request/reply at the Rust socket boundary so MIT 1.22.2
-//! DER can be archived under `tests/traces/` with no packet sniffer. A
-//! release build captures nothing, as MIT's tools capture nothing.
+//! Writes each request/reply at the Rust socket boundary so MIT 1.22.2 DER can be archived under `tests/traces/` with no packet sniffer. A release build captures nothing, as MIT's tools capture nothing.
 
-/// Write `bytes` as `{label}-<nonce>.der` when `KERBER_CAPTURE_DIR` is set, in a `test-hooks`
-/// build; a release build does nothing.
+/// Write `bytes` as `{label}-<nonce>.der` when `KERBER_CAPTURE_DIR` is set, in a `test-hooks` build; a release build does nothing.
 pub fn capture_pdu(label: &str, bytes: &[u8]) {
     #[cfg(feature = "test-hooks")]
     {
