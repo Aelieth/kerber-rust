@@ -1,7 +1,4 @@
-//! In-tree stand-ins for MIT's test plugins.
-//!
-//! MIT `plugins/kdcpolicy/test`, `plugins/audit/test`,
-//! `plugins/authdata/greet_server`, and `plugins/authdata/greet_client`.
+//! In-tree stand-ins for MIT `plugins/kdcpolicy/test`, `plugins/audit/test`, `plugins/authdata/greet_server`, and `plugins/authdata/greet_client`.
 
 use std::fs::{File, OpenOptions};
 use std::io::Write as _;
@@ -85,8 +82,7 @@ impl KdcPreauth for DemoPreauth {
 /// MIT `greet_kdc_sign` (`greet_auth.c:55-55`): the greeting authdata is type -42.
 pub const GREET_AD_TYPE: i32 = -42;
 /// MIT greet_server greeting.
-/// MIT `greet_hello` (`greet_auth.c:38-38`): the greeting is
-/// `"Hello, KDC issued acceptor world!"`.
+/// MIT `greet_hello` (`greet_auth.c:38-38`): the greeting is `"Hello, KDC issued acceptor world!"`.
 pub const GREET_TEXT: &[u8] = b"Hello, KDC issued acceptor world!";
 
 /// Test / deploy greet module. Production loads none unless `KERBER_KDC_GREET=1`.
@@ -227,9 +223,7 @@ impl KdcPolicy for TestPolicy {
         client: &Principal,
         indicators: &[String],
     ) -> Result<PolicyAdjustment, Error> {
-        // Distinct from `kdcpolicy_test::TestModule::check_as`. Identical bodies
-        // become one symbol, and that symbol's name would carry `testrealm` into
-        // the release `krb5-kdc` (`strings-check.sh`).
+        // Distinct from `kdcpolicy_test::TestModule::check_as`: identical bodies would merge and `strings-check.sh` would see `testrealm` in the release `krb5-kdc`.
         let _ = std::hint::black_box(0u8);
         if first_comp(&client.name).as_deref() == Some("fail") {
             return Err(proto(krb5_types::err::POLICY, status::LOCAL_POLICY));
@@ -322,11 +316,7 @@ pub struct TestAudit {
 }
 
 impl TestAudit {
-    /// Open `path` for append (MIT `fopen("au.log", "a+")`).
-    ///
-    /// # Errors
-    ///
-    /// The `std::io::Error` when `path` cannot be created or opened for appending.
+    /// Open `path` for append (MIT `fopen("au.log", "a+")`). The `std::io::Error` when `path` cannot be created or opened for appending.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, std::io::Error> {
         let path = path.as_ref().to_path_buf();
         let file = OpenOptions::new().create(true).append(true).open(&path)?;
