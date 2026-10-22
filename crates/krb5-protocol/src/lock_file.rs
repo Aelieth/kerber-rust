@@ -1,6 +1,4 @@
-//! MIT `krb5_lock_file`'s whole-file locks, as the credential cache files and the KDC database's
-//! lock files take them: open-file-description locks, a classic POSIX lock on a kernel without
-//! them, and `flock` only where the kernel refuses that.
+//! MIT `krb5_lock_file`'s whole-file locks, as the credential cache files and the KDC database's lock files take them: open-file-description locks, a classic POSIX lock on a kernel without them, and `flock` only where the kernel refuses that.
 
 use std::fs::File;
 use std::io;
@@ -41,16 +39,10 @@ fn ofdlock(file: &File, arg: &libc::flock, wait: bool) -> Result<(), Errno> {
     }
 }
 
-/// Lock, or unlock, the whole of `file`, waiting for a conflicting lock to go: a POSIX lock, and
-/// `flock` only where the kernel refuses that with `EINVAL`. A `flock` taken is kept in
-/// `flocked` until the unlock.
+/// Lock, or unlock, the whole of `file`, waiting for a conflicting lock to go: a POSIX lock, and `flock` only where the kernel refuses that with `EINVAL`. A `flock` taken is kept in `flocked` until the unlock.
 /// MIT `krb5_lock_file` (`lib/krb5/os/lock_file.c:117-162`): whole file, `F_RDLCK` / `F_WRLCK` / `F_UNLCK`, blocking; `EACCES` / `EAGAIN` are `EAGAIN`.
 /// MIT `krb5_lock_file` (`lib/krb5/os/lock_file.c:154-170`): only `EINVAL` falls back to `flock`, and the `EINVAL` is still returned when `flock` succeeds.
-///
-/// # Errors
-///
-/// The lock call's errno: `EAGAIN` for `EACCES` or `EAGAIN`, `EINVAL` when the kernel refused
-/// the POSIX lock (even when `flock` then took it), any other as it is.
+/// The lock call's errno: `EAGAIN` for `EACCES` or `EAGAIN`, `EINVAL` when the kernel refused the POSIX lock (even when `flock` then took it), any other as it is.
 pub fn lock_file(
     file: &File,
     how: FileLock,
@@ -60,10 +52,6 @@ pub fn lock_file(
 }
 
 /// [`lock_file`], or without `wait` an attempt that fails with `EAGAIN` where it would wait.
-///
-/// # Errors
-///
-/// As [`lock_file`].
 pub fn lock_file_how(
     file: &File,
     how: FileLock,
@@ -94,7 +82,6 @@ pub fn lock_file_how(
     }
 }
 
-/// `flock(2)` on `file`'s open file description, kept in `flocked` while it is held.
 fn flock_fallback(
     file: &File,
     how: FileLock,
@@ -130,7 +117,6 @@ fn errno_of(e: &io::Error) -> Errno {
 mod tests {
     use super::*;
 
-    /// Two descriptions of one scratch file, as two processes hold it.
     fn two_opens(name: &str) -> (std::path::PathBuf, File, File) {
         let dir = krb5_testkit::scratch_dir(name);
         let path = dir.join("cache");
