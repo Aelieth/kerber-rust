@@ -3,60 +3,41 @@
 use std::io;
 use thiserror::Error;
 
-/// Failure of an AS/TGS/AP exchange or transport.
 #[derive(Debug, Error)]
 pub enum Error {
-    /// Crypto layer failed. A des3 key that MIT refuses to use is [`Error::DesBadParity`] or
-    /// [`Error::DesWeakKey`] instead, wherever a doc here says this.
+    /// Crypto layer failed. A des3 key that MIT refuses to use is [`Error::DesBadParity`] or [`Error::DesWeakKey`] instead, wherever a doc here says this.
     #[error("crypto: {0}")]
     Crypto(String),
-    /// DER codec failed.
     #[error("asn1: {0}")]
     Asn1(String),
-    /// UDP/TCP I/O or timeout.
     #[error("transport: {message}")]
     Io {
-        /// Display text.
         message: String,
-        /// std I/O kind.
         kind: io::ErrorKind,
-        /// Whether a retry/failover may help.
         retryable: bool,
     },
-    /// KDC returned KRB-ERROR with this RFC 4120 code.
     #[error("KRB-ERROR {code}{}", text.as_ref().map(|t| format!(": {t}")).unwrap_or_default())]
     KrbError {
-        /// RFC 4120 error-code.
         code: i32,
-        /// Optional e-text. For a TGS request's unknown server that came with e-text, MIT's
-        /// message in its place, naming the error's server.
         /// MIT `krb5int_process_tgs_reply` (`lib/krb5/krb/gc_via_tkt.c:195-216`): an unknown server's error with e-text sets the message "Server <the error's server> not found in Kerberos database"; without e-text no message is set.
         text: Option<String>,
     },
-    /// Reply tag was not AS-REP, TGS-REP, AP-REP, or KRB-ERROR.
     #[error("unexpected Kerberos PDU tag")]
     UnexpectedPdu,
-    /// The KDC-REP enc-part did not verify under the client's key — MIT
-    /// `krb5_kdc_rep_decrypt_proc` → `krb5_c_decrypt` returns
-    /// `KRB5KRB_AP_ERR_BAD_INTEGRITY` (31), the "wrong password" of a password AS.
-    /// MIT `k5_kinit` (`kinit.c:787-787`): kinit reports `KRB5KRB_AP_ERR_BAD_INTEGRITY` as
-    /// "Password incorrect".
+    /// The KDC-REP enc-part did not verify under the client's key — MIT `krb5_kdc_rep_decrypt_proc` → `krb5_c_decrypt` returns `KRB5KRB_AP_ERR_BAD_INTEGRITY` (31), the "wrong password" of a password AS.
+    /// MIT `k5_kinit` (`kinit.c:787-787`): kinit reports `KRB5KRB_AP_ERR_BAD_INTEGRITY` as "Password incorrect".
     #[error("Decrypt integrity check failed")]
     ReplyIntegrity,
-    /// Encrypted reply nonce did not match the request.
     #[error("AS/TGS nonce mismatch")]
     NonceMismatch,
-    /// Returned principal / sname / etype / flags did not match the request.
     #[error("reply validation: {0}")]
     ReplyMismatch(String),
     /// AS reply starttime outside skew when `kdc_timesync` is off.
     /// MIT `verify_as_reply` (`get_in_tkt.c:264-269`): `KRB5_KDCREP_SKEW`, and no message is set.
     #[error("Clock skew too great in KDC reply")]
     KdcReplySkew,
-    /// Referral TGT presented as a service ticket.
     #[error("referral TGT cannot be used as the requested service ticket")]
     Referral,
-    /// No overlapping etype with the KDC.
     #[error("no mutually supported etype")]
     NoEtype,
     /// The KDC's etype-info names an enctype this client has, but none the request asked for.
@@ -75,31 +56,26 @@ pub enum Error {
     /// MIT `validate_and_schedule` (`lib/crypto/builtin/enc_provider/des3.c:33-53`): `KRB5DES_BAD_KEYPAR`, the code and text, which every encryption, decryption and checksum under such a key returns.
     #[error("DES key has bad parity")]
     DesBadParity,
+    #[error("DES key is a weak key")]
     /// A des3 key with a weak or semi-weak DES key among its three.
     /// MIT `validate_and_schedule` (`lib/crypto/builtin/enc_provider/des3.c:33-53`): `KRB5DES_WEAK_KEY`, the code and text.
-    #[error("DES key is a weak key")]
     DesWeakKey,
-    /// The KDB keytab has no key to give for the ticket: the server's first permitted key at the
-    /// ticket's kvno is not of the ticket's enctype, or no key at it is of a permitted enctype.
+    /// The KDB keytab has no key to give for the ticket: the server's first permitted key at the ticket's kvno is not of the ticket's enctype, or no key at it is of a permitted enctype.
     /// MIT `KRB5_KDB_NO_PERMITTED_KEY` (`lib/krb5/error_tables/kdb5_err.et:72-72`): the code and text.
     /// MIT `krb5_ktkdb_get_entry` (`lib/kdb/keytab.c:171-178`): returns it for a ticket whose enctype is not similar to the key's, and `keytab_fetch_error` passes it on.
     #[error("No matching key in entry having a permitted enctype")]
     KdbNoPermittedKey,
-    /// A checksum type the library does not implement.
     /// MIT `KRB5_PROG_SUMTYPE_NOSUPP` (`krb5_err.et:207-207`): the code and text, which `read_krbsafe` returns for a KRB-SAFE's.
     #[error("Program lacks support for checksum type")]
     ProgSumtypeNosupp,
-    /// An AP-REQ's session key or subkey is of an enctype the acceptor does not permit; the
-    /// text names it.
+    /// An AP-REQ's session key or subkey is of an enctype the acceptor does not permit; the text names it.
     /// MIT `negotiate_etype` (`lib/krb5/krb/rd_req_dec.c:878-886`): `KRB5_NOPERM_ETYPE` with the enctype's name.
     #[error("{0}")]
     NopermEtype(String),
-    /// A real preauthentication type failed, the password's read among them: MIT's
-    /// `KRB5_PREAUTH_FAILED`, its message wrapping the cause.
+    /// A real preauthentication type failed, the password's read among them: MIT's `KRB5_PREAUTH_FAILED`, its message wrapping the cause.
     /// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:716-723`): with no real type answered, the first type's failure is wrapped as "Pre-authentication failed: \<its message\>".
     #[error("Pre-authentication failed: {0}")]
     PreauthFailed(Box<Error>),
-    /// Reply too short to classify.
     #[error("KDC reply truncated")]
     TruncatedReply,
     /// The KDC's error carried PA-FX-FAST and this request had an armor cache but no armor key.
@@ -111,7 +87,7 @@ pub enum Error {
     #[error("Encrypted timestamp is disabled")]
     EnctsDisabled,
     /// A preauthentication module's own failure, shown as it is.
-    /// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:716-723`): a module's failure, such as `KRB5_LIBOS_CANTREADPWD` "Cannot read password", is the message wrapped by [`Error::PreauthFailed`].
+    /// A module's failure, such as `KRB5_LIBOS_CANTREADPWD` "Cannot read password", is the message wrapped by [`Error::PreauthFailed`].
     #[error("{0}")]
     Message(String),
     #[error("{text}")]
@@ -125,7 +101,6 @@ pub enum Error {
         /// The message MIT has set for it.
         text: String,
     },
-    /// I/O from keytab/ccache.
     #[error("file: {0}")]
     File(#[from] io::Error),
 }
@@ -207,7 +182,6 @@ impl Error {
         }
     }
 
-    /// Transport failure from a formatted message (retryable by default).
     #[must_use]
     pub fn transport_msg(msg: impl Into<String>) -> Self {
         Self::Io {
@@ -217,7 +191,6 @@ impl Error {
         }
     }
 
-    /// Wrap an I/O error, classifying retryable kinds.
     #[must_use]
     #[allow(clippy::needless_pass_by_value)] // owns the `io::Error` from `map_err`
     pub fn from_io(e: io::Error) -> Self {
