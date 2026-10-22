@@ -19,7 +19,6 @@ use crate::safe_priv::wiped;
 
 const AES256: EncryptionType = EncryptionType::Aes256CtsHmacSha196;
 
-/// An empty profile's acceptor values, permitting `permitted`.
 fn conf(permitted: &[EncryptionType]) -> AcceptorConfig {
     AcceptorConfig {
         permitted_enctypes: permitted.to_vec(),
@@ -35,8 +34,6 @@ fn enc_key(k: &ProtocolKey) -> EncryptionKey {
     }
 }
 
-/// An accepted AP-REQ as `verify_ap_req_ex` returns it: an aes256-cts session key, the
-/// authenticator's own subkey and sequence number, and its authorization data.
 fn accepted(
     session: &ProtocolKey,
     subkey: Option<&ProtocolKey>,
@@ -196,7 +193,7 @@ fn a_session_key_the_acceptor_does_not_permit_is_noperm_etype() {
     assert!(matches!(err, Error::NopermEtype(_)));
 }
 
-/// MIT `krb5_decrypt_tkt_part` (`decrypt_tk.c:46-50`): the ticket's own enctype is refused before `negotiate_etype` sees the session key's, with the error table's text alone.
+/// the ticket's own enctype is refused before `negotiate_etype` sees the session key's, with the error table's text alone.
 #[test]
 fn a_ticket_enctype_the_acceptor_does_not_permit_is_noperm_etype_first() {
     let aes128 = EncryptionType::Aes128CtsHmacSha196;
@@ -212,8 +209,6 @@ fn a_ticket_enctype_the_acceptor_does_not_permit_is_noperm_etype_first() {
     assert!(AcceptorAuthContext::from_ap_req(&ok, &conf(&[AES256, aes128])).is_ok());
 }
 
-/// MIT `krb5_decrypt_tkt_part` (`decrypt_tk.c:46-47`): an enctype the library does not
-/// implement is `KRB5_PROG_ETYPE_NOSUPP`, before the permitted list is read.
 #[test]
 fn check_ticket_etype_is_nosupp_for_an_enctype_not_implemented() {
     assert!(matches!(
@@ -436,7 +431,6 @@ fn remote_seq_takes_the_exact_number_then_the_next() {
 
 #[test]
 fn remote_seq_reads_old_heimdal_numbers_as_mit_does() {
-    // privsafe.c's table: an old Heimdal counter 0x80 arrives sign-extended as 0xFFFFFF80.
     let mut one = super::RemoteSeq::new(0x80);
     assert!(
         one.check(0xFFFF_FF80),
@@ -446,8 +440,6 @@ fn remote_seq_reads_old_heimdal_numbers_as_mit_does() {
     assert!(two.check(0xFFFF_8000), "the 2-octet form");
     let mut three = super::RemoteSeq::new(0x0080_0000);
     assert!(three.check(0xFF80_0000), "the 3-octet form");
-    // An exact match of an expected number in an ambiguous range marks the peer sane, which then
-    // gets exact matches only.
     let mut sane = super::RemoteSeq::new(0x80);
     assert!(sane.check(0x80));
     sane.advance();
@@ -455,12 +447,10 @@ fn remote_seq_reads_old_heimdal_numbers_as_mit_does() {
         !sane.check(0xFFFF_FF81),
         "a sane peer's numbers are never read as Heimdal's"
     );
-    // Heimdal's counter wrapping through zero from an ambiguous start.
     assert!(super::RemoteSeq::new(0).check(0x100));
     assert!(!super::RemoteSeq::new(0).check(0x200));
 }
 
-/// A peer's KRB-PRIV, under `key`, carrying `seq` (no field when `None`).
 fn peer_priv(key: &ProtocolKey, data: &[u8], seq: Option<u32>) -> Vec<u8> {
     encode(&crate::safe_priv::build_krb_priv_with_seq(key, data, seq).unwrap()).unwrap()
 }
@@ -469,7 +459,6 @@ fn peer_priv(key: &ProtocolKey, data: &[u8], seq: Option<u32>) -> Vec<u8> {
 fn rd_priv_takes_the_request_only_with_the_authenticators_seq() {
     let session = ProtocolKey::random(AES256).unwrap();
     let subkey = ProtocolKey::random(AES256).unwrap();
-    // MIT kpasswd's shape: no seq-number in the authenticator or the KRB-PRIV.
     let ok = accepted(&session, Some(&subkey), None, false, None);
     let fresh = || {
         let mut ac = AcceptorAuthContext::from_ap_req(&ok, &conf(&DEFAULT_LIST)).unwrap();
@@ -487,7 +476,6 @@ fn rd_priv_takes_the_request_only_with_the_authenticators_seq() {
         matches!(one, Error::KrbError { code: 42, .. }),
         "seq 1 where the authenticator had none is BADORDER, got {one:?}"
     );
-    // An authenticator seq-number: the KRB-PRIV must carry it, then the next one.
     let ok = accepted(&session, Some(&subkey), Some(864_518_167), false, None);
     let mut ac = AcceptorAuthContext::from_ap_req(&ok, &conf(&DEFAULT_LIST)).unwrap();
     ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE);
@@ -509,7 +497,6 @@ fn rd_priv_takes_the_request_only_with_the_authenticators_seq() {
         b"two"
     );
     assert_eq!(ac.remote_seq(), 864_518_169);
-    // Without DO_SEQUENCE the number is not looked at.
     let mut lax = AcceptorAuthContext::from_ap_req(&ok, &conf(&DEFAULT_LIST)).unwrap();
     lax.set_flags(0);
     assert!(lax.rd_priv(&peer_priv(&subkey, b"x", Some(7))).is_ok());
@@ -601,7 +588,6 @@ fn rd_priv_refuses_another_message_type() {
     assert!(matches!(e, Error::KrbError { code: 40, .. }), "{e:?}");
 }
 
-/// A KRB-PRIV from the peer whose encrypted part is `part_der`, as given.
 fn sealed_priv(key: &ProtocolKey, part_der: &[u8]) -> Vec<u8> {
     let usage = KeyUsage::new(ku::KRB_PRIV_ENC_PART).unwrap();
     let cipher = krb5_crypto::encrypt(key, usage, part_der).unwrap();
@@ -690,7 +676,7 @@ fn rd_priv_takes_the_clock_skew_krb5_conf_sets() {
     assert_eq!(ac.rd_priv(&msg(b"b")).unwrap(), b"b");
 }
 
-/// MIT `read_krbpriv` (`rd_priv.c:77-78`): a KRB-PRIV's r-address, when it has one, must be the local address the context holds.
+/// a KRB-PRIV's r-address, when it has one, must be the local address the context holds.
 #[test]
 fn rd_priv_checks_the_addresses_the_context_holds() {
     let session = ProtocolKey::random(AES256).unwrap();
@@ -742,7 +728,6 @@ fn request_till_second_is_time_while_the_precise_clock_has_rolled() {
     );
 }
 
-/// MIT `read_krbpriv` (`lib/krb5/krb/rd_priv.c:68-70`): the enc-part decrypts through `krb5_k_decrypt`, so another enctype than the key's is KRB5_BAD_ENCTYPE.
 #[test]
 fn rd_priv_enc_part_of_another_enctype_is_bad_enctype() {
     let session = ProtocolKey::random(AES256).unwrap();
@@ -757,8 +742,7 @@ fn rd_priv_enc_part_of_another_enctype_is_bad_enctype() {
     );
 }
 
-/// MIT `k5_privsafe_check_addrs` (`privsafe.c:355-378`): with no local address (kpasswd's context
-/// sets none), a KRB-PRIV's receiver address must be one of the host's, whatever the sender says.
+/// MIT `k5_privsafe_check_addrs` (`privsafe.c:355-378`): with no local address (kpasswd's context sets none), a KRB-PRIV's receiver address must be one of the host's, whatever the sender says.
 #[test]
 fn rd_priv_with_no_local_address_wants_the_receiver_among_the_hosts() {
     let session = ProtocolKey::random(AES256).unwrap();
@@ -778,14 +762,11 @@ fn rd_priv_with_no_local_address_wants_the_receiver_among_the_hosts() {
     );
     assert_eq!(ac.rd_priv(&msg(Some(here.clone()))).unwrap(), b"p");
     assert_eq!(ac.rd_priv(&msg(None)).unwrap(), b"p");
-    // The host's addresses are not read once a local address is set.
     ac.set_addrs(Some(there.clone()), None);
     assert_eq!(ac.rd_priv(&msg(Some(there.clone()))).unwrap(), b"p");
 }
 
-/// The same check against the machine's own addresses, which hold no documentation address
-/// (RFC 5737's 203.0.113.0/24): kpasswd's request from a client that names such a receiver is
-/// refused as MIT refuses it.
+/// The same check against the machine's own addresses, which hold no documentation address (RFC 5737's 203.0.113.0/24): kpasswd's request from a client that names such a receiver is refused as MIT refuses it.
 #[test]
 fn rd_priv_with_no_addresses_set_refuses_a_receiver_the_machine_does_not_have() {
     let session = ProtocolKey::random(AES256).unwrap();
