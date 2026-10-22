@@ -8,8 +8,7 @@ use krb5_types::{PrincipalName, Realm, kerberos_string_from_bytes};
 /// FILE v4 header tag: KDC time offset (`sec`, `usec`).
 pub const FCC_TAG_DELTATIME: u16 = 1;
 
-/// MIT FILE/KCM/KEYRING v4 keyblock. Enctype 0 is a config entry. `Debug` shows the enctype
-/// and the key's length, never its octets.
+/// MIT FILE/KCM/KEYRING v4 keyblock. Enctype 0 is a config entry. `Debug` shows the enctype and the key's length, never its octets.
 #[derive(Clone, PartialEq, Eq)]
 pub struct CcacheKeyblock {
     /// Enctype as stored (16-bit, sign-extended on read).
@@ -31,7 +30,6 @@ impl std::fmt::Debug for CcacheKeyblock {
 }
 
 impl CcacheKeyblock {
-    /// Copy a protocol session key.
     #[must_use]
     pub fn from_protocol(key: &ProtocolKey) -> Self {
         Self {
@@ -41,11 +39,7 @@ impl CcacheKeyblock {
     }
 
     /// Parse as a [`ProtocolKey`] when the enctype is implemented.
-    ///
-    /// # Errors
-    ///
-    /// `io::ErrorKind::InvalidData` when the enctype is not implemented or the key length does
-    /// not match it.
+    /// `io::ErrorKind::InvalidData` when the enctype is not implemented or the key length does not match it.
     pub fn protocol_key(&self) -> Result<ProtocolKey, io::Error> {
         let et = EncryptionType::known(i32::from(self.etype))
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
@@ -54,7 +48,6 @@ impl CcacheKeyblock {
     }
 }
 
-/// One FILE v4 credential, including config and tombstones.
 #[derive(Clone)]
 pub struct CcacheCred {
     /// Client principal.
@@ -86,24 +79,18 @@ pub struct CcacheCred {
 }
 
 impl CcacheCred {
-    /// Whether this is an `X-CACHECONF:` config entry (server realm).
     #[must_use]
     pub fn is_config(&self) -> bool {
         self.server.0.as_bytes() == b"X-CACHECONF:"
     }
 
-    /// MIT `cred_removed`: `endtime == 0 && authtime != 0`.
     #[must_use]
     pub fn is_removed(&self) -> bool {
         self.endtime == 0 && self.authtime != 0
     }
 
     /// Session key when the enctype is implemented.
-    ///
-    /// # Errors
-    ///
-    /// `io::ErrorKind::InvalidData` when the enctype is not implemented or the key length does
-    /// not match it.
+    /// `io::ErrorKind::InvalidData` when the enctype is not implemented or the key length does not match it.
     pub fn session_key(&self) -> Result<ProtocolKey, io::Error> {
         self.key.protocol_key()
     }
@@ -203,8 +190,7 @@ pub(crate) fn marshal_cred(w: &mut Writer, c: &CcacheCred) {
     w.data(&c.second_ticket);
 }
 
-/// The length of `c` as [`marshal_cred`] writes it, so that a record's buffer is sized before
-/// the session key goes in and no reallocation leaves a copy of it behind.
+/// The length of `c` as [`marshal_cred`] writes it, so that a record's buffer is sized before the session key goes in and no reallocation leaves a copy of it behind.
 /// MIT `k5_marshal_cred` (`ccmarshal.c:429-447`): the client, the server, the keyblock, the times, `is_skey`, the flags, the addresses, the authdata, the ticket and the second ticket, in turn.
 pub(crate) fn cred_len(c: &CcacheCred) -> usize {
     let data = |b: &[u8]| 4 + b.len();
@@ -231,10 +217,8 @@ pub(crate) fn cred_len(c: &CcacheCred) -> usize {
         + data(&c.second_ticket)
 }
 
-/// MIT `k5_unmarshal_cred` (`ccmarshal.c:306-310`): a truncated credential is a format error and is
-/// not returned half-parsed.
-/// An address or authdata count larger than the bytes still in the buffer is rejected before those
-/// lists are walked.
+/// MIT `k5_unmarshal_cred` (`ccmarshal.c:306-310`): a truncated credential is a format error and is not returned half-parsed.
+/// An address or authdata count larger than the bytes still in the buffer is rejected before those lists are walked.
 pub(crate) fn unmarshal_cred(b: &[u8], i: &mut usize) -> Result<CcacheCred, io::Error> {
     let client = unmarshal_princ(b, i)?;
     let server = unmarshal_princ(b, i)?;
