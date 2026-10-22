@@ -1,6 +1,4 @@
-//! Issued tickets and KRB-ERROR (`do_as_req.c` / `do_tgs_req.c`
-//! `prepare_error_*`, `kdc_preauth.c` `return_enc_padata`):
-//! `mint_ticket`, `enc_rep_part`, and the AS/TGS reply wrappers.
+//! Issued tickets and KRB-ERROR (`do_as_req.c` / `do_tgs_req.c` `prepare_error_*`, `kdc_preauth.c` `return_enc_padata`): `mint_ticket`, `enc_rep_part`, and the AS/TGS reply wrappers.
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, encrypt};
@@ -29,8 +27,7 @@ pub(crate) fn kdc_error_bytes(store: &dyn PrincipalRead, code: i32) -> Vec<u8> {
     encode_krb_error(store, code, None, None, None, false)
 }
 
-/// MIT `finish_process_as_req` (`do_as_req.c:372-373`): a discard error is not turned into a
-/// KRB-ERROR. The bytes returned for that discard are empty, so the datagram path sends nothing.
+/// MIT `finish_process_as_req` (`do_as_req.c:372-373`): a discard error is not turned into a KRB-ERROR. The bytes returned for that discard are empty, so the datagram path sends nothing.
 pub(super) fn as_reply(
     store: &dyn PrincipalRead,
     req: &AsReq,
@@ -61,11 +58,9 @@ pub(super) fn as_reply(
             e_data,
             detail,
         }) => {
-            // MIT `finish_process_as_req` (`do_as_req.c:371-372`): `KRB5KDC_ERR_DISCARD` skips
-            // `prepare_error_as` (no KRB-ERROR).
+            // MIT `finish_process_as_req` (`do_as_req.c:371-372`): `KRB5KDC_ERR_DISCARD` skips `prepare_error_as` (no KRB-ERROR).
             // MIT `filter_preauth_error` (`kdc_preauth.c:1125-1125`): the filter kept the code.
-            // MIT `finish_dispatch_cache` (`dispatch.c:78-78`): also drops it; a DISCARD keeps
-            // its null lookaside entry.
+            // MIT `finish_dispatch_cache` (`dispatch.c:78-78`): also drops it; a DISCARD keeps its null lookaside entry.
             if code == err::DISCARD {
                 return Ok((Vec::new(), detail.filter(|s| !s.is_empty())));
             }
@@ -103,8 +98,7 @@ pub(super) fn as_reply(
             ),
             Some(d).filter(|s| !s.is_empty()),
         )),
-        // MIT `finish_process_as_req` (`do_as_req.c:346-347`): an error that set no status of its
-        // own is `UNKNOWN_REASON` (the lookups label theirs in `lookup_as_princ`).
+        // MIT `finish_process_as_req` (`do_as_req.c:346-347`): an error that set no status of its own is `UNKNOWN_REASON` (the lookups label theirs in `lookup_as_princ`).
         Err(e) => Ok((
             encode_krb_error(
                 store,
@@ -119,19 +113,15 @@ pub(super) fn as_reply(
     }
 }
 
-/// MIT `prepare_error_tgs` (`do_tgs_req.c:201-204`): the error client is the header ticket's
-/// client only when that ticket decrypted. A request that is not a TGS-REQ fails before that
-/// decryption, so its error has no client name.
+/// MIT `prepare_error_tgs` (`do_tgs_req.c:201-204`): the error client is the header ticket's client only when that ticket decrypted. A request that is not a TGS-REQ fails before that decryption, so its error has no client name.
 pub(super) fn tgs_reply(
     store: &dyn PrincipalRead,
     req: &TgsReq,
     raw: &[u8],
     sender: Option<&HostAddress>,
 ) -> Result<(Vec<u8>, Option<String>), Error> {
-    // MIT `prepare_error_tgs` (`do_tgs_req.c:201-204`): errpkt.client is the header ticket's
-    // client when it decrypts, else NULL. gather_tgs_req_info returns before kdc_process_tgs_req
-    // when msg_type != 12, so that error has no cname. The TGS-REQ body carries no cname, so
-    // derive it for the error.
+    // MIT `prepare_error_tgs` (`do_tgs_req.c:201-204`): errpkt.client is the header ticket's client when it decrypts, else NULL.
+    // `gather_tgs_req_info` returns before `kdc_process_tgs_req` when `msg_type` is not 12, so that error has no cname. The TGS-REQ body carries no cname, so derive it for the error.
     let mut ebody = req.0.req_body.clone();
     ebody.cname = if req.0.msg_type == krb5_types::KdcReq::MSG_TGS_REQ {
         tgs_header_client(store, req)
@@ -188,14 +178,9 @@ pub(super) fn tgs_reply(
 }
 
 /// Inputs for minting one ticket.
-///
-/// Not a wire type. The ticket fields are MIT `krb5_enc_tkt_part` filled the way `do_as_req.c`
-/// and `do_tgs_req.c` fill them before `krb5_encrypt_tkt_part`. The rest are the PAC inputs
-/// from `kdc_authdata.c`.
-/// MIT `krb5_enc_tkt_part` (`include/krb5/krb5.hin:1930-1930`): flags, session key, client,
-/// transited, times, addresses, and authorization data.
-/// MIT `krb5_encrypt_tkt_part` (`lib/krb5/krb/encrypt_tk.c:42-42`): encodes the enc-part and
-/// encrypts it under the server key.
+/// Not a wire type. The ticket fields are MIT `krb5_enc_tkt_part` filled the way `do_as_req.c` and `do_tgs_req.c` fill them before `krb5_encrypt_tkt_part`. The rest are the PAC inputs from `kdc_authdata.c`.
+/// MIT `krb5_enc_tkt_part` (`include/krb5/krb5.hin:1930-1930`): flags, session key, client, transited, times, addresses, and authorization data.
+/// MIT `krb5_encrypt_tkt_part` (`lib/krb5/krb/encrypt_tk.c:42-42`): encodes the enc-part and encrypts it under the server key.
 pub(super) struct MintTicket<'a> {
     /// Service long-term key.
     pub service_key: &'a ProtocolKey,
@@ -259,15 +244,12 @@ pub(super) enum TicketPac<'a> {
         subject_pac: Option<&'a [u8]>,
         /// The CLIENT_INFO name of an S4U ticket.
         s4u_client_info: Option<&'a str>,
-        /// Whose identity a new PAC carries, when not the ticket client's: an S4U2Self user of
-        /// this realm, also on the hop that refers the request to another realm.
+        /// Whose identity a new PAC carries, when not the ticket client's: an S4U2Self user of this realm, also on the hop that refers the request to another realm.
         identity: Option<(&'a PrincipalName, &'a str)>,
     },
 }
 
-/// MIT `tgs_issue_ticket` (`do_tgs_req.c:1056-1060`): a user-to-user ticket's kvno is zero, and
-/// any other ticket carries the server's current kvno. A zero kvno is omitted from the
-/// encrypted-data, so a user-to-user ticket is not pinned to a key version.
+/// MIT `tgs_issue_ticket` (`do_tgs_req.c:1056-1060`): a user-to-user ticket's kvno is zero, and any other ticket carries the server's current kvno. A zero kvno is omitted from the encrypted-data, so a user-to-user ticket is not pinned to a key version.
 pub(super) fn mint_ticket(p: MintTicket<'_>) -> Result<Ticket, Error> {
     let MintTicket {
         service_key,
@@ -436,9 +418,7 @@ pub(super) fn enc_rep_part(
     })
 }
 
-/// MIT `return_enc_padata` (`kdc_preauth.c:1636-1663`): FAST nego then
-/// PA-PAC-OPTIONS masked to RBCD. Referral PA-20 is omitted — nothing in
-/// 1.22.2 writes `KRB5_TL_SVR_REFERRAL_DATA`.
+/// MIT `return_enc_padata` (`kdc_preauth.c:1636-1663`): FAST nego then PA-PAC-OPTIONS masked to RBCD. Referral PA-20 is omitted — nothing in 1.22.2 writes `KRB5_TL_SVR_REFERRAL_DATA`.
 pub(super) fn return_enc_padata(
     raw: Option<&[u8]>,
     padata: Option<&[PaData]>,
@@ -487,9 +467,7 @@ pub(super) fn krb_error_log_fields(bytes: &[u8]) -> (i32, String) {
     }
 }
 
-/// MIT `prepare_error_as` (`do_as_req.c:831-832`): when the client must be hidden, the error
-/// does not carry the client name. The error realm and server are the request's, and a realm
-/// that is not ASCII produces no error bytes.
+/// MIT `prepare_error_as` (`do_as_req.c:831-832`): when the client must be hidden, the error does not carry the client name. The error realm and server are the request's, and a realm that is not ASCII produces no error bytes.
 pub(super) fn encode_krb_error(
     store: &dyn PrincipalRead,
     code: i32,
@@ -498,8 +476,7 @@ pub(super) fn encode_krb_error(
     body: Option<&krb5_types::KdcReqBody>,
     hide_client: bool,
 ) -> Vec<u8> {
-    // MIT 1.22.2 echoes the request realm/sname (C_PRINCIPAL_UNKNOWN for a
-    // foreign-realm AS-REQ, not WRONG_REALM).
+    // MIT 1.22.2 echoes the request realm/sname (C_PRINCIPAL_UNKNOWN for a foreign-realm AS-REQ, not WRONG_REALM).
     let realm_s = body
         .and_then(|b| std::str::from_utf8(b.realm.as_bytes()).ok())
         .map(str::to_owned)
@@ -544,18 +521,12 @@ pub(super) fn encode_krb_error(
         cusec: None,
         stime: KerberosTime::now(),
         susec: Microseconds::ZERO,
-        // `errcode_to_protocol`: only 0..=128 is a protocol code; anything else (a `KdcPolicy`
-        // handing back a raw library code) goes out as KRB_ERR_GENERIC 60.
-        // MIT `prepare_error_as` (`do_as_req.c:804-804`): the AS error code is
-        // `errcode_to_protocol(code)`.
-        // MIT `prepare_error_tgs` (`do_tgs_req.c:199-199`): the TGS error code is
-        // `errcode_to_protocol(code)`.
+        // `errcode_to_protocol`: only 0..=128 is a protocol code; anything else (a `KdcPolicy` handing back a raw library code) goes out as KRB_ERR_GENERIC 60.
+        // MIT `prepare_error_as` (`do_as_req.c:804-804`): the AS error code is `errcode_to_protocol(code)`.
+        // MIT `prepare_error_tgs` (`do_tgs_req.c:199-199`): the TGS error code is `errcode_to_protocol(code)`.
         error_code: crate::error::errcode_to_protocol(code),
         // MIT prepare_error_as echoes request->client.
-        // MIT `prepare_error_tgs` (`do_tgs_req.c:201-204`): sets errpkt.client from the
-        // decrypted header ticket, else NULL.
-        // MIT `error_7` (`asn1_k_encode.c:919-919`): opt_realm_of_principal omits crealm when
-        // client is NULL.
+        // MIT `error_7` (`asn1_k_encode.c:919-919`): opt_realm_of_principal omits crealm when client is NULL.
         crealm,
         cname,
         realm,
