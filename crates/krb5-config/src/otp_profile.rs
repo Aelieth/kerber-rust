@@ -162,6 +162,7 @@ fn token_type_decode(profile: &OtpProfile<'_>, name: &str) -> Result<OtpType, Ot
         None => true,
         Some(v) => mit_boolean(v).ok_or_else(|| init_error(BAD_BOOLEAN))?,
     };
+    // A `server` or `secret` relation in `[otp]` fails the section (EINVAL, MIT's order of reads). We don't run RADIUS.
     for relation in ["server", "secret"] {
         if profile.value(name, relation).is_some() {
             return Err(OtpInitError {
