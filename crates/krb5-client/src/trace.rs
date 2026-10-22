@@ -1,14 +1,9 @@
-//! The client tools' halves of MIT's trace points ([`krb5_protocol::trace`]): cache names as MIT
-//! prints them, and the cache reads and writes of a credentials request.
-
 use krb5_config::{CcSpec, ClientContext};
 use krb5_protocol::{CcacheCred, trace};
 use krb5_types::PrincipalName;
 
 use crate::creds::{OpenCache, Princ};
 
-/// MIT `krb5_cc_get_type` and `krb5_cc_get_name` as `{ccache}` prints them: `TYPE:name`, a DIR
-/// collection's cache as `DIR::<file>`, the default KCM cache under its primary's name.
 #[must_use]
 pub fn ccname(ctx: &ClientContext, spec: &CcSpec) -> String {
     match spec {
@@ -25,23 +20,18 @@ pub fn ccname(ctx: &ClientContext, spec: &CcSpec) -> String {
     }
 }
 
-/// A cache principal as the trace prints it.
 #[must_use]
 pub fn princ(p: &Princ) -> trace::Princ<'_> {
     trace::Princ::new(&p.1, p.0.as_bytes())
 }
 
-/// `krbtgt/realm` when `realm` is GeneralString. A cache or KDC realm that is not is skipped.
 fn static_tgt(realm: &str) -> Option<(krb5_types::Realm, PrincipalName)> {
     let ks = krb5_types::try_ascii(realm).ok()?;
     let name = PrincipalName::try_new(PrincipalName::NT_SRV_INST, ["krbtgt", realm]).ok()?;
     Some((ks, name))
 }
 
-/// MIT `krb5_init_creds_init` (`lib/krb5/krb/get_in_tkt.c:850-1054`): an initial-credentials
-/// request is traced with its client.
-/// MIT `krb5_init_creds_set_service` (`lib/krb5/krb/get_in_tkt.c:1055-1071`): then its service, when
-/// it names one.
+// MIT krb5_init_creds_set_service; see docs/parity/b1-client-preauth.md
 pub fn init_creds(cname: &PrincipalName, realm: &str, service: Option<&str>) {
     trace::init_creds(trace::Princ::new(cname, realm.as_bytes()));
     if let Some(s) = service {
@@ -49,8 +39,6 @@ pub fn init_creds(cname: &PrincipalName, realm: &str, service: Option<&str>) {
     }
 }
 
-/// MIT `krb5_init_creds_set_keytab` (`lib/krb5/krb/gic_keytab.c:176-232`): a keytab whose
-/// entries cannot be listed is traced, as `errno` with the keytab's message.
 pub fn keytab_lookup_failed(e: &std::io::Error, path: &std::path::Path) {
     if !trace::enabled() {
         return;
@@ -61,10 +49,6 @@ pub fn keytab_lookup_failed(e: &std::io::Error, path: &std::path::Path) {
     trace::init_creds_keytab_lookup_failed(code, msg.as_deref());
 }
 
-/// MIT `krb5int_fast_as_armor` (`lib/krb5/krb/fast.c:171-221`): the armor cache is named, its
-/// `fast_avail` entry for the realm's TGS read, and FAST chosen when it is there.
-/// MIT `fast_armor_ap_request` (`lib/krb5/krb/fast.c:52-108`): the armor TGT is then got from that
-/// cache as a credentials request.
 pub fn fast_armor(
     ctx: &ClientContext,
     cc: &crate::ArmorCcache,
@@ -109,8 +93,6 @@ pub fn fast_armor(
     retrieve(&cache, Some(&me), &server, true);
 }
 
-/// MIT `krb5_tkt_creds_init` (`lib/krb5/krb/get_creds.c:1094-1162`): a credentials request is
-/// traced with its client, server and cache, then reads the cache's start realm.
 pub fn tkt_creds_begin(cache: &OpenCache, me: &Princ, server: &Princ) {
     if !trace::enabled() {
         return;
@@ -132,9 +114,6 @@ pub fn tkt_creds_begin(cache: &OpenCache, me: &Princ, server: &Princ) {
     );
 }
 
-/// MIT `krb5_cc_retrieve_cred` (`lib/krb5/ccache/ccfns.c:86-112`): a cache lookup is traced with
-/// its result, the cache's own message for a credential it does not hold; no client is a lookup
-/// that matches any.
 pub fn retrieve(cache: &OpenCache, client: Option<&Princ>, server: &Princ, found: bool) {
     if !trace::enabled() {
         return;
@@ -154,7 +133,6 @@ pub fn retrieve(cache: &OpenCache, client: Option<&Princ>, server: &Princ, found
     );
 }
 
-/// MIT `krb5_cc_retrieve_cred` (`lib/krb5/ccache/ccfns.c:103-110`): the lookup again with the client's realm for a server in the referral realm, traced with its result.
 pub fn retrieve_ref(cache: &OpenCache, client: &Princ, server: &Princ, found: bool) {
     if !trace::enabled() {
         return;
@@ -168,14 +146,12 @@ pub fn retrieve_ref(cache: &OpenCache, client: &Princ, server: &Princ, found: bo
     trace::cc_retrieve_ref(Some(princ(client)), princ(server), code, msg);
 }
 
-/// MIT `begin` (`lib/krb5/krb/get_creds.c:1076-1080`): a server in the referral realm starts in the start realm, traced with that realm.
 pub fn referral_realm(server: &Princ) {
     if trace::enabled() {
         trace::tkt_creds_referral_realm(princ(server));
     }
 }
 
-/// [`retrieve`] of the lookup whose result is `found`, which is handed back.
 #[must_use]
 pub fn retrieved<'c>(
     cache: &OpenCache,
@@ -187,7 +163,6 @@ pub fn retrieved<'c>(
     found
 }
 
-/// The cache's TGT for `realm`, as the lookups below see it.
 fn cached_tgt<'c>(cache: &'c OpenCache, realm: &str) -> Option<&'c CcacheCred> {
     cache
         .cc
@@ -196,9 +171,7 @@ fn cached_tgt<'c>(cache: &'c OpenCache, realm: &str) -> Option<&'c CcacheCred> {
         .find(|c| c.server.1.is_krbtgt_for(realm))
 }
 
-/// MIT `begin_get_tgt` (`lib/krb5/krb/get_creds.c:986-1031`): for a service in another realm, a
-/// cached TGT for that realm is looked for first; otherwise the client realm's TGT is looked up
-/// and traced as the one the request starts with.
+// MIT begin_get_tgt; see docs/parity/b1-client.md
 pub fn tgt_for(cache: &OpenCache, srealm: &str) {
     if !trace::enabled() {
         return;
@@ -226,8 +199,7 @@ pub fn tgt_for(cache: &OpenCache, srealm: &str) {
     }
 }
 
-/// MIT `krb5_get_self_cred_from_kdc` (`lib/krb5/krb/s4u_creds.c:419-645`): the TGT an S4U request
-/// presents is got with `krb5_get_credentials` from the cache, traced as such a request.
+// MIT `krb5_get_self_cred_from_kdc` (`lib/krb5/krb/s4u_creds.c:419-645`): the TGT an S4U request
 pub fn tgt_creds(cache: &OpenCache, srealm: &str) {
     if !trace::enabled() {
         return;
@@ -240,8 +212,6 @@ pub fn tgt_creds(cache: &OpenCache, srealm: &str) {
     retrieve(cache, Some(&me), &tgt, cached_tgt(cache, srealm).is_some());
 }
 
-/// MIT `k5_get_proxy_cred_from_kdc` (`lib/krb5/krb/s4u_creds.c:1147-1192`): an S4U2Proxy
-/// credential is looked up in the cache for any client, then the TGT is got as for S4U2Self.
 pub fn proxy_lookup(cache: &OpenCache, server: &Princ, found: bool, srealm: &str) {
     retrieve(cache, None, server, found);
     if !found {
@@ -249,15 +219,13 @@ pub fn proxy_lookup(cache: &OpenCache, server: &Princ, found: bool, srealm: &str
     }
 }
 
-/// MIT `krb5_cc_store_cred` (`lib/krb5/ccache/ccfns.c:80-85`): a credential stored in the cache.
+// MIT `krb5_cc_store_cred` (`lib/krb5/ccache/ccfns.c:80-85`): a credential stored in the cache.
 pub fn store(ctx: &ClientContext, spec: &CcSpec, cred: &CcacheCred) {
     if trace::enabled() {
         trace::store_creds(&ccname(ctx, spec), std::slice::from_ref(cred));
     }
 }
 
-/// MIT `krb5_cc_cache_match` (`lib/krb5/ccache/cccursor.c:183-219`): the match is traced with its
-/// result, a principal no cache holds under MIT's message for it.
 pub fn cache_match(client: &Princ, found: bool) {
     if !trace::enabled() {
         return;

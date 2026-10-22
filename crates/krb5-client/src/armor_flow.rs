@@ -1,7 +1,3 @@
-//! P6g r5: armor is armed on the first AS-REQ only when the cache has `fast_avail`.
-//! Otherwise the first request is unarmored, a KDC error carrying PA-FX-FAST restarts
-//! with armor, and a cache that cannot be read then fails with MIT's prefixed text.
-
 use std::io::{Read as _, Write as _};
 use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::sync::{Arc, Mutex};

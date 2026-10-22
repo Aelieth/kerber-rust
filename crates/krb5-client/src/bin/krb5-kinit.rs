@@ -1,11 +1,3 @@
-//! MIT `kinit`: obtain and cache a ticket-granting ticket, or renew or validate the cached one.
-//!
-//! Usage: `kinit [-V] [-l lifetime] [-s start_time] [-r renewable_life] [-f | -F] [-p | -P] [-n]
-//! [-a | -A] [-C] [-E] [-v] [-R] [-k [-i|-t keytab_file]] [-c cachename] [-S service_name]
-//! [-T ticket_armor_cache] [-I input_ccache] [--request-pac | --no-request-pac]
-//! [-X <attribute>[=<value>]] [principal]`. A `test-hooks` build also takes the gates' options and
-//! prints the gates' log lines and an `ok` line on stdout.
-
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
@@ -38,7 +30,6 @@ use krb5_types::PrincipalName;
 use zeroize::Zeroize;
 
 fn main() {
-    // MIT `main` (`clients/kinit/kinit.c:855-861`): the locale comes from the environment first.
     krb5_types::timestamp::setlocale();
     #[cfg(feature = "test-hooks")]
     gate::init_logging();
@@ -76,30 +67,17 @@ fn main() {
     std::process::exit(i32::from(!authed));
 }
 
-/// What `k5_begin` chose.
 struct K5 {
-    /// The program's context, made at start.
     ctx: ClientContext,
-    /// The client.
     me: Princ,
-    /// Its unparsed name.
     name: String,
-    /// The cache the credentials go to.
     out: Cache,
-    /// The name they are written under ([`store_spec`]).
     out_spec: CcSpec,
-    /// Whether that cache becomes its collection's primary.
     switch_to_cache: bool,
-    /// `-I`, read once.
     in_cc: Option<FileCcache>,
 }
 
-/// MIT `k5_begin` (`kinit.c:413-605`): the output cache (`-c`, else the default cache) and the
-/// client: the argument, the anonymous principal, the client keytab's first principal (`-k -i`),
-/// the host principal (`-k`), the output cache's principal, the default cache's principal, else
-/// the login name. When the default cache's type has a collection, the client's own cache in it
-/// is used, else a new one when the default cache holds another principal; either becomes the
-/// primary once the credentials are stored.
+// MIT `k5_begin` (`kinit.c:413-605`): the output cache (`-c`, else the default cache) and the
 fn k5_begin(prog: &str, opts: &KinitArgs) -> Option<K5> {
     let fail = |e: &Krb5Error, doing: &str| {
         eprintln!("{prog}: {e} {doing}");
@@ -234,10 +212,7 @@ fn k5_begin(prog: &str, opts: &KinitArgs) -> Option<K5> {
         (None, None) => return None,
     };
     let out_spec = out_spec.unwrap_or_else(|| out.spec());
-    // MIT `k5_begin` (`kinit.c:575-580`): resolving the input cache fails kinit. A name that
-    // resolves is used even when the file is not there yet.
     // MIT `read_allowed_preauth_type` (`get_in_tkt.c:743-745`): a `pa_type` read that fails
-    // leaves the allowed type unset, and kinit continues.
     let in_cc = match &opts.in_ccache {
         None => None,
         Some(n) => match armor_ccache_spec(n) {
@@ -265,7 +240,6 @@ fn k5_begin(prog: &str, opts: &KinitArgs) -> Option<K5> {
     })
 }
 
-/// `-c`, or in a `test-hooks` build the gates' positional cache.
 fn out_cache_name(opts: &KinitArgs) -> Option<String> {
     #[cfg(feature = "test-hooks")]
     if opts.ccache.is_none() {
@@ -274,7 +248,6 @@ fn out_cache_name(opts: &KinitArgs) -> Option<String> {
     opts.ccache.clone()
 }
 
-/// MIT `k5_kt_get_principal` of `krb5_kt_client_default`: the client keytab's first principal.
 fn client_keytab_principal(ctx: &ClientContext) -> Result<Princ, (Krb5Error, &'static str)> {
     let resolving = "When resolving the default client keytab";
     let determining = "When determining client principal name from keytab";
@@ -301,8 +274,6 @@ fn client_keytab_principal(ctx: &ClientContext) -> Result<Princ, (Krb5Error, &'s
         })
 }
 
-/// MIT `krb5_sname_to_principal(NULL, NULL, KRB5_NT_SRV_HST)`: `host/<this host, lowercased>` in
-/// the host's realm (`[domain_realm]`), else the default realm.
 fn default_host_principal(ctx: &ClientContext) -> Princ {
     let host = nix::unistd::gethostname()
         .map(|h| h.to_string_lossy().to_ascii_lowercase())
@@ -319,7 +290,7 @@ fn default_host_principal(ctx: &ClientContext) -> Princ {
     )
 }
 
-/// MIT `get_name_from_os` (`kinit.c:47-54`): the login name of the real user.
+// MIT `get_name_from_os` (`kinit.c:47-54`): the login name of the real user.
 fn os_user_name() -> Option<String> {
     nix::unistd::User::from_uid(nix::unistd::Uid::current())
         .ok()
@@ -327,10 +298,6 @@ fn os_user_name() -> Option<String> {
         .map(|u| u.name)
 }
 
-/// MIT `k5_kinit` (`kinit.c:638-852`): initial credentials with a password or keytab, written to
-/// the output cache; or the cache's TGT renewed or validated, the cache then holding it alone.
-/// A wrong password is "Password incorrect while \<doing\>". The output cache becomes the primary
-/// when `k5_begin` chose so.
 fn k5_kinit(prog: &str, opts: &KinitArgs, k5: &K5) -> bool {
     let doing = match opts.action {
         KinitAction::InitPw | KinitAction::InitKt => "getting initial credentials",
@@ -362,18 +329,12 @@ fn k5_kinit(prog: &str, opts: &KinitArgs, k5: &K5) -> bool {
     true
 }
 
-/// Why `k5_kinit` failed.
 enum Failure {
-    /// A wrong password.
     PasswordIncorrect,
-    /// An error to report with what was being done.
     Error(Krb5Error),
-    /// Already reported.
     Reported,
 }
 
-/// MIT `k5_kinit` (`kinit.c:797-823`): a renewed or validated credential replaces the cache's
-/// contents under the client (the credential's own with `-C`).
 fn valrenew(prog: &str, opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
     let cred = get_valrenewed_creds(
         &k5.ctx,
@@ -392,8 +353,6 @@ fn valrenew(prog: &str, opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
         eprintln!("Initialized cache");
     }
     let cc = FileCcache::new(cprinc, vec![cred]);
-    // MIT `k5_kinit` (`kinit.c:797-823`): the credential goes through a MEMORY cache moved into
-    // the output cache, traced as `write_out_ccache` traces it.
     if krb5_protocol::trace::enabled() {
         krb5_protocol::trace::write_out_ccache(&k5.out.full_name(), &cc);
     }
@@ -411,15 +370,11 @@ fn valrenew(prog: &str, opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
     Ok(())
 }
 
-/// `-T` is a ccache name, resolved the way `-c` resolves one.
-/// MIT `k5_kinit` (`clients/kinit/kinit.c:684-686`): passes `-T` to `krb5_get_init_creds_opt_set_fast_ccache_name`.
-/// MIT `krb5_get_init_creds_opt_set_fast_ccache_name` (`lib/krb5/krb/gic_opt.c:279-292`): stores that name for resolution.
+// MIT `krb5_get_init_creds_opt_set_fast_ccache_name` (`lib/krb5/krb/gic_opt.c:279-292`): stores that name for resolution.
 fn armor_ccache_spec(name: &str) -> Result<CcSpec, Krb5Error> {
     parse_ccspec(name).map_err(|e| Krb5Error::from_ccname(&e))
 }
 
-/// MIT `k5_kinit` (`kinit.c:654-795`): the initial-credentials options, the keytab, then
-/// `krb5_get_init_creds_password` or `krb5_get_init_creds_keytab` with the output cache.
 #[expect(clippy::too_many_lines, reason = "one MIT function, kept whole")]
 fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
     let realm = String::from_utf8_lossy(k5.me.0.as_bytes()).into_owned();
@@ -438,7 +393,6 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
         allowed_preauth_type: None,
         pa_config_in: None,
     };
-    // MIT `k5_kinit` (`clients/kinit/kinit.c:674-683`): `-a` sets `krb5_os_localaddr`'s list as the request's, which fails the command when it cannot be read, and `-A` sets none.
     // MIT `krb5_init_creds_init` (`lib/krb5/krb/get_in_tkt.c:998-1005`): with neither, `noaddresses` absent or true sends none, and false sends that list.
     match opts.addresses {
         Some(true) => match krb5_protocol::os_localaddr() {
@@ -479,8 +433,6 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
     } else {
         None
     };
-    // MIT `k5_kinit` (`clients/kinit/kinit.c:723-736`): each `-X` option goes to the preauth
-    // modules in order, one they refuse ends the command, and `-V` names each one set.
     // MIT `handle_gic_opt` (`plugins/preauth/pkinit/pkinit_clnt.c:1307-1335`): the pkinit module refuses a second `X509_user_identity`.
     let pkinit = krb5_protocol::clpreauth_loaded(&k5.ctx.profile, "pkinit");
     let mut identity = false;
@@ -499,11 +451,8 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
         }
     }
     // MIT `kinit_prompter` (`clients/kinit/kinit.c:622-636`): the prompter is there for any
-    // mechanism, so a PKINIT that cannot run can go on to the password.
     let pw_auth = !(opts.keytab || opts.anonymous);
     let given = if pw_auth { env_password() } else { None };
-    // MIT `kinit_prompter` (`kinit.c:629-633`): a password prompt is noted; the gates' password
-    // stands for one.
     let prompted = std::cell::Cell::new(given.is_some());
     let mut read_password = || {
         prompted.set(true);
@@ -518,18 +467,14 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
     };
     let new_password = env_new_password();
     // MIT `krb5_get_init_creds_password` (`gic_pwd.c:238-263`): the banner, then
-    // `Enter new password` / `Enter it again`.
-    // MIT `kinit_prompter` (`kinit.c:621-636`): those prompts go through this prompter,
-    // which hands them to `krb5_prompter_posix`.
     let prompter = |banner: &str| -> PromptReply {
-        // MIT `krb5_prompter_posix` (`prompter.c:54-54`): prints the banner on stdout.
+        // MIT krb5_prompter_posix; see docs/parity/b1-client.md
         println!("{banner}");
         let a = read_prompt_line("Enter new password")?;
         let b = read_prompt_line("Enter it again")?;
         Ok((a, b))
     };
     let key_exp_notice = |banner: &str| eprintln!("{banner}");
-    // MIT `kinit_prompter` (`kinit.c:622-636`): a preauth module's prompts go to `krb5_prompter_posix` with the banner above and a reply buffer of 1024; only a password prompt sets `pwprompt`, so `prompted` stays as it is.
     let preauth_prompt = |p: &krb5_protocol::PreauthPrompt<'_>| {
         krb5_cli::Prompter::stdio().hidden_with(p.banner, p.prompt, 1024)
     };
@@ -597,7 +542,6 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
     }
 }
 
-/// MIT's message for a failed initial-credentials request.
 fn init_error(
     e: &(dyn std::error::Error + Send + Sync + 'static),
     k5: &K5,
@@ -612,7 +556,6 @@ fn init_error(
     Krb5Error::new(Code::Other, e.to_string())
 }
 
-/// The KDC of the client's realm, or the gates' KDC host in a `test-hooks` build.
 fn kdc(ctx: &ClientContext, opts: &KinitArgs, realm: &str) -> Result<KdcAddr, Krb5Error> {
     #[cfg(feature = "test-hooks")]
     if let Some(host) = &opts.gate.kdc_host {
@@ -622,8 +565,6 @@ fn kdc(ctx: &ClientContext, opts: &KinitArgs, realm: &str) -> Result<KdcAddr, Kr
     kdc_for_realm(&ctx.profile, realm)
 }
 
-/// `-S`: the initial ticket's service, MIT's `in_tkt_service`. A `test-hooks` build keeps the
-/// gates' meaning instead, [`gate_service`].
 fn in_tkt_service(opts: &KinitArgs) -> Option<&str> {
     if cfg!(feature = "test-hooks") {
         None
@@ -632,8 +573,6 @@ fn in_tkt_service(opts: &KinitArgs) -> Option<&str> {
     }
 }
 
-/// In a `test-hooks` build, the service the gates fetch with a TGS-REQ after the TGT: `-S`, else
-/// the positional one.
 fn gate_service(opts: &KinitArgs) -> Option<String> {
     #[cfg(feature = "test-hooks")]
     return opts
@@ -647,7 +586,6 @@ fn gate_service(opts: &KinitArgs) -> Option<String> {
     }
 }
 
-/// The gates' `--spake`, in a `test-hooks` build.
 const fn want_spake(opts: &KinitArgs) -> bool {
     #[cfg(feature = "test-hooks")]
     return opts.gate.want_spake;
@@ -658,13 +596,11 @@ const fn want_spake(opts: &KinitArgs) -> bool {
     }
 }
 
-/// The gates' pieces, in a `test-hooks` build only.
 #[cfg(feature = "test-hooks")]
 mod gate {
     use krb5_client::cli::KinitArgs;
     use krb5_protocol::KdcAddr;
 
-    /// The gates read kinit's structured log lines on stdout.
     pub(super) fn init_logging() {
         let _ = tracing_subscriber::fmt()
             .json()
@@ -672,7 +608,6 @@ mod gate {
             .try_init();
     }
 
-    /// `--spake` with `-T` or PKINIT is refused, exit 2.
     pub(super) fn refuse(opts: &KinitArgs) -> Option<i32> {
         if opts.gate.want_spake && (opts.armor_ccache.is_some() || opts.pkinit_identity.is_some()) {
             eprintln!("--spake cannot be combined with --armor-ccache or --pkinit");
@@ -681,7 +616,6 @@ mod gate {
         None
     }
 
-    /// `host[:port]`.
     pub(super) fn parse_host(host: &str) -> KdcAddr {
         if let Some((h, p)) = host.rsplit_once(':')
             && let Ok(port) = p.parse()

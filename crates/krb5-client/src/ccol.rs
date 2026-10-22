@@ -1,7 +1,3 @@
-//! MIT's cache collection: a cache resolved to its concrete name, the collection of the default
-//! name's type (its primary first), the match by principal, a new cache in the collection, and
-//! the switch of the primary.
-
 use std::path::{Path, PathBuf};
 
 use krb5_config::{CcSpec, ClientContext};
@@ -9,21 +5,15 @@ use krb5_config::{CcSpec, ClientContext};
 use crate::creds::{Princ, princ_eq};
 use crate::errmsg::{Code, Krb5Error};
 
-/// One concrete cache.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Cache {
-    /// A FILE cache.
     File(PathBuf),
-    /// A DIR collection's subsidiary file.
     Dir(PathBuf),
-    /// A KCM cache, by name.
     Kcm(String),
-    /// A MEMORY cache, by name.
     Memory(String),
 }
 
 impl Cache {
-    /// MIT `krb5_cc_get_type`.
     #[must_use]
     pub const fn type_name(&self) -> &'static str {
         match self {
@@ -34,8 +24,6 @@ impl Cache {
         }
     }
 
-    /// MIT `krb5_cc_get_name`: a FILE cache's path, a DIR subsidiary's `:path`, a KCM or MEMORY
-    /// cache's name.
     #[must_use]
     pub fn name(&self) -> String {
         match self {
@@ -45,13 +33,11 @@ impl Cache {
         }
     }
 
-    /// MIT `krb5_cc_get_full_name`: `TYPE:name`.
     #[must_use]
     pub fn full_name(&self) -> String {
         format!("{}:{}", self.type_name(), self.name())
     }
 
-    /// The name the cache functions of this crate take.
     #[must_use]
     pub fn spec(&self) -> CcSpec {
         match self {
@@ -62,12 +48,6 @@ impl Cache {
         }
     }
 
-    /// MIT `krb5_cc_get_principal`: the default principal of an initialized cache.
-    ///
-    /// # Errors
-    ///
-    /// [`Krb5Error`] `KRB5_FCC_NOFILE` for a cache that does not exist or is not initialized,
-    /// with MIT's message for its type, or the read error.
     pub fn principal(&self, ctx: &ClientContext) -> Result<Princ, Krb5Error> {
         if let Self::Kcm(n) = self {
             return krb5_protocol::kcm_principal(&ctx.profile, n).map_err(|e| {
@@ -87,12 +67,6 @@ impl Cache {
             .map_err(|e| crate::cache_read_error(ctx, &spec, e.as_ref()))
     }
 
-    /// MIT `krb5_cc_destroy`.
-    ///
-    /// # Errors
-    ///
-    /// [`Krb5Error`] `KRB5_FCC_NOFILE` "No credentials cache found" when there is no such cache,
-    /// or the error of the removal.
     pub fn destroy(&self, ctx: &ClientContext) -> Result<(), Krb5Error> {
         // MIT `krb5_cc_destroy` (`lib/krb5/ccache/ccfns.c:66-71`): traced before the destroy.
         if krb5_protocol::trace::enabled() {
@@ -111,21 +85,15 @@ impl Cache {
         })
     }
 
-    /// MIT `krb5_cc_support_switch` (`ccbase.c:457-465`): a DIR or KCM cache can become its
-    /// collection's primary.
+    // MIT `krb5_cc_support_switch` (`ccbase.c:457-465`): a DIR or KCM cache can become its
     #[must_use]
     pub const fn supports_switch(&self) -> bool {
         matches!(self, Self::Dir(_) | Self::Kcm(_))
     }
 
-    /// MIT `krb5_cc_switch` (`ccfns.c:294-300`): make this cache its collection's primary; a type
-    /// that cannot switch does nothing.
-    /// MIT `dcc_switch_to` (`cc_dir.c:719-741`): a DIR collection's `primary` file names it.
-    /// MIT `kcm_switch_to` (`cc_kcm.c:1330-1340`): SET_DEFAULT_CACHE.
-    ///
-    /// # Errors
-    ///
-    /// [`Krb5Error`] with the error of the `primary` write or the KCM request.
+    // MIT krb5_cc_switch; see docs/parity/b1-client.md
+    // MIT `dcc_switch_to` (`cc_dir.c:719-741`): a DIR collection's `primary` file names it.
+    // MIT `kcm_switch_to` (`cc_kcm.c:1330-1340`): SET_DEFAULT_CACHE.
     pub fn switch_to(&self, ctx: &ClientContext) -> Result<(), Krb5Error> {
         let other = |e: std::io::Error| Krb5Error::new(Code::Other, e.to_string());
         match self {
@@ -138,17 +106,8 @@ impl Cache {
     }
 }
 
-/// MIT `krb5_cc_resolve`: the concrete cache a name stands for.
-/// MIT `dcc_resolve` (`cc_dir.c:331-385`): a DIR collection name stands for its primary, `tkt`
-/// when there is no `primary` file. MIT makes a missing collection there; a resolve here is a
-/// read, which leaves it missing ([`crate::dir_read_path`]), and the store makes it.
-/// MIT `kcm_resolve` (`cc_kcm.c:740-768`): a KCM name resolves only with a KCM daemon to ask,
-/// and the empty name stands for the collection's primary.
-///
-/// # Errors
-///
-/// [`Krb5Error`] when a DIR collection cannot be read, or the KCM daemon cannot be asked
-/// (`KRB5_KCM_NO_SERVER` "No KCM server found" when there is none).
+// MIT `dcc_resolve` (`cc_dir.c:331-385`): a DIR collection name stands for its primary, `tkt`
+// MIT `kcm_resolve` (`cc_kcm.c:740-768`): a KCM name resolves only with a KCM daemon to ask,
 pub fn resolve(ctx: &ClientContext, spec: &CcSpec) -> Result<Cache, Krb5Error> {
     let other = |e: std::io::Error| Krb5Error::new(Code::Other, e.to_string());
     let kcm = |e: std::io::Error| Krb5Error::from_kcm(&e);
@@ -166,9 +125,6 @@ pub fn resolve(ctx: &ClientContext, spec: &CcSpec) -> Result<Cache, Krb5Error> {
     })
 }
 
-/// The name kinit writes a cache it resolved from `name` under: a DIR collection's own name, so
-/// that the store makes a missing collection, the directory and a `primary` naming `tkt`, as MIT
-/// makes it on the resolve; any other cache under its own name.
 #[must_use]
 pub fn store_spec(name: &CcSpec, cache: &Cache) -> CcSpec {
     match name {
@@ -177,18 +133,10 @@ pub fn store_spec(name: &CcSpec, cache: &Cache) -> CcSpec {
     }
 }
 
-/// MIT `krb5_cccol_cursor_next` (`cccursor.c:83-124`): the caches of the collection the default
-/// name `default` belongs to, its primary first.
-/// MIT `fcc_ptcursor_next` (`cc_file.c:1205-1241`): a FILE default is a collection of itself,
-/// when its file exists.
-/// MIT `dcc_ptcursor_next` (`cc_dir.c:634-677`): a DIR collection lists the primary, when its file
-/// exists, then every other `tkt*` file; a `DIR::` subsidiary default is a collection of itself.
-/// MIT `kcm_ptcursor_next` (`cc_kcm.c:1210-1263`): a KCM collection lists the primary, when it is
-/// initialized, then every other cache; a named KCM default is a collection of itself.
-///
-/// # Errors
-///
-/// [`Krb5Error`] when a DIR collection cannot be listed or the KCM daemon cannot be asked.
+// MIT `krb5_cccol_cursor_next` (`cccursor.c:83-124`): the caches of the collection the default
+// MIT `fcc_ptcursor_next` (`cc_file.c:1205-1241`): a FILE default is a collection of itself,
+// MIT `dcc_ptcursor_next` (`cc_dir.c:634-677`): a DIR collection lists the primary, when its file
+// MIT `kcm_ptcursor_next` (`cc_kcm.c:1210-1263`): a KCM collection lists the primary, when it is
 pub fn collection(ctx: &ClientContext, default: &CcSpec) -> Result<Vec<Cache>, Krb5Error> {
     let other = |e: std::io::Error| Krb5Error::new(Code::Other, e.to_string());
     match default {
@@ -222,7 +170,6 @@ pub fn collection(ctx: &ClientContext, default: &CcSpec) -> Result<Vec<Cache>, K
         }
         CcSpec::Kcm(n) if !n.is_empty() => {
             // MIT `kcm_ptcursor_new` (`cc_kcm.c:1155-1157`): the cursor connects first, for a
-            // named default too.
             krb5_protocol::kcm_reachable(&ctx.profile).map_err(|e| Krb5Error::from_kcm(&e))?;
             Ok(if krb5_protocol::kcm_principal(&ctx.profile, n).is_ok() {
                 vec![Cache::Kcm(n.clone())]
@@ -247,14 +194,8 @@ pub fn collection(ctx: &ClientContext, default: &CcSpec) -> Result<Vec<Cache>, K
     }
 }
 
-/// MIT `krb5_cc_cache_match` (`cccursor.c:183-219`): the first cache of the collection whose
-/// default principal is `princ`.
-/// MIT `match_caches` (`cccursor.c:145-181`): a cache that is not initialized is passed over.
-///
-/// # Errors
-///
-/// [`Krb5Error`] `KRB5_CC_NOTFOUND` "Matching credential not found" when no cache is for `princ`,
-/// or the collection's error.
+// MIT `krb5_cc_cache_match` (`cccursor.c:183-219`): the first cache of the collection whose
+// MIT `match_caches` (`cccursor.c:145-181`): a cache that is not initialized is passed over.
 pub fn cache_match(
     ctx: &ClientContext,
     default: &CcSpec,
@@ -267,18 +208,11 @@ pub fn cache_match(
     found.ok_or_else(|| Krb5Error::of(Code::CcNotfound))
 }
 
-/// MIT `krb5_cc_new_unique` (`ccbase.c:289-307`): a new cache in the collection of `default`.
-/// MIT `dcc_gen_new` (`cc_dir.c:387-429`): only a DIR collection name (not a `DIR::` subsidiary)
-/// can make one.
-/// MIT `kcm_gen_new` (`cc_kcm.c:795-822`): GEN_NEW names it.
-///
-/// # Errors
-///
-/// [`Krb5Error`] `KRB5_DCC_CANNOT_CREATE` for a default that is not a DIR collection, or the error
-/// of the file creation or the KCM request.
+// MIT `krb5_cc_new_unique` (`ccbase.c:289-307`): a new cache in the collection of `default`.
+// MIT `dcc_gen_new` (`cc_dir.c:387-429`): only a DIR collection name (not a `DIR::` subsidiary)
+// MIT `kcm_gen_new` (`cc_kcm.c:795-822`): GEN_NEW names it.
 pub fn new_unique(ctx: &ClientContext, default: &CcSpec) -> Result<Cache, Krb5Error> {
     let other = |e: std::io::Error| Krb5Error::new(Code::Other, e.to_string());
-    // MIT `krb5_cc_new_unique` (`lib/krb5/ccache/ccbase.c:289-307`): traced with the type.
     krb5_protocol::trace::cc_new_unique(match default {
         CcSpec::File(_) => "FILE",
         CcSpec::Dir(_) => "DIR",

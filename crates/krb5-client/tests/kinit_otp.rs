@@ -1,13 +1,3 @@
-//! red at tree bd74009e (kinit has no OTP prompts there: it asks for the password); the tests of
-//! the password per mechanism (the EOF, refused-support, SIGINT and reuse tests, and the block
-//! after `the_trace_has_mits_otp_lines_in_mits_order`) red at tree bb1a2afc (one password read,
-//! whose failure ended the exchange)
-//!
-//! `kinit -T armor` against an `otp` principal: the prompt text, the OTP login, the ccache
-//! config, and a wrong value being "Preauthentication failed" with no fallback to the password.
-//! MIT `kinit_prompter` (`clients/kinit/kinit.c:622-635`): only a password prompt is noted, so an OTP prompt leaves `pwprompt` false.
-//! MIT `k5_kinit` (`clients/kinit/kinit.c:785-793`): so a wrong value is "Preauthentication failed", not "Password incorrect".
-
 use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -50,7 +40,6 @@ fn serve(store: PrincipalStore) -> String {
     serve_with(store, None)
 }
 
-/// [`serve`], with each reply passed through `rewrite` before the client sees it.
 fn serve_with(store: PrincipalStore, rewrite: Option<fn(Vec<u8>) -> Vec<u8>>) -> String {
     let rewrite = rewrite.unwrap_or(|reply| reply);
     let (udp, tcp) = krb5_testkit::loopback_udp_tcp();
@@ -107,7 +96,6 @@ struct Run {
     stderr: String,
 }
 
-/// `kinit` with `realm_extra` lines in the realm's block of krb5.conf.
 fn kinit_in(
     kdc: &str,
     dir: &std::path::Path,
@@ -126,7 +114,6 @@ fn kinit_in(
     finish_kinit(child)
 }
 
-/// `krb5-kinit [args]` started, its stdin a pipe the caller holds.
 fn spawn_kinit(
     kdc: &str,
     dir: &std::path::Path,
@@ -156,7 +143,6 @@ fn spawn_kinit(
         .unwrap()
 }
 
-/// What a finished `krb5-kinit` left.
 fn finish_kinit(child: std::process::Child) -> Run {
     let out = child.wait_with_output().unwrap();
     Run {
@@ -166,27 +152,18 @@ fn finish_kinit(child: std::process::Child) -> Run {
     }
 }
 
-/// A `test-hooks` build of kinit adds its own output: one JSON object per structured log line, and
-/// an `ok tgt=` line on success. The shipped binary writes neither, so the helper drops them, and a
-/// test compares what the prompts and the reply were.
 fn without_test_hook_output(text: &str) -> String {
     text.split_inclusive('\n')
         .filter(|line| !line.starts_with("{\"timestamp\"") && !line.starts_with("ok tgt="))
         .collect()
 }
 
-/// How the test KDC offers SPAKE.
 #[derive(Clone, Copy)]
 enum Spake {
-    /// edwards25519 is permitted and is the optimistic challenge group: the challenge rides in the
-    /// hint, as on the lab's KDC.
     Challenge,
-    /// No group: no PA-SPAKE in the hint.
     Off,
 }
 
-/// A served realm whose KDC offers SPAKE as `spake`, with the `otp` attribute on the user if `otp`,
-/// and every reply passed through `rewrite`.
 fn spake_realm(spake: Spake, otp: bool, rewrite: Option<fn(Vec<u8>) -> Vec<u8>>) -> String {
     let _ = verifier();
     let (mut store, _) = bootstrap_documented().unwrap();
@@ -206,14 +183,11 @@ fn spake_realm(spake: Spake, otp: bool, rewrite: Option<fn(Vec<u8>) -> Vec<u8>>)
     serve_with(store, rewrite)
 }
 
-/// The password prompt, and the newline MIT's prompter prints when the read fails.
 const PROMPT: &str = "Password for user@KERBER.TEST: \n";
 const CANT_READ: &str =
     "kinit: Pre-authentication failed: Cannot read password while getting initial credentials\n";
 const CANT_READ_CODE: &str = "-1765328254/Cannot read password";
 
-/// A trace as MIT prints it, one entry per line without the `[pid] time: ` prefix; a password
-/// prompt printed into the same stream is `PROMPT`.
 fn trace_lines(text: &str) -> Vec<String> {
     text.lines()
         .map(|l| {
@@ -226,7 +200,6 @@ fn trace_lines(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// The position of the one line that starts with `needle`.
 fn at(lines: &[String], needle: &str) -> usize {
     let hits: Vec<usize> = lines
         .iter()
@@ -238,16 +211,11 @@ fn at(lines: &[String], needle: &str) -> usize {
     hits[0]
 }
 
-// Encrypted timestamp, which the realm disables (`disable_encrypted_timestamp = true`). It is a
-// module like the others: it traces that it ignores the padata, fails with `KRB5_PREAUTH_FAILED`
-// and its message, and the walk goes on; what the exchange reports is the first failure.
-// MIT `encts_process` (`lib/krb5/krb/preauth_encts.c:68-73`): `TRACE_PREAUTH_ENC_TS_DISABLED`, then `KRB5_PREAUTH_FAILED` "Encrypted timestamp is disabled".
-// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:703-724`): the first failure of a real type is saved and reported wrapped.
+// MIT encts_process; see docs/parity/b1-client-preauth.md
 
 const ENCTS_OFF: &str = "Ignoring encrypted timestamp because it is disabled";
 const ENCTS_OFF_RETURNED: &str = "Preauth module encrypted_timestamp (2) (real) returned: -1765328174/Encrypted timestamp is disabled";
 
-/// A login with no armor in a realm that disables encrypted timestamp.
 fn disabled_login(kdc: &str, name: &str, stdin: &str) -> (Run, Vec<String>) {
     let dir = scratch_dir(name);
     let out = dir.join("out.cc");
@@ -287,8 +255,6 @@ fn a_disabled_encrypted_timestamp_is_traced_and_fails_its_module() {
 
 #[test]
 fn the_first_failure_is_reported_when_encrypted_timestamp_is_disabled_after_it() {
-    // SPAKE's prompt fails at EOF; the disabled module fails next. MIT keeps the first failure, so
-    // the message is the read's, and the exchange is not a "Password incorrect".
     let kdc = spake_realm(Spake::Challenge, false, None);
     let (r, trace) = disabled_login(&kdc, "kinit-encts-off-after-spake", "");
     assert_eq!(r.code, Some(1), "{} {}", r.stdout, r.stderr);
@@ -305,8 +271,6 @@ fn the_first_failure_is_reported_when_encrypted_timestamp_is_disabled_after_it()
 
 #[test]
 fn a_refused_support_message_is_the_error_when_encrypted_timestamp_is_disabled() {
-    // The default test KDC refuses the client's support message with PREAUTH_FAILED; the disabled
-    // module fails after it and asked for no password, so the refusal is the error and no prompt shows.
     let kdc = otp_realm();
     let (r, trace) = disabled_login(&kdc, "kinit-encts-off-refused", "");
     assert_eq!(r.code, Some(1), "{} {}", r.stdout, r.stderr);

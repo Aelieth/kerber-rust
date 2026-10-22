@@ -1,7 +1,3 @@
-//! MIT `kswitch`: make a cache the primary of its collection.
-//!
-//! Usage: `kswitch {-c cache_name | -p principal}`
-
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
@@ -32,14 +28,12 @@ fn main() {
     }
 }
 
-/// `-c cache_name` or `-p principal`.
 #[derive(Debug, PartialEq, Eq)]
 enum Which {
     Cache(String),
     Principal(String),
 }
 
-/// MIT `usage` (`kswitch.c:38-45`): the usage text, `prog` naming the program.
 fn usage(prog: &str) -> String {
     format!(
         "Usage: {prog} {{-c cache_name | -p principal}}\n\
@@ -48,7 +42,6 @@ fn usage(prog: &str) -> String {
     )
 }
 
-/// MIT `main` (`kswitch.c:61-90`): one of `-c` or `-p`, once, and nothing else.
 fn parse(args: &[String]) -> Result<Which, UsageError> {
     let (each, rest) = getopt_each(args, "c:p:", &[]);
     let mut lines = Vec::new();
@@ -86,8 +79,6 @@ fn parse(args: &[String]) -> Result<Which, UsageError> {
     }
 }
 
-/// MIT `main` (`kswitch.c:92-127`): the library's profile, then the named cache resolved, or the
-/// principal's found in the default collection, and switched to.
 fn run(which: &Which) -> Result<(), (Krb5Error, String)> {
     let ctx = krb5_client::init_context().map_err(|e| (e, "while initializing krb5".to_owned()))?;
     let ctx = &ctx;

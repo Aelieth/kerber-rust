@@ -1,16 +1,3 @@
-//! `kinit`'s expired-password flow runs in MIT's order.
-//! MIT `krb5_get_init_creds_password` (`lib/krb5/krb/gic_pwd.c:205-240`): a typed
-//! `KDC_ERR_KEY_EXP` → the `kadmin/changepw` AS *first*, with the password just typed → only
-//! then the `Enter new password` prompts. So a wrong password on an expired principal is the
-//! password failure and never prompts, and a changepw AS that fails for any other reason is
-//! that error, unprompted.
-//! MIT `k5_kinit` (`kinit.c:785-790`): that password failure is "Password incorrect while
-//! getting initial credentials".
-//! Drives the shipped `krb5-kinit` against an in-process KDC: no new-password prompt comes
-//! before the changepw AS, and the KDC error is matched by its code, not its text.
-//! The password prompt itself comes only once a KDC reply needs the key, so an unknown client is
-//! reported unprompted, and `-S` asks the AS for that service.
-
 use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -24,7 +11,6 @@ use krb5_kdc::{KDB_REQUIRES_PRE_AUTH, KDB_REQUIRES_PWCHANGE, PrincipalStore};
 use krb5_testkit::scratch_dir;
 use krb5_types::PrincipalName;
 
-/// Serve `store` on UDP and TCP at one ephemeral port; returns `host:port`.
 fn serve(store: PrincipalStore) -> String {
     let (udp, tcp) = krb5_testkit::loopback_udp_tcp();
     udp.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
@@ -63,9 +49,7 @@ fn serve(store: PrincipalStore) -> String {
     format!("127.0.0.1:{}", addr.port())
 }
 
-/// `user` set `+needchange` (`KDB_REQUIRES_PWCHANGE`).
-/// MIT `validate_as_request` (`kdc_util.c:762-766`): every AS but the one for
-/// `kadmin/changepw` is KEY_EXP 23 "REQUIRED PWCHANGE".
+// MIT `validate_as_request` (`kdc_util.c:762-766`): every AS but the one for
 fn expired_user_store() -> PrincipalStore {
     let (mut store, _) = bootstrap_documented().unwrap();
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -87,21 +71,15 @@ fn expired_user_store() -> PrincipalStore {
     store
 }
 
-/// Run `krb5-kinit -c cc user@KERBER.TEST` with the realm's KDC at `kdc` in its krb5.conf,
-/// `password` on the first line of stdin and `stdin` after it for any new-password prompt;
-/// returns (exit code, stdout + stderr — prompts and banners go to stdout like
-/// `krb5_prompter_posix`, errors to stderr).
 fn kinit(kdc: &str, password: &str, stdin: &str) -> (Option<i32>, String) {
     kinit_as(kdc, &format!("{TEST_USER}@{TEST_REALM}"), password, stdin)
 }
 
-/// [`kinit`] for `principal`.
 fn kinit_as(kdc: &str, principal: &str, password: &str, stdin: &str) -> (Option<i32>, String) {
     let (code, out, _) = kinit_full(kdc, &[], principal, password, stdin);
     (code, out)
 }
 
-/// [`kinit_as`] with `extra` options before the principal; also returns the cache it wrote.
 fn kinit_full(
     kdc: &str,
     extra: &[&str],
@@ -167,8 +145,6 @@ fn wrong_password_on_an_expired_principal_is_password_incorrect_and_never_prompt
 
 #[test]
 fn changepw_as_failure_is_reported_before_any_prompt() {
-    // No kadmin/changepw principal: the changepw AS is S_PRINCIPAL_UNKNOWN
-    // (7) with the *right* password — reported as such, never prompted.
     let mut store = expired_user_store();
     store.remove_in(&kadmin_changepw(), TEST_REALM).unwrap();
     let kdc = serve(store);
@@ -188,11 +164,6 @@ fn changepw_as_failure_is_reported_before_any_prompt() {
 
 #[test]
 fn wrong_password_without_preauth_is_bad_integrity_password_incorrect() {
-    // MIT's harness principals carry no REQUIRES_PRE_AUTH: the changepw AS
-    // with a wrong password is answered with an AS-REP the client cannot
-    // verify — `krb5_kdc_rep_decrypt_proc` → `KRB5KRB_AP_ERR_BAD_INTEGRITY`
-    // (31).
-    // MIT `k5_kinit` (`kinit.c:787-787`): kinit also reports that error as `Password incorrect`.
     let mut store = expired_user_store();
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let attrs = store.get_name(&user).unwrap().attributes & !KDB_REQUIRES_PRE_AUTH;
@@ -218,8 +189,6 @@ fn wrong_password_without_preauth_is_bad_integrity_password_incorrect() {
         err.contains("Password incorrect while getting initial credentials"),
         "BAD_INTEGRITY must read as Password incorrect: {err}"
     );
-    // The tracing event trail still names the crypto failure; the user
-    // line must not.
     assert!(
         !err.lines()
             .any(|l| l.starts_with("kinit:") && l.contains("integrity check failed")),

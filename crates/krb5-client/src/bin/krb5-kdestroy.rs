@@ -1,7 +1,3 @@
-//! MIT `kdestroy`: destroy a credential cache, a principal's cache, or the whole collection.
-//!
-//! Usage: `kdestroy [-A] [-q] [-c cache_name] [-p princ_name]`
-
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
@@ -36,30 +32,22 @@ fn main() {
     std::process::exit(run(prog, &args));
 }
 
-/// Parsed `kdestroy` argv.
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Args {
-    /// `-A`.
     all: bool,
-    /// `-q`.
     quiet: bool,
-    /// `-c cache_name`.
     cache: Option<String>,
-    /// `-p princ_name`.
     princ: Option<String>,
 }
 
-/// Why an argv is not run.
 #[derive(Debug, PartialEq, Eq)]
 enum Parsed {
-    /// `-4`, after the lines the option loop printed before it.
-    /// MIT `main` (`kdestroy.c:124-126`): `-4` exits at once, after what the loop printed.
+    // MIT main; see docs/parity/b1-client-preauth.md
     Krb4(UsageError),
-    /// A usage error.
     Usage(UsageError),
 }
 
-/// MIT `usage` (`kdestroy.c:49-59`): the usage text, `prog` naming the program.
+// MIT `usage` (`kdestroy.c:49-59`): the usage text, `prog` naming the program.
 fn usage(prog: &str) -> String {
     format!(
         "Usage: {prog} [-A] [-q] [-c cache_name] [-p princ_name]\n\
@@ -70,8 +58,6 @@ fn usage(prog: &str) -> String {
     )
 }
 
-/// MIT `main` (`kdestroy.c:100-146`): the options `54Aqc:p:`, `-c` and `-p` once each, `-A`
-/// without `-p`, and no other argument.
 fn parse(args: &[String]) -> Result<Args, Parsed> {
     let (each, rest) = getopt_each(args, "54Aqc:p:", &[]);
     let mut out = Args::default();
@@ -116,10 +102,6 @@ fn parse(args: &[String]) -> Result<Args, Parsed> {
     Ok(out)
 }
 
-/// MIT `main` (`kdestroy.c:148-229`): `-A` destroys every cache of the collection and exits 0; else
-/// the default cache, or `-p`'s, is destroyed. A cache that does not exist is reported but is not a
-/// failure; any other failure is "Ticket cache NOT destroyed!" and exit 1. A remaining cache in the
-/// collection is warned of.
 fn run(prog: &str, args: &Args) -> i32 {
     let ctx = match krb5_client::init_context() {
         Ok(ctx) => ctx,
@@ -209,8 +191,7 @@ fn run(prog: &str, args: &Args) -> i32 {
     errflg
 }
 
-/// MIT `print_remaining_cc_warning` (`kdestroy.c:62-83`): a cache left in the collection is
-/// warned of.
+// MIT `print_remaining_cc_warning` (`kdestroy.c:62-83`): a cache left in the collection is
 fn remaining_cc_warning(ctx: &ClientContext, prog: &str, default: &CcSpec) -> i32 {
     match collection(ctx, default) {
         Ok(caches) => {

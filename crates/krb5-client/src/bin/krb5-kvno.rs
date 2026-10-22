@@ -1,11 +1,3 @@
-//! MIT `kvno`: get service tickets and print their key version numbers.
-//!
-//! Usage: `kvno [-c ccache] [-e etype] [-k keytab] [-q] [-u | -S sname] [[{-I | -U} for_user
-//! [-P]] | --u2u ccache] [--cached-only] [--no-store] [--out-cache ccache] service1 service2 ...`
-//! (MIT's `-F cert_file` is not supported). A `test-hooks` build also takes the gates'
-//! options: a KDC host before the services, `--disable-transited-check`, and `--body-realm`
-//! with `--renew` or `--renew-ticket` for one request with no referral chase.
-
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![allow(
@@ -27,7 +19,6 @@ use krb5_config::{ClientContext, resolve_ccspec};
 use krb5_types::{PrincipalName, Ticket};
 
 fn main() {
-    // MIT `main` (`clients/kvno/kvno.c:65-84`): the locale comes from the environment first.
     krb5_types::timestamp::setlocale();
     let argv: Vec<String> = std::env::args().collect();
     let argv0 = argv.first().map_or("kvno", String::as_str);
@@ -45,9 +36,7 @@ fn main() {
     std::process::exit(do_v5_kvno(prog, &args));
 }
 
-/// MIT `do_v5_kvno` (`kvno.c:452-609`): the options are checked and the caches and keytab named
-/// before any request; each service is then asked for in turn, a failed one counted, and the
-/// output cache written only when none failed.
+// MIT `do_v5_kvno` (`kvno.c:452-609`): the options are checked and the caches and keytab named
 fn do_v5_kvno(prog: &str, args: &KvnoArgs) -> i32 {
     let fail = |e: &Krb5Error, doing: &str| {
         eprintln!("{prog}: {e} {doing}");
@@ -69,8 +58,6 @@ fn do_v5_kvno(prog: &str, args: &KvnoArgs) -> i32 {
             Err(e) => return fail(&e, "while converting etype"),
         }
     }
-    // MIT `do_v5_kvno` (`kvno.c:493-507`): both caches are resolved before any request, a KCM one
-    // with its daemon asked.
     let spec = match resolve_ccspec(&kctx, args.ccache.as_deref())
         .map_err(|e| Krb5Error::from_ccname(&e))
         .and_then(|s| resolve(&kctx, &s))
@@ -154,7 +141,6 @@ fn do_v5_kvno(prog: &str, args: &KvnoArgs) -> i32 {
     i32::from(errors > 0)
 }
 
-/// What every service of one run shares.
 struct Ctx<'a> {
     prog: &'a str,
     args: &'a KvnoArgs,
@@ -163,9 +149,7 @@ struct Ctx<'a> {
     opts: &'a GetCredsOptions,
 }
 
-/// MIT `kvno` (`kvno.c:292-411`): one service's ticket, from the cache or the KDC, then
-/// `<principal>: kvno = <n>` (with the keytab's verdict for `-k`), and for `-P` the S4U2Proxy
-/// ticket on the S4U2Self evidence. Each failure is printed here.
+// MIT kvno; see docs/parity/b1-tools.md
 fn kvno(ctx: &Ctx<'_>, cache: &mut OpenCache, name: &str) -> Result<CcacheCred, ()> {
     let prog = ctx.prog;
     let args = ctx.args;
@@ -243,15 +227,11 @@ fn kvno(ctx: &Ctx<'_>, cache: &mut OpenCache, name: &str) -> Result<CcacheCred, 
     })
 }
 
-/// The S4U2Self user as parsed. `get_credentials_for_user` sends the AS realm probe.
-/// MIT `s4u_identify_user` (`lib/krb5/krb/s4u_creds.c:40-88`): an enterprise name is looked up from the service realm by that probe, not by the text after `@`.
+// MIT `s4u_identify_user` (`lib/krb5/krb/s4u_creds.c:40-88`): an enterprise name is looked up from the service realm by that probe, not by the text after `@`.
 fn identify_user(user: Princ, _me: &Princ) -> Princ {
     user
 }
 
-/// The server of one argument: MIT `krb5_parse_name`, or for `-S` the host-based name of `sname`
-/// on the argument as [`krb5_config::sname_to_principal`] makes it.
-/// MIT `kvno` (`clients/kvno/kvno.c:308-313`): `-S` names the service on the host the argument names, through `krb5_sname_to_principal` with `KRB5_NT_SRV_HST`.
 fn server_principal(
     kctx: &ClientContext,
     name: &str,
@@ -269,13 +249,10 @@ fn server_principal(
     .map_err(|e| Krb5Error::from_sname(&e))
 }
 
-/// The gates send S4U2Self for a service other than the cache's principal, for the KDC to
-/// refuse; a release build refuses it first, as MIT's `kvno` does.
 const fn relaxed_for_user() -> bool {
     cfg!(feature = "test-hooks")
 }
 
-/// The gates' request shapes, in a `test-hooks` build only.
 #[cfg(feature = "test-hooks")]
 mod gate {
     use krb5_client::CcacheCred;
@@ -286,7 +263,6 @@ mod gate {
     use krb5_client::errmsg::Krb5Error;
     use krb5_protocol::{KdcAddr, tgs_exchange_once, tgs_u2u};
 
-    /// The gates' KDC host before the services, and `--disable-transited-check`.
     pub(super) fn apply(args: &KvnoArgs, opts: &mut GetCredsOptions) {
         opts.tgs.no_transit_check = args.gate.disable_transited_check;
         opts.kdc = args.gate.kdc_host.as_deref().map(parse_addr);
@@ -302,8 +278,6 @@ mod gate {
         }
     }
 
-    /// `--body-realm`: one TGS-REQ with that `body.realm` and no referral chase, `--renew` /
-    /// `--renew-ticket` setting RENEW, `--u2u` sending the second ticket.
     pub(super) fn body_realm_request(
         args: &KvnoArgs,
         cache: &mut OpenCache,

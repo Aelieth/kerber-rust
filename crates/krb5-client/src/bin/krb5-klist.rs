@@ -1,9 +1,3 @@
-//! MIT `klist`: list a credential cache, the cache collection, or a keytab.
-//!
-//! Usage: `klist [-e] [-V] [[-c] [-l] [-A] [-d] [-f] [-s] [-a [-n]]] [-k [-i] [-t] [-K]] [-C] [name]`
-//! `-V` prints the version and exits. Times follow the process locale, and the date columns are as
-//! wide as MIT's probe of that locale; addresses (`-a`) are printed numerically.
-
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
@@ -29,14 +23,10 @@ use krb5_protocol::{CcacheCred, Keytab, KeytabSlot};
 use krb5_types::{Ticket, TicketFlags};
 use zeroize::Zeroizing;
 
-/// MIT `main` (`klist.c:220-226`): `-V` prints "Kerberos 5 version 1.22.2" and exits 0 after the usage checks.
 const VERSION_LINE: &str = "Kerberos 5 version 1.22.2";
 
-/// The width of a printed time, probed once.
 static TIMESTAMP_WIDTH: OnceLock<usize> = OnceLock::new();
 
-/// MIT `main` (`clients/klist/klist.c:232-236`): the column width is the first `sfstring` of now
-/// that fits in 20 bytes, else in `BUFSIZ` (8192), else 15.
 fn timestamp_width() -> usize {
     *TIMESTAMP_WIDTH.get_or_init(|| {
         let now = unix_now();
@@ -47,7 +37,6 @@ fn timestamp_width() -> usize {
 }
 
 fn main() {
-    // MIT `main` (`clients/klist/klist.c:124-130`): the locale comes from the environment first.
     krb5_types::timestamp::setlocale();
     let argv: Vec<String> = std::env::args().collect();
     let argv0 = argv.first().map_or("klist", String::as_str);
@@ -73,8 +62,6 @@ fn main() {
     std::process::exit(run(prog, &args));
 }
 
-/// MIT `main` (`klist.c:229-260`): the library's profile; a name sets the default cache unless
-/// `-k`; then the collection list (`-l`), every cache (`-A`), the default cache, or the keytab.
 fn run(prog: &str, args: &KlistArgs) -> i32 {
     let now = unix_now();
     let ctx = match krb5_client::init_context() {
@@ -105,7 +92,6 @@ fn run(prog: &str, args: &KlistArgs) -> i32 {
     status
 }
 
-/// The caches of the default's collection; a default of an unknown type has none.
 fn caches(
     ctx: &ClientContext,
     prog: &str,
@@ -123,8 +109,7 @@ fn caches(
     })
 }
 
-/// MIT `list_all_ccaches` (`klist.c:360-386`): one line per initialized cache, its principal and
-/// full name, ` (Expired)` when it holds no current ticket; exit 0 when any was listed.
+// MIT `list_all_ccaches` (`klist.c:360-386`): one line per initialized cache, its principal and
 fn list_all_ccaches(
     ctx: &ClientContext,
     prog: &str,
@@ -147,7 +132,7 @@ fn list_all_ccaches(
     status
 }
 
-/// MIT `list_ccache` (`klist.c:388-420`): a cache that is not initialized is skipped.
+// MIT `list_ccache` (`klist.c:388-420`): a cache that is not initialized is skipped.
 fn list_ccache(ctx: &ClientContext, out: &mut String, cache: &Cache, now: u32) -> i32 {
     let Ok(cc) = load_ccache(ctx, &cache.spec()) else {
         return 1;
@@ -160,8 +145,7 @@ fn list_ccache(ctx: &ClientContext, out: &mut String, cache: &Cache, now: u32) -
     0
 }
 
-/// MIT `show_all_ccaches` (`klist.c:422-450`): each cache of the collection as `show_ccache`
-/// prints it, a blank line between; with `-s`, only the status; exit 0 when any cache passed.
+// MIT `show_all_ccaches` (`klist.c:422-450`): each cache of the collection as `show_ccache`
 fn show_all_ccaches(
     ctx: &ClientContext,
     prog: &str,
@@ -191,7 +175,7 @@ fn show_all_ccaches(
     status
 }
 
-/// MIT `do_ccache` (`klist.c:452-465`): the default cache, shown or (`-s`) checked.
+// MIT `do_ccache` (`klist.c:452-465`): the default cache, shown or (`-s`) checked.
 fn do_ccache(
     ctx: &ClientContext,
     prog: &str,
@@ -216,14 +200,12 @@ fn do_ccache(
     }
 }
 
-/// MIT `check_ccache` (`klist.c:532-576`): 0 when the cache holds a current local TGT, or holds
-/// no local TGT but a current ticket.
+// MIT check_ccache; see docs/parity/b1-tools.md
 fn check(ctx: &ClientContext, cache: &Cache, now: u32) -> i32 {
     load_ccache(ctx, &cache.spec()).map_or(1, |cc| check_ccache(&cc, now))
 }
 
-/// MIT `show_ccache` (`klist.c:468-529`): the cache's name and default principal, the header, then
-/// each credential (configuration entries only with `-C`).
+// MIT `show_ccache` (`klist.c:468-529`): the cache's name and default principal, the header, then
 fn show_ccache(
     ctx: &ClientContext,
     prog: &str,
@@ -258,10 +240,7 @@ fn show_ccache(
     0
 }
 
-/// MIT `show_credential` (`klist.c:678-823`): the times and server, then on one line
-/// `for client`, `renew until` and `Flags`, then (after a line break when three of those were
-/// printed) the enctypes and authdata types, the addresses, and the ticket's own server when it
-/// differs.
+// MIT `show_credential` (`klist.c:678-823`): the times and server, then on one line
 fn show_credential(out: &mut String, args: &KlistArgs, cred: &CcacheCred, defname: &str) {
     let name = unparse(&cred.client);
     let is_config = cred.is_config();
@@ -365,8 +344,7 @@ fn show_credential(out: &mut String, args: &KlistArgs, cred: &CcacheCred, defnam
     }
 }
 
-/// MIT `print_config_data` (`klist.c:653-676`): printable bytes as they are, others as `\ooo`,
-/// from column 8, wrapped after column 72.
+// MIT `print_config_data` (`klist.c:653-676`): printable bytes as they are, others as `\ooo`,
 fn print_config_data(out: &mut String, mut col: usize, data: &[u8]) {
     for &b in data {
         while col < 8 {
@@ -390,8 +368,7 @@ fn print_config_data(out: &mut String, mut col: usize, data: &[u8]) {
     }
 }
 
-/// MIT `one_addr` (`klist.c:829-887`): an IPv4 or IPv6 address (numerically), a NetBIOS name, or
-/// MIT's text for a broken or unknown one.
+// MIT `one_addr` (`klist.c:829-887`): an IPv4 or IPv6 address (numerically), a NetBIOS name, or
 fn one_addr(addrtype: u16, a: &[u8]) -> String {
     match (addrtype, a.len()) {
         (2, 4) => std::net::Ipv4Addr::new(a[0], a[1], a[2], a[3]).to_string(),
@@ -410,8 +387,7 @@ fn one_addr(addrtype: u16, a: &[u8]) -> String {
     }
 }
 
-/// MIT `etype_string` (`klist.c:587-603`): the enctype's name, `DEPRECATED:` before a deprecated
-/// one, `etype N` for one this build does not know.
+// MIT etype_string; see docs/parity/b1-tools.md
 fn etype_string(etype: i32) -> String {
     match EncryptionType::known(etype) {
         Ok(e) if e.is_deprecated() => format!("DEPRECATED:{}", e.to_mit_name()),
@@ -420,18 +396,12 @@ fn etype_string(etype: i32) -> String {
     }
 }
 
-/// MIT `printtime` (`klist.c:643-651`): the local time in `timestamp_width` columns, space-filled.
+// MIT `printtime` (`klist.c:643-651`): the local time in `timestamp_width` columns, space-filled.
 fn printtime(t: u32) -> String {
     timestamp_to_sfstring(t, timestamp_width() + 1, Some(b' ')).unwrap_or_default()
 }
 
-/// MIT `do_keytab` (`klist.c:263-358`): the keytab's name, the header (`-t` adds the timestamp
-/// column), then one line per entry: the key version, `-t`'s timestamp, the principal, `-e`'s
-/// enctype and `-K`'s key.
-/// MIT `do_keytab` (`klist.c:338-343`): the key is printed only under `-K`. Here it is formatted
-/// only then, from the keytab's own bytes; the file's bytes are wiped right after parsing, and the
-/// listing, sized before it is written so that no reallocation leaves a key's hex behind, once
-/// it is printed.
+// MIT `do_keytab` (`klist.c:263-358`): the keytab's name, the header (`-t` adds the timestamp
 fn do_keytab(ctx: &ClientContext, prog: &str, args: &KlistArgs, name: Option<&str>) -> i32 {
     let (ktname, doing) = match name {
         Some(n) => (n.to_owned(), format!("while resolving keytab {n}")),
@@ -520,7 +490,6 @@ fn do_keytab(ctx: &ClientContext, prog: &str, args: &KlistArgs, name: Option<&st
         }
         lines.push((line, key));
     }
-    // ` (0x`, two hex digits a key octet, `)`.
     let hex_len = |key: Option<&[u8]>| {
         if args.keys {
             5 + 2 * key.map_or(0, <[u8]>::len)

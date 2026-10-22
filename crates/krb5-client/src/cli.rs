@@ -1,111 +1,64 @@
-//! getopt-compatible CLI parsing for kinit/klist/kvno/kdestroy.
-
 pub use krb5_cli::{LongOpt, Opt, getopt, getopt_each};
 use krb5_protocol::{CcacheCred, FileCcache};
 
-/// What `kinit` does.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum KinitAction {
-    /// Initial credentials with a password.
     #[default]
     InitPw,
-    /// Initial credentials with a keytab (`-k`).
     InitKt,
-    /// Renew the cache's TGT (`-R`).
     Renew,
-    /// Validate the cache's TGT (`-v`).
     Validate,
 }
 
-/// Parsed `kinit` argv.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct KinitArgs {
-    /// `-V`.
     pub verbose: bool,
-    /// What to do: the last of `-k`, `-R` and `-v`, else a password.
     pub action: KinitAction,
-    /// `-k` (also forced by `-t` / `-i`).
     pub keytab: bool,
-    /// `-R`.
     pub renew: bool,
-    /// `-v`.
     pub validate: bool,
-    /// `-i`.
     pub client_keytab: bool,
-    /// `-t keytab`.
     pub keytab_path: Option<String>,
-    /// `-c cache`.
     pub ccache: Option<String>,
-    /// `-r`, in seconds.
     pub rlife: Option<u64>,
-    /// `-l`, in seconds.
     pub lifetime: Option<u64>,
-    /// `-s`, in seconds from now; negative for a time past.
     pub starttime: Option<i64>,
-    /// `-f` / `-F`.
     pub forwardable: Option<bool>,
-    /// `-p` / `-P`.
     pub proxiable: Option<bool>,
-    /// `-a` / `-A`.
     pub addresses: Option<bool>,
-    /// `-S service`.
     pub service: Option<String>,
-    /// `-E`.
     pub enterprise: bool,
-    /// `-n`.
     pub anonymous: bool,
-    /// `-C`.
     pub canonicalize: bool,
-    /// `-X attr[=value]`, in order, a bare attribute's value `yes`.
-    /// MIT `add_preauth_opt` (`clients/kinit/kinit.c:196-219`): the attribute is what precedes the first `=`.
+    // MIT `add_preauth_opt` (`clients/kinit/kinit.c:196-219`): the attribute is what precedes the first `=`.
     pub pa_opts: Vec<(String, String)>,
-    /// `-T armor_ccache`.
     pub armor_ccache: Option<String>,
-    /// `-I input_ccache`.
     pub in_ccache: Option<String>,
-    /// `--request-pac` (true) / `--no-request-pac` (false).
     pub request_pac: Option<bool>,
-    /// `-X X509_user_identity=`.
     pub pkinit_identity: Option<String>,
-    /// `-X X509_anchors=`.
     pub pkinit_anchors: Vec<String>,
-    /// The client principal.
     pub principal: Option<String>,
-    /// MIT's notices printed before any work ("keytab specified, forcing -k").
     pub notices: Vec<String>,
-    /// The gates' options, in a `test-hooks` build only.
     #[cfg(feature = "test-hooks")]
     pub gate: KinitGateArgs,
 }
 
-/// The gates' `kinit` options, in a `test-hooks` build only: `--spake` (send PA-SPAKE first),
-/// `--fast` (no effect), `--armor-ccache` (`-T`), `--pkinit` / `--pkinit-anchors`
-/// (`-X X509_user_identity=` / `-X X509_anchors=`), and the positional form
-/// `[kdc-host] principal [ccache [service]]`.
 #[cfg(feature = "test-hooks")]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct KinitGateArgs {
-    /// `--spake`.
     pub want_spake: bool,
-    /// A first argument with no `@` before a principal: the KDC host (`host[:port]`).
     pub kdc_host: Option<String>,
-    /// The ccache after the principal.
     pub pos_ccache: Option<String>,
-    /// The service after the ccache.
     pub pos_service: Option<String>,
 }
 
-/// Why a `kinit` argv is not run.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum KinitParseError {
-    /// `-4`: the lines the option loop printed before it, then "Kerberos 4 is no longer supported", exit 3.
-    /// MIT `parse_options` (`kinit.c:359-361`): `-4` exits at once, after what the loop printed.
+    // MIT `parse_options` (`kinit.c:359-361`): `-4` exits at once, after what the loop printed.
     Krb4(UsageError),
-    /// The usage text, after these lines.
     Usage(UsageError),
 }
 
-/// MIT `usage` (`kinit.c:139-179`): the usage text, `prog` naming the program.
 #[must_use]
 pub fn kinit_usage(prog: &str) -> String {
     format!(
@@ -143,7 +96,6 @@ pub fn kinit_usage(prog: &str) -> String {
     )
 }
 
-/// MIT `kinit`'s options without an argument value, as `getopt_long` takes them.
 const KINIT_OPTSTRING: &str = "r:fpFPn54aAVl:s:c:kI:it:T:RS:vX:CE";
 
 fn kinit_longs() -> Vec<LongOpt> {
@@ -207,15 +159,6 @@ fn kinit_longs() -> Vec<LongOpt> {
     longs
 }
 
-/// Parse `kinit` arguments after argv0.
-/// MIT `parse_options` (`kinit.c:221-411`): the option table, a bad lifetime or start time, an
-/// option given twice, `-f` with `-F` and the other pairs, `-t` or `-i` forcing `-k` with a
-/// notice, and one principal at most.
-///
-/// # Errors
-///
-/// [`KinitParseError::Krb4`] for `-4`, with the lines printed before it; [`KinitParseError::Usage`]
-/// with MIT's lines for every refusal above.
 pub fn parse_kinit(args: &[String]) -> Result<KinitArgs, KinitParseError> {
     let (each, rest) = getopt_each(args, KINIT_OPTSTRING, &kinit_longs());
     let mut out = KinitArgs::default();
@@ -332,7 +275,6 @@ pub fn parse_kinit(args: &[String]) -> Result<KinitArgs, KinitParseError> {
     Ok(out)
 }
 
-/// The gates' long options, in a `test-hooks` build.
 #[cfg(feature = "test-hooks")]
 fn gate_long(out: &mut KinitArgs, o: &Opt) -> bool {
     match o.long {
@@ -345,8 +287,6 @@ fn gate_long(out: &mut KinitArgs, o: &Opt) -> bool {
     true
 }
 
-/// The gates' positional form `[kdc-host] principal [ccache [service]]`, in a `test-hooks` build;
-/// a release build takes one principal.
 fn kinit_positionals(out: &mut KinitArgs, rest: Vec<String>) -> Vec<String> {
     #[cfg(feature = "test-hooks")]
     {
@@ -369,7 +309,6 @@ fn kinit_positionals(out: &mut KinitArgs, rest: Vec<String>) -> Vec<String> {
     }
 }
 
-/// MIT `handle_gic_opt` (`plugins/preauth/pkinit/pkinit_clnt.c:1307-1335`): the first `X509_user_identity` is the identity, a second is refused when the options are set; `X509_anchors` adds an anchor.
 fn apply_x_attr(out: &mut KinitArgs, attr: &str, value: &str) {
     match attr {
         "X509_user_identity" if out.pkinit_identity.is_none() => {
@@ -389,51 +328,31 @@ fn file_spec(s: &str) -> String {
     }
 }
 
-/// Parsed `klist` argv.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct KlistArgs {
-    /// The name argument: the cache (`-c`, the default mode) or keytab (`-k`) to list.
     pub ccache: Option<String>,
-    /// `-k`: list a keytab.
     pub keytab: bool,
-    /// `-f`.
     pub flags: bool,
-    /// `-e`.
     pub etype: bool,
-    /// `-s`.
     pub silent: bool,
-    /// `-d`.
     pub adtype: bool,
-    /// `-t`.
     pub times: bool,
-    /// `-K`.
     pub keys: bool,
-    /// `-a`.
     pub addresses: bool,
-    /// `-n`.
     pub no_resolve: bool,
-    /// `-i`.
     pub client_keytab: bool,
-    /// `-l`.
     pub list_all: bool,
-    /// `-A`.
     pub show_all: bool,
-    /// `-C`.
     pub config: bool,
-    /// `-V`: print the version and exit.
     pub version: bool,
 }
 
-/// Why a `klist` argv is not run.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum KlistParseError {
-    /// `-4`: "Kerberos 4 is no longer supported", exit 3.
     Krb4,
-    /// The usage text, after these lines.
     Usage(UsageError),
 }
 
-/// MIT `usage` (`klist.c:81-108`): the usage text, `prog` naming the program.
 #[must_use]
 pub fn klist_usage(prog: &str) -> String {
     format!(
@@ -459,15 +378,6 @@ pub fn klist_usage(prog: &str) -> String {
     )
 }
 
-/// Parse `klist` arguments after argv0.
-/// MIT `main` (`klist.c:137-218`): the options `dfetKsnacki45lAVC`, `-c` and `-k` choosing the
-/// mode once, the options each mode refuses, and one name at most.
-///
-/// # Errors
-///
-/// [`KlistParseError::Krb4`] for `-4`; [`KlistParseError::Usage`] for an option `klist` does not
-/// take, a second mode, an option the mode refuses, `-n` without `-a`, `-l` with `-A` or `-s`, or a
-/// second name.
 pub fn parse_klist(args: &[String]) -> Result<KlistArgs, KlistParseError> {
     let usage = |lines: Vec<String>| KlistParseError::Usage(UsageError::Lines(lines));
     let (opts, rest) = getopt(args, "dfetKsnacki45lAVC", &[])
@@ -519,33 +429,24 @@ pub fn parse_klist(args: &[String]) -> Result<KlistArgs, KlistParseError> {
     Ok(out)
 }
 
-/// Why an argv is refused: the lines a tool prints before its usage text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UsageError {
-    /// glibc `getopt`'s own complaint, printed as `<argv0>: <text>`.
     Getopt(String),
-    /// The tool's own lines, each printed as is.
     Lines(Vec<String>),
-    /// glibc's complaints and the tool's own lines, in the order they are printed.
     Each(Vec<UsageLine>),
 }
 
-/// One line printed before a usage text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UsageLine {
-    /// glibc `getopt`'s complaint, printed as `<argv0>: <text>`.
     Getopt(String),
-    /// The tool's own line, printed as is.
     Own(String),
 }
 
-/// The tool's own line `text`.
 pub fn own(text: impl Into<String>) -> UsageLine {
     UsageLine::Own(text.into())
 }
 
 impl UsageError {
-    /// The lines to print on stderr before the usage text, `argv0` naming the program as invoked.
     #[must_use]
     pub fn lines(&self, argv0: &str) -> Vec<String> {
         match self {
@@ -562,67 +463,43 @@ impl UsageError {
     }
 }
 
-/// `progname` as MIT's tools take it from `argv[0]`: the part after the last `/`.
 #[must_use]
 pub fn progname(argv0: &str) -> &str {
     argv0.rsplit('/').next().unwrap_or(argv0)
 }
 
-/// Parsed `kvno` argv.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct KvnoArgs {
-    /// `-c ccache`.
     pub ccache: Option<String>,
-    /// `-e etype`.
     pub etype: Option<String>,
-    /// `-k keytab`.
     pub keytab: Option<String>,
-    /// `-q`.
     pub quiet: bool,
-    /// `-u`: the service names are NT-UNKNOWN.
     pub unknown: bool,
-    /// `-S sname`: each argument is a host for `sname`.
     pub sname: Option<String>,
-    /// `-C`.
     pub canonicalize: bool,
-    /// `-I` / `-U for_user` (S4U2Self).
     pub for_user: Option<String>,
-    /// `-U`: `for_user` is an enterprise name.
     pub for_user_enterprise: bool,
-    /// `-P` (S4U2Proxy after S4U2Self).
     pub proxy: bool,
-    /// `--cached-only`.
     pub cached_only: bool,
-    /// `--no-store`.
     pub no_store: bool,
-    /// `--out-cache ccache`.
     pub out_cache: Option<String>,
-    /// `--u2u ccache`.
     pub u2u: Option<String>,
-    /// The service names.
     pub services: Vec<String>,
-    /// The gates' options, in a `test-hooks` build only.
     #[cfg(feature = "test-hooks")]
     pub gate: KvnoGateArgs,
 }
 
-/// The gates' `kvno` options: request shapes MIT's `kvno` cannot send. A `test-hooks` build only.
 #[cfg(feature = "test-hooks")]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct KvnoGateArgs {
-    /// A first argument with no `/` or `@` before a service: the KDC host (`host[:port]`).
     pub kdc_host: Option<String>,
-    /// `--disable-transited-check`: KDC option bit 26.
     pub disable_transited_check: bool,
-    /// `--body-realm REALM`: one TGS-REQ with that `body.realm`, no referral chase.
     pub body_realm: Option<String>,
-    /// `--renew`: KDC option RENEW on that request.
     pub renew: bool,
-    /// `--renew-ticket`: RENEW the cached service ticket.
     pub renew_ticket: bool,
 }
 
-/// MIT `xusage` (`kvno.c:41-52`): the usage text, `prog` naming the program.
+// MIT `xusage` (`kvno.c:41-52`): the usage text, `prog` naming the program.
 #[must_use]
 pub fn kvno_usage(prog: &str) -> String {
     format!(
@@ -685,15 +562,6 @@ fn kvno_longs() -> Vec<LongOpt> {
     longs
 }
 
-/// Parse `kvno` arguments after argv0.
-/// MIT `main` (`kvno.c:65-179`): the option table `uCc:e:hk:qPS:I:U:F:` and `--cached-only`,
-/// `--no-store`, `--out-cache`, `--u2u`, and the exclusions checked before any work.
-///
-/// # Errors
-///
-/// [`UsageError`] for an option MIT's `kvno` does not take or that lacks its argument, `-h`,
-/// `-u` with `-S`, `--u2u` with `-I` / `-U`, `-P` without `-I` / `-U`, or no service; a
-/// `test-hooks` build also refuses `--renew` or `--renew-ticket` without `--body-realm`.
 pub fn parse_kvno(args: &[String]) -> Result<KvnoArgs, UsageError> {
     let (opts, rest) =
         getopt(args, "uCc:e:hk:qPS:I:U:", &kvno_longs()).map_err(UsageError::Getopt)?;
@@ -738,7 +606,6 @@ pub fn parse_kvno(args: &[String]) -> Result<KvnoArgs, UsageError> {
                     return Err(UsageError::Lines(lines));
                 }
             }
-            // MIT `main` (`kvno.c:129-137`): `-I` names the user and leaves an earlier `-U`'s enterprise flag set; `-U` names the user and sets it.
             (None, 'I') => out.for_user = o.arg,
             (None, 'U') => {
                 out.for_user = o.arg;
@@ -776,18 +643,11 @@ pub fn parse_kvno(args: &[String]) -> Result<KvnoArgs, UsageError> {
     Ok(out)
 }
 
-/// Parsed `kdestroy` argv.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct KdestroyArgs {
-    /// `-c`.
     pub ccache: Option<String>,
 }
 
-/// Parse `kdestroy` arguments after argv0.
-///
-/// # Errors
-///
-/// Unknown option or missing argument.
 pub fn parse_kdestroy(args: &[String]) -> Result<KdestroyArgs, String> {
     let (opts, _rest) = getopt(args, "c:", &[])?;
     let mut out = KdestroyArgs::default();
@@ -801,7 +661,6 @@ pub fn parse_kdestroy(args: &[String]) -> Result<KdestroyArgs, String> {
     Ok(out)
 }
 
-/// MIT `klist.c` `check_ccache`: 0 if usable, 1 otherwise.
 #[must_use]
 pub fn check_ccache(cc: &FileCcache, now: u32) -> i32 {
     let realm = cc.primary.0.as_bytes();
@@ -833,9 +692,6 @@ fn is_local_tgt(cred: &CcacheCred, realm: &[u8]) -> bool {
         && s.name_string[1].as_bytes() == realm
 }
 
-/// `kinit -s` as seconds from now: a delta, else an absolute time's distance from now, wrapped as
-/// MIT's 32-bit `ts_delta` wraps it. `None` for neither, or an absolute time of 0.
-/// MIT `parse_options` (`kinit.c:283-296`): `krb5_string_to_deltat`, then `krb5_string_to_timestamp`.
 fn start_time(arg: &str) -> Option<i64> {
     match krb5_types::deltat::parse(arg) {
         Ok(d) if d != 0 => Some(i64::from(d)),
@@ -850,28 +706,13 @@ fn start_time(arg: &str) -> Option<i64> {
     }
 }
 
-/// `Password for <principal>: ` — the `krb5_get_init_creds_password`
-/// prompt, read through [`read_prompt_line`].
-/// MIT `krb5_get_as_key_password` (`gic_pwd.c:96-96`): the reply to the `Password for`
-/// prompt becomes the password.
-///
-/// # Errors
-///
-/// As [`krb5_cli::prompt_hidden`]: MIT's `KRB5_LIBOS_CANTREADPWD` or `KRB5_LIBOS_PWDINTR`, so a caller can tell an interrupt.
+// MIT krb5_get_as_key_password; see docs/parity/b1-client-preauth.md
 pub fn read_password_line(
     principal: &str,
 ) -> Result<zeroize::Zeroizing<Vec<u8>>, krb5_cli::PromptError> {
     krb5_cli::prompt_hidden(&format!("Password for {principal}"))
 }
 
-/// One hidden prompt, `prompt` and `: ` on stdout, through the shared MIT prompter
-/// [`krb5_cli::prompt_hidden`]. The reply is wiped when dropped.
-/// MIT `krb5_prompter_posix` (`prompter.c:93-100`): a reply that does not read is `KRB5_LIBOS_CANTREADPWD`, or `KRB5_LIBOS_PWDINTR` when `SIGINT` came.
-///
-/// # Errors
-///
-/// MIT's text: `Cannot read password` when stdin ends or cannot be read, `Password read
-/// interrupted` on `SIGINT`.
 pub fn read_prompt_line(prompt: &str) -> Result<zeroize::Zeroizing<Vec<u8>>, String> {
     krb5_cli::prompt_hidden(prompt).map_err(|e| e.to_string())
 }
