@@ -1,6 +1,4 @@
-//! `kadmin/history` and the osa password-history ring
-//! (`server_kdb.c` `kdb_get_hist_key` / `create_hist`,
-//! `svr_principal.c` `create_history_entry` / `add_to_history`).
+//! `kadmin/history` and the osa password-history ring (`server_kdb.c` `kdb_get_hist_key` / `create_hist`, `svr_principal.c` `create_history_entry` / `add_to_history`).
 
 use krb5_crypto::ProtocolKey;
 
@@ -45,10 +43,7 @@ fn resolve_history(p: &mut Principal, hist: Option<&(u32, ProtocolKey)>) {
         .collect();
 }
 
-/// MIT `create_history_entry` + `add_to_history`: the replaced keys of the
-/// most recent kvno become one history entry under the history key; a history
-/// key newer than the record's resets the ring; `pw_history_num` counts the
-/// current password, so `nhist - 1` entries are kept, oldest dropped first.
+/// MIT `create_history_entry` + `add_to_history`: the replaced keys of the most recent kvno become one history entry under the history key; a newer history key resets the ring; `pw_history_num` counts the current password, so `nhist - 1` entries are kept, oldest dropped first.
 pub(super) fn record_history(
     p: &mut Principal,
     old: &[KeyEntry],
@@ -94,8 +89,7 @@ pub(super) fn record_history(
 }
 
 impl PrincipalStore {
-    /// The current `kadmin/history` key and its kvno (`kdb_get_hist_key`
-    /// without the creation), if the principal exists.
+    /// The current `kadmin/history` key and its kvno (`kdb_get_hist_key` without the creation), if the principal exists.
     #[must_use]
     pub fn history_key(&self) -> Option<(u32, ProtocolKey)> {
         let p = self.get_name(&crate::principals::kadmin_history())?;
@@ -103,19 +97,10 @@ impl PrincipalStore {
         Some((k.kvno, k.key.clone()))
     }
 
-    /// MIT `kdb_get_hist_key` (`server_kdb.c:166-188`): the history key, creating
-    /// `kadmin/history` on first use.
-    /// MIT `create_hist` (`server_kdb.c:141-164`): the first-use creation has MIT's shape —
-    /// `max_life` 64 s (`KRB5_KDB_DISALLOW_ALL_TIX` assigned to `max_life`), no attributes,
-    /// one random key of the master enctype, created at kvno 1 and randomized again to kvno 2.
-    /// Each is its own put, so the update log holds both, and the database is saved before the
-    /// caller goes on, held saves or not: a password change that then fails (`passwd_check`)
-    /// leaves `kadmin/history` in the database, as MIT's committed puts do.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Rng`] when `kadmin/history` must be created and the CSPRNG fails;
-    /// [`Error::Db`] when saving it fails.
+    /// MIT `kdb_get_hist_key` (`server_kdb.c:166-188`): the history key, creating `kadmin/history` on first use.
+    /// MIT `create_hist` (`server_kdb.c:141-164`): first use has MIT's shape — `max_life` 64 s (`KRB5_KDB_DISALLOW_ALL_TIX` assigned to `max_life`), no attributes, one random key of the master enctype, created at kvno 1 and randomized again to kvno 2.
+    /// Each is its own put, so the update log holds both, and the database is saved before the caller goes on, held saves or not: a password change that then fails (`passwd_check`) leaves `kadmin/history` in the database, as MIT's committed puts do.
+    /// Fails with [`Error::Rng`] when `kadmin/history` must be created and the CSPRNG fails, and with [`Error::Db`] when saving it fails.
     pub(crate) fn ensure_history_principal(
         &mut self,
         actor: &str,
@@ -155,10 +140,7 @@ impl PrincipalStore {
         Ok((INITIAL_HIST_KVNO, key))
     }
 
-    /// Decrypt every principal's stored history with the history key (the
-    /// reading half of `kdb_get_hist_key` + `check_pw_reuse`); a record whose
-    /// `admin_history_kvno` is not the current history kvno stays unreadable,
-    /// as MIT treats it.
+    /// Decrypt stored history with the history key (the reading half of `kdb_get_hist_key` + `check_pw_reuse`). A record whose `admin_history_kvno` is not the current history kvno stays unreadable, as MIT treats it.
     pub(crate) fn resolve_history_all(&mut self) {
         let hist = self.history_key();
         for p in self.map.values_mut() {
