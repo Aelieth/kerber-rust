@@ -1,6 +1,4 @@
-//! Long-term keys (`krb5_key_data`): `KeyEntry`, lookup
-//! (`kdb_default.c` `krb5_dbe_find_enctype`), chrand / setkey /
-//! purgekeys / ktadd (`svr_principal.c`) and the krbtgt key set.
+//! Long-term keys (`krb5_key_data`): `KeyEntry`, lookup (`kdb_default.c` `krb5_dbe_find_enctype`), chrand / setkey / purgekeys / ktadd (`svr_principal.c`) and the krbtgt key set.
 
 use krb5_crypto::{EncryptionType, ProtocolKey};
 use krb5_protocol::{Keytab, KeytabEntry};
@@ -20,7 +18,6 @@ use super::{FAIL_NEXT_CHRAND_SAVE, FAIL_NEXT_KTADD_EXPORT};
 #[cfg(test)]
 use std::cell::Cell;
 
-/// Long-term key for one etype.
 #[derive(Clone, Debug)]
 pub struct KeyEntry {
     /// Encryption type.
@@ -35,11 +32,8 @@ pub struct KeyEntry {
     pub kdb_salt: Option<Vec<u8>>,
 }
 
-/// Why [`Principal::find_enctype`] found nothing: MIT `KRB5_KDB_NO_MATCHING_KEY`
-/// (no key of that etype/kvno at all) versus `KRB5_KDB_NO_PERMITTED_KEY` (the
-/// requested etype, or every matching key, is outside `permitted_enctypes`).
-/// Both are KDB-library codes the KDC clamps to 60 `GENERIC` on the wire; the
-/// split is for logs and tests.
+/// Why [`Principal::find_enctype`] found nothing: MIT `KRB5_KDB_NO_MATCHING_KEY` (no key of that etype/kvno at all) versus `KRB5_KDB_NO_PERMITTED_KEY` (the requested etype, or every matching key, is outside `permitted_enctypes`).
+/// Both are KDB-library codes the KDC clamps to 60 `GENERIC` on the wire; the split is for logs and tests.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KeyLookup {
     /// `KRB5_KDB_NO_MATCHING_KEY`.
@@ -48,26 +42,20 @@ pub enum KeyLookup {
     NoPermittedKey,
 }
 
-/// Why the KDB keytab found no key for a lookup.
 /// MIT `krb5_ktkdb_get_entry` (`lib/kdb/keytab.c:117-185`): the code it returns.
 /// MIT `keytab_fetch_error` (`lib/krb5/krb/rd_req_dec.c:118-148`): takes `KRB5_KT_NOTFOUND` and `KRB5_KT_KVNONOTFOUND` as codes of their own and passes any other on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KtkdbError {
-    /// `KRB5_KT_NOTFOUND`: no such principal, or one that may not be a service
-    /// (`KRB5_KDB_DISALLOW_SVR`, `KRB5_KDB_DISALLOW_ALL_TIX`).
+    /// `KRB5_KT_NOTFOUND`: no such principal, or one that may not be a service (`KRB5_KDB_DISALLOW_SVR`, `KRB5_KDB_DISALLOW_ALL_TIX`).
     NotFound,
     /// `KRB5_KT_KVNONOTFOUND`: the principal has no key at that kvno.
     KvnoNotFound,
-    /// `KRB5_KDB_NO_PERMITTED_KEY`: the key found is not of the ticket's enctype, or every key at
-    /// the kvno is outside `permitted_enctypes`.
+    /// `KRB5_KDB_NO_PERMITTED_KEY`: the key found is not of the ticket's enctype, or every key at the kvno is outside `permitted_enctypes`.
     NoPermittedKey,
     /// `KRB5_BAD_ENCTYPE`: the ticket's enctype or the key's is not one MIT implements.
     BadEnctype,
 }
 
-/// The lookup code the AP-REQ verifier takes: `KRB5_KT_NOTFOUND` and `KRB5_KT_KVNONOTFOUND` as `keytab_fetch_error` names them,
-/// any other code passed on as the verifier's own error.
-/// MIT `keytab_fetch_error` (`lib/krb5/krb/rd_req_dec.c:118-148`): maps the two keytab codes and returns any other as it is.
 impl From<KtkdbError> for krb5_protocol::KeytabLookup {
     fn from(e: KtkdbError) -> Self {
         match e {
@@ -80,12 +68,7 @@ impl From<KtkdbError> for krb5_protocol::KeytabLookup {
 }
 
 /// The key the KDB keytab gives for a ticket's kvno and enctype.
-/// MIT `krb5_ktkdb_get_entry` (`lib/kdb/keytab.c:117-185`): for any principal but a cross-realm TGT the first permitted key at the kvno (the highest when it is 0), whatever the ticket's enctype, which must then be `krb5_c_enctype_compare`-similar to it; for a cross-realm TGT the first permitted key of the ticket's enctype. A principal that is not a service is not found.
 /// MIT `is_xrealm_tgt` (`lib/kdb/keytab.c:200-220`): `krbtgt` (a prefix of the word does) and a second component that is not the realm.
-///
-/// # Errors
-///
-/// [`KtkdbError`], as MIT's code names.
 pub fn ktkdb_get_entry<'p>(
     principal: Option<&'p Principal>,
     name: &PrincipalName,
@@ -131,8 +114,6 @@ fn is_xrealm_tgt(name: &PrincipalName, realm: &str) -> bool {
     b"krbtgt".starts_with(c0.as_bytes()) && c1.as_bytes() != realm.as_bytes()
 }
 
-/// The class of enctypes `krb5_c_enctype_compare` calls similar, by enctype number: one encryption
-/// method and one string-to-key. `None` for an enctype MIT 1.22 does not implement.
 /// MIT `krb5_c_enctype_compare` (`lib/crypto/krb/enctype_util.c:73-86`): two enctypes are similar when they share an encryption method and a string-to-key.
 /// MIT `krb5int_enctypes_list` (`lib/crypto/krb/etypes.c:38-145`): des3-cbc-raw and des3-cbc-sha1 are alike, so are arcfour-hmac and its export form; each AES and Camellia enctype stands alone.
 fn enctype_class(etype: i32) -> Option<u8> {
@@ -150,7 +131,6 @@ fn enctype_class(etype: i32) -> Option<u8> {
 }
 
 impl KeyEntry {
-    /// Key without dump salt metadata (`ver` 1 on write).
     #[must_use]
     pub fn new(etype: EncryptionType, key: ProtocolKey, kvno: u32) -> Self {
         Self {
@@ -172,15 +152,8 @@ pub(super) fn cap_key_versions(keys: &mut Vec<KeyEntry>, n: u32) {
     keys.retain(|k| keep.contains(&k.kvno));
 }
 
-/// A random protocol key of `etype`: every key this KDC draws, a principal's `-randkey` and `ktadd` keys, the
-/// krbtgt, history and master keys and the session and sub keys of its replies.
-/// MIT `krb5_c_make_random_key` (`lib/crypto/krb/make_random_key.c:31-76`): `keybytes` random octets through the
-/// enctype's random-to-key, so a des3 key is 21 octets spread over 24 with odd parity on each (`k5_rand2key_des3`,
-/// `k5_des_fixup_key_parity`), and every other enctype takes its random octets as the key.
-///
-/// # Errors
-///
-/// [`Error::Rng`] when the CSPRNG fails.
+/// A random protocol key of `etype`: every key this KDC draws, a principal's `-randkey` and `ktadd` keys, the krbtgt, history and master keys and the session and sub keys of its replies.
+/// MIT `krb5_c_make_random_key` (`lib/crypto/krb/make_random_key.c:31-76`): `keybytes` random octets through the enctype's random-to-key, so a des3 key is 21 octets spread over 24 with odd parity on each (`k5_rand2key_des3`, `k5_des_fixup_key_parity`), and every other enctype takes its random octets as the key.
 pub fn random_key(etype: EncryptionType) -> Result<ProtocolKey, Error> {
     ProtocolKey::random(etype).map_err(|e| match e {
         krb5_crypto::Error::Rng => Error::Rng,
@@ -198,22 +171,13 @@ pub(super) fn default_supported_enctypes() -> [EncryptionType; 2] {
 }
 
 impl PrincipalStore {
-    /// `krbtgt/REALM@REALM`.
     #[must_use]
     pub fn krbtgt(&self) -> Option<&Principal> {
         self.get_name(&PrincipalName::krbtgt(&self.realm))
     }
 
     /// ACL-gated keytab export using the existing v2 writer.
-    ///
-    /// `LOCKDOWN_KEYS` is refused. Local CLI export uses
-    /// [`Self::export_keytab_local`].
-    ///
-    /// # Errors
-    ///
-    /// [`Error::AclDenied`] when the ACL does not grant `actor` extract on `name` or the entry
-    /// has `LOCKDOWN_KEYS`; [`Error::NotFound`] when the principal is missing or has no keys;
-    /// [`Error::Crypto`] when its realm is not a GeneralString.
+    /// `LOCKDOWN_KEYS` is refused. Local CLI export uses [`Self::export_keytab_local`].
     pub fn export_keytab(
         &self,
         acl: &Acl,
@@ -229,16 +193,8 @@ impl PrincipalStore {
         Self::keytab_from(p)
     }
 
-    /// Local-operator keytab export for `--export-keytab` /
-    /// `--export-krbtgt-keytab`.
-    ///
-    /// The operator already holds the DB and stash, so `LOCKDOWN_KEYS` is
-    /// not applied. Remote kadm5 extract still uses [`Self::export_keytab`].
-    ///
-    /// # Errors
-    ///
-    /// [`Error::NotFound`] when the principal is missing or has no keys; [`Error::Crypto`]
-    /// when its realm is not a GeneralString.
+    /// Local-operator keytab export for `--export-keytab` / `--export-krbtgt-keytab`.
+    /// The operator already holds the DB and stash, so `LOCKDOWN_KEYS` is not applied. Remote kadm5 extract still uses [`Self::export_keytab`].
     pub fn export_keytab_local(&self, name: &PrincipalName) -> Result<Keytab, Error> {
         #[cfg(test)]
         if FAIL_NEXT_KTADD_EXPORT.with(Cell::get) {
@@ -249,17 +205,7 @@ impl PrincipalStore {
         Self::keytab_from(p)
     }
 
-    /// Local `ktadd`: optional rotate, export ignoring lockdown, then `write`, as one change to
-    /// the database under its exclusive lock ([`Self::change`]): the rotation is written only
-    /// once `write` succeeded, so a failed export or `write` leaves the database's kvno as it was
-    /// (a store with no database puts the old keys back). Standalone `chrand` does not roll back.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::NotFound`] when the principal is missing or has no keys; [`Error::Rng`] when
-    /// the rotation's CSPRNG fails; [`Error::Db`] when the database cannot be locked, read again
-    /// or written; [`Error::Crypto`] when the realm is not a GeneralString; and any error `write`
-    /// returns.
+    /// Local `ktadd`: optional rotate, export ignoring lockdown, then `write`, as one change to the database under its exclusive lock ([`Self::change`]): the rotation is written only once `write` succeeded, so a failed export or `write` leaves the database's kvno as it was (a store with no database puts the old keys back). Standalone `chrand` does not roll back.
     pub fn ktadd_local_atomic(
         &mut self,
         name: &PrincipalName,
@@ -315,24 +261,13 @@ impl PrincipalStore {
     }
 
     /// Replace long-term keys with a new random kvno (kadm5 `chrand`).
-    ///
-    /// Default MIT `cpw -randkey` / `ktadd` does not keep old kvnos, so the
-    /// previous password must fail `kinit`.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Rng`] when the CSPRNG fails;
-    /// [`Error::Db`] when saving the store to `persist_paths` fails.
+    /// Default MIT `cpw -randkey` / `ktadd` does not keep old kvnos, so the previous password must fail `kinit`.
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Rng`] when the CSPRNG fails; [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn chrand(&mut self, name: &PrincipalName) -> Result<Vec<KeyEntry>, Error> {
         self.chrand_keepold_n(name, 0)
     }
 
     /// [`Self::chrand`] with MIT `keepold` (0 / 1 / N versions).
-    ///
-    /// # Errors
-    ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Rng`] when the CSPRNG fails;
-    /// [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn chrand_keepold_n(
         &mut self,
         name: &PrincipalName,
@@ -344,17 +279,7 @@ impl PrincipalStore {
     }
 
     /// [`Self::chrand_etypes_keepold`] for `name@princ_realm`.
-    ///
-    /// Empty `etypes` is MIT's omitted `-e`.
-    /// MIT `kadm5_randkey_principal_3` (`svr_principal.c:1425-1425`): an omitted `-e` reaches
-    /// `apply_keysalt_policy` as zero keysalts, so the policy or realm default applies.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::BadKeysalts`] when `etypes`
-    /// names an enctype outside the bound policy's `allowed_keysalts`; [`Error::Rng`] when the
-    /// CSPRNG fails; [`Error::Db`] when saving the store to `persist_paths` fails;
-    /// the error from a `kadm5_hook` precommit module.
+    /// MIT `kadm5_randkey_principal_3` (`svr_principal.c:1425-1425`): an omitted `-e` reaches `apply_keysalt_policy` as zero keysalts, so the policy or realm default applies.
     pub fn chrand_etypes_keepold_in(
         &mut self,
         name: &PrincipalName,
@@ -427,12 +352,6 @@ impl PrincipalStore {
     }
 
     /// `cpw -randkey -e` with MIT `keepold`. Empty `etypes` uses policy salts.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::BadKeysalts`] when `etypes`
-    /// names an enctype outside the bound policy's `allowed_keysalts`; [`Error::Rng`] when the
-    /// CSPRNG fails; [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn chrand_etypes_keepold(
         &mut self,
         name: &PrincipalName,
@@ -444,13 +363,7 @@ impl PrincipalStore {
         self.chrand_etypes_keepold_in(name, &realm, etypes, keepold, actor)
     }
 
-    /// Drop keys with kvno below `keepkvno`. `keepkvno <= 0` keeps only the
-    /// newest kvno (MIT `purgekeys` without `-keepkvno`).
-    ///
-    /// # Errors
-    ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
-    /// store to `persist_paths` fails.
+    /// Drop keys with kvno below `keepkvno`. `keepkvno <= 0` keeps only the newest kvno (MIT `purgekeys` without `-keepkvno`).
     pub fn purgekeys(&mut self, name: &PrincipalName, keepkvno: i32) -> Result<(), Error> {
         let realm = self.realm.clone();
         let actor = default_mod_actor(&realm);
@@ -458,14 +371,7 @@ impl PrincipalStore {
     }
 
     /// [`Self::purgekeys`] for `name@princ_realm`.
-    ///
-    /// MIT `kadm5_purgekeys` → `kdb_put_entry` stamps `current_caller`
-    /// even when no old keys are dropped.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
-    /// store to `persist_paths` fails.
+    /// MIT `kadm5_purgekeys` → `kdb_put_entry` stamps `current_caller` even when no old keys are dropped.
     pub fn purgekeys_in(
         &mut self,
         name: &PrincipalName,
@@ -489,15 +395,8 @@ impl PrincipalStore {
     }
 
     /// Replace keys with caller-supplied material (`kadm5_setkey_principal`).
-    ///
-    /// `kvno == 0` on every entry picks the next version. `keepold` is MIT's
-    /// integer: 0 discard, 1 keep all, N keep N versions including the new.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when `keys` is
-    /// empty, its entries carry different kvnos or `keepold` collides with an existing kvno;
-    /// [`Error::Db`] when saving the store to `persist_paths` fails.
+    /// `kvno == 0` on every entry picks the next version. `keepold` is MIT's integer: 0 discard, 1 keep all, N keep N versions including the new.
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when `keys` is empty, its entries carry different kvnos or `keepold` collides with an existing kvno; [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn set_keys(
         &mut self,
         name: &PrincipalName,
@@ -510,12 +409,6 @@ impl PrincipalStore {
     }
 
     /// [`Self::set_keys`] for `name@princ_realm`.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when `keys` is
-    /// empty, its entries carry different kvnos or `keepold` collides with an existing kvno;
-    /// [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn set_keys_in(
         &mut self,
         name: &PrincipalName,
