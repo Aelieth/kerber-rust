@@ -7,7 +7,6 @@ impl ecdsa::EcdsaCurve for BrainpoolP512r1 {
     const NORMALIZE_S: bool = false;
 }
 
-#[cfg(feature = "digest")]
 impl ecdsa::DigestAlgorithm for BrainpoolP512r1 {
     type Digest = sha2::Sha512;
 }

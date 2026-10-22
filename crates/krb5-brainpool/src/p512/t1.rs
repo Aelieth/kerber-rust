@@ -1,12 +1,11 @@
-#[cfg(feature = "ecdsa")]
 #[path = "t1_ecdsa.rs"]
 pub mod ecdsa;
 
-#[cfg(all(feature = "arithmetic", target_pointer_width = "64"))]
+#[cfg(target_pointer_width = "64")]
 #[path = "t1_curve.rs"]
 mod arithmetic;
 
-#[cfg(all(feature = "arithmetic", target_pointer_width = "64"))]
+#[cfg(target_pointer_width = "64")]
 pub use {
     self::arithmetic::{AffinePoint, NonZeroScalar, ProjectivePoint, ScalarValue},
     crate::p512::Scalar,
@@ -38,6 +37,3 @@ pub type Sec1Point = elliptic_curve::sec1::Sec1Point<BrainpoolP512t1>;
 pub type FieldBytes = elliptic_curve::FieldBytes<BrainpoolP512t1>;
 
 pub type SecretKey = elliptic_curve::SecretKey<BrainpoolP512t1>;
-
-#[cfg(not(feature = "arithmetic"))]
-impl elliptic_curve::sec1::ValidatePublicKey for BrainpoolP512t1 {}

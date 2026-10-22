@@ -598,8 +598,13 @@ def _ratio_totals(root: pathlib.Path) -> tuple[dict[str, int], dict[str, dict[st
     """rscount.py's totals, with the four missed modules counted as test code."""
     tot = {"code": 0, "comment": 0, "blank": 0, "test_code": 0, "test_comment": 0}
     per: dict[str, dict[str, int]] = {}
+    # fiat-crypto's generated field code is not ours to count, as vendor/ is not.
+    fiat = root / "crates" / "krb5-brainpool" / "src" / "fiat"
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in ("target", ".git", "vendor")]
+        dirnames[:] = [
+            d for d in dirnames
+            if d not in ("target", ".git", "vendor") and pathlib.Path(dirpath) / d != fiat
+        ]
         for name in filenames:
             if not name.endswith(".rs"):
                 continue

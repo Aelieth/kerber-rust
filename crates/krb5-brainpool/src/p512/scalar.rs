@@ -1,8 +1,8 @@
-//! Synthesized by fiat-crypto. MIT, Apache-2.0, or BSD-1-Clause.
+//! The arithmetic in `../fiat/` is fiat-crypto's output (MIT, Apache-2.0 or BSD-1-Clause).
 
-use super::U512;
 use super::r1::BrainpoolP512r1;
 use super::t1::BrainpoolP512t1;
+use super::{ORDER_HEX, U512};
 use elliptic_curve::{
     ff::PrimeField,
     scalar::{FromUintUnchecked, IsHigh},
@@ -18,8 +18,6 @@ mod scalar_impl;
 #[cfg(target_pointer_width = "64")]
 #[allow(clippy::wildcard_imports)]
 use scalar_impl::*;
-
-const ORDER_HEX: &str = "aadd9db8dbe9c48b3fd4e6ae33c9fc07cb308db3b3c9d20ed6639cca70330870553e5c414ca92619418661197fac10471db1d381085ddaddb58796829ca90069";
 
 primefield::monty_field_params! {
     name: ScalarParams,

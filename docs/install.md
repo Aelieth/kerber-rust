@@ -434,11 +434,11 @@ MIT's (`doc/admin/pkinit.rst`):
     pkinit_anchors = FILE:/var/kerberos/krb5kdc/cacert.pem
 ```
 
-- **Keys.** The KDC's key, and a user's for kinit, is an EC key on P-224, P-256, P-384, P-521 or
-  secp256k1, or an RSA key, as MIT's guide makes it with `openssl genrsa`; RSA signs up to 16384
-  bits and five primes, as OpenSSL does. Another key, such as one on a brainpool curve, leaves
-  PKINIT off. Client certificates and their CAs may be RSA or EC on those curves, signed with
-  SHA-256, SHA-384 or SHA-512.
+- **Keys.** The KDC's key, and a user's for kinit, is an EC key on P-224, P-256, P-384, P-521,
+  secp256k1 or brainpool P256, P384 or P512 (r1 or t1; P512 needs a 64-bit build), or an RSA key,
+  as MIT's guide makes it with `openssl genrsa`; RSA signs up to 16384 bits and five primes, as
+  OpenSSL does. Another key, such as one on brainpool P320, leaves PKINIT off. Client certificates
+  and their CAs may be RSA or EC on those curves, signed with SHA-256, SHA-384 or SHA-512.
 - Not supported in a client's certificate, its CAs or its signature, though MIT takes them through
   OpenSSL: RSASSA-PSS. Such a chain is refused with 71 (`certificate signature failure`), such a
   signature with 80. SHA-1 signatures are refused too, as Fedora's

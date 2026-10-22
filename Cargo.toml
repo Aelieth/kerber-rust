@@ -35,7 +35,7 @@ krb5-log = { path = "crates/krb5-log" }
 krb5-cli = { path = "crates/krb5-cli" }
 krb5-crypto = { path = "crates/krb5-crypto" }
 krb5-types = { path = "crates/krb5-types" }
-krb5-brainpool = { path = "crates/krb5-brainpool", default-features = false, features = ["arithmetic", "ecdsa", "digest"] }
+krb5-brainpool = { path = "crates/krb5-brainpool" }
 krb5-asn1 = { path = "crates/krb5-asn1" }
 krb5-protocol = { path = "crates/krb5-protocol" }
 krb5-client = { path = "crates/krb5-client" }
