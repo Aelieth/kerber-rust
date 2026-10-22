@@ -1,6 +1,4 @@
-//! The trace points, one function per MIT `TRACE_*` macro the client paths reach, its text
-//! verbatim from MIT's header. Each writes one line when `KRB5_TRACE` is set and does nothing
-//! otherwise.
+//! The trace points, one function per MIT `TRACE_*` macro the client paths reach, its text verbatim from MIT's header. Each writes one line when `KRB5_TRACE` is set and does nothing otherwise.
 
 use krb5_types::PaData;
 
@@ -268,8 +266,7 @@ pub fn init_creds_preauth_none() {
 }
 
 /// MIT `TRACE_INIT_CREDS_PREAUTH_TRYAGAIN` (`include/k5-trace.h:247-249`): a mechanism retried after a KDC error.
-/// The macro names its arguments `patype, code` but hands them to `{int}` and `{patype}` in that
-/// order, so the line reads the error first, as its one caller passes it.
+/// The macro names its arguments `patype, code` but hands them to `{int}` and `{patype}` in that order, so the line reads the error first, as its one caller passes it.
 /// MIT `init_creds_step_request` (`lib/krb5/krb/get_in_tkt.c:1321-1322`): the KDC's error, then the selected mechanism.
 pub fn init_creds_preauth_tryagain(code: i32, patype: i32) {
     krb5int_trace(
@@ -1030,9 +1027,7 @@ pub fn spake_unknown_group(name: &str) {
     );
 }
 
-/// MIT `TRACE_SPAKE_RESULT` (`plugins/preauth/spake/trace.h:63-64`): the SPAKE group operation's
-/// result, the secret the reply key is derived from. MIT prints it whole as `{hexdata}`; this port
-/// prints only its `{hashlenstr}`, as `{keyblock}` prints a key.
+/// MIT `TRACE_SPAKE_RESULT` (`plugins/preauth/spake/trace.h:63-64`): the SPAKE group operation's result, the secret the reply key is derived from. MIT prints it whole as `{hexdata}`; this port prints only its `{hashlenstr}`, as `{keyblock}` prints a key.
 pub fn spake_result(result: &[u8]) {
     krb5int_trace(
         "SPAKE algorithm result: {hashlenstr}",
@@ -1040,10 +1035,7 @@ pub fn spake_result(result: &[u8]) {
     );
 }
 
-/// MIT `TRACE_PREAUTH_ENC_TS` (`include/k5-trace.h:317-319`): the timestamp, for one sent inside FAST armor.
-/// Its ciphertext is under the client's long-term key and the armor hides it from the wire, so it
-/// prints only as its `{hashlenstr}`, as `{keyblock}` prints a key: the trace gives no offline
-/// password check that the wire does not.
+/// Its ciphertext is under the client's long-term key and the armor hides it from the wire, so it prints only as its `{hashlenstr}`, as `{keyblock}` prints a key: the trace gives no offline password check that the wire does not.
 /// MIT `enc_ts_get` (`kdc/kdc_preauth_encts.c:37-40`): the KDC offers no timestamp under FAST, so MIT's FAST client sends an encrypted challenge and never traces one.
 pub fn preauth_enc_ts_armored(sec: i64, usec: i32, plain: &[u8], enc: &[u8]) {
     krb5int_trace(

@@ -20,8 +20,6 @@ fn hex(s: &str) -> Vec<u8> {
         .collect()
 }
 
-/// Live MIT 1.22.2 (`s01-keyblock-form.txt`): the key whose bytes MIT's `klist -K` printed traced
-/// as `aes256-sha2/4149`, the first two bytes of its SHA-1; no key byte is printed.
 #[test]
 fn a_keyblock_is_its_enctype_and_a_sixteen_bit_hash() {
     let key = hex("6bf42ce474920d4ddef1ecbdc6371c3bbd395ef68a7bda72c4e8c1f381152a77");
@@ -48,7 +46,6 @@ fn a_keyblock_is_its_enctype_and_a_sixteen_bit_hash() {
     );
 }
 
-/// Live MIT 1.22.2 kinit: the KDC's method data and the next request's padata.
 #[test]
 fn padata_lists_print_names_and_numbers() {
     let list = [pa(136), pa(19), pa(151), pa(2), pa(133)];
@@ -74,7 +71,6 @@ fn padata_lists_print_names_and_numbers() {
     assert_eq!(trace_format("{patype}", &[Arg::Patype(4242)]), "4242");
 }
 
-/// Live MIT 1.22.2 kvno: the shortest enctype names.
 #[test]
 fn enctypes_print_their_shortest_names() {
     assert_eq!(
@@ -89,7 +85,6 @@ fn enctypes_print_their_shortest_names() {
     assert_eq!(trace_format("{etype}", &[Arg::Etype(99)]), "99");
 }
 
-/// Live MIT 1.22.2: an error code prints with its table text, or the message the library set.
 #[test]
 fn errors_print_their_code_and_text() {
     assert_eq!(
@@ -125,7 +120,6 @@ fn errors_print_their_code_and_text() {
     );
 }
 
-/// Live MIT 1.22.2 kinit and kpasswd: addresses with their transport.
 #[test]
 fn remote_addresses_print_transport_and_address() {
     let addr: SocketAddr = "127.0.0.1:88".parse().unwrap();
@@ -150,7 +144,6 @@ fn remote_addresses_print_transport_and_address() {
     );
 }
 
-/// Live MIT 1.22.2 SPAKE kinit: a cookie with bytes outside 32 to 126 prints them as `\xNN`.
 #[test]
 fn unprintable_bytes_print_as_escapes() {
     assert_eq!(
@@ -167,7 +160,6 @@ fn unprintable_bytes_print_as_escapes() {
     assert_eq!(trace_format("{str}", &[Arg::Str(None)]), "(null)");
 }
 
-/// Live MIT 1.22.2 kinit: a config entry's principal escapes `/` and `@` in its third component.
 #[test]
 fn credentials_print_client_and_server() {
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
@@ -194,7 +186,6 @@ fn credentials_print_client_and_server() {
         "Storing user@KERBER.TEST -> krb5_ccache_conf_data/fast_avail/krbtgt\\/KERBER.TEST\\@\
          KERBER.TEST@X-CACHECONF: in MEMORY:mua1adX"
     );
-    // Live MIT 1.22.2 `kvno -U user -P`: the S4U2Proxy lookup matches any client.
     assert_eq!(
         trace_format(
             "Retrieving {creds} from {ccache}",
@@ -211,7 +202,6 @@ fn credentials_print_client_and_server() {
     );
 }
 
-/// Live MIT 1.22.2 kinit: the timestamp line, `{long}.{int}` with no padding.
 #[test]
 fn hex_data_prints_upper_case() {
     let plain = hex("301aa011180f32303236313030353134333834335aa105020300af76");
@@ -231,8 +221,6 @@ fn hex_data_prints_upper_case() {
     );
 }
 
-/// MIT `trace_format`: an unknown word prints nothing and takes no argument, and a `{` with no
-/// `}` ends the message, as MIT's own `TRACE_TGS_REPLY_DECODE_SESSION` shows.
 #[test]
 fn unknown_words_and_open_braces_follow_mit() {
     assert_eq!(
@@ -279,7 +267,6 @@ fn at_secure_reads_the_auxiliary_vector() {
     assert!(at_secure(&v));
 }
 
-/// Live MIT 1.22.2 kinit (`kinit/mit.trace`): the output cache written through a MEMORY cache.
 #[test]
 fn write_out_ccache_is_mits_memory_cache_sequence() {
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
@@ -311,7 +298,6 @@ fn write_out_ccache_is_mits_memory_cache_sequence() {
     assert_eq!(lines, want);
 }
 
-/// Live MIT 1.22.2 kinit and kvno: the points' texts, MIT's conditional words included.
 #[test]
 fn points_print_mits_lines() {
     let addr = RemoteAddr {
@@ -404,7 +390,6 @@ fn no_point_prints_key_or_secret_bytes() {
     );
 }
 
-/// MIT `init_creds_step_request` (`lib/krb5/krb/get_in_tkt.c:1321-1322`): a retry after a KDC error names the error, then the mechanism.
 #[test]
 fn tryagain_names_the_error_then_the_mechanism() {
     let lines = capture(|| init_creds_preauth_tryagain(65, 16));
@@ -414,7 +399,6 @@ fn tryagain_names_the_error_then_the_mechanism() {
     );
 }
 
-/// The `Arg` kinds a `{word}` prints, as `format_word` matches them.
 fn kinds_of(word: &str) -> &'static [&'static str] {
     match word {
         "int" | "long" => &["Int", "Long"],
@@ -443,8 +427,6 @@ fn kinds_of(word: &str) -> &'static [&'static str] {
     }
 }
 
-/// Every point hands each `{word}` of its text, in order, an argument of the kind that word
-/// prints; a word handed another kind prints nothing.
 #[test]
 fn every_point_gives_each_word_its_kind() {
     assert!(WORDS.iter().all(|w| !kinds_of(w).is_empty()));

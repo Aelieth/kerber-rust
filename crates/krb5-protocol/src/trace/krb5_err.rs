@@ -1,7 +1,4 @@
-//! MIT's `krb5` error table, the texts `{kerr}` prints: entry `n` is the text of code
-//! `ERROR_TABLE_BASE_krb5 + n` (`-1765328384 + n`), generated verbatim from MIT's
-//! `lib/krb5/error_tables/krb5_err.et`, whose 256 entries run from `KRB5KDC_ERR_NONE` to
-//! `KRB5_TRACE_NOSUPP`.
+//! MIT's `krb5` error table, the texts `{kerr}` prints: entry `n` is the text of code `ERROR_TABLE_BASE_krb5 + n` (`-1765328384 + n`), generated verbatim from MIT's `lib/krb5/error_tables/krb5_err.et`, whose 256 entries run from `KRB5KDC_ERR_NONE` to `KRB5_TRACE_NOSUPP`.
 
 /// The 256 texts, by offset from `ERROR_TABLE_BASE_krb5`.
 pub(super) const TEXTS: [&str; 256] = [
