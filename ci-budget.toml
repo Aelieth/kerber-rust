@@ -10,7 +10,7 @@ test = 360
 doc = 90
 # release is the old test step (max 108s) plus a toolchain. fuzz is the old
 # doc step (max 61s) plus a toolchain. test and doc ceilings are unchanged.
-release = 180
+release = 210
 fuzz = 120
 shellcheck = 150
 msrv = 150
