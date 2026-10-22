@@ -5,10 +5,8 @@ use std::fmt;
 /// Failure from issue, ACL, or the principal store.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
-    /// Crypto layer.
     Crypto(String),
-    /// An EncryptedData whose enctype is not its key's: MIT's `KRB5_BAD_ENCTYPE`, a library code
-    /// that `errcode_to_protocol` sends as 60.
+    /// An EncryptedData whose enctype is not its key's: MIT's `KRB5_BAD_ENCTYPE`, a library code that `errcode_to_protocol` sends as 60.
     /// MIT `krb5_k_decrypt` (`lib/crypto/krb/decrypt.c:45-46`): the enctype is checked before anything is decrypted.
     BadEnctype,
     /// A des3 key with an octet of even parity: MIT's `KRB5DES_BAD_KEYPAR`, a library code that `errcode_to_protocol` sends as 60.
@@ -17,11 +15,9 @@ pub enum Error {
     /// A des3 key with a weak or semi-weak DES key among its three: MIT's `KRB5DES_WEAK_KEY`, sent as 60 likewise.
     /// MIT `validate_and_schedule` (`lib/crypto/builtin/enc_provider/des3.c:33-53`): the code after the parity of that DES key and before the next one's.
     DesWeakKey,
-    /// DER codec.
     Asn1(String),
     /// RFC 4120 KRB-ERROR / KDC error code.
     Protocol {
-        /// Error code.
         code: i32,
         /// Optional text (MIT status word on the wire).
         text: Option<String>,
@@ -34,15 +30,12 @@ pub enum Error {
     AclDenied,
     /// kadm5.acl load failed (`acl_init`).
     AclParse(String),
-    /// Principal already exists.
     AlreadyExists,
-    /// Principal is not in the store.
     NotFound,
     /// `KADM5_ALIAS_REALM`: alias and target realms differ.
     AliasRealm,
     /// `KRB5_KDB_ALIAS_UNSUPPORTED`: the operation's source is an alias stub.
     AliasUnsupported,
-    /// CSPRNG failed.
     Rng,
     /// Password rejected by named policy.
     PasswordPolicy(String),
@@ -53,8 +46,7 @@ pub enum Error {
         /// `last_pwd_change + pw_min_life`.
         until: u32,
     },
-    /// The principal database, its update log or its stash could not be read or written: an
-    /// I/O failure with the system's own text (`strerror`), or a file that does not load.
+    /// The principal database, its update log or its stash could not be read or written: an I/O failure with the system's own text (`strerror`), or a file that does not load.
     Db {
         /// What failed: `PermissionDenied` for a writer that may not write the database.
         kind: std::io::ErrorKind,
@@ -62,8 +54,7 @@ pub enum Error {
         text: String,
     },
     /// `EINVAL` from `krb5_db_put_principal` / DB2 `db_args`.
-    /// MIT `krb5_db2_put_principal` (`kdb_db2.c:817-822`): any `db_args` is `EINVAL`,
-    /// since DB2 supports no DB arguments for a principal.
+    /// MIT `krb5_db2_put_principal` (`kdb_db2.c:817-822`): any `db_args` is `EINVAL`, since DB2 supports no DB arguments for a principal.
     InvalidArgument(String),
     /// Request PDU was not AS-REQ or TGS-REQ.
     UnexpectedPdu,
@@ -72,9 +63,7 @@ pub enum Error {
         /// DER METHOD-DATA (ETYPE-INFO2).
         e_data: Vec<u8>,
     },
-    /// A kdcpreauth module's failure. `code` is the module's own `krb5_error_code` and `message`
-    /// is what `krb5_get_error_message` gives that code. The filter keeps the message only when
-    /// the wire code is this one.
+    /// A kdcpreauth module's failure. `code` is the module's own `krb5_error_code` and `message` is what `krb5_get_error_message` gives that code. The filter keeps the message only when the wire code is this one.
     /// MIT `k5_get_error` (`util/support/errors.c:68-95`): the message is returned for the code it was set under.
     PreauthModule {
         /// The module's `krb5_error_code`.
@@ -207,8 +196,7 @@ impl From<krb5_protocol::Error> for Error {
     }
 }
 
-/// MIT `errcode_to_protocol` (`kdc_util.c:691-697`): the code past the krb5 table base is
-/// kept when it is 0 to 128, and anything else is `KRB_ERR_GENERIC`.
+/// MIT `errcode_to_protocol` (`kdc_util.c:691-697`): the code past the krb5 table base is kept when it is 0 to 128, and anything else is `KRB_ERR_GENERIC`.
 #[must_use]
 pub fn errcode_to_protocol(code: i32) -> i32 {
     if (0..=128).contains(&code) {
