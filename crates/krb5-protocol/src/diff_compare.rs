@@ -216,8 +216,7 @@ fn method_edata_no_cookie(etypes: &[i32]) -> Vec<u8> {
 
 #[test]
 fn etype_info2_requires_exact_etype_set() {
-    // MIT's hint (get_preauth_hint_list) and Rust's both list one entry for
-    // the selected client key, so the etype sets must be equal.
+    // MIT's hint (get_preauth_hint_list) and Rust's both list one entry for the selected client key, so the etype sets must be equal.
     let one = method_edata(&[18]);
     compare_preauth_e_data(Some(&one), Some(&one)).expect("equal etype sets pass");
 
@@ -335,8 +334,7 @@ fn krb_error_crealm_cname_presence_is_compared() {
 fn ticket_flag_bit_differences_fail_red() {
     let (r_rep, r_enc, r_tkt) = sample_parts("user", 0xaa, 0);
 
-    // The enc-pa-rep bit (== CANONICALIZE bit 15) is compared: MIT sets it on
-    // every ticket, so a divergence must fail red.
+    // The enc-pa-rep bit (== CANONICALIZE bit 15) is compared: MIT sets it on every ticket, so a divergence must fail red.
     let (m_rep, mut m_enc, mut m_tkt) = sample_parts("user", 0xbb, 11);
     m_enc.flags = m_enc.flags.with_bit(flag_bit::ENC_PA_REP, true);
     m_tkt.flags = m_tkt.flags.with_bit(flag_bit::ENC_PA_REP, true);
