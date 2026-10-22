@@ -1,7 +1,4 @@
-//! kadm5.acl-style allow/deny for admin operations.
-//!
-//! No matching line is a denial. A matching line grants only the operations that line sets, so extract is not implied by a wildcard.
-//! Rename also denies when the destination line carries restrictions.
+//! No matching line denies, and * or x does not grant extract.
 
 use crate::error::Error;
 use crate::store::{AdminEnt, kadm5_mask};
@@ -21,9 +18,7 @@ pub(crate) struct AclSyntaxError {
 }
 
 impl AclSyntaxError {
-    /// The line's syntax error as MIT words it, its first ten bytes shown (`fname: ` first when there is a file name).
     // MIT: `load_acl_file` (auth_acl.c:417-423)
-    /// `%s: syntax error at line %d <%.10s...>`, logged and set as the context's message.
     pub(crate) fn located(&self, fname: &str) -> String {
         let shown = String::from_utf8_lossy(&self.line[..self.line.len().min(10)]);
         let at = format!("syntax error at line {} <{shown}...>", self.lineno);
@@ -40,7 +35,6 @@ pub enum AdminOp {
     Create,
     Delete,
     Ktadd,
-    /// Change a password (`kpasswd` / kadm5 `c`).
     ChangePassword,
     Inquire,
     Extract,
@@ -52,25 +46,15 @@ pub enum AdminOp {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Restrictions {
-    /// `-clearpolicy`.
     pub clear_policy: bool,
-    /// `-policy <name>`.
     pub policy: Option<String>,
-    /// `-maxlife` seconds.
     pub max_life: Option<u64>,
-    /// `-maxrenewlife` seconds.
     pub max_renewable_life: Option<u64>,
-    /// `-expire` delta seconds.
     pub expire: Option<u64>,
-    /// `-pwexpire` delta seconds.
     pub pwexpire: Option<u64>,
-    /// Bits forced on (`+flag` / inverted `-allow_*`).
     pub require_attrs: u32,
-    /// Bits allowed to stay (`~0` with `-flag` bits cleared).
     pub forbid_attrs: u32,
-    /// `rs->mask & KADM5_ATTRIBUTES`: at least one flag token was parsed, so the request's attributes are rewritten even when the flag names cancel out.
     // MIT: `parse_restrictions` (auth_acl.c:189-192)
-    /// every token that `krb5_flagspec_to_mask` accepts sets `KADM5_ATTRIBUTES` in the mask.
     pub attrs: bool,
 }
 
@@ -91,17 +75,12 @@ impl Default for Restrictions {
 }
 
 impl Restrictions {
-    /// MIT `impose_restrictions`, run on the kadm5 create/modify *request* before the library call (`auth_restrict` ← `stub_auth_restrict`).
     // MIT: `auth_restrict` (kadmin/server/auth.c:267-272)
-    /// it is handed the request's `ent` and `mask`, so the restrictions rewrite the request itself.
     // MIT: `create_principal_2_svc` (server_stubs.c:478-478)
-    /// `stub_auth_restrict` runs on the create request before `kadm5_create_principal`.
     // MIT: `create_principal3_2_svc` (server_stubs.c:519-519)
-    /// `stub_auth_restrict` runs on the create request before `kadm5_create_principal_3`.
     // MIT: `modify_principal_2_svc` (server_stubs.c:630-630)
-    /// the modify request passes `stub_auth_restrict` before `kadm5_modify_principal`.
     // MIT: `impose_restrictions` (kadmin/server/auth.c:205-265)
-    /// every restriction sets its mask bit, so the entry field wins over the realm default afterwards; a caller value is only *lowered* to the cap (an in-mask 0 stays 0), a value absent from the mask becomes the cap; `-expire`/`-pwexpire` cap at `now + delta`; `-policy` replaces a different requested policy and
+    /// A value under the cap stays, 0 included, and the mask bit is set.
     pub fn impose(&self, ent: &mut AdminEnt, now: u32) {
         if self.attrs || self.require_attrs != 0 || self.forbid_attrs != !0 {
             ent.attributes |= self.require_attrs;
@@ -149,16 +128,14 @@ impl Restrictions {
     }
 }
 
-/// The flags `default_principal_flags` sets ([`principal_flags_spec`]'s, the words read before one that does not convert kept, as MIT keeps `params.flags`). Starts from `KRB5_KDB_DEF_FLAGS` (0) like MIT: when the stanza is written it *is* `params.flags`; the Rust `requires_preauth` knob only stands in for a password-keyed create when the stanza is absent (`PrincipalStore::default_create_attributes`).
 #[must_use]
 pub fn default_principal_flags(spec: &str) -> u32 {
     principal_flags_spec(spec).0
 }
 
-/// `default_principal_flags` as MIT's loop reads it, and whether every word converted. A word ends at the first `,` in what is left, else the first space, else the first tab; its trailing blanks are cut (its first byte never is), the next word's leading blanks skipped, so a value ending in a separator ends in an empty word, which converts to nothing. Each word goes to `krb5_flagspec_to_mask(sp, &flags, &flags)`: a `+flag` sets, a `-flag` clears.
 // MIT: `kadm5_get_config_params` (alt_prof.c:603-627)
-/// the first word that does not convert stops the loop, and the parameter is left unset.
 #[must_use]
+/// A word that does not convert stops the loop and leaves the value unset.
 pub fn principal_flags_spec(spec: &str) -> (u32, bool) {
     let c_space = |c: char| matches!(c, ' ' | '\t' | '\n' | '\x0b' | '\x0c' | '\r');
     let mut flags = 0u32;
@@ -193,33 +170,21 @@ pub fn principal_flags_spec(spec: &str) -> (u32, bool) {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AclEntry {
-    /// Exact `name@REALM` (or glob) as written.
     pub(crate) principal: String,
-    /// `a` / `*`
     pub(crate) add: bool,
-    /// `d` / `*`
     pub(crate) delete: bool,
-    /// `i` (inquire) / `*`
     pub(crate) inquire: bool,
-    /// `e` (extract keys). MIT does not include this in `*`/`x`.
     pub(crate) extract: bool,
-    /// `c` (changepw) / `*`
     pub(crate) changepw: bool,
-    /// `m` (modify) / `*`
     pub(crate) modify: bool,
-    /// `s` (setkey) / `*`
     pub(crate) setkey: bool,
-    /// `l` (list) / `*`
     pub(crate) list: bool,
-    /// `p` (propagate) / `*`
     pub(crate) propagate: bool,
     client: Option<PrincPat>,
     target: Option<PrincPat>,
-    /// Optional restrictions imposed on create/modify.
     pub(crate) restrictions: Option<Restrictions>,
 }
 
-/// Ordered ACL; first matching principal wins. Unlisted principals are denied.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Acl {
     entries: Vec<AclEntry>,
@@ -232,24 +197,19 @@ impl Acl {
     }
 
     // MIT: `acl_init` (auth_acl.c:554-555)
-    /// a null ACL file returns `KRB5_PLUGIN_NO_HANDLE` before any file is read.
     #[must_use]
     pub fn none() -> Self {
         Self::new()
     }
 
-    /// Parse kadm5.acl text (`auth_acl.c` `load_acl_file`), as [`Self::parse_bytes_with_realm`] does with no default realm.
-    /// [`Error::AclParse`] when a line has no client or no operation list, an unknown operation letter, a client or target that is not a principal name, or restrictions that do not parse.
     pub fn parse(text: &str) -> Result<Self, Error> {
         Self::parse_bytes_with_realm(text.as_bytes(), "")
     }
 
-    /// Like [`Self::parse`] with MIT `krb5_parse_name` default realm.
     pub fn parse_with_realm(text: &str, default_realm: &str) -> Result<Self, Error> {
         Self::parse_bytes_with_realm(text.as_bytes(), default_realm)
     }
 
-    /// Parse a kadm5.acl file's bytes as MIT reads them: they need not be UTF-8 (a field's bytes that are not UTF-8 read as U+FFFD), and its lines are MIT `get_line`'s.
     pub fn parse_bytes_with_realm(bytes: &[u8], default_realm: &str) -> Result<Self, Error> {
         Self::parse_located(bytes, default_realm, "").map_err(|e| {
             let located = e.located("");
@@ -257,7 +217,6 @@ impl Acl {
         })
     }
 
-    /// The entries of `bytes`, else the first line that does not load; `fname` names the file in MIT's restriction message.
     pub(crate) fn parse_located(
         bytes: &[u8],
         default_realm: &str,
@@ -279,7 +238,6 @@ impl Acl {
         Ok(Self { entries })
     }
 
-    /// Allow `admin@REALM` every mutating op.
     pub fn allow_admin(admin: impl Into<String>) -> Result<Self, Error> {
         let principal = admin.into();
         let client = Some(parse_princ_pat(&principal)?);
@@ -302,7 +260,6 @@ impl Acl {
         })
     }
 
-    /// Check whether `actor` may perform `op` on `target` (`auth_acl.c` `acl_check`).
     pub fn check(&self, actor: &str, op: AdminOp, target: Option<&str>) -> Result<(), Error> {
         let Some(e) = self.find(actor, target) else {
             return deny(actor, op);
@@ -331,9 +288,8 @@ impl Acl {
         deny(actor, op)
     }
 
-    /// Rename: delete on `src` and add on `dest` with no restrictions.
     // MIT: `acl_renprinc` (auth_acl.c:638-648)
-    /// the rename is allowed only when both checks pass and the add entry carries no restrictions.
+    /// The add line's restrictions deny a rename that otherwise matches.
     pub fn check_rename(&self, actor: &str, src: &str, dest: &str) -> Result<(), Error> {
         self.check(actor, AdminOp::Delete, Some(src))?;
         self.check(actor, AdminOp::Create, Some(dest))?;
@@ -346,9 +302,8 @@ impl Acl {
         Ok(())
     }
 
-    /// Alias: add on `alias` with no restrictions and modify on `target`.
     // MIT: `acl_addalias` (auth_acl.c:723-734)
-    /// the alias is allowed only when the add entry carries no restrictions and the modify check on the target passes.
+    /// An alias also needs modify on the target name.
     pub fn check_addalias(&self, actor: &str, alias: &str, target: &str) -> Result<(), Error> {
         self.check(actor, AdminOp::Create, Some(alias))?;
         if self
@@ -430,11 +385,9 @@ struct WildState {
     backref: Vec<String>,
 }
 
-/// The lines MIT reads from a kadm5.acl file, each with the number of its first physical line: `fgets` reads at most 127 bytes at a time, and a NUL ends what one read returned (`strlen`), so the rest of that read, its newline too, is lost; a line whose newline follows a `\` continues on the next (a CRLF line's `\r` is not a `\`); an empty line and one whose first byte is `#` are skipped, so a `#` line ending in `\` swallows the next; a last line with no newline is kept as it is, its `\` too.
 // MIT: `get_line` (auth_acl.c:102-153)
-/// a line ending in `\` continues; an empty or comment line starts over; at the end, an unterminated line that is not a comment is returned.
+/// A NUL ends a 127-byte read, and a # line ending in \ swallows the next.
 fn acl_lines(bytes: &[u8]) -> Vec<(usize, Vec<u8>)> {
-    // `fgets(p, 128, fp)`: at most 127 bytes, through the first newline.
     const READ: usize = 127;
     let mut out = Vec::new();
     let mut rest = bytes;
@@ -476,10 +429,7 @@ fn acl_lines(bytes: &[u8]) -> Vec<(usize, Vec<u8>)> {
 }
 
 // MIT: `parse_line` (auth_acl.c:360-364)
-/// the target and the restrictions may be absent, and the client and the operation list may not.
 // MIT: `parse_entry` (auth_acl.c:276-312)
-/// an unknown operation letter, a client or a target that is no principal name, and restrictions that do not parse are each logged.
-/// A line whose client or operation list is empty is a syntax error, with no message of its own, and adds no entry. Any other line that does not parse gives the message MIT logs for it.
 fn parse_line(line: &str, default_realm: &str, fname: &str) -> Result<AclEntry, Option<String>> {
     let (client_s, ops, target_s, rs_s) = split_fields(line);
     if client_s.is_empty() || ops.is_empty() {
@@ -496,6 +446,7 @@ fn parse_line(line: &str, default_realm: &str, fname: &str) -> Result<AclEntry, 
     let mut propagate = false;
     for ch in ops.chars() {
         let rop = ch.to_ascii_lowercase();
+        // An upper-case letter revokes that operation.
         let grant = rop == ch;
         match rop {
             'a' => add = grant,
@@ -602,7 +553,6 @@ fn parse_princ_pat_in(s: &str, default_realm: &str) -> Result<PrincPat, Error> {
     Ok(PrincPat { components, realm })
 }
 
-/// A restriction that needs an argument and does not have one is a parse error and adds no entry.
 fn parse_restrictions(str: &str) -> Result<Restrictions, Error> {
     let mut rs = Restrictions::default();
     let tokens: Vec<&str> = str
@@ -650,9 +600,7 @@ fn parse_restrictions(str: &str) -> Result<Restrictions, Error> {
 }
 
 // MIT: `ftbl` (kadm5/str_conv.c:50-94)
-/// each flag name with its KDB bit and whether the name inverts it.
 // MIT: `NFTBL` (kadm5/str_conv.c:95-95)
-/// the table's row count, which bounds the lookup.
 const FLAG_TABLE: &[(&str, u32, bool)] = &[
     ("allow_postdated", KDB_DISALLOW_POSTDATED, true),
     ("postdateable", KDB_DISALLOW_POSTDATED, true),
@@ -700,9 +648,7 @@ const FLAG_TABLE: &[(&str, u32, bool)] = &[
 ];
 
 // MIT: `krb5_flagspec_to_mask` (kadm5/str_conv.c:171-197)
-/// a leading `-` negates and a `+` is dropped, hyphens become underscores and the name is lowercased before the table lookup.
 // MIT: `kadmin_parse_princ_args` (kadmin.c:1164-1165)
-/// `toset == toclear`, both the principal's attributes.
 #[must_use]
 pub fn kadmin_flagspec(spec: &str) -> Option<(u32, u32)> {
     let (req_neg, body) = spec
@@ -736,7 +682,6 @@ pub fn kadmin_flagspec(spec: &str) -> Option<(u32, u32)> {
 }
 
 // MIT: `krb5_flagspec_to_mask` (kadm5/str_conv.c:170-198)
-/// a known flag name or a `0x` number sets or clears its bit; any other name is an error.
 fn flagspec_to_mask(spec: &str, toset: &mut u32, toclear: &mut u32) -> bool {
     let (req_neg, body) = if let Some(rest) = spec.strip_prefix('-') {
         (true, rest)
@@ -772,7 +717,6 @@ fn flagspec_to_mask(spec: &str, toset: &mut u32, toclear: &mut u32) -> bool {
 }
 
 // MIT: `raw_flagspec_to_mask` (kadm5/str_conv.c:147-152)
-/// a `0x` flag is `strtoul(s, NULL, 16) & 0xffffffff`.
 fn hex_flag32(hex: &str) -> u32 {
     let digits: String = hex.chars().take_while(char::is_ascii_hexdigit).collect();
     let v = u64::from_str_radix(&digits, 16).unwrap_or(0);
@@ -784,6 +728,7 @@ fn parse_deltat(s: &str) -> Option<u64> {
     u64::try_from(v).ok()
 }
 
+/// * matches one whole component; *N is that component of the client.
 fn match_data(pat: &str, actual: &str, targetflag: bool, ws: Option<&mut WildState>) -> bool {
     if pat == "*" {
         if let Some(ws) = ws
