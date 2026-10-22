@@ -1,15 +1,10 @@
 //! Client preauth modules selected by `[plugins] clpreauth`.
-//!
-//! MIT `k5_init_preauth_context` (`lib/krb5/krb/preauth2.c:120-204`): registers the built-in
-//! clpreauth modules in the order `pkinit`, `spake`, `encrypted_challenge`, `encrypted_timestamp`,
-//! `otp`.
+//! MIT `k5_init_preauth_context` (`lib/krb5/krb/preauth2.c:120-204`): registers the built-in clpreauth modules in the order `pkinit`, `spake`, `encrypted_challenge`, `encrypted_timestamp`, `otp`.
 //! MIT `k5_plugin_load_all` (`lib/krb5/krb/plugin.c:421-455`): applies `disable` and `enable_only`.
 //! A module whose init fails, or a dynamic module that does not load, is not kept.
 //! MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:648-728`): answers only a pa-type a loaded module serves.
 //! `sam2` is not implemented, so it is absent the way a module that failed to load is absent.
-//! `otp` follows `encrypted_timestamp`, as MIT registers it. `module` is not read. Embedder modules
-//! follow the built-ins; an earlier name wins a duplicate, and the first loaded module to claim a
-//! pa-type keeps it.
+//! `otp` follows `encrypted_timestamp`, as MIT registers it. `module` is not read. Embedder modules follow the built-ins; an earlier name wins a duplicate, and the first loaded module to claim a pa-type keeps it.
 use std::sync::{Arc, Mutex};
 
 use krb5_config::Krb5Conf;
@@ -19,39 +14,21 @@ use krb5_types::PaData;
 use crate::error::Error;
 
 /// One clpreauth module an embedder registers by name.
-///
-/// MIT `krb5_clpreauth_vtable` (`include/krb5/clpreauth_plugin.h`): `name`, `pa_type_list`,
-/// `flags` (`PA_REAL`) and `process`. Built-in mechanisms stay in the AS exchange; this trait is
-/// how an embedder adds a named module the same reader selects.
 pub trait ClPreauth: Send + Sync {
     /// MIT's module name, the string `disable` and `enable_only` match.
     fn name(&self) -> &'static str;
 
-    /// Pa-types this module serves. A type already claimed by an earlier loaded module is a
-    /// conflict and this module is not kept.
-    ///
-    /// MIT `k5_init_preauth_context` (`lib/krb5/krb/preauth2.c:171-181`): the first module to
-    /// list a pa-type keeps it.
+    /// Pa-types this module serves. A type already claimed by an earlier loaded module is a conflict and this module is not kept.
+    /// MIT `k5_init_preauth_context` (`lib/krb5/krb/preauth2.c:171-181`): the first module to list a pa-type keeps it.
     fn pa_types(&self) -> &'static [i32];
 
-    /// Whether `pa_type` is a real mechanism (`PA_REAL`). The default is real, which is MIT's
-    /// when `flags` is unset.
-    ///
-    /// MIT `clpreauth_is_real` (`lib/krb5/krb/preauth2.c:322-328`): a module with no `flags`
-    /// function is real for every type it lists.
+    /// MIT `clpreauth_is_real` (`lib/krb5/krb/preauth2.c:322-328`): a module with no `flags` function is real for every type it lists.
     fn real(&self, _pa_type: i32) -> bool {
         true
     }
 
-    /// Answer one input pa-data element. `Ok(None)` declines; `Ok(Some(out))` is the padata the
-    /// next AS-REQ carries after the cookie.
-    ///
-    /// # Errors
-    ///
+    /// Answer one input pa-data element. `Ok(None)` declines; `Ok(Some(out))` is the padata the next AS-REQ carries after the cookie.
     /// A module failure. The exchange does not try another mechanism after it.
-    ///
-    /// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:679-686`): calls the module's `process`
-    /// and keeps the padata it returns.
     fn process(&self, input: &PaData) -> Result<Option<Vec<PaData>>, Error>;
 }
 
@@ -72,17 +49,11 @@ struct Slot {
 
 /// Which loaded module serves a pa-type.
 pub(crate) enum Owner {
-    /// The built-in `pkinit` module.
     Pkinit,
-    /// The built-in `spake` module.
     Spake,
-    /// The built-in `encrypted_challenge` module.
     EncChallenge,
-    /// The built-in `encrypted_timestamp` module.
     EncTs,
-    /// The built-in `otp` module.
     Otp,
-    /// An embedder module.
     Embedder(Arc<dyn ClPreauth>),
 }
 
@@ -121,8 +92,7 @@ fn extras() -> Vec<Arc<dyn ClPreauth>> {
         .clone()
 }
 
-/// MIT `spake_init` (`plugins/preauth/spake/spake_client.c:62-73`): no permitted group means the
-/// module is not kept.
+/// MIT `spake_init` (`plugins/preauth/spake/spake_client.c:62-73`): no permitted group means the module is not kept.
 fn spake_initialized(profile: &Krb5Conf) -> bool {
     let words = profile
         .spake_preauth_groups
@@ -218,13 +188,11 @@ fn selected(profile: &Krb5Conf) -> Vec<Slot> {
     ordered
 }
 
-/// Whether `[plugins] clpreauth` left `name` loaded.
 #[must_use]
 pub fn loaded(profile: &Krb5Conf, name: &str) -> bool {
     selected(profile).iter().any(|slot| slot.name == name)
 }
 
-/// The loaded module that owns `pa_type`, if one does.
 #[must_use]
 pub(crate) fn owner_of(profile: &Krb5Conf, pa_type: i32) -> Option<Owner> {
     let slot = selected(profile)
@@ -240,7 +208,6 @@ pub(crate) fn owner_of(profile: &Krb5Conf, pa_type: i32) -> Option<Owner> {
     })
 }
 
-/// Names left loaded, in MIT's order after `enable_only`.
 #[cfg(test)]
 #[must_use]
 fn selected_names(profile: &Krb5Conf) -> Vec<&'static str> {
