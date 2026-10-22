@@ -151,6 +151,16 @@ DIFFSEND_CASES = frozenset(
         "tgs-fast-explicit-armor",
         "tgs-fast-armor-no-tgs-subkey",
         "tgs-fast-armor-no-subkey",
+        "pkinit-cms-too-small",
+        "pkinit-cms-header-too-long",
+        "pkinit-cms-too-long",
+        "pkinit-cms-wrong-tag",
+        "pkinit-cms-field-missing",
+        "pkinit-cms-wrong-oid",
+        "pkinit-authpack-not-octet-string",
+        "pkinit-cms-no-signer-cert",
+        "pkinit-sig-not-der",
+        "pkinit-sig-r-zero",
     }
 )
 _LEDGER_GATE = re.compile(r"(?:scripts/)?([A-Za-z0-9._-]+-gate(?:\.sh)?)")

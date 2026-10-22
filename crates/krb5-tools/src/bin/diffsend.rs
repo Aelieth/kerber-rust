@@ -5180,6 +5180,8 @@ fn run() -> Result<(), String> {
         err::PREAUTH_FAILED,
     )?;
 
+    b17_cms_cases(&cfg, realm, &user)?;
+
     let nodot = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "nodot"]);
     let nodot_tgt = mint_tgt(
         tkt_key,
@@ -5354,7 +5356,7 @@ fn run() -> Result<(), String> {
     let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "testhost.kerber.test"]);
     ra_cases(&cfg, realm, &user, &host)?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":139}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":149}}"#);
     Ok(())
 }
 
@@ -5393,6 +5395,157 @@ fn tgs_rep_nonce(raw: &[u8], session: &ProtocolKey) -> Result<Vec<u8>, String> {
         },
         _ => Err("enc-part has no nonce".into()),
     }
+}
+
+/// B17: refused signedAuthPacks; only reasons equal on OpenSSL 3.0 and 3.5 (rest are lab cells).
+fn b17_cms_cases(cfg: &Cfg, realm: &str, user: &PrincipalName) -> Result<(), String> {
+    let base_cms = |nonce: u32| -> Result<Vec<u8>, String> {
+        let pem_path =
+            env::var("KERBER_PKINIT_USER").unwrap_or_else(|_| "/tmp/pkinit/user.pem".into());
+        let pem = fs::read_to_string(&pem_path)
+            .map_err(|e| format!("pkinit user pem {pem_path}: {e}"))?;
+        let (cert, leaf) = krb5_types::pkinit::parse_identity_pem(&pem)
+            .ok_or_else(|| format!("parse {pem_path}"))?;
+        let leaf = krb5_types::pkinit::IdentityKey::p256(leaf);
+        let kp = p256_generate().map_err(|e| e.to_string())?;
+        let req = as_req(user.clone(), realm, nonce, None).map_err(|e| e.to_string())?;
+        let body = encode(&req.0.req_body).map_err(|e| e.to_string())?;
+        let mut h = Sha1::new();
+        h.update(&body);
+        let pa = pa_pk_as_req_signed(&kp.public, &cert, &leaf, nonce, &h.finalize(), None)
+            .map_err(|e| e.to_string())?;
+        let req = decode::<krb5_types::pkinit::PaPkAsReq>(&pa.padata_value)
+            .map_err(|e| format!("decode PaPkAsReq: {e}"))?;
+        Ok(req.signed_auth_pack.as_ref().to_vec())
+    };
+    let as_with = |nonce: u32, cms: Vec<u8>| -> Result<Vec<u8>, String> {
+        let mut req = as_req(user.clone(), realm, nonce, None).map_err(|e| e.to_string())?;
+        let pa_req = krb5_types::pkinit::PaPkAsReq {
+            signed_auth_pack: cms.into(),
+            trusted_certifiers: None,
+            kdc_pk_id: None,
+        };
+        req.0.padata = Some(vec![PaData {
+            padata_type: pa::PK_AS_REQ,
+            padata_value: encode(&pa_req).map_err(|e| e.to_string())?.into(),
+        }]);
+        encode(&req).map_err(|e| e.to_string())
+    };
+    let edit_sd = |cms: &[u8], f: &dyn Fn(&mut Vec<der::Der>)| -> Result<Vec<u8>, String> {
+        let root = ra_root(cms)?;
+        let der::Der::Cons(_, ci) = &root else {
+            return Err("CMS not a SEQUENCE".into());
+        };
+        let der::Der::Cons(_, ex) = ci.get(1).ok_or("no content [0]")? else {
+            return Err("content [0] not constructed".into());
+        };
+        let der::Der::Cons(sd_tag, sd) = ex.first().ok_or("no SignedData")? else {
+            return Err("SignedData not a SEQUENCE".into());
+        };
+        let mut kids = sd.clone();
+        f(&mut kids);
+        let new_sd = der::Der::Cons(*sd_tag, kids);
+        Ok(der::edit(&root, &[1, 0], Some(&new_sd)).bytes())
+    };
+    let set_sig = |cms: &[u8], sig: Vec<u8>| -> Result<Vec<u8>, String> {
+        edit_sd(cms, &move |kids: &mut Vec<der::Der>| {
+            if let Some(der::Der::Cons(_, infos)) = kids.iter_mut().rev().find(|k| k.tag() == 0x31)
+                && let Some(der::Der::Cons(_, si)) = infos.first_mut()
+                && let Some(s) = si.iter_mut().find(|k| k.tag() == 0x04)
+            {
+                *s = der::Der::Prim(0x04, sig.clone());
+            }
+        })
+    };
+
+    expect_error(
+        cfg,
+        "pkinit-cms-too-small",
+        &as_with(0x1000_0220, vec![])?,
+        err::PREAUTH_FAILED,
+    )?;
+    expect_error(
+        cfg,
+        "pkinit-cms-header-too-long",
+        &as_with(0x1000_0221, vec![0x30])?,
+        err::PREAUTH_FAILED,
+    )?;
+    expect_error(
+        cfg,
+        "pkinit-cms-too-long",
+        &as_with(0x1000_0222, vec![0x30, 0x05, 0x06])?,
+        err::PREAUTH_FAILED,
+    )?;
+    expect_error(
+        cfg,
+        "pkinit-cms-wrong-tag",
+        &as_with(0x1000_0223, vec![0x30, 0x03, 0x02, 0x01, 0x00])?,
+        err::PREAUTH_FAILED,
+    )?;
+    expect_error(
+        cfg,
+        "pkinit-cms-field-missing",
+        &as_with(0x1000_0224, vec![0x30, 0x00])?,
+        err::PREAUTH_FAILED,
+    )?;
+
+    // Order: the oerr() cases (the five decode cases above, then the two signature cases) each
+    // drain MIT's OpenSSL error queue; the three cases whose refusal is set by krb5_set_error_message
+    // (wrong-oid, not-octet-string, no-signer-cert) run last, so none of them leaves a stale
+    // "unsupported content type" for a later oerr() case to log (docs/mit-deviations.md).
+    let not_der = set_sig(
+        &base_cms(0x1000_0228)?,
+        vec![0x31, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x02],
+    )?;
+    expect_error(
+        cfg,
+        "pkinit-sig-not-der",
+        &as_with(0x1000_0228, not_der)?,
+        err::DIGEST_IN_SIGNED_DATA_NOT_ACCEPTED,
+    )?;
+    let r_zero = set_sig(
+        &base_cms(0x1000_0229)?,
+        vec![0x30, 0x06, 0x02, 0x01, 0x00, 0x02, 0x01, 0x05],
+    )?;
+    expect_error(
+        cfg,
+        "pkinit-sig-r-zero",
+        &as_with(0x1000_0229, r_zero)?,
+        err::DIGEST_IN_SIGNED_DATA_NOT_ACCEPTED,
+    )?;
+
+    let wrong_oid = vec![
+        0x30, 0x0f, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x07, 0x01, 0xa0, 0x02,
+        0x04, 0x00,
+    ];
+    expect_error(
+        cfg,
+        "pkinit-cms-wrong-oid",
+        &as_with(0x1000_0225, wrong_oid)?,
+        err::PREAUTH_FAILED,
+    )?;
+
+    let not_octets = vec![
+        0x30, 0x0d, 0x06, 0x07, 0x2b, 0x06, 0x01, 0x05, 0x02, 0x03, 0x01, 0xa0, 0x02, 0x05, 0x00,
+    ];
+    expect_error(
+        cfg,
+        "pkinit-authpack-not-octet-string",
+        &as_with(0x1000_0226, not_octets)?,
+        err::PREAUTH_FAILED,
+    )?;
+
+    let no_cert = edit_sd(&base_cms(0x1000_0227)?, &|kids: &mut Vec<der::Der>| {
+        kids.retain(|k| k.tag() != 0xa0);
+    })?;
+    expect_error(
+        cfg,
+        "pkinit-cms-no-signer-cert",
+        &as_with(0x1000_0227, no_cert)?,
+        err::PREAUTH_FAILED,
+    )?;
+
+    Ok(())
 }
 
 fn ra_root(der: &[u8]) -> Result<der::Der, String> {

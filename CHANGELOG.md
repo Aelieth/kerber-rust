@@ -19,6 +19,7 @@ any other `###` heading.
 ### Security
 
 - **pkinit.** P-384 compiles in only with `--cfg p384_backend="fiat"`, p384's constant-time field, which our cargo config sets; a build without it refuses the curve.
+- **kdc.** A bad PKINIT signedAuthPack gives OpenSSL's own CMS reason, as MIT logs it, not one text for all; a signer with no signed attributes is taken, as MIT's `CMS_verify`.
 - **crypto.** AES, DES, Camellia, RC4, HMAC and the hashes wipe key and hash state on drop, via each crate's `zeroize` feature, as MIT's `aes_key_cleanup`.
 - **gss.** A DER length past the end of its token is refused, as MIT's `get_tag`; an eight-octet one overflowed, and SPNEGO and the acceptor panicked.
 - **crypto.** Encrypt keeps the confounder and plaintext, including the RC4 copy, in a buffer that is wiped on drop.
@@ -64,6 +65,7 @@ any other `###` heading.
 - **ci.** The anchor-form check leaves a `// MIT:` cite to the character gate, so a converted cite is not a stray line cite.
 - **ci.** The MIT truth check reads a `// MIT:` cite; a rangeless one must name a symbol that file defines.
 - **gss.** The nightly GSS gate checks that both acceptors report one host ticket's lifetime within 60 s.
+- **ci.** The differential gate sends ten malformed PKINIT signedAuthPacks to both KDCs and compares each refusal's code and logged reason (B17).
 - **ci.** The audit job installs prebuilt cargo-audit 0.22.2 and runs `cargo audit --deny warnings`. It does not file issues.
 - **ci.** ci-policy prints the product and per-crate comment and test ratios and does not fail on them.
 - **ci.** Cap `[Unreleased]` at 24,000 bytes and pin CI to `ubuntu-24.04` with upload-artifact 7.0.2. Released sections are frozen. ci-policy enforces the cap.

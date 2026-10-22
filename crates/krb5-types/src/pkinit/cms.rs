@@ -802,7 +802,8 @@ fn ecdsa_check(
     if sig.is_empty() {
         return Err(PROVIDER_FAILURE);
     }
-    // Not exactly its own DER: "verification failure" over attributes, else "provider signature failure".
+    // Not exactly its own DER: "verification failure" with signed attributes,
+    // "provider signature failure" without (EVP_DigestVerify vs EVP_PKEY_verify).
     let Some((r, s)) = ecdsa_der(sig) else {
         return Err(if attrs {
             "verification failure"
