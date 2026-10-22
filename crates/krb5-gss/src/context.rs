@@ -688,6 +688,7 @@ impl GssContext {
 
     // MIT g_seqstate_check; see docs/parity/b1-gss.md
     pub(super) fn accept_seq(&mut self, seq: u64) -> Result<(), Error> {
+        // MIT returns a replayed, old or out-of-window token's message with a supplementary status; we refuse it.
         let past = self.recv.do_replay && self.recv.past_window(seq);
         match self.recv.check(seq) {
             SeqStatus::Duplicate | SeqStatus::Old => Err(Error::Sequence),
