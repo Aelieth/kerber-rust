@@ -1,11 +1,5 @@
-//! kpropd `authorized_principal` on the wire. The ACL is a list of exact unparsed
-//! principals with an optional enctype restriction; there are no wildcards; the check runs
-//! after `recvauth` has sent the AP-REP, and a refused peer just sees the socket close.
-//! MIT `authorized_principal` (`kpropd.c:1298-1348`): an ACL line matches the exact unparsed
-//! name, then optionally an enctype; there are no wildcards.
-//! MIT `doit` (`kpropd.c:528-546`): an unauthorized client is logged and kpropd exits, so a
-//! refused peer just sees the socket close.
-//! Live oracle: MIT kpropd in `scripts/prop-acl-gate.sh` (`acl-*` cells).
+//! kpropd `authorized_principal` on the wire. The ACL is a list of exact unparsed principals with an optional enctype restriction; there are no wildcards; the check runs after `recvauth` has sent the AP-REP, and a refused peer just sees the socket close.
+//! an unauthorized client is logged and kpropd exits, so a refused peer just sees the socket close.
 
 use krb5_admin::{
     Error, KpropAuth, KpropCreds, KpropError, kprop_send_dump, kprop_sendauth, kpropd_recvauth,
@@ -83,7 +77,6 @@ fn spawn_kpropd(
     (addr, join)
 }
 
-/// kprop's credentials for the documented host's ticket to itself.
 fn creds(ticket: Ticket, session: ProtocolKey) -> KpropCreds {
     KpropCreds {
         ticket,
@@ -126,7 +119,6 @@ fn kpropd_acl_exact_line_authorizes_and_wildcards_never_do() {
     let (ok, client) = kprop_against(Some(vec![CLIENT.to_owned()]));
     assert!(ok.is_ok(), "exact line: {:?}", shown(&ok));
     assert!(client.is_ok(), "client sendauth: {:?}", shown(&client));
-    // kadm5.acl-style globs are not kpropd.acl syntax (`strncmp` on the
     // unparsed name): MIT refuses `*@KERBER.TEST` and `host/*@KERBER.TEST`.
     let (star, _) = kprop_against(Some(vec![
         "*@KERBER.TEST".to_owned(),
@@ -147,7 +139,6 @@ fn kpropd_acl_enctype_suffix_must_name_the_ticket_enctype() {
     let tkt_name = krb5_crypto::EncryptionType::known(tkt_etype)
         .unwrap()
         .to_mit_name();
-    // Another supported enctype than the one the ticket was issued with.
     let other = if tkt_etype == 18 {
         "aes128-cts"
     } else {
@@ -155,7 +146,6 @@ fn kpropd_acl_enctype_suffix_must_name_the_ticket_enctype() {
     };
     let (m, _) = kprop_against(Some(vec![format!("{CLIENT} {tkt_name}")]));
     assert!(m.is_ok(), "matching enctype restriction: {:?}", shown(&m));
-    // strcasecmp: the alias in upper case is the same enctype.
     let (upper, _) = kprop_against(Some(vec![format!("{CLIENT}\t{}", tkt_name.to_uppercase())]));
     assert!(
         upper.is_ok(),
@@ -168,8 +158,6 @@ fn kpropd_acl_enctype_suffix_must_name_the_ticket_enctype() {
         "enctype mismatch must refuse: {:?}",
         shown(&mismatch)
     );
-    // krb5_string_to_enctype EINVAL (unknown name, a number, two names, a
-    // trailing CR) skips the line rather than ignoring the token.
     for bad in [
         "nosuch",
         "18",
@@ -187,12 +175,10 @@ fn kpropd_acl_enctype_suffix_must_name_the_ticket_enctype() {
 
 #[test]
 fn kpropd_acl_is_a_prefix_match_ended_by_whitespace_or_eol() {
-    // Trailing whitespace (and a bare CR, which fgets keeps) is fine …
     let (tail, _) = kprop_against(Some(vec![format!("{CLIENT}\t "), String::new()]));
     assert!(tail.is_ok(), "trailing whitespace: {:?}", shown(&tail));
     let (cr, _) = kprop_against(Some(vec![format!("{CLIENT}\r")]));
     assert!(cr.is_ok(), "trailing CR: {:?}", shown(&cr));
-    // … but the name must start the line and must end there.
     let (longer, _) = kprop_against(Some(vec![format!("{CLIENT}X")]));
     assert!(
         refused(&longer),
@@ -217,7 +203,6 @@ fn kpropd_acl_is_a_prefix_match_ended_by_whitespace_or_eol() {
         "commented line must refuse: {:?}",
         shown(&comment)
     );
-    // No file / empty file: nobody.
     let (none, _) = kprop_against(None);
     assert!(
         refused(&none),
@@ -234,9 +219,6 @@ fn kpropd_acl_is_a_prefix_match_ended_by_whitespace_or_eol() {
 
 #[test]
 fn kpropd_refuses_after_the_ap_rep_so_kprop_fails_on_the_dump_not_sendauth() {
-    // MIT `doit` (`kpropd.c:526-546`): authorized_principal runs after kerberos_authenticate;
-    // MIT kprop completes sendauth (gets the AP-REP) and then dies with
-    // `Broken pipe while sending database block starting at 0`.
     let (store, _) = bootstrap_documented().unwrap();
     let (ticket, session, _) = host_ticket(&store);
     let (addr, join) = spawn_kpropd(&store, Some(vec!["host/other@KERBER.TEST".to_owned()]));

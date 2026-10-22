@@ -1,9 +1,4 @@
 //! `svr_policy.c` create DUP before floors; modify validates the merged record.
-//! `validate_allowed_keysalts` at addpol/modpol.
-//! MIT `validate_allowed_keysalts` (`svr_policy.c:20-36`): a tab or a string that does not
-//! parse as key/salt tuples is `KADM5_BAD_KEYSALTS`.
-//! An unknown key/salt name such as `bogus:normal` is stored as MIT stores it, and a tab
-//! is `KADM5_BAD_KEYSALTS` ("Invalid key/salt tuples").
 
 use krb5_admin::{AdminSession, PolicyArgs, parse_policy_args};
 use krb5_kdc::testrealm::{bootstrap_documented, documented_admin_id};
@@ -83,7 +78,6 @@ fn getpol_prints_allowed_keysalts_only_when_set() {
 
 #[test]
 fn create_policy_checks_min_over_max_before_length_like_mit() {
-    // MIT kadm5_create_policy order: DUP -> name -> min>max -> length -> classes -> history.
     let (mut store, acl) = bootstrap_documented().unwrap();
     let actor = documented_admin_id();
     let mut sess = AdminSession::local(&mut store, &acl, actor);

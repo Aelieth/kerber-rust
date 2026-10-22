@@ -4,9 +4,7 @@ use std::process::{Command, Stdio};
 
 use krb5_testkit::scratch_dir;
 
-/// MIT 1.22.2's `kpasswd` has no set-password target and reads no such variable. A target that is
-/// no principal name stops a `test-hooks` `kpasswd` first; a release one never reads it and gets
-/// as far as the KDC lookup.
+/// MIT 1.22.2's `kpasswd` has no set-password target and reads no such variable. A target that is no principal name stops a `test-hooks` `kpasswd` first; a release one never reads it and gets as far as the KDC lookup.
 #[test]
 fn only_a_test_hooks_kpasswd_reads_a_target() {
     let conf = scratch_dir("kpasswd-target").join("krb5.conf");

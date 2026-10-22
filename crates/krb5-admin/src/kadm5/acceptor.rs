@@ -1,8 +1,4 @@
-//! kadmind's acceptor keytab: the KDB, as MIT's GSS acceptor reads it. `setup_kdb_keytab` points
-//! the GSS mechanism at the `KDB:` keytab, so a context is accepted with the key
-//! `krb5_ktkdb_get_entry` gives the ticket's server (RPCSEC_GSS, accepted with `GSS_C_NO_NAME`),
-//! or the key of each name `svcauth_gssapi_set_names` was given (AUTH_GSSAPI): never with a key
-//! the database holds for another principal, enctype or key version.
+//! kadmind's acceptor keytab: the KDB, as MIT's GSS acceptor reads it. `setup_kdb_keytab` points the GSS mechanism at the `KDB:` keytab, so a context is accepted with the key `krb5_ktkdb_get_entry` gives the ticket's server (RPCSEC_GSS, accepted with `GSS_C_NO_NAME`), or the key of each name `svcauth_gssapi_set_names` was given (AUTH_GSSAPI): never with a key the database holds for another principal, enctype or key version.
 
 use std::io;
 
@@ -16,9 +12,6 @@ use krb5_protocol::{
 };
 use krb5_types::PrincipalName;
 
-/// The KDB keytab's lookup for one ticket, under the database's lock.
-/// MIT `krb5_ktkdb_get_entry` (`lib/kdb/keytab.c:117-185`): the principal's first permitted key at the ticket's kvno, whatever the ticket's enctype, which must then be similar to it.
-/// MIT `krb5_db2_get_principal` (`plugins/kdb/db2/kdb_db2.c:769-773`): the lookup takes the shared lock, reads the database again when it changed, and fails when it cannot.
 fn kdb_keytab_entry(
     store: &SharedStore,
     name: &PrincipalName,
@@ -43,8 +36,7 @@ fn kdb_keytab_entry(
     .map_err(KeytabLookup::from)
 }
 
-/// A context accepted from `token` with the key the KDB keytab gives: for `acceptor`, or, with no
-/// name (`GSS_C_NO_NAME`), for the server the ticket names; `conf` is kadmind's KDC context's.
+/// A context accepted from `token` with the key the KDB keytab gives: for `acceptor`, or, with no name (`GSS_C_NO_NAME`), for the server the ticket names; `conf` is kadmind's KDC context's.
 /// MIT `kg_accept_krb5` (`lib/gssapi/krb5/accept_sec_context.c:829-831`): `krb5_rd_req_decoded` takes the credential's `acceptor_mprinc` (NULL for no name) and its keytab.
 pub(super) fn accept_from_kdb(
     store: &SharedStore,
@@ -60,7 +52,6 @@ pub(super) fn accept_from_kdb(
     GssContext::accept_sec_context_kdb(token, acceptor, realm, &get_entry, bindings, rcache, conf)
 }
 
-/// The KDB keytab's `krb5_kt_get_entry` as the AP-REQ verifier takes it.
 fn kdb_get_entry<'a>(
     store: &'a SharedStore,
     permitted: &'a [EncryptionType],
@@ -70,17 +61,8 @@ fn kdb_get_entry<'a>(
     }
 }
 
-/// `krb5_rd_req` as kadmind's GSS acceptor makes it, without the GSS layer: the AP-REQ `ap_req`
-/// against the KDB keytab for `acceptor` in `realm`, or, with none (`GSS_C_NO_NAME`), for the server
-/// the ticket names, on the profile values `conf` (the KDB gives keys of the enctypes it permits).
-/// What the rd-priv oracle gate compares with MIT's own call.
-/// MIT `kg_accept_krb5` (`lib/gssapi/krb5/accept_sec_context.c:829-831`): `krb5_rd_req_decoded` with the credential's `acceptor_mprinc` and its keytab.
-///
-/// # Errors
-///
-/// [`krb5_protocol::Error::ConfigEtypeNosupp`] when `conf` permits no enctype; what the verifier
-/// refuses the AP-REQ with: the lookup's codes as `keytab_fetch_error` maps them, a key that does
-/// not decrypt the ticket, and the ticket and authenticator checks.
+/// `krb5_rd_req` as kadmind's GSS acceptor makes it, without the GSS layer: the AP-REQ `ap_req` against the KDB keytab for `acceptor` in `realm`, or, with none (`GSS_C_NO_NAME`), for the server the ticket names, on the profile values `conf` (the KDB gives keys of the enctypes it permits).
+/// refuses the AP-REQ with: the lookup's codes as `keytab_fetch_error` maps them, a key that does not decrypt the ticket, and the ticket and authenticator checks.
 pub fn kdb_rd_req(
     store: &SharedStore,
     realm: &str,
@@ -107,10 +89,7 @@ pub fn kdb_rd_req(
     verify_ap_req_ex(ap_req, &params, rcache, None)
 }
 
-/// AUTH_GSSAPI's accept: `kadmin/admin`, then `kadmin/changepw`, each with a credential of its own
-/// (the list `svcauth_gssapi_set_names` was given); the next name is tried only when the ticket is
-/// for no principal the keytab serves under this one (`KRB5KRB_AP_ERR_NOT_US`).
-/// MIT `main` (`kadmin/server/ovsec_kadmd.c:460-476`): the names are `kadmin/admin` and `kadmin/changepw` in `params.realm`.
+/// AUTH_GSSAPI's accept: `kadmin/admin`, then `kadmin/changepw`, each with a credential of its own (the list `svcauth_gssapi_set_names` was given); the next name is tried only when the ticket is for no principal the keytab serves under this one (`KRB5KRB_AP_ERR_NOT_US`).
 /// MIT `gssrpc__svcauth_gssapi` (`lib/rpc/svc_auth_gssapi.c:391-436`): the loop over the credentials stops at the first that completes or fails otherwise than with `GSS_S_FAILURE` and `KRB5KRB_AP_ERR_NOT_US`.
 pub(super) fn accept_auth_gssapi(
     store: &SharedStore,
@@ -130,10 +109,7 @@ pub(super) fn accept_auth_gssapi(
     result
 }
 
-/// Whether the KDB keytab serves both names AUTH_GSSAPI accepts, as `svcauth_gssapi_set_names`
-/// needs of it before kadmind starts.
 /// MIT `check_keytab` (`lib/gssapi/krb5/acquire_cred.c:126-138`): a credential for a name that is not host-based asks `krb5_kt_get_entry(kt, princ, 0, 0)` for it.
-/// MIT `main` (`kadmin/server/ovsec_kadmd.c:476-477`): kadmind fails to start, "Cannot set GSSAPI authentication names", when a credential cannot be acquired.
 #[must_use]
 pub fn acceptor_names_served(store: &PrincipalStore, conf: &AcceptorConfig) -> bool {
     let Ok(permitted) = conf.permitted() else {

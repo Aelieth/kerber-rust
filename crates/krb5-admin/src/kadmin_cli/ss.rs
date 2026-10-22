@@ -1,5 +1,4 @@
-//! The `ss` subsystem `kadmin.local` runs its commands in (`util/ss`): the request table,
-//! line parsing, the prompt loop, `list_requests` and the `!` shell escape.
+//! The `ss` subsystem `kadmin.local` runs its commands in (`util/ss`): the request table, line parsing, the prompt loop, `list_requests` and the `!` shell escape.
 
 use std::fmt::Write as _;
 use std::io::Write as _;
@@ -8,14 +7,12 @@ use super::{Io, LineRead, Session, WHOAMI, kt_cmds, pol_cmds, princ_cmds};
 
 type Verb = fn(&mut Session<'_>, &[String]);
 
-/// One request: its names, its one-line description, and what runs it.
 struct Request {
     names: &'static [&'static str],
     info: &'static str,
     run: Verb,
 }
 
-/// The `kadmin_cmds` table (`kadmin_ct.ct`), in its order.
 const REQUESTS: &[Request] = &[
     Request {
         names: &["add_principal", "addprinc", "ank"],
@@ -144,15 +141,11 @@ const REQUESTS: &[Request] = &[
     },
 ];
 
-/// MIT `ss_quit` (`listen.c:180-183`): the command loop ends after this request.
 fn quit_request(s: &mut Session<'_>, _argv: &[String]) {
     s.abort = true;
 }
 
-/// MIT `ss_list_requests` (`list_rqs.c:24-114`): each request's names, the description at
-/// column 25 (on a line of its own when the names run past 23).
-/// MIT `ss_page_stdin` (`pager.c:69-110`): the list is copied to stdout as the pager process
-/// writes it there, past what stdout still buffers; no pager is run.
+/// MIT `ss_page_stdin` (`pager.c:69-110`): the list is copied to stdout as the pager process writes it there, past what stdout still buffers; no pager is run.
 fn list_requests(s: &mut Session<'_>, _argv: &[String]) {
     let mut text = format!("Available {WHOAMI} requests:\n\n");
     for r in REQUESTS {
@@ -170,8 +163,7 @@ fn list_requests(s: &mut Session<'_>, _argv: &[String]) {
     s.io.out.write_raw(text.as_bytes());
 }
 
-/// MIT `check_request_table` (`execute_cmd.c:56-79`): run the request `argv[0]` names; false
-/// when no request has that name.
+/// MIT `check_request_table` (`execute_cmd.c:56-79`): run the request `argv[0]` names; false when no request has that name.
 fn dispatch(s: &mut Session<'_>, argv: &[String]) -> bool {
     let Some(name) = argv.first() else {
         return true;
@@ -192,15 +184,10 @@ pub(crate) fn execute_command(s: &mut Session<'_>, argv: &[String]) -> bool {
 
 /// What `ss_execute_line` returns for a line it did not run.
 pub(crate) enum Unrun {
-    /// `SS_ET_COMMAND_NOT_FOUND`: the line's leading blanks and its first word as the parse
-    /// left it, which is what `ss_perror` and `ss_listen` print.
     NotFound { lead: String, word: String },
-    /// `SS_ET_ESCAPE_DISABLED`: a `!` shell escape.
     EscapeDisabled,
 }
 
-/// MIT `ss_execute_line` (`execute_cmd.c:170-201`): the line parsed and run. A `!` line is not
-/// given to the shell: this port runs as MIT's `ss` does when `ss_disable_escape` is set.
 pub(crate) fn execute_line(s: &mut Session<'_>, line: &str) -> Option<Unrun> {
     let trimmed = line.trim_start_matches([' ', '\t']);
     if trimmed.starts_with('!') {
@@ -232,12 +219,7 @@ pub(crate) const COMMAND_NOT_FOUND: &str = "Command not found";
 /// `ss_err.et`: the text of `SS_ET_ESCAPE_DISABLED`.
 pub(crate) const ESCAPE_DISABLED: &str = "Shell escapes are disabled";
 
-/// MIT `ss_parse` (`util/ss/parse.c:57-169`): words split on blanks; `"` quotes, inside a word
-/// too, and `""` within quotes is one `"`; an open quote is `Unbalanced quotes in command line`.
-///
-/// # Errors
-///
-/// `Unbalanced quotes in command line`, the text MIT's `ss_error` prints, for a quote left open.
+/// MIT `ss_parse` (`util/ss/parse.c:57-169`): words split on blanks; `"` quotes, inside a word too, and `""` within quotes is one `"`; an open quote is `Unbalanced quotes in command line`.
 pub fn parse(line: &str) -> Result<Vec<String>, &'static str> {
     let mut argv = Vec::new();
     let mut cur = String::new();
@@ -276,14 +258,7 @@ pub fn parse(line: &str) -> Result<Vec<String>, &'static str> {
     Ok(argv)
 }
 
-/// MIT `ss_listen` (`listen.c:67-169`): an unknown request is reported; until `quit` or the end
-/// of input. `SIGINT` is caught through the loop and `SIGCONT` while the prompt waits: either
-/// prints a newline and prompts again. A request one comes during runs to its end first, as this
-/// port never stops one halfway, and the newline comes before the next prompt; one reading a reply
-/// ends there, quietly.
-/// MIT `listen_int_handler` (`listen.c:59-64`): a newline, then back to the prompt.
-/// MIT `readline` (`listen.c:32-50`): a terminal back in line mode, the prompt, flushed, and one
-/// line of at most `BUFSIZ - 1` bytes, up to its `\r` or `\n`.
+/// an unknown request is reported; until `quit` or the end of input. `SIGINT` is caught through the loop and `SIGCONT` while the prompt waits: either prints a newline and prompts again. A request one comes during runs to its end first, as this port never stops one halfway, and the newline comes before the next prompt; one reading a reply ends there, quietly.
 pub(crate) fn listen(s: &mut Session<'_>) {
     let _sigint = krb5_cli::SignalCatch::new(&[krb5_cli::Signal::SIGINT]);
     s.abort = false;
@@ -326,8 +301,6 @@ pub(crate) fn listen(s: &mut Session<'_>) {
     }
 }
 
-/// MIT `ss_listen` (`listen.c:141-152`): `Unknown request "<word>".  Type "?" for a request
-/// list.`, the word byte for byte.
 fn unknown_request(io: &mut Io, word: &[u8]) {
     let mut text = format!("{WHOAMI}: Unknown request \"").into_bytes();
     text.extend_from_slice(word);
@@ -335,9 +308,7 @@ fn unknown_request(io: &mut Io, word: &[u8]) {
     io.eprint_bytes(&text);
 }
 
-/// A prompt line that is not UTF-8. MIT takes its bytes as they are, so `addprinc caf\xe9` makes
-/// a principal of them; this store keeps names as UTF-8, so a line naming a request is refused
-/// whole, and an unknown request is reported with its word byte for byte, as MIT reports it.
+/// a principal of them; this store keeps names as UTF-8, so a line naming a request is refused whole, and an unknown request is reported with its word byte for byte, as MIT reports it.
 fn not_utf8(s: &mut Session<'_>, raw: &[u8]) {
     let bytes: String = raw.iter().copied().map(char::from).collect();
     let trimmed = bytes.trim_start_matches([' ', '\t']);

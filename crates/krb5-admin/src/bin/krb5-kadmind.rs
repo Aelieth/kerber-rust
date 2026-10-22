@@ -1,50 +1,12 @@
 //! `kadmind`: the kadm5 (TCP 749) and kpasswd (UDP and TCP 464) daemon, started as MIT's.
-//!
 //! ```text
 //! kadmind [-x db_args]* [-r realm] [-m] [-nofork] [-port port-number] [-proponly]
 //!         [-p path-to-kdb5_util] [-F dump-file] [-K path-to-kprop] [-k kprop-port]
 //!         [-P pid_file]
 //! ```
+//! - `-proponly` sets up the iprop listeners alone; without `iprop_enable` it is refused with MIT's text (`-proponly can only be used when iprop_enable is true`).
 //!
-//! The options are read as MIT's loop reads them: each by its exact spelling, the first argument
-//! that is none of them ends them, and anything left prints the usage.
-//!
-//! - `-r` names the realm, else krb5.conf's `default_realm`.
-//! - `-x dbname=PATH` names the database instead of kdc.conf's `database_name`; the other
-//!   database arguments are `krb5kdc`'s.
-//! - `-port N` is the kadm5 port, over `kadmind_port`; a port written in `admin_server` is over
-//!   both.
-//! - `-nofork` keeps kadmind in the foreground; without it kadmind binds its sockets, detaches
-//!   (`daemon(3)`) and then writes the `-P` pid file.
-//! - `-W`, `-p`, `-F`, `-K` and `-k` are accepted and unused: this kadmind starts no
-//!   `kdb5_util` or `kprop` for an iprop full resync, whose dump is sent by hand:
-//!   `kdb5_util dump -i1`, then `kprop -f`.
-//! - `-proponly` sets up the iprop listeners alone; without `iprop_enable` it is refused with
-//!   MIT's text (`-proponly can only be used when iprop_enable is true`).
-//! - `-m` reads the master key from the keyboard, including when kdc.conf names a
-//!   `key_stash_file`. In the foreground it is read twice.
-//!
-//! With `iprop_enable` set for the realm ([`krb5_config::IpropParams`], which also needs
-//! `iprop_port`), kadmind maps the update log as the primary's, logs every principal put and
-//! delete there, and serves the iprop program (100423); without it the log is never touched and
-//! the program is not served.
-//!
-//! The database, stash and ACL are where [`krb5_config::KdcPaths`] finds them. kpasswd, kadm5
-//! and iprop listen where the realm's `kpasswd_listen` / `kpasswd_port`, `kadmind_listen` /
-//! `kadmind_port` and `iprop_listen` / `iprop_port` say ([`krb5_config::KadmindListen`]: kdc.conf's
-//! relations, then krb5.conf's, the last value of each), all local addresses by default. A
-//! listener of the same kind on the same port as one set up before it is not added, so with
-//! `iprop_port` equal to kadmind's port the iprop program is not served, as MIT's is not. Every
-//! RPC listener serves every program that has one, and all are served from MIT's one net-server
-//! loop on the main thread. The daemon log goes where `[logging] admin_server` (else
-//! `default`) says, in MIT's line format; SIGHUP reopens its files, and SIGTERM, SIGINT or
-//! SIGQUIT ends kadmind. The JSON structured log goes only where `[logging] json` names a
-//! destination. A kadm5 call that cannot be handled gets no reply and prints `kadm5: <message>`
-//! on standard error.
-//!
-//! Builds with the `test-hooks` feature also take `--test-realm` (the documented realm) and a
-//! `host:port` operand (kadm5 there, kpasswd on `KRB5_KPASSWD_BIND`, else 127.0.0.1:464), both
-//! in the foreground.
+//! With `iprop_enable` set for the realm, kadmind maps the update log as the primary's, logs every principal put and delete there, and serves the iprop program (100423); without it the log is never touched and the program is not served.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -74,8 +36,6 @@ use krb5_kdc::{
 use krb5_log::klog::{self, JsonLog, Severity, os_error_text};
 use krb5_protocol::AcceptorConfig;
 
-/// MIT `main` (`kadmin/server/ovsec_kadmd.c:362-432`): kadmind's options, each matched by
-/// spelling; a test-hooks build adds the gates' `--test-realm`.
 const OPTIONS: &[MitOpt] = &[
     MitOpt::value("-x"),
     MitOpt::value("-r"),
@@ -107,10 +67,7 @@ fn usage() -> ! {
     std::process::exit(1);
 }
 
-/// Report why kadmind cannot start, on standard error and in the daemon log, and exit 1.
-/// MIT `fail_to_start` (`kadmin/server/ovsec_kadmd.c:100-114`): with an error,
-/// `<error> while <doing>, aborting` (the log line keeps MIT's trailing newline); without,
-/// `<what>, aborting`.
+/// MIT `fail_to_start` (`kadmin/server/ovsec_kadmd.c:100-114`): with an error, `<error> while <doing>, aborting` (the log line keeps MIT's trailing newline); without, `<what>, aborting`.
 fn fail_to_start(progname: &str, error: Option<&str>, msg: &str) -> ! {
     if let Some(e) = error {
         eprintln!("{progname}: {e} while {msg}, aborting");
@@ -122,7 +79,6 @@ fn fail_to_start(progname: &str, error: Option<&str>, msg: &str) -> ! {
     std::process::exit(1);
 }
 
-/// C `atoi`: optional space and sign, then digits; anything else stops it, and none is 0.
 fn atoi(s: &str) -> i64 {
     let t = s.trim_start();
     let (neg, digits) = match t.as_bytes().first() {
@@ -139,8 +95,6 @@ fn atoi(s: &str) -> i64 {
     if neg { -n } else { n }
 }
 
-/// The basename of `argv[0]`, the name kadmind logs and prints under.
-/// MIT `main` (`kadmin/server/ovsec_kadmd.c:357-358`): `progname` is the last path component.
 fn progname(argv0: Option<&String>) -> String {
     argv0
         .map(|a| a.rsplit('/').next().unwrap_or(a).to_owned())
@@ -152,8 +106,6 @@ fn main() {
     let argv: Vec<String> = std::env::args().collect();
     let progname = progname(argv.first());
 
-    // MIT `main` (`kadmin/server/ovsec_kadmd.c:434-435`): an argument left after the options
-    // prints the usage.
     let args = MitArgs::parse(
         argv.get(1..).unwrap_or_default(),
         OPTIONS,
@@ -172,8 +124,7 @@ fn main() {
     };
     let nofork = args.flag("-nofork") || test_realm || pinned.is_some();
 
-    // MIT `main` (`kadmin/server/ovsec_kadmd.c:437-442`): the KDC context once the options are
-    // read; a profile it refuses ends kadmind.
+    // the KDC context once the options are read; a profile it refuses ends kadmind.
     let profile_read = krb5_config::ReadOnce::start();
     if let Err(e) = krb5_config::init_kdc_profile() {
         eprintln!(
@@ -183,12 +134,8 @@ fn main() {
         std::process::exit(1);
     }
 
-    // MIT `main` (`kadmin/server/ovsec_kadmd.c:444-444`): the daemon log, once the options are
-    // read.
     let specs = krb5_config::LogSpecs::load("admin_server");
     klog::init(&progname, &specs.specs, specs.debug);
-    // The JSON log only where `[logging] json` names a destination (MIT has none), standard
-    // output or error only in the foreground: a detached kadmind has neither.
     if let Some(json) = specs
         .json
         .as_deref()
@@ -206,9 +153,7 @@ fn main() {
     let (mut store, paths) = open_realm(&progname, &args, test_realm, nofork);
     let realm = store.realm().to_owned();
     let kdc_conf = paths.conf.as_ref();
-    // MIT `kadm5_init` (`lib/kadm5/srv/server_init.c:222-228`): with iprop enabled and no `iprop_port`, kadmind does not start.
     let iprop = krb5_config::IpropParams::load(&realm, &paths.database_name);
-    // MIT `kadm5_init` (`lib/kadm5/srv/server_init.c:207-218`): a realm value that did not convert left its required parameter unset.
     if iprop.missing_required() || krb5_kdc::realm_kadm5_params_missing(&paths, &realm, true) {
         fail_to_start(
             &progname,
@@ -216,20 +161,16 @@ fn main() {
             "initializing",
         );
     }
-    // The dictionary is read here once; kpasswd, every kadm5 connection and every reread of the
-    // database share it.
-    // MIT `main` (`kadmin/server/ovsec_kadmd.c:446-450`): `kadm5_init` sets up the password-quality modules, and a dictionary that cannot be read stops kadmind "while initializing".
+    // `kadm5_init` sets up the password-quality modules, and a dictionary that cannot be read stops kadmind "while initializing".
     if let Err(e) = store.init_pwqual(kdc_conf) {
         fail_to_start(&progname, Some(&os_error_text(&e)), "initializing");
     }
-    // MIT `main` (`kadmin/server/ovsec_kadmd.c:446-457`): `kadm5_init` and `kadm5_get_config_params` read the realm's profile, kdc.conf before krb5.conf; here it is read once and applied in the KDC's order.
     let profile = krb5_config::ProfileSet::from_env_files(&paths)
         .unwrap_or_else(|e| fail_to_start(&progname, Some(&e.init_text()), "initializing context"));
     drop(profile_read);
     if let Err(e) = store.apply_profile(&profile) {
         fail_to_start(&progname, Some(&e.to_string()), "getting config parameters");
     }
-    // A relation MIT's programs read and this one reads past is named once in the log.
     for line in profile
         .kdc
         .iter()
@@ -239,7 +180,6 @@ fn main() {
     }
     // MIT `kadm5_init_krb5_context` (`lib/kadm5/srv/server_init.c:334-345`): kadmind's GSS contexts, as its own, read the KDC profile, kdc.conf ahead of krb5.conf; kpasswd's `krb5_rd_req` too.
     let conf = AcceptorConfig::from_profile(&profile);
-    // MIT `main` (`kadmin/server/ovsec_kadmd.c:459-462`): the propagation-only mode needs iprop_enable.
     let proponly = args.flag("-proponly");
     if proponly && !iprop.enabled {
         fail_to_start(
@@ -248,7 +188,6 @@ fn main() {
             "-proponly can only be used when iprop_enable is true",
         );
     }
-    // MIT `main` (`kadmin/server/ovsec_kadmd.c:476-477`): `svcauth_gssapi_set_names` acquires a credential for `kadmin/admin` and for `kadmin/changepw`, each of which the KDB keytab must have a key for.
     if !acceptor_names_served(&store, &conf) {
         fail_to_start(&progname, None, "Cannot set GSSAPI authentication names");
     }
@@ -266,7 +205,6 @@ fn main() {
         None
     };
     let shared = shared_store(store);
-    // MIT `main` (`kadmin/server/ovsec_kadmd.c:395-400`): `-port` is read with `atoi`.
     let port_arg = args.value("-port").map(|p| {
         let [a, b, c, d, ..] = atoi(p).to_le_bytes();
         i32::from_le_bytes([a, b, c, d])
@@ -274,8 +212,7 @@ fn main() {
     let listen =
         krb5_config::KadmindListen::for_realm(Some(&profile.kdc_context), &realm, port_arg);
 
-    // MIT `setup_loop` (`kadmin/server/ovsec_kadmd.c:134-174`): the signal handlers, then the
-    // listeners, before the ACL file is read.
+    // MIT `setup_loop` (`kadmin/server/ovsec_kadmd.c:134-174`): the signal handlers, then the listeners, before the ACL file is read.
     let signals = Signals::install();
     let (listeners, kpasswd_udp, kpasswd_tcp, programs) = setup_loop(
         &progname,
@@ -301,8 +238,6 @@ fn main() {
     socket_fds.sort_unstable_by(|a, b| b.cmp(a));
     let acl = load_acl(&progname, paths.acl_file.as_deref(), &realm);
 
-    // MIT `main` (`kadmin/server/ovsec_kadmd.c:507-513`): detach unless -nofork, then the pid
-    // file.
     if !nofork && let Err(e) = detach() {
         fail_to_start(
             &progname,
@@ -315,9 +250,6 @@ fn main() {
     {
         fail_to_start(&progname, Some(&os_error_text(&e)), "creating PID file");
     }
-    // MIT `main` (`kadmin/server/ovsec_kadmd.c:515-519`): the database is opened again after
-    // daemon(), so a relative database or stash name now opens from `/`, or kadmind stops as at
-    // its start.
     let db_args: Vec<String> = args.values("-x").into_iter().map(str::to_owned).collect();
     if !nofork && names_relative_database(&paths, &db_args) {
         let reopened = if keyboard {
@@ -340,7 +272,6 @@ fn main() {
             fail_to_start(&progname, Some(&e.to_string()), "initializing");
         }
     }
-    // MIT `main` (`kadmin/server/ovsec_kadmd.c:521-531`): with iprop enabled the update log is mapped as the primary's, and in the foreground the iprop service is announced.
     if iprop.enabled {
         let mapped = shared
             .write()
@@ -362,7 +293,6 @@ fn main() {
             .is_some()
             .then_some((kpasswd_udp.as_slice(), kpasswd_tcp.as_slice())),
     );
-    // Without kadmin/changepw's keys kpasswd's sockets stay bound and unserved.
     let (udp, tcp): (&[UdpSocket], &[TcpListener]) = if cpw_key.is_some() {
         (&kpasswd_udp, &kpasswd_tcp)
     } else {
@@ -379,8 +309,6 @@ fn main() {
         .report_unhandled(Arc::new(|message| {
             let _ = writeln!(std::io::stderr(), "kadm5: {message}");
         }));
-    // MIT `main` (`kadmin/server/ovsec_kadmd.c:538-540`): "starting", and in the foreground
-    // "<prog>: starting..." on standard error.
     klog::syslog(Severity::Info, "starting");
     if nofork {
         eprintln!("{progname}: starting...");
@@ -390,22 +318,14 @@ fn main() {
         eprintln!("{progname}: serve: {e}");
         std::process::exit(1);
     });
-    // MIT `main` (`kadmin/server/ovsec_kadmd.c:543-555`): "finished, exiting" when the loop ends,
-    // then each event left is freed, the newest first, every connection and socket with
-    // "closing down fd", before the log closes.
     klog::syslog(Severity::Info, "finished, exiting");
     for fd in open.into_iter().chain(socket_fds) {
         klog::syslog(Severity::Info, &format!("closing down fd {fd}"));
     }
     klog::close();
-    // MIT `main` (`kadmin/server/ovsec_kadmd.c:557-557`): kadmind exits 0 once the log is closed.
     std::process::exit(0);
 }
 
-/// The realm's store: the test realm in a test-hooks build, else the database
-/// [`krb5_config::KdcPaths`] names, opened as MIT `kadm5_init` opens it.
-/// MIT `main` (`kadmin/server/ovsec_kadmd.c:446-450`): a database that does not open, or no
-/// realm, stops kadmind "while initializing".
 fn open_realm(
     progname: &str,
     args: &MitArgs,
@@ -442,7 +362,6 @@ fn open_realm(
         let (OpenFailure::Database(msg) | OpenFailure::MasterKey(msg)) = e;
         fail_to_start(progname, Some(&msg), "initializing")
     });
-    // MIT `main` (`kadmin/server/ovsec_kadmd.c:502-519`): the handle is destroyed and `kadm5_init` runs again, so `-nofork` reads the master key twice.
     if nofork && keyboard {
         store =
             open_database_with_password(&paths, &db_args, "K/M", &realm_name).unwrap_or_else(|e| {
@@ -453,8 +372,6 @@ fn open_realm(
     (store, paths)
 }
 
-/// The gates' readiness lines on standard output: `persist`, one `listening` line per kadm5
-/// listener and one `kpasswd` line per kpasswd address.
 #[cfg(feature = "test-hooks")]
 fn announce(
     progname: &str,
@@ -482,7 +399,6 @@ fn announce(
     }
 }
 
-/// The service a listener is set up for.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Service {
     Kpasswd,
@@ -490,16 +406,7 @@ enum Service {
     Iprop,
 }
 
-/// kadmind's listeners, added to one list in MIT's order and bound in that order: kpasswd's UDP
-/// and TCP sockets and the kadm5 program unless `-proponly`, then the iprop program when `iprop`
-/// is enabled. The programs served are those whose listener stayed in the list. A list
-/// that does not parse, or a port outside 0 to 65535, stops kadmind "while initializing
-/// network"; a socket that does not bind stops it as [`bind_rpc_listeners`] logs. In a
-/// test-hooks build an address operand, or `--test-realm`, binds the RPC listener there
-/// (127.0.0.1:749) and kpasswd on `KRB5_KPASSWD_BIND` or 127.0.0.1:464, where a kpasswd bind
-/// failure is only reported.
-/// MIT `setup_loop` (`kadmin/server/ovsec_kadmd.c:146-171`): kpasswd's UDP and TCP lists, the kadm5 program, kpasswd's UNIX-domain sockets, then the iprop program; `-proponly` adds iprop's alone.
-/// MIT `main` (`kadmin/server/ovsec_kadmd.c:464-466`): a list that is refused stops kadmind "while initializing network".
+/// a list that is refused stops kadmind "while initializing network".
 fn setup_loop(
     progname: &str,
     test_realm: bool,
@@ -591,7 +498,6 @@ fn setup_loop(
             BindType::Udp => {
                 udp.extend(bind_udp_listeners(one).unwrap_or_else(|_| std::process::exit(1)));
             }
-            // MIT `setup_loop` (`kadmin/server/ovsec_kadmd.c:173-174`): the stream listeners listen with `DEFAULT_TCP_LISTEN_BACKLOG` (5), not the KDC's default.
             BindType::Tcp => tcp.extend(
                 bind_tcp_listeners_with_backlog(one, DEFAULT_TCP_LISTEN_BACKLOG)
                     .unwrap_or_else(|_| std::process::exit(1)),
@@ -609,8 +515,6 @@ fn setup_loop(
     (rpc, udp, tcp, programs)
 }
 
-/// The gates' sockets: the RPC listener on the operand (else 127.0.0.1:749) and kpasswd on
-/// `KRB5_KPASSWD_BIND` (else 127.0.0.1:464).
 #[cfg(feature = "test-hooks")]
 fn legacy_sockets(
     progname: &str,
@@ -638,13 +542,6 @@ fn legacy_sockets(
     )
 }
 
-/// kadmind's ACL, `acl_file` as [`krb5_config::KdcPaths`] resolved it; `None` is self-service
-/// only. A file that cannot be read or parsed stops kadmind: what MIT's ACL module logs goes to
-/// the log alone, and the last line, `fail_to_start`'s, to standard error and the log.
-/// MIT `main` (`kadmin/server/ovsec_kadmd.c:497-501`): `auth_init`, else "while initializing
-/// ACL file".
-/// MIT `fail_to_start` (`kadmin/server/ovsec_kadmd.c:100-114`): `progname: <message> while
-/// <doing>, aborting` on standard error, and the same, a newline after it, to the log.
 fn load_acl(progname: &str, acl_file: Option<&Path>, realm: &str) -> Acl {
     acl_for_store(realm, acl_file).unwrap_or_else(|e| {
         let msg = match e {

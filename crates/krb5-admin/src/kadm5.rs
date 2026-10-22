@@ -1,14 +1,4 @@
 //! MIT kadm5 GSS-RPC (ONC RPC program 2112, version 2) on TCP 749.
-//!
-//! MIT 1.22.2 `kadmin` authenticates with AUTH_GSSAPI flavor 300001
-//! (`auth_gssapi.h`), not RFC 2203 RPCSEC_GSS flavor 6. This is not a
-//! full C ABI clone.
-//!
-//! One module per MIT source family: `codes` (constants), `xdr`, `rpc`
-//! (framing and reply builders), `acceptor` (the KDB keytab the GSS acceptor reads), `auth`
-//! (AUTH_GSSAPI, RPCSEC_GSS and the acceptor checks), `iprop`, `dispatch` (the procedure switch),
-//! `principal` and `policy` (argument and reply codecs), `glob`, `log`.
-//! In-src tests stay under `tests/`.
 
 mod acceptor;
 mod auth;
@@ -47,14 +37,12 @@ pub(crate) fn kadm5_error_message(code: u32) -> String {
     log::kadm5_error_text(code)
 }
 
-/// The daemon log text of a password change that failed with `e`: the message of the kadm5
-/// code a `kadm5_chpass_principal` stub would return.
+/// The daemon log text of a password change that failed with `e`: the message of the kadm5 code a `kadm5_chpass_principal` stub would return.
 pub(crate) fn chpass_error_text(e: &crate::Error) -> String {
     log::kadm5_error_text(dispatch::kadm5_code(codes::CHPASS_PRINCIPAL, e))
 }
 
-/// The message of the kadm5 code a `kadm5_chpass_principal` stub would return for the database's
-/// error `e`, an errno's text included.
+/// The message of the kadm5 code a `kadm5_chpass_principal` stub would return for the database's error `e`, an errno's text included.
 pub(crate) fn chpass_store_error_text(e: &krb5_kdc::Error) -> String {
     log::kadm5_error_text(dispatch::store_code(codes::CHPASS_PRINCIPAL, e))
 }

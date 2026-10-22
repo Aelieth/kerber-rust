@@ -43,7 +43,6 @@ fn chpass_reload_keeps_concurrent_local_create() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A get-principal reply's `last_success`, `last_failed` and `fail_auth_count`.
 #[cfg(feature = "test-hooks")]
 fn gprinc_lockout(out: &[u8]) -> (u32, u32, u32) {
     let mut r = XdrR::new(out);
@@ -149,10 +148,7 @@ fn extract_reload_sees_local_cpw() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A database file kadmind may not write refuses each change before the database is replaced,
-/// with the file's errno as MIT's library returns it (EACCES), and keeps nothing of it in memory;
-/// a lock file it may only read refuses each change with KRB5_KDB_CANTLOCK_DB. The checks MIT
-/// makes before its put (an existing name, a missing one) still answer first.
+/// A database file kadmind may not write refuses each change before the database is replaced, with the file's errno as MIT's library returns it (EACCES), and keeps nothing of it in memory; a lock file it may only read refuses each change with KRB5_KDB_CANTLOCK_DB. The checks MIT makes before its put (an existing name, a missing one) still answer first.
 #[test]
 fn readonly_database_refuses_changes_before_making_them() {
     use std::os::unix::fs::PermissionsExt as _;
@@ -230,7 +226,6 @@ fn readonly_database_refuses_changes_before_making_them() {
         ),
         0
     );
-    // MIT 3i: a lock file opened read-only takes no exclusive lock.
     let ok = krb5_kdc::suffixed(&db, krb5_kdc::SUFFIX_LOCK);
     std::fs::set_permissions(&ok, std::fs::Permissions::from_mode(0o400)).unwrap();
     let reader = krb5_kdc::shared_dump(load_store(&db, &stash).unwrap());
@@ -259,10 +254,7 @@ fn readonly_database_refuses_changes_before_making_them() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A password change under a policy creates `kadmin/history` before its quality check and saves
-/// it on its own, as MIT's `create_hist` commits it (two update-log entries): a change refused for
-/// quality leaves it in the database, and one naming a keysalt the policy refuses is refused
-/// first and creates nothing.
+/// A password change under a policy creates `kadmin/history` before its quality check and saves it on its own, as MIT's `create_hist` commits it (two update-log entries): a change refused for quality leaves it in the database, and one naming a keysalt the policy refuses is refused first and creates nothing.
 #[cfg(feature = "test-hooks")]
 #[test]
 fn failed_chpass_keeps_the_history_principal() {
@@ -338,8 +330,6 @@ fn failed_chpass_keeps_the_history_principal() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A change that fails after a step was made is undone: the store goes back to what the
-/// database holds, and the database was not written.
 #[test]
 fn failed_change_is_undone_from_the_database() {
     use krb5_kdc::{load_store, save_store};
@@ -369,8 +359,6 @@ fn failed_change_is_undone_from_the_database() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// What another process (kadmin.local) saved after kadmind loaded the database is what kadmind
-/// lists and answers, and a change kadmind makes afterwards keeps it.
 #[test]
 fn reads_see_another_process_and_writes_keep_its_change() {
     use krb5_kdc::{load_store, save_store};
@@ -412,9 +400,6 @@ fn reads_see_another_process_and_writes_keep_its_change() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A kadm5 modify that sets several fields is one change: the database is written once, so its
-/// age, set in the future, moves by one second, not by one per field.
-/// MIT `kadm5_modify_principal` (`lib/kadm5/srv/svr_principal.c:601-689`): the fields are set on the entry, then one put writes it.
 #[test]
 fn a_modify_is_one_write() {
     use std::os::unix::fs::MetadataExt as _;
@@ -445,9 +430,6 @@ fn a_modify_is_one_write() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// kadmind's policy call against `kadmind`, overtaken by `other` on `local` after kadmind looked
-/// at the policy: `local` holds the lock shared while kadmind waits for it exclusively, writes
-/// (its hold made exclusive in place), and lets go.
 fn overtaken_policy_call(
     kadmind: &SharedStore,
     acl: &Acl,
@@ -474,9 +456,6 @@ fn overtaken_policy_call(
     kadmind_call.join().unwrap()
 }
 
-/// policy-race-p9.txt: a kadmind policy create or modify that another writer overtakes after
-/// kadmind looked gets MIT's locked answer, OSA_ADB_DUP with the other writer's policy kept, or
-/// OSA_ADB_NOENT with the deleted policy left deleted; nothing is written over the other's.
 #[test]
 fn a_policy_write_overtaken_after_kadminds_look_gets_mits_locked_answer() {
     use krb5_kdc::{load_store, save_store};

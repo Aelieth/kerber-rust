@@ -1,14 +1,10 @@
-//! XDR primitives (`lib/rpc/xdr.c`): the big-endian reader `XdrR` and
-//! writer `XdrW` under every kadm5 argument and reply codec, including the
-//! `krb5_key_salt_tuple` array of `kadm_rpc_xdr.c`. A short read is
-//! `Error::GarbageArgs`; padding is consumed but never trusted.
+//! XDR primitives (`lib/rpc/xdr.c`): the big-endian reader `XdrR` and writer `XdrW` under every kadm5 argument and reply codec, including the `krb5_key_salt_tuple` array of `kadm_rpc_xdr.c`. A short read is `Error::GarbageArgs`; padding is consumed but never trusted.
 
 use krb5_crypto::EncryptionType;
 use krb5_types::PrincipalName;
 
 use crate::Error;
 
-/// MIT `xdr_krb5_int16` truncates `tl_data_type` before the `< 256` guard.
 #[allow(clippy::cast_possible_truncation)]
 pub(super) fn xdr_tl_type(wire: u32) -> i32 {
     i32::from(wire as i16)
@@ -58,9 +54,7 @@ impl<'a> XdrR<'a> {
         Ok(v)
     }
 
-    /// MIT `xdr_string`: the count includes the trailing NUL, and the bytes are not
-    /// required to be UTF-8. A kadm5 password is this (`xdr_chpass3_arg` / `xdr_cprinc_arg`
-    /// `passwd`), so `caf\xe9` reaches `passwd_check`. Principal names stay on `nullstring`.
+    /// MIT `xdr_string`: the count includes the trailing NUL, and the bytes are not required to be UTF-8. A kadm5 password is this (`xdr_chpass3_arg` / `xdr_cprinc_arg` `passwd`), so `caf\xe9` reaches `passwd_check`. Principal names stay on `nullstring`.
     pub(super) fn cstring_bytes(&mut self) -> Result<Option<Vec<u8>>, Error> {
         let n = self.u32()? as usize;
         if n == 0 {
@@ -112,9 +106,6 @@ impl<'a> XdrR<'a> {
             let _salttype = self.u32()?;
             let e = EncryptionType::known(et)
                 .map_err(|_| Error::Inner("Invalid key/salt tuples".into()))?;
-            // MIT `etypes.c`: `allow_weak_crypto` filters `ETYPE_WEAK` only.
-            // None of the implemented types set that flag (`is_mit_weak`).
-            // Deprecated des3/rc4 and camellia are accepted on the v3
             // `ks_tuple` like MIT kadmind (`from_iana` stays stricter).
             if e.is_mit_weak() {
                 return Err(Error::Inner("Invalid key/salt tuples".into()));
@@ -136,8 +127,7 @@ pub(super) fn opaque_len(n: usize) -> usize {
 }
 
 impl XdrW {
-    /// A writer whose buffer holds `n` bytes before it grows: a reply that carries keys is built
-    /// in one buffer, so no copy of them is left behind in a buffer it outgrew.
+    /// A writer whose buffer holds `n` bytes before it grows: a reply that carries keys is built in one buffer, so no copy of them is left behind in a buffer it outgrew.
     pub(super) fn with_capacity(n: usize) -> Self {
         Self {
             b: Vec::with_capacity(n),

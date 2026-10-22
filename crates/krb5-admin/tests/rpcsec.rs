@@ -1,15 +1,4 @@
 //! RPCSEC DATA without a context is MIT `CREDPROBLEM` (connection kept).
-//! RPCSEC_GSS `gc_v` mismatch is MIT `AUTH_BADCRED` (connection kept).
-//! RPCSEC_GSS integrity is databody_integ + checksum.
-//! MIT `xdr_rpc_gss_unwrap_data` (`authgss_prot.c:203-225`): an integrity body is
-//! `databody_integ` then a checksum, a MIC over it that must verify.
-//! AUTH_NONE unknown program is MIT `svcerr_prog_unavail` (connection kept).
-//! AUTH_GSSAPI INIT on IPROP_PROG is auth-layer SUCCESS (`no_dispatch`).
-//! MIT `gssrpc__svcauth_gssapi` (`lib/rpc/svc_auth_gssapi.c:326-341`): the AUTH_GSSAPI
-//! `GSSAPI_INIT` arg-version switch: versions 1 and 2 are answered with `call_res.version` 1
-//! (the OpenVision compat downgrade), 3 and 4 are echoed, anything else is `AUTH_BADCRED`
-//! before the token is looked at.
-//! Version 5 is `AUTH_BADCRED`, not an accepted `init_res`.
 
 #[path = "common/mod.rs"]
 mod common;
@@ -522,18 +511,14 @@ fn accepted_res_version(w: &[u32]) -> u32 {
 
 #[test]
 fn init_arg_version_2_is_answered_with_version_1() {
-    // 3 and 4 are echoed (`:333-336`) …
     assert_eq!(accepted_res_version(&reply_words(4)), 4);
     assert_eq!(accepted_res_version(&reply_words(3)), 3);
-    // … 1 and 2 are the OpenVision protocol and get `call_res.version = 1`
-    // (`:328-331`), so 2 is not echoed.
     assert_eq!(accepted_res_version(&reply_words(2)), 1);
     assert_eq!(accepted_res_version(&reply_words(1)), 1);
 }
 
 #[test]
 fn init_arg_version_5_is_auth_badcred() {
-    // `:337-341` default: "unsupported GSSAPI_INIT version" → AUTH_BADCRED,
     // an RPC MSG_DENIED / AUTH_ERROR, never an accepted reply echoing 5.
     let w = reply_words(5);
     assert_eq!(
@@ -548,8 +533,6 @@ fn init_arg_version_5_is_auth_badcred() {
     );
 }
 
-/// A call that does not decode gets no reply, and the connection answers the next call, as MIT's
-/// does; the server returns once the client is gone.
 #[test]
 fn an_unhandled_rpc_is_not_answered_and_the_connection_goes_on() {
     let (store, acl) = bootstrap_documented().unwrap();
@@ -570,10 +553,8 @@ fn an_unhandled_rpc_is_not_answered_and_the_connection_goes_on() {
     });
     let mut c = TcpStream::connect(addr).unwrap();
     c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
-    // One record holding a single zero byte: the call does not decode.
     c.write_all(&(LAST_FRAG | 1).to_be_bytes()).unwrap();
     c.write_all(&[0]).unwrap();
-    // Then an AUTH_NONE call to procedure 99: AUTH_TOOWEAK.
     let call: Vec<u8> = [9u32, MSG_CALL, 2, KADM_PROG, KADM_VERS, 99, 0, 0, 0, 0]
         .iter()
         .flat_map(|w| w.to_be_bytes())

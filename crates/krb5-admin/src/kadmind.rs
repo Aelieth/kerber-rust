@@ -1,7 +1,4 @@
-//! kadmind's one loop: kpasswd over UDP and TCP and the kadm5 and iprop RPC programs, served from
-//! MIT's net-server loop on the caller's thread, as MIT's kadmind serves them from the loop
-//! `setup_loop` builds. Every connection, kpasswd's and kadm5's alike, counts toward the one cap
-//! of 45.
+//! kadmind's one loop: kpasswd over UDP and TCP and the kadm5 and iprop RPC programs, served from MIT's net-server loop on the caller's thread, as MIT's kadmind serves them from the loop `setup_loop` builds. Every connection, kpasswd's and kadm5's alike, counts toward the one cap of 45.
 
 use std::io;
 use std::net::SocketAddr;
@@ -24,8 +21,7 @@ use crate::kadm5::Kadm5Conn;
 use crate::listen::{client_addr, handle_kpasswd_from, kpasswd_toolong_error};
 use crate::{Programs, RpcPeer, UnhandledRpc};
 
-/// kadmind's side of the loop: kpasswd's requests and each kadm5 connection's session, over one
-/// store, one ACL, one replay cache for the kadm5 acceptor and one set of acceptor profile values.
+/// kadmind's side of the loop: kpasswd's requests and each kadm5 connection's session, over one store, one ACL, one replay cache for the kadm5 acceptor and one set of acceptor profile values.
 pub struct Kadmind {
     store: SharedStore,
     acl: Acl,
@@ -37,9 +33,6 @@ pub struct Kadmind {
 }
 
 impl Kadmind {
-    /// kadmind over `store` and `acl`, its acceptors on the profile values `conf` (the KDC
-    /// context's, [`AcceptorConfig::from_profile`]). A kpasswd request is verified with the
-    /// `kadmin/changepw` keys the database holds, and only while there is a `cpw_key`.
     #[must_use]
     pub fn new(
         store: SharedStore,
@@ -58,16 +51,12 @@ impl Kadmind {
         }
     }
 
-    /// Serve only `programs` on the RPC listeners: those kadmind set a listener up for. Without
-    /// this, both are served.
     #[must_use]
     pub fn serve_programs(mut self, programs: Programs) -> Self {
         self.programs = programs;
         self
     }
 
-    /// Hand the message of each kadm5 call that does not decode (it gets no reply) to `report`;
-    /// without one it goes to the JSON log alone.
     #[must_use]
     pub fn report_unhandled(mut self, report: UnhandledRpc) -> Self {
         self.report = Some(report);
@@ -84,8 +73,6 @@ impl Kadmind {
 }
 
 impl Dispatch for Kadmind {
-    /// One kpasswd request, over UDP or TCP; a request that fails is the loop's "while
-    /// dispatching" line, with no reply.
     /// MIT `dispatch` (`kadmin/server/schpw.c:420-436`): the request goes through `process_chpw_request`, and a failure is handed to the loop with no response.
     fn dispatch(
         &mut self,
@@ -133,8 +120,6 @@ impl Dispatch for Kadmind {
         kpasswd_toolong_error(&self.realm()).map_err(|e| e.to_string())
     }
 
-    /// A kadm5 connection's session. Its acceptor keys are the database's, looked up for each
-    /// context it accepts, under the database's lock, as MIT's KDB keytab reads them.
     /// MIT `krb5_db2_get_principal` (`plugins/kdb/db2/kdb_db2.c:769-773`): the KDB keytab's lookup takes the shared lock, and fails when it cannot.
     fn rpc_session(
         &mut self,
@@ -154,16 +139,7 @@ impl Dispatch for Kadmind {
     }
 }
 
-/// Serve `sockets` to `kadmind` from one loop on this thread until SIGINT, SIGTERM or SIGQUIT,
-/// SIGHUP reopening the log: kpasswd on `udp` and `tcp`, kadm5 and iprop on `rpc`, at most 45
-/// connections together. Returns the descriptors of the connections still open, the newest
-/// first, for kadmind's last lines.
-/// MIT `main` (`kadmin/server/ovsec_kadmd.c:542-542`): `verto_run` serves until a signal ends the loop.
-///
-/// # Errors
-///
-/// The OS error of making a kpasswd socket non-blocking, or of a poll that fails other than by a
-/// signal.
+/// Serve `sockets` to `kadmind` from one loop on this thread until SIGINT, SIGTERM or SIGQUIT, SIGHUP reopening the log: kpasswd on `udp` and `tcp`, kadm5 and iprop on `rpc`, at most 45 connections together. Returns the descriptors of the connections still open, the newest first, for kadmind's last lines.
 pub fn serve_kadmind(
     kadmind: &mut Kadmind,
     sockets: &Sockets<'_>,
@@ -179,12 +155,7 @@ pub fn serve_kadmind(
     )
 }
 
-/// [`serve_kadmind`] until `stop` is set, looked at after each wait of at most `poll`: an
-/// embedder's or a test's loop.
-///
-/// # Errors
-///
-/// As [`serve_kadmind`].
+/// [`serve_kadmind`] until `stop` is set, looked at after each wait of at most `poll`: an embedder's or a test's loop.
 pub fn serve_kadmind_until(
     kadmind: &mut Kadmind,
     sockets: &Sockets<'_>,

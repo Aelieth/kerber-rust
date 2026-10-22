@@ -11,16 +11,12 @@ use krb5_types::PrincipalName;
 
 use super::{Session, WHOAMI, string_to_keysalts, texts};
 
-/// A resolved keytab: the name MIT prints, and its file (`None` for a `MEMORY:` keytab, which
-/// ends with the process).
 struct Kt {
     name: String,
     path: Option<PathBuf>,
 }
 
-/// MIT `kt_default_name` (`lib/krb5/os/ktdefname.c:35-57`): `KRB5_KTNAME`, else
-/// the context's `default_keytab_name`, else `FILE:/etc/krb5.keytab`, with `%{…}` parameters
-/// expanded; `None` when they do not expand.
+/// `KRB5_KTNAME`, else the context's `default_keytab_name`, else `FILE:/etc/krb5.keytab`, with `%{…}` parameters expanded; `None` when they do not expand.
 fn default_keytab_name_of(ctx: &ClientContext) -> Option<String> {
     if let Some(name) = ctx.ktname() {
         return Some(name);
@@ -33,7 +29,6 @@ fn default_keytab_name_of(ctx: &ClientContext) -> Option<String> {
     krb5_config::expand_ccache_params(&name).ok()
 }
 
-/// The keytab types `kadmin.local` reaches.
 #[derive(Clone, Copy)]
 pub(super) enum KtType {
     File,
@@ -51,9 +46,7 @@ impl KtType {
     }
 }
 
-/// MIT `krb5_kt_resolve` (`lib/krb5/keytab/ktbase.c:152-209`): a name with no `:` is a `FILE`
-/// keytab, and so is one whose prefix is a single letter (a drive) or that starts with `/`, the
-/// whole name being the file; any other prefix names the type. The type and the name it keeps.
+/// MIT `krb5_kt_resolve` (`lib/krb5/keytab/ktbase.c:152-209`): a name with no `:` is a `FILE` keytab, and so is one whose prefix is a single letter (a drive) or that starts with `/`, the whole name being the file; any other prefix names the type. The type and the name it keeps.
 pub(super) fn resolve(name: &str) -> Result<(KtType, &str), &'static str> {
     let Some(colon) = name.find(':') else {
         return Ok((KtType::File, name));
@@ -72,9 +65,7 @@ pub(super) fn resolve(name: &str) -> Result<(KtType, &str), &'static str> {
     }
 }
 
-/// The file of the keytab `name` names, else of the context's default keytab
-/// ([`default_keytab_name_of`]), as `krb5_kt_resolve` resolves it; `Ok(None)` for a `MEMORY:`
-/// keytab, which a new process holds empty.
+/// The file of the keytab `name` names, else of the context's default keytab ([`default_keytab_name_of`]), as `krb5_kt_resolve` resolves it; `Ok(None)` for a `MEMORY:` keytab, which a new process holds empty.
 pub(crate) fn keytab_file_of(
     name: Option<&str>,
     ctx: &ClientContext,
@@ -87,8 +78,7 @@ pub(crate) fn keytab_file_of(
     Ok(file_of(ty, residual))
 }
 
-/// MIT `process_keytab` (`kadmin/cli/keytab.c:67-111`): `-k NAME` (a name without a `:` is a
-/// `WRFILE`), printed as given; else the default keytab, printed as `krb5_kt_get_name` names it.
+/// MIT `process_keytab` (`kadmin/cli/keytab.c:67-111`): `-k NAME` (a name without a `:` is a `WRFILE`), printed as given; else the default keytab, printed as `krb5_kt_get_name` names it.
 fn process_keytab(s: &mut Session<'_>, keytab_str: Option<&str>) -> Option<Kt> {
     let Some(given) = keytab_str else {
         let resolved = default_keytab_name_of(&s.h.ctx)
@@ -131,8 +121,7 @@ fn file_of(ty: KtType, residual: &str) -> Option<PathBuf> {
     }
 }
 
-/// MIT `kadmin_keytab_add` (`kadmin/cli/keytab.c:114-203`): the options, then each principal
-/// (a `-glob` pattern adds every match, and is then read as a name itself, as MIT reads it).
+/// MIT `kadmin_keytab_add` (`kadmin/cli/keytab.c:114-203`): the options, then each principal (a `-glob` pattern adds every match, and is then read as a name itself, as MIT reads it).
 pub(crate) fn ktadd(s: &mut Session<'_>, argv: &[String]) {
     let mut rest = argv.get(1..).unwrap_or_default();
     let mut keytab_str: Option<&str> = None;
@@ -211,7 +200,6 @@ pub(crate) fn ktadd(s: &mut Session<'_>, argv: &[String]) {
     }
 }
 
-/// `kadm5_get_principals` for `-glob`.
 fn expand(s: &mut Session<'_>, pattern: &str) -> Result<Vec<String>, String> {
     if !crate::glob_pattern_ok(pattern) {
         return Err("Invalid argument".to_owned());
@@ -232,9 +220,7 @@ struct AddOpts {
     keysalts: Vec<EncryptionType>,
 }
 
-/// MIT `add_principal` (`kadmin/cli/keytab.c:299-358`): new random keys (`randkey_princ`, then
-/// the entry's kvno), or with `-norandkey` the keys the entry has; each is added to the keytab
-/// and reported.
+/// MIT `add_principal` (`kadmin/cli/keytab.c:299-358`): new random keys (`randkey_princ`, then the entry's kvno), or with `-norandkey` the keys the entry has; each is added to the keytab and reported.
 fn add_principal(s: &mut Session<'_>, kt: &Kt, opts: &AddOpts, princ_str: &str) {
     let (name, realm) = match s.h.parse_name(princ_str) {
         Ok(n) => n,
@@ -299,8 +285,6 @@ fn add_principal(s: &mut Session<'_>, kt: &Kt, opts: &AddOpts, princ_str: &str) 
     }
 }
 
-/// `krb5_kt_add_entry` for each key, the keytab file created when missing; an existing file
-/// keeps its owner and mode.
 fn add_entries(
     kt: &Kt,
     name: &PrincipalName,
@@ -337,8 +321,7 @@ fn add_entries(
     })
 }
 
-/// MIT `kadmin_keytab_remove` (`kadmin/cli/keytab.c:206-243`): the options, then one principal
-/// and an optional kvno, `all` or `old`.
+/// MIT `kadmin_keytab_remove` (`kadmin/cli/keytab.c:206-243`): the options, then one principal and an optional kvno, `all` or `old`.
 pub(crate) fn ktremove(s: &mut Session<'_>, argv: &[String]) {
     let mut rest = argv.get(1..).unwrap_or_default();
     let mut keytab_str: Option<&str> = None;
@@ -370,7 +353,6 @@ pub(crate) fn ktremove(s: &mut Session<'_>, argv: &[String]) {
     remove_principal(s, &kt, quiet, &rest[0], rest.get(1).map(String::as_str));
 }
 
-/// Which entries `ktremove` takes.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
     Spec(u32),
@@ -379,8 +361,7 @@ enum Mode {
     Old,
 }
 
-/// MIT `remove_principal` (`kadmin/cli/keytab.c:361-491`): the highest kvno's entries, those
-/// of one kvno, all, or all but the highest.
+/// MIT `remove_principal` (`kadmin/cli/keytab.c:361-491`): the highest kvno's entries, those of one kvno, all, or all but the highest.
 fn remove_principal(
     s: &mut Session<'_>,
     kt: &Kt,

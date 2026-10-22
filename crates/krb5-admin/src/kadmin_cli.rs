@@ -1,10 +1,4 @@
-//! `kadmin.local`: MIT's `kadmin/cli` (`kadmin.c`, `kadmin/cli/keytab.c`, `ss_wrapper.c`) over the
-//! local principal store, and the `ss` command loop it runs in.
-//!
-//! The command line, the three modes (`-q QUERY`, a command after the options, or commands read
-//! from stdin at the `kadmin.local:  ` prompt), the verbs, their messages and the exit status
-//! are MIT's. The verbs call the store's kadm5 functions directly, as `kadmin.local` calls
-//! `libkadm5srv`: no ACL and no `LOCKDOWN_KEYS` check (those are kadmind's).
+//! `kadmin.local`: MIT's `kadmin/cli` (`kadmin.c`, `kadmin/cli/keytab.c`, `ss_wrapper.c`) over the local principal store, and the `ss` command loop it runs in.
 
 mod kt_cmds;
 mod pol_cmds;
@@ -25,18 +19,12 @@ use krb5_types::PrincipalName;
 pub(crate) use kt_cmds::keytab_file_of;
 pub(crate) use stdio::{Io, LineRead, Stdout};
 
-/// The name every message is prefixed with: MIT's `whoami`, the program's base name, which an
-/// installed `kadmin.local` is.
+/// The name every message is prefixed with: MIT's `whoami`, the program's base name, which an installed `kadmin.local` is.
 pub(crate) const WHOAMI: &str = "kadmin.local";
 
 /// MIT `kadmin_startup` (`kadmin.c:288-607`): the options `kadmin` and `kadmin.local` share.
 const OPTSTRING: &str = "+x:r:p:knq:w:d:s:mc:t:e:ON";
 
-/// Run `kadmin.local` with this process's arguments and standard streams.
-///
-/// Returns the exit status: 1 when the command line or the database cannot be used, or a
-/// command-line or `-q` command is unknown, or a script-mode command reports an error; else 0
-/// (a `-q` query that fails still exits 0, as MIT's does).
 #[must_use]
 pub fn kadmin_local_main() -> i32 {
     // MIT `main` (`kadmin/cli/ss_wrapper.c:40-47`): the locale comes from the environment first.
@@ -60,10 +48,6 @@ pub fn kadmin_local_main() -> i32 {
     rc
 }
 
-/// The arguments as UTF-8. MIT passes them on as bytes, so `-p caf\xe9/admin` stamps those bytes
-/// and `addprinc caf\xe9` makes a principal of them; this store keeps names as UTF-8, so an
-/// argument that is not stops `kadmin.local` before anything runs. The program name is only
-/// ever printed as the installed name, so it is taken as it comes.
 fn utf8_args(args: impl Iterator<Item = std::ffi::OsString>, io: &mut Io) -> Option<Vec<String>> {
     let mut argv = Vec::new();
     for (i, arg) in args.enumerate() {
@@ -92,15 +76,13 @@ pub(crate) struct Handle {
     pub(crate) ctx: krb5_config::ClientContext,
 }
 
-/// How the database is opened.
 struct Open {
     db: PathBuf,
     stash: PathBuf,
     conf: Option<krb5_config::KdcConf>,
     krb5: Option<krb5_config::Krb5Conf>,
     keysalts: Vec<krb5_crypto::EncryptionType>,
-    /// `-m`: the master key derived from the password typed at startup. The database is read
-    /// and written under it, and the stash is never opened.
+    /// `-m`: the master key derived from the password typed at startup. The database is read and written under it, and the stash is never opened.
     typed: Option<krb5_crypto::ProtocolKey>,
 }
 
@@ -125,11 +107,7 @@ impl Handle {
         self.store.reload_if_stale()
     }
 
-    /// One kadm5 change, applied whole under the database's exclusive lock: the database is
-    /// read again, the steps run on the store, and the database is written once at the end
-    /// (under the typed master key with `-m`); when a step or the write fails, the store is read
-    /// back from the database, so nothing of the change remains but what MIT commits with its
-    /// own put (the `kadmin/history` a password change under a policy creates).
+    /// One kadm5 change, applied whole under the database's exclusive lock: the database is read again, the steps run on the store, and the database is written once at the end (under the typed master key with `-m`); when a step or the write fails, the store is read back from the database, so nothing of the change remains but what MIT commits with its own put (the `kadmin/history` a password change under a policy creates).
     pub(crate) fn mutate<T>(
         &mut self,
         f: impl FnOnce(&mut PrincipalStore, &str) -> Result<T, Error>,
@@ -145,9 +123,7 @@ impl Handle {
 }
 
 impl Open {
-    /// The store as the database holds it, with the realm's kdc.conf and krb5.conf applied.
-    /// MIT `kdb_init_master` (`lib/kadm5/srv/server_kdb.c:26-80`): a master key typed at the
-    /// keyboard opens the database without the stash.
+    /// MIT `kdb_init_master` (`lib/kadm5/srv/server_kdb.c:26-80`): a master key typed at the keyboard opens the database without the stash.
     fn load(&self) -> Result<PrincipalStore, String> {
         let mut store = match &self.typed {
             Some(key) => {
@@ -156,7 +132,6 @@ impl Open {
             None => krb5_kdc::load_store(&self.db, &self.stash).map_err(|e| self.load_text(e))?,
         };
         // MIT `kadm5_init` (`lib/kadm5/srv/server_init.c:202-205`): the realm's profile, kdc.conf before krb5.conf, in the KDC's order.
-        // `Krb5Conf::new`, not `default`: no krb5.conf leaves MIT's defaults (clockskew 300).
         let krb5 = match self.krb5.clone() {
             Some(conf) => conf,
             None => krb5_config::Krb5Conf::new(),
@@ -179,7 +154,6 @@ impl Open {
     }
 
     /// MIT `ctx_init` (`plugins/kdb/db2/kdb_db2.c:496-500`): a lock file that does not open is the system's text, or the policy lock's own.
-    /// MIT `open_db` (`plugins/kdb/db2/kdb_db2.c:386-389`): a database file of another format is named, with `EINVAL`'s text.
     fn load_text(&self, e: krb5_kdc::PersistError) -> String {
         match e {
             krb5_kdc::PersistError::Lock(e) => e.to_string(),
@@ -197,7 +171,6 @@ impl Open {
     }
 }
 
-/// What the command line asked for.
 struct Startup {
     handle: Handle,
     request: Option<String>,
@@ -205,7 +178,6 @@ struct Startup {
     ccache_name: Option<String>,
 }
 
-/// MIT `main` (`ss_wrapper.c:41-77`): start up, run the one command or the command loop, quit.
 pub(crate) fn run(argv: &[String], io: &mut Io) -> i32 {
     let once = krb5_config::ReadOnce::start();
     let started = startup(argv, io);
@@ -252,7 +224,6 @@ pub(crate) fn run(argv: &[String], io: &mut Io) -> i32 {
 }
 
 /// MIT `quit` (`kadmin.c:610-633`): give up a held lock, and warn that `-c` credentials stay.
-/// MIT `main` (`kadmin/cli/ss_wrapper.c:76-76`): a lock that cannot be let go makes the exit status 1.
 fn quit(s: &mut Session<'_>, ccache: bool) -> bool {
     if s.locked {
         if let Err(e) = s.h.store.unlock_database() {
@@ -271,7 +242,6 @@ fn quit(s: &mut Session<'_>, ccache: bool) -> bool {
     true
 }
 
-/// The options MIT's `kadmin_startup` collects.
 #[derive(Default)]
 struct Opts {
     db_args: Vec<String>,
@@ -286,7 +256,6 @@ struct Opts {
     keysalts: Vec<krb5_crypto::EncryptionType>,
 }
 
-/// glibc prefixes its option errors with `argv[0]` as given; the installed name is MIT's.
 fn getopt_prog(argv0: &str) -> &str {
     if Path::new(argv0).file_name().and_then(|n| n.to_str()) == Some(WHOAMI) {
         argv0
@@ -295,16 +264,12 @@ fn getopt_prog(argv0: &str) -> &str {
     }
 }
 
-/// MIT `kadmin_startup` (`kadmin.c:288-607`): the options, the principal to run as, the
-/// `Authenticating as principal …` line and the database. `None` after printing why the
-/// program exits 1.
 #[allow(
     clippy::disallowed_methods,
     reason = "kadmin.local's start: MIT kadmin_startup reads its context once"
 )]
 fn startup(argv: &[String], io: &mut Io) -> Option<Startup> {
-    // MIT `kadmin_startup` (`kadmin.c:309-313`): the KDC context before the options; a profile
-    // it refuses ends kadmin.local.
+    // the KDC context before the options; a profile it refuses ends kadmin.local.
     if let Err(e) = krb5_config::init_kdc_profile() {
         io.com_err(
             WHOAMI,
@@ -433,7 +398,6 @@ fn startup(argv: &[String], io: &mut Io) -> Option<Startup> {
             return None;
         }
     };
-    // MIT `kadmin_startup` (`kadmin/cli/kadmin.c:599-603`): with iprop enabled the update log is mapped as the primary's, and one that cannot be stops kadmin.local.
     // MIT `kadm5_init_iprop` (`lib/kadm5/srv/server_init.c:347-361`): only with `iprop_enable` is the log mapped.
     if iprop.enabled
         && let Err(e) =
@@ -452,8 +416,6 @@ fn startup(argv: &[String], io: &mut Io) -> Option<Startup> {
     })
 }
 
-/// The ccache `kadmin_startup` opens: `-c`, else the default. `Ok(None)` for one this port
-/// cannot read (`KEYRING`), which has no principal for it either.
 fn resolve_ccache(
     name: Option<&str>,
     env_ccname: Option<String>,
@@ -481,7 +443,6 @@ fn resolve_ccache(
         .map_err(|_| krb5_config::KRB5_CC_UNKNOWN_TYPE.to_owned())
 }
 
-/// `krb5_cc_get_principal`: the ccache's default principal, `None` when it has none to give.
 fn ccache_principal(cc: &krb5_config::CcSpec, profile: &krb5_config::Krb5Conf) -> Option<String> {
     let parsed = match cc {
         krb5_config::CcSpec::File(p) => {
@@ -498,13 +459,11 @@ fn ccache_principal(cc: &krb5_config::CcSpec, profile: &krb5_config::Krb5Conf) -
     Some(name.unparse_with_realm(&String::from_utf8_lossy(realm.as_bytes())))
 }
 
-/// The first `c` in `s` that no backslash escapes, as `kadmin_startup` scans an unparsed name.
 fn unescaped(s: &str, c: u8) -> Option<usize> {
     let b = s.as_bytes();
     (0..b.len()).find(|&i| b[i] == c && (i == 0 || b[i - 1] != b'\\'))
 }
 
-/// MIT `kadmin_startup` (`kadmin.c:395-472`): the principal to run as when `-p` is not given.
 fn default_princstr(
     o: &Opts,
     realm: &str,
@@ -546,9 +505,6 @@ fn default_princstr(
     Some(format!("{}/admin@{realm}", pw.name))
 }
 
-/// `krb5_sname_to_principal(NULL, "host", KRB5_NT_SRV_HST)`: `host/` and the local host name,
-/// lowercased, in the realm `[domain_realm]` maps it to, else the referral (empty) realm. The
-/// name is not canonicalized through DNS.
 fn host_princstr(conf: Option<&krb5_config::Krb5Conf>) -> String {
     let host = std::fs::read_to_string("/proc/sys/kernel/hostname")
         .map(|h| h.trim().to_ascii_lowercase())
@@ -559,18 +515,12 @@ fn host_princstr(conf: Option<&krb5_config::Krb5Conf>) -> String {
     format!("host/{host}@{realm}")
 }
 
-/// MIT `krb5_klog_init` (`lib/kadm5/logger.c:232-522`): for `admin_server`, the `[logging]`
-/// destinations of kdc.conf and the krb5.conf files open as kadmind's do, and one that cannot
-/// is reported; the password-quality dictionary's notice goes there as MIT's does.
+/// MIT `krb5_klog_init` (`lib/kadm5/logger.c:232-522`): for `admin_server`, the `[logging]` destinations of kdc.conf and the krb5.conf files open as kadmind's do, and one that cannot is reported; the password-quality dictionary's notice goes there as MIT's does.
 fn klog_init(specs: &krb5_config::LogSpecs) {
     krb5_log::klog::init(WHOAMI, &specs.specs, specs.debug);
 }
 
-/// MIT `kadm5_init` (`server_init.c:158-275`): for `kadmin.local`, the realm's parameters, the
-/// db2 module's arguments, the database, the caller's name and the master key; with the handle,
-/// the realm's iprop parameters, which `iprop_port` must complete when iprop is enabled. The
-/// error is the `com_err` text, and whether MIT also prints the usage
-/// (`KADM5_BAD_SERVER_PARAMS`).
+/// for `kadmin.local`, the realm's parameters, the db2 module's arguments, the database, the caller's name and the master key; with the handle, the realm's iprop parameters, which `iprop_port` must complete when iprop is enabled. The error is the `com_err` text, and whether MIT also prints the usage (`KADM5_BAD_SERVER_PARAMS`).
 #[allow(
     clippy::disallowed_methods,
     reason = "kadmin.local's start: MIT kadm5_init reads the realm's parameters once"
@@ -590,12 +540,10 @@ fn kadm5_init(
         ));
     }
     let paths = krb5_config::KdcPaths::resolve(Some(realm)).map_err(|e| (e.to_string(), false))?;
-    // MIT `kadm5_init` (`lib/kadm5/srv/server_init.c:222-228`): with iprop enabled, a missing `iprop_port` is a missing required parameter.
     let iprop = krb5_config::IpropParams::load(realm, &paths.database_name);
     if iprop.missing_required() {
         return Err((krb5_config::MISSING_CONF_PARAMS.to_owned(), false));
     }
-    // MIT `kadm5_init` (`lib/kadm5/srv/server_init.c:207-218`): a realm value that did not convert left its required parameter unset.
     if krb5_kdc::realm_kadm5_params_missing(&paths, realm, true) {
         return Err((krb5_config::MISSING_CONF_PARAMS.to_owned(), false));
     }
@@ -644,7 +592,7 @@ fn kadm5_init(
         ));
     }
     let mut store = open.load().map_err(|e| (e, false))?;
-    // MIT `kadm5_init` (`lib/kadm5/srv/server_init.c:266-268`): the password-quality modules come last, their dictionary read once for the session.
+    // the password-quality modules come last, their dictionary read once for the session.
     store
         .init_pwqual(open.conf.as_ref())
         .map_err(|e| (texts::strerror(&e), false))?;
@@ -659,15 +607,13 @@ fn kadm5_init(
     ))
 }
 
-/// What a `-x` argument is to the db2 module.
 enum Db2Arg<'a> {
     DbName(&'a str),
     Other,
     Unsupported,
 }
 
-/// MIT `configure_context` (`kdb_db2.c:202-262`): a db2 argument is `dbname=NAME`, or one of
-/// `temporary`, `merge_nra`, `hash=…`, `unlockiter`, `lockiter`; any other is refused.
+/// MIT `configure_context` (`kdb_db2.c:202-262`): a db2 argument is `dbname=NAME`, or one of `temporary`, `merge_nra`, `hash=…`, `unlockiter`, `lockiter`; any other is refused.
 fn db2_arg(arg: &str) -> Db2Arg<'_> {
     match arg.split_once('=') {
         Some(("dbname", name)) => Db2Arg::DbName(name),
@@ -679,8 +625,7 @@ fn db2_arg(arg: &str) -> Db2Arg<'_> {
     }
 }
 
-/// MIT `krb5_string_to_keysalts` (`kadm5/str_conv.c:319-366`): the enctypes of a keysalt list;
-/// a tuple naming an unknown enctype or salt type is skipped, a repeat is dropped.
+/// MIT `krb5_string_to_keysalts` (`kadm5/str_conv.c:319-366`): the enctypes of a keysalt list; a tuple naming an unknown enctype or salt type is skipped, a repeat is dropped.
 /// MIT `krb5_string_to_salttype` (`krb/str_conv.c:72-86`): a salt name in any case.
 pub(crate) fn string_to_keysalts(s: &str, seps: &[char]) -> Vec<krb5_crypto::EncryptionType> {
     const SALTS: [&str; 4] = ["normal", "norealm", "onlyrealm", "special"];

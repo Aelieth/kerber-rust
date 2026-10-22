@@ -1,6 +1,4 @@
-//! Units for the `kadmin.local` session: the verbs' texts, the prompts, the `ss` loop and the
-//! stdio. The command line and the exit status run as a process in `tests/cli_stdin.rs`; the
-//! texts are MIT 1.22.2's own, settled live for the same commands.
+//! Units for the `kadmin.local` session: the verbs' texts, the prompts, the `ss` loop and the stdio. The command line and the exit status run as a process in `tests/cli_stdin.rs`; the texts are MIT 1.22.2's own, settled live for the same commands.
 
 use std::cell::RefCell;
 use std::io::{self, Write};
@@ -34,8 +32,6 @@ impl Capture {
     }
 }
 
-/// Input that hands out its parts in turn: bytes, or a caught `SIGINT` where MIT's handler
-/// would run.
 struct Script(std::collections::VecDeque<Option<Vec<u8>>>);
 
 impl Script {
@@ -83,8 +79,6 @@ impl io::BufRead for Script {
     }
 }
 
-/// Input whose first line, once read, is followed by a real `SIGINT`: Ctrl-C while that line's
-/// request runs.
 struct SigintAfterLine {
     bytes: &'static [u8],
     raised: bool,
@@ -153,7 +147,6 @@ impl Rig {
         }
     }
 
-    /// One `-q` line; (stdout, stderr).
     fn q(&mut self, line: &str) -> (String, String) {
         let mut s = Session {
             io: &mut self.io,
@@ -169,13 +162,11 @@ impl Rig {
         (self.out.take(), self.err.take())
     }
 
-    /// The interactive loop over the rig's input; (stdout, stderr).
     fn listen(&mut self) -> (String, String) {
         let (out, err) = self.listen_bytes();
         (out, String::from_utf8_lossy(&err).into_owned())
     }
 
-    /// [`Self::listen`] with stderr as the bytes written.
     fn listen_bytes(&mut self) -> (String, Vec<u8>) {
         let mut s = Session {
             io: &mut self.io,
@@ -193,8 +184,6 @@ impl Rig {
         &self.h.as_ref().unwrap().store
     }
 
-    /// A rig on the documented realm saved in a scratch directory, opened as `kadmin.local`
-    /// opens a database: a change is written there, and a failed one read back from it.
     fn on_disk(tag: &str) -> (Self, PathBuf) {
         let dir = krb5_testkit::scratch_dir(tag);
         let _ = std::fs::create_dir_all(&dir);
@@ -285,8 +274,7 @@ fn addprinc_prompts_twice_reads_the_reply_and_refuses_a_mismatch() {
     assert!(r.store().get_name(&n("p3")).is_none());
 }
 
-/// MIT `kadm5_create_principal_3`: `passwd_check` runs before the entry exists, so a refused
-/// password creates nothing; `-randkey` skips it.
+/// MIT `kadm5_create_principal_3`: `passwd_check` runs before the entry exists, so a refused password creates nothing; `-randkey` skips it.
 #[test]
 fn addprinc_rejected_password_creates_no_principal() {
     let mut r = Rig::new("");
@@ -454,7 +442,6 @@ fn cpw_texts() {
     );
 }
 
-/// MIT `kdb_get_hist_key` creates `kadmin/history` with its own committed puts before
 /// `passwd_check`, settled live: a `cpw` refused for its length still leaves it in the database.
 #[test]
 fn cpw_refused_for_quality_keeps_kadmin_history() {

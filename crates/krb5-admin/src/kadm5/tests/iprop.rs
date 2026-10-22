@@ -2,8 +2,6 @@
 
 use super::*;
 
-/// A store whose process maps the update log as a primary's, its keys wrapped under the stash
-/// `seed_master_key` writes.
 #[cfg(feature = "test-hooks")]
 fn logging_setup() -> (krb5_kdc::SharedDump, Acl, String) {
     let (store, acl, actor) = setup();
@@ -24,9 +22,6 @@ fn get_updates_args(last: krb5_kdc::UlogLast) -> Vec<u8> {
     args.b
 }
 
-/// MIT `ulog_get_entries` (settled live): a replica that is not in the log is sent to a full
-/// resync; one at the log's dummy entry gets the update after it, as the log stores it, keys
-/// wrapped.
 #[cfg(feature = "test-hooks")]
 #[test]
 fn iprop_get_updates_full_resync_then_delta() {
@@ -77,7 +72,6 @@ fn iprop_get_updates_full_resync_then_delta() {
     assert_eq!(entries.len(), 1, "one create is one update");
     assert!(entries[0].name.contains("iproprpc") && !entries[0].vals.is_empty());
     assert_eq!(entries[0].sno, now.sno);
-    // Up to date: NIL.
     let nil = dispatch_iprop(
         &store,
         &acl,
@@ -91,9 +85,7 @@ fn iprop_get_updates_full_resync_then_delta() {
     );
 }
 
-// A key leaves only wrapped under the master key, which the log wraps it under as the change is
-// logged; a store with no master key (no stash, no `KRB5_MASTER_PASSWORD`, no `K/M`: the
-// in-memory bootstrap) cannot log a keyed change at all, so no key reaches the log or the wire.
+// logged; a store with no master key (no stash, no `KRB5_MASTER_PASSWORD`, no `K/M`: the in-memory bootstrap) cannot log a keyed change at all, so no key reaches the log or the wire.
 #[cfg(feature = "test-hooks")]
 #[test]
 fn iprop_get_updates_refuses_plaintext_keys_without_master_key() {
@@ -234,17 +226,13 @@ fn iprop_fullresync_deny_is_fullresync_result() {
         IPROP_FULL_RESYNC,
         &[],
     );
-    // MIT `ipropx_resync`: granted, with a zero last entry; the dump comes by kprop.
     assert_eq!(
         ok,
         encode_fullresync_status(krb5_kdc::UlogLast::default(), krb5_kdc::IPROP_OK)
     );
 }
 
-/// MIT `ulog_conv_2logentry`: a new principal is sent as MIT sends one (settled live, kproplog
-/// `-v` of an MIT `addprinc`): no lockout counters, no `AT_PW_POLICY` / `AT_PW_HIST*`; the policy,
-/// the history and the strings ride in `AT_TL_DATA`, without the password-change and modifier
-/// records, which go as `AT_PW_LAST_CHANGE`, `AT_MOD_PRINC` and `AT_MOD_TIME`.
+/// the history and the strings ride in `AT_TL_DATA`, without the password-change and modifier records, which go as `AT_PW_LAST_CHANGE`, `AT_MOD_PRINC` and `AT_MOD_TIME`.
 #[test]
 fn iprop_add_sends_mits_attributes_with_policy_history_and_strings_in_tl_data() {
     let (store, acl, actor) = setup();
@@ -318,7 +306,6 @@ fn iprop_add_sends_mits_attributes_with_policy_history_and_strings_in_tl_data() 
         got.iter()
             .any(|v| matches!(v, krb5_kdc::KdbeVal::PwLastChange(1_234)))
     );
-    // A replica decrypts the history under its own kadmin/history once the update is applied.
     let mut g = store.write().unwrap();
     g.remove_in(&name, "KERBER.TEST").unwrap();
     let next = g.serial() + 1;
@@ -407,8 +394,6 @@ fn iprop_kdbe_omits_internal_kerber_tl() {
 
 #[test]
 fn kadm5_log_op_fields_match_mit_stubs() {
-    // MIT server_stubs.c op strings and prime_arg: the unparsed principal for a create, the
-    // name for a policy.
     assert_eq!(
         kadm5_op_name(CREATE_PRINCIPAL),
         Some("kadm5_create_principal")
@@ -434,7 +419,6 @@ fn kadm5_log_op_fields_match_mit_stubs() {
     assert_eq!(kadm5_prime_arg(GET_POLS, &nopol.b, "a@R"), "*");
 }
 
-/// The lines MIT 1.22.2 kadmind wrote in the live settle, for the same requests.
 #[test]
 fn kadm5_log_lines_match_mit_live() {
     let admin = Caller {
@@ -504,7 +488,6 @@ fn kadm5_log_lines_match_mit_live() {
              client=admin/admin@SETTLE.TEST, {tail}"
         )]
     );
-    // A get of a missing principal fails in stub_setup and logs nothing.
     assert_eq!(
         kadm5_log_lines(
             GET_PRINCIPAL,
@@ -582,8 +565,6 @@ fn test_master_key() -> ProtocolKey {
     ProtocolKey::from_bytes(krb5_crypto::EncryptionType::Aes256CtsHmacSha196, &[7; 32]).unwrap()
 }
 
-/// A key leaves only wrapped under the master key: an update whose key does not wrap is not
-/// encoded at all, and a logged update's key bytes are nowhere in the GET_UPDATES reply.
 #[cfg(feature = "test-hooks")]
 #[test]
 fn a_key_that_does_not_wrap_is_never_sent_in_the_clear() {
@@ -622,10 +603,6 @@ fn a_key_that_does_not_wrap_is_never_sent_in_the_clear() {
     assert!(!ok.windows(key.len()).any(|w| w == key.as_slice()));
 }
 
-/// MIT `setup_loop`: the iprop program is registered only with `iprop_enable` (MIT 1.22.2 answers
-/// PROG_UNAVAIL on the kadmind port while it is off, and dispatches once it is on, where an
-/// AUTH_NONE call is AUTH_TOOWEAK); here it is served only while the update log is mapped as a
-/// primary's. AUTH_GSSAPI's own INIT is answered either way (auth before the program lookup).
 #[cfg(feature = "test-hooks")]
 #[test]
 fn the_iprop_program_is_served_only_with_the_update_log_mapped() {
@@ -668,7 +645,6 @@ fn the_iprop_program_is_served_only_with_the_update_log_mapped() {
     assert_eq!(r.u32().unwrap(), MSG_DENIED);
     assert_eq!(r.u32().unwrap(), REJECT_AUTH_ERROR);
     assert_eq!(r.u32().unwrap(), AUTH_TOOWEAK, "dispatched with iprop on");
-    // A replica's log does not serve the program: only a primary's does.
     let (replica, _, _) = setup();
     replica.write().unwrap().set_ulog(
         krb5_kdc::Ulog::memory(10).unwrap(),

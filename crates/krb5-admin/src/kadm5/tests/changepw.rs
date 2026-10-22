@@ -121,9 +121,7 @@ fn changepw_service_getprivs_is_ok() {
     assert_eq!(r.u32().unwrap(), !0);
 }
 
-// A password that is not UTF-8 is still a kadm5 xdr_string. Decoding it as UTF-8
-// used to fail the RPC with SYSTEM_ERR before passwd_check (the MIT client's
-// "Communication failure with server").
+// A password that is not UTF-8 is still a kadm5 xdr_string. Decoding it as UTF-8 used to fail the RPC with SYSTEM_ERR before passwd_check (the MIT client's "Communication failure with server").
 #[test]
 fn chpass_password_keeps_non_utf8_octets() {
     let pass = b"caf\xe9p16a";

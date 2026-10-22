@@ -1,5 +1,4 @@
-//! The principal requests of MIT `kadmin.c`: add, delete, modify, rename, alias, change the
-//! password, get, list, purge keys, string attributes, privileges and the database lock.
+//! The principal requests of MIT `kadmin.c`: add, delete, modify, rename, alias, change the password, get, list, purge keys, string attributes, privileges and the database lock.
 
 use std::fmt::Write as _;
 
@@ -11,7 +10,6 @@ use zeroize::Zeroizing;
 use super::{Session, string_to_keysalts, texts};
 use crate::getdate;
 
-/// The kadm5 mask bits (`admin.h`) the principal requests set.
 mod mask {
     pub(super) const PRINCIPAL: u32 = 0x0000_0001;
     pub(super) const PRINC_EXPIRE_TIME: u32 = 0x0000_0002;
@@ -27,7 +25,6 @@ mod mask {
     pub(super) const TL_DATA: u32 = 0x0004_0000;
 }
 
-/// The record `kadmin_parse_princ_args` fills.
 #[derive(Default)]
 struct PrincArgs {
     mask: u32,
@@ -47,8 +44,7 @@ struct PrincArgs {
     name: Option<(PrincipalName, String)>,
 }
 
-/// MIT `krb5_flagspec_to_mask` (`kadm5/str_conv.c:171-197`): a `+`, `-` or unsigned attribute
-/// name, or a `0x` number, set or cleared on `attributes`; `None` for any other word.
+/// MIT `krb5_flagspec_to_mask` (`kadm5/str_conv.c:171-197`): a `+`, `-` or unsigned attribute name, or a `0x` number, set or cleared on `attributes`; `None` for any other word.
 fn flagspec(spec: &str, attributes: u32) -> Option<u32> {
     let signed = if spec.starts_with(['+', '-']) {
         spec.to_owned()
@@ -59,9 +55,7 @@ fn flagspec(spec: &str, attributes: u32) -> Option<u32> {
     Some((attributes | set) & !clear)
 }
 
-/// MIT `kadmin_parse_princ_args` (`kadmin.c:1048-1179`): the options before the last word,
-/// which is the principal. `None` after printing what MIT prints there; the caller then prints
-/// its usage.
+/// MIT `kadmin_parse_princ_args` (`kadmin.c:1048-1179`): the options before the last word, which is the principal. `None` after printing what MIT prints there; the caller then prints its usage.
 fn parse_princ_args(
     s: &mut Session<'_>,
     argv: &[String],
@@ -141,7 +135,6 @@ fn parse_princ_args(
     Some(a)
 }
 
-/// MIT `parse_date` (`kadmin.c:158-166`): the date as a 32-bit `krb5_timestamp`.
 fn date(s: &mut Session<'_>, spec: &str, now: i64) -> Option<u32> {
     match getdate::parse_date(spec, now) {
         Ok(d) => Some(getdate::low32(d)),
@@ -152,7 +145,6 @@ fn date(s: &mut Session<'_>, spec: &str, now: i64) -> Option<u32> {
     }
 }
 
-/// MIT `parse_interval` (`kadmin.c:174-197`): the interval as a 32-bit `krb5_deltat`.
 fn interval(s: &mut Session<'_>, spec: &str, now: i64) -> Option<u32> {
     match getdate::parse_interval(spec, now) {
         Ok(d) => Some(getdate::low32(d)),
@@ -175,8 +167,7 @@ fn policy_exists(s: &mut Session<'_>, name: &str) -> bool {
     s.h.store.policies().contains_key(name)
 }
 
-/// MIT `kadmin_addprinc` (`kadmin.c:1242-1362`): the policy notice, the password (asked twice
-/// when none is given), the create, `Principal "…" created.`.
+/// MIT `kadmin_addprinc` (`kadmin.c:1242-1362`): the policy notice, the password (asked twice when none is given), the create, `Principal "…" created.`.
 pub(crate) fn addprinc(s: &mut Session<'_>, argv: &[String]) {
     let Some(mut a) = parse_princ_args(s, argv, 0, "add_principal") else {
         usage(s, &texts::ADDPRINC_USAGE);
@@ -252,8 +243,7 @@ pub(crate) fn addprinc(s: &mut Session<'_>, argv: &[String]) {
     s.io.info(&format!("Principal \"{canon}\" created.\n"));
 }
 
-/// MIT `kadm5_create_principal_3` (`svr_principal.c:300-505`): the parsed record created; `-nokey`
-/// leaves the entry keyless, and a db2 argument is refused where the entry would be stored.
+/// the parsed record created; `-nokey` leaves the entry keyless, and a db2 argument is refused where the entry would be stored.
 fn create(
     st: &mut PrincipalStore,
     caller: &str,
@@ -288,14 +278,12 @@ fn create(
     Ok(())
 }
 
-/// MIT `krb5_db2_put_principal` (`kdb_db2.c:812-822`): the db2 module takes no per-principal
-/// argument.
+/// MIT `krb5_db2_put_principal` (`kdb_db2.c:812-822`): the db2 module takes no per-principal argument.
 fn db2_put_refused(arg: &str) -> Error {
     Error::InvalidArgument(format!("Unsupported argument \"{arg}\" for db2"))
 }
 
-/// MIT `kadmin_modprinc` (`kadmin.c:1365-1435`): the entry is read first, the options apply to
-/// its attributes, `Principal "…" modified.`.
+/// MIT `kadmin_modprinc` (`kadmin.c:1365-1435`): the entry is read first, the options apply to its attributes, `Principal "…" modified.`.
 pub(crate) fn modprinc(s: &mut Session<'_>, argv: &[String]) {
     let argc = argv.len();
     if argc < 2 {
@@ -357,8 +345,6 @@ pub(crate) fn modprinc(s: &mut Session<'_>, argv: &[String]) {
     s.io.info(&format!("Principal \"{canon}\" modified.\n"));
 }
 
-/// MIT `kadm5_modify_principal` (`svr_principal.c:556-690`): the parsed record applied, one store
-/// write for every field.
 fn modify(
     st: &mut PrincipalStore,
     caller: &str,
@@ -568,8 +554,7 @@ fn cpw_usage(s: &mut Session<'_>, msg: Option<&str>) {
     s.io.error(texts::CPW_USAGE);
 }
 
-/// MIT `kadmin_cpw` (`kadmin.c:836-973`): `-pw`, `-randkey`, or the password asked twice;
-/// `-keepold` and `-e` as given.
+/// MIT `kadmin_cpw` (`kadmin.c:836-973`): `-pw`, `-randkey`, or the password asked twice; `-keepold` and `-e` as given.
 pub(crate) fn cpw(s: &mut Session<'_>, argv: &[String]) {
     let mut rest = argv.get(1..).unwrap_or_default();
     let mut pwarg: Option<String> = None;
@@ -675,8 +660,7 @@ pub(crate) fn cpw(s: &mut Session<'_>, argv: &[String]) {
     s.io.info(&format!("Password for \"{canon}\" changed.\n"));
 }
 
-/// MIT `kadmin_getprinc` (`kadmin.c:1438-1571`): the record, or with `-terse` its fields
-/// tab-separated.
+/// MIT `kadmin_getprinc` (`kadmin.c:1438-1571`): the record, or with `-terse` its fields tab-separated.
 pub(crate) fn getprinc(s: &mut Session<'_>, argv: &[String]) {
     let argc = argv.len();
     if !(argc == 2 || (argc == 3 && argv[1] == "-terse")) {
@@ -724,9 +708,7 @@ pub(crate) fn getprinc(s: &mut Session<'_>, argv: &[String]) {
     s.io.print(&text);
 }
 
-/// MIT `kadmin_getprincs` (`kadmin.c:1574-1593`): the names, sorted, that match the glob (the
-/// realm free when the glob names none).
-/// MIT `glob_to_regexp` (`svr_iters.c:55-109`): an empty glob is `^@.*$`, which no name matches.
+/// MIT `kadmin_getprincs` (`kadmin.c:1574-1593`): the names, sorted, that match the glob (the realm free when the glob names none).
 pub(crate) fn getprincs(s: &mut Session<'_>, argv: &[String]) {
     let expr = match argv {
         [_] => None,
@@ -769,8 +751,7 @@ pub(crate) fn getprivs(s: &mut Session<'_>, argv: &[String]) {
     s.io.print("current privileges: INQUIRE ADD MODIFY DELETE\n");
 }
 
-/// MIT `kadmin_purgekeys` (`kadmin.c:1872-1921`): keep the newest keys, `-keepkvno N` and
-/// newer, or (`-all`) none.
+/// MIT `kadmin_purgekeys` (`kadmin.c:1872-1921`): keep the newest keys, `-keepkvno N` and newer, or (`-all`) none.
 pub(crate) fn purgekeys(s: &mut Session<'_>, argv: &[String]) {
     let (keepkvno, pname) = match argv {
         [_, opt, kvno, p] if opt == "-keepkvno" => {
@@ -864,7 +845,6 @@ fn set_or_del(s: &mut Session<'_>, pname: &str, key: &str, value: Option<&str>, 
     let (name, realm) = match s.h.parse_name(pname) {
         Ok(n) => n,
         Err(msg) => {
-            // MIT `kadmin_delstring` (`kadmin.c:2011-2048`): this one message is `delstring`.
             let p = if value.is_some() { prog } else { "delstring" };
             s.io.com_err(p, Some(msg), "while parsing principal");
             return;
@@ -893,8 +873,7 @@ fn set_or_del(s: &mut Session<'_>, pname: &str, key: &str, value: Option<&str>, 
     }
 }
 
-/// MIT `kadmin_lock` (`kadmin.c:636-648`): the database's exclusive lock, taken (waiting for
-/// any other holder) and held across commands until `unlock`; every other process waits.
+/// MIT `kadmin_lock` (`kadmin.c:636-648`): the database's exclusive lock, taken (waiting for any other holder) and held across commands until `unlock`; every other process waits.
 pub(crate) fn lock(s: &mut Session<'_>, _argv: &[String]) {
     if s.locked {
         return;

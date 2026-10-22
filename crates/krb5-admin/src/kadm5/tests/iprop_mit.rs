@@ -1,7 +1,4 @@
-//! Updates shaped as an MIT 1.22.2 primary sends them (the attribute lists `kproplog -v` showed
-//! for `setstr`, `cpw -randkey` and `modprinc +allow_tix`), pulled onto this replica: only the
-//! attributes an update carries change, an update that clears a flag clears it, and the lockout
-//! attributes never change on a replica.
+//! Updates shaped as an MIT 1.22.2 primary sends them (the attribute lists `kproplog -v` showed for `setstr`, `cpw -randkey` and `modprinc +allow_tix`), pulled onto this replica: only the attributes an update carries change, an update that clears a flag clears it, and the lockout attributes never change on a replica.
 
 use super::*;
 use krb5_kdc::{
@@ -17,8 +14,6 @@ const PW_EXPIRE: u32 = 1_906_502_400;
 const MAX_LIFE: u64 = 5 * 3600;
 const MAX_RLIFE: u64 = 3 * 86_400;
 
-/// A replica holding `p11user` as the live settle's primary made it: `+requires_preauth
-/// -allow_tix`, both expirations, its own lifetimes, a policy and a string attribute.
 fn replica() -> (PrincipalStore, PrincipalName) {
     let (mut store, acl) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
     let actor = krb5_kdc::testrealm::documented_admin_id();
@@ -67,9 +62,6 @@ fn tl(w: &mut XdrW, records: &[(i32, Vec<u8>)]) {
     }
 }
 
-/// The tail of every MIT update in the settle: `AT_PRINC`, `AT_PW_LAST_CHANGE`, `AT_MOD_PRINC`
-/// (`admin`), `AT_MOD_TIME`, then `AT_TL_DATA` with the strings, the kadm5 record and the
-/// master key version.
 fn mit_tail(w: &mut XdrW, strings: &[u8], kadm: &[u8]) {
     w.u32(AT_PRINC);
     princ(w, &["p11user"]);
@@ -90,12 +82,10 @@ fn mit_tail(w: &mut XdrW, strings: &[u8], kadm: &[u8]) {
     );
 }
 
-/// One `kdb_incr_result_t` carrying one update of `p11user` with `n` attributes.
 fn mit_result(sno: u32, n: u32, vals: &[u8]) -> Vec<u8> {
     mit_result_for("p11user", sno, n, vals)
 }
 
-/// One `kdb_incr_result_t` carrying one update of `princ` with `n` attributes.
 fn mit_result_for(princ: &str, sno: u32, n: u32, vals: &[u8]) -> Vec<u8> {
     let mut w = XdrW::default();
     w.u32(sno);
@@ -278,9 +268,6 @@ fn an_mit_tl_data_update_replaces_records_by_type_and_removes_none() {
     assert_kept(&after);
 }
 
-/// MIT `krb5_dbe_specialize_salt` on a rename keeps each key's salt explicitly; a replica loads
-/// that record from a dump, then an MIT `cpw -pw` sends keys with the normal salt. The replica
-/// offers the new keys' salt, so a client salting as offered derives the stored key.
 #[test]
 fn an_mit_cpw_after_a_rename_offers_the_new_keys_salt() {
     let (mut store, acl) = krb5_kdc::testrealm::bootstrap_documented().unwrap();

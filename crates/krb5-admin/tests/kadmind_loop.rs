@@ -1,9 +1,4 @@
-//! kadmind's one loop ([`krb5_admin::serve_kadmind_until`]) serves kpasswd's TCP streams and the
-//! kadm5 RPC connections as MIT's net-server serves kadmind's: a kpasswd length past the buffer
-//! is answered with MIT's KRB-ERROR, and an RPC connection stays open between its calls, a call
-//! that does not decode getting no reply and a call whose credential or verifier does not check
-//! out MIT's RPC auth error, as MIT's.
-//! MIT `make_toolong_error` (`kadmin/server/misc.c:139-161`): `KRB_ERR_FIELD_TOOLONG` from `kadmin/changepw` in the realm.
+//! kadmind's one loop ([`krb5_admin::serve_kadmind_until`]) serves kpasswd's TCP streams and the kadm5 RPC connections as MIT's net-server serves kadmind's: a kpasswd length past the buffer is answered with MIT's KRB-ERROR, and an RPC connection stays open between its calls, a call that does not decode getting no reply and a call whose credential or verifier does not check out MIT's RPC auth error, as MIT's.
 
 use std::io::{Read as _, Write as _};
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -23,14 +18,11 @@ use krb5_kdc::testrealm::{TEST_REALM, bootstrap_documented};
 use krb5_protocol::{AcceptorConfig, as_req_sname, pa_enc_timestamp};
 use krb5_types::{KrbError, PrincipalName, ascii, err};
 
-/// kadmind's loop over the documented realm on a thread, kpasswd's TCP listener and the RPC
-/// listener on 127.0.0.1, until the flag is set.
 fn serving() -> (SocketAddr, SocketAddr, Arc<AtomicBool>, JoinHandle<()>) {
     let (kpasswd, rpc, _, stop, served) = serving_with_store();
     (kpasswd, rpc, stop, served)
 }
 
-/// [`serving`], with the store the loop serves.
 fn serving_with_store() -> (
     SocketAddr,
     SocketAddr,
@@ -77,7 +69,6 @@ fn connect(addr: SocketAddr) -> TcpStream {
     c
 }
 
-/// The bytes of a record in one fragment.
 fn record(body: &[u8]) -> Vec<u8> {
     let mut v = (u32::try_from(body.len()).unwrap() | 0x8000_0000)
         .to_be_bytes()
@@ -86,7 +77,6 @@ fn record(body: &[u8]) -> Vec<u8> {
     v
 }
 
-/// A kadm5 call (program 2112, version 2) to procedure 99 with AUTH_NONE.
 fn auth_none_call(xid: u32) -> Vec<u8> {
     [xid, 0, 2, 2112, 2, 99, 0, 0, 0, 0]
         .iter()
@@ -94,7 +84,6 @@ fn auth_none_call(xid: u32) -> Vec<u8> {
         .collect()
 }
 
-/// One reply record's words.
 fn reply_words(c: &mut TcpStream) -> Vec<u32> {
     let mut mark = [0u8; 4];
     c.read_exact(&mut mark).unwrap();
@@ -110,9 +99,6 @@ fn closed(c: &mut TcpStream) -> bool {
     matches!(c.read(&mut [0u8; 1]), Ok(0))
 }
 
-/// A kpasswd TCP length past the 1 MiB buffer is logged and answered before any body with
-/// `KRB_ERR_FIELD_TOOLONG` from `kadmin/changepw`, not framed as a kpasswd reply, then the
-/// stream closes; the length of the buffer less its length word is taken.
 #[test]
 fn a_kpasswd_length_past_the_buffer_is_mits_field_toolong() {
     let (kpasswd, _, flag, served) = serving();
@@ -137,17 +123,12 @@ fn a_kpasswd_length_past_the_buffer_is_mits_field_toolong() {
     stop(&flag, served);
 }
 
-/// An RPC connection answers call after call on the same socket, waiting between them; a call
-/// that does not decode gets no reply, and the connection answers the next one, as MIT's did
-/// when settled live (a 1-byte record, then AUTH_TOOWEAK for the next call).
-/// MIT `svc_do_xprt` (`lib/rpc/svc.c:473-474`): a call that does not decode is not answered.
 #[test]
 fn a_kadm5_connection_stays_between_calls() {
     let (_, rpc, flag, served) = serving();
     let mut c = connect(rpc);
     for xid in [7, 8] {
         c.write_all(&record(&auth_none_call(xid))).unwrap();
-        // xid, REPLY, MSG_DENIED, AUTH_ERROR, AUTH_TOOWEAK
         assert_eq!(reply_words(&mut c), [xid, 1, 1, 1, 5]);
     }
     c.write_all(&record(&[0])).unwrap();
@@ -160,8 +141,6 @@ fn a_kadm5_connection_stays_between_calls() {
     stop(&flag, served);
 }
 
-/// kadmind built on one thread is served on another, as an embedder may run it, with its
-/// reporter: the reporter gets the message of the call that does not decode, and of no other.
 #[test]
 fn kadmind_is_served_from_another_thread_with_its_reporter() {
     let (store, acl) = bootstrap_documented().unwrap();
@@ -206,7 +185,6 @@ fn kadmind_is_served_from_another_thread_with_its_reporter() {
     assert_ne!(reported[0], "");
 }
 
-/// XDR's variable-length opaque: its length, its bytes, zeros to the next word.
 fn opaque(b: &[u8]) -> Vec<u8> {
     let mut v = u32::try_from(b.len()).unwrap().to_be_bytes().to_vec();
     v.extend_from_slice(b);
@@ -214,8 +192,6 @@ fn opaque(b: &[u8]) -> Vec<u8> {
     v
 }
 
-/// A kadm5 call (program 2112, version 2) with an AUTH_GSSAPI credential (version 2, `auth_msg`,
-/// the handle) and verifier (AUTH_NONE when there is none).
 fn agss_call(
     xid: u32,
     proc: u32,
@@ -238,7 +214,6 @@ fn agss_call(
     v
 }
 
-/// One reply record's body.
 fn reply_body(c: &mut TcpStream) -> Vec<u8> {
     let mut mark = [0u8; 4];
     c.read_exact(&mut mark).unwrap();
@@ -247,7 +222,6 @@ fn reply_body(c: &mut TcpStream) -> Vec<u8> {
     body
 }
 
-/// A reader of a reply's words and opaques.
 struct Words<'a>(&'a [u8]);
 
 impl Words<'_> {
@@ -265,8 +239,6 @@ impl Words<'_> {
     }
 }
 
-/// The documented admin's GSS context for kadmin/admin from the served store's KDC, its token,
-/// and the ticket's session key.
 fn admin_initiator(store: &SharedDump) -> (GssContext, Vec<u8>, ProtocolKey) {
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["admin"]);
     let g = store.read().unwrap();
@@ -297,13 +269,6 @@ fn admin_initiator(store: &SharedDump) -> (GssContext, Vec<u8>, ProtocolKey) {
     (ctx, token, out.session_key)
 }
 
-/// A call whose AUTH_GSSAPI verifier or credential does not check out is answered at once with
-/// MIT's RPC auth error, and the connection and its record go on: a verifier that does not
-/// unseal is AUTH_BADVERF, a handle that names no record AUTH_BADCRED, and then the call under
-/// the next sequence number is answered under its reply verifier. MIT's kadmind answered MIT's
-/// kadmin so when settled live (a verifier with a flipped byte, a changed handle).
-/// MIT `svc_do_xprt` (`lib/rpc/svc.c:487-493`): `svcerr_auth` with the flavor's `auth_stat`.
-/// MIT `svc_do_xprt` (`lib/rpc/svc.c:523-531`): the transport stays for the next call.
 #[test]
 fn an_auth_error_is_answered_and_the_connection_goes_on() {
     krb5_config::isolate_test_krb5();
@@ -323,14 +288,11 @@ fn an_auth_error_is_answered_and_the_connection_goes_on() {
     let (tok, isn) = (r.opaque(), r.opaque());
     ctx.process_ap_rep(&tok, &session).unwrap();
     let seq = u32::from_be_bytes(ctx.unwrap(&isn).unwrap().try_into().unwrap());
-    // kadm5 INIT (13), then a verifier that does not unseal and a handle that names no record,
-    // each answered at once, then GET_PRIVS (12) under the next sequence number.
     agss_data_call(&mut c, &mut ctx, &handle, 2, 13, seq.wrapping_add(1));
     let mut bad = ctx.wrap_integ(&seq.wrapping_add(3).to_be_bytes()).unwrap();
     *bad.last_mut().unwrap() ^= 1;
     c.write_all(&record(&agss_call(3, 12, false, &handle, Some(&bad), &[])))
         .unwrap();
-    // xid, REPLY, MSG_DENIED, AUTH_ERROR, AUTH_BADVERF
     assert_eq!(reply_words(&mut c), [3, 1, 1, 1, 3]);
     let verf = ctx.wrap_integ(&seq.wrapping_add(3).to_be_bytes()).unwrap();
     c.write_all(&record(&agss_call(
@@ -342,14 +304,11 @@ fn an_auth_error_is_answered_and_the_connection_goes_on() {
         &[],
     )))
     .unwrap();
-    // AUTH_BADCRED
     assert_eq!(reply_words(&mut c), [4, 1, 1, 1, 1]);
     agss_data_call(&mut c, &mut ctx, &handle, 5, 12, seq.wrapping_add(3));
     stop(&flag, served);
 }
 
-/// A kadm5 call to `proc` under the record's next sequence number `seq` (its verifier, and the
-/// API version sealed after it), answered SUCCESS under the reply verifier sealing `seq` + 1.
 fn agss_data_call(
     c: &mut TcpStream,
     ctx: &mut GssContext,

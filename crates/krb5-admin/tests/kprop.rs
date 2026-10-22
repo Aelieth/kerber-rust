@@ -475,7 +475,6 @@ fn master_key(realm: &str, password: &[u8]) -> krb5_crypto::ProtocolKey {
     krb5_kdc::master_key_from_password(realm, password, krb5_kdc::default_master_etype()).unwrap()
 }
 
-/// MIT's kpropd loads a received dump with `kdb5_util load` beside the replica's stash; a
 /// release kpropd opens it with that stash's key, and one that does not open it is refused.
 #[test]
 fn kpropd_without_a_password_opens_the_dump_with_the_replicas_stash() {
@@ -488,7 +487,6 @@ fn kpropd_without_a_password_opens_the_dump_with_the_replicas_stash() {
     let stash = dir.join("stash");
     krb5_kdc::write_stash(&stash, &realm, &mkey, 1).unwrap();
     let replica = kprop_load_with_stash(dump.as_bytes(), &stash).unwrap();
-    // The dump carries the K/M entry it is wrapped under, beside the store's principals.
     let mut ids = store.ids();
     ids.push(format!("K/M@{realm}"));
     ids.sort();
@@ -508,8 +506,7 @@ fn kpropd_without_a_password_opens_the_dump_with_the_replicas_stash() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// One MIT-wire kprop of `store` as `admin` to a kpropd whose ACL names exactly
-/// `admin@KERBER.TEST`, loading into `db` beside `stash`; kpropd's error, else kprop's.
+/// One MIT-wire kprop of `store` as `admin` to a kpropd whose ACL names exactly `admin@KERBER.TEST`, loading into `db` beside `stash`; kpropd's error, else kprop's.
 fn kprop_exact_acl(
     store: &krb5_kdc::PrincipalStore,
     db: &std::path::Path,
@@ -594,9 +591,7 @@ fn kprop_exact_acl(
     Ok(loaded)
 }
 
-/// MIT's kpropd runs `kdb5_util load`, whose create of the replica's `principal.ok` is
-/// `O_CREAT | O_TRUNC` and empties a symlink's target; this full load refuses a link planted
-/// there by a non-root owner of the replica's directory, and loads nothing.
+/// `O_CREAT | O_TRUNC` and empties a symlink's target; this full load refuses a link planted there by a non-root owner of the replica's directory, and loads nothing.
 #[test]
 fn kpropd_refuses_a_symlink_planted_as_the_replicas_lock_file() {
     let dir = krb5_testkit::scratch_dir("kprop-link");
@@ -634,9 +629,6 @@ fn kpropd_refuses_a_symlink_planted_as_the_replicas_lock_file() {
     assert!(!db.exists(), "nothing loaded");
 }
 
-/// prop-acl-gate's C2 `acl-exact`: a kpropd whose ACL names the sender exactly loads a full dump
-/// into an empty replica directory, and again once the replica's database file alone is removed
-/// (its lock files stay), as MIT's load opens and locks the lock files it finds.
 #[test]
 fn kpropd_with_an_exact_acl_loads_into_an_empty_replica_and_beside_its_lock_files() {
     let dir = krb5_testkit::scratch_dir("kprop-exact-acl");

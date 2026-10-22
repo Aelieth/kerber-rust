@@ -112,7 +112,6 @@ fn kadmind_wire_create_is_visible_after_reload() {
         "kadmind create must persist to stash/db"
     );
 
-    // A ktadd's reply holds the keytab behind the status, in one buffer of its size.
     let ap = build_ap_req(
         tgs_out.rep.0.ticket.clone(),
         &tgs_out.session_key,

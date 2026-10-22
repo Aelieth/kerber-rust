@@ -7,19 +7,15 @@ use krb5_kdc::Error;
 use super::{Session, atoi, texts};
 use crate::{PolicyArgs, getdate};
 
-/// The record `kadmin_parse_policy_args` fills; `clear_keysalts` for `-allowedkeysalts -`.
 struct PolArgs {
     args: PolicyArgs,
     clear_keysalts: bool,
 }
 
-/// A count option's value: C `atoi`, a negative one held as 0 (both fail the same floors).
 fn count(v: &str) -> u32 {
     u32::try_from(atoi(v).max(0)).unwrap_or(u32::MAX)
 }
 
-/// MIT `kadmin_parse_policy_args` (`kadmin.c:1596-1696`): option and value pairs, then the
-/// policy name; `None` after printing what MIT prints there.
 fn parse_policy_args(s: &mut Session<'_>, argv: &[String], caller: &str) -> Option<PolArgs> {
     let argc = argv.len();
     let now = getdate::now();
@@ -129,8 +125,7 @@ pub(crate) fn modpol(s: &mut Session<'_>, argv: &[String]) {
     }
 }
 
-/// MIT `kadmin_delpol` (`kadmin.c:1753-1776`): `-force`, else the `yes` question; the error is
-/// prefixed `delete_policy:` with its colon, as MIT's `com_err` call spells it.
+/// MIT `kadmin_delpol` (`kadmin.c:1753-1776`): `-force`, else the `yes` question; the error is prefixed `delete_policy:` with its colon, as MIT's `com_err` call spells it.
 pub(crate) fn delpol(s: &mut Session<'_>, argv: &[String]) {
     let argc = argv.len();
     if !(argc == 2 || (argc == 3 && argv[1] == "-force")) {
@@ -167,8 +162,6 @@ pub(crate) fn delpol(s: &mut Session<'_>, argv: &[String]) {
     }
 }
 
-/// MIT `kadmin_getpol` (`kadmin.c:1779-1822`): the policy, or with `-terse` its fields
-/// tab-separated.
 pub(crate) fn getpol(s: &mut Session<'_>, argv: &[String]) {
     let argc = argv.len();
     if !(argc == 2 || (argc == 3 && argv[1] == "-terse")) {
@@ -248,7 +241,6 @@ pub(crate) fn getpol(s: &mut Session<'_>, argv: &[String]) {
 }
 
 /// MIT `kadmin_getpols` (`kadmin.c:1825-1844`): the policy names, sorted, matching the glob.
-/// MIT `glob_to_regexp` (`svr_iters.c:55-109`): an empty glob is `^$`, which no name matches.
 pub(crate) fn getpols(s: &mut Session<'_>, argv: &[String]) {
     let expr = match argv {
         [_] => None,

@@ -342,8 +342,6 @@ fn rpcsec_init_reply_mic_is_window() {
     let window = r.u32().unwrap();
     assert_eq!(window, RPCSEC_SEQ_WINDOW);
     let out_tok = r.opaque().unwrap();
-    // MIT kadmind's AP-REP: a fresh acceptor subkey and a random 30-bit seq; the window MIC is
-    // the second token under that subkey (`svcauth_gss` signs the window twice).
     let part = ap_rep_part(&out_tok, &as_out.session_key);
     let subkey = part.subkey.expect("the AP-REP carries an acceptor subkey");
     assert_ne!(
@@ -361,7 +359,6 @@ fn rpcsec_init_reply_mic_is_window() {
         .expect("INIT xp_verf is MIC(htonl(window))");
 }
 
-/// The EncAPRepPart of a GSS AP-REP token: `0x60` framing, the krb5 OID, token id `02 00`.
 fn ap_rep_part(tok: &[u8], session: &krb5_crypto::ProtocolKey) -> krb5_types::EncApRepPart {
     let hdr = if tok[1] & 0x80 == 0 {
         2
@@ -1012,9 +1009,6 @@ fn rpcsec_none_service_data_is_plain_body() {
 
 #[test]
 fn rpcsec_privacy_body_sequence_must_match_the_credential() {
-    // MIT `xdr_rpc_gss_unwrap_data` (`authgss_prot.c:246-256`): the sequence number inside
-    // a sealed body is compared with the credential's, as for an integrity body; a body
-    // sealed for sequence 1 under a header for sequence 2 is GARBAGE_ARGS, not dispatched.
     use krb5_kdc::testrealm::TEST_REALM;
 
     let (store, acl, mut ctx, handle, mut gss) = admin_rpcsec_init();

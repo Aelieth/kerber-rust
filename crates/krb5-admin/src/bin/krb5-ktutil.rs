@@ -1,11 +1,5 @@
-//! MIT `ktutil`: a list of keytab entries read, edited and written through the requests of its
-//! `ss` subsystem.
-//!
-//! Requests are read from stdin after the `ktutil:  ` prompt until `quit` or the end of input.
-//! Arguments after the program name are not read, and ktutil exits 0 whatever its requests did.
-//! `addent -password` reads the password from stdin (the next line of a piped stream); a
-//! `test-hooks` build takes `KRB5_PASSWORD` when it is set. Never from argv. A request that fails
-//! prints MIT's line on stderr.
+//! MIT `ktutil`: a list of keytab entries read, edited and written through the requests of its `ss` subsystem.
+//! `addent -password` reads the password from stdin (the next line of a piped stream); a `test-hooks` build takes `KRB5_PASSWORD` when it is set. Never from argv. A request that fails prints MIT's line on stderr.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -25,24 +19,19 @@ use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};
 use krb5_protocol::{Keytab, KeytabEntry, KeytabSlot, parse_principal};
 use zeroize::Zeroizing;
 
-/// The name ktutil's requests and errors carry, and its prompt's.
 const WHOAMI: &str = "ktutil";
 
-/// C's `BUFSIZ`: a request line is read `BUFSIZ - 1` bytes at a time.
 const BUFSIZ: usize = 8192;
 
 fn main() {
     let argv: Vec<String> = std::env::args().collect();
-    // MIT `main` (`kadmin/ktutil/ktutil.c:49-53`): `krb5_init_context` fails with the program name and "while initializing krb5", then exits 1.
     let profile = krb5_config::init_profile().unwrap_or_else(|e| {
         let prog = argv.first().map_or(WHOAMI, String::as_str);
         eprintln!("{prog}: {} while initializing krb5", e.init_text());
         std::process::exit(1);
     });
-    // MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:209-217`): the context's `KRB5_TRACE` opens with it; no ktutil request traces.
     krb5_protocol::trace::init();
     let mut kt = empty_list();
-    // stdout is line-buffered on a terminal and fully buffered otherwise ([`FullyBuffered`]); the prompt flushes it.
     let mut out: Box<dyn Write> = if io::stdout().is_terminal() {
         Box::new(io::stdout().lock())
     } else {
@@ -53,8 +42,6 @@ fn main() {
     std::process::exit(status);
 }
 
-/// Arguments after the program name are not a one-shot command. The request loop runs, and the
-/// process status is 0 whatever the requests did.
 fn run_ktutil(
     _argv: &[String],
     kt: &mut Keytab,
@@ -62,13 +49,10 @@ fn run_ktutil(
     input: &mut dyn BufRead,
     out: &mut dyn Write,
 ) -> i32 {
-    // MIT `main` (`kadmin/ktutil/ktutil.c:43-62`): `argc` is unused, `ss_listen` runs, and the process exits 0.
     listen(kt, profile, input, out);
     0
 }
 
-/// A stream written as C stdio writes one it buffers whole: bytes wait until the buffer is past
-/// `block`, a full block goes out when more bytes come, and the rest at a flush.
 struct FullyBuffered<W: Write> {
     inner: W,
     buf: Vec<u8>,
@@ -76,7 +60,6 @@ struct FullyBuffered<W: Write> {
 }
 
 impl FullyBuffered<Box<dyn Write>> {
-    /// stdout, its buffer as glibc sizes it: `st_blksize` when that is smaller than `BUFSIZ`.
     fn stdout() -> Box<dyn Write> {
         use std::os::fd::AsFd as _;
         use std::os::unix::fs::MetadataExt as _;
@@ -126,7 +109,6 @@ impl<W: Write> Drop for FullyBuffered<W> {
     }
 }
 
-/// A list with no entries, written as a version 2 keytab.
 fn empty_list() -> Keytab {
     Keytab {
         version: 0x0502,
@@ -136,15 +118,12 @@ fn empty_list() -> Keytab {
     }
 }
 
-/// Whether the request loop goes on after a request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Flow {
     Next,
     Quit,
 }
 
-/// A request's handler: the list, the request's words, stdin for its replies, stdout. An error is
-/// the line MIT prints on stderr for it, without its newline.
 type Run = fn(
     &mut Keytab,
     &Krb5Conf,
@@ -153,14 +132,12 @@ type Run = fn(
     &mut dyn Write,
 ) -> Result<Flow, Vec<u8>>;
 
-/// One request: its names, its one-line description, and what runs it.
 struct Request {
     names: &'static [&'static str],
     info: &'static str,
     run: Run,
 }
 
-/// The `ktutil_cmds` table (`ktutil_ct.ct`), in its order.
 const REQUESTS: &[Request] = &[
     Request {
         names: &["clear_list", "clear"],
@@ -214,8 +191,6 @@ const REQUESTS: &[Request] = &[
     },
 ];
 
-/// The prompt, then one request line, until `quit` or the end of input. `SIGINT` is caught through
-/// the loop and `SIGCONT` while the prompt waits: either prints a newline and prompts again.
 fn listen(kt: &mut Keytab, profile: &Krb5Conf, input: &mut dyn BufRead, out: &mut dyn Write) {
     // MIT `ss_listen` (`util/ss/listen.c:99-108`): `SIGINT` is caught for the whole loop.
     let _sigint = SignalCatch::new(&[Signal::SIGINT]);
@@ -226,7 +201,6 @@ fn listen(kt: &mut Keytab, profile: &Krb5Conf, input: &mut dyn BufRead, out: &mu
             let _ = out.write_all(b"\n");
         }
         let read = {
-            // MIT `ss_listen` (`util/ss/listen.c:116-129`): `SIGCONT` is caught while the prompt waits, then one line is read.
             let _sigcont = SignalCatch::new(&[Signal::SIGCONT]);
             line_mode();
             // MIT `ss_create_invocation` (`util/ss/invocation.c:91-96`): the prompt is the subsystem name, a colon, and two spaces.
@@ -243,8 +217,6 @@ fn listen(kt: &mut Keytab, profile: &Krb5Conf, input: &mut dyn BufRead, out: &mu
             }
             LineEnd::End | LineEnd::Failed => break,
         }
-        // The line as a C string: up to its first `\r`, `\n`, or a NUL before them.
-        // MIT `readline` (`util/ss/listen.c:46-49`): `fgets` of `BUFSIZ`, then cut at the first `\r` or `\n`.
         let end = raw
             .iter()
             .position(|&b| b == b'\r' || b == b'\n' || b == 0)
@@ -261,7 +233,6 @@ fn listen(kt: &mut Keytab, profile: &Krb5Conf, input: &mut dyn BufRead, out: &mu
     let _ = out.flush();
 }
 
-/// One request line. A line that starts with `!` is passed over: no shell is run. A line that is
 /// not UTF-8 is refused when its first word names a request; an unknown one is reported byte for byte.
 fn execute_line(
     kt: &mut Keytab,
@@ -276,7 +247,6 @@ fn execute_line(
         .position(|&b| b != b' ' && b != b'\t')
         .unwrap_or(line.len());
     let trimmed = &line[start..];
-    // This port passes a `!` line over and runs no shell.
     if trimmed.first() == Some(&b'!') {
         return Ok(Flow::Next);
     }
@@ -297,8 +267,6 @@ fn execute_line(
     }
 }
 
-/// `Unknown request "<word>".  Type "?" for a request list.`, the word the line's first, cut at
-/// its first blank, byte for byte.
 fn unknown_request(trimmed: &[u8]) -> Vec<u8> {
     let word = trimmed
         .split(|&b| b == b' ' || b == b'\t')
@@ -310,7 +278,6 @@ fn unknown_request(trimmed: &[u8]) -> Vec<u8> {
     text
 }
 
-/// A request line that is not UTF-8. Names and paths here are UTF-8, so a line whose first word
 /// names a request is refused whole; any other is an unknown request, byte for byte.
 fn not_utf8(trimmed: &[u8]) -> Result<Flow, Vec<u8>> {
     let lossy: String = trimmed.iter().copied().map(char::from).collect();
@@ -325,7 +292,6 @@ fn not_utf8(trimmed: &[u8]) -> Result<Flow, Vec<u8>> {
     }
 }
 
-/// `clear_list`: the list emptied.
 fn clear_list(
     kt: &mut Keytab,
     _profile: &Krb5Conf,
@@ -341,7 +307,6 @@ fn clear_list(
     Ok(Flow::Next)
 }
 
-/// `read_kt`: a keytab's entries added to the list.
 fn read_kt(
     kt: &mut Keytab,
     _profile: &Krb5Conf,
@@ -353,7 +318,6 @@ fn read_kt(
     let [cmd, path] = argv else {
         return Err(format!("{}: must specify keytab to read", argv[0]).into_bytes());
     };
-    // Not MIT: the argument is a filesystem path; MIT 1.22.2 resolves a keytab name.
     let other = krb5_protocol::read_secret_file(Path::new(path))
         .and_then(|bytes| Keytab::parse(&bytes))
         .map_err(|e| {
@@ -363,7 +327,6 @@ fn read_kt(
     Ok(Flow::Next)
 }
 
-/// `read_st`: srvtabs are no longer read.
 fn read_st(
     _kt: &mut Keytab,
     _profile: &Krb5Conf,
@@ -375,7 +338,6 @@ fn read_st(
     Err(format!("{}: reading srvtabs is no longer supported", argv[0]).into_bytes())
 }
 
-/// `write_kt`: each entry added to a keytab.
 fn write_kt(
     kt: &mut Keytab,
     _profile: &Krb5Conf,
@@ -394,7 +356,6 @@ fn write_kt(
     Ok(Flow::Next)
 }
 
-/// `write_st`: srvtabs are no longer written.
 fn write_st(
     _kt: &mut Keytab,
     _profile: &Krb5Conf,
@@ -420,7 +381,6 @@ fn add_entry(
         .map_err(String::into_bytes)
 }
 
-/// `delete_entry`: the entry at a slot taken out of the list.
 fn delete_entry(
     kt: &mut Keytab,
     _profile: &Krb5Conf,
@@ -440,7 +400,6 @@ fn delete_entry(
     Ok(Flow::Next)
 }
 
-/// `list`: the list, `-t` adding each entry's timestamp, `-e` its enctype and `-k` its key.
 fn list(
     kt: &mut Keytab,
     _profile: &Krb5Conf,
@@ -469,7 +428,6 @@ fn list(
     }
 }
 
-/// The list as [`list`] prints it, and the error that ended it early.
 fn format_list(
     kt: &Keytab,
     show_time: bool,
@@ -477,7 +435,6 @@ fn format_list(
     show_keys: bool,
 ) -> (String, Option<&'static str>) {
     let mut out = String::new();
-    // MIT `ktutil_list` (`kadmin/ktutil/ktutil.c:221-227`): the header, with the timestamp columns only for `-t`.
     if show_time {
         out.push_str("slot KVNO Timestamp         Principal\n");
         out.push_str(
@@ -506,7 +463,6 @@ fn format_list(
                 None => continue,
             },
         };
-        // `%4d` of the unsigned kvno: one past `i32::MAX` prints negative.
         let _ = write!(out, "{:4} {:4} ", i + 1, kvno.cast_signed());
         if show_time {
             // MIT `krb5_timestamp_to_sfstring` (`lib/krb5/krb/str_conv.c:242-250`): the first format that fits, then `pad` fills out to `buflen - 1`.
@@ -518,7 +474,6 @@ fn format_list(
         }
         let _ = write!(out, "{princ:>40}");
         if show_enctype {
-            // MIT `ktutil_list` (`kadmin/ktutil/ktutil.c:251-260`): an enctype with no name ends the listing after the principal, with the conversion's error.
             let Some(name) = enctype else {
                 return (
                     out,
@@ -537,7 +492,6 @@ fn format_list(
     (out, None)
 }
 
-/// `list_requests`: each request's names, the description at column 25. No pager is run.
 #[allow(clippy::unnecessary_wraps)]
 fn list_requests(
     _kt: &mut Keytab,
@@ -564,7 +518,6 @@ fn list_requests(
     Ok(Flow::Next)
 }
 
-/// `quit`: the request loop ends.
 #[allow(clippy::unnecessary_wraps)]
 fn quit(
     _kt: &mut Keytab,
@@ -577,16 +530,12 @@ fn quit(
     Ok(Flow::Quit)
 }
 
-/// The OS error text as C `strerror` gives it, without Rust's `(os error N)`.
 fn strerror(e: &io::Error) -> String {
     let s = e.to_string();
     s.rfind(" (os error ")
         .map_or_else(|| s.clone(), |i| s[..i].to_owned())
 }
 
-/// C `atoi`, glibc's `(int) strtol`: the blanks of C's `isspace` skipped, an optional sign and the
-/// leading digits, 0 when there are none; a value past a `long` is its bound, and the `int` is
-/// the `long`'s low 32 bits.
 fn atoi(s: &str) -> i32 {
     let s = s.trim_start_matches([' ', '\t', '\n', '\u{b}', '\u{c}', '\r']);
     let (negative, digits) = match s.strip_prefix('-') {
@@ -642,7 +591,7 @@ fn addent(
         }
         i += 1;
     }
-    // MIT `ktutil_add_entry` (`kadmin/ktutil/ktutil.c:162-171`): the usage line unless a principal, a kvno and one of `-password` or `-key`; an enctype unless `-f`.
+    // the usage line unless a principal, a kvno and one of `-password` or `-key`; an enctype unless `-f`.
     let (Some(spec), Some(kvno), 1) = (princ, kvno, use_pass + use_key) else {
         return Err(format!(
             "usage: {cmd} (-key | -password) -p principal -k kvno [-e enctype] [-f|-s salt]"
@@ -651,7 +600,6 @@ fn addent(
     let Some(enctype) = enctype else {
         return Err("enctype must be specified if not using -f".into());
     };
-    // MIT `ktutil_add_entry` (`kadmin/ktutil/ktutil.c:173-176`): a failure of the entry is reported "while adding new entry".
     let fail = |e: &dyn std::fmt::Display| format!("{cmd}: {e} while adding new entry");
     // MIT `ktutil_add` (`kadmin/ktutil/ktutil_funcs.c:159-172`): the name takes the default realm, and an unknown enctype is `KRB5_BAD_ENCTYPE`.
     let (name, realm) = with_default_realm(spec, profile)
@@ -661,9 +609,7 @@ fn addent(
     let etype = EncryptionType::from_mit_name(enctype).map_err(|_| fail(&"Bad encryption type"))?;
     let full = name.unparse_with_realm(&realm);
     let key = if use_key == 1 {
-        // MIT `ktutil_add` (`kadmin/ktutil/ktutil_funcs.c:205-215`): `Key for <name> (hex): ` and one `fgets`; an odd byte count drops the last byte, an even count writes `0` over it.
         let _ = write!(out, "Key for {full} (hex): ");
-        // A terminal shows the prompt at once; MIT's `printf` leaves it in the line buffer until a newline.
         if io::stdout().is_terminal() {
             let _ = out.flush();
         }
@@ -671,7 +617,6 @@ fn addent(
         match fgets(input, BUFSIZ, &mut line) {
             LineEnd::Read => {}
             LineEnd::Caught(_) => {
-                // MIT `listen_int_handler` (`util/ss/listen.c:60-63`): a newline, then back at the prompt.
                 let _ = out.write_all(b"\n");
                 return Ok(());
             }
@@ -699,7 +644,7 @@ fn addent(
     } else {
         let pw = match krb5_config::env_password() {
             Some(pw) => Zeroizing::new(pw),
-            // MIT `ktutil_add` (`kadmin/ktutil/ktutil_funcs.c:187-190`): `Password for <name>`, asked once.
+            // `Password for <name>`, asked once.
             None => Prompter::terminal(&mut *input, io::stdout())
                 .hidden(&format!("Password for {full}"))
                 .map_err(|e| fail(&e))?,
@@ -730,7 +675,6 @@ fn hex(bytes: &[u8]) -> String {
     s
 }
 
-/// Hex digits, two to a byte. `None` for an odd count or any other byte. The buffer is the key's
 /// exact length and is wiped on drop.
 fn hex_decode(digits: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
     // MIT `k5_hex_decode` (`util/support/hex.c:96-109`): an odd count or a byte that is not a hex digit is `EINVAL`.
@@ -747,7 +691,6 @@ fn hex_decode(digits: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
     Some(out)
 }
 
-/// One hex digit, `None` for any other byte.
 fn hex_nibble(c: u8) -> Option<u8> {
     match c {
         b'0'..=b'9' => Some(c - b'0'),
@@ -757,9 +700,7 @@ fn hex_nibble(c: u8) -> Option<u8> {
     }
 }
 
-/// `spec`, with krb5.conf's `default_realm` when it names no realm.
 fn with_default_realm(spec: &str, profile: &Krb5Conf) -> Result<String, String> {
-    // MIT `krb5_parse_name_flags` (`lib/krb5/krb/parse.c:198-211`): a name with no realm takes the default realm.
     let parsed = krb5_types::parse_name_ex(spec, "", false).map_err(|e| e.to_string())?;
     if parsed.has_realm {
         return Ok(spec.to_owned());
@@ -777,7 +718,6 @@ mod tests {
     use krb5_crypto::ProtocolKey;
     use krb5_types::{PrincipalName, ascii};
 
-    /// `input` run through the request loop: what it printed on stdout.
     fn run_lines(kt: &mut Keytab, input: &[u8]) -> String {
         let mut out = Vec::new();
         listen(
@@ -789,7 +729,6 @@ mod tests {
         String::from_utf8(out).unwrap()
     }
 
-    /// One request line, `input` answering its prompts: its error line, if any.
     fn fails(kt: &mut Keytab, line: &str, input: &[u8]) -> Option<String> {
         execute_line(
             kt,
@@ -812,8 +751,6 @@ mod tests {
         }
     }
 
-    /// A non-empty argv is not a one-shot command: the loop still prompts, a failed request does
-    /// not change the status, and the list is whatever stdin did.
     #[test]
     fn a_nonempty_argv_is_ignored_and_the_loop_exits_0() {
         let mut kt = empty_list();
@@ -836,8 +773,6 @@ mod tests {
         assert_eq!(atoi("  -12x"), -12);
     }
 
-    /// MIT `ss_listen` (`util/ss/listen.c:115-132`): the prompt comes before each read, and the end of input or `quit` ends the loop.
-    /// MIT `ss_list_requests` (`util/ss/list_rqs.c:74-102`): the names joined, the description at column 25.
     #[test]
     fn each_request_line_follows_the_prompt() {
         let mut kt = empty_list();
@@ -862,7 +797,6 @@ mod tests {
         );
     }
 
-    /// MIT `ktutil_list` (`kadmin/ktutil/ktutil.c:221-269`): the header, then the slot and kvno in 4 columns, `-t`'s time, the principal in 40, `-e`'s enctype between spaces and `-k`'s key in hex.
     #[test]
     fn the_list_is_mits_table() {
         let mut kt = empty_list();
@@ -902,8 +836,6 @@ mod tests {
         );
     }
 
-    /// MIT `ss_execute_line` (`util/ss/execute_cmd.c:175-192`): leading blanks are skipped, a `!` line is not a request, and the parsed words name one.
-    /// MIT `ss_listen` (`util/ss/listen.c:143-155`): an unknown request is reported with the line's first word, cut at its first blank.
     #[test]
     fn a_line_is_an_ss_request() {
         let mut kt = empty_list();
@@ -939,7 +871,6 @@ mod tests {
         );
     }
 
-    /// Live MIT 1.22.2 ktutil: each failure's line names the request as it was typed.
     #[test]
     fn failures_are_mit_s_lines() {
         let mut kt = empty_list();
@@ -1004,8 +935,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// MIT `ktutil_clear_list` (`kadmin/ktutil/ktutil.c:70-77`): the list is emptied.
-    /// MIT `ktutil_delete_entry` (`kadmin/ktutil/ktutil.c:184-190`): the entry at the slot leaves the list.
     #[test]
     fn clear_and_delete_change_the_list() {
         let mut kt = empty_list();
@@ -1022,8 +951,7 @@ mod tests {
             // A test-hooks build with KRB5_PASSWORD set takes it instead of the prompt.
             return;
         }
-        // Live MIT 1.22.2 ktutil: `Password for user@REALM: `, the reply read from the next
-        // line of stdin, the rest of the stream left for the next command.
+        // Live MIT 1.22.2 ktutil: `Password for user@REALM: `, the reply read from the next line of stdin, the rest of the stream left for the next command.
         let mut kt = empty_list();
         let input =
             b"addent -password -p user@R.TEST -k 3 -e aes256-cts-hmac-sha1-96\nsecret\nq\nnope\n";
@@ -1040,8 +968,7 @@ mod tests {
         assert_eq!(kt.entries.len(), 1);
         assert_eq!(kt.entries[0].kvno, 3);
         assert_eq!(kt.entries[0].key.as_bytes(), want.as_bytes());
-        // Live MIT 1.22.2: end of input at the prompt is "addent: Cannot read password while
-        // adding new entry", and no entry is added.
+        // Live MIT 1.22.2: end of input at the prompt is "addent: Cannot read password while adding new entry", and no entry is added.
         let line = "addent -password -p user@R.TEST -k 4 -e aes256-cts-hmac-sha1-96";
         assert_eq!(
             fails(&mut kt, line, b""),
@@ -1078,7 +1005,6 @@ mod tests {
         assert_eq!(out, b"ktutil:  ");
     }
 
-    /// MIT `ktutil_write_keytab` (`kadmin/ktutil/ktutil_funcs.c:336-358`): `wkt` adds each entry to the keytab: a missing file is made at version 2, an existing one keeps its version, one that is no keytab is MIT's line, and an empty list opens no file.
     #[test]
     fn wkt_adds_to_the_file_as_mit_s_does() {
         let dir = krb5_testkit::scratch_dir("ktutil-wkt");
@@ -1121,7 +1047,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// MIT `ktutil_list` (`kadmin/ktutil/ktutil.c:251-260`): an enctype with no name ends `-e`'s listing after the entry's principal, with the conversion's error; without `-e` the entry is listed.
     #[test]
     fn an_unknown_enctype_ends_the_listing_under_e() {
         let mut body = Vec::new();
@@ -1166,8 +1091,7 @@ mod tests {
         assert_eq!(kt.entries.len(), 1);
     }
 
-    /// MIT `ktutil_add` (`kadmin/ktutil/ktutil_funcs.c:205-233`): the key prompt on stdout; the line's last byte dropped for an odd count, else made a `0`; `addent` in both failure lines.
-    /// MIT `ktutil_add_entry` (`kadmin/ktutil/ktutil.c:162-171`): one of `-password` and `-key`, once.
+    /// one of `-password` and `-key`, once.
     #[test]
     fn a_key_line_is_read_as_mits() {
         let add = "add_entry -key -p plain@R.TEST -k -1 -e aes256-cts-hmac-sha1-96";
@@ -1227,7 +1151,6 @@ mod tests {
         );
     }
 
-    /// glibc `atoi`: `strtol`'s `long`, its bound past its range, cut to the `int`'s 32 bits.
     #[test]
     fn atoi_is_glibcs() {
         assert_eq!(atoi("  -12x"), -12);
@@ -1246,8 +1169,6 @@ mod tests {
         );
     }
 
-    /// C stdio's full buffering: a full buffer goes out when more bytes come, the rest at a flush.
-    /// MIT `readline` (`util/ss/listen.c:46-49`): a NUL ends the request line as it ends a C string.
     #[test]
     fn stdout_is_sent_as_c_stdio_sends_it() {
         let mut fb = FullyBuffered {

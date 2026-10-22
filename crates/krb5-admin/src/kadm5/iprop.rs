@@ -1,8 +1,4 @@
-//! Incremental propagation (`kadmin/server/ipropd_svc.c`): the `IPROP_GET_UPDATES` /
-//! `IPROP_FULL_RESYNC` server side, answered from the update log ([`krb5_kdc::Ulog`]), and a
-//! replica's client of it ([`IpropClient`], kpropd's RPCSEC_GSS handle). The `kdb_incr_update_t`
-//! codec is `krb5_kdc`'s (`lib/kdb/iprop_xdr.c`): updates leave as the log stores them, keys
-//! wrapped under the master key.
+//! Incremental propagation (`kadmin/server/ipropd_svc.c`): the `IPROP_GET_UPDATES` / `IPROP_FULL_RESYNC` server side, answered from the update log ([`krb5_kdc::Ulog`]), and a replica's client of it ([`IpropClient`], kpropd's RPCSEC_GSS handle). The `kdb_incr_update_t` codec is `krb5_kdc`'s (`lib/kdb/iprop_xdr.c`): updates leave as the log stores them, keys wrapped under the master key.
 
 use std::io;
 use std::net::TcpStream;
@@ -30,9 +26,6 @@ use super::xdr::{XdrR, XdrW};
 use crate::Error;
 
 /// MIT `iprop_get_updates_1_svc` (`kadmin/server/ipropd_svc.c:191-200`): a caller who fails the iprop ACL gets permission denied and no entries.
-/// The null procedure skips that check. Updates leave as the log holds them: their keys were
-/// wrapped under the master key when they were logged, so none leaves in the clear.
-/// MIT `iprop_get_updates_1_svc` (`kadmin/server/ipropd_svc.c:203-205`): the answer is the update log's.
 /// MIT `ipropx_resync` (`kadmin/server/ipropd_svc.c:400-424`): a granted full resync answers `UPDATE_OK` with a zero last entry; the dump comes by kprop.
 pub(super) fn dispatch_iprop(
     store: &SharedStore,
@@ -88,8 +81,7 @@ pub(super) fn tl_u32(tl: &[TlData], ty: i32) -> Option<u32> {
     Some(u32::from_le_bytes(b))
 }
 
-/// A `kdb_incr_result_t` with no updates and a zero last entry: what MIT's reply holds before
-/// any update was sent.
+/// A `kdb_incr_result_t` with no updates and a zero last entry: what MIT's reply holds before any update was sent.
 pub(super) fn encode_incr_status(status: u32) -> Vec<u8> {
     encode_incr_result(&UlogUpdates {
         status,
@@ -121,40 +113,24 @@ pub(super) fn encode_fullresync_status(last: UlogLast, status: u32) -> Vec<u8> {
 /// MIT `IPROPX_VERSION_1` (`include/iprop_hdr.h:43-43`): the highest dump version a replica loads.
 const IPROPX_VERSION_1: u32 = 1;
 
-/// Why an iprop call failed, as MIT's `clnt_call` reports it: its `enum clnt_stat`, with what
-/// `clnt_sperror` prints after it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RpcFailure {
-    /// `RPC_CANTENCODEARGS`: the arguments could not be sealed.
     CantEncodeArgs,
-    /// `RPC_CANTSEND`, with the system's text.
     CantSend(String),
-    /// `RPC_CANTRECV`, with the system's text.
     CantRecv(String),
-    /// `RPC_TIMEDOUT`.
     TimedOut,
-    /// `RPC_CANTDECODERES`.
     CantDecodeRes,
-    /// `RPC_VERSMISMATCH`: the server's lowest and highest RPC versions.
     VersMismatch(u32, u32),
-    /// `RPC_AUTHERROR`, with its `auth_stat`.
     AuthError(u32),
-    /// `RPC_PROGUNAVAIL`.
     ProgUnavail,
-    /// `RPC_PROGVERSMISMATCH`: the lowest and highest versions.
     ProgVersMismatch(u32, u32),
-    /// `RPC_PROCUNAVAIL`.
     ProcUnavail,
-    /// `RPC_CANTDECODEARGS`.
     CantDecodeArgs,
-    /// `RPC_SYSTEMERROR`.
     SystemError,
-    /// `RPC_FAILED`: a status no table names.
     Failed,
 }
 
 impl RpcFailure {
-    /// What `clnt_perror(clnt, s)` prints for this failure, without its newline.
     /// MIT `clnt_sperror` (`lib/rpc/clnt_perror.c:76-175`): `s`, the status's text, then the system's error, why, or the versions.
     /// MIT `clnt_sperrno` (`lib/rpc/clnt_perror.c:233-243`): each status's text is `rpc_errlist`'s.
     #[must_use]
@@ -214,15 +190,11 @@ fn recv_failure(e: &io::Error) -> RpcFailure {
     }
 }
 
-/// A reply's status.
 enum ReplyStat {
-    /// Accepted with `SUCCESS`: the verifier, and where the results begin.
     Success { verf: Vec<u8>, results: usize },
-    /// Accepted with another status, or denied.
     Failed(RpcFailure),
 }
 
-/// The xid and status of a reply; `None` for a record that does not read as one.
 /// MIT `gssrpc__seterr_reply` (`lib/rpc/rpc_prot.c:238-295`): an accepted status other than success, and a denial, are the failure they name.
 /// MIT `accepted` (`lib/rpc/rpc_prot.c:179-212`): an accepted status no table names is `RPC_FAILED`.
 /// MIT `rejected` (`lib/rpc/rpc_prot.c:215-232`): a version mismatch carries the versions, an authentication error why.
@@ -260,7 +232,6 @@ fn read_reply(rec: &[u8]) -> Option<(u32, ReplyStat)> {
     Some((xid, stat))
 }
 
-/// Send `rec`, then read records until the reply to `xid`.
 /// MIT `clnttcp_call` (`lib/rpc/clnt_tcp.c:246-352`): replies to other xids, and records that do not read as replies, are read past.
 fn exchange(
     stream: &mut TcpStream,
@@ -278,7 +249,6 @@ fn exchange(
     }
 }
 
-/// What `IPROP_GET_UPDATES` answered: MIT's `kdb_incr_result_t`, its updates still encoded.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IncrReply {
     /// `ret`, an `update_status_t`.
@@ -292,18 +262,13 @@ pub struct IncrReply {
 
 impl IncrReply {
     /// The updates, their keys opened under `mkey`.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::GarbageArgs`] when an update is cut short; [`Error::Inner`] when one does not
     /// decode or its keys do not open.
     pub fn updates(&self, mkey: Option<&ProtocolKey>) -> Result<Vec<IpropUpdate>, Error> {
         decode_incr_result(&self.body, mkey).map(|(.., updates)| updates)
     }
 }
 
-/// A replica's handle on its primary's iprop service: the connection and the RPCSEC_GSS context
-/// made on it, as MIT's `kadm5_init_with_skey` leaves one for `kiprop`.
+/// A replica's handle on its primary's iprop service: the connection and the RPCSEC_GSS context made on it, as MIT's `kadm5_init_with_skey` leaves one for `kiprop`.
 pub struct IpropClient {
     stream: TcpStream,
     ctx: GssContext,
@@ -326,13 +291,8 @@ impl IpropClient {
     /// MIT `init_any` (`lib/kadm5/clnt/client_init.c:290-294`): a kadm5 handle waits an hour for any reply.
     const TIMEOUT: Duration = Duration::from_hours(1);
 
-    /// The handle on `stream`: an RPCSEC_GSS context with privacy, made with `ticket` and its
-    /// `session` key as `cname` of `crealm`, the primary's AP-REP required.
+    /// The handle on `stream`: an RPCSEC_GSS context with privacy, made with `ticket` and its `session` key as `cname` of `crealm`, the primary's AP-REP required.
     /// MIT `rpc_auth` (`lib/kadm5/clnt/client_init.c:645-683`): RPCSEC_GSS with the krb5 mechanism, privacy, and the mutual and replay flags.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Inner`] when the stream's timeout cannot be set or the context cannot be made.
     pub fn establish(
         mut stream: TcpStream,
         ticket: Ticket,
@@ -378,9 +338,6 @@ impl IpropClient {
 
     /// `IPROP_GET_UPDATES` for the updates after `last`.
     /// MIT `iprop_get_updates_1` (`kprop/kpropd_rpc.c:34-46`): the `kdb_last_t` sent, a `kdb_incr_result_t` back.
-    ///
-    /// # Errors
-    ///
     /// The call's [`RpcFailure`]; results that do not decode are `RPC_CANTDECODERES`.
     pub fn get_updates(&mut self, last: UlogLast) -> Result<IncrReply, RpcFailure> {
         let mut args = XdrW::default();
@@ -399,14 +356,8 @@ impl IpropClient {
         })
     }
 
-    /// A full resync asked for: `IPROP_FULL_RESYNC_EXT` with the highest dump version this
-    /// replica loads, else `IPROP_FULL_RESYNC` of a primary without that procedure. The status
-    /// answered.
+    /// A full resync asked for: `IPROP_FULL_RESYNC_EXT` with the highest dump version this replica loads, else `IPROP_FULL_RESYNC` of a primary without that procedure. The status answered.
     /// MIT `full_resync` (`kprop/kpropd.c:606-625`): `IPROPX_VERSION_1` to the extended procedure, then on `RPC_PROCUNAVAIL` the plain one.
-    ///
-    /// # Errors
-    ///
-    /// As [`Self::get_updates`].
     pub fn full_resync(&mut self) -> Result<u32, RpcFailure> {
         let mut vers = XdrW::default();
         vers.u32(IPROPX_VERSION_1);
@@ -422,10 +373,7 @@ impl IpropClient {
         word()
     }
 
-    /// One call of `proc` with `args` sealed under the context: the reply to its xid, whose
-    /// verifier must be a MIC of the call's sequence number and whose results must unseal. A
-    /// reply with another status is asked again twice before it is the failure.
-    /// MIT `clnttcp_call` (`lib/rpc/clnt_tcp.c:246-352`): a failed status refreshes the auth and calls again, at most twice.
+    /// verifier must be a MIC of the call's sequence number and whose results must unseal. A reply with another status is asked again twice before it is the failure.
     /// MIT `authgss_marshal` (`lib/rpc/auth_gss.c:281-340`): each call takes the next sequence number.
     /// MIT `authgss_validate` (`lib/rpc/auth_gss.c:343-392`): a verifier that is no MIC of that number is `AUTH_INVALIDRESP`.
     /// MIT `authgss_refresh` (`lib/rpc/auth_gss.c:395-525`): an established context's refresh is a call again.
@@ -456,10 +404,6 @@ impl IpropClient {
     }
 }
 
-/// The context's creation: the AP-REQ in an `RPCSEC_GSS_INIT` call of the null procedure (asked
-/// again twice on a failed status), the primary's AP-REP completing the context, and the reply's
-/// verifier a MIC of the sequence window. The handle the primary named.
-/// MIT `authgss_refresh` (`lib/rpc/auth_gss.c:395-525`): a major status other than complete or continue fails, the mutual flag needs the primary's token, and the window's MIC must verify.
 fn rpcsec_init(
     stream: &mut TcpStream,
     ctx: &mut GssContext,
@@ -518,10 +462,6 @@ fn rpcsec_init(
     Ok(handle)
 }
 
-/// One RPCSEC_GSS data call of the iprop program: the credential with `seq`, a MIC of the header
-/// as the verifier, and `args` sealed after the sequence number; `None` when the MIC or the seal
-/// cannot be made.
-/// MIT `authgss_marshal` (`lib/rpc/auth_gss.c:281-340`): the credential, then a MIC of the header up to it.
 /// MIT `xdr_rpc_gss_wrap_data` (`lib/rpc/authgss_prot.c:130-182`): with privacy, the sequence number and the arguments are sealed together.
 fn rpcsec_data_call(
     ctx: &mut GssContext,
@@ -568,9 +508,6 @@ fn rpcsec_data_call(
     ))
 }
 
-/// The results of a sealed reply: unsealed with confidentiality and led by the call's sequence
-/// number, or `None`.
-/// MIT `xdr_rpc_gss_unwrap_data` (`lib/rpc/authgss_prot.c:185-259`): a privacy reply that is not sealed, or whose sequence number is not the call's, does not decode.
 fn unwrap_results(ctx: &mut GssContext, sealed: &[u8], seq: u32) -> Option<Vec<u8>> {
     let wrapped = XdrR::new(sealed).opaque().ok()?;
     let (plain, conf) = ctx.unwrap_conf(&wrapped).ok()?;

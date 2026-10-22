@@ -1,9 +1,7 @@
-//! The C stdio `kadmin.local` writes through, so its streams interleave as MIT's do: stdout
-//! buffered as glibc buffers it (by line on a terminal, by block otherwise), stderr unbuffered.
+//! The C stdio `kadmin.local` writes through, so its streams interleave as MIT's do: stdout buffered as glibc buffers it (by line on a terminal, by block otherwise), stderr unbuffered.
 
 use std::io::{self, Write};
 
-/// glibc's buffer for a pipe or a file (`st_blksize`).
 const BLOCK: usize = 4096;
 
 /// stdout with glibc's buffering.
@@ -23,8 +21,7 @@ impl Stdout {
         }
     }
 
-    /// Bytes written to the descriptor itself, as MIT's pager process writes them: they pass
-    /// what is still buffered.
+    /// Bytes written to the descriptor itself, as MIT's pager process writes them: they pass what is still buffered.
     pub(crate) fn write_raw(&mut self, bytes: &[u8]) {
         let _ = self.raw.write_all(bytes);
         let _ = self.raw.flush();
@@ -73,21 +70,16 @@ pub(crate) struct Io {
     /// MIT `script_mode`: the command came after the options on the command line.
     pub(crate) script_mode: bool,
     pub(crate) exit_status: i32,
-    /// A signal the prompt loop catches cut a reply short: MIT's handler prints a newline and
-    /// goes back to the prompt, so the request says nothing more.
+    /// A signal the prompt loop catches cut a reply short: MIT's handler prints a newline and goes back to the prompt, so the request says nothing more.
     pub(crate) interrupted: bool,
 }
 
-/// glibc's `BUFSIZ`: the most MIT's prompt loop reads of one line (`fgets(input, BUFSIZ, …)`).
 const BUFSIZ: usize = 8192;
 
 /// What a read of the next command line got.
 pub(crate) enum LineRead {
-    /// Up to `BUFSIZ - 1` bytes, the newline kept.
     Line(Vec<u8>),
-    /// The input ended or failed.
     End,
-    /// A caught signal came first.
     Caught,
 }
 
@@ -143,9 +135,7 @@ impl Io {
         }
     }
 
-    /// A reply as `fgets(buf, size, stdin)` reads it: at most `size - 1` bytes, up to and
-    /// including a newline; the rest of a longer line stays for the next read. `None` at the end
-    /// of input, or when a caught signal cuts it short ([`Self::interrupted`] is then set).
+    /// A reply as `fgets(buf, size, stdin)` reads it: at most `size - 1` bytes, up to and including a newline; the rest of a longer line stays for the next read. `None` at the end of input, or when a caught signal cuts it short ([`Self::interrupted`] is then set).
     pub(crate) fn fgets(&mut self, size: usize) -> Option<Vec<u8>> {
         self.out.flush_for_input();
         let mut line = Vec::new();
@@ -159,8 +149,7 @@ impl Io {
         }
     }
 
-    /// MIT `krb5_read_password` (`read_pwd.c:41-77`): `prompt`, then `verify` when given, echo
-    /// off on a terminal.
+    /// MIT `krb5_read_password` (`read_pwd.c:41-77`): `prompt`, then `verify` when given, echo off on a terminal.
     pub(crate) fn read_password(
         &mut self,
         prompt: &str,

@@ -1,7 +1,4 @@
-//! kpropd's iprop mode on a replica (MIT `kprop/kpropd.c`'s `do_iprop`): it polls the primary's
-//! kadmind for the updates after its own update log and applies them, asks for a full resync when
-//! the log cannot bridge the gap (the dump then comes to kpropd's listener), and backs off while
-//! the primary is busy or cannot be reached.
+//! kpropd's iprop mode on a replica (MIT `kprop/kpropd.c`'s `do_iprop`): it polls the primary's kadmind for the updates after its own update log and applies them, asks for a full resync when the log cannot bridge the gap (the dump then comes to kpropd's listener), and backs off while the primary is busy or cannot be reached.
 
 use std::net::{TcpStream, ToSocketAddrs as _};
 use std::path::Path;
@@ -27,10 +24,8 @@ const KIPROP_SVC_NAME: &str = "kiprop";
 /// MIT `MAX_BACKOFF` (`include/iprop_hdr.h:30-30`): the longest wait, in seconds, between tries of a busy or unreachable primary.
 const MAX_BACKOFF: u32 = 300;
 
-/// MIT `UPDATE_BUSY`: the primary asks the replica to come back later.
 const UPDATE_BUSY: u32 = 3;
 
-/// What kpropd's iprop mode runs with: its options and the realm's iprop parameters.
 #[derive(Debug)]
 pub struct KpropdIprop<'a> {
     /// The name kpropd was run as, which leads its `com_err` lines.
@@ -51,12 +46,10 @@ pub struct KpropdIprop<'a> {
     pub runonce: bool,
     /// `-d`: the debug lines on standard error, and `com_err` there instead of syslog.
     pub debug: bool,
-    /// kpropd's context: the KDC context's profile and the environment's names, read when
-    /// kpropd started.
+    /// kpropd's context: the KDC context's profile and the environment's names, read when kpropd started.
     pub ctx: &'a ClientContext,
 }
 
-/// What ends the poller's wait early: SIGUSR1, or the listener after a full propagation.
 #[derive(Debug, Default)]
 pub struct IpropWake {
     poked: Mutex<bool>,
@@ -65,14 +58,11 @@ pub struct IpropWake {
 
 impl IpropWake {
     /// End the wait under way now.
-    /// MIT `do_standalone` (`kprop/kpropd.c:466-471`): after each full propagation the listener signals the iprop parent with SIGUSR1.
     pub fn poke(&self) {
         *self.poked.lock().unwrap_or_else(PoisonError::into_inner) = true;
         self.cv.notify_all();
     }
 
-    /// Wait `secs` seconds, or until poked. A poke from before the wait does not count, as a
-    /// signal that comes outside MIT's `sleep` interrupts nothing.
     /// MIT `usr1_handler` (`kprop/kpropd.c:222-225`): SIGUSR1 does nothing but interrupt the `sleep`.
     fn sleep(&self, secs: u32) {
         let end = Instant::now() + Duration::from_secs(u64::from(secs));
@@ -92,8 +82,6 @@ impl IpropWake {
     }
 }
 
-/// Where the iprop mode's lines go: `com_err`'s to syslog, or with `-d` to standard error, and
-/// the debug lines to standard error with `-d` only.
 struct Log<'a> {
     progname: &'a str,
     debug: bool,
@@ -120,12 +108,6 @@ impl Log<'_> {
     }
 }
 
-/// kpropd's iprop mode: poll the primary for the updates after this replica's update log, apply
-/// them, ask for a full resync when the primary says one is needed, and back off while it is busy
-/// or unreachable. It returns only when the primary answers an error, the update log or the
-/// replica's name fails, or with `-t` after the first answer that is not "full resync needed":
-/// 0 then with `-t`, 1 without, as MIT's.
-/// MIT `do_iprop` (`kprop/kpropd.c:634-1003`): the kiprop handle made with backoff, then the loop on `IPROP_GET_UPDATES` and its answers.
 #[must_use]
 pub fn kpropd_do_iprop(cfg: &KpropdIprop<'_>, wake: &IpropWake) -> i32 {
     let log = Log {
@@ -139,13 +121,11 @@ pub fn kpropd_do_iprop(cfg: &KpropdIprop<'_>, wake: &IpropWake) -> i32 {
         done()
     };
     log.debug("Incremental propagation enabled");
-    // MIT `do_iprop` (`kprop/kpropd.c:653-655`): the poll interval, 10 seconds when it is 0.
     let pollin = match cfg.params.poll_time.cast_unsigned() {
         0 => 10,
         t => t,
     };
     let conf = &cfg.ctx.profile;
-    // MIT `sn2princ_realm` (`kprop/kprop_util.c:35-57`): `kiprop` and this host, host-based, in kpropd's realm.
     let me = krb5_config::local_host_name(conf);
     let Ok(client) =
         PrincipalName::try_new(PrincipalName::NT_SRV_HST, [KIPROP_SVC_NAME, me.as_str()])
@@ -168,7 +148,6 @@ pub fn kpropd_do_iprop(cfg: &KpropdIprop<'_>, wake: &IpropWake) -> i32 {
         log.debug(&format!("Initializing kadm5 as client {client_name}"));
         let mut handle = match kiprop_init(cfg, &client) {
             Ok(h) => h,
-            // MIT `do_iprop` (`kprop/kpropd.c:701-741`): a failed init is retried after a backoff, and an RPC failure is told apart.
             Err(InitFailure { rpc, text }) => {
                 log.debug("kadm5 initialization failed!");
                 reinit_cnt += 1;
@@ -207,7 +186,6 @@ pub fn kpropd_do_iprop(cfg: &KpropdIprop<'_>, wake: &IpropWake) -> i32 {
                 mylast.sno, mylast.time.seconds, mylast.time.useconds
             ));
             let start = Instant::now();
-            // MIT `do_iprop` (`kprop/kpropd.c:784-797`): a failed call is printed by `clnt_perror` and the handle is made again.
             let incr = match handle.get_updates(mylast) {
                 Ok(r) => r,
                 Err(f) => {
@@ -217,7 +195,6 @@ pub fn kpropd_do_iprop(cfg: &KpropdIprop<'_>, wake: &IpropWake) -> i32 {
                 }
             };
             match incr.status {
-                // MIT `do_iprop` (`kprop/kpropd.c:801-876`): a full resync is asked for unless one asked for is still within `iprop_resync_timeout`.
                 krb5_kdc::IPROP_FULL_RESYNC => {
                     let now = unix_now();
                     if frrequested.is_some_and(|at| now - at < i64::from(cfg.params.resync_timeout))
@@ -265,7 +242,6 @@ pub fn kpropd_do_iprop(cfg: &KpropdIprop<'_>, wake: &IpropWake) -> i32 {
                         }
                     }
                 }
-                // MIT `do_iprop` (`kprop/kpropd.c:878-918`): the updates are replayed into the database and kept in the update log; a replay that fails is logged and the poll goes on.
                 krb5_kdc::IPROP_OK => {
                     backoff_cnt = 0;
                     frrequested = None;
@@ -322,7 +298,6 @@ pub fn kpropd_do_iprop(cfg: &KpropdIprop<'_>, wake: &IpropWake) -> i32 {
                     );
                 }
             }
-            // MIT `do_iprop` (`kprop/kpropd.c:961-985`): `-t` stops after the first answer that is not "full resync needed"; else the poll interval, or the backoff while the primary is busy.
             if cfg.runonce && incr.status != krb5_kdc::IPROP_FULL_RESYNC {
                 return done();
             }
@@ -342,8 +317,6 @@ pub fn kpropd_do_iprop(cfg: &KpropdIprop<'_>, wake: &IpropWake) -> i32 {
     }
 }
 
-/// The seconds to wait before trying a busy or unreachable primary again: `2 << cnt`, at most
-/// [`MAX_BACKOFF`], the count stepped back when the cap is hit.
 /// MIT `backoff_from_primary` (`kprop/kpropd.c:1008-1019`): the doubling, capped at `MAX_BACKOFF`.
 fn backoff_from_primary(cnt: &mut u32) -> u32 {
     let btime = 2u32.checked_shl(*cnt).unwrap_or(u32::MAX);
@@ -360,8 +333,6 @@ fn unix_now() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
 }
 
-/// Why kpropd's kiprop handle could not be made: the text of the code `kadm5_init_with_skey`
-/// returned, and whether that code is `KADM5_RPC_ERROR`, which `do_iprop` tells apart.
 struct InitFailure {
     rpc: bool,
     text: String,
@@ -376,10 +347,6 @@ impl InitFailure {
     }
 }
 
-/// kpropd's handle on the primary's iprop service: the parameters checked,
-/// `kiprop/<this host>`'s credentials for `kiprop/<admin server>` from the keytab, the
-/// connection to the iprop port, and the RPCSEC_GSS context.
-/// MIT `init_any` (`lib/kadm5/clnt/client_init.c:172-361`): the admin server is required; the credentials come first, then the connection to `iprop_port`, then the context, and a kiprop handle makes no init call.
 /// MIT `kadm5_get_kiprop_host_srv_name` (`kprop/kpropd.c:1617-1630`): the service is `kiprop/` and the admin server.
 /// MIT `get_init_creds` (`lib/kadm5/clnt/client_init.c:366-434`): a decrypt failure is `KADM5_BAD_PASSWORD`, an unknown service `KADM5_SECURE_PRINC_MISSING`.
 fn kiprop_init(cfg: &KpropdIprop<'_>, client: &PrincipalName) -> Result<IpropClient, InitFailure> {
@@ -411,7 +378,6 @@ fn kiprop_init(cfg: &KpropdIprop<'_>, client: &PrincipalName) -> Result<IpropCli
     .map_err(|_| InitFailure::kadm5(KADM5_GSS_ERROR))
 }
 
-/// A connection to `host` at `port`, each of its addresses tried in turn.
 /// MIT `connect_to_server` (`lib/kadm5/clnt/client_init.c:521-561`): a name that does not resolve is `KADM5_CANT_RESOLVE`, no address that connects `KADM5_RPC_ERROR`.
 fn connect_to_server(host: &str, port: i32) -> Result<TcpStream, u32> {
     let port = u16::try_from(port).map_err(|_| KADM5_CANT_RESOLVE)?;
@@ -424,9 +390,7 @@ fn connect_to_server(host: &str, port: i32) -> Result<TcpStream, u32> {
         .ok_or(KADM5_RPC_ERROR)
 }
 
-/// Apply `incr`'s updates to the replica's database, which is read when first needed and kept,
 /// and keep each in the update log; the failure's text when they do not apply.
-/// MIT `ulog_replay` (`lib/kdb/kdb_log.c:401-480`): the database opened, each update put or deleted without being logged again, then stored in the update log.
 fn ulog_replay(
     cfg: &KpropdIprop<'_>,
     store: &mut Option<PrincipalStore>,

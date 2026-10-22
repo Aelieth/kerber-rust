@@ -1,8 +1,4 @@
-//! `krb5-kprop` as MIT's `kprop`: the dump file `kdb5_util dump` wrote, sent with a ticket one AS
-//! exchange gets from a KDC as `host/<this host>`, its checks and its lines as MIT's.
-//! MIT `main` (`kprop/kprop.c:90-120`): tickets, the dump, the connection, sendauth, the transfer, then the `.last_prop` mark and the line on standard output.
-//! Live oracle: MIT kprop beside this one, settled case by case, and
-//! `scripts/kprop-reverse-gate.sh`.
+//! `krb5-kprop` as MIT's `kprop`: the dump file `kdb5_util dump` wrote, sent with a ticket one AS exchange gets from a KDC as `host/<this host>`, its checks and its lines as MIT's.
 
 #![allow(
     clippy::disallowed_methods,
@@ -28,8 +24,6 @@ use krb5_types::PrincipalName;
 
 const KPROP: &str = env!("CARGO_BIN_EXE_krb5-kprop");
 
-/// A realm on a KDC in this process, with `host/<this host>` (kprop's own principal, its key in
-/// `keytab`) and `host/127.0.0.1` (the replica's, its keys in `replica_keys`).
 struct Realm {
     dir: PathBuf,
     conf: PathBuf,
@@ -47,8 +41,6 @@ fn realm(tag: &str) -> Realm {
     realm_with(tag, false, "")
 }
 
-/// [`realm`] whose `host/<this host>` does (or, as [`realm`] has it, does not) require preauthentication, and whose
-/// krb5.conf has `libdefaults` lines added.
 fn realm_with(tag: &str, requires_preauth: bool, libdefaults: &str) -> Realm {
     let dir = scratch_dir(tag);
     let (udp, tcp) = krb5_testkit::loopback_udp_tcp();
@@ -69,7 +61,6 @@ fn realm_with(tag: &str, requires_preauth: bool, libdefaults: &str) -> Realm {
     for name in [me.as_str(), "127.0.0.1", "other.kerber.test"] {
         store.create_host(&acl, &actor, &host(name)).unwrap();
     }
-    // `create_host` makes a principal that needs no preauthentication; the tests that want it set it.
     let me_name = host(&me);
     let mut attrs = store.get_name(&me_name).unwrap().attributes;
     if requires_preauth {
@@ -129,8 +120,6 @@ fn realm_with(tag: &str, requires_preauth: bool, libdefaults: &str) -> Realm {
 }
 
 impl Realm {
-    /// A dump file and its `.dump_ok` mark, the mark written after the dump as `kdb5_util dump`
-    /// writes it.
     fn dump(&self, name: &str, body: &[u8]) -> PathBuf {
         let path = self.dir.join(name);
         std::fs::write(&path, body).unwrap();
@@ -138,8 +127,6 @@ impl Realm {
         path
     }
 
-    /// One kpropd connection, as `host/127.0.0.1`, that lets kprop's own principal in: what
-    /// it received.
     fn kpropd(&self) -> (u16, JoinHandle<Vec<u8>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -165,7 +152,6 @@ impl Realm {
         (port, join)
     }
 
-    /// [`Self::kprop`] with `KRB5_TRACE` naming `trace`.
     fn kprop_traced(&self, args: &[&str], trace: &Path) -> Output {
         Command::new(KPROP)
             .args(args)
@@ -205,8 +191,6 @@ fn s(p: &Path) -> &str {
     p.to_str().unwrap()
 }
 
-/// MIT `xmit_database` (`kprop/kprop.c:409-544`): the dump goes whole, its total printed after each block under `-d`, and the replica's acknowledgement ends it.
-/// MIT `update_last_prop_file` (`kprop/kprop.c:573-596`): then `<dump>.<replica>.last_prop` holds one NUL, mode 0600, and kprop prints `SUCCEEDED`.
 #[test]
 fn kprop_sends_the_dump_file_and_marks_the_replica() {
     let r = realm("kprop-file-sends");
@@ -243,7 +227,6 @@ fn kprop_sends_the_dump_file_and_marks_the_replica() {
     let _ = std::fs::remove_dir_all(&r.dir);
 }
 
-/// MIT `open_database` (`kprop/kprop.c:337-386`): after the tickets, a dump that does not open, has no `.dump_ok` mark, or is newer than it stops kprop with MIT's line, before any connection.
 #[test]
 fn kprop_refuses_a_dump_without_a_mark_no_older_than_itself() {
     let r = realm("kprop-file-mark");
@@ -290,7 +273,6 @@ fn kprop_refuses_a_dump_without_a_mark_no_older_than_itself() {
     let _ = std::fs::remove_dir_all(&r.dir);
 }
 
-/// MIT `open_database` (`kprop/kprop.c:356-360`): a dump another process holds locked is "database locked".
 #[test]
 fn kprop_refuses_a_locked_dump() {
     let r = realm("kprop-file-locked");
@@ -308,8 +290,6 @@ fn kprop_refuses_a_locked_dump() {
     let _ = std::fs::remove_dir_all(&r.dir);
 }
 
-/// MIT `get_tickets` (`kprop/kprop.c:195-208`): a keytab with no key for kprop's own principal, and a replica the KDC has no `host/` principal for, stop kprop with the error's table text and MIT's newline.
-/// MIT `open_connection` (`kprop/kprop.c:231-264`): a port nothing listens on is the connection's error.
 #[test]
 fn kprop_names_a_failure_as_mits_com_err() {
     let r = realm("kprop-file-failures");
@@ -355,7 +335,6 @@ fn kprop_names_a_failure_as_mits_com_err() {
     let _ = std::fs::remove_dir_all(&r.dir);
 }
 
-/// MIT `parse_args` (`kprop/kprop.c:122-152`): `getopt`'s complaint, then the usage between blank lines, exit 1, for a bad option and for a count of hosts other than one.
 #[test]
 fn kprop_prints_mits_usage() {
     let r = realm("kprop-file-usage");
@@ -381,7 +360,6 @@ fn kprop_prints_mits_usage() {
     let _ = std::fs::remove_dir_all(&r.dir);
 }
 
-/// One length-prefixed message off `stream`.
 fn read_msg(stream: &mut TcpStream) -> Vec<u8> {
     let mut len = [0u8; 4];
     stream.read_exact(&mut len).unwrap();
@@ -390,8 +368,6 @@ fn read_msg(stream: &mut TcpStream) -> Vec<u8> {
     msg
 }
 
-/// MIT `get_tickets` (`kprop/kprop.c:188-204`): the replica's `host/` name goes to `krb5_get_init_creds_keytab` unparsed, without its realm.
-/// MIT `build_in_tkt_name` (`lib/krb5/krb/get_in_tkt.c:484-495`): parsed back there, it is NT-PRINCIPAL, the type the KDC copies into the ticket kprop presents.
 #[test]
 fn kprop_asks_for_the_replicas_name_as_mits_in_tkt_service_parses_it() {
     let r = realm("kprop-file-sname");
@@ -400,7 +376,6 @@ fn kprop_asks_for_the_replicas_name_as_mits_in_tkt_service_parses_it() {
     let port = listener.local_addr().unwrap().port().to_string();
     let kpropd = thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
-        // The two version strings, sendauth's answer, then the AP-REQ; the connection then goes.
         read_msg(&mut stream);
         read_msg(&mut stream);
         stream.write_all(&[0]).unwrap();
@@ -415,9 +390,6 @@ fn kprop_asks_for_the_replicas_name_as_mits_in_tkt_service_parses_it() {
     let _ = std::fs::remove_dir_all(&r.dir);
 }
 
-/// The keytab files kprop cannot read as keytabs, as MIT's `krb5_ktfileint_open` fails them, and
-/// what `com_err` prints for each: a missing file, an empty one, one with a version MIT does not know,
-/// and a directory.
 fn unreadable_keytabs(dir: &Path) -> Vec<(PathBuf, &'static str)> {
     let empty = dir.join("empty.keytab");
     std::fs::write(&empty, b"").unwrap();
@@ -431,10 +403,6 @@ fn unreadable_keytabs(dir: &Path) -> Vec<(PathBuf, &'static str)> {
     ]
 }
 
-/// A keytab that cannot be read is no error until a key is asked of it: the request is made, and a
-/// reply that no preauth answered is decrypted with the keytab's key, which fails with the keytab's
-/// error, whose table text kprop's `com_err` prints.
-/// MIT `krb5_init_creds_set_keytab` (`lib/krb5/krb/gic_keytab.c:209-213`): a keytab whose entries cannot be listed is traced and returns 0.
 /// MIT `decrypt_as_reply` (`lib/krb5/krb/get_in_tkt.c:115-123`): `gak_fct`'s error is returned as it is.
 #[test]
 fn kprop_with_an_unreadable_keytab_makes_the_request_and_fails_the_reply_that_needs_its_key() {
@@ -471,11 +439,7 @@ fn kprop_with_an_unreadable_keytab_makes_the_request_and_fails_the_reply_that_ne
     let _ = std::fs::remove_dir_all(&r.dir);
 }
 
-/// A KDC that asks for preauthentication gets its request, and the encrypted-timestamp module is
-/// the mechanism that wants the key: with SPAKE not permitted it is the only one, fails with the keytab's
-/// error, and the exchange is `KRB5_PREAUTH_FAILED`, "Generic preauthentication failure".
 /// MIT `get_as_key` (`lib/krb5/krb/preauth2.c:438-457`): a module that wants the key gets `gak_fct`'s error as its own.
-/// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:716-723`): with no real mechanism answered the error is `KRB5_PREAUTH_FAILED`.
 #[test]
 fn kprop_with_an_unreadable_keytab_fails_the_preauth_module_that_wants_its_key() {
     let r = realm_with(
@@ -511,8 +475,7 @@ fn kprop_with_an_unreadable_keytab_fails_the_preauth_module_that_wants_its_key()
     let _ = std::fs::remove_dir_all(&r.dir);
 }
 
-/// With SPAKE permitted, the KDC's refusal of the support message is the exchange's error, as
-/// kprop's `com_err` prints it, "Preauthentication failed", over the keytab's failure.
+/// With SPAKE permitted, the KDC's refusal of the support message is the exchange's error, as kprop's `com_err` prints it, "Preauthentication failed", over the keytab's failure.
 /// MIT `init_creds_step_request` (`lib/krb5/krb/get_in_tkt.c:1349-1352`): a `KDC_ERR_PREAUTH_FAILED` the KDC sent is the error saved, and the one reported when the mechanisms after it fail.
 #[test]
 fn kprop_with_an_unreadable_keytab_reports_the_kdcs_refusal_of_spakes_support() {

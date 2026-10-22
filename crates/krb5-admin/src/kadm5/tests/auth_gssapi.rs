@@ -95,14 +95,6 @@ fn auth_gssapi_on_iprop_init_is_success() {
     assert_eq!(r.u32().unwrap(), SUCCESS);
 }
 
-/// GSSAPI_DESTROY is the auth layer's on any program, once the record's verifier checks out: one
-/// that does not unseal is AUTH_BADVERF and the record stays; the next sequence number is
-/// answered under the reply verifier with the reply's sequence number sealed as the body, and the
-/// record is gone.
-/// MIT `gssrpc__svcauth_gssapi` (`svc_auth_gssapi.c:516-524`): a verifier that does not unseal is
-/// AUTH_BADVERF.
-/// MIT `gssrpc__svcauth_gssapi` (`svc_auth_gssapi.c:616-625`): GSSAPI_DESTROY is answered, then
-/// the record goes; settled live, a destroy from MIT's kadmin answered so.
 #[test]
 fn auth_gssapi_destroy_on_iprop_is_auth_layer() {
     let mut c = Established::new(IPROP_PROG, IPROP_VERS);
@@ -177,8 +169,6 @@ fn kadm5_auth_gssapi_ok_requires_store_realm() {
     ));
 }
 
-/// An established AUTH_GSSAPI call on the iprop program is authenticated first: without iprop
-/// the program is not registered, so the call is PROG_UNAVAIL under its verifier (MIT
 /// `svc_do_xprt`); once the update log is mapped the iprop dispatcher refuses the flavor.
 #[cfg(feature = "test-hooks")]
 #[test]
@@ -318,7 +308,6 @@ fn an_established_auth_gssapi_call_on_iprop_is_prog_unavail_until_iprop_is_on() 
     assert_eq!(r.u32().unwrap(), AUTH_TOOWEAK, "dispatched with iprop on");
 }
 
-/// An AUTH_GSSAPI credential: version 2, `auth_msg`, the client handle.
 fn agss_cred(auth_msg: bool, handle: &[u8]) -> Vec<u8> {
     let mut w = XdrW::default();
     w.u32(AUTH_GSSAPI_CREDS_VERS);
@@ -327,7 +316,6 @@ fn agss_cred(auth_msg: bool, handle: &[u8]) -> Vec<u8> {
     w.b
 }
 
-/// A call with an AUTH_GSSAPI credential and verifier (AUTH_NONE when there is none).
 fn agss_call(
     xid: u32,
     prog: u32,
@@ -356,7 +344,6 @@ fn agss_call(
     w.b
 }
 
-/// An `authgssapi_init_arg`: version 4 and the token.
 fn init_arg(token: &[u8]) -> Vec<u8> {
     let mut w = XdrW::default();
     w.u32(4);
@@ -364,16 +351,12 @@ fn init_arg(token: &[u8]) -> Vec<u8> {
     w.b
 }
 
-/// A reply's words.
 fn reply_words(out: &[u8]) -> Vec<u32> {
     out.chunks(4)
         .map(|w| u32::from_be_bytes(w.try_into().unwrap()))
         .collect()
 }
 
-/// A connection's AUTH_GSSAPI record established by GSSAPI_INIT with the documented admin's
-/// ticket for kadmin/admin, beside the client's side of it: the context, the handle, and the
-/// sequence number the record expects one past (MIT's client `seq_num`).
 struct Established {
     store: krb5_kdc::SharedDump,
     acl: Acl,
@@ -453,12 +436,10 @@ impl Established {
         agss_cred(auth_msg, &self.handle)
     }
 
-    /// A verifier: `seq` sealed without confidentiality (`auth_gssapi_seal_seq`).
     fn verf(&mut self, seq: u32) -> Vec<u8> {
         self.ctx.wrap_integ(&seq.to_be_bytes()).unwrap()
     }
 
-    /// Arguments sealed after `seq` (`auth_gssapi_wrap_data`).
     fn sealed(&mut self, seq: u32, body: &[u8]) -> Vec<u8> {
         let mut inner = seq.to_be_bytes().to_vec();
         inner.extend_from_slice(body);
@@ -467,7 +448,6 @@ impl Established {
         w.b
     }
 
-    /// A kadm5 call (not an auth message) under `seq`: its verifier and its sealed arguments.
     fn data(&mut self, xid: u32, vers: u32, proc: u32, seq: u32, body: &[u8]) -> Vec<u8> {
         let cred = self.cred(false);
         let verf = self.verf(seq);
@@ -475,8 +455,6 @@ impl Established {
         agss_call(xid, KADM_PROG, vers, proc, &cred, Some(&verf), &args)
     }
 
-    /// An accepted reply to `xid` under the AUTH_GSSAPI verifier sealing `reply_seq`: its status,
-    /// and what follows it.
     fn accepted(&mut self, out: &[u8], xid: u32, reply_seq: u32) -> (u32, Vec<u8>) {
         let mut r = XdrR::new(out);
         let head: Vec<u32> = (0..4).map(|_| r.u32().unwrap()).collect();
@@ -487,7 +465,6 @@ impl Established {
         (stat, r.rest().to_vec())
     }
 
-    /// A SUCCESS reply to `xid` under the verifier sealing `reply_seq`: its sealed body.
     fn success(&mut self, out: &[u8], xid: u32, reply_seq: u32) -> Vec<u8> {
         let (stat, rest) = self.accepted(out, xid, reply_seq);
         assert_eq!(stat, SUCCESS);
@@ -499,20 +476,10 @@ impl Established {
     }
 }
 
-/// A call's xid and procedure, its AUTH_GSSAPI credential and arguments, and the `auth_stat`.
 type CredCase = (u32, u32, Vec<u8>, Vec<u8>, u32);
 
-/// A call's xid, program, version and flavor, its credential, and the reply's words after the
-/// xid and REPLY.
 type FlavorCase = (u32, u32, u32, u32, Vec<u8>, Vec<u32>);
 
-/// A call whose AUTH_GSSAPI credential does not check out is answered with MIT's `auth_stat`, as
-/// MIT's kadmind answered each of these when settled live: an empty credential, one that does not
-/// decode, or one of version 1 is AUTH_BADCRED; GSSAPI_INIT carrying a handle, or another call
-/// carrying none, AUTH_FAILED; a handle that names no record AUTH_BADCRED; an init argument that
-/// does not decode or is version 5 AUTH_BADCRED.
-/// MIT `gssrpc__svcauth_gssapi` (`lib/rpc/svc_auth_gssapi.c:191-275`): the credential's whys.
-/// MIT `gssrpc__svcauth_gssapi` (`lib/rpc/svc_auth_gssapi.c:308-342`): the init argument's.
 #[test]
 fn an_auth_gssapi_credential_that_does_not_check_out_is_answered_with_mits_why() {
     let (store, acl, _) = setup();
@@ -624,17 +591,6 @@ fn an_auth_gssapi_credential_that_does_not_check_out_is_answered_with_mits_why()
     }
 }
 
-/// The flavor's authenticator runs before the program is looked up, and a program not served
-/// is PROG_UNAVAIL or PROG_MISMATCH only for a call that passed it: AUTH_UNIX passes once its
-/// credential decodes (a machine name of at most 255 bytes, at most 16 groups, all inside the
-/// credential) and then meets kadm5's AUTH_TOOWEAK; AUTH_SHORT and an unknown flavor are
-/// AUTH_REJECTEDCRED on any program; an AUTH_GSSAPI handle that names no record is AUTH_BADCRED on
-/// any program; an RPCSEC_GSS credential without its context handle is AUTH_BADCRED. All as MIT's
-/// kadmind answered them when settled live.
-/// MIT `svc_do_xprt` (`lib/rpc/svc.c:487-520`): authenticated, then the program.
-/// MIT `gssrpc__authenticate` (`svc_auth.c:84-106`): the flavor picks the authenticator.
-/// MIT `gssrpc__svcauth_unix` (`svc_auth_unix.c:55-126`): the Unix credential's bounds.
-/// MIT `xdr_rpc_gss_cred` (`authgss_prot.c:72-90`): the context handle closes the credential.
 #[test]
 fn a_call_is_authenticated_by_its_flavor_before_its_program() {
     let (store, acl, _) = setup();
@@ -822,9 +778,6 @@ fn a_call_is_authenticated_by_its_flavor_before_its_program() {
     }
 }
 
-/// A call whose credential or verifier is longer than `MAX_AUTH_BYTES` does not decode, and is not
-/// answered, as MIT's (settled live: the connection answered the next call).
-/// MIT `xdr_callmsg` (`lib/rpc/rpc_callmsg.c:119-158`): the credential's and verifier's bounds.
 #[test]
 fn a_credential_or_verifier_past_400_bytes_does_not_decode() {
     let (store, acl, _) = setup();
@@ -864,13 +817,6 @@ fn a_credential_or_verifier_past_400_bytes_does_not_decode() {
     }
 }
 
-/// A GSSAPI_INIT whose token does not establish a context is answered with an init_res under the
-/// new record's handle (GSS_S_DEFECTIVE_TOKEN for a token that does not frame), and the record
-/// stays unestablished: a call that is not an auth message is AUTH_REJECTEDCRED, a GSSAPI_DESTROY
-/// AUTH_FAILED, and a CONTINUE_INIT under its handle with a good token establishes it. As MIT's
-/// kadmind answered an unestablished record's handle when settled live.
-/// MIT `gssrpc__svcauth_gssapi` (`svc_auth_gssapi.c:284-305`): an unestablished record's calls.
-/// MIT `gssrpc__svcauth_gssapi` (`svc_auth_gssapi.c:453-467`): a failed accept's init_res.
 #[test]
 fn a_failed_gssapi_init_keeps_an_unestablished_record() {
     use krb5_kdc::testrealm::TEST_REALM;
@@ -906,8 +852,6 @@ fn a_failed_gssapi_init_keeps_an_unestablished_record() {
         &init_arg(&[0x60, 0x00]),
     ));
     let words = reply_words(&out);
-    // xid, REPLY, ACCEPTED, AUTH_NONE verifier, SUCCESS; version 4, a 4-byte handle 1, the major
-    // and minor, no token, no signed sequence number.
     assert_eq!(
         words,
         [
@@ -974,13 +918,6 @@ fn a_failed_gssapi_init_keeps_an_unestablished_record() {
     assert_eq!((words[9], words[10]), (0, 0), "established");
 }
 
-/// An established record's verifier must unseal to the next sequence number: one that does not
-/// unseal is AUTH_BADVERF, one of a number already used AUTH_REJECTEDVERF, and neither moves the
-/// record, so the next call under the next number is answered. An auth message to a kadm5
-/// procedure is AUTH_FAILED after its verifier moved the record two, as MIT's kadmind answered
-/// MIT's kadmin, whose next call then needed two refreshes, when settled live.
-/// MIT `gssrpc__svcauth_gssapi` (`svc_auth_gssapi.c:516-556`): the verifier and the sequence.
-/// MIT `gssrpc__svcauth_gssapi` (`svc_auth_gssapi.c:627-632`): another auth message is AUTH_FAILED.
 #[test]
 fn an_established_record_answers_a_verifier_that_does_not_check_out() {
     let mut c = Established::new(KADM_PROG, KADM_VERS);
@@ -1074,10 +1011,7 @@ fn an_established_record_answers_a_verifier_that_does_not_check_out() {
     c.success(&out, 26, s.wrapping_add(8));
 }
 
-/// GSSAPI_MSG to an established record: arguments that do not unseal are AUTH_BADCRED, and a
-/// context token that does is AUTH_FAILED, as MIT's `gss_process_context_token` fails for an
-/// RFC 4121 context.
-/// MIT `gssrpc__svcauth_gssapi` (`svc_auth_gssapi.c:583-614`): GSSAPI_MSG's arguments and token.
+/// GSSAPI_MSG to an established record: arguments that do not unseal are AUTH_BADCRED, and a context token that does is AUTH_FAILED, as MIT's `gss_process_context_token` fails for an RFC 4121 context.
 #[test]
 fn a_gssapi_msg_is_refused() {
     let mut c = Established::new(KADM_PROG, KADM_VERS);
@@ -1112,13 +1046,7 @@ fn a_gssapi_msg_is_refused() {
     assert_eq!(decode_denied(&out), (31, AUTH_FAILED));
 }
 
-/// An authentic AUTH_GSSAPI call is answered under its reply verifier whatever the outcome
-/// (`svcerr_progvers`, `svcerr_noproc`, `svcerr_decode` answer under the call's `xp_verf`):
-/// another kadm5 version is PROG_MISMATCH; procedure 17 or one past CREATE_ALIAS is PROC_UNAVAIL
-/// before its arguments are read; arguments that do not unseal, or unseal after another sequence
-/// number, are GARBAGE_ARGS; NULLPROC is answered with the reply's sequence number sealed.
-/// MIT `svc_do_xprt` (`lib/rpc/svc.c:495-520`): the program and version, under the verifier.
-/// MIT `kadm_1` (`kadm_rpc_svc.c:91-261`): NULLPROC, the procedures served, the arguments.
+/// before its arguments are read; arguments that do not unseal, or unseal after another sequence number, are GARBAGE_ARGS; NULLPROC is answered with the reply's sequence number sealed.
 #[test]
 fn an_authentic_call_is_answered_under_its_verifier() {
     let mut c = Established::new(KADM_PROG, KADM_VERS);
@@ -1161,7 +1089,6 @@ fn an_authentic_call_is_answered_under_its_verifier() {
     assert_eq!(c.unseal(&sealed), s.to_be_bytes());
 }
 
-/// One AUTH_GSSAPI or RPCSEC_GSS call through `handle_rpc` for the ticket's service, from `peer`.
 fn send_as(
     t: &AdminTicket,
     rc: &krb5_protocol::ReplayCache,
@@ -1188,7 +1115,6 @@ fn send_as(
     .unwrap()
 }
 
-/// A GSSAPI_INIT of `version` carrying `token`.
 fn init_call(xid: u32, version: u32, token: &[u8]) -> Vec<u8> {
     let mut args = XdrW::default();
     args.u32(version);
@@ -1204,7 +1130,6 @@ fn init_call(xid: u32, version: u32, token: &[u8]) -> Vec<u8> {
     )
 }
 
-/// An init_res's GSS major status, after its version and handle.
 fn init_res_major(out: &[u8]) -> u32 {
     let mut r = XdrR::new(out);
     let head: Vec<u32> = (0..4).map(|_| r.u32().unwrap()).collect();
@@ -1216,7 +1141,6 @@ fn init_res_major(out: &[u8]) -> u32 {
     r.u32().unwrap()
 }
 
-/// A connection from `remote` to 127.0.0.1's kadmind port.
 fn peer_from(remote: [u8; 4]) -> RpcPeer {
     let local = std::net::SocketAddr::from(([127, 0, 0, 1], 749));
     RpcPeer::new(
@@ -1225,7 +1149,6 @@ fn peer_from(remote: [u8; 4]) -> RpcPeer {
     )
 }
 
-/// An IPv4 channel binding from `initiator` to `acceptor`, as MIT's AUTH_GSSAPI client sends it.
 fn inet_bindings(initiator: [u8; 4], acceptor: [u8; 4]) -> krb5_gss::ChannelBindings {
     krb5_gss::ChannelBindings {
         initiator_addrtype: krb5_gss::GSS_C_AF_INET,
@@ -1236,12 +1159,6 @@ fn inet_bindings(initiator: [u8; 4], acceptor: [u8; 4]) -> krb5_gss::ChannelBind
     }
 }
 
-/// An established record lives until its ticket's end with the clock skew's grace; past that it
-/// is dropped before the call is looked at, so its handle names no record (AUTH_BADCRED,
-/// "invalid client handle received"), as MIT's kadmind answered a one-minute ticket's second call
-/// at 400 s when settled live.
-/// MIT `clean_client` (`svc_auth_gssapi.c:894-918`): expired records go first.
-/// MIT `gssrpc__svcauth_gssapi` (`svc_auth_gssapi.c:474-478`): an established record's expiry.
 #[test]
 fn an_established_record_expires_at_its_tickets_end_with_the_skew() {
     let log = KlogFile::new("expiry");
@@ -1278,9 +1195,6 @@ fn an_established_record_expires_at_its_tickets_end_with_the_skew() {
     );
 }
 
-/// A record whose GSSAPI_INIT did not complete lives 15 minutes; past that a CONTINUE_INIT under
-/// its handle finds no record.
-/// MIT `create_client` (`svc_auth_gssapi.c:710-712`): `INITIATION_TIMEOUT`.
 #[test]
 fn an_unfinished_record_expires_after_fifteen_minutes() {
     let t = admin_ticket(&krb5_kdc::principals::kadmin_admin(), None);
@@ -1319,11 +1233,7 @@ fn an_unfinished_record_expires_after_fifteen_minutes() {
     assert_eq!(decode_denied(&out), (71, AUTH_BADCRED));
 }
 
-/// GSSAPI_INIT versions 3 and 4 bind the context to the caller's and the connection's IPv4
-/// addresses: bindings that name another caller are GSS_S_BAD_BINDINGS (MIT's "Incorrect channel
-/// bindings were supplied", minor 0), matching ones or none establish it, and versions 1 and 2
-/// bind nothing; as MIT's kadmind refused MIT's kadmin through a relay when settled live.
-/// MIT `gssrpc__svcauth_gssapi` (`svc_auth_gssapi.c:348-371`): the bindings for versions 3 and 4.
+/// GSSAPI_INIT versions 3 and 4 bind the context to the caller's and the connection's IPv4 addresses: bindings that name another caller are GSS_S_BAD_BINDINGS (MIT's "Incorrect channel bindings were supplied", minor 0), matching ones or none establish it, and versions 1 and 2 bind nothing; as MIT's kadmind refused MIT's kadmin through a relay when settled live.
 /// MIT `process_checksum` (`accept_sec_context.c:532-541`): a non-zero binding must match.
 #[test]
 fn version_3_and_4_inits_bind_the_connection_addresses() {
@@ -1362,9 +1272,6 @@ fn version_3_and_4_inits_bind_the_connection_addresses() {
     assert!(text.contains("    Unknown code 0"), "{text}");
 }
 
-/// Without the connection's own address a version 3 or 4 GSSAPI_INIT cannot be bound and is
-/// AUTH_FAILED ("cannot get local address"); versions 1 and 2 need none.
-/// MIT `gssrpc__svcauth_gssapi` (`svc_auth_gssapi.c:356-365`): `xp_laddrlen` is 0.
 #[test]
 fn an_init_without_the_local_address_is_auth_failed() {
     let log = KlogFile::new("nolocal");
@@ -1400,12 +1307,7 @@ fn an_init_without_the_local_address_is_auth_failed() {
     assert_eq!(init_res_major(&out), 0);
 }
 
-/// A version 3 or 4 GSSAPI_INIT's binding names the caller, and a ticket with addresses must
-/// hold it: one from another address is GSS_S_FAILURE ("Incorrect net address"), one from the
-/// ticket's address establishes; a version 2 init names no caller, so the ticket's addresses are
-/// not looked at.
-/// MIT `kg_accept_krb5` (`accept_sec_context.c:781-790`): the binding's initiator address.
-/// MIT `rd_req_decoded_opt` (`rd_req_dec.c:536-540`): the ticket's addresses must hold it.
+/// A version 3 or 4 GSSAPI_INIT's binding names the caller, and a ticket with addresses must hold it: one from another address is GSS_S_FAILURE ("Incorrect net address"), one from the ticket's address establishes; a version 2 init names no caller, so the ticket's addresses are not looked at.
 #[test]
 fn an_addressful_ticket_must_name_the_caller() {
     let log = KlogFile::new("caddr");
@@ -1436,12 +1338,7 @@ fn an_addressful_ticket_must_name_the_caller() {
     );
 }
 
-/// An RPCSEC_GSS context for a service kadm5 does not take is refused with MIT's lines: the
-/// service principal, then the flavor; a procedure kadm5 does not serve is PROC_UNAVAIL with
-/// MIT's line, under the call's verifier.
-/// MIT `check_rpcsec_auth` (`kadm_rpc_svc.c:333-337`): `bad service principal`.
-/// MIT `kadm_1` (`kadm_rpc_svc.c:80-88`): `Authentication attempt failed`, then AUTH_TOOWEAK.
-/// MIT `kadm_1` (`kadm_rpc_svc.c:251-255`): `Invalid KADM5 procedure number`.
+/// An RPCSEC_GSS context for a service kadm5 does not take is refused with MIT's lines: the service principal, then the flavor; a procedure kadm5 does not serve is PROC_UNAVAIL with MIT's line, under the call's verifier.
 #[test]
 fn a_refused_rpcsec_gss_call_writes_mits_lines() {
     use krb5_kdc::testrealm::{TEST_REALM, documented_kiprop};

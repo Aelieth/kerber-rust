@@ -1,13 +1,5 @@
 //! Admin whole-flow tests.
-//! The kpasswd acceptor names the changepw service to `krb5_rd_req` with the KDB keytab: the ticket's
-//! cleartext server is not looked at, only the changepw key at the ticket's kvno and enctype, and a
-//! ticket that decrypts under it is the changepw service's.
-//! kpasswd stamps `kadmind@REALM` as the modifier.
-//! MIT `main` (`ovsec_kadmd.c:446-446`): the global handle is `kadm5_init(…, "kadmind", …)`.
-//! MIT `dispatch` (`schpw.c:407-407`): the changepw dispatcher uses that global handle.
 //! The modifier is that global handle's caller, not the ticket client.
-//! kpasswd reloads the store before it changes it (the `write_store` rule), so a change
-//! made by another process is kept.
 
 #[path = "common/mod.rs"]
 mod common;
@@ -26,10 +18,7 @@ use krb5_protocol::{
 use krb5_testkit::scratch_dir;
 use krb5_types::{ChangePasswdData, PrincipalName};
 
-/// A ticket that decrypts under the changepw key is the changepw service's whatever server its
-/// cleartext names, and is served.
-/// MIT `try_one_princ` (`rd_req_dec.c:325-347`): the named server's keytab entry is asked for, and its key decrypts the ticket.
-/// MIT `try_one_entry` (`rd_req_dec.c:315-317`): the keytab principal becomes the ticket's server, so garbled cleartext (here `host/x`) is never compared.
+/// the keytab principal becomes the ticket's server, so garbled cleartext (here `host/x`) is never compared.
 #[test]
 fn kpasswd_ticket_with_a_forged_cleartext_server_is_served_under_the_changepw_key() {
     use krb5_protocol::unwrap_krb_priv_ex;
@@ -45,7 +34,6 @@ fn kpasswd_ticket_with_a_forged_cleartext_server_is_served_under_the_changepw_ke
         .key
         .clone();
 
-    // A real INITIAL ticket for kadmin/changepw (encrypted under the changepw key).
     let as_out = krb5_kdc::issue_as(
         &store,
         &as_req_sname(
@@ -70,8 +58,6 @@ fn kpasswd_ticket_with_a_forged_cleartext_server_is_served_under_the_changepw_ke
         &user,
     )
     .expect("AP-REQ");
-    // Forge only the cleartext server: the ticket still decrypts under the changepw key, but it
-    // now claims to be host/x in another realm.
     ap.ticket.sname = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "x.kerber.test"]);
     ap.ticket.realm = krb5_types::ascii("ELSEWHERE.TEST");
     let ap_der = encode(&ap).expect("encode ap");
@@ -556,7 +542,6 @@ fn kpasswd_unprivileged_other_principal_is_accessdenied() {
 }
 
 /// A set-password line prints the CLIENT's name, cut to the length of the target's, in its `for` slot.
-/// MIT `process_chpw_request` (`kadmin/server/schpw.c:236-245`): `targetp = clientstr` when a target is present, at `tlen` = the target's length.
 #[test]
 fn kpasswd_setpw_log_prints_the_client_cut_to_the_targets_length() {
     use krb5_asn1::encode;
@@ -585,7 +570,6 @@ fn kpasswd_setpw_log_prints_the_client_cut_to_the_targets_length() {
         &user,
     )
     .unwrap();
-    // `x@KERBER.TEST` is 13 octets; the client, `user@KERBER.TEST`, is 16.
     let cpw = ChangePasswdData {
         newpasswd: b"log-slot-pass".to_vec().into(),
         targname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["x"]),
@@ -614,13 +598,7 @@ fn kpasswd_setpw_log_prints_the_client_cut_to_the_targets_length() {
     );
 }
 
-/// A refused change's Notice is the code's table text, not the sentence the rejecting module set: the empty module's
-/// refusal logs `Password is too short` with a policy bound or not, while its Error line keeps `Empty passwords are not
-/// allowed`. A principal-name match keeps its sentence in both.
-/// MIT `process_chpw_request` (`kadmin/server/schpw.c:212-213`): the notice reads the handle's context, where the modules wrote their sentences.
-/// MIT `_kadm5_chpass_principal_util` (`lib/kadm5/chpass_util.c:158-161`): a too-short code looks the principal up, which clears the module's sentence.
-/// MIT `_kadm5_chpass_principal_util` (`lib/kadm5/chpass_util.c:151-155`): a dictionary code returns first, so a component match keeps its sentence.
-/// MIT `princ_check` (`lib/kadm5/srv/pwqual_princ.c:52-55`): the component match sets that sentence with the dictionary code.
+/// A refused change's Notice is the code's table text, not the sentence the rejecting module set: the empty module's refusal logs `Password is too short` with a policy bound or not, while its Error line keeps `Empty passwords are not allowed`. A principal-name match keeps its sentence in both.
 #[test]
 fn kpasswd_logs_the_code_text_for_an_empty_password_and_the_module_sentence_for_a_name_match() {
     use krb5_protocol::unwrap_krb_priv_ex;
@@ -992,7 +970,6 @@ fn kpasswd_refuses_a_dictionary_word_after_the_database_is_read_again() {
         .set_principal_policy(&user, Some("pq".into()))
         .expect("bind pq");
     save_store(&store, &db, &stash).expect("save");
-    // kadmind's store: the database, and the dictionary read once.
     let mut store = load_store(&db, &stash).expect("load");
     let conf = krb5_config::KdcConf {
         dict_file: Some(words),
@@ -1021,7 +998,6 @@ fn kpasswd_refuses_a_dictionary_word_after_the_database_is_read_again() {
     )
     .expect("AS for kadmin/changepw");
     let shared = shared_dump(store);
-    // Another process changes the database, so the change reads it again first.
     let extra = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["kpwdictx"]);
     load_store(&db, &stash)
         .expect("load writer")
@@ -1922,8 +1898,6 @@ fn kpasswd_keeps_an_out_of_process_principal() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// An MIT `kpasswd` request: the authenticator carries a subkey and no seq-number, and the
-/// KRB-PRIV under that subkey carries neither a seq-number nor a timestamp (`changepw.c`).
 fn mit_shaped_kpasswd_req(
     as_out: &krb5_kdc::IssuedAs,
     user: &PrincipalName,
@@ -1933,8 +1907,6 @@ fn mit_shaped_kpasswd_req(
     kpasswd_req_with_seqs(as_out, user, subkey, password, None, None)
 }
 
-/// A kpasswd request as `mit_shaped_kpasswd_req` builds it, with the authenticator's and the
-/// KRB-PRIV's seq-numbers chosen (no field when `None`).
 fn kpasswd_req_with_seqs(
     as_out: &krb5_kdc::IssuedAs,
     user: &PrincipalName,
@@ -1974,8 +1946,6 @@ fn kpasswd_req_with_seqs(
     encode_kpasswd_req(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap())
 }
 
-/// A kpasswd request as `mit_shaped_kpasswd_req` builds it, its KRB-PRIV naming `receiver` as the
-/// address it is for (none when `None`), as MIT's `kpasswd` names the server's.
 fn kpasswd_req_naming_receiver(
     as_out: &krb5_kdc::IssuedAs,
     user: &PrincipalName,
@@ -2039,9 +2009,8 @@ fn kpasswd_req_naming_receiver(
     encode_kpasswd_req(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap())
 }
 
-/// A request whose KRB-PRIV names a receiver address that is none of the server's is refused, and the
-/// password stays; one that names none, or whose address is the host's, is read.
-/// MIT `process_chpw_request` (`kadmin/server/schpw.c:147-166`): `krb5_rd_priv` is called with no address set, and a refusal is HARDERROR "Failed decrypting request".
+/// A request whose KRB-PRIV names a receiver address that is none of the server's is refused, and the password stays; one that names none, or whose address is the host's, is read.
+/// `krb5_rd_priv` is called with no address set, and a refusal is HARDERROR "Failed decrypting request".
 /// MIT `k5_privsafe_check_addrs` (`lib/krb5/krb/privsafe.c:355-378`): the receiver address is looked up among the host's (`krb5_os_localaddr`, which leaves out 127.0.0.1).
 #[test]
 fn kpasswd_request_naming_a_receiver_the_server_does_not_have_is_refused() {
@@ -2053,7 +2022,6 @@ fn kpasswd_request_naming_a_receiver_the_server_does_not_have_is_refused() {
         addr_type: HostAddress::ADDRTYPE_INET,
         address: o.to_vec().into(),
     };
-    // RFC 5737's 203.0.113.0/24 is no machine's; 127.0.0.1 is the loopback `krb5_os_localaddr` skips.
     for (receiver, read) in [
         (None, true),
         (Some(inet([203, 0, 113, 77])), false),
@@ -2108,8 +2076,7 @@ fn kpasswd_request_naming_a_receiver_the_server_does_not_have_is_refused() {
     }
 }
 
-/// MIT `process_chpw_request` (`schpw.c:153-166`): `krb5_rd_priv` with `DO_SEQUENCE` takes the request's KRB-PRIV only with the authenticator's seq-number (none when it has none), else the answer is HARDERROR "Failed decrypting request" and the password stays.
-/// The five cases settled live beside MIT 1.22.2's kadmind.
+/// `krb5_rd_priv` with `DO_SEQUENCE` takes the request's KRB-PRIV only with the authenticator's seq-number (none when it has none), else the answer is HARDERROR "Failed decrypting request" and the password stays.
 #[test]
 fn kpasswd_refuses_a_request_krb_priv_out_of_sequence() {
     use krb5_crypto::{KeyUsage, ProtocolKey, decrypt};
@@ -2193,8 +2160,7 @@ fn kpasswd_refuses_a_request_krb_priv_out_of_sequence() {
 }
 
 /// A ticket sealed in any key of `kadmin/changepw` but its first is refused.
-/// MIT `krb5_ktkdb_get_entry` (`lib/kdb/keytab.c:152-180`): the KDB keytab gives a service principal's first permitted key at the kvno, whatever the ticket's enctype, and a ticket whose enctype is not similar to it finds `KRB5_KDB_NO_PERMITTED_KEY`.
-/// MIT `process_chpw_request` (`kadmin/server/schpw.c:128-137`): the refusal is AUTHERROR "Failed reading application request".
+/// the refusal is AUTHERROR "Failed reading application request".
 #[test]
 fn kpasswd_ticket_sealed_in_a_later_changepw_key_is_refused() {
     use krb5_crypto::{KeyUsage, encrypt};
@@ -2243,7 +2209,6 @@ fn kpasswd_ticket_sealed_in_a_later_changepw_key_is_refused() {
             &user,
         )
         .unwrap();
-        // The same ticket, sealed in this key instead of the first.
         let part = decrypt_ticket_part(&first.key, &ap.ticket).unwrap();
         let usage = KeyUsage::new(ku::TICKET).unwrap();
         ap.ticket.enc_part.etype = later.etype.to_iana();
@@ -2304,8 +2269,6 @@ fn kpasswd_success_reply_is_mit_shaped() {
     .unwrap();
     let (ap_der, priv_der) = parse_kpasswd_rep(&rep).unwrap();
 
-    // MIT `process_chpw_request` / `k5_mk_rep`: the AP-REP echoes the client's own subkey and
-    // takes a fresh 30-bit seq-number.
     let ap: ApRep = krb5_asn1::decode(&ap_der).unwrap();
     let usage = KeyUsage::new(ku::AP_REP_ENC_PART).unwrap();
     let plain = decrypt(&as_out.session_key, usage, ap.enc_part.cipher.as_ref()).unwrap();
@@ -2324,8 +2287,6 @@ fn kpasswd_success_reply_is_mit_shaped() {
     let seq = part.seq_number.expect("the AP-REP carries a seq-number");
     assert!(seq != 0 && seq < 1 << 30, "a fresh 30-bit seq, got {seq}");
 
-    // MIT `krb5_mk_priv` under DO_SEQUENCE: no timestamp, the AP-REP's seq, the address the
-    // request came in on, no r-address.
     let msg: KrbPriv = krb5_asn1::decode(&priv_der).unwrap();
     let usage = KeyUsage::new(ku::KRB_PRIV_ENC_PART).unwrap();
     let plain = decrypt(&subkey, usage, msg.enc_part.cipher.as_ref()).unwrap();
@@ -2373,10 +2334,7 @@ fn kpasswd_session_enctype_outside_permitted_is_autherror() {
     assert_eq!(&e_data.as_ref()[2..], b"Failed reading application request");
 }
 
-/// A ChangePasswdData that names no target, or whose targname does not decode, is MALFORMED and
 /// changes no password, the caller's own included.
-/// MIT `decode_krb5_setpw_req` (`lib/krb5/asn.1/asn1_k_encode.c:1253-1276`): the target is required.
-/// MIT `process_chpw_request` (`kadmin/server/schpw.c:174-180`): a request that does not decode is MALFORMED "Failed decoding ChangePasswdData".
 #[test]
 fn setpw_without_a_target_is_malformed() {
     use krb5_kdc::shared_dump as shared_store;
@@ -2412,7 +2370,6 @@ fn setpw_without_a_target_is_malformed() {
     };
     let newpasswd = tlv(0xa0, &tlv(0x04, b"no-target-pass"));
     let targrealm = tlv(0xa2, &tlv(0x1b, TEST_REALM.as_bytes()));
-    // newpasswd [0] alone, then a targname [1] that holds a SET where a PrincipalName belongs.
     let requests = [
         tlv(0x30, &newpasswd),
         tlv(
