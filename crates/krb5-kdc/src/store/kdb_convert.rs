@@ -1,6 +1,4 @@
-//! A principal record as an iprop update and back (`lib/kdb/kdb_convert.c`): a primary records
-//! which attributes of a record a change touched and sends only those, and a replica applies to
-//! its own record only the attributes an update carries.
+//! A principal record as an iprop update and back (`lib/kdb/kdb_convert.c`): a primary records which attributes of a record a change touched and sends only those, and a replica applies to its own record only the attributes an update carries.
 
 use krb5_types::PrincipalName;
 
@@ -64,56 +62,34 @@ pub const fn attr_bit(at: u32) -> u32 {
     1 << at
 }
 
-/// One attribute of an iprop update with its value (MIT `kdbe_val_t`); keys are plaintext here,
-/// wrapped under the master key on the wire.
+/// One attribute of an iprop update with its value (MIT `kdbe_val_t`); keys are plaintext here, wrapped under the master key on the wire.
 #[derive(Clone, Debug)]
 pub enum KdbeVal {
-    /// `AT_ATTRFLAGS`.
     AttrFlags(u32),
-    /// `AT_MAX_LIFE`.
     MaxLife(u32),
-    /// `AT_MAX_RENEW_LIFE`.
     MaxRenewLife(u32),
-    /// `AT_EXP`.
     Exp(u32),
-    /// `AT_PW_EXP`.
     PwExp(u32),
-    /// `AT_LAST_SUCCESS`.
     LastSuccess(u32),
-    /// `AT_LAST_FAILED`.
     LastFailed(u32),
-    /// `AT_FAIL_AUTH_COUNT`.
     FailAuthCount(u32),
-    /// `AT_PRINC`: the name and its realm.
     Princ(PrincipalName, String),
-    /// `AT_KEYDATA`: every key of the record.
     KeyData(Vec<KeyEntry>),
-    /// `AT_TL_DATA`.
     TlData(Vec<TlData>),
-    /// `AT_LEN`.
     Len(u32),
-    /// `AT_MOD_PRINC`: the name and its realm.
     ModPrinc(PrincipalName, String),
-    /// `AT_MOD_TIME`.
     ModTime(u32),
-    /// `AT_MOD_WHERE`.
     ModWhere(Vec<u8>),
-    /// `AT_PW_LAST_CHANGE`.
     PwLastChange(u32),
-    /// `AT_PW_POLICY`.
     PwPolicy(Vec<u8>),
-    /// `AT_PW_POLICY_SWITCH`.
     PwPolicySwitch(bool),
-    /// `AT_PW_HIST_KVNO`.
     PwHistKvno(u32),
     /// `AT_PW_HIST`: the old passwords' keys as stored.
     PwHist(Vec<Vec<OsaKeyData>>),
-    /// Any other type: MIT's `av_extension` bytes.
     Extension(u32, Vec<u8>),
 }
 
 impl KdbeVal {
-    /// The `kdbe_attr_type_t` this value carries.
     #[must_use]
     pub fn attr(&self) -> u32 {
         match self {
@@ -142,7 +118,6 @@ impl KdbeVal {
     }
 }
 
-/// One update as a replica receives it (MIT `kdb_incr_update_t`).
 #[derive(Clone, Debug)]
 pub struct IpropUpdate {
     /// `kdb_entry_sno`.
@@ -157,15 +132,11 @@ pub struct IpropUpdate {
     pub commit: bool,
     /// `kdb_update`: the attributes it carries, in its order.
     pub vals: Vec<KdbeVal>,
-    /// The update as the primary encoded it, which a replica's update log keeps as it came;
-    /// empty for one built in memory, which applies without being logged.
+    /// The update as the primary encoded it, which a replica's update log keeps as it came; empty for one built in memory, which applies without being logged.
     pub raw: Vec<u8>,
 }
 
-/// The record's `tl_data` as MIT's database holds it, which an update compares and carries: the
-/// database arguments and kerber-rust's own `0x4B00`–`0x4BFF` types stay out, the kadm5 record is
-/// there whenever a policy or a history is, and the string attributes are the current ones,
-/// kept, once present, where they are and even when empty, as MIT's `krb5_dbe_set_string` does.
+/// The record's `tl_data` as MIT's database holds it, which an update compares and carries: the database arguments and kerber-rust's own `0x4B00`–`0x4BFF` types stay out, the kadm5 record is there whenever a policy or a history is, and the string attributes are the current ones, kept, once present, where they are and even when empty, as MIT's `krb5_dbe_set_string` does.
 #[must_use]
 pub(crate) fn mit_tl(p: &Principal) -> Vec<TlData> {
     let mut tl: Vec<TlData> = p
@@ -274,8 +245,7 @@ pub(crate) fn find_changed_attrs(current: &Principal, new: &Principal, exclude_n
 }
 
 /// MIT `find_changed_attrs` (`lib/kdb/kdb_convert.c:80-101`): the realm test is inverted, so a principal whose realm is the same is always listed.
-/// Only a realm of the same length that differs has its components compared, each by its
-/// current length.
+/// Only a realm of the same length that differs has its components compared, each by its current length.
 fn princ_listed(current: &Principal, new: &Principal) -> bool {
     let (c, n) = (&current.name.name_string, &new.name.name_string);
     if current.name.name_type != new.name.name_type || c.len() != n.len() {
@@ -311,8 +281,7 @@ fn mod_princ_data(tl: &[TlData]) -> Option<(u32, PrincipalName, String)> {
 /// MIT `ulog_conv_2logentry` (`lib/kdb/kdb_convert.c:464-525`): a listed `AT_TL_DATA` is the password-change time, the modifier and its time when the record has one, then every other record.
 /// MIT `ulog_conv_2logentry` (`lib/kdb/kdb_convert.c:364-387`): the flags and both lifetimes go only when they are not negative as 32-bit values.
 /// MIT `ulog_conv_2logentry` (`lib/kdb/kdb_convert.c:389-402`): an expiration or password expiration past 2038 is negative as a 32-bit value and is not sent.
-/// Here both go whenever listed: settled live, MIT's own replica otherwise keeps the expiration
-/// it had while its primary expires the principal (`docs/mit-deviations.md`).
+/// Here both go whenever listed: settled live, MIT's own replica otherwise keeps the expiration it had while its primary expires the principal (`docs/mit-deviations.md`).
 /// The three non-replicated attributes have no case in MIT's switch and are never sent.
 #[must_use]
 pub fn conv_2logentry(p: &Principal, attrs: u32) -> Vec<KdbeVal> {
@@ -369,8 +338,6 @@ pub fn conv_2logentry(p: &Principal, attrs: u32) -> Vec<KdbeVal> {
     out
 }
 
-/// A record with nothing in it but `name` (MIT's `calloc` for an update to a principal the replica
-/// does not have).
 fn empty_entry(name: &str) -> Result<Principal, Error> {
     let (princ, realm) = krb5_types::principal_from_unparsed(name, "")
         .map_err(|e| Error::InvalidArgument(format!("iprop update for {name}: {e}")))?;
@@ -408,15 +375,7 @@ fn empty_entry(name: &str) -> Result<Principal, Error> {
 /// MIT `ulog_conv_2dbentry` (`lib/kdb/kdb_convert.c:651-703`): `AT_KEYDATA` replaces every key.
 /// MIT `ulog_conv_2dbentry` (`lib/kdb/kdb_convert.c:705-715`): each `AT_TL_DATA` record replaces the one of its type, and none is removed.
 /// MIT `ulog_conv_2dbentry` (`lib/kdb/kdb_convert.c:748-756`): the modifier is recorded after every attribute, when both it and a nonzero time came.
-/// The policy, the password history and the attributes MIT's switch ignores travel only in
-/// `KRB5_TL_KADM_DATA`; the record's views of its flags, strings, kadm5 record and master key
-/// version are read again from what changed, and its salt from new keys or a new name as a dump
-/// load reads it.
-///
-/// # Errors
-///
-/// [`Error::InvalidArgument`] when the update is for a principal the replica does not have and
-/// its name does not parse; [`Error::Crypto`] when a carried `KRB5_TL_KADM_DATA` does not decode.
+/// The policy, the password history and the attributes MIT's switch ignores travel only in `KRB5_TL_KADM_DATA`; the record's views of its flags, strings, kadm5 record and master key version are read again from what changed, and its salt from new keys or a new name as a dump load reads it.
 pub fn conv_2dbentry(
     existing: Option<&Principal>,
     name: &str,
