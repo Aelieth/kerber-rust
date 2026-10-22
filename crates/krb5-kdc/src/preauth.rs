@@ -1,8 +1,6 @@
 //! FAST, SPAKE, and PKINIT processing on the KDC.
 //!
-//! A successful FAST unwrap returns the armor key and the inner body
-//! together. The outer wire body is not the client request once armor
-//! has been accepted. SPAKE and PKINIT run on that inner request.
+//! A successful FAST unwrap returns the armor key and the inner body together. The outer wire body is not the client request once armor has been accepted. SPAKE and PKINIT run on that inner request.
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
@@ -55,8 +53,7 @@ pub(crate) fn unwrap_fast_as(
     kdc_find_fast(store, padata, body_der, None, None).map_err(map_fast_unwrap)
 }
 
-/// MIT `kdc_find_fast` for TGS: armor from the PA-TGS-REQ subkey, or
-/// `armor_ap_request` when explicit AP-REQ armor is present without that subkey.
+/// MIT `kdc_find_fast` for TGS: armor from the PA-TGS-REQ subkey, or `armor_ap_request` when explicit AP-REQ armor is present without that subkey.
 pub(crate) fn unwrap_fast_tgs(
     store: &dyn PrincipalRead,
     padata: Option<&[PaData]>,
@@ -67,9 +64,7 @@ pub(crate) fn unwrap_fast_tgs(
     kdc_find_fast(store, padata, pa_tgs_raw, subkey, Some(session)).map_err(map_fast_unwrap)
 }
 
-/// MIT `kdc_find_fast` (`fast_util.c:126-247`): the inner request takes the outer
-/// `msg_type`. Inner `msg_type` is the outer APPLICATION tag in Rust (AS vs TGS
-/// dispatch already happened).
+/// MIT `kdc_find_fast` (`fast_util.c:126-247`): the inner request takes the outer `msg_type`. Inner `msg_type` is the outer APPLICATION tag in Rust (AS vs TGS dispatch already happened).
 fn kdc_find_fast(
     store: &dyn PrincipalRead,
     padata: Option<&[PaData]>,
@@ -159,10 +154,8 @@ fn verify_fast_req_checksum(
     ck_data: &[u8],
     ck: &krb5_types::Checksum,
 ) -> Result<(), Error> {
-    // MIT `kdc_find_fast` (`fast_util.c:207-224`): krb5_c_verify_checksum then
-    // krb5_c_is_keyed_cksum.
-    // Type 0 is not in the keyed/unkeyed tables; verify_checksum_type substitutes
-    // the key's mandatory type, then is_keyed(0) is false → 12.
+    // MIT `kdc_find_fast` (`fast_util.c:207-224`): krb5_c_verify_checksum then krb5_c_is_keyed_cksum.
+    // Type 0 is not in the keyed/unkeyed tables; verify_checksum_type substitutes the key's mandatory type, then is_keyed(0) is false → 12.
     let ck_usage = KeyUsage::new(ku::FAST_REQ_CHKSUM)?;
     match verify_checksum_type(
         armor_key,
@@ -191,7 +184,6 @@ fn verify_fast_req_checksum(
     Ok(())
 }
 
-/// The armor TGT's key, as the KDB keytab gives it.
 /// MIT `krb5_ktkdb_get_entry` (`lib/kdb/keytab.c:117-185`): [`ktkdb_get_entry`] picks the key. A kvno the principal lacks is `KRB5_KT_KVNONOTFOUND`, which `keytab_fetch_error` makes BADKEYVER; any other refusal, `KRB5_KDB_NO_PERMITTED_KEY` included, is a generic failure.
 fn armor_ticket_key(
     store: &dyn PrincipalRead,
@@ -213,33 +205,23 @@ fn armor_ticket_key(
     }
 }
 
-/// MIT `krb5_ktkdb_get_entry` (`kdb/keytab.c:157-163`): the key search is pinned to the
-/// ticket kvno, and a non-permitted enctype is not a candidate.
-/// An unknown server or a foreign-realm armor ticket is not-us, and a local ticket that is
-/// not a TGT is not armor.
+/// MIT `krb5_ktkdb_get_entry` (`kdb/keytab.c:157-163`): the key search is pinned to the ticket kvno, and a non-permitted enctype is not a candidate.
+/// An unknown server or a foreign-realm armor ticket is not-us, and a local ticket that is not a TGT is not armor.
 fn armor_key_from_ap(store: &dyn PrincipalRead, ap_raw: &[u8]) -> Result<ProtocolKey, Error> {
     let ap: krb5_types::ApReq = decode(ap_raw)?;
     let tkt_usage = KeyUsage::new(ku::TICKET)?;
     let cipher = ap.ticket.enc_part.cipher.as_ref();
     let ticket_realm = std::str::from_utf8(ap.ticket.realm.as_bytes())
         .map_err(|_| proto_fast(err::NOT_US, "FAST armor TGT"))?;
-    // MIT rd_req: unknown server (foreign realm or missing row) is NOT_US;
-    // a local non-krbtgt armor ticket is SERVER_NOMATCH.
+    // MIT rd_req: unknown server (foreign realm or missing row) is NOT_US; a local non-krbtgt armor ticket is SERVER_NOMATCH.
     if ticket_realm != store.realm() {
         return Err(proto_fast(err::NOT_US, "FAST armor TGT"));
     }
     let Some(p) = store.fetch_name(&ap.ticket.sname)? else {
         return Err(proto_fast(err::NOT_US, "FAST armor TGT"));
     };
-    // MIT `krb5_rd_req` → KDB keytab `krb5_ktkdb_get_entry`.
-    // MIT `krb5_ktkdb_get_entry` (`kdb/keytab.c:157-163`): the lookup
-    // `krb5_dbe_find_enctype(entry, xrealm ? etype : -1, -1, kvno)` pins the
-    // ticket kvno and skips non-permitted enctypes. A local TGS then fails
-    // `krb5_c_enctype_compare` (`:171-178`) as `KRB5_KDB_NO_PERMITTED_KEY`
-    // (wire 60 via `errcode_to_protocol`). `NO_MATCHING_KEY` becomes
-    // `KRB5_KT_KVNONOTFOUND`.
-    // MIT `keytab_fetch_error` (`rd_req_dec.c:137-147`): `KRB5_KT_KVNONOTFOUND` →
-    // `BADKEYVER` 44 when the principal is the ticket server.
+    // MIT `krb5_ktkdb_get_entry` (`kdb/keytab.c:157-163`): the lookup `krb5_dbe_find_enctype(entry, xrealm ? etype : -1, -1, kvno)` pins the ticket kvno and skips non-permitted enctypes. A local TGS then fails `krb5_c_enctype_compare` (`:171-178`) as `KRB5_KDB_NO_PERMITTED_KEY` (wire 60 via `errcode_to_protocol`). `NO_MATCHING_KEY` becomes `KRB5_KT_KVNONOTFOUND`.
+    // MIT `keytab_fetch_error` (`rd_req_dec.c:137-147`): `KRB5_KT_KVNONOTFOUND` → `BADKEYVER` 44 when the principal is the ticket server.
     let key = armor_ticket_key(store, &p, &ap.ticket)?;
     let enc_tkt = match decrypt_enc_data(&key, tkt_usage, ap.ticket.enc_part.etype, cipher) {
         Ok(plain) => decode::<krb5_types::EncTicketPart>(&plain)
@@ -321,7 +303,6 @@ pub(crate) fn mint_freshness_token_now(store: &dyn PrincipalRead) -> Result<Vec<
     let tgt = store
         .fetch_krbtgt()?
         .ok_or_else(|| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
-    // `rock->local_tgt_key`: `get_local_tgt` → `get_first_current_key`.
     let key = store
         .policy()
         .first_current_key(&tgt)
@@ -346,8 +327,7 @@ pub(crate) fn check_freshness_token(
     let Some(tgt) = store.fetch_krbtgt().ok().flatten() else {
         return Err(proto(err::PREAUTH_EXPIRED, status::PREAUTH_FAILED));
     };
-    // MIT `check_freshness_token` (`kdc_preauth.c:545-545`): the token key is
-    // `krb5_dbe_find_enctype(local_tgt, -1, -1, token_kvno)`.
+    // MIT `check_freshness_token` (`kdc_preauth.c:545-545`): the token key is `krb5_dbe_find_enctype(local_tgt, -1, -1, token_kvno)`.
     let Ok(key) = store.policy().find_enctype(&tgt, None, kvno) else {
         return Err(proto(err::PREAUTH_EXPIRED, status::PREAUTH_FAILED));
     };
@@ -412,8 +392,7 @@ pub(crate) fn make_cookie_at(
     Ok(out)
 }
 
-/// MIT `kdc_fast_read_cookie` (`fast_util.c:545-611`): errors leave the
-/// state empty and return 0 (never 24).
+/// MIT `kdc_fast_read_cookie` (`fast_util.c:545-611`): errors leave the state empty and return 0 (never 24).
 pub(crate) fn open_cookie(
     store: &dyn PrincipalRead,
     client: &PrincipalName,
@@ -426,8 +405,7 @@ pub(crate) fn open_cookie(
     let Ok(Some(krbtgt_p)) = store.fetch_krbtgt() else {
         return Vec::new();
     };
-    // MIT `get_cookie_key` (`fast_util.c:506-516`): the current kvno uses the already-chosen
-    // first permitted key; an older kvno is `krb5_dbe_find_enctype(tgt, -1, -1, kvno)`.
+    // MIT `get_cookie_key` (`fast_util.c:506-516`): the current kvno uses the already-chosen first permitted key; an older kvno is `krb5_dbe_find_enctype(tgt, -1, -1, kvno)`.
     let Ok(ke) = store.policy().find_enctype(&krbtgt_p, None, kvno) else {
         return Vec::new();
     };
@@ -488,27 +466,8 @@ pub(crate) fn wrap_fast_rep(
 
 /// PKINIT: ECDH reply key from PA-PK-AS-REQ.
 ///
-/// A client-caused verify failure (CMS, cert, eContentType, checksum, ctime,
-/// AuthPack, DH group, SPKI) is logged at `info` with `outcome = "denied"` in the JSON log; the KDC's own
-/// faults stay `error`.
-/// MIT `finish_verify_padata` (`kdc_preauth.c:1224-1228`): a module verify failure is
-/// `LOG_INFO "preauth (%s) verify failure: %s"`, which `run_as_preauth` writes for each failure
-/// this returns; the message is the one the error carries, or the code's table text.
-///
-/// # Errors
-///
-/// [`Error::Protocol`] with `PREAUTH_EXPIRED` when the AuthPack's freshness token is short,
-/// expired, or does not verify under a local krbtgt key; `SKEW` when the AuthPack ctime is outside
-/// the clock skew; `DH_KEY_PARAMETERS_NOT_ACCEPTED` when a signed request has no DH public value,
-/// or its group or value is not accepted; `INCONSISTENT_KEY_PURPOSE` when the client
-/// certificate's key purpose is not one `pkinit_eku_checking` accepts; `PREAUTH_FAILED` for every
-/// other check that fails (the request encoding, a KDC with no PKINIT context, the CMS signature,
-/// the client certificate's chain or name, the eContentType, the paChecksum, a required freshness
-/// token, the ctime, an unsigned request from a client that is not anonymous, the reply
-/// signature); [`Error::PreauthModule`] with MIT's text when the KDC's own certificate does not
-/// verify. [`Error::Crypto`] when the
-/// key agreement or the reply-key derivation fails, and [`Error::Asn1`] when the reply does not
-/// encode. A request without PA-PK-AS-REQ is `Ok(None)`.
+/// A client-caused verify failure (CMS, cert, eContentType, checksum, ctime, AuthPack, DH group, SPKI) is logged at `info` with `outcome = "denied"` in the JSON log; the KDC's own faults stay `error`.
+/// MIT `finish_verify_padata` (`kdc_preauth.c:1224-1228`): a module verify failure is `LOG_INFO "preauth (%s) verify failure: %s"`, which `run_as_preauth` writes for each failure this returns; the message is the one the error carries, or the code's table text.
 pub(crate) fn process_pkinit(
     store: &dyn PrincipalRead,
     client: &Principal,
@@ -546,10 +505,8 @@ pub(crate) fn process_pkinit(
     if let Some(cert) = &pack.signer {
         authorize_cert(store, kdc, cert, client, &req_cname, realm)?;
     } else {
-        // MIT `pkinit_server_verify_padata` (`pkinit_srv.c:508-516`): an unsigned request
-        // must name the anonymous principal WITH realm, after the rewrite below.
-        // MIT `process_as_req` (`do_as_req.c:718-734`): the rewrite makes
-        // `request->client` WELLKNOWN/ANONYMOUS@WELLKNOWN:ANONYMOUS.
+        // MIT `pkinit_server_verify_padata` (`pkinit_srv.c:508-516`): an unsigned request must name the anonymous principal WITH realm, after the rewrite below.
+        // MIT `process_as_req` (`do_as_req.c:718-734`): the rewrite makes `request->client` WELLKNOWN/ANONYMOUS@WELLKNOWN:ANONYMOUS.
         // Rewrite runs only for REQUEST_ANONYMOUS + an anonymous name.
         let rewritten = decode::<KdcReqBody>(body_der)
             .is_ok_and(|b| b.kdc_options.bit(flag_bit::ANONYMOUS))
@@ -627,7 +584,6 @@ pub(crate) fn process_pkinit(
     let (group, client_public) = peer;
     let kp =
         KxKey::generate(group).ok_or_else(|| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
-    // MIT server_process_dh; see docs/parity/a3-preauth.md
     let z = kp.shared(&client_public).ok_or_else(|| {
         proto_d(
             err::GENERIC,
@@ -691,8 +647,7 @@ pub(crate) fn process_pkinit(
     Ok(Some((reply_key, pa, is_signed)))
 }
 
-/// A signedAuthPack refusal as MIT gives it: its code, its text, and for a certificate the
-/// e-data naming the KDC's anchors (70) or the certificate refused (71).
+/// A signedAuthPack refusal as MIT gives it: its code, its text, and for a certificate the e-data naming the KDC's anchors (70) or the certificate refused (71).
 /// MIT `cms_signeddata_verify` (`plugins/preauth/pkinit/pkinit_crypto_openssl.c:2163-2209`): "Failed to verify received certificate" is 70 when no issuer was found and 71 otherwise; a signature that does not verify is "Failed to verify CMS message".
 /// MIT `pkinit_create_edata` (`plugins/preauth/pkinit/pkinit_srv.c:101-138`): 70 carries TD-TRUSTED-CERTIFIERS, 71 TD-INVALID-CERTIFICATES.
 fn cms_fault(
@@ -835,8 +790,6 @@ fn authorize_cert(
     }
 }
 
-/// Whether `name@realm` names the client: the request's name (an enterprise name read as the
-/// principal it names), the client entry's name, or a name the database resolves to that entry.
 /// MIT `match_client` (`kdc/kdc_preauth.c:477-497`): `krb5_principal_compare_flags` with `KRB5_PRINCIPAL_COMPARE_ENTERPRISE`, then `krb5_principal_compare`, then a client lookup.
 fn match_client(
     store: &dyn PrincipalRead,
@@ -875,7 +828,6 @@ fn match_client(
         .is_some_and(|entry| (entry.realm.as_bytes().to_vec(), parts(&entry.name)) == own)
 }
 
-// MIT server_check_dh; see docs/parity/a3-preauth.md
 fn server_check_dh(
     store: &dyn PrincipalRead,
     cname: &PrincipalName,
@@ -905,8 +857,7 @@ fn server_check_dh(
     }
 }
 
-/// The freshness line of a signed request, and its refusal when a token is required and none
-/// verified.
+/// The freshness line of a signed request, and its refusal when a token is required and none verified.
 /// MIT `check_log_freshness` (`plugins/preauth/pkinit/pkinit_srv.c:392-412`): one `com_err` line at info naming the request's client.
 fn check_log_freshness(
     store: &dyn PrincipalRead,
@@ -968,8 +919,7 @@ pub(crate) fn proto_fast(code: i32, detail: impl Into<String>) -> Error {
     }
 }
 
-// MIT `process_as_req` (`do_as_req.c:531-535`): any kdc_find_fast failure is status
-// FIND_FAST.
+// MIT `process_as_req` (`do_as_req.c:531-535`): any kdc_find_fast failure is status FIND_FAST.
 // MIT `errcode_to_protocol` (`kdc_util.c:691-698`): decrypt → 31, ASN.1 → 60.
 fn map_fast_unwrap(err: Error) -> Error {
     match err {
@@ -1052,10 +1002,7 @@ pub(crate) fn with_fx_cookie(
     method
 }
 
-/// MIT `prepare_error_as` (`do_as_req.c:785-814`): append PA-FX-COOKIE to every
-/// e_data-bearing AS error, then encode TYPED-DATA when the bytes already use
-/// tags [0]/[1] (PA_TYPED_E_DATA modules). FAST-wrapped outer e_data is left
-/// alone (`kdc_fast_handle_error` already replaced it).
+/// MIT `prepare_error_as` (`do_as_req.c:785-814`): append PA-FX-COOKIE to every e_data-bearing AS error, then encode TYPED-DATA when the bytes already use tags [0]/[1] (PA_TYPED_E_DATA modules). FAST-wrapped outer e_data is left alone (`kdc_fast_handle_error` already replaced it).
 pub(crate) fn prepare_as_edata(
     store: &dyn PrincipalRead,
     client: Option<&PrincipalName>,
