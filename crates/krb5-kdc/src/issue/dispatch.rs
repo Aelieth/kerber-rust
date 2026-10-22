@@ -1,5 +1,4 @@
-//! AS/TGS dispatch (`dispatch.c`): the lookaside, the request's decode, AS or TGS processing, the
-//! UDP reply size, and the KRB-ERROR log line; [`KdcDispatch`] is what the net-server loop calls.
+//! AS/TGS dispatch (`dispatch.c`): the lookaside, the request's decode, AS or TGS processing, the UDP reply size, and the KRB-ERROR log line; [`KdcDispatch`] is what the net-server loop calls.
 
 use std::net::SocketAddr;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -31,25 +30,14 @@ use crate::plugins::{
 };
 
 /// Dispatch one UDP/TCP payload (AS-REQ or TGS-REQ) to the issue path.
-///
-/// A request MIT's dispatch refuses (empty, not an AS-REQ or TGS-REQ, one that does not decode,
-/// a protocol version other than 5, no server name) yields an empty reply, as MIT sends none.
-/// Other failures are a KRB-ERROR.
-///
-/// # Errors
-///
-/// [`Error::Asn1`] when an issued AS-REP or TGS-REP does not encode; every refusal is returned as
-/// KRB-ERROR bytes instead.
+/// A request MIT's dispatch refuses (empty, not an AS-REQ or TGS-REQ, one that does not decode, a protocol version other than 5, no server name) yields an empty reply, as MIT sends none.
+/// [`Error::Asn1`] when an issued AS-REP or TGS-REP does not encode; every refusal is returned as KRB-ERROR bytes instead.
 pub fn handle_request(store: &dyn PrincipalRead, raw: &[u8]) -> Result<Vec<u8>, Error> {
     handle_request_from(store, raw, None)
 }
 
 /// Like [`handle_request`], with the UDP/TCP peer for TGS `BADADDR`.
-///
-/// # Errors
-///
-/// [`Error::Asn1`] when an issued AS-REP or TGS-REP does not encode; every refusal is returned as
-/// KRB-ERROR bytes instead.
+/// [`Error::Asn1`] when an issued AS-REP or TGS-REP does not encode; every refusal is returned as KRB-ERROR bytes instead.
 pub fn handle_request_from(
     store: &dyn PrincipalRead,
     raw: &[u8],
@@ -61,15 +49,12 @@ pub fn handle_request_from(
     }
 }
 
-/// What processing one request gave: reply bytes (empty for an AS-REQ a preauth module
-/// discarded), or MIT's error text for a request its dispatch refuses before processing.
+/// What processing one request gave: reply bytes (empty for an AS-REQ a preauth module discarded), or MIT's error text for a request its dispatch refuses before processing.
 enum Processed {
     Reply(Vec<u8>),
     Refused(&'static str),
 }
 
-/// [`handle_inner`] under the request's correlation id, with its PDU captured and its outcome
-/// logged.
 fn process_logged(
     store: &dyn PrincipalRead,
     raw: &[u8],
@@ -156,9 +141,7 @@ fn log_krb_error(duration_us: u64, code: i32, e_text: &str, detail: Option<&str>
     }
 }
 
-/// What [`handle_inner`] made of a request.
 enum Inner {
-    /// The reply and the log detail.
     Reply(Vec<u8>, Option<String>),
     /// MIT's error text for a request dispatch refuses.
     Refused(&'static str),
@@ -202,11 +185,6 @@ const WRONG_REALM: &str = "Realm not local to KDC";
 /// MIT `KRB5KDC_ERR_DISCARD` (`lib/krb5/error_tables/k5e1_err.et:36-36`): its text.
 const DISCARD: &str = "The KDC should discard this request";
 
-/// Decode a KDC-REQ under APPLICATION `app` with `full`, failing with the text of the error
-/// MIT's decoder returns for the same bytes. The KDC-REQ's own fields (the tags, `pvno` 5,
-/// `msg-type`, the PA-DATA list) are checked as MIT's decoder checks them, in its order; inside
-/// the request body an element that runs past its parent is an overrun, and any other failure is
-/// named by the class of the Rust decoder's failure.
 fn decode_kdc_req<T>(
     raw: &[u8],
     app: u32,
@@ -243,20 +221,14 @@ fn is_universal(t: &Tlv<'_>, constructed: bool, tagnum: u32) -> bool {
     t.class == UNIVERSAL && t.constructed == constructed && t.tagnum == tagnum
 }
 
-/// The KDC-REQ's fields and PA-DATA's, as MIT's decoder knows them.
 #[derive(Clone, Copy)]
 enum Kind {
     /// `krb5_version`: an INTEGER that must be 5.
     Pvno,
-    /// An unsigned INTEGER of 32 bits (`msg-type`).
     Uint32,
-    /// A signed INTEGER of 32 bits (`padata-type`).
     Int32,
-    /// An OCTET STRING.
     Octets,
-    /// The PA-DATA list.
     Padata,
-    /// The request body: a SEQUENCE, whose fields are left to the full decode.
     Body,
 }
 
@@ -290,7 +262,6 @@ const KDC_REQ: [Field; 4] = [
     },
 ];
 
-/// RFC 4120 PA-DATA: `padata-type` [1] Int32, `padata-value` [2] OCTET STRING.
 const PA_DATA: [Field; 2] = [
     Field {
         tagnum: 1,
@@ -341,10 +312,8 @@ fn decode_sequence(mut p: &[u8], fields: &[Field]) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// One explicitly tagged field.
 /// MIT `k5_asn1_decode_int` (`lib/krb5/asn.1/asn1_encode.c:191-199`): an empty INTEGER is a bad length, one longer than eight bytes an overflow.
 /// MIT `k5_asn1_decode_uint` (`lib/krb5/asn.1/asn1_encode.c:211-219`): a negative or too long unsigned INTEGER is an overflow.
-/// MIT `decode_atype` (`lib/krb5/asn.1/asn1_encode.c:1229-1230`): `pvno` other than 5 is the immediate's error, `KRB5KDC_ERR_BAD_PVNO`.
 fn decode_field(kind: Kind, t: &Tlv<'_>) -> Result<(), &'static str> {
     let v = inner(t)?;
     match kind {
@@ -407,7 +376,6 @@ fn decode_field(kind: Kind, t: &Tlv<'_>) -> Result<(), &'static str> {
     }
 }
 
-/// An INTEGER's contents, as MIT's integer decoders take them.
 fn integer<'a>(v: &Tlv<'a>) -> Result<&'a [u8], &'static str> {
     if !is_universal(v, false, 2) {
         return Err(ASN1_BAD_ID);
@@ -418,7 +386,6 @@ fn integer<'a>(v: &Tlv<'a>) -> Result<&'a [u8], &'static str> {
     Ok(v.contents)
 }
 
-/// The contents of the last element of a KDC-REQ's SEQUENCE (its `req-body` SEQUENCE).
 fn last_field(mut p: &[u8]) -> Option<&[u8]> {
     let mut last = None;
     while !p.is_empty() {
@@ -429,13 +396,10 @@ fn last_field(mut p: &[u8]) -> Option<&[u8]> {
     get_tag(last?).ok().map(|t| t.contents)
 }
 
-/// How deep [`framing`] looks: past the deepest element of a request body (a ticket's cipher in
-/// `additional-tickets`, nine down), so a request built of nested tags cannot run it deep.
+/// How deep [`framing`] looks: past the deepest element of a request body (a ticket's cipher in `additional-tickets`, nine down), so a request built of nested tags cannot run it deep.
 const FRAMING_DEPTH: u32 = 16;
 
-/// Every element inside `p`, depth first to [`FRAMING_DEPTH`], read as MIT's `get_tag` reads it:
-/// the error of the first that runs past the element holding it, or whose tag or length cannot
-/// be read.
+/// Every element inside `p`, depth first to [`FRAMING_DEPTH`], read as MIT's `get_tag` reads it: the error of the first that runs past the element holding it, or whose tag or length cannot be read.
 fn framing(p: &[u8]) -> Result<(), &'static str> {
     framing_at(p, 0)
 }
@@ -451,10 +415,6 @@ fn framing_at(mut p: &[u8], depth: u32) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// The MIT error a failure inside a well-framed request body stands for, from the Rust decoder's
-/// failure: a time that is not fifteen characters is a bad length and any other bad time a bad
-/// format; a field missing or out of place is a missing field; a wrong type tag a bad identifier.
-/// `KerberosTime`'s decoder reports `KerberosTime is not YYYYMMDDhhmmssZ (N octets)`.
 /// MIT `k5_asn1_decode_generaltime` (`lib/krb5/asn.1/asn1_encode.c:242-260`): a time must be fifteen characters, digits then `Z`.
 fn body_failure_text(e: &str) -> &'static str {
     if let Some(n) = e
@@ -506,7 +466,6 @@ fn body_failure_text(e: &str) -> &'static str {
 const RESENDING: &str = "DISPATCH: repeated (retransmitted?) request from [unknown address type], resending previous response";
 const DROPPING: &str = "DISPATCH: repeated (retransmitted?) request from [unknown address type] during request processing, dropping repeated request";
 
-/// The JSON twin of the resend line.
 fn log_dispatch_resend() {
     tracing::info!(
         event = krb5_log::events::KDC_ISSUE,
@@ -517,7 +476,6 @@ fn log_dispatch_resend() {
     );
 }
 
-/// The JSON twin of the drop line.
 fn log_dispatch_inflight_drop() {
     tracing::info!(
         event = krb5_log::events::KDC_ISSUE,
@@ -528,28 +486,22 @@ fn log_dispatch_inflight_drop() {
     );
 }
 
-/// What a request's processing came to: MIT's `respond` code and response.
 enum Done {
-    /// Code 0 and a reply.
     Reply(Vec<u8>),
-    /// A nonzero code, as its text; `discard` for `KRB5KDC_ERR_DISCARD`.
     Failed { text: String, discard: bool },
 }
 
-/// The KDC's side of the net-server loop: MIT's `dispatch`, `make_toolong_error` and reset, with
-/// the lookaside the loop's alone (MIT's `kdc/replay.c` has no lock: one loop uses it).
+/// The KDC's side of the net-server loop: MIT's `dispatch`, `make_toolong_error` and reset, with the lookaside the loop's alone (MIT's `kdc/replay.c` has no lock: one loop uses it).
 pub(crate) struct KdcDispatch {
     store: SharedStore,
     lookaside: Lookaside,
     max_dgram_reply_size: usize,
-    /// A request whose processing panics, for the containment unit.
     #[cfg(test)]
     pub(crate) panic_on: Option<Vec<u8>>,
 }
 
 impl KdcDispatch {
-    /// The dispatcher for `store`, with an empty lookaside; a UDP reply longer than
-    /// `max_dgram_reply_size` is replaced by `KRB_ERR_RESPONSE_TOO_BIG`.
+    /// The dispatcher for `store`, with an empty lookaside; a UDP reply longer than `max_dgram_reply_size` is replaced by `KRB_ERR_RESPONSE_TOO_BIG`.
     pub(crate) fn new(store: SharedStore, max_dgram_reply_size: usize) -> Self {
         Self {
             store,
@@ -571,9 +523,7 @@ impl KdcDispatch {
     }
 
     /// MIT `finish_dispatch` (`kdc/dispatch.c:54-66`): a UDP reply over `max_dgram_reply_size` is replaced by the response-too-big error, then the code and reply go back to the loop.
-    ///
-    /// Deviation: a reply resent from the lookaside that is too big for UDP is replaced by the
-    /// realm's response-too-big error, where MIT's builds it from a realm it has not set yet.
+    /// Deviation: a reply resent from the lookaside that is too big for UDP is replaced by the realm's response-too-big error, where MIT's builds it from a realm it has not set yet.
     fn finish_dispatch(&self, is_tcp: bool, done: Done) -> Reply {
         match done {
             Done::Reply(bytes) if !is_tcp && bytes.len() > self.max_dgram_reply_size => {
@@ -587,7 +537,6 @@ impl KdcDispatch {
     }
 }
 
-/// What processing one fresh request through the issue path gave.
 fn process(store: &dyn PrincipalRead, raw: &[u8], sender: &HostAddress) -> Done {
     match process_logged(store, raw, Some(sender)) {
         // MIT `finish_process_as_req` (`kdc/do_as_req.c:371-381`): a discard sends no error.
@@ -609,9 +558,7 @@ fn process(store: &dyn PrincipalRead, raw: &[u8], sender: &HostAddress) -> Done 
 
 impl Dispatch for KdcDispatch {
     /// MIT `dispatch` (`kdc/dispatch.c:114-141`): a request in the lookaside is resent its reply, or dropped while it is being processed, each logged; any other is marked in progress and processed.
-    ///
-    /// A request whose processing panics is answered with nothing and its mark removed, where
-    /// MIT's process would end.
+    /// A request whose processing panics is answered with nothing and its mark removed, where MIT's process would end.
     fn dispatch(
         &mut self,
         _local: SocketAddr,
@@ -673,10 +620,7 @@ impl Dispatch for KdcDispatch {
     }
 }
 
-/// The plugin slots this thread set for itself (its kdcpolicy, kdcpreauth, kdcauthdata and
-/// audit modules), off it while one loop serves every request on the thread, and put back when
-/// the loop returns: modules that apply to all the KDC's requests are the process-wide ones, as
-/// MIT's loaded modules are.
+/// The plugin slots this thread set for itself (its kdcpolicy, kdcpreauth, kdcauthdata and audit modules), off it while one loop serves every request on the thread, and put back when the loop returns: modules that apply to all the KDC's requests are the process-wide ones, as MIT's loaded modules are.
 pub(crate) struct ThreadSlots {
     policy: Option<Arc<dyn KdcPolicy>>,
     policies: Option<Vec<Arc<dyn KdcPolicy>>>,
@@ -762,18 +706,14 @@ mod tests {
         "127.0.0.1:4242".parse().unwrap()
     }
 
-    /// An AS-REQ without preauth for a client the realm does not hold.
     fn nosuch(nonce: u32) -> Vec<u8> {
         let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["nosuch"]);
         encode(&krb5_protocol::as_req(cname, TEST_REALM, nonce, None).unwrap()).unwrap()
     }
 
-    /// A KDC-REQ-BODY's tail after `cname`, as the settles built it: realm, sname, till,
-    /// nonce 4242, etypes 18 and 17.
     const AS_REQ_BODY: &str = "6a8183308180a103020105a20302010aa4743072a00703050000000000a1133011a003020101a10a30081b066e6f73756368a20d1b0b534554544c452e54455354a320301ea003020102a11730151b066b72627467741b0b534554544c452e54455354a511180f32303337303931333032343830355aa704020210f7a8083006020112020111";
 
-    /// Requests MIT 1.22.2's dispatch refused when settled live, byte for byte, each with the text
-    /// MIT logged "- while dispatching (udp)".
+    /// Requests MIT 1.22.2's dispatch refused when settled live, byte for byte, each with the text MIT logged "- while dispatching (udp)".
     const REFUSED: [(&str, &str); 17] = [
         ("6e03020105", MSG_TYPE),
         ("3003020105", MSG_TYPE),
@@ -809,8 +749,7 @@ mod tests {
         ),
     ];
 
-    /// Each request MIT refused is refused with MIT's text, with no DISPATCH line, and is not
-    /// cached: sent again, it is refused again. The library entry point answers it with nothing.
+    /// Each request MIT refused is refused with MIT's text, with no DISPATCH line, and is not cached: sent again, it is refused again. The library entry point answers it with nothing.
     #[test]
     fn requests_dispatch_refuses_get_mits_texts() {
         let mut k = kdc(65_536);
@@ -826,7 +765,6 @@ mod tests {
         for (h, _) in REFUSED {
             assert_eq!(handle_request(&store, &hex(h)).unwrap(), Vec::<u8>::new());
         }
-        // The well-formed request the settles built from the same parts is processed.
         let r = k.dispatch(local(), peer(), &hex(AS_REQ_BODY), false, &mut log);
         let Reply::Send(bytes) = r else {
             panic!("no reply: {r:?}")
@@ -835,8 +773,6 @@ mod tests {
         assert_eq!(e.error_code, err::C_PRINCIPAL_UNKNOWN);
     }
 
-    /// The same request again, over UDP or TCP, is resent the first reply byte for byte, with
-    /// MIT's line.
     #[test]
     fn a_repeat_is_resent_from_the_lookaside_with_mits_line() {
         let mut k = kdc(65_536);
@@ -853,9 +789,6 @@ mod tests {
         assert_eq!(log.0, [info(RESENDING), info(RESENDING)]);
     }
 
-    /// A repeat that finds its request still in progress (MIT's loop meets one while an AS-REQ
-    /// waits on an asynchronous preauth module, settled live with OTP) is dropped with MIT's line
-    /// and the discard code, and the mark stays.
     #[test]
     fn a_repeat_during_processing_is_dropped_with_mits_lines() {
         let mut k = kdc(65_536);
@@ -870,8 +803,7 @@ mod tests {
         assert!(matches!(k.lookaside.check_or_mark(&req), Check::InProgress));
     }
 
-    /// A discarded request keeps its in-progress mark, so its repeats are dropped while the
-    /// lookaside holds it; any other outcome removes the mark.
+    /// A discarded request keeps its in-progress mark, so its repeats are dropped while the lookaside holds it; any other outcome removes the mark.
     #[test]
     fn a_discard_keeps_its_mark_and_a_failure_does_not() {
         let mut k = kdc(65_536);
@@ -892,8 +824,7 @@ mod tests {
         assert!(matches!(k.lookaside.check_or_mark(&b), Check::Fresh));
     }
 
-    /// A request whose processing panics is answered with nothing and its mark removed, so the
-    /// same request is processed when it comes again.
+    /// A request whose processing panics is answered with nothing and its mark removed, so the same request is processed when it comes again.
     #[test]
     fn a_panicking_request_is_contained_and_its_mark_removed() {
         let mut k = kdc(65_536);
@@ -910,8 +841,7 @@ mod tests {
         assert_eq!(log.0, NO_LINES, "processed, not resent or dropped");
     }
 
-    /// A reply too big for UDP goes out as RESPONSE_TOO_BIG, and the whole reply is cached, so
-    /// the client's retry over TCP is resent it.
+    /// A reply too big for UDP goes out as RESPONSE_TOO_BIG, and the whole reply is cached, so the client's retry over TCP is resent it.
     #[test]
     fn a_reply_too_big_for_udp_is_response_too_big_and_cached_whole() {
         let mut k = kdc(10);
@@ -930,8 +860,6 @@ mod tests {
         assert_eq!(log.0, [info(RESENDING)]);
     }
 
-    /// FIELD_TOOLONG names the realm's TGS and carries no client or text, as MIT's (settled
-    /// live: `krbtgt/R@R`, no e-text).
     #[test]
     fn field_toolong_is_mits_error() {
         let mut k = kdc(65_536);
@@ -942,9 +870,7 @@ mod tests {
         assert!(e.cname.is_none() && e.crealm.is_none() && e.e_text.is_none());
     }
 
-    /// A replay the lookaside no longer holds is processed again: the AS-REQ with the same
-    /// PA-ENC-TIMESTAMP and the TGS-REQ with the same authenticator each get a new ticket, where
-    /// the lookaside resent the first reply while it held it.
+    /// A replay the lookaside no longer holds is processed again: the AS-REQ with the same PA-ENC-TIMESTAMP and the TGS-REQ with the same authenticator each get a new ticket, where the lookaside resent the first reply while it held it.
     /// MIT `dispatch` (`kdc/dispatch.c:114-140`): only the lookaside answers a repeated request, so one it no longer holds is processed again.
     #[test]
     fn a_replay_the_lookaside_no_longer_holds_is_issued_again() {
@@ -992,7 +918,6 @@ mod tests {
             "the lookaside resends the TGS-REP"
         );
         std::thread::sleep(stale + Duration::from_millis(100));
-        // A later request's insert purges the stale entries, as MIT's does.
         send(&encode(&as_req(74, None).unwrap()).unwrap());
         let as_again = send(&as_bytes);
         assert_eq!(
@@ -1010,7 +935,6 @@ mod tests {
         assert_ne!(tgs_again, tgs_first, "a new TGS-REP, not the cached one");
     }
 
-    /// A kdcpreauth module that offers nothing and claims nothing.
     struct NoPreauth;
 
     impl KdcPreauth for NoPreauth {
@@ -1037,7 +961,6 @@ mod tests {
         }
     }
 
-    /// A kdcauthdata module that changes nothing.
     struct NoAuthdata;
 
     impl KdcAuthdata for NoAuthdata {
@@ -1070,7 +993,6 @@ mod tests {
         slot.iter().any(|m| Arc::ptr_eq(m, own))
     }
 
-    /// All the slots come off the thread while a loop holds them and go back when it is done.
     #[test]
     fn thread_slots_come_off_and_go_back() {
         use crate::plugins::{authdata_modules, preauth_modules};
