@@ -300,7 +300,8 @@ MITARMOR=
 for k in mit ${OURS:+ours}; do
     kinit=kinit
     [ "$k" = ours ] && kinit=$OURS
-    check "PK.chpw.expire.$k" "^Principal \"pkexp@$R\" modified\\.\$" runin kdc "alice's password ($ALICE), twice" "sudo kadmin.local -q 'cpw pkexp' > /dev/null 2>&1; sudo kadmin.local -q 'modprinc -pwexpire now pkexp' 2>&1" < <(twice "$ALICE")
+    # A password expires only after its second (MIT `validate_as_request`, `kdc_util.c:743`: now > pw_expiration).
+    check "PK.chpw.expire.$k" "^Principal \"pkexp@$R\" modified\\.\$" runin kdc "alice's password ($ALICE), twice" "sudo kadmin.local -q 'cpw pkexp' > /dev/null 2>&1; sudo kadmin.local -q 'modprinc -pwexpire now pkexp' 2>&1 && sleep 2" < <(twice "$ALICE")
     check "PK.chpw.$k" '^kinit rc=0$' runin client2 "pkexp's password ($ALICE), then alice-changed's twice ($ALICE_TEMP)" "kdestroy -c FILE:\$HOME/pk/exp.cc 2> /dev/null; rm -f \$HOME/pk/exp.trace; KRB5_TRACE=\$HOME/pk/exp.trace $kinit -T FILE:\$HOME/pk/armor.$k.cc -c FILE:\$HOME/pk/exp.cc pkexp > \$HOME/pk/exp.out 2>&1; echo \"kinit rc=\$?\"; klist -c FILE:\$HOME/pk/exp.cc 2>&1 | grep -E '^Default principal'; grep -oE 'Password expired' \$HOME/pk/exp.out | sort -u; echo \"armor lines: \$(grep -c 'FAST armor ccache: ' \$HOME/pk/exp.trace)\"" < <(chpw "$ALICE" "$ALICE_TEMP")
     checklast "PK.chpw.$k.tgt" "^Default principal: pkexp@$R\$"
     checklast "PK.chpw.$k.expired" '^Password expired$'
