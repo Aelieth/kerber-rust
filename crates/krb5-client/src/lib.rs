@@ -972,6 +972,9 @@ fn load_pkinit(
         (Ok(anchors), Ok(pool)) => (anchors, pool),
         (Err(text), _) | (_, Err(text)) => return fail(base + 24, text, true),
     };
+    if anchors.is_empty() {
+        return fail(base + 24, NO_TRUSTED_CA.into(), false);
+    }
     Ok(ClientPkinit::Ready(PkinitClient {
         cert: chosen.cert.clone(),
         key: chosen.key().clone(),
@@ -982,6 +985,10 @@ fn load_pkinit(
         eku_checking: opts.eku_checking,
     }))
 }
+
+/// MIT `create_krb5_trustedCertifiers` (`pkinit_crypto_openssl.c:5396-5397`): with no anchor loaded no request is made.
+/// MIT `pa_pkinit_gen_req` (`pkinit_clnt.c:136-142`): that comes before fallback is disabled, so the walk goes on.
+const NO_TRUSTED_CA: &str = "Preauthentication failed";
 
 /// MIT `load_cas_and_crls` (`plugins/preauth/pkinit/pkinit_crypto_openssl.c:5044-5053`): a file that does not open or read fails with `oerr`'s default code; one with no certificate loads none.
 fn ca_certs(values: &[String]) -> Result<Vec<Vec<u8>>, String> {
@@ -1321,7 +1328,15 @@ fn kinit_inner(
     // Live MIT 1.22.2 `kinit -X X509_anchors=… alice`: anchors
     // without an identity leave the password AS as it was.
     let pkinit = match (anchors.is_empty(), params.anonymous) {
-        (false, true) => ClientPkinit::Ready(load_pkinit_anchors(anchors, &pool, opts)?),
+        (false, true) => match load_pkinit_anchors(anchors, &pool, opts)? {
+            pk if pk.anchors.is_empty() => ClientPkinit::Failed(PkinitFailure {
+                code: krb5_protocol::trace::ERROR_TABLE_BASE_KRB5 + 24,
+                text: NO_TRUSTED_CA.into(),
+                no_identity: false,
+                prompted: false,
+            }),
+            pk => ClientPkinit::Ready(pk),
+        },
         (true, true) => return Err("anonymous PKINIT requires pkinit_anchors".into()),
         (_, false) => load_pkinit(&identities, anchors, &pool, &rules, opts)?,
     };

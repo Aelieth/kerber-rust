@@ -699,13 +699,31 @@ pub fn encode_party_u(cname: &crate::PrincipalName, realm: &str) -> Vec<u8> {
             &["WELLKNOWN", "ANONYMOUS"],
         );
     }
-    let parts: Vec<String> = cname
+    encode_principal(cname, realm)
+}
+
+/// RFC 8636 `partyVInfo`: the AS-REQ's server as sent, its sname and realm.
+/// MIT `pkinit_as_rep_parse` (`pkinit_clnt.c:617-618`): the client passes `request->server`.
+/// MIT `pkinit_server_return_padata` (`pkinit_srv.c:880-881`): and so does the KDC.
+#[must_use]
+pub fn encode_party_v(body: &crate::KdcReqBody) -> Option<Vec<u8>> {
+    let sname = body.sname.as_ref()?;
+    Some(encode_principal(
+        sname,
+        &String::from_utf8_lossy(body.realm.as_bytes()),
+    ))
+}
+
+/// `name` in `realm` as a KRB5PrincipalName.
+#[must_use]
+pub fn encode_principal(name: &crate::PrincipalName, realm: &str) -> Vec<u8> {
+    let parts: Vec<String> = name
         .name_string
         .iter()
         .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
         .collect();
     let prefs: Vec<&str> = parts.iter().map(String::as_str).collect();
-    encode_krb5_principal_name(realm, cname.name_type, &prefs)
+    encode_krb5_principal_name(realm, name.name_type, &prefs)
 }
 
 /// AuthPack nonce plus optional `clientPublicValue` (absent for unsigned-no-DH).

@@ -559,21 +559,20 @@ fn as_exchange_inner(
     if crate::clpreauth::loaded(req.profile, "pkinit")
         && (matches!(req.pkinit, Some(Pkinit::Client(_))) || req.ticket.anonymous)
     {
-        let (hint, refusal) =
-            match continue_pkinit(req, nonce, &bound, &etypes, &clock, defer_fast)? {
-                PkinitEnd::Done(out) => return Ok(*out),
-                PkinitEnd::Reply { rep, wire, traced } if !req.ticket.anonymous => {
-                    return finish_bare_reply(
-                        req, keys, unreadable, prompt, *rep, nonce, &etypes, &bound, &wire, traced,
-                    );
-                }
-                PkinitEnd::Reply { .. } => {
-                    return Err(Error::ReplyMismatch("PKINIT expected METHOD-DATA".into()));
-                }
-                PkinitEnd::Walk { hint, refusal } => (*hint, refusal.map(|r| *r)),
-            };
+        let hint = match continue_pkinit(req, nonce, &bound, &etypes, &clock, defer_fast)? {
+            PkinitEnd::Done(out) => return Ok(*out),
+            PkinitEnd::Reply { rep, wire, traced } if !req.ticket.anonymous => {
+                return finish_bare_reply(
+                    req, keys, unreadable, prompt, *rep, nonce, &etypes, &bound, &wire, traced,
+                );
+            }
+            PkinitEnd::Reply { .. } => {
+                return Err(Error::ReplyMismatch("PKINIT expected METHOD-DATA".into()));
+            }
+            PkinitEnd::Walk(hint) => *hint,
+        };
         if req.ticket.anonymous {
-            return Err(refusal.as_ref().map_or_else(preauth_failed, kdc_error));
+            return Err(preauth_failed());
         }
         let mut pw = PasswordCell::new(
             prompt,
@@ -581,7 +580,7 @@ fn as_exchange_inner(
             !keys.is_empty() || unreadable.is_some(),
         )
         .with_unreadable_keytab(unreadable);
-        return continue_from_hint(req, keys, nonce, &etypes, &hint, &clock, &mut pw, refusal);
+        return continue_from_hint(req, keys, nonce, &etypes, &hint, &clock, &mut pw);
     }
     if req.ticket.anonymous {
         return Err(preauth_failed());
@@ -645,7 +644,7 @@ fn as_exchange_inner(
                 !keys.is_empty() || unreadable.is_some(),
             )
             .with_unreadable_keytab(unreadable);
-            continue_from_hint(req, keys, nonce, &etypes, &e, &clock, &mut pw, None)
+            continue_from_hint(req, keys, nonce, &etypes, &e, &clock, &mut pw)
         }
         KdcMsg::Error(e) => classify_kdc_error(&e),
         KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
@@ -860,10 +859,6 @@ pub fn sort_krb5_padata_sequence(padata: &[PaData], preferred: &[i32]) -> Vec<Pa
     out
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the walk's state, as MIT's init_creds context holds it"
-)]
 fn continue_from_hint(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
@@ -872,7 +867,6 @@ fn continue_from_hint(
     err: &KrbError,
     clock: &Clock,
     pw: &mut PasswordCell<'_, '_>,
-    pk_refusal: Option<KrbError>,
 ) -> Result<AsOutcome, Error> {
     if req.want_spake {
         if !crate::clpreauth::loaded(req.profile, "spake") {
@@ -896,7 +890,7 @@ fn continue_from_hint(
     // MIT `spake_init` (`spake_client.c:62-73`): with no permitted group there is no SPAKE module.
     let groups = client_groups(req.profile);
     // MIT `k5_preauth_note_failed` (`lib/krb5/krb/preauth2.c:208-221`): the real types that failed in this authentication, which are not tried again.
-    let mut failed: Vec<i32> = pk_refusal.iter().map(|_| pa::PK_AS_REQ).collect();
+    let mut failed: Vec<i32> = Vec::new();
     if !crate::clpreauth::loaded(req.profile, "spake") {
         failed.push(pa::SPAKE);
     }
@@ -904,7 +898,7 @@ fn continue_from_hint(
     let mut first_failure: Option<Error> = None;
     // MIT `init_creds_step_request` (`lib/krb5/krb/get_in_tkt.c:1315-1317`): a `PREAUTH_FAILED` the KDC sent ends the mechanism that was answered, and its code is the error saved.
     // MIT `init_creds_step_request` (`lib/krb5/krb/get_in_tkt.c:1349-1352`): if the mechanisms after it fail too, the saved error is the one reported.
-    let mut refused: Option<KrbError> = pk_refusal;
+    let mut refused: Option<KrbError> = None;
     let mut prepared = false;
     let mut hint = err.clone();
     loop {
@@ -1348,8 +1342,10 @@ fn continue_pkinit(
     clock: &Clock,
     defer_fast: bool,
 ) -> Result<PkinitEnd, Error> {
-    let Some(Pkinit::Client(pk)) = req.pkinit else {
-        return Err(Error::ReplyMismatch("PKINIT identity missing".into()));
+    let pk = match req.pkinit {
+        Some(Pkinit::Client(pk)) => Some(pk),
+        Some(Pkinit::Failed(_)) if req.ticket.anonymous => None,
+        _ => return Err(Error::ReplyMismatch("PKINIT identity missing".into())),
     };
     // MIT get_in_tkt: empty 150 first, then copy the hint token into AuthPack.
     let first = build_as_req_from(req, nonce, bound, None, etypes)?;
@@ -1357,7 +1353,7 @@ fn continue_pkinit(
     trace::init_creds_preauth_none();
     let msg = send_as(req, &first_wire)?;
     upgrade_to_fast(&msg, defer_fast)?;
-    let (token, cookie, hint) = match msg {
+    let (token, cookie) = match msg {
         KdcMsg::Error(e)
             if e.error_code == err::PREAUTH_REQUIRED || e.error_code == err::PREAUTH_FAILED =>
         {
@@ -1366,10 +1362,7 @@ fn continue_pkinit(
             }
             let method = method_from_error(&e)?;
             if !method.iter().any(|p| p.padata_type == pa::PK_AS_REQ) {
-                return Ok(PkinitEnd::Walk {
-                    hint: Box::new(e),
-                    refusal: None,
-                });
+                return Ok(PkinitEnd::Walk(Box::new(e)));
             }
             if trace::enabled() {
                 trace::init_creds_preauth();
@@ -1386,7 +1379,7 @@ fn continue_pkinit(
                 .filter(|v| !v.is_empty())
                 .map(<[u8]>::to_vec);
             let cookie = find_pa(&method, pa::FX_COOKIE).cloned();
-            (token, cookie, e)
+            (token, cookie)
         }
         KdcMsg::Error(e) => return classify_kdc_error(&e).map(|o| PkinitEnd::Done(Box::new(o))),
         KdcMsg::AsRep(rep) => {
@@ -1397,6 +1390,14 @@ fn continue_pkinit(
             });
         }
         KdcMsg::TgsRep => return Err(Error::UnexpectedPdu),
+    };
+    // MIT `process_pa_data` (`preauth2.c:684-712`): anonymous has no mechanism after pkinit, so its
+    // failure before the request is the walk's first failure, and the error.
+    let Some(pk) = pk else {
+        let Some(Pkinit::Failed(f)) = req.pkinit else {
+            return Err(Error::ReplyMismatch("PKINIT identity missing".into()));
+        };
+        return Err(Error::PreauthFailed(Box::new(pkinit_fails(f).error)));
     };
     let mut dh_size = pk.dh_size();
     let mut nonce = nonce;
@@ -1498,13 +1499,10 @@ fn continue_pkinit(
                 )
                 .map(|o| PkinitEnd::Done(Box::new(o)));
             }
-            KdcMsg::Error(e) => match pkinit_refused(e, hint.clone(), &mut dh_size)? {
-                Refusal::End(end) => return Ok(end),
-                Refusal::Retry(retry) => {
-                    tryagain = Some(retry);
-                    nonce = random_nonce()?;
-                }
-            },
+            KdcMsg::Error(e) => {
+                tryagain = Some(pkinit_refused(&e, &mut dh_size)?);
+                nonce = random_nonce()?;
+            }
             KdcMsg::TgsRep => return Err(Error::UnexpectedPdu),
         }
     }
@@ -1534,10 +1532,7 @@ fn pkinit_padata(
 
 enum PkinitEnd {
     Done(Box<AsOutcome>),
-    Walk {
-        hint: Box<KrbError>,
-        refusal: Option<Box<KrbError>>,
-    },
+    Walk(Box<KrbError>),
     Reply {
         rep: Box<AsRep>,
         wire: Vec<u8>,
@@ -1545,41 +1540,23 @@ enum PkinitEnd {
     },
 }
 
-enum Refusal {
-    End(PkinitEnd),
-    Retry(Retry),
-}
-
 pub(crate) struct Retry(Option<PaData>);
 
 // MIT init_creds_step_reply; see docs/parity/b1-client-preauth.md
-fn pkinit_refused(e: KrbError, hint: KrbError, dh_size: &mut u32) -> Result<Refusal, Error> {
-    if !retried(&e)
-        || matches!(
-            e.error_code,
-            err::PREAUTH_REQUIRED | err::MORE_PREAUTH_DATA_REQUIRED
-        )
+// MIT `pa_pkinit_gen_req` (`pkinit_clnt.c:160-162`): handing out the PK-AS-REQ disables fallback.
+// MIT `init_creds_step_request` (`get_in_tkt.c:1315-1336`): then a PREAUTH_FAILED, or an error tryagain does not answer, ends the exchange.
+fn pkinit_refused(e: &KrbError, dh_size: &mut u32) -> Result<Retry, Error> {
+    let handled = matches!(
+        e.error_code,
+        err::PREAUTH_REQUIRED | err::MORE_PREAUTH_DATA_REQUIRED | err::PREAUTH_FAILED
+    );
+    if retried(e)
+        && !handled
+        && let Some(retry) = pkinit_tryagain(e, dh_size)
     {
-        return Err(kdc_error(&e));
+        return Ok(retry);
     }
-    if e.error_code == err::PREAUTH_FAILED {
-        let hint = if method_from_error(&e).is_ok_and(|m| !m.is_empty()) {
-            e.clone()
-        } else {
-            hint
-        };
-        return Ok(Refusal::End(PkinitEnd::Walk {
-            hint: Box::new(hint),
-            refusal: Some(Box::new(e)),
-        }));
-    }
-    if let Some(retry) = pkinit_tryagain(&e, dh_size) {
-        return Ok(Refusal::Retry(retry));
-    }
-    Ok(Refusal::End(PkinitEnd::Walk {
-        hint: Box::new(hint),
-        refusal: Some(Box::new(e)),
-    }))
+    Err(kdc_error(e))
 }
 
 // MIT pkinit_client_tryagain; see docs/parity/b1-client-preauth.md

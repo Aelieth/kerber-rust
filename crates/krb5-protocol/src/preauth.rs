@@ -871,11 +871,10 @@ pub fn pkinit_reply_key_agile(
         return Err(Error::ReplyMismatch("PKINIT unknown kdf".into()));
     }
     let party_u = krb5_types::pkinit::encode_party_u(client, realm);
-    let party_v = krb5_types::pkinit::encode_krb5_principal_name(
-        realm,
-        PrincipalName::NT_SRV_INST,
-        &["krbtgt", realm],
-    );
+    let party_v = decode::<AsReq>(as_req)
+        .ok()
+        .and_then(|r| krb5_types::pkinit::encode_party_v(&r.0.req_body))
+        .ok_or_else(|| Error::ReplyMismatch("PKINIT AS-REQ sname".into()))?;
     let supp = krb5_types::pkinit::encode_pkinit_supp_pub_info(
         etype.to_iana(),
         as_req,

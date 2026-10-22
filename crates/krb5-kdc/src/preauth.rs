@@ -530,9 +530,10 @@ pub(crate) fn process_pkinit(
     let kdc = store
         .pkinit()
         .ok_or_else(|| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
-    let req_cname = decode::<AsReq>(as_req_der)
-        .ok()
-        .and_then(|r| r.0.req_body.cname)
+    let req_body = decode::<AsReq>(as_req_der).ok().map(|r| r.0.req_body);
+    let req_cname = req_body
+        .as_ref()
+        .and_then(|b| b.cname.clone())
         .unwrap_or_else(|| cname.clone());
     let pack = krb5_types::pkinit::cms_signeddata_verify(
         &cms,
@@ -667,11 +668,10 @@ pub(crate) fn process_pkinit(
             detail = "rfc8636 sha256 kdf",
         );
         let party_u = krb5_types::pkinit::encode_party_u(&req_cname, realm);
-        let party_v = krb5_types::pkinit::encode_krb5_principal_name(
-            realm,
-            PrincipalName::NT_SRV_INST,
-            &["krbtgt", realm],
-        );
+        let party_v = req_body
+            .as_ref()
+            .and_then(krb5_types::pkinit::encode_party_v)
+            .ok_or_else(|| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
         let supp =
             krb5_types::pkinit::encode_pkinit_supp_pub_info(etype.to_iana(), as_req_der, &pa_bytes);
         let other = krb5_types::pkinit::encode_rfc8636_other_info(

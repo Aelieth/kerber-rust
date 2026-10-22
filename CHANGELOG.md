@@ -91,6 +91,7 @@ any other `###` heading.
 - **ci.** The budget workflow is gone. The six per-push walls live in `ci-budget.toml`.
 
 ### Fixed
+- **kdc/client.** RFC 8636's partyVInfo is the AS-REQ's server as sent, as MIT's is, not `krbtgt`: MIT's kpasswd could not decrypt our `kadmin/changepw` reply.
 
 - **client.** kinit's expired-password requests, `kadmin/changepw`'s and the final one, each make their FAST armor afresh, as MIT's contexts do; they reused the first one's.
 - **kdc.** A whole write of the database destroys the `.principal.tmp-*` files a killed one left, under the exclusive lock, as MIT's next load destroys its temporary database.
