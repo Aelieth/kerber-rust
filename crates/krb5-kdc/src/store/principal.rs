@@ -91,6 +91,7 @@ impl KadmData {
     }
 }
 
+/// Times are Unix seconds, 0 never; a 0 max_life sets no limit, a 0 renewable life no renewal.
 #[derive(Clone, Debug)]
 pub struct Principal {
     pub name: PrincipalName,
