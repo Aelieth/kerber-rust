@@ -14,7 +14,8 @@ use super::principal::{Principal, strip_db_args};
 use crate::error::Error;
 use crate::ulog::{Ulog, UlogBatch, UlogError, UlogLast, UlogUpdates};
 
-/// MIT `ulog_conv_2logentry` (`lib/kdb/kdb_convert.c:332-360`): a change is compared with the record the database holds before the put.
+// MIT: `ulog_conv_2logentry` (lib/kdb/kdb_convert.c:332-360)
+/// a change is compared with the record the database holds before the put.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PrincipalMap {
     map: HashMap<String, Principal>,
@@ -282,7 +283,8 @@ impl PrincipalStore {
     }
 
     /// Map the realm's update log at `path`, holding `entries` entries, in `role`: from now on this process logs (a primary) or keeps (a replica) updates there.
-    /// MIT `ulog_set_role` (`lib/kdb/kdb_log.c:651-658`): the role is recorded before the log is mapped.
+    // MIT: `ulog_set_role` (lib/kdb/kdb_log.c:651-658)
+    /// the role is recorded before the log is mapped.
     pub fn map_ulog(
         &mut self,
         path: &std::path::Path,
@@ -304,7 +306,8 @@ impl PrincipalStore {
         self.log.as_deref().map(|c| &c.ulog)
     }
 
-    /// MIT `logging` (`lib/kdb/kdb5.c:107-114`): the log is mapped and the role is the primary's.
+    // MIT: `logging` (lib/kdb/kdb5.c:107-114)
+    /// the log is mapped and the role is the primary's.
     #[must_use]
     pub fn logging(&self) -> bool {
         self.log
@@ -323,7 +326,8 @@ impl PrincipalStore {
     }
 
     /// MIT iprop `GET_UPDATES` for a replica that has applied `last`: the status and the updates it lacks, as the log holds them. A log that does not read, or none mapped, is `UPDATE_ERROR`.
-    /// MIT `iprop_get_updates_1_svc` (`kadmin/server/ipropd_svc.c:203-205`): the answer is `ulog_get_entries`'s.
+    // MIT: `iprop_get_updates_1_svc` (kadmin/server/ipropd_svc.c:203-205)
+    /// the answer is `ulog_get_entries`'s.
     #[must_use]
     pub fn ulog_get_entries(&self, last: UlogLast) -> UlogUpdates {
         let error = UlogUpdates {
@@ -338,10 +342,14 @@ impl PrincipalStore {
 
     /// Apply a replica's updates, each in turn deleting its principal or putting the replica's record with the update applied; an update that carries nothing changes nothing, and one not committed ends the batch there, as MIT's loop never moves past it. A replica that mapped its update log keeps each update there once the database holds it, and starts the log over when an update does not apply (one whose tagged data holds database arguments
     /// included, which db2 refuses), so its next request is a full resync.
-    /// MIT `ulog_replay` (`lib/kdb/kdb_log.c:423-454`): each update in turn deletes its principal or puts the replica's record with the update applied.
-    /// MIT `krb5int_put_principal_no_log` (`lib/kdb/kdb5.c:970-975`): database arguments in the tagged data are taken out, and db2 refuses any.
-    /// MIT `ulog_replay` (`lib/kdb/kdb_log.c:423-425`): an update not committed is skipped without moving to the next, so none after it applies.
-    /// MIT `ulog_replay` (`lib/kdb/kdb_log.c:474-476`): an update that fails resets the log.
+    // MIT: `ulog_replay` (lib/kdb/kdb_log.c:423-454)
+    /// each update in turn deletes its principal or puts the replica's record with the update applied.
+    // MIT: `krb5int_put_principal_no_log` (lib/kdb/kdb5.c:970-975)
+    /// database arguments in the tagged data are taken out, and db2 refuses any.
+    // MIT: `ulog_replay` (lib/kdb/kdb_log.c:423-425)
+    /// an update not committed is skipped without moving to the next, so none after it applies.
+    // MIT: `ulog_replay` (lib/kdb/kdb_log.c:474-476)
+    /// an update that fails resets the log.
     /// As [`conv_2dbentry`], for the update that fails, or [`Error::InvalidArgument`] for one that carries database arguments; the caller's change then reads the database back.
     pub fn apply_updates(&mut self, updates: &[IpropUpdate]) -> Result<(), Error> {
         self.inside_change()?;
@@ -408,15 +416,19 @@ impl PrincipalStore {
     }
 
     /// Record a policy change, which starts the update log over: iprop does not carry policies, so replicas take them with a full resync.
-    /// MIT `krb5_db_create_policy` (`lib/kdb/kdb5.c:2440-2457`): after a policy is created, a primary's log is reinitialized.
-    /// MIT `krb5_db_put_policy` (`lib/kdb/kdb5.c:2473-2490`): after a policy is changed, a primary's log is reinitialized.
-    /// MIT `krb5_db_delete_policy` (`lib/kdb/kdb5.c:2507-2524`): after a policy is deleted, a primary's log is reinitialized.
+    // MIT: `krb5_db_create_policy` (lib/kdb/kdb5.c:2440-2457)
+    /// after a policy is created, a primary's log is reinitialized.
+    // MIT: `krb5_db_put_policy` (lib/kdb/kdb5.c:2473-2490)
+    /// after a policy is changed, a primary's log is reinitialized.
+    // MIT: `krb5_db_delete_policy` (lib/kdb/kdb5.c:2507-2524)
+    /// after a policy is deleted, a primary's log is reinitialized.
     pub(super) fn note_ulog_reset(&self) {
         self.push_note(LogNote::Reset);
     }
 
     /// The changes noted so far, made ready for the log: a primary's puts encoded with their keys wrapped under the master key, before the database is written. A store that does not log drops its notes (a replica keeps its replays).
-    /// MIT `krb5_db_put_principal` (`lib/kdb/kdb5.c:987-999`): the update is converted before the put, and a conversion failure fails the put.
+    // MIT: `krb5_db_put_principal` (lib/kdb/kdb5.c:987-999)
+    /// the update is converted before the put, and a conversion failure fails the put.
     pub(super) fn ready_notes(&self) -> Result<Vec<Ready>, Error> {
         let notes: Vec<LogNote> = self
             .pending
@@ -480,8 +492,10 @@ impl PrincipalStore {
         Ok(ready)
     }
 
-    /// MIT `krb5_db_put_principal` (`lib/kdb/kdb5.c:1006-1007`): the update is logged after the put, and a logging failure is the put's error.
-    /// MIT `krb5_db_delete_principal` (`lib/kdb/kdb5.c:1037-1049`): a delete is logged after it is made, with no values.
+    // MIT: `krb5_db_put_principal` (lib/kdb/kdb5.c:1006-1007)
+    /// the update is logged after the put, and a logging failure is the put's error.
+    // MIT: `krb5_db_delete_principal` (lib/kdb/kdb5.c:1037-1049)
+    /// a delete is logged after it is made, with no values.
     fn append_notes(mut batch: UlogBatch<'_>, ready: Vec<Ready>) -> Result<(), UlogError> {
         for r in ready {
             match r {

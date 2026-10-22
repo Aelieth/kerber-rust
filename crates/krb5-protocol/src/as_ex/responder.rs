@@ -6,10 +6,12 @@ use zeroize::Zeroizing;
 
 use crate::error::Error;
 
-/// MIT `KRB5_RESPONDER_QUESTION_PASSWORD` (`include/krb5/krb5.hin:6502-6502`): the AS key. A module that needs the key asks it, and an answer to it is the password, read with no prompt.
+// MIT: `KRB5_RESPONDER_QUESTION_PASSWORD` (include/krb5/krb5.hin:6502-6502)
+/// the AS key. A module that needs the key asks it, and an answer to it is the password, read with no prompt.
 pub const QUESTION_PASSWORD: &str = "password";
 
-/// MIT `KRB5_RESPONDER_QUESTION_OTP` (`include/krb5/krb5.hin:6539-6539`): the OTP module's question.
+// MIT: `KRB5_RESPONDER_QUESTION_OTP` (include/krb5/krb5.hin:6539-6539)
+/// the OTP module's question.
 pub const QUESTION_OTP: &str = "otp";
 
 /// One question with its challenge and the application's answer; both are wiped on drop.
@@ -43,19 +45,22 @@ fn einval() -> Error {
 }
 
 impl ResponderItems {
-    /// MIT `k5_response_items_empty` (`lib/krb5/krb/response_items.c:77-81`): true for no items.
+    // MIT: `k5_response_items_empty` (lib/krb5/krb/response_items.c:77-81)
+    /// true for no items.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
     }
 
-    /// MIT `k5_response_items_list_questions` (`lib/krb5/krb/response_items.c:83-89`): the question names.
+    // MIT: `k5_response_items_list_questions` (lib/krb5/krb/response_items.c:83-89)
+    /// the question names.
     #[must_use]
     pub fn list_questions(&self) -> Vec<&str> {
         self.items.iter().map(|i| i.question.as_str()).collect()
     }
 
-    /// MIT `k5_response_items_get_challenge` (`lib/krb5/krb/response_items.c:178-189`): `None` for a question not asked or asked with no challenge.
+    // MIT: `k5_response_items_get_challenge` (lib/krb5/krb/response_items.c:178-189)
+    /// `None` for a question not asked or asked with no challenge.
     #[must_use]
     pub fn get_challenge(&self, question: &str) -> Option<&[u8]> {
         self.items
@@ -66,7 +71,8 @@ impl ResponderItems {
     }
 
     /// Set the answer of `question`; `None` clears it.
-    /// MIT `k5_response_items_set_answer` (`lib/krb5/krb/response_items.c:191-211`): `EINVAL` for a question not asked.
+    // MIT: `k5_response_items_set_answer` (lib/krb5/krb/response_items.c:191-211)
+    /// `EINVAL` for a question not asked.
     pub fn set_answer(&mut self, question: &str, answer: Option<&str>) -> Result<(), Error> {
         let item = self
             .items
@@ -78,7 +84,8 @@ impl ResponderItems {
     }
 
     /// Ask `question`, replacing the challenge of one asked before. The question keeps its place.
-    /// MIT `k5_response_items_ask_question` (`lib/krb5/krb/response_items.c:156-176`): a question asked again takes the new challenge in place.
+    // MIT: `k5_response_items_ask_question` (lib/krb5/krb/response_items.c:156-176)
+    /// a question asked again takes the new challenge in place.
     pub(crate) fn ask_question(&mut self, question: &str, challenge: Option<&[u8]>) {
         let challenge = challenge.map(|c| Zeroizing::new(c.to_vec()));
         if let Some(item) = self.items.iter_mut().find(|i| i.question == question) {
@@ -93,7 +100,8 @@ impl ResponderItems {
     }
 
     /// The answer to `question`, as a module reads it.
-    /// MIT `k5_response_items_get_answer` (`lib/krb5/krb/response_items.c:213-224`): `None` for a question not asked or not answered.
+    // MIT: `k5_response_items_get_answer` (lib/krb5/krb/response_items.c:213-224)
+    /// `None` for a question not asked or not answered.
     pub(crate) fn get_answer(&self, question: &str) -> Option<&str> {
         self.items
             .iter()

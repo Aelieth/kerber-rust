@@ -6,9 +6,11 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// MIT `STALE_TIME` (`kdc/replay.c:59-59`): two minutes.
+// MIT: `STALE_TIME` (kdc/replay.c:59-59)
+/// two minutes.
 pub(crate) const STALE_TIME: Duration = Duration::from_secs(120);
-/// MIT `LOOKASIDE_MAX_SIZE` (`kdc/replay.c:44-44`): 10 MiB.
+// MIT: `LOOKASIDE_MAX_SIZE` (kdc/replay.c:44-44)
+/// 10 MiB.
 pub(crate) const MAX_SIZE: usize = 10 * 1024 * 1024;
 /// Rough per-entry overhead, standing in for MIT's `sizeof(struct entry)`.
 const ENTRY_OVERHEAD: usize = 64;
@@ -87,7 +89,8 @@ impl Lookaside {
     }
 
     /// MIT `finish_dispatch_cache`: drop the in-progress marker and cache the produced reply. A reply of `None` (a drop, or an internal error) caches nothing, like MIT removing the marker without inserting a response.
-    /// MIT `finish_dispatch_cache` (`dispatch.c:78-83`): the marker is removed whole, then a reply is inserted as a new entry at the queue's tail.
+    // MIT: `finish_dispatch_cache` (dispatch.c:78-83)
+    /// the marker is removed whole, then a reply is inserted as a new entry at the queue's tail.
     pub fn finish(&mut self, req: &[u8], reply: Option<&[u8]>) {
         let key = self.discard(req);
         if let Some(bytes) = reply
@@ -98,7 +101,8 @@ impl Lookaside {
     }
 
     /// Remove `req`'s entry from the map and empty its queue slot, returning the request's bytes for reuse.
-    /// MIT `discard_entry` (`kdc/replay.c:118-125`): an entry leaves the hash table and the expiration queue together, and its bytes go with it.
+    // MIT: `discard_entry` (kdc/replay.c:118-125)
+    /// an entry leaves the hash table and the expiration queue together, and its bytes go with it.
     fn discard(&mut self, req: &[u8]) -> Option<Arc<[u8]>> {
         let (key, e) = self.map.remove_entry(req)?;
         self.total -= e.size;

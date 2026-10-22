@@ -73,7 +73,8 @@ impl Kadmind {
 }
 
 impl Dispatch for Kadmind {
-    /// MIT `dispatch` (`kadmin/server/schpw.c:420-436`): the request goes through `process_chpw_request`, and a failure is handed to the loop with no response.
+    // MIT: `dispatch` (kadmin/server/schpw.c:420-436)
+    /// the request goes through `process_chpw_request`, and a failure is handed to the loop with no response.
     fn dispatch(
         &mut self,
         local: SocketAddr,
@@ -120,7 +121,8 @@ impl Dispatch for Kadmind {
         kpasswd_toolong_error(&self.realm()).map_err(|e| e.to_string())
     }
 
-    /// MIT `krb5_db2_get_principal` (`plugins/kdb/db2/kdb_db2.c:769-773`): the KDB keytab's lookup takes the shared lock, and fails when it cannot.
+    // MIT: `krb5_db2_get_principal` (plugins/kdb/db2/kdb_db2.c:769-773)
+    /// the KDB keytab's lookup takes the shared lock, and fails when it cannot.
     fn rpc_session(
         &mut self,
         remote: SocketAddr,

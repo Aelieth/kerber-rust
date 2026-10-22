@@ -1,5 +1,6 @@
 //! FAST reply nonce.
-//! MIT `decrypt_fast_reply` (`fast.c:397-402`): a FAST response nonce that differs from the
+// MIT: `decrypt_fast_reply` (fast.c:397-402)
+//! a FAST response nonce that differs from the
 //! request nonce is `KRB5_KDCREP_MODIFIED`.
 //! Unit-only: no MIT tool emits a flipped FAST nonce.
 
@@ -517,7 +518,8 @@ fn rewrite_outer_cname(reply: Vec<u8>) -> Vec<u8> {
     encode(&rep).unwrap()
 }
 
-/// MIT `krb5int_fast_process_response` (`fast.c:548-551`): after the finished checksum verifies,
+// MIT: `krb5int_fast_process_response` (fast.c:548-551)
+/// after the finished checksum verifies,
 /// `resp->client` is the finished client; the outer cname is never compared or returned. With
 /// CANONICALIZE the outer name would otherwise be accepted as the canonical name.
 #[test]
@@ -535,7 +537,8 @@ fn fast_as_rep_client_is_the_finished_client_under_canonicalize() {
 
 /// Without CANONICALIZE the client compare runs on the replaced (finished) client, which is the
 /// requested one — the rewritten outer name is not a mismatch.
-/// MIT `verify_as_reply` (`get_in_tkt.c:239-239`): without CANONICALIZE the reply client is
+// MIT: `verify_as_reply` (get_in_tkt.c:239-239)
+/// without CANONICALIZE the reply client is
 /// compared with the requested client.
 #[test]
 fn fast_as_rep_outer_cname_is_ignored_without_canonicalize() {
@@ -578,11 +581,13 @@ fn fast_as_rep_finished_cname_mismatch_is_kdcrep_modified() {
     );
 }
 
-/// MIT `krb5int_fast_process_error` (`fast.c:445-458`): under an armor key, an error whose
+// MIT: `krb5int_fast_process_error` (fast.c:445-458)
+/// under an armor key, an error whose
 /// e_data carries no PA-FX-FAST is "the fatal error indicated by the KDC" with `retry = 0`;
 /// nothing outer is trusted — not the plaintext ETYPE-INFO2, not an outer FX-COOKIE — and no
 /// second AS-REQ is sent.
-/// MIT `init_creds_step_reply` (`get_in_tkt.c:1721-1724`): continues only on
+// MIT: `init_creds_step_reply` (get_in_tkt.c:1721-1724)
+/// continues only on
 /// `PREAUTH_REQUIRED && retry`.
 #[test]
 fn fast_error_without_fx_fast_is_the_fatal_outer_error() {
@@ -661,7 +666,8 @@ fn fast_error_with_a_corrupt_fx_fast_is_the_fatal_outer_error() {
     assert_eq!(count.load(Ordering::SeqCst), 1, "no second AS-REQ");
 }
 
-/// MIT `krb5int_fast_process_error` (`fast.c:462-469`): a FAST response that unwraps but carries
+// MIT: `krb5int_fast_process_error` (fast.c:462-469)
+/// a FAST response that unwraps but carries
 /// no FX-ERROR is `KRB5KDC_ERR_PREAUTH_FAILED` "Expecting FX_ERROR pa-data inside FAST
 /// container" — an error, not a synthesized retry.
 #[test]
@@ -699,12 +705,14 @@ fn fast_error_without_inner_fx_error_is_preauth_failed() {
     assert_eq!(count.load(Ordering::SeqCst), 1, "no second AS-REQ");
 }
 
-/// MIT `krb5int_process_tgs_reply` (`gc_via_tkt.c:190-194`): the TGS path runs
+// MIT: `krb5int_process_tgs_reply` (gc_via_tkt.c:190-194)
+/// the TGS path runs
 /// `krb5int_fast_process_error` too — the authenticated FX-ERROR inside the FAST envelope is the
 /// error the client reports; the outer code and e_text are unauthenticated. A man in the middle
 /// turns the outer 7 into a 60 "mitm" and leaves the envelope: the client still sees
 /// `S_PRINCIPAL_UNKNOWN`.
-/// MIT `krb5int_fast_process_error` (`fast.c:445-458`): with the envelope stripped the outer
+// MIT: `krb5int_fast_process_error` (fast.c:445-458)
+/// with the envelope stripped the outer
 /// error stands.
 #[test]
 fn fast_tgs_error_is_the_inner_fx_error() {
@@ -815,8 +823,10 @@ fn realm_with_des3_user() -> (PrincipalStore, PrincipalName, ProtocolKey) {
 
 /// Under FAST armor the encrypted-timestamp module meets a keytab key of bad parity as it does without armor: its encryption fails with
 /// the key's code, the module fails, and with no other mechanism the exchange ends "Pre-authentication failed: <the key's message>".
-/// MIT `encts_process` (`lib/krb5/krb/preauth_encts.c:87-97`): `krb5_encrypt_helper` fails with `KRB5DES_BAD_KEYPAR`, the module's failure.
-/// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:716-723`): with no real mechanism answered, the first failure is wrapped as "Pre-authentication failed: <message>"; armor does not change it.
+// MIT: `encts_process` (lib/krb5/krb/preauth_encts.c:87-97)
+/// `krb5_encrypt_helper` fails with `KRB5DES_BAD_KEYPAR`, the module's failure.
+// MIT: `process_pa_data` (lib/krb5/krb/preauth2.c:716-723)
+/// with no real mechanism answered, the first failure is wrapped as "Pre-authentication failed: <message>"; armor does not change it.
 #[test]
 fn a_keytab_key_of_bad_parity_fails_the_encrypted_timestamp_module_under_armor() {
     isolate_host_krb5();

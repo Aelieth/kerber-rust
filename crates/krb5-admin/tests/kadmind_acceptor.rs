@@ -1,5 +1,6 @@
 //! kadmind's :749 acceptor reads its key from the database as MIT's GSS acceptor does: with `GSS_C_NO_NAME` (RPCSEC_GSS) the first permitted key at the ticket's kvno of the server the ticket names, and with AUTH_GSSAPI's two names (`kadmin/admin`, then `kadmin/changepw`) the same for each, the next tried only for a ticket that is not for the first. Every case goes through the daemon's loop over a socket, so it is the public path an operator's `kadmin` takes.
-//! MIT `setup_kdb_keytab` (`kadmin/server/ovsec_kadmd.c:178-190`): the GSS acceptor reads the `KDB:` keytab.
+// MIT: `setup_kdb_keytab` (kadmin/server/ovsec_kadmd.c:178-190)
+//! the GSS acceptor reads the `KDB:` keytab.
 
 use std::io::{Read as _, Write as _};
 use std::net::{SocketAddr, TcpListener, TcpStream};

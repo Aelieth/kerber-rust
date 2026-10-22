@@ -42,8 +42,10 @@ pub enum KeyLookup {
     NoPermittedKey,
 }
 
-/// MIT `krb5_ktkdb_get_entry` (`lib/kdb/keytab.c:117-185`): the code it returns.
-/// MIT `keytab_fetch_error` (`lib/krb5/krb/rd_req_dec.c:118-148`): takes `KRB5_KT_NOTFOUND` and `KRB5_KT_KVNONOTFOUND` as codes of their own and passes any other on.
+// MIT: `krb5_ktkdb_get_entry` (lib/kdb/keytab.c:117-185)
+/// the code it returns.
+// MIT: `keytab_fetch_error` (lib/krb5/krb/rd_req_dec.c:118-148)
+/// takes `KRB5_KT_NOTFOUND` and `KRB5_KT_KVNONOTFOUND` as codes of their own and passes any other on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KtkdbError {
     /// `KRB5_KT_NOTFOUND`: no such principal, or one that may not be a service (`KRB5_KDB_DISALLOW_SVR`, `KRB5_KDB_DISALLOW_ALL_TIX`).
@@ -68,7 +70,8 @@ impl From<KtkdbError> for krb5_protocol::KeytabLookup {
 }
 
 /// The key the KDB keytab gives for a ticket's kvno and enctype.
-/// MIT `is_xrealm_tgt` (`lib/kdb/keytab.c:200-220`): `krbtgt` (a prefix of the word does) and a second component that is not the realm.
+// MIT: `is_xrealm_tgt` (lib/kdb/keytab.c:200-220)
+/// `krbtgt` (a prefix of the word does) and a second component that is not the realm.
 pub fn ktkdb_get_entry<'p>(
     principal: Option<&'p Principal>,
     name: &PrincipalName,
@@ -114,8 +117,10 @@ fn is_xrealm_tgt(name: &PrincipalName, realm: &str) -> bool {
     b"krbtgt".starts_with(c0.as_bytes()) && c1.as_bytes() != realm.as_bytes()
 }
 
-/// MIT `krb5_c_enctype_compare` (`lib/crypto/krb/enctype_util.c:73-86`): two enctypes are similar when they share an encryption method and a string-to-key.
-/// MIT `krb5int_enctypes_list` (`lib/crypto/krb/etypes.c:38-145`): des3-cbc-raw and des3-cbc-sha1 are alike, so are arcfour-hmac and its export form; each AES and Camellia enctype stands alone.
+// MIT: `krb5_c_enctype_compare` (lib/crypto/krb/enctype_util.c:73-86)
+/// two enctypes are similar when they share an encryption method and a string-to-key.
+// MIT: `krb5int_enctypes_list` (lib/crypto/krb/etypes.c:38-145)
+/// des3-cbc-raw and des3-cbc-sha1 are alike, so are arcfour-hmac and its export form; each AES and Camellia enctype stands alone.
 fn enctype_class(etype: i32) -> Option<u8> {
     match etype {
         6 | 16 => Some(1),
@@ -153,7 +158,8 @@ pub(super) fn cap_key_versions(keys: &mut Vec<KeyEntry>, n: u32) {
 }
 
 /// A random protocol key of `etype`: every key this KDC draws, a principal's `-randkey` and `ktadd` keys, the krbtgt, history and master keys and the session and sub keys of its replies.
-/// MIT `krb5_c_make_random_key` (`lib/crypto/krb/make_random_key.c:31-76`): `keybytes` random octets through the enctype's random-to-key, so a des3 key is 21 octets spread over 24 with odd parity on each (`k5_rand2key_des3`, `k5_des_fixup_key_parity`), and every other enctype takes its random octets as the key.
+// MIT: `krb5_c_make_random_key` (lib/crypto/krb/make_random_key.c:31-76)
+/// `keybytes` random octets through the enctype's random-to-key, so a des3 key is 21 octets spread over 24 with odd parity on each (`k5_rand2key_des3`, `k5_des_fixup_key_parity`), and every other enctype takes its random octets as the key.
 pub fn random_key(etype: EncryptionType) -> Result<ProtocolKey, Error> {
     ProtocolKey::random(etype).map_err(|e| match e {
         krb5_crypto::Error::Rng => Error::Rng,
@@ -162,7 +168,8 @@ pub fn random_key(etype: EncryptionType) -> Result<ProtocolKey, Error> {
 }
 
 /// The key types a new key set takes when kdc.conf names no `supported_enctypes`.
-/// MIT `KRB5_DEFAULT_SUPPORTED_ENCTYPES` (`include/osconf.hin:109-111`): aes256-cts-hmac-sha1-96 and aes128-cts-hmac-sha1-96, normal salt.
+// MIT: `KRB5_DEFAULT_SUPPORTED_ENCTYPES` (include/osconf.hin:109-111)
+/// aes256-cts-hmac-sha1-96 and aes128-cts-hmac-sha1-96, normal salt.
 pub(super) fn default_supported_enctypes() -> [EncryptionType; 2] {
     [
         EncryptionType::Aes256CtsHmacSha196,
@@ -279,7 +286,8 @@ impl PrincipalStore {
     }
 
     /// [`Self::chrand_etypes_keepold`] for `name@princ_realm`.
-    /// MIT `kadm5_randkey_principal_3` (`svr_principal.c:1425-1425`): an omitted `-e` reaches `apply_keysalt_policy` as zero keysalts, so the policy or realm default applies.
+    // MIT: `kadm5_randkey_principal_3` (svr_principal.c:1425-1425)
+    /// an omitted `-e` reaches `apply_keysalt_policy` as zero keysalts, so the policy or realm default applies.
     pub fn chrand_etypes_keepold_in(
         &mut self,
         name: &PrincipalName,
@@ -327,7 +335,8 @@ impl PrincipalStore {
                     cap_key_versions(&mut p.keys, keepold);
                 }
             }
-            // MIT `kadm5_randkey_principal_3` (`lib/kadm5/srv/svr_principal.c:1452-1475`): new keys clear REQUIRES_PWCHANGE and unlock the principal on this KDC.
+            // MIT: `kadm5_randkey_principal_3` (lib/kadm5/srv/svr_principal.c:1452-1475)
+            // new keys clear REQUIRES_PWCHANGE and unlock the principal on this KDC.
             p.attributes &= !KDB_REQUIRES_PWCHANGE;
             p.fail_auth_count = 0;
             stamp_admin_tl(p, true, actor);

@@ -16,26 +16,32 @@ use zeroize::Zeroizing;
 use crate::daemon::Signals;
 use crate::listen::{WHILE_DISPATCHING_TCP, WHILE_DISPATCHING_UDP, recv_from_to, send_udp_reply};
 
-/// MIT `max_stream_data_connections` (`lib/apputils/net-server.c:85-85`): at most 45 stream connections.
+// MIT: `max_stream_data_connections` (lib/apputils/net-server.c:85-85)
+/// at most 45 stream connections.
 pub const MAX_STREAM_DATA_CONNECTIONS: usize = 45;
-/// MIT `accept_stream_connection` (`lib/apputils/net-server.c:1278-1278`): a stream's buffer is 1 MiB, its length word included.
+// MIT: `accept_stream_connection` (lib/apputils/net-server.c:1278-1278)
+/// a stream's buffer is 1 MiB, its length word included.
 pub(crate) const BUFSIZ: usize = 1024 * 1024;
 /// The longest request a stream takes: the 1 MiB buffer less its length word.
 pub const MAX_REQUEST: usize = BUFSIZ - 4;
-/// MIT `MAX_DGRAM_SIZE` (`include/osconf.hin:113-113`): a datagram is read into 64 KiB.
+// MIT: `MAX_DGRAM_SIZE` (include/osconf.hin:113-113)
+/// a datagram is read into 64 KiB.
 const MAX_DGRAM_SIZE: usize = 65_536;
 /// The most one read takes. It is not a second cap: a request is read in pieces of at most this size into a buffer the size of its length, so only the pages that receive bytes are touched.
 pub(crate) const READ_SIZE: usize = 64 * 1024;
-/// MIT `setnolinger` (`lib/apputils/net-server.c:687-691`): an accepted stream does not linger.
+// MIT: `setnolinger` (lib/apputils/net-server.c:687-691)
+/// an accepted stream does not linger.
 const NO_LINGER: nix::libc::linger = nix::libc::linger {
     l_onoff: 0,
     l_linger: 0,
 };
-/// MIT `wait_per_try` (`lib/rpc/svc_tcp.c:344-344`): each read of an RPC record waits at most 35 s.
+// MIT: `wait_per_try` (lib/rpc/svc_tcp.c:344-344)
+/// each read of an RPC record waits at most 35 s.
 pub(crate) const RPC_READ_WAIT: Duration = Duration::from_secs(35);
 /// The longest RPC record taken: its fragments and their marks together.
 pub const MAX_RPC_RECORD: usize = 1024 * 1024;
-/// MIT `LAST_FRAG` (`lib/rpc/xdr_rec.c:94-94`): the record mark's top bit ends a record.
+// MIT: `LAST_FRAG` (lib/rpc/xdr_rec.c:94-94)
+/// the record mark's top bit ends a record.
 const LAST_FRAG: u32 = 0x8000_0000;
 const ACCEPT_FAILURE_PAUSE: Duration = Duration::from_millis(20);
 
@@ -66,7 +72,8 @@ pub enum Reply {
 }
 
 /// What a daemon supplies to the loop.
-/// MIT `dispatch` (`include/net-server.h:84-86`): one request in and, through the respond callback, one reply out.
+// MIT: `dispatch` (include/net-server.h:84-86)
+/// one request in and, through the respond callback, one reply out.
 pub trait Dispatch {
     fn dispatch(
         &mut self,
@@ -79,10 +86,12 @@ pub trait Dispatch {
 
     fn make_toolong_error(&mut self) -> Result<Vec<u8>, String>;
 
-    /// MIT `do_reset` (`lib/apputils/net-server.c:246-253`): the daemon's reset function, when it gave one.
+    // MIT: `do_reset` (lib/apputils/net-server.c:246-253)
+    /// the daemon's reset function, when it gave one.
     fn reset(&mut self) {}
 
-    /// MIT `rendezvous_request` (`lib/rpc/svc_tcp.c:296-307`): the RPC library makes each accepted connection a transport of its own, which keeps both addresses.
+    // MIT: `rendezvous_request` (lib/rpc/svc_tcp.c:296-307)
+    /// the RPC library makes each accepted connection a transport of its own, which keeps both addresses.
     fn rpc_session(
         &mut self,
         remote: SocketAddr,
@@ -136,7 +145,8 @@ pub(crate) enum ConnType {
 }
 
 impl ConnType {
-    /// MIT `conn_type_names` (`lib/apputils/net-server.c:120-128`): a TCP stream is `TCP` in the log, an RPC connection `RPC`.
+    // MIT: `conn_type_names` (lib/apputils/net-server.c:120-128)
+    /// a TCP stream is `TCP` in the log, an RPC connection `RPC`.
     fn name(self) -> &'static str {
         match self {
             Self::Tcp => "TCP",
@@ -264,7 +274,8 @@ impl<S: Stream> Streams<S> {
     }
 
     /// Take a new RPC connection printed as `addrbuf`, answered by `session`, as [`Self::add`] takes a TCP one.
-    /// MIT `accept_rpc_connection` (`lib/apputils/net-server.c:1560-1572`): the peer is printed, `start_time` is the current second, and one past the cap evicts.
+    // MIT: `accept_rpc_connection` (lib/apputils/net-server.c:1560-1572)
+    /// the peer is printed, `start_time` is the current second, and one past the cap evicts.
     pub(crate) fn add_rpc(
         &mut self,
         stream: S,
@@ -300,7 +311,8 @@ impl<S: Stream> Streams<S> {
         id
     }
 
-    /// MIT `kill_lru_stream_connection` (`lib/apputils/net-server.c:1198-1223`): "too many connections", a scan from the last entry down with a strict `>`, then "dropping %s fd %d from %s".
+    // MIT: `kill_lru_stream_connection` (lib/apputils/net-server.c:1198-1223)
+    /// "too many connections", a scan from the last entry down with a strict `>`, then "dropping %s fd %d from %s".
     fn kill_lru(&mut self, newest: u64, log: &mut dyn Log) {
         log.syslog(Severity::Info, "too many connections");
         let mut oldest: Option<usize> = None;
@@ -322,14 +334,16 @@ impl<S: Stream> Streams<S> {
         }
     }
 
-    /// MIT `free_socket` (`lib/apputils/net-server.c:511-519`): the event leaves the set, "closing down fd %d" is logged, and the descriptor is closed.
+    // MIT: `free_socket` (lib/apputils/net-server.c:511-519)
+    /// the event leaves the set, "closing down fd %d" is logged, and the descriptor is closed.
     fn free_socket(&mut self, i: usize, log: &mut dyn Log) {
         let conn = self.conns.swap_remove(i);
         log.syslog(Severity::Info, &format!("closing down fd {}", conn.fd));
     }
 
     /// The descriptors still open, the newest event first: the order the loop frees its events in when it ends, each with "closing down fd".
-    /// MIT `verto_free` (`util/verto/verto.c:593-595`): every event left is deleted, the newest first.
+    // MIT: `verto_free` (util/verto/verto.c:593-595)
+    /// every event left is deleted, the newest first.
     pub(crate) fn open_fds(&self) -> Vec<RawFd> {
         let mut open: Vec<(u64, RawFd)> = self.conns.iter().map(|c| (c.event, c.fd)).collect();
         open.sort_unstable_by_key(|c| std::cmp::Reverse(c.0));
@@ -337,7 +351,8 @@ impl<S: Stream> Streams<S> {
     }
 
     /// One readable event on connection `id`: on a TCP stream one read of the length word or of the body, a complete request dispatched to `app`, whose reply the connection then writes; on an RPC connection one record, answered by its session.
-    /// MIT `process_stream_connection_read` (`lib/apputils/net-server.c:1375-1453`): a read error or end of file closes the stream, a length past the buffer is logged and answered with `make_toolong_error`, and exactly one complete message is dispatched.
+    // MIT: `process_stream_connection_read` (lib/apputils/net-server.c:1375-1453)
+    /// a read error or end of file closes the stream, a length past the buffer is logged and answered with `make_toolong_error`, and exactly one complete message is dispatched.
     /// Deviations: a read that would block, or that a signal cut short, waits for the next event (MIT's handler runs only when the socket is readable, where neither happens); and when `getsockname` fails the stream closes as MIT's code means to, where MIT's goes on to use the event it has just freed.
     pub(crate) fn readable(&mut self, id: u64, app: &mut dyn Dispatch, log: &mut dyn Log) {
         let Some(i) = self.position(id) else {
@@ -436,8 +451,10 @@ impl<S: Stream> Streams<S> {
         Step::Respond(dispatch_contained(app, local, remote, &request, true, log))
     }
 
-    /// MIT `process_rpc_connection` (`lib/apputils/net-server.c:1577-1587`): the RPC library serves the woken descriptor, and one whose transport it destroyed leaves the loop.
-    /// MIT `svc_do_xprt` (`lib/rpc/svc.c:469-531`): the record is received and dispatched, and a transport that died is destroyed.
+    // MIT: `process_rpc_connection` (lib/apputils/net-server.c:1577-1587)
+    /// the RPC library serves the woken descriptor, and one whose transport it destroyed leaves the loop.
+    // MIT: `svc_do_xprt` (lib/rpc/svc.c:469-531)
+    /// the record is received and dispatched, and a transport that died is destroyed.
     /// Deviation: a call that panics closes its connection, and the loop goes on; MIT's daemon would end with the process.
     fn rpc_step(&mut self, i: usize) -> Step {
         let conn = &mut self.conns[i];
@@ -466,8 +483,10 @@ impl<S: Stream> Streams<S> {
         }
     }
 
-    /// MIT `process_stream_response` (`lib/apputils/net-server.c:1314-1336`): a nonzero code is logged "while dispatching (tcp)"; it or no response closes the stream without "closing down fd", and a response is queued behind its length.
-    /// MIT `prepare_for_dispatch` (`lib/apputils/net-server.c:1350-1355`): the read event leaves the set before the dispatch, so the write event is added at its end.
+    // MIT: `process_stream_response` (lib/apputils/net-server.c:1314-1336)
+    /// a nonzero code is logged "while dispatching (tcp)"; it or no response closes the stream without "closing down fd", and a response is queued behind its length.
+    // MIT: `prepare_for_dispatch` (lib/apputils/net-server.c:1350-1355)
+    /// the read event leaves the set before the dispatch, so the write event is added at its end.
     fn respond(&mut self, i: usize, reply: Reply, log: &mut dyn Log) {
         let mut conn = self.conns.swap_remove(i);
         match reply {
@@ -488,7 +507,8 @@ impl<S: Stream> Streams<S> {
     }
 
     /// One writable event on connection `id`: as much of the length word and reply as the socket takes; once all of it is sent, or the write fails, the connection closes.
-    /// MIT `process_stream_connection_write` (`lib/apputils/net-server.c:1467-1494`): one `writev` per event with the unsent parts; when nothing is left, or nothing was written, the stream closes.
+    // MIT: `process_stream_connection_write` (lib/apputils/net-server.c:1467-1494)
+    /// one `writev` per event with the unsent parts; when nothing is left, or nothing was written, the stream closes.
     /// Deviation: a write that would block, or that a signal cut short, waits for the next event (MIT's handler runs only when the socket is writable, where neither happens).
     pub(crate) fn writable(&mut self, id: u64, log: &mut dyn Log) {
         let Some(i) = self.position(id) else {
@@ -585,7 +605,8 @@ impl Streams<TcpStream> {
         Ok(())
     }
 
-    /// MIT `makefd_xprt` (`lib/rpc/svc_tcp.c:231-236`): a descriptor at `FD_SETSIZE` or past it prints "svc_tcp: makefd_xprt: fd too high" on standard error and is closed.
+    // MIT: `makefd_xprt` (lib/rpc/svc_tcp.c:231-236)
+    /// a descriptor at `FD_SETSIZE` or past it prints "svc_tcp: makefd_xprt: fd too high" on standard error and is closed.
     fn admit_rpc(
         &mut self,
         stream: TcpStream,
@@ -624,7 +645,8 @@ fn passing_accept_failure(e: &io::Error) -> bool {
     )
 }
 
-/// MIT `readtcp` (`lib/rpc/svc_tcp.c:352-392`): `select` waits up to 35 s, again after an interruption, then one `read`; a wait that runs out, a failed read and end of file are fatal for the connection.
+// MIT: `readtcp` (lib/rpc/svc_tcp.c:352-392)
+/// `select` waits up to 35 s, again after an interruption, then one `read`; a wait that runs out, a failed read and end of file are fatal for the connection.
 fn readtcp<S: Stream>(stream: &mut S, buf: &mut [u8]) -> io::Result<usize> {
     loop {
         match stream.wait_readable(RPC_READ_WAIT) {
@@ -653,7 +675,8 @@ fn read_rpc_record<S: Stream>(stream: &mut S) -> io::Result<Zeroizing<Vec<u8>>> 
 }
 
 /// One RPC record, read with `read_exact`: each fragment behind its four-byte mark, until the one whose mark has the top bit, appended into one buffer that is wiped when dropped and leaves no copy behind as it grows.
-/// MIT `xdrrec_getbytes` (`lib/rpc/xdr_rec.c:245-266`): a record is read fragment by fragment, the next mark read once a fragment is used up, until the last fragment ends.
+// MIT: `xdrrec_getbytes` (lib/rpc/xdr_rec.c:245-266)
+/// a record is read fragment by fragment, the next mark read once a fragment is used up, until the last fragment ends.
 /// Deviation: MIT's RPC library reads a record of any length as its call decodes it, with no buffer for the record; here a record whose marks and bytes pass 1 MiB in all ends before the fragment that crosses is read, so a client chaining fragments, empty ones included, cannot exhaust memory or hold the reader past 1 MiB of input.
 pub fn read_rpc_record_with<F>(mut read_exact: F) -> io::Result<Zeroizing<Vec<u8>>>
 where
@@ -694,10 +717,14 @@ fn reserve_wiped(buf: &mut Zeroizing<Vec<u8>>, more: usize) {
 }
 
 /// One reply record: its mark (the length with the top bit) and the body in one buffer, written whole before the loop goes on; the buffer is wiped once written.
-/// MIT `writetcp` (`lib/rpc/svc_tcp.c:399-414`): blocking writes until the whole of it is written; a failed write is fatal for the connection.
-/// MIT `flush_out` (`lib/rpc/xdr_rec.c:475-489`): the mark is set ahead of the body in xdrrec's buffer, and the buffer goes out in one write. Deviation: MIT's buffer is 4000 bytes, so a longer reply leaves as several fragments; here it is one fragment whatever its length.
-/// MIT `writetcp` (`lib/rpc/svc_tcp.c:399-414`): blocking writes until the whole of it is written; a failed write is fatal for the connection.
-/// MIT `flush_out` (`lib/rpc/xdr_rec.c:475-489`): the mark is set ahead of the body in xdrrec's buffer, and the buffer goes out in one write.
+// MIT: `writetcp` (lib/rpc/svc_tcp.c:399-414)
+/// blocking writes until the whole of it is written; a failed write is fatal for the connection.
+// MIT: `flush_out` (lib/rpc/xdr_rec.c:475-489)
+/// the mark is set ahead of the body in xdrrec's buffer, and the buffer goes out in one write. Deviation: MIT's buffer is 4000 bytes, so a longer reply leaves as several fragments; here it is one fragment whatever its length.
+// MIT: `writetcp` (lib/rpc/svc_tcp.c:399-414)
+/// blocking writes until the whole of it is written; a failed write is fatal for the connection.
+// MIT: `flush_out` (lib/rpc/xdr_rec.c:475-489)
+/// the mark is set ahead of the body in xdrrec's buffer, and the buffer goes out in one write.
 /// Deviation: MIT's buffer is 4000 bytes, so a longer reply leaves as several fragments; here it is one fragment whatever its length.
 fn write_rpc_record<S: Stream>(stream: &mut S, body: &[u8]) -> io::Result<()> {
     let len = u32::try_from(body.len())
@@ -809,8 +836,10 @@ impl Paused {
 }
 
 /// Serve `sockets` to `app` from one loop on this thread until `wake` says to stop: each datagram, accepted stream, RPC connection and stream event in turn, at most `max_streams` streams and RPC connections together, each stream's request of at most `cap` bytes. Returns the descriptors of the connections still open when it stopped, the newest event first: the order MIT's loop frees them in, each with "closing down fd", when kadmind ends.
-/// MIT `loop_setup_signals` (`lib/apputils/net-server.c:265-284`): SIGINT, SIGTERM and SIGQUIT end the loop, SIGHUP resets, and SIGPIPE is ignored, as the Rust runtime leaves it.
-/// MIT `setup_socket` (`lib/apputils/net-server.c:844-851`): a UDP or TCP listener is non-blocking, an RPC one is left blocking.
+// MIT: `loop_setup_signals` (lib/apputils/net-server.c:265-284)
+/// SIGINT, SIGTERM and SIGQUIT end the loop, SIGHUP resets, and SIGPIPE is ignored, as the Rust runtime leaves it.
+// MIT: `setup_socket` (lib/apputils/net-server.c:844-851)
+/// a UDP or TCP listener is non-blocking, an RPC one is left blocking.
 pub fn run(
     app: &mut dyn Dispatch,
     sockets: &Sockets<'_>,
@@ -869,7 +898,8 @@ pub fn run(
                     app.reset();
                 }
                 if s.stop_requested() {
-                    // MIT `do_break` (`lib/apputils/net-server.c:235-238`): the debug line, then the loop ends.
+                    // MIT: `do_break` (lib/apputils/net-server.c:235-238)
+                    // the debug line, then the loop ends.
                     log.syslog(Severity::Debug, "Got signal to request exit");
                     return Ok(streams.open_fds());
                 }
@@ -941,8 +971,10 @@ fn drain(pipe: Option<&OwnedFd>) {
     while matches!(nix::unistd::read(p, &mut buf), Ok(n) if n > 0) {}
 }
 
-/// MIT `process_packet` (`lib/apputils/net-server.c:1150-1188`): a failed read other than an interruption, nothing to read or a refused earlier reply is logged, an empty datagram is dropped, and the request is dispatched with the address it came to.
-/// MIT `process_packet_response` (`lib/apputils/net-server.c:1101-1105`): a nonzero code is logged "while dispatching (udp)", and no reply is sent then or when there is none.
+// MIT: `process_packet` (lib/apputils/net-server.c:1150-1188)
+/// a failed read other than an interruption, nothing to read or a refused earlier reply is logged, an empty datagram is dropped, and the request is dispatched with the address it came to.
+// MIT: `process_packet_response` (lib/apputils/net-server.c:1101-1105)
+/// a nonzero code is logged "while dispatching (udp)", and no reply is sent then or when there is none.
 fn process_packet(sock: &UdpSocket, buf: &mut [u8], app: &mut dyn Dispatch, log: &mut dyn Log) {
     let d = match recv_from_to(sock, buf) {
         Ok(d) => d,
@@ -996,7 +1028,8 @@ fn retry(e: &io::Error) -> bool {
 }
 
 /// `addr` as MIT's log prints a peer: an IPv4 address and port joined by a colon, an IPv6 one in brackets, a link-local address's scope by interface name.
-/// MIT `k5_print_addr_port` (`lib/krb5/os/addr.c:98-106`): `getnameinfo` with numeric host and service, an IPv6 host in brackets.
+// MIT: `k5_print_addr_port` (lib/krb5/os/addr.c:98-106)
+/// `getnameinfo` with numeric host and service, an IPv6 host in brackets.
 pub(crate) fn print_addr_port(addr: &SocketAddr) -> String {
     match addr {
         SocketAddr::V4(a) => a.to_string(),

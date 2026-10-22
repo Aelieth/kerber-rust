@@ -40,7 +40,8 @@ pub struct FastArmor {
     pub cname: PrincipalName,
 }
 
-/// MIT `fast_armor_ap_request` (`lib/krb5/krb/fast.c:52-108`): the armor ticket's session key, the armor authenticator and the armor key are traced as they are made.
+// MIT: `fast_armor_ap_request` (lib/krb5/krb/fast.c:52-108)
+/// the armor ticket's session key, the armor authenticator and the armor key are traced as they are made.
 #[expect(
     clippy::too_many_arguments,
     reason = "the AS round's state, no value type"
@@ -66,7 +67,8 @@ pub(super) fn continue_fast(
     let wire = encode(&probe)?;
     match send_as(req, &wire)? {
         KdcMsg::AsRep(rep) => {
-            // MIT `decrypt_as_reply` (`lib/krb5/krb/get_in_tkt.c:96-123`): no module answered, so the reply key is got now, from the password.
+            // MIT: `decrypt_as_reply` (lib/krb5/krb/get_in_tkt.c:96-123)
+            // no module answered, so the reply key is got now, from the password.
             let mut pw = PasswordCell::new(
                 prompt,
                 req.password,
@@ -95,7 +97,8 @@ pub(super) fn continue_fast(
                 return classify_kdc_error(&inner);
             }
             clock.note(&inner, true);
-            // MIT `get_as_key` (`lib/krb5/krb/preauth2.c:438-457`): the password is read when a mechanism first needs the key, not before one is chosen; OTP never needs it.
+            // MIT: `get_as_key` (lib/krb5/krb/preauth2.c:438-457)
+            // the password is read when a mechanism first needs the key, not before one is chosen; OTP never needs it.
             let mut pw = PasswordCell::new(
                 prompt,
                 req.password,
@@ -122,7 +125,8 @@ pub(super) fn continue_fast(
                     &method_from_error(&current).unwrap_or_default(),
                     &super::conf_preferred_preauth_types_for(req.profile, req.realm),
                 );
-                // MIT `pa_type_allowed` (`lib/krb5/krb/preauth2.c:627-631`): a type the input cache does not allow is not tried.
+                // MIT: `pa_type_allowed` (lib/krb5/krb/preauth2.c:627-631)
+                // a type the input cache does not allow is not tried.
                 method.retain(|p| req.ticket.preauth_allowed(p.padata_type));
                 if fast_mechanism(req.profile, &method, &skip, pkinit).is_err()
                     && !saved_method.is_empty()
@@ -133,7 +137,8 @@ pub(super) fn continue_fast(
                     trace::init_creds_preauth();
                     trace_preauth_input(&method, etypes);
                 }
-                // MIT `k5_preauth` (`lib/krb5/krb/preauth2.c:1004-1016`): every module with a padata in the list prepares first, and the responder answers what was asked, before a mechanism is chosen; a failure there ends the exchange.
+                // MIT: `k5_preauth` (lib/krb5/krb/preauth2.c:1004-1016)
+                // every module with a padata in the list prepares first, and the responder answers what was asked, before a mechanism is chosen; a failure there ends the exchange.
                 super::pkinit_prepare(req, &method, &mut prepared);
                 let items = ask_responder(
                     req,
@@ -259,7 +264,8 @@ pub(super) fn continue_fast(
 }
 
 /// the hint with the request that carries its padata, and no other mechanism follows. A password the prompter cannot read fails the module before any request is sent, and the walk goes on.
-/// MIT `encts_process` (`lib/krb5/krb/preauth_encts.c:75-77`): the same for encrypted timestamp.
+// MIT: `encts_process` (lib/krb5/krb/preauth_encts.c:75-77)
+/// the same for encrypted timestamp.
 #[expect(
     clippy::too_many_arguments,
     reason = "the FAST retry's existing locals"
@@ -390,7 +396,8 @@ fn call_responder(pw: &mut PasswordCell<'_, '_>, items: &mut ResponderItems) -> 
 }
 
 /// The password question put to the responder before a reply's key is got: no preauth module answered the AS-REQ, so the reply is decrypted under a key made from the password.
-/// MIT `krb5_get_as_key_password` (`lib/krb5/krb/gic_pwd.c:30-38`): the question is asked only while no password is held.
+// MIT: `krb5_get_as_key_password` (lib/krb5/krb/gic_pwd.c:30-38)
+/// the question is asked only while no password is held.
 pub(super) fn ask_gak_question(pw: &mut PasswordCell<'_, '_>) -> Result<(), Error> {
     let mut items = ResponderItems::default();
     if pw.asks_question() {
@@ -399,10 +406,14 @@ pub(super) fn ask_gak_question(pw: &mut PasswordCell<'_, '_>) -> Result<(), Erro
     call_responder(pw, &mut items)
 }
 
-/// MIT `fill_response_items` (`lib/krb5/krb/preauth2.c:937-965`): every loaded module with a padata in the list prepares its questions in the list's order, and a failure ends the round.
-/// MIT `ec_prep_questions` (`lib/krb5/krb/preauth_ec.c:36-45`): encrypted challenge asks the password question.
-/// MIT `encts_prep_questions` (`lib/krb5/krb/preauth_encts.c:33-47`): encrypted timestamp asks it too, unless the realm disables it.
-/// MIT `spake_prep_questions` (`plugins/preauth/spake/spake_client.c:119-141`): SPAKE asks it for a challenge it can answer, and for nothing else.
+// MIT: `fill_response_items` (lib/krb5/krb/preauth2.c:937-965)
+/// every loaded module with a padata in the list prepares its questions in the list's order, and a failure ends the round.
+// MIT: `ec_prep_questions` (lib/krb5/krb/preauth_ec.c:36-45)
+/// encrypted challenge asks the password question.
+// MIT: `encts_prep_questions` (lib/krb5/krb/preauth_encts.c:33-47)
+/// encrypted timestamp asks it too, unless the realm disables it.
+// MIT: `spake_prep_questions` (plugins/preauth/spake/spake_client.c:119-141)
+/// SPAKE asks it for a challenge it can answer, and for nothing else.
 /// the question is asked only when the caller gave neither a password nor a keytab, and no module holds the password yet.
 fn fill_response_items(
     profile: &Krb5Conf,
@@ -440,8 +451,10 @@ fn fill_response_items(
     Ok(())
 }
 
-/// MIT `otp_client_process` (`lib/krb5/krb/preauth_otp.c:1118-1127`): `set_as_key(armor key)`, then `disable_fallback`.
-/// MIT `init_creds_step_request` (`lib/krb5/krb/get_in_tkt.c:1334-1336`): with fallback disabled a failed request is the error returned.
+// MIT: `otp_client_process` (lib/krb5/krb/preauth_otp.c:1118-1127)
+/// `set_as_key(armor key)`, then `disable_fallback`.
+// MIT: `init_creds_step_request` (lib/krb5/krb/get_in_tkt.c:1334-1336)
+/// with fallback disabled a failed request is the error returned.
 #[expect(
     clippy::too_many_arguments,
     reason = "the FAST retry's existing locals"
@@ -502,8 +515,10 @@ enum SpakeFast {
     },
     /// The module failed before it answered, its password read among the causes. The failure is
     /// traced, and MIT's walk goes on to the next real mechanism of the list.
-    /// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:699-723`): a real type that fails is noted failed, and the loop tries the next.
-    /// MIT `init_creds_step_request` (`lib/krb5/krb/get_in_tkt.c:1343-1348`): a failure that came after a request was sent (the challenge was a reply to the support message) is followed by a new walk over the method data (`new_walk`).
+    // MIT: `process_pa_data` (lib/krb5/krb/preauth2.c:699-723)
+    /// a real type that fails is noted failed, and the loop tries the next.
+    // MIT: `init_creds_step_request` (lib/krb5/krb/get_in_tkt.c:1343-1348)
+    /// a failure that came after a request was sent (the challenge was a reply to the support message) is followed by a new walk over the method data (`new_walk`).
     Failed { fail: ModuleFail, new_walk: bool },
 }
 
@@ -709,8 +724,10 @@ fn finish_fast_pkinit(
     ))
 }
 
-/// MIT `krb5int_fast_process_response` (`fast.c:548-556`): once the finished checksum holds, the reply client is the finished client. The outer client name and padata are unauthenticated and are not consulted again after that replacement.
-/// MIT `krb5int_fast_reply_key` (`lib/krb5/krb/fast.c:570-592`): the strengthened reply key is traced after the key it strengthens.
+// MIT: `krb5int_fast_process_response` (fast.c:548-556)
+/// once the finished checksum holds, the reply client is the finished client. The outer client name and padata are unauthenticated and are not consulted again after that replacement.
+// MIT: `krb5int_fast_reply_key` (lib/krb5/krb/fast.c:570-592)
+/// the strengthened reply key is traced after the key it strengthens.
 #[expect(clippy::too_many_arguments, reason = "client AS, not a params struct")]
 fn finish_fast_as(
     req: &AsRequest<'_>,
@@ -785,7 +802,8 @@ fn finish_fast_as(
     })?;
     verify_fast_finished(akey, &rep.0.ticket, finished)?;
     // once the finished checksum holds, the reply's client *is* the finished message's client and the reply padata is the FAST-inner list — the outer cname / crealm / padata are unauthenticated and never looked at again.
-    // MIT `verify_as_reply` (`get_in_tkt.c:236-241`): compares the replaced client.
+    // MIT: `verify_as_reply` (get_in_tkt.c:236-241)
+    // compares the replaced client.
     rep.0.crealm = finished.crealm.clone();
     rep.0.cname = finished.cname.clone();
     rep.0.padata = Some(fast.padata.clone());
@@ -807,7 +825,8 @@ fn finish_fast_as(
 }
 
 /// The first real clpreauth mechanism in the KDC's list that this client will run under armor.
-/// MIT `enc_ts_get` (`kdc/kdc_preauth_encts.c:37-41`): the KDC withholds encrypted timestamp from an armored request. A type whose module `[plugins] clpreauth` did not leave loaded is skipped.
+// MIT: `enc_ts_get` (kdc/kdc_preauth_encts.c:37-41)
+/// the KDC withholds encrypted timestamp from an armored request. A type whose module `[plugins] clpreauth` did not leave loaded is skipped.
 pub(super) fn fast_mechanism(
     profile: &Krb5Conf,
     method: &[PaData],
@@ -892,7 +911,8 @@ fn armor_ap_request(
     Ok((sub, akey, ap))
 }
 
-/// MIT `krb5_init_creds_set_service` (`lib/krb5/krb/get_in_tkt.c:1057-1072`): naming the service restarts the loop, which makes the armor before the first request makes it again.
+// MIT: `krb5_init_creds_set_service` (lib/krb5/krb/get_in_tkt.c:1057-1072)
+/// naming the service restarts the loop, which makes the armor before the first request makes it again.
 pub fn set_service_restart(armor: &FastArmor) -> Result<(), Error> {
     armor_ap_request(armor).map(|_| ())
 }
@@ -908,7 +928,8 @@ fn fast_armor_ap(armor: &FastArmor, sub: &ProtocolKey) -> Result<krb5_types::ApR
 }
 
 /// What MIT `krb5int_fast_process_error` hands back for a KRB-ERROR received under an armor key.
-/// MIT `krb5int_fast_process_error` (`fast.c:428-511`): hands back the error to act on, the FAST padata and the retry flag for a KRB-ERROR received under an armor key.
+// MIT: `krb5int_fast_process_error` (fast.c:428-511)
+/// hands back the error to act on, the FAST padata and the retry flag for a KRB-ERROR received under an armor key.
 pub(crate) struct FastErrorMaterial {
     /// The error to act on: the FX-ERROR inner error when the FAST envelope unwrapped, else the outer error as received.
     pub(crate) err: KrbError,
@@ -937,7 +958,8 @@ pub(crate) fn fast_error_material(
     let Ok(method) = decode::<MethodData>(ed.as_ref()) else {
         return outer_fatal();
     };
-    // MIT `decrypt_fast_reply` (`lib/krb5/krb/fast.c:359-415`): traced once the e-data is a padata sequence, before PA-FX-FAST is looked for.
+    // MIT: `decrypt_fast_reply` (lib/krb5/krb/fast.c:359-415)
+    // traced once the e-data is a padata sequence, before PA-FX-FAST is looked for.
     trace::fast_decode();
     let Some(fx) = find_pa(&method, pa::FX_FAST) else {
         return outer_fatal();

@@ -73,7 +73,8 @@ fn as_req_sname_etype(
     )
 }
 
-/// MIT `krb5_dbe_def_search_enctype` (`kdb_default.c:60-61`): a requested etype outside the
+// MIT: `krb5_dbe_def_search_enctype` (kdb_default.c:60-61)
+/// a requested etype outside the
 /// permitted set is `NO_PERMITTED_KEY` before the key list is read, even when the
 /// principal holds such a key.
 #[test]
@@ -640,7 +641,8 @@ fn pwqual_dict_words_are_init_dict_lines_matched_as_strcasecmp() {
 
 #[test]
 fn a_nul_inside_a_line_ends_that_word_and_shifts_the_rest() {
-    // MIT `init_dict` (`lib/kadm5/srv/pwqual_dict.c:136-151`): newlines are counted, then each
+    // MIT: `init_dict` (lib/kadm5/srv/pwqual_dict.c:136-151)
+    // newlines are counted, then each
     // word is a C string, so a NUL ends it and the words after it shift.
     let dict = pwqual_dict::PwqualDict::from_bytes(b"abc\0def\nxyz\nqrs\n".to_vec()).unwrap();
     assert!(dict.contains(b"abc"), "abc");
@@ -656,7 +658,8 @@ fn a_nul_inside_a_line_ends_that_word_and_shifts_the_rest() {
 
 #[test]
 fn iso8859_1_strcasecmp_folds_latin1_letters() {
-    // MIT `word_compare` (`lib/kadm5/srv/pwqual_dict.c:64-68`): `strcasecmp` in an ISO-8859-1
+    // MIT: `word_compare` (lib/kadm5/srv/pwqual_dict.c:64-68)
+    // `strcasecmp` in an ISO-8859-1
     // locale folds E-acute. The C and UTF-8 locales do not (settled live). The process locale
     // is not changed: the fold is the one `from_bytes_folded` is given.
     let dict = pwqual_dict::PwqualDict::from_bytes_folded(
@@ -711,7 +714,8 @@ fn case_fold_follows_the_named_codeset_only() {
 
 #[test]
 fn a_fifo_dict_file_with_a_writer_is_empty() {
-    // MIT `init_dict` (`lib/kadm5/srv/pwqual_dict.c:120-133`): `fstat` reports 0 for a FIFO, so
+    // MIT: `init_dict` (lib/kadm5/srv/pwqual_dict.c:120-133)
+    // `fstat` reports 0 for a FIFO, so
     // the read takes no bytes. A FIFO with no writer blocks in `open` on both sides.
     let dir = krb5_testkit::scratch_dir("krb5-pwqual-fifo");
     let path = dir.join("fifo");
@@ -770,7 +774,8 @@ fn pwqual_dict_reads_the_fstat_size_so_dev_zero_is_empty() {
 
 #[test]
 fn passwd_check_logs_a_module_refusal_and_not_a_policy_floor() {
-    // MIT `passwd_check` (`lib/kadm5/srv/server_misc.c:114-134`): policy floors return before
+    // MIT: `passwd_check` (lib/kadm5/srv/server_misc.c:114-134)
+    // policy floors return before
     // the modules, and only a module refusal is logged.
     use krb5_log::klog::Severity;
     let mut store = PrincipalStore::new(TEST_REALM_STR);
@@ -1330,7 +1335,8 @@ fn odd_parity(octets: &[u8]) -> bool {
     octets.iter().all(|b| b.count_ones() % 2 == 1)
 }
 
-/// MIT `krb5_c_make_random_key` (`lib/crypto/krb/make_random_key.c:31-76`): `keybytes` random octets through the
+// MIT: `krb5_c_make_random_key` (lib/crypto/krb/make_random_key.c:31-76)
+/// `keybytes` random octets through the
 /// enctype's random-to-key, so a des3 key is 24 octets of odd parity (`k5_rand2key_des3`,
 /// `k5_des_fixup_key_parity`) and every other enctype's key is its length. 24 raw random octets are all of odd
 /// parity with probability 2^-24, so 64 keys decide it.

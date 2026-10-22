@@ -4,10 +4,14 @@
 //! `load -update` takes the permanent lock, which makes `principal.kadm5.lock` anew and is let go
 //! on every failure. `-update` judges the database before it fetches any master key, and no load
 //! holds a lock while it waits for one.
-//! MIT `load_db` (`kadmin/dbutil/dump.c:1509-1526`): an update opens the database, then locks it permanently, before any record is read.
-//! MIT `ctx_create_db` (`plugins/kdb/db2/kdb_db2.c:697-732`): `create` makes `principal.ok`, the database, then the policy lock file `O_EXCL`.
-//! MIT `osa_adb_get_lock` (`plugins/kdb/db2/adb_openclose.c:265-283`): the permanent lock removes the policy lock file.
-//! MIT `osa_adb_release_lock` (`plugins/kdb/db2/adb_openclose.c:299-307`): letting it go creates the file again.
+// MIT: `load_db` (kadmin/dbutil/dump.c:1509-1526)
+//! an update opens the database, then locks it permanently, before any record is read.
+// MIT: `ctx_create_db` (plugins/kdb/db2/kdb_db2.c:697-732)
+//! `create` makes `principal.ok`, the database, then the policy lock file `O_EXCL`.
+// MIT: `osa_adb_get_lock` (plugins/kdb/db2/adb_openclose.c:265-283)
+//! the permanent lock removes the policy lock file.
+// MIT: `osa_adb_release_lock` (plugins/kdb/db2/adb_openclose.c:299-307)
+//! letting it go creates the file again.
 
 #![cfg(unix)]
 

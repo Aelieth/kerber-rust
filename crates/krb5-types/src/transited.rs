@@ -1,6 +1,7 @@
 use crate::MAX_TRANSIT_RAW;
 
-// MIT `rtree_hier_realms` (`walk_rtree.c:394-452`): client suffixes through
+// MIT: `rtree_hier_realms` (walk_rtree.c:394-452)
+// client suffixes through
 #[must_use]
 pub fn hierarchical_walk_realms(client: &str, server: &str) -> Vec<String> {
     if client.len() >= MAX_TRANSIT_RAW || server.len() >= MAX_TRANSIT_RAW {

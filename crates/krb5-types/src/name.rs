@@ -4,7 +4,8 @@ use super::{NameError, PrincipalName};
 pub struct ParsedName {
     pub components: Vec<String>,
     pub realm: String,
-    // MIT `allocate_princ` (`krb/parse.c:116-116`): `has_realm_out` is set when an unquoted
+    // MIT: `allocate_princ` (krb/parse.c:116-116)
+    // `has_realm_out` is set when an unquoted
     pub has_realm: bool,
 }
 
@@ -69,7 +70,8 @@ fn push_char(comps: &mut [String], realm: &mut Option<String>, in_realm: bool, c
     }
 }
 
-// MIT `k5_infer_principal_type` (`bld_princ.c:31-42`): two components under `krbtgt` are
+// MIT: `k5_infer_principal_type` (bld_princ.c:31-42)
+// two components under `krbtgt` are
 #[must_use]
 pub fn infer_name_type(comps: &[String]) -> i32 {
     if comps.len() == 2 && comps[0] == "krbtgt" {
@@ -135,7 +137,8 @@ pub fn unparse_name(comps: &[String], realm: &str) -> String {
     format!("{}@{}", unparse_components(comps), quote_component(realm))
 }
 
-// MIT `copy_component_quoting` (`lib/krb5/krb/unparse.c:103-107`): with no realm, `REALM_SEP` is copied as is.
+// MIT: `copy_component_quoting` (lib/krb5/krb/unparse.c:103-107)
+// with no realm, `REALM_SEP` is copied as is.
 #[must_use]
 pub fn unparse_components_no_realm(comps: &[String]) -> String {
     comps

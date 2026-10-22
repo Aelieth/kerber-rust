@@ -55,7 +55,8 @@ fn run<R: BufRead, W: Write>(
         }
     };
     let conf = &ctx.profile;
-    // MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:209-217`): `KRB5_TRACE` opens once the profile has loaded.
+    // MIT: `krb5_init_context_profile` (lib/krb5/krb/init_ctx.c:209-217)
+    // `KRB5_TRACE` opens once the profile has loaded.
     krb5_protocol::trace::init();
     let (client, armor_cc) = match client(prog, pname, &ctx) {
         Ok(client) => client,
@@ -71,7 +72,8 @@ fn run<R: BufRead, W: Write>(
             return 1;
         }
     };
-    // MIT `k5_locate_server` (`locate_kdc.c:871-877`): a realm with no KDC is `KRB5_REALM_UNKNOWN`.
+    // MIT: `k5_locate_server` (locate_kdc.c:871-877)
+    // a realm with no KDC is `KRB5_REALM_UNKNOWN`.
     let Some(list) = conf
         .kdcs_for(&client.realm)
         .ok()
@@ -83,7 +85,8 @@ fn run<R: BufRead, W: Write>(
     let kdc = list[0].clone();
     krb5_config::hand_kdcs(&client.realm, list);
     let given = krb5_config::env_password().map(Zeroizing::new);
-    // MIT `k5_infer_principal_type` (`lib/krb5/krb/bld_princ.c:34-42`): "kadmin/changepw" is not krbtgt or WELLKNOWN, so `krb5_parse_name` makes it NT-PRINCIPAL.
+    // MIT: `k5_infer_principal_type` (lib/krb5/krb/bld_princ.c:34-42)
+    // "kadmin/changepw" is not krbtgt or WELLKNOWN, so `krb5_parse_name` makes it NT-PRINCIPAL.
     let changepw = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["kadmin", "changepw"]);
     let kdc = KdcAddr {
         host: kdc.host,
@@ -95,7 +98,8 @@ fn run<R: BufRead, W: Write>(
         client.realm.as_bytes(),
     ));
     krb5_protocol::trace::init_creds_service("kadmin/changepw");
-    // MIT `krb5_init_creds_init` (`lib/krb5/krb/get_in_tkt.c:998-1005`): `kpasswd` sets no address list, so `noaddresses` decides: absent or true sends none, and false sends `krb5_os_localaddr`'s list.
+    // MIT: `krb5_init_creds_init` (lib/krb5/krb/get_in_tkt.c:998-1005)
+    // `kpasswd` sets no address list, so `noaddresses` decides: absent or true sends none, and false sends `krb5_os_localaddr`'s list.
     let addresses = match krb5_protocol::init_creds_addresses(conf.noaddresses_for(&client.realm)) {
         Ok(list) => list,
         Err(e) => {
@@ -188,8 +192,10 @@ fn run<R: BufRead, W: Write>(
         }
         Err(e) => {
             let text = match (unread, &e) {
-                // MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:716-723`): a read that failed answering the KDC's preauthentication hint is `KRB5_PREAUTH_FAILED`.
-                // MIT `default_com_err_proc` (`util/et/com_err.c:83-85`): kpasswd's `com_err` prints `error_message` of that code.
+                // MIT: `process_pa_data` (lib/krb5/krb/preauth2.c:716-723)
+                // a read that failed answering the KDC's preauthentication hint is `KRB5_PREAUTH_FAILED`.
+                // MIT: `default_com_err_proc` (util/et/com_err.c:83-85)
+                // kpasswd's `com_err` prints `error_message` of that code.
                 (Some(_), Error::PreauthFailed(_)) => {
                     "Generic preauthentication failure".to_owned()
                 }
@@ -217,7 +223,8 @@ fn run<R: BufRead, W: Write>(
         eprintln!("{prog}: Cannot find KDC for requested realm changing password");
         return 1;
     }
-    // MIT `change_set_password` (`changepw.c:256-265`): the next server only when one does not answer.
+    // MIT: `change_set_password` (changepw.c:256-265)
+    // the next server only when one does not answer.
     for server in servers {
         let server = KdcAddr {
             host: server.host,
@@ -248,16 +255,21 @@ fn run<R: BufRead, W: Write>(
 
 fn initial_ticket_text(e: &Error) -> String {
     let mit = match e {
-        // MIT `KRB5_KDC_UNREACH` (`krb5_err.et:211-211`): no KDC answered.
+        // MIT: `KRB5_KDC_UNREACH` (krb5_err.et:211-211)
+        // no KDC answered.
         Error::Io { .. } => "Cannot contact any KDC for requested realm",
         Error::KrbError { code, .. } => match *code {
-            // MIT `KRB5KDC_ERR_NAME_EXP` (`krb5_err.et:42-42`): the text.
+            // MIT: `KRB5KDC_ERR_NAME_EXP` (krb5_err.et:42-42)
+            // the text.
             krb5_types::err::NAME_EXP => "Client's entry in database has expired",
-            // MIT `KRB5KDC_ERR_C_PRINCIPAL_UNKNOWN` (`krb5_err.et:47-47`): the text.
+            // MIT: `KRB5KDC_ERR_C_PRINCIPAL_UNKNOWN` (krb5_err.et:47-47)
+            // the text.
             krb5_types::err::C_PRINCIPAL_UNKNOWN => "Client not found in Kerberos database",
-            // MIT `KRB5KDC_ERR_CLIENT_REVOKED` (`krb5_err.et:59-59`): the text.
+            // MIT: `KRB5KDC_ERR_CLIENT_REVOKED` (krb5_err.et:59-59)
+            // the text.
             krb5_types::err::CLIENT_REVOKED => "Client's credentials have been revoked",
-            // MIT `KRB5KDC_ERR_PREAUTH_FAILED` (`krb5_err.et:65-65`): the text.
+            // MIT: `KRB5KDC_ERR_PREAUTH_FAILED` (krb5_err.et:65-65)
+            // the text.
             krb5_types::err::PREAUTH_FAILED => "Preauthentication failed",
             _ => return e.to_string(),
         },
@@ -300,7 +312,8 @@ fn client(
         };
         return Ok((client, armor));
     }
-    // MIT `get_name_from_passwd_file` (`kpasswd.c:19-37`): the real uid's user name, as a principal.
+    // MIT: `get_name_from_passwd_file` (kpasswd.c:19-37)
+    // the real uid's user name, as a principal.
     let user = nix::unistd::User::from_uid(nix::unistd::Uid::current())
         .ok()
         .flatten()
@@ -320,7 +333,8 @@ fn parse_client(name: &str, conf: &Krb5Conf) -> Result<Client, String> {
     })
 }
 
-/// MIT `krb5_parse_name_flags` (`krb/parse.c:198-211`): a name with no realm takes the default realm.
+// MIT: `krb5_parse_name_flags` (krb/parse.c:198-211)
+/// a name with no realm takes the default realm.
 fn with_default_realm(name: &str, conf: &Krb5Conf) -> Result<String, String> {
     let parsed = krb5_types::parse_name_ex(name, "", false).map_err(|e| e.to_string())?;
     if parsed.has_realm {
@@ -333,7 +347,8 @@ fn with_default_realm(name: &str, conf: &Krb5Conf) -> Result<String, String> {
     Ok(format!("{name}@{realm}"))
 }
 
-/// MIT `kcm_resolve` (`cc_kcm.c:750-759`): the connection first, then for `KCM:` the primary name; either failure fails the resolve.
+// MIT: `kcm_resolve` (cc_kcm.c:750-759)
+/// the connection first, then for `KCM:` the primary name; either failure fails the resolve.
 fn open_default_ccache(ctx: &ClientContext) -> Result<CcSpec, String> {
     let spec = krb5_config::resolve_ccspec(ctx, None).map_err(|e| e.to_string())?;
     let kcm_text = |e: io::Error| strerror(&e);
@@ -355,7 +370,8 @@ fn strerror(e: &io::Error) -> String {
         .to_owned()
 }
 
-/// MIT `interpret_errno` (`cc_file.c:1346-1389`): a refused path is `KRB5_FCC_PERM`, a bad argument or descriptor `KRB5_FCC_INTERNAL`, any other errno `KRB5_CC_IO`.
+// MIT: `interpret_errno` (cc_file.c:1346-1389)
+/// a refused path is `KRB5_FCC_PERM`, a bad argument or descriptor `KRB5_FCC_INTERNAL`, any other errno `KRB5_CC_IO`.
 fn cache_text(spec: &CcSpec, e: &io::Error) -> String {
     use nix::errno::Errno;
     if matches!(spec, CcSpec::Kcm(_)) {
@@ -376,7 +392,8 @@ fn cache_text(spec: &CcSpec, e: &io::Error) -> String {
     .to_owned()
 }
 
-/// MIT `read_header` (`cc_file.c:396-401`): too short is `KRB5_CC_FORMAT`, a version other than 1–4 `KRB5_CCACHE_BADVNO`.
+// MIT: `read_header` (cc_file.c:396-401)
+/// too short is `KRB5_CC_FORMAT`, a version other than 1–4 `KRB5_CCACHE_BADVNO`.
 fn parse_cache_file(b: &[u8]) -> io::Result<FileCcache> {
     let bad = |text: &str| io::Error::new(io::ErrorKind::InvalidData, text);
     let Some(v) = b.get(..2) else {
@@ -418,7 +435,8 @@ fn ccache_principal(
     }
 }
 
-/// MIT `locate_kpasswd` (`changepw.c:61-90`): `admin_server` only when no `kpasswd_server` is listed, its port replaced by `DEFAULT_KPASSWD_PORT`.
+// MIT: `locate_kpasswd` (changepw.c:61-90)
+/// `admin_server` only when no `kpasswd_server` is listed, its port replaced by `DEFAULT_KPASSWD_PORT`.
 fn kpasswd_servers(conf: &Krb5Conf, realm: &str) -> Vec<Endpoint> {
     if let Some(list) = conf.kpasswd_servers.get(realm).filter(|l| !l.is_empty()) {
         return list.clone();

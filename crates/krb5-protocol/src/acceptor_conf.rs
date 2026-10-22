@@ -7,7 +7,8 @@ use krb5_crypto::{EncryptionType, parse_enctype_list};
 
 use crate::error::Error;
 
-/// MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:235-252`): the context takes `ignore_acceptor_hostname` and `clockskew` from its profile when it is made.
+// MIT: `krb5_init_context_profile` (lib/krb5/krb/init_ctx.c:235-252)
+/// the context takes `ignore_acceptor_hostname` and `clockskew` from its profile when it is made.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AcceptorConfig {
     /// `[libdefaults] clockskew`, in seconds; 300 when it is unset. A negative skew fails every time check.
@@ -27,7 +28,8 @@ impl Default for AcceptorConfig {
 }
 
 impl AcceptorConfig {
-    /// MIT `krb5_get_permitted_enctypes` (`lib/krb5/krb/init_ctx.c:574-595`): the first `permitted_enctypes` the profile holds, else `DEFAULT`.
+    // MIT: `krb5_get_permitted_enctypes` (lib/krb5/krb/init_ctx.c:574-595)
+    /// the first `permitted_enctypes` the profile holds, else `DEFAULT`.
     #[must_use]
     pub fn from_krb5_conf(conf: &Krb5Conf) -> Self {
         let profstr = conf
@@ -44,14 +46,16 @@ impl AcceptorConfig {
     }
 
     /// The values of the KDC context's profile, kdc.conf ahead of krb5.conf, as kadmind's and kpropd's acceptors read them.
-    /// MIT `kadm5_init_krb5_context` (`lib/kadm5/srv/server_init.c:334-344`): kadmind's GSS acceptor reads the KDC profile.
+    // MIT: `kadm5_init_krb5_context` (lib/kadm5/srv/server_init.c:334-344)
+    /// kadmind's GSS acceptor reads the KDC profile.
     #[must_use]
     pub fn from_profile(profile: &ProfileSet) -> Self {
         Self::from_krb5_conf(&profile.kdc_context)
     }
 
     /// The enctypes the acceptor permits.
-    /// MIT `krb5int_parse_enctype_list` (`lib/krb5/krb/init_ctx.c:497-500`): a list left empty is `KRB5_CONFIG_ETYPE_NOSUPP`.
+    // MIT: `krb5int_parse_enctype_list` (lib/krb5/krb/init_ctx.c:497-500)
+    /// a list left empty is `KRB5_CONFIG_ETYPE_NOSUPP`.
     pub fn permitted(&self) -> Result<&[EncryptionType], Error> {
         if self.permitted_enctypes.is_empty() {
             return Err(Error::ConfigEtypeNosupp);

@@ -190,7 +190,8 @@ pub fn load_identity(
     found.pop().ok_or_else(IdentityError::enoent)
 }
 
-// MIT `crypto_load_certs` (`plugins/preauth/pkinit/pkinit_crypto_openssl.c:4645-4688`): the identity's type decides how its certificates load.
+// MIT: `crypto_load_certs` (plugins/preauth/pkinit/pkinit_crypto_openssl.c:4645-4688)
+// the identity's type decides how its certificates load.
 pub fn load_identities(value: &str) -> Result<Vec<PkinitIdentity>, IdentityError> {
     load_identities_at(value, 0)
 }
@@ -215,7 +216,8 @@ fn load_identities_at(value: &str, depth: usize) -> Result<Vec<PkinitIdentity>, 
     }
 }
 
-// MIT `parse_fs_options` (`plugins/preauth/pkinit/pkinit_identity.c:307-346`): `cert[,key]`, the key in the certificate's file when not named.
+// MIT: `parse_fs_options` (plugins/preauth/pkinit/pkinit_identity.c:307-346)
+// `cert[,key]`, the key in the certificate's file when not named.
 fn parse_fs_options(residual: &str) -> Option<(&str, &str)> {
     if residual.is_empty() || residual.starts_with(',') {
         return None;
@@ -278,7 +280,8 @@ fn load_identity_dir(dir: &str) -> Result<Vec<PkinitIdentity>, IdentityError> {
     Ok(found)
 }
 
-// MIT `process_option_ca_crl` (`plugins/preauth/pkinit/pkinit_identity.c:468-501`): the type is required, and only FILE and DIR are known.
+// MIT: `process_option_ca_crl` (plugins/preauth/pkinit/pkinit_identity.c:468-501)
+// the type is required, and only FILE and DIR are known.
 pub fn load_ca_certs(value: &str) -> Result<Vec<Vec<u8>>, String> {
     let Some((kind, residual)) = value.split_once(':') else {
         return Err(EINVAL.into());
@@ -300,7 +303,8 @@ pub fn load_ca_certs(value: &str) -> Result<Vec<Vec<u8>>, String> {
     }
 }
 
-// MIT `load_cas_and_crls` (`plugins/preauth/pkinit/pkinit_crypto_openssl.c:4997-5151`): every certificate in the file once; a file with none loads nothing.
+// MIT: `load_cas_and_crls` (plugins/preauth/pkinit/pkinit_crypto_openssl.c:4997-5151)
+// every certificate in the file once; a file with none loads nothing.
 fn load_ca_file(path: &str) -> Result<Vec<Vec<u8>>, String> {
     let bytes =
         std::fs::read(path).map_err(|_| format!("Cannot open file '{path}': {NO_REASON}"))?;
@@ -321,7 +325,8 @@ fn load_ca_file(path: &str) -> Result<Vec<Vec<u8>>, String> {
     Ok(certs)
 }
 
-// MIT `get_cert` (`plugins/preauth/pkinit/pkinit_crypto_openssl.c:1311-1345`): a file that does not open is its errno, one with no certificate `EIO`.
+// MIT: `get_cert` (plugins/preauth/pkinit/pkinit_crypto_openssl.c:1311-1345)
+// a file that does not open is its errno, one with no certificate `EIO`.
 fn read_cert(path: &str) -> Result<Vec<u8>, (i64, &'static str)> {
     let bytes = std::fs::read(path).map_err(|e| (errno(&e), NO_REASON))?;
     let text = String::from_utf8_lossy(&bytes);
@@ -348,7 +353,8 @@ enum KeyFault {
     Unsupported,
 }
 
-// MIT `get_key` (`plugins/preauth/pkinit/pkinit_crypto_openssl.c:1406-1444`): the KDC's password callback fails, so an encrypted key is an error.
+// MIT: `get_key` (plugins/preauth/pkinit/pkinit_crypto_openssl.c:1406-1444)
+// the KDC's password callback fails, so an encrypted key is an error.
 fn read_key(path: &str) -> Result<IdentityKey, KeyFault> {
     let bytes =
         Zeroizing::new(std::fs::read(path).map_err(|e| KeyFault::Read(errno(&e), NO_REASON))?);

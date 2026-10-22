@@ -129,7 +129,8 @@ impl PrincipalStore {
             self.realm.clone(),
             vec![KeyEntry::new(key.etype(), key, 1)],
             salt,
-            // MIT `kadm5_create_principal_3` (`lib/kadm5/srv/svr_principal.c:391-394`): a principal created without a `max_life` takes the realm's.
+            // MIT: `kadm5_create_principal_3` (lib/kadm5/srv/svr_principal.c:391-394)
+            // a principal created without a `max_life` takes the realm's.
             crate::store::PrincipalFields {
                 requires_preauth: false,
                 max_life: self.policy.max_life,
@@ -167,7 +168,8 @@ impl PrincipalStore {
         self.put_incoming_trust_key(acl, actor, foreign_realm, key, true)
     }
 
-    /// MIT `create_principal_2_svc` (`server_stubs.c:477-485`): an ACL denial does not create the principal.
+    // MIT: `create_principal_2_svc` (server_stubs.c:477-485)
+    /// an ACL denial does not create the principal.
     /// Replacing the trust key drops the previous versions, and adding one uses the next kvno rather than reusing the current one.
     fn put_incoming_trust_key(
         &mut self,

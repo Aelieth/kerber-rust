@@ -1,9 +1,11 @@
 //! `[plugins] clpreauth` selects the client's preauth modules by MIT's names.
 //!
-//! MIT `k5_init_preauth_context` (`lib/krb5/krb/preauth2.c:132-150`): built-ins register, then
+// MIT: `k5_init_preauth_context` (lib/krb5/krb/preauth2.c:132-150)
+//! built-ins register, then
 //! `k5_plugin_load_all` applies `disable` and `enable_only`. A module that is not loaded does not
 //! answer its pa-type.
-//! MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:648-728`): a hint whose real types have no
+// MIT: `process_pa_data` (lib/krb5/krb/preauth2.c:648-728)
+//! a hint whose real types have no
 //! loaded module is `KRB5_PREAUTH_FAILED` ("Generic preauthentication failure"), and the prompter
 //! is not asked.
 
@@ -337,7 +339,8 @@ fn a_disabled_widget_is_not_answered() {
     );
 }
 
-/// MIT `otp_client_process` (`lib/krb5/krb/preauth_otp.c:1084-1087`): without a FAST armor key the
+// MIT: `otp_client_process` (lib/krb5/krb/preauth_otp.c:1084-1087)
+/// without a FAST armor key the
 /// module has nothing to answer with, so a PA-OTP-CHALLENGE alone leaves the hint unanswered.
 #[test]
 fn an_unarmored_otp_hint_is_not_answered() {

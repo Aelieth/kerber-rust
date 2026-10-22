@@ -147,13 +147,16 @@ enum Inner {
     Refused(&'static str),
 }
 
-/// MIT `krb5int_is_app_tag` (`include/k5-int.h:1334-1336`): the first byte, its constructed bit cleared, is `0x40 | tag`.
+// MIT: `krb5int_is_app_tag` (include/k5-int.h:1334-1336)
+/// the first byte, its constructed bit cleared, is `0x40 | tag`.
 fn is_app_tag(raw: &[u8], tag: u8) -> bool {
     raw.first().is_some_and(|b| b & !0x20 == 0x40 | tag)
 }
 
-/// MIT `dispatch` (`kdc/dispatch.c:145-170`): a TGS-REQ is tried first, then an AS-REQ, anything else is a message-type error; a request that does not decode, or whose server is not named, is refused before processing.
-/// MIT `setup_server_realm` (`kdc/main.c:123-124`): a request with no server has no realm.
+// MIT: `dispatch` (kdc/dispatch.c:145-170)
+/// a TGS-REQ is tried first, then an AS-REQ, anything else is a message-type error; a request that does not decode, or whose server is not named, is refused before processing.
+// MIT: `setup_server_realm` (kdc/main.c:123-124)
+/// a request with no server has no realm.
 fn handle_inner(
     store: &dyn PrincipalRead,
     raw: &[u8],
@@ -176,13 +179,17 @@ fn handle_inner(
     Ok(Inner::Refused(MSG_TYPE))
 }
 
-/// MIT `KRB5KRB_AP_ERR_MSG_TYPE` (`lib/krb5/error_tables/krb5_err.et:83-83`): its text.
+// MIT: `KRB5KRB_AP_ERR_MSG_TYPE` (lib/krb5/error_tables/krb5_err.et:83-83)
+/// its text.
 const MSG_TYPE: &str = "Invalid message type";
-/// MIT `KRB5KDC_ERR_BAD_PVNO` (`lib/krb5/error_tables/krb5_err.et:44-44`): its text.
+// MIT: `KRB5KDC_ERR_BAD_PVNO` (lib/krb5/error_tables/krb5_err.et:44-44)
+/// its text.
 const BAD_PVNO: &str = "Requested protocol version not supported";
-/// MIT `KRB5KDC_ERR_WRONG_REALM` (`lib/krb5/error_tables/krb5_err.et:112-112`): its text.
+// MIT: `KRB5KDC_ERR_WRONG_REALM` (lib/krb5/error_tables/krb5_err.et:112-112)
+/// its text.
 const WRONG_REALM: &str = "Realm not local to KDC";
-/// MIT `KRB5KDC_ERR_DISCARD` (`lib/krb5/error_tables/k5e1_err.et:36-36`): its text.
+// MIT: `KRB5KDC_ERR_DISCARD` (lib/krb5/error_tables/k5e1_err.et:36-36)
+/// its text.
 const DISCARD: &str = "The KDC should discard this request";
 
 fn decode_kdc_req<T>(
@@ -203,12 +210,14 @@ fn decode_kdc_req<T>(
     })
 }
 
-/// MIT `check_atype_tag` (`lib/krb5/asn.1/asn1_encode.c:1097-1103`): an explicit tag matches by class, number and the constructed bit.
+// MIT: `check_atype_tag` (lib/krb5/asn.1/asn1_encode.c:1097-1103)
+/// an explicit tag matches by class, number and the constructed bit.
 fn explicit(t: &Tlv<'_>, class: u8, tagnum: u32) -> bool {
     t.constructed && t.class == class && t.tagnum == tagnum
 }
 
-/// MIT `decode_atype` (`lib/krb5/asn.1/asn1_encode.c:1186-1201`): an explicit tag holds one element that fills it.
+// MIT: `decode_atype` (lib/krb5/asn.1/asn1_encode.c:1186-1201)
+/// an explicit tag holds one element that fills it.
 fn inner<'a>(t: &Tlv<'a>) -> Result<Tlv<'a>, &'static str> {
     let i = get_tag(t.contents)?;
     if !i.rest.is_empty() {
@@ -238,7 +247,8 @@ struct Field {
     kind: Kind,
 }
 
-/// MIT `kdc_req_fields` (`lib/krb5/asn.1/asn1_k_encode.c:789-792`): `pvno`, `msg-type`, optional `padata`, `req-body`.
+// MIT: `kdc_req_fields` (lib/krb5/asn.1/asn1_k_encode.c:789-792)
+/// `pvno`, `msg-type`, optional `padata`, `req-body`.
 const KDC_REQ: [Field; 4] = [
     Field {
         tagnum: 1,
@@ -275,7 +285,8 @@ const PA_DATA: [Field; 2] = [
     },
 ];
 
-/// MIT `k5_asn1_full_decode` (`lib/krb5/asn.1/asn1_encode.c:1576-1584`): the outer tag, then its contents; bytes after it are not checked.
+// MIT: `k5_asn1_full_decode` (lib/krb5/asn.1/asn1_encode.c:1576-1584)
+/// the outer tag, then its contents; bytes after it are not checked.
 fn kdc_req_verdict(raw: &[u8], app: u32) -> Result<(), &'static str> {
     let t = get_tag(raw)?;
     if !explicit(&t, APPLICATION, app) {
@@ -288,7 +299,8 @@ fn kdc_req_verdict(raw: &[u8], app: u32) -> Result<(), &'static str> {
     decode_sequence(s.contents, &KDC_REQ)
 }
 
-/// MIT `decode_sequence` (`lib/krb5/asn.1/asn1_encode.c:1411-1446`): each element goes to the next field whose tag it carries, the fields it skips are omitted, a required one omitted is a missing field, and an element no field takes ends the sequence.
+// MIT: `decode_sequence` (lib/krb5/asn.1/asn1_encode.c:1411-1446)
+/// each element goes to the next field whose tag it carries, the fields it skips are omitted, a required one omitted is a missing field, and an element no field takes ends the sequence.
 fn decode_sequence(mut p: &[u8], fields: &[Field]) -> Result<(), &'static str> {
     let mut i = 0;
     while i < fields.len() && !p.is_empty() {
@@ -312,8 +324,10 @@ fn decode_sequence(mut p: &[u8], fields: &[Field]) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// MIT `k5_asn1_decode_int` (`lib/krb5/asn.1/asn1_encode.c:191-199`): an empty INTEGER is a bad length, one longer than eight bytes an overflow.
-/// MIT `k5_asn1_decode_uint` (`lib/krb5/asn.1/asn1_encode.c:211-219`): a negative or too long unsigned INTEGER is an overflow.
+// MIT: `k5_asn1_decode_int` (lib/krb5/asn.1/asn1_encode.c:191-199)
+/// an empty INTEGER is a bad length, one longer than eight bytes an overflow.
+// MIT: `k5_asn1_decode_uint` (lib/krb5/asn.1/asn1_encode.c:211-219)
+/// a negative or too long unsigned INTEGER is an overflow.
 fn decode_field(kind: Kind, t: &Tlv<'_>) -> Result<(), &'static str> {
     let v = inner(t)?;
     match kind {
@@ -354,7 +368,8 @@ fn decode_field(kind: Kind, t: &Tlv<'_>) -> Result<(), &'static str> {
             if !is_universal(&v, true, 16) {
                 return Err(ASN1_BAD_ID);
             }
-            // MIT `decode_sequence_of` (`lib/krb5/asn.1/asn1_encode.c:1468-1480`): each element is read, must be a SEQUENCE, and is decoded.
+            // MIT: `decode_sequence_of` (lib/krb5/asn.1/asn1_encode.c:1468-1480)
+            // each element is read, must be a SEQUENCE, and is decoded.
             let mut p = v.contents;
             while !p.is_empty() {
                 let e = get_tag(p)?;
@@ -415,7 +430,8 @@ fn framing_at(mut p: &[u8], depth: u32) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// MIT `k5_asn1_decode_generaltime` (`lib/krb5/asn.1/asn1_encode.c:242-260`): a time must be fifteen characters, digits then `Z`.
+// MIT: `k5_asn1_decode_generaltime` (lib/krb5/asn.1/asn1_encode.c:242-260)
+/// a time must be fifteen characters, digits then `Z`.
 fn body_failure_text(e: &str) -> &'static str {
     if let Some(n) = e
         .split("KerberosTime is not YYYYMMDDhhmmssZ (")
@@ -462,7 +478,8 @@ fn body_failure_text(e: &str) -> &'static str {
     ASN1_PARSE_ERROR
 }
 
-/// MIT `dispatch` (`kdc/dispatch.c:123-131`): the two lines a request found in the lookaside logs; MIT never fills in the address.
+// MIT: `dispatch` (kdc/dispatch.c:123-131)
+/// the two lines a request found in the lookaside logs; MIT never fills in the address.
 const RESENDING: &str = "DISPATCH: repeated (retransmitted?) request from [unknown address type], resending previous response";
 const DROPPING: &str = "DISPATCH: repeated (retransmitted?) request from [unknown address type] during request processing, dropping repeated request";
 
@@ -512,7 +529,8 @@ impl KdcDispatch {
         }
     }
 
-    /// MIT `finish_dispatch_cache` (`kdc/dispatch.c:77-83`): the in-progress mark goes unless the request was discarded, and a reply is cached.
+    // MIT: `finish_dispatch_cache` (kdc/dispatch.c:77-83)
+    /// the in-progress mark goes unless the request was discarded, and a reply is cached.
     fn finish_dispatch_cache(&mut self, request: &[u8], is_tcp: bool, done: Done) -> Reply {
         match &done {
             Done::Failed { discard: true, .. } => {}
@@ -522,7 +540,8 @@ impl KdcDispatch {
         self.finish_dispatch(is_tcp, done)
     }
 
-    /// MIT `finish_dispatch` (`kdc/dispatch.c:54-66`): a UDP reply over `max_dgram_reply_size` is replaced by the response-too-big error, then the code and reply go back to the loop.
+    // MIT: `finish_dispatch` (kdc/dispatch.c:54-66)
+    /// a UDP reply over `max_dgram_reply_size` is replaced by the response-too-big error, then the code and reply go back to the loop.
     /// Deviation: a reply resent from the lookaside that is too big for UDP is replaced by the realm's response-too-big error, where MIT's builds it from a realm it has not set yet.
     fn finish_dispatch(&self, is_tcp: bool, done: Done) -> Reply {
         match done {
@@ -539,7 +558,8 @@ impl KdcDispatch {
 
 fn process(store: &dyn PrincipalRead, raw: &[u8], sender: &HostAddress) -> Done {
     match process_logged(store, raw, Some(sender)) {
-        // MIT `finish_process_as_req` (`kdc/do_as_req.c:371-381`): a discard sends no error.
+        // MIT: `finish_process_as_req` (kdc/do_as_req.c:371-381)
+        // a discard sends no error.
         Ok(Processed::Reply(bytes)) if bytes.is_empty() => Done::Failed {
             text: DISCARD.into(),
             discard: true,
@@ -557,7 +577,8 @@ fn process(store: &dyn PrincipalRead, raw: &[u8], sender: &HostAddress) -> Done 
 }
 
 impl Dispatch for KdcDispatch {
-    /// MIT `dispatch` (`kdc/dispatch.c:114-141`): a request in the lookaside is resent its reply, or dropped while it is being processed, each logged; any other is marked in progress and processed.
+    // MIT: `dispatch` (kdc/dispatch.c:114-141)
+    /// a request in the lookaside is resent its reply, or dropped while it is being processed, each logged; any other is marked in progress and processed.
     /// A request whose processing panics is answered with nothing and its mark removed, where MIT's process would end.
     fn dispatch(
         &mut self,
@@ -612,7 +633,8 @@ impl Dispatch for KdcDispatch {
         self.finish_dispatch_cache(request, is_tcp, done)
     }
 
-    /// MIT `make_toolong_error` (`kdc/kdc_util.c:1882-1913`): `KRB_ERR_FIELD_TOOLONG` from the realm's TGS, with no client or text.
+    // MIT: `make_toolong_error` (kdc/kdc_util.c:1882-1913)
+    /// `KRB_ERR_FIELD_TOOLONG` from the realm's TGS, with no client or text.
     fn make_toolong_error(&mut self) -> Result<Vec<u8>, String> {
         Ok(plain_store(&self.store, |s| {
             super::kdc_error_bytes(s, err::FIELD_TOOLONG)
@@ -871,7 +893,8 @@ mod tests {
     }
 
     /// A replay the lookaside no longer holds is processed again: the AS-REQ with the same PA-ENC-TIMESTAMP and the TGS-REQ with the same authenticator each get a new ticket, where the lookaside resent the first reply while it held it.
-    /// MIT `dispatch` (`kdc/dispatch.c:114-140`): only the lookaside answers a repeated request, so one it no longer holds is processed again.
+    // MIT: `dispatch` (kdc/dispatch.c:114-140)
+    /// only the lookaside answers a repeated request, so one it no longer holds is processed again.
     #[test]
     fn a_replay_the_lookaside_no_longer_holds_is_issued_again() {
         let (store, _) = bootstrap_documented().unwrap();

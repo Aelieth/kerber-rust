@@ -66,7 +66,8 @@ pub struct KrbFastArmoredRep {
     pub enc_fast_rep: EncryptedData,
 }
 
-// MIT `SecureCookie` (`asn1_k_encode.c:1683-1688`): untagged SEQUENCE.
+// MIT: `SecureCookie` (asn1_k_encode.c:1683-1688)
+// untagged SEQUENCE.
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct SecureCookie {
     pub time: i32,

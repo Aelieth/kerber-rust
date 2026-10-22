@@ -44,7 +44,8 @@ struct PrincArgs {
     name: Option<(PrincipalName, String)>,
 }
 
-/// MIT `krb5_flagspec_to_mask` (`kadm5/str_conv.c:171-197`): a `+`, `-` or unsigned attribute name, or a `0x` number, set or cleared on `attributes`; `None` for any other word.
+// MIT: `krb5_flagspec_to_mask` (kadm5/str_conv.c:171-197)
+/// a `+`, `-` or unsigned attribute name, or a `0x` number, set or cleared on `attributes`; `None` for any other word.
 fn flagspec(spec: &str, attributes: u32) -> Option<u32> {
     let signed = if spec.starts_with(['+', '-']) {
         spec.to_owned()
@@ -55,7 +56,8 @@ fn flagspec(spec: &str, attributes: u32) -> Option<u32> {
     Some((attributes | set) & !clear)
 }
 
-/// MIT `kadmin_parse_princ_args` (`kadmin.c:1048-1179`): the options before the last word, which is the principal. `None` after printing what MIT prints there; the caller then prints its usage.
+// MIT: `kadmin_parse_princ_args` (kadmin.c:1048-1179)
+/// the options before the last word, which is the principal. `None` after printing what MIT prints there; the caller then prints its usage.
 fn parse_princ_args(
     s: &mut Session<'_>,
     argv: &[String],
@@ -161,13 +163,15 @@ fn usage(s: &mut Session<'_>, lines: &[&str]) {
     }
 }
 
-/// MIT `policy_exists` (`kadmin.c:277-285`): whether `kadm5_get_policy` finds the name.
+// MIT: `policy_exists` (kadmin.c:277-285)
+/// whether `kadm5_get_policy` finds the name.
 fn policy_exists(s: &mut Session<'_>, name: &str) -> bool {
     let _ = s.h.refresh();
     s.h.store.policies().contains_key(name)
 }
 
-/// MIT `kadmin_addprinc` (`kadmin.c:1242-1362`): the policy notice, the password (asked twice when none is given), the create, `Principal "…" created.`.
+// MIT: `kadmin_addprinc` (kadmin.c:1242-1362)
+/// the policy notice, the password (asked twice when none is given), the create, `Principal "…" created.`.
 pub(crate) fn addprinc(s: &mut Session<'_>, argv: &[String]) {
     let Some(mut a) = parse_princ_args(s, argv, 0, "add_principal") else {
         usage(s, &texts::ADDPRINC_USAGE);
@@ -278,12 +282,14 @@ fn create(
     Ok(())
 }
 
-/// MIT `krb5_db2_put_principal` (`kdb_db2.c:812-822`): the db2 module takes no per-principal argument.
+// MIT: `krb5_db2_put_principal` (kdb_db2.c:812-822)
+/// the db2 module takes no per-principal argument.
 fn db2_put_refused(arg: &str) -> Error {
     Error::InvalidArgument(format!("Unsupported argument \"{arg}\" for db2"))
 }
 
-/// MIT `kadmin_modprinc` (`kadmin.c:1365-1435`): the entry is read first, the options apply to its attributes, `Principal "…" modified.`.
+// MIT: `kadmin_modprinc` (kadmin.c:1365-1435)
+/// the entry is read first, the options apply to its attributes, `Principal "…" modified.`.
 pub(crate) fn modprinc(s: &mut Session<'_>, argv: &[String]) {
     let argc = argv.len();
     if argc < 2 {
@@ -390,7 +396,8 @@ fn modify(
     )
 }
 
-/// MIT `kadmin_delprinc` (`kadmin.c:666-711`): `-force`, else the `yes` question.
+// MIT: `kadmin_delprinc` (kadmin.c:666-711)
+/// `-force`, else the `yes` question.
 pub(crate) fn delprinc(s: &mut Session<'_>, argv: &[String]) {
     let argc = argv.len();
     if !(argc == 2 || (argc == 3 && argv[1] == "-force")) {
@@ -440,7 +447,8 @@ pub(crate) fn delprinc(s: &mut Session<'_>, argv: &[String]) {
     s.io.info("Make sure that you have removed this principal from all ACLs before reusing.\n");
 }
 
-/// MIT `kadmin_renameprinc` (`kadmin.c:714-775`): `-force`, else the `yes` question.
+// MIT: `kadmin_renameprinc` (kadmin.c:714-775)
+/// `-force`, else the `yes` question.
 pub(crate) fn renprinc(s: &mut Session<'_>, argv: &[String]) {
     let argc = argv.len();
     if !(argc == 3 || (argc == 4 && argv[1] == "-force")) {
@@ -505,7 +513,8 @@ pub(crate) fn renprinc(s: &mut Session<'_>, argv: &[String]) {
     s.io.info("Make sure that you have removed the old principal from all ACLs before reusing.\n");
 }
 
-/// MIT `kadmin_addalias` (`kadmin.c:778-824`): `Principal "…" aliased to "…".`
+// MIT: `kadmin_addalias` (kadmin.c:778-824)
+/// `Principal "…" aliased to "…".`
 pub(crate) fn addalias(s: &mut Session<'_>, argv: &[String]) {
     if argv.len() != 3 {
         s.io.error("usage: add_alias alias_principal target_principal\n");
@@ -546,7 +555,8 @@ pub(crate) fn addalias(s: &mut Session<'_>, argv: &[String]) {
     ));
 }
 
-/// MIT `cpw_usage` (`kadmin.c:827-833`): the message when given, then the usage line.
+// MIT: `cpw_usage` (kadmin.c:827-833)
+/// the message when given, then the usage line.
 fn cpw_usage(s: &mut Session<'_>, msg: Option<&str>) {
     if let Some(m) = msg {
         s.io.error(&format!("{m}\n"));
@@ -554,7 +564,8 @@ fn cpw_usage(s: &mut Session<'_>, msg: Option<&str>) {
     s.io.error(texts::CPW_USAGE);
 }
 
-/// MIT `kadmin_cpw` (`kadmin.c:836-973`): `-pw`, `-randkey`, or the password asked twice; `-keepold` and `-e` as given.
+// MIT: `kadmin_cpw` (kadmin.c:836-973)
+/// `-pw`, `-randkey`, or the password asked twice; `-keepold` and `-e` as given.
 pub(crate) fn cpw(s: &mut Session<'_>, argv: &[String]) {
     let mut rest = argv.get(1..).unwrap_or_default();
     let mut pwarg: Option<String> = None;
@@ -660,7 +671,8 @@ pub(crate) fn cpw(s: &mut Session<'_>, argv: &[String]) {
     s.io.info(&format!("Password for \"{canon}\" changed.\n"));
 }
 
-/// MIT `kadmin_getprinc` (`kadmin.c:1438-1571`): the record, or with `-terse` its fields tab-separated.
+// MIT: `kadmin_getprinc` (kadmin.c:1438-1571)
+/// the record, or with `-terse` its fields tab-separated.
 pub(crate) fn getprinc(s: &mut Session<'_>, argv: &[String]) {
     let argc = argv.len();
     if !(argc == 2 || (argc == 3 && argv[1] == "-terse")) {
@@ -708,7 +720,8 @@ pub(crate) fn getprinc(s: &mut Session<'_>, argv: &[String]) {
     s.io.print(&text);
 }
 
-/// MIT `kadmin_getprincs` (`kadmin.c:1574-1593`): the names, sorted, that match the glob (the realm free when the glob names none).
+// MIT: `kadmin_getprincs` (kadmin.c:1574-1593)
+/// the names, sorted, that match the glob (the realm free when the glob names none).
 pub(crate) fn getprincs(s: &mut Session<'_>, argv: &[String]) {
     let expr = match argv {
         [_] => None,
@@ -742,7 +755,8 @@ pub(crate) fn getprincs(s: &mut Session<'_>, argv: &[String]) {
     s.io.print(&out);
 }
 
-/// MIT `kadmin_getprivs` (`kadmin.c:1847-1869`): `kadmin.local` holds every privilege.
+// MIT: `kadmin_getprivs` (kadmin.c:1847-1869)
+/// `kadmin.local` holds every privilege.
 pub(crate) fn getprivs(s: &mut Session<'_>, argv: &[String]) {
     if argv.len() != 1 {
         s.io.error("usage: get_privs\n");
@@ -751,7 +765,8 @@ pub(crate) fn getprivs(s: &mut Session<'_>, argv: &[String]) {
     s.io.print("current privileges: INQUIRE ADD MODIFY DELETE\n");
 }
 
-/// MIT `kadmin_purgekeys` (`kadmin.c:1872-1921`): keep the newest keys, `-keepkvno N` and newer, or (`-all`) none.
+// MIT: `kadmin_purgekeys` (kadmin.c:1872-1921)
+/// keep the newest keys, `-keepkvno N` and newer, or (`-all`) none.
 pub(crate) fn purgekeys(s: &mut Session<'_>, argv: &[String]) {
     let (keepkvno, pname) = match argv {
         [_, opt, kvno, p] if opt == "-keepkvno" => {
@@ -789,7 +804,8 @@ pub(crate) fn purgekeys(s: &mut Session<'_>, argv: &[String]) {
     }
 }
 
-/// MIT `kadmin_getstrings` (`kadmin.c:1924-1967`): `key: value` lines, or `(No string attributes.)`.
+// MIT: `kadmin_getstrings` (kadmin.c:1924-1967)
+/// `key: value` lines, or `(No string attributes.)`.
 pub(crate) fn getstrings(s: &mut Session<'_>, argv: &[String]) {
     if argv.len() != 2 {
         s.io.error("usage: get_strings principal\n");
@@ -823,7 +839,8 @@ pub(crate) fn getstrings(s: &mut Session<'_>, argv: &[String]) {
     }
 }
 
-/// MIT `kadmin_setstring` (`kadmin.c:1970-2008`): `Attribute set for principal "…".`
+// MIT: `kadmin_setstring` (kadmin.c:1970-2008)
+/// `Attribute set for principal "…".`
 pub(crate) fn setstring(s: &mut Session<'_>, argv: &[String]) {
     let [_, pname, key, value] = argv else {
         s.io.error("usage: set_string principal key value\n");
@@ -832,7 +849,8 @@ pub(crate) fn setstring(s: &mut Session<'_>, argv: &[String]) {
     set_or_del(s, pname, key, Some(value), "set_string");
 }
 
-/// MIT `kadmin_delstring` (`kadmin.c:2011-2048`): `Attribute removed from principal "…".`
+// MIT: `kadmin_delstring` (kadmin.c:2011-2048)
+/// `Attribute removed from principal "…".`
 pub(crate) fn delstring(s: &mut Session<'_>, argv: &[String]) {
     let [_, pname, key] = argv else {
         s.io.error("usage: del_string principal key\n");
@@ -873,7 +891,8 @@ fn set_or_del(s: &mut Session<'_>, pname: &str, key: &str, value: Option<&str>, 
     }
 }
 
-/// MIT `kadmin_lock` (`kadmin.c:636-648`): the database's exclusive lock, taken (waiting for any other holder) and held across commands until `unlock`; every other process waits.
+// MIT: `kadmin_lock` (kadmin.c:636-648)
+/// the database's exclusive lock, taken (waiting for any other holder) and held across commands until `unlock`; every other process waits.
 pub(crate) fn lock(s: &mut Session<'_>, _argv: &[String]) {
     if s.locked {
         return;
@@ -885,7 +904,8 @@ pub(crate) fn lock(s: &mut Session<'_>, _argv: &[String]) {
     s.locked = true;
 }
 
-/// MIT `kadmin_unlock` (`kadmin.c:651-663`): the lock `lock` took is let go.
+// MIT: `kadmin_unlock` (kadmin.c:651-663)
+/// the lock `lock` took is let go.
 pub(crate) fn unlock(s: &mut Session<'_>, _argv: &[String]) {
     if !s.locked {
         return;

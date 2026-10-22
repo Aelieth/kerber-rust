@@ -73,7 +73,8 @@ pub use name::{
 };
 pub use name_error::{NameError, TimeError};
 
-// MIT `krb5_principal_compare_flags` (`princ_comp.c:79-124`): ignores name type;
+// MIT: `krb5_principal_compare_flags` (princ_comp.c:79-124)
+// ignores name type;
 #[must_use]
 pub fn principal_compare(
     name_a: &PrincipalName,
@@ -506,11 +507,15 @@ pub struct PaData {
     pub padata_value: OctetString,
 }
 
-// MIT `typed_data_0` (`asn1_k_encode.c:1547-1547`): `data-type [0]` is an Int32.
-// MIT `typed_data_1` (`asn1_k_encode.c:1548-1548`): `data-value [1]` is an OCTET STRING, encoded
+// MIT: `typed_data_0` (asn1_k_encode.c:1547-1547)
+// `data-type [0]` is an Int32.
+// MIT: `typed_data_1` (asn1_k_encode.c:1548-1548)
+// `data-value [1]` is an OCTET STRING, encoded
 /// even when empty, so it is not optional on the wire.
-// MIT `typed_data_fields` (`asn1_k_encode.c:1549-1551`): the element's two fields, in that
-// MIT `typed_data` (`asn1_k_encode.c:1552-1552`): the element is the SEQUENCE of those
+// MIT: `typed_data_fields` (asn1_k_encode.c:1549-1551)
+// the element's two fields, in that
+// MIT: `typed_data` (asn1_k_encode.c:1552-1552)
+// the element is the SEQUENCE of those
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct TypedData {
     #[rasn(tag(explicit(0)))]
@@ -1005,7 +1010,8 @@ impl ApReq {
     pub const MSG_TYPE: i32 = 14;
 }
 
-// MIT `ap_req_msg_type` (`lib/krb5/asn.1/asn1_k_encode.c:747-747`): the msg-type is an immediate with no error, so any INTEGER of up to eight octets decodes and none is kept.
+// MIT: `ap_req_msg_type` (lib/krb5/asn.1/asn1_k_encode.c:747-747)
+// the msg-type is an immediate with no error, so any INTEGER of up to eight octets decodes and none is kept.
 #[derive(AsnType, Decode)]
 #[rasn(tag(explicit(application, 14)))]
 struct ApReqOnWire {
@@ -1108,7 +1114,8 @@ impl KrbError {
     pub const MSG_TYPE: i32 = 30;
 }
 
-// MIT `error_msg_type` (`lib/krb5/asn.1/asn1_k_encode.c:911-911`): the msg-type is an immediate with no error, so any INTEGER of up to eight octets decodes and none is kept.
+// MIT: `error_msg_type` (lib/krb5/asn.1/asn1_k_encode.c:911-911)
+// the msg-type is an immediate with no error, so any INTEGER of up to eight octets decodes and none is kept.
 #[derive(AsnType, Decode, Encode)]
 #[rasn(tag(explicit(application, 30)))]
 struct KrbErrorOnWire {

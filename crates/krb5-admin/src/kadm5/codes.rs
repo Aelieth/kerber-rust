@@ -111,9 +111,11 @@ pub(super) const KADM5_BAD_HISTORY: u32 = 43_787_540;
 pub(super) const KADM5_BAD_MIN_PASS_LIFE: u32 = 43_787_541;
 /// MIT `KADM5_DUP`.
 pub(super) const KADM5_DUP: u32 = 43_787_527;
-/// MIT `OSA_ADB_DUP` (`lib/kdb/adb_err.et`): a policy the locked create finds there already.
+// MIT: `OSA_ADB_DUP` (lib/kdb/adb_err.et)
+/// a policy the locked create finds there already.
 pub(super) const OSA_ADB_DUP: u32 = 28_810_241;
-/// MIT `OSA_ADB_NOENT` (`lib/kdb/adb_err.et`): a policy the locked write or delete finds gone.
+// MIT: `OSA_ADB_NOENT` (lib/kdb/adb_err.et)
+/// a policy the locked write or delete finds gone.
 pub(super) const OSA_ADB_NOENT: u32 = 28_810_242;
 /// MIT `KADM5_FAILURE`.
 pub(super) const KADM5_FAILURE: u32 = 43_787_520;
@@ -147,7 +149,8 @@ pub(super) const KADM5_ALIAS_REALM: u32 = 43_787_583;
 /// MIT `KRB5_KDB_ALIAS_UNSUPPORTED` (`kdb5_err.et`, -1780008402) as the `kadm5_ret_t` the client decodes.
 pub(super) const KRB5_KDB_ALIAS_UNSUPPORTED: u32 = 2_514_958_894;
 /// The `kadm5_ret_t` of a database the server may not lock for writing (-1780008424).
-/// MIT `KRB5_KDB_CANTLOCK_DB` (`lib/krb5/error_tables/kdb5_err.et:64-64`): "Insufficient access to lock database".
+// MIT: `KRB5_KDB_CANTLOCK_DB` (lib/krb5/error_tables/kdb5_err.et:64-64)
+/// "Insufficient access to lock database".
 pub(super) const KRB5_KDB_CANTLOCK_DB: u32 = 2_514_958_872;
 /// MIT `ovk` 1 (`KADM5_AUTH_GET`).
 pub(super) const KADM5_AUTH_GET: u32 = 43_787_521;
@@ -171,7 +174,8 @@ pub(super) const KADM5_TL_DATA: u32 = 0x0004_0000;
 pub(super) const KADM5_KEY_DATA: u32 = 0x0002_0000;
 pub(super) const KADM5_BAD_SERVER_PARAMS: u32 = 43_787_563;
 /// MIT `ovk` 47 (`KADM5_BAD_TL_TYPE`).
-/// MIT `KADM5_BAD_TL_TYPE` (`kadm_err.et:54-54`): entry 47 of the `ovk` error table.
+// MIT: `KADM5_BAD_TL_TYPE` (kadm_err.et:54-54)
+/// entry 47 of the `ovk` error table.
 pub(super) const KADM5_BAD_TL_TYPE: u32 = 43_787_567;
 pub(super) const KADM5_MAX_LIFE: u32 = 0x0000_0020;
 pub(super) const KADM5_PRINCIPAL: u32 = 0x0000_0001;
@@ -242,5 +246,6 @@ pub(super) const API_V2: u32 = 0x1234_5702;
 pub(super) const API_V3: u32 = 0x1234_5703;
 pub(super) const API_V4: u32 = 0x1234_5704;
 
-/// MIT `glob_to_regexp` (`svr_iters.c:61-62`): a glob that ends in a backslash is EINVAL.
+// MIT: `glob_to_regexp` (svr_iters.c:61-62)
+/// a glob that ends in a backslash is EINVAL.
 pub(super) const EINVAL: u32 = 22;

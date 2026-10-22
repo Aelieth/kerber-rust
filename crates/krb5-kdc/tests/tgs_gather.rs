@@ -3,7 +3,8 @@
 //! times after BADMATCH / BADADDR.
 //! The remaining `GET_LOCAL_TGT` sites (the S4U2Proxy PAC in `ad.rs`) go out as 60, and a
 //! kvno-0 header ticket in `kdc_rd_ap_req` decrypts under the previous kvno.
-//! MIT `kdc_rd_ap_req` (`kdc_util.c:325-346`): a kvno-0 ticket that fails to decrypt is
+// MIT: `kdc_rd_ap_req` (kdc_util.c:325-346)
+//! a kvno-0 ticket that fails to decrypt is
 //! retried with the previous kvno's key.
 
 use krb5_asn1::{decode, encode};

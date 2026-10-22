@@ -7,9 +7,12 @@ use krb5_testkit::scratch_dir;
 
 /// Live MIT 1.22.2: a relation with no value whose next line is no `{` refuses the profile, and
 /// each tool stops with its own line for the failed init and exit 1.
-/// MIT `os_init_paths` (`init_os_ctx.c:403-408`): a missing `{` is `KRB5_CONFIG_BADFORMAT`.
-/// MIT `main` (`kdc/main.c:917-921`): krb5kdc prints `while initializing krb5`
-/// MIT `main` (`kdb5_util.c:214-218`): kdb5_util prints `while initializing Kerberos code`
+// MIT: `os_init_paths` (init_os_ctx.c:403-408)
+/// a missing `{` is `KRB5_CONFIG_BADFORMAT`.
+// MIT: `main` (kdc/main.c:917-921)
+/// krb5kdc prints `while initializing krb5`
+// MIT: `main` (kdb5_util.c:214-218)
+/// kdb5_util prints `while initializing Kerberos code`
 #[test]
 fn a_refused_profile_stops_the_tool_with_its_mit_line() {
     let dir = scratch_dir("profile-refused");

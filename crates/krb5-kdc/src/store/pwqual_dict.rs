@@ -18,7 +18,8 @@ pub(crate) enum CaseFold {
 }
 
 /// The words of a dictionary file, kept as MIT keeps them: the file in one block and an index of where each word starts, sorted for a binary search.
-/// MIT `init_dict` (`lib/kadm5/srv/pwqual_dict.c:124-151`): the file is read into one block and the words are pointers into it, sorted.
+// MIT: `init_dict` (lib/kadm5/srv/pwqual_dict.c:124-151)
+/// the file is read into one block and the words are pointers into it, sorted.
 pub(crate) struct PwqualDict {
     /// The file's `\n`-terminated lines with each `\n` turned into a NUL, folded with [`Self::fold`].
     block: Box<[u8]>,
@@ -40,7 +41,8 @@ impl std::fmt::Debug for PwqualDict {
 
 impl PwqualDict {
     /// The dictionary `dict_file` names, `None` when there is none to read; either case gets MIT's notice, which `note` takes ([`PrincipalStore::init_pwqual`] logs it with klog).
-    /// MIT `init_dict` (`lib/kadm5/srv/pwqual_dict.c:104-118`): no `dict_file` and a missing file leave the server without a dictionary; any other open error is returned.
+    // MIT: `init_dict` (lib/kadm5/srv/pwqual_dict.c:104-118)
+    /// no `dict_file` and a missing file leave the server without a dictionary; any other open error is returned.
     /// The open, `fstat` or read error of a `dict_file` that exists but cannot be read (a directory's `EISDIR`), and `FileTooLarge` for a dictionary of 4 GiB or more.
     pub(crate) fn open(
         dict_file: Option<&Path>,
@@ -71,8 +73,10 @@ impl PwqualDict {
     }
 
     /// The dictionary in `block`, folded the way the process locale's `strcasecmp` folds.
-    /// MIT `init_dict` (`lib/kadm5/srv/pwqual_dict.c:136-151`): every newline is a word, an unterminated last line is not, and a NUL ends the word so the words after it shift.
-    /// MIT `word_compare` (`lib/kadm5/srv/pwqual_dict.c:64-68`): words sort with `strcasecmp`.
+    // MIT: `init_dict` (lib/kadm5/srv/pwqual_dict.c:136-151)
+    /// every newline is a word, an unterminated last line is not, and a NUL ends the word so the words after it shift.
+    // MIT: `word_compare` (lib/kadm5/srv/pwqual_dict.c:64-68)
+    /// words sort with `strcasecmp`.
     /// `FileTooLarge` when a word's offset does not fit in 4 GiB.
     pub(crate) fn from_bytes(block: Vec<u8>) -> io::Result<Self> {
         Self::from_bytes_folded(block, case_fold())
@@ -112,7 +116,8 @@ impl PwqualDict {
     }
 
     /// Whether `password` is one of the words, compared as `strcasecmp` compares them; the password is folded as it is compared, never copied. A NUL ends the password.
-    /// MIT `dict_check` (`lib/kadm5/srv/pwqual_dict.c:227-231`): a `bsearch` with `strcasecmp` finds the password among the sorted words.
+    // MIT: `dict_check` (lib/kadm5/srv/pwqual_dict.c:227-231)
+    /// a `bsearch` with `strcasecmp` finds the password among the sorted words.
     pub(crate) fn contains(&self, password: &[u8]) -> bool {
         let password = cstr_bytes(password);
         self.words
@@ -215,7 +220,8 @@ fn locale_spec() -> String {
 }
 
 /// The file's bytes as MIT reads them: as many as `fstat` gives, at most, so a device that says 0 (`/dev/zero`, a FIFO with a writer) gives none. The first `read` is made even for 0 bytes, which still reports a directory's `EISDIR`.
-/// MIT `init_dict` (`lib/kadm5/srv/pwqual_dict.c:120-133`): the file is read once, `st_size` bytes from `fstat`.
+// MIT: `init_dict` (lib/kadm5/srv/pwqual_dict.c:120-133)
+/// the file is read once, `st_size` bytes from `fstat`.
 fn read_fstat_size(file: &mut std::fs::File) -> io::Result<Vec<u8>> {
     let size = u32::try_from(file.metadata()?.len())
         .map_err(|_| io::Error::from(io::ErrorKind::FileTooLarge))?;
@@ -234,8 +240,10 @@ fn read_fstat_size(file: &mut std::fs::File) -> io::Result<Vec<u8>> {
 
 impl PrincipalStore {
     /// Read the realm's `dict_file` for the password-quality checks: kadmind, kadmin.local and `kdb5_util create` call this once as they start, and every request and reread after shares what it read. The KDC never calls it.
-    /// MIT `kadm5_init` (`lib/kadm5/srv/server_init.c:266-268`): the password-quality modules are set up last, once per kadm5 handle.
-    /// MIT `init_pwqual` (`lib/kadm5/srv/server_misc.c:62-66`): the `dict` module is bound to `[realms] dict_file`.
+    // MIT: `kadm5_init` (lib/kadm5/srv/server_init.c:266-268)
+    /// the password-quality modules are set up last, once per kadm5 handle.
+    // MIT: `init_pwqual` (lib/kadm5/srv/server_misc.c:62-66)
+    /// the `dict` module is bound to `[realms] dict_file`.
     /// The open or read error of a `dict_file` that exists but cannot be read (MIT's `kadm5_init` fails with it); the store keeps the dictionary it had.
     pub fn init_pwqual(&mut self, conf: Option<&krb5_config::KdcConf>) -> io::Result<()> {
         self.init_pwqual_noting(conf, &mut |severity, text| klog::syslog(severity, text))

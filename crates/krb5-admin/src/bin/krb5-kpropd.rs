@@ -183,7 +183,8 @@ fn main() {
                             Err(e) => eprintln!("krb5-kpropd: {e}"),
                         }
                     }
-                    // MIT `do_standalone` (`kprop/kpropd.c:466-472`): when a connection is done the iprop poll is woken; without iprop, `-t` ends kpropd.
+                    // MIT: `do_standalone` (kprop/kpropd.c:466-472)
+                    // when a connection is done the iprop poll is woken; without iprop, `-t` ends kpropd.
                     if let Some(w) = &poll {
                         w.poke();
                     }
@@ -247,7 +248,8 @@ fn parse_options(progname: &str, args: &[String]) -> Options {
     }
 }
 
-/// MIT `get_wildcard_addr` (`kprop/kpropd.c:362-377`): the service is `-P`'s, a services name or a number.
+// MIT: `get_wildcard_addr` (kprop/kpropd.c:362-377)
+/// the service is `-P`'s, a services name or a number.
 fn listen_addr(progname: &str, operand: Option<&str>, port: Option<&str>) -> SocketAddr {
     if let Some(op) = operand {
         match op.to_socket_addrs().map(|mut a| a.next()) {

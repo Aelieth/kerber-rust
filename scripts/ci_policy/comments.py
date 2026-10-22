@@ -8,6 +8,7 @@ import re
 import sys
 
 from .common import ROOT, _die
+from .hygiene import _mit_cite_ok
 # S4. A commit that changes a live hit count updates the matching
 # constant in that commit. Hard means 0.
 MIT_ANCHOR_ALLOW = 0
@@ -23,6 +24,12 @@ _ANCHOR_EXT = r"(?:c|hin|h|et|x|y)"
 _ANCHOR_HEAD = re.compile(
     r"MIT `((?:(?:struct|union|enum) )?[A-Za-z_][A-Za-z0-9_]*)` "
     r"\(`([A-Za-z0-9_./+-]+\." + _ANCHOR_EXT + r"):(\d+)-(\d+)`\)"
+)
+# The converted cite. A range is checked like the old form. No range means the
+# symbol is defined somewhere in that file. A `struct` cite stays old-form.
+_NEW_CITE_ANCHOR = re.compile(
+    r"^// MIT: (`[A-Za-z_]\w*`(?: \+ `[A-Za-z_]\w*`)*) "
+    r"\(([\w./-]*\." + _ANCHOR_EXT + r")(?::(\d+)(?:-(\d+))?)?\)$"
 )
 # The pointer form, beside the anchor until the comment sweep: MIT <symbol>; see docs/parity/<file>.md
 _POINTER = re.compile(
@@ -57,6 +64,9 @@ _EMPTY_GUARANTEES = {"same check", "mit"}
 
 def _anchor_line_problems(comment: str) -> list[str]:
     """Why one comment line breaks the R1 anchor or pointer form (empty when it does not)."""
+    # A converted cite is its own // MIT: line. The character gate checks that form.
+    if _mit_cite_ok(comment):
+        return []
     problems: list[str] = []
     pointers = list(_POINTER.finditer(comment))
     if "see docs/parity/" in comment and not pointers:
@@ -451,24 +461,31 @@ def _ref_contained(a: int, b: int, defs: list[tuple[int, int]]) -> bool:
     return any(a >= s - _ANCHOR_SLACK and b <= e and a <= b for s, e in defs)
 
 
-def _anchor_resolves(lines: list[str], ext: str, symbol: str, a: int, b: int) -> bool:
-    """The reference's verdict for one ranged anchor: some definition of the
-    symbol's kind in this file contains the range."""
+def _anchor_tries(lines: list[str], ext: str, symbol: str) -> list[list[tuple[int, int]]]:
+    """Definition spans of `symbol` in one MIT file, by the kinds that file uses."""
     typed = symbol.split(" ")[-1] if " " in symbol else None
     if ext == "c":
         if typed:
-            tries = [_ref_find_type(lines, typed)]
-        else:
-            tries = [
-                _ref_find_fn(lines, symbol),
-                _ref_find_type(lines, symbol),
-                _ref_find_data(lines, symbol),
-                _ref_find_macro_gen(lines, symbol),
-                _ref_find_asn1(lines, symbol),
-            ]
-    else:
-        tries = [_ref_find_hdr(lines, typed or symbol)]
-    return any(defs and _ref_contained(a, b, defs) for defs in tries)
+            return [_ref_find_type(lines, typed)]
+        return [
+            _ref_find_fn(lines, symbol),
+            _ref_find_type(lines, symbol),
+            _ref_find_data(lines, symbol),
+            _ref_find_macro_gen(lines, symbol),
+            _ref_find_asn1(lines, symbol),
+        ]
+    return [_ref_find_hdr(lines, typed or symbol)]
+
+
+def _anchor_resolves(lines: list[str], ext: str, symbol: str, a: int, b: int) -> bool:
+    """The reference's verdict for one ranged anchor: some definition of the
+    symbol's kind in this file contains the range."""
+    return any(defs and _ref_contained(a, b, defs) for defs in _anchor_tries(lines, ext, symbol))
+
+
+def _symbol_defined(lines: list[str], ext: str, symbol: str) -> bool:
+    """A rangeless cite: the symbol has a definition in this file."""
+    return any(_anchor_tries(lines, ext, symbol))
 
 
 def _enclosing_fn(lines: list[str], a: int) -> str | None:
@@ -491,11 +508,65 @@ def _is_rust_test_file(rel: pathlib.Path) -> bool:
     return "/tests/" in text or text.endswith("/tests.rs")
 
 
+def _record_anchor(
+    where: str,
+    files: dict[str, list[str]],
+    mit: pathlib.Path,
+    is_test: bool,
+    symbol: str,
+    cited: str,
+    a: int | None,
+    b: int | None,
+    bad: list[str],
+) -> None:
+    """One old-form or `// MIT:` anchor. `a is None` is rangeless."""
+    cands = _resolve_mit_path(files, cited)
+    if not cands:
+        bad.append(f"{where}: {cited} is not a file of the MIT tree")
+        return
+    if len(cands) > 1:
+        bad.append(f"{where}: {cited} is ambiguous ({', '.join(cands[:4])})")
+        return
+    rel = cands[0]
+    lines = _mit_lines(mit / rel)
+    ext = rel.rsplit(".", 1)[-1]
+    if a is None:
+        if not _symbol_defined(lines, ext, symbol):
+            bad.append(f"{where}: `{symbol}` is not defined in {rel}")
+        return
+    end = a if b is None else b
+    if not _anchor_resolves(lines, ext, symbol, a, end):
+        inside = _enclosing_fn(lines, a) if rel.endswith(".c") else None
+        why = f"range {a}-{end} is inside `{inside}`" if inside else f"range {a}-{end}"
+        bad.append(f"{where}: {why}, not inside a definition of `{symbol}` in {rel}")
+        return
+    if _TEST_MIT_PATH.search(rel) and not is_test:
+        bad.append(f"{where}: `{symbol}` is MIT test code ({rel}) cited from src")
+
+
+def mit_anchor_truth_checked(
+    root: pathlib.Path | None = None, mit: pathlib.Path | None = None
+) -> tuple[int, int]:
+    """Old-form anchors and `// MIT:` anchors the truth check inspects."""
+    root = ROOT if root is None else root
+    assert mit is not None
+    old = new = 0
+    for path in _rs_under(root, ("src", "tests")):
+        for _lineno, comment in _comment_lines(path.read_text(encoding="utf-8")):
+            old += sum(1 for _ in _ANCHOR_HEAD.finditer(comment))
+            new += sum(1 for _ in _NEW_CITE_ANCHOR.finditer(comment))
+    return old, new
+
+
 def mit_anchor_truth_violations(
     root: pathlib.Path | None = None, mit: pathlib.Path | None = None
 ) -> list[str]:
     """Anchors whose range is not inside the named MIT definition, and file
-    mentions that do not name exactly one file of the MIT tree."""
+    mentions that do not name exactly one file of the MIT tree.
+
+    A `// MIT:` cite is checked the same way. With no range, the symbol must
+    be defined in that file.
+    """
     root = ROOT if root is None else root
     assert mit is not None
     files = _mit_files(mit)
@@ -506,28 +577,16 @@ def mit_anchor_truth_violations(
         for lineno, comment in _comment_lines(path.read_text(encoding="utf-8")):
             where = f"{rel}:{lineno}"
             for m in _ANCHOR_HEAD.finditer(comment):
-                symbol, cited = m.group(1), m.group(2)
-                a, b = int(m.group(3)), int(m.group(4))
-                cands = _resolve_mit_path(files, cited)
-                if not cands:
-                    bad.append(f"{where}: {cited} is not a file of the MIT tree")
-                    continue
-                if len(cands) > 1:
-                    bad.append(f"{where}: {cited} is ambiguous ({', '.join(cands[:4])})")
-                    continue
-                ok_in = [
-                    c for c in cands
-                    if _anchor_resolves(_mit_lines(mit / c), c.rsplit(".", 1)[-1], symbol, a, b)
-                ]
-                if not ok_in:
-                    lines = _mit_lines(mit / cands[0])
-                    inside = _enclosing_fn(lines, a) if cands[0].endswith(".c") else None
-                    why = f"range {a}-{b} is inside `{inside}`" if inside else f"range {a}-{b}"
-                    bad.append(f"{where}: {why}, not inside a definition of `{symbol}` in {cands[0]}")
-                    continue
-                if _TEST_MIT_PATH.search(ok_in[0]) and not is_test:
-                    bad.append(f"{where}: `{symbol}` is MIT test code ({ok_in[0]}) cited from src")
-            rest = _ANCHOR_HEAD.sub(" ", comment)
+                _record_anchor(
+                    where, files, mit, is_test, m.group(1), m.group(2),
+                    int(m.group(3)), int(m.group(4)), bad,
+                )
+            for m in _NEW_CITE_ANCHOR.finditer(comment):
+                a = int(m.group(3)) if m.group(3) else None
+                b = int(m.group(4)) if m.group(4) else None
+                for symbol in re.findall(r"`([A-Za-z_]\w*)`", m.group(1)):
+                    _record_anchor(where, files, mit, is_test, symbol, m.group(2), a, b, bad)
+            rest = _NEW_CITE_ANCHOR.sub(" ", _ANCHOR_HEAD.sub(" ", comment))
             for f in _FILE_TOKEN.finditer(rest):
                 cands = _resolve_mit_path(files, f.group(1))
                 if not cands:

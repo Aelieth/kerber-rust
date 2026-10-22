@@ -23,8 +23,10 @@ pub use points::*;
 
 static SINK: OnceLock<Option<File>> = OnceLock::new();
 
-/// MIT `k5_init_trace` (`lib/krb5/os/trace.c:384-392`): the context's trace file is the one `KRB5_TRACE` names, read with `secure_getenv`.
-/// MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:209-217`): it is opened once the profile has loaded, before anything is traced. A tool calls this where MIT's makes its context, so the file is created even when nothing is traced; a later trace point opens it otherwise.
+// MIT: `k5_init_trace` (lib/krb5/os/trace.c:384-392)
+/// the context's trace file is the one `KRB5_TRACE` names, read with `secure_getenv`.
+// MIT: `krb5_init_context_profile` (lib/krb5/krb/init_ctx.c:209-217)
+/// it is opened once the profile has loaded, before anything is traced. A tool calls this where MIT's makes its context, so the file is created even when nothing is traced; a later trace point opens it otherwise.
 pub fn init() {
     let _ = sink();
 }
@@ -55,7 +57,8 @@ fn sink() -> Option<&'static File> {
         .as_ref()
 }
 
-/// MIT `krb5_set_trace_filename` (`lib/krb5/os/trace.c:449-465`): write-only, appended to, created 0600; a file that does not open leaves tracing off.
+// MIT: `krb5_set_trace_filename` (lib/krb5/os/trace.c:449-465)
+/// write-only, appended to, created 0600; a file that does not open leaves tracing off.
 fn set_trace_filename(name: &std::ffi::OsStr) -> Option<File> {
     OpenOptions::new()
         .append(true)
@@ -96,7 +99,8 @@ fn at_secure(auxv: &[u8]) -> bool {
     })
 }
 
-/// MIT `krb5int_trace` (`lib/krb5/os/trace.c:394-420`): `[pid] sec.usec: message`, one line per point, written whole; nothing is formatted when tracing is off.
+// MIT: `krb5int_trace` (lib/krb5/os/trace.c:394-420)
+/// `[pid] sec.usec: message`, one line per point, written whole; nothing is formatted when tracing is off.
 pub fn krb5int_trace(fmt: &str, args: &[Arg<'_>]) {
     #[cfg(test)]
     if CAPTURE.with(|c| c.borrow().is_some()) {
@@ -284,7 +288,8 @@ impl std::fmt::Debug for Arg<'_> {
     }
 }
 
-/// MIT `trace_format` (`lib/krb5/os/trace.c:173-366`): the text up to each `{word}`, then the next argument as the word prints it. An unknown word prints nothing and takes no argument; a `{` without its `}`, or a word over 199 bytes, ends the message.
+// MIT: `trace_format` (lib/krb5/os/trace.c:173-366)
+/// the text up to each `{word}`, then the next argument as the word prints it. An unknown word prints nothing and takes no argument; a `{` without its `}`, or a word over 199 bytes, ends the message.
 #[must_use]
 pub fn trace_format(fmt: &str, args: &[Arg<'_>]) -> String {
     let mut buf = String::new();
@@ -344,7 +349,8 @@ fn is_word(word: &str) -> bool {
     WORDS.contains(&word)
 }
 
-/// MIT `k5_print_addr_port` (`lib/krb5/os/addr.c:94-110`): numeric host and port, `[%s]:%s` for IPv6. A scope id prints as the interface name, or the number when that name is not there.
+// MIT: `k5_print_addr_port` (lib/krb5/os/addr.c:94-110)
+/// numeric host and port, `[%s]:%s` for IPv6. A scope id prints as the interface name, or the number when that name is not there.
 fn print_addr_port(addr: &SocketAddr) -> String {
     match addr {
         SocketAddr::V4(v4) => format!("{}:{}", v4.ip(), v4.port()),
@@ -455,7 +461,8 @@ fn format_word(buf: &mut String, word: &str, arg: &Arg<'_>) {
     }
 }
 
-/// MIT `buf_add_printable_len` (`lib/krb5/os/trace.c:60-79`): bytes 32 to 126 as they are, any other as `\xNN`.
+// MIT: `buf_add_printable_len` (lib/krb5/os/trace.c:60-79)
+/// bytes 32 to 126 as they are, any other as `\xNN`.
 fn add_printable(buf: &mut String, p: &[u8]) {
     for &b in p {
         if (32..=126).contains(&b) {
@@ -472,7 +479,8 @@ fn add_hex(buf: &mut String, p: &[u8]) {
     }
 }
 
-/// MIT `hash_bytes` (`lib/krb5/os/trace.c:89-103`): the first two bytes of the SHA-1 of the bytes, as four upper-case hex digits. The rest of the digest is wiped.
+// MIT: `hash_bytes` (lib/krb5/os/trace.c:89-103)
+/// the first two bytes of the SHA-1 of the bytes, as four upper-case hex digits. The rest of the digest is wiped.
 fn hash_bytes(p: &[u8]) -> String {
     let mut digest: [u8; 20] = Sha1::digest(p).into();
     let s = format!("{:02X}{:02X}", digest[0], digest[1]);
@@ -500,7 +508,8 @@ fn add_etype(buf: &mut String, e: i32) {
     }
 }
 
-/// MIT `principal_type_string` (`lib/krb5/os/trace.c:105-124`): the name of a principal type.
+// MIT: `principal_type_string` (lib/krb5/os/trace.c:105-124)
+/// the name of a principal type.
 #[must_use]
 pub const fn principal_type_string(t: i32) -> &'static str {
     match t {
@@ -521,7 +530,8 @@ pub const fn principal_type_string(t: i32) -> &'static str {
     }
 }
 
-/// MIT `padata_type_string` (`lib/krb5/os/trace.c:126-171`): the name of a padata type.
+// MIT: `padata_type_string` (lib/krb5/os/trace.c:126-171)
+/// the name of a padata type.
 #[must_use]
 pub const fn padata_type_string(t: i32) -> Option<&'static str> {
     Some(match t {
@@ -568,7 +578,8 @@ pub const fn padata_type_string(t: i32) -> Option<&'static str> {
     })
 }
 
-/// MIT `krb5_enctype_to_name` (`lib/crypto/krb/enctype_util.c:129-160`): asked for the shortest, the shortest of an enctype's name and aliases, and the names of the DES types it no longer has.
+// MIT: `krb5_enctype_to_name` (lib/crypto/krb/enctype_util.c:129-160)
+/// asked for the shortest, the shortest of an enctype's name and aliases, and the names of the DES types it no longer has.
 #[must_use]
 pub const fn enctype_shortest_name(e: i32) -> Option<&'static str> {
     Some(match e {

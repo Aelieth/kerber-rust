@@ -2,7 +2,8 @@ use std::path::PathBuf;
 
 use super::{Error, KdcConf, KdcPaths, Krb5Conf, krb5_conf_paths, load_krb5_conf_paths};
 
-// MIT `krb5int_init_context_kdc` (`lib/krb5/krb/init_ctx.c:149-152`): the KDC context reads one profile, kdc.conf and then the krb5.conf files.
+// MIT: `krb5int_init_context_kdc` (lib/krb5/krb/init_ctx.c:149-152)
+// the KDC context reads one profile, kdc.conf and then the krb5.conf files.
 #[derive(Clone, Debug)]
 pub struct ProfileSet {
     pub realm: String,

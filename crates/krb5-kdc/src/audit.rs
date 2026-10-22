@@ -104,7 +104,8 @@ pub fn rep_etypes2str(rep: i32, tkt: Option<i32>, ses: Option<i32>) -> String {
     out
 }
 
-/// MIT `limit_string` (`kdc/kdc_util.c:1120-1135`): long names are cut so they do not crowd out the rest of the entry.
+// MIT: `limit_string` (kdc/kdc_util.c:1120-1135)
+/// long names are cut so they do not crowd out the rest of the entry.
 fn limit_string(name: &str) -> String {
     if name.len() < 128 {
         return name.to_owned();
@@ -204,7 +205,8 @@ pub fn kdc_error_message(code: i32) -> String {
     text.to_owned()
 }
 
-/// MIT `gather_tgs_req_info` (`kdc/do_tgs_req.c:727-754`): the logged authtime is set from the subject ticket only here, so an earlier failure logs authtime 0.
+// MIT: `gather_tgs_req_info` (kdc/do_tgs_req.c:727-754)
+/// the logged authtime is set from the subject ticket only here, so an earlier failure logs authtime 0.
 fn tgs_failed_before_authtime(status: &str) -> bool {
     matches!(
         status,
@@ -240,7 +242,8 @@ enum MitOutcome<'a> {
     },
 }
 
-/// MIT `log_as_req` (`kdc/kdc_log.c:57-97`): `AS_REQ (etypes) from: ISSUE: authtime, reply etypes, client for server`, or the status, the names and the error's message.
+// MIT: `log_as_req` (kdc/kdc_log.c:57-97)
+/// `AS_REQ (etypes) from: ISSUE: authtime, reply etypes, client for server`, or the status, the names and the error's message.
 fn as_req_line(
     req_etypes: &str,
     from: &str,
@@ -262,7 +265,8 @@ fn as_req_line(
     }
 }
 
-/// MIT `log_tgs_req` (`kdc/kdc_log.c:117-173`): a server mismatch logs the second ticket's client instead of the etypes; otherwise the line has the reply etypes on success and the error's message on a failure, followed by `... PROTOCOL-TRANSITION` or `... CONSTRAINED-DELEGATION` with the S4U client.
+// MIT: `log_tgs_req` (kdc/kdc_log.c:117-173)
+/// a server mismatch logs the second ticket's client instead of the etypes; otherwise the line has the reply etypes on success and the error's message on a failure, followed by `... PROTOCOL-TRANSITION` or `... CONSTRAINED-DELEGATION` with the S4U client.
 fn tgs_req_lines(
     req_etypes: &str,
     from: &str,
@@ -507,7 +511,8 @@ pub(crate) fn restore_thread_audits(modules: Option<Vec<Arc<dyn KdcAudit>>>) {
     THREAD_AUDITS.with(|slot| *slot.borrow_mut() = modules);
 }
 
-/// MIT `filter_enabled_modules` (`lib/krb5/krb/plugin.c:271-299`): each enabled name takes the first remaining match.
+// MIT: `filter_enabled_modules` (lib/krb5/krb/plugin.c:271-299)
+/// each enabled name takes the first remaining match.
 fn selected_audits(
     relations: &krb5_config::PluginRelations,
     modules: Vec<Arc<dyn KdcAudit>>,
@@ -524,7 +529,8 @@ fn selected_audits(
     out
 }
 
-/// MIT `kau_as_req` (`kdc/kdc_audit.c:260-272`): every loaded module is called, and none means the call returns without a record.
+// MIT: `kau_as_req` (kdc/kdc_audit.c:260-272)
+/// every loaded module is called, and none means the call returns without a record.
 fn active_audits(store: &dyn PrincipalRead) -> Vec<Arc<dyn KdcAudit>> {
     if let Some(module) = THREAD_AUDIT.with(|slot| slot.borrow().clone()) {
         return vec![module];
@@ -549,20 +555,23 @@ fn active_audits(store: &dyn PrincipalRead) -> Vec<Arc<dyn KdcAudit>> {
     selected_audits(&store.policy().audit, modules)
 }
 
-/// MIT `kau_as_req` (`kdc/kdc_audit.c:260-272`): a null method is skipped; a module error is not defined, and the next module still runs.
+// MIT: `kau_as_req` (kdc/kdc_audit.c:260-272)
+/// a null method is skipped; a module error is not defined, and the next module still runs.
 fn each_audit(store: &dyn PrincipalRead, mut call: impl FnMut(&dyn KdcAudit)) {
     for module in active_audits(store) {
         call(module.as_ref());
     }
 }
 
-/// MIT `kau_kdc_start` (`kdc/kdc_audit.c:244-256`): the same loaded list as a request.
+// MIT: `kau_kdc_start` (kdc/kdc_audit.c:244-256)
+/// the same loaded list as a request.
 /// `disable = json` leaves no module, so this records nothing.
 pub fn audit_kdc_start(store: &dyn PrincipalRead, success: bool) {
     each_audit(store, |module| module.kdc_start(success));
 }
 
-/// MIT `kau_kdc_stop` (`kdc/kdc_audit.c:229-241`): the same loaded list as a request.
+// MIT: `kau_kdc_stop` (kdc/kdc_audit.c:229-241)
+/// the same loaded list as a request.
 pub fn audit_kdc_stop(store: &dyn PrincipalRead, success: bool) {
     each_audit(store, |module| module.kdc_stop(success));
 }
@@ -593,7 +602,8 @@ fn clear_req_id() {
     CUR_REQ_ID.with(|c| *c.borrow_mut() = None);
 }
 
-/// MIT `process_as_req` (`do_as_req.c:520-520`): seeds `kau_as_req(TRUE)` before a ticket exists.
+// MIT: `process_as_req` (do_as_req.c:520-520)
+/// seeds `kau_as_req(TRUE)` before a ticket exists.
 fn seed_as_req(store: &dyn PrincipalRead, req: &AsReq, sender: Option<&HostAddress>) {
     clear_req_id();
     let mut state = base_state("AS_REQ", &req.0.req_body, sender);
@@ -601,7 +611,8 @@ fn seed_as_req(store: &dyn PrincipalRead, req: &AsReq, sender: Option<&HostAddre
     each_audit(store, |module| module.as_req(true, &state));
 }
 
-/// MIT `process_tgs_req` (`do_tgs_req.c:1181-1184`): seeds `kau_tgs_req(TRUE)` at `AUTHN_REQ_CL`.
+// MIT: `process_tgs_req` (do_tgs_req.c:1181-1184)
+/// seeds `kau_tgs_req(TRUE)` at `AUTHN_REQ_CL`.
 fn seed_tgs_req(store: &dyn PrincipalRead, req: &TgsReq, sender: Option<&HostAddress>) {
     clear_req_id();
     let mut state = base_state("TGS_REQ", &req.0.req_body, sender);
@@ -620,7 +631,8 @@ fn tgs_fail_stage(e_text: &str) -> i32 {
     }
 }
 
-/// MIT `armor_ap_request` (`kdc/fast_util.c:57-58`): an armor failure's message is that error plus while handling ap-request armor.
+// MIT: `armor_ap_request` (kdc/fast_util.c:57-58)
+/// an armor failure's message is that error plus while handling ap-request armor.
 fn failure_emsg(code: i32, setmsg: &str) -> String {
     if setmsg.is_empty() {
         kdc_error_message(code)
@@ -649,7 +661,8 @@ fn transit_via(transited: &TransitedEncoding) -> (String, &'static str) {
 }
 
 /// An error other than a refused path while checking the transited realms: logged, then the path counts as unchecked. `crealm` / `srealm` are the realms checked, `cname` / `sname` the request's client and server.
-/// MIT `log_tgs_badtrans` (`kdc/kdc_log.c:176-212`): an unexpected error is logged at error severity with the client and server names and the path.
+// MIT: `log_tgs_badtrans` (kdc/kdc_log.c:176-212)
+/// an unexpected error is logged at error severity with the client and server names and the path.
 #[must_use]
 pub fn unexpected_transit_false(
     err: TransitError,
@@ -684,7 +697,8 @@ pub fn unexpected_transit_false(
 }
 
 /// A transited path the realms do not allow: logged, and the ticket is not marked checked.
-/// MIT `log_tgs_badtrans` (`kdc/kdc_log.c:176-212`): a refused path is logged at info with the client and server names and the path.
+// MIT: `log_tgs_badtrans` (kdc/kdc_log.c:176-212)
+/// a refused path is logged at info with the client and server names and the path.
 pub fn log_bad_transit(cname: &str, sname: &str, transited: &TransitedEncoding) {
     let (via, dots) = transit_via(transited);
     krb5_log::klog::syslog(
@@ -1134,7 +1148,8 @@ fn tgs_header_authtime(store: &dyn PrincipalRead, req: &TgsReq) -> u32 {
     header_enc_part(store, req).map_or(0, |p| p.authtime.unix_seconds())
 }
 
-/// MIT `kdc_get_server_key` (`kdc/kdc_util.c:377-379`): the header ticket opens under its own server key, including a cross-realm krbtgt.
+// MIT: `kdc_get_server_key` (kdc/kdc_util.c:377-379)
+/// the header ticket opens under its own server key, including a cross-realm krbtgt.
 fn header_enc_part(store: &dyn PrincipalRead, req: &TgsReq) -> Option<EncTicketPart> {
     let pa = req
         .0
@@ -1161,7 +1176,8 @@ fn tgs_error_client(store: &dyn PrincipalRead, req: &TgsReq, realm: &str) -> Str
     let Some(part) = header_enc_part(store, req) else {
         return "<unknown client>".into();
     };
-    // MIT `unparse_and_limit` (`kdc/kdc_log.c:105-109`): the logged client keeps the header ticket's own realm.
+    // MIT: `unparse_and_limit` (kdc/kdc_log.c:105-109)
+    // the logged client keeps the header ticket's own realm.
     let crealm = realm_str(&part.crealm);
     let realm = if crealm.is_empty() {
         realm

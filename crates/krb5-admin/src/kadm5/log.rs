@@ -158,7 +158,8 @@ fn trunc_name(s: &str) -> String {
     format!("{}...", &s[..end])
 }
 
-/// MIT `prime_arg` (`stub_setup`): the unparsed principal for a principal op, the policy name for a policy op (`(null)` when there is none), the expression for a list (`*` when there is none), and the client for `kadm5_get_privs`.
+// MIT: `prime_arg` (stub_setup)
+/// the unparsed principal for a principal op, the policy name for a policy op (`(null)` when there is none), the expression for a list (`*` when there is none), and the client for `kadm5_get_privs`.
 pub(super) fn kadm5_prime_arg(proc: u32, args: &[u8], client: &str) -> String {
     let mut r = XdrR::new(args);
     if r.u32().is_err() {
@@ -212,10 +213,13 @@ pub(super) struct Caller<'a> {
 }
 
 /// The daemon log lines MIT writes for procedure `proc` with arguments `args` and `reply`.
-/// MIT `log_unauth` (`kadmin/server/server_stubs.c:403-428`): the `Unauthorized request:` line carries the op, target, client, service, and addr.
-/// MIT `log_done` (`kadmin/server/server_stubs.c:430-459`): the `Request:` line carries the op, target, result text, client, service, and addr.
+// MIT: `log_unauth` (kadmin/server/server_stubs.c:403-428)
+/// the `Unauthorized request:` line carries the op, target, client, service, and addr.
+// MIT: `log_done` (kadmin/server/server_stubs.c:430-459)
+/// the `Request:` line carries the op, target, result text, client, service, and addr.
 /// a rename names both principals, and a refused one is logged once more with both.
-/// MIT `init_2_svc` (`kadmin/server/server_stubs.c:1617-1653`): `kadm5_init` adds the API version and the credential flavor.
+// MIT: `init_2_svc` (kadmin/server/server_stubs.c:1617-1653)
+/// `kadm5_init` adds the API version and the credential flavor.
 pub(super) fn kadm5_log_lines(
     proc: u32,
     args: &[u8],
@@ -298,7 +302,8 @@ pub(super) fn kadm5_log_op(proc: u32, args: &[u8], who: &Caller<'_>, reply: &[u8
 }
 
 /// One line of the RPC layer's own log, which the AUTH_GSSAPI flavor writes as `LOG_MISCERR`.
-/// MIT `log_miscerr` (`kadmin/server/ovsec_kadmd.c:291-295`): the address and the error, at notice.
+// MIT: `log_miscerr` (kadmin/server/ovsec_kadmd.c:291-295)
+/// the address and the error, at notice.
 pub(super) fn rpc_log_miscerr(addr: &str, error: &str) {
     klog::syslog(
         Severity::Notice,
@@ -307,7 +312,8 @@ pub(super) fn rpc_log_miscerr(addr: &str, error: &str) {
 }
 
 /// A call whose verifier did not check out, named by its procedure.
-/// MIT `log_badverf` (`kadmin/server/ovsec_kadmd.c:206-287`): the kadm5 procedure's name from its table (1 to 24 but 17), else its number; the client and server names cut by `trunc_name`, `(null)` for a name the context does not have.
+// MIT: `log_badverf` (kadmin/server/ovsec_kadmd.c:206-287)
+/// the kadm5 procedure's name from its table (1 to 24 but 17), else its number; the client and server names cut by `trunc_name`, `(null)` for a name the context does not have.
 pub(super) fn rpc_log_badverf(proc: u32, client: Option<&str>, server: Option<&str>, addr: &str) {
     const NAMES: [&str; 24] = [
         "CREATE_PRINCIPAL",
@@ -353,7 +359,8 @@ pub(super) fn rpc_log_badverf(proc: u32, client: Option<&str>, server: Option<&s
 }
 
 /// A program's refusal of a flavor it does not take, before `svcerr_weakauth`.
-/// MIT `krb5_iprop_prog_1` (`kadmin/server/ipropd_svc.c:542-548`): iprop's, in lower case.
+// MIT: `krb5_iprop_prog_1` (kadmin/server/ipropd_svc.c:542-548)
+/// iprop's, in lower case.
 pub(super) fn rpc_log_flavor_refused(iprop: bool, addr: &str, flavor: u32) {
     let lead = if iprop {
         "authentication"
@@ -367,8 +374,10 @@ pub(super) fn rpc_log_flavor_refused(iprop: bool, addr: &str, flavor: u32) {
 }
 
 /// A context that did not establish: the minor status's text is MIT's for a minor status of 0 (a channel binding that does not match, as MIT's mechanism leaves it), else this side's error.
-/// MIT `log_badauth` (`kadmin/server/ovsec_kadmd.c:325-333`): the header, the major's and the minor's texts, the footer.
-/// MIT `displayMajor` (`lib/gssapi/mechglue/g_dsp_status.c:192-231`): the major's text.
+// MIT: `log_badauth` (kadmin/server/ovsec_kadmd.c:325-333)
+/// the header, the major's and the minor's texts, the footer.
+// MIT: `displayMajor` (lib/gssapi/mechglue/g_dsp_status.c:192-231)
+/// the major's text.
 pub(super) fn rpc_log_badauth(addr: &str, major: u32, minor: &str) {
     let major = match major {
         GSS_S_BAD_BINDINGS => "Incorrect channel bindings were supplied",

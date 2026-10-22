@@ -18,7 +18,8 @@ pub enum FileLock {
     Unlock,
 }
 
-/// MIT `ofdlock` (`lib/krb5/os/lock_file.c:90-103`): an OFD lock, else on `EINVAL` (a kernel without OFD locks) a classic POSIX lock.
+// MIT: `ofdlock` (lib/krb5/os/lock_file.c:90-103)
+/// an OFD lock, else on `EINVAL` (a kernel without OFD locks) a classic POSIX lock.
 fn ofdlock(file: &File, arg: &libc::flock, wait: bool) -> Result<(), Errno> {
     let ofd = if wait {
         FcntlArg::F_OFD_SETLKW(arg)
@@ -40,8 +41,10 @@ fn ofdlock(file: &File, arg: &libc::flock, wait: bool) -> Result<(), Errno> {
 }
 
 /// Lock, or unlock, the whole of `file`, waiting for a conflicting lock to go: a POSIX lock, and `flock` only where the kernel refuses that with `EINVAL`. A `flock` taken is kept in `flocked` until the unlock.
-/// MIT `krb5_lock_file` (`lib/krb5/os/lock_file.c:117-162`): whole file, `F_RDLCK` / `F_WRLCK` / `F_UNLCK`, blocking; `EACCES` / `EAGAIN` are `EAGAIN`.
-/// MIT `krb5_lock_file` (`lib/krb5/os/lock_file.c:154-170`): only `EINVAL` falls back to `flock`, and the `EINVAL` is still returned when `flock` succeeds.
+// MIT: `krb5_lock_file` (lib/krb5/os/lock_file.c:117-162)
+/// whole file, `F_RDLCK` / `F_WRLCK` / `F_UNLCK`, blocking; `EACCES` / `EAGAIN` are `EAGAIN`.
+// MIT: `krb5_lock_file` (lib/krb5/os/lock_file.c:154-170)
+/// only `EINVAL` falls back to `flock`, and the `EINVAL` is still returned when `flock` succeeds.
 /// The lock call's errno: `EAGAIN` for `EACCES` or `EAGAIN`, `EINVAL` when the kernel refused the POSIX lock (even when `flock` then took it), any other as it is.
 pub fn lock_file(
     file: &File,

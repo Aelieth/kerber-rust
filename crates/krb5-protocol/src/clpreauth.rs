@@ -1,8 +1,11 @@
 //! Client preauth modules selected by `[plugins] clpreauth`.
-//! MIT `k5_init_preauth_context` (`lib/krb5/krb/preauth2.c:120-204`): registers the built-in clpreauth modules in the order `pkinit`, `spake`, `encrypted_challenge`, `encrypted_timestamp`, `otp`.
-//! MIT `k5_plugin_load_all` (`lib/krb5/krb/plugin.c:421-455`): applies `disable` and `enable_only`.
+// MIT: `k5_init_preauth_context` (lib/krb5/krb/preauth2.c:120-204)
+//! registers the built-in clpreauth modules in the order `pkinit`, `spake`, `encrypted_challenge`, `encrypted_timestamp`, `otp`.
+// MIT: `k5_plugin_load_all` (lib/krb5/krb/plugin.c:421-455)
+//! applies `disable` and `enable_only`.
 //! A module whose init fails, or a dynamic module that does not load, is not kept.
-//! MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:648-728`): answers only a pa-type a loaded module serves.
+// MIT: `process_pa_data` (lib/krb5/krb/preauth2.c:648-728)
+//! answers only a pa-type a loaded module serves.
 //! `sam2` is not implemented, so it is absent the way a module that failed to load is absent.
 //! `otp` follows `encrypted_timestamp`, as MIT registers it. `module` is not read. Embedder modules follow the built-ins; an earlier name wins a duplicate, and the first loaded module to claim a pa-type keeps it.
 use std::sync::{Arc, Mutex};
@@ -19,10 +22,12 @@ pub trait ClPreauth: Send + Sync {
     fn name(&self) -> &'static str;
 
     /// Pa-types this module serves. A type already claimed by an earlier loaded module is a conflict and this module is not kept.
-    /// MIT `k5_init_preauth_context` (`lib/krb5/krb/preauth2.c:171-181`): the first module to list a pa-type keeps it.
+    // MIT: `k5_init_preauth_context` (lib/krb5/krb/preauth2.c:171-181)
+    /// the first module to list a pa-type keeps it.
     fn pa_types(&self) -> &'static [i32];
 
-    /// MIT `clpreauth_is_real` (`lib/krb5/krb/preauth2.c:322-328`): a module with no `flags` function is real for every type it lists.
+    // MIT: `clpreauth_is_real` (lib/krb5/krb/preauth2.c:322-328)
+    /// a module with no `flags` function is real for every type it lists.
     fn real(&self, _pa_type: i32) -> bool {
         true
     }
@@ -92,7 +97,8 @@ fn extras() -> Vec<Arc<dyn ClPreauth>> {
         .clone()
 }
 
-/// MIT `spake_init` (`plugins/preauth/spake/spake_client.c:62-73`): no permitted group means the module is not kept.
+// MIT: `spake_init` (plugins/preauth/spake/spake_client.c:62-73)
+/// no permitted group means the module is not kept.
 fn spake_initialized(profile: &Krb5Conf) -> bool {
     let words = profile
         .spake_preauth_groups

@@ -18,14 +18,17 @@ use crate::kdb_dump::TL_LAST_PWD_CHANGE;
 /// Default PBKDF2 iteration count advertised in ETYPE-INFO2 (RFC 3962 default).
 pub const S2K_ITERS: u32 = 4096;
 
-/// MIT `empty_check` (`pwqual_empty.c:40-44`): the extended message for an empty password (`KADM5_PASS_Q_TOOSHORT`).
+// MIT: `empty_check` (pwqual_empty.c:40-44)
+/// the extended message for an empty password (`KADM5_PASS_Q_TOOSHORT`).
 pub const PWQUAL_EMPTY: &str = "Empty passwords are not allowed";
 
-/// MIT `princ_check` (`pwqual_princ.c:50-51`): the extended message for a password that matches a principal component (`KADM5_PASS_Q_DICT`).
+// MIT: `princ_check` (pwqual_princ.c:50-51)
+/// the extended message for a password that matches a principal component (`KADM5_PASS_Q_DICT`).
 pub const PWQUAL_PRINC: &str = "Password may not match principal name";
 
 /// MIT `kadm_err.et` `KADM5_PASS_Q_DICT` text: the `dict` module and the realm branch of `princ_check` set no message.
-/// MIT `princ_check` (`pwqual_princ.c:45-47`): a password equal to the realm returns `KADM5_PASS_Q_DICT` with no message set.
+// MIT: `princ_check` (pwqual_princ.c:45-47)
+/// a password equal to the realm returns `KADM5_PASS_Q_DICT` with no message set.
 pub const PWQUAL_DICT: &str = "Password is in the password dictionary";
 
 fn last_pwd_unix(p: &Principal) -> u32 {
@@ -45,7 +48,8 @@ pub(super) fn c_password(password: &[u8]) -> &[u8] {
     }
 }
 
-/// MIT `check_against_policy` (`lib/kadm5/srv/server_misc.c:81-100`): `strlen` is the byte length, and each byte is `islower`, `isupper`, `isdigit`, `ispunct` or other. In the C and UTF-8 locales a byte at or above 128 is other, so `caf\xe9` is four bytes and two classes.
+// MIT: `check_against_policy` (lib/kadm5/srv/server_misc.c:81-100)
+/// `strlen` is the byte length, and each byte is `islower`, `isupper`, `isdigit`, `ispunct` or other. In the C and UTF-8 locales a byte at or above 128 is other, so `caf\xe9` is four bytes and two classes.
 fn check_against_policy(password: &[u8], pol: &NamedPolicy) -> Result<(), Error> {
     if pol.min_length > 0 && password.len() < pol.min_length as usize {
         return Err(Error::PasswordPolicy(format!(
@@ -88,7 +92,8 @@ fn check_against_policy(password: &[u8], pol: &NamedPolicy) -> Result<(), Error>
 }
 
 /// The `passwd_check` line, then the error the caller returns.
-/// MIT `passwd_check` (`lib/kadm5/srv/server_misc.c:127-130`): a module refusal is logged at error severity before the error returns. A policy floor is not.
+// MIT: `passwd_check` (lib/kadm5/srv/server_misc.c:127-130)
+/// a module refusal is logged at error severity before the error returns. A policy floor is not.
 pub(super) fn module_refusal(
     note: &mut dyn FnMut(Severity, &str),
     module: &str,
@@ -107,7 +112,8 @@ fn syslog_note(severity: Severity, text: &str) {
     klog::syslog(severity, text);
 }
 
-/// MIT `apply_keysalt_policy` (`svr_principal.c:128-231`): the request's `-e` tuples when present, else the bound policy's `allowed_keysalts`, else `supported_enctypes`. A requested tuple outside the policy is `KADM5_BAD_KEYSALTS`. Salt types are stripped like `parse_keysalt_list` (the live cell is `:normal`).
+// MIT: `apply_keysalt_policy` (svr_principal.c:128-231)
+/// the request's `-e` tuples when present, else the bound policy's `allowed_keysalts`, else `supported_enctypes`. A requested tuple outside the policy is `KADM5_BAD_KEYSALTS`. Salt types are stripped like `parse_keysalt_list` (the live cell is `:normal`).
 pub fn apply_keysalt_policy(
     allowed_keysalts: Option<&str>,
     requested: &[EncryptionType],
@@ -168,7 +174,8 @@ impl PrincipalStore {
         self.set_password_keepold(name, password, false)
     }
 
-    /// MIT `check_min_life` (`misc.c:60-121`): a password change inside the policy's `pw_min_life` is `KADM5_PASS_TOOSOON` unless `REQUIRES_PWCHANGE` is set.
+    // MIT: `check_min_life` (misc.c:60-121)
+    /// a password change inside the policy's `pw_min_life` is `KADM5_PASS_TOOSOON` unless `REQUIRES_PWCHANGE` is set.
     /// [`Error::NotFound`] when the principal is missing; [`Error::PassTooSoon`] when its bound policy's `pw_min_life` has not elapsed since the last password change and `REQUIRES_PWCHANGE` is clear.
     pub fn check_min_life(&self, name: &PrincipalName) -> Result<(), Error> {
         self.check_min_life_in(name, &self.realm)
@@ -240,7 +247,8 @@ impl PrincipalStore {
     }
 
     /// [`Self::set_password_keepold_n_in`] with a v3 `ks_tuple` list.
-    /// MIT `kadm5_chpass_principal_3` (`svr_principal.c:1259-1259`): the `ks_tuple` list goes through `apply_keysalt_policy`, which rejects keysalts the policy does not allow.
+    // MIT: `kadm5_chpass_principal_3` (svr_principal.c:1259-1259)
+    /// the `ks_tuple` list goes through `apply_keysalt_policy`, which rejects keysalts the policy does not allow.
     /// [`Error::NotFound`] when the principal is missing; [`Error::PasswordPolicy`] when the password fails the quality or history checks; [`Error::BadKeysalts`] when `etypes` names an enctype outside the bound policy's `allowed_keysalts`; [`Error::Rng`] when the CSPRNG fails creating `kadmin/history`; [`Error::Crypto`] when sealing the replaced keys into the history fails; [`Error::Db`] when saving the store to `persist_paths` fails the error from a `kadm5_hook` precommit module.
     pub fn set_password_etypes_keepold_n_in(
         &mut self,
@@ -252,7 +260,8 @@ impl PrincipalStore {
         etypes: &[EncryptionType],
     ) -> Result<(), Error> {
         self.inside_change()?;
-        // MIT `add_key_pwd` (`lib/kdb/kdb_cpw.c:315-315`): the key is made from the password as a C string, the bytes before its first NUL that the checks and the hooks see.
+        // MIT: `add_key_pwd` (lib/kdb/kdb_cpw.c:315-315)
+        // the key is made from the password as a C string, the bytes before its first NUL that the checks and the hooks see.
         let password = c_password(password);
         let id = self.canonical_id(name, princ_realm)?;
         let pol = self
@@ -387,7 +396,8 @@ impl PrincipalStore {
         self.save_if_configured()
     }
 
-    /// MIT `kadm5_create_principal_3` (`svr_principal.c:364-373`): the `passwd_check` for a new principal — the named policy's length and class floors when the policy exists (`get_policy` treats an unknown name as no policy), then the built-in quality modules.
+    // MIT: `kadm5_create_principal_3` (svr_principal.c:364-373)
+    /// the `passwd_check` for a new principal — the named policy's length and class floors when the policy exists (`get_policy` treats an unknown name as no policy), then the built-in quality modules.
     /// `-randkey` creates do not come here.
     /// [`Error::PasswordPolicy`] when the password is empty or, under an existing `policy`, is short of its `min_length` or `min_classes`, is a dictionary word, or matches the realm or a component of `name`.
     pub fn check_new_password(
@@ -419,7 +429,8 @@ impl PrincipalStore {
         super::pwqual::run(self, name, princ_realm, bound, password, note)
     }
 
-    /// MIT `kadm5_chpass_principal_3` (`lib/kadm5/srv/svr_principal.c:1282-1282`): the `passwd_check` on a password change — the bound policy's floors, the built-in quality modules, then the policy's history.
+    // MIT: `kadm5_chpass_principal_3` (lib/kadm5/srv/svr_principal.c:1282-1282)
+    /// the `passwd_check` on a password change — the bound policy's floors, the built-in quality modules, then the policy's history.
     /// [`Error::PasswordPolicy`] when `name` exists and the password is empty or, under its bound policy, is short of `min_length` or `min_classes`, is a dictionary word, matches the realm or a component of `name`, or (when `history` is set) re-derives a current or kept old key.
     pub fn check_password_quality(
         &self,

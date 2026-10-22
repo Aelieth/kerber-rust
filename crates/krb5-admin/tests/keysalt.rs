@@ -1,6 +1,8 @@
 //! `kadm5_create_principal_3` honours the v3 `ks_tuple` array (`apply_keysalt_policy`).
-//! MIT `kadm5_chpass_principal_3` (`svr_principal.c:1259-1259`): the requested `ks_tuple` goes through `apply_keysalt_policy` with the entry's policy.
-//! MIT `kadm5_randkey_principal_3` (`svr_principal.c:1425-1425`): the requested `ks_tuple` goes through `apply_keysalt_policy` with the entry's policy.
+// MIT: `kadm5_chpass_principal_3` (svr_principal.c:1259-1259)
+//! the requested `ks_tuple` goes through `apply_keysalt_policy` with the entry's policy.
+// MIT: `kadm5_randkey_principal_3` (svr_principal.c:1425-1425)
+//! the requested `ks_tuple` goes through `apply_keysalt_policy` with the entry's policy.
 
 #[path = "common/mod.rs"]
 mod common;

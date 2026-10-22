@@ -37,15 +37,18 @@ pub use rsa::RsaKey;
 pub struct PaPkAsReq {
     #[rasn(tag(0))]
     pub signed_auth_pack: OctetString,
-    // MIT `pa_pk_as_req_1` (`lib/krb5/asn.1/asn1_k_encode.c:1464-1465`): `[1]`, explicit, an optional SEQUENCE OF ExternalPrincipalIdentifier.
-    // MIT `pkinit_as_req_create` (`plugins/preauth/pkinit/pkinit_clnt.c:271-273`): the client fills it from its trusted CAs.
+    // MIT: `pa_pk_as_req_1` (lib/krb5/asn.1/asn1_k_encode.c:1464-1465)
+    // `[1]`, explicit, an optional SEQUENCE OF ExternalPrincipalIdentifier.
+    // MIT: `pkinit_as_req_create` (plugins/preauth/pkinit/pkinit_clnt.c:271-273)
+    // the client fills it from its trusted CAs.
     #[rasn(tag(explicit(1)))]
     pub trusted_certifiers: Option<SequenceOf<ExternalPrincipalIdentifier>>,
     #[rasn(tag(2))]
     pub kdc_pk_id: Option<OctetString>,
 }
 
-// MIT `external_principal_identifier_fields` (`lib/krb5/asn.1/asn1_k_encode.c:1448-1450`): three fields, each `[n]` IMPLICIT, an optional octet string.
+// MIT: `external_principal_identifier_fields` (lib/krb5/asn.1/asn1_k_encode.c:1448-1450)
+// three fields, each `[n]` IMPLICIT, an optional octet string.
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct ExternalPrincipalIdentifier {
     #[rasn(tag(0))]
@@ -619,7 +622,8 @@ pub fn encode_party_u(cname: &crate::PrincipalName, realm: &str) -> Vec<u8> {
 }
 
 // MIT pkinit_as_rep_parse; see docs/parity/b1-client-preauth.md
-// MIT `pkinit_server_return_padata` (`pkinit_srv.c:880-881`): and so does the KDC.
+// MIT: `pkinit_server_return_padata` (pkinit_srv.c:880-881)
+// and so does the KDC.
 #[must_use]
 pub fn encode_party_v(body: &crate::KdcReqBody) -> Option<Vec<u8>> {
     let sname = body.sname.as_ref()?;

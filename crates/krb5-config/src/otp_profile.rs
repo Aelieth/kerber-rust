@@ -4,15 +4,18 @@ use super::plugin_profile::{PluginLine, parse_plugin_line};
 use super::profile::{c_isspace, mit_boolean, parse_profile_int};
 use super::{KdcConf, Krb5Conf};
 
-// MIT `DEFAULT_TYPE_NAME` (`plugins/preauth/otp/otp_state.c:42-42`): the token type a token names when it names none.
+// MIT: `DEFAULT_TYPE_NAME` (plugins/preauth/otp/otp_state.c:42-42)
+// the token type a token names when it names none.
 pub const DEFAULT_OTP_TYPE: &str = "DEFAULT";
 
 const BAD_BOOLEAN: &str = "Invalid boolean value";
-// MIT `PROF_BAD_INTEGER` (`util/profile/prof_err.et:61-61`): the text of a value that is no integer.
+// MIT: `PROF_BAD_INTEGER` (util/profile/prof_err.et:61-61)
+// the text of a value that is no integer.
 const BAD_INTEGER: &str = "Invalid integer value";
 const EINVAL: &str = "Invalid argument";
 
-// MIT `profile_add_node` (`util/profile/prof_tree.c:197-250`): a node goes after the last node whose name is not greater, a repeated subsection is the first one, and a relation is dropped when a final relation of that name is already there.
+// MIT: `profile_add_node` (util/profile/prof_tree.c:197-250)
+// a node goes after the last node whose name is not greater, a repeated subsection is the first one, and a relation is dropped when a final relation of that name is already there.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct OtpTree {
     section_final: bool,
@@ -33,7 +36,8 @@ struct Relation {
 }
 
 impl OtpTree {
-    // MIT `profile_node_iterator` (`util/profile/prof_tree.c:518-653`): a final section or subsection stops the walk at the end of its file.
+    // MIT: `profile_node_iterator` (util/profile/prof_tree.c:518-653)
+    // a final section or subsection stops the walk at the end of its file.
     fn node(&self, ty: &str) -> (Option<&TypeNode>, bool) {
         let node = self.types.get(ty);
         (node, self.section_final || node.is_some_and(|n| n.is_final))
@@ -117,7 +121,8 @@ pub struct OtpType {
 }
 
 impl OtpType {
-    // MIT `token_type_default` (`plugins/preauth/otp/otp_state.c:152-166`): the realm stays in the username, there are no indicators, the timeout is 5 s and there are 3 retries.
+    // MIT: `token_type_default` (plugins/preauth/otp/otp_state.c:152-166)
+    // the realm stays in the username, there are no indicators, the timeout is 5 s and there are 3 retries.
     #[must_use]
     pub fn builtin(name: &str) -> Self {
         Self {
@@ -201,12 +206,14 @@ pub fn token_types_decode(profile: &OtpProfile<'_>) -> Result<Vec<OtpType>, OtpI
     Ok(types)
 }
 
-// MIT `otp_state_new` (`plugins/preauth/otp/otp_state.c:579-585`): the types come from the KDC context's profile, whose files are kdc.conf, then krb5.conf.
+// MIT: `otp_state_new` (plugins/preauth/otp/otp_state.c:579-585)
+// the types come from the KDC context's profile, whose files are kdc.conf, then krb5.conf.
 pub fn kdc_otp_types(kdc: &KdcConf, krb5: &Krb5Conf) -> Result<Vec<OtpType>, OtpInitError> {
     token_types_decode(&OtpProfile::new(&[&kdc.otp, &krb5.otp]))
 }
 
-// MIT `parse_std_line` (`util/profile/prof_parse.c:92-124`): the name is the text up to the first `]`, a `*` after it marks the section final, and only blanks may follow.
+// MIT: `parse_std_line` (util/profile/prof_parse.c:92-124)
+// the name is the text up to the first `]`, a `*` after it marks the section final, and only blanks may follow.
 pub(crate) fn section_header(line: &str) -> Option<(&str, bool)> {
     let rest = line.strip_prefix('[')?;
     let (body, after) = rest.split_once(']')?;

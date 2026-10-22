@@ -1,6 +1,9 @@
-// MIT `dns_locate_server_srv` (`lib/krb5/os/locate_kdc.c:756-797`): `_kerberos._udp` then
-// MIT `krb5int_make_srv_query_realm` (`lib/krb5/os/dnssrv.c:258-347`): the query name ends in
-// MIT `krb5int_dns_init` (`lib/krb5/os/dnsglue.c:120-194`): `res_ninit` then `res_nsearch`.
+// MIT: `dns_locate_server_srv` (lib/krb5/os/locate_kdc.c:756-797)
+// `_kerberos._udp` then
+// MIT: `krb5int_make_srv_query_realm` (lib/krb5/os/dnssrv.c:258-347)
+// the query name ends in
+// MIT: `krb5int_dns_init` (lib/krb5/os/dnsglue.c:120-194)
+// `res_ninit` then `res_nsearch`.
 
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, UdpSocket};
@@ -64,7 +67,8 @@ enum Find {
 }
 
 fn query_service(realm: &str, proto: &str, resolv: &Resolv) -> Find {
-    // MIT `make_lookup_name` (`lib/krb5/os/dnssrv.c:50-78`): the name ends in `.` so the
+    // MIT: `make_lookup_name` (lib/krb5/os/dnssrv.c:50-78)
+    // the name ends in `.` so the
     let name = format!("_kerberos.{proto}.{realm}.");
     let transport = if proto == "_tcp" {
         super::KdcTransport::Tcp
@@ -364,7 +368,8 @@ fn eq_name(got: &str, want: &str) -> bool {
 }
 
 fn mit_host(host: &str) -> String {
-    // MIT `locate_srv_dns_1` (`lib/krb5/os/locate_kdc.c:379-382`): a sole empty host is no service.
+    // MIT: `locate_srv_dns_1` (lib/krb5/os/locate_kdc.c:379-382)
+    // a sole empty host is no service.
     if host.is_empty() || host == "." || host == ".." {
         "..".to_string()
     } else {

@@ -1,8 +1,10 @@
 //! `kdb5_util` (the `krb5-kdb` binary, run under MIT's name): MIT's command line, the realm
 //! `create` makes, `stash`, `dump`, `load` and `destroy`, with the texts and exit statuses
 //! settled live against MIT 1.22.2.
-//! MIT `kdb5_create` (`kdb5_create.c:142-336`): `create` writes `K/M` and `krbtgt`, then `kadm5_create` the two `kadmin/` services.
-//! MIT `add_admin_princs` (`kadm5_create.c:139-154`): the `kadmin/admin` and `kadmin/changepw` attributes and lifetimes.
+// MIT: `kdb5_create` (kdb5_create.c:142-336)
+//! `create` writes `K/M` and `krbtgt`, then `kadm5_create` the two `kadmin/` services.
+// MIT: `add_admin_princs` (kadm5_create.c:139-154)
+//! the `kadmin/admin` and `kadmin/changepw` attributes and lifetimes.
 
 #![cfg(unix)]
 
@@ -554,7 +556,8 @@ fn a_wrong_master_password_warns_and_dump_still_writes() {
          kdb5_util: Warning: proceeding without master key list\n"
     );
     assert!(realm.dir.join("d2").exists());
-    // MIT `main` (`kdb5_util.c:230-232`): a later -P replaces an earlier one.
+    // MIT: `main` (kdb5_util.c:230-232)
+    // a later -P replaces an earlier one.
     let out = realm.run(&["-P", "wrong", "-P", "kl-master", "dump", "d3"], "");
     assert_eq!(status(&out), 0, "{}", text(&out.stderr));
     assert_eq!(text(&out.stderr), "");
@@ -648,7 +651,8 @@ fn a_dump_with_no_principal_loads_a_database_with_none() {
     assert_eq!(live.store().ids().len(), 4);
 }
 
-/// MIT `ctx_create_db` (`kdb_db2.c:710-716`): `-x temporary` destroys a leftover temporary
+// MIT: `ctx_create_db` (kdb_db2.c:710-716)
+/// `-x temporary` destroys a leftover temporary
 /// database before creating it, where a plain create refuses an existing one; settled live
 /// (`mit-temporary.txt`).
 #[test]
@@ -872,7 +876,8 @@ fn load_without_a_stash_needs_a_master_password() {
     );
 }
 
-/// MIT `destroy_file` (`kdb_db2.c:619-682`): the database is zeroed before it is unlinked, so
+// MIT: `destroy_file` (kdb_db2.c:619-682)
+/// the database is zeroed before it is unlinked, so
 /// another link to the file (or its freed blocks) keeps no key; settled live with a hard link.
 #[test]
 fn destroy_zeroes_the_database_before_unlinking_it() {

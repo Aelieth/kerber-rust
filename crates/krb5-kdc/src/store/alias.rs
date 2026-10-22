@@ -31,7 +31,8 @@ impl PrincipalStore {
             .ok_or(Error::NotFound)
     }
 
-    /// MIT `kadm5_create_alias` (`svr_principal.c:2051-2087`): an alias stub is a keyless `DISALLOW_ALL_TIX` entry whose only content is `KRB5_TL_ALIAS_TARGET`. The target need not exist; the alias name must not resolve to anything.
+    // MIT: `kadm5_create_alias` (svr_principal.c:2051-2087)
+    /// an alias stub is a keyless `DISALLOW_ALL_TIX` entry whose only content is `KRB5_TL_ALIAS_TARGET`. The target need not exist; the alias name must not resolve to anything.
     /// Fails with [`Error::AliasRealm`] when `alias_realm` and `target_realm` differ, with [`Error::AlreadyExists`] when the alias name already resolves, with [`Error::Db`] when saving the store fails, or with the error from a `kadm5_hook` precommit module.
     pub fn create_alias_in(
         &mut self,
@@ -69,7 +70,8 @@ impl PrincipalStore {
                 pw_expire: 0,
             },
         );
-        // MIT `kdb_put_entry` (`lib/kadm5/srv/server_kdb.c:376-395`): the modifier is updated, then the kadm5 record, each new one put first.
+        // MIT: `kdb_put_entry` (lib/kadm5/srv/server_kdb.c:376-395)
+        // the modifier is updated, then the kadm5 record, each new one put first.
         stamp_admin_tl(&mut p, false, actor);
         super::update_tl_data(
             &mut p.tl_data,

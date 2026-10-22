@@ -18,8 +18,10 @@ pub struct PkinitParams {
 }
 
 impl PkinitParams {
-    // MIT `pkinit_kdcdefault_strings` (`plugins/preauth/pkinit/pkinit_profile.c:90-144`): the realm's values, else `[kdcdefaults]`'s.
-    // MIT `pkinit_kdcdefault_string` (`plugins/preauth/pkinit/pkinit_profile.c:147-167`): the first of those values.
+    // MIT: `pkinit_kdcdefault_strings` (plugins/preauth/pkinit/pkinit_profile.c:90-144)
+    // the realm's values, else `[kdcdefaults]`'s.
+    // MIT: `pkinit_kdcdefault_string` (plugins/preauth/pkinit/pkinit_profile.c:147-167)
+    // the first of those values.
     // MIT pkinit_kdcdefault_boolean; see docs/parity/a2-as.md
     // MIT pkinit_init_kdc_profile; see docs/parity/a3-preauth.md
     #[must_use]

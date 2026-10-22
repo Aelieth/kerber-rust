@@ -1,5 +1,6 @@
 //! `verify_as_reply` server principals.
-//! MIT `verify_as_reply` (`get_in_tkt.c:227-239`): the enc-part server must equal the ticket
+// MIT: `verify_as_reply` (get_in_tkt.c:227-239)
+//! the enc-part server must equal the ticket
 //! server, and the requested server unless a canonicalizing request asked for a TGS and got one.
 //! Live oracle: `client-differential-gate.sh`.
 
@@ -318,8 +319,10 @@ fn with_a_stranger_last(
 
 /// A keytab AS whose reply the right key opens but whose times are an hour off fails as
 /// `verify_as_reply` says, not with another key's decrypt failure.
-/// MIT `init_creds_step_reply` (`get_in_tkt.c:1824-1837`): once `decrypt_as_reply` succeeds, `verify_as_reply`'s error is the request's.
-/// MIT `verify_as_reply` (`get_in_tkt.c:264-269`): without `kdc_timesync` a starttime outside the skew is `KRB5_KDCREP_SKEW`.
+// MIT: `init_creds_step_reply` (get_in_tkt.c:1824-1837)
+/// once `decrypt_as_reply` succeeds, `verify_as_reply`'s error is the request's.
+// MIT: `verify_as_reply` (get_in_tkt.c:264-269)
+/// without `kdc_timesync` a starttime outside the skew is `KRB5_KDCREP_SKEW`.
 #[test]
 fn a_keytab_reply_outside_the_skew_is_kdcrep_skew_whatever_keys_follow() {
     let profile = pin_timesync(false);
@@ -334,7 +337,8 @@ fn a_keytab_reply_outside_the_skew_is_kdcrep_skew_whatever_keys_follow() {
 
 /// A reply the keytab's key of its enctype opens, but whose session key is of the wrong length,
 /// ends the exchange there.
-/// MIT `init_creds_step_reply` (`get_in_tkt.c:1824-1840`): `decrypt_as_reply` takes one key from the keytab; once it opens the reply, what follows ends the request with its own error, and no other key is asked.
+// MIT: `init_creds_step_reply` (get_in_tkt.c:1824-1840)
+/// `decrypt_as_reply` takes one key from the keytab; once it opens the reply, what follows ends the request with its own error, and no other key is asked.
 #[test]
 fn a_keytab_reply_that_opens_ends_the_walk_whatever_it_fails_next() {
     let profile = pin_timesync(true);
@@ -351,7 +355,8 @@ fn a_keytab_reply_that_opens_ends_the_walk_whatever_it_fails_next() {
 
 /// An enc-pa-rep reply without a checksum over the request is `KRB5_KDCREP_MODIFIED`, whatever
 /// keys follow the one that opened it.
-/// MIT `krb5int_fast_verify_nego` (`fast.c:635-675`): a reply with the enc-pa-rep flag needs a PA-REQ-ENC-PA-REP checksum over the request under the reply key.
+// MIT: `krb5int_fast_verify_nego` (fast.c:635-675)
+/// a reply with the enc-pa-rep flag needs a PA-REQ-ENC-PA-REP checksum over the request under the reply key.
 #[test]
 fn a_keytab_reply_with_a_bad_enc_pa_rep_is_kdcrep_modified_whatever_keys_follow() {
     use krb5_types::{Checksum, PaData, flag_bit, pa};
@@ -377,7 +382,8 @@ fn a_keytab_reply_with_a_bad_enc_pa_rep_is_kdcrep_modified_whatever_keys_follow(
 
 /// No key in the keytab opens the reply: the error is the decrypt failure of the key MIT would
 /// have used, the keytab's key of the reply's enctype, not that of the last key tried.
-/// MIT `decrypt_as_reply` (`get_in_tkt.c:127-133`): the single key's `krb5_kdc_rep_decrypt_proc` error is returned as it is.
+// MIT: `decrypt_as_reply` (get_in_tkt.c:127-133)
+/// the single key's `krb5_kdc_rep_decrypt_proc` error is returned as it is.
 #[test]
 fn a_keytab_reply_no_key_opens_is_the_integrity_failure_of_its_enctypes_key() {
     use krb5_crypto::{EncryptionType, ProtocolKey};
@@ -403,7 +409,8 @@ fn a_keytab_reply_no_key_opens_is_the_integrity_failure_of_its_enctypes_key() {
 }
 
 /// `set_request_times` clamps `rtime` to `till`.
-/// MIT `set_request_times` (`get_in_tkt.c:718-722`): a renewable time shorter than the lifetime
+// MIT: `set_request_times` (get_in_tkt.c:718-722)
+/// a renewable time shorter than the lifetime
 /// is raised to `till`.
 #[test]
 fn rtime_is_clamped_up_to_till() {

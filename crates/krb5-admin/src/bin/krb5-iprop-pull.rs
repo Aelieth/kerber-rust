@@ -123,7 +123,8 @@ fn main() {
         std::process::exit(1);
     });
     store.persist_paths = Some((db.clone(), stash.clone()));
-    // MIT `do_iprop` (`kprop/kpropd.c:764-768`): the serial and time asked from are the log's last.
+    // MIT: `do_iprop` (kprop/kpropd.c:764-768)
+    // the serial and time asked from are the log's last.
     let mut mylast = krb5_kdc::UlogLast::default();
     if !full_resync {
         if !iprop.enabled {

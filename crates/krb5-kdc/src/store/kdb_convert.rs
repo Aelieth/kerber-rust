@@ -53,7 +53,8 @@ pub const AT_PW_HIST_KVNO: u32 = 18;
 /// `AT_PW_HIST`.
 pub const AT_PW_HIST: u32 = 19;
 
-/// MIT `ulog_conv_2logentry` (`lib/kdb/kdb_convert.c:338-355`): a new principal lists every attribute up to `AT_LEN`, one bit each here.
+// MIT: `ulog_conv_2logentry` (lib/kdb/kdb_convert.c:338-355)
+/// a new principal lists every attribute up to `AT_LEN`, one bit each here.
 pub const ULOG_ADD_ATTRS: u32 = (1 << (AT_LEN + 1)) - 1;
 
 /// The bit of attribute `at` in an attribute list.
@@ -158,7 +159,8 @@ pub(crate) fn mit_tl(p: &Principal) -> Vec<TlData> {
     tl
 }
 
-/// MIT `krb5_dbe_set_string` (`lib/kdb/kdb5.c:2197-2245`): each key and value NUL-terminated, in order.
+// MIT: `krb5_dbe_set_string` (lib/kdb/kdb5.c:2197-2245)
+/// each key and value NUL-terminated, in order.
 #[must_use]
 pub(crate) fn encode_string_attrs(attrs: &[(String, String)]) -> Vec<u8> {
     let mut contents = Vec::new();
@@ -171,7 +173,8 @@ pub(crate) fn encode_string_attrs(attrs: &[(String, String)]) -> Vec<u8> {
     contents
 }
 
-/// MIT `krb5_db_update_tl_data` (`lib/kdb/kdb5.c:2285-2334`): a record replaces the one of its type where it is; a new type, or any database argument, goes first.
+// MIT: `krb5_db_update_tl_data` (lib/kdb/kdb5.c:2285-2334)
+/// a record replaces the one of its type where it is; a new type, or any database argument, goes first.
 pub(crate) fn update_tl_data(tl: &mut Vec<TlData>, new: TlData) {
     if new.ty != TL_DB_ARGS
         && let Some(t) = tl.iter_mut().find(|t| t.ty == new.ty)
@@ -191,8 +194,10 @@ fn mit_lifetimes(p: &Principal) -> (u64, u64) {
     }
 }
 
-/// MIT `find_changed_attrs` (`lib/kdb/kdb_convert.c:46-144`): the attributes in which `new` differs from `current`, as a list in MIT's order.
-/// MIT `find_changed_attrs` (`lib/kdb/kdb_convert.c:69-78`): with `exclude_nra` the three lockout attributes are never listed.
+// MIT: `find_changed_attrs` (lib/kdb/kdb_convert.c:46-144)
+/// the attributes in which `new` differs from `current`, as a list in MIT's order.
+// MIT: `find_changed_attrs` (lib/kdb/kdb_convert.c:69-78)
+/// with `exclude_nra` the three lockout attributes are never listed.
 #[must_use]
 pub(crate) fn find_changed_attrs(current: &Principal, new: &Principal, exclude_nra: bool) -> u32 {
     let mut attrs = 0;
@@ -244,7 +249,8 @@ pub(crate) fn find_changed_attrs(current: &Principal, new: &Principal, exclude_n
     attrs
 }
 
-/// MIT `find_changed_attrs` (`lib/kdb/kdb_convert.c:80-101`): the realm test is inverted, so a principal whose realm is the same is always listed.
+// MIT: `find_changed_attrs` (lib/kdb/kdb_convert.c:80-101)
+/// the realm test is inverted, so a principal whose realm is the same is always listed.
 /// Only a realm of the same length that differs has its components compared, each by its current length.
 fn princ_listed(current: &Principal, new: &Principal) -> bool {
     let (c, n) = (&current.name.name_string, &new.name.name_string);
@@ -259,7 +265,8 @@ fn princ_listed(current: &Principal, new: &Principal) -> bool {
         .any(|(a, b)| !b.as_bytes().starts_with(a.as_bytes()))
 }
 
-/// MIT `krb5_dbe_lookup_last_pwd_change` (`lib/kdb/kdb5.c:1505-1527`): a missing record, or one not four bytes long, reads as 0.
+// MIT: `krb5_dbe_lookup_last_pwd_change` (lib/kdb/kdb5.c:1505-1527)
+/// a missing record, or one not four bytes long, reads as 0.
 fn last_pwd_change(tl: &[TlData]) -> u32 {
     tl.iter()
         .find(|t| t.ty == TL_LAST_PWD_CHANGE)
@@ -267,7 +274,8 @@ fn last_pwd_change(tl: &[TlData]) -> u32 {
         .map_or(0, u32::from_le_bytes)
 }
 
-/// MIT `krb5_dbe_lookup_mod_princ_data` (`lib/kdb/kdb5.c:1637-1663`): a record shorter than five bytes, not NUL-terminated or whose name does not parse is not there.
+// MIT: `krb5_dbe_lookup_mod_princ_data` (lib/kdb/kdb5.c:1637-1663)
+/// a record shorter than five bytes, not NUL-terminated or whose name does not parse is not there.
 fn mod_princ_data(tl: &[TlData]) -> Option<(u32, PrincipalName, String)> {
     let (time, name) = tl
         .iter()
@@ -277,10 +285,14 @@ fn mod_princ_data(tl: &[TlData]) -> Option<(u32, PrincipalName, String)> {
     Some((time, princ, realm))
 }
 
-/// MIT `ulog_conv_2logentry` (`lib/kdb/kdb_convert.c:362-535`): the listed attributes of `p`, each in MIT's shape, in the list's order.
-/// MIT `ulog_conv_2logentry` (`lib/kdb/kdb_convert.c:464-525`): a listed `AT_TL_DATA` is the password-change time, the modifier and its time when the record has one, then every other record.
-/// MIT `ulog_conv_2logentry` (`lib/kdb/kdb_convert.c:364-387`): the flags and both lifetimes go only when they are not negative as 32-bit values.
-/// MIT `ulog_conv_2logentry` (`lib/kdb/kdb_convert.c:389-402`): an expiration or password expiration past 2038 is negative as a 32-bit value and is not sent.
+// MIT: `ulog_conv_2logentry` (lib/kdb/kdb_convert.c:362-535)
+/// the listed attributes of `p`, each in MIT's shape, in the list's order.
+// MIT: `ulog_conv_2logentry` (lib/kdb/kdb_convert.c:464-525)
+/// a listed `AT_TL_DATA` is the password-change time, the modifier and its time when the record has one, then every other record.
+// MIT: `ulog_conv_2logentry` (lib/kdb/kdb_convert.c:364-387)
+/// the flags and both lifetimes go only when they are not negative as 32-bit values.
+// MIT: `ulog_conv_2logentry` (lib/kdb/kdb_convert.c:389-402)
+/// an expiration or password expiration past 2038 is negative as a 32-bit value and is not sent.
 /// Here both go whenever listed: settled live, MIT's own replica otherwise keeps the expiration it had while its primary expires the principal (`docs/mit-deviations.md`).
 /// The three non-replicated attributes have no case in MIT's switch and are never sent.
 #[must_use]
@@ -370,11 +382,16 @@ fn empty_entry(name: &str) -> Result<Principal, Error> {
     })
 }
 
-/// MIT `ulog_conv_2dbentry` (`lib/kdb/kdb_convert.c:550-765`): the replica's own record (an empty one for a new principal) with only the attributes the update carries applied, in its order.
-/// MIT `ulog_conv_2dbentry` (`lib/kdb/kdb_convert.c:626-639`): a replica applies none of the three lockout attributes.
-/// MIT `ulog_conv_2dbentry` (`lib/kdb/kdb_convert.c:651-703`): `AT_KEYDATA` replaces every key.
-/// MIT `ulog_conv_2dbentry` (`lib/kdb/kdb_convert.c:705-715`): each `AT_TL_DATA` record replaces the one of its type, and none is removed.
-/// MIT `ulog_conv_2dbentry` (`lib/kdb/kdb_convert.c:748-756`): the modifier is recorded after every attribute, when both it and a nonzero time came.
+// MIT: `ulog_conv_2dbentry` (lib/kdb/kdb_convert.c:550-765)
+/// the replica's own record (an empty one for a new principal) with only the attributes the update carries applied, in its order.
+// MIT: `ulog_conv_2dbentry` (lib/kdb/kdb_convert.c:626-639)
+/// a replica applies none of the three lockout attributes.
+// MIT: `ulog_conv_2dbentry` (lib/kdb/kdb_convert.c:651-703)
+/// `AT_KEYDATA` replaces every key.
+// MIT: `ulog_conv_2dbentry` (lib/kdb/kdb_convert.c:705-715)
+/// each `AT_TL_DATA` record replaces the one of its type, and none is removed.
+// MIT: `ulog_conv_2dbentry` (lib/kdb/kdb_convert.c:748-756)
+/// the modifier is recorded after every attribute, when both it and a nonzero time came.
 /// The policy, the password history and the attributes MIT's switch ignores travel only in `KRB5_TL_KADM_DATA`; the record's views of its flags, strings, kadm5 record and master key version are read again from what changed, and its salt from new keys or a new name as a dump load reads it.
 pub fn conv_2dbentry(
     existing: Option<&Principal>,

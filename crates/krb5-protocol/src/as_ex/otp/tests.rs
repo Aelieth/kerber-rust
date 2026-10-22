@@ -815,7 +815,8 @@ fn a_token_config_keeps_its_octets_in_pa_config_data() {
 
 #[test]
 fn a_second_login_reads_the_config_octets_and_prunes_to_the_token_they_name() {
-    // MIT `read_cc_config_in_data` (`lib/krb5/krb/get_in_tkt.c:1176-1211`): the first login's config comes back as the input cache's octets.
+    // MIT: `read_cc_config_in_data` (lib/krb5/krb/get_in_tkt.c:1176-1211)
+    // the first login's config comes back as the input cache's octets.
     let mut first = Script::of(&["123456"]);
     let (_, cfg) = run(challenge(vec![octet_token()]), &mut first).unwrap();
     let stored = config_octets(&cfg).unwrap();

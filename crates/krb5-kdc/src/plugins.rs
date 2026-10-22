@@ -34,7 +34,8 @@ pub enum PreauthAction {
 }
 
 /// What one kdcpreauth module adds to a PREAUTH_REQUIRED (or PREAUTH_FAILED) hint list. `Debug` prints a cookie entry's type and length, not its octets, as [`ProtocolKey`]'s prints no key octets: a module's cookie state is secret. MIT `send_challenge` (`plugins/preauth/spake/spake_kdc.c:261-277`): SPAKE's stage-0 cookie holds the group, the KDC's private scalar and the transcript hash, and is zapped once set.
-/// MIT `send_challenge` (`plugins/preauth/spake/spake_kdc.c:261-277`): SPAKE's stage-0 cookie holds the group, the KDC's private scalar and the transcript hash, and is zapped once set.
+// MIT: `send_challenge` (plugins/preauth/spake/spake_kdc.c:261-277)
+/// SPAKE's stage-0 cookie holds the group, the KDC's private scalar and the transcript hash, and is zapped once set.
 #[derive(Default)]
 pub struct PreauthHint {
     /// The module's METHOD-DATA offers, in its order.
@@ -111,7 +112,8 @@ pub trait KdcPreauth: Send + Sync {
         armor: bool,
         requested: &[i32],
     ) -> Vec<PaData>;
-    /// MIT `krb5_kdcpreauth_edata_fn` (`kdcpreauth_plugin.h:311-328`): a module sees the request and the rock, whose `client_keyblock` and `set_cookie` callbacks SPAKE's optimistic challenge uses.
+    // MIT: `krb5_kdcpreauth_edata_fn` (kdcpreauth_plugin.h:311-328)
+    /// a module sees the request and the rock, whose `client_keyblock` and `set_cookie` callbacks SPAKE's optimistic challenge uses.
     fn edata(
         &self,
         store: &dyn PrincipalRead,
@@ -136,7 +138,8 @@ pub trait KdcPreauth: Send + Sync {
     ) -> PreauthHint {
         self.edata(store, client, armor.is_some(), requested, ikey)
     }
-    /// MIT `get_preauth_hint_list` (`kdc_preauth.c:999-1001`): the empty PA-FX-FAST is added before any module hint, whatever `hw_only` says.
+    // MIT: `get_preauth_hint_list` (kdc_preauth.c:999-1001)
+    /// the empty PA-FX-FAST is added before any module hint, whatever `hw_only` says.
     fn hardware(&self) -> bool {
         false
     }
@@ -209,7 +212,8 @@ impl KdcPreauth for PkinitMod {
             padata_type: pa::PK_AS_REQ,
             padata_value: Vec::<u8>::new().into(),
         }];
-        // MIT `pkinit_server_get_flags` (`pkinit_srv.c:928-929`): PKINIT_KX is PA_INFO, not PA_HARDWARE.
+        // MIT: `pkinit_server_get_flags` (pkinit_srv.c:928-929)
+        // PKINIT_KX is PA_INFO, not PA_HARDWARE.
         if client.attributes & KDB_REQUIRES_HW_AUTH == 0 {
             out.push(PaData {
                 padata_type: pa::PKINIT_KX,
@@ -230,7 +234,8 @@ impl KdcPreauth for PkinitMod {
             body_der,
             cname,
         } = *rock;
-        // MIT `load_preauth_plugins` (`kdc_preauth.c:207-219`): no identity, so the module is not loaded.
+        // MIT: `load_preauth_plugins` (kdc_preauth.c:207-219)
+        // no identity, so the module is not loaded.
         if store.pkinit().is_none() {
             return Ok(None);
         }
@@ -249,7 +254,8 @@ impl KdcPreauth for PkinitMod {
     }
 }
 
-// MIT `kdcpreauth_otp_initvt` (`plugins/preauth/otp/main.c:378-387`): the module owns PA-OTP-REQUEST.
+// MIT: `kdcpreauth_otp_initvt` (plugins/preauth/otp/main.c:378-387)
+// the module owns PA-OTP-REQUEST.
 impl KdcPreauth for OtpMod {
     fn name(&self) -> &'static str {
         "otp"
@@ -295,8 +301,10 @@ impl KdcPreauth for SpakeMod {
         _armor: bool,
         requested: &[i32],
     ) -> Vec<PaData> {
-        // MIT `spake_edata` (`spake_kdc.c:309-314`): omitted when client_keyblock is NULL, the same condition as `have_client_keys` being false.
-        // MIT `group_init_state` (`groups.c:235-238`): no permitted group is `KRB5_PLUGIN_OP_NOTSUPP` ("No SPAKE preauth groups configured").
+        // MIT: `spake_edata` (spake_kdc.c:309-314)
+        // omitted when client_keyblock is NULL, the same condition as `have_client_keys` being false.
+        // MIT: `group_init_state` (groups.c:235-238)
+        // no permitted group is `KRB5_PLUGIN_OP_NOTSUPP` ("No SPAKE preauth groups configured").
         if store.policy().spake_kdc().is_err() || !have_client_keys(store, client, requested) {
             return Vec::new();
         }
@@ -328,7 +336,8 @@ impl KdcPreauth for SpakeMod {
             cname: _cname,
         } = *rock;
         let Some(ikey) = ikey else {
-            // MIT `verify_response` (`spake_kdc.c:380-384`): the same for a response.
+            // MIT: `verify_response` (spake_kdc.c:380-384)
+            // the same for a response.
             return if store.policy().spake_kdc().is_ok()
                 && crate::preauth::find_pa(padata, pa::SPAKE).is_some()
             {
@@ -363,8 +372,10 @@ impl KdcPreauth for EncTsMod {
         armor: bool,
         requested: &[i32],
     ) -> Vec<PaData> {
-        // MIT `enc_ts_get` (`kdc_preauth_encts.c:39-43`): ENOENT when FAST armor is present or `have_client_keys` is false.
-        // MIT `have_client_keys` (`kdc_preauth.c:442-442`): true when some requested enctype has a client key.
+        // MIT: `enc_ts_get` (kdc_preauth_encts.c:39-43)
+        // ENOENT when FAST armor is present or `have_client_keys` is false.
+        // MIT: `have_client_keys` (kdc_preauth.c:442-442)
+        // true when some requested enctype has a client key.
         if armor || !have_client_keys(store, client, requested) {
             return Vec::new();
         }
@@ -373,7 +384,8 @@ impl KdcPreauth for EncTsMod {
             padata_value: Vec::<u8>::new().into(),
         }]
     }
-    /// MIT `enc_ts_verify` (`kdc_preauth_encts.c:74-97`): the timestamp is tried against keys of that etype, and a clock skew after decrypt is still a failure.
+    // MIT: `enc_ts_verify` (kdc_preauth_encts.c:74-97)
+    /// the timestamp is tried against keys of that etype, and a clock skew after decrypt is still a failure.
     fn process_as(&self, rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, Error> {
         let PreauthRock {
             store,
@@ -398,8 +410,10 @@ impl KdcPreauth for EncTsMod {
                 ));
             }
         };
-        // MIT `krb5_dbe_def_search_enctype` (`kdb_default.c:65-67`): the walk covers the *highest kvno* only and skips non-permitted enctypes (:60-61, :82-86) — a timestamp under a retired kvno's key (a stale keytab) never decrypts.
-        // MIT `filter_preauth_error` (`kdc_preauth.c:1092-1133`): a code off the pass-through list, such as KRB5_KDB_NO_PERMITTED_KEY, becomes the same 24 on the wire. An unknown etype is not permitted.
+        // MIT: `krb5_dbe_def_search_enctype` (kdb_default.c:65-67)
+        // the walk covers the *highest kvno* only and skips non-permitted enctypes (:60-61, :82-86) — a timestamp under a retired kvno's key (a stale keytab) never decrypts.
+        // MIT: `filter_preauth_error` (kdc_preauth.c:1092-1133)
+        // a code off the pass-through list, such as KRB5_KDB_NO_PERMITTED_KEY, becomes the same 24 on the wire. An unknown etype is not permitted.
         let policy = store.policy();
         let top = client.keys.iter().map(|k| k.kvno).max();
         let Some(pa_et) = krb5_crypto::EncryptionType::known(enc.etype)
@@ -418,15 +432,18 @@ impl KdcPreauth for EncTsMod {
         {
             match crate::issue::verify_enc_timestamp(store, &k.key, blob.as_ref()) {
                 Ok(()) => return Ok(Some(PreauthAction::EncTsOk)),
-                // MIT `enc_ts_verify` (`kdc_preauth_encts.c:75-92`): a key that does not decrypt the timestamp sends the walk on to the next key.
-                // MIT `enc_ts_verify` (`kdc_preauth_encts.c:74-92`): any decrypt failure, a des3 key MIT refuses included, sends the walk on to the next key.
+                // MIT: `enc_ts_verify` (kdc_preauth_encts.c:75-92)
+                // a key that does not decrypt the timestamp sends the walk on to the next key.
+                // MIT: `enc_ts_verify` (kdc_preauth_encts.c:74-92)
+                // any decrypt failure, a des3 key MIT refuses included, sends the walk on to the next key.
                 Err(
                     Error::Crypto(_) | Error::BadEnctype | Error::DesBadParity | Error::DesWeakKey,
                 ) => {}
                 Err(e) => return Err(e),
             }
         }
-        // MIT `enc_ts_verify` (`kdc_preauth_encts.c:113-116`): no key decrypts it, the password being wrong most likely, is 24.
+        // MIT: `enc_ts_verify` (kdc_preauth_encts.c:113-116)
+        // no key decrypts it, the password being wrong most likely, is 24.
         Err(crate::preauth::proto(
             krb5_types::err::PREAUTH_FAILED,
             crate::status::PREAUTH_FAILED,
@@ -434,7 +451,8 @@ impl KdcPreauth for EncTsMod {
     }
 }
 
-/// MIT `KRB5_KDB_NO_PERMITTED_KEY` (`lib/krb5/error_tables/kdb5_err.et:72-72`): its text.
+// MIT: `KRB5_KDB_NO_PERMITTED_KEY` (lib/krb5/error_tables/kdb5_err.et:72-72)
+/// its text.
 const NO_PERMITTED_KEY: &str = "No matching key in entry having a permitted enctype";
 const KDB_NO_PERMITTED_KEY: i32 = -1_780_008_418;
 
@@ -454,7 +472,8 @@ impl KdcPreauth for EncChallengeMod {
         armor: bool,
         requested: &[i32],
     ) -> Vec<PaData> {
-        // MIT `ec_edata` (`kdc_preauth_ec.c:37-48`): empty 138 only with armor and `have_client_keys`.
+        // MIT: `ec_edata` (kdc_preauth_ec.c:37-48)
+        // empty 138 only with armor and `have_client_keys`.
         if !armor || !have_client_keys(store, client, requested) {
             return Vec::new();
         }
@@ -630,10 +649,12 @@ pub(crate) fn otp_verifier_names() -> Vec<&'static str> {
 }
 
 /// One kdcauthdata module. Errors are logged, not fatal.
-/// MIT `krb5_kdcauthdata_handle_fn` (`kdcauthdata_plugin.h:105-117`): a module's handler is passed the DB entries, their keys, the request and both ticket parts.
+// MIT: `krb5_kdcauthdata_handle_fn` (kdcauthdata_plugin.h:105-117)
+/// a module's handler is passed the DB entries, their keys, the request and both ticket parts.
 pub trait KdcAuthdata: Send + Sync {
     fn name(&self) -> &'static str;
-    /// MIT `handle_authdata` (`kdc_authdata.c:610-611`): a module error is logged with `kdc_err` and the next module still runs.
+    // MIT: `handle_authdata` (kdc_authdata.c:610-611)
+    /// a module error is logged with `kdc_err` and the next module still runs.
     fn handle(
         &self,
         is_tgs: bool,
@@ -690,8 +711,10 @@ pub(crate) fn authdata_modules() -> Vec<Arc<dyn KdcAuthdata>> {
 }
 
 /// Named kdcpreauth modules after `[plugins] kdcpreauth` `disable` and `enable_only`, less the otp module when its `[otp]` did not initialize.
-/// MIT `get_plugin_vtables` (`kdc/kdc_preauth.c:117-163`): built-ins register, then `k5_plugin_load_all` applies the profile.
-/// MIT `k5_plugin_load_all` (`lib/krb5/krb/plugin.c:421-455`): a caller walks only the modules that stayed loaded.
+// MIT: `get_plugin_vtables` (kdc/kdc_preauth.c:117-163)
+/// built-ins register, then `k5_plugin_load_all` applies the profile.
+// MIT: `k5_plugin_load_all` (lib/krb5/krb/plugin.c:421-455)
+/// a caller walks only the modules that stayed loaded.
 pub(crate) fn selected_preauth(policy: &Policy) -> Vec<Arc<dyn KdcPreauth>> {
     let mut fast = Vec::new();
     let mut named = Vec::new();
@@ -719,7 +742,8 @@ pub(crate) fn kdcpreauth_loaded(store: &dyn PrincipalRead, name: &str) -> bool {
         .any(|module| module.name() == name)
 }
 
-/// MIT `pkinit_server_plugin_init` (`plugins/preauth/pkinit/pkinit_srv.c:1384-1390`): one realm's failure is prefixed with PKINIT initialization failed.
+// MIT: `pkinit_server_plugin_init` (plugins/preauth/pkinit/pkinit_srv.c:1384-1390)
+/// one realm's failure is prefixed with PKINIT initialization failed.
 #[must_use]
 pub fn preauth_startup_lines(
     relations: &krb5_config::PluginRelations,
@@ -766,7 +790,8 @@ pub(crate) fn startup_module_loaded(relations: &krb5_config::PluginRelations, na
 }
 
 /// METHOD-DATA modules after the leading empty PA-FX-FAST, and the cookie state they keep.
-/// MIT `kdc_fast_set_cookie` (`fast_util.c:631-651`): the first state set for a padata type is the one kept.
+// MIT: `kdc_fast_set_cookie` (fast_util.c:631-651)
+/// the first state set for a padata type is the one kept.
 pub fn advertise_preauth(
     store: &dyn PrincipalRead,
     client: &Principal,
@@ -851,7 +876,8 @@ pub fn run_as_preauth(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, E
     Ok(None)
 }
 
-/// MIT `finish_verify_padata` (`kdc_preauth.c:1213-1228`): a module whose verify callback answers a non-zero code is logged at INFO as `preauth (NAME) verify failure: MESSAGE`, `MESSAGE` being `krb5_get_error_message` of the module's own code, which is the text the module left for that code (`k5_setmsg`) or else the code's table text. The failure then goes through [`filter_preauth_error`], which `finish_check_padata` applies (`:1206`).
+// MIT: `finish_verify_padata` (kdc_preauth.c:1213-1228)
+/// a module whose verify callback answers a non-zero code is logged at INFO as `preauth (NAME) verify failure: MESSAGE`, `MESSAGE` being `krb5_get_error_message` of the module's own code, which is the text the module left for that code (`k5_setmsg`) or else the code's table text. The failure then goes through [`filter_preauth_error`], which `finish_check_padata` applies (`:1206`).
 pub(crate) fn finish_verify_padata(module: &str, e: Error) -> Error {
     if is_return_padata(&e) {
         return e;
@@ -860,7 +886,8 @@ pub(crate) fn finish_verify_padata(module: &str, e: Error) -> Error {
     filter_preauth_error(e)
 }
 
-/// MIT `finish_process_as_req` (`kdc/do_as_req.c:251-256`): a `return_padata` failure, which our PKINIT module meets during verify, goes out unfiltered under `KDC_RETURN_PADATA`, with no verify failure logged.
+// MIT: `finish_process_as_req` (kdc/do_as_req.c:251-256)
+/// a `return_padata` failure, which our PKINIT module meets during verify, goes out unfiltered under `KDC_RETURN_PADATA`, with no verify failure logged.
 fn is_return_padata(e: &Error) -> bool {
     matches!(e, Error::Protocol { text: Some(t), .. } if t == status::KDC_RETURN_PADATA)
 }
@@ -884,10 +911,14 @@ pub(crate) fn log_verify_failure(module: &str, emsg: &str) {
     );
 }
 
-/// MIT `filter_preauth_error` (`kdc_preauth.c:1092-1133`): a module failure keeps its code only when it is on the pass-through list; anything else — a KDB code such as `KRB5_KDB_NO_PERMITTED_KEY`, an ASN.1 or crypto failure, 90 `PREAUTH_EXPIRED` — reaches the client as 24 `PREAUTH_FAILED`. It is applied where `finish_check_padata` applies it (`:1206`). The module's e-data rides along (`:1194-1196`).
-/// MIT `finish_preauth` (`do_as_req.c:442-442`): whatever the code, the status word is the `PREAUTH_FAILED` it sets for every module failure, so the e_text is too.
-/// MIT `finish_process_as_req` (`do_as_req.c:358-359`): the AS_REQ line gives the message of the code the client sees, so the text a module left for its own code reaches that line only while the filter keeps the code. FAST errors never pass here (`FastMod::process_as` is a no-op, `kdc_find_fast` is not a module in MIT either).
-/// MIT `finish_preauth` (`do_as_req.c:442-442`): whatever the code, the status word is the `PREAUTH_FAILED` it sets for every module failure, so the e_text is too.
+// MIT: `filter_preauth_error` (kdc_preauth.c:1092-1133)
+/// a module failure keeps its code only when it is on the pass-through list; anything else — a KDB code such as `KRB5_KDB_NO_PERMITTED_KEY`, an ASN.1 or crypto failure, 90 `PREAUTH_EXPIRED` — reaches the client as 24 `PREAUTH_FAILED`. It is applied where `finish_check_padata` applies it (`:1206`). The module's e-data rides along (`:1194-1196`).
+// MIT: `finish_preauth` (do_as_req.c:442-442)
+/// whatever the code, the status word is the `PREAUTH_FAILED` it sets for every module failure, so the e_text is too.
+// MIT: `finish_process_as_req` (do_as_req.c:358-359)
+/// the AS_REQ line gives the message of the code the client sees, so the text a module left for its own code reaches that line only while the filter keeps the code. FAST errors never pass here (`FastMod::process_as` is a no-op, `kdc_find_fast` is not a module in MIT either).
+// MIT: `finish_preauth` (do_as_req.c:442-442)
+/// whatever the code, the status word is the `PREAUTH_FAILED` it sets for every module failure, so the e_text is too.
 /// FAST errors never pass here (`FastMod::process_as` is a no-op, `kdc_find_fast` is not a module in MIT either).
 pub(crate) fn filter_preauth_error(e: Error) -> Error {
     use krb5_types::err;
@@ -961,7 +992,8 @@ pub(crate) fn filter_preauth_error(e: Error) -> Error {
     }
 }
 
-/// MIT `update_ticket_times` (`policy.c:91-99`): a non-zero policy lifetime caps `endtime`, and a non-zero renew lifetime caps `renew_till`, both from now.
+// MIT: `update_ticket_times` (policy.c:91-99)
+/// a non-zero policy lifetime caps `endtime`, and a non-zero renew lifetime caps `renew_till`, both from now.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PolicyAdjustment {
     /// Seconds; 0 = leave `endtime` unchanged.
@@ -1014,7 +1046,8 @@ pub trait KdcPolicy: Send + Sync {
         indicators: &[String],
     ) -> Result<PolicyAdjustment, Error>;
 
-    /// MIT `krb5_kdcpolicy_check_as_fn` (`kdcpolicy_plugin.h:95-102`): the request, both database principals, the auth indicators, and the status out. Lifetime and renew lifetime come back as [`PolicyAdjustment`]. The default ignores the request, the server, and the status and calls [`Self::check_as`].
+    // MIT: `krb5_kdcpolicy_check_as_fn` (kdcpolicy_plugin.h:95-102)
+    /// the request, both database principals, the auth indicators, and the status out. Lifetime and renew lifetime come back as [`PolicyAdjustment`]. The default ignores the request, the server, and the status and calls [`Self::check_as`].
     fn check_as_req(
         &self,
         _request: &KdcReqBody,
@@ -1027,7 +1060,8 @@ pub trait KdcPolicy: Send + Sync {
         self.check_as(store, client, indicators)
     }
 
-    /// MIT `krb5_kdcpolicy_check_tgs_fn` (`kdcpolicy_plugin.h:111-118`): the request, the server, the header ticket, the auth indicators, and the status out. Lifetime and renew lifetime come back as [`PolicyAdjustment`]. The default ignores the request, the ticket, and the status and calls [`Self::check_tgs`] with the server name.
+    // MIT: `krb5_kdcpolicy_check_tgs_fn` (kdcpolicy_plugin.h:111-118)
+    /// the request, the server, the header ticket, the auth indicators, and the status out. Lifetime and renew lifetime come back as [`PolicyAdjustment`]. The default ignores the request, the ticket, and the status and calls [`Self::check_tgs`] with the server name.
     fn check_tgs_req(
         &self,
         _request: &KdcReqBody,
@@ -1188,7 +1222,8 @@ pub(crate) fn request_peer() -> Option<HostAddress> {
     REQUEST_PEER.with(|slot| slot.borrow().clone())
 }
 
-/// MIT `filter_enabled_modules` (`lib/krb5/krb/plugin.c:271-299`): each enabled name takes the first remaining match.
+// MIT: `filter_enabled_modules` (lib/krb5/krb/plugin.c:271-299)
+/// each enabled name takes the first remaining match.
 fn selected_kdcpolicies(
     relations: &krb5_config::PluginRelations,
     modules: Vec<Arc<dyn KdcPolicy>>,
@@ -1205,7 +1240,8 @@ fn selected_kdcpolicies(
     out
 }
 
-/// MIT `check_kdcpolicy_as` (`kdc/policy.c:104-136`): a null method is skipped and no loaded module leaves the times unchanged.
+// MIT: `check_kdcpolicy_as` (kdc/policy.c:104-136)
+/// a null method is skipped and no loaded module leaves the times unchanged.
 fn active_kdcpolicies(store: &dyn PrincipalRead) -> Vec<Arc<dyn KdcPolicy>> {
     if let Some(module) = THREAD_POLICY.with(|slot| slot.borrow().clone()) {
         return vec![module];
@@ -1265,7 +1301,8 @@ pub(crate) fn enforce_kdcpolicy_as(
     Ok(())
 }
 
-/// MIT `check_kdcpolicy_tgs` (`kdc/policy.c:144-176`): same walk as the AS check, with the header ticket and no client database entry.
+// MIT: `check_kdcpolicy_tgs` (kdc/policy.c:144-176)
+/// same walk as the AS check, with the header ticket and no client database entry.
 #[expect(
     clippy::too_many_arguments,
     reason = "MIT check_kdcpolicy_tgs passes the request, the server, the ticket, the indicators and both ticket times"
@@ -1626,7 +1663,8 @@ mod tests {
         let padata = vec![pa_enc_timestamp(&key).unwrap()];
         let req = as_req(cname, TEST_REALM, 9, Some(padata)).unwrap();
         crate::issue_as(&store, &req).expect("registry EncTsOk issues");
-        // MIT `enc_ts_verify` (`kdc/kdc_preauth_encts.c:94-101`): no replay cache, so the same timestamp verifies again.
+        // MIT: `enc_ts_verify` (kdc/kdc_preauth_encts.c:94-101)
+        // no replay cache, so the same timestamp verifies again.
         crate::issue_as(&store, &req).expect("the replayed timestamp issues again");
     }
 

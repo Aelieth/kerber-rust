@@ -145,7 +145,8 @@ fn quit_request(s: &mut Session<'_>, _argv: &[String]) {
     s.abort = true;
 }
 
-/// MIT `ss_page_stdin` (`pager.c:69-110`): the list is copied to stdout as the pager process writes it there, past what stdout still buffers; no pager is run.
+// MIT: `ss_page_stdin` (pager.c:69-110)
+/// the list is copied to stdout as the pager process writes it there, past what stdout still buffers; no pager is run.
 fn list_requests(s: &mut Session<'_>, _argv: &[String]) {
     let mut text = format!("Available {WHOAMI} requests:\n\n");
     for r in REQUESTS {
@@ -163,7 +164,8 @@ fn list_requests(s: &mut Session<'_>, _argv: &[String]) {
     s.io.out.write_raw(text.as_bytes());
 }
 
-/// MIT `check_request_table` (`execute_cmd.c:56-79`): run the request `argv[0]` names; false when no request has that name.
+// MIT: `check_request_table` (execute_cmd.c:56-79)
+/// run the request `argv[0]` names; false when no request has that name.
 fn dispatch(s: &mut Session<'_>, argv: &[String]) -> bool {
     let Some(name) = argv.first() else {
         return true;
@@ -177,7 +179,8 @@ fn dispatch(s: &mut Session<'_>, argv: &[String]) -> bool {
     }
 }
 
-/// MIT `ss_execute_command` (`execute_cmd.c:134-151`): the command line's own words, unparsed.
+// MIT: `ss_execute_command` (execute_cmd.c:134-151)
+/// the command line's own words, unparsed.
 pub(crate) fn execute_command(s: &mut Session<'_>, argv: &[String]) -> bool {
     dispatch(s, argv)
 }
@@ -209,7 +212,8 @@ pub(crate) fn execute_line(s: &mut Session<'_>, line: &str) -> Option<Unrun> {
     })
 }
 
-/// MIT `ss_perror` (`error.c:66-69`): `kadmin.local: <error> <text>`.
+// MIT: `ss_perror` (error.c:66-69)
+/// `kadmin.local: <error> <text>`.
 pub(crate) fn perror(io: &mut Io, code: &str, shown: &str) {
     io.com_err(WHOAMI, Some(code), shown);
 }
@@ -219,7 +223,8 @@ pub(crate) const COMMAND_NOT_FOUND: &str = "Command not found";
 /// `ss_err.et`: the text of `SS_ET_ESCAPE_DISABLED`.
 pub(crate) const ESCAPE_DISABLED: &str = "Shell escapes are disabled";
 
-/// MIT `ss_parse` (`util/ss/parse.c:57-169`): words split on blanks; `"` quotes, inside a word too, and `""` within quotes is one `"`; an open quote is `Unbalanced quotes in command line`.
+// MIT: `ss_parse` (util/ss/parse.c:57-169)
+/// words split on blanks; `"` quotes, inside a word too, and `""` within quotes is one `"`; an open quote is `Unbalanced quotes in command line`.
 pub fn parse(line: &str) -> Result<Vec<String>, &'static str> {
     let mut argv = Vec::new();
     let mut cur = String::new();

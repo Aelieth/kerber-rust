@@ -1,6 +1,7 @@
 //! `[plugins] kdcpreauth` selects built-in and embedder modules by MIT's names.
 //!
-//! MIT `get_plugin_vtables` (`kdc/kdc_preauth.c:117-163`): disable and enable_only run inside k5_plugin_load_all, so a module that is not loaded neither advertises nor verifies.
+// MIT: `get_plugin_vtables` (kdc/kdc_preauth.c:117-163)
+//! disable and enable_only run inside k5_plugin_load_all, so a module that is not loaded neither advertises nor verifies.
 
 use std::sync::Arc;
 

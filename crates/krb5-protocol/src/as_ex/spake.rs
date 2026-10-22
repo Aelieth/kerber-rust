@@ -25,7 +25,8 @@ use crate::trace;
 const SPAKE_MODULE: &str = "spake";
 
 /// The groups the client permits, in configuration order; none means no SPAKE module.
-/// MIT `group_init_state` (`groups.c:213-239`): `[libdefaults] spake_preauth_groups`, the client default when unset; no permitted group fails the module's init.
+// MIT: `group_init_state` (groups.c:213-239)
+/// `[libdefaults] spake_preauth_groups`, the client default when unset; no permitted group fails the module's init.
 pub(super) fn client_groups(profile: &Krb5Conf) -> Vec<SpakeGroup> {
     let value = profile
         .spake_preauth_groups
@@ -34,7 +35,8 @@ pub(super) fn client_groups(profile: &Krb5Conf) -> Vec<SpakeGroup> {
     spake_parse_groups(value.as_deref().unwrap_or(SPAKE_DEFAULT_GROUPS_CLIENT))
 }
 
-/// MIT `reqstate` (`spake_client.c:41-47`): the support message sent (for the transcript), and whether a challenge was answered.
+// MIT: `reqstate` (spake_client.c:41-47)
+/// the support message sent (for the transcript), and whether a challenge was answered.
 struct SpakeState {
     groups: Vec<SpakeGroup>,
     support: Option<Vec<u8>>,
@@ -72,7 +74,8 @@ fn generic_failure() -> ModuleFail {
     ModuleFail::new(code, &trace::error_message(code))
 }
 
-/// MIT `send_support` (`spake_client.c:149-178`): the permitted groups, saved in `st->support`.
+// MIT: `send_support` (spake_client.c:149-178)
+/// the permitted groups, saved in `st->support`.
 fn send_support(st: &mut SpakeState) -> PaData {
     let support = pa_spake_support(&st.groups);
     st.support = Some(support.padata_value.as_ref().to_vec());
@@ -141,7 +144,8 @@ fn process_challenge(
     Ok(Round::Send(resp, Some(k0)))
 }
 
-/// MIT `spake_process` (`spake_client.c:322-363`): an empty PA-SPAKE gets support, once; a challenge goes to `process_challenge`; a message that does not decode, encdata or any other type fails.
+// MIT: `spake_process` (spake_client.c:322-363)
+/// an empty PA-SPAKE gets support, once; a challenge goes to `process_challenge`; a message that does not decode, encdata or any other type fails.
 #[expect(
     clippy::too_many_arguments,
     reason = "the AS round's state, no value type"
@@ -170,7 +174,8 @@ fn spake_round(
         PaSpake::Challenge(ch) => process_challenge(
             st, req, keys, etypes, current, hint, &ch, pa_in, body_der, pw,
         ),
-        // MIT `process_encdata` (`spake_client.c:300-320`): no second factors, so encdata fails.
+        // MIT: `process_encdata` (spake_client.c:300-320)
+        // no second factors, so encdata fails.
         PaSpake::EncData(_) | PaSpake::Support(_) | PaSpake::Response(_) | PaSpake::Unknown => {
             Ok(Round::Failed(generic_failure()))
         }
@@ -464,7 +469,8 @@ pub(super) fn spake_forced(
     }
 }
 
-/// MIT `contains_sf_none` (`spake_client.c:51-51`): true when the challenge lists the SF-NONE second factor, the only factor type this client can answer.
+// MIT: `contains_sf_none` (spake_client.c:51-51)
+/// true when the challenge lists the SF-NONE second factor, the only factor type this client can answer.
 pub(super) fn spake_contains_sf_none(chal: &SpakeChallenge) -> bool {
     chal.factors.iter().any(|f| f.factor_type == SF_NONE)
 }

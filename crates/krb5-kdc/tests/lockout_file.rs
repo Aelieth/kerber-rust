@@ -3,8 +3,10 @@
 //! update log, kept across a restart, merged by every reader, kept by admin changes that do not
 //! set them, replaced by a plain load and kept by an iprop load; `kdb5_util create` and `load`
 //! make the file and `destroy` removes it.
-//! MIT `krb5_db2_lockout_audit` (`plugins/kdb/db2/lockout.c:141-222`): the KDC writes the three attributes it changed.
-//! MIT `klmdb_update_lockout` (`plugins/kdb/lmdb/kdb_lmdb.c:1054-1121`): only the lockout record is written.
+// MIT: `krb5_db2_lockout_audit` (plugins/kdb/db2/lockout.c:141-222)
+//! the KDC writes the three attributes it changed.
+// MIT: `klmdb_update_lockout` (plugins/kdb/lmdb/kdb_lmdb.c:1054-1121)
+//! only the lockout record is written.
 
 #![cfg(unix)]
 

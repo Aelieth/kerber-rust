@@ -1,5 +1,6 @@
 //! kadmind `CREATE_ALIAS` (proc 27) like `create_alias_2_svc` over `acl_addalias`, with the ACL matrix of MIT `tests/t_kadmin_acl.py` and the result codes MIT 1.22.2 returned in a live settle (`docs/testing.md` lists the settles unit tests pin).
-//! MIT `acl_addalias` (`auth_acl.c:723-734`): the caller needs add on the alias without restrictions and modify on the target.
+// MIT: `acl_addalias` (auth_acl.c:723-734)
+//! the caller needs add on the alias without restrictions and modify on the target.
 
 #[path = "common/mod.rs"]
 mod common;

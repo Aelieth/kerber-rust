@@ -88,7 +88,8 @@ fn read_store(
 }
 
 /// runs, and the database is written once and its age moved; a change `f` refuses or fails leaves the database and the store as they were. The error is the reply.
-/// MIT `kdb_put_entry` (`lib/kadm5/srv/server_kdb.c:364-405`): each kadm5 change ends in one put, which locks the database exclusively.
+// MIT: `kdb_put_entry` (lib/kadm5/srv/server_kdb.c:364-405)
+/// each kadm5 change ends in one put, which locks the database exclusively.
 fn commit<T>(
     g: &mut krb5_kdc::PrincipalStore,
     proc: u32,
@@ -186,7 +187,8 @@ pub(super) fn dispatch_kadm5(
     dispatch_kadm5_ticket(store, acl, actor, proc, args, true, false)
 }
 
-/// MIT `modify_principal_2_svc` (`server_stubs.c:630-644`): an ACL denial or a lockdown clear is AUTH_MODIFY before the entry is written.
+// MIT: `modify_principal_2_svc` (server_stubs.c:630-644)
+/// an ACL denial or a lockdown clear is AUTH_MODIFY before the entry is written.
 pub(super) fn dispatch_kadm5_ticket(
     store: &SharedStore,
     acl: &Acl,
@@ -272,7 +274,8 @@ pub(super) fn dispatch_kadm5_ticket(
             {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_DELETE));
             }
-            // MIT `delete_principal_2_svc` (`kadmin/server/server_stubs.c:586-595`): a missing principal fails the lockdown lookup before the delete locks the database.
+            // MIT: `delete_principal_2_svc` (kadmin/server/server_stubs.c:586-595)
+            // a missing principal fails the lockdown lookup before the delete locks the database.
             if g.get_in_realm(&name, &req).is_none() {
                 return Ok(generic_ret(API_V2, KADM5_UNK_PRINC));
             }
@@ -287,7 +290,8 @@ pub(super) fn dispatch_kadm5_ticket(
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
-            // MIT `stub_setup` (`server_stubs.c:296-301`): with rec_out it fetches the entry, so an unknown principal fails before the ACL check.
+            // MIT: `stub_setup` (server_stubs.c:296-301)
+            // with rec_out it fetches the entry, so an unknown principal fails before the ACL check.
             if g.get_in_realm(&name, &req).is_none() {
                 return Ok(generic_ret(API_V2, KADM5_UNK_PRINC));
             }
@@ -298,8 +302,10 @@ pub(super) fn dispatch_kadm5_ticket(
             {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_MODIFY));
             }
-            // MIT `impose_restrictions` (`auth.c:205-265`): the ACL line's restrictions rewrite the request's fields and mask.
-            // MIT `auth_restrict` (`auth.c:267-272`): takes the request's entry and mask, which it may rewrite.
+            // MIT: `impose_restrictions` (auth.c:205-265)
+            // the ACL line's restrictions rewrite the request's fields and mask.
+            // MIT: `auth_restrict` (auth.c:267-272)
+            // takes the request's entry and mask, which it may rewrite.
             let (mask, fields) = impose_request_restrictions(acl, actor, &tid, mask, fields);
             if mask & KADM5_ATTRIBUTES != 0
                 && fields.attributes & KDB_LOCKDOWN_KEYS == 0
@@ -376,8 +382,10 @@ pub(super) fn dispatch_kadm5_ticket(
             {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_ADD));
             }
-            // MIT `create_principal_2_svc` (`server_stubs.c:478-478`): stub_auth_restrict rewrites the request before kadm5_create_principal.
-            // MIT `create_principal3_2_svc` (`server_stubs.c:519-519`): stub_auth_restrict rewrites the request before kadm5_create_principal_3.
+            // MIT: `create_principal_2_svc` (server_stubs.c:478-478)
+            // stub_auth_restrict rewrites the request before kadm5_create_principal.
+            // MIT: `create_principal3_2_svc` (server_stubs.c:519-519)
+            // stub_auth_restrict rewrites the request before kadm5_create_principal_3.
             if let Some(rs) = acl.restrictions(actor, Some(&tid)) {
                 rs.impose(&mut c.ent, unix_now());
             }
@@ -414,8 +422,10 @@ pub(super) fn dispatch_kadm5_ticket(
             let (old, old_realm, new, new_realm) = parse_rename(args)?;
             let old_req = req_realm(&old_realm, &realm);
             let new_req = req_realm(&new_realm, &realm);
-            // MIT `rename_principal_2_svc` (`server_stubs.c:700-712`): ACL (AUTH_INSUFFICIENT) then lockdown (AUTH_DELETE).
-            // MIT `acl_renprinc` (`auth_acl.c:638-648`): delete on src and add on dest without restrictions.
+            // MIT: `rename_principal_2_svc` (server_stubs.c:700-712)
+            // ACL (AUTH_INSUFFICIENT) then lockdown (AUTH_DELETE).
+            // MIT: `acl_renprinc` (auth_acl.c:638-648)
+            // delete on src and add on dest without restrictions.
             if changepw
                 || acl
                     .check_rename(actor, &acl_id(&old, &old_req), &acl_id(&new, &new_req))
@@ -432,7 +442,8 @@ pub(super) fn dispatch_kadm5_ticket(
             {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_DELETE));
             }
-            // MIT `kadm5_rename_principal` (`lib/kadm5/srv/svr_principal.c:715-719`): an existing target is KADM5_DUP, as a missing source fails the stub's lockdown lookup, before the rename locks the database.
+            // MIT: `kadm5_rename_principal` (lib/kadm5/srv/svr_principal.c:715-719)
+            // an existing target is KADM5_DUP, as a missing source fails the stub's lockdown lookup, before the rename locks the database.
             if g.get_in_realm(&old, &old_req).is_none() {
                 return Ok(generic_ret(API_V2, KADM5_UNK_PRINC));
             }
@@ -528,7 +539,8 @@ pub(super) fn dispatch_kadm5_ticket(
                 return Ok(generic_ret(api, code));
             }
             apply_policy_floors(&mut pol, mask);
-            // MIT `osa_adb_create_policy` (`plugins/kdb/db2/adb_policy.c:59-72`): under the exclusive lock, a policy there already is OSA_ADB_DUP.
+            // MIT: `osa_adb_create_policy` (plugins/kdb/db2/adb_policy.c:59-72)
+            // under the exclusive lock, a policy there already is OSA_ADB_DUP.
             Ok(commit_policy(&mut g, proc, api, |s| {
                 if s.policies().contains_key(&pol.name) {
                     return Ok(Err(OSA_ADB_DUP));
@@ -545,11 +557,13 @@ pub(super) fn dispatch_kadm5_ticket(
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
-            // MIT `kadm5_delete_policy` (`lib/kadm5/srv/svr_policy.c:197-199`): a missing policy is KADM5_UNK_POLICY before the delete locks the database.
+            // MIT: `kadm5_delete_policy` (lib/kadm5/srv/svr_policy.c:197-199)
+            // a missing policy is KADM5_UNK_POLICY before the delete locks the database.
             if !g.policies().contains_key(&name) {
                 return Ok(generic_ret(api, KADM5_UNK_POLICY));
             }
-            // MIT `osa_adb_destroy_policy` (`plugins/kdb/db2/adb_policy.c:132-145`): under the exclusive lock, a policy gone since is OSA_ADB_NOENT.
+            // MIT: `osa_adb_destroy_policy` (plugins/kdb/db2/adb_policy.c:132-145)
+            // under the exclusive lock, a policy gone since is OSA_ADB_NOENT.
             Ok(commit_policy(&mut g, proc, api, |s| {
                 match s.delete_policy(&name) {
                     Ok(()) => Ok(Ok(())),
@@ -585,7 +599,8 @@ pub(super) fn dispatch_kadm5_ticket(
             if let Some(code) = policy_floor_err(&merged, mask) {
                 return Ok(generic_ret(api, code));
             }
-            // MIT `osa_adb_put_policy` (`plugins/kdb/db2/adb_policy.c:263-276`): under the exclusive lock, a policy gone since the look is OSA_ADB_NOENT; one there takes the record merged at the look.
+            // MIT: `osa_adb_put_policy` (plugins/kdb/db2/adb_policy.c:263-276)
+            // under the exclusive lock, a policy gone since the look is OSA_ADB_NOENT; one there takes the record merged at the look.
             Ok(commit_policy(&mut g, proc, api, |s| {
                 if !s.policies().contains_key(&merged.name) {
                     return Ok(Err(OSA_ADB_NOENT));
@@ -823,7 +838,8 @@ pub(super) fn dispatch_kadm5_ticket(
             let (alias, alias_realm, target, target_realm) = parse_alias(args)?;
             let alias_req = req_realm(&alias_realm, &realm);
             let target_req = req_realm(&target_realm, &realm);
-            // MIT `create_alias_2_svc` (`server_stubs.c:1727-1758`): CHANGEPW deny, acl_addalias, no lockdown check.
+            // MIT: `create_alias_2_svc` (server_stubs.c:1727-1758)
+            // CHANGEPW deny, acl_addalias, no lockdown check.
             if changepw
                 || acl
                     .check_addalias(

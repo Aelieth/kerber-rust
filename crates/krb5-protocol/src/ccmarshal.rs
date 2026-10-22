@@ -191,7 +191,8 @@ pub(crate) fn marshal_cred(w: &mut Writer, c: &CcacheCred) {
 }
 
 /// The length of `c` as [`marshal_cred`] writes it, so that a record's buffer is sized before the session key goes in and no reallocation leaves a copy of it behind.
-/// MIT `k5_marshal_cred` (`ccmarshal.c:429-447`): the client, the server, the keyblock, the times, `is_skey`, the flags, the addresses, the authdata, the ticket and the second ticket, in turn.
+// MIT: `k5_marshal_cred` (ccmarshal.c:429-447)
+/// the client, the server, the keyblock, the times, `is_skey`, the flags, the addresses, the authdata, the ticket and the second ticket, in turn.
 pub(crate) fn cred_len(c: &CcacheCred) -> usize {
     let data = |b: &[u8]| 4 + b.len();
     let princ = |realm: &Realm, name: &PrincipalName| {
@@ -217,7 +218,8 @@ pub(crate) fn cred_len(c: &CcacheCred) -> usize {
         + data(&c.second_ticket)
 }
 
-/// MIT `k5_unmarshal_cred` (`ccmarshal.c:306-310`): a truncated credential is a format error and is not returned half-parsed.
+// MIT: `k5_unmarshal_cred` (ccmarshal.c:306-310)
+/// a truncated credential is a format error and is not returned half-parsed.
 /// An address or authdata count larger than the bytes still in the buffer is rejected before those lists are walked.
 pub(crate) fn unmarshal_cred(b: &[u8], i: &mut usize) -> Result<CcacheCred, io::Error> {
     let client = unmarshal_princ(b, i)?;

@@ -8,9 +8,11 @@ const SECSPERDAY: i64 = 24 * 60 * 60;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DateError {
-    /// MIT `parse_date` (`kadmin.c:158-166`): `get_date_rel` failed.
+    // MIT: `parse_date` (kadmin.c:158-166)
+    /// `get_date_rel` failed.
     Invalid(String),
-    /// MIT `parse_interval` (`kadmin.c:190-194`): an absolute date before now is refused.
+    // MIT: `parse_interval` (kadmin.c:190-194)
+    /// an absolute date before now is refused.
     InPast(String),
 }
 
@@ -241,7 +243,8 @@ fn find(table: &[(&str, Tok)], word: &str) -> Option<Tok> {
         .map(|(_, t)| *t)
 }
 
-/// MIT `LookupWord` (`getdate.y:681-774`): a word (letters and dots, lowercased) to its token.
+// MIT: `LookupWord` (getdate.y:681-774)
+/// a word (letters and dots, lowercased) to its token.
 fn lookup_word(word: &str) -> Tok {
     let mut buff = word.to_ascii_lowercase();
     if buff == "am" || buff == "a.m." {
@@ -294,7 +297,8 @@ fn lookup_word(word: &str) -> Tok {
     Tok::Id
 }
 
-/// MIT `yylex` (`getdate.y:778-828`): the tokens of the whole phrase.
+// MIT: `yylex` (getdate.y:778-828)
+/// the tokens of the whole phrase.
 fn lex(s: &str) -> Vec<Tok> {
     let b = s.as_bytes();
     let mut i = 0;
@@ -615,7 +619,8 @@ fn localtime(t: i64) -> Option<Tm> {
     })
 }
 
-/// MIT `ToSeconds` (`getdate.y:534-555`): the time of day in seconds, `None` out of range.
+// MIT: `ToSeconds` (getdate.y:534-555)
+/// the time of day in seconds, `None` out of range.
 fn to_seconds(h: i64, m: i64, s: i64, mer: Meridian) -> Option<i64> {
     if !(0..=59).contains(&m) || !(0..=59).contains(&s) {
         return None;
@@ -638,7 +643,8 @@ struct Moment {
     seconds: i64,
 }
 
-/// MIT `Convert` (`getdate.y:562-606`): its leap-year rule included; `timezone` is the global `yyTimezone` (minutes west).
+// MIT: `Convert` (getdate.y:562-606)
+/// its leap-year rule included; `timezone` is the global `yyTimezone` (minutes west).
 fn convert(at: &Moment, mer: Meridian, dst: DstMode, timezone: i64) -> Option<i64> {
     let mut year = at.year.wrapping_abs();
     if year < 1900 {
@@ -685,14 +691,16 @@ fn convert(at: &Moment, mer: Meridian, dst: DstMode, timezone: i64) -> Option<i6
     Some(julian)
 }
 
-/// MIT `DSTcorrect` (`getdate.y:610-630`): the distance corrected for a summer-time change.
+// MIT: `DSTcorrect` (getdate.y:610-630)
+/// the distance corrected for a summer-time change.
 fn dst_correct(start: i64, future: i64) -> Option<i64> {
     let start_day = (localtime(start)?.hour + 1) % 24;
     let future_day = (localtime(future)?.hour + 1) % 24;
     Some((future - start) + (start_day - future_day) * 60 * 60)
 }
 
-/// MIT `RelativeDate` (`getdate.y:634-648`): the distance to the named weekday.
+// MIT: `RelativeDate` (getdate.y:634-648)
+/// the distance to the named weekday.
 fn relative_date(start: i64, ordinal: i64, number: i64) -> Option<i64> {
     let tm = localtime(start)?;
     let mut now = start;
@@ -702,7 +710,8 @@ fn relative_date(start: i64, ordinal: i64, number: i64) -> Option<i64> {
     dst_correct(start, now)
 }
 
-/// MIT `RelativeMonth` (`getdate.y:652-677`): `timezone` is the global `yyTimezone`.
+// MIT: `RelativeMonth` (getdate.y:652-677)
+/// `timezone` is the global `yyTimezone`.
 fn relative_month(start: i64, rel_month: i64, timezone: i64) -> Option<i64> {
     if rel_month == 0 {
         return Some(0);
@@ -721,7 +730,8 @@ fn relative_month(start: i64, rel_month: i64, timezone: i64) -> Option<i64> {
     dst_correct(start, ret)
 }
 
-/// MIT `get_date_rel` (`getdate.y:864-880`): `ftz.timezone`, minutes west of UTC at `t`.
+// MIT: `get_date_rel` (getdate.y:864-880)
+/// `ftz.timezone`, minutes west of UTC at `t`.
 fn local_minutes_west(t: i64) -> Option<i64> {
     let utc = chrono::DateTime::from_timestamp(t, 0)?;
     let offset = utc

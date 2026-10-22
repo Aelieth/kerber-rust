@@ -24,13 +24,16 @@ pub enum HookStage {
 
 /// One kadm5 hook module.
 ///
-/// MIT `kadm5_hook_vftable_1` (`include/krb5/kadm5_hook_plugin.h`): a NULL method is skipped. Each method here allows the operation until an embedder overrides it.
+// MIT: `kadm5_hook_vftable_1` (include/krb5/kadm5_hook_plugin.h)
+/// a NULL method is skipped. Each method here allows the operation until an embedder overrides it.
 pub trait Kadm5Hook: Send + Sync {
     /// Module name for `[plugins] kadm5_hook`.
     fn name(&self) -> &'static str;
 
-    /// MIT `k5_kadm5_hook_chpass` (`kadm5_hook.c:142-151`): each module's chpass.
-    /// MIT `kadm5_randkey_principal_3` (`svr_principal.c:1485-1495`): a random key passes no password.
+    // MIT: `k5_kadm5_hook_chpass` (kadm5_hook.c:142-151)
+    /// each module's chpass.
+    // MIT: `kadm5_randkey_principal_3` (svr_principal.c:1485-1495)
+    /// a random key passes no password.
     /// `keepold` is the count the caller passed (`krb5_boolean` is that unsigned value).
     ///
     /// A module error. [`HookStage::Precommit`] returns it and writes nothing. [`HookStage::Postcommit`] is logged and the operation still succeeds.
@@ -46,7 +49,8 @@ pub trait Kadm5Hook: Send + Sync {
         Ok(())
     }
 
-    /// MIT `k5_kadm5_hook_create` (`kadm5_hook.c:154-162`): each module's create.
+    // MIT: `k5_kadm5_hook_create` (kadm5_hook.c:154-162)
+    /// each module's create.
     /// `password` is `None` for a random-key create. `mask` is the request's `KADM5_*` bits.
     ///
     /// A module error. [`HookStage::Precommit`] returns it and writes nothing. [`HookStage::Postcommit`] is logged and the operation still succeeds.
@@ -62,7 +66,8 @@ pub trait Kadm5Hook: Send + Sync {
         Ok(())
     }
 
-    /// MIT `k5_kadm5_hook_modify` (`kadm5_hook.c:165-170`): each module's modify.
+    // MIT: `k5_kadm5_hook_modify` (kadm5_hook.c:165-170)
+    /// each module's modify.
     /// `mask` is the `KADM5_*` bits this modify applies.
     ///
     /// A module error. [`HookStage::Precommit`] returns it and writes nothing. [`HookStage::Postcommit`] is logged and the operation still succeeds.
@@ -76,7 +81,8 @@ pub trait Kadm5Hook: Send + Sync {
         Ok(())
     }
 
-    /// MIT `k5_kadm5_hook_rename` (`kadm5_hook.c:173-178`): each module's rename.
+    // MIT: `k5_kadm5_hook_rename` (kadm5_hook.c:173-178)
+    /// each module's rename.
     ///
     /// A module error. [`HookStage::Precommit`] returns it and writes nothing. [`HookStage::Postcommit`] is logged and the operation still succeeds.
     fn rename(
@@ -90,14 +96,16 @@ pub trait Kadm5Hook: Send + Sync {
         Ok(())
     }
 
-    /// MIT `k5_kadm5_hook_remove` (`kadm5_hook.c:181-186`): each module's remove.
+    // MIT: `k5_kadm5_hook_remove` (kadm5_hook.c:181-186)
+    /// each module's remove.
     ///
     /// A module error. [`HookStage::Precommit`] returns it and writes nothing. [`HookStage::Postcommit`] is logged and the operation still succeeds.
     fn remove(&self, _stage: HookStage, _princ: &PrincipalName, _realm: &str) -> Result<(), Error> {
         Ok(())
     }
 
-    /// MIT `k5_kadm5_hook_alias` (`kadm5_hook.c:189-194`): each module's alias.
+    // MIT: `k5_kadm5_hook_alias` (kadm5_hook.c:189-194)
+    /// each module's alias.
     ///
     /// A module error. [`HookStage::Precommit`] returns it and writes nothing. [`HookStage::Postcommit`] is logged and the operation still succeeds.
     fn alias(
@@ -163,7 +171,8 @@ fn selected(store: &PrincipalStore) -> Vec<Arc<dyn Kadm5Hook>> {
     out
 }
 
-/// MIT `ITERATE` (`kadm5_hook.c`): precommit returns the first error.
+// MIT: `ITERATE` (kadm5_hook.c)
+/// precommit returns the first error.
 /// Postcommit logs `kadm5_hook %s failed postcommit %s: %s` and continues.
 fn walk(
     store: &PrincipalStore,

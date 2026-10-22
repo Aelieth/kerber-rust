@@ -64,7 +64,8 @@ pub fn dir_read_path(residual: &str) -> std::io::Result<std::path::PathBuf> {
     dir_cache_path(residual)
 }
 
-// MIT `kcm_get_princ` (`cc_kcm.c:933-953`): a KCM cache with no principal is
+// MIT: `kcm_get_princ` (cc_kcm.c:933-953)
+// a KCM cache with no principal is
 #[must_use]
 pub fn cache_read_error(
     ctx: &ClientContext,
@@ -102,7 +103,8 @@ pub fn cache_read_error(
     }
 }
 
-// MIT `os_init_paths` (`init_os_ctx.c:389-391`): no file that opens is an empty profile.
+// MIT: `os_init_paths` (init_os_ctx.c:389-391)
+// no file that opens is an empty profile.
 #[allow(
     clippy::disallowed_methods,
     reason = "MIT krb5_init_context: the program's one read of its profile and environment"
@@ -113,7 +115,8 @@ pub fn init_context() -> Result<ClientContext, Krb5Error> {
         krb5_config::Error::Profile(p, _) => Krb5Error::of(Code::Profile(p)),
         e => Krb5Error::new(Code::Other, e.to_string()),
     })?;
-    // MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:209-217`): `KRB5_TRACE` opens
+    // MIT: `krb5_init_context_profile` (lib/krb5/krb/init_ctx.c:209-217)
+    // `KRB5_TRACE` opens
     krb5_protocol::trace::init();
     Ok(ctx)
 }
@@ -121,7 +124,8 @@ pub fn init_context() -> Result<ClientContext, Krb5Error> {
 pub const DEFKTNAME: &str = "FILE:/etc/krb5.keytab";
 pub const DEFCKTNAME: &str = "FILE:/var/kerberos/krb5/user/%{euid}/client.keytab";
 
-// MIT `kt_default_name` (`ktdefname.c:35-57`): `KRB5_KTNAME`, else
+// MIT: `kt_default_name` (ktdefname.c:35-57)
+// `KRB5_KTNAME`, else
 #[must_use]
 pub fn kt_default_name(ctx: &ClientContext) -> String {
     if let Some(v) = ctx.ktname() {
@@ -165,7 +169,8 @@ impl KeytabName {
     }
 }
 
-// MIT `krb5_kt_resolve` (`ktbase.c:151-209`): a name with no `TYPE:` prefix, or one starting with
+// MIT: `krb5_kt_resolve` (ktbase.c:151-209)
+// a name with no `TYPE:` prefix, or one starting with
 pub fn kt_resolve(name: &str) -> Result<KeytabName, Krb5Error> {
     let Some((pfx, resid)) = name.split_once(':') else {
         return Ok(KeytabName::File(name.into()));
@@ -317,7 +322,8 @@ pub fn kinit(
     )
 }
 
-// MIT `krb5_get_init_creds_opt` (`include/krb5/krb5.hin:6839-6851`): the public option block.
+// MIT: `krb5_get_init_creds_opt` (include/krb5/krb5.hin:6839-6851)
+// the public option block.
 #[derive(Clone, Copy)]
 pub struct InitCredsOpt<'a> {
     pub service: Option<&'a str>,
@@ -443,8 +449,10 @@ pub fn store_error(e: &(dyn std::error::Error + Send + Sync + 'static)) -> Krb5E
     }
 }
 
-// MIT `change_set_password` (`changepw.c:258-266`): a server that answers over neither TCP nor
-// MIT `k5_sendto` (`sendto_kdc.c:1602-1604`): that code carries no message of its own, so it
+// MIT: `change_set_password` (changepw.c:258-266)
+// a server that answers over neither TCP nor
+// MIT: `k5_sendto` (sendto_kdc.c:1602-1604)
+// that code carries no message of its own, so it
 fn chpw_error(e: ProtocolError) -> Box<dyn std::error::Error + Send + Sync> {
     match e {
         ProtocolError::Io { .. } => Box::new(Krb5Error::of(Code::KdcUnreach)),
@@ -645,7 +653,8 @@ pub fn destroy_ccache(
     }
 }
 
-// MIT `fast_armor_ap_request` (`lib/krb5/krb/fast.c:52-108`): the armor cache's TGT is read when the request is armored.
+// MIT: `fast_armor_ap_request` (lib/krb5/krb/fast.c:52-108)
+// the armor cache's TGT is read when the request is armored.
 fn load_fast_armor(
     ctx: &ClientContext,
     spec: &CcSpec,
@@ -684,7 +693,8 @@ impl ClientPkinit {
     }
 }
 
-// MIT `pkinit_identity_initialize` (`plugins/preauth/pkinit/pkinit_identity.c:509-562`): `X509_user_identity`, else each `pkinit_identities` value until one loads; none is "No user identity options specified".
+// MIT: `pkinit_identity_initialize` (plugins/preauth/pkinit/pkinit_identity.c:509-562)
+// `X509_user_identity`, else each `pkinit_identities` value until one loads; none is "No user identity options specified".
 // MIT pkinit_client_process; see docs/parity/b1-client-preauth.md
 // MIT pkinit_identity_prompt; see docs/parity/a3-preauth.md
 fn load_pkinit(
@@ -750,7 +760,8 @@ fn load_pkinit(
     }))
 }
 
-// MIT `create_krb5_trustedCertifiers` (`pkinit_crypto_openssl.c:5396-5397`): with no anchor loaded no request is made.
+// MIT: `create_krb5_trustedCertifiers` (pkinit_crypto_openssl.c:5396-5397)
+// with no anchor loaded no request is made.
 // MIT pa_pkinit_gen_req; see docs/parity/b1-client-preauth.md
 const NO_TRUSTED_CA: &str = "Preauthentication failed";
 
@@ -986,7 +997,8 @@ pub fn as_with_fast_ccache(
     Ok(exchange(armor.as_ref(), false))
 }
 
-// MIT `restart_init_creds_loop` (`lib/krb5/krb/get_in_tkt.c:800-801`): the upgrade sets FAST for the restarted request.
+// MIT: `restart_init_creds_loop` (lib/krb5/krb/get_in_tkt.c:800-801)
+// the upgrade sets FAST for the restarted request.
 fn exchange_shape(
     ctx: &ClientContext,
     password: &mut LazyPassword<'_>,
@@ -1122,7 +1134,8 @@ fn kinit_inner(
     } else {
         None
     };
-    // MIT `build_in_tkt_name` (`get_in_tkt.c:473-512`): an initial-ticket service takes the
+    // MIT: `build_in_tkt_name` (get_in_tkt.c:473-512)
+    // an initial-ticket service takes the
     let in_tkt_sname = match params.in_tkt_service {
         Some(s) => Some(
             krb5_types::principal_from_unparsed(s, &realm_s)
@@ -1174,7 +1187,8 @@ fn kinit_inner(
                 params.keytab.is_some(),
             ) =>
         {
-            // MIT `k5_infer_principal_type` (`lib/krb5/krb/bld_princ.c:31-43`): `kadmin/changepw` is NT-PRINCIPAL.
+            // MIT: `k5_infer_principal_type` (lib/krb5/krb/bld_princ.c:31-43)
+            // `kadmin/changepw` is NT-PRINCIPAL.
             let changepw = krb5_types::PrincipalName::new(
                 krb5_types::PrincipalName::NT_PRINCIPAL,
                 ["kadmin", "changepw"],
@@ -1186,7 +1200,8 @@ fn kinit_inner(
                 rlife: None,
                 forwardable: false,
                 proxiable: false,
-                // MIT `make_chpw_options` (`lib/krb5/krb/gic_pwd.c:163-163`): this request drops the address list the caller set.
+                // MIT: `make_chpw_options` (lib/krb5/krb/gic_pwd.c:163-163)
+                // this request drops the address list the caller set.
                 addresses: krb5_protocol::init_creds_addresses(
                     ctx.profile.noaddresses_for(&realm_s),
                 )

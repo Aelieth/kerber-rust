@@ -4,7 +4,8 @@ use super::{CanonHost, Krb5Conf};
 
 const RESOLV_CONF: &str = "/etc/resolv.conf";
 
-// MIT `krb5_sname_to_principal` (`lib/krb5/os/sn2princ.c:347-352`): no hostname is the local one, `gethostname`'s.
+// MIT: `krb5_sname_to_principal` (lib/krb5/os/sn2princ.c:347-352)
+// no hostname is the local one, `gethostname`'s.
 #[must_use]
 pub fn this_host() -> String {
     nix::unistd::gethostname()
@@ -22,7 +23,8 @@ pub fn local_host_name(conf: &Krb5Conf) -> String {
     expand_hostname(&this_host(), conf)
 }
 
-// MIT `expand_hostname` (`lib/krb5/os/sn2princ.c:121-144`): a one-component name is qualified when DNS was not used, then lowercased, then a trailing dot removed.
+// MIT: `expand_hostname` (lib/krb5/os/sn2princ.c:121-144)
+// a one-component name is qualified when DNS was not used, then lowercased, then a trailing dot removed.
 // MIT qualify_shortname; see docs/parity/a5-prop.md
 #[must_use]
 pub fn expand_hostname_no_dns(
@@ -89,7 +91,8 @@ pub fn sname_to_principal(
     iter.with_host(&host, &combined)
 }
 
-// MIT `k5_canonprinc` (`lib/krb5/os/sn2princ.c:279-285`): a name that is not a two-part host-based name with a hostname is its only candidate.
+// MIT: `k5_canonprinc` (lib/krb5/os/sn2princ.c:279-285)
+// a name that is not a two-part host-based name with a hostname is its only candidate.
 #[derive(Debug)]
 pub struct CanonPrinc<'a> {
     conf: &'a Krb5Conf,
@@ -146,7 +149,8 @@ impl<'a> CanonPrinc<'a> {
         Ok(Some(princ))
     }
 
-    // MIT `canonicalize_princ` (`lib/krb5/os/sn2princ.c:195-221`): the hostname is split from its trailer, expanded only for a host-based name, and the trailer put back.
+    // MIT: `canonicalize_princ` (lib/krb5/os/sn2princ.c:195-221)
+    // the hostname is split from its trailer, expanded only for a host-based name, and the trailer put back.
     fn expand(&self) -> (String, String) {
         let host = match self.princ.1.name_string.as_slice() {
             [_, host] => String::from_utf8_lossy(host.as_bytes()).into_owned(),
@@ -191,8 +195,10 @@ impl<'a> CanonPrinc<'a> {
 }
 
 // MIT krb5_get_fallback_host_realm; see docs/parity/b1-client.md
-// MIT `clean_hostname` (`lib/krb5/os/hostrealm.c:301-310`): the name is lowercased and loses a trailing dot.
-// MIT `domain_fallback_realm` (`lib/krb5/os/hostrealm_domain.c:57-102`): an address has no answer; `realm_try_domains` suffixes with KDCs come first, then the upper-cased parent domain whether or not it is a realm, and a name with no dot has none.
+// MIT: `clean_hostname` (lib/krb5/os/hostrealm.c:301-310)
+// the name is lowercased and loses a trailing dot.
+// MIT: `domain_fallback_realm` (lib/krb5/os/hostrealm_domain.c:57-102)
+// an address has no answer; `realm_try_domains` suffixes with KDCs come first, then the upper-cased parent domain whether or not it is a realm, and a name with no dot has none.
 #[must_use]
 pub fn fallback_host_realm(conf: &Krb5Conf, host: &str) -> Option<String> {
     let mut clean = host.to_ascii_lowercase();
@@ -226,7 +232,8 @@ pub fn fallback_host_realm(conf: &Krb5Conf, host: &str) -> Option<String> {
     conf.default_realm.clone()
 }
 
-// MIT `parse_int` (`util/profile/prof_get.c:288-305`): an empty value, an overflow, a value outside `int`, or anything after the digits is `PROF_BAD_INTEGER`.
+// MIT: `parse_int` (util/profile/prof_get.c:288-305)
+// an empty value, an overflow, a value outside `int`, or anything after the digits is `PROF_BAD_INTEGER`.
 fn parse_int(value: &str) -> Option<i32> {
     let t = value.trim_start_matches(|c: char| c.is_ascii_whitespace() || c == '\x0b');
     let digits = t.strip_prefix(['+', '-']).unwrap_or(t);
@@ -236,7 +243,8 @@ fn parse_int(value: &str) -> Option<i32> {
     t.parse::<i64>().ok().and_then(|n| i32::try_from(n).ok())
 }
 
-// MIT `split_trailer` (`lib/krb5/os/sn2princ.c:170-181`): only a single colon followed by one or more characters starts a trailer.
+// MIT: `split_trailer` (lib/krb5/os/sn2princ.c:170-181)
+// only a single colon followed by one or more characters starts a trailer.
 fn split_trailer(host: &str) -> (&str, &str) {
     match host.split_once(':') {
         Some((name, rest)) if !rest.is_empty() && !rest.contains(':') => {
@@ -246,7 +254,8 @@ fn split_trailer(host: &str) -> (&str, &str) {
     }
 }
 
-// MIT `k5_primary_domain` (`lib/krb5/os/dnsglue.c:500-510`): `res_ninit`'s first search domain.
+// MIT: `k5_primary_domain` (lib/krb5/os/dnsglue.c:500-510)
+// `res_ninit`'s first search domain.
 fn primary_domain() -> Option<String> {
     let localdomain = std::env::var_os("LOCALDOMAIN").map(|v| v.to_string_lossy().into_owned());
     let conf = std::fs::read(RESOLV_CONF).ok();

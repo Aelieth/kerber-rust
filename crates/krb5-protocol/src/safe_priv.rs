@@ -57,7 +57,8 @@ pub fn build_krb_safe_ex(
 }
 
 /// [`build_krb_safe_ex`] from `s_address`, the sender's own address as its auth context holds it.
-/// MIT `create_krbsafe` (`lib/krb5/krb/mk_safe.c:62-63`): the s-address is the context's local address, the r-address its remote one (none here).
+// MIT: `create_krbsafe` (lib/krb5/krb/mk_safe.c:62-63)
+/// the s-address is the context's local address, the r-address its remote one (none here).
 pub fn build_krb_safe_from(
     session: &ProtocolKey,
     user_data: &[u8],
@@ -65,7 +66,8 @@ pub fn build_krb_safe_from(
     include_time: bool,
     s_address: &HostAddress,
 ) -> Result<KrbSafe, Error> {
-    // MIT `k5_privsafe_gen_rdata` (`lib/krb5/krb/privsafe.c:53-55`): the timestamp and its microseconds come from one `krb5_us_timeofday` reading.
+    // MIT: `k5_privsafe_gen_rdata` (lib/krb5/krb/privsafe.c:53-55)
+    // the timestamp and its microseconds come from one `krb5_us_timeofday` reading.
     let (timestamp, usec) = if include_time {
         let (now, usec) = crate::us_timeofday();
         (Some(now), Some(usec))
@@ -142,7 +144,8 @@ enum FreshPolicy {
     SeqOnly,
 }
 
-/// MIT `read_krbsafe` (`rd_safe.c:43-125`): APPLICATION 20, saved body DER, addrs, dummy, body fallback.
+// MIT: `read_krbsafe` (rd_safe.c:43-125)
+/// APPLICATION 20, saved body DER, addrs, dummy, body fallback.
 pub fn verify_krb_safe_checksum(
     session: &ProtocolKey,
     raw: &[u8],
@@ -166,10 +169,12 @@ pub fn verify_krb_safe_checksum_in(
             text: Some("Invalid message type".into()),
         });
     }
-    // MIT `safe_msg_type` (`lib/krb5/asn.1/asn1_k_encode.c:816-816`): the msg-type decodes as the message's own.
+    // MIT: `safe_msg_type` (lib/krb5/asn.1/asn1_k_encode.c:816-816)
+    // the msg-type decodes as the message's own.
     let (msg, body_der) = decode_safe_with_body(raw)?;
     let ctype = msg.cksum.cksumtype;
-    // MIT `read_krbsafe` (`lib/krb5/krb/rd_safe.c:66-69`): a checksum type `krb5_c_valid_cksumtype` does not know is KRB5_PROG_SUMTYPE_NOSUPP, a library code, not KDC_ERR_SUMTYPE_NOSUPP.
+    // MIT: `read_krbsafe` (lib/krb5/krb/rd_safe.c:66-69)
+    // a checksum type `krb5_c_valid_cksumtype` does not know is KRB5_PROG_SUMTYPE_NOSUPP, a library code, not KDC_ERR_SUMTYPE_NOSUPP.
     if !cksumtype_is_known(ctype) {
         return Err(Error::ProgSumtypeNosupp);
     }
@@ -201,7 +206,8 @@ pub fn verify_krb_safe_checksum_in(
     })
 }
 
-/// MIT `k5_privsafe_check_addrs` (`privsafe.c:312-382`): the sender address must match the remote address when one is set; a receiver address, when present, must match the local address, or one of the host's addresses when no local address is set.
+// MIT: `k5_privsafe_check_addrs` (privsafe.c:312-382)
+/// the sender address must match the remote address when one is set; a receiver address, when present, must match the local address, or one of the host's addresses when no local address is set.
 pub fn check_privsafe_addrs(
     msg_s: &HostAddress,
     msg_r: Option<&HostAddress>,
@@ -339,7 +345,8 @@ fn fresh_policy(require_seq: bool, require_time: bool) -> FreshPolicy {
     }
 }
 
-/// MIT `k5_memrcache_store` (`memrcache.c:136-139`): a tag already stored is a replay and is not accepted again. A timestamp more than 300 seconds from now is not fresh, and a required sequence of zero is not a sequence.
+// MIT: `k5_memrcache_store` (memrcache.c:136-139)
+/// a tag already stored is a replay and is not accepted again. A timestamp more than 300 seconds from now is not fresh, and a required sequence of zero is not a sequence.
 fn accept_fresh(
     replay: &ReplayCache,
     kind: &str,
@@ -393,7 +400,8 @@ pub fn build_krb_priv_with_seq(
 }
 
 /// Build a KRB-PRIV that names `sender` as its sender address and carries no timestamp.
-/// MIT `create_krbpriv` (`lib/krb5/krb/mk_priv.c:60-61`): the message's sender is the auth context's local address, and its receiver the remote address, which kpasswd does not set.
+// MIT: `create_krbpriv` (lib/krb5/krb/mk_priv.c:60-61)
+/// the message's sender is the auth context's local address, and its receiver the remote address, which kpasswd does not set.
 pub fn build_krb_priv_from(
     session: &ProtocolKey,
     user_data: &[u8],
@@ -527,7 +535,8 @@ pub fn unwrap_krb_priv(
 }
 
 /// The decrypted part of a KRB-PRIV under `key`, for a caller that checks its sequence number.
-/// MIT `read_krbpriv` (`lib/krb5/krb/rd_priv.c:43-97`): a message that is not a KRB-PRIV is `KRB5KRB_AP_ERR_MSG_TYPE`; the decrypted part is zeroed before it is freed.
+// MIT: `read_krbpriv` (lib/krb5/krb/rd_priv.c:43-97)
+/// a message that is not a KRB-PRIV is `KRB5KRB_AP_ERR_MSG_TYPE`; the decrypted part is zeroed before it is freed.
 pub fn read_krb_priv(key: &ProtocolKey, raw: &[u8]) -> Result<EncKrbPrivPart, Error> {
     if raw.first().is_none_or(|b| b & !0x20 != 0x55) {
         return Err(Error::KrbError {
@@ -591,7 +600,8 @@ pub fn build_krb_cred(
     tickets: Vec<Ticket>,
     ticket_info: Vec<KrbCredInfo>,
 ) -> Result<KrbCred, Error> {
-    // MIT `krb5_mk_ncred` (`lib/krb5/krb/mk_cred.c:177-178`): a missing timestamp is filled from one `krb5_us_timeofday` reading.
+    // MIT: `krb5_mk_ncred` (lib/krb5/krb/mk_cred.c:177-178)
+    // a missing timestamp is filled from one `krb5_us_timeofday` reading.
     let (now, usec) = crate::us_timeofday();
     let part = EncKrbCredPart {
         ticket_info,

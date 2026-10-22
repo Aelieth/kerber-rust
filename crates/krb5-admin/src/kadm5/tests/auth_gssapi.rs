@@ -1234,7 +1234,8 @@ fn an_unfinished_record_expires_after_fifteen_minutes() {
 }
 
 /// GSSAPI_INIT versions 3 and 4 bind the context to the caller's and the connection's IPv4 addresses: bindings that name another caller are GSS_S_BAD_BINDINGS (MIT's "Incorrect channel bindings were supplied", minor 0), matching ones or none establish it, and versions 1 and 2 bind nothing; as MIT's kadmind refused MIT's kadmin through a relay when settled live.
-/// MIT `process_checksum` (`accept_sec_context.c:532-541`): a non-zero binding must match.
+// MIT: `process_checksum` (accept_sec_context.c:532-541)
+/// a non-zero binding must match.
 #[test]
 fn version_3_and_4_inits_bind_the_connection_addresses() {
     let log = KlogFile::new("bindings");

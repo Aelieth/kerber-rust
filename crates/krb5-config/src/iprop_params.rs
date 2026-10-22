@@ -2,7 +2,8 @@ use std::path::{Path, PathBuf};
 
 use super::{Krb5Conf, kdc_conf_path, krb5_conf_paths, load_krb5_conf_paths};
 
-// MIT `DEF_ULOGENTRIES` (`include/kdb_log.h:42-42`): the update log's entries when no size is configured.
+// MIT: `DEF_ULOGENTRIES` (include/kdb_log.h:42-42)
+// the update log's entries when no size is configured.
 pub const DEF_ULOGENTRIES: u32 = 1000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -75,7 +76,8 @@ pub struct KadmindListen {
 }
 
 impl KadmindListen {
-    // MIT `get_port_param` (`lib/kadm5/alt_prof.c:342-362`): a port already set stays; else the caller's, else the last value that scans as `%d`, else the default.
+    // MIT: `get_port_param` (lib/kadm5/alt_prof.c:342-362)
+    // a port already set stays; else the caller's, else the last value that scans as `%d`, else the default.
     #[must_use]
     pub fn for_realm(profile: Option<&Krb5Conf>, realm: &str, port_arg: Option<i32>) -> Self {
         let last = |name: &str| last_value(profile, realm, name);
@@ -95,8 +97,10 @@ impl KadmindListen {
     }
 }
 
-// MIT `krb5_aprof_get_string` (`lib/kadm5/alt_prof.c:184-211`): with `uselast`, the last of the values.
-// MIT `krb5_aprof_get_int32` (`lib/kadm5/alt_prof.c:277-299`): with `uselast`, the last of the values.
+// MIT: `krb5_aprof_get_string` (lib/kadm5/alt_prof.c:184-211)
+// with `uselast`, the last of the values.
+// MIT: `krb5_aprof_get_int32` (lib/kadm5/alt_prof.c:277-299)
+// with `uselast`, the last of the values.
 fn last_value<'a>(profile: Option<&'a Krb5Conf>, realm: &str, name: &str) -> Option<&'a str> {
     profile
         .and_then(|p| p.kadm5.get(realm))?

@@ -37,7 +37,8 @@ pub fn lookup_principal_id(name: &PrincipalName, realm: &str) -> String {
     name.unparse_with_realm(realm)
 }
 
-/// MIT `krb5_db_get_principal` (`kdb5.c:800-840`): follow alias stubs up to [`MAX_ALIAS_DEPTH`] hops and return the canonical id, `None` past the depth, on a missing hop or an unparsable target.
+// MIT: `krb5_db_get_principal` (kdb5.c:800-840)
+/// follow alias stubs up to [`MAX_ALIAS_DEPTH`] hops and return the canonical id, `None` past the depth, on a missing hop or an unparsable target.
 pub fn resolve_alias_id<'a>(
     realm: &str,
     lookup: impl Fn(&str) -> Option<&'a Principal>,
@@ -60,8 +61,10 @@ pub fn resolve_alias_id<'a>(
 
 /// Process-local KDC state (the PKINIT context). Not dump/persist rows.
 /// The KDC keeps no replay cache of its own: a retransmit is answered by the lookaside, and a replay it no longer holds is processed again.
-/// MIT `kdc_process_tgs_req` (`kdc/kdc_util.c:189-191`): the TGS AP-REQ is read without a replay cache.
-/// MIT `enc_ts_verify` (`kdc/kdc_preauth_encts.c:47-118`): a timestamp inside the skew verifies again.
+// MIT: `kdc_process_tgs_req` (kdc/kdc_util.c:189-191)
+/// the TGS AP-REQ is read without a replay cache.
+// MIT: `enc_ts_verify` (kdc/kdc_preauth_encts.c:47-118)
+/// a timestamp inside the skew verifies again.
 #[derive(Clone, Debug)]
 pub struct KdcEnv {
     /// The realm's PKINIT context, when the module initialized.
@@ -104,11 +107,13 @@ pub trait PrincipalRead: Send + Sync {
     fn pkinit(&self) -> Option<&crate::pkinit::PkinitKdc> {
         self.env().pkinit.as_deref()
     }
-    /// MIT `klmdb_get_principal` (`plugins/kdb/lmdb/kdb_lmdb.c:713-744`): a fetched entry takes its lockout record.
+    // MIT: `klmdb_get_principal` (plugins/kdb/lmdb/kdb_lmdb.c:713-744)
+    /// a fetched entry takes its lockout record.
     fn merge_lockout(&self, p: &mut Principal) {
         let _ = p;
     }
-    /// MIT `klmdb_update_lockout` (`plugins/kdb/lmdb/kdb_lmdb.c:1054-1121`): the lockout record alone is written.
+    // MIT: `klmdb_update_lockout` (plugins/kdb/lmdb/kdb_lmdb.c:1054-1121)
+    /// the lockout record alone is written.
     fn update_lockout(&self, p: &Principal, stamp: u32, update: LockoutUpdate) {
         let _ = (p, stamp, update);
     }
@@ -413,7 +418,8 @@ impl PrincipalRead for PrincipalStore {
 }
 
 impl PrincipalWrite for PrincipalStore {
-    /// MIT `krb5_db_put_principal` (`lib/kdb/kdb5.c:987-1007`): every put is recorded in the update log.
+    // MIT: `krb5_db_put_principal` (lib/kdb/kdb5.c:987-1007)
+    /// every put is recorded in the update log.
     fn put_principal(&mut self, mut p: Principal) -> Result<(), Error> {
         strip_db_args(&mut p.tl_data)?;
         self.change(|s| {

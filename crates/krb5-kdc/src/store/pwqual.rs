@@ -13,7 +13,8 @@ use super::pwqual_dict::PwqualDict;
 use crate::error::Error;
 
 /// One password-quality module.
-/// MIT `krb5_pwqual_vtable` (`include/krb5/pwqual_plugin.h`): `check` sees the password, the policy name (NULL when the principal has none) and the principal.
+// MIT: `krb5_pwqual_vtable` (include/krb5/pwqual_plugin.h)
+/// `check` sees the password, the policy name (NULL when the principal has none) and the principal.
 pub trait Pwqual: Send + Sync {
     fn name(&self) -> &'static str;
 
@@ -70,7 +71,8 @@ impl Pwqual for Builtin {
     }
 }
 
-/// MIT `dict_check` (`pwqual_dict.c:215-230`): no policy, or no dictionary, allows the password.
+// MIT: `dict_check` (pwqual_dict.c:215-230)
+/// no policy, or no dictionary, allows the password.
 fn dict_check(
     password: &[u8],
     policy_name: Option<&str>,
@@ -85,7 +87,8 @@ fn dict_check(
     Ok(())
 }
 
-/// MIT `empty_check` (`pwqual_empty.c:38-44`): an empty password is refused with or without a policy.
+// MIT: `empty_check` (pwqual_empty.c:38-44)
+/// an empty password is refused with or without a policy.
 fn empty_check(password: &[u8]) -> Result<(), Error> {
     if password.is_empty() {
         return Err(Error::PasswordPolicy(PWQUAL_EMPTY.into()));
@@ -93,7 +96,8 @@ fn empty_check(password: &[u8]) -> Result<(), Error> {
     Ok(())
 }
 
-/// MIT `princ_check` (`pwqual_princ.c:40-58`): with a policy, the realm matches first, then each component. The realm uses the dictionary text. A component sets its own text.
+// MIT: `princ_check` (pwqual_princ.c:40-58)
+/// with a policy, the realm matches first, then each component. The realm uses the dictionary text. A component sets its own text.
 fn princ_check(
     password: &[u8],
     policy_name: Option<&str>,
@@ -120,7 +124,8 @@ fn builtin(name: &'static str, kind: Kind) -> Arc<dyn Pwqual> {
     Arc::new(Builtin { name, kind })
 }
 
-/// MIT `init_pwqual` (`server_misc.c:44-57`): `dict`, `empty`, `hesiod`, `princ`.
+// MIT: `init_pwqual` (server_misc.c:44-57)
+/// `dict`, `empty`, `hesiod`, `princ`.
 /// `hesiod` is compiled without Hesiod, so its check allows every password (`pwqual_hesiod.c` with `HESIOD` unset).
 fn builtins() -> Vec<Arc<dyn Pwqual>> {
     vec![
@@ -185,7 +190,8 @@ fn selected(store: &PrincipalStore) -> Vec<Arc<dyn Pwqual>> {
     out
 }
 
-/// MIT `passwd_check` (`server_misc.c:110-135`): each loaded module, and the first error returns.
+// MIT: `passwd_check` (server_misc.c:110-135)
+/// each loaded module, and the first error returns.
 /// `princ_realm` is the principal's realm, which may differ from the store realm. A `PasswordPolicy` error is logged by `module_refusal` and then returned.
 pub(super) fn run(
     store: &PrincipalStore,

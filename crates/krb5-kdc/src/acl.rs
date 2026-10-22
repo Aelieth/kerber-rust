@@ -22,7 +22,8 @@ pub(crate) struct AclSyntaxError {
 
 impl AclSyntaxError {
     /// The line's syntax error as MIT words it, its first ten bytes shown (`fname: ` first when there is a file name).
-    /// MIT `load_acl_file` (`auth_acl.c:417-423`): `%s: syntax error at line %d <%.10s...>`, logged and set as the context's message.
+    // MIT: `load_acl_file` (auth_acl.c:417-423)
+    /// `%s: syntax error at line %d <%.10s...>`, logged and set as the context's message.
     pub(crate) fn located(&self, fname: &str) -> String {
         let shown = String::from_utf8_lossy(&self.line[..self.line.len().min(10)]);
         let at = format!("syntax error at line {} <{shown}...>", self.lineno);
@@ -68,7 +69,8 @@ pub struct Restrictions {
     /// Bits allowed to stay (`~0` with `-flag` bits cleared).
     pub forbid_attrs: u32,
     /// `rs->mask & KADM5_ATTRIBUTES`: at least one flag token was parsed, so the request's attributes are rewritten even when the flag names cancel out.
-    /// MIT `parse_restrictions` (`auth_acl.c:189-192`): every token that `krb5_flagspec_to_mask` accepts sets `KADM5_ATTRIBUTES` in the mask.
+    // MIT: `parse_restrictions` (auth_acl.c:189-192)
+    /// every token that `krb5_flagspec_to_mask` accepts sets `KADM5_ATTRIBUTES` in the mask.
     pub attrs: bool,
 }
 
@@ -90,11 +92,16 @@ impl Default for Restrictions {
 
 impl Restrictions {
     /// MIT `impose_restrictions`, run on the kadm5 create/modify *request* before the library call (`auth_restrict` ← `stub_auth_restrict`).
-    /// MIT `auth_restrict` (`kadmin/server/auth.c:267-272`): it is handed the request's `ent` and `mask`, so the restrictions rewrite the request itself.
-    /// MIT `create_principal_2_svc` (`server_stubs.c:478-478`): `stub_auth_restrict` runs on the create request before `kadm5_create_principal`.
-    /// MIT `create_principal3_2_svc` (`server_stubs.c:519-519`): `stub_auth_restrict` runs on the create request before `kadm5_create_principal_3`.
-    /// MIT `modify_principal_2_svc` (`server_stubs.c:630-630`): the modify request passes `stub_auth_restrict` before `kadm5_modify_principal`.
-    /// MIT `impose_restrictions` (`kadmin/server/auth.c:205-265`): every restriction sets its mask bit, so the entry field wins over the realm default afterwards; a caller value is only *lowered* to the cap (an in-mask 0 stays 0), a value absent from the mask becomes the cap; `-expire`/`-pwexpire` cap at `now + delta`; `-policy` replaces a different requested policy and
+    // MIT: `auth_restrict` (kadmin/server/auth.c:267-272)
+    /// it is handed the request's `ent` and `mask`, so the restrictions rewrite the request itself.
+    // MIT: `create_principal_2_svc` (server_stubs.c:478-478)
+    /// `stub_auth_restrict` runs on the create request before `kadm5_create_principal`.
+    // MIT: `create_principal3_2_svc` (server_stubs.c:519-519)
+    /// `stub_auth_restrict` runs on the create request before `kadm5_create_principal_3`.
+    // MIT: `modify_principal_2_svc` (server_stubs.c:630-630)
+    /// the modify request passes `stub_auth_restrict` before `kadm5_modify_principal`.
+    // MIT: `impose_restrictions` (kadmin/server/auth.c:205-265)
+    /// every restriction sets its mask bit, so the entry field wins over the realm default afterwards; a caller value is only *lowered* to the cap (an in-mask 0 stays 0), a value absent from the mask becomes the cap; `-expire`/`-pwexpire` cap at `now + delta`; `-policy` replaces a different requested policy and
     pub fn impose(&self, ent: &mut AdminEnt, now: u32) {
         if self.attrs || self.require_attrs != 0 || self.forbid_attrs != !0 {
             ent.attributes |= self.require_attrs;
@@ -149,7 +156,8 @@ pub fn default_principal_flags(spec: &str) -> u32 {
 }
 
 /// `default_principal_flags` as MIT's loop reads it, and whether every word converted. A word ends at the first `,` in what is left, else the first space, else the first tab; its trailing blanks are cut (its first byte never is), the next word's leading blanks skipped, so a value ending in a separator ends in an empty word, which converts to nothing. Each word goes to `krb5_flagspec_to_mask(sp, &flags, &flags)`: a `+flag` sets, a `-flag` clears.
-/// MIT `kadm5_get_config_params` (`alt_prof.c:603-627`): the first word that does not convert stops the loop, and the parameter is left unset.
+// MIT: `kadm5_get_config_params` (alt_prof.c:603-627)
+/// the first word that does not convert stops the loop, and the parameter is left unset.
 #[must_use]
 pub fn principal_flags_spec(spec: &str) -> (u32, bool) {
     let c_space = |c: char| matches!(c, ' ' | '\t' | '\n' | '\x0b' | '\x0c' | '\r');
@@ -223,7 +231,8 @@ impl Acl {
         Self::default()
     }
 
-    /// MIT `acl_init` (`auth_acl.c:554-555`): a null ACL file returns `KRB5_PLUGIN_NO_HANDLE` before any file is read.
+    // MIT: `acl_init` (auth_acl.c:554-555)
+    /// a null ACL file returns `KRB5_PLUGIN_NO_HANDLE` before any file is read.
     #[must_use]
     pub fn none() -> Self {
         Self::new()
@@ -323,7 +332,8 @@ impl Acl {
     }
 
     /// Rename: delete on `src` and add on `dest` with no restrictions.
-    /// MIT `acl_renprinc` (`auth_acl.c:638-648`): the rename is allowed only when both checks pass and the add entry carries no restrictions.
+    // MIT: `acl_renprinc` (auth_acl.c:638-648)
+    /// the rename is allowed only when both checks pass and the add entry carries no restrictions.
     pub fn check_rename(&self, actor: &str, src: &str, dest: &str) -> Result<(), Error> {
         self.check(actor, AdminOp::Delete, Some(src))?;
         self.check(actor, AdminOp::Create, Some(dest))?;
@@ -337,7 +347,8 @@ impl Acl {
     }
 
     /// Alias: add on `alias` with no restrictions and modify on `target`.
-    /// MIT `acl_addalias` (`auth_acl.c:723-734`): the alias is allowed only when the add entry carries no restrictions and the modify check on the target passes.
+    // MIT: `acl_addalias` (auth_acl.c:723-734)
+    /// the alias is allowed only when the add entry carries no restrictions and the modify check on the target passes.
     pub fn check_addalias(&self, actor: &str, alias: &str, target: &str) -> Result<(), Error> {
         self.check(actor, AdminOp::Create, Some(alias))?;
         if self
@@ -420,7 +431,8 @@ struct WildState {
 }
 
 /// The lines MIT reads from a kadm5.acl file, each with the number of its first physical line: `fgets` reads at most 127 bytes at a time, and a NUL ends what one read returned (`strlen`), so the rest of that read, its newline too, is lost; a line whose newline follows a `\` continues on the next (a CRLF line's `\r` is not a `\`); an empty line and one whose first byte is `#` are skipped, so a `#` line ending in `\` swallows the next; a last line with no newline is kept as it is, its `\` too.
-/// MIT `get_line` (`auth_acl.c:102-153`): a line ending in `\` continues; an empty or comment line starts over; at the end, an unterminated line that is not a comment is returned.
+// MIT: `get_line` (auth_acl.c:102-153)
+/// a line ending in `\` continues; an empty or comment line starts over; at the end, an unterminated line that is not a comment is returned.
 fn acl_lines(bytes: &[u8]) -> Vec<(usize, Vec<u8>)> {
     // `fgets(p, 128, fp)`: at most 127 bytes, through the first newline.
     const READ: usize = 127;
@@ -463,8 +475,10 @@ fn acl_lines(bytes: &[u8]) -> Vec<(usize, Vec<u8>)> {
     }
 }
 
-/// MIT `parse_line` (`auth_acl.c:360-364`): the target and the restrictions may be absent, and the client and the operation list may not.
-/// MIT `parse_entry` (`auth_acl.c:276-312`): an unknown operation letter, a client or a target that is no principal name, and restrictions that do not parse are each logged.
+// MIT: `parse_line` (auth_acl.c:360-364)
+/// the target and the restrictions may be absent, and the client and the operation list may not.
+// MIT: `parse_entry` (auth_acl.c:276-312)
+/// an unknown operation letter, a client or a target that is no principal name, and restrictions that do not parse are each logged.
 /// A line whose client or operation list is empty is a syntax error, with no message of its own, and adds no entry. Any other line that does not parse gives the message MIT logs for it.
 fn parse_line(line: &str, default_realm: &str, fname: &str) -> Result<AclEntry, Option<String>> {
     let (client_s, ops, target_s, rs_s) = split_fields(line);
@@ -635,8 +649,10 @@ fn parse_restrictions(str: &str) -> Result<Restrictions, Error> {
     Ok(rs)
 }
 
-/// MIT `ftbl` (`kadm5/str_conv.c:50-94`): each flag name with its KDB bit and whether the name inverts it.
-/// MIT `NFTBL` (`kadm5/str_conv.c:95-95`): the table's row count, which bounds the lookup.
+// MIT: `ftbl` (kadm5/str_conv.c:50-94)
+/// each flag name with its KDB bit and whether the name inverts it.
+// MIT: `NFTBL` (kadm5/str_conv.c:95-95)
+/// the table's row count, which bounds the lookup.
 const FLAG_TABLE: &[(&str, u32, bool)] = &[
     ("allow_postdated", KDB_DISALLOW_POSTDATED, true),
     ("postdateable", KDB_DISALLOW_POSTDATED, true),
@@ -683,8 +699,10 @@ const FLAG_TABLE: &[(&str, u32, bool)] = &[
     ("lockdown_keys", KDB_LOCKDOWN_KEYS, false),
 ];
 
-/// MIT `krb5_flagspec_to_mask` (`kadm5/str_conv.c:171-197`): a leading `-` negates and a `+` is dropped, hyphens become underscores and the name is lowercased before the table lookup.
-/// MIT `kadmin_parse_princ_args` (`kadmin.c:1164-1165`): `toset == toclear`, both the principal's attributes.
+// MIT: `krb5_flagspec_to_mask` (kadm5/str_conv.c:171-197)
+/// a leading `-` negates and a `+` is dropped, hyphens become underscores and the name is lowercased before the table lookup.
+// MIT: `kadmin_parse_princ_args` (kadmin.c:1164-1165)
+/// `toset == toclear`, both the principal's attributes.
 #[must_use]
 pub fn kadmin_flagspec(spec: &str) -> Option<(u32, u32)> {
     let (req_neg, body) = spec
@@ -717,7 +735,8 @@ pub fn kadmin_flagspec(spec: &str) -> Option<(u32, u32)> {
     }
 }
 
-/// MIT `krb5_flagspec_to_mask` (`kadm5/str_conv.c:170-198`): a known flag name or a `0x` number sets or clears its bit; any other name is an error.
+// MIT: `krb5_flagspec_to_mask` (kadm5/str_conv.c:170-198)
+/// a known flag name or a `0x` number sets or clears its bit; any other name is an error.
 fn flagspec_to_mask(spec: &str, toset: &mut u32, toclear: &mut u32) -> bool {
     let (req_neg, body) = if let Some(rest) = spec.strip_prefix('-') {
         (true, rest)
@@ -752,7 +771,8 @@ fn flagspec_to_mask(spec: &str, toset: &mut u32, toclear: &mut u32) -> bool {
     true
 }
 
-/// MIT `raw_flagspec_to_mask` (`kadm5/str_conv.c:147-152`): a `0x` flag is `strtoul(s, NULL, 16) & 0xffffffff`.
+// MIT: `raw_flagspec_to_mask` (kadm5/str_conv.c:147-152)
+/// a `0x` flag is `strtoul(s, NULL, 16) & 0xffffffff`.
 fn hex_flag32(hex: &str) -> u32 {
     let digits: String = hex.chars().take_while(char::is_ascii_hexdigit).collect();
     let v = u64::from_str_radix(&digits, 16).unwrap_or(0);

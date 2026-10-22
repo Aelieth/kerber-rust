@@ -223,7 +223,8 @@ fn a_wrong_value_is_preauthentication_failed_with_no_fallback() {
     assert_eq!(ui.answers.len(), 1, "the second answer was never read");
 }
 
-/// MIT `sort_krb5_padata_sequence` (`lib/krb5/krb/get_in_tkt.c:400-471`): `preferred_preauth_types`
+// MIT: `sort_krb5_padata_sequence` (lib/krb5/krb/get_in_tkt.c:400-471)
+/// `preferred_preauth_types`
 /// moves a type to the front of the hint, so encrypted challenge (138) is run before OTP (141).
 #[test]
 fn preferred_preauth_types_138_runs_encrypted_challenge_before_otp() {

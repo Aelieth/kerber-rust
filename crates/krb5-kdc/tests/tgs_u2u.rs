@@ -2,13 +2,16 @@
 //! The tests drive the shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry points of a
 //! bootstrapped realm.
 //! The `u2u_session` statuses follow MIT.
-//! MIT `decrypt_2ndtkt` (`do_tgs_req.c:250-307`): the second-ticket statuses are
+// MIT: `decrypt_2ndtkt` (do_tgs_req.c:250-307)
+//! the second-ticket statuses are
 //! `2ND_TKT_SERVER`, `2ND_TKT_DECRYPT` and `2ND_TKT_PAC`, by the step that failed.
-//! MIT `find_server_key` (`kdc_util.c:420-450`): the key is looked up by enctype and kvno
+// MIT: `find_server_key` (kdc_util.c:420-450)
+//! the key is looked up by enctype and kvno
 //! (`krb5_dbe_find_enctype`), and a key whose enctype is not similar is
 //! `KRB5_KDB_NO_PERMITTED_KEY`.
 //! A U2U second ticket whose server is missing is 7 `2ND_TKT_SERVER`.
-//! MIT `decrypt_2ndtkt` (`do_tgs_req.c:280-289`): a second-ticket server that
+// MIT: `decrypt_2ndtkt` (do_tgs_req.c:280-289)
+//! a second-ticket server that
 //! `kdc_get_server_key(stkt)` cannot find is `2ND_TKT_SERVER`.
 
 use krb5_crypto::EncryptionType;

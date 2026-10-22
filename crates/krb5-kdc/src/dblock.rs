@@ -100,7 +100,8 @@ pub struct FileLockGuard<'a> {
 }
 
 /// Lock the whole of `file` exclusively, waiting for any other holder, as `krb5_lock_file` does; the lock is let go when the guard is dropped.
-/// MIT `prep_ok_file` (`kadmin/dbutil/dump.c:191-195`): the dump's `.dump_ok` file is locked exclusively while the dump is written.
+// MIT: `prep_ok_file` (kadmin/dbutil/dump.c:191-195)
+/// the dump's `.dump_ok` file is locked exclusively while the dump is written.
 ///
 /// The system's error of the lock call.
 pub fn lock_file_exclusive(file: &File) -> io::Result<FileLockGuard<'_>> {
@@ -116,7 +117,8 @@ pub struct HeldFileLock {
 }
 
 /// Lock the whole of `file` shared without waiting, as `krb5_lock_file` does with `KRB5_LOCKMODE_SHARED | KRB5_LOCKMODE_DONTBLOCK`: a conflicting lock is `EAGAIN`.
-/// MIT `open_database` (`kprop/kprop.c:356-364`): kprop locks the dump it sends this way, and a held lock is "database locked".
+// MIT: `open_database` (kprop/kprop.c:356-364)
+/// kprop locks the dump it sends this way, and a held lock is "database locked".
 ///
 /// The system's error of the lock call: `EAGAIN` when another holder's lock conflicts.
 pub fn lock_file_shared_nowait(file: &File) -> io::Result<HeldFileLock> {
@@ -127,7 +129,8 @@ pub fn lock_file_shared_nowait(file: &File) -> io::Result<HeldFileLock> {
 
 impl HeldFileLock {
     /// Let the lock on `file`, the file it was taken on, go.
-    /// MIT `close_database` (`kprop/kprop.c:388-398`): kprop unlocks the dump before it closes it.
+    // MIT: `close_database` (kprop/kprop.c:388-398)
+    /// kprop unlocks the dump before it closes it.
     ///
     /// The system's error of the unlock call.
     pub fn unlock(mut self, file: &File) -> io::Result<()> {
@@ -136,7 +139,8 @@ impl HeldFileLock {
 }
 
 /// Take `how` (or let go of) the whole-file lock on `file`'s open file description, waiting for another holder, as `krb5_lock_file` does; `flocked` keeps `flock(2)`'s hold where the file system has no open-file-description locks, and must be the same at the lock and the unlock. Every thread of a process shares the description's one lock: the caller counts its holds.
-/// MIT `lock_ulog` (`lib/kdb/kdb_log.c:288-296`): the update log is locked with `krb5_lock_file` on its own descriptor.
+// MIT: `lock_ulog` (lib/kdb/kdb_log.c:288-296)
+/// the update log is locked with `krb5_lock_file` on its own descriptor.
 ///
 /// The system's error of the lock call.
 pub(crate) fn set_file_lock(
@@ -148,7 +152,8 @@ pub(crate) fn set_file_lock(
 }
 
 impl Drop for FileLockGuard<'_> {
-    /// MIT `update_ok_file` (`kadmin/dbutil/dump.c:214-219`): the `.dump_ok` lock is let go once its byte is written.
+    // MIT: `update_ok_file` (kadmin/dbutil/dump.c:214-219)
+    /// the `.dump_ok` lock is let go once its byte is written.
     fn drop(&mut self) {
         let _ = lock_file(self.file, FileLock::Unlock, &mut self.flocked);
     }
@@ -169,7 +174,8 @@ fn named_if_link(path: &Path, e: io::Error) -> io::Error {
 }
 
 /// Open a lock file read-write, else read-only, never through a symlink: a link at the path, as a non-root owner of the directory may plant, is refused (`ELOOP`) rather than its target locked, which MIT does.
-/// MIT `ctx_init` (`plugins/kdb/db2/kdb_db2.c:492-501`): the lock file is opened `O_RDWR` so that write locking can work, else `O_RDONLY`.
+// MIT: `ctx_init` (plugins/kdb/db2/kdb_db2.c:492-501)
+/// the lock file is opened `O_RDWR` so that write locking can work, else `O_RDONLY`.
 fn open_lock_file(path: &Path) -> io::Result<File> {
     let open = |write: bool| {
         OpenOptions::new()
@@ -200,8 +206,10 @@ enum LockFileKind {
 }
 
 /// Create the lock file at `path`, 0600, labeled as a new file at that path is ([`krb5_protocol::create_labeled`]): `principal.ok` `O_CREAT | O_RDWR | O_TRUNC` (an existing one is kept and emptied), `principal.kadm5.lock` `O_CREAT | O_EXCL`. Neither open follows a symlink (`O_NOFOLLOW`): MIT's truncates a link's target.
-/// MIT `ctx_create_db` (`plugins/kdb/db2/kdb_db2.c:697-702`): `principal.ok` is opened `O_CREAT | O_RDWR | O_TRUNC`, mode 0600.
-/// MIT `osa_adb_create_db` (`plugins/kdb/db2/adb_openclose.c:42-46`): the policy lock file is created `O_RDWR | O_CREAT | O_EXCL`, mode 0600.
+// MIT: `ctx_create_db` (plugins/kdb/db2/kdb_db2.c:697-702)
+/// `principal.ok` is opened `O_CREAT | O_RDWR | O_TRUNC`, mode 0600.
+// MIT: `osa_adb_create_db` (plugins/kdb/db2/adb_openclose.c:42-46)
+/// the policy lock file is created `O_RDWR | O_CREAT | O_EXCL`, mode 0600.
 fn create_lock_file(path: &Path, kind: LockFileKind) -> io::Result<File> {
     krb5_protocol::create_labeled(path, || {
         let mut opts = OpenOptions::new();
@@ -258,7 +266,8 @@ enum PolicyLockError {
 }
 
 impl PolicyLockError {
-    /// MIT `ctx_lock` (`plugins/kdb/db2/kdb_db2.c:469-476`): a policy lock that may not be taken, or whose file is missing, is `KRB5_KDB_CANTLOCK_DB`.
+    // MIT: `ctx_lock` (plugins/kdb/db2/kdb_db2.c:469-476)
+    /// a policy lock that may not be taken, or whose file is missing, is `KRB5_KDB_CANTLOCK_DB`.
     fn into_db(self) -> DbLockError {
         match self {
             Self::NoExclPerm | Self::CantLock | Self::NoLockFile | Self::WouldBlock => {
@@ -272,10 +281,13 @@ impl PolicyLockError {
 
 impl DbLock {
     /// Open the lock files of the database at `db`.
-    /// MIT `osa_adb_init_db` (`plugins/kdb/db2/adb_openclose.c:151-165`): the policy lock file is opened "r+", else "r", else `OSA_ADB_NOLOCKFILE`.
+    // MIT: `osa_adb_init_db` (plugins/kdb/db2/adb_openclose.c:151-165)
+    /// the policy lock file is opened "r+", else "r", else `OSA_ADB_NOLOCKFILE`.
     /// Open the lock files of the database at `db`.
-    /// MIT `ctx_init` (`plugins/kdb/db2/kdb_db2.c:488-501`): `principal.ok` must open; no open creates it.
-    /// MIT `osa_adb_init_db` (`plugins/kdb/db2/adb_openclose.c:151-165`): the policy lock file is opened "r+", else "r", else `OSA_ADB_NOLOCKFILE`. [`DbLockError::Io`] when `principal.ok` opens neither read-write nor read-only (`NotFound` when it is missing) or either lock file is a symlink, which is never followed (`ELOOP`, the path named); [`DbLockError::NoLockFile`] when `principal.kadm5.lock` does not open.
+    // MIT: `ctx_init` (plugins/kdb/db2/kdb_db2.c:488-501)
+    /// `principal.ok` must open; no open creates it.
+    // MIT: `osa_adb_init_db` (plugins/kdb/db2/adb_openclose.c:151-165)
+    /// the policy lock file is opened "r+", else "r", else `OSA_ADB_NOLOCKFILE`. [`DbLockError::Io`] when `principal.ok` opens neither read-write nor read-only (`NotFound` when it is missing) or either lock file is a symlink, which is never followed (`ELOOP`, the path named); [`DbLockError::NoLockFile`] when `principal.kadm5.lock` does not open.
     pub fn open(db: &Path) -> Result<Self, DbLockError> {
         let ok_name = suffixed(db, SUFFIX_LOCK);
         let ok =
@@ -286,7 +298,8 @@ impl DbLock {
     }
 
     /// Make the database's `principal.ok` (keeping an existing one, emptied) and lock it exclusively, before the database file itself is created. The policy lock file comes next, with [`Self::create_policy_lock`], once the database file was created.
-    /// MIT `ctx_create_db` (`plugins/kdb/db2/kdb_db2.c:697-708`): `principal.ok` is created and exclusively locked first.
+    // MIT: `ctx_create_db` (plugins/kdb/db2/kdb_db2.c:697-708)
+    /// `principal.ok` is created and exclusively locked first.
     ///
     /// [`DbLockError::Io`] when `principal.ok` cannot be created or opened (the error of its directory), or locked.
     pub fn create(db: &Path) -> Result<Self, DbLockError> {
@@ -306,7 +319,8 @@ impl DbLock {
     }
 
     /// Make the policy lock file of a database [`Self::create`] made the principal lock of, and take it exclusively, so that the new database is wholly locked.
-    /// MIT `ctx_create_db` (`plugins/kdb/db2/kdb_db2.c:722-732`): the policy lock file is created once the database file exists, then locked exclusively.
+    // MIT: `ctx_create_db` (plugins/kdb/db2/kdb_db2.c:722-732)
+    /// the policy lock file is created once the database file exists, then locked exclusively.
     ///
     /// [`DbLockError::Io`] when the file cannot be created (`AlreadyExists` for a policy lock file already there); [`DbLockError::CantLock`] when it cannot be locked.
     pub fn create_policy_lock(&self) -> Result<(), DbLockError> {
@@ -356,8 +370,10 @@ impl DbLock {
 
     /// Take the database lock in `mode`, waiting for any conflicting holder: `principal.ok`, then the policy lock. A lock this process already holds at least as strongly is counted, not taken again, and a shared one asked for exclusively is upgraded.
     /// Take the database lock in `mode`, waiting for any conflicting holder: `principal.ok`, then the policy lock. A lock this process already holds at least as strongly is counted, not taken again, and a shared one asked for exclusively is upgraded. The holds of a process's threads share one lock, so an upgrade is asked for while other threads may hold it shared. Such an upgrade is tried without waiting and, when another process's lock is in the way, tried again after a pause outside the lock's state, so the other threads can let go meanwhile: two processes upgrading at once (two KDCs on one database) do not each wait for a hold the other's waiting upgrade keeps from being let go. Open-file-description locks have no deadlock detection to break that wait.
-    /// MIT `ctx_lock` (`plugins/kdb/db2/kdb_db2.c:431-447`): `principal.ok` is locked (or upgraded), an exclusive lock on a read-only descriptor and a refused lock are `KRB5_KDB_CANTLOCK_DB`.
-    /// MIT `ctx_lock` (`plugins/kdb/db2/kdb_db2.c:467-477`): the hold is counted, then the policy lock is taken in the same mode; when that fails, `principal.ok` is let go. [`DbLockError::CantLock`] when a lock file is open read-only and the lock is exclusive, or `principal.kadm5.lock` is gone; [`DbLockError::Io`] for any other lock or unlink failure.
+    // MIT: `ctx_lock` (plugins/kdb/db2/kdb_db2.c:431-447)
+    /// `principal.ok` is locked (or upgraded), an exclusive lock on a read-only descriptor and a refused lock are `KRB5_KDB_CANTLOCK_DB`.
+    // MIT: `ctx_lock` (plugins/kdb/db2/kdb_db2.c:467-477)
+    /// the hold is counted, then the policy lock is taken in the same mode; when that fails, `principal.ok` is let go. [`DbLockError::CantLock`] when a lock file is open read-only and the lock is exclusive, or `principal.kadm5.lock` is gone; [`DbLockError::Io`] for any other lock or unlink failure.
     /// `principal.ok` is locked (or upgraded), an exclusive lock on a read-only descriptor and a refused lock are `KRB5_KDB_CANTLOCK_DB`.
     pub fn lock(&self, mode: DbLockMode) -> Result<(), DbLockError> {
         self.lock_reopening(mode, &mut || Ok(()))
@@ -433,9 +449,12 @@ impl DbLock {
     }
 
     /// The policy lock in `mode`: counted when held at least as strongly, else taken; then the file must still exist, and a permanent lock removes it and closes it. An upgrade of a policy lock this process holds is tried without waiting ([`PolicyLockError::WouldBlock`]).
-    /// MIT `osa_adb_get_lock` (`plugins/kdb/db2/adb_openclose.c:220-247`): a held lock is counted; a read-only descriptor refuses an exclusive lock.
-    /// MIT `osa_adb_get_lock` (`plugins/kdb/db2/adb_openclose.c:249-261`): a lock file that no longer exists is `OSA_ADB_NOLOCKFILE`, since a permanent lock removed it.
-    /// MIT `osa_adb_get_lock` (`plugins/kdb/db2/adb_openclose.c:265-283`): the permanent lock unlinks the file, then closes it, which lets its lock go.
+    // MIT: `osa_adb_get_lock` (plugins/kdb/db2/adb_openclose.c:220-247)
+    /// a held lock is counted; a read-only descriptor refuses an exclusive lock.
+    // MIT: `osa_adb_get_lock` (plugins/kdb/db2/adb_openclose.c:249-261)
+    /// a lock file that no longer exists is `OSA_ADB_NOLOCKFILE`, since a permanent lock removed it.
+    // MIT: `osa_adb_get_lock` (plugins/kdb/db2/adb_openclose.c:265-283)
+    /// the permanent lock unlinks the file, then closes it, which lets its lock go.
     fn get_policy_lock(&self, st: &mut State, mode: DbLockMode) -> Result<(), PolicyLockError> {
         if st.pol_mode.is_some_and(|held| held >= mode) {
             st.pol_cnt += 1;
@@ -477,7 +496,8 @@ impl DbLock {
     }
 
     /// Give back one count of the policy lock; the last lets it go, and a permanent lock makes the file again.
-    /// MIT `osa_adb_release_lock` (`plugins/kdb/db2/adb_openclose.c:295-315`): the last release unlocks, or after a permanent lock creates the file `O_RDWR | O_CREAT | O_EXCL`, 0600.
+    // MIT: `osa_adb_release_lock` (plugins/kdb/db2/adb_openclose.c:295-315)
+    /// the last release unlocks, or after a permanent lock creates the file `O_RDWR | O_CREAT | O_EXCL`, 0600.
     fn release_policy_lock(&self, st: &mut State) -> Result<(), PolicyLockError> {
         if st.pol_cnt == 0 {
             return Err(PolicyLockError::NotLocked);
@@ -498,7 +518,8 @@ impl DbLock {
     }
 
     /// Give back one count of the lock: the policy lock, then `principal.ok`, which the last count lets go. A policy lock that fails is the unlock's error once `principal.ok` is let go, as MIT passes it through: a permanent lock's policy lock file that cannot be made again is `OSA_ADB_NOLOCKFILE`'s text, which only a lock maps to `KRB5_KDB_CANTLOCK_DB`.
-    /// MIT `ctx_unlock` (`plugins/kdb/db2/kdb_db2.c:402-422`): the policy lock is released, then the hold count drops and the last one unlocks `principal.ok`; the release's error is returned.
+    // MIT: `ctx_unlock` (plugins/kdb/db2/kdb_db2.c:402-422)
+    /// the policy lock is released, then the hold count drops and the last one unlocks `principal.ok`; the release's error is returned.
     ///
     /// [`DbLockError::NotLocked`] when no lock is held; [`DbLockError::Io`] when an unlock fails; [`DbLockError::NoLockFile`] when a permanent lock's policy lock file cannot be made again.
     pub fn unlock(&self) -> Result<(), DbLockError> {
@@ -537,7 +558,8 @@ impl DbLock {
     }
 
     /// The database's age: `principal.ok`'s modification time, through the descriptor opened with the database; `None` when it cannot be read.
-    /// MIT `krb5_db2_get_age` (`plugins/kdb/db2/kdb_db2.c:573-579`): the age is `principal.ok`'s `st_mtime`, read with `fstat`.
+    // MIT: `krb5_db2_get_age` (plugins/kdb/db2/kdb_db2.c:573-579)
+    /// the age is `principal.ok`'s `st_mtime`, read with `fstat`.
     #[must_use]
     pub fn age(&self) -> Option<DbAge> {
         let st = self.state();
@@ -545,7 +567,8 @@ impl DbLock {
     }
 
     /// Move the database's age strictly forward: `principal.ok`'s times become now, or one second past the old age when that is not before now. Call it holding the lock exclusively, once the change is written. A failure is ignored, as MIT ignores it, but for a symlink at `principal.ok`, which is not retimed (MIT retimes its target) and is logged.
-    /// MIT `ctx_update_age` (`plugins/kdb/db2/kdb_db2.c:590-598`): `utime` to the old `st_mtime` + 1 when it is not in the past, else to now.
+    // MIT: `ctx_update_age` (plugins/kdb/db2/kdb_db2.c:590-598)
+    /// `utime` to the old `st_mtime` + 1 when it is not in the past, else to now.
     pub fn update_age(&self) {
         if let Err(e) = self.move_age()
             && refused_link(&e)

@@ -235,7 +235,8 @@ pub(super) fn parse_rename(
     Ok((old, old_realm, new, new_realm))
 }
 
-/// MIT `xdr_calias_arg` (`kadm_rpc_xdr.c:1214-1226`): api version, alias, target.
+// MIT: `xdr_calias_arg` (kadm_rpc_xdr.c:1214-1226)
+/// api version, alias, target.
 pub(super) fn parse_alias(
     args: &[u8],
 ) -> Result<(PrincipalName, String, PrincipalName, String), Error> {
@@ -250,7 +251,8 @@ pub(super) fn parse_purgekeys(args: &[u8]) -> Result<(u32, PrincipalName, String
     Ok((api, princ, prealm, keep))
 }
 
-/// MIT `xdr_kadm5_key_data` (`kadm_rpc_xdr.c:1166-1174`): a version-4 key carries kvno, keyblock, and salt, with no key-data version word in front.
+// MIT: `xdr_kadm5_key_data` (kadm_rpc_xdr.c:1166-1174)
+/// a version-4 key carries kvno, keyblock, and salt, with no key-data version word in front.
 pub(super) fn parse_setkey(
     args: &[u8],
     proc: u32,
@@ -388,7 +390,8 @@ impl ModFields {
     }
 }
 
-/// MIT `_xdr_kadm5_principal_ent_rec` (`kadm_rpc_xdr.c:410-416`): a null mod-principal pointer is not followed by a principal encoding.
+// MIT: `_xdr_kadm5_principal_ent_rec` (kadm_rpc_xdr.c:410-416)
+/// a null mod-principal pointer is not followed by a principal encoding.
 pub(super) fn parse_modify(args: &[u8]) -> Result<(PrincipalName, String, u32, ModFields), Error> {
     let mut r = XdrR::new(args);
     let _ = r.u32()?;

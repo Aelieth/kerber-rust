@@ -27,7 +27,8 @@ pub enum XdrError {
     Invalid(String),
 }
 
-/// MIT `kdbe_time_t` (`include/iprop.h`): seconds and microseconds.
+// MIT: `kdbe_time_t` (include/iprop.h)
+/// seconds and microseconds.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct UlogTime {
     /// `seconds`.
@@ -38,7 +39,8 @@ pub struct UlogTime {
 
 impl UlogTime {
     /// The time now, to the microsecond.
-    /// MIT `time_current` (`lib/kdb/kdb_log.c:60-68`): `gettimeofday`, seconds and microseconds.
+    // MIT: `time_current` (lib/kdb/kdb_log.c:60-68)
+    /// `gettimeofday`, seconds and microseconds.
     #[must_use]
     pub fn now() -> Self {
         let d = std::time::SystemTime::now()
@@ -120,8 +122,10 @@ impl<'a> XdrIn<'a> {
     }
 }
 
-/// MIT `xdr_kdbe_key_t` (`lib/kdb/iprop_xdr.c:75-90`): each key's version, kvno, then as many types and contents as its version.
-/// MIT `ulog_conv_2logentry` (`lib/kdb/kdb_convert.c:415-462`): each key goes as stored, its version deciding how many types and contents follow.
+// MIT: `xdr_kdbe_key_t` (lib/kdb/iprop_xdr.c:75-90)
+/// each key's version, kvno, then as many types and contents as its version.
+// MIT: `ulog_conv_2logentry` (lib/kdb/kdb_convert.c:415-462)
+/// each key goes as stored, its version deciding how many types and contents follow.
 fn encode_keydata<E>(w: &mut XdrOut, keys: &[KeyEntry], wrap: &KeyWrap<'_, E>) -> Result<(), E> {
     w.count(keys.len());
     for k in keys {
@@ -165,20 +169,23 @@ fn encode_keydata_raw(w: &mut XdrOut, keys: &[OsaKeyData]) {
     }
 }
 
-/// MIT `xdr_kdbe_princ_t` (`lib/kdb/iprop_xdr.c:105-117`): the realm, each component with MIT's `KV5M_DATA` magic, the name type.
+// MIT: `xdr_kdbe_princ_t` (lib/kdb/iprop_xdr.c:105-117)
+/// the realm, each component with MIT's `KV5M_DATA` magic, the name type.
 fn encode_princ(w: &mut XdrOut, name: &PrincipalName, realm: &str) {
     w.opaque(realm.as_bytes());
     w.count(name.name_string.len());
     for c in &name.name_string {
-        // MIT `KV5M_DATA` (`krb5_data.magic`).
+        // MIT: `KV5M_DATA` (krb5_data.magic)
         w.u32((-1_760_647_422i32).cast_unsigned());
         w.opaque(c.as_bytes());
     }
     w.u32(name.name_type.cast_unsigned());
 }
 
-/// MIT `xdr_kdbe_t` (`lib/kdb/iprop_xdr.c:252-260`): the update's values, counted, each in its type's shape; keys wrapped by `wrap`.
-/// MIT `xdr_kdbe_val_t` (`lib/kdb/iprop_xdr.c:153-249`): each attribute's type, then its value in that type's shape.
+// MIT: `xdr_kdbe_t` (lib/kdb/iprop_xdr.c:252-260)
+/// the update's values, counted, each in its type's shape; keys wrapped by `wrap`.
+// MIT: `xdr_kdbe_val_t` (lib/kdb/iprop_xdr.c:153-249)
+/// each attribute's type, then its value in that type's shape.
 /// A key `wrap` refuses.
 pub fn encode_kdbe<E>(vals: &[KdbeVal], wrap: &KeyWrap<'_, E>) -> Result<Vec<u8>, E> {
     let mut w = XdrOut::default();
@@ -223,7 +230,8 @@ pub fn encode_kdbe<E>(vals: &[KdbeVal], wrap: &KeyWrap<'_, E>) -> Result<Vec<u8>
 }
 
 /// One update as the log stores it and the wire carries it: the principal's name, its serial, its time, the encoded values `kdbe` ([`encode_kdbe`]), whether it deletes, whether it is committed, and no KDCs seen and no futures.
-/// MIT `xdr_kdb_incr_update_t` (`lib/kdb/iprop_xdr.c:263-285`): the name, serial, time, the update, the deleted and committed flags, the KDCs seen and the futures.
+// MIT: `xdr_kdb_incr_update_t` (lib/kdb/iprop_xdr.c:263-285)
+/// the name, serial, time, the update, the deleted and committed flags, the KDCs seen and the futures.
 #[must_use]
 pub fn encode_incr_update(
     name: &str,
@@ -295,7 +303,8 @@ fn skip_princ(r: &mut XdrIn<'_>) -> Result<(), XdrError> {
 }
 
 /// Walk an encoded `kdb_incr_update_t` without opening its keys: its name, serial, time, flags, where its commit flag lies and which attributes it carries. An update that does not read to its end, or with bytes past it, is refused, as `xdr_kdb_incr_update_t` failing to decode is `KRB5_LOG_CONV`.
-/// MIT `ulog_get_entries` (`lib/kdb/kdb_log.c:625-631`): an update that does not decode is a conversion error.
+// MIT: `ulog_get_entries` (lib/kdb/kdb_log.c:625-631)
+/// an update that does not decode is a conversion error.
 pub fn walk_incr_update(b: &[u8]) -> Result<IncrLayout, XdrError> {
     let mut r = XdrIn::new(b);
     let name = std::str::from_utf8(r.opaque()?)
@@ -417,8 +426,10 @@ fn decode_princ(r: &mut XdrIn<'_>) -> Result<(PrincipalName, String), XdrError> 
     Ok((name, realm))
 }
 
-/// MIT `krb5_dbe_def_decrypt_key_data` (`lib/kdb/decrypt_key.c:91-93`): a master-key decrypt failure is not a usable key.
-/// MIT `ulog_conv_2dbentry` (`lib/kdb/kdb_convert.c:678-683`): a key of a version past 2 is not a key, and the update does not apply.
+// MIT: `krb5_dbe_def_decrypt_key_data` (lib/kdb/decrypt_key.c:91-93)
+/// a master-key decrypt failure is not a usable key.
+// MIT: `ulog_conv_2dbentry` (lib/kdb/kdb_convert.c:678-683)
+/// a key of a version past 2 is not a key, and the update does not apply.
 fn decode_keydata(
     r: &mut XdrIn<'_>,
     mkey: Option<&ProtocolKey>,

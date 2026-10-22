@@ -1,5 +1,6 @@
 //! The string-to-key inputs an error's padata sets.
-//! MIT `k5_get_etype_info` (`lib/krb5/krb/preauth2.c:790-854`): etype-info2, else etype-info, else the salt elements `get_salt` reads.
+// MIT: `k5_get_etype_info` (lib/krb5/krb/preauth2.c:790-854)
+//! etype-info2, else etype-info, else the salt elements `get_salt` reads.
 
 use super::{S2kMaterial, select_s2k_after};
 use crate::error::Error;

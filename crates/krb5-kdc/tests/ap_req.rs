@@ -82,7 +82,8 @@ fn ap_req_valid_truncated_wrong_key_replay() {
     }
 }
 
-/// MIT `kdc_process_tgs_req` (`kdc_util.c:189-191`): no replay cache, so a replayed TGS-REQ is processed again and issues a new ticket.
+// MIT: `kdc_process_tgs_req` (kdc_util.c:189-191)
+/// no replay cache, so a replayed TGS-REQ is processed again and issues a new ticket.
 #[test]
 fn tgs_authenticator_replay_is_issued_again() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
@@ -115,7 +116,8 @@ fn tgs_authenticator_replay_is_issued_again() {
     );
 }
 
-/// MIT `enc_ts_verify` (`kdc/kdc_preauth_encts.c:94-101`): no replay cache, so a replayed timestamp inside the skew verifies again and issues a new ticket.
+// MIT: `enc_ts_verify` (kdc/kdc_preauth_encts.c:94-101)
+/// no replay cache, so a replayed timestamp inside the skew verifies again and issues a new ticket.
 #[test]
 fn pa_enc_timestamp_replay_is_issued_again() {
     let (store, _) = bootstrap_documented().expect("bootstrap");

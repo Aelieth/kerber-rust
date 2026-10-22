@@ -33,7 +33,8 @@ pub const KPROP_PORT: u16 = 754;
 
 const WIRE_VERSION: u8 = 1;
 
-/// MIT `client_addr` (`kadmin/server/server_stubs.c:152-162`): `k5_print_addr` of the peer, without the port.
+// MIT: `client_addr` (kadmin/server/server_stubs.c:152-162)
+/// `k5_print_addr` of the peer, without the port.
 #[must_use]
 pub fn client_addr(ip: std::net::IpAddr) -> String {
     match ip {
@@ -257,13 +258,15 @@ fn kpasswd_chpwfail_error(realm: &str, result: u16, text: &str) -> Result<Vec<u8
 }
 
 fn kpasswd_krb_error(realm: &str, e_data: Vec<u8>) -> Result<Vec<u8>, Error> {
-    // MIT `process_chpw_request` (`schpw.c:273-345`): alloc_data overwrites `ret` with 0, so `error -= ERROR_TABLE_BASE_krb5` wraps past KRB_ERR_MAX → 60.
+    // MIT: `process_chpw_request` (schpw.c:273-345)
+    // alloc_data overwrites `ret` with 0, so `error -= ERROR_TABLE_BASE_krb5` wraps past KRB_ERR_MAX → 60.
     let der = changepw_krb_error(realm, err::GENERIC, Some(e_data))?;
     Ok(frame_kpasswd_rep(&[], &der))
 }
 
 /// The reply to a kpasswd TCP request whose length is past the buffer: `KRB_ERR_FIELD_TOOLONG` from `kadmin/changepw`, not framed as a kpasswd reply.
-/// MIT `make_toolong_error` (`kadmin/server/misc.c:139-161`): the time, `KRB_ERR_FIELD_TOOLONG` and `kadmin/changepw` in the realm, with no client, text or data.
+// MIT: `make_toolong_error` (kadmin/server/misc.c:139-161)
+/// the time, `KRB_ERR_FIELD_TOOLONG` and `kadmin/changepw` in the realm, with no client, text or data.
 pub(crate) fn kpasswd_toolong_error(realm: &str) -> Result<Vec<u8>, Error> {
     changepw_krb_error(realm, err::FIELD_TOOLONG, None)
 }
@@ -325,8 +328,10 @@ pub enum ChangepwRefused {
 
 /// The AP-REQ half of kpasswd's request: MIT's `krb5_rd_req` for `kadmin/changepw` in the realm, on kadmind's acceptor profile values `conf`, its key looked up in the KDB as the KDB keytab does, then the AP-REP.
 /// `krb5_rd_req` names `kadmin/changepw` against the `KDB:` keytab, and a refusal is AUTHERROR "Failed reading application request".
-/// MIT `krb5_ktkdb_get_entry` (`lib/kdb/keytab.c:117-185`): the KDB keytab gives the principal's first permitted key at the ticket's kvno and refuses another enctype.
-/// MIT `rd_req_decoded_opt` (`lib/krb5/krb/rd_req_dec.c:631-631`): the authenticator's time is checked against kadmind's context's `clockskew`.
+// MIT: `krb5_ktkdb_get_entry` (lib/kdb/keytab.c:117-185)
+/// the KDB keytab gives the principal's first permitted key at the ticket's kvno and refuses another enctype.
+// MIT: `rd_req_decoded_opt` (lib/krb5/krb/rd_req_dec.c:631-631)
+/// the authenticator's time is checked against kadmind's context's `clockskew`.
 /// [`ChangepwRefused`], with the error that refused the request.
 pub fn changepw_accept(
     ap_req: &[u8],
@@ -368,7 +373,8 @@ pub fn changepw_accept(
     Ok(ChangepwAccepted { ok, ac, ap_rep })
 }
 
-/// MIT `_kadm5_chpass_principal_util` (`lib/kadm5/chpass_util.c:195-200`): too short names the policy minimum.
+// MIT: `_kadm5_chpass_principal_util` (lib/kadm5/chpass_util.c:195-200)
+/// too short names the policy minimum.
 /// a too-short code with no policy uses the code text and Password not changed.
 fn kpasswd_quality_reply(msg: &str, empty_policy: &EmptyPolicy) -> String {
     if let Some(n) = quality_count(msg, "min_length ") {
@@ -437,11 +443,16 @@ enum EmptyPolicy {
     Missing,
 }
 
-/// MIT `kadm5_get_principal` (`lib/kadm5/srv/svr_principal.c:759-759`): the lookup clears that message, so the notice is the code's table text.
-/// MIT `empty_check` (`lib/kadm5/srv/pwqual_empty.c:41-43`): an empty password sets Empty passwords are not allowed with the too-short code, so the notice reads the table text.
-/// MIT `KADM5_PASS_Q_TOOSHORT` (`lib/kadm5/kadm_err.et:29-29`): the table text is Password is too short.
-/// MIT `passwd_check` (`lib/kadm5/srv/server_misc.c:122-129`): the Error line is written before the clear and keeps the module's sentence.
-/// MIT `princ_check` (`lib/kadm5/srv/pwqual_princ.c:52-55`): a component match sets Password may not match principal name for that code.
+// MIT: `kadm5_get_principal` (lib/kadm5/srv/svr_principal.c:759-759)
+/// the lookup clears that message, so the notice is the code's table text.
+// MIT: `empty_check` (lib/kadm5/srv/pwqual_empty.c:41-43)
+/// an empty password sets Empty passwords are not allowed with the too-short code, so the notice reads the table text.
+// MIT: `KADM5_PASS_Q_TOOSHORT` (lib/kadm5/kadm_err.et:29-29)
+/// the table text is Password is too short.
+// MIT: `passwd_check` (lib/kadm5/srv/server_misc.c:122-129)
+/// the Error line is written before the clear and keeps the module's sentence.
+// MIT: `princ_check` (lib/kadm5/srv/pwqual_princ.c:52-55)
+/// a component match sets Password may not match principal name for that code.
 fn kpasswd_quality_log(msg: &str) -> String {
     if msg == krb5_kdc::PWQUAL_PRINC {
         return msg.to_owned();
@@ -449,7 +460,8 @@ fn kpasswd_quality_log(msg: &str) -> String {
     crate::kadm5::chpass_error_text(&Error::PasswordPolicy(msg.to_owned()))
 }
 
-/// MIT `get_policy` (`lib/kadm5/srv/svr_principal.c:112-117`): a missing policy is not a failed change. It only changes the too-short reply.
+// MIT: `get_policy` (lib/kadm5/srv/svr_principal.c:112-117)
+/// a missing policy is not a failed change. It only changes the too-short reply.
 fn empty_policy(store: &krb5_kdc::PrincipalStore, name: &PrincipalName) -> EmptyPolicy {
     let Some(pol_name) = store
         .get_name(name)
@@ -477,7 +489,8 @@ security administrator."
     )
 }
 
-/// MIT `trunc_name` (`kadmin/server/misc.c:124-131`): at most `MAXPRINCLEN` (125) bytes of a name, and `...` after them when it is longer.
+// MIT: `trunc_name` (kadmin/server/misc.c:124-131)
+/// at most `MAXPRINCLEN` (125) bytes of a name, and `...` after them when it is longer.
 fn kpasswd_trunc_len(len: usize) -> (usize, &'static str) {
     if len > 125 { (125, "...") } else { (len, "") }
 }
@@ -581,7 +594,8 @@ pub(crate) fn handle_kpasswd_from(
         let decoded = decode::<ChangePasswdData>(&user_data);
         wipe_secret(user_data);
         if let Ok(cpw) = decoded {
-            // MIT `decode_krb5_setpw_req` (`lib/krb5/asn.1/asn1_k_encode.c:1253-1276`): the target is required, so a request that names none, or a target that does not decode, is MALFORMED; it never changes the caller's own password.
+            // MIT: `decode_krb5_setpw_req` (lib/krb5/asn.1/asn1_k_encode.c:1253-1276)
+            // the target is required, so a request that names none, or a target that does not decode, is MALFORMED; it never changes the caller's own password.
             let name = cpw.targname;
             let realm = String::from_utf8_lossy(cpw.targrealm.as_bytes()).into_owned();
             let newpass = cpw.newpasswd.to_vec();
@@ -602,7 +616,8 @@ pub(crate) fn handle_kpasswd_from(
     };
     let client = ok.ticket_part.cname.unparse_with_realm(&ticket_crealm);
     let target_unparsed = targ.unparse_with_realm(&targ_realm);
-    // MIT `schpw_util_wrapper` (`misc.c:33-54`): compare first, INITIAL, auth(OP_CPW), then DB.
+    // MIT: `schpw_util_wrapper` (misc.c:33-54)
+    // compare first, INITIAL, auth(OP_CPW), then DB.
     let self_change = principal_compare(&targ, &targ_realm, &ok.ticket_part.cname, &ticket_crealm);
     let (code, text, log_err) = if self_change && !ok.ticket_part.flags.initial() {
         (
@@ -637,11 +652,13 @@ pub(crate) fn handle_kpasswd_from(
         // of the database to its write, as `AdminSession::change_password` makes it.
         // the changepw dispatcher uses the global handle, so `current_caller` is `kadmind@REALM`, not the ticket client.
         let stamp = format!("kadmind@{store_realm}");
-        // MIT `ctx_lock` (`plugins/kdb/db2/kdb_db2.c:438-447`): the change locks the database first, and a database the server may not write changes nothing.
+        // MIT: `ctx_lock` (plugins/kdb/db2/kdb_db2.c:438-447)
+        // the change locks the database first, and a database the server may not write changes nothing.
         let changed = (|| -> Result<(), krb5_kdc::Error> {
             g.reload_if_stale()?;
             // Stricter than MIT, whose kpasswd path has no lockdown test: the target's keys are refused as the kadm5 chpass stub refuses them.
-            // MIT `chpass_principal_2_svc` (`kadmin/server/server_stubs.c:855-861`): KADM5_PROTECT_KEYS is answered as KADM5_AUTH_CHANGEPW.
+            // MIT: `chpass_principal_2_svc` (kadmin/server/server_stubs.c:855-861)
+            // KADM5_PROTECT_KEYS is answered as KADM5_AUTH_CHANGEPW.
             if g.get_in_realm(&targ, &targ_realm)
                 .is_some_and(|p| p.attributes & krb5_kdc::KDB_LOCKDOWN_KEYS != 0)
             {
@@ -874,7 +891,8 @@ mod tests {
 
     #[test]
     fn a_kpasswd_reply_leaves_from_the_address_the_request_was_sent_to() {
-        // MIT `send_to_from` (`lib/apputils/udppktinfo.c:443-474`): kpasswd's reply on a wildcard socket leaves from the request's destination.
+        // MIT: `send_to_from` (lib/apputils/udppktinfo.c:443-474)
+        // kpasswd's reply on a wildcard socket leaves from the request's destination.
         let (store, acl) = bootstrap_documented().unwrap();
         let key = store
             .get_name(&kadmin_changepw())
@@ -1052,7 +1070,8 @@ mod tests {
             super::kpasswd_quality_log(krb5_kdc::PWQUAL_PRINC),
             "Password may not match principal name"
         );
-        // MIT `check_against_policy` (`lib/kadm5/srv/server_misc.c:82-101`): the floors return their codes with no sentence.
+        // MIT: `check_against_policy` (lib/kadm5/srv/server_misc.c:82-101)
+        // the floors return their codes with no sentence.
         assert_eq!(
             super::kpasswd_quality_log("min_length 8"),
             "Password is too short"
@@ -1061,12 +1080,14 @@ mod tests {
             super::kpasswd_quality_log("min_classes 3"),
             "Password does not contain enough character classes"
         );
-        // MIT `check_pw_reuse` (`lib/kadm5/srv/svr_principal.c:959-959`): reuse returns its code with no sentence.
+        // MIT: `check_pw_reuse` (lib/kadm5/srv/svr_principal.c:959-959)
+        // reuse returns its code with no sentence.
         assert_eq!(
             super::kpasswd_quality_log("history"),
             "Cannot reuse password"
         );
-        // MIT `dict_check` (`lib/kadm5/srv/pwqual_dict.c:228-231`): a dictionary hit returns its code with no sentence.
+        // MIT: `dict_check` (lib/kadm5/srv/pwqual_dict.c:228-231)
+        // a dictionary hit returns its code with no sentence.
         assert_eq!(
             super::kpasswd_quality_log(krb5_kdc::PWQUAL_DICT),
             "Password is in the password dictionary"

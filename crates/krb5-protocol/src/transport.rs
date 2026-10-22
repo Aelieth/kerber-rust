@@ -48,8 +48,10 @@ pub fn exchange(profile: &Krb5Conf, addr: &KdcAddr, request: &[u8]) -> Result<Ve
 }
 
 /// [`exchange`] of an AS or TGS request to `realm`'s KDC, traced as MIT traces it.
-/// MIT `k5_sendto_kdc` (`lib/krb5/os/sendto_kdc.c:446-560`): the request's size and realm are traced before the KDC is located and contacted.
-/// MIT `k5_sendto` (`lib/krb5/os/sendto_kdc.c:1537-1600`): when that location list has more than one KDC and `addr` is its first, each entry is contacted. UDP then TCP, one second each, then two seconds, then two UDP passes at four and eight seconds. One KDC keeps [`exchange_one`]'s waits. An explicit address that is not that first KDC is contacted alone. HTTPS is not used.
+// MIT: `k5_sendto_kdc` (lib/krb5/os/sendto_kdc.c:446-560)
+/// the request's size and realm are traced before the KDC is located and contacted.
+// MIT: `k5_sendto` (lib/krb5/os/sendto_kdc.c:1537-1600)
+/// when that location list has more than one KDC and `addr` is its first, each entry is contacted. UDP then TCP, one second each, then two seconds, then two UDP passes at four and eight seconds. One KDC keeps [`exchange_one`]'s waits. An explicit address that is not that first KDC is contacted alone. HTTPS is not used.
 pub(crate) fn sendto_kdc(
     profile: &Krb5Conf,
     addr: &KdcAddr,
@@ -58,7 +60,8 @@ pub(crate) fn sendto_kdc(
     kind: SendKind,
 ) -> Result<Vec<u8>, Error> {
     trace::sendto_kdc(request.len(), realm.as_bytes(), false, false);
-    // MIT `k5_locate_server` (`lib/krb5/os/locate_kdc.c:853-878`): once per send. A caller that already located `realm` handed that list down; this send does not query again.
+    // MIT: `k5_locate_server` (lib/krb5/os/locate_kdc.c:853-878)
+    // once per send. A caller that already located `realm` handed that list down; this send does not query again.
     let found = krb5_config::take_handed_kdcs(realm, &addr.host, addr.port)
         .unwrap_or_else(|| profile.kdcs_for(realm).unwrap_or_default());
     let walk = found.len() > 1
@@ -166,8 +169,10 @@ impl<'a> Passes<'a> {
         None
     }
 
-    /// MIT `maybe_send` (`lib/krb5/os/sendto_kdc.c:1015-1018`): later passes resend UDP only.
-    /// MIT `resolve_server` (`lib/krb5/os/sendto_kdc.c:827-832`): an entry that names one transport uses that transport only.
+    // MIT: `maybe_send` (lib/krb5/os/sendto_kdc.c:1015-1018)
+    /// later passes resend UDP only.
+    // MIT: `resolve_server` (lib/krb5/os/sendto_kdc.c:827-832)
+    /// an entry that names one transport uses that transport only.
     fn udp_one(&mut self, index: usize, initial: bool) -> Option<Vec<u8>> {
         if self.servers[index].transport == KdcTransport::Tcp {
             return None;
@@ -257,8 +262,10 @@ impl<'a> Passes<'a> {
     }
 }
 
-/// MIT `resolve_server` (`lib/krb5/os/sendto_kdc.c:856-858`): a name that does not resolve adds no connection.
-/// MIT `translate_ai_error` (`lib/krb5/os/sendto_kdc.c:776-779`): that miss is not an error.
+// MIT: `resolve_server` (lib/krb5/os/sendto_kdc.c:856-858)
+/// a name that does not resolve adds no connection.
+// MIT: `translate_ai_error` (lib/krb5/os/sendto_kdc.c:776-779)
+/// that miss is not an error.
 fn exchange_passes(
     addrs: &[(KdcAddr, KdcTransport)],
     request: &[u8],
@@ -294,7 +301,8 @@ fn exchange_passes(
 }
 
 /// A UDP socket of `dest`'s family. Loopback binds loopback so a reply stays on `lo`.
-/// MIT `start_connection` (`lib/krb5/os/sendto_kdc.c:884-990`): `socket(state->addr.family, ...)`.
+// MIT: `start_connection` (lib/krb5/os/sendto_kdc.c:884-990)
+/// `socket(state->addr.family, ...)`.
 fn udp_socket_for(dest: &SocketAddr) -> std::io::Result<UdpSocket> {
     let ip = match (dest.ip().is_loopback(), dest.is_ipv4()) {
         (true, true) => IpAddr::V4(Ipv4Addr::LOCALHOST),
@@ -438,7 +446,8 @@ pub fn exchange_with_failover(
     Err(last)
 }
 
-/// MIT `k5_init_creds_get` (`get_in_tkt.c:570-572`): a response-too-big error retries the same request over TCP.
+// MIT: `k5_init_creds_get` (get_in_tkt.c:570-572)
+/// a response-too-big error retries the same request over TCP.
 /// A UDP timeout prefers the TCP error, because a reply that cannot fit in a datagram otherwise hides that failure. `traced` is the realm and exchange of a [`sendto_kdc`] request, whose TCP retry is traced as a second send.
 fn exchange_one(
     addr: &KdcAddr,
@@ -501,7 +510,8 @@ fn exchange_one(
     reply
 }
 
-/// MIT `init_creds_validate_reply` (`lib/krb5/krb/get_in_tkt.c:1081-1115`): an AS caller first traces the error itself.
+// MIT: `init_creds_validate_reply` (lib/krb5/krb/get_in_tkt.c:1081-1115)
+/// an AS caller first traces the error itself.
 fn trace_retry_tcp(realm: &str, len: usize, kind: SendKind) {
     match kind {
         SendKind::As => {
@@ -543,7 +553,8 @@ pub(crate) fn errno(e: &std::io::Error) -> i32 {
     e.raw_os_error().unwrap_or(0)
 }
 
-/// MIT `service_udp_read` (`sendto_kdc.c:1209-1216`): a UDP read is taken from the connected peer, and a receive error drops that attempt.
+// MIT: `service_udp_read` (sendto_kdc.c:1209-1216)
+/// a UDP read is taken from the connected peer, and a receive error drops that attempt.
 /// This socket is not connected, so a datagram whose source is not the KDC address is ignored and is not the reply.
 fn exchange_udp(dest: SocketAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
     let ra = RemoteAddr {
@@ -614,9 +625,12 @@ fn exchange_udp(dest: SocketAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
     Err(last)
 }
 
-/// MIT `service_tcp_connect` (`lib/krb5/os/sendto_kdc.c:1098-1112`): a connection that fails is traced and closed.
-/// MIT `service_tcp_write` (`lib/krb5/os/sendto_kdc.c:1115-1146`): the request is traced as it is written.
-/// MIT `service_tcp_read` (`lib/krb5/os/sendto_kdc.c:1149-1200`): a read that fails or ends early is traced and closed, a length over 1 MiB closed.
+// MIT: `service_tcp_connect` (lib/krb5/os/sendto_kdc.c:1098-1112)
+/// a connection that fails is traced and closed.
+// MIT: `service_tcp_write` (lib/krb5/os/sendto_kdc.c:1115-1146)
+/// the request is traced as it is written.
+// MIT: `service_tcp_read` (lib/krb5/os/sendto_kdc.c:1149-1200)
+/// a read that fails or ends early is traced and closed, a length over 1 MiB closed.
 fn exchange_tcp(sa: SocketAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
     tcp_exchange(sa, request, TIMEOUT, TIMEOUT)
 }
@@ -662,7 +676,8 @@ fn tcp_round_trip(
     stream
         .set_write_timeout(Some(io_timeout))
         .map_err(|e| Error::transport_msg(e.to_string()))?;
-    // MIT `service_tcp_write` (`lib/krb5/os/sendto_kdc.c:1124-1125`): the length and the request
+    // MIT: `service_tcp_write` (lib/krb5/os/sendto_kdc.c:1124-1125)
+    // the length and the request
     // go out in one writev.
     trace::sendto_kdc_tcp_send(ra);
     crate::framing::write_messages(&mut stream, &[request]).map_err(|e| {

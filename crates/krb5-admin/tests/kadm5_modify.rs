@@ -1,6 +1,8 @@
 //! `kadm5_modify_principal` validates TL type and fail_auth_count before the store write.
-//! MIT `xdr_krb5_tl_data` (`kadm_rpc_xdr.c:349-349`): a TL type that does not decode as an int16 fails the decode.
-//! MIT `krb5_dbe_lookup_mod_princ_data` (`kdb5.c:1637-1663`): the mod principal is parsed from `KRB5_TL_MOD_PRINC` after its 4-byte time.
+// MIT: `xdr_krb5_tl_data` (kadm_rpc_xdr.c:349-349)
+//! a TL type that does not decode as an int16 fails the decode.
+// MIT: `krb5_dbe_lookup_mod_princ_data` (kdb5.c:1637-1663)
+//! the mod principal is parsed from `KRB5_TL_MOD_PRINC` after its 4-byte time.
 //! The mod name `GET_PRINCIPAL` returns is the RPC caller's GSS name, never a fixed `kadmin/admin@REALM`.
 
 #[path = "common/mod.rs"]

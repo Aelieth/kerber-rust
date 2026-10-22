@@ -185,7 +185,8 @@ fn chpass_runs_empty_and_princ_modules() {
         rejected(sess.change_password(&user(), TEST_REALM.to_ascii_lowercase().as_bytes())),
         DICT
     );
-    // MIT `kadm5_create_policy` (`svr_policy.c:114-114`): addpol defaults pw_min_length to 1.
+    // MIT: `kadm5_create_policy` (svr_policy.c:114-114)
+    // addpol defaults pw_min_length to 1.
     assert_eq!(rejected(sess.change_password(&user(), b"")), "min_length 1");
     sess.change_password(&user(), b"userpassword").unwrap();
 }

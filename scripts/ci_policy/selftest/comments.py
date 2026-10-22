@@ -50,6 +50,8 @@ def _self_test_comments() -> None:
             "inner-doc-block": "/*! MIT `krb5_rd_req` (`rd_req.c:10-20`): refuses a replay */\n",
             "nested-block": "/* outer /* MIT `krb5_rd_req` (`rd_req.c:10-20`): refuses a replay */ still outer */\n",
             "pointer": "// MIT krb5_db_def_rename_principal; see docs/parity/a1-store.md\n",
+            "exempt-cite": "// MIT: `krb5_rd_req` (rd_req.c:10-20)\n",
+            "exempt-cite-sum": "// MIT: `create_history_entry` + `add_to_history` (lib/kadm5/srv/svr_principal.c:1270-1330)\n",
         }
         for body in accepted.values():
             good.write_text(body, encoding="utf-8")
@@ -92,6 +94,7 @@ def _self_test_comments() -> None:
             "pointer-unnamed": "// MIT krb5_other; see docs/parity/a1-store.md\n",
             "pointer-missing": "// MIT krb5_db_def_rename_principal; see docs/parity/no-such.md\n",
             "pointer-bad": "// MIT krb5_db_def_rename_principal; see docs/parity/\n",
+            "cite-with-backticks": "// MIT: `f` (`a.c:1-2`)\n",
         }
         for shape, body in rejected.items():
             good.write_text(body, encoding="utf-8")
@@ -129,7 +132,7 @@ def _self_test_comments() -> None:
         )
         # The shape names are part of the fixture, so a deleted shape is a
         # missing key, not a silent pass.
-        if len(accepted) != 19 or len(rejected) != 33:
+        if len(accepted) != 21 or len(rejected) != 34:
             _die("mit anchor fixtures dropped a shape")
     finally:
         subprocess.run(["rm", "-rf", str(anchor_root)], check=False)
@@ -208,6 +211,9 @@ def _self_test_comments() -> None:
             "typedef-list-tail": "// MIT `handle_rec` (`internal.h:3-3`): the handle\n",
             "rpcgen-typedef": "// MIT `kdb_last_t` (`iprop.h:1-4`): the last entry\n",
             "asn1-comment": "// MIT `SecureCookie` (`asn1_k_encode.c:2-4`): the cookie\n",
+            "new-form": "// MIT: `krb5_get_init_creds_password` (gic_pwd.c:14-18)\n",
+            "new-form-defined": "// MIT: `krb5_get_init_creds_password` (gic_pwd.c)\n",
+            "new-form-sum": "// MIT: `helper` + `krb5_get_init_creds_password` (gic_pwd.c)\n",
         }
         for label, body in holds.items():
             if truth(body) != 0:
@@ -237,6 +243,9 @@ def _self_test_comments() -> None:
             "errcode-outside": "// MIT `KADM5_FAILURE` (`kadm_err.et:3-3`): unspecified\n",
             "asn1-outside": "// MIT `SecureCookie` (`asn1_k_encode.c:6-6`): the cookie\n",
             "path-boundary": "// MIT `init_realm` (`dc/main.c:2-4`): realm first\n",
+            "new-form-outside": "// MIT: `krb5_get_init_creds_password` (gic_pwd.c:14-20)\n",
+            "new-form-undefined": "// MIT: `not_a_symbol` (gic_pwd.c)\n",
+            "new-form-sum-outside": "// MIT: `helper` + `krb5_get_init_creds_password` (gic_pwd.c:14-18)\n",
         }
         for label, body in breaks.items():
             if truth(body) != 1:
@@ -245,7 +254,7 @@ def _self_test_comments() -> None:
         check_mit_anchor_truth(truth_root, fake, allow=1)
         _must_die_msg("mit anchor truth 1 != allow 0", check_mit_anchor_truth, truth_root, fake, allow=0)
         _must_die_msg("_AMBIGUOUS_MIT_BASENAMES differs", _check_ambiguous_pin, fake)
-        if len(holds) != 17 or len(breaks) != 16:
+        if len(holds) != 20 or len(breaks) != 19:
             _die("mit anchor truth fixtures dropped a case")
     finally:
         subprocess.run(["rm", "-rf", str(truth_root)], check=False)

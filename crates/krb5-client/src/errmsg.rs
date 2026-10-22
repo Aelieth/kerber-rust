@@ -2,7 +2,8 @@ use std::fmt;
 use std::io;
 use std::path::Path;
 
-// MIT `default_com_err_proc` (`com_err.c:47-96`): `error_message(code)`, not the extended
+// MIT: `default_com_err_proc` (com_err.c:47-96)
+// `error_message(code)`, not the extended
 #[macro_export]
 macro_rules! com_err {
     ($prog:expr, $err:expr, $($ctx:tt)*) => {{
@@ -77,7 +78,8 @@ impl Krb5Error {
         }
     }
 
-    // MIT `k5_sendto_kdc` (`sendto_kdc.c:523-529`): no answer is "Cannot contact any KDC for
+    // MIT: `k5_sendto_kdc` (sendto_kdc.c:523-529)
+    // no answer is "Cannot contact any KDC for
     #[must_use]
     pub fn from_protocol(e: &krb5_protocol::Error, realm: &str) -> Self {
         match e {
@@ -100,8 +102,10 @@ impl Krb5Error {
     }
 
     // MIT verify_as_reply; see docs/parity/b1-client.md
-    // MIT `init_creds_step_reply` (`get_in_tkt.c:1762-1766`): a KDC error, including code 60, is the
-    // MIT `krb5_init_creds_step` (`get_in_tkt.c:1936-1946`): an unknown client is "Client
+    // MIT: `init_creds_step_reply` (get_in_tkt.c:1762-1766)
+    // a KDC error, including code 60, is the
+    // MIT: `krb5_init_creds_step` (get_in_tkt.c:1936-1946)
+    // an unknown client is "Client
     #[must_use]
     pub fn from_as(e: &krb5_protocol::Error, client: &str, realm: &str) -> Self {
         use krb5_protocol::Error as E;
@@ -123,7 +127,8 @@ impl Krb5Error {
         }
     }
 
-    // MIT `krb5int_process_tgs_reply` (`lib/krb5/krb/gc_via_tkt.c:193-216`): an unknown server's error with e-text sets the message "Server <the error's server> not found in Kerberos database"; a generic error with e-text sets "KDC returned error string: \<text\>".
+    // MIT: `krb5int_process_tgs_reply` (lib/krb5/krb/gc_via_tkt.c:193-216)
+    // an unknown server's error with e-text sets the message "Server <the error's server> not found in Kerberos database"; a generic error with e-text sets "KDC returned error string: \<text\>".
     #[must_use]
     pub fn from_tgs(e: &krb5_protocol::Error, realm: &str) -> Self {
         if let krb5_protocol::Error::KrbError {
@@ -155,7 +160,8 @@ impl Krb5Error {
         }
     }
 
-    // MIT `krb5_cc_default` (`ccdefault.c:48-53`): a default name whose `%{token}` does not expand
+    // MIT: `krb5_cc_default` (ccdefault.c:48-53)
+    // a default name whose `%{token}` does not expand
     #[must_use]
     pub fn from_ccname(e: &krb5_config::Error) -> Self {
         match e {
@@ -186,7 +192,8 @@ impl Krb5Error {
         Self::new(Code::Other, text)
     }
 
-    // MIT `kcmio_unix_socket_connect` (`cc_kcm.c:313-330`): a socket that is not there, or a
+    // MIT: `kcmio_unix_socket_connect` (cc_kcm.c:313-330)
+    // a socket that is not there, or a
     #[must_use]
     pub fn from_kcm(e: &io::Error) -> Self {
         if krb5_protocol::kcm_no_server(e) {
@@ -198,8 +205,10 @@ impl Krb5Error {
         }
     }
 
-    // MIT `set_errmsg_filename` (`cc_file.c:117-124`): "\<message\> (filename: \<path\>)".
-    // MIT `open_cache_file` (`cc_file.c:347-352`): a lock failure is the lock's errno, not `interpret_errno`'s code.
+    // MIT: `set_errmsg_filename` (cc_file.c:117-124)
+    // "\<message\> (filename: \<path\>)".
+    // MIT: `open_cache_file` (cc_file.c:347-352)
+    // a lock failure is the lock's errno, not `interpret_errno`'s code.
     #[must_use]
     pub fn from_file_cache(e: &io::Error, path: &Path) -> Self {
         let code = match krb5_protocol::FccFailure::of(e) {
@@ -217,7 +226,8 @@ impl Krb5Error {
         Self::new(code, format!("{text} (filename: {})", path.display()))
     }
 
-    // MIT `fcc_replace` (`cc_file.c:1286-1337`): the error of the write that replaces a cache
+    // MIT: `fcc_replace` (cc_file.c:1286-1337)
+    // the error of the write that replaces a cache
     #[must_use]
     pub fn from_cache_write(e: &io::Error) -> Self {
         match interpret_errno(e) {
@@ -227,7 +237,8 @@ impl Krb5Error {
     }
 }
 
-// MIT `interpret_errno` (`cc_file.c:1346-1389`): a missing path is `KRB5_FCC_NOFILE`, a refused
+// MIT: `interpret_errno` (cc_file.c:1346-1389)
+// a missing path is `KRB5_FCC_NOFILE`, a refused
 fn interpret_errno(e: &io::Error) -> Code {
     use nix::errno::Errno;
     let Some(n) = e.raw_os_error() else {
@@ -254,15 +265,18 @@ fn code_text(code: Code) -> &'static str {
         Code::BadIntegrity => "Decrypt integrity check failed",
         // MIT KRB5_FCC_NOFILE; see docs/parity/b1-client.md
         Code::FccNofile => "No credentials cache found",
-        // MIT `KRB5_FCC_PERM` (`krb5_err.et:262-262`): the text.
+        // MIT: `KRB5_FCC_PERM` (krb5_err.et:262-262)
+        // the text.
         Code::FccPerm => "Credentials cache permissions incorrect",
         // MIT KRB5_CC_NOTFOUND; see docs/parity/b1-client.md
         Code::CcNotfound => "Matching credential not found",
         // MIT KRB5_CC_UNKNOWN_TYPE; see docs/parity/b1-client.md
         Code::CcUnknownType => "Unknown credential cache type",
-        // MIT `KRB5_KT_UNKNOWN_TYPE` (`krb5_err.et:244-244`): the text.
+        // MIT: `KRB5_KT_UNKNOWN_TYPE` (krb5_err.et:244-244)
+        // the text.
         Code::KtUnknownType => "Unknown Key table type",
-        // MIT `KRB5KRB_AP_WRONG_PRINC` (`krb5_err.et:196-196`): the text.
+        // MIT: `KRB5KRB_AP_WRONG_PRINC` (krb5_err.et:196-196)
+        // the text.
         Code::WrongPrinc => "Wrong principal in request",
         // MIT KRB5KRB_AP_ERR_TKT_INVALID; see docs/parity/b1-client.md
         Code::TktInvalid => "Ticket has invalid flag set",
@@ -270,22 +284,28 @@ fn code_text(code: Code) -> &'static str {
         Code::KdcUnreach => "Cannot contact any KDC for requested realm",
         // MIT KRB5_REALM_UNKNOWN; see docs/parity/b1-client.md
         Code::RealmUnknown => "Cannot find KDC for requested realm",
-        // MIT `KRB5_PARSE_MALFORMED` (`krb5_err.et:181-181`): the text.
+        // MIT: `KRB5_PARSE_MALFORMED` (krb5_err.et:181-181)
+        // the text.
         Code::ParseMalformed => "Malformed representation of principal",
-        // MIT `KRB5_CONFIG_NODEFREALM` (`krb5_err.et:310-310`): the text.
+        // MIT: `KRB5_CONFIG_NODEFREALM` (krb5_err.et:310-310)
+        // the text.
         Code::NoDefRealm => "Configuration file does not specify default realm",
         Code::Profile(p) => p.text(),
-        // MIT `KRB5_FCC_INTERNAL` (`krb5_err.et:264-264`): the text.
+        // MIT: `KRB5_FCC_INTERNAL` (krb5_err.et:264-264)
+        // the text.
         Code::FccInternal => "Internal credentials cache error",
         // MIT KRB5_KDCREP_MODIFIED; see docs/parity/b1-client.md
         Code::KdcrepModified => "KDC reply did not match expectations",
-        // MIT `KRB5_KDCREP_SKEW` (`krb5_err.et:201-201`): the text.
+        // MIT: `KRB5_KDCREP_SKEW` (krb5_err.et:201-201)
+        // the text.
         Code::KdcrepSkew => "Clock skew too great in KDC reply",
-        // MIT `KRB5_CC_IO` (`krb5_err.et:261-261`): the text.
+        // MIT: `KRB5_CC_IO` (krb5_err.et:261-261)
+        // the text.
         Code::CcIo => "Credentials cache I/O operation failed",
         // MIT KRB5_CC_FORMAT; see docs/parity/b1-client.md
         Code::CcFormat => "Bad format in credentials cache",
-        // MIT `KRB5_CCACHE_BADVNO` (`krb5_err.et:292-292`): the text.
+        // MIT: `KRB5_CCACHE_BADVNO` (krb5_err.et:292-292)
+        // the text.
         Code::CcBadVno => "Unsupported credentials cache format version number",
         // MIT KRB5_KCM_NO_SERVER; see docs/parity/b1-client.md
         Code::KcmNoServer => "No KCM server found",

@@ -229,7 +229,8 @@ impl PrincipalStore {
 
     /// Read the database again when another process changed it since this store read it.
     /// Kadmind and the KDC are separate processes sharing the database. Holding the database's lock shared, its age and its file's identity are compared with what this store last read, and the database is read again when they differ; the dump rows with the lockout attributes of `principal.lockout` and the named policies come from disk, and the kdc.conf ticket policy, the password dictionary, the lockout state this process keeps (its open `principal.lockout` and any counts kept in memory), the update log it mapped and the PKINIT CA stay process-local, carried over and never copied. The KDC's lockout writes move neither the age nor the file, so a reader that needs them now merges them per entry ([`Self::merge_lockout`]).
-    /// MIT `ctx_lock` (`plugins/kdb/db2/kdb_db2.c:439-455`): each read takes the shared lock and reopens the database under it.
+    // MIT: `ctx_lock` (plugins/kdb/db2/kdb_db2.c:439-455)
+    /// each read takes the shared lock and reopens the database under it.
     /// [`Error::Db`] when the database's lock files do not open or the lock may not be taken (MIT's text), or the changed db or its stash cannot be read or parsed; [`Error::Crypto`] when the stash key does not decrypt it.
     pub fn reload_if_stale(&mut self) -> Result<(), Error> {
         let Some(db) = self.db_path().map(std::path::Path::to_path_buf) else {
@@ -322,7 +323,8 @@ impl PrincipalStore {
     }
 
     /// The store as the database holds it now, read while the caller holds `lock`, with the process-local state kept. A database that does not read again is named in the error, and the store stays as it was.
-    /// MIT `open_db` (`plugins/kdb/db2/kdb_db2.c:386-389`): a database that does not open again is named in the error.
+    // MIT: `open_db` (plugins/kdb/db2/kdb_db2.c:386-389)
+    /// a database that does not open again is named in the error.
     pub(crate) fn reread(&mut self, lock: &Arc<DbLock>) -> Result<(), Error> {
         tracing::info!(
             event = krb5_log::events::KDC_LISTEN,
@@ -459,8 +461,10 @@ impl PrincipalStore {
     /// One change to the database, whole, under its exclusive lock: the lock is taken (waiting for any other holder), the store is brought up to the database, `f` runs on the store, and when `f` returns `Ok` after a mutation the database is written once and its age moves forward; when `f` returns `Err`, what it changed is put back, so nothing of it stays in memory or on disk (a change that wrote part of itself early, or whose save failed, is read back from the database).
     /// A store with no database runs `f` alone, and so does a change inside a change.
     /// With an update log mapped as a primary's, each put and delete the change made is encoded before the write and appended to the log after it, one entry each, in order.
-    /// MIT `krb5_db2_put_principal` (`plugins/kdb/db2/kdb_db2.c:828-854`): a put takes the exclusive lock, writes, moves the age and unlocks.
-    /// MIT `ctx_lock` (`plugins/kdb/db2/kdb_db2.c:439-455`): the exclusive lock reopens the database, so the put starts from what is on disk.
+    // MIT: `krb5_db2_put_principal` (plugins/kdb/db2/kdb_db2.c:828-854)
+    /// a put takes the exclusive lock, writes, moves the age and unlocks.
+    // MIT: `ctx_lock` (plugins/kdb/db2/kdb_db2.c:439-455)
+    /// the exclusive lock reopens the database, so the put starts from what is on disk.
     /// The outer [`Error::Db`] when the lock may not be taken (MIT's `KRB5_KDB_CANTLOCK_DB` text, or a missing lock file), the database cannot be read again, an update cannot be encoded for the log, or the write fails (a writer that may not write the database is refused with MIT's text, and the store is read back), or the log cannot be written after the database was (the change stays, as MIT's put does); the inner result is `f`'s.
     pub fn change<T, E>(
         &mut self,
@@ -619,7 +623,8 @@ impl PrincipalStore {
     }
 
     /// Hold the database's lock exclusively until [`Self::unlock_database`], across changes: kadmin.local's `lock`. Every other process waits meanwhile.
-    /// MIT `kadm5_lock` (`lib/kadm5/srv/server_init.c:285-296`): `krb5_db_lock` in exclusive mode.
+    // MIT: `kadm5_lock` (lib/kadm5/srv/server_init.c:285-296)
+    /// `krb5_db_lock` in exclusive mode.
     /// [`Error::Db`] when the store has no database or the lock may not be taken (MIT's `KRB5_KDB_CANTLOCK_DB` text).
     pub fn lock_database(&mut self) -> Result<(), Error> {
         let lock = self.db_lock()?;
@@ -628,7 +633,8 @@ impl PrincipalStore {
     }
 
     /// Let go of the lock [`Self::lock_database`] took: kadmin.local's `unlock`.
-    /// MIT `kadm5_unlock` (`lib/kadm5/srv/server_init.c:298-309`): `krb5_db_unlock`.
+    // MIT: `kadm5_unlock` (lib/kadm5/srv/server_init.c:298-309)
+    /// `krb5_db_unlock`.
     /// [`Error::Db`] when no lock is held or the unlock fails.
     pub fn unlock_database(&mut self) -> Result<(), Error> {
         let lock = self.db_lock()?;

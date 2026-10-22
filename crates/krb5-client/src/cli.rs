@@ -30,7 +30,8 @@ pub struct KinitArgs {
     pub enterprise: bool,
     pub anonymous: bool,
     pub canonicalize: bool,
-    // MIT `add_preauth_opt` (`clients/kinit/kinit.c:196-219`): the attribute is what precedes the first `=`.
+    // MIT: `add_preauth_opt` (clients/kinit/kinit.c:196-219)
+    // the attribute is what precedes the first `=`.
     pub pa_opts: Vec<(String, String)>,
     pub armor_ccache: Option<String>,
     pub in_ccache: Option<String>,
@@ -54,7 +55,8 @@ pub struct KinitGateArgs {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum KinitParseError {
-    // MIT `parse_options` (`kinit.c:359-361`): `-4` exits at once, after what the loop printed.
+    // MIT: `parse_options` (kinit.c:359-361)
+    // `-4` exits at once, after what the loop printed.
     Krb4(UsageError),
     Usage(UsageError),
 }
@@ -499,7 +501,8 @@ pub struct KvnoGateArgs {
     pub renew_ticket: bool,
 }
 
-// MIT `xusage` (`kvno.c:41-52`): the usage text, `prog` naming the program.
+// MIT: `xusage` (kvno.c:41-52)
+// the usage text, `prog` naming the program.
 #[must_use]
 pub fn kvno_usage(prog: &str) -> String {
     format!(

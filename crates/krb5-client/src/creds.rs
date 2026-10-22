@@ -47,7 +47,8 @@ pub fn parse_name(ctx: &ClientContext, name: &str, enterprise: bool) -> Result<P
     Ok((krb5_protocol::realm(&realm), n))
 }
 
-// MIT `construct_matching_creds` (`get_creds.c:52-108`): the client and server, still valid,
+// MIT: `construct_matching_creds` (get_creds.c:52-108)
+// the client and server, still valid,
 pub struct MatchCreds<'a> {
     pub client: Option<&'a Princ>,
     pub server: &'a Princ,
@@ -58,7 +59,8 @@ pub struct MatchCreds<'a> {
 }
 
 impl MatchCreds<'_> {
-    // MIT `krb5int_cc_creds_match_request` (`cc_retr.c:151-191`): a user-to-user credential
+    // MIT: `krb5int_cc_creds_match_request` (cc_retr.c:151-191)
+    // a user-to-user credential
     fn matches(&self, c: &CcacheCred) -> bool {
         if c.is_config() || c.is_removed() {
             return false;
@@ -102,13 +104,15 @@ impl<'c> OpenCache<'c> {
         self.cc.primary.clone()
     }
 
-    // MIT `cache_get` (`get_creds.c:114-133`): the first credential matching `m`.
+    // MIT: `cache_get` (get_creds.c:114-133)
+    // the first credential matching `m`.
     #[must_use]
     pub fn retrieve(&self, m: &MatchCreds<'_>) -> Option<&CcacheCred> {
         self.cc.creds.iter().find(|c| m.matches(c))
     }
 
-    // MIT `krb5_cc_retrieve_cred` (`lib/krb5/ccache/ccfns.c:97-111`): a lookup that finds nothing for a server in the referral realm is made again with the client's realm.
+    // MIT: `krb5_cc_retrieve_cred` (lib/krb5/ccache/ccfns.c:97-111)
+    // a lookup that finds nothing for a server in the referral realm is made again with the client's realm.
     #[must_use]
     pub fn retrieve_referral(&self, m: &MatchCreds<'_>) -> Option<&CcacheCred> {
         let client = m.client?;
@@ -129,7 +133,8 @@ impl<'c> OpenCache<'c> {
         found
     }
 
-    // MIT `krb5_tkt_creds_init` (`lib/krb5/krb/get_creds.c:1143-1151`): the start realm is the cache's `start_realm` configuration, else the client's realm.
+    // MIT: `krb5_tkt_creds_init` (lib/krb5/krb/get_creds.c:1143-1151)
+    // the start realm is the cache's `start_realm` configuration, else the client's realm.
     fn start_realm(&self, client: &Princ) -> String {
         self.cc.get_config(None, "start_realm").map_or_else(
             || realm_str(&client.0),
@@ -137,7 +142,8 @@ impl<'c> OpenCache<'c> {
         )
     }
 
-    // MIT `fcc_store` (`cc_file.c:987-1026`): one append write of the record, under the file's exclusive lock; the error names the file.
+    // MIT: `fcc_store` (cc_file.c:987-1026)
+    // one append write of the record, under the file's exclusive lock; the error names the file.
     pub fn store(&mut self, cred: CcacheCred) -> Result<(), Krb5Error> {
         crate::trace::store(self.ctx, &self.spec, &cred);
         let stored = match &self.spec {
@@ -191,7 +197,8 @@ impl<'c> OpenCache<'c> {
     }
 }
 
-// MIT `k5_locate_server` (`locate_kdc.c:853-878`): a realm with no KDC is
+// MIT: `k5_locate_server` (locate_kdc.c:853-878)
+// a realm with no KDC is
 pub fn kdc_for_realm(profile: &Krb5Conf, realm: &str) -> Result<KdcAddr, Krb5Error> {
     let found = profile.kdcs_for(realm).unwrap_or_default();
     let Some(ep) = found.first() else {
@@ -285,10 +292,14 @@ impl GetCredsOptions {
 }
 
 // MIT krb5_get_credentials; see docs/parity/b1-client.md
-// MIT `check_cache` (`get_creds.c:1042-1065`): with `cached_only`, a credential missing from the
-// MIT `complete` (`get_creds.c:468-471`): the store's failure is ignored; so is a cross-realm TGT's.
-// MIT `step_get_tgt` (`get_creds.c:952-954`): a cross-realm TGT asked for on the path is stored, its failure ignored.
-// MIT `krb5_tkt_creds_step` (`lib/krb5/krb/get_creds.c:1292-1305`): a request the KDC answers with an unknown server is made again for the next candidate; with none left that error stands.
+// MIT: `check_cache` (get_creds.c:1042-1065)
+// with `cached_only`, a credential missing from the
+// MIT: `complete` (get_creds.c:468-471)
+// the store's failure is ignored; so is a cross-realm TGT's.
+// MIT: `step_get_tgt` (get_creds.c:952-954)
+// a cross-realm TGT asked for on the path is stored, its failure ignored.
+// MIT: `krb5_tkt_creds_step` (lib/krb5/krb/get_creds.c:1292-1305)
+// a request the KDC answers with an unknown server is made again for the next candidate; with none left that error stands.
 pub fn get_credentials(
     cache: &mut OpenCache,
     me: &Princ,
@@ -359,7 +370,8 @@ pub fn get_credentials(
     Ok(cred)
 }
 
-// MIT `begin` (`lib/krb5/krb/get_creds.c:1074-1087`): a server in the referral realm takes the start realm, and the request starts with the TGT for the server's realm.
+// MIT: `begin` (lib/krb5/krb/get_creds.c:1074-1087)
+// a server in the referral realm takes the start realm, and the request starts with the TGT for the server's realm.
 fn request_service(
     cache: &OpenCache,
     server: &Princ,
@@ -491,7 +503,8 @@ fn s4u_identify_user(
     identify_realm(profile, &user.1, &realm_str(&server.0), opts)
 }
 
-// MIT `k5_identify_realm` (`lib/krb5/krb/get_in_tkt.c:2062-2083`): the request asks for a 15-second ticket, neither renewable nor forwardable nor proxiable, canonicalized, and the realm it ends in is the client's.
+// MIT: `k5_identify_realm` (lib/krb5/krb/get_in_tkt.c:2062-2083)
+// the request asks for a 15-second ticket, neither renewable nor forwardable nor proxiable, canonicalized, and the realm it ends in is the client's.
 // MIT init_creds_step_request; see docs/parity/b1-client-preauth.md
 fn identify_realm(
     profile: &Krb5Conf,
@@ -545,9 +558,12 @@ fn identify_realm(
     ))
 }
 
-// MIT `krb5_get_credentials_for_proxy` (`s4u_creds.c:1201-1260`): S4U2Proxy for `client` (the
-// MIT `k5_get_proxy_cred_from_kdc` (`s4u_creds.c:1179-1188`): the KDC's credential is stored
-// MIT `kdcrep2creds` (`gc_via_tkt.c:64-74`): its client is the reply's, and it keeps the evidence
+// MIT: `krb5_get_credentials_for_proxy` (s4u_creds.c:1201-1260)
+// S4U2Proxy for `client` (the
+// MIT: `k5_get_proxy_cred_from_kdc` (s4u_creds.c:1179-1188)
+// the KDC's credential is stored
+// MIT: `kdcrep2creds` (gc_via_tkt.c:64-74)
+// its client is the reply's, and it keeps the evidence
 pub fn get_credentials_for_proxy(
     cache: &mut OpenCache,
     client: &Princ,
@@ -603,8 +619,10 @@ pub fn get_credentials_for_proxy(
     Ok(cred)
 }
 
-// MIT `get_valrenewed_creds` (`val_renew.c:136-179`): the server is `in_tkt_service` in the
-// MIT `get_new_creds` (`val_renew.c:47-74`): the cache's credential for that client and server,
+// MIT: `get_valrenewed_creds` (val_renew.c:136-179)
+// the server is `in_tkt_service` in the
+// MIT: `get_new_creds` (val_renew.c:47-74)
+// the cache's credential for that client and server,
 pub fn get_valrenewed_creds(
     ctx: &ClientContext,
     spec: &CcSpec,
@@ -643,7 +661,8 @@ pub fn get_valrenewed_creds(
     cred_from_tgs(client, &out)
 }
 
-// MIT `get_u2u_ticket` (`kvno.c:414-450`): the local TGT of the cache `spec`'s principal, its
+// MIT: `get_u2u_ticket` (kvno.c:414-450)
+// the local TGT of the cache `spec`'s principal, its
 pub fn get_u2u_ticket(ctx: &ClientContext, spec: CcSpec) -> Result<Ticket, Krb5Error> {
     let cache = OpenCache::open(ctx, spec)?;
     let me = cache.principal();
@@ -660,8 +679,10 @@ pub fn get_u2u_ticket(ctx: &ClientContext, spec: CcSpec) -> Result<Ticket, Krb5E
     decode(&cred.ticket).map_err(|e| Krb5Error::new(Code::Other, e.to_string()))
 }
 
-// MIT `krb5_server_decrypt_ticket_keytab` (`srv_dec_tkt.c:73-139`): `ticket` decrypts under a
-// MIT `decrypt_ticket_keyblock` (`srv_dec_tkt.c:43-70`): a ticket with the invalid flag set is
+// MIT: `krb5_server_decrypt_ticket_keytab` (srv_dec_tkt.c:73-139)
+// `ticket` decrypts under a
+// MIT: `decrypt_ticket_keyblock` (srv_dec_tkt.c:43-70)
+// a ticket with the invalid flag set is
 pub fn server_decrypt_ticket_keytab(keytab: &str, ticket: &Ticket) -> Result<(), Krb5Error> {
     let crate::KeytabName::File(path) = crate::kt_resolve(keytab)? else {
         return Err(Krb5Error::of(Code::WrongPrinc));

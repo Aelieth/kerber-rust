@@ -55,7 +55,8 @@ pub fn load_acl_file(actor: &str, path: Option<&std::path::Path>) -> Result<Acl,
     }
 }
 
-/// MIT `kadmin_parse_policy_args` (`kadmin.c:1600-1689`): the flags and the policy name MIT's `addpol` parses.
+// MIT: `kadmin_parse_policy_args` (kadmin.c:1600-1689)
+/// the flags and the policy name MIT's `addpol` parses.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PolicyArgs {
     /// Policy name (last argument).
@@ -80,7 +81,8 @@ pub struct PolicyArgs {
     pub allowed_keysalts: Option<String>,
 }
 
-/// MIT `strdur` (`kadmin.c:118-138`): formats a duration as `kadmin` prints it.
+// MIT: `strdur` (kadmin.c:118-138)
+/// formats a duration as `kadmin` prints it.
 #[must_use]
 pub fn strdur(duration: i64) -> String {
     let (neg, mut rest) = if duration < 0 {
@@ -268,7 +270,8 @@ impl<'a> AdminSession<'a> {
     }
 
     /// MIT `kadm5_create_principal_3` `passwd_check` for `addprinc [-policy P] -pw PW`: the named policy's floors (if the policy exists) and the built-in `dict` / `empty` / `princ` modules run before the principal is created.
-    /// MIT `kadm5_create_principal_3` (`svr_principal.c:364-373`): the policy is loaded, then `passwd_check` runs, before the entry exists.
+    // MIT: `kadm5_create_principal_3` (svr_principal.c:364-373)
+    /// the policy is loaded, then `passwd_check` runs, before the entry exists.
     /// [`Error::PasswordPolicy`] when `password` fails the policy's length or class floor or a quality module (`dict`, `empty`, `princ`); [`Error::Inner`] when the store cannot be reloaded.
     pub fn check_new_password(
         &mut self,
@@ -507,7 +510,8 @@ impl<'a> AdminSession<'a> {
         let realm = self.store.realm().to_owned();
         let acl = self.acl;
         let restrictions = acl.restrictions(&self.actor, Some(&tid));
-        // MIT `kadm5_modify_principal` (`lib/kadm5/srv/svr_principal.c:601-689`): the fields are set on the entry, then one put writes it.
+        // MIT: `kadm5_modify_principal` (lib/kadm5/srv/svr_principal.c:601-689)
+        // the fields are set on the entry, then one put writes it.
         self.change(|s, _, actor| {
             s.apply_admin_fields_in(
                 name,
@@ -664,7 +668,8 @@ impl<'a> AdminSession<'a> {
     }
 
     /// `modpol` on the merged record.
-    /// MIT `kadm5_modify_policy` (`svr_policy.c:292-322`): each masked field is merged into the stored record, and the min-life check reads the merged max life.
+    // MIT: `kadm5_modify_policy` (svr_policy.c:292-322)
+    /// each masked field is merged into the stored record, and the min-life check reads the merged max life.
     pub fn modify_policy_ent(&mut self, a: &PolicyArgs) -> Result<(), Error> {
         let _ = self.reload();
         let existing = self
@@ -699,7 +704,8 @@ impl<'a> AdminSession<'a> {
     }
 
     /// `getpol`, durations via `strdur`.
-    /// MIT `kadmin_getpol` (`kadmin.c:1794-1807`): prints the policy fields, the lifetimes and intervals via `strdur`.
+    // MIT: `kadmin_getpol` (kadmin.c:1794-1807)
+    /// prints the policy fields, the lifetimes and intervals via `strdur`.
     pub fn get_policy(&self, name: &str) -> Result<String, Error> {
         let p = self.store.policies().get(name).ok_or(Error::NotFound)?;
         let mut text = format!(

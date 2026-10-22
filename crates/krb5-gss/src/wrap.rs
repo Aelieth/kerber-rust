@@ -199,7 +199,8 @@ impl GssContext {
         Ok(self.unwrap_v3(token)?.0)
     }
 
-    // MIT `xdr_rpc_gss_unwrap_data` (`authgss_prot.c:238-240`): the RPCSEC_GSS privacy service
+    // MIT: `xdr_rpc_gss_unwrap_data` (authgss_prot.c:238-240)
+    // the RPCSEC_GSS privacy service
     pub fn unwrap_conf(&mut self, token: &[u8]) -> Result<(Vec<u8>, bool), Error> {
         self.unwrap_v3(token)
     }

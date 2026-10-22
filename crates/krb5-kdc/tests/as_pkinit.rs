@@ -168,9 +168,12 @@ fn stale_freshness_token_is_preauth_failed() {
 
 #[test]
 fn stale_freshness_token_logs_preauth_expired_and_the_as_req_line_says_24() {
-    // MIT `check_freshness_token` (`kdc/kdc_preauth.c:564-564`): a token the checks refuse, its age among them, is `KRB5KDC_ERR_PREAUTH_EXPIRED`.
-    // MIT `finish_verify_padata` (`kdc/kdc_preauth.c:1224-1228`): the module's message is the verify line's.
-    // MIT `filter_preauth_error` (`kdc/kdc_preauth.c:1092-1133`): 90 is off the pass-through list, so the `AS_REQ` line reads like a 24.
+    // MIT: `check_freshness_token` (kdc/kdc_preauth.c:564-564)
+    // a token the checks refuse, its age among them, is `KRB5KDC_ERR_PREAUTH_EXPIRED`.
+    // MIT: `finish_verify_padata` (kdc/kdc_preauth.c:1224-1228)
+    // the module's message is the verify line's.
+    // MIT: `filter_preauth_error` (kdc/kdc_preauth.c:1092-1133)
+    // 90 is off the pass-through list, so the `AS_REQ` line reads like a 24.
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     let ca = krb5_testkit::enable_pkinit(&mut store);
     let raw = encode(&stale_freshness_req(&ca)).expect("AS-REQ");
@@ -618,7 +621,8 @@ fn pkinit_forged_cms_is_rejected() {
     }
 }
 
-/// MIT `load_preauth_plugins` (`kdc/kdc_preauth.c:207-219`): no PKINIT identity, so the module is not loaded.
+// MIT: `load_preauth_plugins` (kdc/kdc_preauth.c:207-219)
+/// no PKINIT identity, so the module is not loaded.
 #[test]
 fn pkinit_without_provisioned_ca_is_rejected() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
@@ -844,7 +848,8 @@ fn pkinit_two_authpacks_same_second_both_issue() {
     krb5_kdc::issue_as(&store, &req2).expect("second AuthPack same second");
 }
 
-/// MIT `pkinit_server_verify_padata` (`plugins/preauth/pkinit/pkinit_srv.c:528-532`): no replay cache, so a replayed AuthPack inside the skew verifies again and issues a new ticket.
+// MIT: `pkinit_server_verify_padata` (plugins/preauth/pkinit/pkinit_srv.c:528-532)
+/// no replay cache, so a replayed AuthPack inside the skew verifies again and issues a new ticket.
 #[test]
 fn pkinit_replayed_authpack_is_issued_again() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
@@ -986,7 +991,8 @@ fn pkinit_enterprise_san_binds_issued_cname() {
 
 #[test]
 fn pkinit_padata_that_does_not_decode_logs_the_decoders_text() {
-    // MIT `pkinit_server_verify_padata` (`plugins/preauth/pkinit/pkinit_srv.c:479-483`): a PA-PK-AS-REQ the decoder refuses fails the module with the decoder's code.
+    // MIT: `pkinit_server_verify_padata` (plugins/preauth/pkinit/pkinit_srv.c:479-483)
+    // a PA-PK-AS-REQ the decoder refuses fails the module with the decoder's code.
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     let _ca = krb5_testkit::enable_pkinit(&mut store);
     for (n, (der, message)) in [
@@ -1026,7 +1032,8 @@ fn pkinit_padata_that_does_not_decode_logs_the_decoders_text() {
 
 #[test]
 fn unsigned_pkinit_for_a_client_that_is_not_anonymous_logs_its_message() {
-    // MIT `pkinit_server_verify_padata` (`plugins/preauth/pkinit/pkinit_srv.c:508-516`): an unsigned request from a client that is not anonymous is refused with this message.
+    // MIT: `pkinit_server_verify_padata` (plugins/preauth/pkinit/pkinit_srv.c:508-516)
+    // an unsigned request from a client that is not anonymous is refused with this message.
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     let _ca = krb5_testkit::enable_pkinit(&mut store);
     let kp = p256_generate().expect("ecdh");

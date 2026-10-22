@@ -61,6 +61,8 @@ any other `###` heading.
 
 - **ci.** The no-features nextest run and the fuzz-crate check are their own jobs. The `test` and `doc` budgets stay 360 s and 90 s. No test was removed.
 - **ci.** `form:` counts product comment characters against code characters; a `// MIT:` cite is exempt only as one line of at most 100 columns, else it fails.
+- **ci.** The anchor-form check leaves a `// MIT:` cite to the character gate, so a converted cite is not a stray line cite.
+- **ci.** The MIT truth check reads a `// MIT:` cite; a rangeless one must name a symbol that file defines.
 - **gss.** The nightly GSS gate checks that both acceptors report one host ticket's lifetime within 60 s.
 - **ci.** The audit job installs prebuilt cargo-audit 0.22.2 and runs `cargo audit --deny warnings`. It does not file issues.
 - **ci.** ci-policy prints the product and per-crate comment and test ratios and does not fail on them.

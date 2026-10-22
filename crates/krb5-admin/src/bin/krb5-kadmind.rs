@@ -53,7 +53,8 @@ const OPTIONS: &[MitOpt] = &[
     MitOpt::flag("--test-realm"),
 ];
 
-/// MIT `usage` (`kadmin/server/ovsec_kadmd.c:80-91`): the text on standard error, then exit 1.
+// MIT: `usage` (kadmin/server/ovsec_kadmd.c:80-91)
+/// the text on standard error, then exit 1.
 fn usage() -> ! {
     eprint!(
         "Usage: kadmind [-x db_args]* [-r realm] [-m] [-nofork] [-port port-number]\n\
@@ -67,7 +68,8 @@ fn usage() -> ! {
     std::process::exit(1);
 }
 
-/// MIT `fail_to_start` (`kadmin/server/ovsec_kadmd.c:100-114`): with an error, `<error> while <doing>, aborting` (the log line keeps MIT's trailing newline); without, `<what>, aborting`.
+// MIT: `fail_to_start` (kadmin/server/ovsec_kadmd.c:100-114)
+/// with an error, `<error> while <doing>, aborting` (the log line keeps MIT's trailing newline); without, `<what>, aborting`.
 fn fail_to_start(progname: &str, error: Option<&str>, msg: &str) -> ! {
     if let Some(e) = error {
         eprintln!("{progname}: {e} while {msg}, aborting");
@@ -178,7 +180,8 @@ fn main() {
     {
         klog::syslog(Severity::Warning, &line);
     }
-    // MIT `kadm5_init_krb5_context` (`lib/kadm5/srv/server_init.c:334-345`): kadmind's GSS contexts, as its own, read the KDC profile, kdc.conf ahead of krb5.conf; kpasswd's `krb5_rd_req` too.
+    // MIT: `kadm5_init_krb5_context` (lib/kadm5/srv/server_init.c:334-345)
+    // kadmind's GSS contexts, as its own, read the KDC profile, kdc.conf ahead of krb5.conf; kpasswd's `krb5_rd_req` too.
     let conf = AcceptorConfig::from_profile(&profile);
     let proponly = args.flag("-proponly");
     if proponly && !iprop.enabled {
@@ -212,7 +215,8 @@ fn main() {
     let listen =
         krb5_config::KadmindListen::for_realm(Some(&profile.kdc_context), &realm, port_arg);
 
-    // MIT `setup_loop` (`kadmin/server/ovsec_kadmd.c:134-174`): the signal handlers, then the listeners, before the ACL file is read.
+    // MIT: `setup_loop` (kadmin/server/ovsec_kadmd.c:134-174)
+    // the signal handlers, then the listeners, before the ACL file is read.
     let signals = Signals::install();
     let (listeners, kpasswd_udp, kpasswd_tcp, programs) = setup_loop(
         &progname,
@@ -451,7 +455,8 @@ fn setup_loop(
                     &Service::Kadm,
                 )
             });
-        // MIT `loop_add_unix_socket` (`lib/apputils/net-server.c:461-468`): kpasswd's `/path` entries are UNIX-domain sockets, which this port does not bind.
+        // MIT: `loop_add_unix_socket` (lib/apputils/net-server.c:461-468)
+        // kpasswd's `/path` entries are UNIX-domain sockets, which this port does not bind.
         for entry in kpasswd
             .into_iter()
             .flat_map(|l| l.split([',', ';', ' ']))
@@ -484,14 +489,16 @@ fn setup_loop(
     if added.is_err() {
         fail_to_start(progname, Some("Invalid argument"), "initializing network");
     }
-    // MIT `loop_setup_network` (`lib/apputils/net-server.c:1068-1068`): the line before the sockets are set up.
+    // MIT: `loop_setup_network` (lib/apputils/net-server.c:1068-1068)
+    // the line before the sockets are set up.
     klog::syslog(Severity::Info, "setting up network...");
     let (mut rpc, mut udp, mut tcp) = (Vec::new(), Vec::new(), Vec::new());
     let mut programs = Programs {
         kadm: false,
         iprop: false,
     };
-    // MIT `setup_addresses` (`lib/apputils/net-server.c:965-1042`): the list is set up in its order, and a socket that does not bind stops the daemon.
+    // MIT: `setup_addresses` (lib/apputils/net-server.c:965-1042)
+    // the list is set up in its order, and a socket that does not bind stops the daemon.
     for entry in list.entries() {
         let one = std::slice::from_ref(&entry.addr);
         match entry.kind {

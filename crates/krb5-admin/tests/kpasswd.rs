@@ -2011,7 +2011,8 @@ fn kpasswd_req_naming_receiver(
 
 /// A request whose KRB-PRIV names a receiver address that is none of the server's is refused, and the password stays; one that names none, or whose address is the host's, is read.
 /// `krb5_rd_priv` is called with no address set, and a refusal is HARDERROR "Failed decrypting request".
-/// MIT `k5_privsafe_check_addrs` (`lib/krb5/krb/privsafe.c:355-378`): the receiver address is looked up among the host's (`krb5_os_localaddr`, which leaves out 127.0.0.1).
+// MIT: `k5_privsafe_check_addrs` (lib/krb5/krb/privsafe.c:355-378)
+/// the receiver address is looked up among the host's (`krb5_os_localaddr`, which leaves out 127.0.0.1).
 #[test]
 fn kpasswd_request_naming_a_receiver_the_server_does_not_have_is_refused() {
     use krb5_crypto::{ProtocolKey, decrypt};
@@ -2326,7 +2327,8 @@ fn kpasswd_session_enctype_outside_permitted_is_autherror() {
     let req = mit_shaped_kpasswd_req(&as_out, &user, &subkey, b"p15a-new-pass-3");
     let shared = shared_dump(store);
     let rep = handle_kpasswd_rfc3244(&shared, &acl, &conf, &ReplayCache::new(), &req).unwrap();
-    // MIT `krb5_dbe_def_search_enctype` (`kdb_default.c:60-61`): the KDB keytab offers no key of a non-permitted enctype, so `krb5_rd_req` fails and `process_chpw_request` answers with the framed KRB-ERROR whose e-data is AUTHERROR "Failed reading application request".
+    // MIT: `krb5_dbe_def_search_enctype` (kdb_default.c:60-61)
+    // the KDB keytab offers no key of a non-permitted enctype, so `krb5_rd_req` fails and `process_chpw_request` answers with the framed KRB-ERROR whose e-data is AUTHERROR "Failed reading application request".
     assert_eq!(u16::from_be_bytes([rep[4], rep[5]]), 0, "no AP-REP");
     let err: krb5_types::KrbError = krb5_asn1::decode(&rep[6..]).unwrap();
     let e_data = err.e_data.unwrap();

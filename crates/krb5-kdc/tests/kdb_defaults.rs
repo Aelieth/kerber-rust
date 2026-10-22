@@ -1,12 +1,16 @@
 //! Store-side realm defaults: the fields `kadm5_create_principal_3` takes when the mask
 //! leaves them out, and the local-verb shape of `impose_restrictions`.
-//! MIT `kadm5_create_principal_3` (`svr_principal.c:381-401`): a field absent from the mask
+// MIT: `kadm5_create_principal_3` (svr_principal.c:381-401)
+//! a field absent from the mask
 //! takes `handle->params.*`.
-//! MIT `kadm5_get_config_params` (`alt_prof.c:573-632`): the realm defaults behind
+// MIT: `kadm5_get_config_params` (alt_prof.c:573-632)
+//! the realm defaults behind
 //! `handle->params.*` (`max_life`, `max_rlife`, `expiration`, `flags`).
-//! MIT `impose_restrictions` (`auth.c:205-265`): an ACL line's restrictions rewrite the record
+// MIT: `impose_restrictions` (auth.c:205-265)
+//! an ACL line's restrictions rewrite the record
 //! and the mask.
-//! MIT `auth_restrict` (`auth.c:267-272`): the hook that applies them, given the record and
+// MIT: `auth_restrict` (auth.c:267-272)
+//! the hook that applies them, given the record and
 //! the mask.
 
 #[path = "common/mod.rs"]

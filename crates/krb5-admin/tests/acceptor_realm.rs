@@ -1,5 +1,6 @@
 //! Realm-qualified kadm5 acceptor checks.
-//! MIT `CHANGEPW_SERVICE` (`server_stubs.c:28-32`): the acceptor name is compared with the changepw service name, and with the old changepw name when one is set.
+// MIT: `CHANGEPW_SERVICE` (server_stubs.c:28-32)
+//! the acceptor name is compared with the changepw service name, and with the old changepw name when one is set.
 
 use krb5_admin::{
     changepw_acceptor, check_auth_gssapi_names, check_iprop_rpcsec_auth, check_rpcsec_auth,
@@ -46,7 +47,8 @@ fn acceptor(parts: &[&str]) -> GssContext {
 }
 
 /// deviation on purpose (`docs/mit-deviations.md`).
-/// MIT `check_iprop_rpcsec_auth` (`ipropd_svc.c:513-514`): `strncmp("kiprop", c1->data, c1->length)` takes any prefix of `kiprop`.
+// MIT: `check_iprop_rpcsec_auth` (ipropd_svc.c:513-514)
+/// `strncmp("kiprop", c1->data, c1->length)` takes any prefix of `kiprop`.
 #[test]
 fn the_iprop_program_takes_kiprop_alone_not_its_prefixes() {
     let host = "testhost.kerber.test";

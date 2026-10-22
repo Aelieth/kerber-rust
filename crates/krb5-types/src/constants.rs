@@ -71,12 +71,14 @@ pub mod err {
     pub const INCONSISTENT_KEY_PURPOSE: i32 = 77;
     pub const DIGEST_IN_SIGNED_DATA_NOT_ACCEPTED: i32 = 80;
     /// invalid flag set". A library-local code, not an RFC 4120 wire number.
-    // MIT `errcode_to_protocol` (`kdc_util.c:691-697`): clamps offsets over 128 to `GENERIC`
+    // MIT: `errcode_to_protocol` (kdc_util.c:691-697)
+    // clamps offsets over 128 to `GENERIC`
     pub const TKT_INVALID: i32 = 145;
     /// com_err base ×256 with the 2³² wrap). Library-local: not an RFC 4120
     // MIT filter_preauth_error; see docs/parity/a3-preauth.md
     // MIT finish_process_as_req; see docs/parity/b1-crypto-keys.md
-    // MIT `finish_dispatch_cache` (`dispatch.c:78-78`): keeps the request's null lookaside
+    // MIT: `finish_dispatch_cache` (dispatch.c:78-78)
+    // keeps the request's null lookaside
     pub const DISCARD: i32 = -1_750_600_189;
 }
 
@@ -102,7 +104,8 @@ pub mod ku {
     pub const GSS_ACCEPTOR_SIGN: u32 = 23;
     pub const GSS_INITIATOR_SEAL: u32 = 24;
     pub const GSS_INITIATOR_SIGN: u32 = 25;
-    // MIT `verify_s4u_x509_user_checksum` (`kdc_util.c:1374-1374`): the request checksum is
+    // MIT: `verify_s4u_x509_user_checksum` (kdc_util.c:1374-1374)
+    // the request checksum is
     pub const PA_S4U_X509_USER_REQUEST: u32 = 26;
     // MIT kdc_make_s4u2self_rep; see docs/parity/a2-as.md
     pub const PA_S4U_X509_USER_REPLY: u32 = 27;
@@ -112,9 +115,11 @@ pub mod ku {
     pub const FAST_FINISHED: u32 = 53;
     #[allow(dead_code)]
     pub const FAST_COOKIE: u32 = 54;
-    // MIT `KRB5_KEYUSAGE_PA_FX_COOKIE` (`krb5.hin:1006-1006`): 513, used for encrypted FAST
+    // MIT: `KRB5_KEYUSAGE_PA_FX_COOKIE` (krb5.hin:1006-1006)
+    // 513, used for encrypted FAST
     pub const PA_FX_COOKIE: u32 = 513;
-    // MIT `KRB5_KEYUSAGE_PA_AS_FRESHNESS` (`krb5.hin:1007-1007`): 514, used for freshness
+    // MIT: `KRB5_KEYUSAGE_PA_AS_FRESHNESS` (krb5.hin:1007-1007)
+    // 514, used for freshness
     pub const PA_AS_FRESHNESS: u32 = 514;
     pub const ENC_CHALLENGE_CLIENT: u32 = 54;
     pub const ENC_CHALLENGE_KDC: u32 = 55;
@@ -122,9 +127,11 @@ pub mod ku {
     pub const AD_KDCISSUED_CKSUM: u32 = 19;
     pub const CAMMAC: u32 = 64;
     pub const SPAKE: u32 = 65;
-    // MIT `KRB5_KEYUSAGE_PA_PKINIT_KX` (`krb5.hin:991-991`): the PA-PKINIT-KX key usage, 44.
+    // MIT: `KRB5_KEYUSAGE_PA_PKINIT_KX` (krb5.hin:991-991)
+    // the PA-PKINIT-KX key usage, 44.
     pub const PA_PKINIT_KX: u32 = 44;
-    // MIT `KRB5_KEYUSAGE_PA_OTP_REQUEST` (`krb5.hin:992-992`): 45, the key usage of PA-OTP-REQUEST (see RFC 6560 section 4.2).
+    // MIT: `KRB5_KEYUSAGE_PA_OTP_REQUEST` (krb5.hin:992-992)
+    // 45, the key usage of PA-OTP-REQUEST (see RFC 6560 section 4.2).
     pub const PA_OTP_REQUEST: u32 = 45;
 }
 

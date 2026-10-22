@@ -3,9 +3,12 @@
 //! The AS password is read when a mechanism needs the key, once per mechanism that does: a read that
 //! fails is that mechanism's failure and the next one that needs the key reads again; a read that
 //! worked is kept; an interrupt ends the exchange at once.
-//! MIT `get_as_key` (`lib/krb5/krb/preauth2.c:438-457`): `gak_fct` runs whenever a module wants the key and none is held.
-//! MIT `krb5_get_as_key_password` (`lib/krb5/krb/gic_pwd.c:55-97`): `gp->password` is set only by a prompt that returned.
-//! MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:684-723`): a module that fails is traced and the next real mechanism runs; the first failure is the one reported; a keyboard interrupt ends the walk.
+// MIT: `get_as_key` (lib/krb5/krb/preauth2.c:438-457)
+//! `gak_fct` runs whenever a module wants the key and none is held.
+// MIT: `krb5_get_as_key_password` (lib/krb5/krb/gic_pwd.c:55-97)
+//! `gp->password` is set only by a prompt that returned.
+// MIT: `process_pa_data` (lib/krb5/krb/preauth2.c:684-723)
+//! a module that fails is traced and the next real mechanism runs; the first failure is the one reported; a keyboard interrupt ends the walk.
 //! Settled live on kerber-rust-mit-kdc:1.22.2: FAST and plain logins at EOF, a wrong password and a reused one, SIGINT, and a refused support message.
 
 #[path = "common/mod.rs"]
@@ -466,8 +469,10 @@ fn passwords_asked(calls: &Calls) -> Vec<Vec<String>> {
 }
 
 // The responder's password question, settled live on kerber-rust-mit-kdc:1.22.2 with the libkrb5 responder client.
-// MIT `fill_response_items` (`lib/krb5/krb/preauth2.c:937-965`): every module with a padata prepares, and the responder is called when one asked.
-// MIT `spake_prep_questions` (`plugins/preauth/spake/spake_client.c:119-141`): SPAKE asks `password` for a challenge it can answer, and nothing for a support message or any other.
+// MIT: `fill_response_items` (lib/krb5/krb/preauth2.c:937-965)
+// every module with a padata prepares, and the responder is called when one asked.
+// MIT: `spake_prep_questions` (plugins/preauth/spake/spake_client.c:119-141)
+// SPAKE asks `password` for a challenge it can answer, and nothing for a support message or any other.
 
 #[test]
 fn spake_alone_asks_the_responder_for_the_password_under_fast() {
@@ -579,7 +584,8 @@ fn a_password_that_a_module_holds_is_not_asked_for_again_in_the_next_walk() {
 
 // With no prompter, no password from the caller and no answer, the key cannot be got. Settled live
 // on kerber-rust-mit-kdc:1.22.2 with a libkrb5 client that passes no password and no prompter.
-// MIT `krb5_get_as_key_password` (`lib/krb5/krb/gic_pwd.c:70-72`): `EIO` once the responder has no answer either, and the empty password is no password to try.
+// MIT: `krb5_get_as_key_password` (lib/krb5/krb/gic_pwd.c:70-72)
+// `EIO` once the responder has no answer either, and the empty password is no password to try.
 
 #[test]
 fn with_no_prompter_and_no_password_every_mechanism_fails_with_eio_and_nothing_is_answered() {
@@ -631,7 +637,8 @@ fn a_reply_that_needs_a_key_and_has_no_password_is_eio_not_a_guess_at_the_empty_
 
 #[test]
 fn a_reply_no_module_answered_asks_the_responder_for_the_password() {
-    // MIT `decrypt_as_reply` (`lib/krb5/krb/get_in_tkt.c:96-111`): with a responder the password question is put before the key is got, whatever the mechanism.
+    // MIT: `decrypt_as_reply` (lib/krb5/krb/get_in_tkt.c:96-111)
+    // with a responder the password question is put before the key is got, whatever the mechanism.
     let profile = krb5_config::isolated_profile();
     let (kdc, _) = kdc_counting(store_without_preauth(Spake::Challenge));
     let (mut ui, calls) = Ui::answering();

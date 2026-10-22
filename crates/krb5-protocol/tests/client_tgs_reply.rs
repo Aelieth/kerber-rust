@@ -1,5 +1,6 @@
 //! TGS-REP validation.
-//! MIT `krb5int_process_tgs_reply` (`gc_via_tkt.c:247-297`): validates the TGS-REP —
+// MIT: `krb5int_process_tgs_reply` (gc_via_tkt.c:247-297)
+//! validates the TGS-REP —
 //! ok-as-delegate, client, server, nonce and request times.
 //! Live oracle: the `kvno_plain` / `kvno_s4u` cells (`MIT_tgs_reply_client`).
 

@@ -74,7 +74,8 @@ fn usage(s: &mut Session<'_>, func: &str) {
     }
 }
 
-/// MIT `kadmin_addpol` (`kadmin.c:1711-1729`): the options parsed, then `kadm5_create_policy`.
+// MIT: `kadmin_addpol` (kadmin.c:1711-1729)
+/// the options parsed, then `kadm5_create_policy`.
 pub(crate) fn addpol(s: &mut Session<'_>, argv: &[String]) {
     let Some(a) = parse_policy_args(s, argv, "add_policy") else {
         usage(s, "add_policy");
@@ -96,7 +97,8 @@ pub(crate) fn addpol(s: &mut Session<'_>, argv: &[String]) {
     }
 }
 
-/// MIT `kadmin_modpol` (`kadmin.c:1732-1750`): the options parsed, then `kadm5_modify_policy`.
+// MIT: `kadmin_modpol` (kadmin.c:1732-1750)
+/// the options parsed, then `kadm5_modify_policy`.
 pub(crate) fn modpol(s: &mut Session<'_>, argv: &[String]) {
     let Some(a) = parse_policy_args(s, argv, "modify_policy") else {
         usage(s, "modify_policy");
@@ -125,7 +127,8 @@ pub(crate) fn modpol(s: &mut Session<'_>, argv: &[String]) {
     }
 }
 
-/// MIT `kadmin_delpol` (`kadmin.c:1753-1776`): `-force`, else the `yes` question; the error is prefixed `delete_policy:` with its colon, as MIT's `com_err` call spells it.
+// MIT: `kadmin_delpol` (kadmin.c:1753-1776)
+/// `-force`, else the `yes` question; the error is prefixed `delete_policy:` with its colon, as MIT's `com_err` call spells it.
 pub(crate) fn delpol(s: &mut Session<'_>, argv: &[String]) {
     let argc = argv.len();
     if !(argc == 2 || (argc == 3 && argv[1] == "-force")) {
@@ -240,7 +243,8 @@ pub(crate) fn getpol(s: &mut Session<'_>, argv: &[String]) {
     s.io.print(&o);
 }
 
-/// MIT `kadmin_getpols` (`kadmin.c:1825-1844`): the policy names, sorted, matching the glob.
+// MIT: `kadmin_getpols` (kadmin.c:1825-1844)
+/// the policy names, sorted, matching the glob.
 pub(crate) fn getpols(s: &mut Session<'_>, argv: &[String]) {
     let expr = match argv {
         [_] => None,

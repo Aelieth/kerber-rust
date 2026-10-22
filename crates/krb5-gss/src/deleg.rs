@@ -44,7 +44,8 @@ pub(super) fn krb_cred_for_deleg(
         sname: Some(PrincipalName::krbtgt(realm.as_ref())),
         caddr: None,
     };
-    // MIT `krb5_mk_ncred` (`lib/krb5/krb/mk_cred.c:177-178`): a missing timestamp is filled from one `krb5_us_timeofday` reading.
+    // MIT: `krb5_mk_ncred` (lib/krb5/krb/mk_cred.c:177-178)
+    // a missing timestamp is filled from one `krb5_us_timeofday` reading.
     let (now, usec) = krb5_protocol::us_timeofday();
     let part = EncKrbCredPart {
         ticket_info: vec![info],
@@ -133,7 +134,8 @@ mod hooks {
         let ticket = cred.tickets.first().ok_or(Error::Truncated)?;
         let prealm = info.prealm.clone().ok_or(Error::Truncated)?;
         let pname = info.pname.clone().ok_or(Error::Truncated)?;
-        // MIT `make_cred_list` (`lib/krb5/krb/rd_cred.c:109-110`): the stored session key is the credential's keyblock.
+        // MIT: `make_cred_list` (lib/krb5/krb/rd_cred.c:109-110)
+        // the stored session key is the credential's keyblock.
         let etype = EncryptionType::from_iana(info.key.keytype)
             .or_else(|_| EncryptionType::known(info.key.keytype))
             .map_err(Error::from)?;

@@ -97,8 +97,10 @@ impl PrincipalStore {
         Some((k.kvno, k.key.clone()))
     }
 
-    /// MIT `kdb_get_hist_key` (`server_kdb.c:166-188`): the history key, creating `kadmin/history` on first use.
-    /// MIT `create_hist` (`server_kdb.c:141-164`): first use has MIT's shape — `max_life` 64 s (`KRB5_KDB_DISALLOW_ALL_TIX` assigned to `max_life`), no attributes, one random key of the master enctype, created at kvno 1 and randomized again to kvno 2.
+    // MIT: `kdb_get_hist_key` (server_kdb.c:166-188)
+    /// the history key, creating `kadmin/history` on first use.
+    // MIT: `create_hist` (server_kdb.c:141-164)
+    /// first use has MIT's shape — `max_life` 64 s (`KRB5_KDB_DISALLOW_ALL_TIX` assigned to `max_life`), no attributes, one random key of the master enctype, created at kvno 1 and randomized again to kvno 2.
     /// Each is its own put, so the update log holds both, and the database is saved before the caller goes on, held saves or not: a password change that then fails (`passwd_check`) leaves `kadmin/history` in the database, as MIT's committed puts do.
     /// Fails with [`Error::Rng`] when `kadmin/history` must be created and the CSPRNG fails, and with [`Error::Db`] when saving it fails.
     pub(crate) fn ensure_history_principal(

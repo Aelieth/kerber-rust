@@ -57,22 +57,27 @@ pub enum Error {
     // MIT KRB5_CC_UNKNOWN_TYPE; see docs/parity/b1-client.md
     #[error("{0}")]
     Ccache(String),
-    // MIT `KRB5_CONFIG_NODEFREALM` (`krb5_err.et:310-310`): the text.
+    // MIT: `KRB5_CONFIG_NODEFREALM` (krb5_err.et:310-310)
+    // the text.
     #[error("Configuration file does not specify default realm")]
     NoDefaultRealm,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProfileError {
-    // MIT `parse_include_file` (`prof_parse.c:229-231`): a file that does not open fails with
+    // MIT: `parse_include_file` (prof_parse.c:229-231)
+    // a file that does not open fails with
     IncludeFile,
-    // MIT `parse_include_dir` (`prof_parse.c:271-272`): a directory that does not list fails
+    // MIT: `parse_include_dir` (prof_parse.c:271-272)
+    // a directory that does not list fails
     IncludeDir,
-    // MIT `os_init_paths` (`init_os_ctx.c:403-408`): a syntax error is `KRB5_CONFIG_BADFORMAT`.
+    // MIT: `os_init_paths` (init_os_ctx.c:403-408)
+    // a syntax error is `KRB5_CONFIG_BADFORMAT`.
     Syntax,
     // MIT get_boolean; see docs/parity/a2-as.md
     BadBoolean,
-    // MIT `get_tristate` (`lib/krb5/krb/init_ctx.c:115-118`): any other value is `EINVAL`.
+    // MIT: `get_tristate` (lib/krb5/krb/init_ctx.c:115-118)
+    // any other value is `EINVAL`.
     BadTristate,
     BadDeltat,
     BadPathToken,
@@ -109,9 +114,11 @@ impl ProfileError {
     #[must_use]
     pub const fn text(self) -> &'static str {
         match self {
-            // MIT `PROF_FAIL_INCLUDE_FILE` (`prof_err.et:67-67`): the code whose text this is.
+            // MIT: `PROF_FAIL_INCLUDE_FILE` (prof_err.et:67-67)
+            // the code whose text this is.
             Self::IncludeFile => "Included profile file could not be read",
-            // MIT `PROF_FAIL_INCLUDE_DIR` (`prof_err.et:69-69`): the code whose text this is.
+            // MIT: `PROF_FAIL_INCLUDE_DIR` (prof_err.et:69-69)
+            // the code whose text this is.
             Self::IncludeDir => "Included profile directory could not be read",
             // MIT KRB5_CONFIG_BADFORMAT; see docs/parity/b1-client.md
             Self::Syntax => "Improper format of Kerberos configuration file",
@@ -213,14 +220,16 @@ pub struct Krb5Conf {
     pub udp_preference_limit: Option<u32>,
     pub rdns: bool,
     pub kdc_timesync: bool,
-    // MIT `nofail` (`vfy_increds.c:38-51`): `verify_ap_req_nofail` defaults to false.
+    // MIT: `nofail` (vfy_increds.c:38-51)
+    // `verify_ap_req_nofail` defaults to false.
     pub verify_ap_req_nofail: bool,
     pub permitted_enctypes: Option<Vec<String>>,
     pub default_tkt_enctypes: Vec<String>,
     pub default_tgs_enctypes: Vec<String>,
     pub forwardable: bool,
     pub proxiable: bool,
-    // MIT `krb5_init_creds_init` (`get_in_tkt.c:921-930`): `canonicalize` defaults to false.
+    // MIT: `krb5_init_creds_init` (get_in_tkt.c:921-930)
+    // `canonicalize` defaults to false.
     pub canonicalize: bool,
     pub ticket_lifetime: Option<u64>,
     pub renew_lifetime: Option<u64>,
@@ -292,7 +301,8 @@ pub struct KdcConf {
     pub default_principal_expiration: Option<String>,
     pub master_key_type: Option<String>,
     pub db_library: Option<String>,
-    // MIT `configure_context` (`plugins/kdb/db2/kdb_db2.c:267-271`): `disable_last_success` from that `[dbmodules]` section, default false.
+    // MIT: `configure_context` (plugins/kdb/db2/kdb_db2.c:267-271)
+    // `disable_last_success` from that `[dbmodules]` section, default false.
     pub disable_last_success: bool,
     pub disable_lockout: bool,
     pub domain_sid: Option<String>,
@@ -310,7 +320,8 @@ pub struct KdcConf {
     pub kdc_max_dgram_reply_size: i32,
     pub kdc_tcp_listen_backlog: i32,
     pub unsupported: Vec<String>,
-    // MIT `get_profile_var` (`lib/krb5/krb/plugin.c:188-203`): the relations sit under the interface name.
+    // MIT: `get_profile_var` (lib/krb5/krb/plugin.c:188-203)
+    // the relations sit under the interface name.
     pub plugins: PluginProfile,
     pub otp: OtpTree,
 }

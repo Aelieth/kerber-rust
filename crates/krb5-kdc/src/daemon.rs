@@ -21,7 +21,8 @@ pub enum OpenFailure {
 }
 
 /// The database file the `-d` / `-x` arguments name, else `default`.
-/// MIT `configure_context` (`plugins/kdb/db2/kdb_db2.c:226-276`): `dbname=` names the file, `temporary` is that name with `~`, `merge_nra` and `hash=` are accepted, and anything else is an unsupported argument.
+// MIT: `configure_context` (plugins/kdb/db2/kdb_db2.c:226-276)
+/// `dbname=` names the file, `temporary` is that name with `~`, `merge_nra` and `hash=` are accepted, and anything else is an unsupported argument.
 pub fn database_path(default: &Path, db_args: &[String]) -> Result<PathBuf, String> {
     let mut db = default.to_path_buf();
     let mut temporary = false;
@@ -44,9 +45,12 @@ pub fn database_path(default: &Path, db_args: &[String]) -> Result<PathBuf, Stri
 }
 
 /// Open the realm's database as MIT's daemons do: the database arguments, the database file (one that is no database this store reads is refused, as [`crate::check_openable`] judges it) and its lock files, then the master key from the stash; `mkey_name` is the master key principal (`-M`).
-/// MIT `open_db` (`plugins/kdb/db2/kdb_db2.c:386-389`): a database that will not open is named in the error.
-/// MIT `krb5_db2_open` (`plugins/kdb/db2/kdb_db2.c:1181-1199`): the lock files open with the database, before any master key is fetched.
-/// MIT `krb5_db_def_fetch_mkey` (`lib/kdb/kdb_default.c:384-390`): a stash that cannot be read is "Can not fetch master key (error: …)."
+// MIT: `open_db` (plugins/kdb/db2/kdb_db2.c:386-389)
+/// a database that will not open is named in the error.
+// MIT: `krb5_db2_open` (plugins/kdb/db2/kdb_db2.c:1181-1199)
+/// the lock files open with the database, before any master key is fetched.
+// MIT: `krb5_db_def_fetch_mkey` (lib/kdb/kdb_default.c:384-390)
+/// a stash that cannot be read is "Can not fetch master key (error: …)."
 pub fn open_database(
     paths: &krb5_config::KdcPaths,
     db_args: &[String],
@@ -108,10 +112,12 @@ fn open_prepared(db: &Path, key: &krb5_crypto::ProtocolKey) -> Result<PrincipalS
     }
 }
 
-/// MIT `krb5_def_fetch_mkey_list` (`lib/kdb/kdb_default.c:454-458`): the provided key did not decrypt the latest master key.
+// MIT: `krb5_def_fetch_mkey_list` (lib/kdb/kdb_default.c:454-458)
+/// the provided key did not decrypt the latest master key.
 const BAD_MASTER_KEY: &str = "Unable to decrypt latest master key with the provided master key";
 
-/// MIT `init_realm` (`kdc/main.c:393-396`): a key that does not decrypt is `while fetching master keys list for realm`.
+// MIT: `init_realm` (kdc/main.c:393-396)
+/// a key that does not decrypt is `while fetching master keys list for realm`.
 #[must_use]
 pub fn mkey_log_context(error: &str, realm: &str, mkey_name: &str) -> String {
     if error == BAD_MASTER_KEY {
@@ -137,7 +143,8 @@ pub fn manual_master_key(manual: bool, paths: &krb5_config::KdcPaths) -> bool {
         .is_none_or(|c| c.key_stash_file.is_none())
 }
 
-/// MIT `main` (`kadmin/server/ovsec_kadmd.c:386-388`): `-m` sets `mkey_from_kbd` with or without a stash.
+// MIT: `main` (kadmin/server/ovsec_kadmd.c:386-388)
+/// `-m` sets `mkey_from_kbd` with or without a stash.
 #[must_use]
 pub fn kadmind_mkey_from_kbd(manual: bool) -> bool {
     if !manual {
@@ -189,7 +196,8 @@ pub fn open_database_with_key(
 }
 
 /// Whether the realm's database or stash is named relative to the current directory, so that a daemon must open it again once [`detach`] has moved it to `/`: the name then means what it means to MIT's daemons, which open the realm after `daemon()`.
-/// MIT `main` (`kdc/main.c:1016-1016`): the realms are initialized again after `daemon(0, 0)`.
+// MIT: `main` (kdc/main.c:1016-1016)
+/// the realms are initialized again after `daemon(0, 0)`.
 #[must_use]
 pub fn names_relative_database(paths: &krb5_config::KdcPaths, db_args: &[String]) -> bool {
     database_path(&paths.database_name, db_args).is_ok_and(|db| db.is_relative())
@@ -197,14 +205,16 @@ pub fn names_relative_database(paths: &krb5_config::KdcPaths, db_args: &[String]
 }
 
 /// Leave the terminal: fork, the parent exits 0, the child starts a new session in `/` with its standard streams on `/dev/null`. Call it before any thread is started.
-/// MIT `main` (`kdc/main.c:996-999`): `daemon(0, 0)` unless `-n`, after the sockets are bound.
+// MIT: `main` (kdc/main.c:996-999)
+/// `daemon(0, 0)` unless `-n`, after the sockets are bound.
 /// The OS error of `daemon(3)`; the process has not forked.
 pub fn detach() -> io::Result<()> {
     nix::unistd::daemon(false, false).map_err(io::Error::from)
 }
 
 /// Write the process id and a newline to `path`, replacing what was there, never through a symlink (`O_NOFOLLOW`): MIT's `fopen(path, "w")` empties a link's target.
-/// MIT `write_pid_file` (`kdc/main.c:834-847`): `fopen(path, "w")`, `"%ld\n"`, the open, write or close error returned.
+// MIT: `write_pid_file` (kdc/main.c:834-847)
+/// `fopen(path, "w")`, `"%ld\n"`, the open, write or close error returned.
 /// The OS error of creating, writing or closing `path`; `ELOOP` for a symlink there.
 pub fn write_pid_file(path: &Path) -> io::Result<()> {
     use std::os::unix::fs::OpenOptionsExt as _;
@@ -229,7 +239,8 @@ pub fn json_log_filter(default: &str) -> tracing_subscriber::EnvFilter {
 }
 
 /// The signals a daemon answers: SIGINT, SIGTERM and SIGQUIT end its loop, SIGHUP reopens its log files, and SIGPIPE stays ignored, as the Rust runtime sets it. Each also writes a byte to a pipe the daemon's loop waits on, as verto's signal events wake MIT's loop.
-/// MIT `loop_setup_signals` (`lib/apputils/net-server.c:263-286`): the three end the loop, SIGPIPE is ignored and SIGHUP resets, all set up before the network.
+// MIT: `loop_setup_signals` (lib/apputils/net-server.c:263-286)
+/// the three end the loop, SIGPIPE is ignored and SIGHUP resets, all set up before the network.
 #[derive(Clone)]
 pub struct Signals {
     stop: Arc<AtomicBool>,

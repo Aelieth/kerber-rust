@@ -14,19 +14,26 @@ use crate::dblock::{FileLock, set_file_lock};
 use crate::store::iprop_xdr::{UlogTime, encode_incr_update, walk_incr_update};
 use crate::store::{IPROP_FULL_RESYNC, IPROP_NIL, IPROP_OK};
 
-/// MIT `KDB_ULOG_HDR_MAGIC` (`include/kdb_log.h:37-37`): the header's magic.
+// MIT: `KDB_ULOG_HDR_MAGIC` (include/kdb_log.h:37-37)
+/// the header's magic.
 pub const KDB_ULOG_HDR_MAGIC: u32 = 0x0666_2323;
-/// MIT `KDB_ULOG_MAGIC` (`include/kdb_log.h:36-36`): each entry's magic.
+// MIT: `KDB_ULOG_MAGIC` (include/kdb_log.h:36-36)
+/// each entry's magic.
 pub const KDB_ULOG_MAGIC: u32 = 0x0666_1212;
-/// MIT `KDB_VERSION` (`include/kdb_log.h:24-24`): the log's version.
+// MIT: `KDB_VERSION` (include/kdb_log.h:24-24)
+/// the log's version.
 pub const KDB_VERSION: u16 = 1;
-/// MIT `KDB_STABLE` (`include/kdb_log.h:29-29`): no update is half written.
+// MIT: `KDB_STABLE` (include/kdb_log.h:29-29)
+/// no update is half written.
 pub const KDB_STABLE: u16 = 1;
-/// MIT `KDB_UNSTABLE` (`include/kdb_log.h:30-30`): an update is being written.
+// MIT: `KDB_UNSTABLE` (include/kdb_log.h:30-30)
+/// an update is being written.
 pub const KDB_UNSTABLE: u16 = 2;
-/// MIT `ULOG_BLOCK` (`include/kdb_log.h:48-48`): the default size of one entry's block.
+// MIT: `ULOG_BLOCK` (include/kdb_log.h:48-48)
+/// the default size of one entry's block.
 pub const ULOG_BLOCK: u16 = 2048;
-/// MIT `MAXLOGLEN` (`include/kdb_log.h:50-50`): the most of the file MIT maps.
+// MIT: `MAXLOGLEN` (include/kdb_log.h:50-50)
+/// the most of the file MIT maps.
 pub const MAXLOGLEN: u64 = 0x1000_0000;
 
 const HDR_LEN: u64 = 40;
@@ -410,9 +417,12 @@ pub struct Ulog {
 
 impl Ulog {
     /// Open the update log at `path` holding `entries` entries, making it when it is missing: a new 0600 file the size of a header and `entries` blocks of [`ULOG_BLOCK`]. A header whose magic is zero, or whose first or last entry is not where `entries` puts it, or which holds more entries than `entries`, is reinitialized; a file too short for its blocks is extended. The open never follows a symlink. Two differences from MIT: a log of more than [`MAXLOGLEN`] bytes is refused (MIT maps only that much and faults past it), and a file kerber-rust 1.0 left (its text log, starting `ulog `) is emptied and reinitialized, as MIT would refuse it as corrupt.
-    /// MIT `ulog_map` (`lib/kdb/kdb_log.c:500-577`): open or create the log, then check its header under the exclusive lock.
-    /// MIT `ulog_map` (`lib/kdb/kdb_log.c:547-553`): a header that is not MIT's is corrupt, unless it is all zero, which is reinitialized.
-    /// MIT `ulog_map` (`lib/kdb/kdb_log.c:555-569`): a log whose size no longer fits its entries is reinitialized, then the file grows to hold them.
+    // MIT: `ulog_map` (lib/kdb/kdb_log.c:500-577)
+    /// open or create the log, then check its header under the exclusive lock.
+    // MIT: `ulog_map` (lib/kdb/kdb_log.c:547-553)
+    /// a header that is not MIT's is corrupt, unless it is all zero, which is reinitialized.
+    // MIT: `ulog_map` (lib/kdb/kdb_log.c:555-569)
+    /// a log whose size no longer fits its entries is reinitialized, then the file grows to hold them.
     /// [`UlogError::Io`] when the file cannot be opened, made, read, written or locked; [`UlogError::Corrupt`] when its magic is another program's; [`UlogError::Io`] of kind `InvalidInput` when `entries` blocks would pass [`MAXLOGLEN`].
     pub fn map(path: &Path, entries: u32) -> Result<Self, UlogError> {
         let entries = entries.max(1);
@@ -472,7 +482,8 @@ impl Ulog {
     }
 
     /// Hold the log shared or exclusively, waiting for a conflicting holder: this process's other threads at the gate, then another process at the file's lock.
-    /// MIT `lock_ulog` (`lib/kdb/kdb_log.c:288-296`): `krb5_lock_file` on the log's own descriptor.
+    // MIT: `lock_ulog` (lib/kdb/kdb_log.c:288-296)
+    /// `krb5_lock_file` on the log's own descriptor.
     fn lock(&self, exclusive: bool) -> io::Result<Held<'_>> {
         let gate = if exclusive {
             Gate::Exclusive(
@@ -553,7 +564,8 @@ impl Ulog {
     }
 
     /// Grow the file to a header and every entry's block of `block` bytes, writing zeros so that its blocks are allocated now; never shrink it. MIT `extend_file_to` (`lib/kdb/kdb_log.c:168-194`): zeros are written from the end of the file up to the new size.
-    /// MIT `extend_file_to` (`lib/kdb/kdb_log.c:168-194`): zeros are written from the end of the file up to the new size.
+    // MIT: `extend_file_to` (lib/kdb/kdb_log.c:168-194)
+    /// zeros are written from the end of the file up to the new size.
     fn extend_to(&self, block: u64) -> Result<(), UlogError> {
         static ZEROS: [u8; 65536] = [0; 65536];
         let size = HDR_LEN + u64::from(self.entries) * block;
@@ -575,7 +587,8 @@ impl Ulog {
         Ok(UlogHeader::decode(&head))
     }
 
-    /// MIT `sync_header` (`lib/kdb/kdb_log.c:93-104`): the header is written to disk; a failure, which MIT aborts on, is the error here.
+    // MIT: `sync_header` (lib/kdb/kdb_log.c:93-104)
+    /// the header is written to disk; a failure, which MIT aborts on, is the error here.
     fn sync_header(&self, hdr: &UlogHeader) -> Result<(), UlogError> {
         self.backing.write_at(&hdr.encode(), 0)?;
         self.backing.sync()?;
@@ -593,14 +606,16 @@ impl Ulog {
         Ok(EntHeader::decode(&b))
     }
 
-    /// MIT `check_sno` (`lib/kdb/kdb_log.c:125-133`): the entry where `sno` belongs holds that serial and that time.
+    // MIT: `check_sno` (lib/kdb/kdb_log.c:125-133)
+    /// the entry where `sno` belongs holds that serial and that time.
     fn check_sno(&self, hdr: &UlogHeader, sno: u32, time: UlogTime) -> Result<bool, UlogError> {
         let index = sno.wrapping_sub(1) % self.entries;
         let ent = self.ent_header(index, hdr.block)?;
         Ok(ent.sno == sno && ent.time == time)
     }
 
-    /// MIT `get_sno_status` (`lib/kdb/kdb_log.c:141-165`): up to date, in need of a full resync, or able to catch up from the log.
+    // MIT: `get_sno_status` (lib/kdb/kdb_log.c:141-165)
+    /// up to date, in need of a full resync, or able to catch up from the log.
     fn sno_status(&self, hdr: &UlogHeader, last: UlogLast) -> Result<u32, UlogError> {
         if last.sno == hdr.last_sno && last.time == hdr.last_time {
             return Ok(IPROP_NIL);
@@ -615,7 +630,8 @@ impl Ulog {
     }
 
     /// The log holding only a dummy entry at `sno` with `time`; the header is the caller's to sync.
-    /// MIT `set_dummy` (`lib/kdb/kdb_log.c:247-262`): the entry's header holds only the magic, the serial and the time, and the log one entry.
+    // MIT: `set_dummy` (lib/kdb/kdb_log.c:247-262)
+    /// the entry's header holds only the magic, the serial and the time, and the log one entry.
     fn set_dummy(&self, hdr: &mut UlogHeader, sno: u32, time: UlogTime) -> Result<(), UlogError> {
         let index = sno.wrapping_sub(1) % self.entries;
         let ent = EntHeader {
@@ -636,7 +652,8 @@ impl Ulog {
     }
 
     /// Start the log over: a dummy entry at serial 1 with the time now, blocks of [`ULOG_BLOCK`].
-    /// MIT `reset_ulog` (`lib/kdb/kdb_log.c:265-281`): a new header, a dummy entry at serial 1 that remembers the time for replicas, then the header synced.
+    // MIT: `reset_ulog` (lib/kdb/kdb_log.c:265-281)
+    /// a new header, a dummy entry at serial 1 that remembers the time for replicas, then the header synced.
     fn reset(&self) -> Result<UlogHeader, UlogError> {
         let mut hdr = UlogHeader {
             hmagic: KDB_ULOG_HDR_MAGIC,
@@ -651,7 +668,8 @@ impl Ulog {
     }
 
     /// Make every block big enough for a record of `recsize` bytes: the next multiple of [`ULOG_BLOCK`] past it, the entries moved to their new places.
-    /// MIT `resize` (`lib/kdb/kdb_log.c:198-243`): the new block size, the file extended, each entry moved from the last down, the rest of each block zeroed.
+    // MIT: `resize` (lib/kdb/kdb_log.c:198-243)
+    /// the new block size, the file extended, each entry moved from the last down, the rest of each block zeroed.
     fn resize(&self, hdr: &mut UlogHeader, recsize: usize, name: &str) -> Result<(), UlogError> {
         let old_block = usize::from(hdr.block);
         let new_block = (recsize / usize::from(ULOG_BLOCK) + 1) * usize::from(ULOG_BLOCK);
@@ -686,7 +704,8 @@ impl Ulog {
     }
 
     /// Store `update`, an encoded `kdb_incr_update_t`, in the entry its serial names, committed, and move the header past it.
-    /// MIT `store_update` (`lib/kdb/kdb_log.c:310-372`): the state is unstable while the entry is written and synced, then the header records it and is synced stable.
+    // MIT: `store_update` (lib/kdb/kdb_log.c:310-372)
+    /// the state is unstable while the entry is written and synced, then the header records it and is synced stable.
     fn store_update(&self, hdr: &mut UlogHeader, update: &[u8]) -> Result<(), UlogError> {
         hdr.state = KDB_UNSTABLE;
         self.backing
@@ -735,7 +754,8 @@ impl Ulog {
     }
 
     /// Add one update: the principal `name`'s change whose values `kdbe` holds (an encoded `kdbe_t`), or its deletion. The update takes the serial after the log's last and the time now; past the last serial a `u32` holds, the log starts over first, and so it does when a process stopped mid-update left it unstable (MIT writes over that header). Returns the serial and time given.
-    /// MIT `ulog_add_update` (`lib/kdb/kdb_log.c:375-397`): under the log's exclusive lock, the next serial and the time now, after a reset when the serials ran out.
+    // MIT: `ulog_add_update` (lib/kdb/kdb_log.c:375-397)
+    /// under the log's exclusive lock, the next serial and the time now, after a reset when the serials ran out.
     pub fn add_update(
         &self,
         name: &str,
@@ -757,7 +777,8 @@ impl Ulog {
     }
 
     /// Keep an update a replica applied, as it came from its primary: after the log's last one, or alone after a reset when it does not follow that one.
-    /// MIT `ulog_replay` (`lib/kdb/kdb_log.c:456-469`): each applied update is stored for downstream replicas, the log reset first when it does not follow the last.
+    // MIT: `ulog_replay` (lib/kdb/kdb_log.c:456-469)
+    /// each applied update is stored for downstream replicas, the log reset first when it does not follow the last.
     pub fn replay_update(&self, update: &[u8]) -> Result<(), UlogError> {
         let layout = walk_incr_update(update).map_err(|_| UlogError::Conv)?;
         let _held = self.lock(true)?;
@@ -769,7 +790,8 @@ impl Ulog {
     }
 
     /// Begin a run of updates recording one database write: the log held exclusively until the run ends, a log a stopped process left unstable started over, then its header marked unstable and synced before the caller writes the database. [`UlogBatch::finish`] marks it stable once the last update is appended; a process stopped in between leaves it unstable, and the next to use it starts it over, so a replica resynchronizes in full instead of skipping what was never logged. MIT appends each put's update after that put, one at a time, and has the same window for one update. MIT `krb5_db_put_principal` (`lib/kdb/kdb5.c:1002-1007`): the update is logged after the put; a process stopped between the two loses it. [`UlogError::Io`] when the log cannot be locked, read or written.
-    /// MIT `krb5_db_put_principal` (`lib/kdb/kdb5.c:1002-1007`): the update is logged after the put; a process stopped between the two loses it.
+    // MIT: `krb5_db_put_principal` (lib/kdb/kdb5.c:1002-1007)
+    /// the update is logged after the put; a process stopped between the two loses it.
     pub fn begin(&self) -> Result<UlogBatch<'_>, UlogError> {
         let held = self.lock(true)?;
         let mut hdr = self.header()?;
@@ -787,7 +809,8 @@ impl Ulog {
     }
 
     /// Start the log over (`kproplog -R`, a policy change, a load).
-    /// MIT `ulog_init_header` (`lib/kdb/kdb_log.c:483-497`): reset under the exclusive lock.
+    // MIT: `ulog_init_header` (lib/kdb/kdb_log.c:483-497)
+    /// reset under the exclusive lock.
     pub fn init_header(&self) -> Result<(), UlogError> {
         let _held = self.lock(true)?;
         self.reset()?;
@@ -795,10 +818,13 @@ impl Ulog {
     }
 
     /// The updates a replica that has applied `last` still lacks, with the status MIT answers.
-    /// MIT `ulog_get_entries` (`lib/kdb/kdb_log.c:580-649`): under the shared lock, the status, then each update after `last` decoded from its entry, its committed flag the entry's.
+    // MIT: `ulog_get_entries` (lib/kdb/kdb_log.c:580-649)
+    /// under the shared lock, the status, then each update after `last` decoded from its entry, its committed flag the entry's.
     /// The updates a replica that has applied `last` still lacks, with the status MIT answers. A log another process left half written is reset first, under the exclusive lock where MIT writes it under the shared one. An entry that is not the serial asked for (a torn ring) is an error, where MIT would send it.
-    /// MIT `ulog_get_entries` (`lib/kdb/kdb_log.c:580-649`): under the shared lock, the status, then each update after `last` decoded from its entry, its committed flag the entry's.
-    /// MIT `ulog_get_entries` (`lib/kdb/kdb_log.c:601-604`): a log another process left mid-update is reset, forcing full resyncs. [`UlogError::Io`] when the log cannot be locked or read; [`UlogError::Corrupt`] when an entry is not the serial that belongs there; [`UlogError::Conv`] when an entry does not decode (the caller answers `UPDATE_ERROR`).
+    // MIT: `ulog_get_entries` (lib/kdb/kdb_log.c:580-649)
+    /// under the shared lock, the status, then each update after `last` decoded from its entry, its committed flag the entry's.
+    // MIT: `ulog_get_entries` (lib/kdb/kdb_log.c:601-604)
+    /// a log another process left mid-update is reset, forcing full resyncs. [`UlogError::Io`] when the log cannot be locked or read; [`UlogError::Corrupt`] when an entry is not the serial that belongs there; [`UlogError::Conv`] when an entry does not decode (the caller answers `UPDATE_ERROR`).
     pub fn get_entries(&self, last: UlogLast) -> Result<UlogUpdates, UlogError> {
         let shared = self.lock(false)?;
         let mut hdr = self.header()?;
@@ -854,7 +880,8 @@ impl Ulog {
     }
 
     /// Whether a replica that has applied `last` is up to date, can catch up from the log, or needs a full resync (`kdb5_util dump -c`).
-    /// MIT `ulog_get_sno_status` (`lib/kdb/kdb_log.c:660-670`): the status under the shared lock, `UPDATE_ERROR` when the lock fails.
+    // MIT: `ulog_get_sno_status` (lib/kdb/kdb_log.c:660-670)
+    /// the status under the shared lock, `UPDATE_ERROR` when the lock fails.
     #[must_use]
     pub fn sno_status_of(&self, last: UlogLast) -> u32 {
         let Ok(_held) = self.lock(false) else {
@@ -866,7 +893,8 @@ impl Ulog {
     }
 
     /// The log's last serial and time.
-    /// MIT `ulog_get_last` (`lib/kdb/kdb_log.c:672-687`): read under the shared lock.
+    // MIT: `ulog_get_last` (lib/kdb/kdb_log.c:672-687)
+    /// read under the shared lock.
     pub fn get_last(&self) -> Result<UlogLast, UlogError> {
         let _held = self.lock(false)?;
         let hdr = self.header()?;
@@ -877,7 +905,8 @@ impl Ulog {
     }
 
     /// Make `last` the log's only entry, a dummy, as a load of an iprop dump leaves it.
-    /// MIT `ulog_set_last` (`lib/kdb/kdb_log.c:689-705`): a dummy entry at the serial and time, then the header synced.
+    // MIT: `ulog_set_last` (lib/kdb/kdb_log.c:689-705)
+    /// a dummy entry at the serial and time, then the header synced.
     pub fn set_last(&self, last: UlogLast) -> Result<(), UlogError> {
         let _held = self.lock(true)?;
         let mut hdr = self.header()?;
@@ -893,7 +922,8 @@ impl Ulog {
     }
 
     /// Every entry from the first serial to the last, as `kproplog -v` walks them: a dummy entry has no update.
-    /// MIT `print_update` (`kprop/kproplog.c:316-360`): the entries from the first serial to the last, a dummy one being of size 0; a bad magic or an update that does not decode stops the listing.
+    // MIT: `print_update` (kprop/kproplog.c:316-360)
+    /// the entries from the first serial to the last, a dummy one being of size 0; a bad magic or an update that does not decode stops the listing.
     #[cfg(any(test, feature = "test-hooks"))]
     pub fn entries(&self) -> Result<Vec<UlogEntry>, UlogError> {
         let _held = self.lock(false)?;

@@ -1,8 +1,10 @@
 //! The subkeys the client library draws under a des3-cbc-sha1 session key.
 //!
-//! MIT `krb5_c_make_random_key` (`lib/crypto/krb/make_random_key.c:31-76`): `keybytes` random octets through the enctype's random-to-key, so a des3 key is 24 octets of odd parity; `krb5_generate_subkey` draws the subkey of an authenticator with it.
+// MIT: `krb5_c_make_random_key` (lib/crypto/krb/make_random_key.c:31-76)
+//! `keybytes` random octets through the enctype's random-to-key, so a des3 key is 24 octets of odd parity; `krb5_generate_subkey` draws the subkey of an authenticator with it.
 //! A MIT service that is given a subkey of even parity cannot use it ("DES key has bad parity").
-//! MIT `fast_armor_ap_request` (`lib/krb5/krb/fast.c:52-108`): the FAST armor AP-REQ carries such a subkey, as does the authenticator of a TGS-REQ.
+// MIT: `fast_armor_ap_request` (lib/krb5/krb/fast.c:52-108)
+//! the FAST armor AP-REQ carries such a subkey, as does the authenticator of a TGS-REQ.
 //! Both are read here off the wire, from a KDC on loopback that records what it is sent; the kpasswd request's subkey is checked in `chpw.rs`.
 
 #[path = "common/mod.rs"]
@@ -254,7 +256,8 @@ fn session_of_bad_parity() -> ProtocolKey {
 
 /// A TGT whose session key has bad parity cannot seal the authenticator of a TGS-REQ: the request is refused with MIT's code, and
 /// nothing is sent. MIT's own `kvno` says the same ("DES key has bad parity while getting credentials for ...").
-/// MIT `validate_and_schedule` (`lib/crypto/builtin/enc_provider/des3.c:33-53`): the encryption of the authenticator under the session key fails with `KRB5DES_BAD_KEYPAR`.
+// MIT: `validate_and_schedule` (lib/crypto/builtin/enc_provider/des3.c:33-53)
+/// the encryption of the authenticator under the session key fails with `KRB5DES_BAD_KEYPAR`.
 #[test]
 fn a_tgt_whose_session_key_has_bad_parity_is_refused_before_the_tgs_request_is_sent() {
     isolate_host_krb5();
@@ -277,7 +280,8 @@ fn a_tgt_whose_session_key_has_bad_parity_is_refused_before_the_tgs_request_is_s
 }
 
 /// The same for the armor session key of a FAST AS-REQ: the armor AP-REQ cannot be made.
-/// MIT `fast_armor_ap_request` (`lib/krb5/krb/fast.c:52-108`): `krb5_mk_req_extended` encrypts the armor authenticator under the armor ticket's session key.
+// MIT: `fast_armor_ap_request` (lib/krb5/krb/fast.c:52-108)
+/// `krb5_mk_req_extended` encrypts the armor authenticator under the armor ticket's session key.
 #[test]
 fn an_armor_session_key_of_bad_parity_is_refused_before_the_as_request_is_sent() {
     isolate_host_krb5();

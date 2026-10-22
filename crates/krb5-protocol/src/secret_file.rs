@@ -25,8 +25,10 @@ enum Replace<'a> {
 }
 
 /// Write `bytes` to `path` through a temp file + rename, keeping a replaced file's owner, group and permission bits.
-/// MIT `ctx_lock` (`plugins/kdb/db2/kdb_db2.c:450-455`): the principal database is reopened `O_RDWR`, not recreated.
-/// MIT `krb5_ktfileint_open` (`lib/krb5/keytab/kt_file.c:739-746`): an existing keytab is opened "rb+" and written in place.
+// MIT: `ctx_lock` (plugins/kdb/db2/kdb_db2.c:450-455)
+/// the principal database is reopened `O_RDWR`, not recreated.
+// MIT: `krb5_ktfileint_open` (lib/krb5/keytab/kt_file.c:739-746)
+/// an existing keytab is opened "rb+" and written in place.
 /// A regular file at `path` that the writer may not open read-write is refused before anything is written ([`check_secret_file_writable`]); a missing path, a symlink or another non-regular file is replaced by a new file, and a symlink is not written through.
 /// On Unix the temp file is created with `O_EXCL` and mode 0600, takes the replaced regular file's uid, gid and permission bits (`fchown`, `fchmod`), and is `fsync`'d before the rename, so `path` never has the wrong owner. A writer that may not give the file to its owner still saves: it keeps the group when it may, drops the group bits when it may not, and logs `protocol.secret_file` at warn. A file another user owns in a shared sticky directory such as `/tmp` is not taken from (Linux `protected_regular`: it may have been planted there). With nothing to take from, the new file is 0600 and the writer's. Off Unix the same exclusive create and rename are used, and the platform default ACL is the permission story.
 /// The error of [`check_secret_file_writable`] for an existing regular file the writer may not write (`path` is left as it was); the OS error when the temp file beside `path` cannot be created (`O_EXCL`, mode 0600), written, or synced, or cannot be renamed onto `path`. An owner or group that cannot be kept is a warning, not an error.
@@ -52,8 +54,10 @@ pub fn check_secret_file_writable(path: &Path) -> io::Result<()> {
 }
 
 /// Write `bytes` to `path` as a new file, mode 0600, owned by the writer, whatever it replaces.
-/// MIT `fcc_initialize` (`lib/krb5/ccache/cc_file.c:481-492`): a FILE ccache is unlinked and created again `O_EXCL`, mode 0600.
-/// MIT `create_ofile` (`kadmin/dbutil/dump.c:139-146`): a dump goes to a new `mkstemp` file that is renamed into place.
+// MIT: `fcc_initialize` (lib/krb5/ccache/cc_file.c:481-492)
+/// a FILE ccache is unlinked and created again `O_EXCL`, mode 0600.
+// MIT: `create_ofile` (kadmin/dbutil/dump.c:139-146)
+/// a dump goes to a new `mkstemp` file that is renamed into place.
 pub fn write_fresh_secret_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     write_atomic(path, bytes, Replace::Fresh, true)
 }

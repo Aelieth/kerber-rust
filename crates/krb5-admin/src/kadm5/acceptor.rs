@@ -37,7 +37,8 @@ fn kdb_keytab_entry(
 }
 
 /// A context accepted from `token` with the key the KDB keytab gives: for `acceptor`, or, with no name (`GSS_C_NO_NAME`), for the server the ticket names; `conf` is kadmind's KDC context's.
-/// MIT `kg_accept_krb5` (`lib/gssapi/krb5/accept_sec_context.c:829-831`): `krb5_rd_req_decoded` takes the credential's `acceptor_mprinc` (NULL for no name) and its keytab.
+// MIT: `kg_accept_krb5` (lib/gssapi/krb5/accept_sec_context.c:829-831)
+/// `krb5_rd_req_decoded` takes the credential's `acceptor_mprinc` (NULL for no name) and its keytab.
 pub(super) fn accept_from_kdb(
     store: &SharedStore,
     realm: &str,
@@ -90,7 +91,8 @@ pub fn kdb_rd_req(
 }
 
 /// AUTH_GSSAPI's accept: `kadmin/admin`, then `kadmin/changepw`, each with a credential of its own (the list `svcauth_gssapi_set_names` was given); the next name is tried only when the ticket is for no principal the keytab serves under this one (`KRB5KRB_AP_ERR_NOT_US`).
-/// MIT `gssrpc__svcauth_gssapi` (`lib/rpc/svc_auth_gssapi.c:391-436`): the loop over the credentials stops at the first that completes or fails otherwise than with `GSS_S_FAILURE` and `KRB5KRB_AP_ERR_NOT_US`.
+// MIT: `gssrpc__svcauth_gssapi` (lib/rpc/svc_auth_gssapi.c:391-436)
+/// the loop over the credentials stops at the first that completes or fails otherwise than with `GSS_S_FAILURE` and `KRB5KRB_AP_ERR_NOT_US`.
 pub(super) fn accept_auth_gssapi(
     store: &SharedStore,
     realm: &str,
@@ -109,7 +111,8 @@ pub(super) fn accept_auth_gssapi(
     result
 }
 
-/// MIT `check_keytab` (`lib/gssapi/krb5/acquire_cred.c:126-138`): a credential for a name that is not host-based asks `krb5_kt_get_entry(kt, princ, 0, 0)` for it.
+// MIT: `check_keytab` (lib/gssapi/krb5/acquire_cred.c:126-138)
+/// a credential for a name that is not host-based asks `krb5_kt_get_entry(kt, princ, 0, 0)` for it.
 #[must_use]
 pub fn acceptor_names_served(store: &PrincipalStore, conf: &AcceptorConfig) -> bool {
     let Ok(permitted) = conf.permitted() else {

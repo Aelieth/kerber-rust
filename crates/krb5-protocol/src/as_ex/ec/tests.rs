@@ -156,7 +156,8 @@ fn a_malformed_kdc_challenge_is_traced_with_mits_codes() {
     );
 }
 
-/// MIT `krb5_c_decrypt` (`lib/crypto/krb/decrypt.c:88-101`): the keyblock's key goes through `krb5_k_decrypt`.
+// MIT: `krb5_c_decrypt` (lib/crypto/krb/decrypt.c:88-101)
+/// the keyblock's key goes through `krb5_k_decrypt`.
 #[test]
 fn the_kdc_challenge_enctype_is_checked_as_krb5_k_decrypt_checks_it() {
     let (armor, as_key) = sha2_pair();

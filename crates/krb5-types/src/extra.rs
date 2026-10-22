@@ -21,7 +21,8 @@ impl ApRep {
     pub const MSG_TYPE: i32 = 15;
 }
 
-// MIT `ap_rep_msg_type` (`lib/krb5/asn.1/asn1_k_encode.c:760-760`): the msg-type is an immediate with no error, so any INTEGER of up to eight octets decodes and none is kept.
+// MIT: `ap_rep_msg_type` (lib/krb5/asn.1/asn1_k_encode.c:760-760)
+// the msg-type is an immediate with no error, so any INTEGER of up to eight octets decodes and none is kept.
 #[derive(AsnType, Decode)]
 #[rasn(tag(explicit(application, 15)))]
 struct ApRepOnWire {
@@ -143,7 +144,8 @@ impl KrbPriv {
     pub const MSG_TYPE: i32 = 21;
 }
 
-// MIT `priv_msg_type` (`lib/krb5/asn.1/asn1_k_encode.c:845-845`): the msg-type is an immediate with no error, so any INTEGER of up to eight octets decodes and none is kept.
+// MIT: `priv_msg_type` (lib/krb5/asn.1/asn1_k_encode.c:845-845)
+// the msg-type is an immediate with no error, so any INTEGER of up to eight octets decodes and none is kept.
 #[derive(AsnType, Decode)]
 #[rasn(tag(explicit(application, 21)))]
 struct KrbPrivOnWire {
@@ -188,8 +190,10 @@ pub struct EncKrbPrivPart {
     pub r_address: Option<HostAddress>,
 }
 
-// MIT `decode_seqno` (`lib/krb5/asn.1/asn1_k_encode.c:133-146`): an INTEGER from `INT32_MIN` to `0xFFFFFFFF` decodes, a negative one (an old Heimdal's) as the same 32 bits unsigned, and a wider one is `ASN1_OVERFLOW`, which fails the message.
-// MIT `encode_seqno` (`asn1_k_encode.c:124-132`): written unsigned.
+// MIT: `decode_seqno` (lib/krb5/asn.1/asn1_k_encode.c:133-146)
+// an INTEGER from `INT32_MIN` to `0xFFFFFFFF` decodes, a negative one (an old Heimdal's) as the same 32 bits unsigned, and a wider one is `ASN1_OVERFLOW`, which fails the message.
+// MIT: `encode_seqno` (asn1_k_encode.c:124-132)
+// written unsigned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct WireSeqNumber(pub(crate) u32);
 
@@ -403,7 +407,8 @@ impl KrbCred {
     pub const MSG_TYPE: i32 = 22;
 }
 
-// MIT `cred_msg_type` (`lib/krb5/asn.1/asn1_k_encode.c:877-877`): the msg-type is an immediate with no error, so any INTEGER of up to eight octets decodes and none is kept.
+// MIT: `cred_msg_type` (lib/krb5/asn.1/asn1_k_encode.c:877-877)
+// the msg-type is an immediate with no error, so any INTEGER of up to eight octets decodes and none is kept.
 #[derive(AsnType, Decode)]
 #[rasn(tag(explicit(application, 22)))]
 struct KrbCredOnWire {

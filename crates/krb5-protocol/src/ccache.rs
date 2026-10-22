@@ -157,7 +157,8 @@ impl FileCcache {
         }
     }
 
-    /// MIT `krb5_cc_get_config` (`lib/krb5/ccache/ccfns.c:263-292`): the entry `X-CACHECONF:` `krb5_ccache_conf_data/<key>[/<principal>]` of the cache's principal is retrieved with no other field matched, and its ticket field is the value.
+    // MIT: `krb5_cc_get_config` (lib/krb5/ccache/ccfns.c:263-292)
+    /// the entry `X-CACHECONF:` `krb5_ccache_conf_data/<key>[/<principal>]` of the cache's principal is retrieved with no other field matched, and its ticket field is the value.
     #[must_use]
     pub fn get_config(&self, principal: Option<&str>, key: &str) -> Option<&[u8]> {
         let mut comps: Vec<&[u8]> = vec![b"krb5_ccache_conf_data", key.as_bytes()];
@@ -336,7 +337,8 @@ struct CacheFile {
     flocked: Option<Flock<File>>,
 }
 
-/// MIT `open_cache_file` (`cc_file.c:331-363`): an existing cache file, read-only under a shared lock or `O_RDWR | O_APPEND` under an exclusive one, the lock waiting for its holder; a lock failure closes the file and is the lock's errno.
+// MIT: `open_cache_file` (cc_file.c:331-363)
+/// an existing cache file, read-only under a shared lock or `O_RDWR | O_APPEND` under an exclusive one, the lock waiting for its holder; a lock failure closes the file and is the lock's errno.
 fn open_cache_file(path: &Path, writable: bool) -> io::Result<CacheFile> {
     let file = std::fs::OpenOptions::new()
         .read(true)
@@ -353,7 +355,8 @@ fn open_cache_file(path: &Path, writable: bool) -> io::Result<CacheFile> {
 }
 
 impl CacheFile {
-    /// MIT `close_cache_file` (`cc_file.c:366-379`): the lock let go, then the file closed; the unlock's errno first, else the close's error.
+    // MIT: `close_cache_file` (cc_file.c:366-379)
+    /// the lock let go, then the file closed; the unlock's errno first, else the close's error.
     fn close(self) -> io::Result<()> {
         let Self { file, mut flocked } = self;
         let unlocked = lock_file(&file, FileLock::Unlock, &mut flocked);
@@ -371,7 +374,8 @@ fn read16(file: &mut impl io::Read) -> io::Result<u16> {
     Ok(u16::from_be_bytes(b))
 }
 
-/// MIT `read_header` (`cc_file.c:383-440`): the format version; `KRB5_CC_FORMAT` when it does not read, `KRB5_CCACHE_BADVNO` outside 1–4, and for version 4 the tagged fields read through with each length checked.
+// MIT: `read_header` (cc_file.c:383-440)
+/// the format version; `KRB5_CC_FORMAT` when it does not read, `KRB5_CCACHE_BADVNO` outside 1–4, and for version 4 the tagged fields read through with each length checked.
 fn read_header(file: &mut impl io::Read) -> io::Result<u16> {
     let format = || FccFailure::Format.into_io();
     let mut two = [0u8; 2];
@@ -416,7 +420,8 @@ pub fn read_cache_file(path: &Path) -> io::Result<Zeroizing<Vec<u8>>> {
 }
 
 /// `cred` appended to the existing cache file at `path` in one write, under the file's exclusive lock, after its header gives the format version; the record's bytes are wiped once written. A version 1–3 file, which [`FileCcache::parse`] does not read, is refused as `KRB5_CCACHE_BADVNO` rather than written in its own format.
-/// MIT `fcc_store` (`cc_file.c:987-1026`): open for append and lock, read the header, one append write of the marshalled credential, a short write `KRB5_CC_IO`; the first error, else the close's.
+// MIT: `fcc_store` (cc_file.c:987-1026)
+/// open for append and lock, read the header, one append write of the marshalled credential, a short write `KRB5_CC_IO`; the first error, else the close's.
 pub fn fcc_store(path: &Path, cred: &CcacheCred) -> io::Result<()> {
     let mut cf = open_cache_file(path, true)?;
     let stored = append_cred(&mut cf.file, cred);

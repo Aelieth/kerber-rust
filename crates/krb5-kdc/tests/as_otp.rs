@@ -375,7 +375,8 @@ fn run_with_none(
     krb5_kdc::issue_as(store, &fast_req(a, vec![pa_otp(&a.key, plain, b"1")], n))
 }
 
-/// MIT `otp_verify` (`plugins/preauth/otp/main.c:300-301`): a PA 142 outside FAST is 24, with the table text of that code.
+// MIT: `otp_verify` (plugins/preauth/otp/main.c:300-301)
+/// a PA 142 outside FAST is 24, with the table text of that code.
 #[test]
 fn no_armor_is_24() {
     let store = realm(Some("[{}]"));
@@ -542,7 +543,8 @@ fn reject_is_24_with_a_fresh_hint() {
 }
 
 /// A rejection is the module's verify failure: `finish_verify_padata` writes its one line, and the AS_REQ line follows.
-/// MIT `finish_verify_padata` (`kdc/kdc_preauth.c:1224-1228`): the module's failure is logged once, under its name, with the message of its code.
+// MIT: `finish_verify_padata` (kdc/kdc_preauth.c:1224-1228)
+/// the module's failure is logged once, under its name, with the message of its code.
 #[test]
 fn a_rejection_is_logged_once_as_the_modules_verify_failure() {
     let _g = Guard;

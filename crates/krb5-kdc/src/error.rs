@@ -7,13 +7,16 @@ use std::fmt;
 pub enum Error {
     Crypto(String),
     /// An EncryptedData whose enctype is not its key's: MIT's `KRB5_BAD_ENCTYPE`, a library code that `errcode_to_protocol` sends as 60.
-    /// MIT `krb5_k_decrypt` (`lib/crypto/krb/decrypt.c:45-46`): the enctype is checked before anything is decrypted.
+    // MIT: `krb5_k_decrypt` (lib/crypto/krb/decrypt.c:45-46)
+    /// the enctype is checked before anything is decrypted.
     BadEnctype,
     /// A des3 key with an octet of even parity: MIT's `KRB5DES_BAD_KEYPAR`, a library code that `errcode_to_protocol` sends as 60.
-    /// MIT `validate_and_schedule` (`lib/crypto/builtin/enc_provider/des3.c:33-53`): every use of the key, in an encryption, a decryption or a checksum, fails with it.
+    // MIT: `validate_and_schedule` (lib/crypto/builtin/enc_provider/des3.c:33-53)
+    /// every use of the key, in an encryption, a decryption or a checksum, fails with it.
     DesBadParity,
     /// A des3 key with a weak or semi-weak DES key among its three: MIT's `KRB5DES_WEAK_KEY`, sent as 60 likewise.
-    /// MIT `validate_and_schedule` (`lib/crypto/builtin/enc_provider/des3.c:33-53`): the code after the parity of that DES key and before the next one's.
+    // MIT: `validate_and_schedule` (lib/crypto/builtin/enc_provider/des3.c:33-53)
+    /// the code after the parity of that DES key and before the next one's.
     DesWeakKey,
     Asn1(String),
     /// RFC 4120 KRB-ERROR / KDC error code.
@@ -54,7 +57,8 @@ pub enum Error {
         text: String,
     },
     /// `EINVAL` from `krb5_db_put_principal` / DB2 `db_args`.
-    /// MIT `krb5_db2_put_principal` (`kdb_db2.c:817-822`): any `db_args` is `EINVAL`, since DB2 supports no DB arguments for a principal.
+    // MIT: `krb5_db2_put_principal` (kdb_db2.c:817-822)
+    /// any `db_args` is `EINVAL`, since DB2 supports no DB arguments for a principal.
     InvalidArgument(String),
     /// Request PDU was not AS-REQ or TGS-REQ.
     UnexpectedPdu,
@@ -64,7 +68,8 @@ pub enum Error {
         e_data: Vec<u8>,
     },
     /// A kdcpreauth module's failure. `code` is the module's own `krb5_error_code` and `message` is what `krb5_get_error_message` gives that code. The filter keeps the message only when the wire code is this one.
-    /// MIT `k5_get_error` (`util/support/errors.c:68-95`): the message is returned for the code it was set under.
+    // MIT: `k5_get_error` (util/support/errors.c:68-95)
+    /// the message is returned for the code it was set under.
     PreauthModule {
         /// The module's `krb5_error_code`.
         code: i32,
@@ -78,9 +83,11 @@ impl fmt::Display for Error {
         match self {
             Self::Crypto(s) => write!(f, "crypto: {s}"),
             Self::BadEnctype => write!(f, "Bad encryption type"),
-            // MIT `KRB5DES_BAD_KEYPAR` (`krb5_err.et:251-251`): the text.
+            // MIT: `KRB5DES_BAD_KEYPAR` (krb5_err.et:251-251)
+            // the text.
             Self::DesBadParity => write!(f, "DES key has bad parity"),
-            // MIT `KRB5DES_WEAK_KEY` (`krb5_err.et:252-252`): the text.
+            // MIT: `KRB5DES_WEAK_KEY` (krb5_err.et:252-252)
+            // the text.
             Self::DesWeakKey => write!(f, "DES key is a weak key"),
             Self::Asn1(s) => write!(f, "asn1: {s}"),
             Self::Protocol { code, text, .. } => match text {
@@ -124,8 +131,10 @@ impl From<krb5_crypto::Error> for Error {
 
 impl Error {
     /// The `krb5_error_code` MIT's library returns for a des3 key it refuses, which a log line prints as a number.
-    /// MIT `KRB5DES_BAD_KEYPAR` (`krb5_err.et:251-251`): `ERROR_TABLE_BASE_krb5` (-1765328384) plus 186.
-    /// MIT `KRB5DES_WEAK_KEY` (`krb5_err.et:252-252`): the same base plus 187.
+    // MIT: `KRB5DES_BAD_KEYPAR` (krb5_err.et:251-251)
+    /// `ERROR_TABLE_BASE_krb5` (-1765328384) plus 186.
+    // MIT: `KRB5DES_WEAK_KEY` (krb5_err.et:252-252)
+    /// the same base plus 187.
     #[must_use]
     pub(crate) fn des_key_code(&self) -> Option<i64> {
         match self {
@@ -196,7 +205,8 @@ impl From<krb5_protocol::Error> for Error {
     }
 }
 
-/// MIT `errcode_to_protocol` (`kdc_util.c:691-697`): the code past the krb5 table base is kept when it is 0 to 128, and anything else is `KRB_ERR_GENERIC`.
+// MIT: `errcode_to_protocol` (kdc_util.c:691-697)
+/// the code past the krb5 table base is kept when it is 0 to 128, and anything else is `KRB_ERR_GENERIC`.
 #[must_use]
 pub fn errcode_to_protocol(code: i32) -> i32 {
     if (0..=128).contains(&code) {

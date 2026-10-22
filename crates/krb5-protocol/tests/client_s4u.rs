@@ -1,9 +1,12 @@
 //! `kvno -U` emits PA-S4U-X509-USER 130 and PA-FOR-USER 129 on the FAST TGS outer list and
 //! `verify_s4u2self_reply` fails closed.
-//! MIT `krb5_get_self_cred_from_kdc` (`s4u_creds.c:517-567`): the request carries 130 and,
+// MIT: `krb5_get_self_cred_from_kdc` (s4u_creds.c:517-567)
+//! the request carries 130 and,
 //! for a named user, 129.
-//! MIT `make_tgs_outer_padata` (`fast.c:227-250`): the FAST TGS outer list duplicates them.
-//! MIT `verify_s4u2self_reply` (`s4u_creds.c:273-397`): fails closed — a reply 130 with a bad
+// MIT: `make_tgs_outer_padata` (fast.c:227-250)
+//! the FAST TGS outer list duplicates them.
+// MIT: `verify_s4u2self_reply` (s4u_creds.c:273-397)
+//! fails closed — a reply 130 with a bad
 //! nonce, checksum or user is `KRB5_KDCREP_MODIFIED`.
 //! Live oracle: `client-differential-gate.sh` `MIT_kvno_U_tgs_padata`.
 //! The live MIT `kvno -U` cell is the production oracle.
@@ -252,7 +255,8 @@ fn reply_from_userid(key: &ProtocolKey, req: &krb5_types::s4u::PaS4uX509User) ->
     }
 }
 
-/// MIT `make_pa_for_user_checksum` (`lib/krb5/krb/s4u_creds.c:130-133`): HMAC-MD5 under the TGT session key whatever its type, key usage 17.
+// MIT: `make_pa_for_user_checksum` (lib/krb5/krb/s4u_creds.c:130-133)
+/// HMAC-MD5 under the TGT session key whatever its type, key usage 17.
 /// The checksums below are MIT 1.22.2's own for these keys and `user@KERBER.TEST`, read live
 /// from its `krb5_c_make_checksum`.
 #[test]

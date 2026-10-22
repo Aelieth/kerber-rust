@@ -30,10 +30,12 @@ use krb5_kdc::{
 };
 use krb5_log::klog::{self, JsonLog, Severity, os_error_text};
 
-/// MIT `initialize_realms` (`kdc/main.c:669-669`): krb5kdc's option letters.
+// MIT: `initialize_realms` (kdc/main.c:669-669)
+/// krb5kdc's option letters.
 const OPTSTRING: &str = "x:r:d:mM:k:R:P:p:nw:4:T:X3";
 
-/// MIT `usage` (`kdc/main.c:582-595`): the text on standard error, then exit 1.
+// MIT: `usage` (kdc/main.c:582-595)
+/// the text on standard error, then exit 1.
 fn usage(progname: &str) -> ! {
     eprint!(
         "usage: {progname} [-x db_args]* [-d dbpathname] [-r dbrealmname]\n\
@@ -147,7 +149,8 @@ fn parse_options(progname: &str, args: &[String]) -> Options {
     out
 }
 
-/// MIT `main` (`kdc/main.c:899-900`): `argv[0]` is cut to its last path component.
+// MIT: `main` (kdc/main.c:899-900)
+/// `argv[0]` is cut to its last path component.
 fn progname(argv0: Option<&String>) -> String {
     argv0
         .map(|a| a.rsplit('/').next().unwrap_or(a).to_owned())
@@ -158,7 +161,8 @@ fn progname(argv0: Option<&String>) -> String {
 fn main() {
     let argv: Vec<String> = std::env::args().collect();
     let progname = progname(argv.first());
-    // MIT `main` (`kdc/main.c:917-921`): the KDC context first, its profile kdc.conf ahead of krb5.conf; a profile it refuses ends krb5kdc, named as invoked.
+    // MIT: `main` (kdc/main.c:917-921)
+    // the KDC context first, its profile kdc.conf ahead of krb5.conf; a profile it refuses ends krb5kdc, named as invoked.
     let profile_read = krb5_config::ReadOnce::start();
     if let Err(e) = krb5_config::init_kdc_profile() {
         let argv0 = argv.first().map_or("krb5kdc", String::as_str);
@@ -257,7 +261,8 @@ fn main() {
     #[cfg(feature = "test-hooks")]
     hooks::before_serving(&mut store, &opts.hooks);
     let pkinit_failure = pkinit_failure.filter(|_| store.pkinit().is_none());
-    // MIT `load_preauth_plugins` (`kdc/kdc_preauth.c:207-219`): a module whose init fails is logged at error and left out.
+    // MIT: `load_preauth_plugins` (kdc/kdc_preauth.c:207-219)
+    // a module whose init fails is logged at error and left out.
     for (level, line) in
         krb5_kdc::preauth_startup_lines(&store.policy.kdcpreauth, pkinit_failure.as_deref())
     {
@@ -306,9 +311,11 @@ fn main() {
     #[cfg(not(feature = "test-hooks"))]
     let pinned: Option<String> = None;
     let _ = &opts.operands;
-    // MIT `main` (`kdc/main.c:976-983`): the signal handlers are set up before the network.
+    // MIT: `main` (kdc/main.c:976-983)
+    // the signal handlers are set up before the network.
     let signals = Signals::install();
-    // MIT `loop_setup_network` (`lib/apputils/net-server.c:1068-1074`): the network lines around binding every listener.
+    // MIT: `loop_setup_network` (lib/apputils/net-server.c:1068-1074)
+    // the network lines around binding every listener.
     klog::syslog(Severity::Info, "setting up network...");
     let (udp, tcp) = bind_sockets(
         &progname,
@@ -321,7 +328,8 @@ fn main() {
         Severity::Info,
         &format!("set up {} sockets", udp.len() + tcp.len()),
     );
-    // MIT `main` (`kdc/main.c:996-1008`): detach unless -n, then the pid file, each failure logged and fatal.
+    // MIT: `main` (kdc/main.c:996-1008)
+    // detach unless -n, then the pid file, each failure logged and fatal.
     if !foreground && let Err(e) = detach() {
         klog::com_err(Some(&os_error_text(&e)), "while detaching from tty");
         std::process::exit(1);
@@ -332,7 +340,8 @@ fn main() {
         klog::com_err(Some(&os_error_text(&e)), "while creating PID file");
         std::process::exit(1);
     }
-    // MIT `main` (`kdc/main.c:1016-1016`): the realm is opened again after daemon(), so a relative database or stash name now opens from `/`, or the KDC stops as at its start.
+    // MIT: `main` (kdc/main.c:1016-1016)
+    // the realm is opened again after daemon(), so a relative database or stash name now opens from `/`, or the KDC stops as at its start.
     if !foreground && names_relative_database(&paths, &opts.args.db_args) {
         if keyboard {
             let fetching = format!(
@@ -391,7 +400,8 @@ fn main() {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         krb5_kdc::audit_kdc_start(&*g, true);
     }
-    // MIT `finish_dispatch` (`kdc/dispatch.c:54-55`): the reply size is compared as an unsigned number.
+    // MIT: `finish_dispatch` (kdc/dispatch.c:54-55)
+    // the reply size is compared as an unsigned number.
     let max_dgram = kdc_conf.as_ref().map_or(krb5_kdc::MAX_DGRAM_REPLY, |c| {
         usize::try_from(c.kdc_max_dgram_reply_size.cast_unsigned()).unwrap_or(usize::MAX)
     });
@@ -427,7 +437,8 @@ fn cannot_initialize(progname: &str, realm: &str, error: &str, during: &str) -> 
     std::process::exit(1);
 }
 
-/// MIT `init_realm` (`kdc/main.c:351-382`): open the database, then fetch the master key from the stash, or from the keyboard with `-m` when kdc.conf names no stash.
+// MIT: `init_realm` (kdc/main.c:351-382)
+/// open the database, then fetch the master key from the stash, or from the keyboard with `-m` when kdc.conf names no stash.
 fn init_realm(
     progname: &str,
     realm: &str,
@@ -452,7 +463,8 @@ fn init_realm(
 }
 
 /// The listening sockets. A pinned address binds one UDP and TCP pair, and `--test-realm` alone binds the first loopback candidate. Otherwise every `kdc_listen` / `kdc_ports` entry (after `-p`) is UDP and every `kdc_tcp_listen` / `kdc_tcp_ports` entry (else the UDP list) is TCP, a bare port on all local addresses, port 88 when nothing names one. A bind failure is logged and fatal.
-/// MIT `main` (`kdc/main.c:960-973`): UDP and TCP listeners for each realm's lists.
+// MIT: `main` (kdc/main.c:960-973)
+/// UDP and TCP listeners for each realm's lists.
 fn bind_sockets(
     progname: &str,
     test_realm: bool,
@@ -478,7 +490,8 @@ fn bind_sockets(
         std::process::exit(1);
     });
     let udp = bind_udp_listeners(&udp_addrs).unwrap_or_else(|_| std::process::exit(1));
-    // MIT `initialize_realms` (`kdc/main.c:639-644`): the TCP listeners' backlog is `kdc_tcp_listen_backlog`.
+    // MIT: `initialize_realms` (kdc/main.c:639-644)
+    // the TCP listeners' backlog is `kdc_tcp_listen_backlog`.
     let tcp = bind_tcp_listeners_with_backlog(&tcp_addrs, conf.kdc_tcp_listen_backlog)
         .unwrap_or_else(|_| std::process::exit(1));
     (udp, tcp)

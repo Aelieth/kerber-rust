@@ -166,8 +166,10 @@ fn sent_addresses(
         .addresses
 }
 
-/// MIT `req_body_9` (`lib/krb5/asn.1/asn1_k_encode.c:457-458`): the request's addresses are an optional-if-empty field.
-/// MIT `DEFOPTIONALEMPTYTYPE` (`lib/krb5/asn.1/asn1_encode.h:389-396`): present only for a list with an element, so `kinit -a` on a host with no usable address sends none.
+// MIT: `req_body_9` (lib/krb5/asn.1/asn1_k_encode.c:457-458)
+/// the request's addresses are an optional-if-empty field.
+// MIT: `DEFOPTIONALEMPTYTYPE` (lib/krb5/asn.1/asn1_encode.h:389-396)
+/// present only for a list with an element, so `kinit -a` on a host with no usable address sends none.
 #[test]
 fn the_request_carries_an_ipv4_and_an_ipv6_address_and_an_empty_list_is_no_field() {
     let list = vec![

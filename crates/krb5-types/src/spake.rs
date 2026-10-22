@@ -40,7 +40,8 @@ pub struct SpakeResponse {
 
 // MIT decode_cntype; see docs/parity/a3-preauth.md
 // MIT spake_verify; see docs/parity/a3-preauth.md
-// MIT `spake_process` (`plugins/preauth/spake/spake_client.c:357-359`): the client takes it as an unexpected message, as it takes a support or a response.
+// MIT: `spake_process` (plugins/preauth/spake/spake_client.c:357-359)
+// the client takes it as an unexpected message, as it takes a support or a response.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PaSpake {
     Support(SpakeSupport),

@@ -11,15 +11,20 @@ use crate::error::Error;
 use crate::keytab::KeytabFailure;
 use crate::trace::{self, ERROR_TABLE_BASE_KRB5};
 
-/// MIT `KRB5_LIBOS_CANTREADPWD` (`krb5_err.et`): "Cannot read password".
+// MIT: `KRB5_LIBOS_CANTREADPWD` (krb5_err.et)
+/// "Cannot read password".
 pub(super) const CANTREADPWD: i64 = ERROR_TABLE_BASE_KRB5 + 130;
-/// MIT `KRB5_LIBOS_PWDINTR` (`krb5_err.et`): "Password read interrupted".
+// MIT: `KRB5_LIBOS_PWDINTR` (krb5_err.et)
+/// "Password read interrupted".
 pub(super) const PWDINTR: i64 = ERROR_TABLE_BASE_KRB5 + 132;
-/// MIT `KRB5_PREAUTH_FAILED` (`krb5_err.et`): "Generic preauthentication failure".
+// MIT: `KRB5_PREAUTH_FAILED` (krb5_err.et)
+/// "Generic preauthentication failure".
 pub(super) const KRB5_PREAUTH_FAILED: i64 = ERROR_TABLE_BASE_KRB5 + 210;
-/// MIT `KRB5DES_BAD_KEYPAR` (`krb5_err.et:251-251`): "DES key has bad parity".
+// MIT: `KRB5DES_BAD_KEYPAR` (krb5_err.et:251-251)
+/// "DES key has bad parity".
 pub(super) const DES_BAD_KEYPAR: i64 = ERROR_TABLE_BASE_KRB5 + 186;
-/// MIT `KRB5DES_WEAK_KEY` (`krb5_err.et:252-252`): "DES key is a weak key".
+// MIT: `KRB5DES_WEAK_KEY` (krb5_err.et:252-252)
+/// "DES key is a weak key".
 pub(super) const DES_WEAK_KEY: i64 = ERROR_TABLE_BASE_KRB5 + 187;
 /// `EIO` (errno 5), whose message is "Input/output error".
 pub(super) const EIO: i64 = 5;
@@ -62,7 +67,8 @@ impl ModuleFail {
     }
 
     /// A prompt that did not read: `KRB5_LIBOS_PWDINTR` for an interrupt, else `KRB5_LIBOS_CANTREADPWD` with the reader's message.
-    /// MIT `krb5_prompter_posix` (`lib/krb5/os/prompter.c:93-100`): a reply that does not read is one of those two codes.
+    // MIT: `krb5_prompter_posix` (lib/krb5/os/prompter.c:93-100)
+    /// a reply that does not read is one of those two codes.
     pub(super) fn from_read(e: Error) -> Self {
         match e {
             Error::File(io) if io.kind() == ErrorKind::Interrupted => Self {
@@ -82,7 +88,8 @@ impl ModuleFail {
     }
 
     /// A key wanted from a keytab that could not be read: the lookup's error, in MIT's code and message.
-    /// MIT `get_as_key_keytab` (`lib/krb5/krb/gic_keytab.c:68-71`): `krb5_kt_get_entry`'s error is the callback's, and a module that wanted the key fails with it.
+    // MIT: `get_as_key_keytab` (lib/krb5/krb/gic_keytab.c:68-71)
+    /// `krb5_kt_get_entry`'s error is the callback's, and a module that wanted the key fails with it.
     pub(super) fn keytab(f: &KeytabFailure) -> Self {
         Self {
             error: Error::Keytab {
@@ -169,7 +176,8 @@ impl<'p, 'g> PasswordCell<'p, 'g> {
     }
 
     /// The exchange's keytab could not be read: every key a module or the reply asks for fails with `failure`.
-    /// MIT `krb5_init_creds_set_keytab` (`lib/krb5/krb/gic_keytab.c:209-213`): the failure is traced and is no error until a key is asked of the keytab.
+    // MIT: `krb5_init_creds_set_keytab` (lib/krb5/krb/gic_keytab.c:209-213)
+    /// the failure is traced and is no error until a key is asked of the keytab.
     pub(super) fn with_unreadable_keytab(mut self, failure: Option<&KeytabFailure>) -> Self {
         self.unreadable = failure.cloned();
         self

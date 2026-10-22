@@ -1,15 +1,19 @@
 //! AS ticket times: `from` / `till` / `rtime`, postdating, the key-expiry field, the realm
 //! lifetime defaults, and the kadmin service lifetimes.
 //! When `kdc.conf` sets no `max_life`, `params.max_life` is 24 h.
-//! MIT `kadm5_get_config_params` (`alt_prof.c:574-575`): the `max_life` default is
+// MIT: `kadm5_get_config_params` (alt_prof.c:574-575)
+//! the `max_life` default is
 //! `GET_DELTAT_PARAM(…, 24 * 60 * 60)`. The store's `Policy::max_life` and
 //! `KdcConf::max_life` default to it too.
 //! An omitted `max_renewable_life` is not fed into the KDC issue cap as 0, the K/M record
 //! uses the realm lifetimes, and the client `till` defaults to one day.
 //! `add_admin_princ` sets `KADM5_MAX_LIFE`.
-//! MIT `ADMIN_LIFETIME` (`kadm5_create.c:54-54`): the 3 h `max_life` of `kadmin/admin`.
-//! MIT `CHANGEPW_LIFETIME` (`kadm5_create.c:55-55`): the 5 min `max_life` of `kadmin/changepw`.
-//! MIT `add_admin_princ` (`kadm5_create.c:207-213`): a nonzero lifetime is written as
+// MIT: `ADMIN_LIFETIME` (kadm5_create.c:54-54)
+//! the 3 h `max_life` of `kadmin/admin`.
+// MIT: `CHANGEPW_LIFETIME` (kadm5_create.c:55-55)
+//! the 5 min `max_life` of `kadmin/changepw`.
+// MIT: `add_admin_princ` (kadm5_create.c:207-213)
+//! a nonzero lifetime is written as
 //! `max_life` with `KADM5_MAX_LIFE` in the mask, so the kadmin principals do not take
 //! `params.max_life`.
 
@@ -472,15 +476,18 @@ fn as_postdated_is_invalid_until_validate() {
     let part = tgt_part_issue_acl_ap(&store, &early);
     assert!(part.flags.invalid());
     assert!(part.flags.bit(flag_bit::POSTDATED));
-    // MIT `process_as_req` (`kdc/do_as_req.c:692-693`): a POSTDATED request's starttime is its from.
+    // MIT: `process_as_req` (kdc/do_as_req.c:692-693)
+    // a POSTDATED request's starttime is its from.
     assert_eq!(
         part.starttime.as_ref().map(KerberosTime::unix_seconds),
         Some(ahead.unix_seconds())
     );
-    // MIT `check_tgs_opts` (`kdc/tgs_policy.c:98-101`): an INVALID ticket without VALIDATE is TKT_NYV.
+    // MIT: `check_tgs_opts` (kdc/tgs_policy.c:98-101)
+    // an INVALID ticket without VALIDATE is TKT_NYV.
     let err = krb5_kdc::issue_tgs(&store, &host_tgs(&store, &early, 111)).unwrap_err();
     assert_eq!(status(&err), (err::TKT_NYV, Some("TICKET NOT VALID")));
-    // MIT `check_tgs_times` (`kdc/tgs_policy.c:228-232`): VALIDATE before the starttime is TKT_NYV.
+    // MIT: `check_tgs_times` (kdc/tgs_policy.c:228-232)
+    // VALIDATE before the starttime is TKT_NYV.
     let too_soon = krb5_kdc::issue_tgs(&store, &validate_tgs(&early, 112)).unwrap_err();
     assert_eq!(status(&too_soon), (err::TKT_NYV, Some("NOT_YET_VALID")));
     let from = KerberosTime::now().add_seconds(1).unwrap();

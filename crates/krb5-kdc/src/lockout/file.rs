@@ -1,7 +1,8 @@
 //! `principal.lockout`: the database's lockout attributes beside it, MIT klmdb's lockout split for a dump store. `kdb5_util create` and `load` make it; the KDC updates a record in place under the database's exclusive lock, with no temporary file, rename or sync, and never makes the file; every reader merges it over the database's own values, which stay the fallback for a principal it has no record of. A tool that writes the whole file writes a new one and renames it over the old, as a database save does, so a rewrite cut short leaves the old file whole. No open follows a symlink, so a link planted as the file is never written through.
 //!
 //! The file is text: a header line, then one line per principal holding its three attributes as ten-digit fields, a CRC-32 of them and its name, and its name, so a record keeps its offset and an update rewrites only its digits and checksum, in one write. A deleted principal's line is marked with `#` and dropped when the file is next rewritten. A line that does not parse or whose checksum fails, an update torn by a crash included, is no record: that principal's values are the database's again, the loss MIT accepts for lockout records it never syncs, and never a value no write made.
-//! MIT `open_lmdb_env` (`plugins/kdb/lmdb/kdb_lmdb.c:265-268`): the lockout environment is never synced, durability not being worth it.
+// MIT: `open_lmdb_env` (plugins/kdb/lmdb/kdb_lmdb.c:265-268)
+//! the lockout environment is never synced, durability not being worth it.
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
@@ -408,7 +409,8 @@ fn open_for_writing(db: &Path) -> io::Result<Option<SideFile>> {
     }
 }
 
-/// MIT `fetch_lockout` (`plugins/kdb/lmdb/kdb_lmdb.c:329-344`): a reader takes the lockout record when there is one and ignores a failure to read it.
+// MIT: `fetch_lockout` (plugins/kdb/lmdb/kdb_lmdb.c:329-344)
+/// a reader takes the lockout record when there is one and ignores a failure to read it.
 #[must_use]
 pub fn lockout_records(db: &Path) -> HashMap<String, Lockout> {
     match SideFile::open_read(&lockout_path(db)) {
@@ -418,7 +420,8 @@ pub fn lockout_records(db: &Path) -> HashMap<String, Lockout> {
 }
 
 /// Give each principal of `store` its record in `db`'s side file, when it has one: what a read of the database gives every reader. Read it holding the database's lock.
-/// MIT `klmdb_iterate` (`plugins/kdb/lmdb/kdb_lmdb.c:841-888`): every entry read takes its lockout record.
+// MIT: `klmdb_iterate` (plugins/kdb/lmdb/kdb_lmdb.c:841-888)
+/// every entry read takes its lockout record.
 pub fn merge_lockout_file(store: &mut PrincipalStore, db: &Path) {
     let records = lockout_records(db);
     if !records.is_empty() {
@@ -437,8 +440,10 @@ pub(crate) fn store_records(store: &PrincipalStore) -> Vec<(String, Lockout)> {
 }
 
 /// After a full load or a create, holding the database's exclusive lock: `records` become the side file of `db`, made when it is not there; with `merge`, a principal it already has a record of keeps that record, as an iprop load keeps a replica's own. A principal the load left out loses its record.
-/// MIT `klmdb_create` (`plugins/kdb/lmdb/kdb_lmdb.c:575-661`): a create or load makes the lockout environment when there is none and does not empty it.
-/// MIT `klmdb_put_principal` (`plugins/kdb/lmdb/kdb_lmdb.c:781-809`): each loaded entry's lockout attributes are written, kept under `merge_nra` when a record exists.
+// MIT: `klmdb_create` (plugins/kdb/lmdb/kdb_lmdb.c:575-661)
+/// a create or load makes the lockout environment when there is none and does not empty it.
+// MIT: `klmdb_put_principal` (plugins/kdb/lmdb/kdb_lmdb.c:781-809)
+/// each loaded entry's lockout attributes are written, kept under `merge_nra` when a record exists.
 pub(crate) fn write_loaded(
     db: &Path,
     records: &[(String, Lockout)],
@@ -470,7 +475,8 @@ pub(crate) fn ensure(db: &Path) -> io::Result<()> {
 }
 
 /// After a change written to the database `db` holding its exclusive lock, with the store read again under that lock: bring the side file in line with `store`. A principal whose attributes the change set (an unlock, a key change, a load's update) gets them as its record, a new one a record, a deleted one's record is marked, a renamed one's moves with it; a file with more marked lines than records is rewritten. With `make_missing` a missing side file is made, owned and moded as the database ([`make_beside`]); without it nothing is made. One that is no side file is left as it is.
-/// MIT `klmdb_delete_principal` (`plugins/kdb/lmdb/kdb_lmdb.c:819-838`): a delete removes the lockout record too.
+// MIT: `klmdb_delete_principal` (plugins/kdb/lmdb/kdb_lmdb.c:819-838)
+/// a delete removes the lockout record too.
 pub(crate) fn reconcile_ids(store: &PrincipalStore, db: &Path, ids: &[String]) -> io::Result<()> {
     let Some(mut side) = open_for_writing(db)? else {
         return Ok(());

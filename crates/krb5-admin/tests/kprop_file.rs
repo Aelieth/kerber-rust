@@ -403,7 +403,8 @@ fn unreadable_keytabs(dir: &Path) -> Vec<(PathBuf, &'static str)> {
     ]
 }
 
-/// MIT `decrypt_as_reply` (`lib/krb5/krb/get_in_tkt.c:115-123`): `gak_fct`'s error is returned as it is.
+// MIT: `decrypt_as_reply` (lib/krb5/krb/get_in_tkt.c:115-123)
+/// `gak_fct`'s error is returned as it is.
 #[test]
 fn kprop_with_an_unreadable_keytab_makes_the_request_and_fails_the_reply_that_needs_its_key() {
     let r = realm_with("kprop-file-unreadable-reply", false, "");
@@ -439,7 +440,8 @@ fn kprop_with_an_unreadable_keytab_makes_the_request_and_fails_the_reply_that_ne
     let _ = std::fs::remove_dir_all(&r.dir);
 }
 
-/// MIT `get_as_key` (`lib/krb5/krb/preauth2.c:438-457`): a module that wants the key gets `gak_fct`'s error as its own.
+// MIT: `get_as_key` (lib/krb5/krb/preauth2.c:438-457)
+/// a module that wants the key gets `gak_fct`'s error as its own.
 #[test]
 fn kprop_with_an_unreadable_keytab_fails_the_preauth_module_that_wants_its_key() {
     let r = realm_with(
@@ -476,7 +478,8 @@ fn kprop_with_an_unreadable_keytab_fails_the_preauth_module_that_wants_its_key()
 }
 
 /// With SPAKE permitted, the KDC's refusal of the support message is the exchange's error, as kprop's `com_err` prints it, "Preauthentication failed", over the keytab's failure.
-/// MIT `init_creds_step_request` (`lib/krb5/krb/get_in_tkt.c:1349-1352`): a `KDC_ERR_PREAUTH_FAILED` the KDC sent is the error saved, and the one reported when the mechanisms after it fail.
+// MIT: `init_creds_step_request` (lib/krb5/krb/get_in_tkt.c:1349-1352)
+/// a `KDC_ERR_PREAUTH_FAILED` the KDC sent is the error saved, and the one reported when the mechanisms after it fail.
 #[test]
 fn kprop_with_an_unreadable_keytab_reports_the_kdcs_refusal_of_spakes_support() {
     let r = realm_with("kprop-file-unreadable-spake", true, "");

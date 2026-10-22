@@ -60,7 +60,8 @@ impl Krb5Conf {
             .unwrap_or(self.verify_ap_req_nofail)
     }
 
-    // MIT `sort_krb5_padata_sequence` (`lib/krb5/krb/get_in_tkt.c:418-424`): the realm string, else "17, 16, 15, 14".
+    // MIT: `sort_krb5_padata_sequence` (lib/krb5/krb/get_in_tkt.c:418-424)
+    // the realm string, else "17, 16, 15, 14".
     #[must_use]
     pub fn preferred_preauth_for(&self, realm: &str) -> Option<&[i32]> {
         if let Some(list) = self
@@ -205,14 +206,17 @@ fn include_directive(raw: &str) -> Option<IncludeKind<'_>> {
     None
 }
 
-// MIT `parse_file` (`prof_parse.c:351-359`): each `fgets` line goes to `parse_line` whole.
-// MIT `strip_line` (`prof_parse.c:40-45`): a line's trailing `\n` and `\r` characters go.
+// MIT: `parse_file` (prof_parse.c:351-359)
+// each `fgets` line goes to `parse_line` whole.
+// MIT: `strip_line` (prof_parse.c:40-45)
+// a line's trailing `\n` and `\r` characters go.
 fn profile_lines(text: &str) -> impl Iterator<Item = &str> {
     text.split_terminator('\n')
         .map(|line| line.trim_end_matches(['\r', '\n']))
 }
 
-// MIT `parse_line` (`prof_parse.c:331-335`): that line must start with `{`, its rest unread,
+// MIT: `parse_line` (prof_parse.c:331-335)
+// that line must start with `{`, its rest unread,
 pub fn join_subsection_braces(text: &str) -> Result<String, Error> {
     let mut out = String::with_capacity(text.len());
     let mut in_section = false;
@@ -395,7 +399,8 @@ fn take_first(seen: &mut BTreeSet<String>, key: &str) -> bool {
     seen.insert(key.to_owned())
 }
 
-// MIT `profile_parse_file` (`prof_parse.c:431-434`): a parse error is not a successful profile.
+// MIT: `profile_parse_file` (prof_parse.c:431-434)
+// a parse error is not a successful profile.
 fn parse_into(
     conf: &mut Krb5Conf,
     seen: &mut BTreeSet<String>,
@@ -666,7 +671,8 @@ fn relation_name(tag: &str) -> &str {
     tag.split_once('*').map_or(tag, |(name, _)| name)
 }
 
-// MIT `profile_get_string` (`prof_get.c:265-270`): a missing relation keeps the default, and
+// MIT: `profile_get_string` (prof_get.c:265-270)
+// a missing relation keeps the default, and
 fn parse_libdefaults(
     conf: &mut Krb5Conf,
     seen: &mut BTreeSet<String>,
@@ -992,7 +998,8 @@ pub(crate) fn relation_value(v: &str) -> String {
         .map_or_else(|| v.trim_end().to_owned(), parse_quoted_string)
 }
 
-// MIT `parse_quoted_string` (`prof_parse.c:47-72`): up to the closing quote; `\n`, `\t` and `\b`
+// MIT: `parse_quoted_string` (prof_parse.c:47-72)
+// up to the closing quote; `\n`, `\t` and `\b`
 fn parse_quoted_string(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars();
@@ -1067,8 +1074,10 @@ fn refuse(conf: &mut Krb5Conf, why: ProfileError) {
     }
 }
 
-// MIT `expand_token` (`lib/krb5/os/expand_path.c:403-422`): an empty token, or one no table name starts with, is `EINVAL`.
-// MIT `k5_expand_path_tokens_extra` (`lib/krb5/os/expand_path.c:500-506`): a `%{` with no `}` is `EINVAL`.
+// MIT: `expand_token` (lib/krb5/os/expand_path.c:403-422)
+// an empty token, or one no table name starts with, is `EINVAL`.
+// MIT: `k5_expand_path_tokens_extra` (lib/krb5/os/expand_path.c:500-506)
+// a `%{` with no `}` is `EINVAL`.
 fn path_tokens_expand(path: &str) -> bool {
     const TOKENS: [&str; 9] = [
         "LIBDIR", "BINDIR", "SBINDIR", "euid", "username", "TEMP", "USERID", "uid", "null",
@@ -1198,7 +1207,8 @@ pub fn init_kdc_profile() -> Result<(), Error> {
     }
 }
 
-// MIT `locate_server` (`lib/krb5/os/locate_kdc.c:823-836`): the profile `[realms] kdc` list when
+// MIT: `locate_server` (lib/krb5/os/locate_kdc.c:823-836)
+// the profile `[realms] kdc` list when
 #[must_use]
 pub fn discover_kdc_in<P: AsRef<Path>>(
     paths: impl IntoIterator<Item = P>,

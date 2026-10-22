@@ -109,7 +109,8 @@ fn caches(
     })
 }
 
-// MIT `list_all_ccaches` (`klist.c:360-386`): one line per initialized cache, its principal and
+// MIT: `list_all_ccaches` (klist.c:360-386)
+// one line per initialized cache, its principal and
 fn list_all_ccaches(
     ctx: &ClientContext,
     prog: &str,
@@ -132,7 +133,8 @@ fn list_all_ccaches(
     status
 }
 
-// MIT `list_ccache` (`klist.c:388-420`): a cache that is not initialized is skipped.
+// MIT: `list_ccache` (klist.c:388-420)
+// a cache that is not initialized is skipped.
 fn list_ccache(ctx: &ClientContext, out: &mut String, cache: &Cache, now: u32) -> i32 {
     let Ok(cc) = load_ccache(ctx, &cache.spec()) else {
         return 1;
@@ -145,7 +147,8 @@ fn list_ccache(ctx: &ClientContext, out: &mut String, cache: &Cache, now: u32) -
     0
 }
 
-// MIT `show_all_ccaches` (`klist.c:422-450`): each cache of the collection as `show_ccache`
+// MIT: `show_all_ccaches` (klist.c:422-450)
+// each cache of the collection as `show_ccache`
 fn show_all_ccaches(
     ctx: &ClientContext,
     prog: &str,
@@ -175,7 +178,8 @@ fn show_all_ccaches(
     status
 }
 
-// MIT `do_ccache` (`klist.c:452-465`): the default cache, shown or (`-s`) checked.
+// MIT: `do_ccache` (klist.c:452-465)
+// the default cache, shown or (`-s`) checked.
 fn do_ccache(
     ctx: &ClientContext,
     prog: &str,
@@ -205,7 +209,8 @@ fn check(ctx: &ClientContext, cache: &Cache, now: u32) -> i32 {
     load_ccache(ctx, &cache.spec()).map_or(1, |cc| check_ccache(&cc, now))
 }
 
-// MIT `show_ccache` (`klist.c:468-529`): the cache's name and default principal, the header, then
+// MIT: `show_ccache` (klist.c:468-529)
+// the cache's name and default principal, the header, then
 fn show_ccache(
     ctx: &ClientContext,
     prog: &str,
@@ -240,7 +245,8 @@ fn show_ccache(
     0
 }
 
-// MIT `show_credential` (`klist.c:678-823`): the times and server, then on one line
+// MIT: `show_credential` (klist.c:678-823)
+// the times and server, then on one line
 fn show_credential(out: &mut String, args: &KlistArgs, cred: &CcacheCred, defname: &str) {
     let name = unparse(&cred.client);
     let is_config = cred.is_config();
@@ -344,7 +350,8 @@ fn show_credential(out: &mut String, args: &KlistArgs, cred: &CcacheCred, defnam
     }
 }
 
-// MIT `print_config_data` (`klist.c:653-676`): printable bytes as they are, others as `\ooo`,
+// MIT: `print_config_data` (klist.c:653-676)
+// printable bytes as they are, others as `\ooo`,
 fn print_config_data(out: &mut String, mut col: usize, data: &[u8]) {
     for &b in data {
         while col < 8 {
@@ -368,7 +375,8 @@ fn print_config_data(out: &mut String, mut col: usize, data: &[u8]) {
     }
 }
 
-// MIT `one_addr` (`klist.c:829-887`): an IPv4 or IPv6 address (numerically), a NetBIOS name, or
+// MIT: `one_addr` (klist.c:829-887)
+// an IPv4 or IPv6 address (numerically), a NetBIOS name, or
 fn one_addr(addrtype: u16, a: &[u8]) -> String {
     match (addrtype, a.len()) {
         (2, 4) => std::net::Ipv4Addr::new(a[0], a[1], a[2], a[3]).to_string(),
@@ -396,12 +404,14 @@ fn etype_string(etype: i32) -> String {
     }
 }
 
-// MIT `printtime` (`klist.c:643-651`): the local time in `timestamp_width` columns, space-filled.
+// MIT: `printtime` (klist.c:643-651)
+// the local time in `timestamp_width` columns, space-filled.
 fn printtime(t: u32) -> String {
     timestamp_to_sfstring(t, timestamp_width() + 1, Some(b' ')).unwrap_or_default()
 }
 
-// MIT `do_keytab` (`klist.c:263-358`): the keytab's name, the header (`-t` adds the timestamp
+// MIT: `do_keytab` (klist.c:263-358)
+// the keytab's name, the header (`-t` adds the timestamp
 fn do_keytab(ctx: &ClientContext, prog: &str, args: &KlistArgs, name: Option<&str>) -> i32 {
     let (ktname, doing) = match name {
         Some(n) => (n.to_owned(), format!("while resolving keytab {n}")),

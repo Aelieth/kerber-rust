@@ -11,11 +11,13 @@ const OID_CONTENT_TYPE: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09
 
 const OID_MESSAGE_DIGEST: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x04];
 
-// MIT `algorithm_identifier` (`lib/krb5/asn.1/asn1_k_encode.c:1331-1332`): the algorithm OID, then the parameters as their own DER.
+// MIT: `algorithm_identifier` (lib/krb5/asn.1/asn1_k_encode.c:1331-1332)
+// the algorithm OID, then the parameters as their own DER.
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct CmsAlgorithmIdentifier {
     pub algorithm: ObjectIdentifier,
-    // MIT `opt_der_data` (`lib/krb5/asn.1/asn1_k_encode.c:65-65`): an optional field kept as its raw DER.
+    // MIT: `opt_der_data` (lib/krb5/asn.1/asn1_k_encode.c:65-65)
+    // an optional field kept as its raw DER.
     pub parameters: Option<Any>,
 }
 
@@ -405,7 +407,8 @@ pub fn cms_extract_unsigned(der: &[u8]) -> Option<Vec<u8>> {
     unsigned_signeddata_econtent(der)
 }
 
-// MIT `cms_signeddata_verify` (`pkinit_crypto_openssl.c:2052-2063`): a SignedData with no
+// MIT: `cms_signeddata_verify` (pkinit_crypto_openssl.c:2052-2063)
+// a SignedData with no
 fn unsigned_signeddata_econtent(der: &[u8]) -> Option<Vec<u8>> {
     let (tag, ci, _) = take_tlv(der)?;
     if tag != 0x30 {
@@ -1837,7 +1840,8 @@ fn cert_pkinit_san(cert: &[u8]) -> Option<(String, Vec<String>)> {
     out
 }
 
-// MIT `pkinit_krb5_principal_name_data` (`asn1_k_encode.c:1360-1364`): KRB5PrincipalName is a
+// MIT: `pkinit_krb5_principal_name_data` (asn1_k_encode.c:1360-1364)
+// KRB5PrincipalName is a
 /// SEQUENCE of `realm [0]` and `principalName [1]`, not RFC 4120's PrincipalName.
 fn parse_krb5_principal_name(der: &[u8]) -> Option<(String, Vec<String>)> {
     parse_krb5_principal_name_typed(der).map(|(realm, _, parts)| (realm, parts))

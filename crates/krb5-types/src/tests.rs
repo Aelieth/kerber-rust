@@ -1078,7 +1078,8 @@ fn a_non_utf8_pin_and_vendor_in_a_request_decode_as_mit_octets() {
     assert_eq!(rasn::der::encode(&request).unwrap(), der);
 }
 
-// MIT `decode_atype_to_ptr` (`lib/krb5/asn.1/asn1_encode.c:1341-1342`): non-emptiness of a sequence is not
+// MIT: `decode_atype_to_ptr` (lib/krb5/asn.1/asn1_encode.c:1341-1342)
+// non-emptiness of a sequence is not
 #[test]
 fn an_empty_token_info_list_decodes_as_mit_does() {
     let der = [0x30, 0x05, 0x80, 0x01, 0x6e, 0xa2, 0x00];

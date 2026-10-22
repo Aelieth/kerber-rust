@@ -2,7 +2,8 @@
 
 use krb5_kdc::PrincipalStore;
 
-/// MIT `kadm5_get_either` (`svr_iters.c:175-175`): the converted glob is compiled with `regcomp` as a POSIX BRE.
+// MIT: `kadm5_get_either` (svr_iters.c:175-175)
+/// the converted glob is compiled with `regcomp` as a POSIX BRE.
 #[must_use]
 pub fn glob_pattern_ok(glob: &str) -> bool {
     if glob.ends_with('\\') {
@@ -76,7 +77,8 @@ pub(crate) fn glob_expand(glob: &str, append_realm: bool) -> String {
 }
 
 /// `glob_to_regexp` + `regexec` as a direct anchored matcher: `?`=one, `*`=run, `[...]`=class, `\\x`=literal.
-/// MIT `get_either_iter` (`svr_iters.c:111-115`): a name matches when `regexec` returns 0.
+// MIT: `get_either_iter` (svr_iters.c:111-115)
+/// a name matches when `regexec` returns 0.
 pub(crate) fn glob_is_match(pattern: &[u8], text: &[u8]) -> bool {
     let (mut p, mut t) = (0usize, 0usize);
     let (mut star_p, mut star_t): (Option<usize>, usize) = (None, 0);

@@ -1,20 +1,27 @@
-// MIT `loop_add_addresses` (`lib/apputils/net-server.c:381-433`): a list is split on `,`,
-// MIT `k5_parse_host_string` (`lib/krb5/krb/parse_host_string.c:70-124`): an entry is a
-// MIT `loop_add_address` (`lib/apputils/net-server.c:304-361`): a daemon's listeners are one
+// MIT: `loop_add_addresses` (lib/apputils/net-server.c:381-433)
+// a list is split on `,`,
+// MIT: `k5_parse_host_string` (lib/krb5/krb/parse_host_string.c:70-124)
+// an entry is a
+// MIT: `loop_add_address` (lib/apputils/net-server.c:304-361)
+// a daemon's listeners are one
 
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
 
 use super::Error;
 
-// MIT `KRB5_DEFAULT_PORT` (`include/osconf.hin:95-95`): the KDC's port.
+// MIT: `KRB5_DEFAULT_PORT` (include/osconf.hin:95-95)
+// the KDC's port.
 pub const KDC_PORT: u16 = 88;
-// MIT `DEFAULT_KDC_PORTLIST` (`include/osconf.hin:99-99`): the KDC's UDP list when neither
+// MIT: `DEFAULT_KDC_PORTLIST` (include/osconf.hin:99-99)
+// the KDC's UDP list when neither
 pub const DEFAULT_KDC_PORTLIST: &str = "88";
-// MIT `DEFAULT_KADM5_PORT` (`include/osconf.hin:107-107`): kadmind's port.
+// MIT: `DEFAULT_KADM5_PORT` (include/osconf.hin:107-107)
+// kadmind's port.
 pub const KADMIND_PORT: u16 = 749;
 // MIT DEFAULT_KPASSWD_PORT; see docs/parity/b1-client.md
 pub const KPASSWD_PORT: u16 = 464;
-// MIT `ADDRESSES_DELIM` (`include/net-server.h:36-36`): the list separators.
+// MIT: `ADDRESSES_DELIM` (include/net-server.h:36-36)
+// the list separators.
 const ADDRESSES_DELIM: &[char] = &[',', ';', ' '];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,7 +31,8 @@ pub struct ListenAddr {
 }
 
 impl ListenAddr {
-    // MIT `setup_addresses` (`lib/apputils/net-server.c:927-1049`): `getaddrinfo` with
+    // MIT: `setup_addresses` (lib/apputils/net-server.c:927-1049)
+    // `getaddrinfo` with
     pub fn resolve(&self) -> Result<Vec<SocketAddr>, Error> {
         let Some(host) = self.host.as_deref() else {
             return Ok(vec![
@@ -119,7 +127,8 @@ pub enum BindType {
 }
 
 impl BindType {
-    // MIT `bind_type_names` (`lib/apputils/net-server.c:134-139`): the name the daemon log gives the kind.
+    // MIT: `bind_type_names` (lib/apputils/net-server.c:134-139)
+    // the name the daemon log gives the kind.
     #[must_use]
     pub fn name(self) -> &'static str {
         match self {
@@ -179,8 +188,10 @@ impl<S: Clone> BindAddresses<S> {
         Ok(())
     }
 
-    // MIT `FOREACH_ELT` (`lib/apputils/net-server.c:178-179`): the list is walked from the top.
-    // MIT `DEL` (`lib/apputils/net-server.c:197-198`): a removed entry takes the last one's place.
+    // MIT: `FOREACH_ELT` (lib/apputils/net-server.c:178-179)
+    // the list is walked from the top.
+    // MIT: `DEL` (lib/apputils/net-server.c:197-198)
+    // a removed entry takes the last one's place.
     pub fn add(
         &mut self,
         host: Option<String>,
@@ -236,7 +247,8 @@ impl<S: Clone> BindAddresses<S> {
     }
 }
 
-// MIT `parse_admin_server_port` (`lib/kadm5/alt_prof.c:395-417`): a written port is read with `atoi`, so one that is no number is 0, and it is kept.
+// MIT: `parse_admin_server_port` (lib/kadm5/alt_prof.c:395-417)
+// a written port is read with `atoi`, so one that is no number is 0, and it is kept.
 #[must_use]
 pub fn admin_server_port(server: &str) -> Option<i32> {
     let port = if let Some(rest) = server.strip_prefix('[')

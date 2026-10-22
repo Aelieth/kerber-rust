@@ -91,7 +91,8 @@ pub fn dir_switch(residual: &str) -> io::Result<()> {
     write_primary(dir, name)
 }
 
-/// MIT `dcc_ptcursor_new` (`cc_dir.c:579-632`): a primary file that cannot be read leaves the collection with no primary.
+// MIT: `dcc_ptcursor_new` (cc_dir.c:579-632)
+/// a primary file that cannot be read leaves the collection with no primary.
 #[must_use]
 pub fn dir_primary(dir: &Path) -> Option<PathBuf> {
     match read_primary(dir, false) {
@@ -101,7 +102,8 @@ pub fn dir_primary(dir: &Path) -> Option<PathBuf> {
 }
 
 /// A new empty subsidiary `tkt` + six random characters in the collection `dir`, created exclusively with mode 0600.
-/// MIT `dcc_gen_new` (`cc_dir.c:387-429`): the `tktXXXXXX` template made unique in the collection directory, which is created if missing.
+// MIT: `dcc_gen_new` (cc_dir.c:387-429)
+/// the `tktXXXXXX` template made unique in the collection directory, which is created if missing.
 pub fn dir_gen_new(dir: &Path) -> io::Result<PathBuf> {
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     ensure_dir(dir)?;

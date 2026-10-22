@@ -623,7 +623,8 @@ fn priv_part_der(
     .unwrap()
 }
 
-/// MIT `decode_seqno` (`asn1_k_encode.c:133-146`): a seq-number sent as a negative INTEGER reads as its 32 bits unsigned, so -2 is 0xFFFFFFFE, and an old Heimdal's -128 for its count 0x80 passes `k5_privsafe_check_seqnum`'s Heimdal check.
+// MIT: `decode_seqno` (asn1_k_encode.c:133-146)
+/// a seq-number sent as a negative INTEGER reads as its 32 bits unsigned, so -2 is 0xFFFFFFFE, and an old Heimdal's -128 for its count 0x80 passes `k5_privsafe_check_seqnum`'s Heimdal check.
 #[test]
 fn rd_priv_reads_a_negative_seq_number_as_mit_does() {
     let session = ProtocolKey::random(AES256).unwrap();
@@ -646,7 +647,8 @@ fn rd_priv_reads_a_negative_seq_number_as_mit_does() {
     }
 }
 
-/// MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:251-252`): under `DO_TIME`, a KRB-PRIV must be within the clock skew `[libdefaults] clockskew` sets, 300 seconds unless it is set.
+// MIT: `krb5_init_context_profile` (lib/krb5/krb/init_ctx.c:251-252)
+/// under `DO_TIME`, a KRB-PRIV must be within the clock skew `[libdefaults] clockskew` sets, 300 seconds unless it is set.
 #[test]
 fn rd_priv_takes_the_clock_skew_krb5_conf_sets() {
     let session = ProtocolKey::random(AES256).unwrap();
@@ -742,7 +744,8 @@ fn rd_priv_enc_part_of_another_enctype_is_bad_enctype() {
     );
 }
 
-/// MIT `k5_privsafe_check_addrs` (`privsafe.c:355-378`): with no local address (kpasswd's context sets none), a KRB-PRIV's receiver address must be one of the host's, whatever the sender says.
+// MIT: `k5_privsafe_check_addrs` (privsafe.c:355-378)
+/// with no local address (kpasswd's context sets none), a KRB-PRIV's receiver address must be one of the host's, whatever the sender says.
 #[test]
 fn rd_priv_with_no_local_address_wants_the_receiver_among_the_hosts() {
     let session = ProtocolKey::random(AES256).unwrap();

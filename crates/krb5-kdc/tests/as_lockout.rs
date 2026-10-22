@@ -1,9 +1,12 @@
 //! Lockout stamp-0 and REQUIRES_PRE_AUTH fail-count clear.
-//! MIT `krb5_dbe_lookup_last_admin_unlock` (`kdb5.c:1539-1545`): a missing or malformed
+// MIT: `krb5_dbe_lookup_last_admin_unlock` (kdb5.c:1539-1545)
+//! a missing or malformed
 //! `KRB5_TL_LAST_ADMIN_UNLOCK` reads as stamp 0.
-//! MIT `krb5_dbe_lookup_tl_data` (`kdb5.c:1574-1576`): a missing TL record is zero bytes, not
+// MIT: `krb5_dbe_lookup_tl_data` (kdb5.c:1574-1576)
+//! a missing TL record is zero bytes, not
 //! an error.
-//! MIT `krb5_db2_lockout_audit` (`db2/lockout.c:181-190`): a success clears the fail count
+// MIT: `krb5_db2_lockout_audit` (db2/lockout.c:181-190)
+//! a success clears the fail count
 //! only when the principal requires preauth.
 
 use krb5_asn1::encode;

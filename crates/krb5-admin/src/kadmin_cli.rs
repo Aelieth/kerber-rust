@@ -22,12 +22,14 @@ pub(crate) use stdio::{Io, LineRead, Stdout};
 /// The name every message is prefixed with: MIT's `whoami`, the program's base name, which an installed `kadmin.local` is.
 pub(crate) const WHOAMI: &str = "kadmin.local";
 
-/// MIT `kadmin_startup` (`kadmin.c:288-607`): the options `kadmin` and `kadmin.local` share.
+// MIT: `kadmin_startup` (kadmin.c:288-607)
+/// the options `kadmin` and `kadmin.local` share.
 const OPTSTRING: &str = "+x:r:p:knq:w:d:s:mc:t:e:ON";
 
 #[must_use]
 pub fn kadmin_local_main() -> i32 {
-    // MIT `main` (`kadmin/cli/ss_wrapper.c:40-47`): the locale comes from the environment first.
+    // MIT: `main` (kadmin/cli/ss_wrapper.c:40-47)
+    // the locale comes from the environment first.
     krb5_types::timestamp::setlocale();
     let stdout = io::stdout();
     let line = stdout.is_terminal();
@@ -97,7 +99,8 @@ pub(crate) struct Session<'a> {
 }
 
 impl Handle {
-    /// MIT `kadmin_parse_name` (`kadmin.c:202-225`): a name without a realm takes `params.realm`.
+    // MIT: `kadmin_parse_name` (kadmin.c:202-225)
+    /// a name without a realm takes `params.realm`.
     pub(crate) fn parse_name(&self, spec: &str) -> Result<(PrincipalName, String), &'static str> {
         krb5_types::principal_from_unparsed(spec, &self.realm).map_err(|_| texts::MALFORMED)
     }
@@ -123,7 +126,8 @@ impl Handle {
 }
 
 impl Open {
-    /// MIT `kdb_init_master` (`lib/kadm5/srv/server_kdb.c:26-80`): a master key typed at the keyboard opens the database without the stash.
+    // MIT: `kdb_init_master` (lib/kadm5/srv/server_kdb.c:26-80)
+    /// a master key typed at the keyboard opens the database without the stash.
     fn load(&self) -> Result<PrincipalStore, String> {
         let mut store = match &self.typed {
             Some(key) => {
@@ -131,7 +135,8 @@ impl Open {
             }
             None => krb5_kdc::load_store(&self.db, &self.stash).map_err(|e| self.load_text(e))?,
         };
-        // MIT `kadm5_init` (`lib/kadm5/srv/server_init.c:202-205`): the realm's profile, kdc.conf before krb5.conf, in the KDC's order.
+        // MIT: `kadm5_init` (lib/kadm5/srv/server_init.c:202-205)
+        // the realm's profile, kdc.conf before krb5.conf, in the KDC's order.
         let krb5 = match self.krb5.clone() {
             Some(conf) => conf,
             None => krb5_config::Krb5Conf::new(),
@@ -144,7 +149,8 @@ impl Open {
         Ok(store)
     }
 
-    /// MIT `open_db` (`kdb_db2.c:365-394`): the db2 module's text for a database it cannot open.
+    // MIT: `open_db` (kdb_db2.c:365-394)
+    /// the db2 module's text for a database it cannot open.
     fn cannot_open(&self, e: &io::Error) -> String {
         format!(
             "Cannot open DB2 database '{}': {}",
@@ -153,7 +159,8 @@ impl Open {
         )
     }
 
-    /// MIT `ctx_init` (`plugins/kdb/db2/kdb_db2.c:496-500`): a lock file that does not open is the system's text, or the policy lock's own.
+    // MIT: `ctx_init` (plugins/kdb/db2/kdb_db2.c:496-500)
+    /// a lock file that does not open is the system's text, or the policy lock's own.
     fn load_text(&self, e: krb5_kdc::PersistError) -> String {
         match e {
             krb5_kdc::PersistError::Lock(e) => e.to_string(),
@@ -223,7 +230,8 @@ pub(crate) fn run(argv: &[String], io: &mut Io) -> i32 {
     s.io.exit_status
 }
 
-/// MIT `quit` (`kadmin.c:610-633`): give up a held lock, and warn that `-c` credentials stay.
+// MIT: `quit` (kadmin.c:610-633)
+/// give up a held lock, and warn that `-c` credentials stay.
 fn quit(s: &mut Session<'_>, ccache: bool) -> bool {
     if s.locked {
         if let Err(e) = s.h.store.unlock_database() {
@@ -398,7 +406,8 @@ fn startup(argv: &[String], io: &mut Io) -> Option<Startup> {
             return None;
         }
     };
-    // MIT `kadm5_init_iprop` (`lib/kadm5/srv/server_init.c:347-361`): only with `iprop_enable` is the log mapped.
+    // MIT: `kadm5_init_iprop` (lib/kadm5/srv/server_init.c:347-361)
+    // only with `iprop_enable` is the log mapped.
     if iprop.enabled
         && let Err(e) =
             handle
@@ -515,7 +524,8 @@ fn host_princstr(conf: Option<&krb5_config::Krb5Conf>) -> String {
     format!("host/{host}@{realm}")
 }
 
-/// MIT `krb5_klog_init` (`lib/kadm5/logger.c:232-522`): for `admin_server`, the `[logging]` destinations of kdc.conf and the krb5.conf files open as kadmind's do, and one that cannot is reported; the password-quality dictionary's notice goes there as MIT's does.
+// MIT: `krb5_klog_init` (lib/kadm5/logger.c:232-522)
+/// for `admin_server`, the `[logging]` destinations of kdc.conf and the krb5.conf files open as kadmind's do, and one that cannot is reported; the password-quality dictionary's notice goes there as MIT's does.
 fn klog_init(specs: &krb5_config::LogSpecs) {
     krb5_log::klog::init(WHOAMI, &specs.specs, specs.debug);
 }
@@ -569,7 +579,8 @@ fn kadm5_init(
     if let Err(e) = krb5_kdc::check_openable(&open.db) {
         return Err((open.load_text(e), false));
     }
-    // MIT `krb5_db2_open` (`plugins/kdb/db2/kdb_db2.c:1181-1199`): the lock files open with the database, before the master key is typed or read.
+    // MIT: `krb5_db2_open` (plugins/kdb/db2/kdb_db2.c:1181-1199)
+    // the lock files open with the database, before the master key is typed or read.
     if let Err(e) = krb5_kdc::DbLock::open(&open.db) {
         return Err((open.load_text(krb5_kdc::PersistError::Lock(e)), false));
     }
@@ -613,7 +624,8 @@ enum Db2Arg<'a> {
     Unsupported,
 }
 
-/// MIT `configure_context` (`kdb_db2.c:202-262`): a db2 argument is `dbname=NAME`, or one of `temporary`, `merge_nra`, `hash=…`, `unlockiter`, `lockiter`; any other is refused.
+// MIT: `configure_context` (kdb_db2.c:202-262)
+/// a db2 argument is `dbname=NAME`, or one of `temporary`, `merge_nra`, `hash=…`, `unlockiter`, `lockiter`; any other is refused.
 fn db2_arg(arg: &str) -> Db2Arg<'_> {
     match arg.split_once('=') {
         Some(("dbname", name)) => Db2Arg::DbName(name),
@@ -625,8 +637,10 @@ fn db2_arg(arg: &str) -> Db2Arg<'_> {
     }
 }
 
-/// MIT `krb5_string_to_keysalts` (`kadm5/str_conv.c:319-366`): the enctypes of a keysalt list; a tuple naming an unknown enctype or salt type is skipped, a repeat is dropped.
-/// MIT `krb5_string_to_salttype` (`krb/str_conv.c:72-86`): a salt name in any case.
+// MIT: `krb5_string_to_keysalts` (kadm5/str_conv.c:319-366)
+/// the enctypes of a keysalt list; a tuple naming an unknown enctype or salt type is skipped, a repeat is dropped.
+// MIT: `krb5_string_to_salttype` (krb/str_conv.c:72-86)
+/// a salt name in any case.
 pub(crate) fn string_to_keysalts(s: &str, seps: &[char]) -> Vec<krb5_crypto::EncryptionType> {
     const SALTS: [&str; 4] = ["normal", "norealm", "onlyrealm", "special"];
     let mut out = Vec::new();

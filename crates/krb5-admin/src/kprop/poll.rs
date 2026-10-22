@@ -18,10 +18,12 @@ use crate::kadm5::{
     kadm5_error_message,
 };
 
-/// MIT `KIPROP_SVC_NAME` (`include/iprop_hdr.h:29-29`): the service of a replica's and a primary's iprop principals.
+// MIT: `KIPROP_SVC_NAME` (include/iprop_hdr.h:29-29)
+/// the service of a replica's and a primary's iprop principals.
 const KIPROP_SVC_NAME: &str = "kiprop";
 
-/// MIT `MAX_BACKOFF` (`include/iprop_hdr.h:30-30`): the longest wait, in seconds, between tries of a busy or unreachable primary.
+// MIT: `MAX_BACKOFF` (include/iprop_hdr.h:30-30)
+/// the longest wait, in seconds, between tries of a busy or unreachable primary.
 const MAX_BACKOFF: u32 = 300;
 
 const UPDATE_BUSY: u32 = 3;
@@ -63,7 +65,8 @@ impl IpropWake {
         self.cv.notify_all();
     }
 
-    /// MIT `usr1_handler` (`kprop/kpropd.c:222-225`): SIGUSR1 does nothing but interrupt the `sleep`.
+    // MIT: `usr1_handler` (kprop/kpropd.c:222-225)
+    /// SIGUSR1 does nothing but interrupt the `sleep`.
     fn sleep(&self, secs: u32) {
         let end = Instant::now() + Duration::from_secs(u64::from(secs));
         let mut poked = self.poked.lock().unwrap_or_else(PoisonError::into_inner);
@@ -88,7 +91,8 @@ struct Log<'a> {
 }
 
 impl Log<'_> {
-    /// MIT `kpropd_com_err_proc` (`kprop/kpropd.c:1030-1040`): `whoami: `, the code's text and a space, then the message, at `LOG_ERR`; with `-d` the default `com_err` on standard error.
+    // MIT: `kpropd_com_err_proc` (kprop/kpropd.c:1030-1040)
+    /// `whoami: `, the code's text and a space, then the message, at `LOG_ERR`; with `-d` the default `com_err` on standard error.
     fn com_err(&self, code: Option<&str>, msg: &str) {
         let line = match code {
             Some(text) => format!("{}: {text} {msg}", self.progname),
@@ -317,7 +321,8 @@ pub fn kpropd_do_iprop(cfg: &KpropdIprop<'_>, wake: &IpropWake) -> i32 {
     }
 }
 
-/// MIT `backoff_from_primary` (`kprop/kpropd.c:1008-1019`): the doubling, capped at `MAX_BACKOFF`.
+// MIT: `backoff_from_primary` (kprop/kpropd.c:1008-1019)
+/// the doubling, capped at `MAX_BACKOFF`.
 fn backoff_from_primary(cnt: &mut u32) -> u32 {
     let btime = 2u32.checked_shl(*cnt).unwrap_or(u32::MAX);
     if btime > MAX_BACKOFF {
@@ -347,8 +352,10 @@ impl InitFailure {
     }
 }
 
-/// MIT `kadm5_get_kiprop_host_srv_name` (`kprop/kpropd.c:1617-1630`): the service is `kiprop/` and the admin server.
-/// MIT `get_init_creds` (`lib/kadm5/clnt/client_init.c:366-434`): a decrypt failure is `KADM5_BAD_PASSWORD`, an unknown service `KADM5_SECURE_PRINC_MISSING`.
+// MIT: `kadm5_get_kiprop_host_srv_name` (kprop/kpropd.c:1617-1630)
+/// the service is `kiprop/` and the admin server.
+// MIT: `get_init_creds` (lib/kadm5/clnt/client_init.c:366-434)
+/// a decrypt failure is `KADM5_BAD_PASSWORD`, an unknown service `KADM5_SECURE_PRINC_MISSING`.
 fn kiprop_init(cfg: &KpropdIprop<'_>, client: &PrincipalName) -> Result<IpropClient, InitFailure> {
     let admin = cfg
         .admin_server
@@ -378,7 +385,8 @@ fn kiprop_init(cfg: &KpropdIprop<'_>, client: &PrincipalName) -> Result<IpropCli
     .map_err(|_| InitFailure::kadm5(KADM5_GSS_ERROR))
 }
 
-/// MIT `connect_to_server` (`lib/kadm5/clnt/client_init.c:521-561`): a name that does not resolve is `KADM5_CANT_RESOLVE`, no address that connects `KADM5_RPC_ERROR`.
+// MIT: `connect_to_server` (lib/kadm5/clnt/client_init.c:521-561)
+/// a name that does not resolve is `KADM5_CANT_RESOLVE`, no address that connects `KADM5_RPC_ERROR`.
 fn connect_to_server(host: &str, port: i32) -> Result<TcpStream, u32> {
     let port = u16::try_from(port).map_err(|_| KADM5_CANT_RESOLVE)?;
     let addrs = (host, port)

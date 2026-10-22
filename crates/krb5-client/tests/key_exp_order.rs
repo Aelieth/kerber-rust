@@ -49,7 +49,8 @@ fn serve(store: PrincipalStore) -> String {
     format!("127.0.0.1:{}", addr.port())
 }
 
-// MIT `validate_as_request` (`kdc_util.c:762-766`): every AS but the one for
+// MIT: `validate_as_request` (kdc_util.c:762-766)
+// every AS but the one for
 fn expired_user_store() -> PrincipalStore {
     let (mut store, _) = bootstrap_documented().unwrap();
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);

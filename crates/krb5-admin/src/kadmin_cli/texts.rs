@@ -19,7 +19,8 @@ const ATTRIBUTES: &str = "\tattributes are:\n\t\tallow_postdated allow_forwardab
      [-x db_princ_args]* - any number of database specific arguments.\n\t\t\tLook at each \
      database documentation for supported arguments\n";
 
-/// MIT `kadmin_addprinc_usage` (`kadmin.c:1182-1203`): its four `error` calls.
+// MIT: `kadmin_addprinc_usage` (kadmin.c:1182-1203)
+/// its four `error` calls.
 pub(crate) const ADDPRINC_USAGE: [&str; 4] = [
     "usage: add_principal [options] principal\n",
     "\toptions are:\n",
@@ -29,7 +30,8 @@ pub(crate) const ADDPRINC_USAGE: [&str; 4] = [
     ATTRIBUTES,
 ];
 
-/// MIT `kadmin_modprinc_usage` (`kadmin.c:1206-1226`): its four `error` calls.
+// MIT: `kadmin_modprinc_usage` (kadmin.c:1206-1226)
+/// its four `error` calls.
 pub(crate) const MODPRINC_USAGE: [&str; 4] = [
     "usage: modify_principal [options] principal\n",
     "\toptions are:\n",
@@ -43,7 +45,8 @@ pub(crate) const MODPRINC_USAGE: [&str; 4] = [
 pub(crate) const CPW_USAGE: &str =
     "usage: change_password [-randkey] [-keepold] [-e keysaltlist] [-pw password] principal\n";
 
-/// MIT `kadmin_addmodpol_usage` (`kadmin.c:1699-1708`): its four `error` calls.
+// MIT: `kadmin_addmodpol_usage` (kadmin.c:1699-1708)
+/// its four `error` calls.
 pub(crate) fn addmodpol_usage(func: &str) -> [String; 4] {
     [
         format!("usage; {func} [options] policy\n"),
@@ -56,11 +59,13 @@ pub(crate) fn addmodpol_usage(func: &str) -> [String; 4] {
     ]
 }
 
-/// MIT `add_usage` (`kadmin/cli/keytab.c:53-57`): the `ktadd` usage line, on stderr.
+// MIT: `add_usage` (kadmin/cli/keytab.c:53-57)
+/// the `ktadd` usage line, on stderr.
 pub(crate) const KTADD_USAGE: &str = "Usage: ktadd [-k[eytab] keytab] [-q] [-e keysaltlist] \
      [-norandkey] [principal | -glob princ-exp] [...]\n";
 
-/// MIT `rem_usage` (`kadmin/cli/keytab.c:60-64`): the `ktremove` usage line, on stderr.
+// MIT: `rem_usage` (kadmin/cli/keytab.c:60-64)
+/// the `ktremove` usage line, on stderr.
 pub(crate) const KTREM_USAGE: &str =
     "Usage: ktremove [-k[eytab] keytab] [-q] principal [kvno|\"all\"|\"old\"]\n";
 

@@ -310,9 +310,12 @@ fn tgt_part_issue_acl_ap(store: &PrincipalStore, issued: &krb5_kdc::IssuedAs) ->
 
 #[test]
 fn as_req_with_tgs_only_option_is_invalid_as_options() {
-    // MIT `NON_TGT_OPTION` (`kdc_util.h:456-457`): RENEW is one of its four TGS-REQ options.
-    // MIT `NO_REFERRAL_OPTION` (`kdc_util.h:460-460`): it includes every `NON_TGT_OPTION`.
-    // MIT `AS_INVALID_OPTIONS` (`kdc_util.h:463-463`): it includes every `NO_REFERRAL_OPTION`,
+    // MIT: `NON_TGT_OPTION` (kdc_util.h:456-457)
+    // RENEW is one of its four TGS-REQ options.
+    // MIT: `NO_REFERRAL_OPTION` (kdc_util.h:460-460)
+    // it includes every `NON_TGT_OPTION`.
+    // MIT: `AS_INVALID_OPTIONS` (kdc_util.h:463-463)
+    // it includes every `NO_REFERRAL_OPTION`,
     // so a TGS-only KDC option (RENEW) in an AS-REQ is INVALID AS OPTIONS / BADOPTION (13),
     // not a ticket.
     let (store, _) = bootstrap_documented().expect("bootstrap");
@@ -325,7 +328,8 @@ fn as_req_with_tgs_only_option_is_invalid_as_options() {
 
 #[test]
 fn as_request_reserved_option_bit_is_ignored_like_mit() {
-    // MIT `validate_as_request` (`kdc_util.c:727-727`): the option test is AS_INVALID_OPTIONS
+    // MIT: `validate_as_request` (kdc_util.c:727-727)
+    // the option test is AS_INVALID_OPTIONS
     // only; a reserved KDCOptions bit (RFC bit 17) is neither rejected nor acted on.
     // The bit passes validate, so a preauth-required client reaches
     // PREAUTH_REQUIRED, not BADOPTION.
@@ -346,7 +350,8 @@ fn as_request_reserved_option_bit_is_ignored_like_mit() {
 #[test]
 // oracle: differential-gate.sh as-request-anonymous
 fn as_request_anonymous_from_named_client_is_validate_anonymous_principal() {
-    // MIT `process_as_req` (`do_as_req.c:718-724`): REQUEST_ANONYMOUS demands the anonymous
+    // MIT: `process_as_req` (do_as_req.c:718-724)
+    // REQUEST_ANONYMOUS demands the anonymous
     // principal; a named client is KRB5KDC_ERR_BADOPTION "VALIDATE_ANONYMOUS_PRINCIPAL"
     // before check_padata. validate_as_request lets the bit through.
     let (store, _) = bootstrap_documented().expect("bootstrap");
@@ -374,7 +379,8 @@ fn as_request_anonymous_from_named_client_is_validate_anonymous_principal() {
 
 #[test]
 fn as_canonicalize_issues_the_krbtgt_under_the_canonical_db_name() {
-    // MIT `process_as_req` (`do_as_req.c:660-666`): CANONICALIZE on a krbtgt request whose
+    // MIT: `process_as_req` (do_as_req.c:660-666)
+    // CANONICALIZE on a krbtgt request whose
     // requested and DB server are both TGS principals issues the ticket (and, per :243, the
     // enc-part) under the canonical DB name -- Windows short-realm aliases.
     // krbtgt/SHORT aliases krbtgt/KERBER.TEST here.
@@ -441,7 +447,8 @@ fn as_canonicalize_issues_the_krbtgt_under_the_canonical_db_name() {
 
 #[test]
 fn as_validate_runs_before_preauth_like_process_as_req() {
-    // MIT `process_as_req` (`do_as_req.c:630-630`): validate_as_request runs before
+    // MIT: `process_as_req` (do_as_req.c:630-630)
+    // validate_as_request runs before
     // check_padata (:758). A preauth-required client that needs a password
     // change gets REQUIRED PWCHANGE (23), not PREAUTH_REQUIRED (25).
     let (mut store, _) = bootstrap_documented().expect("bootstrap");

@@ -1,5 +1,6 @@
 //! Realm ticket policy (`alt_prof.c`, `kdc/main.c`) and named kadm5 `osa_policy_ent` (`svr_policy.c`): defaults, kdc.conf / krb5.conf overlay, and the policy CRUD on the store.
-//! MIT `init_realm` (`kdc/main.c:316-319`): the realm's `max_renewable_life` is read into `realm_maxrlife`, `KRB5_KDB_MAX_RLIFE` (7 d) when omitted.
+// MIT: `init_realm` (kdc/main.c:316-319)
+//! the realm's `max_renewable_life` is read into `realm_maxrlife`, `KRB5_KDB_MAX_RLIFE` (7 d) when omitted.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -62,7 +63,8 @@ pub struct Policy {
     /// Max ticket lifetime seconds (MIT `alt_prof.c`: omitted = 24 h).
     pub max_life: u64,
     /// kadm5 create default.
-    /// MIT `kadm5_get_config_params` (`alt_prof.c:577-578`): `max_rlife` omitted = 0.
+    // MIT: `kadm5_get_config_params` (alt_prof.c:577-578)
+    /// `max_rlife` omitted = 0.
     pub max_renewable_life: u64,
     /// KDC issue cap.
     pub realm_max_renewable_life: u64,
@@ -81,10 +83,12 @@ pub struct Policy {
     /// Default requires_preauth for new principals.
     pub requires_preauth: bool,
     /// MIT `[realms] default_principal_flags`: the `handle->params.flags` a kadm5 create takes when `KADM5_ATTRIBUTES` is not in the mask.
-    /// MIT `kadm5_get_config_params` (`alt_prof.c:596-632`): the stanza is parsed into `params.flags`. `None` = the stanza is absent (MIT `KRB5_KDB_DEF_FLAGS` 0; here the `requires_preauth` knob's bit).
+    // MIT: `kadm5_get_config_params` (alt_prof.c:596-632)
+    /// the stanza is parsed into `params.flags`. `None` = the stanza is absent (MIT `KRB5_KDB_DEF_FLAGS` 0; here the `requires_preauth` knob's bit).
     pub default_principal_flags: Option<u32>,
     /// MIT `[realms] default_principal_expiration`: `handle->params.expiration`, the `expiration` of a create without `KADM5_PRINC_EXPIRE_TIME`.
-    /// MIT `kadm5_get_config_params` (`alt_prof.c:580-594`): the stanza goes through `krb5_string_to_timestamp`. 0 when absent or unparsable (MIT leaves the zeroed field).
+    // MIT: `kadm5_get_config_params` (alt_prof.c:580-594)
+    /// the stanza goes through `krb5_string_to_timestamp`. 0 when absent or unparsable (MIT leaves the zeroed field).
     pub default_principal_expiration: u32,
     /// `[capaths]` client → server → intermediates (`.` = direct).
     pub capaths: BTreeMap<String, BTreeMap<String, Vec<String>>>,
@@ -112,7 +116,8 @@ pub struct Policy {
     pub spake_preauth_indicators: Vec<String>,
     /// `[libdefaults] spake_preauth_groups`: the groups the KDC permits, in configuration order.
     /// Empty, MIT's KDC default, leaves the SPAKE module unloaded.
-    /// MIT `DEFAULT_GROUPS_KDC` (`groups.c:60-60`): the KDC's default group list is empty.
+    // MIT: `DEFAULT_GROUPS_KDC` (groups.c:60-60)
+    /// the KDC's default group list is empty.
     pub spake_preauth_groups: Vec<SpakeGroup>,
     /// `[kdcdefaults] spake_preauth_kdc_challenge`, as written: the group of the optimistic challenge the KDC sends with PREAUTH_REQUIRED. `None` = none.
     pub spake_preauth_kdc_challenge: Option<String>,
@@ -121,23 +126,30 @@ pub struct Policy {
     /// `[dbmodules] disable_lockout`: the KDC neither counts failed authentications nor checks the lockout policy.
     pub disable_lockout: bool,
     /// `[plugins] kdcpreauth` `disable` and `enable_only`. Absent relations load every named module.
-    /// MIT `k5_plugin_load_all` (`lib/krb5/krb/plugin.c:421-455`): the KDC walks the modules that remain loaded.
+    // MIT: `k5_plugin_load_all` (lib/krb5/krb/plugin.c:421-455)
+    /// the KDC walks the modules that remain loaded.
     pub kdcpreauth: krb5_config::PluginRelations,
     /// `[plugins] kdcpolicy` `disable` and `enable_only`. Absent relations load every named module.
-    /// MIT `load_kdcpolicy_plugins` (`kdc/policy.c:194-246`): the KDC walks the modules that remain loaded.
+    // MIT: `load_kdcpolicy_plugins` (kdc/policy.c:194-246)
+    /// the KDC walks the modules that remain loaded.
     pub kdcpolicy: krb5_config::PluginRelations,
     /// `[plugins] audit` `disable` and `enable_only`. Absent relations load every named module.
-    /// MIT `load_audit_modules` (`kdc/kdc_audit.c:71-84`): `k5_plugin_load_all` applies that profile.
+    // MIT: `load_audit_modules` (kdc/kdc_audit.c:71-84)
+    /// `k5_plugin_load_all` applies that profile.
     pub audit: krb5_config::PluginRelations,
     /// `[plugins] pwqual` `disable` and `enable_only`. Absent relations load every named module.
-    /// MIT `k5_pwqual_load` (`lib/kadm5/srv/pwqual.c:42-96`): `k5_plugin_load_all` applies that profile.
+    // MIT: `k5_pwqual_load` (lib/kadm5/srv/pwqual.c:42-96)
+    /// `k5_plugin_load_all` applies that profile.
     pub pwqual: krb5_config::PluginRelations,
     /// `[plugins] kadm5_hook` `disable` and `enable_only`. Absent relations load every named module.
-    /// MIT `k5_kadm5_hook_load` (`lib/kadm5/srv/kadm5_hook.c:40-94`): `k5_plugin_load_all` applies that profile.
+    // MIT: `k5_kadm5_hook_load` (lib/kadm5/srv/kadm5_hook.c:40-94)
+    /// `k5_plugin_load_all` applies that profile.
     pub kadm5_hook: krb5_config::PluginRelations,
     /// The otp module's token types from `[otp]` in kdc.conf, then krb5.conf, or why the module did not initialize (then it is left out). Without a section the built-in `DEFAULT` is the only type.
-    /// MIT `otp_state_new` (`plugins/preauth/otp/otp_state.c:579-585`): the types come from the KDC context's profile once, when the module starts.
-    /// MIT `reset_for_hangup` (`kdc/kdc_util.c:1916-1922`): SIGHUP refreshes the database configuration and does not read `[otp]` again.
+    // MIT: `otp_state_new` (plugins/preauth/otp/otp_state.c:579-585)
+    /// the types come from the KDC context's profile once, when the module starts.
+    // MIT: `reset_for_hangup` (kdc/kdc_util.c:1916-1922)
+    /// SIGHUP refreshes the database configuration and does not read `[otp]` again.
     pub otp: Result<Vec<krb5_config::OtpType>, krb5_config::OtpInitError>,
 }
 
@@ -194,7 +206,8 @@ pub struct SpakeKdc<'a> {
 }
 
 /// A written `permitted_enctypes` as the KDC's context parses it: a value that names no enctype (empty, or only names it does not know) permits none.
-/// MIT `krb5int_parse_enctype_list` (`lib/krb5/krb/init_ctx.c:497-500`): a list left empty is `KRB5_CONFIG_ETYPE_NOSUPP`, and `krb5_is_permitted_enctype` then permits nothing.
+// MIT: `krb5int_parse_enctype_list` (lib/krb5/krb/init_ctx.c:497-500)
+/// a list left empty is `KRB5_CONFIG_ETYPE_NOSUPP`, and `krb5_is_permitted_enctype` then permits nothing.
 fn parse_permitted(names: &[String], allow_weak: bool) -> Vec<EncryptionType> {
     krb5_crypto::parse_enctype_list(&names.join(" "), allow_weak).unwrap_or_default()
 }
@@ -205,7 +218,8 @@ fn parse_spake_preauth_groups(words: &[String]) -> Vec<SpakeGroup> {
 
 impl Policy {
     /// The SPAKE module's configuration, or the message MIT logs when the module does not load.
-    /// MIT `group_init_state` (`groups.c:213-281`): no permitted group, or a challenge group that is unknown or not permitted, fails the module's init.
+    // MIT: `group_init_state` (groups.c:213-281)
+    /// no permitted group, or a challenge group that is unknown or not permitted, fails the module's init.
     pub fn spake_kdc(&self) -> Result<SpakeKdc<'_>, String> {
         if self.spake_preauth_groups.is_empty() {
             return Err("No SPAKE preauth groups configured".to_owned());
@@ -228,7 +242,8 @@ impl Policy {
     }
 
     /// The otp module's token types, or the reason it does not initialize.
-    /// MIT `otp_init` (`plugins/preauth/otp/main.c:195-206`): a failed `otp_state_new` fails the module's init.
+    // MIT: `otp_init` (plugins/preauth/otp/main.c:195-206)
+    /// a failed `otp_state_new` fails the module's init.
     pub fn otp_kdc(&self) -> Result<&[krb5_config::OtpType], &krb5_config::OtpInitError> {
         self.otp.as_deref()
     }
@@ -254,7 +269,8 @@ impl Policy {
             .is_none_or(|v| v.contains(&e))
     }
 
-    /// MIT `krb5_get_permitted_enctypes` (`lib/krb5/krb/init_ctx.c:573-595`): with no `permitted_enctypes`, the `DEFAULT` list, filtered by `allow_weak_crypto`.
+    // MIT: `krb5_get_permitted_enctypes` (lib/krb5/krb/init_ctx.c:573-595)
+    /// with no `permitted_enctypes`, the `DEFAULT` list, filtered by `allow_weak_crypto`.
     #[must_use]
     pub fn permitted_list(&self) -> Vec<EncryptionType> {
         self.permitted_enctypes.clone().unwrap_or_else(|| {
@@ -273,7 +289,8 @@ impl Policy {
         p.find_enctype(etype, kvno, |e| self.etype_permitted(e))
     }
 
-    /// MIT `get_first_current_key` (`kdc_util.c:462-473`): the first *permitted* key of the highest kvno, `krb5_dbe_find_enctype(-1, -1, 0)`.
+    // MIT: `get_first_current_key` (kdc_util.c:462-473)
+    /// the first *permitted* key of the highest kvno, `krb5_dbe_find_enctype(-1, -1, 0)`.
     /// [`KeyLookup::NoMatchingKey`] when there are no keys; [`KeyLookup::NoPermittedKey`] when none at the top kvno is permitted.
     pub fn first_current_key<'p>(&self, p: &'p Principal) -> Result<&'p KeyEntry, KeyLookup> {
         self.find_enctype(p, None, 0)
@@ -286,7 +303,8 @@ impl Policy {
     }
 
     /// Long-term keys minted by addprinc/cpw when `-e` is omitted.
-    /// MIT `kadm5_get_config_params` (`lib/kadm5/alt_prof.c:650-654`): the realm's `supported_enctypes`, else `KRB5_DEFAULT_SUPPORTED_ENCTYPES`.
+    // MIT: `kadm5_get_config_params` (lib/kadm5/alt_prof.c:650-654)
+    /// the realm's `supported_enctypes`, else `KRB5_DEFAULT_SUPPORTED_ENCTYPES`.
     #[must_use]
     pub fn password_etypes(&self) -> Vec<EncryptionType> {
         if self.supported_enctypes.is_empty() {
@@ -376,7 +394,8 @@ impl PrincipalStore {
     }
 
     /// `[otp]` from kdc.conf, then krb5.conf. A missing file adds no sections.
-    /// MIT `add_kdc_config_file` (`lib/krb5/os/init_os_ctx.c:339-366`): kdc.conf is inserted ahead of the krb5.conf files.
+    // MIT: `add_kdc_config_file` (lib/krb5/os/init_os_ctx.c:339-366)
+    /// kdc.conf is inserted ahead of the krb5.conf files.
     /// This replaces the kdc.conf-only value [`Self::apply_kdc_conf`] stored.
     pub fn apply_otp(
         &mut self,
@@ -492,7 +511,8 @@ impl PrincipalStore {
     }
 
     /// Initialize the realm's PKINIT context from the KDC profile when `[plugins] kdcpreauth` loads the module; `Some` is MIT's message when it does not initialize, and the realm then serves without PKINIT.
-    /// MIT `load_preauth_plugins` (`kdc/kdc_preauth.c:207-219`): only a loaded module initializes, and one whose init fails is left out.
+    // MIT: `load_preauth_plugins` (kdc/kdc_preauth.c:207-219)
+    /// only a loaded module initializes, and one whose init fails is left out.
     pub fn init_pkinit(&mut self, profile: &krb5_config::ProfileSet) -> Option<String> {
         self.env.pkinit = None;
         if !crate::plugins::startup_module_loaded(&self.policy.kdcpreauth, "pkinit") {
@@ -532,7 +552,8 @@ impl PrincipalStore {
         if let Some(names) = &conf.spake_preauth_groups {
             self.policy.spake_preauth_groups = parse_spake_preauth_groups(names);
         }
-        // MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:251-252`): the KDC's skew is the profile's `clockskew`; kdc.conf's, applied after this, wins.
+        // MIT: `krb5_init_context_profile` (lib/krb5/krb/init_ctx.c:251-252)
+        // the KDC's skew is the profile's `clockskew`; kdc.conf's, applied after this, wins.
         self.policy.skew = i64::from(conf.clockskew);
         self.policy.domain_realm.clone_from(&conf.domain_realm);
     }

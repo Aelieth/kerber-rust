@@ -199,7 +199,8 @@ pub fn tgt_for(cache: &OpenCache, srealm: &str) {
     }
 }
 
-// MIT `krb5_get_self_cred_from_kdc` (`lib/krb5/krb/s4u_creds.c:419-645`): the TGT an S4U request
+// MIT: `krb5_get_self_cred_from_kdc` (lib/krb5/krb/s4u_creds.c:419-645)
+// the TGT an S4U request
 pub fn tgt_creds(cache: &OpenCache, srealm: &str) {
     if !trace::enabled() {
         return;
@@ -219,7 +220,8 @@ pub fn proxy_lookup(cache: &OpenCache, server: &Princ, found: bool, srealm: &str
     }
 }
 
-// MIT `krb5_cc_store_cred` (`lib/krb5/ccache/ccfns.c:80-85`): a credential stored in the cache.
+// MIT: `krb5_cc_store_cred` (lib/krb5/ccache/ccfns.c:80-85)
+// a credential stored in the cache.
 pub fn store(ctx: &ClientContext, spec: &CcSpec, cred: &CcacheCred) {
     if trace::enabled() {
         trace::store_creds(&ccname(ctx, spec), std::slice::from_ref(cred));

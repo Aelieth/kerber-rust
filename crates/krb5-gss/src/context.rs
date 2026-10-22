@@ -93,14 +93,16 @@ pub struct InquireOk {
     pub client: Option<String>,
 }
 
-// MIT `krb5_generate_subkey_extended` (`lib/krb5/krb/gen_subkey.c:29-52`): a random key of the session key's enctype.
+// MIT: `krb5_generate_subkey_extended` (lib/krb5/krb/gen_subkey.c:29-52)
+// a random key of the session key's enctype.
 pub(super) fn random_subkey(session: &ProtocolKey) -> Result<ProtocolKey, Error> {
     Ok(ProtocolKey::random(session.etype())?)
 }
 
 const FIELD_TOOLONG: &str = "Field is too long for this implementation";
 
-// MIT `kg_setup_keys` (`lib/gssapi/krb5/util_crypt.c:99-125`): DES3 and RC4 keys use the pre-CFX tokens, every other enctype CFX (`proto` 1).
+// MIT: `kg_setup_keys` (lib/gssapi/krb5/util_crypt.c:99-125)
+// DES3 and RC4 keys use the pre-CFX tokens, every other enctype CFX (`proto` 1).
 const fn pre_cfx(etype: i32) -> bool {
     matches!(etype, 16 | 23 | 24)
 }
@@ -124,7 +126,8 @@ pub(super) fn authenticator_checksum(
     v
 }
 
-// MIT `kg_process_extension` (`accept_sec_context.c:381-383`): a finished extension is
+// MIT: `kg_process_extension` (accept_sec_context.c:381-383)
+// a finished extension is
 fn process_checksum(
     cksum: Option<&Checksum>,
     ap_mutual: bool,
@@ -331,7 +334,8 @@ impl GssContext {
             keytype: sub.etype().to_iana(),
             keyvalue: sub.as_bytes().to_vec().into(),
         };
-        // MIT `generate_authenticator` (`lib/krb5/krb/mk_req_ext.c:327-327`): the time and its microseconds, from `krb5_us_timeofday`.
+        // MIT: `generate_authenticator` (lib/krb5/krb/mk_req_ext.c:327-327)
+        // the time and its microseconds, from `krb5_us_timeofday`.
         let (now, usec) = krb5_protocol::us_timeofday();
         let authenticator = Authenticator {
             authenticator_vno: Authenticator::VNO,
@@ -425,7 +429,8 @@ impl GssContext {
         )
     }
 
-    // MIT `kg_accept_krb5` (`accept_sec_context.c:829-831`): `krb5_rd_req_decoded` with the credential's `acceptor_mprinc` (NULL for `GSS_C_NO_NAME`) and its keytab.
+    // MIT: `kg_accept_krb5` (accept_sec_context.c:829-831)
+    // `krb5_rd_req_decoded` with the credential's `acceptor_mprinc` (NULL for `GSS_C_NO_NAME`) and its keytab.
     // MIT decrypt_try_server; see docs/parity/b1-client.md
     pub fn accept_sec_context_kdb(
         token: &[u8],
@@ -618,12 +623,14 @@ impl GssContext {
         let ap: ApRep = decode(&inner[2..])?;
         let usage = KeyUsage::new(ku::AP_REP_ENC_PART)?;
         let cipher = ap.enc_part.cipher.as_ref();
-        // MIT `mutual_auth` (`init_sec_context.c:785-794`): ticket session, then subkey.
+        // MIT: `mutual_auth` (init_sec_context.c:785-794)
+        // ticket session, then subkey.
         let etype = ap.enc_part.etype;
         let plain = decrypt_enc_data(ticket_session, usage, etype, cipher)
             .or_else(|_| decrypt_enc_data(&self.session, usage, etype, cipher))?;
         let part: EncApRepPart = decode(&plain)?;
-        // MIT `krb5_rd_rep` (`rd_rep.c:106-111`): an AP-REP that does not echo the authenticator's time is not mutual authentication.
+        // MIT: `krb5_rd_rep` (rd_rep.c:106-111)
+        // an AP-REP that does not echo the authenticator's time is not mutual authentication.
         if let Some((ctime, cusec)) = &self.ap_req_time
             && (part.ctime != *ctime || part.cusec.get() != cusec.get())
         {

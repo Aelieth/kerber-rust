@@ -1,21 +1,27 @@
 //! Persist round-trip and UDP listener adversarial tests, and the modifier each write
 //! stamps.
-//! MIT `kdb_put_entry` (`server_kdb.c:376-377`): the put stamps `KRB5_TL_MOD_PRINC` with
+// MIT: `kdb_put_entry` (server_kdb.c:376-377)
+//! the put stamps `KRB5_TL_MOD_PRINC` with
 //! `handle->current_caller`, not a hard-coded `kadmin/admin@REALM`, so the actor a create
 //! names is the stamp.
 //! `kdb5_util create` stamps `db_creation@REALM`.
-//! MIT `db_creator_entries` (`kdb5_create.c:114-115`): the stamp's one name component is
+// MIT: `db_creator_entries` (kdb5_create.c:114-115)
+//! the stamp's one name component is
 //! `db_creation`.
-//! MIT `db_create_princ` (`kdb5_create.c:127-133`): the `db_creation` principal that
+// MIT: `db_create_princ` (kdb5_create.c:127-133)
+//! the `db_creation` principal that
 //! `add_principal` stamps as the modifier of each principal `kdb5_util create` writes.
 //! `kadm5_create` stamps `kadmin/admin` and `kadmin/changepw` with `kdb5_util@REALM`.
-//! MIT `kadm5_create_magic_princs` (`kadm5_create.c:100-100`): the kadm5 handle is opened
+// MIT: `kadm5_create_magic_princs` (kadm5_create.c:100-100)
+//! the kadm5 handle is opened
 //! with `progname` as the client name, so its `current_caller` is `kdb5_util@REALM`.
 //! `kadm5_purgekeys` goes through `kdb_put_entry`, which stamps `current_caller`.
-//! MIT `kdb_put_entry` (`server_kdb.c:376-377`): the put stamps the modifier as
+// MIT: `kdb_put_entry` (server_kdb.c:376-377)
+//! the put stamps the modifier as
 //! `handle->current_caller`.
 //! `kadm5_set_string` goes through `kdb_put_entry` too, so it stamps `current_caller`.
-//! MIT `kadm5_set_string` (`svr_principal.c:2022-2043`): the string is stored through
+// MIT: `kadm5_set_string` (svr_principal.c:2022-2043)
+//! the string is stored through
 //! `kdb_put_entry`.
 
 use krb5_asn1::{decode, encode};

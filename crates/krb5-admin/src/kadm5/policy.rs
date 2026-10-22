@@ -23,7 +23,8 @@ pub(super) fn parse_gpols(args: &[u8]) -> (u32, Option<String>) {
     (api, r.nullstring().ok().flatten())
 }
 
-/// MIT `_xdr_kadm5_policy_ent_rec` (`kadm_rpc_xdr.c:507-514`): lockout fields are present only at API version 3 or later.
+// MIT: `_xdr_kadm5_policy_ent_rec` (kadm_rpc_xdr.c:507-514)
+/// lockout fields are present only at API version 3 or later.
 pub(super) fn parse_policy_arg(args: &[u8]) -> Result<(u32, krb5_kdc::NamedPolicy, u32), Error> {
     let mut r = XdrR::new(args);
     let api = r.u32()?;
@@ -135,7 +136,8 @@ pub(crate) fn policy_text(code: u32) -> &'static str {
     }
 }
 
-/// MIT `validate_allowed_keysalts` (`svr_policy.c:20-36`): a tab is `KADM5_BAD_KEYSALTS`. `krb5_string_to_keysalts` skips unknown tokens and only fails ENOMEM, so `addpol -allowedkeysalts bogus:normal` succeeds on MIT 1.22.2 (live settle).
+// MIT: `validate_allowed_keysalts` (svr_policy.c:20-36)
+/// a tab is `KADM5_BAD_KEYSALTS`. `krb5_string_to_keysalts` skips unknown tokens and only fails ENOMEM, so `addpol -allowedkeysalts bogus:normal` succeeds on MIT 1.22.2 (live settle).
 pub(super) fn validate_allowed_keysalts(allowed: Option<&str>) -> Option<u32> {
     let s = allowed.filter(|s| !s.is_empty())?;
     if s.contains('\t') {

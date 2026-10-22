@@ -84,7 +84,8 @@ pub(crate) enum LineRead {
 }
 
 impl Io {
-    /// MIT `info` (`kadmin.c:76-85`): printed only outside script mode.
+    // MIT: `info` (kadmin.c:76-85)
+    /// printed only outside script mode.
     pub(crate) fn info(&mut self, text: &str) {
         if !self.script_mode {
             let _ = self.out.write_all(text.as_bytes());
@@ -96,7 +97,8 @@ impl Io {
         let _ = self.out.write_all(text.as_bytes());
     }
 
-    /// MIT `error` (`kadmin.c:89-98`): stderr, and in script mode the exit status becomes 1.
+    // MIT: `error` (kadmin.c:89-98)
+    /// stderr, and in script mode the exit status becomes 1.
     pub(crate) fn error(&mut self, text: &str) {
         if self.script_mode {
             self.exit_status = 1;
@@ -114,7 +116,8 @@ impl Io {
         let _ = self.err.write_all(bytes);
     }
 
-    /// MIT `extended_com_err_fn` (`kadmin.c:228-242`): `prog: message text` through `error`.
+    // MIT: `extended_com_err_fn` (kadmin.c:228-242)
+    /// `prog: message text` through `error`.
     pub(crate) fn com_err(&mut self, prog: &str, message: Option<&str>, text: &str) {
         match message {
             Some(m) => self.error(&format!("{prog}: {m} ")),
@@ -149,7 +152,8 @@ impl Io {
         }
     }
 
-    /// MIT `krb5_read_password` (`read_pwd.c:41-77`): `prompt`, then `verify` when given, echo off on a terminal.
+    // MIT: `krb5_read_password` (read_pwd.c:41-77)
+    /// `prompt`, then `verify` when given, echo off on a terminal.
     pub(crate) fn read_password(
         &mut self,
         prompt: &str,

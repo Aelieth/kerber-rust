@@ -192,20 +192,24 @@ const REQUESTS: &[Request] = &[
 ];
 
 fn listen(kt: &mut Keytab, profile: &Krb5Conf, input: &mut dyn BufRead, out: &mut dyn Write) {
-    // MIT `ss_listen` (`util/ss/listen.c:99-108`): `SIGINT` is caught for the whole loop.
+    // MIT: `ss_listen` (util/ss/listen.c:99-108)
+    // `SIGINT` is caught for the whole loop.
     let _sigint = SignalCatch::new(&[Signal::SIGINT]);
     let mut raw = Vec::new();
     loop {
-        // MIT `listen_int_handler` (`util/ss/listen.c:60-63`): a newline, then back at the prompt.
+        // MIT: `listen_int_handler` (util/ss/listen.c:60-63)
+        // a newline, then back at the prompt.
         if take_caught().is_some() {
             let _ = out.write_all(b"\n");
         }
         let read = {
             let _sigcont = SignalCatch::new(&[Signal::SIGCONT]);
             line_mode();
-            // MIT `ss_create_invocation` (`util/ss/invocation.c:91-96`): the prompt is the subsystem name, a colon, and two spaces.
+            // MIT: `ss_create_invocation` (util/ss/invocation.c:91-96)
+            // the prompt is the subsystem name, a colon, and two spaces.
             let _ = write!(out, "{WHOAMI}:  ");
-            // MIT `readline` (`util/ss/listen.c:44-46`): the prompt is written and stdout is flushed.
+            // MIT: `readline` (util/ss/listen.c:44-46)
+            // the prompt is written and stdout is flushed.
             let _ = out.flush();
             fgets(input, BUFSIZ, &mut raw)
         };
@@ -241,7 +245,8 @@ fn execute_line(
     input: &mut dyn BufRead,
     out: &mut dyn Write,
 ) -> Result<Flow, Vec<u8>> {
-    // MIT `ss_execute_line` (`util/ss/execute_cmd.c:175-187`): leading blanks are skipped, and a `!` line is given to the shell unless escapes are disabled.
+    // MIT: `ss_execute_line` (util/ss/execute_cmd.c:175-187)
+    // leading blanks are skipped, and a `!` line is given to the shell unless escapes are disabled.
     let start = line
         .iter()
         .position(|&b| b != b' ' && b != b'\t')
@@ -261,7 +266,8 @@ fn execute_line(
     match REQUESTS.iter().find(|r| r.names.contains(&name.as_str())) {
         Some(r) => (r.run)(kt, profile, &argv, input, out),
         None => {
-            // MIT `ss_listen` (`util/ss/listen.c:143-155`): an unknown request is named by its first word, cut at the first blank.
+            // MIT: `ss_listen` (util/ss/listen.c:143-155)
+            // an unknown request is named by its first word, cut at the first blank.
             Err(unknown_request(trimmed))
         }
     }
@@ -299,7 +305,8 @@ fn clear_list(
     _input: &mut dyn BufRead,
     _out: &mut dyn Write,
 ) -> Result<Flow, Vec<u8>> {
-    // MIT `ktutil_clear_list` (`kadmin/ktutil/ktutil.c:70-77`): no argument, else "invalid arguments"; the list is freed.
+    // MIT: `ktutil_clear_list` (kadmin/ktutil/ktutil.c:70-77)
+    // no argument, else "invalid arguments"; the list is freed.
     if argv.len() != 1 {
         return Err(format!("{}: invalid arguments", argv[0]).into_bytes());
     }
@@ -314,7 +321,8 @@ fn read_kt(
     _input: &mut dyn BufRead,
     _out: &mut dyn Write,
 ) -> Result<Flow, Vec<u8>> {
-    // MIT `ktutil_read_v5` (`kadmin/ktutil/ktutil.c:85-91`): one argument, and a failure names the keytab.
+    // MIT: `ktutil_read_v5` (kadmin/ktutil/ktutil.c:85-91)
+    // one argument, and a failure names the keytab.
     let [cmd, path] = argv else {
         return Err(format!("{}: must specify keytab to read", argv[0]).into_bytes());
     };
@@ -334,7 +342,8 @@ fn read_st(
     _input: &mut dyn BufRead,
     _out: &mut dyn Write,
 ) -> Result<Flow, Vec<u8>> {
-    // MIT `ktutil_read_v4` (`kadmin/ktutil/ktutil.c:96-98`): the request only says srvtabs are no longer read.
+    // MIT: `ktutil_read_v4` (kadmin/ktutil/ktutil.c:96-98)
+    // the request only says srvtabs are no longer read.
     Err(format!("{}: reading srvtabs is no longer supported", argv[0]).into_bytes())
 }
 
@@ -345,11 +354,13 @@ fn write_kt(
     _input: &mut dyn BufRead,
     _out: &mut dyn Write,
 ) -> Result<Flow, Vec<u8>> {
-    // MIT `ktutil_write_v5` (`kadmin/ktutil/ktutil.c:106-112`): one argument, and a failure names the keytab.
+    // MIT: `ktutil_write_v5` (kadmin/ktutil/ktutil.c:106-112)
+    // one argument, and a failure names the keytab.
     let [cmd, path] = argv else {
         return Err(format!("{}: must specify keytab to write", argv[0]).into_bytes());
     };
-    // MIT `ktutil_write_keytab` (`kadmin/ktutil/ktutil_funcs.c:336-358`): each entry is added to the keytab, made at version 2 or keeping its own.
+    // MIT: `ktutil_write_keytab` (kadmin/ktutil/ktutil_funcs.c:336-358)
+    // each entry is added to the keytab, made at version 2 or keeping its own.
     kt.add_to_file(Path::new(path)).map_err(|e| {
         format!("{cmd}: {} while writing keytab \"{path}\"", strerror(&e)).into_bytes()
     })?;
@@ -363,7 +374,8 @@ fn write_st(
     _input: &mut dyn BufRead,
     _out: &mut dyn Write,
 ) -> Result<Flow, Vec<u8>> {
-    // MIT `ktutil_write_v4` (`kadmin/ktutil/ktutil.c:117-119`): the request only says srvtabs are no longer written.
+    // MIT: `ktutil_write_v4` (kadmin/ktutil/ktutil.c:117-119)
+    // the request only says srvtabs are no longer written.
     Err(format!("{}: writing srvtabs is no longer supported", argv[0]).into_bytes())
 }
 
@@ -388,7 +400,8 @@ fn delete_entry(
     _input: &mut dyn BufRead,
     _out: &mut dyn Write,
 ) -> Result<Flow, Vec<u8>> {
-    // MIT `ktutil_delete_entry` (`kadmin/ktutil/ktutil.c:184-190`): one argument read by `atoi`; no such entry is `EINVAL`.
+    // MIT: `ktutil_delete_entry` (kadmin/ktutil/ktutil.c:184-190)
+    // one argument read by `atoi`; no such entry is `EINVAL`.
     let [cmd, slot] = argv else {
         return Err(format!("{}: must specify entry to delete", argv[0]).into_bytes());
     };
@@ -407,7 +420,8 @@ fn list(
     _input: &mut dyn BufRead,
     out: &mut dyn Write,
 ) -> Result<Flow, Vec<u8>> {
-    // MIT `ktutil_list` (`kadmin/ktutil/ktutil.c:203-218`): only `-t`, `-k` and `-e`, else the usage line before anything is printed.
+    // MIT: `ktutil_list` (kadmin/ktutil/ktutil.c:203-218)
+    // only `-t`, `-k` and `-e`, else the usage line before anything is printed.
     let (mut show_time, mut show_keys, mut show_enctype) = (false, false, false);
     for arg in &argv[1..] {
         match arg.as_str() {
@@ -465,7 +479,8 @@ fn format_list(
         };
         let _ = write!(out, "{:4} {:4} ", i + 1, kvno.cast_signed());
         if show_time {
-            // MIT `krb5_timestamp_to_sfstring` (`lib/krb5/krb/str_conv.c:242-250`): the first format that fits, then `pad` fills out to `buflen - 1`.
+            // MIT: `krb5_timestamp_to_sfstring` (lib/krb5/krb/str_conv.c:242-250)
+            // the first format that fits, then `pad` fills out to `buflen - 1`.
             if let Some(text) =
                 krb5_types::timestamp::timestamp_to_sfstring(timestamp, 18, Some(b' '))
             {
@@ -500,7 +515,8 @@ fn list_requests(
     _input: &mut dyn BufRead,
     out: &mut dyn Write,
 ) -> Result<Flow, Vec<u8>> {
-    // MIT `ss_list_requests` (`util/ss/list_rqs.c:74-102`): the names joined, the description at column 25.
+    // MIT: `ss_list_requests` (util/ss/list_rqs.c:74-102)
+    // the names joined, the description at column 25.
     let mut text = format!("Available {WHOAMI} requests:\n\n");
     for r in REQUESTS {
         let names = r.names.join(", ");
@@ -526,7 +542,8 @@ fn quit(
     _input: &mut dyn BufRead,
     _out: &mut dyn Write,
 ) -> Result<Flow, Vec<u8>> {
-    // MIT `ss_quit` (`util/ss/listen.c:180-182`): the subsystem is aborted.
+    // MIT: `ss_quit` (util/ss/listen.c:180-182)
+    // the subsystem is aborted.
     Ok(Flow::Quit)
 }
 
@@ -568,7 +585,8 @@ fn addent(
     let (mut use_pass, mut use_key) = (0u32, 0u32);
     let (mut princ, mut kvno, mut enctype) = (None, None, None);
     let mut i = 0;
-    // MIT `ktutil_add_entry` (`kadmin/ktutil/ktutil.c:132-160`): `-p`, `-k`, `-e`, `-password`, `-key`, `-s` and `-f` are read, and any other word is passed over.
+    // MIT: `ktutil_add_entry` (kadmin/ktutil/ktutil.c:132-160)
+    // `-p`, `-k`, `-e`, `-password`, `-key`, `-s` and `-f` are read, and any other word is passed over.
     while i < args.len() {
         match args[i] {
             "-p" => {
@@ -601,11 +619,13 @@ fn addent(
         return Err("enctype must be specified if not using -f".into());
     };
     let fail = |e: &dyn std::fmt::Display| format!("{cmd}: {e} while adding new entry");
-    // MIT `ktutil_add` (`kadmin/ktutil/ktutil_funcs.c:159-172`): the name takes the default realm, and an unknown enctype is `KRB5_BAD_ENCTYPE`.
+    // MIT: `ktutil_add` (kadmin/ktutil/ktutil_funcs.c:159-172)
+    // the name takes the default realm, and an unknown enctype is `KRB5_BAD_ENCTYPE`.
     let (name, realm) = with_default_realm(spec, profile)
         .and_then(|spec| parse_principal(&spec))
         .map_err(|e| fail(&e))?;
-    // MIT `KRB5_BAD_ENCTYPE` (`lib/krb5/error_tables/krb5_err.et:254-254`): the text is "Bad encryption type".
+    // MIT: `KRB5_BAD_ENCTYPE` (lib/krb5/error_tables/krb5_err.et:254-254)
+    // the text is "Bad encryption type".
     let etype = EncryptionType::from_mit_name(enctype).map_err(|_| fail(&"Bad encryption type"))?;
     let full = name.unparse_with_realm(&realm);
     let key = if use_key == 1 {
@@ -677,7 +697,8 @@ fn hex(bytes: &[u8]) -> String {
 
 /// exact length and is wiped on drop.
 fn hex_decode(digits: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
-    // MIT `k5_hex_decode` (`util/support/hex.c:96-109`): an odd count or a byte that is not a hex digit is `EINVAL`.
+    // MIT: `k5_hex_decode` (util/support/hex.c:96-109)
+    // an odd count or a byte that is not a hex digit is `EINVAL`.
     if !digits.len().is_multiple_of(2) {
         return None;
     }

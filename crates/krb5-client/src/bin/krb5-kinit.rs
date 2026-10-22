@@ -77,7 +77,8 @@ struct K5 {
     in_cc: Option<FileCcache>,
 }
 
-// MIT `k5_begin` (`kinit.c:413-605`): the output cache (`-c`, else the default cache) and the
+// MIT: `k5_begin` (kinit.c:413-605)
+// the output cache (`-c`, else the default cache) and the
 fn k5_begin(prog: &str, opts: &KinitArgs) -> Option<K5> {
     let fail = |e: &Krb5Error, doing: &str| {
         eprintln!("{prog}: {e} {doing}");
@@ -212,7 +213,8 @@ fn k5_begin(prog: &str, opts: &KinitArgs) -> Option<K5> {
         (None, None) => return None,
     };
     let out_spec = out_spec.unwrap_or_else(|| out.spec());
-    // MIT `read_allowed_preauth_type` (`get_in_tkt.c:743-745`): a `pa_type` read that fails
+    // MIT: `read_allowed_preauth_type` (get_in_tkt.c:743-745)
+    // a `pa_type` read that fails
     let in_cc = match &opts.in_ccache {
         None => None,
         Some(n) => match armor_ccache_spec(n) {
@@ -290,7 +292,8 @@ fn default_host_principal(ctx: &ClientContext) -> Princ {
     )
 }
 
-// MIT `get_name_from_os` (`kinit.c:47-54`): the login name of the real user.
+// MIT: `get_name_from_os` (kinit.c:47-54)
+// the login name of the real user.
 fn os_user_name() -> Option<String> {
     nix::unistd::User::from_uid(nix::unistd::Uid::current())
         .ok()
@@ -370,7 +373,8 @@ fn valrenew(prog: &str, opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
     Ok(())
 }
 
-// MIT `krb5_get_init_creds_opt_set_fast_ccache_name` (`lib/krb5/krb/gic_opt.c:279-292`): stores that name for resolution.
+// MIT: `krb5_get_init_creds_opt_set_fast_ccache_name` (lib/krb5/krb/gic_opt.c:279-292)
+// stores that name for resolution.
 fn armor_ccache_spec(name: &str) -> Result<CcSpec, Krb5Error> {
     parse_ccspec(name).map_err(|e| Krb5Error::from_ccname(&e))
 }
@@ -393,7 +397,8 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
         allowed_preauth_type: None,
         pa_config_in: None,
     };
-    // MIT `krb5_init_creds_init` (`lib/krb5/krb/get_in_tkt.c:998-1005`): with neither, `noaddresses` absent or true sends none, and false sends that list.
+    // MIT: `krb5_init_creds_init` (lib/krb5/krb/get_in_tkt.c:998-1005)
+    // with neither, `noaddresses` absent or true sends none, and false sends that list.
     match opts.addresses {
         Some(true) => match krb5_protocol::os_localaddr() {
             Ok(list) => ticket.addresses = Some(list),
@@ -433,7 +438,8 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
     } else {
         None
     };
-    // MIT `handle_gic_opt` (`plugins/preauth/pkinit/pkinit_clnt.c:1307-1335`): the pkinit module refuses a second `X509_user_identity`.
+    // MIT: `handle_gic_opt` (plugins/preauth/pkinit/pkinit_clnt.c:1307-1335)
+    // the pkinit module refuses a second `X509_user_identity`.
     let pkinit = krb5_protocol::clpreauth_loaded(&k5.ctx.profile, "pkinit");
     let mut identity = false;
     for (attr, value) in &opts.pa_opts {
@@ -450,7 +456,8 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
             eprintln!("PA Option {attr} = {value}");
         }
     }
-    // MIT `kinit_prompter` (`clients/kinit/kinit.c:622-636`): the prompter is there for any
+    // MIT: `kinit_prompter` (clients/kinit/kinit.c:622-636)
+    // the prompter is there for any
     let pw_auth = !(opts.keytab || opts.anonymous);
     let given = if pw_auth { env_password() } else { None };
     let prompted = std::cell::Cell::new(given.is_some());
@@ -466,7 +473,8 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
         })
     };
     let new_password = env_new_password();
-    // MIT `krb5_get_init_creds_password` (`gic_pwd.c:238-263`): the banner, then
+    // MIT: `krb5_get_init_creds_password` (gic_pwd.c:238-263)
+    // the banner, then
     let prompter = |banner: &str| -> PromptReply {
         // MIT krb5_prompter_posix; see docs/parity/b1-client.md
         println!("{banner}");
@@ -529,7 +537,8 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
             Ok(())
         }
         Err(e) => {
-            // MIT `k5_kinit` (`kinit.c:785-793`): BAD_INTEGRITY, or PREAUTH_FAILED after a
+            // MIT: `k5_kinit` (kinit.c:785-793)
+            // BAD_INTEGRITY, or PREAUTH_FAILED after a
             // password prompt, is "Password incorrect".
             match mit_error_code(e.as_ref()) {
                 Some(krb5_types::err::BAD_INTEGRITY) => Err(Failure::PasswordIncorrect),

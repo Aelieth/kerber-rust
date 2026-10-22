@@ -90,8 +90,10 @@ fn merge_iface(dest: &mut IfaceRelations, later: &IfaceRelations) {
 /// assert_eq!(left, vec!["profile".to_string()]);
 /// Ok::<(), krb5_config::Error>(())
 /// ```
-// MIT `remove_disabled_modules` (`lib/krb5/krb/plugin.c:255-269`): named modules are dropped and the rest keep their order.
-// MIT `filter_enabled_modules` (`lib/krb5/krb/plugin.c:271-299`): each enabled name takes the first remaining match.
+// MIT: `remove_disabled_modules` (lib/krb5/krb/plugin.c:255-269)
+// named modules are dropped and the rest keep their order.
+// MIT: `filter_enabled_modules` (lib/krb5/krb/plugin.c:271-299)
+// each enabled name takes the first remaining match.
 // MIT k5_plugin_load_all; see docs/parity/a4-kadmin.md
 #[must_use]
 pub fn filter_plugin_modules<S: AsRef<str>>(

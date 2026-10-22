@@ -40,7 +40,8 @@ pub fn build_fast_armor(
     cname: &PrincipalName,
     subkey: Option<&ProtocolKey>,
 ) -> Result<ApReq, Error> {
-    // MIT `generate_authenticator` (`lib/krb5/krb/mk_req_ext.c:327-327`): the armor authenticator's time and microseconds, from `krb5_us_timeofday`.
+    // MIT: `generate_authenticator` (lib/krb5/krb/mk_req_ext.c:327-327)
+    // the armor authenticator's time and microseconds, from `krb5_us_timeofday`.
     let (now, usec) = crate::auth_con::us_timeofday();
     let sub = subkey.map(|k| EncryptionKey {
         keytype: k.etype().to_iana(),
@@ -97,10 +98,14 @@ pub fn attach_fast_with_options(
     inner_padata: Vec<PaData>,
     fast_options: &krb5_types::fast::FastOptions,
 ) -> Result<(), Error> {
-    // MIT `restart_init_creds_loop` (`get_in_tkt.c:836-838`): takes the `krb5int_fast_prep_req_body` snapshot of the outer body.
-    // MIT `krb5int_fast_prep_req_body` (`fast.c:157-161`): the snapshot is the request without its padata.
-    // MIT `init_creds_step_request` (`get_in_tkt.c:1278-1280`): resets the request times with `set_request_times` on each step, after that snapshot.
-    // MIT `krb5int_fast_prep_req` (`fast.c:310-313`): `req_checksum` is over the snapshotted outer body.
+    // MIT: `restart_init_creds_loop` (get_in_tkt.c:836-838)
+    // takes the `krb5int_fast_prep_req_body` snapshot of the outer body.
+    // MIT: `krb5int_fast_prep_req_body` (fast.c:157-161)
+    // the snapshot is the request without its padata.
+    // MIT: `init_creds_step_request` (get_in_tkt.c:1278-1280)
+    // resets the request times with `set_request_times` on each step, after that snapshot.
+    // MIT: `krb5int_fast_prep_req` (fast.c:310-313)
+    // `req_checksum` is over the snapshotted outer body.
     let mut inner = inner_padata;
     inner.extend(req.0.padata.take().unwrap_or_default());
     let inner_body = req.0.req_body.clone();
@@ -140,7 +145,8 @@ pub fn fx_fast_padata(
 
 /// [`fx_fast_padata`] with an explicit FAST req_checksum input.
 /// the FAST encode path, whose req_checksum is over the caller's `to_be_checksummed` bytes.
-/// MIT `k5_make_tgs_req` (`send_tgs.c:279-279`): passes the PA-TGS-REQ AP-REQ as those bytes.
+// MIT: `k5_make_tgs_req` (send_tgs.c:279-279)
+/// passes the PA-TGS-REQ AP-REQ as those bytes.
 pub fn fx_fast_padata_over(
     armor: Option<&ApReq>,
     armor_key: &ProtocolKey,
@@ -185,7 +191,8 @@ pub fn fx_fast_padata_over(
 }
 
 /// Verify `KrbFastFinished.ticket_checksum` over the ticket DER.
-/// MIT `krb5int_fast_process_response` (`fast.c:543-551`): the ticket checksum is verified under the armor key over the encoded ticket; a mismatch is "Ticket modified in KDC reply".
+// MIT: `krb5int_fast_process_response` (fast.c:543-551)
+/// the ticket checksum is verified under the armor key over the encoded ticket; a mismatch is "Ticket modified in KDC reply".
 pub fn verify_fast_finished(
     armor_key: &ProtocolKey,
     ticket: &Ticket,
@@ -204,7 +211,8 @@ pub fn verify_fast_finished(
 }
 
 /// PA-REQ-ENC-PA-REP over the AS-REQ when `enc-pa-rep` is set.
-/// MIT `krb5int_fast_verify_nego` (`fast.c:648-664`): with `enc-pa-rep` set, a missing or bad PA-REQ-ENC-PA-REP checksum over the AS-REQ is `KRB5_KDCREP_MODIFIED`.
+// MIT: `krb5int_fast_verify_nego` (fast.c:648-664)
+/// with `enc-pa-rep` set, a missing or bad PA-REQ-ENC-PA-REP checksum over the AS-REQ is `KRB5_KDCREP_MODIFIED`.
 pub fn verify_req_enc_pa_rep(
     enc: &EncKdcRepPart,
     key: &ProtocolKey,
@@ -247,7 +255,8 @@ pub fn unwrap_fast_rep(
     decode(&plain).map_err(Error::from)
 }
 
-/// MIT `decrypt_fast_reply` (`fast.c:397-402`): `local_resp->nonce != state->nonce` is `KRB5_KDCREP_MODIFIED` ("nonce modified in FAST response").
+// MIT: `decrypt_fast_reply` (fast.c:397-402)
+/// `local_resp->nonce != state->nonce` is `KRB5_KDCREP_MODIFIED` ("nonce modified in FAST response").
 pub fn unwrap_fast_rep_checked(
     armor_key: &ProtocolKey,
     padata: &Option<Vec<PaData>>,
@@ -272,7 +281,8 @@ pub fn apply_strengthen(
     krb_fx_cf2(&sk, base, b"strengthenkey", b"replykey").map_err(Into::into)
 }
 
-/// MIT `send_support` (`spake_client.c:155-167`): the client's permitted groups, in configuration order.
+// MIT: `send_support` (spake_client.c:155-167)
+/// the client's permitted groups, in configuration order.
 #[must_use]
 pub fn pa_spake_support(groups: &[SpakeGroup]) -> PaData {
     let msg = krb5_types::spake::PaSpake::Support(krb5_types::spake::SpakeSupport {
@@ -285,7 +295,8 @@ pub fn pa_spake_support(groups: &[SpakeGroup]) -> PaData {
 }
 
 /// A PA-SPAKE response to a challenge in `group`, and the reply key `K'[0]`.
-/// MIT `process_challenge` (`spake_client.c:210-282`): the transcript is the support message, the challenge and the client's element; the SF-NONE factor is encrypted in `K'[1]`.
+// MIT: `process_challenge` (spake_client.c:210-282)
+/// the transcript is the support message, the challenge and the client's element; the SF-NONE factor is encrypted in `K'[1]`.
 pub fn pa_spake_response(
     ikey: &ProtocolKey,
     group: SpakeGroup,
@@ -296,10 +307,12 @@ pub fn pa_spake_response(
 ) -> Result<(PaData, ProtocolKey), Error> {
     let wbytes = spake_wbytes(ikey, group)?;
     let (secret, pub_x) = spake_keygen(group, &wbytes, false)?;
-    // MIT `group_keygen` (`plugins/preauth/spake/groups.c:333-371`): the public value is traced.
+    // MIT: `group_keygen` (plugins/preauth/spake/groups.c:333-371)
+    // the public value is traced.
     crate::trace::spake_keygen(&pub_x);
     let result = spake_result(group, &wbytes, &secret, challenge_pubkey, false)?;
-    // MIT `group_result` (`plugins/preauth/spake/groups.c:374-412`): the result is traced, which `trace::spake_result` prints as a hash only.
+    // MIT: `group_result` (plugins/preauth/spake/groups.c:374-412)
+    // the result is traced, which `trace::spake_result` prints as a hash only.
     crate::trace::spake_result(&result);
     let thash = spake_thash_update(group, &[], support_der, challenge_der);
     let thash = spake_thash_update(group, &thash, &pub_x, &[]);
@@ -737,7 +750,8 @@ pub fn pkinit_reply_key_agile(
 }
 
 /// PA-FOR-USER (S4U2Self) checksummed with the TGT session key (usage 17).
-/// MIT `make_pa_for_user_checksum` (`lib/krb5/krb/s4u_creds.c:130-133`): the checksum is HMAC-MD5 (`CKSUMTYPE_HMAC_MD5_ARCFOUR`, -138) whatever the key's type, as MS-SFU specifies.
+// MIT: `make_pa_for_user_checksum` (lib/krb5/krb/s4u_creds.c:130-133)
+/// the checksum is HMAC-MD5 (`CKSUMTYPE_HMAC_MD5_ARCFOUR`, -138) whatever the key's type, as MS-SFU specifies.
 pub fn pa_for_user(
     session: &ProtocolKey,
     user: PrincipalName,
@@ -809,7 +823,8 @@ fn s4u_not_newer(etype: EncryptionType) -> bool {
     matches!(etype, EncryptionType::Des3CbcSha1 | EncryptionType::Rc4Hmac)
 }
 
-/// MIT `verify_s4u2self_reply` (`s4u_creds.c:273-397`): missing 130 on both the (FAST-swapped) reply padata and enc-padata is accepted. Enc-only 130, a nonce/user/checksum mismatch, or an unkeyed reply checksum on a modern etype is refused.
+// MIT: `verify_s4u2self_reply` (s4u_creds.c:273-397)
+/// missing 130 on both the (FAST-swapped) reply padata and enc-padata is accepted. Enc-only 130, a nonce/user/checksum mismatch, or an unkeyed reply checksum on a modern etype is refused.
 pub fn verify_s4u2self_reply(
     subkey: &ProtocolKey,
     req: &krb5_types::s4u::PaS4uX509User,

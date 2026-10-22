@@ -348,7 +348,8 @@ fn non_ascii_realm_as_exchange_is_err() {
     assert!(err.is_err(), "non-ASCII realm must not panic");
 }
 
-/// MIT `init_creds_step_reply` (`lib/krb5/krb/get_in_tkt.c:1759-1765`): an error to a request no mechanism answered is the KDC's error, with no second request.
+// MIT: `init_creds_step_reply` (lib/krb5/krb/get_in_tkt.c:1759-1765)
+/// an error to a request no mechanism answered is the KDC's error, with no second request.
 #[test]
 fn first_bare_as_req_skew_is_the_kdcs_error_like_mit() {
     use std::net::UdpSocket;
@@ -1005,8 +1006,10 @@ fn timestamp_of(req: &krb5_types::AsReq) -> krb5_types::PaEncTsEnc {
     decode(&krb5_crypto::decrypt(&key, usage, enc.cipher.as_ref()).unwrap()).unwrap()
 }
 
-/// MIT `note_req_timestamp` (`lib/krb5/krb/get_in_tkt.c:1433-1438`): a retried PREAUTH_REQUIRED sets the offset of the KDC's time.
-/// MIT `k5_init_creds_current_time` (`lib/krb5/krb/get_in_tkt.c:683-697`): the next request's times and its encrypted timestamp are then the KDC's.
+// MIT: `note_req_timestamp` (lib/krb5/krb/get_in_tkt.c:1433-1438)
+/// a retried PREAUTH_REQUIRED sets the offset of the KDC's time.
+// MIT: `k5_init_creds_current_time` (lib/krb5/krb/get_in_tkt.c:683-697)
+/// the next request's times and its encrypted timestamp are then the KDC's.
 #[test]
 fn after_preauth_required_the_timestamp_and_times_are_the_kdcs() {
     isolate_host_krb5();
@@ -1035,7 +1038,8 @@ fn after_preauth_required_the_timestamp_and_times_are_the_kdcs() {
     );
 }
 
-/// MIT `k5_init_creds_current_time` (`lib/krb5/krb/get_in_tkt.c:683-697`): with `kdc_timesync = 0` the local time stays.
+// MIT: `k5_init_creds_current_time` (lib/krb5/krb/get_in_tkt.c:683-697)
+/// with `kdc_timesync = 0` the local time stays.
 #[test]
 fn kdc_timesync_off_keeps_the_local_time_in_the_timestamp() {
     isolate_host_krb5();
@@ -1049,7 +1053,8 @@ fn kdc_timesync_off_keeps_the_local_time_in_the_timestamp() {
     assert!((i64::from(ts.patimestamp.unix_seconds()) - now).abs() <= 5);
 }
 
-/// MIT `krb5_us_timeofday` (`lib/krb5/os/ustime.c:66-82`): a client authenticator and an encrypted timestamp carry the time to the microsecond.
+// MIT: `krb5_us_timeofday` (lib/krb5/os/ustime.c:66-82)
+/// a client authenticator and an encrypted timestamp carry the time to the microsecond.
 #[test]
 fn client_authenticators_and_timestamps_carry_microseconds() {
     use krb5_crypto::{EncryptionType, ProtocolKey, decrypt};
@@ -1127,7 +1132,8 @@ fn client_authenticators_and_timestamps_carry_microseconds() {
     }
 }
 
-/// MIT `krb5_init_creds_init` (`lib/krb5/krb/get_in_tkt.c:966-976`): a caller that sets no etype list, as kpasswd's, asks for `default_tkt_enctypes` in krb5.conf's order.
+// MIT: `krb5_init_creds_init` (lib/krb5/krb/get_in_tkt.c:966-976)
+/// a caller that sets no etype list, as kpasswd's, asks for `default_tkt_enctypes` in krb5.conf's order.
 #[test]
 fn an_as_request_with_no_etype_list_asks_for_krb5_confs_order() {
     use krb5_types::{AsReq, KerberosTime, KrbError, Microseconds, err};
@@ -1189,8 +1195,10 @@ fn an_as_request_with_no_etype_list_asks_for_krb5_confs_order() {
     assert_eq!(req.0.req_body.etype, vec![20, 17], "krb5.conf's order");
 }
 
-/// MIT `krb5int_parse_enctype_list` (`lib/krb5/krb/init_ctx.c:447-502`): `aes` is the four AES types, and `DEFAULT` is the eight-type default list.
-/// MIT `krb5int_c_weak_enctype` (`lib/crypto/krb/enctype_util.c:58-64`): rc4-hmac is not `ETYPE_WEAK`, so it stays when `allow_weak_crypto` is off.
+// MIT: `krb5int_parse_enctype_list` (lib/krb5/krb/init_ctx.c:447-502)
+/// `aes` is the four AES types, and `DEFAULT` is the eight-type default list.
+// MIT: `krb5int_c_weak_enctype` (lib/crypto/krb/enctype_util.c:58-64)
+/// rc4-hmac is not `ETYPE_WEAK`, so it stays when `allow_weak_crypto` is off.
 #[test]
 fn conf_etypes_expands_default_and_family_words() {
     isolate_host_krb5();
@@ -1214,7 +1222,8 @@ fn conf_etypes_expands_default_and_family_words() {
     );
 }
 
-/// MIT `note_req_timestamp` (`lib/krb5/krb/get_in_tkt.c:1427-1438`): the offset is the error's time less the time the error arrives, so a slow password prompt is not skew.
+// MIT: `note_req_timestamp` (lib/krb5/krb/get_in_tkt.c:1427-1438)
+/// the offset is the error's time less the time the error arrives, so a slow password prompt is not skew.
 #[test]
 fn a_delayed_prompt_is_not_added_to_the_kdc_offset() {
     use krb5_types::{
@@ -1310,7 +1319,8 @@ fn a_delayed_prompt_is_not_added_to_the_kdc_offset() {
     );
 }
 
-/// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:648-728`): a hint with no encrypted timestamp and no FAST fails `KRB5_PREAUTH_FAILED` without reading the password.
+// MIT: `process_pa_data` (lib/krb5/krb/preauth2.c:648-728)
+/// a hint with no encrypted timestamp and no FAST fails `KRB5_PREAUTH_FAILED` without reading the password.
 #[test]
 fn a_hint_without_enc_ts_fails_without_prompting() {
     use krb5_types::{EtypeInfo2Entry, KerberosTime, KrbError, Microseconds, PaData, err, pa};

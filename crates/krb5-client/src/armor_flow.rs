@@ -220,7 +220,8 @@ fn disable_encrypted_timestamp_does_not_prompt_and_fails() {
         super::Krb5Error::from_protocol(proto, TEST_REALM).to_string(),
         "Pre-authentication failed: Encrypted timestamp is disabled"
     );
-    // MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:716-724`): the code is `KRB5_PREAUTH_FAILED`, not the KDC's 24, so kinit prints the message and not "Password incorrect".
+    // MIT: `process_pa_data` (lib/krb5/krb/preauth2.c:716-724)
+    // the code is `KRB5_PREAUTH_FAILED`, not the KDC's 24, so kinit prints the message and not "Password incorrect".
     assert_eq!(mit_error_code(err.as_ref()), None);
     let reqs = reqs_of(&cap);
     assert_eq!(

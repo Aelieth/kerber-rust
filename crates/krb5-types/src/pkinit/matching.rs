@@ -65,12 +65,14 @@ const KEYWORDS: [(&[u8], Keyword); 5] = [
     (b"<SUBJECT>", Keyword::Subject),
 ];
 
-// MIT `ku_keywords` (`pkinit_matching.c:117-121`): the key usage words.
+// MIT: `ku_keywords` (pkinit_matching.c:117-121)
+// the key usage words.
 const KU_WORDS: [(&[u8], u32); 2] = [
     (b"digitalSignature", KU_DIGITAL_SIGNATURE),
     (b"keyEncipherment", KU_KEY_ENCIPHERMENT),
 ];
-// MIT `eku_keywords` (`pkinit_matching.c:123-129`): the extended key usage words.
+// MIT: `eku_keywords` (pkinit_matching.c:123-129)
+// the extended key usage words.
 const EKU_WORDS: [(&[u8], u32); 4] = [
     (b"pkinit", EKU_PKINIT),
     (b"msScLogin", EKU_MS_SC_LOGIN),
@@ -232,7 +234,8 @@ fn parse_rule_set(rule: &[u8]) -> Result<(Relation, Vec<Component>), i32> {
     Ok((relation, components))
 }
 
-// MIT `parse_rule_component` (`pkinit_matching.c:253-372`): a keyword and its value up to the next.
+// MIT: `parse_rule_component` (pkinit_matching.c:253-372)
+// a keyword and its value up to the next.
 fn parse_rule_component(rule: &mut &[u8]) -> Result<Component, i32> {
     let (kw, n) = keyword_at(rule).ok_or(ENOENT)?;
     let after = &rule[n..];
@@ -250,7 +253,8 @@ fn parse_rule_component(rule: &mut &[u8]) -> Result<Component, i32> {
     }
 }
 
-// MIT `parse_list_value` (`pkinit_matching.c:182-250`): a word matches a keyword it starts, and
+// MIT: `parse_list_value` (pkinit_matching.c:182-250)
+// a word matches a keyword it starts, and
 fn parse_list_value(kw: Keyword, value: &[u8]) -> Result<u32, i32> {
     let words: &[(&[u8], u32)] = if kw == Keyword::Eku {
         &EKU_WORDS
@@ -354,7 +358,8 @@ fn component_match(
     })
 }
 
-// MIT `crypto_retrieve_X509_key_usage` (`pkinit_crypto_openssl.c:4694-4766`): an extension that appears twice gives none.
+// MIT: `crypto_retrieve_X509_key_usage` (pkinit_crypto_openssl.c:4694-4766)
+// an extension that appears twice gives none.
 fn usage_bits(extensions: &[u8]) -> (u32, u32) {
     let mut ku = Vec::new();
     let mut eku = Vec::new();
@@ -399,7 +404,8 @@ fn usage_bits(extensions: &[u8]) -> (u32, u32) {
     (ku_bits, eku_bits)
 }
 
-// MIT `rfc2253_name` (`pkinit_crypto_openssl.c:4769-4790`): `X509_NAME_print_ex` with `XN_FLAG_SEP_COMMA_PLUS`, read as a C string.
+// MIT: `rfc2253_name` (pkinit_crypto_openssl.c:4769-4790)
+// `X509_NAME_print_ex` with `XN_FLAG_SEP_COMMA_PLUS`, read as a C string.
 fn print_name(name: &[u8]) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     let mut rdns = name;

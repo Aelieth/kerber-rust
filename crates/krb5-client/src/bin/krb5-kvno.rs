@@ -36,7 +36,8 @@ fn main() {
     std::process::exit(do_v5_kvno(prog, &args));
 }
 
-// MIT `do_v5_kvno` (`kvno.c:452-609`): the options are checked and the caches and keytab named
+// MIT: `do_v5_kvno` (kvno.c:452-609)
+// the options are checked and the caches and keytab named
 fn do_v5_kvno(prog: &str, args: &KvnoArgs) -> i32 {
     let fail = |e: &Krb5Error, doing: &str| {
         eprintln!("{prog}: {e} {doing}");
@@ -227,7 +228,8 @@ fn kvno(ctx: &Ctx<'_>, cache: &mut OpenCache, name: &str) -> Result<CcacheCred, 
     })
 }
 
-// MIT `s4u_identify_user` (`lib/krb5/krb/s4u_creds.c:40-88`): an enterprise name is looked up from the service realm by that probe, not by the text after `@`.
+// MIT: `s4u_identify_user` (lib/krb5/krb/s4u_creds.c:40-88)
+// an enterprise name is looked up from the service realm by that probe, not by the text after `@`.
 fn identify_user(user: Princ, _me: &Princ) -> Princ {
     user
 }

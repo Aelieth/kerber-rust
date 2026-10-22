@@ -19,7 +19,8 @@ pub(crate) use file::{
 pub use file::{SUFFIX_LOCKOUT, lockout_path, lockout_records, merge_lockout_file};
 
 /// A principal's three lockout attributes, which MIT does not replicate: the last successful and the last failed authentication, and the failed attempts since the count was reset.
-/// MIT `klmdb_encode_princ_lockout` (`plugins/kdb/lmdb/marshal.c:91-98`): a lockout record holds these three fields.
+// MIT: `klmdb_encode_princ_lockout` (plugins/kdb/lmdb/marshal.c:91-98)
+/// a lockout record holds these three fields.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Lockout {
     /// `last_success`, Unix seconds (0 = never).
@@ -68,7 +69,8 @@ impl LockoutUpdate {
     }
 
     /// `base` with the update applied at `stamp`.
-    /// MIT `klmdb_update_lockout` (`plugins/kdb/lmdb/kdb_lmdb.c:1054-1121`): the update starts from the attributes stored when it writes, then zeroes, stamps and counts.
+    // MIT: `klmdb_update_lockout` (plugins/kdb/lmdb/kdb_lmdb.c:1054-1121)
+    /// the update starts from the attributes stored when it writes, then zeroes, stamps and counts.
     #[must_use]
     pub fn apply(self, base: Lockout, stamp: u32) -> Lockout {
         let mut out = base;
@@ -86,18 +88,21 @@ impl LockoutUpdate {
     }
 }
 
-/// MIT `ts_after` (`include/k5-int.h:2350-2354`): times compare as unsigned 32-bit values.
+// MIT: `ts_after` (include/k5-int.h:2350-2354)
+/// times compare as unsigned 32-bit values.
 fn ts_after(a: u32, b: u32) -> bool {
     a > b
 }
 
-/// MIT `ts_incr` (`include/k5-int.h:2343-2347`): a time plus a duration wraps as an unsigned 32-bit value.
+// MIT: `ts_incr` (include/k5-int.h:2343-2347)
+/// a time plus a duration wraps as an unsigned 32-bit value.
 fn ts_incr(ts: u32, delta: u32) -> u32 {
     ts.wrapping_add(delta)
 }
 
 /// The time of the principal's last administrative unlock, 0 when it has none.
-/// MIT `krb5_dbe_lookup_last_admin_unlock` (`lib/kdb/kdb5.c:1530-1552`): a `KRB5_TL_LAST_ADMIN_UNLOCK` that is not four bytes, or none, is time 0.
+// MIT: `krb5_dbe_lookup_last_admin_unlock` (lib/kdb/kdb5.c:1530-1552)
+/// a `KRB5_TL_LAST_ADMIN_UNLOCK` that is not four bytes, or none, is time 0.
 pub(crate) fn last_admin_unlock(p: &Principal) -> u32 {
     p.tl_data
         .iter()
@@ -108,7 +113,8 @@ pub(crate) fn last_admin_unlock(p: &Principal) -> u32 {
 }
 
 /// The principal's lockout policy: its maximum failures, failure count interval and lockout duration, all 0 when it has no policy or its policy does not exist.
-/// MIT `lookup_lockout_policy` (`plugins/kdb/db2/lockout.c:40-89`): the policy named in the entry's kadm5 data, zeros without one.
+// MIT: `lookup_lockout_policy` (plugins/kdb/db2/lockout.c:40-89)
+/// the policy named in the entry's kadm5 data, zeros without one.
 fn lookup_lockout_policy<S: PrincipalRead + ?Sized>(store: &S, p: &Principal) -> (u32, u32, u32) {
     store.named_policy_for(p).map_or((0, 0, 0), |pol| {
         (
@@ -120,7 +126,8 @@ fn lookup_lockout_policy<S: PrincipalRead + ?Sized>(store: &S, p: &Principal) ->
 }
 
 /// Whether `p` is locked out at `stamp`.
-/// MIT `locked_check_p` (`plugins/kdb/db2/lockout.c:92-113`): an unlock since the last failure unlocks; else locked at max_fail failures, for good or until the duration passes.
+// MIT: `locked_check_p` (plugins/kdb/db2/lockout.c:92-113)
+/// an unlock since the last failure unlocks; else locked at max_fail failures, for good or until the duration passes.
 fn locked_check_p(stamp: u32, max_fail: u32, lockout_duration: u32, p: &Principal) -> bool {
     if !ts_after(p.last_failed, last_admin_unlock(p)) {
         return false;
@@ -135,8 +142,10 @@ fn locked_check_p(stamp: u32, max_fail: u32, lockout_duration: u32, p: &Principa
 }
 
 /// The KDB module's AS policy check: `CLIENT_REVOKED` with MIT's `LOCKED_OUT` status for a client locked out at `stamp`, the request's time.
-/// MIT `krb5_db2_lockout_check_policy` (`plugins/kdb/db2/lockout.c:115-139`): nothing with `disable_lockout`, else `CLIENT_REVOKED` when `locked_check_p` holds.
-/// MIT `krb5_db2_check_policy_as` (`plugins/kdb/db2/kdb_db2.c:1539-1550`): that refusal's status is `LOCKED_OUT`.
+// MIT: `krb5_db2_lockout_check_policy` (plugins/kdb/db2/lockout.c:115-139)
+/// nothing with `disable_lockout`, else `CLIENT_REVOKED` when `locked_check_p` holds.
+// MIT: `krb5_db2_check_policy_as` (plugins/kdb/db2/kdb_db2.c:1539-1550)
+/// that refusal's status is `LOCKED_OUT`.
 pub(crate) fn lockout_check_policy<S: PrincipalRead + ?Sized>(
     store: &S,
     p: &Principal,
@@ -166,9 +175,12 @@ pub(crate) fn as_outcome<T>(out: &Result<T, Error>) -> i32 {
 }
 
 /// Record one AS outcome of `p`, the client entry as the request looked it up, ended with `status` at `stamp`, the request's time: a reply to a client that requires preauthentication stamps its last success and zeroes its count; a failed preauthentication or integrity check stamps its last failure and counts it, the count first zeroed after an administrative unlock since the last failure or once the policy's failure count interval has passed; any other outcome, and any outcome for a client already locked out, changes nothing. The KDB's `disable_last_success` and `disable_lockout` suppress the writes they name.
-/// MIT `log_as_req` (`kdc/kdc_log.c:57-97`): every logged AS outcome goes to the KDB's audit with the request's time and error code.
-/// MIT `krb5_db2_audit_as_req` (`plugins/kdb/db2/kdb_db2.c:1553-1560`): the audit is `krb5_db2_lockout_audit`.
-/// MIT `krb5_db2_lockout_audit` (`plugins/kdb/db2/lockout.c:141-222`): only 0, `PREAUTH_FAILED` and `BAD_INTEGRITY` count, a locked entry is not written, and one put records what changed.
+// MIT: `log_as_req` (kdc/kdc_log.c:57-97)
+/// every logged AS outcome goes to the KDB's audit with the request's time and error code.
+// MIT: `krb5_db2_audit_as_req` (plugins/kdb/db2/kdb_db2.c:1553-1560)
+/// the audit is `krb5_db2_lockout_audit`.
+// MIT: `krb5_db2_lockout_audit` (plugins/kdb/db2/lockout.c:141-222)
+/// only 0, `PREAUTH_FAILED` and `BAD_INTEGRITY` count, a locked entry is not written, and one put records what changed.
 pub fn lockout_audit<S: PrincipalRead + ?Sized>(store: &S, p: &Principal, stamp: u32, status: i32) {
     if !matches!(status, 0 | err::PREAUTH_FAILED | err::BAD_INTEGRITY) {
         return;

@@ -1,8 +1,11 @@
 //! The database's lock files and lock: what creates them, what a database without them does,
 //! the age every write moves, and who waits for whom.
-//! MIT `ctx_create_db` (`plugins/kdb/db2/kdb_db2.c:697-732`): creating a database makes `principal.ok`, then the policy lock file, `O_EXCL`.
-//! MIT `ctx_init` (`plugins/kdb/db2/kdb_db2.c:488-501`): opening a database needs `principal.ok`; no open creates it.
-//! MIT `ctx_update_age` (`plugins/kdb/db2/kdb_db2.c:590-598`): every write moves `principal.ok`'s mtime strictly forward.
+// MIT: `ctx_create_db` (plugins/kdb/db2/kdb_db2.c:697-732)
+//! creating a database makes `principal.ok`, then the policy lock file, `O_EXCL`.
+// MIT: `ctx_init` (plugins/kdb/db2/kdb_db2.c:488-501)
+//! opening a database needs `principal.ok`; no open creates it.
+// MIT: `ctx_update_age` (plugins/kdb/db2/kdb_db2.c:590-598)
+//! every write moves `principal.ok`'s mtime strictly forward.
 
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
