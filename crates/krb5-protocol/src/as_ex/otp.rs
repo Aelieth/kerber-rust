@@ -1,10 +1,4 @@
 //! The OTP clpreauth module (`lib/krb5/krb/preauth_otp.c`), RFC 6560 on the client.
-//!
-//! It runs only inside FAST. The KDC's PA-OTP-CHALLENGE is filtered to the tokens this client
-//! supports, a responder or the user picks one and gives its value (and a PIN where the token asks
-//! for one), and the nonce, encrypted in the FAST armor key with key usage 45, goes back in a
-//! PA-OTP-REQUEST. The armor key is then the AS key (FAST strengthens it) and the exchange allows no
-//! fallback after the request.
 
 use std::fmt::Write as _;
 
@@ -37,7 +31,6 @@ const R_NEXTOTP: i64 = 0x4;
 /// The reply buffers of `doprompt` callers are 1024 bytes, so a reply is at most 1023.
 const REPLY_MAX: usize = 1023;
 
-/// `EINVAL`, `ERANGE`, `ENOTSUP` and `ENOMEM`.
 const EINVAL: i64 = 22;
 const ERANGE: i64 = 34;
 const ENOTSUP: i64 = 95;
@@ -47,14 +40,12 @@ fn fail(code: i64, text: &str) -> ModuleFail {
     ModuleFail::new(code, text)
 }
 
-/// What `prep_questions` leaves for `process`: the challenge with its tokens filtered.
 /// MIT `otp_client_request_init` (`lib/krb5/krb/preauth_otp.c:979-979`): the per-request slot that holds the decoded challenge.
 #[derive(Default)]
 pub(super) struct OtpState {
     chl: Option<PaOtpChallenge>,
 }
 
-/// The first 32 bits of a flags field, bit 0 first, as MIT's `krb5_flags` word.
 fn flags_u32(f: &KerberosFlags) -> u32 {
     f.iter()
         .take(32)
@@ -62,14 +53,12 @@ fn flags_u32(f: &KerberosFlags) -> u32 {
         .fold(0, |w, (i, b)| if *b { w | (1 << (31 - i)) } else { w })
 }
 
-/// The octets of an OCTET STRING or a UTF8String, `None` when it is absent or empty.
 /// MIT `k5_asn1_decode_bytestring` (`lib/krb5/asn.1/asn1_encode.c:222-239`): length 0 gives `NULL`.
 /// MIT `utf8string` (`lib/krb5/asn.1/asn1_k_encode.c:89-91`): a byte string, so these fields are octets.
 fn odata(o: Option<&OctetString>) -> Option<&[u8]> {
     o.map(AsRef::as_ref).filter(|b: &&[u8]| !b.is_empty())
 }
 
-/// `Some` of a copy of `b` when it is not empty.
 fn nonempty(b: &[u8]) -> Option<OctetString> {
     (!b.is_empty()).then(|| OctetString::from(b.to_vec()))
 }
@@ -98,8 +87,7 @@ fn is_supported(ti: &OtpTokenInfo) -> bool {
         && format(ti) != OTP_FORMAT_BASE64
 }
 
-/// MIT `filter_supported_tokeninfos` (`lib/krb5/krb/preauth_otp.c:899-921`): drop what this
-/// client cannot answer; none left is `KRB5_PREAUTH_FAILED` "No supported tokens".
+/// MIT `filter_supported_tokeninfos` (`lib/krb5/krb/preauth_otp.c:899-921`): drop what this client cannot answer; none left is `KRB5_PREAUTH_FAILED` "No supported tokens".
 fn filter_supported(tis: Vec<OtpTokenInfo>) -> Result<Vec<OtpTokenInfo>, Error> {
     let kept: Vec<OtpTokenInfo> = tis.into_iter().filter(is_supported).collect();
     if kept.is_empty() {
@@ -108,14 +96,12 @@ fn filter_supported(tis: Vec<OtpTokenInfo>) -> Result<Vec<OtpTokenInfo>, Error> 
     Ok(kept)
 }
 
-/// The string `key` of the ccache's preauth config.
 /// MIT `get_cc_config` (`lib/krb5/krb/preauth2.c:513-530`): only a string value counts.
 fn cc_get<'a>(cc: Option<&'a Value>, key: &str) -> Option<&'a [u8]> {
     cc?.member(key)?.as_cstr()
 }
 
-/// MIT `filter_config_tokeninfos` (`lib/krb5/krb/preauth_otp.c:928-973`): when exactly one token
-/// agrees with the vendor, algID and tokenID the ccache recorded, it is the only one kept.
+/// MIT `filter_config_tokeninfos` (`lib/krb5/krb/preauth_otp.c:928-973`): when exactly one token agrees with the vendor, algID and tokenID the ccache recorded, it is the only one kept.
 fn filter_config(tis: &mut Vec<OtpTokenInfo>, cc: Option<&Value>) {
     let (vendor, alg_id, token_id) = (
         cc_get(cc, "vendor"),
@@ -139,15 +125,11 @@ fn filter_config(tis: &mut Vec<OtpTokenInfo>, cc: Option<&Value>) {
     tis.push(keep);
 }
 
-/// A JSON string of the octets `b`.
 fn string_value(b: &[u8]) -> Value {
     Value::String(b.to_vec())
 }
 
-/// MIT `codec_encode_tokeninfo` (`lib/krb5/krb/preauth_otp.c:149-206`): one token as the responder
-/// reads it. A token that collects a PIN is flags 3; one that also has a separate PIN is 7, since MIT
-/// sets NEXTOTP there and not SEPARATE_PIN (`:161-165`). Format 3 (binary) and 4 (base64) are left
-/// out, and -1 means absent.
+/// MIT `codec_encode_tokeninfo` (`lib/krb5/krb/preauth_otp.c:149-206`): one token as the responder reads it. A token that collects a PIN is flags 3; one that also has a separate PIN is 7, since MIT sets NEXTOTP there and not SEPARATE_PIN (`:161-165`). Format 3 (binary) and 4 (base64) are left out, and -1 means absent.
 fn tokeninfo_json(ti: &OtpTokenInfo) -> Value {
     let f = flags_u32(&ti.flags);
     let mut flags = R_COLLECT_TOKEN;
@@ -183,9 +165,7 @@ fn tokeninfo_json(ti: &OtpTokenInfo) -> Value {
     o
 }
 
-/// MIT `codec_encode_challenge` (`lib/krb5/krb/preauth_otp.c:209-261`): the challenge the responder
-/// reads, `{"service": .., "tokenInfo": [..]}` in MIT's key order and compact. The service is left out
-/// when it is empty.
+/// MIT `codec_encode_challenge` (`lib/krb5/krb/preauth_otp.c:209-261`): the challenge the responder reads, `{"service": .., "tokenInfo": [..]}` in MIT's key order and compact. The service is left out when it is empty.
 fn challenge_json(chl: &PaOtpChallenge) -> Vec<u8> {
     let mut o = Value::Object(Vec::new());
     if let Some(s) = odata(chl.service.as_ref()) {
@@ -198,15 +178,7 @@ fn challenge_json(chl: &PaOtpChallenge) -> Vec<u8> {
     k5json::encode(&o)
 }
 
-/// MIT `otp_client_prep_questions` (`lib/krb5/krb/preauth_otp.c:983-1030`): decode the challenge,
-/// keep the supported tokens, prune by the ccache's config, and ask the `otp` question with the
-/// challenge JSON. Any error ends the round, the other mechanisms' too. A later challenge in the
-/// list replaces an earlier one, as MIT's does.
-///
-/// # Errors
-///
-/// [`Error::Asn1`] when the challenge does not decode; [`Error::Message`] "No supported tokens"
-/// when none is left.
+/// MIT `otp_client_prep_questions` (`lib/krb5/krb/preauth_otp.c:983-1030`): decode the challenge, keep the supported tokens, prune by the ccache's config, and ask the `otp` question with the challenge JSON. Any error ends the round, the other mechanisms' too. A later challenge in the list replaces an earlier one, as MIT's does.
 pub(super) fn prep_questions(
     state: &mut OtpState,
     pa_data: &PaData,
@@ -221,7 +193,6 @@ pub(super) fn prep_questions(
     Ok(())
 }
 
-/// C `strtoul(s, NULL, 0)`: the value, and whether it overflowed (`ERANGE`).
 fn strtoul_base0(s: &[u8]) -> (u64, bool) {
     let mut i = 0;
     while s
@@ -268,8 +239,7 @@ fn strtoul_base0(s: &[u8]) -> (u64, bool) {
     (if neg { n.wrapping_neg() } else { n }, false)
 }
 
-/// MIT `otpvalue_matches_tokeninfo` (`lib/krb5/krb/preauth_otp.c:456-469`): the value has the
-/// token's length, and its format when that is 0 to 2; a format of 3 or more is not checked.
+/// MIT `otpvalue_matches_tokeninfo` (`lib/krb5/krb/preauth_otp.c:456-469`): the value has the token's length, and its format when that is 0 to 2; a format of 3 or more is not checked.
 fn value_matches(value: &[u8], ti: &OtpTokenInfo) -> bool {
     if length(ti) >= 0 && value.len() != usize::try_from(length(ti)).unwrap_or(usize::MAX) {
         return false;
@@ -282,8 +252,7 @@ fn value_matches(value: &[u8], ti: &OtpTokenInfo) -> bool {
     }
 }
 
-/// MIT `doprompt` (`lib/krb5/krb/preauth_otp.c:482-499`): one hidden prompt of type PREAUTH into
-/// a 1024-byte buffer, read as a C string: the reply is cut at its first NUL.
+/// MIT `doprompt` (`lib/krb5/krb/preauth_otp.c:482-499`): one hidden prompt of type PREAUTH into a 1024-byte buffer, read as a C string: the reply is cut at its first NUL.
 fn doprompt(
     ui: &mut dyn AsPrompt,
     banner: Option<&str>,
@@ -306,8 +275,7 @@ fn doprompt(
     Ok(reply)
 }
 
-/// MIT `prompt_for_tokeninfo` (`lib/krb5/krb/preauth_otp.c:514-543`): the menu, asked again until
-/// the answer is a number from 1 to the count (`strtoul` base 0; a number out of range is an error).
+/// MIT `prompt_for_tokeninfo` (`lib/krb5/krb/preauth_otp.c:514-543`): the menu, asked again until the answer is a number from 1 to the count (`strtoul` base 0; a number out of range is an error).
 fn prompt_for_tokeninfo(
     ui: &mut dyn AsPrompt,
     tis: &[usize],
@@ -335,8 +303,7 @@ fn prompt_for_tokeninfo(
     }
 }
 
-/// MIT `collect_pin` (`lib/krb5/krb/preauth_otp.c:583-602`): asked when the token collects a PIN
-/// or a separate one; `None` is MIT's `empty_data`.
+/// MIT `collect_pin` (`lib/krb5/krb/preauth_otp.c:583-602`): asked when the token collects a PIN or a separate one; `None` is MIT's `empty_data`.
 fn collect_pin(
     ui: &mut dyn AsPrompt,
     ti: &OtpTokenInfo,
@@ -347,12 +314,9 @@ fn collect_pin(
     Ok(Some(doprompt(ui, None, "OTP Token PIN")?))
 }
 
-/// What the user chose: the token's index, the value, and the PIN when one was collected.
 type Chosen = (usize, Zeroizing<Vec<u8>>, Option<Zeroizing<Vec<u8>>>);
 
 /// MIT `prompt_for_token` (`lib/krb5/krb/preauth_otp.c:742-811`): pick a token and read its value.
-/// One token is chosen; with several and any challenge the menu comes first; otherwise the value
-/// comes first and filters the tokens by length and format, with a menu if several remain.
 fn prompt_for_token(ui: &mut dyn AsPrompt, tis: &[OtpTokenInfo]) -> Result<Chosen, ModuleFail> {
     if tis.is_empty() {
         return Err(fail(EINVAL, "Invalid argument"));
@@ -377,8 +341,7 @@ fn prompt_for_token(ui: &mut dyn AsPrompt, tis: &[OtpTokenInfo]) -> Result<Chose
     let at = if let Some(at) = ti {
         at
     } else {
-        // MIT `filter_tokeninfos` (`lib/krb5/krb/preauth_otp.c:689-721`): the tokens whose
-        // length and format the value has; none is an error, one is chosen, several get the menu.
+        // MIT `filter_tokeninfos` (`lib/krb5/krb/preauth_otp.c:689-721`): the tokens whose length and format the value has; none is an error, one is chosen, several get the menu.
         let kept: Vec<usize> = all
             .into_iter()
             .filter(|&i| value_matches(&value, &tis[i]))
@@ -398,11 +361,7 @@ fn prompt_for_token(ui: &mut dyn AsPrompt, tis: &[OtpTokenInfo]) -> Result<Chose
     Ok((at, value, pin))
 }
 
-/// MIT `make_request` (`lib/krb5/krb/preauth_otp.c:613-667`): the PA-OTP-REQUEST without its
-/// `encData`. The flags keep only NEXTOTP; vendor, format, tokenID and algID come from the token;
-/// a PIN is a field of its own for a separate one, else it prefixes the value.
-/// MIT leaves `iteration_count` at 0 (`calloc`), so it is sent as 0 (`:619`).
-/// MIT drops the combined value of a PIN prefix (`:654-663` sets its length to 0); this port sends it.
+/// MIT `make_request` (`lib/krb5/krb/preauth_otp.c:613-667`): the PA-OTP-REQUEST without its `encData`. The flags keep only NEXTOTP; vendor, format, tokenID and algID come from the token; a PIN is a field of its own for a separate one, else it prefixes the value.
 fn make_request(
     ti: &OtpTokenInfo,
     value: &[u8],
@@ -450,8 +409,7 @@ fn other_fail(error: Error) -> ModuleFail {
     }
 }
 
-/// MIT `encrypt_nonce` (`lib/krb5/krb/preauth_otp.c:433-446`): the challenge's nonce as a
-/// PA-OTP-ENC-REQUEST, encrypted in the armor key with key usage 45.
+/// MIT `encrypt_nonce` (`lib/krb5/krb/preauth_otp.c:433-446`): the challenge's nonce as a PA-OTP-ENC-REQUEST, encrypted in the armor key with key usage 45.
 fn encrypt_nonce(armor: &ProtocolKey, chl: &PaOtpChallenge) -> Result<EncryptedData, Error> {
     let plain = encode(&PaOtpEncRequest {
         nonce: chl.nonce.clone(),
@@ -464,15 +422,11 @@ fn encrypt_nonce(armor: &ProtocolKey, chl: &PaOtpChallenge) -> Result<EncryptedD
     })
 }
 
-/// A JSON string of `b` up to its first NUL: MIT stores the C string, so a value that starts with a
-/// NUL is saved as `""`.
 fn cstr_value(b: &[u8]) -> Value {
     Value::String(b.split(|&c| c == 0).next().unwrap_or_default().to_vec())
 }
 
-/// MIT `save_config_tokeninfo` (`lib/krb5/krb/preauth_otp.c:1044-1058`): the vendor, algID and
-/// tokenID of the token used, in that order, for the ccache's preauth config. A field is saved when
-/// its octets are not empty, and its value is the C string.
+/// MIT `save_config_tokeninfo` (`lib/krb5/krb/preauth_otp.c:1044-1058`): the vendor, algID and tokenID of the token used, in that order, for the ccache's preauth config. A field is saved when its octets are not empty, and its value is the C string.
 fn config_of(ti: &OtpTokenInfo) -> Value {
     let mut o = Value::Object(Vec::new());
     for (key, v) in [
@@ -511,16 +465,8 @@ fn wipe(v: &mut Value) {
     }
 }
 
-/// MIT `codec_decode_answer` (`lib/krb5/krb/preauth_otp.c:374-422`): the responder's answer, a JSON
-/// object `{"tokeninfo": n, "value": s, "pin": s}`. `None` when the answer is not usable, and the
-/// prompts run instead.
-///
-/// The usable answers are the ones MIT reads: an object whose `tokeninfo` is an index of the tokens,
-/// whose `value` is a string, and whose `pin` is a string or absent. Where MIT is undefined (an answer
-/// that is not an object, or an object with no `value`):
-/// MIT `codec_decode_answer` (`lib/krb5/krb/preauth_otp.c:385-412`): it returns with nothing set, or
-/// with an uninitialised value, and the module crashes on it. Both are "no answer" here
-/// (`docs/mit-deviations.md`).
+/// MIT `codec_decode_answer` (`lib/krb5/krb/preauth_otp.c:374-422`): the responder's answer, a JSON object `{"tokeninfo": n, "value": s, "pin": s}`. `None` when the answer is not usable, and the prompts run instead.
+/// it returns with nothing set, or with an uninitialised value, and the module crashes on it. Both are "no answer" here (`docs/mit-deviations.md`).
 fn decode_answer(answer: Option<&str>, n_tokens: usize) -> Option<Chosen> {
     let mut v = k5json::decode(answer?.as_bytes()).ok()?;
     let chosen = read_answer(&v, n_tokens);
@@ -528,7 +474,6 @@ fn decode_answer(answer: Option<&str>, n_tokens: usize) -> Option<Chosen> {
     chosen
 }
 
-/// The members of a decoded answer, as [`decode_answer`] reads them.
 fn read_answer(v: &Value, n_tokens: usize) -> Option<Chosen> {
     if !matches!(v, Value::Object(_)) {
         return None;
@@ -552,10 +497,7 @@ fn read_answer(v: &Value, n_tokens: usize) -> Option<Chosen> {
     Some((at, value, pin))
 }
 
-/// MIT `otp_client_process` (`lib/krb5/krb/preauth_otp.c:1062-1134`): a usable answer from the
-/// responder names the token, its value and its PIN, with no prompt (`:1089-1096`); otherwise the
-/// token is prompted for. Then build the PA-OTP-REQUEST for the armor key `armor`, and the config
-/// entries to record. The caller makes `armor` the AS key and disables fallback.
+/// a usable answer from the responder names the token, its value and its PIN, with no prompt (`:1089-1096`); otherwise the token is prompted for. Then build the PA-OTP-REQUEST for the armor key `armor`, and the config entries to record. The caller makes `armor` the AS key and disables fallback.
 pub(super) fn process(
     state: &OtpState,
     items: &ResponderItems,
@@ -584,9 +526,7 @@ pub(super) fn process(
     ))
 }
 
-/// One token of the OTP responder question's challenge; `-1` is MIT's "not specified".
-/// MIT `krb5_responder_otp_tokeninfo` (`include/krb5/krb5.hin:6713-6721`): the token's responder
-/// flags, format and length, and its optional strings.
+/// MIT `krb5_responder_otp_tokeninfo` (`include/krb5/krb5.hin:6713-6721`): the token's responder flags, format and length, and its optional strings.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OtpTokenView {
     /// `KRB5_RESPONDER_OTP_FLAGS_*` bits.
@@ -605,9 +545,7 @@ pub struct OtpTokenView {
     pub alg_id: Option<Vec<u8>>,
 }
 
-/// The OTP responder question's challenge, decoded.
-/// MIT `krb5_responder_otp_challenge` (`include/krb5/krb5.hin:6723-6726`): the service and the tokens
-/// a responder may choose from, by index.
+/// MIT `krb5_responder_otp_challenge` (`include/krb5/krb5.hin:6723-6726`): the service and the tokens a responder may choose from, by index.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OtpChallengeView {
     /// The service the OTP is for: MIT's C string, its octets up to the first NUL.
@@ -616,7 +554,6 @@ pub struct OtpChallengeView {
     pub tokeninfo: Vec<OtpTokenView>,
 }
 
-/// A string member as MIT's C string: `Ok(None)` when absent, `Err` when present and not a string.
 /// MIT `codec_value_to_string` (`lib/krb5/krb/preauth_otp.c:57-76`): absent is `ENOENT`, another type is `EINVAL`.
 fn string_member(o: &Value, key: &str) -> Result<Option<Vec<u8>>, ()> {
     match o.member(key) {
@@ -625,7 +562,6 @@ fn string_member(o: &Value, key: &str) -> Result<Option<Vec<u8>>, ()> {
     }
 }
 
-/// A number member as MIT's `krb5_int32`: `-1` when absent, `None` when present and not a number.
 /// MIT `codec_value_to_int32` (`lib/krb5/krb/preauth_otp.c:113-127`): the JSON number is stored in a `krb5_int32`.
 #[expect(
     clippy::cast_possible_truncation,
@@ -639,8 +575,7 @@ fn int_member(o: &Value, key: &str) -> Option<i32> {
     }
 }
 
-/// MIT `codec_decode_tokeninfo` (`lib/krb5/krb/preauth_otp.c:264-311`): `flags` is required, the
-/// rest optional, and a member of the wrong type fails the token.
+/// MIT `codec_decode_tokeninfo` (`lib/krb5/krb/preauth_otp.c:264-311`): `flags` is required, the rest optional, and a member of the wrong type fails the token.
 fn token_view(o: &Value) -> Option<OtpTokenView> {
     if !matches!(o.member("flags"), Some(Value::Number(_))) {
         return None;
@@ -656,8 +591,7 @@ fn token_view(o: &Value) -> Option<OtpTokenView> {
     })
 }
 
-/// MIT `codec_decode_challenge` (`lib/krb5/krb/preauth_otp.c:314-360`): an object with a `tokenInfo`
-/// array of objects; any other shape is refused.
+/// MIT `codec_decode_challenge` (`lib/krb5/krb/preauth_otp.c:314-360`): an object with a `tokenInfo` array of objects; any other shape is refused.
 fn challenge_view(json: &[u8]) -> Option<OtpChallengeView> {
     let v = k5json::decode(json).ok()?;
     if !matches!(v, Value::Object(_)) {
@@ -679,12 +613,7 @@ fn challenge_view(json: &[u8]) -> Option<OtpChallengeView> {
 
 impl ResponderItems {
     /// The OTP question's challenge as a struct; `None` when no OTP question was asked.
-    /// MIT `krb5_responder_otp_get_challenge` (`lib/krb5/krb/preauth_otp.c:1168-1189`): the challenge
-    /// JSON decoded; one that does not decode is `ENOMEM`, as MIT returns it.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Message`] "Cannot allocate memory" when the challenge does not decode.
+    /// MIT `krb5_responder_otp_get_challenge` (`lib/krb5/krb/preauth_otp.c:1168-1189`): the challenge JSON decoded; one that does not decode is `ENOMEM`, as MIT returns it.
     pub fn otp_get_challenge(&self) -> Result<Option<OtpChallengeView>, Error> {
         let Some(json) = self.get_challenge(QUESTION_OTP) else {
             return Ok(None);
@@ -695,13 +624,7 @@ impl ResponderItems {
     }
 
     /// Answer the OTP question: token `ti`, with a value and a PIN where the token takes them.
-    /// MIT `krb5_responder_otp_set_answer` (`lib/krb5/krb/preauth_otp.c:1191-1249`): the answer is
-    /// `{"tokeninfo": ti, "value": ..., "pin": ...}`, the last two when given.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Message`] "Invalid argument" when the OTP question was not asked, or `ti` does not fit
-    /// a JSON number.
+    /// MIT `krb5_responder_otp_set_answer` (`lib/krb5/krb/preauth_otp.c:1191-1249`): the answer is `{"tokeninfo": ti, "value": ..., "pin": ...}`, the last two when given.
     pub fn otp_set_answer(
         &mut self,
         ti: usize,

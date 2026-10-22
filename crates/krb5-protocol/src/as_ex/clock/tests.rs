@@ -1,5 +1,4 @@
-//! The AS clock as MIT's `k5_init_creds_current_time`, `note_req_timestamp` and
-//! `k5_time_with_offset`.
+//! The AS clock as MIT's `k5_init_creds_current_time`, `note_req_timestamp` and `k5_time_with_offset`.
 
 use super::{Clock, with_offset};
 use crate::auth_con::us_timeofday;
@@ -36,7 +35,6 @@ fn the_offset_carries_microseconds_into_seconds_as_mit() {
     assert_eq!(at(1000, 400_000, 3600, 300_000), (4600, 700_000));
     assert_eq!(at(1000, 900_000, 3600, 300_000), (4601, 200_000));
     assert_eq!(at(10_000, 100_000, -3600, -300_000), (6399, 800_000));
-    // MIT leaves exactly 1000000 microseconds (`usec > 1000000`); here it carries.
     assert_eq!(at(1000, 999_999, 0, 1), (1001, 0));
 }
 
@@ -55,7 +53,6 @@ fn a_kdc_time_is_used_after_a_preauth_error_as_mit() {
         (unauth - i64::from(kdc)).abs() <= 2,
         "the KDC's time: {unauth} vs {kdc}"
     );
-    // An unarmored error's offset is not used where only an authenticated one may be.
     assert!((secs(&clock.now(false).0) - secs(&now)).abs() <= 2);
     clock.note(&preauth_required_at(kdc, 0), true);
     assert!((secs(&clock.now(false).0) - i64::from(kdc)).abs() <= 2);

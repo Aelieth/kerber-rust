@@ -135,7 +135,6 @@ fn renew_life_shorter_than_till_is_clamped() {
     );
 }
 
-/// The address field of the AS-REQ as it is sent: encoded, then read back.
 fn sent_addresses(
     addresses: Option<krb5_types::HostAddresses>,
 ) -> Option<krb5_types::HostAddresses> {
@@ -167,7 +166,6 @@ fn sent_addresses(
         .addresses
 }
 
-/// A host with an IPv4 and an IPv6 address sends both, IPv6 as `ADDRTYPE_INET6` of 16 octets; a list with no address sends no field.
 /// MIT `req_body_9` (`lib/krb5/asn.1/asn1_k_encode.c:457-458`): the request's addresses are an optional-if-empty field.
 /// MIT `DEFOPTIONALEMPTYTYPE` (`lib/krb5/asn.1/asn1_encode.h:389-396`): present only for a list with an element, so `kinit -a` on a host with no usable address sends none.
 #[test]

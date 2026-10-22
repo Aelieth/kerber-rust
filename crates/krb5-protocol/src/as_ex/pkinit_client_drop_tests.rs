@@ -1,7 +1,4 @@
 //! `PkinitClient`'s drop wipes the P-256 scalar where the value lies.
-//!
-//! The scalar is an inline array, with no allocation to follow past the drop, so a test build
-//! records the array as the drop left it.
 
 use std::cell::RefCell;
 

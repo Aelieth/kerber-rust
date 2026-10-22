@@ -1,12 +1,10 @@
-//! `PasswordCell`: the password is read when a module wants the key, kept once it is read, and not
-//! kept when the read fails.
+//! `PasswordCell`: the password is read when a module wants the key, kept once it is read, and not kept when the read fails.
 
 use std::collections::VecDeque;
 use std::io::ErrorKind;
 
 use super::*;
 
-/// A prompter answering from a script: `Ok(text)`, or an error of that kind.
 struct Script {
     reads: VecDeque<Result<&'static [u8], ErrorKind>>,
     asked: usize,
@@ -184,9 +182,7 @@ fn a_failure_no_module_wraps_is_the_error_the_prompter_gave() {
     );
 }
 
-/// A keytab that could not be read fails every key a module or the reply asks of it with the
 /// keytab's own error, asks the responder nothing, and never reads a password.
-/// MIT `get_as_key_keytab` (`lib/krb5/krb/gic_keytab.c:68-71`): the lookup's error is the callback's, in its code and message.
 #[test]
 fn an_unreadable_keytab_fails_every_key_with_its_error_and_reads_no_password() {
     let failure = KeytabFailure {
