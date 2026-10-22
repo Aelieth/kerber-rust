@@ -1,13 +1,6 @@
-//! Hierarchical transited-realm walk.
-//!
-//! MIT `lib/krb5/krb/walk_rtree.c` `rtree_hier_realms`, declared at
-//! `:69` and defined at `:394`. `rtree_hier_tree` calls it at `:358`.
-
 use crate::MAX_TRANSIT_RAW;
 
-/// MIT `rtree_hier_realms` (`walk_rtree.c:394-452`): client suffixes through
-/// the common component suffix, then the server's suffixes below that
-/// suffix in reverse. `common == 0` walks every suffix of both realms.
+// MIT `rtree_hier_realms` (`walk_rtree.c:394-452`): client suffixes through
 #[must_use]
 pub fn hierarchical_walk_realms(client: &str, server: &str) -> Vec<String> {
     if client.len() >= MAX_TRANSIT_RAW || server.len() >= MAX_TRANSIT_RAW {

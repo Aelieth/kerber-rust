@@ -17,11 +17,9 @@ const REG_ESIZE: i32 = 15;
 
 const DUP_MAX: i64 = 0x7fff;
 
-/// A back-reference compiles to neither regex: glibc's backtracking is not ported.
 pub struct Ere(Option<(Regex, Regex)>);
 
 impl Ere {
-    /// glibc `regcomp(REG_EXTENDED)` in the C locale.
     pub fn new(pattern: &[u8]) -> Result<Self, i32> {
         let mut p = Parser {
             pat: pattern,
@@ -55,14 +53,12 @@ impl Ere {
         self.0.as_ref().map(|(re, _)| re.is_match(subject))
     }
 
-    /// Whether glibc `regexec`'s leftmost-longest match is all of `subject`.
     #[must_use]
     pub fn is_whole_match(&self, subject: &[u8]) -> Option<bool> {
         self.0.as_ref().map(|(_, whole)| whole.is_match(subject))
     }
 }
 
-/// glibc `regerror` in the C locale.
 #[must_use]
 pub fn regerror(code: i32) -> &'static str {
     match code {
@@ -126,7 +122,6 @@ enum Elem {
     Class(Vec<u8>),
 }
 
-// glibc 2.42's regcomp parser: each `parse_*` function, named here without its prefix.
 struct Parser<'a> {
     pat: &'a [u8],
     pos: usize,
@@ -138,7 +133,6 @@ struct Parser<'a> {
 type Set = [bool; 256];
 
 impl Parser<'_> {
-    /// glibc `peek_token` under `RE_SYNTAX_POSIX_EXTENDED`.
     fn peek(&self) -> (Tok, usize, u8) {
         let Some(&c) = self.pat.get(self.pos) else {
             return (Tok::End, 0, 0);
@@ -189,7 +183,6 @@ impl Parser<'_> {
         self.pos += self.peek().1;
     }
 
-    /// A group one branch closed is not visible to the next branch.
     fn reg_exp(&mut self, nest: u32) -> Result<String, i32> {
         let initial = self.done;
         let mut out = self.branch(nest)?;
@@ -218,7 +211,6 @@ impl Parser<'_> {
         }
     }
 
-    /// An anchor takes no repetition.
     fn expression(&mut self, nest: u32) -> Result<String, i32> {
         let (t, len, c) = self.peek();
         let mut atom = match t {
@@ -340,7 +332,6 @@ impl Parser<'_> {
         Ok(Some(rep))
     }
 
-    /// -1 for no number, -2 for anything but digits, with the end token.
     fn fetch_number(&mut self) -> (i64, Tok) {
         let mut num: i64 = -1;
         loop {
@@ -366,7 +357,6 @@ impl Parser<'_> {
         }
     }
 
-    /// glibc `peek_token_bracket`.
     fn peek_bracket(&self) -> (BTok, usize) {
         let Some(&c) = self.pat.get(self.pos) else {
             return (BTok::End, 0);
@@ -388,7 +378,6 @@ impl Parser<'_> {
         (t, 1)
     }
 
-    /// glibc `parse_bracket_exp` in the C locale.
     fn bracket(&mut self) -> Result<String, i32> {
         self.pos += 1;
         let mut set: Set = [false; 256];
@@ -495,7 +484,6 @@ impl Parser<'_> {
     }
 }
 
-/// glibc `build_range_exp` in the C locale.
 fn range_point(e: &Elem) -> Result<u8, i32> {
     match e {
         Elem::Byte(b) => Ok(*b),
@@ -505,7 +493,6 @@ fn range_point(e: &Elem) -> Result<u8, i32> {
     }
 }
 
-/// glibc `build_equiv_class`, `build_collating_symbol` and `build_charclass` in the C locale.
 fn add_element(set: &mut Set, e: &Elem) -> Result<(), i32> {
     match e {
         Elem::Byte(b) => set[usize::from(*b)] = true,
@@ -541,7 +528,6 @@ fn char_class(name: &[u8]) -> Option<fn(u8) -> bool> {
     })
 }
 
-/// glibc `build_charclass_op`.
 fn named(name: &[u8], neg: bool, extra: &[u8]) -> Set {
     let mut set: Set = [false; 256];
     let _ = add_element(&mut set, &Elem::Class(name.to_vec()));
@@ -560,7 +546,6 @@ fn lit(b: u8) -> String {
     format!(r"\x{b:02X}")
 }
 
-/// A byte set as a class; an empty one never matches.
 fn class(set: &Set) -> String {
     let mut out = String::from("[");
     let mut b = 0;

@@ -1,6 +1,3 @@
-//! PKINIT's key exchange as MIT's: the `pkinit_constants.c` groups, each weighed as a finite
-//! field.
-
 use crypto_bigint::modular::{FixedMontyForm, FixedMontyParams};
 use crypto_bigint::{Encoding, Odd, U1024, U2048, U4096, Uint};
 use zeroize::Zeroizing;
@@ -106,7 +103,6 @@ impl KxGroup {
         Self::ALL.into_iter().find(|g| g.bits() == bits)
     }
 
-    /// dhpublicnumber with `DomainParameters` `{p, 2, (p - 1) / 2}`, or id-ecPublicKey and the curve.
     #[must_use]
     pub fn algorithm_identifier(self) -> Vec<u8> {
         let (oid, params) = match self {
@@ -272,7 +268,6 @@ pub fn parse_dh_min_bits(value: Option<&str>) -> Result<u32, String> {
     }
 }
 
-/// C's `strtol(s, &end, 0)`, `None` where it reads no digit.
 fn strtol(s: &str) -> Option<i64> {
     let t = s.trim_start_matches([' ', '\t', '\n', '\x0b', '\x0c', '\r']);
     let (neg, t) = match t.strip_prefix('-') {
@@ -296,7 +291,6 @@ fn strtol(s: &str) -> Option<i64> {
     Some(if neg { n.saturating_neg() } else { n })
 }
 
-/// One exchange's key: the secret, and the public value as its BIT STRING carries it.
 pub struct KxKey {
     pub group: KxGroup,
     secret: Zeroizing<Vec<u8>>,
@@ -340,7 +334,6 @@ impl KxKey {
         None
     }
 
-    /// The key of a known secret: an exponent, or a scalar the size of the curve's field.
     #[must_use]
     pub fn from_secret(group: KxGroup, secret: &[u8]) -> Option<Self> {
         let public = match group {

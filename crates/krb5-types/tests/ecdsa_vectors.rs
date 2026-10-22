@@ -1,6 +1,3 @@
-//! ECDSA on P-224, P-384, P-521, secp256k1 and the brainpool curves against Wycheproof's vectors and OpenSSL's
-//! signatures with SHA-256.
-
 use krb5_types::pkinit::{IdentityKey, P384_ENABLED, spki_signature_ok};
 
 const ECDSA_SHA256: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02];
@@ -46,7 +43,6 @@ fn wycheproof_vectors_verify() {
     assert_eq!(wycheproof(k256, ECDSA_SHA256, true), 476);
 }
 
-/// Each of OpenSSL's signatures verifies and a changed one does not, and ours verifies; a key that does not load
 /// (a curve this build refuses) must not verify either. Gives (checked, refused).
 fn openssl(data: &str) -> (usize, usize) {
     let (mut key, mut spki) = (None, Vec::new());

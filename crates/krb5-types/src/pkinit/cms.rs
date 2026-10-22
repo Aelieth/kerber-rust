@@ -1,7 +1,3 @@
-//! CMS SignedData (`plugins/preauth/pkinit/pkinit_crypto_openssl.c`
-//! `cms_signeddata_create` / `cms_signeddata_verify`): wrap, verify,
-//! and the RFC 5652 certificate walk.
-
 use super::identity::IdentityKey;
 use super::{
     ECONTENT_AUTHDATA, OID_BC, OID_EKU, OID_KP_CLIENT_AUTH, OID_KP_KDC, OID_KU, OID_PKINIT_SAN,
@@ -15,62 +11,42 @@ const OID_CONTENT_TYPE: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09
 
 const OID_MESSAGE_DIGEST: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x04];
 
-/// CMS AlgorithmIdentifier (digest or signature).
-/// MIT `algorithm_identifier` (`lib/krb5/asn.1/asn1_k_encode.c:1331-1332`): the algorithm OID, then the parameters as their own DER.
+// MIT `algorithm_identifier` (`lib/krb5/asn.1/asn1_k_encode.c:1331-1332`): the algorithm OID, then the parameters as their own DER.
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct CmsAlgorithmIdentifier {
-    /// Object identifier.
     pub algorithm: ObjectIdentifier,
-    /// The parameters' whole DER element, whatever its type (a NULL included).
-    /// MIT `opt_der_data` (`lib/krb5/asn.1/asn1_k_encode.c:65-65`): an optional field kept as its raw DER.
+    // MIT `opt_der_data` (`lib/krb5/asn.1/asn1_k_encode.c:65-65`): an optional field kept as its raw DER.
     pub parameters: Option<Any>,
 }
 
-/// CMS EncapsulatedContentInfo.
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct CmsEncapContentInfo {
-    /// eContentType (id-pkinit-authData or id-data).
     pub e_content_type: ObjectIdentifier,
-    /// eContent.
     #[rasn(tag(explicit(0)))]
     pub e_content: Option<OctetString>,
 }
 
-/// CMS SignerInfo (subjectKeyIdentifier form, no signedAttrs).
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct CmsSignerInfo {
-    /// version (3 when sid is subjectKeyIdentifier).
     pub version: i32,
-    /// `subjectKeyIdentifier [0] EXPLICIT` (local CMS profile).
     #[rasn(tag(explicit(0)))]
     pub sid: OctetString,
-    /// Digest algorithm.
     pub digest_algorithm: CmsAlgorithmIdentifier,
-    /// Signature algorithm.
     pub signature_algorithm: CmsAlgorithmIdentifier,
-    /// ECDSA-SHA256 signature of eContent (DER `SEQUENCE { r, s }`).
     pub signature: OctetString,
 }
 
-/// CMS SignedData.
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct CmsSignedData {
-    /// CMSVersion.
     pub version: i32,
-    /// DigestAlgorithmIdentifiers.
     pub digest_algorithms: SequenceOf<CmsAlgorithmIdentifier>,
-    /// Encapsulated content.
     pub encap_content_info: CmsEncapContentInfo,
-    /// SignerInfos.
     pub signer_infos: SequenceOf<CmsSignerInfo>,
 }
 
-/// CMS ContentInfo wrapping [`CmsSignedData`].
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct CmsContentInfo {
-    /// id-signedData.
     pub content_type: ObjectIdentifier,
-    /// `SignedData [0] EXPLICIT`.
     #[rasn(tag(explicit(0)))]
     pub content: CmsSignedData,
 }
@@ -105,7 +81,6 @@ pub(super) fn p224_sign(secret: &[u8; 28], message: &[u8]) -> Option<Vec<u8>> {
     Some(sig.to_der().as_bytes().to_vec())
 }
 
-/// `$name`: ECDSA with SHA-256 on `$curve` (RFC 6979), DER, as p224_sign signs.
 macro_rules! ecdsa_sign {
     ($name:ident, $curve:ty, $len:literal) => {
         pub(super) fn $name(secret: &[u8; $len], message: &[u8]) -> Option<Vec<u8>> {
@@ -217,10 +192,6 @@ fn decompress_p256(pt: &[u8]) -> Option<Vec<u8>> {
 }
 
 /// Encoded by hand so the Certificate SET uses IMPLICIT `[0]` (RFC 5652).
-/// SignerInfo uses **issuerAndSerialNumber** (CMS version 1), matching MIT
-/// OpenSSL `PKCS7_SIGNER_INFO`. `signed_attrs` if present is the
-/// `[0] IMPLICIT SET` encoding; the signature is over the corresponding
-/// `SET` (tag 0x31).
 #[must_use]
 #[expect(
     clippy::too_many_arguments,
@@ -273,7 +244,6 @@ pub fn cms_sign_leaf(
     cms_sign_leaf_oids(e_content, cert_der, key, econtent_oid, econtent_oid)
 }
 
-/// CMS SignedData with independent encap and signed `content-type` OIDs.
 pub fn cms_sign_leaf_oids(
     e_content: &[u8],
     cert_der: &[u8],
@@ -325,7 +295,6 @@ pub(super) fn cert_issuer_serial(cert: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
     Some((tlv(0x30, issuer), serial.to_vec()))
 }
 
-/// First PEM block of `kind` (`CERTIFICATE`, `EC PRIVATE KEY`, …).
 #[must_use]
 pub fn parse_pem(kind: &str, text: &str) -> Option<Vec<u8>> {
     let begin = format!("-----BEGIN {kind}-----");
@@ -336,8 +305,6 @@ pub fn parse_pem(kind: &str, text: &str) -> Option<Vec<u8>> {
     unbase64(rest.get(..stop)?.trim())
 }
 
-/// Certificate DER plus P-256 scalar from a MIT `FILE:` identity PEM. The key's base64 text and
-/// DER are wiped on every return.
 #[must_use]
 pub fn parse_identity_pem(text: &str) -> Option<(Vec<u8>, [u8; 32])> {
     let cert = parse_pem("CERTIFICATE", text)?;
@@ -409,14 +376,12 @@ pub(super) fn signed_attrs_set(econtent_oid: &[u8], e_content: &[u8]) -> Vec<u8>
     tlv(0x31, &[ct, md].concat())
 }
 
-/// CMS ContentInfo wrapping AuthPack with no signers (anonymous PKINIT).
 #[must_use]
 pub fn cms_wrap_unsigned(e_content: &[u8]) -> Vec<u8> {
     let oid = oid_der(ECONTENT_AUTHDATA);
     tlv(0x30, &[oid, tlv(0xa0, &tlv(0x04, e_content))].concat())
 }
 
-/// AuthPack from an unsigned CMS ContentInfo or SignedData with no signers.
 #[must_use]
 pub fn cms_extract_unsigned(der: &[u8]) -> Option<Vec<u8>> {
     if let Some((tag, body, _)) = take_tlv(der)
@@ -440,10 +405,7 @@ pub fn cms_extract_unsigned(der: &[u8]) -> Option<Vec<u8>> {
     unsigned_signeddata_econtent(der)
 }
 
-/// MIT `cms_signeddata_verify` (`pkinit_crypto_openssl.c:2052-2063`): a SignedData with no
-/// SignerInfo is the anonymous case, and its content is read with no signature check.
-/// The encapsulated content is returned without checking a signer, so the bytes are not an
-/// authenticated pack.
+// MIT `cms_signeddata_verify` (`pkinit_crypto_openssl.c:2052-2063`): a SignedData with no
 fn unsigned_signeddata_econtent(der: &[u8]) -> Option<Vec<u8>> {
     let (tag, ci, _) = take_tlv(der)?;
     if tag != 0x30 {
@@ -489,10 +451,7 @@ fn unsigned_signeddata_econtent(der: &[u8]) -> Option<Vec<u8>> {
     Some(oct.to_vec())
 }
 
-/// Extract eContent from CMS SignedData, or return `der` unchanged.
-///
 /// This does **not** authenticate the content. PKINIT must call
-/// [`cms_verify`] against a provisioned trust anchor.
 #[must_use]
 pub fn cms_unwrap(der: &[u8]) -> Vec<u8> {
     if let Ok(ci) = rasn::der::decode::<CmsContentInfo>(der)
@@ -506,46 +465,17 @@ pub fn cms_unwrap(der: &[u8]) -> Vec<u8> {
     der.to_vec()
 }
 
-/// Verified CMS SignedData: eContent, signer certificate, eContentType OID body.
 #[derive(Clone, Debug)]
 pub struct CmsVerified {
-    /// Encapsulated content.
     pub e_content: Vec<u8>,
-    /// Embedded signer certificate (DER).
     pub cert: Vec<u8>,
-    /// `eContentType` OID body (no DER tag).
     pub e_content_type: Vec<u8>,
 }
 
-/// Verify CMS SignedData against `trust_anchor` (CA certificate DER).
-///
-/// The embedded leaf must be issued by the trust anchor; the SignerInfo
-/// ECDSA-SHA256 signature is then checked with the leaf public key.
-/// There is no unverified fallback. Role checks (KDC vs client EKU/SAN)
-/// are separate: [`cert_sans`], [`cert_eku`] and [`require_client_pkinit_san`].
-///
-/// # Errors
-///
-/// A field-named string (`"cms"`, `"encap"`, `"signer"`, …) when the SignedData is malformed;
-/// a `"cms …"` chain string (`"cms trust"`, `"cms chain"`, `"cms expired"`, …) when
-/// `trust_anchor` is not a usable CA or did not validly issue the leaf; `"cms spki"` for a leaf
-/// with no P-256 key; `"cms signedAttrs"` when signedAttrs are absent, `"cms ecdsa attrs"` when
-/// their signature fails, `"cms message-digest"` when their digest is not SHA-256 of the
-/// eContent, and `"cms content-type"` when their content type is absent or not the eContentType.
 pub fn cms_verify(der: &[u8], trust_anchor: &[u8]) -> Result<Vec<u8>, &'static str> {
     Ok(cms_verify_full(der, trust_anchor)?.e_content)
 }
 
-/// [`cms_verify`] plus the signer certificate and eContentType.
-///
-/// # Errors
-///
-/// A field-named string (`"cms"`, `"encap"`, `"signer"`, …) when the SignedData is malformed;
-/// a `"cms …"` chain string (`"cms trust"`, `"cms chain"`, `"cms expired"`, …) when
-/// `trust_anchor` is not a usable CA or did not validly issue the leaf; `"cms spki"` for a leaf
-/// with no P-256 key; `"cms signedAttrs"` when signedAttrs are absent, `"cms ecdsa attrs"` when
-/// their signature fails, `"cms message-digest"` when their digest is not SHA-256 of the
-/// eContent, and `"cms content-type"` when their content type is absent or not the eContentType.
 pub fn cms_verify_full(der: &[u8], trust_anchor: &[u8]) -> Result<CmsVerified, &'static str> {
     let p = cms_parts(der)?;
     cert_path_ok(&p.cert, trust_anchor)?;
@@ -578,12 +508,6 @@ fn signer_verified(p: CmsParts) -> Result<CmsVerified, &'static str> {
     })
 }
 
-/// RFC 4556 §3.2.2: signer is a client cert bound to `cname` by its SAN.
-///
-/// # Errors
-///
-/// `"pkinit client san"` when `cert` has no PKINIT SAN, or the SAN realm is not `realm` or its
-/// name is not `cname` (an enterprise `cname` compares the part before its last `@`).
 pub fn require_client_pkinit_san(
     cert: &[u8],
     cname: &crate::PrincipalName,
@@ -717,28 +641,17 @@ fn cert_path_ok(leaf: &[u8], ca: &[u8]) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// rsaEncryption 1.2.840.113549.1.1.1 (OID body).
 const OID_RSA: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01];
-/// sha256WithRSAEncryption 1.2.840.113549.1.1.11 (OID body).
 pub(super) const OID_RSA_SHA256: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0b];
-/// sha384WithRSAEncryption 1.2.840.113549.1.1.12 (OID body).
 const OID_RSA_SHA384: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0c];
-/// sha512WithRSAEncryption 1.2.840.113549.1.1.13 (OID body).
 const OID_RSA_SHA512: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0d];
-/// ecdsa-with-SHA256 1.2.840.10045.4.3.2 (OID body).
 pub(super) const OID_ECDSA_SHA256: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02];
-/// ecdsa-with-SHA384 1.2.840.10045.4.3.3 (OID body).
 const OID_ECDSA_SHA384: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x03];
-/// ecdsa-with-SHA512 1.2.840.10045.4.3.4 (OID body).
 const OID_ECDSA_SHA512: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x04];
-/// id-sha256 2.16.840.1.101.3.4.2.1 (OID body).
 const OID_SHA256: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01];
-/// id-sha384 2.16.840.1.101.3.4.2.2 (OID body).
 const OID_SHA384: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02];
-/// id-sha512 2.16.840.1.101.3.4.2.3 (OID body).
 const OID_SHA512: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03];
 
-/// A digest a signature names. SHA-1 is not one: the lab's crypto policy refuses it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Digest {
     Sha256,
@@ -765,7 +678,6 @@ impl Digest {
         }
     }
 
-    /// The DER DigestInfo before the hash (RFC 8017 §9.2, note 1).
     fn digest_info_prefix(self) -> &'static [u8] {
         match self {
             Self::Sha256 => &[
@@ -784,15 +696,12 @@ impl Digest {
     }
 }
 
-/// id-ecPublicKey 1.2.840.10045.2.1 (OID body).
 const OID_EC_KEY: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01];
-/// prime256v1 1.2.840.10045.3.1.7 (OID body).
 pub(super) const OID_P256_CURVE: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07];
 pub(super) const OID_P384_CURVE: &[u8] = &[0x2b, 0x81, 0x04, 0x00, 0x22];
 pub(super) const OID_P521_CURVE: &[u8] = &[0x2b, 0x81, 0x04, 0x00, 0x23];
 pub(super) const OID_P224_CURVE: &[u8] = &[0x2b, 0x81, 0x04, 0x00, 0x21];
 pub(super) const OID_K256_CURVE: &[u8] = &[0x2b, 0x81, 0x04, 0x00, 0x0a];
-// RFC 5639's brainpool curves, 1.3.36.3.3.2.8.1.1.7 to .14.
 pub(super) const OID_BP256R1_CURVE: &[u8] = &[0x2b, 0x24, 0x03, 0x03, 0x02, 0x08, 0x01, 0x01, 0x07];
 pub(super) const OID_BP256T1_CURVE: &[u8] = &[0x2b, 0x24, 0x03, 0x03, 0x02, 0x08, 0x01, 0x01, 0x08];
 pub(super) const OID_BP384R1_CURVE: &[u8] = &[0x2b, 0x24, 0x03, 0x03, 0x02, 0x08, 0x01, 0x01, 0x0b];
@@ -800,7 +709,6 @@ pub(super) const OID_BP384T1_CURVE: &[u8] = &[0x2b, 0x24, 0x03, 0x03, 0x02, 0x08
 pub(super) const OID_BP512R1_CURVE: &[u8] = &[0x2b, 0x24, 0x03, 0x03, 0x02, 0x08, 0x01, 0x01, 0x0d];
 pub(super) const OID_BP512T1_CURVE: &[u8] = &[0x2b, 0x24, 0x03, 0x03, 0x02, 0x08, 0x01, 0x01, 0x0e];
 
-/// A certificate's SubjectPublicKeyInfo (its DER).
 fn cert_spki(cert: &[u8]) -> Option<&[u8]> {
     let (_, body, _) = take_tlv(cert)?;
     let (_, tbs, _) = take_tlv(body)?;
@@ -815,7 +723,6 @@ fn cert_spki(cert: &[u8]) -> Option<&[u8]> {
     (t == 0x30).then(|| &cur[..cur.len() - rest.len()])
 }
 
-/// A certificate's to-be-signed DER, its signature algorithm OID and its signature.
 fn cert_signed_parts(cert: &[u8]) -> Option<(&[u8], &[u8], &[u8])> {
     let (_, body, _) = take_tlv(cert)?;
     let (_, _, after_tbs) = take_tlv(body)?;
@@ -829,18 +736,12 @@ fn cert_signed_parts(cert: &[u8]) -> Option<(&[u8], &[u8], &[u8])> {
     Some((tbs, oid, bits.get(1..)?))
 }
 
-/// Whether `issuer`'s key signed `cert`.
 fn cert_signed_by(cert: &[u8], issuer: &[u8]) -> bool {
     cert_signed_parts(cert)
         .zip(cert_spki(issuer))
         .is_some_and(|((tbs, alg, sig), spki)| signature_ok(spki, alg, None, tbs, sig))
 }
 
-/// Whether `sig` over `msg` verifies under the key of `spki`. The key's own type decides how:
-/// ECDSA on P-224, P-256, P-384, P-521, secp256k1 or brainpool P256, P384 or P512, or RSASSA-PKCS1-v1_5 (RFC 8017 §8.2.2). The digest is the one `alg` names, or
-/// `digest` for `rsaEncryption` / `id-ecPublicKey`; SHA-1 is refused, as the lab's crypto policy
-/// refuses it. MIT's client names its key's type with SHA-256 in its SignerInfo (`cert_sig_alg`):
-/// `ecdsa-with-SHA256` for an EC key, else `sha256WithRSAEncryption`.
 fn signature_ok(spki: &[u8], alg: &[u8], digest: Option<Digest>, msg: &[u8], sig: &[u8]) -> bool {
     let digest = match alg {
         OID_ECDSA_SHA256 | OID_RSA_SHA256 => Some(Digest::Sha256),
@@ -876,13 +777,11 @@ fn signature_ok(spki: &[u8], alg: &[u8], digest: Option<Digest>, msg: &[u8], sig
     }
 }
 
-/// Whether `sig` over `msg` verifies under the SubjectPublicKeyInfo `spki` with algorithm `alg`.
 #[must_use]
 pub fn spki_signature_ok(spki: &[u8], alg: &[u8], msg: &[u8], sig: &[u8]) -> bool {
     signature_ok(spki, alg, None, msg, sig)
 }
 
-/// Whether the DER `$sig` verifies over the digest `$hash` under the SEC1 point `$key` on `$curve`.
 macro_rules! ecdsa_verify {
     ($curve:ty, $key:expr, $hash:expr, $sig:expr) => {
         ecdsa::VerifyingKey::<$curve>::from_sec1_bytes($key)
@@ -918,7 +817,6 @@ fn ecdsa_ok(curve: &[u8], key: &[u8], hash: &[u8], sig: &[u8]) -> bool {
             .ok()
             .zip(p224::ecdsa::Signature::from_der(sig).ok())
             .is_some_and(|(vk, s)| vk.verify_prehash(hash, &s).is_ok()),
-        // k256 refuses a high s, which OpenSSL takes; (r, n - s) verifies as (r, s) does.
         OID_K256_CURVE => k256::ecdsa::VerifyingKey::from_sec1_bytes(key)
             .ok()
             .zip(k256::ecdsa::Signature::from_der(sig).ok())
@@ -941,9 +839,6 @@ fn ecdsa_ok(curve: &[u8], key: &[u8], hash: &[u8], sig: &[u8]) -> bool {
     }
 }
 
-/// RSASSA-PKCS1-v1_5 verification of `sig` over a message whose digest is `hash`, under the
-/// RSAPublicKey `key`: `sig^e mod n` is `00 01 FF.. 00` and the DigestInfo of `hash`.
-/// Only public values are used, so no part of it is secret.
 fn rsa_pkcs1_ok(key: &[u8], digest: Digest, hash: &[u8], sig: &[u8]) -> bool {
     use num_bigint::BigUint;
     let Some((_, body, _)) = take_tlv(key) else {
@@ -978,29 +873,18 @@ fn rsa_pkcs1_ok(key: &[u8], digest: Digest, hash: &[u8], sig: &[u8]) -> bool {
     em.len() == n_bytes - 1 && em[..] == want[1..]
 }
 
-/// id-data 1.2.840.113549.1.7.1 (OID body).
 const OID_DATA: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x07, 0x01];
-/// id-signedData 1.2.840.113549.1.7.2 (OID body).
 const OID_SIGNED_DATA: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x07, 0x02];
-/// subjectKeyIdentifier 2.5.29.14 (OID body).
 const OID_SKID: &[u8] = &[0x55, 0x1d, 0x0e];
 
-/// Why the KDC refuses a client's signedAuthPack.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CmsFault {
-    /// The ContentInfo does not decode: OpenSSL's reason.
     Decode(&'static str),
-    /// The pre-1.10 form, whose content is not an OCTET STRING.
     NotOctetString,
-    /// The ContentInfo is not SignedData, or the eContentType is not id-pkinit-authData.
     WrongOid,
-    /// No certificate names the signer, or an unsigned message carries no content.
     NoSigner,
-    /// The signer's chain did not verify, and the certificate where it stopped.
     Chain(ChainError, Vec<u8>),
-    /// The signature or its message digest did not verify: OpenSSL's reason.
     Signature(&'static str),
-    /// The signed content-type attribute is not the eContentType. OpenSSL's `CMS_verify` does not
     /// check it; RFC 5652 binds the two, and this verifier refuses the message.
     ContentType,
 }
@@ -1036,33 +920,18 @@ impl CmsFault {
     }
 }
 
-/// MIT's `cms_msg_type`: a client's AuthPack, which may come unsigned, or the KDC's DH reply.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CmsSigner {
     Client,
     Server,
 }
 
-/// A client's AuthPack from its signedAuthPack, and the certificate that signed it (none when
-/// the message is unsigned, the anonymous case).
 #[derive(Clone, Debug)]
 pub struct CmsAuthPack {
-    /// The encapsulated AuthPack.
     pub e_content: Vec<u8>,
-    /// The signer's certificate (DER).
     pub signer: Option<Vec<u8>>,
 }
 
-/// A client's signedAuthPack as the KDC verifies it: it decodes; the pre-1.10 form and a
-/// SignedData without signers are unsigned; the signer's certificate is found by its signer
-/// identifier among the message's certificates, then `anchors`, then `intermediates`; its chain
-/// reaches an anchor; its signature verifies; the eContentType is id-pkinit-authData.
-/// MIT `cms_signeddata_verify` (`pkinit_crypto_openssl.c:1987-2229`): the order, and the
-/// refusal of each step.
-///
-/// # Errors
-///
-/// The [`CmsFault`] of the first step that fails.
 pub fn cms_signeddata_verify(
     der: &[u8],
     anchors: &[Vec<u8>],
@@ -1155,7 +1024,6 @@ pub fn cms_signeddata_verify(
     })
 }
 
-/// A SignedData's encapsulated content, certificates and signers.
 struct SignedDataFields {
     e_content_type: Vec<u8>,
     e_content: Option<Vec<u8>>,
@@ -1163,7 +1031,6 @@ struct SignedDataFields {
     signers: Vec<SignerFields>,
 }
 
-/// One SignerInfo: how it names its certificate, its signed attributes (`[0]`), its signature.
 struct SignerFields {
     issuer_serial: Option<(Vec<u8>, Vec<u8>)>,
     key_id: Option<Vec<u8>>,
@@ -1174,8 +1041,6 @@ struct SignerFields {
 }
 
 impl SignerFields {
-    /// Whether `cert` is the one this signer names: its issuer and serial number, or its
-    /// subject key identifier.
     fn names(&self, cert: &[u8]) -> bool {
         if let Some(want) = &self.issuer_serial {
             return cert_issuer_serial(cert).as_ref() == Some(want);
@@ -1187,7 +1052,6 @@ impl SignerFields {
 }
 
 impl SignedDataFields {
-    /// The fields of the `[0]` content of a SignedData ContentInfo that decoded.
     fn read(content: &[u8]) -> Option<Self> {
         let (_, sd, _) = take_tlv(content)?;
         let (_, _, rest) = take_tlv(sd)?;
@@ -1253,7 +1117,6 @@ impl SignedDataFields {
     }
 }
 
-/// A certificate's subject key identifier.
 fn cert_key_id(cert: &[u8]) -> Option<Vec<u8>> {
     let exts = walk_tbs(cert)?.extensions?;
     let mut id = None;
@@ -1267,10 +1130,7 @@ fn cert_key_id(cert: &[u8]) -> Option<Vec<u8>> {
     id
 }
 
-/// The TD-TRUSTED-CERTIFIERS or TD-INVALID-CERTIFICATES of `certs`: one
-/// ExternalPrincipalIdentifier each, its subject name, its issuer and serial number, and its
-/// subject key identifier when it has one, each the DER of that field.
-/// MIT `create_identifiers_from_stack` (`pkinit_crypto_openssl.c:5224-5300`): the fields of each certificate, in the stack's order.
+// MIT create_identifiers_from_stack; see docs/parity/a3-preauth.md
 #[must_use]
 pub fn encode_td_certifiers(certs: &[&[u8]]) -> Vec<u8> {
     let ids: Vec<super::ExternalPrincipalIdentifier> = certs
@@ -1289,8 +1149,6 @@ pub fn encode_td_certifiers(certs: &[&[u8]]) -> Vec<u8> {
     rasn::der::encode(&ids).unwrap_or_default()
 }
 
-/// One DER element's tag, contents and the rest, with the reason OpenSSL gives for a header it
-/// cannot read or a length past the input.
 fn der_next(input: &[u8]) -> Result<(u8, &[u8], &[u8]), &'static str> {
     let (&tag, after) = input.split_first().ok_or("header too long")?;
     let (&first, after) = after.split_first().ok_or("header too long")?;
@@ -1315,7 +1173,6 @@ fn der_next(input: &[u8]) -> Result<(u8, &[u8], &[u8]), &'static str> {
     Ok((tag, &after[..len], &after[len..]))
 }
 
-/// The next element of a sequence, which must carry `tag`.
 fn der_field<'a>(cur: &mut &'a [u8], tag: u8) -> Result<&'a [u8], &'static str> {
     if cur.is_empty() {
         return Err("field missing");
@@ -1328,7 +1185,6 @@ fn der_field<'a>(cur: &mut &'a [u8], tag: u8) -> Result<&'a [u8], &'static str> 
     Ok(body)
 }
 
-/// The next element of a sequence when it carries `tag`.
 fn der_optional<'a>(cur: &mut &'a [u8], tag: u8) -> Result<Option<&'a [u8]>, &'static str> {
     if cur.first() == Some(&tag) {
         der_field(cur, tag).map(Some)
@@ -1337,7 +1193,6 @@ fn der_optional<'a>(cur: &mut &'a [u8], tag: u8) -> Result<Option<&'a [u8]>, &'s
     }
 }
 
-/// Every element of a SET OF or SEQUENCE OF, each checked by `each`.
 fn der_each(
     mut items: &[u8],
     each: impl Fn(u8, &[u8]) -> Result<(), &'static str>,
@@ -1350,10 +1205,6 @@ fn der_each(
     Ok(())
 }
 
-/// OpenSSL's first reason when `d2i_CMS_ContentInfo` refuses `der`, as far as a client's
-/// signedAuthPack goes: the ContentInfo, and a SignedData's fields and signers. The inside of a
-/// certificate, an algorithm's parameters or an attribute is not walked.
-/// MIT `cms_signeddata_verify` (`pkinit_crypto_openssl.c:1989-1991`): "Failed to decode CMS message" and OpenSSL's reason.
 fn cms_decode_reason(der: &[u8]) -> Option<&'static str> {
     if der.is_empty() {
         return Some("too small");
@@ -1361,7 +1212,6 @@ fn cms_decode_reason(der: &[u8]) -> Option<&'static str> {
     cms_template(der).err()
 }
 
-/// The ContentInfo template walk of [`cms_decode_reason`].
 fn cms_template(der: &[u8]) -> Result<(), &'static str> {
     let mut top = der;
     {
@@ -1411,13 +1261,9 @@ fn cms_template(der: &[u8]) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// Where a certificate chain failed: the depth of the certificate (0 is the end entity) and
-/// OpenSSL's `X509_verify_cert_error_string` for the error.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ChainError {
-    /// Depth of the certificate the error is about.
     pub depth: usize,
-    /// OpenSSL's text for the error.
     pub reason: &'static str,
 }
 
@@ -1427,21 +1273,10 @@ impl std::fmt::Display for ChainError {
     }
 }
 
-/// Certificates (DER), the end entity first.
 type CertChain = Vec<Vec<u8>>;
 
-/// OpenSSL's default verify depth.
 const MAX_CHAIN: usize = 100;
 
-/// `leaf`'s chain, leaf first, to one of `anchors` through `intermediates`, as OpenSSL's
-/// `X509_verify_cert` builds and checks it: issuers found by subject name, trusted ones first;
-/// each issuer a CA; then, from the anchor down, each issuer's key usage, each signature, each
-/// validity period.
-/// MIT `cms_signeddata_create` (`pkinit_crypto_openssl.c:1758-1782`): the KDC's own chain is built against its `pkinit_anchors` and `pkinit_pool`, and sent without the anchor.
-///
-/// # Errors
-///
-/// The depth and OpenSSL's text where the chain failed. Signatures are P-256 ECDSA only.
 pub fn verify_chain(
     leaf: &[u8],
     anchors: &[Vec<u8>],
@@ -1450,8 +1285,6 @@ pub fn verify_chain(
     build_chain(leaf, anchors, intermediates).map_err(|(e, _)| e)
 }
 
-/// [`verify_chain`], and on failure the chain as far as it was built, the certificate at the
-/// error's depth included (OpenSSL's current certificate).
 fn build_chain(
     leaf: &[u8],
     anchors: &[Vec<u8>],
@@ -1560,8 +1393,6 @@ fn build_chain(
     Ok(chain)
 }
 
-/// A critical extension other than the four this verifier reads. OpenSSL refuses a critical one
-/// it does not handle; this refuses every other, name constraints and policies included.
 fn cert_unhandled_critical(cert: &[u8]) -> bool {
     let Some(mut cur) = walk_tbs(cert).and_then(|w| w.extensions) else {
         return false;
@@ -1580,7 +1411,6 @@ fn cert_unhandled_critical(cert: &[u8]) -> bool {
     false
 }
 
-/// The `pathLenConstraint` of a certificate's basic constraints.
 fn cert_path_len(cert: &[u8]) -> Option<u64> {
     let exts = walk_tbs(cert)?.extensions?;
     let mut max = None;
@@ -1600,7 +1430,6 @@ fn cert_path_len(cert: &[u8]) -> Option<u64> {
     max
 }
 
-/// A version 1 certificate: OpenSSL's `X509_check_ca` takes a self-signed one as a CA.
 fn cert_v1(cert: &[u8]) -> bool {
     let Some((_, body, _)) = take_tlv(cert) else {
         return false;
@@ -1611,7 +1440,6 @@ fn cert_v1(cert: &[u8]) -> bool {
     tbs.first() != Some(&0xa0) && cert_name_der(cert, true) == cert_name_der(cert, false)
 }
 
-/// MIT `cms_signeddata_create` (`pkinit_crypto_openssl.c:1784-1811`): the chain without its trust anchor rides in the message, and the signer is named by its issuer and serial number.
 pub fn cms_sign_chain(
     e_content: &[u8],
     leaf: &[u8],
@@ -1638,22 +1466,16 @@ pub fn cms_sign_chain(
     ))
 }
 
-/// id-ms-san-upn 1.3.6.1.4.1.311.20.2.3 (OID body): Microsoft's UPN otherName.
 const OID_MS_SAN_UPN: &[u8] = &[0x2b, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x14, 0x02, 0x03];
 
-/// The PKINIT names in a certificate's subjectAltName.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CertSans {
-    /// The id-pkinit-san principals: realm, name type, components.
     pub principals: Vec<(String, i32, Vec<String>)>,
-    /// The Microsoft UPNs, when asked for.
     pub upns: Vec<String>,
     pub dns_names: Vec<String>,
 }
 
-/// The PKINIT principals of `cert`'s subjectAltName and, with `upns`, its UPNs; `None` when the
-/// extension is not a sequence of general names. A certificate without the extension has none.
-/// MIT `crypto_retrieve_X509_sans` (`pkinit_crypto_openssl.c:2343-2440`): an extension that does not decode is an error; a principal name that does not decode, and a UPN holding a NUL, are skipped.
+// MIT crypto_retrieve_X509_sans; see docs/parity/a3-preauth.md
 #[must_use]
 pub fn cert_sans(cert: &[u8], upns: bool) -> Option<CertSans> {
     let mut out = CertSans::default();
@@ -1707,11 +1529,9 @@ pub fn cert_sans(cert: &[u8], upns: bool) -> Option<CertSans> {
     Some(out)
 }
 
-/// id-ms-kp-sc-logon 1.3.6.1.4.1.311.20.2.2 (OID body).
 pub(super) const OID_MS_SC_LOGON: &[u8] =
     &[0x2b, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x14, 0x02, 0x02];
 
-/// What a certificate's extended key usage and key usage allow.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EkuCheck {
     Accepted,
@@ -1757,10 +1577,6 @@ pub(super) struct TbsWalk<'a> {
     pub(super) extensions: Option<&'a [u8]>,
 }
 
-/// Locate the issuer, validity, subject and extensions of a DER certificate. MIT has no walker of
-/// its own: its PKINIT reads these fields through OpenSSL.
-/// A certificate that is not a sequence yields no issuer or validity, and an optional version is
-/// skipped rather than read as the serial.
 pub(super) fn walk_tbs(cert: &[u8]) -> Option<TbsWalk<'_>> {
     let (t, body, _) = take_tlv(cert)?;
     if t != 0x30 {
@@ -1947,14 +1763,12 @@ fn cert_pkinit_san(cert: &[u8]) -> Option<(String, Vec<String>)> {
     out
 }
 
-/// MIT `pkinit_krb5_principal_name_data` (`asn1_k_encode.c:1360-1364`): KRB5PrincipalName is a
+// MIT `pkinit_krb5_principal_name_data` (`asn1_k_encode.c:1360-1364`): KRB5PrincipalName is a
 /// SEQUENCE of `realm [0]` and `principalName [1]`, not RFC 4120's PrincipalName.
-/// A realm that is not a string, or a name that is not the principal-name tag, is not a principal.
 fn parse_krb5_principal_name(der: &[u8]) -> Option<(String, Vec<String>)> {
     parse_krb5_principal_name_typed(der).map(|(realm, _, parts)| (realm, parts))
 }
 
-/// A KRB5PrincipalName's realm, name type and components.
 fn parse_krb5_principal_name_typed(der: &[u8]) -> Option<(String, i32, Vec<String>)> {
     let seq = if der.first() == Some(&0x30) {
         take_tlv(der)?.1
@@ -2087,10 +1901,6 @@ struct CmsParts {
     e_content_type: Vec<u8>,
 }
 
-/// MIT `cms_signeddata_verify` (`pkinit_crypto_openssl.c:2022-2028`): MIT refuses a message whose
-/// ContentInfo type is not id-signedData ("wrong oid"); this port does not check that type and
-/// reads the `[0]` content as SignedData whatever the OID.
-/// Content that does not parse as SignedData is an error.
 fn cms_parts(der: &[u8]) -> Result<CmsParts, &'static str> {
     let (tag, ci, _) = take_tlv(der).ok_or("cms")?;
     if tag != 0x30 {
@@ -2105,7 +1915,6 @@ fn cms_parts(der: &[u8]) -> Result<CmsParts, &'static str> {
     if t != 0x30 {
         return Err("cms sd seq");
     }
-    // version, digestAlgs, encap, [0] certs, signerInfos
     let mut cur = sd;
     let _ = take_tlv(cur).ok_or("ver")?;
     cur = take_tlv(cur).ok_or("ver")?.2;
@@ -2132,7 +1941,6 @@ fn cms_parts(der: &[u8]) -> Result<CmsParts, &'static str> {
     if t != 0xa0 {
         return Err("certs tag");
     }
-    // IMPLICIT SET OF Certificate: body is the Certificate SEQUENCE
     let cert = if cert_set.first() == Some(&0x30) {
         let (tt, body, _) = take_tlv(cert_set).ok_or("cert")?;
         tlv(tt, body)
@@ -2147,7 +1955,6 @@ fn cms_parts(der: &[u8]) -> Result<CmsParts, &'static str> {
     if t != 0x30 {
         return Err("signer seq");
     }
-    // version, sid, digestAlg, sigAlg, signature OCTET STRING
     let mut s = signer;
     s = take_tlv(s).ok_or("sver")?.2;
     s = take_tlv(s).ok_or("sid")?.2;

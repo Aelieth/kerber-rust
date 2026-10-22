@@ -1,5 +1,3 @@
-//! MIT's `pkinit_matching.c` rules: the `pkinit_cert_match` a client's certificate must satisfy.
-
 use super::cms::{OID_MS_SC_LOGON, bitstring_has, cert_sans, each_ext, walk_tbs};
 use super::{OID_EKU, OID_KP_CLIENT_AUTH, OID_KU, take_tlv};
 use crate::ere::Ere;
@@ -59,7 +57,6 @@ pub enum MatchTrace<'a> {
     NoDefault(usize),
 }
 
-/// The five keywords of MIT's `matching_keywords` table (`pkinit_matching.c`), matched as written.
 const KEYWORDS: [(&[u8], Keyword); 5] = [
     (b"<KU>", Keyword::Ku),
     (b"<EKU>", Keyword::Eku),
@@ -68,12 +65,12 @@ const KEYWORDS: [(&[u8], Keyword); 5] = [
     (b"<SUBJECT>", Keyword::Subject),
 ];
 
-/// MIT `ku_keywords` (`pkinit_matching.c:117-121`): the key usage words.
+// MIT `ku_keywords` (`pkinit_matching.c:117-121`): the key usage words.
 const KU_WORDS: [(&[u8], u32); 2] = [
     (b"digitalSignature", KU_DIGITAL_SIGNATURE),
     (b"keyEncipherment", KU_KEY_ENCIPHERMENT),
 ];
-/// MIT `eku_keywords` (`pkinit_matching.c:123-129`): the extended key usage words.
+// MIT `eku_keywords` (`pkinit_matching.c:123-129`): the extended key usage words.
 const EKU_WORDS: [(&[u8], u32); 4] = [
     (b"pkinit", EKU_PKINIT),
     (b"msScLogin", EKU_MS_SC_LOGIN),
@@ -93,12 +90,9 @@ enum Relation {
     Or,
 }
 
-/// Why a rule could not be checked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CertMatchError {
-    /// MIT's `errno` or `regcomp` code, which the KDC reports as an errno.
     Code(i32),
-    /// A regular expression with a back-reference (`\1` to `\9`).
     BackReference,
 }
 
@@ -117,10 +111,7 @@ impl std::fmt::Display for CertMatchError {
     }
 }
 
-/// MIT `pkinit_client_cert_match` (`pkinit_matching.c:716-750`): the rule is parsed, the certificate's matching data read, and the components checked in order, an `&&` rule stopping at the first miss and an `||` rule at the first hit; the last component checked decides.
-///
-/// # Errors
-/// MIT's code for a rule or certificate it cannot read, or a back-reference.
+// MIT pkinit_client_cert_match; see docs/parity/a3-preauth.md
 pub fn cert_match(
     rule: &str,
     cert: &[u8],
@@ -139,15 +130,7 @@ pub fn cert_match(
     Ok(matched)
 }
 
-/// Which of a client's certificates it uses: the one the first rule that picks exactly one picks,
-/// a rule that does not parse (`EINVAL`) skipped; with no rule, the only one.
-/// MIT `pkinit_cert_matching` (`pkinit_matching.c:617-713`): each `pkinit_cert_match` rule in turn until one matches exactly one certificate, else `ENOENT`.
-/// MIT `crypto_cert_select_default` (`pkinit_crypto_openssl.c:4974-4991`): with no rule, exactly one certificate, else `EINVAL`.
-///
-/// # Errors
-///
-/// `EINVAL` for no rule and not one certificate, `ENOENT` when no rule picks one, a rule's other
-/// parse error, or a back-reference.
+// MIT pkinit_cert_matching; see docs/parity/a3-preauth.md
 pub fn select_cert(
     rules: &[String],
     certs: &[&[u8]],
@@ -185,8 +168,7 @@ pub fn select_cert(
     Err(CertMatchError::Code(ENOENT))
 }
 
-/// The certificate a rule picks when it matches exactly one.
-/// MIT `check_all_certs` (`pkinit_matching.c:541-614`): an `||` rule counts a certificate at its first hit and an `&&` rule drops it at its first miss; otherwise the last component checked decides.
+// MIT check_all_certs; see docs/parity/a3-preauth.md
 fn check_all_certs(
     relation: &Relation,
     components: &[Component],
@@ -227,7 +209,7 @@ fn keyword_at(rule: &[u8]) -> Option<(Keyword, usize)> {
         .map(|(k, kw)| (*kw, k.len()))
 }
 
-/// MIT `parse_rule_set` (`pkinit_matching.c:375-447`): components without `&&` or `||` are `&&`.
+// MIT parse_rule_set; see docs/parity/a3-preauth.md
 fn parse_rule_set(rule: &[u8]) -> Result<(Relation, Vec<Component>), i32> {
     let mut rest = rule;
     let mut relation = Relation::None;
@@ -250,7 +232,7 @@ fn parse_rule_set(rule: &[u8]) -> Result<(Relation, Vec<Component>), i32> {
     Ok((relation, components))
 }
 
-/// MIT `parse_rule_component` (`pkinit_matching.c:253-372`): a keyword and its value up to the next.
+// MIT `parse_rule_component` (`pkinit_matching.c:253-372`): a keyword and its value up to the next.
 fn parse_rule_component(rule: &mut &[u8]) -> Result<Component, i32> {
     let (kw, n) = keyword_at(rule).ok_or(ENOENT)?;
     let after = &rule[n..];
@@ -268,8 +250,7 @@ fn parse_rule_component(rule: &mut &[u8]) -> Result<Component, i32> {
     }
 }
 
-/// MIT `parse_list_value` (`pkinit_matching.c:182-250`): a word matches a keyword it starts, and
-/// the value moves on by the keyword's length; where MIT would read past the end, the value ends.
+// MIT `parse_list_value` (`pkinit_matching.c:182-250`): a word matches a keyword it starts, and
 fn parse_list_value(kw: Keyword, value: &[u8]) -> Result<u32, i32> {
     let words: &[(&[u8], u32)] = if kw == Keyword::Eku {
         &EKU_WORDS
@@ -309,7 +290,7 @@ struct MatchData {
     eku: u32,
 }
 
-/// MIT `get_matching_data` (`pkinit_crypto_openssl.c:4850-4888`): names, SANs, UPNs and usage bits.
+// MIT get_matching_data; see docs/parity/a3-preauth.md
 fn matching_data(cert: &[u8]) -> Result<MatchData, i32> {
     let w = walk_tbs(cert).ok_or(EINVAL)?;
     let subject = print_name(w.subject).ok_or(ENOMEM)?;
@@ -330,8 +311,7 @@ fn matching_data(cert: &[u8]) -> Result<MatchData, i32> {
     })
 }
 
-/// MIT `component_match` (`pkinit_matching.c:468-535`): a list's words must all be set.
-/// MIT `component_match` (`pkinit_matching.c:484-497`): the UPN loop runs after the SAN loop, so with any UPN its outcome is the SAN keyword's.
+// MIT component_match; see docs/parity/a3-preauth.md
 fn component_match(
     c: &Component,
     md: &MatchData,
@@ -374,7 +354,7 @@ fn component_match(
     })
 }
 
-/// MIT `crypto_retrieve_X509_key_usage` (`pkinit_crypto_openssl.c:4694-4766`): an extension that appears twice gives none.
+// MIT `crypto_retrieve_X509_key_usage` (`pkinit_crypto_openssl.c:4694-4766`): an extension that appears twice gives none.
 fn usage_bits(extensions: &[u8]) -> (u32, u32) {
     let mut ku = Vec::new();
     let mut eku = Vec::new();
@@ -419,7 +399,7 @@ fn usage_bits(extensions: &[u8]) -> (u32, u32) {
     (ku_bits, eku_bits)
 }
 
-/// MIT `rfc2253_name` (`pkinit_crypto_openssl.c:4769-4790`): `X509_NAME_print_ex` with `XN_FLAG_SEP_COMMA_PLUS`, read as a C string.
+// MIT `rfc2253_name` (`pkinit_crypto_openssl.c:4769-4790`): `X509_NAME_print_ex` with `XN_FLAG_SEP_COMMA_PLUS`, read as a C string.
 fn print_name(name: &[u8]) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     let mut rdns = name;
@@ -451,7 +431,6 @@ fn print_name(name: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// OpenSSL `do_print_ex`, `do_buf` and `do_esc_char` without `ASN1_STRFLGS`.
 fn print_string(tag: u8, data: &[u8], out: &mut Vec<u8>) -> Option<()> {
     let mut put = |c: u32| {
         if c > 0xffff {
@@ -485,7 +464,6 @@ fn print_string(tag: u8, data: &[u8], out: &mut Vec<u8>) -> Option<()> {
     Some(())
 }
 
-/// OpenSSL `UTF8_getc`.
 fn utf8_getc(p: &[u8]) -> Option<(u32, usize)> {
     let b0 = u32::from(p[0]);
     let (n, init, min) = match p[0] {
@@ -505,7 +483,6 @@ fn utf8_getc(p: &[u8]) -> Option<(u32, usize)> {
     (c >= min && !(0xd800..0xe000).contains(&c)).then_some((c, n))
 }
 
-/// OpenSSL 3.5's short name in four attribute arcs, else `OBJ_obj2txt`'s dotted OID.
 fn field_name(oid: &[u8]) -> Option<String> {
     let mut arcs: Vec<u128> = Vec::new();
     let mut v: u128 = 0;

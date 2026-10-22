@@ -1,26 +1,8 @@
-//! The LC_TIME half of glibc's `setlocale(LC_ALL, "")`, which MIT's tools call before anything
-//! else, and the locale data it selects.
-//!
-//! Each category takes its name from `LC_ALL`, else `LC_<category>`, else `LANG`, else `C`.
-//! `C` and `POSIX` are built in; any other name must be installed: in glibc's locale archive
-//! (its name with the codeset normalised, `de_DE.UTF-8` → `de_DE.utf8`), or the archive entry of
-//! its alias from `locale.alias`, or a directory of that name holding the category under
-//! `/usr/lib/locale` (`LOCPATH`'s directories instead, and no archive, when `LOCPATH` is set).
-//! When any category's name is not installed the whole call fails and every category stays
-//! `C`, so an unknown, unset or uninstalled locale formats dates as `C` does.
-//!
-//! The data is glibc's own LC_TIME source, from `pure-rust-locales`, chosen by the name's
-//! language, territory and modifier. Output is always UTF-8; a locale glibc installs in another
-//! codeset prints the same names in UTF-8. glibc's fallback from an uninstalled name to a less
-//! specific installed one (`de_AT` to `de`) is not followed, and a locale the crate does not carry
-//! formats as `C`.
-
 use std::fs::File;
 use std::os::unix::fs::FileExt as _;
 
 use pure_rust_locales::{Locale, locale_match};
 
-/// One locale's LC_TIME: the `nl_langinfo` items `strftime` reads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LcTime {
     pub(super) abday: &'static [&'static str],
@@ -39,13 +21,10 @@ pub struct LcTime {
     pub(super) era_d_t_fmt: &'static str,
     pub(super) era_t_fmt: &'static str,
     pub(super) alt_digits: &'static [&'static str],
-    /// glibc's LC_CTYPE in the Turkic locales: the byte-wise `toupper` / `tolower` leave `i` and
-    /// `I` alone (their case partners are not single bytes).
     pub(super) keep_i: bool,
 }
 
 impl LcTime {
-    /// The `C` (`POSIX`) locale, a C program's LC_TIME before it calls `setlocale`.
     pub const C: Self = {
         use pure_rust_locales::POSIX::LC_TIME as T;
         Self {
@@ -69,9 +48,6 @@ impl LcTime {
         }
     };
 
-    /// The LC_TIME of the glibc locale `name` (`language[_territory][.codeset][@modifier]`),
-    /// whether or not it is installed here; `C`, `POSIX` and `C.<codeset>` are `C`. `None` for a
-    /// locale glibc does not ship.
     #[must_use]
     pub fn named(name: &str) -> Option<Self> {
         let (base, modifier) = match name.split_once('@') {
@@ -89,8 +65,6 @@ impl LcTime {
         Locale::try_from(key.as_str()).ok().map(Self::of)
     }
 
-    /// glibc localedef: an unset `ab_alt_mon` / `alt_mon` is `abmon` / `mon`, and an unset era
-    /// or alternative-digit item is empty.
     fn of(l: Locale) -> Self {
         let abmon = locale_match!(l => LC_TIME::ABMON);
         let mon = locale_match!(l => LC_TIME::MON);
@@ -123,7 +97,6 @@ impl LcTime {
         }
     }
 
-    /// glibc's byte-wise `toupper` over `bytes`: ASCII letters only, as in a UTF-8 locale.
     pub(super) fn upper(&self, bytes: &mut [u8]) {
         for b in bytes {
             if !(self.keep_i && *b == b'i') {
@@ -132,7 +105,6 @@ impl LcTime {
         }
     }
 
-    /// glibc's byte-wise `tolower` over `bytes`.
     pub(super) fn lower(&self, bytes: &mut [u8]) {
         for b in bytes {
             if !(self.keep_i && *b == b'I') {
@@ -141,8 +113,6 @@ impl LcTime {
         }
     }
 
-    /// glibc `_nl_get_alt_digit`: the alternative spelling of `n` below 100, if the locale has a
-    /// non-empty one.
     pub(super) fn alt_digit(&self, n: u64) -> Option<&'static str> {
         if n >= 100 {
             return None;
@@ -152,7 +122,6 @@ impl LcTime {
     }
 }
 
-/// The categories `setlocale(LC_ALL, "")` loads, by the names of their variables and files.
 const CATEGORIES: [&str; 12] = [
     "LC_CTYPE",
     "LC_NUMERIC",
@@ -168,23 +137,16 @@ const CATEGORIES: [&str; 12] = [
     "LC_IDENTIFICATION",
 ];
 
-/// glibc's compiled-in locale directory, and its archive and alias file.
 const LOCALE_DIR: &str = "/usr/lib/locale";
 const LOCALE_ARCHIVE: &str = "/usr/lib/locale/locale-archive";
 const LOCALE_ALIAS: &str = "/usr/share/locale/locale.alias";
 
-/// Where installed locales are found.
 pub(super) trait Installed {
-    /// The archive holds `name` (spelled as glibc normalises it).
     fn in_archive(&self, name: &str) -> bool;
-    /// `dir/name/category` exists (a file, or `LC_MESSAGES`'s directory).
     fn in_dir(&self, dir: &str, name: &str, category: &str) -> bool;
-    /// glibc `_nl_expand_alias`: the value `locale.alias` gives `name`, matched ignoring case.
     fn alias(&self, name: &str) -> Option<String>;
 }
 
-/// glibc `setlocale(LC_ALL, "")`, kept to the LC_TIME it leaves: every category's name from the
-/// environment must be found, else the call fails and LC_TIME stays `C`.
 pub(super) fn resolve(getenv: &dyn Fn(&str) -> Option<String>, store: &dyn Installed) -> LcTime {
     let locpath = getenv("LOCPATH").filter(|p| !p.is_empty());
     let mut time = None;
@@ -203,7 +165,6 @@ pub(super) fn resolve(getenv: &dyn Fn(&str) -> Option<String>, store: &dyn Insta
     time.and_then(|n| LcTime::named(&n)).unwrap_or(LcTime::C)
 }
 
-/// glibc `_nl_find_locale` for one category: the name it loads `name` under, or `None`.
 fn find_locale(
     name: &str,
     category: &str,
@@ -240,8 +201,6 @@ fn find_locale(
         .then_some(loc_name)
 }
 
-/// glibc `valid_locale_name`: at most 255 bytes, no `..` path component, and a `/` only in a
-/// name that starts with one.
 fn valid_locale_name(name: &str) -> bool {
     name.len() <= 255
         && !name.contains("/../")
@@ -251,8 +210,6 @@ fn valid_locale_name(name: &str) -> bool {
         && (!name.contains('/') || name.starts_with('/'))
 }
 
-/// glibc `_nl_normalize_codeset` applied to a locale name's codeset: its letters lower-cased, its
-/// digits kept, everything else dropped, and `iso` before a codeset of digits only.
 fn normalize_codeset(name: &str) -> String {
     let Some((head, rest)) = name.split_once('.') else {
         return name.to_owned();
@@ -273,7 +230,6 @@ fn normalize_codeset(name: &str) -> String {
     out
 }
 
-/// The installed locales on this host.
 pub(super) struct System {
     archive: Vec<String>,
 }
@@ -301,8 +257,6 @@ impl Installed for System {
     }
 }
 
-/// glibc `read_alias_file`: per line an alias and its value, separated by blanks; `#` starts a
-/// comment line. The first alias equal to `name` ignoring ASCII case.
 fn alias_lookup(text: &[u8], name: &str) -> Option<String> {
     for line in text.split(|&b| b == b'\n') {
         let mut words = line
@@ -320,18 +274,13 @@ fn alias_lookup(text: &[u8], name: &str) -> Option<String> {
     None
 }
 
-/// The names in glibc's locale archive at `path`; `None` when there is none.
 fn archive_names(path: &str) -> Option<Vec<String>> {
     let file = File::open(path).ok()?;
     parse_archive(&|off, buf| file.read_exact_at(buf, off).ok())
 }
 
-/// The names in a glibc locale archive read through `read_at`: its name hash table's used
-/// slots, each pointing into the string table. `None` when it is not an archive.
 fn parse_archive(read_at: &dyn Fn(u64, &mut [u8]) -> Option<()>) -> Option<Vec<String>> {
-    /// glibc `AR_MAGIC`.
     const MAGIC: u32 = 0xde02_0109;
-    /// Bounds on the tables read, far above any glibc archive's.
     const MAX_TABLE: usize = 16 << 20;
     let mut head = [0u8; 56];
     read_at(0, &mut head)?;
@@ -377,7 +326,6 @@ mod tests {
     use super::*;
     use std::collections::{BTreeMap, BTreeSet};
 
-    /// A host with these archive names, `dir/name/category` paths and aliases.
     #[derive(Default)]
     struct Host {
         archive: BTreeSet<&'static str>,
@@ -567,7 +515,6 @@ mod tests {
     #[test]
     fn an_archive_lists_its_hash_table_names() {
         let words = |ws: &[u32]| ws.iter().flat_map(|w| w.to_ne_bytes()).collect::<Vec<u8>>();
-        // The header; two hash slots at 56 (the first empty); the string table at 80.
         let mut a = words(&[0xde02_0109, 0, 56, 1, 2, 80, 11, 11, 0, 0, 0, 0, 0, 0]);
         a.extend(words(&[0, 0, 0, 7, 80, 0]));
         a.extend_from_slice(b"de_DE.utf8\0");

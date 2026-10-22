@@ -1,5 +1,3 @@
-//! PKINIT key exchange on MIT's six groups against OpenSSL's shared secrets.
-
 use krb5_types::pkinit::{KxGroup, KxKey, P384_ENABLED};
 
 fn hex(s: &str) -> Vec<u8> {

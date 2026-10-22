@@ -20,7 +20,6 @@ fn ticket_flags_initial_preauth_is_rfc_bits_9_and_10() {
     assert!(f.initial(), "bit 9 initial");
     assert!(f.pre_authent(), "bit 10 pre-authent");
     assert!(!f.renewable(), "must not set renewable (bit 8)");
-    // MIT packed: bit 9 => 1<<22, bit 10 => 1<<21
     assert_eq!(f.to_u32(), 0x0060_0000);
     let round = TicketFlags::from_u32(0x0060_0000);
     assert!(round.initial() && round.pre_authent() && !round.renewable());
@@ -131,8 +130,6 @@ fn transited_csv_round_trip() {
 
 #[test]
 fn transited_x500_expand_mit_live_fixture() {
-    // Live MIT 1.22.2 4-hop A.EX.COM→EX.COM→B.EX.COM→C.EX.COM issued
-    // tr-type 1 contents "EX.COM,B." (captured s2-live-compress.log).
     assert_eq!(
         hops(b"EX.COM,B."),
         vec!["EX.COM".to_string(), "B.EX.COM".to_string()]
@@ -298,8 +295,6 @@ fn transited_mit_transit_tests_vectors() {
 
 #[test]
 fn transited_hop_cap_is_too_many_fields() {
-    // Space-clears last, emits "/", then 510 slashes with intermediates.
-    // Nine cycles exceed MAX_TRANSIT_HOPS; comma count stays under 256.
     let mut cycle = b" /,,".to_vec();
     cycle.extend(std::iter::repeat_n(b'/', 510));
     cycle.push(b',');
@@ -610,8 +605,6 @@ fn pa_pk_as_req_signed_auth_pack_is_implicit() {
 #[test]
 fn parse_authpack_accepts_spki_sequence() {
     let spki = pkinit::encode_ec_spki(&[0x04u8; 65]);
-    // AuthPack SEQUENCE { [0] empty-ish, [1] EXPLICIT SPKI }
-    // Minimal: SEQUENCE { [1] EXPLICIT SPKI } is enough for parse_authpack.
     let mut inner = vec![0xa1];
     let spki_len = u8::try_from(spki.len()).expect("spki");
     inner.push(spki_len);
@@ -626,10 +619,6 @@ fn parse_authpack_accepts_spki_sequence() {
 
 #[test]
 fn typed_data_uses_rfc6113_tags_not_padata() {
-    // MIT `typed_data_0` (`asn1_k_encode.c:1547-1547`): `data-type [0]` is an Int32.
-    // MIT `typed_data_1` (`asn1_k_encode.c:1548-1548`): `data-value [1]` is an OCTET STRING.
-    // MIT `typed_data_fields` (`asn1_k_encode.c:1549-1551`): `encode_krb5_typed_data` writes
-    // those two fields in that order.
     let td: crate::TypedDataList = vec![crate::TypedData {
         data_type: 13,
         data_value: b"pa-data".to_vec().into(),
@@ -674,13 +663,10 @@ fn typed_data_uses_rfc6113_tags_not_padata() {
     );
 }
 
-/// Key octets with a quote, a backslash, a newline and a NUL, so each rendering differs.
 const SECRET: [u8; 16] = [
     0x13, 0x37, 0xc0, 0xde, 0x22, 0x5c, 0x0a, 0xa5, 0x9e, 0x41, 0x42, 0x43, 0x7f, 0x00, 0xfe, 0x5a,
 ];
 
-/// Whether `debug` shows `secret` as hex, as a list of numbers, as an escaped byte string (an
-/// `OctetString`'s derived `Debug`), or as text.
 fn shows(debug: &str, secret: &[u8]) -> bool {
     use std::fmt::Write as _;
     let hex = secret.iter().fold(String::new(), |mut s, b| {
@@ -770,7 +756,6 @@ fn a_pkinit_cas_debug_shows_no_private_scalar() {
     assert!(debug.contains("ca_secret: <redacted>"), "{debug}");
 }
 
-/// MIT `decode_seqno` (`asn1_k_encode.c:133-146`): a seq-number from `INT32_MIN` to `0xFFFFFFFF` decodes, a negative one as its 32 bits unsigned, and anything wider does not.
 #[test]
 fn seq_numbers_decode_as_mit_decode_seqno_reads_them() {
     fn negated(mut der: Vec<u8>, field: u8) -> Vec<u8> {
@@ -810,7 +795,6 @@ fn seq_numbers_decode_as_mit_decode_seqno_reads_them() {
     );
     assert!(seq_of(&[0x01, 0, 0, 0, 0]).is_err(), "2^32");
 
-    // The authenticator, KRB-SAFE body and KRB-PRIV part read a negative one the same way.
     let addr = HostAddress {
         addr_type: 2,
         address: vec![127, 0, 0, 1].into(),
@@ -858,7 +842,6 @@ fn seq_numbers_decode_as_mit_decode_seqno_reads_them() {
             .seq_number,
         Some(0xFFFF_FF80)
     );
-    // Encoding is unchanged: an unsigned INTEGER, as MIT's `encode_seqno` writes it.
     let back = rasn::der::encode(&back).unwrap();
     assert!(
         back.windows(7)
@@ -868,9 +851,6 @@ fn seq_numbers_decode_as_mit_decode_seqno_reads_them() {
 
 #[test]
 fn pa_spake_unknown_choice_decodes() {
-    // MIT `decode_cntype` (`asn1_encode.c:1277-1293`): an element no PA-SPAKE alternative takes, by
-    // its tag ([4]) or by its constructed bit (a primitive [1]), is an unknown choice; a [2] that
-    // does not decode as a SPAKEResponse fails the message.
     for der in [&[0xa4, 0x02, 0x30, 0x00][..], &[0x81, 0x00][..]] {
         assert_eq!(
             rasn::der::decode::<spake::PaSpake>(der).unwrap(),
@@ -881,30 +861,17 @@ fn pa_spake_unknown_choice_decodes() {
     assert!(rasn::der::encode(&spake::PaSpake::Unknown).is_err());
 }
 
-// RFC 6560 OTP types (`otp.rs`) checked against MIT 1.22.2's own encodings. The
-// octets are lines 62 to 68 of MIT's `reference_encode.out`; each value is the one
-// that MIT's `ktest.c` builds in its `ktest_make_*otp*` helpers.
-
-/// MIT's reference output for `encode_krb5_otp_tokeninfo(optionals NULL)`.
 const MIT_OTP_TOKENINFO_MINIMAL: &str = "30 07 80 05 00 00 00 00 00";
-/// MIT's reference output for `encode_krb5_otp_tokeninfo`, all fields set.
 const MIT_OTP_TOKENINFO_MAXIMAL: &str = "30 72 80 05 00 77 00 00 00 81 0B 45 78 61 6D 70 6C 65 63 6F 72 70 82 05 68 61 72 6B 21 83 01 0A 84 01 02 85 09 79 6F 75 72 74 6F 6B 65 6E 86 28 75 72 6E 3A 69 65 74 66 3A 70 61 72 61 6D 73 3A 78 6D 6C 3A 6E 73 3A 6B 65 79 70 72 6F 76 3A 70 73 6B 63 3A 68 6F 74 70 A7 16 30 0B 06 09 60 86 48 01 65 03 04 02 01 30 07 06 05 2B 0E 03 02 1A 88 02 03 E8";
-/// MIT's reference output for `encode_krb5_pa_otp_challenge(optionals NULL)`.
 const MIT_PA_OTP_CHALLENGE_MINIMAL: &str =
     "30 15 80 08 6D 69 6E 6E 6F 6E 63 65 A2 09 30 07 80 05 00 00 00 00 00";
-/// MIT's reference output for `encode_krb5_pa_otp_challenge`, all fields set.
 const MIT_PA_OTP_CHALLENGE_MAXIMAL: &str = "30 81 A5 80 08 6D 61 78 6E 6F 6E 63 65 81 0B 74 65 73 74 73 65 72 76 69 63 65 A2 7D 30 07 80 05 00 00 00 00 00 30 72 80 05 00 77 00 00 00 81 0B 45 78 61 6D 70 6C 65 63 6F 72 70 82 05 68 61 72 6B 21 83 01 0A 84 01 02 85 09 79 6F 75 72 74 6F 6B 65 6E 86 28 75 72 6E 3A 69 65 74 66 3A 70 61 72 61 6D 73 3A 78 6D 6C 3A 6E 73 3A 6B 65 79 70 72 6F 76 3A 70 73 6B 63 3A 68 6F 74 70 A7 16 30 0B 06 09 60 86 48 01 65 03 04 02 01 30 07 06 05 2B 0E 03 02 1A 88 02 03 E8 83 07 6B 65 79 73 61 6C 74 84 04 31 32 33 34";
-/// MIT's reference output for `encode_krb5_pa_otp_req(optionals NULL)`.
 const MIT_PA_OTP_REQ_MINIMAL: &str = "30 2C 80 05 00 00 00 00 00 A2 23 A0 03 02 01 00 A1 03 02 01 05 A2 17 04 15 6B 72 62 41 53 4E 2E 31 20 74 65 73 74 20 6D 65 73 73 61 67 65";
-/// MIT's reference output for `encode_krb5_pa_otp_req`, all fields set.
 const MIT_PA_OTP_REQ_MAXIMAL: &str = "30 81 B9 80 05 00 60 00 00 00 81 05 6E 6F 6E 63 65 A2 23 A0 03 02 01 00 A1 03 02 01 05 A2 17 04 15 6B 72 62 41 53 4E 2E 31 20 74 65 73 74 20 6D 65 73 73 61 67 65 A3 0B 06 09 60 86 48 01 65 03 04 02 01 84 02 03 E8 85 05 66 72 6F 67 73 86 0A 6D 79 66 69 72 73 74 70 69 6E 87 05 68 61 72 6B 21 88 0F 31 39 39 34 30 36 31 30 30 36 30 33 31 37 5A 89 03 33 34 36 8A 01 02 8B 09 79 6F 75 72 74 6F 6B 65 6E 8C 28 75 72 6E 3A 69 65 74 66 3A 70 61 72 61 6D 73 3A 78 6D 6C 3A 6E 73 3A 6B 65 79 70 72 6F 76 3A 70 73 6B 63 3A 68 6F 74 70 8D 0B 45 78 61 6D 70 6C 65 63 6F 72 70";
-/// MIT's reference output for `encode_krb5_pa_otp_enc_req`.
 const MIT_PA_OTP_ENC_REQ: &str = "30 0A 80 08 6B 72 62 35 64 61 74 61";
 
-/// The OTP algorithm identifier URN that MIT's `ktest.c` uses.
 const OTP_ALG_ID: &str = "urn:ietf:params:xml:ns:keyprov:pskc:hotp";
 
-/// `value`'s DER octets as MIT's reference output prints them: upper-case hex, a space between octets.
 fn mit_hex(der: &[u8]) -> String {
     der.iter()
         .map(|octet| format!("{octet:02X}"))
@@ -912,15 +879,12 @@ fn mit_hex(der: &[u8]) -> String {
         .join(" ")
 }
 
-/// The octets of MIT's reference output `hex`.
 fn mit_octets(hex: &str) -> Vec<u8> {
     hex.split_whitespace()
         .map(|octet| u8::from_str_radix(octet, 16).unwrap())
         .collect()
 }
 
-/// Asserts that `value` encodes to MIT's reference output `hex`, octet for octet, and that
-/// decoding those octets gives `value` back.
 fn assert_mit_encoding<T>(value: &T, hex: &str)
 where
     T: rasn::Encode + rasn::Decode + PartialEq + std::fmt::Debug,
@@ -931,12 +895,10 @@ where
     assert_eq!(&decoded, value, "decoding MIT's octets gives another value");
 }
 
-/// The OTP flags as the `OTPFlags` bit string of a 32-bit word (bit 0 is the most significant).
 fn otp_flags(bits: u32) -> KerberosFlags {
     KerberosFlags::from_slice(&bits.to_be_bytes())
 }
 
-/// The EncryptedData of MIT's `ktest_make_sample_enc_data`: etype 0, kvno 5.
 fn sample_enc_data() -> EncryptedData {
     EncryptedData {
         etype: 0,
@@ -945,10 +907,8 @@ fn sample_enc_data() -> EncryptedData {
     }
 }
 
-/// MIT `opt_der_data` (`lib/krb5/asn.1/asn1_k_encode.c:65-65`): an AlgorithmIdentifier's parameters are kept as DER, so a NULL survives a decode and an encode.
 #[test]
 fn algorithm_identifier_parameters_survive_a_round_trip() {
-    // sha256, then a NULL parameter, then the same OID with no parameter.
     let with_null = [
         0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00,
     ];
@@ -961,7 +921,6 @@ fn algorithm_identifier_parameters_survive_a_round_trip() {
     }
 }
 
-/// The SHA-256 AlgorithmIdentifier of MIT's `ktest_make_sha256_alg`, with no parameters.
 fn sha256_alg() -> pkinit::CmsAlgorithmIdentifier {
     pkinit::CmsAlgorithmIdentifier {
         algorithm: rasn::types::ObjectIdentifier::new(vec![2, 16, 840, 1, 101, 3, 4, 2, 1])
@@ -970,7 +929,6 @@ fn sha256_alg() -> pkinit::CmsAlgorithmIdentifier {
     }
 }
 
-/// The SHA-1 AlgorithmIdentifier of MIT's `ktest_make_sha1_alg`, with no parameters.
 fn sha1_alg() -> pkinit::CmsAlgorithmIdentifier {
     pkinit::CmsAlgorithmIdentifier {
         algorithm: rasn::types::ObjectIdentifier::new(vec![1, 3, 14, 3, 2, 26]).unwrap(),
@@ -978,7 +936,6 @@ fn sha1_alg() -> pkinit::CmsAlgorithmIdentifier {
     }
 }
 
-/// MIT's `ktest_make_minimal_otp_tokeninfo`: every optional field absent.
 fn minimal_token_info() -> otp::OtpTokenInfo {
     otp::OtpTokenInfo {
         flags: otp_flags(0),
@@ -993,7 +950,6 @@ fn minimal_token_info() -> otp::OtpTokenInfo {
     }
 }
 
-/// MIT's `ktest_make_maximal_otp_tokeninfo`: every field set.
 fn maximal_token_info() -> otp::OtpTokenInfo {
     otp::OtpTokenInfo {
         flags: otp_flags(
@@ -1015,7 +971,6 @@ fn maximal_token_info() -> otp::OtpTokenInfo {
     }
 }
 
-/// MIT's `ktest_make_maximal_pa_otp_req`: every field set.
 fn maximal_request() -> otp::PaOtpRequest {
     otp::PaOtpRequest {
         flags: otp_flags(otp::OTP_FLAG_NEXTOTP | otp::OTP_FLAG_COMBINE),
@@ -1103,11 +1058,8 @@ fn pa_otp_enc_request_is_mits_encoding() {
     assert_mit_encoding(&enc, MIT_PA_OTP_ENC_REQ);
 }
 
-/// MIT `utf8string` (`lib/krb5/asn.1/asn1_k_encode.c:89-91`): a byte string, so a token's algID with a
-/// non-UTF-8 octet decodes, and the octets come back as sent.
 #[test]
 fn a_non_utf8_alg_id_in_a_challenge_decodes_as_mit_octets() {
-    // PA-OTP-CHALLENGE { nonce "n", tokenInfo { flags 0, algID "a\xffb" } }
     let der = [
         0x30, 0x13, 0x80, 0x01, 0x6e, 0xa2, 0x0e, 0x30, 0x0c, 0x80, 0x05, 0x00, 0x00, 0x00, 0x00,
         0x00, 0x86, 0x03, 0x61, 0xff, 0x62,
@@ -1116,10 +1068,8 @@ fn a_non_utf8_alg_id_in_a_challenge_decodes_as_mit_octets() {
     assert_eq!(rasn::der::encode(&challenge).unwrap(), der);
 }
 
-/// The same for PA-OTP-REQUEST: a PIN and a vendor with non-UTF-8 octets decode as MIT's do.
 #[test]
 fn a_non_utf8_pin_and_vendor_in_a_request_decode_as_mit_octets() {
-    // PA-OTP-REQUEST { flags 0, encData { etype 18, cipher "x" }, pin "\xff\xfe", vendor "\xff" }
     let der = [
         0x30, 0x1a, 0x80, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0xa2, 0x0a, 0xa0, 0x03, 0x02, 0x01,
         0x12, 0xa2, 0x03, 0x04, 0x01, 0x78, 0x86, 0x02, 0xff, 0xfe, 0x8d, 0x01, 0xff,
@@ -1128,8 +1078,7 @@ fn a_non_utf8_pin_and_vendor_in_a_request_decode_as_mit_octets() {
     assert_eq!(rasn::der::encode(&request).unwrap(), der);
 }
 
-/// MIT `decode_atype_to_ptr` (`lib/krb5/asn.1/asn1_encode.c:1341-1342`): non-emptiness of a sequence is not
-/// enforced, so a challenge whose tokenInfo list is empty decodes and has no token.
+// MIT `decode_atype_to_ptr` (`lib/krb5/asn.1/asn1_encode.c:1341-1342`): non-emptiness of a sequence is not
 #[test]
 fn an_empty_token_info_list_decodes_as_mit_does() {
     let der = [0x30, 0x05, 0x80, 0x01, 0x6e, 0xa2, 0x00];

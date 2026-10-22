@@ -1,8 +1,3 @@
-//! A KDC's PKINIT identity and CA certificates, loaded from MIT's option strings as
-//! `pkinit_identity.c` and `pkinit_crypto_openssl.c` load them. An error is the message MIT
-//! sets, which follows "PKINIT initialization failed: " in the KDC's startup line; where MIT
-//! appends OpenSSL's reason, the reason is OpenSSL 3's (a system error has none: "(null)").
-
 use std::path::Path;
 
 use zeroize::{Zeroize, Zeroizing};
@@ -25,15 +20,10 @@ const EINVAL: &str = "Invalid argument";
 const ENOENT: &str = "No such file or directory";
 const ENOTSUP: &str = "Operation not supported";
 const EIO: i64 = 5;
-/// `KRB5_PREAUTH_FAILED`, which `process_option_identity` returns for an unknown type.
 const PREAUTH_FAILED: i64 = -1_765_328_174;
-/// `KRB5KDC_ERR_PREAUTH_FAILED`, what `oerr` makes of a code of 0.
 const KDC_PREAUTH_FAILED: i64 = -1_765_328_360;
-/// `ERR_reason_error_string` of a system error is NULL, which glibc prints so.
 const NO_REASON: &str = "(null)";
-/// MIT `MAX_CREDS_ALLOWED` (`pkinit.h`): the most identities a `DIR:` yields.
 const MAX_CREDS: usize = 20;
-/// id-ecPublicKey 1.2.840.10045.2.1 (OID body).
 const OID_EC_PUBLIC_KEY: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01];
 
 #[derive(Clone)]
@@ -122,9 +112,7 @@ impl Zeroize for IdentityKey {
     }
 }
 
-/// A certificate and its private key; the key is wiped on drop.
 pub struct PkinitIdentity {
-    /// The certificate (DER).
     pub cert: Vec<u8>,
     key: IdentityKey,
 }
@@ -135,7 +123,6 @@ impl PkinitIdentity {
         Self { cert, key }
     }
 
-    /// The identity of `cert` and a copy of `key`.
     #[must_use]
     pub fn from_key(cert: Vec<u8>, key: [u8; 32]) -> Self {
         Self::new(cert, IdentityKey::P256(Zeroizing::new(key)))
@@ -147,12 +134,9 @@ impl PkinitIdentity {
     }
 }
 
-/// Why an identity did not load: MIT's code and the message it sets.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IdentityError {
-    /// MIT's `krb5_error_code`: an errno, or a Kerberos code.
     pub code: i64,
-    /// The message `krb5_get_error_message` gives for it.
     pub text: String,
 }
 
@@ -194,15 +178,8 @@ impl std::fmt::Debug for PkinitIdentity {
     }
 }
 
-/// The KDC's identity from `pkinit_identity`: `FILE:cert[,key]` (a value with no type is one),
-/// `DIR:` holding one `NAME.crt` with its `NAME.key`, or `ENV:VAR` naming another value. Keys
-/// are P-256 EC or RSA; `PKCS11:` and `PKCS12:` are refused as unsupported types.
-/// MIT `process_option_identity` (`plugins/preauth/pkinit/pkinit_identity.c:378-465`): the type before the first colon, else FILE.
-/// MIT `crypto_cert_select_default` (`plugins/preauth/pkinit/pkinit_crypto_openssl.c:4986-4991`): the KDC's identity is the only certificate loaded.
-///
-/// # Errors
-///
-/// MIT's message for the value that does not load.
+// MIT process_option_identity; see docs/parity/a3-preauth.md
+// MIT crypto_cert_select_default; see docs/parity/a3-preauth.md
 pub fn load_identity(
     value: &str,
     trace: &mut dyn FnMut(MatchTrace<'_>),
@@ -213,13 +190,7 @@ pub fn load_identity(
     found.pop().ok_or_else(IdentityError::enoent)
 }
 
-/// Every certificate and key an identity value names, for a client to choose from: one for
-/// `FILE:`, each `NAME.crt` with its `NAME.key` (20 at most) for `DIR:`.
-/// MIT `crypto_load_certs` (`plugins/preauth/pkinit/pkinit_crypto_openssl.c:4645-4688`): the identity's type decides how its certificates load.
-///
-/// # Errors
-///
-/// As [`load_identity`]; a `DIR:` holding no pair that loads is `ENOENT`'s text.
+// MIT `crypto_load_certs` (`plugins/preauth/pkinit/pkinit_crypto_openssl.c:4645-4688`): the identity's type decides how its certificates load.
 pub fn load_identities(value: &str) -> Result<Vec<PkinitIdentity>, IdentityError> {
     load_identities_at(value, 0)
 }
@@ -244,7 +215,7 @@ fn load_identities_at(value: &str, depth: usize) -> Result<Vec<PkinitIdentity>, 
     }
 }
 
-/// MIT `parse_fs_options` (`plugins/preauth/pkinit/pkinit_identity.c:307-346`): `cert[,key]`, the key in the certificate's file when not named.
+// MIT `parse_fs_options` (`plugins/preauth/pkinit/pkinit_identity.c:307-346`): `cert[,key]`, the key in the certificate's file when not named.
 fn parse_fs_options(residual: &str) -> Option<(&str, &str)> {
     if residual.is_empty() || residual.starts_with(',') {
         return None;
@@ -254,7 +225,7 @@ fn parse_fs_options(residual: &str) -> Option<(&str, &str)> {
     Some((cert, names.next().unwrap_or(cert)))
 }
 
-/// MIT `pkinit_load_fs_cert_and_key` (`plugins/preauth/pkinit/pkinit_crypto_openssl.c:4210-4268`): the certificate file, then the key file, each with its own message.
+// MIT pkinit_load_fs_cert_and_key; see docs/parity/a3-preauth.md
 fn load_cert_and_key(cert_file: &str, key_file: &str) -> Result<PkinitIdentity, IdentityError> {
     let fsname = format!("FILE:{cert_file},{key_file}");
     let cert = read_cert(cert_file).map_err(|(code, why)| {
@@ -282,7 +253,7 @@ fn load_cert_and_key(cert_file: &str, key_file: &str) -> Result<PkinitIdentity, 
     Ok(PkinitIdentity::new(cert, key))
 }
 
-/// MIT `pkinit_get_certs_dir` (`plugins/preauth/pkinit/pkinit_crypto_openssl.c:4298-4366`): each `NAME.crt` not starting with a dot, with `NAME.key`; a pair that does not load is skipped.
+// MIT pkinit_get_certs_dir; see docs/parity/a3-preauth.md
 fn load_identity_dir(dir: &str) -> Result<Vec<PkinitIdentity>, IdentityError> {
     let mut found = Vec::new();
     for name in dir_names(dir)? {
@@ -307,13 +278,7 @@ fn load_identity_dir(dir: &str) -> Result<Vec<PkinitIdentity>, IdentityError> {
     Ok(found)
 }
 
-/// The certificates of one `pkinit_anchors` or `pkinit_pool` value: `FILE:` a PEM file, or
-/// `DIR:` every file in a directory.
-/// MIT `process_option_ca_crl` (`plugins/preauth/pkinit/pkinit_identity.c:468-501`): the type is required, and only FILE and DIR are known.
-///
-/// # Errors
-///
-/// MIT's message for the value that does not load.
+// MIT `process_option_ca_crl` (`plugins/preauth/pkinit/pkinit_identity.c:468-501`): the type is required, and only FILE and DIR are known.
 pub fn load_ca_certs(value: &str) -> Result<Vec<Vec<u8>>, String> {
     let Some((kind, residual)) = value.split_once(':') else {
         return Err(EINVAL.into());
@@ -335,7 +300,7 @@ pub fn load_ca_certs(value: &str) -> Result<Vec<Vec<u8>>, String> {
     }
 }
 
-/// MIT `load_cas_and_crls` (`plugins/preauth/pkinit/pkinit_crypto_openssl.c:4997-5151`): every certificate in the file once; a file with none loads nothing.
+// MIT `load_cas_and_crls` (`plugins/preauth/pkinit/pkinit_crypto_openssl.c:4997-5151`): every certificate in the file once; a file with none loads nothing.
 fn load_ca_file(path: &str) -> Result<Vec<Vec<u8>>, String> {
     let bytes =
         std::fs::read(path).map_err(|_| format!("Cannot open file '{path}': {NO_REASON}"))?;
@@ -356,8 +321,7 @@ fn load_ca_file(path: &str) -> Result<Vec<Vec<u8>>, String> {
     Ok(certs)
 }
 
-/// The first certificate in `path`, as `PEM_read_bio_X509` reads it.
-/// MIT `get_cert` (`plugins/preauth/pkinit/pkinit_crypto_openssl.c:1311-1345`): a file that does not open is its errno, one with no certificate `EIO`.
+// MIT `get_cert` (`plugins/preauth/pkinit/pkinit_crypto_openssl.c:1311-1345`): a file that does not open is its errno, one with no certificate `EIO`.
 fn read_cert(path: &str) -> Result<Vec<u8>, (i64, &'static str)> {
     let bytes = std::fs::read(path).map_err(|e| (errno(&e), NO_REASON))?;
     let text = String::from_utf8_lossy(&bytes);
@@ -380,15 +344,11 @@ fn block_cert(block: &PemBlock<'_>) -> Result<Vec<u8>, &'static str> {
 }
 
 enum KeyFault {
-    /// MIT's code and OpenSSL's reason the key does not read.
     Read(i64, &'static str),
-    /// A key MIT reads that this KDC cannot use.
     Unsupported,
 }
 
-/// The first private key in `path`, P-256 EC or RSA, as `PEM_read_bio_PrivateKey`
-/// finds it; an encrypted key cannot be read, as the KDC has no prompter.
-/// MIT `get_key` (`plugins/preauth/pkinit/pkinit_crypto_openssl.c:1406-1444`): the KDC's password callback fails, so an encrypted key is an error.
+// MIT `get_key` (`plugins/preauth/pkinit/pkinit_crypto_openssl.c:1406-1444`): the KDC's password callback fails, so an encrypted key is an error.
 fn read_key(path: &str) -> Result<IdentityKey, KeyFault> {
     let bytes =
         Zeroizing::new(std::fs::read(path).map_err(|e| KeyFault::Read(errno(&e), NO_REASON))?);
@@ -431,7 +391,6 @@ fn pkcs8_ec(der: &[u8]) -> Option<IdentityKey> {
     sec1_ec(key, Some(curve))
 }
 
-/// RFC 5915 ECPrivateKey: the scalar, on the curve it names, else the one PKCS#8 named.
 fn sec1_ec(der: &[u8], outer: Option<&[u8]>) -> Option<IdentityKey> {
     let (_, body, _) = take_tlv(der)?;
     let (_, _, rest) = take_tlv(body)?;
@@ -513,8 +472,6 @@ struct PemBlock<'a> {
     body: &'a str,
 }
 
-/// The PEM blocks of `text` in order, each with its label, whether an RFC 1421 header marks it
-/// encrypted, and its base64 text.
 fn pem_blocks(text: &str) -> Vec<PemBlock<'_>> {
     let mut out = Vec::new();
     let mut rest = text;
@@ -544,8 +501,6 @@ fn pem_blocks(text: &str) -> Vec<PemBlock<'_>> {
     out
 }
 
-/// The names in `dir` not starting with a dot, sorted.
-/// MIT `k5_dir_filenames` (`util/support/dir_filenames.c`): the directory's names, sorted; a directory that does not open is its errno.
 fn dir_names(dir: &str) -> Result<Vec<String>, IdentityError> {
     let entries =
         std::fs::read_dir(dir).map_err(|e| IdentityError::new(errno(&e), sys_text(&e)))?;
@@ -562,12 +517,10 @@ fn join(dir: &str, name: &str) -> String {
     Path::new(dir).join(name).to_string_lossy().into_owned()
 }
 
-/// The errno of an I/O error, `EIO` when it has none.
 fn errno(e: &std::io::Error) -> i64 {
     e.raw_os_error().map_or(EIO, i64::from)
 }
 
-/// `strerror` of an I/O error: its text without Rust's " (os error N)".
 fn sys_text(e: &std::io::Error) -> String {
     let text = e.to_string();
     match text.rfind(" (os error ") {

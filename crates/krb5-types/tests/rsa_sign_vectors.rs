@@ -1,5 +1,3 @@
-//! RSASSA-PKCS1-v1_5 signing with SHA-256 against Wycheproof's vectors and OpenSSL's signatures.
-
 use krb5_types::pkinit::RsaKey;
 
 fn hex(s: &str) -> Vec<u8> {

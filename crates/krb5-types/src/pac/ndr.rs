@@ -1,9 +1,3 @@
-//! MS-PAC / MS-RPCE Type-Serialization v1 NDR32 codec for
-//! `KERB_VALIDATION_INFO`.
-//!
-//! MIT `lib/krb5/krb/pac.c` does not parse this buffer; the codec is
-//! the Windows layout, not an MIT function.
-
 use super::{ExtraSid, GroupMembership, NDR_PTR_BASE, PacError, RpcSid, RpcUnicode};
 
 pub(super) struct NdrR<'a> {

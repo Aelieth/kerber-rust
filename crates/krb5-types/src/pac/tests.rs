@@ -15,7 +15,6 @@ fn u8_len(n: usize) -> u8 {
 #[test]
 fn zero_pac_ad_data_preserves_sibling_encoding() {
     let pac = vec![0x09, 0, 0, 0, 0, 0, 0, 0, 1, 2];
-    // SEQUENCE { INTEGER 1 with non-minimal length, OCTET STRING pac }
     let mut der = vec![0x30, 0];
     der.extend_from_slice(&[0x02, 0x81, 0x01, 0x01]);
     der.push(0x04);
@@ -31,21 +30,18 @@ fn zero_pac_ad_data_preserves_sibling_encoding() {
 #[test]
 fn zero_pac_ad_data_walks_ad_if_relevant() {
     let pac = vec![0x09, 0, 0, 0, 0, 0, 0, 0, 3, 4];
-    // AD-WIN2K-PAC inner SEQUENCE { INTEGER 128, OCTET STRING pac }
     let mut inner = vec![0x30, 0];
     inner.extend_from_slice(&[0x02, 0x02, 0x00, 0x80]);
     inner.push(0x04);
     inner.push(u8_len(pac.len()));
     inner.extend_from_slice(&pac);
     inner[1] = u8_len(inner.len() - 2);
-    // AD-IF-RELEVANT SEQUENCE { INTEGER 1, OCTET STRING inner }
     let mut outer = vec![0x30, 0];
     outer.extend_from_slice(&[0x02, 0x01, 0x01]);
     outer.push(0x04);
     outer.push(u8_len(inner.len()));
     outer.extend_from_slice(&inner);
     outer[1] = u8_len(outer.len() - 2);
-    // APPLICATION 3 wrapping SEQUENCE
     let mut app = vec![0x63, 0];
     app.extend_from_slice(&outer);
     app[1] = u8_len(app.len() - 2);
