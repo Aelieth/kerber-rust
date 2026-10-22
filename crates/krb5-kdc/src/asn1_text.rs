@@ -1,5 +1,4 @@
-//! The ASN.1 side that the KDC's DER readers share: MIT's error texts, MIT's `get_tag` reader,
-//! and the text MIT's decoder gives a failed decode of a PA-OTP-ENC-REQUEST or a PA-ENC-TS-ENC.
+//! The ASN.1 side that the KDC's DER readers share: MIT's error texts, MIT's `get_tag` reader, and the text MIT's decoder gives a failed decode of a PA-OTP-ENC-REQUEST or a PA-ENC-TS-ENC.
 
 /// MIT `ASN1_MISSING_FIELD` (`lib/krb5/error_tables/asn1_err.et:3-3`): its text.
 pub(crate) const ASN1_MISSING_FIELD: &str = "ASN.1 structure is missing a required field";
@@ -125,18 +124,12 @@ pub(crate) fn get_tag(asn1: &[u8]) -> Result<Tlv<'_>, &'static str> {
     })
 }
 
-/// The text MIT's decoder gives a PA-OTP-ENC-REQUEST or a PA-ENC-TS-ENC that does not decode from
-/// `der`. `first_field_explicit` is true for PA-ENC-TS-ENC, whose `[0]` is explicit, and false for
-/// PA-OTP-ENC-REQUEST, whose `[0]` is implicit.
-///
-/// A bad element is the tag reader's own text. The outer element must be a universal constructed
-/// SEQUENCE, or the text is the identifier's. An empty SEQUENCE, or a first element that is not
-/// the `[0]` field, is a missing field. A `[0]` that is there fails inside the field: an overrun.
+/// The text MIT's decoder gives a PA-OTP-ENC-REQUEST or a PA-ENC-TS-ENC that does not decode from `der`. `first_field_explicit` is true for PA-ENC-TS-ENC, whose `[0]` is explicit, and false for PA-OTP-ENC-REQUEST, whose `[0]` is implicit.
+/// A bad element is the tag reader's own text. The outer element must be a universal constructed SEQUENCE, or the text is the identifier's. An empty SEQUENCE, or a first element that is not the `[0]` field, is a missing field. A `[0]` that is there fails inside the field: an overrun.
 /// MIT `k5_asn1_full_decode` (`lib/krb5/asn.1/asn1_encode.c:1582-1583`): a top element whose tag is not the type's is an identifier error.
 /// MIT `check_atype_tag` (`lib/krb5/asn.1/asn1_encode.c:1049-1052`): a SEQUENCE is a universal constructed element with tag 16.
 /// MIT `decode_sequence` (`lib/krb5/asn.1/asn1_encode.c:1411-1412`): an empty SEQUENCE has no field to read.
 /// MIT `omit_atype` (`lib/krb5/asn.1/asn1_encode.c:1375-1375`): a field that is not optional and is not there is a missing field.
-/// MIT `check_atype_tag` (`lib/krb5/asn.1/asn1_encode.c:1099-1104`): an implicit tag's constructed bit is not checked, and an explicit tag's is.
 pub(crate) fn decode_failure_text(der: &[u8], first_field_explicit: bool) -> &'static str {
     let outer = match get_tag(der) {
         Ok(t) => t,
@@ -160,12 +153,8 @@ pub(crate) fn decode_failure_text(der: &[u8], first_field_explicit: bool) -> &'s
     }
 }
 
-/// The text MIT's decoder gives a PA-SPAKE that does not decode from `der`. A message whose outer
-/// element is no alternative of the choice decodes as an unknown one, which is no ASN.1 error here.
-///
-/// A bad element is the tag reader's own text. An alternative with nothing inside it is an
-/// overrun; one whose content is not a SEQUENCE is an identifier error, and an empty SEQUENCE, or
-/// any field lacking inside one, a missing field.
+/// The text MIT's decoder gives a PA-SPAKE that does not decode from `der`. A message whose outer element is no alternative of the choice decodes as an unknown one, which is no ASN.1 error here.
+/// A bad element is the tag reader's own text. An alternative with nothing inside it is an overrun; one whose content is not a SEQUENCE is an identifier error, and an empty SEQUENCE, or any field lacking inside one, a missing field.
 /// MIT `decode_cntype` (`lib/krb5/asn.1/asn1_encode.c:1277-1293`): a choice reads the element's tag, and the alternative it names reads what is inside.
 /// MIT `get_tag` (`lib/krb5/asn.1/asn1_encode.c:368-369`): an alternative with an empty body is an overrun.
 /// MIT `decode_sequence` (`lib/krb5/asn.1/asn1_encode.c:1411-1412`): an empty SEQUENCE has no field to read.
@@ -188,8 +177,7 @@ pub(crate) fn pa_spake_failure_text(der: &[u8]) -> &'static str {
 mod tests {
     use super::*;
 
-    /// The four inputs of the settle's cell X1 (a PA-OTP-ENC-REQUEST's plaintext, mutated), and
-    /// the empty plaintext, each with the text MIT's log gave for it.
+    /// The four inputs of the settle's cell X1 (a PA-OTP-ENC-REQUEST's plaintext, mutated), and the empty plaintext, each with the text MIT's log gave for it.
     #[test]
     fn decode_failure_text_matches_the_x1_cells() {
         // X1 `garbage`: deadbeef01020304 is an overrun.
@@ -230,8 +218,7 @@ mod tests {
         );
     }
 
-    /// The stale-nonce cell: an implicit `[0]` (primitive) is the field of a PA-OTP-ENC-REQUEST,
-    /// and the same bytes read as a PA-ENC-TS-ENC are missing their explicit (constructed) `[0]`.
+    /// The stale-nonce cell: an implicit `[0]` (primitive) is the field of a PA-OTP-ENC-REQUEST, and the same bytes read as a PA-ENC-TS-ENC are missing their explicit (constructed) `[0]`.
     #[test]
     fn implicit_and_explicit_zero_fields_differ() {
         let mut stale = vec![0x30, 0x26, 0x80, 0x24];
