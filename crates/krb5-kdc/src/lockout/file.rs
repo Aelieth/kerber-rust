@@ -1,8 +1,5 @@
-//! `principal.lockout`: the database's lockout attributes beside it, MIT klmdb's lockout split for a dump store. `kdb5_util create` and `load` make it; the KDC updates a record in place under the database's exclusive lock, with no temporary file, rename or sync, and never makes the file; every reader merges it over the database's own values, which stay the fallback for a principal it has no record of. A tool that writes the whole file writes a new one and renames it over the old, as a database save does, so a rewrite cut short leaves the old file whole. No open follows a symlink, so a link planted as the file is never written through.
-//!
-//! The file is text: a header line, then one line per principal holding its three attributes as ten-digit fields, a CRC-32 of them and its name, and its name, so a record keeps its offset and an update rewrites only its digits and checksum, in one write. A deleted principal's line is marked with `#` and dropped when the file is next rewritten. A line that does not parse or whose checksum fails, an update torn by a crash included, is no record: that principal's values are the database's again, the loss MIT accepts for lockout records it never syncs, and never a value no write made.
+//! The KDC updates a record in place and does not create the file.
 // MIT: `open_lmdb_env` (plugins/kdb/lmdb/kdb_lmdb.c:265-268)
-//! the lockout environment is never synced, durability not being worth it.
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
@@ -18,7 +15,7 @@ use super::{Lockout, LockoutUpdate};
 use crate::dblock::{DbLock, DbLockMode, suffixed};
 use crate::store::{Principal, PrincipalStore};
 
-/// The side file's suffix: `principal.lockout`, which Fedora's `file_contexts` labels as it labels the database (`principal.*`), never as a lock file (`principal.*.ok`).
+/// .lockout is labeled with the database, not as a lock file.
 pub const SUFFIX_LOCKOUT: &str = ".lockout";
 
 const HEADER: &[u8] = b"kerber-rust lockout 1\n";
@@ -26,6 +23,7 @@ const FIELD: usize = 10;
 const VALUES: usize = 3 * FIELD + 2;
 const SUM: usize = 8;
 const HEAD: usize = VALUES + 1 + SUM;
+/// A deleted principal's line, dropped when the file is rewritten.
 const DELETED: u8 = b'#';
 
 const CRC_TABLE: [u32; 256] = crc_table();
@@ -112,6 +110,7 @@ fn render(records: &[(String, Lockout)]) -> Vec<u8> {
     text
 }
 
+/// A bad checksum is no record; an update in place is not synced.
 fn parse_line(line: &[u8]) -> Option<(Lockout, &str)> {
     let field = |i: usize| -> Option<u32> {
         let start = i * (FIELD + 1);
@@ -211,7 +210,6 @@ fn read_full_at(file: &File, buf: &mut [u8], at: u64) -> io::Result<usize> {
     Ok(done)
 }
 
-/// Open the regular file at `path`, read-write or read-only: never through a symlink (`O_NOFOLLOW`, so a planted one fails the open with `ELOOP`), and never waiting on a FIFO.
 fn open_file(path: &Path, write: bool) -> io::Result<File> {
     let file = OpenOptions::new()
         .read(true)
@@ -364,7 +362,7 @@ impl SideFile {
         Ok(())
     }
 
-    /// Replace the file with one holding `records` alone: a new file written beside it and renamed over it, keeping its owner, mode and SELinux context, as a database save does ([`krb5_protocol::write_secret_file`]); the old file stays whole until the new one is in place. Only a tool rewrites; the KDC never does.
+    /// A whole-file write is renamed over the old one, so a short write leaves it.
     fn rewrite(&mut self, records: &[(String, Lockout)]) -> io::Result<()> {
         krb5_protocol::write_secret_file(&self.path, &render(records))
             .map_err(|e| named(&self.path, &e))?;
@@ -383,20 +381,16 @@ impl SideFile {
     }
 }
 
-/// Make the side file of `db` holding `records`: a new 0600 file of the writer's, written beside its path and renamed onto it, with the SELinux context a new file at its path takes ([`krb5_protocol::write_fresh_secret_file`]).
 fn make(db: &Path, records: &[(String, Lockout)]) -> io::Result<()> {
     let path = lockout_path(db);
     krb5_protocol::write_fresh_secret_file(&path, &render(records)).map_err(|e| named(&path, &e))
 }
 
-/// Make the side file of `db` holding `records` beside a database that stays where it is (a `load -update`, a save that makes the database): a new file with the database's owner, group and permission bits and the SELinux context a new file at its path takes ([`krb5_protocol::write_secret_file_like`]), as install.md's upgrade step makes it by hand, so a root `load -update` of a realm a service user owns leaves that user's saves writable.
 fn make_beside(db: &Path, records: &[(String, Lockout)]) -> io::Result<()> {
     let path = lockout_path(db);
     krb5_protocol::write_secret_file_like(&path, db, &render(records)).map_err(|e| named(&path, &e))
 }
 
-/// The side file of `db` for a writer, opened read-write; `None` when there is none.
-/// The error of the open, the file named in its text: one the writer may only read is `PermissionDenied`, a symlink `ELOOP`.
 fn open_for_writing(db: &Path) -> io::Result<Option<SideFile>> {
     let path = lockout_path(db);
     match SideFile::open(&path).map_err(|e| named(&path, &e))? {
@@ -410,7 +404,6 @@ fn open_for_writing(db: &Path) -> io::Result<Option<SideFile>> {
 }
 
 // MIT: `fetch_lockout` (plugins/kdb/lmdb/kdb_lmdb.c:329-344)
-/// a reader takes the lockout record when there is one and ignores a failure to read it.
 #[must_use]
 pub fn lockout_records(db: &Path) -> HashMap<String, Lockout> {
     match SideFile::open_read(&lockout_path(db)) {
@@ -419,9 +412,7 @@ pub fn lockout_records(db: &Path) -> HashMap<String, Lockout> {
     }
 }
 
-/// Give each principal of `store` its record in `db`'s side file, when it has one: what a read of the database gives every reader. Read it holding the database's lock.
 // MIT: `klmdb_iterate` (plugins/kdb/lmdb/kdb_lmdb.c:841-888)
-/// every entry read takes its lockout record.
 pub fn merge_lockout_file(store: &mut PrincipalStore, db: &Path) {
     let records = lockout_records(db);
     if !records.is_empty() {
@@ -429,7 +420,6 @@ pub fn merge_lockout_file(store: &mut PrincipalStore, db: &Path) {
     }
 }
 
-/// The records a load or a create writes: each principal's attributes as `store` holds them.
 pub(crate) fn store_records(store: &PrincipalStore) -> Vec<(String, Lockout)> {
     let mut out: Vec<(String, Lockout)> = store
         .debug_principals()
@@ -439,11 +429,9 @@ pub(crate) fn store_records(store: &PrincipalStore) -> Vec<(String, Lockout)> {
     out
 }
 
-/// After a full load or a create, holding the database's exclusive lock: `records` become the side file of `db`, made when it is not there; with `merge`, a principal it already has a record of keeps that record, as an iprop load keeps a replica's own. A principal the load left out loses its record.
 // MIT: `klmdb_create` (plugins/kdb/lmdb/kdb_lmdb.c:575-661)
-/// a create or load makes the lockout environment when there is none and does not empty it.
 // MIT: `klmdb_put_principal` (plugins/kdb/lmdb/kdb_lmdb.c:781-809)
-/// each loaded entry's lockout attributes are written, kept under `merge_nra` when a record exists.
+/// With merge, a record already there is kept, as an iprop load keeps the replica's own.
 pub(crate) fn write_loaded(
     db: &Path,
     records: &[(String, Lockout)],
@@ -466,7 +454,6 @@ pub(crate) fn write_loaded(
     side.rewrite(&content)
 }
 
-/// Make `db`'s side file when it is not there, holding the database's exclusive lock, owned and moded as the database ([`make_beside`]): a load whose dump has no principal record.
 pub(crate) fn ensure(db: &Path) -> io::Result<()> {
     match open_for_writing(db)? {
         Some(_) => Ok(()),
@@ -474,9 +461,7 @@ pub(crate) fn ensure(db: &Path) -> io::Result<()> {
     }
 }
 
-/// After a change written to the database `db` holding its exclusive lock, with the store read again under that lock: bring the side file in line with `store`. A principal whose attributes the change set (an unlock, a key change, a load's update) gets them as its record, a new one a record, a deleted one's record is marked, a renamed one's moves with it; a file with more marked lines than records is rewritten. With `make_missing` a missing side file is made, owned and moded as the database ([`make_beside`]); without it nothing is made. One that is no side file is left as it is.
 // MIT: `klmdb_delete_principal` (plugins/kdb/lmdb/kdb_lmdb.c:819-838)
-/// a delete removes the lockout record too.
 pub(crate) fn reconcile_ids(store: &PrincipalStore, db: &Path, ids: &[String]) -> io::Result<()> {
     let Some(mut side) = open_for_writing(db)? else {
         return Ok(());
@@ -539,7 +524,6 @@ pub(crate) fn reconcile(store: &PrincipalStore, db: &Path, make_missing: bool) -
     Ok(())
 }
 
-/// Whether a writer may change `db`'s side file: there is none, or it is a regular file that opens read-write. A symlink there is refused (`ELOOP`), never followed.
 pub(crate) fn check_writable(db: &Path) -> io::Result<()> {
     let path = lockout_path(db);
     match open_file(&path, true) {
@@ -613,7 +597,6 @@ impl LockoutState {
         self.inner.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// `p`'s lockout attributes now: its record in the side file of `db`, opened and read holding `lock` shared, else what the store read; while this process has no side file it may write, what it records for `p` in memory comes first. Once it has one, what it kept in memory for `p` is dropped, so an update it could not write is lost, as MIT's KDC loses a lockout write that fails.
     pub(crate) fn lookup(
         &self,
         db: Option<&Path>,
@@ -642,7 +625,6 @@ impl LockoutState {
             .unwrap_or_else(|| Lockout::of(p))
     }
 
-    /// Record `update` for `p` at `stamp`: in its side-file record, holding `lock` exclusively, starting from the record as it is then (else from `p`'s attributes), which drops what was kept in memory for `p`; without a side file this process may write, or when the write fails, in memory, which is said once for each cause in the log. The database's lock is taken before this state's mutex, so lookups go on while an update waits for the lock.
     pub(crate) fn update(
         &self,
         db: Option<&Path>,
@@ -704,14 +686,12 @@ impl LockoutState {
         inner.overlay.insert(id, update.apply(base, stamp));
     }
 
-    /// Zero the failed authentication count kept in memory for `id`, when one is kept.
     pub(crate) fn overlay_zero(&self, id: &str) {
         if let Some(l) = self.inner().overlay.get_mut(id) {
             l.fail_auth_count = 0;
         }
     }
 
-    /// The attributes kept in memory for `id`, if any.
     pub(crate) fn overlay_get(&self, id: &str) -> Option<Lockout> {
         self.inner().overlay.get(id).copied()
     }
