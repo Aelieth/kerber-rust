@@ -273,7 +273,7 @@ fn the_module_loads_as_mit_decides() {
 
 #[test]
 fn a_module_that_did_not_load_offers_nothing_and_skips_pa_spake() {
-    // MIT: a challenge group that is not permitted fails the module's init, so the KDC neither
+    // A challenge group that is not permitted fails the module's init, so the KDC neither
     // offers SPAKE nor answers a PA-SPAKE.
     let store = store_with(&[SpakeGroup::P256], Some("edwards25519"));
     let req = as_req(user(), TEST_REALM, 7140, None).unwrap();

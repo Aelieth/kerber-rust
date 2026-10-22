@@ -10,7 +10,8 @@ import tempfile
 from ..common import _scratch_root
 from ..golden import check_golden_dump_unique_keys
 from ..hygiene import (
-    _blank_rust, _cfg_test_ranges, check_autotests_registered, check_isolate_test_krb5,
+    _blank_rust, _cfg_test_ranges, _char_totals, _mit_cite_bad, _mit_cite_ok,
+    check_autotests_registered, check_isolate_test_krb5, check_mit_cites,
     check_no_test_temp_dir, check_python_compiles,
 )
 from .common import _must_die, _must_die_msg
@@ -249,3 +250,24 @@ def _self_test_hygiene() -> None:
     # Every scripts/**/*.py compiles.
     check_python_compiles({"a.py": "x = 1\n"})
     _must_die_msg("1 Python file(s) do not compile", check_python_compiles, {"a.py": "x = 1\n", "b.py": "def f(:\n"})
+    cite = "// MIT: `krb5_db_get_principal` (lib/kdb/kdb5.c:2010-2040)"
+    assert _mit_cite_ok(cite)
+    assert _mit_cite_ok("// MIT: `create_history_entry` + `add_to_history` (lib/kadm5/srv/svr_principal.c:1270-1330)")
+    assert _mit_cite_bad("// MIT: column-0 include is a directive")
+    assert _mit_cite_bad(cite + " and a why")
+    assert _mit_cite_bad("// MIT: `sym` (" + "x" * 90 + ".c)")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        src = root / "crates" / "demo" / "src"
+        src.mkdir(parents=True)
+        (src / "lib.rs").write_text(
+            "    let x = 1;\n" + cite + "\n/// why stays\n",
+            encoding="utf-8",
+        )
+        tot, _per, bad = _char_totals(root)
+        assert bad == [], bad
+        assert tot["code"] == len("let x = 1;")
+        assert tot["comment"] == len("/// why stays")
+        assert tot["exempt"] == len(cite)
+        (src / "lib.rs").write_text("// MIT: not a cite\n", encoding="utf-8")
+        _must_die(check_mit_cites, root)

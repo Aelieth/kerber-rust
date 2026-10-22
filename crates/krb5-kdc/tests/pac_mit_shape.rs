@@ -329,7 +329,7 @@ fn cross_realm_referral_and_foreign_ticket_carry_mits_pac() {
         .unwrap(),
     )
     .unwrap();
-    // MIT: the inter-realm key signs the server checksum, the local krbtgt key the KDC checksum.
+    // The inter-realm key signs the server checksum, the local krbtgt key the KDC checksum.
     let (_, ref_pac) = checked_pac(&referral.rep.0.ticket, &ir, &krbtgt_key(&local), false);
     assert_eq!(kinds(&ref_pac), TGT);
     let svc = krb5_kdc::issue_tgs(

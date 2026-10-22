@@ -923,7 +923,7 @@ fn final_hop(ad_identity: bool, logon: HeaderLogon) -> Result<Pac, Error> {
 
 #[test]
 fn s4u2self_final_hop_carries_the_foreign_logon_info() {
-    // MIT: on this hop `issue_pac` has no client entry (the user is not in C), so a KDB with AD
+    // On this hop `issue_pac` has no client entry (the user is not in C), so a KDB with AD
     // data can only carry the user's realm's identity; it never mints one from C's store.
     let foreign = RpcSid::nt_domain(11, 12, 13);
     let pac = final_hop(true, HeaderLogon::Foreign(foreign.clone(), 1234)).expect("final hop");

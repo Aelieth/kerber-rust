@@ -623,25 +623,157 @@ def _ratio_totals(root: pathlib.Path) -> tuple[dict[str, int], dict[str, dict[st
     return tot, per
 
 
-def check_form_ratios(root: pathlib.Path | None = None) -> None:
-    """Print the product figures and one line per crate. This does not fail."""
+# Phil 10-22: 3% is comment characters over product code characters. A cite is exempt
+# only in this form, on its own line, at most 100 columns. RF-4 is what fails the share.
+_MIT_CITE_RE = re.compile(
+    r"^\s*// MIT: `[A-Za-z_]\w*`( \+ `[A-Za-z_]\w*`)* \([\w./-]+(:\d+(-\d+)?)?\)$"
+)
+_FIAT_REL = "crates/krb5-brainpool/src/fiat/"
+
+
+def _mit_cite_ok(line: str) -> bool:
+    return _MIT_CITE_RE.match(line) is not None and len(line) <= 100
+
+
+def _mit_cite_bad(line: str) -> bool:
+    if not line.lstrip().startswith("// MIT:"):
+        return False
+    return not _mit_cite_ok(line)
+
+
+def _code_comment_split(line: str) -> tuple[str, str]:
+    """Code, and a trailing `//` comment that is outside a string."""
+    state: dict = {"str": False, "raw": None, "blk": 0}
+    i, n = 0, len(line)
+    while i < n:
+        c = line[i]
+        if state["blk"]:
+            if line.startswith("*/", i):
+                state["blk"] -= 1
+                i += 2
+                continue
+            if line.startswith("/*", i):
+                state["blk"] += 1
+                i += 2
+                continue
+            i += 1
+            continue
+        if state["raw"] is not None:
+            end = '"' + "#" * state["raw"]
+            j = line.find(end, i)
+            if j < 0:
+                return line, ""
+            i = j + len(end)
+            state["raw"] = None
+            continue
+        if state["str"]:
+            if c == "\\":
+                i += 2
+                continue
+            if c == '"':
+                state["str"] = False
+            i += 1
+            continue
+        if line.startswith("//", i):
+            return line[:i], line[i:]
+        if line.startswith("/*", i):
+            state["blk"] += 1
+            i += 2
+            continue
+        raw = re.match(r'b?r(#*)"', line[i:])
+        if raw and (i == 0 or not (line[i - 1].isalnum() or line[i - 1] == "_")):
+            state["raw"] = len(raw.group(1))
+            i += raw.end()
+            continue
+        if c == '"':
+            state["str"] = True
+            i += 1
+            continue
+        if c == "'":
+            quoted = re.match(r"'(\\.[^']*|[^'\\])'", line[i:])
+            i += quoted.end() if quoted else 1
+            continue
+        i += 1
+    return line, ""
+
+
+def _char_totals(root: pathlib.Path) -> tuple[dict[str, int], dict[str, dict[str, int]], list[str]]:
+    """Product code and comment characters per crate. Exempt cites are not comments.
+
+    Code characters are the line with its indentation and any trailing `//` comment removed.
+    An inline `/* */` on a code line stays in the code count.
+    Comment characters are the comment text including its marker, without the indentation.
+    `crates/krb5-brainpool/src/fiat/` is skipped. Test lines use the same marking as the line ratio.
+    """
+    tot = {"code": 0, "comment": 0, "exempt": 0}
+    per: dict[str, dict[str, int]] = {}
+    bad: list[str] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in ("target", ".git", "vendor")]
+        for name in filenames:
+            if not name.endswith(".rs"):
+                continue
+            path = pathlib.Path(dirpath) / name
+            rel = path.relative_to(root).as_posix()
+            if rel.startswith(_FIAT_REL):
+                continue
+            text = path.read_text(encoding="utf-8", errors="replace")
+            lines, kinds = _ratio_scan(text)
+            mark = [True] * len(lines) if _ratio_test_path(rel) else _ratio_test_lines(lines)
+            key = rel.split("/")[1] if rel.startswith("crates/") else rel.split("/")[0]
+            row = per.setdefault(key, {"code": 0, "comment": 0, "exempt": 0})
+            for i, (line, kind, is_test) in enumerate(zip(lines, kinds, mark), 1):
+                if _mit_cite_bad(line):
+                    bad.append(f"{rel}:{i}")
+                if is_test or kind == "blank":
+                    continue
+                if kind == "comment":
+                    if _mit_cite_ok(line):
+                        tot["exempt"] += len(line.lstrip())
+                        row["exempt"] += len(line.lstrip())
+                    else:
+                        n = len(line.lstrip())
+                        tot["comment"] += n
+                        row["comment"] += n
+                    continue
+                code, comment = _code_comment_split(line)
+                ncode = len(code.strip())
+                tot["code"] += ncode
+                row["code"] += ncode
+                if comment:
+                    tot["comment"] += len(comment)
+                    row["comment"] += len(comment)
+    return tot, per, bad
+
+
+def check_mit_cites(root: pathlib.Path | None = None) -> None:
+    """A `// MIT:` line is the cite form, on its own line, at most 100 columns, or it fails."""
     base = ROOT if root is None else root
-    tot, per = _ratio_totals(base)
-    code, comment = tot["code"], tot["comment"]
-    product_code, product_comment = code - tot["test_code"], comment - tot["test_comment"]
+    _tot, _per, bad = _char_totals(base)
+    if bad:
+        _die(
+            f"{len(bad)} MIT cite line(s) are not the one-line cite form within 100 columns: "
+            + "; ".join(bad[:8])
+        )
+
+
+def check_form_ratios(root: pathlib.Path | None = None) -> None:
+    """Print product comment characters over product code characters. This does not fail the share."""
+    base = ROOT if root is None else root
+    tot, per, _bad = _char_totals(base)
 
     def share(num: int, den: int) -> str:
         return f"{num / den:.1%}" if den else "0.0%"
 
     print(
-        f"form: product code {product_code}, comments {product_comment}, "
-        f"comment share {share(product_comment, product_code + product_comment)}, "
-        f"test code {tot['test_code']} of {code} ({share(tot['test_code'], code)})"
+        f"form: product code chars {tot['code']}, comment chars {tot['comment']}, "
+        f"comment share {share(tot['comment'], tot['code'])}, "
+        f"cite chars exempt {tot['exempt']}"
     )
     for name in sorted(k for k in per if (base / "crates" / k).is_dir()):
         row = per[name]
         print(
-            f"form: {name} code {row['code']}, comments {row['comment']}, "
-            f"comment share {share(row['comment'], row['code'] + row['comment'])}, "
-            f"test code {row['test_code']} ({share(row['test_code'], row['code'])})"
+            f"form: {name} code chars {row['code']}, comment chars {row['comment']}, "
+            f"comment share {share(row['comment'], row['code'])}, "
+            f"cite chars exempt {row['exempt']}"
         )

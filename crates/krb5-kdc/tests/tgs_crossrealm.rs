@@ -1535,7 +1535,7 @@ fn interrealm_issue_key_is_not_the_peer_accept_key() {
         [PAC_CLIENT_INFO, PAC_SERVER_CHECKSUM, PAC_PRIVSVR_CHECKSUM]
     );
     let der = ticket_checksum_der(&part).expect("der");
-    // MIT: the server checksum is under the inter-realm key and the KDC checksum under the
+    // The server checksum is under the inter-realm key and the KDC checksum under the
     // local krbtgt key.
     let local_tgt = store.krbtgt().unwrap().best_key().unwrap();
     verify_pac_signatures(&pac, &issue_key, Some(&local_tgt.key), Some(&der), false)
