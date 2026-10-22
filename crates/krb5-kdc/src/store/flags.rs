@@ -1,6 +1,4 @@
-//! KDB principal attribute bits (`kdb.h` `KRB5_KDB_*`) and the dump
-//! `KDB_V1_BASE_LENGTH`. Values only; the mask checks live with the
-//! principal and policy writers.
+//! KDB principal attribute bits (`kdb.h` `KRB5_KDB_*`) and the dump `KDB_V1_BASE_LENGTH`. Values only; the mask checks live with the principal and policy writers.
 
 /// MIT `KRB5_KDB_DISALLOW_POSTDATED`.
 pub const KDB_DISALLOW_POSTDATED: u32 = 0x0000_0001;
