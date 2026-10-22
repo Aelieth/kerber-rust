@@ -19,9 +19,9 @@
 #          failure: Client name mismatch" in the KDC log (75);
 #   PK.ca: client2's alice-unknownca.pem, issued by unknown-cacert.pem, which client2 trusts and the KDC does not:
 #          "Failed to verify received certificate (depth 0): unable to get local issuer certificate" (70);
-#   PK.refuse: with alice's password on stdin, a refusal that carries e-data goes on to the password and a TGT
-#          (alice-unknownca's 70, and the <SUBJECT>( rule's 24 in PK.dbmatch); alice-wrongsan's 75 carries none and
-#          ends with rc 1; each refusal's code as the kinit's trace gives it;
+#   PK.refuse: with alice's password on stdin, the KDC's refusal of a PK-AS-REQ ends kinit (rc 1), as MIT's
+#          disable_fallback does once the request is made: alice-unknownca's 70, alice-wrongsan's 75, and the
+#          <SUBJECT>( rule's 24 in PK.dbmatch, with MIT's message; each refusal's code as the kinit's trace gives it;
 #   PK.rsacert: client2's alice-rsa.pem (an RSA 2048 key, issued by rsa-cacert.pem, which kdc's pkinit_anchors and
 #          client2 both trust) gets a TGT, from MIT's kinit and, in the rust leg, ours (it signs with the RSA key);
 #   PK.dbmatch: alice's pkinit_cert_match rule decides her alice.pem kinit: "<KU>digitalSignature" and "<SAN>^alice@"
@@ -35,8 +35,8 @@
 #          stdin) and gets a TGT: each request makes its armor afresh, so the trace has MIT's 4 "FAST armor ccache"
 #          lines (the first request 1, kadmin/changepw's 2, the final one 1), ours as many as MIT's;
 #   PK.anchors: a profile whose second pkinit_anchors value is the KDC's CA: alice's certificate kinit gets a TGT;
-#          an anchors file with no certificate: the reply does not verify (the trace's line and module 17's 70), and
-#          the password is taken (stdin), which cannot open a PKINIT reply;
+#          an anchors file with no certificate: no anchor loads, so no PK-AS-REQ is made (MIT's pkinit_as_req_create
+#          fails before disable_fallback), and alice's password on stdin gets a TGT;
 #   PK.kpasswd: with pkinit_identities and pkinit_anchors in a profile of its own, alice's kpasswd gets its
 #          kadmin/changepw ticket by pkinit (the trace's module line) and stops at the new password (stdin empty);
 #          with alice's TGT in the default ccache, each kpasswd arms its request with it as MIT's does: the trace
@@ -67,8 +67,10 @@
 #          her kinit gets a TGT;
 #   PK.dh: the KDC's realm has pkinit_dh_min_bits = 4096 and client2's kinit 2048 (~/pk/dh.conf first): the KDC
 #          refuses its 2048-bit DH with 65 and its groups, and kinit tries again with P-384 and gets a TGT;
-#   PK.dh1024: client2's kinit at pkinit_dh_min_bits = 1024 (~/pk/dh1024.conf first): the KDC's realm at 1024
-#          takes its 1024-bit DH for a TGT; at the default 2048 it is 65, and kinit tries again with P-256;
+#   PK.dh1024: client2's kinit at pkinit_dh_min_bits = 1024 (~/pk/dh1024.conf first): MIT's kinit fails to make its
+#          1024-bit request on client2 and, with no password, ends with rc 1 (its pkinit module line, any KDC error
+#          and the KDC's lines recorded); ours sends it: the KDC's realm at 1024 takes its 1024-bit DH for a TGT; at
+#          the default 2048 it is 65, and ours tries again with P-256;
 #   PK.kdccert: made on kdc by scripts/lib/pkinit-kdc-certs.sh, a CA, alice's certificate and four KDC identities,
 #          the CA and alice's piped to client2; kinit checks the KDC's certificate as MIT's verify_kdc_san and
 #          verify_kdc_eku do: an id-pkinit-san naming another realm's krbtgt is 76 (KDC name mismatch), with or
@@ -122,7 +124,7 @@ pkkdc() {
 # given) and client2's anchors, stdin empty (no password to fall back on), then the ticket cache listed.
 certkinit() {
     local id=${4:-alice}
-    check "$1" "$3" run client2 "mkdir -p ~/pk && kdestroy -c FILE:\$HOME/pk/a.cc 2> /dev/null; $2 -X X509_anchors=FILE:$C/cacert.pem -X X509_user_identity=FILE:$C/$id.pem,$C/$id.key -c FILE:\$HOME/pk/a.cc alice < /dev/null 2>&1; echo \"kinit rc=\$?\"; klist -c FILE:\$HOME/pk/a.cc 2>&1 | grep -E '^Default principal|krbtgt/'"
+    check "$1" "$3" run client2 "mkdir -p ~/pk && kdestroy -c FILE:\$HOME/pk/a.cc 2> /dev/null; $2 -X X509_anchors=FILE:$C/cacert.pem -X X509_user_identity=FILE:$C/$id.pem,$C/$id.key -c FILE:\$HOME/pk/a.cc alice < /dev/null 2>&1; echo \"kinit rc=\$?\"; klist -c FILE:\$HOME/pk/a.cc 2>&1 | grep -E '^Default principal|krbtgt/'; true"
 }
 # pwkinit <check> <kinit> <identity> <ERE for the rc line> <code>: <identity>'s certificate kinit, trusting client2's two
 # CAs, alice's password on stdin; the KDC's refusal in the trace is <code> (the com_err code, from -1765328384).
@@ -143,7 +145,7 @@ check l6.copy rc host "$LABQ ssh kdc -- 'sudo tar -C $D/client2 -cf - .' | $LABQ
 KP=
 [ "$LEG" = mit ] && KP='krb5-pkinit, '
 check l6.kdc "^kdc: ${KP}CA and KDC P-256, RSA KDC identity\$" run kdc "${KP:+rpm -q krb5-pkinit > /dev/null && }for f in cacert.pem kdc.pem kdc-rsa.pem rsa-cacert.pem; do sudo openssl x509 -in $D/\$f -noout -subject || exit 1; done && sudo test -r $D/kdc.key && sudo test -r $D/kdc-rsa.key && sudo openssl x509 -in $D/kdc.pem -noout -text | grep -qE 'ASN1 OID: prime256v1' && sudo openssl x509 -in $D/kdc-rsa.pem -noout -text | grep -qE 'Public Key Algorithm: rsaEncryption' && echo 'kdc: ${KP}CA and KDC P-256, RSA KDC identity'"
-check l6.client2 '^client2: krb5-pkinit, alice P-256$' run client2 "rpm -q krb5-pkinit > /dev/null && for f in alice alice-wrongsan alice-unknownca unknown-cacert alice-rsa rsa-cacert; do openssl x509 -in $C/\$f.pem -noout -subject || exit 1; done && test -r $C/alice.key && test -r $C/alice-wrongsan.key && test -r $C/alice-unknownca.key && test -r $C/alice-rsa.key && openssl x509 -in $C/alice.pem -noout -text | grep -qE 'ASN1 OID: prime256v1' && echo 'client2: krb5-pkinit, alice P-256'"
+check l6.client2 '^client2: krb5-pkinit, alice P-256$' run client2 "rpm -q krb5-pkinit > /dev/null && for f in cacert alice alice-wrongsan alice-unknownca unknown-cacert alice-rsa rsa-cacert alice-noeku; do openssl x509 -in $C/\$f.pem -noout -subject || exit 1; done && test -r $C/alice.key && test -r $C/alice-wrongsan.key && test -r $C/alice-unknownca.key && test -r $C/alice-rsa.key && test -r $C/alice-noeku.key && openssl x509 -in $C/alice.pem -noout -text | grep -qE 'ASN1 OID: prime256v1' && echo 'client2: krb5-pkinit, alice P-256'"
 OURS=
 OURSPW=
 if [ "$LEG" = rust ]; then
@@ -221,12 +223,12 @@ for k in mit ${OURS:+ours}; do
     checklast "PK.ca.$k.line" 'preauth \(pkinit\) verify failure: Failed to verify received certificate \(depth 0\): unable to get local issuer certificate$'
 done
 
-section "PK.refuse a refused certificate with alice's password: 70 goes on to the password, 75 stops (MIT and ours)"
+section "PK.refuse a refused certificate with alice's password: the refusal ends kinit, 70 and 75 alike (MIT and ours)"
 for k in mit ${OURS:+ours}; do
     kinit=kinit
     [ "$k" = ours ] && kinit=$OURS
-    pwkinit "PK.refuse.ca.$k" "$kinit" alice-unknownca '^kinit rc=0$' 70
-    checklast "PK.refuse.ca.$k.tgt" "^Default principal: alice@$R\$"
+    pwkinit "PK.refuse.ca.$k" "$kinit" alice-unknownca '^kinit rc=1$' 70
+    checklast "PK.refuse.ca.$k.text" "^kinit: Can't verify certificate while getting initial credentials\$"
     pwkinit "PK.refuse.san.$k" "$kinit" alice-wrongsan '^kinit rc=1$' 75
     observelast "obs.PK.refuse.san.$k" 'kinit: .*'
 done
@@ -265,8 +267,8 @@ dbmatch PK.dbmatch.bad '<SUBJECT>(' '^kinit rc=1$' 'preauth \(pkinit\) verify fa
 for k in mit ${OURS:+ours}; do
     kinit=kinit
     [ "$k" = ours ] && kinit=$OURS
-    pwkinit "PK.refuse.rule.$k" "$kinit" alice '^kinit rc=0$' 24
-    checklast "PK.refuse.rule.$k.tgt" "^Default principal: alice@$R\$"
+    pwkinit "PK.refuse.rule.$k" "$kinit" alice '^kinit rc=1$' 24
+    checklast "PK.refuse.rule.$k.text" '^kinit: Preauthentication failed while getting initial credentials$'
 done
 run kdc "sudo kadmin.local -q 'delstr alice pkinit_cert_match' 2>&1"
 DBMATCH=0
@@ -342,11 +344,10 @@ for k in mit ${OURS:+ours}; do
     [ "$k" = ours ] && kinit=$OURS
     check "PK.anchors.second.$k" '^kinit rc=0$' run client2 "kdestroy -c FILE:\$HOME/pk/an.cc 2> /dev/null; KRB5_CONFIG=\$HOME/pk/an.conf:/etc/krb5.conf $kinit -c FILE:\$HOME/pk/an.cc alice < /dev/null 2>&1; echo \"kinit rc=\$?\"; klist -c FILE:\$HOME/pk/an.cc 2>&1 | grep -E '^Default principal'"
     checklast "PK.anchors.second.$k.tgt" "^Default principal: alice@$R\$"
-    check "PK.anchors.empty.$k" '^kinit rc=1$' runin client2 "alice's password ($ALICE)" "kdestroy -c FILE:\$HOME/pk/an.cc 2> /dev/null; rm -f \$HOME/pk/an.trace; KRB5_CONFIG=\$HOME/pk/an0.conf:/etc/krb5.conf KRB5_TRACE=\$HOME/pk/an.trace $kinit -c FILE:\$HOME/pk/an.cc alice > \$HOME/pk/an.out 2>&1; echo \"kinit rc=\$?\"; grep -E 'kinit: ' \$HOME/pk/an.out; grep -oE 'PKINIT client could not verify DH reply|Preauth module pkinit \\(17\\) \\(real\\) returned: -?[0-9]+|Getting AS key' \$HOME/pk/an.trace | sort -u" < <(once "$ALICE")
-    checklast "PK.anchors.empty.$k.verify" '^PKINIT client could not verify DH reply$'
-    checklast "PK.anchors.empty.$k.module" '^Preauth module pkinit \(17\) \(real\) returned: -1765328314$'
-    checklast "PK.anchors.empty.$k.password" '^Getting AS key$'
-    observelast "obs.PK.anchors.empty.$k" 'kinit: .*'
+    check "PK.anchors.empty.$k" '^kinit rc=0$' runin client2 "alice's password ($ALICE)" "kdestroy -c FILE:\$HOME/pk/an.cc 2> /dev/null; rm -f \$HOME/pk/an.trace; KRB5_CONFIG=\$HOME/pk/an0.conf:/etc/krb5.conf KRB5_TRACE=\$HOME/pk/an.trace $kinit -c FILE:\$HOME/pk/an.cc alice > \$HOME/pk/an.out 2>&1; echo \"kinit rc=\$?\"; grep -E 'kinit: ' \$HOME/pk/an.out; klist -c FILE:\$HOME/pk/an.cc 2>&1 | grep -E '^Default principal'; grep -oE 'PKINIT client could not verify DH reply|Preauth module pkinit \\(1[67]\\) \\(real\\) returned: .*' \$HOME/pk/an.trace | sort -u" < <(once "$ALICE")
+    checklast "PK.anchors.empty.$k.tgt" "^Default principal: alice@$R\$"
+    countlast "PK.anchors.empty.$k.nopk" 'PKINIT client could not verify DH reply' 0
+    observelast "obs.PK.anchors.empty.$k" 'Preauth module pkinit \(16\) \(real\) returned: .*'
 done
 
 section "PK.7b pkinit_identity names a file that is not there: MIT's line (MIT and ours)"
@@ -500,7 +501,7 @@ for k in mit ${OURS:+ours}; do
     checklast "PK.dh.$k.tryagain" '^Preauth module pkinit \(16\) tryagain returned: 0/Success$'
 done
 
-section "PK.dh1024 kinit at pkinit_dh_min_bits = 1024: the KDC's floor of 1024 takes its 1024-bit DH, and the default 2048 refuses it with 65, then P-256 (MIT and ours)"
+section "PK.dh1024 kinit at pkinit_dh_min_bits = 1024: MIT's fails to make the 1024-bit request; ours sends it, the KDC's floor of 1024 takes it, and the default 2048 refuses it with 65, then P-256 (MIT and ours)"
 check PK.dh1024.conf '^    pkinit_dh_min_bits = 1024$' run client2 "mkdir -p ~/pk && printf '[libdefaults]\\n    pkinit_dh_min_bits = 1024\\n' > ~/pk/dh1024.conf && cat ~/pk/dh1024.conf"
 for floor in 1024 2048; do
     realm="\n[realms]\n    $REALM = {\n        pkinit_dh_min_bits = 1024\n    }\n"
@@ -510,9 +511,17 @@ for floor in 1024 2048; do
         kinit=kinit
         [ "$k" = ours ] && kinit=$OURS
         n=PK.dh1024.kdc$floor.$k
-        check "$n" '^kinit rc=0$' run client2 "kdestroy -c FILE:\$HOME/pk/dh.cc 2> /dev/null; rm -f \$HOME/pk/dh.trace; KRB5_CONFIG=\$HOME/pk/dh1024.conf:/etc/krb5.conf KRB5_TRACE=\$HOME/pk/dh.trace $kinit -X X509_anchors=FILE:$C/cacert.pem -X X509_user_identity=FILE:$C/alice.pem,$C/alice.key -c FILE:\$HOME/pk/dh.cc alice < /dev/null 2>&1; echo \"kinit rc=\$?\"; klist -c FILE:\$HOME/pk/dh.cc 2>&1 | grep -E '^Default principal'; grep -oE 'PKINIT using [^ ]+( DH)? key exchange group|Key parameters not accepted|PKINIT accepting KDC key exchange group preference .*' \$HOME/pk/dh.trace"
-        checklast "$n.tgt" "^Default principal: alice@$R\$"
+        want=0
+        [ "$k" = mit ] && want=1
+        kdcmark "$n.as"
+        check "$n" "^kinit rc=$want\$" run client2 "kdestroy -c FILE:\$HOME/pk/dh.cc 2> /dev/null; rm -f \$HOME/pk/dh.trace; KRB5_CONFIG=\$HOME/pk/dh1024.conf:/etc/krb5.conf KRB5_TRACE=\$HOME/pk/dh.trace $kinit -X X509_anchors=FILE:$C/cacert.pem -X X509_user_identity=FILE:$C/alice.pem,$C/alice.key -c FILE:\$HOME/pk/dh.cc alice < /dev/null 2>&1; echo \"kinit rc=\$?\"; klist -c FILE:\$HOME/pk/dh.cc 2>&1 | grep -E '^Default principal'; grep -oE 'PKINIT using [^ ]+( DH)? key exchange group|Key parameters not accepted|PKINIT accepting KDC key exchange group preference .*|Preauth module pkinit \\(1[67]\\) \\(real\\) returned: .*|Received error from KDC: -?[0-9]+' \$HOME/pk/dh.trace"
         checklast "$n.first" '^PKINIT using 1024-bit DH key exchange group$'
+        if [ "$k" = mit ]; then
+            observelast "obs.$n.module" 'Preauth module pkinit \(16\) \(real\) returned: .*'
+            kdcsince "$n.as" 'pkinit|PKINIT|preauth|AS_REQ'
+            continue
+        fi
+        checklast "$n.tgt" "^Default principal: alice@$R\$"
         if [ "$floor" = 1024 ]; then
             countlast "$n.taken" 'Key parameters not accepted' 0
         else
