@@ -1,7 +1,4 @@
-//! Documented `KERBER.TEST` realm the product binaries seed.
-//!
-//! `krb5-kdc` and `krb5-kdb create` build this realm from these
-//! constants. The module is always compiled.
+//! Documented `KERBER.TEST` realm the product binaries seed. `krb5-kdc` and `krb5-kdb create` build it from these constants, and the module is always compiled.
 
 use super::{Acl, Error, PrincipalStore, admin_id_for_realm, bootstrap_realm};
 use krb5_types::PrincipalName;
@@ -18,8 +15,7 @@ pub const TEST_ADMIN: &str = "admin";
 pub const TEST_ADMIN_PASSWORD: &[u8] = b"adminpassword";
 /// Host name component of the documented POSIX host principal.
 pub const TEST_HOST: &str = "testhost.kerber.test";
-/// The key types the documented realm gives a principal when its profile names no
-/// `supported_enctypes`: all four AES types, where a production realm takes MIT's two.
+/// The key types the documented realm gives a principal when its profile names no `supported_enctypes`: all four AES types, where a production realm takes MIT's two.
 pub const TEST_SUPPORTED_ENCTYPES: [krb5_crypto::EncryptionType; 4] = [
     krb5_crypto::EncryptionType::Aes256CtsHmacSha196,
     krb5_crypto::EncryptionType::Aes128CtsHmacSha196,
@@ -49,15 +45,7 @@ pub fn documented_admin_id() -> String {
 #[cfg(any(test, feature = "test-hooks"))]
 pub const TEST_MASTER_PASSWORD: &[u8] = b"masterpassword";
 
-/// Give a store with no database an update log in memory of `entries` entries, in `role`, and
-/// a `K/M` entry holding the master key [`TEST_MASTER_PASSWORD`] makes for its realm, which the
-/// keys of its logged updates are wrapped under (as a database's are under its stash's). Returns
-/// that key.
-///
-/// # Errors
-///
-/// [`Error::Crypto`] when the master key cannot be derived; [`Error::Db`] when the log cannot be
-/// made.
+/// Give a store with no database an in-memory update log of `entries` entries, in `role`, plus a `K/M` entry whose master key is what [`TEST_MASTER_PASSWORD`] makes for its realm. Logged-update keys are wrapped under that key, as a database's are under its stash. Returns that key. [`Error::Crypto`] when the master key cannot be derived; [`Error::Db`] when the log cannot be made.
 #[cfg(any(test, feature = "test-hooks"))]
 pub fn map_memory_ulog(
     store: &mut PrincipalStore,
@@ -85,11 +73,7 @@ pub fn map_memory_ulog(
     Ok(master)
 }
 
-/// Bootstrap the documented realm: krbtgt, user, admin, host.
-///
-/// # Errors
-///
-/// [`Error::Rng`] when the CSPRNG fails while generating a random key.
+/// Bootstrap the documented realm: krbtgt, user, admin, host. [`Error::Rng`] when the CSPRNG fails while generating a random key.
 pub fn bootstrap_documented() -> Result<(PrincipalStore, Acl), Error> {
     bootstrap_realm(
         TEST_REALM,
