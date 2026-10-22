@@ -1,4 +1,4 @@
-//! The KDC's listeners: MIT's net-server sockets ([`bind_udp_listeners`], [`bind_tcp_listeners`]) and the serve functions that run [`crate::net_server`]'s one loop over them on the calling thread, with [`crate::issue::KdcDispatch`] answering each request.
+//! The KDC's listeners and the one loop that serves them.
 
 use std::io::{self, IoSlice, IoSliceMut};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, UdpSocket};
@@ -21,16 +21,12 @@ use nix::sys::socket::{
 };
 
 // MIT: `process_packet_response` (net-server.c:1101-1105)
-/// a dispatch error is logged with this text and no reply is sent.
 pub const WHILE_DISPATCHING_UDP: &str = "while dispatching (udp)";
 // MIT: `process_stream_response` (net-server.c:1314-1315)
-/// a dispatch error is logged with this text.
 pub const WHILE_DISPATCHING_TCP: &str = "while dispatching (tcp)";
 
-/// Serving store: AS/TGS take a read lock; kadmind/kpasswd take a write lock so runtime mutations reach [`crate::persist::save_store`].
 pub type SharedStore = Arc<RwLock<dyn Store>>;
 
-/// Wrap a [`Store`] backend for [`serve`].
 #[must_use]
 pub fn shared_store<S: Store + 'static>(store: S) -> SharedStore {
     Arc::new(RwLock::new(store))
@@ -38,16 +34,13 @@ pub fn shared_store<S: Store + 'static>(store: S) -> SharedStore {
 
 pub type SharedDump = Arc<RwLock<crate::store::PrincipalStore>>;
 
-/// Wrap a dump-v7 store for kadmind / kpasswd.
 #[must_use]
 pub fn shared_dump(store: crate::store::PrincipalStore) -> SharedDump {
     Arc::new(RwLock::new(store))
 }
 
-/// Answer one request from the store, after reading the database again when another process changed it. The database's lock is held shared only while its age and file are compared and the database is read again, and let go before the request is answered from the store: a write holder makes the request wait, a read holder does not, and a writer waiting for the lock gets it between lookups however many requests run. A lock that may not be taken answers every lookup with `SVC_UNAVAILABLE`, and a database that cannot be read again answers with its error, never with what the store read before. MIT `krb5_db2_get_principal` (`plugins/kdb/db2/kdb_db2.c:771-801`): a lookup takes the shared lock, reads, and lets it go.
-/// Answer one request from the store, after reading the database again when another process changed it. The database's lock is held shared only while its age and file are compared and the database is read again, and let go before the request is answered from the store: a write holder makes the request wait, a read holder does not, and a writer waiting for the lock gets it between lookups however many requests run. A lock that may not be taken answers every lookup with `SVC_UNAVAILABLE`, and a database that cannot be read again answers with its error, never with what the store read before. MIT `krb5_db2_get_principal` (`plugins/kdb/db2/kdb_db2.c:771-801`): a lookup takes the shared lock, reads, and lets it go.
+/// The shared lock is held only while the database is read.
 // MIT: `krb5_db2_get_principal` (plugins/kdb/db2/kdb_db2.c:771-801)
-/// a lookup takes the shared lock, reads, and lets it go.
 pub(crate) fn read_store<R>(store: &SharedStore, f: impl FnOnce(&dyn PrincipalRead) -> R) -> R {
     {
         let g = store.read().unwrap_or_else(PoisonError::into_inner);
@@ -74,7 +67,6 @@ pub(crate) fn read_store<R>(store: &SharedStore, f: impl FnOnce(&dyn PrincipalRe
     }
 }
 
-/// kadmind's reads: the read guard, after a reread when another process changed the database.
 pub fn read_fresh(
     store: &SharedDump,
 ) -> (
@@ -102,14 +94,13 @@ pub fn read_fresh(
     (store.read().unwrap_or_else(PoisonError::into_inner), reread)
 }
 
-/// The store, without its database lock, for a reply that needs no lookup (an error built from the realm alone).
 pub(crate) fn plain_store<R>(store: &SharedStore, f: impl FnOnce(&dyn PrincipalRead) -> R) -> R {
     let g = store.read().unwrap_or_else(PoisonError::into_inner);
     f(&*g)
 }
 
 // MIT: `process_as_req` (kdc/do_as_req.c:577-580)
-/// a lookup that cannot lock the database is `KDC_ERR_SVC_UNAVAILABLE`.
+/// A lookup that cannot lock the database is `KDC_ERR_SVC_UNAVAILABLE`.
 struct Unreadable<'a> {
     inner: &'a dyn PrincipalRead,
     error: Error,
@@ -163,32 +154,21 @@ impl PrincipalRead for Unreadable<'_> {
     }
 }
 
-/// Addresses tried when the caller does not pin a bind address.
-/// Never includes `0.0.0.0` — the daemon must be given an explicit bind to listen on all interfaces.
+/// An all-interfaces bind is explicit.
 pub const BIND_CANDIDATES: &[&str] = &["127.0.0.1:88", "127.0.0.1:8888"];
 
-/// The most stream connections a loop keeps: at the cap a new connection evicts the one that started first rather than being refused.
 // MIT: `max_stream_data_connections` (net-server.c:85-85)
-/// the cap is 45 stream connections.
 pub const MAX_TCP_WORKERS: usize = crate::net_server::MAX_STREAM_DATA_CONNECTIONS;
-/// The longest TCP request: FIELD_TOOLONG at `msglen > bufsiz-4`.
 // MIT: `accept_stream_connection` (net-server.c:1278-1278)
-/// `bufsiz` is 1 MiB.
 pub const MAX_TCP_REQUEST: usize = crate::net_server::MAX_REQUEST;
-/// MIT `MAX_DGRAM_SIZE` / `kdc_max_dgram_reply_size` default (`osconf.hin`).
 pub const MAX_DGRAM_REPLY: usize = 65_536;
 
 #[derive(Clone, Copy, Debug)]
 pub struct ListenLimits {
-    /// The most stream connections at once, past which the one that started first is evicted.
     pub max_tcp_workers: usize,
-    /// Maximum TCP length-prefix body.
     pub max_tcp_request: usize,
-    /// UDP reply cap; over is KRB-ERROR 52.
     // MIT: `finish_dispatch` (dispatch.c:54-63)
-    /// a UDP reply over `max_dgram_reply_size` is replaced by the response-too-big error.
     pub max_dgram_reply_size: usize,
-    /// The longest wait between two looks at a caller's stop flag ([`serve_all_until`]); the daemon's signals wake the loop at once ([`serve_daemon`]). A stream has no timeout.
     pub shutdown_poll: Duration,
 }
 
@@ -204,23 +184,17 @@ impl Default for ListenLimits {
 }
 
 // MIT: `DEFAULT_TCP_LISTEN_BACKLOG` (include/osconf.hin:100-100)
-/// MIT's TCP listen backlog is 5.
 pub const DEFAULT_TCP_LISTEN_BACKLOG: i32 = 5;
-/// The embedder's TCP `listen` backlog ([`bind_tcp_listeners`]). MIT's is 5; 128 is the deviation in `docs/mit-deviations.md`, the same default an unset `kdc_tcp_listen_backlog` takes.
+/// The TCP backlog is 128; MIT's is 5.
 const KDC_TCP_LISTEN_BACKLOG: i32 = 128;
 // MIT: `svctcp_create` (lib/rpc/svc_tcp.c:178-178)
-/// an RPC listener's backlog is 2.
 const RPC_LISTEN_BACKLOG: i32 = 2;
 // MIT: `setnolinger` (lib/apputils/net-server.c:686-691)
-/// a TCP listener does not linger.
 const NO_LINGER: nix::libc::linger = nix::libc::linger {
     l_onoff: 0,
     l_linger: 0,
 };
 
-/// Bind UDP and TCP on the same `addr`, each socket made as a configured listener's is ([`bind_udp_listeners`]).
-///
-/// The `io::Error` from setting up the UDP socket on `addr`, or from setting up the TCP listener when the UDP socket was set up.
 pub(crate) fn bind_udp_tcp(addr: SocketAddr) -> io::Result<(UdpSocket, TcpListener)> {
     let udp = UdpSocket::from(setup_socket(
         addr,
@@ -235,9 +209,6 @@ pub(crate) fn bind_udp_tcp(addr: SocketAddr) -> io::Result<(UdpSocket, TcpListen
     Ok((udp, tcp))
 }
 
-/// Try each candidate until UDP and TCP both bind.
-///
-/// The last candidate's error when none binds: `io::ErrorKind::InvalidInput` for a candidate that is not a socket address, else that candidate's bind error; `io::ErrorKind::AddrNotAvailable` when `candidates` is empty.
 pub fn bind_preferred(candidates: &[&str]) -> io::Result<(SocketAddr, UdpSocket, TcpListener)> {
     let mut last = io::Error::new(io::ErrorKind::AddrNotAvailable, "no bind candidates");
     for c in candidates {
@@ -266,12 +237,8 @@ pub fn bind_preferred(candidates: &[&str]) -> io::Result<(SocketAddr, UdpSocket,
     Err(last)
 }
 
-/// Bind a UDP socket on every listener in `addrs` (the `kdc_listen` list): one socket for each address an entry resolves to, so the wildcard is two sockets, `0.0.0.0` and an IPv6-only `[::]`, whatever the host's default for IPv6 sockets (`net.ipv6.bindv6only`).
-///
 // MIT: `setup_addresses` (lib/apputils/net-server.c:1011-1036)
-/// every address of an entry is set up; an address family the host lacks (`EAFNOSUPPORT`) is skipped when another address of the entry binds, and any other failure stops the daemon.
-///
-/// `io::ErrorKind::InvalidInput` when an entry does not resolve, and the setup error, named with its address, for an address that does not bind.
+/// `EAFNOSUPPORT` is skipped when another address of the entry binds.
 pub fn bind_udp_listeners(addrs: &[ListenAddr]) -> io::Result<Vec<UdpSocket>> {
     Ok(
         bind_listeners(addrs, BindType::Udp, DEFAULT_TCP_LISTEN_BACKLOG)?
@@ -281,18 +248,11 @@ pub fn bind_udp_listeners(addrs: &[ListenAddr]) -> io::Result<Vec<UdpSocket>> {
     )
 }
 
-/// [`bind_udp_listeners`] for a TCP list (`kdc_tcp_listen`), each listening with the KDC's default backlog of 128. kadmind's kpasswd list passes 5 to [`bind_tcp_listeners_with_backlog`].
-///
-/// As [`bind_udp_listeners`].
 pub fn bind_tcp_listeners(addrs: &[ListenAddr]) -> io::Result<Vec<TcpListener>> {
     bind_tcp_listeners_with_backlog(addrs, KDC_TCP_LISTEN_BACKLOG)
 }
 
-/// [`bind_tcp_listeners`] with the backlog `listen` is given (krb5kdc's `kdc_tcp_listen_backlog`), as C's `listen` takes it: a negative one is the system's most.
 // MIT: `loop_setup_network` (lib/apputils/net-server.c:1053-1070)
-/// the TCP listeners listen with the backlog the daemon passes.
-///
-/// As [`bind_udp_listeners`].
 pub fn bind_tcp_listeners_with_backlog(
     addrs: &[ListenAddr],
     backlog: i32,
@@ -303,9 +263,6 @@ pub fn bind_tcp_listeners_with_backlog(
         .collect())
 }
 
-/// [`bind_tcp_listeners`] for an RPC service's list (kadmind's `kadmind_listen`), whose sockets the daemon log names RPC.
-///
-/// As [`bind_udp_listeners`].
 pub fn bind_rpc_listeners(addrs: &[ListenAddr]) -> io::Result<Vec<TcpListener>> {
     Ok(
         bind_listeners(addrs, BindType::Rpc, DEFAULT_TCP_LISTEN_BACKLOG)?
@@ -315,7 +272,6 @@ pub fn bind_rpc_listeners(addrs: &[ListenAddr]) -> io::Result<Vec<TcpListener>> 
     )
 }
 
-/// The transport, as the JSON log and a bind error name it.
 fn proto(kind: BindType) -> &'static str {
     match kind {
         BindType::Udp => "udp",
@@ -324,7 +280,6 @@ fn proto(kind: BindType) -> &'static str {
 }
 
 // MIT: `setup_addresses` (lib/apputils/net-server.c:1029-1030)
-/// EAFNOSUPPORT is skipped when another address of the entry binds.
 fn is_unsupported_family(err: &io::Error) -> bool {
     err.raw_os_error() == Some(nix::errno::Errno::EAFNOSUPPORT as i32)
 }
@@ -380,13 +335,9 @@ fn bind_listeners(addrs: &[ListenAddr], kind: BindType, backlog: i32) -> io::Res
     Ok(out)
 }
 
-/// One listener on `addr`, made as MIT's net-server makes it: created and bound by [`create_server_socket`], then a TCP listener listens with MIT's backlog and does not linger, an RPC listener listens with the RPC library's backlog, and a UDP socket on a wildcard address asks for each datagram's destination, which its reply leaves from ([`send_to_from`]).
 // MIT: `setup_socket` (lib/apputils/net-server.c:813-859)
-/// the setup is logged at debug, then the socket is created and a stream one listens, each failure logged and fatal.
 // MIT: `setup_socket` (lib/apputils/net-server.c:861-875)
-/// a UDP socket on a wildcard address asks for pktinfo; without it the socket is kept and the reason logged.
 // MIT: `svctcp_create` (lib/rpc/svc_tcp.c:178-178)
-/// an RPC listener that cannot listen is no RPC service.
 fn setup_socket(addr: SocketAddr, kind: BindType, backlog: i32) -> io::Result<OwnedFd> {
     klog::syslog(
         Severity::Debug,
@@ -440,13 +391,9 @@ fn setup_socket(addr: SocketAddr, kind: BindType, backlog: i32) -> io::Result<Ow
     Ok(fd)
 }
 
-/// A socket for `addr`, close-on-exec, with `SO_REUSEADDR` and, on IPv6, `IPV6_V6ONLY`, bound; a failure is logged with the address.
 // MIT: `create_server_socket` (lib/apputils/net-server.c:625-631)
-/// a socket that is not made is logged as a TCP one, whatever its type.
 // MIT: `create_server_socket` (lib/apputils/net-server.c:644-658)
-/// `SO_REUSEADDR`, then `IPV6_V6ONLY` on an IPv6 socket, each logged and neither fatal.
 // MIT: `create_server_socket` (lib/apputils/net-server.c:660-666)
-/// a bind that fails is logged with the address and the socket closed.
 fn create_server_socket(addr: SocketAddr, kind: BindType) -> io::Result<OwnedFd> {
     let family = if addr.is_ipv4() {
         AddressFamily::Inet
@@ -475,7 +422,6 @@ fn create_server_socket(addr: SocketAddr, kind: BindType) -> io::Result<OwnedFd>
 }
 
 // MIT: `set_pktinfo` (lib/apputils/udppktinfo.c:123-133)
-/// `IP_PKTINFO` on an IPv4 socket, `IPV6_RECVPKTINFO` on an IPv6 one.
 fn set_pktinfo(fd: &OwnedFd, addr: SocketAddr) -> nix::Result<()> {
     if addr.is_ipv4() {
         setsockopt(fd, sockopt::Ipv4PacketInfo, &true)
@@ -486,27 +432,18 @@ fn set_pktinfo(fd: &OwnedFd, addr: SocketAddr) -> nix::Result<()> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PktInfo {
-    /// The address the datagram was sent to.
     pub addr: IpAddr,
-    /// The interface an IPv6 datagram came in on; 0 for IPv4.
     pub ifindex: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct Datagram {
-    /// Its length, at the start of the buffer.
     pub len: usize,
-    /// The sender.
     pub from: SocketAddr,
-    /// Where it was sent, when the socket is bound to a wildcard address and the system says.
     pub to: Option<PktInfo>,
 }
 
-/// Read one datagram from `sock` into `buf`, with the address it was sent to when `sock` is bound to a wildcard address, so the reply can leave from it ([`send_udp_reply`]).
 // MIT: `recv_from_to` (lib/apputils/udppktinfo.c:283-325)
-/// a socket bound to a wildcard address is read with its pktinfo; any other socket, or a datagram without pktinfo, has no destination.
-///
-/// The receive's `io::Error` (`WouldBlock` when the socket's read timeout passes), and `io::ErrorKind::InvalidData` for a datagram whose sender is not an IP address.
 pub fn recv_from_to(sock: &UdpSocket, buf: &mut [u8]) -> io::Result<Datagram> {
     if !sock.local_addr()?.ip().is_unspecified() {
         let (len, from) = sock.recv_from(buf)?;
@@ -557,11 +494,8 @@ fn inet_addr(a: &SockaddrStorage) -> Option<SocketAddr> {
         .or_else(|| a.as_sockaddr_in6().map(|v6| SocketAddr::V6((*v6).into())))
 }
 
-/// Send `buf` to `to` on `sock`, from `from` when it is where the request was sent and `sock` is bound to a wildcard address, so a client whose socket is connected to that address takes it.
 // MIT: `send_to_from` (lib/apputils/udppktinfo.c:443-474)
-/// pktinfo names the source only on a wildcard socket and for a source of the destination's family; otherwise the datagram goes out with `sendto`.
 // MIT: `set_msg_from_ipv6_pktinfo` (lib/apputils/udppktinfo.c:383-394)
-/// the interface is named only for a link-local source.
 fn send_to_from(
     sock: &UdpSocket,
     buf: &[u8],
@@ -605,11 +539,7 @@ fn send_to_from(
     Ok(sent?)
 }
 
-/// Answer the datagram `d` with `reply` from the address it was sent to ([`recv_from_to`]); a failed send is logged with both addresses, a short one with both lengths.
 // MIT: `process_packet_response` (lib/apputils/net-server.c:1107-1125)
-/// the reply goes out with `send_to_from`; a failed send is logged with the client's address and the local one, a short send with the lengths.
-///
-/// The send's `io::Error`, once it is logged.
 pub fn send_udp_reply(sock: &UdpSocket, reply: &[u8], d: &Datagram) -> io::Result<()> {
     match send_to_from(sock, reply, d.from, d.to) {
         Ok(n) if n == reply.len() => Ok(()),
@@ -631,12 +561,10 @@ pub fn send_udp_reply(sock: &UdpSocket, reply: &[u8], d: &Datagram) -> io::Resul
     }
 }
 
-/// Log a failed call as MIT's `com_err` does: the error's text, ` - `, then `what`.
 fn com_err(e: &io::Error, what: &str) {
     klog::com_err(Some(&os_error_text(e)), what);
 }
 
-/// [`com_err`] for a call whose failure ends the setup: `e`, logged, as an `io::Error`.
 fn failed(e: nix::Error, what: &str) -> io::Error {
     let e = io::Error::from(e);
     com_err(&e, what);
@@ -644,7 +572,6 @@ fn failed(e: nix::Error, what: &str) -> io::Error {
 }
 
 // MIT: `setup_addresses` (lib/apputils/net-server.c:1024-1030)
-/// a failed setup is logged with its socket type and address.
 fn setup_failure_line(a: SocketAddr, kind: BindType) -> String {
     format!(
         "Failed setting up a {} socket (for {})",
@@ -654,7 +581,6 @@ fn setup_failure_line(a: SocketAddr, kind: BindType) -> String {
 }
 
 // MIT: `loop_setup_network` (lib/apputils/net-server.c:1068-1073)
-/// the error the setup stopped on is logged once more, and the daemon exits.
 fn log_network_failure(e: &io::Error) {
     klog::syslog(
         Severity::Err,
@@ -668,11 +594,8 @@ fn log_lines(lines: &[String]) {
     }
 }
 
-/// The daemon log lines for a listen entry whose host does not resolve; the daemon then stops. `error` is the resolver's text, which ends with `getaddrinfo`'s message.
 // MIT: `setup_addresses` (lib/apputils/net-server.c:993-1000)
-/// the host (`<wildcard>` for none) and `gai_strerror`, and the setup fails with EIO.
 // MIT: `loop_setup_network` (lib/apputils/net-server.c:1068-1073)
-/// that error once more.
 fn resolve_failure_lines(entry: &ListenAddr, error: &str) -> [String; 2] {
     let host = entry.host.as_deref().unwrap_or("<wildcard>");
     let gai = error
@@ -685,11 +608,7 @@ fn resolve_failure_lines(entry: &ListenAddr, error: &str) -> [String; 2] {
     ]
 }
 
-/// Drop root after a privileged bind (port 88): the gates' test realm, in a `test-hooks` build only. MIT's `krb5kdc` never changes user and reads no `KRB5_KDC_USER`, so a release build has neither.
-///
-/// When effective uid is 0, setgid/setuid to `KRB5_KDC_USER` (default `nobody`). Unprivileged processes return `Ok(false)` without changing credentials.
-///
-/// Only as root: `io::ErrorKind::NotFound` when the target user does not exist, and `io::ErrorKind::Other` when the user lookup, `setgid` or `setuid` fails.
+/// Only a test-hooks build drops root.
 #[cfg(feature = "test-hooks")]
 #[allow(clippy::disallowed_methods, reason = "a test-hooks build's override")]
 pub fn drop_privileges() -> io::Result<bool> {
@@ -702,9 +621,6 @@ pub fn drop_privileges() -> io::Result<bool> {
     )
 }
 
-/// Drop to `username` when running as root.
-///
-/// Only as root: `io::ErrorKind::NotFound` when `username` does not exist, and `io::ErrorKind::Other` when the user lookup, `setgid` or `setuid` fails.
 #[cfg(any(test, feature = "test-hooks"))]
 pub(crate) fn drop_privileges_to(username: &str) -> io::Result<bool> {
     if !nix::unistd::Uid::effective().is_root() {
@@ -738,25 +654,16 @@ fn install_shutdown_flag(flag: &Arc<AtomicBool>) {
     }
 }
 
-/// Serve AS/TGS until SIGTERM/SIGINT (or forever if signal registration fails).
-///
-/// As [`serve_all_until`].
 pub fn serve(store: SharedStore, udp: UdpSocket, tcp: TcpListener) -> io::Result<()> {
     serve_all(store, vec![udp], vec![tcp])
 }
 
-/// [`serve`] on every socket of [`bind_udp_listeners`] / [`bind_tcp_listeners`].
-///
-/// As [`serve_all_until`].
 pub fn serve_all(store: SharedStore, udp: Vec<UdpSocket>, tcp: Vec<TcpListener>) -> io::Result<()> {
     let shutdown = Arc::new(AtomicBool::new(false));
     install_shutdown_flag(&shutdown);
     serve_all_until(store, udp, tcp, shutdown, ListenLimits::default())
 }
 
-/// Serve until `shutdown` is true, looked at every `limits.shutdown_poll`.
-///
-/// As [`serve_all_until`].
 pub fn serve_until(
     store: SharedStore,
     udp: UdpSocket,
@@ -767,7 +674,6 @@ pub fn serve_until(
     serve_all_until(store, vec![udp], vec![tcp], shutdown, limits)
 }
 
-/// [`serve_until`] on several sockets: one loop on the calling thread serves them all, with one lookaside cache and one stream cap, as MIT's net-server loop does. An embedder runs it on a thread of its own; plugin modules set for the calling thread alone do not apply while it runs. `io::ErrorKind::InvalidInput` when `limits.shutdown_poll` is zero, and the OS error when a listener cannot be made non-blocking or the loop's poll fails. Per-request failures are only logged.
 #[allow(clippy::needless_pass_by_value)] // the loop owns the store and the stop flag
 pub fn serve_all_until(
     store: SharedStore,
@@ -789,11 +695,7 @@ pub fn serve_all_until(
     serve_loop(store, &udp, &tcp, &wake, limits)
 }
 
-/// krb5kdc's loop: serve on the calling thread until SIGINT, SIGTERM or SIGQUIT, each logged as MIT's, with SIGHUP reopening the log.
 // MIT: `main` (kdc/main.c:1030-1030)
-/// `verto_run` serves every realm from the one loop.
-///
-/// The OS error when a listener cannot be made non-blocking or the loop's poll fails.
 #[allow(clippy::needless_pass_by_value)] // the loop owns the store
 pub fn serve_daemon(
     store: SharedStore,
