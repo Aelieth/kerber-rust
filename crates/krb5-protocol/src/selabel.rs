@@ -1,51 +1,17 @@
-//! The SELinux context of each file the Kerberos tools create, set as the file is created and
-//! never changed afterwards, the way Fedora's krb5 labels its files (its SELinux patch,
-//! `push_fscreatecon`): the context becomes the creating thread's fscreate context, the file is
-//! created, and the fscreate context is cleared again on every return.
-//!
-//! - A file that replaces a regular file through a temp file and a rename, as an update in place
-//!   (the database, its `.ulog`, a keytab), takes the replaced file's `security.selinux` whole,
-//!   as MIT's in-place write keeps it.
-//! - Any other new file takes the context the policy's `file_contexts` gives the path it will
-//!   have, as `matchpathcon` prints it, with the writer's SELinux user as Fedora's krb5 sets it,
-//!   whatever type the kernel would give it; a writer that may not create that type fails.
-//!
-//! The fscreate context is read first and written only when it differs, so nothing is asked of a
-//! writer when nothing would change, and a context that was written is cleared by an empty write
-//! after the create. SELinux is on as libselinux's `is_selinux_enabled` says: selinuxfs mounted
-//! read-write at `/sys/fs/selinux` and an `/etc/selinux/config`; without SELinux nothing happens.
-//! A context that cannot be set fails the create when SELinux is enforcing (an `enforce` that
-//! cannot be read counts as enforcing) and is skipped with a warning when it is permissive.
-//!
-//! The lookup is libselinux's: the path goes through `file_contexts.subs` and
-//! `file_contexts.subs_dist`; of the specifications in `file_contexts`, `file_contexts.homedirs`
-//! and `file_contexts.local`, in that order, those without regular-expression characters are
-//! tried first, and among each kind the last one whose expression matches the whole path and whose
-//! file type allows a regular file wins; `<<none>>` means no context. The expressions are Rust's,
-//! not PCRE2's: a specification is anchored as `^(?:…)$` where libselinux writes `^…$` (a
-//! top-level `|` binds differently), `.` does not match a newline (libselinux compiles with
-//! `PCRE2_DOTALL`), `\d`, `\w` and `\s` are Unicode classes, and a specification this syntax
-//! cannot compile is skipped.
+//! The SELinux context of each file the Kerberos tools create, set as the file is created and never changed afterwards, the way Fedora's krb5 labels its files (its SELinux patch, `push_fscreatecon`): the context becomes the creating thread's fscreate context, the file is created, and the fscreate context is cleared again on every return.
 
 use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
 
-/// libselinux's policy type when the configuration names none.
 const DEFAULT_POLICY_TYPE: &str = "targeted";
 
-/// Where SELinux's files are.
 #[derive(Clone, Debug)]
 pub(crate) struct Roots {
-    /// selinuxfs, with its `enforce`.
     selinuxfs: PathBuf,
-    /// The configuration naming the loaded policy type.
     config: PathBuf,
-    /// The directory of the policy types' files.
     policy_root: PathBuf,
-    /// The calling thread's attributes: `fscreate` and `current`.
     attr: PathBuf,
-    /// The extended attribute holding a file's context.
     xattr: &'static str,
 }
 
@@ -61,20 +27,14 @@ impl Roots {
     }
 }
 
-/// SELinux, on, as this process sees it.
 #[derive(Debug)]
 pub(crate) struct SeLinux {
     roots: Roots,
     enforcing: bool,
 }
 
-/// Create the file at `path` with `create`, labeled with the context the policy gives a new file
-/// at `path`; a file already there is left to `create` as it is.
-///
-/// # Errors
-///
-/// The error of `create`, a writer that may not create the policy's type included; when SELinux
-/// is enforcing, the error of setting the fscreate context (the file is then not created).
+/// Create the file at `path` with `create`, labeled with the context the policy gives a new file at `path`; a file already there is left to `create` as it is.
+/// A context that cannot be set fails the create when SELinux is enforcing (an `enforce` that cannot be read counts as enforcing) and is skipped with a warning when it is permissive.
 pub fn create_labeled<T>(path: &Path, create: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
     match SeLinux::system() {
         Some(se) => se.create_labeled(path, create),
@@ -82,7 +42,6 @@ pub fn create_labeled<T>(path: &Path, create: impl FnOnce() -> io::Result<T>) ->
     }
 }
 
-/// `context` with its SELinux user replaced by `user`.
 fn with_user(context: &str, user: &str) -> String {
     match context.split_once(':') {
         Some((_, rest)) => format!("{user}:{rest}"),
@@ -96,9 +55,6 @@ impl SeLinux {
         Self::detect(Roots::system())
     }
 
-    /// libselinux's `is_selinux_enabled` (selinuxfs mounted read-write, a read-only one being how
-    /// a container is shown the host's, and its configuration file there, which a confined domain
-    /// such as `kpropd_t` may not read), then its `enforce`, where only `0` is permissive.
     fn detect(roots: Roots) -> Option<Self> {
         let mounted = nix::sys::statfs::statfs(&roots.selinuxfs)
             .is_ok_and(|fs| fs.filesystem_type() == nix::sys::statfs::SELINUX_MAGIC)
@@ -128,9 +84,7 @@ impl SeLinux {
         create()
     }
 
-    /// Create the temp file that will be renamed onto `path` with `create`: with the replaced
-    /// regular file's context when `replace` and `path` is one, else with the context the policy
-    /// gives a new file at `path`.
+    /// Create the temp file that will be renamed onto `path` with `create`: with the replaced regular file's context when `replace` and `path` is one, else with the context the policy gives a new file at `path`.
     pub(crate) fn create_temp(
         &self,
         path: &Path,
@@ -148,8 +102,6 @@ impl SeLinux {
         create()
     }
 
-    /// Set the thread's fscreate context for a file at `path`: `None` when it is that already or,
-    /// SELinux being permissive, when it cannot be set (a warning says so).
     fn set_fscreate(&self, context: &str, path: &Path) -> io::Result<Option<FsCreate>> {
         match FsCreate::set(&self.roots.attr, context) {
             Ok(set) => Ok(set),
@@ -175,7 +127,6 @@ impl SeLinux {
         }
     }
 
-    /// The policy's context for a new regular file at `path`, with this thread's SELinux user.
     fn policy_context(&self, path: &Path) -> Option<String> {
         let context = FileContexts::load(&self.policy_context_dir())
             .ok()?
@@ -186,7 +137,6 @@ impl SeLinux {
         })
     }
 
-    /// The SELinux user of this thread's context.
     fn own_user(&self) -> Option<String> {
         let current = fs::read(self.roots.attr.join("current")).ok()?;
         let current = std::str::from_utf8(attr_value(&current)).ok()?;
@@ -194,7 +144,6 @@ impl SeLinux {
         (!user.is_empty()).then(|| user.to_owned())
     }
 
-    /// `<policy root>/<SELINUXTYPE>/contexts/files`.
     fn policy_context_dir(&self) -> PathBuf {
         let config = fs::read_to_string(&self.roots.config).unwrap_or_default();
         let kind = config
@@ -223,7 +172,6 @@ impl SeLinux {
     }
 }
 
-/// A thread attribute's value as read: the text before its trailing NULs and newline.
 fn attr_value(bytes: &[u8]) -> &[u8] {
     let end = bytes
         .iter()
@@ -232,8 +180,7 @@ fn attr_value(bytes: &[u8]) -> &[u8] {
     &bytes[..end]
 }
 
-/// `path` made absolute against the current directory, with its directory's symlinks resolved
-/// when it exists, as the file's real location is what the policy labels.
+/// `path` made absolute against the current directory, with its directory's symlinks resolved when it exists, as the file's real location is what the policy labels.
 fn absolute(path: &Path) -> String {
     let joined = if path.is_absolute() {
         path.to_path_buf()
@@ -247,13 +194,10 @@ fn absolute(path: &Path) -> String {
     resolved.to_string_lossy().into_owned()
 }
 
-/// The thread's fscreate context while this lives, cleared when it is dropped with an empty
-/// write, as libselinux's `setfscreatecon(NULL)` clears it.
+/// The thread's fscreate context while this lives, cleared when it is dropped with an empty write, as libselinux's `setfscreatecon(NULL)` clears it.
 struct FsCreate(File);
 
 impl FsCreate {
-    /// Set the thread's fscreate context to `context`; `None` when it is that already, and then
-    /// nothing is written.
     fn set(attr: &Path, context: &str) -> io::Result<Option<Self>> {
         let path = attr.join("fscreate");
         if fs::read(&path).is_ok_and(|now| attr_value(&now) == context.as_bytes()) {
@@ -281,7 +225,6 @@ fn write_attr(file: &File, bytes: &[u8]) -> io::Result<()> {
     Ok(())
 }
 
-/// The file type a specification is limited to: `--` a regular file, and the others.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SpecType {
     Any,
@@ -297,7 +240,6 @@ struct Spec {
     meta: bool,
 }
 
-/// The specifications and substitutions of one policy's file contexts.
 #[derive(Debug, Default)]
 struct FileContexts {
     specs: Vec<Spec>,
@@ -306,8 +248,7 @@ struct FileContexts {
 }
 
 impl FileContexts {
-    /// Read `file_contexts` (which must exist), `file_contexts.homedirs`, `file_contexts.local`
-    /// and the two substitution files from `dir`.
+    /// Read `file_contexts` (which must exist), `file_contexts.homedirs`, `file_contexts.local` and the two substitution files from `dir`.
     fn load(dir: &Path) -> io::Result<Self> {
         let mut fc = Self::default();
         fc.add_specs(&fs::read_to_string(dir.join("file_contexts"))?);
@@ -351,6 +292,7 @@ impl FileContexts {
     }
 
     /// The context for a regular file at the absolute `path`, `None` for `<<none>>` or no match.
+    /// Expressions are Rust regex, not PCRE2: anchored `^(?:…)$`, `.` excludes newline (no `DOTALL`), Unicode `\d\w\s`, and an uncompilable spec is skipped.
     fn lookup(&self, path: &str) -> Option<String> {
         let key = self.substitute(&normalize(path));
         let candidates = self
@@ -396,7 +338,6 @@ fn read_subs(path: &Path) -> Vec<(String, String)> {
         .collect()
 }
 
-/// The first substitution whose source is `key` or a leading directory of it.
 fn sub_one(subs: &[(String, String)], key: &str) -> Option<String> {
     subs.iter().find_map(|(src, dst)| {
         let rest = key.strip_prefix(src.as_str())?;
@@ -404,7 +345,6 @@ fn sub_one(subs: &[(String, String)], key: &str) -> Option<String> {
     })
 }
 
-/// Duplicate slashes collapsed and a trailing one dropped.
 fn normalize(path: &str) -> String {
     let mut out = String::with_capacity(path.len());
     for c in path.chars() {
@@ -419,7 +359,6 @@ fn normalize(path: &str) -> String {
     out
 }
 
-/// Whether a specification has regular-expression characters; an escaped character is literal.
 fn has_meta(regex: &str) -> bool {
     let mut chars = regex.chars();
     while let Some(c) = chars.next() {
@@ -434,8 +373,6 @@ fn has_meta(regex: &str) -> bool {
     false
 }
 
-/// Whether `path` starts with the literal text a specification's expression starts with, so that
-/// only the few specifications that may match are compiled.
 fn may_match(regex: &str, path: &str) -> bool {
     let mut depth = 0usize;
     let mut chars = regex.chars();
@@ -480,23 +417,18 @@ pub(crate) mod tests {
     use std::os::unix::fs::PermissionsExt as _;
 
     thread_local! {
-        /// Every write to the fscreate attribute, in order: a context ends in a NUL, a clear is
-        /// empty.
+        /// Every write to the fscreate attribute, in order: a context ends in a NUL, a clear is empty.
         pub(crate) static ATTR_WRITES: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
     }
 
-    /// The user extended attribute that stands in for `security.selinux`.
     const TEST_XATTR: &str = "user.kerber.test.selinux";
 
     const PRINCIPAL: &str = "system_u:object_r:krb5kdc_principal_t:s0";
     const LOCK: &str = "system_u:object_r:krb5kdc_lock_t:s0";
     const CONF: &str = "system_u:object_r:krb5kdc_conf_t:s0";
-    /// The policy's contexts as an unconfined writer sets them, with its own SELinux user.
     const PRINCIPAL_U: &str = "unconfined_u:object_r:krb5kdc_principal_t:s0";
     const LOCK_U: &str = "unconfined_u:object_r:krb5kdc_lock_t:s0";
 
-    /// The `/var/kerberos/krb5kdc` lines of Fedora 43's targeted `file_contexts`, in their order,
-    /// among a few others of the same shape.
     const FC: &str = "\
 /.*\tsystem_u:object_r:default_t:s0
 /var(/.*)?\tsystem_u:object_r:var_t:s0
@@ -517,9 +449,7 @@ pub(crate) mod tests {
         fc
     }
 
-    /// A stand-in SELinux in a scratch directory: the thread's fscreate and current attributes
-    /// (an unconfined user), and a policy whose `file_contexts` labels the files named in `specs`
-    /// in its `data` directory. The write record starts empty.
+    /// A stand-in SELinux in a scratch directory: the thread's fscreate and current attributes (an unconfined user), and a policy whose `file_contexts` labels the files named in `specs` in its `data` directory. The write record starts empty.
     pub(crate) struct Fake {
         pub(crate) se: SeLinux,
         dir: PathBuf,
@@ -584,8 +514,6 @@ pub(crate) mod tests {
             self.se.roots.attr.join("fscreate")
         }
 
-        /// The thread's fscreate context is `context` already, as the kernel reads it back, and
-        /// may not be written: a writer without `process:setfscreate`.
         fn hold(&self, context: &str) {
             fs::write(self.fscreate_path(), format!("{context}\0")).unwrap();
             fs::set_permissions(self.fscreate_path(), fs::Permissions::from_mode(0o400)).unwrap();
@@ -596,8 +524,7 @@ pub(crate) mod tests {
             fs::remove_file(self.fscreate_path()).unwrap();
         }
 
-        /// Give `path` the stand-in context `context`; false when the filesystem keeps no user
-        /// extended attributes.
+        /// Give `path` the stand-in context `context`; false when the filesystem keeps no user extended attributes.
         pub(crate) fn label(path: &Path, context: &str) -> bool {
             let done = rustix::fs::setxattr(
                 path,
@@ -635,12 +562,10 @@ pub(crate) mod tests {
         out
     }
 
-    /// The fscreate writes so far on this thread.
     fn writes() -> Vec<Vec<u8>> {
         ATTR_WRITES.with(|w| w.borrow().clone())
     }
 
-    /// `context` written, then cleared with an empty write.
     fn set_then_cleared(context: &str) -> Vec<Vec<u8>> {
         vec![format!("{context}\0").into_bytes(), Vec::new()]
     }
@@ -769,8 +694,6 @@ pub(crate) mod tests {
         let fake = Fake::new("selabel-replace", true, &[("principal", PRINCIPAL)]);
         let path = fake.path("principal");
         fs::write(&path, b"old").unwrap();
-        // A database an unconfined writer left with its directory's type keeps it, as MIT's
-        // in-place write keeps whatever the file has, whatever the policy says.
         if !Fake::label(&path, CONF) {
             return;
         }
@@ -887,10 +810,6 @@ pub(crate) mod tests {
         assert!(!may_match("/var/kerberos/krb5kdc(/.*)?", "/srv/x"));
     }
 
-    /// Run with `KERBER_FILE_CONTEXTS_DIR` (a copy of a policy's `contexts/files`) and
-    /// `KERBER_MATCHPATHCON_TABLE` (`matchpathcon -m file` output: path, a tab, context) to
-    /// compare this lookup with libselinux's for every path in the table, and to list the
-    /// specifications this syntax cannot compile; skipped otherwise.
     #[test]
     fn agrees_with_matchpathcon_when_given_its_table() {
         let (Some(dir), Some(table)) = (
