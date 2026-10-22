@@ -1,10 +1,6 @@
 //! The SPAKE kdcpreauth module.
 //!
-//! The KDC answers a support message with a challenge in the first of the client's groups it
-//! permits, or sends an optimistic challenge with PREAUTH_REQUIRED when
-//! `spake_preauth_kdc_challenge` names a group. It keeps the private scalar and the transcript hash
-//! in its secure cookie, checks the response's encrypted SF-NONE factor with `K'[1]`, and makes the
-//! reply key `K'[0]`.
+//! The KDC answers a support message with a challenge in the first of the client's groups it permits, or sends an optimistic challenge with PREAUTH_REQUIRED when `spake_preauth_kdc_challenge` names a group. It keeps the private scalar and the transcript hash in its secure cookie, checks the response's encrypted SF-NONE factor with `K'[1]`, and makes the reply key `K'[0]`.
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
@@ -44,7 +40,6 @@ fn failed() -> Error {
     proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED)
 }
 
-/// `EINVAL`.
 const EINVAL: i32 = 22;
 /// MIT `KRB5_BAD_ENCTYPE` (`krb5_err.et`): `ERROR_TABLE_BASE_krb5` plus 188.
 const KRB5_BAD_ENCTYPE: i32 = -1_765_328_196;
@@ -75,9 +70,7 @@ fn pa_spake(value: Vec<u8>) -> PaData {
     }
 }
 
-/// The module's cookie: version 1, the stage, the group, then the SPAKE value and the transcript
-/// hash.
-///
+/// The module's cookie: version 1, the stage, the group, then the SPAKE value and the transcript hash.
 /// MIT `make_cookie` (`spake_kdc.c:127-153`): the integers are big-endian, and each data field is a 32-bit length and its octets; a stage-0 cookie's SPAKE value is the private scalar.
 fn make_spake_cookie(
     stage: u16,
@@ -153,13 +146,8 @@ fn parse_spake_cookie(cookie: &[u8]) -> Result<SpakeCookie<'_>, Error> {
 }
 
 /// A challenge in `group` and the stage-0 cookie that keeps the private scalar.
-///
+/// [`Error::Crypto`] when the key generation fails; [`Error::Asn1`] when the challenge does not encode.
 /// MIT `send_challenge` (`spake_kdc.c:207-294`): the challenge offers only SF-NONE, and the transcript hash starts with the support message (none for an optimistic challenge) and the challenge.
-///
-/// # Errors
-///
-/// [`Error::Crypto`] when the key generation fails; [`Error::Asn1`] when the challenge does not
-/// encode.
 fn send_challenge(
     ikey: &ProtocolKey,
     group: SpakeGroup,
@@ -181,7 +169,6 @@ fn send_challenge(
 }
 
 /// The module's PREAUTH_REQUIRED hint, and the cookie state of an optimistic challenge.
-///
 /// MIT `spake_edata` (`spake_kdc.c:296-324`): no client key is no hint, a configured challenge group sends a challenge, and otherwise the hint is an empty PA-SPAKE.
 pub(crate) fn spake_edata(store: &dyn PrincipalRead, ikey: Option<&ProtocolKey>) -> PreauthHint {
     // MIT `load_preauth_plugins` (`kdc_preauth.c:207-219`): a module whose init failed is left out.
@@ -207,7 +194,6 @@ pub(crate) fn spake_edata(store: &dyn PrincipalRead, ikey: Option<&ProtocolKey>)
 }
 
 /// A challenge in the first of the client's groups the KDC permits.
-///
 /// MIT `verify_support` (`spake_kdc.c:326-355`): the client's order decides, and a support message sharing no group is PREAUTH_FAILED.
 fn verify_support(
     store: &dyn PrincipalRead,
@@ -236,7 +222,6 @@ fn verify_support(
 }
 
 /// The reply key `K'[0]` once the response's factor decrypts under `K'[1]` and is SF-NONE.
-///
 /// MIT `verify_response` (`spake_kdc.c:357-475`): the stage-0 cookie gives the group, the private scalar and the transcript hash; a missing cookie, another stage, a bad factor or another factor type is PREAUTH_FAILED.
 fn verify_response(
     store: &dyn PrincipalRead,
@@ -288,19 +273,10 @@ fn verify_response(
     Ok(SpakeStep::Done(k0))
 }
 
-/// The module's answer to a PA-SPAKE in an AS-REQ: a challenge for a support message, the reply
-/// key for a response. `None` when the request has no PA-SPAKE or the module did not load.
-///
+/// The module's answer to a PA-SPAKE in an AS-REQ: a challenge for a support message, the reply key for a response. `None` when the request has no PA-SPAKE or the module did not load.
 /// MIT `spake_verify` (`spake_kdc.c:501-539`): a message that does not decode fails, and an encdata or any other message type is PREAUTH_FAILED.
 /// MIT `next_padata` (`kdc_preauth.c:1306-1307`): a module that did not load is no pa_system, so its padata is skipped.
-///
-/// # Errors
-///
-/// [`Error::Protocol`] `PREAUTH_FAILED` for a support message sharing no permitted group, a
-/// response without a readable stage-0 cookie or with a bad factor, an encdata or challenge
-/// message, or a cookie in a group not implemented; [`Error::Asn1`] when the PA-SPAKE does not
-/// decode or the challenge does not encode; [`Error::Crypto`] when a SPAKE derivation, the
-/// client's element or the cookie encryption fails.
+/// [`Error::Protocol`] `PREAUTH_FAILED` for a support message sharing no permitted group, a response without a readable stage-0 cookie or with a bad factor, an encdata or challenge message, or a cookie in a group not implemented; [`Error::Asn1`] when the PA-SPAKE does not decode or the challenge does not encode; [`Error::Crypto`] when a SPAKE derivation, the client's element or the cookie encryption fails.
 pub(crate) fn process_spake(
     store: &dyn PrincipalRead,
     client: &Principal,
