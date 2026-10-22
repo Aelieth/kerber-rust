@@ -1,5 +1,3 @@
-//! Non-0x8003 authenticator checksum over empty data.
-
 use krb5_asn1::encode;
 use krb5_crypto::{EncryptionType, KeyUsage, checksum, string_to_key};
 use krb5_gss::{GSS_C_MUTUAL, GSS_C_REPLAY, GSS_C_SEQUENCE, GssContext};

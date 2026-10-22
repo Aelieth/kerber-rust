@@ -1,5 +1,3 @@
-//! GSS init/accept whole-flow tests (public API).
-
 use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};
 use krb5_gss::{Error, GssContext, mit_shaped_wrap};
 use krb5_kdc::S2K_ITERS;
@@ -203,7 +201,6 @@ fn wrap_mic_replay_inside_window_is_rejected() {
     let (mut init, mut acc) = contexts();
     let w = init.wrap(b"one").unwrap();
     acc.unwrap(&w).unwrap();
-    // Gap inside the window is accepted (seq 0 then seq 2).
     let gap = mit_shaped_wrap(init.session_key(), true, 2, b"gap").unwrap();
     assert_eq!(acc.unwrap(&gap).unwrap(), b"gap");
     assert!(matches!(acc.unwrap(&w), Err(Error::Sequence)));

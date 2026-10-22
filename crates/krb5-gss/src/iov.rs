@@ -1,6 +1,3 @@
-//! IOV wrap (`k5sealiov.c`, `k5sealv3iov.c`, `k5unsealiov.c`,
-//! `wrap_size_limit.c`): SIGN_ONLY buffers and DCE RRC.
-
 use krb5_crypto::{checksum, decrypt_cts, encrypt_with_confounder, integrity_mac};
 
 use super::wrap::{
@@ -9,26 +6,17 @@ use super::wrap::{
 };
 use super::{Error, GssContext};
 
-/// GSS IOV buffer type (MIT `gssapi_ext.h`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IovType {
-    /// Confidentiality payload (encrypted in place).
     Data,
-    /// Token header (GSS 16 + AES confounder ciphertext).
     Header,
-    /// E(header) + HMAC.
     Trailer,
-    /// Empty for AES-CTS / RFC 8009.
     Padding,
-    /// Integrity-only associated data (RPCSEC_GSS header).
     SignOnly,
 }
 
-/// One wrap_iov buffer. HEADER/TRAILER/PADDING are resized; DATA is in-place.
 pub struct IovBuf<'a> {
-    /// Buffer role.
     pub kind: IovType,
-    /// Backing storage.
     pub data: &'a mut Vec<u8>,
 }
 
@@ -137,10 +125,7 @@ fn split_wrap_token(
     write_iov_one(iov, IovType::Trailer, &tok[header_len + n..])
 }
 
-/// MIT `gss_krb5int_make_seal_token_v3` (`k5sealv3.c:87-93`): a wrap token is checksummed under the
-/// seal usage, not the MIC usage.
-/// Sign-only bytes are included in that checksum, and a ciphertext shorter than the confounder is
-/// not a checksum input.
+// MIT `gss_krb5int_make_seal_token_v3` (`k5sealv3.c:87-93`): a wrap token is checksummed under the
 fn iov_hmac_input(
     iov: &[IovBuf<'_>],
     rfc8009: bool,
@@ -189,15 +174,6 @@ fn iov_hmac_input(
 }
 
 impl GssContext {
-    /// CFX wrap_iov (AES / RFC 8009). `conf` encrypts DATA; `SIGN_ONLY` is MAC-only.
-    ///
-    /// Layout: HEADER (32) | DATA | PADDING (empty) | TRAILER (E(header)+HMAC), RRC=0.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Inner`] when the send key is not AES, or (with `conf`) the OS random source
-    /// fails; [`Error::Truncated`] when the HEADER or TRAILER buffer is missing or repeated, or
-    /// (with `conf`) there is no DATA buffer.
     pub fn wrap_iov(&mut self, conf: bool, iov: &mut [IovBuf<'_>]) -> Result<(), Error> {
         if conf {
             self.wrap_iov_sealed(iov)
@@ -206,16 +182,6 @@ impl GssContext {
         }
     }
 
-    /// Inverse of [`Self::wrap_iov`]. DATA is replaced with plaintext.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Truncated`] when a HEADER, TRAILER, or DATA buffer is missing, a HEADER or
-    /// TRAILER is repeated or the wrong size, the token header is malformed, or the plaintext
-    /// does not fill the DATA buffers; [`Error::Integrity`] when the token comes from this side
-    /// or its seal or checksum does not verify; [`Error::Inner`] when the receive key is not AES
-    /// or the payload is too short to decrypt; [`Error::Sequence`] when its sequence number is a
-    /// replay or outside the window.
     pub fn unwrap_iov(&mut self, iov: &mut [IovBuf<'_>]) -> Result<(), Error> {
         let sealed = iov
             .iter()
@@ -231,11 +197,6 @@ impl GssContext {
         }
     }
 
-    /// HEADER / PADDING / TRAILER sizes for AES wrap_iov (`conf` = confidentiality).
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Inner`] when the send key is not an AES etype.
     pub fn wrap_iov_length(&self, conf: bool) -> Result<(usize, usize, usize), Error> {
         let (key, _) = self.send_key();
         require_aes(key.etype())?;
@@ -247,9 +208,7 @@ impl GssContext {
         }
     }
 
-    /// MIT `kg_seal` (`k5seal.c:318-320`): a context that is not established does not produce a
-    /// token.
-    /// Sign-only buffers are authenticated and are not written out as ciphertext.
+    // MIT `kg_seal` (`k5seal.c:318-320`): a context that is not established does not produce a
     fn wrap_iov_sealed(&mut self, iov: &mut [IovBuf<'_>]) -> Result<(), Error> {
         let (key, extra) = self.send_key();
         let key = key.clone();
@@ -324,10 +283,7 @@ impl GssContext {
         Ok(())
     }
 
-    /// MIT `unwrap_v3` (`unwrap.c:300-304`): a wrap token from the wrong direction is a bad
-    /// signature and is not decrypted.
-    /// A header that is not a sealed wrap token, or whose right-rotation count is not zero, is not
-    /// plaintext.
+    // MIT unwrap_v3; see docs/parity/b1-gss.md
     fn unwrap_iov_sealed(&mut self, iov: &mut [IovBuf<'_>]) -> Result<(), Error> {
         let has_ad = iov
             .iter()

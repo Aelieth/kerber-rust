@@ -1,5 +1,3 @@
-//! In-crate GSS tests (private-bound; moved out of `lib.rs`).
-
 use super::context::TOK_AP_REQ;
 use super::oid::{gss_unwrap_app, gss_wrap_app};
 use super::wrap::TOK_WRAP;

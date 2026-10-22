@@ -1,10 +1,3 @@
-//! GSS acceptor for out-of-process MIT `gss-client` interop (RFC 4121).
-//!
-//! Speaks the MIT `gss-sample` TCP framing: 4-byte length prefix then token.
-//! Usage: `krb5-gss-accept --keytab PATH [--listen HOST:PORT] [--channel-bindings DATA] [--accept-only]`
-//!
-//! The gss gate's test tool, built only with the `test-hooks` feature: a release build has none.
-
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![allow(
@@ -78,9 +71,6 @@ fn main() {
         std::process::exit(1);
     };
     let service_keys: Vec<_> = kt.entries.iter().map(|e| e.key.clone()).collect();
-    // Parallel kvnos so a fully specified acceptor name pins the ticket kvno
-    // (MIT try_one_princ); a ticket labelled kvno N is not opened by a key
-    // labelled M != N.
     let service_kvnos: Vec<u32> = kt.entries.iter().map(|e| e.kvno).collect();
     eprintln!(
         "gss-accept keytab entries={} principal={}",
@@ -94,7 +84,6 @@ fn main() {
     });
     println!("gss-accept listening {listen}");
     let rcache = ReplayCache::new();
-    // The acceptor's profile, krb5.conf's, read once.
     let conf = krb5_config::load_krb5_conf()
         .as_ref()
         .map_or_else(AcceptorConfig::default, AcceptorConfig::from_krb5_conf);

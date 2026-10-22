@@ -1,5 +1,3 @@
-//! RFC 4121 RRC is reduced modulo the payload length.
-
 #[path = "common/mod.rs"]
 mod common;
 use common::issue_tgt;
@@ -53,7 +51,6 @@ fn linked() -> (GssContext, GssContext) {
 
 #[test]
 fn rrc_reduces_modulo_the_payload_length() {
-    // A token MIT accepts (rc %= len): rrc = payload.len() + real_rrc.
     let (mut init, mut acc) = linked();
     let tok = init.wrap_with_rrc(b"rrc-wrap", 0).unwrap();
     let payload_len = u16::try_from(tok.len() - 16).unwrap();

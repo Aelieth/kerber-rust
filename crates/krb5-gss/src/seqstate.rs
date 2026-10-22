@@ -45,7 +45,6 @@ impl SeqState {
         rel < self.next && self.next - rel > 64
     }
 
-    // MIT g_seqstate_check; see docs/parity/b1-gss.md
     pub(crate) fn check(&mut self, seqnum: u64) -> SeqStatus {
         if !self.do_replay && !self.do_sequence {
             return SeqStatus::Complete;
@@ -54,7 +53,6 @@ impl SeqState {
         let rel = seqnum.wrapping_sub(self.base) & mask;
         if rel >= self.next {
             let offset = rel - self.next;
-            // A shift of 64 or more, undefined in MIT's C, empties the bitmap.
             self.recvmap = offset
                 .checked_add(1)
                 .and_then(|n| u32::try_from(n).ok())

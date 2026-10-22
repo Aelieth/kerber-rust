@@ -1,7 +1,3 @@
-//! Exported context tokens (`export_sec_context.c`,
-//! `import_sec_context.c`, `ser_sctx.c`): a Rust-private encoding,
-//! not MIT's `ser_sctx` wire.
-
 use krb5_crypto::{EncryptionType, ProtocolKey};
 
 use super::seqstate::SeqState;
@@ -55,12 +51,6 @@ fn read_opt_str(token: &[u8], i: &mut usize) -> Result<Option<String>, Error> {
 }
 
 impl GssContext {
-    /// Serialize context state (private Rust↔Rust format, not MIT `kg_ctx_externalize`).
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Truncated`] when the client name, delegated name, or SPNEGO mechanism list
-    /// exceeds `u16::MAX` bytes.
     pub fn export_sec_context(&self) -> Result<Vec<u8>, Error> {
         let mut o = Vec::new();
         o.extend_from_slice(EXPORT_MAGIC);
@@ -92,13 +82,6 @@ impl GssContext {
         Ok(o)
     }
 
-    /// Inverse of [`Self::export_sec_context`].
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Truncated`] when the token lacks the `K5G1` magic or version 2, runs short, holds a
-    /// non-UTF-8 name, or has trailing bytes;
-    /// [`Error::Inner`] when a key's etype is unknown or its length does not match the etype.
     pub fn import_sec_context(token: &[u8]) -> Result<Self, Error> {
         let mut i = 0usize;
         if token.get(i..i + 4) != Some(EXPORT_MAGIC.as_slice()) {

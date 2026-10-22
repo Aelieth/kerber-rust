@@ -1,9 +1,3 @@
-//! MIC tokens (`verify_mic.c`, `k5seal.c`).
-//!
-//! A MIC is token id `0x0404`. Verify rejects a bad direction or a bad
-//! checksum before it consumes the sequence. The send sequence
-//! increments only after the token is built.
-
 use krb5_crypto::{checksum, verify_checksum_type};
 
 use super::oid::message_token;
@@ -24,11 +18,6 @@ fn mic_header(initiator: bool, extra: u8, seq: u64) -> [u8; 16] {
 }
 
 impl GssContext {
-    /// MIC (integrity only). RFC 4121 §4.2.6.1 token.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Inner`] when the keyed checksum under the send key cannot be computed.
     pub fn get_mic(&mut self, data: &[u8]) -> Result<Vec<u8>, Error> {
         let usage = sign_usage(self.initiator);
         let (key, extra) = self.send_key();
@@ -42,15 +31,6 @@ impl GssContext {
         Ok(tok)
     }
 
-    /// Verify a MIC. Sequence numbers are checked.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Truncated`] when the token is badly framed or under its 16-byte header, is not a
-    /// MIC token, has a bad filler, or its checksum is the wrong length; [`Error::Integrity`] when
-    /// the token comes from this side or its checksum does not verify under the key its flags
-    /// select; [`Error::Sequence`] when its sequence number is a replay or outside the receive
-    /// window.
     pub fn verify_mic(&mut self, data: &[u8], token: &[u8]) -> Result<(), Error> {
         let owned = message_token(token)?;
         let inner = owned.as_slice();
