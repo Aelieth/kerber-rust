@@ -88,8 +88,8 @@ compares a completed SHA, or the last N runs, against that file. A run cannot
 measure itself. No workflow runs that check on a schedule.
 
 - **Tier 1** — per-push blocking (`.github/workflows/ci.yml`): `test` 360,
-  `doc` 90, `shellcheck` 150, `msrv` 150, `audit` 260, `mit-smoke` 150.
-  Combined wall ≤ `[push].run_wall` (360 s).
+  `doc` 90, `release` 180, `fuzz` 120, `shellcheck` 150, `msrv` 150,
+  `audit` 260, `mit-smoke` 150. Combined wall ≤ `[push].run_wall` (360 s).
 - **Tier 2** — none. No per-push job is `continue-on-error`.
 - **Tier 3** — scheduled: `nightly.yml` (`oracles`, `moving`, `fuzz`,
   `anchors`; `test-release` and `msrv-test` on a tag or a manual run) and
@@ -107,8 +107,10 @@ The toolchain, lld, and `rust-cache` steps are one composite,
 
 | Job | Runs |
 | --- | --- |
-| `test` | `python3 scripts/ci-policy.py`, `cargo fmt --all -- --check`, `cargo clippy -D warnings` with `--all-features` and with none, `cargo nextest run --workspace --profile ci` with the test-hooks features, then `--profile ci-nofeatures --locked`, then doctests |
-| `doc` | `cargo doc --workspace --no-deps` under `RUSTDOCFLAGS=-D warnings`, then `cargo check --locked --manifest-path fuzz/Cargo.toml --bins` |
+| `test` | `python3 scripts/ci-policy.py`, `cargo fmt --all -- --check`, `cargo clippy -D warnings` with `--all-features` and with none, `cargo nextest run --workspace --profile ci` with the test-hooks features, then doctests |
+| `release` | `cargo nextest run --workspace --profile ci-nofeatures --locked` |
+| `doc` | `cargo doc --workspace --no-deps` under `RUSTDOCFLAGS=-D warnings` |
+| `fuzz` | `cargo check --locked --manifest-path fuzz/Cargo.toml --bins` |
 | `shellcheck` | `shellcheck -S style` on `scripts/*.sh`, `scripts/lib/*.sh`, `harness/*.sh`, `dist/*.sh`, `harness/field/*.sh`, `harness/field/lib/*.sh`, and `harness/field/scenarios/*.sh`. ShellCheck is v0.11.0, checked by sha256. `.shellcheckrc` sets `external-sources=true` and disables `SC2329` |
 | `msrv` | `cargo build --workspace --all-targets --locked` on Rust 1.95, with the test-hooks features and without |
 | `audit` | `cargo audit --deny warnings` (cargo-audit 0.22.2), `cargo deny`, `cargo vet --locked` (cargo-vet 0.10.0) |

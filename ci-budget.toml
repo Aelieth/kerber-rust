@@ -1,4 +1,4 @@
-# Per-push budgets (seconds) for the six ci.yml jobs.
+# Per-push budgets (seconds) for the ci.yml jobs.
 # From runs 873-875 and the five successful jobs of run 876.
 # Run 877 had no published durations when these numbers were set.
 # Run 876 msrv failed and is not a sample.
@@ -8,6 +8,10 @@
 [jobs]
 test = 360
 doc = 90
+# release is the old test step (max 108s) plus a toolchain. fuzz is the old
+# doc step (max 61s) plus a toolchain. test and doc ceilings are unchanged.
+release = 180
+fuzz = 120
 shellcheck = 150
 msrv = 150
 audit = 260

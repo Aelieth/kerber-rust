@@ -48,13 +48,6 @@ jobs:
         env:
           KRB5_CONFIG: ${{ github.workspace }}/harness/nextest-krb5.conf
         run: cargo nextest run --workspace --profile ci --features krb5-kdc/test-hooks,krb5-admin/test-hooks,krb5-client/test-hooks
-      - name: test (release build, no features)
-        # The release-only units: a build without the test-hooks features, as `make build` makes.
-        # Its own profile keeps its junit beside the features run's, not over it.
-        timeout-minutes: 10
-        env:
-          KRB5_CONFIG: ${{ github.workspace }}/harness/nextest-krb5.conf
-        run: cargo nextest run --workspace --profile ci-nofeatures --locked
       - name: doctests
         env:
           KRB5_CONFIG: ${{ github.workspace }}/harness/nextest-krb5.conf
@@ -63,19 +56,13 @@ jobs:
         # Job logs are private; the annotations are public and are what
         # scripts/ci-status.py reads. One ::error per failed testcase.
         if: failure()
-        run: |
-          python3 scripts/lib/junit-annotate.py target/nextest/ci/junit.xml
-          if [ -f target/nextest/ci-nofeatures/junit.xml ]; then
-            python3 scripts/lib/junit-annotate.py target/nextest/ci-nofeatures/junit.xml
-          fi
+        run: python3 scripts/lib/junit-annotate.py target/nextest/ci/junit.xml
       - name: Upload nextest junit
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: nextest-junit
-          path: |
-            target/nextest/ci/junit.xml
-            target/nextest/ci-nofeatures/junit.xml
+          path: target/nextest/ci/junit.xml
           retention-days: 7
           if-no-files-found: error
 
@@ -89,6 +76,42 @@ jobs:
         run: cargo doc --workspace --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
+
+  release:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: ./.github/actions/rust-preamble
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2.87.14
+        with:
+          tool: nextest
+      - name: test (release build, no features)
+        # The release-only units: a build without the test-hooks features, as `make build` makes.
+        # Its own profile keeps its junit beside the features run's, not over it.
+        timeout-minutes: 10
+        env:
+          KRB5_CONFIG: ${{ github.workspace }}/harness/nextest-krb5.conf
+        run: cargo nextest run --workspace --profile ci-nofeatures --locked
+      - name: Annotate nextest failures
+        if: failure()
+        run: python3 scripts/lib/junit-annotate.py target/nextest/ci-nofeatures/junit.xml
+      - name: Upload nextest junit
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nextest-junit-nofeatures
+          path: target/nextest/ci-nofeatures/junit.xml
+          retention-days: 7
+          if-no-files-found: error
+
+  fuzz:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: ./.github/actions/rust-preamble
       - name: fuzz crate
         run: cargo check --locked --manifest-path fuzz/Cargo.toml --bins
 

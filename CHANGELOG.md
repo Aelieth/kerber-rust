@@ -59,6 +59,7 @@ any other `###` heading.
 
 ### Tests and CI
 
+- **ci.** The no-features nextest run and the fuzz-crate check are their own jobs. The `test` and `doc` budgets stay 360 s and 90 s. No test was removed.
 - **gss.** The nightly GSS gate checks that both acceptors report one host ticket's lifetime within 60 s.
 - **ci.** The audit job installs prebuilt cargo-audit 0.22.2 and runs `cargo audit --deny warnings`. It does not file issues.
 - **ci.** ci-policy prints the product and per-crate comment and test ratios and does not fail on them.
