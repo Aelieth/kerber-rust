@@ -10,9 +10,13 @@ use zeroize::{Zeroize, Zeroizing};
 #[cfg(p384_backend = "fiat")]
 use super::cms::p384_sign;
 use super::cms::{
-    OID_ECDSA_SHA256, OID_K256_CURVE, OID_P224_CURVE, OID_P256_CURVE, OID_P384_CURVE,
-    OID_P521_CURVE, OID_RSA_SHA256, k256_sign, p224_sign, p256_sign, p521_sign, unbase64,
+    OID_BP256R1_CURVE, OID_BP256T1_CURVE, OID_BP384R1_CURVE, OID_BP384T1_CURVE, OID_BP512R1_CURVE,
+    OID_BP512T1_CURVE, OID_ECDSA_SHA256, OID_K256_CURVE, OID_P224_CURVE, OID_P256_CURVE,
+    OID_P384_CURVE, OID_P521_CURVE, OID_RSA_SHA256, bp256r1_sign, bp256t1_sign, bp384r1_sign,
+    bp384t1_sign, k256_sign, p224_sign, p256_sign, p521_sign, unbase64,
 };
+#[cfg(target_pointer_width = "64")]
+use super::cms::{bp512r1_sign, bp512t1_sign};
 use super::matching::{MatchTrace, select_cert};
 use super::rsa::RsaKey;
 use super::take_tlv;
@@ -39,6 +43,12 @@ pub enum IdentityKey {
     P521(Zeroizing<[u8; 66]>),
     P224(Zeroizing<[u8; 28]>),
     K256(Zeroizing<[u8; 32]>),
+    Bp256r1(Zeroizing<[u8; 32]>),
+    Bp256t1(Zeroizing<[u8; 32]>),
+    Bp384r1(Zeroizing<[u8; 48]>),
+    Bp384t1(Zeroizing<[u8; 48]>),
+    Bp512r1(Zeroizing<[u8; 64]>),
+    Bp512t1(Zeroizing<[u8; 64]>),
     Rsa(Box<RsaKey>),
 }
 
@@ -65,6 +75,16 @@ impl IdentityKey {
             Self::P521(k) => Some((p521_sign(k, msg)?, OID_ECDSA_SHA256)),
             Self::P224(k) => Some((p224_sign(k, msg)?, OID_ECDSA_SHA256)),
             Self::K256(k) => Some((k256_sign(k, msg)?, OID_ECDSA_SHA256)),
+            Self::Bp256r1(k) => Some((bp256r1_sign(k, msg)?, OID_ECDSA_SHA256)),
+            Self::Bp256t1(k) => Some((bp256t1_sign(k, msg)?, OID_ECDSA_SHA256)),
+            Self::Bp384r1(k) => Some((bp384r1_sign(k, msg)?, OID_ECDSA_SHA256)),
+            Self::Bp384t1(k) => Some((bp384t1_sign(k, msg)?, OID_ECDSA_SHA256)),
+            #[cfg(target_pointer_width = "64")]
+            Self::Bp512r1(k) => Some((bp512r1_sign(k, msg)?, OID_ECDSA_SHA256)),
+            #[cfg(target_pointer_width = "64")]
+            Self::Bp512t1(k) => Some((bp512t1_sign(k, msg)?, OID_ECDSA_SHA256)),
+            #[cfg(not(target_pointer_width = "64"))]
+            Self::Bp512r1(_) | Self::Bp512t1(_) => None,
             Self::Rsa(k) => Some((k.sign_sha256(msg)?, OID_RSA_SHA256)),
         }
     }
@@ -78,6 +98,12 @@ impl std::fmt::Debug for IdentityKey {
             Self::P521(_) => f.write_str("IdentityKey::P521"),
             Self::P224(_) => f.write_str("IdentityKey::P224"),
             Self::K256(_) => f.write_str("IdentityKey::K256"),
+            Self::Bp256r1(_) => f.write_str("IdentityKey::Bp256r1"),
+            Self::Bp256t1(_) => f.write_str("IdentityKey::Bp256t1"),
+            Self::Bp384r1(_) => f.write_str("IdentityKey::Bp384r1"),
+            Self::Bp384t1(_) => f.write_str("IdentityKey::Bp384t1"),
+            Self::Bp512r1(_) => f.write_str("IdentityKey::Bp512r1"),
+            Self::Bp512t1(_) => f.write_str("IdentityKey::Bp512t1"),
             Self::Rsa(k) => write!(f, "IdentityKey::Rsa({k:?})"),
         }
     }
@@ -86,8 +112,9 @@ impl std::fmt::Debug for IdentityKey {
 impl Zeroize for IdentityKey {
     fn zeroize(&mut self) {
         match self {
-            Self::P256(k) | Self::K256(k) => k.zeroize(),
-            Self::P384(k) => k.zeroize(),
+            Self::P256(k) | Self::K256(k) | Self::Bp256r1(k) | Self::Bp256t1(k) => k.zeroize(),
+            Self::P384(k) | Self::Bp384r1(k) | Self::Bp384t1(k) => k.zeroize(),
+            Self::Bp512r1(k) | Self::Bp512t1(k) => k.zeroize(),
             Self::P521(k) => k.zeroize(),
             Self::P224(k) => k.zeroize(),
             Self::Rsa(k) => k.zeroize(),
@@ -240,10 +267,17 @@ fn load_cert_and_key(cert_file: &str, key_file: &str) -> Result<PkinitIdentity, 
         KeyFault::Read(code, why) => {
             IdentityError::new(code, format!("Cannot read key file '{fsname}': {why}"))
         }
-        KeyFault::Unsupported => IdentityError::new(
-            KDC_PREAUTH_FAILED,
-            format!("Cannot use key file '{fsname}': only P-224, P-256, P-384, P-521 and secp256k1 EC keys and RSA keys are supported"),
-        ),
+        KeyFault::Unsupported => {
+            let curves = if cfg!(target_pointer_width = "64") {
+                "brainpool P256, P384 and P512"
+            } else {
+                "brainpool P256 and P384"
+            };
+            IdentityError::new(
+                KDC_PREAUTH_FAILED,
+                format!("Cannot use key file '{fsname}': only P-224, P-256, P-384, P-521, secp256k1 and {curves} EC keys and RSA keys are supported"),
+            )
+        }
     })?;
     Ok(PkinitIdentity::new(cert, key))
 }
@@ -431,6 +465,34 @@ fn sec1_ec(der: &[u8], outer: Option<&[u8]>) -> Option<IdentityKey> {
             .map(IdentityKey::P224),
         OID_K256_CURVE => scalar_on::<32>(scalar, |k| k256::SecretKey::from_slice(k).is_ok())
             .map(IdentityKey::K256),
+        OID_BP256R1_CURVE => scalar_on::<32>(scalar, |k| {
+            ecdsa::SigningKey::<bp256::r1::BrainpoolP256r1>::from_slice(k).is_ok()
+        })
+        .map(IdentityKey::Bp256r1),
+        OID_BP256T1_CURVE => scalar_on::<32>(scalar, |k| {
+            ecdsa::SigningKey::<bp256::t1::BrainpoolP256t1>::from_slice(k).is_ok()
+        })
+        .map(IdentityKey::Bp256t1),
+        OID_BP384R1_CURVE => scalar_on::<48>(scalar, |k| {
+            ecdsa::SigningKey::<bp384::r1::BrainpoolP384r1>::from_slice(k).is_ok()
+        })
+        .map(IdentityKey::Bp384r1),
+        OID_BP384T1_CURVE => scalar_on::<48>(scalar, |k| {
+            ecdsa::SigningKey::<bp384::t1::BrainpoolP384t1>::from_slice(k).is_ok()
+        })
+        .map(IdentityKey::Bp384t1),
+        #[cfg(target_pointer_width = "64")]
+        OID_BP512R1_CURVE => scalar_on::<64>(scalar, |k| {
+            ecdsa::SigningKey::<krb5_brainpool::p512::r1::BrainpoolP512r1>::from_slice(k).is_ok()
+        })
+        .map(IdentityKey::Bp512r1),
+        #[cfg(target_pointer_width = "64")]
+        OID_BP512T1_CURVE => scalar_on::<64>(scalar, |k| {
+            ecdsa::SigningKey::<krb5_brainpool::p512::t1::BrainpoolP512t1>::from_slice(k).is_ok()
+        })
+        .map(IdentityKey::Bp512t1),
+        #[cfg(not(target_pointer_width = "64"))]
+        OID_BP512R1_CURVE | OID_BP512T1_CURVE => None,
         _ => None,
     }
 }

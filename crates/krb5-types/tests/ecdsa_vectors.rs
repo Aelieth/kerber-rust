@@ -1,8 +1,10 @@
-//! ECDSA on P-224, P-384, P-521 and secp256k1 against Wycheproof's vectors and OpenSSL's signatures with SHA-256.
+//! ECDSA on P-224, P-384, P-521, secp256k1 and the brainpool curves against Wycheproof's vectors and OpenSSL's
+//! signatures with SHA-256.
 
 use krb5_types::pkinit::{IdentityKey, P384_ENABLED, spki_signature_ok};
 
 const ECDSA_SHA256: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02];
+const ECDSA_SHA384: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x03];
 const ECDSA_SHA512: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x04];
 
 fn hex(s: &str) -> Vec<u8> {
@@ -44,14 +46,12 @@ fn wycheproof_vectors_verify() {
     assert_eq!(wycheproof(k256, ECDSA_SHA256, true), 476);
 }
 
-#[test]
-fn openssl_signatures_verify_and_ours_verify_too() {
+/// Each of OpenSSL's signatures verifies and a changed one does not, and ours verifies; a key that does not load
+/// (a curve this build refuses) must not verify either. Gives (checked, refused).
+fn openssl(data: &str) -> (usize, usize) {
     let (mut key, mut spki) = (None, Vec::new());
     let (mut checked, mut refused) = (0, 0);
-    for line in include_str!("data/openssl-ecdsa-sha256.kat")
-        .lines()
-        .filter(|l| !l.starts_with('#'))
-    {
+    for line in data.lines().filter(|l| !l.starts_with('#')) {
         match line.split(' ').collect::<Vec<_>>()[..] {
             ["key", der] => key = IdentityKey::from_pkcs8(&hex(der)),
             ["spki", der] => spki = hex(der),
@@ -83,8 +83,32 @@ fn openssl_signatures_verify_and_ours_verify_too() {
             _ => panic!("unknown line: {line}"),
         }
     }
+    (checked, refused)
+}
+
+#[test]
+fn openssl_signatures_verify_and_ours_verify_too() {
+    let counts = openssl(include_str!("data/openssl-ecdsa-sha256.kat"));
+    assert_eq!(counts, if P384_ENABLED { (24, 0) } else { (18, 6) });
     assert_eq!(
-        (checked, refused),
-        if P384_ENABLED { (24, 0) } else { (18, 6) }
+        openssl(include_str!("data/openssl-ecdsa-brainpool.kat")),
+        if cfg!(target_pointer_width = "64") {
+            (36, 12)
+        } else {
+            (24, 24)
+        }
     );
+}
+
+#[test]
+fn wycheproof_brainpool_verify() {
+    let p256 = include_str!("data/wycheproof-ecdsa-brainpoolP256r1-sha256.kat");
+    assert_eq!(wycheproof(p256, ECDSA_SHA256, true), 485);
+    let p384 = include_str!("data/wycheproof-ecdsa-brainpoolP384r1-sha384.kat");
+    assert_eq!(wycheproof(p384, ECDSA_SHA384, true), 516);
+    #[cfg(target_pointer_width = "64")]
+    {
+        let p512 = include_str!("data/wycheproof-ecdsa-brainpoolP512r1-sha512.kat");
+        assert_eq!(wycheproof(p512, ECDSA_SHA512, true), 559);
+    }
 }

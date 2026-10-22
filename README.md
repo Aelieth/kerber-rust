@@ -44,6 +44,7 @@ Focused crates under `crates/`:
 | `krb5-cli` | MIT-style command lines (getopt, `kdb5_util` / `kadmind` option tables) and password prompts |
 | `krb5-crypto` | RFC 3961/3962/8009 etypes 17–20 (plus legacy behind `allow_weak_crypto`) |
 | `krb5-types` | RFC 4120 owned protocol values |
+| `krb5-brainpool` | brainpoolP512, r1 and t1, on a fiat field |
 | `krb5-asn1` | DER encode/decode of those values |
 | `krb5-config` | `krb5.conf` / `kdc.conf`, env, DNS SRV |
 | `krb5-protocol` | AS/TGS/AP/SAFE/PRIV/CRED, keytab, FILE ccache |

@@ -1,0 +1,26 @@
+[package]
+name = "krb5-brainpool"
+description = "brainpoolP512 (r1 and t1) on a fiat field"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[features]
+arithmetic = ["dep:primefield", "dep:primeorder"]
+digest = ["ecdsa/digest", "dep:sha2"]
+ecdsa = ["dep:ecdsa", "arithmetic"]
+default = ["arithmetic", "ecdsa", "digest"]
+
+[dependencies]
+ecdsa = { version = "0.17", default-features = false, features = ["der"], optional = true }
+elliptic-curve = { version = "0.14.1", default-features = false, features = ["sec1"] }
+primefield = { version = "0.14", optional = true }
+primeorder = { version = "0.14", optional = true }
+sha2 = { workspace = true, optional = true }
+
+
+[lints]
+workspace = true

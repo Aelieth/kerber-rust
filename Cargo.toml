@@ -5,6 +5,7 @@ members = [
     "crates/krb5-cli",
     "crates/krb5-crypto",
     "crates/krb5-types",
+    "crates/krb5-brainpool",
     "crates/krb5-asn1",
     "crates/krb5-config",
     "crates/krb5-protocol",
@@ -34,6 +35,7 @@ krb5-log = { path = "crates/krb5-log" }
 krb5-cli = { path = "crates/krb5-cli" }
 krb5-crypto = { path = "crates/krb5-crypto" }
 krb5-types = { path = "crates/krb5-types" }
+krb5-brainpool = { path = "crates/krb5-brainpool", default-features = false, features = ["arithmetic", "ecdsa", "digest"] }
 krb5-asn1 = { path = "crates/krb5-asn1" }
 krb5-protocol = { path = "crates/krb5-protocol" }
 krb5-client = { path = "crates/krb5-client" }
@@ -70,6 +72,9 @@ p521 = { version = "0.14", default-features = false, features = ["arithmetic", "
 # No stable 0.14 yet: the release candidate, pinned exactly.
 p224 = { version = "=0.14.0-rc.15", default-features = false, features = ["arithmetic", "ecdsa"] }
 k256 = { version = "0.14", default-features = false, features = ["arithmetic", "ecdsa"] }
+# brainpoolP256 and P384, r1 and t1, on their default fiat field; pinned exactly.
+bp256 = { version = "=0.14.0", default-features = false, features = ["arithmetic", "ecdsa", "sha256"] }
+bp384 = { version = "=0.14.0", default-features = false, features = ["arithmetic", "ecdsa", "sha384"] }
 pbkdf2 = { version = "0.13", default-features = false, features = ["hmac"] }
 # Pinned: the build takes rasn from vendor/rasn (`[patch.crates-io]` below).
 rasn = "=0.28.14"

@@ -105,6 +105,26 @@ pub(super) fn p224_sign(secret: &[u8; 28], message: &[u8]) -> Option<Vec<u8>> {
     Some(sig.to_der().as_bytes().to_vec())
 }
 
+/// `$name`: ECDSA with SHA-256 on `$curve` (RFC 6979), DER, as p224_sign signs.
+macro_rules! ecdsa_sign {
+    ($name:ident, $curve:ty, $len:literal) => {
+        pub(super) fn $name(secret: &[u8; $len], message: &[u8]) -> Option<Vec<u8>> {
+            use ecdsa::signature::hazmat::PrehashSigner;
+            let sk = ecdsa::SigningKey::<$curve>::from_bytes(secret.into()).ok()?;
+            let sig: ecdsa::Signature<$curve> = sk.sign_prehash(&sha256_bytes(message)).ok()?;
+            Some(sig.to_der().as_bytes().to_vec())
+        }
+    };
+}
+ecdsa_sign!(bp256r1_sign, bp256::r1::BrainpoolP256r1, 32);
+ecdsa_sign!(bp256t1_sign, bp256::t1::BrainpoolP256t1, 32);
+ecdsa_sign!(bp384r1_sign, bp384::r1::BrainpoolP384r1, 48);
+ecdsa_sign!(bp384t1_sign, bp384::t1::BrainpoolP384t1, 48);
+#[cfg(target_pointer_width = "64")]
+ecdsa_sign!(bp512r1_sign, krb5_brainpool::p512::r1::BrainpoolP512r1, 64);
+#[cfg(target_pointer_width = "64")]
+ecdsa_sign!(bp512t1_sign, krb5_brainpool::p512::t1::BrainpoolP512t1, 64);
+
 pub(super) fn k256_sign(secret: &[u8; 32], message: &[u8]) -> Option<Vec<u8>> {
     use k256::ecdsa::signature::hazmat::PrehashSigner;
     use k256::ecdsa::{Signature, SigningKey};
@@ -772,6 +792,13 @@ pub(super) const OID_P384_CURVE: &[u8] = &[0x2b, 0x81, 0x04, 0x00, 0x22];
 pub(super) const OID_P521_CURVE: &[u8] = &[0x2b, 0x81, 0x04, 0x00, 0x23];
 pub(super) const OID_P224_CURVE: &[u8] = &[0x2b, 0x81, 0x04, 0x00, 0x21];
 pub(super) const OID_K256_CURVE: &[u8] = &[0x2b, 0x81, 0x04, 0x00, 0x0a];
+// RFC 5639's brainpool curves, 1.3.36.3.3.2.8.1.1.7 to .14.
+pub(super) const OID_BP256R1_CURVE: &[u8] = &[0x2b, 0x24, 0x03, 0x03, 0x02, 0x08, 0x01, 0x01, 0x07];
+pub(super) const OID_BP256T1_CURVE: &[u8] = &[0x2b, 0x24, 0x03, 0x03, 0x02, 0x08, 0x01, 0x01, 0x08];
+pub(super) const OID_BP384R1_CURVE: &[u8] = &[0x2b, 0x24, 0x03, 0x03, 0x02, 0x08, 0x01, 0x01, 0x0b];
+pub(super) const OID_BP384T1_CURVE: &[u8] = &[0x2b, 0x24, 0x03, 0x03, 0x02, 0x08, 0x01, 0x01, 0x0c];
+pub(super) const OID_BP512R1_CURVE: &[u8] = &[0x2b, 0x24, 0x03, 0x03, 0x02, 0x08, 0x01, 0x01, 0x0d];
+pub(super) const OID_BP512T1_CURVE: &[u8] = &[0x2b, 0x24, 0x03, 0x03, 0x02, 0x08, 0x01, 0x01, 0x0e];
 
 /// A certificate's SubjectPublicKeyInfo (its DER).
 fn cert_spki(cert: &[u8]) -> Option<&[u8]> {
@@ -810,7 +837,7 @@ fn cert_signed_by(cert: &[u8], issuer: &[u8]) -> bool {
 }
 
 /// Whether `sig` over `msg` verifies under the key of `spki`. The key's own type decides how:
-/// ECDSA on P-224, P-256, P-384, P-521 or secp256k1, or RSASSA-PKCS1-v1_5 (RFC 8017 §8.2.2). The digest is the one `alg` names, or
+/// ECDSA on P-224, P-256, P-384, P-521, secp256k1 or brainpool P256, P384 or P512, or RSASSA-PKCS1-v1_5 (RFC 8017 §8.2.2). The digest is the one `alg` names, or
 /// `digest` for `rsaEncryption` / `id-ecPublicKey`; SHA-1 is refused, as the lab's crypto policy
 /// refuses it. MIT's client names its key's type with SHA-256 in its SignerInfo (`cert_sig_alg`):
 /// `ecdsa-with-SHA256` for an EC key, else `sha256WithRSAEncryption`.
@@ -855,6 +882,16 @@ pub fn spki_signature_ok(spki: &[u8], alg: &[u8], msg: &[u8], sig: &[u8]) -> boo
     signature_ok(spki, alg, None, msg, sig)
 }
 
+/// Whether the DER `$sig` verifies over the digest `$hash` under the SEC1 point `$key` on `$curve`.
+macro_rules! ecdsa_verify {
+    ($curve:ty, $key:expr, $hash:expr, $sig:expr) => {
+        ecdsa::VerifyingKey::<$curve>::from_sec1_bytes($key)
+            .ok()
+            .zip(ecdsa::Signature::<$curve>::from_der($sig).ok())
+            .is_some_and(|(vk, s)| vk.verify_prehash($hash, &s).is_ok())
+    };
+}
+
 fn ecdsa_ok(curve: &[u8], key: &[u8], hash: &[u8], sig: &[u8]) -> bool {
     use ecdsa::signature::hazmat::PrehashVerifier;
     match curve {
@@ -886,6 +923,20 @@ fn ecdsa_ok(curve: &[u8], key: &[u8], hash: &[u8], sig: &[u8]) -> bool {
             .ok()
             .zip(k256::ecdsa::Signature::from_der(sig).ok())
             .is_some_and(|(vk, s)| vk.verify_prehash(hash, &s.normalize_s()).is_ok()),
+        OID_BP256R1_CURVE => ecdsa_verify!(bp256::r1::BrainpoolP256r1, key, hash, sig),
+        OID_BP256T1_CURVE => ecdsa_verify!(bp256::t1::BrainpoolP256t1, key, hash, sig),
+        OID_BP384R1_CURVE => ecdsa_verify!(bp384::r1::BrainpoolP384r1, key, hash, sig),
+        OID_BP384T1_CURVE => ecdsa_verify!(bp384::t1::BrainpoolP384t1, key, hash, sig),
+        #[cfg(target_pointer_width = "64")]
+        OID_BP512R1_CURVE => {
+            ecdsa_verify!(krb5_brainpool::p512::r1::BrainpoolP512r1, key, hash, sig)
+        }
+        #[cfg(target_pointer_width = "64")]
+        OID_BP512T1_CURVE => {
+            ecdsa_verify!(krb5_brainpool::p512::t1::BrainpoolP512t1, key, hash, sig)
+        }
+        #[cfg(not(target_pointer_width = "64"))]
+        OID_BP512R1_CURVE | OID_BP512T1_CURVE => false,
         _ => false,
     }
 }

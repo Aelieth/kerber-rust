@@ -31,7 +31,8 @@ from the OS CSPRNG (`getrandom`).
 
 **`krb5-types`** holds RFC 4120 owned values with rasn derives. Tagging
 is EXPLICIT, matching the RFC. This crate is the protocol vocabulary;
-it does not catch codec errors.
+it does not catch codec errors. It uses `krb5-brainpool` for brainpoolP512
+(r1 and t1) PKINIT keys; a 32-bit build does not compile that field.
 
 **`krb5-asn1`** is the DER boundary: `encode` / `decode` return
 `Result`, never panic, and emit log events for success and failure.
