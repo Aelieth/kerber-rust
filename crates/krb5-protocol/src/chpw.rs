@@ -161,8 +161,9 @@ pub fn change_password(
     servers: &[Endpoint],
     as_out: &AsOutcome,
     new_pw: &[u8],
+    timeout: Option<Duration>,
 ) -> Result<(), Error> {
-    let (code, data) = change_password_result(servers, as_out, new_pw)?;
+    let (code, data) = change_password_result(servers, as_out, new_pw, timeout)?;
     if code != KPASSWD_SUCCESS {
         return Err(Error::ReplyMismatch(format_chpw_failure(code, &data)));
     }
@@ -173,8 +174,9 @@ pub fn change_password_result(
     servers: &[Endpoint],
     as_out: &AsOutcome,
     new_pw: &[u8],
+    timeout: Option<Duration>,
 ) -> Result<(u16, Vec<u8>), Error> {
-    change_or_set(servers, as_out, new_pw, None)
+    change_or_set(servers, as_out, new_pw, None, timeout)
 }
 
 /// Version 0xff80, another principal's password.
@@ -183,8 +185,9 @@ pub fn set_password(
     as_out: &AsOutcome,
     new_pw: &[u8],
     target: (&Realm, &PrincipalName),
+    timeout: Option<Duration>,
 ) -> Result<(), Error> {
-    let (code, data) = change_or_set(servers, as_out, new_pw, Some(target))?;
+    let (code, data) = change_or_set(servers, as_out, new_pw, Some(target), timeout)?;
     if code != KPASSWD_SUCCESS {
         return Err(Error::ReplyMismatch(format_chpw_failure(code, &data)));
     }
@@ -196,9 +199,10 @@ fn change_or_set(
     as_out: &AsOutcome,
     new_pw: &[u8],
     target: Option<(&Realm, &PrincipalName)>,
+    timeout: Option<Duration>,
 ) -> Result<(u16, Vec<u8>), Error> {
     change_or_set_via(
-        &mut |build| send_listed(servers, build),
+        &mut |build| send_listed(servers, build, timeout),
         as_out,
         new_pw,
         target,
@@ -206,25 +210,35 @@ fn change_or_set(
 }
 
 // MIT: `change_set_password` (lib/krb5/os/changepw.c:256-265)
-fn send_listed(servers: &[Endpoint], build: &mut Build<'_>) -> Result<Vec<u8>, Error> {
+fn send_listed(
+    servers: &[Endpoint],
+    build: &mut Build<'_>,
+    timeout: Option<Duration>,
+) -> Result<Vec<u8>, Error> {
     if servers.is_empty() {
         return Err(Error::RealmUnknown);
     }
-    if let Some(rep) = one_transport(servers, build, false)? {
+    if let Some(rep) = one_transport(servers, build, false, timeout)? {
         return Ok(rep);
     }
-    if let Some(rep) = one_transport(servers, build, true)? {
+    if let Some(rep) = one_transport(servers, build, true, timeout)? {
         return Ok(rep);
     }
     Err(unreachable_kdc())
 }
 
+// MIT: `k5_sendto` (lib/krb5/os/sendto_kdc.c:1520-1524)
 fn one_transport(
     servers: &[Endpoint],
     build: &mut Build<'_>,
     udp: bool,
+    timeout: Option<Duration>,
 ) -> Result<Option<Vec<u8>>, Error> {
+    let deadline = timeout.map(|limit| Instant::now() + limit);
     for server in servers {
+        if deadline.is_some_and(|end| Instant::now() >= end) {
+            break;
+        }
         let skip = if udp {
             server.transport == KdcTransport::Tcp
         } else {
@@ -238,7 +252,7 @@ fn one_transport(
         } else {
             KdcTransport::Tcp
         };
-        match send_kpasswd(&server.host, server.port, transport, build) {
+        match send_kpasswd(&server.host, server.port, transport, build, deadline) {
             Err(Error::Io { .. }) => {}
             Err(e) => return Err(e),
             Ok(rep) => return Ok(Some(rep)),
@@ -533,6 +547,7 @@ fn send_kpasswd(
     port: u16,
     transport: KdcTransport,
     build: &mut Build<'_>,
+    deadline: Option<Instant>,
 ) -> Result<Vec<u8>, Error> {
     trace::sendto_kdc_resolving(host);
     let addrs: Vec<SocketAddr> = (host, port)
@@ -542,14 +557,14 @@ fn send_kpasswd(
     let tcp = transport != KdcTransport::Udp;
     let udp = transport != KdcTransport::Tcp;
     let reply = if tcp {
-        kpasswd_tcp(&addrs, build)
+        kpasswd_tcp(&addrs, build, deadline)
     } else {
         None
     };
     reply
         .or_else(|| {
             if udp {
-                kpasswd_udp(&addrs, build)
+                kpasswd_udp(&addrs, build, deadline)
             } else {
                 None
             }
@@ -557,17 +572,27 @@ fn send_kpasswd(
         .ok_or_else(unreachable_kdc)
 }
 
-// MIT: `service_fds` (sendto_kdc.c:1421-1421)
-/// Once connected, the read has no deadline.
-fn kpasswd_tcp(addrs: &[SocketAddr], build: &mut Build<'_>) -> Option<Vec<u8>> {
+// MIT: `service_fds` (sendto_kdc.c:1421-1424)
+/// Once connected, only `request_timeout` bounds the read.
+fn kpasswd_tcp(
+    addrs: &[SocketAddr],
+    build: &mut Build<'_>,
+    deadline: Option<Instant>,
+) -> Option<Vec<u8>> {
     let slots = PASS_SLOT.saturating_mul(u32::try_from(addrs.len()).unwrap_or(u32::MAX));
-    let deadline = Instant::now() + slots + PASS_DELAYS.iter().sum::<Duration>();
+    let connect_end = Instant::now() + slots + PASS_DELAYS.iter().sum::<Duration>();
     for (i, addr) in addrs.iter().enumerate() {
-        let left = deadline.saturating_duration_since(Instant::now());
+        if deadline.is_some_and(|end| Instant::now() >= end) {
+            break;
+        }
+        let left = connect_end.saturating_duration_since(Instant::now());
         let slot = if i + 1 < addrs.len() {
             left.min(PASS_SLOT)
         } else {
             left
+        };
+        let Some(slot) = capped(slot, deadline) else {
+            break;
         };
         if slot.is_zero() {
             break;
@@ -592,7 +617,12 @@ fn kpasswd_tcp(addrs: &[SocketAddr], build: &mut Build<'_>) -> Option<Vec<u8>> {
             trace::sendto_kdc_tcp_disconnect(&ra);
             continue;
         };
-        let reply = tcp_round_trip(&mut stream, &body, &ra);
+        let read_limit = deadline.map(|end| end.saturating_duration_since(Instant::now()));
+        if read_limit.as_ref().is_some_and(Duration::is_zero) {
+            trace::sendto_kdc_tcp_disconnect(&ra);
+            break;
+        }
+        let reply = tcp_round_trip(&mut stream, &body, &ra, read_limit);
         if let Ok(reply) = &reply {
             trace::sendto_kdc_response(reply.len(), &ra);
         }
@@ -607,7 +637,16 @@ fn kpasswd_tcp(addrs: &[SocketAddr], build: &mut Build<'_>) -> Option<Vec<u8>> {
 // MIT: `service_tcp_read` (sendto_kdc.c:1151-1200)
 /// A length of 0 or over 1 MiB ends the connection.
 // MIT: `service_tcp_write` (lib/krb5/os/sendto_kdc.c:1115-1146)
-fn tcp_round_trip(stream: &mut TcpStream, body: &[u8], ra: &RemoteAddr) -> io::Result<Vec<u8>> {
+fn tcp_round_trip(
+    stream: &mut TcpStream,
+    body: &[u8],
+    ra: &RemoteAddr,
+    limit: Option<Duration>,
+) -> io::Result<Vec<u8>> {
+    if let Some(limit) = limit {
+        stream.set_read_timeout(Some(limit))?;
+        stream.set_write_timeout(Some(limit))?;
+    }
     trace::sendto_kdc_tcp_send(ra);
     crate::framing::write_messages(stream, &[body]).inspect_err(|e| {
         trace::sendto_kdc_tcp_error_send(ra, errno(e));
@@ -632,7 +671,11 @@ fn tcp_round_trip(stream: &mut TcpStream, body: &[u8], ra: &RemoteAddr) -> io::R
 }
 // MIT: `maybe_send` (sendto_kdc.c:1021-1035)
 /// A failed send keeps the server for the next pass.
-fn kpasswd_udp(addrs: &[SocketAddr], build: &mut Build<'_>) -> Option<Vec<u8>> {
+fn kpasswd_udp(
+    addrs: &[SocketAddr],
+    build: &mut Build<'_>,
+    deadline: Option<Instant>,
+) -> Option<Vec<u8>> {
     let mut bodies: Vec<Vec<u8>> = Vec::with_capacity(addrs.len());
     let mut socks: Vec<Option<UdpSocket>> = Vec::with_capacity(addrs.len());
     for a in addrs {
@@ -650,6 +693,9 @@ fn kpasswd_udp(addrs: &[SocketAddr], build: &mut Build<'_>) -> Option<Vec<u8>> {
         }
     }
     for (pass, delay) in PASS_DELAYS.into_iter().enumerate() {
+        if deadline.is_some_and(|end| Instant::now() >= end) {
+            return None;
+        }
         for i in 0..socks.len() {
             let Some(sock) = &socks[i] else {
                 continue;
@@ -668,14 +714,16 @@ fn kpasswd_udp(addrs: &[SocketAddr], build: &mut Build<'_>) -> Option<Vec<u8>> {
                     trace::sendto_kdc_udp_error_send_retry(&ra, errno(&e));
                 }
             }
-            if let Some(reply) = udp_wait(&mut socks, addrs, PASS_SLOT) {
+            let slot = capped(PASS_SLOT, deadline)?;
+            if let Some(reply) = udp_wait(&mut socks, addrs, slot) {
                 return Some(reply);
             }
         }
         if socks.iter().all(Option::is_none) {
             return None;
         }
-        if let Some(reply) = udp_wait(&mut socks, addrs, delay) {
+        let wait = capped(delay, deadline)?;
+        if let Some(reply) = udp_wait(&mut socks, addrs, wait) {
             return Some(reply);
         }
     }
@@ -701,6 +749,18 @@ fn udp_connect(addr: &SocketAddr) -> io::Result<UdpSocket> {
 }
 
 // MIT: `service_udp_read` (sendto_kdc.c:1203-1217)
+fn capped(want: Duration, deadline: Option<Instant>) -> Option<Duration> {
+    let Some(end) = deadline else {
+        return Some(want);
+    };
+    let left = end.saturating_duration_since(Instant::now());
+    if left.is_zero() {
+        None
+    } else {
+        Some(want.min(left))
+    }
+}
+
 fn udp_wait(
     socks: &mut [Option<UdpSocket>],
     addrs: &[SocketAddr],
@@ -876,7 +936,7 @@ mod transport_tests {
             gap
         });
         assert_eq!(
-            kpasswd_udp(&[addr], &mut |_| Ok(b"req".to_vec())).as_deref(),
+            kpasswd_udp(&[addr], &mut |_| Ok(b"req".to_vec()), None).as_deref(),
             Some(&b"reply"[..])
         );
         let gap = seen.join().unwrap();
@@ -899,7 +959,7 @@ mod transport_tests {
             conn.write_all(b"reply").unwrap();
         });
         assert_eq!(
-            kpasswd_tcp(&[addr], &mut |_| Ok(b"req".to_vec())).as_deref(),
+            kpasswd_tcp(&[addr], &mut |_| Ok(b"req".to_vec()), None).as_deref(),
             Some(&b"reply"[..])
         );
     }
@@ -911,8 +971,8 @@ mod transport_tests {
             .local_addr()
             .unwrap();
         let started = Instant::now();
-        assert!(kpasswd_tcp(&[addr], &mut |_| Ok(b"req".to_vec())).is_none());
-        assert!(kpasswd_udp(&[addr], &mut |_| Ok(b"req".to_vec())).is_none());
+        assert!(kpasswd_tcp(&[addr], &mut |_| Ok(b"req".to_vec()), None).is_none());
+        assert!(kpasswd_udp(&[addr], &mut |_| Ok(b"req".to_vec()), None).is_none());
         assert!(
             started.elapsed() < Duration::from_secs(2),
             "refused took {:?}",
@@ -948,10 +1008,14 @@ mod transport_tests {
                 from
             });
             let mut sender = None;
-            let reply = kpasswd_tcp(&[addr], &mut |s| {
-                sender = Some(s.clone());
-                Ok(b"req".to_vec())
-            });
+            let reply = kpasswd_tcp(
+                &[addr],
+                &mut |s| {
+                    sender = Some(s.clone());
+                    Ok(b"req".to_vec())
+                },
+                None,
+            );
             assert_eq!(reply.as_deref(), Some(&b"reply"[..]), "{bind}");
             let from = seen.join().unwrap();
             let want = match from.ip() {
@@ -969,10 +1033,14 @@ mod transport_tests {
                 from
             });
             let mut sender = None;
-            let reply = kpasswd_udp(&[addr], &mut |s| {
-                sender = Some(s.clone());
-                Ok(b"req".to_vec())
-            });
+            let reply = kpasswd_udp(
+                &[addr],
+                &mut |s| {
+                    sender = Some(s.clone());
+                    Ok(b"req".to_vec())
+                },
+                None,
+            );
             assert_eq!(reply.as_deref(), Some(&b"reply"[..]), "{bind}");
             let from = seen.join().unwrap();
             let want = match from.ip() {
@@ -1000,14 +1068,18 @@ mod transport_tests {
             conn.write_all(b"reply").unwrap();
         });
         let mut tries = 0;
-        let reply = kpasswd_tcp(&addrs, &mut |_| {
-            tries += 1;
-            if tries == 1 {
-                Err(Error::Message("cannot be made".into()))
-            } else {
-                Ok(b"req".to_vec())
-            }
-        });
+        let reply = kpasswd_tcp(
+            &addrs,
+            &mut |_| {
+                tries += 1;
+                if tries == 1 {
+                    Err(Error::Message("cannot be made".into()))
+                } else {
+                    Ok(b"req".to_vec())
+                }
+            },
+            None,
+        );
         assert_eq!(reply.as_deref(), Some(&b"reply"[..]));
         assert_eq!(tries, 2);
     }

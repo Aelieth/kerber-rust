@@ -62,7 +62,11 @@ fn run() -> Result<(), String> {
     let keytab = fs::read(&kt_path).ok().and_then(|b| Keytab::parse(&b).ok());
     let crealm = String::from_utf8_lossy(cred.client.0.as_bytes()).into_owned();
     let nofail = verify_init_creds_nofail(opt_nofail, conf.verify_ap_req_nofail_for(&crealm));
-    let found = conf.kdcs_for(&crealm).unwrap_or_default();
+    let found = match conf.kdcs_for(&crealm) {
+        Ok(list) => list,
+        Err(e @ krb5_config::Error::InvalidArgument) => return Err(e.to_string()),
+        Err(_) => Vec::new(),
+    };
     let addr = found.first().map_or_else(
         || KdcAddr::new("127.0.0.1"),
         |ep| KdcAddr {

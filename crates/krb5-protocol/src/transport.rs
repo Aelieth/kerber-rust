@@ -15,6 +15,36 @@ use crate::trace::{self, RemoteAddr, Transport};
 pub const KDC_PORT: u16 = 88;
 
 const TIMEOUT: Duration = Duration::from_secs(5);
+
+// MIT: `k5_sendto` (lib/krb5/os/sendto_kdc.c:1520-1524)
+fn request_deadline(profile: &Krb5Conf) -> Option<Instant> {
+    profile.request_timeout.map(|limit| Instant::now() + limit)
+}
+
+// MIT: `k5_init_creds_get` (lib/krb5/krb/get_in_tkt.c:570-578)
+// MIT: `krb5_tkt_creds_get` (lib/krb5/krb/get_creds.c:1220-1228)
+fn fresh_deadline(limit: Option<Duration>) -> Option<Instant> {
+    limit.map(|span| Instant::now() + span)
+}
+
+fn cap_budget(budget: Duration, deadline: Option<Instant>) -> Option<Duration> {
+    let Some(end) = deadline else {
+        return Some(budget);
+    };
+    let left = end.saturating_duration_since(Instant::now());
+    if left.is_zero() {
+        None
+    } else {
+        Some(budget.min(left))
+    }
+}
+
+fn request_timeout_error() -> Error {
+    Error::from_io(std::io::Error::new(
+        std::io::ErrorKind::TimedOut,
+        "Cannot contact any KDC for requested realm",
+    ))
+}
 const UDP_MAX: usize = 64 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -58,16 +88,30 @@ pub(crate) fn sendto_kdc(
     kind: SendKind,
 ) -> Result<Vec<u8>, Error> {
     trace::sendto_kdc(request.len(), realm.as_bytes(), false, false);
+    let deadline = request_deadline(profile);
     // MIT: `k5_locate_server` (lib/krb5/os/locate_kdc.c:853-878)
     // A list already located for this realm is not queried again.
-    let found = krb5_config::take_handed_kdcs(realm, &addr.host, addr.port)
-        .unwrap_or_else(|| profile.kdcs_for(realm).unwrap_or_default());
+    let found = match krb5_config::take_handed_kdcs(realm, &addr.host, addr.port) {
+        Some(list) => list,
+        None => match profile.kdcs_for(realm) {
+            Ok(list) => list,
+            Err(krb5_config::Error::InvalidArgument) => return Err(Error::InvalidArgument),
+            Err(_) => Vec::new(),
+        },
+    };
     let walk = found.len() > 1
         && found
             .first()
             .is_some_and(|ep| ep.host == addr.host && ep.port == addr.port);
     if !walk {
-        return exchange_one(addr, request, profile.udp_limit(), Some((realm, kind)));
+        return exchange_one(
+            addr,
+            request,
+            profile.udp_limit(),
+            Some((realm, kind)),
+            deadline,
+            profile.request_timeout,
+        );
     }
     let addrs: Vec<(KdcAddr, KdcTransport)> = found
         .into_iter()
@@ -81,7 +125,14 @@ pub(crate) fn sendto_kdc(
             )
         })
         .collect();
-    exchange_passes(&addrs, request, profile.udp_limit(), Some((realm, kind)))
+    exchange_passes(
+        &addrs,
+        request,
+        profile.udp_limit(),
+        Some((realm, kind)),
+        deadline,
+        profile.request_timeout,
+    )
 }
 
 struct Located {
@@ -106,6 +157,8 @@ struct Passes<'a> {
     servers: Vec<Located>,
     last: Error,
     svc: Option<Vec<u8>>,
+    deadline: Option<Instant>,
+    limit: Option<Duration>,
 }
 
 impl<'a> Passes<'a> {
@@ -113,6 +166,8 @@ impl<'a> Passes<'a> {
         addrs: &'a [(KdcAddr, KdcTransport)],
         request: &'a [u8],
         traced: Option<(&'a str, SendKind)>,
+        deadline: Option<Instant>,
+        limit: Option<Duration>,
     ) -> Self {
         Self {
             request,
@@ -123,6 +178,17 @@ impl<'a> Passes<'a> {
                 .collect(),
             last: Error::transport_msg("no KDC addresses"),
             svc: None,
+            deadline,
+            limit,
+        }
+    }
+
+    fn past_deadline(&mut self) -> bool {
+        if self.deadline.is_some_and(|end| Instant::now() >= end) {
+            self.last = request_timeout_error();
+            true
+        } else {
+            false
         }
     }
 
@@ -175,6 +241,9 @@ impl<'a> Passes<'a> {
         if self.servers[index].transport == KdcTransport::Tcp {
             return None;
         }
+        if self.past_deadline() {
+            return None;
+        }
         if self.servers[index].dest.is_none() {
             self.last = Error::transport_msg("no KDC address");
             return None;
@@ -203,7 +272,10 @@ impl<'a> Passes<'a> {
                 }
                 Err(Error::from_io(e))
             } else {
-                recv_udp(sock, dest, Duration::from_secs(1))
+                match cap_budget(Duration::from_secs(1), self.deadline) {
+                    Some(budget) => recv_udp(sock, dest, budget),
+                    None => Err(request_timeout_error()),
+                }
             }
         };
         match got {
@@ -219,11 +291,22 @@ impl<'a> Passes<'a> {
         if self.servers[index].transport == KdcTransport::Udp {
             return None;
         }
+        if self.past_deadline() {
+            return None;
+        }
         let Some(dest) = self.servers[index].dest else {
             self.last = Error::transport_msg("no KDC address");
             return None;
         };
-        match tcp_exchange(dest, self.request, Duration::from_secs(1), TIMEOUT) {
+        let Some(connect) = cap_budget(Duration::from_secs(1), self.deadline) else {
+            self.last = request_timeout_error();
+            return None;
+        };
+        let Some(io_timeout) = cap_budget(TIMEOUT, self.deadline) else {
+            self.last = request_timeout_error();
+            return None;
+        };
+        match tcp_exchange(dest, self.request, connect, io_timeout) {
             Ok(bytes) => {
                 crate::capture_pdu("client-rep", &bytes);
                 Some(bytes)
@@ -240,7 +323,11 @@ impl<'a> Passes<'a> {
             if let Some((realm, kind)) = self.traced {
                 trace_retry_tcp(realm, self.request.len(), kind);
             }
-            return self.tcp_one(index);
+            let kept = self.deadline;
+            self.deadline = fresh_deadline(self.limit);
+            let reply = self.tcp_one(index);
+            self.deadline = kept;
+            return reply;
         }
         if is_svc_unavailable(&bytes) {
             self.svc = Some(bytes);
@@ -252,6 +339,10 @@ impl<'a> Passes<'a> {
     }
 
     fn backoff(&mut self, budget: Duration) -> Option<Vec<u8>> {
+        let Some(budget) = cap_budget(budget, self.deadline) else {
+            self.last = request_timeout_error();
+            return None;
+        };
         let got = wait_udp(&mut self.servers, budget);
         if let Some((index, bytes)) = got {
             return self.accept(index, bytes);
@@ -268,9 +359,11 @@ fn exchange_passes(
     request: &[u8],
     udp_limit: usize,
     traced: Option<(&str, SendKind)>,
+    deadline: Option<Instant>,
+    limit: Option<Duration>,
 ) -> Result<Vec<u8>, Error> {
     crate::capture_pdu("client-req", request);
-    let mut walk = Passes::new(addrs, request, traced);
+    let mut walk = Passes::new(addrs, request, traced, deadline, limit);
     let udp_first = request.len() <= udp_limit;
     if let Some(reply) = walk.first_pass(udp_first) {
         return Ok(reply);
@@ -431,9 +524,20 @@ pub fn exchange_with_failover(
     addrs: &[KdcAddr],
     request: &[u8],
 ) -> Result<Vec<u8>, Error> {
+    let deadline = request_deadline(profile);
     let mut last = Error::transport_msg("no KDC addresses");
     for addr in addrs {
-        match exchange_one(addr, request, profile.udp_limit(), None) {
+        if deadline.is_some_and(|end| Instant::now() >= end) {
+            break;
+        }
+        match exchange_one(
+            addr,
+            request,
+            profile.udp_limit(),
+            None,
+            deadline,
+            profile.request_timeout,
+        ) {
             Ok(r) => return Ok(r),
             Err(e) if e.is_retryable() => last = e,
             Err(e) => return Err(e),
@@ -442,7 +546,8 @@ pub fn exchange_with_failover(
     Err(last)
 }
 
-// MIT: `k5_init_creds_get` (get_in_tkt.c:570-572)
+// MIT: `k5_init_creds_get` (lib/krb5/krb/get_in_tkt.c:570-578)
+// MIT: `krb5_tkt_creds_get` (lib/krb5/krb/get_creds.c:1220-1228)
 /// A response-too-big reply retries the same request over TCP.
 /// A UDP timeout returns the TCP error, so a reply that never fit UDP does not hide it.
 fn exchange_one(
@@ -450,17 +555,19 @@ fn exchange_one(
     request: &[u8],
     udp_limit: usize,
     traced: Option<(&str, SendKind)>,
+    deadline: Option<Instant>,
+    limit: Option<Duration>,
 ) -> Result<Vec<u8>, Error> {
     crate::capture_pdu("client-req", request);
     let dest = dest_addr(addr)?;
     if request.len() > udp_limit {
-        let reply = exchange_tcp(dest, request);
+        let reply = exchange_tcp_capped(dest, request, deadline);
         if let Ok(bytes) = &reply {
             crate::capture_pdu("client-rep", bytes);
         }
         return reply;
     }
-    let reply = match exchange_udp(dest, request) {
+    let reply = match exchange_udp(dest, request, deadline) {
         Ok(reply) if is_response_too_big(&reply) => {
             tracing::info!(
                 event = krb5_log::events::PROTOCOL_TRANSPORT,
@@ -472,10 +579,11 @@ fn exchange_one(
             if let Some((realm, kind)) = traced {
                 trace_retry_tcp(realm, request.len(), kind);
             }
-            exchange_tcp(dest_addr(addr)?, request)
+            exchange_tcp_capped(dest_addr(addr)?, request, fresh_deadline(limit))
         }
         Ok(reply) => Ok(reply),
-        Err(udp_err) => match exchange_tcp(dest, request) {
+        Err(udp_err) if deadline.is_some_and(|end| Instant::now() >= end) => Err(udp_err),
+        Err(udp_err) => match exchange_tcp_capped(dest, request, deadline) {
             Ok(reply) => Ok(reply),
             Err(tcp_err) => {
                 tracing::error!(
@@ -550,13 +658,20 @@ pub(crate) fn errno(e: &std::io::Error) -> i32 {
 }
 
 // MIT: `service_udp_read` (sendto_kdc.c:1209-1216)
-fn exchange_udp(dest: SocketAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
+fn exchange_udp(
+    dest: SocketAddr,
+    request: &[u8],
+    deadline: Option<Instant>,
+) -> Result<Vec<u8>, Error> {
     let ra = RemoteAddr {
         transport: Transport::Udp,
         addr: dest,
     };
     let sock = udp_socket_for(&dest).map_err(|e| Error::transport_msg(format!("udp bind: {e}")))?;
-    sock.set_write_timeout(Some(TIMEOUT))
+    let Some(write_timeout) = cap_budget(TIMEOUT, deadline) else {
+        return Err(request_timeout_error());
+    };
+    sock.set_write_timeout(Some(write_timeout))
         .map_err(|e| Error::transport_msg(e.to_string()))?;
     // Not connected: some stacks drop a reply sent from another local address.
     // The source is still checked, so an off-path datagram is not the reply.
@@ -567,6 +682,13 @@ fn exchange_udp(dest: SocketAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
     ];
     let mut last = Error::transport_msg("udp timeout");
     for (attempt, bo) in backoffs.into_iter().enumerate() {
+        let Some(bo) = cap_budget(bo, deadline) else {
+            return Err(if attempt == 0 {
+                request_timeout_error()
+            } else {
+                last
+            });
+        };
         sock.set_read_timeout(Some(bo)).map_err(Error::from_io)?;
         if attempt == 0 {
             trace::sendto_kdc_udp_send_initial(&ra);
@@ -624,6 +746,16 @@ fn exchange_udp(dest: SocketAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
 /// A length of 0 or over 1 MiB ends the connection.
 fn exchange_tcp(sa: SocketAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
     tcp_exchange(sa, request, TIMEOUT, TIMEOUT)
+}
+
+fn exchange_tcp_capped(
+    sa: SocketAddr,
+    request: &[u8],
+    deadline: Option<Instant>,
+) -> Result<Vec<u8>, Error> {
+    let connect = cap_budget(TIMEOUT, deadline).ok_or_else(request_timeout_error)?;
+    let io_timeout = cap_budget(TIMEOUT, deadline).ok_or_else(request_timeout_error)?;
+    tcp_exchange(sa, request, connect, io_timeout)
 }
 
 fn tcp_exchange(
@@ -895,8 +1027,14 @@ mod kdc_list {
             ),
         ];
         let started = Instant::now();
-        let result =
-            super::exchange_passes(&servers, b"ping", 1465, Some(("KERBER.TEST", SendKind::As)));
+        let result = super::exchange_passes(
+            &servers,
+            b"ping",
+            1465,
+            Some(("KERBER.TEST", SendKind::As)),
+            None,
+            None,
+        );
         let elapsed = started.elapsed();
         assert!(result.is_err(), "{result:?}");
         assert!(elapsed < Duration::from_millis(1500), "{elapsed:?}");

@@ -1247,6 +1247,7 @@ fn kinit_inner(
                         &ctx.profile.locate_kpasswd(&realm_s)?,
                         &chpw_as,
                         p,
+                        ctx.profile.request_timeout,
                     )
                     .map_err(|e| chpw_error(e, &realm_s))?;
                     Zeroizing::new(p.to_vec())
@@ -1256,6 +1257,7 @@ fn kinit_inner(
                     &chpw_as,
                     prompter,
                     &realm_s,
+                    ctx.profile.request_timeout,
                 )?,
                 (None, None) => return Err(e.into()),
             };
@@ -1361,6 +1363,7 @@ fn prompt_and_change(
     chpw_as: &krb5_protocol::AsOutcome,
     prompter: NewPasswordPrompter<'_>,
     realm: &str,
+    timeout: Option<std::time::Duration>,
 ) -> Result<Zeroizing<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
     let mut banner = KEY_EXP_BANNER.to_owned();
     let mut ret = "Password change failed";
@@ -1374,8 +1377,9 @@ fn prompt_and_change(
             ret = "New password cannot be zero length";
             banner = format!("{ret}.  Please try again.");
         } else {
-            let (code, data) = krb5_protocol::change_password_result(servers, chpw_as, &pw0)
-                .map_err(|e| chpw_error(e, realm))?;
+            let (code, data) =
+                krb5_protocol::change_password_result(servers, chpw_as, &pw0, timeout)
+                    .map_err(|e| chpw_error(e, realm))?;
             if code == krb5_protocol::KPASSWD_SUCCESS {
                 return Ok(pw0);
             }

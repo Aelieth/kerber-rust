@@ -248,7 +248,7 @@ fn tgs_inner(
         let (dest, hops) = get_dest_tgt(profile, kdc, &cur_tgt, realm)?;
         cur_tgt = dest;
         path = hops;
-        cur_kdc = kdc_for_realm(profile, &tgt_served_realm(&cur_tgt), kdc);
+        cur_kdc = kdc_for_realm(profile, &tgt_served_realm(&cur_tgt), kdc)?;
     }
     let mut seen = vec![start.clone()];
     for _ in 0..REFERRAL_MAX_HOPS {
@@ -291,7 +291,7 @@ fn tgs_inner(
                     &out.ticket.sname,
                     out.ticket.realm.as_bytes(),
                 ));
-                cur_kdc = kdc_for_realm(profile, &foreign, kdc);
+                cur_kdc = kdc_for_realm(profile, &foreign, kdc)?;
                 cur_tgt = tgs_as_tgt(&cur_tgt, out);
             }
         }
@@ -328,7 +328,7 @@ fn tgs_fallback_realm(
     let (dest, hops) = get_dest_tgt(profile, kdc, tgt, realm)?;
     path.extend(hops);
     let served = tgt_served_realm(&dest);
-    let dest_kdc = kdc_for_realm(profile, &served, kdc);
+    let dest_kdc = kdc_for_realm(profile, &served, kdc)?;
     let extra = service_extra(creds_opts, &dest, realm);
     trace::tkt_creds_service_req(trace::Princ::new(sname, realm.as_bytes()), false);
     let req = service_request(
@@ -400,7 +400,7 @@ fn get_dest_tgt(
                 } else {
                     trace::tkt_creds_advance(got.as_bytes());
                 }
-                cur_kdc = kdc_for_realm(profile, &got, kdc);
+                cur_kdc = kdc_for_realm(profile, &got, kdc)?;
                 dest.clone_into(&mut next);
             }
             Err(e @ Error::KrbError { .. }) => match closer_hop(&path, &served, &next) {
@@ -579,21 +579,25 @@ fn authenticate_srealm(out: &TgsOutcome) -> Result<(), Error> {
     Ok(())
 }
 
-fn kdc_for_realm(profile: &Krb5Conf, realm: &str, fallback: &KdcAddr) -> KdcAddr {
+fn kdc_for_realm(profile: &Krb5Conf, realm: &str, fallback: &KdcAddr) -> Result<KdcAddr, Error> {
     if krb5_config::handed_matches(realm, &fallback.host, fallback.port) {
-        return fallback.clone();
+        return Ok(fallback.clone());
     }
-    let found = profile.kdcs_for(realm).unwrap_or_default();
+    let found = match profile.kdcs_for(realm) {
+        Ok(list) => list,
+        Err(krb5_config::Error::InvalidArgument) => return Err(Error::InvalidArgument),
+        Err(_) => Vec::new(),
+    };
     let Some(ep) = found.first() else {
         krb5_config::clear_handed();
-        return fallback.clone();
+        return Ok(fallback.clone());
     };
     let addr = KdcAddr {
         host: ep.host.clone(),
         port: ep.port,
     };
     krb5_config::hand_kdcs(realm, found);
-    addr
+    Ok(addr)
 }
 
 struct TgsRequest<'a> {

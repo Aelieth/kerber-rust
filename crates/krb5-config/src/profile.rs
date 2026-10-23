@@ -746,8 +746,14 @@ fn parse_libdefaults(
             context_boolean(conf, &v);
         }
         "request_timeout" if exact && take_first(seen, "request_timeout") => {
-            if krb5_types::deltat::parse(&v).is_err() {
-                refuse(conf, ProfileError::BadDeltat);
+            match krb5_types::deltat::parse(&v) {
+                Err(_) => refuse(conf, ProfileError::BadDeltat),
+                Ok(secs) if secs > 0 => {
+                    conf.request_timeout =
+                        u64::try_from(secs).ok().map(std::time::Duration::from_secs);
+                }
+                Ok(secs) if secs < 0 => conf.request_timeout = Some(std::time::Duration::ZERO),
+                Ok(_) => {}
             }
         }
         "plugin_base_dir" if exact && take_first(seen, "plugin_base_dir") => {
@@ -1263,15 +1269,18 @@ pub fn init_kdc_profile() -> Result<(), Error> {
 
 // MIT: `locate_server` (lib/krb5/os/locate_kdc.c:823-836)
 // the profile `[realms] kdc` list when
-#[must_use]
 pub fn discover_kdc_in<P: AsRef<Path>>(
     paths: impl IntoIterator<Item = P>,
     realm: &str,
-) -> Vec<Endpoint> {
+) -> Result<Vec<Endpoint>, Error> {
     let Ok(conf) = load_krb5_conf_paths(paths) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
-    conf.kdcs_for(realm).unwrap_or_default()
+    match conf.kdcs_for(realm) {
+        Err(Error::InvalidArgument) => Err(Error::InvalidArgument),
+        Err(_) => Ok(Vec::new()),
+        Ok(list) => Ok(list),
+    }
 }
 
 #[must_use]

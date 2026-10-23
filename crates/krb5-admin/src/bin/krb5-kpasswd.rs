@@ -74,13 +74,16 @@ fn run<R: BufRead, W: Write>(
     };
     // MIT: `k5_locate_server` (locate_kdc.c:871-877)
     // a realm with no KDC is `KRB5_REALM_UNKNOWN`.
-    let Some(list) = conf
-        .kdcs_for(&client.realm)
-        .ok()
-        .filter(|list| !list.is_empty())
-    else {
-        eprintln!("{prog}: Cannot find KDC for requested realm getting initial ticket");
-        return 1;
+    let list = match conf.kdcs_for(&client.realm) {
+        Ok(list) if !list.is_empty() => list,
+        Err(krb5_config::Error::InvalidArgument) => {
+            eprintln!("{prog}: Invalid argument getting initial ticket");
+            return 1;
+        }
+        _ => {
+            eprintln!("{prog}: Cannot find KDC for requested realm getting initial ticket");
+            return 1;
+        }
     };
     let kdc = list[0].clone();
     krb5_config::hand_kdcs(&client.realm, list);
@@ -231,7 +234,13 @@ fn run<R: BufRead, W: Write>(
     }
     // MIT: `change_set_password` (changepw.c:256-265)
     // the next server only when one does not answer.
-    match send(&servers, &as_out, &new, target.as_ref()) {
+    match send(
+        &servers,
+        &as_out,
+        &new,
+        target.as_ref(),
+        conf.request_timeout,
+    ) {
         Ok(None) => {
             // "Password changed." and exit 0.
             println!("Password changed.");
@@ -468,12 +477,19 @@ fn send(
     as_out: &AsOutcome,
     new: &[u8],
     target: Option<&(PrincipalName, String)>,
+    timeout: Option<std::time::Duration>,
 ) -> Result<Option<String>, Error> {
     let Some((tname, trealm)) = target else {
-        let (code, data) = change_password_result(servers, as_out, new)?;
+        let (code, data) = change_password_result(servers, as_out, new, timeout)?;
         return Ok((code != KPASSWD_SUCCESS).then(|| format_chpw_failure(code, &data)));
     };
-    match set_password(servers, as_out, new, (&krb5_protocol::realm(trealm), tname)) {
+    match set_password(
+        servers,
+        as_out,
+        new,
+        (&krb5_protocol::realm(trealm), tname),
+        timeout,
+    ) {
         Ok(()) => Ok(None),
         Err(Error::ReplyMismatch(line)) if is_chpw_result_line(&line) => Ok(Some(line)),
         Err(e) => Err(e),

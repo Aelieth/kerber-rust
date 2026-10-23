@@ -52,8 +52,6 @@ checks run on them as on MIT's. They are **not yet a drop-in** for MIT's in thes
   mapping; MIT's asks for S4U2Self by the user's certificate.
 - `klist` prints dates as the C locale does, where MIT's follow the locale, and an error not yet
   compared with MIT's tools may read differently from MIT's text.
-- `[libdefaults] request_timeout` is only checked (a malformed one stops a program, as MIT's
-  context does); its value is ignored.
 - `ktutil` `rkt` takes a filesystem path, where MIT's takes a keytab name; `addent` rejects `-s`
   and `-f`, and refuses a `-key` whose length is not the enctype's; a `!` line is passed over.
 - `kinit -k` with no principal asks for `host/<host name>` in the default realm, where MIT's asks

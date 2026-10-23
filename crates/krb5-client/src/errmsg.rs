@@ -94,6 +94,7 @@ impl Krb5Error {
             krb5_protocol::Error::ReplyIntegrity => Self::of(Code::BadIntegrity),
             // MIT krb5_ktfileint_open; see docs/parity/b1-client-keytab.md
             krb5_protocol::Error::Keytab { code: 2, text } => Self::new(Code::Enoent, text.clone()),
+            krb5_protocol::Error::InvalidArgument => Self::of(Code::Einval),
             krb5_protocol::Error::Io { .. } => Self::new(
                 Code::KdcUnreach,
                 format!("Cannot contact any KDC for realm '{realm}'"),

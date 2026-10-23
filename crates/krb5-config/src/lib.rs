@@ -19,6 +19,8 @@
     reason = "the profile and environment readers the lint confines live here"
 )]
 
+use std::time::Duration;
+
 mod ccname;
 mod context;
 mod files;
@@ -238,6 +240,8 @@ pub struct Krb5Conf {
     pub renew_lifetime: Option<u64>,
     pub noaddresses: Option<bool>,
     pub kdc_timeout: Option<String>,
+    // MIT: `krb5_init_context_profile` (lib/krb5/krb/init_ctx.c:254-263)
+    pub request_timeout: Option<Duration>,
     pub max_retries: Option<String>,
     pub kcm_socket: Option<String>,
     pub default_ccache_name: Option<String>,

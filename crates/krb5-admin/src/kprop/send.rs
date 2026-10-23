@@ -271,7 +271,16 @@ pub(crate) fn init_creds_keytab(
         }
         None => return Err(KpropError::code(KT_NOTFOUND, GETTING_CREDS)),
     };
-    let found = conf.kdcs_for(realm).unwrap_or_default();
+    let found = match conf.kdcs_for(realm) {
+        Ok(list) => list,
+        Err(krb5_config::Error::InvalidArgument) => {
+            return Err(KpropError::code(
+                i64::from(nix::errno::Errno::EINVAL as i32),
+                GETTING_CREDS,
+            ));
+        }
+        Err(_) => Vec::new(),
+    };
     let Some(first) = found.first() else {
         krb5_config::clear_handed();
         return Err(KpropError::code(REALM_UNKNOWN, GETTING_CREDS));

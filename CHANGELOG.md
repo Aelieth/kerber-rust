@@ -55,6 +55,9 @@ any other `###` heading.
 
 ### Changed
 
+- **client.** `request_timeout` bounds a KDC exchange and each kpasswd pass; unset, a kpasswd TCP read stays open.
+- **client.** After error 52, the TCP resend gets its own `request_timeout`.
+- **client/admin.** A malformed `kdc` host is an invalid argument for kinit, kvno, kpasswd, and kprop.
 - **client.** Kpasswd tries every server on TCP before UDP, and a bad host string is an invalid argument.
 - **client.** A kpasswd KRB-ERROR is decoded, and an expired-password change uses the kpasswd server list, including its port.
 - **client.** A kpasswd AP-REQ follows the KDC clock when `kdc_timesync` is on.
