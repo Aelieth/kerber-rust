@@ -6,14 +6,13 @@ use std::time::Duration;
 
 use krb5_crypto::ProtocolKey;
 use krb5_gss::GssContext;
-use krb5_kdc::{
-    Acl, IpropUpdate, SharedDump as SharedStore, TlData, UlogLast, UlogTime, UlogUpdates,
-};
+use krb5_kdc::{IpropUpdate, SharedDump as SharedStore, TlData, UlogLast, UlogTime, UlogUpdates};
 use krb5_log::klog::os_error_text;
 use krb5_types::{PrincipalName, Ticket};
 use nix::errno::Errno;
 use zeroize::Zeroizing;
 
+use super::auth_plugin::Kadm5AuthConfig;
 use super::codes::{
     AUTH_INVALIDRESP, FLAVOR_GSS, FLAVOR_NONE, GARBAGE_ARGS, GSS_PRIVACY, GSS_S_COMPLETE,
     GSS_S_CONTINUE_NEEDED, IPROP_FULL_RESYNC, IPROP_FULL_RESYNC_EXT, IPROP_GET_UPDATES, IPROP_NULL,
@@ -31,12 +30,12 @@ use crate::Error;
 /// a granted full resync answers `UPDATE_OK` with a zero last entry; the dump comes by kprop.
 pub(super) fn dispatch_iprop(
     store: &SharedStore,
-    acl: &Acl,
+    authcfg: &Kadm5AuthConfig,
     actor: &str,
     proc: u32,
     args: &[u8],
 ) -> Vec<u8> {
-    if proc != IPROP_NULL && !super::auth_plugin::AuthStack::builtin(acl).iprop(actor) {
+    if proc != IPROP_NULL && !authcfg.stack().iprop(actor) {
         return if proc == IPROP_FULL_RESYNC || proc == IPROP_FULL_RESYNC_EXT {
             encode_fullresync_status(UlogLast::default(), krb5_kdc::IPROP_PERM_DENIED)
         } else {

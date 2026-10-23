@@ -25,6 +25,8 @@ use krb5_config::{KadmindListen, KdcPaths, LogSpecs, ProfileSet};
 use krb5_kdc::OpenFailure;
 use krb5_log::klog::{self, Severity, os_error_text};
 
+mod auth_modules;
+
 /// The name used when `argv[0]` has none.
 const DEFAULT_PROGNAME: &str = "krb5-embed-realm";
 /// The master key principal the database opens with, as the daemon opens it without `-m`.
@@ -100,6 +102,7 @@ fn main() {
         listen,
         limits: ServeLimits::default(),
         acl,
+        auth_modules: auth_modules::example_modules(),
         iprop: None,
     };
     let mut kadmind = Kadmind::new(shared, cfg)

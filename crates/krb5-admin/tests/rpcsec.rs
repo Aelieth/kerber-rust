@@ -4,7 +4,7 @@
 mod common;
 use common::*;
 
-use krb5_admin::{Kadm5RpcSession, Programs, kadm5_handle_rpc, serve_kadm5_conn};
+use krb5_admin::{Kadm5AuthConfig, Kadm5RpcSession, Programs, kadm5_handle_rpc, serve_kadm5_conn};
 use krb5_gss::GssContext;
 use krb5_kdc::principals::kadmin_admin;
 use krb5_kdc::testrealm::{TEST_REALM, bootstrap_documented};
@@ -47,7 +47,7 @@ fn rpcsec_data_without_context_is_credproblem() {
         let (s, _) = listener.accept().unwrap();
         let _ = serve_kadm5_conn(
             store,
-            acl,
+            Arc::new(Kadm5AuthConfig::from_acl(acl)),
             "KERBER.TEST".into(),
             ReplayCache::new(),
             Arc::new(AcceptorConfig::default()),
@@ -104,7 +104,7 @@ fn rpcsec_bad_version_is_auth_badcred() {
         let (s, _) = listener.accept().unwrap();
         let _ = serve_kadm5_conn(
             store,
-            acl,
+            Arc::new(Kadm5AuthConfig::from_acl(acl)),
             "KERBER.TEST".into(),
             ReplayCache::new(),
             Arc::new(AcceptorConfig::default()),
@@ -181,7 +181,7 @@ fn rpcsec_integrity_request_is_databody_plus_mic() {
     let out = kadm5_handle_rpc(
         krb5_admin::RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: TEST_REALM,
             conf: &AcceptorConfig::default(),
             programs: Programs::BOTH,
@@ -209,7 +209,7 @@ fn rpcsec_integrity_reply_is_databody_plus_mic() {
     let out = kadm5_handle_rpc(
         krb5_admin::RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: TEST_REALM,
             conf: &AcceptorConfig::default(),
             programs: Programs::BOTH,
@@ -258,7 +258,7 @@ fn rpcsec_none_service_body_is_plain() {
     let out = kadm5_handle_rpc(
         krb5_admin::RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: TEST_REALM,
             conf: &AcceptorConfig::default(),
             programs: Programs::BOTH,
@@ -289,7 +289,7 @@ fn rpcsec_integrity_bad_checksum_is_garbage_args() {
     let out = kadm5_handle_rpc(
         krb5_admin::RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: TEST_REALM,
             conf: &AcceptorConfig::default(),
             programs: Programs::BOTH,
@@ -317,7 +317,7 @@ fn rpcsec_wrong_handle_with_valid_mic_dispatches() {
     let out = kadm5_handle_rpc(
         krb5_admin::RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: TEST_REALM,
             conf: &AcceptorConfig::default(),
             programs: Programs::BOTH,
@@ -359,7 +359,7 @@ fn unknown_program_auth_none_is_prog_unavail() {
         let (s, _) = listener.accept().unwrap();
         let _ = serve_kadm5_conn(
             store,
-            acl,
+            Arc::new(Kadm5AuthConfig::from_acl(acl)),
             "KERBER.TEST".into(),
             ReplayCache::new(),
             Arc::new(AcceptorConfig::default()),
@@ -408,7 +408,7 @@ fn auth_gssapi_on_iprop_init_is_success() {
         let (s, _) = listener.accept().unwrap();
         let _ = serve_kadm5_conn(
             store,
-            acl,
+            Arc::new(Kadm5AuthConfig::from_acl(acl)),
             "KERBER.TEST".into(),
             ReplayCache::new(),
             Arc::new(AcceptorConfig::default()),
@@ -482,7 +482,7 @@ fn reply_words(version: u32) -> Vec<u32> {
     let out = kadm5_handle_rpc(
         krb5_admin::RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: TEST_REALM,
             conf: &AcceptorConfig::default(),
             programs: Programs::BOTH,
@@ -544,7 +544,7 @@ fn an_unhandled_rpc_is_not_answered_and_the_connection_goes_on() {
         let (s, _) = listener.accept().unwrap();
         serve_kadm5_conn(
             store,
-            acl,
+            Arc::new(Kadm5AuthConfig::from_acl(acl)),
             "KERBER.TEST".into(),
             ReplayCache::new(),
             Arc::new(AcceptorConfig::default()),

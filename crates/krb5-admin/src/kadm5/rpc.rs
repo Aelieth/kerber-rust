@@ -5,12 +5,13 @@ use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::sync::Arc;
 
+use krb5_kdc::SharedDump as SharedStore;
 use krb5_kdc::net_server::{RpcReply, RpcSession, read_rpc_record_with};
-use krb5_kdc::{Acl, SharedDump as SharedStore};
 use krb5_protocol::{AcceptorConfig, ReplayCache};
 use zeroize::Zeroizing;
 
 use super::auth::{Agss, AgssAuth, RpcsecGss, agss_dispatch, handle_rpcsec_gss, svcauth_gssapi};
+use super::auth_plugin::Kadm5AuthConfig;
 use super::codes::{
     AUTH_BADCRED, AUTH_REJECTEDCRED, AUTH_TOOWEAK, FLAVOR_AUTH_GSSAPI, FLAVOR_GSS, FLAVOR_NONE,
     FLAVOR_UNIX, IPROP_PROG, IPROP_VERS, KADM_PROG, KADM_VERS, LAST_FRAG, MAX_AUTH_BYTES,
@@ -27,8 +28,8 @@ use crate::Error;
 pub struct RpcCtx<'a> {
     /// KDC store the procedure reads and writes, and the acceptor's keytab.
     pub store: &'a SharedStore,
-    /// Kadm5 ACL.
-    pub acl: &'a Acl,
+    /// Kadm5 authorization: the ACL and the selected module stack.
+    pub authcfg: &'a Kadm5AuthConfig,
     /// Realm the acceptor name must belong to.
     pub expected_realm: &'a str,
     /// The acceptor's profile values, kadmind's KDC context's.
@@ -58,7 +59,7 @@ impl Programs {
 /// Serve one TCP connection until EOF, each record on this socket in turn; a call that does not decode gets no reply, and the connection goes on (see [`kadm5_handle_rpc`]).
 pub fn serve_kadm5_conn(
     store: SharedStore,
-    acl: Acl,
+    authcfg: Arc<Kadm5AuthConfig>,
     expected_realm: String,
     rcache: ReplayCache,
     conf: Arc<AcceptorConfig>,
@@ -67,7 +68,7 @@ pub fn serve_kadm5_conn(
     let peer = RpcPeer::new(stream.peer_addr().ok(), stream.local_addr().ok());
     let Some(mut conn) = Kadm5Conn::new(
         store,
-        acl,
+        authcfg,
         expected_realm,
         rcache,
         conf,
@@ -141,7 +142,7 @@ fn sockaddr_in_addr(a: &SocketAddr) -> [u8; 4] {
 /// One kadm5 connection's server side: its handle, its GSS state and its peer, over kadmind's store (its acceptor keytab too), ACL, replay cache and acceptor profile values.
 pub(crate) struct Kadm5Conn {
     store: SharedStore,
-    acl: Acl,
+    authcfg: Arc<Kadm5AuthConfig>,
     realm: String,
     rcache: ReplayCache,
     conf: Arc<AcceptorConfig>,
@@ -156,7 +157,7 @@ impl Kadm5Conn {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         store: SharedStore,
-        acl: Acl,
+        authcfg: Arc<Kadm5AuthConfig>,
         realm: String,
         rcache: ReplayCache,
         conf: Arc<AcceptorConfig>,
@@ -166,7 +167,7 @@ impl Kadm5Conn {
     ) -> Option<Self> {
         Some(Self {
             store,
-            acl,
+            authcfg,
             realm,
             rcache,
             conf,
@@ -181,7 +182,7 @@ impl Kadm5Conn {
     fn handle(&mut self, rec: &[u8]) -> Result<Vec<u8>, Error> {
         let ctx = RpcCtx {
             store: &self.store,
-            acl: &self.acl,
+            authcfg: &self.authcfg,
             expected_realm: &self.realm,
             conf: &self.conf,
             programs: self.programs,

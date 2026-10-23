@@ -156,7 +156,7 @@ fn auth_none_is_auth_too_weak() {
     let out = handle_rpc(
         RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: "KERBER.TEST",
             conf: &AcceptorConfig::default(),
             programs: Programs::BOTH,
@@ -186,7 +186,7 @@ fn bad_program_is_prog_unavail() {
     let out = handle_rpc(
         RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: "KERBER.TEST",
             conf: &AcceptorConfig::default(),
             programs: Programs::BOTH,
@@ -217,7 +217,7 @@ fn kadm_vers_99_is_prog_mismatch_2_2() {
     let out = handle_rpc(
         RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: "KERBER.TEST",
             conf: &AcceptorConfig::default(),
             programs: Programs::BOTH,
@@ -260,7 +260,7 @@ fn reply_typed_rpc_is_no_reply() {
     let out = handle_rpc(
         RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: "KERBER.TEST",
             conf: &AcceptorConfig::default(),
             programs: Programs::BOTH,

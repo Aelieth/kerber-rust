@@ -20,6 +20,7 @@ pub use acceptor::{acceptor_names_served, kdb_rd_req};
 pub use auth::{
     changepw_acceptor, check_auth_gssapi_names, check_iprop_rpcsec_auth, check_rpcsec_auth,
 };
+pub use auth_plugin::{Decision, Kadm5Auth, Kadm5AuthConfig};
 pub(crate) use codes::{
     KADM5_BAD_PASSWORD, KADM5_CANT_RESOLVE, KADM5_GSS_ERROR, KADM5_MISSING_KRB5_CONF_PARAMS,
     KADM5_RPC_ERROR, KADM5_SECURE_PRINC_MISSING,

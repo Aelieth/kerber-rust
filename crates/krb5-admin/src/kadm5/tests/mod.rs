@@ -255,7 +255,7 @@ fn admin_rpcsec_init_svc(
     let out = handle_rpc(
         RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: TEST_REALM,
             conf: &AcceptorConfig::default(),
             programs: Programs::BOTH,
@@ -466,7 +466,16 @@ fn cpw_dispatch(
     proc: u32,
     args: &[u8],
 ) -> Vec<u8> {
-    dispatch_kadm5_ticket(store, acl, actor, proc, args, true, true).unwrap()
+    dispatch_kadm5_ticket(
+        store,
+        &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
+        actor,
+        proc,
+        args,
+        true,
+        true,
+    )
+    .unwrap()
 }
 
 fn setup() -> (krb5_kdc::SharedDump, Acl, String) {

@@ -28,6 +28,7 @@ fn test_cfg(acl: krb5_kdc::Acl, services: Services) -> KadmindConfig {
         listen: krb5_config::KadmindListen::for_realm(None, TEST_REALM, None),
         limits: ServeLimits::default(),
         acl,
+        auth_modules: Vec::new(),
         iprop: None,
     }
 }

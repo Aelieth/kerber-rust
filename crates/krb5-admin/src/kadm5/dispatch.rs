@@ -1,9 +1,9 @@
 //! The kadm5 procedure switch (`kadmin/server/server_stubs.c`): one arm per procedure, the store path (`reload_if_stale` before every read and mutation), the `KADM5_AUTH_*` code each procedure denies with, and the `Error` -> `kadm_err.et` mapping behind `generic_ret`.
 
-use krb5_kdc::{Acl, KDB_LOCKDOWN_KEYS, SharedDump as SharedStore};
+use krb5_kdc::{KDB_LOCKDOWN_KEYS, SharedDump as SharedStore};
 use krb5_types::PrincipalName;
 
-use super::auth_plugin::AuthStack;
+use super::auth_plugin::Kadm5AuthConfig;
 use super::codes::{
     API_V2, CHPASS_PRINCIPAL, CHPASS_PRINCIPAL3, CHRAND_PRINCIPAL, CHRAND_PRINCIPAL3, CREATE_ALIAS,
     CREATE_POLICY, CREATE_PRINCIPAL, CREATE_PRINCIPAL3, DELETE_POLICY, DELETE_PRINCIPAL, EINVAL,
@@ -48,7 +48,7 @@ pub(super) fn kadm5_or_iprop(
     changepw: bool,
     iprop: bool,
 ) -> Result<Vec<u8>, Error> {
-    let RpcCtx { store, acl, .. } = ctx;
+    let RpcCtx { store, authcfg, .. } = ctx;
     if proc == 0 {
         return Ok(Vec::new());
     }
@@ -59,9 +59,9 @@ pub(super) fn kadm5_or_iprop(
         ) {
             return Err(Error::ProcUnavail);
         }
-        return Ok(dispatch_iprop(store, acl, actor, proc, args));
+        return Ok(dispatch_iprop(store, authcfg, actor, proc, args));
     }
-    dispatch_kadm5_ticket(store, acl, actor, proc, args, initial, changepw)
+    dispatch_kadm5_ticket(store, authcfg, actor, proc, args, initial, changepw)
 }
 
 fn write_store(
@@ -185,19 +185,20 @@ fn req_realm(prealm: &str, store_realm: &str) -> String {
 #[cfg(test)]
 pub(super) fn dispatch_kadm5(
     store: &SharedStore,
-    acl: &Acl,
+    acl: &krb5_kdc::Acl,
     actor: &str,
     proc: u32,
     args: &[u8],
 ) -> Result<Vec<u8>, Error> {
-    dispatch_kadm5_ticket(store, acl, actor, proc, args, true, false)
+    let authcfg = Kadm5AuthConfig::from_acl(acl.clone());
+    dispatch_kadm5_ticket(store, &authcfg, actor, proc, args, true, false)
 }
 
 // MIT: `modify_principal_2_svc` (server_stubs.c:630-644)
 /// an ACL denial or a lockdown clear is AUTH_MODIFY before the entry is written.
 pub(super) fn dispatch_kadm5_ticket(
     store: &SharedStore,
-    acl: &Acl,
+    authcfg: &Kadm5AuthConfig,
     actor: &str,
     proc: u32,
     args: &[u8],
@@ -205,7 +206,7 @@ pub(super) fn dispatch_kadm5_ticket(
     changepw: bool,
 ) -> Result<Vec<u8>, Error> {
     let realm = store_realm(store);
-    let stack = AuthStack::builtin(acl);
+    let stack = authcfg.stack();
     match proc {
         INIT => Ok(generic_ret(API_V2, 0)),
         GET_PRIVS => {

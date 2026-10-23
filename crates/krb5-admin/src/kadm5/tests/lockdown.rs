@@ -30,7 +30,7 @@ fn chpass_lockdown_self_is_auth_changepw_before_initial() {
     w.nullstring(Some("new-secret"));
     let out = dispatch_kadm5_ticket(
         &store,
-        &acl,
+        &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
         "lockedself@KERBER.TEST",
         CHPASS_PRINCIPAL,
         &w.b,

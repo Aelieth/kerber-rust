@@ -24,7 +24,7 @@ use krb5_kdc::{
 use krb5_log::klog::{self, Severity};
 use krb5_protocol::{AcceptorConfig, ReplayCache};
 
-use crate::kadm5::Kadm5Conn;
+use crate::kadm5::{Kadm5Auth, Kadm5AuthConfig, Kadm5Conn};
 use crate::listen::{client_addr, handle_kpasswd_from, kpasswd_toolong_error};
 use crate::{Programs, RpcPeer, UnhandledRpc, acceptor_names_served};
 
@@ -85,6 +85,8 @@ pub struct KadmindConfig {
     pub listen: KadmindListen,
     pub limits: ServeLimits,
     pub acl: Acl,
+    /// Loaded kadm5_auth modules; `[plugins] kadm5_auth` selects them.
+    pub auth_modules: Vec<Arc<dyn Kadm5Auth>>,
     pub iprop: Option<IpropConfig>,
 }
 
@@ -122,7 +124,7 @@ enum BindService {
 /// kadmind's side of the loop: kpasswd's requests and each kadm5 connection's session, over one store, one ACL, one replay cache for the kadm5 acceptor and one set of acceptor profile values.
 pub struct Kadmind {
     store: SharedStore,
-    acl: Acl,
+    authcfg: Arc<Kadm5AuthConfig>,
     cpw_key: Option<ProtocolKey>,
     rcache: ReplayCache,
     conf: Arc<AcceptorConfig>,
@@ -166,9 +168,20 @@ impl Kadmind {
                 None
             }
         };
+        let kdc_default = krb5_config::KdcConf::default();
+        let relations = krb5_config::kdc_plugin_relations(
+            cfg.profile.kdc.as_ref().unwrap_or(&kdc_default),
+            &cfg.profile.krb5,
+            "kadm5_auth",
+        );
+        let authcfg = Arc::new(Kadm5AuthConfig::build(
+            cfg.acl,
+            &cfg.auth_modules,
+            &relations,
+        ));
         Ok(Self {
             store,
-            acl: cfg.acl,
+            authcfg,
             cpw_key,
             rcache: ReplayCache::new(),
             conf: Arc::new(conf),
@@ -189,7 +202,7 @@ impl Kadmind {
     ) -> Self {
         Self {
             store,
-            acl,
+            authcfg: Arc::new(Kadm5AuthConfig::from_acl(acl)),
             cpw_key,
             rcache: ReplayCache::new(),
             conf: Arc::new(conf),
@@ -266,7 +279,7 @@ impl Dispatch for Kadmind {
         let here = Some(local.ip());
         match handle_kpasswd_from(
             &self.store,
-            &self.acl,
+            &self.authcfg,
             &self.conf,
             &replay,
             request,
@@ -305,7 +318,7 @@ impl Dispatch for Kadmind {
     ) -> Option<Box<dyn RpcSession>> {
         Some(Box::new(Kadm5Conn::new(
             Arc::clone(&self.store),
-            self.acl.clone(),
+            Arc::clone(&self.authcfg),
             self.realm(),
             self.rcache.clone(),
             Arc::clone(&self.conf),

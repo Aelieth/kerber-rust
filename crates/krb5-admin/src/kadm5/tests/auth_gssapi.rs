@@ -25,7 +25,7 @@ fn auth_gssapi_on_iprop_data_is_auth_failed() {
     let out = handle_rpc(
         RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: "KERBER.TEST",
             conf: &AcceptorConfig::default(),
             programs: Programs::BOTH,
@@ -73,7 +73,7 @@ fn auth_gssapi_on_iprop_init_is_success() {
     let out = handle_rpc(
         RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: "KERBER.TEST",
             conf: &AcceptorConfig::default(),
             programs: Programs::BOTH,
@@ -209,9 +209,10 @@ fn an_established_auth_gssapi_call_on_iprop_is_prog_unavail_until_iprop_is_on() 
         &init_args.b,
     );
     let conf = AcceptorConfig::default();
+    let authcfg = crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone());
     let ctx_for = |store| RpcCtx {
         store,
-        acl: &acl,
+        authcfg: &authcfg,
         expected_realm: TEST_REALM,
         conf: &conf,
         programs: Programs::BOTH,
@@ -418,7 +419,7 @@ impl Established {
         handle_rpc(
             RpcCtx {
                 store: &self.store,
-                acl: &self.acl,
+                authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(self.acl.clone()),
                 expected_realm: krb5_kdc::testrealm::TEST_REALM,
                 conf: &AcceptorConfig::default(),
                 programs: Programs::BOTH,
@@ -574,7 +575,7 @@ fn an_auth_gssapi_credential_that_does_not_check_out_is_answered_with_mits_why()
         let out = handle_rpc(
             RpcCtx {
                 store: &store,
-                acl: &acl,
+                authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
                 expected_realm: "KERBER.TEST",
                 conf: &AcceptorConfig::default(),
                 programs: Programs::BOTH,
@@ -759,7 +760,7 @@ fn a_call_is_authenticated_by_its_flavor_before_its_program() {
         let out = handle_rpc(
             RpcCtx {
                 store: &store,
-                acl: &acl,
+                authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
                 expected_realm: "KERBER.TEST",
                 conf: &AcceptorConfig::default(),
                 programs: Programs::BOTH,
@@ -798,7 +799,7 @@ fn a_credential_or_verifier_past_400_bytes_does_not_decode() {
         let out = handle_rpc(
             RpcCtx {
                 store: &store,
-                acl: &acl,
+                authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
                 expected_realm: "KERBER.TEST",
                 conf: &AcceptorConfig::default(),
                 programs: Programs::BOTH,
@@ -828,7 +829,7 @@ fn a_failed_gssapi_init_keeps_an_unestablished_record() {
         handle_rpc(
             RpcCtx {
                 store: &store,
-                acl: &acl,
+                authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
                 expected_realm: TEST_REALM,
                 conf: &AcceptorConfig::default(),
                 programs: Programs::BOTH,
@@ -1100,7 +1101,7 @@ fn send_as(
     handle_rpc(
         RpcCtx {
             store: &t.store,
-            acl: &t.acl,
+            authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(t.acl.clone()),
             expected_realm: krb5_kdc::testrealm::TEST_REALM,
             conf: &AcceptorConfig::default(),
             programs: Programs::BOTH,

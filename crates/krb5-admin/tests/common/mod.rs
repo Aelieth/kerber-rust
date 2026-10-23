@@ -160,7 +160,7 @@ pub fn init_client(
     let out = kadm5_handle_rpc(
         krb5_admin::RpcCtx {
             store,
-            acl,
+            authcfg: &krb5_admin::Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: TEST_REALM,
             conf: &AcceptorConfig::default(),
             programs: Programs::BOTH,
@@ -242,7 +242,7 @@ pub fn data_call(
     let out = kadm5_handle_rpc(
         krb5_admin::RpcCtx {
             store,
-            acl,
+            authcfg: &krb5_admin::Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: TEST_REALM,
             conf: &AcceptorConfig::default(),
             programs: Programs::BOTH,

@@ -301,7 +301,16 @@ pub fn handle_kpasswd_rfc3244(
     raw: &[u8],
 ) -> Result<Vec<u8>, Error> {
     let loopback = std::net::IpAddr::from([127, 0, 0, 1]);
-    handle_kpasswd_from(store, acl, conf, replay, raw, "127.0.0.1", Some(loopback))
+    let authcfg = crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone());
+    handle_kpasswd_from(
+        store,
+        &authcfg,
+        conf,
+        replay,
+        raw,
+        "127.0.0.1",
+        Some(loopback),
+    )
 }
 
 const RFC3244_VERSION: u16 = 0xff80;
@@ -520,7 +529,7 @@ fn kpasswd_log_line(setpw: bool, from: &str, client: &str, target: &str, text: &
 /// That mismatch returns an error and no datagram is sent. The AP-REQ is verified only as a ticket for `kadmin/changepw` in this realm; any failure, a ticket for another service included, is answered with a framed KRB-ERROR (code 60) whose e-data carries result code 3.
 pub(crate) fn handle_kpasswd_from(
     store: &SharedStore,
-    acl: &krb5_kdc::Acl,
+    authcfg: &crate::kadm5::Kadm5AuthConfig,
     conf: &AcceptorConfig,
     replay: &ReplayCache,
     raw: &[u8],
@@ -625,7 +634,7 @@ pub(crate) fn handle_kpasswd_from(
             "Ticket must be derived from a password".to_owned(),
             "Operation requires initial ticket".to_owned(),
         )
-    } else if !crate::kadm5::auth_plugin::AuthStack::builtin(acl).cpw(&client, &target_unparsed) {
+    } else if !authcfg.stack().cpw(&client, &target_unparsed) {
         (
             5u16,
             "Unauthorized request".to_owned(),

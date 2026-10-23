@@ -2,6 +2,9 @@
 //! modules. Every authorization site routes through one [`AuthStack`]; a request is
 //! authorized when at least one module allows it and none deny it.
 
+use std::sync::Arc;
+
+use krb5_config::PluginRelations;
 use krb5_kdc::{Acl, AdminOp, Restrictions};
 use krb5_types::{principal_compare, principal_from_unparsed};
 
@@ -11,8 +14,7 @@ use krb5_types::{principal_compare, principal_from_unparsed};
 pub enum Decision {
     Allow,
     Abstain,
-    /// A built-in module only allows or abstains; an explicit denial stops the stack.
-    #[allow(dead_code)]
+    /// An explicit denial stops the stack, overriding any allow.
     Deny,
 }
 
@@ -20,6 +22,9 @@ pub enum Decision {
 /// `client` and the principal arguments are unparsed names (`name@REALM`); the target is the
 /// canonical principal taken from the fetched record.
 pub trait Kadm5Auth: Send + Sync {
+    /// The module's name, for `[plugins] kadm5_auth`.
+    fn name(&self) -> &'static str;
+
     fn addprinc(&self, _client: &str, _target: &str) -> (Decision, Option<Restrictions>) {
         (Decision::Abstain, None)
     }
@@ -93,9 +98,12 @@ fn allow_if(ok: bool) -> Decision {
 
 /// The built-in `acl` module: `kadm5.acl`, wrapping [`Acl`]. It allows or abstains, never denies.
 // MIT: `kadm5_auth_acl_initvt` (kadmin/server/auth_acl.c)
-pub struct AclModule<'a>(pub &'a Acl);
+pub struct AclModule(pub Arc<Acl>);
 
-impl Kadm5Auth for AclModule<'_> {
+impl Kadm5Auth for AclModule {
+    fn name(&self) -> &'static str {
+        "acl"
+    }
     fn addprinc(&self, client: &str, target: &str) -> (Decision, Option<Restrictions>) {
         if self.0.allows(client, AdminOp::Create, Some(target)) {
             (
@@ -197,6 +205,9 @@ fn is_same_principal(client: &str, target: &str) -> bool {
 pub struct SelfModule;
 
 impl Kadm5Auth for SelfModule {
+    fn name(&self) -> &'static str {
+        "self"
+    }
     // MIT: `self_compare` (kadmin/server/auth_self.c)
     fn cpw(&self, client: &str, target: &str) -> Decision {
         allow_if(is_same_principal(client, target))
@@ -219,21 +230,12 @@ impl Kadm5Auth for SelfModule {
     }
 }
 
-/// The ordered stack of kadm5_auth modules for one request: `acl` first, then `self`.
-pub struct AuthStack<'a> {
-    modules: Vec<Box<dyn Kadm5Auth + 'a>>,
+/// The ordered, selected stack of kadm5_auth modules, built once and shared by every request.
+pub struct AuthStack {
+    modules: Vec<Arc<dyn Kadm5Auth>>,
 }
 
-impl<'a> AuthStack<'a> {
-    /// The built-in stack: `acl` first, then `self`, as MIT registers them.
-    // MIT: `auth_init` (kadmin/server/auth.c:62-128)
-    #[must_use]
-    pub fn builtin(acl: &'a Acl) -> Self {
-        Self {
-            modules: vec![Box::new(AclModule(acl)), Box::new(SelfModule)],
-        }
-    }
-
+impl AuthStack {
     // MIT: `auth` (kadmin/server/auth.c:181-202)
     fn combine(&self, f: impl Fn(&dyn Kadm5Auth) -> Decision) -> bool {
         let mut authorized = false;
@@ -347,5 +349,54 @@ impl<'a> AuthStack<'a> {
     #[must_use]
     pub fn addalias(&self, client: &str, alias: &str, target: &str) -> bool {
         self.combine(|m| m.addalias(client, alias, target))
+    }
+}
+
+/// One kadmind's kadm5 authorization: the ACL and the selected, ordered module stack.
+pub struct Kadm5AuthConfig {
+    acl: Arc<Acl>,
+    stack: AuthStack,
+}
+
+impl Kadm5AuthConfig {
+    /// `acl` and `self` plus `extra`, ordered by `[plugins] kadm5_auth` (`enable_only = self` drops the ACL, as MIT).
+    // MIT: `auth_init` (kadmin/server/auth.c:62-128)
+    #[must_use]
+    pub fn build(acl: Acl, extra: &[Arc<dyn Kadm5Auth>], relations: &PluginRelations) -> Self {
+        let acl = Arc::new(acl);
+        // MIT: `make_full_list` (lib/krb5/krb/plugin.c:223-235)
+        let mut candidates: Vec<Arc<dyn Kadm5Auth>> = extra.to_vec();
+        candidates.push(Arc::new(AclModule(Arc::clone(&acl))));
+        candidates.push(Arc::new(SelfModule));
+        let names: Vec<&str> = candidates.iter().map(|m| m.name()).collect();
+        let kept = krb5_config::filter_plugin_modules(relations, &names);
+        let mut left = candidates;
+        let mut modules = Vec::with_capacity(kept.len());
+        for want in kept {
+            if let Some(index) = left.iter().position(|m| m.name() == want) {
+                modules.push(left.remove(index));
+            }
+        }
+        Self {
+            acl,
+            stack: AuthStack { modules },
+        }
+    }
+
+    /// `acl` and `self` only.
+    #[must_use]
+    pub fn from_acl(acl: Acl) -> Self {
+        Self::build(acl, &[], &PluginRelations::default())
+    }
+
+    #[must_use]
+    pub fn stack(&self) -> &AuthStack {
+        &self.stack
+    }
+
+    /// The ACL, for the version-1 admin session.
+    #[must_use]
+    pub fn acl(&self) -> &Acl {
+        &self.acl
     }
 }

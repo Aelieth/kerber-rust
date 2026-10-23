@@ -2,6 +2,23 @@
 
 use super::*;
 
+// Shim: build the acl+self auth config the real `dispatch_iprop` now takes.
+fn dispatch_iprop(
+    store: &krb5_kdc::SharedDump,
+    acl: &Acl,
+    actor: &str,
+    proc: u32,
+    args: &[u8],
+) -> Vec<u8> {
+    crate::kadm5::iprop::dispatch_iprop(
+        store,
+        &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
+        actor,
+        proc,
+        args,
+    )
+}
+
 #[cfg(feature = "test-hooks")]
 fn logging_setup() -> (krb5_kdc::SharedDump, Acl, String) {
     let (store, acl, actor) = setup();
@@ -612,7 +629,7 @@ fn the_iprop_program_is_served_only_with_the_update_log_mapped() {
         handle_rpc(
             RpcCtx {
                 store,
-                acl: &acl,
+                authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
                 expected_realm: "KERBER.TEST",
                 conf: &AcceptorConfig::default(),
                 programs: Programs::BOTH,

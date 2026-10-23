@@ -105,7 +105,7 @@ fn cpw_self_without_initial_is_auth_initial() {
     w.nullstring(Some("new-secret"));
     let out = dispatch_kadm5_ticket(
         &store,
-        &none,
+        &crate::kadm5::Kadm5AuthConfig::from_acl(none.clone()),
         "user@KERBER.TEST",
         CHPASS_PRINCIPAL,
         &w.b,

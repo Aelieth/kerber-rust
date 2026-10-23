@@ -32,3 +32,12 @@ KRB5_KDC_PROFILE=examples/configs/kdc.conf KRB5_CONFIG=examples/configs/krb5.con
 The database and stash the profile names must already exist (create them with `krb5-kdb`, as
 `otp-kdc`'s README shows). Then MIT `kadmin -p admin/admin` and `kpasswd` work against it exactly as
 against the daemon.
+
+## Authorization modules
+
+It registers two example `kadm5_auth` modules in [`auth_modules.rs`](src/auth_modules.rs) through
+`KadmindConfig::auth_modules`: `welcomer` lets any caller read a `guest-*` principal, and `bouncer`
+denies every write to a `deny-*` one, overriding the ACL. The built-in `acl` and `self` run first.
+`[plugins] kadm5_auth` in the profile selects and orders the stack — `enable_only = self` turns the
+ACL file off, `disable = bouncer` drops the bouncer — as MIT's stanza does. This library's interface
+passes the caller and target names, not MIT's field mask, policy entry or string value.

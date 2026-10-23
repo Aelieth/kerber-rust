@@ -258,6 +258,7 @@ fn main() {
         listen,
         limits: ServeLimits::default(),
         acl,
+        auth_modules: Vec::new(),
         iprop: iprop_cfg,
     };
     // Before daemonizing, as MIT does; the names check is after the network above.
