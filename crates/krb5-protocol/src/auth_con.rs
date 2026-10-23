@@ -489,7 +489,7 @@ pub fn us_timeofday() -> (KerberosTime, Microseconds) {
 }
 
 // MIT: `krb5_timeofday` (lib/krb5/os/timeofday.c:45-45)
-/// Linux reads CLOCK_REALTIME_COARSE, not time().
+/// MIT reads time(), whose Linux second is CLOCK_REALTIME_COARSE's.
 #[must_use]
 pub(crate) fn kdc_time_seconds() -> u32 {
     #[cfg(any(
