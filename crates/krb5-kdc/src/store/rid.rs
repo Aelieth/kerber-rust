@@ -1,5 +1,4 @@
-//! Per-realm NT domain SID and PAC RIDs (MS-ADTS well-known
-//! Administrator 500 / krbtgt 502; MIT has no RID concept).
+//! MIT has no RID concept; a zero or a missing RID is used as 1000.
 
 use krb5_types::PrincipalName;
 use krb5_types::pac::{PacIdentity, RpcSid};
@@ -8,13 +7,10 @@ use super::PrincipalStore;
 use super::principal::Principal;
 use crate::error::Error;
 
-/// Well-known RID: Administrator.
 pub(crate) const RID_ADMINISTRATOR: u32 = 500;
 
-/// Well-known RID: krbtgt.
 pub const RID_KRBTGT: u32 = 502;
 
-/// First allocated RID for ordinary principals (AD-style).
 pub const RID_FIRST_USER: u32 = 1000;
 
 pub(super) fn generate_domain_sid() -> Result<RpcSid, Error> {
@@ -38,19 +34,16 @@ pub(super) fn sid_from_random_bytes(b: &[u8; 12]) -> Result<RpcSid, Error> {
 }
 
 impl PrincipalStore {
-    /// Realm NT domain SID.
     #[must_use]
     pub fn domain_sid(&self) -> &RpcSid {
         &self.domain_sid
     }
 
-    /// Next RID that would be allocated for an ordinary principal.
     #[must_use]
     pub(crate) fn next_rid(&self) -> u32 {
         self.next_rid
     }
 
-    /// Override the realm domain SID (config / dump / persist).
     pub fn set_domain_sid(&mut self, sid: RpcSid) {
         self.domain_sid = sid;
     }
@@ -67,7 +60,6 @@ impl PrincipalStore {
         }
     }
 
-    /// PAC identity for `name` in `crealm` (store RID, or `RID_FIRST_USER` if unknown).
     #[must_use]
     pub fn pac_identity(&self, name: &PrincipalName, crealm: &str) -> PacIdentity {
         let rid = self.get_name(name).map_or(RID_FIRST_USER, |p| {
