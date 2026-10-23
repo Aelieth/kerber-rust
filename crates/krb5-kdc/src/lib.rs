@@ -1,8 +1,4 @@
-//! Pure-Rust Kerberos V5 KDC graded against MIT 1.22.2.
-//!
-//! AS/TGS issue (`issue`), preauth — PA-ENC-TIMESTAMP, encrypted challenge, PKINIT with RFC 8070 freshness and RFC 8062 anonymity, SPAKE, FAST (`preauth`), the kdcpreauth / kdcpolicy registries (`plugins`), PAC and S4U2Self / S4U2Proxy (`ad`), the MIT ISSUE tuple + audit plugin (`audit`), KDB traits and the in-memory store (`kdb`, `store`), `kdb5_util` dump v7 at rest (`kdb_dump`, `persist`), master-key stash (`mkey`), the lookaside reply cache (`lookaside`), ACL-gated admin (`acl`), keytab export, the documented test realm (`testrealm`), and MIT kadm5 names (`principals`). Ticket issuance, ACL checks, and keytab export are pure functions so tests do not need a bound socket. UDP/TCP 88 is served by MIT's net-server loop ([`net_server`]), one loop on the caller's thread ([`serve_all_until`], [`serve_daemon`]); kadmind runs the same loop. There is no C FFI.
-//!
-//! The public surface is the names this root re-exports, plus `net_server`, `principals` and `testrealm`. Every other module stays private.
+//! The KDC library.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -145,43 +141,33 @@ use krb5_types::PrincipalName;
 use testrealm::{TEST_ADMIN, documented_kiprop};
 
 #[must_use]
-/// `admin@<realm>` actor string used by kadmind when no `acl_file` is set.
 pub(crate) fn admin_id_for_realm(realm: &str) -> String {
     format!("{TEST_ADMIN}@{realm}")
 }
 
-/// `kdb5_util@<realm>` — `kadm5_init(context, progname, …)` when `kdb5_util create` seeds `kadmin/admin` and `kadmin/changepw`.
 // MIT: `kadm5_create_magic_princs` (kadm5_create.c:100-100)
-/// `kadm5_init` is called with `progname` as the client name, before the admin principals are added.
 #[must_use]
 pub(crate) fn kdb5_util_id_for_realm(realm: &str) -> String {
     format!("kdb5_util@{realm}")
 }
 
 #[must_use]
-/// `host/testhost.<realm-as-dns>` as NT-SRV-HST.
 pub(crate) fn host_for_realm(realm: &str) -> PrincipalName {
     let inst = format!("testhost.{}", realm.to_ascii_lowercase());
     PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", inst.as_str()])
 }
 
-/// Default `acl_file`.
 // MIT: `DEFAULT_KADM5_ACL_FILE` (osconf.hin:106-106)
-/// `KDC_DIR "/kadm5.acl"`.
 #[must_use]
 pub fn default_acl_path(kdc_dir: &std::path::Path) -> std::path::PathBuf {
     kdc_dir.join("kadm5.acl")
 }
 
-/// Load `acl_file` (`auth_acl.c` `acl_init` / `load_acl_file`): the file's bytes, as MIT's `fgets` reads them, whether or not they are UTF-8. A directory opens, and its first read fails, which MIT's `get_line` takes for the end: an ACL with no line.
 // MIT: `main` (ovsec_kadmd.c:497-497)
-/// an empty `acl_file` becomes NULL.
 // MIT: `acl_init` (auth_acl.c:554-555)
-/// a NULL ACL file → `KRB5_PLUGIN_NO_HANDLE`.
 // MIT: `load_acl_file` (auth_acl.c:398-405)
-/// a file that does not open is logged as `<strerror> while opening ACL file <fname>`, and the context's message is `Cannot open`.
-/// `None` or an empty path is self-only.
-/// [`Error::AclParse`] when the file does not open or a line does not load. Its lines but the last are what MIT logs (`parse_entry`'s message, `load_acl_file`'s); the last is the line MIT's `fail_to_start` prints and logs: `Cannot open FNAME: <strerror>`, or `FNAME: syntax error at line N <…>`, then ` while initializing ACL file, aborting`.
+/// Empty path is self-only; a directory has no lines.
+/// A missing ACL file errors and names it.
 pub fn acl_for_store(realm: &str, acl_file: Option<&std::path::Path>) -> Result<Acl, Error> {
     let Some(path) = acl_file else {
         return Ok(Acl::none());
@@ -213,8 +199,6 @@ pub fn acl_for_store(realm: &str, acl_file: Option<&std::path::Path>) -> Result<
     })
 }
 
-/// Bootstrap a named realm: krbtgt, user, admin, host, `kadmin/admin`, `kadmin/changepw`.
-/// [`Error::PasswordPolicy`] when `user_password` or `admin_password` is empty, [`Error::AlreadyExists`] when `user` and `admin` are the same name, [`Error::AclParse`] when `admin@<realm>` is not a principal name (a realm with `/` or `@`), and [`Error::Rng`] when the CSPRNG fails while generating a random key.
 pub(crate) fn bootstrap_realm(
     realm: &str,
     user: &str,
@@ -225,9 +209,6 @@ pub(crate) fn bootstrap_realm(
     bootstrap_realm_with_kdc_conf(realm, user, user_password, admin, admin_password, None)
 }
 
-/// `bootstrap_realm` honouring `kdc.conf` `supported_enctypes`.
-/// [`Error::Crypto`] when `kdc` sets a `domain_sid` that is not valid SDDL.
-/// [`Error::PasswordPolicy`] when `user_password` or `admin_password` is empty, [`Error::AlreadyExists`] when `user` and `admin` are the same name, [`Error::AclParse`] when `admin@<realm>` is not a principal name (a realm with `/` or `@`), and [`Error::Rng`] when the CSPRNG fails while generating a random key.
 pub fn bootstrap_realm_with_kdc_conf(
     realm: &str,
     user: &str,
@@ -255,15 +236,14 @@ pub fn bootstrap_realm_with_kdc_conf(
 }
 
 // MIT: `ADMIN_LIFETIME` (kadm5_create.c:54-54)
-/// `60*60*3`, three hours.
 const KADM5_ADMIN_LIFETIME: u64 = 60 * 60 * 3;
 // MIT: `CHANGEPW_LIFETIME` (kadm5_create.c:55-55)
-/// `60*5`, five minutes.
 const KADM5_CHANGEPW_LIFETIME: u64 = 60 * 5;
 
 // MIT: `kadm5_create` (kadm5_create.c)
-/// flags. `create_principal` does not set these.
-/// [`Error::NotFound`] when `kadmin/admin` or `kadmin/changepw` is missing, and [`Error::Db`] when the store's configured file cannot be written after an update.
+/// kadmin/admin is three hours; kadmin/changepw is five minutes.
+/// The attributes word is replaced, so other flags clear.
+/// Expiry and policy fields stay unchanged.
 pub fn apply_kadm5_create_service_attrs(store: &mut PrincipalStore) -> Result<(), Error> {
     let realm = store.realm().to_owned();
     let actor = kdb5_util_id_for_realm(&realm);
