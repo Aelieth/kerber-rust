@@ -140,6 +140,7 @@ fn string_value(b: &[u8]) -> Value {
 
 // MIT: `codec_encode_tokeninfo` (lib/krb5/krb/preauth_otp.c:149-206)
 /// A PIN is flags 3; a separate PIN is 7. Formats 3 and 4 are left out.
+/// MIT sets NEXTOTP, not SEPARATE_PIN, for a separate PIN.
 fn tokeninfo_json(ti: &OtpTokenInfo) -> Value {
     let f = flags_u32(&ti.flags);
     let mut flags = R_COLLECT_TOKEN;
