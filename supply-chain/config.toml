@@ -114,7 +114,7 @@ version = "0.2.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.ctutils]]
-version = "0.4.3"
+version = "0.4.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.curve25519-dalek]]
@@ -166,7 +166,7 @@ criteria = "safe-to-deploy"
 [[exemptions.fiat-crypto]]
 version = "0.3.0"
 criteria = "safe-to-deploy"
-notes = "Locked as curve25519-dalek's dependency under cfg(curve25519_dalek_backend = \"fiat\"), a backend this tree never selects; not compiled."
+notes = """Locked as curve25519-dalek's dependency under cfg(curve25519_dalek_backend = "fiat"), a backend this tree never selects; not compiled."""
 
 [[exemptions.find-msvc-tools]]
 version = "0.1.10"
