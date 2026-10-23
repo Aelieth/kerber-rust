@@ -100,12 +100,16 @@ struct AsReqTimes {
     opts: KdcOptions,
 }
 
+#[expect(
+    clippy::derivable_impls,
+    reason = "MIT's library default is written out in full"
+)]
 impl Default for AsTicketOpts {
     fn default() -> Self {
         Self {
             lifetime: None,
             rlife: None,
-            forwardable: true,
+            forwardable: false,
             proxiable: false,
             addresses: None,
             anonymous: false,
@@ -779,7 +783,6 @@ fn unarmored_mech<'a>(req: &AsRequest<'a>, pa_type: i32, failed: &[i32]) -> Opti
     }
 }
 
-/// Unlike MIT, an unsupported etype is retried once with aes256 alone.
 fn continue_preauth(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
@@ -846,20 +849,6 @@ fn continue_preauth(
         };
     match send_as(req, &wire)? {
         KdcMsg::AsRep(rep) => finish(rep, &wire, etypes, client_key, &bound),
-        KdcMsg::Error(e) if e.error_code == err::ETYPE_NOSUPP => {
-            let etypes = vec![EncryptionType::Aes256CtsHmacSha196.to_iana()];
-            trace_tryagain_input(&e, pa::ENC_TIMESTAMP);
-            let mut padata = vec![pa_enc_timestamp_at(&client_key, clock.now(true), false)?];
-            tryagain_padata(error_cookie(&e), &mut padata);
-            let bound = request_times(req, clock);
-            let retry = build_as_req_from(req, nonce, &bound, Some(padata), &etypes)?;
-            let wire = encode(&retry)?;
-            match send_as(req, &wire)? {
-                KdcMsg::AsRep(rep) => finish(rep, &wire, &etypes, client_key, &bound),
-                KdcMsg::Error(e) => classify_kdc_error(&e),
-                KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
-            }
-        }
         KdcMsg::Error(e) => {
             encts_tryagain(&e);
             classify_kdc_error(&e)
@@ -937,7 +926,7 @@ fn hint_offers_real_mechanism(req: &AsRequest<'_>, err: &KrbError) -> bool {
 }
 
 // MIT: `krb5int_fast_process_error` (lib/krb5/krb/fast.c:494-497)
-/// Without FAST, only an error with e-data is retried.
+/// Without FAST, only e-data is retried.
 fn retried(e: &KrbError) -> bool {
     e.e_data.as_ref().is_some_and(|d| !d.as_ref().is_empty())
 }
@@ -1012,17 +1001,6 @@ fn error_padata(e: &KrbError) -> Vec<PaData> {
             })
         })
         .unwrap_or_default()
-}
-
-fn tryagain_padata(cookie: Vec<PaData>, padata: &mut Vec<PaData>) {
-    if trace::enabled() {
-        trace::preauth_tryagain(ENCTS_MODULE, pa::ENC_TIMESTAMP, 0, None);
-        for c in &cookie {
-            trace::preauth_cookie(c.padata_value.as_ref());
-        }
-    }
-    padata.extend(cookie);
-    trace::preauth_tryagain_output(padata);
 }
 
 pub fn insert_module_padata_before_info_pa(list: &mut Vec<PaData>, module_pa: PaData) {

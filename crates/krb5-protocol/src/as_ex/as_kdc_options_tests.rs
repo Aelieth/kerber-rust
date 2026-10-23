@@ -41,7 +41,7 @@ fn times_of(ticket: AsTicketOpts, canonicalize: bool) -> AsReqTimes {
 #[test]
 fn default_as_options_include_renewable_ok() {
     let opts = options_of(AsTicketOpts::default());
-    assert!(opts.bit(flag_bit::FORWARDABLE));
+    assert!(!opts.bit(flag_bit::FORWARDABLE), "get_in_tkt.c:899-905");
     assert!(opts.bit(flag_bit::RENEWABLE_OK), "MIT init_ctx.c:265-267");
     assert!(!opts.bit(flag_bit::RENEWABLE));
 }

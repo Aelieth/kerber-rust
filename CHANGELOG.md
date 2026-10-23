@@ -52,6 +52,8 @@ any other `###` heading.
 ### Changed
 
 - **kdc.** Creating `kadmin/changepw` no longer sets `PWCHANGE_SERVICE`; only realm creation does, as MIT's `kadm5_create`.
+- **protocol.** `AsTicketOpts::default()` is not forwardable, as MIT's library default; `[libdefaults] forwardable = true` still sets it.
+- **protocol.** An unsupported etype is no longer retried as aes256; the KDC error is returned, as MIT does.
 - **crypto.** RustCrypto moves to the 0.14 generation (`aes` 0.9, `sha2` 0.11, `p256` 0.14 and the rest) and curve25519-dalek to 5.0; every enctype and SPAKE vector holds.
 - **examples.** Comments are the preauth-plugin pointer and the two invariants the code does not state.
 - **kdc.** A database change skips the whole-realm reread when no other writer moved the database, merging only the KDC's lockout records; a failed change is undone in memory.
