@@ -108,6 +108,7 @@ impl Krb5Conf {
             parse_into(&mut conf, &mut seen, text, None, &mut plugin_profile)?;
         }
         conf.plugins = plugin_profile;
+        conf.apply_dns_lookup_default(&seen);
         Ok(conf)
     }
 
@@ -124,12 +125,21 @@ impl Krb5Conf {
             &mut plugin_profile,
         )?;
         conf.plugins = plugin_profile;
+        conf.apply_dns_lookup_default(&seen);
         Ok(conf)
     }
 
     #[must_use]
     pub fn realm_for_host(&self, host: &str) -> Option<&str> {
         host_to_realm(&self.domain_realm, host)
+    }
+
+    // MIT: `_krb5_use_dns_kdc` (lib/krb5/os/locate_kdc.c:88-91)
+    pub(crate) fn apply_dns_lookup_default(&mut self, seen: &BTreeSet<String>) {
+        if seen.contains("dns_lookup_kdc") || seen.contains("dns_fallback") {
+            return;
+        }
+        self.dns_lookup_kdc = true;
     }
 
     #[must_use]
@@ -767,6 +777,12 @@ fn parse_libdefaults(
         "dns_lookup_kdc" if top && k == "dns_lookup_kdc" && take_first(seen, "dns_lookup_kdc") => {
             conf.dns_lookup_kdc = truthy(&v);
         }
+        // MIT: `maybe_use_dns` (lib/krb5/os/locate_kdc.c:52-72)
+        "dns_fallback" if top && k == "dns_fallback" && take_first(seen, "dns_fallback") => {
+            if !seen.contains("dns_lookup_kdc") {
+                conf.dns_lookup_kdc = truthy(&v);
+            }
+        }
         "dns_lookup_realm"
             if top && k == "dns_lookup_realm" && take_first(seen, "dns_lookup_realm") =>
         {
@@ -1240,6 +1256,7 @@ pub fn load_krb5_conf_paths<P: AsRef<Path>>(
     }
     if any {
         conf.plugins = plugin_profile;
+        conf.apply_dns_lookup_default(&seen);
         if let Some(p) = conf.context_refusal {
             return Err(Error::Profile(p, p.text().to_owned()));
         }
@@ -1253,7 +1270,11 @@ pub fn load_krb5_conf_paths<P: AsRef<Path>>(
 
 pub fn init_profile() -> Result<Krb5Conf, Error> {
     match load_krb5_conf_paths(krb5_conf_paths()) {
-        Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => Ok(Krb5Conf::new()),
+        Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+            let mut conf = Krb5Conf::new();
+            conf.apply_dns_lookup_default(&BTreeSet::new());
+            Ok(conf)
+        }
         loaded => loaded,
     }
 }

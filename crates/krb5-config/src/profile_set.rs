@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use super::{Error, KdcConf, KdcPaths, Krb5Conf, krb5_conf_paths, load_krb5_conf_paths};
@@ -61,7 +62,9 @@ fn load_or_defaults(paths: Vec<PathBuf>) -> Result<Krb5Conf, Error> {
                 std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
             ) =>
         {
-            Ok(Krb5Conf::new())
+            let mut conf = Krb5Conf::new();
+            conf.apply_dns_lookup_default(&BTreeSet::new());
+            Ok(conf)
         }
         Err(e) => Err(e),
     }

@@ -523,7 +523,7 @@ mod tests {
     #[test]
     fn kpasswd_server_wins_and_admin_server_is_port_464() {
         let c = conf(
-            "[realms]\n R = {\n  kdc = k\n  admin_server = a:749\n  kpasswd_server = p1:1464\n  \
+            "[libdefaults]\n dns_lookup_kdc = false\n[realms]\n R = {\n  kdc = k\n  admin_server = a:749\n  kpasswd_server = p1:1464\n  \
              kpasswd_server = p2\n }\n S = {\n  admin_server = a2:12345\n }\n T = {\n  kdc = k\n }\n",
         );
         assert_eq!(
