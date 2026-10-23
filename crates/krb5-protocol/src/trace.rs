@@ -20,7 +20,7 @@ pub mod cc;
 mod krb5_err;
 pub mod points;
 
-pub use cc::{get_config, random_string, store_creds, write_out_ccache};
+pub use cc::{get_config, store_creds, write_out_ccache};
 pub use points::*;
 
 static SINK: OnceLock<Option<File>> = OnceLock::new();

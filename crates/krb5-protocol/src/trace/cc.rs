@@ -10,9 +10,8 @@ use crate::ccache::{CcacheCred, FileCcache};
 
 // MIT: `krb5int_random_string` (lib/krb5/krb/random_str.c:37-68)
 /// Each character is a random byte modulo 62.
-/// A failed getrandom is all zeros.
 #[must_use]
-pub fn random_string(len: usize) -> String {
+pub(crate) fn random_string(len: usize) -> String {
     const CHARS: &[u8; 62] = b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
     let mut bytes = vec![0u8; len];
     if getrandom::getrandom(&mut bytes).is_err() {

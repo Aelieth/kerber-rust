@@ -39,15 +39,14 @@ pub fn make_tkt_id(ciphertext: &[u8]) -> String {
     out
 }
 
-#[must_use]
-pub fn new_req_id() -> String {
+pub fn new_req_id() -> Result<String, getrandom::Error> {
     let mut bytes = [0u8; REQID_CHARS];
-    let _ = getrandom::getrandom(&mut bytes);
+    getrandom::getrandom(&mut bytes)?;
     let mut out = String::with_capacity(REQID_CHARS);
     for b in bytes {
         out.push(RAND_ALPHANUM[usize::from(b) % RAND_ALPHANUM.len()] as char);
     }
-    out
+    Ok(out)
 }
 
 #[must_use]
@@ -550,7 +549,7 @@ fn current_req_id() -> String {
         if let Some(id) = c.borrow().as_ref() {
             return id.clone();
         }
-        let id = new_req_id();
+        let id = new_req_id().unwrap_or_default();
         *c.borrow_mut() = Some(id.clone());
         id
     })
@@ -560,9 +559,23 @@ fn clear_req_id() {
     CUR_REQ_ID.with(|c| *c.borrow_mut() = None);
 }
 
+// MIT: `kau_init_kdc_req` (kdc/kdc_audit.c:200-202)
+pub fn begin_request() -> Result<ReqIdGuard, getrandom::Error> {
+    let id = new_req_id()?;
+    CUR_REQ_ID.with(|c| *c.borrow_mut() = Some(id));
+    Ok(ReqIdGuard)
+}
+
+pub struct ReqIdGuard;
+
+impl Drop for ReqIdGuard {
+    fn drop(&mut self) {
+        clear_req_id();
+    }
+}
+
 // MIT: `process_as_req` (do_as_req.c:520-520)
 fn seed_as_req(store: &dyn PrincipalRead, req: &AsReq, sender: Option<&HostAddress>) {
-    clear_req_id();
     let mut state = base_state("AS_REQ", &req.0.req_body, sender);
     state.stage = AUTHN_REQ_CL;
     each_audit(store, |module| module.as_req(true, &state));
@@ -570,7 +583,6 @@ fn seed_as_req(store: &dyn PrincipalRead, req: &AsReq, sender: Option<&HostAddre
 
 // MIT: `process_tgs_req` (do_tgs_req.c:1181-1184)
 fn seed_tgs_req(store: &dyn PrincipalRead, req: &TgsReq, sender: Option<&HostAddress>) {
-    clear_req_id();
     let mut state = base_state("TGS_REQ", &req.0.req_body, sender);
     state.stage = AUTHN_REQ_CL;
     state.tkt_in_id = tgs_header_tkt_id(req);
@@ -1411,7 +1423,7 @@ mod tests {
 
     #[test]
     fn req_id_is_mit_random_string_len() {
-        let id = new_req_id();
+        let id = new_req_id().unwrap();
         assert_eq!(id.len(), REQID_CHARS);
         assert!(id.chars().all(|c| c.is_ascii_alphanumeric()));
     }

@@ -56,6 +56,10 @@ fn process_logged(
 ) -> Result<Processed, Error> {
     let id = krb5_log::new_correlation_id();
     let _g = krb5_log::enter_correlation(id);
+    let _req = match crate::audit::begin_request() {
+        Ok(req) => req,
+        Err(e) => return Ok(audit_id_failure(store, raw, e)),
+    };
     let started = Instant::now();
     krb5_protocol::capture_pdu("kdc-req", raw);
     let result = handle_inner(store, raw, sender);
@@ -107,6 +111,23 @@ fn process_logged(
             );
             Err(e)
         }
+    }
+}
+
+fn audit_id_failure(store: &dyn PrincipalRead, raw: &[u8], e: getrandom::Error) -> Processed {
+    tracing::error!(
+        event = krb5_log::events::KDC_ISSUE,
+        correlation_id = krb5_log::current_correlation_id(),
+        component = "krb5-kdc",
+        outcome = "error",
+        error = %e,
+        "cannot make the audit request id",
+    );
+    match raw.first() {
+        // MIT: `prepare_error_tgs` (kdc/do_tgs_req.c:182)
+        Some(&0x6c) => Processed::Reply(super::kdc_error_bytes(store, err::GENERIC)),
+        // MIT: `process_packet_response` (lib/apputils/net-server.c:1096-1104)
+        _ => Processed::Refused("audit id unavailable"),
     }
 }
 
