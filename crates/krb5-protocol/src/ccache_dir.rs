@@ -9,12 +9,12 @@ use std::os::unix::fs::PermissionsExt;
 
 const DEFAULT_SUB: &str = "tkt";
 
-/// FILE path for a DIR residual (`dirname` or `:filepath`). Does not create.
+/// Does not create the collection.
 pub fn dir_cache_path(residual: &str) -> io::Result<PathBuf> {
     resolve_dir(residual, false)
 }
 
-/// FILE path for a DIR residual, creating the collection on first store.
+/// Creates the collection on the first store.
 pub fn dir_cache_path_for_store(residual: &str) -> io::Result<PathBuf> {
     resolve_dir(residual, true)
 }
@@ -59,13 +59,12 @@ fn resolve_dir(residual: &str, init: bool) -> io::Result<PathBuf> {
     Ok(dir.join(name))
 }
 
-/// `DIR::{path}` display name for the resolved subsidiary.
 pub fn dir_display_name(residual: &str) -> io::Result<String> {
     let path = dir_cache_path(residual)?;
     Ok(format!("DIR::{}", path.display()))
 }
 
-/// Set the collection primary from a `DIR::filepath` residual.
+/// Only a DIR::filepath residual changes the primary.
 pub fn dir_switch(residual: &str) -> io::Result<()> {
     let path = residual.strip_prefix(':').ok_or_else(|| {
         io::Error::new(io::ErrorKind::InvalidInput, "kswitch needs DIR::subsidiary")
@@ -92,7 +91,7 @@ pub fn dir_switch(residual: &str) -> io::Result<()> {
 }
 
 // MIT: `dcc_ptcursor_new` (cc_dir.c:579-632)
-/// a primary file that cannot be read leaves the collection with no primary.
+/// No readable primary file means no primary.
 #[must_use]
 pub fn dir_primary(dir: &Path) -> Option<PathBuf> {
     match read_primary(dir, false) {
@@ -101,9 +100,10 @@ pub fn dir_primary(dir: &Path) -> Option<PathBuf> {
     }
 }
 
-/// A new empty subsidiary `tkt` + six random characters in the collection `dir`, created exclusively with mode 0600.
+/// An existing name is skipped.
 // MIT: `dcc_gen_new` (cc_dir.c:387-429)
-/// the `tktXXXXXX` template made unique in the collection directory, which is created if missing.
+/// On Unix the mode is 0600.
+/// The collection directory is created if it is missing.
 pub fn dir_gen_new(dir: &Path) -> io::Result<PathBuf> {
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     ensure_dir(dir)?;
@@ -130,7 +130,6 @@ pub fn dir_gen_new(dir: &Path) -> io::Result<PathBuf> {
     }
 }
 
-/// Subsidiary FILE paths (`tkt*`) in `dir`.
 pub fn dir_subsidiaries(dir: &Path) -> io::Result<Vec<PathBuf>> {
     let mut v = Vec::new();
     for e in fs::read_dir(dir)? {
