@@ -48,6 +48,7 @@ fn contexts() -> (GssContext, GssContext) {
         None,
         None,
         None,
+        0,
     )
     .unwrap();
     let host = store.get_name(&documented_host()).unwrap();
@@ -117,6 +118,7 @@ fn accept_same_token_twice_is_repeat() {
         None,
         None,
         None,
+        0,
     )
     .unwrap();
     let rcache = ReplayCache::new();
@@ -183,6 +185,7 @@ fn mutual_ap_rep_decrypts_with_ticket_session() {
         None,
         None,
         None,
+        0,
     )
     .unwrap();
     let (_acc, ap_rep) = GssContext::accept_sec_context(

@@ -187,7 +187,7 @@ pub fn generate_ap_authenticator(auth: ApAuthenticator<'_>) -> Result<Authentica
     })
 }
 
-fn stamped(offset: i64) -> (KerberosTime, krb5_types::Microseconds) {
+pub(crate) fn stamped(offset: i64) -> (KerberosTime, krb5_types::Microseconds) {
     let (now, usec) = crate::auth_con::us_timeofday();
     if offset == 0 {
         return (now, usec);

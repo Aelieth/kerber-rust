@@ -62,6 +62,7 @@ fn contexts() -> (GssContext, GssContext) {
         None,
         None,
         None,
+        0,
     )
     .unwrap();
     let host = store.get_name(&documented_host()).unwrap();

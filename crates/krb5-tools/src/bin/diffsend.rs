@@ -1969,6 +1969,7 @@ fn run() -> Result<(), String> {
             enc_authorization_data: None,
             till: None,
             subkey: None,
+            time_offset: 0,
         })
         .map_err(|e| e.to_string())
     };
@@ -2117,6 +2118,7 @@ fn run() -> Result<(), String> {
                 enc_authorization_data: None,
                 till: None,
                 subkey: None,
+                time_offset: 0,
             })
             .map_err(|e| e.to_string())?,
         )
@@ -2202,6 +2204,7 @@ fn run() -> Result<(), String> {
                 enc_authorization_data: None,
                 till: None,
                 subkey: None,
+                time_offset: 0,
             })
             .map_err(|e| e.to_string())?,
         )
@@ -2242,6 +2245,7 @@ fn run() -> Result<(), String> {
                 enc_authorization_data: None,
                 till: None,
                 subkey: None,
+                time_offset: 0,
             })
             .map_err(|e| e.to_string())?,
         )
@@ -2296,6 +2300,7 @@ fn run() -> Result<(), String> {
                 enc_authorization_data: None,
                 till: None,
                 subkey: None,
+                time_offset: 0,
             })
             .map_err(|e| e.to_string())?,
         )
@@ -2370,6 +2375,7 @@ fn run() -> Result<(), String> {
                 enc_authorization_data: None,
                 till: None,
                 subkey: None,
+                time_offset: 0,
             })
             .map_err(|e| e.to_string())?,
         )
@@ -2532,6 +2538,7 @@ fn run() -> Result<(), String> {
                 enc_authorization_data: None,
                 till: None,
                 subkey: None,
+                time_offset: 0,
             })
             .map_err(|e| e.to_string())?,
         )
@@ -2732,6 +2739,7 @@ fn run() -> Result<(), String> {
                     enc_authorization_data: None,
                     till: None,
                     subkey: None,
+                    time_offset: 0,
                 })
                 .map_err(|e| e.to_string())?,
             )
@@ -2882,6 +2890,7 @@ fn run() -> Result<(), String> {
             enc_authorization_data: None,
             till: None,
             subkey: None,
+            time_offset: 0,
         })
         .map_err(|e| e.to_string())?,
     )
@@ -2984,6 +2993,7 @@ fn run() -> Result<(), String> {
             enc_authorization_data: None,
             till: None,
             subkey: None,
+            time_offset: 0,
         })
         .map_err(|e| e.to_string())?,
     )
@@ -3059,6 +3069,7 @@ fn run() -> Result<(), String> {
                 enc_authorization_data: None,
                 till: None,
                 subkey: None,
+                time_offset: 0,
             })
             .map_err(|e| e.to_string())?,
         )
@@ -3102,6 +3113,7 @@ fn run() -> Result<(), String> {
                 enc_authorization_data: None,
                 till: None,
                 subkey: None,
+                time_offset: 0,
             })
             .map_err(|e| e.to_string())?,
         )
@@ -3386,6 +3398,7 @@ fn run() -> Result<(), String> {
             enc_authorization_data: None,
             till: None,
             subkey: None,
+            time_offset: 0,
         })
         .map_err(|e| e.to_string())?,
     )
@@ -3447,6 +3460,7 @@ fn run() -> Result<(), String> {
             enc_authorization_data: None,
             till: None,
             subkey: None,
+            time_offset: 0,
         })
         .map_err(|e| e.to_string())?,
     )
@@ -3508,6 +3522,7 @@ fn run() -> Result<(), String> {
                 enc_authorization_data: None,
                 till: None,
                 subkey: None,
+                time_offset: 0,
             })
             .map_err(|e| e.to_string())?,
         )
@@ -3546,6 +3561,7 @@ fn run() -> Result<(), String> {
                 enc_authorization_data: None,
                 till: None,
                 subkey: None,
+                time_offset: 0,
             })
             .map_err(|e| e.to_string())?,
         )
@@ -3768,6 +3784,7 @@ fn run() -> Result<(), String> {
                 enc_authorization_data: None,
                 till: None,
                 subkey: None,
+                time_offset: 0,
             })
             .map_err(|e| e.to_string())?,
         )
@@ -3808,6 +3825,7 @@ fn run() -> Result<(), String> {
                 enc_authorization_data: None,
                 till: None,
                 subkey: None,
+                time_offset: 0,
             })
             .map_err(|e| e.to_string())?,
         )
@@ -4114,6 +4132,7 @@ fn run() -> Result<(), String> {
             enc_authorization_data: None,
             till: None,
             subkey: None,
+            time_offset: 0,
         })
         .map_err(|e| e.to_string())?,
     )
@@ -4174,6 +4193,7 @@ fn run() -> Result<(), String> {
                 enc_authorization_data: None,
                 till: None,
                 subkey: None,
+                time_offset: 0,
             })
             .map_err(|e| e.to_string())?,
         )
@@ -4212,6 +4232,7 @@ fn run() -> Result<(), String> {
                 enc_authorization_data: None,
                 till: None,
                 subkey: None,
+                time_offset: 0,
             })
             .map_err(|e| e.to_string())?,
         )
@@ -4250,6 +4271,7 @@ fn run() -> Result<(), String> {
                 enc_authorization_data: None,
                 till: None,
                 subkey: None,
+                time_offset: 0,
             })
             .map_err(|e| e.to_string())?,
         )
@@ -4295,6 +4317,7 @@ fn run() -> Result<(), String> {
                 enc_authorization_data: None,
                 till: None,
                 subkey: None,
+                time_offset: 0,
             })
             .map_err(|e| e.to_string())?,
         )
@@ -4343,6 +4366,7 @@ fn run() -> Result<(), String> {
             enc_authorization_data: Some(copy_enc),
             till: None,
             subkey: None,
+            time_offset: 0,
         })
         .map_err(|e| e.to_string())?,
     )
@@ -4432,6 +4456,7 @@ fn run() -> Result<(), String> {
                 enc_authorization_data: Some(mand_enc),
                 till: None,
                 subkey: None,
+                time_offset: 0,
             })
             .map_err(|e| e.to_string())?,
         )
@@ -4497,6 +4522,7 @@ fn run() -> Result<(), String> {
             enc_authorization_data: Some(strip_enc),
             till: None,
             subkey: None,
+            time_offset: 0,
         })
         .map_err(|e| e.to_string())?,
     )
@@ -4567,6 +4593,7 @@ fn run() -> Result<(), String> {
             enc_authorization_data: Some(sub_enc),
             till: None,
             subkey: Some(&sub),
+            time_offset: 0,
         })
         .map_err(|e| e.to_string())?,
     )
@@ -4625,6 +4652,7 @@ fn run() -> Result<(), String> {
             enc_authorization_data: Some(ku5_enc),
             till: None,
             subkey: None,
+            time_offset: 0,
         })
         .map_err(|e| e.to_string())?,
     )
@@ -4704,6 +4732,7 @@ fn run() -> Result<(), String> {
             enc_authorization_data: None,
             till: None,
             subkey: None,
+            time_offset: 0,
         })
         .map_err(|e| e.to_string())?,
     )
@@ -4766,6 +4795,7 @@ fn run() -> Result<(), String> {
                 enc_authorization_data: None,
                 till: None,
                 subkey: None,
+                time_offset: 0,
             })
             .map_err(|e| e.to_string())?,
         )
@@ -4820,6 +4850,7 @@ fn run() -> Result<(), String> {
             enc_authorization_data: None,
             till: Some(past.clone()),
             subkey: None,
+            time_offset: 0,
         })
         .map_err(|e| e.to_string())?,
     )
@@ -4877,6 +4908,7 @@ fn run() -> Result<(), String> {
                 enc_authorization_data: None,
                 till: None,
                 subkey: None,
+                time_offset: 0,
             })
             .map_err(|e| e.to_string())?,
         )
@@ -4912,6 +4944,7 @@ fn run() -> Result<(), String> {
         enc_authorization_data: None,
         till: None,
         subkey: None,
+        time_offset: 0,
     })
     .map_err(|e| e.to_string())?;
     let from_past = encode(&from_past).map_err(|e| e.to_string())?;
@@ -4971,6 +5004,7 @@ fn run() -> Result<(), String> {
             enc_authorization_data: None,
             till: None,
             subkey: None,
+            time_offset: 0,
         })
         .map_err(|e| e.to_string())?,
     )
@@ -5021,6 +5055,7 @@ fn run() -> Result<(), String> {
             enc_authorization_data: None,
             till: None,
             subkey: None,
+            time_offset: 0,
         })
         .map_err(|e| e.to_string())?,
     )
@@ -5220,6 +5255,7 @@ fn run() -> Result<(), String> {
                 enc_authorization_data: None,
                 till: None,
                 subkey: None,
+                time_offset: 0,
             })
             .map_err(|e| e.to_string())?,
         )
@@ -5326,6 +5362,7 @@ fn run() -> Result<(), String> {
         enc_authorization_data: None,
         till: None,
         subkey: None,
+        time_offset: 0,
     })
     .map_err(|e| e.to_string())?;
     let renew_from = encode(&renew_from).map_err(|e| e.to_string())?;

@@ -311,6 +311,7 @@ impl GssContext {
         channel_bindings: Option<&ChannelBindings>,
         deleg: Option<&DelegCred>,
         profile: Option<&krb5_config::Krb5Conf>,
+        time_offset: i64,
     ) -> Result<(Self, Vec<u8>), Error> {
         // MIT kg_new_connection; see docs/parity/b1-gss.md
         // MIT: `kg_new_connection` (lib/gssapi/krb5/init_sec_context.c:486)
@@ -366,7 +367,7 @@ impl GssContext {
             cksum: Some(cksum),
             subkey: Some(enc_sub),
             sequence: Some(seq),
-            time_offset: 0,
+            time_offset,
             cbt,
             desired_etypes: &desired,
             ticket_etype: session.etype().to_iana(),

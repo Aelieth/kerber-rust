@@ -260,6 +260,7 @@ fn admin_initiator(store: &SharedDump) -> (GssContext, Vec<u8>, ProtocolKey) {
         None,
         None,
         None,
+        0,
     )
     .unwrap();
     (ctx, token, out.session_key)

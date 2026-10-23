@@ -179,6 +179,7 @@ impl TgsReqBuilder {
             enc_authorization_data: self.enc_ad,
             till: self.till,
             subkey: self.subkey.as_ref(),
+            time_offset: 0,
         })
     }
 }

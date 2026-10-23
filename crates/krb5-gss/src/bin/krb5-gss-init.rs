@@ -119,7 +119,11 @@ fn main() {
             used_fast: false,
             pa_type: None,
             pa_config: None,
-            time_offset: 0,
+            time_offset: if profile.kdc_timesync {
+                cc.deltatime_seconds().unwrap_or(0)
+            } else {
+                0
+            },
         };
         let kdc = std::env::var("KRB5_KDC")
             .ok()
@@ -198,6 +202,11 @@ fn main() {
         println!("gss-init ap-rep=none");
         return;
     }
+    let time_offset = if profile.kdc_timesync {
+        cc.deltatime_seconds().unwrap_or(0)
+    } else {
+        0
+    };
     let mut req_flags = krb5_gss::GSS_C_MUTUAL | krb5_gss::GSS_C_REPLAY | krb5_gss::GSS_C_SEQUENCE;
     if bind_data.is_some() {
         req_flags |= krb5_gss::GSS_C_CHANNEL_BOUND;
@@ -211,6 +220,7 @@ fn main() {
         cb.as_ref(),
         deleg_cred.as_ref(),
         Some(&profile),
+        time_offset,
     )
     .unwrap_or_else(|e| {
         eprintln!("init_sec_context: {e}");

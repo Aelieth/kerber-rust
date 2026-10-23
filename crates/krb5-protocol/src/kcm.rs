@@ -33,6 +33,8 @@ const OP_GET_CACHE_UUID_LIST: u16 = 18;
 const OP_GET_CACHE_BY_UUID: u16 = 19;
 const OP_GET_DEFAULT_CACHE: u16 = 20;
 const OP_SET_DEFAULT_CACHE: u16 = 21;
+const OP_GET_KDC_OFFSET: u16 = 22;
+const OP_SET_KDC_OFFSET: u16 = 23;
 const OP_GET_CRED_LIST: u16 = 13_001;
 
 const KRB5_CC_NOSUPP: i32 = -1_765_328_137;
@@ -355,7 +357,16 @@ pub fn kcm_load(profile: &Krb5Conf, residual: &str) -> io::Result<FileCcache> {
         Err(e) if unsupported(&e) => creds_via_uuid(&mut io, &name)?,
         Err(e) => return Err(e),
     };
-    Ok(FileCcache::new(primary, creds))
+    let mut cc = FileCcache::new(primary, creds);
+    // MIT: `get_kdc_offset` (lib/krb5/ccache/cc_kcm.c:683-701)
+    if profile.kdc_timesync
+        && let Ok(body) = io.call(OP_GET_KDC_OFFSET, &zname(&name))
+        && body.len() >= 4
+    {
+        let sec = i32::from_be_bytes(body[..4].try_into().unwrap_or([0; 4]));
+        cc.set_deltatime(i64::from(sec));
+    }
+    Ok(cc)
 }
 
 /// Stored, and made the collection default.
@@ -400,6 +411,15 @@ fn kcm_put(
     let mut io = KcmIo::connect(profile)?;
     let name = default_or_create(&mut io, residual)?;
     initialize(&mut io, &name, cc)?;
+    // MIT: `set_kdc_offset` (lib/krb5/ccache/cc_kcm.c:705-715)
+    if profile.kdc_timesync
+        && let Some(sec) = cc.deltatime_seconds()
+    {
+        let bits = i32::try_from(sec).unwrap_or(if sec < 0 { i32::MIN } else { i32::MAX });
+        let mut args = zname(&name);
+        args.extend_from_slice(&bits.to_be_bytes());
+        let _ = io.call(OP_SET_KDC_OFFSET, &args);
+    }
     for c in cc.creds.iter().filter(|c| !c.is_removed()) {
         store_one(&mut io, &name, c)?;
     }

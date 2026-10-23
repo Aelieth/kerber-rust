@@ -1,13 +1,28 @@
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 
 use super::{Error, Krb5Conf, init_profile};
 
 // MIT k5_os_init_context; see docs/parity/b1-client.md
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct ClientContext {
     pub profile: Krb5Conf,
+    // MIT: `krb5_us_timeofday` (lib/krb5/os/ustime.c:67-78)
+    kdc_offset_valid: AtomicBool,
+    kdc_offset: AtomicI64,
     // `KRB5CCNAME`, read at the first default-cache lookup.
     ccname: OnceLock<Option<String>>,
+}
+
+impl Clone for ClientContext {
+    fn clone(&self) -> Self {
+        Self {
+            profile: self.profile.clone(),
+            kdc_offset_valid: AtomicBool::new(self.kdc_offset_valid.load(Ordering::Relaxed)),
+            kdc_offset: AtomicI64::new(self.kdc_offset.load(Ordering::Relaxed)),
+            ccname: self.ccname.clone(),
+        }
+    }
 }
 
 impl Default for ClientContext {
@@ -21,12 +36,29 @@ impl ClientContext {
     pub fn new(profile: Krb5Conf) -> Self {
         Self {
             profile,
+            kdc_offset_valid: AtomicBool::new(false),
+            kdc_offset: AtomicI64::new(0),
             ccname: OnceLock::new(),
         }
     }
 
     pub fn from_env() -> Result<Self, Error> {
         Ok(Self::new(init_profile()?))
+    }
+
+    pub fn note_kdc_offset(&self, seconds: i64) {
+        if self.kdc_offset_valid.load(Ordering::Relaxed) {
+            return;
+        }
+        self.kdc_offset.store(seconds, Ordering::Relaxed);
+        self.kdc_offset_valid.store(true, Ordering::Relaxed);
+    }
+
+    #[must_use]
+    pub fn kdc_offset(&self) -> Option<i64> {
+        self.kdc_offset_valid
+            .load(Ordering::Relaxed)
+            .then(|| self.kdc_offset.load(Ordering::Relaxed))
     }
 
     // MIT krb5_cc_default_name; see docs/parity/b1-client.md

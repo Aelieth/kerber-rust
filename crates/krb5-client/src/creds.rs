@@ -96,6 +96,12 @@ impl<'c> OpenCache<'c> {
     pub fn open(ctx: &'c ClientContext, spec: CcSpec) -> Result<Self, Krb5Error> {
         let cc = crate::load_ccache(ctx, &spec)
             .map_err(|e| crate::cache_read_error(ctx, &spec, e.as_ref()))?;
+        // MIT: `read_header` (lib/krb5/ccache/cc_file.c:416-430)
+        if ctx.profile.kdc_timesync
+            && let Some(off) = cc.deltatime_seconds()
+        {
+            ctx.note_kdc_offset(off);
+        }
         Ok(Self { ctx, spec, cc })
     }
 
@@ -218,6 +224,17 @@ pub fn kdc_for_realm(profile: &Krb5Conf, realm: &str) -> Result<KdcAddr, Krb5Err
     };
     krb5_config::hand_kdcs(realm, found);
     Ok(addr)
+}
+
+fn outcome_from_presented(
+    cache: &OpenCache<'_>,
+    cred: &CcacheCred,
+) -> Result<AsOutcome, Krb5Error> {
+    let mut tgt = outcome_from_cred(cred)?;
+    if let Some(off) = cache.ctx.kdc_offset() {
+        tgt.time_offset = off;
+    }
+    Ok(tgt)
 }
 
 pub fn outcome_from_cred(cred: &CcacheCred) -> Result<AsOutcome, Krb5Error> {
@@ -399,7 +416,7 @@ fn request_service(
     crate::trace::tgt_for(cache, &srealm);
     let (presented, hop) = cache.tgt_for(&srealm)?;
     let kdc = opts.kdc(&cache.ctx.profile, &hop)?;
-    let tgt = outcome_from_cred(&presented)?;
+    let tgt = outcome_from_presented(cache, &presented)?;
     tgs_exchange_path(
         &cache.ctx.profile,
         &kdc,
@@ -454,7 +471,7 @@ pub fn get_credentials_for_user(
     crate::trace::tgt_creds(cache, &srealm);
     let (presented, hop) = cache.tgt_for(&srealm)?;
     let kdc = opts.kdc(&cache.ctx.profile, &hop)?;
-    let tgt = outcome_from_cred(&presented)?;
+    let tgt = outcome_from_presented(cache, &presented)?;
     let out = tgs_s4u(
         &cache.ctx.profile,
         &kdc,
@@ -598,7 +615,7 @@ pub fn get_credentials_for_proxy(
         let srealm = realm_str(&server.0);
         let (presented, hop) = cache.tgt_for(&srealm)?;
         let kdc = opts.kdc(&cache.ctx.profile, &hop)?;
-        let tgt = outcome_from_cred(&presented)?;
+        let tgt = outcome_from_presented(cache, &presented)?;
         let ticket: Ticket =
             decode(&evidence.ticket).map_err(|e| Krb5Error::new(Code::Other, e.to_string()))?;
         let out = tgs_s4u2proxy(
@@ -656,7 +673,7 @@ pub fn get_valrenewed_creds(
         crate::trace::retrieved(&cache, client, &server, old).ok_or_else(|| cache.not_found())?;
     let realm = realm_str(&old.server.0);
     let kdc = kdc_for_realm(&ctx.profile, &realm)?;
-    let tgt = outcome_from_cred(old)?;
+    let tgt = outcome_from_presented(&cache, old)?;
     let out = if validate {
         krb5_protocol::tgs_validate(&ctx.profile, &kdc, &tgt)
     } else {

@@ -1275,6 +1275,9 @@ fn kinit_inner(
         }
         Err(e) => return Err(e.into()),
     };
+    if ctx.profile.kdc_timesync {
+        ctx.note_kdc_offset(as_out.time_offset);
+    }
     let mut creds = vec![tgt_cred(
         &as_out.crealm,
         &as_out.cname,
@@ -1318,6 +1321,10 @@ fn kinit_inner(
         }
     }
     let mut cache = FileCcache::new((as_out.crealm.clone(), as_out.cname.clone()), Vec::new());
+    // MIT: `marshal_header` (lib/krb5/ccache/cc_file.c:454-462)
+    if let Some(off) = ctx.kdc_offset() {
+        cache.set_deltatime(off);
+    }
     let tgt_realm = String::from_utf8_lossy(as_out.ticket.realm.as_bytes()).into_owned();
     let tgt_server = as_out.ticket.sname.unparse_with_realm(&tgt_realm);
     record_preauth_config(

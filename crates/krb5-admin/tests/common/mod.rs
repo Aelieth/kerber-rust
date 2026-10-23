@@ -151,6 +151,7 @@ pub fn init_client(
         None,
         None,
         None,
+        0,
     )
     .unwrap();
     let cred = cred(RPG_INIT, 0, svc, &[]);

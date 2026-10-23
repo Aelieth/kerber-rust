@@ -137,6 +137,7 @@ pub fn tgs_req(
         enc_authorization_data: None,
         till: None,
         subkey: None,
+        time_offset: 0,
     })
 }
 
@@ -163,6 +164,7 @@ pub struct TgsReqParams<'a> {
     /// None is ten hours from now.
     pub till: Option<KerberosTime>,
     pub subkey: Option<&'a ProtocolKey>,
+    pub time_offset: i64,
 }
 
 pub fn tgs_req_ex(p: TgsReqParams<'_>) -> Result<TgsReq, Error> {
@@ -183,6 +185,7 @@ pub fn tgs_req_ex(p: TgsReqParams<'_>) -> Result<TgsReq, Error> {
         enc_authorization_data,
         till,
         subkey,
+        time_offset,
     } = p;
 
     let till = till.unwrap_or_else(|| {
@@ -208,8 +211,7 @@ pub fn tgs_req_ex(p: TgsReqParams<'_>) -> Result<TgsReq, Error> {
     let cksum_usage = KeyUsage::new(ku::TGS_REQ_AUTH_CKSUM)?;
     let mic = checksum(session, cksum_usage, &body_der)?;
     // MIT: `tgs_construct_ap_req` (lib/krb5/krb/send_tgs.c:82-82)
-    // The authenticator's time and microseconds come from one reading.
-    let (now, usec) = crate::auth_con::us_timeofday();
+    let (now, usec) = crate::ap_req::stamped(time_offset);
     let authenticator = Authenticator {
         authenticator_vno: Authenticator::VNO,
         crealm: krb5_types::try_ascii(crealm).map_err(|e| Error::ReplyMismatch(e.to_string()))?,

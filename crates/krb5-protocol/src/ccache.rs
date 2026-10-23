@@ -42,6 +42,39 @@ impl FileCcache {
         }
     }
 
+    // MIT: `read_header` (lib/krb5/ccache/cc_file.c:416-430)
+    #[must_use]
+    pub fn deltatime_seconds(&self) -> Option<i64> {
+        let bytes = self
+            .header_tags
+            .iter()
+            .find(|(tag, _)| *tag == FCC_TAG_DELTATIME)?
+            .1
+            .as_slice();
+        if bytes.len() != 8 {
+            return None;
+        }
+        let sec = i32::from_be_bytes(bytes[0..4].try_into().unwrap_or([0; 4]));
+        Some(i64::from(sec))
+    }
+
+    // MIT: `marshal_header` (lib/krb5/ccache/cc_file.c:454-462)
+    pub fn set_deltatime(&mut self, seconds: i64) {
+        let sec = i32::try_from(seconds).unwrap_or(if seconds < 0 { i32::MIN } else { i32::MAX });
+        let mut val = Vec::with_capacity(8);
+        val.extend_from_slice(&sec.to_be_bytes());
+        val.extend_from_slice(&0i32.to_be_bytes());
+        if let Some(slot) = self
+            .header_tags
+            .iter_mut()
+            .find(|(tag, _)| *tag == FCC_TAG_DELTATIME)
+        {
+            slot.1 = val;
+        } else {
+            self.header_tags.insert(0, (FCC_TAG_DELTATIME, val));
+        }
+    }
+
     pub fn to_bytes(&self) -> Result<Vec<u8>, io::Error> {
         let mut w = Writer::default();
         w.u16(0x0504);

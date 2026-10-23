@@ -130,6 +130,7 @@ impl AdminTicket {
             cb,
             None,
             None,
+            0,
         )
         .unwrap()
     }
@@ -210,6 +211,7 @@ fn admin_gss_token() -> AdminGssToken {
         None,
         None,
         None,
+        0,
     )
     .unwrap();
     (store, acl, ctx, token, as_out.session_key)

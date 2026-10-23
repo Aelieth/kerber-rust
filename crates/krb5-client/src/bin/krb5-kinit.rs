@@ -355,7 +355,11 @@ fn valrenew(prog: &str, opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
     if opts.verbose {
         eprintln!("Initialized cache");
     }
-    let cc = FileCcache::new(cprinc, vec![cred]);
+    let mut cc = FileCcache::new(cprinc, vec![cred]);
+    // MIT: `marshal_header` (lib/krb5/ccache/cc_file.c:454-462)
+    if let Some(off) = k5.ctx.kdc_offset() {
+        cc.set_deltatime(off);
+    }
     if krb5_protocol::trace::enabled() {
         krb5_protocol::trace::write_out_ccache(&k5.out.full_name(), &cc);
     }

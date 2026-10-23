@@ -1029,6 +1029,7 @@ fn kadmind_init(addr: &str, keytab: &str, client: &str, opts: &[String]) -> Resu
         None,
         None,
         None,
+        0,
     )
     .map_err(|e| e.to_string())?;
     let mut stream = std::net::TcpStream::connect(addr).map_err(|e| format!("{addr}: {e}"))?;

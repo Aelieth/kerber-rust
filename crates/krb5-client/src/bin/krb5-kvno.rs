@@ -330,7 +330,10 @@ mod gate {
             Some(k) => k.clone(),
             None => kdc_for_realm(&cache.ctx.profile, &hop)?,
         };
-        let tgt = outcome_from_cred(&cred)?;
+        let mut tgt = outcome_from_cred(&cred)?;
+        if let Some(off) = cache.ctx.kdc_offset() {
+            tgt.time_offset = off;
+        }
         let out = match &opts.tgs.second_ticket {
             Some(stkt) => tgs_u2u(
                 &cache.ctx.profile,

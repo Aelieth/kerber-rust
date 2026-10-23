@@ -181,6 +181,7 @@ fn token(ticket: Ticket, session: &ProtocolKey) -> (GssContext, Vec<u8>) {
         None,
         None,
         None,
+        0,
     )
     .unwrap()
 }

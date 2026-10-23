@@ -289,6 +289,7 @@ fn rpcsec_init_reply_mic_is_window() {
         None,
         None,
         None,
+        0,
     )
     .unwrap();
     let mut cred = XdrW::default();
