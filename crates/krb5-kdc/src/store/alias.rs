@@ -76,6 +76,7 @@ impl PrincipalStore {
         );
         let mut contents = target.unparse_with_realm(target_realm).into_bytes();
         contents.push(0);
+        // MIT: `krb5_dbe_make_alias_entry` (lib/kdb/kdb5.c:2826-2870)
         p.tl_data.push(TlData {
             ty: TL_ALIAS_TARGET,
             contents,
