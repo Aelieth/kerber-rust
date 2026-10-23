@@ -14,6 +14,7 @@ pub enum Error {
     Asn1(String),
     Protocol {
         code: i32,
+        /// Only `text` goes on the wire; `detail` is the kdc.issue log text.
         text: Option<String>,
         e_data: Option<Vec<u8>>,
         detail: Option<String>,
