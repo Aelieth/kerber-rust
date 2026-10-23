@@ -1,5 +1,4 @@
-//! The acceptor's auth context (`krb/auth_con.c`, `rd_req_dec.c`, `mk_rep.c`, `mk_priv.c`, `rd_priv.c`, `rd_safe.c`, `privsafe.c`, `gen_seqnum.c`, `gen_save_subkey.c`): what an accepted AP-REQ leaves for the AP-REP that answers it and the KRB-SAFE and KRB-PRIV messages after it.
-//! The context starts as `krb5_auth_con_init` leaves one (`DO_TIME`); the caller sets the flags its MIT program sets. `krb5_mk_rep` takes a fresh subkey only under `USE_SUBKEY` and otherwise echoes the authenticator's own, and its sequence number is random only when the context has none yet. `krb5_rd_priv` and `krb5_rd_safe` take the peer's messages in order under `DO_SEQUENCE`, from the authenticator's sequence number on.
+//! Acceptor auth context for the AP-REP, KRB-SAFE, and KRB-PRIV.
 
 use std::net::IpAddr;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -74,9 +73,8 @@ impl RemoteSeq {
         self.expected
     }
 
-    /// Whether a message carrying `in_seq` is the next one, learning from it whether the peer is a sane sender or an old Heimdal that sends short numbers sign-extended.
+    /// A sane peer must match exactly; an ambiguous number may be old Heimdal.
     // MIT: `k5_privsafe_check_seqnum` (lib/krb5/krb/privsafe.c:225-304)
-    /// a peer known sane must match exactly; otherwise a number in the ambiguous range 0xFF800000..0xFFFFFFFF matches exactly or as a Heimdal encoding of the expected one (which marks the peer Heimdal), an exact match of an expected number in the ambiguous counter ranges marks the peer sane, and an expected 0 takes Heimdal's wraparound values 0x100, 0x10000 and 0x1000000.
     pub const fn check(&mut self, in_seq: u32) -> bool {
         let exp_seq = self.expected;
         if self.sane {
@@ -123,7 +121,7 @@ impl RemoteSeq {
 }
 
 // MIT: `chk_heimdal_seqnum` (lib/krb5/krb/privsafe.c:206-223)
-/// `in_seq` is `exp_seq` as an old Heimdal encodes it, a 1-, 2- or 3-octet count read back sign-extended.
+/// Old Heimdal sign-extends a 1-, 2-, or 3-octet sequence number.
 const fn chk_heimdal_seqnum(exp_seq: u32, in_seq: u32) -> bool {
     (exp_seq & 0xFF80_0000 == 0x0080_0000
         && in_seq & 0xFF80_0000 == 0xFF80_0000
@@ -143,10 +141,8 @@ fn krb_error(code: i32, text: &str) -> Error {
     }
 }
 
-/// Whether a ticket encrypted in `ticket_etype` may be read where `permitted` holds.
 // MIT: `krb5_decrypt_tkt_part` (lib/krb5/krb/decrypt_tk.c:46-50)
-/// an enctype the library does not implement is `KRB5_PROG_ETYPE_NOSUPP`, one it does but `permitted_enctypes` leaves out is `KRB5_NOPERM_ETYPE`, before any decryption.
-/// [`Error::ProgEtypeNosupp`] for an enctype not implemented; [`Error::NopermEtype`] for one not permitted.
+/// An unknown enctype is ProgEtypeNosupp; one not permitted is NopermEtype, before decryption.
 pub fn check_ticket_etype(ticket_etype: i32, permitted: &[EncryptionType]) -> Result<(), Error> {
     let etype = EncryptionType::known(ticket_etype).map_err(|_| Error::ProgEtypeNosupp)?;
     if permitted.contains(&etype) {
@@ -156,9 +152,8 @@ pub fn check_ticket_etype(ticket_etype: i32, permitted: &[EncryptionType]) -> Re
     }
 }
 
-/// The enctype an AP-REQ's authenticator negotiates against `permitted`, as `krb5_rd_req` does on every acceptor, the KDC's own included.
 // MIT: `rd_req_decoded_opt` (lib/krb5/krb/rd_req_dec.c:652-723)
-/// the RFC 4537 list, then the subkey's and the session key's enctypes, go to `negotiate_etype`; every enctype after the RFC 4537 list must be permitted.
+/// Enctypes after the RFC 4537 list must be permitted.
 pub fn negotiate_ap_req_etypes(
     authenticator: &Authenticator,
     session_etype: i32,
@@ -174,7 +169,6 @@ pub fn negotiate_ap_req_etypes(
 }
 
 impl AcceptorAuthContext {
-    /// The auth context an accepted AP-REQ leaves, checked against the enctypes `conf` permits; its KRB-SAFE and KRB-PRIV times are judged by `conf`'s clock skew.
     /// the ticket's own enctype must be permitted too.
     pub fn from_ap_req(ok: &ApVerifyOk, conf: &AcceptorConfig) -> Result<Self, Error> {
         let permitted = conf.permitted()?;
@@ -213,20 +207,19 @@ impl AcceptorAuthContext {
         })
     }
 
-    /// Set the addresses messages are checked against and sent from, as `krb5_auth_con_setaddrs` does: `local` is this side's (a KRB-PRIV's or KRB-SAFE's receiver must be it when named), `remote` the peer's (a message's sender must be it).
+    /// A message's sender must be remote, and its receiver local.
     pub fn set_addrs(&mut self, local: Option<HostAddress>, remote: Option<HostAddress>) {
         self.local_addr = local;
         self.remote_addr = remote;
     }
 
-    /// Name the addresses a message's receiver address is looked up in when no local address is set, in place of the machine's own ([`crate::os_localaddr`], which is what `None` asks for): the list an oracle saw on its host, or a test's.
+    /// None asks for the machine's own addresses.
     pub fn set_host_addrs(&mut self, hosts: Option<Vec<HostAddress>>) {
         self.host_addrs = hosts;
     }
 
-    /// Start chaining KRB-PRIV encryption from the initial cipher state, as kprop and kpropd do for the dump's blocks.
     // MIT: `krb5_auth_con_initivector` (lib/krb5/krb/auth_con.c:314-322)
-    /// the cipher state starts from the session key's initial state for `KRB_PRIV` encryption, and `krb5_mk_priv` and `krb5_rd_priv` chain through it from then on.
+    /// KRB-PRIV chains from the session key's initial cipher state.
     pub fn init_ivector(&mut self) {
         self.cstate = Some(CipherState::initial());
     }
@@ -236,7 +229,6 @@ impl AcceptorAuthContext {
         self.flags
     }
 
-    /// Replace the context flags, as `krb5_auth_con_setflags` does.
     pub const fn set_flags(&mut self, flags: u32) {
         self.flags = flags;
     }
@@ -276,9 +268,7 @@ impl AcceptorAuthContext {
         self.ap_req_use_subkey
     }
 
-    /// The AP-REP answering the AP-REQ.
     // MIT: `k5_mk_rep` (lib/krb5/krb/mk_rep.c:67-140)
-    /// under `DO_SEQUENCE` a context with no sequence number takes a random one, `USE_SUBKEY` makes a fresh subkey of the negotiated enctype (else the authenticator's subkey is echoed), and the part is encrypted in the session key.
     pub fn mk_rep(&mut self) -> Result<ApRep, Error> {
         if self.flags & AUTH_CONTEXT_DO_SEQUENCE != 0 && self.local_seq == 0 {
             self.local_seq = generate_seq_number()?;
@@ -316,9 +306,7 @@ impl AcceptorAuthContext {
         })
     }
 
-    /// A KRB-PRIV of `user_data` from `local_addr` (and to `remote_addr`).
     // MIT: `krb5_mk_priv` (lib/krb5/krb/mk_priv.c:105-155)
-    /// the send subkey else the session key, the timestamp only under `DO_TIME`, the sequence number under `DO_SEQUENCE`, which then advances.
     pub fn mk_priv(
         &mut self,
         user_data: &[u8],
@@ -371,11 +359,9 @@ impl AcceptorAuthContext {
         Ok(msg)
     }
 
-    /// The user data of a KRB-PRIV from the peer.
     // MIT: `krb5_rd_priv` (lib/krb5/krb/rd_priv.c:99-150)
-    /// decrypted under the receive subkey else the session key (through the cipher state once `krb5_auth_con_initivector` set one), its addresses checked against the context's (`k5_privsafe_check_addrs`, the host's own for a receiver address when no local one is set), a replay refused under `DO_TIME`, and its sequence number checked against the peer's next one, which then advances, under `DO_SEQUENCE`.
     // MIT: `read_krbpriv` (lib/krb5/krb/rd_priv.c:43-97)
-    /// a message that is not a KRB-PRIV is `KRB5KRB_AP_ERR_MSG_TYPE`, and the decrypted part is zeroed before it is freed.
+    /// The decrypted part is wiped before it is freed.
     pub fn rd_priv(&mut self, raw: &[u8]) -> Result<Vec<u8>, Error> {
         if raw.first().is_none_or(|b| b & !0x20 != 0x55) {
             return Err(krb_error(err::MSG_TYPE, "Invalid message type"));
@@ -410,10 +396,7 @@ impl AcceptorAuthContext {
         checked.map(|()| user_data)
     }
 
-    /// The user data of a KRB-SAFE from the peer.
     // MIT: `krb5_rd_safe` (lib/krb5/krb/rd_safe.c:127-178)
-    /// its checksum verified under the receive subkey else the session key (`read_krbsafe`), a replay refused under `DO_TIME`, and its sequence number checked against the peer's next one, which then advances, under `DO_SEQUENCE`.
-    /// [`Error::KrbError`] as [`verify_krb_safe_checksum_in`] reports a message it refuses, `SKEW` (37) or `REPEAT` (34) under `DO_TIME`, and `BADORDER` (42) for an out-of-order sequence number under `DO_SEQUENCE`; [`Error::Asn1`] when the message does not decode.
     pub fn rd_safe(&mut self, raw: &[u8]) -> Result<Vec<u8>, Error> {
         let key = self.recv_subkey.as_ref().unwrap_or(&self.key);
         let msg = verify_krb_safe_checksum_in(
@@ -432,7 +415,6 @@ impl AcceptorAuthContext {
     }
 
     // MIT: `k5_privsafe_check_replay` (lib/krb5/krb/privsafe.c:107-141)
-    /// only under `DO_TIME`, a timestamp outside the clock skew is `KRB5KRB_AP_ERR_SKEW`, and a message whose tag the context's memory replay cache already holds is `KRB5KRB_AP_ERR_REPEAT`.
     // MIT: `krb5_check_clockskew` (lib/krb5/os/timeofday.c:55-67)
     /// the skew is the context's, which the acceptor's profile gave it.
     fn check_replay(&mut self, timestamp: Option<&KerberosTime>, tag: &[u8]) -> Result<(), Error> {
@@ -468,7 +450,7 @@ impl AcceptorAuthContext {
 }
 
 // MIT: `k5_rc_tag_from_ciphertext` (lib/krb5/rcache/rc_base.c:146-164)
-/// the tag is the end of the ciphertext, as long as the enctype's checksum; a shorter ciphertext is `EINVAL`.
+/// The tag is the checksum-sized tail. A short ciphertext is Crypto, not MIT's EINVAL.
 fn ciphertext_tag(etype: EncryptionType, cipher: &[u8]) -> Result<&[u8], Error> {
     let len = checksum_output_size(etype.checksum_type())
         .ok_or_else(|| Error::Crypto("no checksum length for the enctype".into()))?;
@@ -493,7 +475,7 @@ impl std::fmt::Debug for AcceptorAuthContext {
 }
 
 // MIT: `krb5_us_timeofday` (lib/krb5/os/ustime.c:66-82)
-/// the seconds and the microseconds come from the same reading (`KerberosTime::now` keeps whole seconds only).
+/// Seconds and microseconds come from one reading; KerberosTime keeps seconds only.
 #[must_use]
 pub fn us_timeofday() -> (KerberosTime, Microseconds) {
     let now = SystemTime::now()
@@ -507,7 +489,7 @@ pub fn us_timeofday() -> (KerberosTime, Microseconds) {
 }
 
 // MIT: `krb5_timeofday` (lib/krb5/os/timeofday.c:45-45)
-/// `time()` supplies the seconds.
+/// Linux reads CLOCK_REALTIME_COARSE, not time().
 #[must_use]
 pub(crate) fn kdc_time_seconds() -> u32 {
     #[cfg(any(
@@ -542,9 +524,8 @@ pub(crate) fn request_lifetime_now(precise: KerberosTime) -> KerberosTime {
     }
 }
 
-/// A fresh initial sequence number.
 // MIT: `krb5_generate_seq_number` (lib/krb5/krb/gen_seqnum.c:39-63)
-/// 30 random bits, so peers that read sequence numbers as signed never see a negative one, and never 0.
+/// 30 random bits, so a signed reader never sees a negative number, and never 0.
 pub fn generate_seq_number() -> Result<u32, Error> {
     let n = seq_random()? & 0x3fff_ffff;
     Ok(if n == 0 { 1 } else { n })
@@ -571,7 +552,7 @@ fn seq_random() -> Result<u32, Error> {
 }
 
 // MIT: `k5_sockaddr_to_address` (lib/krb5/os/addr.c:43-75)
-/// an IPv4-mapped IPv6 address is IPv4, and no address is the directional "accept" address (`k5_addr_directional_accept`).
+/// An IPv4-mapped IPv6 address is IPv4; none is the directional accept address.
 #[must_use]
 pub fn local_host_address(local: Option<IpAddr>) -> HostAddress {
     let (addr_type, octets) = match local {
@@ -589,7 +570,7 @@ pub fn local_host_address(local: Option<IpAddr>) -> HostAddress {
 }
 
 // MIT: `decode_etype_list` (lib/krb5/krb/rd_req_dec.c:906-976)
-/// the first AD-ETYPE-NEGOTIATION element, inside an AD-IF-RELEVANT container or bare; a container that does not decode is passed over, a list that does not decode fails the request.
+/// A container that does not decode is skipped; a bad list fails the request.
 fn decode_etype_list(a: &Authenticator) -> Result<Option<Vec<i32>>, Error> {
     let Some(ad) = &a.authorization_data else {
         return Ok(None);
@@ -615,7 +596,7 @@ fn decode_etype_list(a: &Authenticator) -> Result<Option<Vec<i32>>, Error> {
 }
 
 // MIT: `negotiate_etype` (lib/krb5/krb/rd_req_dec.c:854-904)
-/// every enctype from `mandatory` on must be permitted, and the result is the first permitted enctype the peer desires.
+/// Every enctype from the mandatory index on must be permitted.
 fn negotiate_etype(
     desired: &[i32],
     mandatory: usize,
