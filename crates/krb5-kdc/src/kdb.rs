@@ -1,6 +1,4 @@
-//! Public KDB extension surface (MIT kdb capabilities as Rust traits).
-//! Dump-v7 [`crate::PrincipalStore`] is the default at-rest backend.
-//! `db_library` selects the factory; unknown names error. The process-local PKINIT CA lives on [`KdcEnv`], not in dump rows.
+//! The KDB traits and dump-v7.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -18,9 +16,8 @@ use crate::store::{
     MAX_ALIAS_DEPTH, NamedPolicy, Policy, Principal, PrincipalStore, RID_FIRST_USER, strip_db_args,
 };
 
-/// Map a wire name to a `user@REALM` store id.
-/// NT-ENTERPRISE is a single `user@suffix` component (RFC 6806), not a `/`-joined name. A suffix equal to `realm` (RFC 4120 §6.1, exact octets) maps to `user@realm`. Mixed-case `user@kerber.test` in `KERBER.TEST` is not a local alias (MIT `CLIENT_NOT_FOUND`).
 #[must_use]
+/// An enterprise suffix matches the realm byte for byte.
 pub fn lookup_principal_id(name: &PrincipalName, realm: &str) -> String {
     if name.name_type == PrincipalName::NT_ENTERPRISE {
         let raw = name.components_joined();
@@ -38,7 +35,7 @@ pub fn lookup_principal_id(name: &PrincipalName, realm: &str) -> String {
 }
 
 // MIT: `krb5_db_get_principal` (kdb5.c:800-840)
-/// follow alias stubs up to [`MAX_ALIAS_DEPTH`] hops and return the canonical id, `None` past the depth, on a missing hop or an unparsable target.
+/// One hop past the depth is none, not that hop.
 pub fn resolve_alias_id<'a>(
     realm: &str,
     lookup: impl Fn(&str) -> Option<&'a Principal>,
@@ -59,15 +56,10 @@ pub fn resolve_alias_id<'a>(
     Some(id)
 }
 
-/// Process-local KDC state (the PKINIT context). Not dump/persist rows.
-/// The KDC keeps no replay cache of its own: a retransmit is answered by the lookaside, and a replay it no longer holds is processed again.
 // MIT: `kdc_process_tgs_req` (kdc/kdc_util.c:189-191)
-/// the TGS AP-REQ is read without a replay cache.
 // MIT: `enc_ts_verify` (kdc/kdc_preauth_encts.c:47-118)
-/// a timestamp inside the skew verifies again.
 #[derive(Clone, Debug)]
 pub struct KdcEnv {
-    /// The realm's PKINIT context, when the module initialized.
     pub pkinit: Option<std::sync::Arc<crate::pkinit::PkinitKdc>>,
 }
 
@@ -84,36 +76,28 @@ impl KdcEnv {
     }
 }
 
-/// MIT kdb lookup / iterate (owned rows so a fetch-on-demand backend can impl).
 pub trait PrincipalRead: Send + Sync {
     fn realm(&self) -> &str;
     fn policy(&self) -> &Policy;
     fn domain_sid(&self) -> &RpcSid;
     fn env(&self) -> &KdcEnv;
-    /// The backend's [`Error`] when a read fails, [`Error::Protocol`] `SVC_UNAVAILABLE` for a locked database (MIT `KRB5_KDB_CANTLOCK_DB`). [`PrincipalStore`] and [`MemoryStore`] never fail.
     fn fetch(&self, id: &str) -> Result<Option<Principal>, Error>;
-    /// The backend's [`Error`] when a read fails, [`Error::Protocol`] `SVC_UNAVAILABLE` for a locked database (MIT `KRB5_KDB_CANTLOCK_DB`). [`PrincipalStore`] and [`MemoryStore`] never fail.
     fn fetch_name(&self, name: &PrincipalName) -> Result<Option<Principal>, Error> {
         self.fetch(&lookup_principal_id(name, self.realm()))
     }
-    /// The backend's [`Error`] when a read fails, [`Error::Protocol`] `SVC_UNAVAILABLE` for a locked database (MIT `KRB5_KDB_CANTLOCK_DB`). [`PrincipalStore`] and [`MemoryStore`] never fail.
     fn fetch_krbtgt(&self) -> Result<Option<Principal>, Error> {
         self.fetch_name(&PrincipalName::krbtgt(self.realm()))
     }
-    /// The backend's [`Error`] when a read fails, [`Error::Protocol`] `SVC_UNAVAILABLE` for a locked database (MIT `KRB5_KDB_CANTLOCK_DB`). [`PrincipalStore`] and [`MemoryStore`] never fail.
     fn list_ids(&self) -> Result<Vec<String>, Error>;
-    /// The backend's [`Error`] when a read fails, [`Error::Protocol`] `SVC_UNAVAILABLE` for a locked database (MIT `KRB5_KDB_CANTLOCK_DB`). [`PrincipalStore`] and [`MemoryStore`] never fail.
     fn list_principals(&self) -> Result<Vec<Principal>, Error>;
     fn pkinit(&self) -> Option<&crate::pkinit::PkinitKdc> {
         self.env().pkinit.as_deref()
     }
     // MIT: `klmdb_get_principal` (plugins/kdb/lmdb/kdb_lmdb.c:713-744)
-    /// a fetched entry takes its lockout record.
     fn merge_lockout(&self, p: &mut Principal) {
         let _ = p;
     }
     // MIT: `klmdb_update_lockout` (plugins/kdb/lmdb/kdb_lmdb.c:1054-1121)
-    /// the lockout record alone is written.
     fn update_lockout(&self, p: &Principal, stamp: u32, update: LockoutUpdate) {
         let _ = (p, stamp, update);
     }
@@ -132,12 +116,11 @@ pub trait PrincipalRead: Send + Sync {
         self.merge_lockout(&mut q);
         q.last_success
     }
-    /// Max failures before CLIENT_REVOKED (0 = none).
+    /// The default of 0 does not lock the account.
     fn max_fail_for(&self, p: &Principal) -> u32 {
         let _ = p;
         0
     }
-    /// Audit one AS outcome of `name` now as the KDC does: a success (`ok`) or a failed preauthentication ([`crate::lockout::lockout_audit`]); an unknown name records nothing.
     #[cfg(feature = "test-hooks")]
     fn record_as_outcome(&self, name: &PrincipalName, ok: bool) {
         let Ok(Some(mut p)) = self.fetch_name(name) else {
@@ -172,18 +155,14 @@ pub trait PrincipalRead: Send + Sync {
     }
 }
 
-/// MIT kdb mutate.
 pub trait PrincipalWrite: PrincipalRead {
-    /// [`Error::InvalidArgument`] when `p.tl_data` holds a `KRB5_TL_DB_ARGS` entry, which neither [`PrincipalStore`] nor [`MemoryStore`] accepts; [`Error::Db`] when a [`PrincipalStore`] cannot lock, read or write its database.
+    /// A KRB5_TL_DB_ARGS tag is refused.
     fn put_principal(&mut self, p: Principal) -> Result<(), Error>;
     fn remove_id(&mut self, id: &str) -> Result<(), Error>;
 }
 
-/// Reload / persist gate.
 pub trait StoreLifecycle {
-    /// [`Error::Crypto`] when its stash key does not decrypt it; [`MemoryStore`] never fails.
     fn reload_if_stale(&mut self) -> Result<(), Error>;
-    /// [`MemoryStore`] never fails.
     fn read_hold(&self) -> Result<Option<(DbLockHold, bool)>, Error> {
         Ok(None)
     }
@@ -229,7 +208,6 @@ impl<T: PrincipalRead + ?Sized> PrincipalRead for std::sync::Arc<T> {
     }
 }
 
-/// Open a backend from `db_library` (kdc.conf). Dump-v7 is the default.
 pub fn open_store(
     db_library: Option<&str>,
     db: &Path,
@@ -324,6 +302,7 @@ impl PrincipalRead for MemoryStore {
             l.set_on(p);
         }
     }
+    /// Lockout sits beside the principal.
     fn update_lockout(&self, p: &Principal, stamp: u32, update: LockoutUpdate) {
         let mut g = self
             .lockout
@@ -419,7 +398,7 @@ impl PrincipalRead for PrincipalStore {
 
 impl PrincipalWrite for PrincipalStore {
     // MIT: `krb5_db_put_principal` (lib/kdb/kdb5.c:987-1007)
-    /// every put is recorded in the update log.
+    /// This put is an update-log record.
     fn put_principal(&mut self, mut p: Principal) -> Result<(), Error> {
         strip_db_args(&mut p.tl_data)?;
         self.change(|s| {
