@@ -1,5 +1,3 @@
-//! net-server (`lib/apputils/net-server.c`): the one loop a daemon serves every client from, on the caller's thread.
-
 use std::io::{self, IoSlice, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::os::fd::{AsFd as _, AsRawFd as _, OwnedFd, RawFd};
@@ -22,7 +20,7 @@ pub(crate) const BUFSIZ: usize = 1024 * 1024;
 pub const MAX_REQUEST: usize = BUFSIZ - 4;
 // MIT: `MAX_DGRAM_SIZE` (include/osconf.hin:113-113)
 const MAX_DGRAM_SIZE: usize = 65_536;
-/// Not a second cap: only the pages a short read touches are faulted in.
+/// A read chunk, not a request cap.
 pub(crate) const READ_SIZE: usize = 64 * 1024;
 // MIT: `setnolinger` (lib/apputils/net-server.c:687-691)
 const NO_LINGER: nix::libc::linger = nix::libc::linger {
@@ -780,7 +778,7 @@ impl Paused {
 }
 
 // MIT: `loop_setup_signals` (lib/apputils/net-server.c:265-284)
-/// The runtime ignores SIGPIPE.
+/// Runtime ignores SIGPIPE.
 // MIT: `setup_socket` (lib/apputils/net-server.c:844-851)
 pub fn run(
     app: &mut dyn Dispatch,
