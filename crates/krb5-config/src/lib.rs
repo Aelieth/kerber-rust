@@ -39,7 +39,7 @@ mod testenv;
 mod tests;
 
 use std::cell::Cell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use thiserror::Error;
@@ -54,6 +54,9 @@ pub enum Error {
     Profile(ProfileError, String),
     #[error("dns srv: {0}")]
     Dns(String),
+    // MIT: `k5_parse_host_string` (lib/krb5/krb/parse_host_string.c:107-108)
+    #[error("Invalid argument")]
+    InvalidArgument,
     // MIT KRB5_CC_UNKNOWN_TYPE; see docs/parity/b1-client.md
     #[error("{0}")]
     Ccache(String),
@@ -251,6 +254,9 @@ pub struct Krb5Conf {
     pub kdcs: BTreeMap<String, Vec<Endpoint>>,
     pub admin_servers: BTreeMap<String, Vec<Endpoint>>,
     pub kpasswd_servers: BTreeMap<String, Vec<Endpoint>>,
+    pub kdc_host_invalid: BTreeSet<String>,
+    pub admin_host_invalid: BTreeSet<String>,
+    pub kpasswd_host_invalid: BTreeSet<String>,
     pub domain_realm: BTreeMap<String, String>,
     pub pkinit_identities: BTreeMap<String, Vec<String>>,
     pub pkinit_anchors: BTreeMap<String, Vec<String>>,

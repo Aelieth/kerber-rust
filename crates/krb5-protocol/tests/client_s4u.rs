@@ -71,6 +71,7 @@ fn fake_tgt() -> AsOutcome {
         used_fast: false,
         pa_type: None,
         pa_config: None,
+        time_offset: 0,
     }
 }
 

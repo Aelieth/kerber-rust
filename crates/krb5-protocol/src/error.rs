@@ -10,6 +10,9 @@ pub enum Error {
     Crypto(String),
     #[error("asn1: {0}")]
     Asn1(String),
+    // MIT: `k5_locate_server` (lib/krb5/os/locate_kdc.c:871-876)
+    #[error("Cannot find KDC for realm")]
+    RealmUnknown,
     #[error("transport: {message}")]
     Io {
         message: String,
@@ -129,6 +132,7 @@ impl Clone for Error {
                 code: *code,
                 text: text.clone(),
             },
+            Self::RealmUnknown => Self::RealmUnknown,
             Self::UnexpectedPdu => Self::UnexpectedPdu,
             Self::ReplyIntegrity => Self::ReplyIntegrity,
             Self::NonceMismatch => Self::NonceMismatch,

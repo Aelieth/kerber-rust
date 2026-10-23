@@ -16,8 +16,8 @@ use krb5_cli::Prompter;
 use krb5_client::ArmorCcache;
 use krb5_config::{CcSpec, ClientContext, Endpoint, Krb5Conf};
 use krb5_protocol::{
-    AsOutcome, AsRequest, AsTicketOpts, Error, FileCcache, KPASSWD_PORT, KPASSWD_SUCCESS, KdcAddr,
-    as_exchange, as_exchange_defer_fast, as_exchange_prompted, as_exchange_prompted_defer_fast,
+    AsOutcome, AsRequest, AsTicketOpts, Error, FileCcache, KPASSWD_SUCCESS, KdcAddr, as_exchange,
+    as_exchange_defer_fast, as_exchange_prompted, as_exchange_prompted_defer_fast,
     change_password_result, format_chpw_failure, parse_principal, set_password,
 };
 use krb5_types::PrincipalName;
@@ -218,39 +218,41 @@ fn run<R: BufRead, W: Write>(
             }
         },
     };
-    let servers = kpasswd_servers(conf, &client.realm);
+    let servers = match conf.locate_kpasswd(&client.realm) {
+        Ok(list) => list,
+        Err(e) => {
+            eprintln!("{prog}: {e} changing password");
+            return 1;
+        }
+    };
     if servers.is_empty() {
         eprintln!("{prog}: Cannot find KDC for requested realm changing password");
         return 1;
     }
     // MIT: `change_set_password` (changepw.c:256-265)
     // the next server only when one does not answer.
-    for server in servers {
-        let server = KdcAddr {
-            host: server.host,
-            port: server.port,
-        };
-        match send(&server, &as_out, &new, target.as_ref()) {
-            Ok(None) => {
-                // "Password changed." and exit 0.
-                println!("Password changed.");
-                return 0;
-            }
-            Ok(Some(line)) => {
-                // a refusal is printed on stdout, exit 2.
-                println!("{line}");
-                return 2;
-            }
-            Err(Error::Io { .. }) => {}
-            Err(e) => {
-                // a failed exchange is "<error> changing password".
-                eprintln!("{prog}: {e} changing password");
-                return 1;
-            }
+    match send(&servers, &as_out, &new, target.as_ref()) {
+        Ok(None) => {
+            // "Password changed." and exit 0.
+            println!("Password changed.");
+            0
+        }
+        Ok(Some(line)) => {
+            // a refusal is printed on stdout, exit 2.
+            println!("{line}");
+            2
+        }
+        Err(Error::Io { .. }) => {
+            eprintln!("{prog}: Cannot contact any KDC for requested realm changing password");
+            1
+        }
+        Err(e) => {
+            // a failed exchange is "<error> changing password".
+            let text = krb5_client::errmsg::Krb5Error::from_protocol(&e, &client.realm);
+            eprintln!("{prog}: {text} changing password");
+            1
         }
     }
-    eprintln!("{prog}: Cannot contact any KDC for requested realm changing password");
-    1
 }
 
 fn initial_ticket_text(e: &Error) -> String {
@@ -435,24 +437,6 @@ fn ccache_principal(
     }
 }
 
-// MIT: `locate_kpasswd` (changepw.c:61-90)
-/// `admin_server` only when no `kpasswd_server` is listed, its port replaced by `DEFAULT_KPASSWD_PORT`.
-fn kpasswd_servers(conf: &Krb5Conf, realm: &str) -> Vec<Endpoint> {
-    if let Some(list) = conf.kpasswd_servers.get(realm).filter(|l| !l.is_empty()) {
-        return list.clone();
-    }
-    conf.admin_servers
-        .get(realm)
-        .into_iter()
-        .flatten()
-        .map(|e| Endpoint {
-            host: e.host.clone(),
-            port: KPASSWD_PORT,
-            transport: e.transport,
-        })
-        .collect()
-}
-
 /// The gates' set-password target, `KRB5_KPASSWD_TARGET=name@REALM`, in a `test-hooks` build.
 /// `krb5_change_password` changes the client's own password, so a release build reads no target.
 #[cfg_attr(
@@ -480,16 +464,16 @@ fn set_password_target() -> Result<Option<(PrincipalName, String)>, String> {
 
 /// One kpasswd exchange: `Ok(None)` when the password was changed, `Ok(Some(line))` when the server refused it (`line` is what MIT's `kpasswd` prints).
 fn send(
-    server: &KdcAddr,
+    servers: &[Endpoint],
     as_out: &AsOutcome,
     new: &[u8],
     target: Option<&(PrincipalName, String)>,
 ) -> Result<Option<String>, Error> {
     let Some((tname, trealm)) = target else {
-        let (code, data) = change_password_result(server, as_out, new)?;
+        let (code, data) = change_password_result(servers, as_out, new)?;
         return Ok((code != KPASSWD_SUCCESS).then(|| format_chpw_failure(code, &data)));
     };
-    match set_password(server, as_out, new, (&krb5_protocol::realm(trealm), tname)) {
+    match set_password(servers, as_out, new, (&krb5_protocol::realm(trealm), tname)) {
         Ok(()) => Ok(None),
         Err(Error::ReplyMismatch(line)) if is_chpw_result_line(&line) => Ok(Some(line)),
         Err(e) => Err(e),
@@ -527,12 +511,18 @@ mod tests {
              kpasswd_server = p2\n }\n S = {\n  admin_server = a2:12345\n }\n T = {\n  kdc = k\n }\n",
         );
         assert_eq!(
-            hosts(&kpasswd_servers(&c, "R")),
+            hosts(&c.locate_kpasswd("R").unwrap()),
             [("p1", 1464), ("p2", 464)]
         );
-        assert_eq!(hosts(&kpasswd_servers(&c, "S")), [("a2", 464)]);
-        assert_eq!(hosts(&kpasswd_servers(&c, "T")), [] as [(&str, u16); 0]);
-        assert_eq!(hosts(&kpasswd_servers(&c, "U")), [] as [(&str, u16); 0]);
+        assert_eq!(hosts(&c.locate_kpasswd("S").unwrap()), [("a2", 464)]);
+        assert_eq!(
+            hosts(&c.locate_kpasswd("T").unwrap()),
+            [] as [(&str, u16); 0]
+        );
+        assert_eq!(
+            hosts(&c.locate_kpasswd("U").unwrap()),
+            [] as [(&str, u16); 0]
+        );
     }
 
     #[test]

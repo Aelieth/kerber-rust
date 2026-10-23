@@ -58,8 +58,6 @@ checks run on them as on MIT's. They are **not yet a drop-in** for MIT's in thes
   and `-f`, and refuses a `-key` whose length is not the enctype's; a `!` line is passed over.
 - `kinit -k` with no principal asks for `host/<host name>` in the default realm, where MIT's asks
   for the host's canonical name.
-- `kinit` sends an expired password's change to the KDC's host on port 464, where MIT's sends it
-  to `kpasswd_server`, else `admin_server`; `kpasswd` ignores a port given in `kpasswd_server`.
 - With no enctypes in `krb5.conf` the default list is the four AES types; MIT's also has DES3, RC4
   and Camellia, so the two agree only where `krb5.conf` or Fedora's crypto-policies sets the list.
 - Of `kinit -X`'s attributes only `X509_user_identity` and `X509_anchors` act (one anchors file);

@@ -195,5 +195,6 @@ fn cred_as_outcome(creds: &CcacheCred, session: &ProtocolKey, ticket: Ticket) ->
         used_fast: false,
         pa_type: None,
         pa_config: None,
+        time_offset: 0,
     }
 }

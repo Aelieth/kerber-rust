@@ -437,6 +437,7 @@ fn tgs_as_tgt(prev: &AsOutcome, out: TgsOutcome) -> AsOutcome {
         used_fast: prev.used_fast,
         pa_type: prev.pa_type,
         pa_config: None,
+        time_offset: prev.time_offset,
     }
 }
 
@@ -1355,6 +1356,7 @@ mod tests {
             used_fast: false,
             pa_type: None,
             pa_config: None,
+            time_offset: 0,
         }
     }
 
@@ -1388,6 +1390,7 @@ mod tests {
             used_fast: false,
             pa_type: None,
             pa_config: None,
+            time_offset: 0,
         }
     }
 

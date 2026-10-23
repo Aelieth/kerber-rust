@@ -1,9 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use super::srv::lookup_srv_kdc;
+use super::srv::{lookup_srv_kdc, lookup_srv_kerberos_adm, lookup_srv_kpasswd};
 use super::testenv::TEST_KRB5_PATHS;
-use super::{Endpoint, Error, Krb5Conf, ProfileError, RealmLibdefaults};
+use super::{Endpoint, Error, KdcTransport, Krb5Conf, ProfileError, RealmLibdefaults};
 
 impl Krb5Conf {
     #[must_use]
@@ -139,6 +139,9 @@ impl Krb5Conf {
     }
 
     pub fn kdcs_for(&self, realm: &str) -> Result<Vec<Endpoint>, Error> {
+        if self.kdc_host_invalid.contains(realm) {
+            return Err(Error::InvalidArgument);
+        }
         if let Some(list) = self.kdcs.get(realm)
             && !list.is_empty()
         {
@@ -146,6 +149,35 @@ impl Krb5Conf {
         }
         if self.dns_lookup_kdc {
             return lookup_srv_kdc(realm);
+        }
+        Ok(Vec::new())
+    }
+
+    // MIT: `locate_kpasswd` (lib/krb5/os/changepw.c:61-90)
+    pub fn locate_kpasswd(&self, realm: &str) -> Result<Vec<Endpoint>, Error> {
+        if self.kpasswd_host_invalid.contains(realm) {
+            return Err(Error::InvalidArgument);
+        }
+        if let Some(list) = self.kpasswd_servers.get(realm).filter(|l| !l.is_empty()) {
+            return Ok(list.clone());
+        }
+        if self.dns_lookup_kdc
+            && let Ok(list) = lookup_srv_kpasswd(realm)
+            && !list.is_empty()
+        {
+            return Ok(list);
+        }
+        if self.admin_host_invalid.contains(realm) {
+            return Err(Error::InvalidArgument);
+        }
+        if let Some(list) = self.admin_servers.get(realm).filter(|l| !l.is_empty()) {
+            return Ok(kpasswd_from_admin(list));
+        }
+        if self.dns_lookup_kdc
+            && let Ok(list) = lookup_srv_kerberos_adm(realm)
+            && !list.is_empty()
+        {
+            return Ok(kpasswd_from_admin(&list));
         }
         Ok(Vec::new())
     }
@@ -932,30 +964,39 @@ fn parse_realm_line(conf: &mut Krb5Conf, realm: &str, line: &str) {
             .or_default()
             .push((k.to_owned(), v.clone()));
     }
-    let ep = parse_endpoint(&v);
     match k.to_ascii_lowercase().as_str() {
-        "kdc" => conf.kdcs.entry(realm.to_owned()).or_default().push(ep),
+        "kdc" => match located_host(&v, crate::listen::KDC_PORT) {
+            Ok(ep) => conf.kdcs.entry(realm.to_owned()).or_default().push(ep),
+            Err(()) => {
+                conf.kdc_host_invalid.insert(realm.to_owned());
+            }
+        },
         "admin_server" => {
-            conf.admin_servers
-                .entry(realm.to_owned())
-                .or_default()
-                .push(Endpoint {
-                    port: if ep.port == 88 { 749 } else { ep.port },
-                    ..ep
-                });
+            match located_host(&v, crate::listen::KADMIND_PORT) {
+                Ok(ep) => conf
+                    .admin_servers
+                    .entry(realm.to_owned())
+                    .or_default()
+                    .push(ep),
+                Err(()) => {
+                    conf.admin_host_invalid.insert(realm.to_owned());
+                }
+            }
             conf.kadm5
                 .entry(realm.to_owned())
                 .or_default()
                 .push(("admin_server".to_owned(), v));
         }
-        "kpasswd_server" => conf
-            .kpasswd_servers
-            .entry(realm.to_owned())
-            .or_default()
-            .push(Endpoint {
-                port: if ep.port == 88 { 464 } else { ep.port },
-                ..ep
-            }),
+        "kpasswd_server" => match located_host(&v, crate::listen::KPASSWD_PORT) {
+            Ok(ep) => conf
+                .kpasswd_servers
+                .entry(realm.to_owned())
+                .or_default()
+                .push(ep),
+            Err(()) => {
+                conf.kpasswd_host_invalid.insert(realm.to_owned());
+            }
+        },
         "pkinit_identities" => conf
             .pkinit_identities
             .entry(realm.to_owned())
@@ -1106,17 +1147,30 @@ fn canon_host(v: &str) -> Option<super::CanonHost> {
     }
 }
 
-fn parse_endpoint(v: &str) -> Endpoint {
-    if let Some((h, p)) = v.rsplit_once(':')
-        && let Ok(port) = p.parse()
-    {
-        return Endpoint {
-            host: h.to_owned(),
-            port,
-            transport: super::KdcTransport::Either,
-        };
-    }
-    Endpoint::kdc(v)
+fn located_host(v: &str, default_port: u16) -> Result<Endpoint, ()> {
+    let addr = crate::listen::parse_host_string(v, default_port).map_err(|_| ())?;
+    let Some(host) = addr.host.filter(|h| !h.is_empty()) else {
+        return Err(());
+    };
+    Ok(Endpoint {
+        host,
+        port: addr.port,
+        transport: super::KdcTransport::Either,
+    })
+}
+
+fn kpasswd_from_admin(list: &[Endpoint]) -> Vec<Endpoint> {
+    list.iter()
+        .map(|e| Endpoint {
+            host: e.host.clone(),
+            port: 464,
+            transport: if e.transport == KdcTransport::Tcp {
+                KdcTransport::Either
+            } else {
+                e.transport
+            },
+        })
+        .collect()
 }
 
 #[must_use]

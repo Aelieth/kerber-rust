@@ -55,6 +55,9 @@ any other `###` heading.
 
 ### Changed
 
+- **client.** Kpasswd tries every server on TCP before UDP, and a bad host string is an invalid argument.
+- **client.** A kpasswd KRB-ERROR is decoded, and an expired-password change uses the kpasswd server list, including its port.
+- **client.** A kpasswd AP-REQ follows the KDC clock when `kdc_timesync` is on.
 - **protocol.** A preauth failure with no saved module error is its own error, reported as preauthentication failed.
 - **kdc.** Embedded realm create writes the stash, then the lock files, then the database, and a re-run keeps that master.
 - **kdc.** `bootstrap_realm_into` fills a caller-owned store without rotating keys, and `create_database` writes the stash first.

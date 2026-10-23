@@ -118,6 +118,7 @@ fn main() {
             used_fast: false,
             pa_type: None,
             pa_config: None,
+            time_offset: 0,
         };
         let kdc = std::env::var("KRB5_KDC")
             .ok()

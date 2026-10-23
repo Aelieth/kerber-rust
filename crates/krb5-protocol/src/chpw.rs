@@ -5,7 +5,8 @@ use std::io::{self, Read};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs, UdpSocket};
 use std::time::{Duration, Instant};
 
-use krb5_asn1::encode;
+use krb5_asn1::{decode, encode};
+use krb5_config::{Endpoint, KdcTransport};
 use krb5_crypto::{KeyUsage, ProtocolKey, encrypt};
 use krb5_types::{
     ApOptions, ApReq, Authenticator, ChangePasswdData, EncryptedData, EncryptionKey, HostAddress,
@@ -19,7 +20,7 @@ use crate::auth_con::RemoteSeq;
 use crate::error::Error;
 use crate::safe_priv::{build_krb_priv_from, read_krb_priv, wipe_octets, wipe_vec};
 use crate::trace::{self, RemoteAddr, Transport};
-use crate::transport::{KdcAddr, errno, is_timeout, read_errno};
+use crate::transport::{errno, is_timeout, read_errno};
 
 pub const KPASSWD_SUCCESS: u16 = 0;
 pub const KPASSWD_MALFORMED: u16 = 1;
@@ -156,8 +157,12 @@ pub fn format_chpw_failure(code: u16, result_data: &[u8]) -> String {
 }
 
 /// Version 1, the caller's own password.
-pub fn change_password(kdc: &KdcAddr, as_out: &AsOutcome, new_pw: &[u8]) -> Result<(), Error> {
-    let (code, data) = change_password_result(kdc, as_out, new_pw)?;
+pub fn change_password(
+    servers: &[Endpoint],
+    as_out: &AsOutcome,
+    new_pw: &[u8],
+) -> Result<(), Error> {
+    let (code, data) = change_password_result(servers, as_out, new_pw)?;
     if code != KPASSWD_SUCCESS {
         return Err(Error::ReplyMismatch(format_chpw_failure(code, &data)));
     }
@@ -165,21 +170,21 @@ pub fn change_password(kdc: &KdcAddr, as_out: &AsOutcome, new_pw: &[u8]) -> Resu
 }
 
 pub fn change_password_result(
-    kdc: &KdcAddr,
+    servers: &[Endpoint],
     as_out: &AsOutcome,
     new_pw: &[u8],
 ) -> Result<(u16, Vec<u8>), Error> {
-    change_or_set(kdc, as_out, new_pw, None)
+    change_or_set(servers, as_out, new_pw, None)
 }
 
 /// Version 0xff80, another principal's password.
 pub fn set_password(
-    kdc: &KdcAddr,
+    servers: &[Endpoint],
     as_out: &AsOutcome,
     new_pw: &[u8],
     target: (&Realm, &PrincipalName),
 ) -> Result<(), Error> {
-    let (code, data) = change_or_set(kdc, as_out, new_pw, Some(target))?;
+    let (code, data) = change_or_set(servers, as_out, new_pw, Some(target))?;
     if code != KPASSWD_SUCCESS {
         return Err(Error::ReplyMismatch(format_chpw_failure(code, &data)));
     }
@@ -187,17 +192,66 @@ pub fn set_password(
 }
 
 fn change_or_set(
-    kdc: &KdcAddr,
+    servers: &[Endpoint],
     as_out: &AsOutcome,
     new_pw: &[u8],
     target: Option<(&Realm, &PrincipalName)>,
 ) -> Result<(u16, Vec<u8>), Error> {
     change_or_set_via(
-        &mut |build| send_kpasswd(&kdc.host, build),
+        &mut |build| send_listed(servers, build),
         as_out,
         new_pw,
         target,
     )
+}
+
+// MIT: `change_set_password` (lib/krb5/os/changepw.c:256-265)
+fn send_listed(servers: &[Endpoint], build: &mut Build<'_>) -> Result<Vec<u8>, Error> {
+    if servers.is_empty() {
+        return Err(Error::RealmUnknown);
+    }
+    if let Some(rep) = one_transport(servers, build, false)? {
+        return Ok(rep);
+    }
+    if let Some(rep) = one_transport(servers, build, true)? {
+        return Ok(rep);
+    }
+    Err(unreachable_kdc())
+}
+
+fn one_transport(
+    servers: &[Endpoint],
+    build: &mut Build<'_>,
+    udp: bool,
+) -> Result<Option<Vec<u8>>, Error> {
+    for server in servers {
+        let skip = if udp {
+            server.transport == KdcTransport::Tcp
+        } else {
+            server.transport == KdcTransport::Udp
+        };
+        if skip {
+            continue;
+        }
+        let transport = if udp {
+            KdcTransport::Udp
+        } else {
+            KdcTransport::Tcp
+        };
+        match send_kpasswd(&server.host, server.port, transport, build) {
+            Err(Error::Io { .. }) => {}
+            Err(e) => return Err(e),
+            Ok(rep) => return Ok(Some(rep)),
+        }
+    }
+    Ok(None)
+}
+
+fn unreachable_kdc() -> Error {
+    Error::from_io(io::Error::new(
+        io::ErrorKind::TimedOut,
+        "Cannot contact any KDC for requested realm",
+    ))
 }
 
 type SendRequest<'a> = dyn FnMut(&mut Build<'_>) -> Result<Vec<u8>, Error> + 'a;
@@ -218,6 +272,7 @@ fn change_or_set_via(
         &as_out.session_key,
         (&as_out.crealm, &as_out.cname),
         &sub,
+        as_out.time_offset,
     )?;
     let (priv_plain, version) = if let Some((realm, name)) = target {
         let cpw = ChangePasswdData {
@@ -238,8 +293,7 @@ fn change_or_set_via(
     let rep = send(&mut build)?;
     let (ap_rep, priv_rep, from_error) = parse_kpasswd_rep(&rep)?;
     let (code, data) = if from_error {
-        let (code, rest) = parse_chpw_rep(&priv_rep, true)?;
-        (code, rest.to_vec())
+        clear_from_krb_error(&priv_rep)?
     } else {
         let user = get_clear_result(
             &ap_rep,
@@ -254,6 +308,16 @@ fn change_or_set_via(
     Ok((code, data))
 }
 
+fn stamped(offset: i64) -> (krb5_types::KerberosTime, krb5_types::Microseconds) {
+    let (now, usec) = crate::auth_con::us_timeofday();
+    if offset == 0 {
+        return (now, usec);
+    }
+    let sec = i64::from(now.unix_seconds()).saturating_add(offset);
+    let sec = u32::try_from(sec.clamp(0, i64::from(u32::MAX))).unwrap_or(u32::MAX);
+    (krb5_types::KerberosTime::from_unix_seconds(sec), usec)
+}
+
 // MIT: `krb5_auth_con_init` (lib/krb5/krb/auth_con.c:39-41)
 // MIT: `krb5_mk_req_extended` (lib/krb5/krb/mk_req_ext.c:137-143)
 /// No sequence number: DO_SEQUENCE is set only after this authenticator is made.
@@ -263,13 +327,15 @@ fn kpasswd_ap_req(
     session: &ProtocolKey,
     (crealm, cname): (&Realm, &PrincipalName),
     sub: &ProtocolKey,
+    offset: i64,
 ) -> Result<(Authenticator, Vec<u8>), Error> {
     let sub_enc = EncryptionKey {
         keytype: sub.etype().to_iana(),
         keyvalue: sub.as_bytes().to_vec().into(),
     };
     // MIT: `generate_authenticator` (lib/krb5/krb/mk_req_ext.c:327-327)
-    let (now, usec) = crate::auth_con::us_timeofday();
+    // MIT: `krb5_us_timeofday` (lib/krb5/os/ustime.c:66-78)
+    let (now, usec) = stamped(offset);
     let authenticator = Authenticator {
         authenticator_vno: Authenticator::VNO,
         crealm: crealm.clone(),
@@ -360,7 +426,8 @@ fn encode_kpasswd_req(ap_req: &[u8], krb_priv_der: &[u8], version: u16) -> Vec<u
 }
 
 fn parse_kpasswd_rep(raw: &[u8]) -> Result<(Vec<u8>, Vec<u8>, bool), Error> {
-    if raw.len() >= 2 && raw[0] == 0x7e {
+    // MIT: `krb5int_is_app_tag` (include/k5-int.h:1334-1336)
+    if raw.len() >= 2 && raw[0] & !0x20 == 0x5e {
         return Ok((Vec::new(), raw.to_vec(), true));
     }
     if raw.len() < 6 {
@@ -444,20 +511,50 @@ fn kpasswd_request(
     Ok(encode_kpasswd_req(ap_der, &priv_der, version))
 }
 
-fn send_kpasswd(host: &str, build: &mut Build<'_>) -> Result<Vec<u8>, Error> {
+// MIT: `get_error_edata` (lib/krb5/krb/chpw.c:79-101)
+fn clear_from_krb_error(raw: &[u8]) -> Result<(u16, Vec<u8>), Error> {
+    let parsed: krb5_types::KrbError = decode(raw).map_err(|e| Error::Asn1(e.to_string()))?;
+    if let Some(edata) = parsed.e_data.as_ref().filter(|d| !d.as_ref().is_empty()) {
+        let (code, rest) = parse_chpw_rep(edata.as_ref(), true)?;
+        return Ok((code, rest.to_vec()));
+    }
+    Err(Error::KrbError {
+        code: parsed.error_code,
+        text: parsed
+            .e_text
+            .as_ref()
+            .and_then(|s| std::str::from_utf8(s.as_bytes()).ok())
+            .map(str::to_owned),
+    })
+}
+
+fn send_kpasswd(
+    host: &str,
+    port: u16,
+    transport: KdcTransport,
+    build: &mut Build<'_>,
+) -> Result<Vec<u8>, Error> {
     trace::sendto_kdc_resolving(host);
-    let addrs: Vec<SocketAddr> = (host, KPASSWD_PORT)
+    let addrs: Vec<SocketAddr> = (host, port)
         .to_socket_addrs()
         .map_err(Error::from_io)?
         .collect();
-    kpasswd_tcp(&addrs, build)
-        .or_else(|| kpasswd_udp(&addrs, build))
-        .ok_or_else(|| {
-            Error::from_io(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "Cannot contact any KDC for requested realm",
-            ))
+    let tcp = transport != KdcTransport::Udp;
+    let udp = transport != KdcTransport::Tcp;
+    let reply = if tcp {
+        kpasswd_tcp(&addrs, build)
+    } else {
+        None
+    };
+    reply
+        .or_else(|| {
+            if udp {
+                kpasswd_udp(&addrs, build)
+            } else {
+                None
+            }
         })
+        .ok_or_else(unreachable_kdc)
 }
 
 // MIT: `service_fds` (sendto_kdc.c:1421-1421)
@@ -1068,7 +1165,7 @@ mod ap_req_tests {
         };
         let crealm = ascii("KERBER.TEST");
         let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
-        let (kept, ap_der) = kpasswd_ap_req(&ticket, &session, (&crealm, &cname), &sub).unwrap();
+        let (kept, ap_der) = kpasswd_ap_req(&ticket, &session, (&crealm, &cname), &sub, 0).unwrap();
 
         let ap: ApReq = decode(&ap_der).unwrap();
         assert_eq!(ap.ap_options, ApOptions::none(), "no AP option");
@@ -1095,6 +1192,41 @@ mod ap_req_tests {
             field_tags(&plain),
             [0xa0, 0xa1, 0xa2, 0xa4, 0xa5, 0xa6],
             "{plain:02x?}"
+        );
+    }
+
+    #[test]
+    fn the_authenticator_ctime_adds_the_kdc_time_offset() {
+        let session = ProtocolKey::random(EncryptionType::Aes256CtsHmacSha196).unwrap();
+        let sub = ProtocolKey::random(EncryptionType::Aes256CtsHmacSha196).unwrap();
+        let ticket = Ticket {
+            tkt_vno: Ticket::VNO,
+            realm: ascii("KERBER.TEST"),
+            sname: PrincipalName::new(PrincipalName::NT_SRV_INST, ["kadmin", "changepw"]),
+            enc_part: EncryptedData {
+                etype: 18,
+                kvno: Some(1),
+                cipher: vec![0u8; 16].into(),
+            },
+        };
+        let crealm = ascii("KERBER.TEST");
+        let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
+        let (local, _) = crate::auth_con::us_timeofday();
+        let (kept, ap_der) =
+            kpasswd_ap_req(&ticket, &session, (&crealm, &cname), &sub, 600).unwrap();
+        let ap: ApReq = decode(&ap_der).unwrap();
+        let plain = decrypt(
+            &session,
+            KeyUsage::new(ku::AP_REQ_AUTHENTICATOR).unwrap(),
+            ap.authenticator.cipher.as_ref(),
+        )
+        .unwrap();
+        let sent: Authenticator = decode(&plain).unwrap();
+        assert_eq!(sent, kept);
+        let delta = i64::from(sent.ctime.unix_seconds()) - i64::from(local.unix_seconds());
+        assert!(
+            (590..=610).contains(&delta),
+            "authenticator ctime delta {delta} is not the 600 s KDC offset"
         );
     }
 
@@ -1152,6 +1284,7 @@ mod ap_req_tests {
                 used_fast: false,
                 pa_type: None,
                 pa_config: None,
+                time_offset: 0,
             };
             let mut sent = Vec::new();
             let result = change_or_set_via(

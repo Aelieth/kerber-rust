@@ -45,8 +45,24 @@ pub fn lookup_srv_kdc(realm: &str) -> Result<Vec<Endpoint>, Error> {
 }
 
 fn locate_kdc_srv(realm: &str, resolv: &Resolv) -> Result<Vec<Endpoint>, Error> {
-    let udp = query_service(realm, "_udp", resolv);
-    let tcp = query_service(realm, "_tcp", resolv);
+    locate_named_srv(realm, "_kerberos", resolv)
+}
+
+pub(crate) fn lookup_srv_kpasswd(realm: &str) -> Result<Vec<Endpoint>, Error> {
+    locate_named_srv(realm, "_kpasswd", &load_resolv())
+}
+
+pub(crate) fn lookup_srv_kerberos_adm(realm: &str) -> Result<Vec<Endpoint>, Error> {
+    let tcp = query_service(realm, "_kerberos-adm", "_tcp", &load_resolv());
+    match tcp {
+        Find::Hit(list) if !list.is_empty() => Ok(list),
+        _ => Err(Error::Dns("no SRV".into())),
+    }
+}
+
+fn locate_named_srv(realm: &str, service: &str, resolv: &Resolv) -> Result<Vec<Endpoint>, Error> {
+    let udp = query_service(realm, service, "_udp", resolv);
+    let tcp = query_service(realm, service, "_tcp", resolv);
     let mut out = Vec::new();
     if let Find::Hit(list) = udp {
         out.extend(list);
@@ -66,10 +82,10 @@ enum Find {
     None,
 }
 
-fn query_service(realm: &str, proto: &str, resolv: &Resolv) -> Find {
+fn query_service(realm: &str, service: &str, proto: &str, resolv: &Resolv) -> Find {
     // MIT: `make_lookup_name` (lib/krb5/os/dnssrv.c:50-78)
     // the name ends in `.` so the
-    let name = format!("_kerberos.{proto}.{realm}.");
+    let name = format!("{service}.{proto}.{realm}.");
     let transport = if proto == "_tcp" {
         super::KdcTransport::Tcp
     } else {

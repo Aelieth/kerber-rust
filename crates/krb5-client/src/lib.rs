@@ -453,10 +453,15 @@ pub fn store_error(e: &(dyn std::error::Error + Send + Sync + 'static)) -> Krb5E
 // a server that answers over neither TCP nor
 // MIT: `k5_sendto` (sendto_kdc.c:1602-1604)
 // that code carries no message of its own, so it
-fn chpw_error(e: ProtocolError) -> Box<dyn std::error::Error + Send + Sync> {
-    match e {
+fn chpw_error(e: ProtocolError, realm: &str) -> Box<dyn std::error::Error + Send + Sync> {
+    match &e {
         ProtocolError::Io { .. } => Box::new(Krb5Error::of(Code::KdcUnreach)),
-        other => Box::new(other),
+        ProtocolError::KrbError { .. } => Box::new(Krb5Error::from_protocol(&e, realm)),
+        ProtocolError::RealmUnknown => Box::new(Krb5Error::new(
+            Code::RealmUnknown,
+            format!("Cannot find KDC for realm \"{realm}\""),
+        )),
+        _ => Box::new(e),
     }
 }
 
@@ -1058,7 +1063,7 @@ fn kinit_inner(
         realm_s = conf_default_realm(ctx).ok_or("Cannot find KDC for requested realm")?;
     }
     trace::init_creds(&cname, &realm_s, params.in_tkt_service);
-    let resolved = resolve_kdc(&ctx.profile, &realm_s, kdc);
+    let resolved = resolve_kdc(&ctx.profile, &realm_s, kdc)?;
     let mut armor = initial_armor(
         ctx,
         params.armor_ccache,
@@ -1238,10 +1243,20 @@ fn kinit_inner(
                     if let Some(n) = params.key_exp_notice {
                         (n.0)(KEY_EXP_BANNER);
                     }
-                    krb5_protocol::change_password(&resolved, &chpw_as, p).map_err(chpw_error)?;
+                    krb5_protocol::change_password(
+                        &ctx.profile.locate_kpasswd(&realm_s)?,
+                        &chpw_as,
+                        p,
+                    )
+                    .map_err(|e| chpw_error(e, &realm_s))?;
                     Zeroizing::new(p.to_vec())
                 }
-                (None, Some(prompter)) => prompt_and_change(&resolved, &chpw_as, prompter)?,
+                (None, Some(prompter)) => prompt_and_change(
+                    &ctx.profile.locate_kpasswd(&realm_s)?,
+                    &chpw_as,
+                    prompter,
+                    &realm_s,
+                )?,
                 (None, None) => return Err(e.into()),
             };
             krb5_protocol::trace::gic_pwd_changed();
@@ -1342,9 +1357,10 @@ fn record_preauth_config(
 const KEY_EXP_BANNER: &str = "Password expired.  You must change it now.";
 
 fn prompt_and_change(
-    kdc: &KdcAddr,
+    servers: &[krb5_config::Endpoint],
     chpw_as: &krb5_protocol::AsOutcome,
     prompter: NewPasswordPrompter<'_>,
+    realm: &str,
 ) -> Result<Zeroizing<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
     let mut banner = KEY_EXP_BANNER.to_owned();
     let mut ret = "Password change failed";
@@ -1358,8 +1374,8 @@ fn prompt_and_change(
             ret = "New password cannot be zero length";
             banner = format!("{ret}.  Please try again.");
         } else {
-            let (code, data) =
-                krb5_protocol::change_password_result(kdc, chpw_as, &pw0).map_err(chpw_error)?;
+            let (code, data) = krb5_protocol::change_password_result(servers, chpw_as, &pw0)
+                .map_err(|e| chpw_error(e, realm))?;
             if code == krb5_protocol::KPASSWD_SUCCESS {
                 return Ok(pw0);
             }
@@ -1376,21 +1392,25 @@ fn prompt_and_change(
     Err(ret.into())
 }
 
-fn resolve_kdc(profile: &Krb5Conf, realm: &str, argv: &KdcAddr) -> KdcAddr {
+fn resolve_kdc(profile: &Krb5Conf, realm: &str, argv: &KdcAddr) -> Result<KdcAddr, Krb5Error> {
     if krb5_config::handed_matches(realm, &argv.host, argv.port) {
-        return argv.clone();
+        return Ok(argv.clone());
     }
-    let found = profile.kdcs_for(realm).unwrap_or_default();
+    let found = match profile.kdcs_for(realm) {
+        Ok(list) => list,
+        Err(krb5_config::Error::InvalidArgument) => return Err(Krb5Error::of(Code::Einval)),
+        Err(_) => Vec::new(),
+    };
     let Some(ep) = found.first() else {
         krb5_config::clear_handed();
-        return argv.clone();
+        return Ok(argv.clone());
     };
     let addr = KdcAddr {
         host: ep.host.clone(),
         port: ep.port,
     };
     krb5_config::hand_kdcs(realm, found);
-    addr
+    Ok(addr)
 }
 
 #[cfg(test)]

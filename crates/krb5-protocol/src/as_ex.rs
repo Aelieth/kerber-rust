@@ -51,6 +51,7 @@ pub struct AsOutcome {
     pub used_fast: bool,
     pub pa_type: Option<i32>,
     pub pa_config: Option<Vec<u8>>,
+    pub time_offset: i64,
 }
 
 #[derive(Clone)]
@@ -1467,6 +1468,12 @@ fn finish_as_rep(
     let session_etype = EncryptionType::known(enc_part.key.keytype)?;
     let session_key = ProtocolKey::from_bytes(session_etype, enc_part.key.keyvalue.as_ref())?;
     let fast_avail = fast_avail_in(&enc_part);
+    // MIT: `verify_as_reply` (lib/krb5/krb/get_in_tkt.c:260-262)
+    let time_offset = if profile.kdc_timesync {
+        i64::from(enc_part.authtime.unix_seconds()) - now
+    } else {
+        0
+    };
     Ok(AsOutcome {
         ticket: inner.ticket,
         enc_part,
@@ -1478,6 +1485,7 @@ fn finish_as_rep(
         used_fast,
         pa_type,
         pa_config: None,
+        time_offset,
     })
 }
 

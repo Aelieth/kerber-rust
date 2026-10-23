@@ -200,7 +200,11 @@ impl<'c> OpenCache<'c> {
 // MIT: `k5_locate_server` (locate_kdc.c:853-878)
 // a realm with no KDC is
 pub fn kdc_for_realm(profile: &Krb5Conf, realm: &str) -> Result<KdcAddr, Krb5Error> {
-    let found = profile.kdcs_for(realm).unwrap_or_default();
+    let found = match profile.kdcs_for(realm) {
+        Ok(list) => list,
+        Err(krb5_config::Error::InvalidArgument) => return Err(Krb5Error::of(Code::Einval)),
+        Err(_) => Vec::new(),
+    };
     let Some(ep) = found.first() else {
         krb5_config::clear_handed();
         return Err(Krb5Error::new(
@@ -251,6 +255,7 @@ pub fn outcome_from_cred(cred: &CcacheCred) -> Result<AsOutcome, Krb5Error> {
         used_fast: false,
         pa_type: None,
         pa_config: None,
+        time_offset: 0,
     })
 }
 
