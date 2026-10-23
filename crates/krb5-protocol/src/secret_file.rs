@@ -167,6 +167,7 @@ fn create_temp(path: &Path, replace: Replace, labeled: bool) -> io::Result<(fs::
 }
 
 /// Mode, and for a kept file its owner and group, come from the file it replaces.
+/// A failed fchmod keeps the 0600 create mode, so its error is ignored.
 #[cfg(unix)]
 fn set_owner_and_mode(f: &fs::File, path: &Path, dir: &Path, replace: Replace) {
     let mode = match replace {
