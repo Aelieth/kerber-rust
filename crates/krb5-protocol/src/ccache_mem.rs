@@ -5,6 +5,7 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::ccache::FileCcache;
 
+/// A poisoned lock is recovered.
 fn table() -> std::sync::MutexGuard<'static, HashMap<String, FileCcache>> {
     static TABLE: OnceLock<Mutex<HashMap<String, FileCcache>>> = OnceLock::new();
     TABLE
@@ -13,18 +14,17 @@ fn table() -> std::sync::MutexGuard<'static, HashMap<String, FileCcache>> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// Store a named MEMORY cache.
 pub fn memory_store(name: impl Into<String>, cc: FileCcache) {
     table().insert(name.into(), cc);
 }
 
-/// Clone a named MEMORY cache.
+/// A clone of the named cache.
 #[must_use]
 pub fn memory_retrieve(name: &str) -> Option<FileCcache> {
     table().get(name).cloned()
 }
 
-/// Drop a named MEMORY cache. Returns whether it existed.
+/// True when the name was present.
 #[must_use]
 pub fn memory_destroy(name: &str) -> bool {
     table().remove(name).is_some()
