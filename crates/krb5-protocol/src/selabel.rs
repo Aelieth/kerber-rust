@@ -1,4 +1,5 @@
-//! The SELinux context of each file the Kerberos tools create, set as the file is created and never changed afterwards, the way Fedora's krb5 labels its files (its SELinux patch, `push_fscreatecon`): the context becomes the creating thread's fscreate context, the file is created, and the fscreate context is cleared again on every return.
+//! Each created file's SELinux context is set as it is created, and never changed after.
+//! The context is the thread's fscreate context for the create, then cleared on every return.
 
 use std::fs::{self, File, OpenOptions};
 use std::io;
@@ -33,8 +34,9 @@ pub(crate) struct SeLinux {
     enforcing: bool,
 }
 
-/// Create the file at `path` with `create`, labeled with the context the policy gives a new file at `path`; a file already there is left to `create` as it is.
-/// A context that cannot be set fails the create when SELinux is enforcing (an `enforce` that cannot be read counts as enforcing) and is skipped with a warning when it is permissive.
+/// A new file gets the policy's context. A file already there is left as create leaves it.
+/// A context that cannot be set fails the create when enforcing, and is skipped when permissive.
+/// An enforce mode that cannot be read counts as enforcing.
 pub fn create_labeled<T>(path: &Path, create: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
     match SeLinux::system() {
         Some(se) => se.create_labeled(path, create),
@@ -84,7 +86,7 @@ impl SeLinux {
         create()
     }
 
-    /// Create the temp file that will be renamed onto `path` with `create`: with the replaced regular file's context when `replace` and `path` is one, else with the context the policy gives a new file at `path`.
+    /// A replaced regular file keeps its context. A new file gets the policy's.
     pub(crate) fn create_temp(
         &self,
         path: &Path,
@@ -160,7 +162,7 @@ impl SeLinux {
             .join("files")
     }
 
-    /// The context of the regular file at `path`, not following a symlink.
+    /// The regular file's context, not following a symlink.
     fn regular_file_label(&self, path: &Path) -> Option<String> {
         if !fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_file()) {
             return None;
@@ -180,7 +182,7 @@ fn attr_value(bytes: &[u8]) -> &[u8] {
     &bytes[..end]
 }
 
-/// `path` made absolute against the current directory, with its directory's symlinks resolved when it exists, as the file's real location is what the policy labels.
+/// Made absolute, with the directory's symlinks resolved: the policy labels the real location.
 fn absolute(path: &Path) -> String {
     let joined = if path.is_absolute() {
         path.to_path_buf()
@@ -194,7 +196,7 @@ fn absolute(path: &Path) -> String {
     resolved.to_string_lossy().into_owned()
 }
 
-/// The thread's fscreate context while this lives, cleared when it is dropped with an empty write, as libselinux's `setfscreatecon(NULL)` clears it.
+/// Cleared on drop by an empty write, as setfscreatecon(NULL) clears it.
 struct FsCreate(File);
 
 impl FsCreate {
@@ -248,7 +250,7 @@ struct FileContexts {
 }
 
 impl FileContexts {
-    /// Read `file_contexts` (which must exist), `file_contexts.homedirs`, `file_contexts.local` and the two substitution files from `dir`.
+    /// file_contexts must exist. homedirs, local, and the two substitution files are optional.
     fn load(dir: &Path) -> io::Result<Self> {
         let mut fc = Self::default();
         fc.add_specs(&fs::read_to_string(dir.join("file_contexts"))?);
@@ -291,8 +293,8 @@ impl FileContexts {
         }
     }
 
-    /// The context for a regular file at the absolute `path`, `None` for `<<none>>` or no match.
-    /// Expressions are Rust regex, not PCRE2: anchored `^(?:…)$`, `.` excludes newline (no `DOTALL`), Unicode `\d\w\s`, and an uncompilable spec is skipped.
+    /// None for <<none>> or no match.
+    /// Rust regex, not PCRE2: anchored, no DOTALL, Unicode classes, and a bad spec is skipped.
     fn lookup(&self, path: &str) -> Option<String> {
         let key = self.substitute(&normalize(path));
         let candidates = self
