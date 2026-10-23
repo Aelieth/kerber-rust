@@ -1,6 +1,5 @@
-//! RFC 3244 kpasswd client (`chpw.c` / `gic_pwd.c` KEY_EXP).
-//! KEY_EXP is the expired-password path. A reply that is not a KRB-ERROR is not read until its AP-REP verifies, and a success code inside a KRB-ERROR is not accepted. The random subkey buffer is wiped once the key is built, and the authenticator DER once encrypted. The copies of the new password this module and the KRB-PRIV builder make
-//! are wiped once encrypted.
+//! RFC 3244 kpasswd client.
+//! The password copies and the authenticator DER are wiped once encrypted.
 
 use std::io::{self, Read};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs, UdpSocket};
@@ -22,25 +21,17 @@ use crate::safe_priv::{build_krb_priv_from, read_krb_priv, wipe_octets, wipe_vec
 use crate::trace::{self, RemoteAddr, Transport};
 use crate::transport::{KdcAddr, errno, is_timeout, read_errno};
 
-/// MIT `KRB5_KPASSWD_SUCCESS`.
 pub const KPASSWD_SUCCESS: u16 = 0;
-/// MIT `KRB5_KPASSWD_MALFORMED`.
 pub const KPASSWD_MALFORMED: u16 = 1;
-/// MIT `KRB5_KPASSWD_HARDERROR`.
 pub const KPASSWD_HARDERROR: u16 = 2;
-/// MIT `KRB5_KPASSWD_AUTHERROR`.
 pub const KPASSWD_AUTHERROR: u16 = 3;
-/// MIT `KRB5_KPASSWD_SOFTERROR`.
 pub const KPASSWD_SOFTERROR: u16 = 4;
-/// MIT `KRB5_KPASSWD_ACCESSDENIED`.
 pub const KPASSWD_ACCESSDENIED: u16 = 5;
-/// MIT `KRB5_KPASSWD_BAD_VERSION`.
 pub const KPASSWD_BAD_VERSION: u16 = 6;
-/// MIT `KRB5_KPASSWD_INITIAL_FLAG_NEEDED` — last valid result code.
+/// Last valid kpasswd result code.
 pub const KPASSWD_INITIAL_FLAG_NEEDED: u16 = 7;
-/// RFC 3244 set-password version (`krb5int_mk_setpw_req`).
+/// RFC 3244 set-password version.
 pub const KPASSWD_SETPW_VERSION: u16 = 0xff80;
-/// kpasswd / kadmind port.
 pub const KPASSWD_PORT: u16 = 464;
 
 const AD_POLICY_LEN: usize = 30;
@@ -48,7 +39,6 @@ const AD_POLICY_COMPLEX: u32 = 0x0000_0001;
 const AD_POLICY_TICKS_PER_DAY: u64 = 86_400 * 10_000_000;
 
 // MIT: `krb5_chpw_result_code_string` (chpw.c:244-279)
-/// the message for each kpasswd result code; an unknown code is "Password change failed".
 #[must_use]
 pub fn chpw_result_code_string(code: u16) -> &'static str {
     match code {
@@ -65,7 +55,6 @@ pub fn chpw_result_code_string(code: u16) -> &'static str {
 }
 
 // MIT: `krb5_chpw_message` (chpw.c:476-510)
-/// an AD policy blob is decoded into a message, else a valid UTF-8 server string is returned, else a generic hint.
 #[must_use]
 pub fn chpw_message(server_string: &[u8]) -> String {
     if let Some(msg) = decode_ad_policy_info(server_string) {
@@ -81,7 +70,6 @@ pub fn chpw_message(server_string: &[u8]) -> String {
 }
 
 // MIT: `decode_ad_policy_info` (chpw.c:389-474)
-/// decodes the AD 30-byte policy blob.
 fn decode_ad_policy_info(data: &[u8]) -> Option<String> {
     if data.len() != AD_POLICY_LEN {
         return None;
@@ -133,12 +121,11 @@ fn decode_ad_policy_info(data: &[u8]) -> Option<String> {
 }
 
 // MIT: `krb5int_rd_chpw_rep` (chpw.c:217-231)
-/// the result-code half of the kpasswd reply check.
 pub fn parse_chpw_result(clear: &[u8], from_error: bool) -> Result<u16, Error> {
     Ok(parse_chpw_rep(clear, from_error)?.0)
 }
 
-/// Like [`parse_chpw_result`], also returning the result-string octets.
+/// SUCCESS inside a KRB-ERROR is not accepted.
 pub fn parse_chpw_rep(clear: &[u8], from_error: bool) -> Result<(u16, &[u8]), Error> {
     if clear.len() < 2 {
         return Err(Error::ReplyMismatch(
@@ -168,7 +155,7 @@ pub fn format_chpw_failure(code: u16, result_data: &[u8]) -> String {
     }
 }
 
-/// RFC 3244 kpasswd using a `kadmin/changepw` AS outcome (version 1).
+/// Version 1, the caller's own password.
 pub fn change_password(kdc: &KdcAddr, as_out: &AsOutcome, new_pw: &[u8]) -> Result<(), Error> {
     let (code, data) = change_password_result(kdc, as_out, new_pw)?;
     if code != KPASSWD_SUCCESS {
@@ -177,7 +164,6 @@ pub fn change_password(kdc: &KdcAddr, as_out: &AsOutcome, new_pw: &[u8]) -> Resu
     Ok(())
 }
 
-/// [`change_password`] returning the kpasswd result code and result data like MIT `krb5_change_password` (`result_code`, `result_string`), so a caller can tell a soft rejection (`KRB5_KPASSWD_SOFTERROR`) apart.
 pub fn change_password_result(
     kdc: &KdcAddr,
     as_out: &AsOutcome,
@@ -186,7 +172,7 @@ pub fn change_password_result(
     change_or_set(kdc, as_out, new_pw, None)
 }
 
-/// RFC 3244 `krb5_set_password` (version `0xff80` + `ChangePasswdData`).
+/// Version 0xff80, another principal's password.
 pub fn set_password(
     kdc: &KdcAddr,
     as_out: &AsOutcome,
@@ -200,7 +186,6 @@ pub fn set_password(
     Ok(())
 }
 
-/// a success code carried inside an error reply is not accepted. The generated subkey buffer is wiped as soon as the key exists, and a non-error reply is not accepted until its AP-REP verifies.
 fn change_or_set(
     kdc: &KdcAddr,
     as_out: &AsOutcome,
@@ -218,9 +203,9 @@ fn change_or_set(
 type SendRequest<'a> = dyn FnMut(&mut Build<'_>) -> Result<Vec<u8>, Error> + 'a;
 
 // MIT: `change_set_password` (lib/krb5/os/changepw.c:230-240)
-/// the request's subkey is made once, by `krb5_mk_req_extended`, before any connection.
+/// The subkey and its AP-REQ are made once, before any connection.
 // MIT: `krb5_c_make_random_key` (lib/crypto/krb/make_random_key.c:31-76)
-/// `krb5_generate_subkey` draws that subkey with it, so a des3 subkey has odd parity.
+/// A des3 subkey has odd parity.
 fn change_or_set_via(
     send: &mut SendRequest<'_>,
     as_out: &AsOutcome,
@@ -247,7 +232,7 @@ fn change_or_set_via(
         (Zeroizing::new(new_pw.to_vec()), 1)
     };
     // MIT: `kpasswd_sendto_msg_callback` (lib/krb5/os/changepw.c:108-195)
-    // the request is made once a connection to a server exists, with that connection's local address as the KRB-PRIV's sender.
+    // The KRB-PRIV sender is this connection's local address, and it names no receiver.
     let mut build =
         |sender: &HostAddress| kpasswd_request(&sub, &ap_der, &priv_plain, version, sender);
     let rep = send(&mut build)?;
@@ -269,13 +254,10 @@ fn change_or_set_via(
     Ok((code, data))
 }
 
-/// The AP-REQ of a kpasswd request, and the authenticator inside it, which the caller keeps to check the AP-REP's echo. The authenticator carries the client, the time and the request's subkey, and no sequence number, checksum or authorization data.
 // MIT: `krb5_auth_con_init` (lib/krb5/krb/auth_con.c:39-41)
-/// the new context does time and not sequence numbers.
 // MIT: `krb5_mk_req_extended` (lib/krb5/krb/mk_req_ext.c:137-143)
-/// a sequence number is made only under `DO_SEQUENCE` or `RET_SEQUENCE`, which `krb5int_mk_chpw_req` sets after the authenticator is made, so the authenticator has none.
+/// No sequence number: DO_SEQUENCE is set only after this authenticator is made.
 // MIT: `authenticator_7` (lib/krb5/asn.1/asn1_k_encode.c:693-693)
-/// the sequence number is an `opt_seqno`, which leaves a zero out, so the field is not on the wire.
 fn kpasswd_ap_req(
     ticket: &Ticket,
     session: &ProtocolKey,
@@ -287,7 +269,6 @@ fn kpasswd_ap_req(
         keyvalue: sub.as_bytes().to_vec().into(),
     };
     // MIT: `generate_authenticator` (lib/krb5/krb/mk_req_ext.c:327-327)
-    // the time and its microseconds, from `krb5_us_timeofday`.
     let (now, usec) = crate::auth_con::us_timeofday();
     let authenticator = Authenticator {
         authenticator_vno: Authenticator::VNO,
@@ -304,7 +285,7 @@ fn kpasswd_ap_req(
     let cipher = KeyUsage::new(ku::AP_REQ_AUTHENTICATOR)
         .map_err(Error::from)
         .and_then(|usage| Ok(encrypt(session, usage, &der)?));
-    // the encoded authenticator, subkey and all, is zeroed before it is freed.
+    // It holds the subkey, so it is wiped before it drops.
     wipe_vec(der);
     let cipher = cipher?;
     trace::mk_req(
@@ -329,7 +310,7 @@ fn kpasswd_ap_req(
 }
 
 // MIT: `get_clear_result` (lib/krb5/krb/chpw.c:159-181)
-/// `krb5_rd_rep` checks the AP-REP's echo and takes its sequence number as the peer's next, the receive subkey is then put back to the request's own send subkey ("per spec") whatever subkey the AP-REP carried, and `krb5_rd_priv` on that context, which does sequence numbers, reads the KRB-PRIV under it and refuses one that does not carry that number.
+/// The KRB-PRIV is read under the request's subkey, not the AP-REP's.
 fn get_clear_result(
     ap_rep: &[u8],
     priv_rep: &[u8],
@@ -351,9 +332,8 @@ fn get_clear_result(
     Ok(part.user_data.to_vec())
 }
 
-/// KEY_EXP plus a new-password source, not keytab.
 // MIT: `krb5_get_init_creds_password` (gic_pwd.c:211-222)
-/// only KEY_EXP with a prompter, and the change-password prompt not turned off, goes on to a password change.
+/// KEY_EXP with a new password, and not a keytab.
 #[must_use]
 pub fn key_exp_should_changepw(err: &Error, has_new_password: bool, keytab: bool) -> bool {
     has_new_password
@@ -412,7 +392,6 @@ fn parse_kpasswd_rep(raw: &[u8]) -> Result<(Vec<u8>, Vec<u8>, bool), Error> {
 }
 
 // MIT: `k5_sendto` (sendto_kdc.c:1537-1557)
-/// each new connection gets 1 s for an answer.
 const PASS_SLOT: Duration = Duration::from_secs(1);
 
 const PASS_DELAYS: [Duration; 3] = [
@@ -428,7 +407,6 @@ fn request_for(local: io::Result<SocketAddr>, build: &mut Build<'_>) -> Result<V
     build(&sender)
 }
 
-/// The sender of a kpasswd request on a connection whose local address is `local`.
 pub(crate) fn kpasswd_sender_address(
     local: SocketAddr,
     host: impl FnOnce() -> Result<Vec<HostAddress>, Error>,
@@ -452,9 +430,8 @@ pub(crate) fn kpasswd_sender_address(
 }
 
 // MIT: `krb5int_mk_chpw_req` (lib/krb5/krb/chpw.c:13-67)
-/// `DO_SEQUENCE` alone, the sender the auth context's local address and no receiver, so no timestamp.
+/// DO_SEQUENCE only, so there is no timestamp, and sequence 0 is left out.
 // MIT: `priv_enc_part_3` (lib/krb5/asn.1/asn1_k_encode.c:866-866)
-/// a sequence number of zero, the authenticator's, is left out of the part.
 fn kpasswd_request(
     sub: &ProtocolKey,
     ap_der: &[u8],
@@ -484,7 +461,7 @@ fn send_kpasswd(host: &str, build: &mut Build<'_>) -> Result<Vec<u8>, Error> {
 }
 
 // MIT: `service_fds` (sendto_kdc.c:1421-1421)
-/// a connected stream is waited on without a deadline (`request_timeout` is not read here).
+/// Once connected, the read has no deadline.
 fn kpasswd_tcp(addrs: &[SocketAddr], build: &mut Build<'_>) -> Option<Vec<u8>> {
     let slots = PASS_SLOT.saturating_mul(u32::try_from(addrs.len()).unwrap_or(u32::MAX));
     let deadline = Instant::now() + slots + PASS_DELAYS.iter().sum::<Duration>();
@@ -499,7 +476,6 @@ fn kpasswd_tcp(addrs: &[SocketAddr], build: &mut Build<'_>) -> Option<Vec<u8>> {
             break;
         }
         // MIT: `start_connection` (lib/krb5/os/sendto_kdc.c:884-990)
-        // a connection is traced as it starts, and `kill_conn` or the cleanup of `k5_sendto` as it ends.
         let ra = RemoteAddr {
             transport: Transport::Tcp,
             addr: *addr,
@@ -532,9 +508,8 @@ fn kpasswd_tcp(addrs: &[SocketAddr], build: &mut Build<'_>) -> Option<Vec<u8>> {
 }
 
 // MIT: `service_tcp_read` (sendto_kdc.c:1151-1200)
-/// a reply shorter than its length, or a length of 0 or over 1 MiB, ends the connection.
+/// A length of 0 or over 1 MiB ends the connection.
 // MIT: `service_tcp_write` (lib/krb5/os/sendto_kdc.c:1115-1146)
-/// the write and a failed one are traced, and so is a failed read.
 fn tcp_round_trip(stream: &mut TcpStream, body: &[u8], ra: &RemoteAddr) -> io::Result<Vec<u8>> {
     trace::sendto_kdc_tcp_send(ra);
     crate::framing::write_messages(stream, &[body]).inspect_err(|e| {
@@ -559,7 +534,7 @@ fn tcp_round_trip(stream: &mut TcpStream, body: &[u8], ra: &RemoteAddr) -> io::R
     Ok(out)
 }
 // MIT: `maybe_send` (sendto_kdc.c:1021-1035)
-/// a failed resend keeps the server for the next pass.
+/// A failed send keeps the server for the next pass.
 fn kpasswd_udp(addrs: &[SocketAddr], build: &mut Build<'_>) -> Option<Vec<u8>> {
     let mut bodies: Vec<Vec<u8>> = Vec::with_capacity(addrs.len());
     let mut socks: Vec<Option<UdpSocket>> = Vec::with_capacity(addrs.len());
@@ -629,7 +604,6 @@ fn udp_connect(addr: &SocketAddr) -> io::Result<UdpSocket> {
 }
 
 // MIT: `service_udp_read` (sendto_kdc.c:1203-1217)
-/// a receive error, such as a refused port, drops that server, and is traced.
 fn udp_wait(
     socks: &mut [Option<UdpSocket>],
     addrs: &[SocketAddr],
