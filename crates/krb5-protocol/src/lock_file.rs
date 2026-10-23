@@ -1,4 +1,4 @@
-//! MIT `krb5_lock_file`'s whole-file locks, as the credential cache files and the KDC database's lock files take them: open-file-description locks, a classic POSIX lock on a kernel without them, and `flock` only where the kernel refuses that.
+//! Whole-file locks: an OFD lock, else POSIX, else flock.
 
 use std::fs::File;
 use std::io;
@@ -7,19 +7,15 @@ use nix::errno::Errno;
 use nix::fcntl::{FcntlArg, Flock, FlockArg, fcntl};
 use nix::libc;
 
-/// What one [`lock_file`] call asks for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum FileLock {
-    /// `KRB5_LOCKMODE_SHARED`: any number of holders.
     Shared,
-    /// `KRB5_LOCKMODE_EXCLUSIVE`: one holder.
     Exclusive,
-    /// `KRB5_LOCKMODE_UNLOCK`.
     Unlock,
 }
 
 // MIT: `ofdlock` (lib/krb5/os/lock_file.c:90-103)
-/// an OFD lock, else on `EINVAL` (a kernel without OFD locks) a classic POSIX lock.
+/// EINVAL, a kernel without OFD locks, uses a POSIX lock.
 fn ofdlock(file: &File, arg: &libc::flock, wait: bool) -> Result<(), Errno> {
     let ofd = if wait {
         FcntlArg::F_OFD_SETLKW(arg)
@@ -40,12 +36,12 @@ fn ofdlock(file: &File, arg: &libc::flock, wait: bool) -> Result<(), Errno> {
     }
 }
 
-/// Lock, or unlock, the whole of `file`, waiting for a conflicting lock to go: a POSIX lock, and `flock` only where the kernel refuses that with `EINVAL`. A `flock` taken is kept in `flocked` until the unlock.
 // MIT: `krb5_lock_file` (lib/krb5/os/lock_file.c:117-162)
-/// whole file, `F_RDLCK` / `F_WRLCK` / `F_UNLCK`, blocking; `EACCES` / `EAGAIN` are `EAGAIN`.
+/// The lock covers the whole file.
 // MIT: `krb5_lock_file` (lib/krb5/os/lock_file.c:154-170)
-/// only `EINVAL` falls back to `flock`, and the `EINVAL` is still returned when `flock` succeeds.
-/// The lock call's errno: `EAGAIN` for `EACCES` or `EAGAIN`, `EINVAL` when the kernel refused the POSIX lock (even when `flock` then took it), any other as it is.
+/// Only EINVAL falls back to flock, and that error is still returned.
+/// A flock taken stays in flocked until the unlock.
+/// EACCES is returned as EAGAIN.
 pub fn lock_file(
     file: &File,
     how: FileLock,
@@ -54,7 +50,7 @@ pub fn lock_file(
     lock_file_how(file, how, flocked, true)
 }
 
-/// [`lock_file`], or without `wait` an attempt that fails with `EAGAIN` where it would wait.
+/// Without wait, a conflict is EAGAIN.
 pub fn lock_file_how(
     file: &File,
     how: FileLock,
