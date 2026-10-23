@@ -156,7 +156,7 @@ fn kadm5_create_applies_every_masked_field() {
     assert_eq!(create(&mut r, &args), 0);
     let p = stored(&r, "z1u");
     assert_eq!(p.attributes, KDB_DISALLOW_ALL_TIX | KDB_REQUIRES_PRE_AUTH);
-    assert!(p.locked, "DISALLOW_ALL_TIX mirrors into `locked`");
+    assert!(p.locked(), "DISALLOW_ALL_TIX mirrors into `locked`");
     assert_eq!(p.max_life, 3600);
     assert_eq!(
         p.max_renewable_life, 0,

@@ -97,9 +97,9 @@ pub struct Principal {
     pub keys: Vec<KeyEntry>,
     pub key_history: Vec<KeyEntry>,
     pub salt: Vec<u8>,
-    pub requires_preauth: bool,
+    pub(crate) requires_preauth: bool,
     pub max_life: u64,
-    pub locked: bool,
+    pub(crate) locked: bool,
     pub pw_expire: u32,
     pub attributes: u32,
     pub max_renewable_life: u64,
@@ -129,6 +129,40 @@ pub(crate) struct PrincipalFields {
 }
 
 impl Principal {
+    // MIT: `missing_required_preauth` (kdc_preauth.c:729-750)
+    #[must_use]
+    pub fn requires_preauth(&self) -> bool {
+        self.attributes & KDB_REQUIRES_PRE_AUTH != 0
+    }
+
+    #[must_use]
+    pub fn locked(&self) -> bool {
+        self.attributes & KDB_DISALLOW_ALL_TIX != 0
+    }
+
+    pub(crate) fn reconcile_flags(&mut self) {
+        self.requires_preauth = self.requires_preauth();
+        self.locked = self.locked();
+    }
+
+    pub(crate) fn set_requires_preauth(&mut self, on: bool) {
+        if on {
+            self.attributes |= KDB_REQUIRES_PRE_AUTH;
+        } else {
+            self.attributes &= !KDB_REQUIRES_PRE_AUTH;
+        }
+        self.requires_preauth = on;
+    }
+
+    pub(crate) fn set_locked(&mut self, on: bool) {
+        if on {
+            self.attributes |= KDB_DISALLOW_ALL_TIX;
+        } else {
+            self.attributes &= !KDB_DISALLOW_ALL_TIX;
+        }
+        self.locked = on;
+    }
+
     pub(crate) fn from_keys(
         name: PrincipalName,
         realm: String,
@@ -176,6 +210,90 @@ impl Principal {
             kadm: KadmData::default(),
             string_attrs: Vec::new(),
         }
+    }
+}
+
+pub struct PrincipalBuilder {
+    name: PrincipalName,
+    realm: String,
+    keys: Vec<KeyEntry>,
+    salt: Vec<u8>,
+    attributes: u32,
+    max_life: u64,
+    pw_expire: u32,
+}
+
+impl PrincipalBuilder {
+    #[must_use]
+    pub fn new(name: PrincipalName, realm: impl Into<String>) -> Self {
+        let realm = realm.into();
+        let salt = name.default_salt(&realm);
+        Self {
+            name,
+            realm,
+            keys: Vec::new(),
+            salt,
+            attributes: 0,
+            max_life: 0,
+            pw_expire: 0,
+        }
+    }
+
+    #[must_use]
+    pub fn keys(mut self, keys: Vec<KeyEntry>) -> Self {
+        self.keys = keys;
+        self
+    }
+
+    #[must_use]
+    pub fn attributes(mut self, attributes: u32) -> Self {
+        self.attributes = attributes;
+        self
+    }
+
+    #[must_use]
+    pub fn requires_preauth(mut self, on: bool) -> Self {
+        if on {
+            self.attributes |= KDB_REQUIRES_PRE_AUTH;
+        } else {
+            self.attributes &= !KDB_REQUIRES_PRE_AUTH;
+        }
+        self
+    }
+
+    #[must_use]
+    pub fn locked(mut self, on: bool) -> Self {
+        if on {
+            self.attributes |= KDB_DISALLOW_ALL_TIX;
+        } else {
+            self.attributes &= !KDB_DISALLOW_ALL_TIX;
+        }
+        self
+    }
+
+    #[must_use]
+    pub fn max_life(mut self, max_life: u64) -> Self {
+        self.max_life = max_life;
+        self
+    }
+
+    #[must_use]
+    pub fn build(self) -> Principal {
+        let mut p = Principal::from_keys(
+            self.name,
+            self.realm,
+            self.keys,
+            self.salt,
+            PrincipalFields {
+                requires_preauth: self.attributes & KDB_REQUIRES_PRE_AUTH != 0,
+                max_life: self.max_life,
+                locked: self.attributes & KDB_DISALLOW_ALL_TIX != 0,
+                pw_expire: self.pw_expire,
+            },
+        );
+        p.attributes = self.attributes;
+        p.reconcile_flags();
+        p
     }
 }
 
@@ -667,13 +785,8 @@ impl PrincipalStore {
         self.inside_change()?;
         let id = self.canonical_id(name, &self.realm)?;
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
-        p.locked = locked;
+        p.set_locked(locked);
         p.pw_expire = pw_expire;
-        if locked {
-            p.attributes |= KDB_DISALLOW_ALL_TIX;
-        } else {
-            p.attributes &= !KDB_DISALLOW_ALL_TIX;
-        }
         stamp_admin_tl(p, false, actor);
         let snap = p.clone();
         self.note_ulog(id, false, Some(snap));
@@ -1196,6 +1309,7 @@ impl PrincipalStore {
         if strip_db_args(&mut p.tl_data).is_err() {
             return;
         }
+        p.reconcile_flags();
         self.settle_rid(&mut p);
         let id = p.id();
         self.note_ulog(id.clone(), false, Some(p.clone()));

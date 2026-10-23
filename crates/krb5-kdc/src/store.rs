@@ -692,6 +692,7 @@ impl PrincipalStore {
     }
 
     pub(crate) fn debug_insert(&mut self, mut p: Principal) {
+        p.reconcile_flags();
         self.settle_rid(&mut p);
         self.map.insert_unlogged(p.id(), p);
     }
@@ -738,7 +739,9 @@ pub use password::{
 };
 pub use policy::{NamedPolicy, Policy, SpakeKdc};
 pub(crate) use principal::PrincipalFields;
-pub use principal::{AdminEnt, AdminFields, KadmData, Principal, TlData, strip_db_args};
+pub use principal::{
+    AdminEnt, AdminFields, KadmData, Principal, PrincipalBuilder, TlData, strip_db_args,
+};
 pub(crate) use principal::{db_args_put_error, refresh_kadm_tl};
 pub use pwqual::{Pwqual, clear_thread_pwqual, register_pwqual, set_thread_pwqual};
 pub use rid::{RID_FIRST_USER, RID_KRBTGT};

@@ -96,7 +96,7 @@ impl PrincipalStore {
         }
         self.insert_password(&name, password)?;
         if let Some(p) = self.map.get_mut(&id) {
-            p.requires_preauth = false;
+            p.set_requires_preauth(false);
         }
         if let Some(p) = self.map.get(&id) {
             self.note_ulog(id.clone(), false, Some(p.clone()));

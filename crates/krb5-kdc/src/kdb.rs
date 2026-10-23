@@ -328,6 +328,7 @@ impl PrincipalRead for MemoryStore {
 impl PrincipalWrite for MemoryStore {
     fn put_principal(&mut self, mut p: Principal) -> Result<(), Error> {
         strip_db_args(&mut p.tl_data)?;
+        p.reconcile_flags();
         self.map.insert(p.id(), p);
         Ok(())
     }

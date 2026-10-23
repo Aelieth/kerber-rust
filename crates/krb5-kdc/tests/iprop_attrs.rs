@@ -357,8 +357,8 @@ fn pull(primary: &PrincipalStore, replica: &mut PrincipalStore, last: UlogLast) 
 
 fn assert_same(primary: &Principal, replica: &Principal) {
     assert_eq!(replica.attributes, primary.attributes);
-    assert_eq!(replica.locked, primary.locked);
-    assert_eq!(replica.requires_preauth, primary.requires_preauth);
+    assert_eq!(replica.locked(), primary.locked());
+    assert_eq!(replica.requires_preauth(), primary.requires_preauth());
     assert_eq!(replica.max_life, primary.max_life);
     assert_eq!(replica.max_renewable_life, primary.max_renewable_life);
     assert_eq!(replica.expiration, primary.expiration);
@@ -445,7 +445,7 @@ fn a_replica_fed_by_this_primary_matches_it_after_each_change() {
         .unwrap();
     last = pull(&primary, &mut replica, last);
     same(&primary, &replica);
-    assert!(!replica.get_name(&name).unwrap().locked);
+    assert!(!replica.get_name(&name).unwrap().locked());
     // The last string deleted: MIT keeps an empty record, which clears it on the replica.
     primary.set_string(&name, "note", None).unwrap();
     primary.set_string(&name, "start", None).unwrap();

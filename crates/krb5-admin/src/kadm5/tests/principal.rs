@@ -341,7 +341,7 @@ fn modprinc_sets_requires_preauth_bit() {
     assert_eq!(ret_code(&out), 0);
     let g = store.read().unwrap();
     let p = g.get_name(&extra).unwrap();
-    assert!(p.requires_preauth);
+    assert!(p.requires_preauth());
     assert_eq!(p.max_life, 3600);
 }
 

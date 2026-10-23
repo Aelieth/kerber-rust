@@ -1236,7 +1236,7 @@ fn serialize_plain(store: &PrincipalStore) -> Vec<u8> {
         put_str(&mut out, &p.name.unparse());
         out.extend_from_slice(&p.name.name_type.to_be_bytes());
         put_bytes(&mut out, &p.salt);
-        out.push(u8::from(p.requires_preauth));
+        out.push(u8::from(p.requires_preauth()));
         out.extend_from_slice(&p.max_life.to_be_bytes());
         let nk = u32::try_from(p.keys.len()).unwrap_or(0);
         out.extend_from_slice(&nk.to_be_bytes());
@@ -1245,7 +1245,7 @@ fn serialize_plain(store: &PrincipalStore) -> Vec<u8> {
             out.extend_from_slice(&k.kvno.to_be_bytes());
             put_bytes(&mut out, k.key.as_bytes());
         }
-        out.push(u8::from(p.locked));
+        out.push(u8::from(p.locked()));
         out.extend_from_slice(&p.pw_expire.to_be_bytes());
     }
     out.extend_from_slice(b"SID1");

@@ -51,6 +51,7 @@ any other `###` heading.
 
 ### Changed
 
+- **kdc.** `requires_preauth` and `locked` became methods, the fields are no longer public, and `PrincipalBuilder` builds a principal.
 - **kdc.** K/M and krbtgt are built by `realm_rows`, and kadmin attributes live in `add_admin_principals` only.
 - **kdc.** Creating `kadmin/changepw` no longer sets `PWCHANGE_SERVICE`; only realm creation does, as MIT's `kadm5_create`.
 - **protocol.** `AsTicketOpts::default()` is not forwardable, as MIT's library default; `[libdefaults] forwardable = true` still sets it.

@@ -1083,18 +1083,7 @@ fn unix_now() -> u32 {
 }
 
 pub(crate) fn dump_attributes(p: &Principal) -> u32 {
-    let mut a = p.attributes;
-    if p.requires_preauth {
-        a |= KDB_REQUIRES_PRE_AUTH;
-    } else {
-        a &= !KDB_REQUIRES_PRE_AUTH;
-    }
-    if p.locked {
-        a |= KDB_DISALLOW_ALL_TIX;
-    } else {
-        a &= !KDB_DISALLOW_ALL_TIX;
-    }
-    a
+    p.attributes
 }
 
 // MIT: `k5beta7_common` (dump.c:327-331)

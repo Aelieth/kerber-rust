@@ -1700,7 +1700,7 @@ fn hint_types(err: Error) -> Vec<i32> {
 fn hint_omits_enc_ts_when_the_only_key_is_not_permitted() {
     let mut store = store_permitting_aes256_z6_hints();
     set_user_aes128_only(&mut store);
-    assert!(store.get_name(&user_name()).unwrap().requires_preauth);
+    assert!(store.get_name(&user_name()).unwrap().requires_preauth());
     let req = as_req(user_name(), TEST_REALM, 0x2600_0062, None).unwrap();
     let types = hint_types(krb5_kdc::issue_as(&store, &req).unwrap_err());
     assert!(

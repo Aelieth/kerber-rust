@@ -130,8 +130,8 @@ fn assert_kept(after: &Principal) {
         after.attributes & KDB_REQUIRES_PRE_AUTH,
         KDB_REQUIRES_PRE_AUTH
     );
-    assert!(after.locked, "a disabled account stays disabled");
-    assert!(after.requires_preauth);
+    assert!(after.locked(), "a disabled account stays disabled");
+    assert!(after.requires_preauth());
     assert_eq!(after.expiration, EXPIRE);
     assert_eq!(after.max_life, MAX_LIFE);
     assert_eq!(after.max_renewable_life, MAX_RLIFE);
@@ -204,8 +204,8 @@ fn an_mit_update_that_clears_a_flag_clears_it_and_keeps_the_rest() {
     pull(&mut store, &wire);
     let after = record(&store, &name);
     assert_eq!(after.attributes, KDB_REQUIRES_PRE_AUTH);
-    assert!(!after.locked, "+allow_tix enables the account");
-    assert!(after.requires_preauth);
+    assert!(!after.locked(), "+allow_tix enables the account");
+    assert!(after.requires_preauth());
     assert_eq!(after.expiration, EXPIRE);
     assert_eq!(after.pw_expire, PW_EXPIRE);
     assert_eq!(after.max_life, MAX_LIFE);

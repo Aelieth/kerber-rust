@@ -213,7 +213,7 @@ fn load_dump_store_keys_match_string_to_key() {
     let store = load_dump(&golden_v7(), b"masterpassword").expect("load");
     assert_eq!(store.realm(), "KERBER.TEST");
     let pauser = store.get("pauser@KERBER.TEST").expect("pauser loaded");
-    assert!(pauser.requires_preauth);
+    assert!(pauser.requires_preauth());
     assert_eq!(pauser.attributes, KDB_REQUIRES_PRE_AUTH);
     let got = pauser
         .key_for(EncryptionType::Aes256CtsHmacSha384192)
@@ -230,7 +230,7 @@ fn load_dump_store_keys_match_string_to_key() {
     assert_eq!(got.key.as_bytes(), expect.as_bytes());
 
     let user = store.get("user@KERBER.TEST").unwrap();
-    assert!(!user.requires_preauth);
+    assert!(!user.requires_preauth());
     let host = store
         .get("host/testhost.kerber.test@KERBER.TEST")
         .expect("host");

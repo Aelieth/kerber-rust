@@ -426,7 +426,7 @@ fn finish_preauth(
             Err(e) => return Err(finish_verify_padata(EC_MODULE, e)),
         }
     }
-    if (client.requires_preauth || anonymous_as) && !skip_timestamp {
+    if (client.requires_preauth() || anonymous_as) && !skip_timestamp {
         return Err(preauth_required(
             store,
             &client,
