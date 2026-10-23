@@ -354,7 +354,8 @@ pub use context::ClientContext;
 pub use files::ReadOnce;
 pub use hostname::{
     CanonPrinc, HostPrinc, SnameError, expand_hostname, expand_hostname_no_dns,
-    fallback_host_realm, local_host_name, sname_to_principal, this_host,
+    fallback_host_realm, fallback_host_realm_traced, local_host_name, sname_to_principal,
+    this_host,
 };
 pub use iprop_params::{DEF_ULOGENTRIES, IpropParams, KadmindListen, MISSING_CONF_PARAMS};
 pub use kdcconf::{

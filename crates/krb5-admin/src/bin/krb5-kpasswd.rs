@@ -74,7 +74,7 @@ fn run<R: BufRead, W: Write>(
     };
     // MIT: `k5_locate_server` (locate_kdc.c:871-877)
     // a realm with no KDC is `KRB5_REALM_UNKNOWN`.
-    let list = match conf.kdcs_for(&client.realm) {
+    let list = match conf.kdcs_for_traced(&client.realm, &mut krb5_protocol::trace::dns_srv) {
         Ok(list) if !list.is_empty() => list,
         Err(krb5_config::Error::InvalidArgument) => {
             eprintln!("{prog}: Invalid argument getting initial ticket");
@@ -221,13 +221,14 @@ fn run<R: BufRead, W: Write>(
             }
         },
     };
-    let servers = match conf.locate_kpasswd(&client.realm) {
-        Ok(list) => list,
-        Err(e) => {
-            eprintln!("{prog}: {e} changing password");
-            return 1;
-        }
-    };
+    let servers =
+        match conf.locate_kpasswd_traced(&client.realm, &mut krb5_protocol::trace::dns_srv) {
+            Ok(list) => list,
+            Err(e) => {
+                eprintln!("{prog}: {e} changing password");
+                return 1;
+            }
+        };
     if servers.is_empty() {
         eprintln!("{prog}: Cannot find KDC for requested realm changing password");
         return 1;

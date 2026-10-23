@@ -272,7 +272,7 @@ pub(crate) fn init_creds_keytab(
         }
         None => return Err(KpropError::code(KT_NOTFOUND, GETTING_CREDS)),
     };
-    let found = match conf.kdcs_for(realm) {
+    let found = match conf.kdcs_for_traced(realm, &mut krb5_protocol::trace::dns_srv) {
         Ok(list) => list,
         Err(krb5_config::Error::InvalidArgument) => {
             return Err(KpropError::code(

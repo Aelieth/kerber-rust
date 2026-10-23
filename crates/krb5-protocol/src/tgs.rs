@@ -583,7 +583,7 @@ fn kdc_for_realm(profile: &Krb5Conf, realm: &str, fallback: &KdcAddr) -> Result<
     if krb5_config::handed_matches(realm, &fallback.host, fallback.port) {
         return Ok(fallback.clone());
     }
-    let found = match profile.kdcs_for(realm) {
+    let found = match profile.kdcs_for_traced(realm, &mut crate::trace::dns_srv) {
         Ok(list) => list,
         Err(krb5_config::Error::InvalidArgument) => return Err(Error::InvalidArgument),
         Err(_) => Vec::new(),
@@ -1136,7 +1136,11 @@ enum ServiceStep {
 
 fn fallback_realm(profile: &Krb5Conf, sname: &PrincipalName) -> Option<String> {
     let host = sname.name_string.get(1)?;
-    krb5_config::fallback_host_realm(profile, &String::from_utf8_lossy(host.as_bytes()))
+    krb5_config::fallback_host_realm_traced(
+        profile,
+        &String::from_utf8_lossy(host.as_bytes()),
+        &mut crate::trace::dns_srv,
+    )
 }
 
 fn service_request<'a>(

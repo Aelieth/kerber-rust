@@ -29,6 +29,7 @@ pub struct FileCcache {
     pub header_tags: Vec<(u16, Vec<u8>)>,
     /// How many parsed credentials preceded each unparsed record.
     pub unparsed: Vec<(usize, Vec<u8>)>,
+    pub kcm_offset: Option<i64>,
 }
 
 impl FileCcache {
@@ -39,6 +40,7 @@ impl FileCcache {
             creds,
             header_tags: vec![(FCC_TAG_DELTATIME, vec![0u8; 8])],
             unparsed: Vec::new(),
+            kcm_offset: None,
         }
     }
 
@@ -153,6 +155,7 @@ impl FileCcache {
             creds,
             header_tags,
             unparsed: Vec::new(),
+            kcm_offset: None,
         })
     }
 

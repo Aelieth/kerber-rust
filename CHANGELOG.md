@@ -60,6 +60,7 @@ any other `###` heading.
 - **gss.** A non-boolean `client_aware_channel_bindings` fails the AP-REQ.
 - **client.** Kinit traces initial credentials before DNS SRV, and each query, answer, and miss.
 - **client.** A credential cache keeps the KDC clock offset, and later authenticators use it.
+- **client.** DNS SRV traces cover kpasswd, kprop, referrals, and the other KDC locates.
 - **gss.** An initiator's AP-REQ sequence number is random, and without mutual authentication the receive sequence starts there.
 - **client.** `request_timeout` bounds a KDC exchange and each kpasswd pass; unset, a kpasswd TCP read stays open.
 - **client.** After error 52, the TCP resend gets its own `request_timeout`.

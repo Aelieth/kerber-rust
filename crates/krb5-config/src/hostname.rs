@@ -201,6 +201,14 @@ impl<'a> CanonPrinc<'a> {
 // an address has no answer; `realm_try_domains` suffixes with KDCs come first, then the upper-cased parent domain whether or not it is a realm, and a name with no dot has none.
 #[must_use]
 pub fn fallback_host_realm(conf: &Krb5Conf, host: &str) -> Option<String> {
+    fallback_host_realm_traced(conf, host, &mut |_| {})
+}
+
+pub fn fallback_host_realm_traced(
+    conf: &Krb5Conf,
+    host: &str,
+    trace: &mut dyn FnMut(super::DnsSrv),
+) -> Option<String> {
     let mut clean = host.to_ascii_lowercase();
     if clean.ends_with('.') {
         clean.pop();
@@ -220,7 +228,10 @@ pub fn fallback_host_realm(conf: &Krb5Conf, host: &str) -> Option<String> {
             let Some((_, rest)) = suffix.split_once('.') else {
                 break;
             };
-            if conf.kdcs_for(suffix).is_ok_and(|kdcs| !kdcs.is_empty()) {
+            if conf
+                .kdcs_for_traced(suffix, trace)
+                .is_ok_and(|kdcs| !kdcs.is_empty())
+            {
                 return Some(suffix.to_owned());
             }
             suffix = rest;

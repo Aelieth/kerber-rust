@@ -96,10 +96,13 @@ impl<'c> OpenCache<'c> {
     pub fn open(ctx: &'c ClientContext, spec: CcSpec) -> Result<Self, Krb5Error> {
         let cc = crate::load_ccache(ctx, &spec)
             .map_err(|e| crate::cache_read_error(ctx, &spec, e.as_ref()))?;
-        // MIT: `read_header` (lib/krb5/ccache/cc_file.c:416-430)
-        if ctx.profile.kdc_timesync
+        // MIT: `get_kdc_offset` (lib/krb5/ccache/cc_kcm.c:683-701)
+        if let Some(off) = cc.kcm_offset {
+            ctx.set_kdc_offset(off);
+        } else if ctx.profile.kdc_timesync
             && let Some(off) = cc.deltatime_seconds()
         {
+            // MIT: `read_header` (lib/krb5/ccache/cc_file.c:416-430)
             ctx.note_kdc_offset(off);
         }
         Ok(Self { ctx, spec, cc })

@@ -359,12 +359,13 @@ pub fn kcm_load(profile: &Krb5Conf, residual: &str) -> io::Result<FileCcache> {
     };
     let mut cc = FileCcache::new(primary, creds);
     // MIT: `get_kdc_offset` (lib/krb5/ccache/cc_kcm.c:683-701)
-    if profile.kdc_timesync
-        && let Ok(body) = io.call(OP_GET_KDC_OFFSET, &zname(&name))
+    if let Ok(body) = io.call(OP_GET_KDC_OFFSET, &zname(&name))
         && body.len() >= 4
     {
         let sec = i32::from_be_bytes(body[..4].try_into().unwrap_or([0; 4]));
-        cc.set_deltatime(i64::from(sec));
+        let off = i64::from(sec);
+        cc.set_deltatime(off);
+        cc.kcm_offset = Some(off);
     }
     Ok(cc)
 }

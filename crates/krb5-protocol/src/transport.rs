@@ -93,7 +93,7 @@ pub(crate) fn sendto_kdc(
     // A list already located for this realm is not queried again.
     let found = match krb5_config::take_handed_kdcs(realm, &addr.host, addr.port) {
         Some(list) => list,
-        None => match profile.kdcs_for(realm) {
+        None => match profile.kdcs_for_traced(realm, &mut crate::trace::dns_srv) {
             Ok(list) => list,
             Err(krb5_config::Error::InvalidArgument) => return Err(Error::InvalidArgument),
             Err(_) => Vec::new(),

@@ -50,6 +50,10 @@ impl ClientContext {
         if self.kdc_offset_valid.load(Ordering::Relaxed) {
             return;
         }
+        self.set_kdc_offset(seconds);
+    }
+
+    pub fn set_kdc_offset(&self, seconds: i64) {
         self.kdc_offset.store(seconds, Ordering::Relaxed);
         self.kdc_offset_valid.store(true, Ordering::Relaxed);
     }

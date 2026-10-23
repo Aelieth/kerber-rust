@@ -71,13 +71,18 @@ fn locate_kdc_srv(
     locate_named_srv(realm, "_kerberos", resolv, trace)
 }
 
-pub(crate) fn lookup_srv_kpasswd(realm: &str) -> Result<Vec<Endpoint>, Error> {
-    locate_named_srv(realm, "_kpasswd", &load_resolv(), &mut |_| {})
+pub(crate) fn lookup_srv_kpasswd(
+    realm: &str,
+    trace: &mut dyn FnMut(DnsSrv),
+) -> Result<Vec<Endpoint>, Error> {
+    locate_named_srv(realm, "_kpasswd", &load_resolv(), trace)
 }
 
-pub(crate) fn lookup_srv_kerberos_adm(realm: &str) -> Result<Vec<Endpoint>, Error> {
-    let mut trace = |_| {};
-    let tcp = query_service(realm, "_kerberos-adm", "_tcp", &load_resolv(), &mut trace);
+pub(crate) fn lookup_srv_kerberos_adm(
+    realm: &str,
+    trace: &mut dyn FnMut(DnsSrv),
+) -> Result<Vec<Endpoint>, Error> {
+    let tcp = query_service(realm, "_kerberos-adm", "_tcp", &load_resolv(), trace);
     match tcp {
         Find::Hit(list) if !list.is_empty() => Ok(list),
         _ => {

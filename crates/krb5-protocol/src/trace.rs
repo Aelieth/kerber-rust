@@ -23,6 +23,24 @@ pub mod points;
 pub use cc::{get_config, store_creds, write_out_ccache};
 pub use points::*;
 
+pub fn dns_srv(ev: krb5_config::DnsSrv) {
+    match ev {
+        krb5_config::DnsSrv::Send(name) => dns_srv_send(&name),
+        krb5_config::DnsSrv::Answer {
+            priority,
+            weight,
+            port,
+            host,
+        } => dns_srv_ans(
+            i64::from(priority),
+            i64::from(weight),
+            i64::from(port),
+            &host,
+        ),
+        krb5_config::DnsSrv::NotFound => dns_srv_notfound(),
+    }
+}
+
 static SINK: OnceLock<Option<File>> = OnceLock::new();
 
 // MIT: `k5_init_trace` (lib/krb5/os/trace.c:384-392)

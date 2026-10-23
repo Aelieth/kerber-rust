@@ -173,6 +173,14 @@ impl Krb5Conf {
 
     // MIT: `locate_kpasswd` (lib/krb5/os/changepw.c:61-90)
     pub fn locate_kpasswd(&self, realm: &str) -> Result<Vec<Endpoint>, Error> {
+        self.locate_kpasswd_traced(realm, &mut |_| {})
+    }
+
+    pub fn locate_kpasswd_traced(
+        &self,
+        realm: &str,
+        trace: &mut dyn FnMut(DnsSrv),
+    ) -> Result<Vec<Endpoint>, Error> {
         if self.kpasswd_host_invalid.contains(realm) {
             return Err(Error::InvalidArgument);
         }
@@ -180,7 +188,7 @@ impl Krb5Conf {
             return Ok(list.clone());
         }
         if self.dns_lookup_kdc
-            && let Ok(list) = lookup_srv_kpasswd(realm)
+            && let Ok(list) = lookup_srv_kpasswd(realm, trace)
             && !list.is_empty()
         {
             return Ok(list);
@@ -192,7 +200,7 @@ impl Krb5Conf {
             return Ok(kpasswd_from_admin(list));
         }
         if self.dns_lookup_kdc
-            && let Ok(list) = lookup_srv_kerberos_adm(realm)
+            && let Ok(list) = lookup_srv_kerberos_adm(realm, trace)
             && !list.is_empty()
         {
             return Ok(kpasswd_from_admin(&list));
@@ -1318,7 +1326,7 @@ pub fn discover_kdc_in<P: AsRef<Path>>(
     let Ok(conf) = load_krb5_conf_paths(paths) else {
         return Ok(Vec::new());
     };
-    match conf.kdcs_for(realm) {
+    match conf.kdcs_for_traced(realm, &mut |_| {}) {
         Err(Error::InvalidArgument) => Err(Error::InvalidArgument),
         Err(_) => Ok(Vec::new()),
         Ok(list) => Ok(list),

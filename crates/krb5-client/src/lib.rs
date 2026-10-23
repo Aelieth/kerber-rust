@@ -1244,7 +1244,8 @@ fn kinit_inner(
                         (n.0)(KEY_EXP_BANNER);
                     }
                     krb5_protocol::change_password(
-                        &ctx.profile.locate_kpasswd(&realm_s)?,
+                        &ctx.profile
+                            .locate_kpasswd_traced(&realm_s, &mut crate::trace::dns_srv)?,
                         &chpw_as,
                         p,
                         ctx.profile.request_timeout,
@@ -1254,7 +1255,8 @@ fn kinit_inner(
                     Zeroizing::new(p.to_vec())
                 }
                 (None, Some(prompter)) => prompt_and_change(
-                    &ctx.profile.locate_kpasswd(&realm_s)?,
+                    &ctx.profile
+                        .locate_kpasswd_traced(&realm_s, &mut crate::trace::dns_srv)?,
                     &chpw_as,
                     prompter,
                     &realm_s,
