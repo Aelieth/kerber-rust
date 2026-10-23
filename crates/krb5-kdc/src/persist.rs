@@ -1041,6 +1041,17 @@ pub fn read_stash(stash_path: &Path, db_path: &Path) -> Result<ProtocolKey, Pers
     existing_stash_key(db_path, stash_path)
 }
 
+pub fn read_stashed_master(path: &Path) -> Result<(ProtocolKey, u32), PersistError> {
+    let bytes = krb5_protocol::read_secret_file(path)?;
+    let kt = Keytab::parse(&bytes).map_err(|e| PersistError::Format(e.to_string()))?;
+    let km = PrincipalName::new(PrincipalName::NT_PRINCIPAL, crate::mkey::MASTER_NAME);
+    kt.entries
+        .into_iter()
+        .find(|e| e.name == km)
+        .map(|e| (e.key, e.kvno))
+        .ok_or_else(|| PersistError::Crypto("stash is not a usable master key".into()))
+}
+
 #[must_use]
 pub fn stash_keys(bytes: &[u8]) -> Vec<ProtocolKey> {
     if let Some(k) = stash_keytab_key(bytes) {

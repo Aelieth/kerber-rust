@@ -53,10 +53,14 @@ fn cannot_start(progname: &str, error: &str) -> ! {
 fn main() {
     let argv: Vec<String> = std::env::args().collect();
     let progname = progname(argv.first().map(String::as_str));
-    if argv.len() > 1 {
-        eprintln!("usage: {progname}");
-        exit(1);
-    }
+    let bootstrap_only = match argv.len() {
+        1 => false,
+        2 if argv[1] == "--bootstrap-only" => true,
+        _ => {
+            eprintln!("usage: {progname} [--bootstrap-only]");
+            exit(1);
+        }
+    };
 
     // The profile first, kdc.conf ahead of krb5.conf; a profile it refuses ends the program.
     if let Err(e) = krb5_config::init_kdc_profile() {
@@ -68,23 +72,24 @@ fn main() {
     let specs = LogSpecs::load("admin_server");
     klog::init(&progname, &specs.specs, specs.debug);
 
-    // The realm's database and stash, then the admin-side profile for the same files.
+    // The profile names the realm. A missing database is created; a present one is opened.
     let paths = KdcPaths::resolve(None)
         .unwrap_or_else(|e| cannot_start(&progname, &format!("{e} while initializing")));
-    let store = match krb5_kdc::open_database(&paths, &[], MKEY_NAME) {
-        Ok(store) => store,
-        Err(OpenFailure::Database(e) | OpenFailure::MasterKey(e)) => {
-            cannot_start(&progname, &format!("{e} while initializing"));
-        }
+    let Some(realm) = paths.realm.clone() else {
+        cannot_start(&progname, "no default realm while initializing");
     };
-    let realm = store.realm().to_owned();
-    let shared = krb5_kdc::shared_dump(store);
     let profile = ProfileSet::from_env_files(&paths).unwrap_or_else(|e| {
         cannot_start(
             &progname,
             &format!("{} while initializing context", e.init_text()),
         );
     });
+    let store = open_or_create(&progname, &paths, &profile, &realm);
+    if bootstrap_only {
+        klog::close();
+        return;
+    }
+    let shared = krb5_kdc::shared_dump(store);
 
     // The listen ports and the ACL the realm's profile names; kpasswd and kadm5, no iprop.
     let listen = KadmindListen::for_realm(Some(&profile.kdc_context), &realm, None);
@@ -143,4 +148,85 @@ fn main() {
             exit(1);
         }
     }
+}
+
+fn open_or_create(
+    progname: &str,
+    paths: &KdcPaths,
+    profile: &ProfileSet,
+    realm: &str,
+) -> krb5_kdc::PrincipalStore {
+    use krb5_kdc::{
+        AdminSpec, MasterKey, PrincipalStore, RealmSpec, StashTarget, bootstrap_realm_into,
+        create_database, read_stashed_master,
+    };
+    use krb5_types::PrincipalName;
+
+    let db = &paths.database_name;
+    let stash_path = &paths.key_stash_file;
+    let resumed = if db.exists() || !stash_path.exists() {
+        None
+    } else {
+        match read_stashed_master(stash_path) {
+            Ok((key, kvno)) => {
+                let Ok(mkvno) = u16::try_from(kvno) else {
+                    cannot_start(progname, "master kvno does not fit while initializing");
+                };
+                Some((MasterKey::Key(key), mkvno))
+            }
+            Err(e) => cannot_start(progname, &format!("{e} while initializing")),
+        }
+    };
+    let (master, mkvno) = match resumed {
+        Some(pair) => pair,
+        None => (MasterKey::Random { etype: None }, 1),
+    };
+    let mut store = if db.exists() {
+        match krb5_kdc::open_database(paths, &[], MKEY_NAME) {
+            Ok(store) => store,
+            Err(OpenFailure::Database(e) | OpenFailure::MasterKey(e)) => {
+                cannot_start(progname, &format!("{e} while initializing"));
+            }
+        }
+    } else {
+        PrincipalStore::try_new(realm)
+            .unwrap_or_else(|e| cannot_start(progname, &format!("{e} while initializing")))
+    };
+    let spec = RealmSpec {
+        realm,
+        profile,
+        mkvno,
+        admin: Some(AdminSpec::new(PrincipalName::new(
+            PrincipalName::NT_PRINCIPAL,
+            ["admin", "admin"],
+        ))),
+    };
+    let boot = bootstrap_realm_into(&mut store, master, &spec)
+        .unwrap_or_else(|e| cannot_start(progname, &format!("{e} while initializing")));
+    if !db.exists() {
+        create_database(
+            &store,
+            db,
+            &StashTarget {
+                path: &paths.key_stash_file,
+            },
+            &boot,
+        )
+        .unwrap_or_else(|e| cannot_start(progname, &format!("{e} while initializing")));
+        store = match krb5_kdc::open_database(paths, &[], MKEY_NAME) {
+            Ok(store) => store,
+            Err(OpenFailure::Database(e) | OpenFailure::MasterKey(e)) => {
+                cannot_start(progname, &format!("{e} while initializing"));
+            }
+        };
+    }
+    if let Some(keytab) = &boot.admin_keytab {
+        let path = db.with_file_name("admin.keytab");
+        if let Err(e) = keytab.write_file(&path) {
+            cannot_start(progname, &format!("{e} while writing {}", path.display()));
+        }
+        eprintln!("{progname}: keytab {}", path.display());
+    }
+    eprintln!("{progname}: created {}", boot.created.join(" "));
+    store
 }

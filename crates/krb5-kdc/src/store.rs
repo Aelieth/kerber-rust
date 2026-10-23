@@ -394,6 +394,10 @@ impl PrincipalStore {
         self.logged_write(|| self.write_database())
     }
 
+    pub(crate) fn flush_unlogged(&mut self) -> Result<(), Error> {
+        self.save_through()
+    }
+
     fn inside_change(&self) -> Result<(), Error> {
         match self.db_path() {
             Some(db) if !self.saves_held => Err(Error::Db {

@@ -128,9 +128,11 @@ kerber-rust point release:
   is not applied. Remote MIT `kadmin` on 749 (which
   the satomlin fleet uses for `addprinc -randkey` + `ktadd`) is that loop on
   a thread beside the KDC's, or `krb5-kadmind` run beside KLLDAP.
-- **Bootstrap.** `PrincipalStore::bootstrap` creates a test user and admin with
-  passwords; KLLDAP wants krbtgt, `kadmin/*` and a random-key admin with no
-  password. Build it from `PrincipalStore::try_new` and `create_principal_3_in`.
+- **Bootstrap.** `bootstrap_realm_into` creates K/M, krbtgt, `kadmin/*` and a
+  random-key admin that requires pre-auth, and returns the admin keytab.
+  `create_database` writes the stash, then the lock files, then the database.
+  A re-run with a stash and no database reuses that master. A restart creates
+  nothing that is already there.
 - **`kadm5_hook`** is [`Kadm5Hook`](../../crates/krb5-kdc/src/store/kadm5_hook.rs):
   an embedder registers a module with `register_kadm5_hook`. The directory does
   not have to. **`kadm5_auth`** is still not implemented (`docs/parity/a4-kadmin.md`).

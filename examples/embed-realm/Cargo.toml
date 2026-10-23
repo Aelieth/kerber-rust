@@ -17,6 +17,7 @@ krb5-admin.workspace = true
 krb5-config.workspace = true
 krb5-kdc.workspace = true
 krb5-log.workspace = true
+krb5-types.workspace = true
 signal-hook.workspace = true
 
 [lints]

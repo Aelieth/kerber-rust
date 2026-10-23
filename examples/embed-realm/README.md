@@ -29,9 +29,11 @@ KRB5_KDC_PROFILE=examples/configs/kdc.conf KRB5_CONFIG=examples/configs/krb5.con
     cargo run -p krb5-embed-realm-example
 ```
 
-The database and stash the profile names must already exist (create them with `krb5-kdb`, as
-`otp-kdc`'s README shows). Then MIT `kadmin -p admin/admin` and `kpasswd` work against it exactly as
-against the daemon.
+Each start opens the database the profile names, or creates it when the file is missing.
+A start that finds the stash and no database finishes that create and keeps the stashed master.
+`--bootstrap-only` stops after that and writes `admin.keytab` beside the database. A later start
+prints `created` empty and leaves the key versions as they were. MIT `kadmin -p admin/admin` and
+`kpasswd` then work against it exactly as against the daemon.
 
 ## Authorization modules
 

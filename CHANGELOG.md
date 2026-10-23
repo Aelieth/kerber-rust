@@ -53,6 +53,9 @@ any other `###` heading.
 
 ### Changed
 
+- **kdc.** Embedded realm create writes the stash, then the lock files, then the database, and a re-run keeps that master.
+- **kdc.** `bootstrap_realm_into` fills a caller-owned store without rotating keys, and `create_database` writes the stash first.
+- **kdc.** The bootstrap admin requires pre-auth, and its keytab is returned for the caller to write.
 - **kdc.** `requires_preauth` and `locked` became methods, the fields are no longer public, and `PrincipalBuilder` builds a principal.
 - **kdc.** K/M and krbtgt are built by `realm_rows`, and kadmin attributes live in `add_admin_principals` only.
 - **kdc.** Creating `kadmin/changepw` no longer sets `PWCHANGE_SERVICE`; only realm creation does, as MIT's `kadm5_create`.

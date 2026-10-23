@@ -47,7 +47,9 @@ pub use audit::{
 #[cfg(feature = "test-hooks")]
 pub use create::seed_test_principals;
 pub use create::{
-    add_admin_principals, create_realm, create_realm_db, kdc_conf_for_realm, realm_rows,
+    AdminSpec, Bootstrapped, MasterKey, RealmSpec, StashTarget, add_admin_principals,
+    bootstrap_realm_into, create_database, create_realm, create_realm_db, kdc_conf_for_realm,
+    realm_rows,
 };
 pub use daemon::{
     OpenFailure, Shutdown, Signals, copy_persist_master, database_path, detach, json_log_filter,
@@ -97,7 +99,7 @@ pub use persist::{
     CreateError, DbUpdate, DbWrite, FullLoad, LoadError, LoadLog, PersistError, Unopenable,
     check_database, check_openable, create_store, load_dump_with_stash, load_store,
     load_store_full, load_store_with_master, load_text_full, read_db_and_lockout_locked,
-    read_db_locked, read_stash, save_dump_text, save_store, save_store_fresh,
+    read_db_locked, read_stash, read_stashed_master, save_dump_text, save_store, save_store_fresh,
     save_store_legacy_kdb3, save_store_with_master, stash_keys, write_stash,
 };
 pub use pkinit::PkinitKdc;
