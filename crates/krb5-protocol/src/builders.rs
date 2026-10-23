@@ -14,7 +14,6 @@ fn realm_string(realm: &str) -> Result<krb5_types::Realm, Error> {
     krb5_types::try_ascii(realm).map_err(|e| Error::ReplyMismatch(e.to_string()))
 }
 
-/// AS-REQ for `cname@realm` with optional padata.
 pub fn as_req(
     cname: PrincipalName,
     realm: &str,
@@ -35,7 +34,6 @@ pub fn as_req(
     )
 }
 
-/// AS-REQ with an explicit `sname` and etype list.
 pub fn as_req_sname(
     cname: PrincipalName,
     realm: &str,
@@ -68,15 +66,15 @@ pub fn as_req_sname(
     }))
 }
 
-/// PA-ENC-TIMESTAMP encrypted with the client long-term key (usage 1), at the time now and its microseconds.
+/// Encrypted under the long-term key, usage 1.
 // MIT: `encts_process` (lib/krb5/krb/preauth_encts.c:87-89)
-/// the time and its microseconds as `get_preauth_time` gives them.
+/// The time and its microseconds come from one reading.
 pub fn pa_enc_timestamp(key: &ProtocolKey) -> Result<PaData, Error> {
     let (now, usec) = crate::auth_con::us_timeofday();
     pa_enc_timestamp_usec(key, &now, usec)
 }
 
-/// PA-ENC-TIMESTAMP with an explicit client time, its microseconds those of `now`.
+/// The microseconds are those of the given time.
 pub fn pa_enc_timestamp_at(key: &ProtocolKey, now: &KerberosTime) -> Result<PaData, Error> {
     pa_enc_timestamp_usec(
         key,
@@ -86,7 +84,7 @@ pub fn pa_enc_timestamp_at(key: &ProtocolKey, now: &KerberosTime) -> Result<PaDa
 }
 
 // MIT: `pa_enc_ts_1` (lib/krb5/asn.1/asn1_k_encode.c:935-935)
-/// `pausec` is an `opt_int32`, omitted when 0.
+/// pausec is omitted when 0.
 fn pa_enc_timestamp_usec(
     key: &ProtocolKey,
     now: &KerberosTime,
@@ -110,7 +108,6 @@ fn pa_enc_timestamp_usec(
     })
 }
 
-/// TGS-REQ with PA-TGS-REQ (AP-REQ wrapping `ticket`).
 pub fn tgs_req(
     ticket: Ticket,
     session: &ProtocolKey,
@@ -143,45 +140,31 @@ pub fn tgs_req(
     })
 }
 
-/// Inputs of a TGS-REQ.
 // MIT: `k5_make_tgs_req` (lib/krb5/krb/send_tgs.c:119-119)
-/// takes the same values positionally. This is the parameter struct for [`tgs_req_ex`], not a wire type.
+/// The parameter struct for tgs_req_ex, not a wire type.
 pub struct TgsReqParams<'a> {
-    /// Header ticket.
     pub ticket: Ticket,
-    /// Key that checksums the body and encrypts the authenticator.
+    /// Checksums the body and encrypts the authenticator.
     pub session: &'a ProtocolKey,
-    /// Client realm.
     pub crealm: &'a str,
-    /// Client name.
     pub cname: &'a PrincipalName,
-    /// Server name. Owned because the body stores it.
+    /// Owned because the body stores it.
     pub sname: PrincipalName,
-    /// Server realm.
     pub realm: &'a str,
-    /// Request nonce.
     pub nonce: u32,
-    /// KDC options copied onto the body.
     pub kdc_options: KdcOptions,
-    /// Additional tickets, when the caller has them.
     pub additional_tickets: Option<Vec<Ticket>>,
-    /// Padata appended after the PA-TGS-REQ.
+    /// Appended after the PA-TGS-REQ.
     pub extra_padata: Vec<PaData>,
-    /// Offered encryption types.
     pub etypes: Vec<i32>,
-    /// Request addresses. `None` omits them.
     pub addresses: Option<HostAddresses>,
-    /// Postdated `from`. `None` omits it.
     pub from: Option<KerberosTime>,
-    /// Encrypted authorization data. `None` omits it.
     pub enc_authorization_data: Option<EncryptedData>,
-    /// Explicit end time. `None` is ten hours from now.
+    /// None is ten hours from now.
     pub till: Option<KerberosTime>,
-    /// Authenticator subkey. `None` omits it.
     pub subkey: Option<&'a ProtocolKey>,
 }
 
-/// TGS-REQ with explicit KDC options, tickets, padata, addresses, and times.
 pub fn tgs_req_ex(p: TgsReqParams<'_>) -> Result<TgsReq, Error> {
     let TgsReqParams {
         ticket,
@@ -225,7 +208,7 @@ pub fn tgs_req_ex(p: TgsReqParams<'_>) -> Result<TgsReq, Error> {
     let cksum_usage = KeyUsage::new(ku::TGS_REQ_AUTH_CKSUM)?;
     let mic = checksum(session, cksum_usage, &body_der)?;
     // MIT: `tgs_construct_ap_req` (lib/krb5/krb/send_tgs.c:82-82)
-    // the authenticator's time and microseconds, from `krb5_us_timeofday`.
+    // The authenticator's time and microseconds come from one reading.
     let (now, usec) = crate::auth_con::us_timeofday();
     let authenticator = Authenticator {
         authenticator_vno: Authenticator::VNO,
