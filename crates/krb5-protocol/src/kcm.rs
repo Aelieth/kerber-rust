@@ -1,5 +1,7 @@
-//! MIT KCM unix-socket client (Heimdal protocol, FILE v4 creds).
-//! Wire (cc_kcm.c): request is 4-byte length plus payload (major, minor, opcode, args). Reply is 4-byte length, 4-byte status, then that many bytes starting with another status. sssd-kcm 2.11/2.12 implements GET_CRED_LIST; RETRIEVE and REPLACE return FCC_INTERNAL.
+//! MIT KCM client. Credentials are FILE v4.
+//! A request is a 4-byte length, then major, minor, opcode and args.
+//! A reply is a 4-byte length and a status, then that many bytes, starting with another status.
+//! sssd-kcm answers GET_CRED_LIST. RETRIEVE and REPLACE return FCC_INTERNAL.
 
 use std::ffi::OsStr;
 use std::io::{self, Read, Write};
@@ -43,7 +45,6 @@ const KRB5_KCM_NO_SERVER: i32 = -1_750_600_181;
 
 /// The KCM socket when `kcm_socket` names none.
 // MIT: `DEFAULT_KCM_SOCKET_PATH` (kcm.h:43-43)
-/// the path.
 pub const KCM_SOCKET_DEFAULT: &str = "/var/run/.heim_org.h5l.kcm-socket";
 
 const SUN_PATH_LEN: usize = 108;
@@ -55,7 +56,8 @@ struct KcmIo {
 
 impl KcmIo {
     // MIT: `kcmio_unix_socket_connect` (cc_kcm.c:313-330)
-    /// a `kcm_socket` of `-`, or a socket that is not there, is `KRB5_KCM_NO_SERVER`; any other failure to connect is its errno.
+    /// A socket of "-", or one that is not there, is KRB5_KCM_NO_SERVER.
+    /// Any other failure to connect is its errno.
     fn connect(profile: &Krb5Conf) -> io::Result<Self> {
         Self::connect_to(kcm_socket_path(profile))
     }
@@ -216,8 +218,8 @@ fn socket_path_from(kcm_socket: Option<String>) -> PathBuf {
     PathBuf::from(kcm_socket.unwrap_or_else(|| KCM_SOCKET_DEFAULT.to_owned()))
 }
 
-/// The connect MIT makes for an empty value, `kcm_socket = ""`: its `sun_path` all zero, given with the whole `sizeof(addr)`, is the abstract socket named by 107 NUL bytes, which nothing binds, so the connect is refused (`ECONNREFUSED`); where there are no abstract sockets, that refusal is returned as is.
-/// `strlcpy` of the path into a zeroed address, then `connect` with `sizeof(addr)`.
+/// An empty kcm_socket is the abstract socket of 107 NUL bytes, which nothing binds.
+/// With no abstract sockets, that refusal is returned as is.
 fn connect_unnamed() -> io::Result<UnixStream> {
     #[cfg(target_os = "linux")]
     {
@@ -231,9 +233,8 @@ fn connect_unnamed() -> io::Result<UnixStream> {
     }
 }
 
-/// A connection to the KCM daemon, made and closed: what MIT's `kcm_resolve` checks first.
+/// A name resolves only when a KCM daemon answers.
 // MIT: `kcm_resolve` (cc_kcm.c:750-752)
-/// a cache name resolves only with a KCM daemon to ask.
 pub fn kcm_reachable(profile: &Krb5Conf) -> io::Result<()> {
     KcmIo::connect(profile).map(drop)
 }
@@ -344,7 +345,7 @@ fn get_principal(io: &mut KcmIo, name: &str) -> io::Result<(Realm, PrincipalName
     unmarshal_princ(&raw, &mut i)
 }
 
-/// Load `KCM:residual` (empty residual is the default cache).
+/// An empty residual is the default cache.
 pub fn kcm_load(profile: &Krb5Conf, residual: &str) -> io::Result<FileCcache> {
     let mut io = KcmIo::connect(profile)?;
     let name = default_or(&mut io, residual)?;
@@ -357,12 +358,12 @@ pub fn kcm_load(profile: &Krb5Conf, residual: &str) -> io::Result<FileCcache> {
     Ok(FileCcache::new(primary, creds))
 }
 
-/// Store a FILE v4 cache into `KCM:residual` and make it the collection default.
+/// Stored, and made the collection default.
 pub fn kcm_store(profile: &Krb5Conf, residual: &str, cc: &FileCcache) -> io::Result<()> {
     kcm_put(profile, residual, cc, true)
 }
 
-/// [`kcm_store`] without `SET_DEFAULT_CACHE` (kvno store-back).
+/// No SET_DEFAULT_CACHE. A kvno stores back into the same cache.
 pub fn kcm_store_keep_default(
     profile: &Krb5Conf,
     residual: &str,
@@ -371,17 +372,16 @@ pub fn kcm_store_keep_default(
     kcm_put(profile, residual, cc, false)
 }
 
-/// The collection's primary cache name.
 // MIT: `k5_kcm_primary_name` (cc_kcm.c:770-793)
-/// the GET_DEFAULT_CACHE answer.
+/// The GET_DEFAULT_CACHE answer.
 pub fn kcm_primary_name(profile: &Krb5Conf) -> io::Result<String> {
     let mut io = KcmIo::connect(profile)?;
     cstring(&io.call(OP_GET_DEFAULT_CACHE, &[])?)
 }
 
-/// Add `creds` to `KCM:residual` (empty is the primary), leaving its other credentials.
+/// The cache's other credentials stay.
 // MIT: `kcm_store` (cc_kcm.c:865-875)
-/// one STORE request per credential.
+/// One STORE request per credential.
 pub fn kcm_store_creds(profile: &Krb5Conf, residual: &str, creds: &[CcacheCred]) -> io::Result<()> {
     let mut io = KcmIo::connect(profile)?;
     let name = default_or(&mut io, residual)?;
@@ -409,14 +409,13 @@ fn kcm_put(
     Ok(())
 }
 
-/// Destroy `KCM:residual`.
 pub fn kcm_destroy(profile: &Krb5Conf, residual: &str) -> io::Result<()> {
     let mut io = KcmIo::connect(profile)?;
     let name = default_or(&mut io, residual)?;
     io.call(OP_DESTROY, &zname(&name)).map(|_| ())
 }
 
-/// `kswitch -c KCM:name` (SET_DEFAULT_CACHE).
+/// SET_DEFAULT_CACHE.
 pub fn kcm_switch(profile: &Krb5Conf, residual: &str) -> io::Result<()> {
     if residual.is_empty() {
         return Err(io::Error::new(
@@ -428,7 +427,6 @@ pub fn kcm_switch(profile: &Krb5Conf, residual: &str) -> io::Result<()> {
     io.call(OP_SET_DEFAULT_CACHE, &zname(residual)).map(|_| ())
 }
 
-/// Names of caches this uid can see.
 pub fn kcm_cache_names(profile: &Krb5Conf) -> io::Result<Vec<String>> {
     let mut io = KcmIo::connect(profile)?;
     let uuids = match io.call(OP_GET_CACHE_UUID_LIST, &[]) {
@@ -453,9 +451,8 @@ pub fn kcm_cache_names(profile: &Krb5Conf) -> io::Result<Vec<String>> {
     Ok(names)
 }
 
-/// The default principal of the cache `name`.
 // MIT: `kcm_get_princ` (cc_kcm.c:932-954)
-/// a GET_PRINCIPAL request; a cache that is not initialized is `KRB5_FCC_NOFILE`.
+/// A cache that is not initialized is KRB5_FCC_NOFILE.
 pub fn kcm_principal(profile: &Krb5Conf, name: &str) -> io::Result<(Realm, PrincipalName)> {
     let mut io = KcmIo::connect(profile)?;
     let raw = io.call(OP_GET_PRINCIPAL, &zname(name))?;
@@ -466,9 +463,9 @@ pub fn kcm_principal(profile: &Krb5Conf, name: &str) -> io::Result<(Realm, Princ
     unmarshal_princ(&raw, &mut i)
 }
 
-/// A new cache in the collection, not yet initialized.
+/// Not yet initialized.
 // MIT: `kcm_gen_new` (cc_kcm.c:795-822)
-/// the GEN_NEW answer names it.
+/// The GEN_NEW answer names it.
 pub fn kcm_gen_new(profile: &Krb5Conf) -> io::Result<String> {
     let mut io = KcmIo::connect(profile)?;
     cstring(&io.call(OP_GEN_NEW, &[])?)
