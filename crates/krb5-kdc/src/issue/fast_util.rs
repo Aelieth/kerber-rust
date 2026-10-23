@@ -16,6 +16,7 @@ const FAST_HIDE_CLIENT_NAMES_BIT: usize = 1;
 /// Bit 1 is kept; other critical bits are refused.
 pub(super) fn check_fast_options(opts: &krb5_types::fast::FastOptions) -> Result<(), Error> {
     // MIT: `kdc_find_fast` (fast_util.c:226-226)
+    // MIT: `UNSUPPORTED_CRITICAL_FAST_OPTIONS` (include/k5-int.h:802-802)
     let n = opts.len().min(16);
     for i in 0..n {
         if i == FAST_HIDE_CLIENT_NAMES_BIT {
