@@ -1,4 +1,4 @@
-//! Transited-realm walks (`walk_rtree.c` `krb5_walk_realm_tree`, `rtree_hier_realms`) and inter-realm krbtgt trust principals (`kdc_util.c` incoming / outgoing `krbtgt/<realm>`).
+//! Transited realms and inter-realm trust.
 
 use std::collections::BTreeMap;
 
@@ -12,6 +12,7 @@ use super::principal::Principal;
 use crate::acl::{Acl, AdminOp};
 use crate::error::Error;
 
+/// Any dot capath lists no intermediate.
 pub(super) fn permitted_transited(
     capaths: &BTreeMap<String, BTreeMap<String, Vec<String>>>,
     crealm: &str,
@@ -26,7 +27,6 @@ pub(super) fn permitted_transited(
     hierarchical_intermediates(crealm, srealm)
 }
 
-/// MIT `krb5_walk_realm_tree` instance list (`walk_rtree.c`): local, hops, dest.
 pub(crate) fn walk_realm_instances(
     capaths: &BTreeMap<String, BTreeMap<String, Vec<String>>>,
     client: &str,
@@ -50,6 +50,7 @@ pub(crate) fn walk_realm_instances(
     hierarchical_walk_realms(client, server)
 }
 
+/// An overlong realm name is not walked.
 pub(super) fn hierarchical_intermediates(client: &str, server: &str) -> Vec<String> {
     if client.len() >= MAX_TRANSIT_RAW || server.len() >= MAX_TRANSIT_RAW {
         return Vec::new();
@@ -75,13 +76,10 @@ pub(super) fn hierarchical_intermediates(client: &str, server: &str) -> Vec<Stri
 }
 
 impl PrincipalStore {
-    /// `[capaths]` from krb5.conf / kdc.conf.
     pub fn set_capaths(&mut self, capaths: BTreeMap<String, BTreeMap<String, Vec<String>>>) {
         self.policy.capaths = capaths;
     }
 
-    /// ACL-gated inter-realm `krbtgt/FOREIGN` (shared key with the foreign KDC).
-    /// [`Error::AclDenied`] when the ACL does not grant `actor` add on `krbtgt/FOREIGN`; [`Error::AlreadyExists`] when that principal exists; [`Error::PasswordPolicy`] when `password` is empty; [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn create_interrealm(
         &mut self,
         acl: &Acl,
@@ -107,8 +105,6 @@ impl PrincipalStore {
         self.save_if_configured()
     }
 
-    /// Inter-realm `krbtgt/FOREIGN` with an explicit shared key (same bytes on both KDCs; default salts would diverge).
-    /// [`Error::AclDenied`] when the ACL does not grant `actor` add on `krbtgt/FOREIGN`; [`Error::AlreadyExists`] when that principal exists; [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn create_interrealm_key(
         &mut self,
         acl: &Acl,
@@ -130,7 +126,6 @@ impl PrincipalStore {
             vec![KeyEntry::new(key.etype(), key, 1)],
             salt,
             // MIT: `kadm5_create_principal_3` (lib/kadm5/srv/svr_principal.c:391-394)
-            // a principal created without a `max_life` takes the realm's.
             crate::store::PrincipalFields {
                 requires_preauth: false,
                 max_life: self.policy.max_life,
@@ -143,9 +138,6 @@ impl PrincipalStore {
         self.save_if_configured()
     }
 
-    /// Incoming trust `krbtgt/<local>@<foreign>` (MIT KDB naming).
-    /// `replace` drops keys already on that principal (the first `KRB5_TEST_INTERREALM_KEY_ACCEPT` value). Further keys append.
-    /// [`Error::AclDenied`] when the ACL does not grant `actor` add on the incoming trust principal; [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn add_interrealm_decrypt_key(
         &mut self,
         acl: &Acl,
@@ -156,8 +148,6 @@ impl PrincipalStore {
         self.put_incoming_trust_key(acl, actor, foreign_realm, key, false)
     }
 
-    /// Replace keys on the incoming trust principal.
-    /// [`Error::AclDenied`] when the ACL does not grant `actor` add on the incoming trust principal; [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn set_interrealm_decrypt_key(
         &mut self,
         acl: &Acl,
@@ -169,8 +159,7 @@ impl PrincipalStore {
     }
 
     // MIT: `create_principal_2_svc` (server_stubs.c:477-485)
-    /// an ACL denial does not create the principal.
-    /// Replacing the trust key drops the previous versions, and adding one uses the next kvno rather than reusing the current one.
+    /// An ACL denial creates nothing.
     fn put_incoming_trust_key(
         &mut self,
         acl: &Acl,
