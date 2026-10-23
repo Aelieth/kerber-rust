@@ -8,12 +8,11 @@ use krb5_types::{PrincipalName, Realm, kerberos_string_from_bytes};
 /// FILE v4 header tag: KDC time offset (`sec`, `usec`).
 pub const FCC_TAG_DELTATIME: u16 = 1;
 
-/// MIT FILE/KCM/KEYRING v4 keyblock. Enctype 0 is a config entry. `Debug` shows the enctype and the key's length, never its octets.
+/// Enctype 0 is a config entry. Debug shows the enctype and the length, never the octets.
 #[derive(Clone, PartialEq, Eq)]
 pub struct CcacheKeyblock {
-    /// Enctype as stored (16-bit, sign-extended on read).
+    /// Stored as 16 bits, sign-extended on read.
     pub etype: i16,
-    /// Key octets.
     pub contents: Vec<u8>,
 }
 
@@ -38,8 +37,7 @@ impl CcacheKeyblock {
         }
     }
 
-    /// Parse as a [`ProtocolKey`] when the enctype is implemented.
-    /// `io::ErrorKind::InvalidData` when the enctype is not implemented or the key length does not match it.
+    /// InvalidData when the enctype is unknown or the length does not match.
     pub fn protocol_key(&self) -> Result<ProtocolKey, io::Error> {
         let et = EncryptionType::known(i32::from(self.etype))
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
@@ -50,31 +48,23 @@ impl CcacheKeyblock {
 
 #[derive(Clone)]
 pub struct CcacheCred {
-    /// Client principal.
     pub client: (Realm, PrincipalName),
-    /// Server principal.
     pub server: (Realm, PrincipalName),
-    /// Session key (etype 0 + empty for MIT config).
+    /// Etype 0 and empty, for a config entry.
     pub key: CcacheKeyblock,
-    /// Unix authtime (`u32::MAX` is MIT tombstone `-1`).
+    /// u32::MAX is MIT's tombstone -1.
     pub authtime: u32,
-    /// Unix starttime.
     pub starttime: u32,
-    /// Unix endtime (0 with nonzero authtime is a tombstone).
+    /// 0 with a nonzero authtime is a tombstone.
     pub endtime: u32,
-    /// Unix renew_till (0 if none).
     pub renew_till: u32,
-    /// `is_skey` (0 or 1).
     pub is_skey: u8,
-    /// Ticket flags as a 32-bit MIT integer (MSB is RFC bit 0).
+    /// MSB is RFC bit 0.
     pub ticket_flags: u32,
-    /// Addresses: (addrtype, value).
     pub addresses: Vec<(u16, Vec<u8>)>,
-    /// Authdata: (ad_type, value). `ad_type` is signed.
+    /// ad_type is signed.
     pub authdata: Vec<(i16, Vec<u8>)>,
-    /// DER-encoded Ticket.
     pub ticket: Vec<u8>,
-    /// Second ticket (user-to-user).
     pub second_ticket: Vec<u8>,
 }
 
@@ -89,8 +79,6 @@ impl CcacheCred {
         self.endtime == 0 && self.authtime != 0
     }
 
-    /// Session key when the enctype is implemented.
-    /// `io::ErrorKind::InvalidData` when the enctype is not implemented or the key length does not match it.
     pub fn session_key(&self) -> Result<ProtocolKey, io::Error> {
         self.key.protocol_key()
     }
@@ -157,7 +145,7 @@ pub(crate) fn unmarshal_princ(
     for _ in 0..ncomp {
         parts.push(take_data(b, i)?);
     }
-    // FILE name fields are raw octets in MIT; we require ASCII GeneralString.
+    // FILE names are raw octets in MIT. This parse requires ASCII.
     let realm = kerberos_string_from_bytes(&realm_b)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
     let name = PrincipalName::try_from_bytes(ntype, parts)
@@ -190,9 +178,9 @@ pub(crate) fn marshal_cred(w: &mut Writer, c: &CcacheCred) {
     w.data(&c.second_ticket);
 }
 
-/// The length of `c` as [`marshal_cred`] writes it, so that a record's buffer is sized before the session key goes in and no reallocation leaves a copy of it behind.
+/// The marshalled length, so the buffer is sized before the session key is copied in.
 // MIT: `k5_marshal_cred` (ccmarshal.c:429-447)
-/// the client, the server, the keyblock, the times, `is_skey`, the flags, the addresses, the authdata, the ticket and the second ticket, in turn.
+/// Client, server, key, times, flags, addresses, authdata, then both tickets.
 pub(crate) fn cred_len(c: &CcacheCred) -> usize {
     let data = |b: &[u8]| 4 + b.len();
     let princ = |realm: &Realm, name: &PrincipalName| {
@@ -219,8 +207,8 @@ pub(crate) fn cred_len(c: &CcacheCred) -> usize {
 }
 
 // MIT: `k5_unmarshal_cred` (ccmarshal.c:306-310)
-/// a truncated credential is a format error and is not returned half-parsed.
-/// An address or authdata count larger than the bytes still in the buffer is rejected before those lists are walked.
+/// A truncated credential is a format error, not a half-parsed one.
+/// A count larger than the bytes left is rejected before the list is walked.
 pub(crate) fn unmarshal_cred(b: &[u8], i: &mut usize) -> Result<CcacheCred, io::Error> {
     let client = unmarshal_princ(b, i)?;
     let server = unmarshal_princ(b, i)?;
