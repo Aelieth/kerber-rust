@@ -1,11 +1,10 @@
-//! Length-prefixed messages on a stream (RFC 4120 §7.2.2 TCP, RFC 3244 kpasswd over TCP, kprop), each call written with one write.
+//! Length-prefixed messages, each call written with one write.
 
 use std::io::{self, Write};
 
-/// Write `messages`, each behind its 4-byte big-endian length, with one write and a flush, so a message and its length leave together: two writes put the 4-byte length in a segment of its own, and Nagle then holds the message until the peer's delayed ACK (about 40 ms).
 // MIT: `k5_write_messages` (lib/krb5/os/write_msg.c:39-70)
-/// the lengths and the messages go out in one writev, "to avoid Nagle/DelayedAck problems".
-/// The error of the write or the flush; `InvalidInput` for a message of 4 GiB or more.
+/// A lone length lets Nagle hold the message.
+/// A message of 4 GiB or more is InvalidInput.
 pub fn write_messages(w: &mut impl Write, messages: &[&[u8]]) -> io::Result<()> {
     let mut out = Vec::with_capacity(messages.iter().map(|m| 4 + m.len()).sum());
     for m in messages {
