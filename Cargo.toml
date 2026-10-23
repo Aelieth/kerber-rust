@@ -18,6 +18,7 @@ members = [
     "examples/consumer",
     "examples/kdc-consumer",
     "examples/otp-kdc",
+    "examples/embed-realm",
 ]
 
 [workspace.package]

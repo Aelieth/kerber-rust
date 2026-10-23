@@ -677,6 +677,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "krb5-embed-realm-example"
+version = "1.1.0"
+dependencies = [
+ "krb5-admin",
+ "krb5-config",
+ "krb5-kdc",
+ "krb5-log",
+ "signal-hook",
+]
+
+[[package]]
 name = "krb5-gss"
 version = "1.1.0"
 dependencies = [
