@@ -21,13 +21,13 @@ use crate::tgs::tgs_exchange;
 use crate::transport::KdcAddr;
 
 // MIT: `nofail` (vfy_increds.c:38-51)
-/// programmatic `ap_req_nofail` overrides `[libdefaults] verify_ap_req_nofail`.
+/// A set option overrides the profile.
 #[must_use]
 pub fn verify_init_creds_nofail(opt_nofail: Option<bool>, conf_nofail: bool) -> bool {
     opt_nofail.unwrap_or(conf_nofail)
 }
 
-/// MIT `krb5_kt_get_entry(keytab, server, 0, 0)`: name + realm, any kvno.
+/// Name and realm only. Any kvno or enctype.
 #[must_use]
 pub fn keytab_has_server(keytab: &Keytab, realm: &Realm, name: &PrincipalName) -> bool {
     let realm_b = realm.as_bytes();
@@ -38,7 +38,7 @@ pub fn keytab_has_server(keytab: &Keytab, realm: &Realm, name: &PrincipalName) -
 }
 
 // MIT: `get_host_princs_from_keytab` (vfy_increds.c:221-257)
-/// lists every unique two-component `host/` principal in the keytab, in keytab order.
+/// Unique two-component host principals, in keytab order.
 #[must_use]
 pub fn host_princs_from_keytab(keytab: &Keytab) -> Vec<(Realm, PrincipalName)> {
     let mut out = Vec::new();
@@ -56,10 +56,10 @@ pub fn host_princs_from_keytab(keytab: &Keytab) -> Vec<(Realm, PrincipalName)> {
     out
 }
 
-/// Verify initial creds against a keytab.
 // MIT: `krb5_verify_init_creds` (vfy_increds.c:259-321)
-/// verifies initial creds against the given or default keytab.
-/// `keytab` `None` is a missing or unreadable default keytab. No host keys (and a requested server that is not in the keytab) succeed unless `nofail`. `ccache` output is omitted; MIT `t_vfy_increds` passes NULL.
+/// None is a missing default keytab.
+/// No keys succeed unless nofail.
+/// No ccache is written.
 pub fn verify_init_creds(
     profile: &Krb5Conf,
     creds: &CcacheCred,
@@ -69,7 +69,7 @@ pub fn verify_init_creds(
     nofail: bool,
 ) -> Result<(), Error> {
     // MIT: `get_vfy_cred` (lib/krb5/krb/vfy_increds.c:151-151)
-    // `krb5_rd_req` on the caller's own context, whose profile is krb5.conf.
+    // The profile is krb5.conf, not the KDC profile.
     let conf = AcceptorConfig::from_krb5_conf(profile);
     let mut last = Err(no_verify_keys());
     let mut have_keys = false;
@@ -109,7 +109,8 @@ fn princ_eq(a: &(Realm, PrincipalName), realm: &Realm, name: &PrincipalName) -> 
 }
 
 // MIT: `get_vfy_cred` (vfy_increds.c:90-94)
-/// a credential already for the named server is what builds the AP-REQ. Any other server is reached by a TGS exchange first, and the AP-REQ is checked only against that server's keytab entries.
+/// A cred for that server is used as is.
+/// Any other server is reached by a TGS exchange first.
 fn get_vfy_cred(
     profile: &Krb5Conf,
     creds: &CcacheCred,
