@@ -1,51 +1,35 @@
-//! MIT `kdc/replay.c` lookaside reply cache: a retransmitted request, keyed by its exact request bytes, is answered from the cache instead of re-processed.
-//!
-//! MIT's KDC is single-threaded, so `kdc/replay.c` uses no locking; the KDC's one net-server loop owns its [`Lookaside`] in its dispatcher ([`crate::issue::KdcDispatch`]) and uses none either. Direct callers of `issue_as`/`issue_tgs`/`handle_request` bypass the cache, as MIT's request processing does.
+//! Lookaside replies.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 // MIT: `STALE_TIME` (kdc/replay.c:59-59)
-/// two minutes.
 pub(crate) const STALE_TIME: Duration = Duration::from_secs(120);
 // MIT: `LOOKASIDE_MAX_SIZE` (kdc/replay.c:44-44)
-/// 10 MiB.
 pub(crate) const MAX_SIZE: usize = 10 * 1024 * 1024;
-/// Rough per-entry overhead, standing in for MIT's `sizeof(struct entry)`.
 const ENTRY_OVERHEAD: usize = 64;
 
 struct Entry {
     timein: Instant,
-    /// `None` marks a request that is still being processed (MIT inserts a NULL reply); `Some` is a completed reply to resend.
     reply: Option<Vec<u8>>,
-    /// The entry's place in the queue: slot `seq - head` of `order`.
     seq: u64,
     size: usize,
 }
 
-/// The outcome of checking a request against the cache.
 pub enum Check {
-    /// A completed reply is cached; resend these bytes.
     Hit(Vec<u8>),
-    /// The request is being processed already; drop this duplicate (MIT `KRB5KDC_ERR_DISCARD`).
     InProgress,
-    /// Not seen before; the caller marked it in-progress and must process it, then call [`Lookaside::finish`].
     Fresh,
 }
 
-/// A bounded request→reply cache with stale-entry and total-size eviction.
-/// The request bytes are held once, shared by the map and the FIFO, so memory tracks MIT's accounting (`req_packet + reply_packet + sizeof(entry)`).
 pub(crate) struct Lookaside {
     map: HashMap<Arc<[u8]>, Entry>,
-    /// The FIFO MIT keeps in `expiration_queue`, oldest first; slot `i` holds the entry whose `seq` is `head + i`. A discarded entry's slot is emptied at once, so it keeps none of the request's bytes, and is dropped when it reaches the front.
     order: VecDeque<Option<Arc<[u8]>>>,
-    /// The `seq` of `order`'s first slot.
     head: u64,
     total: usize,
     max_size: usize,
     stale: Duration,
-    /// Set once the size cap first forces an eviction; the KDC log line lets a soak tell the cache filling (bounded) from a leak (unbounded).
     full_logged: bool,
 }
 
@@ -56,13 +40,11 @@ impl Default for Lookaside {
 }
 
 impl Lookaside {
-    /// A cache with the MIT default limits.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// A cache with explicit limits (tests exercise eviction with small ones).
     #[must_use]
     pub fn with_limits(max_size: usize, stale: Duration) -> Self {
         Self {
@@ -76,7 +58,6 @@ impl Lookaside {
         }
     }
 
-    /// MIT `kdc_check_lookaside` + the `kdc_insert_lookaside(pkt, NULL)` marker: a hit resends the cached reply, an in-progress hit drops the duplicate, and a miss records an in-progress marker so a concurrent duplicate is dropped while this request is processed.
     pub(crate) fn check_or_mark(&mut self, req: &[u8]) -> Check {
         if let Some(e) = self.map.get(req) {
             return match &e.reply {
@@ -88,9 +69,8 @@ impl Lookaside {
         Check::Fresh
     }
 
-    /// MIT `finish_dispatch_cache`: drop the in-progress marker and cache the produced reply. A reply of `None` (a drop, or an internal error) caches nothing, like MIT removing the marker without inserting a response.
     // MIT: `finish_dispatch_cache` (dispatch.c:78-83)
-    /// the marker is removed whole, then a reply is inserted as a new entry at the queue's tail.
+    /// An empty reply is not stored.
     pub fn finish(&mut self, req: &[u8], reply: Option<&[u8]>) {
         let key = self.discard(req);
         if let Some(bytes) = reply
@@ -100,9 +80,7 @@ impl Lookaside {
         }
     }
 
-    /// Remove `req`'s entry from the map and empty its queue slot, returning the request's bytes for reuse.
     // MIT: `discard_entry` (kdc/replay.c:118-125)
-    /// an entry leaves the hash table and the expiration queue together, and its bytes go with it.
     fn discard(&mut self, req: &[u8]) -> Option<Arc<[u8]>> {
         let (key, e) = self.map.remove_entry(req)?;
         self.total -= e.size;
@@ -134,6 +112,7 @@ impl Lookaside {
         );
     }
 
+    /// Size eviction logs once.
     fn note_full(&mut self) {
         if self.full_logged {
             return;
@@ -149,7 +128,6 @@ impl Lookaside {
         );
     }
 
-    /// MIT `kdc_insert_lookaside`'s purge loop: from the oldest end, drop stale entries and keep dropping until `incoming` fits under `max_size`.
     fn evict(&mut self, incoming: usize) {
         let now = Instant::now();
         while let Some(front) = self.order.front() {
