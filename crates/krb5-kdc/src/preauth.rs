@@ -645,7 +645,6 @@ pub(crate) fn process_pkinit(
 
 // MIT: `cms_signeddata_verify` (plugins/preauth/pkinit/pkinit_crypto_openssl.c:2163-2209)
 // MIT: `pkinit_create_edata` (plugins/preauth/pkinit/pkinit_srv.c:101-138)
-/// Cannot-verify names the KDC's anchors; any other chain fault names the certificate.
 fn cms_fault(
     store: &dyn PrincipalRead,
     kdc: &crate::pkinit::PkinitKdc,
