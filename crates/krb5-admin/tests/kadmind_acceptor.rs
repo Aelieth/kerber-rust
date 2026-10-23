@@ -4,15 +4,13 @@
 
 use std::io::{Read as _, Write as _};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use krb5_admin::{Kadmind, serve_kadmind_until};
+use krb5_admin::{Kadmind, Listeners, Programs, Shutdown};
 use krb5_crypto::{KeyUsage, ProtocolKey, encrypt};
 use krb5_gss::GssContext;
-use krb5_kdc::net_server::Sockets;
 use krb5_kdc::principals::{kadmin_admin, kadmin_changepw, kadmin_history};
 use krb5_kdc::testrealm::{
     TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
@@ -55,7 +53,7 @@ fn realm() -> (Arc<RwLock<PrincipalStore>>, krb5_kdc::Acl) {
 struct Served {
     rpc: SocketAddr,
     store: Arc<RwLock<PrincipalStore>>,
-    stop: Arc<AtomicBool>,
+    stop: Shutdown,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -65,16 +63,13 @@ impl Served {
         let served_store = Arc::clone(&store);
         let rpc = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = rpc.local_addr().unwrap();
-        let stop = Arc::new(AtomicBool::new(false));
-        let flag = Arc::clone(&stop);
+        let stop = Shutdown::new();
+        let flag = stop.clone();
         let thread = std::thread::spawn(move || {
             let mut kadmind = Kadmind::new(served_store, acl, None, AcceptorConfig::default());
-            let rpc = [rpc];
-            let sockets = Sockets {
-                rpc: &rpc,
-                ..Sockets::default()
-            };
-            serve_kadmind_until(&mut kadmind, &sockets, &flag, Duration::from_millis(20)).unwrap();
+            let listeners =
+                Listeners::from_sockets(Vec::new(), Vec::new(), vec![rpc], Programs::BOTH);
+            kadmind.serve(&listeners, &flag).unwrap();
         });
         Self {
             rpc: addr,
@@ -123,7 +118,7 @@ impl Served {
 
 impl Drop for Served {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::SeqCst);
+        self.stop.trigger();
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }

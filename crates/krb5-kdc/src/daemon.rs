@@ -273,6 +273,55 @@ impl Signals {
     }
 }
 
+/// A programmatic stop for [`net_server::run`](crate::net_server::run)'s loop: [`Shutdown::trigger`]
+/// wakes the poll at once through a self-pipe, or, if the pipe cannot be made, the loop polls the
+/// flag every 1000 ms.
+#[derive(Clone)]
+pub struct Shutdown {
+    stop: Arc<AtomicBool>,
+    read: Option<Arc<OwnedFd>>,
+    write: Option<Arc<OwnedFd>>,
+}
+
+impl Shutdown {
+    #[must_use]
+    pub fn new() -> Self {
+        let (read, write) = match nix::unistd::pipe2(
+            nix::fcntl::OFlag::O_CLOEXEC | nix::fcntl::OFlag::O_NONBLOCK,
+        ) {
+            Ok((r, w)) => (Some(Arc::new(r)), Some(Arc::new(w))),
+            Err(_) => (None, None),
+        };
+        Self {
+            stop: Arc::new(AtomicBool::new(false)),
+            read,
+            write,
+        }
+    }
+
+    /// Stop the loop and wake it now.
+    pub fn trigger(&self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(w) = &self.write {
+            let _ = nix::unistd::write(w.as_ref(), &[0u8]);
+        }
+    }
+
+    pub(crate) fn wake_fd(&self) -> Option<&OwnedFd> {
+        self.read.as_deref()
+    }
+
+    pub(crate) fn stop_requested(&self) -> bool {
+        self.stop.load(Ordering::Relaxed)
+    }
+}
+
+impl Default for Shutdown {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 #[allow(
     clippy::disallowed_methods,

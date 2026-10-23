@@ -12,7 +12,7 @@ use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 use nix::sys::socket::{setsockopt, sockopt};
 use zeroize::Zeroizing;
 
-use crate::daemon::Signals;
+use crate::daemon::{Shutdown, Signals};
 use crate::listen::{WHILE_DISPATCHING_TCP, WHILE_DISPATCHING_UDP, recv_from_to, send_udp_reply};
 
 // MIT: `max_stream_data_connections` (lib/apputils/net-server.c:85-85)
@@ -715,6 +715,7 @@ fn panic_isolated() {
 
 pub enum Wake<'a> {
     Signals(&'a Signals),
+    Shutdown(&'a Shutdown),
     Flag {
         stop: &'a AtomicBool,
         every: Duration,
@@ -803,11 +804,24 @@ pub fn run(
             Some(fd) => (Some(fd), PollTimeout::NONE),
             None => (None, PollTimeout::from(1000u16)),
         },
+        Wake::Shutdown(sd) => match sd.wake_fd() {
+            Some(fd) => (Some(fd), PollTimeout::NONE),
+            None => (None, PollTimeout::from(1000u16)),
+        },
         Wake::Flag { every, .. } => {
             let ms = u16::try_from(every.as_millis()).unwrap_or(u16::MAX).max(1);
             (None, PollTimeout::from(ms))
         }
     };
+    let already_stopped = match wake {
+        Wake::Shutdown(sd) => sd.stop_requested(),
+        Wake::Flag { stop, .. } => stop.load(Ordering::Relaxed),
+        // Signals keeps its pipe-byte wake so a stop during start-up still logs `do_break`.
+        Wake::Signals(_) => false,
+    };
+    if already_stopped {
+        return Ok(streams.open_fds());
+    }
     loop {
         let ready = wait(pipe, sockets, &streams, &paused, timeout)?;
         for r in ready {
@@ -841,6 +855,11 @@ pub fn run(
                 if s.stop_requested() {
                     // MIT: `do_break` (lib/apputils/net-server.c:235-238)
                     log.syslog(Severity::Debug, "Got signal to request exit");
+                    return Ok(streams.open_fds());
+                }
+            }
+            Wake::Shutdown(sd) => {
+                if sd.stop_requested() {
                     return Ok(streams.open_fds());
                 }
             }

@@ -48,7 +48,7 @@ pub use audit::{
 pub use create::seed_test_principals;
 pub use create::{add_admin_principals, create_realm, create_realm_db, kdc_conf_for_realm};
 pub use daemon::{
-    OpenFailure, Signals, copy_persist_master, database_path, detach, json_log_filter,
+    OpenFailure, Shutdown, Signals, copy_persist_master, database_path, detach, json_log_filter,
     kadmind_mkey_from_kbd, manual_master_key, mkey_log_context, names_relative_database,
     open_database, open_database_with_key, open_database_with_password, write_pid_file,
 };

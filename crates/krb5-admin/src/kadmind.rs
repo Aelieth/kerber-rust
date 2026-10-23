@@ -1,7 +1,7 @@
 //! kadmind's one loop: kpasswd over UDP and TCP and the kadm5 and iprop RPC programs, served from MIT's net-server loop on the caller's thread, as MIT's kadmind serves them from the loop `setup_loop` builds. Every connection, kpasswd's and kadm5's alike, counts toward the one cap of 45.
 
 use std::io;
-use std::net::SocketAddr;
+use std::net::{SocketAddr, TcpListener, UdpSocket};
 use std::os::fd::RawFd;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, PoisonError};
@@ -13,7 +13,7 @@ use krb5_kdc::net_server::{
     Sockets, Wake,
 };
 use krb5_kdc::{
-    Acl, SharedDump as SharedStore, Signals, WHILE_DISPATCHING_TCP, WHILE_DISPATCHING_UDP,
+    Acl, SharedDump as SharedStore, Shutdown, Signals, WHILE_DISPATCHING_TCP, WHILE_DISPATCHING_UDP,
 };
 use krb5_protocol::{AcceptorConfig, ReplayCache};
 
@@ -61,6 +61,26 @@ impl Kadmind {
     pub fn report_unhandled(mut self, report: UnhandledRpc) -> Self {
         self.report = Some(report);
         self
+    }
+
+    /// Serve `listeners` on the calling thread (blocking) until `stop` is triggered: kpasswd over
+    /// UDP and TCP, kadm5 and iprop over the RPC listeners. Returns the descriptors still open.
+    pub fn serve(&mut self, listeners: &Listeners, stop: &Shutdown) -> io::Result<ServeSummary> {
+        self.programs = listeners.programs;
+        let sockets = Sockets {
+            udp: &listeners.udp,
+            tcp: &listeners.tcp,
+            rpc: &listeners.rpc,
+        };
+        net_server::run(
+            self,
+            &sockets,
+            MAX_STREAM_DATA_CONNECTIONS,
+            MAX_REQUEST,
+            &Wake::Shutdown(stop),
+            &mut Klog,
+        )
+        .map(|open_fds| ServeSummary { open_fds })
     }
 
     fn realm(&self) -> String {
@@ -139,6 +159,37 @@ impl Dispatch for Kadmind {
             self.report.clone(),
         )))
     }
+}
+
+/// The pre-bound sockets kadmind serves: `udp` and `tcp` are kpasswd, `rpc` is kadm5 and iprop,
+/// with `programs` naming which of the two the `rpc` listeners carry.
+pub struct Listeners {
+    pub(crate) udp: Vec<UdpSocket>,
+    pub(crate) tcp: Vec<TcpListener>,
+    pub(crate) rpc: Vec<TcpListener>,
+    pub(crate) programs: Programs,
+}
+
+impl Listeners {
+    #[must_use]
+    pub fn from_sockets(
+        udp: Vec<UdpSocket>,
+        tcp: Vec<TcpListener>,
+        rpc: Vec<TcpListener>,
+        programs: Programs,
+    ) -> Self {
+        Self {
+            udp,
+            tcp,
+            rpc,
+            programs,
+        }
+    }
+}
+
+/// What [`Kadmind::serve`] leaves open when it stops, newest first.
+pub struct ServeSummary {
+    pub open_fds: Vec<RawFd>,
 }
 
 /// Serve `sockets` to `kadmind` from one loop on this thread until SIGINT, SIGTERM or SIGQUIT, SIGHUP reopening the log: kpasswd on `udp` and `tcp`, kadm5 and iprop on `rpc`, at most 45 connections together. Returns the descriptors of the connections still open, the newest first, for kadmind's last lines.

@@ -1,35 +1,27 @@
-//! kadmind's one loop ([`krb5_admin::serve_kadmind_until`]) serves kpasswd's TCP streams and the kadm5 RPC connections as MIT's net-server serves kadmind's: a kpasswd length past the buffer is answered with MIT's KRB-ERROR, and an RPC connection stays open between its calls, a call that does not decode getting no reply and a call whose credential or verifier does not check out MIT's RPC auth error, as MIT's.
+//! kadmind's one loop ([`krb5_admin::Kadmind::serve`]) serves kpasswd's TCP streams and the kadm5 RPC connections as MIT's net-server serves kadmind's: a kpasswd length past the buffer is answered with MIT's KRB-ERROR, and an RPC connection stays open between its calls, a call that does not decode getting no reply and a call whose credential or verifier does not check out MIT's RPC auth error, as MIT's.
 
 use std::io::{Read as _, Write as _};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use krb5_admin::{Kadmind, serve_kadmind_until};
+use krb5_admin::{Kadmind, Listeners, Programs, Shutdown};
 use krb5_asn1::decode;
 use krb5_crypto::{EncryptionType, ProtocolKey};
 use krb5_gss::GssContext;
 use krb5_kdc::SharedDump;
-use krb5_kdc::net_server::Sockets;
 use krb5_kdc::principals::{kadmin_admin, kadmin_changepw};
 use krb5_kdc::testrealm::{TEST_REALM, bootstrap_documented};
 use krb5_protocol::{AcceptorConfig, as_req_sname, pa_enc_timestamp};
 use krb5_types::{KrbError, PrincipalName, ascii, err};
 
-fn serving() -> (SocketAddr, SocketAddr, Arc<AtomicBool>, JoinHandle<()>) {
+fn serving() -> (SocketAddr, SocketAddr, Shutdown, JoinHandle<()>) {
     let (kpasswd, rpc, _, stop, served) = serving_with_store();
     (kpasswd, rpc, stop, served)
 }
 
-fn serving_with_store() -> (
-    SocketAddr,
-    SocketAddr,
-    SharedDump,
-    Arc<AtomicBool>,
-    JoinHandle<()>,
-) {
+fn serving_with_store() -> (SocketAddr, SocketAddr, SharedDump, Shutdown, JoinHandle<()>) {
     let (store, acl) = bootstrap_documented().unwrap();
     let key = store
         .get_name(&kadmin_changepw())
@@ -43,23 +35,19 @@ fn serving_with_store() -> (
     let kpasswd = TcpListener::bind("127.0.0.1:0").unwrap();
     let rpc = TcpListener::bind("127.0.0.1:0").unwrap();
     let addrs = (kpasswd.local_addr().unwrap(), rpc.local_addr().unwrap());
-    let stop = Arc::new(AtomicBool::new(false));
-    let flag = Arc::clone(&stop);
+    let stop = Shutdown::new();
+    let flag = stop.clone();
     let served = std::thread::spawn(move || {
         let mut kadmind = Kadmind::new(served_store, acl, Some(key), AcceptorConfig::default());
-        let (tcp, rpc) = ([kpasswd], [rpc]);
-        let sockets = Sockets {
-            tcp: &tcp,
-            rpc: &rpc,
-            ..Sockets::default()
-        };
-        serve_kadmind_until(&mut kadmind, &sockets, &flag, Duration::from_millis(20)).unwrap();
+        let listeners =
+            Listeners::from_sockets(Vec::new(), vec![kpasswd], vec![rpc], Programs::BOTH);
+        kadmind.serve(&listeners, &flag).unwrap();
     });
     (addrs.0, addrs.1, shared, stop, served)
 }
 
-fn stop(flag: &AtomicBool, served: JoinHandle<()>) {
-    flag.store(true, Ordering::SeqCst);
+fn stop(flag: &Shutdown, served: JoinHandle<()>) {
+    flag.trigger();
     served.join().unwrap();
 }
 
@@ -157,21 +145,11 @@ fn kadmind_is_served_from_another_thread_with_its_reporter() {
     }));
     let rpc = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = rpc.local_addr().unwrap();
-    let flag = Arc::new(AtomicBool::new(false));
-    let stop_flag = Arc::clone(&flag);
+    let flag = Shutdown::new();
+    let stop_flag = flag.clone();
     let served = std::thread::spawn(move || {
-        let rpc = [rpc];
-        let sockets = Sockets {
-            rpc: &rpc,
-            ..Sockets::default()
-        };
-        serve_kadmind_until(
-            &mut kadmind,
-            &sockets,
-            &stop_flag,
-            Duration::from_millis(20),
-        )
-        .unwrap();
+        let listeners = Listeners::from_sockets(Vec::new(), Vec::new(), vec![rpc], Programs::BOTH);
+        kadmind.serve(&listeners, &stop_flag).unwrap();
     });
     let mut c = connect(addr);
     c.write_all(&record(&auth_none_call(7))).unwrap();
