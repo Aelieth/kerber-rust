@@ -2,6 +2,7 @@
 
 mod acceptor;
 mod auth;
+pub(crate) mod auth_plugin;
 mod codes;
 mod dispatch;
 mod glob;

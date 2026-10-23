@@ -625,15 +625,7 @@ pub(crate) fn handle_kpasswd_from(
             "Ticket must be derived from a password".to_owned(),
             "Operation requires initial ticket".to_owned(),
         )
-    } else if !self_change
-        && acl
-            .check(
-                &client,
-                krb5_kdc::AdminOp::ChangePassword,
-                Some(&target_unparsed),
-            )
-            .is_err()
-    {
+    } else if !crate::kadm5::auth_plugin::AuthStack::builtin(acl).cpw(&client, &target_unparsed) {
         (
             5u16,
             "Unauthorized request".to_owned(),

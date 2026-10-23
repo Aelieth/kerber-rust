@@ -27,17 +27,17 @@ pub(super) fn unix_now() -> u32 {
 
 /// `auth_restrict` for a modify request: the actor's ACL restrictions, if any, imposed on the parsed `(mask, fields)`.
 pub(super) fn impose_request_restrictions(
-    acl: &krb5_kdc::Acl,
-    actor: &str,
-    tid: &str,
+    rss: &[krb5_kdc::Restrictions],
     mask: u32,
     mut fields: ModFields,
 ) -> (u32, ModFields) {
-    let Some(rs) = acl.restrictions(actor, Some(tid)) else {
+    if rss.is_empty() {
         return (mask, fields);
-    };
+    }
     let mut ent = fields.admin_ent(mask);
-    rs.impose(&mut ent, unix_now());
+    for rs in rss {
+        rs.impose(&mut ent, unix_now());
+    }
     let mask = fields.take_admin_ent(ent);
     (mask, fields)
 }

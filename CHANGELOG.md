@@ -28,6 +28,7 @@ any other `###` heading.
 - **kdc/protocol.** A new password is keyed up to its first NUL, as MIT's C string; the kpasswd client wipes its encoded authenticator. Lab beside MIT.
 - **config.** kdc.conf is read for the served realm alone, and `reject_bad_transit`, `disable_pac` and `restrict_anonymous_to_tgt` as MIT reads them. Lab beside MIT.
 - **config/kdc.** `[libdefaults] clockskew`, kdc.conf's first, is the KDC's skew (it was always 300), read as MIT's integer. Lab beside MIT.
+- **admin.** kadm5 and kpasswd authorize on the principal an alias resolves to, not the alias, and read a caller's own policy in its realm, as MIT's stubs do.
 - **admin.** kpasswd checks an AP-REQ's time against the profile's `clockskew`, kdc.conf's first, not a fixed 300 s; a negative one is kept, as MIT's. Lab beside MIT.
 - **admin/gss.** kadmind and kpropd read the profile once, kdc.conf first: no request opens krb5.conf or kdc.conf, and kpropd's skew is the profile's. Lab beside MIT.
 - **gss/protocol.** GSS's receive window is MIT's 64-number bitmap; the replay cache keeps MIT's tag for the clock skew, and a full cache refuses a new tag, not a live one.

@@ -260,11 +260,13 @@ impl Acl {
         })
     }
 
-    pub fn check(&self, actor: &str, op: AdminOp, target: Option<&str>) -> Result<(), Error> {
+    // MIT: `acl_check` (kadmin/server/auth_acl.c)
+    #[must_use]
+    pub fn allows(&self, actor: &str, op: AdminOp, target: Option<&str>) -> bool {
         let Some(e) = self.find(actor, target) else {
-            return deny(actor, op);
+            return false;
         };
-        let ok = match op {
+        match op {
             AdminOp::Create => e.add,
             AdminOp::Delete => e.delete,
             AdminOp::Inquire => e.inquire,
@@ -274,8 +276,11 @@ impl Acl {
             AdminOp::SetKey => e.setkey,
             AdminOp::List => e.list,
             AdminOp::Propagate => e.propagate,
-        };
-        if ok {
+        }
+    }
+
+    pub fn check(&self, actor: &str, op: AdminOp, target: Option<&str>) -> Result<(), Error> {
+        if self.allows(actor, op, target) {
             tracing::info!(
                 event = krb5_log::events::KDC_ACL,
                 component = "krb5-kdc",

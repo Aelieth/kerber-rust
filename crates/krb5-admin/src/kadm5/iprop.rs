@@ -36,11 +36,7 @@ pub(super) fn dispatch_iprop(
     proc: u32,
     args: &[u8],
 ) -> Vec<u8> {
-    if proc != IPROP_NULL
-        && acl
-            .check(actor, krb5_kdc::AdminOp::Propagate, None)
-            .is_err()
-    {
+    if proc != IPROP_NULL && !super::auth_plugin::AuthStack::builtin(acl).iprop(actor) {
         return if proc == IPROP_FULL_RESYNC || proc == IPROP_FULL_RESYNC_EXT {
             encode_fullresync_status(UlogLast::default(), krb5_kdc::IPROP_PERM_DENIED)
         } else {
