@@ -3,9 +3,7 @@
 use krb5_crypto::EncryptionType;
 use krb5_types::PrincipalName;
 
-use super::flags::{
-    KDB_DISALLOW_ALL_TIX, KDB_PWCHANGE_SERVICE, KDB_REQUIRES_PRE_AUTH, KDB_V1_BASE_LENGTH,
-};
+use super::flags::{KDB_DISALLOW_ALL_TIX, KDB_REQUIRES_PRE_AUTH, KDB_V1_BASE_LENGTH};
 use super::keys::{KeyEntry, KeyLookup, random_key};
 use super::password::{apply_keysalt_policy, c_password, keys_from_password};
 use super::{PrincipalStore, kadm5_mask, unix_now, unix_now_u32};
@@ -628,27 +626,11 @@ impl PrincipalStore {
         }
         let realm = self.realm.clone();
         self.create_principal_3_in(name, &realm, None, etypes, &AdminEnt::default(), actor)?;
-        self.mark_pwchange_service(name, &id)?;
         if let Some(rs) = acl.restrictions(actor, Some(&id)) {
             self.apply_acl_restrictions(&id, rs)?;
         }
         self.save_if_configured()?;
         Ok(())
-    }
-
-    /// A created `kadmin/changepw` gets `PWCHANGE_SERVICE` by its name.
-    fn mark_pwchange_service(&mut self, name: &PrincipalName, id: &str) -> Result<(), Error> {
-        self.inside_change()?;
-        if name.components_joined() != "kadmin/changepw" {
-            return Ok(());
-        }
-        let Some(p) = self.map.get_mut(id) else {
-            return Ok(());
-        };
-        p.attributes |= KDB_PWCHANGE_SERVICE;
-        let snap = p.clone();
-        self.note_ulog(id.to_owned(), false, Some(snap));
-        self.save_if_configured()
     }
 
     pub fn create_etypes_pol(
@@ -669,9 +651,6 @@ impl PrincipalStore {
             ent.policy = Some(p.to_owned());
         }
         self.create_principal_3_in(name, &realm, password, etypes, &ent, actor)?;
-        if password.is_none() {
-            self.mark_pwchange_service(name, &id)?;
-        }
         if let Some(rs) = acl.restrictions(actor, Some(&id)) {
             self.apply_acl_restrictions(&id, rs)?;
         }

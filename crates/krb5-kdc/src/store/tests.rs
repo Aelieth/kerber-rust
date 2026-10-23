@@ -1028,7 +1028,7 @@ fn persist_round_trip_keeps_serial_not_mtime() {
 }
 
 #[test]
-fn create_host_changepw_flag_survives_save() {
+fn create_host_changepw_has_no_pwchange_service() {
     let dir = krb5_testkit::scratch_dir("krb5-changepw");
     let _ = std::fs::create_dir_all(&dir);
     let db = dir.join("principal");
@@ -1049,7 +1049,7 @@ fn create_host_changepw_flag_survives_save() {
         .unwrap();
     let loaded = crate::persist::load_store(&db, &stash).unwrap();
     let p = loaded.get_name(&cpw).expect("changepw");
-    assert_ne!(p.attributes & KDB_PWCHANGE_SERVICE, 0);
+    assert_eq!(p.attributes & KDB_PWCHANGE_SERVICE, 0);
     let mkey = store.iprop_master_key().unwrap();
     let flagged = store
         .ulog()
@@ -1065,10 +1065,10 @@ fn create_host_changepw_flag_survives_save() {
         .0
         .vals;
     assert!(
-        vals.iter().any(
-            |v| matches!(v, crate::store::KdbeVal::AttrFlags(f) if f & KDB_PWCHANGE_SERVICE != 0)
+        vals.iter().all(
+            |v| !matches!(v, crate::store::KdbeVal::AttrFlags(f) if f & KDB_PWCHANGE_SERVICE != 0)
         ),
-        "ulog update must carry PWCHANGE_SERVICE"
+        "ulog update must not carry PWCHANGE_SERVICE"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
