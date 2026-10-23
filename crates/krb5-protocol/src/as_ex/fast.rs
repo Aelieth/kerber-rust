@@ -780,7 +780,7 @@ fn finish_fast_as(
         Error::ReplyMismatch("FAST response missing finish message in KDC reply".into())
     })?;
     verify_fast_finished(akey, &rep.0.ticket, finished)?;
-    // Once the finished checksum holds, the reply client is the finished client.
+    // The outer cname, crealm and padata are unauthenticated and are not read again.
     // MIT: `verify_as_reply` (get_in_tkt.c:236-241)
     // compares the replaced client.
     rep.0.crealm = finished.crealm.clone();
