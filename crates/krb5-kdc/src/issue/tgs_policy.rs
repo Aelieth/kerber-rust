@@ -224,7 +224,6 @@ pub(super) fn check_tgs_policy_flags(
         return Err(proto(err::GENERIC, status::NO_PREAUTH));
     }
     // MIT: `check_tgs_svc_time` (tgs_policy.c:190-198)
-    // MIT: `check_tgs_req` (do_tgs_req.c:897-902)
     check_db_times(None, server)?;
     Ok(())
 }

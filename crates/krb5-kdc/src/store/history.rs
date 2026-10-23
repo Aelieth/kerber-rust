@@ -43,6 +43,8 @@ fn resolve_history(p: &mut Principal, hist: Option<&(u32, ProtocolKey)>) {
         .collect();
 }
 
+// MIT: `create_history_entry` (svr_principal.c:1004-1062)
+// MIT: `add_to_history` (svr_principal.c:1091-1208)
 /// A new history kvno clears the ring.
 pub(super) fn record_history(
     p: &mut Principal,
@@ -98,7 +100,8 @@ impl PrincipalStore {
 
     // MIT: `kdb_get_hist_key` (server_kdb.c:166-188)
     // MIT: `create_hist` (server_kdb.c:141-164)
-    /// First use sets max life to 64 seconds.
+    /// Saved at once, held saves or not, as MIT's committed puts are.
+    /// Max life 64 is MIT's `KRB5_KDB_DISALLOW_ALL_TIX` assigned to `max_life`.
     pub(crate) fn ensure_history_principal(
         &mut self,
         actor: &str,

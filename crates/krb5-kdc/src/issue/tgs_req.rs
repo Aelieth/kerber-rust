@@ -390,6 +390,7 @@ fn check_tgs_req<'a>(
         .and_then(|t| store.policy().first_current_key(t).ok())
         .ok_or_else(|| proto(err::GENERIC, status::GET_LOCAL_TGT))?;
     let mut auth_indicators = Vec::new();
+    // MIT: `check_tgs_req` (do_tgs_req.c:897-902)
     if !s4u2self {
         let subject = stkt.as_ref().map_or(&enc_tkt, |s| &s.part);
         let tgt = local_tgt
