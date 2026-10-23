@@ -1,5 +1,7 @@
-//! MIT's trace log, `KRB5_TRACE`: the file it names, the line format, the `{word}` formatter, and the trace points of `include/k5-trace.h` and `plugins/preauth/spake/trace.h` that the client paths reach ([`points`], re-exported here).
-//! The file is MIT's own environment input, read in a release build too. Nothing goes to standard output or standard error unless `KRB5_TRACE` names one of them. No line carries key, password or seed bytes: a key prints as its enctype and a 16-bit hash, as MIT prints it, and the one MIT point that prints a secret in the clear, the SPAKE algorithm result, prints the same hash instead ([`points::spake_result`]).
+//! KRB5_TRACE names the file, and a release build reads it too.
+//! Nothing is written to standard output or standard error unless that name is one of them.
+//! No line carries key, password or seed bytes.
+//! A key is its enctype and a 16-bit hash. SPAKE prints that hash, not the secret.
 
 use std::ffi::OsString;
 use std::fmt::Write as _;
@@ -24,9 +26,9 @@ pub use points::*;
 static SINK: OnceLock<Option<File>> = OnceLock::new();
 
 // MIT: `k5_init_trace` (lib/krb5/os/trace.c:384-392)
-/// the context's trace file is the one `KRB5_TRACE` names, read with `secure_getenv`.
+/// The file KRB5_TRACE names, read with secure_getenv.
 // MIT: `krb5_init_context_profile` (lib/krb5/krb/init_ctx.c:209-217)
-/// it is opened once the profile has loaded, before anything is traced. A tool calls this where MIT's makes its context, so the file is created even when nothing is traced; a later trace point opens it otherwise.
+/// Opened after the profile loads and before any trace, even when nothing is traced.
 pub fn init() {
     let _ = sink();
 }
@@ -58,7 +60,7 @@ fn sink() -> Option<&'static File> {
 }
 
 // MIT: `krb5_set_trace_filename` (lib/krb5/os/trace.c:449-465)
-/// write-only, appended to, created 0600; a file that does not open leaves tracing off.
+/// Write-only, appended, created 0600. A file that does not open leaves tracing off.
 fn set_trace_filename(name: &std::ffi::OsStr) -> Option<File> {
     OpenOptions::new()
         .append(true)
@@ -68,7 +70,7 @@ fn set_trace_filename(name: &std::ffi::OsStr) -> Option<File> {
         .ok()
 }
 
-/// glibc's `secure_getenv`: nothing in a program the kernel marks secure (`AT_SECURE`, a setuid, setgid or file-capability exec), so such a program never writes a file its caller names. The kernel is asked only when the variable is set.
+/// A setuid, setgid or file-capability exec gets nothing, so it never writes a caller-named file.
 #[allow(
     clippy::disallowed_methods,
     reason = "MIT reads KRB5_TRACE as each context is made"
@@ -100,7 +102,7 @@ fn at_secure(auxv: &[u8]) -> bool {
 }
 
 // MIT: `krb5int_trace` (lib/krb5/os/trace.c:394-420)
-/// `[pid] sec.usec: message`, one line per point, written whole; nothing is formatted when tracing is off.
+/// Nothing is formatted when tracing is off.
 pub fn krb5int_trace(fmt: &str, args: &[Arg<'_>]) {
     #[cfg(test)]
     if CAPTURE.with(|c| c.borrow().is_some()) {
@@ -128,7 +130,7 @@ thread_local! {
     static GAK_KEYTAB: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
 }
 
-/// Runs `f` with `name()` (`TYPE:residual`) as the keytab of the initial-credentials request it makes, so that the AS exchange traces each key lookup as MIT's `get_as_key_keytab` does. The name is made only when tracing is on.
+/// The keytab name is built only when tracing is on.
 pub fn with_gak_keytab<T>(name: impl FnOnce() -> String, f: impl FnOnce() -> T) -> T {
     if !enabled() {
         return f();
@@ -146,9 +148,7 @@ pub fn gak_keytab() -> Option<String> {
 
 #[derive(Clone, Copy, Debug)]
 pub struct Princ<'a> {
-    /// The name.
     pub name: &'a PrincipalName,
-    /// The realm.
     pub realm: &'a [u8],
 }
 
@@ -167,7 +167,6 @@ impl<'a> Princ<'a> {
 
 #[derive(Clone, Copy)]
 pub struct Key<'a> {
-    /// The enctype number.
     pub etype: i32,
     /// The key bytes; never printed.
     pub bytes: &'a [u8],
@@ -207,9 +206,7 @@ pub enum Transport {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RemoteAddr {
-    /// The transport.
     pub transport: Transport,
-    /// The address.
     pub addr: SocketAddr,
 }
 
@@ -249,7 +246,7 @@ impl std::fmt::Debug for Withheld {
     }
 }
 
-/// As derived, except that a `{hashlenstr}` shows only its length, never its bytes, and a key only its enctype ([`Key`]'s own).
+/// A hash shows its length, never its bytes. A key shows only its enctype.
 impl std::fmt::Debug for Arg<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match *self {
@@ -289,7 +286,8 @@ impl std::fmt::Debug for Arg<'_> {
 }
 
 // MIT: `trace_format` (lib/krb5/os/trace.c:173-366)
-/// the text up to each `{word}`, then the next argument as the word prints it. An unknown word prints nothing and takes no argument; a `{` without its `}`, or a word over 199 bytes, ends the message.
+/// An unknown word prints nothing and takes no argument. A word over 199 bytes ends the message.
+/// A brace with no close ends the message.
 #[must_use]
 pub fn trace_format(fmt: &str, args: &[Arg<'_>]) -> String {
     let mut buf = String::new();
@@ -350,7 +348,7 @@ fn is_word(word: &str) -> bool {
 }
 
 // MIT: `k5_print_addr_port` (lib/krb5/os/addr.c:94-110)
-/// numeric host and port, `[%s]:%s` for IPv6. A scope id prints as the interface name, or the number when that name is not there.
+/// IPv6 is bracketed. A scope id prints as the interface name, or its number.
 fn print_addr_port(addr: &SocketAddr) -> String {
     match addr {
         SocketAddr::V4(v4) => format!("{}:{}", v4.ip(), v4.port()),
@@ -480,7 +478,7 @@ fn add_hex(buf: &mut String, p: &[u8]) {
 }
 
 // MIT: `hash_bytes` (lib/krb5/os/trace.c:89-103)
-/// the first two bytes of the SHA-1 of the bytes, as four upper-case hex digits. The rest of the digest is wiped.
+/// Four hex digits from the first two SHA-1 bytes. The rest of the digest is wiped.
 fn hash_bytes(p: &[u8]) -> String {
     let mut digest: [u8; 20] = Sha1::digest(p).into();
     let s = format!("{:02X}{:02X}", digest[0], digest[1]);
@@ -509,7 +507,6 @@ fn add_etype(buf: &mut String, e: i32) {
 }
 
 // MIT: `principal_type_string` (lib/krb5/os/trace.c:105-124)
-/// the name of a principal type.
 #[must_use]
 pub const fn principal_type_string(t: i32) -> &'static str {
     match t {
@@ -531,7 +528,6 @@ pub const fn principal_type_string(t: i32) -> &'static str {
 }
 
 // MIT: `padata_type_string` (lib/krb5/os/trace.c:126-171)
-/// the name of a padata type.
 #[must_use]
 pub const fn padata_type_string(t: i32) -> Option<&'static str> {
     Some(match t {
@@ -579,7 +575,7 @@ pub const fn padata_type_string(t: i32) -> Option<&'static str> {
 }
 
 // MIT: `krb5_enctype_to_name` (lib/crypto/krb/enctype_util.c:129-160)
-/// asked for the shortest, the shortest of an enctype's name and aliases, and the names of the DES types it no longer has.
+/// The shortest name, including DES types this build no longer has.
 #[must_use]
 pub const fn enctype_shortest_name(e: i32) -> Option<&'static str> {
     Some(match e {
@@ -602,17 +598,11 @@ pub const fn enctype_shortest_name(e: i32) -> Option<&'static str> {
     })
 }
 
-/// `ERROR_TABLE_BASE_krb5`.
 pub const ERROR_TABLE_BASE_KRB5: i64 = -1_765_328_384;
-/// MIT `KRB5_CC_NOTFOUND`.
 pub const KRB5_CC_NOTFOUND: i64 = ERROR_TABLE_BASE_KRB5 + 141;
-/// MIT `KRB5_KDCREP_MODIFIED`.
 pub const KRB5_KDCREP_MODIFIED: i64 = ERROR_TABLE_BASE_KRB5 + 147;
-/// MIT `KRB5_KDC_UNREACH`.
 pub const KRB5_KDC_UNREACH: i64 = ERROR_TABLE_BASE_KRB5 + 156;
-/// MIT `KRB5_KT_NOTFOUND`.
 pub const KRB5_KT_NOTFOUND: i64 = ERROR_TABLE_BASE_KRB5 + 181;
-/// MIT `KRB5_FCC_NOFILE`.
 pub const KRB5_FCC_NOFILE: i64 = ERROR_TABLE_BASE_KRB5 + 195;
 
 #[must_use]
