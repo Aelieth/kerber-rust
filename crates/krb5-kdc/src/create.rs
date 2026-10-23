@@ -1,4 +1,4 @@
-//! The realm `kdb5_util create` writes: MIT `kdb5_create.c` (`K/M`, `krbtgt`) and `kadm5_create.c` (`kadmin/admin`, `kadmin/changepw`). No other principal is made: no `kadmin/history`, no `kiprop/*`, no host or user.
+//! kdb5_util create.
 
 use krb5_config::KdcConf;
 use krb5_crypto::ProtocolKey;
@@ -14,29 +14,18 @@ use crate::store::{
 };
 
 // MIT: `ADMIN_LIFETIME` (kadm5_create.c:54-54)
-/// `60*60*3`, three hours.
 const ADMIN_LIFETIME: u32 = 60 * 60 * 3;
 // MIT: `CHANGEPW_LIFETIME` (kadm5_create.c:55-55)
-/// `60*5`, five minutes.
 const CHANGEPW_LIFETIME: u32 = 60 * 5;
 
-/// The principals of a new realm, as MIT `kdb5_util create` writes them, under `master` at master key version `mkvno`.
-/// `K/M` holds `master`; `krbtgt/realm@realm` has a random key of each `supported_enctypes` type; both are stamped `db_creation@realm` and take the realm's `default_principal_flags`, `max_life`, `max_renewable_life` and `default_principal_expiration`. Then `kadmin/admin` and `kadmin/changepw` are created the way `kadm5_create_principal` creates them for a caller named `kdb5_util`, with MIT's attributes and lifetimes. None of them is logged: with iprop enabled, `kdb5_util create` maps the update log afterwards and starts it over.
 // MIT: `kdb5_create` (kadmin/dbutil/kdb5_create.c:170-175)
-/// `K/M` and `krbtgt` take the realm's flags, lifetimes, expiration and key/salt list.
 // MIT: `add_principal` (kadmin/dbutil/kdb5_create.c:392-406)
-/// each entry is stamped `db_creation` with those defaults.
 // MIT: `add_principal` (kadmin/dbutil/kdb5_create.c:409-440)
-/// `K/M` gets `DISALLOW_ALL_TIX`, the master key, and the active and master key versions.
 // MIT: `add_principal` (kadmin/dbutil/kdb5_create.c:441-454)
-/// `krbtgt` gets one random key per key/salt type.
 // MIT: `add_principal` (kadmin/dbutil/kdb5_create.c:462-465)
-/// both get `LOCKDOWN_KEYS`.
 // MIT: `add_admin_princs` (kadmin/dbutil/kadm5_create.c:139-154)
-/// `kadmin/admin` and `kadmin/changepw`, their attributes and lifetimes.
 // MIT: `add_admin_princ` (kadmin/dbutil/kadm5_create.c:207-213)
-/// a random-key create with only the attributes and the max life masked.
-/// [`Error::Crypto`] when `kdc` sets a `domain_sid` that is not valid SDDL; [`Error::InvalidArgument`] when its `dict_file` cannot be read for any reason but being missing; [`Error::Rng`] when the CSPRNG fails while generating a random key.
+/// A missing dictionary does not fail this.
 pub fn create_realm(
     realm: &str,
     kdc: Option<&KdcConf>,
@@ -46,7 +35,6 @@ pub fn create_realm(
     let mut store = create_realm_db(realm, kdc, master, mkvno)?;
     if let Some(c) = kdc {
         // MIT: `kadm5_create_magic_princs` (kadmin/dbutil/kadm5_create.c:100-107)
-        // the create starts the admin side, which reads the dictionary or fails.
         store.init_pwqual(Some(c)).map_err(|e| {
             let path = c.dict_file.as_deref().unwrap_or(std::path::Path::new(""));
             Error::InvalidArgument(format!("kdc.conf dict_file {}: {e}", path.display()))
@@ -56,10 +44,8 @@ pub fn create_realm(
     Ok(store)
 }
 
-/// `K/M` and `krbtgt` only, before `kadm5_create` reads the dictionary.
 // MIT: `kdb5_create` (kadmin/dbutil/kdb5_create.c:291-294)
-/// `K/M` and `krbtgt` are added before `kadm5_create`.
-/// [`Error::Crypto`] when `kdc` sets a `domain_sid` that is not valid SDDL; [`Error::Rng`] when the CSPRNG fails while generating a random key.
+/// K/M and krbtgt skip the update log.
 pub fn create_realm_db(
     realm: &str,
     kdc: Option<&KdcConf>,
@@ -104,7 +90,7 @@ pub fn create_realm_db(
     Ok(store)
 }
 
-/// `kadmin/admin` and `kadmin/changepw`, after the dictionary has been read.
+/// Admin is three hours; changepw is five minutes.
 pub fn add_admin_principals(store: &mut PrincipalStore, mkvno: u16) -> Result<(), Error> {
     let realm = store.realm().to_owned();
     let caller = crate::kdb5_util_id_for_realm(&realm);
@@ -132,7 +118,6 @@ pub fn add_admin_principals(store: &mut PrincipalStore, mkvno: u16) -> Result<()
     Ok(())
 }
 
-/// `K/M` or `krbtgt` before its tagged data: the realm's lifetimes and expiration, and the given attributes with `LOCKDOWN_KEYS`.
 fn new_entry(
     store: &PrincipalStore,
     name: PrincipalName,
@@ -160,7 +145,6 @@ fn new_entry(
     p
 }
 
-/// `KRB5_TL_MOD_PRINC` naming `db_creation@realm`, the modifier `kdb5_util create` stamps on the entries it writes without a kadm5 handle.
 fn db_creation(realm: &str, now: u32) -> TlData {
     let mut contents = now.to_le_bytes().to_vec();
     contents.extend_from_slice(format!("db_creation@{realm}").as_bytes());
@@ -172,11 +156,8 @@ fn tl(ty: i32, contents: Vec<u8>) -> TlData {
     TlData { ty, contents }
 }
 
-/// The tagged data `kadm5_create_principal` leaves on a new entry, in MIT's order: the admin record, the modifier, the master key version and the password change time.
 // MIT: `kadm5_create_principal_3` (lib/kadm5/srv/svr_principal.c:475-478)
-/// the master key version that wrapped the keys is recorded.
 // MIT: `kadm5_create_principal_3` (lib/kadm5/srv/svr_principal.c:490-501)
-/// the admin record is stored with the entry.
 fn stamp_kadm5_create_tl(store: &mut PrincipalStore, name: &PrincipalName, mkvno: u16) {
     let Some(mut p) = store.get_name(name).cloned() else {
         return;
@@ -197,14 +178,10 @@ fn stamp_kadm5_create_tl(store: &mut PrincipalStore, name: &PrincipalName, mkvno
     store.debug_insert(p);
 }
 
-/// The settings of the KDC profile `text` that apply to `realm`: [`KdcConf::parse_for_realm`].
-/// As [`KdcConf::parse_for_realm`].
 pub fn kdc_conf_for_realm(text: &str, realm: &str) -> Result<KdcConf, krb5_config::Error> {
     KdcConf::parse_for_realm(text, realm)
 }
 
-/// The principals the gates seed beside a new realm: `user@` and `admin@` with the given passwords, `host/testhost.<realm>` and `kiprop/testhost.kerber.test` with random keys.
-/// [`Error::AlreadyExists`] when one of them exists; [`Error::PasswordPolicy`] when a password is empty; [`Error::Rng`] when the CSPRNG fails.
 #[cfg(feature = "test-hooks")]
 pub fn seed_test_principals(
     store: &mut PrincipalStore,
