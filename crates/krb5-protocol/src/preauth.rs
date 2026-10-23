@@ -9,8 +9,8 @@ use krb5_crypto::{
     spake_wbytes, verify_checksum_type,
 };
 use krb5_types::{
-    ApOptions, ApReq, AsReq, Authenticator, Checksum, EncKdcRepPart, EncryptedData, EncryptionKey,
-    KerberosFlags, KerberosTime, Microseconds, PaData, PrincipalName, Realm, Ticket, err, ku, pa,
+    ApOptions, ApReq, AsReq, Checksum, EncKdcRepPart, EncryptedData, EncryptionKey, KerberosFlags,
+    KerberosTime, Microseconds, PaData, PrincipalName, Realm, Ticket, err, ku, pa,
     principal_compare,
 };
 
@@ -38,24 +38,20 @@ pub fn build_fast_armor(
     cname: &PrincipalName,
     subkey: Option<&ProtocolKey>,
 ) -> Result<ApReq, Error> {
-    // MIT: `generate_authenticator` (lib/krb5/krb/mk_req_ext.c:327-327)
-    // the armor authenticator's time and microseconds come from one reading.
-    let (now, usec) = crate::auth_con::us_timeofday();
     let sub = subkey.map(|k| EncryptionKey {
         keytype: k.etype().to_iana(),
         keyvalue: k.as_bytes().to_vec().into(),
     });
-    let authenticator = Authenticator {
-        authenticator_vno: Authenticator::VNO,
-        crealm: crealm.clone(),
-        cname: cname.clone(),
+    let authenticator = crate::ap_req::generate_ap_authenticator(crate::ap_req::ApAuthenticator {
+        crealm,
+        cname,
         cksum: None,
-        cusec: usec,
-        ctime: now,
         subkey: sub,
-        seq_number: None,
-        authorization_data: None,
-    };
+        sequence: None,
+        time_offset: 0,
+        cbt: false,
+        desired_etypes: &[],
+    })?;
     let der = encode(&authenticator)?;
     let usage = KeyUsage::new(ku::AP_REQ_AUTHENTICATOR)?;
     let cipher = encrypt(session, usage, &der)?;

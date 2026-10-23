@@ -55,6 +55,7 @@ any other `###` heading.
 
 ### Changed
 
+- **gss.** An initiator's AP-REQ sequence number is random, and without mutual authentication the receive sequence starts there.
 - **client.** `request_timeout` bounds a KDC exchange and each kpasswd pass; unset, a kpasswd TCP read stays open.
 - **client.** After error 52, the TCP resend gets its own `request_timeout`.
 - **client/admin.** A malformed `kdc` host is an invalid argument for kinit, kvno, kpasswd, and kprop.

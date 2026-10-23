@@ -2,11 +2,12 @@ use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt_enc_data};
 use krb5_protocol::{
     AUTH_CONTEXT_DO_SEQUENCE, AUTH_CONTEXT_USE_SUBKEY, AcceptorAuthContext, AcceptorConfig,
-    KeytabGetEntry, ReplayCache, build_ap_req_from_authenticator,
+    ApAuthenticator, KeytabGetEntry, ReplayCache, build_ap_req_from_authenticator,
+    generate_ap_authenticator, generate_seq_number,
 };
 use krb5_types::{
-    ApOptions, ApRep, Authenticator, AuthorizationData, AuthorizationDataValue, Checksum,
-    EncApRepPart, EncryptionKey, HostAddress, KerberosTime, PrincipalName, Realm, Ticket, ku, pa,
+    ApOptions, ApRep, AuthorizationData, AuthorizationDataValue, Checksum, EncApRepPart,
+    EncryptionKey, HostAddress, KerberosTime, PrincipalName, Realm, Ticket, ku, pa,
 };
 
 use super::deleg::{DelegCred, extract_delegated, krb_cred_for_deleg};
@@ -334,20 +335,18 @@ impl GssContext {
             keytype: sub.etype().to_iana(),
             keyvalue: sub.as_bytes().to_vec().into(),
         };
-        // MIT: `generate_authenticator` (lib/krb5/krb/mk_req_ext.c:327-327)
-        // the time and its microseconds, from `krb5_us_timeofday`.
-        let (now, usec) = krb5_protocol::us_timeofday();
-        let authenticator = Authenticator {
-            authenticator_vno: Authenticator::VNO,
-            crealm: crealm.clone(),
-            cname: cname.clone(),
+        // MIT: `krb5_mk_req_extended` (lib/krb5/krb/mk_req_ext.c:136-143)
+        let seq = generate_seq_number()?;
+        let authenticator = generate_ap_authenticator(ApAuthenticator {
+            crealm,
+            cname,
             cksum: Some(cksum),
-            cusec: usec,
-            ctime: now,
             subkey: Some(enc_sub),
-            seq_number: Some(0),
-            authorization_data: None,
-        };
+            sequence: Some(seq),
+            time_offset: 0,
+            cbt: false,
+            desired_etypes: &[],
+        })?;
         let ap = build_ap_req_from_authenticator(ticket, session, opts, &authenticator)?;
         let der = encode(&ap)?;
         let token = gss_wrap_app(TOK_AP_REQ, &der);
@@ -355,8 +354,17 @@ impl GssContext {
             Self {
                 session: sub,
                 acceptor_subkey: None,
-                send_seq: 0,
-                recv: SeqState::new(0, flags, !pre_cfx(sub_etype)),
+                send_seq: u64::from(seq),
+                // MIT: `kg_new_connection` (lib/gssapi/krb5/init_sec_context.c:632-634)
+                recv: SeqState::new(
+                    if flags & GSS_C_MUTUAL == 0 {
+                        u64::from(seq)
+                    } else {
+                        0
+                    },
+                    flags,
+                    !pre_cfx(sub_etype),
+                ),
                 initiator: true,
                 client: Some(cname.unparse_with_realm(&String::from_utf8_lossy(crealm.as_bytes()))),
                 delegated: None,
@@ -655,6 +663,11 @@ impl GssContext {
     #[must_use]
     pub fn session_key(&self) -> &ProtocolKey {
         &self.session
+    }
+
+    #[must_use]
+    pub fn send_seq(&self) -> u64 {
+        self.send_seq
     }
 
     #[must_use]

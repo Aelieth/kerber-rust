@@ -199,9 +199,10 @@ fn mutual_ap_rep_decrypts_with_ticket_session() {
 #[test]
 fn wrap_mic_replay_inside_window_is_rejected() {
     let (mut init, mut acc) = contexts();
+    let start = init.send_seq();
     let w = init.wrap(b"one").unwrap();
     acc.unwrap(&w).unwrap();
-    let gap = mit_shaped_wrap(init.session_key(), true, 2, b"gap").unwrap();
+    let gap = mit_shaped_wrap(init.session_key(), true, start.wrapping_add(2), b"gap").unwrap();
     assert_eq!(acc.unwrap(&gap).unwrap(), b"gap");
     assert!(matches!(acc.unwrap(&w), Err(Error::Sequence)));
     let mic = init.get_mic(b"one").unwrap();

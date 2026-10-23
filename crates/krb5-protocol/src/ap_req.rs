@@ -10,8 +10,9 @@ use krb5_crypto::{
 };
 use krb5_types::transited::hierarchical_walk_realms;
 use krb5_types::{
-    ApOptions, ApReq, Authenticator, EncTicketPart, EncryptedData, HostAddress, HostAddresses,
-    KerberosTime, PrincipalName, Realm, Ticket, err, flag_bit, ku, principal_compare,
+    ApOptions, ApReq, Authenticator, AuthorizationDataValue, EncTicketPart, EncryptedData,
+    HostAddress, HostAddresses, KerberosTime, PrincipalName, Realm, Ticket, err, flag_bit, ku, pa,
+    principal_compare,
 };
 
 use crate::error::Error;
@@ -116,6 +117,63 @@ pub fn build_ap_req_opts(
     build_ap_req_with_cksum(ticket, session_key, crealm, cname, ap_options, cksum, None)
 }
 
+pub struct ApAuthenticator<'a> {
+    pub crealm: &'a Realm,
+    pub cname: &'a PrincipalName,
+    pub cksum: Option<krb5_types::Checksum>,
+    pub subkey: Option<krb5_types::EncryptionKey>,
+    pub sequence: Option<u32>,
+    pub time_offset: i64,
+    pub cbt: bool,
+    pub desired_etypes: &'a [i32],
+}
+
+// MIT: `generate_authenticator` (lib/krb5/krb/mk_req_ext.c:301-327)
+// MIT: `krb5_us_timeofday` (lib/krb5/os/ustime.c:66-78)
+pub fn generate_ap_authenticator(auth: ApAuthenticator<'_>) -> Result<Authenticator, Error> {
+    let _ = auth.desired_etypes.len();
+    let (now, usec) = stamped(auth.time_offset);
+    Ok(Authenticator {
+        authenticator_vno: Authenticator::VNO,
+        crealm: auth.crealm.clone(),
+        cname: auth.cname.clone(),
+        cksum: auth.cksum,
+        cusec: usec,
+        ctime: now,
+        subkey: auth.subkey,
+        seq_number: auth.sequence,
+        authorization_data: cbt_authdata(auth.cbt)?,
+    })
+}
+
+fn stamped(offset: i64) -> (KerberosTime, krb5_types::Microseconds) {
+    let (now, usec) = crate::auth_con::us_timeofday();
+    if offset == 0 {
+        return (now, usec);
+    }
+    let sec = i64::from(now.unix_seconds()).saturating_add(offset);
+    let sec = u32::try_from(sec.clamp(0, i64::from(u32::MAX))).unwrap_or(u32::MAX);
+    (KerberosTime::from_unix_seconds(sec), usec)
+}
+
+// MIT: `make_ap_authdata` (lib/krb5/krb/mk_req_ext.c:385-393)
+fn cbt_authdata(cbt: bool) -> Result<Option<Vec<AuthorizationDataValue>>, Error> {
+    const AD_AP_OPTIONS: i32 = 143;
+    const KERB_AP_OPTIONS_CBT: u32 = 0x4000;
+    if !cbt {
+        return Ok(None);
+    }
+    let inner = vec![AuthorizationDataValue {
+        ad_type: AD_AP_OPTIONS,
+        ad_data: KERB_AP_OPTIONS_CBT.to_le_bytes().to_vec().into(),
+    }];
+    let der = encode(&inner)?;
+    Ok(Some(vec![AuthorizationDataValue {
+        ad_type: pa::AD_IF_RELEVANT,
+        ad_data: der.into(),
+    }]))
+}
+
 pub fn build_ap_req_mutual_seq(
     ticket: Ticket,
     session_key: &ProtocolKey,
@@ -123,20 +181,16 @@ pub fn build_ap_req_mutual_seq(
     cname: &PrincipalName,
     seq_number: u32,
 ) -> Result<ApReq, Error> {
-    // MIT: `generate_authenticator` (lib/krb5/krb/mk_req_ext.c:327-327)
-    // the time and its microseconds, from `krb5_us_timeofday`.
-    let (now, usec) = crate::auth_con::us_timeofday();
-    let authenticator = Authenticator {
-        authenticator_vno: Authenticator::VNO,
-        crealm: crealm.clone(),
-        cname: cname.clone(),
+    let authenticator = generate_ap_authenticator(ApAuthenticator {
+        crealm,
+        cname,
         cksum: None,
-        cusec: usec,
-        ctime: now,
         subkey: None,
-        seq_number: Some(seq_number),
-        authorization_data: None,
-    };
+        sequence: Some(seq_number),
+        time_offset: 0,
+        cbt: false,
+        desired_etypes: &[],
+    })?;
     let der = encode(&authenticator)?;
     let usage = KeyUsage::new(ku::AP_REQ_AUTHENTICATOR)?;
     let cipher = encrypt(session_key, usage, &der)?;
@@ -162,18 +216,16 @@ pub fn build_ap_req_with_cksum(
     cksum: Option<krb5_types::Checksum>,
     subkey: Option<krb5_types::EncryptionKey>,
 ) -> Result<ApReq, Error> {
-    let (now, usec) = crate::auth_con::us_timeofday();
-    let authenticator = Authenticator {
-        authenticator_vno: Authenticator::VNO,
-        crealm: crealm.clone(),
-        cname: cname.clone(),
+    let authenticator = generate_ap_authenticator(ApAuthenticator {
+        crealm,
+        cname,
         cksum,
-        cusec: usec,
-        ctime: now,
         subkey,
-        seq_number: Some(0),
-        authorization_data: None,
-    };
+        sequence: Some(0),
+        time_offset: 0,
+        cbt: false,
+        desired_etypes: &[],
+    })?;
     build_ap_req_from_authenticator(ticket, session_key, ap_options, &authenticator)
 }
 

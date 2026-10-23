@@ -48,9 +48,10 @@ mod vfy_increds;
 pub use acceptor_conf::AcceptorConfig;
 pub use ap_rep::{build_ap_rep, verify_ap_rep};
 pub use ap_req::{
-    ApVerifyOk, ApVerifyParams, DEFAULT_SKEW, KeytabGetEntry, KeytabLookup, address_search,
-    build_ap_req, build_ap_req_from_authenticator, build_ap_req_mutual_seq, build_ap_req_opts,
-    build_ap_req_with_cksum, sname_match, verify_ap_req, verify_ap_req_ex,
+    ApAuthenticator, ApVerifyOk, ApVerifyParams, DEFAULT_SKEW, KeytabGetEntry, KeytabLookup,
+    address_search, build_ap_req, build_ap_req_from_authenticator, build_ap_req_mutual_seq,
+    build_ap_req_opts, build_ap_req_with_cksum, generate_ap_authenticator, sname_match,
+    verify_ap_req, verify_ap_req_ex,
 };
 pub use as_ex::{
     AsOutcome, AsPrompt, AsRequest, AsTicketOpts, DEFAULT_PREFERRED_PREAUTH_TYPES, FastArmor,

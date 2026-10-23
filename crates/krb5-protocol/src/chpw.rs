@@ -322,16 +322,6 @@ fn change_or_set_via(
     Ok((code, data))
 }
 
-fn stamped(offset: i64) -> (krb5_types::KerberosTime, krb5_types::Microseconds) {
-    let (now, usec) = crate::auth_con::us_timeofday();
-    if offset == 0 {
-        return (now, usec);
-    }
-    let sec = i64::from(now.unix_seconds()).saturating_add(offset);
-    let sec = u32::try_from(sec.clamp(0, i64::from(u32::MAX))).unwrap_or(u32::MAX);
-    (krb5_types::KerberosTime::from_unix_seconds(sec), usec)
-}
-
 // MIT: `krb5_auth_con_init` (lib/krb5/krb/auth_con.c:39-41)
 // MIT: `krb5_mk_req_extended` (lib/krb5/krb/mk_req_ext.c:137-143)
 /// No sequence number: DO_SEQUENCE is set only after this authenticator is made.
@@ -347,20 +337,16 @@ fn kpasswd_ap_req(
         keytype: sub.etype().to_iana(),
         keyvalue: sub.as_bytes().to_vec().into(),
     };
-    // MIT: `generate_authenticator` (lib/krb5/krb/mk_req_ext.c:327-327)
-    // MIT: `krb5_us_timeofday` (lib/krb5/os/ustime.c:66-78)
-    let (now, usec) = stamped(offset);
-    let authenticator = Authenticator {
-        authenticator_vno: Authenticator::VNO,
-        crealm: crealm.clone(),
-        cname: cname.clone(),
+    let authenticator = crate::ap_req::generate_ap_authenticator(crate::ap_req::ApAuthenticator {
+        crealm,
+        cname,
         cksum: None,
-        cusec: usec,
-        ctime: now,
         subkey: Some(sub_enc),
-        seq_number: None,
-        authorization_data: None,
-    };
+        sequence: None,
+        time_offset: offset,
+        cbt: false,
+        desired_etypes: &[],
+    })?;
     let der = encode(&authenticator)?;
     let cipher = KeyUsage::new(ku::AP_REQ_AUTHENTICATOR)
         .map_err(Error::from)

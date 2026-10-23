@@ -13,13 +13,12 @@ use krb5_crypto::{CipherState, ProtocolKey};
 use krb5_kdc::HeldFileLock;
 use krb5_protocol::trace::{self, ERROR_TABLE_BASE_KRB5, error_message, kdc_code};
 use krb5_protocol::{
-    AsRequest, AsTicketOpts, KdcAddr, Keytab, RemoteSeq, build_ap_req_from_authenticator,
-    build_krb_priv_chained_from, generate_seq_number, local_host_address, us_timeofday,
-    verify_ap_rep, verify_krb_safe_checksum,
+    ApAuthenticator, AsRequest, AsTicketOpts, KdcAddr, Keytab, RemoteSeq,
+    build_ap_req_from_authenticator, build_krb_priv_chained_from, generate_ap_authenticator,
+    generate_seq_number, local_host_address, us_timeofday, verify_ap_rep, verify_krb_safe_checksum,
 };
 use krb5_types::{
-    ApOptions, Authenticator, HostAddress, KerberosTime, KrbError, Microseconds, PrincipalName,
-    Realm, Ticket, err,
+    ApOptions, HostAddress, KerberosTime, KrbError, Microseconds, PrincipalName, Realm, Ticket, err,
 };
 
 use super::{
@@ -600,20 +599,17 @@ pub fn kprop_sendauth(
         None,
         (&creds.session).into(),
     );
-    // MIT: `generate_authenticator` (lib/krb5/krb/mk_req_ext.c:269-327)
-    // the client, the sequence number, no checksum, subkey or authorization data here, and the time to the microsecond.
-    let (ctime, cusec) = timeofday_with_offset(creds.time_offset);
-    let authenticator = Authenticator {
-        authenticator_vno: Authenticator::VNO,
-        crealm: creds.crealm.clone(),
-        cname: creds.client.clone(),
+    let authenticator = generate_ap_authenticator(ApAuthenticator {
+        crealm: &creds.crealm,
+        cname: &creds.client,
         cksum: None,
-        cusec,
-        ctime,
         subkey: None,
-        seq_number: Some(seq),
-        authorization_data: None,
-    };
+        sequence: Some(seq),
+        time_offset: creds.time_offset,
+        cbt: false,
+        desired_etypes: &[],
+    })
+    .map_err(|e| KpropError::new(Some(e.to_string()), AUTHENTICATING))?;
     let ap = build_ap_req_from_authenticator(
         creds.ticket.clone(),
         &creds.session,
