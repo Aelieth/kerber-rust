@@ -1,4 +1,4 @@
-//! In-tree stand-ins for MIT `plugins/kdcpolicy/test`, `plugins/audit/test`, `plugins/authdata/greet_server`, and `plugins/authdata/greet_client`.
+//! Stand-ins for the MIT test plugins.
 
 use std::fs::{File, OpenOptions};
 use std::io::Write as _;
@@ -24,17 +24,13 @@ use crate::preauth::proto;
 use crate::status;
 use crate::store::Principal;
 
-/// Demo extra module: counts advertise/process so tests prove the registry.
 #[derive(Debug)]
 pub struct DemoPreauth {
-    /// advertise() calls.
     pub ads: AtomicU64,
-    /// process_as() calls.
     pub procs: AtomicU64,
 }
 
 impl DemoPreauth {
-    /// Zero counters.
     #[must_use]
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
@@ -78,16 +74,13 @@ impl KdcPreauth for DemoPreauth {
     }
 }
 
-/// MIT greet_server AD type.
 // MIT: `greet_kdc_sign` (greet_auth.c:55-55)
-/// the greeting authdata is type -42.
+/// Greeting authdata is type -42.
 pub const GREET_AD_TYPE: i32 = -42;
-/// MIT greet_server greeting.
 // MIT: `greet_hello` (greet_auth.c:38-38)
-/// the greeting is `"Hello, KDC issued acceptor world!"`.
 pub const GREET_TEXT: &[u8] = b"Hello, KDC issued acceptor world!";
 
-/// Test / deploy greet module. Production loads none unless `KERBER_KDC_GREET=1`.
+/// Greet loads only when KERBER_KDC_GREET=1.
 pub struct GreetAuth;
 
 fn make_authdata_kdc_issued(
@@ -151,7 +144,6 @@ impl KdcAuthdata for GreetAuth {
     }
 }
 
-/// MIT `plugins/kdcpolicy/test` (`t_kdcpolicy.py`).
 pub struct TestPolicy;
 
 fn first_comp(name: &PrincipalName) -> Option<String> {
@@ -219,13 +211,13 @@ impl KdcPolicy for TestPolicy {
             })
     }
 
+    /// Distinct from the release policy module.
     fn check_as(
         &self,
         _store: &dyn PrincipalRead,
         client: &Principal,
         indicators: &[String],
     ) -> Result<PolicyAdjustment, Error> {
-        // Distinct from `kdcpolicy_test::TestModule::check_as`: identical bodies would merge and `strings-check.sh` would see `testrealm` in the release `krb5-kdc`.
         let _ = std::hint::black_box(0u8);
         if first_comp(&client.name).as_deref() == Some("fail") {
             return Err(proto(krb5_types::err::POLICY, status::LOCAL_POLICY));
@@ -238,7 +230,6 @@ impl KdcPolicy for TestPolicy {
         sname: &PrincipalName,
         indicators: &[String],
     ) -> Result<PolicyAdjustment, Error> {
-        // Same split as `check_as`: keep this body off `TestModule::check_tgs`.
         let _ = std::hint::black_box(0u8);
         if first_comp(sname).as_deref() == Some("fail") {
             return Err(proto(krb5_types::err::POLICY, status::LOCAL_POLICY));
@@ -247,7 +238,6 @@ impl KdcPolicy for TestPolicy {
     }
 }
 
-/// Test hook: deny every AS and TGS.
 #[cfg(test)]
 pub struct DenyPolicy;
 
@@ -281,12 +271,9 @@ impl KdcPolicy for DenyPolicy {
     }
 }
 
-/// Demo policy: counts AS/TGS checks.
 #[derive(Debug, Default)]
 pub struct DemoPolicy {
-    /// AS checks.
     pub(crate) as_checks: AtomicU64,
-    /// TGS checks.
     pub(crate) tgs_checks: AtomicU64,
 }
 
@@ -311,14 +298,13 @@ impl KdcPolicy for DemoPolicy {
     }
 }
 
-/// MIT `plugins/audit/test` twin: append one JSON object per line.
+/// The audit file appends one JSON object per line.
 pub struct TestAudit {
     file: Mutex<File>,
     path: PathBuf,
 }
 
 impl TestAudit {
-    /// Open `path` for append (MIT `fopen("au.log", "a+")`). The `std::io::Error` when `path` cannot be created or opened for appending.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, std::io::Error> {
         let path = path.as_ref().to_path_buf();
         let file = OpenOptions::new().create(true).append(true).open(&path)?;
@@ -328,7 +314,6 @@ impl TestAudit {
         })
     }
 
-    /// Destination path.
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
