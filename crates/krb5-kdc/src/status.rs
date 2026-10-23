@@ -1,6 +1,4 @@
-//! MIT `log_tgs_req` / `log_as_req` status words (`do_as_req.c`,
-//! `do_tgs_req.c`, `tgs_policy.c`, `kdc_util.c`). These are the KRB-ERROR
-//! `e_text` values; `k5_setmsg` strings stay in `Error::Protocol.detail`.
+//! e_text; detail is off the wire.
 
 #![allow(dead_code)]
 
@@ -16,8 +14,6 @@ pub(crate) const CLIENT_EXPIRED: &str = "CLIENT EXPIRED";
 pub(crate) const CLIENT_KEY_EXPIRED: &str = "CLIENT KEY EXPIRED";
 pub(crate) const CLIENT_LOCKED_OUT: &str = "CLIENT LOCKED OUT";
 // MIT: `krb5_db2_check_policy_as` (plugins/kdb/db2/kdb_db2.c:1539-1550)
-/// the failcount
-/// lockout's status, set by the DB module (lmdb and ldap set the same).
 pub(crate) const LOCKED_OUT: &str = "LOCKED_OUT";
 pub(crate) const CLIENT_NOT_FOUND: &str = "CLIENT_NOT_FOUND";
 pub(crate) const EVIDENCE_TICKET_MISMATCH: &str = "EVIDENCE_TICKET_MISMATCH";
@@ -30,9 +26,7 @@ pub(crate) const HIGHER_AUTHENTICATION_REQUIRED: &str = "HIGHER_AUTHENTICATION_R
 pub(crate) const HEADER_PAC: &str = "HEADER_PAC";
 pub(crate) const HANDLE_AUTHDATA: &str = "HANDLE_AUTHDATA";
 // MIT: `finish_process_as_req` (kdc/do_as_req.c:316-322)
-/// the status of a `return_enc_padata` failure.
 // MIT: `tgs_issue_ticket` (kdc/do_tgs_req.c:1098-1105)
-/// the same status for a TGS.
 pub(crate) const KDC_RETURN_ENC_PADATA: &str = "KDC_RETURN_ENC_PADATA";
 pub(crate) const KDC_RETURN_PADATA: &str = "KDC_RETURN_PADATA";
 pub(crate) const INVALID_AS_OPTIONS: &str = "INVALID AS OPTIONS";
