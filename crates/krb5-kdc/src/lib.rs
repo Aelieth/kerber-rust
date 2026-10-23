@@ -46,7 +46,9 @@ pub use audit::{
 };
 #[cfg(feature = "test-hooks")]
 pub use create::seed_test_principals;
-pub use create::{add_admin_principals, create_realm, create_realm_db, kdc_conf_for_realm};
+pub use create::{
+    add_admin_principals, create_realm, create_realm_db, kdc_conf_for_realm, realm_rows,
+};
 pub use daemon::{
     OpenFailure, Shutdown, Signals, copy_persist_master, database_path, detach, json_log_filter,
     kadmind_mkey_from_kbd, manual_master_key, mkey_log_context, names_relative_database,
@@ -228,56 +230,7 @@ pub fn bootstrap_realm_with_kdc_conf(
     let actor = admin_id_for_realm(realm);
     let acl = Acl::allow_admin(&actor)?;
     store.create_host(&acl, &actor, &host_for_realm(realm))?;
-    store.create_host(&acl, &actor, &principals::kadmin_admin())?;
-    store.create_host(&acl, &actor, &principals::kadmin_changepw())?;
     store.create_host(&acl, &actor, &documented_kiprop())?;
-    apply_kadm5_create_service_attrs(&mut store)?;
+    add_admin_principals(&mut store, 1)?;
     Ok((store, acl))
-}
-
-// MIT: `ADMIN_LIFETIME` (kadm5_create.c:54-54)
-const KADM5_ADMIN_LIFETIME: u64 = 60 * 60 * 3;
-// MIT: `CHANGEPW_LIFETIME` (kadm5_create.c:55-55)
-const KADM5_CHANGEPW_LIFETIME: u64 = 60 * 5;
-
-// MIT: `kadm5_create` (kadm5_create.c)
-/// kadmin/admin is three hours; kadmin/changepw is five minutes.
-/// The attributes word is replaced, so other flags clear.
-/// Expiry and policy fields stay unchanged.
-pub fn apply_kadm5_create_service_attrs(store: &mut PrincipalStore) -> Result<(), Error> {
-    let realm = store.realm().to_owned();
-    let actor = kdb5_util_id_for_realm(&realm);
-    store.apply_admin_fields_in(
-        &principals::kadmin_admin(),
-        &realm,
-        AdminFields {
-            attributes: Some(store::KDB_DISALLOW_TGT_BASED | store::KDB_LOCKDOWN_KEYS),
-            max_life: Some(KADM5_ADMIN_LIFETIME),
-            expiration: None,
-            pw_expire: None,
-            policy: None,
-            clear_policy: false,
-            max_renewable_life: None,
-        },
-        &actor,
-    )?;
-    store.apply_admin_fields_in(
-        &principals::kadmin_changepw(),
-        &realm,
-        AdminFields {
-            attributes: Some(
-                store::KDB_DISALLOW_TGT_BASED
-                    | store::KDB_PWCHANGE_SERVICE
-                    | store::KDB_LOCKDOWN_KEYS,
-            ),
-            max_life: Some(KADM5_CHANGEPW_LIFETIME),
-            expiration: None,
-            pw_expire: None,
-            policy: None,
-            clear_policy: false,
-            max_renewable_life: None,
-        },
-        &actor,
-    )?;
-    Ok(())
 }

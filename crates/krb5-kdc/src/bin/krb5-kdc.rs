@@ -492,12 +492,10 @@ mod hooks {
     use std::path::PathBuf;
 
     use krb5_cli::LongOpt;
-    use krb5_kdc::principals::{kadmin_admin, kadmin_changepw};
     use krb5_kdc::testrealm::{TEST_ADMIN, TEST_REALM, TEST_USER, documented_kiprop};
     use krb5_kdc::{
         Acl, BIND_CANDIDATES, KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_DUP_SKEY, KDB_DISALLOW_SVR,
-        KDB_OK_TO_AUTH_AS_DELEGATE, PrincipalStore, apply_kadm5_create_service_attrs,
-        bind_preferred,
+        KDB_OK_TO_AUTH_AS_DELEGATE, PrincipalStore, add_admin_principals, bind_preferred,
     };
 
     pub(super) const LONGS: &[LongOpt] = &[
@@ -854,19 +852,11 @@ mod hooks {
                 "disallow_dup_skey",
             );
         }
-        if let Err(e) = store.create_host(&acl, &actor, &kadmin_admin()) {
-            eprintln!("krb5-kdc: kadmin/admin: {e}");
-            std::process::exit(1);
-        }
-        if let Err(e) = store.create_host(&acl, &actor, &kadmin_changepw()) {
-            eprintln!("krb5-kdc: kadmin/changepw: {e}");
-            std::process::exit(1);
-        }
         if let Err(e) = store.create_host(&acl, &actor, &documented_kiprop()) {
             eprintln!("krb5-kdc: kiprop: {e}");
             std::process::exit(1);
         }
-        if let Err(e) = apply_kadm5_create_service_attrs(&mut store) {
+        if let Err(e) = add_admin_principals(&mut store, 1) {
             eprintln!("krb5-kdc: kadmin service attrs: {e}");
             std::process::exit(1);
         }

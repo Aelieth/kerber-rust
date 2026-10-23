@@ -19,12 +19,6 @@ const ADMIN_LIFETIME: u32 = 60 * 60 * 3;
 const CHANGEPW_LIFETIME: u32 = 60 * 5;
 
 // MIT: `kdb5_create` (kadmin/dbutil/kdb5_create.c:170-175)
-// MIT: `add_principal` (kadmin/dbutil/kdb5_create.c:392-406)
-// MIT: `add_principal` (kadmin/dbutil/kdb5_create.c:409-440)
-// MIT: `add_principal` (kadmin/dbutil/kdb5_create.c:441-454)
-// MIT: `add_principal` (kadmin/dbutil/kdb5_create.c:462-465)
-// MIT: `add_admin_princs` (kadmin/dbutil/kadm5_create.c:139-154)
-// MIT: `add_admin_princ` (kadmin/dbutil/kadm5_create.c:207-213)
 /// A missing dictionary does not fail this.
 pub fn create_realm(
     realm: &str,
@@ -56,6 +50,23 @@ pub fn create_realm_db(
     if let Some(c) = kdc {
         store.apply_kdc_conf(c)?;
     }
+    for row in realm_rows(&store, master, mkvno)? {
+        store.debug_insert(row);
+    }
+    Ok(store)
+}
+
+// MIT: `add_principal` (kadmin/dbutil/kdb5_create.c:392-406)
+// MIT: `add_principal` (kadmin/dbutil/kdb5_create.c:409-440)
+// MIT: `add_principal` (kadmin/dbutil/kdb5_create.c:441-454)
+// MIT: `add_principal` (kadmin/dbutil/kdb5_create.c:462-465)
+/// K/M and krbtgt, as `kdb5_util create` inserts them.
+pub fn realm_rows(
+    store: &PrincipalStore,
+    master: &ProtocolKey,
+    mkvno: u16,
+) -> Result<Vec<Principal>, Error> {
+    let realm = store.realm();
     let now = crate::store::unix_now_u32();
     let flags = store.default_create_attributes(false);
     let creation = db_creation(realm, now);
@@ -66,7 +77,7 @@ pub fn create_realm_db(
         master.clone(),
         u32::from(mkvno),
     )];
-    let mut km = new_entry(&store, km_name, km_keys, flags | KDB_DISALLOW_ALL_TIX);
+    let mut km = new_entry(store, km_name, km_keys, flags | KDB_DISALLOW_ALL_TIX);
     let mut actkvno = Vec::with_capacity(8);
     actkvno.extend_from_slice(&1u16.to_le_bytes());
     actkvno.extend_from_slice(&mkvno.to_le_bytes());
@@ -77,19 +88,19 @@ pub fn create_realm_db(
         tl(TL_ACTKVNO, actkvno),
         creation.clone(),
     ];
-    store.debug_insert(km);
 
     let mut tgt_keys = Vec::new();
     for etype in store.policy.password_etypes() {
         tgt_keys.push(KeyEntry::new(etype, random_key(etype)?, 1));
     }
-    let mut tgt = new_entry(&store, PrincipalName::krbtgt(realm), tgt_keys, flags);
+    let mut tgt = new_entry(store, PrincipalName::krbtgt(realm), tgt_keys, flags);
     tgt.mkvno = mkvno;
     tgt.tl_data = vec![creation];
-    store.debug_insert(tgt);
-    Ok(store)
+    Ok(vec![km, tgt])
 }
 
+// MIT: `add_admin_princs` (kadmin/dbutil/kadm5_create.c:139-154)
+// MIT: `add_admin_princ` (kadmin/dbutil/kadm5_create.c:207-213)
 /// Admin is three hours; changepw is five minutes.
 pub fn add_admin_principals(store: &mut PrincipalStore, mkvno: u16) -> Result<(), Error> {
     let realm = store.realm().to_owned();

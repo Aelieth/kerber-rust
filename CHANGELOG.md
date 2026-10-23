@@ -51,6 +51,7 @@ any other `###` heading.
 
 ### Changed
 
+- **kdc.** K/M and krbtgt are built by `realm_rows`, and kadmin attributes live in `add_admin_principals` only.
 - **kdc.** Creating `kadmin/changepw` no longer sets `PWCHANGE_SERVICE`; only realm creation does, as MIT's `kadm5_create`.
 - **protocol.** `AsTicketOpts::default()` is not forwardable, as MIT's library default; `[libdefaults] forwardable = true` still sets it.
 - **protocol.** An unsupported etype is no longer retried as aes256; the KDC error is returned, as MIT does.
