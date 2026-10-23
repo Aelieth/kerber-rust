@@ -111,6 +111,30 @@ fn changepw_service_own_policy_getpol_is_ok() {
     assert_eq!(ret_code(&denied), KADM5_AUTH_GET);
 }
 
+// AZ-1 cell 6 (A2-20): a caller's own policy is read in the caller's realm, so a same-name store
+// principal does not grant it. Not lab-gradable (MIT's KDC refuses the cross-realm kadmin ticket).
+#[test]
+fn changepw_cross_realm_same_name_getpol_is_denied() {
+    let (store, acl, _actor) = setup();
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
+    {
+        let mut g = store.write().unwrap();
+        g.put_policy(krb5_kdc::NamedPolicy::new("userpol")).unwrap();
+        g.set_principal_policy(&user, Some("userpol".into()))
+            .unwrap();
+    }
+    // user@KERBER.TEST holds userpol, but the caller is user@OTHER.REALM: its own-policy lookup
+    // finds no record, so the read pre-AZ's name-only lookup allowed is now denied.
+    let denied = cpw_dispatch(
+        &store,
+        &acl,
+        "user@OTHER.REALM",
+        GET_POLICY,
+        &encode_named("userpol"),
+    );
+    assert_eq!(ret_code(&denied), KADM5_AUTH_GET);
+}
+
 #[test]
 fn changepw_service_getprivs_is_ok() {
     let (store, acl, actor) = setup();
