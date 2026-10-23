@@ -5356,7 +5356,7 @@ fn run() -> Result<(), String> {
     let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "testhost.kerber.test"]);
     ra_cases(&cfg, realm, &user, &host)?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":149}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":151}}"#);
     Ok(())
 }
 
@@ -5489,10 +5489,31 @@ fn b17_cms_cases(cfg: &Cfg, realm: &str, user: &PrincipalName) -> Result<(), Str
         err::PREAUTH_FAILED,
     )?;
 
-    // Order: the oerr() cases (the five decode cases above, then the two signature cases) each
-    // drain MIT's OpenSSL error queue; the three cases whose refusal is set by krb5_set_error_message
-    // (wrong-oid, not-octet-string, no-signer-cert) run last, so none of them leaves a stale
-    // "unsupported content type" for a later oerr() case to log (docs/mit-deviations.md).
+    let sd_trailing = edit_sd(&base_cms(0x1000_022a)?, &|kids: &mut Vec<der::Der>| {
+        kids.push(der::Der::Prim(0x05, Vec::new()));
+    })?;
+    expect_error(
+        cfg,
+        "pkinit-cms-signeddata-trailing",
+        &as_with(0x1000_022a, sd_trailing)?,
+        err::PREAUTH_FAILED,
+    )?;
+    let algid_tag = edit_sd(&base_cms(0x1000_022b)?, &|kids: &mut Vec<der::Der>| {
+        if let Some(der::Der::Cons(_, algs)) = kids.iter_mut().find(|k| k.tag() == 0x31)
+            && let Some(der::Der::Cons(_, alg)) = algs.first_mut()
+            && let Some(der::Der::Prim(tag, _)) = alg.first_mut()
+        {
+            *tag = 0x05;
+        }
+    })?;
+    expect_error(
+        cfg,
+        "pkinit-cms-algid-wrong-tag",
+        &as_with(0x1000_022b, algid_tag)?,
+        err::PREAUTH_FAILED,
+    )?;
+
+    // oerr() cases first; the krb5_set_error_message refusals last, so none leaves a stale reason.
     let not_der = set_sig(
         &base_cms(0x1000_0228)?,
         vec![0x31, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x02],

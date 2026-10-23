@@ -67,6 +67,7 @@ any other `###` heading.
 - **ci.** The MIT truth check reads a `// MIT:` cite; a rangeless one must name a symbol that file defines.
 - **gss.** The nightly GSS gate checks that both acceptors report one host ticket's lifetime within 60 s.
 - **ci.** The differential gate sends ten malformed PKINIT signedAuthPacks to both KDCs and compares each refusal's code and logged reason (B17).
+- **ci.** Two more differential-gate signedAuthPacks: a trailing element and a mistyped algorithm OID in the SignedData, refused at decode on both KDCs (B17b).
 - **ci.** The audit job installs prebuilt cargo-audit 0.22.2 and runs `cargo audit --deny warnings`. It does not file issues.
 - **ci.** ci-policy prints the product and per-crate comment and test ratios and does not fail on them.
 - **ci.** Cap `[Unreleased]` at 24,000 bytes and pin CI to `ubuntu-24.04` with upload-artifact 7.0.2. Released sections are frozen. ci-policy enforces the cap.

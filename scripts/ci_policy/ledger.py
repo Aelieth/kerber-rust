@@ -161,6 +161,8 @@ DIFFSEND_CASES = frozenset(
         "pkinit-cms-no-signer-cert",
         "pkinit-sig-not-der",
         "pkinit-sig-r-zero",
+        "pkinit-cms-signeddata-trailing",
+        "pkinit-cms-algid-wrong-tag",
     }
 )
 _LEDGER_GATE = re.compile(r"(?:scripts/)?([A-Za-z0-9._-]+-gate(?:\.sh)?)")

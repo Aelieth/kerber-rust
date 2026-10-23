@@ -103,7 +103,7 @@ is `proposed`. The listed live `diffsend` cases are `garbage-pdu`,
 `tgs-server-disallow-postdated`, `s4u2self-client-expired`,
 `s4u2self-client-locked-out`, `tgs-fast-unkeyed-bad-checksum`,
 `tgs-fast-explicit-armor`, `tgs-fast-armor-no-tgs-subkey`,
-`tgs-fast-armor-no-subkey`, `pkinit-cms-too-small`, `pkinit-cms-header-too-long`, `pkinit-cms-too-long`, `pkinit-cms-wrong-tag`, `pkinit-cms-field-missing`, `pkinit-cms-wrong-oid`, `pkinit-authpack-not-octet-string`, `pkinit-cms-no-signer-cert`, `pkinit-sig-not-der`, `pkinit-sig-r-zero`.
+`tgs-fast-armor-no-subkey`, `pkinit-cms-too-small`, `pkinit-cms-header-too-long`, `pkinit-cms-too-long`, `pkinit-cms-wrong-tag`, `pkinit-cms-field-missing`, `pkinit-cms-wrong-oid`, `pkinit-authpack-not-octet-string`, `pkinit-cms-no-signer-cert`, `pkinit-sig-not-der`, `pkinit-sig-r-zero`, `pkinit-cms-signeddata-trailing`, `pkinit-cms-algid-wrong-tag`.
 
 Wire `e_text` is the MIT **status word**. MIT log messages are not
 wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
