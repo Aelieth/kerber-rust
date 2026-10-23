@@ -1,13 +1,15 @@
 //! Client preauth modules selected by `[plugins] clpreauth`.
 // MIT: `k5_init_preauth_context` (lib/krb5/krb/preauth2.c:120-204)
-//! registers the built-in clpreauth modules in the order `pkinit`, `spake`, `encrypted_challenge`, `encrypted_timestamp`, `otp`.
+//! Built-ins register as pkinit, spake, encrypted_challenge, encrypted_timestamp, otp.
 // MIT: `k5_plugin_load_all` (lib/krb5/krb/plugin.c:421-455)
 //! applies `disable` and `enable_only`.
 //! A module whose init fails, or a dynamic module that does not load, is not kept.
 // MIT: `process_pa_data` (lib/krb5/krb/preauth2.c:648-728)
 //! answers only a pa-type a loaded module serves.
 //! `sam2` is not implemented, so it is absent the way a module that failed to load is absent.
-//! `otp` follows `encrypted_timestamp`, as MIT registers it. `module` is not read. Embedder modules follow the built-ins; an earlier name wins a duplicate, and the first loaded module to claim a pa-type keeps it.
+//! otp follows encrypted_timestamp, as MIT registers it. module is not read.
+//! Embedder modules follow the built-ins. An earlier name wins a duplicate.
+//! The first loaded module to claim a pa-type keeps it.
 use std::sync::{Arc, Mutex};
 
 use krb5_config::Krb5Conf;
@@ -21,7 +23,7 @@ pub trait ClPreauth: Send + Sync {
     /// MIT's module name, the string `disable` and `enable_only` match.
     fn name(&self) -> &'static str;
 
-    /// Pa-types this module serves. A type already claimed by an earlier loaded module is a conflict and this module is not kept.
+    /// A type an earlier module claimed is a conflict, and this module is not kept.
     // MIT: `k5_init_preauth_context` (lib/krb5/krb/preauth2.c:171-181)
     /// the first module to list a pa-type keeps it.
     fn pa_types(&self) -> &'static [i32];
@@ -32,8 +34,8 @@ pub trait ClPreauth: Send + Sync {
         true
     }
 
-    /// Answer one input pa-data element. `Ok(None)` declines; `Ok(Some(out))` is the padata the next AS-REQ carries after the cookie.
-    /// A module failure. The exchange does not try another mechanism after it.
+    /// Ok(None) declines. Some is the next AS-REQ's padata, after the cookie.
+    /// A failure stops the exchange. No other mechanism is tried.
     fn process(&self, input: &PaData) -> Result<Option<Vec<PaData>>, Error>;
 }
 
@@ -52,7 +54,6 @@ struct Slot {
     kind: Kind,
 }
 
-/// Which loaded module serves a pa-type.
 pub(crate) enum Owner {
     Pkinit,
     Spake,
