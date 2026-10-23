@@ -18,6 +18,7 @@ use super::codes::{
     MAX_MACHINE_NAME, MSG_ACCEPTED, MSG_CALL, MSG_DENIED, MSG_REPLY, NGRPS, PROG_MISMATCH,
     PROG_UNAVAIL, REJECT_AUTH_ERROR, RPC_VERSION, SUCCESS,
 };
+use super::iprop::IpropResync;
 use super::log::rpc_log_flavor_refused;
 use super::xdr::{XdrR, XdrW, opaque_len};
 use crate::Error;
@@ -36,6 +37,8 @@ pub struct RpcCtx<'a> {
     pub conf: &'a AcceptorConfig,
     /// The programs served.
     pub programs: Programs,
+    #[doc(hidden)]
+    pub iprop_resync: Option<&'a Arc<IpropResync>>,
 }
 
 // MIT: `svc_register` (lib/rpc/svc.c:161-191)
@@ -74,6 +77,7 @@ pub fn serve_kadm5_conn(
         conf,
         Programs::BOTH,
         peer,
+        None,
         None,
     ) else {
         return Err(io::Error::other(
@@ -151,6 +155,7 @@ pub(crate) struct Kadm5Conn {
     sess: Kadm5RpcSession,
     peer: RpcPeer,
     report: Option<UnhandledRpc>,
+    iprop_resync: Option<Arc<IpropResync>>,
 }
 
 impl Kadm5Conn {
@@ -164,6 +169,7 @@ impl Kadm5Conn {
         programs: Programs,
         peer: RpcPeer,
         report: Option<UnhandledRpc>,
+        iprop_resync: Option<Arc<IpropResync>>,
     ) -> Option<Self> {
         Some(Self {
             store,
@@ -176,6 +182,7 @@ impl Kadm5Conn {
             sess: Kadm5RpcSession::default(),
             peer,
             report,
+            iprop_resync,
         })
     }
 
@@ -186,6 +193,7 @@ impl Kadm5Conn {
             expected_realm: &self.realm,
             conf: &self.conf,
             programs: self.programs,
+            iprop_resync: self.iprop_resync.as_ref(),
         };
         let Kadm5RpcSession { gss, agss } = &mut self.sess;
         handle_rpc(ctx, &self.handle, gss, agss, &self.rcache, rec, &self.peer)

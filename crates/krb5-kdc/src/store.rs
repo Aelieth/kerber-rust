@@ -293,7 +293,7 @@ impl PrincipalStore {
         true
     }
 
-    fn journal_key(&self) -> Option<krb5_crypto::ProtocolKey> {
+    pub(crate) fn journal_key(&self) -> Option<krb5_crypto::ProtocolKey> {
         if let Some((_, master)) = &self.persist_master {
             return Some(master.clone());
         }

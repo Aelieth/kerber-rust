@@ -13,6 +13,7 @@ fn dispatch_iprop(
     crate::kadm5::iprop::dispatch_iprop(
         store,
         &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
+        None,
         actor,
         proc,
         args,
@@ -633,6 +634,7 @@ fn the_iprop_program_is_served_only_with_the_update_log_mapped() {
                 expected_realm: "KERBER.TEST",
                 conf: &AcceptorConfig::default(),
                 programs: Programs::BOTH,
+                iprop_resync: None,
             },
             &[],
             &mut None,

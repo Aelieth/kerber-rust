@@ -48,7 +48,12 @@ pub(super) fn kadm5_or_iprop(
     changepw: bool,
     iprop: bool,
 ) -> Result<Vec<u8>, Error> {
-    let RpcCtx { store, authcfg, .. } = ctx;
+    let RpcCtx {
+        store,
+        authcfg,
+        iprop_resync,
+        ..
+    } = ctx;
     if proc == 0 {
         return Ok(Vec::new());
     }
@@ -59,7 +64,14 @@ pub(super) fn kadm5_or_iprop(
         ) {
             return Err(Error::ProcUnavail);
         }
-        return Ok(dispatch_iprop(store, authcfg, actor, proc, args));
+        return Ok(dispatch_iprop(
+            store,
+            authcfg,
+            iprop_resync,
+            actor,
+            proc,
+            args,
+        ));
     }
     dispatch_kadm5_ticket(store, authcfg, actor, proc, args, initial, changepw)
 }

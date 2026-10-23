@@ -14,8 +14,8 @@ use crate::error::Error as KdcError;
 use crate::mkey::{MASTER_NAME, default_master_etype, master_key_from_password};
 use crate::osa::OsaPrincEnt;
 use crate::store::{
-    KDB_DISALLOW_ALL_TIX, KDB_LOCKDOWN_KEYS, KDB_REQUIRES_PRE_AUTH, KadmData, KeyEntry,
-    NamedPolicy, Principal, PrincipalStore, TlData,
+    IPROP_NIL, IPROP_OK, KDB_DISALLOW_ALL_TIX, KDB_LOCKDOWN_KEYS, KDB_REQUIRES_PRE_AUTH, KadmData,
+    KeyEntry, NamedPolicy, Principal, PrincipalStore, TlData,
 };
 use crate::ulog::UlogLast;
 
@@ -813,6 +813,19 @@ pub fn parse_iprop_header(line: &str) -> Result<(bool, UlogLast), IpropHeaderErr
     ))
 }
 
+// MIT: `current_dump_sno_in_ulog` (kadmin/dbutil/dump.c:1111-1134)
+#[must_use]
+pub fn dump_current_in_ulog(dump_file: &Path, ulog: &crate::ulog::Ulog) -> bool {
+    let Ok(text) = fs::read(dump_file) else {
+        return false;
+    };
+    let line = text.split(|&b| b == b'\n').next().unwrap_or_default();
+    let Ok((_, last)) = parse_iprop_header(&String::from_utf8_lossy(line)) else {
+        return false;
+    };
+    matches!(ulog.sno_status_of(last), IPROP_OK | IPROP_NIL)
+}
+
 // MIT: `dump_db` (kadmin/dbutil/dump.c:1176-1188)
 // MIT: `dump_db` (kadmin/dbutil/dump.c:1318-1333)
 /// The log's last serial is read before the database is iterated.
@@ -835,6 +848,22 @@ pub fn dump_store_iprop_with_key(
     last: UlogLast,
 ) -> Result<String, DumpError> {
     Ok(iprop_header(last, &write_dump_nra(store, mkey, true)?))
+}
+
+// MIT: `ipropx_resync` (kadmin/server/ipropd_svc.c:343-344)
+pub fn conditional_iprop_dump(store: &PrincipalStore, dump_file: &Path) -> Result<(), DumpError> {
+    if let Some(ulog) = store.ulog()
+        && dump_current_in_ulog(dump_file, ulog)
+    {
+        return Ok(());
+    }
+    let mkey = store
+        .journal_key()
+        .ok_or_else(|| DumpError::Crypto("no master key for the iprop dump".to_owned()))?;
+    let last = store.ulog_last().unwrap_or_default();
+    let text = dump_store_iprop_with_key(store, &mkey, last)?;
+    write_fresh_secret_file(dump_file, text.as_bytes())?;
+    Ok(())
 }
 
 // MIT: `dump_db` (kadmin/dbutil/dump.c:1318-1329)

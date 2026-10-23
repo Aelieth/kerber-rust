@@ -17,11 +17,11 @@ use krb5_cli::{MitArgs, MitOpt, Placement, Prompter, getopt};
 use krb5_config::{IpropParams, KdcPaths};
 use krb5_crypto::{EncryptionType, ProtocolKey};
 use krb5_kdc::{
-    CreateError, DbUpdate, DbWrite, DumpError, DumpFile, DumpPrincipal, FullLoad, IPROP_NIL,
-    IPROP_OK, IpropHeaderError, IpropRole, KDB_DUMP_VERSION, LoadError, Lockout, LoggedWrite,
-    PersistError, PrincipalStore, Ulog, UlogLast, add_admin_principals, create_realm_db,
-    create_store, load_dump_with_key, master_key_from_password, parse_dump, save_store_with_master,
-    stash_keys, string_to_enctype, update_store, write_stash,
+    CreateError, DbUpdate, DbWrite, DumpError, DumpFile, DumpPrincipal, FullLoad, IpropHeaderError,
+    IpropRole, KDB_DUMP_VERSION, LoadError, Lockout, LoggedWrite, PersistError, PrincipalStore,
+    Ulog, UlogLast, add_admin_principals, create_realm_db, create_store, dump_current_in_ulog,
+    load_dump_with_key, master_key_from_password, parse_dump, save_store_with_master, stash_keys,
+    string_to_enctype, update_store, write_stash,
 };
 use zeroize::{Zeroize as _, Zeroizing};
 
@@ -937,18 +937,10 @@ enum Iprop {
     X1,
 }
 
-// MIT: `current_dump_sno_in_ulog` (kadmin/dbutil/dump.c:1111-1134)
 fn current_dump_sno_in_ulog(util: &Util, file: &Path) -> bool {
-    let Ok(text) = fs::read(file) else {
-        return false;
-    };
-    let line = text.split(|&b| b == b'\n').next().unwrap_or_default();
-    let Some(last) = iprop_header_last(util, &String::from_utf8_lossy(line)) else {
-        return false;
-    };
     util.ulog
         .as_ref()
-        .is_some_and(|log| matches!(log.sno_status_of(last), IPROP_OK | IPROP_NIL))
+        .is_some_and(|log| dump_current_in_ulog(file, log))
 }
 
 // MIT: `parse_iprop_header` (kadmin/dbutil/dump.c:1089-1101)

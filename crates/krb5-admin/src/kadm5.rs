@@ -27,7 +27,7 @@ pub(crate) use codes::{
 };
 pub use glob::glob_pattern_ok;
 pub(crate) use glob::{glob_expand, glob_is_match, policies_matching, principals_matching};
-pub use iprop::{IncrReply, IpropClient, RpcFailure};
+pub use iprop::{IncrReply, IpropClient, IpropResync, RpcFailure};
 pub(crate) use policy::{create_policy_local, modify_policy_local};
 pub(crate) use rpc::Kadm5Conn;
 pub use rpc::{

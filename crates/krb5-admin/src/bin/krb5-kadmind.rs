@@ -224,6 +224,14 @@ fn main() {
     let iprop_cfg = iprop.enabled.then(|| IpropConfig {
         listen: iprop.listen.clone(),
         port: iprop.port.unwrap_or_default(),
+        dump_file: Some(
+            args.value("-F")
+                .map_or_else(krb5_config::default_kprop_file, std::path::PathBuf::from),
+        ),
+        kprop_port: args
+            .value("-k")
+            .map(str::to_owned)
+            .or_else(|| std::env::var("KPROP_PORT").ok()),
     });
 
     let signals = Signals::install();

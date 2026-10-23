@@ -4,6 +4,7 @@ use std::fmt;
 use std::io;
 use std::net::{SocketAddr, TcpListener, UdpSocket};
 use std::os::fd::RawFd;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, PoisonError};
 use std::time::Duration;
@@ -24,7 +25,7 @@ use krb5_kdc::{
 use krb5_log::klog::{self, Severity};
 use krb5_protocol::{AcceptorConfig, ReplayCache};
 
-use crate::kadm5::{Kadm5Auth, Kadm5AuthConfig, Kadm5Conn};
+use crate::kadm5::{IpropResync, Kadm5Auth, Kadm5AuthConfig, Kadm5Conn};
 use crate::listen::{client_addr, handle_kpasswd_from, kpasswd_toolong_error};
 use crate::{Programs, RpcPeer, UnhandledRpc, acceptor_names_served};
 
@@ -76,6 +77,8 @@ impl Default for ServeLimits {
 pub struct IpropConfig {
     pub listen: Option<String>,
     pub port: i32,
+    pub dump_file: Option<PathBuf>,
+    pub kprop_port: Option<String>,
 }
 
 /// What an embedder hands [`Kadmind::new`] to start kadm5 and kpasswd over a shared store.
@@ -131,6 +134,7 @@ pub struct Kadmind {
     programs: Programs,
     report: Option<UnhandledRpc>,
     limits: ServeLimits,
+    iprop_resync: Option<Arc<IpropResync>>,
 }
 
 impl Kadmind {
@@ -179,6 +183,21 @@ impl Kadmind {
             &cfg.auth_modules,
             &relations,
         ));
+        let iprop_resync = cfg.iprop.as_ref().and_then(|ip| {
+            ip.dump_file.as_ref().map(|dump_file| {
+                let realm = store
+                    .read()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .realm()
+                    .to_owned();
+                Arc::new(IpropResync {
+                    dump_file: dump_file.clone(),
+                    kprop_port: ip.kprop_port.clone(),
+                    profile: cfg.profile.krb5.clone(),
+                    realm,
+                })
+            })
+        });
         Ok(Self {
             store,
             authcfg,
@@ -188,6 +207,7 @@ impl Kadmind {
             programs: Programs::BOTH,
             report: None,
             limits: cfg.limits,
+            iprop_resync,
         })
     }
 
@@ -209,6 +229,7 @@ impl Kadmind {
             programs: Programs::BOTH,
             report: None,
             limits: ServeLimits::default(),
+            iprop_resync: None,
         }
     }
 
@@ -325,6 +346,7 @@ impl Dispatch for Kadmind {
             self.programs,
             RpcPeer::new(Some(remote), Some(local)),
             self.report.clone(),
+            self.iprop_resync.clone(),
         )?))
     }
 }

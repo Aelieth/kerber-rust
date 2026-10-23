@@ -263,6 +263,7 @@ fn admin_rpcsec_init_svc(
             expected_realm: TEST_REALM,
             conf: &AcceptorConfig::default(),
             programs: Programs::BOTH,
+            iprop_resync: None,
         },
         b"hdl",
         &mut gss,

@@ -56,6 +56,7 @@ any other `###` heading.
 
 ### Changed
 
+- **admin.** On a full resync kadmind dumps the database and kprops it to the replica itself, as MIT's does, instead of leaving the two commands to be run by hand.
 - **gss.** A mutual initiator sends the RFC 4537 enctype list, and an authenticator leaves out a zero sequence number.
 - **gss.** A non-boolean `client_aware_channel_bindings` fails the AP-REQ.
 - **client.** Kinit traces initial credentials before DNS SRV, and each query, answer, and miss.

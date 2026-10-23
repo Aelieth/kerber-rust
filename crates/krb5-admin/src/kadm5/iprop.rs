@@ -2,12 +2,15 @@
 
 use std::io;
 use std::net::TcpStream;
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
+use krb5_config::ClientContext;
 use krb5_crypto::ProtocolKey;
 use krb5_gss::GssContext;
 use krb5_kdc::{IpropUpdate, SharedDump as SharedStore, TlData, UlogLast, UlogTime, UlogUpdates};
-use krb5_log::klog::os_error_text;
+use krb5_log::klog::{Severity, os_error_text, syslog};
 use krb5_types::{PrincipalName, Ticket};
 use nix::errno::Errno;
 use zeroize::Zeroizing;
@@ -23,6 +26,9 @@ use super::codes::{
 use super::rpc::{read_record, rpc_call_bytes, write_record};
 use super::xdr::{XdrR, XdrW};
 use crate::Error;
+use crate::kprop::{
+    KPROP_SERVICE, kprop_get_tickets, kprop_open_connection, kprop_send_dump, kprop_sendauth,
+};
 
 // MIT: `iprop_get_updates_1_svc` (kadmin/server/ipropd_svc.c:191-200)
 /// a caller who fails the iprop ACL gets permission denied and no entries.
@@ -31,6 +37,7 @@ use crate::Error;
 pub(super) fn dispatch_iprop(
     store: &SharedStore,
     authcfg: &Kadm5AuthConfig,
+    resync: Option<&Arc<IpropResync>>,
     actor: &str,
     proc: u32,
     args: &[u8],
@@ -58,11 +65,67 @@ pub(super) fn dispatch_iprop(
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             encode_incr_result(&g.ulog_get_entries(last))
         }
-        IPROP_FULL_RESYNC | IPROP_FULL_RESYNC_EXT => {
-            encode_fullresync_status(UlogLast::default(), krb5_kdc::IPROP_OK)
-        }
+        IPROP_FULL_RESYNC | IPROP_FULL_RESYNC_EXT => full_resync(store, resync, actor),
         _ => encode_incr_status(krb5_kdc::IPROP_FULL_RESYNC),
     }
+}
+
+#[doc(hidden)]
+pub struct IpropResync {
+    pub dump_file: PathBuf,
+    pub kprop_port: Option<String>,
+    pub profile: krb5_config::Krb5Conf,
+    pub realm: String,
+}
+
+// MIT: `ipropx_resync` (kadmin/server/ipropd_svc.c:322-424)
+fn full_resync(store: &SharedStore, resync: Option<&Arc<IpropResync>>, actor: &str) -> Vec<u8> {
+    let Some(resync) = resync else {
+        return encode_fullresync_status(UlogLast::default(), krb5_kdc::IPROP_OK);
+    };
+    let Some(host) = getclhoststr(actor) else {
+        syslog(Severity::Err, "iprop_full_resync: getclhoststr failed");
+        return encode_fullresync_status(UlogLast::default(), krb5_kdc::IPROP_ERROR);
+    };
+    let store = store.clone();
+    let resync = Arc::clone(resync);
+    let host = host.to_owned();
+    std::thread::spawn(move || run_resync(&store, &resync, &host));
+    encode_fullresync_status(UlogLast::default(), krb5_kdc::IPROP_OK)
+}
+
+// MIT: `getclhoststr` (kadmin/server/ipropd_svc.c:245-255)
+fn getclhoststr(princ: &str) -> Option<&str> {
+    let start = princ.find('/')? + 1;
+    let end = princ[start..].find('@')? + start;
+    (end > start).then(|| &princ[start..end])
+}
+
+// MIT: `ipropx_resync` (kadmin/server/ipropd_svc.c:355-420)
+fn run_resync(store: &SharedStore, resync: &IpropResync, host: &str) {
+    if let Err(e) = resync_dump_and_send(store, resync, host) {
+        syslog(Severity::Err, &format!("iprop_full_resync to {host}: {e}"));
+    }
+}
+
+fn resync_dump_and_send(
+    store: &SharedStore,
+    resync: &IpropResync,
+    host: &str,
+) -> Result<(), String> {
+    {
+        let g = store
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        krb5_kdc::conditional_iprop_dump(&g, &resync.dump_file).map_err(|e| e.to_string())?;
+    }
+    let dump = std::fs::read(&resync.dump_file).map_err(|e| e.to_string())?;
+    let ctx = ClientContext::new(resync.profile.clone());
+    let creds = kprop_get_tickets(&ctx, &resync.realm, host, None).map_err(|e| e.to_string())?;
+    let port = resync.kprop_port.as_deref().unwrap_or(KPROP_SERVICE);
+    let (mut stream, sender) = kprop_open_connection(host, port).map_err(|e| e.to_string())?;
+    let mut auth = kprop_sendauth(&mut stream, &creds, sender).map_err(|e| e.to_string())?;
+    kprop_send_dump(&mut stream, &mut auth, &dump).map_err(|e| e.to_string())
 }
 
 // MIT: `xdr_kdb_last_t` (lib/kdb/iprop_xdr.c:309-318)
