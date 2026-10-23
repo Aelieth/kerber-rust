@@ -1,4 +1,4 @@
-//! The OTP kdcpreauth module (RFC 6560): MIT `plugins/preauth/otp/main.c` and `plugins/preauth/otp/otp_state.c`, with an embedder's verifier in place of MIT's RADIUS transport.
+//! OTP preauth for a client's tokens.
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{KeyUsage, ProtocolKey, decrypt_enc_data};
@@ -19,19 +19,15 @@ use crate::plugins::{
 use crate::store::{Principal, unix_now_u32};
 
 // MIT: `DEFAULT_TYPE_NAME` (plugins/preauth/otp/otp_state.c:42-42)
-/// the type an `otp` token names when it names none.
 pub(crate) const DEFAULT_TYPE: &str = krb5_config::DEFAULT_OTP_TYPE;
 
-/// One token type of the module, without the RADIUS server and secret that MIT's `token_type` carries: `[otp]` reads it (`krb5_config::token_types_decode`).
 pub(crate) use krb5_config::OtpType as OtpTypeConfig;
 
-/// The token types in force, in order.
 pub(crate) struct OtpTypes(Vec<OtpTypeConfig>);
 
 impl OtpTypes {
-    /// The types `[otp]` configured, then one more per registered verifier name that no section names. MIT takes its types from the profile alone; a verifier's name is the type that selects it, so a verifier needs no section, and then it has the built-in type's defaults.
     // MIT: `token_type_default` (plugins/preauth/otp/otp_state.c:152-166)
-    /// the realm stays in the username and there are no indicators.
+    /// A verifier with no section is still a type.
     pub(crate) fn from_config(configured: &[OtpTypeConfig]) -> Self {
         let mut v = configured.to_vec();
         for n in otp_verifier_names() {
@@ -42,24 +38,19 @@ impl OtpTypes {
         Self(v)
     }
 
-    /// The types with no `[otp]` at all: the built-in DEFAULT, then the registered verifiers.
     // MIT: `token_types_decode` (plugins/preauth/otp/otp_state.c:298-344)
-    /// no section named DEFAULT adds the built-in one.
     #[cfg(test)]
     pub(crate) fn builtin() -> Self {
         Self::from_config(&[OtpTypeConfig::builtin(DEFAULT_TYPE)])
     }
 
     // MIT: `token_decode` (plugins/preauth/otp/otp_state.c:422-427)
-    /// the last entry of that name wins.
     fn find(&self, name: &[u8]) -> Option<&OtpTypeConfig> {
         self.0.iter().rev().find(|t| t.name.as_bytes() == name)
     }
 }
 
-/// The token types in force: `[otp]` (kdc.conf, then krb5.conf), read when the KDC started, and the verifiers registered now. A module that did not initialize is never asked, and has none.
 // MIT: `otp_state_new` (plugins/preauth/otp/otp_state.c:564-610)
-/// the types come from the profile, once.
 fn otp_types(store: &dyn PrincipalRead) -> OtpTypes {
     match store.policy().otp_kdc() {
         Ok(configured) => OtpTypes::from_config(configured),
@@ -69,17 +60,12 @@ fn otp_types(store: &dyn PrincipalRead) -> OtpTypes {
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct OtpToken {
-    /// The token type, whose indicators apply when the token has none.
     pub(crate) ty: OtpTypeConfig,
-    /// The username the verifier is told (MIT `token.username`), as octets: a JSON string's `\u` escapes are single octets, not UTF-8.
     pub(crate) username: Vec<u8>,
-    /// The token's own indicators. When present, they replace the type's, even when empty.
     pub(crate) indicators: Option<Vec<String>>,
 }
 
-/// The first `otp` string attribute of the client, when it has one. An empty string counts.
 // MIT: `get_string` (kdc/kdc_preauth.c:410-414)
-/// the string attribute the module reads.
 pub(crate) fn otp_attr(client: &Principal) -> Option<&str> {
     client
         .string_attrs
@@ -89,7 +75,6 @@ pub(crate) fn otp_attr(client: &Principal) -> Option<&str> {
 }
 
 // MIT: `nonce_generate` (plugins/preauth/otp/main.c:137-153)
-/// the KDC's time as four big-endian octets, then `key_len` random octets.
 pub(crate) fn nonce_generate(key_len: usize) -> Result<Vec<u8>, Error> {
     let mut nonce = vec![0u8; 4 + key_len];
     getrandom::getrandom(&mut nonce[4..]).map_err(|_| Error::Rng)?;
@@ -98,15 +83,12 @@ pub(crate) fn nonce_generate(key_len: usize) -> Result<Vec<u8>, Error> {
 }
 
 // MIT: `krb5_check_clockskew` (lib/krb5/os/timeofday.c:54-67)
-/// `then` is within `skew` seconds of the KDC's clock.
 fn within_skew(then: u32, skew: i64) -> bool {
     (i64::from(unix_now_u32()) - i64::from(then)).abs() <= skew
 }
 
-/// The codes and texts of the module's failures: MIT's `com_err` message for each code.
 const E_PREAUTH_FAILED: &str = "Preauthentication failed";
 // MIT: `on_response` (plugins/preauth/otp/main.c:167-168)
-/// an OTP reject is `KRB5_PREAUTH_FAILED`.
 const KRB5_PREAUTH_FAILED: i32 = -1_765_328_174;
 const E_GENERIC: &str = "Generic preauthentication failure";
 const E_INTEGRITY: &str = "Decrypt integrity check failed";
@@ -115,23 +97,16 @@ pub(crate) const E_EINVAL: &str = "Invalid argument";
 const E_ASN1: &str = "ASN.1 identifier doesn't match expected value";
 pub(crate) const E_BAD_ENCTYPE: &str = "Bad encryption type";
 pub(crate) const E_BAD_MSIZE: &str = "Message size is incompatible with encryption type";
-/// MIT's `strerror(EMSGSIZE)`: the text of a RADIUS attribute whose value is out of its size.
 const E_MSG_SIZE: &str = "Message too long";
 // MIT: `MAX_ATTRSIZE` (lib/krad/internal.h:49-49)
-/// the largest RADIUS attribute value, which is the User-Name's.
 // MIT: `attributes` (lib/krad/attr.c:62-62)
-/// the User-Name takes 1 to MAX_ATTRSIZE octets.
 const MAX_USER_NAME: usize = 253;
 // MIT: `attributes` (lib/krad/attr.c:63-63)
-/// the User-Password takes 1 to 128 octets.
 const MAX_USER_PASSWORD: usize = 128;
 
-/// A verify failure: the code the filter sees, and the message of that code, which the module logs.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct OtpFail {
-    /// The Kerberos error code of the failure.
     pub(crate) code: i32,
-    /// The message MIT's `krb5_get_error_message` gives for the module's own code.
     pub(crate) emsg: String,
 }
 
@@ -143,19 +118,16 @@ fn fail(code: i32, emsg: &str) -> OtpFail {
 }
 
 // MIT: `kr_attr_valid` (lib/krad/attr.c:252-261)
-/// a value whose length is outside its attribute's size is EMSGSIZE, and the RADIUS request is not built, so no transport is used.
 fn attr_sizes_ok(username: &[u8], otp_value: &[u8]) -> bool {
     (1..=MAX_USER_NAME).contains(&username.len())
         && (1..=MAX_USER_PASSWORD).contains(&otp_value.len())
 }
 
-/// Log one `com_err` line of the module, as MIT's `com_err("otp", code, text)` does.
 fn com_err(code_text: &str, text: &str) {
     klog::com_err(Some(code_text), text);
 }
 
 // MIT: `otp_edata` (plugins/preauth/otp/main.c:235-276)
-/// the challenge hint is offered only for a client with an `otp` attribute and a FAST armor key. An RNG or encode failure gives no hint.
 pub(crate) fn otp_edata(client: &Principal, armor: Option<&ProtocolKey>) -> PreauthHint {
     let (Some(_), Some(armor)) = (otp_attr(client), armor) else {
         return PreauthHint::default();
@@ -164,8 +136,6 @@ pub(crate) fn otp_edata(client: &Principal, armor: Option<&ProtocolKey>) -> Prea
         return PreauthHint::default();
     };
     // MIT: `otp_edata` (plugins/preauth/otp/main.c:254-256)
-    // the format, length and iteration count are -1, which the encoder omits.
-    // The flags are the only token info field on the wire.
     let info = OtpTokenInfo {
         flags: KerberosFlags::from_slice(&[0, 0, 0, 0]),
         vendor: None,
@@ -196,13 +166,9 @@ pub(crate) fn otp_edata(client: &Principal, armor: Option<&ProtocolKey>) -> Prea
     }
 }
 
-/// Decode the `otp` attribute into its tokens. `Err(())` is MIT's EINVAL, and it fails the whole attribute.
 // MIT: `decode_config_json` (plugins/preauth/otp/otp_state.c:485-502)
-/// the attribute is a JSON array, and an empty array is one empty token.
 // MIT: `tokens_decode` (plugins/preauth/otp/otp_state.c:523-541)
-/// every element is an object, and one token that fails fails the attribute.
 // MIT: `indicators_decode` (plugins/preauth/otp/otp_state.c:378-397)
-/// the indicators are an array of strings, and any other value is EINVAL.
 pub(crate) fn decode_tokens(
     name: &PrincipalName,
     realm: &str,
@@ -249,9 +215,7 @@ pub(crate) fn decode_tokens(
         .collect()
 }
 
-/// One indicator of an `indicators` array, which the ticket carries as text.
 // MIT: `indicators_decode` (plugins/preauth/otp/otp_state.c:378-397)
-/// the indicator takes any octets, and one that is not UTF-8 fails the attribute here.
 fn indicator(v: &Value) -> Result<String, ()> {
     match v {
         Value::String(s) => String::from_utf8(s.clone()).map_err(|_| ()),
@@ -260,11 +224,11 @@ fn indicator(v: &Value) -> Result<String, ()> {
 }
 
 // MIT: `nonce_verify` (plugins/preauth/otp/main.c:91-101)
-/// a nonce of any other length than the armor key plus four octets passes with no clock check.
 fn nonce_verify(armor_len: usize, plain: &[u8], skew: i64) -> Result<(), OtpFail> {
     let er: PaOtpEncRequest =
         decode(plain).map_err(|_| fail(24, decode_failure_text(plain, false)))?;
     let n: &[u8] = er.nonce.as_ref();
+    // Any other nonce length passes, with no clock check.
     if n.len() != armor_len + 4 {
         return Ok(());
     }
@@ -276,7 +240,6 @@ fn nonce_verify(armor_len: usize, plain: &[u8], skew: i64) -> Result<(), OtpFail
 }
 
 // MIT: `timestamp_verify` (plugins/preauth/otp/main.c:117-123)
-/// the PA-ENC-TS-ENC timestamp is within the clock skew.
 fn timestamp_verify(plain: &[u8], skew: i64) -> Result<(), OtpFail> {
     let ts: PaEncTsEnc = decode(plain).map_err(|_| fail(24, decode_failure_text(plain, true)))?;
     if within_skew(ts.patimestamp.unix_seconds(), skew) {
@@ -286,9 +249,7 @@ fn timestamp_verify(plain: &[u8], skew: i64) -> Result<(), OtpFail> {
     }
 }
 
-/// The verify step of the module's `process_as`: the module's own failure goes to `finish_verify_padata`, which logs its message at INFO, and the request sees PREAUTH_FAILED with no detail.
 // MIT: `finish_verify_padata` (kdc/kdc_preauth.c:1224-1228)
-/// the module's message goes to the log at INFO.
 pub(crate) fn process_otp(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, Error> {
     otp_verify(rock).map_err(OtpFail::into_error)
 }
@@ -303,7 +264,6 @@ impl OtpFail {
 }
 
 // MIT: `otp_verify` (plugins/preauth/otp/main.c:298-355)
-/// the PA-OTP-REQUEST is decrypted under the armor key, its nonce or timestamp is checked, and each token of the `otp` attribute is tried in turn.
 fn otp_verify(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, OtpFail> {
     let Some(raw) = find_pa(rock.padata, pa::OTP_REQUEST) else {
         return Ok(None);
@@ -362,7 +322,7 @@ fn otp_verify(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, OtpFail> 
     };
     let otp_value: &[u8] = req.otp_value.as_ref().map_or(&[][..], AsRef::as_ref);
     for tok in &tokens {
-        // MIT `request_send` builds the RADIUS request before any transport, so an attribute out of its size fails the whole request, whichever token it is in.
+        // A bad length fails before a verifier runs.
         if !attr_sizes_ok(&tok.username, otp_value) {
             return Err(fail(24, E_MSG_SIZE));
         }
@@ -385,8 +345,8 @@ fn otp_verify(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, OtpFail> 
         match verifier.verify(&request) {
             OtpVerdict::Accept => {
                 // MIT: `callback` (plugins/preauth/otp/otp_state.c:632-657)
-                // the reply carries the token's indicators, or the type's when the token has none.
                 let mut indicators = Vec::new();
+                // Empty indicators replace the type's, even an empty list.
                 for ind in tok.indicators.as_deref().unwrap_or(&tok.ty.indicators[..]) {
                     authind_add(&mut indicators, ind);
                 }
