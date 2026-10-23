@@ -29,43 +29,31 @@ const REFERRAL_MAX_HOPS: usize = 10;
 
 #[derive(Clone, Debug)]
 pub struct TgsOutcome {
-    /// Service ticket.
     pub ticket: Ticket,
-    /// Decrypted EncKDCRepPart.
     pub enc_part: EncKdcRepPart,
-    /// Session key for the service.
     pub session_key: ProtocolKey,
-    /// The reply's client realm (`crealm`).
     pub crealm: krb5_types::Realm,
-    /// The reply's client name (`cname`): an S4U2Proxy caller checks it against the evidence ticket's client.
+    /// An S4U2Proxy caller checks it against the evidence ticket's client.
     pub cname: PrincipalName,
 }
 
-/// What a `krb5_get_credentials` caller asks for beyond the server name: the `KRB5_GC_*` options that become KDC options of the service requests, and the extras of `in_creds`.
 // MIT: `krb5_tkt_creds_init` (get_creds.c:1107-1113)
-/// `KRB5_GC_CANONICALIZE`, `KRB5_GC_FORWARDABLE` and `KRB5_GC_NO_TRANSIT_CHECK` are the requested KDC options.
 // MIT: `make_request_for_service` (get_creds.c:358-363)
-/// service requests carry them, and a second ticket adds `ENC_TKT_IN_SKEY`.
 #[derive(Clone, Debug, Default)]
 pub struct TgsCredsOptions {
     /// `KRB5_GC_CANONICALIZE` (`kvno -C`): `canonicalize` on the non-referral retry too.
     pub canonicalize: bool,
-    /// `KRB5_GC_FORWARDABLE`.
     pub forwardable: bool,
-    /// `in_creds.keyblock.enctype` (`kvno -e`): the one enctype the service requests ask for.
     pub enctype: Option<i32>,
-    /// `in_creds.second_ticket` (`kvno --u2u`): sent with `ENC_TKT_IN_SKEY` on the service requests.
     pub second_ticket: Option<Ticket>,
-    /// `KRB5_GC_NO_TRANSIT_CHECK`, a gate-only knob (a `test-hooks` build): `DISABLE_TRANSITED_CHECK` goes only on the hop whose TGT is `krbtgt/<service realm>`, so a default MIT KDC doesn't refuse the first hop.
+    /// Gate-only: the flag is set only on the service-realm krbtgt hop.
     #[cfg(feature = "test-hooks")]
     pub no_transit_check: bool,
-    /// The server was asked for in the referral realm and stands here in the start realm: a failed first referral request then falls back to the server host's fallback realm.
     // MIT: `begin` (lib/krb5/krb/get_creds.c:1074-1083)
     /// a server in the referral realm is asked for in the start realm, as a referral request.
     pub referral_realm: bool,
 }
 
-/// Request a service ticket with a TGT from [`AsOutcome`].
 pub fn tgs_exchange(
     profile: &Krb5Conf,
     kdc: &KdcAddr,
@@ -76,7 +64,7 @@ pub fn tgs_exchange(
     Ok(tgs_exchange_path(profile, kdc, tgt, sname, realm, &TgsCredsOptions::default())?.0)
 }
 
-/// Gate-only (`krb5-kvno --body-realm`, a `test-hooks` build): MIT clients never send a foreign `body.realm`.
+/// Gate-only: MIT clients never send a foreign body.realm.
 #[cfg(feature = "test-hooks")]
 pub fn tgs_exchange_once(
     profile: &Krb5Conf,
@@ -97,7 +85,6 @@ pub fn tgs_exchange_once(
     tgs_once(profile, kdc, tgt, TgsRequest::new(sname, realm, opts))
 }
 
-/// Like [`tgs_exchange`], with the caller's [`TgsCredsOptions`], also returning the asked-for path TGTs to cache.
 #[allow(clippy::needless_pass_by_value)] // `tgt` is cloned into the path-TGT vec
 pub fn tgs_exchange_path(
     profile: &Krb5Conf,
@@ -132,7 +119,6 @@ pub fn tgs_exchange_path(
     result
 }
 
-/// TGS-REQ with `FORWARDED` for `krb5_fwd_tgt_creds`.
 pub fn tgs_forward(
     profile: &Krb5Conf,
     kdc: &KdcAddr,
@@ -149,7 +135,6 @@ pub fn tgs_forward(
     )
 }
 
-/// TGS-REQ with KDC option `renew` for `kinit -R`: the presented ticket's own server, at its realm.
 // MIT: `get_new_creds` (val_renew.c:47-74)
 /// the cached credential is presented to ask for its server again, with its common flags.
 pub fn tgs_renew(profile: &Krb5Conf, kdc: &KdcAddr, tgt: &AsOutcome) -> Result<TgsOutcome, Error> {
@@ -186,7 +171,6 @@ pub fn tgs_renew_options(flags: &krb5_types::TicketFlags) -> KdcOptions {
     tkt_common_from_flags(flags).with_bit(flag_bit::RENEW, true)
 }
 
-/// TGS-REQ with PA-S4U-X509-USER (130) and PA-FOR-USER (129) like MIT `krb5_get_self_cred_from_kdc`.
 // MIT: `krb5_get_self_cred_from_kdc` (s4u_creds.c:517-567)
 /// 130 is filled after the TGS subkey exists (ku 26).
 // MIT: `make_tgs_outer_padata` (fast.c:227-250)
@@ -209,7 +193,6 @@ pub fn tgs_s4u(
     tgs_once(profile, kdc, tgt, req)
 }
 
-/// One TGS-REQ for `sname` at `realm` with `ENC_TKT_IN_SKEY` and `stkt` as the second ticket, with no referral chase: the gates' `krb5-kvno --u2u … --body-realm` request. `kvno --u2u` as MIT's goes through [`tgs_exchange_path`] with [`TgsCredsOptions::second_ticket`].
 pub fn tgs_u2u(
     profile: &Krb5Conf,
     kdc: &KdcAddr,
@@ -230,7 +213,7 @@ pub fn tgs_u2u(
 }
 
 // MIT: `make_request` (get_creds.c:286-292)
-/// a request's KDC options are the caller's `extra` plus `FLAGS2OPTS` of the TGT it presents, its forwardable, proxiable, may-postdate and renewable flags (`KDC_TKT_COMMON_MASK`).
+/// Options add the TGT's forwardable, proxiable, postdate, and renewable flags.
 fn tgs_request_options(tgt: &AsOutcome, extra: KdcOptions) -> KdcOptions {
     let common = tkt_common_from_flags(&tgt.enc_part.flags);
     let mut opts = extra;
@@ -242,7 +225,6 @@ fn tgs_request_options(tgt: &AsOutcome, extra: KdcOptions) -> KdcOptions {
     opts
 }
 
-/// the extra options of a service request, the caller's `KRB5_GC_*` ones and `ENC_TKT_IN_SKEY` for a second ticket; `canonicalize` is added for a referral request.
 fn tgs_service_extra(opts: &TgsCredsOptions) -> KdcOptions {
     KdcOptions::none()
         .with_bit(flag_bit::CANONICALIZE, opts.canonicalize)
@@ -330,7 +312,7 @@ fn service_extra(creds_opts: &TgsCredsOptions, tgt: &AsOutcome, realm: &str) -> 
 }
 
 // MIT: `try_fallback` (lib/krb5/krb/get_creds.c:534-542)
-/// the server's realm becomes the fallback realm, and a TGT for it is got before a non-referral request.
+/// The server realm is the fallback, and its TGT is obtained first.
 // MIT: `step_non_referral` (lib/krb5/krb/get_creds.c:483-487)
 /// a non-referral request's error is the result; its reply completes.
 fn tgs_fallback_realm(
@@ -469,7 +451,7 @@ fn tgs_sname_matches(
 }
 
 // MIT: `krb5int_fast_process_response` (fast.c:548-551)
-/// when armed, the reply's `crealm` / `cname` are replaced by the finished message's client before `process_tgs_reply` compares them.
+/// When armed, the finished client replaces crealm and cname before the compare.
 fn tgs_fast_reply_key(
     armor_key: &ProtocolKey,
     sub: &ProtocolKey,
@@ -560,7 +542,6 @@ fn chase_step(
     }
 }
 
-/// Authenticate `srealm` then decide whether this TGS-REP is a referral hop.
 pub(crate) fn tgs_hop_decision(
     requested: &PrincipalName,
     hop_realm: &str,
@@ -646,9 +627,7 @@ impl<'a> TgsRequest<'a> {
 }
 
 // MIT: `krb5_get_cred_via_tkt_ext` (lib/krb5/krb/gc_via_tkt.c:342-413)
-/// the request is traced with the TGT it uses, and its result at the end.
 // MIT: `get_creds_from_tgs_reply` (lib/krb5/krb/get_creds.c:381-410)
-/// a `krb5_get_credentials` step traces the result of each reply; a request that reached no KDC traces none.
 fn tgs_once(
     profile: &Krb5Conf,
     kdc: &KdcAddr,
@@ -683,7 +662,7 @@ fn tgs_once(
 }
 
 // MIT: `krb5int_process_tgs_reply` (lib/krb5/krb/gc_via_tkt.c:195-216)
-/// a KDC error with e-text is `KDC returned error string: <text>` for a generic error and `Server <name> not found in Kerberos database` for an unknown server (the message [`Error::KrbError`] already holds); otherwise the table's text.
+/// A generic KDC error keeps its e-text; an unknown server is named in the text.
 fn tgs_kerr(e: &Error, ext: bool) -> Option<(i64, Option<String>)> {
     Some(match e {
         Error::KrbError { code, text } => {
@@ -943,9 +922,7 @@ fn random_nonce31() -> Result<u32, Error> {
     Ok(if n == 0 { 1 } else { n })
 }
 
-/// S4U2Proxy TGS-REQ: `CNAME_IN_ADDL_TKT`, the evidence ticket, and PA-PAC-OPTIONS RBCD.
 // MIT: `get_proxy_cred_from_kdc` (s4u_creds.c:1013-1031)
-/// the `k5_get_proxy_cred_from_kdc` step that adds PA-PAC-OPTIONS RBCD and requests with `CNAME_IN_ADDL_TKT`.
 pub fn tgs_s4u2proxy(
     profile: &Krb5Conf,
     kdc: &KdcAddr,
@@ -966,7 +943,6 @@ pub fn tgs_s4u2proxy(
     tgs_once(profile, kdc, tgt, req)
 }
 
-/// TGS-REQ with KDC option `validate` for `kinit -v`: the presented ticket's own server, at its realm.
 pub fn tgs_validate(
     profile: &Krb5Conf,
     kdc: &KdcAddr,
@@ -998,7 +974,7 @@ fn princ_eq(
 }
 
 #[expect(clippy::too_many_arguments, reason = "name and realm stay separate")]
-/// S4U2Self final hop: a reply client equal to the requested server means the KDC ignored PA-FOR-USER (`KRB5KDC_ERR_PADATA_TYPE_NOSUPP`). Otherwise, except on a final S4U2Proxy hop, the reply client must be the TGT client (`KRB5_KDCREP_MODIFIED`). The name type is ignored.
+/// A reply client equal to the requested server means the KDC ignored PA-FOR-USER.
 pub fn tgs_reply_client_ok(
     tgt_cname: &PrincipalName,
     tgt_crealm: &krb5_types::Realm,
@@ -1045,7 +1021,7 @@ pub fn tgs_reply_server_consistent(
     Ok(())
 }
 
-/// `till`/`rtime`/`from` of 0 are unspecified. Reply `endtime` after `till`, `renew_till` after `rtime` (RENEWABLE) or after `till` (RENEWABLE_OK + issued RENEWABLE), or POSTDATED `from` not equal to starttime, is `KRB5_KDCREP_MODIFIED`. `tgs_once` skips this on RENEW/VALIDATE. Starttime skew is not applied here: MIT uses the per-context timestamp that `kdc_timesync` adjusts, and this crate has no `krb5_context`.
+/// A time of 0 is unspecified and is not checked.
 pub fn tgs_reply_req_times(
     enc: &EncKdcRepPart,
     till: &KerberosTime,
@@ -1105,7 +1081,7 @@ fn tgt_is_local_realm(tgt: &AsOutcome) -> bool {
 
 #[must_use]
 // MIT: `krb5int_process_tgs_reply` (gc_via_tkt.c:247-252)
-/// `ok-as-delegate` is dropped from a ticket got with a foreign TGT that lacks the flag. A delegation guard.
+/// ok-as-delegate is dropped when a foreign TGT lacks it.
 pub fn tgs_strip_ok_as_delegate(
     tgt_local_realm: bool,
     tgt_ok_as_delegate: bool,
@@ -1159,7 +1135,6 @@ fn fallback_realm(profile: &Krb5Conf, sname: &PrincipalName) -> Option<String> {
     krb5_config::fallback_host_realm(profile, &String::from_utf8_lossy(host.as_bytes()))
 }
 
-/// caller's second ticket and enctype.
 fn service_request<'a>(
     sname: &PrincipalName,
     served: &'a str,
@@ -1175,14 +1150,13 @@ fn service_request<'a>(
 struct ServiceHop<'a> {
     sname: &'a PrincipalName,
     served: &'a str,
-    /// The caller's extra options ([`tgs_service_extra`]).
     extra: KdcOptions,
     request_realm: &'a str,
     referral_count: usize,
     creds_opts: &'a TgsCredsOptions,
 }
 
-/// the referral request adds `canonicalize` to the caller's options; the non-referral retry sends the caller's alone.
+/// A referral adds canonicalize; the retry sends the caller's options alone.
 fn tgs_service_once(
     profile: &Krb5Conf,
     kdc: &KdcAddr,
@@ -1418,7 +1392,6 @@ mod tests {
     }
 
     #[test]
-    /// Live MIT 1.22.2 `kvno`: a FRIA TGT sends 0x40810000, an FIA one 0x40010000, an RIA one (`kinit -F`) 0x00810000; `--u2u` adds 0x08.
     fn tgs_options_are_flags2opts_of_the_tgt() {
         const FRIA: u32 = 0x40e1_0000;
         let canon = KdcOptions::none().with_bit(flag_bit::CANONICALIZE, true);
