@@ -14,6 +14,7 @@ use crate::error::Error;
 pub trait Pwqual: Send + Sync {
     fn name(&self) -> &'static str;
 
+    /// Embedders leave this false: true runs the realm dictionary in place of `check`.
     fn checks_dictionary(&self) -> bool {
         false
     }
@@ -56,6 +57,7 @@ impl Pwqual for Builtin {
         name: &PrincipalName,
     ) -> Result<(), Error> {
         match self.kind {
+            // MIT: `hesiod_check` (pwqual_hesiod.c:95-119)
             Kind::Dict | Kind::Hesiod => Ok(()),
             Kind::Empty => empty_check(password),
             Kind::Princ => princ_check(password, policy_name, realm, name),
@@ -139,6 +141,7 @@ pub fn register_pwqual(module: Arc<dyn Pwqual>) {
         .push(module);
 }
 
+/// Replaces the built-ins and registered modules on this thread; an empty list checks nothing.
 pub fn set_thread_pwqual(modules: Vec<Arc<dyn Pwqual>>) {
     THREAD.with(|slot| *slot.borrow_mut() = Some(modules));
 }
