@@ -1,3 +1,6 @@
+//! `krb5-otp-kdc`: the KDC run in-process with the example TOTP verifier and `require_mfa` policy.
+//! See the crate README. Not a shipped product.
+
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
@@ -6,13 +9,13 @@
     reason = "a program reads its profile and environment when it starts"
 )]
 
-mod rfc6238;
-
 use std::process::exit;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, PoisonError};
 
 use krb5_config::{KdcConf, KdcPaths, LogSpecs, ProfileSet};
+use krb5_embed_realm_example::require_mfa::RequireMfa;
+use krb5_embed_realm_example::totp::{self, TotpVerifier};
 use krb5_kdc::{ListenLimits, MAX_DGRAM_REPLY, OpenFailure, SharedStore};
 use krb5_log::klog::{self, Severity};
 
@@ -103,7 +106,6 @@ fn main() {
     {
         klog::syslog(Severity::Warning, &line);
     }
-    krb5_kdc::register_kdcpolicy_test_if_selected(&store.policy().kdcpolicy);
     let kdc_conf = paths.conf;
     let pkinit_failure = store.init_pkinit(&profile);
     for (level, line) in
@@ -116,29 +118,33 @@ fn main() {
         };
         klog::syslog(severity, &line);
     }
-    // MIT load_preauth_plugins; see docs/parity/a3-preauth.md
     for (_, line) in krb5_kdc::otp_startup_lines(&store.policy) {
         klog::syslog(Severity::Err, &line);
     }
-    if let Err(msg) = store.policy.spake_kdc() {
+    if let Err(e) = store.policy.spake_kdc() {
         klog::syslog(
             Severity::Err,
-            &format!("preauth spake failed to initialize: {msg}"),
+            &format!("preauth spake failed to initialize: {e}"),
         );
     }
 
-    // The registry is process-wide: this thread runs the loop below, and a list set for this
-    // thread alone would not apply while it runs.
-    if std::env::var_os(rfc6238::SEEDS_ENV).is_none() {
+    if std::env::var_os(totp::SEEDS_ENV).is_none() {
         klog::syslog(
             Severity::Warning,
             "KERBER_EXAMPLE_TOTP_SEEDS is unset: every totp OTP is refused",
         );
     }
-    if let Err(e) = krb5_kdc::register_otp_verifier(Arc::new(rfc6238::TotpVerifier::from_env())) {
+    if std::env::var_os(totp::STATE_ENV).is_none() {
+        klog::syslog(
+            Severity::Warning,
+            "KERBER_EXAMPLE_TOTP_STATE is unset: replay memory does not survive a restart",
+        );
+    }
+    if let Err(e) = krb5_kdc::register_otp_verifier(Arc::new(TotpVerifier::from_env())) {
         eprintln!("{progname}: cannot register the totp verifier: {e}");
         exit(1);
     }
+    krb5_kdc::register_kdcpolicy(Arc::new(RequireMfa::from_env()));
 
     let store = krb5_kdc::shared_store(store);
     let shutdown = Arc::new(AtomicBool::new(false));

@@ -17,7 +17,6 @@ members = [
     "crates/krb5-testkit",
     "examples/consumer",
     "examples/kdc-consumer",
-    "examples/otp-kdc",
     "examples/embed-realm",
 ]
 

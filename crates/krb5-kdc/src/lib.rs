@@ -74,8 +74,8 @@ pub use kdb_dump::{
     DumpError, DumpFile, DumpKeyData, DumpKeySlot, DumpPrincipal, IpropHeaderError,
     KDB_DUMP_VERSION, TL_ALIAS_TARGET, TL_DB_ARGS, TL_KADM_DATA, TL_KERBER_HIST, TL_KERBER_SERIAL,
     TL_KERBER_SID, TL_LAST_ADMIN_UNLOCK, TL_LAST_PWD_CHANGE, TL_MOD_PRINC, TL_STRING_ATTRS,
-    dump_store, dump_store_iprop, dump_store_iprop_with_key, dump_store_with_key, load_dump,
-    load_dump_etype, load_dump_path, load_dump_with_key, parse_dump, parse_iprop_header,
+    dump_store, dump_store_iprop, dump_store_iprop_with_key, dump_store_with_key, key_salt,
+    load_dump, load_dump_etype, load_dump_path, load_dump_with_key, parse_dump, parse_iprop_header,
     tl_mod_princ_name, update_store, write_dump_path_etype,
 };
 #[cfg(feature = "test-hooks")]

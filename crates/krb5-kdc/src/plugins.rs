@@ -748,6 +748,7 @@ impl std::fmt::Debug for OtpRuntime {
 pub(crate) enum OtpOutcome {
     Verdict(OtpVerdict),
     TimedOut,
+    QueueFull,
 }
 
 pub(crate) fn bounded_verify(
@@ -759,7 +760,7 @@ pub(crate) fn bounded_verify(
     let reply_rx = match pool {
         Some(p) => match p.submit(req, verifier) {
             Some(rx) => rx,
-            None => return OtpOutcome::TimedOut,
+            None => return OtpOutcome::QueueFull,
         },
         None => one_shot_verify(req, verifier),
     };

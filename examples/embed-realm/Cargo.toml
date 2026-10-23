@@ -12,13 +12,28 @@ publish.workspace = true
 name = "krb5-embed-realm"
 path = "src/main.rs"
 
+# The in-process KDC with the example TOTP verifier (folds in the retired otp-kdc example); the
+# gate scripts run this binary name.
+[[bin]]
+name = "krb5-otp-kdc"
+path = "src/bin/krb5-otp-kdc.rs"
+
+[features]
+# Lab-only fault injection for cells V9 and V10; never built by build-bins.sh or CI.
+chaos = []
+
 [dependencies]
+hmac.workspace = true
 krb5-admin.workspace = true
 krb5-config.workspace = true
+krb5-crypto.workspace = true
 krb5-kdc.workspace = true
 krb5-log.workspace = true
 krb5-types.workspace = true
+sha1.workspace = true
 signal-hook.workspace = true
+subtle.workspace = true
+zeroize.workspace = true
 
 [lints]
 workspace = true

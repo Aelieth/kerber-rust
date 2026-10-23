@@ -1067,6 +1067,14 @@ pub(crate) fn salt_of_keys(keys: &[KeyEntry], name: &PrincipalName, realm: &str)
         .unwrap_or_else(|| name.default_salt(realm))
 }
 
+#[must_use]
+pub fn key_salt(key: &KeyEntry, name: &PrincipalName, realm: &str) -> Vec<u8> {
+    match (key.salt_type, &key.kdb_salt) {
+        (Some(SALTTYPE_NORMAL | SALTTYPE_SPECIAL), Some(salt)) if !salt.is_empty() => salt.clone(),
+        _ => name.default_salt(realm),
+    }
+}
+
 pub(crate) fn mkvno_from_tl(tl: &[TlData]) -> u16 {
     tl.iter()
         .find(|t| t.ty == TL_MKVNO && t.contents.len() == 2)

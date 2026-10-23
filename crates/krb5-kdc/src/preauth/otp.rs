@@ -438,6 +438,11 @@ fn otp_verify(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, OtpFail> 
                 ));
                 return Err(fail(24, "OTP verifier timed out"));
             }
+            OtpOutcome::QueueFull => {
+                kdc_otp_event(&principal_label, &tok.ty.name, "queue_full", duration_us);
+                otp_log_refusal(&format!("OTP verifier queue full for {principal_label}"));
+                return Err(fail(24, "OTP verifier queue full"));
+            }
         }
     }
     Err(fail(KRB5_PREAUTH_FAILED, E_GENERIC))

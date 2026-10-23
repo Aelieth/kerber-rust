@@ -1,10 +1,11 @@
 # krb5-embed-realm
 
-`kadmind` run in-process through the library's embed API, the kadmind counterpart of
-[`otp-kdc`](../otp-kdc/README.md)'s in-process KDC. It is kept to prove the embed path end to end
-against MIT `kadmin` and `kpasswd`; it is not a shipped product.
+Two embedders run in-process through the library's embed API: `krb5-embed-realm` runs `kadmind`,
+and `krb5-otp-kdc` ([below](#the-otp-kdc-krb5-otp-kdc)) runs the KDC with an example TOTP
+`OtpVerifier` and a `require_mfa` policy. Both prove the embed path end to end against MIT `kadmin`
+and `kpasswd` and `kinit -T`; neither is a shipped product.
 
-It is the whole of what an embedder (the KLLDAP seam) does to start the admin service over a realm
+The kadmind half is the whole of what an embedder (the KLLDAP seam) does to start the admin service over a realm
 it already has a store for:
 
 ```rust
@@ -43,3 +44,37 @@ denies every write to a `deny-*` one, overriding the ACL. The built-in `acl` and
 `[plugins] kadm5_auth` in the profile selects and orders the stack — `enable_only = self` turns the
 ACL file off, `disable = bouncer` drops the bouncer — as MIT's stanza does. This library's interface
 passes the caller and target names, not MIT's field mask, policy entry or string value.
+
+## The OTP KDC (`krb5-otp-kdc`)
+
+`krb5-otp-kdc` runs the KDC in-process and registers the example TOTP [`OtpVerifier`](src/totp.rs)
+and the [`require_mfa`](src/require_mfa.rs) `KdcPolicy` — the shape KLLDAP fills for OTP. Run it like
+the kadmind half:
+
+```sh
+KRB5_KDC_PROFILE=examples/configs/kdc.conf KRB5_CONFIG=examples/configs/krb5.conf \
+    KERBER_EXAMPLE_TOTP_SEEDS=seeds KERBER_EXAMPLE_TOTP_STATE=state \
+    cargo run -p krb5-embed-realm-example --bin krb5-otp-kdc -- -n
+```
+
+The verifier:
+
+- A `SeedSource` trait is the sealing boundary KLLDAP fills; the demo `FileSeeds` reads a 0600
+  `principal base32-seed` file named by `KERBER_EXAMPLE_TOTP_SEEDS`. Seeds are `Zeroizing` and never
+  logged; unset, every code is refused.
+- RFC 6238 TOTP over a ±1 step window.
+- `KERBER_EXAMPLE_TOTP_STATE` names a 0600 state file holding each principal's **monotonic last
+  accepted step** and failure count — never a seed — so a code cannot be replayed, even across a
+  restart. Unset, the memory is in-process only.
+- By default `password‖code`: the trailing six digits are the TOTP code and the rest is the
+  password, checked against the principal's keys in constant time. `KERBER_EXAMPLE_TOTP_ONLY` opts
+  into a code-only login.
+
+`require_mfa`, selected by `[plugins] kdcpolicy enable_only = require_mfa`, refuses an AS and a TGS
+for a principal whose `require_mfa` string attribute is set unless the ticket carries the MFA auth
+indicator (`mfa`, or `KERBER_EXAMPLE_MFA_INDICATOR`). The refusal is code 24, as a wrong password is,
+so it is no oracle.
+
+The `chaos` cargo feature is off by default and is never built by `build-bins.sh` or CI. Built with
+`--features chaos`, a token username of `chaos:hang`, `chaos:slow:<ms>`, `chaos:panic` or
+`chaos:error` drives the verifier, for lab cells V9 and V10 only.

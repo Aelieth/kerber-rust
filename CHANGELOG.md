@@ -52,6 +52,7 @@ any other `###` heading.
 - **pkinit.** The KDC and kinit sign PKINIT with an RSA key as MIT does (PKCS#1 v1.5, SHA-256): up to 16384 bits and five primes, constant-time and blinded.
 - **client.** kinit takes `DIR:` and `ENV:` PKINIT identities and `FILE:cert,key`, tries `pkinit_identities` in order, and picks a certificate by `pkinit_cert_match` as MIT.
 - **kdc.** The `OtpVerifier` request is frozen: owned, `#[non_exhaustive]`, with peer and deadline and a zeroizing value; `register_otp_verifier` errors on a duplicate name.
+- **examples.** `krb5-otp-kdc` gains a sealed-seed TOTP verifier with monotonic persisted replay state, a `password‖code` mode, and a `require_mfa` `KdcPolicy`.
 
 ### Changed
 
@@ -83,6 +84,7 @@ any other `###` heading.
 - **client.** A client program reads its profile once, at start: `init_context` returns a `ClientContext`, which the AS, TGS, KCM, ccache and keytab calls take.
 - **kdc.** A PKINIT client chain is built through `pkinit_pool` as OpenSSL builds it, and a key purpose `pkinit_eku_checking` refuses is error 77, as MIT's.
 - **gss.** An exported context is version 2, which carries the receive window and the acceptor's skew; a version-1 token, as 1.1 exported, is refused.
+- **examples.** `examples/otp-kdc` is folded into `examples/embed-realm`; the `krb5-otp-kdc` binary name is unchanged.
 
 ### Tests and CI
 
