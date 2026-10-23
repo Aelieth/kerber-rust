@@ -13,6 +13,7 @@ use super::keys::KeyEntry;
 use super::principal::TlData;
 use crate::osa::OsaKeyData;
 
+/// Must wrap under the master key or return Err; a key is never encoded in the clear.
 pub type KeyWrap<'a, E> = dyn Fn(&[u8]) -> Result<Vec<u8>, E> + 'a;
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
