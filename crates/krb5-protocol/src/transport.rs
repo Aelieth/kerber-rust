@@ -12,7 +12,6 @@ use krb5_config::{KdcTransport, Krb5Conf};
 use crate::error::Error;
 use crate::trace::{self, RemoteAddr, Transport};
 
-/// Default KDC port.
 pub const KDC_PORT: u16 = 88;
 
 const TIMEOUT: Duration = Duration::from_secs(5);
@@ -20,9 +19,7 @@ const UDP_MAX: usize = 64 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KdcAddr {
-    /// Host name or dotted IP.
     pub host: String,
-    /// UDP/TCP port (usually 88).
     pub port: u16,
 }
 
@@ -42,16 +39,17 @@ pub(crate) enum SendKind {
     Tgs,
 }
 
-/// Send `request` to the KDC. Prefers UDP; retries on TCP if the KDC asks (`KRB_ERR_RESPONSE_TOO_BIG`) or UDP fails. UDP replies are accepted only from the destination we sent to (off-path datagrams are ignored).
+/// Prefers UDP, and retries on TCP when the reply is too big or UDP fails.
+/// A UDP reply is accepted only from the address it was sent to.
 pub fn exchange(profile: &Krb5Conf, addr: &KdcAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
     exchange_with_failover(profile, std::slice::from_ref(addr), request)
 }
 
-/// [`exchange`] of an AS or TGS request to `realm`'s KDC, traced as MIT traces it.
 // MIT: `k5_sendto_kdc` (lib/krb5/os/sendto_kdc.c:446-560)
-/// the request's size and realm are traced before the KDC is located and contacted.
 // MIT: `k5_sendto` (lib/krb5/os/sendto_kdc.c:1537-1600)
-/// when that location list has more than one KDC and `addr` is its first, each entry is contacted. UDP then TCP, one second each, then two seconds, then two UDP passes at four and eight seconds. One KDC keeps [`exchange_one`]'s waits. An explicit address that is not that first KDC is contacted alone. HTTPS is not used.
+/// Several KDCs: UDP then TCP, one second each, then two, then UDP at four and eight.
+/// One KDC keeps exchange_one's waits. Any other explicit address is contacted alone.
+/// HTTPS is not used.
 pub(crate) fn sendto_kdc(
     profile: &Krb5Conf,
     addr: &KdcAddr,
@@ -61,7 +59,7 @@ pub(crate) fn sendto_kdc(
 ) -> Result<Vec<u8>, Error> {
     trace::sendto_kdc(request.len(), realm.as_bytes(), false, false);
     // MIT: `k5_locate_server` (lib/krb5/os/locate_kdc.c:853-878)
-    // once per send. A caller that already located `realm` handed that list down; this send does not query again.
+    // A list already located for this realm is not queried again.
     let found = krb5_config::take_handed_kdcs(realm, &addr.host, addr.port)
         .unwrap_or_else(|| profile.kdcs_for(realm).unwrap_or_default());
     let walk = found.len() > 1
@@ -263,9 +261,8 @@ impl<'a> Passes<'a> {
 }
 
 // MIT: `resolve_server` (lib/krb5/os/sendto_kdc.c:856-858)
-/// a name that does not resolve adds no connection.
+/// A name that does not resolve adds no connection, and that is not an error.
 // MIT: `translate_ai_error` (lib/krb5/os/sendto_kdc.c:776-779)
-/// that miss is not an error.
 fn exchange_passes(
     addrs: &[(KdcAddr, KdcTransport)],
     request: &[u8],
@@ -300,9 +297,8 @@ fn exchange_passes(
     walk.done()
 }
 
-/// A UDP socket of `dest`'s family. Loopback binds loopback so a reply stays on `lo`.
+/// Loopback binds loopback, so a reply stays on lo.
 // MIT: `start_connection` (lib/krb5/os/sendto_kdc.c:884-990)
-/// `socket(state->addr.family, ...)`.
 fn udp_socket_for(dest: &SocketAddr) -> std::io::Result<UdpSocket> {
     let ip = match (dest.ip().is_loopback(), dest.is_ipv4()) {
         (true, true) => IpAddr::V4(Ipv4Addr::LOCALHOST),
@@ -422,14 +418,14 @@ fn wait_udp(servers: &mut [Located], budget: Duration) -> Option<(usize, Vec<u8>
     None
 }
 
-/// Send `request` on TCP only so a PAC-sized reply cannot silently upgrade UDP.
+/// TCP only, so a PAC-sized reply is not a silent UDP upgrade.
 pub fn exchange_on_tcp(addr: &KdcAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
     crate::capture_pdu("client-req", request);
     let sa = dest_addr(addr)?;
     exchange_tcp(sa, request)
 }
 
-/// Try each KDC in order: UDP with retransmit waits of 0.5 s, 1 s and 2 s, then TCP.
+/// Each KDC in order: UDP at 0.5 s, 1 s and 2 s, then TCP.
 pub fn exchange_with_failover(
     profile: &Krb5Conf,
     addrs: &[KdcAddr],
@@ -447,8 +443,8 @@ pub fn exchange_with_failover(
 }
 
 // MIT: `k5_init_creds_get` (get_in_tkt.c:570-572)
-/// a response-too-big error retries the same request over TCP.
-/// A UDP timeout prefers the TCP error, because a reply that cannot fit in a datagram otherwise hides that failure. `traced` is the realm and exchange of a [`sendto_kdc`] request, whose TCP retry is traced as a second send.
+/// A response-too-big reply retries the same request over TCP.
+/// A UDP timeout returns the TCP error, so a reply that never fit UDP does not hide it.
 fn exchange_one(
     addr: &KdcAddr,
     request: &[u8],
@@ -489,7 +485,7 @@ fn exchange_one(
                     outcome = "error",
                     error = %tcp_err,
                 );
-                // Prefer the TCP error when UDP timed out: TGS replies with a PAC often never fit UDP, and the TCP failure is actionable.
+                // A UDP timeout returns the TCP error: a PAC often never fits UDP.
                 if matches!(
                     &udp_err,
                     Error::Io {
@@ -548,14 +544,12 @@ fn dest_addr(addr: &KdcAddr) -> Result<SocketAddr, Error> {
         .ok_or_else(|| Error::transport_msg("no KDC address"))
 }
 
-/// The errno of an I/O error, 0 when it has none.
+/// 0 when the error has no errno.
 pub(crate) fn errno(e: &std::io::Error) -> i32 {
     e.raw_os_error().unwrap_or(0)
 }
 
 // MIT: `service_udp_read` (sendto_kdc.c:1209-1216)
-/// a UDP read is taken from the connected peer, and a receive error drops that attempt.
-/// This socket is not connected, so a datagram whose source is not the KDC address is ignored and is not the reply.
 fn exchange_udp(dest: SocketAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
     let ra = RemoteAddr {
         transport: Transport::Udp,
@@ -564,9 +558,8 @@ fn exchange_udp(dest: SocketAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
     let sock = udp_socket_for(&dest).map_err(|e| Error::transport_msg(format!("udp bind: {e}")))?;
     sock.set_write_timeout(Some(TIMEOUT))
         .map_err(|e| Error::transport_msg(e.to_string()))?;
-    // send_to/recv_from (not connect): some stacks drop connected-UDP replies
-    // when the KDC answers from a different local address. Source is still
-    // checked so an off-path first datagram is not accepted.
+    // Not connected: some stacks drop a reply sent from another local address.
+    // The source is still checked, so an off-path datagram is not the reply.
     let backoffs = [
         Duration::from_millis(500),
         Duration::from_secs(1),
@@ -626,11 +619,9 @@ fn exchange_udp(dest: SocketAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
 }
 
 // MIT: `service_tcp_connect` (lib/krb5/os/sendto_kdc.c:1098-1112)
-/// a connection that fails is traced and closed.
 // MIT: `service_tcp_write` (lib/krb5/os/sendto_kdc.c:1115-1146)
-/// the request is traced as it is written.
 // MIT: `service_tcp_read` (lib/krb5/os/sendto_kdc.c:1149-1200)
-/// a read that fails or ends early is traced and closed, a length over 1 MiB closed.
+/// A length of 0 or over 1 MiB ends the connection.
 fn exchange_tcp(sa: SocketAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
     tcp_exchange(sa, request, TIMEOUT, TIMEOUT)
 }
@@ -677,8 +668,7 @@ fn tcp_round_trip(
         .set_write_timeout(Some(io_timeout))
         .map_err(|e| Error::transport_msg(e.to_string()))?;
     // MIT: `service_tcp_write` (lib/krb5/os/sendto_kdc.c:1124-1125)
-    // the length and the request
-    // go out in one writev.
+    // The length and the request go out in one write.
     trace::sendto_kdc_tcp_send(ra);
     crate::framing::write_messages(&mut stream, &[request]).map_err(|e| {
         trace::sendto_kdc_tcp_error_send(ra, errno(&e));
@@ -713,7 +703,7 @@ pub(crate) fn is_timeout(e: &std::io::Error) -> bool {
     )
 }
 
-/// The errno of a failed read: a connection closed early is `ECONNRESET`, as MIT counts a read of nothing.
+/// An early close is ECONNRESET, as MIT counts a read of nothing.
 pub(crate) fn read_errno(e: &std::io::Error) -> i32 {
     if e.kind() == std::io::ErrorKind::UnexpectedEof {
         nix::errno::Errno::ECONNRESET as i32
