@@ -147,15 +147,40 @@ pub(super) fn kadm5_error_text(code: u32) -> String {
     }
 }
 
+/// Unlike MIT, a name cannot forge a log line. mit-deviations.
+fn escape_log(s: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    if !s.chars().any(char::is_control) {
+        return s.to_owned();
+    }
+    let mut out = String::with_capacity(s.len() + 8);
+    for c in s.chars() {
+        match c {
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            // C0/DEL/C1 as \xNN.
+            c if c.is_control() => {
+                let b = c as usize;
+                out.push_str("\\x");
+                out.push(HEX[(b >> 4) & 0xf] as char);
+                out.push(HEX[b & 0xf] as char);
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 fn trunc_name(s: &str) -> String {
     if s.len() <= 125 {
-        return s.to_owned();
+        return escape_log(s);
     }
     let mut end = 125;
     while !s.is_char_boundary(end) {
         end -= 1;
     }
-    format!("{}...", &s[..end])
+    escape_log(&format!("{}...", &s[..end]))
 }
 
 // MIT: `prime_arg` (stub_setup)

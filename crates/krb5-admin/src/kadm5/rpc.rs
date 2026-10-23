@@ -65,7 +65,7 @@ pub fn serve_kadm5_conn(
     mut stream: TcpStream,
 ) -> io::Result<()> {
     let peer = RpcPeer::new(stream.peer_addr().ok(), stream.local_addr().ok());
-    let mut conn = Kadm5Conn::new(
+    let Some(mut conn) = Kadm5Conn::new(
         store,
         acl,
         expected_realm,
@@ -74,7 +74,11 @@ pub fn serve_kadm5_conn(
         Programs::BOTH,
         peer,
         None,
-    );
+    ) else {
+        return Err(io::Error::other(
+            "CSPRNG failure generating the kadm5 RPC handle",
+        ));
+    };
     loop {
         let rec = match read_record(&mut stream) {
             Ok(r) => r,
@@ -159,19 +163,19 @@ impl Kadm5Conn {
         programs: Programs,
         peer: RpcPeer,
         report: Option<UnhandledRpc>,
-    ) -> Self {
-        Self {
+    ) -> Option<Self> {
+        Some(Self {
             store,
             acl,
             realm,
             rcache,
             conf,
             programs,
-            handle: random_handle(),
+            handle: random_handle()?,
             sess: Kadm5RpcSession::default(),
             peer,
             report,
-        }
+        })
     }
 
     fn handle(&mut self, rec: &[u8]) -> Result<Vec<u8>, Error> {
@@ -210,10 +214,11 @@ impl RpcSession for Kadm5Conn {
     }
 }
 
-fn random_handle() -> Vec<u8> {
+// No CSPRNG, no handle.
+fn random_handle() -> Option<Vec<u8>> {
     let mut h = [0u8; 8];
-    let _ = getrandom::getrandom(&mut h);
-    h.to_vec()
+    getrandom::getrandom(&mut h).ok()?;
+    Some(h.to_vec())
 }
 
 /// One record from a socket that blocks for it, read as kadmind's loop reads one ([`read_rpc_record_with`]): at most 1 MiB, its marks counted, in one buffer wiped when dropped.

@@ -95,11 +95,11 @@ fn kprop_body_text(bytes: &[u8]) -> Result<&str, Error> {
 
 // MIT: `krb5_write_message` (lib/krb5/os/write_msg.c:73-76)
 /// one message, its length and body in one write (`k5_write_messages`).
-fn write_message(stream: &mut TcpStream, data: &[u8]) -> io::Result<()> {
+fn write_message<S: Write>(stream: &mut S, data: &[u8]) -> io::Result<()> {
     krb5_protocol::write_messages(stream, &[data])
 }
 
-fn read_message(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
+fn read_message<S: Read>(stream: &mut S) -> io::Result<Vec<u8>> {
     let mut hdr = [0u8; 4];
     stream.read_exact(&mut hdr)?;
     let n = usize::try_from(u32::from_be_bytes(hdr)).unwrap_or(0);
@@ -228,7 +228,7 @@ impl KpropAuth {
 
     // MIT: `send_error` (kprop/kpropd.c:1476-1510)
     /// a KRB-ERROR naming kpropd and the client, stamped now; an error code past the protocol's 127 is `KRB_ERR_GENERIC` with the error's message before `text`, any other carries `text` alone.
-    fn send_error(&self, stream: &mut TcpStream, e: &krb5_protocol::Error, text: &str) {
+    fn send_error<S: Write>(&self, stream: &mut S, e: &krb5_protocol::Error, text: &str) {
         let Some(names) = &self.names else {
             return;
         };
@@ -295,8 +295,8 @@ struct RecvauthKeys<'a> {
     keytab: Option<&'a KpropdKeys>,
 }
 
-fn recvauth_with(
-    stream: &mut TcpStream,
+fn recvauth_with<S: Read + Write + PeerAddr>(
+    stream: &mut S,
     keys: &RecvauthKeys<'_>,
     expected_server: Option<&PrincipalName>,
     expected_realm: Option<&str>,
@@ -879,7 +879,98 @@ fn more_recent(k1: &KeytabEntry, k2: &KeytabEntry) -> bool {
 // MIT: `recv_database` (kprop/kpropd.c:1356-1473)
 /// the size comes in a KRB-SAFE and the dump in KRB-PRIV blocks chained from the initial cipher state, each read by `krb5_rd_safe` / `krb5_rd_priv` on recvauth's context, so each must carry kprop's next sequence number (the authenticator's, then one more per message); a message that fails is answered with a KRB-ERROR naming what was being read, and a KRB-ERROR from kprop ends the transfer without one.
 /// KRB-ERROR, the size KRB-SAFE or a block's KRB-PRIV is refused (out of order, modified, or not decrypting), the size is malformed, or the blocks overrun it.
-pub fn kpropd_recv_dump(stream: &mut TcpStream, auth: &mut KpropAuth) -> Result<Vec<u8>, Error> {
+/// MIT streams to disk unbounded. mit-deviations.
+const MAX_DUMP_SIZE: u64 = 1 << 32;
+
+/// The idle read/write bound on a kpropd connection (the kadm5 RPC loop's `RPC_READ_WAIT`).
+pub const KPROPD_IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(35);
+
+/// Each read/write waits at most the time left to the deadline.
+struct DeadlineStream<'a> {
+    inner: &'a mut TcpStream,
+    deadline: Option<std::time::Instant>,
+}
+
+fn timed_out() -> io::Error {
+    io::Error::new(io::ErrorKind::TimedOut, "Full propagation timed out")
+}
+
+impl DeadlineStream<'_> {
+    fn arm(&self) -> io::Result<()> {
+        let Some(d) = self.deadline else {
+            return Ok(());
+        };
+        let remaining = d
+            .checked_duration_since(std::time::Instant::now())
+            .filter(|r| !r.is_zero());
+        let Some(remaining) = remaining else {
+            return Err(timed_out());
+        };
+        let t = remaining.min(KPROPD_IO_TIMEOUT);
+        self.inner.set_read_timeout(Some(t))?;
+        self.inner.set_write_timeout(Some(t))?;
+        Ok(())
+    }
+
+    // A timeout past the deadline is the transfer timeout.
+    fn mapped(&self, e: io::Error) -> io::Error {
+        if matches!(
+            e.kind(),
+            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+        ) && self
+            .deadline
+            .is_some_and(|d| std::time::Instant::now() >= d)
+        {
+            timed_out()
+        } else {
+            e
+        }
+    }
+}
+
+impl Read for DeadlineStream<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.arm()?;
+        match self.inner.read(buf) {
+            Ok(n) => Ok(n),
+            Err(e) => Err(self.mapped(e)),
+        }
+    }
+}
+
+impl Write for DeadlineStream<'_> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.arm()?;
+        match self.inner.write(buf) {
+            Ok(n) => Ok(n),
+            Err(e) => Err(self.mapped(e)),
+        }
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+trait PeerAddr {
+    fn peer_addr(&self) -> io::Result<std::net::SocketAddr>;
+}
+
+impl PeerAddr for TcpStream {
+    fn peer_addr(&self) -> io::Result<std::net::SocketAddr> {
+        TcpStream::peer_addr(self)
+    }
+}
+
+impl PeerAddr for DeadlineStream<'_> {
+    fn peer_addr(&self) -> io::Result<std::net::SocketAddr> {
+        self.inner.peer_addr()
+    }
+}
+
+pub fn kpropd_recv_dump<S: Read + Write>(
+    stream: &mut S,
+    auth: &mut KpropAuth,
+) -> Result<Vec<u8>, Error> {
     let size_raw = read_message(stream).map_err(|e| Error::Inner(e.to_string()))?;
     if size_raw.first() == Some(&0x7e) {
         return Err(Error::Inner("kprop sent a KRB-ERROR".into()));
@@ -902,10 +993,21 @@ pub fn kpropd_recv_dump(stream: &mut TcpStream, auth: &mut KpropAuth) -> Result<
             return Err(e);
         }
     };
+    if want > MAX_DUMP_SIZE {
+        let generic = krb5_protocol::Error::KrbError {
+            code: err::GENERIC,
+            text: None,
+        };
+        auth.send_error(stream, &generic, "database size exceeds the limit");
+        return Err(Error::Inner(format!(
+            "database size {want} exceeds the {MAX_DUMP_SIZE}-byte limit"
+        )));
+    }
     auth.acceptor()
         .map_err(|e| Error::Inner(e.to_string()))?
         .init_ivector();
-    let mut dump = Vec::with_capacity(usize::try_from(want).unwrap_or(0));
+    // Grow as chunks arrive.
+    let mut dump = Vec::new();
     while (dump.len() as u64) < want {
         let chunk_raw = read_message(stream).map_err(|e| Error::Inner(e.to_string()))?;
         if chunk_raw.first() == Some(&0x7e) {
@@ -940,8 +1042,8 @@ pub fn kpropd_recv_dump(stream: &mut TcpStream, auth: &mut KpropAuth) -> Result<
 }
 
 /// Send the SAFE size-ack MIT `kprop` waits for, from the peer's address as MIT's kpropd sends it.
-pub fn kpropd_send_ack(
-    stream: &mut TcpStream,
+pub fn kpropd_send_ack<S: Write>(
+    stream: &mut S,
     auth: &mut KpropAuth,
     size: u64,
 ) -> Result<(), Error> {
@@ -1058,6 +1160,8 @@ pub struct KpropdConfig<'a> {
     pub allowed_clients: Option<&'a [String]>,
     /// The replica realm's iprop parameters when `iprop_enable` is set: the dump must then be an iprop one, and the update log takes its serial and time.
     pub iprop: Option<&'a krb5_config::IpropParams>,
+    /// Whole-transfer deadline (`iprop_resync_timeout`). mit-deviations.
+    pub resync_timeout: std::time::Duration,
     /// kpropd's acceptor profile values, its KDC context's.
     pub conf: &'a AcceptorConfig,
 }
@@ -1109,14 +1213,22 @@ pub fn kpropd_handle_conn(
         stash,
         allowed_clients,
         iprop,
+        resync_timeout,
         conf,
     } = *cfg;
+    // MIT: `doit` (kprop/kpropd.c:493-494)
+    // Zero is no deadline.
+    let deadline = (!resync_timeout.is_zero()).then(|| std::time::Instant::now() + resync_timeout);
+    let mut ds = DeadlineStream {
+        inner: stream,
+        deadline,
+    };
     let keys = RecvauthKeys {
         keys: host_keys,
         keytab,
     };
     let mut auth = recvauth_with(
-        stream,
+        &mut ds,
         &keys,
         expected_server,
         expected_realm,
@@ -1128,7 +1240,7 @@ pub fn kpropd_handle_conn(
         Some(_) => None,
         None => Some(read_stash_file(stash)?),
     };
-    let dump = kpropd_recv_dump(stream, &mut auth)?;
+    let dump = kpropd_recv_dump(&mut ds, &mut auth)?;
     let iprop_last = match (iprop, iprop_dump_last(&dump)) {
         (Some(params), Some(last)) => Some((params, last)),
         (None, None) if !is_iprop_dump(&dump) => None,
@@ -1140,7 +1252,7 @@ pub fn kpropd_handle_conn(
         (None, None) => return Err(Error::Inner("no master key".into())),
     };
     load_replica(&store, db, stash, iprop_last)?;
-    kpropd_send_ack(stream, &mut auth, dump.len() as u64)?;
+    kpropd_send_ack(&mut ds, &mut auth, dump.len() as u64)?;
     tracing::info!(
         event = krb5_log::events::ADMIN,
         component = "krb5-admin",

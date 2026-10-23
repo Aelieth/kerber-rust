@@ -178,7 +178,7 @@ impl DumpFile {
         self.into_store(mkey)
     }
 
-    /// Version 7 is the r1.11 record; version 6 keeps the r1.8 nine counters.
+    /// Version 7 = r1.11; version 6 = r1.8 (nine counters).
     // MIT: `dump_r1_8_policy` (kadmin/dbutil/dump.c:404-413)
     // MIT: `dump_k5beta7_policy` (kadmin/dbutil/dump.c:394-401)
     #[must_use]
@@ -904,7 +904,7 @@ fn parse_princ_line(rest: &str, lineno: usize) -> Result<DumpPrincipal, DumpErro
         last_failed,
         fail_auth_count,
     ] = attrs;
-    let mut tl_data = Vec::with_capacity(n_tl);
+    let mut tl_data = Vec::with_capacity(n_tl.min(c.remaining()));
     for _ in 0..n_tl {
         let (ty, len) = (|| Ok::<_, DumpError>((c.i32()?, c.usize()?)))()
             .map_err(|_| bad("cannot read tagged data type and length"))?;
@@ -913,7 +913,7 @@ fn parse_princ_line(rest: &str, lineno: usize) -> Result<DumpPrincipal, DumpErro
             .map_err(|_| bad("cannot read tagged data contents"))?;
         tl_data.push(TlData { ty, contents });
     }
-    let mut keys = Vec::with_capacity(n_key);
+    let mut keys = Vec::with_capacity(n_key.min(c.remaining()));
     for _ in 0..n_key {
         let (ver, kvno) = (|| Ok::<_, DumpError>((c.i32()?, c.u32()?)))()
             .map_err(|_| bad("cannot read key size and version"))?;
@@ -961,6 +961,10 @@ struct Cursor<'a> {
 impl<'a> Cursor<'a> {
     fn err(&self, msg: &str) -> DumpError {
         DumpError::Format(format!("line {}: {msg}", self.line))
+    }
+
+    fn remaining(&self) -> usize {
+        self.f.len().saturating_sub(self.i)
     }
 
     fn take(&mut self) -> Result<&'a str, DumpError> {
@@ -1314,7 +1318,8 @@ fn decode_hist(b: &[u8], mkey: &ProtocolKey) -> Result<Vec<KeyEntry>, DumpError>
     }
     let n = u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize;
     let mut i = 4usize;
-    let mut out = Vec::with_capacity(n);
+    // >= 10 bytes each.
+    let mut out = Vec::with_capacity(n.min(b.len() / 10));
     for _ in 0..n {
         if i + 10 > b.len() {
             return Err(DumpError::Format("truncated 0x4B04 hist tl_data".into()));

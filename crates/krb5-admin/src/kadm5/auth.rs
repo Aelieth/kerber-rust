@@ -542,7 +542,10 @@ fn agss_init(
         }
     };
     let mut isn = [0u8; 4];
-    let _ = getrandom::getrandom(&mut isn);
+    // No CSPRNG, no auth.
+    if getrandom::getrandom(&mut isn).is_err() {
+        return agss_denied(addr, AUTH_FAILED, "cannot generate initial sequence number");
+    }
     let seq = u32::from_le_bytes(isn);
     let Ok(signed_isn) = gctx.wrap_integ(&seq.to_be_bytes()) else {
         return agss_denied(addr, AUTH_FAILED, "internal error sealing sequence number");

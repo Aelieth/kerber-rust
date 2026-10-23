@@ -312,7 +312,7 @@ impl Dispatch for Kadmind {
             self.programs,
             RpcPeer::new(Some(remote), Some(local)),
             self.report.clone(),
-        )))
+        )?))
     }
 }
 

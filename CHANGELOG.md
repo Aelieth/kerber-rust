@@ -35,6 +35,8 @@ any other `###` heading.
 - **kdc.** PKINIT trusts kdc.conf's `pkinit_anchors` and signs with `pkinit_identity`, not a CA it made, now test-only. Lab beside MIT.
 - **kdc.** PKINIT checks a client's `pkinit_cert_match` rule as MIT's dbmatch (`<KU>`, `<EKU>`, `<SAN>`, `<ISSUER>`, `<SUBJECT>`, `&&`, `||`); a miss is 66. Lab beside MIT.
 - **pkinit.** MODP Diffie-Hellman exponentiates in constant time, with crypto-bigint; it used num-bigint's variable-time `modpow`.
+- **admin.** kpropd and kprop bound their input: a handler cap, read, write, transfer and connect timeouts, and caps on the dump buffer and the dump's record counts.
+- **admin/kdc.** A CSPRNG failure fails a kadm5 request closed, a logged policy name or glob escapes control characters, and a CMS ContentInfo type is checked.
 
 ### Added
 

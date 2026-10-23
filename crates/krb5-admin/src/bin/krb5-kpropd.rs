@@ -22,13 +22,14 @@ use std::os::fd::AsRawFd as _;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 use std::time::Duration;
 
 use krb5_admin::{
-    IpropWake, KPROP_PORT, KpropdConfig, KpropdIprop, KpropdKeys, kprop_service_port,
-    kpropd_do_iprop, kpropd_handle_conn, kpropd_keytab_keys, kpropd_server_name,
+    IpropWake, KPROP_PORT, KPROPD_IO_TIMEOUT, KpropdConfig, KpropdIprop, KpropdKeys,
+    kprop_service_port, kpropd_do_iprop, kpropd_handle_conn, kpropd_keytab_keys,
+    kpropd_server_name,
 };
 use krb5_log::klog::{self, JsonLog, Severity, os_error_text};
 use nix::sys::socket::{
@@ -39,6 +40,9 @@ use nix::sys::socket::{
 use krb5_config::ProfileSet;
 use krb5_protocol::{AcceptorConfig, ReplayCache};
 use krb5_types::PrincipalName;
+
+/// MIT forks uncapped. mit-deviations.
+const MAX_HANDLERS: usize = 64;
 
 fn main() {
     let argv: Vec<String> = std::env::args().collect();
@@ -113,6 +117,9 @@ fn main() {
         eprintln!("{progname}: {e} Unable to map log!");
         std::process::exit(1);
     }
+    // Before the iprop gate, so it applies with iprop off too.
+    let resync_timeout =
+        std::time::Duration::from_secs(u64::try_from(iprop.resync_timeout).unwrap_or(0));
     let iprop = iprop.enabled.then_some(iprop);
     let addr = listen_addr(&progname, address.as_deref(), port.as_deref());
     let listener = standalone_listener(&progname, addr);
@@ -136,6 +143,11 @@ fn main() {
         })
     });
     let stop = Arc::new(AtomicBool::new(false));
+    // SIGTERM/SIGINT stop the accept loop.
+    for sig in [signal_hook::consts::SIGTERM, signal_hook::consts::SIGINT] {
+        let _ = signal_hook::flag::register(sig, Arc::clone(&stop));
+    }
+    let live = Arc::new(AtomicUsize::new(0));
     let replay = ReplayCache::new();
     loop {
         if stop.load(Ordering::Relaxed) {
@@ -144,6 +156,11 @@ fn main() {
         let accepted = listener.accept();
         match accepted {
             Ok((mut stream, _)) => {
+                let _ = stream.set_read_timeout(Some(KPROPD_IO_TIMEOUT));
+                let _ = stream.set_write_timeout(Some(KPROPD_IO_TIMEOUT));
+                if live.load(Ordering::Relaxed) >= MAX_HANDLERS {
+                    continue; // dropping `stream` closes the refused connection
+                }
                 let progname = progname.clone();
                 let keytab = keytab.clone();
                 let server = server.clone();
@@ -175,6 +192,7 @@ fn main() {
                                 stash: &stash,
                                 allowed_clients: allowed.as_deref(),
                                 iprop: iprop.as_ref(),
+                                resync_timeout,
                                 conf: &conf,
                             },
                             &replay,
@@ -193,7 +211,12 @@ fn main() {
                     conn();
                     std::process::exit(0);
                 }
-                thread::spawn(conn);
+                live.fetch_add(1, Ordering::Relaxed);
+                let live = Arc::clone(&live);
+                thread::spawn(move || {
+                    conn();
+                    live.fetch_sub(1, Ordering::Relaxed);
+                });
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 thread::sleep(Duration::from_millis(20));

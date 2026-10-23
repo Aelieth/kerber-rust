@@ -505,6 +505,9 @@ fn lookup(host: &str, port: &str) -> Result<Vec<SocketAddr>, String> {
     Ok(kept)
 }
 
+/// MIT uses the OS default. mit-deviations.
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// A connection to `host` on `port` (a number or a services name) and kprop's own address on it, the sender address of every KRB-SAFE and KRB-PRIV it sends.
 // MIT: `k5_sockaddr_to_address` (lib/krb5/os/addr.c:43-75)
 /// an IPv4-mapped IPv6 address is IPv4.
@@ -516,7 +519,7 @@ pub fn kprop_open_connection(
     let mut last = io::Error::from(nix::errno::Errno::EINVAL);
     let mut stream = None;
     for a in addrs {
-        match TcpStream::connect(a) {
+        match TcpStream::connect_timeout(&a, CONNECT_TIMEOUT) {
             Ok(s) => {
                 stream = Some(s);
                 break;

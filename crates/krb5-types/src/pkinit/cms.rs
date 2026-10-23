@@ -1063,7 +1063,7 @@ pub fn cms_signeddata_verify(
     })?;
     let e_content = sd.e_content.clone().unwrap_or_default();
     let digest = Digest::from_oid(&signer_info.digest_alg);
-    // With no signed attributes CMS_verify signs over the content; with them, over the DER SET.
+    // No signed attrs: CMS_verify signs the content; else the DER SET.
     let signed = match &signer_info.signed_attrs {
         Some(sa) => {
             let mut set = sa.clone();
@@ -1344,7 +1344,7 @@ fn cms_template(der: &[u8]) -> Result<(), &'static str> {
                 der_field(&mut der_field(&mut info, 0x30)?, 0x06)?;
                 der_field(&mut info, 0x04)?;
                 der_optional(&mut info, 0xa1)?;
-                // unsignedAttrs [1] is the last, optional field; OpenSSL names a trailing element by tag.
+                // unsignedAttrs [1] is the last optional field (OpenSSL names it by tag).
                 der_end(info, "wrong tag")
             })?;
             der_end(sd, "sequence length mismatch")?;
@@ -2001,7 +2001,11 @@ fn cms_parts(der: &[u8]) -> Result<CmsParts, &'static str> {
     if tag != 0x30 {
         return Err("cms");
     }
-    let (_, _oid, rest) = take_tlv(ci).ok_or("cms oid")?;
+    // Only id-signedData, as MIT.
+    let (tag, oid, rest) = take_tlv(ci).ok_or("cms oid")?;
+    if tag != 0x06 || oid != OID_SIGNED_DATA {
+        return Err("cms content-type");
+    }
     let (t, sd_wrap, _) = take_tlv(rest).ok_or("cms sd")?;
     if t != 0xa0 {
         return Err("cms sd tag");
