@@ -1,17 +1,12 @@
-//! The realm values MIT's `kadm5_init` requires of `kadm5_get_config_params`: a KDC-profile value that does not convert leaves its parameter unset, and `kadmin.local`, `kadmind`, and `kdb5_util create` refuse to start with `KADM5_MISSING_CONF_PARAMS`.
+//! Bad values are not replaced by defaults.
 
 use krb5_config::{KdcConf, KdcPaths};
 use krb5_crypto::EncryptionType;
 
-/// Whether `kadm5_init` refuses the realm: a bad expiration, flags word, `master_key_type` (when `with_master_key_type`; `kdb5_util create` meets that one first), or `supported_enctypes` with no key/salt tuple.
 // MIT: `kadm5_init` (lib/kadm5/srv/server_init.c:207-218)
-/// a required parameter unset is `KADM5_MISSING_CONF_PARAMS`.
 // MIT: `kadm5_get_config_params` (lib/kadm5/alt_prof.c:580-594)
-/// a `default_principal_expiration` that `krb5_string_to_timestamp` refuses leaves it unset.
 // MIT: `kadm5_get_config_params` (lib/kadm5/alt_prof.c:541-555)
-/// so does a `master_key_type` that `krb5_string_to_enctype` refuses.
 // MIT: `kadm5_get_config_params` (lib/kadm5/alt_prof.c:649-671)
-/// and `supported_enctypes` that give no key/salt tuple.
 #[must_use]
 pub fn kadm5_params_missing(conf: &KdcConf, with_master_key_type: bool) -> bool {
     let expiration = conf
@@ -32,7 +27,6 @@ pub fn kadm5_params_missing(conf: &KdcConf, with_master_key_type: bool) -> bool 
     expiration || flags || master || enctypes
 }
 
-/// [`kadm5_params_missing`] for `realm`'s stanza of `paths`. A missing or unloadable profile leaves every parameter at its default.
 #[must_use]
 #[allow(
     clippy::disallowed_methods,
@@ -50,11 +44,8 @@ pub fn realm_kadm5_params_missing(
         .is_ok_and(|conf| kadm5_params_missing(&conf, with_master_key_type))
 }
 
-/// Whether `s` holds a key/salt tuple. Tuples split on `,`, space, or tab; a salt follows `:` or `.`; a tuple that does not convert is skipped.
 // MIT: `krb5_string_to_keysalts` (lib/kadm5/str_conv.c:337-358)
-/// unrecognized tuples are discarded, so a list of them gives none.
 // MIT: `krb5_string_to_salttype` (lib/krb5/krb/str_conv.c:72-86)
-/// a salt name in any case.
 fn keysalts_present(s: &str) -> bool {
     const SALTS: [&str; 4] = ["normal", "norealm", "onlyrealm", "special"];
     s.split([',', ' ', '\t'])
