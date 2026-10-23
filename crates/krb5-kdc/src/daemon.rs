@@ -188,6 +188,7 @@ pub fn names_relative_database(paths: &krb5_config::KdcPaths, db_args: &[String]
 }
 
 // MIT: `main` (kdc/main.c:996-999)
+/// Forks via daemon(3); call it before any thread is started.
 pub fn detach() -> io::Result<()> {
     nix::unistd::daemon(false, false).map_err(io::Error::from)
 }
