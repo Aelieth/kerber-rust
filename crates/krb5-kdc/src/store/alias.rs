@@ -1,5 +1,3 @@
-//! Alias stubs (`kdb5.c` `krb5_dbe_make_alias_entry` / `krb5_dbe_read_alias`): `MAX_ALIAS_DEPTH`, create-alias, and the hop walk used by `get` / `get_raw`.
-
 use krb5_types::PrincipalName;
 
 use super::PrincipalStore;
@@ -7,10 +5,8 @@ use super::principal::{Principal, TlData, stamp_admin_tl};
 use crate::error::Error;
 use crate::kdb_dump::{TL_ALIAS_TARGET, TL_KADM_DATA};
 
-/// `kdb5.c` `MAX_ALIAS_DEPTH`: alias hops `krb5_db_get_principal` follows.
 pub const MAX_ALIAS_DEPTH: usize = 10;
 
-/// `xdr_osa_princ_ent_rec` of a zeroed record: version `OSA_ADB_PRINC_VERSION_1`, empty policy, `aux_attributes`, `old_key_next`, `admin_history_kvno`, and empty `old_keys` (`kdb_put_entry` on `kadm5_create_alias`).
 fn empty_kadm_data() -> Vec<u8> {
     let mut v = 0x1234_5c01u32.to_be_bytes().to_vec();
     v.resize(24, 0);
@@ -32,8 +28,7 @@ impl PrincipalStore {
     }
 
     // MIT: `kadm5_create_alias` (svr_principal.c:2051-2087)
-    /// an alias stub is a keyless `DISALLOW_ALL_TIX` entry whose only content is `KRB5_TL_ALIAS_TARGET`. The target need not exist; the alias name must not resolve to anything.
-    /// Fails with [`Error::AliasRealm`] when `alias_realm` and `target_realm` differ, with [`Error::AlreadyExists`] when the alias name already resolves, with [`Error::Db`] when saving the store fails, or with the error from a `kadm5_hook` precommit module.
+    /// An absent target is fine; the alias must not resolve.
     pub fn create_alias_in(
         &mut self,
         alias: &PrincipalName,
@@ -71,7 +66,6 @@ impl PrincipalStore {
             },
         );
         // MIT: `kdb_put_entry` (lib/kadm5/srv/server_kdb.c:376-395)
-        // the modifier is updated, then the kadm5 record, each new one put first.
         stamp_admin_tl(&mut p, false, actor);
         super::update_tl_data(
             &mut p.tl_data,
