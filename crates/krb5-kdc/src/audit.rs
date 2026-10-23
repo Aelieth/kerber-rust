@@ -526,7 +526,7 @@ fn each_audit(store: &dyn PrincipalRead, mut call: impl FnMut(&dyn KdcAudit)) {
 }
 
 // MIT: `kau_kdc_start` (kdc/kdc_audit.c:244-256)
-/// Disabling json leaves no module, so nothing is recorded.
+/// Disabling json drops the built-in; an empty selection records nothing.
 pub fn audit_kdc_start(store: &dyn PrincipalRead, success: bool) {
     each_audit(store, |module| module.kdc_start(success));
 }
