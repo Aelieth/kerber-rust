@@ -32,10 +32,39 @@ fn static_tgt(realm: &str) -> Option<(krb5_types::Realm, PrincipalName)> {
 }
 
 // MIT krb5_init_creds_set_service; see docs/parity/b1-client-preauth.md
+thread_local! {
+    static SKIP_NEXT_INIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 pub fn init_creds(cname: &PrincipalName, realm: &str, service: Option<&str>) {
+    if SKIP_NEXT_INIT.with(std::cell::Cell::take) {
+        return;
+    }
     trace::init_creds(trace::Princ::new(cname, realm.as_bytes()));
     if let Some(s) = service {
         trace::init_creds_service(s);
+    }
+}
+
+pub fn skip_next_init_creds() {
+    SKIP_NEXT_INIT.with(|c| c.set(true));
+}
+
+pub(crate) fn dns_srv(ev: krb5_config::DnsSrv) {
+    match ev {
+        krb5_config::DnsSrv::Send(name) => trace::dns_srv_send(&name),
+        krb5_config::DnsSrv::Answer {
+            priority,
+            weight,
+            port,
+            host,
+        } => trace::dns_srv_ans(
+            i64::from(priority),
+            i64::from(weight),
+            i64::from(port),
+            &host,
+        ),
+        krb5_config::DnsSrv::NotFound => trace::dns_srv_notfound(),
     }
 }
 

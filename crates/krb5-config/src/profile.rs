@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use super::srv::{lookup_srv_kdc, lookup_srv_kerberos_adm, lookup_srv_kpasswd};
+use super::srv::{DnsSrv, lookup_srv_kdc_traced, lookup_srv_kerberos_adm, lookup_srv_kpasswd};
 use super::testenv::TEST_KRB5_PATHS;
 use super::{Endpoint, Error, KdcTransport, Krb5Conf, ProfileError, RealmLibdefaults};
 
@@ -149,6 +149,14 @@ impl Krb5Conf {
     }
 
     pub fn kdcs_for(&self, realm: &str) -> Result<Vec<Endpoint>, Error> {
+        self.kdcs_for_traced(realm, &mut |_| {})
+    }
+
+    pub fn kdcs_for_traced(
+        &self,
+        realm: &str,
+        trace: &mut dyn FnMut(DnsSrv),
+    ) -> Result<Vec<Endpoint>, Error> {
         if self.kdc_host_invalid.contains(realm) {
             return Err(Error::InvalidArgument);
         }
@@ -158,7 +166,7 @@ impl Krb5Conf {
             return Ok(list.clone());
         }
         if self.dns_lookup_kdc {
-            return lookup_srv_kdc(realm);
+            return lookup_srv_kdc_traced(realm, trace);
         }
         Ok(Vec::new())
     }

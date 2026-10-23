@@ -1408,7 +1408,7 @@ fn resolve_kdc(profile: &Krb5Conf, realm: &str, argv: &KdcAddr) -> Result<KdcAdd
     if krb5_config::handed_matches(realm, &argv.host, argv.port) {
         return Ok(argv.clone());
     }
-    let found = match profile.kdcs_for(realm) {
+    let found = match profile.kdcs_for_traced(realm, &mut crate::trace::dns_srv) {
         Ok(list) => list,
         Err(krb5_config::Error::InvalidArgument) => return Err(Krb5Error::of(Code::Einval)),
         Err(_) => Vec::new(),

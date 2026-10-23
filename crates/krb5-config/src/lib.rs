@@ -375,5 +375,5 @@ pub use profile::{
     load_krb5_conf, load_krb5_conf_paths, parse_deltat, split_krb5_config_paths,
 };
 pub use profile_set::ProfileSet;
-pub use srv::lookup_srv_kdc;
+pub use srv::{DnsSrv, lookup_srv_kdc};
 pub use testenv::{isolate_test_krb5, isolated_profile, set_test_kdc_profile, set_test_krb5_paths};

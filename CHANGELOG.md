@@ -58,6 +58,7 @@ any other `###` heading.
 
 - **gss.** A mutual initiator sends the RFC 4537 enctype list, and an authenticator leaves out a zero sequence number.
 - **gss.** A non-boolean `client_aware_channel_bindings` fails the AP-REQ.
+- **client.** Kinit traces initial credentials before DNS SRV, and each query, answer, and miss.
 - **gss.** An initiator's AP-REQ sequence number is random, and without mutual authentication the receive sequence starts there.
 - **client.** `request_timeout` bounds a KDC exchange and each kpasswd pass; unset, a kpasswd TCP read stays open.
 - **client.** After error 52, the TCP resend gets its own `request_timeout`.

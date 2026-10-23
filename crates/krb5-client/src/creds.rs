@@ -200,7 +200,7 @@ impl<'c> OpenCache<'c> {
 // MIT: `k5_locate_server` (locate_kdc.c:853-878)
 // a realm with no KDC is
 pub fn kdc_for_realm(profile: &Krb5Conf, realm: &str) -> Result<KdcAddr, Krb5Error> {
-    let found = match profile.kdcs_for(realm) {
+    let found = match profile.kdcs_for_traced(realm, &mut crate::trace::dns_srv) {
         Ok(list) => list,
         Err(krb5_config::Error::InvalidArgument) => return Err(Krb5Error::of(Code::Einval)),
         Err(_) => Vec::new(),

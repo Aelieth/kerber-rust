@@ -1050,3 +1050,29 @@ pub fn preauth_enc_ts_armored(sec: i64, usec: i32, plain: &[u8], enc: &[u8]) {
         ],
     );
 }
+
+// MIT: `TRACE_DNS_SRV_ANS` (include/k5-trace.h:162-164)
+pub fn dns_srv_ans(priority: i64, weight: i64, port: i64, host: &str) {
+    krb5int_trace(
+        "SRV answer: {int} {int} {int} \"{str}\"",
+        &[
+            Arg::Int(priority),
+            Arg::Int(weight),
+            Arg::Int(port),
+            Arg::Str(Some(host.as_bytes())),
+        ],
+    );
+}
+
+// MIT: `TRACE_DNS_SRV_NOTFOUND` (include/k5-trace.h:165-166)
+pub fn dns_srv_notfound() {
+    krb5int_trace("No SRV records found", &[]);
+}
+
+// MIT: `TRACE_DNS_SRV_SEND` (include/k5-trace.h:167-168)
+pub fn dns_srv_send(name: &str) {
+    krb5int_trace(
+        "Sending DNS SRV query for {str}",
+        &[Arg::Str(Some(name.as_bytes()))],
+    );
+}

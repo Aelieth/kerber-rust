@@ -512,6 +512,9 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
         in_ccache: k5.in_cc.as_ref().map(krb5_client::InputCcache),
         preauth_prompter: (!opts.keytab).then_some(krb5_client::PreauthPrompter(&preauth_prompt)),
     };
+    // MIT: `krb5_init_creds_init` (lib/krb5/krb/get_in_tkt.c:864)
+    krb5_client::trace::init_creds(&k5.me.1, &realm, in_tkt_service(opts));
+    krb5_client::trace::skip_next_init_creds();
     let addr = kdc(&k5.ctx, opts, &realm).map_err(Failure::Error)?;
     let spec = &k5.out_spec;
     let result = match given {

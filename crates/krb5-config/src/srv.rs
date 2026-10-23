@@ -40,29 +40,62 @@ impl Resolv {
     }
 }
 
-pub fn lookup_srv_kdc(realm: &str) -> Result<Vec<Endpoint>, Error> {
-    locate_kdc_srv(realm, &load_resolv())
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DnsSrv {
+    Send(String),
+    Answer {
+        priority: u16,
+        weight: u16,
+        port: u16,
+        host: String,
+    },
+    NotFound,
 }
 
-fn locate_kdc_srv(realm: &str, resolv: &Resolv) -> Result<Vec<Endpoint>, Error> {
-    locate_named_srv(realm, "_kerberos", resolv)
+pub fn lookup_srv_kdc(realm: &str) -> Result<Vec<Endpoint>, Error> {
+    lookup_srv_kdc_traced(realm, &mut |_| {})
+}
+
+pub(crate) fn lookup_srv_kdc_traced(
+    realm: &str,
+    trace: &mut dyn FnMut(DnsSrv),
+) -> Result<Vec<Endpoint>, Error> {
+    locate_kdc_srv(realm, &load_resolv(), trace)
+}
+
+fn locate_kdc_srv(
+    realm: &str,
+    resolv: &Resolv,
+    trace: &mut dyn FnMut(DnsSrv),
+) -> Result<Vec<Endpoint>, Error> {
+    locate_named_srv(realm, "_kerberos", resolv, trace)
 }
 
 pub(crate) fn lookup_srv_kpasswd(realm: &str) -> Result<Vec<Endpoint>, Error> {
-    locate_named_srv(realm, "_kpasswd", &load_resolv())
+    locate_named_srv(realm, "_kpasswd", &load_resolv(), &mut |_| {})
 }
 
 pub(crate) fn lookup_srv_kerberos_adm(realm: &str) -> Result<Vec<Endpoint>, Error> {
-    let tcp = query_service(realm, "_kerberos-adm", "_tcp", &load_resolv());
+    let mut trace = |_| {};
+    let tcp = query_service(realm, "_kerberos-adm", "_tcp", &load_resolv(), &mut trace);
     match tcp {
         Find::Hit(list) if !list.is_empty() => Ok(list),
-        _ => Err(Error::Dns("no SRV".into())),
+        _ => {
+            // MIT: `dns_locate_server_srv` (lib/krb5/os/locate_kdc.c:795)
+            trace(DnsSrv::NotFound);
+            Err(Error::Dns("no SRV".into()))
+        }
     }
 }
 
-fn locate_named_srv(realm: &str, service: &str, resolv: &Resolv) -> Result<Vec<Endpoint>, Error> {
-    let udp = query_service(realm, service, "_udp", resolv);
-    let tcp = query_service(realm, service, "_tcp", resolv);
+fn locate_named_srv(
+    realm: &str,
+    service: &str,
+    resolv: &Resolv,
+    trace: &mut dyn FnMut(DnsSrv),
+) -> Result<Vec<Endpoint>, Error> {
+    let udp = query_service(realm, service, "_udp", resolv, trace);
+    let tcp = query_service(realm, service, "_tcp", resolv, trace);
     let mut out = Vec::new();
     if let Find::Hit(list) = udp {
         out.extend(list);
@@ -71,6 +104,8 @@ fn locate_named_srv(realm: &str, service: &str, resolv: &Resolv) -> Result<Vec<E
         out.extend(list);
     }
     if out.is_empty() {
+        // MIT: `dns_locate_server_srv` (lib/krb5/os/locate_kdc.c:795)
+        trace(DnsSrv::NotFound);
         Err(Error::Dns("no SRV".into()))
     } else {
         Ok(out)
@@ -82,17 +117,25 @@ enum Find {
     None,
 }
 
-fn query_service(realm: &str, service: &str, proto: &str, resolv: &Resolv) -> Find {
+fn query_service(
+    realm: &str,
+    service: &str,
+    proto: &str,
+    resolv: &Resolv,
+    trace: &mut dyn FnMut(DnsSrv),
+) -> Find {
     // MIT: `make_lookup_name` (lib/krb5/os/dnssrv.c:50-78)
     // the name ends in `.` so the
     let name = format!("{service}.{proto}.{realm}.");
+    // MIT: `krb5int_make_srv_query_realm` (lib/krb5/os/dnssrv.c:286)
+    trace(DnsSrv::Send(name.clone()));
     let transport = if proto == "_tcp" {
         super::KdcTransport::Tcp
     } else {
         super::KdcTransport::Udp
     };
     match search(&name, DNS_SRV, resolv) {
-        Ok(msg) => srv_targets(&msg, transport),
+        Ok(msg) => srv_targets(&msg, transport, trace),
         Err(_) => Find::None,
     }
 }
@@ -383,6 +426,15 @@ fn eq_name(got: &str, want: &str) -> bool {
         .eq_ignore_ascii_case(want.trim_end_matches('.'))
 }
 
+fn trace_host(host: &str) -> String {
+    let host = mit_host(host);
+    if host.ends_with('.') {
+        host
+    } else {
+        format!("{host}.")
+    }
+}
+
 fn mit_host(host: &str) -> String {
     // MIT: `locate_srv_dns_1` (lib/krb5/os/locate_kdc.c:379-382)
     // a sole empty host is no service.
@@ -393,10 +445,19 @@ fn mit_host(host: &str) -> String {
     }
 }
 
-fn srv_targets(msg: &[u8], transport: super::KdcTransport) -> Find {
+fn srv_targets(msg: &[u8], transport: super::KdcTransport, trace: &mut dyn FnMut(DnsSrv)) -> Find {
     let mut recs = parse_srv(msg);
     if recs.is_empty() {
         return Find::None;
+    }
+    for rec in &recs {
+        // MIT: `krb5int_make_srv_query_realm` (lib/krb5/os/dnssrv.c:337)
+        trace(DnsSrv::Answer {
+            priority: rec.1,
+            weight: rec.2,
+            port: rec.3,
+            host: trace_host(&rec.0),
+        });
     }
     for rec in &mut recs {
         rec.0 = mit_host(&rec.0);
@@ -409,14 +470,14 @@ fn srv_targets(msg: &[u8], transport: super::KdcTransport) -> Find {
             .into_iter()
             .map(|i| Endpoint {
                 host: recs[i].0.clone(),
-                port: recs[i].2,
+                port: recs[i].3,
                 transport,
             })
             .collect(),
     )
 }
 
-fn parse_srv(msg: &[u8]) -> Vec<(String, u16, u16)> {
+fn parse_srv(msg: &[u8]) -> Vec<(String, u16, u16, u16)> {
     if msg.len() < 12 {
         return Vec::new();
     }
@@ -448,9 +509,10 @@ fn parse_srv(msg: &[u8]) -> Vec<(String, u16, u16)> {
         }
         if typ == DNS_SRV && class == DNS_IN && rdlen >= 6 {
             let prio = u16::from_be_bytes([msg[i], msg[i + 1]]);
+            let weight = u16::from_be_bytes([msg[i + 2], msg[i + 3]]);
             let port = u16::from_be_bytes([msg[i + 4], msg[i + 5]]);
             let host = decode_name(msg, i + 6).unwrap_or_default();
-            out.push((host, prio, port));
+            out.push((host, prio, weight, port));
         }
         i += rdlen;
     }
@@ -617,7 +679,7 @@ mod tests {
             let good = answer(id, qname, 0x8180, good_host, 88, 0, 0);
             let _ = sock.send_to(&good, src);
         }));
-        let found = locate_kdc_srv("EXAMPLE", &resolv_at(addr)).unwrap();
+        let found = locate_kdc_srv("EXAMPLE", &resolv_at(addr), &mut |_| {}).unwrap();
         assert_eq!(found[0].host, good_host);
         assert_eq!(found[0].port, 88);
     }
