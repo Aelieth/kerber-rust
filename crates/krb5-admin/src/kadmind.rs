@@ -8,6 +8,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, PoisonError};
 use std::time::Duration;
 
+use krb5_config::listen::{BindAddresses, BindType, ListenLog};
 use krb5_config::{KadmindListen, ProfileSet};
 use krb5_crypto::ProtocolKey;
 use krb5_kdc::net_server::{
@@ -16,8 +17,11 @@ use krb5_kdc::net_server::{
 };
 use krb5_kdc::principals::kadmin_changepw;
 use krb5_kdc::{
-    Acl, SharedDump as SharedStore, Shutdown, Signals, WHILE_DISPATCHING_TCP, WHILE_DISPATCHING_UDP,
+    Acl, DEFAULT_TCP_LISTEN_BACKLOG, SharedDump as SharedStore, Shutdown, Signals,
+    WHILE_DISPATCHING_TCP, WHILE_DISPATCHING_UDP, bind_rpc_listeners,
+    bind_tcp_listeners_with_backlog, bind_udp_listeners,
 };
+use krb5_log::klog::{self, Severity};
 use krb5_protocol::{AcceptorConfig, ReplayCache};
 
 use crate::kadm5::Kadm5Conn;
@@ -90,6 +94,9 @@ pub enum StartError {
     Pwqual(io::Error),
     Config(String),
     AcceptorNames,
+    /// The listen addresses are bad or empty ("Invalid argument"), before any socket is bound.
+    Listen(String),
+    /// A listener could not be bound to its address.
     Bind(io::Error),
 }
 
@@ -97,13 +104,20 @@ impl fmt::Display for StartError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Pwqual(e) | Self::Bind(e) => write!(f, "{e}"),
-            Self::Config(m) => f.write_str(m),
+            Self::Config(m) | Self::Listen(m) => f.write_str(m),
             Self::AcceptorNames => f.write_str("Cannot set GSSAPI authentication names"),
         }
     }
 }
 
 impl std::error::Error for StartError {}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BindService {
+    Kpasswd,
+    Kadm,
+    Iprop,
+}
 
 /// kadmind's side of the loop: kpasswd's requests and each kadm5 connection's session, over one store, one ACL, one replay cache for the kadm5 acceptor and one set of acceptor profile values.
 pub struct Kadmind {
@@ -312,6 +326,121 @@ pub struct Listeners {
 }
 
 impl Listeners {
+    /// Bind the listeners `services`, `listen` and `iprop` call for: kpasswd over UDP and TCP, the
+    /// kadm5 program on its port, and the iprop program. Returns them with the RPC programs they carry.
+    // MIT: `setup_loop` (kadmin/server/ovsec_kadmd.c:134-174)
+    pub fn bind(
+        listen: &KadmindListen,
+        services: Services,
+        iprop: Option<&IpropConfig>,
+    ) -> Result<Self, StartError> {
+        let mut list: BindAddresses<BindService> = BindAddresses::default();
+        let mut added = Ok(());
+        if services.kpasswd_udp || services.kpasswd_tcp {
+            let kpasswd = listen.kpasswd_listen.as_deref();
+            if services.kpasswd_udp {
+                added = added.and_then(|()| {
+                    list.add_addresses(
+                        kpasswd,
+                        listen.kpasswd_port,
+                        BindType::Udp,
+                        &BindService::Kpasswd,
+                    )
+                });
+            }
+            if services.kpasswd_tcp {
+                added = added.and_then(|()| {
+                    list.add_addresses(
+                        kpasswd,
+                        listen.kpasswd_port,
+                        BindType::Tcp,
+                        &BindService::Kpasswd,
+                    )
+                });
+            }
+            // MIT: `loop_add_unix_socket` (lib/apputils/net-server.c:461-468)
+            // a `/path` kpasswd entry is a UNIX-domain socket, which this port does not bind.
+            for entry in kpasswd
+                .into_iter()
+                .flat_map(|l| l.split([',', ';', ' ']))
+                .filter(|e| e.starts_with('/'))
+            {
+                klog::syslog(
+                    Severity::Warning,
+                    &format!(
+                        "kpasswd_listen entry {entry} is a UNIX-domain socket, which is not supported; it is skipped"
+                    ),
+                );
+            }
+        }
+        if services.kadm5 {
+            added = added.and_then(|()| {
+                list.add_addresses(
+                    listen.kadmind_listen.as_deref(),
+                    listen.kadmind_port,
+                    BindType::Rpc,
+                    &BindService::Kadm,
+                )
+            });
+        }
+        if let Some(iprop) = iprop.filter(|_| services.iprop) {
+            added = added.and_then(|()| {
+                list.add_addresses(
+                    iprop.listen.as_deref(),
+                    iprop.port,
+                    BindType::Rpc,
+                    &BindService::Iprop,
+                )
+            });
+        }
+        for line in list.take_log() {
+            match line {
+                ListenLog::Debug(l) => klog::syslog(Severity::Debug, &l),
+                ListenLog::Err(l) => klog::syslog(Severity::Err, &l),
+            }
+        }
+        // An add refusal or an empty list stops kadmind before any socket is bound.
+        if added.is_err() || list.entries().is_empty() {
+            return Err(StartError::Listen("Invalid argument".into()));
+        }
+        // MIT: `loop_setup_network` (lib/apputils/net-server.c:1068-1068)
+        klog::syslog(Severity::Info, "setting up network...");
+        let (mut rpc, mut udp, mut tcp) = (Vec::new(), Vec::new(), Vec::new());
+        let mut programs = Programs {
+            kadm: false,
+            iprop: false,
+        };
+        // MIT: `setup_addresses` (lib/apputils/net-server.c:965-1042)
+        for entry in list.entries() {
+            let one = std::slice::from_ref(&entry.addr);
+            match entry.kind {
+                BindType::Udp => udp.extend(bind_udp_listeners(one).map_err(StartError::Bind)?),
+                BindType::Tcp => tcp.extend(
+                    bind_tcp_listeners_with_backlog(one, DEFAULT_TCP_LISTEN_BACKLOG)
+                        .map_err(StartError::Bind)?,
+                ),
+                BindType::Rpc => {
+                    rpc.extend(bind_rpc_listeners(one).map_err(StartError::Bind)?);
+                    match entry.service {
+                        BindService::Kadm => programs.kadm = true,
+                        BindService::Iprop => programs.iprop = true,
+                        BindService::Kpasswd => {}
+                    }
+                }
+            }
+        }
+        klog::syslog(
+            Severity::Info,
+            &format!("set up {} sockets", udp.len() + tcp.len() + rpc.len()),
+        );
+        Ok(Self {
+            udp,
+            tcp,
+            rpc,
+            programs,
+        })
+    }
+
     #[must_use]
     pub fn from_sockets(
         udp: Vec<UdpSocket>,
@@ -325,6 +454,22 @@ impl Listeners {
             rpc,
             programs,
         }
+    }
+
+    /// These listeners as a [`Sockets`] for the loop.
+    #[must_use]
+    pub fn sockets(&self) -> Sockets<'_> {
+        Sockets {
+            udp: &self.udp,
+            tcp: &self.tcp,
+            rpc: &self.rpc,
+        }
+    }
+
+    /// The RPC programs the bound listeners carry.
+    #[must_use]
+    pub fn programs(&self) -> Programs {
+        self.programs
     }
 }
 

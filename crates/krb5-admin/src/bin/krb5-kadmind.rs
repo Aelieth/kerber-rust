@@ -17,19 +17,18 @@
 )]
 
 use std::io::Write as _;
+#[cfg(feature = "test-hooks")]
 use std::net::{TcpListener, UdpSocket};
 use std::path::Path;
 use std::sync::Arc;
 
 use krb5_admin::{
-    IpropConfig, Kadmind, KadmindConfig, Programs, ServeLimits, Services, StartError, serve_kadmind,
+    IpropConfig, Kadmind, KadmindConfig, ServeLimits, Services, StartError, serve_kadmind,
 };
 use krb5_cli::{MitArgs, MitOpt, Placement};
-use krb5_config::listen::{BindAddresses, BindType, ListenLog};
 use krb5_kdc::net_server::Sockets;
 use krb5_kdc::{
-    Acl, DEFAULT_TCP_LISTEN_BACKLOG, Error, IpropRole, OpenFailure, PrincipalStore, Signals,
-    acl_for_store, bind_rpc_listeners, bind_tcp_listeners_with_backlog, bind_udp_listeners,
+    Acl, Error, IpropRole, OpenFailure, PrincipalStore, Signals, acl_for_store,
     copy_persist_master, detach, kadmind_mkey_from_kbd, names_relative_database, open_database,
     open_database_with_key, open_database_with_password, shared_dump as shared_store,
     write_pid_file,
@@ -81,6 +80,17 @@ fn fail_to_start(progname: &str, error: Option<&str>, msg: &str) -> ! {
     std::process::exit(1);
 }
 
+/// Map a `Listeners::bind` failure to MIT's two paths: a bad or empty listen list stops kadmind
+/// "while initializing network"; a socket that will not bind has already been logged by the bind
+/// helper ("Error setting up network"), so this just exits 1, as MIT and the tip do.
+fn bind_fail(progname: &str, e: StartError) -> ! {
+    match e {
+        StartError::Bind(_) => std::process::exit(1),
+        StartError::Listen(msg) => fail_to_start(progname, Some(&msg), "initializing network"),
+        other => fail_to_start(progname, Some(&other.to_string()), "initializing network"),
+    }
+}
+
 fn atoi(s: &str) -> i64 {
     let t = s.trim_start();
     let (neg, digits) = match t.as_bytes().first() {
@@ -118,7 +128,7 @@ fn main() {
     let test_realm = args.flag("--test-realm");
     #[cfg(not(feature = "test-hooks"))]
     let test_realm = false;
-    let pinned = match args.operands.as_slice() {
+    let pinned: Option<String> = match args.operands.as_slice() {
         [] => None,
         #[cfg(feature = "test-hooks")]
         [addr] => Some(addr.clone()),
@@ -205,52 +215,52 @@ fn main() {
     });
     let listen =
         krb5_config::KadmindListen::for_realm(Some(&profile.kdc_context), &realm, port_arg);
-
-    // MIT: `setup_loop` (kadmin/server/ovsec_kadmd.c:134-174)
-    // the signal handlers, then the listeners, before the ACL file is read.
-    let signals = Signals::install();
-    let (listeners, kpasswd_udp, kpasswd_tcp, programs) = setup_loop(
-        &progname,
-        test_realm,
-        pinned,
-        &listen,
-        iprop.enabled.then_some(&iprop),
-        proponly,
-    );
-    klog::syslog(
-        Severity::Info,
-        &format!(
-            "set up {} sockets",
-            listeners.len() + kpasswd_udp.len() + kpasswd_tcp.len()
-        ),
-    );
-    let mut socket_fds: Vec<i32> = listeners
-        .iter()
-        .map(std::os::fd::AsRawFd::as_raw_fd)
-        .chain(kpasswd_udp.iter().map(std::os::fd::AsRawFd::as_raw_fd))
-        .chain(kpasswd_tcp.iter().map(std::os::fd::AsRawFd::as_raw_fd))
-        .collect();
-    socket_fds.sort_unstable_by(|a, b| b.cmp(a));
-    let acl = load_acl(&progname, paths.acl_file.as_deref(), &realm);
-
     let services = Services {
         kpasswd_udp: !proponly,
         kpasswd_tcp: !proponly,
         kadm5: !proponly,
         iprop: iprop.enabled,
     };
+    let iprop_cfg = iprop.enabled.then(|| IpropConfig {
+        listen: iprop.listen.clone(),
+        port: iprop.port.unwrap_or_default(),
+    });
+
+    let signals = Signals::install();
+    // MIT sets up the network before the names check; test-hooks hands pre-bound sockets.
+    #[cfg(feature = "test-hooks")]
+    let listeners = if test_realm || pinned.is_some() {
+        let (rpc, udp, tcp) = legacy_sockets(&progname, pinned);
+        krb5_admin::Listeners::from_sockets(udp, tcp, rpc, krb5_admin::Programs::BOTH)
+    } else {
+        krb5_admin::Listeners::bind(&listen, services, iprop_cfg.as_ref())
+            .unwrap_or_else(|e| bind_fail(&progname, e))
+    };
+    #[cfg(not(feature = "test-hooks"))]
+    let listeners = krb5_admin::Listeners::bind(&listen, services, iprop_cfg.as_ref())
+        .unwrap_or_else(|e| bind_fail(&progname, e));
+    let socket_fds: Vec<i32> = {
+        let s = listeners.sockets();
+        let mut fds: Vec<i32> = s
+            .rpc
+            .iter()
+            .map(std::os::fd::AsRawFd::as_raw_fd)
+            .chain(s.udp.iter().map(std::os::fd::AsRawFd::as_raw_fd))
+            .chain(s.tcp.iter().map(std::os::fd::AsRawFd::as_raw_fd))
+            .collect();
+        fds.sort_unstable_by(|a, b| b.cmp(a));
+        fds
+    };
+    let acl = load_acl(&progname, paths.acl_file.as_deref(), &realm);
     let cfg = KadmindConfig {
         profile: Arc::new(profile),
         services,
         listen,
         limits: ServeLimits::default(),
         acl,
-        iprop: iprop.enabled.then(|| IpropConfig {
-            listen: iprop.listen.clone(),
-            port: iprop.port.unwrap_or_default(),
-        }),
+        iprop: iprop_cfg,
     };
-    // Before daemonizing, as MIT does.
+    // Before daemonizing, as MIT does; the names check is after the network above.
     let mut kadmind = Kadmind::new(Arc::clone(&shared), cfg)
         .unwrap_or_else(|e| match e {
             StartError::Pwqual(err) => {
@@ -262,13 +272,9 @@ fn main() {
             StartError::AcceptorNames => {
                 fail_to_start(&progname, None, "Cannot set GSSAPI authentication names")
             }
-            StartError::Bind(err) => fail_to_start(
-                &progname,
-                Some(&os_error_text(&err)),
-                "initializing network",
-            ),
+            other => fail_to_start(&progname, Some(&other.to_string()), "initializing"),
         })
-        .serve_programs(programs)
+        .serve_programs(listeners.programs())
         .report_unhandled(Arc::new(|message| {
             let _ = writeln!(std::io::stderr(), "kadm5: {message}");
         }));
@@ -320,24 +326,24 @@ fn main() {
         }
     }
     #[cfg(feature = "test-hooks")]
-    announce(
-        &progname,
-        persist.as_ref(),
-        &listeners,
-        kadmind
-            .serves_kpasswd()
-            .then_some((kpasswd_udp.as_slice(), kpasswd_tcp.as_slice())),
-    );
-    let (udp, tcp): (&[UdpSocket], &[TcpListener]) = if kadmind.serves_kpasswd() {
-        (&kpasswd_udp, &kpasswd_tcp)
+    {
+        let s = listeners.sockets();
+        announce(
+            &progname,
+            persist.as_ref(),
+            s.rpc,
+            kadmind.serves_kpasswd().then_some((s.udp, s.tcp)),
+        );
+    }
+    let full = listeners.sockets();
+    let sockets = if kadmind.serves_kpasswd() {
+        full
     } else {
         eprintln!("{progname}: no kadmin/changepw keys (RFC 3244 not listening)");
-        (&[], &[])
-    };
-    let sockets = Sockets {
-        udp,
-        tcp,
-        rpc: &listeners,
+        Sockets {
+            rpc: full.rpc,
+            ..Sockets::default()
+        }
     };
     klog::syslog(Severity::Info, "starting");
     if nofork {
@@ -427,125 +433,6 @@ fn announce(
             println!("kpasswd {a}");
         }
     }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Service {
-    Kpasswd,
-    Kadm,
-    Iprop,
-}
-
-/// a list that is refused stops kadmind "while initializing network".
-fn setup_loop(
-    progname: &str,
-    test_realm: bool,
-    pinned: Option<String>,
-    listen: &krb5_config::KadmindListen,
-    iprop: Option<&krb5_config::IpropParams>,
-    proponly: bool,
-) -> (Vec<TcpListener>, Vec<UdpSocket>, Vec<TcpListener>, Programs) {
-    #[cfg(feature = "test-hooks")]
-    if test_realm || pinned.is_some() {
-        klog::syslog(Severity::Info, "setting up network...");
-        let (rpc, udp, tcp) = legacy_sockets(progname, pinned);
-        return (rpc, udp, tcp, Programs::BOTH);
-    }
-    let _ = (test_realm, pinned);
-    let mut list = BindAddresses::default();
-    let mut added = Ok(());
-    if !proponly {
-        let kpasswd = listen.kpasswd_listen.as_deref();
-        added = added
-            .and_then(|()| {
-                list.add_addresses(
-                    kpasswd,
-                    listen.kpasswd_port,
-                    BindType::Udp,
-                    &Service::Kpasswd,
-                )
-            })
-            .and_then(|()| {
-                list.add_addresses(
-                    kpasswd,
-                    listen.kpasswd_port,
-                    BindType::Tcp,
-                    &Service::Kpasswd,
-                )
-            })
-            .and_then(|()| {
-                list.add_addresses(
-                    listen.kadmind_listen.as_deref(),
-                    listen.kadmind_port,
-                    BindType::Rpc,
-                    &Service::Kadm,
-                )
-            });
-        // MIT: `loop_add_unix_socket` (lib/apputils/net-server.c:461-468)
-        // kpasswd's `/path` entries are UNIX-domain sockets, which this port does not bind.
-        for entry in kpasswd
-            .into_iter()
-            .flat_map(|l| l.split([',', ';', ' ']))
-            .filter(|e| e.starts_with('/'))
-        {
-            klog::syslog(
-                Severity::Warning,
-                &format!(
-                    "kpasswd_listen entry {entry} is a UNIX-domain socket, which is not supported; it is skipped"
-                ),
-            );
-        }
-    }
-    if let Some(iprop) = iprop {
-        added = added.and_then(|()| {
-            list.add_addresses(
-                iprop.listen.as_deref(),
-                iprop.port.unwrap_or_default(),
-                BindType::Rpc,
-                &Service::Iprop,
-            )
-        });
-    }
-    for line in list.take_log() {
-        match line {
-            ListenLog::Debug(l) => klog::syslog(Severity::Debug, &l),
-            ListenLog::Err(l) => klog::syslog(Severity::Err, &l),
-        }
-    }
-    if added.is_err() {
-        fail_to_start(progname, Some("Invalid argument"), "initializing network");
-    }
-    // MIT: `loop_setup_network` (lib/apputils/net-server.c:1068-1068)
-    // the line before the sockets are set up.
-    klog::syslog(Severity::Info, "setting up network...");
-    let (mut rpc, mut udp, mut tcp) = (Vec::new(), Vec::new(), Vec::new());
-    let mut programs = Programs {
-        kadm: false,
-        iprop: false,
-    };
-    // MIT: `setup_addresses` (lib/apputils/net-server.c:965-1042)
-    // the list is set up in its order, and a socket that does not bind stops the daemon.
-    for entry in list.entries() {
-        let one = std::slice::from_ref(&entry.addr);
-        match entry.kind {
-            BindType::Udp => {
-                udp.extend(bind_udp_listeners(one).unwrap_or_else(|_| std::process::exit(1)));
-            }
-            BindType::Tcp => tcp.extend(
-                bind_tcp_listeners_with_backlog(one, DEFAULT_TCP_LISTEN_BACKLOG)
-                    .unwrap_or_else(|_| std::process::exit(1)),
-            ),
-            BindType::Rpc => {
-                rpc.extend(bind_rpc_listeners(one).unwrap_or_else(|_| std::process::exit(1)));
-                match entry.service {
-                    Service::Kadm => programs.kadm = true,
-                    Service::Iprop => programs.iprop = true,
-                    Service::Kpasswd => {}
-                }
-            }
-        }
-    }
-    (rpc, udp, tcp, programs)
 }
 
 #[cfg(feature = "test-hooks")]
