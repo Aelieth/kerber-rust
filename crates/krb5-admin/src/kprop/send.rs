@@ -910,6 +910,7 @@ krb5_prop       754/tcp         tell            # Kerberos slave propagation\n";
                 "Generic preauthentication failure",
             ),
             (E::EnctsDisabled, "Generic preauthentication failure"),
+            (E::PreauthNoMech, "Generic preauthentication failure"),
         ] {
             assert_eq!(init_creds_text(&e), text, "{e:?}");
         }

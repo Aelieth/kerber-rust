@@ -83,6 +83,9 @@ pub enum Error {
     /// With no real type answered, the first failure is that message.
     #[error("Pre-authentication failed: {0}")]
     PreauthFailed(Box<Error>),
+    // MIT: `process_pa_data` (lib/krb5/krb/preauth2.c:716-723)
+    #[error("Generic preauthentication failure")]
+    PreauthNoMech,
     #[error("KDC reply truncated")]
     TruncatedReply,
     /// The KDC offered FAST, and this request had armor but no armor key.
@@ -142,6 +145,7 @@ impl Clone for Error {
             Self::ProgSumtypeNosupp => Self::ProgSumtypeNosupp,
             Self::NopermEtype(s) => Self::NopermEtype(s.clone()),
             Self::PreauthFailed(e) => Self::PreauthFailed(e.clone()),
+            Self::PreauthNoMech => Self::PreauthNoMech,
             Self::TruncatedReply => Self::TruncatedReply,
             Self::FastUpgrade => Self::FastUpgrade,
             Self::EnctsDisabled => Self::EnctsDisabled,
@@ -172,6 +176,11 @@ impl PartialEq for Error {
 impl Eq for Error {}
 
 impl Error {
+    #[must_use]
+    pub(crate) const fn preauth_no_mech() -> Self {
+        Self::PreauthNoMech
+    }
+
     /// A transport failure, or SVC_UNAVAILABLE or RESPONSE_TOO_BIG.
     #[must_use]
     pub fn is_retryable(&self) -> bool {

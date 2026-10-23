@@ -196,7 +196,7 @@ fn run<R: BufRead, W: Write>(
                 // a read that failed answering the KDC's preauthentication hint is `KRB5_PREAUTH_FAILED`.
                 // MIT: `default_com_err_proc` (util/et/com_err.c:83-85)
                 // kpasswd's `com_err` prints `error_message` of that code.
-                (Some(_), Error::PreauthFailed(_)) => {
+                (Some(_), Error::PreauthFailed(_)) | (_, Error::PreauthNoMech) => {
                     "Generic preauthentication failure".to_owned()
                 }
                 // A read that failed and was not the end of the exchange (a later mechanism read the password and the KDC refused it) leaves the KDC's own error to print.

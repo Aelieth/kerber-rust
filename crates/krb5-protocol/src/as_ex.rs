@@ -898,7 +898,7 @@ fn continue_embedder(
 }
 
 fn preauth_failed() -> Error {
-    Error::ReplyMismatch("Generic preauthentication failure".into())
+    Error::preauth_no_mech()
 }
 
 pub(super) fn allowed_padata(req: &AsRequest<'_>, method: &[PaData]) -> Vec<PaData> {

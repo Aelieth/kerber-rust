@@ -90,6 +90,7 @@ impl Krb5Error {
                 Code::PreauthFailed,
                 format!("Pre-authentication failed: {inner}"),
             ),
+            krb5_protocol::Error::PreauthNoMech => Self::new(Code::PreauthFailed, e.to_string()),
             krb5_protocol::Error::ReplyIntegrity => Self::of(Code::BadIntegrity),
             // MIT krb5_ktfileint_open; see docs/parity/b1-client-keytab.md
             krb5_protocol::Error::Keytab { code: 2, text } => Self::new(Code::Enoent, text.clone()),
@@ -122,7 +123,7 @@ impl Krb5Error {
         match e {
             E::KdcReplySkew => Self::of(Code::KdcrepSkew),
             E::NonceMismatch | E::ReplyMismatch(_) | E::Referral => Self::of(Code::KdcrepModified),
-            E::EnctsDisabled => Self::new(Code::PreauthFailed, e.to_string()),
+            E::EnctsDisabled | E::PreauthNoMech => Self::new(Code::PreauthFailed, e.to_string()),
             _ => Self::from_protocol(e, realm),
         }
     }

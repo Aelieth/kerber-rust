@@ -53,6 +53,7 @@ any other `###` heading.
 
 ### Changed
 
+- **protocol.** A preauth failure with no saved module error is its own error, reported as preauthentication failed.
 - **kdc.** Embedded realm create writes the stash, then the lock files, then the database, and a re-run keeps that master.
 - **kdc.** `bootstrap_realm_into` fills a caller-owned store without rotating keys, and `create_database` writes the stash first.
 - **kdc.** The bootstrap admin requires pre-auth, and its keytab is returned for the caller to write.

@@ -171,9 +171,7 @@ pub(super) fn continue_fast(
                                 );
                             }
                             None => {
-                                return Err(Error::ReplyMismatch(
-                                    "Generic preauthentication failure".into(),
-                                ));
+                                return Err(Error::preauth_no_mech());
                             }
                         },
                         pa::OTP_CHALLENGE => {
@@ -597,9 +595,7 @@ fn finish_fast_spake(
             KdcMsg::TgsRep => return Err(Error::UnexpectedPdu),
         }
     }
-    Err(Error::ReplyMismatch(
-        "Generic preauthentication failure".into(),
-    ))
+    Err(Error::preauth_no_mech())
 }
 
 enum ReplyKey<'a, 'p, 'g> {
@@ -827,7 +823,7 @@ pub(super) fn fast_mechanism(
                     _ => false,
                 }
         })
-        .ok_or_else(|| Error::ReplyMismatch("Generic preauthentication failure".into()))
+        .ok_or(Error::preauth_no_mech())
 }
 
 fn fast_base_key(
@@ -998,8 +994,7 @@ mod tests {
         let only_ts = vec![pa_of(pa::ENC_TIMESTAMP)];
         let err = fast_mechanism(&profile, &only_ts, &[], false).unwrap_err();
         assert!(
-            err.to_string()
-                .contains("Generic preauthentication failure"),
+            matches!(err, crate::error::Error::PreauthNoMech),
             "a disabled encrypted_timestamp is not a FAST mechanism, got {err}"
         );
     }
