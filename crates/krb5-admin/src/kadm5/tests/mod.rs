@@ -129,6 +129,7 @@ impl AdminTicket {
             krb5_gss::GSS_C_MUTUAL | krb5_gss::GSS_C_REPLAY | krb5_gss::GSS_C_SEQUENCE,
             cb,
             None,
+            None,
         )
         .unwrap()
     }
@@ -206,6 +207,7 @@ fn admin_gss_token() -> AdminGssToken {
         &ascii(TEST_REALM),
         &admin,
         krb5_gss::GSS_C_MUTUAL | krb5_gss::GSS_C_REPLAY | krb5_gss::GSS_C_SEQUENCE,
+        None,
         None,
         None,
     )

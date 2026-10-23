@@ -32,6 +32,7 @@ fn linked() -> (GssContext, GssContext) {
         krb5_gss::GSS_C_REPLAY | krb5_gss::GSS_C_SEQUENCE,
         None,
         None,
+        None,
     )
     .unwrap();
     let host = store.get_name(&documented_host()).unwrap();

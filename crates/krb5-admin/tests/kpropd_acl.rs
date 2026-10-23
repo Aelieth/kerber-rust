@@ -84,6 +84,8 @@ fn creds(ticket: Ticket, session: ProtocolKey) -> KpropCreds {
         client: documented_host(),
         crealm: krb5_types::ascii(TEST_REALM),
         time_offset: 0,
+        client_aware: false,
+        client_aware_invalid: false,
     }
 }
 

@@ -264,6 +264,10 @@ fn the_context_refuses_a_profile_as_mits_does() {
         let c = parse(&format!("[libdefaults]\n    {rel} = maybe\n"));
         assert_eq!(c.context_refusal, Some(ProfileError::BadBoolean), "{rel}");
     }
+    let aware = parse("[libdefaults]\n    client_aware_channel_bindings = maybe\n");
+    assert_eq!(aware.context_refusal, None);
+    assert!(aware.client_aware_channel_bindings_invalid);
+    assert!(!aware.client_aware_channel_bindings);
     let both =
         parse("[libdefaults]\n    dns_canonicalize_hostname = sometimes\n    allow_rc4 = maybe\n");
     assert_eq!(both.context_refusal, Some(ProfileError::BadBoolean));

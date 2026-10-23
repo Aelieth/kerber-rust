@@ -39,7 +39,8 @@ const INITIATOR_FLAGS: u32 = GSS_C_INTEG
     | GSS_C_SEQUENCE
     | GSS_C_DCE
     | GSS_C_IDENTIFY
-    | GSS_C_EXTENDED_ERROR;
+    | GSS_C_EXTENDED_ERROR
+    | GSS_C_CHANNEL_BOUND;
 
 pub(super) const KRB5_GSS_FOR_CREDS: u16 = 1;
 
@@ -297,6 +298,10 @@ impl GssContext {
         })
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the initiator's ticket, flags, and profile"
+    )]
     pub fn init_sec_context(
         ticket: Ticket,
         session: &ProtocolKey,
@@ -305,10 +310,16 @@ impl GssContext {
         req_flags: u32,
         channel_bindings: Option<&ChannelBindings>,
         deleg: Option<&DelegCred>,
+        profile: Option<&krb5_config::Krb5Conf>,
     ) -> Result<(Self, Vec<u8>), Error> {
         // MIT kg_new_connection; see docs/parity/b1-gss.md
-        let mut flags =
-            req_flags & (INITIATOR_FLAGS & !GSS_C_DCE) | GSS_C_TRANS | GSS_C_CONF | GSS_C_INTEG;
+        // MIT: `kg_new_connection` (lib/gssapi/krb5/init_sec_context.c:486)
+        let cbt = req_flags & GSS_C_CHANNEL_BOUND != 0;
+        // MIT: `kg_new_connection` (lib/gssapi/krb5/init_sec_context.c:544-550)
+        let mut flags = req_flags & (INITIATOR_FLAGS & !GSS_C_DCE & !GSS_C_CHANNEL_BOUND)
+            | GSS_C_TRANS
+            | GSS_C_CONF
+            | GSS_C_INTEG;
         let opts = if flags & GSS_C_MUTUAL != 0 {
             ApOptions::mutual_required()
         } else {
@@ -336,7 +347,19 @@ impl GssContext {
             keyvalue: sub.as_bytes().to_vec().into(),
         };
         // MIT: `krb5_mk_req_extended` (lib/krb5/krb/mk_req_ext.c:136-143)
+        // MIT: `krb5_mk_req_extended` (lib/krb5/krb/mk_req_ext.c:187-194)
         let seq = generate_seq_number()?;
+        let desired = if flags & GSS_C_MUTUAL != 0 {
+            match profile {
+                Some(conf) => krb5_protocol::conf_etypes(conf, true),
+                None => krb5_crypto::EncryptionType::preferred()
+                    .iter()
+                    .map(|etype| etype.to_iana())
+                    .collect(),
+            }
+        } else {
+            Vec::new()
+        };
         let authenticator = generate_ap_authenticator(ApAuthenticator {
             crealm,
             cname,
@@ -344,8 +367,10 @@ impl GssContext {
             subkey: Some(enc_sub),
             sequence: Some(seq),
             time_offset: 0,
-            cbt: false,
-            desired_etypes: &[],
+            cbt,
+            desired_etypes: &desired,
+            ticket_etype: session.etype().to_iana(),
+            profile,
         })?;
         let ap = build_ap_req_from_authenticator(ticket, session, opts, &authenticator)?;
         let der = encode(&ap)?;

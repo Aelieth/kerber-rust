@@ -259,6 +259,7 @@ fn admin_initiator(store: &SharedDump) -> (GssContext, Vec<u8>, ProtocolKey) {
         krb5_gss::GSS_C_MUTUAL | krb5_gss::GSS_C_REPLAY | krb5_gss::GSS_C_SEQUENCE,
         None,
         None,
+        None,
     )
     .unwrap();
     (ctx, token, out.session_key)

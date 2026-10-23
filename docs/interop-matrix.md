@@ -38,8 +38,6 @@ from that tree by one test-only change, the version, the docs and the CHANGELOG.
   against 25 and 27 ms with fsync on): the store rereads and rewrites the whole realm. While kadmind writes, a
   kinit takes a median of 60, 156 and 473 ms at 10, 1,000 and 5,000 principals, where MIT's is 15 to 18 ms. Reads
   match. The store redesign is after 1.1.
-- **The GSS initiator's sequence number.** The authenticator's sequence number and the per-message start are 0; MIT
-  draws a random one. MIT accepts ours, and a cross-context replay still fails the MIC.
 - **Client messages and logs.** None changes an outcome.
   - The KDC's AS_REQ line for a wrong encrypted-challenge password ends `Preauthentication failed`, where MIT's ends
     `Incorrect password in encrypted challenge`.

@@ -1028,6 +1028,7 @@ fn kadmind_init(addr: &str, keytab: &str, client: &str, opts: &[String]) -> Resu
         krb5_gss::GSS_C_MUTUAL | krb5_gss::GSS_C_REPLAY,
         None,
         None,
+        None,
     )
     .map_err(|e| e.to_string())?;
     let mut stream = std::net::TcpStream::connect(addr).map_err(|e| format!("{addr}: {e}"))?;

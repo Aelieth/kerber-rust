@@ -18,8 +18,8 @@ use super::{
 use crate::error::Error;
 use crate::keytab::KeytabFailure;
 use crate::preauth::{
-    apply_strengthen, armor_key, attach_fast, build_fast_armor, pkinit_reply_key_agile,
-    unwrap_fast_rep_checked, verify_fast_finished,
+    apply_strengthen, armor_key, attach_fast, pkinit_reply_key_agile, unwrap_fast_rep_checked,
+    verify_fast_finished,
 };
 use crate::trace;
 use krb5_asn1::{decode, encode};
@@ -53,7 +53,7 @@ pub(super) fn continue_fast(
     let armor = req
         .fast_armor
         .ok_or_else(|| Error::ReplyMismatch("FAST armor missing".into()))?;
-    let (sub, akey, ap) = armor_ap_request(armor)?;
+    let (sub, akey, ap) = armor_ap_request(armor, Some(req.profile))?;
     let mut probe = build_as_req_from(req, nonce, bound, None, etypes)?;
     trace::init_creds_preauth_none();
     attach_fast(&mut probe, &ap, &akey, Vec::new())?;
@@ -330,7 +330,7 @@ fn fast_key_mechanism(
         trace::preauth_process(ENCTS_MODULE, mech, true, 0, None);
     }
     trace::preauth_output(&inner_pa);
-    let ap = fast_armor_ap(armor, sub)?;
+    let ap = fast_armor_ap(armor, sub, Some(req.profile))?;
     let bound = &request_times(req, clock);
     let mut req2 = build_as_req_from(req, nonce, bound, None, etypes)?;
     attach_fast(&mut req2, &ap, akey, inner_pa)?;
@@ -462,7 +462,7 @@ fn finish_fast_otp(
     inner_pa.push(pa142);
     trace::preauth_process(OTP_MODULE, pa::OTP_CHALLENGE, true, 0, None);
     trace::preauth_output(&inner_pa);
-    let ap = fast_armor_ap(armor, sub)?;
+    let ap = fast_armor_ap(armor, sub, Some(req.profile))?;
     let bound = &request_times(req, clock);
     let mut req2 = build_as_req_from(req, nonce, bound, None, etypes)?;
     attach_fast(&mut req2, &ap, akey, inner_pa)?;
@@ -549,7 +549,7 @@ fn finish_fast_spake(
         }
         inner_pa.push(module_pa);
         trace::preauth_output(&inner_pa);
-        let ap = fast_armor_ap(armor, sub)?;
+        let ap = fast_armor_ap(armor, sub, Some(req.profile))?;
         attach_fast(&mut req2, &ap, akey, inner_pa)?;
         trace::fast_encode();
         let wire = encode(&req2)?;
@@ -657,7 +657,7 @@ fn finish_fast_pkinit(
             trace::preauth_process(super::PKINIT_MODULE, pa::PK_AS_REQ, true, 0, None);
             trace::preauth_output(&inner_pa);
         }
-        let ap = fast_armor_ap(armor, sub)?;
+        let ap = fast_armor_ap(armor, sub, Some(req.profile))?;
         attach_fast(&mut req2, &ap, akey, inner_pa)?;
         trace::fast_encode();
         let wire = encode(&req2)?;
@@ -869,10 +869,11 @@ fn fast_base_key(
 
 fn armor_ap_request(
     armor: &FastArmor,
+    profile: Option<&krb5_config::Krb5Conf>,
 ) -> Result<(ProtocolKey, ProtocolKey, krb5_types::ApReq), Error> {
     let sub = ProtocolKey::random(armor.session.etype())?;
     let akey = armor_key(&armor.session, Some(&sub))?;
-    let ap = fast_armor_ap(armor, &sub)?;
+    let ap = fast_armor_ap(armor, &sub, profile)?;
     trace::fast_armor_ccache_key((&armor.session).into());
     trace::mk_req(
         trace::Princ::new(&armor.cname, armor.crealm.as_bytes()),
@@ -887,16 +888,21 @@ fn armor_ap_request(
 
 // MIT: `krb5_init_creds_set_service` (lib/krb5/krb/get_in_tkt.c:1057-1072)
 pub fn set_service_restart(armor: &FastArmor) -> Result<(), Error> {
-    armor_ap_request(armor).map(|_| ())
+    armor_ap_request(armor, None).map(|_| ())
 }
 
-fn fast_armor_ap(armor: &FastArmor, sub: &ProtocolKey) -> Result<krb5_types::ApReq, Error> {
-    build_fast_armor(
+fn fast_armor_ap(
+    armor: &FastArmor,
+    sub: &ProtocolKey,
+    profile: Option<&krb5_config::Krb5Conf>,
+) -> Result<krb5_types::ApReq, Error> {
+    crate::preauth::build_fast_armor_profile(
         armor.ticket.clone(),
         &armor.session,
         &armor.crealm,
         &armor.cname,
         Some(sub),
+        profile,
     )
 }
 

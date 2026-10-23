@@ -1323,6 +1323,8 @@ pub fn kprop_send_store(
         client: cname.clone(),
         crealm: crealm.clone(),
         time_offset: 0,
+        client_aware: false,
+        client_aware_invalid: false,
     };
     let local = stream.local_addr().ok().map(|a| a.ip());
     let mut auth = kprop_sendauth(stream, &creds, local_host_address(local))
@@ -2611,6 +2613,8 @@ mod tests {
             client: admin.clone(),
             crealm: krb5_types::ascii(TEST_REALM),
             time_offset: 0,
+            client_aware: false,
+            client_aware_invalid: false,
         };
         let mut auth = kprop_sendauth(&mut client, &creds, local_host_address(None)).unwrap();
         let e = kprop_send_dump(&mut client, &mut auth, &dump).unwrap_err();
@@ -2682,6 +2686,8 @@ mod tests {
             client: admin,
             crealm: krb5_types::ascii(TEST_REALM),
             time_offset: 0,
+            client_aware: false,
+            client_aware_invalid: false,
         };
         let mut auth = kprop_sendauth(&mut client, &creds, sender).unwrap();
         let sent = kprop_send_dump(&mut client, &mut auth, dump);
@@ -2725,6 +2731,8 @@ mod tests {
             client: admin,
             crealm: krb5_types::ascii(TEST_REALM),
             time_offset,
+            client_aware: false,
+            client_aware_invalid: false,
         };
         (host_keys, creds)
     }
@@ -2866,6 +2874,8 @@ mod tests {
             client: admin,
             crealm: krb5_types::ascii(TEST_REALM),
             time_offset: 0,
+            client_aware: false,
+            client_aware_invalid: false,
         };
         let mut auth = kprop_sendauth(&mut client, &creds, local_host_address(None)).unwrap();
         let sent = thread::spawn(move || {

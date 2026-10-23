@@ -162,8 +162,9 @@ pub fn change_password(
     as_out: &AsOutcome,
     new_pw: &[u8],
     timeout: Option<Duration>,
+    profile: Option<&krb5_config::Krb5Conf>,
 ) -> Result<(), Error> {
-    let (code, data) = change_password_result(servers, as_out, new_pw, timeout)?;
+    let (code, data) = change_password_result(servers, as_out, new_pw, timeout, profile)?;
     if code != KPASSWD_SUCCESS {
         return Err(Error::ReplyMismatch(format_chpw_failure(code, &data)));
     }
@@ -175,8 +176,9 @@ pub fn change_password_result(
     as_out: &AsOutcome,
     new_pw: &[u8],
     timeout: Option<Duration>,
+    profile: Option<&krb5_config::Krb5Conf>,
 ) -> Result<(u16, Vec<u8>), Error> {
-    change_or_set(servers, as_out, new_pw, None, timeout)
+    change_or_set(servers, as_out, new_pw, None, timeout, profile)
 }
 
 /// Version 0xff80, another principal's password.
@@ -186,8 +188,9 @@ pub fn set_password(
     new_pw: &[u8],
     target: (&Realm, &PrincipalName),
     timeout: Option<Duration>,
+    profile: Option<&krb5_config::Krb5Conf>,
 ) -> Result<(), Error> {
-    let (code, data) = change_or_set(servers, as_out, new_pw, Some(target), timeout)?;
+    let (code, data) = change_or_set(servers, as_out, new_pw, Some(target), timeout, profile)?;
     if code != KPASSWD_SUCCESS {
         return Err(Error::ReplyMismatch(format_chpw_failure(code, &data)));
     }
@@ -200,12 +203,14 @@ fn change_or_set(
     new_pw: &[u8],
     target: Option<(&Realm, &PrincipalName)>,
     timeout: Option<Duration>,
+    profile: Option<&krb5_config::Krb5Conf>,
 ) -> Result<(u16, Vec<u8>), Error> {
     change_or_set_via(
         &mut |build| send_listed(servers, build, timeout),
         as_out,
         new_pw,
         target,
+        profile,
     )
 }
 
@@ -279,6 +284,7 @@ fn change_or_set_via(
     as_out: &AsOutcome,
     new_pw: &[u8],
     target: Option<(&Realm, &PrincipalName)>,
+    profile: Option<&krb5_config::Krb5Conf>,
 ) -> Result<(u16, Vec<u8>), Error> {
     let sub = ProtocolKey::random(as_out.session_key.etype())?;
     let (authenticator, ap_der) = kpasswd_ap_req(
@@ -287,6 +293,7 @@ fn change_or_set_via(
         (&as_out.crealm, &as_out.cname),
         &sub,
         as_out.time_offset,
+        profile,
     )?;
     let (priv_plain, version) = if let Some((realm, name)) = target {
         let cpw = ChangePasswdData {
@@ -332,6 +339,7 @@ fn kpasswd_ap_req(
     (crealm, cname): (&Realm, &PrincipalName),
     sub: &ProtocolKey,
     offset: i64,
+    profile: Option<&krb5_config::Krb5Conf>,
 ) -> Result<(Authenticator, Vec<u8>), Error> {
     let sub_enc = EncryptionKey {
         keytype: sub.etype().to_iana(),
@@ -346,6 +354,8 @@ fn kpasswd_ap_req(
         time_offset: offset,
         cbt: false,
         desired_etypes: &[],
+        ticket_etype: session.etype().to_iana(),
+        profile,
     })?;
     let der = encode(&authenticator)?;
     let cipher = KeyUsage::new(ku::AP_REQ_AUTHENTICATOR)
@@ -1223,7 +1233,8 @@ mod ap_req_tests {
         };
         let crealm = ascii("KERBER.TEST");
         let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
-        let (kept, ap_der) = kpasswd_ap_req(&ticket, &session, (&crealm, &cname), &sub, 0).unwrap();
+        let (kept, ap_der) =
+            kpasswd_ap_req(&ticket, &session, (&crealm, &cname), &sub, 0, None).unwrap();
 
         let ap: ApReq = decode(&ap_der).unwrap();
         assert_eq!(ap.ap_options, ApOptions::none(), "no AP option");
@@ -1271,7 +1282,7 @@ mod ap_req_tests {
         let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
         let (local, _) = crate::auth_con::us_timeofday();
         let (kept, ap_der) =
-            kpasswd_ap_req(&ticket, &session, (&crealm, &cname), &sub, 600).unwrap();
+            kpasswd_ap_req(&ticket, &session, (&crealm, &cname), &sub, 600, None).unwrap();
         let ap: ApReq = decode(&ap_der).unwrap();
         let plain = decrypt(
             &session,
@@ -1352,6 +1363,7 @@ mod ap_req_tests {
                 },
                 &as_out,
                 b"new-password",
+                None,
                 None,
             );
             assert!(matches!(result, Err(Error::ReplyMismatch(ref m)) if m == "recorded"));

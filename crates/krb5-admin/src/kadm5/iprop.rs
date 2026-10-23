@@ -321,6 +321,7 @@ impl IpropClient {
             krb5_gss::GSS_C_MUTUAL | krb5_gss::GSS_C_REPLAY,
             None,
             None,
+            None,
         )
         .map_err(|e| Error::Inner(e.to_string()))?;
         let mut xid = 1u32;

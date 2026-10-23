@@ -93,7 +93,26 @@ pub fn build_ap_req(
     crealm: &Realm,
     cname: &PrincipalName,
 ) -> Result<ApReq, Error> {
-    build_ap_req_opts(ticket, session_key, crealm, cname, ApOptions::none(), None)
+    build_ap_req_in(ticket, session_key, crealm, cname, None)
+}
+
+pub(crate) fn build_ap_req_in(
+    ticket: Ticket,
+    session_key: &ProtocolKey,
+    crealm: &Realm,
+    cname: &PrincipalName,
+    profile: Option<&krb5_config::Krb5Conf>,
+) -> Result<ApReq, Error> {
+    ap_req_with_cksum(
+        ticket,
+        session_key,
+        crealm,
+        cname,
+        ApOptions::none(),
+        None,
+        None,
+        profile,
+    )
 }
 
 pub fn build_ap_req_opts(
@@ -114,7 +133,16 @@ pub fn build_ap_req_opts(
     } else {
         None
     };
-    build_ap_req_with_cksum(ticket, session_key, crealm, cname, ap_options, cksum, None)
+    ap_req_with_cksum(
+        ticket,
+        session_key,
+        crealm,
+        cname,
+        ap_options,
+        cksum,
+        None,
+        None,
+    )
 }
 
 pub struct ApAuthenticator<'a> {
@@ -126,12 +154,25 @@ pub struct ApAuthenticator<'a> {
     pub time_offset: i64,
     pub cbt: bool,
     pub desired_etypes: &'a [i32],
+    pub ticket_etype: i32,
+    pub profile: Option<&'a krb5_config::Krb5Conf>,
 }
 
 // MIT: `generate_authenticator` (lib/krb5/krb/mk_req_ext.c:301-327)
 // MIT: `krb5_us_timeofday` (lib/krb5/os/ustime.c:66-78)
 pub fn generate_ap_authenticator(auth: ApAuthenticator<'_>) -> Result<Authenticator, Error> {
-    let _ = auth.desired_etypes.len();
+    if auth
+        .profile
+        .is_some_and(|p| p.client_aware_channel_bindings_invalid)
+    {
+        return Err(Error::BadBoolean);
+    }
+    let aware = auth.cbt
+        || auth
+            .profile
+            .is_some_and(|p| p.client_aware_channel_bindings);
+    // MIT: `authenticator_7` (lib/krb5/asn.1/asn1_k_encode.c:693-693)
+    let sequence = auth.sequence.filter(|n| *n != 0);
     let (now, usec) = stamped(auth.time_offset);
     Ok(Authenticator {
         authenticator_vno: Authenticator::VNO,
@@ -141,8 +182,8 @@ pub fn generate_ap_authenticator(auth: ApAuthenticator<'_>) -> Result<Authentica
         cusec: usec,
         ctime: now,
         subkey: auth.subkey,
-        seq_number: auth.sequence,
-        authorization_data: cbt_authdata(auth.cbt)?,
+        seq_number: sequence,
+        authorization_data: ap_authdata(auth.desired_etypes, auth.ticket_etype, aware)?,
     })
 }
 
@@ -156,17 +197,44 @@ fn stamped(offset: i64) -> (KerberosTime, krb5_types::Microseconds) {
     (KerberosTime::from_unix_seconds(sec), usec)
 }
 
-// MIT: `make_ap_authdata` (lib/krb5/krb/mk_req_ext.c:385-393)
-fn cbt_authdata(cbt: bool) -> Result<Option<Vec<AuthorizationDataValue>>, Error> {
+// MIT: `make_etype_list` (lib/krb5/krb/mk_req_ext.c:341-350)
+fn etype_list(desired: &[i32], ticket_etype: i32) -> Option<Vec<i32>> {
+    let first = *desired.first()?;
+    if first == ticket_etype {
+        return None;
+    }
+    let end = desired
+        .iter()
+        .position(|etype| *etype == ticket_etype)
+        .map_or(desired.len(), |i| i + 1);
+    Some(desired[..end].to_vec())
+}
+
+// MIT: `make_ap_authdata` (lib/krb5/krb/mk_req_ext.c:373-393)
+fn ap_authdata(
+    desired: &[i32],
+    ticket_etype: i32,
+    cbt: bool,
+) -> Result<Option<Vec<AuthorizationDataValue>>, Error> {
     const AD_AP_OPTIONS: i32 = 143;
     const KERB_AP_OPTIONS_CBT: u32 = 0x4000;
-    if !cbt {
+    let mut inner = Vec::new();
+    if let Some(list) = etype_list(desired, ticket_etype) {
+        let der = encode(&krb5_types::EtypeList(list))?;
+        inner.push(AuthorizationDataValue {
+            ad_type: pa::AD_ETYPE_NEGOTIATION,
+            ad_data: der.into(),
+        });
+    }
+    if cbt {
+        inner.push(AuthorizationDataValue {
+            ad_type: AD_AP_OPTIONS,
+            ad_data: KERB_AP_OPTIONS_CBT.to_le_bytes().to_vec().into(),
+        });
+    }
+    if inner.is_empty() {
         return Ok(None);
     }
-    let inner = vec![AuthorizationDataValue {
-        ad_type: AD_AP_OPTIONS,
-        ad_data: KERB_AP_OPTIONS_CBT.to_le_bytes().to_vec().into(),
-    }];
     let der = encode(&inner)?;
     Ok(Some(vec![AuthorizationDataValue {
         ad_type: pa::AD_IF_RELEVANT,
@@ -190,6 +258,8 @@ pub fn build_ap_req_mutual_seq(
         time_offset: 0,
         cbt: false,
         desired_etypes: &[],
+        ticket_etype: session_key.etype().to_iana(),
+        profile: None,
     })?;
     let der = encode(&authenticator)?;
     let usage = KeyUsage::new(ku::AP_REQ_AUTHENTICATOR)?;
@@ -216,6 +286,32 @@ pub fn build_ap_req_with_cksum(
     cksum: Option<krb5_types::Checksum>,
     subkey: Option<krb5_types::EncryptionKey>,
 ) -> Result<ApReq, Error> {
+    ap_req_with_cksum(
+        ticket,
+        session_key,
+        crealm,
+        cname,
+        ap_options,
+        cksum,
+        subkey,
+        None,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the AP-REQ pieces and the caller's profile"
+)]
+fn ap_req_with_cksum(
+    ticket: Ticket,
+    session_key: &ProtocolKey,
+    crealm: &Realm,
+    cname: &PrincipalName,
+    ap_options: ApOptions,
+    cksum: Option<krb5_types::Checksum>,
+    subkey: Option<krb5_types::EncryptionKey>,
+    profile: Option<&krb5_config::Krb5Conf>,
+) -> Result<ApReq, Error> {
     let authenticator = generate_ap_authenticator(ApAuthenticator {
         crealm,
         cname,
@@ -225,6 +321,8 @@ pub fn build_ap_req_with_cksum(
         time_offset: 0,
         cbt: false,
         desired_etypes: &[],
+        ticket_etype: session_key.etype().to_iana(),
+        profile,
     })?;
     build_ap_req_from_authenticator(ticket, session_key, ap_options, &authenticator)
 }

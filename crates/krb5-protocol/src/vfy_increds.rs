@@ -11,7 +11,7 @@ use krb5_types::{
 use krb5_config::Krb5Conf;
 
 use crate::acceptor_conf::AcceptorConfig;
-use crate::ap_req::{ApVerifyParams, build_ap_req, verify_ap_req_ex};
+use crate::ap_req::{ApVerifyParams, build_ap_req_in, verify_ap_req_ex};
 use crate::as_ex::AsOutcome;
 use crate::ccmarshal::CcacheCred;
 use crate::error::Error;
@@ -135,7 +135,7 @@ fn get_vfy_cred(
         let tgs = tgs_exchange(profile, kdc, &tgt, name.clone(), &realm_s)?;
         (tgs.ticket, tgs.session_key, tgt.crealm, tgt.cname)
     };
-    let ap = build_ap_req(ticket, &session, &crealm, &cname)?;
+    let ap = build_ap_req_in(ticket, &session, &crealm, &cname, Some(profile))?;
     let raw = encode(&ap)?;
     let matched: Vec<_> = keytab
         .entries

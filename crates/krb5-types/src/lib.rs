@@ -492,6 +492,10 @@ impl HostAddress {
 }
 
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
+#[rasn(delegate)]
+pub struct EtypeList(pub Vec<i32>);
+
+#[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct AuthorizationDataValue {
     #[rasn(tag(explicit(0)))]
     pub ad_type: i32,

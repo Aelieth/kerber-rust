@@ -288,6 +288,7 @@ fn rpcsec_init_reply_mic_is_window() {
         krb5_gss::GSS_C_MUTUAL | krb5_gss::GSS_C_REPLAY | krb5_gss::GSS_C_SEQUENCE,
         None,
         None,
+        None,
     )
     .unwrap();
     let mut cred = XdrW::default();

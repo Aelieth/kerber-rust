@@ -38,6 +38,17 @@ pub fn build_fast_armor(
     cname: &PrincipalName,
     subkey: Option<&ProtocolKey>,
 ) -> Result<ApReq, Error> {
+    build_fast_armor_profile(ticket, session, crealm, cname, subkey, None)
+}
+
+pub(crate) fn build_fast_armor_profile(
+    ticket: Ticket,
+    session: &ProtocolKey,
+    crealm: &Realm,
+    cname: &PrincipalName,
+    subkey: Option<&ProtocolKey>,
+    profile: Option<&krb5_config::Krb5Conf>,
+) -> Result<ApReq, Error> {
     let sub = subkey.map(|k| EncryptionKey {
         keytype: k.etype().to_iana(),
         keyvalue: k.as_bytes().to_vec().into(),
@@ -51,6 +62,8 @@ pub fn build_fast_armor(
         time_offset: 0,
         cbt: false,
         desired_etypes: &[],
+        ticket_etype: session.etype().to_iana(),
+        profile,
     })?;
     let der = encode(&authenticator)?;
     let usage = KeyUsage::new(ku::AP_REQ_AUTHENTICATOR)?;

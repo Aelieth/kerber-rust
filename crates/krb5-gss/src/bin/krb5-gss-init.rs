@@ -80,6 +80,7 @@ fn main() {
         eprintln!("host session key: {e}");
         std::process::exit(1);
     });
+    let profile = krb5_config::init_profile().unwrap_or_else(|_| krb5_config::Krb5Conf::new());
     let deleg_cred = if deleg {
         let session = tgt.session_key().unwrap_or_else(|e| {
             eprintln!("tgt session key: {e}");
@@ -138,7 +139,6 @@ fn main() {
                     }
                 },
             );
-        let profile = krb5_config::init_profile().unwrap_or_else(|_| krb5_config::Krb5Conf::new());
         let fwd = tgs_forward(&profile, &kdc, &as_out).unwrap_or_else(|e| {
             eprintln!("tgs_forward: {e}");
             std::process::exit(1);
@@ -198,14 +198,19 @@ fn main() {
         println!("gss-init ap-rep=none");
         return;
     }
+    let mut req_flags = krb5_gss::GSS_C_MUTUAL | krb5_gss::GSS_C_REPLAY | krb5_gss::GSS_C_SEQUENCE;
+    if bind_data.is_some() {
+        req_flags |= krb5_gss::GSS_C_CHANNEL_BOUND;
+    }
     let (mut ctx, token) = GssContext::init_sec_context(
         ticket,
         &svc_key,
         &svc.client.0,
         &svc.client.1,
-        krb5_gss::GSS_C_MUTUAL | krb5_gss::GSS_C_REPLAY | krb5_gss::GSS_C_SEQUENCE,
+        req_flags,
         cb.as_ref(),
         deleg_cred.as_ref(),
+        Some(&profile),
     )
     .unwrap_or_else(|e| {
         eprintln!("init_sec_context: {e}");

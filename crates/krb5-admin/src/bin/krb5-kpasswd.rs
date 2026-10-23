@@ -240,6 +240,7 @@ fn run<R: BufRead, W: Write>(
         &new,
         target.as_ref(),
         conf.request_timeout,
+        conf,
     ) {
         Ok(None) => {
             // "Password changed." and exit 0.
@@ -478,9 +479,10 @@ fn send(
     new: &[u8],
     target: Option<&(PrincipalName, String)>,
     timeout: Option<std::time::Duration>,
+    profile: &krb5_config::Krb5Conf,
 ) -> Result<Option<String>, Error> {
     let Some((tname, trealm)) = target else {
-        let (code, data) = change_password_result(servers, as_out, new, timeout)?;
+        let (code, data) = change_password_result(servers, as_out, new, timeout, Some(profile))?;
         return Ok((code != KPASSWD_SUCCESS).then(|| format_chpw_failure(code, &data)));
     };
     match set_password(
@@ -489,6 +491,7 @@ fn send(
         new,
         (&krb5_protocol::realm(trealm), tname),
         timeout,
+        Some(profile),
     ) {
         Ok(()) => Ok(None),
         Err(Error::ReplyMismatch(line)) if is_chpw_result_line(&line) => Ok(Some(line)),

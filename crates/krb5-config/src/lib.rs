@@ -222,6 +222,8 @@ pub struct Krb5Conf {
     pub clockskew: i32,
     pub dns_lookup_kdc: bool,
     pub dns_lookup_realm: bool,
+    pub client_aware_channel_bindings: bool,
+    pub client_aware_channel_bindings_invalid: bool,
     pub udp_preference_limit: Option<u32>,
     pub rdns: bool,
     pub kdc_timesync: bool,

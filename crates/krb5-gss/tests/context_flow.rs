@@ -47,6 +47,7 @@ fn contexts() -> (GssContext, GssContext) {
         krb5_gss::GSS_C_REPLAY | krb5_gss::GSS_C_SEQUENCE,
         None,
         None,
+        None,
     )
     .unwrap();
     let host = store.get_name(&documented_host()).unwrap();
@@ -115,6 +116,7 @@ fn accept_same_token_twice_is_repeat() {
         krb5_gss::GSS_C_REPLAY | krb5_gss::GSS_C_SEQUENCE,
         None,
         None,
+        None,
     )
     .unwrap();
     let rcache = ReplayCache::new();
@@ -178,6 +180,7 @@ fn mutual_ap_rep_decrypts_with_ticket_session() {
         &ascii(TEST_REALM),
         &cname,
         krb5_gss::GSS_C_MUTUAL | krb5_gss::GSS_C_REPLAY | krb5_gss::GSS_C_SEQUENCE,
+        None,
         None,
         None,
     )

@@ -150,6 +150,8 @@ pub struct KpropCreds {
     pub crealm: Realm,
     /// Seconds to add to this host's clock to read the KDC's: the AS reply's authtime less the time of the request when `kdc_timesync` is on (MIT's default), else 0. kprop's own timestamps (its authenticator, its KRB-ERROR) carry it.
     pub time_offset: i64,
+    pub client_aware: bool,
+    pub client_aware_invalid: bool,
 }
 
 // MIT: `krb5_us_timeofday` (lib/krb5/os/ustime.c:66-82)
@@ -328,6 +330,8 @@ pub(crate) fn init_creds_keytab(
         client: out.cname,
         crealm: out.crealm,
         time_offset,
+        client_aware: conf.client_aware_channel_bindings,
+        client_aware_invalid: conf.client_aware_channel_bindings_invalid,
     })
 }
 
@@ -599,6 +603,10 @@ pub fn kprop_sendauth(
         None,
         (&creds.session).into(),
     );
+    let stub = creds.client_aware_invalid.then(|| krb5_config::Krb5Conf {
+        client_aware_channel_bindings_invalid: true,
+        ..krb5_config::Krb5Conf::default()
+    });
     let authenticator = generate_ap_authenticator(ApAuthenticator {
         crealm: &creds.crealm,
         cname: &creds.client,
@@ -606,8 +614,10 @@ pub fn kprop_sendauth(
         subkey: None,
         sequence: Some(seq),
         time_offset: creds.time_offset,
-        cbt: false,
+        cbt: creds.client_aware,
         desired_etypes: &[],
+        ticket_etype: creds.session.etype().to_iana(),
+        profile: stub.as_ref(),
     })
     .map_err(|e| KpropError::new(Some(e.to_string()), AUTHENTICATING))?;
     let ap = build_ap_req_from_authenticator(

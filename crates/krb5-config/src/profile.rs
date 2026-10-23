@@ -788,6 +788,19 @@ fn parse_libdefaults(
         {
             conf.dns_lookup_realm = truthy(&v);
         }
+        // MIT: `generate_authenticator` (lib/krb5/krb/mk_req_ext.c:301-308)
+        "client_aware_channel_bindings"
+            if top
+                && k == "client_aware_channel_bindings"
+                && take_first(seen, "client_aware_channel_bindings") =>
+        {
+            if let Some(b) = mit_boolean(&v) {
+                conf.client_aware_channel_bindings = b;
+            } else {
+                // MIT: `profile_parse_boolean` (util/profile/prof_get.c:347-369)
+                conf.client_aware_channel_bindings_invalid = true;
+            }
+        }
         "udp_preference_limit"
             if top && k == "udp_preference_limit" && take_first(seen, "udp_preference_limit") =>
         {

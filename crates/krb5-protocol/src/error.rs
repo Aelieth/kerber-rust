@@ -16,6 +16,9 @@ pub enum Error {
     // MIT: `locate_srv_conf_1` (lib/krb5/os/locate_kdc.c:319-320)
     #[error("Invalid argument")]
     InvalidArgument,
+    // MIT: `profile_parse_boolean` (util/profile/prof_get.c:347-369)
+    #[error("Invalid boolean value")]
+    BadBoolean,
     #[error("transport: {message}")]
     Io {
         message: String,
@@ -137,6 +140,7 @@ impl Clone for Error {
             },
             Self::RealmUnknown => Self::RealmUnknown,
             Self::InvalidArgument => Self::InvalidArgument,
+            Self::BadBoolean => Self::BadBoolean,
             Self::UnexpectedPdu => Self::UnexpectedPdu,
             Self::ReplyIntegrity => Self::ReplyIntegrity,
             Self::NonceMismatch => Self::NonceMismatch,

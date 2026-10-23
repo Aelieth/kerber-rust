@@ -180,6 +180,7 @@ fn token(ticket: Ticket, session: &ProtocolKey) -> (GssContext, Vec<u8>) {
         krb5_gss::GSS_C_MUTUAL | krb5_gss::GSS_C_REPLAY | krb5_gss::GSS_C_SEQUENCE,
         None,
         None,
+        None,
     )
     .unwrap()
 }

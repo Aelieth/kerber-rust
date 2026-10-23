@@ -150,6 +150,7 @@ pub fn init_client(
         krb5_gss::GSS_C_MUTUAL | krb5_gss::GSS_C_REPLAY | krb5_gss::GSS_C_SEQUENCE,
         None,
         None,
+        None,
     )
     .unwrap();
     let cred = cred(RPG_INIT, 0, svc, &[]);
