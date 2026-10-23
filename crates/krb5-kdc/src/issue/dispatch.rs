@@ -1,4 +1,4 @@
-//! AS/TGS dispatch (`dispatch.c`): the lookaside, the request's decode, AS or TGS processing, the UDP reply size, and the KRB-ERROR log line; [`KdcDispatch`] is what the net-server loop calls.
+//! AS and TGS dispatch, the lookaside, and the UDP size cap.
 
 use std::net::SocketAddr;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -29,15 +29,10 @@ use crate::plugins::{
     take_thread_otp_verifiers, take_thread_policy, take_thread_preauth,
 };
 
-/// Dispatch one UDP/TCP payload (AS-REQ or TGS-REQ) to the issue path.
-/// A request MIT's dispatch refuses (empty, not an AS-REQ or TGS-REQ, one that does not decode, a protocol version other than 5, no server name) yields an empty reply, as MIT sends none.
-/// [`Error::Asn1`] when an issued AS-REP or TGS-REP does not encode; every refusal is returned as KRB-ERROR bytes instead.
 pub fn handle_request(store: &dyn PrincipalRead, raw: &[u8]) -> Result<Vec<u8>, Error> {
     handle_request_from(store, raw, None)
 }
 
-/// Like [`handle_request`], with the UDP/TCP peer for TGS `BADADDR`.
-/// [`Error::Asn1`] when an issued AS-REP or TGS-REP does not encode; every refusal is returned as KRB-ERROR bytes instead.
 pub fn handle_request_from(
     store: &dyn PrincipalRead,
     raw: &[u8],
@@ -49,7 +44,6 @@ pub fn handle_request_from(
     }
 }
 
-/// What processing one request gave: reply bytes (empty for an AS-REQ a preauth module discarded), or MIT's error text for a request its dispatch refuses before processing.
 enum Processed {
     Reply(Vec<u8>),
     Refused(&'static str),
@@ -143,25 +137,22 @@ fn log_krb_error(duration_us: u64, code: i32, e_text: &str, detail: Option<&str>
 
 enum Inner {
     Reply(Vec<u8>, Option<String>),
-    /// MIT's error text for a request dispatch refuses.
     Refused(&'static str),
 }
 
 // MIT: `krb5int_is_app_tag` (include/k5-int.h:1334-1336)
-/// the first byte, its constructed bit cleared, is `0x40 | tag`.
 fn is_app_tag(raw: &[u8], tag: u8) -> bool {
     raw.first().is_some_and(|b| b & !0x20 == 0x40 | tag)
 }
 
 // MIT: `dispatch` (kdc/dispatch.c:145-170)
-/// a TGS-REQ is tried first, then an AS-REQ, anything else is a message-type error; a request that does not decode, or whose server is not named, is refused before processing.
 // MIT: `setup_server_realm` (kdc/main.c:123-124)
-/// a request with no server has no realm.
 fn handle_inner(
     store: &dyn PrincipalRead,
     raw: &[u8],
     sender: Option<&HostAddress>,
 ) -> Result<Inner, Error> {
+    // A TGS-REQ is tried before an AS-REQ; no server name is WRONG_REALM.
     if is_app_tag(raw, 12) {
         return match decode_kdc_req(raw, 12, decode::<TgsReq>) {
             Err(text) => Ok(Inner::Refused(text)),
@@ -180,16 +171,12 @@ fn handle_inner(
 }
 
 // MIT: `KRB5KRB_AP_ERR_MSG_TYPE` (lib/krb5/error_tables/krb5_err.et:83-83)
-/// its text.
 const MSG_TYPE: &str = "Invalid message type";
 // MIT: `KRB5KDC_ERR_BAD_PVNO` (lib/krb5/error_tables/krb5_err.et:44-44)
-/// its text.
 const BAD_PVNO: &str = "Requested protocol version not supported";
 // MIT: `KRB5KDC_ERR_WRONG_REALM` (lib/krb5/error_tables/krb5_err.et:112-112)
-/// its text.
 const WRONG_REALM: &str = "Realm not local to KDC";
 // MIT: `KRB5KDC_ERR_DISCARD` (lib/krb5/error_tables/k5e1_err.et:36-36)
-/// its text.
 const DISCARD: &str = "The KDC should discard this request";
 
 fn decode_kdc_req<T>(
@@ -211,13 +198,11 @@ fn decode_kdc_req<T>(
 }
 
 // MIT: `check_atype_tag` (lib/krb5/asn.1/asn1_encode.c:1097-1103)
-/// an explicit tag matches by class, number and the constructed bit.
 fn explicit(t: &Tlv<'_>, class: u8, tagnum: u32) -> bool {
     t.constructed && t.class == class && t.tagnum == tagnum
 }
 
 // MIT: `decode_atype` (lib/krb5/asn.1/asn1_encode.c:1186-1201)
-/// an explicit tag holds one element that fills it.
 fn inner<'a>(t: &Tlv<'a>) -> Result<Tlv<'a>, &'static str> {
     let i = get_tag(t.contents)?;
     if !i.rest.is_empty() {
@@ -232,7 +217,6 @@ fn is_universal(t: &Tlv<'_>, constructed: bool, tagnum: u32) -> bool {
 
 #[derive(Clone, Copy)]
 enum Kind {
-    /// `krb5_version`: an INTEGER that must be 5.
     Pvno,
     Uint32,
     Int32,
@@ -248,7 +232,6 @@ struct Field {
 }
 
 // MIT: `kdc_req_fields` (lib/krb5/asn.1/asn1_k_encode.c:789-792)
-/// `pvno`, `msg-type`, optional `padata`, `req-body`.
 const KDC_REQ: [Field; 4] = [
     Field {
         tagnum: 1,
@@ -286,7 +269,6 @@ const PA_DATA: [Field; 2] = [
 ];
 
 // MIT: `k5_asn1_full_decode` (lib/krb5/asn.1/asn1_encode.c:1576-1584)
-/// the outer tag, then its contents; bytes after it are not checked.
 fn kdc_req_verdict(raw: &[u8], app: u32) -> Result<(), &'static str> {
     let t = get_tag(raw)?;
     if !explicit(&t, APPLICATION, app) {
@@ -300,7 +282,6 @@ fn kdc_req_verdict(raw: &[u8], app: u32) -> Result<(), &'static str> {
 }
 
 // MIT: `decode_sequence` (lib/krb5/asn.1/asn1_encode.c:1411-1446)
-/// each element goes to the next field whose tag it carries, the fields it skips are omitted, a required one omitted is a missing field, and an element no field takes ends the sequence.
 fn decode_sequence(mut p: &[u8], fields: &[Field]) -> Result<(), &'static str> {
     let mut i = 0;
     while i < fields.len() && !p.is_empty() {
@@ -325,9 +306,7 @@ fn decode_sequence(mut p: &[u8], fields: &[Field]) -> Result<(), &'static str> {
 }
 
 // MIT: `k5_asn1_decode_int` (lib/krb5/asn.1/asn1_encode.c:191-199)
-/// an empty INTEGER is a bad length, one longer than eight bytes an overflow.
 // MIT: `k5_asn1_decode_uint` (lib/krb5/asn.1/asn1_encode.c:211-219)
-/// a negative or too long unsigned INTEGER is an overflow.
 fn decode_field(kind: Kind, t: &Tlv<'_>) -> Result<(), &'static str> {
     let v = inner(t)?;
     match kind {
@@ -369,7 +348,6 @@ fn decode_field(kind: Kind, t: &Tlv<'_>) -> Result<(), &'static str> {
                 return Err(ASN1_BAD_ID);
             }
             // MIT: `decode_sequence_of` (lib/krb5/asn.1/asn1_encode.c:1468-1480)
-            // each element is read, must be a SEQUENCE, and is decoded.
             let mut p = v.contents;
             while !p.is_empty() {
                 let e = get_tag(p)?;
@@ -411,10 +389,9 @@ fn last_field(mut p: &[u8]) -> Option<&[u8]> {
     get_tag(last?).ok().map(|t| t.contents)
 }
 
-/// How deep [`framing`] looks: past the deepest element of a request body (a ticket's cipher in `additional-tickets`, nine down), so a request built of nested tags cannot run it deep.
+/// Depth 16 is past a ticket cipher nine down, so nested tags stop.
 const FRAMING_DEPTH: u32 = 16;
 
-/// Every element inside `p`, depth first to [`FRAMING_DEPTH`], read as MIT's `get_tag` reads it: the error of the first that runs past the element holding it, or whose tag or length cannot be read.
 fn framing(p: &[u8]) -> Result<(), &'static str> {
     framing_at(p, 0)
 }
@@ -431,7 +408,6 @@ fn framing_at(mut p: &[u8], depth: u32) -> Result<(), &'static str> {
 }
 
 // MIT: `k5_asn1_decode_generaltime` (lib/krb5/asn.1/asn1_encode.c:242-260)
-/// a time must be fifteen characters, digits then `Z`.
 fn body_failure_text(e: &str) -> &'static str {
     if let Some(n) = e
         .split("KerberosTime is not YYYYMMDDhhmmssZ (")
@@ -479,7 +455,6 @@ fn body_failure_text(e: &str) -> &'static str {
 }
 
 // MIT: `dispatch` (kdc/dispatch.c:123-131)
-/// the two lines a request found in the lookaside logs; MIT never fills in the address.
 const RESENDING: &str = "DISPATCH: repeated (retransmitted?) request from [unknown address type], resending previous response";
 const DROPPING: &str = "DISPATCH: repeated (retransmitted?) request from [unknown address type] during request processing, dropping repeated request";
 
@@ -508,7 +483,6 @@ enum Done {
     Failed { text: String, discard: bool },
 }
 
-/// The KDC's side of the net-server loop: MIT's `dispatch`, `make_toolong_error` and reset, with the lookaside the loop's alone (MIT's `kdc/replay.c` has no lock: one loop uses it).
 pub(crate) struct KdcDispatch {
     store: SharedStore,
     lookaside: Lookaside,
@@ -518,7 +492,6 @@ pub(crate) struct KdcDispatch {
 }
 
 impl KdcDispatch {
-    /// The dispatcher for `store`, with an empty lookaside; a UDP reply longer than `max_dgram_reply_size` is replaced by `KRB_ERR_RESPONSE_TOO_BIG`.
     pub(crate) fn new(store: SharedStore, max_dgram_reply_size: usize) -> Self {
         Self {
             store,
@@ -530,9 +503,9 @@ impl KdcDispatch {
     }
 
     // MIT: `finish_dispatch_cache` (kdc/dispatch.c:77-83)
-    /// the in-progress mark goes unless the request was discarded, and a reply is cached.
     fn finish_dispatch_cache(&mut self, request: &[u8], is_tcp: bool, done: Done) -> Reply {
         match &done {
+            // An empty reply is a discard: it is not cached, and the mark stays.
             Done::Failed { discard: true, .. } => {}
             Done::Reply(bytes) => self.lookaside.finish(request, Some(bytes)),
             Done::Failed { .. } => self.lookaside.finish(request, None),
@@ -541,10 +514,9 @@ impl KdcDispatch {
     }
 
     // MIT: `finish_dispatch` (kdc/dispatch.c:54-66)
-    /// a UDP reply over `max_dgram_reply_size` is replaced by the response-too-big error, then the code and reply go back to the loop.
-    /// Deviation: a reply resent from the lookaside that is too big for UDP is replaced by the realm's response-too-big error, where MIT's builds it from a realm it has not set yet.
     fn finish_dispatch(&self, is_tcp: bool, done: Done) -> Reply {
         match done {
+            // An oversized UDP reply, a resend included, is this realm's response-too-big.
             Done::Reply(bytes) if !is_tcp && bytes.len() > self.max_dgram_reply_size => {
                 Reply::Send(plain_store(&self.store, |s| {
                     super::kdc_error_bytes(s, err::RESPONSE_TOO_BIG)
@@ -559,7 +531,6 @@ impl KdcDispatch {
 fn process(store: &dyn PrincipalRead, raw: &[u8], sender: &HostAddress) -> Done {
     match process_logged(store, raw, Some(sender)) {
         // MIT: `finish_process_as_req` (kdc/do_as_req.c:371-381)
-        // a discard sends no error.
         Ok(Processed::Reply(bytes)) if bytes.is_empty() => Done::Failed {
             text: DISCARD.into(),
             discard: true,
@@ -578,8 +549,6 @@ fn process(store: &dyn PrincipalRead, raw: &[u8], sender: &HostAddress) -> Done 
 
 impl Dispatch for KdcDispatch {
     // MIT: `dispatch` (kdc/dispatch.c:114-141)
-    /// a request in the lookaside is resent its reply, or dropped while it is being processed, each logged; any other is marked in progress and processed.
-    /// A request whose processing panics is answered with nothing and its mark removed, where MIT's process would end.
     fn dispatch(
         &mut self,
         _local: SocketAddr,
@@ -613,6 +582,7 @@ impl Dispatch for KdcDispatch {
         let store = &self.store;
         #[cfg(test)]
         let panics = self.panic_on.as_deref() == Some(request);
+        // A panic sends nothing and drops the lookaside mark.
         let run = catch_unwind(AssertUnwindSafe(|| {
             #[cfg(test)]
             assert!(!panics, "a request set to panic");
@@ -634,7 +604,6 @@ impl Dispatch for KdcDispatch {
     }
 
     // MIT: `make_toolong_error` (kdc/kdc_util.c:1882-1913)
-    /// `KRB_ERR_FIELD_TOOLONG` from the realm's TGS, with no client or text.
     fn make_toolong_error(&mut self) -> Result<Vec<u8>, String> {
         Ok(plain_store(&self.store, |s| {
             super::kdc_error_bytes(s, err::FIELD_TOOLONG)
@@ -642,7 +611,6 @@ impl Dispatch for KdcDispatch {
     }
 }
 
-/// The plugin slots this thread set for itself (its kdcpolicy, kdcpreauth, kdcauthdata and audit modules), off it while one loop serves every request on the thread, and put back when the loop returns: modules that apply to all the KDC's requests are the process-wide ones, as MIT's loaded modules are.
 pub(crate) struct ThreadSlots {
     policy: Option<Arc<dyn KdcPolicy>>,
     policies: Option<Vec<Arc<dyn KdcPolicy>>>,
@@ -654,7 +622,6 @@ pub(crate) struct ThreadSlots {
 }
 
 impl ThreadSlots {
-    /// Take this thread's slots off it until the result is dropped.
     pub(crate) fn take() -> Self {
         Self {
             policy: take_thread_policy(),
