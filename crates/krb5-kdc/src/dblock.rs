@@ -138,7 +138,7 @@ fn named_if_link(path: &Path, e: io::Error) -> io::Error {
     }
 }
 
-/// A lock file is never opened through a symlink.
+/// Unlike MIT, never opened through a symlink.
 // MIT: `ctx_init` (plugins/kdb/db2/kdb_db2.c:492-501)
 fn open_lock_file(path: &Path) -> io::Result<File> {
     let open = |write: bool| {
