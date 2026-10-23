@@ -1,4 +1,4 @@
-//! The responder: the questions a preauth module asks, which the application answers before the prompter is used (`lib/krb5/krb/response_items.c`, and the responder callbacks of `preauth2.c`).
+//! Questions a module asks, answered before the prompter.
 
 use std::fmt;
 
@@ -7,21 +7,19 @@ use zeroize::Zeroizing;
 use crate::error::Error;
 
 // MIT: `KRB5_RESPONDER_QUESTION_PASSWORD` (include/krb5/krb5.hin:6502-6502)
-/// the AS key. A module that needs the key asks it, and an answer to it is the password, read with no prompt.
+/// The password. An answer skips the prompter.
 pub const QUESTION_PASSWORD: &str = "password";
 
 // MIT: `KRB5_RESPONDER_QUESTION_OTP` (include/krb5/krb5.hin:6539-6539)
-/// the OTP module's question.
 pub const QUESTION_OTP: &str = "otp";
 
-/// One question with its challenge and the application's answer; both are wiped on drop.
+/// The challenge and the answer are wiped on drop.
 struct Item {
     question: String,
     challenge: Option<Zeroizing<Vec<u8>>>,
     answer: Option<Zeroizing<String>>,
 }
 
-/// MIT `struct k5_response_items_st` (`lib/krb5/krb/response_items.c:30-35`): the questions in the order they were asked, each with a challenge and an answer.
 #[derive(Default)]
 pub struct ResponderItems {
     items: Vec<Item>,
@@ -35,7 +33,7 @@ impl fmt::Debug for ResponderItems {
     }
 }
 
-/// Answers the questions of a round before the prompter is called. A round is one call of MIT's `k5_preauth`: the walk over a hint, a message that continues a mechanism, or a new walk over method data.
+/// Called before the prompter.
 pub trait Responder {
     fn respond(&mut self, items: &mut ResponderItems) -> Result<(), Error>;
 }
@@ -46,21 +44,19 @@ fn einval() -> Error {
 
 impl ResponderItems {
     // MIT: `k5_response_items_empty` (lib/krb5/krb/response_items.c:77-81)
-    /// true for no items.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
     }
 
     // MIT: `k5_response_items_list_questions` (lib/krb5/krb/response_items.c:83-89)
-    /// the question names.
     #[must_use]
     pub fn list_questions(&self) -> Vec<&str> {
         self.items.iter().map(|i| i.question.as_str()).collect()
     }
 
     // MIT: `k5_response_items_get_challenge` (lib/krb5/krb/response_items.c:178-189)
-    /// `None` for a question not asked or asked with no challenge.
+    /// None when it was not asked, or asked with no challenge.
     #[must_use]
     pub fn get_challenge(&self, question: &str) -> Option<&[u8]> {
         self.items
@@ -70,9 +66,9 @@ impl ResponderItems {
             .map(|c| c.as_slice())
     }
 
-    /// Set the answer of `question`; `None` clears it.
     // MIT: `k5_response_items_set_answer` (lib/krb5/krb/response_items.c:191-211)
-    /// `EINVAL` for a question not asked.
+    /// None clears it.
+    /// A question not asked is refused.
     pub fn set_answer(&mut self, question: &str, answer: Option<&str>) -> Result<(), Error> {
         let item = self
             .items
@@ -83,9 +79,8 @@ impl ResponderItems {
         Ok(())
     }
 
-    /// Ask `question`, replacing the challenge of one asked before. The question keeps its place.
     // MIT: `k5_response_items_ask_question` (lib/krb5/krb/response_items.c:156-176)
-    /// a question asked again takes the new challenge in place.
+    /// Asked again, it keeps its place and takes the new challenge.
     pub(crate) fn ask_question(&mut self, question: &str, challenge: Option<&[u8]>) {
         let challenge = challenge.map(|c| Zeroizing::new(c.to_vec()));
         if let Some(item) = self.items.iter_mut().find(|i| i.question == question) {
@@ -99,9 +94,8 @@ impl ResponderItems {
         }
     }
 
-    /// The answer to `question`, as a module reads it.
     // MIT: `k5_response_items_get_answer` (lib/krb5/krb/response_items.c:213-224)
-    /// `None` for a question not asked or not answered.
+    /// None when it was not asked, or not answered.
     pub(crate) fn get_answer(&self, question: &str) -> Option<&str> {
         self.items
             .iter()
