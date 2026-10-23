@@ -34,6 +34,7 @@ pub struct ApVerifyParams<'a> {
     /// A host-based name matches that service on any host.
     pub ignore_acceptor_hostname: bool,
     pub capaths: &'a BTreeMap<String, BTreeMap<String, Vec<String>>>,
+    /// The ticket's caddr must hold it; None skips the check, as MIT's unset remote address.
     pub remote_addr: Option<&'a HostAddress>,
     pub now: Option<KerberosTime>,
 }
