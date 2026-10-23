@@ -803,7 +803,7 @@ pub fn serve_kpasswd_udp(
     sock: UdpSocket,
     shutdown: Arc<AtomicBool>,
 ) -> io::Result<()> {
-    let mut kadmind = Kadmind::new(store, acl, Some(service_key), conf);
+    let mut kadmind = Kadmind::from_parts(store, acl, Some(service_key), conf);
     let udp = [sock];
     let sockets = krb5_kdc::net_server::Sockets {
         udp: &udp,
@@ -821,7 +821,7 @@ pub fn serve_kpasswd_tcp(
     listener: TcpListener,
     shutdown: Arc<AtomicBool>,
 ) -> io::Result<()> {
-    let mut kadmind = Kadmind::new(store, acl, Some(service_key), conf);
+    let mut kadmind = Kadmind::from_parts(store, acl, Some(service_key), conf);
     let tcp = [listener];
     let sockets = krb5_kdc::net_server::Sockets {
         tcp: &tcp,

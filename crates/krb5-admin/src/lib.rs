@@ -25,7 +25,10 @@ pub use kadm5::{
     check_rpcsec_auth, glob_pattern_ok, kadm5_handle_rpc, kdb_rd_req, serve_kadm5_conn,
 };
 pub use kadmin_cli::{kadmin_local_main, ss_parse};
-pub use kadmind::{Kadmind, Listeners, ServeSummary, serve_kadmind, serve_kadmind_until};
+pub use kadmind::{
+    IpropConfig, Kadmind, KadmindConfig, Listeners, ServeLimits, ServeSummary, Services,
+    StartError, serve_kadmind, serve_kadmind_until,
+};
 pub use kprop::{
     IpropPoll, IpropWake, KPROP_SERVICE, KpropAuth, KpropCreds, KpropDump, KpropError,
     KpropdConfig, KpropdIprop, KpropdKeys, KpropdKeytabError, KpropdLookup, RemoteError,

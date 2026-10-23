@@ -1,5 +1,6 @@
 //! kadmind's one loop: kpasswd over UDP and TCP and the kadm5 and iprop RPC programs, served from MIT's net-server loop on the caller's thread, as MIT's kadmind serves them from the loop `setup_loop` builds. Every connection, kpasswd's and kadm5's alike, counts toward the one cap of 45.
 
+use std::fmt;
 use std::io;
 use std::net::{SocketAddr, TcpListener, UdpSocket};
 use std::os::fd::RawFd;
@@ -7,11 +8,13 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, PoisonError};
 use std::time::Duration;
 
+use krb5_config::{KadmindListen, ProfileSet};
 use krb5_crypto::ProtocolKey;
 use krb5_kdc::net_server::{
     self, Dispatch, Klog, Log, MAX_REQUEST, MAX_STREAM_DATA_CONNECTIONS, Reply, RpcSession,
     Sockets, Wake,
 };
+use krb5_kdc::principals::kadmin_changepw;
 use krb5_kdc::{
     Acl, SharedDump as SharedStore, Shutdown, Signals, WHILE_DISPATCHING_TCP, WHILE_DISPATCHING_UDP,
 };
@@ -19,7 +22,88 @@ use krb5_protocol::{AcceptorConfig, ReplayCache};
 
 use crate::kadm5::Kadm5Conn;
 use crate::listen::{client_addr, handle_kpasswd_from, kpasswd_toolong_error};
-use crate::{Programs, RpcPeer, UnhandledRpc};
+use crate::{Programs, RpcPeer, UnhandledRpc, acceptor_names_served};
+
+/// Which of kadmind's services to serve.
+#[derive(Clone, Copy, Debug)]
+pub struct Services {
+    pub kpasswd_udp: bool,
+    pub kpasswd_tcp: bool,
+    pub kadm5: bool,
+    pub iprop: bool,
+}
+
+impl Services {
+    pub const ALL: Self = Self {
+        kpasswd_udp: true,
+        kpasswd_tcp: true,
+        kadm5: true,
+        iprop: true,
+    };
+    pub const DAEMON: Self = Self {
+        kpasswd_udp: true,
+        kpasswd_tcp: true,
+        kadm5: true,
+        iprop: false,
+    };
+
+    fn kpasswd(self) -> bool {
+        self.kpasswd_udp || self.kpasswd_tcp
+    }
+}
+
+/// How much kadmind takes on at once; the defaults are MIT's 45 connections and 1 MiB request.
+#[derive(Clone, Copy, Debug)]
+pub struct ServeLimits {
+    pub max_connections: usize,
+    pub max_request: usize,
+}
+
+impl Default for ServeLimits {
+    fn default() -> Self {
+        Self {
+            max_connections: MAX_STREAM_DATA_CONNECTIONS,
+            max_request: MAX_REQUEST,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct IpropConfig {
+    pub listen: Option<String>,
+    pub port: i32,
+}
+
+/// What an embedder hands [`Kadmind::new`] to start kadm5 and kpasswd over a shared store.
+pub struct KadmindConfig {
+    pub profile: Arc<ProfileSet>,
+    pub services: Services,
+    pub listen: KadmindListen,
+    pub limits: ServeLimits,
+    pub acl: Acl,
+    pub iprop: Option<IpropConfig>,
+}
+
+/// Why kadmind could not start.
+#[derive(Debug)]
+pub enum StartError {
+    Pwqual(io::Error),
+    Config(String),
+    AcceptorNames,
+    Bind(io::Error),
+}
+
+impl fmt::Display for StartError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Pwqual(e) | Self::Bind(e) => write!(f, "{e}"),
+            Self::Config(m) => f.write_str(m),
+            Self::AcceptorNames => f.write_str("Cannot set GSSAPI authentication names"),
+        }
+    }
+}
+
+impl std::error::Error for StartError {}
 
 /// kadmind's side of the loop: kpasswd's requests and each kadm5 connection's session, over one store, one ACL, one replay cache for the kadm5 acceptor and one set of acceptor profile values.
 pub struct Kadmind {
@@ -30,11 +114,60 @@ pub struct Kadmind {
     conf: Arc<AcceptorConfig>,
     programs: Programs,
     report: Option<UnhandledRpc>,
+    limits: ServeLimits,
 }
 
 impl Kadmind {
+    /// Set up the password-quality modules and apply the admin-side profile to `store`; [`new`](Self::new)
+    /// calls this, and the daemon calls it before binding so a bad dictionary or profile stops it early.
+    // MIT: `kadm5_init` (lib/kadm5/srv/server_init.c:158-276)
+    pub fn prepare_store(store: &SharedStore, profile: &ProfileSet) -> Result<(), StartError> {
+        let mut guard = store.write().unwrap_or_else(PoisonError::into_inner);
+        guard
+            .init_pwqual(profile.kdc.as_ref())
+            .map_err(StartError::Pwqual)?;
+        guard
+            .apply_profile(profile)
+            .map_err(|e| StartError::Config(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Start kadmind over `store`: [`prepare_store`](Self::prepare_store), then check the acceptor
+    /// serves its GSS names and take the kadmin/changepw key when `services` asks for kpasswd.
+    pub fn new(store: SharedStore, cfg: KadmindConfig) -> Result<Self, StartError> {
+        Self::prepare_store(&store, &cfg.profile)?;
+        // MIT: `kadm5_init_krb5_context` (lib/kadm5/srv/server_init.c:334-345)
+        let conf = AcceptorConfig::from_profile(&cfg.profile);
+        let cpw_key = {
+            let guard = store.read().unwrap_or_else(PoisonError::into_inner);
+            if !acceptor_names_served(&guard, &conf) {
+                return Err(StartError::AcceptorNames);
+            }
+            if cfg.services.kpasswd() {
+                guard
+                    .get_name(&kadmin_changepw())
+                    .and_then(|p| p.best_key())
+                    .map(|k| k.key.clone())
+            } else {
+                None
+            }
+        };
+        Ok(Self {
+            store,
+            acl: cfg.acl,
+            cpw_key,
+            rcache: ReplayCache::new(),
+            conf: Arc::new(conf),
+            programs: Programs::BOTH,
+            report: None,
+            limits: cfg.limits,
+        })
+    }
+
+    /// Build kadmind from parts directly, without [`new`](Self::new)'s profile set-up. Crate-internal
+    /// for the kpasswd-only serving helpers; it is not a public bypass of the start-up checks.
     #[must_use]
-    pub fn new(
+    pub(crate) fn from_parts(
         store: SharedStore,
         acl: Acl,
         cpw_key: Option<ProtocolKey>,
@@ -48,6 +181,7 @@ impl Kadmind {
             conf: Arc::new(conf),
             programs: Programs::BOTH,
             report: None,
+            limits: ServeLimits::default(),
         }
     }
 
@@ -67,6 +201,7 @@ impl Kadmind {
     /// UDP and TCP, kadm5 and iprop over the RPC listeners. Returns the descriptors still open.
     pub fn serve(&mut self, listeners: &Listeners, stop: &Shutdown) -> io::Result<ServeSummary> {
         self.programs = listeners.programs;
+        let (max_conns, max_req) = (self.limits.max_connections, self.limits.max_request);
         let sockets = Sockets {
             udp: &listeners.udp,
             tcp: &listeners.tcp,
@@ -75,12 +210,18 @@ impl Kadmind {
         net_server::run(
             self,
             &sockets,
-            MAX_STREAM_DATA_CONNECTIONS,
-            MAX_REQUEST,
+            max_conns,
+            max_req,
             &Wake::Shutdown(stop),
             &mut Klog,
         )
         .map(|open_fds| ServeSummary { open_fds })
+    }
+
+    /// Whether kpasswd is served: `services` asked for it and the kadmin/changepw key is present.
+    #[must_use]
+    pub fn serves_kpasswd(&self) -> bool {
+        self.cpw_key.is_some()
     }
 
     fn realm(&self) -> String {

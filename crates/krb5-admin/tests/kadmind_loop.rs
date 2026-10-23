@@ -6,15 +6,31 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use krb5_admin::{Kadmind, Listeners, Programs, Shutdown};
+use krb5_admin::{Kadmind, KadmindConfig, Listeners, Programs, ServeLimits, Services, Shutdown};
 use krb5_asn1::decode;
 use krb5_crypto::{EncryptionType, ProtocolKey};
 use krb5_gss::GssContext;
 use krb5_kdc::SharedDump;
-use krb5_kdc::principals::{kadmin_admin, kadmin_changepw};
+use krb5_kdc::principals::kadmin_admin;
 use krb5_kdc::testrealm::{TEST_REALM, bootstrap_documented};
-use krb5_protocol::{AcceptorConfig, as_req_sname, pa_enc_timestamp};
+use krb5_protocol::{as_req_sname, pa_enc_timestamp};
 use krb5_types::{KrbError, PrincipalName, ascii, err};
+
+fn test_cfg(acl: krb5_kdc::Acl, services: Services) -> KadmindConfig {
+    KadmindConfig {
+        profile: Arc::new(krb5_config::ProfileSet {
+            realm: TEST_REALM.into(),
+            krb5: krb5_config::Krb5Conf::default(),
+            kdc: None,
+            kdc_context: krb5_config::Krb5Conf::default(),
+        }),
+        services,
+        listen: krb5_config::KadmindListen::for_realm(None, TEST_REALM, None),
+        limits: ServeLimits::default(),
+        acl,
+        iprop: None,
+    }
+}
 
 fn serving() -> (SocketAddr, SocketAddr, Shutdown, JoinHandle<()>) {
     let (kpasswd, rpc, _, stop, served) = serving_with_store();
@@ -23,13 +39,6 @@ fn serving() -> (SocketAddr, SocketAddr, Shutdown, JoinHandle<()>) {
 
 fn serving_with_store() -> (SocketAddr, SocketAddr, SharedDump, Shutdown, JoinHandle<()>) {
     let (store, acl) = bootstrap_documented().unwrap();
-    let key = store
-        .get_name(&kadmin_changepw())
-        .unwrap()
-        .best_key()
-        .unwrap()
-        .key
-        .clone();
     let shared = krb5_kdc::shared_dump(store);
     let served_store = Arc::clone(&shared);
     let kpasswd = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -38,7 +47,7 @@ fn serving_with_store() -> (SocketAddr, SocketAddr, SharedDump, Shutdown, JoinHa
     let stop = Shutdown::new();
     let flag = stop.clone();
     let served = std::thread::spawn(move || {
-        let mut kadmind = Kadmind::new(served_store, acl, Some(key), AcceptorConfig::default());
+        let mut kadmind = Kadmind::new(served_store, test_cfg(acl, Services::DAEMON)).unwrap();
         let listeners =
             Listeners::from_sockets(Vec::new(), vec![kpasswd], vec![rpc], Programs::BOTH);
         kadmind.serve(&listeners, &flag).unwrap();
@@ -136,10 +145,17 @@ fn kadmind_is_served_from_another_thread_with_its_reporter() {
     let sink = Arc::clone(&reported);
     let mut kadmind = Kadmind::new(
         krb5_kdc::shared_dump(store),
-        acl,
-        None,
-        AcceptorConfig::default(),
+        test_cfg(
+            acl,
+            Services {
+                kpasswd_udp: false,
+                kpasswd_tcp: false,
+                kadm5: true,
+                iprop: false,
+            },
+        ),
     )
+    .unwrap()
     .report_unhandled(Arc::new(move |message: &str| {
         sink.lock().unwrap().push(message.to_owned());
     }));

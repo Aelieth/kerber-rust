@@ -8,7 +8,7 @@ use std::sync::{Arc, RwLock};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use krb5_admin::{Kadmind, Listeners, Programs, Shutdown};
+use krb5_admin::{Kadmind, KadmindConfig, Listeners, Programs, ServeLimits, Services, Shutdown};
 use krb5_crypto::{KeyUsage, ProtocolKey, encrypt};
 use krb5_gss::GssContext;
 use krb5_kdc::principals::{kadmin_admin, kadmin_changepw, kadmin_history};
@@ -50,6 +50,22 @@ fn realm() -> (Arc<RwLock<PrincipalStore>>, krb5_kdc::Acl) {
     (krb5_kdc::shared_dump(store), acl)
 }
 
+fn test_cfg(acl: krb5_kdc::Acl, services: Services) -> KadmindConfig {
+    KadmindConfig {
+        profile: Arc::new(krb5_config::ProfileSet {
+            realm: TEST_REALM.into(),
+            krb5: krb5_config::Krb5Conf::default(),
+            kdc: None,
+            kdc_context: krb5_config::Krb5Conf::default(),
+        }),
+        services,
+        listen: krb5_config::KadmindListen::for_realm(None, TEST_REALM, None),
+        limits: ServeLimits::default(),
+        acl,
+        iprop: None,
+    }
+}
+
 struct Served {
     rpc: SocketAddr,
     store: Arc<RwLock<PrincipalStore>>,
@@ -66,7 +82,19 @@ impl Served {
         let stop = Shutdown::new();
         let flag = stop.clone();
         let thread = std::thread::spawn(move || {
-            let mut kadmind = Kadmind::new(served_store, acl, None, AcceptorConfig::default());
+            let mut kadmind = Kadmind::new(
+                served_store,
+                test_cfg(
+                    acl,
+                    Services {
+                        kpasswd_udp: false,
+                        kpasswd_tcp: false,
+                        kadm5: true,
+                        iprop: false,
+                    },
+                ),
+            )
+            .unwrap();
             let listeners =
                 Listeners::from_sockets(Vec::new(), Vec::new(), vec![rpc], Programs::BOTH);
             kadmind.serve(&listeners, &flag).unwrap();

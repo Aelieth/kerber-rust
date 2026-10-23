@@ -38,6 +38,7 @@ any other `###` heading.
 
 ### Added
 
+- **admin.** An embedder runs kadmind as a library: `Kadmind::new(store, config)` sets up the password modules, `serve` runs the loop, and a `Shutdown` stops it at once.
 - **pkinit.** Brainpool P256, P384 and P512 (r1 and t1) sign and verify. P320 is refused: crypto-bigint 0.7 has no 320-bit encoding, and a 32-bit build refuses P512.
 - **kpropd.** With `iprop_enable` a replica polls its primary as `kiprop/<host>`, applies updates, asks for a full resync and backs off, as MIT's `do_iprop`; `-A`, `-P`, `-t`.
 - **config/kdc.** PKINIT reads `pkinit_identity`, `pkinit_anchors`, `pkinit_pool` and `pkinit_eku_checking` as MIT's; a failure leaves it off with MIT's line. Lab beside MIT.

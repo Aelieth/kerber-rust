@@ -21,11 +21,12 @@ use std::net::{TcpListener, UdpSocket};
 use std::path::Path;
 use std::sync::Arc;
 
-use krb5_admin::{Kadmind, Programs, acceptor_names_served, serve_kadmind};
+use krb5_admin::{
+    IpropConfig, Kadmind, KadmindConfig, Programs, ServeLimits, Services, StartError, serve_kadmind,
+};
 use krb5_cli::{MitArgs, MitOpt, Placement};
 use krb5_config::listen::{BindAddresses, BindType, ListenLog};
 use krb5_kdc::net_server::Sockets;
-use krb5_kdc::principals::kadmin_changepw;
 use krb5_kdc::{
     Acl, DEFAULT_TCP_LISTEN_BACKLOG, Error, IpropRole, OpenFailure, PrincipalStore, Signals,
     acl_for_store, bind_rpc_listeners, bind_tcp_listeners_with_backlog, bind_udp_listeners,
@@ -34,7 +35,6 @@ use krb5_kdc::{
     write_pid_file,
 };
 use krb5_log::klog::{self, JsonLog, Severity, os_error_text};
-use krb5_protocol::AcceptorConfig;
 
 const OPTIONS: &[MitOpt] = &[
     MitOpt::value("-x"),
@@ -152,9 +152,8 @@ fn main() {
             ))
             .try_init();
     }
-    let (mut store, paths) = open_realm(&progname, &args, test_realm, nofork);
+    let (store, paths) = open_realm(&progname, &args, test_realm, nofork);
     let realm = store.realm().to_owned();
-    let kdc_conf = paths.conf.as_ref();
     let iprop = krb5_config::IpropParams::load(&realm, &paths.database_name);
     if iprop.missing_required() || krb5_kdc::realm_kadm5_params_missing(&paths, &realm, true) {
         fail_to_start(
@@ -163,16 +162,9 @@ fn main() {
             "initializing",
         );
     }
-    // `kadm5_init` sets up the password-quality modules, and a dictionary that cannot be read stops kadmind "while initializing".
-    if let Err(e) = store.init_pwqual(kdc_conf) {
-        fail_to_start(&progname, Some(&os_error_text(&e)), "initializing");
-    }
     let profile = krb5_config::ProfileSet::from_env_files(&paths)
         .unwrap_or_else(|e| fail_to_start(&progname, Some(&e.init_text()), "initializing context"));
     drop(profile_read);
-    if let Err(e) = store.apply_profile(&profile) {
-        fail_to_start(&progname, Some(&e.to_string()), "getting config parameters");
-    }
     for line in profile
         .kdc
         .iter()
@@ -180,25 +172,6 @@ fn main() {
     {
         klog::syslog(Severity::Warning, &line);
     }
-    // MIT: `kadm5_init_krb5_context` (lib/kadm5/srv/server_init.c:334-345)
-    // kadmind's GSS contexts, as its own, read the KDC profile, kdc.conf ahead of krb5.conf; kpasswd's `krb5_rd_req` too.
-    let conf = AcceptorConfig::from_profile(&profile);
-    let proponly = args.flag("-proponly");
-    if proponly && !iprop.enabled {
-        fail_to_start(
-            &progname,
-            None,
-            "-proponly can only be used when iprop_enable is true",
-        );
-    }
-    if !acceptor_names_served(&store, &conf) {
-        fail_to_start(&progname, None, "Cannot set GSSAPI authentication names");
-    }
-    let changepw = kadmin_changepw();
-    let cpw_key = store
-        .get_name(&changepw)
-        .and_then(|p| p.best_key())
-        .map(|k| k.key.clone());
     #[cfg(feature = "test-hooks")]
     let persist = store.persist_paths.clone();
     let keyboard = kadmind_mkey_from_kbd(args.flag("-m"));
@@ -208,6 +181,24 @@ fn main() {
         None
     };
     let shared = shared_store(store);
+    // Before the network, as MIT does.
+    Kadmind::prepare_store(&shared, &profile).unwrap_or_else(|e| match e {
+        StartError::Pwqual(err) => {
+            fail_to_start(&progname, Some(&os_error_text(&err)), "initializing")
+        }
+        StartError::Config(msg) => {
+            fail_to_start(&progname, Some(&msg), "getting config parameters")
+        }
+        other => fail_to_start(&progname, Some(&other.to_string()), "initializing"),
+    });
+    let proponly = args.flag("-proponly");
+    if proponly && !iprop.enabled {
+        fail_to_start(
+            &progname,
+            None,
+            "-proponly can only be used when iprop_enable is true",
+        );
+    }
     let port_arg = args.value("-port").map(|p| {
         let [a, b, c, d, ..] = atoi(p).to_le_bytes();
         i32::from_le_bytes([a, b, c, d])
@@ -241,6 +232,46 @@ fn main() {
         .collect();
     socket_fds.sort_unstable_by(|a, b| b.cmp(a));
     let acl = load_acl(&progname, paths.acl_file.as_deref(), &realm);
+
+    let services = Services {
+        kpasswd_udp: !proponly,
+        kpasswd_tcp: !proponly,
+        kadm5: !proponly,
+        iprop: iprop.enabled,
+    };
+    let cfg = KadmindConfig {
+        profile: Arc::new(profile),
+        services,
+        listen,
+        limits: ServeLimits::default(),
+        acl,
+        iprop: iprop.enabled.then(|| IpropConfig {
+            listen: iprop.listen.clone(),
+            port: iprop.port.unwrap_or_default(),
+        }),
+    };
+    // Before daemonizing, as MIT does.
+    let mut kadmind = Kadmind::new(Arc::clone(&shared), cfg)
+        .unwrap_or_else(|e| match e {
+            StartError::Pwqual(err) => {
+                fail_to_start(&progname, Some(&os_error_text(&err)), "initializing")
+            }
+            StartError::Config(msg) => {
+                fail_to_start(&progname, Some(&msg), "getting config parameters")
+            }
+            StartError::AcceptorNames => {
+                fail_to_start(&progname, None, "Cannot set GSSAPI authentication names")
+            }
+            StartError::Bind(err) => fail_to_start(
+                &progname,
+                Some(&os_error_text(&err)),
+                "initializing network",
+            ),
+        })
+        .serve_programs(programs)
+        .report_unhandled(Arc::new(|message| {
+            let _ = writeln!(std::io::stderr(), "kadm5: {message}");
+        }));
 
     if !nofork && let Err(e) = detach() {
         fail_to_start(
@@ -293,11 +324,11 @@ fn main() {
         &progname,
         persist.as_ref(),
         &listeners,
-        cpw_key
-            .is_some()
+        kadmind
+            .serves_kpasswd()
             .then_some((kpasswd_udp.as_slice(), kpasswd_tcp.as_slice())),
     );
-    let (udp, tcp): (&[UdpSocket], &[TcpListener]) = if cpw_key.is_some() {
+    let (udp, tcp): (&[UdpSocket], &[TcpListener]) = if kadmind.serves_kpasswd() {
         (&kpasswd_udp, &kpasswd_tcp)
     } else {
         eprintln!("{progname}: no kadmin/changepw keys (RFC 3244 not listening)");
@@ -308,11 +339,6 @@ fn main() {
         tcp,
         rpc: &listeners,
     };
-    let mut kadmind = Kadmind::new(shared, acl, cpw_key, conf)
-        .serve_programs(programs)
-        .report_unhandled(Arc::new(|message| {
-            let _ = writeln!(std::io::stderr(), "kadm5: {message}");
-        }));
     klog::syslog(Severity::Info, "starting");
     if nofork {
         eprintln!("{progname}: starting...");
