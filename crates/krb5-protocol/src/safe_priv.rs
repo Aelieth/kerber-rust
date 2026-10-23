@@ -1,7 +1,7 @@
-//! KRB-SAFE, KRB-PRIV, and KRB-CRED (RFC 4120 §5.6–5.8).
-//!
-//! Outgoing SAFE and PRIV sequence numbers come from two process-global counters that start at 1, wrap, and skip 0.
-//! `unwrap_*` accepts a message only after its checksum or decryption succeeds, its timestamp is within 300 s, and the replay cache hasn't seen it; a required sequence number must be present, and it isn't compared with an expected remote sequence, which MIT's `k5_privsafe_check_seqnum` does.
+//! KRB-SAFE, KRB-PRIV, and KRB-CRED.
+//! Sequence numbers start at 1, wrap, and skip 0.
+//! Accepted only after the checksum or decryption, a 300 s window, and a new replay tag.
+//! Unlike MIT, a sequence is not checked against the expected remote one.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -41,12 +41,10 @@ fn local_addr() -> HostAddress {
     }
 }
 
-/// Build a KRB-SAFE (integrity-only).
 pub fn build_krb_safe(session: &ProtocolKey, user_data: &[u8]) -> Result<KrbSafe, Error> {
     build_krb_safe_ex(session, user_data, Some(take_seq(&NEXT_SAFE_SEQ)), true)
 }
 
-/// Build a KRB-SAFE with explicit sequence and optional timestamp.
 pub fn build_krb_safe_ex(
     session: &ProtocolKey,
     user_data: &[u8],
@@ -56,9 +54,8 @@ pub fn build_krb_safe_ex(
     build_krb_safe_from(session, user_data, seq_number, include_time, &local_addr())
 }
 
-/// [`build_krb_safe_ex`] from `s_address`, the sender's own address as its auth context holds it.
 // MIT: `create_krbsafe` (lib/krb5/krb/mk_safe.c:62-63)
-/// the s-address is the context's local address, the r-address its remote one (none here).
+/// The sender is the local address, and no receiver is set.
 pub fn build_krb_safe_from(
     session: &ProtocolKey,
     user_data: &[u8],
@@ -84,7 +81,8 @@ pub fn build_krb_safe_from(
     };
     let body_der = encode(&body)?;
     let usage = KeyUsage::new(ku::KRB_SAFE_CKSUM)?;
-    // checksums the full KRB-SAFE with a zero checksum spliced in — the verifier's primary branch (`rd_safe.c`); body-only was accepted only via the RFC 1510 fallback.
+    // The checksum covers the whole KRB-SAFE with a zero checksum spliced in.
+    // A body-only checksum is the RFC 1510 fallback.
     let dummy = encode_safe_with_body(
         KrbSafe::PVNO,
         KrbSafe::MSG_TYPE,
@@ -103,7 +101,6 @@ pub fn build_krb_safe_from(
     })
 }
 
-/// Verify a KRB-SAFE and return the user data.
 pub fn unwrap_krb_safe(
     session: &ProtocolKey,
     raw: &[u8],
@@ -112,7 +109,6 @@ pub fn unwrap_krb_safe(
     unwrap_krb_safe_ex(session, raw, replay, true, true)
 }
 
-/// Verify a KRB-SAFE.
 pub fn unwrap_krb_safe_ex(
     session: &ProtocolKey,
     raw: &[u8],
@@ -138,14 +134,13 @@ enum FreshPolicy {
     SeqAndTime,
     /// CRED: a timestamp required, the sequence optional.
     TimeOnly,
-    /// MIT kpasswd: sequence 0 and a missing timestamp are legal, so replay protection is the cache alone.
+    /// Kpasswd allows sequence 0 and no timestamp; the cache is the replay check.
     HashOnly,
-    /// MIT `kprop` (`DO_SEQUENCE` only): the sequence required, the timestamp optional.
+    /// Kprop with DO_SEQUENCE only: the sequence is required, the timestamp is not.
     SeqOnly,
 }
 
 // MIT: `read_krbsafe` (rd_safe.c:43-125)
-/// APPLICATION 20, saved body DER, addrs, dummy, body fallback.
 pub fn verify_krb_safe_checksum(
     session: &ProtocolKey,
     raw: &[u8],
@@ -155,7 +150,6 @@ pub fn verify_krb_safe_checksum(
     verify_krb_safe_checksum_in(session, raw, remote, local, None)
 }
 
-/// [`verify_krb_safe_checksum`] with the host addresses a receiver address is looked up in when `local` is `None`: `hosts`, else the machine's own ([`crate::os_localaddr`]).
 pub fn verify_krb_safe_checksum_in(
     session: &ProtocolKey,
     raw: &[u8],
@@ -170,11 +164,10 @@ pub fn verify_krb_safe_checksum_in(
         });
     }
     // MIT: `safe_msg_type` (lib/krb5/asn.1/asn1_k_encode.c:816-816)
-    // the msg-type decodes as the message's own.
     let (msg, body_der) = decode_safe_with_body(raw)?;
     let ctype = msg.cksum.cksumtype;
     // MIT: `read_krbsafe` (lib/krb5/krb/rd_safe.c:66-69)
-    // a checksum type `krb5_c_valid_cksumtype` does not know is KRB5_PROG_SUMTYPE_NOSUPP, a library code, not KDC_ERR_SUMTYPE_NOSUPP.
+    // An unknown checksum type is KRB5_PROG_SUMTYPE_NOSUPP, not the KDC error.
     if !cksumtype_is_known(ctype) {
         return Err(Error::ProgSumtypeNosupp);
     }
@@ -207,7 +200,8 @@ pub fn verify_krb_safe_checksum_in(
 }
 
 // MIT: `k5_privsafe_check_addrs` (privsafe.c:312-382)
-/// the sender address must match the remote address when one is set; a receiver address, when present, must match the local address, or one of the host's addresses when no local address is set.
+/// The sender must match a set remote address.
+/// A receiver must match local, or a host address if local is unset.
 pub fn check_privsafe_addrs(
     msg_s: &HostAddress,
     msg_r: Option<&HostAddress>,
@@ -217,8 +211,6 @@ pub fn check_privsafe_addrs(
     check_privsafe_addrs_in(msg_s, msg_r, remote, local, None)
 }
 
-/// [`check_privsafe_addrs`] with the host addresses to search when `local` is `None`: `hosts`, else the machine's own, read only when a receiver address is there to look up.
-/// the sender against the remote address; a receiver address is optional and, with no local address, must be one of `krb5_os_localaddr`'s (`krb5_address_search`, so an empty list holds none and a list of one NetBIOS address holds any).
 pub fn check_privsafe_addrs_in(
     msg_s: &HostAddress,
     msg_r: Option<&HostAddress>,
@@ -346,7 +338,7 @@ fn fresh_policy(require_seq: bool, require_time: bool) -> FreshPolicy {
 }
 
 // MIT: `k5_memrcache_store` (memrcache.c:136-139)
-/// a tag already stored is a replay and is not accepted again. A timestamp more than 300 seconds from now is not fresh, and a required sequence of zero is not a sequence.
+/// A stored tag is a replay. SeqAndTime rejects a sequence of zero.
 fn accept_fresh(
     replay: &ReplayCache,
     kind: &str,
@@ -384,12 +376,10 @@ fn accept_fresh(
     Ok(())
 }
 
-/// Build a KRB-PRIV (encrypted). Sequence numbers start at 1.
 pub fn build_krb_priv(session: &ProtocolKey, user_data: &[u8]) -> Result<KrbPriv, Error> {
     build_krb_priv_with_seq(session, user_data, Some(take_seq(&NEXT_PRIV_SEQ)))
 }
 
-/// Build a KRB-PRIV with an explicit sequence number.
 pub fn build_krb_priv_with_seq(
     session: &ProtocolKey,
     user_data: &[u8],
@@ -399,9 +389,9 @@ pub fn build_krb_priv_with_seq(
     build_krb_priv_chained(session, user_data, seq_number, true, &mut state)
 }
 
-/// Build a KRB-PRIV that names `sender` as its sender address and carries no timestamp.
 // MIT: `create_krbpriv` (lib/krb5/krb/mk_priv.c:60-61)
-/// the message's sender is the auth context's local address, and its receiver the remote address, which kpasswd does not set.
+/// Names the sender and carries no timestamp.
+/// The receiver stays unset, as kpasswd leaves it.
 pub fn build_krb_priv_from(
     session: &ProtocolKey,
     user_data: &[u8],
@@ -419,7 +409,7 @@ pub fn build_krb_priv_from(
     )
 }
 
-/// Build a KRB-PRIV with cipher-state chaining (MIT `auth_con_initivector`).
+// MIT: `krb5_auth_con_initivector` (lib/krb5/krb/auth_con.c:315)
 pub fn build_krb_priv_chained(
     session: &ProtocolKey,
     user_data: &[u8],
@@ -437,7 +427,6 @@ pub fn build_krb_priv_chained(
     )
 }
 
-/// [`build_krb_priv_chained`] from `s_address`, the sender's own address as its auth context holds it.
 pub fn build_krb_priv_chained_from(
     session: &ProtocolKey,
     user_data: &[u8],
@@ -494,14 +483,14 @@ fn krb_priv_part(
     })
 }
 
-/// Wipes an octet string's bytes when it holds the only reference to them, as a copy of a secret made only to be encoded does.
+/// Wipes the bytes only when this string holds their only reference.
 pub(crate) fn wipe_octets(octets: OctetString) {
     if let Ok(buf) = bytes::Bytes::from(octets).try_into_mut() {
         wipe_vec(Vec::<u8>::from(buf));
     }
 }
 
-/// Zeroizes every byte of `buf`'s allocation, then frees it: a plaintext that was encoded only to be encrypted. A test build keeps each wiped allocation ([`wiped::take`]) instead of freeing it, so a test can see the buffer zeroed, whole.
+/// Zeroes the whole allocation, not only the live length.
 pub(crate) fn wipe_vec(mut buf: Vec<u8>) {
     buf.resize(buf.capacity(), 0);
     buf.as_mut_slice().zeroize();
@@ -509,7 +498,6 @@ pub(crate) fn wipe_vec(mut buf: Vec<u8>) {
     let _ = wiped::WIPED.try_with(|w| w.borrow_mut().push(buf));
 }
 
-/// The allocations this crate's wipes zeroed on the current thread, kept for the tests.
 #[cfg(test)]
 pub(crate) mod wiped {
     use std::cell::RefCell;
@@ -525,7 +513,6 @@ pub(crate) mod wiped {
     }
 }
 
-/// Decrypt a KRB-PRIV and return the user data.
 pub fn unwrap_krb_priv(
     session: &ProtocolKey,
     raw: &[u8],
@@ -534,9 +521,10 @@ pub fn unwrap_krb_priv(
     unwrap_krb_priv_ex(session, raw, replay, true, true)
 }
 
-/// The decrypted part of a KRB-PRIV under `key`, for a caller that checks its sequence number.
 // MIT: `read_krbpriv` (lib/krb5/krb/rd_priv.c:43-97)
-/// a message that is not a KRB-PRIV is `KRB5KRB_AP_ERR_MSG_TYPE`; the decrypted part is zeroed before it is freed.
+/// The caller checks the sequence number.
+/// A message that is not a KRB-PRIV is MSG_TYPE.
+/// The decrypted part is wiped before it is freed.
 pub fn read_krb_priv(key: &ProtocolKey, raw: &[u8]) -> Result<EncKrbPrivPart, Error> {
     if raw.first().is_none_or(|b| b & !0x20 != 0x55) {
         return Err(Error::KrbError {
@@ -552,7 +540,6 @@ pub fn read_krb_priv(key: &ProtocolKey, raw: &[u8]) -> Result<EncKrbPrivPart, Er
     Ok(part?)
 }
 
-/// Decrypt a KRB-PRIV.
 pub fn unwrap_krb_priv_ex(
     session: &ProtocolKey,
     raw: &[u8],
@@ -564,7 +551,7 @@ pub fn unwrap_krb_priv_ex(
     unwrap_krb_priv_chained(session, raw, replay, require_seq, require_time, &mut state)
 }
 
-/// Decrypt a KRB-PRIV using cipher-state chaining (MIT kprop `initivector`).
+// MIT: `krb5_auth_con_initivector` (lib/krb5/krb/auth_con.c:315)
 pub fn unwrap_krb_priv_chained(
     session: &ProtocolKey,
     raw: &[u8],
@@ -594,7 +581,6 @@ pub fn unwrap_krb_priv_chained(
     Ok(part.user_data.to_vec())
 }
 
-/// Build a KRB-CRED forwarding `tickets` + `info`.
 pub fn build_krb_cred(
     session: &ProtocolKey,
     tickets: Vec<Ticket>,
@@ -626,7 +612,6 @@ pub fn build_krb_cred(
     })
 }
 
-/// Decrypt a KRB-CRED.
 pub fn unwrap_krb_cred(
     session: &ProtocolKey,
     raw: &[u8],
