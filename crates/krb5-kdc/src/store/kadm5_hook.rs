@@ -1,6 +1,4 @@
-//! kadm5 hook modules (`kadm5_hook.c`).
-//!
-//! There is no built-in module. `[plugins] kadm5_hook` `disable` then `enable_only` select embedder modules from [`register_kadm5_hook`]. A precommit error stops the walk and the operation writes nothing. A postcommit error is logged and the walk continues. The operation still succeeds. `module` is not read. Nothing is loaded with `dlopen`.
+//! kadm5 hooks.
 
 use std::sync::{Arc, Mutex};
 
@@ -11,32 +9,18 @@ use zeroize::Zeroizing;
 use super::PrincipalStore;
 use crate::error::Error;
 
-/// `KADM5_HOOK_STAGE_PRECOMMIT` is 0 and `KADM5_HOOK_STAGE_POSTCOMMIT` is 1.
-///
-/// MIT `kadm5_hook_plugin.h`: the stage passed to every hook method.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HookStage {
-    /// Before the kdb write. The first error aborts the operation.
     Precommit = 0,
-    /// After a successful write. An error is logged and the walk continues.
     Postcommit = 1,
 }
 
-/// One kadm5 hook module.
-///
 // MIT: `kadm5_hook_vftable_1` (include/krb5/kadm5_hook_plugin.h)
-/// a NULL method is skipped. Each method here allows the operation until an embedder overrides it.
 pub trait Kadm5Hook: Send + Sync {
-    /// Module name for `[plugins] kadm5_hook`.
     fn name(&self) -> &'static str;
 
     // MIT: `k5_kadm5_hook_chpass` (kadm5_hook.c:142-151)
-    /// each module's chpass.
     // MIT: `kadm5_randkey_principal_3` (svr_principal.c:1485-1495)
-    /// a random key passes no password.
-    /// `keepold` is the count the caller passed (`krb5_boolean` is that unsigned value).
-    ///
-    /// A module error. [`HookStage::Precommit`] returns it and writes nothing. [`HookStage::Postcommit`] is logged and the operation still succeeds.
     fn chpass(
         &self,
         _stage: HookStage,
@@ -50,10 +34,6 @@ pub trait Kadm5Hook: Send + Sync {
     }
 
     // MIT: `k5_kadm5_hook_create` (kadm5_hook.c:154-162)
-    /// each module's create.
-    /// `password` is `None` for a random-key create. `mask` is the request's `KADM5_*` bits.
-    ///
-    /// A module error. [`HookStage::Precommit`] returns it and writes nothing. [`HookStage::Postcommit`] is logged and the operation still succeeds.
     fn create(
         &self,
         _stage: HookStage,
@@ -67,10 +47,6 @@ pub trait Kadm5Hook: Send + Sync {
     }
 
     // MIT: `k5_kadm5_hook_modify` (kadm5_hook.c:165-170)
-    /// each module's modify.
-    /// `mask` is the `KADM5_*` bits this modify applies.
-    ///
-    /// A module error. [`HookStage::Precommit`] returns it and writes nothing. [`HookStage::Postcommit`] is logged and the operation still succeeds.
     fn modify(
         &self,
         _stage: HookStage,
@@ -82,9 +58,6 @@ pub trait Kadm5Hook: Send + Sync {
     }
 
     // MIT: `k5_kadm5_hook_rename` (kadm5_hook.c:173-178)
-    /// each module's rename.
-    ///
-    /// A module error. [`HookStage::Precommit`] returns it and writes nothing. [`HookStage::Postcommit`] is logged and the operation still succeeds.
     fn rename(
         &self,
         _stage: HookStage,
@@ -97,17 +70,11 @@ pub trait Kadm5Hook: Send + Sync {
     }
 
     // MIT: `k5_kadm5_hook_remove` (kadm5_hook.c:181-186)
-    /// each module's remove.
-    ///
-    /// A module error. [`HookStage::Precommit`] returns it and writes nothing. [`HookStage::Postcommit`] is logged and the operation still succeeds.
     fn remove(&self, _stage: HookStage, _princ: &PrincipalName, _realm: &str) -> Result<(), Error> {
         Ok(())
     }
 
     // MIT: `k5_kadm5_hook_alias` (kadm5_hook.c:189-194)
-    /// each module's alias.
-    ///
-    /// A module error. [`HookStage::Precommit`] returns it and writes nothing. [`HookStage::Postcommit`] is logged and the operation still succeeds.
     fn alias(
         &self,
         _stage: HookStage,
@@ -127,7 +94,7 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
-/// Register one named module for every thread that has not set its own list.
+/// No dlopen here.
 pub fn register_kadm5_hook(module: Arc<dyn Kadm5Hook>) {
     EXTRA
         .lock()
@@ -135,18 +102,15 @@ pub fn register_kadm5_hook(module: Arc<dyn Kadm5Hook>) {
         .push(module);
 }
 
-/// Install this thread's modules in place of [`register_kadm5_hook`] (tests).
-///
-/// The list is still filtered by `[plugins] kadm5_hook`. An empty list runs nothing.
 pub fn set_thread_kadm5_hook(modules: Vec<Arc<dyn Kadm5Hook>>) {
     THREAD.with(|slot| *slot.borrow_mut() = Some(modules));
 }
 
-/// Drop this thread's modules so it uses the process list.
 pub fn clear_thread_kadm5_hook() {
     THREAD.with(|slot| *slot.borrow_mut() = None);
 }
 
+/// A thread list hides the process list.
 fn candidates() -> Vec<Arc<dyn Kadm5Hook>> {
     if let Some(modules) = THREAD.with(|slot| slot.borrow().clone()) {
         return modules;
@@ -157,6 +121,7 @@ fn candidates() -> Vec<Arc<dyn Kadm5Hook>> {
         .clone()
 }
 
+/// disable runs before enable_only.
 fn selected(store: &PrincipalStore) -> Vec<Arc<dyn Kadm5Hook>> {
     let modules = candidates();
     let names: Vec<&str> = modules.iter().map(|module| module.name()).collect();
@@ -172,8 +137,8 @@ fn selected(store: &PrincipalStore) -> Vec<Arc<dyn Kadm5Hook>> {
 }
 
 // MIT: `ITERATE` (kadm5_hook.c)
-/// precommit returns the first error.
-/// Postcommit logs `kadm5_hook %s failed postcommit %s: %s` and continues.
+/// Precommit fails before the write.
+/// Postcommit logs and continues.
 fn walk(
     store: &PrincipalStore,
     stage: HookStage,
@@ -314,7 +279,6 @@ pub(crate) enum Post {
 }
 
 impl Post {
-    // MIT kadm5_create_principal_3; see docs/parity/a4-kadmin.md
     pub(crate) fn always(&self) -> bool {
         matches!(self, Self::Create { .. })
     }
