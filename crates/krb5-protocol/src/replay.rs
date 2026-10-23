@@ -14,7 +14,7 @@ pub struct ReplayKey {
 }
 
 impl ReplayKey {
-    /// A tag held whole, as MIT's memory cache holds it; past 24 bytes only those are kept.
+    /// Past 24 bytes, only the first 24 are kept.
     #[must_use]
     pub fn tag(bytes: &[u8]) -> Self {
         let n = bytes.len().min(TAG_MAX);
@@ -26,7 +26,8 @@ impl ReplayKey {
         }
     }
 
-    // MIT k5_rc_tag_from_ciphertext; see docs/parity/b1-client.md
+    // MIT: `k5_rc_tag_from_ciphertext` (lib/krb5/rcache/rc_base.c:147)
+    /// A short ciphertext is None, not MIT's EINVAL.
     #[must_use]
     pub fn from_ciphertext(etype: EncryptionType, cipher: &[u8]) -> Option<Self> {
         let len = checksum_output_size(etype.checksum_type())?;
@@ -34,7 +35,8 @@ impl ReplayKey {
         Some(Self::tag(&cipher[at..]))
     }
 
-    // MIT k5_rcfile2_store; see docs/parity/b1-client.md
+    // MIT: `k5_rcfile2_store` (lib/krb5/rcache/rc_file2.c:201)
+    /// The file cache keeps 12 bytes, zero-padded when shorter.
     #[must_use]
     pub fn file2(self) -> Self {
         let mut tag = [0; TAG_MAX];
@@ -46,7 +48,7 @@ impl ReplayKey {
     }
 }
 
-/// Shared replay detector. `Clone` shares the same cache (does not fork state).
+/// Clone shares the cache and does not fork it.
 #[derive(Clone, Debug)]
 pub struct ReplayCache {
     inner: Arc<Mutex<Inner>>,
@@ -86,8 +88,9 @@ impl ReplayCache {
         }
     }
 
-    /// `true` for a replay. Unlike MIT's cache, a full one refuses every new tag.
-    // MIT k5_memrcache_store; see docs/parity/b1-client.md
+    /// True is a replay. Unlike MIT's, a full cache refuses every new tag.
+    // MIT: `k5_memrcache_store` (lib/krb5/rcache/memrcache.c:125)
+    /// A poisoned lock is a replay.
     #[must_use]
     pub fn check_and_store(&self, key: ReplayKey, skew: i64) -> bool {
         let Ok(mut g) = self.inner.lock() else {
@@ -113,7 +116,7 @@ impl ReplayCache {
             _ => g.buckets.push_back((expiry, vec![key])),
         }
         if g.seen.len() == 1_024 {
-            // Room for 28,672 tags at once: churn just past half full would grow the set again.
+            // Reserved once, so churn past half full does not grow it again.
             g.seen.reserve(28_672 - 1_024);
             g.buckets.reserve(512);
         }
