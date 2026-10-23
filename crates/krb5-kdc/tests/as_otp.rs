@@ -61,10 +61,10 @@ impl OtpVerifier for Scripted {
         self.name
     }
 
-    fn verify(&self, req: &OtpVerifyRequest<'_>) -> OtpVerdict {
+    fn verify(&self, req: &OtpVerifyRequest) -> OtpVerdict {
         self.calls.lock().unwrap().push(Call {
-            token_type: req.token_type.to_owned(),
-            username: req.username.to_vec(),
+            token_type: req.token_type.clone(),
+            username: req.username.clone(),
             otp_value: req.otp_value.to_vec(),
         });
         self.script

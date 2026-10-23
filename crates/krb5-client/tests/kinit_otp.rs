@@ -17,9 +17,9 @@ impl OtpVerifier for Code {
         "kinittest"
     }
 
-    fn verify(&self, r: &OtpVerifyRequest<'_>) -> OtpVerdict {
+    fn verify(&self, r: &OtpVerifyRequest) -> OtpVerdict {
         self.0.lock().unwrap().push(r.otp_value.to_vec());
-        if r.otp_value == b"123456" {
+        if r.otp_value.as_slice() == b"123456" {
             OtpVerdict::Accept
         } else {
             OtpVerdict::Reject
@@ -31,7 +31,7 @@ fn verifier() -> &'static Arc<Code> {
     static V: OnceLock<Arc<Code>> = OnceLock::new();
     V.get_or_init(|| {
         let v = Arc::new(Code(Mutex::new(Vec::new())));
-        register_otp_verifier(v.clone());
+        register_otp_verifier(v.clone()).expect("register the test otp verifier");
         v
     })
 }

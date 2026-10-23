@@ -74,3 +74,10 @@ path = "fuzz_targets/transited.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "otp_req_decode"
+path = "fuzz_targets/otp_req_decode.rs"
+test = false
+doc = false
+bench = false

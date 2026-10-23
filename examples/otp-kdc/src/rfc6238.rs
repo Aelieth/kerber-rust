@@ -86,8 +86,9 @@ impl OtpVerifier for TotpVerifier {
         self.name
     }
 
-    fn verify(&self, req: &OtpVerifyRequest<'_>) -> OtpVerdict {
-        let accepted = unix_now().is_some_and(|now| self.decide(req.username, req.otp_value, now));
+    fn verify(&self, req: &OtpVerifyRequest) -> OtpVerdict {
+        let accepted =
+            unix_now().is_some_and(|now| self.decide(&req.username, &req.otp_value, now));
         if accepted {
             OtpVerdict::Accept
         } else {

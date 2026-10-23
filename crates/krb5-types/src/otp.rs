@@ -165,6 +165,18 @@ impl fmt::Debug for PaOtpRequest {
     }
 }
 
+// MIT: `k5_free_pa_otp_req` (lib/krb5/krb/kfree.c:813)
+impl Drop for PaOtpRequest {
+    fn drop(&mut self) {
+        if let Some(v) = self.otp_value.take() {
+            crate::wipe::wipe_octets(v);
+        }
+        if let Some(p) = self.pin.take() {
+            crate::wipe::wipe_octets(p);
+        }
+    }
+}
+
 // MIT: `pa_otp_enc_req` (lib/krb5/asn.1/asn1_k_encode.c:1633-1633)
 // the SEQUENCE of `krb5_data` with the field table `pa_otp_enc_req_fields`.
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]

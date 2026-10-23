@@ -103,8 +103,10 @@ pub use persist::{
     save_store_legacy_kdb3, save_store_with_master, stash_keys, write_stash,
 };
 pub use pkinit::PkinitKdc;
+#[doc(hidden)]
+pub use plugins::OtpRuntime;
 pub use plugins::{
-    KdcAuthdata, KdcPolicy, KdcPreauth, OtpVerdict, OtpVerifier, OtpVerifyRequest,
+    KdcAuthdata, KdcPolicy, KdcPreauth, OtpTokenFields, OtpVerdict, OtpVerifier, OtpVerifyRequest,
     PolicyAdjustment, PreauthAction, PreauthHint, PreauthRock, apply_policy_times,
     clear_thread_authdata, clear_thread_kdcpolicies, clear_thread_otp_verifiers,
     clear_thread_policy, clear_thread_preauth, current_policy, register_authdata,

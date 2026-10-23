@@ -1,6 +1,9 @@
 //! kdcpreauth, kdcpolicy, and kdcauthdata, as Rust traits.
 
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use krb5_crypto::{EncryptionType, ProtocolKey};
 use krb5_log::klog::{self, Severity};
@@ -8,6 +11,7 @@ use krb5_types::{
     AuthorizationData, EncTicketPart, HostAddress, KdcReqBody, KerberosTime, PaData, PrincipalName,
     pa,
 };
+use zeroize::Zeroizing;
 
 use crate::audit::kdc_error_message;
 use crate::error::Error;
@@ -530,26 +534,68 @@ pub(crate) fn preauth_modules() -> Vec<Arc<dyn KdcPreauth>> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum OtpVerdict {
     Accept,
     Reject,
     Error(String),
 }
 
-/// Not `Debug`: `otp_value` is a secret.
-pub struct OtpVerifyRequest<'a> {
-    pub principal: &'a Principal,
-    pub realm: &'a str,
-    pub token_type: &'a str,
-    pub username: &'a [u8],
-    /// Untrusted bytes, not UTF-8: it may be the password and the code.
-    pub otp_value: &'a [u8],
+#[derive(Clone, Debug)]
+pub struct OtpTokenFields {
+    pub ty_name: String,
+    pub indicators: Vec<String>,
 }
 
-/// `verify` blocks the whole KDC loop.
+/// Owned and `Send` for the worker; not `Debug` (`otp_value` is secret).
+#[derive(Clone)]
+#[non_exhaustive]
+pub struct OtpVerifyRequest {
+    pub principal: Principal,
+    pub realm: String,
+    pub token_type: String,
+    pub username: Vec<u8>,
+    /// Untrusted bytes, not UTF-8: it may be the password and the code.
+    pub otp_value: Zeroizing<Vec<u8>>,
+    pub peer: Option<HostAddress>,
+    pub request_time: Instant,
+    pub deadline: Instant,
+    pub token: OtpTokenFields,
+}
+
+impl OtpVerifyRequest {
+    #[doc(hidden)]
+    #[must_use]
+    pub fn for_test(
+        principal: Principal,
+        realm: impl Into<String>,
+        token_type: impl Into<String>,
+        username: impl Into<Vec<u8>>,
+        otp_value: impl Into<Vec<u8>>,
+    ) -> Self {
+        let token_type = token_type.into();
+        let now = Instant::now();
+        Self {
+            principal,
+            realm: realm.into(),
+            token: OtpTokenFields {
+                ty_name: token_type.clone(),
+                indicators: Vec::new(),
+            },
+            token_type,
+            username: username.into(),
+            otp_value: Zeroizing::new(otp_value.into()),
+            peer: None,
+            request_time: now,
+            deadline: now + Duration::from_secs(5),
+        }
+    }
+}
+
+/// Runs on a worker under a deadline; a hang or panic fails closed; `Error` text is logged.
 pub trait OtpVerifier: Send + Sync {
     fn name(&self) -> &'static str;
-    fn verify(&self, req: &OtpVerifyRequest<'_>) -> OtpVerdict;
+    fn verify(&self, req: &OtpVerifyRequest) -> OtpVerdict;
 }
 
 static OTP_VERIFIERS: Mutex<Vec<Arc<dyn OtpVerifier>>> = Mutex::new(Vec::new());
@@ -559,11 +605,19 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
-pub fn register_otp_verifier(v: Arc<dyn OtpVerifier>) {
-    OTP_VERIFIERS
+/// Errs on a duplicate `name()`.
+pub fn register_otp_verifier(v: Arc<dyn OtpVerifier>) -> Result<(), Error> {
+    let mut reg = OTP_VERIFIERS
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .push(v);
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if reg.iter().any(|e| e.name() == v.name()) {
+        return Err(Error::InvalidArgument(format!(
+            "an OTP verifier named '{}' is already registered",
+            v.name()
+        )));
+    }
+    reg.push(v);
+    Ok(())
 }
 
 pub fn set_thread_otp_verifiers(v: Vec<Arc<dyn OtpVerifier>>) {
@@ -578,11 +632,15 @@ pub(crate) fn take_thread_otp_verifiers() -> Option<Vec<Arc<dyn OtpVerifier>>> {
     THREAD_OTP.with(|t| t.borrow_mut().take())
 }
 
+pub(crate) fn thread_otp_present() -> bool {
+    THREAD_OTP.with(|t| t.borrow().is_some())
+}
+
 pub(crate) fn restore_thread_otp_verifiers(v: Option<Vec<Arc<dyn OtpVerifier>>>) {
     THREAD_OTP.with(|t| *t.borrow_mut() = v);
 }
 
-fn otp_verifiers() -> Vec<Arc<dyn OtpVerifier>> {
+pub(crate) fn otp_verifiers() -> Vec<Arc<dyn OtpVerifier>> {
     if let Some(v) = THREAD_OTP.with(|t| t.borrow().clone()) {
         return v;
     }
@@ -598,6 +656,178 @@ pub(crate) fn find_otp_verifier(name: &str) -> Option<Arc<dyn OtpVerifier>> {
 
 pub(crate) fn otp_verifier_names() -> Vec<&'static str> {
     otp_verifiers().iter().map(|v| v.name()).collect()
+}
+
+const OTP_WORKERS: usize = 4;
+const OTP_QUEUE: usize = 64;
+
+type OtpJob = (
+    OtpVerifyRequest,
+    Arc<dyn OtpVerifier>,
+    SyncSender<OtpVerdict>,
+);
+
+pub(crate) struct OtpPool {
+    tx: SyncSender<OtpJob>,
+}
+
+impl OtpPool {
+    fn new(threads: usize) -> Self {
+        let (tx, rx) = sync_channel::<OtpJob>(OTP_QUEUE);
+        let rx = Arc::new(Mutex::new(rx));
+        for _ in 0..threads.max(1) {
+            let rx = Arc::clone(&rx);
+            let _ = std::thread::Builder::new()
+                .name("otp-verify".to_owned())
+                .spawn(move || run_otp_worker(&rx));
+        }
+        Self { tx }
+    }
+
+    fn submit(
+        &self,
+        req: OtpVerifyRequest,
+        verifier: Arc<dyn OtpVerifier>,
+    ) -> Option<Receiver<OtpVerdict>> {
+        let (reply_tx, reply_rx) = sync_channel::<OtpVerdict>(1);
+        self.tx.try_send((req, verifier, reply_tx)).ok()?;
+        Some(reply_rx)
+    }
+}
+
+fn run_otp_worker(rx: &Mutex<Receiver<OtpJob>>) {
+    loop {
+        let job = {
+            let guard = rx.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            guard.recv()
+        };
+        let Ok((req, verifier, reply)) = job else {
+            return;
+        };
+        // Past its deadline: the caller gave up, so skip verify (don't burn a TOTP step).
+        if Instant::now() >= req.deadline {
+            continue;
+        }
+        let verdict = catch_unwind(AssertUnwindSafe(|| verifier.verify(&req)))
+            .unwrap_or_else(|_| OtpVerdict::Error("the OTP verifier panicked".to_owned()));
+        let _ = reply.send(verdict);
+    }
+}
+
+#[doc(hidden)]
+pub struct OtpRuntime {
+    verifiers: Vec<Arc<dyn OtpVerifier>>,
+    pool: OtpPool,
+}
+
+impl OtpRuntime {
+    pub(crate) fn new(verifiers: Vec<Arc<dyn OtpVerifier>>) -> Self {
+        Self {
+            verifiers,
+            pool: OtpPool::new(OTP_WORKERS),
+        }
+    }
+
+    pub(crate) fn find(&self, name: &str) -> Option<Arc<dyn OtpVerifier>> {
+        self.verifiers.iter().find(|v| v.name() == name).cloned()
+    }
+
+    pub(crate) fn pool(&self) -> &OtpPool {
+        &self.pool
+    }
+}
+
+impl std::fmt::Debug for OtpRuntime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OtpRuntime")
+            .field("verifiers", &self.verifiers.len())
+            .finish_non_exhaustive()
+    }
+}
+
+pub(crate) enum OtpOutcome {
+    Verdict(OtpVerdict),
+    TimedOut,
+}
+
+pub(crate) fn bounded_verify(
+    pool: Option<&OtpPool>,
+    verifier: Arc<dyn OtpVerifier>,
+    req: OtpVerifyRequest,
+    timeout: Duration,
+) -> OtpOutcome {
+    let reply_rx = match pool {
+        Some(p) => match p.submit(req, verifier) {
+            Some(rx) => rx,
+            None => return OtpOutcome::TimedOut,
+        },
+        None => one_shot_verify(req, verifier),
+    };
+    match reply_rx.recv_timeout(timeout) {
+        Ok(v) => OtpOutcome::Verdict(v),
+        Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => OtpOutcome::TimedOut,
+    }
+}
+
+fn one_shot_verify(req: OtpVerifyRequest, verifier: Arc<dyn OtpVerifier>) -> Receiver<OtpVerdict> {
+    let (tx, rx) = sync_channel::<OtpVerdict>(1);
+    let _ = std::thread::Builder::new()
+        .name("otp-verify-1".to_owned())
+        .spawn(move || {
+            let verdict = catch_unwind(AssertUnwindSafe(|| verifier.verify(&req)))
+                .unwrap_or_else(|_| OtpVerdict::Error("the OTP verifier panicked".to_owned()));
+            let _ = tx.send(verdict);
+        });
+    rx
+}
+
+static OTP_LAST_REFUSAL_LOG: Mutex<Option<Instant>> = Mutex::new(None);
+
+pub(crate) fn otp_log_refusal(msg: &str) {
+    let now = Instant::now();
+    let mut last = OTP_LAST_REFUSAL_LOG
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let fire = match *last {
+        Some(t) => now.duration_since(t) >= Duration::from_secs(1),
+        None => true,
+    };
+    if fire {
+        *last = Some(now);
+        drop(last);
+        klog::syslog(Severity::Err, msg);
+        tracing::error!(target: "kdc.otp", "{}", msg);
+    }
+}
+
+pub(crate) fn sanitize_otp_error(text: &str) -> String {
+    let mut out = String::new();
+    for ch in text.chars() {
+        let piece = if ch.is_control() {
+            ch.escape_default().count()
+        } else {
+            ch.len_utf8()
+        };
+        if out.len() + piece > 256 {
+            break;
+        }
+        if ch.is_control() {
+            out.extend(ch.escape_default());
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+pub(crate) fn kdc_otp_event(principal: &str, token_type: &str, verdict: &str, duration_us: u64) {
+    tracing::info!(
+        target: "kdc.otp",
+        principal = principal,
+        token_type = token_type,
+        verdict = verdict,
+        duration_us = duration_us,
+    );
 }
 
 // MIT: `krb5_kdcauthdata_handle_fn` (kdcauthdata_plugin.h:105-117)
@@ -2230,13 +2460,13 @@ mod tests {
         fn name(&self) -> &'static str {
             self.0
         }
-        fn verify(&self, _req: &OtpVerifyRequest<'_>) -> OtpVerdict {
+        fn verify(&self, _req: &OtpVerifyRequest) -> OtpVerdict {
             self.1.clone()
         }
     }
 
     #[test]
-    fn registry_first_name_wins_thread_list_replaces() {
+    fn register_rejects_a_duplicate_name_and_a_thread_list_replaces() {
         let (store, _) = bootstrap_documented().unwrap();
         let client = store
             .get_name(&PrincipalName::new(
@@ -2247,16 +2477,19 @@ mod tests {
             .clone();
         let verdict = |name: &str| {
             let v = find_otp_verifier(name).expect("a verifier of that name");
-            v.verify(&OtpVerifyRequest {
-                principal: &client,
-                realm: TEST_REALM,
-                token_type: name,
-                username: b"u",
-                otp_value: b"1",
-            })
+            v.verify(&OtpVerifyRequest::for_test(
+                client.clone(),
+                TEST_REALM,
+                name,
+                b"u".to_vec(),
+                b"1".to_vec(),
+            ))
         };
-        register_otp_verifier(Arc::new(Tagged("registry-first", OtpVerdict::Accept)));
-        register_otp_verifier(Arc::new(Tagged("registry-first", OtpVerdict::Reject)));
+        register_otp_verifier(Arc::new(Tagged("registry-first", OtpVerdict::Accept))).unwrap();
+        // The same name a second time is rejected; the first registration stands.
+        assert!(
+            register_otp_verifier(Arc::new(Tagged("registry-first", OtpVerdict::Reject))).is_err()
+        );
         assert_eq!(verdict("registry-first"), OtpVerdict::Accept);
         set_thread_otp_verifiers(vec![Arc::new(Tagged("registry-first", OtpVerdict::Reject))]);
         assert_eq!(verdict("registry-first"), OtpVerdict::Reject);

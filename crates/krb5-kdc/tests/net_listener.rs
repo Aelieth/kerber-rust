@@ -355,8 +355,10 @@ fn the_loop_does_not_take_a_slot_set_on_its_thread() {
         set_thread_policy(Arc::new(ThreadPolicy { panics }));
         let own = |nonce| {
             let (store, _) = bootstrap_documented().unwrap();
-            std::panic::catch_unwind(|| krb5_kdc::issue_as(&store, &documented_as_req(nonce)))
-                .map_or(true, |r| r.is_err())
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                krb5_kdc::issue_as(&store, &documented_as_req(nonce))
+            }))
+            .map_or(true, |r| r.is_err())
         };
         assert!(own(1), "the slot applies to this thread's own calls");
         let reply = served_on_this_thread(2);

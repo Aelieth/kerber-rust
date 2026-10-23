@@ -154,6 +154,9 @@ pub trait PrincipalRead: Send + Sync {
             rid,
         }
     }
+    fn otp_runtime(&self) -> Option<&crate::plugins::OtpRuntime> {
+        None
+    }
 }
 
 pub trait PrincipalWrite: PrincipalRead {
@@ -166,6 +169,12 @@ pub trait StoreLifecycle {
     fn reload_if_stale(&mut self) -> Result<(), Error>;
     fn read_hold(&self) -> Result<Option<(DbLockHold, bool)>, Error> {
         Ok(None)
+    }
+    fn install_otp_runtime(&mut self, rt: std::sync::Arc<crate::plugins::OtpRuntime>) {
+        let _ = rt;
+    }
+    fn take_otp_runtime(&mut self) -> Option<std::sync::Arc<crate::plugins::OtpRuntime>> {
+        None
     }
 }
 
@@ -206,6 +215,9 @@ impl<T: PrincipalRead + ?Sized> PrincipalRead for std::sync::Arc<T> {
     }
     fn named_policy_for(&self, p: &Principal) -> Option<NamedPolicy> {
         (**self).named_policy_for(p)
+    }
+    fn otp_runtime(&self) -> Option<&crate::plugins::OtpRuntime> {
+        (**self).otp_runtime()
     }
 }
 
@@ -359,6 +371,9 @@ impl PrincipalRead for PrincipalStore {
     fn env(&self) -> &KdcEnv {
         self.env()
     }
+    fn otp_runtime(&self) -> Option<&crate::plugins::OtpRuntime> {
+        self.otp_runtime()
+    }
     fn fetch(&self, id: &str) -> Result<Option<Principal>, Error> {
         Ok(self.get(id).cloned())
     }
@@ -419,6 +434,12 @@ impl StoreLifecycle for PrincipalStore {
     }
     fn read_hold(&self) -> Result<Option<(DbLockHold, bool)>, Error> {
         PrincipalStore::read_hold(self)
+    }
+    fn install_otp_runtime(&mut self, rt: std::sync::Arc<crate::plugins::OtpRuntime>) {
+        PrincipalStore::install_otp_runtime(self, rt);
+    }
+    fn take_otp_runtime(&mut self) -> Option<std::sync::Arc<crate::plugins::OtpRuntime>> {
+        PrincipalStore::take_otp_runtime(self)
     }
 }
 

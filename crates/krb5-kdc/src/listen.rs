@@ -707,6 +707,26 @@ pub fn serve_daemon(
     serve_loop(store, &udp, &tcp, &Wake::Signals(signals), limits)
 }
 
+fn otp_serve_start(store: &SharedStore) {
+    let verifiers = crate::plugins::otp_verifiers();
+    let empty = verifiers.is_empty();
+    if !empty {
+        if crate::plugins::thread_otp_present() {
+            tracing::info!(
+                target: "kdc.otp",
+                "captured {} thread-local OTP verifier(s) for this serving instance",
+                verifiers.len()
+            );
+        }
+        let rt = Arc::new(crate::plugins::OtpRuntime::new(verifiers));
+        store
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .install_otp_runtime(rt);
+    }
+    read_store(store, |s| crate::preauth::serve_start_diagnostics(s, empty));
+}
+
 fn serve_loop(
     store: SharedStore,
     udp: &[UdpSocket],
@@ -715,13 +735,15 @@ fn serve_loop(
     limits: ListenLimits,
 ) -> io::Result<()> {
     let _slots = ThreadSlots::take();
+    otp_serve_start(&store);
+    let teardown = Arc::clone(&store);
     let mut app = KdcDispatch::new(store, limits.max_dgram_reply_size);
     let sockets = Sockets {
         udp,
         tcp,
         ..Sockets::default()
     };
-    crate::net_server::run(
+    let result = crate::net_server::run(
         &mut app,
         &sockets,
         limits.max_tcp_workers,
@@ -729,7 +751,14 @@ fn serve_loop(
         wake,
         &mut Klog,
     )
-    .map(drop)
+    .map(drop);
+    drop(
+        teardown
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take_otp_runtime(),
+    );
+    result
 }
 
 #[cfg(test)]

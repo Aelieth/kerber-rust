@@ -995,7 +995,7 @@ mod tests {
         fn name(&self) -> &'static str {
             "none"
         }
-        fn verify(&self, _req: &OtpVerifyRequest<'_>) -> OtpVerdict {
+        fn verify(&self, _req: &OtpVerifyRequest) -> OtpVerdict {
             OtpVerdict::Reject
         }
     }

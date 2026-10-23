@@ -88,6 +88,7 @@ pub struct PrincipalStore {
     pending: Arc<Mutex<Vec<LogNote>>>,
     saves_held: bool,
     post: Option<Vec<Post>>,
+    otp_runtime: Option<Arc<crate::plugins::OtpRuntime>>,
 }
 
 #[derive(Debug, Default)]
@@ -201,7 +202,20 @@ impl PrincipalStore {
             pending: Arc::new(Mutex::new(Vec::new())),
             saves_held: false,
             post: None,
+            otp_runtime: None,
         })
+    }
+
+    pub(crate) fn otp_runtime(&self) -> Option<&crate::plugins::OtpRuntime> {
+        self.otp_runtime.as_deref()
+    }
+
+    pub(crate) fn install_otp_runtime(&mut self, rt: Arc<crate::plugins::OtpRuntime>) {
+        self.otp_runtime = Some(rt);
+    }
+
+    pub(crate) fn take_otp_runtime(&mut self) -> Option<Arc<crate::plugins::OtpRuntime>> {
+        self.otp_runtime.take()
     }
 
     // MIT: `ctx_lock` (plugins/kdb/db2/kdb_db2.c:439-455)
@@ -327,6 +341,7 @@ impl PrincipalStore {
         loaded.log = self.log.take();
         loaded.saves_held = self.saves_held;
         loaded.post = self.post.take();
+        loaded.otp_runtime = self.otp_runtime.take();
         *self = loaded;
         Ok(())
     }

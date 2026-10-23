@@ -1,11 +1,14 @@
 //! OTP preauth for a client's tokens.
 
+use std::time::{Duration, Instant};
+
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{KeyUsage, ProtocolKey, decrypt_enc_data};
 use krb5_log::klog;
 use krb5_types::k5json::{self, Value};
 use krb5_types::otp::{OtpTokenInfo, PaOtpChallenge, PaOtpEncRequest, PaOtpRequest};
 use krb5_types::{KerberosFlags, PaData, PaEncTsEnc, PrincipalName, err, ku, pa};
+use zeroize::Zeroizing;
 
 use super::find_pa;
 use crate::ad::authind_add;
@@ -13,8 +16,9 @@ use crate::asn1_text::decode_failure_text;
 use crate::error::Error;
 use crate::kdb::PrincipalRead;
 use crate::plugins::{
-    OtpVerdict, OtpVerifyRequest, PreauthAction, PreauthHint, PreauthRock, find_otp_verifier,
-    otp_verifier_names,
+    OtpOutcome, OtpTokenFields, OtpVerdict, OtpVerifyRequest, PreauthAction, PreauthHint,
+    PreauthRock, bounded_verify, find_otp_verifier, kdc_otp_event, otp_log_refusal,
+    otp_verifier_names, request_peer, sanitize_otp_error,
 };
 use crate::store::{Principal, unix_now_u32};
 
@@ -72,6 +76,33 @@ pub(crate) fn otp_attr(client: &Principal) -> Option<&str> {
         .iter()
         .find(|(k, _)| k == "otp")
         .map(|(_, v)| v.as_str())
+}
+
+pub(crate) fn serve_start_diagnostics(store: &dyn PrincipalRead, registry_empty: bool) {
+    if !crate::plugins::startup_module_loaded(&store.policy().kdcpreauth, "otp") {
+        return;
+    }
+    let principals = store.list_principals().unwrap_or_default();
+    let mut otp_users = 0usize;
+    for p in &principals {
+        if otp_attr(p).is_none() {
+            continue;
+        }
+        otp_users += 1;
+        if p.attributes & crate::store::KDB_REQUIRES_PRE_AUTH == 0 {
+            tracing::warn!(
+                target: "kdc.otp",
+                "principal {} has an otp attribute but not +requires_preauth; OTP is never demanded",
+                p.name.unparse_with_realm(store.realm())
+            );
+        }
+    }
+    if registry_empty && otp_users > 0 {
+        crate::plugins::otp_log_refusal(&format!(
+            "the otp preauth module is loaded and {otp_users} principal(s) have an otp attribute, \
+             but no OTP verifier is registered; those logins will be refused"
+        ));
+    }
 }
 
 // MIT: `nonce_generate` (plugins/preauth/otp/main.c:137-153)
@@ -321,12 +352,24 @@ fn otp_verify(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, OtpFail> 
         return Err(fail(24, E_EINVAL));
     };
     let otp_value: &[u8] = req.otp_value.as_ref().map_or(&[][..], AsRef::as_ref);
+    let runtime = rock.store.otp_runtime();
+    let pool = runtime.map(crate::plugins::OtpRuntime::pool);
+    let principal_label = rock.client.name.unparse_with_realm(realm);
+    let peer = request_peer();
     for tok in &tokens {
         // A bad length fails before a verifier runs.
         if !attr_sizes_ok(&tok.username, otp_value) {
             return Err(fail(24, E_MSG_SIZE));
         }
-        let Some(verifier) = find_otp_verifier(&tok.ty.name) else {
+        let verifier = match runtime {
+            Some(rt) => rt.find(&tok.ty.name),
+            None => find_otp_verifier(&tok.ty.name),
+        };
+        let Some(verifier) = verifier else {
+            otp_log_refusal(&format!(
+                "no OTP verifier registered for token type '{}'",
+                tok.ty.name
+            ));
             return Err(fail(
                 24,
                 &format!(
@@ -335,15 +378,36 @@ fn otp_verify(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, OtpFail> 
                 ),
             ));
         };
-        let request = OtpVerifyRequest {
-            principal: rock.client,
-            realm,
-            token_type: &tok.ty.name,
-            username: &tok.username,
-            otp_value,
+        let vname = verifier.name();
+        // MIT: `request_send` (plugins/preauth/otp/otp_state.c:661)
+        let timeout_ms = match u64::try_from(tok.ty.timeout_ms) {
+            Ok(ms) if ms > 0 => ms,
+            _ => 5000,
         };
-        match verifier.verify(&request) {
-            OtpVerdict::Accept => {
+        let timeout = Duration::from_millis(timeout_ms);
+        let now = Instant::now();
+        let request = OtpVerifyRequest {
+            principal: rock.client.clone(),
+            realm: realm.to_owned(),
+            token_type: tok.ty.name.clone(),
+            username: tok.username.clone(),
+            otp_value: Zeroizing::new(otp_value.to_vec()),
+            peer: peer.clone(),
+            request_time: now,
+            deadline: now + timeout,
+            token: OtpTokenFields {
+                ty_name: tok.ty.name.clone(),
+                indicators: tok
+                    .indicators
+                    .clone()
+                    .unwrap_or_else(|| tok.ty.indicators.clone()),
+            },
+        };
+        let outcome = bounded_verify(pool, verifier, request, timeout);
+        let duration_us = u64::try_from(now.elapsed().as_micros()).unwrap_or(u64::MAX);
+        match outcome {
+            OtpOutcome::Verdict(OtpVerdict::Accept) => {
+                kdc_otp_event(&principal_label, &tok.ty.name, "accept", duration_us);
                 // MIT: `callback` (plugins/preauth/otp/otp_state.c:632-657)
                 let mut indicators = Vec::new();
                 // Empty indicators replace the type's, even an empty list.
@@ -355,8 +419,25 @@ fn otp_verify(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, OtpFail> 
                     indicators,
                 }));
             }
-            OtpVerdict::Reject => {}
-            OtpVerdict::Error(text) => return Err(fail(24, &text)),
+            OtpOutcome::Verdict(OtpVerdict::Reject) => {
+                kdc_otp_event(&principal_label, &tok.ty.name, "reject", duration_us);
+            }
+            OtpOutcome::Verdict(OtpVerdict::Error(text)) => {
+                kdc_otp_event(&principal_label, &tok.ty.name, "error", duration_us);
+                let text = sanitize_otp_error(&text);
+                otp_log_refusal(&format!(
+                    "OTP verifier '{vname}' errored for {principal_label}: {text}"
+                ));
+                return Err(fail(24, &text));
+            }
+            OtpOutcome::TimedOut => {
+                kdc_otp_event(&principal_label, &tok.ty.name, "timeout", duration_us);
+                otp_log_refusal(&format!(
+                    "OTP verifier '{vname}' did not answer in {} ms (deadline {timeout_ms}) for {principal_label}",
+                    duration_us / 1000
+                ));
+                return Err(fail(24, "OTP verifier timed out"));
+            }
         }
     }
     Err(fail(KRB5_PREAUTH_FAILED, E_GENERIC))
@@ -450,7 +531,7 @@ mod tests {
         fn name(&self) -> &'static str {
             self.0
         }
-        fn verify(&self, _: &OtpVerifyRequest<'_>) -> OtpVerdict {
+        fn verify(&self, _: &OtpVerifyRequest) -> OtpVerdict {
             self.1.clone()
         }
     }

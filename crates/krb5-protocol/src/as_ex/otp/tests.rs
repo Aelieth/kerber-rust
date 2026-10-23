@@ -558,9 +558,9 @@ fn a_reply_is_cut_to_1023_bytes_and_at_a_nul() {
     let long: &'static str = Box::leak("7".repeat(2000).into_boxed_str());
     let mut ui = Script::of(&[long, "ab\0cd"]);
     let (req, _) = run(challenge(vec![ti()]), &mut ui).unwrap();
-    assert_eq!(req.otp_value.unwrap().len(), 1023);
+    assert_eq!(req.otp_value.as_ref().unwrap().len(), 1023);
     let (req, _) = run(challenge(vec![ti()]), &mut ui).unwrap();
-    assert_eq!(req.otp_value.unwrap().as_ref(), b"ab");
+    assert_eq!(req.otp_value.as_ref().unwrap().as_ref(), b"ab");
 }
 
 #[test]

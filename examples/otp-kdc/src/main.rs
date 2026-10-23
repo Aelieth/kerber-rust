@@ -135,7 +135,10 @@ fn main() {
             "KERBER_EXAMPLE_TOTP_SEEDS is unset: every totp OTP is refused",
         );
     }
-    krb5_kdc::register_otp_verifier(Arc::new(rfc6238::TotpVerifier::from_env()));
+    if let Err(e) = krb5_kdc::register_otp_verifier(Arc::new(rfc6238::TotpVerifier::from_env())) {
+        eprintln!("{progname}: cannot register the totp verifier: {e}");
+        exit(1);
+    }
 
     let store = krb5_kdc::shared_store(store);
     let shutdown = Arc::new(AtomicBool::new(false));

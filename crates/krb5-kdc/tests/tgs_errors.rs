@@ -132,7 +132,9 @@ fn unknown_client_e_text_is_client_not_found() {
 #[test]
 fn non_ascii_realm_is_krb_error_not_panic() {
     let store = PrincipalStore::new("CAFÉ.TEST");
-    let r = std::panic::catch_unwind(|| krb5_kdc::handle_request(&store, &[]));
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        krb5_kdc::handle_request(&store, &[])
+    }));
     assert!(r.is_ok(), "untrusted realm must not panic ascii()");
     let reply = r.unwrap().expect("drop");
     assert_eq!(reply, [] as [u8; 0]);

@@ -39,6 +39,7 @@ any other `###` heading.
 - **pkinit.** MODP Diffie-Hellman exponentiates in constant time, with crypto-bigint; it used num-bigint's variable-time `modpow`.
 - **admin.** kpropd and kprop bound their input: a handler cap, read, write, transfer and connect timeouts, and caps on the dump buffer and the dump's record counts.
 - **admin/kdc.** A CSPRNG failure fails a kadm5 request closed, a logged policy name or glob escapes control characters, and a CMS ContentInfo type is checked.
+- **kdc.** A bounded worker pool runs each OTP verifier under the `[otp] timeout`; a hang, panic, late answer or full queue is 24, counted, so no verifier can stall the KDC.
 
 ### Added
 
@@ -50,6 +51,7 @@ any other `###` heading.
 - **kdc.** PKINIT verifies RSA client certificates, chains and signatures (PKCS#1 v1.5, SHA-256/384/512).
 - **pkinit.** The KDC and kinit sign PKINIT with an RSA key as MIT does (PKCS#1 v1.5, SHA-256): up to 16384 bits and five primes, constant-time and blinded.
 - **client.** kinit takes `DIR:` and `ENV:` PKINIT identities and `FILE:cert,key`, tries `pkinit_identities` in order, and picks a certificate by `pkinit_cert_match` as MIT.
+- **kdc.** The `OtpVerifier` request is frozen: owned, `#[non_exhaustive]`, with peer and deadline and a zeroizing value; `register_otp_verifier` errors on a duplicate name.
 
 ### Changed
 
@@ -109,6 +111,7 @@ any other `###` heading.
 - **config.** Unit tests outside the keep list are gone. Proofs a parity row still names stay.
 - **client.** Unit tests outside the keep list are gone. Rows that still name a proof name the one that stays.
 - **gss.** Unit tests outside the keep list are gone. Proofs a parity row still names stay.
+- **fuzz.** A new `otp_req_decode` target decodes arbitrary bytes as the PA-OTP-REQUEST wire types the KDC reads from a client's packet.
 
 ### Removed
 
