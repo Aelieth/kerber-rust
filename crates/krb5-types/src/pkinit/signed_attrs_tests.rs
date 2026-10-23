@@ -58,3 +58,50 @@ fn ecdsa_der_takes_only_its_own_der() {
     );
     assert_eq!(ecdsa_der(&[]), None);
 }
+
+#[test]
+fn cms_template_walks_the_signeddata_structure() {
+    use super::cms::cms_decode_reason;
+    fn tlv(tag: u8, body: &[u8]) -> Vec<u8> {
+        let mut out = vec![tag];
+        if let Ok(len) = u8::try_from(body.len()) {
+            out.push(len);
+        } else {
+            let bytes = body.len().to_be_bytes();
+            let start = bytes.iter().position(|b| *b != 0).unwrap();
+            out.push(0x80 | u8::try_from(bytes.len() - start).unwrap());
+            out.extend_from_slice(&bytes[start..]);
+        }
+        out.extend_from_slice(body);
+        out
+    }
+    let oid = |v: &[u8]| tlv(0x06, v);
+    let signed_data_oid: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x07, 0x02];
+    let authdata: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x02, 0x03, 0x01];
+    let sha256: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01];
+    // A minimal SignedData: version, one DigestAlgorithmIdentifier, an encap, no certs, no signers.
+    let digest_algs = |inner_tag: u8| tlv(0x31, &tlv(0x30, &tlv(inner_tag, sha256)));
+    let build = |algs: &[u8], extra: &[u8]| {
+        let mut sd = tlv(0x02, &[0x03]);
+        sd.extend(algs.iter().copied());
+        sd.extend(tlv(0x30, &oid(authdata)));
+        sd.extend(tlv(0x31, &[]));
+        sd.extend_from_slice(extra);
+        tlv(
+            0x30,
+            &[oid(signed_data_oid), tlv(0xa0, &tlv(0x30, &sd))].concat(),
+        )
+    };
+    // Well formed: it decodes.
+    assert_eq!(cms_decode_reason(&build(&digest_algs(0x06), &[])), None);
+    // A trailing element in the SignedData SEQUENCE (part 1).
+    assert_eq!(
+        cms_decode_reason(&build(&digest_algs(0x06), &tlv(0x05, &[]))),
+        Some("sequence length mismatch")
+    );
+    // A wrong tag inside a DigestAlgorithmIdentifier (part 2).
+    assert_eq!(
+        cms_decode_reason(&build(&digest_algs(0x05), &[])),
+        Some("wrong tag")
+    );
+}

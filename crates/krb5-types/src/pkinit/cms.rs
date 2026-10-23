@@ -1283,7 +1283,12 @@ fn der_each(
     Ok(())
 }
 
-fn cms_decode_reason(der: &[u8]) -> Option<&'static str> {
+/// OpenSSL's templates consume a container exactly; a trailing element is a length mismatch.
+fn der_end(cur: &[u8], reason: &'static str) -> Result<(), &'static str> {
+    if cur.is_empty() { Ok(()) } else { Err(reason) }
+}
+
+pub(super) fn cms_decode_reason(der: &[u8]) -> Option<&'static str> {
     if der.is_empty() {
         return Some("too small");
     }
@@ -1300,15 +1305,21 @@ fn cms_template(der: &[u8]) -> Result<(), &'static str> {
             der_field(&mut content, 0x04)?;
         } else if oid == OID_SIGNED_DATA {
             let mut sd = der_field(&mut content, 0x30)?;
+            der_end(content, "explicit length mismatch")?;
             der_field(&mut sd, 0x02)?;
-            der_each(der_field(&mut sd, 0x31)?, |t, _| {
-                (t == 0x30).then_some(()).ok_or("wrong tag")
+            der_each(der_field(&mut sd, 0x31)?, |t, body| {
+                (t == 0x30).then_some(()).ok_or("wrong tag")?;
+                let mut alg = body;
+                der_field(&mut alg, 0x06)?;
+                Ok(())
             })?;
             let mut encap = der_field(&mut sd, 0x30)?;
             der_field(&mut encap, 0x06)?;
             if let Some(mut expl) = der_optional(&mut encap, 0xa0)? {
                 der_field(&mut expl, 0x04)?;
+                der_end(expl, "explicit length mismatch")?;
             }
+            der_end(encap, "sequence length mismatch")?;
             if let Some(certs) = der_optional(&mut sd, 0xa0)? {
                 der_each(certs, |t, _| {
                     matches!(t, 0x30 | 0xa0..=0xa3)
@@ -1323,15 +1334,20 @@ fn cms_template(der: &[u8]) -> Result<(), &'static str> {
                 }
                 der_field(&mut info, 0x02)?;
                 if der_optional(&mut info, 0x80)?.is_none() {
-                    der_field(&mut info, 0x30)?;
+                    let mut sid = der_field(&mut info, 0x30)?;
+                    der_field(&mut sid, 0x30)?;
+                    der_field(&mut sid, 0x02)?;
+                    der_end(sid, "sequence length mismatch")?;
                 }
-                der_field(&mut info, 0x30)?;
+                der_field(&mut der_field(&mut info, 0x30)?, 0x06)?;
                 der_optional(&mut info, 0xa0)?;
-                der_field(&mut info, 0x30)?;
+                der_field(&mut der_field(&mut info, 0x30)?, 0x06)?;
                 der_field(&mut info, 0x04)?;
                 der_optional(&mut info, 0xa1)?;
-                Ok(())
+                // unsignedAttrs [1] is the last, optional field; OpenSSL names a trailing element by tag.
+                der_end(info, "wrong tag")
             })?;
+            der_end(sd, "sequence length mismatch")?;
         } else {
             der_next(content)?;
         }

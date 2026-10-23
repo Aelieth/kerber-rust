@@ -18,6 +18,7 @@ any other `###` heading.
 
 ### Security
 
+- **kdc.** A PKINIT signedAuthPack whose SignedData or SignerInfo has an extra or mistyped element is refused at decode, as MIT's CMS template; it was taken before.
 - **pkinit.** P-384 compiles in only with `--cfg p384_backend="fiat"`, p384's constant-time field, which our cargo config sets; a build without it refuses the curve.
 - **kdc.** A bad PKINIT signedAuthPack gives OpenSSL's own CMS reason, as MIT logs it, not one text for all; a signer with no signed attributes is taken, as MIT's `CMS_verify`.
 - **crypto.** AES, DES, Camellia, RC4, HMAC and the hashes wipe key and hash state on drop, via each crate's `zeroize` feature, as MIT's `aes_key_cleanup`.
