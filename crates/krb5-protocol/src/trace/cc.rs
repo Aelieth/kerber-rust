@@ -1,4 +1,4 @@
-//! The traces of MIT's credential cache functions that write several points, for the callers whose caches are files written whole rather than MIT's cache handles.
+//! Traces for a cache written as a whole file, not through a cache handle.
 
 use krb5_types::PrincipalName;
 
@@ -9,7 +9,8 @@ use super::{
 use crate::ccache::{CcacheCred, FileCcache};
 
 // MIT: `krb5int_random_string` (lib/krb5/krb/random_str.c:37-68)
-/// `len` characters of `0-9a-zA-Z`, each a random byte modulo 62.
+/// Each character is a random byte modulo 62.
+/// A failed getrandom is all zeros.
 #[must_use]
 pub fn random_string(len: usize) -> String {
     const CHARS: &[u8; 62] = b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -24,7 +25,7 @@ pub fn random_string(len: usize) -> String {
 }
 
 // MIT: `write_out_ccache` (lib/krb5/krb/get_in_tkt.c:1616-1663)
-/// the new credentials and their configuration go into a new MEMORY cache, which then replaces the output cache's contents.
+/// A new MEMORY cache is filled, then moved onto the output cache.
 pub fn write_out_ccache(dest: &str, cc: &FileCcache) {
     if !enabled() {
         return;
@@ -38,9 +39,9 @@ pub fn write_out_ccache(dest: &str, cc: &FileCcache) {
 }
 
 // MIT: `krb5_cc_store_cred` (lib/krb5/ccache/ccfns.c:80-85)
-/// each credential stored in `cache` is traced.
+/// Each stored credential is traced.
 // MIT: `krb5_cc_set_config` (lib/krb5/ccache/ccfns.c:236-261)
-/// a configuration entry is traced as configuration, then as the credential it is stored as.
+/// Configuration is traced, then traced again as the stored credential.
 pub fn store_creds(cache: &str, creds: &[CcacheCred]) {
     if !enabled() {
         return;
@@ -71,7 +72,8 @@ fn config_key(c: &CcacheCred) -> Option<(String, Option<String>)> {
 }
 
 // MIT: `krb5_cc_get_config` (lib/krb5/ccache/ccfns.c:264-292)
-/// the configuration entry is looked up as a credential of the cache's client, traced with its result, and traced as configuration when it is found. `found` is its value; `not_found` the cache's message for a missing one.
+/// A hit is traced as a credential, then as configuration.
+/// A miss is traced with the cache's own message.
 pub fn get_config(
     cache: &str,
     client: Princ<'_>,
