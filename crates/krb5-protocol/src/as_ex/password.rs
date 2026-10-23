@@ -1,5 +1,6 @@
-//! The AS key callback of one AS exchange: a preauth module asks for the key when it needs it.
-//! MIT gives every clpreauth module `get_as_key`, which runs `krb5_get_as_key_password` when no key is held yet. That prompts when no password has been read, and keeps the password it read. A prompt that fails keeps nothing, so the next module that wants the key prompts again. With no password, no responder answer and no prompter at all, the key cannot be got: `EIO`.
+//! A preauth module asks for the AS key when it needs it.
+//! A password read is kept; a failed prompt keeps nothing, so the next module asks again.
+//! With no password, no responder answer and no prompter, the key is EIO.
 
 use std::io::ErrorKind;
 
@@ -12,37 +13,28 @@ use crate::keytab::KeytabFailure;
 use crate::trace::{self, ERROR_TABLE_BASE_KRB5};
 
 // MIT: `KRB5_LIBOS_CANTREADPWD` (krb5_err.et)
-/// "Cannot read password".
 pub(super) const CANTREADPWD: i64 = ERROR_TABLE_BASE_KRB5 + 130;
 // MIT: `KRB5_LIBOS_PWDINTR` (krb5_err.et)
-/// "Password read interrupted".
 pub(super) const PWDINTR: i64 = ERROR_TABLE_BASE_KRB5 + 132;
 // MIT: `KRB5_PREAUTH_FAILED` (krb5_err.et)
-/// "Generic preauthentication failure".
 pub(super) const KRB5_PREAUTH_FAILED: i64 = ERROR_TABLE_BASE_KRB5 + 210;
 // MIT: `KRB5DES_BAD_KEYPAR` (krb5_err.et:251-251)
-/// "DES key has bad parity".
 pub(super) const DES_BAD_KEYPAR: i64 = ERROR_TABLE_BASE_KRB5 + 186;
 // MIT: `KRB5DES_WEAK_KEY` (krb5_err.et:252-252)
-/// "DES key is a weak key".
 pub(super) const DES_WEAK_KEY: i64 = ERROR_TABLE_BASE_KRB5 + 187;
 /// `EIO` (errno 5), whose message is "Input/output error".
 pub(super) const EIO: i64 = 5;
 
 #[derive(Debug)]
 pub(super) struct ModuleFail {
-    /// The error for the caller.
     pub(super) error: Error,
-    /// MIT's `krb5_error_code`, for the trace line `Preauth module <name> (<type>) (real) returned: <code>/<text>`.
+    /// MIT's code, for the preauth trace line.
     pub(super) code: i64,
-    /// The message MIT has set for that code, for the same line.
     pub(super) text: String,
-    /// `KRB5_LIBOS_PWDINTR`.
     pub(super) interrupted: bool,
 }
 
 impl ModuleFail {
-    /// A failure with MIT's `code` and its message.
     pub(super) fn new(code: i64, text: &str) -> Self {
         Self {
             error: Error::Message(text.into()),
@@ -52,7 +44,7 @@ impl ModuleFail {
         }
     }
 
-    /// A des3 key MIT refuses, met where the module encrypts with it: the key's code and message, and the walk goes on to the next mechanism.
+    /// A des3 key MIT refuses. The walk goes on to the next mechanism.
     pub(super) fn des_key(e: Error) -> Self {
         let code = match e {
             Error::DesWeakKey => DES_WEAK_KEY,
@@ -66,9 +58,8 @@ impl ModuleFail {
         }
     }
 
-    /// A prompt that did not read: `KRB5_LIBOS_PWDINTR` for an interrupt, else `KRB5_LIBOS_CANTREADPWD` with the reader's message.
     // MIT: `krb5_prompter_posix` (lib/krb5/os/prompter.c:93-100)
-    /// a reply that does not read is one of those two codes.
+    /// An interrupt is PWDINTR; any other read failure is CANTREADPWD.
     pub(super) fn from_read(e: Error) -> Self {
         match e {
             Error::File(io) if io.kind() == ErrorKind::Interrupted => Self {
@@ -87,9 +78,8 @@ impl ModuleFail {
         }
     }
 
-    /// A key wanted from a keytab that could not be read: the lookup's error, in MIT's code and message.
     // MIT: `get_as_key_keytab` (lib/krb5/krb/gic_keytab.c:68-71)
-    /// `krb5_kt_get_entry`'s error is the callback's, and a module that wanted the key fails with it.
+    /// The keytab lookup's error is the module's failure.
     pub(super) fn keytab(f: &KeytabFailure) -> Self {
         Self {
             error: Error::Keytab {
@@ -102,13 +92,12 @@ impl ModuleFail {
         }
     }
 
-    /// A key wanted with no password to get it from: the caller gave none, the responder had no answer and there is no prompter to ask.
-    /// `gp->password` is still NULL and the prompter is NULL, so `EIO`.
+    /// No password, no responder answer and no prompter is EIO.
     pub(super) fn no_password() -> Self {
         Self::new(EIO, "Input/output error")
     }
 
-    /// The failure as the exchange's own error, for a key that no module asked for (the reply's).
+    /// A CANTREADPWD message becomes a file error.
     pub(super) fn unwrapped(self) -> Error {
         match self.error {
             Error::Message(_) if self.code == CANTREADPWD => {
@@ -118,7 +107,7 @@ impl ModuleFail {
         }
     }
 
-    /// Encrypted timestamp, which the realm disables: the module traces that it ignores the padata and fails with `KRB5_PREAUTH_FAILED` and that message.
+    /// Encrypted timestamp disabled: traced, then PREAUTH_FAILED.
     pub(super) fn encts_disabled() -> Self {
         trace::preauth_enc_ts_disabled();
         Self {
@@ -129,7 +118,6 @@ impl ModuleFail {
         }
     }
 
-    /// The trace line of this failure for the module `name` that answered `patype`.
     pub(super) fn trace(&self, name: &str, patype: i32) {
         trace::preauth_process(name, patype, true, self.code, Some(&self.text));
     }
@@ -143,25 +131,20 @@ impl AsPrompt for NoPrompt {
     }
 }
 
-/// The AS password of one exchange, read when a module first needs the key and kept once it is read.
-/// a prompt that fails returns its error and leaves `gp->password` unset; one that reads keeps it for every later module.
+/// Read when a module first needs the key, and kept. A failed prompt keeps nothing.
 pub(super) struct PasswordCell<'p, 'g> {
     prompt: Option<&'p mut dyn AsPrompt>,
-    /// The password the caller supplied, used when there is no prompter. Empty is no password: the type cannot tell it from MIT's NULL.
+    /// The caller's password. Empty is none, as MIT's NULL.
     given: &'g [u8],
-    /// Whether a module that wants the key asks the responder for the password.
     asks: bool,
-    /// This round's responder answer to the password question.
     answer: Option<Zeroizing<Vec<u8>>>,
-    /// The password a prompt read, or the responder's answer once a module used it.
     got: Option<Zeroizing<Vec<u8>>>,
     unreadable: Option<KeytabFailure>,
     none: NoPrompt,
 }
 
 impl<'p, 'g> PasswordCell<'p, 'g> {
-    /// `keytab` is true when the exchange has the client's keys, which need no password.
-    /// the password question is asked unless the caller gave a password with no prompter, or a keytab.
+    /// Asked unless a keytab, or a caller password and no prompter.
     pub(super) fn new(prompt: Option<&'p mut dyn AsPrompt>, given: &'g [u8], keytab: bool) -> Self {
         let asks = !keytab && (prompt.is_some() || given.is_empty());
         Self {
@@ -175,34 +158,28 @@ impl<'p, 'g> PasswordCell<'p, 'g> {
         }
     }
 
-    /// The exchange's keytab could not be read: every key a module or the reply asks for fails with `failure`.
     // MIT: `krb5_init_creds_set_keytab` (lib/krb5/krb/gic_keytab.c:209-213)
-    /// the failure is traced and is no error until a key is asked of the keytab.
+    /// Stored, and not an error until a key is asked.
     pub(super) fn with_unreadable_keytab(mut self, failure: Option<&KeytabFailure>) -> Self {
         self.unreadable = failure.cloned();
         self
     }
 
-    /// The keytab failure every key lookup returns, if the exchange's keytab could not be read.
     pub(super) fn unreadable_keytab(&self) -> Option<&KeytabFailure> {
         self.unreadable.as_ref()
     }
 
-    /// Whether a module that wants the key puts the password question to the responder now: no module has the password yet.
-    /// `need_as_key` returns without a question once `gp->password` is set.
+    /// No question once a password is held.
     pub(super) fn asks_question(&self) -> bool {
         self.asks && self.got.is_none()
     }
 
-    /// The responder's answer to the password question of the round that begins. A module that then wants the key and has no password takes it.
-    /// a responder's answer to the password question is the password, with no prompt.
+    /// A responder answer is the password, with no prompt.
     pub(super) fn offer(&mut self, answer: Option<&str>) {
         self.answer = answer.map(|a| Zeroizing::new(a.as_bytes().to_vec()));
     }
 
-    /// The password for a module that wants the AS key: the one already held, the responder's answer, else a read through the prompter, else the caller's. A read that fails is the module's failure and holds nothing.
-    /// `gp->password` is set only by the answer or by a prompt that returned.
-    /// there is no prompter and the caller gave no password: [`ModuleFail::no_password`].
+    /// A failed read holds nothing, so the next module asks again.
     pub(super) fn get(&mut self) -> Result<Zeroizing<Vec<u8>>, ModuleFail> {
         if let Some(failure) = &self.unreadable {
             return Err(ModuleFail::keytab(failure));
@@ -225,12 +202,10 @@ impl<'p, 'g> PasswordCell<'p, 'g> {
         Ok(read)
     }
 
-    /// The responder of the exchange's prompter, if it has one.
     pub(super) fn responder(&mut self) -> Option<&mut dyn Responder> {
         self.prompt.as_deref_mut().and_then(|p| p.responder())
     }
 
-    /// The prompter a module's own prompts go through.
     pub(super) fn ui(&mut self) -> &mut dyn AsPrompt {
         match self.prompt.as_deref_mut() {
             Some(p) => p,
