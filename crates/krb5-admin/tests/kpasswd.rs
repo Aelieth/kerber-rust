@@ -43,9 +43,9 @@ fn udp_cfg(acl: krb5_kdc::Acl) -> krb5_admin::KadmindConfig {
     krb5_admin::KadmindConfig {
         profile: Arc::new(krb5_config::ProfileSet {
             realm: TEST_REALM.into(),
-            krb5: krb5_config::Krb5Conf::default(),
+            krb5: krb5_config::Krb5Conf::new(),
             kdc: None,
-            kdc_context: krb5_config::Krb5Conf::default(),
+            kdc_context: krb5_config::Krb5Conf::new(),
         }),
         services: krb5_admin::Services::DAEMON,
         listen: krb5_config::KadmindListen::for_realm(None, TEST_REALM, None),
@@ -1505,12 +1505,14 @@ fn kpasswd_udp_listener_then_issue_as() {
     use std::thread;
     use std::time::Duration;
 
-    use krb5_asn1::encode;
+    use krb5_asn1::{decode, encode};
     use krb5_kdc::shared_dump as shared_store;
     use krb5_kdc::testrealm::{TEST_REALM, TEST_USER};
 
-    use krb5_protocol::{build_ap_req, build_krb_priv_with_seq, pa_enc_timestamp};
-    use krb5_types::ChangePasswdData;
+    use krb5_protocol::{
+        build_ap_req, build_krb_priv_with_seq, pa_enc_timestamp, unwrap_krb_priv_ex,
+    };
+    use krb5_types::{ChangePasswdData, KrbError};
 
     krb5_config::isolate_test_krb5();
 
@@ -1566,7 +1568,30 @@ fn kpasswd_udp_listener_then_issue_as() {
     client.send_to(&req, addr).unwrap();
     let mut buf = [0u8; 4096];
     let n = client.recv(&mut buf).expect("kpasswd reply");
-    assert!(n > 6, "RFC 3244 reply");
+    let reply = &buf[..n];
+    assert!(reply.len() > 6, "RFC 3244 reply");
+    let ap_len = u16::from_be_bytes([reply[4], reply[5]]);
+    if ap_len == 0 {
+        let e: KrbError = decode(&reply[6..]).expect("framed KRB-ERROR");
+        let data = e
+            .e_data
+            .as_ref()
+            .map(|d| String::from_utf8_lossy(d.as_ref()).into_owned())
+            .unwrap_or_default();
+        panic!("kpasswd KRB-ERROR {}: {data}", e.error_code);
+    }
+    let (_, priv_rep) = parse_kpasswd_rep(reply).expect("kpasswd reply");
+    let user_data = unwrap_krb_priv_ex(
+        &as_out.session_key,
+        &priv_rep,
+        &ReplayCache::new(),
+        false,
+        false,
+    )
+    .expect("KRB-PRIV");
+    let code = u16::from_be_bytes([user_data[0], user_data[1]]);
+    let text = String::from_utf8_lossy(&user_data[2..]);
+    assert_eq!(code, 0, "kpasswd result {code}: {text}");
     stop.trigger();
     let after = shared.read().unwrap();
     let salt = user.default_salt(TEST_REALM);
