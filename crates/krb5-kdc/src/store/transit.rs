@@ -133,7 +133,7 @@ impl PrincipalStore {
                 pw_expire: 0,
             },
         );
-        self.put_principal(p);
+        self.put_principal(p)?;
         self.ensure_incoming_trust(foreign_realm);
         self.save_if_configured()
     }
@@ -203,7 +203,7 @@ impl PrincipalStore {
                 pw_expire: 0,
             },
         );
-        self.put_principal(p);
+        self.put_principal(p)?;
         self.save_if_configured()
     }
 
@@ -224,6 +224,6 @@ impl PrincipalStore {
         foreign_realm.clone_into(&mut incoming.realm);
         incoming.salt = incoming.name.default_salt(foreign_realm);
         incoming.rid = 0;
-        self.put_principal(incoming);
+        let _ = self.put_principal(incoming);
     }
 }

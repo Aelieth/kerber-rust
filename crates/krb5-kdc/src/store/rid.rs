@@ -49,8 +49,16 @@ impl PrincipalStore {
     }
 
     pub(crate) fn set_principal_rid(&mut self, id: &str, rid: u32) {
-        if let Some(p) = self.map.get_mut(id) {
-            p.rid = rid;
+        self.map.set_rid(id, rid);
+    }
+
+    pub(crate) fn rid_owner(&self, rid: u32) -> Option<&str> {
+        self.map.rid_owner(rid)
+    }
+
+    pub(crate) fn raise_next_rid(&mut self, next: u32) {
+        if next >= RID_FIRST_USER && next > self.next_rid {
+            self.next_rid = next;
         }
     }
 

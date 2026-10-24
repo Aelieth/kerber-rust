@@ -124,10 +124,9 @@ pub trait PrincipalRead: Send + Sync {
     }
     #[cfg(feature = "test-hooks")]
     fn record_as_outcome(&self, name: &PrincipalName, ok: bool) {
-        let Ok(Some(mut p)) = self.fetch_name(name) else {
+        let Ok(Some(p)) = self.fetch_name(name) else {
             return;
         };
-        self.merge_lockout(&mut p);
         let status = if ok {
             0
         } else {
@@ -138,6 +137,25 @@ pub trait PrincipalRead: Send + Sync {
     fn named_policy_for(&self, p: &Principal) -> Option<NamedPolicy> {
         let _ = p;
         None
+    }
+    // MIT: `krb5_ldap_check_allowed_to_delegate` (plugins/kdb/ldap/libkdb_ldap/kdb_ldap.c:286-316)
+    fn allowed_to_delegate(&self, server: &Principal, proxy: &PrincipalName) -> bool {
+        let realm = self.realm();
+        server.s4u_allowed_to.iter().any(|entry| {
+            krb5_types::principal_from_unparsed(entry, realm).is_ok_and(|(name, entry_realm)| {
+                krb5_types::principal_compare(&name, &entry_realm, proxy, realm)
+            })
+        })
+    }
+    fn allowed_from(
+        &self,
+        resource: &Principal,
+        client: &PrincipalName,
+        client_realm: &str,
+    ) -> bool {
+        let _ = self;
+        let from = client.unparse_with_realm(client_realm);
+        resource.s4u_allowed_from.iter().any(|n| n == &from)
     }
     fn pac_identity(&self, name: &PrincipalName, crealm: &str) -> PacIdentity {
         let rid = self
@@ -219,6 +237,17 @@ impl<T: PrincipalRead + ?Sized> PrincipalRead for std::sync::Arc<T> {
     fn otp_runtime(&self) -> Option<&crate::plugins::OtpRuntime> {
         (**self).otp_runtime()
     }
+    fn allowed_to_delegate(&self, server: &Principal, proxy: &PrincipalName) -> bool {
+        (**self).allowed_to_delegate(server, proxy)
+    }
+    fn allowed_from(
+        &self,
+        resource: &Principal,
+        client: &PrincipalName,
+        client_realm: &str,
+    ) -> bool {
+        (**self).allowed_from(resource, client, client_realm)
+    }
 }
 
 pub fn open_store(
@@ -297,13 +326,26 @@ impl PrincipalRead for MemoryStore {
     fn fetch(&self, id: &str) -> Result<Option<Principal>, Error> {
         self.lookups.fetch_add(1, Ordering::SeqCst);
         let id = resolve_alias_id(&self.realm, |k| self.map.get(k), id);
-        Ok(id.and_then(|id| self.map.get(&id).cloned()))
+        Ok(id.and_then(|id| {
+            self.map.get(&id).cloned().map(|mut p| {
+                self.merge_lockout(&mut p);
+                p
+            })
+        }))
     }
     fn list_ids(&self) -> Result<Vec<String>, Error> {
         Ok(self.map.keys().cloned().collect())
     }
     fn list_principals(&self) -> Result<Vec<Principal>, Error> {
-        Ok(self.map.values().cloned().collect())
+        Ok(self
+            .map
+            .values()
+            .cloned()
+            .map(|mut p| {
+                self.merge_lockout(&mut p);
+                p
+            })
+            .collect())
     }
     fn merge_lockout(&self, p: &mut Principal) {
         if let Some(l) = self
@@ -375,16 +417,29 @@ impl PrincipalRead for PrincipalStore {
         self.otp_runtime()
     }
     fn fetch(&self, id: &str) -> Result<Option<Principal>, Error> {
-        Ok(self.get(id).cloned())
+        Ok(self.get(id).cloned().map(|mut p| {
+            self.merge_lockout(&mut p);
+            p
+        }))
     }
     fn fetch_name(&self, name: &PrincipalName) -> Result<Option<Principal>, Error> {
-        Ok(self.get_name(name).cloned())
+        Ok(self.get_name(name).cloned().map(|mut p| {
+            self.merge_lockout(&mut p);
+            p
+        }))
     }
     fn list_ids(&self) -> Result<Vec<String>, Error> {
         Ok(self.ids())
     }
     fn list_principals(&self) -> Result<Vec<Principal>, Error> {
-        Ok(self.debug_principals().cloned().collect())
+        Ok(self
+            .debug_principals()
+            .cloned()
+            .map(|mut p| {
+                self.merge_lockout(&mut p);
+                p
+            })
+            .collect())
     }
     fn merge_lockout(&self, p: &mut Principal) {
         PrincipalStore::merge_lockout(self, p);
@@ -419,7 +474,7 @@ impl PrincipalWrite for PrincipalStore {
     fn put_principal(&mut self, mut p: Principal) -> Result<(), Error> {
         strip_db_args(&mut p.tl_data)?;
         self.change(|s| {
-            PrincipalStore::put_principal(s, p);
+            PrincipalStore::put_principal(s, p)?;
             s.save_configured()
         })?
     }

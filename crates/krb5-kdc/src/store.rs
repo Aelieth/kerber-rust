@@ -321,7 +321,9 @@ impl PrincipalStore {
         })?;
         loaded.policy = std::mem::take(&mut self.policy);
         loaded.pwqual_dict = self.pwqual_dict.take();
-        loaded.domain_sid.clone_from(&self.domain_sid);
+        if loaded.policy.ad_identity {
+            loaded.domain_sid.clone_from(&self.domain_sid);
+        }
         loaded.lockout = Arc::clone(&self.lockout);
         loaded.env = std::mem::take(&mut self.env);
         loaded.log = self.log.take();

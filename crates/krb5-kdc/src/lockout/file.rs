@@ -391,6 +391,18 @@ fn make_beside(db: &Path, records: &[(String, Lockout)]) -> io::Result<()> {
     krb5_protocol::write_secret_file_like(&path, db, &render(records)).map_err(|e| named(&path, &e))
 }
 
+fn db_writable(db: &Path) -> bool {
+    OpenOptions::new().read(true).write(true).open(db).is_ok()
+}
+
+pub(crate) fn ensure_lockout_file(db: &Path) {
+    let path = lockout_path(db);
+    if path.symlink_metadata().is_ok() || !db_writable(db) {
+        return;
+    }
+    let _ = make(db, &[]);
+}
+
 fn open_for_writing(db: &Path) -> io::Result<Option<SideFile>> {
     let path = lockout_path(db);
     match SideFile::open(&path).map_err(|e| named(&path, &e))? {
@@ -657,25 +669,38 @@ impl LockoutState {
                 }
                 Some(Err(e)) => {
                     let msg = format!(
-                        "{}: {e}: lockout attributes are kept in memory",
+                        "{}: {e}: lockout counting is off",
                         lockout_path(db).display()
                     );
                     Inner::tell_once(&mut inner.told_unwritable, &msg);
+                    return;
                 }
-                None if !inner.told_absent => {
-                    let path = lockout_path(db);
-                    let why = match SideFile::open(&path) {
-                        Err(e) => klog::os_error_text(&e),
-                        Ok(Some(_)) => "no lockout file".to_owned(),
-                        Ok(None) => "does not exist".to_owned(),
-                    };
-                    let msg = format!(
-                        "{}: {why}: lockout attributes are kept in memory until it is made",
-                        path.display()
-                    );
-                    Inner::tell_once(&mut inner.told_absent, &msg);
+                None => {
+                    if db_writable(db)
+                        && lockout_path(db).symlink_metadata().is_err()
+                        && make(db, &[]).is_ok()
+                        && let Some(side) = inner.side(db)
+                        && side.writable
+                        && record(side, &id, p, stamp, update).is_ok()
+                    {
+                        inner.overlay.remove(&id);
+                        return;
+                    }
+                    if !inner.told_absent {
+                        let path = lockout_path(db);
+                        let why = match SideFile::open(&path) {
+                            Err(e) => klog::os_error_text(&e),
+                            Ok(Some(_)) => "no lockout file".to_owned(),
+                            Ok(None) => "does not exist".to_owned(),
+                        };
+                        let msg = format!(
+                            "{path}: {why}: lockout counting is off",
+                            path = path.display()
+                        );
+                        Inner::tell_once(&mut inner.told_absent, &msg);
+                    }
+                    return;
                 }
-                None => {}
             }
         }
         let base = inner
@@ -842,7 +867,7 @@ mod tests {
             ..LockoutUpdate::default()
         };
         state.update(Some(&db), Some(&lock), &p, 100, update);
-        assert_eq!(state.overlay_get(&p.id()).unwrap().fail_auth_count, 1);
+        assert!(state.overlay_get(&p.id()).is_none(), "counting stays off");
         assert_eq!(
             std::fs::read(&victim).unwrap(),
             content,

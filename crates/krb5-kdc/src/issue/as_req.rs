@@ -196,9 +196,8 @@ fn lookup_client(
         .cname
         .clone()
         .ok_or_else(|| proto(err::C_PRINCIPAL_UNKNOWN, status::NULL_CLIENT))?;
-    let mut client = lookup_as_princ(store, &req_cname, status::LOOKING_UP_CLIENT)?
+    let client = lookup_as_princ(store, &req_cname, status::LOOKING_UP_CLIENT)?
         .ok_or_else(|| proto(err::C_PRINCIPAL_UNKNOWN, status::CLIENT_NOT_FOUND))?;
-    store.merge_lockout(&mut client);
     *audited = Some(audit_entry(&client, body, &req_cname));
     let cname = if req_cname.name_type == PrincipalName::NT_ENTERPRISE
         || body.kdc_options.bit(flag_bit::CANONICALIZE)

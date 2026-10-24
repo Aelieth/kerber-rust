@@ -716,7 +716,7 @@ impl PrincipalStore {
             password,
             &use_etypes,
         )?;
-        self.put_principal(p);
+        self.put_principal(p)?;
         self.save_if_configured()?;
         self.postcommit(super::kadm5_hook::Post::Create {
             princ: name.clone(),
@@ -896,7 +896,7 @@ impl PrincipalStore {
         strip_db_args(&mut p.tl_data)?;
         stamp_admin_tl(&mut p, false, actor);
         self.inside_change()?;
-        self.put_principal(p);
+        self.put_principal(p)?;
         self.save_if_configured()
     }
 
@@ -1320,14 +1320,18 @@ impl PrincipalStore {
         crate::lockout::lockout_audit(self, &p, unix_now_u32(), status);
     }
 
-    pub(crate) fn put_principal(&mut self, mut p: Principal) {
-        if strip_db_args(&mut p.tl_data).is_err() {
-            return;
-        }
+    pub(crate) fn put_principal(&mut self, mut p: Principal) -> Result<(), Error> {
+        strip_db_args(&mut p.tl_data)?;
         p.reconcile_flags();
         self.settle_rid(&mut p);
+        if p.name.components_joined() != "K/M"
+            && self.rid_owner(p.rid).is_some_and(|owner| owner != p.id())
+        {
+            return Err(Error::InvalidArgument("duplicate RID".into()));
+        }
         let id = p.id();
         self.note_ulog(id.clone(), false, Some(p.clone()));
         self.map.insert(id, p);
+        Ok(())
     }
 }

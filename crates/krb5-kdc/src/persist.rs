@@ -334,6 +334,7 @@ pub(crate) fn read_store(
         _ => load_dump_with_stash(dump_text(&blob)?, &stash)?,
     };
     crate::lockout::merge_lockout_file(&mut store, db_path);
+    crate::lockout::ensure_lockout_file(db_path);
     store.persist_paths = Some((db_path.to_path_buf(), stash_path.to_path_buf()));
     store.db_stamp = stamp_read(&mut store, lock, db_path, &blob);
     store.dblock = Some(Arc::clone(lock));
@@ -381,6 +382,7 @@ pub(crate) fn read_store_with_master(
     }
     let mut store = crate::kdb_dump::load_dump_with_key(dump_text(&blob)?, master)?;
     crate::lockout::merge_lockout_file(&mut store, db_path);
+    crate::lockout::ensure_lockout_file(db_path);
     store.db_stamp = stamp_read(&mut store, lock, db_path, &blob);
     store.dblock = Some(Arc::clone(lock));
     store.persist_master = Some((db_path.to_path_buf(), master.clone()));

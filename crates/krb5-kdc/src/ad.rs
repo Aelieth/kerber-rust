@@ -1109,6 +1109,7 @@ fn is_client_db_alias(store: &dyn PrincipalRead, entry: &Principal, princ: &Prin
 /// A referral needs RBCD; anything not allowed is `BADOPTION`.
 #[expect(clippy::too_many_arguments, reason = "MIT passes args positionally")]
 pub(crate) fn check_s4u2proxy_policy(
+    store: &dyn PrincipalRead,
     padata: Option<&[PaData]>,
     dest: &PrincipalName,
     impersonator_name: &PrincipalName,
@@ -1127,13 +1128,13 @@ pub(crate) fn check_s4u2proxy_policy(
     }
     let mut policy_denial = false;
     if support_rbcd {
-        if allowed_to_delegate_from(resource, impersonator_name, impersonator_realm) {
+        if allowed_to_delegate_from(store, resource, impersonator_name, impersonator_realm) {
             return Ok(());
         }
         policy_denial = true;
     }
     if !is_crossrealm {
-        if check_allowed_to_delegate(impersonator, dest) {
+        if store.allowed_to_delegate(impersonator, dest) {
             return Ok(());
         }
         policy_denial = true;
@@ -1158,17 +1159,12 @@ fn pa_pac_rbcd(padata: Option<&[PaData]>) -> Result<bool, Error> {
 }
 
 fn allowed_to_delegate_from(
+    store: &dyn PrincipalRead,
     resource: &Principal,
     impersonator: &PrincipalName,
     impersonator_realm: &str,
 ) -> bool {
-    let from = impersonator.unparse_with_realm(impersonator_realm);
-    resource.s4u_allowed_from.iter().any(|n| n == &from)
-}
-
-fn check_allowed_to_delegate(impersonator: &Principal, resource: &PrincipalName) -> bool {
-    let want = resource.components_joined();
-    impersonator.s4u_allowed_to.iter().any(|n| n == &want)
+    store.allowed_from(resource, impersonator, impersonator_realm)
 }
 
 pub(crate) fn update_delegation_info(

@@ -153,6 +153,8 @@ pub(super) const KRB5_KDB_ALIAS_UNSUPPORTED: u32 = 2_514_958_894;
 // MIT: `KRB5_KDB_CANTLOCK_DB` (lib/krb5/error_tables/kdb5_err.et:64-64)
 /// "Insufficient access to lock database".
 pub(super) const KRB5_KDB_CANTLOCK_DB: u32 = 2_514_958_872;
+// MIT: `KRB5_KDB_BAD_SALTTYPE` (lib/krb5/error_tables/kdb5_err.et:69-69)
+pub(super) const KRB5_KDB_BAD_SALTTYPE: u32 = 2_514_958_875;
 /// MIT `ovk` 1 (`KADM5_AUTH_GET`).
 pub(super) const KADM5_AUTH_GET: u32 = 43_787_521;
 /// MIT `ovk` 44 (`KADM5_AUTH_LIST`).

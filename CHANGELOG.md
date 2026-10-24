@@ -57,6 +57,9 @@ any other `###` heading.
 
 ### Changed
 
+- **kdc.** A dump keeps the next RID above every RID it has held, a repeated RID is refused, and a reload keeps the database SID unless kdc.conf sets one.
+- **kdc.** S4U allow-lists are stored in the dump, and a missing lockout file is created when the database is writable.
+- **admin.** A remote rename that hits an unsupported salt type returns that error.
 - **config.** Krb5Conf::default is MIT's unset profile: clock skew 300, reverse DNS, and KDC time sync.
 - **kdc.** Rename stores each current key's salt, a kvno wraps from 65535 to 1, and getprinc sends tl types above 255 except the vendor SID and history records.
 - **kdc.** Deleting K/M is refused, as is a password change, a keepold random key, or setkey of kadmin/history.

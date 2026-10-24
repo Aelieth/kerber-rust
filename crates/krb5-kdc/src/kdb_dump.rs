@@ -60,6 +60,10 @@ pub const TL_KERBER_SID: i32 = 0x4B01;
 pub(crate) const TL_KERBER_POLICY: i32 = 0x4B02;
 pub const TL_KERBER_SERIAL: i32 = 0x4B03;
 pub const TL_KERBER_HIST: i32 = 0x4B04;
+pub const TL_KERBER_RID_HWM: i32 = 0x4B05;
+// MIT: `KRB5_TL_CONSTRAINED_DELEGATION_ACL` (include/kdb.h:271)
+pub const TL_CONSTRAINED_DELEGATION: i32 = 0x0400;
+pub const TL_KERBER_S4U_FROM: i32 = 0x4B06;
 pub const SALTTYPE_NORMAL: i32 = 0;
 pub(crate) const SALTTYPE_NOREALM: i32 = 2;
 pub(crate) const SALTTYPE_ONLYREALM: i32 = 3;
@@ -94,6 +98,7 @@ pub struct DumpFile {
     pub policies: Vec<String>,
     pub(crate) records: usize,
     pub(crate) applied_len: usize,
+    pub(crate) seen_rid: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -209,9 +214,24 @@ impl DumpFile {
             u64::try_from(self.applied_len).unwrap_or(u64::MAX),
         ));
         let mut domain: Option<RpcSid> = None;
+        let mut hwm = None;
+        let mut seen_rid: HashMap<u32, String> = HashMap::new();
         for p in self.princs {
             let is_km = p.name.starts_with("K/M@");
+            if is_km {
+                hwm = rid_hwm_of(&p.tl_data);
+            }
             let (princ, sid) = p.into_principal(mkey)?;
+            if princ.rid != 0
+                && princ.name.components_joined() != "K/M"
+                && let Some(owner) = seen_rid.insert(princ.rid, princ.id())
+            {
+                return Err(DumpError::Format(format!(
+                    "duplicate RID {} on {owner} and {}",
+                    princ.rid,
+                    princ.id()
+                )));
+            }
             if is_km {
                 if let Some(s) = sid {
                     domain = Some(s);
@@ -228,6 +248,10 @@ impl DumpFile {
         if let Some(sid) = domain {
             store.set_domain_sid(sid);
         }
+        if let Some(next) = hwm {
+            store.raise_next_rid(next);
+        }
+        store.raise_next_rid(self.seen_rid.saturating_add(1));
         Ok(store)
     }
 }
@@ -346,12 +370,24 @@ impl DumpPrincipal {
             .or_else(|| policy_from_tl(&self.tl_data));
         let kadm = osa.as_ref().map(KadmData::from_osa).unwrap_or_default();
         let string_attrs = attrs_from_tl(&self.tl_data);
+        let s4u_allowed_from = nul_tl_names(&self.tl_data, TL_KERBER_S4U_FROM);
+        let s4u_allowed_to = nul_tl_names(&self.tl_data, TL_CONSTRAINED_DELEGATION);
+        let key_history = hist_from_tl(&self.tl_data, mkey)?;
+        let tl_data = self
+            .tl_data
+            .into_iter()
+            .filter(|t| {
+                t.ty != TL_CONSTRAINED_DELEGATION
+                    && t.ty != TL_KERBER_S4U_FROM
+                    && t.ty != TL_KERBER_RID_HWM
+            })
+            .collect();
         Ok((
             Principal {
                 name,
                 realm,
                 keys,
-                key_history: hist_from_tl(&self.tl_data, mkey)?,
+                key_history,
                 salt,
                 requires_preauth,
                 max_life: u64::from(self.max_life),
@@ -365,11 +401,11 @@ impl DumpPrincipal {
                 fail_auth_count: self.fail_auth_count,
                 mkvno,
                 db_entry_len: self.db_len,
-                tl_data: self.tl_data,
+                tl_data,
                 e_data: self.e_data,
                 rid,
-                s4u_allowed_from: Vec::new(),
-                s4u_allowed_to: Vec::new(),
+                s4u_allowed_from,
+                s4u_allowed_to,
                 pw_policy,
                 kadm,
                 string_attrs,
@@ -418,6 +454,7 @@ pub fn parse_dump(text: &str) -> Result<DumpFile, DumpError> {
         records: fold.records,
         policies: fold.policies.into_iter().flatten().collect(),
         applied_len,
+        seen_rid: fold.max_rid,
     })
 }
 
@@ -484,6 +521,7 @@ struct Fold {
     policies: Vec<Option<String>>,
     policy_at: HashMap<String, usize>,
     records: usize,
+    max_rid: u32,
 }
 
 impl Fold {
@@ -504,6 +542,8 @@ impl Fold {
         }
         if let Some(rest) = text.strip_prefix("princ\t") {
             let p = parse_princ_line(rest, line.no)?;
+            let (_, rid) = parse_sid_tl(&p.tl_data)?;
+            self.max_rid = self.max_rid.max(rid);
             put_last(&mut self.princs, &mut self.princ_at, p.name.clone(), p);
             self.records += 1;
             return Ok(());
@@ -603,14 +643,14 @@ pub fn update_store(
         if let Some(p) = loaded.get_raw(name)
             && put.insert(p.id())
         {
-            store.put_principal(p.clone());
+            store.put_principal(p.clone())?;
         }
     }
     for id in loaded.ids() {
         if let Some(p) = loaded.get_raw(&id)
             && put.insert(id)
         {
-            store.put_principal(p.clone());
+            store.put_principal(p.clone())?;
         }
     }
     for pol in loaded.policies().values() {
@@ -1176,6 +1216,9 @@ fn write_princ_record(
     };
     tl.retain(|t| t.ty != TL_DB_ARGS && t.ty != TL_KERBER_SERIAL);
     merge_sid_tl(&mut tl, store.domain_sid(), p.rid);
+    let is_km = p.name.components_joined() == "K/M" && p.realm == store.realm();
+    merge_rid_hwm(&mut tl, store.next_rid(), is_km);
+    merge_s4u_tl(&mut tl, p);
     merge_kadm_tl(&mut tl, p);
     merge_string_attrs_tl(&mut tl, &p.string_attrs);
     if p.kadm.old_keys.is_empty() {
@@ -1387,6 +1430,68 @@ fn policy_from_tl(tl: &[TlData]) -> Option<String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(ToOwned::to_owned)
+}
+
+fn nul_tl_names(tl: &[TlData], ty: i32) -> Vec<String> {
+    tl.iter()
+        .filter(|t| t.ty == ty)
+        .filter_map(|t| {
+            let raw = t.contents.strip_suffix(&[0])?;
+            if raw.contains(&0) || raw.is_empty() {
+                return None;
+            }
+            std::str::from_utf8(raw).ok().map(str::to_owned)
+        })
+        .collect()
+}
+
+pub(crate) fn absorb_identity_tl(p: &mut Principal) -> Option<u32> {
+    let hwm = rid_hwm_of(&p.tl_data);
+    if p.tl_data.iter().any(|t| t.ty == TL_CONSTRAINED_DELEGATION) {
+        p.s4u_allowed_to = nul_tl_names(&p.tl_data, TL_CONSTRAINED_DELEGATION);
+    }
+    if p.tl_data.iter().any(|t| t.ty == TL_KERBER_S4U_FROM) {
+        p.s4u_allowed_from = nul_tl_names(&p.tl_data, TL_KERBER_S4U_FROM);
+    }
+    p.tl_data.retain(|t| {
+        t.ty != TL_CONSTRAINED_DELEGATION && t.ty != TL_KERBER_S4U_FROM && t.ty != TL_KERBER_RID_HWM
+    });
+    hwm
+}
+
+fn rid_hwm_of(tl: &[TlData]) -> Option<u32> {
+    let bytes = tl
+        .iter()
+        .find(|t| t.ty == TL_KERBER_RID_HWM)?
+        .contents
+        .get(..4)?;
+    Some(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+}
+
+fn merge_rid_hwm(tl: &mut Vec<TlData>, next: u32, is_km: bool) {
+    tl.retain(|t| t.ty != TL_KERBER_RID_HWM);
+    if is_km {
+        tl.push(TlData {
+            ty: TL_KERBER_RID_HWM,
+            contents: next.to_le_bytes().to_vec(),
+        });
+    }
+}
+
+fn merge_s4u_tl(tl: &mut Vec<TlData>, p: &Principal) {
+    tl.retain(|t| t.ty != TL_CONSTRAINED_DELEGATION && t.ty != TL_KERBER_S4U_FROM);
+    for name in &p.s4u_allowed_to {
+        tl.push(nul_tl(TL_CONSTRAINED_DELEGATION, name));
+    }
+    for name in &p.s4u_allowed_from {
+        tl.push(nul_tl(TL_KERBER_S4U_FROM, name));
+    }
+}
+
+fn nul_tl(ty: i32, name: &str) -> TlData {
+    let mut contents = name.as_bytes().to_vec();
+    contents.push(0);
+    TlData { ty, contents }
 }
 
 fn encode_sid_tl(domain: &RpcSid, rid: u32) -> TlData {

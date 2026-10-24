@@ -1,4 +1,6 @@
 # Per-push budgets (seconds) for the ci.yml jobs.
+# A job that goes over its ceiling a second time in any five consecutive runs
+# has that ceiling raised to the measured maximum plus about twenty percent.
 # From runs 873-875 and the five successful jobs of run 876.
 # Run 877 had no published durations when these numbers were set.
 # Run 876 msrv failed and is not a sample.

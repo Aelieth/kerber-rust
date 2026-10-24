@@ -228,8 +228,8 @@ fn a_full_load_writes_a_new_side_file_and_renames_it_over_the_old() {
 }
 
 /// A symlink planted as `principal.lockout` (by a less-privileged owner of the directory) is
-/// never followed: the KDC keeps its counts in memory, readers find no record, and the tools
-/// refuse, its target left as it was.
+/// never followed: lockout counting stays off, readers find no record, and the tools refuse,
+/// its target left as it was.
 #[test]
 fn a_symlink_planted_as_the_side_file_is_never_followed() {
     let (db, stash, _) = saved("lockout-symlink");
@@ -241,7 +241,7 @@ fn a_symlink_planted_as_the_side_file_is_never_followed() {
     std::os::unix::fs::symlink(&victim, &side).unwrap();
     let kdc = load_store(&db, &stash).unwrap();
     assert!(issue_as(&kdc, &bad(TEST_USER, 1)).is_err());
-    assert_eq!(kdc.fail_auth_of(kdc.get_name(&name(TEST_USER)).unwrap()), 1);
+    assert_eq!(kdc.fail_auth_of(kdc.get_name(&name(TEST_USER)).unwrap()), 0);
     assert!(lockout_records(&db).is_empty(), "never read through it");
     let mut admin = load_store(&db, &stash).unwrap();
     let refused = admin
@@ -290,19 +290,18 @@ fn an_empty_side_file_made_by_hand_is_filled_by_the_kdc() {
 }
 
 #[test]
-fn without_its_side_file_the_kdc_keeps_counts_in_memory_and_makes_none() {
+fn without_its_side_file_the_kdc_creates_one_and_keeps_the_count() {
     let (db, stash, _) = saved("lockout-absent");
     let side = lockout_path(&db);
     std::fs::remove_file(&side).unwrap();
     let kdc = load_store(&db, &stash).unwrap();
+    assert!(side.is_file(), "a writable database gains a lockout file");
     assert!(issue_as(&kdc, &bad(TEST_USER, 1)).is_err());
     assert_eq!(kdc.fail_auth_of(kdc.get_name(&name(TEST_USER)).unwrap()), 1);
-    assert!(!side.exists(), "the KDC never makes the side file");
     let again = load_store(&db, &stash).unwrap();
     assert_eq!(
         again.fail_auth_of(again.get_name(&name(TEST_USER)).unwrap()),
-        0,
-        "kept in memory only"
+        1
     );
 }
 
@@ -317,8 +316,7 @@ fn counts_the_kdc_could_not_write_are_lost_once_it_can_write_again() {
     for n in 2..=4 {
         assert!(issue_as(&kdc, &bad(TEST_USER, n)).is_err());
     }
-    let refused = issue_as(&kdc, &good(&kdc, TEST_USER)).unwrap_err();
-    assert!(locked_out(&refused), "counted in memory: {refused:?}");
+    issue_as(&kdc, &good(&kdc, TEST_USER)).expect("counting is off while the lock is missing");
     std::fs::write(&policy_lock, b"").unwrap();
     assert_eq!(record(&db, TEST_USER).unwrap().fail_auth_count, 1);
     issue_as(&kdc, &good(&kdc, TEST_USER)).unwrap();

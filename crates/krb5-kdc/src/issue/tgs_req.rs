@@ -404,6 +404,7 @@ fn check_tgs_req<'a>(
             .as_ref()
             .ok_or_else(|| proto(err::GENERIC, status::UNKNOWN_REASON))?;
         check_s4u2proxy_policy(
+            store,
             tgs_padata,
             &sname,
             &enc_tkt.cname,

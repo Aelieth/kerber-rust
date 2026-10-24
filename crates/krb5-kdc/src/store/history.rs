@@ -131,12 +131,12 @@ impl PrincipalStore {
         refresh_kadm_tl(&mut p);
         stamp_admin_tl(&mut p, true, actor);
         let id = p.id();
-        self.put_principal(p);
+        self.put_principal(p)?;
         let key = random_key(etype)?;
         let mut p = self.map.get(&id).cloned().ok_or(Error::NotFound)?;
         p.keys = vec![KeyEntry::new(etype, key.clone(), INITIAL_HIST_KVNO)];
         stamp_admin_tl(&mut p, true, actor);
-        self.put_principal(p);
+        self.put_principal(p)?;
         self.save_through()?;
         Ok((INITIAL_HIST_KVNO, key))
     }

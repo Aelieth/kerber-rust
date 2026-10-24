@@ -16,6 +16,7 @@ use crate::ulog::{Ulog, UlogBatch, UlogError, UlogLast, UlogUpdates};
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PrincipalMap {
     map: HashMap<String, Principal>,
+    rids: HashMap<u32, String>,
     logged: HashMap<String, Option<Principal>>,
     undo: Undo,
 }
@@ -56,12 +57,59 @@ impl PrincipalMap {
 
     pub(crate) fn insert(&mut self, id: String, p: Principal) -> Option<Principal> {
         self.keep(&id);
-        self.map.insert(id, p)
+        let key = id.clone();
+        let old = self.map.insert(id, p);
+        self.reindex(&key, old.as_ref());
+        old
     }
 
     pub(crate) fn remove(&mut self, id: &str) -> Option<Principal> {
         self.keep(id);
-        self.map.remove(id)
+        let old = self.map.remove(id);
+        self.forget(id, old.as_ref());
+        old
+    }
+
+    pub(crate) fn rid_owner(&self, rid: u32) -> Option<&str> {
+        if rid == 0 {
+            return None;
+        }
+        self.rids.get(&rid).map(String::as_str)
+    }
+
+    pub(crate) fn set_rid(&mut self, id: &str, rid: u32) {
+        let Some(old) = self.map.get_mut(id).map(|p| {
+            let old = p.rid;
+            p.rid = rid;
+            old
+        }) else {
+            return;
+        };
+        if old != 0 && self.rids.get(&old).is_some_and(|o| o == id) {
+            self.rids.remove(&old);
+        }
+        if rid != 0 {
+            self.rids.insert(rid, id.to_owned());
+        }
+    }
+
+    fn reindex(&mut self, id: &str, old: Option<&Principal>) {
+        self.forget(id, old);
+        if let Some(p) = self.map.get(id)
+            && p.name.components_joined() != "K/M"
+            && p.rid != 0
+        {
+            self.rids.insert(p.rid, id.to_owned());
+        }
+    }
+
+    fn forget(&mut self, id: &str, old: Option<&Principal>) {
+        if let Some(p) = old
+            && p.rid != 0
+            && self.rids.get(&p.rid).is_some_and(|o| o == id)
+        {
+            self.rids.remove(&p.rid);
+        }
     }
 
     pub(crate) fn values_mut(&mut self) -> impl Iterator<Item = &mut Principal> {
@@ -70,7 +118,9 @@ impl PrincipalMap {
 
     pub(crate) fn insert_unlogged(&mut self, id: String, p: Principal) {
         self.lose_undo();
-        self.map.insert(id, p);
+        let key = id.clone();
+        let old = self.map.insert(id, p);
+        self.reindex(&key, old.as_ref());
     }
 
     pub(crate) fn get_mut_unlogged(&mut self, id: &str) -> Option<&mut Principal> {
@@ -79,7 +129,8 @@ impl PrincipalMap {
 
     pub(crate) fn remove_unlogged(&mut self, id: &str) {
         self.lose_undo();
-        self.map.remove(id);
+        let old = self.map.remove(id);
+        self.forget(id, old.as_ref());
     }
 
     fn lose_undo(&mut self) {
@@ -123,13 +174,12 @@ impl PrincipalMap {
             return false;
         };
         for (id, p) in before {
-            match p {
-                Some(p) => {
-                    self.map.insert(id, p);
-                }
-                None => {
-                    self.map.remove(&id);
-                }
+            if let Some(p) = p {
+                let old = self.map.insert(id.clone(), p);
+                self.reindex(&id, old.as_ref());
+            } else {
+                let old = self.map.remove(&id);
+                self.forget(&id, old.as_ref());
             }
         }
         self.logged.clear();
@@ -354,6 +404,9 @@ impl PrincipalStore {
 
     /// A new row's RID of 0 would PAC as the first user.
     fn assign_iprop_rid(&mut self, mut p: Principal) -> Principal {
+        if let Some(next) = crate::kdb_dump::absorb_identity_tl(&mut p) {
+            self.raise_next_rid(next);
+        }
         self.settle_rid(&mut p);
         p
     }
