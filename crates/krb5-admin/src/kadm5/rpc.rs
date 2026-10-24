@@ -60,6 +60,7 @@ impl Programs {
 }
 
 /// Serve one TCP connection until EOF, each record on this socket in turn; a call that does not decode gets no reply, and the connection goes on (see [`kadm5_handle_rpc`]).
+#[cfg(feature = "test-hooks")]
 pub fn serve_kadm5_conn(
     store: SharedStore,
     authcfg: Arc<Kadm5AuthConfig>,

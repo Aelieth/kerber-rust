@@ -2,7 +2,7 @@
 //! flavor refuses is answered at once with MIT's `auth_stat`.
 
 use krb5_gss::{ChannelBindings, GSS_C_AF_INET, GssContext};
-use krb5_log::klog::{self, Severity};
+use krb5_log::klog::Severity;
 use krb5_protocol::ReplayCache;
 use krb5_types::{KerberosTime, PrincipalName};
 
@@ -722,7 +722,7 @@ pub(super) fn agss_dispatch(
             .unwrap_or_else(|| rpc_reply_agss_status(xid, reply_verf, SYSTEM_ERR));
     }
     if proc > CREATE_ALIAS || proc == SETV4KEY_PRINCIPAL {
-        klog::syslog(
+        crate::kadmind::admin_syslog(
             Severity::Err,
             &format!("Invalid KADM5 procedure number: {addr}, {proc}"),
         );
@@ -765,7 +765,7 @@ pub(super) fn agss_dispatch(
     };
     kadm5_log_op(proc, kadm_args, &who, &result);
     agss_result(gctx, seq, xid, reply_verf, &result).unwrap_or_else(|| {
-        klog::syslog(
+        crate::kadmind::admin_syslog(
             Severity::Err,
             "WARNING! Unable to send function results, continuing.",
         );

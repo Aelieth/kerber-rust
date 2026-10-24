@@ -1,9 +1,6 @@
 //! KRB-SAFE, KRB-PRIV, and KRB-CRED.
-//! Sequence numbers start at 1, wrap, and skip 0.
 //! Accepted only after the checksum or decryption, a 300 s window, and a new replay tag.
-//! Unlike MIT, a sequence is not checked against the expected remote one.
-
-use std::sync::atomic::{AtomicU32, Ordering};
+//! Unlike MIT, a sequence is not checked against the remote one.
 
 use zeroize::{Zeroize, Zeroizing};
 
@@ -22,27 +19,11 @@ use crate::ap_req::address_in_list;
 use crate::error::Error;
 use crate::replay::{ReplayCache, ReplayKey};
 
-static NEXT_SAFE_SEQ: AtomicU32 = AtomicU32::new(1);
-static NEXT_PRIV_SEQ: AtomicU32 = AtomicU32::new(1);
-
-fn take_seq(counter: &AtomicU32) -> u32 {
-    loop {
-        let n = counter.fetch_add(1, Ordering::Relaxed);
-        if n != 0 {
-            return n;
-        }
-    }
-}
-
 fn local_addr() -> HostAddress {
     HostAddress {
         addr_type: 2,
         address: OctetString::from(vec![127, 0, 0, 1]),
     }
-}
-
-pub fn build_krb_safe(session: &ProtocolKey, user_data: &[u8]) -> Result<KrbSafe, Error> {
-    build_krb_safe_ex(session, user_data, Some(take_seq(&NEXT_SAFE_SEQ)), true)
 }
 
 pub fn build_krb_safe_ex(
@@ -376,10 +357,6 @@ fn accept_fresh(
     Ok(())
 }
 
-pub fn build_krb_priv(session: &ProtocolKey, user_data: &[u8]) -> Result<KrbPriv, Error> {
-    build_krb_priv_with_seq(session, user_data, Some(take_seq(&NEXT_PRIV_SEQ)))
-}
-
 pub fn build_krb_priv_with_seq(
     session: &ProtocolKey,
     user_data: &[u8],
@@ -647,11 +624,9 @@ mod tests {
     }
 
     #[test]
-    fn safe_seq_increments_and_second_unwrap_fails() {
+    fn safe_second_unwrap_fails() {
         let key = session();
-        let a = build_krb_safe(&key, b"one").unwrap();
-        let b = build_krb_safe(&key, b"two").unwrap();
-        assert!(a.safe_body.seq_number.unwrap() < b.safe_body.seq_number.unwrap());
+        let a = build_krb_safe_ex(&key, b"one", Some(1), true).unwrap();
         let raw = encode(&a).unwrap();
         let cache = ReplayCache::new();
         assert_eq!(unwrap_krb_safe(&key, &raw, &cache).unwrap(), b"one");
@@ -661,7 +636,7 @@ mod tests {
     #[test]
     fn priv_second_unwrap_fails() {
         let key = session();
-        let msg = build_krb_priv(&key, b"secret").unwrap();
+        let msg = build_krb_priv_with_seq(&key, b"secret", Some(1)).unwrap();
         let raw = encode(&msg).unwrap();
         let cache = ReplayCache::new();
         assert_eq!(unwrap_krb_priv(&key, &raw, &cache).unwrap(), b"secret");
@@ -682,7 +657,7 @@ mod tests {
     #[test]
     fn safe_unkeyed_cksumtype_is_inapp() {
         let key = session();
-        let mut msg = build_krb_safe(&key, b"body").unwrap();
+        let mut msg = build_krb_safe_ex(&key, b"body", Some(1), true).unwrap();
         msg.cksum.cksumtype = 7;
         match verify_krb_safe_checksum(&key, &encode(&msg).unwrap(), None, None) {
             Err(Error::KrbError { code, .. }) => assert_eq!(code, err::INAPP_CKSUM),
@@ -694,7 +669,7 @@ mod tests {
     fn safe_unknown_cksumtype_is_prog_sumtype_nosupp() {
         let key = session();
         for ctype in [1, 3, 4, 5, 6, 8, 10, 13, 127] {
-            let mut msg = build_krb_safe(&key, b"body").unwrap();
+            let mut msg = build_krb_safe_ex(&key, b"body", Some(1), true).unwrap();
             msg.cksum.cksumtype = ctype;
             match verify_krb_safe_checksum(&key, &encode(&msg).unwrap(), None, None) {
                 Err(Error::ProgSumtypeNosupp) => {}
@@ -706,7 +681,7 @@ mod tests {
     #[test]
     fn safe_bad_mac_is_modified() {
         let key = session();
-        let mut msg = build_krb_safe(&key, b"body").unwrap();
+        let mut msg = build_krb_safe_ex(&key, b"body", Some(1), true).unwrap();
         let mut mac = msg.cksum.checksum.to_vec();
         mac[0] ^= 0xff;
         msg.cksum.checksum = mac.into();
@@ -719,7 +694,7 @@ mod tests {
     #[test]
     fn safe_dummy_with_saved_body_matches_rasn_zero_cksum() {
         let key = session();
-        let msg = build_krb_safe(&key, b"dummy-eq").unwrap();
+        let msg = build_krb_safe_ex(&key, b"dummy-eq", Some(1), true).unwrap();
         let raw = encode(&msg).unwrap();
         let (decoded, body) = decode_safe_with_body(&raw).unwrap();
         let mut rasn_dummy = decoded.clone();
@@ -747,7 +722,7 @@ mod tests {
     #[test]
     fn reject_non_safe_application_tag_is_msg_type_40() {
         let key = session();
-        let raw = encode(&build_krb_safe(&key, b"tag").unwrap()).unwrap();
+        let raw = encode(&build_krb_safe_ex(&key, b"tag", Some(1), true).unwrap()).unwrap();
         for tag in [0x6e_u8, 0x75] {
             let mut bad = raw.clone();
             bad[0] = tag;

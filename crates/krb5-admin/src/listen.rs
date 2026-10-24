@@ -1,14 +1,13 @@
 //! TCP/UDP listeners for kadmind (749), kpasswd (464), and kprop (754).
 //! The ticket must be for `kadmin/changepw`.
 
-use std::io::{self, Read};
-use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::io;
+use std::net::{SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
 
+use crate::Error;
+use crate::kprop::is_app_tag;
 use krb5_asn1::{decode, encode};
-use krb5_crypto::ProtocolKey;
 use krb5_kdc::{Principal, SharedDump as SharedStore};
 use krb5_protocol::{
     AUTH_CONTEXT_DO_SEQUENCE, AcceptorAuthContext, AcceptorConfig, ApVerifyOk, ApVerifyParams,
@@ -18,11 +17,7 @@ use krb5_types::{
     ChangePasswdData, HostAddress, KerberosTime, KrbError, Microseconds, PrincipalName, err,
     principal_compare,
 };
-use zeroize::{Zeroize, Zeroizing};
-
-use crate::kadmind::{Kadmind, serve_kadmind_until};
-use crate::kprop::is_app_tag;
-use crate::{AdminSession, Error, Op};
+use zeroize::Zeroize;
 
 /// Ports from the Kerberos assigned set.
 pub const KADMIND_PORT: u16 = 749;
@@ -30,8 +25,6 @@ pub const KADMIND_PORT: u16 = 749;
 pub const KPASSWD_PORT: u16 = 464;
 /// kprop.
 pub const KPROP_PORT: u16 = 754;
-
-const WIRE_VERSION: u8 = 1;
 
 // MIT: `client_addr` (kadmin/server/server_stubs.c:152-162)
 /// `k5_print_addr` of the peer, without the port.
@@ -113,110 +106,6 @@ fn kpasswd_udp_recv_until(
     }
 }
 
-fn status_bytes(status: u32) -> Zeroizing<Vec<u8>> {
-    Zeroizing::new(status.to_be_bytes().to_vec())
-}
-
-/// Version-1 kadmind body: `version, op, ap_len, ap-req, pay_len, payload`. The reply is wiped when dropped: a ktadd's holds the keytab, in one buffer of its size.
-/// (or `name\0password`). The create, cpw, delete, and ktadd ops (1-4; there is no dump op: MIT kadmind serves none) also return their [`AdminSession`] call's [`Error::AclDenied`], [`Error::NotFound`], [`Error::PasswordPolicy`], [`Error::PassTooSoon`], or [`Error::Inner`].
-pub fn dispatch_kadmind(
-    store: &SharedStore,
-    acl: &krb5_kdc::Acl,
-    service_key: &ProtocolKey,
-    replay: &ReplayCache,
-    body: &[u8],
-) -> Result<Zeroizing<Vec<u8>>, Error> {
-    if body.len() < 10 || body[0] != WIRE_VERSION {
-        return Err(Error::Inner("kadmind version".into()));
-    }
-    let op = match body[1] {
-        1 => Op::Create,
-        2 => Op::Delete,
-        3 => Op::Ktadd,
-        4 => Op::Cpw,
-        _ => return Err(Error::Inner("kadmind op".into())),
-    };
-    let ap_len = u32::from_be_bytes(
-        body[2..6]
-            .try_into()
-            .map_err(|_| Error::Inner("kadmind truncated".into()))?,
-    ) as usize;
-    if 6 + ap_len + 4 > body.len() {
-        return Err(Error::Inner("kadmind truncated".into()));
-    }
-    let ap_req = &body[6..6 + ap_len];
-    let pay_off = 6 + ap_len;
-    let pay_len = u32::from_be_bytes(
-        body[pay_off..pay_off + 4]
-            .try_into()
-            .map_err(|_| Error::Inner("kadmind payload".into()))?,
-    ) as usize;
-    if pay_off + 4 + pay_len > body.len() {
-        return Err(Error::Inner("kadmind payload".into()));
-    }
-    let payload = &body[pay_off + 4..pay_off + 4 + pay_len];
-
-    let mut g = store
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let mut sess = AdminSession::from_ap_req(&mut g, acl, service_key, ap_req, replay)?;
-    match op {
-        Op::Create => {
-            let (name, password) = split_name_pass(payload)?;
-            sess.create_password(&name, password)?;
-            Ok(status_bytes(0))
-        }
-        Op::Cpw => {
-            let (name, password) = split_name_pass(payload)?;
-            sess.change_password(&name, password)?;
-            Ok(status_bytes(0))
-        }
-        Op::Delete => {
-            let name = PrincipalName::try_new(
-                PrincipalName::NT_PRINCIPAL,
-                [std::str::from_utf8(payload).unwrap_or("")],
-            )
-            .map_err(|e| Error::Inner(e.to_string()))?;
-            sess.delete(&name)?;
-            Ok(status_bytes(0))
-        }
-        Op::Ktadd => {
-            let name = PrincipalName::try_new(
-                PrincipalName::NT_PRINCIPAL,
-                [std::str::from_utf8(payload).unwrap_or("")],
-            )
-            .map_err(|e| Error::Inner(e.to_string()))?;
-            let kt = sess.ktadd(&name)?;
-            let keytab = Zeroizing::new(kt.to_bytes());
-            let mut out = Zeroizing::new(Vec::with_capacity(4 + keytab.len()));
-            out.extend_from_slice(&status_bytes(0));
-            out.extend_from_slice(&keytab);
-            Ok(out)
-        }
-    }
-}
-
-fn split_name_pass(payload: &[u8]) -> Result<(PrincipalName, &[u8]), Error> {
-    let z = payload
-        .iter()
-        .position(|b| *b == 0)
-        .ok_or_else(|| Error::Inner("name\\0password".into()))?;
-    let name_s = std::str::from_utf8(&payload[..z]).map_err(|e| Error::Inner(e.to_string()))?;
-    let (name, _realm) =
-        krb5_types::principal_from_unparsed(name_s, "").map_err(|e| Error::Inner(e.to_string()))?;
-    Ok((name, &payload[z + 1..]))
-}
-
-#[must_use]
-pub fn encode_kadmind_req(op: Op, ap_req: &[u8], payload: &[u8]) -> Vec<u8> {
-    let mut v = vec![WIRE_VERSION, op as u8];
-    v.extend_from_slice(&(u32::try_from(ap_req.len()).unwrap_or(0)).to_be_bytes());
-    v.extend_from_slice(ap_req);
-    v.extend_from_slice(&(u32::try_from(payload.len()).unwrap_or(0)).to_be_bytes());
-    v.extend_from_slice(payload);
-    v
-}
-
 fn frame_kpasswd_rep(ap_rep: &[u8], priv_der: &[u8]) -> Vec<u8> {
     let total = 6usize
         .saturating_add(ap_rep.len())
@@ -293,26 +182,6 @@ impl KpasswdReply {
 /// RFC 3244 / MIT changepw request: `len, version, ap-req-len, AP-REQ, KRB-PRIV`.
 /// Version 1 (MIT `kpasswd`) carries the raw password in KRB-PRIV. Version `0xff80` (setpw) carries `ChangePasswdData`. KRB-PRIV is encrypted with the authenticator subkey when present (MIT always sends one).
 /// built. A bad AP-REQ, KRB-PRIV, ACL, or password change is an `Ok` framed result code.
-pub fn handle_kpasswd_rfc3244(
-    store: &SharedStore,
-    acl: &krb5_kdc::Acl,
-    conf: &AcceptorConfig,
-    replay: &ReplayCache,
-    raw: &[u8],
-) -> Result<Vec<u8>, Error> {
-    let loopback = std::net::IpAddr::from([127, 0, 0, 1]);
-    let authcfg = crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone());
-    handle_kpasswd_from(
-        store,
-        &authcfg,
-        conf,
-        replay,
-        raw,
-        "127.0.0.1",
-        Some(loopback),
-    )
-}
-
 const RFC3244_VERSION: u16 = 0xff80;
 const UNK_PRINC_PRIV: &str =
     "Password not changed.\nPrincipal does not exist while trying to change password.\n";
@@ -727,7 +596,7 @@ pub(crate) fn handle_kpasswd_from(
         client = client.as_str(),
         "{log_line}"
     );
-    krb5_log::klog::syslog(krb5_log::klog::Severity::Notice, &log_line);
+    crate::kadmind::admin_syslog(krb5_log::klog::Severity::Notice, &log_line);
     let mut body = Vec::with_capacity(2 + text.len());
     body.extend_from_slice(&code.to_be_bytes());
     body.extend_from_slice(text.as_bytes());
@@ -793,80 +662,9 @@ pub fn encode_kpasswd_req(ap_req: &[u8], krb_priv_der: &[u8]) -> Vec<u8> {
     out
 }
 
-const STOP_POLL: Duration = Duration::from_millis(100);
-
-#[allow(clippy::needless_pass_by_value)]
-pub fn serve_kpasswd_udp(
-    store: SharedStore,
-    acl: krb5_kdc::Acl,
-    service_key: ProtocolKey,
-    conf: AcceptorConfig,
-    sock: UdpSocket,
-    shutdown: Arc<AtomicBool>,
-) -> io::Result<()> {
-    let mut kadmind = Kadmind::from_parts(store, acl, Some(service_key), conf);
-    let udp = [sock];
-    let sockets = krb5_kdc::net_server::Sockets {
-        udp: &udp,
-        ..krb5_kdc::net_server::Sockets::default()
-    };
-    serve_kadmind_until(&mut kadmind, &sockets, &shutdown, STOP_POLL)
-}
-
-#[allow(clippy::needless_pass_by_value)]
-pub fn serve_kpasswd_tcp(
-    store: SharedStore,
-    acl: krb5_kdc::Acl,
-    service_key: ProtocolKey,
-    conf: AcceptorConfig,
-    listener: TcpListener,
-    shutdown: Arc<AtomicBool>,
-) -> io::Result<()> {
-    let mut kadmind = Kadmind::from_parts(store, acl, Some(service_key), conf);
-    let tcp = [listener];
-    let sockets = krb5_kdc::net_server::Sockets {
-        tcp: &tcp,
-        ..krb5_kdc::net_server::Sockets::default()
-    };
-    serve_kadmind_until(&mut kadmind, &sockets, &shutdown, STOP_POLL)
-}
-
-/// kprop dump over TCP: send MIT dump version-7 text (4-byte length prefix).
-/// The body is `kdb5_util load_dump version 7`, not a KDB3 blob. MIT-wire sendauth lives in `crate::kprop`.
-/// (string-to-key or key wrap under `master_password`), or the `io::Error` of a failed write or flush on `stream`.
-pub fn kprop_send(
-    store: &krb5_kdc::PrincipalStore,
-    master_password: &[u8],
-    stream: &mut TcpStream,
-) -> io::Result<()> {
-    let blob = crate::kprop::kprop_dump_bytes(store, master_password)
-        .map_err(|e| io::Error::other(e.to_string()))?;
-    krb5_protocol::write_messages(stream, &[blob.as_slice()])
-}
-
-/// Receive a length-prefixed dump v7 body and load it.
-/// the master key from `master_password`.
-pub fn kprop_recv(
-    stream: &mut TcpStream,
-    master_password: &[u8],
-) -> Result<krb5_kdc::PrincipalStore, Error> {
-    let mut hdr = [0u8; 4];
-    stream
-        .read_exact(&mut hdr)
-        .map_err(|e| Error::Inner(e.to_string()))?;
-    let n = usize::try_from(u32::from_be_bytes(hdr)).unwrap_or(0);
-    let mut blob = vec![0u8; n];
-    stream
-        .read_exact(&mut blob)
-        .map_err(|e| Error::Inner(e.to_string()))?;
-    crate::kprop::kprop_load_bytes(&blob, master_password)
-}
-
 #[cfg(test)]
 mod tests {
     use std::net::{SocketAddr, UdpSocket};
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::thread;
     use std::time::Duration;
 
@@ -875,7 +673,7 @@ mod tests {
     use krb5_kdc::testrealm::bootstrap_documented;
     use krb5_protocol::AcceptorConfig;
 
-    use super::{encode_kpasswd_req, serve_kpasswd_udp, wiped};
+    use super::{encode_kpasswd_req, wiped};
 
     fn exchange(sock: &UdpSocket, to: Option<SocketAddr>) -> Option<(Vec<u8>, SocketAddr)> {
         let req = encode_kpasswd_req(&[0, 1, 2, 3], b"x");
@@ -890,18 +688,36 @@ mod tests {
         Some((buf, src))
     }
 
+    fn reply_cfg(acl: krb5_kdc::Acl) -> crate::KadmindConfig {
+        use std::sync::Arc;
+        crate::KadmindConfig {
+            profile: Arc::new(krb5_config::ProfileSet {
+                realm: krb5_kdc::testrealm::TEST_REALM.into(),
+                krb5: krb5_config::Krb5Conf::default(),
+                kdc: None,
+                kdc_context: krb5_config::Krb5Conf::default(),
+            }),
+            services: crate::Services::DAEMON,
+            listen: krb5_config::KadmindListen::for_realm(
+                None,
+                krb5_kdc::testrealm::TEST_REALM,
+                None,
+            ),
+            limits: crate::ServeLimits::default(),
+            acl,
+            auth_modules: Vec::new(),
+            log: Arc::new(crate::KlogAdmin),
+            pwqual: Vec::new(),
+            hooks: Vec::new(),
+            iprop: None,
+        }
+    }
+
     #[test]
     fn a_kpasswd_reply_leaves_from_the_address_the_request_was_sent_to() {
         // MIT: `send_to_from` (lib/apputils/udppktinfo.c:443-474)
         // kpasswd's reply on a wildcard socket leaves from the request's destination.
         let (store, acl) = bootstrap_documented().unwrap();
-        let key = store
-            .get_name(&kadmin_changepw())
-            .unwrap()
-            .best_key()
-            .unwrap()
-            .key
-            .clone();
         let any = ListenAddr {
             host: Some("0.0.0.0".into()),
             port: 0,
@@ -912,10 +728,18 @@ mod tests {
             .next()
             .unwrap();
         let to = SocketAddr::from(([127, 0, 0, 2], sock.local_addr().unwrap().port()));
-        let stop = Arc::new(AtomicBool::new(false));
-        let (shared, flag) = (krb5_kdc::shared_dump(store), Arc::clone(&stop));
+        let shared = krb5_kdc::shared_dump(store);
+        let stop = krb5_kdc::Shutdown::new();
+        let flag = stop.clone();
         let server = thread::spawn(move || {
-            serve_kpasswd_udp(shared, acl, key, AcceptorConfig::default(), sock, flag)
+            let mut kadmind = crate::Kadmind::new(shared, reply_cfg(acl)).unwrap();
+            let listeners = crate::Listeners::from_sockets(
+                vec![sock],
+                Vec::new(),
+                Vec::new(),
+                crate::Programs::BOTH,
+            );
+            kadmind.serve(&listeners, &flag).map(|_| ())
         });
         let plain = UdpSocket::bind("127.0.0.1:0").unwrap();
         let (rep, src) = exchange(&plain, Some(to)).expect("a reply");
@@ -927,7 +751,7 @@ mod tests {
             exchange(&connected, None).is_some(),
             "the connected client's reply"
         );
-        stop.store(true, Ordering::Relaxed);
+        stop.trigger();
         server.join().unwrap().unwrap();
     }
 
@@ -992,12 +816,15 @@ mod tests {
         req.extend_from_slice(&priv_der);
         let shared = krb5_kdc::shared_dump(store);
         wiped::take();
-        let rep = super::handle_kpasswd_rfc3244(
+        let authcfg = crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone());
+        let rep = super::handle_kpasswd_from(
             &shared,
-            &acl,
+            &authcfg,
             &AcceptorConfig::default(),
             &ReplayCache::new(),
             &req,
+            "127.0.0.1",
+            Some(std::net::IpAddr::from([127, 0, 0, 1])),
         )
         .unwrap();
         let zeroed = wiped::take();
@@ -1190,12 +1017,15 @@ mod tests {
         let (store, acl) = bootstrap_documented().unwrap();
         let shared = krb5_kdc::shared_dump(store);
         for frame in [&[0u8, 3, 0][..], &[0, 4, 0, 1], &[0, 5, 0, 1, 0]] {
-            let got = super::handle_kpasswd_rfc3244(
+            let authcfg = crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone());
+            let got = super::handle_kpasswd_from(
                 &shared,
-                &acl,
+                &authcfg,
                 &AcceptorConfig::default(),
                 &ReplayCache::new(),
                 frame,
+                "127.0.0.1",
+                Some(std::net::IpAddr::from([127, 0, 0, 1])),
             )
             .unwrap_err()
             .to_string();

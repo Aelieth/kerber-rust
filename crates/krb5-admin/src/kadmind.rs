@@ -5,22 +5,20 @@ use std::io;
 use std::net::{SocketAddr, TcpListener, UdpSocket};
 use std::os::fd::RawFd;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, PoisonError};
-use std::time::Duration;
 
 use krb5_config::listen::{BindAddresses, BindType, ListenLog};
 use krb5_config::{KadmindListen, ProfileSet};
 use krb5_crypto::ProtocolKey;
 use krb5_kdc::net_server::{
-    self, Dispatch, Klog, Log, MAX_REQUEST, MAX_STREAM_DATA_CONNECTIONS, Reply, RpcSession,
-    Sockets, Wake,
+    self, Dispatch, Log, MAX_REQUEST, MAX_STREAM_DATA_CONNECTIONS, Reply, RpcSession, Sockets, Wake,
 };
 use krb5_kdc::principals::kadmin_changepw;
 use krb5_kdc::{
-    Acl, DEFAULT_TCP_LISTEN_BACKLOG, SharedDump as SharedStore, Shutdown, Signals,
-    WHILE_DISPATCHING_TCP, WHILE_DISPATCHING_UDP, bind_rpc_listeners,
-    bind_tcp_listeners_with_backlog, bind_udp_listeners,
+    Acl, DEFAULT_TCP_LISTEN_BACKLOG, Kadm5Hook, Pwqual, SharedDump as SharedStore, Shutdown,
+    Signals, WHILE_DISPATCHING_TCP, WHILE_DISPATCHING_UDP, bind_rpc_listeners,
+    bind_tcp_listeners_with_backlog, bind_udp_listeners, clear_thread_kadm5_hook,
+    clear_thread_pwqual, set_thread_kadm5_hook, set_thread_pwqual,
 };
 use krb5_log::klog::{self, Severity};
 use krb5_protocol::{AcceptorConfig, ReplayCache};
@@ -90,7 +88,79 @@ pub struct KadmindConfig {
     pub acl: Acl,
     /// Loaded kadm5_auth modules; `[plugins] kadm5_auth` selects them.
     pub auth_modules: Vec<Arc<dyn Kadm5Auth>>,
+    pub log: Arc<dyn AdminLog>,
+    pub pwqual: Vec<Arc<dyn Pwqual>>,
+    pub hooks: Vec<Arc<dyn Kadm5Hook>>,
     pub iprop: Option<IpropConfig>,
+}
+
+pub trait AdminLog: Send + Sync {
+    fn syslog(&self, severity: Severity, msg: &str);
+
+    fn reopen(&self) {}
+}
+
+pub struct KlogAdmin;
+
+impl AdminLog for KlogAdmin {
+    fn syslog(&self, severity: Severity, msg: &str) {
+        klog::syslog(severity, msg);
+    }
+
+    fn reopen(&self) {
+        klog::reopen();
+    }
+}
+
+pub struct TracingAdmin;
+
+impl AdminLog for TracingAdmin {
+    fn syslog(&self, severity: Severity, msg: &str) {
+        match severity {
+            Severity::Emerg | Severity::Alert | Severity::Crit | Severity::Err => {
+                tracing::error!(target: "krb5-admin", "{msg}");
+            }
+            Severity::Warning => tracing::warn!(target: "krb5-admin", "{msg}"),
+            Severity::Debug => tracing::debug!(target: "krb5-admin", "{msg}"),
+            Severity::Notice | Severity::Info => tracing::info!(target: "krb5-admin", "{msg}"),
+        }
+    }
+}
+
+struct AdminLogFwd(Arc<dyn AdminLog>);
+
+impl Log for AdminLogFwd {
+    fn syslog(&mut self, severity: Severity, msg: &str) {
+        self.0.syslog(severity, msg);
+    }
+
+    fn reopen(&mut self) {
+        self.0.reopen();
+    }
+}
+
+std::thread_local! {
+    static THREAD_ADMIN_LOG: std::cell::RefCell<Option<Arc<dyn AdminLog>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+pub(crate) fn admin_syslog(severity: Severity, msg: &str) {
+    let sent = THREAD_ADMIN_LOG.with(|slot| {
+        let slot = slot.borrow();
+        if let Some(log) = slot.as_ref() {
+            log.syslog(severity, msg);
+            true
+        } else {
+            false
+        }
+    });
+    if !sent {
+        klog::syslog(severity, msg);
+    }
+}
+
+pub(crate) fn set_thread_admin_log(log: Option<Arc<dyn AdminLog>>) {
+    THREAD_ADMIN_LOG.with(|slot| *slot.borrow_mut() = log);
 }
 
 /// Why kadmind could not start.
@@ -135,6 +205,9 @@ pub struct Kadmind {
     report: Option<UnhandledRpc>,
     limits: ServeLimits,
     iprop_resync: Option<Arc<IpropResync>>,
+    log: Arc<dyn AdminLog>,
+    pwqual: Vec<Arc<dyn Pwqual>>,
+    hooks: Vec<Arc<dyn Kadm5Hook>>,
 }
 
 impl Kadmind {
@@ -208,29 +281,10 @@ impl Kadmind {
             report: None,
             limits: cfg.limits,
             iprop_resync,
+            log: cfg.log,
+            pwqual: cfg.pwqual,
+            hooks: cfg.hooks,
         })
-    }
-
-    /// Build kadmind from parts directly, without [`new`](Self::new)'s profile set-up. Crate-internal
-    /// for the kpasswd-only serving helpers; it is not a public bypass of the start-up checks.
-    #[must_use]
-    pub(crate) fn from_parts(
-        store: SharedStore,
-        acl: Acl,
-        cpw_key: Option<ProtocolKey>,
-        conf: AcceptorConfig,
-    ) -> Self {
-        Self {
-            store,
-            authcfg: Arc::new(Kadm5AuthConfig::from_acl(acl)),
-            cpw_key,
-            rcache: ReplayCache::new(),
-            conf: Arc::new(conf),
-            programs: Programs::BOTH,
-            report: None,
-            limits: ServeLimits::default(),
-            iprop_resync: None,
-        }
     }
 
     #[must_use]
@@ -255,15 +309,8 @@ impl Kadmind {
             tcp: &listeners.tcp,
             rpc: &listeners.rpc,
         };
-        net_server::run(
-            self,
-            &sockets,
-            max_conns,
-            max_req,
-            &Wake::Shutdown(stop),
-            &mut Klog,
-        )
-        .map(|open_fds| ServeSummary { open_fds })
+        run_logged(self, &sockets, max_conns, max_req, &Wake::Shutdown(stop))
+            .map(|open_fds| ServeSummary { open_fds })
     }
 
     /// Whether kpasswd is served: `services` asked for it and the kadmin/changepw key is present.
@@ -368,6 +415,7 @@ impl Listeners {
         listen: &KadmindListen,
         services: Services,
         iprop: Option<&IpropConfig>,
+        log: &dyn AdminLog,
     ) -> Result<Self, StartError> {
         let mut list: BindAddresses<BindService> = BindAddresses::default();
         let mut added = Ok(());
@@ -400,7 +448,7 @@ impl Listeners {
                 .flat_map(|l| l.split([',', ';', ' ']))
                 .filter(|e| e.starts_with('/'))
             {
-                klog::syslog(
+                log.syslog(
                     Severity::Warning,
                     &format!(
                         "kpasswd_listen entry {entry} is a UNIX-domain socket, which is not supported; it is skipped"
@@ -430,8 +478,8 @@ impl Listeners {
         }
         for line in list.take_log() {
             match line {
-                ListenLog::Debug(l) => klog::syslog(Severity::Debug, &l),
-                ListenLog::Err(l) => klog::syslog(Severity::Err, &l),
+                ListenLog::Debug(l) => log.syslog(Severity::Debug, &l),
+                ListenLog::Err(l) => log.syslog(Severity::Err, &l),
             }
         }
         // An add refusal or an empty list stops kadmind before any socket is bound.
@@ -439,7 +487,7 @@ impl Listeners {
             return Err(StartError::Listen("Invalid argument".into()));
         }
         // MIT: `loop_setup_network` (lib/apputils/net-server.c:1068-1068)
-        klog::syslog(Severity::Info, "setting up network...");
+        log.syslog(Severity::Info, "setting up network...");
         let (mut rpc, mut udp, mut tcp) = (Vec::new(), Vec::new(), Vec::new());
         let mut programs = Programs {
             kadm: false,
@@ -464,7 +512,7 @@ impl Listeners {
                 }
             }
         }
-        klog::syslog(
+        log.syslog(
             Severity::Info,
             &format!("set up {} sockets", udp.len() + tcp.len() + rpc.len()),
         );
@@ -519,31 +567,39 @@ pub fn serve_kadmind(
     sockets: &Sockets<'_>,
     signals: &Signals,
 ) -> io::Result<Vec<RawFd>> {
-    net_server::run(
+    run_logged(
         kadmind,
         sockets,
         MAX_STREAM_DATA_CONNECTIONS,
         MAX_REQUEST,
         &Wake::Signals(signals),
-        &mut Klog,
     )
 }
 
-/// [`serve_kadmind`] until `stop` is set, looked at after each wait of at most `poll`: an embedder's or a test's loop.
-pub fn serve_kadmind_until(
+fn run_logged(
     kadmind: &mut Kadmind,
     sockets: &Sockets<'_>,
-    stop: &AtomicBool,
-    poll: Duration,
-) -> io::Result<()> {
-    let wake = Wake::Flag { stop, every: poll };
-    net_server::run(
-        kadmind,
-        sockets,
-        MAX_STREAM_DATA_CONNECTIONS,
-        MAX_REQUEST,
-        &wake,
-        &mut Klog,
-    )
-    .map(drop)
+    max_conns: usize,
+    max_req: usize,
+    wake: &Wake<'_>,
+) -> io::Result<Vec<RawFd>> {
+    let set_pw = !kadmind.pwqual.is_empty();
+    let set_hooks = !kadmind.hooks.is_empty();
+    if set_pw {
+        set_thread_pwqual(kadmind.pwqual.clone());
+    }
+    if set_hooks {
+        set_thread_kadm5_hook(kadmind.hooks.clone());
+    }
+    set_thread_admin_log(Some(Arc::clone(&kadmind.log)));
+    let mut log = AdminLogFwd(Arc::clone(&kadmind.log));
+    let result = net_server::run(kadmind, sockets, max_conns, max_req, wake, &mut log);
+    set_thread_admin_log(None);
+    if set_pw {
+        clear_thread_pwqual();
+    }
+    if set_hooks {
+        clear_thread_kadm5_hook();
+    }
+    result
 }

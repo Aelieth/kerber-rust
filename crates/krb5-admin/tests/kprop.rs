@@ -57,6 +57,7 @@ fn kprop_replica_issues_with_same_krbtgt() {
 
 #[test]
 fn kprop_tcp_replica_issues_as_with_shared_stash() {
+    use std::io::Write;
     use std::net::{TcpListener, TcpStream};
     use std::thread;
     use std::time::Duration;
@@ -82,13 +83,23 @@ fn kprop_tcp_replica_issues_as_with_shared_stash() {
         .unwrap();
     let addr = listener.local_addr().unwrap();
     let join = thread::spawn(move || {
+        use std::io::Read;
         krb5_config::isolate_test_krb5();
         let (mut stream, _) = listener.accept().unwrap();
-        kprop_recv(&mut stream, MASTER).expect("kprop_recv")
+        let mut hdr = [0u8; 4];
+        stream.read_exact(&mut hdr).unwrap();
+        let n = usize::try_from(u32::from_be_bytes(hdr)).unwrap();
+        let mut blob = vec![0u8; n];
+        stream.read_exact(&mut blob).unwrap();
+        kprop_load_bytes(&blob, MASTER).unwrap()
     });
     thread::sleep(Duration::from_millis(20));
     let mut client = TcpStream::connect(addr).unwrap();
-    kprop_send(&store, MASTER, &mut client).expect("kprop_send");
+    let blob = kprop_dump_bytes(&store, MASTER).unwrap();
+    client
+        .write_all(&u32::try_from(blob.len()).unwrap().to_be_bytes())
+        .unwrap();
+    client.write_all(&blob).unwrap();
     let replica = join.join().expect("thread");
     let after = replica
         .krbtgt()

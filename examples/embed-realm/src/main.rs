@@ -20,7 +20,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
-use krb5_admin::{Kadmind, KadmindConfig, Listeners, ServeLimits, Services, Shutdown};
+use krb5_admin::{
+    Kadmind, KadmindConfig, Listeners, ServeLimits, Services, Shutdown, TracingAdmin,
+};
 use krb5_config::{KadmindListen, KdcPaths, LogSpecs, ProfileSet};
 use krb5_kdc::OpenFailure;
 use krb5_log::klog::{self, Severity, os_error_text};
@@ -99,7 +101,7 @@ fn main() {
 
     // Bind the listeners, then set up the admin service over the shared store — both here, in the
     // foreground, as the daemon does before it forks.
-    let listeners = Listeners::bind(&listen, services, None)
+    let listeners = Listeners::bind(&listen, services, None, &TracingAdmin)
         .unwrap_or_else(|e| cannot_start(&progname, &format!("{e} while initializing network")));
     let cfg = KadmindConfig {
         profile: Arc::new(profile),
@@ -108,6 +110,9 @@ fn main() {
         limits: ServeLimits::default(),
         acl,
         auth_modules: auth_modules::example_modules(),
+        log: Arc::new(TracingAdmin),
+        pwqual: Vec::new(),
+        hooks: Vec::new(),
         iprop: None,
     };
     let mut kadmind = Kadmind::new(shared, cfg)

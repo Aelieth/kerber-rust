@@ -14,21 +14,24 @@ mod listen;
 
 use krb5_crypto::EncryptionType;
 use krb5_kdc::{Acl, AdminOp, PrincipalStore};
-use krb5_protocol::{Keytab, ReplayCache, verify_ap_req};
+use krb5_protocol::Keytab;
 use krb5_types::PrincipalName;
 use thiserror::Error;
 
 pub use getdate::{DateError, get_date_rel, parse_date, parse_interval};
+#[cfg(feature = "test-hooks")]
+#[doc(hidden)]
+pub use kadm5::serve_kadm5_conn;
 pub use kadm5::{
     Decision, IncrReply, IpropClient, IpropResync, Kadm5Auth, Kadm5AuthConfig, Kadm5RpcSession,
     Programs, RpcCtx, RpcFailure, RpcPeer, UnhandledRpc, acceptor_names_served, changepw_acceptor,
     check_auth_gssapi_names, check_iprop_rpcsec_auth, check_rpcsec_auth, glob_pattern_ok,
-    kadm5_handle_rpc, kdb_rd_req, serve_kadm5_conn,
+    kadm5_handle_rpc, kdb_rd_req,
 };
 pub use kadmin_cli::{kadmin_local_main, ss_parse};
 pub use kadmind::{
-    IpropConfig, Kadmind, KadmindConfig, Listeners, ServeLimits, ServeSummary, Services,
-    StartError, serve_kadmind, serve_kadmind_until,
+    AdminLog, IpropConfig, Kadmind, KadmindConfig, KlogAdmin, Listeners, ServeLimits, ServeSummary,
+    Services, StartError, TracingAdmin, serve_kadmind,
 };
 pub use kprop::{
     IpropPoll, IpropWake, KPROP_SERVICE, KPROPD_IO_TIMEOUT, KpropAuth, KpropCreds, KpropDump,
@@ -43,10 +46,21 @@ pub use kprop::{
 pub use krb5_kdc::Shutdown;
 pub use listen::{
     ChangepwAccepted, ChangepwRefused, KADMIND_PORT, KPASSWD_PORT, KPROP_PORT, changepw_accept,
-    dispatch_kadmind, encode_kadmind_req, encode_kpasswd_req, handle_kpasswd_rfc3244,
-    kpasswd_udp_exchange_to, kprop_recv, kprop_send, parse_kpasswd_rep, serve_kpasswd_tcp,
-    serve_kpasswd_udp,
+    encode_kpasswd_req, kpasswd_udp_exchange_to, parse_kpasswd_rep,
 };
+#[cfg(feature = "test-hooks")]
+#[doc(hidden)]
+pub fn handle_kpasswd_from(
+    store: &krb5_kdc::SharedDump,
+    authcfg: &kadm5::Kadm5AuthConfig,
+    conf: &krb5_protocol::AcceptorConfig,
+    replay: &krb5_protocol::ReplayCache,
+    raw: &[u8],
+    from: &str,
+    local: Option<std::net::IpAddr>,
+) -> Result<Vec<u8>, Error> {
+    listen::handle_kpasswd_from(store, authcfg, conf, replay, raw, from, local)
+}
 
 /// Load a kadm5 ACL file. `None` is MIT `kadmin.local` full privs for `actor`.
 pub fn load_acl_file(actor: &str, path: Option<&std::path::Path>) -> Result<Acl, String> {
@@ -207,18 +221,8 @@ impl From<krb5_kdc::Error> for Error {
     }
 }
 
-/// Wire op codes for the kadmind-equivalent framing.
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Op {
-    Create = 1,
-    Delete = 2,
-    Ktadd = 3,
-    /// Change password (kpasswd / RFC 3244 style).
-    Cpw = 4,
-}
-
-/// Authenticated admin session: AP-REQ must succeed and ACL is checked per op.
+/// Authenticated admin session. ACL is checked per op.
+#[doc(hidden)]
 pub struct AdminSession<'a> {
     store: &'a mut PrincipalStore,
     acl: &'a Acl,
@@ -226,21 +230,6 @@ pub struct AdminSession<'a> {
 }
 
 impl<'a> AdminSession<'a> {
-    /// Verify `ap_req` with `service_key` and bind `actor` from the authenticator.
-    pub fn from_ap_req(
-        store: &'a mut PrincipalStore,
-        acl: &'a Acl,
-        service_key: &krb5_crypto::ProtocolKey,
-        ap_req: &[u8],
-        replay: &ReplayCache,
-    ) -> Result<Self, Error> {
-        let ok =
-            verify_ap_req(ap_req, service_key, replay).map_err(|e| Error::Inner(e.to_string()))?;
-        let crealm = String::from_utf8_lossy(ok.authenticator.crealm.as_bytes());
-        let actor = ok.authenticator.cname.unparse_with_realm(&crealm);
-        Ok(Self { store, acl, actor })
-    }
-
     #[must_use]
     pub fn local(store: &'a mut PrincipalStore, acl: &'a Acl, actor: impl Into<String>) -> Self {
         Self {

@@ -30,9 +30,10 @@ pub(crate) use glob::{glob_expand, glob_is_match, policies_matching, principals_
 pub use iprop::{IncrReply, IpropClient, IpropResync, RpcFailure};
 pub(crate) use policy::{create_policy_local, modify_policy_local};
 pub(crate) use rpc::Kadm5Conn;
-pub use rpc::{
-    Kadm5RpcSession, Programs, RpcCtx, RpcPeer, UnhandledRpc, kadm5_handle_rpc, serve_kadm5_conn,
-};
+#[cfg(feature = "test-hooks")]
+#[doc(hidden)]
+pub use rpc::serve_kadm5_conn;
+pub use rpc::{Kadm5RpcSession, Programs, RpcCtx, RpcPeer, UnhandledRpc, kadm5_handle_rpc};
 
 /// The message of the kadm5 code `code` (`lib/kadm5/kadm_err.et`), as `error_message` gives it.
 pub(crate) fn kadm5_error_message(code: u32) -> String {

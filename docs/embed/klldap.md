@@ -119,15 +119,15 @@ kerber-rust point release:
   inside `PrincipalStore::change` and is refused outside it before it touches
   the store. A kadm5 hook runs after the write and must not take the store's
   write guard.
-- **kadmind as a library.** `Kadmind` and `serve_kadmind_until` run
-  kadmind's loop (kpasswd over UDP and TCP, kadm5 on its RPC listeners) on
-  the caller's thread over a `SharedDump`, as `krb5-kadmind` does; the
-  listener setup lives in the binary. An embedder serving kadm5 or
-  kpasswd from a `SharedDump` calls `PrincipalStore::init_pwqual` on the store
-  itself, as `krb5-kadmind` does at start; without it the realm's `dict_file`
-  is not applied. Remote MIT `kadmin` on 749 (which
-  the satomlin fleet uses for `addprinc -randkey` + `ktadd`) is that loop on
-  a thread beside the KDC's, or `krb5-kadmind` run beside KLLDAP.
+- **kadmind as a library.** `Kadmind::new` prepares the store, checks the
+  acceptor names, and takes the kpasswd key when the service set asks for it.
+  `Listeners::bind` binds the sockets, and `Kadmind::serve` runs the loop on
+  the caller's thread until a `Shutdown`. The binary's log is `KlogAdmin`;
+  an embedder passes `TracingAdmin` or its own `AdminLog`. Password-quality
+  modules and kadm5 hooks on `KadmindConfig` apply to that kadmind alone;
+  empty lists keep `register_pwqual` and `register_kadm5_hook`. Remote MIT
+  `kadmin` on 749 is that loop on a thread beside the KDC's, or
+  `krb5-kadmind` run beside KLLDAP.
 - **Bootstrap.** `bootstrap_realm_into` creates K/M, krbtgt, `kadmin/*` and a
   random-key admin that requires pre-auth, and returns the admin keytab.
   `create_database` writes the stash, then the lock files, then the database.

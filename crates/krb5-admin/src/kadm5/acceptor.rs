@@ -6,7 +6,7 @@ use krb5_crypto::{EncryptionType, ProtocolKey};
 use krb5_gss::{ChannelBindings, GssContext};
 use krb5_kdc::principals::{kadmin_admin, kadmin_changepw};
 use krb5_kdc::{PrincipalStore, SharedDump as SharedStore, ktkdb_get_entry};
-use krb5_log::klog::{self, Severity};
+use krb5_log::klog::Severity;
 use krb5_protocol::{
     AcceptorConfig, ApVerifyOk, ApVerifyParams, KeytabLookup, ReplayCache, verify_ap_req_ex,
 };
@@ -22,7 +22,7 @@ fn kdb_keytab_entry(
 ) -> Result<ProtocolKey, KeytabLookup> {
     let (g, read) = krb5_kdc::read_fresh(store);
     if let Err(e) = read {
-        klog::syslog(Severity::Err, &format!("{e} while reloading database"));
+        crate::kadmind::admin_syslog(Severity::Err, &format!("{e} while reloading database"));
         return Err(KeytabLookup::Other(krb5_protocol::Error::Io {
             message: e.to_string(),
             kind: io::ErrorKind::Other,

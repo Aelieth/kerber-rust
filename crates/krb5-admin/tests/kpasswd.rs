@@ -1,3 +1,4 @@
+#![cfg(feature = "test-hooks")]
 //! Admin whole-flow tests.
 //! The modifier is that global handle's caller, not the ticket client.
 
@@ -5,7 +6,7 @@
 mod common;
 use common::*;
 
-use krb5_admin::{encode_kpasswd_req, handle_kpasswd_rfc3244, *};
+use krb5_admin::{encode_kpasswd_req, *};
 use krb5_asn1::encode;
 use krb5_kdc::principals::kadmin_changepw;
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented, documented_admin_id};
@@ -17,6 +18,46 @@ use krb5_protocol::{
 };
 use krb5_testkit::scratch_dir;
 use krb5_types::{ChangePasswdData, PrincipalName};
+
+fn kpasswd_answer(
+    store: &krb5_kdc::SharedDump,
+    acl: &krb5_kdc::Acl,
+    conf: &AcceptorConfig,
+    replay: &ReplayCache,
+    raw: &[u8],
+) -> Result<Vec<u8>, krb5_admin::Error> {
+    let authcfg = krb5_admin::Kadm5AuthConfig::from_acl(acl.clone());
+    krb5_admin::handle_kpasswd_from(
+        store,
+        &authcfg,
+        conf,
+        replay,
+        raw,
+        "127.0.0.1",
+        Some(std::net::IpAddr::from([127, 0, 0, 1])),
+    )
+}
+
+fn udp_cfg(acl: krb5_kdc::Acl) -> krb5_admin::KadmindConfig {
+    use std::sync::Arc;
+    krb5_admin::KadmindConfig {
+        profile: Arc::new(krb5_config::ProfileSet {
+            realm: TEST_REALM.into(),
+            krb5: krb5_config::Krb5Conf::default(),
+            kdc: None,
+            kdc_context: krb5_config::Krb5Conf::default(),
+        }),
+        services: krb5_admin::Services::DAEMON,
+        listen: krb5_config::KadmindListen::for_realm(None, TEST_REALM, None),
+        limits: krb5_admin::ServeLimits::default(),
+        acl,
+        auth_modules: Vec::new(),
+        log: Arc::new(krb5_admin::KlogAdmin),
+        pwqual: Vec::new(),
+        hooks: Vec::new(),
+        iprop: None,
+    }
+}
 
 /// the keytab principal becomes the ticket's server, so garbled cleartext (here `host/x`) is never compared.
 #[test]
@@ -67,7 +108,7 @@ fn kpasswd_ticket_with_a_forged_cleartext_server_is_served_under_the_changepw_ke
     let req = encode_kpasswd_req(&ap_der, &encode(&priv_msg).expect("encode priv"));
 
     let shared = shared_dump(store);
-    let rep = handle_kpasswd_rfc3244(
+    let rep = kpasswd_answer(
         &shared,
         &acl,
         &AcceptorConfig::default(),
@@ -138,7 +179,7 @@ fn kpasswd_self_change_without_initial_is_initial_flag_needed() {
         build_krb_priv_with_seq(&tgs_out.session_key, &encode(&cpw).unwrap(), None).unwrap();
     let req = encode_setpw(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap());
     let shared = shared_store(store);
-    let rep = handle_kpasswd_rfc3244(
+    let rep = kpasswd_answer(
         &shared,
         &acl,
         &AcceptorConfig::default(),
@@ -225,7 +266,7 @@ fn kpasswd_self_change_with_other_name_type_still_requires_initial() {
         build_krb_priv_with_seq(&tgs_out.session_key, &encode(&cpw).unwrap(), None).unwrap();
     let req = encode_setpw(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap());
     let shared = shared_store(store);
-    let rep = handle_kpasswd_rfc3244(
+    let rep = kpasswd_answer(
         &shared,
         &acl,
         &AcceptorConfig::default(),
@@ -312,7 +353,7 @@ fn kpasswd_target_realm_mismatch_is_harderror() {
         build_krb_priv_with_seq(&as_out.session_key, &encode(&cpw).unwrap(), None).unwrap();
     let req = encode_setpw(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap());
     let shared = shared_store(store);
-    let rep = handle_kpasswd_rfc3244(
+    let rep = kpasswd_answer(
         &shared,
         &acl,
         &AcceptorConfig::default(),
@@ -411,7 +452,7 @@ fn kpasswd_foreign_self_change_needs_initial() {
         build_krb_priv_with_seq(&tgs_out.session_key, &encode(&cpw).unwrap(), None).unwrap();
     let req = encode_setpw(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap());
     let shared = shared_store(store);
-    let rep = handle_kpasswd_rfc3244(
+    let rep = kpasswd_answer(
         &shared,
         &acl,
         &AcceptorConfig::default(),
@@ -499,7 +540,7 @@ fn kpasswd_unprivileged_other_principal_is_accessdenied() {
         build_krb_priv_with_seq(&tgs_out.session_key, &encode(&cpw).unwrap(), None).unwrap();
     let req = encode_setpw(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap());
     let shared = shared_store(store);
-    let rep = handle_kpasswd_rfc3244(
+    let rep = kpasswd_answer(
         &shared,
         &acl,
         &AcceptorConfig::default(),
@@ -579,7 +620,7 @@ fn kpasswd_setpw_log_prints_the_client_cut_to_the_targets_length() {
         build_krb_priv_with_seq(&as_out.session_key, &encode(&cpw).unwrap(), None).unwrap();
     let req = encode_setpw(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap());
     let shared = shared_dump(store);
-    handle_kpasswd_rfc3244(
+    kpasswd_answer(
         &shared,
         &acl,
         &AcceptorConfig::default(),
@@ -630,7 +671,7 @@ fn kpasswd_logs_the_code_text_for_an_empty_password_and_the_module_sentence_for_
         .unwrap();
         let priv_msg = build_krb_priv_with_seq(&as_out.session_key, newpw, None).unwrap();
         let req = encode_kpasswd_req(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap());
-        let rep = handle_kpasswd_rfc3244(
+        let rep = kpasswd_answer(
             &shared,
             &acl,
             &AcceptorConfig::default(),
@@ -753,7 +794,7 @@ fn kpasswd_self_change_with_initial_succeeds() {
         build_krb_priv_with_seq(&as_out.session_key, &encode(&cpw).unwrap(), None).unwrap();
     let req = encode_setpw(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap());
     let shared = shared_store(store);
-    let rep = handle_kpasswd_rfc3244(
+    let rep = kpasswd_answer(
         &shared,
         &acl,
         &AcceptorConfig::default(),
@@ -832,7 +873,7 @@ fn kpasswd_admin_change_ignores_initial() {
         build_krb_priv_with_seq(&tgs_out.session_key, &encode(&cpw).unwrap(), None).unwrap();
     let req = encode_setpw(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap());
     let shared = shared_store(store);
-    let rep = handle_kpasswd_rfc3244(
+    let rep = kpasswd_answer(
         &shared,
         &acl,
         &AcceptorConfig::default(),
@@ -938,7 +979,7 @@ fn kpasswd_policy_rejection_is_softerror() {
     let req = encode_setpw(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap());
     let shared = shared_store(store);
     let replay = ReplayCache::new();
-    let rep = handle_kpasswd_rfc3244(&shared, &acl, &AcceptorConfig::default(), &replay, &req)
+    let rep = kpasswd_answer(&shared, &acl, &AcceptorConfig::default(), &replay, &req)
         .expect("policy rejection must reply");
     let (ap_rep, priv_rep) = parse_kpasswd_rep(&rep).expect("parse kpasswd rep");
     assert!(!ap_rep.is_empty(), "SOFTERROR reply includes AP-REP");
@@ -1021,7 +1062,7 @@ fn kpasswd_refuses_a_dictionary_word_after_the_database_is_read_again() {
             build_krb_priv_with_seq(&as_out.session_key, &encode(&cpw).expect("cpw"), None)
                 .expect("priv");
         let req = encode_setpw(&encode(&ap).expect("ap"), &encode(&priv_msg).expect("priv"));
-        let rep = handle_kpasswd_rfc3244(
+        let rep = kpasswd_answer(
             &shared,
             &acl,
             &AcceptorConfig::default(),
@@ -1057,7 +1098,7 @@ fn kpasswd_unknown_version_is_bad_version() {
     let (store, acl) = bootstrap_documented().unwrap();
     let req = [0u8, 6, 0, 2, 0, 0];
     let shared = shared_store(store);
-    let err = handle_kpasswd_rfc3244(
+    let err = kpasswd_answer(
         &shared,
         &acl,
         &AcceptorConfig::default(),
@@ -1081,7 +1122,7 @@ fn kpasswd_inconsistent_length_is_malformed() {
     let (store, acl) = bootstrap_documented().unwrap();
     let req = [0u8, 99, 0, 1, 0, 0];
     let shared = shared_store(store);
-    let err = handle_kpasswd_rfc3244(
+    let err = kpasswd_answer(
         &shared,
         &acl,
         &AcceptorConfig::default(),
@@ -1104,7 +1145,7 @@ fn kpasswd_bad_ap_req_is_chpwfail_autherror() {
     let (store, acl) = bootstrap_documented().unwrap();
     let req = encode_kpasswd_req(&[0, 1, 2, 3], b"x");
     let shared = shared_store(store);
-    let r1 = handle_kpasswd_rfc3244(
+    let r1 = kpasswd_answer(
         &shared,
         &acl,
         &AcceptorConfig::default(),
@@ -1112,7 +1153,7 @@ fn kpasswd_bad_ap_req_is_chpwfail_autherror() {
         &req,
     )
     .expect("chpwfail");
-    let r2 = handle_kpasswd_rfc3244(
+    let r2 = kpasswd_answer(
         &shared,
         &acl,
         &AcceptorConfig::default(),
@@ -1142,7 +1183,7 @@ fn kpasswd_ap_req_fills_datagram_is_bailout() {
     let (store, acl) = bootstrap_documented().unwrap();
     let req = encode_kpasswd_req(&[0, 1, 2, 3], &[]);
     let shared = shared_store(store);
-    let err = handle_kpasswd_rfc3244(
+    let err = kpasswd_answer(
         &shared,
         &acl,
         &AcceptorConfig::default(),
@@ -1181,7 +1222,7 @@ fn kpasswd_bad_priv_after_ap_req_is_harderror() {
     .unwrap();
     let req = encode_kpasswd_req(&krb5_asn1::encode(&ap).unwrap(), b"not-priv");
     let shared = shared_store(store);
-    let rep = handle_kpasswd_rfc3244(
+    let rep = kpasswd_answer(
         &shared,
         &acl,
         &AcceptorConfig::default(),
@@ -1244,7 +1285,7 @@ fn kpasswd_setpw_decode_failure_is_malformed() {
     let priv_msg = build_krb_priv_with_seq(&as_out.session_key, b"not-der-setpw", None).unwrap();
     let req = encode_setpw(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap());
     let shared = shared_store(store);
-    let rep = handle_kpasswd_rfc3244(
+    let rep = kpasswd_answer(
         &shared,
         &acl,
         &AcceptorConfig::default(),
@@ -1330,8 +1371,8 @@ fn kpasswd_rfc3244_bumps_kvno() {
     let req = encode_setpw(&ap_der, &priv_der);
     let shared = shared_store(store);
     let replay = ReplayCache::new();
-    let rep = handle_kpasswd_rfc3244(&shared, &acl, &AcceptorConfig::default(), &replay, &req)
-        .expect("kpasswd");
+    let rep =
+        kpasswd_answer(&shared, &acl, &AcceptorConfig::default(), &replay, &req).expect("kpasswd");
     assert!(
         rep.len() > 6 && u16::from_be_bytes([rep[4], rep[5]]) > 0,
         "success reply must include AP-REP"
@@ -1444,7 +1485,7 @@ fn kpasswd_accepts_first_current_ticket_when_best_key_differs() {
         build_krb_priv_with_seq(&as_out.session_key, &encode(&cpw_data).unwrap(), None).unwrap();
     let req = encode_setpw(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap());
     let shared = shared_store(store);
-    let rep = handle_kpasswd_rfc3244(
+    let rep = kpasswd_answer(
         &shared,
         &acl,
         &AcceptorConfig::default(),
@@ -1461,13 +1502,10 @@ fn kpasswd_accepts_first_current_ticket_when_best_key_differs() {
 #[test]
 fn kpasswd_udp_listener_then_issue_as() {
     use std::net::UdpSocket;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::thread;
     use std::time::Duration;
 
     use krb5_asn1::encode;
-    use krb5_kdc::principals::kadmin_changepw;
     use krb5_kdc::shared_dump as shared_store;
     use krb5_kdc::testrealm::{TEST_REALM, TEST_USER};
 
@@ -1480,14 +1518,6 @@ fn kpasswd_udp_listener_then_issue_as() {
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let user_key = store
         .get_name(&user)
-        .unwrap()
-        .best_key()
-        .unwrap()
-        .key
-        .clone();
-    let changepw = kadmin_changepw();
-    let cpw_key = store
-        .get_name(&changepw)
         .unwrap()
         .best_key()
         .unwrap()
@@ -1512,20 +1542,20 @@ fn kpasswd_udp_listener_then_issue_as() {
 
     let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
     let addr = sock.local_addr().unwrap();
-    let stop = Arc::new(AtomicBool::new(false));
+    let stop = krb5_admin::Shutdown::new();
     let shared = shared_store(store);
     let shared2 = shared.clone();
-    let stop2 = Arc::clone(&stop);
+    let stop2 = stop.clone();
     thread::spawn(move || {
         krb5_config::isolate_test_krb5();
-        let _ = serve_kpasswd_udp(
-            shared2,
-            acl,
-            cpw_key,
-            AcceptorConfig::default(),
-            sock,
-            stop2,
+        let mut kadmind = krb5_admin::Kadmind::new(shared2, udp_cfg(acl)).unwrap();
+        let listeners = krb5_admin::Listeners::from_sockets(
+            vec![sock],
+            Vec::new(),
+            Vec::new(),
+            krb5_admin::Programs::BOTH,
         );
+        let _ = kadmind.serve(&listeners, &stop2);
     });
     thread::sleep(Duration::from_millis(30));
     let client = UdpSocket::bind("127.0.0.1:0").unwrap();
@@ -1537,7 +1567,7 @@ fn kpasswd_udp_listener_then_issue_as() {
     let mut buf = [0u8; 4096];
     let n = client.recv(&mut buf).expect("kpasswd reply");
     assert!(n > 6, "RFC 3244 reply");
-    stop.store(true, Ordering::Relaxed);
+    stop.trigger();
     let after = shared.read().unwrap();
     let salt = user.default_salt(TEST_REALM);
     let new_key = krb5_crypto::string_to_key(
@@ -1602,7 +1632,7 @@ fn kpasswd_mit_style_subkey_seq0_then_issue_as() {
     let req = encode_kpasswd_req(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap());
     let shared = shared_store(store);
     let replay = ReplayCache::new();
-    let rep = handle_kpasswd_rfc3244(&shared, &acl, &AcceptorConfig::default(), &replay, &req)
+    let rep = kpasswd_answer(&shared, &acl, &AcceptorConfig::default(), &replay, &req)
         .expect("MIT-style kpasswd");
     assert!(
         rep.len() > 6 && u16::from_be_bytes([rep[4], rep[5]]) > 0,
@@ -1681,7 +1711,7 @@ fn kpasswd_vno1_der_stays_password() {
         build_krb_priv_with_seq(&as_out.session_key, &encode(&cpw).unwrap(), None).unwrap();
     let req = encode_kpasswd_req(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap());
     let shared = shared_store(store);
-    let rep = handle_kpasswd_rfc3244(
+    let rep = kpasswd_answer(
         &shared,
         &acl,
         &AcceptorConfig::default(),
@@ -1791,7 +1821,7 @@ fn kpasswd_stamps_kadmind_not_the_client() {
     let mut req = encode_kpasswd_req(&encode(&ap).expect("ap"), &encode(&priv_msg).expect("priv"));
     req[2..4].copy_from_slice(&0xff80u16.to_be_bytes());
     let shared = shared_dump(store);
-    let rep = handle_kpasswd_rfc3244(
+    let rep = kpasswd_answer(
         &shared,
         &acl,
         &AcceptorConfig::default(),
@@ -1877,7 +1907,7 @@ fn kpasswd_keeps_an_out_of_process_principal() {
         .expect("priv");
     let mut req = encode_kpasswd_req(&encode(&ap).expect("ap"), &encode(&priv_msg).expect("priv"));
     req[2..4].copy_from_slice(&0xff80u16.to_be_bytes());
-    let rep = handle_kpasswd_rfc3244(
+    let rep = kpasswd_answer(
         &shared,
         &acl,
         &AcceptorConfig::default(),
@@ -2048,7 +2078,7 @@ fn kpasswd_request_naming_a_receiver_the_server_does_not_have_is_refused() {
             receiver.clone(),
         );
         let shared = shared_dump(store);
-        let rep = handle_kpasswd_rfc3244(
+        let rep = kpasswd_answer(
             &shared,
             &acl,
             &AcceptorConfig::default(),
@@ -2123,7 +2153,7 @@ fn kpasswd_refuses_a_request_krb_priv_out_of_sequence() {
             priv_seq,
         );
         let shared = shared_dump(store);
-        let rep = handle_kpasswd_rfc3244(
+        let rep = kpasswd_answer(
             &shared,
             &acl,
             &AcceptorConfig::default(),
@@ -2218,7 +2248,7 @@ fn kpasswd_ticket_sealed_in_a_later_changepw_key_is_refused() {
         let priv_msg =
             build_krb_priv_with_seq(&as_out.session_key, b"later-key-pass", None).unwrap();
         let req = encode_kpasswd_req(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap());
-        let rep = handle_kpasswd_rfc3244(
+        let rep = kpasswd_answer(
             &shared,
             &acl,
             &AcceptorConfig::default(),
@@ -2260,7 +2290,7 @@ fn kpasswd_success_reply_is_mit_shaped() {
     let subkey = ProtocolKey::random(as_out.session_key.etype()).unwrap();
     let req = mit_shaped_kpasswd_req(&as_out, &user, &subkey, b"p15a-new-pass-2");
     let shared = shared_dump(store);
-    let rep = handle_kpasswd_rfc3244(
+    let rep = kpasswd_answer(
         &shared,
         &acl,
         &AcceptorConfig::default(),
@@ -2326,7 +2356,7 @@ fn kpasswd_session_enctype_outside_permitted_is_autherror() {
     let subkey = krb5_crypto::ProtocolKey::random(as_out.session_key.etype()).unwrap();
     let req = mit_shaped_kpasswd_req(&as_out, &user, &subkey, b"p15a-new-pass-3");
     let shared = shared_dump(store);
-    let rep = handle_kpasswd_rfc3244(&shared, &acl, &conf, &ReplayCache::new(), &req).unwrap();
+    let rep = kpasswd_answer(&shared, &acl, &conf, &ReplayCache::new(), &req).unwrap();
     // MIT: `krb5_dbe_def_search_enctype` (kdb_default.c:60-61)
     // the KDB keytab offers no key of a non-permitted enctype, so `krb5_rd_req` fails and `process_chpw_request` answers with the framed KRB-ERROR whose e-data is AUTHERROR "Failed reading application request".
     assert_eq!(u16::from_be_bytes([rep[4], rep[5]]), 0, "no AP-REP");
@@ -2389,7 +2419,7 @@ fn setpw_without_a_target_is_malformed() {
         .unwrap();
         let priv_msg = build_krb_priv_with_seq(&as_out.session_key, cpw, None).unwrap();
         let req = encode_setpw(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap());
-        let rep = handle_kpasswd_rfc3244(
+        let rep = kpasswd_answer(
             &shared,
             &acl,
             &AcceptorConfig::default(),

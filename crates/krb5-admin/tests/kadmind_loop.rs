@@ -6,7 +6,9 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use krb5_admin::{Kadmind, KadmindConfig, Listeners, Programs, ServeLimits, Services, Shutdown};
+use krb5_admin::{
+    Kadmind, KadmindConfig, KlogAdmin, Listeners, Programs, ServeLimits, Services, Shutdown,
+};
 use krb5_asn1::decode;
 use krb5_crypto::{EncryptionType, ProtocolKey};
 use krb5_gss::GssContext;
@@ -29,6 +31,9 @@ fn test_cfg(acl: krb5_kdc::Acl, services: Services) -> KadmindConfig {
         limits: ServeLimits::default(),
         acl,
         auth_modules: Vec::new(),
+        log: Arc::new(KlogAdmin),
+        pwqual: Vec::new(),
+        hooks: Vec::new(),
         iprop: None,
     }
 }

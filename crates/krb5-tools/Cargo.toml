@@ -58,5 +58,10 @@ name = "loadgen"
 path = "src/bin/loadgen.rs"
 required-features = ["krb5-kdc/test-hooks"]
 
+[[bin]]
+name = "rd-sweep"
+path = "src/bin/rd-sweep.rs"
+required-features = ["krb5-admin/test-hooks"]
+
 [lints]
 workspace = true

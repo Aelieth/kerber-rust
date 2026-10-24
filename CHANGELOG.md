@@ -57,6 +57,7 @@ any other `###` heading.
 
 ### Changed
 
+- **admin.** An embedder supplies kadmind's log and its own password-quality and hook modules.
 - **kdc.** A pending OTP verify no longer blocks the KDC loop: other clients are served while it runs and it resumes with the verdict, as in MIT.
 - **client.** kinit and kpasswd warn when a deprecated enctype was used to authenticate.
 - **protocol.** A preauth key that does not decrypt the AS reply is dropped, and the long-term key is tried.
@@ -141,6 +142,9 @@ any other `###` heading.
 
 ### Removed
 
+- **admin.** The standalone kpasswd listeners, `serve_kadmind_until`, and the length-prefixed kprop send and receive are gone.
+- **admin.** The kadmind-equivalent framing, an op byte plus an AP-REQ, is gone.
+- **protocol.** `build_krb_safe` and `build_krb_priv` are gone; a caller passes the sequence to the longer builder.
 - **ci.** The budget workflow is gone. The six per-push walls live in `ci-budget.toml`.
 
 ### Fixed

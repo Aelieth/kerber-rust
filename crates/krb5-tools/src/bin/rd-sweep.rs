@@ -575,8 +575,16 @@ fn explicit_answer(
     conf: &AcceptorConfig,
     frame: &[u8],
 ) -> String {
-    let Ok(rep) = krb5_admin::handle_kpasswd_rfc3244(shared, acl, conf, &ReplayCache::new(), frame)
-    else {
+    let authcfg = krb5_admin::Kadm5AuthConfig::from_acl(acl.clone());
+    let Ok(rep) = krb5_admin::handle_kpasswd_from(
+        shared,
+        &authcfg,
+        conf,
+        &ReplayCache::new(),
+        frame,
+        "127.0.0.1",
+        Some(std::net::IpAddr::from([127, 0, 0, 1])),
+    ) else {
         return "drop".into();
     };
     if rep.len() < 6 {

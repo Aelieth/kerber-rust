@@ -512,7 +512,8 @@ fn rd_priv_refuses_a_replay_and_a_stale_time_under_do_time() {
         super::AUTH_CONTEXT_DO_TIME,
         "krb5_auth_con_init's flags"
     );
-    let msg = encode(&crate::safe_priv::build_krb_priv(&session, b"t").unwrap()).unwrap();
+    let msg = encode(&crate::safe_priv::build_krb_priv_with_seq(&session, b"t", Some(1)).unwrap())
+        .unwrap();
     assert_eq!(ac.rd_priv(&msg).unwrap(), b"t");
     let again = ac.rd_priv(&msg).unwrap_err();
     assert!(

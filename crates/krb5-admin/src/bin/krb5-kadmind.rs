@@ -241,12 +241,22 @@ fn main() {
         let (rpc, udp, tcp) = legacy_sockets(&progname, pinned);
         krb5_admin::Listeners::from_sockets(udp, tcp, rpc, krb5_admin::Programs::BOTH)
     } else {
-        krb5_admin::Listeners::bind(&listen, services, iprop_cfg.as_ref())
-            .unwrap_or_else(|e| bind_fail(&progname, e))
+        krb5_admin::Listeners::bind(
+            &listen,
+            services,
+            iprop_cfg.as_ref(),
+            &krb5_admin::KlogAdmin,
+        )
+        .unwrap_or_else(|e| bind_fail(&progname, e))
     };
     #[cfg(not(feature = "test-hooks"))]
-    let listeners = krb5_admin::Listeners::bind(&listen, services, iprop_cfg.as_ref())
-        .unwrap_or_else(|e| bind_fail(&progname, e));
+    let listeners = krb5_admin::Listeners::bind(
+        &listen,
+        services,
+        iprop_cfg.as_ref(),
+        &krb5_admin::KlogAdmin,
+    )
+    .unwrap_or_else(|e| bind_fail(&progname, e));
     let socket_fds: Vec<i32> = {
         let s = listeners.sockets();
         let mut fds: Vec<i32> = s
@@ -267,6 +277,9 @@ fn main() {
         limits: ServeLimits::default(),
         acl,
         auth_modules: Vec::new(),
+        log: std::sync::Arc::new(krb5_admin::KlogAdmin),
+        pwqual: Vec::new(),
+        hooks: Vec::new(),
         iprop: iprop_cfg,
     };
     // Before daemonizing, as MIT does; the names check is after the network above.

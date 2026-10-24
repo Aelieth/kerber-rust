@@ -10,9 +10,9 @@ use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented, documente
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
 use krb5_protocol::{
-    ReplayCache, build_ap_rep, build_ap_req, build_ap_req_opts, build_krb_cred, build_krb_priv,
-    build_krb_safe, unwrap_krb_priv, unwrap_krb_safe, verify_ap_rep, verify_ap_req,
-    verify_ap_req_ex,
+    ReplayCache, build_ap_rep, build_ap_req, build_ap_req_opts, build_krb_cred,
+    build_krb_priv_with_seq, build_krb_safe_ex, unwrap_krb_priv, unwrap_krb_safe, verify_ap_rep,
+    verify_ap_req, verify_ap_req_ex,
 };
 use krb5_types::{EncTgsRepPart, PrincipalName, ascii, ku};
 use std::collections::BTreeMap;
@@ -141,11 +141,11 @@ fn ap_rep_mutual_and_safe_priv() {
     let ap_rep_raw = encode(&ap_rep).unwrap();
     verify_ap_rep(&ap_rep_raw, &tgs_out.session_key, &ok.authenticator).unwrap();
 
-    let safe = build_krb_safe(&tgs_out.session_key, b"safe-payload").unwrap();
+    let safe = build_krb_safe_ex(&tgs_out.session_key, b"safe-payload", Some(1), true).unwrap();
     let replay = ReplayCache::new();
     let got = unwrap_krb_safe(&tgs_out.session_key, &encode(&safe).unwrap(), &replay).unwrap();
     assert_eq!(got, b"safe-payload");
-    let privm = build_krb_priv(&tgs_out.session_key, b"priv-payload").unwrap();
+    let privm = build_krb_priv_with_seq(&tgs_out.session_key, b"priv-payload", Some(1)).unwrap();
     let got = unwrap_krb_priv(&tgs_out.session_key, &encode(&privm).unwrap(), &replay).unwrap();
     assert_eq!(got, b"priv-payload");
 

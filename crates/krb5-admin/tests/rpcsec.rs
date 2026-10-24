@@ -1,3 +1,4 @@
+#![cfg(feature = "test-hooks")]
 //! RPCSEC DATA without a context is MIT `CREDPROBLEM` (connection kept).
 
 #[path = "common/mod.rs"]

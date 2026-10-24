@@ -316,7 +316,7 @@ pub(super) fn kadm5_service_name(ctx: &GssContext) -> String {
 pub(super) fn kadm5_log_op(proc: u32, args: &[u8], who: &Caller<'_>, reply: &[u8]) {
     for line in kadm5_log_lines(proc, args, who, reply) {
         let unauthorized = line.starts_with("Unauthorized");
-        klog::syslog(Severity::Notice, &line);
+        crate::kadmind::admin_syslog(Severity::Notice, &line);
         tracing::info!(
             event = krb5_log::events::ADMIN,
             component = "krb5-admin",
@@ -330,7 +330,7 @@ pub(super) fn kadm5_log_op(proc: u32, args: &[u8], who: &Caller<'_>, reply: &[u8
 // MIT: `log_miscerr` (kadmin/server/ovsec_kadmd.c:291-295)
 /// the address and the error, at notice.
 pub(super) fn rpc_log_miscerr(addr: &str, error: &str) {
-    klog::syslog(
+    crate::kadmind::admin_syslog(
         Severity::Notice,
         &format!("Miscellaneous RPC error: {addr}, {error}"),
     );
@@ -374,7 +374,7 @@ pub(super) fn rpc_log_badverf(proc: u32, client: Option<&str>, server: Option<&s
         .map_or_else(|| proc.to_string(), |n| (*n).to_owned());
     let client = trunc_name(client.unwrap_or("(null)"));
     let server = trunc_name(server.unwrap_or("(null)"));
-    klog::syslog(
+    crate::kadmind::admin_syslog(
         Severity::Notice,
         &format!(
             "WARNING! Forged/garbled request: {procname}, claimed client = {client}, server = \
@@ -392,7 +392,7 @@ pub(super) fn rpc_log_flavor_refused(iprop: bool, addr: &str, flavor: u32) {
     } else {
         "Authentication"
     };
-    klog::syslog(
+    crate::kadmind::admin_syslog(
         Severity::Err,
         &format!("{lead} attempt failed: {addr}, RPC authentication flavor {flavor}"),
     );
@@ -415,13 +415,13 @@ pub(super) fn rpc_log_badauth(addr: &str, major: u32, minor: &str) {
         format!("    {minor}"),
         "   GSS-API error strings complete.".to_owned(),
     ] {
-        klog::syslog(Severity::Notice, &line);
+        crate::kadmind::admin_syslog(Severity::Notice, &line);
     }
 }
 
 /// An RPCSEC_GSS context for a service its program does not take, cut by `trunc_name`.
 pub(super) fn rpc_log_bad_service(service: &str) {
-    klog::syslog(
+    crate::kadmind::admin_syslog(
         Severity::Err,
         &format!("bad service principal {}", trunc_name(service)),
     );
@@ -434,5 +434,5 @@ pub(super) fn rpc_log_bad_proc(iprop: bool, addr: &str, proc: u32) {
     } else {
         format!("Invalid KADM5 procedure number: {addr}, {proc}")
     };
-    klog::syslog(Severity::Err, &line);
+    crate::kadmind::admin_syslog(Severity::Err, &line);
 }
