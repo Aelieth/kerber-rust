@@ -368,7 +368,7 @@ fn admin_changes_keep_the_counts_unless_they_set_them() {
         .change(|s| s.create_password(&acl, &documented_admin_id(), &name("newp"), b"New-pw-123"))
         .unwrap()
         .unwrap();
-    assert_eq!(record(&db, "newp"), Some(Lockout::default()));
+    assert_eq!(record(&db, "newp"), None);
     assert!(issue_as(&kdc, &bad(TEST_USER, 3)).is_err());
     admin
         .change(|s| {
@@ -567,15 +567,8 @@ fn create_and_load_make_the_side_file_and_destroy_removes_it() {
     assert_eq!(meta.uid(), std::fs::metadata(&realm.db).unwrap().uid());
     let mut ids: Vec<String> = lockout_records(&realm.db).into_keys().collect();
     ids.sort();
-    assert_eq!(
-        ids,
-        [
-            "K/M@KL.TEST",
-            "kadmin/admin@KL.TEST",
-            "kadmin/changepw@KL.TEST",
-            "krbtgt/KL.TEST@KL.TEST"
-        ]
-    );
+    // kadmin/admin and kadmin/changepw are added by addprinc, which writes no row; all four read 0.
+    assert_eq!(ids, ["K/M@KL.TEST", "krbtgt/KL.TEST@KL.TEST"]);
     let dump = realm.dir.join("d1");
     assert!(
         realm

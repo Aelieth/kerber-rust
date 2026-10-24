@@ -921,8 +921,10 @@ impl PrincipalStore {
             });
             stamp_admin_tl(p, false, actor);
         }
-        self.clear_as_fail_count(name);
         let snap = self.map.get(&id).cloned();
+        if let Some(p) = &snap {
+            self.zero_fail_count_in_file(p, now);
+        }
         self.note_ulog(id, false, snap);
         self.save_if_configured()
     }
@@ -940,8 +942,10 @@ impl PrincipalStore {
             p.fail_auth_count = 0;
             stamp_admin_tl(p, false, actor);
         }
-        self.clear_as_fail_count(name);
         let snap = self.map.get(&id).cloned();
+        if let Some(p) = &snap {
+            self.zero_fail_count_in_file(p, unix_now_u32());
+        }
         self.note_ulog(id, false, snap);
         self.save_if_configured()
     }
@@ -1080,6 +1084,7 @@ impl PrincipalStore {
         let mut p = self.map.remove(&old_id).ok_or(Error::NotFound)?;
         p.name = new.clone();
         new_realm.clone_into(&mut p.realm);
+        self.rename_lockout_in_file(&old_id, &p);
         // MIT: `krb5_db_def_rename_principal` (lib/kdb/kdb_default.c:537-545)
         self.note_ulog(p.id(), false, Some(p.clone()));
         self.note_ulog(old_id, true, None);
@@ -1394,10 +1399,23 @@ impl PrincipalStore {
             .update(self.db_path(), self.dblock.as_ref(), p, stamp, update);
     }
 
-    pub(crate) fn clear_as_fail_count(&self, name: &PrincipalName) {
-        self.lockout.overlay_zero(&self.lockout_id(name));
+    pub(crate) fn zero_fail_count_in_file(&self, p: &Principal, stamp: u32) {
+        self.update_lockout(
+            p,
+            stamp,
+            LockoutUpdate {
+                zero_fail_count: true,
+                ..Default::default()
+            },
+        );
     }
 
+    pub(crate) fn rename_lockout_in_file(&self, old_id: &str, new: &Principal) {
+        self.lockout
+            .rename_row(self.db_path(), self.dblock.as_ref(), old_id, new);
+    }
+
+    #[cfg(feature = "test-hooks")]
     fn lockout_id(&self, name: &PrincipalName) -> String {
         let id = crate::kdb::lookup_principal_id(name, &self.realm);
         self.resolve_id(&id).unwrap_or(id)

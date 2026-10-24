@@ -279,6 +279,9 @@ impl PrincipalStore {
         self.replace_password_keys(&id, new_keys, nhist.zip(hist), keepold, actor)?;
         self.apply_pw_max_life_in(name, princ_realm)?;
         let snap = self.map.get(&id).cloned();
+        if let Some(p) = &snap {
+            self.zero_fail_count_in_file(p, unix_now_u32());
+        }
         self.note_ulog(id, false, snap);
         self.save_if_configured()?;
         self.postcommit(super::kadm5_hook::Post::Chpass {

@@ -166,7 +166,7 @@ any other `###` heading.
 
 ### Fixed
 - **client.** A PKINIT retry after the KDC offers a larger DH group checks the reply against the retried request, as MIT's does.
-- **kdc.** A refresh re-reads the lockout side file only when its identity, length or mtime moved, not on every applied tail or change. Lab beside MIT.
+- **kdc.** The lockout side file is read per principal and written only for the fields a change sets, not read or rewritten whole per operation. Lab beside MIT.
 - **kdc/client.** RFC 8636's partyVInfo is the AS-REQ's server as sent, as MIT's is, not `krbtgt`: MIT's kpasswd could not decrypt our `kadmin/changepw` reply.
 
 - **client.** kinit's expired-password requests, `kadmin/changepw`'s and the final one, each make their FAST armor afresh, as MIT's contexts do; they reused the first one's.

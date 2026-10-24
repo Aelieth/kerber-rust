@@ -63,13 +63,6 @@ pub(crate) fn crc32<'a>(bytes: impl IntoIterator<Item = &'a u8>) -> u32 {
 }
 
 #[must_use]
-// mtime too: an in-place put keeps the length
-pub(crate) fn lockout_file_stamp(db: &Path) -> Option<(u64, u64, u64, i64, i64)> {
-    let m = std::fs::symlink_metadata(lockout_path(db)).ok()?;
-    Some((m.dev(), m.ino(), m.len(), m.mtime(), m.mtime_nsec()))
-}
-
-#[must_use]
 pub fn lockout_path(db: &Path) -> PathBuf {
     suffixed(db, SUFFIX_LOCKOUT)
 }
@@ -174,10 +167,15 @@ fn index(bytes: &[u8]) -> Index {
         ix.foreign = true;
         return ix;
     };
-    let mut off = HEADER.len();
+    index_body(&mut ix, body, len_u64(HEADER.len()));
+    ix
+}
+
+fn index_body(ix: &mut Index, body: &[u8], start: u64) {
+    let mut off = start;
     for line in body.split_inclusive(|&b| b == b'\n') {
-        let at = len_u64(off);
-        off += line.len();
+        let at = off;
+        off += len_u64(line.len());
         match line.strip_suffix(b"\n").and_then(parse_line) {
             Some((l, name)) => {
                 if ix.records.insert(name.to_owned(), (at, l)).is_some() {
@@ -187,7 +185,6 @@ fn index(bytes: &[u8]) -> Index {
             None => ix.dead += 1,
         }
     }
-    ix
 }
 
 fn read_all(file: &File) -> io::Result<Vec<u8>> {
@@ -282,6 +279,17 @@ impl SideFile {
         Ok(())
     }
 
+    fn extend(&mut self, to: u64) -> io::Result<()> {
+        let from = self.ix.len;
+        let mut buf = vec![0u8; usize::try_from(to.saturating_sub(from)).unwrap_or(0)];
+        let n = read_full_at(&self.file, &mut buf, from)?;
+        buf.truncate(n);
+        index_body(&mut self.ix, &buf, from);
+        self.ix.len = from + len_u64(n);
+        self.ix.whole = buf.last().is_none_or(|&b| b == b'\n');
+        Ok(())
+    }
+
     fn refresh(&mut self) -> io::Result<bool> {
         let meta = match std::fs::symlink_metadata(&self.path) {
             Ok(m) => m,
@@ -302,7 +310,10 @@ impl SideFile {
                 None => false,
             });
         }
-        if meta.len() != self.ix.len {
+        let len = meta.len();
+        if len > self.ix.len && self.ix.len > 0 && self.ix.whole && !self.ix.foreign {
+            self.extend(len)?;
+        } else if len != self.ix.len {
             self.reindex()?;
         }
         Ok(true)
@@ -385,6 +396,22 @@ impl SideFile {
             .iter()
             .map(|(id, &(_, l))| (id.clone(), l))
             .collect()
+    }
+
+    fn compact(&mut self) -> io::Result<()> {
+        let ats: Vec<(String, u64)> = self
+            .ix
+            .records
+            .iter()
+            .map(|(id, &(at, _))| (id.clone(), at))
+            .collect();
+        let mut live = Vec::with_capacity(ats.len());
+        for (id, at) in ats {
+            if let Some(l) = self.record_at(at, &id)? {
+                live.push((id, l));
+            }
+        }
+        self.rewrite(&live)
     }
 }
 
@@ -482,63 +509,66 @@ pub(crate) fn ensure(db: &Path) -> io::Result<()> {
 
 // MIT: `klmdb_delete_principal` (plugins/kdb/lmdb/kdb_lmdb.c:819-838)
 pub(crate) fn reconcile_ids(store: &PrincipalStore, db: &Path, ids: &[String]) -> io::Result<()> {
-    let Some(mut side) = open_for_writing(db)? else {
-        return Ok(());
-    };
-    if side.ix.foreign {
-        return Ok(());
-    }
-    for id in ids {
-        match store.principal_by_id(id) {
-            Some(p) => {
-                let l = Lockout::of(p);
-                if side.ix.records.get(id).map(|&(_, have)| have) != Some(l) {
-                    side.put(id, l)?;
-                }
-            }
-            None => side.delete(id)?,
-        }
-    }
-    if side.ix.dead > side.ix.records.len() {
-        side.rewrite(&store_records(store))?;
-    }
-    Ok(())
+    let gone: Vec<String> = ids
+        .iter()
+        .filter(|id| store.principal_by_id(id).is_none())
+        .cloned()
+        .collect();
+    store.reconcile_lockout_deletes(db, &gone)
 }
 
 pub(crate) fn reconcile(store: &PrincipalStore, db: &Path, make_missing: bool) -> io::Result<()> {
-    let want = store_records(store);
     let Some(mut side) = open_for_writing(db)? else {
         return if make_missing {
-            make_beside(db, &want)
+            make_beside(db, &store_records(store))
         } else {
             Ok(())
         };
     };
     if side.ix.foreign {
         return if make_missing {
-            side.rewrite(&want)
+            side.rewrite(&store_records(store))
         } else {
             Ok(())
         };
     }
-    for (id, l) in &want {
-        if side.ix.records.get(id).map(|&(_, have)| have) != Some(*l) {
-            side.put(id, *l)?;
+    if make_missing {
+        // A load or fresh create owns the records: write memory.
+        let want = store_records(store);
+        for (id, l) in &want {
+            if side.ix.records.get(id).map(|&(_, have)| have) != Some(*l) {
+                side.put(id, *l)?;
+            }
         }
+        let keep: HashSet<&str> = want.iter().map(|(id, _)| id.as_str()).collect();
+        let gone: Vec<String> = side
+            .ix
+            .records
+            .keys()
+            .filter(|id| !keep.contains(id.as_str()))
+            .cloned()
+            .collect();
+        for id in gone {
+            side.delete(&id)?;
+        }
+        if side.ix.dead > side.ix.records.len() {
+            side.rewrite(&want)?;
+        }
+        return Ok(());
     }
-    let keep: HashSet<&str> = want.iter().map(|(id, _)| id.as_str()).collect();
+    // A running store's full save keeps the lockout the KDC wrote.
     let gone: Vec<String> = side
         .ix
         .records
         .keys()
-        .filter(|id| !keep.contains(id.as_str()))
+        .filter(|id| store.principal_by_id(id).is_none())
         .cloned()
         .collect();
-    for id in gone {
-        side.delete(&id)?;
+    for id in &gone {
+        side.delete(id)?;
     }
     if side.ix.dead > side.ix.records.len() {
-        side.rewrite(&want)?;
+        side.compact()?;
     }
     Ok(())
 }
@@ -614,6 +644,26 @@ impl Inner {
 impl LockoutState {
     fn inner(&self) -> MutexGuard<'_, Inner> {
         self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub(crate) fn reconcile_deletes(&self, db: &Path, gone: &[String]) -> io::Result<()> {
+        if gone.is_empty() {
+            return Ok(());
+        }
+        let mut inner = self.inner();
+        for id in gone {
+            inner.overlay.remove(id);
+        }
+        let Some(side) = inner.side(db) else {
+            return Ok(());
+        };
+        for id in gone {
+            side.delete(id)?;
+        }
+        if side.ix.dead > side.ix.records.len() {
+            side.compact()?;
+        }
+        Ok(())
     }
 
     pub(crate) fn lookup(
@@ -718,9 +768,37 @@ impl LockoutState {
         inner.overlay.insert(id, update.apply(base, stamp));
     }
 
-    pub(crate) fn overlay_zero(&self, id: &str) {
-        if let Some(l) = self.inner().overlay.get_mut(id) {
-            l.fail_auth_count = 0;
+    pub(crate) fn rename_row(
+        &self,
+        db: Option<&Path>,
+        lock: Option<&Arc<DbLock>>,
+        old_id: &str,
+        new: &Principal,
+    ) {
+        let new_id = new.id();
+        let mut inner = self.inner();
+        let overlaid = inner.overlay.remove(old_id);
+        let held = db
+            .zip(lock)
+            .map(|(db, lock)| (db, lock.hold(DbLockMode::Exclusive)));
+        if let Some((db, Ok(_held))) = held {
+            let moved = match inner.side(db) {
+                Some(side) if side.writable => match side.get(old_id).ok().flatten().or(overlaid) {
+                    Some(v) => side
+                        .put(&new_id, v)
+                        .and_then(|()| side.delete(old_id))
+                        .is_ok(),
+                    None => true,
+                },
+                _ => false,
+            };
+            if moved {
+                inner.overlay.remove(&new_id);
+                return;
+            }
+        }
+        if let Some(v) = overlaid {
+            inner.overlay.insert(new_id, v);
         }
     }
 

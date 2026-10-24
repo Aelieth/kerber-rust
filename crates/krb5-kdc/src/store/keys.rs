@@ -325,6 +325,9 @@ impl PrincipalStore {
         }
         self.apply_pw_max_life_in(name, princ_realm)?;
         let snap = self.map.get(&id).cloned();
+        if let Some(p) = &snap {
+            self.zero_fail_count_in_file(p, crate::store::unix_now_u32());
+        }
         self.note_ulog(id, false, snap);
         #[cfg(test)]
         if FAIL_NEXT_CHRAND_SAVE.with(Cell::get) {
@@ -442,6 +445,9 @@ impl PrincipalStore {
         }
         self.apply_pw_max_life_in(name, princ_realm)?;
         let snap = self.map.get(&id).cloned();
+        if let Some(p) = &snap {
+            self.zero_fail_count_in_file(p, crate::store::unix_now_u32());
+        }
         self.note_ulog(id, false, snap);
         self.save_if_configured()
     }
