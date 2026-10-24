@@ -94,14 +94,17 @@ impl SpakeGroup {
     }
 }
 
+pub fn spake_group_words(value: &str) -> impl Iterator<Item = &str> {
+    value
+        .split([' ', '\t', '\r', '\n', ','])
+        .filter(|word| !word.is_empty())
+}
+
 // MIT parse_groups; see docs/parity/b1-crypto-keys.md
 #[must_use]
 pub fn spake_parse_groups(value: &str) -> Vec<SpakeGroup> {
     let mut out = Vec::new();
-    for word in value
-        .split([' ', '\t', '\r', '\n', ','])
-        .filter(|w| !w.is_empty())
-    {
+    for word in spake_group_words(value) {
         let Some(group) = SpakeGroup::from_name(word) else {
             tracing::debug!(name = word, "Unrecognized SPAKE group name");
             continue;

@@ -37,6 +37,7 @@ use password::{ModuleFail, PasswordCell};
 pub use responder::{QUESTION_OTP, QUESTION_PASSWORD, Responder, ResponderItems};
 use spake::{
     SpakeEnd, client_groups, continue_spake, refuse_spake_combo, refuse_spake_skip, spake_forced,
+    trace_unknown_groups,
 };
 
 #[derive(Clone, Debug)]
@@ -356,6 +357,7 @@ fn as_exchange_inner(
 ) -> Result<AsOutcome, Error> {
     let _ = krb5_types::try_ascii(req.realm).map_err(|e| Error::ReplyMismatch(e.to_string()))?;
     refuse_spake_combo(req)?;
+    trace_unknown_groups(req.profile);
     let etypes: Vec<i32> = match req.etypes {
         Some(e) if !e.is_empty() => e.to_vec(),
         _ => conf_etypes(req.profile, false),

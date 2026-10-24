@@ -40,6 +40,6 @@ pub use ops::{
 pub use prf::{derive_prfplus, derive_prfplus_enctype, prf, prf_plus};
 pub use spake::{
     SPAKE_DEFAULT_GROUPS_CLIENT, SPAKE_DEFAULT_GROUPS_KDC, SpakeGroup, spake_decode_point,
-    spake_derive_key, spake_keygen, spake_parse_groups, spake_public, spake_result,
-    spake_thash_update, spake_wbytes,
+    spake_derive_key, spake_group_words, spake_keygen, spake_parse_groups, spake_public,
+    spake_result, spake_thash_update, spake_wbytes,
 };

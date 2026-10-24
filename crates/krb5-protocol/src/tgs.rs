@@ -900,6 +900,16 @@ fn tgs_round_trip(
     if !kdc_options.bit(flag_bit::RENEW) && !kdc_options.bit(flag_bit::VALIDATE) {
         tgs_reply_req_times(&enc_part, &till, None, None, &kdc_options)?;
     }
+    if kdc_options.bit(flag_bit::CANONICALIZE)
+        && (inner.ticket.sname.name_string != requested.name_string
+            || inner.ticket.realm.as_bytes() != realm.as_bytes())
+        && tgs_sname_matches(&requested, &inner.ticket.sname, &enc_part.sname)
+    {
+        trace::check_reply_server_differs(
+            trace::Princ::new(&requested, realm.as_bytes()),
+            trace::Princ::new(&inner.ticket.sname, inner.ticket.realm.as_bytes()),
+        );
+    }
     tgs_sname_ok(&requested, &inner.ticket.sname, &enc_part.sname)?;
     let session_etype = EncryptionType::known(enc_part.key.keytype)?;
     let session_key = ProtocolKey::from_bytes(session_etype, enc_part.key.keyvalue.as_ref())?;

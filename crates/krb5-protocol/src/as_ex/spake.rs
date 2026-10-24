@@ -3,7 +3,8 @@
 use krb5_asn1::{decode, encode};
 use krb5_config::Krb5Conf;
 use krb5_crypto::{
-    ProtocolKey, SPAKE_DEFAULT_GROUPS_CLIENT, SpakeGroup, spake_parse_groups, string_to_key,
+    ProtocolKey, SPAKE_DEFAULT_GROUPS_CLIENT, SpakeGroup, spake_group_words, spake_parse_groups,
+    string_to_key,
 };
 use krb5_types::spake::{PaSpake, SF_NONE, SpakeChallenge};
 use krb5_types::{KrbError, PaData, err, pa};
@@ -24,7 +25,22 @@ use crate::trace;
 
 const SPAKE_MODULE: &str = "spake";
 
-/// The groups the client permits, in configuration order.
+pub(super) fn trace_unknown_groups(profile: &Krb5Conf) {
+    if !trace::enabled() || !crate::clpreauth::loaded(profile, "spake") {
+        return;
+    }
+    let joined = profile
+        .spake_preauth_groups
+        .as_ref()
+        .map(|groups| groups.join(" "));
+    let raw = joined.as_deref().unwrap_or(SPAKE_DEFAULT_GROUPS_CLIENT);
+    for word in spake_group_words(raw) {
+        if SpakeGroup::from_name(word).is_none() {
+            trace::spake_unknown_group(word);
+        }
+    }
+}
+
 // MIT: `group_init_state` (groups.c:213-239)
 /// Unset uses the client default. No permitted group fails init.
 pub(super) fn client_groups(profile: &Krb5Conf) -> Vec<SpakeGroup> {

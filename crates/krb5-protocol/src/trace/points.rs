@@ -158,11 +158,6 @@ pub fn fast_reply_key(key: Key<'_>) {
     krb5int_trace("FAST reply key: {keyblock}", &[Arg::Keyblock(Some(key))]);
 }
 
-// MIT: `TRACE_FAST_REQUIRED` (include/k5-trace.h:194-195)
-pub fn fast_required() {
-    krb5int_trace("Using FAST due to KRB5_FAST_REQUIRED flag", &[]);
-}
-
 // MIT: `TRACE_GIC_PWD_CHANGED` (include/k5-trace.h:200-201)
 pub fn gic_pwd_changed() {
     krb5int_trace("Getting initial TGT with changed password", &[]);
@@ -245,14 +240,6 @@ pub fn init_creds_keytab_lookup_failed(code: i64, msg: Option<&str>) {
 // MIT: `TRACE_INIT_CREDS_PREAUTH` (include/k5-trace.h:237-238)
 pub fn init_creds_preauth() {
     krb5int_trace("Preauthenticating using KDC method data", &[]);
-}
-
-// MIT: `TRACE_INIT_CREDS_PREAUTH_DECRYPT_FAIL` (include/k5-trace.h:239-240)
-pub fn init_creds_preauth_decrypt_fail(code: i64, msg: Option<&str>) {
-    krb5int_trace(
-        "Decrypt with preauth AS key failed: {kerr}",
-        &[Arg::Kerr(code, msg)],
-    );
 }
 
 // MIT: `TRACE_INIT_CREDS_PREAUTH_MORE` (include/k5-trace.h:241-242)
@@ -808,14 +795,6 @@ pub fn tkt_creds_advance(realm: &[u8]) {
     );
 }
 
-// MIT: `TRACE_TKT_CREDS_CACHED_INTERMEDIATE_TGT` (include/k5-trace.h:459-460)
-pub fn tkt_creds_cached_intermediate_tgt(client: Princ<'_>, server: Princ<'_>) {
-    krb5int_trace(
-        "Found cached TGT for intermediate realm: {creds}",
-        &[Arg::Creds(Some(client), server)],
-    );
-}
-
 // MIT: `TRACE_TKT_CREDS_CACHED_SERVICE_TGT` (include/k5-trace.h:461-462)
 pub fn tkt_creds_cached_service_tgt(client: Princ<'_>, server: Princ<'_>) {
     krb5int_trace(
@@ -856,22 +835,6 @@ pub fn tkt_creds_local_tgt(client: Princ<'_>, server: Princ<'_>) {
     );
 }
 
-// MIT: `TRACE_TKT_CREDS_NON_TGT` (include/k5-trace.h:472-474)
-pub fn tkt_creds_non_tgt(server: Princ<'_>) {
-    krb5int_trace(
-        "Received non-TGT referral response ({princ}); trying again without referrals",
-        &[Arg::Princ(Some(server))],
-    );
-}
-
-// MIT: `TRACE_TKT_CREDS_OFFPATH` (include/k5-trace.h:475-476)
-pub fn tkt_creds_offpath(realm: &[u8]) {
-    krb5int_trace(
-        "Received TGT for offpath realm {data}",
-        &[Arg::Data(Some(realm))],
-    );
-}
-
 // MIT: `TRACE_TKT_CREDS_REFERRAL` (include/k5-trace.h:477-478)
 pub fn tkt_creds_referral(server: Princ<'_>) {
     krb5int_trace(
@@ -901,14 +864,6 @@ pub fn tkt_creds_retry_tcp() {
     );
 }
 
-// MIT: `TRACE_TKT_CREDS_SAME_REALM_TGT` (include/k5-trace.h:485-487)
-pub fn tkt_creds_same_realm_tgt(realm: &[u8]) {
-    krb5int_trace(
-        "Received TGT referral back to same realm ({data}); trying again without referrals",
-        &[Arg::Data(Some(realm))],
-    );
-}
-
 // MIT: `TRACE_TKT_CREDS_SERVICE_REQ` (include/k5-trace.h:488-490)
 pub fn tkt_creds_service_req(server: Princ<'_>, referral: bool) {
     krb5int_trace(
@@ -928,27 +883,11 @@ pub fn tkt_creds_target_tgt(server: Princ<'_>) {
     );
 }
 
-// MIT: `TRACE_TKT_CREDS_TARGET_TGT_OFFPATH` (include/k5-trace.h:493-494)
-pub fn tkt_creds_target_tgt_offpath(server: Princ<'_>) {
-    krb5int_trace(
-        "Received TGT for service realm: {princ}",
-        &[Arg::Princ(Some(server))],
-    );
-}
-
 // MIT: `TRACE_TKT_CREDS_TGT_REQ` (include/k5-trace.h:495-496)
 pub fn tkt_creds_tgt_req(next: Princ<'_>, cur: Princ<'_>) {
     krb5int_trace(
         "Requesting TGT {princ} using TGT {princ}",
         &[Arg::Princ(Some(next)), Arg::Princ(Some(cur))],
-    );
-}
-
-// MIT: `TRACE_TKT_CREDS_WRONG_ENCTYPE` (include/k5-trace.h:497-498)
-pub fn tkt_creds_wrong_enctype() {
-    krb5int_trace(
-        "Retrying TGS request with desired service ticket enctypes",
-        &[],
     );
 }
 
