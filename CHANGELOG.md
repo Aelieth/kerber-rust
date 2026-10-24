@@ -57,6 +57,8 @@ any other `###` heading.
 
 ### Changed
 
+- **examples.** krb5-embed-realm records an allowed-to-delegate target from `--allow-to-delegate`.
+- **examples.** krb5-embed-realm creates both trust principals from `--create-trust` and a key file.
 - **kdc.** A trust principal takes the realm's lifetimes and flags, and both directions share one key at one kvno.
 - **kdc.** A dump keeps the next RID above every RID it has held, a repeated RID is refused, and a reload keeps the database SID unless kdc.conf sets one.
 - **kdc.** S4U allow-lists are stored in the dump, and a missing lockout file is created when the database is writable.

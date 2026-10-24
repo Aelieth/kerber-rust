@@ -36,6 +36,14 @@ A start that finds the stash and no database finishes that create and keeps the 
 prints `created` empty and leaves the key versions as they were. MIT `kadmin -p admin/admin` and
 `kpasswd` then work against it exactly as against the daemon.
 
+`--create-trust OTHER.TEST --key-file key.hex` creates both trust principals and stops. The file is
+32 bytes of aes256 written as 64 hex characters, and the bytes are wiped after the key is built.
+`--kvno N` sets that version on both; without it the version is 1. The actor is `admin/admin@REALM`,
+checked against the realm's ACL before either principal is written.
+
+`--allow-to-delegate host/svc HTTP/target@REALM` adds that target, in MIT's principal string form,
+to the service's allowed-to list, writes it, and stops. The service has to already be in the realm.
+
 ## Authorization modules
 
 It registers two example `kadm5_auth` modules in [`auth_modules.rs`](src/auth_modules.rs) through

@@ -686,6 +686,7 @@ dependencies = [
  "krb5-crypto",
  "krb5-kdc",
  "krb5-log",
+ "krb5-protocol",
  "krb5-types",
  "sha1",
  "signal-hook",
