@@ -835,6 +835,14 @@ pub fn tkt_creds_local_tgt(client: Princ<'_>, server: Princ<'_>) {
     );
 }
 
+// MIT: `TRACE_TKT_CREDS_NON_TGT` (include/k5-trace.h:472-474)
+pub fn tkt_creds_non_tgt(server: Princ<'_>) {
+    krb5int_trace(
+        "Received non-TGT referral response ({princ}); trying again without referrals",
+        &[Arg::Princ(Some(server))],
+    );
+}
+
 // MIT: `TRACE_TKT_CREDS_REFERRAL` (include/k5-trace.h:477-478)
 pub fn tkt_creds_referral(server: Princ<'_>) {
     krb5int_trace(
@@ -861,6 +869,14 @@ pub fn tkt_creds_retry_tcp() {
     krb5int_trace(
         "Request or response is too big for UDP; retrying with TCP",
         &[],
+    );
+}
+
+// MIT: `TRACE_TKT_CREDS_SAME_REALM_TGT` (include/k5-trace.h:485-487)
+pub fn tkt_creds_same_realm_tgt(realm: &[u8]) {
+    krb5int_trace(
+        "Received TGT referral back to same realm ({data}); trying again without referrals",
+        &[Arg::Data(Some(realm))],
     );
 }
 

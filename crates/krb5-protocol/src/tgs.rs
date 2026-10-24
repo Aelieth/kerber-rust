@@ -274,10 +274,26 @@ fn tgs_inner(
                 );
             }
         };
+        if step_referrals(sname, &served, &out)? == ReferralStep::Again {
+            let out = service_non_referral_request(
+                profile,
+                &cur_kdc,
+                &cur_tgt,
+                sname,
+                &served,
+                service_extra(creds_opts, &cur_tgt, realm),
+                creds_opts,
+            )?;
+            // MIT: `complete` (lib/krb5/krb/get_creds.c:451-470)
+            trace::tkt_creds_complete(trace::Princ::new(
+                &out.enc_part.sname,
+                out.enc_part.srealm.as_bytes(),
+            ));
+            return Ok((out, path));
+        }
         match chase_step(&start, &mut seen, sname, &served, &out)? {
             TgsHop::Done => {
                 // MIT: `complete` (lib/krb5/krb/get_creds.c:451-470)
-                // the service's credential.
                 trace::tkt_creds_complete(trace::Princ::new(
                     &out.enc_part.sname,
                     out.enc_part.srealm.as_bytes(),
@@ -286,7 +302,6 @@ fn tgs_inner(
             }
             TgsHop::Referral(foreign) => {
                 // MIT: `step_referrals` (lib/krb5/krb/get_creds.c:561-634)
-                // a referral TGT is followed to its realm.
                 trace::tkt_creds_referral(trace::Princ::new(
                     &out.ticket.sname,
                     out.ticket.realm.as_bytes(),
@@ -441,14 +456,34 @@ fn tgs_as_tgt(prev: &AsOutcome, out: TgsOutcome) -> AsOutcome {
     }
 }
 
-fn tgs_sname_matches(
+// MIT: `check_reply_server` (lib/krb5/krb/gc_via_tkt.c:104-136)
+fn check_reply_server(
     requested: &PrincipalName,
+    requested_realm: &[u8],
     ticket: &PrincipalName,
+    ticket_realm: &[u8],
     enc: &PrincipalName,
-) -> bool {
-    ticket.name_string == requested.name_string
-        || enc.name_string == requested.name_string
-        || (ticket.is_krbtgt() && requested.components_joined() != ticket.components_joined())
+    enc_realm: &[u8],
+    canonicalize: bool,
+) -> Result<(), Error> {
+    if requested.name_string == ticket.name_string && requested_realm == ticket_realm {
+        return Ok(());
+    }
+    if canonicalize {
+        trace::check_reply_server_differs(
+            trace::Princ::new(requested, requested_realm),
+            trace::Princ::new(enc, enc_realm),
+        );
+        return Ok(());
+    }
+    if !(requested.is_krbtgt() && ticket.is_krbtgt()) {
+        return Err(Error::ReplyMismatch(format!(
+            "TGS-REP sname mismatch requested={} ticket={}",
+            requested.components_joined(),
+            ticket.components_joined()
+        )));
+    }
+    Ok(())
 }
 
 // MIT: `krb5int_fast_process_response` (fast.c:548-551)
@@ -493,22 +528,6 @@ fn tgs_fast_reply_key(
     Ok((reply_key, fast.padata))
 }
 
-fn tgs_sname_ok(
-    requested: &PrincipalName,
-    ticket: &PrincipalName,
-    enc: &PrincipalName,
-) -> Result<(), Error> {
-    if tgs_sname_matches(requested, ticket, enc) {
-        Ok(())
-    } else {
-        Err(Error::ReplyMismatch(format!(
-            "TGS-REP sname mismatch requested={} ticket={}",
-            requested.components_joined(),
-            ticket.components_joined()
-        )))
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TgsHop {
     Done,
@@ -541,6 +560,38 @@ fn chase_step(
             Ok(TgsHop::Referral(foreign))
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReferralStep {
+    Chase,
+    Again,
+}
+
+// MIT: `step_referrals` (lib/krb5/krb/get_creds.c:572-598)
+// MIT: `begin_non_referral` (lib/krb5/krb/get_creds.c:492-496)
+fn step_referrals(
+    requested: &PrincipalName,
+    hop_realm: &str,
+    out: &TgsOutcome,
+) -> Result<ReferralStep, Error> {
+    authenticate_srealm(out)?;
+    let server = &out.ticket.sname;
+    if server.name_string == requested.name_string
+        || out.enc_part.sname.name_string == requested.name_string
+    {
+        return Ok(ReferralStep::Chase);
+    }
+    if !server.is_krbtgt() {
+        trace::tkt_creds_non_tgt(trace::Princ::new(server, out.ticket.realm.as_bytes()));
+        return Ok(ReferralStep::Again);
+    }
+    let foreign = referral_hop_realm(server).ok_or(Error::Referral)?;
+    if foreign == hop_realm {
+        trace::tkt_creds_same_realm_tgt(foreign.as_bytes());
+        return Ok(ReferralStep::Again);
+    }
+    Ok(ReferralStep::Chase)
 }
 
 pub(crate) fn tgs_hop_decision(
@@ -900,17 +951,15 @@ fn tgs_round_trip(
     if !kdc_options.bit(flag_bit::RENEW) && !kdc_options.bit(flag_bit::VALIDATE) {
         tgs_reply_req_times(&enc_part, &till, None, None, &kdc_options)?;
     }
-    if kdc_options.bit(flag_bit::CANONICALIZE)
-        && (inner.ticket.sname.name_string != requested.name_string
-            || inner.ticket.realm.as_bytes() != realm.as_bytes())
-        && tgs_sname_matches(&requested, &inner.ticket.sname, &enc_part.sname)
-    {
-        trace::check_reply_server_differs(
-            trace::Princ::new(&requested, realm.as_bytes()),
-            trace::Princ::new(&inner.ticket.sname, inner.ticket.realm.as_bytes()),
-        );
-    }
-    tgs_sname_ok(&requested, &inner.ticket.sname, &enc_part.sname)?;
+    check_reply_server(
+        &requested,
+        realm.as_bytes(),
+        &inner.ticket.sname,
+        inner.ticket.realm.as_bytes(),
+        &enc_part.sname,
+        enc_part.srealm.as_bytes(),
+        kdc_options.bit(flag_bit::CANONICALIZE),
+    )?;
     let session_etype = EncryptionType::known(enc_part.key.keytype)?;
     let session_key = ProtocolKey::from_bytes(session_etype, enc_part.key.keyvalue.as_ref())?;
     // MIT: `kdcrep2creds` (lib/krb5/krb/gc_via_tkt.c:36-94)
@@ -1174,6 +1223,24 @@ struct ServiceHop<'a> {
     creds_opts: &'a TgsCredsOptions,
 }
 
+fn service_non_referral_request(
+    profile: &Krb5Conf,
+    kdc: &KdcAddr,
+    tgt: &AsOutcome,
+    sname: &PrincipalName,
+    served: &str,
+    extra: KdcOptions,
+    creds_opts: &TgsCredsOptions,
+) -> Result<TgsOutcome, Error> {
+    trace::tkt_creds_service_req(trace::Princ::new(sname, served.as_bytes()), false);
+    tgs_once(
+        profile,
+        kdc,
+        tgt,
+        service_request(sname, served, tgs_request_options(tgt, extra), creds_opts),
+    )
+}
+
 /// A referral adds canonicalize; the retry sends the caller's options alone.
 fn tgs_service_once(
     profile: &Krb5Conf,
@@ -1193,9 +1260,8 @@ fn tgs_service_once(
     let server = trace::Princ::new(sname, served.as_bytes());
     trace::tkt_creds_service_req(server, true);
     let non_referral = || {
-        trace::tkt_creds_service_req(server, false);
-        let req = service_request(sname, served, tgs_request_options(tgt, extra), creds_opts);
-        tgs_once(profile, kdc, tgt, req).map(|out| ServiceStep::Reply(Box::new(out)))
+        service_non_referral_request(profile, kdc, tgt, sname, served, extra, creds_opts)
+            .map(|out| ServiceStep::Reply(Box::new(out)))
     };
     match tgs_once(
         profile,
@@ -1327,35 +1393,62 @@ mod tests {
 
     #[test]
     fn tgs_sname_ignores_name_type_rejects_wrong_components() {
+        let realm = b"KERBER.TEST";
         let asked = PrincipalName::new(
             PrincipalName::NT_PRINCIPAL,
             ["host", "testhost.kerber.test"],
         );
         let heimdal =
             PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "testhost.kerber.test"]);
-        assert!(tgs_sname_matches(&asked, &heimdal, &heimdal));
+        check_reply_server(&asked, realm, &heimdal, realm, &heimdal, realm, false).unwrap();
         let other = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "other.kerber.test"]);
-        assert!(!tgs_sname_matches(&asked, &other, &other));
+        assert!(check_reply_server(&asked, realm, &other, realm, &other, realm, false).is_err());
+        check_reply_server(&asked, realm, &other, realm, &other, realm, true).unwrap();
+        assert!(
+            check_reply_server(
+                &asked,
+                realm,
+                &heimdal,
+                b"OTHER.TEST",
+                &heimdal,
+                b"OTHER.TEST",
+                false
+            )
+            .is_err()
+        );
         let krbtgt = PrincipalName::krbtgt("OTHER.TEST");
-        assert!(tgs_sname_matches(&asked, &krbtgt, &krbtgt));
-        tgs_sname_ok(&asked, &krbtgt, &krbtgt).unwrap();
+        assert!(
+            check_reply_server(
+                &asked,
+                realm,
+                &krbtgt,
+                b"OTHER.TEST",
+                &krbtgt,
+                b"OTHER.TEST",
+                false
+            )
+            .is_err()
+        );
         let want_c = PrincipalName::krbtgt("C.TEST");
         let got_b = PrincipalName::krbtgt("B.TEST");
-        assert!(tgs_sname_matches(&want_c, &got_b, &got_b));
-        tgs_sname_ok(&want_c, &got_b, &got_b).unwrap();
+        check_reply_server(
+            &want_c, b"C.TEST", &got_b, b"B.TEST", &got_b, b"B.TEST", false,
+        )
+        .unwrap();
     }
 
     #[test]
     fn tgs_sname_flat_krbtgt_is_reply_mismatch() {
+        let realm = b"KERBER.TEST";
         let two = PrincipalName::krbtgt("KERBER.TEST");
         let flat = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["krbtgt/KERBER.TEST"]);
         assert_eq!(two.components_joined(), flat.components_joined());
         assert!(matches!(
-            tgs_sname_ok(&two, &flat, &flat),
+            check_reply_server(&two, realm, &flat, realm, &flat, realm, false),
             Err(Error::ReplyMismatch(_))
         ));
         assert!(matches!(
-            tgs_sname_ok(&flat, &two, &two),
+            check_reply_server(&flat, realm, &two, realm, &two, realm, false),
             Err(Error::ReplyMismatch(_))
         ));
     }

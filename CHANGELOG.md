@@ -56,6 +56,8 @@ any other `###` heading.
 
 ### Changed
 
+- **protocol.** A TGS reply for another server is accepted only when canonicalize was asked, or when both are TGTs, as MIT's is.
+- **protocol.** A referral reply whose server is not a TGT, or whose TGT is for the current realm, is requested again without referrals.
 - **protocol.** An unknown SPAKE group is traced once at the start of an AS exchange when SPAKE is loaded, and a canonicalized reply whose server differs is traced.
 - **admin.** On a full resync kadmind dumps the database and kprops it to the replica itself, as MIT's does, instead of leaving the two commands to be run by hand.
 - **gss.** A mutual initiator sends the RFC 4537 enctype list, and an authenticator leaves out a zero sequence number.
