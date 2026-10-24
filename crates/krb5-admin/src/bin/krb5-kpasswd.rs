@@ -273,16 +273,12 @@ fn initial_ticket_text(e: &Error) -> String {
         Error::Io { .. } => "Cannot contact any KDC for requested realm",
         Error::KrbError { code, .. } => match *code {
             // MIT: `KRB5KDC_ERR_NAME_EXP` (krb5_err.et:42-42)
-            // the text.
             krb5_types::err::NAME_EXP => "Client's entry in database has expired",
             // MIT: `KRB5KDC_ERR_C_PRINCIPAL_UNKNOWN` (krb5_err.et:47-47)
-            // the text.
             krb5_types::err::C_PRINCIPAL_UNKNOWN => "Client not found in Kerberos database",
             // MIT: `KRB5KDC_ERR_CLIENT_REVOKED` (krb5_err.et:59-59)
-            // the text.
             krb5_types::err::CLIENT_REVOKED => "Client's credentials have been revoked",
             // MIT: `KRB5KDC_ERR_PREAUTH_FAILED` (krb5_err.et:65-65)
-            // the text.
             krb5_types::err::PREAUTH_FAILED => "Preauthentication failed",
             _ => return e.to_string(),
         },

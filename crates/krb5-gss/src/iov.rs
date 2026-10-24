@@ -126,7 +126,7 @@ fn split_wrap_token(
 }
 
 // MIT: `gss_krb5int_make_seal_token_v3` (k5sealv3.c:87-93)
-// a wrap token is checksummed under the
+// Checksummed under the seal usage, not the MIC usage.
 fn iov_hmac_input(
     iov: &[IovBuf<'_>],
     rfc8009: bool,
@@ -210,7 +210,6 @@ impl GssContext {
     }
 
     // MIT: `kg_seal` (k5seal.c:318-320)
-    // a context that is not established does not produce a
     fn wrap_iov_sealed(&mut self, iov: &mut [IovBuf<'_>]) -> Result<(), Error> {
         let (key, extra) = self.send_key();
         let key = key.clone();

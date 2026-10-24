@@ -1,5 +1,5 @@
 // MIT: `MAX_DECODE_DEPTH` (util/support/json.c:78-78)
-// the depth budget a parse starts with, so
+// 63 containers may nest and the 64th is an error.
 const MAX_DEPTH: usize = 64;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -58,7 +58,6 @@ impl Decoder<'_> {
     }
 
     // MIT: `white_spaces` (util/support/json.c:715-725)
-    // skips the white space, and reports
     fn skip_ws(&mut self) -> bool {
         while matches!(self.cur(), b' ' | b'\t' | b'\r' | b'\n') {
             self.p += 1;
@@ -84,7 +83,7 @@ impl Decoder<'_> {
     }
 
     // MIT: `parse_value` (util/support/json.c:1002-1069)
-    // one value. `Ok(None)` is MIT's NULL,
+    // `Ok(None)` is MIT's NULL, which a malformed nested array leaves behind with no error.
     fn parse_value(&mut self) -> Result<Option<Value>, ()> {
         if !self.skip_ws() {
             return Err(());
@@ -153,7 +152,7 @@ impl Decoder<'_> {
     }
 
     // MIT: `parse_string` (util/support/json.c:789-851)
-    // a quoted string, whose escapes are
+    // The string ends at the first NUL, as a C string does.
     fn parse_string(&mut self) -> Result<Vec<u8>, ()> {
         if self.cur() != b'"' {
             return Err(());
@@ -214,7 +213,6 @@ impl Decoder<'_> {
     }
 
     // MIT: `parse_object_association` (util/support/json.c:855-887)
-    // one `key: value` member,
     fn parse_member(&mut self, members: &mut Vec<(Vec<u8>, Value)>) -> Result<(), ()> {
         let key = self.parse_string()?;
         if !self.skip_ws() || self.cur() != b':' {
@@ -230,7 +228,6 @@ impl Decoder<'_> {
     }
 
     // MIT: `parse_object` (util/support/json.c:891-935)
-    // members separated by commas, between
     fn parse_object(&mut self) -> Result<Vec<(Vec<u8>, Value)>, ()> {
         if self.cur() != b'{' {
             return Err(());
@@ -263,7 +260,6 @@ impl Decoder<'_> {
     }
 
     // MIT: `parse_array` (util/support/json.c:954-998)
-    // values separated by commas, between
     fn parse_array(&mut self) -> Result<Vec<Value>, ()> {
         if self.cur() != b'[' {
             return Err(());
@@ -309,7 +305,7 @@ fn hexval(c: u8) -> u32 {
 }
 
 // MIT: `is_hex_digit` (util/support/json.c:736-739)
-// a decimal digit or an uppercase letter from A
+// A lowercase letter is not a hex digit here.
 fn is_hex_digit(c: u8) -> bool {
     c.is_ascii_digit() || (b'A'..=b'F').contains(&c)
 }
@@ -333,7 +329,7 @@ pub struct JsonError;
 
 /// Decodes the text as one JSON value, which must be all of the text before its first NUL.
 // MIT: `k5_json_decode` (util/support/json.c:1072-1090)
-// a value with something after it is an
+// A top-level NULL is an error here, since MIT crashes on it.
 pub fn decode(input: &[u8]) -> Result<Value, JsonError> {
     let s = input.split(|&b| b == 0).next().unwrap_or_default();
     let mut d = Decoder {
@@ -349,9 +345,7 @@ pub fn decode(input: &[u8]) -> Result<Value, JsonError> {
 }
 
 // MIT: `encode_value` (util/support/json.c:630-684)
-// an object's members are written in order,
 // MIT: `encode_string` (util/support/json.c:584-606)
-// `"`, `\` and the control characters are
 #[must_use]
 pub fn encode(value: &Value) -> Vec<u8> {
     let mut out = Vec::new();

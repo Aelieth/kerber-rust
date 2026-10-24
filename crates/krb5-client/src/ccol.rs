@@ -87,7 +87,6 @@ impl Cache {
     }
 
     // MIT: `krb5_cc_support_switch` (ccbase.c:457-465)
-    // a DIR or KCM cache can become its
     #[must_use]
     pub const fn supports_switch(&self) -> bool {
         matches!(self, Self::Dir(_) | Self::Kcm(_))
@@ -113,7 +112,6 @@ impl Cache {
 // MIT: `dcc_resolve` (cc_dir.c:331-385)
 // a DIR collection name stands for its primary, `tkt`
 // MIT: `kcm_resolve` (cc_kcm.c:740-768)
-// a KCM name resolves only with a KCM daemon to ask,
 pub fn resolve(ctx: &ClientContext, spec: &CcSpec) -> Result<Cache, Krb5Error> {
     let other = |e: std::io::Error| Krb5Error::new(Code::Other, e.to_string());
     let kcm = |e: std::io::Error| Krb5Error::from_kcm(&e);
@@ -140,13 +138,9 @@ pub fn store_spec(name: &CcSpec, cache: &Cache) -> CcSpec {
 }
 
 // MIT: `krb5_cccol_cursor_next` (cccursor.c:83-124)
-// the caches of the collection the default
 // MIT: `fcc_ptcursor_next` (cc_file.c:1205-1241)
-// a FILE default is a collection of itself,
 // MIT: `dcc_ptcursor_next` (cc_dir.c:634-677)
-// a DIR collection lists the primary, when its file
 // MIT: `kcm_ptcursor_next` (cc_kcm.c:1210-1263)
-// a KCM collection lists the primary, when it is
 pub fn collection(ctx: &ClientContext, default: &CcSpec) -> Result<Vec<Cache>, Krb5Error> {
     let other = |e: std::io::Error| Krb5Error::new(Code::Other, e.to_string());
     match default {
@@ -180,7 +174,6 @@ pub fn collection(ctx: &ClientContext, default: &CcSpec) -> Result<Vec<Cache>, K
         }
         CcSpec::Kcm(n) if !n.is_empty() => {
             // MIT: `kcm_ptcursor_new` (cc_kcm.c:1155-1157)
-            // the cursor connects first, for a
             krb5_protocol::kcm_reachable(&ctx.profile).map_err(|e| Krb5Error::from_kcm(&e))?;
             Ok(if krb5_protocol::kcm_principal(&ctx.profile, n).is_ok() {
                 vec![Cache::Kcm(n.clone())]
@@ -206,7 +199,6 @@ pub fn collection(ctx: &ClientContext, default: &CcSpec) -> Result<Vec<Cache>, K
 }
 
 // MIT: `krb5_cc_cache_match` (cccursor.c:183-219)
-// the first cache of the collection whose
 // MIT: `match_caches` (cccursor.c:145-181)
 // a cache that is not initialized is passed over.
 pub fn cache_match(

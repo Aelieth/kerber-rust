@@ -124,7 +124,6 @@ pub(super) struct NegInit {
 }
 
 // MIT: `get_negTokenInit` (spnego_mech.c:3427-3430)
-// a token whose header is not SPNEGO is
 pub(super) fn parse_neg_init(token: &[u8]) -> Result<NegInit, Error> {
     let (oid, rest) = gss_oid_body(token)?;
     if oid != SPNEGO_OID {

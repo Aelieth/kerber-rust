@@ -517,9 +517,7 @@ pub struct PaData {
 // `data-value [1]` is an OCTET STRING, encoded
 /// even when empty, so it is not optional on the wire.
 // MIT: `typed_data_fields` (asn1_k_encode.c:1549-1551)
-// the element's two fields, in that
 // MIT: `typed_data` (asn1_k_encode.c:1552-1552)
-// the element is the SEQUENCE of those
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct TypedData {
     #[rasn(tag(explicit(0)))]

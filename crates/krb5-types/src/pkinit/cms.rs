@@ -408,7 +408,7 @@ pub fn cms_extract_unsigned(der: &[u8]) -> Option<Vec<u8>> {
 }
 
 // MIT: `cms_signeddata_verify` (pkinit_crypto_openssl.c:2052-2063)
-// a SignedData with no
+// A SignedData with no SignerInfo is the anonymous case; its content has no signature check.
 fn unsigned_signeddata_econtent(der: &[u8]) -> Option<Vec<u8>> {
     let (tag, ci, _) = take_tlv(der)?;
     if tag != 0x30 {

@@ -5,7 +5,6 @@ pub struct ParsedName {
     pub components: Vec<String>,
     pub realm: String,
     // MIT: `allocate_princ` (krb/parse.c:116-116)
-    // `has_realm_out` is set when an unquoted
     pub has_realm: bool,
 }
 
@@ -71,7 +70,6 @@ fn push_char(comps: &mut [String], realm: &mut Option<String>, in_realm: bool, c
 }
 
 // MIT: `k5_infer_principal_type` (bld_princ.c:31-42)
-// two components under `krbtgt` are
 #[must_use]
 pub fn infer_name_type(comps: &[String]) -> i32 {
     if comps.len() == 2 && comps[0] == "krbtgt" {

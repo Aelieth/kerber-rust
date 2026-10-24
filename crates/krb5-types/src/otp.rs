@@ -1,5 +1,5 @@
 // MIT: `utf8string` (lib/krb5/asn.1/asn1_k_encode.c:89-91)
-// a byte string that is never checked as
+// MIT never checks a utf8string as UTF-8, so `vendor`, `alg_id`, `service` and `pin` are octets.
 
 use std::fmt;
 

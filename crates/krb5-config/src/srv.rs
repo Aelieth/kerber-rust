@@ -1,7 +1,5 @@
 // MIT: `dns_locate_server_srv` (lib/krb5/os/locate_kdc.c:756-797)
-// `_kerberos._udp` then
 // MIT: `krb5int_make_srv_query_realm` (lib/krb5/os/dnssrv.c:258-347)
-// the query name ends in
 // MIT: `krb5int_dns_init` (lib/krb5/os/dnsglue.c:120-194)
 // `res_ninit` then `res_nsearch`.
 
@@ -130,7 +128,6 @@ fn query_service(
     trace: &mut dyn FnMut(DnsSrv),
 ) -> Find {
     // MIT: `make_lookup_name` (lib/krb5/os/dnssrv.c:50-78)
-    // the name ends in `.` so the
     let name = format!("{service}.{proto}.{realm}.");
     // MIT: `krb5int_make_srv_query_realm` (lib/krb5/os/dnssrv.c:286)
     trace(DnsSrv::Send(name.clone()));

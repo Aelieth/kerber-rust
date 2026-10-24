@@ -78,7 +78,6 @@ struct K5 {
 }
 
 // MIT: `k5_begin` (kinit.c:413-605)
-// the output cache (`-c`, else the default cache) and the
 fn k5_begin(prog: &str, opts: &KinitArgs) -> Option<K5> {
     let fail = |e: &Krb5Error, doing: &str| {
         eprintln!("{prog}: {e} {doing}");
@@ -214,7 +213,7 @@ fn k5_begin(prog: &str, opts: &KinitArgs) -> Option<K5> {
     };
     let out_spec = out_spec.unwrap_or_else(|| out.spec());
     // MIT: `read_allowed_preauth_type` (get_in_tkt.c:743-745)
-    // a `pa_type` read that fails
+    // A `pa_type` read that fails leaves the allowed type unset, and kinit continues.
     let in_cc = match &opts.in_ccache {
         None => None,
         Some(n) => match armor_ccache_spec(n) {
@@ -461,7 +460,7 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
         }
     }
     // MIT: `kinit_prompter` (clients/kinit/kinit.c:622-636)
-    // the prompter is there for any
+    // The prompter serves any mechanism, so a PKINIT that cannot run goes on to the password.
     let pw_auth = !(opts.keytab || opts.anonymous);
     let given = if pw_auth { env_password() } else { None };
     let prompted = std::cell::Cell::new(given.is_some());
@@ -478,7 +477,6 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
     };
     let new_password = env_new_password();
     // MIT: `krb5_get_init_creds_password` (gic_pwd.c:238-263)
-    // the banner, then
     let prompter = |banner: &str| -> PromptReply {
         // MIT krb5_prompter_posix; see docs/parity/b1-client.md
         println!("{banner}");

@@ -274,7 +274,6 @@ fn profile_lines(text: &str) -> impl Iterator<Item = &str> {
 }
 
 // MIT: `parse_line` (prof_parse.c:331-335)
-// that line must start with `{`, its rest unread,
 pub fn join_subsection_braces(text: &str) -> Result<String, Error> {
     let mut out = String::with_capacity(text.len());
     let mut in_section = false;
@@ -730,7 +729,6 @@ fn relation_name(tag: &str) -> &str {
 }
 
 // MIT: `profile_get_string` (prof_get.c:265-270)
-// a missing relation keeps the default, and
 fn parse_libdefaults(
     conf: &mut Krb5Conf,
     seen: &mut BTreeSet<String>,
@@ -1318,7 +1316,7 @@ pub fn init_kdc_profile() -> Result<(), Error> {
 }
 
 // MIT: `locate_server` (lib/krb5/os/locate_kdc.c:823-836)
-// the profile `[realms] kdc` list when
+// DNS only when the `kdc` list is empty; a `..` SRV target stays in the list.
 pub fn discover_kdc_in<P: AsRef<Path>>(
     paths: impl IntoIterator<Item = P>,
     realm: &str,

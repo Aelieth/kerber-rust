@@ -63,7 +63,6 @@ pub enum Error {
     #[error("{0}")]
     Ccache(String),
     // MIT: `KRB5_CONFIG_NODEFREALM` (krb5_err.et:310-310)
-    // the text.
     #[error("Configuration file does not specify default realm")]
     NoDefaultRealm,
 }
@@ -71,10 +70,8 @@ pub enum Error {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProfileError {
     // MIT: `parse_include_file` (prof_parse.c:229-231)
-    // a file that does not open fails with
     IncludeFile,
     // MIT: `parse_include_dir` (prof_parse.c:271-272)
-    // a directory that does not list fails
     IncludeDir,
     // MIT: `os_init_paths` (init_os_ctx.c:403-408)
     // a syntax error is `KRB5_CONFIG_BADFORMAT`.

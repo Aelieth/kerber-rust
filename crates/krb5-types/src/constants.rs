@@ -78,7 +78,7 @@ pub mod err {
     // MIT filter_preauth_error; see docs/parity/a3-preauth.md
     // MIT finish_process_as_req; see docs/parity/b1-crypto-keys.md
     // MIT: `finish_dispatch_cache` (dispatch.c:78-78)
-    // keeps the request's null lookaside
+    // Keeps the request's null lookaside entry for it, so a resend gets no reply either.
     pub const DISCARD: i32 = -1_750_600_189;
 }
 
@@ -105,7 +105,6 @@ pub mod ku {
     pub const GSS_INITIATOR_SEAL: u32 = 24;
     pub const GSS_INITIATOR_SIGN: u32 = 25;
     // MIT: `verify_s4u_x509_user_checksum` (kdc_util.c:1374-1374)
-    // the request checksum is
     pub const PA_S4U_X509_USER_REQUEST: u32 = 26;
     // MIT kdc_make_s4u2self_rep; see docs/parity/a2-as.md
     pub const PA_S4U_X509_USER_REPLY: u32 = 27;
@@ -113,13 +112,9 @@ pub mod ku {
     pub const FAST_ENC: u32 = 51;
     pub const FAST_REP: u32 = 52;
     pub const FAST_FINISHED: u32 = 53;
-    #[allow(dead_code)]
-    pub const FAST_COOKIE: u32 = 54;
     // MIT: `KRB5_KEYUSAGE_PA_FX_COOKIE` (krb5.hin:1006-1006)
-    // 513, used for encrypted FAST
     pub const PA_FX_COOKIE: u32 = 513;
     // MIT: `KRB5_KEYUSAGE_PA_AS_FRESHNESS` (krb5.hin:1007-1007)
-    // 514, used for freshness
     pub const PA_AS_FRESHNESS: u32 = 514;
     pub const ENC_CHALLENGE_CLIENT: u32 = 54;
     pub const ENC_CHALLENGE_KDC: u32 = 55;

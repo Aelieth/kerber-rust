@@ -1,9 +1,7 @@
 // MIT: `loop_add_addresses` (lib/apputils/net-server.c:381-433)
-// a list is split on `,`,
 // MIT: `k5_parse_host_string` (lib/krb5/krb/parse_host_string.c:70-124)
-// an entry is a
+// A `/path` entry is a UNIX-domain listener, skipped here: this port binds no UNIX sockets.
 // MIT: `loop_add_address` (lib/apputils/net-server.c:304-361)
-// a daemon's listeners are one
 
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
 
@@ -13,7 +11,6 @@ use super::Error;
 // the KDC's port.
 pub const KDC_PORT: u16 = 88;
 // MIT: `DEFAULT_KDC_PORTLIST` (include/osconf.hin:99-99)
-// the KDC's UDP list when neither
 pub const DEFAULT_KDC_PORTLIST: &str = "88";
 // MIT: `DEFAULT_KADM5_PORT` (include/osconf.hin:107-107)
 // kadmind's port.
@@ -32,7 +29,6 @@ pub struct ListenAddr {
 
 impl ListenAddr {
     // MIT: `setup_addresses` (lib/apputils/net-server.c:927-1049)
-    // `getaddrinfo` with
     pub fn resolve(&self) -> Result<Vec<SocketAddr>, Error> {
         let Some(host) = self.host.as_deref() else {
             return Ok(vec![

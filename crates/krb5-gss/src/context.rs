@@ -129,7 +129,7 @@ pub(super) fn authenticator_checksum(
 }
 
 // MIT: `kg_process_extension` (accept_sec_context.c:381-383)
-// a finished extension is
+// GSS_EXTS_FINISHED is IAKERB-only; a plain krb5 acceptor fails it.
 fn process_checksum(
     cksum: Option<&Checksum>,
     ap_mutual: bool,

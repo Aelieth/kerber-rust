@@ -3,7 +3,6 @@ use std::io;
 use std::path::Path;
 
 // MIT: `default_com_err_proc` (com_err.c:47-96)
-// `error_message(code)`, not the extended
 #[macro_export]
 macro_rules! com_err {
     ($prog:expr, $err:expr, $($ctx:tt)*) => {{
@@ -79,7 +78,6 @@ impl Krb5Error {
     }
 
     // MIT: `k5_sendto_kdc` (sendto_kdc.c:523-529)
-    // no answer is "Cannot contact any KDC for
     #[must_use]
     pub fn from_protocol(e: &krb5_protocol::Error, realm: &str) -> Self {
         match e {
@@ -105,9 +103,8 @@ impl Krb5Error {
 
     // MIT verify_as_reply; see docs/parity/b1-client.md
     // MIT: `init_creds_step_reply` (get_in_tkt.c:1762-1766)
-    // a KDC error, including code 60, is the
+    // A KDC error, code 60 included, is the table text; the e-text rewrite is TGS-only.
     // MIT: `krb5_init_creds_step` (get_in_tkt.c:1936-1946)
-    // an unknown client is "Client
     #[must_use]
     pub fn from_as(e: &krb5_protocol::Error, client: &str, realm: &str) -> Self {
         use krb5_protocol::Error as E;
@@ -163,7 +160,6 @@ impl Krb5Error {
     }
 
     // MIT: `krb5_cc_default` (ccdefault.c:48-53)
-    // a default name whose `%{token}` does not expand
     #[must_use]
     pub fn from_ccname(e: &krb5_config::Error) -> Self {
         match e {
@@ -195,7 +191,6 @@ impl Krb5Error {
     }
 
     // MIT: `kcmio_unix_socket_connect` (cc_kcm.c:313-330)
-    // a socket that is not there, or a
     #[must_use]
     pub fn from_kcm(e: &io::Error) -> Self {
         if krb5_protocol::kcm_no_server(e) {
@@ -229,7 +224,6 @@ impl Krb5Error {
     }
 
     // MIT: `fcc_replace` (cc_file.c:1286-1337)
-    // the error of the write that replaces a cache
     #[must_use]
     pub fn from_cache_write(e: &io::Error) -> Self {
         match interpret_errno(e) {
@@ -240,7 +234,6 @@ impl Krb5Error {
 }
 
 // MIT: `interpret_errno` (cc_file.c:1346-1389)
-// a missing path is `KRB5_FCC_NOFILE`, a refused
 fn interpret_errno(e: &io::Error) -> Code {
     use nix::errno::Errno;
     let Some(n) = e.raw_os_error() else {

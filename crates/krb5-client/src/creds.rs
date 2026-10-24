@@ -48,7 +48,6 @@ pub fn parse_name(ctx: &ClientContext, name: &str, enterprise: bool) -> Result<P
 }
 
 // MIT: `construct_matching_creds` (get_creds.c:52-108)
-// the client and server, still valid,
 pub struct MatchCreds<'a> {
     pub client: Option<&'a Princ>,
     pub server: &'a Princ,
@@ -60,7 +59,6 @@ pub struct MatchCreds<'a> {
 
 impl MatchCreds<'_> {
     // MIT: `krb5int_cc_creds_match_request` (cc_retr.c:151-191)
-    // a user-to-user credential
     fn matches(&self, c: &CcacheCred) -> bool {
         if c.is_config() || c.is_removed() {
             return false;
@@ -207,7 +205,6 @@ impl<'c> OpenCache<'c> {
 }
 
 // MIT: `k5_locate_server` (locate_kdc.c:853-878)
-// a realm with no KDC is
 pub fn kdc_for_realm(profile: &Krb5Conf, realm: &str) -> Result<KdcAddr, Krb5Error> {
     let found = match profile.kdcs_for_traced(realm, &mut crate::trace::dns_srv) {
         Ok(list) => list,
@@ -318,7 +315,6 @@ impl GetCredsOptions {
 
 // MIT krb5_get_credentials; see docs/parity/b1-client.md
 // MIT: `check_cache` (get_creds.c:1042-1065)
-// with `cached_only`, a credential missing from the
 // MIT: `complete` (get_creds.c:468-471)
 // the store's failure is ignored; so is a cross-realm TGT's.
 // MIT: `step_get_tgt` (get_creds.c:952-954)
@@ -584,11 +580,8 @@ fn identify_realm(
 }
 
 // MIT: `krb5_get_credentials_for_proxy` (s4u_creds.c:1201-1260)
-// S4U2Proxy for `client` (the
 // MIT: `k5_get_proxy_cred_from_kdc` (s4u_creds.c:1179-1188)
-// the KDC's credential is stored
 // MIT: `kdcrep2creds` (gc_via_tkt.c:64-74)
-// its client is the reply's, and it keeps the evidence
 pub fn get_credentials_for_proxy(
     cache: &mut OpenCache,
     client: &Princ,
@@ -645,9 +638,7 @@ pub fn get_credentials_for_proxy(
 }
 
 // MIT: `get_valrenewed_creds` (val_renew.c:136-179)
-// the server is `in_tkt_service` in the
 // MIT: `get_new_creds` (val_renew.c:47-74)
-// the cache's credential for that client and server,
 pub fn get_valrenewed_creds(
     ctx: &ClientContext,
     spec: &CcSpec,
@@ -687,7 +678,6 @@ pub fn get_valrenewed_creds(
 }
 
 // MIT: `get_u2u_ticket` (kvno.c:414-450)
-// the local TGT of the cache `spec`'s principal, its
 pub fn get_u2u_ticket(ctx: &ClientContext, spec: CcSpec) -> Result<Ticket, Krb5Error> {
     let cache = OpenCache::open(ctx, spec)?;
     let me = cache.principal();
@@ -705,9 +695,8 @@ pub fn get_u2u_ticket(ctx: &ClientContext, spec: CcSpec) -> Result<Ticket, Krb5E
 }
 
 // MIT: `krb5_server_decrypt_ticket_keytab` (srv_dec_tkt.c:73-139)
-// `ticket` decrypts under a
+// The transited-path check of a cross-realm ticket is not made.
 // MIT: `decrypt_ticket_keyblock` (srv_dec_tkt.c:43-70)
-// a ticket with the invalid flag set is
 pub fn server_decrypt_ticket_keytab(keytab: &str, ticket: &Ticket) -> Result<(), Krb5Error> {
     let crate::KeytabName::File(path) = crate::kt_resolve(keytab)? else {
         return Err(Krb5Error::of(Code::WrongPrinc));

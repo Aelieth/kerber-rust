@@ -65,7 +65,6 @@ pub fn dir_read_path(residual: &str) -> std::io::Result<std::path::PathBuf> {
 }
 
 // MIT: `kcm_get_princ` (cc_kcm.c:933-953)
-// a KCM cache with no principal is
 #[must_use]
 pub fn cache_read_error(
     ctx: &ClientContext,
@@ -116,7 +115,6 @@ pub fn init_context() -> Result<ClientContext, Krb5Error> {
         e => Krb5Error::new(Code::Other, e.to_string()),
     })?;
     // MIT: `krb5_init_context_profile` (lib/krb5/krb/init_ctx.c:209-217)
-    // `KRB5_TRACE` opens
     krb5_protocol::trace::init();
     Ok(ctx)
 }
@@ -125,7 +123,6 @@ pub const DEFKTNAME: &str = "FILE:/etc/krb5.keytab";
 pub const DEFCKTNAME: &str = "FILE:/var/kerberos/krb5/user/%{euid}/client.keytab";
 
 // MIT: `kt_default_name` (ktdefname.c:35-57)
-// `KRB5_KTNAME`, else
 #[must_use]
 pub fn kt_default_name(ctx: &ClientContext) -> String {
     if let Some(v) = ctx.ktname() {
@@ -170,7 +167,6 @@ impl KeytabName {
 }
 
 // MIT: `krb5_kt_resolve` (ktbase.c:151-209)
-// a name with no `TYPE:` prefix, or one starting with
 pub fn kt_resolve(name: &str) -> Result<KeytabName, Krb5Error> {
     let Some((pfx, resid)) = name.split_once(':') else {
         return Ok(KeytabName::File(name.into()));
@@ -450,9 +446,8 @@ pub fn store_error(e: &(dyn std::error::Error + Send + Sync + 'static)) -> Krb5E
 }
 
 // MIT: `change_set_password` (changepw.c:258-266)
-// a server that answers over neither TCP nor
 // MIT: `k5_sendto` (sendto_kdc.c:1602-1604)
-// that code carries no message of its own, so it
+// That code has no message of its own, so it prints its table text, not "Cannot contact any KDC".
 fn chpw_error(e: ProtocolError, realm: &str) -> Box<dyn std::error::Error + Send + Sync> {
     match &e {
         ProtocolError::Io { .. } => Box::new(Krb5Error::of(Code::KdcUnreach)),
@@ -1140,7 +1135,7 @@ fn kinit_inner(
         None
     };
     // MIT: `build_in_tkt_name` (get_in_tkt.c:473-512)
-    // an initial-ticket service takes the
+    // An initial-ticket service takes the client's realm, whatever realm its name gives.
     let in_tkt_sname = match params.in_tkt_service {
         Some(s) => Some(
             krb5_types::principal_from_unparsed(s, &realm_s)

@@ -193,7 +193,6 @@ fn run(prog: &str, args: &Args) -> i32 {
 }
 
 // MIT: `print_remaining_cc_warning` (kdestroy.c:62-83)
-// a cache left in the collection is
 fn remaining_cc_warning(ctx: &ClientContext, prog: &str, default: &CcSpec) -> i32 {
     match collection(ctx, default) {
         Ok(caches) => {

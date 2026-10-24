@@ -229,7 +229,6 @@ pub fn tgt_for(cache: &OpenCache, srealm: &str) {
 }
 
 // MIT: `krb5_get_self_cred_from_kdc` (lib/krb5/krb/s4u_creds.c:419-645)
-// the TGT an S4U request
 pub fn tgt_creds(cache: &OpenCache, srealm: &str) {
     if !trace::enabled() {
         return;

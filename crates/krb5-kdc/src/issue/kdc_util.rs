@@ -596,7 +596,7 @@ pub(super) fn get_ticket_flags(
         return h.clone().with_bit(flag_bit::INVALID, false);
     }
     // MIT: `OPTS2FLAGS` (kdc_util.h:500-500)
-    // COPY_TKT_FLAGS
+    // MIT: `COPY_TKT_FLAGS` (kdc_util.h:529-529)
     let mut flags = TicketFlags::none()
         .with_bit(flag_bit::FORWARDABLE, req.bit(flag_bit::FORWARDABLE))
         .with_bit(flag_bit::FORWARDED, req.bit(flag_bit::FORWARDED))

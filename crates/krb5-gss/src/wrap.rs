@@ -200,7 +200,7 @@ impl GssContext {
     }
 
     // MIT: `xdr_rpc_gss_unwrap_data` (authgss_prot.c:238-240)
-    // the RPCSEC_GSS privacy service
+    // The RPCSEC_GSS privacy service rejects an integrity-only body.
     pub fn unwrap_conf(&mut self, token: &[u8]) -> Result<(Vec<u8>, bool), Error> {
         self.unwrap_v3(token)
     }

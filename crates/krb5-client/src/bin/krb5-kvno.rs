@@ -37,7 +37,6 @@ fn main() {
 }
 
 // MIT: `do_v5_kvno` (kvno.c:452-609)
-// the options are checked and the caches and keytab named
 fn do_v5_kvno(prog: &str, args: &KvnoArgs) -> i32 {
     let fail = |e: &Krb5Error, doing: &str| {
         eprintln!("{prog}: {e} {doing}");

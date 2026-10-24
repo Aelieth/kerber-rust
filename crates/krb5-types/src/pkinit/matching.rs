@@ -254,7 +254,7 @@ fn parse_rule_component(rule: &mut &[u8]) -> Result<Component, i32> {
 }
 
 // MIT: `parse_list_value` (pkinit_matching.c:182-250)
-// a word matches a keyword it starts, and
+// Where MIT would read past the end, the value ends.
 fn parse_list_value(kw: Keyword, value: &[u8]) -> Result<u32, i32> {
     let words: &[(&[u8], u32)] = if kw == Keyword::Eku {
         &EKU_WORDS
