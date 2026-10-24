@@ -57,6 +57,7 @@ any other `###` heading.
 
 ### Changed
 
+- **examples.** krb5-embed-realm applies the realm profile before a trust or a delegation grant.
 - **examples.** krb5-embed-realm records an allowed-to-delegate target from `--allow-to-delegate`.
 - **examples.** krb5-embed-realm creates both trust principals from `--create-trust` and a key file.
 - **kdc.** A trust principal takes the realm's lifetimes and flags, and both directions share one key at one kvno.

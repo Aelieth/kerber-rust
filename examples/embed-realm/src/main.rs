@@ -99,11 +99,17 @@ fn main() {
     let mut store = open_or_create(&progname, &paths, &profile, &realm);
     match job {
         Job::Trust(trust) => {
+            store
+                .apply_profile(&profile)
+                .unwrap_or_else(|e| cannot_start(&progname, &format!("{e} while initializing")));
             create_trust(&progname, &mut store, &paths, &realm, &trust);
             klog::close();
             return;
         }
         Job::Allow(allow) => {
+            store
+                .apply_profile(&profile)
+                .unwrap_or_else(|e| cannot_start(&progname, &format!("{e} while initializing")));
             allow_delegate(&progname, &mut store, &realm, &allow);
             klog::close();
             return;

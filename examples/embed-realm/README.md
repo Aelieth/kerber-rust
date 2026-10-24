@@ -36,6 +36,9 @@ A start that finds the stash and no database finishes that create and keeps the 
 prints `created` empty and leaves the key versions as they were. MIT `kadmin -p admin/admin` and
 `kpasswd` then work against it exactly as against the daemon.
 
+The realm profile is applied before either flag writes a principal, so the new
+principal takes that profile's lifetimes, flags, and enctypes.
+
 `--create-trust OTHER.TEST --key-file key.hex` creates both trust principals and stops. The file is
 32 bytes of aes256 written as 64 hex characters, and the bytes are wiped after the key is built.
 `--kvno N` sets that version on both; without it the version is 1. The actor is `admin/admin@REALM`,
