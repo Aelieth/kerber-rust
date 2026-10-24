@@ -56,6 +56,7 @@ any other `###` heading.
 
 ### Changed
 
+- **client.** kinit and kpasswd warn when a deprecated enctype was used to authenticate.
 - **protocol.** A preauth key that does not decrypt the AS reply is dropped, and the long-term key is tried.
 - **protocol.** A TGT for a realm off the client path is chased to the server realm, and a repeated realm ends it.
 - **protocol.** A cached TGT for the next realm on a cross-realm walk is used, and the walk advances.

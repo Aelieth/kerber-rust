@@ -1272,6 +1272,9 @@ fn kinit_inner(
         }
         Err(e) => return Err(e.into()),
     };
+    if params.prompter.is_some() || params.preauth_prompter.is_some() {
+        krb5_protocol::warn_deprecated_enctype(&as_out);
+    }
     if ctx.profile.kdc_timesync {
         ctx.note_kdc_offset(as_out.time_offset);
     }

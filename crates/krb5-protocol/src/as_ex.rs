@@ -1458,6 +1458,23 @@ fn krb_err(e: &KrbError) -> Result<AsOutcome, Error> {
     })
 }
 
+// MIT: `warn_deprecated` (lib/krb5/krb/get_in_tkt.c:1584-1607)
+pub fn warn_deprecated_enctype(out: &AsOutcome) {
+    let reply = out.client_key.etype();
+    let session = out.session_key.etype();
+    let etype = if reply.is_deprecated() {
+        reply
+    } else if session.is_deprecated() {
+        session
+    } else {
+        return;
+    };
+    println!(
+        "Warning: encryption type {} used for authentication is deprecated and will be disabled",
+        etype.to_mit_name()
+    );
+}
+
 // MIT: `krb5int_fast_verify_nego` (fast.c:648-664)
 /// No request checksum is refused.
 #[expect(clippy::too_many_arguments, reason = "client AS, not a params struct")]

@@ -181,7 +181,10 @@ fn run<R: BufRead, W: Write>(
         }
     };
     let as_out = match out {
-        Ok(out) => out,
+        Ok(out) => {
+            krb5_protocol::warn_deprecated_enctype(&out);
+            out
+        }
         // a wrong password is "Password incorrect", any other failure its own text.
         Err(
             Error::ReplyIntegrity
