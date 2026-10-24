@@ -65,6 +65,11 @@
 #   PK.ec224, PK.ec384, PK.ec521, PK.k256: made on kdc by scripts/lib/pkinit-ec-certs.sh, a CA, a KDC identity and
 #          alice's certificate, each with a P-224 key, then P-384, P-521 and secp256k1, alice's piped to client2:
 #          her kinit gets a TGT;
+#   PK.bp256r1 .. PK.bp512t1: as PK.ec, on the six brainpool curves we ship (P256, P384 and P512, each r1 and t1):
+#          each certificate kinit gets a TGT, MIT's and ours;
+#   PK.bp320: a brainpoolP320r1 KDC identity: MIT's KDC loads it and alice's bp320 certificate kinit gets a TGT; ours
+#          refuses the key ("Cannot use key file ...: only ... brainpool P256, P384 and P512 EC keys and RSA keys are
+#          supported"), serves the realm without PKINIT, and the kinit ends rc 1 (fail closed, MIT first);
 #   PK.dh: the KDC's realm has pkinit_dh_min_bits = 4096 and client2's kinit 2048 (~/pk/dh.conf first): the KDC
 #          refuses its 2048-bit DH with 65 and its groups, and kinit tries again with P-384 and gets a TGT;
 #   PK.dh1024: client2's kinit at pkinit_dh_min_bits = 1024 (~/pk/dh1024.conf first): MIT's kinit fails to make its
@@ -483,6 +488,36 @@ for curve in P-224 P-384 P-521 secp256k1; do
         check "PK.$n.$k" '^kinit rc=0$' run client2 "kdestroy -c FILE:\$HOME/pk/e.cc 2> /dev/null; $kinit -X X509_anchors=FILE:\$HOME/pk/$n/ca.pem -X X509_user_identity=FILE:\$HOME/pk/$n/client.pem,\$HOME/pk/$n/client.key -c FILE:\$HOME/pk/e.cc alice < /dev/null 2>&1; echo \"kinit rc=\$?\"; klist -c FILE:\$HOME/pk/e.cc 2>&1 | grep -E '^Default principal'"
         checklast "PK.$n.$k.tgt" "^Default principal: alice@$R\$"
     done
+done
+
+section "PK.bp256r1 .. PK.bp512t1 the KDC's and alice's keys on the six brainpool curves we ship, r1 and t1, made for the cells: a TGT (MIT and ours)"
+for curve in brainpoolP256r1 brainpoolP256t1 brainpoolP384r1 brainpoolP384t1 brainpoolP512r1 brainpoolP512t1; do
+    n=bp${curve#brainpoolP}
+    check "PK.$n.make" "^ec certs in $EC/$n\$" runin kdc "scripts/lib/pkinit-ec-certs.sh" "sudo sh -s -- $EC/$n $REALM alice $curve" < "$HERE/../../../scripts/lib/pkinit-ec-certs.sh"
+    check "PK.$n.copy" '^client2: 3 files$' host "$LABQ ssh kdc -- 'sudo tar -C $EC/$n -cf - ca.pem client.pem client.key' | $LABQ ssh client2 -- 'install -d -m 0700 ~/pk/$n && tar -C ~/pk/$n -xf - && echo \"client2: \$(ls ~/pk/$n | wc -l) files\"'"
+    pkkdc "PK.$n.kdc" "\n[kdcdefaults]\n    pkinit_identity = FILE:$EC/$n/kdc.pem,$EC/$n/kdc.key\n    pkinit_anchors = FILE:$EC/$n/ca.pem\n"
+    for k in mit ${OURS:+ours}; do
+        kinit=kinit
+        [ "$k" = ours ] && kinit=$OURS
+        check "PK.$n.$k" '^kinit rc=0$' run client2 "kdestroy -c FILE:\$HOME/pk/e.cc 2> /dev/null; $kinit -X X509_anchors=FILE:\$HOME/pk/$n/ca.pem -X X509_user_identity=FILE:\$HOME/pk/$n/client.pem,\$HOME/pk/$n/client.key -c FILE:\$HOME/pk/e.cc alice < /dev/null 2>&1; echo \"kinit rc=\$?\"; klist -c FILE:\$HOME/pk/e.cc 2>&1 | grep -E '^Default principal'"
+        checklast "PK.$n.$k.tgt" "^Default principal: alice@$R\$"
+    done
+done
+
+section "PK.bp320 a brainpoolP320r1 KDC identity: MIT loads it for a TGT, ours refuses it and serves without PKINIT (MIT first, a fail-closed deviation)"
+check "PK.bp320.make" "^ec certs in $EC/bp320r1\$" runin kdc "scripts/lib/pkinit-ec-certs.sh" "sudo sh -s -- $EC/bp320r1 $REALM alice brainpoolP320r1" < "$HERE/../../../scripts/lib/pkinit-ec-certs.sh"
+check "PK.bp320.copy" '^client2: 3 files$' host "$LABQ ssh kdc -- 'sudo tar -C $EC/bp320r1 -cf - ca.pem client.pem client.key' | $LABQ ssh client2 -- 'install -d -m 0700 ~/pk/bp320r1 && tar -C ~/pk/bp320r1 -xf - && echo \"client2: \$(ls ~/pk/bp320r1 | wc -l) files\"'"
+pkkdc "PK.bp320.kdc" "\n[kdcdefaults]\n    pkinit_identity = FILE:$EC/bp320r1/kdc.pem,$EC/bp320r1/kdc.key\n    pkinit_anchors = FILE:$EC/bp320r1/ca.pem\n"
+if [ "$LEG" = rust ]; then
+    kdcsince PK.bp320.kdc 'preauth pkinit'
+    checklast PK.bp320.refused "preauth pkinit failed to initialize: PKINIT initialization failed: Cannot use key file .*: only P-224, P-256, P-384, P-521, secp256k1 and brainpool P256, P384 and P512 EC keys and RSA keys are supported\$"
+fi
+rc='rc=0'
+[ "$LEG" = rust ] && rc='rc=1'
+for k in mit ${OURS:+ours}; do
+    kinit=kinit
+    [ "$k" = ours ] && kinit=$OURS
+    check "PK.bp320.$k" "^kinit $rc\$" run client2 "kdestroy -c FILE:\$HOME/pk/e.cc 2> /dev/null; $kinit -X X509_anchors=FILE:\$HOME/pk/bp320r1/ca.pem -X X509_user_identity=FILE:\$HOME/pk/bp320r1/client.pem,\$HOME/pk/bp320r1/client.key -c FILE:\$HOME/pk/e.cc alice < /dev/null 2>&1; echo \"kinit rc=\$?\""
 done
 
 section "PK.dh the KDC's pkinit_dh_min_bits = 4096: kinit's 2048-bit DH gets 65 and the KDC's groups, and kinit tries again with P-384 for a TGT (MIT and ours)"
