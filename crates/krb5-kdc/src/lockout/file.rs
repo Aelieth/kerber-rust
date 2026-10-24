@@ -63,6 +63,13 @@ pub(crate) fn crc32<'a>(bytes: impl IntoIterator<Item = &'a u8>) -> u32 {
 }
 
 #[must_use]
+// mtime too: an in-place put keeps the length
+pub(crate) fn lockout_file_stamp(db: &Path) -> Option<(u64, u64, u64, i64, i64)> {
+    let m = std::fs::symlink_metadata(lockout_path(db)).ok()?;
+    Some((m.dev(), m.ino(), m.len(), m.mtime(), m.mtime_nsec()))
+}
+
+#[must_use]
 pub fn lockout_path(db: &Path) -> PathBuf {
     suffixed(db, SUFFIX_LOCKOUT)
 }

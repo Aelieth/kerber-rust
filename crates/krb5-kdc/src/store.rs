@@ -66,6 +66,7 @@ pub struct PrincipalStore {
     pub persist_paths: Option<(std::path::PathBuf, std::path::PathBuf)>,
     pub(crate) persist_master: Option<(std::path::PathBuf, krb5_crypto::ProtocolKey)>,
     pub(crate) db_stamp: Option<DbStamp>,
+    pub(crate) lockout_stamp: Option<(u64, u64, u64, i64, i64)>,
     pub(crate) loaded_span: Option<(u64, u64)>,
     pub(crate) dblock: Option<Arc<DbLock>>,
     changed: ChangeMark,
@@ -105,6 +106,7 @@ impl Drop for HeldSaves<'_> {
         self.0.saves_held = false;
         if std::thread::panicking() {
             self.0.db_stamp = None;
+            self.0.lockout_stamp = None;
         }
     }
 }
@@ -176,6 +178,7 @@ impl PrincipalStore {
             persist_paths: None,
             persist_master: None,
             db_stamp: None,
+            lockout_stamp: None,
             loaded_span: None,
             dblock: None,
             changed: ChangeMark::default(),
@@ -272,7 +275,7 @@ impl PrincipalStore {
             }
         }
         self.resolve_history_of(&ids);
-        crate::lockout::merge_lockout_file(self, db);
+        self.merge_lockout_if_moved(db);
         let applied = stamp.applied + u64::try_from(used).unwrap_or_default();
         let records = stamp.records + u64::try_from(count).unwrap_or_default();
         self.db_stamp = DbStamp::holding(lock, db, records, applied);
@@ -290,6 +293,7 @@ impl PrincipalStore {
 
     pub fn reload(&mut self) -> Result<(), Error> {
         self.db_stamp = None;
+        self.lockout_stamp = None;
         self.reload_if_stale()
     }
 
@@ -512,6 +516,7 @@ impl PrincipalStore {
                             ),
                             _ => DbStamp::now(&lock, &db, self.map.len_u64()),
                         };
+                        self.lockout_stamp = crate::lockout::lockout_file_stamp(&db);
                         tracing::info!(
                             event = krb5_log::events::ADMIN,
                             component = "krb5-kdc",
@@ -558,6 +563,14 @@ impl PrincipalStore {
         Some((self.map.touched()?, self.journal_key()?, stamp.applied))
     }
 
+    fn merge_lockout_if_moved(&mut self, db: &std::path::Path) {
+        let now = crate::lockout::lockout_file_stamp(db);
+        if now != self.lockout_stamp {
+            crate::lockout::merge_lockout_file(self, db);
+            self.lockout_stamp = now;
+        }
+    }
+
     fn refresh_for_change(
         &mut self,
         lock: &Arc<DbLock>,
@@ -572,13 +585,14 @@ impl PrincipalStore {
             return self.reread(lock);
         }
         if self.catch_up(lock, db)? == Freshness::Same {
-            crate::lockout::merge_lockout_file(self, db);
+            self.merge_lockout_if_moved(db);
         }
         Ok(())
     }
 
     fn read_back(&mut self, lock: &Arc<DbLock>) {
         self.db_stamp = None;
+        self.lockout_stamp = None;
         let _ = self.reread(lock);
     }
 
