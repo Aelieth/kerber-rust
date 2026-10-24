@@ -9,12 +9,26 @@ pub(crate) const OSA_ADB_PRINC_VERSION_1: u32 = 0x1234_5c01;
 pub const KADM5_POLICY: u32 = 0x0000_0800;
 pub(crate) const INITIAL_HIST_KVNO: u32 = 2;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct OsaKeyData {
     pub ver: u16,
     pub kvno: u16,
     pub types: [i16; 2],
     pub contents: [Vec<u8>; 2],
+}
+
+impl std::fmt::Debug for OsaKeyData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OsaKeyData")
+            .field("ver", &self.ver)
+            .field("kvno", &self.kvno)
+            .field("types", &self.types)
+            .field(
+                "contents",
+                &[self.contents[0].len(), self.contents[1].len()],
+            )
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

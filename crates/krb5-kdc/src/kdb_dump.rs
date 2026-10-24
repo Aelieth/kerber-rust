@@ -9,6 +9,7 @@ use krb5_crypto::{EncryptionType, ProtocolKey, kdb_decrypt_key, kdb_encrypt_key}
 use krb5_protocol::write_fresh_secret_file;
 use krb5_types::pac::RpcSid;
 use krb5_types::{PrincipalName, infer_name_type, parse_name};
+use subtle::ConstantTimeEq;
 
 use crate::error::Error as KdcError;
 use crate::mkey::{MASTER_NAME, default_master_etype, master_key_from_password};
@@ -351,7 +352,7 @@ impl DumpPrincipal {
         }
         if name.components_joined() == "K/M"
             && let Some(first) = keys.first()
-            && first.key.as_bytes() != mkey.as_bytes()
+            && first.key.as_bytes().ct_eq(mkey.as_bytes()).unwrap_u8() != 1
         {
             return Err(DumpError::Crypto(
                 "K/M key_data does not match derived master key".into(),

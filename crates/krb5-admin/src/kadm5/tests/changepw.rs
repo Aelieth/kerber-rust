@@ -156,7 +156,7 @@ fn chpass_password_keeps_non_utf8_octets() {
     let got = parse_chpass(&w.b, false).unwrap();
     assert_eq!(got.name.components_joined(), "nosuch-latin");
     assert_eq!(got.prealm, "KERBER.TEST");
-    assert_eq!(got.pass, pass);
+    assert_eq!(got.pass.as_slice(), pass);
     assert!(!got.keepold);
     assert_eq!(got.ks.len(), 0);
 

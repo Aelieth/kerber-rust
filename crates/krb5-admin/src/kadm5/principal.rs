@@ -117,7 +117,7 @@ pub(super) struct CreateFields {
     pub(super) prealm: String,
     /// `None` is the XDR NULL `passwd` of `kadmin addprinc -randkey` (1.8+).
     /// a NULL password creates with a random key, and `:369` skips `passwd_check`. The string is octets (`xdr_string`), not UTF-8, so a Latin-1 password is the bytes the client sent.
-    pub(super) pass: Option<Vec<u8>>,
+    pub(super) pass: Option<zeroize::Zeroizing<Vec<u8>>>,
     /// The `kadm5_principal_ent_rec` fields `kadm5_create_principal_3` applies under `mask`, as sent.
     pub(super) ent: AdminEnt,
     pub(super) tl_data: Vec<TlData>,
@@ -170,7 +170,7 @@ pub(super) fn parse_ks<T>(r: Result<T, Error>) -> Result<T, Result<Vec<u8>, Erro
 pub(super) struct ChpassArgs {
     pub(super) name: PrincipalName,
     pub(super) prealm: String,
-    pub(super) pass: Vec<u8>,
+    pub(super) pass: zeroize::Zeroizing<Vec<u8>>,
     pub(super) keepold: bool,
     pub(super) ks: Vec<EncryptionType>,
 }
@@ -269,7 +269,7 @@ pub(super) fn parse_setkey(
         };
         let et = i32::from_be_bytes(r.u32()?.to_be_bytes());
         let etype = EncryptionType::known(et).map_err(|e| Error::Inner(e.to_string()))?;
-        let bytes = r.opaque()?;
+        let bytes = zeroize::Zeroizing::new(r.opaque()?);
         let key =
             ProtocolKey::from_bytes(etype, &bytes).map_err(|e| Error::Inner(e.to_string()))?;
         let mut ke = KeyEntry::new(etype, key, kvno);

@@ -77,7 +77,7 @@ pub struct PrincipalStore {
     policies: HashMap<String, NamedPolicy>,
     lockout: Arc<crate::lockout::LockoutState>,
     log: Option<Arc<LogContext>>,
-    pending: Arc<Mutex<Vec<LogNote>>>,
+    pending: PendingNotes,
     saves_held: bool,
     post: Option<Vec<Post>>,
     otp_runtime: Option<Arc<crate::plugins::OtpRuntime>>,
@@ -89,6 +89,33 @@ struct ChangeMark(AtomicBool);
 impl Clone for ChangeMark {
     fn clone(&self) -> Self {
         Self(AtomicBool::new(self.0.load(Ordering::Relaxed)))
+    }
+}
+
+#[derive(Debug)]
+struct PendingNotes(Arc<Mutex<Vec<LogNote>>>);
+
+impl PendingNotes {
+    fn new() -> Self {
+        Self(Arc::new(Mutex::new(Vec::new())))
+    }
+}
+
+impl Clone for PendingNotes {
+    fn clone(&self) -> Self {
+        let notes = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        Self(Arc::new(Mutex::new(notes)))
+    }
+}
+
+impl std::ops::Deref for PendingNotes {
+    type Target = Mutex<Vec<LogNote>>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
@@ -188,7 +215,7 @@ impl PrincipalStore {
             policies: HashMap::new(),
             lockout: Arc::default(),
             log: None,
-            pending: Arc::new(Mutex::new(Vec::new())),
+            pending: PendingNotes::new(),
             saves_held: false,
             post: None,
             otp_runtime: None,
@@ -331,6 +358,7 @@ impl PrincipalStore {
         loaded.lockout = Arc::clone(&self.lockout);
         loaded.env = std::mem::take(&mut self.env);
         loaded.log = self.log.take();
+        loaded.map.set_records_log(loaded.log.is_some());
         loaded.saves_held = self.saves_held;
         loaded.post = self.post.take();
         loaded.otp_runtime = self.otp_runtime.take();

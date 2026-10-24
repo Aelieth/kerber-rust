@@ -1,5 +1,7 @@
 use std::fmt::Write as _;
 
+use zeroize::Zeroize;
+
 mod ndr;
 
 use ndr::{NdrR, NdrW};
@@ -749,6 +751,12 @@ impl std::fmt::Debug for KerbValidationInfo {
     }
 }
 
+impl Drop for KerbValidationInfo {
+    fn drop(&mut self) {
+        self.session_key.zeroize();
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PacIdentity {
     pub sam: String,
@@ -943,7 +951,10 @@ fn utf16_str(data: &[u8], off: usize, len: usize) -> Result<String, PacError> {
 
 pub fn parse_logon_info(data: &[u8]) -> Result<(String, String), PacError> {
     if let Ok(v) = parse_kerb_validation_info(data) {
-        return Ok((v.effective_name.value, v.logon_domain_name.value));
+        return Ok((
+            v.effective_name.value.clone(),
+            v.logon_domain_name.value.clone(),
+        ));
     }
     parse_legacy_utf8_logon(data)
 }

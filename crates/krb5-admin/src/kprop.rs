@@ -60,7 +60,7 @@ pub fn kprop_load_with_stash(bytes: &[u8], stash: &Path) -> Result<PrincipalStor
 
 /// The stash file's bytes, in a wiped buffer sized from the file; a stash that cannot be read is named.
 fn read_stash_file(stash: &Path) -> Result<zeroize::Zeroizing<Vec<u8>>, Error> {
-    krb5_protocol::read_secret_file(stash)
+    krb5_protocol::read_stash_file(stash)
         .map_err(|e| Error::Inner(format!("stash {}: {e}", stash.display())))
 }
 

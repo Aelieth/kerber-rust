@@ -55,7 +55,7 @@ impl<'a> XdrR<'a> {
     }
 
     /// MIT `xdr_string`: the count includes the trailing NUL, and the bytes are not required to be UTF-8. A kadm5 password is this (`xdr_chpass3_arg` / `xdr_cprinc_arg` `passwd`), so `caf\xe9` reaches `passwd_check`. Principal names stay on `nullstring`.
-    pub(super) fn cstring_bytes(&mut self) -> Result<Option<Vec<u8>>, Error> {
+    pub(super) fn cstring_bytes(&mut self) -> Result<Option<zeroize::Zeroizing<Vec<u8>>>, Error> {
         let n = self.u32()? as usize;
         if n == 0 {
             return Ok(None);
@@ -66,7 +66,7 @@ impl<'a> XdrR<'a> {
         let pad = (4 - (n % 4)) % 4;
         self.i = self.i.saturating_add(pad).min(self.b.len());
         let end = raw.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
-        Ok(Some(raw[..end].to_vec()))
+        Ok(Some(zeroize::Zeroizing::new(raw[..end].to_vec())))
     }
 
     pub(super) fn nullstring(&mut self) -> Result<Option<String>, Error> {

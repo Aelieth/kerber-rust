@@ -733,7 +733,7 @@ fn fetch_mkey(util: &mut Util, realm: &str, km: &DumpPrincipal) -> Result<Option
 }
 
 fn read_stash_key(path: &Path, km: &DumpPrincipal) -> Result<ProtocolKey, String> {
-    let bytes = krb5_protocol::read_secret_file(path).map_err(|e| strerror(&e))?;
+    let bytes = krb5_protocol::read_stash_file(path).map_err(|e| strerror(&e))?;
     let keys = stash_keys(&bytes);
     let pick = keys.iter().position(|k| km.opens_with(k)).unwrap_or(0);
     keys.into_iter()
@@ -1487,7 +1487,7 @@ fn load_master_key(util: &mut Util, dump: &DumpFile) -> Option<(ProtocolKey, boo
             }
         }
     } else {
-        match krb5_protocol::read_secret_file(&util.paths.key_stash_file) {
+        match krb5_protocol::read_stash_file(&util.paths.key_stash_file) {
             Ok(bytes) => {
                 let found = stash_keys(&bytes).into_iter().find(|k| opens(k));
                 if found.is_none() {

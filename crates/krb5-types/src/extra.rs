@@ -112,7 +112,7 @@ impl Decode for KrbSafe {
     }
 }
 
-#[derive(AsnType, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(AsnType, Clone, PartialEq, Eq, Hash)]
 pub struct KrbSafeBody {
     #[rasn(tag(explicit(0)))]
     pub user_data: OctetString,
@@ -126,6 +126,19 @@ pub struct KrbSafeBody {
     pub s_address: HostAddress,
     #[rasn(tag(explicit(5)))]
     pub r_address: Option<HostAddress>,
+}
+
+impl std::fmt::Debug for KrbSafeBody {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KrbSafeBody")
+            .field("user_data", &self.user_data.len())
+            .field("timestamp", &self.timestamp)
+            .field("usec", &self.usec)
+            .field("seq_number", &self.seq_number)
+            .field("s_address", &self.s_address)
+            .field("r_address", &self.r_address)
+            .finish()
+    }
 }
 
 #[derive(AsnType, Clone, Debug, Encode, PartialEq, Eq, Hash)]
@@ -173,7 +186,7 @@ impl Decode for KrbPriv {
     }
 }
 
-#[derive(AsnType, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(AsnType, Clone, PartialEq, Eq, Hash)]
 #[rasn(tag(explicit(application, 28)))]
 pub struct EncKrbPrivPart {
     #[rasn(tag(explicit(0)))]
@@ -188,6 +201,19 @@ pub struct EncKrbPrivPart {
     pub s_address: HostAddress,
     #[rasn(tag(explicit(5)))]
     pub r_address: Option<HostAddress>,
+}
+
+impl std::fmt::Debug for EncKrbPrivPart {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EncKrbPrivPart")
+            .field("user_data", &self.user_data.len())
+            .field("timestamp", &self.timestamp)
+            .field("usec", &self.usec)
+            .field("seq_number", &self.seq_number)
+            .field("s_address", &self.s_address)
+            .field("r_address", &self.r_address)
+            .finish()
+    }
 }
 
 // MIT: `decode_seqno` (lib/krb5/asn.1/asn1_k_encode.c:133-146)

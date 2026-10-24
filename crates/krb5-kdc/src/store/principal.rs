@@ -24,10 +24,19 @@ fn qualify_s4u_from(from: &str, local_realm: &str) -> String {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct TlData {
     pub ty: i32,
     pub contents: Vec<u8>,
+}
+
+impl std::fmt::Debug for TlData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TlData")
+            .field("ty", &self.ty)
+            .field("contents", &self.contents.len())
+            .finish()
+    }
 }
 
 // MIT: `extract_db_args_from_tl_data` (kdb5.c:893-945)
@@ -90,7 +99,7 @@ impl KadmData {
 }
 
 /// Times are Unix seconds, 0 never; a 0 max_life sets no limit, a 0 renewable life no renewal.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Principal {
     pub name: PrincipalName,
     pub realm: String,
@@ -117,6 +126,38 @@ pub struct Principal {
     pub pw_policy: Option<String>,
     pub kadm: KadmData,
     pub string_attrs: Vec<(String, String)>,
+}
+
+impl std::fmt::Debug for Principal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Principal")
+            .field("name", &self.name)
+            .field("realm", &self.realm)
+            .field("keys", &self.keys.len())
+            .field("key_history", &self.key_history.len())
+            .field("salt", &self.salt.len())
+            .field("requires_preauth", &self.requires_preauth)
+            .field("max_life", &self.max_life)
+            .field("locked", &self.locked)
+            .field("pw_expire", &self.pw_expire)
+            .field("attributes", &self.attributes)
+            .field("max_renewable_life", &self.max_renewable_life)
+            .field("expiration", &self.expiration)
+            .field("last_success", &self.last_success)
+            .field("last_failed", &self.last_failed)
+            .field("fail_auth_count", &self.fail_auth_count)
+            .field("mkvno", &self.mkvno)
+            .field("db_entry_len", &self.db_entry_len)
+            .field("tl_data", &self.tl_data)
+            .field("e_data", &self.e_data.len())
+            .field("rid", &self.rid)
+            .field("s4u_allowed_from", &self.s4u_allowed_from)
+            .field("s4u_allowed_to", &self.s4u_allowed_to)
+            .field("pw_policy", &self.pw_policy)
+            .field("kadm", &self.kadm)
+            .field("string_attrs", &self.string_attrs)
+            .finish()
+    }
 }
 
 // MIT: `krb5_db_entry` (include/kdb.h:191-213)
@@ -497,7 +538,7 @@ impl PrincipalStore {
     }
 
     #[doc(hidden)]
-    #[doc = "Memory only; use `record_s4u_to` for a store."]
+    /// Memory only; use `record_s4u_to` for a store.
     pub fn allow_s4u_from(&mut self, name: &PrincipalName, from: &str) {
         let id = crate::kdb::lookup_principal_id(name, &self.realm);
         let qualified = qualify_s4u_from(from, &self.realm);
@@ -507,7 +548,7 @@ impl PrincipalStore {
     }
 
     #[doc(hidden)]
-    #[doc = "Memory only; use `record_s4u_to` for a store."]
+    /// Memory only; use `record_s4u_to` for a store.
     pub fn allow_s4u_to(&mut self, name: &PrincipalName, to: &str) {
         let id = crate::kdb::lookup_principal_id(name, &self.realm);
         if let Some(p) = self.map.get_mut(&id) {

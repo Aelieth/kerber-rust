@@ -436,7 +436,7 @@ fn decode_keydata(
         let raw = if let Some(m) = mkey {
             kdb_decrypt_key(m, raw_enc).map_err(|e| XdrError::Invalid(e.to_string()))?
         } else {
-            raw_enc.clone()
+            zeroize::Zeroizing::new(raw_enc.clone())
         };
         let Ok(key) = ProtocolKey::from_bytes(etype, &raw) else {
             continue;

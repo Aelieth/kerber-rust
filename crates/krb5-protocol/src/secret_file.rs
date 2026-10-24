@@ -139,6 +139,38 @@ pub fn read_secret_file(path: &Path) -> io::Result<Zeroizing<Vec<u8>>> {
     Ok(bytes)
 }
 
+/// A master-key stash: no link, a regular file, at most 64 KiB.
+pub fn read_stash_file(path: &Path) -> io::Result<Zeroizing<Vec<u8>>> {
+    use std::io::Read as _;
+    const CAP: usize = 64 * 1024;
+    let mut opts = fs::OpenOptions::new();
+    opts.read(true);
+    #[cfg(unix)]
+    {
+        opts.custom_flags((nix::fcntl::OFlag::O_NOFOLLOW | nix::fcntl::OFlag::O_NONBLOCK).bits());
+    }
+    let file = opts.open(path)?;
+    let meta = file.metadata()?;
+    if meta.file_type().is_dir() {
+        return Err(io::Error::from(nix::errno::Errno::EISDIR));
+    }
+    if !meta.file_type().is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not a regular file",
+        ));
+    }
+    let mut bytes = Zeroizing::new(Vec::with_capacity(CAP + 1));
+    file.take((CAP + 1) as u64).read_to_end(&mut bytes)?;
+    if bytes.len() > CAP {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "stash exceeds 64 KiB",
+        ));
+    }
+    Ok(bytes)
+}
+
 /// O_EXCL|O_NOFOLLOW, mode 0600, so a planted link is not written through.
 pub(crate) fn new_temp(path: &Path) -> io::Result<(fs::File, PathBuf)> {
     let tmp = temp_path(path);

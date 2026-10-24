@@ -15,6 +15,7 @@ row below is mixed on absurd inputs.
 
 | Deviation | MIT | Rust | Why |
 | --- | --- | --- | --- |
+| Master-key stash open (`kdb_default.c:226`) | `fopen` follows a link and has no size bound | the stash is opened with `O_NOFOLLOW` and `O_NONBLOCK`, must be a regular file, and is refused past 64 KiB. A keytab stays on `fopen`'s rules | **STRICTER** |
 | Embedded realm create is crash-safe (`kdb5_create.c:247`, `:314`) | `kdb5_util create` writes the database first (`krb5_db_create`) and the stash last (`krb5_db_store_master_key`), and it refuses to re-run over an existing database | the stash is a temp file renamed into place (0600), then both lock files, then the database renamed into place as the commit. A re-run with a stash and no database reuses that master and kvno. A database with no lock file is still refused | **STRICTER** |
 | Bootstrap admin requires pre-auth (`alt_prof.c:629-631`, `kdb.h:873`) | with no relation the flags are `KRB5_KDB_DEF_FLAGS` 0, so a created `admin/admin` has no `REQUIRES_PRE_AUTH` | `bootstrap_realm_into` sets `REQUIRES_PRE_AUTH` on that admin when `AdminSpec` asks, and it asks by default. K/M, krbtgt and `kadmin/*` stay clear | **STRICTER** |
 | Expired AS-REP when `kdc_timesync` is 0 | `verify_as_reply` compares endtime only with `till` (`get_in_tkt.c:207-272`) | with `kdc_timesync` 0 an expired ticket is `ReplyMismatch` (`check_as_rep_times`) | stricter than MIT |

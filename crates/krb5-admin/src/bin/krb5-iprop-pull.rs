@@ -269,7 +269,7 @@ fn load_dump(text: &str, stash: &std::path::Path) -> Result<krb5_kdc::PrincipalS
     if let Some(pw) = hooked {
         return krb5_kdc::load_dump(text, pw.as_bytes()).map_err(|e| e.to_string());
     }
-    let bytes = krb5_protocol::read_secret_file(stash)
+    let bytes = krb5_protocol::read_stash_file(stash)
         .map_err(|e| format!("stash {}: {e}", stash.display()))?;
     load_dump_with_stash(text, &bytes).map_err(|e| e.to_string())
 }

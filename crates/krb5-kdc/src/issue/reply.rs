@@ -305,9 +305,9 @@ pub(super) fn mint_ticket(p: MintTicket<'_>) -> Result<Ticket, Error> {
                         )
                     })?;
                     PacIdentity {
-                        sam: v.effective_name.value,
+                        sam: v.effective_name.value.clone(),
                         realm: crealm.to_owned(),
-                        domain_sid: v.logon_domain_id,
+                        domain_sid: v.logon_domain_id.clone(),
                         rid: v.user_id,
                     }
                 } else if let Some((name, realm)) = identity {

@@ -177,7 +177,7 @@ fn decrypt_pauser_key_data_equals_string_to_key() {
     )
     .unwrap();
     assert_eq!(
-        raw,
+        raw.as_slice(),
         expect.as_bytes(),
         "KDB usage-0 decrypt must equal string_to_key(preauthpw)"
     );
@@ -201,11 +201,11 @@ fn decrypt_pauser_key_data_equals_string_to_key() {
         None,
     )
     .unwrap();
-    assert_eq!(user_raw, user_expect.as_bytes());
+    assert_eq!(user_raw.as_slice(), user_expect.as_bytes());
 
     let km = dump.princ("K/M@KERBER.TEST").unwrap();
     let km_raw = kdb_decrypt_key(&mkey, &km.keys[0].slots[0].contents).unwrap();
-    assert_eq!(km_raw, mkey.as_bytes());
+    assert_eq!(km_raw.as_slice(), mkey.as_bytes());
 }
 
 #[test]

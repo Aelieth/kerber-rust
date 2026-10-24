@@ -328,7 +328,7 @@ pub(crate) fn read_store(
     if let Some(e) = refusal(db_path, format) {
         return Err(e);
     }
-    let stash = krb5_protocol::read_secret_file(stash_path)?;
+    let stash = krb5_protocol::read_stash_file(stash_path)?;
     let mut store = match format {
         DbFormat::Kdb(version) => load_kdb_blob(&blob, version, &stash)?,
         _ => load_dump_with_stash(dump_text(&blob)?, &stash)?,
@@ -1044,7 +1044,7 @@ pub fn read_stash(stash_path: &Path, db_path: &Path) -> Result<ProtocolKey, Pers
 }
 
 pub fn read_stashed_master(path: &Path) -> Result<(ProtocolKey, u32), PersistError> {
-    let bytes = krb5_protocol::read_secret_file(path)?;
+    let bytes = krb5_protocol::read_stash_file(path)?;
     let kt = Keytab::parse(&bytes).map_err(|e| PersistError::Format(e.to_string()))?;
     let km = PrincipalName::new(PrincipalName::NT_PRINCIPAL, crate::mkey::MASTER_NAME);
     kt.entries
@@ -1144,7 +1144,7 @@ fn master_for_save(
 ) -> Result<ProtocolKey, PersistError> {
     if stash_path.exists() {
         let master = existing_stash_key(db_path, stash_path)?;
-        if stash_keytab_key(&krb5_protocol::read_secret_file(stash_path)?).is_none()
+        if stash_keytab_key(&krb5_protocol::read_stash_file(stash_path)?).is_none()
             && check_secret_file_writable(stash_path).is_ok()
         {
             write_secret_file(stash_path, &stash_keytab_bytes(store.realm(), &master)?)?;
@@ -1181,7 +1181,7 @@ fn master_for_save(
 }
 
 fn existing_stash_key(db_path: &Path, stash_path: &Path) -> Result<ProtocolKey, PersistError> {
-    let bytes = krb5_protocol::read_secret_file(stash_path)?;
+    let bytes = krb5_protocol::read_stash_file(stash_path)?;
     if let Some(mkey) = stash_keytab_key(&bytes) {
         return Ok(mkey);
     }
@@ -1235,7 +1235,7 @@ fn stash_etypes() -> [EncryptionType; 2] {
 }
 
 fn load_stash_etype(path: &Path, etype: EncryptionType) -> Result<ProtocolKey, PersistError> {
-    let bytes = krb5_protocol::read_secret_file(path)?;
+    let bytes = krb5_protocol::read_stash_file(path)?;
     ProtocolKey::from_bytes(etype, &bytes).map_err(|e| PersistError::Crypto(e.to_string()))
 }
 

@@ -18,6 +18,7 @@ pub(crate) struct PrincipalMap {
     map: HashMap<String, Principal>,
     rids: HashMap<u32, String>,
     logged: HashMap<String, Option<Principal>>,
+    records_log: bool,
     undo: Undo,
 }
 
@@ -139,8 +140,12 @@ impl PrincipalMap {
         }
     }
 
+    pub(super) fn set_records_log(&mut self, on: bool) {
+        self.records_log = on;
+    }
+
     fn keep(&mut self, id: &str) {
-        if !self.logged.contains_key(id) {
+        if self.records_log && !self.logged.contains_key(id) {
             let before = self.map.get(id).cloned();
             self.logged.insert(id.to_owned(), before);
         }
@@ -273,7 +278,7 @@ impl PrincipalStore {
     #[must_use]
     pub fn iprop_master_key(&self) -> Option<krb5_crypto::ProtocolKey> {
         if let Some((_, stash)) = &self.persist_paths
-            && let Ok(bytes) = krb5_protocol::read_secret_file(stash)
+            && let Ok(bytes) = krb5_protocol::read_stash_file(stash)
         {
             if let Some(k) = crate::persist::stash_keytab_key(&bytes) {
                 return Some(k);
@@ -325,6 +330,7 @@ impl PrincipalStore {
 
     pub fn set_ulog(&mut self, ulog: Ulog, role: IpropRole) {
         self.log = Some(Arc::new(LogContext { ulog, role }));
+        self.map.records_log = true;
     }
 
     #[must_use]
@@ -419,6 +425,9 @@ impl PrincipalStore {
     }
 
     pub(super) fn note_ulog(&mut self, name: String, deleted: bool, princ: Option<Principal>) {
+        if self.log.is_none() {
+            return;
+        }
         let now = princ.as_ref().filter(|_| !deleted);
         let attrs = match (self.map.log(&name, now), now) {
             (Some(before), Some(after)) => find_changed_attrs(&before, after, true),

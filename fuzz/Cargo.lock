@@ -676,6 +676,7 @@ dependencies = [
  "regex-automata",
  "rustix",
  "sha1",
+ "subtle",
  "thiserror",
  "tracing",
  "zeroize",

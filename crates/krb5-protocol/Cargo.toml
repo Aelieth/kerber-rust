@@ -101,6 +101,7 @@ nix = { workspace = true, features = ["fs", "time"] }
 sha1.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+subtle.workspace = true
 zeroize.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]

@@ -18,6 +18,9 @@ any other `###` heading.
 
 ### Security
 
+- **kdc.** Decrypted long-term keys are wiped on drop, and debug output shows lengths rather than key bytes.
+- **protocol.** A master-key stash must be a regular file of at most 64 KiB, and a symlink is refused.
+- **admin.** A kadm5 password buffer is wiped when that RPC copy is dropped.
 - **crypto.** crypto-bigint 0.7.6 fixes RUSTSEC-2026-0387, timing variability in constant-time operations used by PKINIT (DH, RSA, ECDSA) and SPAKE's curves.
 - **kdc.** The KDC drops an AS-REQ, or answers a TGS-REQ with a generic error, when it cannot make the audit id, as MIT does.
 - **kdc.** A PKINIT signedAuthPack whose SignedData or SignerInfo has an extra or mistyped element is refused at decode, as MIT's CMS template; it was taken before.

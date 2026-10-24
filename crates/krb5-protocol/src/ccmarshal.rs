@@ -4,17 +4,34 @@ use std::io;
 
 use krb5_crypto::{EncryptionType, ProtocolKey};
 use krb5_types::{PrincipalName, Realm, kerberos_string_from_bytes};
+use subtle::ConstantTimeEq;
+use zeroize::Zeroize;
 
 /// FILE v4 header tag: KDC time offset (`sec`, `usec`).
 pub const FCC_TAG_DELTATIME: u16 = 1;
 
 /// Enctype 0 is a config entry. Debug shows the enctype and the length, never the octets.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct CcacheKeyblock {
     /// Stored as 16 bits, sign-extended on read.
     pub etype: i16,
     pub contents: Vec<u8>,
 }
+
+impl Drop for CcacheKeyblock {
+    fn drop(&mut self) {
+        self.contents.zeroize();
+    }
+}
+
+impl PartialEq for CcacheKeyblock {
+    fn eq(&self, other: &Self) -> bool {
+        self.etype == other.etype
+            && bool::from(self.contents.as_slice().ct_eq(other.contents.as_slice()))
+    }
+}
+
+impl Eq for CcacheKeyblock {}
 
 impl std::fmt::Debug for CcacheKeyblock {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

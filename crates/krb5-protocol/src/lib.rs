@@ -133,8 +133,8 @@ pub use safe_priv::{
     verify_krb_safe_checksum_in,
 };
 pub use secret_file::{
-    check_secret_file_writable, destroy_secret_file, read_secret_file, write_fresh_secret_file,
-    write_secret_file, write_secret_file_like,
+    check_secret_file_writable, destroy_secret_file, read_secret_file, read_stash_file,
+    write_fresh_secret_file, write_secret_file, write_secret_file_like,
 };
 #[cfg(target_os = "linux")]
 pub use selabel::create_labeled;
