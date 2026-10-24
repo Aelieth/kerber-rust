@@ -162,6 +162,7 @@ any other `###` heading.
 - **ci.** The budget workflow is gone. The six per-push walls live in `ci-budget.toml`.
 
 ### Fixed
+- **client.** A PKINIT retry after the KDC offers a larger DH group checks the reply against the retried request, as MIT's does.
 - **kdc.** A refresh re-reads the lockout side file only when its identity, length or mtime moved, not on every applied tail or change. Lab beside MIT.
 - **kdc/client.** RFC 8636's partyVInfo is the AS-REQ's server as sent, as MIT's is, not `krbtgt`: MIT's kpasswd could not decrypt our `kadmin/changepw` reply.
 

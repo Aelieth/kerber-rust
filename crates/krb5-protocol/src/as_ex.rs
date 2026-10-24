@@ -382,6 +382,8 @@ fn as_exchange_inner(
                 wire,
                 reply_key,
                 learned,
+                nonce,
+                bound,
             } => {
                 let mut pw = PasswordCell::new(
                     prompt,
@@ -417,7 +419,13 @@ fn as_exchange_inner(
                 );
             }
             PkinitEnd::Done(out) => return Ok(*out),
-            PkinitEnd::Reply { rep, wire, traced } if !req.ticket.anonymous => {
+            PkinitEnd::Reply {
+                rep,
+                wire,
+                traced,
+                nonce,
+                bound,
+            } if !req.ticket.anonymous => {
                 return finish_bare_reply(
                     req, keys, unreadable, prompt, *rep, nonce, &etypes, &bound, &wire, traced,
                 );
@@ -1163,6 +1171,8 @@ fn continue_pkinit(
                 rep: Box::new(rep),
                 wire: first_wire,
                 traced: false,
+                nonce,
+                bound: bound.clone(),
             });
         }
         KdcMsg::TgsRep => return Err(Error::UnexpectedPdu),
@@ -1175,16 +1185,17 @@ fn continue_pkinit(
         return Err(Error::PreauthFailed(Box::new(pkinit_fails(f).error)));
     };
     let mut dh_size = pk.dh_size();
-    let mut nonce = nonce;
     let mut tryagain: Option<Retry> = None;
     for _ in 1..MAX_IN_TKT_LOOPS {
         let group = KxGroup::for_bits(dh_size).unwrap_or(KxGroup::Modp2048);
-        let bound = &request_times(req, clock);
+        // A fresh nonce and request times each pass, as RFC 6113 requires for each try.
+        let bound = request_times(req, clock);
+        let nonce = random_nonce()?;
         let extra = match &tryagain {
             None => cookie.iter().cloned().collect(),
             Some(_) => Vec::new(),
         };
-        let mut req2 = build_as_req_from(req, nonce, bound, Some(extra), etypes)?;
+        let mut req2 = build_as_req_from(req, nonce, &bound, Some(extra), etypes)?;
         trace::pkinit_dh_proposing_group(group.desc());
         let kp =
             KxKey::generate(group).ok_or_else(|| Error::Crypto("PKINIT key exchange".into()))?;
@@ -1246,6 +1257,8 @@ fn continue_pkinit(
                             rep: Box::new(rep),
                             wire,
                             traced: true,
+                            nonce,
+                            bound,
                         });
                     }
                     Err(e) => return Err(e),
@@ -1260,11 +1273,12 @@ fn continue_pkinit(
                     wire,
                     reply_key,
                     learned,
+                    nonce,
+                    bound,
                 });
             }
             KdcMsg::Error(e) => {
                 tryagain = Some(pkinit_refused(&e, &mut dh_size)?);
-                nonce = random_nonce()?;
             }
             KdcMsg::TgsRep => return Err(Error::UnexpectedPdu),
         }
@@ -1298,6 +1312,10 @@ enum PkinitEnd {
         wire: Vec<u8>,
         reply_key: ProtocolKey,
         learned: Option<LearnedSalt>,
+        // The answered request's nonce and times; a tryagain regenerates both (RFC 6113), so the
+        // reply check must use these, not the first request's.
+        nonce: u32,
+        bound: AsReqTimes,
     },
     Done(Box<AsOutcome>),
     Walk(Box<KrbError>),
@@ -1305,6 +1323,8 @@ enum PkinitEnd {
         rep: Box<AsRep>,
         wire: Vec<u8>,
         traced: bool,
+        nonce: u32,
+        bound: AsReqTimes,
     },
 }
 
