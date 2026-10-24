@@ -899,8 +899,24 @@ pub fn tkt_creds_service_req(server: Princ<'_>, referral: bool) {
     );
 }
 
+// MIT: `TRACE_TKT_CREDS_OFFPATH` (include/k5-trace.h:475-476)
+pub fn tkt_creds_offpath(realm: &[u8]) {
+    krb5int_trace(
+        "Received TGT for offpath realm {data}",
+        &[Arg::Data(Some(realm))],
+    );
+}
+
 // MIT: `TRACE_TKT_CREDS_TARGET_TGT` (include/k5-trace.h:491-492)
 pub fn tkt_creds_target_tgt(server: Princ<'_>) {
+    krb5int_trace(
+        "Received TGT for service realm: {princ}",
+        &[Arg::Princ(Some(server))],
+    );
+}
+
+// MIT: `TRACE_TKT_CREDS_TARGET_TGT_OFFPATH` (include/k5-trace.h:493-494)
+pub fn tkt_creds_target_tgt_offpath(server: Princ<'_>) {
     krb5int_trace(
         "Received TGT for service realm: {princ}",
         &[Arg::Princ(Some(server))],

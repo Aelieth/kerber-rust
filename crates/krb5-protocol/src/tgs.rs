@@ -398,33 +398,38 @@ fn get_dest_tgt(
     let mut cur_tgt = tgt.clone();
     let mut next = dest.to_owned();
     let now = krb5_types::unix_now();
+    let mut offpath = false;
+    let mut offpath_count = 0usize;
+    let mut visited: Vec<String> = Vec::new();
     for _ in 0..REFERRAL_MAX_HOPS {
         let served = tgt_served_realm(&cur_tgt);
         if served == dest {
             return Ok((cur_tgt, cached));
         }
-        // MIT: `get_tgt_request` (lib/krb5/krb/get_creds.c:890-914)
-        let cred = cached_tgt(
-            &creds_opts.cached_creds,
-            &cur_tgt.cname,
-            cur_tgt.crealm.as_bytes(),
-            &next,
-            now,
-            &crate::as_ex::conf_etypes(profile, true),
-        )?;
-        if let Some(cred) = cred {
-            trace::tkt_creds_cached_intermediate_tgt(
-                trace::Princ::new(&cred.client.1, cred.client.0.as_bytes()),
-                trace::Princ::new(&cred.server.1, cred.server.0.as_bytes()),
-            );
-            cur_tgt = tgt_from_cached(&cur_tgt, cred)?;
-            let got = tgt_served_realm(&cur_tgt);
-            if got == dest {
-                return Ok((cur_tgt, cached));
+        if !offpath {
+            // MIT: `get_tgt_request` (lib/krb5/krb/get_creds.c:890-914)
+            let cred = cached_tgt(
+                &creds_opts.cached_creds,
+                &cur_tgt.cname,
+                cur_tgt.crealm.as_bytes(),
+                &next,
+                now,
+                &crate::as_ex::conf_etypes(profile, true),
+            )?;
+            if let Some(cred) = cred {
+                trace::tkt_creds_cached_intermediate_tgt(
+                    trace::Princ::new(&cred.client.1, cred.client.0.as_bytes()),
+                    trace::Princ::new(&cred.server.1, cred.server.0.as_bytes()),
+                );
+                cur_tgt = tgt_from_cached(&cur_tgt, cred)?;
+                let got = tgt_served_realm(&cur_tgt);
+                if got == dest {
+                    return Ok((cur_tgt, cached));
+                }
+                cur_kdc = kdc_for_realm(profile, &got, kdc)?;
+                dest.clone_into(&mut next);
+                continue;
             }
-            cur_kdc = kdc_for_realm(profile, &got, kdc)?;
-            dest.clone_into(&mut next);
-            continue;
         }
         let hop = PrincipalName::try_new(PrincipalName::NT_SRV_INST, ["krbtgt", next.as_str()])
             .map_err(|e| Error::ReplyMismatch(e.to_string()))?;
@@ -442,7 +447,51 @@ fn get_dest_tgt(
             TgsRequest::new(hop.clone(), &served, opts),
         ) {
             Ok(out) => {
+                if offpath {
+                    // MIT: `step_get_tgt_offpath` (lib/krb5/krb/get_creds.c:681-717)
+                    authenticate_srealm(&out)?;
+                    let Some(got) = referral_hop_realm(&out.ticket.sname) else {
+                        return Err(Error::ReplyMismatch("off-path reply was not a TGT".into()));
+                    };
+                    if visited.iter().any(|r| r == &got) {
+                        return Err(kdc_unreach());
+                    }
+                    visited.push(got.clone());
+                    cur_tgt = tgs_as_tgt(&cur_tgt, out);
+                    if got == dest {
+                        trace::tkt_creds_target_tgt_offpath(trace::Princ::new(
+                            &cur_tgt.ticket.sname,
+                            cur_tgt.ticket.realm.as_bytes(),
+                        ));
+                        return Ok((cur_tgt, cached));
+                    }
+                    if offpath_count >= REFERRAL_MAX_HOPS {
+                        return Err(Error::ReplyMismatch("off-path chase gave up".into()));
+                    }
+                    offpath_count += 1;
+                    cur_kdc = kdc_for_realm(profile, &got, kdc)?;
+                    dest.clone_into(&mut next);
+                    continue;
+                }
+                if let Some(realm) = referral_hop_realm(&out.ticket.sname)
+                    && tgt_is_off_path(&path, &served, &start, &realm)
+                {
+                    // MIT: `step_get_tgt` (lib/krb5/krb/get_creds.c:966-971)
+                    // MIT: `begin_get_tgt_offpath` (lib/krb5/krb/get_creds.c:721-726)
+                    authenticate_srealm(&out)?;
+                    trace::tkt_creds_offpath(realm.as_bytes());
+                    visited.push(realm.clone());
+                    offpath = true;
+                    offpath_count = 1;
+                    cur_tgt = tgs_as_tgt(&cur_tgt, out);
+                    cur_kdc = kdc_for_realm(profile, &realm, kdc)?;
+                    dest.clone_into(&mut next);
+                    continue;
+                }
                 chase_step(&start, &mut seen, &hop, &served, &out)?;
+                if let Some(realm) = referral_hop_realm(&out.ticket.sname) {
+                    visited.push(realm);
+                }
                 if asked_for_hop(&hop, &out) {
                     cached.push(tgs_as_tgt(&cur_tgt, out.clone()));
                 }
@@ -461,6 +510,7 @@ fn get_dest_tgt(
                 cur_kdc = kdc_for_realm(profile, &got, kdc)?;
                 dest.clone_into(&mut next);
             }
+            Err(e @ Error::KrbError { .. }) if offpath => return Err(e),
             Err(e @ Error::KrbError { .. }) => match closer_hop(&path, &served, &next) {
                 Some(c) => {
                     trace::tkt_creds_closer_realm(c.as_bytes());
@@ -554,6 +604,23 @@ fn tgt_from_cached(prev: &AsOutcome, cred: &CcacheCred) -> Result<AsOutcome, Err
         pa_config: None,
         time_offset: prev.time_offset,
     })
+}
+
+// MIT: `find_realm_in_path` (lib/krb5/krb/get_creds.c:871-882)
+fn tgt_is_off_path(path: &[String], cur: &str, start: &str, realm: &str) -> bool {
+    let rest = path
+        .iter()
+        .position(|r| r == cur)
+        .map_or(&[][..], |i| &path[i + 1..]);
+    !rest.iter().any(|r| r == realm) && realm != start
+}
+
+fn kdc_unreach() -> Error {
+    Error::Io {
+        message: "Cannot contact any KDC for requested realm".into(),
+        kind: std::io::ErrorKind::Other,
+        retryable: false,
+    }
 }
 
 fn closer_hop<'a>(path: &'a [String], cur: &str, next: &str) -> Option<&'a str> {
