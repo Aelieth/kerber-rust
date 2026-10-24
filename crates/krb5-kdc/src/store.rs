@@ -636,7 +636,7 @@ impl PrincipalStore {
         store.create_principal_3_in(
             &tgt,
             realm,
-            None,
+            CreateKeys::Random,
             &[],
             &AdminEnt {
                 mask: kadm5_mask::ATTRIBUTES,
@@ -747,7 +747,7 @@ pub use password::{
 pub use policy::{NamedPolicy, Policy, SpakeKdc};
 pub(crate) use principal::PrincipalFields;
 pub use principal::{
-    AdminEnt, AdminFields, KadmData, Principal, PrincipalBuilder, TlData, strip_db_args,
+    AdminEnt, AdminFields, CreateKeys, KadmData, Principal, PrincipalBuilder, TlData, strip_db_args,
 };
 pub(crate) use principal::{db_args_put_error, refresh_kadm_tl};
 pub use pwqual::{Pwqual, clear_thread_pwqual, register_pwqual, set_thread_pwqual};

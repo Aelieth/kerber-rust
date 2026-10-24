@@ -411,7 +411,17 @@ pub(super) fn dispatch_kadm5_ticket(
             // NULL password: random key (`krb5_dbe_crk`), no quality check.
             // keyless entry (ledger deviation).
             let changed = commit(&mut g, proc, API_V2, |s| {
-                s.create_principal_3_in(&c.name, &req, c.pass.as_deref(), &c.ks, &c.ent, actor)?;
+                s.create_principal_3_in(
+                    &c.name,
+                    &req,
+                    match c.pass.as_deref() {
+                        Some(p) => krb5_kdc::CreateKeys::Password(p),
+                        None => krb5_kdc::CreateKeys::Random,
+                    },
+                    &c.ks,
+                    &c.ent,
+                    actor,
+                )?;
                 if c.ent.mask & KADM5_TL_DATA != 0 {
                     s.merge_tl_data_in(&c.name, &req, &c.tl_data, actor)?;
                 }

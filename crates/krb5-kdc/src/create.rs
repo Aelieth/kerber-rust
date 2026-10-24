@@ -130,7 +130,14 @@ pub fn add_admin_principals(store: &mut PrincipalStore, mkvno: u16) -> Result<()
             max_life,
             ..AdminEnt::default()
         };
-        store.create_principal_3_in(&name, &realm, None, &[], &ent, &caller)?;
+        store.create_principal_3_in(
+            &name,
+            &realm,
+            crate::CreateKeys::Random,
+            &[],
+            &ent,
+            &caller,
+        )?;
         stamp_kadm5_create_tl(store, &name, mkvno);
     }
     Ok(())
@@ -330,7 +337,14 @@ fn create_bootstrap_admin(
         ..AdminEnt::default()
     };
     let actor = format!("bootstrap@{realm}");
-    store.create_principal_3_in(&admin.name, realm, None, &admin.etypes, &ent, &actor)
+    store.create_principal_3_in(
+        &admin.name,
+        realm,
+        crate::CreateKeys::Random,
+        &admin.etypes,
+        &ent,
+        &actor,
+    )
 }
 
 fn admin_keytab(store: &PrincipalStore, admin: &AdminSpec) -> Result<Keytab, Error> {

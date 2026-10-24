@@ -502,6 +502,7 @@ fn getprinc_incoming_trust_uses_foreign_realm_id() {
             &krb5_kdc::testrealm::documented_admin_id(),
             "AD.KERBER.TEST",
             key,
+            None,
         )
         .unwrap();
     let mut r = Rig::with_store(store, b"");

@@ -242,7 +242,7 @@ fn s4u2self_case2(ad_identity: bool) -> (krb5_kdc::IssuedTgs, krb5_crypto::Proto
     store.policy.ad_identity = ad_identity;
     let ir = aes_key(0x44);
     store
-        .create_interrealm_key(&acl, &documented_admin_id(), "OTHER.TEST", ir.clone())
+        .create_interrealm_key(&acl, &documented_admin_id(), "OTHER.TEST", ir.clone(), None)
         .unwrap();
     store
         .policy
@@ -332,7 +332,7 @@ fn s4u2self_case3_cross_foreign_user_referral_issues() {
     let (mut store, acl) = bootstrap_documented().expect("bootstrap");
     let ir = aes_key(0x55);
     store
-        .create_interrealm_key(&acl, &documented_admin_id(), "OTHER.TEST", ir.clone())
+        .create_interrealm_key(&acl, &documented_admin_id(), "OTHER.TEST", ir.clone(), None)
         .unwrap();
     store
         .policy

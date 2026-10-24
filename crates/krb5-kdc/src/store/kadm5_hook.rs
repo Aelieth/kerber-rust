@@ -614,7 +614,7 @@ mod tests {
             .create_principal_3_in(
                 &created,
                 TEST_REALM,
-                Some(b"long-enough"),
+                crate::CreateKeys::Password(b"long-enough"),
                 &[],
                 &AdminEnt::default(),
                 "actor",

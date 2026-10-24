@@ -145,15 +145,6 @@ impl Principal {
         self.locked = self.locked();
     }
 
-    pub(crate) fn set_requires_preauth(&mut self, on: bool) {
-        if on {
-            self.attributes |= KDB_REQUIRES_PRE_AUTH;
-        } else {
-            self.attributes &= !KDB_REQUIRES_PRE_AUTH;
-        }
-        self.requires_preauth = on;
-    }
-
     pub(crate) fn set_locked(&mut self, on: bool) {
         if on {
             self.attributes |= KDB_DISALLOW_ALL_TIX;
@@ -301,6 +292,13 @@ impl PrincipalBuilder {
 /// A field applies only when its mask bit is set; otherwise the realm default.
 // MIT: `impose_restrictions` (auth.c:205-265)
 // MIT: `auth_restrict` (auth.c:267-272)
+#[derive(Copy, Clone)]
+pub enum CreateKeys<'a> {
+    Password(&'a [u8]),
+    Random,
+    Explicit(&'a [KeyEntry]),
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AdminEnt {
     pub mask: u32,
@@ -571,7 +569,7 @@ impl PrincipalStore {
         self.create_principal_3_in(
             name,
             princ_realm,
-            Some(password),
+            CreateKeys::Password(password),
             etypes,
             &AdminEnt::default(),
             actor,
@@ -587,7 +585,14 @@ impl PrincipalStore {
         etypes: &[EncryptionType],
         actor: &str,
     ) -> Result<(), Error> {
-        self.create_principal_3_in(name, princ_realm, None, etypes, &AdminEnt::default(), actor)
+        self.create_principal_3_in(
+            name,
+            princ_realm,
+            CreateKeys::Random,
+            etypes,
+            &AdminEnt::default(),
+            actor,
+        )
     }
 
     /// A create without `KADM5_ATTRIBUTES` takes `default_principal_flags`.
@@ -608,13 +613,17 @@ impl PrincipalStore {
         &mut self,
         name: &PrincipalName,
         princ_realm: &str,
-        password: Option<&[u8]>,
+        keys: CreateKeys<'_>,
         etypes: &[EncryptionType],
         ent: &AdminEnt,
         actor: &str,
     ) -> Result<(), Error> {
         self.inside_change()?;
-        let password = password.map(c_password);
+        let (password, explicit) = match keys {
+            CreateKeys::Password(p) => (Some(c_password(p)), None),
+            CreateKeys::Random => (None, None),
+            CreateKeys::Explicit(k) => (None, Some(k)),
+        };
         let id = crate::kdb::lookup_principal_id(name, princ_realm);
         if self.get(&id).is_some() {
             return Err(Error::AlreadyExists);
@@ -638,21 +647,34 @@ impl PrincipalStore {
             )?;
         }
         let now = unix_now_u32();
-        let use_etypes = apply_keysalt_policy(
-            polent.as_ref().and_then(|p| p.allowed_keysalts.as_deref()),
-            etypes,
-            &self.policy.password_etypes(),
-        )?;
+        let use_etypes = if let Some(given) = explicit {
+            given.iter().map(|k| k.etype).collect()
+        } else {
+            apply_keysalt_policy(
+                polent.as_ref().and_then(|p| p.allowed_keysalts.as_deref()),
+                etypes,
+                &self.policy.password_etypes(),
+            )?
+        };
         let salt = name.default_salt(princ_realm);
-        let kvno = if ent.mask & kadm5_mask::KVNO != 0 {
+        let asked = if ent.mask & kadm5_mask::KVNO != 0 {
             if ent.kvno > 65535 {
                 return Err(Error::InvalidArgument("invalid kvno".into()));
             }
-            ent.kvno
+            Some(ent.kvno)
         } else {
-            1
+            None
         };
-        let keys = if let Some(pw) = password {
+        let kvno = asked.unwrap_or(1);
+        let keys = if let Some(given) = explicit {
+            let mut keys = given.to_vec();
+            if let Some(kvno) = asked {
+                for key in &mut keys {
+                    key.kvno = kvno;
+                }
+            }
+            keys
+        } else if let Some(pw) = password {
             keys_from_password(&use_etypes, pw, &salt, kvno)?
         } else {
             let mut keys = Vec::new();
@@ -751,7 +773,14 @@ impl PrincipalStore {
             return Err(Error::AlreadyExists);
         }
         let realm = self.realm.clone();
-        self.create_principal_3_in(name, &realm, None, etypes, &AdminEnt::default(), actor)?;
+        self.create_principal_3_in(
+            name,
+            &realm,
+            CreateKeys::Random,
+            etypes,
+            &AdminEnt::default(),
+            actor,
+        )?;
         if let Some(rs) = acl.restrictions(actor, Some(&id)) {
             self.apply_acl_restrictions(&id, rs)?;
         }
@@ -776,7 +805,11 @@ impl PrincipalStore {
             ent.mask |= kadm5_mask::POLICY;
             ent.policy = Some(p.to_owned());
         }
-        self.create_principal_3_in(name, &realm, password, etypes, &ent, actor)?;
+        let keys = match password {
+            Some(p) => CreateKeys::Password(p),
+            None => CreateKeys::Random,
+        };
+        self.create_principal_3_in(name, &realm, keys, etypes, &ent, actor)?;
         if let Some(rs) = acl.restrictions(actor, Some(&id)) {
             self.apply_acl_restrictions(&id, rs)?;
         }
@@ -1156,7 +1189,11 @@ impl PrincipalStore {
         self.save_if_configured()
     }
 
-    fn apply_acl_restrictions(&mut self, id: &str, rs: &Restrictions) -> Result<(), Error> {
+    pub(crate) fn apply_acl_restrictions(
+        &mut self,
+        id: &str,
+        rs: &Restrictions,
+    ) -> Result<(), Error> {
         self.inside_change()?;
         let mut ent = AdminEnt::default();
         rs.impose(&mut ent, unix_now_u32());

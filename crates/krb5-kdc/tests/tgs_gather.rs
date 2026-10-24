@@ -587,7 +587,7 @@ fn lineage_before_u2u() {
     let (mut store, acl) = bootstrap_documented().unwrap();
     let ir = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x44; 32]).unwrap();
     store
-        .create_interrealm_key(&acl, &documented_admin_id(), FOREIGN, ir.clone())
+        .create_interrealm_key(&acl, &documented_admin_id(), FOREIGN, ir.clone(), None)
         .unwrap();
     let as_out = issue_tgt(&store, TEST_USER, 19030);
     let local = store.krbtgt().unwrap().best_key().unwrap().key.clone();

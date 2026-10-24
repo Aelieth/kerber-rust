@@ -921,7 +921,9 @@ mod hooks {
                     if foreign.is_empty() {
                         continue;
                     }
-                    if let Err(e) = store.create_interrealm_key(acl, actor, foreign, key.clone()) {
+                    if let Err(e) =
+                        store.create_interrealm_key(acl, actor, foreign, key.clone(), None)
+                    {
                         eprintln!("krb5-kdc: inter-realm {foreign}: {e}");
                         std::process::exit(1);
                     }
@@ -949,9 +951,9 @@ mod hooks {
                             continue;
                         }
                         let put = if first {
-                            store.set_interrealm_decrypt_key(acl, actor, foreign, key.clone())
+                            store.set_interrealm_decrypt_key(acl, actor, foreign, key.clone(), None)
                         } else {
-                            store.add_interrealm_decrypt_key(acl, actor, foreign, key.clone())
+                            store.add_interrealm_decrypt_key(acl, actor, foreign, key.clone(), None)
                         };
                         if let Err(e) = put {
                             eprintln!("krb5-kdc: inter-realm accept key {foreign}: {e}");

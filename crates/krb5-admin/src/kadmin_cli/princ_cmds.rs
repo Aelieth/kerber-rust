@@ -275,7 +275,11 @@ fn create(
         kvno: a.kvno,
         policy: a.policy.clone(),
     };
-    st.create_principal_3_in(name, realm, pass, &a.keysalts, &ent, caller)?;
+    let keys = match pass {
+        Some(p) => krb5_kdc::CreateKeys::Password(p),
+        None => krb5_kdc::CreateKeys::Random,
+    };
+    st.create_principal_3_in(name, realm, keys, &a.keysalts, &ent, caller)?;
     if a.nokey {
         st.purgekeys_in(name, realm, i32::MAX, caller)?;
     }
