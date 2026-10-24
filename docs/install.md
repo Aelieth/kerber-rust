@@ -377,7 +377,7 @@ the module loaded and fails that one mechanism; the others still run.
 
 ### OTP preauth
 
-A user can present a one-time code in place of a password: MIT `kinit -T <armor ccache>` asks for it. MIT's KDC asks a RADIUS server whether the code is good. kerber-rust does not: an embedder registers an `OtpVerifier` ([plugins.md](plugins.md), [the KLLDAP embed](embed/klldap.md)), and `krb5kdc` itself has none, so it refuses every code. Give `otp` to a principal only on a KDC that has a verifier: `kinit` offers the code whenever the KDC does, and does not fall back to the password.
+A user can present a one-time code in place of a password: MIT `kinit -T <armor ccache>` asks for it. MIT's KDC asks a RADIUS server whether the code is good. kerber-rust does not: an embedder registers an `OtpVerifier` ([plugins.md](plugins.md), [the KLLDAP embed](embed/klldap.md)), and `krb5kdc` itself has none, so it refuses every code. Give `otp` to a principal only on a KDC that has a verifier: `kinit` offers the code whenever the KDC does, and does not fall back to the password. The exchange verifies the code, not a password: MIT's RADIUS server, like an `OtpVerifier`, is handed the token value alone, so a principal that also keeps a key is not asked for it here. An embedder that wants both checks a `password‖code` value itself, as `examples/embed-realm` does.
 
 The principal needs `+requires_preauth` (Fedora's `default_principal_flags = +preauth` gives new ones the flag) and an `otp` string attribute, a JSON array of tokens that names a verifier and holds no secret. MIT `kadmin` strips quotes from a word, so the JSON's quotes are doubled inside one double-quoted word:
 
