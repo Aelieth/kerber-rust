@@ -152,6 +152,42 @@ if ! echo "$TRACE$OUT" | grep -Eqi 'PKINIT|pa[_ ]?type[[:space:]]*16|padata type
 fi
 log "pkinit.client.gate" "ok" ',"mode":"rust-kinit","pa_type":16,"principal":"user@KERBER.TEST","mit_plugin":"present"'
 
+echo "==== MIT kinit, then Rust kinit, with RSA user certificates (PKCS#1 keys of two and three primes) vs MIT KDC ===="
+docker exec -i "$NAME" sh -s -- /tmp/pkinit-rsa KERBER.TEST user < "$ROOT/scripts/lib/pkinit-rsa-certs.sh"
+docker exec -i "$NAME" sh -s -- /tmp/pkinit-rsa3 KERBER.TEST user 2048 3 < "$ROOT/scripts/lib/pkinit-rsa-certs.sh"
+docker exec "$NAME" sed -i '/pkinit_anchors = FILE:\/tmp\/pkinit\/ca.pem/a\    pkinit_anchors = FILE:/tmp/pkinit-rsa/ca.pem' /etc/krb5kdc/kdc.conf
+docker exec "$NAME" sed -i '/pkinit_anchors = FILE:\/tmp\/pkinit-rsa\/ca.pem/a\    pkinit_anchors = FILE:/tmp/pkinit-rsa3/ca.pem' /etc/krb5kdc/kdc.conf
+docker exec "$NAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
+wait_pid_gone "$NAME" krb5kdc || true
+docker exec -d \
+    -e KRB5_TRACE=/tmp/mit-kdc.trace \
+    -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
+    -e KRB5_CONFIG=/etc/krb5.conf \
+    "$NAME" sh -c 'krb5kdc -n >/tmp/mit-kdc.log 2>&1'
+retry_until --log "$NAME" /tmp/mit-kdc.log -- 100 "MIT krb5kdc listening with the RSA anchor" \
+    docker exec "$NAME" python3 -c "import socket;socket.create_connection(('127.0.0.1',88),0.3)"
+for id in rsa rsa3; do
+    RSAID="-X X509_user_identity=FILE:/tmp/pkinit-$id/client.pem,/tmp/pkinit-$id/client.key -X X509_anchors=FILE:/tmp/pkinit/ca.pem"
+    for who in mit rust; do
+        kinit=kinit
+        [ "$who" = rust ] && kinit=/tmp/krb5-kinit
+        set +e
+        # shellcheck disable=SC2086
+        RSAOUT="$(docker exec -e KRB5_PASSWORD= "$NAME" $kinit $RSAID -c "/tmp/krb5cc_${id}_$who" user@KERBER.TEST 2>&1 </dev/null)"
+        rsarc=$?
+        set -e
+        echo "$RSAOUT"
+        RSAKL="$(docker exec "$NAME" klist -c "/tmp/krb5cc_${id}_$who" 2>/dev/null || true)"
+        echo "$RSAKL"
+        if [ "$rsarc" -ne 0 ] || ! echo "$RSAKL" | grep -q 'user@KERBER.TEST'; then
+            docker exec "$NAME" cat /tmp/mit-kdc.log 2>/dev/null || true
+            log "pkinit.client.gate" "error" ',"error":"'"$who"' kinit with the '"$id"' certificate got no TGT","rc":'"$rsarc"
+            exit 1
+        fi
+    done
+done
+log "pkinit.client.gate" "ok" ',"mode":"rust-kinit-rsa","principal":"user@KERBER.TEST","keys":"rsa-2048 rsa-2048-3-primes"'
+
 echo "==== mit_kdc MIT kinit pkinit_dh_min_bits=2048 TYPED-DATA + cookie ===="
 mit_kdc_pkinit_dh1024() {
     local proxy=1888
@@ -316,7 +352,7 @@ if [ "$ok" != 1 ]; then
 fi
 docker exec "$NAME" sh -c 'cat /dev/null > /tmp/mit-kdc-rogue.trace' || true
 set +e
-ROGUE="$(docker exec -e KRB5_PASSWORD= "$NAME" \
+ROGUE="$(docker exec -e KRB5_PASSWORD= -e KRB5_TRACE=/tmp/rust-rogue.trace "$NAME" \
     /tmp/krb5-kinit --pkinit FILE:/tmp/pkinit/user.pem --pkinit-anchors FILE:/tmp/pkinit/ca.pem \
     -c /tmp/krb5cc_pkinit_rogue user@KERBER.TEST 2>&1)"
 rrc=$?
@@ -328,9 +364,10 @@ if [ "$rrc" -eq 0 ]; then
     log "pkinit.client.gate" "error" ',"error":"rust kinit accepted client-cert KDC CMS"'
     exit 1
 fi
-if ! echo "$ROGUE" | grep -q 'pkinit kdc eku'; then
-    echo "$ROGUE" >&2
-    log "pkinit.client.gate" "error" ',"error":"rogue KDC refused without pkinit kdc eku","rc":'"$rrc"
+RTRACE="$(docker exec "$NAME" cat /tmp/rust-rogue.trace 2>/dev/null || true)"
+if ! grep -qF 'Preauth module pkinit (17) (real) returned: -1765328308/KDC name mismatch' <<< "$RTRACE"; then
+    echo "$RTRACE" >&2
+    log "pkinit.client.gate" "error" ',"error":"rogue KDC refused without KDC name mismatch","rc":'"$rrc"
     exit 1
 fi
 log "pkinit.client.gate" "ok" ',"mode":"rust-kinit-rogue","refused":"client-cert-kdc","rc":'"$rrc"

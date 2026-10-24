@@ -1,15 +1,21 @@
 //! Principal aliases like MIT 1.22.2.
-//! MIT `kadm5_create_alias` (`svr_principal.c:2051-2087`): an alias must be in the target's
+// MIT: `kadm5_create_alias` (svr_principal.c:2051-2087)
+//! an alias must be in the target's
 //! realm and must not resolve yet (`KADM5_DUP`); it is stored as a stub entry.
-//! MIT `krb5_dbe_make_alias_entry` (`kdb5.c:2826-2870`): the stub is a keyless
+// MIT: `krb5_dbe_make_alias_entry` (kdb5.c:2826-2870)
+//! the stub is a keyless
 //! `DISALLOW_ALL_TIX` entry whose only TL-data is `KRB5_TL_ALIAS_TARGET`.
-//! MIT `krb5_dbe_read_alias` (`kdb5.c:2872-2893`): `KRB5_TL_ALIAS_TARGET` is read back as the
+// MIT: `krb5_dbe_read_alias` (kdb5.c:2872-2893)
+//! `KRB5_TL_ALIAS_TARGET` is read back as the
 //! target principal; an entry without it is no alias.
-//! MIT `krb5_db_get_principal` (`kdb5.c:800-840`): a lookup follows aliases at most
+// MIT: `krb5_db_get_principal` (kdb5.c:800-840)
+//! a lookup follows aliases at most
 //! `MAX_ALIAS_DEPTH` (10) links deep; past that it is `KRB5_KDB_NOENTRY`.
-//! MIT `process_as_req` (`do_as_req.c:681-687`): the AS cname is the DB entry's name under
+// MIT: `process_as_req` (do_as_req.c:681-687)
+//! the AS cname is the DB entry's name under
 //! CANONICALIZE, else the requested name with the canonical realm.
-//! MIT `tgs_issue_ticket` (`do_tgs_req.c:1029-1029`): the TGS ticket's sname is the requested
+// MIT: `tgs_issue_ticket` (do_tgs_req.c:1029-1029)
+//! the TGS ticket's sname is the requested
 //! sname unless the reply is a referral.
 //! The texts and the dump line are the ones MIT 1.22.2 produced in a live settle
 //! (`docs/testing.md` lists the settles unit tests pin).

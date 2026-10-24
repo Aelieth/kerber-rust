@@ -12,14 +12,29 @@ publish.workspace = true
 bytes.workspace = true
 chrono.workspace = true
 pure-rust-locales.workspace = true
+crypto-bigint.workspace = true
 getrandom.workspace = true
+num-bigint.workspace = true
 p256.workspace = true
+p384.workspace = true
+ecdsa.workspace = true
+p521.workspace = true
+p224.workspace = true
+k256.workspace = true
+bp256.workspace = true
+bp384.workspace = true
+krb5-brainpool.workspace = true
 rasn.workspace = true
+regex-automata.workspace = true
 sha1.workspace = true
 sha2.workspace = true
 subtle.workspace = true
 thiserror.workspace = true
 zeroize.workspace = true
+
+[features]
+# The generated PKINIT test CA (`pkinit::PkinitCa`): test builds only, never a release one.
+test-ca = []
 
 [lints]
 workspace = true

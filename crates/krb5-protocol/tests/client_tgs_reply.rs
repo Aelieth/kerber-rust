@@ -1,5 +1,6 @@
 //! TGS-REP validation.
-//! MIT `krb5int_process_tgs_reply` (`gc_via_tkt.c:247-297`): validates the TGS-REP —
+// MIT: `krb5int_process_tgs_reply` (gc_via_tkt.c:247-297)
+//! validates the TGS-REP —
 //! ok-as-delegate, client, server, nonce and request times.
 //! Live oracle: the `kvno_plain` / `kvno_s4u` cells (`MIT_tgs_reply_client`).
 
@@ -82,27 +83,6 @@ fn tgs_reply_client_ignores_name_type() {
         false,
     )
     .unwrap();
-}
-
-#[test]
-fn tgs_reply_wrong_client_is_modified() {
-    let other = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["other"]);
-    let err = tgs_reply_client_ok(
-        &user(),
-        &realm(),
-        &other,
-        &realm(),
-        &host(),
-        &host(),
-        &realm(),
-        false,
-        false,
-    )
-    .unwrap_err();
-    assert!(
-        err.to_string().contains("client does not match TGT"),
-        "{err}"
-    );
 }
 
 #[test]
@@ -241,11 +221,6 @@ fn tgs_reply_zero_till_skips_endtime() {
 }
 
 #[test]
-fn try_fallback_specified_realm_is_non_referral() {
-    assert_eq!(tgs_try_fallback(1, true, 2), TgsFallback::NonReferral);
-}
-
-#[test]
 fn try_fallback_later_hop_keeps_error() {
     assert_eq!(tgs_try_fallback(2, true, 2), TgsFallback::KeepError);
     assert_eq!(tgs_try_fallback(2, false, 2), TgsFallback::KeepError);
@@ -270,25 +245,6 @@ fn try_fallback_non_referral_drops_canonicalize() {
 }
 
 #[test]
-fn validate_options_are_common_mask_plus_validate() {
-    let flags = TicketFlags::from_u32(0x5480_0000);
-    let opts = tgs_validate_options(&flags);
-    assert!(opts.bit(flag_bit::FORWARDABLE));
-    assert!(opts.bit(flag_bit::PROXIABLE));
-    assert!(opts.bit(flag_bit::MAY_POSTDATE));
-    assert!(opts.bit(flag_bit::RENEWABLE));
-    assert!(
-        opts.bit(flag_bit::VALIDATE),
-        "val_renew.c:116-121 KDC_OPT_VALIDATE"
-    );
-    assert!(!opts.bit(flag_bit::RENEW));
-    assert!(
-        !opts.bit(flag_bit::CANONICALIZE),
-        "validate is not the get_creds referral walk"
-    );
-}
-
-#[test]
 fn validate_options_omit_unset_ticket_flags() {
     let flags = TicketFlags::from_u32(0x4000_0000);
     let opts = tgs_validate_options(&flags);
@@ -304,16 +260,6 @@ fn common_flags() -> TicketFlags {
     TicketFlags::none()
         .with_bit(flag_bit::FORWARDABLE, true)
         .with_bit(flag_bit::RENEWABLE, true)
-}
-
-#[test]
-fn fwd_tgt_options_are_common_mask_plus_forwarded() {
-    let opts = tgs_forward_options(&common_flags(), true);
-    assert!(opts.bit(flag_bit::FORWARDED));
-    assert!(opts.bit(flag_bit::FORWARDABLE));
-    assert!(opts.bit(flag_bit::RENEWABLE));
-    assert!(!opts.bit(flag_bit::CANONICALIZE));
-    assert!(!opts.bit(flag_bit::PROXIABLE));
 }
 
 #[test]

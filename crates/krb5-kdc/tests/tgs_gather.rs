@@ -3,7 +3,8 @@
 //! times after BADMATCH / BADADDR.
 //! The remaining `GET_LOCAL_TGT` sites (the S4U2Proxy PAC in `ad.rs`) go out as 60, and a
 //! kvno-0 header ticket in `kdc_rd_ap_req` decrypts under the previous kvno.
-//! MIT `kdc_rd_ap_req` (`kdc_util.c:325-346`): a kvno-0 ticket that fails to decrypt is
+// MIT: `kdc_rd_ap_req` (kdc_util.c:325-346)
+//! a kvno-0 ticket that fails to decrypt is
 //! retried with the previous kvno's key.
 
 use krb5_asn1::{decode, encode};
@@ -586,7 +587,7 @@ fn lineage_before_u2u() {
     let (mut store, acl) = bootstrap_documented().unwrap();
     let ir = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x44; 32]).unwrap();
     store
-        .create_interrealm_key(&acl, &documented_admin_id(), FOREIGN, ir.clone())
+        .create_interrealm_key(&acl, &documented_admin_id(), FOREIGN, ir.clone(), None)
         .unwrap();
     let as_out = issue_tgt(&store, TEST_USER, 19030);
     let local = store.krbtgt().unwrap().best_key().unwrap().key.clone();

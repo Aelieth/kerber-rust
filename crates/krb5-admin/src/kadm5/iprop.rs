@@ -1,44 +1,48 @@
-//! Incremental propagation (`kadmin/server/ipropd_svc.c`): the `IPROP_GET_UPDATES` /
-//! `IPROP_FULL_RESYNC` server side, answered from the update log ([`krb5_kdc::Ulog`]), and the
-//! `krb5-iprop-pull` client (kpropd's RPCSEC_GSS calls). The `kdb_incr_update_t` codec is
-//! `krb5_kdc`'s (`lib/kdb/iprop_xdr.c`): updates leave as the log stores them, keys wrapped under
-//! the master key.
+//! Incremental propagation (`kadmin/server/ipropd_svc.c`): the `IPROP_GET_UPDATES` / `IPROP_FULL_RESYNC` server side, answered from the update log ([`krb5_kdc::Ulog`]), and a replica's client of it ([`IpropClient`], kpropd's RPCSEC_GSS handle). The `kdb_incr_update_t` codec is `krb5_kdc`'s (`lib/kdb/iprop_xdr.c`): updates leave as the log stores them, keys wrapped under the master key.
 
+use std::io;
 use std::net::TcpStream;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
 
+use krb5_config::ClientContext;
 use krb5_crypto::ProtocolKey;
 use krb5_gss::GssContext;
-use krb5_kdc::{
-    Acl, IpropUpdate, SharedDump as SharedStore, TlData, UlogLast, UlogTime, UlogUpdates,
-};
+use krb5_kdc::{IpropUpdate, SharedDump as SharedStore, TlData, UlogLast, UlogTime, UlogUpdates};
+use krb5_log::klog::{Severity, os_error_text, syslog};
 use krb5_types::{PrincipalName, Ticket};
+use nix::errno::Errno;
+use zeroize::Zeroizing;
 
+use super::auth_plugin::Kadm5AuthConfig;
 use super::codes::{
-    FLAVOR_GSS, FLAVOR_NONE, GSS_PRIVACY, IPROP_FULL_RESYNC, IPROP_FULL_RESYNC_EXT,
-    IPROP_GET_UPDATES, IPROP_NULL, IPROP_PROG, IPROP_VERS, MSG_ACCEPTED, MSG_CALL, MSG_REPLY,
-    RPC_VERSION, RPCSEC_GSS_VERS, RPG_DATA, RPG_INIT, SUCCESS,
+    AUTH_INVALIDRESP, FLAVOR_GSS, FLAVOR_NONE, GARBAGE_ARGS, GSS_PRIVACY, GSS_S_COMPLETE,
+    GSS_S_CONTINUE_NEEDED, IPROP_FULL_RESYNC, IPROP_FULL_RESYNC_EXT, IPROP_GET_UPDATES, IPROP_NULL,
+    IPROP_PROG, IPROP_VERS, MSG_ACCEPTED, MSG_CALL, MSG_DENIED, MSG_REPLY, PROC_UNAVAIL,
+    PROG_MISMATCH, PROG_UNAVAIL, REJECT_AUTH_ERROR, REJECT_RPC_MISMATCH, RPC_VERSION,
+    RPCSEC_GSS_VERS, RPG_DATA, RPG_INIT, SUCCESS, SYSTEM_ERR,
 };
 use super::rpc::{read_record, rpc_call_bytes, write_record};
 use super::xdr::{XdrR, XdrW};
 use crate::Error;
+use crate::kprop::{
+    KPROP_SERVICE, kprop_get_tickets, kprop_open_connection, kprop_send_dump, kprop_sendauth,
+};
 
-/// MIT `iprop_get_updates_1_svc` (`kadmin/server/ipropd_svc.c:191-200`): a caller who fails the iprop ACL gets permission denied and no entries.
-/// The null procedure skips that check. Updates leave as the log holds them: their keys were
-/// wrapped under the master key when they were logged, so none leaves in the clear.
-/// MIT `iprop_get_updates_1_svc` (`kadmin/server/ipropd_svc.c:203-205`): the answer is the update log's.
-/// MIT `ipropx_resync` (`kadmin/server/ipropd_svc.c:400-424`): a granted full resync answers `UPDATE_OK` with a zero last entry; the dump comes by kprop.
+// MIT: `iprop_get_updates_1_svc` (kadmin/server/ipropd_svc.c:191-200)
+/// a caller who fails the iprop ACL gets permission denied and no entries.
+// MIT: `ipropx_resync` (kadmin/server/ipropd_svc.c:400-424)
+/// a granted full resync answers `UPDATE_OK` with a zero last entry; the dump comes by kprop.
 pub(super) fn dispatch_iprop(
     store: &SharedStore,
-    acl: &Acl,
+    authcfg: &Kadm5AuthConfig,
+    resync: Option<&Arc<IpropResync>>,
     actor: &str,
     proc: u32,
     args: &[u8],
 ) -> Vec<u8> {
-    if proc != IPROP_NULL
-        && acl
-            .check(actor, krb5_kdc::AdminOp::Propagate, None)
-            .is_err()
-    {
+    if proc != IPROP_NULL && !authcfg.stack().iprop(actor) {
         return if proc == IPROP_FULL_RESYNC || proc == IPROP_FULL_RESYNC_EXT {
             encode_fullresync_status(UlogLast::default(), krb5_kdc::IPROP_PERM_DENIED)
         } else {
@@ -61,14 +65,71 @@ pub(super) fn dispatch_iprop(
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             encode_incr_result(&g.ulog_get_entries(last))
         }
-        IPROP_FULL_RESYNC | IPROP_FULL_RESYNC_EXT => {
-            encode_fullresync_status(UlogLast::default(), krb5_kdc::IPROP_OK)
-        }
+        IPROP_FULL_RESYNC | IPROP_FULL_RESYNC_EXT => full_resync(store, resync, actor),
         _ => encode_incr_status(krb5_kdc::IPROP_FULL_RESYNC),
     }
 }
 
-/// MIT `xdr_kdb_last_t` (`lib/kdb/iprop_xdr.c:309-318`): the serial, then the time's seconds and microseconds.
+#[doc(hidden)]
+pub struct IpropResync {
+    pub dump_file: PathBuf,
+    pub kprop_port: Option<String>,
+    pub profile: krb5_config::Krb5Conf,
+    pub realm: String,
+}
+
+// MIT: `ipropx_resync` (kadmin/server/ipropd_svc.c:322-424)
+fn full_resync(store: &SharedStore, resync: Option<&Arc<IpropResync>>, actor: &str) -> Vec<u8> {
+    let Some(resync) = resync else {
+        return encode_fullresync_status(UlogLast::default(), krb5_kdc::IPROP_OK);
+    };
+    let Some(host) = getclhoststr(actor) else {
+        syslog(Severity::Err, "iprop_full_resync: getclhoststr failed");
+        return encode_fullresync_status(UlogLast::default(), krb5_kdc::IPROP_ERROR);
+    };
+    let store = store.clone();
+    let resync = Arc::clone(resync);
+    let host = host.to_owned();
+    std::thread::spawn(move || run_resync(&store, &resync, &host));
+    encode_fullresync_status(UlogLast::default(), krb5_kdc::IPROP_OK)
+}
+
+// MIT: `getclhoststr` (kadmin/server/ipropd_svc.c:245-255)
+fn getclhoststr(princ: &str) -> Option<&str> {
+    let start = princ.find('/')? + 1;
+    let end = princ[start..].find('@')? + start;
+    (end > start).then(|| &princ[start..end])
+}
+
+// MIT: `ipropx_resync` (kadmin/server/ipropd_svc.c:355-420)
+fn run_resync(store: &SharedStore, resync: &IpropResync, host: &str) {
+    if let Err(e) = resync_dump_and_send(store, resync, host) {
+        syslog(Severity::Err, &format!("iprop_full_resync to {host}: {e}"));
+    }
+}
+
+fn resync_dump_and_send(
+    store: &SharedStore,
+    resync: &IpropResync,
+    host: &str,
+) -> Result<(), String> {
+    {
+        let g = store
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        krb5_kdc::conditional_iprop_dump(&g, &resync.dump_file).map_err(|e| e.to_string())?;
+    }
+    let dump = std::fs::read(&resync.dump_file).map_err(|e| e.to_string())?;
+    let ctx = ClientContext::new(resync.profile.clone());
+    let creds = kprop_get_tickets(&ctx, &resync.realm, host, None).map_err(|e| e.to_string())?;
+    let port = resync.kprop_port.as_deref().unwrap_or(KPROP_SERVICE);
+    let (mut stream, sender) = kprop_open_connection(host, port).map_err(|e| e.to_string())?;
+    let mut auth = kprop_sendauth(&mut stream, &creds, sender).map_err(|e| e.to_string())?;
+    kprop_send_dump(&mut stream, &mut auth, &dump).map_err(|e| e.to_string())
+}
+
+// MIT: `xdr_kdb_last_t` (lib/kdb/iprop_xdr.c:309-318)
+/// the serial, then the time's seconds and microseconds.
 fn encode_kdb_last(w: &mut XdrW, last: UlogLast) {
     w.u32(last.sno);
     w.u32(last.time.seconds);
@@ -81,8 +142,7 @@ pub(super) fn tl_u32(tl: &[TlData], ty: i32) -> Option<u32> {
     Some(u32::from_le_bytes(b))
 }
 
-/// A `kdb_incr_result_t` with no updates and a zero last entry: what MIT's reply holds before
-/// any update was sent.
+/// A `kdb_incr_result_t` with no updates and a zero last entry: what MIT's reply holds before any update was sent.
 pub(super) fn encode_incr_status(status: u32) -> Vec<u8> {
     encode_incr_result(&UlogUpdates {
         status,
@@ -91,7 +151,8 @@ pub(super) fn encode_incr_status(status: u32) -> Vec<u8> {
 }
 
 /// A `kdb_incr_result_t`: the last entry, the updates as the log holds them, the status.
-/// MIT `xdr_kdb_incr_result_t` (`lib/kdb/iprop_xdr.c:321-332`): the last entry, the updates, then the status.
+// MIT: `xdr_kdb_incr_result_t` (lib/kdb/iprop_xdr.c:321-332)
+/// the last entry, the updates, then the status.
 pub(super) fn encode_incr_result(got: &UlogUpdates) -> Vec<u8> {
     let mut w = XdrW::default();
     encode_kdb_last(&mut w, got.last);
@@ -111,138 +172,318 @@ pub(super) fn encode_fullresync_status(last: UlogLast, status: u32) -> Vec<u8> {
     w.b
 }
 
-/// Outcome of [`iprop_pull`].
+// MIT: `IPROPX_VERSION_1` (include/iprop_hdr.h:43-43)
+/// the highest dump version a replica loads.
+const IPROPX_VERSION_1: u32 = 1;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct IpropPull {
-    /// MIT `update_status_t`.
-    pub status: u32,
-    /// `kdb_last_t.last_sno` from the reply.
-    pub last_sno: u32,
-    /// `kdb_last_t.last_time.seconds`.
-    pub last_sec: u32,
-    /// `kdb_last_t.last_time.useconds`.
-    pub last_usec: u32,
-    /// Entries applied into the replica store.
-    pub applied: usize,
+pub enum RpcFailure {
+    CantEncodeArgs,
+    CantSend(String),
+    CantRecv(String),
+    TimedOut,
+    CantDecodeRes,
+    VersMismatch(u32, u32),
+    AuthError(u32),
+    ProgUnavail,
+    ProgVersMismatch(u32, u32),
+    ProcUnavail,
+    CantDecodeArgs,
+    SystemError,
+    Failed,
 }
 
-/// Replica cursor passed to `IPROP_GET_UPDATES`.
-///
-/// MIT `kdb_last_t` (`include/iprop.h:176-180`): the serial number and
-/// the timestamp's seconds and microseconds.
-#[derive(Clone, Copy)]
-pub struct IpropLast {
-    /// `kdb_last_t.last_sno`.
-    pub last_sno: u32,
-    /// `kdb_last_t.last_time.seconds`.
-    pub last_sec: u32,
-    /// `kdb_last_t.last_time.useconds`.
-    pub last_usec: u32,
-}
-
-/// RPCSEC_GSS IPROP_GET_UPDATES against MIT `kadmind` (program 100423).
-///
-/// # Errors
-///
-/// [`Error::GarbageArgs`] when a reply is truncated; [`Error::Inner`] when the GSS context
-/// cannot be built, a read or write on `stream` fails, a reply is not an accepted `SUCCESS`
-/// or carries a non-zero GSS major status, a reply's AP-REP, MIC, or seal does not verify or
-/// has the wrong sequence, or an update's name or KADM data does not decode or its keys do not
-/// decrypt under the replica's iprop master key.
-pub fn iprop_pull(
-    stream: &mut TcpStream,
-    ticket: Ticket,
-    session: &ProtocolKey,
-    crealm: &krb5_types::Realm,
-    cname: &PrincipalName,
-    last: IpropLast,
-    store: &mut krb5_kdc::PrincipalStore,
-) -> Result<IpropPull, Error> {
-    let IpropLast {
-        last_sno,
-        last_sec,
-        last_usec,
-    } = last;
-    let (mut ctx, token) =
-        GssContext::init_sec_context(ticket, session, crealm, cname, true, None, None)
-            .map_err(|e| Error::Inner(e.to_string()))?;
-    let mut xid = 1u32;
-    let handle = rpcsec_init(stream, &mut ctx, session, &token, &mut xid)?;
-    let mut args = XdrW::default();
-    args.u32(last_sno);
-    args.u32(last_sec);
-    args.u32(last_usec);
-    let body = rpcsec_data(
-        stream,
-        &mut ctx,
-        &handle,
-        &mut xid,
-        1,
-        IPROP_PROG,
-        IPROP_VERS,
-        IPROP_GET_UPDATES,
-        &args.b,
-    )?;
-    let (status, last, last_sec, last_usec, entries) =
-        decode_incr_result(&body, store.iprop_master_key().as_ref())?;
-    let n = entries.len();
-    if status == krb5_kdc::IPROP_OK && n > 0 {
-        // MIT `ulog_replay` (`lib/kdb/kdb_log.c:430-467`): each update is put into the database, which locks it.
-        store
-            .change(|s| s.apply_updates(&entries).map_err(Error::from))
-            .map_err(Error::from)??;
+impl RpcFailure {
+    // MIT: `clnt_sperror` (lib/rpc/clnt_perror.c:76-175)
+    /// `s`, the status's text, then the system's error, why, or the versions.
+    // MIT: `clnt_sperrno` (lib/rpc/clnt_perror.c:233-243)
+    /// each status's text is `rpc_errlist`'s.
+    #[must_use]
+    pub fn sperror(&self, s: &str) -> String {
+        let versions = |lo: &u32, hi: &u32| format!("; low version = {lo}, high version = {hi}");
+        let (text, detail) = match self {
+            Self::CantEncodeArgs => ("Can't encode arguments", String::new()),
+            Self::CantSend(e) => ("Unable to send", format!("; errno = {e}")),
+            Self::CantRecv(e) => ("Unable to receive", format!("; errno = {e}")),
+            Self::TimedOut => ("Timed out", String::new()),
+            Self::CantDecodeRes => ("Can't decode result", String::new()),
+            Self::VersMismatch(lo, hi) => ("Incompatible versions of RPC", versions(lo, hi)),
+            Self::AuthError(why) => (
+                "Authentication error",
+                format!("; why = {}", auth_errmsg(*why)),
+            ),
+            Self::ProgUnavail => ("Program unavailable", String::new()),
+            Self::ProgVersMismatch(lo, hi) => ("Program/version mismatch", versions(lo, hi)),
+            Self::ProcUnavail => ("Procedure unavailable", String::new()),
+            Self::CantDecodeArgs => ("Server can't decode arguments", String::new()),
+            Self::SystemError => ("Remote system error", String::new()),
+            Self::Failed => ("Failed (unspecified error)", String::new()),
+        };
+        format!("{s}: RPC: {text}{detail}")
     }
-    Ok(IpropPull {
-        status,
-        last_sno: last,
-        last_sec,
-        last_usec,
-        applied: if status == krb5_kdc::IPROP_OK { n } else { 0 },
-    })
 }
 
-/// RPCSEC_GSS `IPROP_FULL_RESYNC` against program 100423.
-///
-/// # Errors
-///
-/// [`Error::GarbageArgs`] when a reply is truncated; [`Error::Inner`] when the GSS context
-/// cannot be built, a read or write on `stream` fails, a reply is not an accepted `SUCCESS`
-/// or carries a non-zero GSS major status, or a reply's AP-REP, MIC, or seal does not verify
-/// or has the wrong sequence.
-pub fn iprop_fullresync(
+// MIT: `auth_errmsg` (lib/rpc/clnt_perror.c:339-349)
+/// an `auth_stat`'s text, and one the table lacks named by its number.
+fn auth_errmsg(why: u32) -> String {
+    const TEXTS: [&str; 8] = [
+        "Authentication OK",
+        "Invalid client credential",
+        "Server rejected credential",
+        "Invalid client verifier",
+        "Server rejected verifier",
+        "Client credential too weak",
+        "Invalid server verifier",
+        "Failed (unspecified error)",
+    ];
+    usize::try_from(why)
+        .ok()
+        .and_then(|i| TEXTS.get(i))
+        .map_or_else(
+            || format!("(unknown authentication error - {})", why.cast_signed()),
+            |t| (*t).to_owned(),
+        )
+}
+
+// MIT: `readtcp` (lib/rpc/clnt_tcp.c:434-490)
+/// no reply within the call's timeout is `RPC_TIMEDOUT`, an early end of stream `ECONNRESET`, any other failure the system's error.
+fn recv_failure(e: &io::Error) -> RpcFailure {
+    match e.kind() {
+        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => RpcFailure::TimedOut,
+        io::ErrorKind::UnexpectedEof => {
+            RpcFailure::CantRecv(os_error_text(&io::Error::from(Errno::ECONNRESET)))
+        }
+        _ => RpcFailure::CantRecv(os_error_text(e)),
+    }
+}
+
+enum ReplyStat {
+    Success { verf: Vec<u8>, results: usize },
+    Failed(RpcFailure),
+}
+
+// MIT: `gssrpc__seterr_reply` (lib/rpc/rpc_prot.c:238-295)
+/// an accepted status other than success, and a denial, are the failure they name.
+// MIT: `accepted` (lib/rpc/rpc_prot.c:179-212)
+/// an accepted status no table names is `RPC_FAILED`.
+// MIT: `rejected` (lib/rpc/rpc_prot.c:215-232)
+/// a version mismatch carries the versions, an authentication error why.
+fn read_reply(rec: &[u8]) -> Option<(u32, ReplyStat)> {
+    let mut r = XdrR::new(rec);
+    let xid = r.u32().ok()?;
+    if r.u32().ok()? != MSG_REPLY {
+        return None;
+    }
+    let stat = match r.u32().ok()? {
+        MSG_ACCEPTED => {
+            let _flavor = r.u32().ok()?;
+            let verf = r.opaque().ok()?;
+            match r.u32().ok()? {
+                SUCCESS => ReplyStat::Success { verf, results: r.i },
+                PROG_UNAVAIL => ReplyStat::Failed(RpcFailure::ProgUnavail),
+                PROG_MISMATCH => {
+                    ReplyStat::Failed(RpcFailure::ProgVersMismatch(r.u32().ok()?, r.u32().ok()?))
+                }
+                PROC_UNAVAIL => ReplyStat::Failed(RpcFailure::ProcUnavail),
+                GARBAGE_ARGS => ReplyStat::Failed(RpcFailure::CantDecodeArgs),
+                SYSTEM_ERR => ReplyStat::Failed(RpcFailure::SystemError),
+                _ => ReplyStat::Failed(RpcFailure::Failed),
+            }
+        }
+        MSG_DENIED => match r.u32().ok()? {
+            REJECT_RPC_MISMATCH => {
+                ReplyStat::Failed(RpcFailure::VersMismatch(r.u32().ok()?, r.u32().ok()?))
+            }
+            REJECT_AUTH_ERROR => ReplyStat::Failed(RpcFailure::AuthError(r.u32().ok()?)),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    Some((xid, stat))
+}
+
+// MIT: `clnttcp_call` (lib/rpc/clnt_tcp.c:246-352)
+/// replies to other xids, and records that do not read as replies, are read past.
+fn exchange(
     stream: &mut TcpStream,
-    ticket: Ticket,
-    session: &ProtocolKey,
-    crealm: &krb5_types::Realm,
-    cname: &PrincipalName,
-) -> Result<u32, Error> {
-    let (mut ctx, token) =
-        GssContext::init_sec_context(ticket, session, crealm, cname, true, None, None)
-            .map_err(|e| Error::Inner(e.to_string()))?;
-    let mut xid = 1u32;
-    let handle = rpcsec_init(stream, &mut ctx, session, &token, &mut xid)?;
-    let body = rpcsec_data(
-        stream,
-        &mut ctx,
-        &handle,
-        &mut xid,
-        1,
-        IPROP_PROG,
-        IPROP_VERS,
-        IPROP_FULL_RESYNC,
-        &[],
-    )?;
-    let mut r = XdrR::new(&body);
-    let _last = r.u32()?;
-    let _sec = r.u32()?;
-    let _usec = r.u32()?;
-    r.u32()
+    xid: u32,
+    rec: &[u8],
+) -> Result<(Zeroizing<Vec<u8>>, ReplyStat), RpcFailure> {
+    write_record(stream, rec).map_err(|e| RpcFailure::CantSend(os_error_text(&e)))?;
+    loop {
+        let reply = read_record(stream).map_err(|e| recv_failure(&e))?;
+        if let Some((got, stat)) = read_reply(&reply)
+            && got == xid
+        {
+            return Ok((reply, stat));
+        }
+    }
 }
 
-/// MIT `authgss_validate` (`auth_gss.c:369-389`): the init verifier is a MIC of the sequence
-/// window, and a bad MIC is not success.
-/// A non-zero GSS major status is not a context, and the AP-REP is processed only after that status
-/// is zero.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IncrReply {
+    /// `ret`, an `update_status_t`.
+    pub status: u32,
+    /// `lastentry`: the serial and time the primary's update log ends at.
+    pub last: UlogLast,
+    /// The number of updates.
+    pub count: usize,
+    body: Vec<u8>,
+}
+
+impl IncrReply {
+    /// The updates, their keys opened under `mkey`.
+    /// decode or its keys do not open.
+    pub fn updates(&self, mkey: Option<&ProtocolKey>) -> Result<Vec<IpropUpdate>, Error> {
+        decode_incr_result(&self.body, mkey).map(|(.., updates)| updates)
+    }
+}
+
+/// A replica's handle on its primary's iprop service: the connection and the RPCSEC_GSS context made on it, as MIT's `kadm5_init_with_skey` leaves one for `kiprop`.
+pub struct IpropClient {
+    stream: TcpStream,
+    ctx: GssContext,
+    handle: Vec<u8>,
+    xid: u32,
+    seq: u32,
+    refreshes: u32,
+}
+
+impl std::fmt::Debug for IpropClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IpropClient")
+            .field("peer", &self.stream.peer_addr().ok())
+            .field("seq", &self.seq)
+            .finish_non_exhaustive()
+    }
+}
+
+impl IpropClient {
+    // MIT: `init_any` (lib/kadm5/clnt/client_init.c:290-294)
+    /// a kadm5 handle waits an hour for any reply.
+    const TIMEOUT: Duration = Duration::from_hours(1);
+
+    /// The handle on `stream`: an RPCSEC_GSS context with privacy, made with `ticket` and its `session` key as `cname` of `crealm`, the primary's AP-REP required.
+    // MIT: `rpc_auth` (lib/kadm5/clnt/client_init.c:645-683)
+    /// RPCSEC_GSS with the krb5 mechanism, privacy, and the mutual and replay flags.
+    pub fn establish(
+        mut stream: TcpStream,
+        ticket: Ticket,
+        session: &ProtocolKey,
+        crealm: &krb5_types::Realm,
+        cname: &PrincipalName,
+    ) -> Result<Self, Error> {
+        stream
+            .set_read_timeout(Some(Self::TIMEOUT))
+            .map_err(|e| Error::Inner(e.to_string()))?;
+        let (mut ctx, token) = GssContext::init_sec_context(
+            ticket,
+            session,
+            crealm,
+            cname,
+            krb5_gss::GSS_C_MUTUAL | krb5_gss::GSS_C_REPLAY,
+            None,
+            None,
+            None,
+            0,
+        )
+        .map_err(|e| Error::Inner(e.to_string()))?;
+        let mut xid = 1u32;
+        let handle = rpcsec_init(&mut stream, &mut ctx, session, &token, &mut xid)?;
+        Ok(Self {
+            stream,
+            ctx,
+            handle,
+            xid,
+            seq: 0,
+            refreshes: 0,
+        })
+    }
+
+    #[cfg(feature = "test-hooks")]
+    #[must_use]
+    pub fn refreshes(&self) -> u32 {
+        self.refreshes
+    }
+
+    #[cfg(feature = "test-hooks")]
+    pub fn skip_mic(&mut self) {
+        let _ = self.ctx.get_mic(&[]);
+    }
+
+    /// `IPROP_GET_UPDATES` for the updates after `last`.
+    // MIT: `iprop_get_updates_1` (kprop/kpropd_rpc.c:34-46)
+    /// the `kdb_last_t` sent, a `kdb_incr_result_t` back.
+    /// The call's [`RpcFailure`]; results that do not decode are `RPC_CANTDECODERES`.
+    pub fn get_updates(&mut self, last: UlogLast) -> Result<IncrReply, RpcFailure> {
+        let mut args = XdrW::default();
+        encode_kdb_last(&mut args, last);
+        let body = self.call(IPROP_GET_UPDATES, &args.b)?;
+        let (status, sno, seconds, useconds, updates) =
+            decode_incr_result(&body, None).map_err(|_| RpcFailure::CantDecodeRes)?;
+        Ok(IncrReply {
+            status,
+            last: UlogLast {
+                sno,
+                time: UlogTime { seconds, useconds },
+            },
+            count: updates.len(),
+            body,
+        })
+    }
+
+    /// A full resync asked for: `IPROP_FULL_RESYNC_EXT` with the highest dump version this replica loads, else `IPROP_FULL_RESYNC` of a primary without that procedure. The status answered.
+    // MIT: `full_resync` (kprop/kpropd.c:606-625)
+    /// `IPROPX_VERSION_1` to the extended procedure, then on `RPC_PROCUNAVAIL` the plain one.
+    pub fn full_resync(&mut self) -> Result<u32, RpcFailure> {
+        let mut vers = XdrW::default();
+        vers.u32(IPROPX_VERSION_1);
+        let body = match self.call(IPROP_FULL_RESYNC_EXT, &vers.b) {
+            Err(RpcFailure::ProcUnavail) => self.call(IPROP_FULL_RESYNC, &[])?,
+            other => other?,
+        };
+        let mut r = XdrR::new(&body);
+        let mut word = || r.u32().map_err(|_| RpcFailure::CantDecodeRes);
+        for _ in 0..3 {
+            word()?;
+        }
+        word()
+    }
+
+    /// verifier must be a MIC of the call's sequence number and whose results must unseal. A reply with another status is asked again twice before it is the failure.
+    // MIT: `authgss_marshal` (lib/rpc/auth_gss.c:281-340)
+    /// each call takes the next sequence number.
+    // MIT: `authgss_validate` (lib/rpc/auth_gss.c:343-392)
+    /// a verifier that is no MIC of that number is `AUTH_INVALIDRESP`.
+    // MIT: `authgss_refresh` (lib/rpc/auth_gss.c:395-525)
+    /// an established context's refresh is a call again.
+    fn call(&mut self, proc: u32, args: &[u8]) -> Result<Vec<u8>, RpcFailure> {
+        let mut refreshes = 2;
+        loop {
+            self.seq = self.seq.wrapping_add(1);
+            let xid = self.xid;
+            self.xid = self.xid.wrapping_add(1);
+            let rec = rpcsec_data_call(&mut self.ctx, &self.handle, xid, self.seq, proc, args)
+                .ok_or(RpcFailure::CantEncodeArgs)?;
+            match exchange(&mut self.stream, xid, &rec)? {
+                (reply, ReplyStat::Success { verf, results }) => {
+                    if self.ctx.verify_mic(&self.seq.to_be_bytes(), &verf).is_err() {
+                        return Err(RpcFailure::AuthError(AUTH_INVALIDRESP));
+                    }
+                    let sealed = reply.get(results..).unwrap_or_default();
+                    return unwrap_results(&mut self.ctx, sealed, self.seq)
+                        .ok_or(RpcFailure::CantDecodeRes);
+                }
+                (_, ReplyStat::Failed(f)) if refreshes == 0 => return Err(f),
+                (_, ReplyStat::Failed(_)) => {
+                    refreshes -= 1;
+                    self.refreshes += 1;
+                }
+            }
+        }
+    }
+}
+
 fn rpcsec_init(
     stream: &mut TcpStream,
     ctx: &mut GssContext,
@@ -250,6 +491,7 @@ fn rpcsec_init(
     token: &[u8],
     xid: &mut u32,
 ) -> Result<Vec<u8>, Error> {
+    let fail = |what: String| Error::Inner(format!("rpcsec init: {what}"));
     let mut cred = XdrW::default();
     cred.u32(RPCSEC_GSS_VERS);
     cred.u32(RPG_INIT);
@@ -258,72 +500,58 @@ fn rpcsec_init(
     cred.opaque(&[]);
     let mut arg = XdrW::default();
     arg.opaque(token);
-    let rec = rpc_call_bytes(
-        super::rpc::RpcCallId {
-            xid: *xid,
-            prog: IPROP_PROG,
-            vers: IPROP_VERS,
-            proc: IPROP_NULL,
-        },
-        FLAVOR_GSS,
-        &cred.b,
-        FLAVOR_NONE,
-        &[],
-        &arg.b,
-    );
-    *xid = xid.wrapping_add(1);
-    write_record(stream, &rec).map_err(|e| Error::Inner(e.to_string()))?;
-    let reply = read_record(stream).map_err(|e| Error::Inner(e.to_string()))?;
-    let mut r = XdrR::new(&reply);
-    let _ = r.u32()?;
-    if r.u32()? != MSG_REPLY {
-        return Err(Error::Inner("rpcsec init not reply".into()));
-    }
-    if r.u32()? != MSG_ACCEPTED {
-        return Err(Error::Inner("rpcsec init denied".into()));
-    }
-    let verf_flavor = r.u32()?;
-    let verf = r.opaque()?;
-    if r.u32()? != SUCCESS {
-        return Err(Error::Inner("rpcsec init accept".into()));
-    }
+    let mut refreshes = 2;
+    let (reply, verf, results) = loop {
+        let id = *xid;
+        *xid = xid.wrapping_add(1);
+        let rec = rpc_call_bytes(
+            super::rpc::RpcCallId {
+                xid: id,
+                prog: IPROP_PROG,
+                vers: IPROP_VERS,
+                proc: IPROP_NULL,
+            },
+            FLAVOR_GSS,
+            &cred.b,
+            FLAVOR_NONE,
+            &[],
+            &arg.b,
+        );
+        match exchange(stream, id, &rec).map_err(|f| fail(f.sperror("call")))? {
+            (reply, ReplyStat::Success { verf, results }) => break (reply, verf, results),
+            (_, ReplyStat::Failed(f)) if refreshes == 0 => return Err(fail(f.sperror("call"))),
+            (_, ReplyStat::Failed(_)) => refreshes -= 1,
+        }
+    };
+    let mut r = XdrR::new(reply.get(results..).unwrap_or_default());
     let handle = r.opaque()?;
     let major = r.u32()?;
     let _minor = r.u32()?;
     let window = r.u32()?;
     let out = r.opaque()?;
-    if major != 0 {
-        return Err(Error::Inner(format!("rpcsec gss major {major}")));
+    if major != GSS_S_COMPLETE && major != GSS_S_CONTINUE_NEEDED {
+        return Err(fail(format!("gss major {major}")));
     }
-    if !out.is_empty() {
-        ctx.process_ap_rep(&out, ticket_session)
-            .map_err(|e| Error::Inner(format!("rpcsec ap-rep: {e}")))?;
+    if out.is_empty() {
+        return Err(fail("no AP-REP".into()));
     }
-    ctx.allow_rpcsec_init_window();
-    // RFC 2203: INIT verifier is a MIC of the sequence window.
-    if verf_flavor == FLAVOR_GSS && !verf.is_empty() {
-        ctx.verify_mic(&window.to_be_bytes(), &verf)
-            .map_err(|e| Error::Inner(format!("rpcsec init mic: {e}")))?;
-    }
+    ctx.process_ap_rep(&out, ticket_session)
+        .map_err(|e| fail(format!("ap-rep: {e}")))?;
+    ctx.verify_mic(&window.to_be_bytes(), &verf)
+        .map_err(|e| fail(format!("window mic: {e}")))?;
     Ok(handle)
 }
 
-/// MIT `xdr_rpc_gss_unwrap_data` (`authgss_prot.c:239-256`): a privacy reply that is not sealed, or
-/// whose sequence does not match, is not the arguments.
-/// The wrapped body is the sequence number followed by the arguments, so a reply that omits that
-/// prefix is rejected.
-#[expect(clippy::too_many_arguments, reason = "xid is advanced inside the body")]
-fn rpcsec_data(
-    stream: &mut TcpStream,
+// MIT: `xdr_rpc_gss_wrap_data` (lib/rpc/authgss_prot.c:130-182)
+/// with privacy, the sequence number and the arguments are sealed together.
+fn rpcsec_data_call(
     ctx: &mut GssContext,
     handle: &[u8],
-    xid: &mut u32,
+    xid: u32,
     seq: u32,
-    prog: u32,
-    vers: u32,
     proc: u32,
     args: &[u8],
-) -> Result<Vec<u8>, Error> {
+) -> Option<Vec<u8>> {
     let mut cred = XdrW::default();
     cred.u32(RPCSEC_GSS_VERS);
     cred.u32(RPG_DATA);
@@ -331,32 +559,26 @@ fn rpcsec_data(
     cred.u32(GSS_PRIVACY);
     cred.opaque(handle);
     let mut header = XdrW::default();
-    header.u32(*xid);
+    header.u32(xid);
     header.u32(MSG_CALL);
     header.u32(RPC_VERSION);
-    header.u32(prog);
-    header.u32(vers);
+    header.u32(IPROP_PROG);
+    header.u32(IPROP_VERS);
     header.u32(proc);
     header.u32(FLAVOR_GSS);
     header.opaque(&cred.b);
-    let mic = ctx
-        .get_mic(&header.b)
-        .map_err(|e| Error::Inner(format!("rpcsec mic: {e}")))?;
-    // MIT `xdr_rpc_gss_wrap_data`: gss_wrap(xdr_u_int32(seq) || args).
-    // libgssrpc unwraps RRC=0 (same as the acceptor path above).
+    let mic = ctx.get_mic(&header.b).ok()?;
     let mut inner = Vec::with_capacity(4 + args.len());
     inner.extend_from_slice(&seq.to_be_bytes());
     inner.extend_from_slice(args);
-    let wrap = ctx
-        .wrap_with_rrc(&inner, 0)
-        .map_err(|e| Error::Inner(format!("rpcsec wrap: {e}")))?;
+    let wrap = ctx.wrap_with_rrc(&inner, 0).ok()?;
     let mut arg = XdrW::default();
     arg.opaque(&wrap);
-    let rec = rpc_call_bytes(
+    Some(rpc_call_bytes(
         super::rpc::RpcCallId {
-            xid: *xid,
-            prog,
-            vers,
+            xid,
+            prog: IPROP_PROG,
+            vers: IPROP_VERS,
             proc,
         },
         FLAVOR_GSS,
@@ -364,47 +586,14 @@ fn rpcsec_data(
         FLAVOR_GSS,
         &mic,
         &arg.b,
-    );
-    *xid = xid.wrapping_add(1);
-    write_record(stream, &rec).map_err(|e| Error::Inner(e.to_string()))?;
-    let reply = read_record(stream).map_err(|e| Error::Inner(e.to_string()))?;
-    let mut r = XdrR::new(&reply);
-    let _ = r.u32()?;
-    if r.u32()? != MSG_REPLY {
-        return Err(Error::Inner("rpcsec data not reply".into()));
-    }
-    if r.u32()? != MSG_ACCEPTED {
-        return Err(Error::Inner("rpcsec data denied".into()));
-    }
-    let verf_flavor = r.u32()?;
-    let verf = r.opaque()?;
-    let accept_stat = r.u32()?;
-    if accept_stat != SUCCESS {
-        return Err(Error::Inner(format!("rpcsec data accept {accept_stat}")));
-    }
-    if verf_flavor == FLAVOR_GSS {
-        ctx.verify_mic(&seq.to_be_bytes(), &verf)
-            .map_err(|e| Error::Inner(format!("rpcsec reply mic: {e}")))?;
-    }
-    let wrapped = r.opaque()?;
-    let (plain, conf) = ctx
-        .unwrap_conf(&wrapped)
-        .map_err(|e| Error::Inner(format!("rpcsec unwrap: {e}")))?;
-    if !conf {
-        return Err(Error::Inner("rpcsec privacy reply not sealed".into()));
-    }
-    if plain.len() < 4 {
-        return Err(Error::Inner("rpcsec wrap seq".into()));
-    }
-    let got = u32::from_be_bytes(
-        plain[..4]
-            .try_into()
-            .map_err(|_| Error::Inner("rpcsec wrap seq".into()))?,
-    );
-    if got != seq {
-        return Err(Error::Inner(format!("rpcsec wrap seq {got} want {seq}")));
-    }
-    Ok(plain[4..].to_vec())
+    ))
+}
+
+fn unwrap_results(ctx: &mut GssContext, sealed: &[u8], seq: u32) -> Option<Vec<u8>> {
+    let wrapped = XdrR::new(sealed).opaque().ok()?;
+    let (plain, conf) = ctx.unwrap_conf(&wrapped).ok()?;
+    let (got, results) = plain.split_first_chunk::<4>()?;
+    (conf && u32::from_be_bytes(*got) == seq).then(|| results.to_vec())
 }
 
 pub(super) fn decode_incr_result(

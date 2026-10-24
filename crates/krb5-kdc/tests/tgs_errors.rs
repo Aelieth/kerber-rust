@@ -4,9 +4,11 @@
 //! The tests drive the shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry points of a
 //! bootstrapped realm.
 //! TGS KRB-ERROR omits `crealm` when `errpkt.client` is NULL.
-//! MIT `prepare_error_tgs` (`do_tgs_req.c:201-204`): `errpkt.client` is the header ticket's
+// MIT: `prepare_error_tgs` (do_tgs_req.c:201-204)
+//! `errpkt.client` is the header ticket's
 //! client, or NULL when there is no decrypted ticket.
-//! MIT `error_7` (`asn1_k_encode.c:919-919`): KRB-ERROR `crealm` [7] is optional and taken
+// MIT: `error_7` (asn1_k_encode.c:919-919)
+//! KRB-ERROR `crealm` [7] is optional and taken
 //! from `client`, so a NULL client omits it.
 
 #[path = "common/mod.rs"]
@@ -130,7 +132,9 @@ fn unknown_client_e_text_is_client_not_found() {
 #[test]
 fn non_ascii_realm_is_krb_error_not_panic() {
     let store = PrincipalStore::new("CAFÉ.TEST");
-    let r = std::panic::catch_unwind(|| krb5_kdc::handle_request(&store, &[]));
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        krb5_kdc::handle_request(&store, &[])
+    }));
     assert!(r.is_ok(), "untrusted realm must not panic ascii()");
     let reply = r.unwrap().expect("drop");
     assert_eq!(reply, [] as [u8; 0]);
@@ -167,7 +171,8 @@ fn tgs_bad_checksum_is_error() {
 
 #[test]
 fn tgs_error_echoes_the_header_ticket_client_like_prepare_error_tgs() {
-    // MIT `prepare_error_tgs` (`do_tgs_req.c:201-204`): errpkt.client is the decrypted
+    // MIT: `prepare_error_tgs` (do_tgs_req.c:201-204)
+    // errpkt.client is the decrypted
     // header ticket's client, so a TGS KRB-ERROR carries the TGT client's cname even though
     // the TGS-REQ body has none.
     let (store, _) = bootstrap_documented().expect("bootstrap");
@@ -230,7 +235,8 @@ fn hostile_keytab_does_not_panic() {
     let r = catch_unwind(|| krb5_protocol::Keytab::parse(&non_ascii));
     assert!(r.is_ok());
     assert!(r.unwrap().is_err());
-    // MIT `krb5_ktfileint_internal_read_entry` (`kt_file.c:1003-1006`): a component length of 0
+    // MIT: `krb5_ktfileint_internal_read_entry` (kt_file.c:1003-1006)
+    // a component length of 0
     // ends the keytab before its realm is looked at.
     let zero_component = {
         let mut v = vec![0x05, 0x02];
@@ -244,7 +250,8 @@ fn hostile_keytab_does_not_panic() {
 
 #[test]
 fn as_error_echoes_the_requested_client_like_prepare_error_as() {
-    // MIT `prepare_error_as` (`do_as_req.c:806-808`): errpkt.client is request->client, so
+    // MIT: `prepare_error_as` (do_as_req.c:806-808)
+    // errpkt.client is request->client, so
     // the AS KRB-ERROR echoes the requested crealm/cname even for an unknown client.
     let (store, _) = bootstrap_documented().unwrap();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["nosuchuser"]);
@@ -441,7 +448,8 @@ fn tgs_authenticator_malformed_subkey_is_process_tgs() {
 // oracle: differential-gate.sh tgs-authenticator-crealm-octets
 fn tgs_authenticator_crealm_octets_is_badmatch() {
     // MIT reads the crealm as octets (`KERBER.TEß`), another client than the ticket's.
-    // MIT `rd_req_decoded_opt` (`lib/krb5/krb/rd_req_dec.c:530-532`): another client is BADMATCH, 36 PROCESS_TGS.
+    // MIT: `rd_req_decoded_opt` (lib/krb5/krb/rd_req_dec.c:530-532)
+    // another client is BADMATCH, 36 PROCESS_TGS.
     let (store, req) = tgs_with_authenticator(|der| {
         let at = der.windows(11).position(|w| w == b"KERBER.TEST").unwrap();
         der[at + 9..at + 11].copy_from_slice(&[0xc3, 0x9f]);
@@ -454,7 +462,8 @@ fn tgs_authenticator_crealm_octets_is_badmatch() {
 
 #[test]
 fn tgs_authenticator_cusec_out_of_range_is_issued() {
-    // MIT `rd_req_decoded_opt` (`lib/krb5/krb/rd_req_dec.c:631-631`): only the authenticator's ctime is checked, against the clock skew; its cusec is taken as it is, past 999999 too.
+    // MIT: `rd_req_decoded_opt` (lib/krb5/krb/rd_req_dec.c:631-631)
+    // only the authenticator's ctime is checked, against the clock skew; its cusec is taken as it is, past 999999 too.
     let (store, req) = tgs_with_authenticator(|der| {
         let mut authenticator: Authenticator = decode(der).unwrap();
         authenticator.cusec = krb5_types::Microseconds(1_000_000);
@@ -467,7 +476,8 @@ fn tgs_authenticator_cusec_out_of_range_is_issued() {
 #[test]
 // oracle: differential-gate.sh tgs-authenticator-etype-mismatch
 fn tgs_authenticator_etype_mismatch_is_generic() {
-    // MIT `krb5_k_decrypt` (`lib/crypto/krb/decrypt.c:45-46`): an authenticator EncryptedData of another enctype than the session key's is KRB5_BAD_ENCTYPE, 60 PROCESS_TGS.
+    // MIT: `krb5_k_decrypt` (lib/crypto/krb/decrypt.c:45-46)
+    // an authenticator EncryptedData of another enctype than the session key's is KRB5_BAD_ENCTYPE, 60 PROCESS_TGS.
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let req = as_req(

@@ -475,7 +475,7 @@ mit_oracle_brand() {
     krb5="$(printf '%s\n' "$libs" | awk '$1 == "libkrb5.so.3" { print $3 }')"
     [ -n "$krb5" ] || die "oracle $bin loads no libkrb5.so.3 in $ctn"
     # shellcheck disable=SC2016 # expanded by the container's sh, not here
-    brand="$(docker exec "$ctn" sh -c 'strings -a "$1" | grep -m1 "^KRB5_BRAND: "' sh "$krb5" || true)"
+    brand="$(docker exec "$ctn" sh -c 't=$(mktemp); strings -a "$1" > "$t"; grep -m1 "^KRB5_BRAND: " "$t"; rc=$?; rm -f "$t"; exit $rc' sh "$krb5" || true)"
     echo "oracle $bin: libkrb5.so.3 => $krb5 (${brand:-no KRB5_BRAND})"
     case "$brand" in
         "KRB5_BRAND: $MIT_ORACLE_BRAND "*) ;;
@@ -604,7 +604,7 @@ _stock_mit_ready() {
         return 0
     fi
     logs="$(docker logs "$n" 2>&1 || true)"
-    echo "$logs" | grep -q '"event":"harness.kinit".*"outcome":"ok"'
+    grep -q '"event":"harness.kinit".*"outcome":"ok"' <<<"$logs"
 }
 
 _stock_mit_warn_dead() {
@@ -626,7 +626,7 @@ stock_mit_kdc() {
             fi
             if _stock_mit_running "$n"; then
                 logs="$(docker logs "$n" 2>&1 || true)"
-                if echo "$logs" | grep -q '"event":"harness.kinit".*"outcome":"error"'; then
+                if grep -q '"event":"harness.kinit".*"outcome":"error"' <<<"$logs"; then
                     echo "$logs" >&2
                     die "stock MIT KDC harness kinit failed"
                 fi
@@ -653,13 +653,13 @@ stock_mit_kdc() {
     fi
     for _ in $(seq 1 90); do
         logs="$(docker logs "$n" 2>&1 || true)"
-        if echo "$logs" | grep -q '"event":"harness.kinit".*"outcome":"ok"'; then
+        if grep -q '"event":"harness.kinit".*"outcome":"ok"' <<<"$logs"; then
             if [ "$replaced" = 1 ]; then
                 mit_conf_snapshot "$n"
             fi
             return 0
         fi
-        if echo "$logs" | grep -q '"event":"harness.kinit".*"outcome":"error"'; then
+        if grep -q '"event":"harness.kinit".*"outcome":"error"' <<<"$logs"; then
             echo "$logs" >&2
             die "stock MIT KDC harness kinit failed"
         fi
@@ -721,7 +721,7 @@ mit_live_guard() {
 # assert_no_error_log OUTPUT COMPONENT: a happy-path client run logs no ERROR line; the failure is
 # logged under COMPONENT (the gate's client component, e.g. fast.client.gate).
 assert_no_error_log() {
-    if echo "$1" | grep -qF '"level":"ERROR"'; then
+    if grep -qF '"level":"ERROR"' <<<"$1"; then
         echo "$1" >&2
         log "$2" "error" ',"error":"happy-path ERROR log"'
         exit 1

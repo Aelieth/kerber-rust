@@ -1,13 +1,9 @@
-//! GSS initiator for out-of-process MIT `gss-server` interop (RFC 4121).
-//!
-//! Speaks the MIT `gss-sample` TCP framing: 4-byte length prefix then token.
-//! Usage: `krb5-gss-init --ccache PATH --host HOST --ip IP --port PORT [--deleg]`
-//!
-//! The gss gate's test tool, built only with the `test-hooks` feature: a release build has none.
-//! `KRB5_KDC` names the KDC a `--deleg` run asks for the forwarded ticket (default `127.0.0.1`).
-
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "a program reads its profile and environment when it starts"
+)]
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -84,6 +80,7 @@ fn main() {
         eprintln!("host session key: {e}");
         std::process::exit(1);
     });
+    let profile = krb5_config::init_profile().unwrap_or_else(|_| krb5_config::Krb5Conf::new());
     let deleg_cred = if deleg {
         let session = tgt.session_key().unwrap_or_else(|e| {
             eprintln!("tgt session key: {e}");
@@ -122,6 +119,11 @@ fn main() {
             used_fast: false,
             pa_type: None,
             pa_config: None,
+            time_offset: if profile.kdc_timesync {
+                cc.deltatime_seconds().unwrap_or(0)
+            } else {
+                0
+            },
         };
         let kdc = std::env::var("KRB5_KDC")
             .ok()
@@ -141,7 +143,7 @@ fn main() {
                     }
                 },
             );
-        let fwd = tgs_forward(&kdc, &as_out).unwrap_or_else(|e| {
+        let fwd = tgs_forward(&profile, &kdc, &as_out).unwrap_or_else(|e| {
             eprintln!("tgs_forward: {e}");
             std::process::exit(1);
         });
@@ -200,14 +202,25 @@ fn main() {
         println!("gss-init ap-rep=none");
         return;
     }
+    let time_offset = if profile.kdc_timesync {
+        cc.deltatime_seconds().unwrap_or(0)
+    } else {
+        0
+    };
+    let mut req_flags = krb5_gss::GSS_C_MUTUAL | krb5_gss::GSS_C_REPLAY | krb5_gss::GSS_C_SEQUENCE;
+    if bind_data.is_some() {
+        req_flags |= krb5_gss::GSS_C_CHANNEL_BOUND;
+    }
     let (mut ctx, token) = GssContext::init_sec_context(
         ticket,
         &svc_key,
         &svc.client.0,
         &svc.client.1,
-        true,
+        req_flags,
         cb.as_ref(),
         deleg_cred.as_ref(),
+        Some(&profile),
+        time_offset,
     )
     .unwrap_or_else(|e| {
         eprintln!("init_sec_context: {e}");
@@ -268,17 +281,8 @@ fn wrap_app(inner: &[u8]) -> Vec<u8> {
 }
 
 fn der_tlv(tag: u8, body: &[u8]) -> Vec<u8> {
-    let mut out = vec![tag];
-    if body.len() < 128 {
-        out.push(u8::try_from(body.len()).unwrap_or(u8::MAX));
-    } else if body.len() < 256 {
-        out.push(0x81);
-        out.push(u8::try_from(body.len()).unwrap_or(u8::MAX));
-    } else {
-        out.push(0x82);
-        out.extend_from_slice(&(u16::try_from(body.len()).unwrap_or(u16::MAX)).to_be_bytes());
-    }
-    out.extend_from_slice(body);
+    let mut out = Vec::with_capacity(1 + krb5_types::der::len_len(body.len()) + body.len());
+    krb5_types::der::push_tlv(&mut out, tag, body);
     out
 }
 

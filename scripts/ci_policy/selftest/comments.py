@@ -24,6 +24,12 @@ def _self_test_comments() -> None:
         good = src / "lib.rs"
         in_tests = tests_dir / "t.rs"
         in_tests.write_text("", encoding="utf-8")
+        parity = anchor_root / "docs" / "parity"
+        parity.mkdir(parents=True)
+        (parity / "a1-store.md").write_text(
+            "| store.c:1 `krb5_db_def_rename_principal` | renames a principal | n/a | demo/lib.rs f | n/a | deferred | none |\n",
+            encoding="utf-8",
+        )
         accepted = {
             "fn-anchor": "/// MIT `krb5_rd_req` (`rd_req.c:10-20`): refuses a replay\n",
             "line-comment": "// MIT `krb5_rd_req` (`rd_req.c:10-20`): refuses a replay\n",
@@ -43,6 +49,9 @@ def _self_test_comments() -> None:
             "y-anchor": "/// MIT `yyparse` (`getdate.y:210-240`): a date\n",
             "inner-doc-block": "/*! MIT `krb5_rd_req` (`rd_req.c:10-20`): refuses a replay */\n",
             "nested-block": "/* outer /* MIT `krb5_rd_req` (`rd_req.c:10-20`): refuses a replay */ still outer */\n",
+            "pointer": "// MIT krb5_db_def_rename_principal; see docs/parity/a1-store.md\n",
+            "exempt-cite": "// MIT: `krb5_rd_req` (rd_req.c:10-20)\n",
+            "exempt-cite-sum": "// MIT: `create_history_entry` + `add_to_history` (lib/kadm5/srv/svr_principal.c:1270-1330)\n",
         }
         for body in accepted.values():
             good.write_text(body, encoding="utf-8")
@@ -82,6 +91,10 @@ def _self_test_comments() -> None:
             "y-range": "// the rule at getdate.y:210-240 runs first\n",
             "inner-doc-block-cite": "/*! see do_as_req.c:10 */\n",
             "nested-block-cite": "/* outer /* see do_as_req.c:10 */ still outer */\n",
+            "pointer-unnamed": "// MIT krb5_other; see docs/parity/a1-store.md\n",
+            "pointer-missing": "// MIT krb5_db_def_rename_principal; see docs/parity/no-such.md\n",
+            "pointer-bad": "// MIT krb5_db_def_rename_principal; see docs/parity/\n",
+            "cite-with-backticks": "// MIT: `f` (`a.c:1-2`)\n",
         }
         for shape, body in rejected.items():
             good.write_text(body, encoding="utf-8")
@@ -91,6 +104,20 @@ def _self_test_comments() -> None:
                 anchor_root,
                 allow=0,
             )
+        good.write_text("", encoding="utf-8")
+        row = (parity / "a1-store.md").read_text(encoding="utf-8")
+        (parity / "a1-store.md").write_text(
+            "krb5_db_def_rename_principal is named only in this intro.\n",
+            encoding="utf-8",
+        )
+        good.write_text(accepted["pointer"], encoding="utf-8")
+        _must_die_msg(
+            "mit anchor lines 1 != allow 0",
+            check_mit_anchor_form,
+            anchor_root,
+            allow=0,
+        )
+        (parity / "a1-store.md").write_text(row, encoding="utf-8")
         good.write_text("", encoding="utf-8")
         in_tests.write_text(rejected["file-range-only"], encoding="utf-8")
         _must_die_msg(
@@ -105,7 +132,7 @@ def _self_test_comments() -> None:
         )
         # The shape names are part of the fixture, so a deleted shape is a
         # missing key, not a silent pass.
-        if len(accepted) != 18 or len(rejected) != 30:
+        if len(accepted) != 21 or len(rejected) != 34:
             _die("mit anchor fixtures dropped a shape")
     finally:
         subprocess.run(["rm", "-rf", str(anchor_root)], check=False)
@@ -184,6 +211,9 @@ def _self_test_comments() -> None:
             "typedef-list-tail": "// MIT `handle_rec` (`internal.h:3-3`): the handle\n",
             "rpcgen-typedef": "// MIT `kdb_last_t` (`iprop.h:1-4`): the last entry\n",
             "asn1-comment": "// MIT `SecureCookie` (`asn1_k_encode.c:2-4`): the cookie\n",
+            "new-form": "// MIT: `krb5_get_init_creds_password` (gic_pwd.c:14-18)\n",
+            "new-form-defined": "// MIT: `krb5_get_init_creds_password` (gic_pwd.c)\n",
+            "new-form-sum": "// MIT: `helper` + `krb5_get_init_creds_password` (gic_pwd.c)\n",
         }
         for label, body in holds.items():
             if truth(body) != 0:
@@ -213,6 +243,9 @@ def _self_test_comments() -> None:
             "errcode-outside": "// MIT `KADM5_FAILURE` (`kadm_err.et:3-3`): unspecified\n",
             "asn1-outside": "// MIT `SecureCookie` (`asn1_k_encode.c:6-6`): the cookie\n",
             "path-boundary": "// MIT `init_realm` (`dc/main.c:2-4`): realm first\n",
+            "new-form-outside": "// MIT: `krb5_get_init_creds_password` (gic_pwd.c:14-20)\n",
+            "new-form-undefined": "// MIT: `not_a_symbol` (gic_pwd.c)\n",
+            "new-form-sum-outside": "// MIT: `helper` + `krb5_get_init_creds_password` (gic_pwd.c:14-18)\n",
         }
         for label, body in breaks.items():
             if truth(body) != 1:
@@ -221,7 +254,7 @@ def _self_test_comments() -> None:
         check_mit_anchor_truth(truth_root, fake, allow=1)
         _must_die_msg("mit anchor truth 1 != allow 0", check_mit_anchor_truth, truth_root, fake, allow=0)
         _must_die_msg("_AMBIGUOUS_MIT_BASENAMES differs", _check_ambiguous_pin, fake)
-        if len(holds) != 17 or len(breaks) != 16:
+        if len(holds) != 20 or len(breaks) != 19:
             _die("mit anchor truth fixtures dropped a case")
     finally:
         subprocess.run(["rm", "-rf", str(truth_root)], check=False)
@@ -304,5 +337,9 @@ def _self_test_comments() -> None:
         (dt_root / "docs" / "x.md").write_text("| r | `scripts/a-gate.sh` `==== Z7.2 not there ====` |\n",
                                                encoding="utf-8")
         _must_die_msg("1 docs line(s) with a process tag, allow 0", check_no_docs_process_tags, dt_root, allow=0)
+        # A section cite of a script that is no longer in the tree is retired history.
+        (dt_root / "docs" / "x.md").write_text("| r | `scripts/gone-gate.sh` `==== Z7.1 omitted till ====` |\n",
+                                               encoding="utf-8")
+        check_no_docs_process_tags(dt_root, allow=0)
     finally:
         subprocess.run(["rm", "-rf", str(dt_root)], check=False)

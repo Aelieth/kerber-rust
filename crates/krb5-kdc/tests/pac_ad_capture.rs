@@ -4,6 +4,11 @@
 //! `svc.keytab` / ccache stay in operator-held `~/adlab/`; those paths
 //! skip cleanly.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "a test sets up its own profile and environment"
+)]
+
 use krb5_asn1::decode;
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
 use krb5_kdc::{

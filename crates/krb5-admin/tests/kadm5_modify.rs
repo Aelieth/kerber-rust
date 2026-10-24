@@ -1,30 +1,9 @@
-//! `kadm5_modify_principal` validates TL type and fail_auth_count before
-//! the store write.
-//! MIT `kadm5_modify_principal` (`svr_principal.c:581-588`): a TL type below 256 is
-//! `KADM5_BAD_TL_TYPE` before the entry is read.
-//! MIT `kadm5_modify_principal` (`svr_principal.c:671-675`): a non-zero fail_auth_count is
-//! `KADM5_BAD_SERVER_PARAMS` before the store write.
-//! A bad create or modify mask is `KADM5_BAD_MASK`, and a TL type must decode as an int16
-//! on both paths.
-//! MIT `kadm5_create_principal_3` (`svr_principal.c:310-326`): a NULL entry is EINVAL and a
-//! bad create mask is `KADM5_BAD_MASK`.
-//! MIT `kadm5_modify_principal` (`svr_principal.c:565-580`): a NULL entry is EINVAL and a
-//! bad modify mask is `KADM5_BAD_MASK`.
-//! MIT `xdr_krb5_tl_data` (`kadm_rpc_xdr.c:349-349`): a TL type that does not decode as an
-//! int16 fails the decode.
-//! On an existing principal the ACL is checked before the mask; a `KEY_DATA` mask with a
-//! key count is `KADM5_BAD_MASK`; a DB-args TL (`0x7fff`) is EINVAL 22 and changes nothing;
-//! a missing principal is `KADM5_UNK_PRINC` before the ACL, because the GET runs first.
-//! MIT `stub_setup` GETs the principal before ACL or mask on modify.
-//! kadm5 modify honours `KADM5_MAX_RLIFE`.
-//! MIT `kadm5_modify_principal` (`svr_principal.c:642-643`): `KADM5_MAX_RLIFE` sets the
-//! entry's max renewable life.
-//! `get_principal` unparses `mod_name` from `KRB5_TL_MOD_PRINC`.
-//! MIT `kadmin_getprinc` (`kadmin.c:1476-1476`): `mod_name` is unparsed for display.
-//! MIT `krb5_dbe_lookup_mod_princ_data` (`kdb5.c:1637-1663`): the mod principal is parsed
-//! from `KRB5_TL_MOD_PRINC` after its 4-byte time.
-//! The mod name `GET_PRINCIPAL` returns is the RPC caller's GSS name, never a fixed
-//! `kadmin/admin@REALM`.
+//! `kadm5_modify_principal` validates TL type and fail_auth_count before the store write.
+// MIT: `xdr_krb5_tl_data` (kadm_rpc_xdr.c:349-349)
+//! a TL type that does not decode as an int16 fails the decode.
+// MIT: `krb5_dbe_lookup_mod_princ_data` (kdb5.c:1637-1663)
+//! the mod principal is parsed from `KRB5_TL_MOD_PRINC` after its 4-byte time.
+//! The mod name `GET_PRINCIPAL` returns is the RPC caller's GSS name, never a fixed `kadmin/admin@REALM`.
 
 #[path = "common/mod.rs"]
 mod common;
@@ -282,7 +261,6 @@ fn create_fail_auth_count_mask_is_bad_mask() {
         GSS_INTEGRITY,
     );
     let name = format!("r9create@{TEST_REALM}");
-    // Layout matches kadm5/tests/mod.rs create_rec; mask = PRINCIPAL|FAIL_AUTH_COUNT.
     let mut w = Vec::new();
     push_u32(&mut w, API_V2);
     push_nullstring(&mut w, &name);
@@ -341,9 +319,7 @@ fn create_args(name: &str, tl: Option<(u32, &[u8])>, mask: u32) -> Vec<u8> {
     push_u32(&mut w, 0);
     push_u32(&mut w, 0);
     push_u32(&mut w, 0);
-    // n_key_data
     push_u32(&mut w, 0);
-    // n_tl_data + optional linked list (`skip_principal_ent_rest`)
     if let Some((ty, contents)) = tl {
         push_u32(&mut w, 1);
         push_u32(&mut w, 0);
@@ -355,7 +331,6 @@ fn create_args(name: &str, tl: Option<(u32, &[u8])>, mask: u32) -> Vec<u8> {
         push_u32(&mut w, 0);
         push_u32(&mut w, 1);
     }
-    // key_data array length
     push_u32(&mut w, 0);
     push_u32(&mut w, mask);
     push_nullstring(&mut w, "password");

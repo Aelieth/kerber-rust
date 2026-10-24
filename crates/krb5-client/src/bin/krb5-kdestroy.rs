@@ -1,7 +1,3 @@
-//! MIT `kdestroy`: destroy a credential cache, a principal's cache, or the whole collection.
-//!
-//! Usage: `kdestroy [-A] [-q] [-c cache_name] [-p princ_name]`
-
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
@@ -10,7 +6,7 @@ use krb5_client::ccol::{cache_match, collection, resolve};
 use krb5_client::cli::{UsageError, UsageLine, getopt_each, own, progname};
 use krb5_client::creds::parse_name;
 use krb5_client::errmsg::{Code, Krb5Error};
-use krb5_config::{CcSpec, parse_ccspec, resolve_ccspec};
+use krb5_config::{CcSpec, ClientContext, parse_ccspec, resolve_ccspec};
 
 fn main() {
     let argv: Vec<String> = std::env::args().collect();
@@ -36,30 +32,23 @@ fn main() {
     std::process::exit(run(prog, &args));
 }
 
-/// Parsed `kdestroy` argv.
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Args {
-    /// `-A`.
     all: bool,
-    /// `-q`.
     quiet: bool,
-    /// `-c cache_name`.
     cache: Option<String>,
-    /// `-p princ_name`.
     princ: Option<String>,
 }
 
-/// Why an argv is not run.
 #[derive(Debug, PartialEq, Eq)]
 enum Parsed {
-    /// `-4`, after the lines the option loop printed before it.
-    /// MIT `main` (`kdestroy.c:124-126`): `-4` exits at once, after what the loop printed.
+    // MIT main; see docs/parity/b1-client-preauth.md
     Krb4(UsageError),
-    /// A usage error.
     Usage(UsageError),
 }
 
-/// MIT `usage` (`kdestroy.c:49-59`): the usage text, `prog` naming the program.
+// MIT: `usage` (kdestroy.c:49-59)
+// the usage text, `prog` naming the program.
 fn usage(prog: &str) -> String {
     format!(
         "Usage: {prog} [-A] [-q] [-c cache_name] [-p princ_name]\n\
@@ -70,8 +59,6 @@ fn usage(prog: &str) -> String {
     )
 }
 
-/// MIT `main` (`kdestroy.c:100-146`): the options `54Aqc:p:`, `-c` and `-p` once each, `-A`
-/// without `-p`, and no other argument.
 fn parse(args: &[String]) -> Result<Args, Parsed> {
     let (each, rest) = getopt_each(args, "54Aqc:p:", &[]);
     let mut out = Args::default();
@@ -116,25 +103,25 @@ fn parse(args: &[String]) -> Result<Args, Parsed> {
     Ok(out)
 }
 
-/// MIT `main` (`kdestroy.c:148-229`): `-A` destroys every cache of the collection and exits 0; else
-/// the default cache, or `-p`'s, is destroyed. A cache that does not exist is reported but is not a
-/// failure; any other failure is "Ticket cache NOT destroyed!" and exit 1. A remaining cache in the
-/// collection is warned of.
 fn run(prog: &str, args: &Args) -> i32 {
-    if let Err(e) = krb5_client::init_context() {
-        krb5_client::com_err!(prog, e, "while initializing krb5");
-        return 1;
-    }
+    let ctx = match krb5_client::init_context() {
+        Ok(ctx) => ctx,
+        Err(e) => {
+            krb5_client::com_err!(prog, e, "while initializing krb5");
+            return 1;
+        }
+    };
+    let ctx = &ctx;
     let default = match &args.cache {
         Some(name) => parse_ccspec(name),
-        None => resolve_ccspec(None),
+        None => resolve_ccspec(ctx, None),
     }
     .map_err(|e| Krb5Error::from_ccname(&e));
     if args.all {
         let Ok(default) = default else {
             return 0;
         };
-        let caches = match collection(&default) {
+        let caches = match collection(ctx, &default) {
             Ok(c) => c,
             Err(e) => {
                 krb5_client::com_err!(prog, e, "while listing credential caches");
@@ -142,7 +129,7 @@ fn run(prog: &str, args: &Args) -> i32 {
             }
         };
         for cache in caches {
-            if let Err(e) = cache.destroy()
+            if let Err(e) = cache.destroy(ctx)
                 && e.code != Code::FccNofile
             {
                 krb5_client::com_err!(prog, e, "while destroying cache {}", cache.full_name());
@@ -152,7 +139,7 @@ fn run(prog: &str, args: &Args) -> i32 {
     }
     let cache = match &args.princ {
         Some(name) => {
-            let princ = match parse_name(name, false) {
+            let princ = match parse_name(ctx, name, false) {
                 Ok(p) => p,
                 Err(e) => {
                     krb5_client::com_err!(prog, e, "while parsing principal name {name}");
@@ -162,7 +149,7 @@ fn run(prog: &str, args: &Args) -> i32 {
             match default
                 .as_ref()
                 .map_err(Clone::clone)
-                .and_then(|d| cache_match(d, &princ))
+                .and_then(|d| cache_match(ctx, d, &princ))
             {
                 Ok(c) => c,
                 Err(e) => {
@@ -171,7 +158,11 @@ fn run(prog: &str, args: &Args) -> i32 {
                 }
             }
         }
-        None => match default.as_ref().map_err(Clone::clone).and_then(resolve) {
+        None => match default
+            .as_ref()
+            .map_err(Clone::clone)
+            .and_then(|d| resolve(ctx, d))
+        {
             Ok(c) => c,
             Err(e) => {
                 krb5_client::com_err!(prog, e, "while resolving ccache");
@@ -180,7 +171,7 @@ fn run(prog: &str, args: &Args) -> i32 {
         },
     };
     let mut errflg = 0;
-    if let Err(e) = cache.destroy() {
+    if let Err(e) = cache.destroy(ctx) {
         krb5_client::com_err!(prog, e, "while destroying cache");
         if e.code != Code::FccNofile {
             if args.quiet {
@@ -196,15 +187,14 @@ fn run(prog: &str, args: &Args) -> i32 {
         && args.princ.is_none()
         && let Ok(default) = default
     {
-        return remaining_cc_warning(prog, &default);
+        return remaining_cc_warning(ctx, prog, &default);
     }
     errflg
 }
 
-/// MIT `print_remaining_cc_warning` (`kdestroy.c:62-83`): a cache left in the collection is
-/// warned of.
-fn remaining_cc_warning(prog: &str, default: &CcSpec) -> i32 {
-    match collection(default) {
+// MIT: `print_remaining_cc_warning` (kdestroy.c:62-83)
+fn remaining_cc_warning(ctx: &ClientContext, prog: &str, default: &CcSpec) -> i32 {
+    match collection(ctx, default) {
         Ok(caches) => {
             if !caches.is_empty() {
                 eprintln!("Other credential caches present, use -A to destroy all");
@@ -215,76 +205,5 @@ fn remaining_cc_warning(prog: &str, default: &CcSpec) -> i32 {
             krb5_client::com_err!(prog, e, "while listing credential caches");
             1
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn s(v: &[&str]) -> Vec<String> {
-        v.iter().map(|x| (*x).to_owned()).collect()
-    }
-
-    /// Live MIT 1.22.2 `kdestroy`: its options and refusals.
-    #[test]
-    fn kdestroy_parses_as_mit() {
-        assert_eq!(
-            parse(&s(&["-A", "-q", "-c", "KCM:"])).unwrap(),
-            Args {
-                all: true,
-                quiet: true,
-                cache: Some("KCM:".into()),
-                princ: None,
-            }
-        );
-        let lines = |v: &[&str]| match parse(&s(v)) {
-            Err(Parsed::Usage(u)) => u.lines("kdestroy"),
-            other => panic!("{other:?}"),
-        };
-        assert_eq!(
-            lines(&["-A", "-p", "alice"]),
-            ["-A option is exclusive with -p option"]
-        );
-        assert_eq!(
-            lines(&["-c", "a", "-c", "b"]),
-            ["Only one -c option allowed"]
-        );
-        assert_eq!(
-            parse(&s(&["-4"])),
-            Err(Parsed::Krb4(UsageError::Each(Vec::new())))
-        );
-        let Err(Parsed::Krb4(before)) = parse(&s(&["-Z", "-c", "a", "-c", "b", "-4"])) else {
-            panic!("-4 did not stop kdestroy's option loop");
-        };
-        assert_eq!(
-            before.lines("kdestroy"),
-            [
-                "kdestroy: invalid option -- 'Z'",
-                "Only one -c option allowed"
-            ]
-        );
-        assert_eq!(lines(&["extra"]), Vec::<String>::new());
-        // glibc's getopt goes on past a bad option, as MIT's `kdestroy` loop does.
-        assert_eq!(
-            lines(&["-Z", "-c"]),
-            [
-                "kdestroy: invalid option -- 'Z'",
-                "kdestroy: option requires an argument -- 'c'"
-            ]
-        );
-        assert!(usage("kdestroy").starts_with("Usage: kdestroy [-A] [-q] [-c cache_name]"));
-    }
-
-    /// Live MIT 1.22.2: `kdestroy` with no cache reports it and exits 0.
-    #[test]
-    fn kdestroy_of_a_missing_file_cache_exits_zero() {
-        let path = krb5_testkit::scratch_dir("kdestroy-none").join("cc");
-        let _ = std::fs::remove_file(&path);
-        let args = Args {
-            cache: Some(format!("FILE:{}", path.display())),
-            ..Args::default()
-        };
-        assert_eq!(run("kdestroy", &args), 0);
     }
 }

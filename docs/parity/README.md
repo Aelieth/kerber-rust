@@ -14,6 +14,8 @@ Overlap (PROCESS_TGS, GET_LOCAL_TGT, FIND_FAST, HANDLE_AUTHDATA,
 AD-FX-ARMOR) is left in both sections on purpose — A1 owns TGS gather,
 A2 owns AS/`kdc_util`, A3 owns FAST residue.
 
+A row keeps the proof it names until a later edit points that row at a lab cell or a test that stays.
+
 ## Files
 
 One or more files per section, each named `<key>-<subject>.md`; A4 has
@@ -49,12 +51,12 @@ Schema: `MIT file:line | check | MIT status + wire code | Rust site | Rust e_tex
 Verdict ∈ {exact, stricter-documented (`docs/mit-deviations.md` row), absent,
 deviation, deferred (reason + promotion oracle)}. Proof `none` only
 with deferred. A named gate cell or `diffsend` case that does not exist
-is `proposed`. The 123 live `diffsend` cases are `garbage-pdu`,
+is `proposed`. The listed live `diffsend` cases are `garbage-pdu`,
 `unknown-cname`, `etype-nosupp`, `as-session-enctype`, `wrong-realm`, `pauser-no-preauth`,
 `as-needpreauth-hints-unpermitted`,
 `skewed-timestamp`, `as-needchange`, `as-invalid-opts`, `as-validate-before-preauth`, `as-locked-out`,
 `as-optimistic-encts-wrong-etype`, `unknown-sname`, `as-success`, `as-retransmit`,
-`as-request-anonymous`, `tgs-success`, `tgs-not-a-tgt`, `tgt-expired`, `tgt-nyv`, `tgt-nyv-no-starttime`,
+`as-request-anonymous`, `as-reserved-option-bit`, `as-service-expired`, `as-service-locked`, `tgs-success`, `tgs-not-a-tgt`, `tgt-expired`, `tgt-nyv`, `tgt-nyv-no-starttime`,
 `fast-armor-no-subkey`, `armor-ap-req-as-pa-tgs-req`, `tgs-ad-fx-armor-authenticator`,
 `as-bad-msg-type`, `as-bad-pvno`, `tgs-bad-msg-type`, `as-service-not-allowed`,
 `tgs-ap-options`, `tgs-header-kvno-zero`, `as-hw-preauth`, `as-spake-round1`,
@@ -94,16 +96,23 @@ is `proposed`. The 123 live `diffsend` cases are `garbage-pdu`,
 `as-req-trailing-body-field`, `tgs-req-nonce-int32-min`, `tgs-authenticator-malformed-subkey`,
 `tgs-authenticator-trailing-field`, `tgs-authenticator-crealm-octets`, `as-spake-unknown-choice`,
 `tgs-authenticator-cusec-out-of-range`, `as-enc-timestamp-pausec-out-of-range`,
-`tgs-authenticator-etype-mismatch`, `as-fast-armored-data-etype-mismatch`.
+`tgs-authenticator-etype-mismatch`, `as-fast-armored-data-etype-mismatch`,
+`tgs-missing-pa-tgs-req`, `tgs-authenticator-cname-mismatch`,
+`tgs-authenticator-crealm-mismatch`, `tgs-server-locked-out`,
+`tgs-disallow-tgt-based`, `tgs-authenticator-replay`,
+`tgs-server-disallow-postdated`, `s4u2self-client-expired`,
+`s4u2self-client-locked-out`, `tgs-fast-unkeyed-bad-checksum`,
+`tgs-fast-explicit-armor`, `tgs-fast-armor-no-tgs-subkey`,
+`tgs-fast-armor-no-subkey`, `pkinit-cms-too-small`, `pkinit-cms-header-too-long`, `pkinit-cms-too-long`, `pkinit-cms-wrong-tag`, `pkinit-cms-field-missing`, `pkinit-cms-wrong-oid`, `pkinit-authpack-not-octet-string`, `pkinit-cms-no-signer-cert`, `pkinit-sig-not-der`, `pkinit-sig-r-zero`, `pkinit-cms-signeddata-trailing`, `pkinit-cms-algid-wrong-tag`.
 
 Wire `e_text` is the MIT **status word**. MIT log messages are not
 wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
 Counts:
-**531** = A1 131 + A2 94 + A3 96 + A4 64 + A5 34 + B1 112.
-exact 430 · stricter-documented 19 · deviation 36 ·
-absent 1 · deferred 45.
+**584** = A1 131 + A2 94 + A3 118 + A4 67 + A5 34 + B1 140.
+exact 451 · stricter-documented 24 · deviation 38 ·
+absent 3 · deferred 68.
 
 When the ledger was split into these files, the one-file A4 (153 rows,
 kadm5 plus the client library) was re-cut by subject: A4 58, A5 25 and

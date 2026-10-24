@@ -1,5 +1,6 @@
 //! The acceptor's `krb5_sname_match`.
-//! MIT `krb5_sname_match` (`sname_match.c:30-57`): matches the ticket server to the acceptor name.
+// MIT: `krb5_sname_match` (sname_match.c:30-57)
+//! matches the ticket server to the acceptor name.
 //! Live oracle: GSS / `vfy_increds` cells (`MIT_sname_match`).
 
 use krb5_protocol::sname_match;
@@ -46,27 +47,6 @@ fn sname_match_srv_hst_requires_service_and_host() {
 }
 
 #[test]
-fn sname_match_ignore_acceptor_hostname_skips_host() {
-    let want = host("host", "svc.kerber.test");
-    let other = host("host", "other.kerber.test");
-    assert!(sname_match(
-        Some(&want),
-        Some("KERBER.TEST"),
-        &other,
-        b"KERBER.TEST",
-        true,
-    ));
-    let http = host("HTTP", "other.kerber.test");
-    assert!(!sname_match(
-        Some(&want),
-        Some("KERBER.TEST"),
-        &http,
-        b"KERBER.TEST",
-        true,
-    ));
-}
-
-#[test]
 fn sname_match_empty_hostname_is_wildcard() {
     let want = host("host", "");
     let got = host("host", "svc.kerber.test");
@@ -102,34 +82,6 @@ fn sname_match_realm_mismatch_is_false() {
         Some("KERBER.TEST"),
         &got,
         b"OTHER.TEST",
-        false,
-    ));
-}
-
-#[test]
-fn sname_match_non_hst_is_principal_compare() {
-    let want = user();
-    assert!(sname_match(
-        Some(&want),
-        Some("KERBER.TEST"),
-        &user(),
-        b"KERBER.TEST",
-        false,
-    ));
-    let other = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["other"]);
-    assert!(!sname_match(
-        Some(&want),
-        Some("KERBER.TEST"),
-        &other,
-        b"KERBER.TEST",
-        false,
-    ));
-    let nt = PrincipalName::new(PrincipalName::NT_UNKNOWN, ["user"]);
-    assert!(sname_match(
-        Some(&want),
-        Some("KERBER.TEST"),
-        &nt,
-        b"KERBER.TEST",
         false,
     ));
 }

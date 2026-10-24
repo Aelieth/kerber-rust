@@ -79,7 +79,7 @@ fn min_life_requires_pwchange_bypasses() {
     );
     {
         let mut g = store.write().unwrap();
-        g.put_policy(pol);
+        g.put_policy(pol).unwrap();
         g.set_principal_policy(&user, Some("soon".into())).unwrap();
         g.set_password(&user, b"need-change").unwrap();
         g.apply_admin_fields(
@@ -128,7 +128,7 @@ fn create_policy_min_life_without_max_is_ok() {
 fn create_policy_dup_checked_before_name() {
     let (store, acl, actor) = setup();
     let pol = krb5_kdc::NamedPolicy::new("bad\u{1}name");
-    store.write().unwrap().put_policy(pol.clone());
+    store.write().unwrap().put_policy(pol.clone()).unwrap();
     let out = dispatch_kadm5(
         &store,
         &acl,

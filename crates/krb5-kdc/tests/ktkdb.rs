@@ -37,7 +37,8 @@ fn get(p: &Principal, kvno: u32, etype: i32, permitted: &[E]) -> Result<(E, u32)
     .map(|k| (k.etype, k.kvno))
 }
 
-/// MIT `krb5_ktkdb_get_entry` (`lib/kdb/keytab.c:157-180`): a principal that is not a cross-realm TGT gives its FIRST key at the kvno, whatever the ticket's enctype, and a ticket of an enctype not similar to it finds `KRB5_KDB_NO_PERMITTED_KEY`.
+// MIT: `krb5_ktkdb_get_entry` (lib/kdb/keytab.c:157-180)
+/// a principal that is not a cross-realm TGT gives its FIRST key at the kvno, whatever the ticket's enctype, and a ticket of an enctype not similar to it finds `KRB5_KDB_NO_PERMITTED_KEY`.
 #[test]
 fn the_first_key_at_the_kvno_is_the_only_one_a_service_ticket_can_use() {
     let p = service(&[(E::Aes256CtsHmacSha196, 3), (E::Aes128CtsHmacSha196, 3)]);
@@ -45,7 +46,8 @@ fn the_first_key_at_the_kvno_is_the_only_one_a_service_ticket_can_use() {
     assert_eq!(get(&p, 3, 17, &ALL), Err(KtkdbError::NoPermittedKey));
 }
 
-/// MIT `krb5_dbe_def_search_enctype` (`lib/kdb/kdb_default.c:47-94`): kvno 0 is the highest key version, and through the lookup a kvno the principal lacks is `KRB5_KT_KVNONOTFOUND`.
+// MIT: `krb5_dbe_def_search_enctype` (lib/kdb/kdb_default.c:47-94)
+/// kvno 0 is the highest key version, and through the lookup a kvno the principal lacks is `KRB5_KT_KVNONOTFOUND`.
 #[test]
 fn kvno_zero_is_the_highest_and_a_missing_kvno_is_kvnonotfound() {
     let p = service(&[(E::Aes256CtsHmacSha196, 5), (E::Aes256CtsHmacSha196, 4)]);
@@ -65,7 +67,8 @@ fn a_key_outside_the_permitted_enctypes_is_passed_over() {
     assert_eq!(get(&p, 1, 18, &[]), Err(KtkdbError::NoPermittedKey));
 }
 
-/// MIT `krb5_ktkdb_get_entry` (`lib/kdb/keytab.c:140-149`): no such principal, and one that may not be a service, are `KRB5_KT_NOTFOUND`.
+// MIT: `krb5_ktkdb_get_entry` (lib/kdb/keytab.c:140-149)
+/// no such principal, and one that may not be a service, are `KRB5_KT_NOTFOUND`.
 #[test]
 fn a_principal_that_is_not_a_service_is_not_found() {
     let mut p = service(&[(E::Aes256CtsHmacSha196, 1)]);
@@ -80,8 +83,10 @@ fn a_principal_that_is_not_a_service_is_not_found() {
     assert_eq!(get(&p, 1, 18, &ALL), Err(KtkdbError::NotFound));
 }
 
-/// MIT `krb5_ktkdb_get_entry` (`lib/kdb/keytab.c:152-157`): for a cross-realm TGT the lookup takes the ticket's enctype, not the first key.
-/// MIT `is_xrealm_tgt` (`lib/kdb/keytab.c:200-220`): matches any first component that is a prefix of `krbtgt` and a second that is not the realm.
+// MIT: `krb5_ktkdb_get_entry` (lib/kdb/keytab.c:152-157)
+/// for a cross-realm TGT the lookup takes the ticket's enctype, not the first key.
+// MIT: `is_xrealm_tgt` (lib/kdb/keytab.c:200-220)
+/// matches any first component that is a prefix of `krbtgt` and a second that is not the realm.
 #[test]
 fn a_cross_realm_tgt_is_looked_up_by_the_tickets_enctype() {
     let p = service(&[(E::Aes256CtsHmacSha196, 1), (E::Aes128CtsHmacSha196, 1)]);
@@ -97,7 +102,8 @@ fn a_cross_realm_tgt_is_looked_up_by_the_tickets_enctype() {
     assert_eq!(at(&xtgt, 99), Err(KtkdbError::NoPermittedKey));
 }
 
-/// MIT `krb5_c_enctype_compare` (`lib/crypto/krb/enctype_util.c:73-86`): an enctype MIT does not implement is `KRB5_BAD_ENCTYPE`.
+// MIT: `krb5_c_enctype_compare` (lib/crypto/krb/enctype_util.c:73-86)
+/// an enctype MIT does not implement is `KRB5_BAD_ENCTYPE`.
 #[test]
 fn an_enctype_mit_does_not_know_is_bad_enctype() {
     let p = service(&[(E::Aes256CtsHmacSha196, 1)]);

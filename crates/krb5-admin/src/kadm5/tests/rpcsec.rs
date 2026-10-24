@@ -27,8 +27,11 @@ fn rpcsec_bad_version_is_auth_badcred() {
     let out = handle_rpc(
         RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: "KERBER.TEST",
+            conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
+            iprop_resync: None,
         },
         &[],
         &mut gss,
@@ -71,8 +74,11 @@ fn rpcsec_unknown_program_bad_version_is_auth_badcred() {
     let out = handle_rpc(
         RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: "KERBER.TEST",
+            conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
+            iprop_resync: None,
         },
         &[],
         &mut gss,
@@ -115,8 +121,11 @@ fn rpcsec_init_non_nullproc_is_auth_failed() {
     let out = handle_rpc(
         RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: "KERBER.TEST",
+            conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
+            iprop_resync: None,
         },
         &[],
         &mut gss,
@@ -159,8 +168,11 @@ fn rpcsec_data_without_context_is_credproblem() {
     let out = handle_rpc(
         RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: "KERBER.TEST",
+            conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
+            iprop_resync: None,
         },
         &[],
         &mut gss,
@@ -203,8 +215,11 @@ fn rpcsec_unknown_program_data_without_context_is_credproblem() {
     let out = handle_rpc(
         RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: "KERBER.TEST",
+            conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
+            iprop_resync: None,
         },
         &[],
         &mut gss,
@@ -275,9 +290,11 @@ fn rpcsec_init_reply_mic_is_window() {
         &as_out.session_key,
         &ascii(TEST_REALM),
         &admin,
-        true,
+        krb5_gss::GSS_C_MUTUAL | krb5_gss::GSS_C_REPLAY | krb5_gss::GSS_C_SEQUENCE,
         None,
         None,
+        None,
+        0,
     )
     .unwrap();
     let mut cred = XdrW::default();
@@ -305,8 +322,11 @@ fn rpcsec_init_reply_mic_is_window() {
     let out = handle_rpc(
         RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: TEST_REALM,
+            conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
+            iprop_resync: None,
         },
         b"hdl",
         &mut gss,
@@ -330,8 +350,6 @@ fn rpcsec_init_reply_mic_is_window() {
     let window = r.u32().unwrap();
     assert_eq!(window, RPCSEC_SEQ_WINDOW);
     let out_tok = r.opaque().unwrap();
-    // MIT kadmind's AP-REP: a fresh acceptor subkey and a random 30-bit seq; the window MIC is
-    // the second token under that subkey (`svcauth_gss` signs the window twice).
     let part = ap_rep_part(&out_tok, &as_out.session_key);
     let subkey = part.subkey.expect("the AP-REP carries an acceptor subkey");
     assert_ne!(
@@ -345,12 +363,10 @@ fn rpcsec_init_reply_mic_is_window() {
     let verf_seq = u64::from_be_bytes(verf[8..16].try_into().unwrap());
     assert_eq!(verf_seq, u64::from(seq) + 1);
     ctx.process_ap_rep(&out_tok, &as_out.session_key).unwrap();
-    ctx.allow_rpcsec_init_window();
     ctx.verify_mic(&window.to_be_bytes(), &verf)
         .expect("INIT xp_verf is MIC(htonl(window))");
 }
 
-/// The EncAPRepPart of a GSS AP-REP token: `0x60` framing, the krb5 OID, token id `02 00`.
 fn ap_rep_part(tok: &[u8], session: &krb5_crypto::ProtocolKey) -> krb5_types::EncApRepPart {
     let hdr = if tok[1] & 0x80 == 0 {
         2
@@ -386,8 +402,11 @@ fn rpcsec_unknown_gc_proc_is_rejectedcred() {
     let out = handle_rpc(
         RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: "KERBER.TEST",
+            conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
+            iprop_resync: None,
         },
         &[],
         &mut gss,
@@ -425,8 +444,11 @@ fn rpcsec_init_garbage_token_is_rejectedcred() {
     let out = handle_rpc(
         RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: "KERBER.TEST",
+            conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
+            iprop_resync: None,
         },
         &[],
         &mut gss,
@@ -463,8 +485,11 @@ fn rpcsec_destroy_without_context_is_credproblem() {
     let out = handle_rpc(
         RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: "KERBER.TEST",
+            conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
+            iprop_resync: None,
         },
         &[],
         &mut gss,
@@ -501,8 +526,11 @@ fn rpcsec_bad_mic_is_credproblem() {
     let out = handle_rpc(
         RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: TEST_REALM,
+            conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
+            iprop_resync: None,
         },
         b"hdl",
         &mut gss,
@@ -539,8 +567,11 @@ fn rpcsec_wrong_handle_data_is_dispatched() {
     let out = handle_rpc(
         RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: TEST_REALM,
+            conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
+            iprop_resync: None,
         },
         b"hdl",
         &mut gss,
@@ -581,8 +612,11 @@ fn rpcsec_seq_over_maxseq_is_ctxproblem() {
     let out = handle_rpc(
         RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: TEST_REALM,
+            conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
+            iprop_resync: None,
         },
         b"hdl",
         &mut gss,
@@ -619,8 +653,11 @@ fn rpcsec_seq_replay_is_ctxproblem() {
     let out1 = handle_rpc(
         RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: TEST_REALM,
+            conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
+            iprop_resync: None,
         },
         b"hdl",
         &mut gss,
@@ -650,8 +687,11 @@ fn rpcsec_seq_replay_is_ctxproblem() {
     let out2 = handle_rpc(
         RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: TEST_REALM,
+            conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
+            iprop_resync: None,
         },
         b"hdl",
         &mut gss,
@@ -698,8 +738,11 @@ fn rpcsec_destroy_then_data_is_credproblem() {
     let out = handle_rpc(
         RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: TEST_REALM,
+            conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
+            iprop_resync: None,
         },
         b"hdl",
         &mut gss,
@@ -730,8 +773,11 @@ fn rpcsec_destroy_then_data_is_credproblem() {
     let out2 = handle_rpc(
         RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: TEST_REALM,
+            conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
+            iprop_resync: None,
         },
         b"hdl",
         &mut gss,
@@ -768,8 +814,11 @@ fn rpcsec_unknown_program_data_carries_xp_verf() {
     let out = handle_rpc(
         RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: TEST_REALM,
+            conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
+            iprop_resync: None,
         },
         b"hdl",
         &mut gss,
@@ -825,8 +874,11 @@ fn rpcsec_unwrap_fail_is_garbage_args_with_verf() {
     let out = handle_rpc(
         RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: TEST_REALM,
+            conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
+            iprop_resync: None,
         },
         b"hdl",
         &mut gss,
@@ -856,8 +908,11 @@ fn rpcsec_integrity_data_round_trips() {
     let out = handle_rpc(
         RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: TEST_REALM,
+            conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
+            iprop_resync: None,
         },
         b"hdl",
         &mut gss,
@@ -894,8 +949,11 @@ fn rpcsec_integrity_bad_checksum_is_garbage_args() {
     let out = handle_rpc(
         RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: TEST_REALM,
+            conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
+            iprop_resync: None,
         },
         b"hdl",
         &mut gss,
@@ -946,8 +1004,11 @@ fn rpcsec_none_service_data_is_plain_body() {
     let out = handle_rpc(
         RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: TEST_REALM,
+            conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
+            iprop_resync: None,
         },
         b"hdl",
         &mut gss,
@@ -971,9 +1032,6 @@ fn rpcsec_none_service_data_is_plain_body() {
 
 #[test]
 fn rpcsec_privacy_body_sequence_must_match_the_credential() {
-    // MIT `xdr_rpc_gss_unwrap_data` (`authgss_prot.c:246-256`): the sequence number inside
-    // a sealed body is compared with the credential's, as for an integrity body; a body
-    // sealed for sequence 1 under a header for sequence 2 is GARBAGE_ARGS, not dispatched.
     use krb5_kdc::testrealm::TEST_REALM;
 
     let (store, acl, mut ctx, handle, mut gss) = admin_rpcsec_init();
@@ -997,8 +1055,11 @@ fn rpcsec_privacy_body_sequence_must_match_the_credential() {
         let out = handle_rpc(
             RpcCtx {
                 store: &store,
-                acl: &acl,
+                authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
                 expected_realm: TEST_REALM,
+                conf: &AcceptorConfig::default(),
+                programs: Programs::BOTH,
+                iprop_resync: None,
             },
             b"hdl",
             &mut gss,

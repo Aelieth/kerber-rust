@@ -1,9 +1,4 @@
-//! kadm5 wire constants: the ONC RPC message, accept and reject values
-//! (`gssrpc/rpc_msg.h`, `gssrpc/auth.h`), the AUTH_GSSAPI and RPCSEC_GSS
-//! control values (`gssrpc/auth_gssapi.h`, `gssrpc/auth_gss.h`), the kadm5
-//! procedure numbers and API versions (`kadm_rpc.h`, `admin.h`), the
-//! principal and policy mask bits (`admin.h`) and the `kadm_err.et` return
-//! codes. Values only; nothing here is interpreted.
+//! kadm5 wire constants: the ONC RPC message, accept and reject values (`gssrpc/rpc_msg.h`, `gssrpc/auth.h`), the AUTH_GSSAPI and RPCSEC_GSS control values (`gssrpc/auth_gssapi.h`, `gssrpc/auth_gss.h`), the kadm5 procedure numbers and API versions (`kadm_rpc.h`, `admin.h`), the principal and policy mask bits (`admin.h`) and the `kadm_err.et` return
 
 pub(super) const LAST_FRAG: u32 = 0x8000_0000;
 pub(super) const RPC_VERSION: u32 = 2;
@@ -46,34 +41,33 @@ pub(super) const PROG_UNAVAIL: u32 = 1;
 pub(super) const PROG_MISMATCH: u32 = 2;
 pub(super) const PROC_UNAVAIL: u32 = 3;
 pub(super) const GARBAGE_ARGS: u32 = 4;
+pub(super) const REJECT_RPC_MISMATCH: u32 = 0;
 pub(super) const REJECT_AUTH_ERROR: u32 = 1;
 pub(super) const AUTH_TOOWEAK: u32 = 5;
 pub(super) const AUTH_BADCRED: u32 = 1;
 pub(super) const AUTH_BADVERF: u32 = 3;
 pub(super) const AUTH_REJECTEDVERF: u32 = 4;
+pub(super) const AUTH_INVALIDRESP: u32 = 6;
 pub(super) const AUTH_FAILED: u32 = 7;
-/// MIT `gssrpc/auth.h` `MAX_AUTH_BYTES`: a call whose credential or verifier is longer does not
-/// decode.
+/// MIT `gssrpc/auth.h` `MAX_AUTH_BYTES`: a call whose credential or verifier is longer does not decode.
 pub(super) const MAX_AUTH_BYTES: usize = 400;
 /// MIT `gssrpc/auth.h` `AUTH_UNIX`, and `gssrpc/auth_unix.h` `MAX_MACHINE_NAME` and `NGRPS`.
 pub(super) const FLAVOR_UNIX: u32 = 1;
 pub(super) const MAX_MACHINE_NAME: usize = 255;
 pub(super) const NGRPS: u32 = 16;
-/// GSS-API major statuses (RFC 2744) an AUTH_GSSAPI init_res carries for a failed context.
+/// GSS-API major statuses (RFC 2744): an init_res's for a context made or under way, and those an AUTH_GSSAPI init_res carries for a failed context.
+pub(super) const GSS_S_COMPLETE: u32 = 0;
+pub(super) const GSS_S_CONTINUE_NEEDED: u32 = 1;
 pub(super) const GSS_S_BAD_BINDINGS: u32 = 0x0004_0000;
 pub(super) const GSS_S_DEFECTIVE_TOKEN: u32 = 0x0009_0000;
 pub(super) const GSS_S_FAILURE: u32 = 0x000d_0000;
-/// MIT `svc_auth_gssapi.c` `INITIATION_TIMEOUT` and `INDEF_EXPIRE`: an AUTH_GSSAPI record whose
-/// context is not established is dropped after 15 minutes, one whose context has no end after a
-/// day.
+/// MIT `svc_auth_gssapi.c` `INITIATION_TIMEOUT` and `INDEF_EXPIRE`: an AUTH_GSSAPI record whose context is not established is dropped after 15 minutes, one whose context has no end after a day.
 pub(super) const AGSS_INITIATION_TIMEOUT: u32 = 60 * 15;
 pub(super) const AGSS_INDEF_EXPIRE: u32 = 60 * 60 * 24;
 /// MIT `gssrpc/auth.h` `RPCSEC_GSS_CREDPROBLEM`.
 pub(super) const RPCSEC_GSS_CREDPROBLEM: u32 = 13;
 /// MIT `gssrpc/auth.h` `RPCSEC_GSS_CTXPROBLEM`.
 pub(super) const RPCSEC_GSS_CTXPROBLEM: u32 = 14;
-/// MIT `svcauth_gss_accept_sec_context` (`svc_auth_gss.c:226-226`): the sequence window
-/// `gr_win` is `sizeof(seqmask)*8`.
 pub(super) const RPCSEC_SEQ_WINDOW: u32 = 32;
 
 pub(super) const CREATE_PRINCIPAL: u32 = 1;
@@ -117,12 +111,22 @@ pub(super) const KADM5_BAD_HISTORY: u32 = 43_787_540;
 pub(super) const KADM5_BAD_MIN_PASS_LIFE: u32 = 43_787_541;
 /// MIT `KADM5_DUP`.
 pub(super) const KADM5_DUP: u32 = 43_787_527;
-/// MIT `OSA_ADB_DUP` (`lib/kdb/adb_err.et`): a policy the locked create finds there already.
+// MIT: `OSA_ADB_DUP` (lib/kdb/adb_err.et)
+/// a policy the locked create finds there already.
 pub(super) const OSA_ADB_DUP: u32 = 28_810_241;
-/// MIT `OSA_ADB_NOENT` (`lib/kdb/adb_err.et`): a policy the locked write or delete finds gone.
+// MIT: `OSA_ADB_NOENT` (lib/kdb/adb_err.et)
+/// a policy the locked write or delete finds gone.
 pub(super) const OSA_ADB_NOENT: u32 = 28_810_242;
 /// MIT `KADM5_FAILURE`.
 pub(super) const KADM5_FAILURE: u32 = 43_787_520;
+/// MIT `kadm_err.et` codes a kadm5 client's init returns: `KADM5_RPC_ERROR` (`:15`), `KADM5_BAD_PASSWORD` (`:36`), `KADM5_SECURE_PRINC_MISSING` (`:47`), `KADM5_GSS_ERROR` (`:53`), `KADM5_MISSING_KRB5_CONF_PARAMS` (`:61`) and `KADM5_CANT_RESOLVE` (`:63`).
+pub(crate) const KADM5_RPC_ERROR: u32 = KADM5_FAILURE + 8;
+pub(crate) const KADM5_BAD_PASSWORD: u32 = KADM5_FAILURE + 29;
+pub(super) const KADM5_PROTECT_PRINCIPAL: u32 = KADM5_FAILURE + 30;
+pub(crate) const KADM5_SECURE_PRINC_MISSING: u32 = KADM5_FAILURE + 40;
+pub(crate) const KADM5_GSS_ERROR: u32 = KADM5_FAILURE + 46;
+pub(crate) const KADM5_MISSING_KRB5_CONF_PARAMS: u32 = KADM5_FAILURE + 54;
+pub(crate) const KADM5_CANT_RESOLVE: u32 = KADM5_FAILURE + 56;
 /// MIT `ovk` 22 (`kadm_err.et`; base `43787520`).
 pub(super) const KADM5_PASS_Q_TOOSHORT: u32 = 43_787_542;
 /// MIT `ovk` 23.
@@ -143,13 +147,14 @@ pub(super) const KADM5_AUTH_DELETE: u32 = 43_787_524;
 pub(super) const KADM5_AUTH_INSUFFICIENT: u32 = 43_787_525;
 /// MIT `ovk` 63 (`KADM5_ALIAS_REALM`).
 pub(super) const KADM5_ALIAS_REALM: u32 = 43_787_583;
-/// MIT `KRB5_KDB_ALIAS_UNSUPPORTED` (`kdb5_err.et`, -1780008402) as the
-/// `kadm5_ret_t` the client decodes.
+/// MIT `KRB5_KDB_ALIAS_UNSUPPORTED` (`kdb5_err.et`, -1780008402) as the `kadm5_ret_t` the client decodes.
 pub(super) const KRB5_KDB_ALIAS_UNSUPPORTED: u32 = 2_514_958_894;
 /// The `kadm5_ret_t` of a database the server may not lock for writing (-1780008424).
-/// MIT `KRB5_KDB_CANTLOCK_DB` (`lib/krb5/error_tables/kdb5_err.et:64-64`): "Insufficient access
-/// to lock database".
+// MIT: `KRB5_KDB_CANTLOCK_DB` (lib/krb5/error_tables/kdb5_err.et:64-64)
+/// "Insufficient access to lock database".
 pub(super) const KRB5_KDB_CANTLOCK_DB: u32 = 2_514_958_872;
+// MIT: `KRB5_KDB_BAD_SALTTYPE` (lib/krb5/error_tables/kdb5_err.et:69-69)
+pub(super) const KRB5_KDB_BAD_SALTTYPE: u32 = 2_514_958_875;
 /// MIT `ovk` 1 (`KADM5_AUTH_GET`).
 pub(super) const KADM5_AUTH_GET: u32 = 43_787_521;
 /// MIT `ovk` 44 (`KADM5_AUTH_LIST`).
@@ -172,7 +177,8 @@ pub(super) const KADM5_TL_DATA: u32 = 0x0004_0000;
 pub(super) const KADM5_KEY_DATA: u32 = 0x0002_0000;
 pub(super) const KADM5_BAD_SERVER_PARAMS: u32 = 43_787_563;
 /// MIT `ovk` 47 (`KADM5_BAD_TL_TYPE`).
-/// MIT `KADM5_BAD_TL_TYPE` (`kadm_err.et:54-54`): entry 47 of the `ovk` error table.
+// MIT: `KADM5_BAD_TL_TYPE` (kadm_err.et:54-54)
+/// entry 47 of the `ovk` error table.
 pub(super) const KADM5_BAD_TL_TYPE: u32 = 43_787_567;
 pub(super) const KADM5_MAX_LIFE: u32 = 0x0000_0020;
 pub(super) const KADM5_PRINCIPAL: u32 = 0x0000_0001;
@@ -243,5 +249,6 @@ pub(super) const API_V2: u32 = 0x1234_5702;
 pub(super) const API_V3: u32 = 0x1234_5703;
 pub(super) const API_V4: u32 = 0x1234_5704;
 
-/// MIT `glob_to_regexp` (`svr_iters.c:61-62`): a glob that ends in a backslash is EINVAL.
+// MIT: `glob_to_regexp` (svr_iters.c:61-62)
+/// a glob that ends in a backslash is EINVAL.
 pub(super) const EINVAL: u32 = 22;

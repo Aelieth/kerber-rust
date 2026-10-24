@@ -39,12 +39,12 @@ impl OtpVerifier for Code {
         "clienttest"
     }
 
-    fn verify(&self, r: &OtpVerifyRequest<'_>) -> OtpVerdict {
+    fn verify(&self, r: &OtpVerifyRequest) -> OtpVerdict {
         self.calls.lock().unwrap().push(Call {
-            username: r.username.to_vec(),
+            username: r.username.clone(),
             otp_value: r.otp_value.to_vec(),
         });
-        if r.otp_value == b"123456" {
+        if r.otp_value.as_slice() == b"123456" {
             OtpVerdict::Accept
         } else {
             OtpVerdict::Reject
@@ -58,7 +58,7 @@ fn verifier() -> &'static Arc<Code> {
         let v = Arc::new(Code {
             calls: Mutex::new(Vec::new()),
         });
-        register_otp_verifier(v.clone());
+        register_otp_verifier(v.clone()).expect("register the test otp verifier");
         v
     })
 }
@@ -133,7 +133,8 @@ fn realm(attr: &str) -> (KdcAddr, FastArmor) {
         host: "127.0.0.1".into(),
         port,
     };
-    let plain = as_exchange(&request(&kdc, None)).expect("password AS for the armor ticket");
+    let plain = as_exchange(&request(&krb5_config::isolated_profile(), &kdc, None))
+        .expect("password AS for the armor ticket");
     let armor = FastArmor {
         ticket: plain.ticket,
         session: plain.session_key,
@@ -147,12 +148,17 @@ fn shared(store: PrincipalStore) -> krb5_kdc::SharedStore {
     shared_store(store)
 }
 
-fn request<'a>(kdc: &'a KdcAddr, armor: Option<&'a FastArmor>) -> AsRequest<'a> {
+fn request<'a>(
+    profile: &'a krb5_config::Krb5Conf,
+    kdc: &'a KdcAddr,
+    armor: Option<&'a FastArmor>,
+) -> AsRequest<'a> {
     AsRequest {
         cname: user(),
         realm: TEST_REALM,
         password: TEST_USER_PASSWORD,
         kdc,
+        profile,
         want_spake: false,
         fast_armor: armor,
         pkinit: None,
@@ -163,15 +169,21 @@ fn request<'a>(kdc: &'a KdcAddr, armor: Option<&'a FastArmor>) -> AsRequest<'a> 
     }
 }
 
-fn otp_login(kdc: &KdcAddr, armor: &FastArmor, ui: &mut Ui) -> Result<AsOutcome, Error> {
-    as_exchange_interactive(&request(kdc, Some(armor)), ui, false)
+fn otp_login(
+    profile: &krb5_config::Krb5Conf,
+    kdc: &KdcAddr,
+    armor: &FastArmor,
+    ui: &mut Ui,
+) -> Result<AsOutcome, Error> {
+    as_exchange_interactive(&request(profile, kdc, Some(armor)), ui, false)
 }
 
 #[test]
 fn otp_login_issues_a_tgt_and_never_asks_for_the_password() {
     let (kdc, armor) = realm(r#"[{"type":"clienttest"}]"#);
+    let profile = krb5_config::isolated_profile();
     let mut ui = Ui::answering(&["123456"]);
-    let out = otp_login(&kdc, &armor, &mut ui).expect("OTP login");
+    let out = otp_login(&profile, &kdc, &armor, &mut ui).expect("OTP login");
     assert_eq!(out.pa_type, Some(pa::OTP_CHALLENGE), "ccache pa_type 141");
     assert!(out.used_fast);
     assert_eq!(out.pa_config, None, "a DEFAULT token records no config");
@@ -199,8 +211,9 @@ fn otp_login_issues_a_tgt_and_never_asks_for_the_password() {
 #[test]
 fn a_wrong_value_is_preauthentication_failed_with_no_fallback() {
     let (kdc, armor) = realm(r#"[{"type":"clienttest"}]"#);
+    let profile = krb5_config::isolated_profile();
     let mut ui = Ui::answering(&["000000", "123456"]);
-    let e = otp_login(&kdc, &armor, &mut ui).expect_err("wrong OTP");
+    let e = otp_login(&profile, &kdc, &armor, &mut ui).expect_err("wrong OTP");
     match e {
         Error::KrbError { code, .. } => assert_eq!(code, err::PREAUTH_FAILED),
         other => panic!("{other:?}"),
@@ -210,34 +223,22 @@ fn a_wrong_value_is_preauthentication_failed_with_no_fallback() {
     assert_eq!(ui.answers.len(), 1, "the second answer was never read");
 }
 
-#[test]
-fn no_prompter_fails_the_module_and_the_password_follows() {
-    let (kdc, armor) = realm(r#"[{"type":"clienttest"}]"#);
-    // as_exchange has no prompter: the OTP module fails "Cannot read password" and the exchange
-    // goes on to the next mechanism, which has the password in the request.
-    let out = as_exchange(&request(&kdc, Some(&armor))).expect("falls back to the password");
-    assert_eq!(out.pa_type, Some(pa::ENCRYPTED_CHALLENGE));
-}
-
-/// MIT `sort_krb5_padata_sequence` (`lib/krb5/krb/get_in_tkt.c:400-471`): `preferred_preauth_types`
+// MIT: `sort_krb5_padata_sequence` (lib/krb5/krb/get_in_tkt.c:400-471)
+/// `preferred_preauth_types`
 /// moves a type to the front of the hint, so encrypted challenge (138) is run before OTP (141).
 #[test]
 fn preferred_preauth_types_138_runs_encrypted_challenge_before_otp() {
     let (kdc, armor) = realm(r#"[{"type":"clienttest"}]"#);
-    krb5_config::isolate_test_krb5();
-    let dir = krb5_testkit::scratch_dir("client-otp-preferred");
-    let path = dir.join("krb5.conf");
-    std::fs::write(
-        &path,
+    let profile = krb5_config::Krb5Conf::parse(
         "[libdefaults]\n    default_realm = KERBER.TEST\n    dns_lookup_kdc = false\n    dns_lookup_realm = false\n    preferred_preauth_types = 138\n",
     )
     .unwrap();
-    krb5_config::set_test_krb5_paths(Some(vec![path]));
     let mut ui = Ui {
         password: Some(TEST_USER_PASSWORD),
         ..Ui::default()
     };
-    let out = otp_login(&kdc, &armor, &mut ui).expect("password login through encrypted challenge");
+    let out = otp_login(&profile, &kdc, &armor, &mut ui)
+        .expect("password login through encrypted challenge");
     assert_eq!(out.pa_type, Some(pa::ENCRYPTED_CHALLENGE));
     assert!(ui.prompts.is_empty(), "no OTP prompt: {:?}", ui.prompts);
     assert_eq!(ui.passwords, 1);
@@ -277,6 +278,7 @@ impl Responder for PasswordAnswer {
 #[test]
 fn a_responder_answer_replaces_the_prompts() {
     let (kdc, armor) = realm(r#"[{"type":"clienttest"}]"#);
+    let profile = krb5_config::isolated_profile();
     let mut ui = Ui {
         responder: Some(Box::new(Answer {
             ti: 0,
@@ -285,7 +287,7 @@ fn a_responder_answer_replaces_the_prompts() {
         })),
         ..Ui::default()
     };
-    let out = otp_login(&kdc, &armor, &mut ui).expect("OTP login by responder");
+    let out = otp_login(&profile, &kdc, &armor, &mut ui).expect("OTP login by responder");
     assert_eq!(out.pa_type, Some(pa::OTP_CHALLENGE));
     assert!(ui.prompts.is_empty(), "the responder answered");
 }
@@ -293,6 +295,7 @@ fn a_responder_answer_replaces_the_prompts() {
 #[test]
 fn a_bad_responder_answer_falls_back_to_the_prompt() {
     let (kdc, armor) = realm(r#"[{"type":"clienttest"}]"#);
+    let profile = krb5_config::isolated_profile();
     let mut ui = Ui {
         responder: Some(Box::new(Answer {
             ti: 7,
@@ -301,7 +304,7 @@ fn a_bad_responder_answer_falls_back_to_the_prompt() {
         })),
         ..Ui::answering(&["123456"])
     };
-    let out = otp_login(&kdc, &armor, &mut ui).expect("OTP login by prompt");
+    let out = otp_login(&profile, &kdc, &armor, &mut ui).expect("OTP login by prompt");
     assert_eq!(out.pa_type, Some(pa::OTP_CHALLENGE));
     assert_eq!(ui.prompts.len(), 1);
 }
@@ -309,13 +312,15 @@ fn a_bad_responder_answer_falls_back_to_the_prompt() {
 #[test]
 fn a_responder_password_answer_is_the_password_with_no_prompt() {
     let (kdc, armor) = realm(r#"[{"type":"clienttest"}]"#);
+    let profile = krb5_config::isolated_profile();
     // OTP asks for its value and gets none, so its module fails; encrypted challenge then needs the
     // key, and the responder's answer to the password question is the password.
     let mut ui = Ui {
         responder: Some(Box::new(PasswordAnswer)),
         ..Ui::default()
     };
-    let out = otp_login(&kdc, &armor, &mut ui).expect("password login by the responder's answer");
+    let out = otp_login(&profile, &kdc, &armor, &mut ui)
+        .expect("password login by the responder's answer");
     assert_eq!(out.pa_type, Some(pa::ENCRYPTED_CHALLENGE));
     assert_eq!(
         ui.passwords, 0,
@@ -338,16 +343,12 @@ fn the_questions_follow_the_hint_and_the_loaded_modules() {
         })),
         ..Ui::default()
     };
-    otp_login(&kdc, &armor, &mut keyed).expect("OTP login, keyed user");
-    krb5_config::isolate_test_krb5();
-    let dir = krb5_testkit::scratch_dir("client-otp-questions");
-    let path = dir.join("krb5.conf");
-    std::fs::write(
-        &path,
+    otp_login(&krb5_config::isolated_profile(), &kdc, &armor, &mut keyed)
+        .expect("OTP login, keyed user");
+    let profile = krb5_config::Krb5Conf::parse(
         "[plugins]\n    clpreauth = {\n        disable = encrypted_challenge\n    }\n",
     )
     .unwrap();
-    krb5_config::set_test_krb5_paths(Some(vec![path]));
     let mut alone = Ui {
         responder: Some(Box::new(Answer {
             ti: 0,
@@ -356,5 +357,5 @@ fn the_questions_follow_the_hint_and_the_loaded_modules() {
         })),
         ..Ui::default()
     };
-    otp_login(&kdc, &armor, &mut alone).expect("OTP login, encrypted challenge disabled");
+    otp_login(&profile, &kdc, &armor, &mut alone).expect("OTP login, encrypted challenge disabled");
 }

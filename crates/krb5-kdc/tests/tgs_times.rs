@@ -2,9 +2,11 @@
 //! client lifetime, renewal, and the header-ticket time check.
 //! The KDC's header-ticket time check is `krb5int_validate_times` too
 //! (`kdc_util.c` `kdc_rd_ap_req` → `krb5_rd_req_decoded_anyflag`).
-//! MIT `rd_req_decoded_opt` (`rd_req_dec.c:627-627`): the decoded AP-REQ's ticket times go
+// MIT: `rd_req_decoded_opt` (rd_req_dec.c:627-627)
+//! the decoded AP-REQ's ticket times go
 //! through `krb5int_validate_times`.
-//! MIT `krb5int_validate_times` (`valid_times.c:44-51`): a TGT with no `starttime` is
+// MIT: `krb5int_validate_times` (valid_times.c:44-51)
+//! a TGT with no `starttime` is
 //! judged by its `authtime`, so a resealed TGT with a future `authtime` and no `starttime`
 //! is not yet valid.
 
@@ -743,7 +745,8 @@ fn tgs_renew_strips_when_disallow_renewable() {
 fn assert_process_tgs_expired(err: Error) {
     // MIT reports an expired header ticket at the rd_req stage: code 32 with
     // e_text PROCESS_TGS, not TKT_EXPIRED.
-    // MIT `gather_tgs_req_info` (`do_tgs_req.c:623-623`): a `kdc_process_tgs_req` failure
+    // MIT: `gather_tgs_req_info` (do_tgs_req.c:623-623)
+    // a `kdc_process_tgs_req` failure
     // has the status PROCESS_TGS.
     match err {
         Error::Protocol { code, text, .. } => {
@@ -790,7 +793,8 @@ fn tgs_renew_after_endtime_is_process_tgs() {
             },
         )
         .unwrap();
-    // MIT `enc_ts_verify` (`kdc/kdc_preauth_encts.c:97-99`): the encrypted timestamp
+    // MIT: `enc_ts_verify` (kdc/kdc_preauth_encts.c:97-99)
+    // the encrypted timestamp
     // is `krb5_check_clockskew`. Skew 0 before this AS rejects a stamp from the
     // adjacent second. The expired-ticket check is what needs skew 0.
     let issued = renewable_as(&store, 95);
@@ -945,7 +949,8 @@ fn tgs_header_tgt_without_starttime_and_future_authtime_is_nyv() {
     .unwrap();
     krb5_kdc::issue_tgs(&store, &ok_req).expect("control TGS issues");
 
-    // MIT `krb5int_validate_times` (`valid_times.c:44-46`): starttime == 0 → authtime;
+    // MIT: `krb5int_validate_times` (valid_times.c:44-46)
+    // starttime == 0 → authtime;
     // :47-51 far-future → NYV.
     let far = KerberosTime::now()
         .add_seconds(store.policy().skew + 3600)

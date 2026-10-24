@@ -95,7 +95,7 @@ fn changepw_service_own_policy_getpol_is_ok() {
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
     {
         let mut g = store.write().unwrap();
-        g.put_policy(krb5_kdc::NamedPolicy::new("userpol"));
+        g.put_policy(krb5_kdc::NamedPolicy::new("userpol")).unwrap();
         g.set_principal_policy(&user, Some("userpol".into()))
             .unwrap();
     }
@@ -111,6 +111,30 @@ fn changepw_service_own_policy_getpol_is_ok() {
     assert_eq!(ret_code(&denied), KADM5_AUTH_GET);
 }
 
+// AZ-1 cell 6 (A2-20): a caller's own policy is read in the caller's realm, so a same-name store
+// principal does not grant it. Not lab-gradable (MIT's KDC refuses the cross-realm kadmin ticket).
+#[test]
+fn changepw_cross_realm_same_name_getpol_is_denied() {
+    let (store, acl, _actor) = setup();
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
+    {
+        let mut g = store.write().unwrap();
+        g.put_policy(krb5_kdc::NamedPolicy::new("userpol")).unwrap();
+        g.set_principal_policy(&user, Some("userpol".into()))
+            .unwrap();
+    }
+    // user@KERBER.TEST holds userpol, but the caller is user@OTHER.REALM: its own-policy lookup
+    // finds no record, so the read pre-AZ's name-only lookup allowed is now denied.
+    let denied = cpw_dispatch(
+        &store,
+        &acl,
+        "user@OTHER.REALM",
+        GET_POLICY,
+        &encode_named("userpol"),
+    );
+    assert_eq!(ret_code(&denied), KADM5_AUTH_GET);
+}
+
 #[test]
 fn changepw_service_getprivs_is_ok() {
     let (store, acl, actor) = setup();
@@ -121,9 +145,7 @@ fn changepw_service_getprivs_is_ok() {
     assert_eq!(r.u32().unwrap(), !0);
 }
 
-// A password that is not UTF-8 is still a kadm5 xdr_string. Decoding it as UTF-8
-// used to fail the RPC with SYSTEM_ERR before passwd_check (the MIT client's
-// "Communication failure with server").
+// A password that is not UTF-8 is still a kadm5 xdr_string. Decoding it as UTF-8 used to fail the RPC with SYSTEM_ERR before passwd_check (the MIT client's "Communication failure with server").
 #[test]
 fn chpass_password_keeps_non_utf8_octets() {
     let pass = b"caf\xe9p16a";
@@ -134,7 +156,7 @@ fn chpass_password_keeps_non_utf8_octets() {
     let got = parse_chpass(&w.b, false).unwrap();
     assert_eq!(got.name.components_joined(), "nosuch-latin");
     assert_eq!(got.prealm, "KERBER.TEST");
-    assert_eq!(got.pass, pass);
+    assert_eq!(got.pass.as_slice(), pass);
     assert!(!got.keepold);
     assert_eq!(got.ks.len(), 0);
 

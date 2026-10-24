@@ -21,7 +21,6 @@ fn pipe_stdin(bin: &str, input: &[u8]) -> std::process::Output {
     child.wait_with_output().expect("wait")
 }
 
-/// MIT `main` (`ktutil.c:60-62`): the command loop exits 0 whatever it ran (settled live).
 #[test]
 fn ktutil_nope_then_q_exits_0() {
     let bin = env!("CARGO_BIN_EXE_krb5-ktutil");
@@ -54,7 +53,6 @@ fn ktutil_nope_then_q_exits_0() {
         "stderr={}",
         String::from_utf8_lossy(&out.stderr)
     );
-    // Live MIT 1.22.2: a line that is no request, bytes as read, then the next line runs.
     assert_eq!(
         out.stderr,
         b"ktutil: Unknown request \"\xff\".  Type \"?\" for a request list.\n\
@@ -88,7 +86,6 @@ fn ktutil_directory_stdin_terminates() {
         "directory stdin spun: stderr={}",
         String::from_utf8_lossy(&out.stderr)
     );
-    // Live MIT 1.22.2: ktutil with a directory as stdin ends its loop and exits 0.
     assert_eq!(out.status.code(), Some(0));
     assert!(
         out.stderr.len() < 64 * 1024,
@@ -97,8 +94,6 @@ fn ktutil_directory_stdin_terminates() {
     );
 }
 
-/// A scratch realm for `kadmin.local`: the documented test realm saved where the env names it,
-/// a krb5.conf naming its realm, no KDC profile and no ccache.
 struct Realm {
     dir: std::path::PathBuf,
 }
@@ -114,7 +109,6 @@ impl Realm {
             "[libdefaults]\n default_realm = KERBER.TEST\n",
         )
         .unwrap();
-        // The database and stash as a release build finds them: named in the realm's stanza.
         std::fs::write(
             dir.join("kdc.conf"),
             format!(
@@ -168,9 +162,6 @@ fn text(b: &[u8]) -> String {
     String::from_utf8_lossy(b).into_owned()
 }
 
-/// MIT `main` (`ss_wrapper.c`), settled live: a failed `-q` query exits 0, an unknown `-q` or
-/// command-line command 1, a command-line command (script mode) that reports an error 1, and the
-/// prompt loop 0 whatever it read.
 #[test]
 fn kadmin_local_exit_status_is_mit_s() {
     let realm = Realm::new("kadmin-exit");
@@ -222,7 +213,6 @@ fn kadmin_local_exit_status_is_mit_s() {
     assert!(text(&out.stdout).contains("user@KERBER.TEST\n"));
 }
 
-/// The KLLDAP manager's lines: `addprinc -randkey` then `ktadd -k`, stdout as MIT prints it.
 #[test]
 fn kadmin_local_klldap_bootstrap_lines() {
     let realm = Realm::new("kadmin-klldap");
@@ -257,8 +247,6 @@ fn kadmin_local_klldap_bootstrap_lines() {
     );
 }
 
-/// `-p` is printed as given and stamps the change with its realm added, as MIT's `kadm5_init`
-/// parses the client name.
 #[test]
 fn kadmin_local_explicit_principal_takes_the_realm() {
     let realm = Realm::new("kadmin-explicit-p");
@@ -291,7 +279,6 @@ fn kadmin_local_explicit_principal_takes_the_realm() {
     assert_eq!(modified(&realm).as_deref(), Some("joe/admin@OTHER.TEST"));
 }
 
-/// Reads `from` until `marker` has been seen in all it read (or the stream ends).
 fn read_through(from: &mut impl Read, seen: &mut Vec<u8>, marker: &[u8]) {
     let mut buf = [0u8; 256];
     let mut start = seen.len();
@@ -315,8 +302,6 @@ fn sigint(child: &std::process::Child) {
     nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGINT).unwrap();
 }
 
-/// MIT `ss_listen`: Ctrl-C at the prompt prints a newline and prompts again; the session goes
-/// on and ends with 0.
 #[test]
 fn kadmin_local_sigint_at_the_prompt_prompts_again() {
     let realm = Realm::new("kadmin-sigint");
@@ -345,8 +330,7 @@ fn kadmin_local_sigint_at_the_prompt_prompts_again() {
     );
 }
 
-/// MIT `krb5_prompter_posix`: Ctrl-C at a password prompt is `Password read interrupted`, and
-/// `-q` still exits 0.
+/// MIT `krb5_prompter_posix`: Ctrl-C at a password prompt is `Password read interrupted`, and `-q` still exits 0.
 #[test]
 fn kadmin_local_sigint_at_a_password_prompt_is_password_read_interrupted() {
     let realm = Realm::new("kadmin-sigint-pw");
@@ -387,8 +371,6 @@ fn kadmin_local_sigint_at_a_password_prompt_is_password_read_interrupted() {
     );
 }
 
-/// An argument that is not UTF-8 stops `kadmin.local` before it opens the database: this store
-/// keeps names as UTF-8.
 #[test]
 fn kadmin_local_refuses_an_argument_that_is_not_utf8() {
     use std::os::unix::ffi::OsStrExt as _;
@@ -408,8 +390,6 @@ fn kadmin_local_refuses_an_argument_that_is_not_utf8() {
     );
 }
 
-/// MIT `krb5_klog_init`: `kadmin.local` opens `[logging] admin_server` as kadmind does, an
-/// included file's too, and reports a destination that does not open.
 #[test]
 fn kadmin_local_opens_its_log_as_kadmind_does() {
     let realm = Realm::new("kadmin-log");
@@ -444,8 +424,6 @@ fn kadmin_local_opens_its_log_as_kadmind_does() {
     );
 }
 
-/// MIT `kt_default_name`: with no `-k`, the keytab is the profile's `default_keytab_name`, an
-/// `includedir` file's included.
 #[test]
 fn kadmin_local_default_keytab_follows_includedir() {
     let realm = Realm::new("kadmin-ktname");
@@ -475,7 +453,6 @@ fn kadmin_local_default_keytab_follows_includedir() {
     assert!(kt.exists());
 }
 
-/// MIT `kdb_init_master`: with `-m` the typed master key opens and writes the database, and the
 /// stash is never read: here there is none.
 #[test]
 fn kadmin_local_m_needs_no_stash() {
@@ -518,7 +495,6 @@ fn kadmin_local_m_needs_no_stash() {
     );
 }
 
-/// MIT `kdb_get_hist_key` under `-m`: the `kadmin/history` a `cpw` creates is committed under the
 /// typed master key before `passwd_check`, so a password refused for its length still leaves it.
 #[test]
 fn kadmin_local_m_keeps_kadmin_history_after_a_refused_cpw() {
@@ -560,7 +536,6 @@ fn kadmin_local_m_keeps_kadmin_history_after_a_refused_cpw() {
     );
 }
 
-/// MIT's prompt loop reads a directory stdin as the end of input (`fgets` fails): no spin, exit 0.
 #[test]
 fn kadmin_local_directory_stdin_terminates() {
     let realm = Realm::new("kadmin-dirin");
@@ -586,9 +561,6 @@ fn kadmin_local_directory_stdin_terminates() {
     );
 }
 
-/// Settled live on MIT 1.22.2: without `iprop_enable` kadmin.local writes no update log; with it
-/// but no `iprop_port` it stops at its start; with both it maps the log (made with one dummy
-/// entry) and each change adds one entry, a rename three.
 #[test]
 fn kadmin_local_keeps_the_update_log_only_with_iprop() {
     let realm = Realm::new("kadmin-iprop");
@@ -638,10 +610,6 @@ fn kadmin_local_keeps_the_update_log_only_with_iprop() {
     assert_eq!(std::fs::metadata(&ulog).unwrap().len(), 40 + 10 * 2048);
 }
 
-/// A realm value `kadm5_get_config_params` cannot convert leaves a required parameter unset, and
-/// kadmin.local stops at its start.
-/// MIT `kadm5_init` (`lib/kadm5/srv/server_init.c:207-218`): a required parameter that is not set
-/// is `KADM5_MISSING_CONF_PARAMS`.
 #[test]
 fn kadmin_local_refuses_a_realm_value_kadm5_cannot_convert() {
     let realm = Realm::new("kadmin-params");

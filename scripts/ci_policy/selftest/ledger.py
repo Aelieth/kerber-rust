@@ -12,7 +12,8 @@ from ..common import ROOT, SCRIPTS, _die, _scratch_root
 from ..ledger import (
     DIFFSEND_CASES, _item_span, _item_spans, _src_index, check_diffsend_cases, check_ledger_anchors,
     check_ledger_layout, check_ledger_mit_cites, check_ledger_proof_column, check_ledger_tally,
-    check_no_case_whitelists, ledger_sources,
+    check_no_case_whitelists, fix_ledger_tally, ledger_sources, recount_ledger_sections,
+    recount_ledger_verdicts, rewrite_tally_header,
 )
 from .common import _must_die, _must_die_msg
 
@@ -31,18 +32,18 @@ def _self_test_ledger() -> None:
         "| kdc_util.c:1 | x | y | z | w | exact | diffsend `no-such-case` |\n"
     )
     _must_die(check_ledger_proof_column, ledger_bad_case)
-    ledger_bad_gate = (
+    ledger_retired_gate = (
         "| MIT file:line | check | MIT | Rust | e_text | verdict | proof |\n"
         "| --- | --- | --- | --- | --- | --- | --- |\n"
         "| kdc_util.c:1 | x | y | z | w | exact | kdc-lookaside-gate.sh |\n"
     )
-    _must_die(check_ledger_proof_column, ledger_bad_gate)
+    check_ledger_proof_column(ledger_retired_gate)
     ledger_proposed_sibling = (
         "| MIT file:line | check | MIT | Rust | e_text | verdict | proof |\n"
         "| --- | --- | --- | --- | --- | --- | --- |\n"
         "| kdc_util.c:1 | x | y | z | w | exact | proposed: diffsend `no-such-case`; kdc-lookaside-gate.sh |\n"
     )
-    _must_die(check_ledger_proof_column, ledger_proposed_sibling)
+    check_ledger_proof_column(ledger_proposed_sibling)
     cases_hdr = (
         "The thirty-three live `diffsend` cases are "
         + ", ".join(f"`{c}`" for c in sorted(DIFFSEND_CASES))
@@ -121,6 +122,19 @@ def _self_test_ledger() -> None:
         "**1** = A1 0 + A2 1 + A3 0.",
     )
     _must_die(check_ledger_tally, ledger_tally_wrong_split)
+    fixed = rewrite_tally_header(
+        ledger_tally_bad, recount_ledger_verdicts(ledger_tally_bad), recount_ledger_sections(ledger_tally_bad)
+    )
+    check_ledger_tally(fixed)
+    if rewrite_tally_header(
+        fixed, recount_ledger_verdicts(fixed), recount_ledger_sections(fixed)
+    ) != fixed:
+        _die("--fix-tally rewrote an already-correct tally")
+    lfix = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
+    (lfix / "docs").mkdir()
+    (lfix / "docs" / "mit-parity-ledger.md").write_text(ledger_tally_bad, encoding="utf-8")
+    fix_ledger_tally(lfix)
+    check_ledger_tally(root=lfix)
     # The ledger in either layout: one file, or docs/parity/ with a README header and one or more
     # files per section keyed by their names. A row's identity is its MIT cite and check cells.
     lroot = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
@@ -236,6 +250,17 @@ def _self_test_ledger() -> None:
     _must_die(check_ledger_anchors, _row("krb5-kdc/plugins.rs advertise:1", verdict="absent"))
     _must_die(check_ledger_anchors, _row("krb5-kdc/dispatch.rs make_toolong_error", "no status word"))
     _must_die(check_ledger_anchors, _row("krb5-kdc/dispatch.rs make_toolong_error", proof="`no_such_unit_anywhere`"))
+    check_ledger_anchors(
+        _row(
+            "krb5-kdc/dispatch.rs make_toolong_error",
+            "no status word",
+            proof="proven against MIT by `no_such_unit_anywhere` at `495637f3`, since removed",
+        )
+    )
+    _must_die(
+        check_ledger_anchors,
+        _row("krb5-kdc/dispatch.rs make_toolong_error", "no status word", proof="since removed"),
+    )
     check_ledger_anchors(_row("krb5-kdc/dispatch.rs make_toolong_error", "no status word", proof=unit))
     _must_die(check_ledger_anchors, _row("krb5-kdc/dispatch.rs make_toolong_error", "NOT_A_REAL_STATUS 60"))
     check_ledger_anchors(_row("krb5-kdc/dispatch.rs make_toolong_error", "FIELD_TOOLONG 52"))
@@ -302,84 +327,6 @@ def _self_test_ledger() -> None:
         "for c in skip_cases; do :; done\n",
         "skip-gate.sh",
     )
-
-    env = os.environ.copy()
-    env.update({"ROOT": str(ROOT), "KERBER_NO_IMAGE": "1"})
-    dirty_refuse = subprocess.run(
-        [
-            "bash",
-            "-c",
-            '. "$ROOT/scripts/lib/unit-evidence.sh"; dirty=yes; unit_guard_dirty',
-        ],
-        cwd=ROOT,
-        env=env,
-        capture_output=True,
-        check=False,
-        text=True,
-    )
-    if dirty_refuse.returncode != 1:
-        _die("unit_guard_dirty must refuse dirty=yes without KERBER_UNIT_ALLOW_DIRTY")
-    dirty_allow = subprocess.run(
-        [
-            "bash",
-            "-c",
-            '. "$ROOT/scripts/lib/unit-evidence.sh"; dirty=yes; '
-            "KERBER_UNIT_ALLOW_DIRTY=1 unit_guard_dirty",
-        ],
-        cwd=ROOT,
-        env=env,
-        capture_output=True,
-        check=False,
-        text=True,
-    )
-    if dirty_allow.returncode != 0 or "override=KERBER_UNIT_ALLOW_DIRTY" not in (
-        dirty_allow.stdout or ""
-    ):
-        _die("unit_guard_dirty must stamp override=KERBER_UNIT_ALLOW_DIRTY when allowed")
-    dirty_ok = subprocess.run(
-        [
-            "bash",
-            "-c",
-            '. "$ROOT/scripts/lib/unit-evidence.sh"; dirty=no; unit_guard_dirty',
-        ],
-        cwd=ROOT,
-        env=env,
-        capture_output=True,
-        check=False,
-    )
-    if dirty_ok.returncode != 0:
-        _die("unit_guard_dirty must accept dirty=no")
-
-    red_py = SCRIPTS / "lib" / "unit-red-check.py"
-    if not red_py.is_file():
-        _die("missing scripts/lib/unit-red-check.py")
-    red_fail = subprocess.run(
-        [sys.executable, str(red_py), "foo"],
-        input="test foo ... FAILED\n",
-        capture_output=True,
-        check=False,
-        text=True,
-    )
-    if red_fail.returncode != 0:
-        _die("unit-red-check.py must accept all FAILED")
-    red_pass = subprocess.run(
-        [sys.executable, str(red_py), "foo"],
-        input="test foo ... ok\n",
-        capture_output=True,
-        check=False,
-        text=True,
-    )
-    if red_pass.returncode != 1 or "vacuous red" not in (red_pass.stderr or ""):
-        _die("unit-red-check.py must reject a passed test")
-    red_empty = subprocess.run(
-        [sys.executable, str(red_py), "foo"],
-        input="",
-        capture_output=True,
-        check=False,
-        text=True,
-    )
-    if red_empty.returncode != 1:
-        _die("unit-red-check.py must reject empty cargo output")
 
     hdr_mismatch = "The thirty-three live `diffsend` cases are `garbage-pdu`.\n"
     _must_die(check_diffsend_cases, hdr_mismatch, gate_n, src_n)

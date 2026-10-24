@@ -1,9 +1,7 @@
-//! The words `kadmin.local` prints: MIT's usage blocks and the `com_err` text of each error the
-//! store returns (`kadm_err.et`, `kdb5_err.et`, the db2 module's messages).
+//! The words `kadmin.local` prints: MIT's usage blocks and the `com_err` text of each error the store returns (`kadm_err.et`, `kdb5_err.et`, the db2 module's messages).
 
 use krb5_kdc::Error;
 
-/// MIT `usage` (`kadmin.c:101-115`): the startup usage block, written through `error`.
 pub(crate) fn startup_usage(whoami: &str) -> String {
     format!(
         "Usage: {whoami} [-r realm] [-p principal] [-q query] [clnt|local args]\n              \
@@ -21,7 +19,8 @@ const ATTRIBUTES: &str = "\tattributes are:\n\t\tallow_postdated allow_forwardab
      [-x db_princ_args]* - any number of database specific arguments.\n\t\t\tLook at each \
      database documentation for supported arguments\n";
 
-/// MIT `kadmin_addprinc_usage` (`kadmin.c:1182-1203`): its four `error` calls.
+// MIT: `kadmin_addprinc_usage` (kadmin.c:1182-1203)
+/// its four `error` calls.
 pub(crate) const ADDPRINC_USAGE: [&str; 4] = [
     "usage: add_principal [options] principal\n",
     "\toptions are:\n",
@@ -31,7 +30,8 @@ pub(crate) const ADDPRINC_USAGE: [&str; 4] = [
     ATTRIBUTES,
 ];
 
-/// MIT `kadmin_modprinc_usage` (`kadmin.c:1206-1226`): its four `error` calls.
+// MIT: `kadmin_modprinc_usage` (kadmin.c:1206-1226)
+/// its four `error` calls.
 pub(crate) const MODPRINC_USAGE: [&str; 4] = [
     "usage: modify_principal [options] principal\n",
     "\toptions are:\n",
@@ -41,11 +41,12 @@ pub(crate) const MODPRINC_USAGE: [&str; 4] = [
     ATTRIBUTES,
 ];
 
-/// MIT `cpw_usage` (`kadmin.c:827-833`): the `change_password` usage line.
+/// the `change_password` usage line.
 pub(crate) const CPW_USAGE: &str =
     "usage: change_password [-randkey] [-keepold] [-e keysaltlist] [-pw password] principal\n";
 
-/// MIT `kadmin_addmodpol_usage` (`kadmin.c:1699-1708`): its four `error` calls.
+// MIT: `kadmin_addmodpol_usage` (kadmin.c:1699-1708)
+/// its four `error` calls.
 pub(crate) fn addmodpol_usage(func: &str) -> [String; 4] {
     [
         format!("usage; {func} [options] policy\n"),
@@ -58,11 +59,13 @@ pub(crate) fn addmodpol_usage(func: &str) -> [String; 4] {
     ]
 }
 
-/// MIT `add_usage` (`kadmin/cli/keytab.c:53-57`): the `ktadd` usage line, on stderr.
+// MIT: `add_usage` (kadmin/cli/keytab.c:53-57)
+/// the `ktadd` usage line, on stderr.
 pub(crate) const KTADD_USAGE: &str = "Usage: ktadd [-k[eytab] keytab] [-q] [-e keysaltlist] \
      [-norandkey] [principal | -glob princ-exp] [...]\n";
 
-/// MIT `rem_usage` (`kadmin/cli/keytab.c:60-64`): the `ktremove` usage line, on stderr.
+// MIT: `rem_usage` (kadmin/cli/keytab.c:60-64)
+/// the `ktremove` usage line, on stderr.
 pub(crate) const KTREM_USAGE: &str =
     "Usage: ktremove [-k[eytab] keytab] [-q] principal [kvno|\"all\"|\"old\"]\n";
 
@@ -82,10 +85,7 @@ pub(crate) const MALFORMED: &str = "Malformed representation of principal";
 pub(crate) const BAD_MASTER_KEY: &str =
     "Unable to decrypt latest master key with the provided master key\n";
 
-/// The text MIT's library gives for a store error on a principal operation; a database error
-/// carries MIT's own: `KRB5_KDB_CANTLOCK_DB`'s for a lock that may not be taken, the database's
-/// name for a database file that may not be written.
-/// MIT `ctx_lock` (`kdb_db2.c:441-463`): a lock that may not be taken is `KRB5_KDB_CANTLOCK_DB`; a database file that does not reopen read-write is named.
+/// The text MIT's library gives for a store error on a principal operation; a database error carries MIT's own: `KRB5_KDB_CANTLOCK_DB`'s for a lock that may not be taken, the database's name for a database file that may not be written.
 pub(crate) fn princ_text(e: &Error) -> String {
     match e {
         Error::AlreadyExists => DUP.to_owned(),
@@ -94,8 +94,7 @@ pub(crate) fn princ_text(e: &Error) -> String {
     }
 }
 
-/// The text for a store error on a policy operation: the policy database is opened as a file,
-/// so a refused write is the system's own text.
+/// The text for a store error on a policy operation: the policy database is opened as a file, so a refused write is the system's own text.
 pub(crate) fn policy_text(e: &Error) -> String {
     match e {
         Error::NotFound => UNK_POLICY.to_owned(),
@@ -115,8 +114,7 @@ fn common_text(e: &Error) -> String {
     }
 }
 
-/// MIT `passwd_check` (`server_misc.c:107-137`): the `kadm_err.et` text of a refused password,
-/// or the quality module's own message.
+/// the `kadm_err.et` text of a refused password, or the quality module's own message.
 fn password_text(s: &str) -> String {
     if s.contains("min_length") {
         "Password is too short".to_owned()

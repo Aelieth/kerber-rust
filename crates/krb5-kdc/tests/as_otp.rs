@@ -61,10 +61,10 @@ impl OtpVerifier for Scripted {
         self.name
     }
 
-    fn verify(&self, req: &OtpVerifyRequest<'_>) -> OtpVerdict {
+    fn verify(&self, req: &OtpVerifyRequest) -> OtpVerdict {
         self.calls.lock().unwrap().push(Call {
-            token_type: req.token_type.to_owned(),
-            username: req.username.to_vec(),
+            token_type: req.token_type.clone(),
+            username: req.username.clone(),
             otp_value: req.otp_value.to_vec(),
         });
         self.script
@@ -375,7 +375,8 @@ fn run_with_none(
     krb5_kdc::issue_as(store, &fast_req(a, vec![pa_otp(&a.key, plain, b"1")], n))
 }
 
-/// A PA 142 outside FAST is 24 with PREAUTH_FAILED text and no detail.
+// MIT: `otp_verify` (plugins/preauth/otp/main.c:300-301)
+/// a PA 142 outside FAST is 24, with the table text of that code.
 #[test]
 fn no_armor_is_24() {
     let store = realm(Some("[{}]"));
@@ -387,7 +388,7 @@ fn no_armor_is_24() {
     let (c, text, d) = code(&e);
     assert_eq!(c, 24);
     assert_eq!(text.as_deref(), Some("PREAUTH_FAILED"));
-    assert_eq!(d, None);
+    assert_eq!(d.as_deref(), Some("Preauthentication failed"));
 }
 
 /// The plugins stanza selects the module by name.
@@ -542,7 +543,8 @@ fn reject_is_24_with_a_fresh_hint() {
 }
 
 /// A rejection is the module's verify failure: `finish_verify_padata` writes its one line, and the AS_REQ line follows.
-/// MIT `finish_verify_padata` (`kdc/kdc_preauth.c:1224-1228`): the module's failure is logged once, under its name, with the message of its code.
+// MIT: `finish_verify_padata` (kdc/kdc_preauth.c:1224-1228)
+/// the module's failure is logged once, under its name, with the message of its code.
 #[test]
 fn a_rejection_is_logged_once_as_the_modules_verify_failure() {
     let _g = Guard;

@@ -1,19 +1,5 @@
-//! `principal.lockout`: the database's lockout attributes beside it, MIT klmdb's lockout split
-//! for a dump store. `kdb5_util create` and `load` make it; the KDC updates a record in place
-//! under the database's exclusive lock, with no temporary file, rename or sync, and never makes
-//! the file; every reader merges it over the database's own values, which stay the fallback for
-//! a principal it has no record of. A tool that writes the whole file writes a new one and
-//! renames it over the old, as a database save does, so a rewrite cut short leaves the old file
-//! whole. No open follows a symlink, so a link planted as the file is never written through.
-//!
-//! The file is text: a header line, then one line per principal holding its three attributes as
-//! ten-digit fields, a CRC-32 of them and its name, and its name, so a record keeps its offset
-//! and an update rewrites only its digits and checksum, in one write. A deleted principal's
-//! line is marked with `#` and dropped when the file is next rewritten. A line that does not
-//! parse or whose checksum fails, an update torn by a crash included, is no record: that
-//! principal's values are the database's again, the loss MIT accepts for lockout records it
-//! never syncs, and never a value no write made.
-//! MIT `open_lmdb_env` (`plugins/kdb/lmdb/kdb_lmdb.c:265-268`): the lockout environment is never synced, durability not being worth it.
+//! The KDC updates a record in place and does not create the file.
+// MIT: `open_lmdb_env` (plugins/kdb/lmdb/kdb_lmdb.c:265-268)
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
@@ -29,22 +15,17 @@ use super::{Lockout, LockoutUpdate};
 use crate::dblock::{DbLock, DbLockMode, suffixed};
 use crate::store::{Principal, PrincipalStore};
 
-/// The side file's suffix: `principal.lockout`, which Fedora's `file_contexts` labels as it
-/// labels the database (`principal.*`), never as a lock file (`principal.*.ok`).
+/// .lockout is labeled with the database, not as a lock file.
 pub const SUFFIX_LOCKOUT: &str = ".lockout";
 
 const HEADER: &[u8] = b"kerber-rust lockout 1\n";
-/// The digits of one attribute.
 const FIELD: usize = 10;
-/// The three attributes and the spaces between them.
 const VALUES: usize = 3 * FIELD + 2;
-/// The record's checksum, eight hex digits.
 const SUM: usize = 8;
-/// The attributes, a space and their checksum: what an update rewrites, in one write.
 const HEAD: usize = VALUES + 1 + SUM;
+/// A deleted principal's line, dropped when the file is rewritten.
 const DELETED: u8 = b'#';
 
-/// CRC-32 (IEEE 802.3), the table of its reflected polynomial.
 const CRC_TABLE: [u32; 256] = crc_table();
 
 const fn crc_table() -> [u32; 256] {
@@ -69,16 +50,25 @@ const fn crc_table() -> [u32; 256] {
     table
 }
 
-/// The checksum a record carries: the CRC-32 of its attributes' digits, a space and its name.
 fn checksum(values: &[u8], name: &[u8]) -> u32 {
+    crc32(values.iter().chain(b" ").chain(name))
+}
+
+pub(crate) fn crc32<'a>(bytes: impl IntoIterator<Item = &'a u8>) -> u32 {
     let mut c = !0u32;
-    for &b in values.iter().chain(b" ").chain(name) {
+    for &b in bytes {
         c = CRC_TABLE[usize::from(c.to_le_bytes()[0] ^ b)] ^ (c >> 8);
     }
     !c
 }
 
-/// The side file of the database at `db`.
+#[must_use]
+// mtime too: an in-place put keeps the length
+pub(crate) fn lockout_file_stamp(db: &Path) -> Option<(u64, u64, u64, i64, i64)> {
+    let m = std::fs::symlink_metadata(lockout_path(db)).ok()?;
+    Some((m.dev(), m.ino(), m.len(), m.mtime(), m.mtime_nsec()))
+}
+
 #[must_use]
 pub fn lockout_path(db: &Path) -> PathBuf {
     suffixed(db, SUFFIX_LOCKOUT)
@@ -88,7 +78,6 @@ fn len_u64(n: usize) -> u64 {
     u64::try_from(n).unwrap_or(u64::MAX)
 }
 
-/// `e` with `path` in its text, as a tool reports it.
 fn named(path: &Path, e: &io::Error) -> io::Error {
     io::Error::new(
         e.kind(),
@@ -96,7 +85,6 @@ fn named(path: &Path, e: &io::Error) -> io::Error {
     )
 }
 
-/// A record's attributes and checksum, as an update writes them.
 fn head(id: &str, l: Lockout) -> [u8; HEAD] {
     let values = format!(
         "{:010} {:010} {:010}",
@@ -121,7 +109,6 @@ fn record_line(id: &str, l: Lockout) -> Vec<u8> {
     line
 }
 
-/// The whole text of a side file holding `records`.
 fn render(records: &[(String, Lockout)]) -> Vec<u8> {
     let mut text = HEADER.to_vec();
     for (id, l) in records {
@@ -130,8 +117,7 @@ fn render(records: &[(String, Lockout)]) -> Vec<u8> {
     text
 }
 
-/// A line's attributes and principal, its newline taken off; `None` for a line that is no
-/// record: a deleted one's `#`, a torn one, one whose checksum fails.
+/// A bad checksum is no record; an update in place is not synced.
 fn parse_line(line: &[u8]) -> Option<(Lockout, &str)> {
     let field = |i: usize| -> Option<u32> {
         let start = i * (FIELD + 1);
@@ -166,18 +152,12 @@ fn parse_line(line: &[u8]) -> Option<(Lockout, &str)> {
     Some((lockout, std::str::from_utf8(name).ok()?))
 }
 
-/// What one read of the whole file found.
 #[derive(Debug, Default)]
 struct Index {
-    /// Each principal's record: its line's offset and its attributes when read.
     records: HashMap<String, (u64, Lockout)>,
-    /// Lines that are no live record: deleted, superseded or unreadable.
     dead: usize,
-    /// The file's length when read.
     len: u64,
-    /// Whether the file ends with a whole line, so a record can be added after it.
     whole: bool,
-    /// The file is not empty and does not start with this format's header: it is left alone.
     foreign: bool,
 }
 
@@ -210,7 +190,6 @@ fn index(bytes: &[u8]) -> Index {
     ix
 }
 
-/// Read the whole of `file`, however short its reads.
 fn read_all(file: &File) -> io::Result<Vec<u8>> {
     let mut out = Vec::new();
     let mut buf = vec![0u8; 64 * 1024];
@@ -223,7 +202,6 @@ fn read_all(file: &File) -> io::Result<Vec<u8>> {
     }
 }
 
-/// Read up to `buf.len()` bytes at `at`; the count read, short only at the end of the file.
 fn read_full_at(file: &File, buf: &mut [u8], at: u64) -> io::Result<usize> {
     let mut done = 0;
     while done < buf.len() {
@@ -239,8 +217,6 @@ fn read_full_at(file: &File, buf: &mut [u8], at: u64) -> io::Result<usize> {
     Ok(done)
 }
 
-/// Open the regular file at `path`, read-write or read-only: never through a symlink
-/// (`O_NOFOLLOW`, so a planted one fails the open with `ELOOP`), and never waiting on a FIFO.
 fn open_file(path: &Path, write: bool) -> io::Result<File> {
     let file = OpenOptions::new()
         .read(true)
@@ -256,20 +232,16 @@ fn open_file(path: &Path, write: bool) -> io::Result<File> {
     Ok(file)
 }
 
-/// The side file, open, with what the last read of it found.
 #[derive(Debug)]
 pub(crate) struct SideFile {
     path: PathBuf,
     file: File,
     writable: bool,
-    /// The file's device and inode when opened.
     id: (u64, u64),
     ix: Index,
 }
 
 impl SideFile {
-    /// Open the side file at `path` read-write, else read-only; `None` when there is none.
-    /// Nothing is created.
     fn open(path: &Path) -> io::Result<Option<Self>> {
         let (file, writable) = match open_file(path, true) {
             Ok(f) => (f, true),
@@ -283,7 +255,6 @@ impl SideFile {
         Self::with(path, file, writable).map(Some)
     }
 
-    /// Open the side file at `path` to read it alone; `None` when there is none.
     fn open_read(path: &Path) -> io::Result<Option<Self>> {
         match open_file(path, false) {
             Ok(f) => Self::with(path, f, false).map(Some),
@@ -311,9 +282,6 @@ impl SideFile {
         Ok(())
     }
 
-    /// Read the file again when it is no longer as this handle read it: another file at its
-    /// path (a symlink included, which then fails to open), or another length. `false` when it
-    /// is gone.
     fn refresh(&mut self) -> io::Result<bool> {
         let meta = match std::fs::symlink_metadata(&self.path) {
             Ok(m) => m,
@@ -340,7 +308,6 @@ impl SideFile {
         Ok(true)
     }
 
-    /// The record at `at` when it still is `id`'s.
     fn record_at(&self, at: u64, id: &str) -> io::Result<Option<Lockout>> {
         let mut buf = vec![0u8; HEAD + id.len() + 2];
         let n = read_full_at(&self.file, &mut buf, at)?;
@@ -351,7 +318,6 @@ impl SideFile {
             .map(|(l, _)| l))
     }
 
-    /// Where `id`'s record is now, read again when the file was rewritten under the index.
     fn locate(&mut self, id: &str) -> io::Result<Option<(u64, Lockout)>> {
         if let Some(&(at, _)) = self.ix.records.get(id) {
             if let Some(l) = self.record_at(at, id)? {
@@ -365,14 +331,10 @@ impl SideFile {
         Ok(None)
     }
 
-    /// `id`'s attributes as stored now; `None` when the file has no record of it.
     fn get(&mut self, id: &str) -> io::Result<Option<Lockout>> {
         Ok(self.locate(id)?.map(|(_, l)| l))
     }
 
-    /// Store `l` as `id`'s record: its digits and checksum rewritten where the record is, in one
-    /// write, else a line added at the end of the file (after the header in an empty file, after
-    /// a newline when the last line is torn).
     fn put(&mut self, id: &str, l: Lockout) -> io::Result<()> {
         if let Some((at, have)) = self.locate(id)? {
             if have != l {
@@ -398,7 +360,6 @@ impl SideFile {
         Ok(())
     }
 
-    /// Mark `id`'s record deleted.
     fn delete(&mut self, id: &str) -> io::Result<()> {
         if let Some((at, _)) = self.locate(id)? {
             self.file.write_all_at(&[DELETED], at)?;
@@ -408,10 +369,7 @@ impl SideFile {
         Ok(())
     }
 
-    /// Replace the file with one holding `records` alone: a new file written beside it and
-    /// renamed over it, keeping its owner, mode and SELinux context, as a database save does
-    /// ([`krb5_protocol::write_secret_file`]); the old file stays whole until the new one is in
-    /// place. Only a tool rewrites; the KDC never does.
+    /// A whole-file write is renamed over the old one, so a short write leaves it.
     fn rewrite(&mut self, records: &[(String, Lockout)]) -> io::Result<()> {
         krb5_protocol::write_secret_file(&self.path, &render(records))
             .map_err(|e| named(&self.path, &e))?;
@@ -430,30 +388,28 @@ impl SideFile {
     }
 }
 
-/// Make the side file of `db` holding `records`: a new 0600 file of the writer's, written beside
-/// its path and renamed onto it, with the SELinux context a new file at its path takes
-/// ([`krb5_protocol::write_fresh_secret_file`]).
 fn make(db: &Path, records: &[(String, Lockout)]) -> io::Result<()> {
     let path = lockout_path(db);
     krb5_protocol::write_fresh_secret_file(&path, &render(records)).map_err(|e| named(&path, &e))
 }
 
-/// Make the side file of `db` holding `records` beside a database that stays where it is (a
-/// `load -update`, a save that makes the database): a new file with the database's owner, group
-/// and permission bits and the SELinux context a new file at its path takes
-/// ([`krb5_protocol::write_secret_file_like`]), as install.md's upgrade step makes it by hand, so
-/// a root `load -update` of a realm a service user owns leaves that user's saves writable.
 fn make_beside(db: &Path, records: &[(String, Lockout)]) -> io::Result<()> {
     let path = lockout_path(db);
     krb5_protocol::write_secret_file_like(&path, db, &render(records)).map_err(|e| named(&path, &e))
 }
 
-/// The side file of `db` for a writer, opened read-write; `None` when there is none.
-///
-/// # Errors
-///
-/// The error of the open, the file named in its text: one the writer may only read is
-/// `PermissionDenied`, a symlink `ELOOP`.
+fn db_writable(db: &Path) -> bool {
+    OpenOptions::new().read(true).write(true).open(db).is_ok()
+}
+
+pub(crate) fn ensure_lockout_file(db: &Path) {
+    let path = lockout_path(db);
+    if path.symlink_metadata().is_ok() || !db_writable(db) {
+        return;
+    }
+    let _ = make(db, &[]);
+}
+
 fn open_for_writing(db: &Path) -> io::Result<Option<SideFile>> {
     let path = lockout_path(db);
     match SideFile::open(&path).map_err(|e| named(&path, &e))? {
@@ -466,9 +422,7 @@ fn open_for_writing(db: &Path) -> io::Result<Option<SideFile>> {
     }
 }
 
-/// Each principal's record in `db`'s side file, read now; empty when there is none, or it
-/// cannot be read or is no side file. Read it holding the database's lock.
-/// MIT `fetch_lockout` (`plugins/kdb/lmdb/kdb_lmdb.c:329-344`): a reader takes the lockout record when there is one and ignores a failure to read it.
+// MIT: `fetch_lockout` (plugins/kdb/lmdb/kdb_lmdb.c:329-344)
 #[must_use]
 pub fn lockout_records(db: &Path) -> HashMap<String, Lockout> {
     match SideFile::open_read(&lockout_path(db)) {
@@ -477,9 +431,7 @@ pub fn lockout_records(db: &Path) -> HashMap<String, Lockout> {
     }
 }
 
-/// Give each principal of `store` its record in `db`'s side file, when it has one: what a read
-/// of the database gives every reader. Read it holding the database's lock.
-/// MIT `klmdb_iterate` (`plugins/kdb/lmdb/kdb_lmdb.c:841-888`): every entry read takes its lockout record.
+// MIT: `klmdb_iterate` (plugins/kdb/lmdb/kdb_lmdb.c:841-888)
 pub fn merge_lockout_file(store: &mut PrincipalStore, db: &Path) {
     let records = lockout_records(db);
     if !records.is_empty() {
@@ -487,7 +439,6 @@ pub fn merge_lockout_file(store: &mut PrincipalStore, db: &Path) {
     }
 }
 
-/// The records a load or a create writes: each principal's attributes as `store` holds them.
 pub(crate) fn store_records(store: &PrincipalStore) -> Vec<(String, Lockout)> {
     let mut out: Vec<(String, Lockout)> = store
         .debug_principals()
@@ -497,17 +448,9 @@ pub(crate) fn store_records(store: &PrincipalStore) -> Vec<(String, Lockout)> {
     out
 }
 
-/// After a full load or a create, holding the database's exclusive lock: `records` become the
-/// side file of `db`, made when it is not there; with `merge`, a principal it already has a
-/// record of keeps that record, as an iprop load keeps a replica's own. A principal the load
-/// left out loses its record.
-/// MIT `klmdb_create` (`plugins/kdb/lmdb/kdb_lmdb.c:575-661`): a create or load makes the lockout environment when there is none and does not empty it.
-/// MIT `klmdb_put_principal` (`plugins/kdb/lmdb/kdb_lmdb.c:781-809`): each loaded entry's lockout attributes are written, kept under `merge_nra` when a record exists.
-///
-/// # Errors
-///
-/// The I/O error of opening, making or writing the side file, the file named in its text; one
-/// the writer may only read is `PermissionDenied`.
+// MIT: `klmdb_create` (plugins/kdb/lmdb/kdb_lmdb.c:575-661)
+// MIT: `klmdb_put_principal` (plugins/kdb/lmdb/kdb_lmdb.c:781-809)
+/// With merge, a record already there is kept, as an iprop load keeps the replica's own.
 pub(crate) fn write_loaded(
     db: &Path,
     records: &[(String, Lockout)],
@@ -530,12 +473,6 @@ pub(crate) fn write_loaded(
     side.rewrite(&content)
 }
 
-/// Make `db`'s side file when it is not there, holding the database's exclusive lock, owned and
-/// moded as the database ([`make_beside`]): a load whose dump has no principal record.
-///
-/// # Errors
-///
-/// As [`write_loaded`].
 pub(crate) fn ensure(db: &Path) -> io::Result<()> {
     match open_for_writing(db)? {
         Some(_) => Ok(()),
@@ -543,19 +480,31 @@ pub(crate) fn ensure(db: &Path) -> io::Result<()> {
     }
 }
 
-/// After a change written to the database `db` holding its exclusive lock, with the store read
-/// again under that lock: bring the side file in line with `store`. A principal whose
-/// attributes the change set (an unlock, a key change, a load's update) gets them as its record,
-/// a new one a record, a deleted one's record is marked, a renamed one's moves with it; a file
-/// with more marked lines than records is rewritten. With `make_missing` a missing side file
-/// is made, owned and moded as the database ([`make_beside`]); without it nothing is made. One
-/// that is no side file is left as it is.
-/// MIT `klmdb_put_principal` (`plugins/kdb/lmdb/kdb_lmdb.c:781-809`): a put whose mask names a lockout attribute, or a new entry, writes the lockout record.
-/// MIT `klmdb_delete_principal` (`plugins/kdb/lmdb/kdb_lmdb.c:819-838`): a delete removes the lockout record too.
-///
-/// # Errors
-///
-/// As [`write_loaded`].
+// MIT: `klmdb_delete_principal` (plugins/kdb/lmdb/kdb_lmdb.c:819-838)
+pub(crate) fn reconcile_ids(store: &PrincipalStore, db: &Path, ids: &[String]) -> io::Result<()> {
+    let Some(mut side) = open_for_writing(db)? else {
+        return Ok(());
+    };
+    if side.ix.foreign {
+        return Ok(());
+    }
+    for id in ids {
+        match store.principal_by_id(id) {
+            Some(p) => {
+                let l = Lockout::of(p);
+                if side.ix.records.get(id).map(|&(_, have)| have) != Some(l) {
+                    side.put(id, l)?;
+                }
+            }
+            None => side.delete(id)?,
+        }
+    }
+    if side.ix.dead > side.ix.records.len() {
+        side.rewrite(&store_records(store))?;
+    }
+    Ok(())
+}
+
 pub(crate) fn reconcile(store: &PrincipalStore, db: &Path, make_missing: bool) -> io::Result<()> {
     let want = store_records(store);
     let Some(mut side) = open_for_writing(db)? else {
@@ -594,12 +543,6 @@ pub(crate) fn reconcile(store: &PrincipalStore, db: &Path, make_missing: bool) -
     Ok(())
 }
 
-/// Whether a writer may change `db`'s side file: there is none, or it is a regular file that
-/// opens read-write. A symlink there is refused (`ELOOP`), never followed.
-///
-/// # Errors
-///
-/// The error of opening an existing side file read-write, the file named in its text.
 pub(crate) fn check_writable(db: &Path) -> io::Result<()> {
     let path = lockout_path(db);
     match open_file(&path, true) {
@@ -609,8 +552,6 @@ pub(crate) fn check_writable(db: &Path) -> io::Result<()> {
     }
 }
 
-/// Apply `update` at `stamp` to `id`'s record as `side` holds it now (else to `p`'s attributes)
-/// and write it.
 fn record(
     side: &mut SideFile,
     id: &str,
@@ -622,9 +563,6 @@ fn record(
     side.put(id, update.apply(base, stamp))
 }
 
-/// What a process keeps of the lockout attributes: the database's side file, open, and the
-/// attributes it records in memory while the database has none it may write. Shared by every
-/// copy of a store and kept across its reads of the database.
 #[derive(Debug, Default)]
 pub(crate) struct LockoutState {
     inner: Mutex<Inner>,
@@ -639,8 +577,6 @@ struct Inner {
 }
 
 impl Inner {
-    /// The side file of `db`, opened when this process has none open for it; on the first
-    /// opening of one it may write, the attributes kept in memory give way to it.
     fn side(&mut self, db: &Path) -> Option<&mut SideFile> {
         let path = lockout_path(db);
         if self.side.as_ref().is_none_or(|s| s.path != path) {
@@ -680,11 +616,6 @@ impl LockoutState {
         self.inner.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// `p`'s lockout attributes now: its record in the side file of `db`, opened and read
-    /// holding `lock` shared, else what the store read; while this process has no side file it
-    /// may write, what it records for `p` in memory comes first. Once it has one, what it kept
-    /// in memory for `p` is dropped, so an update it could not write is lost, as MIT's KDC
-    /// loses a lockout write that fails.
     pub(crate) fn lookup(
         &self,
         db: Option<&Path>,
@@ -713,11 +644,6 @@ impl LockoutState {
             .unwrap_or_else(|| Lockout::of(p))
     }
 
-    /// Record `update` for `p` at `stamp`: in its side-file record, holding `lock` exclusively,
-    /// starting from the record as it is then (else from `p`'s attributes), which drops what
-    /// was kept in memory for `p`; without a side file this process may write, or when the
-    /// write fails, in memory, which is said once for each cause in the log. The database's lock
-    /// is taken before this state's mutex, so lookups go on while an update waits for the lock.
     pub(crate) fn update(
         &self,
         db: Option<&Path>,
@@ -750,25 +676,38 @@ impl LockoutState {
                 }
                 Some(Err(e)) => {
                     let msg = format!(
-                        "{}: {e}: lockout attributes are kept in memory",
+                        "{}: {e}: lockout counting is off",
                         lockout_path(db).display()
                     );
                     Inner::tell_once(&mut inner.told_unwritable, &msg);
+                    return;
                 }
-                None if !inner.told_absent => {
-                    let path = lockout_path(db);
-                    let why = match SideFile::open(&path) {
-                        Err(e) => klog::os_error_text(&e),
-                        Ok(Some(_)) => "no lockout file".to_owned(),
-                        Ok(None) => "does not exist".to_owned(),
-                    };
-                    let msg = format!(
-                        "{}: {why}: lockout attributes are kept in memory until it is made",
-                        path.display()
-                    );
-                    Inner::tell_once(&mut inner.told_absent, &msg);
+                None => {
+                    if db_writable(db)
+                        && lockout_path(db).symlink_metadata().is_err()
+                        && make(db, &[]).is_ok()
+                        && let Some(side) = inner.side(db)
+                        && side.writable
+                        && record(side, &id, p, stamp, update).is_ok()
+                    {
+                        inner.overlay.remove(&id);
+                        return;
+                    }
+                    if !inner.told_absent {
+                        let path = lockout_path(db);
+                        let why = match SideFile::open(&path) {
+                            Err(e) => klog::os_error_text(&e),
+                            Ok(Some(_)) => "no lockout file".to_owned(),
+                            Ok(None) => "does not exist".to_owned(),
+                        };
+                        let msg = format!(
+                            "{path}: {why}: lockout counting is off",
+                            path = path.display()
+                        );
+                        Inner::tell_once(&mut inner.told_absent, &msg);
+                    }
+                    return;
                 }
-                None => {}
             }
         }
         let base = inner
@@ -779,14 +718,12 @@ impl LockoutState {
         inner.overlay.insert(id, update.apply(base, stamp));
     }
 
-    /// Zero the failed authentication count kept in memory for `id`, when one is kept.
     pub(crate) fn overlay_zero(&self, id: &str) {
         if let Some(l) = self.inner().overlay.get_mut(id) {
             l.fail_auth_count = 0;
         }
     }
 
-    /// The attributes kept in memory for `id`, if any.
     pub(crate) fn overlay_get(&self, id: &str) -> Option<Lockout> {
         self.inner().overlay.get(id).copied()
     }
@@ -937,7 +874,7 @@ mod tests {
             ..LockoutUpdate::default()
         };
         state.update(Some(&db), Some(&lock), &p, 100, update);
-        assert_eq!(state.overlay_get(&p.id()).unwrap().fail_auth_count, 1);
+        assert!(state.overlay_get(&p.id()).is_none(), "counting stays off");
         assert_eq!(
             std::fs::read(&victim).unwrap(),
             content,

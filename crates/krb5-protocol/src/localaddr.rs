@@ -1,5 +1,4 @@
-//! The host's own addresses (`lib/krb5/os/localaddr.c`), which a KRB-PRIV's or KRB-SAFE's receiver
-//! address is looked up in when the auth context holds no local address of its own.
+//! Host addresses a KRB-PRIV or KRB-SAFE checks when no local address is set.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
@@ -9,14 +8,10 @@ use nix::net::if_::InterfaceFlags;
 
 use crate::error::Error;
 
-/// The host's addresses, in interface order.
-/// MIT `krb5_os_localaddr` (`lib/krb5/os/localaddr.c:1311-1315`): the addresses of the interfaces that are up, through `getifaddrs`, as [`host_addresses_from`] picks them.
-/// MIT `get_localaddrs` (`lib/krb5/os/localaddr.c:1317-1368`): the addresses `[libdefaults] extra_addresses` names, then the interfaces'; the first part is not read.
-///
-/// # Errors
-///
-/// [`Error::Io`] when `getifaddrs` fails, carrying the errno's text as MIT's callers print it
-/// (`getifaddrs_error`).
+// MIT: `krb5_os_localaddr` (lib/krb5/os/localaddr.c:1311-1315)
+// MIT: `get_localaddrs` (lib/krb5/os/localaddr.c:1317-1368)
+/// extra_addresses is not read.
+/// A failed getifaddrs is Io, with the errno text.
 pub fn os_localaddr() -> Result<Vec<HostAddress>, Error> {
     let interfaces = getifaddrs().map_err(getifaddrs_error)?;
     Ok(host_addresses_from(interfaces.map(|i| {
@@ -29,8 +24,6 @@ pub fn os_localaddr() -> Result<Vec<HostAddress>, Error> {
     })))
 }
 
-/// The error of a failed `getifaddrs`: its errno, with the text `error_message` gives it.
-/// MIT `krb5_os_localaddr` (`lib/krb5/os/localaddr.c:1311-1315`): the call returns that errno, which `kinit -a` prints as `<text> getting local addresses`.
 fn getifaddrs_error(errno: nix::errno::Errno) -> Error {
     let raw = errno as i32;
     Error::Io {
@@ -40,12 +33,8 @@ fn getifaddrs_error(errno: nix::errno::Errno) -> Error {
     }
 }
 
-/// The address list an AS-REQ carries when the caller set none of its own.
-/// MIT `krb5_init_creds_init` (`lib/krb5/krb/get_in_tkt.c:998-1005`): `[libdefaults] noaddresses` absent or true sends none, and false sends [`os_localaddr`]'s list.
-///
-/// # Errors
-///
-/// As [`os_localaddr`], when `noaddresses` is false.
+// MIT: `krb5_init_creds_init` (lib/krb5/krb/get_in_tkt.c:998-1005)
+/// Absent or true sends none.
 pub fn init_creds_addresses(noaddresses: Option<bool>) -> Result<Option<Vec<HostAddress>>, Error> {
     init_creds_addresses_from(noaddresses, os_localaddr)
 }
@@ -61,10 +50,9 @@ fn init_creds_addresses_from(
     }
 }
 
-/// The host addresses of interface entries `(is up, address)`, an address of another family or
-/// none being `None`.
-/// MIT `foreach_localaddr` (`lib/krb5/os/localaddr.c:415-481`): an entry that is down, has no address, holds the loopback address (exactly 127.0.0.1 or ::1, not the rest of 127/8) or repeats the address of an earlier kept entry is passed over.
-/// MIT `add_addr` (`lib/krb5/os/localaddr.c:1162-1195`): makes `ADDRTYPE_INET` of an IPv4 address and `ADDRTYPE_INET6` of an IPv6 one, an IPv4-mapped one included, and drops a link-local IPv6 address (fe80::/10).
+// MIT: `foreach_localaddr` (lib/krb5/os/localaddr.c:415-481)
+/// A down, empty, loopback, or repeated entry is skipped.
+// MIT: `add_addr` (lib/krb5/os/localaddr.c:1162-1195)
 #[must_use]
 pub fn host_addresses_from(
     entries: impl IntoIterator<Item = (bool, Option<IpAddr>)>,
@@ -80,8 +68,8 @@ pub fn host_addresses_from(
     kept.into_iter().filter_map(host_address).collect()
 }
 
-/// MIT `is_loopback_address` (`localaddr.c:179-190`): `INADDR_LOOPBACK` and `in6addr_loopback`
-/// only.
+// MIT: `is_loopback_address` (localaddr.c:179-190)
+/// Only 127.0.0.1 and ::1.
 fn is_loopback(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => v4 == Ipv4Addr::LOCALHOST,
@@ -97,7 +85,7 @@ fn host_address(ip: IpAddr) -> Option<HostAddress> {
         }),
         IpAddr::V6(v6) => {
             let o = v6.octets();
-            // IN6_IS_ADDR_LINKLOCAL: fe80::/10.
+            // fe80::/10 is link-local and is dropped.
             if o[0] == 0xfe && o[1] & 0xc0 == 0x80 {
                 return None;
             }
@@ -179,8 +167,6 @@ mod tests {
         }
     }
 
-    /// Interface entries `(is up, address)` of a multi-homed host: loopbacks, a bridge that is down,
-    /// an entry with no address, a link-local IPv6 address, and three addresses that count.
     fn multi_homed_host() -> Vec<(bool, Option<IpAddr>)> {
         vec![
             (true, Some(v4(127, 0, 0, 1))),
@@ -198,8 +184,6 @@ mod tests {
     }
 
     /// `kinit -a` and a false `noaddresses` send this list, not the one address a route towards 8.8.8.8 picks.
-    /// MIT `foreach_localaddr` (`lib/krb5/os/localaddr.c:415-481`): every up entry that is not a loopback or a repeat, in interface order.
-    /// MIT `add_addr` (`lib/krb5/os/localaddr.c:1162-1195`): IPv6 addresses are `ADDRTYPE_INET6`, and a link-local one is dropped.
     #[test]
     fn a_multi_homed_host_lists_every_up_address_ipv6_included_in_interface_order() {
         let want = vec![
@@ -213,7 +197,6 @@ mod tests {
         assert_eq!(sent.unwrap(), Some(want));
     }
 
-    /// MIT `krb5_init_creds_init` (`lib/krb5/krb/get_in_tkt.c:998-1005`): only a `noaddresses` that is false reads the interfaces.
     #[test]
     fn noaddresses_false_alone_reads_the_interfaces() {
         let read = std::cell::Cell::new(0);
@@ -233,7 +216,6 @@ mod tests {
         assert_eq!(read.get(), 1);
     }
 
-    /// MIT `krb5_os_localaddr` (`lib/krb5/os/localaddr.c:1311-1315`): a `getifaddrs` that fails returns its errno, and `noaddresses = false` fails the request with it.
     #[test]
     fn a_failed_getifaddrs_is_the_errno_and_fails_a_false_noaddresses() {
         match getifaddrs_error(nix::errno::Errno::EACCES) {

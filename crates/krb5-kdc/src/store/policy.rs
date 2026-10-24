@@ -1,8 +1,5 @@
-//! Realm ticket policy (`alt_prof.c`, `kdc/main.c`) and named
-//! kadm5 `osa_policy_ent` (`svr_policy.c`): defaults, kdc.conf /
-//! krb5.conf overlay, and the policy CRUD on the store.
-//! MIT `init_realm` (`kdc/main.c:316-319`): the realm's `max_renewable_life` is read into
-//! `realm_maxrlife`, `KRB5_KDB_MAX_RLIFE` (7 d) when omitted.
+//! Named policies and the realm ticket policy.
+// MIT: `init_realm` (kdc/main.c:316-319)
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -12,37 +9,31 @@ use krb5_types::pac::RpcSid;
 
 use super::PrincipalStore;
 use super::keys::{KeyEntry, KeyLookup, default_supported_enctypes};
-use super::principal::{Principal, refresh_kadm_tl};
+use super::principal::{Principal, default_mod_actor, refresh_kadm_tl, stamp_admin_tl};
 use super::transit::permitted_transited;
 use crate::error::Error;
 
-/// Named dump/kadm5 password policy.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NamedPolicy {
-    /// Policy name.
     pub name: String,
-    /// Minimum password length.
     pub min_length: u32,
-    /// Distinct character classes required (0 = none).
+    /// 0 requires no class.
     pub min_classes: u32,
-    /// History depth (0 = unused).
+    /// 0 keeps no history.
     pub history: u32,
-    /// Failures before lockout (0 = no lockout).
+    /// 0 means no lockout.
     pub max_fail: u32,
-    /// Seconds after `last_failed` after which the fail count resets (0 = never).
+    /// 0 never resets the count.
     pub pw_failcnt_interval: u32,
-    /// Seconds the lock lasts after `last_failed` (0 = until a successful AS).
+    /// 0 lasts until a successful AS.
     pub pw_lockout_duration: u32,
-    /// MIT `pw_min_life` seconds (`osa_policy_ent`).
     pub pw_min_life: u32,
-    /// MIT `pw_max_life` seconds; 0 = no password expiration.
+    /// 0 sets no password expiration.
     pub pw_max_life: u32,
-    /// MIT `osa_policy_ent.allowed_keysalts`; `None` is NULL (getpol omits the line).
     pub allowed_keysalts: Option<String>,
 }
 
 impl NamedPolicy {
-    /// Name-only policy with no quality/lockout rules.
     #[must_use]
     pub fn new(name: impl Into<String>) -> Self {
         Self {
@@ -60,107 +51,56 @@ impl NamedPolicy {
     }
 }
 
-/// Realm-wide ticket policy.
 #[derive(Clone, Debug)]
 pub struct Policy {
-    /// Max ticket lifetime seconds (MIT `alt_prof.c`: omitted = 24 h).
+    /// Omitted is 24 hours; 0 sets no limit.
     pub max_life: u64,
-    /// kadm5 create default.
-    /// MIT `kadm5_get_config_params` (`alt_prof.c:577-578`): `max_rlife` omitted = 0.
+    // MIT: `kadm5_get_config_params` (alt_prof.c:577-578)
+    /// Omitted is 0, which means no renewal.
     pub max_renewable_life: u64,
-    /// KDC issue cap.
-    /// MIT `init_realm` (`kdc/main.c:316-319`): `realm_maxrlife` omitted = 7 d.
+    /// Omitted is 7 days.
     pub realm_max_renewable_life: u64,
-    /// Clock skew seconds.
     pub skew: i64,
-    /// Allow weak etypes.
     pub allow_weak_crypto: bool,
-    /// MIT `allow_rc4` (session keys).
     pub allow_rc4: bool,
-    /// MIT `allow_des3` (session keys).
     pub allow_des3: bool,
-    /// MIT `permitted_enctypes`. `None` = DEFAULT (every implemented type).
     pub permitted_enctypes: Option<Vec<EncryptionType>>,
-    /// MIT `supported_enctypes`. Empty = MIT's default, aes256-cts-hmac-sha1-96 and
-    /// aes128-cts-hmac-sha1-96.
     pub supported_enctypes: Vec<EncryptionType>,
-    /// Default requires_preauth for new principals.
     pub requires_preauth: bool,
-    /// MIT `[realms] default_principal_flags`: the `handle->params.flags` a
-    /// kadm5 create takes when `KADM5_ATTRIBUTES` is not in the mask.
-    /// MIT `kadm5_get_config_params` (`alt_prof.c:596-632`): the stanza is parsed
-    /// into `params.flags`. `None` = the stanza is absent (MIT
-    /// `KRB5_KDB_DEF_FLAGS` 0; here the `requires_preauth` knob's bit).
+    // MIT: `kadm5_get_config_params` (alt_prof.c:596-632)
     pub default_principal_flags: Option<u32>,
-    /// MIT `[realms] default_principal_expiration`: `handle->params.expiration`,
-    /// the `expiration` of a create without `KADM5_PRINC_EXPIRE_TIME`.
-    /// MIT `kadm5_get_config_params` (`alt_prof.c:580-594`): the stanza goes
-    /// through `krb5_string_to_timestamp`. 0 when absent or unparsable (MIT
-    /// leaves the zeroed field).
+    // MIT: `kadm5_get_config_params` (alt_prof.c:580-594)
     pub default_principal_expiration: u32,
-    /// `[capaths]` client → server → intermediates (`.` = direct).
     pub capaths: BTreeMap<String, BTreeMap<String, Vec<String>>>,
-    /// MIT `reject_bad_transit` (default true).
     pub reject_bad_transit: bool,
-    /// MIT `disable_pac` (default false): issue no PAC.
     pub disable_pac: bool,
-    /// kdc.conf `domain_sid` is set: the realm has an AD identity, so a PAC minted for one of its
-    /// principals has AD data and takes the AD shape (`ad.rs` `pac_has_ad_data`). Unset (the
-    /// default), the KDC issues MIT's PAC.
     pub ad_identity: bool,
-    /// MIT `restrict_anonymous_to_tgt` (default false).
     pub restrict_anon: bool,
-    /// MIT `pkinit_require_freshness` (default false).
     pub pkinit_require_freshness: bool,
-    /// MIT `host_based_services` (NT-UNKNOWN referral allow-list).
     pub host_based_services: String,
-    /// MIT `no_host_referral` (service-type deny-list).
     pub no_host_referral: String,
-    /// `[domain_realm]` for `krb5_get_host_realm`.
     pub domain_realm: BTreeMap<String, String>,
-    /// `[realms] encrypted_challenge_indicator` (single).
     pub encrypted_challenge_indicator: Option<String>,
-    /// `[realms] pkinit_indicator` (repeatable).
     pub pkinit_indicators: Vec<String>,
-    /// `[realms] spake_preauth_indicator` (repeatable).
     pub spake_preauth_indicators: Vec<String>,
-    /// `[libdefaults] spake_preauth_groups`: the groups the KDC permits, in configuration order.
-    /// Empty, MIT's KDC default, leaves the SPAKE module unloaded.
-    /// MIT `DEFAULT_GROUPS_KDC` (`groups.c:60-60`): the KDC's default group list is empty.
+    /// Empty leaves the SPAKE module unloaded.
+    // MIT: `DEFAULT_GROUPS_KDC` (groups.c:60-60)
     pub spake_preauth_groups: Vec<SpakeGroup>,
-    /// `[kdcdefaults] spake_preauth_kdc_challenge`, as written: the group of the optimistic
-    /// challenge the KDC sends with PREAUTH_REQUIRED. `None` = none.
     pub spake_preauth_kdc_challenge: Option<String>,
-    /// `[dbmodules] disable_last_success`: the KDC records no successful authentication.
     pub disable_last_success: bool,
-    /// `[dbmodules] disable_lockout`: the KDC neither counts failed authentications nor
-    /// checks the lockout policy.
     pub disable_lockout: bool,
-    /// `[plugins] kdcpreauth` `disable` and `enable_only`. Absent relations load every named module.
-    ///
-    /// MIT `k5_plugin_load_all` (`lib/krb5/krb/plugin.c:421-455`): the KDC walks the modules that remain loaded.
+    // MIT: `k5_plugin_load_all` (lib/krb5/krb/plugin.c:421-455)
     pub kdcpreauth: krb5_config::PluginRelations,
-    /// `[plugins] kdcpolicy` `disable` and `enable_only`. Absent relations load every named module.
-    ///
-    /// MIT `load_kdcpolicy_plugins` (`kdc/policy.c:194-246`): the KDC walks the modules that remain loaded.
+    // MIT: `load_kdcpolicy_plugins` (kdc/policy.c:194-246)
     pub kdcpolicy: krb5_config::PluginRelations,
-    /// `[plugins] audit` `disable` and `enable_only`. Absent relations load every named module.
-    ///
-    /// MIT `load_audit_modules` (`kdc/kdc_audit.c:71-84`): `k5_plugin_load_all` applies that profile.
+    // MIT: `load_audit_modules` (kdc/kdc_audit.c:71-84)
     pub audit: krb5_config::PluginRelations,
-    /// `[plugins] pwqual` `disable` and `enable_only`. Absent relations load every named module.
-    ///
-    /// MIT `k5_pwqual_load` (`lib/kadm5/srv/pwqual.c:42-96`): `k5_plugin_load_all` applies that profile.
+    // MIT: `k5_pwqual_load` (lib/kadm5/srv/pwqual.c:42-96)
     pub pwqual: krb5_config::PluginRelations,
-    /// `[plugins] kadm5_hook` `disable` and `enable_only`. Absent relations load every named module.
-    ///
-    /// MIT `k5_kadm5_hook_load` (`lib/kadm5/srv/kadm5_hook.c:40-94`): `k5_plugin_load_all` applies that profile.
+    // MIT: `k5_kadm5_hook_load` (lib/kadm5/srv/kadm5_hook.c:40-94)
     pub kadm5_hook: krb5_config::PluginRelations,
-    /// The otp module's token types from `[otp]` in kdc.conf, then krb5.conf, or why the module did not
-    /// initialize (then it is left out). Without a section the built-in `DEFAULT` is the only type.
-    ///
-    /// MIT `otp_state_new` (`plugins/preauth/otp/otp_state.c:579-585`): the types come from the KDC context's profile once, when the module starts.
-    /// MIT `reset_for_hangup` (`kdc/kdc_util.c:1916-1922`): SIGHUP refreshes the database configuration and does not read `[otp]` again.
+    // MIT: `otp_state_new` (plugins/preauth/otp/otp_state.c:579-585)
+    // MIT: `reset_for_hangup` (kdc/kdc_util.c:1916-1922)
     pub otp: Result<Vec<krb5_config::OtpType>, krb5_config::OtpInitError>,
 }
 
@@ -207,29 +147,24 @@ impl Default for Policy {
     }
 }
 
-/// The KDC's SPAKE module as MIT loads it: the permitted groups and the optimistic challenge group.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SpakeKdc<'a> {
-    /// The permitted groups, in configuration order.
     pub groups: &'a [SpakeGroup],
-    /// The group of the challenge sent with PREAUTH_REQUIRED, if one is configured.
     pub challenge: Option<SpakeGroup>,
 }
 
-/// The permitted groups of a `spake_preauth_groups` value split into words by the profile parser.
+/// A list that names no enctype permits nothing.
+// MIT: `krb5int_parse_enctype_list` (lib/krb5/krb/init_ctx.c:497-500)
+fn parse_permitted(names: &[String], allow_weak: bool) -> Vec<EncryptionType> {
+    krb5_crypto::parse_enctype_list(&names.join(" "), allow_weak).unwrap_or_default()
+}
+
 fn parse_spake_preauth_groups(words: &[String]) -> Vec<SpakeGroup> {
     spake_parse_groups(&words.join(" "))
 }
 
 impl Policy {
-    /// The SPAKE module's configuration, or the message MIT logs when the module does not load.
-    ///
-    /// MIT `group_init_state` (`groups.c:213-281`): no permitted group, or a challenge group that is unknown or not permitted, fails the module's init.
-    ///
-    /// # Errors
-    ///
-    /// MIT's message when the module would not load: "No SPAKE preauth groups configured", or
-    /// "SPAKE challenge group not a permitted group: " and the configured value.
+    // MIT: `group_init_state` (groups.c:213-281)
     pub fn spake_kdc(&self) -> Result<SpakeKdc<'_>, String> {
         if self.spake_preauth_groups.is_empty() {
             return Err("No SPAKE preauth groups configured".to_owned());
@@ -251,18 +186,11 @@ impl Policy {
         })
     }
 
-    /// The otp module's token types, or the reason it does not initialize.
-    ///
-    /// MIT `otp_init` (`plugins/preauth/otp/main.c:195-206`): a failed `otp_state_new` fails the module's init.
-    ///
-    /// # Errors
-    ///
-    /// The [`krb5_config::OtpInitError`] of the first `[otp]` section that does not decode.
+    // MIT: `otp_init` (plugins/preauth/otp/main.c:195-206)
     pub fn otp_kdc(&self) -> Result<&[krb5_config::OtpType], &krb5_config::OtpInitError> {
         self.otp.as_deref()
     }
 
-    /// MIT `krb5_check_transited_list`: anonymous crealm passes; then capaths if present, else hierarchical.
     #[must_use]
     pub(crate) fn transit_allowed(&self, crealm: &str, srealm: &str, hops: &[String]) -> bool {
         if crealm == "WELLKNOWN:ANONYMOUS" {
@@ -276,7 +204,6 @@ impl Policy {
             .all(|h| h == crealm || h == srealm || permitted.iter().any(|p| p == h))
     }
 
-    /// MIT `krb5_is_permitted_enctype`.
     #[must_use]
     pub fn etype_permitted(&self, e: EncryptionType) -> bool {
         self.permitted_enctypes
@@ -284,8 +211,7 @@ impl Policy {
             .is_none_or(|v| v.contains(&e))
     }
 
-    /// The KDC context's `permitted_enctypes` as a list, MIT's `DEFAULT` one when none is set.
-    /// MIT `krb5_get_permitted_enctypes` (`lib/krb5/krb/init_ctx.c:573-595`): with no `permitted_enctypes`, the `DEFAULT` list, filtered by `allow_weak_crypto`.
+    // MIT: `krb5_get_permitted_enctypes` (lib/krb5/krb/init_ctx.c:573-595)
     #[must_use]
     pub fn permitted_list(&self) -> Vec<EncryptionType> {
         self.permitted_enctypes.clone().unwrap_or_else(|| {
@@ -293,14 +219,6 @@ impl Policy {
         })
     }
 
-    /// MIT `krb5_dbe_find_enctype` under this policy's `permitted_enctypes`
-    /// ([`Principal::find_enctype`] with [`Policy::etype_permitted`]).
-    ///
-    /// # Errors
-    ///
-    /// [`KeyLookup::NoMatchingKey`] when no key of `p` matches `etype`/`kvno` at all;
-    /// [`KeyLookup::NoPermittedKey`] when `etype` itself, or every matching key, is outside
-    /// `permitted_enctypes`.
     pub fn find_enctype<'p>(
         &self,
         p: &'p Principal,
@@ -310,25 +228,17 @@ impl Policy {
         p.find_enctype(etype, kvno, |e| self.etype_permitted(e))
     }
 
-    /// MIT `get_first_current_key` (`kdc_util.c:462-473`): the first
-    /// *permitted* key of the highest kvno, `krb5_dbe_find_enctype(-1, -1, 0)`.
-    ///
-    /// # Errors
-    ///
-    /// [`KeyLookup::NoMatchingKey`] when there are no keys,
-    /// [`KeyLookup::NoPermittedKey`] when none at the top kvno is permitted.
+    // MIT: `get_first_current_key` (kdc_util.c:462-473)
     pub fn first_current_key<'p>(&self, p: &'p Principal) -> Result<&'p KeyEntry, KeyLookup> {
         self.find_enctype(p, None, 0)
     }
 
-    /// MIT `krb5_get_host_realm` profile half (no DNS).
     #[must_use]
     pub fn realm_for_host(&self, host: &str) -> Option<&str> {
         krb5_config::host_to_realm(&self.domain_realm, host)
     }
 
-    /// Long-term keys minted by addprinc/cpw when `-e` is omitted.
-    /// MIT `kadm5_get_config_params` (`lib/kadm5/alt_prof.c:650-654`): the realm's `supported_enctypes`, else `KRB5_DEFAULT_SUPPORTED_ENCTYPES`.
+    // MIT: `kadm5_get_config_params` (lib/kadm5/alt_prof.c:650-654)
     #[must_use]
     pub fn password_etypes(&self) -> Vec<EncryptionType> {
         if self.supported_enctypes.is_empty() {
@@ -340,12 +250,6 @@ impl Policy {
 }
 
 impl PrincipalStore {
-    /// Apply `kdc.conf` ticket policy. `dict_file` is not read here: the password dictionary is
-    /// the admin side's ([`Self::init_pwqual`]), and the KDC never reads it.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Crypto`] when `domain_sid` is not valid SDDL.
     pub fn apply_kdc_conf(&mut self, conf: &krb5_config::KdcConf) -> Result<(), Error> {
         self.policy.max_life = conf.max_life;
         self.policy.max_renewable_life = conf.max_renewable_life;
@@ -359,15 +263,16 @@ impl PrincipalStore {
         if let Some(v) = conf.allow_des3 {
             self.policy.allow_des3 = v;
         }
-        if !conf.permitted_enctypes.is_empty() {
-            self.policy.permitted_enctypes = krb5_crypto::parse_enctype_list(
-                &conf.permitted_enctypes.join(" "),
-                self.policy.allow_weak_crypto,
-            );
+        if let Some(names) = &conf.permitted_enctypes {
+            self.policy.permitted_enctypes =
+                Some(parse_permitted(names, self.policy.allow_weak_crypto));
         }
         if !conf.supported_enctypes.is_empty() {
             self.policy.supported_enctypes =
                 krb5_crypto::parse_keysalt_list(&conf.supported_enctypes.join(" "));
+        }
+        if let Some(skew) = conf.clockskew {
+            self.policy.skew = skew;
         }
         self.policy.requires_preauth = conf.requires_preauth;
         self.policy.default_principal_flags = conf
@@ -384,7 +289,6 @@ impl PrincipalStore {
         self.policy.disable_lockout = conf.disable_lockout;
         self.policy.disable_pac = conf.disable_pac;
         self.policy.restrict_anon = conf.restrict_anon;
-        self.policy.pkinit_require_freshness = conf.pkinit_require_freshness;
         self.policy
             .host_based_services
             .clone_from(&conf.host_based_services);
@@ -394,9 +298,6 @@ impl PrincipalStore {
         self.policy
             .encrypted_challenge_indicator
             .clone_from(&conf.encrypted_challenge_indicator);
-        self.policy
-            .pkinit_indicators
-            .clone_from(&conf.pkinit_indicators);
         self.policy
             .spake_preauth_indicators
             .clone_from(&conf.spake_preauth_indicators);
@@ -424,11 +325,7 @@ impl PrincipalStore {
         Ok(())
     }
 
-    /// `[otp]` from kdc.conf, then krb5.conf. A missing file adds no sections.
-    ///
-    /// This replaces the kdc.conf-only value [`Self::apply_kdc_conf`] stored.
-    /// MIT `add_kdc_config_file` (`lib/krb5/os/init_os_ctx.c:339-366`): kdc.conf is inserted ahead of the krb5.conf files.
-    /// MIT `otp_state_new` (`plugins/preauth/otp/otp_state.c:579-585`): the types are read once, from the KDC context's profile.
+    // MIT: `add_kdc_config_file` (lib/krb5/os/init_os_ctx.c:339-366)
     pub fn apply_otp(
         &mut self,
         kdc: Option<&krb5_config::KdcConf>,
@@ -442,10 +339,6 @@ impl PrincipalStore {
         );
     }
 
-    /// `[plugins] kdcpreauth` from kdc.conf, then krb5.conf. A missing file adds no relations.
-    ///
-    /// This replaces the kdc.conf-only value [`Self::apply_kdc_conf`] stored.
-    /// MIT `add_kdc_config_file` (`lib/krb5/os/init_os_ctx.c:339-366`): kdc.conf is inserted ahead of the krb5.conf files.
     pub fn apply_kdcpreauth_plugins(
         &mut self,
         kdc: Option<&krb5_config::KdcConf>,
@@ -460,11 +353,6 @@ impl PrincipalStore {
         );
     }
 
-    /// `[plugins] kdcpolicy` from kdc.conf, then krb5.conf. A missing file adds no relations.
-    ///
-    /// This replaces the kdc.conf-only value [`Self::apply_kdc_conf`] stored.
-    /// MIT `add_kdc_config_file` (`lib/krb5/os/init_os_ctx.c:339-366`): kdc.conf is inserted ahead of the krb5.conf files.
-    /// MIT `load_kdcpolicy_plugins` (`kdc/policy.c:194-246`): `k5_plugin_load_all` applies that profile.
     pub fn apply_kdcpolicy_plugins(
         &mut self,
         kdc: Option<&krb5_config::KdcConf>,
@@ -479,10 +367,6 @@ impl PrincipalStore {
         );
     }
 
-    /// `[plugins] audit` from kdc.conf, then krb5.conf. A missing file adds no relations.
-    ///
-    /// This replaces the kdc.conf-only value [`Self::apply_kdc_conf`] stored.
-    /// MIT `load_audit_modules` (`kdc/kdc_audit.c:71-84`): `k5_plugin_load_all` applies that profile.
     pub fn apply_audit_plugins(
         &mut self,
         kdc: Option<&krb5_config::KdcConf>,
@@ -497,10 +381,6 @@ impl PrincipalStore {
         );
     }
 
-    /// `[plugins] pwqual` from kdc.conf, then krb5.conf. A missing file adds no relations.
-    ///
-    /// This replaces the kdc.conf-only value [`Self::apply_kdc_conf`] stored.
-    /// MIT `k5_pwqual_load` (`lib/kadm5/srv/pwqual.c:42-66`): `k5_plugin_load_all` applies that profile.
     pub fn apply_pwqual_plugins(
         &mut self,
         kdc: Option<&krb5_config::KdcConf>,
@@ -515,10 +395,6 @@ impl PrincipalStore {
         );
     }
 
-    /// `[plugins] kadm5_hook` from kdc.conf, then krb5.conf. A missing file adds no relations.
-    ///
-    /// This replaces the kdc.conf-only value [`Self::apply_kdc_conf`] stored.
-    /// MIT `k5_kadm5_hook_load` (`lib/kadm5/srv/kadm5_hook.c:40-94`): `k5_plugin_load_all` applies that profile.
     pub fn apply_kadm5_hook_plugins(
         &mut self,
         kdc: Option<&krb5_config::KdcConf>,
@@ -533,10 +409,46 @@ impl PrincipalStore {
         );
     }
 
-    /// Overlay `[libdefaults]` `allow_rc4` / `allow_des3` / `permitted_enctypes`.
+    pub fn apply_profile(&mut self, profile: &krb5_config::ProfileSet) -> Result<(), Error> {
+        self.set_capaths(profile.krb5.capaths.clone());
+        self.apply_libdefaults(&profile.krb5);
+        let (kdc, krb5) = (profile.kdc.as_ref(), Some(&profile.krb5));
+        if let Some(conf) = kdc {
+            self.apply_kdc_conf(conf)?;
+        }
+        let pkinit = krb5_config::PkinitParams::for_realm(&profile.kdc_context, &self.realm);
+        self.policy.pkinit_require_freshness = pkinit.require_freshness;
+        self.policy.pkinit_indicators = pkinit.indicators;
+        self.apply_kdcpreauth_plugins(kdc, krb5);
+        self.apply_otp(kdc, krb5);
+        self.apply_kdcpolicy_plugins(kdc, krb5);
+        self.apply_audit_plugins(kdc, krb5);
+        self.apply_pwqual_plugins(kdc, krb5);
+        self.apply_kadm5_hook_plugins(kdc, krb5);
+        Ok(())
+    }
+
+    // MIT: `load_preauth_plugins` (kdc/kdc_preauth.c:207-219)
+    pub fn init_pkinit(&mut self, profile: &krb5_config::ProfileSet) -> Option<String> {
+        self.env.pkinit = None;
+        if !crate::plugins::startup_module_loaded(&self.policy.kdcpreauth, "pkinit") {
+            return None;
+        }
+        let params = krb5_config::PkinitParams::for_realm(&profile.kdc_context, &self.realm);
+        match crate::pkinit::PkinitKdc::init(&params, &self.realm) {
+            Ok(kdc) => {
+                self.env.pkinit = Some(std::sync::Arc::new(kdc));
+                None
+            }
+            Err(msg) => Some(msg),
+        }
+    }
+
+    pub fn set_pkinit(&mut self, pkinit: Option<crate::pkinit::PkinitKdc>) {
+        self.env.pkinit = pkinit.map(std::sync::Arc::new);
+    }
+
     pub fn apply_libdefaults(&mut self, conf: &krb5_config::Krb5Conf) {
-        // krb5.conf [libdefaults] is the base; kdc.conf overrides it (applied
-        // last in the KDC bin), so `allow_weak_crypto` here reaches the KDC.
         self.policy.allow_weak_crypto = conf.allow_weak_crypto;
         if let Some(v) = conf.allow_rc4 {
             self.policy.allow_rc4 = v;
@@ -544,91 +456,68 @@ impl PrincipalStore {
         if let Some(v) = conf.allow_des3 {
             self.policy.allow_des3 = v;
         }
-        if !conf.permitted_enctypes.is_empty() {
-            self.policy.permitted_enctypes = krb5_crypto::parse_enctype_list(
-                &conf.permitted_enctypes.join(" "),
+        if let Some(names) = &conf.permitted_enctypes {
+            self.policy.permitted_enctypes = Some(parse_permitted(
+                names,
                 self.policy.allow_weak_crypto || conf.allow_weak_crypto,
-            );
+            ));
         }
         if let Some(names) = &conf.spake_preauth_groups {
             self.policy.spake_preauth_groups = parse_spake_preauth_groups(names);
         }
+        // MIT: `krb5_init_context_profile` (lib/krb5/krb/init_ctx.c:251-252)
+        self.policy.skew = i64::from(conf.clockskew);
         self.policy.domain_realm.clone_from(&conf.domain_realm);
     }
 
-    /// Named password policies.
     #[must_use]
     pub fn policies(&self) -> &HashMap<String, NamedPolicy> {
         &self.policies
     }
 
-    /// Insert or replace a named policy; a failed save is not reported (see
-    /// [`Self::put_policy_and_save`]).
-    pub fn put_policy(&mut self, pol: NamedPolicy) {
-        let _ = self.put_policy_and_save(pol);
+    pub fn put_policy(&mut self, pol: NamedPolicy) -> Result<(), Error> {
+        self.change(|s| {
+            s.note_ulog_reset();
+            s.policies.insert(pol.name.clone(), pol);
+            s.save_if_configured()
+        })?
     }
 
-    /// Insert or replace a named policy and save the store when it persists.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Db`] when the store cannot be saved, a writer that may not write the database
-    /// included; the policy stays in memory and nothing on disk changes.
-    pub fn put_policy_and_save(&mut self, pol: NamedPolicy) -> Result<(), Error> {
-        self.note_ulog_reset();
-        self.policies.insert(pol.name.clone(), pol);
-        self.save_if_configured()
-    }
-
-    /// Load a dump policy without logging (dump/iprop apply).
     pub(crate) fn load_policy(&mut self, pol: NamedPolicy) {
         self.policies.insert(pol.name.clone(), pol);
     }
 
-    /// Delete a named policy.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::NotFound`] when no policy is named `name`; [`Error::Db`] when saving the
-    /// store to `persist_paths` fails.
     pub fn delete_policy(&mut self, name: &str) -> Result<(), Error> {
-        self.policies.remove(name).ok_or(Error::NotFound)?;
-        self.note_ulog_reset();
-        self.save_if_configured()
+        self.change(|s| {
+            s.policies.remove(name).ok_or(Error::NotFound)?;
+            s.note_ulog_reset();
+            s.save_if_configured()
+        })?
     }
 
-    /// Bind `princ` to `policy` (None unbinds).
-    ///
-    /// # Errors
-    ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
-    /// store to `persist_paths` fails.
     pub fn set_principal_policy(
         &mut self,
         name: &PrincipalName,
         policy: Option<String>,
     ) -> Result<(), Error> {
         let realm = self.realm.clone();
-        self.set_principal_policy_in(name, &realm, policy)
+        self.set_principal_policy_in(name, &realm, policy, &default_mod_actor(&realm))
     }
 
-    /// [`Self::set_principal_policy`] for `name@princ_realm`.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
-    /// store to `persist_paths` fails.
     pub(crate) fn set_principal_policy_in(
         &mut self,
         name: &PrincipalName,
         princ_realm: &str,
         policy: Option<String>,
+        actor: &str,
     ) -> Result<(), Error> {
+        self.inside_change()?;
         let id = self.canonical_id(name, princ_realm)?;
         {
             let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
             p.pw_policy = policy;
             refresh_kadm_tl(p);
+            stamp_admin_tl(p, false, actor);
         }
         self.apply_pw_max_life_in(name, princ_realm)?;
         let snap = self.map.get(&id).cloned();
@@ -636,7 +525,6 @@ impl PrincipalStore {
         self.save_if_configured()
     }
 
-    /// Max failures from the bound policy (0 = no lockout).
     #[must_use]
     pub fn max_fail_for(&self, p: &Principal) -> u32 {
         p.pw_policy
@@ -645,7 +533,6 @@ impl PrincipalStore {
             .map_or(0, |pol| pol.max_fail)
     }
 
-    /// Bound named policy, if any.
     #[must_use]
     pub(crate) fn named_policy_for(&self, p: &Principal) -> Option<NamedPolicy> {
         p.pw_policy

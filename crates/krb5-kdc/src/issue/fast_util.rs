@@ -1,6 +1,3 @@
-//! FAST (`fast_util.c`): hide-client-names, FAST option check
-//! (`:226`), and the AS FAST error wrap (`kdc_fast_handle_error`).
-
 use krb5_asn1::{decode, encode};
 use krb5_types::{AsReq, HostAddress, KdcReqBody, MethodData, PaData, TgsReq, err, pa};
 
@@ -14,15 +11,12 @@ use crate::preauth::{
 };
 use crate::status;
 
-/// RFC 6113 bit 1 (`KRB5_FAST_OPTION_HIDE_CLIENT_NAMES`, MIT 0x40000000): the
-/// only non-reserved critical FAST option, honoured rather than refused.
 const FAST_HIDE_CLIENT_NAMES_BIT: usize = 1;
 
+/// Bit 1 is kept; other critical bits are refused.
 pub(super) fn check_fast_options(opts: &krb5_types::fast::FastOptions) -> Result<(), Error> {
-    // MIT `kdc_find_fast` (`fast_util.c:226-226`): rejects only
-    // UNSUPPORTED_CRITICAL_FAST_OPTIONS = 0xbfff0000 (RFC bits 0 and 2..15). Bit 1
-    // (hide-client-names) is honoured (kdc_fast_hide_client), so it is skipped here rather
-    // than refused.
+    // MIT: `kdc_find_fast` (fast_util.c:226-226)
+    // MIT: `UNSUPPORTED_CRITICAL_FAST_OPTIONS` (include/k5-int.h:802-802)
     let n = opts.len().min(16);
     for i in 0..n {
         if i == FAST_HIDE_CLIENT_NAMES_BIT {
@@ -38,8 +32,7 @@ pub(super) fn check_fast_options(opts: &krb5_types::fast::FastOptions) -> Result
     Ok(())
 }
 
-/// MIT `kdc_fast_hide_client` (`fast_util.c:444-444`): the request set RFC 6113 bit 1, so the
-/// reply's outer client name/realm become the anonymous principal.
+// MIT: `kdc_fast_hide_client` (fast_util.c:444-444)
 pub(super) fn fast_hides_client(opts: &krb5_types::fast::FastOptions) -> bool {
     opts.len() > FAST_HIDE_CLIENT_NAMES_BIT && opts[FAST_HIDE_CLIENT_NAMES_BIT]
 }
@@ -95,9 +88,8 @@ pub(super) fn peek_tgs_hides_client(
     .is_some_and(|f| fast_hides_client(&f.fast_options))
 }
 
-/// MIT `kdc_fast_handle_error` (`fast_util.c:382-386`): with no armor key the error is
-/// unchanged, and the inner error carries no e-data. The caller's e-data travels as FAST padata
-/// beside the inner error, so the outer error alone is not the protected result.
+// MIT: `kdc_fast_handle_error` (fast_util.c:382-386)
+/// Caller's e-data is padata, not the inner error.
 pub(super) fn wrap_as_fast(
     store: &dyn PrincipalRead,
     fast: Option<&FastOk>,
@@ -143,9 +135,7 @@ pub(super) fn wrap_as_fast(
     };
     let mut padata = as_preauth.unwrap_or_else(|| decode_edata_padata(&inner_ed));
     padata = with_fx_cookie(store, body.cname.as_ref(), padata);
-    // MIT `kdc_fast_handle_error` (`fast_util.c:384-386`): the inner PA-FX-ERROR KRB-ERROR has
-    // empty e_data; the caller's e_data (plus cookie) travels as FAST inner padata next to
-    // FX-ERROR.
+    // MIT: `kdc_fast_handle_error` (fast_util.c:384-386)
     let inner_err = encode_krb_error(store, code, text.as_deref(), None, Some(body), false);
     padata.push(PaData {
         padata_type: pa::FX_ERROR,

@@ -1,6 +1,5 @@
-//! `kadmin.local` on a database file it does not read: the open fails with MIT's text before the
-//! master key is asked for, with the stash as with `-m` (settled live on MIT 1.22.2).
-//! MIT `kadm5_init` (`lib/kadm5/srv/server_init.c:234-256`): the database is opened before the caller's name is parsed and the master key fetched.
+//! `kadmin.local` on a database file it does not read: the open fails with MIT's text before the master key is asked for, with the stash as with `-m` (settled live on MIT 1.22.2).
+//! the database is opened before the caller's name is parsed and the master key fetched.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -8,7 +7,6 @@ use std::process::{Command, Output, Stdio};
 
 use krb5_testkit::scratch_dir;
 
-/// The documented test realm saved as a database a kdc.conf names, as `kadmin.local` finds it.
 fn realm(tag: &str) -> PathBuf {
     let dir = scratch_dir(tag);
     let (store, _) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
@@ -76,8 +74,6 @@ fn a_database_file_that_is_no_database_is_refused_before_the_master_key() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// MIT 1.22.2's own db2 headers (settled live): a btree `principal` from `kdb5_util create`, a
-/// hash one from `-x hash=true`. Either is named with the way over and left as it was.
 #[test]
 fn an_mit_db2_database_is_named_with_the_way_over_before_the_master_key() {
     let dir = realm("kadmin-local-mit-db2");
@@ -109,9 +105,6 @@ fn an_mit_db2_database_is_named_with_the_way_over_before_the_master_key() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The database's lock files open with it, before the master key is typed or read, as MIT's
-/// `kadm5_init` opens them (settled live on MIT 1.22.2): with `-m` no prompt is printed, and with
-/// no stash the missing lock file is named, not the stash.
 #[test]
 fn a_database_without_its_lock_files_is_refused_before_the_master_key() {
     let dir = realm("kadmin-local-no-lock-files");

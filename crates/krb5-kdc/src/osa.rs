@@ -1,47 +1,42 @@
-//! MIT `KRB5_TL_KADM_DATA`: the XDR `osa_princ_ent_rec` kadm5 keeps in every
-//! principal (`lib/kadm5/srv/adb_xdr.c`) — the bound policy, `aux_attributes`,
-//! and the password history: `old_keys` holds one entry per old password, its
-//! key data encrypted under the `kadmin/history` key of `admin_history_kvno`
-//! (`svr_principal.c create_history_entry`, `add_to_history`, `check_pw_reuse`).
+//! Kadm5 history record.
 
 use krb5_crypto::{EncryptionType, ProtocolKey, kdb_decrypt_key, kdb_encrypt_key};
 
 use crate::kdb_dump::TL_KADM_DATA;
 use crate::store::{KeyEntry, TlData};
 
-/// `OSA_ADB_PRINC_VERSION_1`.
 pub(crate) const OSA_ADB_PRINC_VERSION_1: u32 = 0x1234_5c01;
-/// `KADM5_POLICY` in `aux_attributes`: a policy is bound.
 pub const KADM5_POLICY: u32 = 0x0000_0800;
-/// `INITIAL_HIST_KVNO` (`server_internal.h`): the history kvno a new record starts at.
 pub(crate) const INITIAL_HIST_KVNO: u32 = 2;
 
-/// One `krb5_key_data` as stored in an `osa_pw_hist_ent`: slot 0 is the key
-/// (`kdb_encrypt_key` form) under the history key, slot 1 the salt.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct OsaKeyData {
-    /// `key_data_ver`: 1 (key only) or 2 (key + salt).
     pub ver: u16,
-    /// `key_data_kvno`.
     pub kvno: u16,
-    /// `key_data_type[0..2]`: enctype, salt type.
     pub types: [i16; 2],
-    /// `key_data_contents[0..2]`.
     pub contents: [Vec<u8>; 2],
 }
 
-/// `osa_princ_ent_rec`.
+impl std::fmt::Debug for OsaKeyData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OsaKeyData")
+            .field("ver", &self.ver)
+            .field("kvno", &self.kvno)
+            .field("types", &self.types)
+            .field(
+                "contents",
+                &[self.contents[0].len(), self.contents[1].len()],
+            )
+            .finish()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OsaPrincEnt {
-    /// Bound policy name (meaningful with [`KADM5_POLICY`] in `aux_attributes`).
     pub policy: Option<String>,
-    /// `aux_attributes`.
     pub aux_attributes: u32,
-    /// `old_key_next`: the ring slot the next history entry overwrites.
     pub old_key_next: u32,
-    /// `admin_history_kvno`: kvno of the history key that encrypted `old_keys`.
     pub admin_history_kvno: u32,
-    /// `old_keys`: one entry per remembered old password.
     pub old_keys: Vec<Vec<OsaKeyData>>,
 }
 
@@ -57,13 +52,10 @@ impl Default for OsaPrincEnt {
     }
 }
 
-/// Malformed `KRB5_TL_KADM_DATA`.
 #[derive(Debug, thiserror::Error)]
 pub enum OsaError {
-    /// Not `OSA_ADB_PRINC_VERSION_1`.
     #[error("osa_princ_ent version {0:#x}")]
     Version(u32),
-    /// Truncated or mis-sized XDR.
     #[error("osa_princ_ent xdr: {0}")]
     Xdr(&'static str),
 }
@@ -95,7 +87,8 @@ impl<'a> Xdr<'a> {
         Ok(s)
     }
 
-    /// `xdr_nullstring`: size 0 is NULL; else `size` counts the NUL.
+    /// A zero size is no policy.
+    /// A policy's size counts its trailing NUL.
     fn nullstring(&mut self) -> Result<Option<String>, OsaError> {
         let s = self.bytes()?;
         match s.split_last() {
@@ -158,13 +151,6 @@ impl OsaKeyData {
 }
 
 impl OsaPrincEnt {
-    /// Decode a `KRB5_TL_KADM_DATA` value.
-    ///
-    /// # Errors
-    ///
-    /// [`OsaError::Version`] when the first word is not `OSA_ADB_PRINC_VERSION_1`, and
-    /// [`OsaError::Xdr`] when the XDR is short, the policy is not a NUL-terminated UTF-8 string, or
-    /// a key field is out of range or its length does not match.
     pub fn decode(b: &[u8]) -> Result<Self, OsaError> {
         let mut x = Xdr { b, i: 0 };
         let version = x.u32()?;
@@ -194,7 +180,6 @@ impl OsaPrincEnt {
         })
     }
 
-    /// Encode as `xdr_osa_princ_ent_rec` does.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(24);
@@ -220,12 +205,6 @@ impl OsaPrincEnt {
         out
     }
 
-    /// The record inside `tl`, if present.
-    ///
-    /// # Errors
-    ///
-    /// [`OsaError::Version`] or [`OsaError::Xdr`] when the first `KRB5_TL_KADM_DATA` value has the
-    /// wrong version word or malformed XDR.
     pub fn from_tl(tl: &[TlData]) -> Result<Option<Self>, OsaError> {
         tl.iter()
             .find(|t| t.ty == TL_KADM_DATA)
@@ -233,7 +212,6 @@ impl OsaPrincEnt {
             .transpose()
     }
 
-    /// The bound policy name (`kadm5_get_principal`: only with [`KADM5_POLICY`]).
     #[must_use]
     pub fn bound_policy(&self) -> Option<&str> {
         if self.aux_attributes & KADM5_POLICY != 0 {
@@ -243,8 +221,8 @@ impl OsaPrincEnt {
         }
     }
 
-    /// `old_keys` oldest first: the ring's next slot is the oldest entry.
     #[must_use]
+    /// The next ring slot is the oldest entry.
     pub fn old_keys_oldest_first(&self) -> Vec<&Vec<OsaKeyData>> {
         let n = self.old_keys.len();
         if n == 0 {
@@ -255,12 +233,6 @@ impl OsaPrincEnt {
     }
 }
 
-/// `create_history_entry`: the keys of one password (their own kvno and salt)
-/// re-encrypted under the history key.
-///
-/// # Errors
-///
-/// `krb5_crypto::Error::Rng` when the CSPRNG fails while a key is encrypted under `hist_key`.
 pub fn history_entry(
     keys: &[KeyEntry],
     hist_key: &ProtocolKey,
@@ -285,9 +257,8 @@ pub fn history_entry(
     Ok(entry)
 }
 
-/// `check_pw_reuse`'s reading side: an entry's keys decrypted with the
-/// history key; a key that does not decrypt is skipped like MIT's `continue`.
 #[must_use]
+/// A key that does not decrypt is skipped.
 pub fn decrypt_entry(entry: &[OsaKeyData], hist_key: &ProtocolKey) -> Vec<KeyEntry> {
     entry
         .iter()

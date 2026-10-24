@@ -1,26 +1,23 @@
 //! Kerberos V5 AS, TGS, AP, SAFE/PRIV/CRED exchanges (RFC 4120).
-//!
-//! Transport is UDP with TCP fallback. Preauthentication covers
-//! PA-ENC-TIMESTAMP / ETYPE-INFO2, FAST armor, SPAKE and PKINIT padata
-//! (`preauth`). Keytab (v1/v2) and the FILE, DIR, MEMORY and KCM ccaches
-//! live here so the KDC does not depend on the client crate; so do RFC
-//! 3244 password change (`chpw`), `krb5_verify_init_creds`
-//! (`vfy_increds`), the replay cache (`replay`), and the capture /
-//! differential tooling (`capture`, `diff`). There is no C FFI.
-//!
-//! The public surface is the names this root re-exports. Child modules
-//! stay private, but for `trace`, MIT's `KRB5_TRACE` log and its trace
-//! points, which the tools call where MIT's library does.
+//! Transport is UDP, with TCP fallback.
+//! Keytabs and ccaches live here so the KDC does not depend on the client crate.
+//! There is no C FFI.
+//! Child modules stay private, except trace, which the tools call where MIT's library does.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+mod acceptor_conf;
 mod ap_rep;
 mod ap_req;
 mod as_ex;
 mod auth_con;
 mod builders;
+#[allow(
+    clippy::disallowed_methods,
+    reason = "a test-hooks build's capture switch"
+)]
 mod capture;
 mod ccache;
 mod ccache_dir;
@@ -48,29 +45,32 @@ pub mod trace;
 mod transport;
 mod vfy_increds;
 
+pub use acceptor_conf::AcceptorConfig;
 pub use ap_rep::{build_ap_rep, verify_ap_rep};
 pub use ap_req::{
-    ApVerifyOk, ApVerifyParams, DEFAULT_SKEW, KeytabGetEntry, KeytabLookup, address_search,
-    build_ap_req, build_ap_req_from_authenticator, build_ap_req_mutual_seq, build_ap_req_opts,
-    build_ap_req_with_cksum, sname_match, verify_ap_req, verify_ap_req_ex,
+    ApAuthenticator, ApVerifyOk, ApVerifyParams, DEFAULT_SKEW, KeytabGetEntry, KeytabLookup,
+    address_search, build_ap_req, build_ap_req_from_authenticator, build_ap_req_mutual_seq,
+    build_ap_req_opts, build_ap_req_with_cksum, generate_ap_authenticator, sname_match,
+    verify_ap_req, verify_ap_req_ex,
 };
 pub use as_ex::{
     AsOutcome, AsPrompt, AsRequest, AsTicketOpts, DEFAULT_PREFERRED_PREAUTH_TYPES, FastArmor,
-    IdentifyReply, OtpChallengeView, OtpTokenView, PasswordPrompt, PkinitClient, PreauthPrompt,
-    PromptType, QUESTION_OTP, QUESTION_PASSWORD, Responder, ResponderItems, as_exchange,
-    as_exchange_defer_fast, as_exchange_interactive, as_exchange_key, as_exchange_prompted,
-    as_exchange_prompted_defer_fast, as_exchange_with_keys, as_exchange_with_keys_defer_fast,
-    as_exchange_with_unreadable_keytab, as_exchange_with_unreadable_keytab_defer_fast,
-    as_identify_realm, as_init_creds_options, check_as_rep_times, conf_etypes,
-    conf_preferred_preauth_types, insert_module_padata_before_info_pa, sort_krb5_padata_sequence,
-    verify_as_reply_req_times, verify_as_reply_server,
+    IdentifyReply, OtpChallengeView, OtpTokenView, PasswordPrompt, Pkinit, PkinitClient,
+    PkinitFailure, PreauthPrompt, PromptType, QUESTION_OTP, QUESTION_PASSWORD, Responder,
+    ResponderItems, as_exchange, as_exchange_defer_fast, as_exchange_interactive, as_exchange_key,
+    as_exchange_prompted, as_exchange_prompted_defer_fast, as_exchange_with_keys,
+    as_exchange_with_keys_defer_fast, as_exchange_with_unreadable_keytab,
+    as_exchange_with_unreadable_keytab_defer_fast, as_identify_realm, as_init_creds_options,
+    check_as_rep_times, conf_etypes, insert_module_padata_before_info_pa, set_service_restart,
+    sort_krb5_padata_sequence, verify_as_reply_req_times, verify_as_reply_server,
+    warn_deprecated_enctype,
 };
 #[cfg(feature = "test-hooks")]
 pub use auth_con::set_test_seq_random;
 pub use auth_con::{
     AUTH_CONTEXT_DO_SEQUENCE, AUTH_CONTEXT_DO_TIME, AUTH_CONTEXT_USE_SUBKEY, AcceptorAuthContext,
     RemoteSeq, check_ticket_etype, generate_seq_number, local_host_address,
-    negotiate_ap_req_etypes, permitted_enctypes, permitted_enctypes_kdc, us_timeofday,
+    negotiate_ap_req_etypes, us_timeofday,
 };
 pub use builders::{
     TgsReqParams, as_req, as_req_sname, pa_enc_timestamp, pa_enc_timestamp_at, tgs_req, tgs_req_ex,
@@ -93,7 +93,10 @@ pub use chpw::{
     chpw_result_code_string, format_chpw_failure, key_exp_should_changepw, parse_chpw_rep,
     parse_chpw_result, set_password,
 };
-pub use clpreauth::{ClPreauth, clear_thread_clpreauth, register_clpreauth, set_thread_clpreauth};
+pub use clpreauth::{
+    ClPreauth, clear_thread_clpreauth, loaded as clpreauth_loaded, register_clpreauth,
+    set_thread_clpreauth,
+};
 #[cfg(feature = "diff")]
 pub use diff::{
     DiffError, StableKrbError, StableRep, compare_krb_error, compare_preauth_e_data,
@@ -113,24 +116,25 @@ pub use keytab::{
 pub use localaddr::{host_addresses_from, init_creds_addresses, os_localaddr};
 pub use lock_file::{FileLock, lock_file, lock_file_how};
 pub use preauth::{
-    apply_strengthen, armor_key, attach_fast, attach_fast_with_options, build_fast_armor,
-    fx_fast_padata, fx_fast_padata_over, pa_for_user, pa_pac_options, pa_pk_as_req,
-    pa_pk_as_req_agile, pa_pk_as_req_cn, pa_pk_as_req_signed, pa_pk_as_req_spki,
+    KdcTrust, apply_strengthen, armor_key, attach_fast, attach_fast_with_options, build_fast_armor,
+    fx_fast_padata, fx_fast_padata_over, pa_for_user, pa_pac_options, pa_pk_as_req_signed,
     pa_pk_as_req_unsigned, pa_s4u_x509_user, pa_spake_response, pa_spake_support, pkinit_reply_key,
     pkinit_reply_key_agile, unwrap_fast_rep, unwrap_fast_rep_checked, verify_fast_finished,
     verify_req_enc_pa_rep, verify_s4u2self_reply,
 };
+#[cfg(any(test, feature = "test-ca"))]
+pub use preauth::{pa_pk_as_req, pa_pk_as_req_agile, pa_pk_as_req_cn, pa_pk_as_req_spki};
 pub use replay::{ReplayCache, ReplayKey};
 pub use safe_priv::{
-    build_krb_cred, build_krb_priv, build_krb_priv_chained, build_krb_priv_chained_from,
-    build_krb_priv_from, build_krb_priv_with_seq, build_krb_safe, build_krb_safe_ex,
-    build_krb_safe_from, check_privsafe_addrs, check_privsafe_addrs_in, unwrap_krb_cred,
-    unwrap_krb_priv, unwrap_krb_priv_chained, unwrap_krb_priv_ex, unwrap_krb_safe,
-    unwrap_krb_safe_ex, verify_krb_safe_checksum, verify_krb_safe_checksum_in,
+    build_krb_cred, build_krb_priv_chained, build_krb_priv_chained_from, build_krb_priv_from,
+    build_krb_priv_with_seq, build_krb_safe_ex, build_krb_safe_from, check_privsafe_addrs,
+    check_privsafe_addrs_in, unwrap_krb_cred, unwrap_krb_priv, unwrap_krb_priv_chained,
+    unwrap_krb_priv_ex, unwrap_krb_safe, unwrap_krb_safe_ex, verify_krb_safe_checksum,
+    verify_krb_safe_checksum_in,
 };
 pub use secret_file::{
-    check_secret_file_writable, destroy_secret_file, read_secret_file, write_fresh_secret_file,
-    write_secret_file, write_secret_file_like,
+    check_secret_file_writable, destroy_secret_file, read_secret_file, read_stash_file,
+    write_fresh_secret_file, write_secret_file, write_secret_file_like,
 };
 #[cfg(target_os = "linux")]
 pub use selabel::create_labeled;

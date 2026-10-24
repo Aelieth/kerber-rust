@@ -1,11 +1,6 @@
-//! AES CBC-CS3 (RFC 3962 / NIST SP 800-38A addendum), matching MIT krb5 1.22.2.
-//!
-//! An AES key that is not 16 or 32 bytes is `Error::InvalidKeyLength`.
-//! The block size is 16.
-
 use aes::{
     Aes128, Aes256,
-    cipher::{BlockDecrypt, BlockEncrypt, KeyInit, generic_array::GenericArray},
+    cipher::{BlockCipherDecrypt, BlockCipherEncrypt, KeyInit, consts::U16},
 };
 use camellia::{Camellia128, Camellia256};
 
@@ -15,31 +10,30 @@ pub(crate) const BLOCK: usize = 16;
 
 pub(crate) fn encrypt(key: &[u8], iv: &[u8; BLOCK], plaintext: &[u8]) -> Result<Vec<u8>, Error> {
     match key.len() {
-        16 => encrypt_with(Aes128::new(GenericArray::from_slice(key)), iv, plaintext),
-        32 => encrypt_with(Aes256::new(GenericArray::from_slice(key)), iv, plaintext),
+        16 => encrypt_with(keyed::<Aes128>(key)?, iv, plaintext),
+        32 => encrypt_with(keyed::<Aes256>(key)?, iv, plaintext),
         _ => Err(Error::InvalidKeyLength),
     }
 }
 
 pub(crate) fn decrypt(key: &[u8], iv: &[u8; BLOCK], ciphertext: &[u8]) -> Result<Vec<u8>, Error> {
     match key.len() {
-        16 => decrypt_with(Aes128::new(GenericArray::from_slice(key)), iv, ciphertext),
-        32 => decrypt_with(Aes256::new(GenericArray::from_slice(key)), iv, ciphertext),
+        16 => decrypt_with(keyed::<Aes128>(key)?, iv, ciphertext),
+        32 => decrypt_with(keyed::<Aes256>(key)?, iv, ciphertext),
         _ => Err(Error::InvalidKeyLength),
     }
 }
 
-/// Single-block AES (ECB). Used by RFC 3961 DR.
 pub(crate) fn encrypt_block(key: &[u8], block: &[u8; BLOCK]) -> Result<[u8; BLOCK], Error> {
     let mut out = *block;
     match key.len() {
         16 => {
-            let cipher = Aes128::new(GenericArray::from_slice(key));
-            cipher.encrypt_block(GenericArray::from_mut_slice(&mut out));
+            let cipher = keyed::<Aes128>(key)?;
+            cipher.encrypt_block((&mut out).into());
         }
         32 => {
-            let cipher = Aes256::new(GenericArray::from_slice(key));
-            cipher.encrypt_block(GenericArray::from_mut_slice(&mut out));
+            let cipher = keyed::<Aes256>(key)?;
+            cipher.encrypt_block((&mut out).into());
         }
         _ => return Err(Error::InvalidKeyLength),
     }
@@ -52,16 +46,8 @@ pub(crate) fn camellia_encrypt(
     plaintext: &[u8],
 ) -> Result<Vec<u8>, Error> {
     match key.len() {
-        16 => encrypt_with(
-            Camellia128::new(GenericArray::from_slice(key)),
-            iv,
-            plaintext,
-        ),
-        32 => encrypt_with(
-            Camellia256::new(GenericArray::from_slice(key)),
-            iv,
-            plaintext,
-        ),
+        16 => encrypt_with(keyed::<Camellia128>(key)?, iv, plaintext),
+        32 => encrypt_with(keyed::<Camellia256>(key)?, iv, plaintext),
         _ => Err(Error::InvalidKeyLength),
     }
 }
@@ -72,38 +58,14 @@ pub(crate) fn camellia_decrypt(
     ciphertext: &[u8],
 ) -> Result<Vec<u8>, Error> {
     match key.len() {
-        16 => decrypt_with(
-            Camellia128::new(GenericArray::from_slice(key)),
-            iv,
-            ciphertext,
-        ),
-        32 => decrypt_with(
-            Camellia256::new(GenericArray::from_slice(key)),
-            iv,
-            ciphertext,
-        ),
+        16 => decrypt_with(keyed::<Camellia128>(key)?, iv, ciphertext),
+        32 => decrypt_with(keyed::<Camellia256>(key)?, iv, ciphertext),
         _ => Err(Error::InvalidKeyLength),
     }
 }
 
-#[allow(dead_code)]
-pub(crate) fn camellia_encrypt_block(
-    key: &[u8],
-    block: &[u8; BLOCK],
-) -> Result<[u8; BLOCK], Error> {
-    let mut out = *block;
-    match key.len() {
-        16 => {
-            let cipher = Camellia128::new(GenericArray::from_slice(key));
-            cipher.encrypt_block(GenericArray::from_mut_slice(&mut out));
-        }
-        32 => {
-            let cipher = Camellia256::new(GenericArray::from_slice(key));
-            cipher.encrypt_block(GenericArray::from_mut_slice(&mut out));
-        }
-        _ => return Err(Error::InvalidKeyLength),
-    }
-    Ok(out)
+fn keyed<C: KeyInit>(key: &[u8]) -> Result<C, Error> {
+    C::new_from_slice(key).map_err(|_| Error::InvalidKeyLength)
 }
 
 fn xor_in_place(block: &mut [u8; BLOCK], mask: &[u8; BLOCK]) {
@@ -112,10 +74,8 @@ fn xor_in_place(block: &mut [u8; BLOCK], mask: &[u8; BLOCK]) {
     }
 }
 
-/// MIT `krb5int_aes_encrypt` (`builtin/enc_provider/aes.c:255-258`): a single-block input is
-/// one CBC block, not ciphertext stealing.
-/// The last two blocks are encrypted and then written back swapped.
-fn encrypt_with<C: BlockEncrypt>(
+// MIT krb5int_aes_encrypt; see docs/parity/b1-crypto-state.md
+fn encrypt_with<C: BlockCipherEncrypt<BlockSize = U16>>(
     cipher: C,
     iv: &[u8; BLOCK],
     plaintext: &[u8],
@@ -125,10 +85,9 @@ fn encrypt_with<C: BlockEncrypt>(
     }
     let nblocks = plaintext.len().div_ceil(BLOCK);
     if nblocks == 1 {
-        // RFC 3962: a single block is AES (ECB), equivalent to CBC with IV = 0.
         let mut block = [0u8; BLOCK];
         block[..plaintext.len()].copy_from_slice(plaintext);
-        cipher.encrypt_block(GenericArray::from_mut_slice(&mut block));
+        cipher.encrypt_block((&mut block).into());
         let mut out = block.to_vec();
         out.truncate(plaintext.len());
         return Ok(out);
@@ -142,18 +101,17 @@ fn encrypt_with<C: BlockEncrypt>(
         let mut block = [0u8; BLOCK];
         block.copy_from_slice(&plaintext[i * BLOCK..(i + 1) * BLOCK]);
         xor_in_place(&mut block, &prev);
-        cipher.encrypt_block(GenericArray::from_mut_slice(&mut block));
+        cipher.encrypt_block((&mut block).into());
         prev = block;
         out[i * BLOCK..(i + 1) * BLOCK].copy_from_slice(&block);
     }
 
-    // Last two blocks: CBC-encrypt then write back swapped (MIT krb5int_aes_encrypt).
     let mut block_n2 = [0u8; BLOCK];
     let n2_len = plaintext.len() - full_prefix;
     let take_n2 = n2_len.min(BLOCK);
     block_n2[..take_n2].copy_from_slice(&plaintext[full_prefix..full_prefix + take_n2]);
     xor_in_place(&mut block_n2, &prev);
-    cipher.encrypt_block(GenericArray::from_mut_slice(&mut block_n2));
+    cipher.encrypt_block((&mut block_n2).into());
     prev = block_n2;
 
     let mut block_n1 = [0u8; BLOCK];
@@ -162,9 +120,8 @@ fn encrypt_with<C: BlockEncrypt>(
         block_n1[..plaintext.len() - n1_off].copy_from_slice(&plaintext[n1_off..]);
     }
     xor_in_place(&mut block_n1, &prev);
-    cipher.encrypt_block(GenericArray::from_mut_slice(&mut block_n1));
+    cipher.encrypt_block((&mut block_n1).into());
 
-    // Write C_n (full) then truncated C_{n-1}.
     let last_len = plaintext.len() - (nblocks - 1) * BLOCK;
     out[full_prefix..full_prefix + BLOCK].copy_from_slice(&block_n1);
     let n2_out_off = full_prefix + BLOCK;
@@ -172,11 +129,8 @@ fn encrypt_with<C: BlockEncrypt>(
     Ok(out)
 }
 
-/// MIT `krb5int_aes_decrypt` (`builtin/enc_provider/aes.c:319-324`): a single-block ciphertext
-/// is one CBC block, not ciphertext stealing.
-/// The last two ciphertext blocks are swapped back before the CBC decrypt, and a short final
-/// block is not a full block.
-fn decrypt_with<C: BlockDecrypt>(
+// MIT krb5int_aes_decrypt; see docs/parity/b1-crypto-state.md
+fn decrypt_with<C: BlockCipherDecrypt<BlockSize = U16>>(
     cipher: C,
     iv: &[u8; BLOCK],
     ciphertext: &[u8],
@@ -188,7 +142,7 @@ fn decrypt_with<C: BlockDecrypt>(
     if nblocks == 1 {
         let mut block = [0u8; BLOCK];
         block[..ciphertext.len()].copy_from_slice(ciphertext);
-        cipher.decrypt_block(GenericArray::from_mut_slice(&mut block));
+        cipher.decrypt_block((&mut block).into());
         let mut out = block.to_vec();
         out.truncate(ciphertext.len());
         return Ok(out);
@@ -203,27 +157,25 @@ fn decrypt_with<C: BlockDecrypt>(
         let mut block = [0u8; BLOCK];
         block.copy_from_slice(&ciphertext[i * BLOCK..(i + 1) * BLOCK]);
         let ccopy = block;
-        cipher.decrypt_block(GenericArray::from_mut_slice(&mut block));
+        cipher.decrypt_block((&mut block).into());
         xor_in_place(&mut block, &prev);
         prev = ccopy;
         out[i * BLOCK..(i + 1) * BLOCK].copy_from_slice(&block);
     }
 
-    // blockN2 = next-to-last ciphertext (full AES block = CBC C_n)
     let mut block_n2 = [0u8; BLOCK];
     block_n2.copy_from_slice(&ciphertext[full_prefix..full_prefix + BLOCK]);
-    // blockN1 = last ciphertext (possibly partial = stolen C_{n-1})
     let mut block_n1 = [0u8; BLOCK];
     block_n1[..last_len].copy_from_slice(&ciphertext[full_prefix + BLOCK..]);
 
     let dummy_iv = block_n1;
     let mut pn = block_n2;
-    cipher.decrypt_block(GenericArray::from_mut_slice(&mut pn));
+    cipher.decrypt_block((&mut pn).into());
     xor_in_place(&mut pn, &dummy_iv);
 
     block_n1[last_len..].copy_from_slice(&pn[last_len..]);
     let mut pn1 = block_n1;
-    cipher.decrypt_block(GenericArray::from_mut_slice(&mut pn1));
+    cipher.decrypt_block((&mut pn1).into());
     xor_in_place(&mut pn1, &prev);
 
     out[full_prefix..full_prefix + BLOCK].copy_from_slice(&pn1);
@@ -243,7 +195,6 @@ mod tests {
             .collect()
     }
 
-    /// RFC 3962 Appendix B CBC-CS3 vectors (AES-128, IV = 0).
     #[test]
     fn rfc3962_cts_vectors() {
         let key = hex("636869636b656e207465726979616b69");

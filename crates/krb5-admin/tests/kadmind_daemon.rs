@@ -1,8 +1,4 @@
-//! The krb5-kadmind daemon on MIT's one net-server loop: one thread for kpasswd and kadm5 however
-//! many clients hold a connection, one cap of 45 over kpasswd's streams and the RPC connections
-//! with MIT's eviction lines, SIGHUP reopening the log while it serves on, and SIGTERM ending
-//! the loop with MIT's lines.
-//! MIT `main` (`kadmin/server/ovsec_kadmd.c:542-555`): `verto_run` serves until a signal ends the loop, then "finished, exiting" and the loop freed.
+//! The krb5-kadmind daemon on MIT's one net-server loop: one thread for kpasswd and kadm5 however many clients hold a connection, one cap of 45 over kpasswd's streams and the RPC connections with MIT's eviction lines, SIGHUP reopening the log while it serves on, and SIGTERM ending the loop with MIT's lines.
 
 #![cfg(target_os = "linux")]
 
@@ -14,7 +10,6 @@ use std::time::Duration;
 
 use krb5_testkit::scratch_dir;
 
-/// A port free for UDP and TCP on 127.0.0.1.
 fn free_port() -> u16 {
     loop {
         let t = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -25,8 +20,6 @@ fn free_port() -> u16 {
     }
 }
 
-/// The documented realm saved to a database that `krb5-kadmind -nofork` serves, kadm5 on
-/// 127.0.0.1:`rpc` and kpasswd on 127.0.0.1:`kpasswd`, logging to `log` with debug lines.
 struct Daemon {
     dir: PathBuf,
     child: Child,
@@ -89,7 +82,6 @@ impl Daemon {
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
-        // MIT `main` (`kadmin/server/ovsec_kadmd.c:538-540`): "<prog>: starting..." on standard error once it serves.
         let mut err = BufReader::new(child.stderr.take().unwrap());
         let mut line = String::new();
         while !line.ends_with("starting...\n") {
@@ -139,7 +131,6 @@ impl Drop for Daemon {
     }
 }
 
-/// An AUTH_NONE kadm5 call on `c`: answered AUTH_TOOWEAK.
 fn too_weak(c: &mut TcpStream, xid: u32) -> bool {
     let call: Vec<u8> = [xid, 0, 2, 2112, 2, 99, 0, 0, 0, 0]
         .iter()
@@ -156,19 +147,13 @@ fn too_weak(c: &mut TcpStream, xid: u32) -> bool {
         && reply[4..] == [xid, 1, 1, 1, 5].map(u32::to_be_bytes).concat()
 }
 
-/// Whether the server closed `c`.
 fn evicted(c: &TcpStream) -> bool {
     c.set_read_timeout(Some(Duration::from_millis(100)))
         .unwrap();
     matches!((&*c).read(&mut [0u8; 1]), Ok(0))
 }
 
-/// Fifty clients, kadm5 and kpasswd by turns, hold a connection, and a fifty-first kadm5 client
-/// calls: one thread serves them all, the cap of 45 covers both kinds, and each eviction's line
-/// names the kind of the client it closed. The caller is answered again after SIGHUP, which
-/// reopens the log; SIGTERM ends the loop with MIT's lines: the request to exit, "finished,
-/// exiting", then "closing down fd" for each of the 45 connections left and for each socket, the
-/// sockets last and newest first.
+/// names the kind of the client it closed. The caller is answered again after SIGHUP, which reopens the log; SIGTERM ends the loop with MIT's lines: the request to exit, "finished, exiting", then "closing down fd" for each of the 45 connections left and for each socket, the sockets last and newest first.
 #[test]
 fn kadmind_serves_every_client_from_one_thread() {
     let mut d = Daemon::start("kadmind-loop-daemon");
@@ -179,7 +164,6 @@ fn kadmind_serves_every_client_from_one_thread() {
             (rpc, TcpStream::connect(("127.0.0.1", port)).unwrap())
         })
         .collect();
-    // Answered once the loop has taken every connection queued before this one.
     let mut caller = TcpStream::connect(("127.0.0.1", d.rpc)).unwrap();
     assert!(too_weak(&mut caller, 1), "the caller is answered");
     let gone: Vec<bool> = conns
@@ -202,7 +186,6 @@ fn kadmind_serves_every_client_from_one_thread() {
     );
     assert_eq!(d.threads(), "1", "one thread");
     d.signal("HUP");
-    // The second call is served in a later turn of the loop than the signal's.
     assert!(
         too_weak(&mut caller, 2) && too_weak(&mut caller, 3),
         "answering after SIGHUP"

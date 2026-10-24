@@ -3,9 +3,11 @@
 //! Drives the shipped codec on the committed 1.22.2 golden (not a
 //! reimplementation, not hardcoded key bytes).
 //! A put that carries `KRB5_TL_DB_ARGS` is refused.
-//! MIT `extract_db_args_from_tl_data` (`kdb5.c:893-945`): the `KRB5_TL_DB_ARGS` records are
+// MIT: `extract_db_args_from_tl_data` (kdb5.c:893-945)
+//! the `KRB5_TL_DB_ARGS` records are
 //! pulled out of the entry as the put's `db_args`, and one without a trailing NUL is `EINVAL`.
-//! MIT `krb5_db2_put_principal` (`kdb_db2.c:817-822`): DB2 refuses any `db_args` with `EINVAL`.
+// MIT: `krb5_db2_put_principal` (kdb_db2.c:817-822)
+//! DB2 refuses any `db_args` with `EINVAL`.
 
 use krb5_crypto::{EncryptionType, KeyUsage, kdb_decrypt_key, string_to_key};
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented};
@@ -175,7 +177,7 @@ fn decrypt_pauser_key_data_equals_string_to_key() {
     )
     .unwrap();
     assert_eq!(
-        raw,
+        raw.as_slice(),
         expect.as_bytes(),
         "KDB usage-0 decrypt must equal string_to_key(preauthpw)"
     );
@@ -199,11 +201,11 @@ fn decrypt_pauser_key_data_equals_string_to_key() {
         None,
     )
     .unwrap();
-    assert_eq!(user_raw, user_expect.as_bytes());
+    assert_eq!(user_raw.as_slice(), user_expect.as_bytes());
 
     let km = dump.princ("K/M@KERBER.TEST").unwrap();
     let km_raw = kdb_decrypt_key(&mkey, &km.keys[0].slots[0].contents).unwrap();
-    assert_eq!(km_raw, mkey.as_bytes());
+    assert_eq!(km_raw.as_slice(), mkey.as_bytes());
 }
 
 #[test]
@@ -211,7 +213,7 @@ fn load_dump_store_keys_match_string_to_key() {
     let store = load_dump(&golden_v7(), b"masterpassword").expect("load");
     assert_eq!(store.realm(), "KERBER.TEST");
     let pauser = store.get("pauser@KERBER.TEST").expect("pauser loaded");
-    assert!(pauser.requires_preauth);
+    assert!(pauser.requires_preauth());
     assert_eq!(pauser.attributes, KDB_REQUIRES_PRE_AUTH);
     let got = pauser
         .key_for(EncryptionType::Aes256CtsHmacSha384192)
@@ -228,7 +230,7 @@ fn load_dump_store_keys_match_string_to_key() {
     assert_eq!(got.key.as_bytes(), expect.as_bytes());
 
     let user = store.get("user@KERBER.TEST").unwrap();
-    assert!(!user.requires_preauth);
+    assert!(!user.requires_preauth());
     let host = store
         .get("host/testhost.kerber.test@KERBER.TEST")
         .expect("host");
@@ -441,7 +443,7 @@ fn merge_tl_db_args_leaves_entry_and_file_unchanged() {
     let before = store.get_name(&user).unwrap().clone();
     let file_before = std::fs::read(&db).unwrap();
     let err = store
-        .merge_tl_data_in(&user, TEST_REALM, &[db_arg(true)])
+        .merge_tl_data_in(&user, TEST_REALM, &[db_arg(true)], "admin/admin")
         .unwrap_err();
     assert!(err.to_string().contains("foo=bar"), "{err}");
     let three = store
@@ -449,11 +451,12 @@ fn merge_tl_db_args_leaves_entry_and_file_unchanged() {
             &user,
             TEST_REALM,
             &[db_arg(true), db_arg(true), db_arg(true)],
+            "admin/admin",
         )
         .unwrap_err();
     assert!(three.to_string().contains("foo=bar"), "{three}");
     let nul = store
-        .merge_tl_data_in(&user, TEST_REALM, &[db_arg(false)])
+        .merge_tl_data_in(&user, TEST_REALM, &[db_arg(false)], "admin/admin")
         .unwrap_err();
     assert!(nul.to_string().contains("Invalid argument"), "{nul}");
     let after = store.get_name(&user).unwrap();

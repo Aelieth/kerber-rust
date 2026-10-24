@@ -1,46 +1,12 @@
-//! `krb5kdc`: the KDC daemon, started as MIT's.
-//!
-//! ```text
-//! krb5kdc [-x db_args]* [-d dbpathname] [-r dbrealmname] [-R replaycachename] [-m]
-//!         [-k masterenctype] [-M masterkeyname] [-p port] [-P pid_file] [-n]
-//!         [-w numworkers] [-T time_offset]
-//! ```
-//!
-//! The options are read as MIT's `getopt` loop reads them; an option written after `-r` would
-//! apply to a next realm, so here it applies to none.
-//!
-//! - `-r` names the realm, else krb5.conf's `default_realm`; one realm per process.
-//! - The database and stash are where [`krb5_config::KdcPaths`] finds them: the realm's
-//!   `database_name` / `key_stash_file` in kdc.conf, else MIT's defaults; a `test-hooks` build
-//!   (the gates') takes `KRB5_KDC_DB` / `KRB5_KDC_STASH` first when they are set.
-//! - `-d PATH` and `-x dbname=PATH` name the database instead of kdc.conf's `database_name`;
-//!   `-x temporary` opens `PATH~`; `-x merge_nra` and `-x hash=…` are accepted; any other `-x`
-//!   stops the KDC as MIT's database module does.
-//! - `-p PORTS` replaces the default listener list (`[kdcdefaults]`, else 88) unless the realm
-//!   stanza writes its own `kdc_listen` / `kdc_ports`.
-//! - `-n` keeps the KDC in the foreground. Without it the KDC binds its sockets, detaches
-//!   (`daemon(3)`) and then writes the `-P` pid file.
-//! - `-w N` is accepted and does nothing: one loop on the main thread serves every request;
-//!   `-R`, `-4` and `-X` are ignored; `-k` is only checked; `-M` must be `K/M`; `-T` must
-//!   be 0. `-m` is ignored when the realm stanza names `key_stash_file`, as in MIT; otherwise
-//!   the KDC stops as MIT's does when it cannot read the master password.
-//!
-//! The KDC serves every client from MIT's net-server loop on its main thread: one thread, with
-//! `[kdcdefaults] kdc_max_dgram_reply_size` and `kdc_tcp_listen_backlog` read as MIT's are.
-//!
-//! The daemon log ([`krb5_log::klog`]) goes where `[logging] kdc` (else `default`) in kdc.conf
-//! and krb5.conf says, in MIT's line format; SIGHUP reopens its files, and SIGTERM, SIGINT or
-//! SIGQUIT ends the KDC. The JSON structured log goes only where `[logging] json` names a
-//! destination.
-//!
-//! Builds with the `test-hooks` feature also take the gates' forms, which stay in the
-//! foreground: `--test-realm` (the documented `KERBER.TEST` realm), `--export-keytab PATH`,
-//! `--export-krbtgt-keytab PATH`, `--export-pkinit DIR`, a `host:port` operand or
-//! `KRB5_KDC_BIND` (one listener pair), and the test environment the gates set.
+//! krb5kdc: one realm, started as MIT's.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "a program reads its profile and environment when it starts"
+)]
 
 use std::net::{TcpListener, UdpSocket};
 use std::path::PathBuf;
@@ -48,15 +14,16 @@ use std::path::PathBuf;
 use krb5_crypto::EncryptionType;
 use krb5_kdc::{
     ListenLimits, OpenFailure, PrincipalStore, Signals, bind_tcp_listeners_with_backlog,
-    bind_udp_listeners, detach, names_relative_database, open_database, serve_daemon, shared_store,
-    write_pid_file,
+    bind_udp_listeners, copy_persist_master, detach, manual_master_key, mkey_log_context,
+    names_relative_database, open_database, open_database_with_key, open_database_with_password,
+    serve_daemon, shared_store, write_pid_file,
 };
 use krb5_log::klog::{self, JsonLog, Severity, os_error_text};
 
-/// MIT `initialize_realms` (`kdc/main.c:669-669`): krb5kdc's option letters.
+// MIT: `initialize_realms` (kdc/main.c:669-669)
 const OPTSTRING: &str = "x:r:d:mM:k:R:P:p:nw:4:T:X3";
 
-/// MIT `usage` (`kdc/main.c:582-595`): the text on standard error, then exit 1.
+// MIT: `usage` (kdc/main.c:582-595)
 fn usage(progname: &str) -> ! {
     eprint!(
         "usage: {progname} [-x db_args]* [-d dbpathname] [-r dbrealmname]\n\
@@ -71,7 +38,6 @@ fn usage(progname: &str) -> ! {
     std::process::exit(1);
 }
 
-/// What `-r` (or the end of the options, when there is no `-r`) took for the realm.
 #[derive(Clone, Default)]
 struct RealmArgs {
     db_args: Vec<String>,
@@ -80,11 +46,9 @@ struct RealmArgs {
     mkey_name: Option<String>,
 }
 
-/// The command line.
 #[derive(Default)]
 struct Options {
     realm: Option<String>,
-    /// A second realm: this KDC serves one.
     extra_realm: Option<String>,
     args: RealmArgs,
     pid_file: Option<PathBuf>,
@@ -95,7 +59,6 @@ struct Options {
     hooks: hooks::Args,
 }
 
-/// C `atoi`: optional space and sign, then digits; anything else stops it, and none is 0.
 fn atoi(s: &str) -> i64 {
     let t = s.trim_start();
     let (neg, digits) = match t.as_bytes().first() {
@@ -112,9 +75,6 @@ fn atoi(s: &str) -> i64 {
     if neg { -n } else { n }
 }
 
-/// MIT `initialize_realms` (`kdc/main.c:668-787`): each option in order; `-r` takes the options
-/// before it for its realm and starts the database arguments over; with no `-r` the realm takes
-/// them all. A bad option or `-w` below 1 prints the usage.
 fn parse_options(progname: &str, args: &[String]) -> Options {
     #[cfg(feature = "test-hooks")]
     let longs = hooks::LONGS;
@@ -139,6 +99,7 @@ fn parse_options(progname: &str, args: &[String]) -> Options {
             continue;
         }
         match o.flag {
+            // -x temporary appends a tilde. Any other unknown -x is refused.
             'x' => cur.db_args.push(arg),
             'r' => match &out.realm {
                 None => {
@@ -157,7 +118,9 @@ fn parse_options(progname: &str, args: &[String]) -> Options {
                 let name = db_name.get_or_insert_with(|| format!("dbname={arg}"));
                 cur.db_args.push(name.clone());
             }
+            // -m reads the master key only when the realm names no stash.
             'm' => cur.manual = true,
+            // -M must be K/M when the database opens.
             'M' => cur.mkey_name = Some(arg),
             'n' => out.nofork = true,
             'w' if atoi(&arg) > 0 => {}
@@ -166,6 +129,7 @@ fn parse_options(progname: &str, args: &[String]) -> Options {
                     klog::com_err(None, &format!("invalid enctype {arg}"));
                 }
             }
+            // -R, -4 and -X are ignored. -k is only checked. A positive -w is ignored.
             'R' | '4' | 'X' => {}
             'P' => out.pid_file = Some(PathBuf::from(arg)),
             'p' => cur.listen = Some(arg),
@@ -173,12 +137,12 @@ fn parse_options(progname: &str, args: &[String]) -> Options {
             _ => usage(progname),
         }
     }
+    // An option after -r applies to none.
     out.args = taken.unwrap_or(cur);
     out
 }
 
-/// The basename of `argv[0]`, the name the KDC logs and prints under.
-/// MIT `main` (`kdc/main.c:899-900`): `argv[0]` is cut to its last path component.
+// MIT: `main` (kdc/main.c:899-900)
 fn progname(argv0: Option<&String>) -> String {
     argv0
         .map(|a| a.rsplit('/').next().unwrap_or(a).to_owned())
@@ -189,15 +153,14 @@ fn progname(argv0: Option<&String>) -> String {
 fn main() {
     let argv: Vec<String> = std::env::args().collect();
     let progname = progname(argv.first());
-    // MIT `main` (`kdc/main.c:917-921`): the KDC context first, its profile kdc.conf ahead of
-    // krb5.conf; a profile it refuses ends krb5kdc, named as invoked.
+    // MIT: `main` (kdc/main.c:917-921)
+    let profile_read = krb5_config::ReadOnce::start();
+    // The profile is read once; a refusal ends the process.
     if let Err(e) = krb5_config::init_kdc_profile() {
         let argv0 = argv.first().map_or("krb5kdc", String::as_str);
         eprintln!("{argv0}: {} while initializing krb5", e.init_text());
         std::process::exit(1);
     }
-    // MIT `main` (`kdc/main.c:917-922`): the daemon log is set up from the profile before the
-    // options are read.
     let specs = krb5_config::LogSpecs::load("kdc");
     klog::init(&progname, &specs.specs, specs.debug);
     let opts = parse_options(&progname, argv.get(1..).unwrap_or_default());
@@ -205,8 +168,6 @@ fn main() {
     let foreground = opts.nofork || opts.hooks.foreground(&opts.operands);
     #[cfg(not(feature = "test-hooks"))]
     let foreground = opts.nofork;
-    // The JSON log only where `[logging] json` names a destination (MIT has none), standard
-    // output or error only in the foreground: a detached KDC has neither.
     if let Some(json) = specs
         .json
         .as_deref()
@@ -221,6 +182,7 @@ fn main() {
             ))
             .try_init();
     }
+    // -T must be 0.
     if opts.time_offset != 0 {
         eprintln!("{progname}: -T (a clock offset for testing) is not supported");
         std::process::exit(1);
@@ -238,8 +200,6 @@ fn main() {
     #[cfg(not(feature = "test-hooks"))]
     let realm_arg = opts.realm.clone();
     let paths = krb5_config::KdcPaths::resolve(realm_arg.as_deref()).unwrap_or_else(|e| {
-        // MIT `initialize_realms` (`kdc/main.c:793-800`): no realm is logged "while attempting to
-        // retrieve default realm" and printed "…, attempting to retrieve default realm", exit 1.
         if matches!(e, krb5_config::Error::NoDefaultRealm) {
             klog::com_err(
                 Some(&e.to_string()),
@@ -252,6 +212,7 @@ fn main() {
         std::process::exit(1);
     });
     let realm = paths.realm.clone().unwrap_or_default();
+    // A second, different -r stops the KDC.
     if let Some(extra) = &opts.extra_realm {
         cannot_initialize(
             &progname,
@@ -269,39 +230,36 @@ fn main() {
     };
     #[cfg(not(feature = "test-hooks"))]
     let mut store = init_realm(&progname, &realm, &paths, &opts.args);
-    // MIT builds the KDC profile with kdc.conf before krb5.conf, so kdc.conf
-    // wins (`init_os_ctx.c add_kdc_config_file`). Apply krb5.conf [libdefaults]
-    // first as the base, then let kdc.conf override.
-    let krb5_conf = krb5_config::load_krb5_conf();
-    if let Some(c) = krb5_conf.as_ref() {
-        store.set_capaths(c.capaths.clone());
-        store.apply_libdefaults(c);
+    if foreground && !test_realm && manual_master_key(opts.args.manual, &paths) {
+        store = init_realm(&progname, &realm, &paths, &opts.args);
     }
-    if let Some(conf) = &kdc_conf
-        && let Err(e) = store.apply_kdc_conf(conf)
-    {
+    let profile = krb5_config::ProfileSet::from_env_files(&paths).unwrap_or_else(|e| {
+        let argv0 = argv.first().map_or("krb5kdc", String::as_str);
+        eprintln!("{argv0}: {} while initializing krb5", e.init_text());
+        std::process::exit(1);
+    });
+    drop(profile_read);
+    if let Err(e) = store.apply_profile(&profile) {
         eprintln!("{progname}: kdc.conf: {e}");
         std::process::exit(2);
     }
-    // MIT `get_plugin_vtables` (`kdc/kdc_preauth.c:117-163`): built-ins register, then disable and enable_only select which modules load.
-    // MIT `add_kdc_config_file` (`lib/krb5/os/init_os_ctx.c:339-366`): kdc.conf is the first profile file, ahead of krb5.conf.
-    store.apply_kdcpreauth_plugins(kdc_conf.as_ref(), krb5_conf.as_ref());
-    // MIT `otp_state_new` (`plugins/preauth/otp/otp_state.c:579-585`): the otp module reads `[otp]` from the same profile, once, when it starts.
-    store.apply_otp(kdc_conf.as_ref(), krb5_conf.as_ref());
-    // MIT `load_kdcpolicy_plugins` (`kdc/policy.c:194-246`): the same profile selects kdcpolicy modules.
-    store.apply_kdcpolicy_plugins(kdc_conf.as_ref(), krb5_conf.as_ref());
-    // MIT `plugins/kdcpolicy/test` has no `.so` here. `enable_only = test` registers it.
+    for line in profile
+        .kdc
+        .iter()
+        .flat_map(krb5_config::KdcConf::unsupported_lines)
+    {
+        klog::syslog(Severity::Warning, &line);
+    }
     krb5_kdc::register_kdcpolicy_test_if_selected(&store.policy().kdcpolicy);
-    // MIT `load_audit_modules` (`kdc/kdc_audit.c:71-84`): the same profile selects audit modules.
-    store.apply_audit_plugins(kdc_conf.as_ref(), krb5_conf.as_ref());
+    let pkinit_failure = store.init_pkinit(&profile);
     #[cfg(feature = "test-hooks")]
     hooks::before_serving(&mut store, &opts.hooks);
-    // MIT `load_preauth_plugins` (`kdc/kdc_preauth.c:207-219`): a module whose init fails is logged at error and left out.
-    for (level, line) in krb5_kdc::preauth_startup_lines(
-        store.realm(),
-        &store.policy.kdcpreauth,
-        store.pkinit_ca().is_some(),
-    ) {
+    let pkinit_failure = pkinit_failure.filter(|_| store.pkinit().is_none());
+    // MIT: `load_preauth_plugins` (kdc/kdc_preauth.c:207-219)
+    // A preauth module whose init fails is logged at error and left out.
+    for (level, line) in
+        krb5_kdc::preauth_startup_lines(&store.policy.kdcpreauth, pkinit_failure.as_deref())
+    {
         let severity = if level == "error" {
             Severity::Err
         } else {
@@ -309,7 +267,6 @@ fn main() {
         };
         klog::syslog(severity, &line);
     }
-    // MIT `load_preauth_plugins` (`kdc/kdc_preauth.c:207-219`): the modules initialize in the order pkinit, otp, spake, and one that fails is logged and left out.
     for (_, line) in krb5_kdc::otp_startup_lines(&store.policy) {
         klog::syslog(Severity::Err, &line);
     }
@@ -329,6 +286,12 @@ fn main() {
         .as_deref()
         .or_else(|| kdc_conf.as_ref().and_then(|c| c.db_library.as_deref()));
     let memory = lib == Some("memory");
+    let keyboard = manual_master_key(opts.args.manual, &paths);
+    let held_master = if keyboard {
+        copy_persist_master(&store)
+    } else {
+        None
+    };
     let store = if memory {
         shared_store(krb5_kdc::MemoryStore::from_dump(&store))
     } else {
@@ -342,10 +305,10 @@ fn main() {
     #[cfg(not(feature = "test-hooks"))]
     let pinned: Option<String> = None;
     let _ = &opts.operands;
-    // MIT `main` (`kdc/main.c:976-983`): the signal handlers are set up before the network.
+    // MIT: `main` (kdc/main.c:976-983)
+    // Signal handlers are installed before the listeners are bound.
     let signals = Signals::install();
-    // MIT `loop_setup_network` (`lib/apputils/net-server.c:1068-1074`): the network lines around
-    // binding every listener.
+    // MIT: `loop_setup_network` (lib/apputils/net-server.c:1068-1074)
     klog::syslog(Severity::Info, "setting up network...");
     let (udp, tcp) = bind_sockets(
         &progname,
@@ -358,8 +321,8 @@ fn main() {
         Severity::Info,
         &format!("set up {} sockets", udp.len() + tcp.len()),
     );
-    // MIT `main` (`kdc/main.c:996-1008`): detach unless -n, then the pid file, each failure
-    // logged and fatal.
+    // MIT: `main` (kdc/main.c:996-1008)
+    // -n stays in the foreground. Otherwise bind, then detach, then the pid file.
     if !foreground && let Err(e) = detach() {
         klog::com_err(Some(&os_error_text(&e)), "while detaching from tty");
         std::process::exit(1);
@@ -370,14 +333,46 @@ fn main() {
         klog::com_err(Some(&os_error_text(&e)), "while creating PID file");
         std::process::exit(1);
     }
-    // MIT `main` (`kdc/main.c:1016-1016`): the realm is opened again after daemon(), so a
-    // relative database or stash name now opens from `/`, or the KDC stops as at its start.
+    // MIT: `main` (kdc/main.c:1016-1016)
+    // A relative database or stash is opened again after detach, from /.
     if !foreground && names_relative_database(&paths, &opts.args.db_args) {
-        let _ = init_realm(&progname, &realm, &paths, &opts.args);
+        if keyboard {
+            let fetching = format!(
+                "while fetching master key {} for realm {realm}",
+                opts.args.mkey_name.as_deref().unwrap_or("K/M")
+            );
+            let Some(key) = &held_master else {
+                cannot_initialize(&progname, &realm, "Cannot read password", &fetching);
+            };
+            if let Err(e) = open_database_with_key(
+                &paths,
+                &opts.args.db_args,
+                opts.args.mkey_name.as_deref().unwrap_or("K/M"),
+                key,
+            ) {
+                let (msg, during) = match e {
+                    OpenFailure::Database(msg) => (
+                        msg,
+                        format!("while initializing database for realm {realm}"),
+                    ),
+                    OpenFailure::MasterKey(msg) => {
+                        let during = mkey_log_context(
+                            &msg,
+                            &realm,
+                            opts.args.mkey_name.as_deref().unwrap_or("K/M"),
+                        );
+                        (msg, during)
+                    }
+                };
+                cannot_initialize(&progname, &realm, &msg, &during);
+            }
+        } else {
+            let _ = init_realm(&progname, &realm, &paths, &opts.args);
+        }
         let mut s = store
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Err(e) = krb5_kdc::StoreLifecycle::reload_if_stale(&mut **s) {
+        if let Err(e) = krb5_kdc::StoreLifecycle::reload_if_stale(&mut *s) {
             cannot_initialize(
                 &progname,
                 &realm,
@@ -388,8 +383,6 @@ fn main() {
     }
     #[cfg(feature = "test-hooks")]
     hooks::announce(&progname, persist.as_ref(), memory, &udp, &tcp);
-    // MIT `main` (`kdc/main.c:1025-1028`): "commencing operation", and in the foreground
-    // "<prog>: starting..." on standard error.
     klog::syslog(Severity::Info, "commencing operation");
     if foreground {
         eprintln!("{progname}: starting...");
@@ -398,10 +391,11 @@ fn main() {
         let g = store
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        krb5_kdc::audit_kdc_start(&**g, true);
+        krb5_kdc::audit_kdc_start(&*g, true);
     }
-    // MIT `finish_dispatch` (`kdc/dispatch.c:54-55`): the reply size is compared as an unsigned number.
+    // MIT: `finish_dispatch` (kdc/dispatch.c:54-55)
     let max_dgram = kdc_conf.as_ref().map_or(krb5_kdc::MAX_DGRAM_REPLY, |c| {
+        // The UDP reply cap is the value's unsigned bits.
         usize::try_from(c.kdc_max_dgram_reply_size.cast_unsigned()).unwrap_or(usize::MAX)
     });
     let limits = ListenLimits {
@@ -414,7 +408,7 @@ fn main() {
             let g = store
                 .read()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            krb5_kdc::audit_kdc_stop(&**g, false);
+            krb5_kdc::audit_kdc_stop(&*g, false);
         }
         klog::com_err(Some(&e.to_string()), "while serving");
         eprintln!("{progname}: serve: {e}");
@@ -424,25 +418,19 @@ fn main() {
         let g = store
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        krb5_kdc::audit_kdc_stop(&**g, true);
+        krb5_kdc::audit_kdc_stop(&*g, true);
     }
-    // MIT `main` (`kdc/main.c:1031-1032`): "shutting down" once the loop ends.
     klog::syslog(Severity::Info, "shutting down");
     klog::close();
 }
 
-/// The realm cannot start: the reason to the daemon log, MIT's line on standard error, exit 1.
-/// MIT `initialize_realms` (`kdc/main.c:688-698`): "cannot initialize realm … - see log file for
-/// details" after `init_realm` logged why.
 fn cannot_initialize(progname: &str, realm: &str, error: &str, during: &str) -> ! {
     klog::com_err(Some(error), during);
     eprintln!("{progname}: cannot initialize realm {realm} - see log file for details");
     std::process::exit(1);
 }
 
-/// Open the realm's database as MIT `init_realm` does; each failure is logged and stops the KDC.
-/// MIT `init_realm` (`kdc/main.c:351-382`): open the database, then fetch the master key from the
-/// stash, or from the keyboard with `-m` when kdc.conf names no stash.
+// MIT: `init_realm` (kdc/main.c:351-382)
 fn init_realm(
     progname: &str,
     realm: &str,
@@ -451,32 +439,22 @@ fn init_realm(
 ) -> PrincipalStore {
     let opening = format!("while initializing database for realm {realm}");
     let mkey_name = args.mkey_name.as_deref().unwrap_or("K/M");
-    let fetching = format!("while fetching master key {mkey_name} for realm {realm}");
-    // MIT `init_realm` (`kdc/main.c:285-290`): `-m` counts only when kdc.conf names no stash.
-    #[cfg(feature = "test-hooks")]
-    let stash_env = std::env::var_os("KRB5_KDC_STASH").is_some();
-    #[cfg(not(feature = "test-hooks"))]
-    let stash_env = false;
-    let stash_relation = paths
-        .conf
-        .as_ref()
-        .is_some_and(|c| c.key_stash_file.is_some())
-        || stash_env;
-    let keyboard = args.manual && !stash_relation;
-    match open_database(paths, &args.db_args, mkey_name) {
+    let opened = if manual_master_key(args.manual, paths) {
+        open_database_with_password(paths, &args.db_args, mkey_name, realm)
+    } else {
+        open_database(paths, &args.db_args, mkey_name)
+    };
+    match opened {
         Err(OpenFailure::Database(e)) => cannot_initialize(progname, realm, &e, &opening),
-        _ if keyboard => cannot_initialize(progname, realm, "Cannot read password", &fetching),
-        Err(OpenFailure::MasterKey(e)) => cannot_initialize(progname, realm, &e, &fetching),
+        Err(OpenFailure::MasterKey(e)) => {
+            let during = mkey_log_context(&e, realm, mkey_name);
+            cannot_initialize(progname, realm, &e, &during)
+        }
         Ok(store) => store,
     }
 }
 
-/// The listening sockets. A pinned address (test-hooks builds) binds one UDP + TCP pair on it,
-/// and `--test-realm` alone on the first loopback candidate that binds. Otherwise the KDC
-/// listens where MIT's would: every `kdc_listen` / `kdc_ports` entry (after `-p`) for UDP and
-/// every `kdc_tcp_listen` / `kdc_tcp_ports` entry (else the UDP list) for TCP, a bare port on
-/// all local addresses, port 88 when nothing names one. A bind failure is logged and fatal.
-/// MIT `main` (`kdc/main.c:960-973`): UDP and TCP listeners for each realm's lists.
+// MIT: `main` (kdc/main.c:960-973)
 fn bind_sockets(
     progname: &str,
     test_realm: bool,
@@ -502,28 +480,24 @@ fn bind_sockets(
         std::process::exit(1);
     });
     let udp = bind_udp_listeners(&udp_addrs).unwrap_or_else(|_| std::process::exit(1));
-    // MIT `initialize_realms` (`kdc/main.c:639-644`): the TCP listeners' backlog is `kdc_tcp_listen_backlog`.
+    // MIT: `initialize_realms` (kdc/main.c:639-644)
     let tcp = bind_tcp_listeners_with_backlog(&tcp_addrs, conf.kdc_tcp_listen_backlog)
         .unwrap_or_else(|_| std::process::exit(1));
     (udp, tcp)
 }
 
-/// The gates' test realm, key exports and environment hooks; off in a release build.
 #[cfg(feature = "test-hooks")]
 mod hooks {
     use std::net::{TcpListener, UdpSocket};
     use std::path::PathBuf;
 
     use krb5_cli::LongOpt;
-    use krb5_kdc::principals::{kadmin_admin, kadmin_changepw};
     use krb5_kdc::testrealm::{TEST_ADMIN, TEST_REALM, TEST_USER, documented_kiprop};
     use krb5_kdc::{
         Acl, BIND_CANDIDATES, KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_DUP_SKEY, KDB_DISALLOW_SVR,
-        KDB_OK_TO_AUTH_AS_DELEGATE, PrincipalStore, apply_kadm5_create_service_attrs,
-        bind_preferred,
+        KDB_OK_TO_AUTH_AS_DELEGATE, PrincipalStore, add_admin_principals, bind_preferred,
     };
 
-    /// The gates' long options.
     pub(super) const LONGS: &[LongOpt] = &[
         LongOpt {
             name: "test-realm",
@@ -547,7 +521,6 @@ mod hooks {
         },
     ];
 
-    /// The gates' arguments.
     #[derive(Default)]
     pub(super) struct Args {
         pub(super) test_realm: bool,
@@ -567,7 +540,6 @@ mod hooks {
             }
         }
 
-        /// The gates' forms run in the foreground, as the KDC did before it detached.
         pub(super) fn foreground(&self, operands: &[String]) -> bool {
             self.test_realm
                 || self.export_keytab.is_some()
@@ -577,7 +549,6 @@ mod hooks {
         }
     }
 
-    /// The one address to bind: the first operand, else `KRB5_KDC_BIND`.
     pub(super) fn pinned(operands: &[String]) -> Option<String> {
         operands
             .first()
@@ -585,13 +556,10 @@ mod hooks {
             .or_else(|| std::env::var("KRB5_KDC_BIND").ok())
     }
 
-    /// The test realm's name keeps the stash default from needing krb5.conf's default_realm.
     pub(super) fn test_realm_name() -> String {
         std::env::var("KRB5_TEST_REALM").unwrap_or_else(|_| TEST_REALM.to_owned())
     }
 
-    /// The bootstrapped test realm, saved to and reloaded from `KRB5_KDC_DB` / `KRB5_KDC_STASH`
-    /// when both are set.
     pub(super) fn test_realm_store(kdc: Option<&krb5_config::KdcConf>) -> PrincipalStore {
         let store = bootstrap_test_realm(kdc);
         if let (Ok(db), Ok(stash)) = (
@@ -612,7 +580,6 @@ mod hooks {
         store
     }
 
-    /// One UDP + TCP pair on the pinned address, else on the first loopback candidate.
     pub(super) fn bind_pinned(pinned: Option<String>) -> (Vec<UdpSocket>, Vec<TcpListener>) {
         let owned: Vec<String> = pinned.map_or_else(
             || BIND_CANDIDATES.iter().map(|s| (*s).to_owned()).collect(),
@@ -626,7 +593,6 @@ mod hooks {
         (vec![udp], vec![tcp])
     }
 
-    /// The test policy, audit sink, PKINIT CA and key exports.
     pub(super) fn before_serving(store: &mut PrincipalStore, args: &Args) {
         if std::env::var("KRB5_KDCPOLICY").ok().as_deref() == Some("test") {
             krb5_kdc::set_policy(std::sync::Arc::new(krb5_kdc::testrealm::TestPolicy));
@@ -643,10 +609,7 @@ mod hooks {
         }
         let enable_pkinit = args.export_pkinit.is_some()
             || std::env::var("KRB5_ENABLE_PKINIT").ok().as_deref() == Some("1");
-        if enable_pkinit && let Err(e) = store.enable_pkinit_ca() {
-            eprintln!("krb5-kdc: PKINIT CA: {e}");
-            std::process::exit(1);
-        }
+        let pkinit_ca = enable_pkinit.then(|| test_pkinit(store));
         let export_keytab = args
             .export_keytab
             .clone()
@@ -683,9 +646,25 @@ mod hooks {
             let tgt = krb5_types::PrincipalName::krbtgt(store.realm());
             export(store, &tgt, path, "export-krbtgt-keytab", "krbtgt-keytab");
         }
-        if let Some(dir) = args.export_pkinit.as_ref() {
-            export_pkinit(store, dir);
+        if let (Some(dir), Some(ca)) = (args.export_pkinit.as_ref(), pkinit_ca.as_ref()) {
+            export_pkinit(store, ca, dir);
         }
+    }
+
+    fn test_pkinit(store: &mut PrincipalStore) -> krb5_types::pkinit::PkinitCa {
+        let ca = krb5_types::pkinit::PkinitCa::generate();
+        let identity = ca
+            .as_ref()
+            .and_then(|c| c.kdc_pkinit_identity(store.realm()));
+        let (Some(ca), Some(identity)) = (ca, identity) else {
+            eprintln!("krb5-kdc: PKINIT CA: pkinit CA generate failed");
+            std::process::exit(1);
+        };
+        store.set_pkinit(Some(krb5_kdc::PkinitKdc::new(
+            identity,
+            vec![ca.ca_cert.clone()],
+        )));
+        ca
     }
 
     fn export(
@@ -710,48 +689,38 @@ mod hooks {
         }
     }
 
-    fn export_pkinit(store: &PrincipalStore, dir: &str) {
+    fn export_pkinit(store: &PrincipalStore, ca: &krb5_types::pkinit::PkinitCa, dir: &str) {
         let _ = std::fs::create_dir_all(dir);
-        if let Some(pem) = store.pkinit_anchor_pem() {
-            let _ = std::fs::write(format!("{dir}/ca.pem"), pem);
-            println!("pkinit-ca {dir}/ca.pem");
-        }
-        if let Some(pem) = store.pkinit_user_pem("user@KERBER.TEST") {
+        let _ = std::fs::write(format!("{dir}/ca.pem"), ca.cert_pem());
+        println!("pkinit-ca {dir}/ca.pem");
+        if let Some(pem) = ca.user_identity_pem("user@KERBER.TEST") {
             let _ = std::fs::write(format!("{dir}/user.pem"), pem);
             println!("pkinit-user {dir}/user.pem");
         }
-        if let Some(pem) = store.pkinit_user_pem("other@KERBER.TEST") {
+        if let Some(pem) = ca.user_identity_pem("other@KERBER.TEST") {
             let _ = std::fs::write(format!("{dir}/other.pem"), pem);
             println!("pkinit-other {dir}/other.pem");
         }
-        if let Some(pem) = store.pkinit_kdc_pem() {
+        if let Some(pem) = ca.kdc_identity_pem_for(store.realm()) {
             let _ = std::fs::write(format!("{dir}/kdc.pem"), pem);
             println!("pkinit-kdc {dir}/kdc.pem");
         }
-        if let Some(pem) = store
-            .pkinit_ca()
-            .and_then(|c| c.kdc_identity_pem_for("OTHER.TEST"))
-        {
+        if let Some(pem) = ca.kdc_identity_pem_for("OTHER.TEST") {
             let _ = std::fs::write(format!("{dir}/kdc-wrong-realm.pem"), pem);
             println!("pkinit-kdc-wrong-realm {dir}/kdc-wrong-realm.pem");
         }
     }
 
-    /// The greet authdata module of MIT's test plugins, when `KERBER_KDC_GREET=1`.
     fn authdata() {
         if std::env::var("KERBER_KDC_GREET").ok().as_deref() == Some("1") {
             krb5_kdc::register_authdata(std::sync::Arc::new(krb5_kdc::testrealm::GreetAuth));
         }
     }
 
-    /// The store gate's backend selector (`memory`), over kdc.conf's `db_library`.
     pub(super) fn db_library() -> Option<String> {
         std::env::var("KRB5_KDC_DB_LIBRARY").ok()
     }
 
-    /// The gates' readiness lines on standard output (`persist`, `backend`, one `listening`
-    /// line per UDP address and a `listening tcp` line for a TCP address that is not also a UDP
-    /// one), the authdata hook, and the privilege drop of a KDC that serves no database file.
     pub(super) fn announce(
         progname: &str,
         persist: Option<&(PathBuf, PathBuf)>,
@@ -764,9 +733,8 @@ mod hooks {
             None => println!("persist none"),
         }
         println!("backend {}", if memory { "memory" } else { "dump" });
-        // Kadmind writes the db as the kadmind uid (root in the gate). Dropping
-        // to nobody would make 0600 persist files unreadable on reload.
         if persist.is_none() {
+            // Privileges drop only when no database file is served.
             match krb5_kdc::drop_privileges() {
                 Ok(true) => eprintln!("{progname}: dropped privileges"),
                 Ok(false) => {}
@@ -884,19 +852,11 @@ mod hooks {
                 "disallow_dup_skey",
             );
         }
-        if let Err(e) = store.create_host(&acl, &actor, &kadmin_admin()) {
-            eprintln!("krb5-kdc: kadmin/admin: {e}");
-            std::process::exit(1);
-        }
-        if let Err(e) = store.create_host(&acl, &actor, &kadmin_changepw()) {
-            eprintln!("krb5-kdc: kadmin/changepw: {e}");
-            std::process::exit(1);
-        }
         if let Err(e) = store.create_host(&acl, &actor, &documented_kiprop()) {
             eprintln!("krb5-kdc: kiprop: {e}");
             std::process::exit(1);
         }
-        if let Err(e) = apply_kadm5_create_service_attrs(&mut store) {
+        if let Err(e) = add_admin_principals(&mut store, 1) {
             eprintln!("krb5-kdc: kadmin service attrs: {e}");
             std::process::exit(1);
         }
@@ -912,7 +872,7 @@ mod hooks {
                 eprintln!("krb5-kdc: locked user: {e}");
                 std::process::exit(1);
             }
-            if let Err(e) = store.set_status(&locked, true, 0) {
+            if let Err(e) = store.set_status(&locked, true, 0, "db_creation") {
                 eprintln!("krb5-kdc: lock user: {e}");
                 std::process::exit(1);
             }
@@ -947,7 +907,6 @@ mod hooks {
         store
     }
 
-    /// The test inter-realm keys of `KRB5_TEST_FOREIGN_REALM` / `KRB5_TEST_INTERREALM_KEY`.
     fn interrealm_keys(store: &mut PrincipalStore, acl: &Acl, actor: &str) {
         let (Ok(foreigns), Ok(hexkey)) = (
             std::env::var("KRB5_TEST_FOREIGN_REALM"),
@@ -962,7 +921,9 @@ mod hooks {
                     if foreign.is_empty() {
                         continue;
                     }
-                    if let Err(e) = store.create_interrealm_key(acl, actor, foreign, key.clone()) {
+                    if let Err(e) =
+                        store.create_interrealm_key(acl, actor, foreign, key.clone(), None)
+                    {
                         eprintln!("krb5-kdc: inter-realm {foreign}: {e}");
                         std::process::exit(1);
                     }
@@ -973,8 +934,6 @@ mod hooks {
                 std::process::exit(2);
             }
         }
-        // Peer-issued tickets (AD outbound) may use a second AES key
-        // (Windows TDO inbound/outbound salts differ).
         let Ok(hex2) = std::env::var("KRB5_TEST_INTERREALM_KEY_ACCEPT") else {
             return;
         };
@@ -992,9 +951,9 @@ mod hooks {
                             continue;
                         }
                         let put = if first {
-                            store.set_interrealm_decrypt_key(acl, actor, foreign, key.clone())
+                            store.set_interrealm_decrypt_key(acl, actor, foreign, key.clone(), None)
                         } else {
-                            store.add_interrealm_decrypt_key(acl, actor, foreign, key.clone())
+                            store.add_interrealm_decrypt_key(acl, actor, foreign, key.clone(), None)
                         };
                         if let Err(e) = put {
                             eprintln!("krb5-kdc: inter-realm accept key {foreign}: {e}");

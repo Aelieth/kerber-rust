@@ -1,17 +1,23 @@
 //! PAC shape at issue and verify, including the RODCIdentifier trailer on the server
 //! checksum.
-//! MIT `verify_pac_checksums` (`pac.c:557-569`): the privsvr checksum covers the server
+// MIT: `verify_pac_checksums` (pac.c:557-569)
+//! the privsvr checksum covers the server
 //! checksum buffer past its 4-byte type, a trailer included.
 //! PAC shape and placement rules MIT 1.22.2 applies at issue and verify time:
-//! MIT `k5_pac_should_have_ticket_signature` (`pac.c:583-592`): tickets to TGS and
+// MIT: `k5_pac_should_have_ticket_signature` (pac.c:583-592)
+//! tickets to TGS and
 //! `kadmin/changepw` principals carry no ticket signature.
-//! MIT `sign_pac` (`pac_sign.c:239-243`): only a service ticket (`is_service_tkt`) gets the
+// MIT: `sign_pac` (pac_sign.c:239-243)
+//! only a service ticket (`is_service_tkt`) gets the
 //! full checksum.
-//! MIT `get_verified_pac` (`kdc_util.c:597-602`): for a TGS principal only the server
+// MIT: `get_verified_pac` (kdc_util.c:597-602)
+//! for a TGS principal only the server
 //! signature is checked.
-//! MIT `krb5_pac_parse` (`pac.c:281-317`): it refuses a bad version, buffer count,
+// MIT: `krb5_pac_parse` (pac.c:281-317)
+//! it refuses a bad version, buffer count,
 //! alignment, or offset.
-//! MIT `k5_pac_locate_buffer` (`pac.c:137-147`): a buffer type present twice is `EINVAL`,
+// MIT: `k5_pac_locate_buffer` (pac.c:137-147)
+//! a buffer type present twice is `EINVAL`,
 //! and one that is absent is `ENOENT`.
 //! The tests drive the shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry points of a
 //! bootstrapped realm.

@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import importlib.util
 import os
 import pathlib
 import re
 import sys
 
-from .common import ROOT, SCRIPTS, _die
+from .common import ROOT, _die
+from .hygiene import _mit_cite_ok
 # S4. A commit that changes a live hit count updates the matching
 # constant in that commit. Hard means 0.
 MIT_ANCHOR_ALLOW = 0
@@ -24,6 +24,16 @@ _ANCHOR_EXT = r"(?:c|hin|h|et|x|y)"
 _ANCHOR_HEAD = re.compile(
     r"MIT `((?:(?:struct|union|enum) )?[A-Za-z_][A-Za-z0-9_]*)` "
     r"\(`([A-Za-z0-9_./+-]+\." + _ANCHOR_EXT + r"):(\d+)-(\d+)`\)"
+)
+# The converted cite. A range is checked like the old form. No range means the
+# symbol is defined somewhere in that file. A `struct` cite stays old-form.
+_NEW_CITE_ANCHOR = re.compile(
+    r"^// MIT: (`[A-Za-z_]\w*`(?: \+ `[A-Za-z_]\w*`)*) "
+    r"\(([\w./-]*\." + _ANCHOR_EXT + r")(?::(\d+)(?:-(\d+))?)?\)$"
+)
+# The pointer form, beside the anchor until the comment sweep: MIT <symbol>; see docs/parity/<file>.md
+_POINTER = re.compile(
+    r"MIT ([A-Za-z_][A-Za-z0-9_]*); see docs/parity/([A-Za-z0-9][A-Za-z0-9_-]*\.md)"
 )
 # Any MIT line cite: a source path with a line number. Outside an anchor
 # head it is the dodge the form forbids (a range that is not an anchor).
@@ -53,8 +63,23 @@ _EMPTY_GUARANTEES = {"same check", "mit"}
 
 
 def _anchor_line_problems(comment: str) -> list[str]:
-    """Why one comment line breaks the R1 anchor form (empty when it does not)."""
+    """Why one comment line breaks the R1 anchor or pointer form (empty when it does not)."""
+    # A converted cite is its own // MIT: line. The character gate checks that form.
+    if _mit_cite_ok(comment):
+        return []
     problems: list[str] = []
+    pointers = list(_POINTER.finditer(comment))
+    if "see docs/parity/" in comment and not pointers:
+        problems.append("pointer is not MIT <symbol>; see docs/parity/<file>.md")
+    if len(pointers) > 1:
+        problems.append("two pointers on one line")
+    if pointers and _ANCHOR_HEAD.search(comment):
+        problems.append("pointer and anchor on one line")
+    if len(pointers) == 1 and not problems:
+        if _LINE_CITE.search(comment):
+            problems.append("line cite outside the anchor form")
+        else:
+            return []
     heads = list(_ANCHOR_HEAD.finditer(comment))
     if len(heads) > 1:
         problems.append("two anchors on one line")
@@ -80,27 +105,76 @@ def _anchor_line_problems(comment: str) -> list[str]:
     return problems
 
 
-def _comment_lexer():
-    spec = importlib.util.spec_from_file_location(
-        "hygiene_fn_diff_comments", SCRIPTS / "hygiene-fn-diff.py"
-    )
-    if spec is None or spec.loader is None:
-        _die("missing scripts/hygiene-fn-diff.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+def _ident_prev(src: str, i: int) -> bool:
+    if i <= 0:
+        return False
+    return src[i - 1].isalnum() or src[i - 1] == "_"
 
 
-_COMMENT_LEXER = None
+def _scan_quoted(src: str, i: int) -> int:
+    """Index past a `"…"` / `b"…"` starting at the opening quote."""
+    n = len(src)
+    j = i + 1
+    while j < n:
+        if src[j] == "\\":
+            j += 2
+            continue
+        if src[j] == '"':
+            return j + 1
+        j += 1
+    return n
+
+
+def _scan_raw(src: str, i: int) -> int | None:
+    """Index past `r"…"`, `r#"…"#`, `br"…"` starting at `r` (or `b` of `br`)."""
+    n = len(src)
+    j = i
+    if src[j] == "b":
+        j += 1
+        if j >= n or src[j] != "r":
+            return None
+    if j >= n or src[j] != "r":
+        return None
+    if _ident_prev(src, i):
+        return None
+    j += 1
+    hashes = 0
+    while j < n and src[j] == "#":
+        hashes += 1
+        j += 1
+    if j >= n or src[j] != '"':
+        return None
+    close = '"' + "#" * hashes
+    k = src.find(close, j + 1)
+    return n if k < 0 else k + len(close)
+
+
+def _scan_char(src: str, i: int) -> int | None:
+    """Index past `'x'` / `b'x'` / `'\\n'`; None for a lifetime `'a`."""
+    n = len(src)
+    j = i
+    if src[j] == "b":
+        j += 1
+        if j >= n or src[j] != "'":
+            return None
+        if _ident_prev(src, i):
+            return None
+    elif src[j] != "'":
+        return None
+    nxt = src[j + 1] if j + 1 < n else ""
+    if nxt == "\\":
+        k = src.find("'", j + 2)
+        if 0 < k <= j + 12:
+            return k + 1
+        return None
+    if j + 2 < n and src[j + 2] == "'":
+        return j + 3
+    return None
 
 
 def _comment_lines(src: str) -> list[tuple[int, str]]:
     """Comment lines outside string literals: every `//`, `///` and `//!`
     line, and every line of a (nested) `/* */`, `/** */` or `/*! */` block."""
-    global _COMMENT_LEXER
-    if _COMMENT_LEXER is None:
-        _COMMENT_LEXER = _comment_lexer()
-    mod = _COMMENT_LEXER
     out: list[tuple[int, str]] = []
     i, n = 0, len(src)
     line = 1
@@ -137,13 +211,13 @@ def _comment_lines(src: str) -> list[tuple[int, str]]:
         nxt = src[i + 1] if i + 1 < n else ""
         end: int | None = None
         if c == "r" or (c == "b" and nxt == "r"):
-            end = mod._scan_raw(src, i)
+            end = _scan_raw(src, i)
         if end is None and c == "b" and nxt == '"':
-            end = mod._scan_quoted(src, i + 1)
+            end = _scan_quoted(src, i + 1)
         if end is None and c == '"':
-            end = mod._scan_quoted(src, i)
+            end = _scan_quoted(src, i)
         if end is None and c in "'b":
-            end = mod._scan_char(src, i)
+            end = _scan_char(src, i)
         if end is not None:
             bump(src[i:end])
             i = end
@@ -387,24 +461,31 @@ def _ref_contained(a: int, b: int, defs: list[tuple[int, int]]) -> bool:
     return any(a >= s - _ANCHOR_SLACK and b <= e and a <= b for s, e in defs)
 
 
-def _anchor_resolves(lines: list[str], ext: str, symbol: str, a: int, b: int) -> bool:
-    """The reference's verdict for one ranged anchor: some definition of the
-    symbol's kind in this file contains the range."""
+def _anchor_tries(lines: list[str], ext: str, symbol: str) -> list[list[tuple[int, int]]]:
+    """Definition spans of `symbol` in one MIT file, by the kinds that file uses."""
     typed = symbol.split(" ")[-1] if " " in symbol else None
     if ext == "c":
         if typed:
-            tries = [_ref_find_type(lines, typed)]
-        else:
-            tries = [
-                _ref_find_fn(lines, symbol),
-                _ref_find_type(lines, symbol),
-                _ref_find_data(lines, symbol),
-                _ref_find_macro_gen(lines, symbol),
-                _ref_find_asn1(lines, symbol),
-            ]
-    else:
-        tries = [_ref_find_hdr(lines, typed or symbol)]
-    return any(defs and _ref_contained(a, b, defs) for defs in tries)
+            return [_ref_find_type(lines, typed)]
+        return [
+            _ref_find_fn(lines, symbol),
+            _ref_find_type(lines, symbol),
+            _ref_find_data(lines, symbol),
+            _ref_find_macro_gen(lines, symbol),
+            _ref_find_asn1(lines, symbol),
+        ]
+    return [_ref_find_hdr(lines, typed or symbol)]
+
+
+def _anchor_resolves(lines: list[str], ext: str, symbol: str, a: int, b: int) -> bool:
+    """The reference's verdict for one ranged anchor: some definition of the
+    symbol's kind in this file contains the range."""
+    return any(defs and _ref_contained(a, b, defs) for defs in _anchor_tries(lines, ext, symbol))
+
+
+def _symbol_defined(lines: list[str], ext: str, symbol: str) -> bool:
+    """A rangeless cite: the symbol has a definition in this file."""
+    return any(_anchor_tries(lines, ext, symbol))
 
 
 def _enclosing_fn(lines: list[str], a: int) -> str | None:
@@ -427,11 +508,65 @@ def _is_rust_test_file(rel: pathlib.Path) -> bool:
     return "/tests/" in text or text.endswith("/tests.rs")
 
 
+def _record_anchor(
+    where: str,
+    files: dict[str, list[str]],
+    mit: pathlib.Path,
+    is_test: bool,
+    symbol: str,
+    cited: str,
+    a: int | None,
+    b: int | None,
+    bad: list[str],
+) -> None:
+    """One old-form or `// MIT:` anchor. `a is None` is rangeless."""
+    cands = _resolve_mit_path(files, cited)
+    if not cands:
+        bad.append(f"{where}: {cited} is not a file of the MIT tree")
+        return
+    if len(cands) > 1:
+        bad.append(f"{where}: {cited} is ambiguous ({', '.join(cands[:4])})")
+        return
+    rel = cands[0]
+    lines = _mit_lines(mit / rel)
+    ext = rel.rsplit(".", 1)[-1]
+    if a is None:
+        if not _symbol_defined(lines, ext, symbol):
+            bad.append(f"{where}: `{symbol}` is not defined in {rel}")
+        return
+    end = a if b is None else b
+    if not _anchor_resolves(lines, ext, symbol, a, end):
+        inside = _enclosing_fn(lines, a) if rel.endswith(".c") else None
+        why = f"range {a}-{end} is inside `{inside}`" if inside else f"range {a}-{end}"
+        bad.append(f"{where}: {why}, not inside a definition of `{symbol}` in {rel}")
+        return
+    if _TEST_MIT_PATH.search(rel) and not is_test:
+        bad.append(f"{where}: `{symbol}` is MIT test code ({rel}) cited from src")
+
+
+def mit_anchor_truth_checked(
+    root: pathlib.Path | None = None, mit: pathlib.Path | None = None
+) -> tuple[int, int]:
+    """Old-form anchors and `// MIT:` anchors the truth check inspects."""
+    root = ROOT if root is None else root
+    assert mit is not None
+    old = new = 0
+    for path in _rs_under(root, ("src", "tests")):
+        for _lineno, comment in _comment_lines(path.read_text(encoding="utf-8")):
+            old += sum(1 for _ in _ANCHOR_HEAD.finditer(comment))
+            new += sum(1 for _ in _NEW_CITE_ANCHOR.finditer(comment))
+    return old, new
+
+
 def mit_anchor_truth_violations(
     root: pathlib.Path | None = None, mit: pathlib.Path | None = None
 ) -> list[str]:
     """Anchors whose range is not inside the named MIT definition, and file
-    mentions that do not name exactly one file of the MIT tree."""
+    mentions that do not name exactly one file of the MIT tree.
+
+    A `// MIT:` cite is checked the same way. With no range, the symbol must
+    be defined in that file.
+    """
     root = ROOT if root is None else root
     assert mit is not None
     files = _mit_files(mit)
@@ -442,28 +577,16 @@ def mit_anchor_truth_violations(
         for lineno, comment in _comment_lines(path.read_text(encoding="utf-8")):
             where = f"{rel}:{lineno}"
             for m in _ANCHOR_HEAD.finditer(comment):
-                symbol, cited = m.group(1), m.group(2)
-                a, b = int(m.group(3)), int(m.group(4))
-                cands = _resolve_mit_path(files, cited)
-                if not cands:
-                    bad.append(f"{where}: {cited} is not a file of the MIT tree")
-                    continue
-                if len(cands) > 1:
-                    bad.append(f"{where}: {cited} is ambiguous ({', '.join(cands[:4])})")
-                    continue
-                ok_in = [
-                    c for c in cands
-                    if _anchor_resolves(_mit_lines(mit / c), c.rsplit(".", 1)[-1], symbol, a, b)
-                ]
-                if not ok_in:
-                    lines = _mit_lines(mit / cands[0])
-                    inside = _enclosing_fn(lines, a) if cands[0].endswith(".c") else None
-                    why = f"range {a}-{b} is inside `{inside}`" if inside else f"range {a}-{b}"
-                    bad.append(f"{where}: {why}, not inside a definition of `{symbol}` in {cands[0]}")
-                    continue
-                if _TEST_MIT_PATH.search(ok_in[0]) and not is_test:
-                    bad.append(f"{where}: `{symbol}` is MIT test code ({ok_in[0]}) cited from src")
-            rest = _ANCHOR_HEAD.sub(" ", comment)
+                _record_anchor(
+                    where, files, mit, is_test, m.group(1), m.group(2),
+                    int(m.group(3)), int(m.group(4)), bad,
+                )
+            for m in _NEW_CITE_ANCHOR.finditer(comment):
+                a = int(m.group(3)) if m.group(3) else None
+                b = int(m.group(4)) if m.group(4) else None
+                for symbol in re.findall(r"`([A-Za-z_]\w*)`", m.group(1)):
+                    _record_anchor(where, files, mit, is_test, symbol, m.group(2), a, b, bad)
+            rest = _NEW_CITE_ANCHOR.sub(" ", _ANCHOR_HEAD.sub(" ", comment))
             for f in _FILE_TOKEN.finditer(rest):
                 cands = _resolve_mit_path(files, f.group(1))
                 if not cands:
@@ -518,8 +641,35 @@ def check_mit_anchor_truth(
         _die(f"mit anchor truth {len(bad)} != allow {allow}")
 
 
+def _pointer_row_names(text: str, symbol: str) -> bool:
+    """A table row names the symbol. The header and the separator do not."""
+    rx = re.compile(rf"(?<![A-Za-z0-9_]){re.escape(symbol)}(?![A-Za-z0-9_])")
+    for line in text.splitlines():
+        row = line.lstrip()
+        if not row.startswith("|") or "MIT file:line" in row or re.match(r"^\|\s*-+", row):
+            continue
+        if rx.search(row):
+            return True
+    return False
+
+
+def _pointer_file_problems(comment: str, root: pathlib.Path) -> list[str]:
+    """A well-formed pointer names a parity file whose table row names the symbol."""
+    hits = list(_POINTER.finditer(comment))
+    if len(hits) != 1:
+        return []
+    symbol, name = hits[0].group(1), hits[0].group(2)
+    path = root / "docs" / "parity" / name
+    if not path.is_file():
+        return [f"parity file docs/parity/{name} is missing"]
+    text = path.read_text(encoding="utf-8")
+    if not _pointer_row_names(text, symbol):
+        return [f"docs/parity/{name} has no row naming {symbol}"]
+    return []
+
+
 def mit_anchor_violations(root: pathlib.Path | None = None) -> list[str]:
-    """Comment lines that break the R1 anchor form, one entry per line."""
+    """Comment lines that break the R1 anchor or pointer form, one entry per line."""
     root = ROOT if root is None else root
     bad: list[str] = []
     for path in _rs_under(root, ("src", "tests")):
@@ -527,6 +677,7 @@ def mit_anchor_violations(root: pathlib.Path | None = None) -> list[str]:
         rel = path.relative_to(root)
         for lineno, comment in _comment_lines(text):
             problems = _anchor_line_problems(comment)
+            problems.extend(_pointer_file_problems(comment, root))
             if problems:
                 bad.append(f"{rel}:{lineno}: {'; '.join(problems)}: {comment.strip()[:140]}")
     return bad
@@ -622,15 +773,78 @@ _DOCS_PROCESS_TAG = re.compile(
 )
 
 
+_CITE_FILE = re.compile(
+    r"(?<![\w/.-])((?:[\w.-]+/)*[\w.-]+\.(?:sh|py|c|h|rs|md|toml|yml|yaml|conf|env))"
+    r"(:[0-9]+(?:-[0-9]+)?(?:,\s?[0-9]+(?:-[0-9]+)?)*)?"
+)
+_CITE_CONT = re.compile(r"(?<![\w.)\]])(:[0-9]+(?:-[0-9]+)?(?:,[0-9]+(?:-[0-9]+)?)*)(?![\w:])")
+_CITE_SECTION = re.compile(r"`(==== .+? ====)`")
+_CITE_FUNCTION = re.compile(r"`([A-Za-z_][\w]*)\(\)`")
+_BARE_MIT_NAMES = frozenset({"t_vfy_increds.c"})
+
+
+def scripts_by_name(root: pathlib.Path) -> dict[str, pathlib.Path]:
+    """Every scripts/**/*.(sh|py|c) by its file name (the first in sorted order when two share one)."""
+    scripts = root / "scripts"
+    by_name: dict[str, pathlib.Path] = {}
+    for p in sorted(scripts.rglob("*")) if scripts.is_dir() else []:
+        if p.suffix in (".sh", ".py", ".c") and p.is_file() and "__pycache__" not in p.parts:
+            by_name.setdefault(p.name, p)
+    return by_name
+
+
+def line_script_cites(
+    root: pathlib.Path, line: str, by_name: dict[str, pathlib.Path]
+) -> tuple[list[str], list[tuple[str, pathlib.Path, bool]]]:
+    """One doc line's script cites, and its section and function cites as (text, script, resolved)."""
+    cites: list[str] = []
+    sections: list[tuple[str, pathlib.Path, bool]] = []
+    for cell in re.split(r"(?<!\\)\|", line) if line.lstrip().startswith("|") else [line]:
+        events = [(m.start(), "file", m) for m in _CITE_FILE.finditer(cell)]
+        events += [(m.start(), "cont", m) for m in _CITE_CONT.finditer(cell)]
+        events += [(m.start(), "section", m) for m in _CITE_SECTION.finditer(cell)]
+        events += [(m.start(), "function", m) for m in _CITE_FUNCTION.finditer(cell)]
+        current: pathlib.Path | None = None
+        last_end = -1
+        in_script = False
+        for _pos, kind, m in sorted(events, key=lambda e: e[0]):
+            if kind == "file":
+                name = m.group(1)
+                if name.startswith("scripts/"):
+                    current = root / name
+                elif "/" not in name and name in by_name and name not in _BARE_MIT_NAMES:
+                    current = by_name[name]
+                else:
+                    current = None
+                in_script = current is not None and bool(m.group(2))
+                last_end = m.end() + 1 if current is not None else -1
+                if in_script:
+                    cites.append(m.group(0))
+            elif kind == "cont":
+                ranged = "-" in m.group(1) or "," in m.group(1)
+                if (in_script or (current is not None and ranged)) and not cell[: m.start()].endswith(
+                    tuple("0123456789")
+                ):
+                    cites.append(m.group(1))
+            elif kind == "function":
+                if current is not None and cell[last_end:m.start()].strip() == "":
+                    text = current.read_text(encoding="utf-8", errors="replace") if current.is_file() else ""
+                    name = m.group(1)
+                    ok = re.search(rf"^\s*(?:function\s+)?{re.escape(name)}\s*\(\)", text, re.M) is not None
+                    sections.append((f"{name}()", current, ok))
+            elif current is not None:
+                text = current.read_text(encoding="utf-8", errors="replace") if current.is_file() else ""
+                sections.append((m.group(1), current, m.group(1) in text))
+    return cites, sections
+
+
 def docs_process_tag_lines(root: pathlib.Path | None = None) -> list[str]:
     """`path:line` of every docs/**/*.md line outside a code fence that carries a process tag.
 
     A backticked `==== … ====` section cite that resolves verbatim in the script named before it (the cites
-    judge's rule) is the script's text, quoted faithfully, and is not counted; unresolved, it counts. This arm is
-    temporary: 31 gate sections carry a tag in their own echo text, and the commit that renames them deletes it.
+    judge's rule) is the script's text, quoted faithfully, and is not counted. A cite of a script that is
+    no longer in the tree is retired history and is not counted. Unresolved in a live script, it counts.
     """
-    from .docs import line_script_cites, scripts_by_name
-
     root = ROOT if root is None else root
     by_name = scripts_by_name(root)
     out = []
@@ -640,8 +854,8 @@ def docs_process_tag_lines(root: pathlib.Path | None = None) -> list[str]:
             if line.startswith("```"):
                 fence = not fence
             elif not fence and _DOCS_PROCESS_TAG.search(line):
-                for text, _script, ok in line_script_cites(root, line, by_name)[1]:
-                    if ok:
+                for text, script, ok in line_script_cites(root, line, by_name)[1]:
+                    if ok or not script.is_file():
                         line = line.replace(f"`{text}`", "``")
                 if _DOCS_PROCESS_TAG.search(line):
                     out.append(f"{path.relative_to(root)}:{i}")

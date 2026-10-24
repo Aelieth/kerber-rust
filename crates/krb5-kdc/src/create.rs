@@ -1,10 +1,12 @@
-//! The realm `kdb5_util create` writes: MIT `kdb5_create.c` (`K/M`, `krbtgt`) and
-//! `kadm5_create.c` (`kadmin/admin`, `kadmin/changepw`). No other principal is made: no
-//! `kadmin/history`, no `kiprop/*`, no host or user.
+//! kdb5_util create.
 
-use krb5_config::KdcConf;
-use krb5_crypto::ProtocolKey;
+use std::path::Path;
+
+use krb5_config::{KdcConf, ProfileSet};
+use krb5_crypto::{EncryptionType, ProtocolKey};
+use krb5_protocol::{Keytab, KeytabEntry};
 use krb5_types::PrincipalName;
+use zeroize::Zeroizing;
 
 use crate::error::Error;
 use crate::kdb_dump::{TL_ACTKVNO, TL_KADM_DATA, TL_LAST_PWD_CHANGE, TL_MKVNO, TL_MOD_PRINC};
@@ -15,33 +17,13 @@ use crate::store::{
     PrincipalStore, TlData, kadm5_mask, random_key, refresh_kadm_tl,
 };
 
-/// MIT `ADMIN_LIFETIME` (`kadm5_create.c:54-54`): `60*60*3`, three hours.
+// MIT: `ADMIN_LIFETIME` (kadm5_create.c:54-54)
 const ADMIN_LIFETIME: u32 = 60 * 60 * 3;
-/// MIT `CHANGEPW_LIFETIME` (`kadm5_create.c:55-55`): `60*5`, five minutes.
+// MIT: `CHANGEPW_LIFETIME` (kadm5_create.c:55-55)
 const CHANGEPW_LIFETIME: u32 = 60 * 5;
 
-/// The principals of a new realm, as MIT `kdb5_util create` writes them, under `master` at
-/// master key version `mkvno`.
-///
-/// `K/M` holds `master`; `krbtgt/realm@realm` has a random key of each `supported_enctypes`
-/// type; both are stamped `db_creation@realm` and take the realm's `default_principal_flags`,
-/// `max_life`, `max_renewable_life` and `default_principal_expiration`. Then `kadmin/admin` and
-/// `kadmin/changepw` are created the way `kadm5_create_principal` creates them for a caller
-/// named `kdb5_util`, with MIT's attributes and lifetimes. None of them is logged: with iprop
-/// enabled, `kdb5_util create` maps the update log afterwards and starts it over.
-/// MIT `kdb5_create` (`kadmin/dbutil/kdb5_create.c:170-175`): `K/M` and `krbtgt` take the realm's flags, lifetimes, expiration and key/salt list.
-/// MIT `add_principal` (`kadmin/dbutil/kdb5_create.c:392-406`): each entry is stamped `db_creation` with those defaults.
-/// MIT `add_principal` (`kadmin/dbutil/kdb5_create.c:409-440`): `K/M` gets `DISALLOW_ALL_TIX`, the master key, and the active and master key versions.
-/// MIT `add_principal` (`kadmin/dbutil/kdb5_create.c:441-454`): `krbtgt` gets one random key per key/salt type.
-/// MIT `add_principal` (`kadmin/dbutil/kdb5_create.c:462-465`): both get `LOCKDOWN_KEYS`.
-/// MIT `add_admin_princs` (`kadmin/dbutil/kadm5_create.c:139-154`): `kadmin/admin` and `kadmin/changepw`, their attributes and lifetimes.
-/// MIT `add_admin_princ` (`kadmin/dbutil/kadm5_create.c:207-213`): a random-key create with only the attributes and the max life masked.
-///
-/// # Errors
-///
-/// [`Error::Crypto`] when `kdc` sets a `domain_sid` that is not valid SDDL;
-/// [`Error::InvalidArgument`] when its `dict_file` cannot be read for any reason but being
-/// missing; [`Error::Rng`] when the CSPRNG fails while generating a random key.
+// MIT: `kdb5_create` (kadmin/dbutil/kdb5_create.c:170-175)
+/// A missing dictionary does not fail this.
 pub fn create_realm(
     realm: &str,
     kdc: Option<&KdcConf>,
@@ -50,7 +32,7 @@ pub fn create_realm(
 ) -> Result<PrincipalStore, Error> {
     let mut store = create_realm_db(realm, kdc, master, mkvno)?;
     if let Some(c) = kdc {
-        // MIT `kadm5_create_magic_princs` (`kadmin/dbutil/kadm5_create.c:100-107`): the create starts the admin side, which reads the dictionary or fails.
+        // MIT: `kadm5_create_magic_princs` (kadmin/dbutil/kadm5_create.c:100-107)
         store.init_pwqual(Some(c)).map_err(|e| {
             let path = c.dict_file.as_deref().unwrap_or(std::path::Path::new(""));
             Error::InvalidArgument(format!("kdc.conf dict_file {}: {e}", path.display()))
@@ -60,23 +42,35 @@ pub fn create_realm(
     Ok(store)
 }
 
-/// `K/M` and `krbtgt` only, before `kadm5_create` reads the dictionary.
-/// MIT `kdb5_create` (`kadmin/dbutil/kdb5_create.c:291-294`): `K/M` and `krbtgt` are added before `kadm5_create`.
-///
-/// # Errors
-///
-/// [`Error::Crypto`] when `kdc` sets a `domain_sid` that is not valid SDDL;
-/// [`Error::Rng`] when the CSPRNG fails while generating a random key.
+// MIT: `kdb5_create` (kadmin/dbutil/kdb5_create.c:291-294)
+/// K/M and krbtgt skip the update log.
 pub fn create_realm_db(
     realm: &str,
     kdc: Option<&KdcConf>,
     master: &ProtocolKey,
     mkvno: u16,
 ) -> Result<PrincipalStore, Error> {
-    let mut store = PrincipalStore::new(realm);
+    let mut store = PrincipalStore::try_new(realm)?;
     if let Some(c) = kdc {
         store.apply_kdc_conf(c)?;
     }
+    for row in realm_rows(&store, master, mkvno)? {
+        store.debug_insert(row);
+    }
+    Ok(store)
+}
+
+// MIT: `add_principal` (kadmin/dbutil/kdb5_create.c:392-406)
+// MIT: `add_principal` (kadmin/dbutil/kdb5_create.c:409-440)
+// MIT: `add_principal` (kadmin/dbutil/kdb5_create.c:441-454)
+// MIT: `add_principal` (kadmin/dbutil/kdb5_create.c:462-465)
+/// K/M and krbtgt, as `kdb5_util create` inserts them.
+pub fn realm_rows(
+    store: &PrincipalStore,
+    master: &ProtocolKey,
+    mkvno: u16,
+) -> Result<Vec<Principal>, Error> {
+    let realm = store.realm();
     let now = crate::store::unix_now_u32();
     let flags = store.default_create_attributes(false);
     let creation = db_creation(realm, now);
@@ -87,7 +81,7 @@ pub fn create_realm_db(
         master.clone(),
         u32::from(mkvno),
     )];
-    let mut km = new_entry(&store, km_name, km_keys, flags | KDB_DISALLOW_ALL_TIX);
+    let mut km = new_entry(store, km_name, km_keys, flags | KDB_DISALLOW_ALL_TIX);
     let mut actkvno = Vec::with_capacity(8);
     actkvno.extend_from_slice(&1u16.to_le_bytes());
     actkvno.extend_from_slice(&mkvno.to_le_bytes());
@@ -98,26 +92,20 @@ pub fn create_realm_db(
         tl(TL_ACTKVNO, actkvno),
         creation.clone(),
     ];
-    store.debug_insert(km);
 
     let mut tgt_keys = Vec::new();
     for etype in store.policy.password_etypes() {
         tgt_keys.push(KeyEntry::new(etype, random_key(etype)?, 1));
     }
-    let mut tgt = new_entry(&store, PrincipalName::krbtgt(realm), tgt_keys, flags);
+    let mut tgt = new_entry(store, PrincipalName::krbtgt(realm), tgt_keys, flags);
     tgt.mkvno = mkvno;
     tgt.tl_data = vec![creation];
-    store.debug_insert(tgt);
-    Ok(store)
+    Ok(vec![km, tgt])
 }
 
-/// `kadmin/admin` and `kadmin/changepw`, after the dictionary has been read.
-/// MIT `add_admin_princs` (`kadmin/dbutil/kadm5_create.c:139-154`): `kadmin/admin` and `kadmin/changepw`, their attributes and lifetimes.
-///
-/// # Errors
-///
-/// [`Error::AlreadyExists`] when one of them is already in `store`; [`Error::Rng`] when a
-/// random key cannot be made.
+// MIT: `add_admin_princs` (kadmin/dbutil/kadm5_create.c:139-154)
+// MIT: `add_admin_princ` (kadmin/dbutil/kadm5_create.c:207-213)
+/// Admin is three hours; changepw is five minutes.
 pub fn add_admin_principals(store: &mut PrincipalStore, mkvno: u16) -> Result<(), Error> {
     let realm = store.realm().to_owned();
     let caller = crate::kdb5_util_id_for_realm(&realm);
@@ -133,20 +121,28 @@ pub fn add_admin_principals(store: &mut PrincipalStore, mkvno: u16) -> Result<()
             CHANGEPW_LIFETIME,
         ),
     ] {
+        if store.get_name(&name).is_some() {
+            continue;
+        }
         let ent = AdminEnt {
             mask: kadm5_mask::ATTRIBUTES | kadm5_mask::MAX_LIFE,
             attributes,
             max_life,
             ..AdminEnt::default()
         };
-        store.create_principal_3_in(&name, &realm, None, &[], &ent, &caller)?;
+        store.create_principal_3_in(
+            &name,
+            &realm,
+            crate::CreateKeys::Random,
+            &[],
+            &ent,
+            &caller,
+        )?;
         stamp_kadm5_create_tl(store, &name, mkvno);
     }
     Ok(())
 }
 
-/// `K/M` or `krbtgt` before its tagged data: the realm's lifetimes and expiration, and the
-/// given attributes with `LOCKDOWN_KEYS`.
 fn new_entry(
     store: &PrincipalStore,
     name: PrincipalName,
@@ -174,8 +170,6 @@ fn new_entry(
     p
 }
 
-/// `KRB5_TL_MOD_PRINC` naming `db_creation@realm`, the modifier `kdb5_util create` stamps on
-/// the entries it writes without a kadm5 handle.
 fn db_creation(realm: &str, now: u32) -> TlData {
     let mut contents = now.to_le_bytes().to_vec();
     contents.extend_from_slice(format!("db_creation@{realm}").as_bytes());
@@ -187,10 +181,8 @@ fn tl(ty: i32, contents: Vec<u8>) -> TlData {
     TlData { ty, contents }
 }
 
-/// The tagged data `kadm5_create_principal` leaves on a new entry, in MIT's order: the admin
-/// record, the modifier, the master key version and the password change time.
-/// MIT `kadm5_create_principal_3` (`lib/kadm5/srv/svr_principal.c:475-478`): the master key version that wrapped the keys is recorded.
-/// MIT `kadm5_create_principal_3` (`lib/kadm5/srv/svr_principal.c:490-501`): the admin record is stored with the entry.
+// MIT: `kadm5_create_principal_3` (lib/kadm5/srv/svr_principal.c:475-478)
+// MIT: `kadm5_create_principal_3` (lib/kadm5/srv/svr_principal.c:490-501)
 fn stamp_kadm5_create_tl(store: &mut PrincipalStore, name: &PrincipalName, mkvno: u16) {
     let Some(mut p) = store.get_name(name).cloned() else {
         return;
@@ -211,67 +203,362 @@ fn stamp_kadm5_create_tl(store: &mut PrincipalStore, name: &PrincipalName, mkvno
     store.debug_insert(p);
 }
 
-/// The settings of the KDC profile `text` that apply to `realm`: every section but
-/// `[realms]`, and only `realm`'s own stanza there, so another realm's relations are never
-/// lent to this one.
-/// MIT `get_string_param` (`lib/kadm5/alt_prof.c:310-336`): a realm parameter is read from that realm's stanza, else it takes the default.
-///
-/// # Errors
-///
-/// As [`KdcConf::parse`].
-pub fn kdc_conf_for_realm(text: &str, realm: &str) -> Result<KdcConf, krb5_config::Error> {
-    // A stanza written `R =` with its `{` on the next line is `R`'s too: the text is read as
-    // the profile parser reads it, the brace joined first.
-    let text = &krb5_config::join_subsection_braces(text)?;
-    let mut kept = String::with_capacity(text.len());
-    let mut section = String::new();
-    let mut depth = 0usize;
-    let mut keep = true;
-    for raw in text.lines() {
-        let line = raw.trim();
-        if depth == 0
-            && let Some(s) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']'))
-        {
-            section = s.trim().to_ascii_lowercase();
-            keep = true;
-        } else if section == "realms" {
-            if line.ends_with('{') {
-                if depth == 0 {
-                    let name = line
-                        .trim_end_matches('{')
-                        .trim()
-                        .trim_end_matches('=')
-                        .trim();
-                    keep = name == realm;
-                }
-                depth += 1;
-            } else if line.starts_with('}') && depth > 0 {
-                depth -= 1;
-                if depth == 0 {
-                    if keep {
-                        kept.push_str(raw);
-                        kept.push('\n');
-                    }
-                    keep = true;
-                    continue;
-                }
-            }
-        }
-        if keep {
-            kept.push_str(raw);
-            kept.push('\n');
-        }
-    }
-    KdcConf::parse(&kept)
+pub enum MasterKey {
+    Random { etype: Option<EncryptionType> },
+    Password(Zeroizing<Vec<u8>>),
+    Key(ProtocolKey),
 }
 
-/// The principals the gates seed beside a new realm: `user@` and `admin@` with the given
-/// passwords, `host/testhost.<realm>` and `kiprop/testhost.kerber.test` with random keys.
-///
-/// # Errors
-///
-/// [`Error::AlreadyExists`] when one of them exists; [`Error::PasswordPolicy`] when a password
-/// is empty; [`Error::Rng`] when the CSPRNG fails.
+pub struct AdminSpec {
+    pub name: PrincipalName,
+    pub requires_preauth: bool,
+    pub etypes: Vec<EncryptionType>,
+    pub max_life: Option<u32>,
+}
+
+impl AdminSpec {
+    #[must_use]
+    pub fn new(name: PrincipalName) -> Self {
+        Self {
+            name,
+            requires_preauth: true,
+            etypes: Vec::new(),
+            max_life: None,
+        }
+    }
+}
+
+pub struct RealmSpec<'a> {
+    pub realm: &'a str,
+    pub profile: &'a ProfileSet,
+    pub mkvno: u16,
+    pub admin: Option<AdminSpec>,
+}
+
+pub struct Bootstrapped {
+    pub master: ProtocolKey,
+    pub kvno: u16,
+    pub created: Vec<String>,
+    pub admin_keytab: Option<Keytab>,
+}
+
+pub struct StashTarget<'a> {
+    pub path: &'a Path,
+}
+
+pub fn bootstrap_realm_into(
+    store: &mut PrincipalStore,
+    master: MasterKey,
+    spec: &RealmSpec<'_>,
+) -> Result<Bootstrapped, Error> {
+    if store.realm() != spec.realm {
+        return Err(Error::InvalidArgument(format!(
+            "realm {} does not match the store",
+            spec.realm
+        )));
+    }
+    store.change(|store| fill_realm(store, master, spec))?
+}
+
+fn fill_realm(
+    store: &mut PrincipalStore,
+    master: MasterKey,
+    spec: &RealmSpec<'_>,
+) -> Result<Bootstrapped, Error> {
+    let mut created = Vec::new();
+    let (master, kvno) = if let Some(found) = master_on_store(store)? {
+        found
+    } else {
+        if let Some(kdc) = spec.profile.kdc.as_ref() {
+            store.apply_kdc_conf(kdc)?;
+        }
+        (resolve_master(spec, master)?, spec.mkvno)
+    };
+    let mut wrote_rows = false;
+    for row in realm_rows(store, &master, kvno)? {
+        if store.get_name(&row.name).is_some() {
+            continue;
+        }
+        created.push(row.id());
+        store.debug_insert(row);
+        wrote_rows = true;
+    }
+    if wrote_rows && store.db_path().is_some() {
+        store.flush_unlogged()?;
+    }
+    for name in [
+        crate::principals::kadmin_admin(),
+        crate::principals::kadmin_changepw(),
+    ] {
+        if store.get_name(&name).is_none() {
+            created.push(crate::kdb::lookup_principal_id(&name, spec.realm));
+        }
+    }
+    add_admin_principals(store, kvno)?;
+    let admin_keytab = match &spec.admin {
+        None => None,
+        Some(admin) => {
+            if store.get_name(&admin.name).is_none() {
+                create_bootstrap_admin(store, spec.realm, admin)?;
+                created.push(crate::kdb::lookup_principal_id(&admin.name, spec.realm));
+            }
+            Some(admin_keytab(store, admin)?)
+        }
+    };
+    Ok(Bootstrapped {
+        master,
+        kvno,
+        created,
+        admin_keytab,
+    })
+}
+
+fn create_bootstrap_admin(
+    store: &mut PrincipalStore,
+    realm: &str,
+    admin: &AdminSpec,
+) -> Result<(), Error> {
+    let mut attributes = store.default_create_attributes(false);
+    if admin.requires_preauth {
+        attributes |= KDB_REQUIRES_PRE_AUTH;
+    }
+    let mut mask = kadm5_mask::ATTRIBUTES;
+    let max_life = match admin.max_life {
+        Some(life) => {
+            mask |= kadm5_mask::MAX_LIFE;
+            life
+        }
+        None => 0,
+    };
+    let ent = AdminEnt {
+        mask,
+        attributes,
+        max_life,
+        ..AdminEnt::default()
+    };
+    let actor = format!("bootstrap@{realm}");
+    store.create_principal_3_in(
+        &admin.name,
+        realm,
+        crate::CreateKeys::Random,
+        &admin.etypes,
+        &ent,
+        &actor,
+    )
+}
+
+fn admin_keytab(store: &PrincipalStore, admin: &AdminSpec) -> Result<Keytab, Error> {
+    let principal = store.get_name(&admin.name).ok_or(Error::NotFound)?;
+    let want = if admin.etypes.is_empty() {
+        vec![
+            EncryptionType::Aes256CtsHmacSha196,
+            EncryptionType::Aes128CtsHmacSha196,
+        ]
+    } else {
+        admin.etypes.clone()
+    };
+    let realm = krb5_types::try_ascii(&principal.realm)
+        .map_err(|e| Error::InvalidArgument(e.to_string()))?;
+    let timestamp = krb5_types::KerberosTime::now().unix_seconds();
+    let mut entries = Vec::new();
+    for etype in want {
+        let Some(key) = principal.key_for(etype) else {
+            continue;
+        };
+        entries.push(KeytabEntry {
+            realm: realm.clone(),
+            name: principal.name.clone(),
+            timestamp,
+            kvno: key.kvno,
+            key: key.key.clone(),
+        });
+    }
+    if entries.is_empty() {
+        return Err(Error::NotFound);
+    }
+    Ok(Keytab {
+        version: 0x0502,
+        skipped_unknown_etype: 0,
+        unparsed: Vec::new(),
+        entries,
+    })
+}
+
+fn resolve_master(spec: &RealmSpec<'_>, master: MasterKey) -> Result<ProtocolKey, Error> {
+    match master {
+        MasterKey::Key(key) => Ok(key),
+        MasterKey::Random { etype } => {
+            let etype = match etype {
+                Some(etype) => etype,
+                None => profile_master_etype(spec)?,
+            };
+            random_key(etype)
+        }
+        MasterKey::Password(password) => {
+            crate::mkey::master_key_from_password(spec.realm, password, profile_master_etype(spec)?)
+        }
+    }
+}
+
+fn profile_master_etype(spec: &RealmSpec<'_>) -> Result<EncryptionType, Error> {
+    let name = spec
+        .profile
+        .kdc
+        .as_ref()
+        .and_then(|conf| conf.master_key_type.as_deref());
+    crate::mkey::master_etype(name).map_err(Error::InvalidArgument)
+}
+
+fn master_on_store(store: &PrincipalStore) -> Result<Option<(ProtocolKey, u16)>, Error> {
+    let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, crate::mkey::MASTER_NAME);
+    let Some(principal) = store.get_name(&name) else {
+        return Ok(None);
+    };
+    if principal.keys.is_empty() {
+        return Err(Error::NotFound);
+    }
+    let kvno = active_kvno(principal)
+        .filter(|kvno| {
+            principal
+                .keys
+                .iter()
+                .any(|key| key.kvno == u32::from(*kvno))
+        })
+        .or_else(|| newest_kvno(principal))
+        .ok_or_else(|| Error::InvalidArgument("master kvno does not fit".to_owned()))?;
+    let key = principal
+        .keys
+        .iter()
+        .find(|key| key.kvno == u32::from(kvno))
+        .map(|key| key.key.clone())
+        .ok_or(Error::NotFound)?;
+    Ok(Some((key, kvno)))
+}
+
+// MIT: `find_actkvno` (lib/kdb/kdb5.c:1333-1344)
+fn active_kvno(principal: &Principal) -> Option<u16> {
+    let tl = principal.tl_data.iter().find(|tl| tl.ty == TL_ACTKVNO)?;
+    let bytes = tl.contents.as_slice();
+    if bytes.len() < 8 || u16::from_le_bytes([bytes[0], bytes[1]]) != 1 {
+        return None;
+    }
+    let mut chosen = None;
+    let mut at = 2;
+    let now = crate::store::unix_now_u32();
+    while at + 6 <= bytes.len() {
+        let kvno = u16::from_le_bytes([bytes[at], bytes[at + 1]]);
+        let time = u32::from_le_bytes([bytes[at + 2], bytes[at + 3], bytes[at + 4], bytes[at + 5]]);
+        if chosen.is_none() || time <= now {
+            chosen = Some(kvno);
+        }
+        if time > now {
+            break;
+        }
+        at += 6;
+    }
+    chosen
+}
+
+fn newest_kvno(principal: &Principal) -> Option<u16> {
+    principal
+        .keys
+        .iter()
+        .map(|key| key.kvno)
+        .max()
+        .and_then(|kvno| u16::try_from(kvno).ok())
+}
+
+pub fn create_database(
+    store: &PrincipalStore,
+    db: &Path,
+    stash: &StashTarget<'_>,
+    boot: &Bootstrapped,
+) -> Result<(), Error> {
+    if stash.path.exists() {
+        let (key, kvno) =
+            crate::persist::read_stashed_master(stash.path).map_err(|err| db_err(&err))?;
+        if kvno != u32::from(boot.kvno)
+            || key.etype() != boot.master.etype()
+            || key.as_bytes() != boot.master.as_bytes()
+        {
+            return Err(Error::InvalidArgument(
+                "stashed master does not match".into(),
+            ));
+        }
+    } else {
+        crate::persist::write_stash(
+            stash.path,
+            store.realm(),
+            &boot.master,
+            u32::from(boot.kvno),
+        )?;
+    }
+    ensure_lock_files(db)?;
+    commit_store(store, db, &boot.master)
+}
+
+fn db_err(err: &impl std::fmt::Display) -> Error {
+    Error::Db {
+        kind: std::io::ErrorKind::Other,
+        text: err.to_string(),
+    }
+}
+
+fn ensure_lock_files(db: &Path) -> Result<(), Error> {
+    let lock = crate::dblock::DbLock::create(db).map_err(|err| db_err(&err))?;
+    let policy = crate::dblock::suffixed(db, crate::dblock::SUFFIX_POLICY_LOCK);
+    if !policy.exists()
+        && let Err(err) = lock.create_policy_lock()
+    {
+        let _ = lock.unlock();
+        return Err(db_err(&err));
+    }
+    lock.unlock().map_err(|err| db_err(&err))
+}
+
+fn commit_store(store: &PrincipalStore, db: &Path, master: &ProtocolKey) -> Result<(), Error> {
+    let tmp = temp_database(db);
+    clear_temp(&tmp);
+    if let Err(err) = crate::persist::create_store(store, &tmp, master) {
+        clear_temp(&tmp);
+        return Err(db_err(&err));
+    }
+    if db.exists() {
+        clear_temp(&tmp);
+        return Err(Error::InvalidArgument("database already exists".into()));
+    }
+    if let Err(err) = std::fs::rename(&tmp, db) {
+        clear_temp(&tmp);
+        return Err(db_err(&err));
+    }
+    clear_temp_locks(&tmp);
+    Ok(())
+}
+
+fn temp_database(db: &Path) -> std::path::PathBuf {
+    let mut name = std::ffi::OsString::from(".");
+    name.push(db.file_name().unwrap_or(std::ffi::OsStr::new("principal")));
+    name.push(".tmp-create");
+    db.with_file_name(name)
+}
+
+fn clear_temp(tmp: &Path) {
+    let _ = std::fs::remove_file(tmp);
+    clear_temp_locks(tmp);
+}
+
+fn clear_temp_locks(tmp: &Path) {
+    let _ = std::fs::remove_file(crate::dblock::suffixed(tmp, crate::dblock::SUFFIX_LOCK));
+    let _ = std::fs::remove_file(crate::dblock::suffixed(
+        tmp,
+        crate::dblock::SUFFIX_POLICY_LOCK,
+    ));
+}
+
+pub fn kdc_conf_for_realm(text: &str, realm: &str) -> Result<KdcConf, krb5_config::Error> {
+    KdcConf::parse_for_realm(text, realm)
+}
+
 #[cfg(feature = "test-hooks")]
 pub fn seed_test_principals(
     store: &mut PrincipalStore,

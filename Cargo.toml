@@ -5,6 +5,7 @@ members = [
     "crates/krb5-cli",
     "crates/krb5-crypto",
     "crates/krb5-types",
+    "crates/krb5-brainpool",
     "crates/krb5-asn1",
     "crates/krb5-config",
     "crates/krb5-protocol",
@@ -16,7 +17,7 @@ members = [
     "crates/krb5-testkit",
     "examples/consumer",
     "examples/kdc-consumer",
-    "examples/otp-kdc",
+    "examples/embed-realm",
 ]
 
 [workspace.package]
@@ -34,6 +35,7 @@ krb5-log = { path = "crates/krb5-log" }
 krb5-cli = { path = "crates/krb5-cli" }
 krb5-crypto = { path = "crates/krb5-crypto" }
 krb5-types = { path = "crates/krb5-types" }
+krb5-brainpool = { path = "crates/krb5-brainpool" }
 krb5-asn1 = { path = "crates/krb5-asn1" }
 krb5-protocol = { path = "crates/krb5-protocol" }
 krb5-client = { path = "crates/krb5-client" }
@@ -42,36 +44,46 @@ krb5-config = { path = "crates/krb5-config" }
 krb5-gss = { path = "crates/krb5-gss" }
 krb5-admin = { path = "crates/krb5-admin" }
 krb5-testkit = { path = "crates/krb5-testkit" }
-aes = "0.8"
+aes = { version = "0.9", features = ["zeroize"] }
 # rasn's `OctetString` buffer; `try_into_mut` lets the last handle on a key, or on a secret copy
 # made to be encoded (`safe_priv::wipe_octets`), wipe it in place.
 bytes = "1.12"
-camellia = "0.1"
+camellia = { version = "0.2", features = ["zeroize"] }
 chrono = { version = "0.4", default-features = false, features = ["alloc", "clock", "std"] }
 # glibc LC_TIME tables. krb5-types formats dates with them; defmt stays off.
 pure-rust-locales = { version = "0.8.2", default-features = false }
-cmac = "0.7"
-# SPAKE edwards25519 (MIT `edwards25519.c`). 4.1 shares cpufeatures 0.2 with the RustCrypto
-# crates; 5.0 would add cpufeatures 0.3. No `alloc`: no multiscalar API is used.
-curve25519-dalek = { version = "4.1.3", default-features = false, features = ["precomputed-tables", "zeroize"] }
-des = "0.8"
+cmac = "0.8"
+crypto-bigint = { version = "0.7", default-features = false, features = ["zeroize"] }
+# SPAKE edwards25519 (MIT `edwards25519.c`). 5.0 shares cpufeatures 0.3 with the RustCrypto
+# crates; 4.1 would add cpufeatures 0.2. No `alloc`: no multiscalar API is used.
+curve25519-dalek = { version = "5.0.0", default-features = false, features = ["precomputed-tables", "zeroize"] }
+des = { version = "0.9", features = ["zeroize"] }
 getrandom = "0.2"
-hmac = "0.12"
-md-5 = "0.10"
-md4 = "0.10"
+hmac = { version = "0.13", features = ["zeroize"] }
+md-5 = { version = "0.11", features = ["zeroize"] }
+md4 = { version = "0.11", features = ["zeroize"] }
 nix = { version = "0.31", default-features = false, features = ["net", "uio", "user"] }
 num-bigint = { version = "0.4", default-features = false, features = ["std"] }
 signal-hook = { version = "0.3", default-features = false }
-p256 = { version = "0.13", default-features = false, features = ["arithmetic", "ecdsa"] }
-pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+p256 = { version = "0.14", default-features = false, features = ["arithmetic", "ecdsa"] }
+p384 = { version = "0.14", default-features = false, features = ["arithmetic", "ecdsa"] }
+ecdsa = { version = "0.17", default-features = false, features = ["algorithm", "der"] }
+p521 = { version = "0.14", default-features = false, features = ["arithmetic", "ecdsa"] }
+# No stable 0.14 yet: the release candidate, pinned exactly.
+p224 = { version = "=0.14.0-rc.15", default-features = false, features = ["arithmetic", "ecdsa"] }
+k256 = { version = "0.14", default-features = false, features = ["arithmetic", "ecdsa"] }
+# brainpoolP256 and P384, r1 and t1, on their default fiat field; pinned exactly.
+bp256 = { version = "=0.14.0", default-features = false, features = ["arithmetic", "ecdsa", "sha256"] }
+bp384 = { version = "=0.14.0", default-features = false, features = ["arithmetic", "ecdsa", "sha384"] }
+pbkdf2 = { version = "0.13", default-features = false, features = ["hmac"] }
 # Pinned: the build takes rasn from vendor/rasn (`[patch.crates-io]` below).
 rasn = "=0.28.14"
-rc4 = "0.1"
+rc4 = { version = "0.2", features = ["zeroize"] }
 regex-automata = { version = "0.4", default-features = false, features = ["std", "meta", "unicode"] }
 # The xattr reads of the SELinux labeler (`security.selinux`), behind a safe API.
 rustix = { version = "1.1", default-features = false, features = ["fs", "std"] }
-sha1 = "0.10"
-sha2 = "0.10"
+sha1 = { version = "0.11", features = ["zeroize"] }
+sha2 = { version = "0.11", features = ["zeroize"] }
 subtle = "2.6"
 thiserror = "2"
 tracing = { version = "0.1", default-features = false, features = ["std", "attributes"] }
@@ -84,11 +96,15 @@ zeroize = { version = "1.8", features = ["derive", "alloc"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
-missing_docs = "deny"
+# P-384 compiles in only under p384's fiat backend (.cargo/config.toml sets it).
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(p384_backend, values("fiat", "bigint"))'] }
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
 pedantic = { level = "deny", priority = -1 }
+# A one-line doc has no Errors or Panics section.
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
 unwrap_used = "allow"
 expect_used = "allow"
 panic = "allow"
@@ -98,6 +114,9 @@ unimplemented = "deny"
 # krb5-types alone), so this lint cannot be denied without an allow on each
 # derived type.
 no_effect_underscore_binding = "allow"
+# clippy.toml names the infallible constructors. Stays allow: static callers
+# still use them. consts is the allow module for a later raise.
+disallowed_methods = "allow"
 # Pedantic noise that is not useful in this tree: RFC vocabulary in
 # rustdoc, MIT functions ported whole, MIT flag structs mirrored 1:1, and
 # Kerberos names (cname/crealm, KAT single-letter vars).
@@ -137,6 +156,10 @@ opt-level = 3
 [profile.dev.package.aes]
 opt-level = 3
 [profile.dev.package.p256]
+opt-level = 3
+[profile.dev.package.p384]
+opt-level = 3
+[profile.dev.package.p521]
 opt-level = 3
 [profile.dev.package.curve25519-dalek]
 opt-level = 3

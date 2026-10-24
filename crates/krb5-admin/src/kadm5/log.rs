@@ -1,8 +1,4 @@
-//! kadmind request logging (`kadmin/server/server_stubs.c` `log_done` / `log_unauth`, `prime_arg`,
-//! `init_2_svc`): the `Request:` / `Unauthorized request:` lines with client, service and address,
-//! one per procedure MIT logs, to the daemon log and the structured log; and the RPC layer's own
-//! daemon log lines (`ovsec_kadmd.c` `log_miscerr` and `log_badverf`, the programs' refusal of a
-//! flavor).
+//! kadmind request logging (`kadmin/server/server_stubs.c` `log_done` / `log_unauth`, `prime_arg`, `init_2_svc`): the `Request:` / `Unauthorized request:` lines with client, service and address, one per procedure MIT logs, to the daemon log and the structured log; and the RPC layer's own daemon log lines (`ovsec_kadmd.c` `log_miscerr` and `log_badverf`, the programs' refusal of a flavor).
 
 use krb5_gss::GssContext;
 use krb5_log::klog::{self, Severity};
@@ -12,15 +8,14 @@ use super::codes::{
     CREATE_POLICY, CREATE_PRINCIPAL, CREATE_PRINCIPAL3, DELETE_POLICY, DELETE_PRINCIPAL, EINVAL,
     EXTRACT_KEYS, GET_POLICY, GET_POLS, GET_PRINCIPAL, GET_PRINCS, GET_PRIVS, GET_STRINGS,
     GSS_S_BAD_BINDINGS, GSS_S_DEFECTIVE_TOKEN, INIT, KADM5_AUTH_DELETE, KADM5_FAILURE,
-    KADM5_UNK_PRINC, KRB5_KDB_ALIAS_UNSUPPORTED, KRB5_KDB_CANTLOCK_DB, MODIFY_POLICY,
-    MODIFY_PRINCIPAL, PURGEKEYS, RENAME_PRINCIPAL, SET_STRING, SETKEY_PRINCIPAL, SETKEY_PRINCIPAL3,
-    SETKEY_PRINCIPAL4,
+    KADM5_UNK_PRINC, KRB5_KDB_ALIAS_UNSUPPORTED, KRB5_KDB_BAD_SALTTYPE, KRB5_KDB_CANTLOCK_DB,
+    MODIFY_POLICY, MODIFY_PRINCIPAL, PURGEKEYS, RENAME_PRINCIPAL, SET_STRING, SETKEY_PRINCIPAL,
+    SETKEY_PRINCIPAL3, SETKEY_PRINCIPAL4,
 };
 use super::dispatch::auth_code_for;
 use super::xdr::XdrR;
 
-/// MIT `server_stubs.c` op name for the `Request:` / `Unauthorized request:` kadmind log lines;
-/// `None` for the procedures MIT does not log this way (`kadm5_init` has its own line).
+/// MIT `server_stubs.c` op name for the `Request:` / `Unauthorized request:` kadmind log lines; `None` for the procedures MIT does not log this way (`kadm5_init` has its own line).
 pub(super) fn kadm5_op_name(proc: u32) -> Option<&'static str> {
     Some(match proc {
         CREATE_PRINCIPAL | CREATE_PRINCIPAL3 => "kadm5_create_principal",
@@ -47,10 +42,6 @@ pub(super) fn kadm5_op_name(proc: u32) -> Option<&'static str> {
     })
 }
 
-/// Whether the stub fetches the principal before anything else, so that a missing one ends the
-/// request before any line is logged.
-/// MIT `stub_setup` (`kadmin/server/server_stubs.c:293-298`): with `rec_out` the principal is
-/// read first, and its error returns before the ACL check and the log.
 fn fetches_principal_first(proc: u32) -> bool {
     matches!(
         proc,
@@ -70,8 +61,7 @@ fn fetches_principal_first(proc: u32) -> bool {
     )
 }
 
-/// The message of a kadm5 return code: MIT's `lib/kadm5/kadm_err.et` texts, the database errors
-/// kadmind returns, and `strerror` for an errno.
+/// The message of a kadm5 return code: MIT's `lib/kadm5/kadm_err.et` texts, the database errors kadmind returns, and `strerror` for an errno.
 pub(super) fn kadm5_error_text(code: u32) -> String {
     const OVK: [&str; 64] = [
         "Operation failed for unspecified reason",
@@ -147,6 +137,7 @@ pub(super) fn kadm5_error_text(code: u32) -> String {
     }
     match code {
         KRB5_KDB_CANTLOCK_DB => "Insufficient access to lock database".to_owned(),
+        KRB5_KDB_BAD_SALTTYPE => "Unsupported salt type".to_owned(),
         KRB5_KDB_ALIAS_UNSUPPORTED => "Operation unsupported on alias principal name".to_owned(),
         EINVAL => "Invalid argument".to_owned(),
         c if c < 4096 => i32::try_from(c).map_or_else(
@@ -157,23 +148,44 @@ pub(super) fn kadm5_error_text(code: u32) -> String {
     }
 }
 
-/// A name for a log line: up to 125 bytes, then `...` when longer.
-/// MIT `trunc_name` (`kadmin/server/misc.c:127-131`): names past `MAXPRINCLEN` are cut and
-/// marked with dots.
+/// Unlike MIT, a name cannot forge a log line. mit-deviations.
+fn escape_log(s: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    if !s.chars().any(char::is_control) {
+        return s.to_owned();
+    }
+    let mut out = String::with_capacity(s.len() + 8);
+    for c in s.chars() {
+        match c {
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            // C0/DEL/C1 as \xNN.
+            c if c.is_control() => {
+                let b = c as usize;
+                out.push_str("\\x");
+                out.push(HEX[(b >> 4) & 0xf] as char);
+                out.push(HEX[b & 0xf] as char);
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 fn trunc_name(s: &str) -> String {
     if s.len() <= 125 {
-        return s.to_owned();
+        return escape_log(s);
     }
     let mut end = 125;
     while !s.is_char_boundary(end) {
         end -= 1;
     }
-    format!("{}...", &s[..end])
+    escape_log(&format!("{}...", &s[..end]))
 }
 
-/// MIT `prime_arg` (`stub_setup`): the unparsed principal for a principal op, the policy name for
-/// a policy op (`(null)` when there is none), the expression for a list (`*` when there is
-/// none), and the client for `kadm5_get_privs`.
+// MIT: `prime_arg` (stub_setup)
+/// the unparsed principal for a principal op, the policy name for a policy op (`(null)` when there is none), the expression for a list (`*` when there is none), and the client for `kadm5_get_privs`.
 pub(super) fn kadm5_prime_arg(proc: u32, args: &[u8], client: &str) -> String {
     let mut r = XdrR::new(args);
     if r.u32().is_err() {
@@ -203,7 +215,6 @@ pub(super) fn kadm5_prime_arg(proc: u32, args: &[u8], client: &str) -> String {
     }
 }
 
-/// The rename's two principals, unparsed.
 fn rename_targets(args: &[u8]) -> Option<(String, String)> {
     let mut r = XdrR::new(args);
     r.u32().ok()?;
@@ -228,14 +239,13 @@ pub(super) struct Caller<'a> {
 }
 
 /// The daemon log lines MIT writes for procedure `proc` with arguments `args` and `reply`.
-/// MIT `log_unauth` (`kadmin/server/server_stubs.c:403-428`): the `Unauthorized request:` line
-/// carries the op, target, client, service, and addr.
-/// MIT `log_done` (`kadmin/server/server_stubs.c:430-459`): the `Request:` line carries the op,
-/// target, result text, client, service, and addr.
-/// MIT `rename_principal_2_svc` (`kadmin/server/server_stubs.c:671-747`): a rename names both
-/// principals, and a refused one is logged once more with both.
-/// MIT `init_2_svc` (`kadmin/server/server_stubs.c:1617-1653`): `kadm5_init` adds the API version
-/// and the credential flavor.
+// MIT: `log_unauth` (kadmin/server/server_stubs.c:403-428)
+/// the `Unauthorized request:` line carries the op, target, client, service, and addr.
+// MIT: `log_done` (kadmin/server/server_stubs.c:430-459)
+/// the `Request:` line carries the op, target, result text, client, service, and addr.
+/// a rename names both principals, and a refused one is logged once more with both.
+// MIT: `init_2_svc` (kadmin/server/server_stubs.c:1617-1653)
+/// `kadm5_init` adds the API version and the credential flavor.
 pub(super) fn kadm5_log_lines(
     proc: u32,
     args: &[u8],
@@ -273,7 +283,6 @@ pub(super) fn kadm5_log_lines(
         let (src, dst) = rename_targets(args).unwrap_or_default();
         let (src, dst) = (trunc_name(&src), trunc_name(&dst));
         // Refused by the ACL or the source's lockdown: `log_unauth`, then the line naming both.
-        // A missing source fails the lockdown lookup: only the line naming both.
         let refused = denied || code == KADM5_AUTH_DELETE;
         let mut lines = Vec::new();
         if refused {
@@ -308,7 +317,7 @@ pub(super) fn kadm5_service_name(ctx: &GssContext) -> String {
 pub(super) fn kadm5_log_op(proc: u32, args: &[u8], who: &Caller<'_>, reply: &[u8]) {
     for line in kadm5_log_lines(proc, args, who, reply) {
         let unauthorized = line.starts_with("Unauthorized");
-        klog::syslog(Severity::Notice, &line);
+        crate::kadmind::admin_syslog(Severity::Notice, &line);
         tracing::info!(
             event = krb5_log::events::ADMIN,
             component = "krb5-admin",
@@ -319,19 +328,18 @@ pub(super) fn kadm5_log_op(proc: u32, args: &[u8], who: &Caller<'_>, reply: &[u8
 }
 
 /// One line of the RPC layer's own log, which the AUTH_GSSAPI flavor writes as `LOG_MISCERR`.
-/// MIT `log_miscerr` (`kadmin/server/ovsec_kadmd.c:291-295`): the address and the error, at
-/// notice.
+// MIT: `log_miscerr` (kadmin/server/ovsec_kadmd.c:291-295)
+/// the address and the error, at notice.
 pub(super) fn rpc_log_miscerr(addr: &str, error: &str) {
-    klog::syslog(
+    crate::kadmind::admin_syslog(
         Severity::Notice,
         &format!("Miscellaneous RPC error: {addr}, {error}"),
     );
 }
 
 /// A call whose verifier did not check out, named by its procedure.
-/// MIT `log_badverf` (`kadmin/server/ovsec_kadmd.c:206-287`): the kadm5 procedure's name from its
-/// table (1 to 24 but 17), else its number; the client and server names cut by `trunc_name`,
-/// `(null)` for a name the context does not have.
+// MIT: `log_badverf` (kadmin/server/ovsec_kadmd.c:206-287)
+/// the kadm5 procedure's name from its table (1 to 24 but 17), else its number; the client and server names cut by `trunc_name`, `(null)` for a name the context does not have.
 pub(super) fn rpc_log_badverf(proc: u32, client: Option<&str>, server: Option<&str>, addr: &str) {
     const NAMES: [&str; 24] = [
         "CREATE_PRINCIPAL",
@@ -367,7 +375,7 @@ pub(super) fn rpc_log_badverf(proc: u32, client: Option<&str>, server: Option<&s
         .map_or_else(|| proc.to_string(), |n| (*n).to_owned());
     let client = trunc_name(client.unwrap_or("(null)"));
     let server = trunc_name(server.unwrap_or("(null)"));
-    klog::syslog(
+    crate::kadmind::admin_syslog(
         Severity::Notice,
         &format!(
             "WARNING! Forged/garbled request: {procname}, claimed client = {client}, server = \
@@ -377,25 +385,25 @@ pub(super) fn rpc_log_badverf(proc: u32, client: Option<&str>, server: Option<&s
 }
 
 /// A program's refusal of a flavor it does not take, before `svcerr_weakauth`.
-/// MIT `kadm_1` (`kadmin/server/kadm_rpc_svc.c:80-88`): kadm5's line, at error.
-/// MIT `krb5_iprop_prog_1` (`kadmin/server/ipropd_svc.c:542-548`): iprop's, in lower case.
+// MIT: `krb5_iprop_prog_1` (kadmin/server/ipropd_svc.c:542-548)
+/// iprop's, in lower case.
 pub(super) fn rpc_log_flavor_refused(iprop: bool, addr: &str, flavor: u32) {
     let lead = if iprop {
         "authentication"
     } else {
         "Authentication"
     };
-    klog::syslog(
+    crate::kadmind::admin_syslog(
         Severity::Err,
         &format!("{lead} attempt failed: {addr}, RPC authentication flavor {flavor}"),
     );
 }
 
-/// A context that did not establish: the minor status's text is MIT's for a minor status of 0
-/// (a channel binding that does not match, as MIT's mechanism leaves it), else this side's error.
-/// MIT `log_badauth` (`kadmin/server/ovsec_kadmd.c:325-333`): the header, the major's and the
-/// minor's texts, the footer.
-/// MIT `displayMajor` (`lib/gssapi/mechglue/g_dsp_status.c:192-231`): the major's text.
+/// A context that did not establish: the minor status's text is MIT's for a minor status of 0 (a channel binding that does not match, as MIT's mechanism leaves it), else this side's error.
+// MIT: `log_badauth` (kadmin/server/ovsec_kadmd.c:325-333)
+/// the header, the major's and the minor's texts, the footer.
+// MIT: `displayMajor` (lib/gssapi/mechglue/g_dsp_status.c:192-231)
+/// the major's text.
 pub(super) fn rpc_log_badauth(addr: &str, major: u32, minor: &str) {
     let major = match major {
         GSS_S_BAD_BINDINGS => "Incorrect channel bindings were supplied",
@@ -408,28 +416,24 @@ pub(super) fn rpc_log_badauth(addr: &str, major: u32, minor: &str) {
         format!("    {minor}"),
         "   GSS-API error strings complete.".to_owned(),
     ] {
-        klog::syslog(Severity::Notice, &line);
+        crate::kadmind::admin_syslog(Severity::Notice, &line);
     }
 }
 
 /// An RPCSEC_GSS context for a service its program does not take, cut by `trunc_name`.
-/// MIT `check_rpcsec_auth` (`kadmin/server/kadm_rpc_svc.c:333-337`): `bad service principal`, at
-/// error, as `check_iprop_rpcsec_auth` writes it for iprop.
 pub(super) fn rpc_log_bad_service(service: &str) {
-    klog::syslog(
+    crate::kadmind::admin_syslog(
         Severity::Err,
         &format!("bad service principal {}", trunc_name(service)),
     );
 }
 
 /// A procedure a program does not serve, before `svcerr_noproc`.
-/// MIT `kadm_1` (`kadmin/server/kadm_rpc_svc.c:251-255`): kadm5's line.
-/// MIT `krb5_iprop_prog_1` (`kadmin/server/ipropd_svc.c:575-580`): iprop's.
 pub(super) fn rpc_log_bad_proc(iprop: bool, addr: &str, proc: u32) {
     let line = if iprop {
         format!("RPC unknown request: {proc} (krb5_iprop_prog_1)")
     } else {
         format!("Invalid KADM5 procedure number: {addr}, {proc}")
     };
-    klog::syslog(Severity::Err, &line);
+    crate::kadmind::admin_syslog(Severity::Err, &line);
 }

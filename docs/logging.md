@@ -31,8 +31,7 @@ FIFO), holds every client until it takes the line.
 The gates read the stream from the daemons' standard output:
 `json_log_on` (`scripts/lib/gate-common.sh`) puts `json = STDOUT` in
 the stock kdc.conf and krb5.conf of each container they start before
-any copy of them is kept, and `harness/prod/env-up.sh` and
-`scripts/prod-gate.sh` do the same for their KDCs. A profile a gate
+any copy of them is kept. A profile a gate
 writes for our KDC alone, whose log it reads for a status word,
 carries the relation itself: a daemon whose kdc.conf and krb5.conf are
 both the gate's own reads neither stock file.
@@ -92,15 +91,14 @@ names are declared here and nowhere in Rust:
 | `harness` | `harness.start` | `kdc_port` | `harness/entrypoint.sh`, before the KDB is created |
 | `harness` | `harness.kdc.ready` | `kdc_port`; `error` on `outcome=error` | once `krb5kdc` listens on 88, or after the wait times out |
 | `harness` | `harness.kinit` | `principal` | after the in-container `kinit`; `outcome` `ok` or `error` |
-| `heimdal-harness` | `heimdal.start` | `kdc` (the KDC binary path) | `harness/heimdal/entrypoint.sh`, before `exec` of the KDC |
+| `heimdal-harness` | `heimdal.start` | `kdc` (the KDC binary path) | harness/heimdal/entrypoint.sh, before `exec` of the KDC |
 | `samba-harness` | `samba.start` | — | `harness/samba/entrypoint.sh`, before `exec samba` (the domain is provisioned in the image) |
 
 Gate scripts depend on two of these by exact string:
 `scripts/lib/gate-common.sh`, `scripts/run-harness.sh` and
-`scripts/kadmin-mit-gate.sh` wait for
-`"event":"harness.kinit"` with `"outcome":"ok"` (and fail on
-`"outcome":"error"`), and `scripts/heimdal-gate.sh` waits for
-`"event":"heimdal.start"`. Renaming an event renames those greps.
+scripts/kadmin-mit-gate.sh waits for
+`"event":"harness.kinit"` with `"outcome":"ok"` (and fails on
+`"outcome":"error"`). Renaming an event renames those greps.
 
 A request that reaches `handle_request` and gets a reply logs one
 `event=kdc.issue` line at `info`, including `duration_us`:
@@ -157,6 +155,10 @@ causes (no file it may open; one it may not write), with
 attributes in memory until it can write the file; from then on the
 file's are the only ones. A KDC that opened the file read-only keeps
 them in memory until it is restarted, even once the file is writable.
+
+A realm MIT's `kdb5_util` made has no `principal.lockout`. The KS oracle
+realm is one of these, so the first counted login logs that warning until
+the file is created beside the database, as an upgrade does.
 
 The `KdcAudit` registry (`kdc_audit.c`) writes `event=kdc.audit`
 with MIT `j_dict.h` field names (`event_name`, `event_success`,
@@ -262,7 +264,7 @@ referrals and S4U, the cache and keytab lookups and stores, and the
 kpasswd exchange. Where our flow differs from MIT's, the lines show
 ours: under FAST, when the KDC offers SPAKE, MIT's `kinit` tries SPAKE
 before the encrypted challenge and ours sends the challenge. PKINIT's own lines
-(`pkinit_trace.h`) and the DNS lookups are not traced.
+(`pkinit_trace.h`) are not traced.
 
 A key prints as its enctype and the first two bytes of its SHA-1
 (`aes256-sha2/4149`), as MIT prints it. No line carries key, password

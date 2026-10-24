@@ -1,5 +1,6 @@
 //! FAST reply nonce.
-//! MIT `decrypt_fast_reply` (`fast.c:397-402`): a FAST response nonce that differs from the
+// MIT: `decrypt_fast_reply` (fast.c:397-402)
+//! a FAST response nonce that differs from the
 //! request nonce is `KRB5_KDCREP_MODIFIED`.
 //! Unit-only: no MIT tool emits a flipped FAST nonce.
 
@@ -201,6 +202,7 @@ fn as_exchange_records_fast_availability() {
             host: "127.0.0.1".into(),
             port,
         },
+        profile: &krb5_config::isolated_profile(),
         want_spake: false,
         fast_armor: None,
         pkinit: None,
@@ -216,6 +218,7 @@ fn as_exchange_records_fast_availability() {
 }
 
 fn request<'a>(
+    profile: &'a krb5_config::Krb5Conf,
     cname: &PrincipalName,
     kdc: &'a KdcAddr,
     armor: Option<&'a FastArmor>,
@@ -225,6 +228,7 @@ fn request<'a>(
         realm: TEST_REALM,
         password: TEST_USER_PASSWORD,
         kdc,
+        profile,
         want_spake: false,
         fast_armor: armor,
         pkinit: None,
@@ -258,7 +262,8 @@ fn fast_exchange_negotiates_through_the_armor_like_mit() {
     };
     // The documented user requires preauth and the KDC advertises SPAKE.
     // MIT `sort_krb5_padata_sequence` + `k5_preauth` records pa_type 151.
-    let plain = as_exchange(&request(&cname, &kdc, None)).expect("plain AS exchange");
+    let profile = krb5_config::isolated_profile();
+    let plain = as_exchange(&request(&profile, &cname, &kdc, None)).expect("plain AS exchange");
     assert!(plain.fast_avail);
     assert_eq!(plain.pa_type, Some(pa::SPAKE));
     let armor = FastArmor {
@@ -270,7 +275,8 @@ fn fast_exchange_negotiates_through_the_armor_like_mit() {
     // Under FAST the advertised 150/149 travel inside the FAST-REQ, the KDC
     // swaps the inner request in, and the client verifies the echo over the
     // outer request with the strengthened reply key (krb5int_fast_verify_nego).
-    let fast = as_exchange(&request(&cname, &kdc, Some(&armor))).expect("FAST AS exchange");
+    let fast =
+        as_exchange(&request(&profile, &cname, &kdc, Some(&armor))).expect("FAST AS exchange");
     assert!(fast.fast_avail, "PA-FX-FAST echoed inside the FAST reply");
     // Inside FAST the KDC lists SPAKE before encrypted challenge and withholds encrypted
     // timestamp. MIT `process_pa_data` runs that first loaded real module.
@@ -327,6 +333,7 @@ fn as_exchange_rejects_reply_missing_enc_pa_rep_checksum() {
             host: "127.0.0.1".into(),
             port,
         },
+        profile: &krb5_config::isolated_profile(),
         want_spake: false,
         fast_armor: None,
         pkinit: None,
@@ -490,6 +497,7 @@ fn fast_exchange(
         realm: TEST_REALM,
         password: TEST_USER_PASSWORD,
         kdc,
+        profile: &krb5_config::isolated_profile(),
         want_spake: false,
         fast_armor: Some(armor),
         pkinit: None,
@@ -510,7 +518,8 @@ fn rewrite_outer_cname(reply: Vec<u8>) -> Vec<u8> {
     encode(&rep).unwrap()
 }
 
-/// MIT `krb5int_fast_process_response` (`fast.c:548-551`): after the finished checksum verifies,
+// MIT: `krb5int_fast_process_response` (fast.c:548-551)
+/// after the finished checksum verifies,
 /// `resp->client` is the finished client; the outer cname is never compared or returned. With
 /// CANONICALIZE the outer name would otherwise be accepted as the canonical name.
 #[test]
@@ -528,7 +537,8 @@ fn fast_as_rep_client_is_the_finished_client_under_canonicalize() {
 
 /// Without CANONICALIZE the client compare runs on the replaced (finished) client, which is the
 /// requested one — the rewritten outer name is not a mismatch.
-/// MIT `verify_as_reply` (`get_in_tkt.c:239-239`): without CANONICALIZE the reply client is
+// MIT: `verify_as_reply` (get_in_tkt.c:239-239)
+/// without CANONICALIZE the reply client is
 /// compared with the requested client.
 #[test]
 fn fast_as_rep_outer_cname_is_ignored_without_canonicalize() {
@@ -571,11 +581,13 @@ fn fast_as_rep_finished_cname_mismatch_is_kdcrep_modified() {
     );
 }
 
-/// MIT `krb5int_fast_process_error` (`fast.c:445-458`): under an armor key, an error whose
+// MIT: `krb5int_fast_process_error` (fast.c:445-458)
+/// under an armor key, an error whose
 /// e_data carries no PA-FX-FAST is "the fatal error indicated by the KDC" with `retry = 0`;
 /// nothing outer is trusted — not the plaintext ETYPE-INFO2, not an outer FX-COOKIE — and no
 /// second AS-REQ is sent.
-/// MIT `init_creds_step_reply` (`get_in_tkt.c:1721-1724`): continues only on
+// MIT: `init_creds_step_reply` (get_in_tkt.c:1721-1724)
+/// continues only on
 /// `PREAUTH_REQUIRED && retry`.
 #[test]
 fn fast_error_without_fx_fast_is_the_fatal_outer_error() {
@@ -654,7 +666,8 @@ fn fast_error_with_a_corrupt_fx_fast_is_the_fatal_outer_error() {
     assert_eq!(count.load(Ordering::SeqCst), 1, "no second AS-REQ");
 }
 
-/// MIT `krb5int_fast_process_error` (`fast.c:462-469`): a FAST response that unwraps but carries
+// MIT: `krb5int_fast_process_error` (fast.c:462-469)
+/// a FAST response that unwraps but carries
 /// no FX-ERROR is `KRB5KDC_ERR_PREAUTH_FAILED` "Expecting FX_ERROR pa-data inside FAST
 /// container" — an error, not a synthesized retry.
 #[test]
@@ -692,12 +705,14 @@ fn fast_error_without_inner_fx_error_is_preauth_failed() {
     assert_eq!(count.load(Ordering::SeqCst), 1, "no second AS-REQ");
 }
 
-/// MIT `krb5int_process_tgs_reply` (`gc_via_tkt.c:190-194`): the TGS path runs
+// MIT: `krb5int_process_tgs_reply` (gc_via_tkt.c:190-194)
+/// the TGS path runs
 /// `krb5int_fast_process_error` too — the authenticated FX-ERROR inside the FAST envelope is the
 /// error the client reports; the outer code and e_text are unauthenticated. A man in the middle
 /// turns the outer 7 into a 60 "mitm" and leaves the envelope: the client still sees
 /// `S_PRINCIPAL_UNKNOWN`.
-/// MIT `krb5int_fast_process_error` (`fast.c:445-458`): with the envelope stripped the outer
+// MIT: `krb5int_fast_process_error` (fast.c:445-458)
+/// with the envelope stripped the outer
 /// error stands.
 #[test]
 fn fast_tgs_error_is_the_inner_fx_error() {
@@ -727,11 +742,13 @@ fn fast_tgs_error_is_the_inner_fx_error() {
         }),
     );
     krb5_config::isolate_test_krb5();
+    let profile = krb5_config::isolated_profile();
     let tgt = as_exchange(&AsRequest {
         cname: user(),
         realm: TEST_REALM,
         password: TEST_USER_PASSWORD,
         kdc: &kdc,
+        profile: &profile,
         want_spake: false,
         fast_armor: None,
         pkinit: None,
@@ -742,7 +759,7 @@ fn fast_tgs_error_is_the_inner_fx_error() {
     })
     .expect("TGT");
     let nosuch = PrincipalName::new(PrincipalName::NT_SRV_INST, ["nosuch", "service"]);
-    let err = krb5_protocol::tgs_exchange(&kdc, &tgt, nosuch.clone(), TEST_REALM)
+    let err = krb5_protocol::tgs_exchange(&profile, &kdc, &tgt, nosuch.clone(), TEST_REALM)
         .expect_err("unknown service");
     match err {
         Error::KrbError { code, text } => {
@@ -756,7 +773,7 @@ fn fast_tgs_error_is_the_inner_fx_error() {
         other => panic!("want the inner KRB-ERROR 7, got {other:?}"),
     }
     strip.store(true, Ordering::SeqCst);
-    let err = krb5_protocol::tgs_exchange(&kdc, &tgt, nosuch, TEST_REALM)
+    let err = krb5_protocol::tgs_exchange(&profile, &kdc, &tgt, nosuch, TEST_REALM)
         .expect_err("unknown service, envelope stripped");
     match err {
         Error::KrbError { code, text } => {
@@ -806,8 +823,10 @@ fn realm_with_des3_user() -> (PrincipalStore, PrincipalName, ProtocolKey) {
 
 /// Under FAST armor the encrypted-timestamp module meets a keytab key of bad parity as it does without armor: its encryption fails with
 /// the key's code, the module fails, and with no other mechanism the exchange ends "Pre-authentication failed: <the key's message>".
-/// MIT `encts_process` (`lib/krb5/krb/preauth_encts.c:87-97`): `krb5_encrypt_helper` fails with `KRB5DES_BAD_KEYPAR`, the module's failure.
-/// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:716-723`): with no real mechanism answered, the first failure is wrapped as "Pre-authentication failed: <message>"; armor does not change it.
+// MIT: `encts_process` (lib/krb5/krb/preauth_encts.c:87-97)
+/// `krb5_encrypt_helper` fails with `KRB5DES_BAD_KEYPAR`, the module's failure.
+// MIT: `process_pa_data` (lib/krb5/krb/preauth2.c:716-723)
+/// with no real mechanism answered, the first failure is wrapped as "Pre-authentication failed: <message>"; armor does not change it.
 #[test]
 fn a_keytab_key_of_bad_parity_fails_the_encrypted_timestamp_module_under_armor() {
     isolate_host_krb5();
@@ -824,7 +843,8 @@ fn a_keytab_key_of_bad_parity_fails_the_encrypted_timestamp_module_under_armor()
     };
     // The armor ticket is the documented user's TGT.
     let armor_user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgt = as_exchange(&request(&armor_user, &kdc, None)).expect("the armor TGT");
+    let profile = krb5_config::isolated_profile();
+    let tgt = as_exchange(&request(&profile, &armor_user, &kdc, None)).expect("the armor TGT");
     let armor = FastArmor {
         ticket: tgt.ticket.clone(),
         session: tgt.session_key.clone(),
@@ -835,7 +855,7 @@ fn a_keytab_key_of_bad_parity_fails_the_encrypted_timestamp_module_under_armor()
     let ask = |password: &'static [u8]| AsRequest {
         password,
         etypes: Some(&des3),
-        ..request(&user, &kdc, Some(&armor))
+        ..request(&profile, &user, &kdc, Some(&armor))
     };
     // The good key logs in under armor: the harness is sound.
     let ok = krb5_protocol::as_exchange_with_keys(&ask(b""), std::slice::from_ref(&key))

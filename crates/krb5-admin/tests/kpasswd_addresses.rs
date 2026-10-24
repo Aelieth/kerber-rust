@@ -1,8 +1,5 @@
 //! `kpasswd`'s request for `kadmin/changepw` follows `noaddresses`, as any initial-credentials request does.
-//! MIT `main` (`clients/kpasswd/kpasswd.c:63-72`): `kpasswd` sets no address list on its options.
-//! MIT `krb5_init_creds_init` (`lib/krb5/krb/get_in_tkt.c:998-1005`): so `noaddresses` absent or true sends none, and false sends `krb5_os_localaddr`'s list.
-//! Drives the shipped `krb5-kpasswd` against an in-process KDC that keeps every request; the wrong password ends the run
-//! before any password change is sent.
+//! Drives the shipped `krb5-kpasswd` against an in-process KDC that keeps every request; the wrong password ends the run before any password change is sent.
 
 use std::io::{Read, Write};
 use std::process::{Command, Stdio};
@@ -17,7 +14,6 @@ use krb5_types::{AsReq, HostAddress};
 
 type Seen = Arc<Mutex<Vec<Vec<u8>>>>;
 
-/// Serve `store` on UDP and TCP at one ephemeral port, keeping the bytes of every request.
 fn serve(store: PrincipalStore) -> (String, Seen) {
     let (udp, tcp) = krb5_testkit::loopback_udp_tcp();
     udp.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
@@ -98,7 +94,6 @@ fn kpasswd(kdc: &str, libdefaults: &str) {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The AS-REQs the KDC kept: each one's service and address field.
 fn as_requests(seen: &Seen) -> Vec<(String, Option<Vec<HostAddress>>)> {
     seen.lock()
         .unwrap()

@@ -41,10 +41,10 @@ fn incoming_trust_is_own_principal() {
     let issue = aes_key(0x11);
     let accept = aes_key(0x22);
     store
-        .create_interrealm_key(&acl, &actor, FOREIGN, issue)
+        .create_interrealm_key(&acl, &actor, FOREIGN, issue, None)
         .unwrap();
     store
-        .add_interrealm_decrypt_key(&acl, &actor, FOREIGN, accept)
+        .add_interrealm_decrypt_key(&acl, &actor, FOREIGN, accept, None)
         .unwrap();
     let outgoing = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", FOREIGN]);
     let out = store.get_name(&outgoing).expect("outgoing");
@@ -71,7 +71,7 @@ fn cross_tgt_renew_realm_mismatch_is_server_nomatch() {
     let actor = documented_admin_id();
     let ir = aes_key(0x33);
     store
-        .create_interrealm_key(&acl, &actor, FOREIGN, ir.clone())
+        .create_interrealm_key(&acl, &actor, FOREIGN, ir.clone(), None)
         .unwrap();
     let issued = issue_tgt_renewable(&store, TEST_USER, 16100, true);
     let local = store.krbtgt().unwrap().best_key().unwrap().key.clone();
@@ -165,7 +165,7 @@ fn incoming_trust_dump_load_round_trip() {
     let actor = documented_admin_id();
     let ir = aes_key(0x44);
     store
-        .create_interrealm_key(&acl, &actor, FOREIGN, ir)
+        .create_interrealm_key(&acl, &actor, FOREIGN, ir, None)
         .unwrap();
     let text = dump_store(&store, b"masterpassword").unwrap();
     assert!(
@@ -184,7 +184,7 @@ fn incoming_trust_dump_load_round_trip() {
 fn incoming_trust_iprop_names_foreign_id() {
     let (mut store, acl) = bootstrap_documented().unwrap();
     store
-        .create_interrealm_key(&acl, &documented_admin_id(), FOREIGN, aes_key(0x55))
+        .create_interrealm_key(&acl, &documented_admin_id(), FOREIGN, aes_key(0x55), None)
         .unwrap();
     let text = dump_store_iprop(&store, b"masterpassword", krb5_kdc::UlogLast::default()).unwrap();
     assert!(text.starts_with("ipropx "));
@@ -201,14 +201,14 @@ fn foreign_header_decrypts_via_incoming_kvno() {
     let issue = aes_key(0x66);
     let accept = aes_key(0x77);
     store
-        .create_interrealm_key(&acl, &actor, FOREIGN, issue)
+        .create_interrealm_key(&acl, &actor, FOREIGN, issue, None)
         .unwrap();
     store
-        .set_interrealm_decrypt_key(&acl, &actor, FOREIGN, accept.clone())
+        .set_interrealm_decrypt_key(&acl, &actor, FOREIGN, accept.clone(), None)
         .unwrap();
     let incoming = store.get_in_realm(&incoming_name(), FOREIGN).unwrap();
     assert_eq!(incoming.keys.len(), 1);
-    assert_eq!(incoming.keys[0].kvno, 1);
+    assert_eq!(incoming.keys[0].kvno, 2);
     assert_eq!(incoming.keys[0].key.as_bytes(), &[0x77u8; 32]);
     let issued = issue_tgt_renewable(&store, TEST_USER, 16120, false);
     let local = store.krbtgt().unwrap().best_key().unwrap().key.clone();
@@ -222,7 +222,7 @@ fn foreign_header_decrypts_via_incoming_kvno() {
         sname: incoming_name(),
         enc_part: krb5_types::EncryptedData {
             etype: accept.etype().to_iana(),
-            kvno: Some(1),
+            kvno: Some(2),
             cipher: encrypt(&accept, usage, &der).unwrap().into(),
         },
     };
@@ -355,13 +355,13 @@ fn three_realm() -> (
     let (mut a, acl_a, actor_a, _) = realm_store("A.TEST", "svc.a.test");
     let (mut b, acl_b, actor_b, _) = realm_store("B.TEST", "svc.b.test");
     let (mut c, acl_c, actor_c, host_c) = realm_store("C.TEST", "svc.c.test");
-    a.create_interrealm_key(&acl_a, &actor_a, "B.TEST", ir.clone())
+    a.create_interrealm_key(&acl_a, &actor_a, "B.TEST", ir.clone(), None)
         .expect("A→B");
-    b.create_interrealm_key(&acl_b, &actor_b, "A.TEST", ir.clone())
+    b.create_interrealm_key(&acl_b, &actor_b, "A.TEST", ir.clone(), None)
         .expect("B→A");
-    b.create_interrealm_key(&acl_b, &actor_b, "C.TEST", ir.clone())
+    b.create_interrealm_key(&acl_b, &actor_b, "C.TEST", ir.clone(), None)
         .expect("B→C");
-    c.create_interrealm_key(&acl_c, &actor_c, "B.TEST", ir.clone())
+    c.create_interrealm_key(&acl_c, &actor_c, "B.TEST", ir.clone(), None)
         .expect("C→B");
     let mut cap = std::collections::BTreeMap::new();
     cap.entry("A.TEST".into())
@@ -406,13 +406,13 @@ fn three_realm_distinct() -> (
     let (mut a, acl_a, actor_a, _) = realm_store("A.TEST", "svc.a.test");
     let (mut b, acl_b, actor_b, _) = realm_store("B.TEST", "svc.b.test");
     let (mut c, acl_c, actor_c, host_c) = realm_store("C.TEST", "svc.c.test");
-    a.create_interrealm_key(&acl_a, &actor_a, "B.TEST", ab.clone())
+    a.create_interrealm_key(&acl_a, &actor_a, "B.TEST", ab.clone(), None)
         .expect("A B");
-    b.create_interrealm_key(&acl_b, &actor_b, "A.TEST", ab.clone())
+    b.create_interrealm_key(&acl_b, &actor_b, "A.TEST", ab.clone(), None)
         .expect("B A");
-    b.create_interrealm_key(&acl_b, &actor_b, "C.TEST", bc.clone())
+    b.create_interrealm_key(&acl_b, &actor_b, "C.TEST", bc.clone(), None)
         .expect("B C");
-    c.create_interrealm_key(&acl_c, &actor_c, "B.TEST", bc.clone())
+    c.create_interrealm_key(&acl_c, &actor_c, "B.TEST", bc.clone(), None)
         .expect("C B");
     let mut cap = std::collections::BTreeMap::new();
     cap.entry("A.TEST".into())
@@ -466,13 +466,13 @@ fn three_hop_capaths_accept_and_reject() {
     let (mut a, acl_a, actor_a, _) = realm_store("A.TEST", "svc.a.test");
     let (mut b, acl_b, actor_b, _) = realm_store("B.TEST", "svc.b.test");
     let (mut c, acl_c, actor_c, host_c) = realm_store("C.TEST", "svc.c.test");
-    a.create_interrealm_key(&acl_a, &actor_a, "B.TEST", ir.clone())
+    a.create_interrealm_key(&acl_a, &actor_a, "B.TEST", ir.clone(), None)
         .expect("A→B");
-    b.create_interrealm_key(&acl_b, &actor_b, "A.TEST", ir.clone())
+    b.create_interrealm_key(&acl_b, &actor_b, "A.TEST", ir.clone(), None)
         .expect("B→A");
-    b.create_interrealm_key(&acl_b, &actor_b, "C.TEST", ir.clone())
+    b.create_interrealm_key(&acl_b, &actor_b, "C.TEST", ir.clone(), None)
         .expect("B→C");
-    c.create_interrealm_key(&acl_c, &actor_c, "B.TEST", ir)
+    c.create_interrealm_key(&acl_c, &actor_c, "B.TEST", ir, None)
         .expect("C→B");
 
     let mut cap = std::collections::BTreeMap::new();
@@ -1396,10 +1396,16 @@ fn two_realm_pac_stores() -> (PrincipalStore, PrincipalStore, ProtocolKey, Princ
     let ir =
         ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x5a; 32]).expect("ir key");
     local
-        .create_interrealm_key(&acl_a, &documented_admin_id(), "OTHER.TEST", ir.clone())
+        .create_interrealm_key(
+            &acl_a,
+            &documented_admin_id(),
+            "OTHER.TEST",
+            ir.clone(),
+            None,
+        )
         .expect("A→B");
     foreign
-        .create_interrealm_key(&acl_b, &actor_b, TEST_REALM, ir.clone())
+        .create_interrealm_key(&acl_b, &actor_b, TEST_REALM, ir.clone(), None)
         .expect("B→A");
     (local, foreign, ir, host_b)
 }
@@ -1465,10 +1471,22 @@ fn interrealm_issue_key_is_not_the_peer_accept_key() {
             .expect("accept key");
     let (mut store, acl) = bootstrap_documented().expect("bootstrap");
     store
-        .create_interrealm_key(&acl, &documented_admin_id(), "AD.KERBER.TEST", issue_key)
+        .create_interrealm_key(
+            &acl,
+            &documented_admin_id(),
+            "AD.KERBER.TEST",
+            issue_key,
+            None,
+        )
         .expect("issue");
     store
-        .set_interrealm_decrypt_key(&acl, &documented_admin_id(), "AD.KERBER.TEST", accept_key)
+        .set_interrealm_decrypt_key(
+            &acl,
+            &documented_admin_id(),
+            "AD.KERBER.TEST",
+            accept_key,
+            None,
+        )
         .expect("accept");
     let ir_name = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "AD.KERBER.TEST"]);
     let ir = store.get_name(&ir_name).expect("ir");
@@ -1535,7 +1553,7 @@ fn interrealm_issue_key_is_not_the_peer_accept_key() {
         [PAC_CLIENT_INFO, PAC_SERVER_CHECKSUM, PAC_PRIVSVR_CHECKSUM]
     );
     let der = ticket_checksum_der(&part).expect("der");
-    // MIT: the server checksum is under the inter-realm key and the KDC checksum under the
+    // The server checksum is under the inter-realm key and the KDC checksum under the
     // local krbtgt key.
     let local_tgt = store.krbtgt().unwrap().best_key().unwrap();
     verify_pac_signatures(&pac, &issue_key, Some(&local_tgt.key), Some(&der), false)
@@ -1561,6 +1579,7 @@ fn interrealm_referral_with_ad_data_keeps_the_inter_realm_kdc_checksum() {
             &documented_admin_id(),
             "AD.KERBER.TEST",
             issue_key.clone(),
+            None,
         )
         .expect("issue");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);

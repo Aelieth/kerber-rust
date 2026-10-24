@@ -1,9 +1,3 @@
-//! MIT `klist`: list a credential cache, the cache collection, or a keytab.
-//!
-//! Usage: `klist [-e] [-V] [[-c] [-l] [-A] [-d] [-f] [-s] [-a [-n]]] [-k [-i] [-t] [-K]] [-C] [name]`
-//! `-V` prints the version and exits. Times follow the process locale, and the date columns are as
-//! wide as MIT's probe of that locale; addresses (`-a`) are printed numerically.
-
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
@@ -23,20 +17,16 @@ use krb5_client::errmsg::{Code, Krb5Error};
 use krb5_client::{
     KeytabName, keytab_read_error, kt_client_default_name, kt_default_name, kt_resolve, load_ccache,
 };
-use krb5_config::{CcSpec, parse_ccspec, resolve_ccspec};
+use krb5_config::{CcSpec, ClientContext, parse_ccspec, resolve_ccspec};
 use krb5_crypto::EncryptionType;
 use krb5_protocol::{CcacheCred, Keytab, KeytabSlot};
 use krb5_types::{Ticket, TicketFlags};
 use zeroize::Zeroizing;
 
-/// MIT `main` (`klist.c:220-226`): `-V` prints "Kerberos 5 version 1.22.2" and exits 0 after the usage checks.
 const VERSION_LINE: &str = "Kerberos 5 version 1.22.2";
 
-/// The width of a printed time, probed once.
 static TIMESTAMP_WIDTH: OnceLock<usize> = OnceLock::new();
 
-/// MIT `main` (`clients/klist/klist.c:232-236`): the column width is the first `sfstring` of now
-/// that fits in 20 bytes, else in `BUFSIZ` (8192), else 15.
 fn timestamp_width() -> usize {
     *TIMESTAMP_WIDTH.get_or_init(|| {
         let now = unix_now();
@@ -47,7 +37,6 @@ fn timestamp_width() -> usize {
 }
 
 fn main() {
-    // MIT `main` (`clients/klist/klist.c:124-130`): the locale comes from the environment first.
     krb5_types::timestamp::setlocale();
     let argv: Vec<String> = std::env::args().collect();
     let argv0 = argv.first().map_or("klist", String::as_str);
@@ -73,40 +62,46 @@ fn main() {
     std::process::exit(run(prog, &args));
 }
 
-/// MIT `main` (`klist.c:229-260`): the library's profile; a name sets the default cache unless
-/// `-k`; then the collection list (`-l`), every cache (`-A`), the default cache, or the keytab.
 fn run(prog: &str, args: &KlistArgs) -> i32 {
     let now = unix_now();
-    if let Err(e) = krb5_client::init_context() {
-        eprintln!("{prog}: {e} while initializing krb5");
-        return 1;
-    }
+    let ctx = match krb5_client::init_context() {
+        Ok(ctx) => ctx,
+        Err(e) => {
+            eprintln!("{prog}: {e} while initializing krb5");
+            return 1;
+        }
+    };
+    let ctx = &ctx;
     if args.keytab {
-        return do_keytab(prog, args, args.ccache.as_deref());
+        return do_keytab(ctx, prog, args, args.ccache.as_deref());
     }
     let default = match &args.ccache {
         Some(name) => parse_ccspec(name),
-        None => resolve_ccspec(None),
+        None => resolve_ccspec(ctx, None),
     }
     .map_err(|e| Krb5Error::from_ccname(&e));
     let mut out = String::new();
     let status = if args.list_all {
-        list_all_ccaches(prog, &mut out, default.ok(), now)
+        list_all_ccaches(ctx, prog, &mut out, default.ok(), now)
     } else if args.show_all {
-        show_all_ccaches(prog, &mut out, args, default.ok(), now)
+        show_all_ccaches(ctx, prog, &mut out, args, default.ok(), now)
     } else {
-        do_ccache(prog, &mut out, args, default, now)
+        do_ccache(ctx, prog, &mut out, args, default, now)
     };
     print!("{out}");
     status
 }
 
-/// The caches of the default's collection; a default of an unknown type has none.
-fn caches(prog: &str, default: Option<CcSpec>, silent: bool) -> Result<Vec<Cache>, i32> {
+fn caches(
+    ctx: &ClientContext,
+    prog: &str,
+    default: Option<CcSpec>,
+    silent: bool,
+) -> Result<Vec<Cache>, i32> {
     let Some(default) = default else {
         return Ok(Vec::new());
     };
-    collection(&default).map_err(|e| {
+    collection(ctx, &default).map_err(|e| {
         if !silent {
             eprintln!("{prog}: {e} while listing ccache collection");
         }
@@ -114,10 +109,15 @@ fn caches(prog: &str, default: Option<CcSpec>, silent: bool) -> Result<Vec<Cache
     })
 }
 
-/// MIT `list_all_ccaches` (`klist.c:360-386`): one line per initialized cache, its principal and
-/// full name, ` (Expired)` when it holds no current ticket; exit 0 when any was listed.
-fn list_all_ccaches(prog: &str, out: &mut String, default: Option<CcSpec>, now: u32) -> i32 {
-    let caches = match caches(prog, default, false) {
+// MIT: `list_all_ccaches` (klist.c:360-386)
+fn list_all_ccaches(
+    ctx: &ClientContext,
+    prog: &str,
+    out: &mut String,
+    default: Option<CcSpec>,
+    now: u32,
+) -> i32 {
+    let caches = match caches(ctx, prog, default, false) {
         Ok(c) => c,
         Err(code) => return code,
     };
@@ -125,16 +125,17 @@ fn list_all_ccaches(prog: &str, out: &mut String, default: Option<CcSpec>, now: 
     let _ = writeln!(out, "{:<30} ----------", "--------------");
     let mut status = 1;
     for cache in caches {
-        if list_ccache(out, &cache, now) == 0 {
+        if list_ccache(ctx, out, &cache, now) == 0 {
             status = 0;
         }
     }
     status
 }
 
-/// MIT `list_ccache` (`klist.c:388-420`): a cache that is not initialized is skipped.
-fn list_ccache(out: &mut String, cache: &Cache, now: u32) -> i32 {
-    let Ok(cc) = load_ccache(&cache.spec()) else {
+// MIT: `list_ccache` (klist.c:388-420)
+// a cache that is not initialized is skipped.
+fn list_ccache(ctx: &ClientContext, out: &mut String, cache: &Cache, now: u32) -> i32 {
+    let Ok(cc) = load_ccache(ctx, &cache.spec()) else {
         return 1;
     };
     let _ = write!(out, "{:<30.30} {}", unparse(&cc.primary), cache.full_name());
@@ -145,16 +146,17 @@ fn list_ccache(out: &mut String, cache: &Cache, now: u32) -> i32 {
     0
 }
 
-/// MIT `show_all_ccaches` (`klist.c:422-450`): each cache of the collection as `show_ccache`
-/// prints it, a blank line between; with `-s`, only the status; exit 0 when any cache passed.
+// MIT: `show_all_ccaches` (klist.c:422-450)
+// each cache of the collection as `show_ccache`
 fn show_all_ccaches(
+    ctx: &ClientContext,
     prog: &str,
     out: &mut String,
     args: &KlistArgs,
     default: Option<CcSpec>,
     now: u32,
 ) -> i32 {
-    let caches = match caches(prog, default, args.silent) {
+    let caches = match caches(ctx, prog, default, args.silent) {
         Ok(c) => c,
         Err(code) => return code,
     };
@@ -164,9 +166,9 @@ fn show_all_ccaches(
             out.push('\n');
         }
         let st = if args.silent {
-            check(cache, now)
+            check(ctx, cache, now)
         } else {
-            show_ccache(prog, out, args, cache)
+            show_ccache(ctx, prog, out, args, cache)
         };
         if st == 0 {
             status = 0;
@@ -175,15 +177,17 @@ fn show_all_ccaches(
     status
 }
 
-/// MIT `do_ccache` (`klist.c:452-465`): the default cache, shown or (`-s`) checked.
+// MIT: `do_ccache` (klist.c:452-465)
+// the default cache, shown or (`-s`) checked.
 fn do_ccache(
+    ctx: &ClientContext,
     prog: &str,
     out: &mut String,
     args: &KlistArgs,
     default: Result<CcSpec, Krb5Error>,
     now: u32,
 ) -> i32 {
-    let cache = match default.and_then(|d| resolve(&d)) {
+    let cache = match default.and_then(|d| resolve(ctx, &d)) {
         Ok(c) => c,
         Err(e) => {
             if !args.silent {
@@ -193,27 +197,31 @@ fn do_ccache(
         }
     };
     if args.silent {
-        check(&cache, now)
+        check(ctx, &cache, now)
     } else {
-        show_ccache(prog, out, args, &cache)
+        show_ccache(ctx, prog, out, args, &cache)
     }
 }
 
-/// MIT `check_ccache` (`klist.c:532-576`): 0 when the cache holds a current local TGT, or holds
-/// no local TGT but a current ticket.
-fn check(cache: &Cache, now: u32) -> i32 {
-    load_ccache(&cache.spec()).map_or(1, |cc| check_ccache(&cc, now))
+// MIT check_ccache; see docs/parity/b1-tools.md
+fn check(ctx: &ClientContext, cache: &Cache, now: u32) -> i32 {
+    load_ccache(ctx, &cache.spec()).map_or(1, |cc| check_ccache(&cc, now))
 }
 
-/// MIT `show_ccache` (`klist.c:468-529`): the cache's name and default principal, the header, then
-/// each credential (configuration entries only with `-C`).
-fn show_ccache(prog: &str, out: &mut String, args: &KlistArgs, cache: &Cache) -> i32 {
-    let cc = match load_ccache(&cache.spec()) {
+// MIT: `show_ccache` (klist.c:468-529)
+fn show_ccache(
+    ctx: &ClientContext,
+    prog: &str,
+    out: &mut String,
+    args: &KlistArgs,
+    cache: &Cache,
+) -> i32 {
+    let cc = match load_ccache(ctx, &cache.spec()) {
         Ok(cc) => cc,
         Err(e) => {
             eprintln!(
                 "{prog}: {}",
-                krb5_client::cache_read_error(&cache.spec(), e.as_ref())
+                krb5_client::cache_read_error(ctx, &cache.spec(), e.as_ref())
             );
             return 1;
         }
@@ -235,10 +243,7 @@ fn show_ccache(prog: &str, out: &mut String, args: &KlistArgs, cache: &Cache) ->
     0
 }
 
-/// MIT `show_credential` (`klist.c:678-823`): the times and server, then on one line
-/// `for client`, `renew until` and `Flags`, then (after a line break when three of those were
-/// printed) the enctypes and authdata types, the addresses, and the ticket's own server when it
-/// differs.
+// MIT: `show_credential` (klist.c:678-823)
 fn show_credential(out: &mut String, args: &KlistArgs, cred: &CcacheCred, defname: &str) {
     let name = unparse(&cred.client);
     let is_config = cred.is_config();
@@ -342,8 +347,7 @@ fn show_credential(out: &mut String, args: &KlistArgs, cred: &CcacheCred, defnam
     }
 }
 
-/// MIT `print_config_data` (`klist.c:653-676`): printable bytes as they are, others as `\ooo`,
-/// from column 8, wrapped after column 72.
+// MIT: `print_config_data` (klist.c:653-676)
 fn print_config_data(out: &mut String, mut col: usize, data: &[u8]) {
     for &b in data {
         while col < 8 {
@@ -367,8 +371,7 @@ fn print_config_data(out: &mut String, mut col: usize, data: &[u8]) {
     }
 }
 
-/// MIT `one_addr` (`klist.c:829-887`): an IPv4 or IPv6 address (numerically), a NetBIOS name, or
-/// MIT's text for a broken or unknown one.
+// MIT: `one_addr` (klist.c:829-887)
 fn one_addr(addrtype: u16, a: &[u8]) -> String {
     match (addrtype, a.len()) {
         (2, 4) => std::net::Ipv4Addr::new(a[0], a[1], a[2], a[3]).to_string(),
@@ -387,8 +390,7 @@ fn one_addr(addrtype: u16, a: &[u8]) -> String {
     }
 }
 
-/// MIT `etype_string` (`klist.c:587-603`): the enctype's name, `DEPRECATED:` before a deprecated
-/// one, `etype N` for one this build does not know.
+// MIT etype_string; see docs/parity/b1-tools.md
 fn etype_string(etype: i32) -> String {
     match EncryptionType::known(etype) {
         Ok(e) if e.is_deprecated() => format!("DEPRECATED:{}", e.to_mit_name()),
@@ -397,26 +399,24 @@ fn etype_string(etype: i32) -> String {
     }
 }
 
-/// MIT `printtime` (`klist.c:643-651`): the local time in `timestamp_width` columns, space-filled.
+// MIT: `printtime` (klist.c:643-651)
+// the local time in `timestamp_width` columns, space-filled.
 fn printtime(t: u32) -> String {
     timestamp_to_sfstring(t, timestamp_width() + 1, Some(b' ')).unwrap_or_default()
 }
 
-/// MIT `do_keytab` (`klist.c:263-358`): the keytab's name, the header (`-t` adds the timestamp
-/// column), then one line per entry: the key version, `-t`'s timestamp, the principal, `-e`'s
-/// enctype and `-K`'s key.
-/// MIT `do_keytab` (`klist.c:338-343`): the key is printed only under `-K`. Here it is formatted
-/// only then, from the keytab's own bytes; the file's bytes are wiped right after parsing, and the
-/// listing, sized before it is written so that no reallocation leaves a key's hex behind, once
-/// it is printed.
-fn do_keytab(prog: &str, args: &KlistArgs, name: Option<&str>) -> i32 {
+// MIT: `do_keytab` (klist.c:263-358)
+fn do_keytab(ctx: &ClientContext, prog: &str, args: &KlistArgs, name: Option<&str>) -> i32 {
     let (ktname, doing) = match name {
         Some(n) => (n.to_owned(), format!("while resolving keytab {n}")),
         None if args.client_keytab => (
-            kt_client_default_name(),
+            kt_client_default_name(ctx),
             "while getting default client keytab".to_owned(),
         ),
-        None => (kt_default_name(), "while getting default keytab".to_owned()),
+        None => (
+            kt_default_name(ctx),
+            "while getting default keytab".to_owned(),
+        ),
     };
     let kt = match kt_resolve(&ktname) {
         Ok(k) => k,
@@ -432,6 +432,7 @@ fn do_keytab(prog: &str, args: &KlistArgs, name: Option<&str>) -> i32 {
             let read = krb5_protocol::read_secret_file(path)
                 .map_err(|e| keytab_read_error(&e, &path.display().to_string()))
                 .and_then(|b| {
+                    // `klist -k` wipes the keytab's bytes after parsing.
                     Keytab::parse(&b).map_err(|e| Krb5Error::new(Code::Other, e.to_string()))
                 });
             match read {
@@ -494,7 +495,6 @@ fn do_keytab(prog: &str, args: &KlistArgs, name: Option<&str>) -> i32 {
         }
         lines.push((line, key));
     }
-    // ` (0x`, two hex digits a key octet, `)`.
     let hex_len = |key: Option<&[u8]>| {
         if args.keys {
             5 + 2 * key.map_or(0, <[u8]>::len)
@@ -522,146 +522,4 @@ fn do_keytab(prog: &str, args: &KlistArgs, name: Option<&str>) -> i32 {
     }
     print!("{}", out.as_str());
     0
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use krb5_protocol::FileCcache;
-    use krb5_types::PrincipalName;
-
-    fn sample_cred(renew_till: u32, flags: u32) -> CcacheCred {
-        let realm = krb5_protocol::realm("KERBER.TEST");
-        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
-        let key =
-            krb5_crypto::ProtocolKey::from_bytes(EncryptionType::Aes128CtsHmacSha196, &[0u8; 16])
-                .unwrap();
-        CcacheCred {
-            client: (realm.clone(), user),
-            server: (realm, PrincipalName::krbtgt("KERBER.TEST")),
-            key: krb5_protocol::CcacheKeyblock::from_protocol(&key),
-            authtime: 1_700_000_000,
-            starttime: 1_700_000_000,
-            endtime: 1_700_360_000,
-            renew_till,
-            is_skey: 0,
-            ticket_flags: flags,
-            addresses: Vec::new(),
-            authdata: Vec::new(),
-            ticket: Vec::new(),
-            second_ticket: Vec::new(),
-        }
-    }
-
-    fn args(flags: bool) -> KlistArgs {
-        KlistArgs {
-            flags,
-            ..KlistArgs::default()
-        }
-    }
-
-    /// Live MIT 1.22.2 `klist -f`: `renew until …, Flags: FRIA` on
-    /// one line.
-    #[test]
-    fn renew_until_and_flags_share_a_line_as_mit() {
-        let cred = sample_cred(1_700_720_000, 0x40e0_0000);
-        let mut out = String::new();
-        show_credential(&mut out, &args(true), &cred, "user@KERBER.TEST");
-        let lines: Vec<&str> = out.lines().collect();
-        assert_eq!(lines.len(), 2, "{out}");
-        assert!(lines[1].starts_with("\trenew until "), "{out}");
-        assert!(lines[1].ends_with(", Flags: FRIA"), "{out}");
-        let mut none = String::new();
-        show_credential(
-            &mut none,
-            &args(false),
-            &sample_cred(0, 0),
-            "user@KERBER.TEST",
-        );
-        assert_eq!(none.lines().count(), 1, "{none}");
-    }
-
-    #[test]
-    fn ticket_server_only_when_sname_differs() {
-        use krb5_asn1::encode;
-        use krb5_types::{EncryptedData, OctetString, ascii};
-        let mut cred = sample_cred(0, 0);
-        let tkt = Ticket {
-            tkt_vno: Ticket::VNO,
-            realm: ascii("KERBER.TEST"),
-            sname: PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "testhost.kerber.test"]),
-            enc_part: EncryptedData {
-                etype: 18,
-                kvno: Some(1),
-                cipher: OctetString::from(vec![0u8; 16]),
-            },
-        };
-        cred.ticket = encode(&tkt).unwrap();
-        let mut out = String::new();
-        show_credential(&mut out, &args(false), &cred, "user@KERBER.TEST");
-        assert!(
-            out.contains("Ticket server: host/testhost.kerber.test@KERBER.TEST"),
-            "{out}"
-        );
-        cred.server = (
-            krb5_protocol::realm("KERBER.TEST"),
-            PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "testhost.kerber.test"]),
-        );
-        let mut same = String::new();
-        show_credential(&mut same, &args(false), &cred, "user@KERBER.TEST");
-        assert!(!same.contains("Ticket server:"), "{same}");
-    }
-
-    /// Live MIT 1.22.2 `klist -C`: `config: fast_avail(krbtgt/…) = yes`.
-    #[test]
-    fn config_entries_print_as_mit() {
-        let mut cc = FileCcache::new(sample_cred(0, 0).client, Vec::new());
-        cc.set_config(Some("krbtgt/KERBER.TEST@KERBER.TEST"), "fast_avail", b"yes");
-        let mut out = String::new();
-        let all = KlistArgs {
-            config: true,
-            ..KlistArgs::default()
-        };
-        show_credential(&mut out, &all, &cc.creds[0], "user@KERBER.TEST");
-        assert_eq!(
-            out,
-            "config: fast_avail(krbtgt/KERBER.TEST@KERBER.TEST) = yes\n"
-        );
-    }
-
-    #[test]
-    fn printtime_is_timestamp_width() {
-        assert_eq!(printtime(1_700_000_000).len(), timestamp_width());
-        assert_eq!(etype_string(18), "aes256-cts-hmac-sha1-96");
-        assert_eq!(etype_string(99), "etype 99");
-        assert_eq!(one_addr(2, &[192, 0, 2, 1]), "192.0.2.1");
-        assert_eq!(one_addr(99, &[]), "unknown addrtype 99");
-    }
-
-    /// Live MIT 1.22.2 `klist -k` / `-kte` / `-kK`: the layout.
-    #[test]
-    fn keytab_listing_lays_out_as_mit() {
-        let key =
-            krb5_crypto::ProtocolKey::from_bytes(EncryptionType::Aes128CtsHmacSha196, &[0xa1; 16])
-                .unwrap();
-        let kt = Keytab::single(
-            krb5_protocol::realm("KERBER.TEST"),
-            PrincipalName::new(PrincipalName::NT_SRV_HST, ["nfs", "services.kerber.test"]),
-            2,
-            key,
-        );
-        let path = krb5_testkit::scratch_dir("klist-k").join("kt");
-        kt.write_file(&path).unwrap();
-        let name = path.display().to_string();
-        let a = KlistArgs {
-            keytab: true,
-            etype: true,
-            keys: true,
-            ..KlistArgs::default()
-        };
-        assert_eq!(do_keytab("klist", &a, Some(&name)), 0);
-        assert_eq!(do_keytab("klist", &a, Some("BOGUS:/x")), 1);
-        assert_eq!(do_keytab("klist", &a, Some("/no/such/keytab")), 1);
-        let _ = std::fs::remove_file(&path);
-    }
 }

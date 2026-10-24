@@ -20,7 +20,7 @@ decoder patches `vendor/rasn/PATCHES.md` lists and diffs. `[policy.rasn] audit-a
 audits it as the crates.io crate (its 0.28.14 exemption); vet cannot hash a path dependency, so the
 delta is reviewed in that file.
 
-**`curve25519-dalek` 4.1.3** (SPAKE edwards25519) has no importable
+**`curve25519-dalek` 5.0.0** (SPAKE edwards25519) has no importable
 safe-to-deploy audit (Google's is `ub-risk-1`, for 4.0.0), so it, its
 build-time `curve25519-dalek-derive` and the never-built `fiat-crypto`
 backend are exempt with notes. Its build dependencies `rustc_version`

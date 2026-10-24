@@ -4,7 +4,8 @@
 //! The tests drive the shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry points of a
 //! bootstrapped realm.
 //! SPAKE 91 carries ETYPE-INFO2 when the client has not yet seen a cookie.
-//! MIT `maybe_add_etype_info2` (`kdc_preauth.c:1141-1170`): a 91 reply gets PA-ETYPE-INFO2
+// MIT: `maybe_add_etype_info2` (kdc_preauth.c:1141-1170)
+//! a 91 reply gets PA-ETYPE-INFO2
 //! only while the request carries no cookie.
 
 #[path = "common/mod.rs"]
@@ -100,6 +101,7 @@ fn password_as_tgt() -> AsOutcome {
         used_fast: false,
         pa_type: None,
         pa_config: None,
+        time_offset: 0,
     }
 }
 
@@ -120,7 +122,7 @@ fn verify_support_unpermitted_offer_is_preauth_failed() {
 #[test]
 fn pkinit_hint_is_16_147() {
     let (mut store, _) = bootstrap_documented().unwrap();
-    store.enable_pkinit_ca().unwrap();
+    let _ca = krb5_testkit::enable_pkinit(&mut store);
     let req = as_req(user(), TEST_REALM, 30004, None).unwrap();
     let err = krb5_kdc::issue_as(&store, &req).unwrap_err();
     let Error::PreauthRequired { e_data } = err else {
@@ -181,6 +183,7 @@ fn tgs_after_password_as_is_fast_armored() {
     let tgt = password_as_tgt();
     let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "testhost.kerber.test"]);
     let _ = tgs_exchange(
+        &krb5_config::isolated_profile(),
         &KdcAddr {
             host: "127.0.0.1".into(),
             port: addr.port(),
@@ -710,8 +713,10 @@ fn spake_91_without_cookie_carries_etype_info2() {
 #[test]
 // oracle: differential-gate.sh as-spake-unknown-choice
 fn as_spake_unknown_choice_is_preauth_failed() {
-    // MIT `decode_cntype` (`lib/krb5/asn.1/asn1_encode.c:1277-1293`): a PA-SPAKE no alternative takes ([4]) is an unknown choice.
-    // MIT `spake_verify` (`plugins/preauth/spake/spake_kdc.c:532-535`): an unknown choice is PREAUTH_FAILED.
+    // MIT: `decode_cntype` (lib/krb5/asn.1/asn1_encode.c:1277-1293)
+    // a PA-SPAKE no alternative takes ([4]) is an unknown choice.
+    // MIT: `spake_verify` (plugins/preauth/spake/spake_kdc.c:532-535)
+    // an unknown choice is PREAUTH_FAILED.
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let spake = PaData {
@@ -743,7 +748,8 @@ fn spake_padata_req(nonce: u32, padata: Vec<PaData>) -> krb5_types::AsReq {
 
 #[test]
 fn spake_support_message_is_logged_as_a_verify_failure() {
-    // MIT `send_challenge` (`plugins/preauth/spake/spake_kdc.c:290-292`): the module answers a support message with `KRB5KDC_ERR_MORE_PREAUTH_DATA_REQUIRED`, which `finish_verify_padata` logs like any failure of a module.
+    // MIT: `send_challenge` (plugins/preauth/spake/spake_kdc.c:290-292)
+    // the module answers a support message with `KRB5KDC_ERR_MORE_PREAUTH_DATA_REQUIRED`, which `finish_verify_padata` logs like any failure of a module.
     let (store, _) = bootstrap_documented().unwrap();
     let req = spake_padata_req(
         0x4b11,
@@ -762,8 +768,10 @@ fn spake_support_message_is_logged_as_a_verify_failure() {
 
 #[test]
 fn spake_messages_that_do_not_decode_log_the_decoders_text() {
-    // MIT `spake_verify` (`plugins/preauth/spake/spake_kdc.c:519-521`): a PA-SPAKE the decoder refuses fails the module with the decoder's code.
-    // MIT `spake_verify` (`plugins/preauth/spake/spake_kdc.c:532-535`): a choice no alternative takes fails with this message.
+    // MIT: `spake_verify` (plugins/preauth/spake/spake_kdc.c:519-521)
+    // a PA-SPAKE the decoder refuses fails the module with the decoder's code.
+    // MIT: `spake_verify` (plugins/preauth/spake/spake_kdc.c:532-535)
+    // a choice no alternative takes fails with this message.
     let (store, _) = bootstrap_documented().unwrap();
     for (n, (der, message)) in [
         (vec![0xff, 0xff], "ASN.1 encoding ended unexpectedly"),
@@ -822,7 +830,8 @@ fn spake_response_failures_are_logged_as_the_plain_24_text() {
         "preauth (spake) verify failure: Preauthentication failed",
         "AS_REQ PREAUTH_FAILED, Preauthentication failed",
     ];
-    // MIT `verify_response` (`plugins/preauth/spake/spake_kdc.c:429-434`): a factor that does not decrypt is the wrong password.
+    // MIT: `verify_response` (plugins/preauth/spake/spake_kdc.c:429-434)
+    // a factor that does not decrypt is the wrong password.
     let (_, spa, cookie, chal) = spake_round1(&store, 0x4b31);
     let mut req = spake_padata_req(0x4b32, vec![]);
     let body_der = encode(&req.0.req_body).unwrap();
@@ -845,7 +854,8 @@ fn spake_response_failures_are_logged_as_the_plain_24_text() {
     let (code, log) = spake_traced(&store, &req);
     assert_eq!(code, err::PREAUTH_FAILED);
     assert_eq!(common::failure_trace(&log), plain, "wrong password");
-    // MIT `verify_response` (`plugins/preauth/spake/spake_kdc.c:388-391`): a response with no cookie to answer is refused the same way.
+    // MIT: `verify_response` (plugins/preauth/spake/spake_kdc.c:388-391)
+    // a response with no cookie to answer is refused the same way.
     let (key, spa, _cookie, chal) = spake_round1(&store, 0x4b33);
     let mut req = spake_padata_req(0x4b34, vec![]);
     let body_der = encode(&req.0.req_body).unwrap();

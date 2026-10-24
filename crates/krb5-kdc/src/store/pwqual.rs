@@ -1,8 +1,4 @@
-//! Password-quality modules (`server_misc.c` `init_pwqual`, `pwqual.c`).
-//!
-//! Built-ins are `dict`, `empty`, `hesiod` and `princ`, in that order.
-//! `[plugins] pwqual` `disable` then `enable_only` select them and any
-//! embedder module from [`register_pwqual`]. The first error stops the walk.
+//! Password-quality checks.
 
 use std::sync::{Arc, Mutex};
 
@@ -14,24 +10,15 @@ use super::password::{PWQUAL_DICT, PWQUAL_EMPTY, PWQUAL_PRINC};
 use super::pwqual_dict::PwqualDict;
 use crate::error::Error;
 
-/// One password-quality module.
-///
-/// MIT `krb5_pwqual_vtable` (`include/krb5/pwqual_plugin.h`): `check` sees the password, the
-/// policy name (NULL when the principal has none) and the principal.
+// MIT: `krb5_pwqual_vtable` (include/krb5/pwqual_plugin.h)
 pub trait Pwqual: Send + Sync {
-    /// Module name for `[plugins] pwqual`.
     fn name(&self) -> &'static str;
 
-    /// The built-in `dict` module reads the realm dictionary. Embedder modules leave this false.
+    /// Embedders leave this false: true runs the realm dictionary in place of `check`.
     fn checks_dictionary(&self) -> bool {
         false
     }
 
-    /// Reject `password`, or allow it.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::PasswordPolicy`] when this module rejects the password. The walk stops there.
     fn check(
         &self,
         password: &[u8],
@@ -70,6 +57,7 @@ impl Pwqual for Builtin {
         name: &PrincipalName,
     ) -> Result<(), Error> {
         match self.kind {
+            // MIT: `hesiod_check` (pwqual_hesiod.c:95-119)
             Kind::Dict | Kind::Hesiod => Ok(()),
             Kind::Empty => empty_check(password),
             Kind::Princ => princ_check(password, policy_name, realm, name),
@@ -77,7 +65,8 @@ impl Pwqual for Builtin {
     }
 }
 
-/// MIT `dict_check` (`pwqual_dict.c:215-230`): no policy, or no dictionary, allows the password.
+// MIT: `dict_check` (pwqual_dict.c:215-230)
+/// No policy, or no dictionary, allows it.
 fn dict_check(
     password: &[u8],
     policy_name: Option<&str>,
@@ -92,7 +81,7 @@ fn dict_check(
     Ok(())
 }
 
-/// MIT `empty_check` (`pwqual_empty.c:38-44`): an empty password is refused with or without a policy.
+// MIT: `empty_check` (pwqual_empty.c:38-44)
 fn empty_check(password: &[u8]) -> Result<(), Error> {
     if password.is_empty() {
         return Err(Error::PasswordPolicy(PWQUAL_EMPTY.into()));
@@ -100,8 +89,8 @@ fn empty_check(password: &[u8]) -> Result<(), Error> {
     Ok(())
 }
 
-/// MIT `princ_check` (`pwqual_princ.c:40-58`): with a policy, the realm matches first, then each
-/// component. The realm uses the dictionary text. A component sets its own text.
+// MIT: `princ_check` (pwqual_princ.c:40-58)
+/// A realm match uses the dictionary text.
 fn princ_check(
     password: &[u8],
     policy_name: Option<&str>,
@@ -128,10 +117,7 @@ fn builtin(name: &'static str, kind: Kind) -> Arc<dyn Pwqual> {
     Arc::new(Builtin { name, kind })
 }
 
-/// MIT `init_pwqual` (`server_misc.c:44-57`): `dict`, `empty`, `hesiod`, `princ`.
-///
-/// `hesiod` is compiled without Hesiod, so its check allows every password (`pwqual_hesiod.c`
-/// with `HESIOD` unset).
+// MIT: `init_pwqual` (server_misc.c:44-57)
 fn builtins() -> Vec<Arc<dyn Pwqual>> {
     vec![
         builtin("dict", Kind::Dict),
@@ -148,7 +134,6 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
-/// Register one named module after the built-ins, for every thread that has not set its own list.
 pub fn register_pwqual(module: Arc<dyn Pwqual>) {
     EXTRA
         .lock()
@@ -156,14 +141,11 @@ pub fn register_pwqual(module: Arc<dyn Pwqual>) {
         .push(module);
 }
 
-/// Install this thread's modules in place of the built-ins and [`register_pwqual`] (tests).
-///
-/// The list is still filtered by `[plugins] pwqual`. An empty list checks nothing.
+/// Replaces the built-ins and registered modules on this thread; an empty list checks nothing.
 pub fn set_thread_pwqual(modules: Vec<Arc<dyn Pwqual>>) {
     THREAD.with(|slot| *slot.borrow_mut() = Some(modules));
 }
 
-/// Drop this thread's modules so it uses the built-ins.
 pub fn clear_thread_pwqual() {
     THREAD.with(|slot| *slot.borrow_mut() = None);
 }
@@ -196,10 +178,7 @@ fn selected(store: &PrincipalStore) -> Vec<Arc<dyn Pwqual>> {
     out
 }
 
-/// MIT `passwd_check` (`server_misc.c:110-135`): each loaded module, and the first error returns.
-///
-/// `princ_realm` is the principal's realm, which may differ from the store realm. A
-/// `PasswordPolicy` error is logged by `module_refusal` and then returned.
+// MIT: `passwd_check` (server_misc.c:110-135)
 pub(super) fn run(
     store: &PrincipalStore,
     name: &PrincipalName,

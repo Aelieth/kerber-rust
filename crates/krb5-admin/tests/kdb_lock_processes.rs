@@ -1,7 +1,4 @@
-//! Two `kadmin.local` processes changing one database at once lose nothing: each change takes
-//! the database's exclusive lock, reads the database again under it and writes it once, as MIT's
-//! put does under `principal.ok` and `principal.kadm5.lock`.
-//! MIT `krb5_db2_put_principal` (`plugins/kdb/db2/kdb_db2.c:828-854`): a put locks the database exclusively, writes, moves the age and unlocks.
+//! Two `kadmin.local` processes changing one database at once lose nothing: each change takes the database's exclusive lock, reads the database again under it and writes it once, as MIT's put does under `principal.ok` and `principal.kadm5.lock`.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -10,7 +7,6 @@ use krb5_kdc::KDB_DISALLOW_ALL_TIX;
 use krb5_testkit::scratch_dir;
 use krb5_types::PrincipalName;
 
-/// The documented test realm saved as a database a kdc.conf names, as `kadmin.local` finds it.
 fn realm(tag: &str) -> PathBuf {
     let dir = scratch_dir(tag);
     let _ = std::fs::create_dir_all(&dir);
@@ -47,7 +43,6 @@ fn kadmin_local(dir: &Path, query: &str) -> std::process::Output {
         .unwrap()
 }
 
-/// Run `query(tag, i)` for i in 0..n in each of two concurrent sequences of processes.
 fn race(dir: &Path, n: usize, query: fn(&str, usize) -> String) {
     let side = |tag: &'static str| {
         let dir = dir.to_path_buf();

@@ -1,20 +1,11 @@
-//! Principal and policy name globbing for `GET_PRINCS` / `GET_POLS`
-//! (`svr_iters.c` `glob_to_regexp`): the pre-flight MIT answers `EINVAL`
-//! for, and the match itself with POSIX bracket classes.
+//! Principal and policy name globbing for `GET_PRINCS` / `GET_POLS` (`svr_iters.c` `glob_to_regexp`): the pre-flight MIT answers `EINVAL` for, and the match itself with POSIX bracket classes.
 
 use krb5_kdc::PrincipalStore;
 
-/// MIT compiles the glob to a POSIX BRE with `regcomp`; a pattern that fails to compile
-/// (trailing `\\`, an unterminated `[...]`) is `EINVAL` from `kadm5_get_either`. This
-/// mirrors that pre-flight.
-/// MIT `kadm5_get_either` (`svr_iters.c:175-175`): the converted glob is compiled with
-/// `regcomp` as a POSIX BRE.
+// MIT: `kadm5_get_either` (svr_iters.c:175-175)
+/// the converted glob is compiled with `regcomp` as a POSIX BRE.
 #[must_use]
 pub fn glob_pattern_ok(glob: &str) -> bool {
-    // MIT's `ss_parse` unescapes a `\\` pair before `glob_to_regexp`; the Rust
-    // tokenizer does not, so a pattern ending in a backslash is `EINVAL` either
-    // way (a lone trailing `\` fails `regcomp`; MIT unescapes a `\\` pair to a
-    // lone trailing `\` and then fails).
     if glob.ends_with('\\') {
         return false;
     }
@@ -61,7 +52,6 @@ pub fn glob_pattern_ok(glob: &str) -> bool {
     true
 }
 
-/// POSIX character classes MIT's BRE accepts inside `[...]`.
 fn posix_class_match(name: &[u8], c: u8) -> bool {
     match name {
         b"digit" => c.is_ascii_digit(),
@@ -86,11 +76,9 @@ pub(crate) fn glob_expand(glob: &str, append_realm: bool) -> String {
     }
 }
 
-/// `glob_to_regexp` + `regexec` as a direct anchored matcher: `?`=one, `*`=run,
-/// `[...]`=class, `\\x`=literal.
-/// MIT `glob_to_regexp` (`svr_iters.c:41-109`): `?` becomes `.`, `*` becomes `.*`, `[...]`
-/// is copied, a quoted character stays quoted, and the regexp is anchored with `^` and `$`.
-/// MIT `get_either_iter` (`svr_iters.c:111-115`): a name matches when `regexec` returns 0.
+/// `glob_to_regexp` + `regexec` as a direct anchored matcher: `?`=one, `*`=run, `[...]`=class, `\\x`=literal.
+// MIT: `get_either_iter` (svr_iters.c:111-115)
+/// a name matches when `regexec` returns 0.
 pub(crate) fn glob_is_match(pattern: &[u8], text: &[u8]) -> bool {
     let (mut p, mut t) = (0usize, 0usize);
     let (mut star_p, mut star_t): (Option<usize>, usize) = (None, 0);
@@ -155,8 +143,6 @@ pub(crate) fn glob_is_match(pattern: &[u8], text: &[u8]) -> bool {
     p == pattern.len()
 }
 
-/// Match one `[...]` class at the start of `pat`; `Some((matched, consumed))`
-/// or `None` when the class is malformed (treat `[` as a literal).
 fn glob_class(pat: &[u8], c: u8) -> Option<(bool, usize)> {
     let mut i = 1;
     let negate = pat.get(i) == Some(&b'^');
@@ -194,10 +180,6 @@ fn glob_class(pat: &[u8], c: u8) -> Option<(bool, usize)> {
 }
 
 /// The principal names `expr` lists, in the store's order: no expression is `*`, every name.
-/// MIT `kadm5_get_either` (`lib/kadm5/srv/svr_iters.c:153-211`): a missing expression is `*`,
-/// and the names are those the converted glob's regexp matches.
-/// MIT `glob_to_regexp` (`lib/kadm5/srv/svr_iters.c:55-109`): a glob naming no realm gets `@*`,
-/// so the empty expression, `^@.*$`, lists none.
 pub(crate) fn principals_matching(store: &PrincipalStore, expr: Option<&str>) -> Vec<String> {
     let ids = store.ids();
     match expr {
@@ -212,9 +194,6 @@ pub(crate) fn principals_matching(store: &PrincipalStore, expr: Option<&str>) ->
 }
 
 /// The policy names `expr` lists, sorted: no expression is `*`, every name.
-/// MIT `kadm5_get_either` (`lib/kadm5/srv/svr_iters.c:153-211`): a missing expression is `*`.
-/// MIT `glob_to_regexp` (`lib/kadm5/srv/svr_iters.c:55-109`): a policy glob gets no realm, so
-/// the empty expression, `^$`, lists none.
 pub(crate) fn policies_matching(store: &PrincipalStore, expr: Option<&str>) -> Vec<String> {
     let pat = expr.filter(|g| *g != "*").map(|g| glob_expand(g, false));
     let mut names: Vec<String> = store

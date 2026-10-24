@@ -309,10 +309,16 @@ fn cross_realm_referral_and_foreign_ticket_carry_mits_pac() {
     foreign.create_host(&acl_b, &actor_b, &host_b).unwrap();
     let ir = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x5a; 32]).unwrap();
     local
-        .create_interrealm_key(&acl_a, &documented_admin_id(), "OTHER.TEST", ir.clone())
+        .create_interrealm_key(
+            &acl_a,
+            &documented_admin_id(),
+            "OTHER.TEST",
+            ir.clone(),
+            None,
+        )
         .unwrap();
     foreign
-        .create_interrealm_key(&acl_b, &actor_b, TEST_REALM, ir.clone())
+        .create_interrealm_key(&acl_b, &actor_b, TEST_REALM, ir.clone(), None)
         .unwrap();
     let tgt = issue_tgt_password(&local, TEST_USER, TEST_USER_PASSWORD, 9861);
     let referral = krb5_kdc::issue_tgs(
@@ -329,7 +335,7 @@ fn cross_realm_referral_and_foreign_ticket_carry_mits_pac() {
         .unwrap(),
     )
     .unwrap();
-    // MIT: the inter-realm key signs the server checksum, the local krbtgt key the KDC checksum.
+    // The inter-realm key signs the server checksum, the local krbtgt key the KDC checksum.
     let (_, ref_pac) = checked_pac(&referral.rep.0.ticket, &ir, &krbtgt_key(&local), false);
     assert_eq!(kinds(&ref_pac), TGT);
     let svc = krb5_kdc::issue_tgs(

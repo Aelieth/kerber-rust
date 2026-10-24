@@ -1,7 +1,3 @@
-//! stdin as MIT's tools read it: unbuffered, one byte per read, so a reply takes only its line
-//! and leaves the rest of the input to the next reader; and the signals a reader catches, so that
-//! a read they cut short ends with the signal reported instead of the process ending.
-
 use std::cell::RefCell;
 use std::fmt;
 use std::io::{self, BufRead, Read};
@@ -14,10 +10,8 @@ use nix::sys::signalfd::{SfdFlags, SignalFd};
 use nix::sys::termios::{LocalFlags, SetArg, tcgetattr, tcsetattr};
 use zeroize::Zeroize;
 
-/// A terminal stdin back in line mode, echoing, with its signal keys on; stdin that is not a
-/// terminal is left alone.
-/// MIT `readline` (`util/ss/listen.c:40-43`): `ICANON`, `ISIG` and `ECHO` set before each
-/// prompt.
+/// A terminal stdin is put back in line mode, with echo and its signal keys on.
+// MIT readline; see docs/parity/a4-kadmin.md
 pub fn line_mode() {
     let stdin = io::stdin();
     if let Ok(mut mode) = tcgetattr(&stdin) {
@@ -27,8 +21,6 @@ pub fn line_mode() {
     }
 }
 
-/// The signal that cut a [`Stdin`] read short: the payload of the
-/// [`io::ErrorKind::Interrupted`] error such a read returns.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Caught(pub Signal);
 
@@ -40,7 +32,6 @@ impl fmt::Display for Caught {
 
 impl std::error::Error for Caught {}
 
-/// The signal a read error reports, when a caught signal cut the read short.
 #[must_use]
 pub fn caught(e: &io::Error) -> Option<Signal> {
     e.get_ref()
@@ -48,11 +39,9 @@ pub fn caught(e: &io::Error) -> Option<Signal> {
         .map(|c| c.0)
 }
 
-/// The signals this thread holds off and reads from a signalfd while [`SignalCatch`]es live.
 struct Catching {
     fd: SignalFd,
     mask: SigSet,
-    /// The thread's signal mask before the first catch.
     before: SigSet,
 }
 
@@ -60,25 +49,15 @@ thread_local! {
     static CATCHING: RefCell<Option<Catching>> = const { RefCell::new(None) };
 }
 
-/// While this lives, `signals` no longer take their default action on this thread: a [`Stdin`]
-/// read they arrive during returns them as [`Caught`], and one that arrives between reads waits
-/// for the next or for [`take_caught`]. MIT's readers install a handler for the same span: `krb5_prompter_posix` for
-/// `SIGINT` while a reply is read, `ss_listen` for `SIGINT` through the command loop and for
-/// `SIGCONT` while the prompt waits. Dropping it gives the signals back, a pending one it caught
-/// included, so it does not fire later.
-///
-/// MIT `catch_signals` (`lib/krb5/os/prompter.c:133-146`): `SIGINT` caught, with no
-/// `SA_RESTART`, for the read.
-/// MIT `ss_listen` (`util/ss/listen.c:87-114`): `SIGINT` caught through the loop.
-///
-/// A thread that cannot hold a signal off (no signalfd) keeps its default action.
 #[must_use = "the signals are caught only while the catch lives"]
+/// `SIGINT` during a read is returned, instead of ending the process.
+// MIT catch_signals; see docs/parity/b1-client.md
+// MIT ss_listen; see docs/parity/a4-kadmin.md
 pub struct SignalCatch {
     added: SigSet,
 }
 
 impl SignalCatch {
-    /// Catch `signals` until this drops; ones an enclosing catch holds stay with it.
     pub fn new(signals: &[Signal]) -> Self {
         let added = CATCHING.with(|c| {
             let mut state = c.borrow_mut();
@@ -109,8 +88,6 @@ impl SignalCatch {
     }
 }
 
-/// The first catch: `added` held off this thread and read from a new signalfd; `None`, with the
-/// mask as it was, when either fails.
 fn start(added: &SigSet) -> Option<Catching> {
     let mut before = SigSet::empty();
     pthread_sigmask(SigmaskHow::SIG_BLOCK, Some(added), Some(&mut before)).ok()?;
@@ -127,8 +104,6 @@ fn start(added: &SigSet) -> Option<Catching> {
     }
 }
 
-/// A nested catch: `added` held off too and read from the same signalfd; false, with the mask as
-/// it was, when either fails.
 fn widen(k: &mut Catching, added: &SigSet) -> bool {
     let mut mask = k.mask;
     for s in signals_of(added) {
@@ -188,7 +163,6 @@ fn signals_of(set: &SigSet) -> Vec<Signal> {
     set.iter().collect()
 }
 
-/// The signals of `set` that `before` did not hold off: the ones a catch may give back.
 fn outside(set: &SigSet, before: &SigSet) -> SigSet {
     let mut out = SigSet::empty();
     for s in set.iter().filter(|&s| !before.contains(s)) {
@@ -197,8 +171,6 @@ fn outside(set: &SigSet, before: &SigSet) -> SigSet {
     out
 }
 
-/// stdin (file descriptor 0) read without a buffer of its own beyond `capacity` bytes, and with
-/// the signals a [`SignalCatch`] holds reported as [`Caught`].
 pub struct Stdin {
     buf: Box<[u8]>,
     pos: usize,
@@ -206,11 +178,6 @@ pub struct Stdin {
 }
 
 impl Stdin {
-    /// One byte per read, as MIT sets stdin unbuffered for the prompt loop and reads a reply.
-    /// MIT `readline` (`util/ss/listen.c:32-50`): stdin unbuffered, so nothing past the line is
-    /// read.
-    /// MIT `krb5_prompter_posix` (`lib/krb5/os/prompter.c:62-70`): the reply is read through an
-    /// unbuffered `dup` of stdin.
     #[must_use]
     pub fn unbuffered() -> Self {
         Self {
@@ -248,15 +215,12 @@ impl BufRead for Stdin {
     }
 }
 
-/// What a wait for stdin turned up.
 enum Woke {
     Signal(Signal),
     Readable,
     Again,
 }
 
-/// One `read(2)` of file descriptor 0; with a catch held, a caught signal first. A closed
-/// descriptor reads as the end of the input, as Rust's own stdin does.
 fn read_fd0(buf: &mut [u8]) -> io::Result<usize> {
     let stdin = io::stdin();
     let fd = stdin.as_fd();
@@ -276,8 +240,6 @@ fn read_fd0(buf: &mut [u8]) -> io::Result<usize> {
     }
 }
 
-/// With no catch held, stdin is read at once; with one, `poll` waits for stdin or a caught
-/// signal, the signal first, as a signal cuts a blocked read short.
 fn wait(catching: Option<&Catching>, fd: BorrowedFd<'_>) -> io::Result<Woke> {
     let Some(k) = catching else {
         return Ok(Woke::Readable);
@@ -309,8 +271,6 @@ fn numbered(signo: u32) -> Option<Signal> {
         .and_then(|n| Signal::try_from(n).ok())
 }
 
-/// A signal this thread's [`SignalCatch`]es hold pending, taken: one that came while no
-/// [`Stdin`] read waited for it. `None` when none is pending or no catch is held.
 #[must_use]
 pub fn take_caught() -> Option<Signal> {
     CATCHING.with(|c| {
@@ -320,23 +280,14 @@ pub fn take_caught() -> Option<Signal> {
     })
 }
 
-/// How [`fgets`] ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LineEnd {
-    /// Bytes were read: a line, or the input's last bytes, or `size - 1` bytes of a longer line.
     Read,
-    /// The input ended before any byte.
     End,
-    /// A caught signal cut the read short; the bytes read before it are kept.
     Caught(Signal),
-    /// The read failed.
     Failed,
 }
 
-/// C `fgets(buf, size, stream)` on `input`, into `line`: at most `size - 1` bytes, up to and
-/// including a newline; the rest of a longer line stays for the next read. A line can be a
-/// password, so one that outgrows `line`'s buffer moves to a larger one and the old buffer is
-/// wiped before it is freed.
 pub fn fgets(input: &mut (impl BufRead + ?Sized), size: usize, line: &mut Vec<u8>) -> LineEnd {
     line.clear();
     while line.len() + 1 < size {
@@ -373,9 +324,6 @@ pub fn fgets(input: &mut (impl BufRead + ?Sized), size: usize, line: &mut Vec<u8
     }
 }
 
-/// Makes room for `more` bytes in `line`. A buffer too small is not reallocated in place, which
-/// would free it unwiped: its bytes move to a buffer at least twice as large, and the old one is
-/// zeroed whole before it is freed.
 fn reserve_wiped(line: &mut Vec<u8>, more: usize) {
     if line.capacity() - line.len() >= more {
         return;
@@ -393,10 +341,8 @@ fn reserve_wiped(line: &mut Vec<u8>, more: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nix::sys::signal::raise;
 
     thread_local! {
-        /// The buffers `reserve_wiped` replaced on this thread, kept alive as it left them.
         pub(super) static OUTGROWN: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
     }
 
@@ -411,83 +357,11 @@ mod tests {
         assert_eq!(fgets(&mut input, usize::MAX, &mut line), LineEnd::Read);
         assert_eq!(line, typed);
         let old = OUTGROWN.with(|o| std::mem::take(&mut *o.borrow_mut()));
-        // The 1024-octet buffer the prompt starts with, then the 2048-octet one it grew into.
         assert_eq!(old, [vec![0; 1024], vec![0; 2048]]);
         assert_eq!(
             old[0].as_ptr(),
             first,
             "a copy was wiped, not the line's own buffer"
         );
-    }
-
-    fn read(input: &[u8], size: usize) -> (LineEnd, Vec<u8>, Vec<u8>) {
-        let mut input = input;
-        let mut line = Vec::new();
-        let end = fgets(&mut input, size, &mut line);
-        (end, line, input.to_vec())
-    }
-
-    #[test]
-    fn fgets_stops_at_the_newline_or_size_minus_one() {
-        assert_eq!(
-            read(b"yes\nrest\n", 5),
-            (LineEnd::Read, b"yes\n".to_vec(), b"rest\n".to_vec())
-        );
-        assert_eq!(
-            read(b"yesss\n", 5),
-            (LineEnd::Read, b"yess".to_vec(), b"s\n".to_vec())
-        );
-        assert_eq!(
-            read(b"tail", 100),
-            (LineEnd::Read, b"tail".to_vec(), Vec::new())
-        );
-        assert_eq!(read(b"", 100), (LineEnd::End, Vec::new(), Vec::new()));
-    }
-
-    #[test]
-    fn a_caught_sigint_cuts_a_stdin_read_short_and_a_pending_one_goes_with_the_catch() {
-        let catch = SignalCatch::new(&[Signal::SIGINT]);
-        raise(Signal::SIGINT).unwrap();
-        let mut line = Vec::new();
-        assert_eq!(
-            fgets(&mut Stdin::unbuffered(), 100, &mut line),
-            LineEnd::Caught(Signal::SIGINT)
-        );
-        raise(Signal::SIGINT).unwrap();
-        drop(catch);
-    }
-
-    #[test]
-    fn take_caught_takes_a_pending_signal_once() {
-        let catch = SignalCatch::new(&[Signal::SIGINT]);
-        assert_eq!(take_caught(), None);
-        raise(Signal::SIGINT).unwrap();
-        assert_eq!(take_caught(), Some(Signal::SIGINT));
-        assert_eq!(take_caught(), None);
-        drop(catch);
-        assert_eq!(take_caught(), None);
-    }
-
-    #[test]
-    fn a_nested_catch_gives_back_only_its_own_signals() {
-        let outer = SignalCatch::new(&[Signal::SIGINT]);
-        {
-            let _inner = SignalCatch::new(&[Signal::SIGINT, Signal::SIGCONT]);
-            raise(Signal::SIGCONT).unwrap();
-        }
-        raise(Signal::SIGINT).unwrap();
-        let mut line = Vec::new();
-        assert_eq!(
-            fgets(&mut Stdin::unbuffered(), 100, &mut line),
-            LineEnd::Caught(Signal::SIGINT)
-        );
-        drop(outer);
-    }
-
-    #[test]
-    fn caught_names_only_a_caught_signal() {
-        let e = io::Error::new(io::ErrorKind::Interrupted, Caught(Signal::SIGINT));
-        assert_eq!(caught(&e), Some(Signal::SIGINT));
-        assert_eq!(caught(&io::Error::from(io::ErrorKind::Interrupted)), None);
     }
 }

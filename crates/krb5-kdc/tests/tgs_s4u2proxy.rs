@@ -318,7 +318,7 @@ fn cross_store() -> (PrincipalStore, ProtocolKey) {
     let (mut store, acl) = bootstrap_documented().unwrap();
     let ir = aes_key(0x44);
     store
-        .create_interrealm_key(&acl, &documented_admin_id(), FOREIGN, ir.clone())
+        .create_interrealm_key(&acl, &documented_admin_id(), FOREIGN, ir.clone(), None)
         .unwrap();
     store.allow_s4u_from(
         &documented_host(),
@@ -674,7 +674,7 @@ fn store_with_ir() -> (PrincipalStore, ProtocolKey) {
     let (mut store, acl) = bootstrap_documented().unwrap();
     let ir = aes_key(0x44);
     store
-        .create_interrealm_key(&acl, &documented_admin_id(), FOREIGN, ir.clone())
+        .create_interrealm_key(&acl, &documented_admin_id(), FOREIGN, ir.clone(), None)
         .unwrap();
     store
         .create_host(&acl, &documented_admin_id(), &extra_host())

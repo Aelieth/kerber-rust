@@ -1,11 +1,7 @@
-//! Compare MIT vs Rust KDC replies after masking volatiles.
-//!
-//! KRB-ERROR mask: `stime`/`susec`/`ctime`/`cusec`. `e_text` is compared.
-//! PREAUTH / MORE_PREAUTH / TYPED-DATA `e_data` is structural (type
-//! **multiset**; `differential-gate.sh` pins the wire order through
-//! `kdc-padata-proxy.py`). Success nulls session key, times, `last_req`,
-//! both `enc_part.cipher`s, and PAC auth-data. Any other field difference
-//! is fail-red.
+//! Compare MIT and Rust KDC replies after the volatiles are masked.
+//! KRB-ERROR times are masked. e_text is compared. Any other difference is fail-red.
+//! PREAUTH e_data is a type multiset. The differential gate pins the wire order.
+//! A success leaves out the session key, the times, last_req, both ciphers, and PAC.
 
 use krb5_asn1::decode;
 use krb5_types::{
@@ -25,61 +21,40 @@ impl std::fmt::Display for DiffError {
 
 impl std::error::Error for DiffError {}
 
-/// Stable KRB-ERROR fields (times stripped; `e_text` is the MIT status word).
+/// Times are stripped. e_text stays.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StableKrbError {
-    /// Protocol version.
     pub pvno: i32,
-    /// Message type (30).
     pub msg_type: i32,
-    /// RFC 4120 error-code.
     pub error_code: i32,
-    /// Error realm.
     pub realm: String,
-    /// Error sname (`krbtgt/REALM` typically).
     pub sname: String,
-    /// MIT status word (`e_text`).
     pub e_text: String,
-    /// Whether `crealm` is present (omit with a missing client).
+    /// Presence only. A missing client omits it.
     pub has_crealm: bool,
-    /// Whether `cname` is present.
     pub has_cname: bool,
 }
 
-/// Stable AS/TGS fields after volatile-null.
+/// The volatiles are left out.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StableRep {
-    /// Protocol version.
     pub pvno: i32,
-    /// 11 = AS-REP, 13 = TGS-REP.
     pub msg_type: i32,
-    /// Client realm.
     pub crealm: String,
-    /// Client name.
     pub cname: String,
-    /// Ticket realm.
     pub ticket_realm: String,
-    /// Ticket sname.
     pub ticket_sname: String,
-    /// EncryptedData etype on the reply enc-part.
     pub enc_part_etype: i32,
-    /// EncryptedData kvno on the reply enc-part.
     pub enc_part_kvno: Option<u32>,
-    /// EncKDCRepPart srealm.
     pub srealm: String,
-    /// EncKDCRepPart sname.
     pub sname: String,
-    /// Transited encoding type.
     pub transited_tr_type: i32,
-    /// Transited contents.
     pub transited_contents: Vec<u8>,
     /// TicketFlags as a big-endian bitmask.
     pub flags: u32,
-    /// Reply outer padata types, sorted.
+    /// Outer padata types, sorted.
     pub padata_types: Vec<i32>,
-    /// Ticket EncTicketPart crealm.
     pub tkt_crealm: String,
-    /// Ticket EncTicketPart cname.
     pub tkt_cname: String,
 }
 
@@ -87,7 +62,6 @@ fn ks(r: &krb5_types::KerberosString) -> String {
     String::from_utf8_lossy(r.as_bytes()).into_owned()
 }
 
-/// Mask times; keep `error_code`, `realm`, `sname`, `e_text`, and client presence.
 #[must_use]
 pub fn stable_krb_error(e: &KrbError) -> StableKrbError {
     StableKrbError {
@@ -102,13 +76,7 @@ pub fn stable_krb_error(e: &KrbError) -> StableKrbError {
     }
 }
 
-/// Compare two KRB-ERRORs. PREAUTH / MORE_PREAUTH / TYPED e_data is structural.
-///
-/// # Errors
-///
-/// [`DiffError`] when the stable fields differ, or, for error codes 24, 25, 65 and 91, when
-/// the two `e_data`s fail [`compare_preauth_e_data`] (missing, undecodable, or structurally
-/// different).
+/// PREAUTH, MORE_PREAUTH and TYPED e_data are compared as structure.
 pub fn compare_krb_error(rust: &KrbError, mit: &KrbError) -> Result<(), DiffError> {
     let a = stable_krb_error(rust);
     let b = stable_krb_error(mit);
@@ -117,9 +85,8 @@ pub fn compare_krb_error(rust: &KrbError, mit: &KrbError) -> Result<(), DiffErro
             "krb-error stable mismatch rust={a:?} mit={b:?}"
         )));
     }
-    // MIT `finish_preauth` (`do_as_req.c:443-447`): attaches the get_preauth_hint_list e_data
-    // to PREAUTH_FAILED (24) as well as PREAUTH_REQUIRED (25). 91 carries module METHOD-DATA
-    // (+ maybe_add_etype_info2). 65 is TYPED-DATA.
+    // MIT: `finish_preauth` (do_as_req.c:443-447)
+    // PREAUTH_FAILED carries the hint list too. 91 is METHOD-DATA; 65 is TYPED-DATA.
     if matches!(
         a.error_code,
         err::PREAUTH_REQUIRED
@@ -160,20 +127,11 @@ fn type_multiset(m: &MethodData) -> Vec<i32> {
     v
 }
 
-/// Structural METHOD-DATA / TYPED-DATA compare for 25/24/91/65 e_data.
-///
-/// Both legs' padata type **multisets** must match; the wire order is pinned by the
-/// differential gate's `kdc-padata-proxy.py`, not here. When FX-FAST (136) is present (hint
-/// list), FX-COOKIE is required. ETYPE-INFO2 is required only when either leg listed it.
-/// MIT `add_etype_info` (`kdc_preauth.c:776-778`): skips ETYPE-INFO2 when there is no client key.
-/// When both list it, the etype sets must be equal. ENC_TIMESTAMP agreement is implied by the
-/// multiset.
-///
-/// # Errors
-///
-/// [`DiffError`] when either leg is `None` or does not decode as a non-empty METHOD-DATA or
-/// TYPED-DATA; when the padata type multisets differ; when FX-FAST comes with other types but
-/// no FX-COOKIE; or when an ETYPE-INFO2 does not decode, is empty, or lists different etypes.
+/// The type multisets must match. The gate's proxy pins the wire order.
+/// With FX-FAST, FX-COOKIE is required. ETYPE-INFO2 only when a leg listed it.
+// MIT: `add_etype_info` (kdc_preauth.c:776-778)
+/// No client key skips ETYPE-INFO2.
+/// When both list it, the etype sets are equal. ENC-TIMESTAMP is the multiset.
 pub fn compare_preauth_e_data(a: Option<&[u8]>, b: Option<&[u8]>) -> Result<(), DiffError> {
     let a = a.ok_or_else(|| DiffError("rust e_data missing".into()))?;
     let b = b.ok_or_else(|| DiffError("mit e_data missing".into()))?;
@@ -187,12 +145,10 @@ pub fn compare_preauth_e_data(a: Option<&[u8]>, b: Option<&[u8]>) -> Result<(), 
         )));
     }
     if sa.contains(&pa::FX_FAST) {
-        // FAST-wrapped outer 25/24 is empty 136 only; cookie and ETYPE-INFO2
-        // live inside FX-ERROR.
-        // MIT `prepare_error_as` (`do_as_req.c:785-826`): adds the cookie to the error padata,
-        // then lets `kdc_fast_handle_error` replace the e_data under an armor key.
-        // MIT `kdc_fast_handle_error` (`kdc/fast_util.c:380-418`): puts that padata and the
-        // FX-ERROR inside the encrypted FAST response; the outer e_data is one PA-FX-FAST.
+        // The outer e_data of a FAST error is one PA-FX-FAST.
+        // MIT: `prepare_error_as` (do_as_req.c:785-826)
+        // MIT: `kdc_fast_handle_error` (kdc/fast_util.c:380-418)
+        // Cookie and ETYPE-INFO2 live inside that encrypted response.
         if sa == [pa::FX_FAST] {
             return Ok(());
         }
@@ -202,8 +158,6 @@ pub fn compare_preauth_e_data(a: Option<&[u8]>, b: Option<&[u8]>) -> Result<(), 
                 pa::FX_COOKIE
             )));
         }
-        // MIT `add_etype_info` (`kdc_preauth.c:776-778`): skips PA-ETYPE-INFO2 when
-        // `select_client_key` found no key (`have_client_keys` is then also false).
         // The type multiset still has to match; do not require 19.
     }
     if sa.contains(&pa::ETYPE_INFO2) {
@@ -237,12 +191,7 @@ fn etype_info2_etypes(m: &MethodData) -> Result<Vec<i32>, DiffError> {
     Ok(out)
 }
 
-/// Decode EncKDCRepPart: APPLICATION 26, then 25, then untagged.
-///
-/// # Errors
-///
-/// [`DiffError`] with the decode message when `plain` is none of APPLICATION 26,
-/// APPLICATION 25, or an untagged EncKDCRepPart, a known tag with a malformed body included.
+/// Tries APPLICATION 26, then 25, then untagged.
 pub fn decode_enc_kdc_rep(plain: &[u8]) -> Result<EncKdcRepPart, DiffError> {
     krb5_asn1::decode_enc_kdc_rep_part(plain).map_err(|e| DiffError(e.to_string()))
 }
@@ -257,7 +206,6 @@ fn padata_types(rep: &KdcRep) -> Vec<i32> {
     v
 }
 
-/// Null volatiles and project the stable AS/TGS set.
 #[must_use]
 pub fn stable_rep(rep: &KdcRep, enc: &EncKdcRepPart, ticket: &EncTicketPart) -> StableRep {
     StableRep {
@@ -280,12 +228,7 @@ pub fn stable_rep(rep: &KdcRep, enc: &EncKdcRepPart, ticket: &EncTicketPart) -> 
     }
 }
 
-/// Compare decrypted AS/TGS replies field by field.
-///
-/// # Errors
-///
-/// [`DiffError`] when the two [`StableRep`] projections differ; a kvno carried by only one
-/// leg is not compared.
+/// A kvno present on only one leg is not compared.
 pub fn compare_stable_rep(
     rust_rep: &KdcRep,
     rust_enc: &EncKdcRepPart,

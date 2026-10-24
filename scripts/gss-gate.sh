@@ -564,6 +564,21 @@ echo "$MIT_NC" | grep -q 'mit-gss ap-rep=none' || {
 MIT_NC_FLAGS="$(echo "$MIT_NC" | sed -n 's/.*mit-gss inquire flags=\([0-9]*\) lifetime=.*/\1/p' | head -1)"
 [ $((${MIT_NC_FLAGS:-1} & 2)) -eq 0 ]
 [ $((${MIT_NC_FLAGS:-1} & 2048)) -eq 0 ]
+RUST_NC_LIFE="$(echo "$RUST_NC" | sed -n 's/.*gss-accept inquire flags=[0-9]* lifetime=\([0-9]*\).*/\1/p' | head -1)"
+MIT_NC_LIFE="$(echo "$MIT_NC" | sed -n 's/.*mit-gss inquire flags=[0-9]* lifetime=\([0-9]*\).*/\1/p' | head -1)"
+if [ -z "${RUST_NC_LIFE}" ] || [ -z "${MIT_NC_LIFE}" ]; then
+    log "gss.gate" "error" ',"error":"acceptor lifetime missing"'
+    exit 1
+fi
+LIFE_DELTA=$((RUST_NC_LIFE - MIT_NC_LIFE))
+if [ "$LIFE_DELTA" -lt 0 ]; then
+    LIFE_DELTA=$((-LIFE_DELTA))
+fi
+echo "acceptor lifetime rust=$RUST_NC_LIFE mit=$MIT_NC_LIFE delta=$LIFE_DELTA"
+if [ "$LIFE_DELTA" -gt 60 ]; then
+    log "gss.gate" "error" ",\"error\":\"acceptor lifetime rust=$RUST_NC_LIFE mit=$MIT_NC_LIFE\""
+    exit 1
+fi
 
 echo "==== MIT initiator no CB vs Rust acceptor with CB ===="
 docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'

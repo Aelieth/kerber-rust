@@ -1,8 +1,10 @@
 //! After PREAUTH_REQUIRED the client picks the first runnable mechanism in MIT
 //! `sort_krb5_padata_sequence` order.
-//! MIT `sort_krb5_padata_sequence` (`get_in_tkt.c:400-471`): default preferred is
+// MIT: `sort_krb5_padata_sequence` (get_in_tkt.c:400-471)
+//! default preferred is
 //! `17, 16, 15, 14`; the remainder keeps hint order, so advertised 151 is tried before 2.
-//! MIT `process_pa_data` (`preauth2.c:649-713`): picks the first runnable real mechanism in list
+// MIT: `process_pa_data` (preauth2.c:649-713)
+//! picks the first runnable real mechanism in list
 //! order.
 //! Live oracle: `client-differential-gate.sh` `MIT_preauth_cascade`.
 
@@ -105,6 +107,7 @@ fn optimistic_hint_picks_spake_before_enc_ts() {
             host: "127.0.0.1".into(),
             port,
         },
+        profile: &krb5_config::isolated_profile(),
         want_spake: false,
         fast_armor: None,
         pkinit: None,
@@ -139,7 +142,8 @@ fn optimistic_hint_picks_spake_before_enc_ts() {
 /// The encrypted-timestamp request that answers PREAUTH_REQUIRED sends the error's cookie back
 /// first and verbatim, as MIT's kinit does against MIT's KDC (live MIT 1.22.2:
 /// `[133, 2, 150, 149]`).
-/// MIT `k5_preauth` (`preauth2.c:992-993`): `copy_cookie` runs before any module adds padata.
+// MIT: `k5_preauth` (preauth2.c:992-993)
+/// `copy_cookie` runs before any module adds padata.
 #[test]
 fn enc_timestamp_request_returns_the_cookie_first() {
     isolate_host_krb5();
@@ -178,6 +182,7 @@ fn enc_timestamp_request_returns_the_cookie_first() {
             host: "127.0.0.1".into(),
             port,
         },
+        profile: &krb5_config::isolated_profile(),
         want_spake: false,
         fast_armor: None,
         pkinit: None,
@@ -256,6 +261,7 @@ fn spake_first_shot_omits_optimistic_151() {
         while udp.recv_from(&mut buf).is_ok() {}
     });
     thread::spawn(move || {
+        isolate_host_krb5();
         let _ = as_exchange(&AsRequest {
             cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
             realm: "KERBER.TEST",
@@ -264,6 +270,7 @@ fn spake_first_shot_omits_optimistic_151() {
                 host: "127.0.0.1".into(),
                 port,
             },
+            profile: &krb5_config::isolated_profile(),
             want_spake: true,
             fast_armor: None,
             pkinit: None,
@@ -390,6 +397,7 @@ fn spake_response_request_keeps_the_advertised_padata_in_mit_order() {
             host: "127.0.0.1".into(),
             port,
         },
+        profile: &krb5_config::isolated_profile(),
         want_spake: true,
         fast_armor: None,
         pkinit: None,
@@ -421,7 +429,8 @@ fn spake_response_request_keeps_the_advertised_padata_in_mit_order() {
 /// the user has, though the request asks for aes256-cts-hmac-sha384-192 first (the harness
 /// image's krb5.conf order). Taking the first requested type there instead made every SPAKE
 /// response PREAUTH_FAILED (slo/soak, CI run 751).
-/// MIT `k5_get_etype_info` (`lib/krb5/krb/preauth2.c:790-854`): an error without etype-info leaves the enctype and salt an earlier error set.
+// MIT: `k5_get_etype_info` (lib/krb5/krb/preauth2.c:790-854)
+/// an error without etype-info leaves the enctype and salt an earlier error set.
 #[test]
 fn spake_keeps_the_hints_etype_info_when_the_challenge_has_none() {
     isolate_host_krb5();
@@ -459,6 +468,7 @@ fn spake_keeps_the_hints_etype_info_when_the_challenge_has_none() {
                 host: "127.0.0.1".into(),
                 port,
             },
+            profile: &krb5_config::isolated_profile(),
             want_spake,
             fast_armor: None,
             pkinit: None,
@@ -477,7 +487,8 @@ fn spake_keeps_the_hints_etype_info_when_the_challenge_has_none() {
     }
 }
 
-/// MIT `maybe_add_pac_request` (`lib/krb5/krb/get_in_tkt.c:1243-1253`): `include-pac` is the option, and with no option the padata is absent.
+// MIT: `maybe_add_pac_request` (lib/krb5/krb/get_in_tkt.c:1243-1253)
+/// `include-pac` is the option, and with no option the padata is absent.
 #[test]
 fn every_as_request_carries_the_pac_request_when_asked() {
     isolate_host_krb5();
@@ -516,6 +527,7 @@ fn every_as_request_carries_the_pac_request_when_asked() {
         realm: "KERBER.TEST",
         password: b"pw",
         kdc: &kdc,
+        profile: &krb5_config::isolated_profile(),
         want_spake: false,
         fast_armor: None,
         pkinit: None,
@@ -591,6 +603,7 @@ fn prompted_as(port: u16, prompt: &mut krb5_protocol::PasswordPrompt<'_>) -> krb
             realm: "KERBER.TEST",
             password: b"",
             kdc: &kdc,
+            profile: &krb5_config::isolated_profile(),
             want_spake: false,
             fast_armor: None,
             pkinit: None,
@@ -607,7 +620,8 @@ fn prompted_as(port: u16, prompt: &mut krb5_protocol::PasswordPrompt<'_>) -> krb
 /// MIT asks the KDC before it reads the password: an unknown client is the KDC's error, and the
 /// prompter is never called. A read that fails answering the preauthentication hint is
 /// `KRB5_PREAUTH_FAILED` around the read, unless the read was interrupted.
-/// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:716-723`): the failure of the real type answered is wrapped.
+// MIT: `process_pa_data` (lib/krb5/krb/preauth2.c:716-723)
+/// the failure of the real type answered is wrapped.
 #[test]
 fn a_password_read_that_fails_in_preauthentication_is_a_preauth_failure() {
     isolate_host_krb5();

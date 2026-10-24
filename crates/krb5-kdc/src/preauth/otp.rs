@@ -1,6 +1,6 @@
-//! The OTP kdcpreauth module (RFC 6560): MIT `plugins/preauth/otp/main.c` and
-//! `plugins/preauth/otp/otp_state.c`, with an embedder's verifier in place of MIT's RADIUS
-//! transport.
+//! OTP preauth for a client's tokens.
+
+use std::time::{Duration, Instant};
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{KeyUsage, ProtocolKey, decrypt_enc_data};
@@ -8,36 +8,31 @@ use krb5_log::klog;
 use krb5_types::k5json::{self, Value};
 use krb5_types::otp::{OtpTokenInfo, PaOtpChallenge, PaOtpEncRequest, PaOtpRequest};
 use krb5_types::{KerberosFlags, PaData, PaEncTsEnc, PrincipalName, err, ku, pa};
+use zeroize::Zeroizing;
 
-use super::{find_pa, proto};
+use super::find_pa;
 use crate::ad::authind_add;
 use crate::asn1_text::decode_failure_text;
-use crate::audit::kdc_error_message;
 use crate::error::Error;
 use crate::kdb::PrincipalRead;
 use crate::plugins::{
-    OtpVerdict, OtpVerifyRequest, PreauthAction, PreauthHint, PreauthRock, find_otp_verifier,
-    otp_verifier_names,
+    OtpOutcome, OtpTokenFields, OtpVerdict, OtpVerifyRequest, ParkedOtp, PreauthAction,
+    PreauthHint, PreauthRock, bounded_verify, find_otp_verifier, kdc_otp_event, otp_log_refusal,
+    otp_park_enabled, otp_verifier_names, request_peer, sanitize_otp_error, set_otp_park,
+    take_otp_resume,
 };
-use crate::status;
 use crate::store::{Principal, unix_now_u32};
 
-/// MIT `DEFAULT_TYPE_NAME` (`plugins/preauth/otp/otp_state.c:42-42`): the type an `otp` token
-/// names when it names none.
+// MIT: `DEFAULT_TYPE_NAME` (plugins/preauth/otp/otp_state.c:42-42)
 pub(crate) const DEFAULT_TYPE: &str = krb5_config::DEFAULT_OTP_TYPE;
 
-/// One token type of the module, without the RADIUS server and secret that MIT's `token_type`
-/// carries: `[otp]` reads it (`krb5_config::token_types_decode`).
 pub(crate) use krb5_config::OtpType as OtpTypeConfig;
 
-/// The token types in force, in order.
 pub(crate) struct OtpTypes(Vec<OtpTypeConfig>);
 
 impl OtpTypes {
-    /// The types `[otp]` configured, then one more per registered verifier name that no section
-    /// names. MIT takes its types from the profile alone; a verifier's name is the type that
-    /// selects it, so a verifier needs no section, and then it has the built-in type's defaults.
-    /// MIT `token_type_default` (`plugins/preauth/otp/otp_state.c:152-166`): the realm stays in the username and there are no indicators.
+    // MIT: `token_type_default` (plugins/preauth/otp/otp_state.c:152-166)
+    /// A verifier with no section is still a type.
     pub(crate) fn from_config(configured: &[OtpTypeConfig]) -> Self {
         let mut v = configured.to_vec();
         for n in otp_verifier_names() {
@@ -48,23 +43,19 @@ impl OtpTypes {
         Self(v)
     }
 
-    /// The types with no `[otp]` at all: the built-in DEFAULT, then the registered verifiers.
-    /// MIT `token_types_decode` (`plugins/preauth/otp/otp_state.c:298-344`): no section named DEFAULT adds the built-in one.
+    // MIT: `token_types_decode` (plugins/preauth/otp/otp_state.c:298-344)
     #[cfg(test)]
     pub(crate) fn builtin() -> Self {
         Self::from_config(&[OtpTypeConfig::builtin(DEFAULT_TYPE)])
     }
 
-    /// MIT `token_decode` (`plugins/preauth/otp/otp_state.c:422-427`): the last entry of that
-    /// name wins.
+    // MIT: `token_decode` (plugins/preauth/otp/otp_state.c:422-427)
     fn find(&self, name: &[u8]) -> Option<&OtpTypeConfig> {
         self.0.iter().rev().find(|t| t.name.as_bytes() == name)
     }
 }
 
-/// The token types in force: `[otp]` (kdc.conf, then krb5.conf), read when the KDC started, and the
-/// verifiers registered now. A module that did not initialize is never asked, and has none.
-/// MIT `otp_state_new` (`plugins/preauth/otp/otp_state.c:564-610`): the types come from the profile, once.
+// MIT: `otp_state_new` (plugins/preauth/otp/otp_state.c:564-610)
 fn otp_types(store: &dyn PrincipalRead) -> OtpTypes {
     match store.policy().otp_kdc() {
         Ok(configured) => OtpTypes::from_config(configured),
@@ -72,20 +63,14 @@ fn otp_types(store: &dyn PrincipalRead) -> OtpTypes {
     }
 }
 
-/// One token of the `otp` attribute.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct OtpToken {
-    /// The token type, whose indicators apply when the token has none.
     pub(crate) ty: OtpTypeConfig,
-    /// The username the verifier is told (MIT `token.username`), as octets: a JSON string's
-    /// `\u` escapes are single octets, not UTF-8.
     pub(crate) username: Vec<u8>,
-    /// The token's own indicators. When present, they replace the type's, even when empty.
     pub(crate) indicators: Option<Vec<String>>,
 }
 
-/// The first `otp` string attribute of the client, when it has one. An empty string counts.
-/// MIT `get_string` (`kdc/kdc_preauth.c:410-414`): the string attribute the module reads.
+// MIT: `get_string` (kdc/kdc_preauth.c:410-414)
 pub(crate) fn otp_attr(client: &Principal) -> Option<&str> {
     client
         .string_attrs
@@ -94,8 +79,34 @@ pub(crate) fn otp_attr(client: &Principal) -> Option<&str> {
         .map(|(_, v)| v.as_str())
 }
 
-/// MIT `nonce_generate` (`plugins/preauth/otp/main.c:137-153`): the KDC's time as four big-endian
-/// octets, then `key_len` random octets.
+pub(crate) fn serve_start_diagnostics(store: &dyn PrincipalRead, registry_empty: bool) {
+    if !crate::plugins::startup_module_loaded(&store.policy().kdcpreauth, "otp") {
+        return;
+    }
+    let principals = store.list_principals().unwrap_or_default();
+    let mut otp_users = 0usize;
+    for p in &principals {
+        if otp_attr(p).is_none() {
+            continue;
+        }
+        otp_users += 1;
+        if p.attributes & crate::store::KDB_REQUIRES_PRE_AUTH == 0 {
+            tracing::warn!(
+                target: "kdc.otp",
+                "principal {} has an otp attribute but not +requires_preauth; OTP is never demanded",
+                p.name.unparse_with_realm(store.realm())
+            );
+        }
+    }
+    if registry_empty && otp_users > 0 {
+        crate::plugins::otp_log_refusal(&format!(
+            "the otp preauth module is loaded and {otp_users} principal(s) have an otp attribute, \
+             but no OTP verifier is registered; those logins will be refused"
+        ));
+    }
+}
+
+// MIT: `nonce_generate` (plugins/preauth/otp/main.c:137-153)
 pub(crate) fn nonce_generate(key_len: usize) -> Result<Vec<u8>, Error> {
     let mut nonce = vec![0u8; 4 + key_len];
     getrandom::getrandom(&mut nonce[4..]).map_err(|_| Error::Rng)?;
@@ -103,14 +114,14 @@ pub(crate) fn nonce_generate(key_len: usize) -> Result<Vec<u8>, Error> {
     Ok(nonce)
 }
 
-/// MIT `krb5_check_clockskew` (`lib/krb5/os/timeofday.c:54-67`): `then` is within `skew` seconds
-/// of the KDC's clock.
+// MIT: `krb5_check_clockskew` (lib/krb5/os/timeofday.c:54-67)
 fn within_skew(then: u32, skew: i64) -> bool {
     (i64::from(unix_now_u32()) - i64::from(then)).abs() <= skew
 }
 
-/// The codes and texts of the module's failures: MIT's `com_err` message for each code.
 const E_PREAUTH_FAILED: &str = "Preauthentication failed";
+// MIT: `on_response` (plugins/preauth/otp/main.c:167-168)
+const KRB5_PREAUTH_FAILED: i32 = -1_765_328_174;
 const E_GENERIC: &str = "Generic preauthentication failure";
 const E_INTEGRITY: &str = "Decrypt integrity check failed";
 const E_SKEW: &str = "Clock skew too great";
@@ -118,21 +129,16 @@ pub(crate) const E_EINVAL: &str = "Invalid argument";
 const E_ASN1: &str = "ASN.1 identifier doesn't match expected value";
 pub(crate) const E_BAD_ENCTYPE: &str = "Bad encryption type";
 pub(crate) const E_BAD_MSIZE: &str = "Message size is incompatible with encryption type";
-/// MIT's `strerror(EMSGSIZE)`: the text of a RADIUS attribute whose value is out of its size.
 const E_MSG_SIZE: &str = "Message too long";
-/// MIT `MAX_ATTRSIZE` (`lib/krad/internal.h:49-49`): the largest RADIUS attribute value, which is the User-Name's.
-/// MIT `attributes` (`lib/krad/attr.c:62-62`): the User-Name takes 1 to MAX_ATTRSIZE octets.
+// MIT: `MAX_ATTRSIZE` (lib/krad/internal.h:49-49)
+// MIT: `attributes` (lib/krad/attr.c:62-62)
 const MAX_USER_NAME: usize = 253;
-/// MIT `attributes` (`lib/krad/attr.c:63-63`): the User-Password takes 1 to 128 octets.
+// MIT: `attributes` (lib/krad/attr.c:63-63)
 const MAX_USER_PASSWORD: usize = 128;
 
-/// A verify failure: the code the filter sees, and the message of that code, which the module
-/// logs.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct OtpFail {
-    /// The Kerberos error code of the failure.
     pub(crate) code: i32,
-    /// The message MIT's `krb5_get_error_message` gives for the module's own code.
     pub(crate) emsg: String,
 }
 
@@ -143,20 +149,17 @@ fn fail(code: i32, emsg: &str) -> OtpFail {
     }
 }
 
-/// MIT `kr_attr_valid` (`lib/krad/attr.c:252-261`): a value whose length is outside its attribute's
-/// size is EMSGSIZE, and the RADIUS request is not built, so no transport is used.
+// MIT: `kr_attr_valid` (lib/krad/attr.c:252-261)
 fn attr_sizes_ok(username: &[u8], otp_value: &[u8]) -> bool {
     (1..=MAX_USER_NAME).contains(&username.len())
         && (1..=MAX_USER_PASSWORD).contains(&otp_value.len())
 }
 
-/// Log one `com_err` line of the module, as MIT's `com_err("otp", code, text)` does.
 fn com_err(code_text: &str, text: &str) {
     klog::com_err(Some(code_text), text);
 }
 
-/// MIT `otp_edata` (`plugins/preauth/otp/main.c:235-276`): the challenge hint is offered only for a
-/// client with an `otp` attribute and a FAST armor key. An RNG or encode failure gives no hint.
+// MIT: `otp_edata` (plugins/preauth/otp/main.c:235-276)
 pub(crate) fn otp_edata(client: &Principal, armor: Option<&ProtocolKey>) -> PreauthHint {
     let (Some(_), Some(armor)) = (otp_attr(client), armor) else {
         return PreauthHint::default();
@@ -164,8 +167,7 @@ pub(crate) fn otp_edata(client: &Principal, armor: Option<&ProtocolKey>) -> Prea
     let Ok(nonce) = nonce_generate(armor.as_bytes().len()) else {
         return PreauthHint::default();
     };
-    // MIT `otp_edata` (`plugins/preauth/otp/main.c:254-256`): the format, length and iteration count are -1, which the encoder omits.
-    // The flags are the only token info field on the wire.
+    // MIT: `otp_edata` (plugins/preauth/otp/main.c:254-256)
     let info = OtpTokenInfo {
         flags: KerberosFlags::from_slice(&[0, 0, 0, 0]),
         vendor: None,
@@ -196,12 +198,9 @@ pub(crate) fn otp_edata(client: &Principal, armor: Option<&ProtocolKey>) -> Prea
     }
 }
 
-/// Decode the `otp` attribute into its tokens. `Err(())` is MIT's EINVAL, and it fails the whole
-/// attribute.
-/// MIT `decode_config_json` (`plugins/preauth/otp/otp_state.c:485-502`): the attribute is a JSON array, and an empty array is one empty token.
-/// MIT `tokens_decode` (`plugins/preauth/otp/otp_state.c:523-541`): every element is an object, and one token that fails fails the attribute.
-/// MIT `token_decode` (`plugins/preauth/otp/otp_state.c:419-450`): an unknown type is EINVAL, and a `type` or `username` that is not a string takes its default.
-/// MIT `indicators_decode` (`plugins/preauth/otp/otp_state.c:378-397`): the indicators are an array of strings, and any other value is EINVAL.
+// MIT: `decode_config_json` (plugins/preauth/otp/otp_state.c:485-502)
+// MIT: `tokens_decode` (plugins/preauth/otp/otp_state.c:523-541)
+// MIT: `indicators_decode` (plugins/preauth/otp/otp_state.c:378-397)
 pub(crate) fn decode_tokens(
     name: &PrincipalName,
     realm: &str,
@@ -248,8 +247,7 @@ pub(crate) fn decode_tokens(
         .collect()
 }
 
-/// One indicator of an `indicators` array, which the ticket carries as text.
-/// MIT `indicators_decode` (`plugins/preauth/otp/otp_state.c:378-397`): the indicator takes any octets, and one that is not UTF-8 fails the attribute here.
+// MIT: `indicators_decode` (plugins/preauth/otp/otp_state.c:378-397)
 fn indicator(v: &Value) -> Result<String, ()> {
     match v {
         Value::String(s) => String::from_utf8(s.clone()).map_err(|_| ()),
@@ -257,12 +255,12 @@ fn indicator(v: &Value) -> Result<String, ()> {
     }
 }
 
-/// The clock check of a nonce or timestamp, against the policy's skew.
-/// MIT `nonce_verify` (`plugins/preauth/otp/main.c:91-101`): a nonce of any other length than the armor key plus four octets passes with no clock check.
+// MIT: `nonce_verify` (plugins/preauth/otp/main.c:91-101)
 fn nonce_verify(armor_len: usize, plain: &[u8], skew: i64) -> Result<(), OtpFail> {
     let er: PaOtpEncRequest =
         decode(plain).map_err(|_| fail(24, decode_failure_text(plain, false)))?;
     let n: &[u8] = er.nonce.as_ref();
+    // Any other nonce length passes, with no clock check.
     if n.len() != armor_len + 4 {
         return Ok(());
     }
@@ -273,8 +271,7 @@ fn nonce_verify(armor_len: usize, plain: &[u8], skew: i64) -> Result<(), OtpFail
     }
 }
 
-/// MIT `timestamp_verify` (`plugins/preauth/otp/main.c:117-123`): the PA-ENC-TS-ENC timestamp is
-/// within the clock skew.
+// MIT: `timestamp_verify` (plugins/preauth/otp/main.c:117-123)
 fn timestamp_verify(plain: &[u8], skew: i64) -> Result<(), OtpFail> {
     let ts: PaEncTsEnc = decode(plain).map_err(|_| fail(24, decode_failure_text(plain, true)))?;
     if within_skew(ts.patimestamp.unix_seconds(), skew) {
@@ -284,28 +281,21 @@ fn timestamp_verify(plain: &[u8], skew: i64) -> Result<(), OtpFail> {
     }
 }
 
-/// The verify step of the module's `process_as`: the module's own failure goes to `finish_verify_padata`,
-/// which logs its message at INFO, and the request sees PREAUTH_FAILED with no detail.
-/// MIT `finish_verify_padata` (`kdc/kdc_preauth.c:1224-1228`): the module's message goes to the log at INFO.
+// MIT: `finish_verify_padata` (kdc/kdc_preauth.c:1224-1228)
 pub(crate) fn process_otp(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, Error> {
     otp_verify(rock).map_err(OtpFail::into_error)
 }
 
 impl OtpFail {
-    /// The error `finish_verify_padata` logs for it: a code with its table text is that code, and
-    /// any other message belongs to a library code that is no KRB-ERROR code.
     fn into_error(self) -> Error {
-        if self.emsg == kdc_error_message(self.code) {
-            proto(self.code, status::PREAUTH_FAILED)
-        } else {
-            Error::PreauthModule { message: self.emsg }
+        Error::PreauthModule {
+            code: self.code,
+            message: self.emsg,
         }
     }
 }
 
-/// MIT `otp_verify` (`plugins/preauth/otp/main.c:298-355`): the PA-OTP-REQUEST is decrypted under
-/// the armor key, its nonce or timestamp is checked, and each token of the `otp` attribute is
-/// tried in turn.
+// MIT: `otp_verify` (plugins/preauth/otp/main.c:298-355)
 fn otp_verify(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, OtpFail> {
     let Some(raw) = find_pa(rock.padata, pa::OTP_REQUEST) else {
         return Ok(None);
@@ -363,13 +353,29 @@ fn otp_verify(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, OtpFail> 
         return Err(fail(24, E_EINVAL));
     };
     let otp_value: &[u8] = req.otp_value.as_ref().map_or(&[][..], AsRef::as_ref);
-    for tok in &tokens {
-        // MIT `request_send` builds the RADIUS request before any transport, so an attribute out
-        // of its size fails the whole request, whichever token it is in.
+    let runtime = rock.store.otp_runtime();
+    let pool = runtime.map(crate::plugins::OtpRuntime::pool);
+    let principal_label = rock.client.name.unparse_with_realm(realm);
+    let peer = request_peer();
+    let mut resume = take_otp_resume();
+    for (i, tok) in tokens.iter().enumerate() {
+        // Already rejected on an earlier pass; skip without a second submit or audit event.
+        if resume.as_ref().is_some_and(|r| i < r.token_index) {
+            continue;
+        }
+        // A bad length fails before a verifier runs.
         if !attr_sizes_ok(&tok.username, otp_value) {
             return Err(fail(24, E_MSG_SIZE));
         }
-        let Some(verifier) = find_otp_verifier(&tok.ty.name) else {
+        let verifier = match runtime {
+            Some(rt) => rt.find(&tok.ty.name),
+            None => find_otp_verifier(&tok.ty.name),
+        };
+        let Some(verifier) = verifier else {
+            otp_log_refusal(&format!(
+                "no OTP verifier registered for token type '{}'",
+                tok.ty.name
+            ));
             return Err(fail(
                 24,
                 &format!(
@@ -378,18 +384,72 @@ fn otp_verify(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, OtpFail> 
                 ),
             ));
         };
-        let request = OtpVerifyRequest {
-            principal: rock.client,
-            realm,
-            token_type: &tok.ty.name,
-            username: &tok.username,
-            otp_value,
+        let vname = verifier.name();
+        // MIT: `request_send` (plugins/preauth/otp/otp_state.c:661)
+        let timeout_ms = match u64::try_from(tok.ty.timeout_ms) {
+            Ok(ms) if ms > 0 => ms,
+            _ => 5000,
         };
-        match verifier.verify(&request) {
-            OtpVerdict::Accept => {
-                // MIT `callback` (`plugins/preauth/otp/otp_state.c:632-657`): the reply carries the token's indicators, or the type's when the token has none.
-                // MIT `on_response` (`plugins/preauth/otp/main.c:167-188`): each one is added to the ticket, and the reply key is replaced.
+        let timeout = Duration::from_millis(timeout_ms);
+        let now = Instant::now();
+        // `started` dates from the submit so a resumed token reports its real verify time.
+        let started;
+        let outcome = if let Some(r) = resume.take_if(|r| i == r.token_index) {
+            // Bind the verdict to its token: a reload between park and resume could reorder tokens.
+            if r.token_type != tok.ty.name || r.username != tok.username {
+                return Err(fail(24, "OTP token set changed during verify"));
+            }
+            started = r.started;
+            r.outcome
+        } else {
+            started = now;
+            let request = OtpVerifyRequest {
+                principal: rock.client.clone(),
+                realm: realm.to_owned(),
+                token_type: tok.ty.name.clone(),
+                username: tok.username.clone(),
+                otp_value: Zeroizing::new(otp_value.to_vec()),
+                peer: peer.clone(),
+                request_time: now,
+                deadline: now + timeout,
+                token: OtpTokenFields {
+                    ty_name: tok.ty.name.clone(),
+                    indicators: tok
+                        .indicators
+                        .clone()
+                        .unwrap_or_else(|| tok.ty.indicators.clone()),
+                },
+            };
+            let deadline = request.deadline;
+            // Don't block the loop: submit and park so others are served; a loop-less caller blocks.
+            if otp_park_enabled()
+                && let Some(p) = pool
+            {
+                match p.submit(request, verifier) {
+                    Some(rx) => {
+                        set_otp_park(ParkedOtp {
+                            rx,
+                            deadline,
+                            started: now,
+                            token_index: i,
+                            token_type: tok.ty.name.clone(),
+                            username: tok.username.clone(),
+                        });
+                        return Err(fail(24, "OTP verify parked"));
+                    }
+                    None => OtpOutcome::QueueFull,
+                }
+            } else {
+                bounded_verify(pool, verifier, request, timeout)
+            }
+        };
+        let duration_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+        match outcome {
+            OtpOutcome::Verdict(OtpVerdict::Accept) => {
+                kdc_otp_event(&principal_label, &tok.ty.name, "accept", duration_us);
+                // MIT: `callback` (plugins/preauth/otp/otp_state.c:632-657)
                 let mut indicators = Vec::new();
+                // Empty indicators replace the type's, even an empty list.
                 for ind in tok.indicators.as_deref().unwrap_or(&tok.ty.indicators[..]) {
                     authind_add(&mut indicators, ind);
                 }
@@ -398,11 +458,33 @@ fn otp_verify(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, OtpFail> 
                     indicators,
                 }));
             }
-            OtpVerdict::Reject => {}
-            OtpVerdict::Error(text) => return Err(fail(24, &text)),
+            OtpOutcome::Verdict(OtpVerdict::Reject) => {
+                kdc_otp_event(&principal_label, &tok.ty.name, "reject", duration_us);
+            }
+            OtpOutcome::Verdict(OtpVerdict::Error(text)) => {
+                kdc_otp_event(&principal_label, &tok.ty.name, "error", duration_us);
+                let text = sanitize_otp_error(&text);
+                otp_log_refusal(&format!(
+                    "OTP verifier '{vname}' errored for {principal_label}: {text}"
+                ));
+                return Err(fail(24, &text));
+            }
+            OtpOutcome::TimedOut => {
+                kdc_otp_event(&principal_label, &tok.ty.name, "timeout", duration_us);
+                otp_log_refusal(&format!(
+                    "OTP verifier '{vname}' did not answer in {} ms (deadline {timeout_ms}) for {principal_label}",
+                    duration_us / 1000
+                ));
+                return Err(fail(24, "OTP verifier timed out"));
+            }
+            OtpOutcome::QueueFull => {
+                kdc_otp_event(&principal_label, &tok.ty.name, "queue_full", duration_us);
+                otp_log_refusal(&format!("OTP verifier queue full for {principal_label}"));
+                return Err(fail(24, "OTP verifier queue full"));
+            }
         }
     }
-    Err(fail(24, E_GENERIC))
+    Err(fail(KRB5_PREAUTH_FAILED, E_GENERIC))
 }
 
 #[cfg(test)]
@@ -493,7 +575,7 @@ mod tests {
         fn name(&self) -> &'static str {
             self.0
         }
-        fn verify(&self, _: &OtpVerifyRequest<'_>) -> OtpVerdict {
+        fn verify(&self, _: &OtpVerifyRequest) -> OtpVerdict {
             self.1.clone()
         }
     }
@@ -664,7 +746,7 @@ mod tests {
         set_thread_otp_verifiers(vec![Arc::new(Fixed("DEFAULT", OtpVerdict::Reject))]);
         assert_eq!(
             got(run(ok, Some(&a), &[pa142(&a, t, &fresh)])),
-            want(24, E_GENERIC)
+            want(KRB5_PREAUTH_FAILED, E_GENERIC)
         );
         set_thread_otp_verifiers(vec![Arc::new(Fixed(
             "DEFAULT",
@@ -686,7 +768,6 @@ mod tests {
             (key.as_bytes(), indicators),
             (a.as_bytes(), vec!["a".to_owned()])
         );
-        // No PA 142: not this module's request.
         assert!(matches!(run(ok, Some(&a), &[]), Ok(None)));
     }
 
@@ -721,8 +802,10 @@ mod tests {
     }
 
     /// Stricter, fail-closed deviation: MIT reads a PA-ENC-TS-ENC as a wrong-length nonce, with no clock check, and this port refuses it as a nonce.
-    /// MIT `decode_atype` (`lib/krb5/asn.1/asn1_encode.c:1184-1199`): an implicit tag decodes its element's contents as the base type, with no tag check of its own.
-    /// MIT `check_atype_tag` (`lib/krb5/asn.1/asn1_encode.c:1099-1105`): an implicit tag's construction bit is not checked.
+    // MIT: `decode_atype` (lib/krb5/asn.1/asn1_encode.c:1184-1199)
+    /// an implicit tag decodes its element's contents as the base type, with no tag check of its own.
+    // MIT: `check_atype_tag` (lib/krb5/asn.1/asn1_encode.c:1099-1105)
+    /// an implicit tag's construction bit is not checked.
     #[test]
     fn a_pa_enc_ts_enc_is_not_read_as_a_nonce() {
         let ts = encode(&PaEncTsEnc {
@@ -737,197 +820,115 @@ mod tests {
     /// One X3 case: its number, the `otp` octets, MIT's decode verdict, and the username octets.
     type X3Case = (u32, &'static [u8], bool, Option<&'static [u8]>);
 
-    /// The `otp` strings of settle cell X3, with MIT's verdict on each. The comment names the case
-    /// and its line in the cell. `true` is a decode, and the username is the one MIT's RADIUS stub
-    /// received when the token names one. The cases where the KDC died under MIT (SEGV) are
-    /// `false`: this port fails closed there.
+    /// The `otp` strings of settle cell X3, with MIT's verdict on each. `true` is a decode, and the username is the one MIT's RADIUS stub received when the token names one.
+    /// The cases where the KDC died under MIT (SEGV) are `false`: this port fails closed there.
     const X3_CASES: &[X3Case] = &[
-        // X3 case 1 (X3.txt:71)
         (1, b"[]", true, None),
-        // X3 case 2 (X3.txt:72)
         (2, b"[{}]", true, None),
-        // X3 case 3 (X3.txt:73)
         (3, b"{}", false, None),
-        // X3 case 4 (X3.txt:74)
         (4, b"[1]", false, None),
-        // X3 case 5 (X3.txt:75)
         (5, b"[[]]", false, None),
-        // X3 case 6 (X3.txt:76)
         (6, b"[null]", false, None),
-        // X3 case 7 (X3.txt:77)
         (7, b"[true]", false, None),
-        // X3 case 8 (X3.txt:78)
         (8, b"\"str\"", false, None),
-        // X3 case 9 (X3.txt:79)
         (9, b"null", false, None),
-        // X3 case 10 (X3.txt:80)
         (10, b"1", false, None),
-        // X3 case 11 (X3.txt:81)
         (11, b"", false, None),
-        // X3 case 12 (X3.txt:82)
         (12, b" ", false, None),
-        // X3 case 13 (X3.txt:83)
         (13, b"[{}] x", false, None),
-        // X3 case 14 (X3.txt:84)
         (14, b"[{}][{}]", false, None),
-        // X3 case 15 (X3.txt:85)
         (15, b" [{}] ", true, None),
-        // X3 case 16 (X3.txt:86)
         (16, b"[{},]", false, None),
-        // X3 case 17 (X3.txt:87)
         (17, b"[,{}]", false, None),
-        // X3 case 18 (X3.txt:90)
         (18, b"[{\"type\":5}]", true, None),
-        // X3 case 19 (X3.txt:91)
         (19, b"[{\"type\":null}]", true, None),
-        // X3 case 20 (X3.txt:92)
         (20, b"[{\"type\":\"DEFAULT\"}]", true, None),
-        // X3 case 21 (X3.txt:93)
         (21, b"[{\"type\":\"default\"}]", false, None),
-        // X3 case 22 (X3.txt:94)
         (22, b"[{\"type\":\"\"}]", false, None),
-        // X3 case 23 (X3.txt:95)
         (23, b"[{\"username\":5}]", true, None),
-        // X3 case 24 (X3.txt:96)
         (24, b"[{\"username\":null}]", true, None),
-        // X3 case 25 (X3.txt:97)
         (25, b"[{\"username\":\"\"}]", true, Some(b"")),
-        // X3 case 26 (X3.txt:98)
         (26, b"[{\"username\":\"a b\"}]", true, Some(b"a b")),
-        // X3 case 27 (X3.txt:99)
         (27, b"[{\"indicators\":\"x\"}]", false, None),
-        // X3 case 28 (X3.txt:100)
         (28, b"[{\"indicators\":null}]", false, None),
-        // X3 case 29 (X3.txt:101)
         (29, b"[{\"indicators\":[1]}]", false, None),
-        // X3 case 30 (X3.txt:102)
         (30, b"[{\"indicators\":[\"a\"]}]", true, None),
-        // X3 case 31 (X3.txt:103)
         (31, b"[{\"indicators\":[]}]", true, None),
-        // X3 case 32 (X3.txt:104)
         (32, b"[{\"unknown\":1}]", true, None),
-        // X3 case 33 (X3.txt:105)
         (
             33,
             b"[{\"type\":\"nosuch\",\"type\":\"DEFAULT\"}]",
             true,
             None,
         ),
-        // X3 case 34 (X3.txt:106)
         (
             34,
             b"[{\"type\":\"DEFAULT\",\"type\":\"nosuch\"}]",
             false,
             None,
         ),
-        // X3 case 35 (X3.txt:109)
         (35, b"[{\"x\":1.5}]", false, None),
-        // X3 case 36 (X3.txt:110)
         (36, b"[{\"x\":1e3}]", false, None),
-        // X3 case 37 (X3.txt:111)
         (37, b"[{\"x\":-1}]", true, None),
-        // X3 case 38 (X3.txt:112)
         (38, b"[{\"x\":01}]", true, None),
-        // X3 case 39 (X3.txt:113)
         (39, b"[{\"x\":+1}]", false, None),
-        // X3 case 40 (X3.txt:114)
         (40, b"[{\"x\":0x10}]", false, None),
-        // X3 case 41 (X3.txt:115)
         (41, b"[{\"x\":\"\\u00e9\"}]", false, None),
-        // X3 case 42 (X3.txt:116)
         (42, b"[{\"x\":\"\\u0100\"}]", false, None),
-        // X3 case 43 (X3.txt:117)
         (43, b"[{\"x\":\"\\ud83d\\ude00\"}]", false, None),
-        // X3 case 44 (X3.txt:118)
         (44, b"[{\"x\":\"\xc3\xa9\"}]", true, None),
-        // X3 case 45 (X3.txt:119)
         (45, b"[{\"x\":\"\xc4\x80\"}]", true, None),
-        // X3 case 46 (X3.txt:120)
         (46, b"[{\"x\":\"\xff\"}]", true, None),
-        // X3 case 47 (X3.txt:121)
         (47, b"[{\"x\":\"\x01\"}]", true, None),
-        // X3 case 48 (X3.txt:122)
         (48, b"[{\"x\":\"\\q\"}]", false, None),
-        // X3 case 49 (X3.txt:123)
         (49, b"[{\"x\":\"a\x09b\"}]", true, None),
-        // X3 case 50 (X3.txt:124)
         (50, b"[{\"x\":\"a\\tb\"}]", true, None),
-        // X3 case 51 (X3.txt:125)
         (51, b"[{\"username\":\"a\\u00e9b\"}]", false, None),
-        // X3 case 52 (X3.txt:126)
         (52, b"[{\"username\":\"a\\/b\"}]", true, Some(b"a/b")),
-        // X3 case 53 (X3.txt:129)
         (53, b"[{\"username\":\"a\\u0100b\"}]", false, None),
-        // X3 case 54 (X3.txt:130)
         (54, b"[{\"username\":\"\\ud83d\\ude00\"}]", false, None),
-        // X3 case 55 (X3.txt:131)
         (55, b"[{\"username\":\"a\\u0000b\"}]", true, Some(b"a")),
-        // X3 case 56 (X3.txt:132)
         (56, b"[{\"username\":\"a\\u0041b\"}]", true, Some(b"aAb")),
-        // X3 case 57 (X3.txt:133)
         (57, b"[{\"username\":\"a\\u007fb\"}]", false, None),
-        // X3 case 58 (X3.txt:134)
         (58, b"[{\"username\":\"a\\u0080b\"}]", true, Some(b"a\x80b")),
-        // X3 case 59 (X3.txt:135)
         (59, b"[{\"username\":\"a\\u00ffb\"}]", false, None),
-        // X3 case 60 (X3.txt:136)
         (60, b"[{\"username\":\"a\\u007Fb\"}]", true, Some(b"a\x7fb")),
-        // X3 case 61 (X3.txt:137)
         (61, b"[{\"username\":\"a\\u00E9b\"}]", true, Some(b"a\xe9b")),
-        // X3 case 62 (X3.txt:138)
         (62, b"[{\"username\":\"a\\u00FFb\"}]", true, Some(b"a\xffb")),
-        // X3 case 63 (X3.txt:139)
         (63, b"[{\"username\":\"a\\u004Ab\"}]", true, Some(b"aJb")),
-        // X3 case 64 (X3.txt:140)
         (64, b"[{\"username\":\"a\\u004ab\"}]", false, None),
-        // X3 case 65 (X3.txt:141)
         (65, b"[{\"username\":\"a\\nb\"}]", true, Some(b"a\x0ab")),
-        // X3 case 66 (X3.txt:142)
         (
             66,
             b"[{\"username\":\"a\xc3\xa9b\"}]",
             true,
             Some(b"a\xc3\xa9b"),
         ),
-        // X3 case 67 (X3.txt:143)
         (
             67,
             b"[{\"username\":\"x\",\"username\":\"y\"}]",
             true,
             Some(b"y"),
         ),
-        // X3 case 68 (X3.txt:144)
         (68, b"[{\"x\":99999999999999999999}]", false, None),
-        // X3 case 69 (X3.txt:145)
         (69, b"[{\"x\":-0}]", true, None),
-        // X3 case 70 (X3.txt:146)
         (70, b"[ ]", true, None),
-        // X3 case 71 (X3.txt:147)
         (71, b"[ {} ]", true, None),
-        // X3 case 72 (X3.txt:148)
         (72, b"[{\"type\":true}]", true, None),
-        // X3 case 73 (X3.txt:149)
         (73, b"[{\"username\":true}]", true, None),
-        // X3 case 74 (X3.txt:150)
         (74, b"[{\"indicators\":[\"a\",1]}]", false, None),
-        // X3 case 75 (X3.txt:151)
         (75, b"[{\"indicators\":[[\"a\"]]}]", false, None),
-        // X3 case 76 (X3.txt:152)
         (76, b"[{\"indicators\":[\"a\",\"a\"]}]", true, None),
-        // X3 case 77 (X3.txt:153)
         (77, b"[{\"t\\u0079pe\":\"nosuch\"}]", false, None),
-        // X3 case 78 (X3.txt:154)
         (
             78,
             b"[{\"type\":\"DEFAULT\"},{\"type\":\"DEFAULT\"}]",
             true,
             None,
         ),
-        // X3 case 79 (X3.txt:155)
         (79, b"[{\"x\":{\"y\":[{\"z\":null}]}}]", true, None),
         // X3 case 80 (X3.txt:156) (SEGV: fail closed)
         (80, b"[{\"x\":\"unterminated}]", false, None),
-        // X3 case 81 (X3.txt:157)
         (81, b"[{\"x\":tru}]", false, None),
         // X3 case 90 (X3.txt:170) (SEGV: fail closed)
         (90, b"[{}", false, None),
@@ -937,20 +938,16 @@ mod tests {
         (92, b"[", false, None),
         // X3 case 93 (X3.txt:173) (SEGV: fail closed)
         (93, b"[1", false, None),
-        // X3 case 94 (X3.txt:174)
         (94, b"[{\"x\":[1,}]", true, None),
-        // X3 case 95 (X3.txt:175)
         (95, b"[{\"x\":[1,2}]", true, None),
         // X3 case 96 (X3.txt:176) (SEGV: fail closed)
         (96, b"[{\"a\":1", false, None),
-        // X3 case 97 (X3.txt:177)
         (97, b"[{\"x\":[}]", true, None),
         // X3 case 98 (X3.txt:178) (SEGV: fail closed)
         (98, b"[{\"type\":\"DEFAULT\"", false, None),
     ];
 
-    /// MIT's JSON reader gives the verdict of each X3 case, and of the depth cases 82 to 89 (an
-    /// array nested N deep inside the first member of the outer array's object).
+    /// MIT's JSON reader gives the verdict of each X3 case, and of the depth cases 82 to 89 (an array nested N deep inside the first member of the outer array's object).
     #[test]
     fn otp_json_matches_mits_decoder() {
         let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["otpuser"]);
@@ -983,9 +980,7 @@ mod tests {
         }
     }
 
-    /// The types in force are `[otp]`'s, in listing order, then one built-in type per registered
-    /// verifier no section names; a verifier whose name a section carries keeps the section's
-    /// settings; the last entry of a name is the one a token finds.
+    /// The types in force are `[otp]`'s, in listing order, then one built-in type per registered verifier no section names; a verifier whose name a section carries keeps the section's settings; the last entry of a name is the one a token finds.
     #[test]
     fn configured_types_come_first_and_verifiers_add_the_rest() {
         let _g = Guard;

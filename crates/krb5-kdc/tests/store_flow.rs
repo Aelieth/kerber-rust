@@ -36,7 +36,7 @@ fn pw_expiration_on_modify_is_last_pwd_change_plus_max_life() {
     );
     let mut pol = NamedPolicy::new("life");
     pol.pw_max_life = 3600;
-    store.put_policy(pol);
+    store.put_policy(pol).unwrap();
     store.set_last_pwd_unix(&user, 1_000_000).unwrap();
     store
         .apply_admin_fields(
@@ -148,18 +148,20 @@ fn named_policy_pwqual_and_lockout() {
         PrincipalName::NT_PRINCIPAL,
         [krb5_kdc::testrealm::TEST_USER],
     );
-    store.put_policy(NamedPolicy {
-        name: "strict".into(),
-        min_length: 8,
-        min_classes: 2,
-        history: 1,
-        max_fail: 3,
-        pw_failcnt_interval: 0,
-        pw_lockout_duration: 0,
-        pw_min_life: 0,
-        pw_max_life: 0,
-        allowed_keysalts: None,
-    });
+    store
+        .put_policy(NamedPolicy {
+            name: "strict".into(),
+            min_length: 8,
+            min_classes: 2,
+            history: 1,
+            max_fail: 3,
+            pw_failcnt_interval: 0,
+            pw_lockout_duration: 0,
+            pw_min_life: 0,
+            pw_max_life: 0,
+            allowed_keysalts: None,
+        })
+        .unwrap();
     store
         .set_principal_policy(&user, Some("strict".into()))
         .unwrap();
@@ -232,18 +234,20 @@ fn pwqual_counts_five_mit_classes() {
         PrincipalName::NT_PRINCIPAL,
         [krb5_kdc::testrealm::TEST_USER],
     );
-    store.put_policy(NamedPolicy {
-        name: "five".into(),
-        min_length: 8,
-        min_classes: 5,
-        history: 0,
-        max_fail: 0,
-        pw_failcnt_interval: 0,
-        pw_lockout_duration: 0,
-        pw_min_life: 0,
-        pw_max_life: 0,
-        allowed_keysalts: None,
-    });
+    store
+        .put_policy(NamedPolicy {
+            name: "five".into(),
+            min_length: 8,
+            min_classes: 5,
+            history: 0,
+            max_fail: 0,
+            pw_failcnt_interval: 0,
+            pw_lockout_duration: 0,
+            pw_min_life: 0,
+            pw_max_life: 0,
+            allowed_keysalts: None,
+        })
+        .unwrap();
     store
         .set_principal_policy(&user, Some("five".into()))
         .unwrap();
@@ -269,13 +273,13 @@ fn load_update_prepares_the_log_before_the_database_is_written() {
     assert!(keyless.iprop_master_key().is_none());
     keyless.set_ulog(Ulog::memory(64).unwrap(), IpropRole::Primary);
     let before = keyless.ulog_last().unwrap();
-    update_store(&mut keyless, &loaded, &[]);
+    update_store(&mut keyless, &loaded, &[]).unwrap();
     assert!(keyless.prepare_log().is_err());
     assert_eq!(keyless.ulog_last(), Some(before));
     let (mut keyed, _) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
     krb5_kdc::testrealm::map_memory_ulog(&mut keyed, 64, IpropRole::Primary).unwrap();
     let start = keyed.ulog_last().unwrap();
-    update_store(&mut keyed, &loaded, &[]);
+    update_store(&mut keyed, &loaded, &[]).unwrap();
     let prepared = keyed.prepare_log().unwrap();
     assert_eq!(
         keyed.ulog_last(),
@@ -304,7 +308,7 @@ fn a_policy_change_starts_the_update_log_over() {
     store.set_password(&user, b"Before-pw1").unwrap();
     let before = store.ulog_last().unwrap();
     assert_eq!(before.sno, 2);
-    store.put_policy(NamedPolicy::new("ipol"));
+    store.put_policy(NamedPolicy::new("ipol")).unwrap();
     let reset = store.ulog_last().unwrap();
     assert_eq!(reset.sno, 1, "the policy started the log over");
     assert_eq!(store.ulog_get_entries(before).status, IPROP_FULL_RESYNC);
@@ -343,7 +347,7 @@ fn kadmin_history_is_created_before_a_rejected_quality_chpass() {
     let mut pol = NamedPolicy::new("minlen");
     pol.min_length = 8;
     pol.history = 2;
-    store.put_policy(pol);
+    store.put_policy(pol).unwrap();
     store
         .set_principal_policy(&user, Some("minlen".into()))
         .unwrap();
@@ -369,18 +373,20 @@ fn password_history_matches_mit_window() {
         PrincipalName::NT_PRINCIPAL,
         [krb5_kdc::testrealm::TEST_USER],
     );
-    store.put_policy(NamedPolicy {
-        name: "h1".into(),
-        min_length: 8,
-        min_classes: 2,
-        history: 1,
-        max_fail: 0,
-        pw_failcnt_interval: 0,
-        pw_lockout_duration: 0,
-        pw_min_life: 0,
-        pw_max_life: 0,
-        allowed_keysalts: None,
-    });
+    store
+        .put_policy(NamedPolicy {
+            name: "h1".into(),
+            min_length: 8,
+            min_classes: 2,
+            history: 1,
+            max_fail: 0,
+            pw_failcnt_interval: 0,
+            pw_lockout_duration: 0,
+            pw_min_life: 0,
+            pw_max_life: 0,
+            allowed_keysalts: None,
+        })
+        .unwrap();
     store
         .set_principal_policy(&user, Some("h1".into()))
         .unwrap();
@@ -394,18 +400,20 @@ fn password_history_matches_mit_window() {
         .set_password(&user, b"Hist-pw0")
         .expect("history=1 must allow A→B→A like MIT");
 
-    store.put_policy(NamedPolicy {
-        name: "h2".into(),
-        min_length: 8,
-        min_classes: 2,
-        history: 2,
-        max_fail: 0,
-        pw_failcnt_interval: 0,
-        pw_lockout_duration: 0,
-        pw_min_life: 0,
-        pw_max_life: 0,
-        allowed_keysalts: None,
-    });
+    store
+        .put_policy(NamedPolicy {
+            name: "h2".into(),
+            min_length: 8,
+            min_classes: 2,
+            history: 2,
+            max_fail: 0,
+            pw_failcnt_interval: 0,
+            pw_lockout_duration: 0,
+            pw_min_life: 0,
+            pw_max_life: 0,
+            allowed_keysalts: None,
+        })
+        .unwrap();
     store
         .set_principal_policy(&user, Some("h2".into()))
         .unwrap();
@@ -517,18 +525,20 @@ fn lockout_duration_only_unlocks_after_sleep() {
         PrincipalName::NT_PRINCIPAL,
         [krb5_kdc::testrealm::TEST_USER],
     );
-    store.put_policy(NamedPolicy {
-        name: "dur".into(),
-        min_length: 0,
-        min_classes: 0,
-        history: 0,
-        max_fail: 1,
-        pw_failcnt_interval: 0,
-        pw_lockout_duration: 1,
-        pw_min_life: 0,
-        pw_max_life: 0,
-        allowed_keysalts: None,
-    });
+    store
+        .put_policy(NamedPolicy {
+            name: "dur".into(),
+            min_length: 0,
+            min_classes: 0,
+            history: 0,
+            max_fail: 1,
+            pw_failcnt_interval: 0,
+            pw_lockout_duration: 1,
+            pw_min_life: 0,
+            pw_max_life: 0,
+            allowed_keysalts: None,
+        })
+        .unwrap();
     store
         .set_principal_policy(&user, Some("dur".into()))
         .unwrap();
@@ -597,8 +607,8 @@ fn lockout_interval_resets_the_count_but_never_a_lock() {
         pw_max_life: 0,
         allowed_keysalts: None,
     };
-    store.put_policy(policy("intv2", 2));
-    store.put_policy(policy("intv1", 1));
+    store.put_policy(policy("intv2", 2)).unwrap();
+    store.put_policy(policy("intv1", 1)).unwrap();
     store
         .set_principal_policy(&user, Some("intv2".into()))
         .unwrap();
@@ -925,7 +935,7 @@ fn ulog_records_delete_rename_chrand() {
         "chrand carries the keys"
     );
     let after_ch = store.ulog_last().unwrap();
-    store.set_status(&user, true, 0).unwrap();
+    store.set_status(&user, true, 0, "admin/admin").unwrap();
     let got = store.ulog_get_entries(after_ch);
     let (status, _) = decode_incr_update(&got.updates[0], Some(&mkey)).unwrap();
     assert!(
@@ -946,18 +956,20 @@ fn admin_unlock_clears_failcount_lockout() {
         PrincipalName::NT_PRINCIPAL,
         [krb5_kdc::testrealm::TEST_USER],
     );
-    store.put_policy(NamedPolicy {
-        name: "lock".into(),
-        min_length: 1,
-        min_classes: 1,
-        history: 0,
-        max_fail: 1,
-        pw_failcnt_interval: 0,
-        pw_lockout_duration: 0,
-        pw_min_life: 0,
-        pw_max_life: 0,
-        allowed_keysalts: None,
-    });
+    store
+        .put_policy(NamedPolicy {
+            name: "lock".into(),
+            min_length: 1,
+            min_classes: 1,
+            history: 0,
+            max_fail: 1,
+            pw_failcnt_interval: 0,
+            pw_lockout_duration: 0,
+            pw_min_life: 0,
+            pw_max_life: 0,
+            allowed_keysalts: None,
+        })
+        .unwrap();
     store
         .set_principal_policy(&user, Some("lock".into()))
         .unwrap();

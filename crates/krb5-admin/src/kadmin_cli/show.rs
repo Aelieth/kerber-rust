@@ -1,11 +1,9 @@
-//! How `getprinc` shows a principal record: MIT `kadmin_getprinc` and the `strdate`, `strdur`,
-//! flag and salt-type names it prints with.
+//! How `getprinc` shows a principal record: MIT `kadmin_getprinc` and the `strdate`, `strdur`, flag and salt-type names it prints with.
 
 use std::fmt::Write as _;
 
 use krb5_kdc::Principal;
 
-/// The 4-byte little-endian value of the first `ty` tl-data entry, 0 when there is none.
 fn tl_u32(p: &Principal, ty: i32) -> u32 {
     p.tl_data
         .iter()
@@ -21,12 +19,10 @@ fn mod_name(p: &Principal) -> String {
     krb5_kdc::tl_mod_princ_name(&p.tl_data).unwrap_or_else(|| format!("kadmin/admin@{}", p.realm))
 }
 
-/// The record's kvno: its highest key's (`kadm5_get_principal`).
 fn kvno(p: &Principal) -> u32 {
     p.keys.iter().map(|k| k.kvno).max().unwrap_or(0)
 }
 
-/// `key_data_ver`: 2 when the key carries its salt, else 1.
 fn key_ver(k: &krb5_kdc::KeyEntry) -> u32 {
     if k.salt_type.is_some() && k.kdb_salt.is_some() {
         2
@@ -35,7 +31,6 @@ fn key_ver(k: &krb5_kdc::KeyEntry) -> u32 {
     }
 }
 
-/// MIT `kadmin_getprinc` (`kadmin.c:1438-1571`): the full record.
 pub(crate) fn principal(p: &Principal, policy_missing: bool) -> String {
     let never = |t: u32| {
         if t == 0 {
@@ -104,8 +99,6 @@ pub(crate) fn principal(p: &Principal, policy_missing: bool) -> String {
     o
 }
 
-/// MIT `kadmin_getprinc` (`kadmin.c:1438-1571`): `-terse`, the fields tab-separated, then
-/// version, kvno, enctype and salt type of each key.
 pub(crate) fn principal_terse(p: &Principal) -> String {
     let mut o = format!(
         "\"{}\"\t{}\t{}\t{}\t{}\t\"{}\"\t{}\t{}\t{}\t{}\t\"{}\"\t{}\t{}\t{}\t{}\t{}",
@@ -144,20 +137,19 @@ pub(crate) fn principal_terse(p: &Principal) -> String {
     o
 }
 
-/// MIT `strdate` (`kadmin.c:142-153`): `%a %b %d %H:%M:%S %Z %Y` in local time; the zone is
-/// `UTC` at offset zero and the numeric offset elsewhere (no zone abbreviations).
+// MIT: `strdate` (kadmin.c:142-153)
+/// `%a %b %d %H:%M:%S %Z %Y` in local time; the zone is `UTC` at offset zero and the numeric offset elsewhere (no zone abbreviations).
 pub(crate) fn strdate(when: u32) -> String {
     krb5_types::timestamp::strftime("%a %b %d %H:%M:%S %Z %Y", when, 40)
         .unwrap_or_else(|| "(error)".to_owned())
 }
 
-/// MIT `strdur` (`kadmin.c:118-139`): `D days HH:MM:SS`, `day` when D is one.
 pub(crate) fn strdur(duration: u64) -> String {
     crate::strdur(i64::try_from(duration).unwrap_or(i64::MAX))
 }
 
-/// MIT `krb5_flags_to_strings` (`kadm5/str_conv.c:229-261`): one name per set bit, in bit
-/// order, each after a space; a bit with no name is `0x%08lx`.
+// MIT: `krb5_flags_to_strings` (kadm5/str_conv.c:229-261)
+/// one name per set bit, in bit order, each after a space; a bit with no name is `0x%08lx`.
 pub(crate) fn flags_to_string(attributes: u32) -> String {
     const NAMES: [Option<&str>; 24] = [
         Some("DISALLOW_POSTDATED"),
@@ -201,8 +193,8 @@ pub(crate) fn flags_to_string(attributes: u32) -> String {
     out
 }
 
-/// MIT `krb5_salttype_to_string` (`krb/str_conv.c:95-114`): normal, norealm, onlyrealm and
-/// special; any other is `<Salt type 0x..>`.
+// MIT: `krb5_salttype_to_string` (krb/str_conv.c:95-114)
+/// normal, norealm, onlyrealm and special; any other is `<Salt type 0x..>`.
 pub(crate) fn salttype_name(t: i32) -> String {
     match t {
         0 => "normal".into(),
@@ -217,7 +209,6 @@ pub(crate) fn salttype_name(t: i32) -> String {
 mod tests {
     use super::strdate;
 
-    /// 2026-03-05 08:40:00 UTC, through the same formatter `getprinc` prints.
     #[test]
     fn strdate_is_the_locale_strftime() {
         let t = 1_772_700_000;

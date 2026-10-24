@@ -1,8 +1,3 @@
-//! Test CA used as a MIT `pkinit_anchors` FILE trust anchor.
-//!
-//! `cms_wrap` lives here (it names [`PkinitCa`]) so `cms` does not
-//! import this module.
-
 use super::cms::{cms_wrap_signed, p256_sign, pem, signed_attrs_set};
 use super::{
     ECONTENT_AUTHDATA, ECONTENT_DHKEY, OID_KP_CLIENT_AUTH, OID_KP_KDC, OID_KU,
@@ -20,7 +15,7 @@ fn generate_p256() -> Option<([u8; 32], Vec<u8>)> {
         getrandom::getrandom(&mut secret).ok()?;
         secret[0] &= 0x7f;
         if let Ok(sk) = SigningKey::from_bytes((&secret).into()) {
-            let pt = sk.verifying_key().to_encoded_point(false);
+            let pt = sk.verifying_key().to_sec1_point(false);
             return Some((secret, pt.as_bytes().to_vec()));
         }
     }
@@ -66,9 +61,6 @@ fn p256_cert(
     )
 }
 
-/// Build a P-256 certificate valid from `not_before` to `not_after`. MIT has no counterpart: its
-/// PKINIT reads certificates and never issues one.
-/// The certificate is returned only when the signature over the to-be-signed body is produced.
 #[expect(clippy::too_many_arguments, reason = "test CA, not a params struct")]
 fn p256_cert_window(
     serial: u8,
@@ -118,10 +110,7 @@ fn p256_cert_window(
     Some(tlv(0x30, &[tbs, alg_id, tlv(0x03, &sig_bit)].concat()))
 }
 
-/// MIT `verify_kdc_eku` (`pkinit_clnt.c:461-472`): unless EKU checking is off, the KDC
-/// certificate must pass `crypto_check_cert_eku` as a KDC certificate.
-/// A KDC certificate carries a krbtgt name in that realm and the KDC extended key usage, and a CA
-/// without key usage still carries basic constraints.
+// MIT verify_kdc_eku; see docs/parity/b1-client-preauth.md
 fn cert_extensions(kind: CertKind, subject_cn: &str, realm: &str) -> Vec<u8> {
     let is_ca = matches!(
         kind,
@@ -206,15 +195,6 @@ fn eku(oid_body: &[u8]) -> Vec<u8> {
     )
 }
 
-/// Wrap `e_content` in CMS SignedData under `ca`.
-///
-/// The SignerInfo signature is ECDSA-SHA256 over `e_content`. Never
-/// falls back to plaintext: a CA/signing failure is an error.
-///
-/// # Errors
-///
-/// `"cms wrap"` when no leaf key can be generated (the OS random source fails) or `ca.ca_secret`
-/// is not a valid P-256 scalar, so the leaf cannot be issued or signed.
 pub fn cms_wrap(e_content: &[u8], ca: &PkinitCa) -> Result<Vec<u8>, &'static str> {
     ca.sign_cms(e_content, "pkinit-test").ok_or("cms wrap")
 }
@@ -233,15 +213,9 @@ fn pem_ec_key(secret: &[u8; 32], public: &[u8]) -> String {
     pem("EC PRIVATE KEY", &tlv(0x30, &body))
 }
 
-/// Test CA used as a MIT `pkinit_anchors` FILE trust anchor. `Debug` never shows the private
-/// scalar.
-#[derive(Clone)]
 pub struct PkinitCa {
-    /// CA private scalar.
-    pub ca_secret: [u8; 32],
-    /// CA certificate (DER).
+    pub(crate) ca_secret: zeroize::Zeroizing<[u8; 32]>,
     pub ca_cert: Vec<u8>,
-    /// Uncompressed P-256 public key.
     pub ca_public: Vec<u8>,
 }
 
@@ -256,13 +230,11 @@ impl std::fmt::Debug for PkinitCa {
 }
 
 impl PkinitCa {
-    /// Generate a self-signed P-256 test CA.
     #[must_use]
     pub fn generate() -> Option<Self> {
         Self::generate_window(UTC_NOT_BEFORE, UTC_NOT_AFTER)
     }
 
-    /// Self-signed CA with an explicit UTCTime window.
     #[must_use]
     pub fn generate_window(not_before: &[u8], not_after: &[u8]) -> Option<Self> {
         let (ca_secret, ca_public) = generate_p256()?;
@@ -278,13 +250,12 @@ impl PkinitCa {
             not_after,
         )?;
         Some(Self {
-            ca_secret,
+            ca_secret: zeroize::Zeroizing::new(ca_secret),
             ca_cert,
             ca_public,
         })
     }
 
-    /// CA with `basicConstraints` CA=true but without `keyCertSign`.
     #[must_use]
     pub fn generate_no_key_cert_sign() -> Option<Self> {
         let (ca_secret, ca_public) = generate_p256()?;
@@ -298,13 +269,12 @@ impl PkinitCa {
             "KERBER.TEST",
         )?;
         Some(Self {
-            ca_secret,
+            ca_secret: zeroize::Zeroizing::new(ca_secret),
             ca_cert,
             ca_public,
         })
     }
 
-    /// CA with no `keyUsage` extension (RFC 5280 §6.1.4(n) skip).
     #[must_use]
     pub fn generate_absent_key_usage() -> Option<Self> {
         let (ca_secret, ca_public) = generate_p256()?;
@@ -318,19 +288,17 @@ impl PkinitCa {
             "KERBER.TEST",
         )?;
         Some(Self {
-            ca_secret,
+            ca_secret: zeroize::Zeroizing::new(ca_secret),
             ca_cert,
             ca_public,
         })
     }
 
-    /// PEM of the CA certificate (`pkinit_anchors = FILE:`).
     #[must_use]
     pub fn cert_pem(&self) -> String {
         pem("CERTIFICATE", &self.ca_cert)
     }
 
-    /// Issue a leaf certificate signed by this CA.
     #[must_use]
     pub fn issue_leaf(
         &self,
@@ -349,7 +317,6 @@ impl PkinitCa {
         )
     }
 
-    /// Client leaf with an explicit UTCTime validity window (`YYMMDDHHMMSSZ`).
     #[must_use]
     pub fn issue_leaf_window(
         &self,
@@ -371,7 +338,6 @@ impl PkinitCa {
         )
     }
 
-    /// Client leaf whose issuer DN does not match this CA (CA key still signs).
     #[must_use]
     pub fn issue_leaf_wrong_issuer(&self, cn: &str, leaf_public: &[u8]) -> Option<Vec<u8>> {
         p256_cert(
@@ -385,13 +351,11 @@ impl PkinitCa {
         )
     }
 
-    /// CMS-sign `e_content` with a fresh leaf under this CA (`id-pkinit-authData`).
     #[must_use]
     pub fn sign_cms(&self, e_content: &[u8], leaf_cn: &str) -> Option<Vec<u8>> {
         self.sign_cms_typed(e_content, leaf_cn, ECONTENT_AUTHDATA, "KERBER.TEST")
     }
 
-    /// CMS-sign `e_content` with `econtent_oid` and RFC 5652 signedAttrs.
     #[must_use]
     pub fn sign_cms_typed(
         &self,
@@ -430,10 +394,10 @@ impl PkinitCa {
             &[2],
             econtent_oid,
             Some(&implicit),
+            super::cms::OID_ECDSA_SHA256,
         ))
     }
 
-    /// User identity PEM (certificate + EC key) for MIT `X509_user_identity=FILE:`.
     #[must_use]
     pub fn user_identity_pem(&self, cn: &str) -> Option<String> {
         let (s, p) = generate_p256()?;
@@ -445,13 +409,11 @@ impl PkinitCa {
         ))
     }
 
-    /// KDC identity PEM (cert+key) for MIT `pkinit_identity = FILE:`.
     #[must_use]
     pub fn kdc_identity_pem(&self) -> Option<String> {
         self.kdc_identity_pem_for("KERBER.TEST")
     }
 
-    /// KDC identity whose `id-pkinit-san` is `krbtgt/REALM@REALM`.
     #[must_use]
     pub fn kdc_identity_pem_for(&self, realm: &str) -> Option<String> {
         let (cert, s, p) = self.kdc_identity_for(realm)?;
@@ -462,7 +424,6 @@ impl PkinitCa {
         ))
     }
 
-    /// KDC leaf + scalar for `realm` (EKU KPKdc, SAN `krbtgt/REALM@REALM`).
     #[must_use]
     pub fn kdc_identity_for(&self, realm: &str) -> Option<(Vec<u8>, [u8; 32], Vec<u8>)> {
         let (s, p) = generate_p256()?;
@@ -478,7 +439,12 @@ impl PkinitCa {
         Some((cert, s, p))
     }
 
-    /// Client cert + scalar (EKU KPClientAuth, SAN from `cn`).
+    #[must_use]
+    pub fn kdc_pkinit_identity(&self, realm: &str) -> Option<super::PkinitIdentity> {
+        let (cert, key, _) = self.kdc_identity_for(realm)?;
+        Some(super::PkinitIdentity::from_key(cert, key))
+    }
+
     #[must_use]
     pub fn client_identity_for(&self, cn: &str) -> Option<(Vec<u8>, [u8; 32])> {
         let (s, p) = generate_p256()?;
@@ -486,7 +452,6 @@ impl PkinitCa {
         Some((cert, s))
     }
 
-    /// Client identity with an explicit UTCTime validity window.
     #[must_use]
     pub fn client_identity_window(
         &self,
@@ -499,7 +464,6 @@ impl PkinitCa {
         Some((cert, s))
     }
 
-    /// Client identity whose issuer DN does not match this CA.
     #[must_use]
     pub fn client_identity_wrong_issuer(&self, cn: &str) -> Option<(Vec<u8>, [u8; 32])> {
         let (s, p) = generate_p256()?;
@@ -507,7 +471,6 @@ impl PkinitCa {
         Some((cert, s))
     }
 
-    /// Self-signed end-entity (CA=false) for negative path-validation tests.
     #[must_use]
     pub fn self_signed_end_entity() -> Option<(Vec<u8>, [u8; 32])> {
         let (s, p) = generate_p256()?;

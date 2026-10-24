@@ -64,6 +64,7 @@ fn probe(port: u16) -> Result<IdentifyReply, krb5_protocol::Error> {
         realm: "KERBER.TEST",
         password: b"",
         kdc: &kdc,
+        profile: &krb5_config::isolated_profile(),
         want_spake: false,
         fast_armor: None,
         pkinit: None,
@@ -79,8 +80,10 @@ fn probe(port: u16) -> Result<IdentifyReply, krb5_protocol::Error> {
     })
 }
 
-/// MIT `k5_identify_realm` (`lib/krb5/krb/get_in_tkt.c:2062-2083`): the request asks for a 15-second ticket, neither renewable nor forwardable nor proxiable, canonicalized.
-/// MIT `init_creds_step_reply` (`lib/krb5/krb/get_in_tkt.c:1721-1726`): while identifying the realm, preauthentication required or an expired key ends the exchange: the client exists.
+// MIT: `k5_identify_realm` (lib/krb5/krb/get_in_tkt.c:2062-2083)
+/// the request asks for a 15-second ticket, neither renewable nor forwardable nor proxiable, canonicalized.
+// MIT: `init_creds_step_reply` (lib/krb5/krb/get_in_tkt.c:1721-1726)
+/// while identifying the realm, preauthentication required or an expired key ends the exchange: the client exists.
 #[test]
 fn the_probe_ends_at_preauthentication_required_or_an_expired_key() {
     isolate_host_krb5();
@@ -108,8 +111,10 @@ fn the_probe_ends_at_preauthentication_required_or_an_expired_key() {
     assert_eq!(probe(port).unwrap(), IdentifyReply::Here);
 }
 
-/// MIT `is_referral` (`lib/krb5/krb/get_in_tkt.c:1450-1458`): a referral is WRONG_REALM or C_PRINCIPAL_UNKNOWN whose client is in another realm.
-/// MIT `init_creds_step_reply` (`lib/krb5/krb/get_in_tkt.c:1745-1758`): a client referral rewrites the request's realm and starts over there.
+// MIT: `is_referral` (lib/krb5/krb/get_in_tkt.c:1450-1458)
+/// a referral is WRONG_REALM or C_PRINCIPAL_UNKNOWN whose client is in another realm.
+// MIT: `init_creds_step_reply` (lib/krb5/krb/get_in_tkt.c:1745-1758)
+/// a client referral rewrites the request's realm and starts over there.
 #[test]
 fn a_client_in_another_realm_is_a_referral_and_an_unknown_one_an_error() {
     isolate_host_krb5();

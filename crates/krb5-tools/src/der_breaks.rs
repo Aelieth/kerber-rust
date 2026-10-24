@@ -4,7 +4,6 @@
 
 use std::fmt::Write as _;
 
-/// One DER element as the sweep edits it. `Raw` is written as it is (a broken header).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Der {
     Prim(u8, Vec<u8>),
@@ -56,7 +55,6 @@ impl Der {
         }
     }
 
-    /// The content octets as they are written.
     pub(crate) fn content(&self) -> Vec<u8> {
         match self {
             Der::Prim(_, content) => content.clone(),
@@ -72,7 +70,6 @@ impl Der {
     }
 }
 
-/// Parse definite-length DER with one-octet tags into elements; `None` for anything else.
 pub(crate) fn der_parse(mut b: &[u8]) -> Option<Vec<Der>> {
     let mut out = Vec::new();
     while let Some((&tag, rest)) = b.split_first() {
@@ -106,27 +103,16 @@ pub(crate) fn der_parse(mut b: &[u8]) -> Option<Vec<Der>> {
     Some(out)
 }
 
-/// How a field or element is broken.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Break {
-    /// The `[n]` field left out: absent stays absent where the field is OPTIONAL.
     Absent,
-    /// The value's tag replaced (SET for a constructed value, REAL for a primitive one).
     Tag,
-    /// One octet after the value, inside the field or element.
     Extra,
-    /// The value's length one octet longer than its content.
     Short,
-    /// The field's or element's identifier with its constructed bit flipped.
     Prim,
-    /// The first primitive (depth first) with broken content of its type ([`bad_content`]), first
-    /// form.
     Content,
-    /// The same, second form.
     Content2,
-    /// The same, third form.
     Content3,
-    /// The same, fourth form.
     Content4,
 }
 
@@ -158,7 +144,6 @@ impl Break {
     }
 }
 
-/// The value as a value of another type: SET for a constructed value, REAL for a primitive one.
 pub(crate) fn retag(d: &Der) -> Der {
     match d {
         Der::Cons(_, kids) => Der::Cons(0x31, kids.clone()),
@@ -166,7 +151,6 @@ pub(crate) fn retag(d: &Der) -> Der {
     }
 }
 
-/// The element with one more octet in its content.
 pub(crate) fn with_extra(d: &Der) -> Der {
     match d {
         Der::Cons(tag, kids) => {
@@ -182,7 +166,6 @@ pub(crate) fn with_extra(d: &Der) -> Der {
     }
 }
 
-/// The element with a length one octet longer than its content.
 pub(crate) fn short(d: &Der) -> Der {
     let content = d.content();
     let mut raw = vec![d.tag()];
@@ -191,7 +174,6 @@ pub(crate) fn short(d: &Der) -> Der {
     Der::Raw(raw)
 }
 
-/// The element with its constructed bit flipped, content unchanged.
 pub(crate) fn flip(d: &Der) -> Der {
     let content = d.content();
     let mut raw = vec![d.tag() ^ 0x20];
@@ -200,9 +182,6 @@ pub(crate) fn flip(d: &Der) -> Der {
     Der::Raw(raw)
 }
 
-/// Content of the type of `tag` broken in form `form` (0 to 3), or `None` when the type has no
-/// such form (every OCTET STRING content is valid).
-///
 /// INTEGER: nine octets (past MIT's eight); `FF 7F FF FF FF` (-2^31-1, which an octet dropped to
 /// make it fit would read as 2^31-1); 6 (no pvno or vno, which MIT's `krb5_version` refuses);
 /// 2^31 (past an int32, inside MIT's unsigned msg-type and error-code).
@@ -224,7 +203,6 @@ pub(crate) fn bad_content(tag: u8, form: u8) -> Option<Vec<u8>> {
     }
 }
 
-/// The element with its first primitive (depth first) that has broken content broken.
 pub(crate) fn with_bad_content(d: &Der, form: u8) -> Option<Der> {
     match d {
         Der::Prim(tag, _) => bad_content(*tag, form).map(|c| Der::Prim(*tag, c)),
@@ -239,27 +217,21 @@ pub(crate) fn with_bad_content(d: &Der, form: u8) -> Option<Der> {
     }
 }
 
-/// The marker every 32-bit counter carries in the samples (`01 02 03 04`).
 pub(crate) const COUNTER: u32 = 0x0102_0304;
 
 /// MIT's 32-bit edges for a counter: INT32_MIN (an int32 and a seq-number both take it), 2^31 in
-/// five octets (past an int32, not a seq-number), and 2^32-1 (likewise).
 pub(crate) const COUNTER_EDGES: [(&str, &[u8]); 3] = [
     ("int32-min", &[0x80, 0x00, 0x00, 0x00]),
     ("int32-wide", &[0x00, 0x80, 0x00, 0x00, 0x00]),
     ("uint32-max", &[0x00, 0xff, 0xff, 0xff, 0xff]),
 ];
 
-/// Where a target sits: the child indices from the message's outermost element.
 pub(crate) type Path = Vec<usize>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Target {
-    /// An explicit `[n]` field: a context-specific constructed element.
     Field,
-    /// An element of a SEQUENCE OF (a SEQUENCE whose two or more elements share a tag).
     Element,
-    /// A 32-bit counter's INTEGER.
     Counter,
 }
 
@@ -302,7 +274,6 @@ pub(crate) fn path_name(root: &Der, path: &[usize]) -> String {
     name
 }
 
-/// The message with the element at `path` replaced (`None`: removed).
 pub(crate) fn edit(d: &Der, path: &[usize], with: Option<&Der>) -> Der {
     let Some((&first, rest)) = path.split_first() else {
         return with.cloned().unwrap_or_else(|| d.clone());
@@ -334,15 +305,11 @@ pub(crate) fn at<'a>(d: &'a Der, path: &[usize]) -> Option<&'a Der> {
     })
 }
 
-/// What a break does to its target.
 pub(crate) enum Edit {
-    /// The target removed.
     Remove,
-    /// The target replaced.
     Replace(Der),
 }
 
-/// The broken target for one break, or `None` when the break does not apply.
 pub(crate) fn broken(target: &Der, kind: Target, b: Break) -> Option<Edit> {
     match kind {
         Target::Field => {
@@ -386,9 +353,6 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
     })
 }
 
-/// Every broken form of `root`: per explicit `[n]` field and SEQUENCE OF element, each [`Break`]
-/// that applies, and per 32-bit counter, each of [`COUNTER_EDGES`]. Each comes with its place and
-/// break as `<path>/<break>`.
 pub(crate) fn all_breaks(root: &Der) -> Vec<(String, Der)> {
     let mut found = Vec::new();
     targets(root, &mut Vec::new(), false, &mut found);

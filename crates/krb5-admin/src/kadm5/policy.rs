@@ -1,6 +1,4 @@
-//! Policy argument and reply codecs (`kadm_rpc_xdr.c` `xdr_cpol_arg`,
-//! `xdr_gpol_ret`) and the `svr_policy.c` validation: mask bits, the
-//! password-quality floors and `allowed_keysalts`.
+//! Policy argument and reply codecs (`kadm_rpc_xdr.c` `xdr_cpol_arg`, `xdr_gpol_ret`) and the `svr_policy.c` validation: mask bits, the password-quality floors and `allowed_keysalts`.
 
 use super::codes::{
     ALL_POLICY_MASK, API_V2, API_V3, API_V4, KADM5_BAD_CLASS, KADM5_BAD_HISTORY,
@@ -25,10 +23,8 @@ pub(super) fn parse_gpols(args: &[u8]) -> (u32, Option<String>) {
     (api, r.nullstring().ok().flatten())
 }
 
-/// MIT `_xdr_kadm5_policy_ent_rec` (`kadm_rpc_xdr.c:507-514`): lockout fields are present only at
-/// API version 3 or later.
-/// Allowed keysalts are read only at version 4 or later, so an older argument's mask is not
-/// consumed as a lockout field.
+// MIT: `_xdr_kadm5_policy_ent_rec` (kadm_rpc_xdr.c:507-514)
+/// lockout fields are present only at API version 3 or later.
 pub(super) fn parse_policy_arg(args: &[u8]) -> Result<(u32, krb5_kdc::NamedPolicy, u32), Error> {
     let mut r = XdrR::new(args);
     let api = r.u32()?;
@@ -140,10 +136,8 @@ pub(crate) fn policy_text(code: u32) -> &'static str {
     }
 }
 
-/// MIT `validate_allowed_keysalts` (`svr_policy.c:20-36`): a tab is
-/// `KADM5_BAD_KEYSALTS`. `krb5_string_to_keysalts` skips unknown tokens
-/// and only fails ENOMEM, so `addpol -allowedkeysalts bogus:normal`
-/// succeeds on MIT 1.22.2 (live settle).
+// MIT: `validate_allowed_keysalts` (svr_policy.c:20-36)
+/// a tab is `KADM5_BAD_KEYSALTS`. `krb5_string_to_keysalts` skips unknown tokens and only fails ENOMEM, so `addpol -allowedkeysalts bogus:normal` succeeds on MIT 1.22.2 (live settle).
 pub(super) fn validate_allowed_keysalts(allowed: Option<&str>) -> Option<u32> {
     let s = allowed.filter(|s| !s.is_empty())?;
     if s.contains('\t') {
@@ -195,8 +189,7 @@ pub(crate) fn build_policy(a: &crate::PolicyArgs) -> (krb5_kdc::NamedPolicy, u32
     (p, mask)
 }
 
-/// `kadm5_create_policy` for kadmin.local: DUP -> name -> min>max -> length ->
-/// classes -> history (`svr_policy.c`). Returns the MIT `com_err` text on failure.
+/// `kadm5_create_policy` for kadmin.local: DUP -> name -> min>max -> length -> classes -> history (`svr_policy.c`). Returns the MIT `com_err` text on failure.
 pub(crate) fn create_policy_local(
     exists: bool,
     a: &crate::PolicyArgs,
@@ -220,8 +213,7 @@ pub(crate) fn create_policy_local(
     Ok(pol)
 }
 
-/// `kadm5_modify_policy` for kadmin.local: merge the masked fields onto the
-/// existing policy, then the same floor checks (no name check).
+/// `kadm5_modify_policy` for kadmin.local: merge the masked fields onto the existing policy, then the same floor checks (no name check).
 pub(crate) fn modify_policy_local(
     existing: &krb5_kdc::NamedPolicy,
     a: &crate::PolicyArgs,

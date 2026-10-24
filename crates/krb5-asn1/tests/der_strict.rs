@@ -1,5 +1,3 @@
-//! DER-strictness negatives: truncated, extra bytes, BER indefinite, non-minimal.
-
 use krb5_asn1::{PrincipalName, decode, encode};
 use krb5_types::PrincipalName as PN;
 
@@ -13,7 +11,6 @@ fn truncated_principal_is_error() {
 
 #[test]
 fn ber_indefinite_length_is_error() {
-    // APPLICATION 1 constructed indefinite (0x61 0x80 ... 0x00 0x00) is BER.
     let ber = [0x61, 0x80, 0x00, 0x00];
     assert!(decode::<krb5_types::Ticket>(&ber).is_err());
 }
@@ -23,11 +20,8 @@ fn extra_trailing_bytes_rejected_or_decoded_prefix() {
     let p = PN::new(PN::NT_PRINCIPAL, ["user"]);
     let mut der = encode(&p).unwrap();
     der.extend_from_slice(&[0xff; 8]);
-    // rasn DER decode of the type may error on extra data; either is strict enough.
-    let r = decode::<PrincipalName>(&der);
-    if let Ok(p2) = r {
-        assert_eq!(p, p2);
-    }
+    let p2 = decode::<PrincipalName>(&der).unwrap();
+    assert_eq!(p, p2);
 }
 
 #[test]
@@ -37,7 +31,7 @@ fn deep_nesting_does_not_panic() {
         bomb.extend_from_slice(&[0x30, 0x80]);
     }
     bomb.extend_from_slice(&[0x00, 0x00]);
-    let _ = std::panic::catch_unwind(|| {
-        let _ = decode::<PrincipalName>(&bomb);
-    });
+    let decoded = std::panic::catch_unwind(|| decode::<PrincipalName>(&bomb));
+    assert!(decoded.is_ok());
+    assert!(decoded.unwrap().is_err());
 }

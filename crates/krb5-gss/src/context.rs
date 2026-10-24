@@ -1,19 +1,13 @@
-//! Context establishment (`init_sec_context.c`, `accept_sec_context.c`,
-//! `inq_context.c`, `context_time.c`, `get_tkt_flags.c`,
-//! `generic/util_seqstate.c`, `util_cksum.c`): AP-REQ/AP-REP, channel
-//! bindings, and the sequence window.
-
-use std::sync::atomic::{AtomicBool, Ordering};
-
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt_enc_data};
 use krb5_protocol::{
-    AUTH_CONTEXT_DO_SEQUENCE, AUTH_CONTEXT_USE_SUBKEY, AcceptorAuthContext, KeytabGetEntry,
-    ReplayCache, build_ap_req_from_authenticator, permitted_enctypes, permitted_enctypes_kdc,
+    AUTH_CONTEXT_DO_SEQUENCE, AUTH_CONTEXT_USE_SUBKEY, AcceptorAuthContext, AcceptorConfig,
+    ApAuthenticator, KeytabGetEntry, ReplayCache, build_ap_req_from_authenticator,
+    generate_ap_authenticator, generate_seq_number,
 };
 use krb5_types::{
-    ApOptions, ApRep, Authenticator, AuthorizationData, AuthorizationDataValue, Checksum,
-    EncApRepPart, EncryptionKey, HostAddress, KerberosTime, PrincipalName, Realm, Ticket, ku, pa,
+    ApOptions, ApRep, AuthorizationData, AuthorizationDataValue, Checksum, EncApRepPart,
+    EncryptionKey, HostAddress, KerberosTime, PrincipalName, Realm, Ticket, ku, pa,
 };
 
 use super::deleg::{DelegCred, extract_delegated, krb_cred_for_deleg};
@@ -22,6 +16,7 @@ use super::oid::{
     GSS_C_INTEG, GSS_C_MUTUAL, GSS_C_PROT_READY, GSS_C_REPLAY, GSS_C_SEQUENCE, GSS_C_TRANS,
     GSS_CHECKSUM_TYPE, gss_unwrap_app, gss_wrap_app,
 };
+use super::seqstate::{SeqState, SeqStatus};
 use super::{Error, GssContext};
 
 pub(super) const TOK_AP_REQ: [u8; 2] = [0x01, 0x00];
@@ -30,23 +25,11 @@ pub(super) const TOK_AP_REP: [u8; 2] = [0x02, 0x00];
 
 pub(super) const FLAG_ACCEPTOR_SUBKEY: u8 = 0x04;
 
-/// Whether this process accepts on the KDC profile ([`use_kdc_context`]).
-static KDC_CONTEXT: AtomicBool = AtomicBool::new(false);
-
-/// Where the acceptor finds the key a ticket is sealed in: keys it holds, with their kvnos when
-/// the keytab they came from labels them, or a lookup in a keytab that cannot be walked.
 #[derive(Clone, Copy)]
 struct AcceptKeys<'a> {
     keys: &'a [ProtocolKey],
     kvnos: Option<&'a [u32]>,
     get_entry: Option<KeytabGetEntry<'a>>,
-}
-
-/// From now on, accept every context with the KDC profile's enctype policy, kdc.conf's
-/// `[libdefaults]` before krb5.conf's, as kadmind does.
-/// MIT `krb5int_gss_use_kdc_context` (`lib/gssapi/krb5/init_sec_context.c:1018-1036`): the switch is process-wide, and every krb5 context made after it reads the KDC profile.
-pub fn use_kdc_context() {
-    KDC_CONTEXT.store(true, Ordering::Relaxed);
 }
 
 const INITIATOR_FLAGS: u32 = GSS_C_INTEG
@@ -56,29 +39,24 @@ const INITIATOR_FLAGS: u32 = GSS_C_INTEG
     | GSS_C_SEQUENCE
     | GSS_C_DCE
     | GSS_C_IDENTIFY
-    | GSS_C_EXTENDED_ERROR;
+    | GSS_C_EXTENDED_ERROR
+    | GSS_C_CHANNEL_BOUND;
 
 pub(super) const KRB5_GSS_FOR_CREDS: u16 = 1;
 
 const GSS_EXTS_FINISHED: u32 = 2;
 
-/// RFC 2744 channel bindings (hashed into the AP-REQ 0x8003 checksum).
+/// Channel bindings are hashed into the AP-REQ's 0x8003 checksum (RFC 2744).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ChannelBindings {
-    /// Initiator address type.
     pub initiator_addrtype: u32,
-    /// Initiator address octets.
     pub initiator_address: Vec<u8>,
-    /// Acceptor address type.
     pub acceptor_addrtype: u32,
-    /// Acceptor address octets.
     pub acceptor_address: Vec<u8>,
-    /// Application data (TLS unique, …).
     pub application_data: Vec<u8>,
 }
 
 impl ChannelBindings {
-    /// MD5 of the RFC 2744 encoding, or 16 zero octets when `None`.
     #[must_use]
     pub fn bnd_hash(cb: Option<&Self>) -> [u8; 16] {
         let Some(cb) = cb else {
@@ -109,28 +87,24 @@ impl ChannelBindings {
     }
 }
 
-/// Result of [`GssContext::inquire_context`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InquireOk {
-    /// True if this context is the initiator.
     pub initiator: bool,
-    /// Established GSS flags (`GSS_C_*`), including `GSS_C_TRANS`.
     pub flags: u32,
-    /// Remaining ticket lifetime in seconds (`0` if unknown or expired).
     pub lifetime: u32,
-    /// Authenticated client `name@REALM`.
     pub client: Option<String>,
 }
 
-/// Per-message sequence window (RFC 4121 replay detection).
-const SEQ_WINDOW: u64 = 32;
-
-/// MIT `krb5_generate_subkey_extended` (`lib/krb5/krb/gen_subkey.c:29-52`): a random key of the session key's enctype.
+// MIT: `krb5_generate_subkey_extended` (lib/krb5/krb/gen_subkey.c:29-52)
+// a random key of the session key's enctype.
 pub(super) fn random_subkey(session: &ProtocolKey) -> Result<ProtocolKey, Error> {
     Ok(ProtocolKey::random(session.etype())?)
 }
 
-/// MIT `kg_setup_keys` (`lib/gssapi/krb5/util_crypt.c:99-125`): DES3 and RC4 keys use the pre-CFX tokens, every other enctype CFX (`proto` 1).
+const FIELD_TOOLONG: &str = "Field is too long for this implementation";
+
+// MIT: `kg_setup_keys` (lib/gssapi/krb5/util_crypt.c:99-125)
+// DES3 and RC4 keys use the pre-CFX tokens, every other enctype CFX (`proto` 1).
 const fn pre_cfx(etype: i32) -> bool {
     matches!(etype, 16 | 23 | 24)
 }
@@ -154,9 +128,8 @@ pub(super) fn authenticator_checksum(
     v
 }
 
-/// MIT `kg_process_extension` (`accept_sec_context.c:381-383`): a finished extension is
-/// rejected unless this is an IAKERB acceptor.
-/// A short extension header is an error, not a skipped option.
+// MIT: `kg_process_extension` (accept_sec_context.c:381-383)
+// GSS_EXTS_FINISHED is IAKERB-only; a plain krb5 acceptor fails it.
 fn process_checksum(
     cksum: Option<&Checksum>,
     ap_mutual: bool,
@@ -227,8 +200,6 @@ fn process_checksum(
                 }
                 let ext_type =
                     u32::from_be_bytes(rest[0..4].try_into().map_err(|_| Error::Truncated)?);
-                // MIT `kg_process_extension` (`accept_sec_context.c:380-384`): GSS_EXTS_FINISHED
-                // is IAKERB-only; a plain krb5 acceptor fails it.
                 if ext_type == GSS_EXTS_FINISHED {
                     return Err(Error::Inner("gss failure".into()));
                 }
@@ -302,11 +273,6 @@ fn md5_16(data: &[u8]) -> [u8; 16] {
 }
 
 impl GssContext {
-    /// Acceptor identity for kadm5 name/realm gates (no usable session).
-    ///
-    /// # Errors
-    ///
-    /// None: the fixed all-zero 32-byte AES-256 key always builds, so this is always `Ok`.
     pub fn for_kadm5_acceptor(
         acceptor: PrincipalName,
         ticket_realm: impl Into<String>,
@@ -315,15 +281,13 @@ impl GssContext {
             session: ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0u8; 32])?,
             acceptor_subkey: None,
             send_seq: 0,
-            recv_seq: 0,
-            recv_seen: false,
-            recv_window: std::collections::HashSet::new(),
+            recv: SeqState::new(0, 0, true),
             initiator: false,
-            rpcsec_init_window: false,
             client: None,
             delegated: None,
             spnego_mech_list: None,
             lifetime_end: 0,
+            acceptor_skew: 0,
             gss_flags: 0,
             ticket_initial: false,
             acceptor: Some(acceptor),
@@ -334,33 +298,42 @@ impl GssContext {
         })
     }
 
-    /// Initiator: wrap a service ticket as a GSS initial token (AP-REQ).
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Inner`] when the OS random source fails (for the subkey or a confounder), or the
-    /// delegated KRB-CRED or the AP-REQ does not encode.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the initiator's ticket, flags, and profile"
+    )]
     pub fn init_sec_context(
         ticket: Ticket,
         session: &ProtocolKey,
         crealm: &Realm,
         cname: &PrincipalName,
-        mutual: bool,
+        req_flags: u32,
         channel_bindings: Option<&ChannelBindings>,
         deleg: Option<&DelegCred>,
+        profile: Option<&krb5_config::Krb5Conf>,
+        time_offset: i64,
     ) -> Result<(Self, Vec<u8>), Error> {
-        let opts = if mutual {
+        // MIT kg_new_connection; see docs/parity/b1-gss.md
+        // MIT: `kg_new_connection` (lib/gssapi/krb5/init_sec_context.c:486)
+        let cbt = req_flags & GSS_C_CHANNEL_BOUND != 0;
+        // MIT: `kg_new_connection` (lib/gssapi/krb5/init_sec_context.c:544-550)
+        let mut flags = req_flags & (INITIATOR_FLAGS & !GSS_C_DCE & !GSS_C_CHANNEL_BOUND)
+            | GSS_C_TRANS
+            | GSS_C_CONF
+            | GSS_C_INTEG;
+        let opts = if flags & GSS_C_MUTUAL != 0 {
             ApOptions::mutual_required()
         } else {
             ApOptions::none()
         };
-        let mut flags = GSS_C_INTEG | GSS_C_CONF | GSS_C_REPLAY | GSS_C_SEQUENCE;
-        if mutual {
-            flags |= GSS_C_MUTUAL;
-        }
         let deleg_der = if let Some(d) = deleg {
             flags |= GSS_C_DELEG;
-            Some(krb_cred_for_deleg(session, d)?)
+            let der = krb_cred_for_deleg(session, d)?;
+            // MIT make_gss_checksum; see docs/parity/b1-gss.md
+            if der.len() + 28 > 65_535 {
+                return Err(Error::Inner(FIELD_TOOLONG.into()));
+            }
+            Some(der)
         } else {
             None
         };
@@ -369,23 +342,37 @@ impl GssContext {
             checksum: authenticator_checksum(channel_bindings, flags, deleg_der.as_deref()).into(),
         };
         let sub = random_subkey(session)?;
+        let sub_etype = sub.etype().to_iana();
         let enc_sub = EncryptionKey {
             keytype: sub.etype().to_iana(),
             keyvalue: sub.as_bytes().to_vec().into(),
         };
-        // MIT `generate_authenticator` (`lib/krb5/krb/mk_req_ext.c:327-327`): the time and its microseconds, from `krb5_us_timeofday`.
-        let (now, usec) = krb5_protocol::us_timeofday();
-        let authenticator = Authenticator {
-            authenticator_vno: Authenticator::VNO,
-            crealm: crealm.clone(),
-            cname: cname.clone(),
-            cksum: Some(cksum),
-            cusec: usec,
-            ctime: now,
-            subkey: Some(enc_sub),
-            seq_number: Some(0),
-            authorization_data: None,
+        // MIT: `krb5_mk_req_extended` (lib/krb5/krb/mk_req_ext.c:136-143)
+        // MIT: `krb5_mk_req_extended` (lib/krb5/krb/mk_req_ext.c:187-194)
+        let seq = generate_seq_number()?;
+        let desired = if flags & GSS_C_MUTUAL != 0 {
+            match profile {
+                Some(conf) => krb5_protocol::conf_etypes(conf, true),
+                None => krb5_crypto::EncryptionType::preferred()
+                    .iter()
+                    .map(|etype| etype.to_iana())
+                    .collect(),
+            }
+        } else {
+            Vec::new()
         };
+        let authenticator = generate_ap_authenticator(ApAuthenticator {
+            crealm,
+            cname,
+            cksum: Some(cksum),
+            subkey: Some(enc_sub),
+            sequence: Some(seq),
+            time_offset,
+            cbt,
+            desired_etypes: &desired,
+            ticket_etype: session.etype().to_iana(),
+            profile,
+        })?;
         let ap = build_ap_req_from_authenticator(ticket, session, opts, &authenticator)?;
         let der = encode(&ap)?;
         let token = gss_wrap_app(TOK_AP_REQ, &der);
@@ -393,16 +380,23 @@ impl GssContext {
             Self {
                 session: sub,
                 acceptor_subkey: None,
-                send_seq: 0,
-                recv_seq: 0,
-                recv_seen: false,
-                recv_window: std::collections::HashSet::new(),
+                send_seq: u64::from(seq),
+                // MIT: `kg_new_connection` (lib/gssapi/krb5/init_sec_context.c:632-634)
+                recv: SeqState::new(
+                    if flags & GSS_C_MUTUAL == 0 {
+                        u64::from(seq)
+                    } else {
+                        0
+                    },
+                    flags,
+                    !pre_cfx(sub_etype),
+                ),
                 initiator: true,
-                rpcsec_init_window: false,
                 client: Some(cname.unparse_with_realm(&String::from_utf8_lossy(crealm.as_bytes()))),
                 delegated: None,
                 spnego_mech_list: None,
                 lifetime_end: 0,
+                acceptor_skew: 0,
                 gss_flags: flags,
                 ticket_initial: false,
                 acceptor: None,
@@ -415,22 +409,6 @@ impl GssContext {
         ))
     }
 
-    /// Acceptor: verify the initial token with the service key.
-    ///
-    /// `expected_server` / `expected_realm` bind the ticket sname. Passing
-    /// `None` accepts any principal the key decrypts; production acceptors
-    /// must pass the keytab principal.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Truncated`] when `service_keys` is empty, the GSS framing is bad or lacks the
-    /// AP-REQ token ID, or a delegated KRB-CRED lacks its credential fields; [`Error::Integrity`]
-    /// when the ticket or authenticator fails its integrity check; [`Error::ChannelBindings`] when
-    /// the 0x8003 checksum is under 24 bytes or its bindings (sent or demanded) do not match;
-    /// [`Error::Inner`] for every other refusal of the AP-REQ (a session key or subkey enctype
-    /// outside `permitted_enctypes`, the KDC profile's after [`use_kdc_context`], among them),
-    /// its subkey, 0x8003 checksum, authorization data, or delegated KRB-CRED, and when the
-    /// AP-REP cannot be built.
     pub fn accept_sec_context(
         token: &[u8],
         service_keys: &[ProtocolKey],
@@ -438,6 +416,7 @@ impl GssContext {
         expected_server: Option<&PrincipalName>,
         expected_realm: Option<&str>,
         rcache: &ReplayCache,
+        conf: &AcceptorConfig,
     ) -> Result<(Self, Option<Vec<u8>>), Error> {
         Self::accept_sec_context_kt(
             token,
@@ -447,26 +426,15 @@ impl GssContext {
             expected_server,
             expected_realm,
             rcache,
+            conf,
         )
     }
 
-    /// [`accept_sec_context`](Self::accept_sec_context) with a per-key kvno
-    /// slice (parallel to `service_keys`, as read from a keytab).
-    /// MIT `try_one_princ` (`rd_req_dec.c:325-347`): fetches the keytab entry by the exact
-    /// ticket kvno when the server principal is fully specified; a wildcard name
-    /// (`is_matching`) iterates instead. We mirror that: the kvnos pin the ticket kvno only
-    /// when `expected_server` is `Some`.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Truncated`] when `service_keys` is empty, the GSS framing is bad or lacks the
-    /// AP-REQ token ID, or a delegated KRB-CRED lacks its credential fields; [`Error::Integrity`]
-    /// when the ticket or authenticator fails its integrity check; [`Error::ChannelBindings`] when
-    /// the 0x8003 checksum is under 24 bytes or its bindings (sent or demanded) do not match;
-    /// [`Error::Inner`] for every other refusal of the AP-REQ (a session key or subkey enctype
-    /// outside `permitted_enctypes`, the KDC profile's after [`use_kdc_context`], among them),
-    /// its subkey, 0x8003 checksum, authorization data, or delegated KRB-CRED, and when the
-    /// AP-REP cannot be built.
+    // MIT try_one_princ; see docs/parity/b1-client.md
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "gss_accept_sec_context's inputs and the acceptor's profile"
+    )]
     pub fn accept_sec_context_kt(
         token: &[u8],
         service_keys: &[ProtocolKey],
@@ -475,6 +443,7 @@ impl GssContext {
         expected_server: Option<&PrincipalName>,
         expected_realm: Option<&str>,
         rcache: &ReplayCache,
+        conf: &AcceptorConfig,
     ) -> Result<(Self, Option<Vec<u8>>), Error> {
         if service_keys.is_empty() {
             return Err(Error::Truncated);
@@ -483,8 +452,6 @@ impl GssContext {
             token,
             AcceptKeys {
                 keys: service_keys,
-                // MIT pins the ticket kvno only on the fully specified (explicit
-                // server) path; a wildcard acceptor name iterates every key.
                 kvnos: expected_server.and(service_kvnos),
                 get_entry: None,
             },
@@ -492,20 +459,13 @@ impl GssContext {
             expected_server,
             expected_realm,
             rcache,
+            conf,
         )
     }
 
-    /// Acceptor over a keytab that cannot be walked, the KDB's: the key is looked up by `get_entry`
-    /// for the principal `acceptor` names, or, with `GSS_C_NO_NAME` (`None`), for the server the
-    /// ticket names. `realm` is the realm `acceptor` is in.
-    /// MIT `kg_accept_krb5` (`accept_sec_context.c:829-831`): `krb5_rd_req_decoded` with the credential's `acceptor_mprinc` (NULL for `GSS_C_NO_NAME`) and its keytab.
-    /// MIT `decrypt_try_server` (`rd_req_dec.c:373-386`): a named acceptor is looked up as it is, no name takes the ticket's server (NOT_US where the keytab has none).
-    ///
-    /// # Errors
-    ///
-    /// As [`accept_sec_context_kt`](Self::accept_sec_context_kt) for a ticket that does not
-    /// verify; [`Error::NotUs`] where the ticket is for no principal the keytab serves under the
-    /// name given.
+    // MIT: `kg_accept_krb5` (accept_sec_context.c:829-831)
+    // `krb5_rd_req_decoded` with the credential's `acceptor_mprinc` (NULL for `GSS_C_NO_NAME`) and its keytab.
+    // MIT decrypt_try_server; see docs/parity/b1-client.md
     pub fn accept_sec_context_kdb(
         token: &[u8],
         acceptor: Option<&PrincipalName>,
@@ -513,6 +473,7 @@ impl GssContext {
         get_entry: KeytabGetEntry<'_>,
         channel_bindings: Option<&ChannelBindings>,
         rcache: &ReplayCache,
+        conf: &AcceptorConfig,
     ) -> Result<(Self, Option<Vec<u8>>), Error> {
         Self::accept_inner(
             token,
@@ -525,23 +486,8 @@ impl GssContext {
             acceptor,
             Some(realm),
             rcache,
+            conf,
         )
-    }
-
-    /// The enctypes this process's acceptor permits for a ticket's session key and subkey, and for
-    /// the key a keytab gives: the KDC profile's after [`use_kdc_context`], else krb5.conf's.
-    /// MIT `krb5_gss_init_context` (`init_sec_context.c:995-1016`): the context a process that asked for the KDC context accepts on.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Inner`] when the profile's `permitted_enctypes` do not parse.
-    pub fn acceptor_permitted_enctypes() -> Result<Vec<EncryptionType>, Error> {
-        let permitted = if KDC_CONTEXT.load(Ordering::Relaxed) {
-            permitted_enctypes_kdc()
-        } else {
-            permitted_enctypes()
-        };
-        Ok(permitted?)
     }
 
     fn accept_inner(
@@ -551,6 +497,7 @@ impl GssContext {
         expected_server: Option<&PrincipalName>,
         expected_realm: Option<&str>,
         rcache: &ReplayCache,
+        conf: &AcceptorConfig,
     ) -> Result<(Self, Option<Vec<u8>>), Error> {
         let dce_style = token.first() != Some(&0x60);
         let inner = ap_req_token(token)?;
@@ -558,8 +505,6 @@ impl GssContext {
             return Err(Error::Truncated);
         }
         let replay = ReplayCache::new();
-        // MIT `kg_accept_krb5` (`accept_sec_context.c:781-790`): an INET initiator address in the
-        // channel bindings is the sender's, which an address list in the ticket must hold.
         let sender = channel_bindings
             .filter(|cb| cb.initiator_addrtype == crate::oid::GSS_C_AF_INET)
             .map(|cb| HostAddress {
@@ -574,10 +519,10 @@ impl GssContext {
             key_principals: None,
             kvno: None,
             get_entry: keys.get_entry,
-            // MIT `rd_req_decoded_opt` (`lib/krb5/krb/rd_req_dec.c:631-632`): the authenticator time is checked against the context clock skew.
-            // MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:251-252`): that skew is `[libdefaults] clockskew`, 300 seconds when unset.
-            skew: krb5_config::load_krb5_conf()
-                .map_or(krb5_protocol::DEFAULT_SKEW, |c| i64::from(c.clockskew)),
+            // MIT rd_req_decoded_opt; see docs/parity/b1-client.md
+            skew: i64::from(conf.clockskew),
+            ignore_acceptor_hostname: conf.ignore_acceptor_hostname,
+            capaths: &conf.capaths,
             remote_addr: sender.as_ref(),
             now: None,
         };
@@ -588,14 +533,7 @@ impl GssContext {
             }
             Err(e) => return Err(e.into()),
         };
-        // MIT `krb5_gss_init_context` (`init_sec_context.c:995-1016`): a process that asked for the KDC context accepts on the KDC profile.
-        let permitted = if KDC_CONTEXT.load(Ordering::Relaxed) {
-            permitted_enctypes_kdc()
-        } else {
-            permitted_enctypes()
-        };
-        // MIT `kg_accept_krb5` (`accept_sec_context.c:829-837`): `krb5_rd_req_decoded` negotiates the enctypes before the context exists, then the auth context takes `DO_SEQUENCE`.
-        let mut ac = permitted.and_then(|p| AcceptorAuthContext::from_ap_req(&ok, &p))?;
+        let mut ac = AcceptorAuthContext::from_ap_req(&ok, conf)?;
         ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE);
         let crealm = String::from_utf8_lossy(ok.ticket_part.crealm.as_bytes()).into_owned();
         let client = ok.authenticator.cname.unparse_with_realm(&crealm);
@@ -626,18 +564,15 @@ impl GssContext {
         if dce_style {
             gss_flags |= GSS_C_MUTUAL | GSS_C_DCE;
         }
-        // MIT `kg_accept_krb5` (`accept_sec_context.c:1089-1089`): sets GSS_C_PROT_READY_FLAG on
-        // the established single-leg context.
         gss_flags |= GSS_C_PROT_READY;
         let want_mutual = gss_flags & GSS_C_MUTUAL != 0;
         let sess = subkey.unwrap_or_else(|| ticket_session.clone());
+        let sess_etype = sess.etype().to_iana();
         let base = ok.authenticator.seq_number.unwrap_or(0);
-        // MIT `kg_accept_krb5` (`accept_sec_context.c:1107-1113`): without mutual authentication this side's sequence numbers start at the initiator's.
         let mut send_seq = u64::from(base);
         let mut acceptor_subkey = None;
         let mut ap_rep_tok = None;
         if want_mutual {
-            // MIT `kg_accept_krb5` (`accept_sec_context.c:998-1037`): a CFX or DCE context, or a negotiated enctype other than the session key's that is not DES3 or RC4, gets an acceptor subkey.
             let mut use_subkey = ac.ap_req_use_subkey();
             let cfx = !pre_cfx(sess.etype().to_iana());
             if !cfx && !dce_style && use_subkey && pre_cfx(ac.negotiated_etype().to_iana()) {
@@ -647,7 +582,6 @@ impl GssContext {
             if generate_subkey {
                 ac.set_flags(ac.flags() | AUTH_CONTEXT_USE_SUBKEY);
             }
-            // MIT `kg_accept_krb5` (`accept_sec_context.c:1039-1064`): the AP-REP's random seq is the first this side sends, and its subkey keys every token after it.
             let ap_rep = ac.mk_rep()?;
             send_seq = u64::from(ac.local_seq());
             if generate_subkey {
@@ -664,15 +598,13 @@ impl GssContext {
             session: sess,
             acceptor_subkey,
             send_seq,
-            recv_seq: u64::from(base),
-            recv_seen: false,
-            recv_window: std::collections::HashSet::new(),
+            recv: SeqState::new(u64::from(base), gss_flags, !pre_cfx(sess_etype)),
             initiator: false,
-            rpcsec_init_window: false,
             client: Some(client),
             delegated,
             spnego_mech_list: None,
             lifetime_end: ok.ticket_part.endtime.unix_seconds(),
+            acceptor_skew: conf.clockskew,
             gss_flags,
             ticket_initial: ok.ticket_part.flags.initial(),
             acceptor: Some(ok.sname.clone()),
@@ -688,14 +620,6 @@ impl GssContext {
         Ok((out, ap_rep_tok))
     }
 
-    /// MIT `kg_accept_dce` / `krb5_rd_rep_dce`.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Truncated`] when the context is not DCE-style or its AP-REP key is already spent;
-    /// [`Error::Inner`] when the AP-REP or its enc-part does not decode or does not decrypt under
-    /// the ticket session key; [`Error::Integrity`] when the enc-part carries a subkey or a
-    /// sequence number other than this context's send sequence.
     pub fn accept_dce(&mut self, token: &[u8]) -> Result<(), Error> {
         if !self.dce_style {
             return Err(Error::Truncated);
@@ -716,23 +640,11 @@ impl GssContext {
         Ok(())
     }
 
-    /// True when the initial token was a raw DCE AP-REQ.
     #[must_use]
     pub fn is_dce_style(&self) -> bool {
         self.dce_style
     }
 
-    /// Consume the acceptor's AP-REP token: its sequence number and its subkey.
-    ///
-    /// MIT `krb5_mk_rep` encrypts EncAPRepPart with the **ticket session**
-    /// (`auth_context->key`), not the authenticator subkey.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Truncated`] when the GSS framing is bad or lacks the AP-REP token ID;
-    /// [`Error::Inner`] when the AP-REP or its enc-part does not decode, the enc-part decrypts
-    /// under neither `ticket_session` nor the context key, it does not echo this context's
-    /// authenticator time, or the acceptor subkey has an unknown etype or a wrong length.
     pub fn process_ap_rep(
         &mut self,
         token: &[u8],
@@ -745,22 +657,24 @@ impl GssContext {
         let ap: ApRep = decode(&inner[2..])?;
         let usage = KeyUsage::new(ku::AP_REP_ENC_PART)?;
         let cipher = ap.enc_part.cipher.as_ref();
-        // MIT `mutual_auth` (`init_sec_context.c:785-794`): ticket session, then subkey.
+        // MIT: `mutual_auth` (init_sec_context.c:785-794)
+        // ticket session, then subkey.
         let etype = ap.enc_part.etype;
         let plain = decrypt_enc_data(ticket_session, usage, etype, cipher)
             .or_else(|_| decrypt_enc_data(&self.session, usage, etype, cipher))?;
         let part: EncApRepPart = decode(&plain)?;
-        // MIT `krb5_rd_rep` (`rd_rep.c:106-111`): an AP-REP that does not echo the authenticator's time is not mutual authentication.
+        // MIT: `krb5_rd_rep` (rd_rep.c:106-111)
+        // an AP-REP that does not echo the authenticator's time is not mutual authentication.
         if let Some((ctime, cusec)) = &self.ap_req_time
             && (part.ctime != *ctime || part.cusec.get() != cusec.get())
         {
             return Err(Error::Inner("Mutual authentication failed".into()));
         }
-        // MIT `mutual_auth` (`init_sec_context.c:797-806`): the acceptor's sequence numbers start at the AP-REP's.
-        self.recv_seq = u64::from(part.seq_number.unwrap_or(0));
-        self.recv_seen = false;
-        self.recv_window.clear();
-        // MIT `mutual_auth` (`init_sec_context.c:808-825`): the acceptor's subkey is kept for a CFX or DCE context, or when its enctype is not the initiator subkey's.
+        self.recv = SeqState::new(
+            u64::from(part.seq_number.unwrap_or(0)),
+            self.gss_flags,
+            !pre_cfx(self.session.etype().to_iana()),
+        );
         if let Some(sk) = part.subkey {
             let et = EncryptionType::from_iana(sk.keytype)
                 .or_else(|_| EncryptionType::known(sk.keytype))?;
@@ -772,19 +686,21 @@ impl GssContext {
         Ok(())
     }
 
-    /// Session key established by the context (for tests and the acceptor binary).
     #[must_use]
     pub fn session_key(&self) -> &ProtocolKey {
         &self.session
     }
 
-    /// MIT `gss_krb5_get_tkt_flags` INITIAL bit.
+    #[must_use]
+    pub fn send_seq(&self) -> u64 {
+        self.send_seq
+    }
+
     #[must_use]
     pub fn ticket_is_initial(&self) -> bool {
         self.ticket_initial
     }
 
-    /// Remaining lifetime, GSS flags, and names.
     #[must_use]
     pub fn inquire_context(&self) -> InquireOk {
         InquireOk {
@@ -795,58 +711,35 @@ impl GssContext {
         }
     }
 
-    /// The ticket's end time, for an accepted context; `None` when it is not known.
     #[must_use]
     pub fn endtime(&self) -> Option<u32> {
         (self.lifetime_end != 0).then_some(self.lifetime_end)
     }
 
-    /// Remaining ticket lifetime in seconds (`0` if unknown or expired).
+    // MIT krb5_gss_context_time; see docs/parity/b1-gss.md
     #[must_use]
     pub fn lifetime(&self) -> u32 {
         if self.lifetime_end == 0 {
             return 0;
         }
-        let now = KerberosTime::now().unix_seconds();
-        self.lifetime_end.saturating_sub(now)
+        let now = i64::from(KerberosTime::now().unix_seconds());
+        let start = now - i64::from(self.acceptor_skew);
+        u32::try_from((i64::from(self.lifetime_end) - start).max(0)).unwrap_or(u32::MAX)
     }
 
-    /// Established GSS flags, including `GSS_C_TRANS`.
     #[must_use]
     pub fn gss_flags(&self) -> u32 {
         self.gss_flags | GSS_C_TRANS
     }
 
-    /// MIT libgssrpc INIT verifier may skip GSS seq 0 (discarded window MIC).
-    ///
-    /// Only the iprop RPCSEC client sets this. Default wrap/MIC stays strict.
-    pub fn allow_rpcsec_init_window(&mut self) {
-        self.rpcsec_init_window = true;
-    }
-
+    // MIT g_seqstate_check; see docs/parity/b1-gss.md
     pub(super) fn accept_seq(&mut self, seq: u64) -> Result<(), Error> {
-        if self.recv_window.contains(&seq) {
-            return Err(Error::Sequence);
+        // MIT returns a replayed, old or out-of-window token's message with a supplementary status; we refuse it.
+        let past = self.recv.do_replay && self.recv.past_window(seq);
+        match self.recv.check(seq) {
+            SeqStatus::Duplicate | SeqStatus::Old => Err(Error::Sequence),
+            SeqStatus::Unseq if past => Err(Error::Sequence),
+            SeqStatus::Complete | SeqStatus::Gap | SeqStatus::Unseq => Ok(()),
         }
-        if !self.recv_seen {
-            if seq != self.recv_seq && !self.rpcsec_init_window {
-                return Err(Error::Sequence);
-            }
-            self.recv_seen = true;
-            self.recv_window.insert(seq);
-            self.recv_seq = seq.wrapping_add(1);
-            return Ok(());
-        }
-        let next = self.recv_seq;
-        let too_old = seq.wrapping_add(SEQ_WINDOW) < next;
-        let too_new = seq >= next.wrapping_add(SEQ_WINDOW);
-        if too_old || too_new {
-            return Err(Error::Sequence);
-        }
-        self.recv_window.insert(seq);
-        if seq >= next {
-            self.recv_seq = seq.wrapping_add(1);
-        }
-        Ok(())
     }
 }

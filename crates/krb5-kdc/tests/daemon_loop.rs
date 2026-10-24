@@ -1,7 +1,8 @@
 //! The krb5-kdc daemon on MIT's one net-server loop: one thread however many clients hold a
 //! connection, SIGHUP reopens the log and keeps serving, and SIGTERM ends the loop with MIT's
 //! lines.
-//! MIT `main` (`kdc/main.c:1030-1032`): `verto_run` serves until a signal ends the loop, then "shutting down".
+// MIT: `main` (kdc/main.c:1030-1032)
+//! `verto_run` serves until a signal ends the loop, then "shutting down".
 
 #![cfg(target_os = "linux")]
 
@@ -96,7 +97,8 @@ impl Daemon {
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
-        // MIT `main` (`kdc/main.c:1027-1028`): "<prog>: starting..." on standard error once it serves.
+        // MIT: `main` (kdc/main.c:1027-1028)
+        // "<prog>: starting..." on standard error once it serves.
         let mut err = BufReader::new(child.stderr.take().unwrap());
         let mut line = String::new();
         while !line.ends_with("starting...\n") {

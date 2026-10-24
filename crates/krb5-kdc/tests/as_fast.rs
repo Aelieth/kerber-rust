@@ -2,14 +2,17 @@
 //! The tests drive the shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry points of a
 //! bootstrapped realm.
 //! A cookie minted under krbtgt kvno N still opens after a keepold rollover.
-//! MIT `kdc_fast_read_cookie` (`fast_util.c:545-611`): the cookie opens under the krbtgt key
+// MIT: `kdc_fast_read_cookie` (fast_util.c:545-611)
+//! the cookie opens under the krbtgt key
 //! of the kvno it carries, which the Rust side finds with `first_key_at_kvno`.
 //! The armor TGT is decrypted with the key MIT `krb5_ktkdb_get_entry` would find.
-//! MIT `krb5_ktkdb_get_entry` (`lib/kdb/keytab.c:157-157`): `krb5_dbe_find_enctype(entry,
+// MIT: `krb5_ktkdb_get_entry` (lib/kdb/keytab.c:157-157)
+//! `krb5_dbe_find_enctype(entry,
 //! xrealm ? etype : -1, -1, kvno)` pins the ticket kvno and skips non-permitted enctypes;
 //! a local TGS whose first permitted key is not similar to the ticket etype is
 //! `KRB5_KDB_NO_PERMITTED_KEY`.
-//! MIT `armor_ap_request` (`fast_util.c:52-59`): `krb5_rd_req` hands the armor's
+// MIT: `armor_ap_request` (fast_util.c:52-59)
+//! `krb5_rd_req` hands the armor's
 //! `KRB5_KDB_NO_PERMITTED_KEY` back, and it goes out as wire 60 `FIND_FAST`
 //! (`errcode_to_protocol`); no other krbtgt key is tried.
 
@@ -519,9 +522,11 @@ fn fast_as_exchange_strengthen_and_finished() {
 
 #[test]
 fn fast_hide_client_names_returns_the_anonymous_outer_client() {
-    // MIT `kdc_fast_hide_client` (`fast_util.c:444-444`): a FAST request that sets
+    // MIT: `kdc_fast_hide_client` (fast_util.c:444-444)
+    // a FAST request that sets
     // KRB5_FAST_OPTION_HIDE_CLIENT_NAMES (RFC 6113 bit 1) asks to hide the client.
-    // MIT `finish_process_as_req` (`do_as_req.c:324-324`): such a request is answered with
+    // MIT: `finish_process_as_req` (do_as_req.c:324-324)
+    // such a request is answered with
     // the anonymous principal WELLKNOWN/ANONYMOUS@WELLKNOWN:ANONYMOUS as the outer reply
     // client; the real client stays inside the FAST-armored reply, which still strengthens
     // and finishes. The option is not refused as UNKNOWN_CRITICAL_FAST_OPTION.
@@ -593,18 +598,20 @@ fn fast_as_forged_armor_realm_is_not_us() {
 fn encrypted_challenge_wrong_key_locks_at_max_fail() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    store.put_policy(NamedPolicy {
-        name: "chalock".into(),
-        min_length: 0,
-        min_classes: 0,
-        history: 0,
-        max_fail: 2,
-        pw_failcnt_interval: 0,
-        pw_lockout_duration: 0,
-        pw_min_life: 0,
-        pw_max_life: 0,
-        allowed_keysalts: None,
-    });
+    store
+        .put_policy(NamedPolicy {
+            name: "chalock".into(),
+            min_length: 0,
+            min_classes: 0,
+            history: 0,
+            max_fail: 2,
+            pw_failcnt_interval: 0,
+            pw_lockout_duration: 0,
+            pw_min_life: 0,
+            pw_max_life: 0,
+            allowed_keysalts: None,
+        })
+        .unwrap();
     store
         .set_principal_policy(&user, Some("chalock".into()))
         .unwrap();
@@ -635,7 +642,8 @@ fn encrypted_challenge_stale_ts_is_skew() {
     assert_eq!(issue_code(err), err::SKEW);
 }
 
-/// MIT `ec_verify` (`kdc/kdc_preauth_ec.c:121-128`): no replay cache, so a replayed challenge inside the skew verifies again and issues a new ticket.
+// MIT: `ec_verify` (kdc/kdc_preauth_ec.c:121-128)
+/// no replay cache, so a replayed challenge inside the skew verifies again and issues a new ticket.
 #[test]
 fn encrypted_challenge_replayed_blob_is_issued_again() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
@@ -1424,7 +1432,8 @@ fn armor_whose_session_enctype_the_kdc_does_not_permit_is_find_fast() {
     assert_find_fast(err, err::GENERIC, "FAST armor enctype not permitted");
 }
 
-/// MIT `ec_verify` (`kdc/kdc_preauth_ec.c:124-124`): only the timestamp is checked, against the clock skew; its pausec is taken as it is.
+// MIT: `ec_verify` (kdc/kdc_preauth_ec.c:124-124)
+/// only the timestamp is checked, against the clock skew; its pausec is taken as it is.
 #[test]
 fn encrypted_challenge_with_an_out_of_range_pausec_is_issued() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
@@ -1460,7 +1469,8 @@ fn encrypted_challenge_with_an_out_of_range_pausec_is_issued() {
 #[test]
 // oracle: differential-gate.sh as-fast-armored-data-etype-mismatch
 fn fast_armored_data_etype_mismatch_is_generic_find_fast() {
-    // MIT `kdc_find_fast` (`kdc/fast_util.c:191-194`): the armored data decrypts through `krb5_k_decrypt`, so another enctype than the armor key's is KRB5_BAD_ENCTYPE, 60 FIND_FAST.
+    // MIT: `kdc_find_fast` (kdc/fast_util.c:191-194)
+    // the armored data decrypts through `krb5_k_decrypt`, so another enctype than the armor key's is KRB5_BAD_ENCTYPE, 60 FIND_FAST.
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let (armor_ap, akey) = armor_ap_key(&armor_tgt(&store, 850), 0);
     let mut req = fast_challenge_req_with(&armor_ap, &akey, &user_key(), &KerberosTime::now(), 851);
@@ -1493,7 +1503,8 @@ fn fast_verify_failures(store: &PrincipalStore, req: &krb5_types::AsReq) -> Vec<
 
 #[test]
 fn encrypted_challenge_wrong_key_logs_the_incorrect_password_message() {
-    // MIT `ec_verify` (`kdc/kdc_preauth_ec.c:114-118`): no client key opens the challenge, and the module says why.
+    // MIT: `ec_verify` (kdc/kdc_preauth_ec.c:114-118)
+    // no client key opens the challenge, and the module says why.
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let zeros = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0u8; 32]).unwrap();
     let req = fast_challenge_req(&store, &zeros, &KerberosTime::now(), 841, 840);
@@ -1505,7 +1516,8 @@ fn encrypted_challenge_wrong_key_logs_the_incorrect_password_message() {
 
 #[test]
 fn encrypted_challenge_skew_logs_clock_skew() {
-    // MIT `ec_verify` (`kdc/kdc_preauth_ec.c:124-126`): a challenge outside the skew fails with `KRB5KRB_AP_ERR_SKEW`.
+    // MIT: `ec_verify` (kdc/kdc_preauth_ec.c:124-126)
+    // a challenge outside the skew fails with `KRB5KRB_AP_ERR_SKEW`.
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let stale = KerberosTime::now().add_seconds(-10_000).unwrap();
     let req = fast_challenge_req(&store, &user_key(), &stale, 851, 850);

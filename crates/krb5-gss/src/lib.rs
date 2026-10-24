@@ -1,11 +1,4 @@
-//! GSS-API Kerberos V5 mechanism (RFC 4121) and SPNEGO (RFC 4178).
-//!
-//! Interop with MIT `libgssapi_krb5` is out-of-process only. This crate
-//! never links C libraries.
-//!
-//! One module per MIT source family: `context` (init/accept), `wrap`,
-//! `mic`, `iov`, `export`, `spnego`, `deleg`, `oid`. In-src tests stay
-//! under `tests`.
+//! GSS-API Kerberos V5 (RFC 4121) and SPNEGO (RFC 4178); never links C libraries.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -17,6 +10,7 @@ mod export;
 mod iov;
 mod mic;
 mod oid;
+mod seqstate;
 mod spnego;
 mod wrap;
 
@@ -26,26 +20,18 @@ mod tests;
 use krb5_crypto::ProtocolKey;
 use thiserror::Error;
 
-/// GSS-API error.
 #[derive(Debug, Error)]
 pub enum Error {
-    /// Protocol / crypto.
     #[error("{0}")]
     Inner(String),
-    /// Integrity.
     #[error("gss integrity")]
     Integrity,
-    /// Token too short.
     #[error("gss truncated")]
     Truncated,
-    /// Sequence number replay or gap.
     #[error("gss sequence")]
     Sequence,
-    /// Channel bindings mismatch.
     #[error("gss channel bindings")]
     ChannelBindings,
-    /// `KRB5KRB_AP_ERR_NOT_US`: the ticket is for no principal the keytab serves under the name
-    /// given. The acceptor that holds several names tries the next on it.
     #[error("{0}")]
     NotUs(String),
 }
@@ -73,39 +59,27 @@ impl From<krb5_asn1::Error> for Error {
     }
 }
 
-/// Established GSS context (initiator or acceptor).
 pub struct GssContext {
     session: ProtocolKey,
-    /// MIT CFX acceptor subkey from AP-REP (`FLAG_ACCEPTOR_SUBKEY`).
     acceptor_subkey: Option<ProtocolKey>,
     send_seq: u64,
-    recv_seq: u64,
-    recv_seen: bool,
-    recv_window: std::collections::HashSet<u64>,
+    recv: seqstate::SeqState,
     initiator: bool,
-    /// MIT libgssrpc INIT may spend GSS seq 0 on a discarded window MIC.
-    rpcsec_init_window: bool,
-    /// Authenticated client `name@REALM` (set on accept; initiator from cname).
     pub client: Option<String>,
-    /// Delegated client from a 0x8003 KRB-CRED trailer (`GSS_C_DELEG_FLAG`).
     pub delegated: Option<String>,
     spnego_mech_list: Option<Vec<u8>>,
     lifetime_end: u32,
+    acceptor_skew: i32,
     gss_flags: u32,
-    /// Ticket INITIAL flag (`gss_krb5_get_tkt_flags` / `TKT_FLG_INITIAL`).
     ticket_initial: bool,
-    /// Ticket sname (`accept_sec_context` / CHANGEPW_SERVICE / kiprop).
     pub acceptor: Option<krb5_types::PrincipalName>,
-    /// Ticket realm (`check_rpcsec_auth` / `check_iprop_rpcsec_auth`).
     pub ticket_realm: Option<String>,
-    /// Ticket session for DCE third-leg `krb5_rd_rep_dce`.
     ap_rep_key: Option<ProtocolKey>,
     dce_style: bool,
-    /// The initiator's authenticator `ctime` / `cusec`, which its AP-REP must echo.
     ap_req_time: Option<(krb5_types::KerberosTime, krb5_types::Microseconds)>,
 }
 
-pub use context::{ChannelBindings, InquireOk, use_kdc_context};
+pub use context::{ChannelBindings, InquireOk};
 pub use deleg::DelegCred;
 pub use iov::{IovBuf, IovType};
 pub use oid::{

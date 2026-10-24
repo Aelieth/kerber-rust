@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The Rust KDC's OTP module through the example embedder krb5-otp-kdc (examples/otp-kdc: the KLLDAP seam in miniature, a
+# The Rust KDC's OTP module through the example embedder krb5-otp-kdc (examples/embed-realm: the KLLDAP seam in miniature, a
 # TOTP OtpVerifier), then MIT kinit -T and the Rust kinit against it, cell for cell as otp-gate.sh runs them against
 # MIT's KDC: the right code, a wrong code, end of file at the prompt with SPAKE and encrypted challenge offered, the
 # password path with [otp] indicator and require_auth, a bad [otp], MIT's server relation refused. The TOTP codes come from

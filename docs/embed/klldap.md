@@ -30,6 +30,11 @@ kerber-rust stays Apache-2.0 OR MIT; `publish = false`.
 | chrono 0.4, thiserror 2, tracing 0.1, sha2/hmac/md-5 0.10, zeroize 1, getrandom 0.2, serde 1 | already the same major |
 | rasn, aes/des/rc4/camellia/cmac, p256, md4, pbkdf2 | kerber-only (additive) |
 
+P-384 needs `--cfg p384_backend="fiat"` in klldap's own build too (its `.cargo/config.toml`:
+`[target.'cfg(all())'] rustflags = ["--cfg", "p384_backend=\"fiat\""]`). Our cargo config does not
+reach an embedder, and without the cfg kerber-rust refuses P-384 rather than use p384's default
+field, which is not constant-time.
+
 `rasn` is a normal `0.28` requirement (resolved **0.28.14**). MIT golden DER
 (`crates/krb5-protocol/tests/golden_traces.rs`) still byte-matches
 checked-in `tests/traces/mit-*.der`. Dual `getrandom` 0.2/0.4 remains
@@ -79,7 +84,7 @@ kerber-rust's `PrincipalStore`, so the directory stays the writer:
 | `ready` | the embedded listener's own state | KLLDAP probes TCP to the KDC port today |
 | `sync_principal` (chpass, else create) | `set_password`; `create_principal_3_in` for a new user | `user@REALM`, keys per `supported_enctypes` |
 | `delete_principal` (missing is Ok) | `remove_in` | the ACL-gated `delete` is for kadmind |
-| `set_principal_enabled` | `set_status` (sets / clears `KDB_DISALLOW_ALL_TIX`) | it also writes `pw_expire`: pass the current value |
+| `set_principal_enabled` | `set_status` (sets / clears `KDB_DISALLOW_ALL_TIX`) | it also writes `pw_expire`: pass the current value, and the directory's admin as the actor |
 | `export_keytab_for_keycloak` | `insert_new_randkey` when missing, then `ktadd_local_atomic` / `chrand_etypes_keepold_in` with aes256 + aes128, and `Keytab::write_file` | MIT's `ktadd` re-keys, so the kvno moves on every export |
 | persistence | `load_store` / `save_store` (dump-v7 text + a stash in MIT keytab form) | an existing KLLDAP volume is MIT db2: migrate once with MIT `kdb5_util dump`, then `krb5-kdb load` |
 | the KDC | `bind_udp_listeners` / `bind_tcp_listeners` on `KdcConf::kdc_udp_listeners` / `kdc_tcp_listeners`, then `serve_all_until` with the embedder's shutdown flag | not `serve` / `serve_all`: those install SIGTERM / SIGINT handlers; `serve_all_until` runs MIT's one loop on the thread that calls it, and a plugin module set for that thread alone does not apply while it runs |
@@ -93,7 +98,7 @@ KLLDAP 0.7.6's catalog (its domain-handlers policies module, `POLICY_ITEM_CATALO
 | `lockout-threshold` | kadm5 policy `max_fail` (`store/policy.rs` `max_fail_for`). `0` is no lockout. The KDC returns `LOCKED_OUT` / `CLIENT_REVOKED` from that count. |
 | `lockout-duration-seconds` | kadm5 policy `pw_lockout_duration` on the same policy. `0` lasts until a successful AS. |
 | `inactivity-days` | the KDC records `last_success` (`PrincipalRead::last_success_of`, `kdb.rs`). It does not disable a principal after N quiet days. `set_status` is how an account is enabled or disabled. |
-| `require-mfa` | OTP preauth (RFC 6560): the `otp` kdcpreauth module asks an embedder `OtpVerifier`; KLLDAP registers its TOTP check and writes the principal's `otp` attribute (`examples/otp-kdc` shows the path). MIT does not refuse a password login for a principal that keeps a key, so enforce with `require_auth` on the services to protect (or a `KdcPolicy`) and an indicator the `otp` attribute names or the type's `[otp]` `<type>` indicator; not on krbtgt, which would also refuse the keytab login that gets the FAST armor ticket. |
+| `require-mfa` | OTP preauth (RFC 6560): the `otp` kdcpreauth module asks an embedder `OtpVerifier`; KLLDAP registers its TOTP check and writes the principal's `otp` attribute (`examples/embed-realm`'s `krb5-otp-kdc` shows the path). MIT does not refuse a password login for a principal that keeps a key, so MFA is enforced one of three ways, each with the indicator the `otp` attribute names or the type's `[otp]` `<type>` indicator, and none on krbtgt (which would refuse the keytab login that gets the FAST armor ticket): **(a)** `require_auth = <indicator>` on each service to protect — MIT-native and per-service, but the client still gets a TGT and only the protected service refuses; **(b)** an embedder `KdcPolicy`, e.g. `examples/embed-realm`'s `require_mfa`, refusing the AS and the TGS of a flagged client whose ticket lacks the indicator (denial code 24, which neither reveals the password oracle nor skips the lockout count) — KDC-wide and strongest, but custom; **(c)** a keyless principal — no long-term key, so no password to fall back to, simplest but with no password path at all. |
 | `login-hours` | not built in. An embedder `KdcPolicy` denies outside the window. `check_as` / `check_tgs` are enough; the request time is the KDC's clock. |
 | `allowed-networks` | not built in. An embedder `KdcPolicy` reads the socket peer from `check_as_from` / `check_tgs_from`. That address is the accepted socket, not `request.addresses`. |
 
@@ -105,22 +110,29 @@ These are larger than a release touch-up and belong to the embed or a later
 kerber-rust point release:
 
 - **One store for the KDC and the admin verbs.** The KDC serves a
-  `SharedStore` (`Arc<RwLock<Box<dyn Store>>>`); the admin verbs above are
-  methods of the concrete `PrincipalStore` and are not on `dyn Store`. Today
-  the two meet through the dump file (the KDC's `reload_if_stale` re-reads it
-  after kadmind writes), which is the two-process model inside one process.
-- **kadmind as a library.** `Kadmind` and `serve_kadmind_until` run
-  kadmind's loop (kpasswd over UDP and TCP, kadm5 on its RPC listeners) on
-  the caller's thread over a `SharedDump`, as `krb5-kadmind` does; the
-  listener setup lives in the binary. An embedder serving kadm5 or
-  kpasswd from a `SharedDump` calls `PrincipalStore::init_pwqual` on the store
-  itself, as `krb5-kadmind` does at start; without it the realm's `dict_file`
-  is not applied. Remote MIT `kadmin` on 749 (which
-  the satomlin fleet uses for `addprinc -randkey` + `ktadd`) is that loop on
-  a thread beside the KDC's, or `krb5-kadmind` run beside KLLDAP.
-- **Bootstrap.** `PrincipalStore::bootstrap` creates a test user and admin with
-  passwords; KLLDAP wants krbtgt, `kadmin/*` and a random-key admin with no
-  password. Build it from `PrincipalStore::new` and `create_principal_3_in`.
+  `SharedStore` (`Arc<RwLock<dyn Store>>`); the admin verbs above are
+  methods of the concrete `PrincipalStore`, which a `SharedDump`
+  (`Arc<RwLock<PrincipalStore>>`) holds. A `SharedDump` is a `SharedStore`
+  too (`let kdc: SharedStore = dump.clone();`), so the KDC's loop and
+  kadmind's share one store and one lock. The trait writes and
+  `put_policy` / `delete_policy` commit themselves; every other write runs
+  inside `PrincipalStore::change` and is refused outside it before it touches
+  the store. A kadm5 hook runs after the write and must not take the store's
+  write guard.
+- **kadmind as a library.** `Kadmind::new` prepares the store, checks the
+  acceptor names, and takes the kpasswd key when the service set asks for it.
+  `Listeners::bind` binds the sockets, and `Kadmind::serve` runs the loop on
+  the caller's thread until a `Shutdown`. The binary's log is `KlogAdmin`;
+  an embedder passes `TracingAdmin` or its own `AdminLog`. Password-quality
+  modules and kadm5 hooks on `KadmindConfig` apply to that kadmind alone;
+  empty lists keep `register_pwqual` and `register_kadm5_hook`. Remote MIT
+  `kadmin` on 749 is that loop on a thread beside the KDC's, or
+  `krb5-kadmind` run beside KLLDAP.
+- **Bootstrap.** `bootstrap_realm_into` creates K/M, krbtgt, `kadmin/*` and a
+  random-key admin that requires pre-auth, and returns the admin keytab.
+  `create_database` writes the stash, then the lock files, then the database.
+  A re-run with a stash and no database reuses that master. A restart creates
+  nothing that is already there.
 - **`kadm5_hook`** is [`Kadm5Hook`](../../crates/krb5-kdc/src/store/kadm5_hook.rs):
   an embedder registers a module with `register_kadm5_hook`. The directory does
   not have to. **`kadm5_auth`** is still not implemented (`docs/parity/a4-kadmin.md`).

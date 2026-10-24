@@ -52,14 +52,10 @@ checks run on them as on MIT's. They are **not yet a drop-in** for MIT's in thes
   mapping; MIT's asks for S4U2Self by the user's certificate.
 - `klist` prints dates as the C locale does, where MIT's follow the locale, and an error not yet
   compared with MIT's tools may read differently from MIT's text.
-- `[libdefaults] request_timeout` is only checked (a malformed one stops a program, as MIT's
-  context does); its value is ignored.
 - `ktutil` `rkt` takes a filesystem path, where MIT's takes a keytab name; `addent` rejects `-s`
   and `-f`, and refuses a `-key` whose length is not the enctype's; a `!` line is passed over.
 - `kinit -k` with no principal asks for `host/<host name>` in the default realm, where MIT's asks
   for the host's canonical name.
-- `kinit` sends an expired password's change to the KDC's host on port 464, where MIT's sends it
-  to `kpasswd_server`, else `admin_server`; `kpasswd` ignores a port given in `kpasswd_server`.
 - With no enctypes in `krb5.conf` the default list is the four AES types; MIT's also has DES3, RC4
   and Camellia, so the two agree only where `krb5.conf` or Fedora's crypto-policies sets the list.
 - Of `kinit -X`'s attributes only `X509_user_identity` and `X509_anchors` act (one anchors file);
@@ -100,6 +96,10 @@ them. Run it as yourself.
 `sudo make install` installs that build and never compiles (sudo would not find your toolchain),
 and no install goal compiles as root: it stops if the build is missing or the sources are newer.
 Build on the distribution you install on: the programs link against its C library.
+`.cargo/config.toml` also sets `--cfg p384_backend="fiat"`, the constant-time field of the
+`p384` crate. A `RUSTFLAGS` of your own replaces the file's flags, so carry that one too:
+without it the build has no P-384 (keys, certificates and the key-exchange group are refused),
+and `krb5kdc` logs so at start.
 
 ## Install
 
@@ -232,6 +232,13 @@ about 1.2 seconds for its connection to be retried: with backlog 5, 24, 178 and 
 did at 10, 1,000 and 5,000 principals. At backlog 5, idle bursts wait too, as on
 MIT's KDC: 19, 46 and 67 of 500 at 10, 1,000 and 5,000 principals. With 128, none
 waited a second, on MIT's KDC or on kerber-rust.
+
+The KDC and kadmind read `kdc.conf` and `krb5.conf` once, when they start, so an edit takes a
+restart (SIGHUP reopens the logs only). As MIT's, `kdc.conf`'s `[libdefaults]` values come
+before `krb5.conf`'s, its `include` and `includedir` lines are followed, and section and relation
+names match only as written. `clockskew` there is both the KDC's and kpasswd's allowance for a
+client's clock (300 seconds by default). A relation MIT reads that kerber-rust does not, such as
+`master_key_name`, is named in the log when the daemon starts.
 
 `[plugins] kdcpreauth` `disable` and `enable_only` select the KDC's preauth
 modules by MIT's names (`encrypted_timestamp`, `encrypted_challenge`, `spake`,
@@ -370,7 +377,7 @@ the module loaded and fails that one mechanism; the others still run.
 
 ### OTP preauth
 
-A user can present a one-time code in place of a password: MIT `kinit -T <armor ccache>` asks for it. MIT's KDC asks a RADIUS server whether the code is good. kerber-rust does not: an embedder registers an `OtpVerifier` ([plugins.md](plugins.md), [the KLLDAP embed](embed/klldap.md)), and `krb5kdc` itself has none, so it refuses every code. Give `otp` to a principal only on a KDC that has a verifier: `kinit` offers the code whenever the KDC does, and does not fall back to the password.
+A user can present a one-time code in place of a password: MIT `kinit -T <armor ccache>` asks for it. MIT's KDC asks a RADIUS server whether the code is good. kerber-rust does not: an embedder registers an `OtpVerifier` ([plugins.md](plugins.md), [the KLLDAP embed](embed/klldap.md)), and `krb5kdc` itself has none, so it refuses every code. Give `otp` to a principal only on a KDC that has a verifier: `kinit` offers the code whenever the KDC does, and does not fall back to the password. The exchange verifies the code, not a password: MIT's RADIUS server, like an `OtpVerifier`, is handed the token value alone, so a principal that also keeps a key is not asked for it here. An embedder that wants both checks a `password‖code` value itself, as `examples/embed-realm` does.
 
 The principal needs `+requires_preauth` (Fedora's `default_principal_flags = +preauth` gives new ones the flag) and an `otp` string attribute, a JSON array of tokens that names a verifier and holds no secret. MIT `kadmin` strips quotes from a word, so the JSON's quotes are doubled inside one double-quoted word:
 
@@ -410,6 +417,50 @@ sudo kadmin.local -q "setstr host/files.$DOMAIN require_auth mfa"
 ```
 
 A ticket-granting ticket from a password login then cannot get a ticket for that service (`KDC policy rejects request`), nor can one if the OTP module is left out. On `krbtgt` the rule applies to every login, and the host-keytab login that fetches the armor ticket has no indicator either, so set it there only when the armor comes another way. A principal made keyless (`addprinc -nokey`) has no password to fall back on, and its verifier has to check any password itself. For some users only, an embedder's `KdcPolicy` checks the indicators in `check_as`.
+
+### PKINIT
+
+A user can log in with a certificate instead of a password: MIT `kinit -X
+X509_user_identity=FILE:alice.pem,alice.key alice`. The KDC uses your PKI, configured in kdc.conf as
+MIT's (`doc/admin/pkinit.rst`):
+
+```ini
+[kdcdefaults]
+    pkinit_identity = FILE:/var/kerberos/krb5kdc/kdc.pem,/var/kerberos/krb5kdc/kdc.key
+    pkinit_anchors = FILE:/var/kerberos/krb5kdc/cacert.pem
+```
+
+- **Keys.** The KDC's key, and a user's for kinit, is an EC key on P-224, P-256, P-384, P-521,
+  secp256k1 or brainpool P256, P384 or P512 (r1 or t1; P512 needs a 64-bit build), or an RSA key,
+  as MIT's guide makes it with `openssl genrsa`; RSA signs up to 16384 bits and five primes, as
+  OpenSSL does. Another key, such as one on brainpool P320, leaves PKINIT off. Client certificates
+  and their CAs may be RSA or EC on those curves, signed with SHA-256, SHA-384 or SHA-512.
+- Not supported in a client's certificate, its CAs or its signature, though MIT takes them through
+  OpenSSL: RSASSA-PSS. Such a chain is refused with 71 (`certificate signature failure`), such a
+  signature with 80. SHA-1 signatures are refused too, as Fedora's
+  DEFAULT crypto policy makes OpenSSL refuse them for MIT.
+- `pkinit_identity` is `FILE:cert[,key]`, `DIR:` (one `NAME.crt` with its `NAME.key`) or `ENV:`;
+  `pkinit_anchors` and `pkinit_pool` (the intermediate CAs) are `FILE:` or `DIR:`. A relation under
+  `[realms] REALM` wins over `[kdcdefaults]`.
+- The KDC certificate has the `id-pkinit-KPKdc` extended key usage and the PKINIT SAN
+  `krbtgt/REALM@REALM`, and chains to `pkinit_anchors`. A client certificate's PKINIT SAN names the
+  user, and it has the `id-pkinit-KPClientAuth` extended key usage and the digitalSignature key
+  usage: `pkinit_eku_checking = scLogin` also takes Microsoft's smart-card logon usage, and `none`
+  checks neither.
+- `pkinit_require_freshness`, `pkinit_indicator` and `pkinit_allow_upn` work as MIT's.
+  `pkinit_revoke`, `pkinit_require_crl_checking` and `pkinit_kdc_ocsp` are refused.
+- A principal's `pkinit_cert_match` string attribute (`kadmin setstr`) is a rule its certificate must
+  match, as MIT's, else the login is refused (66). A regular expression with a back-reference
+  (`\1` to `\9`) is refused (24).
+- If the identity or the anchors do not load, the KDC starts without PKINIT and logs MIT's line, for
+  example `preauth pkinit failed to initialize: PKINIT initialization failed: No pkinit_identity
+  supplied for realm EXAMPLE.COM`.
+
+A client needs the CA as `pkinit_anchors` in the realm's `krb5.conf` stanza. kerber-rust's kinit
+takes `FILE:`, `DIR:` and `ENV:` identities (`X509_user_identity`, else `pkinit_identities` in
+order) and picks the certificate by `pkinit_cert_match`, as MIT's does; its keys are P-256 EC or
+RSA, and only the first anchor is used. Anonymous PKINIT
+(`kinit -n`) uses the same KDC identity.
 
 ## Upgrading an MIT realm
 
@@ -605,10 +656,11 @@ release made, five things changed:
   one entry appended per change. Without iprop an earlier release's `principal.ulog` is no
   longer read or written and may be removed; with iprop the first program that maps it starts
   it over, so each replica takes one full dump (`kdb5_util dump -i1 FILE`, then
-  `kprop -f FILE REPLICA`, what MIT's kadmind runs). kadmind serves iprop on its own port and
-  nothing listens on `iprop_port`, so an MIT replica's `iprop_port` names kadmind's port. kadmind
-  grants a full resync but sends no dump: each one (after a policy change, or a replica the log
-  has run past) needs those two commands run by hand.
+  `kprop -f FILE REPLICA`, what MIT's kadmind runs). kadmind serves iprop on `iprop_listen` /
+  `iprop_port`, and on its kadm5 port too, as MIT's does; with `iprop_port` equal to kadmind's
+  port, iprop is not served at all, as MIT's is not. kadmind
+  dumps and sends on a full resync itself, as MIT's does: a policy change (which restarts the
+  log) or a replica the log has run past is served without those commands run by hand.
 
 Stop the daemons and install, and move the realm into the KDC directory only if it was kept
 elsewhere (leave `OLD` empty when it is already in `/var/kerberos/krb5kdc`):
@@ -679,9 +731,12 @@ update log and lock files, the stash, `kdc.conf` and `kadm5.acl`.
   MIT realm moves over with dump and load.
 - Replica KDCs: Fedora's `kprop.service` and MIT's `kpropd` daemon. `kprop` and `kpropd` are
   installed; `kpropd` opens the dump with the stash. `kpropd` takes MIT's `-r`, `-s` (else the
-  default keytab) and `-a` (else `kpropd.acl` in the KDC directory) and an address (without one
-  it listens on port 754 of every address, as MIT's does), not MIT's other options (`-f`, `-P`,
-  `--pid-file`, `-D`), and it does not detach. As MIT's, it accepts a ticket for its own
+  default keytab), `-a` (else `kpropd.acl` in the KDC directory), `-P` (else port 754, on every
+  address, as MIT's), `-A`, `-t`, `-d`, `-D` and `-S`, and an address of its own, not MIT's
+  `-f`, `-F`, `-p`, `-x` or `--pid-file`, and it does not detach. With `iprop_enable` it polls
+  the primary (`-A`, else `admin_server`) at `iprop_port` as `kiprop/<this host>`, with that
+  principal's keys from the same keytab, every `iprop_replica_poll`, as MIT's iprop mode does;
+  `-d` prints the poll's lines, not the listener's. As MIT's, it accepts a ticket for its own
   `host/<this host>` only, its name as MIT makes it without DNS: a hostname without a dot gains
   `qualify_shortname`, else the resolver's first search domain, and is lowercased. MIT's DNS
   canonicalization (`dns_canonicalize_hostname = true`, its default, and the second step of
@@ -694,12 +749,17 @@ update log and lock files, the stash, `kdc.conf` and `kadm5.acl`.
   `make install` installs no `kprop.service`.
 - SPAKE groups P-384 and P-521 (MIT's OpenSSL groups). `edwards25519`, the group Fedora's
   `krb5.conf` names and its `kdc.conf` challenges with, and P-256 work as MIT's.
-- RADIUS-backed OTP preauthentication (OTP works through an embedder's verifier: [OTP preauth](#otp-preauth)), PKINIT configured in `kdc.conf`, master key rollover
+- RADIUS-backed OTP preauthentication (OTP works through an embedder's verifier: [OTP preauth](#otp-preauth)), PKINIT
+  with RSA keys, `PKCS11:` or `PKCS12:` identities, or revocation lists ([PKINIT](#pkinit)), master key rollover
   (`kdb5_util add_mkey` and the other `*_mkey` commands), `kproplog`, `sclient` / `sserver`, and
   plugin modules (plugins are Rust traits: [plugins.md](plugins.md)).
 - `KEYRING:` credential caches in the tools `make install-clients` installs. `KCM:` (Fedora's
   default), `DIR:` and `FILE:` work, with their collections; the tools' other gaps are listed
   above.
+- One realm per KDC process. A second `-r` stops `krb5kdc` with `Only one realm per KDC process is supported`.
+- `krb5kdc -T` other than `0` stops with `-T (a clock offset for testing) is not supported`.
+- `krb5kdc -w N` is accepted and does nothing: one loop on the main thread serves every request.
+- `kadmind -proponly` with `iprop_enable` unset stops with `-proponly can only be used when iprop_enable is true`.
 
 ## Make variables
 

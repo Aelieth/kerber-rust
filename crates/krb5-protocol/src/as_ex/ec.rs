@@ -1,10 +1,4 @@
 //! The encrypted challenge clpreauth module (`lib/krb5/krb/preauth_ec.c`).
-//!
-//! It runs only inside FAST. The client proves its long-term key with a PA-ENC-TS-ENC encrypted
-//! in the client challenge key, KRB-FX-CF2(armor key, AS key, "clientchallengearmor",
-//! "challengelongterm"), key usage 54. The KDC answers with its own timestamp under the KDC
-//! challenge key (pepper "kdcchallengearmor", key usage 55), which the client decrypts and does
-//! not check further. The AS key stays the reply key; FAST strengthens it.
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{KeyUsage, ProtocolKey, decrypt_enc_data, encrypt, krb_fx_cf2};
@@ -13,16 +7,13 @@ use krb5_types::{EncryptedData, KerberosTime, Microseconds, PaData, PaEncTsEnc, 
 use crate::error::Error;
 use crate::trace::kdc_code;
 
-/// MIT's name of the encrypted challenge module (`preauth_ec.c`).
+/// MIT's module name.
 pub(super) const EC_MODULE: &str = "encrypted_challenge";
 
-/// MIT `ASN1_BAD_ID` (`asn1_err.et`): the code a KDC challenge that does not decode is traced
-/// with.
 const ASN1_BAD_ID: i64 = 1_859_794_438;
 
-/// The PA-ENC-TS-ENC of `sec`.`usec`; MIT encodes `pausec` only when it is not zero.
-/// MIT `pa_enc_ts_1` (`lib/krb5/asn.1/asn1_k_encode.c:935-935`): `pausec` is an `opt_int32`,
-/// which is omitted when 0.
+// MIT: `pa_enc_ts_1` (lib/krb5/asn.1/asn1_k_encode.c:935-935)
+/// pausec is omitted when 0.
 pub(super) fn pa_enc_ts(sec: &KerberosTime, usec: Microseconds) -> PaEncTsEnc {
     PaEncTsEnc {
         patimestamp: sec.clone(),
@@ -30,16 +21,8 @@ pub(super) fn pa_enc_ts(sec: &KerberosTime, usec: Microseconds) -> PaEncTsEnc {
     }
 }
 
-/// The client's PA-ENCRYPTED-CHALLENGE: the timestamp encrypted in the client challenge key.
-/// MIT `ec_process` (`lib/krb5/krb/preauth_ec.c:96-145`): with no padata from the KDC, the
-/// timestamp MIT's `get_preauth_time` gives is encoded, encrypted under KRB-FX-CF2(armor key,
-/// AS key, "clientchallengearmor", "challengelongterm") with key usage 54, and sent as
-/// PA-ENCRYPTED-CHALLENGE; no fallback follows it.
-///
-/// # Errors
-///
-/// [`Error::Crypto`] when the challenge key cannot be derived or the encryption fails;
-/// [`Error::Asn1`] when the timestamp or its EncryptedData does not encode.
+// MIT: `ec_process` (lib/krb5/krb/preauth_ec.c:96-145)
+/// CF2 of the armor key and the AS key, usage 54.
 pub(super) fn client_challenge(
     armor_key: &ProtocolKey,
     as_key: &ProtocolKey,
@@ -68,13 +51,8 @@ pub(super) fn client_challenge(
     })
 }
 
-/// The KDC's PA-ENCRYPTED-CHALLENGE in the reply, decrypted under the KDC challenge key; the
-/// code the module returns, 0 when it decrypts.
-/// MIT `ec_process` (`lib/krb5/krb/preauth_ec.c:64-95`): padata from the KDC is decoded and
-/// decrypted under KRB-FX-CF2(armor key, AS key, "kdcchallengearmor", "challengelongterm") with
-/// key usage 55; the timestamp inside is not checked.
-/// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:679-712`): on the reply a module's failure is
-/// traced and noted, and the reply is processed on, so it fails nothing.
+// MIT: `process_pa_data` (lib/krb5/krb/preauth2.c:679-712)
+/// A non-zero code is noted, and the reply is still accepted.
 pub(super) fn verify_kdc_challenge(
     armor_key: &ProtocolKey,
     as_key: &ProtocolKey,
@@ -91,7 +69,8 @@ pub(super) fn verify_kdc_challenge(
     ) else {
         return KRB5_BAD_ENCTYPE;
     };
-    // MIT `krb5_k_decrypt` (`lib/crypto/krb/decrypt.c:45-52`): ciphertext of another enctype is `KRB5_BAD_ENCTYPE`, a short one `KRB5_BAD_MSIZE`.
+    // MIT: `krb5_k_decrypt` (lib/crypto/krb/decrypt.c:45-52)
+    // Another enctype is KRB5_BAD_ENCTYPE, a short one KRB5_BAD_MSIZE.
     let decrypted = KeyUsage::new(ku::ENC_CHALLENGE_KDC)
         .and_then(|usage| decrypt_enc_data(&key, usage, enc.etype, enc.cipher.as_ref()));
     match decrypted {
@@ -102,15 +81,11 @@ pub(super) fn verify_kdc_challenge(
     }
 }
 
-/// MIT `KRB5_BAD_ENCTYPE` (`krb5_err.et`), "Bad encryption type".
 const KRB5_BAD_ENCTYPE: i64 = crate::trace::ERROR_TABLE_BASE_KRB5 + 188;
 
-/// MIT `KRB5_BAD_MSIZE` (`krb5_err.et`), "Message size is incompatible with encryption type".
 const KRB5_BAD_MSIZE: i64 = crate::trace::ERROR_TABLE_BASE_KRB5 + 190;
 
-/// What the module returns for the reply's PA-ENCRYPTED-CHALLENGE, `None` when the reply has none.
-/// MIT `init_creds_step_reply` (`lib/krb5/krb/get_in_tkt.c:1799-1803`): the reply padata goes
-/// through the modules with no preauth type restricted.
+/// None when the reply has none, an empty value included.
 pub(super) fn reply_code(
     padata: &[PaData],
     armor_key: &ProtocolKey,

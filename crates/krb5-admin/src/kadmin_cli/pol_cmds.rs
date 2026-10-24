@@ -7,19 +7,15 @@ use krb5_kdc::Error;
 use super::{Session, atoi, texts};
 use crate::{PolicyArgs, getdate};
 
-/// The record `kadmin_parse_policy_args` fills; `clear_keysalts` for `-allowedkeysalts -`.
 struct PolArgs {
     args: PolicyArgs,
     clear_keysalts: bool,
 }
 
-/// A count option's value: C `atoi`, a negative one held as 0 (both fail the same floors).
 fn count(v: &str) -> u32 {
     u32::try_from(atoi(v).max(0)).unwrap_or(u32::MAX)
 }
 
-/// MIT `kadmin_parse_policy_args` (`kadmin.c:1596-1696`): option and value pairs, then the
-/// policy name; `None` after printing what MIT prints there.
 fn parse_policy_args(s: &mut Session<'_>, argv: &[String], caller: &str) -> Option<PolArgs> {
     let argc = argv.len();
     let now = getdate::now();
@@ -78,7 +74,8 @@ fn usage(s: &mut Session<'_>, func: &str) {
     }
 }
 
-/// MIT `kadmin_addpol` (`kadmin.c:1711-1729`): the options parsed, then `kadm5_create_policy`.
+// MIT: `kadmin_addpol` (kadmin.c:1711-1729)
+/// the options parsed, then `kadm5_create_policy`.
 pub(crate) fn addpol(s: &mut Session<'_>, argv: &[String]) {
     let Some(a) = parse_policy_args(s, argv, "add_policy") else {
         usage(s, "add_policy");
@@ -89,7 +86,7 @@ pub(crate) fn addpol(s: &mut Session<'_>, argv: &[String]) {
         let exists = st.policies().contains_key(&a.args.name);
         let pol = crate::kadm5::create_policy_local(exists, &a.args)
             .map_err(|t| Error::InvalidArgument(t.to_owned()))?;
-        st.put_policy_and_save(pol)
+        st.put_policy(pol)
     });
     if let Err(e) = done {
         s.io.com_err(
@@ -100,7 +97,8 @@ pub(crate) fn addpol(s: &mut Session<'_>, argv: &[String]) {
     }
 }
 
-/// MIT `kadmin_modpol` (`kadmin.c:1732-1750`): the options parsed, then `kadm5_modify_policy`.
+// MIT: `kadmin_modpol` (kadmin.c:1732-1750)
+/// the options parsed, then `kadm5_modify_policy`.
 pub(crate) fn modpol(s: &mut Session<'_>, argv: &[String]) {
     let Some(a) = parse_policy_args(s, argv, "modify_policy") else {
         usage(s, "modify_policy");
@@ -118,7 +116,7 @@ pub(crate) fn modpol(s: &mut Session<'_>, argv: &[String]) {
         if a.clear_keysalts {
             pol.allowed_keysalts = None;
         }
-        st.put_policy_and_save(pol)
+        st.put_policy(pol)
     });
     if let Err(e) = done {
         s.io.com_err(
@@ -129,8 +127,8 @@ pub(crate) fn modpol(s: &mut Session<'_>, argv: &[String]) {
     }
 }
 
-/// MIT `kadmin_delpol` (`kadmin.c:1753-1776`): `-force`, else the `yes` question; the error is
-/// prefixed `delete_policy:` with its colon, as MIT's `com_err` call spells it.
+// MIT: `kadmin_delpol` (kadmin.c:1753-1776)
+/// `-force`, else the `yes` question; the error is prefixed `delete_policy:` with its colon, as MIT's `com_err` call spells it.
 pub(crate) fn delpol(s: &mut Session<'_>, argv: &[String]) {
     let argc = argv.len();
     if !(argc == 2 || (argc == 3 && argv[1] == "-force")) {
@@ -167,8 +165,6 @@ pub(crate) fn delpol(s: &mut Session<'_>, argv: &[String]) {
     }
 }
 
-/// MIT `kadmin_getpol` (`kadmin.c:1779-1822`): the policy, or with `-terse` its fields
-/// tab-separated.
 pub(crate) fn getpol(s: &mut Session<'_>, argv: &[String]) {
     let argc = argv.len();
     if !(argc == 2 || (argc == 3 && argv[1] == "-terse")) {
@@ -247,8 +243,8 @@ pub(crate) fn getpol(s: &mut Session<'_>, argv: &[String]) {
     s.io.print(&o);
 }
 
-/// MIT `kadmin_getpols` (`kadmin.c:1825-1844`): the policy names, sorted, matching the glob.
-/// MIT `glob_to_regexp` (`svr_iters.c:55-109`): an empty glob is `^$`, which no name matches.
+// MIT: `kadmin_getpols` (kadmin.c:1825-1844)
+/// the policy names, sorted, matching the glob.
 pub(crate) fn getpols(s: &mut Session<'_>, argv: &[String]) {
     let expr = match argv {
         [_] => None,

@@ -1,5 +1,6 @@
 //! The string-to-key inputs an error's padata sets.
-//! MIT `k5_get_etype_info` (`lib/krb5/krb/preauth2.c:790-854`): etype-info2, else etype-info, else the salt elements `get_salt` reads.
+// MIT: `k5_get_etype_info` (lib/krb5/krb/preauth2.c:790-854)
+//! etype-info2, else etype-info, else the salt elements `get_salt` reads.
 
 use super::{S2kMaterial, select_s2k_after};
 use crate::error::Error;
@@ -81,13 +82,10 @@ fn etype_info2_names_the_first_requested_enctype_it_lists() {
 
 #[test]
 fn etype_info_that_names_no_requested_enctype_fails_as_mit_does() {
-    // A valid enctype the request did not ask for: KRB5_CONFIG_ETYPE_NOSUPP.
     let got = after(Some(vec![info2(&[23], None)]), prev());
     assert_eq!(got, Err(Error::ConfigEtypeNosupp));
-    // No enctype this client has at all: KRB5_PROG_ETYPE_NOSUPP.
     let got = after(Some(vec![info2(&[999], None)]), prev());
     assert_eq!(got, Err(Error::ProgEtypeNosupp));
-    // ETYPE-INFO is read the same way when there is no ETYPE-INFO2.
     let old = vec![EtypeInfoEntry {
         etype: 999,
         salt: None,
@@ -110,7 +108,6 @@ fn without_etype_info_a_salt_element_sets_the_salt_alone() {
             Some(vec![0, 0, 16, 0])
         )
     );
-    // An afs3-salt ends at '@', drops a trailing NUL, and asks for AFS string-to-key.
     let got = after(
         Some(vec![pa_of(pa::AFS3_SALT, b"CELL@REALM\0".to_vec())]),
         prev(),
@@ -126,7 +123,6 @@ fn without_etype_info_a_salt_element_sets_the_salt_alone() {
 fn nothing_named_leaves_what_an_earlier_error_set() {
     assert_eq!(after(None, prev()).unwrap(), prev());
     assert_eq!(after(Some(Vec::new()), prev()).unwrap(), prev());
-    // An etype-info element that does not decode counts as absent.
     let got = after(
         Some(vec![
             pa_of(pa::ETYPE_INFO2, Vec::new()),

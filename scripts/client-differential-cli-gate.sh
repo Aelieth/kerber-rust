@@ -925,6 +925,37 @@ fi
 echo "MIT_kinit_validate"
 echo "RUST_kinit_validate"
 
+echo "==== kinit -R TGS options (val_renew.c RENEW) ===="
+docker exec -e KRB5_CONFIG=/tmp/direct-krb5.conf "$NAME" \
+    sh -c "printf 'userpassword\n' | kinit -r 12h -c /tmp/cc_mit_ren user@KERBER.TEST" \
+    || die "MIT kinit -r for renew failed"
+docker exec -e KRB5_CONFIG=/tmp/direct-krb5.conf -e KRB5_PASSWORD=userpassword "$NAME" \
+    /tmp/krb5-kinit -r 12h -c /tmp/cc_rust_ren user@KERBER.TEST \
+    || die "Rust kinit -r for renew failed"
+reset_cap
+docker exec -e KRB5_CONFIG=/tmp/proxy-krb5.conf "$NAME" \
+    kinit -R -c /tmp/cc_mit_ren user@KERBER.TEST \
+    || die "MIT kinit -R failed"
+save_cap mit-renew
+reset_cap
+docker exec -e KRB5_CONFIG=/tmp/proxy-krb5.conf "$NAME" \
+    /tmp/krb5-kinit -R -c /tmp/cc_rust_ren user@KERBER.TEST \
+    || die "Rust kinit -R failed"
+save_cap rust-renew
+MIT_REN_OPTS="$(tgs_kdc_options /tmp/cdiff/mit-renew.jsonl)"
+RUST_REN_OPTS="$(tgs_kdc_options /tmp/cdiff/rust-renew.jsonl)"
+echo "MIT_REN_OPTS=$MIT_REN_OPTS"
+echo "RUST_REN_OPTS=$RUST_REN_OPTS"
+echo "$MIT_REN_OPTS" | grep -q "'renew'" \
+    || die "MIT kinit -R missing renew ($MIT_REN_OPTS)"
+echo "$RUST_REN_OPTS" | grep -q "'renew'" \
+    || die "Rust kinit -R missing renew ($RUST_REN_OPTS)"
+if [ "$MIT_REN_OPTS" != "$RUST_REN_OPTS" ]; then
+    die "kinit -R kdc_options MIT=$MIT_REN_OPTS Rust=$RUST_REN_OPTS"
+fi
+echo "MIT_kinit_renew"
+echo "RUST_kinit_renew"
+
 echo "==== acceptor transited skip on same-realm (rd_req_dec.c) ===="
 # Same-realm MIT tickets have an empty transited field (klist Flags: FI,
 # no T). The acceptor skip is the empty-field arm; T is for cross-realm.

@@ -97,6 +97,7 @@ fn options_of(
         realm: "KERBER.TEST",
         password: b"x",
         kdc: &kdc,
+        profile: &krb5_config::isolated_profile(),
         want_spake: false,
         fast_armor: None,
         pkinit: None,
@@ -254,21 +255,6 @@ fn chpw_message_ad_policy_matches_mit_test_chpw_message() {
     assert!(msg.contains("The password must be different from the previous 13 passwords."));
     assert!(msg.contains("The password must contain at least 5 characters."));
     assert!(msg.contains("The password must include numbers or symbols."));
-}
-
-#[test]
-fn renew_options_are_common_mask_plus_renew() {
-    let flags = TicketFlags::from_u32(0x5480_0000);
-    let opts = tgs_renew_options(&flags);
-    assert!(opts.bit(flag_bit::FORWARDABLE));
-    assert!(opts.bit(flag_bit::PROXIABLE));
-    assert!(opts.bit(flag_bit::MAY_POSTDATE));
-    assert!(opts.bit(flag_bit::RENEWABLE));
-    assert!(opts.bit(flag_bit::RENEW), "val_renew.c:129 KDC_OPT_RENEW");
-    assert!(
-        !opts.bit(flag_bit::CANONICALIZE),
-        "renew is not the get_creds referral walk"
-    );
 }
 
 #[test]

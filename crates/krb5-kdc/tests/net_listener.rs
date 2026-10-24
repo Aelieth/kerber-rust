@@ -1,7 +1,9 @@
 //! MIT `net-server.c` dispatch suffix strings.
-//! MIT `process_packet_response` (`net-server.c:1101-1105`): a UDP dispatch failure is logged
+// MIT: `process_packet_response` (net-server.c:1101-1105)
+//! a UDP dispatch failure is logged
 //! `while dispatching (udp)` and gets no reply.
-//! MIT `process_stream_response` (`net-server.c:1314-1317`): a TCP dispatch failure is logged
+// MIT: `process_stream_response` (net-server.c:1314-1317)
+//! a TCP dispatch failure is logged
 //! `while dispatching (tcp)` and the connection is dropped.
 //! MIT `net-server.c` TCP `bufsiz` 1 MiB, `FIELD_TOOLONG` at `msglen > bufsiz-4`.
 //! Persist round-trip and UDP listener adversarial tests.
@@ -110,7 +112,8 @@ fn udp_listener_answers_wrong_password() {
 
 #[test]
 fn listener_retransmit_resends_the_cached_reply_like_replay_c() {
-    // MIT `dispatch` (`dispatch.c:114-140`): with the kdc/replay.c lookaside, an identical
+    // MIT: `dispatch` (dispatch.c:114-140)
+    // with the kdc/replay.c lookaside, an identical
     // request resent to the listener is answered from the cache, so the second reply is
     // byte-for-byte the first, not a freshly minted AS-REP (new session key).
     use std::io::{Read, Write};
@@ -352,8 +355,10 @@ fn the_loop_does_not_take_a_slot_set_on_its_thread() {
         set_thread_policy(Arc::new(ThreadPolicy { panics }));
         let own = |nonce| {
             let (store, _) = bootstrap_documented().unwrap();
-            std::panic::catch_unwind(|| krb5_kdc::issue_as(&store, &documented_as_req(nonce)))
-                .map_or(true, |r| r.is_err())
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                krb5_kdc::issue_as(&store, &documented_as_req(nonce))
+            }))
+            .map_or(true, |r| r.is_err())
         };
         assert!(own(1), "the slot applies to this thread's own calls");
         let reply = served_on_this_thread(2);
@@ -586,7 +591,8 @@ fn tcp_as_answers(addr: std::net::SocketAddr) -> bool {
 
 #[test]
 fn kdc_listen_list_is_served_on_every_address_like_mit() {
-    // MIT `loop_add_addresses` (`lib/apputils/net-server.c:381-433`): every entry of a list
+    // MIT: `loop_add_addresses` (lib/apputils/net-server.c:381-433)
+    // every entry of a list
     // is added, and `kdc_tcp_listen` is its own list; the first-binds-wins candidate walk
     // answered on one address only.
     use krb5_kdc::{bind_tcp_listeners, bind_udp_listeners, serve_all};
@@ -597,7 +603,8 @@ fn kdc_listen_list_is_served_on_every_address_like_mit() {
     let udp = bind_udp_listeners(&conf.kdc_udp_listeners().unwrap()).unwrap();
     let tcp = bind_tcp_listeners(&conf.kdc_tcp_listeners().unwrap()).unwrap();
     assert_eq!((udp.len(), tcp.len()), (2, 2));
-    // MIT `setup_socket` (`lib/apputils/net-server.c:861-875`): only a wildcard socket asks for pktinfo.
+    // MIT: `setup_socket` (lib/apputils/net-server.c:861-875)
+    // only a wildcard socket asks for pktinfo.
     assert!(!udp.iter().any(asks_pktinfo));
     let udp_addrs: Vec<_> = udp.iter().map(|s| s.local_addr().unwrap()).collect();
     let tcp_addrs: Vec<_> = tcp.iter().map(|s| s.local_addr().unwrap()).collect();
@@ -665,8 +672,10 @@ fn asks_pktinfo(sock: &UdpSocket) -> bool {
 
 #[test]
 fn the_wildcard_is_an_ipv4_and_an_ipv6_only_socket_on_one_port_like_mit() {
-    // MIT `setup_addresses` (`lib/apputils/net-server.c:1011-1036`): both addresses of the wildcard are set up.
-    // MIT `create_server_socket` (`lib/apputils/net-server.c:647-658`): the IPv6 one is `IPV6_V6ONLY`.
+    // MIT: `setup_addresses` (lib/apputils/net-server.c:1011-1036)
+    // both addresses of the wildcard are set up.
+    // MIT: `create_server_socket` (lib/apputils/net-server.c:647-658)
+    // the IPv6 one is `IPV6_V6ONLY`.
     // So `0.0.0.0` and `[::]` bind on one port whatever `net.ipv6.bindv6only` says.
     use krb5_kdc::{bind_rpc_listeners, bind_tcp_listeners, bind_udp_listeners};
     let want = if ipv6_host() { 2 } else { 1 };
@@ -731,9 +740,12 @@ fn bare_port_listens_on_ipv4_and_ipv6_like_mit() {
 
 #[test]
 fn listener_setup_logs_mits_lines() {
-    // MIT `setup_socket` (`lib/apputils/net-server.c:813-815`): each setup is logged at debug.
-    // MIT `create_server_socket` (`lib/apputils/net-server.c:647-658`): each IPv6 socket's `IPV6_V6ONLY` is logged with its descriptor.
-    // MIT `create_server_socket` (`lib/apputils/net-server.c:660-666`): a bind that fails is logged with the address, then as a failed setup and a failed network.
+    // MIT: `setup_socket` (lib/apputils/net-server.c:813-815)
+    // each setup is logged at debug.
+    // MIT: `create_server_socket` (lib/apputils/net-server.c:647-658)
+    // each IPv6 socket's `IPV6_V6ONLY` is logged with its descriptor.
+    // MIT: `create_server_socket` (lib/apputils/net-server.c:660-666)
+    // a bind that fails is logged with the address, then as a failed setup and a failed network.
     use krb5_kdc::{bind_rpc_listeners, bind_tcp_listeners, bind_udp_listeners};
     use krb5_log::klog;
     use std::os::fd::AsRawFd;
@@ -759,8 +771,17 @@ fn listener_setup_logs_mits_lines() {
         let line = format!("(debug): Setting pktinfo on socket {a}\n");
         assert!(text.contains(&line), "{line}in\n{text}");
     }
-    for port in [tcp_port, rpc_port] {
-        assert!(!text.contains(&format!("pktinfo on socket 0.0.0.0:{port}\n")));
+    // A UDP socket and a TCP or RPC socket can share a port number. The
+    // pktinfo line names the address, so the check follows the socket kind.
+    let udp_addrs: Vec<std::net::SocketAddr> =
+        udp.iter().map(|s| s.local_addr().unwrap()).collect();
+    for sock in tcp.iter().chain(rpc.iter()) {
+        let addr = sock.local_addr().unwrap();
+        if udp_addrs.contains(&addr) {
+            continue;
+        }
+        let line = format!("pktinfo on socket {addr}\n");
+        assert!(!text.contains(&line), "{line}in\n{text}");
     }
     let v6_fds: Vec<i32> = udp
         .iter()
@@ -808,7 +829,8 @@ fn udp_exchange(
 
 #[test]
 fn a_udp_reply_leaves_from_the_address_the_request_was_sent_to_like_mit() {
-    // MIT `send_to_from` (`lib/apputils/udppktinfo.c:443-474`): a wildcard socket's reply leaves from the request's destination.
+    // MIT: `send_to_from` (lib/apputils/udppktinfo.c:443-474)
+    // a wildcard socket's reply leaves from the request's destination.
     // A client whose UDP socket is connected to that address, as MIT's is, takes no reply from any other.
     use krb5_kdc::{bind_udp_listeners, serve_all};
     let mut entries = vec![ListenAddr {

@@ -1,22 +1,4 @@
-//! `kadm5_create_principal_3` applies the `kadm5_principal_ent_rec`
-//! fields under the request mask and the ACL restrictions are imposed on the
-//! *request* before the create/modify runs (`impose_restrictions`, called from
-//! `stub_auth_restrict`).
-//! MIT `kadm5_create_principal_3` (`svr_principal.c:376-420`): a field under the request mask
-//! is taken from the request, else from the server defaults.
-//! MIT `impose_restrictions` (`kadmin/server/auth.c:205-265`): the ACL restrictions rewrite
-//! the request's fields and mask.
-//! MIT `auth_restrict` (`kadmin/server/auth.c:267-272`): takes the request's entry and mask,
-//! which it may rewrite.
-//! MIT `create_principal_2_svc` (`server_stubs.c:478-478`): `stub_auth_restrict` runs on the
-//! request before the create.
-//! MIT `create_principal3_2_svc` (`server_stubs.c:519-519`): `stub_auth_restrict` runs on
-//! the request before the create.
-//! MIT `modify_principal_2_svc` (`server_stubs.c:630-630`): `stub_auth_restrict` runs on the
-//! request before the modify.
-//! Every assertion is on the stored entry read back through the RPC path, so a field the
-//! server accepts and then drops fails. A reserved TL type on create writes nothing, and a
-//! dump carries no TL type at or above 0x10000.
+//! `kadm5_create_principal_3` applies the `kadm5_principal_ent_rec` fields under the request mask and the ACL restrictions are imposed on the *request* before the create/modify runs (`impose_restrictions`, called from `stub_auth_restrict`).
 
 #[path = "common/mod.rs"]
 mod common;
@@ -174,7 +156,7 @@ fn kadm5_create_applies_every_masked_field() {
     assert_eq!(create(&mut r, &args), 0);
     let p = stored(&r, "z1u");
     assert_eq!(p.attributes, KDB_DISALLOW_ALL_TIX | KDB_REQUIRES_PRE_AUTH);
-    assert!(p.locked, "DISALLOW_ALL_TIX mirrors into `locked`");
+    assert!(p.locked(), "DISALLOW_ALL_TIX mirrors into `locked`");
     assert_eq!(p.max_life, 3600);
     assert_eq!(
         p.max_renewable_life, 0,
@@ -195,7 +177,7 @@ fn kadm5_create_without_mask_bits_takes_realm_defaults() {
     let mut r = rig("admin@KERBER.TEST *\n", |s| {
         let mut pol = NamedPolicy::new("z1pw");
         pol.pw_max_life = 30 * 86400;
-        s.put_policy(pol);
+        s.put_policy(pol).unwrap();
     });
     let (realm_max_life, realm_max_rlife) = {
         let g = r.store.read().unwrap();
@@ -220,7 +202,6 @@ fn kadm5_create_without_mask_bits_takes_realm_defaults() {
         KDB_REQUIRES_PRE_AUTH,
         "params.flags (the realm default flags)"
     );
-    // `:397-400`: a policy with pw_max_life sets pw_expiration = now + it.
     let t0 = now();
     let args = ent_args(
         &format!("z1p@{TEST_REALM}"),
@@ -246,7 +227,7 @@ fn acl_policy_restriction_is_enforced_on_create() {
         |s| {
             let mut pol = NamedPolicy::new("shortpol");
             pol.min_length = 8;
-            s.put_policy(pol);
+            s.put_policy(pol).unwrap();
         },
     );
     let args = ent_args(

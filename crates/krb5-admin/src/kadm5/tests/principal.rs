@@ -98,18 +98,14 @@ fn modify_foreign_realm_existing_user_is_unk_princ() {
     assert_eq!(ret_code(&local), 0);
 }
 
-/// MIT `kadm5_create_principal_3` `passwd_check`: `empty` rejects without a policy as
-/// `KADM5_PASS_Q_TOOSHORT`; `princ` rejects a component match under a policy as
-/// `KADM5_PASS_Q_DICT`; a rejected create leaves no entry.
-/// MIT `kadm5_create_principal_3` (`svr_principal.c:370-370`): `passwd_check` runs with the
-/// loaded policy, or none, before the entry is stored.
 #[test]
 fn create_runs_pwqual_modules_before_the_entry_exists() {
     let (store, acl, actor) = setup();
     store
         .write()
         .unwrap()
-        .put_policy(krb5_kdc::NamedPolicy::new("pq"));
+        .put_policy(krb5_kdc::NamedPolicy::new("pq"))
+        .unwrap();
     let empty = dispatch_kadm5(
         &store,
         &acl,
@@ -137,7 +133,6 @@ fn create_runs_pwqual_modules_before_the_entry_exists() {
     )
     .unwrap();
     assert_eq!(ret_code(&realm), KADM5_PASS_Q_DICT);
-    // Without a policy the princ module does not run.
     let nopol = dispatch_kadm5(
         &store,
         &acl,
@@ -346,7 +341,7 @@ fn modprinc_sets_requires_preauth_bit() {
     assert_eq!(ret_code(&out), 0);
     let g = store.read().unwrap();
     let p = g.get_name(&extra).unwrap();
-    assert!(p.requires_preauth);
+    assert!(p.requires_preauth());
     assert_eq!(p.max_life, 3600);
 }
 
@@ -388,8 +383,6 @@ fn modprinc_sets_max_rlife() {
     assert_eq!(g.get_name(&extra).unwrap().max_renewable_life, 86_400);
 }
 
-/// `modprinc -kvno 5` on a principal holding kvno 1 and 2 keys leaves every key at kvno 5, and
-/// a modify without `KADM5_KVNO` leaves the kvnos alone.
 #[test]
 fn modprinc_kvno_sets_every_keys_version() {
     let (store, acl, actor) = setup();
@@ -433,8 +426,6 @@ fn modprinc_kvno_sets_every_keys_version() {
     assert_eq!(kvnos(), [5]);
 }
 
-/// An empty list expression lists nothing, as MIT's `^@.*$` / `^$` regexps match no name, while
-/// no expression and `*` list everything.
 #[test]
 fn empty_list_expression_lists_nothing() {
     let (store, acl, actor) = setup();
@@ -454,7 +445,6 @@ fn empty_list_expression_lists_nothing() {
         assert!(count(proc, Some("*")) > 0, "proc {proc}");
         assert_eq!(count(proc, None), count(proc, Some("*")), "proc {proc}");
     }
-    // kadmin.local's lists go through the same MIT filter.
     let mut g = store.write().unwrap();
     let sess = AdminSession::local(&mut g, &acl, actor.clone());
     assert_eq!(sess.list_ids_glob(Some("")), Vec::<String>::new());

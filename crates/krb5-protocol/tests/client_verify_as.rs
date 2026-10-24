@@ -1,9 +1,14 @@
 //! `verify_as_reply` server principals.
-//! MIT `verify_as_reply` (`get_in_tkt.c:227-239`): the enc-part server must equal the ticket
+// MIT: `verify_as_reply` (get_in_tkt.c:227-239)
+//! the enc-part server must equal the ticket
 //! server, and the requested server unless a canonicalizing request asked for a TGS and got one.
 //! Live oracle: `client-differential-gate.sh`.
 
-use krb5_config::set_test_krb5_paths;
+#![allow(
+    clippy::disallowed_methods,
+    reason = "a test sets up its own profile and environment"
+)]
+
 use krb5_protocol::{check_as_rep_times, verify_as_reply_req_times, verify_as_reply_server};
 use krb5_types::{
     EncKdcRepPart, EncryptionKey, KdcOptions, KerberosTime, OctetString, PrincipalName,
@@ -167,53 +172,32 @@ fn verify_times_postdated_from_mismatch_is_kdcrep_modified() {
     );
 }
 
-fn pin_timesync(on: bool) {
-    let dir = std::env::var_os("CARGO_TARGET_TMPDIR")
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("CARGO_TARGET_DIR")
-                .map(|p| std::path::PathBuf::from(p).join("test-krb5"))
-        })
-        .unwrap_or_else(|| {
-            std::path::PathBuf::from(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../target/test-krb5"
-            ))
-        });
-    let _ = std::fs::create_dir_all(&dir);
-    let path = dir.join(format!(
-        "b1-timesync-{}-{}.conf",
-        std::process::id(),
-        if on { "on" } else { "off" }
-    ));
+fn pin_timesync(on: bool) -> krb5_config::Krb5Conf {
     let flag = if on { "1" } else { "0" };
-    std::fs::write(&path, format!("[libdefaults]\n    kdc_timesync = {flag}\n"))
-        .expect("write timesync conf");
-    set_test_krb5_paths(Some(vec![path]));
+    krb5_config::Krb5Conf::parse(&format!("[libdefaults]\n    kdc_timesync = {flag}\n"))
+        .expect("parse timesync conf")
 }
 
 #[test]
 fn kdc_timesync_accepts_authtime_outside_skew() {
-    pin_timesync(true);
     let mut part = sample_part();
     let now_t = KerberosTime::now();
     let now = i64::from(now_t.unix_seconds());
     part.authtime = kerberos_time_from_utc_z("20000101000000Z").expect("old");
     part.starttime = Some(part.authtime.clone());
     part.endtime = now_t.add_hours(10).unwrap_or(now_t);
-    check_as_rep_times(&part, now, 300).expect("MIT default kdc_timesync skips starttime");
+    check_as_rep_times(&part, now, 300, true).expect("MIT default kdc_timesync skips starttime");
 }
 
 #[test]
 fn kdc_timesync_off_is_kdcrep_skew() {
-    pin_timesync(false);
     let mut part = sample_part();
     let now_t = KerberosTime::now();
     let now = i64::from(now_t.unix_seconds());
     part.authtime = kerberos_time_from_utc_z("20000101000000Z").expect("old");
     part.starttime = Some(part.authtime.clone());
     part.endtime = now_t.add_hours(10).unwrap_or(now_t);
-    let err = check_as_rep_times(&part, now, 300).expect_err("timesync=0");
+    let err = check_as_rep_times(&part, now, 300, false).expect_err("timesync=0");
     assert!(
         err.to_string()
             .contains("Clock skew too great in KDC reply"),
@@ -283,7 +267,11 @@ fn forging_kdc(
 }
 
 /// The documented host's keytab AS against the KDC at `port`, with `keys` as its keytab's.
-fn keytab_as(port: u16, keys: &[krb5_crypto::ProtocolKey]) -> krb5_protocol::Error {
+fn keytab_as(
+    profile: &krb5_config::Krb5Conf,
+    port: u16,
+    keys: &[krb5_crypto::ProtocolKey],
+) -> krb5_protocol::Error {
     use krb5_kdc::testrealm::{TEST_REALM, documented_host};
     use krb5_protocol::{AsRequest, AsTicketOpts, KdcAddr, as_exchange_with_keys};
 
@@ -296,6 +284,7 @@ fn keytab_as(port: u16, keys: &[krb5_crypto::ProtocolKey]) -> krb5_protocol::Err
                 host: "127.0.0.1".into(),
                 port,
             },
+            profile,
             want_spake: false,
             fast_armor: None,
             pkinit: None,
@@ -330,34 +319,34 @@ fn with_a_stranger_last(
 
 /// A keytab AS whose reply the right key opens but whose times are an hour off fails as
 /// `verify_as_reply` says, not with another key's decrypt failure.
-/// MIT `init_creds_step_reply` (`get_in_tkt.c:1824-1837`): once `decrypt_as_reply` succeeds, `verify_as_reply`'s error is the request's.
-/// MIT `verify_as_reply` (`get_in_tkt.c:264-269`): without `kdc_timesync` a starttime outside the skew is `KRB5_KDCREP_SKEW`.
+// MIT: `init_creds_step_reply` (get_in_tkt.c:1824-1837)
+/// once `decrypt_as_reply` succeeds, `verify_as_reply`'s error is the request's.
+// MIT: `verify_as_reply` (get_in_tkt.c:264-269)
+/// without `kdc_timesync` a starttime outside the skew is `KRB5_KDCREP_SKEW`.
 #[test]
 fn a_keytab_reply_outside_the_skew_is_kdcrep_skew_whatever_keys_follow() {
-    pin_timesync(false);
+    let profile = pin_timesync(false);
     let (port, etype, keys) = forging_kdc(|part| {
         part.authtime = part.authtime.add_seconds(3600).unwrap();
         part.starttime = part.starttime.take().map(|t| t.add_seconds(3600).unwrap());
         part.endtime = part.endtime.add_seconds(3600).unwrap();
     });
-    let err = keytab_as(port, &with_a_stranger_last(keys, etype));
-    assert_eq!(
-        err.to_string(),
-        "reply validation: Clock skew too great in KDC reply"
-    );
+    let err = keytab_as(&profile, port, &with_a_stranger_last(keys, etype));
+    assert_eq!(err.to_string(), "Clock skew too great in KDC reply");
 }
 
 /// A reply the keytab's key of its enctype opens, but whose session key is of the wrong length,
 /// ends the exchange there.
-/// MIT `init_creds_step_reply` (`get_in_tkt.c:1824-1840`): `decrypt_as_reply` takes one key from the keytab; once it opens the reply, what follows ends the request with its own error, and no other key is asked.
+// MIT: `init_creds_step_reply` (get_in_tkt.c:1824-1840)
+/// `decrypt_as_reply` takes one key from the keytab; once it opens the reply, what follows ends the request with its own error, and no other key is asked.
 #[test]
 fn a_keytab_reply_that_opens_ends_the_walk_whatever_it_fails_next() {
-    pin_timesync(true);
+    let profile = pin_timesync(true);
     let (port, etype, keys) = forging_kdc(|part| {
         let longer = part.key.keyvalue.len() + 1;
         part.key.keyvalue = vec![7u8; longer].into();
     });
-    let err = keytab_as(port, &with_a_stranger_last(keys, etype));
+    let err = keytab_as(&profile, port, &with_a_stranger_last(keys, etype));
     assert!(
         matches!(err, krb5_protocol::Error::Crypto(_)),
         "the session key's own failure, not another key's: {err:?}"
@@ -366,12 +355,13 @@ fn a_keytab_reply_that_opens_ends_the_walk_whatever_it_fails_next() {
 
 /// An enc-pa-rep reply without a checksum over the request is `KRB5_KDCREP_MODIFIED`, whatever
 /// keys follow the one that opened it.
-/// MIT `krb5int_fast_verify_nego` (`fast.c:635-675`): a reply with the enc-pa-rep flag needs a PA-REQ-ENC-PA-REP checksum over the request under the reply key.
+// MIT: `krb5int_fast_verify_nego` (fast.c:635-675)
+/// a reply with the enc-pa-rep flag needs a PA-REQ-ENC-PA-REP checksum over the request under the reply key.
 #[test]
 fn a_keytab_reply_with_a_bad_enc_pa_rep_is_kdcrep_modified_whatever_keys_follow() {
     use krb5_types::{Checksum, PaData, flag_bit, pa};
 
-    pin_timesync(true);
+    let profile = pin_timesync(true);
     let (port, etype, keys) = forging_kdc(|part| {
         part.flags = part.flags.clone().with_bit(flag_bit::ENC_PA_REP, true);
         let bogus = Checksum {
@@ -383,7 +373,7 @@ fn a_keytab_reply_with_a_bad_enc_pa_rep_is_kdcrep_modified_whatever_keys_follow(
             padata_value: krb5_asn1::encode(&bogus).unwrap().into(),
         }]);
     });
-    let err = keytab_as(port, &with_a_stranger_last(keys, etype));
+    let err = keytab_as(&profile, port, &with_a_stranger_last(keys, etype));
     assert!(
         matches!(&err, krb5_protocol::Error::ReplyMismatch(m) if m == "Ticket modified in KDC reply"),
         "{err:?}"
@@ -392,12 +382,13 @@ fn a_keytab_reply_with_a_bad_enc_pa_rep_is_kdcrep_modified_whatever_keys_follow(
 
 /// No key in the keytab opens the reply: the error is the decrypt failure of the key MIT would
 /// have used, the keytab's key of the reply's enctype, not that of the last key tried.
-/// MIT `decrypt_as_reply` (`get_in_tkt.c:127-133`): the single key's `krb5_kdc_rep_decrypt_proc` error is returned as it is.
+// MIT: `decrypt_as_reply` (get_in_tkt.c:127-133)
+/// the single key's `krb5_kdc_rep_decrypt_proc` error is returned as it is.
 #[test]
 fn a_keytab_reply_no_key_opens_is_the_integrity_failure_of_its_enctypes_key() {
     use krb5_crypto::{EncryptionType, ProtocolKey};
 
-    pin_timesync(true);
+    let profile = pin_timesync(true);
     let (port, etype, _) = forging_kdc(|_| {});
     // A stale key of the reply's enctype first, then a key of another enctype.
     let first = EncryptionType::known(etype).unwrap();
@@ -410,7 +401,7 @@ fn a_keytab_reply_no_key_opens_is_the_integrity_failure_of_its_enctypes_key() {
         ProtocolKey::random(first).unwrap(),
         ProtocolKey::random(other).unwrap(),
     ];
-    let err = keytab_as(port, &keys);
+    let err = keytab_as(&profile, port, &keys);
     assert!(
         matches!(err, krb5_protocol::Error::ReplyIntegrity),
         "{err:?}"
@@ -418,7 +409,8 @@ fn a_keytab_reply_no_key_opens_is_the_integrity_failure_of_its_enctypes_key() {
 }
 
 /// `set_request_times` clamps `rtime` to `till`.
-/// MIT `set_request_times` (`get_in_tkt.c:718-722`): a renewable time shorter than the lifetime
+// MIT: `set_request_times` (get_in_tkt.c:718-722)
+/// a renewable time shorter than the lifetime
 /// is raised to `till`.
 #[test]
 fn rtime_is_clamped_up_to_till() {

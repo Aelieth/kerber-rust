@@ -1,21 +1,27 @@
 //! Persist round-trip and UDP listener adversarial tests, and the modifier each write
 //! stamps.
-//! MIT `kdb_put_entry` (`server_kdb.c:376-377`): the put stamps `KRB5_TL_MOD_PRINC` with
+// MIT: `kdb_put_entry` (server_kdb.c:376-377)
+//! the put stamps `KRB5_TL_MOD_PRINC` with
 //! `handle->current_caller`, not a hard-coded `kadmin/admin@REALM`, so the actor a create
 //! names is the stamp.
 //! `kdb5_util create` stamps `db_creation@REALM`.
-//! MIT `db_creator_entries` (`kdb5_create.c:114-115`): the stamp's one name component is
+// MIT: `db_creator_entries` (kdb5_create.c:114-115)
+//! the stamp's one name component is
 //! `db_creation`.
-//! MIT `db_create_princ` (`kdb5_create.c:127-133`): the `db_creation` principal that
+// MIT: `db_create_princ` (kdb5_create.c:127-133)
+//! the `db_creation` principal that
 //! `add_principal` stamps as the modifier of each principal `kdb5_util create` writes.
 //! `kadm5_create` stamps `kadmin/admin` and `kadmin/changepw` with `kdb5_util@REALM`.
-//! MIT `kadm5_create_magic_princs` (`kadm5_create.c:100-100`): the kadm5 handle is opened
+// MIT: `kadm5_create_magic_princs` (kadm5_create.c:100-100)
+//! the kadm5 handle is opened
 //! with `progname` as the client name, so its `current_caller` is `kdb5_util@REALM`.
 //! `kadm5_purgekeys` goes through `kdb_put_entry`, which stamps `current_caller`.
-//! MIT `kdb_put_entry` (`server_kdb.c:376-377`): the put stamps the modifier as
+// MIT: `kdb_put_entry` (server_kdb.c:376-377)
+//! the put stamps the modifier as
 //! `handle->current_caller`.
 //! `kadm5_set_string` goes through `kdb_put_entry` too, so it stamps `current_caller`.
-//! MIT `kadm5_set_string` (`svr_principal.c:2022-2043`): the string is stored through
+// MIT: `kadm5_set_string` (svr_principal.c:2022-2043)
+//! the string is stored through
 //! `kdb_put_entry`.
 
 use krb5_asn1::{decode, encode};
@@ -219,18 +225,20 @@ fn reload_if_stale_keeps_lockout() {
     let stash = dir.join("stash");
     let (mut writer, acl) = bootstrap_documented().unwrap();
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    writer.put_policy(NamedPolicy {
-        name: "lock".into(),
-        min_length: 0,
-        min_classes: 0,
-        history: 0,
-        max_fail: 3,
-        pw_failcnt_interval: 0,
-        pw_lockout_duration: 0,
-        pw_min_life: 0,
-        pw_max_life: 0,
-        allowed_keysalts: None,
-    });
+    writer
+        .put_policy(NamedPolicy {
+            name: "lock".into(),
+            min_length: 0,
+            min_classes: 0,
+            history: 0,
+            max_fail: 3,
+            pw_failcnt_interval: 0,
+            pw_lockout_duration: 0,
+            pw_min_life: 0,
+            pw_max_life: 0,
+            allowed_keysalts: None,
+        })
+        .unwrap();
     writer
         .set_principal_policy(&user, Some("lock".into()))
         .unwrap();
@@ -294,7 +302,7 @@ fn persist_paths_saves_password_lock_and_expiry() {
     store
         .change(|s| {
             s.change_password(&acl, &documented_admin_id(), &user, b"rotated-secret")?;
-            s.set_status(&user, true, 1_700_000_123)
+            s.set_status(&user, true, 1_700_000_123, "admin/admin")
         })
         .unwrap()
         .unwrap();
@@ -305,7 +313,7 @@ fn persist_paths_saves_password_lock_and_expiry() {
         kvno_after > kvno_before,
         "change_password must persist a kvno bump via save_if_configured"
     );
-    assert!(p.locked, "locked must round-trip through dump v7");
+    assert!(p.locked(), "locked must round-trip through dump v7");
     assert_eq!(p.pw_expire, 1_700_000_123);
     let _ = std::fs::remove_dir_all(&dir);
 }

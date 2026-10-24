@@ -1,5 +1,4 @@
-//! In-src kadm5 tests, regrouped by family. Private-bound: they reach
-//! the sibling modules' `pub(super)` items, nothing wider.
+//! In-src kadm5 tests, regrouped by family. Private-bound: they reach the sibling modules' `pub(super)` items, nothing wider.
 
 use krb5_crypto::ProtocolKey;
 use krb5_gss::GssContext;
@@ -9,6 +8,7 @@ use krb5_kdc::{
     AT_PW_LAST_CHANGE, AT_TL_DATA,
 };
 use krb5_kdc::{Acl, KDB_LOCKDOWN_KEYS, SharedDump as SharedStore, TL_LAST_PWD_CHANGE, TlData};
+use krb5_protocol::AcceptorConfig;
 use krb5_types::PrincipalName;
 
 use super::{
@@ -64,13 +64,11 @@ fn rpcsec_call(id: RpcCallId, cred: &[u8], verf_flavor: u32, verf: &[u8], args: 
     w.b
 }
 
-/// A connection from 127.0.0.1 to kadmind's port on 127.0.0.1.
 fn peer() -> RpcPeer {
     let loopback = std::net::SocketAddr::from(([127, 0, 0, 1], 749));
     RpcPeer::new(Some(loopback), Some(loopback))
 }
 
-/// The documented admin's ticket for a service, from the documented realm's KDC.
 struct AdminTicket {
     store: krb5_kdc::SharedDump,
     acl: Acl,
@@ -78,7 +76,6 @@ struct AdminTicket {
     session: ProtocolKey,
 }
 
-/// The documented admin's ticket for `service`, its AS-REQ carrying `addresses`.
 fn admin_ticket(
     service: &PrincipalName,
     addresses: Option<krb5_types::HostAddresses>,
@@ -120,7 +117,6 @@ fn admin_ticket(
 }
 
 impl AdminTicket {
-    /// A new initiator context on the ticket and its first token, binding `cb`.
     fn token(&self, cb: Option<&krb5_gss::ChannelBindings>) -> (GssContext, Vec<u8>) {
         use krb5_kdc::testrealm::TEST_REALM;
 
@@ -130,16 +126,16 @@ impl AdminTicket {
             &self.session,
             &krb5_types::ascii(TEST_REALM),
             &admin,
-            true,
+            krb5_gss::GSS_C_MUTUAL | krb5_gss::GSS_C_REPLAY | krb5_gss::GSS_C_SEQUENCE,
             cb,
             None,
+            None,
+            0,
         )
         .unwrap()
     }
 }
 
-/// Lines kadmind's daemon log gets during a test, in a scratch directory of their own (each test
-/// runs in a process of its own).
 struct KlogFile(std::path::PathBuf);
 
 impl KlogFile {
@@ -211,9 +207,11 @@ fn admin_gss_token() -> AdminGssToken {
         &as_out.session_key,
         &ascii(TEST_REALM),
         &admin,
-        true,
+        krb5_gss::GSS_C_MUTUAL | krb5_gss::GSS_C_REPLAY | krb5_gss::GSS_C_SEQUENCE,
         None,
         None,
+        None,
+        0,
     )
     .unwrap();
     (store, acl, ctx, token, as_out.session_key)
@@ -261,8 +259,11 @@ fn admin_rpcsec_init_svc(
     let out = handle_rpc(
         RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: TEST_REALM,
+            conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
+            iprop_resync: None,
         },
         b"hdl",
         &mut gss,
@@ -287,7 +288,6 @@ fn admin_rpcsec_init_svc(
     if !out_tok.is_empty() {
         ctx.process_ap_rep(&out_tok, &session).unwrap();
     }
-    ctx.allow_rpcsec_init_window();
     ctx.verify_mic(&window.to_be_bytes(), &verf).unwrap();
     assert!(gss.is_some());
     (store, acl, ctx, handle, gss)
@@ -342,7 +342,6 @@ fn rpcsec_data_rec(
     )
 }
 
-/// An RPCSEC_GSS privacy DATA call whose sealed body opens with `body_seq`.
 fn rpcsec_priv_rec(
     ctx: &mut GssContext,
     id: RpcCallId,
@@ -472,7 +471,16 @@ fn cpw_dispatch(
     proc: u32,
     args: &[u8],
 ) -> Vec<u8> {
-    dispatch_kadm5_ticket(store, acl, actor, proc, args, true, true).unwrap()
+    dispatch_kadm5_ticket(
+        store,
+        &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
+        actor,
+        proc,
+        args,
+        true,
+        true,
+    )
+    .unwrap()
 }
 
 fn setup() -> (krb5_kdc::SharedDump, Acl, String) {
@@ -583,7 +591,6 @@ fn create_rec(name: &str, pass: &str) -> Vec<u8> {
     w.b
 }
 
-/// `create_rec` with `KADM5_POLICY` set and the policy string filled.
 fn create_rec_policy(name: &str, pass: &str, policy: &str) -> Vec<u8> {
     let mut w = XdrW::default();
     w.u32(API_V2);
@@ -592,8 +599,6 @@ fn create_rec_policy(name: &str, pass: &str, policy: &str) -> Vec<u8> {
         w.u32(v);
     }
     w.nullstring(Some(policy));
-    // aux, max_rlife, last_success, last_failed, fail_auth_count, n_key,
-    // n_tl, tl_data NULL, empty key_data array.
     for v in [0, 0, 0, 0, 0, 0, 0, 1, 0] {
         w.u32(v);
     }
@@ -749,9 +754,6 @@ fn modify_policy_floor_code(mask: u32, set: impl Fn(&mut krb5_kdc::NamedPolicy))
     ret_code(&out)
 }
 
-// Give a shared store a real master key the iprop encoder can wrap keys
-// with: `save_store` writes a keytab stash for the fresh bootstrap, then
-// `persist_paths` points `iprop_master_key` at it. Without this a store has
 // no master key and the encoder refuses to ship keys (see the negative test).
 #[cfg(feature = "test-hooks")]
 fn seed_master_key(store: &krb5_kdc::SharedDump) {

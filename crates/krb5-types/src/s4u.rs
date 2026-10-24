@@ -1,57 +1,38 @@
-//! MS-SFU PA-FOR-USER / PA-S4U-X509-USER (S4U2Self) and MS-KILE PA-PAC-OPTIONS.
-//!
-//! The PA-FOR-USER checksum is key usage 17 over the name encoding.
-//! Resource-based constrained delegation is bit 3 of PA-PAC-OPTIONS.
-
 use rasn::prelude::*;
 
 use crate::{Checksum, KerberosFlags, OctetString, PrincipalName, Realm};
 
-/// [MS-SFU] `KRB5_S4U_OPTS_USE_REPLY_KEY_USAGE` (MIT `k5-int.h`: bit 2).
 pub const S4U_OPTS_USE_REPLY_KEY_USAGE: usize = 2;
 
-/// MS-KILE PA-PAC-OPTIONS flags bit: resource-based constrained delegation.
 pub const PAC_OPTIONS_RBCD: usize = 3;
 
-/// PA-FOR-USER ::= SEQUENCE { userName, userRealm, cksum, auth-package }
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct PaForUser {
-    /// Impersonated user.
     #[rasn(tag(explicit(0)))]
     pub user_name: PrincipalName,
-    /// Impersonated realm.
     #[rasn(tag(explicit(1)))]
     pub user_realm: Realm,
-    /// Checksum over the name encoding (key usage 17).
     #[rasn(tag(explicit(2)))]
     pub cksum: Checksum,
-    /// Auth package, typically `Kerberos`.
     #[rasn(tag(explicit(3)))]
     pub auth_package: crate::KerberosString,
 }
 
-/// [MS-SFU] 2.2.2 `S4UUserID`.
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct S4uUserId {
-    /// TGS-REQ nonce.
     #[rasn(tag(explicit(0)))]
     pub nonce: i32,
-    /// Impersonated name; absent when `name-string` is empty (cert-only).
     #[rasn(tag(explicit(1)))]
     pub user: Option<PrincipalName>,
-    /// Impersonated realm (required).
     #[rasn(tag(explicit(2)))]
     pub realm: Realm,
-    /// Subject certificate (optional).
     #[rasn(tag(explicit(3)))]
     pub subject_cert: Option<OctetString>,
-    /// Options; bit 2 is `USE_REPLY_KEY_USAGE`.
     #[rasn(tag(explicit(4)))]
     pub options: Option<KerberosFlags>,
 }
 
 impl S4uUserId {
-    /// Whether `USE_REPLY_KEY_USAGE` (ku 27 on the reply) is set.
     #[must_use]
     pub fn use_reply_key_usage(&self) -> bool {
         self.options.as_ref().is_some_and(|f| {
@@ -60,18 +41,14 @@ impl S4uUserId {
     }
 }
 
-/// [MS-SFU] 2.2.2 `PA-S4U-X509-USER`.
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct PaS4uX509User {
-    /// User-id (checksummed).
     #[rasn(tag(explicit(0)))]
     pub user_id: S4uUserId,
-    /// Checksum over the encoded user-id (ku 26).
     #[rasn(tag(explicit(1)))]
     pub cksum: Checksum,
 }
 
-/// Flags with only `USE_REPLY_KEY_USAGE`.
 #[must_use]
 pub fn s4u_reply_key_usage_flags() -> KerberosFlags {
     let mut flags = KerberosFlags::repeat(false, 32);
@@ -81,7 +58,6 @@ pub fn s4u_reply_key_usage_flags() -> KerberosFlags {
     flags
 }
 
-/// Bytes checksummed for PA-FOR-USER (MIT/MS-SFU layout).
 #[must_use]
 pub fn pa_for_user_cksum_data(user: &PrincipalName, realm: &str, package: &str) -> Vec<u8> {
     let mut v = Vec::new();
@@ -94,16 +70,13 @@ pub fn pa_for_user_cksum_data(user: &PrincipalName, realm: &str, package: &str) 
     v
 }
 
-/// MS-KILE `PA-PAC-OPTIONS` (padata 167).
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct PaPacOptions {
-    /// KerberosFlags: claims(0), branch(1), forward-to-full-DC(2), RBCD(3).
     #[rasn(tag(explicit(0)))]
     pub flags: KerberosFlags,
 }
 
 impl PaPacOptions {
-    /// Flags with only the RBCD bit set.
     #[must_use]
     pub fn rbcd() -> Self {
         let mut flags = KerberosFlags::repeat(false, 32);
@@ -113,7 +86,6 @@ impl PaPacOptions {
         Self { flags }
     }
 
-    /// Whether resource-based constrained delegation (bit 3) is set.
     #[must_use]
     pub fn resource_based_constrained_delegation(&self) -> bool {
         PAC_OPTIONS_RBCD < self.flags.len() && self.flags[PAC_OPTIONS_RBCD]

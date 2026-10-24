@@ -1,10 +1,10 @@
-//! kdcpreauth, kdcpolicy, and kdcauthdata extension points.
-//!
-//! These are Rust traits, not loaded objects. A preauth module returns
-//! an action the KDC already understands. There is no dlopen path that
-//! can change that action after the module returns.
+//! kdcpreauth, kdcpolicy, and kdcauthdata, as Rust traits.
 
+use std::os::fd::OwnedFd;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use krb5_crypto::{EncryptionType, ProtocolKey};
 use krb5_log::klog::{self, Severity};
@@ -12,6 +12,7 @@ use krb5_types::{
     AuthorizationData, EncTicketPart, HostAddress, KdcReqBody, KerberosTime, PaData, PrincipalName,
     pa,
 };
+use zeroize::Zeroizing;
 
 use crate::audit::kdc_error_message;
 use crate::error::Error;
@@ -20,43 +21,28 @@ use crate::preauth::{SpakeStep, process_pkinit, process_spake, spake_edata};
 use crate::status;
 use crate::store::{KDB_REQUIRES_HW_AUTH, Policy, Principal};
 
-/// Outcome of one preauth module on an AS-REQ.
 #[derive(Debug)]
 pub enum PreauthAction {
-    /// PKINIT produced a reply key and PA-PK-AS-REP.
     Pkinit {
-        /// AS-REP key.
         key: ProtocolKey,
-        /// PA-PK-AS-REP.
         pa: PaData,
-        /// CMS SignedData verified (MIT `is_signed`).
         signed: bool,
     },
-    /// SPAKE challenge METHOD-DATA.
     Challenge(Vec<u8>),
-    /// SPAKE finished; key encrypts AS-REP.
     SpakeDone(ProtocolKey),
-    /// PA-ENC-TIMESTAMP verified; caller must not re-verify.
+    /// Already verified; the caller must not verify it again.
     EncTsOk,
-    /// OTP verified: the reply key is the FAST armor key, and the token's indicators apply.
     Otp {
-        /// The armor key, which replaces the reply key.
         key: ProtocolKey,
-        /// Authentication indicators to add to the ticket.
         indicators: Vec<String>,
     },
 }
 
-/// What one kdcpreauth module adds to a PREAUTH_REQUIRED (or PREAUTH_FAILED) hint list.
-///
-/// `Debug` prints a cookie entry's type and length, not its octets, as [`ProtocolKey`]'s prints
-/// no key octets: a module's cookie state is secret.
-/// MIT `send_challenge` (`plugins/preauth/spake/spake_kdc.c:261-277`): SPAKE's stage-0 cookie holds the group, the KDC's private scalar and the transcript hash, and is zapped once set.
+// MIT: `send_challenge` (plugins/preauth/spake/spake_kdc.c:261-277)
+/// A cookie's octets are not printed; SPAKE's stage-0 cookie is zapped.
 #[derive(Default)]
 pub struct PreauthHint {
-    /// The module's METHOD-DATA offers, in its order.
     pub padata: Vec<PaData>,
-    /// Padata the KDC keeps for the module in its secure cookie (MIT's `set_cookie`).
     pub cookie: Vec<PaData>,
 }
 
@@ -69,7 +55,6 @@ impl std::fmt::Debug for PreauthHint {
     }
 }
 
-/// Padata shown as type and length only.
 struct RedactedPadata<'a>(&'a [PaData]);
 
 impl std::fmt::Debug for RedactedPadata<'_> {
@@ -84,7 +69,6 @@ impl std::fmt::Debug for RedactedPadata<'_> {
     }
 }
 
-/// One redacted padata: its type and its value's length.
 struct RedactedEntry(i32, usize);
 
 impl std::fmt::Debug for RedactedEntry {
@@ -96,41 +80,22 @@ impl std::fmt::Debug for RedactedEntry {
     }
 }
 
-/// Rock passed to a kdcpreauth module's AS handler.
-///
-/// MIT `struct krb5_kdcpreauth_rock_st` (`kdc/kdc_util.h:422-422`): the struct behind
-/// `krb5_kdcpreauth_rock`, the information handle for kdcpreauth callbacks.
 #[derive(Clone, Copy)]
 pub struct PreauthRock<'a> {
-    /// KDC store the module reads.
     pub store: &'a dyn PrincipalRead,
-    /// Client principal entry.
     pub client: &'a Principal,
-    /// AS-REQ padata. `None` when the request carried none.
     pub padata: Option<&'a [PaData]>,
-    /// Initial reply key; `None` for a client with no usable key (MIT `client_keyblock` is NULL).
     pub ikey: Option<&'a ProtocolKey>,
-    /// Selected encryption type; `None` with no client key.
     pub etype: Option<EncryptionType>,
-    /// The FAST armor key; `None` outside FAST (MIT `fast_armor`).
     pub armor_key: Option<&'a ProtocolKey>,
-    /// Encoded AS-REQ.
     pub as_req_der: &'a [u8],
-    /// Encoded request body.
     pub body_der: &'a [u8],
-    /// Client name from the request.
     pub cname: &'a PrincipalName,
 }
 
-/// One kdcpreauth module.
 pub trait KdcPreauth: Send + Sync {
-    /// Stable name (built-in or demo).
     fn name(&self) -> &'static str;
-    /// PA-DATA types this module owns.
     fn pa_types(&self) -> &'static [i32];
-    /// METHOD-DATA offers for PREAUTH_REQUIRED.
-    /// `armor` is set when the request is FAST-tunneled (`get_edata` rock).
-    /// `requested` is the AS-REQ etype list (`have_client_keys`).
     fn advertise(
         &self,
         store: &dyn PrincipalRead,
@@ -138,10 +103,7 @@ pub trait KdcPreauth: Send + Sync {
         armor: bool,
         requested: &[i32],
     ) -> Vec<PaData>;
-    /// The module's hint with the client's reply key, and the state it keeps in the KDC cookie.
-    /// The default is [`Self::advertise`] and no state.
-    ///
-    /// MIT `krb5_kdcpreauth_edata_fn` (`kdcpreauth_plugin.h:311-328`): a module sees the request and the rock, whose `client_keyblock` and `set_cookie` callbacks SPAKE's optimistic challenge uses.
+    // MIT: `krb5_kdcpreauth_edata_fn` (kdcpreauth_plugin.h:311-328)
     fn edata(
         &self,
         store: &dyn PrincipalRead,
@@ -156,8 +118,6 @@ pub trait KdcPreauth: Send + Sync {
             cookie: Vec::new(),
         }
     }
-    /// [`Self::edata`] with the FAST armor key in place of its presence. The default passes
-    /// `armor.is_some()` through, so a module that does not read the key needs no change.
     fn edata_with_armor(
         &self,
         store: &dyn PrincipalRead,
@@ -168,22 +128,11 @@ pub trait KdcPreauth: Send + Sync {
     ) -> PreauthHint {
         self.edata(store, client, armor.is_some(), requested, ikey)
     }
-    /// MIT `PA_HARDWARE` (`kdcpreauth_plugin.h`). FAST is still advertised
-    /// under `hw_only`.
-    /// MIT `get_preauth_hint_list` (`kdc_preauth.c:999-1001`): the empty PA-FX-FAST is
-    /// added before any module hint, whatever `hw_only` says.
+    // MIT: `get_preauth_hint_list` (kdc_preauth.c:999-1001)
+    /// The empty PA-FX-FAST is added first, whatever `hw_only` says.
     fn hardware(&self) -> bool {
         false
     }
-    /// Process AS padata. `None` = not this module's request.
-    ///
-    /// # Errors
-    ///
-    /// The [`Error`] with which a module refuses its padata. The built-in modules return
-    /// [`Error::Protocol`] for a failed check (`PREAUTH_FAILED`, `SKEW`, ...),
-    /// [`Error::Crypto`] when a timestamp does not decrypt or a PKINIT or SPAKE derivation fails,
-    /// and [`Error::Asn1`] when padata does not decode or a reply does not encode; `run_as_preauth`
-    /// then applies MIT's `filter_preauth_error`.
     fn process_as(&self, rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, Error>;
 }
 
@@ -245,15 +194,14 @@ impl KdcPreauth for PkinitMod {
         _armor: bool,
         _requested: &[i32],
     ) -> Vec<PaData> {
-        if store.pkinit_ca().is_none() {
+        if store.pkinit().is_none() {
             return Vec::new();
         }
         let mut out = vec![PaData {
             padata_type: pa::PK_AS_REQ,
             padata_value: Vec::<u8>::new().into(),
         }];
-        // MIT `pkinit_server_get_flags` (`pkinit_srv.c:928-929`): PKINIT_KX is PA_INFO,
-        // not PA_HARDWARE.
+        // MIT: `pkinit_server_get_flags` (pkinit_srv.c:928-929)
         if client.attributes & KDB_REQUIRES_HW_AUTH == 0 {
             out.push(PaData {
                 padata_type: pa::PKINIT_KX,
@@ -265,7 +213,7 @@ impl KdcPreauth for PkinitMod {
     fn process_as(&self, rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, Error> {
         let PreauthRock {
             store,
-            client: _client,
+            client,
             padata,
             ikey: _ikey,
             etype,
@@ -274,10 +222,11 @@ impl KdcPreauth for PkinitMod {
             body_der,
             cname,
         } = *rock;
+        // MIT: `load_preauth_plugins` (kdc_preauth.c:207-219)
+        if store.pkinit().is_none() {
+            return Ok(None);
+        }
         let Some(etype) = etype else {
-            // Residue (a2-as.md ORDER AS (1)): MIT issues a PKINIT reply to a keyless client. The
-            // PKINIT key derivation takes the selected etype, which only a client key supplies
-            // here, so a keyless PKINIT request keeps CANT_FIND_CLIENT_KEY.
             return if crate::preauth::find_pa(padata, pa::PK_AS_REQ).is_some() {
                 Err(crate::preauth::proto(
                     krb5_types::err::ETYPE_NOSUPP,
@@ -287,20 +236,12 @@ impl KdcPreauth for PkinitMod {
                 Ok(None)
             };
         };
-        let done = process_pkinit(
-            store,
-            padata,
-            etype,
-            as_req_der,
-            body_der,
-            cname,
-            store.realm(),
-        )?;
+        let done = process_pkinit(store, client, padata, etype, as_req_der, body_der, cname)?;
         Ok(done.map(|(key, pa, signed)| PreauthAction::Pkinit { key, pa, signed }))
     }
 }
 
-// MIT `kdcpreauth_otp_initvt` (`plugins/preauth/otp/main.c:378-387`): the module owns PA-OTP-REQUEST.
+// MIT: `kdcpreauth_otp_initvt` (plugins/preauth/otp/main.c:378-387)
 impl KdcPreauth for OtpMod {
     fn name(&self) -> &'static str {
         "otp"
@@ -346,10 +287,8 @@ impl KdcPreauth for SpakeMod {
         _armor: bool,
         requested: &[i32],
     ) -> Vec<PaData> {
-        // Without the reply key there is no optimistic challenge: the empty PA-SPAKE MIT sends
-        // when none is configured. The KDC itself uses `edata`.
-        // MIT `spake_edata` (`spake_kdc.c:309-314`): omitted when client_keyblock is NULL, the same condition as `have_client_keys` being false.
-        // MIT `group_init_state` (`groups.c:235-238`): no permitted group is `KRB5_PLUGIN_OP_NOTSUPP` ("No SPAKE preauth groups configured").
+        // MIT: `spake_edata` (spake_kdc.c:309-314)
+        // MIT: `group_init_state` (groups.c:235-238)
         if store.policy().spake_kdc().is_err() || !have_client_keys(store, client, requested) {
             return Vec::new();
         }
@@ -381,8 +320,7 @@ impl KdcPreauth for SpakeMod {
             cname: _cname,
         } = *rock;
         let Some(ikey) = ikey else {
-            // MIT `send_challenge` (`spake_kdc.c:228-232`): no client keyblock is KRB5KDC_ERR_ETYPE_NOSUPP.
-            // MIT `verify_response` (`spake_kdc.c:380-384`): the same for a response.
+            // MIT: `verify_response` (spake_kdc.c:380-384)
             return if store.policy().spake_kdc().is_ok()
                 && crate::preauth::find_pa(padata, pa::SPAKE).is_some()
             {
@@ -417,10 +355,8 @@ impl KdcPreauth for EncTsMod {
         armor: bool,
         requested: &[i32],
     ) -> Vec<PaData> {
-        // MIT `enc_ts_get` (`kdc_preauth_encts.c:39-43`): ENOENT when FAST armor is
-        // present or `have_client_keys` is false.
-        // MIT `have_client_keys` (`kdc_preauth.c:442-442`): true when some requested enctype
-        // has a client key.
+        // MIT: `enc_ts_get` (kdc_preauth_encts.c:39-43)
+        // MIT: `have_client_keys` (kdc_preauth.c:442-442)
         if armor || !have_client_keys(store, client, requested) {
             return Vec::new();
         }
@@ -429,9 +365,7 @@ impl KdcPreauth for EncTsMod {
             padata_value: Vec::<u8>::new().into(),
         }]
     }
-    /// MIT `enc_ts_verify` (`kdc_preauth_encts.c:74-97`): the timestamp is tried against keys
-    /// of that etype, and a clock skew after decrypt is still a failure.
-    /// Only the highest kvno is tried, so a timestamp under a retired key does not succeed.
+    // MIT: `enc_ts_verify` (kdc_preauth_encts.c:74-97)
     fn process_as(&self, rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, Error> {
         let PreauthRock {
             store,
@@ -449,29 +383,25 @@ impl KdcPreauth for EncTsMod {
         };
         let enc: krb5_types::EncryptedData = match krb5_asn1::decode(blob.as_ref()) {
             Ok(e) => e,
-            Err(_) => return Ok(None),
+            Err(_) => {
+                return Err(crate::asn1_text::preauth_decode_failure(
+                    blob.as_ref(),
+                    true,
+                ));
+            }
         };
-        // MIT `enc_ts_verify` (`kdc_preauth_encts.c:74-92`): krb5_dbe_search_enctype
-        // (client, &start, etype, -1, kvno 0) walks the keys of the declared etype.
-        // A miss is KRB5_KDB_NO_MATCHING_KEY, remapped to KRB5KDC_ERR_PREAUTH_FAILED
-        // (24) at :113-114.
-        // MIT `krb5_dbe_def_search_enctype` (`kdb_default.c:65-67`): the walk covers the
-        // *highest kvno* only and skips non-permitted enctypes (:60-61, :82-86) — a
-        // timestamp under a retired kvno's key (a stale keytab) never decrypts.
-        // KRB5_KDB_NO_PERMITTED_KEY (a declared etype outside permitted_enctypes,
-        // :60-61) is not remapped by `enc_ts_verify` but is not a pass-through code
-        // either.
-        // MIT `filter_preauth_error` (`kdc_preauth.c:1092-1133`): a code off the
-        // pass-through list, such as KRB5_KDB_NO_PERMITTED_KEY, becomes the same 24 on
-        // the wire. An unknown etype is not permitted.
+        // MIT: `krb5_dbe_def_search_enctype` (kdb_default.c:65-67)
+        // Only the highest kvno is tried, so a retired key does not verify.
+        // MIT: `filter_preauth_error` (kdc_preauth.c:1092-1133)
+        // A code off the pass-through list becomes 24.
         let policy = store.policy();
         let top = client.keys.iter().map(|k| k.kvno).max();
         let Some(pa_et) = krb5_crypto::EncryptionType::known(enc.etype)
             .ok()
             .filter(|et| policy.etype_permitted(*et))
         else {
-            // MIT `krb5_dbe_def_search_enctype` (`kdb_default.c:60-61`): its message goes to the log.
             return Err(Error::PreauthModule {
+                code: KDB_NO_PERMITTED_KEY,
                 message: NO_PERMITTED_KEY.to_owned(),
             });
         };
@@ -482,17 +412,15 @@ impl KdcPreauth for EncTsMod {
         {
             match crate::issue::verify_enc_timestamp(store, &k.key, blob.as_ref()) {
                 Ok(()) => return Ok(Some(PreauthAction::EncTsOk)),
-                // MIT `enc_ts_verify` (`kdc_preauth_encts.c:75-92`): a key that does not decrypt
-                // the timestamp sends the walk on to the next key.
-                // MIT `enc_ts_verify` (`kdc_preauth_encts.c:74-92`): any decrypt failure, a des3 key MIT refuses included, sends the walk on to the next key.
+                // MIT: `enc_ts_verify` (kdc_preauth_encts.c:75-92)
+                // MIT: `enc_ts_verify` (kdc_preauth_encts.c:74-92)
                 Err(
                     Error::Crypto(_) | Error::BadEnctype | Error::DesBadParity | Error::DesWeakKey,
                 ) => {}
-                // A timestamp that decrypts and then fails, by the clock or by its encoding, ends it.
                 Err(e) => return Err(e),
             }
         }
-        // MIT `enc_ts_verify` (`kdc_preauth_encts.c:113-116`): no key decrypts it, the password being wrong most likely, is 24.
+        // MIT: `enc_ts_verify` (kdc_preauth_encts.c:113-116)
         Err(crate::preauth::proto(
             krb5_types::err::PREAUTH_FAILED,
             crate::status::PREAUTH_FAILED,
@@ -500,8 +428,9 @@ impl KdcPreauth for EncTsMod {
     }
 }
 
-/// MIT `KRB5_KDB_NO_PERMITTED_KEY` (`lib/krb5/error_tables/kdb5_err.et:72-72`): its text.
+// MIT: `KRB5_KDB_NO_PERMITTED_KEY` (lib/krb5/error_tables/kdb5_err.et:72-72)
 const NO_PERMITTED_KEY: &str = "No matching key in entry having a permitted enctype";
+const KDB_NO_PERMITTED_KEY: i32 = -1_780_008_418;
 
 struct EncChallengeMod;
 
@@ -519,10 +448,7 @@ impl KdcPreauth for EncChallengeMod {
         armor: bool,
         requested: &[i32],
     ) -> Vec<PaData> {
-        // MIT `ec_edata` (`kdc_preauth_ec.c:37-48`): empty 138 only with armor and
-        // `have_client_keys`.
-        // MIT `have_client_keys` (`kdc_preauth.c:442-442`): true when some requested enctype
-        // has a client key.
+        // MIT: `ec_edata` (kdc_preauth_ec.c:37-48)
         if !armor || !have_client_keys(store, client, requested) {
             return Vec::new();
         }
@@ -568,7 +494,6 @@ fn builtins() -> &'static [Arc<dyn KdcPreauth>] {
     })
 }
 
-/// Extra modules after the built-ins, for every thread that has not set its own list (the KDC's loop).
 pub fn register_preauth(m: Arc<dyn KdcPreauth>) {
     EXTRA
         .lock()
@@ -576,29 +501,22 @@ pub fn register_preauth(m: Arc<dyn KdcPreauth>) {
         .push(m);
 }
 
-/// Install this thread's extra modules, used in place of the process-wide ones (tests).
 pub fn set_thread_preauth(modules: Vec<Arc<dyn KdcPreauth>>) {
     THREAD_EXTRA.with(|t| *t.borrow_mut() = Some(modules));
 }
 
-/// Drop this thread's extra modules so it uses the process-wide ones.
 pub fn clear_thread_preauth() {
     THREAD_EXTRA.with(|t| *t.borrow_mut() = None);
 }
 
-/// Take this thread's own extra modules off it, leaving the process-wide ones in force on the
-/// thread.
 pub(crate) fn take_thread_preauth() -> Option<Vec<Arc<dyn KdcPreauth>>> {
     THREAD_EXTRA.with(|t| t.borrow_mut().take())
 }
 
-/// Put back what [`take_thread_preauth`] took.
 pub(crate) fn restore_thread_preauth(modules: Option<Vec<Arc<dyn KdcPreauth>>>) {
     THREAD_EXTRA.with(|t| *t.borrow_mut() = modules);
 }
 
-/// All modules, built-ins first, then this thread's extras when it has set them, else the
-/// process-wide ones.
 #[must_use]
 pub(crate) fn preauth_modules() -> Vec<Arc<dyn KdcPreauth>> {
     let mut v: Vec<Arc<dyn KdcPreauth>> = builtins().to_vec();
@@ -616,47 +534,69 @@ pub(crate) fn preauth_modules() -> Vec<Arc<dyn KdcPreauth>> {
     v
 }
 
-/// What an [`OtpVerifier`] decides about one OTP.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum OtpVerdict {
-    /// MIT Access-Accept: the user is authenticated. The token's indicators apply.
     Accept,
-    /// Any other reply, such as MIT Access-Reject: this token is refused, and the next token of
-    /// the `otp` attribute is tried.
     Reject,
-    /// MIT transport error: the check could not be made, so the request fails at once.
     Error(String),
 }
 
-/// One OTP presented for a principal. Not `Debug`: `otp_value` is a secret.
-pub struct OtpVerifyRequest<'a> {
-    /// The client's database entry, under its canonical name (MIT `client_name`), not the name the
-    /// request used.
-    pub principal: &'a Principal,
-    /// The KDC's realm.
-    pub realm: &'a str,
-    /// The token type that chose this verifier.
-    pub token_type: &'a str,
-    /// The username the token names (MIT `token.username`), as octets: a JSON string's `\u`
-    /// escapes are single octets, not UTF-8.
-    pub username: &'a [u8],
-    /// The `otp-value` the client sent, empty when it sent none. Untrusted bytes, not UTF-8: it may
-    /// carry the password followed by the code, so the embedder decides what it means.
-    pub otp_value: &'a [u8],
+#[derive(Clone, Debug)]
+pub struct OtpTokenFields {
+    pub ty_name: String,
+    pub indicators: Vec<String>,
 }
 
-/// The verdict source that MIT's OTP module takes from a RADIUS server. An embedder supplies it.
-///
-/// `verify` is synchronous and blocks the whole KDC loop. It runs under the loop's store read
-/// lock, so it must never call a writer of that store, which would deadlock. An
-/// [`OtpVerdict::Error`] counts as a failed attempt for kadm5 lockout, as MIT's RADIUS timeout
-/// does. `otp_value` is untrusted bytes, not UTF-8, and may carry the password followed by the code,
-/// so the embedder decides what it means. Replay and throttling belong to the verifier.
+/// Owned and `Send` for the worker; not `Debug` (`otp_value` is secret).
+#[derive(Clone)]
+#[non_exhaustive]
+pub struct OtpVerifyRequest {
+    pub principal: Principal,
+    pub realm: String,
+    pub token_type: String,
+    pub username: Vec<u8>,
+    /// Untrusted bytes, not UTF-8: it may be the password and the code.
+    pub otp_value: Zeroizing<Vec<u8>>,
+    pub peer: Option<HostAddress>,
+    pub request_time: Instant,
+    pub deadline: Instant,
+    pub token: OtpTokenFields,
+}
+
+impl OtpVerifyRequest {
+    #[doc(hidden)]
+    #[must_use]
+    pub fn for_test(
+        principal: Principal,
+        realm: impl Into<String>,
+        token_type: impl Into<String>,
+        username: impl Into<Vec<u8>>,
+        otp_value: impl Into<Vec<u8>>,
+    ) -> Self {
+        let token_type = token_type.into();
+        let now = Instant::now();
+        Self {
+            principal,
+            realm: realm.into(),
+            token: OtpTokenFields {
+                ty_name: token_type.clone(),
+                indicators: Vec::new(),
+            },
+            token_type,
+            username: username.into(),
+            otp_value: Zeroizing::new(otp_value.into()),
+            peer: None,
+            request_time: now,
+            deadline: now + Duration::from_secs(5),
+        }
+    }
+}
+
+/// Runs on a worker under a deadline; a hang or panic fails closed; `Error` text is logged.
 pub trait OtpVerifier: Send + Sync {
-    /// The token type this verifier serves: the `type` an `otp` attribute token names.
     fn name(&self) -> &'static str;
-    /// Decide on one presented OTP.
-    fn verify(&self, req: &OtpVerifyRequest<'_>) -> OtpVerdict;
+    fn verify(&self, req: &OtpVerifyRequest) -> OtpVerdict;
 }
 
 static OTP_VERIFIERS: Mutex<Vec<Arc<dyn OtpVerifier>>> = Mutex::new(Vec::new());
@@ -666,36 +606,42 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
-/// Register a verifier for every thread that has not set its own list.
-pub fn register_otp_verifier(v: Arc<dyn OtpVerifier>) {
-    OTP_VERIFIERS
+/// Errs on a duplicate `name()`.
+pub fn register_otp_verifier(v: Arc<dyn OtpVerifier>) -> Result<(), Error> {
+    let mut reg = OTP_VERIFIERS
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .push(v);
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if reg.iter().any(|e| e.name() == v.name()) {
+        return Err(Error::InvalidArgument(format!(
+            "an OTP verifier named '{}' is already registered",
+            v.name()
+        )));
+    }
+    reg.push(v);
+    Ok(())
 }
 
-/// Install this thread's verifiers, used in place of the process-wide ones (tests).
 pub fn set_thread_otp_verifiers(v: Vec<Arc<dyn OtpVerifier>>) {
     THREAD_OTP.with(|t| *t.borrow_mut() = Some(v));
 }
 
-/// Drop this thread's verifiers so it uses the process-wide ones.
 pub fn clear_thread_otp_verifiers() {
     THREAD_OTP.with(|t| *t.borrow_mut() = None);
 }
 
-/// Take this thread's own verifiers off it, leaving the process-wide ones in force on the thread.
 pub(crate) fn take_thread_otp_verifiers() -> Option<Vec<Arc<dyn OtpVerifier>>> {
     THREAD_OTP.with(|t| t.borrow_mut().take())
 }
 
-/// Put back what [`take_thread_otp_verifiers`] took.
+pub(crate) fn thread_otp_present() -> bool {
+    THREAD_OTP.with(|t| t.borrow().is_some())
+}
+
 pub(crate) fn restore_thread_otp_verifiers(v: Option<Vec<Arc<dyn OtpVerifier>>>) {
     THREAD_OTP.with(|t| *t.borrow_mut() = v);
 }
 
-/// The verifiers in force on this thread: its own list when it set one, else the process-wide list.
-fn otp_verifiers() -> Vec<Arc<dyn OtpVerifier>> {
+pub(crate) fn otp_verifiers() -> Vec<Arc<dyn OtpVerifier>> {
     if let Some(v) = THREAD_OTP.with(|t| t.borrow().clone()) {
         return v;
     }
@@ -705,34 +651,258 @@ fn otp_verifiers() -> Vec<Arc<dyn OtpVerifier>> {
         .clone()
 }
 
-/// The first verifier of that name in force on this thread. The Arc is cloned out of the list.
 pub(crate) fn find_otp_verifier(name: &str) -> Option<Arc<dyn OtpVerifier>> {
     otp_verifiers().into_iter().find(|v| v.name() == name)
 }
 
-/// The names of the verifiers in force on this thread, in order.
 pub(crate) fn otp_verifier_names() -> Vec<&'static str> {
     otp_verifiers().iter().map(|v| v.name()).collect()
 }
 
-/// One kdcauthdata module. Errors are logged, not fatal.
-/// MIT `krb5_kdcauthdata_handle_fn` (`kdcauthdata_plugin.h:105-117`): a module's handler
-/// is passed the DB entries, their keys, the request and both ticket parts.
+const OTP_WORKERS: usize = 4;
+const OTP_QUEUE: usize = 64;
+
+type OtpJob = (
+    OtpVerifyRequest,
+    Arc<dyn OtpVerifier>,
+    SyncSender<OtpVerdict>,
+);
+
+pub(crate) struct OtpPool {
+    tx: SyncSender<OtpJob>,
+    wake_read: Option<OwnedFd>,
+}
+
+impl OtpPool {
+    fn new(threads: usize) -> Self {
+        let (tx, rx) = sync_channel::<OtpJob>(OTP_QUEUE);
+        let rx = Arc::new(Mutex::new(rx));
+        let (wake_read, wake_write) = match nix::unistd::pipe2(
+            nix::fcntl::OFlag::O_CLOEXEC | nix::fcntl::OFlag::O_NONBLOCK,
+        ) {
+            Ok((r, w)) => (Some(r), Some(Arc::new(w))),
+            Err(_) => (None, None),
+        };
+        for _ in 0..threads.max(1) {
+            let rx = Arc::clone(&rx);
+            let wake = wake_write.clone();
+            let _ = std::thread::Builder::new()
+                .name("otp-verify".to_owned())
+                .spawn(move || run_otp_worker(&rx, wake.as_deref()));
+        }
+        Self { tx, wake_read }
+    }
+
+    pub(crate) fn submit(
+        &self,
+        req: OtpVerifyRequest,
+        verifier: Arc<dyn OtpVerifier>,
+    ) -> Option<Receiver<OtpVerdict>> {
+        let (reply_tx, reply_rx) = sync_channel::<OtpVerdict>(1);
+        self.tx.try_send((req, verifier, reply_tx)).ok()?;
+        Some(reply_rx)
+    }
+
+    pub(crate) fn wake_read_fd(&self) -> Option<OwnedFd> {
+        self.wake_read.as_ref().and_then(|fd| fd.try_clone().ok())
+    }
+}
+
+fn run_otp_worker(rx: &Mutex<Receiver<OtpJob>>, wake: Option<&OwnedFd>) {
+    loop {
+        let job = {
+            let guard = rx.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            guard.recv()
+        };
+        let Ok((req, verifier, reply)) = job else {
+            return;
+        };
+        // Past its deadline: the caller gave up, so skip verify (don't burn a TOTP step).
+        if Instant::now() >= req.deadline {
+            continue;
+        }
+        let verdict = catch_unwind(AssertUnwindSafe(|| verifier.verify(&req)))
+            .unwrap_or_else(|_| OtpVerdict::Error("the OTP verifier panicked".to_owned()));
+        let _ = reply.send(verdict);
+        if let Some(w) = wake {
+            let _ = nix::unistd::write(w, &[1u8]);
+        }
+    }
+}
+
+#[doc(hidden)]
+pub struct OtpRuntime {
+    verifiers: Vec<Arc<dyn OtpVerifier>>,
+    pool: OtpPool,
+}
+
+impl OtpRuntime {
+    pub(crate) fn new(verifiers: Vec<Arc<dyn OtpVerifier>>) -> Self {
+        Self {
+            verifiers,
+            pool: OtpPool::new(OTP_WORKERS),
+        }
+    }
+
+    pub(crate) fn find(&self, name: &str) -> Option<Arc<dyn OtpVerifier>> {
+        self.verifiers.iter().find(|v| v.name() == name).cloned()
+    }
+
+    pub(crate) fn pool(&self) -> &OtpPool {
+        &self.pool
+    }
+}
+
+impl std::fmt::Debug for OtpRuntime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OtpRuntime")
+            .field("verifiers", &self.verifiers.len())
+            .finish_non_exhaustive()
+    }
+}
+
+pub(crate) enum OtpOutcome {
+    Verdict(OtpVerdict),
+    TimedOut,
+    QueueFull,
+}
+
+pub(crate) struct ParkedOtp {
+    pub(crate) rx: Receiver<OtpVerdict>,
+    pub(crate) deadline: Instant,
+    pub(crate) started: Instant,
+    pub(crate) token_index: usize,
+    pub(crate) token_type: String,
+    pub(crate) username: Vec<u8>,
+}
+
+pub(crate) struct OtpResume {
+    pub(crate) token_index: usize,
+    pub(crate) started: Instant,
+    pub(crate) token_type: String,
+    pub(crate) username: Vec<u8>,
+    pub(crate) outcome: OtpOutcome,
+}
+
+thread_local! {
+    static OTP_PARK: std::cell::RefCell<Option<ParkedOtp>> = const { std::cell::RefCell::new(None) };
+    static OTP_RESUME: std::cell::RefCell<Option<OtpResume>> = const { std::cell::RefCell::new(None) };
+    static OTP_PARK_ENABLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+pub(crate) fn set_otp_park(p: ParkedOtp) {
+    OTP_PARK.with(|t| *t.borrow_mut() = Some(p));
+}
+
+pub(crate) fn take_otp_park() -> Option<ParkedOtp> {
+    OTP_PARK.with(|t| t.borrow_mut().take())
+}
+
+pub(crate) fn otp_park_pending() -> bool {
+    OTP_PARK.with(|t| t.borrow().is_some())
+}
+
+pub(crate) fn set_otp_resume(r: Option<OtpResume>) {
+    OTP_RESUME.with(|t| *t.borrow_mut() = r);
+}
+
+pub(crate) fn take_otp_resume() -> Option<OtpResume> {
+    OTP_RESUME.with(|t| t.borrow_mut().take())
+}
+
+pub(crate) fn set_otp_park_enabled(on: bool) {
+    OTP_PARK_ENABLED.with(|t| t.set(on));
+}
+
+pub(crate) fn otp_park_enabled() -> bool {
+    OTP_PARK_ENABLED.with(std::cell::Cell::get)
+}
+
+pub(crate) fn bounded_verify(
+    pool: Option<&OtpPool>,
+    verifier: Arc<dyn OtpVerifier>,
+    req: OtpVerifyRequest,
+    timeout: Duration,
+) -> OtpOutcome {
+    let reply_rx = match pool {
+        Some(p) => match p.submit(req, verifier) {
+            Some(rx) => rx,
+            None => return OtpOutcome::QueueFull,
+        },
+        None => one_shot_verify(req, verifier),
+    };
+    match reply_rx.recv_timeout(timeout) {
+        Ok(v) => OtpOutcome::Verdict(v),
+        Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => OtpOutcome::TimedOut,
+    }
+}
+
+fn one_shot_verify(req: OtpVerifyRequest, verifier: Arc<dyn OtpVerifier>) -> Receiver<OtpVerdict> {
+    let (tx, rx) = sync_channel::<OtpVerdict>(1);
+    let _ = std::thread::Builder::new()
+        .name("otp-verify-1".to_owned())
+        .spawn(move || {
+            let verdict = catch_unwind(AssertUnwindSafe(|| verifier.verify(&req)))
+                .unwrap_or_else(|_| OtpVerdict::Error("the OTP verifier panicked".to_owned()));
+            let _ = tx.send(verdict);
+        });
+    rx
+}
+
+static OTP_LAST_REFUSAL_LOG: Mutex<Option<Instant>> = Mutex::new(None);
+
+pub(crate) fn otp_log_refusal(msg: &str) {
+    let now = Instant::now();
+    let mut last = OTP_LAST_REFUSAL_LOG
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let fire = match *last {
+        Some(t) => now.duration_since(t) >= Duration::from_secs(1),
+        None => true,
+    };
+    if fire {
+        *last = Some(now);
+        drop(last);
+        klog::syslog(Severity::Err, msg);
+        tracing::error!(target: "kdc.otp", "{}", msg);
+    }
+}
+
+pub(crate) fn sanitize_otp_error(text: &str) -> String {
+    let mut out = String::new();
+    for ch in text.chars() {
+        let piece = if ch.is_control() {
+            ch.escape_default().count()
+        } else {
+            ch.len_utf8()
+        };
+        if out.len() + piece > 256 {
+            break;
+        }
+        if ch.is_control() {
+            out.extend(ch.escape_default());
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+pub(crate) fn kdc_otp_event(principal: &str, token_type: &str, verdict: &str, duration_us: u64) {
+    tracing::info!(
+        target: "kdc.otp",
+        principal = principal,
+        token_type = token_type,
+        verdict = verdict,
+        duration_us = duration_us,
+    );
+}
+
+// MIT: `krb5_kdcauthdata_handle_fn` (kdcauthdata_plugin.h:105-117)
 pub trait KdcAuthdata: Send + Sync {
-    /// Stable name (`greet` in MIT `plugins/authdata/greet_server`).
     fn name(&self) -> &'static str;
-    /// Mutate ticket authdata. TGS-only modules return immediately on AS.
-    ///
-    /// `session` / `issuer` are `enc_tkt_reply->session` and the local TGS
-    /// principal.
-    /// MIT `krb5_kdcauthdata_handle_fn` (`kdcauthdata_plugin.h:111-117`): the handler is
-    /// passed the keys, the request and `enc_tkt_reply`, which carries the session key.
-    ///
-    /// # Errors
-    ///
-    /// Module-specific; the KDC logs and continues.
-    /// MIT `handle_authdata` (`kdc_authdata.c:610-611`): a module error is logged with
-    /// `kdc_err` and the next module still runs.
+    // MIT: `handle_authdata` (kdc_authdata.c:610-611)
+    /// A module error is logged and the next module still runs.
     fn handle(
         &self,
         is_tgs: bool,
@@ -749,7 +919,6 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
-/// Extra kdcauthdata modules for every thread that has not set its own list. None are built in.
 pub fn register_authdata(m: Arc<dyn KdcAuthdata>) {
     EXTRA_AD
         .lock()
@@ -757,29 +926,22 @@ pub fn register_authdata(m: Arc<dyn KdcAuthdata>) {
         .push(m);
 }
 
-/// Install this thread's kdcauthdata modules, used in place of the process-wide ones (tests).
 pub fn set_thread_authdata(modules: Vec<Arc<dyn KdcAuthdata>>) {
     THREAD_EXTRA_AD.with(|t| *t.borrow_mut() = Some(modules));
 }
 
-/// Drop this thread's kdcauthdata modules so it uses the process-wide ones.
 pub fn clear_thread_authdata() {
     THREAD_EXTRA_AD.with(|t| *t.borrow_mut() = None);
 }
 
-/// Take this thread's own kdcauthdata modules off it, leaving the process-wide ones in force on
-/// the thread.
 pub(crate) fn take_thread_authdata() -> Option<Vec<Arc<dyn KdcAuthdata>>> {
     THREAD_EXTRA_AD.with(|t| t.borrow_mut().take())
 }
 
-/// Put back what [`take_thread_authdata`] took.
 pub(crate) fn restore_thread_authdata(modules: Option<Vec<Arc<dyn KdcAuthdata>>>) {
     THREAD_EXTRA_AD.with(|t| *t.borrow_mut() = modules);
 }
 
-/// Loaded kdcauthdata modules: this thread's when it has set them, else the process-wide ones
-/// (empty unless [`register_authdata`] was called).
 #[must_use]
 pub(crate) fn authdata_modules() -> Vec<Arc<dyn KdcAuthdata>> {
     if let Some(modules) = THREAD_EXTRA_AD.with(|t| t.borrow().clone()) {
@@ -791,13 +953,8 @@ pub(crate) fn authdata_modules() -> Vec<Arc<dyn KdcAuthdata>> {
         .clone()
 }
 
-/// Named kdcpreauth modules after `[plugins] kdcpreauth` `disable` and `enable_only`, less the otp
-/// module when its `[otp]` did not initialize.
-///
-/// `fast` is not a kdcpreauth module, so it stays loaded and is not a name the profile can select.
-/// MIT `get_plugin_vtables` (`kdc/kdc_preauth.c:117-163`): built-ins register, then `k5_plugin_load_all` applies the profile.
-/// MIT `k5_plugin_load_all` (`lib/krb5/krb/plugin.c:421-455`): a caller walks only the modules that stayed loaded.
-/// MIT `load_preauth_plugins` (`kdc/kdc_preauth.c:207-219`): a module whose init fails is logged and not added to the systems.
+// MIT: `get_plugin_vtables` (kdc/kdc_preauth.c:117-163)
+// MIT: `k5_plugin_load_all` (lib/krb5/krb/plugin.c:421-455)
 pub(crate) fn selected_preauth(policy: &Policy) -> Vec<Arc<dyn KdcPreauth>> {
     let mut fast = Vec::new();
     let mut named = Vec::new();
@@ -818,49 +975,31 @@ pub(crate) fn selected_preauth(policy: &Policy) -> Vec<Arc<dyn KdcPreauth>> {
     fast
 }
 
-/// Whether `[plugins] kdcpreauth` left `name` loaded.
 pub(crate) fn kdcpreauth_loaded(store: &dyn PrincipalRead, name: &str) -> bool {
     selected_preauth(store.policy())
         .iter()
         .any(|module| module.name() == name)
 }
 
-/// Lines MIT writes while loading kdcpreauth, before the network is set up.
-///
-/// MIT `kdcpreauth_otp_initvt` (`plugins/preauth/otp/main.c:387-388`): code 0 logs Loaded at info when the vtable is installed.
-/// MIT `pkinit_server_plugin_init` (`plugins/preauth/pkinit/pkinit_srv.c:1384-1390`): one realm's failure is prefixed with PKINIT initialization failed.
-/// MIT `pkinit_init_kdc_profile` (`plugins/preauth/pkinit/pkinit_srv.c:960-964`): a missing identity is No pkinit_identity supplied for realm.
-/// MIT `load_preauth_plugins` (`kdc/kdc_preauth.c:213-216`): a failed module init is logged and that module is left out.
-///
-/// `pkinit_ready` is true when this process already holds a PKINIT identity (the test CA).
-/// A disabled module is absent, as `disable` / `enable_only` leave it out of the load.
+// MIT: `pkinit_server_plugin_init` (plugins/preauth/pkinit/pkinit_srv.c:1384-1390)
 #[must_use]
 pub fn preauth_startup_lines(
-    realm: &str,
     relations: &krb5_config::PluginRelations,
-    pkinit_ready: bool,
+    pkinit_failure: Option<&str>,
 ) -> Vec<(&'static str, String)> {
     let mut lines = Vec::new();
     if startup_module_loaded(relations, "otp") {
         lines.push(("info", "Loaded".to_owned()));
     }
-    if startup_module_loaded(relations, "pkinit") && !pkinit_ready {
+    if let Some(msg) = pkinit_failure.filter(|_| startup_module_loaded(relations, "pkinit")) {
         lines.push((
             "error",
-            format!(
-                "preauth pkinit failed to initialize: PKINIT initialization failed: No pkinit_identity supplied for realm {realm}"
-            ),
+            format!("preauth pkinit failed to initialize: PKINIT initialization failed: {msg}"),
         ));
     }
     lines
 }
 
-/// The lines MIT writes when the otp module's init fails, after the pkinit line and before the spake
-/// one, as `(level, text)` like [`preauth_startup_lines`]: the module's `com_err` line when it has
-/// one, then `preauth otp failed to initialize: <message>`. The KDC starts without the module.
-/// Nothing when `[plugins] kdcpreauth` left the module out, since its init never runs.
-///
-/// MIT `load_preauth_plugins` (`kdc/kdc_preauth.c:207-219`): a failed init is logged at error with the module's name and message, and the next module loads.
 #[must_use]
 pub fn otp_startup_lines(policy: &Policy) -> Vec<(&'static str, String)> {
     let Err(e) = policy.otp_kdc() else {
@@ -880,19 +1019,13 @@ pub fn otp_startup_lines(policy: &Policy) -> Vec<(&'static str, String)> {
     lines
 }
 
-/// Whether MIT would install `name` under these `[plugins] kdcpreauth` relations.
-fn startup_module_loaded(relations: &krb5_config::PluginRelations, name: &str) -> bool {
+pub(crate) fn startup_module_loaded(relations: &krb5_config::PluginRelations, name: &str) -> bool {
     krb5_config::filter_plugin_modules(relations, &[name])
         .iter()
         .any(|kept| kept == name)
 }
 
-/// METHOD-DATA modules after the leading empty PA-FX-FAST, and the cookie state they keep.
-/// `armor` is the FAST armor key, when the request is FAST-tunneled. `ikey` is the client's
-/// reply key, when one was selected.
-/// MIT `get_preauth_hint_list` (`kdc_preauth.c:999-1006`): the empty PA-FX-FAST and the
-/// etype info come first, then the module hints.
-/// MIT `kdc_fast_set_cookie` (`fast_util.c:631-651`): the first state set for a padata type is the one kept.
+// MIT: `kdc_fast_set_cookie` (fast_util.c:631-651)
 pub fn advertise_preauth(
     store: &dyn PrincipalRead,
     client: &Principal,
@@ -926,9 +1059,6 @@ pub fn advertise_preauth(
     out
 }
 
-/// MIT `have_client_keys` (`kdc_preauth.c:434-447`): true when
-/// `krb5_dbe_find_enctype(client, requested[i], -1, 0)` succeeds for any
-/// requested etype — top kvno only, permitted enctypes only.
 fn have_client_keys(store: &dyn PrincipalRead, client: &Principal, requested: &[i32]) -> bool {
     requested.iter().any(|&iana| {
         let Ok(et) = EncryptionType::known(iana) else {
@@ -938,20 +1068,6 @@ fn have_client_keys(store: &dyn PrincipalRead, client: &Principal, requested: &[
     })
 }
 
-/// Run registered AS preauth modules in order. First `Some` action wins;
-/// later modules (EXTRA after EncTsOk on a normal login) are skipped.
-/// Observe-every-AS is a future kadm5_hook, not this cascade.
-///
-/// A module that does not verify its padata is logged and filtered by [`finish_verify_padata`],
-/// and so is a SPAKE challenge, which MIT's module returns as `MORE_PREAUTH_DATA_REQUIRED`.
-///
-/// # Errors
-///
-/// [`Error::Protocol`] with status `PREAUTH_FAILED` when the first module to fail refuses its
-/// padata: the module's code when MIT's pass-through list keeps it (`SKEW`, `BAD_INTEGRITY`,
-/// `ETYPE_NOSUPP`, `MORE_PREAUTH_DATA_REQUIRED`, the PKINIT codes, ...), else
-/// `PREAUTH_FAILED` for any other code or variant. A module's [`Error::PreauthRequired`] passes
-/// through unchanged.
 pub fn run_as_preauth(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, Error> {
     let PreauthRock {
         store,
@@ -977,8 +1093,6 @@ pub fn run_as_preauth(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, E
             cname,
         }) {
             Ok(Some(a)) => {
-                // MIT `send_challenge` (`plugins/preauth/spake/spake_kdc.c:290-292`): a challenge
-                // is the verify callback answering `KRB5KDC_ERR_MORE_PREAUTH_DATA_REQUIRED`.
                 if matches!(a, PreauthAction::Challenge(_)) {
                     log_verify_failure(
                         m.name(),
@@ -988,28 +1102,32 @@ pub fn run_as_preauth(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, E
                 return Ok(Some(a));
             }
             Ok(None) => {}
-            Err(e) => return Err(finish_verify_padata(m.name(), e)),
+            Err(e) => {
+                if otp_park_pending() {
+                    return Err(e);
+                }
+                return Err(finish_verify_padata(m.name(), e));
+            }
         }
     }
     Ok(None)
 }
 
-/// MIT `finish_verify_padata` (`kdc_preauth.c:1213-1228`): a module whose verify callback answers a
-/// non-zero code is logged at INFO as `preauth (NAME) verify failure: MESSAGE`, `MESSAGE` being
-/// `krb5_get_error_message` of the module's own code, which is the text the module left for that
-/// code (`k5_setmsg`) or else the code's table text. The failure then goes through
-/// [`filter_preauth_error`], which `finish_check_padata` applies (`:1206`).
-///
-/// Every verify failure of a kdcpreauth module comes through here: the cascade of
-/// [`run_as_preauth`] and the encrypted challenge, which the AS path checks inside FAST.
-/// Cases whose text is not MIT's are named in `docs/parity/a3-preauth.md`.
+// MIT: `finish_verify_padata` (kdc_preauth.c:1213-1228)
 pub(crate) fn finish_verify_padata(module: &str, e: Error) -> Error {
+    if is_return_padata(&e) {
+        return e;
+    }
     log_verify_failure(module, &verify_failure_text(&e));
     filter_preauth_error(e)
 }
 
-/// `krb5_get_error_message` of the code a module failed with.
-/// A failure of the tree's own, which is no MIT code, gives its own text.
+// MIT: `finish_process_as_req` (kdc/do_as_req.c:251-256)
+/// A `return_padata` failure goes out unfiltered.
+fn is_return_padata(e: &Error) -> bool {
+    matches!(e, Error::Protocol { text: Some(t), .. } if t == status::KDC_RETURN_PADATA)
+}
+
 fn verify_failure_text(e: &Error) -> String {
     match e {
         Error::Protocol { code, detail, .. } => detail
@@ -1017,12 +1135,11 @@ fn verify_failure_text(e: &Error) -> String {
             .filter(|d| !d.is_empty())
             .unwrap_or_else(|| kdc_error_message(*code)),
         Error::PreauthRequired { .. } => kdc_error_message(krb5_types::err::PREAUTH_REQUIRED),
-        Error::PreauthModule { message } => message.clone(),
+        Error::PreauthModule { message, .. } => message.clone(),
         other => other.to_string(),
     }
 }
 
-/// MIT `finish_verify_padata` (`kdc_preauth.c:1226-1227`): `krb5_klog_syslog(LOG_INFO, "preauth (%s) verify failure: %s")`.
 pub(crate) fn log_verify_failure(module: &str, emsg: &str) {
     klog::syslog(
         Severity::Info,
@@ -1030,67 +1147,77 @@ pub(crate) fn log_verify_failure(module: &str, emsg: &str) {
     );
 }
 
-/// MIT `filter_preauth_error` (`kdc_preauth.c:1092-1133`): a module failure keeps its
-/// code only when it is on the pass-through list; anything else — a KDB
-/// code such as `KRB5_KDB_NO_PERMITTED_KEY`, an ASN.1 or crypto failure, 90
-/// `PREAUTH_EXPIRED` — reaches the client as 24 `PREAUTH_FAILED`. It is applied
-/// where `finish_check_padata` applies it (`:1206`). The module's e-data rides
-/// along (`:1194-1196`).
-/// MIT `finish_preauth` (`do_as_req.c:442-442`): whatever the code, the status word
-/// is the `PREAUTH_FAILED` it sets for every module failure, so the e_text is too.
-/// MIT `finish_process_as_req` (`do_as_req.c:358-359`): the AS_REQ line gives the message of the code the
-/// client sees, so the text a module left for its own code reaches that line only while the
-/// filter keeps the code.
-/// FAST errors never pass here (`FastMod::process_as` is a no-op, `kdc_find_fast` is not a
-/// module in MIT either).
+// MIT: `filter_preauth_error` (kdc_preauth.c:1092-1133)
+/// A failure keeps its code only on the pass-through list.
+// MIT: `finish_preauth` (do_as_req.c:442-442)
+// MIT: `finish_process_as_req` (do_as_req.c:358-359)
+// MIT: `finish_preauth` (do_as_req.c:442-442)
 pub(crate) fn filter_preauth_error(e: Error) -> Error {
     use krb5_types::err;
+    const CANT_VERIFY_CERTIFICATE: i32 = 70;
+    const INVALID_CERTIFICATE: i32 = 71;
+    const REVOKED_CERTIFICATE: i32 = 72;
+    const REVOCATION_STATUS_UNKNOWN: i32 = 73;
+    const CLIENT_NAME_MISMATCH: i32 = 75;
+    const INCONSISTENT_KEY_PURPOSE: i32 = 77;
+    const DIGEST_IN_CERT_NOT_ACCEPTED: i32 = 78;
+    const PA_CHECKSUM_MUST_BE_INCLUDED: i32 = 79;
+    const DIGEST_IN_SIGNED_DATA_NOT_ACCEPTED: i32 = 80;
+    const PUBLIC_KEY_ENCRYPTION_NOT_SUPPORTED: i32 = 81;
+    const CERTIFICATE_MISMATCH: i32 = 66;
+    const KDC_NOT_TRUSTED: i32 = 63;
+    const REVOCATION_STATUS_UNAVAILABLE: i32 = 74;
+    const NO_ACCEPTABLE_KDF: i32 = 100;
     const PASS_THROUGH: &[i32] = &[
         err::BAD_INTEGRITY,
         err::SKEW,
         err::PREAUTH_REQUIRED,
         err::ETYPE_NOSUPP,
-        // rfc 4556
         err::CLIENT_NOT_TRUSTED,
         err::INVALID_SIG,
         err::DH_KEY_PARAMETERS_NOT_ACCEPTED,
-        70, // CANT_VERIFY_CERTIFICATE
-        71, // INVALID_CERTIFICATE
-        72, // REVOKED_CERTIFICATE
-        73, // REVOCATION_STATUS_UNKNOWN
-        75, // CLIENT_NAME_MISMATCH
-        77, // INCONSISTENT_KEY_PURPOSE
-        78, // DIGEST_IN_CERT_NOT_ACCEPTED
-        79, // PA_CHECKSUM_MUST_BE_INCLUDED
-        80, // DIGEST_IN_SIGNED_DATA_NOT_ACCEPTED
-        81, // PUBLIC_KEY_ENCRYPTION_NOT_SUPPORTED
-        // earlier drafts of what became rfc 4556
-        66, // CERTIFICATE_MISMATCH
-        63, // KDC_NOT_TRUSTED
-        74, // REVOCATION_STATUS_UNAVAILABLE
-        // pkinit alg-agility
-        100, // NO_ACCEPTABLE_KDF
-        // rfc 6113
+        CANT_VERIFY_CERTIFICATE,
+        INVALID_CERTIFICATE,
+        REVOKED_CERTIFICATE,
+        REVOCATION_STATUS_UNKNOWN,
+        CLIENT_NAME_MISMATCH,
+        INCONSISTENT_KEY_PURPOSE,
+        DIGEST_IN_CERT_NOT_ACCEPTED,
+        PA_CHECKSUM_MUST_BE_INCLUDED,
+        DIGEST_IN_SIGNED_DATA_NOT_ACCEPTED,
+        PUBLIC_KEY_ENCRYPTION_NOT_SUPPORTED,
+        CERTIFICATE_MISMATCH,
+        KDC_NOT_TRUSTED,
+        REVOCATION_STATUS_UNAVAILABLE,
+        NO_ACCEPTABLE_KDF,
         err::MORE_PREAUTH_DATA_REQUIRED,
-        // k5e1 KRB5KDC_ERR_DISCARD.
-        // MIT `filter_preauth_error` (`kdc_preauth.c:1125-1125`): KRB5KDC_ERR_DISCARD
-        // passes through.
-        // MIT `finish_process_as_req` (`do_as_req.c:372-372`): suppresses the reply.
         err::DISCARD,
     ];
+    let wire_of = |code| {
+        if code == err::PREAUTH_FAILED || PASS_THROUGH.contains(&code) {
+            code
+        } else {
+            err::PREAUTH_FAILED
+        }
+    };
     match e {
         Error::PreauthRequired { .. } => e,
+        Error::PreauthModule { code, message } => {
+            let wire = wire_of(code);
+            Error::Protocol {
+                code: wire,
+                text: Some(status::PREAUTH_FAILED.to_owned()),
+                e_data: None,
+                detail: (wire == code).then_some(message),
+            }
+        }
         Error::Protocol {
             code,
             text: _,
             e_data,
             detail,
         } => {
-            let wire = if code == err::PREAUTH_FAILED || PASS_THROUGH.contains(&code) {
-                code
-            } else {
-                err::PREAUTH_FAILED
-            };
+            let wire = wire_of(code);
             Error::Protocol {
                 code: wire,
                 text: Some(status::PREAUTH_FAILED.to_owned()),
@@ -1107,18 +1234,15 @@ pub(crate) fn filter_preauth_error(e: Error) -> Error {
     }
 }
 
-/// MIT `check_kdcpolicy_as/tgs` lifetime rewrite.
-/// MIT `update_ticket_times` (`policy.c:91-99`): a non-zero policy lifetime caps
-/// `endtime`, and a non-zero renew lifetime caps `renew_till`, both from now.
+// MIT: `update_ticket_times` (policy.c:91-99)
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PolicyAdjustment {
-    /// Seconds; 0 = leave `endtime` unchanged.
+    /// Seconds; 0 leaves `endtime` unchanged.
     pub lifetime: i64,
-    /// Seconds; 0 = leave `renew_till` unchanged.
+    /// Seconds; 0 leaves `renew_till` unchanged.
     pub renew_lifetime: i64,
 }
 
-/// Cap ticket times the way MIT `update_ticket_times` does.
 pub fn apply_policy_times(
     now: &KerberosTime,
     end: &mut KerberosTime,
@@ -1141,35 +1265,17 @@ pub fn apply_policy_times(
     }
 }
 
-/// Ticket-policy hook (etype / transited stay on DefaultPolicy).
-///
-/// Several modules may be registered by [`name`](KdcPolicy::name). `[plugins] kdcpolicy`
-/// `disable` then `enable_only` select which of them run. [`set_policy`] and
-/// [`set_thread_policy`] install one module and skip that stanza.
 pub trait KdcPolicy: Send + Sync {
-    /// Module name for `[plugins] kdcpolicy`. The default is empty, which is not a built-in name.
     fn name(&self) -> &'static str {
         ""
     }
 
-    /// Called after AS times are computed; `Err` denies the request.
-    ///
-    /// # Errors
-    ///
-    /// The [`Error`] that denies the request, usually [`Error::Protocol`] with the KRB-ERROR code
-    /// to send (such as `POLICY`); `DefaultPolicy` never fails.
     fn check_as(
         &self,
         store: &dyn PrincipalRead,
         client: &Principal,
         indicators: &[String],
     ) -> Result<PolicyAdjustment, Error>;
-    /// Called after TGS times are computed; `Err` denies the request.
-    ///
-    /// # Errors
-    ///
-    /// The [`Error`] that denies the request, usually [`Error::Protocol`] with the KRB-ERROR code
-    /// to send (such as `POLICY`); `DefaultPolicy` never fails.
     fn check_tgs(
         &self,
         store: &dyn PrincipalRead,
@@ -1177,15 +1283,7 @@ pub trait KdcPolicy: Send + Sync {
         indicators: &[String],
     ) -> Result<PolicyAdjustment, Error>;
 
-    /// MIT `krb5_kdcpolicy_check_as_fn` (`kdcpolicy_plugin.h:95-102`): the request, both database
-    /// principals, the auth indicators, and the status out. Lifetime and renew lifetime come back
-    /// as [`PolicyAdjustment`]. The default ignores the request, the server, and the status and
-    /// calls [`Self::check_as`].
-    ///
-    /// # Errors
-    ///
-    /// The [`Error`] that denies the request. A denial stops later modules. When `status` is set,
-    /// that string is the KRB-ERROR text.
+    // MIT: `krb5_kdcpolicy_check_as_fn` (kdcpolicy_plugin.h:95-102)
     fn check_as_req(
         &self,
         _request: &KdcReqBody,
@@ -1198,15 +1296,7 @@ pub trait KdcPolicy: Send + Sync {
         self.check_as(store, client, indicators)
     }
 
-    /// MIT `krb5_kdcpolicy_check_tgs_fn` (`kdcpolicy_plugin.h:111-118`): the request, the server,
-    /// the header ticket, the auth indicators, and the status out. Lifetime and renew lifetime
-    /// come back as [`PolicyAdjustment`]. The default ignores the request, the ticket, and the
-    /// status and calls [`Self::check_tgs`] with the server name.
-    ///
-    /// # Errors
-    ///
-    /// The [`Error`] that denies the request. A denial stops later modules. When `status` is set,
-    /// that string is the KRB-ERROR text.
+    // MIT: `krb5_kdcpolicy_check_tgs_fn` (kdcpolicy_plugin.h:111-118)
     fn check_tgs_req(
         &self,
         _request: &KdcReqBody,
@@ -1219,13 +1309,6 @@ pub trait KdcPolicy: Send + Sync {
         self.check_tgs(store, &server.name, indicators)
     }
 
-    /// AS check with the socket peer. MIT's kdcpolicy receives no peer address.
-    /// `peer` is the address the KDC accepted the request from, not `request.addresses`.
-    /// The default ignores `peer` and calls [`Self::check_as_req`].
-    ///
-    /// # Errors
-    ///
-    /// The [`Error`] that denies the request. A denial stops later modules.
     #[expect(
         clippy::too_many_arguments,
         reason = "MIT check_as plus the socket the KDC accepted"
@@ -1244,11 +1327,6 @@ pub trait KdcPolicy: Send + Sync {
         self.check_as_req(request, store, client, server, indicators, status)
     }
 
-    /// TGS check with the socket peer. The default ignores `peer` and calls [`Self::check_tgs_req`].
-    ///
-    /// # Errors
-    ///
-    /// The [`Error`] that denies the request. A denial stops later modules.
     #[expect(
         clippy::too_many_arguments,
         reason = "MIT check_tgs plus the socket the KDC accepted"
@@ -1268,7 +1346,6 @@ pub trait KdcPolicy: Send + Sync {
     }
 }
 
-/// Default policy: records nothing; built-in ticket rules stay in issue/.
 pub struct DefaultPolicy;
 
 impl KdcPolicy for DefaultPolicy {
@@ -1302,34 +1379,28 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
-/// Install the policy hook for every thread that has not set its own (the KDC's loop).
 pub fn set_policy(p: Arc<dyn KdcPolicy>) {
     *POLICY
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(p);
 }
 
-/// Install a thread-local hook checked before the process-wide slot (tests).
 pub fn set_thread_policy(p: Arc<dyn KdcPolicy>) {
     THREAD_POLICY.with(|t| *t.borrow_mut() = Some(p));
 }
 
-/// Drop the thread-local hook so this thread uses the process-wide slot.
 pub fn clear_thread_policy() {
     THREAD_POLICY.with(|t| *t.borrow_mut() = None);
 }
 
-/// Take this thread's own hook off it, leaving the process-wide slot in force on the thread.
 pub(crate) fn take_thread_policy() -> Option<Arc<dyn KdcPolicy>> {
     THREAD_POLICY.with(|t| t.borrow_mut().take())
 }
 
-/// Put back what [`take_thread_policy`] took.
 pub(crate) fn restore_thread_policy(p: Option<Arc<dyn KdcPolicy>>) {
     THREAD_POLICY.with(|t| *t.borrow_mut() = p);
 }
 
-/// Current policy hook.
 #[must_use]
 pub fn current_policy() -> Arc<dyn KdcPolicy> {
     if let Some(p) = THREAD_POLICY.with(|t| t.borrow().clone()) {
@@ -1342,9 +1413,6 @@ pub fn current_policy() -> Arc<dyn KdcPolicy> {
         .unwrap_or_else(|| Arc::new(DefaultPolicy))
 }
 
-/// Register one named kdcpolicy module for every thread that has not set its own list.
-///
-/// `test` is registered only when `enable_only` names it. [`set_policy`] still installs one module and skips this list.
 pub fn register_kdcpolicy(module: Arc<dyn KdcPolicy>) {
     NAMED_POLICIES
         .lock()
@@ -1352,46 +1420,32 @@ pub fn register_kdcpolicy(module: Arc<dyn KdcPolicy>) {
         .push(module);
 }
 
-/// Install this thread's named kdcpolicy modules, used in place of [`register_kdcpolicy`] (tests).
-///
-/// An empty list allows the request and leaves the ticket times. The list is filtered by
-/// `[plugins] kdcpolicy`. It is not used while [`set_thread_policy`] is set.
 pub fn set_thread_kdcpolicies(modules: Vec<Arc<dyn KdcPolicy>>) {
     THREAD_POLICIES.with(|slot| *slot.borrow_mut() = Some(modules));
 }
 
-/// Drop this thread's named kdcpolicy modules so it uses the process-wide registry.
 pub fn clear_thread_kdcpolicies() {
     THREAD_POLICIES.with(|slot| *slot.borrow_mut() = None);
 }
 
-/// Take this thread's named kdcpolicy modules off it.
 pub(crate) fn take_thread_kdcpolicies() -> Option<Vec<Arc<dyn KdcPolicy>>> {
     THREAD_POLICIES.with(|slot| slot.borrow_mut().take())
 }
 
-/// Put back what [`take_thread_kdcpolicies`] took.
 pub(crate) fn restore_thread_kdcpolicies(modules: Option<Vec<Arc<dyn KdcPolicy>>>) {
     THREAD_POLICIES.with(|slot| *slot.borrow_mut() = modules);
 }
 
-/// The socket peer for policy checks on this thread. `None` outside the listener.
-///
-/// This is not the `addresses` field of the request, which is the client's claim.
 pub(crate) fn set_request_peer(peer: Option<HostAddress>) {
     REQUEST_PEER.with(|slot| *slot.borrow_mut() = peer);
 }
 
-/// Peer address set by [`set_request_peer`].
 #[must_use]
 pub(crate) fn request_peer() -> Option<HostAddress> {
     REQUEST_PEER.with(|slot| slot.borrow().clone())
 }
 
-/// Named modules after `[plugins] kdcpolicy` `disable` and `enable_only`, in the order that remains.
-///
-/// MIT `filter_enabled_modules` (`lib/krb5/krb/plugin.c:271-299`): each enabled name takes the first
-/// remaining match.
+// MIT: `filter_enabled_modules` (lib/krb5/krb/plugin.c:271-299)
 fn selected_kdcpolicies(
     relations: &krb5_config::PluginRelations,
     modules: Vec<Arc<dyn KdcPolicy>>,
@@ -1408,13 +1462,7 @@ fn selected_kdcpolicies(
     out
 }
 
-/// Modules for this request.
-///
-/// A thread slot ([`set_thread_policy`]) or the process slot ([`set_policy`]) is that one module,
-/// not filtered. Otherwise the thread's named list, if set, or the process registry, after the
-/// profile. An empty selection allows the request.
-/// MIT `check_kdcpolicy_as` (`kdc/policy.c:104-136`): a null method is skipped and no loaded module
-/// leaves the times unchanged.
+// MIT: `check_kdcpolicy_as` (kdc/policy.c:104-136)
 fn active_kdcpolicies(store: &dyn PrincipalRead) -> Vec<Arc<dyn KdcPolicy>> {
     if let Some(module) = THREAD_POLICY.with(|slot| slot.borrow().clone()) {
         return vec![module];
@@ -1436,16 +1484,6 @@ fn active_kdcpolicies(store: &dyn PrincipalRead) -> Vec<Arc<dyn KdcPolicy>> {
     selected_kdcpolicies(&store.policy().kdcpolicy, modules)
 }
 
-/// Walk the loaded kdcpolicy modules for an AS request and cap the ticket times.
-///
-/// MIT `check_kdcpolicy_as` (`kdc/policy.c:104-136`): each module may deny or return lifetimes;
-/// the first error stops the walk.
-/// MIT `update_ticket_times` (`kdc/policy.c:91-99`): a non-zero lifetime caps `endtime` from now,
-/// and a non-zero renew lifetime caps `renew_till`.
-///
-/// # Errors
-///
-/// The first module's denial. Times already capped by an earlier module stay capped.
 #[expect(
     clippy::too_many_arguments,
     reason = "MIT check_kdcpolicy_as passes the request, both principals, the indicators and both ticket times"
@@ -1484,14 +1522,7 @@ pub(crate) fn enforce_kdcpolicy_as(
     Ok(())
 }
 
-/// Walk the loaded kdcpolicy modules for a TGS request and cap the ticket times.
-///
-/// MIT `check_kdcpolicy_tgs` (`kdc/policy.c:144-176`): same walk as the AS check, with the header
-/// ticket and no client database entry.
-///
-/// # Errors
-///
-/// The first module's denial. Times already capped by an earlier module stay capped.
+// MIT: `check_kdcpolicy_tgs` (kdc/policy.c:144-176)
 #[expect(
     clippy::too_many_arguments,
     reason = "MIT check_kdcpolicy_tgs passes the request, the server, the ticket, the indicators and both ticket times"
@@ -1549,8 +1580,6 @@ mod tests {
 
     #[test]
     fn a_hints_cookie_shows_no_octets() {
-        // SPAKE's stage-0 cookie holds the KDC's private scalar, which MIT zaps: Debug shows the
-        // entry's type and length, as ProtocolKey's shows no key octets.
         let hint = PreauthHint {
             padata: vec![PaData {
                 padata_type: pa::SPAKE,
@@ -1616,7 +1645,6 @@ mod tests {
         clear_thread_policy();
     }
 
-    /// A module counting its `handle` calls.
     struct CountingAuthdata(std::sync::atomic::AtomicU64);
 
     impl KdcAuthdata for CountingAuthdata {
@@ -1764,18 +1792,20 @@ mod tests {
         set_thread_policy(Arc::new(DemoPolicy::default()));
         let (mut store, _) = bootstrap_documented().unwrap();
         let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-        store.put_policy(NamedPolicy {
-            name: "lock".into(),
-            min_length: 0,
-            min_classes: 0,
-            history: 0,
-            max_fail: 1,
-            pw_failcnt_interval: 0,
-            pw_lockout_duration: 0,
-            pw_min_life: 0,
-            pw_max_life: 0,
-            allowed_keysalts: None,
-        });
+        store
+            .put_policy(NamedPolicy {
+                name: "lock".into(),
+                min_length: 0,
+                min_classes: 0,
+                history: 0,
+                max_fail: 1,
+                pw_failcnt_interval: 0,
+                pw_lockout_duration: 0,
+                pw_min_life: 0,
+                pw_max_life: 0,
+                allowed_keysalts: None,
+            })
+            .unwrap();
         store
             .set_principal_policy(&user, Some("lock".into()))
             .unwrap();
@@ -1853,7 +1883,8 @@ mod tests {
         let padata = vec![pa_enc_timestamp(&key).unwrap()];
         let req = as_req(cname, TEST_REALM, 9, Some(padata)).unwrap();
         crate::issue_as(&store, &req).expect("registry EncTsOk issues");
-        // MIT `enc_ts_verify` (`kdc/kdc_preauth_encts.c:94-101`): no replay cache, so the same timestamp verifies again.
+        // MIT: `enc_ts_verify` (kdc/kdc_preauth_encts.c:94-101)
+        // no replay cache, so the same timestamp verifies again.
         crate::issue_as(&store, &req).expect("the replayed timestamp issues again");
     }
 
@@ -1893,14 +1924,10 @@ mod tests {
         assert_eq!(issued.elements[0].ad_data.as_ref(), GREET_TEXT);
     }
 
-    /// Startup logs Loaded, then the pkinit identity error when no identity is configured. A ready identity logs Loaded only.
     #[test]
     fn startup_lines_match_the_mit_kdc_log() {
-        let lines = preauth_startup_lines(
-            "KERBER.TEST",
-            &krb5_config::PluginRelations::default(),
-            false,
-        );
+        let missing = "No pkinit_identity supplied for realm KERBER.TEST";
+        let lines = preauth_startup_lines(&krb5_config::PluginRelations::default(), Some(missing));
         assert_eq!(
             lines,
             vec![
@@ -1911,18 +1938,14 @@ mod tests {
                 ),
             ]
         );
-        let ready = preauth_startup_lines(
-            "KERBER.TEST",
-            &krb5_config::PluginRelations::default(),
-            true,
-        );
+        let ready = preauth_startup_lines(&krb5_config::PluginRelations::default(), None);
         assert_eq!(ready, vec![("info", "Loaded".to_owned())]);
         let off = krb5_config::PluginRelations {
             disable: Some(vec!["otp".to_owned(), "pkinit".to_owned()]),
             ..krb5_config::PluginRelations::default()
         };
         assert_eq!(
-            preauth_startup_lines("KERBER.TEST", &off, false),
+            preauth_startup_lines(&off, Some(missing)),
             Vec::<(&str, String)>::new()
         );
         let only_pkinit = krb5_config::PluginRelations {
@@ -1930,16 +1953,14 @@ mod tests {
             ..krb5_config::PluginRelations::default()
         };
         assert_eq!(
-            preauth_startup_lines("R", &only_pkinit, false),
+            preauth_startup_lines(&only_pkinit, Some(missing)),
             vec![(
                 "error",
-                "preauth pkinit failed to initialize: PKINIT initialization failed: No pkinit_identity supplied for realm R".to_owned(),
+                "preauth pkinit failed to initialize: PKINIT initialization failed: No pkinit_identity supplied for realm KERBER.TEST".to_owned(),
             )]
         );
     }
 
-    /// An otp module that does not initialize is logged as MIT logs a failed init, after the pkinit
-    /// line and with the `com_err` line first, and is left out of the loaded modules. A module that
     /// `[plugins] kdcpreauth` left out never initializes, so it logs nothing.
     #[test]
     fn a_failed_otp_init_is_logged_and_the_module_left_out() {
@@ -1974,7 +1995,6 @@ mod tests {
         };
         assert!(!loaded(&store).contains(&"otp"));
         assert!(loaded(&store).contains(&"spake"));
-        // MIT's own message for a value that is none carries no `com_err` line.
         let kdc =
             krb5_config::KdcConf::parse("[otp]\n    A = {\n        timeout = 5s\n    }\n").unwrap();
         store.apply_kdc_conf(&kdc).unwrap();
@@ -1985,7 +2005,6 @@ mod tests {
                 "preauth otp failed to initialize: Invalid integer value".to_owned(),
             )]
         );
-        // `disable = otp`: the module is not loaded, so nothing initializes.
         let kdc = krb5_config::KdcConf::parse(
             "[otp]\n    A = {\n        timeout = 5s\n    }\n[plugins]\n    kdcpreauth = {\n        disable = otp\n    }\n",
         )
@@ -1995,7 +2014,6 @@ mod tests {
             otp_startup_lines(store.policy()),
             Vec::<(&str, String)>::new()
         );
-        // A good section loads the module again.
         let kdc =
             krb5_config::KdcConf::parse("[otp]\n    A = {\n        timeout = 5\n    }\n").unwrap();
         store.apply_kdc_conf(&kdc).unwrap();
@@ -2006,7 +2024,6 @@ mod tests {
         assert!(loaded(&store).contains(&"otp"));
     }
 
-    /// Clears this thread's kdcpolicy slot and named list.
     struct ClearKdcpolicy;
 
     impl ClearKdcpolicy {
@@ -2411,8 +2428,6 @@ mod tests {
         assert_eq!(end, start_end);
     }
 
-    /// MIT `filter_preauth_error` (`kdc_preauth.c:1092-1133`): a code off the pass-through list reaches the client as 24.
-    /// MIT `finish_process_as_req` (`do_as_req.c:358-359`): the AS_REQ line gives the message of the code the client sees, so the text a module left for its own code follows only a code the filter keeps.
     #[test]
     fn filter_preauth_error_sends_24_and_keeps_the_text_only_with_a_kept_code() {
         use krb5_types::err;
@@ -2433,7 +2448,6 @@ mod tests {
             }
             other => panic!("expected a protocol error, got {other:?}"),
         }
-        // 24 and the codes on the list stay, and so does the text left for them.
         for code in [err::PREAUTH_FAILED, err::SKEW, err::ETYPE_NOSUPP, 75] {
             match filter_preauth_error(module_text(code, "left for it")) {
                 Error::Protocol {
@@ -2445,9 +2459,9 @@ mod tests {
                 other => panic!("expected a protocol error, got {other:?}"),
             }
         }
-        // A failure that is no KRB-ERROR code, or none of the module's, is 24 with no text.
         for e in [
             Error::PreauthModule {
+                code: 22,
                 message: "Invalid argument".to_owned(),
             },
             Error::Rng,
@@ -2463,7 +2477,6 @@ mod tests {
         }
     }
 
-    /// MIT `finish_verify_padata` (`kdc_preauth.c:1224-1228`): the line carries `krb5_get_error_message` of the module's own code: the text it left for it, else the code's table text.
     #[test]
     fn a_failure_is_logged_with_the_message_of_its_own_code() {
         use krb5_types::err;
@@ -2500,6 +2513,7 @@ mod tests {
             ),
             (
                 Error::PreauthModule {
+                    code: KDB_NO_PERMITTED_KEY,
                     message: "No matching key in entry having a permitted enctype".to_owned(),
                 },
                 "No matching key in entry having a permitted enctype",
@@ -2513,20 +2527,19 @@ mod tests {
         }
     }
 
-    /// A verifier of one name and one fixed verdict.
     struct Tagged(&'static str, OtpVerdict);
 
     impl OtpVerifier for Tagged {
         fn name(&self) -> &'static str {
             self.0
         }
-        fn verify(&self, _req: &OtpVerifyRequest<'_>) -> OtpVerdict {
+        fn verify(&self, _req: &OtpVerifyRequest) -> OtpVerdict {
             self.1.clone()
         }
     }
 
     #[test]
-    fn registry_first_name_wins_thread_list_replaces() {
+    fn register_rejects_a_duplicate_name_and_a_thread_list_replaces() {
         let (store, _) = bootstrap_documented().unwrap();
         let client = store
             .get_name(&PrincipalName::new(
@@ -2537,19 +2550,20 @@ mod tests {
             .clone();
         let verdict = |name: &str| {
             let v = find_otp_verifier(name).expect("a verifier of that name");
-            v.verify(&OtpVerifyRequest {
-                principal: &client,
-                realm: TEST_REALM,
-                token_type: name,
-                username: b"u",
-                otp_value: b"1",
-            })
+            v.verify(&OtpVerifyRequest::for_test(
+                client.clone(),
+                TEST_REALM,
+                name,
+                b"u".to_vec(),
+                b"1".to_vec(),
+            ))
         };
-        // The process-wide list: the first verifier of a name is the one used.
-        register_otp_verifier(Arc::new(Tagged("registry-first", OtpVerdict::Accept)));
-        register_otp_verifier(Arc::new(Tagged("registry-first", OtpVerdict::Reject)));
+        register_otp_verifier(Arc::new(Tagged("registry-first", OtpVerdict::Accept))).unwrap();
+        // The same name a second time is rejected; the first registration stands.
+        assert!(
+            register_otp_verifier(Arc::new(Tagged("registry-first", OtpVerdict::Reject))).is_err()
+        );
         assert_eq!(verdict("registry-first"), OtpVerdict::Accept);
-        // This thread's own list replaces the process-wide one.
         set_thread_otp_verifiers(vec![Arc::new(Tagged("registry-first", OtpVerdict::Reject))]);
         assert_eq!(verdict("registry-first"), OtpVerdict::Reject);
         clear_thread_otp_verifiers();
@@ -2836,11 +2850,6 @@ mod tests {
 #[path = "kdcpolicy_test.rs"]
 mod kdcpolicy_test;
 
-/// Register MIT's kdcpolicy test module when `enable_only` names `test`.
-///
-/// A missing `enable_only` registers nothing, so a KDC with no stanza does not
-/// deny a principal named `fail` or cap ticket lifetimes. A second call does
-/// not register a second copy. `module` is not read.
 pub fn register_kdcpolicy_test_if_selected(relations: &krb5_config::PluginRelations) {
     let Some(names) = relations.enable_only.as_ref() else {
         return;

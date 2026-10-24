@@ -73,7 +73,8 @@ fn as_req_sname_etype(
     )
 }
 
-/// MIT `krb5_dbe_def_search_enctype` (`kdb_default.c:60-61`): a requested etype outside the
+// MIT: `krb5_dbe_def_search_enctype` (kdb_default.c:60-61)
+/// a requested etype outside the
 /// permitted set is `NO_PERMITTED_KEY` before the key list is read, even when the
 /// principal holds such a key.
 #[test]
@@ -311,9 +312,7 @@ fn apply_kdc_conf_sets_ticket_policy() {
         max_renewable_life = 2d 0h 0m 0s
         requires_preauth = no
         restrict_anonymous_to_tgt = true
-        pkinit_require_freshness = true
         encrypted_challenge_indicator = encrypted_challenge
-        pkinit_indicator = pkinit
         spake_preauth_indicator = spake
         host_based_services = host
         no_host_referral = imap
@@ -329,12 +328,10 @@ fn apply_kdc_conf_sets_ticket_policy() {
     assert_eq!(store.policy.realm_max_renewable_life, 2 * 86400);
     assert!(!store.policy.requires_preauth);
     assert!(store.policy.restrict_anon);
-    assert!(store.policy.pkinit_require_freshness);
     assert_eq!(
         store.policy.encrypted_challenge_indicator.as_deref(),
         Some("encrypted_challenge")
     );
-    assert_eq!(store.policy.pkinit_indicators, vec!["pkinit".to_string()]);
     assert_eq!(
         store.policy.spake_preauth_indicators,
         vec!["spake".to_string()]
@@ -644,7 +641,8 @@ fn pwqual_dict_words_are_init_dict_lines_matched_as_strcasecmp() {
 
 #[test]
 fn a_nul_inside_a_line_ends_that_word_and_shifts_the_rest() {
-    // MIT `init_dict` (`lib/kadm5/srv/pwqual_dict.c:136-151`): newlines are counted, then each
+    // MIT: `init_dict` (lib/kadm5/srv/pwqual_dict.c:136-151)
+    // newlines are counted, then each
     // word is a C string, so a NUL ends it and the words after it shift.
     let dict = pwqual_dict::PwqualDict::from_bytes(b"abc\0def\nxyz\nqrs\n".to_vec()).unwrap();
     assert!(dict.contains(b"abc"), "abc");
@@ -660,7 +658,8 @@ fn a_nul_inside_a_line_ends_that_word_and_shifts_the_rest() {
 
 #[test]
 fn iso8859_1_strcasecmp_folds_latin1_letters() {
-    // MIT `word_compare` (`lib/kadm5/srv/pwqual_dict.c:64-68`): `strcasecmp` in an ISO-8859-1
+    // MIT: `word_compare` (lib/kadm5/srv/pwqual_dict.c:64-68)
+    // `strcasecmp` in an ISO-8859-1
     // locale folds E-acute. The C and UTF-8 locales do not (settled live). The process locale
     // is not changed: the fold is the one `from_bytes_folded` is given.
     let dict = pwqual_dict::PwqualDict::from_bytes_folded(
@@ -715,7 +714,8 @@ fn case_fold_follows_the_named_codeset_only() {
 
 #[test]
 fn a_fifo_dict_file_with_a_writer_is_empty() {
-    // MIT `init_dict` (`lib/kadm5/srv/pwqual_dict.c:120-133`): `fstat` reports 0 for a FIFO, so
+    // MIT: `init_dict` (lib/kadm5/srv/pwqual_dict.c:120-133)
+    // `fstat` reports 0 for a FIFO, so
     // the read takes no bytes. A FIFO with no writer blocks in `open` on both sides.
     let dir = krb5_testkit::scratch_dir("krb5-pwqual-fifo");
     let path = dir.join("fifo");
@@ -767,14 +767,15 @@ fn pwqual_dict_reads_the_fstat_size_so_dev_zero_is_empty() {
         .init_pwqual_noting(Some(&dict_conf(zero)), &mut note)
         .unwrap();
     assert!(notes.is_empty(), "{notes:?}");
-    store.put_policy(NamedPolicy::new("pq"));
+    store.put_policy(NamedPolicy::new("pq")).unwrap();
     let u = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["dictu"]);
     store.check_new_password(&u, Some("pq"), b"zebra").unwrap();
 }
 
 #[test]
 fn passwd_check_logs_a_module_refusal_and_not_a_policy_floor() {
-    // MIT `passwd_check` (`lib/kadm5/srv/server_misc.c:114-134`): policy floors return before
+    // MIT: `passwd_check` (lib/kadm5/srv/server_misc.c:114-134)
+    // policy floors return before
     // the modules, and only a module refusal is logged.
     use krb5_log::klog::Severity;
     let mut store = PrincipalStore::new(TEST_REALM_STR);
@@ -784,8 +785,8 @@ fn passwd_check_logs_a_module_refusal_and_not_a_policy_floor() {
     let mut floors = NamedPolicy::new("floors");
     floors.min_length = 4;
     floors.min_classes = 2;
-    store.put_policy(floors);
-    store.put_policy(NamedPolicy::new("open"));
+    store.put_policy(floors).unwrap();
+    store.put_policy(NamedPolicy::new("open")).unwrap();
     let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["sam"]);
     let notes = std::cell::RefCell::new(Vec::<(Severity, String)>::new());
     let mut note = |severity: Severity, text: &str| {
@@ -880,7 +881,7 @@ fn passwd_check_logs_a_module_refusal_and_not_a_policy_floor() {
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::testrealm::TEST_USER]);
     let mut hist = NamedPolicy::new("hist");
     hist.history = 1;
-    live.put_policy(hist);
+    live.put_policy(hist).unwrap();
     live.set_principal_policy(&user, Some("hist".into()))
         .unwrap();
     live.set_password(&user, b"Fresh-secret-1").unwrap();
@@ -937,7 +938,7 @@ fn a_reread_moves_the_dictionary_and_ticket_policy_never_copies_them() {
     let (db, stash, words) = (dir.join("principal"), dir.join("stash"), dir.join("words"));
     std::fs::write(&words, "zebra\ncorrecthorse\n").unwrap();
     let (mut store, acl) = crate::testrealm::bootstrap_documented().unwrap();
-    store.put_policy(NamedPolicy::new("pq"));
+    store.put_policy(NamedPolicy::new("pq")).unwrap();
     crate::persist::save_store(&store, &db, &stash).unwrap();
     store.persist_paths = Some((db.clone(), stash.clone()));
     store.init_pwqual(Some(&dict_conf(&words))).unwrap();
@@ -1027,7 +1028,7 @@ fn persist_round_trip_keeps_serial_not_mtime() {
 }
 
 #[test]
-fn create_host_changepw_flag_survives_save() {
+fn create_host_changepw_has_no_pwchange_service() {
     let dir = krb5_testkit::scratch_dir("krb5-changepw");
     let _ = std::fs::create_dir_all(&dir);
     let db = dir.join("principal");
@@ -1048,7 +1049,7 @@ fn create_host_changepw_flag_survives_save() {
         .unwrap();
     let loaded = crate::persist::load_store(&db, &stash).unwrap();
     let p = loaded.get_name(&cpw).expect("changepw");
-    assert_ne!(p.attributes & KDB_PWCHANGE_SERVICE, 0);
+    assert_eq!(p.attributes & KDB_PWCHANGE_SERVICE, 0);
     let mkey = store.iprop_master_key().unwrap();
     let flagged = store
         .ulog()
@@ -1064,10 +1065,10 @@ fn create_host_changepw_flag_survives_save() {
         .0
         .vals;
     assert!(
-        vals.iter().any(
-            |v| matches!(v, crate::store::KdbeVal::AttrFlags(f) if f & KDB_PWCHANGE_SERVICE != 0)
+        vals.iter().all(
+            |v| !matches!(v, crate::store::KdbeVal::AttrFlags(f) if f & KDB_PWCHANGE_SERVICE != 0)
         ),
-        "ulog update must carry PWCHANGE_SERVICE"
+        "ulog update must not carry PWCHANGE_SERVICE"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -1247,18 +1248,20 @@ fn last_admin_unlock_skips_failcount_lockout() {
     use krb5_protocol::{as_req, pa_enc_timestamp};
     let (mut store, _) = crate::testrealm::bootstrap_documented().unwrap();
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::testrealm::TEST_USER]);
-    store.put_policy(NamedPolicy {
-        name: "lock".into(),
-        min_length: 1,
-        min_classes: 1,
-        history: 0,
-        max_fail: 1,
-        pw_failcnt_interval: 0,
-        pw_lockout_duration: 0,
-        pw_min_life: 0,
-        pw_max_life: 0,
-        allowed_keysalts: None,
-    });
+    store
+        .put_policy(NamedPolicy {
+            name: "lock".into(),
+            min_length: 1,
+            min_classes: 1,
+            history: 0,
+            max_fail: 1,
+            pw_failcnt_interval: 0,
+            pw_lockout_duration: 0,
+            pw_min_life: 0,
+            pw_max_life: 0,
+            allowed_keysalts: None,
+        })
+        .unwrap();
     store
         .set_principal_policy(&user, Some("lock".into()))
         .unwrap();
@@ -1332,7 +1335,8 @@ fn odd_parity(octets: &[u8]) -> bool {
     octets.iter().all(|b| b.count_ones() % 2 == 1)
 }
 
-/// MIT `krb5_c_make_random_key` (`lib/crypto/krb/make_random_key.c:31-76`): `keybytes` random octets through the
+// MIT: `krb5_c_make_random_key` (lib/crypto/krb/make_random_key.c:31-76)
+/// `keybytes` random octets through the
 /// enctype's random-to-key, so a des3 key is 24 octets of odd parity (`k5_rand2key_des3`,
 /// `k5_des_fixup_key_parity`) and every other enctype's key is its length. 24 raw random octets are all of odd
 /// parity with probability 2^-24, so 64 keys decide it.

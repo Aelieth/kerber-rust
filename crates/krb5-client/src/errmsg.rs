@@ -1,15 +1,8 @@
-//! MIT's error texts as the client tools print them: the `krb5_err.et` table and the messages the
-//! library sets in their place (`krb5_get_error_message`).
-
 use std::fmt;
 use std::io;
 use std::path::Path;
 
-/// `com_err` with its default hook, as `kdestroy` and `kswitch` keep it: `prog: `, the error's
-/// table text, a space, the context, then `\n`, as Fedora's MIT prints it (built with the system
-/// com_err). MIT's own com_err, which the gates' MIT image is built with, ends the line `\r\n`.
-/// MIT `default_com_err_proc` (`com_err.c:47-96`): `error_message(code)`, not the extended
-/// message.
+// MIT: `default_com_err_proc` (com_err.c:47-96)
 #[macro_export]
 macro_rules! com_err {
     ($prog:expr, $err:expr, $($ctx:tt)*) => {{
@@ -17,67 +10,39 @@ macro_rules! com_err {
     }};
 }
 
-/// A failure carrying the MIT error code the tools branch on and MIT's whole message for it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Krb5Error {
-    /// The code.
     pub code: Code,
-    /// `krb5_get_error_message`: the table text, or the message the library set instead.
     pub message: String,
 }
 
-/// The MIT error codes the client tools tell apart.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Code {
-    /// A KDC error (`ERROR_TABLE_BASE_krb5` plus the RFC 4120 code).
     Kdc(i32),
-    /// `KRB5KRB_AP_ERR_BAD_INTEGRITY`.
     BadIntegrity,
-    /// `KRB5_FCC_NOFILE`.
     FccNofile,
-    /// `KRB5_FCC_PERM`.
     FccPerm,
-    /// `KRB5_CC_NOTFOUND`.
     CcNotfound,
-    /// `KRB5_CC_UNKNOWN_TYPE`.
     CcUnknownType,
-    /// `KRB5_KT_UNKNOWN_TYPE`.
     KtUnknownType,
-    /// `KRB5KRB_AP_WRONG_PRINC`.
     WrongPrinc,
-    /// `KRB5KRB_AP_ERR_TKT_INVALID`.
     TktInvalid,
-    /// `KRB5_KDC_UNREACH`.
     KdcUnreach,
-    /// `KRB5_REALM_UNKNOWN`.
     RealmUnknown,
-    /// `KRB5_PARSE_MALFORMED`.
     ParseMalformed,
-    /// `KRB5_CONFIG_NODEFREALM`.
     NoDefRealm,
-    /// A profile MIT's `krb5_init_context` refuses.
     Profile(krb5_config::ProfileError),
-    /// `KRB5_FCC_INTERNAL`.
     FccInternal,
-    /// `KRB5_KDCREP_MODIFIED`.
     KdcrepModified,
-    /// `KRB5_CC_IO`.
+    KdcrepSkew,
     CcIo,
-    /// `KRB5_CC_FORMAT`.
     CcFormat,
-    /// `KRB5_CCACHE_BADVNO`.
     CcBadVno,
-    /// `KRB5_KCM_NO_SERVER`.
     KcmNoServer,
-    /// errno `ENOENT`.
     Enoent,
-    /// errno `EINVAL`.
     Einval,
-    /// `KRB5_PREAUTH_FAILED`.
     PreauthFailed,
-    /// `KRB5_LIBOS_PWDINTR`: a password prompt that `SIGINT` interrupted.
     PwdInterrupted,
-    /// Any other failure, under its own text.
     Other,
 }
 
@@ -90,7 +55,6 @@ impl fmt::Display for Krb5Error {
 impl std::error::Error for Krb5Error {}
 
 impl Krb5Error {
-    /// A failure with `code` and `message`.
     #[must_use]
     pub fn new(code: Code, message: impl Into<String>) -> Self {
         Self {
@@ -99,14 +63,11 @@ impl Krb5Error {
         }
     }
 
-    /// The code under its table text.
     #[must_use]
     pub fn of(code: Code) -> Self {
         Self::new(code, code_text(code))
     }
 
-    /// MIT `error_message`: the code's table text, without the message the library set in its
-    /// place; what `com_err`'s default hook prints.
     #[must_use]
     pub fn table_text(&self) -> String {
         match self.code {
@@ -116,30 +77,22 @@ impl Krb5Error {
         }
     }
 
-    /// MIT `krb5_get_error_message` of a protocol failure; `realm` names the realm whose KDC was
-    /// asked.
-    /// MIT `krb5int_process_tgs_reply` (`gc_via_tkt.c:194-201`): a generic KDC error with an
-    /// e-text is "KDC returned error string: \<text\>"; every other KDC error is its table text.
-    /// MIT `k5_sendto_kdc` (`sendto_kdc.c:523-529`): no answer is "Cannot contact any KDC for
-    /// realm '\<realm\>'".
+    // MIT: `k5_sendto_kdc` (sendto_kdc.c:523-529)
     #[must_use]
     pub fn from_protocol(e: &krb5_protocol::Error, realm: &str) -> Self {
         match e {
-            krb5_protocol::Error::KrbError { code, text } => {
-                if *code == krb5_types::err::GENERIC
-                    && let Some(t) = text.as_deref().filter(|t| !t.is_empty())
-                {
-                    return Self::new(Code::Kdc(*code), format!("KDC returned error string: {t}"));
-                }
+            krb5_protocol::Error::KrbError { code, .. } => {
                 Self::new(Code::Kdc(*code), kdc_error_text(*code))
             }
             krb5_protocol::Error::PreauthFailed(inner) => Self::new(
                 Code::PreauthFailed,
                 format!("Pre-authentication failed: {inner}"),
             ),
+            krb5_protocol::Error::PreauthNoMech => Self::new(Code::PreauthFailed, e.to_string()),
             krb5_protocol::Error::ReplyIntegrity => Self::of(Code::BadIntegrity),
-            // MIT `krb5_ktfileint_open` (`kt_file.c:753-760`): a keytab file that is not there is `ENOENT` with its own message.
+            // MIT krb5_ktfileint_open; see docs/parity/b1-client-keytab.md
             krb5_protocol::Error::Keytab { code: 2, text } => Self::new(Code::Enoent, text.clone()),
+            krb5_protocol::Error::InvalidArgument => Self::of(Code::Einval),
             krb5_protocol::Error::Io { .. } => Self::new(
                 Code::KdcUnreach,
                 format!("Cannot contact any KDC for realm '{realm}'"),
@@ -148,12 +101,14 @@ impl Krb5Error {
         }
     }
 
-    /// [`Self::from_protocol`] for an AS exchange.
-    /// MIT `krb5_init_creds_step` (`get_in_tkt.c:1936-1946`): an unknown client is "Client
-    /// '\<client\>' not found in Kerberos database".
+    // MIT verify_as_reply; see docs/parity/b1-client.md
+    // MIT: `init_creds_step_reply` (get_in_tkt.c:1762-1766)
+    // A KDC error, code 60 included, is the table text; the e-text rewrite is TGS-only.
+    // MIT: `krb5_init_creds_step` (get_in_tkt.c:1936-1946)
     #[must_use]
     pub fn from_as(e: &krb5_protocol::Error, client: &str, realm: &str) -> Self {
-        if let krb5_protocol::Error::KrbError {
+        use krb5_protocol::Error as E;
+        if let E::KrbError {
             code: krb5_types::err::C_PRINCIPAL_UNKNOWN,
             ..
         } = e
@@ -163,13 +118,16 @@ impl Krb5Error {
                 format!("Client '{client}' not found in Kerberos database"),
             );
         }
-        Self::from_protocol(e, realm)
+        match e {
+            E::KdcReplySkew => Self::of(Code::KdcrepSkew),
+            E::NonceMismatch | E::ReplyMismatch(_) | E::Referral => Self::of(Code::KdcrepModified),
+            E::EnctsDisabled | E::PreauthNoMech => Self::new(Code::PreauthFailed, e.to_string()),
+            _ => Self::from_protocol(e, realm),
+        }
     }
 
-    /// [`Self::from_protocol`] for a TGS exchange: an unknown server is the message the reply's
-    /// processing set, which names the error's server, when the error came with e-text, else the
-    /// table's text.
-    /// MIT `krb5int_process_tgs_reply` (`lib/krb5/krb/gc_via_tkt.c:195-216`): an unknown server's error with e-text sets the message "Server <the error's server> not found in Kerberos database"; without e-text no message is set.
+    // MIT: `krb5int_process_tgs_reply` (lib/krb5/krb/gc_via_tkt.c:193-216)
+    // an unknown server's error with e-text sets the message "Server <the error's server> not found in Kerberos database"; a generic error with e-text sets "KDC returned error string: \<text\>".
     #[must_use]
     pub fn from_tgs(e: &krb5_protocol::Error, realm: &str) -> Self {
         if let krb5_protocol::Error::KrbError {
@@ -180,12 +138,18 @@ impl Krb5Error {
         {
             return Self::new(Code::Kdc(krb5_types::err::S_PRINCIPAL_UNKNOWN), t.clone());
         }
+        if let krb5_protocol::Error::KrbError {
+            code,
+            text: Some(t),
+        } = e
+            && *code == krb5_types::err::GENERIC
+            && !t.is_empty()
+        {
+            return Self::new(Code::Kdc(*code), format!("KDC returned error string: {t}"));
+        }
         Self::from_protocol(e, realm)
     }
 
-    /// A host-based name that [`krb5_config::sname_to_principal`] or a candidate of
-    /// [`krb5_config::CanonPrinc`] could not make: MIT's code for it, and
-    /// `KRB5_PARSE_MALFORMED` for a name this port's principal names cannot hold.
     #[must_use]
     pub fn from_sname(e: &krb5_config::SnameError) -> Self {
         match e {
@@ -195,9 +159,7 @@ impl Krb5Error {
         }
     }
 
-    /// The failure of a cache name that does not resolve.
-    /// MIT `krb5_cc_default` (`ccdefault.c:48-53`): a default name whose `%{token}` does not expand
-    /// leaves no name, `KRB5_FCC_INTERNAL`; a type no cache is built for is `KRB5_CC_UNKNOWN_TYPE`.
+    // MIT: `krb5_cc_default` (ccdefault.c:48-53)
     #[must_use]
     pub fn from_ccname(e: &krb5_config::Error) -> Self {
         match e {
@@ -209,8 +171,7 @@ impl Krb5Error {
         }
     }
 
-    /// The failure of `krb5_os_localaddr`: the errno's text, as `com_err` prints it.
-    /// MIT `krb5_os_localaddr` (`lib/krb5/os/localaddr.c:1311-1315`): the call returns the errno of a failed `getifaddrs`.
+    // MIT krb5_os_localaddr; see docs/parity/b1-client.md
     #[must_use]
     pub fn from_local_addresses(e: &krb5_protocol::Error) -> Self {
         match e {
@@ -219,7 +180,6 @@ impl Krb5Error {
         }
     }
 
-    /// An OS error under its `strerror` text, as `com_err` prints an errno.
     #[must_use]
     pub fn from_os(e: &io::Error) -> Self {
         let text = e.to_string();
@@ -230,9 +190,7 @@ impl Krb5Error {
         Self::new(Code::Other, text)
     }
 
-    /// A KCM request's failure: no KCM daemon is `KRB5_KCM_NO_SERVER`, an OS error its errno.
-    /// MIT `kcmio_unix_socket_connect` (`cc_kcm.c:313-330`): a socket that is not there, or a
-    /// `kcm_socket` of `-`, is `KRB5_KCM_NO_SERVER`; any other failure to connect is its errno.
+    // MIT: `kcmio_unix_socket_connect` (cc_kcm.c:313-330)
     #[must_use]
     pub fn from_kcm(e: &io::Error) -> Self {
         if krb5_protocol::kcm_no_server(e) {
@@ -244,9 +202,10 @@ impl Krb5Error {
         }
     }
 
-    /// A FILE cache's read or store failure, with the file name as MIT adds it.
-    /// MIT `set_errmsg_filename` (`cc_file.c:117-124`): "\<message\> (filename: \<path\>)".
-    /// MIT `open_cache_file` (`cc_file.c:347-352`): a lock failure is the lock's errno, not `interpret_errno`'s code.
+    // MIT: `set_errmsg_filename` (cc_file.c:117-124)
+    // "\<message\> (filename: \<path\>)".
+    // MIT: `open_cache_file` (cc_file.c:347-352)
+    // a lock failure is the lock's errno, not `interpret_errno`'s code.
     #[must_use]
     pub fn from_file_cache(e: &io::Error, path: &Path) -> Self {
         let code = match krb5_protocol::FccFailure::of(e) {
@@ -264,9 +223,7 @@ impl Krb5Error {
         Self::new(code, format!("{text} (filename: {})", path.display()))
     }
 
-    /// A cache file's write failure.
-    /// MIT `fcc_replace` (`cc_file.c:1286-1337`): the error of the write that replaces a cache
-    /// names no file.
+    // MIT: `fcc_replace` (cc_file.c:1286-1337)
     #[must_use]
     pub fn from_cache_write(e: &io::Error) -> Self {
         match interpret_errno(e) {
@@ -276,9 +233,7 @@ impl Krb5Error {
     }
 }
 
-/// The cache code of an I/O error: an OS error by its errno, any other by its kind, or none.
-/// MIT `interpret_errno` (`cc_file.c:1346-1389`): a missing path is `KRB5_FCC_NOFILE`, a refused
-/// one `KRB5_FCC_PERM`, a bad argument or descriptor `KRB5_FCC_INTERNAL`, the rest `KRB5_CC_IO`.
+// MIT: `interpret_errno` (cc_file.c:1346-1389)
 fn interpret_errno(e: &io::Error) -> Code {
     use nix::errno::Errno;
     let Some(n) = e.raw_os_error() else {
@@ -298,59 +253,57 @@ fn interpret_errno(e: &io::Error) -> Code {
     }
 }
 
-/// The table text of `code`.
 fn code_text(code: Code) -> &'static str {
     match code {
         Code::Kdc(_) | Code::Other => "Unknown code",
-        // MIT `KRB5KRB_AP_ERR_BAD_INTEGRITY` (`krb5_err.et:74-74`): the text.
+        // MIT KRB5KRB_AP_ERR_BAD_INTEGRITY; see docs/parity/b1-client.md
         Code::BadIntegrity => "Decrypt integrity check failed",
-        // MIT `KRB5_FCC_NOFILE` (`krb5_err.et:263-263`): the text.
+        // MIT KRB5_FCC_NOFILE; see docs/parity/b1-client.md
         Code::FccNofile => "No credentials cache found",
-        // MIT `KRB5_FCC_PERM` (`krb5_err.et:262-262`): the text.
+        // MIT: `KRB5_FCC_PERM` (krb5_err.et:262-262)
         Code::FccPerm => "Credentials cache permissions incorrect",
-        // MIT `KRB5_CC_NOTFOUND` (`krb5_err.et:191-191`): the text.
+        // MIT KRB5_CC_NOTFOUND; see docs/parity/b1-client.md
         Code::CcNotfound => "Matching credential not found",
-        // MIT `KRB5_CC_UNKNOWN_TYPE` (`krb5_err.et:190-190`): the text.
+        // MIT KRB5_CC_UNKNOWN_TYPE; see docs/parity/b1-client.md
         Code::CcUnknownType => "Unknown credential cache type",
-        // MIT `KRB5_KT_UNKNOWN_TYPE` (`krb5_err.et:244-244`): the text.
+        // MIT: `KRB5_KT_UNKNOWN_TYPE` (krb5_err.et:244-244)
         Code::KtUnknownType => "Unknown Key table type",
-        // MIT `KRB5KRB_AP_WRONG_PRINC` (`krb5_err.et:196-196`): the text.
+        // MIT: `KRB5KRB_AP_WRONG_PRINC` (krb5_err.et:196-196)
         Code::WrongPrinc => "Wrong principal in request",
-        // MIT `KRB5KRB_AP_ERR_TKT_INVALID` (`krb5_err.et:197-197`): the text.
+        // MIT KRB5KRB_AP_ERR_TKT_INVALID; see docs/parity/b1-client.md
         Code::TktInvalid => "Ticket has invalid flag set",
-        // MIT `KRB5_KDC_UNREACH` (`krb5_err.et:211-211`): the text.
+        // MIT KRB5_KDC_UNREACH; see docs/parity/b1-client.md
         Code::KdcUnreach => "Cannot contact any KDC for requested realm",
-        // MIT `KRB5_REALM_UNKNOWN` (`krb5_err.et:209-209`): the text.
+        // MIT KRB5_REALM_UNKNOWN; see docs/parity/b1-client.md
         Code::RealmUnknown => "Cannot find KDC for requested realm",
-        // MIT `KRB5_PARSE_MALFORMED` (`krb5_err.et:181-181`): the text.
+        // MIT: `KRB5_PARSE_MALFORMED` (krb5_err.et:181-181)
         Code::ParseMalformed => "Malformed representation of principal",
-        // MIT `KRB5_CONFIG_NODEFREALM` (`krb5_err.et:310-310`): the text.
+        // MIT: `KRB5_CONFIG_NODEFREALM` (krb5_err.et:310-310)
         Code::NoDefRealm => "Configuration file does not specify default realm",
         Code::Profile(p) => p.text(),
-        // MIT `KRB5_FCC_INTERNAL` (`krb5_err.et:264-264`): the text.
+        // MIT: `KRB5_FCC_INTERNAL` (krb5_err.et:264-264)
         Code::FccInternal => "Internal credentials cache error",
-        // MIT `KRB5_KDCREP_MODIFIED` (`krb5_err.et:200-200`): the text.
+        // MIT KRB5_KDCREP_MODIFIED; see docs/parity/b1-client.md
         Code::KdcrepModified => "KDC reply did not match expectations",
-        // MIT `KRB5_CC_IO` (`krb5_err.et:261-261`): the text.
+        // MIT: `KRB5_KDCREP_SKEW` (krb5_err.et:201-201)
+        Code::KdcrepSkew => "Clock skew too great in KDC reply",
+        // MIT: `KRB5_CC_IO` (krb5_err.et:261-261)
         Code::CcIo => "Credentials cache I/O operation failed",
-        // MIT `KRB5_CC_FORMAT` (`krb5_err.et:267-267`): the text.
+        // MIT KRB5_CC_FORMAT; see docs/parity/b1-client.md
         Code::CcFormat => "Bad format in credentials cache",
-        // MIT `KRB5_CCACHE_BADVNO` (`krb5_err.et:292-292`): the text.
+        // MIT: `KRB5_CCACHE_BADVNO` (krb5_err.et:292-292)
         Code::CcBadVno => "Unsupported credentials cache format version number",
-        // MIT `KRB5_KCM_NO_SERVER` (`k5e1_err.et:44-44`): the text.
+        // MIT KRB5_KCM_NO_SERVER; see docs/parity/b1-client.md
         Code::KcmNoServer => "No KCM server found",
         Code::Enoent => "No such file or directory",
         Code::Einval => "Invalid argument",
-        // MIT `KRB5_PREAUTH_FAILED` (`krb5_err.et:287-287`): the text.
+        // MIT KRB5_PREAUTH_FAILED; see docs/parity/b1-client-preauth.md
         Code::PreauthFailed => "Generic preauthentication failure",
-        // MIT `KRB5_LIBOS_PWDINTR` (`krb5_err.et:178-178`): the text.
+        // MIT KRB5_LIBOS_PWDINTR; see docs/parity/b1-client-preauth.md
         Code::PwdInterrupted => "Password read interrupted",
     }
 }
 
-/// The text of a KDC error code.
-/// The KDC codes' texts of MIT's `lib/krb5/error_tables/krb5_err.et`, whose unnamed slots read
-/// "KRB5 error code N".
 #[must_use]
 pub fn kdc_error_text(code: i32) -> String {
     let text = match code {
@@ -436,126 +389,4 @@ pub fn kdc_error_text(code: i32) -> String {
         _ => return format!("KRB5 error code {code}"),
     };
     text.to_owned()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Live MIT 1.22.2: the texts the tools print.
-    #[test]
-    fn mit_texts_of_the_settled_failures() {
-        let unknown = krb5_protocol::Error::KrbError {
-            code: krb5_types::err::C_PRINCIPAL_UNKNOWN,
-            text: Some("CLIENT_NOT_FOUND".into()),
-        };
-        assert_eq!(
-            Krb5Error::from_as(&unknown, "nosuch@KERBER.TEST", "KERBER.TEST").message,
-            "Client 'nosuch@KERBER.TEST' not found in Kerberos database"
-        );
-        let svc = "Server nfs/zima-nas.kerber.test@KERBER.TEST not found in Kerberos database";
-        let server = krb5_protocol::Error::KrbError {
-            code: krb5_types::err::S_PRINCIPAL_UNKNOWN,
-            text: Some(svc.into()),
-        };
-        assert_eq!(Krb5Error::from_tgs(&server, "KERBER.TEST").message, svc);
-        let bare = krb5_protocol::Error::KrbError {
-            code: krb5_types::err::S_PRINCIPAL_UNKNOWN,
-            text: None,
-        };
-        assert_eq!(
-            Krb5Error::from_tgs(&bare, "KERBER.TEST").message,
-            "Server not found in Kerberos database"
-        );
-        let preauth = krb5_protocol::Error::KrbError {
-            code: krb5_types::err::PREAUTH_FAILED,
-            text: None,
-        };
-        assert_eq!(
-            Krb5Error::from_protocol(&preauth, "R").message,
-            "Preauthentication failed"
-        );
-        let generic = krb5_protocol::Error::KrbError {
-            code: krb5_types::err::GENERIC,
-            text: Some("why".into()),
-        };
-        assert_eq!(
-            Krb5Error::from_protocol(&generic, "R").message,
-            "KDC returned error string: why"
-        );
-        let s4u = krb5_protocol::Error::KrbError {
-            code: krb5_types::err::PADATA_TYPE_NOSUPP,
-            text: None,
-        };
-        assert_eq!(
-            Krb5Error::from_tgs(&s4u, "KERBER.TEST").message,
-            "KDC has no support for padata type"
-        );
-        let nofile = io::Error::from(io::ErrorKind::NotFound);
-        let e = Krb5Error::from_file_cache(&nofile, Path::new("/tmp/none"));
-        assert_eq!(e.code, Code::FccNofile);
-        assert_eq!(
-            e.message,
-            "No credentials cache found (filename: /tmp/none)"
-        );
-        assert_eq!(kdc_error_text(30), "KRB5 error code 30");
-        assert_eq!(
-            Krb5Error::of(Code::WrongPrinc).to_string(),
-            "Wrong principal in request"
-        );
-    }
-
-    /// Live MIT 1.22.2: a default cache name with an unterminated `%{` is "Internal credentials
-    /// cache error"; a type no cache is built for is "Unknown credential cache type".
-    #[test]
-    fn mit_texts_of_a_cache_name_that_does_not_resolve() {
-        let unterminated = krb5_config::expand_ccache_params("FILE:/tmp/x_%{uid").unwrap_err();
-        let e = Krb5Error::from_ccname(&unterminated);
-        assert_eq!(e.code, Code::FccInternal);
-        assert_eq!(e.message, "Internal credentials cache error");
-        let unknown = krb5_config::parse_ccspec("NOSUCHTYPE:x").unwrap_err();
-        assert_eq!(
-            Krb5Error::from_ccname(&unknown).message,
-            "Unknown credential cache type"
-        );
-        assert_eq!(
-            Krb5Error::from_os(&io::Error::from_raw_os_error(13)).message,
-            "Permission denied"
-        );
-        assert_eq!(
-            Krb5Error::of(Code::KdcrepModified).message,
-            "KDC reply did not match expectations"
-        );
-    }
-
-    /// A failed interface walk reads as its errno's text, the one `kinit -a` prints before "getting local addresses".
-    /// MIT `krb5_os_localaddr` (`lib/krb5/os/localaddr.c:1311-1315`): the call returns the errno of a failed `getifaddrs`.
-    #[test]
-    fn a_failed_interface_walk_is_the_errno_text() {
-        let e = krb5_protocol::Error::Io {
-            message: "Permission denied".into(),
-            kind: io::ErrorKind::PermissionDenied,
-            retryable: false,
-        };
-        let got = Krb5Error::from_local_addresses(&e);
-        assert_eq!(got.code, Code::Other);
-        assert_eq!(got.message, "Permission denied");
-    }
-
-    /// Live MIT 1.22.2 `kinit -c /tmp/nonexistent-dir/cc`: "Failed to store credentials: No
-    /// credentials cache found", no file name; MIT's errno table for the rest.
-    #[test]
-    fn a_cache_write_error_is_its_errno_code_without_the_file() {
-        let write = |n| Krb5Error::from_cache_write(&io::Error::from_raw_os_error(n)).message;
-        assert_eq!(write(2), "No credentials cache found");
-        assert_eq!(write(20), "No credentials cache found");
-        assert_eq!(write(13), "Credentials cache permissions incorrect");
-        assert_eq!(write(30), "Credentials cache permissions incorrect");
-        assert_eq!(write(17), "Internal credentials cache error");
-        assert_eq!(write(28), "Credentials cache I/O operation failed");
-        assert_eq!(
-            Krb5Error::from_file_cache(&io::Error::from_raw_os_error(21), Path::new("/x")).message,
-            "Credentials cache permissions incorrect (filename: /x)"
-        );
-    }
 }

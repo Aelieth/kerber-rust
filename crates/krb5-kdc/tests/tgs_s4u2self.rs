@@ -340,7 +340,7 @@ fn s4u2self_keeps_f_without_clearing_targets() {
 fn explicit_cross_tgs_is_server_mismatch() {
     let (mut store, acl) = bootstrap_documented().unwrap();
     store
-        .create_interrealm_key(&acl, &documented_admin_id(), FOREIGN, aes_key(0x11))
+        .create_interrealm_key(&acl, &documented_admin_id(), FOREIGN, aes_key(0x11), None)
         .unwrap();
     let tgt = host_tgt(&store, 17010);
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
@@ -415,7 +415,7 @@ fn foreign_pac_client() {
     let (mut store, acl) = bootstrap_documented().unwrap();
     let ir = aes_key(0x33);
     store
-        .create_interrealm_key(&acl, &documented_admin_id(), FOREIGN, ir.clone())
+        .create_interrealm_key(&acl, &documented_admin_id(), FOREIGN, ir.clone(), None)
         .unwrap();
     let tgt = host_tgt(&store, 17040);
     let local = store.krbtgt().unwrap().best_key().unwrap().key.clone();
@@ -573,13 +573,13 @@ fn three_realm() -> (
     let (mut a, acl_a, actor_a, _) = realm_store("A.TEST", "svc.a.test");
     let (mut b, acl_b, actor_b, _) = realm_store("B.TEST", "svc.b.test");
     let (mut c, acl_c, actor_c, host_c) = realm_store("C.TEST", "svc.c.test");
-    a.create_interrealm_key(&acl_a, &actor_a, "B.TEST", ir.clone())
+    a.create_interrealm_key(&acl_a, &actor_a, "B.TEST", ir.clone(), None)
         .expect("A→B");
-    b.create_interrealm_key(&acl_b, &actor_b, "A.TEST", ir.clone())
+    b.create_interrealm_key(&acl_b, &actor_b, "A.TEST", ir.clone(), None)
         .expect("B→A");
-    b.create_interrealm_key(&acl_b, &actor_b, "C.TEST", ir.clone())
+    b.create_interrealm_key(&acl_b, &actor_b, "C.TEST", ir.clone(), None)
         .expect("B→C");
-    c.create_interrealm_key(&acl_c, &actor_c, "B.TEST", ir.clone())
+    c.create_interrealm_key(&acl_c, &actor_c, "B.TEST", ir.clone(), None)
         .expect("C→B");
     let mut cap = std::collections::BTreeMap::new();
     cap.entry("A.TEST".into())
@@ -923,7 +923,7 @@ fn final_hop(ad_identity: bool, logon: HeaderLogon) -> Result<Pac, Error> {
 
 #[test]
 fn s4u2self_final_hop_carries_the_foreign_logon_info() {
-    // MIT: on this hop `issue_pac` has no client entry (the user is not in C), so a KDB with AD
+    // On this hop `issue_pac` has no client entry (the user is not in C), so a KDB with AD
     // data can only carry the user's realm's identity; it never mints one from C's store.
     let foreign = RpcSid::nt_domain(11, 12, 13);
     let pac = final_hop(true, HeaderLogon::Foreign(foreign.clone(), 1234)).expect("final hop");
@@ -1173,7 +1173,7 @@ fn s4u2self_explicit_cross_tgs_is_server_mismatch() {
     let (mut store, acl) = bootstrap_documented().expect("bootstrap");
     let ir = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x11; 32]).unwrap();
     store
-        .create_interrealm_key(&acl, &documented_admin_id(), "OTHER.TEST", ir)
+        .create_interrealm_key(&acl, &documented_admin_id(), "OTHER.TEST", ir, None)
         .expect("interrealm");
     let host = documented_host();
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);

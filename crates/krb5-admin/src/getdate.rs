@@ -1,9 +1,4 @@
-//! The date and interval phrases `kadmin` reads: MIT `get_date_rel` (`kadmin/cli/getdate.y`),
-//! a port of its grammar, word tables and conversion, and the `parse_date` / `parse_interval`
-//! wrappers of `kadmin.c`.
-//!
-//! Local time comes from the process's time zone (`TZ`, else `/etc/localtime`), as `localtime`
-//! gives it to MIT.
+//! The date and interval phrases `kadmin` reads: MIT `get_date_rel` (`kadmin/cli/getdate.y`), a port of its grammar, word tables and conversion, and the `parse_date` / `parse_interval` wrappers of `kadmin.c`.
 
 use chrono::{Datelike as _, Offset as _, TimeZone as _, Timelike as _};
 
@@ -11,12 +6,13 @@ const EPOCH: i64 = 1970;
 const EPOCH_END: i64 = 2106;
 const SECSPERDAY: i64 = 24 * 60 * 60;
 
-/// Why a phrase did not convert.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DateError {
-    /// MIT `parse_date` (`kadmin.c:158-166`): `get_date_rel` failed.
+    // MIT: `parse_date` (kadmin.c:158-166)
+    /// `get_date_rel` failed.
     Invalid(String),
-    /// MIT `parse_interval` (`kadmin.c:190-194`): an absolute date before now is refused.
+    // MIT: `parse_interval` (kadmin.c:190-194)
+    /// an absolute date before now is refused.
     InPast(String),
 }
 
@@ -29,7 +25,6 @@ impl std::fmt::Display for DateError {
     }
 }
 
-/// The current time as `time(&now)` gives it to `kadmin`'s parsers.
 #[must_use]
 pub fn now() -> i64 {
     std::time::SystemTime::now()
@@ -39,31 +34,18 @@ pub fn now() -> i64 {
         .unwrap_or(0)
 }
 
-/// `t` as a 32-bit `krb5_timestamp` / `krb5_deltat` keeps it: its low 32 bits.
 #[must_use]
 pub fn low32(t: i64) -> u32 {
     u32::try_from(t.rem_euclid(1 << 32)).unwrap_or(0)
 }
 
 /// `kadmin`'s absolute date: `get_date_rel(s, now)`, 0 for `never`.
-/// MIT `parse_date` (`kadmin.c:158-166`): `get_date_rel`, and `Invalid date specification "%s".`
-/// when it fails.
-///
-/// # Errors
-///
-/// [`DateError::Invalid`] when `s` is not a date `get_date_rel` reads.
 pub fn parse_date(s: &str, now: i64) -> Result<i64, DateError> {
     get_date_rel(s, now).ok_or_else(|| DateError::Invalid(s.to_owned()))
 }
 
 /// `kadmin`'s interval: a `krb5_string_to_deltat` duration, else a date less now.
-/// MIT `parse_interval` (`kadmin.c:174-197`): the deltat first; else `get_date_rel`, an absolute
-/// 0 (`never`) being an interval of 0 and a date in the past an error.
-///
-/// # Errors
-///
-/// [`DateError::Invalid`] when `s` is neither; [`DateError::InPast`] when it names a moment
-/// before `now`.
+/// the deltat first; else `get_date_rel`, an absolute 0 (`never`) being an interval of 0 and a date in the past an error.
 pub fn parse_interval(s: &str, now: i64) -> Result<i64, DateError> {
     if let Ok(delta) = krb5_types::deltat::parse(s) {
         return Ok(i64::from(delta));
@@ -112,7 +94,6 @@ enum Tok {
     End,
 }
 
-/// The parser's globals (`yyYear`, `yyHaveDate`, …).
 struct State {
     dst: DstMode,
     day_ordinal: i64,
@@ -138,7 +119,6 @@ const fn hour(h: i64) -> i64 {
     h * 60
 }
 
-/// The month and weekday names: MIT's `MonthDayTable` in `getdate.y`.
 const MONTH_DAY: &[(&str, Tok)] = &[
     ("january", Tok::Month(1)),
     ("february", Tok::Month(2)),
@@ -166,7 +146,6 @@ const MONTH_DAY: &[(&str, Tok)] = &[
     ("saturday", Tok::Day(6)),
 ];
 
-/// The time units: MIT's `UnitsTable` in `getdate.y`.
 const UNITS: &[(&str, Tok)] = &[
     ("year", Tok::MonthUnit(12)),
     ("month", Tok::MonthUnit(1)),
@@ -180,7 +159,6 @@ const UNITS: &[(&str, Tok)] = &[
     ("sec", Tok::SecUnit(1)),
 ];
 
-/// The relative words and ordinals: MIT's `OtherTable` in `getdate.y`.
 const OTHER: &[(&str, Tok)] = &[
     ("tomorrow", Tok::MinuteUnit(24 * 60)),
     ("yesterday", Tok::MinuteUnit(-24 * 60)),
@@ -204,7 +182,6 @@ const OTHER: &[(&str, Tok)] = &[
     ("never", Tok::Never),
 ];
 
-/// The zone names compiled into MIT's `TimezoneTable` in `getdate.y`, minutes west of UTC.
 const ZONES: &[(&str, Tok)] = &[
     ("gmt", Tok::Zone(hour(0))),
     ("ut", Tok::Zone(hour(0))),
@@ -266,7 +243,8 @@ fn find(table: &[(&str, Tok)], word: &str) -> Option<Tok> {
         .map(|(_, t)| *t)
 }
 
-/// MIT `LookupWord` (`getdate.y:681-774`): a word (letters and dots, lowercased) to its token.
+// MIT: `LookupWord` (getdate.y:681-774)
+/// a word (letters and dots, lowercased) to its token.
 fn lookup_word(word: &str) -> Tok {
     let mut buff = word.to_ascii_lowercase();
     if buff == "am" || buff == "a.m." {
@@ -319,7 +297,8 @@ fn lookup_word(word: &str) -> Tok {
     Tok::Id
 }
 
-/// MIT `yylex` (`getdate.y:778-828`): the tokens of the whole phrase.
+// MIT: `yylex` (getdate.y:778-828)
+/// the tokens of the whole phrase.
 fn lex(s: &str) -> Vec<Tok> {
     let b = s.as_bytes();
     let mut i = 0;
@@ -417,7 +396,6 @@ impl State {
         self.have_date += 1;
     }
 
-    /// The `rel` rule of `getdate.y`: `relunit [ago]`, `ago` negating every relative part.
     fn rel(&mut self, toks: &[Tok], i: usize) -> usize {
         self.have_rel += 1;
         if toks.get(i) == Some(&Tok::Ago) {
@@ -432,8 +410,6 @@ impl State {
         self.rel_seconds = self.rel_seconds.wrapping_add(n.wrapping_mul(60));
     }
 
-    /// The `spec` grammar of `getdate.y` as its yacc parser runs it (a conflict shifts), false
-    /// on a syntax error.
     fn parse(&mut self, toks: &[Tok]) -> bool {
         let at = |i: usize| toks.get(i).copied().unwrap_or(Tok::End);
         let mut i = 0;
@@ -601,7 +577,6 @@ impl State {
     }
 }
 
-/// The broken-down local time `localtime` gives MIT, `None` outside the calendar.
 struct Tm {
     year: i64,
     mon: i64,
@@ -617,8 +592,6 @@ fn localtime(t: i64) -> Option<Tm> {
     let utc = chrono::DateTime::from_timestamp(t, 0)?;
     let local = utc.with_timezone(&chrono::Local);
     let offset = local.offset().fix().local_minus_utc();
-    // tm_isdst: the offset is above the year's standard one (the smaller of January's and
-    // July's), which holds in every zone that observes summer time.
     let standard = [1, 7]
         .iter()
         .filter_map(|&m| {
@@ -646,7 +619,8 @@ fn localtime(t: i64) -> Option<Tm> {
     })
 }
 
-/// MIT `ToSeconds` (`getdate.y:534-555`): the time of day in seconds, `None` out of range.
+// MIT: `ToSeconds` (getdate.y:534-555)
+/// the time of day in seconds, `None` out of range.
 fn to_seconds(h: i64, m: i64, s: i64, mer: Meridian) -> Option<i64> {
     if !(0..=59).contains(&m) || !(0..=59).contains(&s) {
         return None;
@@ -660,7 +634,6 @@ fn to_seconds(h: i64, m: i64, s: i64, mer: Meridian) -> Option<i64> {
     Some((h * 60 + m) * 60 + s)
 }
 
-/// A calendar moment for MIT `Convert`: `yyMonth`, `yyDay`, `yyYear` and the time of day.
 struct Moment {
     month: i64,
     day: i64,
@@ -670,8 +643,8 @@ struct Moment {
     seconds: i64,
 }
 
-/// MIT `Convert` (`getdate.y:562-606`): its leap-year rule included; `timezone` is the global
-/// `yyTimezone` (minutes west).
+// MIT: `Convert` (getdate.y:562-606)
+/// its leap-year rule included; `timezone` is the global `yyTimezone` (minutes west).
 fn convert(at: &Moment, mer: Meridian, dst: DstMode, timezone: i64) -> Option<i64> {
     let mut year = at.year.wrapping_abs();
     if year < 1900 {
@@ -718,14 +691,16 @@ fn convert(at: &Moment, mer: Meridian, dst: DstMode, timezone: i64) -> Option<i6
     Some(julian)
 }
 
-/// MIT `DSTcorrect` (`getdate.y:610-630`): the distance corrected for a summer-time change.
+// MIT: `DSTcorrect` (getdate.y:610-630)
+/// the distance corrected for a summer-time change.
 fn dst_correct(start: i64, future: i64) -> Option<i64> {
     let start_day = (localtime(start)?.hour + 1) % 24;
     let future_day = (localtime(future)?.hour + 1) % 24;
     Some((future - start) + (start_day - future_day) * 60 * 60)
 }
 
-/// MIT `RelativeDate` (`getdate.y:634-648`): the distance to the named weekday.
+// MIT: `RelativeDate` (getdate.y:634-648)
+/// the distance to the named weekday.
 fn relative_date(start: i64, ordinal: i64, number: i64) -> Option<i64> {
     let tm = localtime(start)?;
     let mut now = start;
@@ -735,7 +710,8 @@ fn relative_date(start: i64, ordinal: i64, number: i64) -> Option<i64> {
     dst_correct(start, now)
 }
 
-/// MIT `RelativeMonth` (`getdate.y:652-677`): `timezone` is the global `yyTimezone`.
+// MIT: `RelativeMonth` (getdate.y:652-677)
+/// `timezone` is the global `yyTimezone`.
 fn relative_month(start: i64, rel_month: i64, timezone: i64) -> Option<i64> {
     if rel_month == 0 {
         return Some(0);
@@ -754,7 +730,8 @@ fn relative_month(start: i64, rel_month: i64, timezone: i64) -> Option<i64> {
     dst_correct(start, ret)
 }
 
-/// MIT `get_date_rel` (`getdate.y:864-880`): `ftz.timezone`, minutes west of UTC at `t`.
+// MIT: `get_date_rel` (getdate.y:864-880)
+/// `ftz.timezone`, minutes west of UTC at `t`.
 fn local_minutes_west(t: i64) -> Option<i64> {
     let utc = chrono::DateTime::from_timestamp(t, 0)?;
     let offset = utc
@@ -790,8 +767,6 @@ impl State {
     }
 }
 
-/// MIT `get_date_rel` (`getdate.y:864-1012`): the moment `p` names, relative to `now`; `None`
-/// where MIT returns -1.
 #[must_use]
 pub fn get_date_rel(p: &str, now: i64) -> Option<i64> {
     let tm = localtime(now)?;
@@ -842,8 +817,6 @@ pub fn get_date_rel(p: &str, now: i64) -> Option<i64> {
 mod tests {
     use super::*;
 
-    /// 2026-10-01 21:53:53 UTC, the settle run's clock; the tests assume `TZ` is UTC or unset
-    /// in a UTC container, as the gates and CI run.
     const NOW: i64 = 1_790_891_633;
 
     fn utc() -> bool {

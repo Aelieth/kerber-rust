@@ -2,8 +2,6 @@
 
 use super::*;
 
-/// A store-level `AclDenied` takes the stub's own
-/// `KADM5_AUTH_*` (`server_stubs.c`), not `KADM5_AUTH_GET` for every op.
 #[test]
 fn store_acl_denied_is_the_stubs_auth_code() {
     use super::*;
@@ -28,7 +26,6 @@ fn store_acl_denied_is_the_stubs_auth_code() {
     assert_eq!(kadm5_code(CHRAND_PRINCIPAL3, &d), KADM5_AUTH_CHANGEPW);
     assert_eq!(kadm5_code(SETKEY_PRINCIPAL4, &d), KADM5_AUTH_SETKEY);
     assert_eq!(kadm5_code(EXTRACT_KEYS, &d), KADM5_AUTH_EXTRACT);
-    // Other store errors are op-independent.
     assert_eq!(
         kadm5_code(DELETE_PRINCIPAL, &Error::NotFound),
         KADM5_UNK_PRINC
@@ -108,7 +105,7 @@ fn cpw_self_without_initial_is_auth_initial() {
     w.nullstring(Some("new-secret"));
     let out = dispatch_kadm5_ticket(
         &store,
-        &none,
+        &crate::kadm5::Kadm5AuthConfig::from_acl(none.clone()),
         "user@KERBER.TEST",
         CHPASS_PRINCIPAL,
         &w.b,

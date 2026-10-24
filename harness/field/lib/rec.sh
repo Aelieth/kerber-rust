@@ -24,7 +24,8 @@
 #   kdcmark <name> / kdcsince <name> [ERE]                 windows of kdc's two daemon logs (check mark.<name>)
 #   capstart <vm> <name> <filter> / capstop <vm> <name>    a capture on a VM, kept without AS exchanges
 #   waitsync <vm>                                          chrony synchronised (check sync.<vm>)
-#   finish                                                 the result: PASS when no check failed and one passed
+#   finish                                                 the result: PASS when no check failed and one passed, each
+#                                                          check counted once, by its last row (a check run again)
 # <expect>: `rc` (exit status 0), `rc=N` or `rc=N|M`, `line:<text>` (a whole output line equal to text, and
 # status 0), or an ERE that must match an output line (and status 0). checks.tsv gets one line per check:
 #   name, PASS / FAIL / INFO, expect, rc, observed (the matching line, or what was seen), record.txt line.
@@ -205,12 +206,14 @@ waitsync() {
     check "sync.$1" '^synchronized: yes$' run "$1" "chronyc -n waitsync 30 0 0 2 > /dev/null 2>&1; printf 'synchronized: %s\n' \"\$(timedatectl show -p NTPSynchronized --value)\"; chronyc -n tracking | grep -E '^(Leap status|System time)'"
 }
 
+# _lastcounts <checks.tsv>: "PASS FAIL INFO", each check counted once, by its last row.
+_lastcounts() {
+    awk -F'\t' '!/^#/ { r[$1] = $2 } END { for (k in r) n[r[k]]++; print n["PASS"] + 0, n["FAIL"] + 0, n["INFO"] + 0 }' "$1"
+}
 # finish: the scenario's result into $REC_DIR/result; status 0 for PASS.
 finish() {
     local pass fail info result=FAIL
-    pass=$(awk -F'\t' '$2 == "PASS"' "$CHECKS" | wc -l)
-    fail=$(awk -F'\t' '$2 == "FAIL"' "$CHECKS" | wc -l)
-    info=$(awk -F'\t' '$2 == "INFO"' "$CHECKS" | wc -l)
+    read -r pass fail info < <(_lastcounts "$CHECKS")
     [ "$fail" -eq 0 ] && [ "$pass" -gt 0 ] && result=PASS
     printf '%s %s pass %s fail %s info\n' "$result" "$pass" "$fail" "$info" > "$REC_DIR/result"
     section "result: $result ($pass pass, $fail fail, $info info; checks.tsv)"

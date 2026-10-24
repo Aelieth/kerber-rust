@@ -151,7 +151,8 @@ fn bootstrap_honours_supported_enctypes_order() {
 
 /// With no `supported_enctypes`, a new key set is MIT's default pair; an explicit list (`-e`)
 /// is taken as given, even outside it; the documented test realm keeps its four AES types.
-/// MIT `KRB5_DEFAULT_SUPPORTED_ENCTYPES` (`osconf.hin:109-111`): aes256-cts-hmac-sha1-96 and aes128-cts-hmac-sha1-96.
+// MIT: `KRB5_DEFAULT_SUPPORTED_ENCTYPES` (osconf.hin:109-111)
+/// aes256-cts-hmac-sha1-96 and aes128-cts-hmac-sha1-96.
 #[test]
 fn unset_supported_enctypes_keys_mits_default_pair() {
     let etypes = |store: &krb5_kdc::PrincipalStore, who: &str| -> Vec<i32> {

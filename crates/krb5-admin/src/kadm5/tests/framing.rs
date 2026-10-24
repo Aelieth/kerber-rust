@@ -4,11 +4,7 @@ use super::*;
 
 #[test]
 fn read_record_bounds_the_total_accumulated_size() {
-    // A pre-auth client that chains fragments without ever setting
-    // LAST_FRAG must not accumulate unbounded memory. Two 600 KiB non-last
-    // fragments sum to 1.2 MiB, over the 1 MiB total cap, so read_record
-    // errors on the second fragment instead of waiting for more and hitting
-    // EOF, a different error kind.
+    // LAST_FRAG must not accumulate unbounded memory. Two 600 KiB non-last fragments sum to 1.2 MiB, over the 1 MiB total cap, so read_record errors on the second fragment instead of waiting for more and hitting EOF, a different error kind.
     use std::io::Write as _;
     use std::net::{TcpListener, TcpStream};
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -34,8 +30,6 @@ fn read_record_bounds_the_total_accumulated_size() {
     let _ = writer.join();
 }
 
-/// A record of empty fragments, 300,000 marks with no last one, ends once its marks pass 1 MiB:
-/// the blocking reader holds no memory for them and stops reading at the cap.
 #[test]
 fn empty_fragments_end_the_record_at_the_cap() {
     use std::io::Write as _;
@@ -54,8 +48,6 @@ fn empty_fragments_end_the_record_at_the_cap() {
     let _ = writer.join();
 }
 
-/// A kadm5 RPC reply is one write: the record mark (length | LAST_FRAG) and the body together,
-/// as MIT's `xdrrec` flushes a record.
 #[test]
 fn rpc_record_is_one_write() {
     #[derive(Default)]
@@ -74,8 +66,6 @@ fn rpc_record_is_one_write() {
     assert_eq!(w.0, [b"\x80\0\0\x05reply".to_vec()]);
 }
 
-/// The replies that carry keys, `chrand`'s and `get_principal_keys`'s, are built in one buffer of
-/// their size, and so is the RPCSEC_GSS reply that carries one in the clear: no copy of a key is
 /// left in a buffer they outgrew. Their callers wipe them.
 #[test]
 fn the_key_replies_are_built_in_one_buffer() {
@@ -105,7 +95,6 @@ fn xdr_nullstring_round_trip_shape() {
     w.opaque(b"alice@KERBER.TEST\0");
     let mut r = XdrR::new(&w.b);
     let s = r.nullstring().unwrap().unwrap();
-    // opaque != nullstring (nullstring writes size then bytes including NUL)
     assert!(!s.is_empty() || w.b.len() >= 4);
     let mut w2 = XdrW::default();
     let s = "alice@KERBER.TEST";
@@ -167,8 +156,11 @@ fn auth_none_is_auth_too_weak() {
     let out = handle_rpc(
         RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: "KERBER.TEST",
+            conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
+            iprop_resync: None,
         },
         &[],
         &mut gss,
@@ -195,8 +187,11 @@ fn bad_program_is_prog_unavail() {
     let out = handle_rpc(
         RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: "KERBER.TEST",
+            conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
+            iprop_resync: None,
         },
         &[],
         &mut gss,
@@ -224,8 +219,11 @@ fn kadm_vers_99_is_prog_mismatch_2_2() {
     let out = handle_rpc(
         RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: "KERBER.TEST",
+            conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
+            iprop_resync: None,
         },
         &[],
         &mut gss,
@@ -265,8 +263,11 @@ fn reply_typed_rpc_is_no_reply() {
     let out = handle_rpc(
         RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: "KERBER.TEST",
+            conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
+            iprop_resync: None,
         },
         &[],
         &mut gss,

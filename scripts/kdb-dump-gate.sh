@@ -308,10 +308,17 @@ echo "$RUST_HIST_B"
 echo "$RUST_HIST_B" | grep -F 'Principal: kadmin/history@KERBER.TEST'
 docker exec "$NAME" grep -q 'histb@KERBER.TEST' /tmp/principal
 
-echo "==== half B: MIT kdb5_util load + krb5kdc ===="
+echo "==== half B: krb5-kdb dump, then MIT kdb5_util load + krb5kdc ===="
+# The database takes each change as an appended batch, so MIT loads a dump of it, as kdb5_util dump makes one.
+DUMP_B="$(docker exec \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kdb dump /tmp/rust-b.dump 2>&1 || true)"
+echo "$DUMP_B"
 docker exec "$NAME" sh -c 'kdb5_util destroy -f >/dev/null 2>&1 || true'
 docker exec "$NAME" kdb5_util create -s -P masterpassword
-LOAD_B="$(docker exec "$NAME" kdb5_util load /tmp/principal 2>&1 || true)"
+LOAD_B="$(docker exec "$NAME" kdb5_util load /tmp/rust-b.dump 2>&1 || true)"
 echo "$LOAD_B"
 echo "$LOAD_B" | grep -qiE 'error|fail' && {
     log "kdb.dump.gate" "error" ',"error":"MIT kdb5_util load rejected policy dump"'

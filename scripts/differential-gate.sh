@@ -83,6 +83,32 @@ ADDDUP="$(rust_kadmin_local \
     "$NAME" -- -q 'addprinc -randkey +0x24 host/dupskey.kerber.test')"
 echo "$ADDDUP"
 grep -q 'created' <<<"$ADDDUP" || die "rust addprinc host/dupskey.kerber.test failed"
+ADDNOPOST="$(rust_kadmin_local \
+    -e KRB5_KDC_DB=/tmp/rust.db \
+    -e KRB5_KDC_STASH=/tmp/rust.stash \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    "$NAME" -- -q 'addprinc -randkey +0x1 host/nopost.kerber.test')"
+echo "$ADDNOPOST"
+grep -q 'created' <<<"$ADDNOPOST" || die "rust addprinc host/nopost.kerber.test failed"
+ADDEXPUSER="$(rust_kadmin_local \
+    -e KRB5_KDC_DB=/tmp/rust.db \
+    -e KRB5_KDC_STASH=/tmp/rust.stash \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    "$NAME" -- -q 'addprinc -randkey expuser')"
+echo "$ADDEXPUSER"
+grep -q 'created' <<<"$ADDEXPUSER" || die "rust addprinc expuser failed"
+kadmin_q_ok rust_kadmin_local \
+    -e KRB5_KDC_DB=/tmp/rust.db \
+    -e KRB5_KDC_STASH=/tmp/rust.stash \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    "$NAME" -- -q 'modprinc -expire "1970-01-01 00:00:01 UTC" expuser'
+ADDLOCKUSER="$(rust_kadmin_local \
+    -e KRB5_KDC_DB=/tmp/rust.db \
+    -e KRB5_KDC_STASH=/tmp/rust.stash \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    "$NAME" -- -q 'addprinc -randkey +0x40 lockuser')"
+echo "$ADDLOCKUSER"
+grep -q 'created' <<<"$ADDLOCKUSER" || die "rust addprinc lockuser failed"
 ADDNOSVR="$(rust_kadmin_local \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
@@ -172,6 +198,12 @@ kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -randkey host/locked.kerber
 kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'modprinc -allow_tix host/locked.kerber.test'
 kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -randkey host/dupskey.kerber.test'
 kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'modprinc +disallow_dup_skey +disallow_tgt_based host/dupskey.kerber.test'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -randkey host/nopost.kerber.test'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'modprinc +disallow_postdated host/nopost.kerber.test'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -randkey expuser'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'modprinc -expire 1/1/1990 expuser'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -randkey lockuser'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'modprinc -allow_tix lockuser'
 kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -randkey host/nosvr.kerber.test'
 kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'modprinc +disallow_svr host/nosvr.kerber.test'
 kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -randkey expiredsvc'
@@ -241,12 +273,21 @@ grep -q '"case":"tgs-success".*"rust_enc_tag":"0x7a".*"mit_enc_tag":"0x7a"' <<<"
 grep -q '"case":"as-optimistic-encts-wrong-etype","outcome":"ok","error_code":24' <<<"$DIFF" || die "as-optimistic-encts-wrong-etype not code 24 on both legs"
 grep -q '"case":"as-invalid-opts","outcome":"ok","error_code":13' <<<"$DIFF" || die "as-invalid-opts (RENEW) not code 13 on both legs"
 grep -q '"case":"as-request-anonymous","outcome":"ok","error_code":13,"e_text":"VALIDATE_ANONYMOUS_PRINCIPAL","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "as-request-anonymous not code 13 e_text VALIDATE_ANONYMOUS_PRINCIPAL on both legs"
+grep -q '"case":"as-reserved-option-bit","outcome":"ok","error_code":25,"e_text":"NEEDED_PREAUTH".*"rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "as-reserved-option-bit not code 25 e_text NEEDED_PREAUTH on both legs"
 grep -q '"case":"as-validate-before-preauth","outcome":"ok","error_code":23' <<<"$DIFF" || die "as-validate-before-preauth (preauth+needchange) not code 23 on both legs"
 grep -q '"case":"as-retransmit","outcome":"ok","rust_retransmit_identical":true,"mit_retransmit_identical":true' <<<"$DIFF" || die "as-retransmit reply not identical from the lookaside on both legs"
 # MIT `finish_verify_padata` (`kdc/kdc_preauth.c:1224-1228`): a module's verify failure is its own INFO line in the KDC log. The Rust KDC's lines are MIT's, one for one and in order, and no AS_REQ line carries any of the text.
 verify_failure_lines() { sed -n -E 's/^.*\(info\): (preauth \([a-z_]+\) verify failure: .*)$/\1/p' "$1"; }
 VF_MIT="$(verify_failure_lines "$OUT/mit-kdc.log")"
 VF_RUST="$(verify_failure_lines "$OUT/rust-kdc.log")"
+# B17 pkinit-cms-too-small: graded on its wire code and tag (the per-case grep below). MIT oerr
+# logs ERR_peek_error(), a stale OpenSSL reason an earlier refusal left undrained, so its one
+# decode line differs; drop it from both legs by position (docs/mit-deviations.md).
+ts_n="$(grep -nxF 'preauth (pkinit) verify failure: Failed to decode CMS message: too small' <<<"$VF_RUST" | head -1 | cut -d: -f1)"
+if [ -n "$ts_n" ]; then
+    VF_RUST="$(sed "${ts_n}d" <<<"$VF_RUST")"
+    VF_MIT="$(sed "${ts_n}d" <<<"$VF_MIT")"
+fi
 [ "$VF_RUST" = "$VF_MIT" ] || {
     diff <(echo "$VF_MIT") <(echo "$VF_RUST") >&2 || true
     die "the Rust KDC's preauth verify failure lines are not MIT's"
@@ -268,8 +309,8 @@ fi
 # actually emitted, not the literal its summary line claims (a stale
 # "cases":N in diffsend.rs would otherwise pass). History: A'-3 R32 102 ·
 # A'-4 item 16 105 · item 17 106 · item 18 107 · W1-B F4 109 · W1-Z Z1.3 110 · Z6.2 111 ·
-# as-locked-out 112 · RA 123.
-DIFFSEND_RATCHET=123
+# as-locked-out 112 · RA 123 · a1-tgs 128 · replay 129 · nopost 130 · s4u-client 132 · fast-cksum 133 · explicit-armor 134 · armor-no-tgs-subkey 135 · armor-no-subkey 136 · reserved-option 137 · service-expired 138 · service-locked 139 · B17 cms 149 · B17b structure 151.
+DIFFSEND_RATCHET=151
 CASES_SEEN="$(grep -o '"case":"[^"]*","outcome":"ok"' <<<"$DIFF" | sort -u | wc -l | tr -d ' ')"
 [ "$CASES_SEEN" = "$DIFFSEND_RATCHET" ] || die "diffsend emitted $CASES_SEEN distinct ok cases; the ratchet is $DIFFSEND_RATCHET"
 grep -q "\"outcome\":\"ok\",\"cases\":$DIFFSEND_RATCHET}" <<<"$DIFF" || die "diffsend summary line does not claim $DIFFSEND_RATCHET cases"
@@ -297,6 +338,8 @@ grep -q '"case":"tgs-ad-fx-armor-authenticator","outcome":"ok","error_code":12,"
 grep -q '"case":"as-bad-msg-type","outcome":"ok","error_code":60,"e_text":"VALIDATE_MESSAGE_TYPE","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "as-bad-msg-type not code 60 e_text VALIDATE_MESSAGE_TYPE on both legs"
 grep -q '"case":"as-bad-pvno","outcome":"ok","rust_tag":"drop","mit_tag":"drop"' <<<"$DIFF" || die "as-bad-pvno was not both-drop"
 grep -q '"case":"tgs-bad-msg-type","outcome":"ok","error_code":60,"e_text":"UNKNOWN_REASON","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-bad-msg-type not code 60 e_text UNKNOWN_REASON on both legs"
+grep -q '"case":"as-service-expired","outcome":"ok","error_code":2,"e_text":"SERVICE EXPIRED","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "as-service-expired not code 2 e_text SERVICE EXPIRED on both legs"
+grep -q '"case":"as-service-locked","outcome":"ok","error_code":7,"e_text":"SERVICE LOCKED OUT","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "as-service-locked not code 7 e_text SERVICE LOCKED OUT on both legs"
 grep -q '"case":"as-service-not-allowed","outcome":"ok","error_code":27,"e_text":"SERVICE NOT ALLOWED","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "as-service-not-allowed not code 27 e_text SERVICE NOT ALLOWED on both legs"
 grep -q '"case":"tgs-ap-options","outcome":"ok","error_code":12,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-ap-options not code 12 e_text PROCESS_TGS on both legs"
 grep -q '"case":"tgs-header-kvno-zero","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d"' <<<"$DIFF" || die "tgs-header-kvno-zero not TGS-REP on both legs"
@@ -355,7 +398,20 @@ grep -q '"case":"tgs-forwarded-addresses".*"forwarded":true' <<<"$DIFF" || die "
 grep -q '"case":"tgs-forwarded-tgt-addresses".*"forwarded":true' <<<"$DIFF" || die "tgs-forwarded-tgt-addresses missing forwarded true on both legs"
 grep -q '"case":"tgs-forwarded-on-non-f-tgt","outcome":"ok","error_code":13,"e_text":"TGT NOT FORWARDABLE","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-forwarded-on-non-f-tgt not code 13 e_text TGT NOT FORWARDABLE on both legs"
 grep -q '"case":"tgs-proxy-on-non-p-tgt","outcome":"ok","error_code":13,"e_text":"TGT NOT PROXIABLE","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-proxy-on-non-p-tgt not code 13 e_text TGT NOT PROXIABLE on both legs"
+grep -q '"case":"tgs-missing-pa-tgs-req","outcome":"ok","error_code":16,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-missing-pa-tgs-req not code 16 e_text PROCESS_TGS on both legs"
+grep -q '"case":"tgs-authenticator-cname-mismatch","outcome":"ok","error_code":36,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-authenticator-cname-mismatch not code 36 e_text PROCESS_TGS on both legs"
+grep -q '"case":"tgs-authenticator-crealm-mismatch","outcome":"ok","error_code":36,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-authenticator-crealm-mismatch not code 36 e_text PROCESS_TGS on both legs"
+grep -q '"case":"tgs-server-locked-out","outcome":"ok","error_code":7,"e_text":"SERVER LOCKED OUT","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-server-locked-out not code 7 e_text SERVER LOCKED OUT on both legs"
+grep -q '"case":"tgs-disallow-tgt-based","outcome":"ok","error_code":12,"e_text":"TGT BASED NOT ALLOWED","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-disallow-tgt-based not code 12 e_text TGT BASED NOT ALLOWED on both legs"
+grep -q '"case":"tgs-authenticator-replay","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","replay_session_differs":true' <<<"$DIFF" || die "tgs-authenticator-replay did not issue a second ticket with a different session key on both legs"
 grep -q '"case":"tgs-postdate-on-non-postdatable","outcome":"ok","error_code":13,"e_text":"TGT NOT POSTDATABLE","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-postdate-on-non-postdatable not code 13 e_text TGT NOT POSTDATABLE on both legs"
+grep -q '"case":"tgs-server-disallow-postdated","outcome":"ok","error_code":10,"e_text":"NON-POSTDATABLE TICKET","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-server-disallow-postdated not code 10 e_text NON-POSTDATABLE TICKET on both legs"
+grep -q '"case":"s4u2self-client-expired","outcome":"ok","error_code":1,"e_text":"CLIENT EXPIRED","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "s4u2self-client-expired not code 1 e_text CLIENT EXPIRED on both legs"
+grep -q '"case":"s4u2self-client-locked-out","outcome":"ok","error_code":18,"e_text":"CLIENT LOCKED OUT","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "s4u2self-client-locked-out not code 18 e_text CLIENT LOCKED OUT on both legs"
+grep -q '"case":"tgs-fast-unkeyed-bad-checksum","outcome":"ok","error_code":41,"e_text":"FIND_FAST","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-fast-unkeyed-bad-checksum not code 41 e_text FIND_FAST on both legs"
+grep -q '"case":"tgs-fast-explicit-armor","outcome":"ok","error_code":24,"e_text":"FIND_FAST","e_data":"absent","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-fast-explicit-armor not code 24 e_text FIND_FAST with e_data absent on both legs"
+grep -q '"case":"tgs-fast-armor-no-tgs-subkey","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d"' <<<"$DIFF" || die "tgs-fast-armor-no-tgs-subkey not a TGS-REP on both legs"
+grep -q '"case":"tgs-fast-armor-no-subkey","outcome":"ok","error_code":12,"e_text":"FIND_FAST","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-fast-armor-no-subkey not code 12 e_text FIND_FAST on both legs"
 grep -q '"case":"tgs-validate-invalid-non-renewable","outcome":"ok","error_code":13,"e_text":"TICKET NOT RENEWABLE","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-validate-invalid-non-renewable not code 13 e_text TICKET NOT RENEWABLE on both legs"
 grep -q '"case":"tgs-postdated-is-invalid","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d".*"invalid":true' <<<"$DIFF" || die "tgs-postdated-is-invalid not invalid true on both legs"
 grep -q '"case":"tgs-no-preauth-flag","outcome":"ok","error_code":60,"e_text":"NO PREAUTH","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-no-preauth-flag not code 60 e_text NO PREAUTH on both legs"
@@ -409,6 +465,19 @@ grep -q '"case":"as-anonymous-unsigned-authpack-named-client","outcome":"ok","er
 grep -q '"case":"as-fast-hide-error-client","outcome":"ok","error_code":25' <<<"$DIFF" || die "as-fast-hide-error-client not code 25 on both legs"
 grep -q '"case":"tgs-fast-hide-client","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","hidden":true' <<<"$DIFF" || die "tgs-fast-hide-client not hidden TGS-REP on both legs"
 grep -q '"case":"pkinit-stale-freshness","outcome":"ok","error_code":24' <<<"$DIFF" || die "pkinit-stale-freshness not code 24 on both legs"
+# B17 (cms_signeddata_verify): each refusal's code, MIT first; the reason text is in the verify-failure lines compared above.
+grep -q '"case":"pkinit-cms-too-small","outcome":"ok","error_code":24' <<<"$DIFF" || die "pkinit-cms-too-small not code 24 on both legs"
+grep -q '"case":"pkinit-cms-header-too-long","outcome":"ok","error_code":24' <<<"$DIFF" || die "pkinit-cms-header-too-long not code 24 on both legs"
+grep -q '"case":"pkinit-cms-too-long","outcome":"ok","error_code":24' <<<"$DIFF" || die "pkinit-cms-too-long not code 24 on both legs"
+grep -q '"case":"pkinit-cms-wrong-tag","outcome":"ok","error_code":24' <<<"$DIFF" || die "pkinit-cms-wrong-tag not code 24 on both legs"
+grep -q '"case":"pkinit-cms-field-missing","outcome":"ok","error_code":24' <<<"$DIFF" || die "pkinit-cms-field-missing not code 24 on both legs"
+grep -q '"case":"pkinit-cms-wrong-oid","outcome":"ok","error_code":24' <<<"$DIFF" || die "pkinit-cms-wrong-oid not code 24 on both legs"
+grep -q '"case":"pkinit-authpack-not-octet-string","outcome":"ok","error_code":24' <<<"$DIFF" || die "pkinit-authpack-not-octet-string not code 24 on both legs"
+grep -q '"case":"pkinit-cms-no-signer-cert","outcome":"ok","error_code":24' <<<"$DIFF" || die "pkinit-cms-no-signer-cert not code 24 on both legs"
+grep -q '"case":"pkinit-sig-not-der","outcome":"ok","error_code":80' <<<"$DIFF" || die "pkinit-sig-not-der not code 80 on both legs"
+grep -q '"case":"pkinit-sig-r-zero","outcome":"ok","error_code":80' <<<"$DIFF" || die "pkinit-sig-r-zero not code 80 on both legs"
+grep -q '"case":"pkinit-cms-signeddata-trailing","outcome":"ok","error_code":24' <<<"$DIFF" || die "pkinit-cms-signeddata-trailing not code 24 on both legs"
+grep -q '"case":"pkinit-cms-algid-wrong-tag","outcome":"ok","error_code":24' <<<"$DIFF" || die "pkinit-cms-algid-wrong-tag not code 24 on both legs"
 grep -q '"case":"tgs-referral-no-dot","outcome":"ok","error_code":7,"e_text":"LOOKING_UP_SERVER","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-referral-no-dot not code 7 LOOKING_UP_SERVER on both legs"
 grep -q '"case":"tgs-alternate-tgs-hierarchical","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","sname":"krbtgt/SUB.KERBER.TEST"' <<<"$DIFF" || die "tgs-alternate-tgs-hierarchical not TGS-REP krbtgt/SUB.KERBER.TEST on both legs"
 grep -q '"case":"tgs-renew-postdated-from","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d"' <<<"$DIFF" || die "tgs-renew-postdated-from not TGS-REP on both legs"
@@ -607,7 +676,7 @@ RUSTCPW="$(rust_kadmin_local \
     "$NAME" -- -q 'cpw -randkey -keepold -e aes128-cts-hmac-sha1-96:normal krbtgt/KERBER.TEST')"
 echo "$RUSTCPW"
 grep -qi 'randomized' <<<"$RUSTCPW" || die "rust cpw -keepold krbtgt failed"
-docker exec "$NAME" sh -c 'for p in /proc/[0-9]*; do comm=$(cat "$p/comm" 2>/dev/null) || continue; [ "$comm" = krb5-kdc ] || continue; cmd=$(tr "\0" " " < "$p/cmdline" 2>/dev/null) || continue; echo "$cmd" | grep -q "/tmp/krb5-kdc" || continue; kill -9 "${p#/proc/}" 2>/dev/null || true; done'
+docker exec "$NAME" sh -c 'for p in /proc/[0-9]*; do comm=$(cat "$p/comm" 2>/dev/null) || continue; [ "$comm" = krb5-kdc ] || continue; cmd=$(tr "\0" " " < "$p/cmdline" 2>/dev/null) || continue; case "$cmd" in */tmp/krb5-kdc*) ;; *) continue ;; esac; kill -9 "${p#/proc/}" 2>/dev/null || true; done'
 ok=0
 for _ in $(seq 1 40); do
     if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',8888),0.15)" 2>/dev/null; then

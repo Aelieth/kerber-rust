@@ -3,3 +3,8 @@
 # on $PATH (Debian/Ubuntu `lld`, Fedora `lld`).
 [target.x86_64-unknown-linux-gnu]
 rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+# p384 0.14's default `bigint` field backend is not constant-time; its `fiat` one is.
+# The P-384 code compiles in only under this cfg, so a build without it refuses the curve.
+[target.'cfg(all())']
+rustflags = ["--cfg", "p384_backend=\"fiat\""]

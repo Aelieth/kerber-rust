@@ -1,8 +1,10 @@
 //! `kdb5_util` (the `krb5-kdb` binary, run under MIT's name): MIT's command line, the realm
 //! `create` makes, `stash`, `dump`, `load` and `destroy`, with the texts and exit statuses
 //! settled live against MIT 1.22.2.
-//! MIT `kdb5_create` (`kdb5_create.c:142-336`): `create` writes `K/M` and `krbtgt`, then `kadm5_create` the two `kadmin/` services.
-//! MIT `add_admin_princs` (`kadm5_create.c:139-154`): the `kadmin/admin` and `kadmin/changepw` attributes and lifetimes.
+// MIT: `kdb5_create` (kdb5_create.c:142-336)
+//! `create` writes `K/M` and `krbtgt`, then `kadm5_create` the two `kadmin/` services.
+// MIT: `add_admin_princs` (kadm5_create.c:139-154)
+//! the `kadmin/admin` and `kadmin/changepw` attributes and lifetimes.
 
 #![cfg(unix)]
 
@@ -14,8 +16,8 @@ use std::process::{Command, Output, Stdio};
 use krb5_crypto::EncryptionType;
 use krb5_kdc::{
     KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_TGT_BASED, KDB_LOCKDOWN_KEYS, KDB_PWCHANGE_SERVICE,
-    KDB_REQUIRES_PRE_AUTH, PrincipalStore, create_realm, kdc_conf_for_realm, load_store,
-    master_key_from_password, parse_dump, tl_mod_princ_name,
+    KDB_REQUIRES_PRE_AUTH, PrincipalStore, create_realm, load_store, master_key_from_password,
+    parse_dump, tl_mod_princ_name,
 };
 use krb5_testkit::scratch_dir;
 
@@ -276,9 +278,9 @@ fn create_takes_the_stanzas_flags_lifetimes_and_keysalts() {
 #[test]
 fn another_realms_stanza_is_not_read_for_this_one() {
     let text = "[realms]\n    OTHER.TEST = {\n        max_life = 1h\n    }\n    KL.TEST = {\n        max_renewable_life = 2d\n    }\n";
-    let kl = kdc_conf_for_realm(text, "KL.TEST").unwrap();
+    let kl = krb5_config::KdcConf::parse_for_realm(text, "KL.TEST").unwrap();
     assert_eq!((kl.max_life, kl.max_renewable_life), (86400, 2 * 86400));
-    let none = kdc_conf_for_realm(text, "NONE.TEST").unwrap();
+    let none = krb5_config::KdcConf::parse_for_realm(text, "NONE.TEST").unwrap();
     assert_eq!((none.max_life, none.max_renewable_life), (86400, 0));
     let master =
         master_key_from_password("KL.TEST", b"pw", EncryptionType::Aes256CtsHmacSha196).unwrap();
@@ -554,7 +556,8 @@ fn a_wrong_master_password_warns_and_dump_still_writes() {
          kdb5_util: Warning: proceeding without master key list\n"
     );
     assert!(realm.dir.join("d2").exists());
-    // MIT `main` (`kdb5_util.c:230-232`): a later -P replaces an earlier one.
+    // MIT: `main` (kdb5_util.c:230-232)
+    // a later -P replaces an earlier one.
     let out = realm.run(&["-P", "wrong", "-P", "kl-master", "dump", "d3"], "");
     assert_eq!(status(&out), 0, "{}", text(&out.stderr));
     assert_eq!(text(&out.stderr), "");
@@ -648,7 +651,8 @@ fn a_dump_with_no_principal_loads_a_database_with_none() {
     assert_eq!(live.store().ids().len(), 4);
 }
 
-/// MIT `ctx_create_db` (`kdb_db2.c:710-716`): `-x temporary` destroys a leftover temporary
+// MIT: `ctx_create_db` (kdb_db2.c:710-716)
+/// `-x temporary` destroys a leftover temporary
 /// database before creating it, where a plain create refuses an existing one; settled live
 /// (`mit-temporary.txt`).
 #[test]
@@ -872,7 +876,8 @@ fn load_without_a_stash_needs_a_master_password() {
     );
 }
 
-/// MIT `destroy_file` (`kdb_db2.c:619-682`): the database is zeroed before it is unlinked, so
+// MIT: `destroy_file` (kdb_db2.c:619-682)
+/// the database is zeroed before it is unlinked, so
 /// another link to the file (or its freed blocks) keeps no key; settled live with a hard link.
 #[test]
 fn destroy_zeroes_the_database_before_unlinking_it() {
