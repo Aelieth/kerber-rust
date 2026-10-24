@@ -210,7 +210,7 @@ pub struct RealmLibdefaults {
     pub verify_ap_req_nofail: Option<bool>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Krb5Conf {
     pub default_realm: Option<String>,
     pub allow_weak_crypto: bool,
@@ -277,6 +277,70 @@ pub struct Krb5Conf {
     pub plugins: PluginProfile,
     // MIT token_types_decode; see docs/parity/a3-preauth.md
     pub otp: OtpTree,
+}
+
+// MIT: `krb5_init_context_profile` (lib/krb5/krb/init_ctx.c:235-252)
+impl Default for Krb5Conf {
+    fn default() -> Self {
+        Self {
+            default_realm: None,
+            allow_weak_crypto: false,
+            allow_rc4: None,
+            allow_des3: None,
+            clockskew: 300,
+            dns_lookup_kdc: false,
+            dns_lookup_realm: false,
+            client_aware_channel_bindings: false,
+            client_aware_channel_bindings_invalid: false,
+            udp_preference_limit: None,
+            rdns: true,
+            kdc_timesync: true,
+            verify_ap_req_nofail: false,
+            permitted_enctypes: None,
+            default_tkt_enctypes: Vec::new(),
+            default_tgs_enctypes: Vec::new(),
+            forwardable: false,
+            proxiable: false,
+            canonicalize: false,
+            ticket_lifetime: None,
+            renew_lifetime: None,
+            noaddresses: None,
+            kdc_timeout: None,
+            request_timeout: None,
+            max_retries: None,
+            kcm_socket: None,
+            default_ccache_name: None,
+            default_keytab_name: None,
+            default_client_keytab_name: None,
+            spake_preauth_groups: None,
+            preferred_preauth_types: Vec::new(),
+            ignore_acceptor_hostname: false,
+            qualify_shortname: None,
+            realm_try_domains: None,
+            dns_canonicalize_hostname: CanonHost::default(),
+            context_refusal: None,
+            kdcs: BTreeMap::new(),
+            admin_servers: BTreeMap::new(),
+            kpasswd_servers: BTreeMap::new(),
+            kdc_host_invalid: BTreeSet::new(),
+            admin_host_invalid: BTreeSet::new(),
+            kpasswd_host_invalid: BTreeSet::new(),
+            domain_realm: BTreeMap::new(),
+            pkinit_identities: BTreeMap::new(),
+            pkinit_anchors: BTreeMap::new(),
+            capaths: BTreeMap::new(),
+            logging: Vec::new(),
+            kadm5: BTreeMap::new(),
+            pkinit: BTreeMap::new(),
+            kdcdefaults_pkinit: Vec::new(),
+            libdefaults_pkinit: Vec::new(),
+            realm_libdefaults_pkinit: BTreeMap::new(),
+            realm_libdefaults: BTreeMap::new(),
+            disable_encrypted_timestamp: BTreeMap::new(),
+            plugins: PluginProfile::default(),
+            otp: OtpTree::default(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

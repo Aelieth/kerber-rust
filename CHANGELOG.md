@@ -57,6 +57,7 @@ any other `###` heading.
 
 ### Changed
 
+- **config.** Krb5Conf::default is MIT's unset profile: clock skew 300, reverse DNS, and KDC time sync.
 - **kdc.** Rename stores each current key's salt, a kvno wraps from 65535 to 1, and getprinc sends tl types above 255 except the vendor SID and history records.
 - **kdc.** Deleting K/M is refused, as is a password change, a keepold random key, or setkey of kadmin/history.
 - **kdc.** A norealm salt is the principal name alone, and an onlyrealm salt is the realm.

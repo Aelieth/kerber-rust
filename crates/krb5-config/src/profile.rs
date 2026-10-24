@@ -88,12 +88,7 @@ impl Krb5Conf {
 
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            clockskew: 300,
-            rdns: true,
-            kdc_timesync: true,
-            ..Self::default()
-        }
+        Self::default()
     }
 
     pub fn parse(text: &str) -> Result<Self, Error> {
