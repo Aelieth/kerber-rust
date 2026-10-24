@@ -377,6 +377,45 @@ fn as_exchange_inner(
         && (matches!(req.pkinit, Some(Pkinit::Client(_))) || req.ticket.anonymous)
     {
         let hint = match continue_pkinit(req, nonce, &bound, &etypes, &clock, defer_fast)? {
+            PkinitEnd::Decrypt {
+                rep,
+                wire,
+                reply_key,
+                learned,
+            } => {
+                let mut pw = PasswordCell::new(
+                    prompt,
+                    req.password,
+                    !keys.is_empty() || unreadable.is_some(),
+                )
+                .with_unreadable_keytab(unreadable);
+                let (salt, params) = fallback_s2k(
+                    rep.0.padata.as_deref(),
+                    &etypes,
+                    learned,
+                    &rep.0.cname,
+                    &rep.0.crealm,
+                );
+                let mut fallback = |et: EncryptionType| {
+                    long_term_as_key(req, keys, &mut pw, et, &salt, params.as_deref())
+                };
+                return finish_as_rep(
+                    req.profile,
+                    *rep,
+                    nonce,
+                    Some(reply_key),
+                    req.password,
+                    &req.cname,
+                    req.realm,
+                    Some(pa::PK_AS_REQ),
+                    req.canonicalize,
+                    &req_sname(req),
+                    &bound,
+                    Some(&wire),
+                    false,
+                    Some(&mut fallback),
+                );
+            }
             PkinitEnd::Done(out) => return Ok(*out),
             PkinitEnd::Reply { rep, wire, traced } if !req.ticket.anonymous => {
                 return finish_bare_reply(
@@ -507,12 +546,19 @@ fn finish_as_rep_keys(
     let (canonicalize, expected_sname) = (req.canonicalize, &req_sname(req));
     let etype = EncryptionType::known(rep.0.enc_part.etype)?;
     if let Some(failure) = pw.unreadable_keytab() {
-        trace_gak_salt(req, rep.0.padata.as_deref(), etypes, true);
+        trace_gak_salt(
+            req,
+            &rep.0.cname,
+            &rep.0.crealm,
+            rep.0.padata.as_deref(),
+            etypes,
+            true,
+        );
         trace_keytab_gak(req, keys, Some(failure), etype);
         return Err(ModuleFail::keytab(failure).unwrapped());
     }
     if keys.is_empty() {
-        trace_salt_princ(req, rep.0.padata.as_deref(), etypes);
+        trace_salt_princ(&rep.0.cname, &rep.0.crealm, rep.0.padata.as_deref(), etypes);
         ask_gak_question(pw)?;
         trace_gak(req, rep.0.padata.as_deref(), etypes, false);
         let password = pw.get().map_err(ModuleFail::unwrapped)?;
@@ -533,10 +579,18 @@ fn finish_as_rep_keys(
             bound,
             req_der,
             false,
+            None,
         );
     }
     let password = req.password;
-    trace_gak_salt(req, rep.0.padata.as_deref(), etypes, true);
+    trace_gak_salt(
+        req,
+        &rep.0.cname,
+        &rep.0.crealm,
+        rep.0.padata.as_deref(),
+        etypes,
+        true,
+    );
     trace_keytab_gak(req, keys, None, etype);
     let picked = pick_key(keys, Some(etype));
     if let Some(k) = &picked
@@ -565,6 +619,7 @@ fn finish_as_rep_keys(
                     bound,
                     req_der,
                     false,
+                    None,
                 );
             }
             Err(e) => {
@@ -576,19 +631,47 @@ fn finish_as_rep_keys(
 }
 
 fn opens_as_reply(rep: &AsRep, key: &ProtocolKey) -> Result<(), Error> {
-    let usage = KeyUsage::new(ku::AS_REP_ENC_PART)?;
-    let plain = decrypt_enc_data(
-        key,
-        usage,
-        rep.0.enc_part.etype,
-        rep.0.enc_part.cipher.as_ref(),
-    )
-    .map_err(|e| match e {
-        krb5_crypto::Error::Integrity => Error::ReplyIntegrity,
-        other => other.into(),
-    })?;
+    let plain = as_rep_plain(key, &rep.0.enc_part)?;
     drop(Zeroizing::new(plain));
     Ok(())
+}
+
+// MIT: `decrypt_as_reply` (lib/krb5/krb/get_in_tkt.c:115-123)
+fn long_term_as_key(
+    req: &AsRequest<'_>,
+    keys: &[ProtocolKey],
+    pw: &mut PasswordCell<'_, '_>,
+    etype: EncryptionType,
+    salt: &[u8],
+    params: Option<&[u8]>,
+) -> Result<ProtocolKey, Error> {
+    trace::init_creds_gak(salt, params.unwrap_or(&[]));
+    if !keys.is_empty() || pw.unreadable_keytab().is_some() {
+        trace_keytab_gak(req, keys, pw.unreadable_keytab(), etype);
+        if let Some(failure) = pw.unreadable_keytab() {
+            return Err(ModuleFail::keytab(failure).unwrapped());
+        }
+        let Some(key) = keys.iter().find(|k| k.etype() == etype).cloned() else {
+            return Err(Error::Keytab {
+                code: trace::KRB5_KT_NOTFOUND,
+                text: "Key table entry not found".into(),
+            });
+        };
+        trace::init_creds_as_key_gak((&key).into());
+        return Ok(key);
+    }
+    let password = pw.get().map_err(ModuleFail::unwrapped)?;
+    let key = string_to_key(etype, &password, salt, params)?;
+    trace::init_creds_as_key_gak((&key).into());
+    Ok(key)
+}
+
+fn as_rep_plain(key: &ProtocolKey, enc: &krb5_types::EncryptedData) -> Result<Vec<u8>, Error> {
+    let usage = KeyUsage::new(ku::AS_REP_ENC_PART)?;
+    decrypt_enc_data(key, usage, enc.etype, enc.cipher.as_ref()).map_err(|e| match e {
+        krb5_crypto::Error::Integrity => Error::ReplyIntegrity,
+        other => other.into(),
+    })
 }
 
 fn same_key(a: &ProtocolKey, b: &ProtocolKey) -> bool {
@@ -830,10 +913,20 @@ fn continue_preauth(
     let bound = request_times(req, clock);
     let second = build_as_req_from(req, nonce, &bound, Some(padata), etypes)?;
     let wire = encode(&second)?;
-    let finish =
+    let mut finish =
         |rep: AsRep, wire: &[u8], etypes: &[i32], client_key: ProtocolKey, bound: &AsReqTimes| {
             trace_reply_padata(rep.0.padata.as_deref(), etypes, None);
             trace::init_creds_as_key_preauth((&client_key).into());
+            let (fsalt, fparams) = fallback_s2k(
+                rep.0.padata.as_deref(),
+                etypes,
+                learned_s2k(preauth_err, &salt_cname(&req.cname), req.realm, etypes),
+                &rep.0.cname,
+                &rep.0.crealm,
+            );
+            let mut fallback = |et: EncryptionType| {
+                long_term_as_key(req, keys, pw, et, &fsalt, fparams.as_deref())
+            };
             finish_as_rep(
                 req.profile,
                 rep,
@@ -848,6 +941,7 @@ fn continue_preauth(
                 bound,
                 Some(wire),
                 false,
+                Some(&mut fallback),
             )
         };
     match send_as(req, &wire)? {
@@ -1034,13 +1128,14 @@ fn continue_pkinit(
     trace::init_creds_preauth_none();
     let msg = send_as(req, &first_wire)?;
     upgrade_to_fast(&msg, defer_fast)?;
-    let (token, cookie) = match msg {
+    let (token, cookie, learned) = match msg {
         KdcMsg::Error(e)
             if e.error_code == err::PREAUTH_REQUIRED || e.error_code == err::PREAUTH_FAILED =>
         {
             if retried(&e) {
                 clock.note(&e, false);
             }
+            let learned = learned_s2k(&e, &salt_cname(&req.cname), req.realm, etypes);
             let method = method_from_error(&e)?;
             if !method.iter().any(|p| p.padata_type == pa::PK_AS_REQ) {
                 return Ok(PkinitEnd::Walk(Box::new(e)));
@@ -1060,7 +1155,7 @@ fn continue_pkinit(
                 .filter(|v| !v.is_empty())
                 .map(<[u8]>::to_vec);
             let cookie = find_pa(&method, pa::FX_COOKIE).cloned();
-            (token, cookie)
+            (token, cookie, learned)
         }
         KdcMsg::Error(e) => return classify_kdc_error(&e).map(|o| PkinitEnd::Done(Box::new(o))),
         KdcMsg::AsRep(rep) => {
@@ -1160,22 +1255,12 @@ fn continue_pkinit(
                 }
                 trace::preauth_output(&[]);
                 trace::init_creds_as_key_preauth((&reply_key).into());
-                return finish_as_rep(
-                    req.profile,
-                    rep,
-                    nonce,
-                    Some(reply_key),
-                    req.password,
-                    &req.cname,
-                    req.realm,
-                    Some(pa::PK_AS_REQ),
-                    req.canonicalize,
-                    &req_sname(req),
-                    bound,
-                    Some(&wire),
-                    false,
-                )
-                .map(|o| PkinitEnd::Done(Box::new(o)));
+                return Ok(PkinitEnd::Decrypt {
+                    rep: Box::new(rep),
+                    wire,
+                    reply_key,
+                    learned,
+                });
             }
             KdcMsg::Error(e) => {
                 tryagain = Some(pkinit_refused(&e, &mut dh_size)?);
@@ -1208,6 +1293,12 @@ fn pkinit_padata(
 }
 
 enum PkinitEnd {
+    Decrypt {
+        rep: Box<AsRep>,
+        wire: Vec<u8>,
+        reply_key: ProtocolKey,
+        learned: Option<LearnedSalt>,
+    },
     Done(Box<AsOutcome>),
     Walk(Box<KrbError>),
     Reply {
@@ -1384,27 +1475,30 @@ fn finish_as_rep(
     bound: &AsReqTimes,
     req_der: Option<&[u8]>,
     used_fast: bool,
+    mut fallback: Option<&mut dyn FnMut(EncryptionType) -> Result<ProtocolKey, Error>>,
 ) -> Result<AsOutcome, Error> {
     let inner = rep.0;
     let had_preauth = pa_type.is_some();
     let etype = EncryptionType::known(inner.enc_part.etype)?;
-    let key = if let Some(k) = client_key {
+    let mut key = if let Some(k) = client_key {
         k
     } else {
         let salt = salt_cname(cname).default_salt(realm);
         string_to_key(etype, password, &salt, None)?
     };
-    let usage = KeyUsage::new(ku::AS_REP_ENC_PART)?;
-    let plain = decrypt_enc_data(
-        &key,
-        usage,
-        inner.enc_part.etype,
-        inner.enc_part.cipher.as_ref(),
-    )
-    .map_err(|e| match e {
-        krb5_crypto::Error::Integrity => Error::ReplyIntegrity,
-        other => other.into(),
-    })?;
+    // MIT: `decrypt_as_reply` (lib/krb5/krb/get_in_tkt.c:61-89)
+    let plain = match as_rep_plain(&key, &inner.enc_part) {
+        Ok(plain) => plain,
+        Err(e) if had_preauth => {
+            let Some(fallback) = fallback.as_mut() else {
+                return Err(e);
+            };
+            trace::init_creds_preauth_decrypt_fail(trace::kdc_code(krb5_types::err::BAD_INTEGRITY));
+            key = fallback(etype)?;
+            as_rep_plain(&key, &inner.enc_part)?
+        }
+        Err(e) => return Err(e),
+    };
     let enc_part = decode_enc_as(&plain)?;
     trace::init_creds_decrypted_reply((&enc_part.key).into());
     if enc_part.nonce != nonce {
@@ -1855,6 +1949,7 @@ fn pa_enc_timestamp_at(
 }
 
 pub(super) type S2kMaterial = (EncryptionType, Vec<u8>, Option<Vec<u8>>);
+pub(super) type LearnedSalt = (Vec<u8>, Option<Vec<u8>>);
 
 fn first_etype(etypes: &[i32]) -> EncryptionType {
     etypes
@@ -1922,6 +2017,33 @@ pub(super) fn select_s2k_after(
         return Ok((etype, afs, Some(vec![1])));
     }
     Ok((etype, salt, params))
+}
+
+pub(super) fn error_has_salt(error: &KrbError) -> bool {
+    let Some(edata) = &error.e_data else {
+        return false;
+    };
+    let Ok(method) = decode::<MethodData>(edata.as_ref()) else {
+        return false;
+    };
+    find_pa(&method, pa::ETYPE_INFO2).is_some()
+        || find_pa(&method, pa::ETYPE_INFO).is_some()
+        || find_pa(&method, pa::PW_SALT).is_some()
+        || find_pa(&method, pa::AFS3_SALT).is_some()
+}
+
+pub(super) fn learned_s2k(
+    error: &KrbError,
+    cname: &PrincipalName,
+    realm: &str,
+    etypes: &[i32],
+) -> Option<LearnedSalt> {
+    if !error_has_salt(error) {
+        return None;
+    }
+    select_s2k(error, cname, realm, etypes)
+        .ok()
+        .map(|(_, salt, params)| (salt, params))
 }
 
 fn no_requested_etype(listed: impl IntoIterator<Item = i32>) -> Error {
@@ -2130,16 +2252,48 @@ fn trace_reply_padata(padata: Option<&[PaData]>, etypes: &[i32], module: Option<
     trace::preauth_output(&[]);
 }
 
-fn trace_gak_salt(req: &AsRequest<'_>, padata: Option<&[PaData]>, etypes: &[i32], keytab: bool) {
-    trace_salt_princ(req, padata, etypes);
+fn trace_gak_salt(
+    req: &AsRequest<'_>,
+    cname: &PrincipalName,
+    realm: &krb5_types::Realm,
+    padata: Option<&[PaData]>,
+    etypes: &[i32],
+    keytab: bool,
+) {
+    trace_salt_princ(cname, realm, padata, etypes);
     trace_gak(req, padata, etypes, keytab);
 }
 
-fn trace_salt_princ(req: &AsRequest<'_>, padata: Option<&[PaData]>, etypes: &[i32]) {
+// MIT: `init_creds_step_reply` (lib/krb5/krb/get_in_tkt.c:1817-1819)
+fn trace_salt_princ(
+    cname: &PrincipalName,
+    realm: &krb5_types::Realm,
+    padata: Option<&[PaData]>,
+    etypes: &[i32],
+) {
     if !trace::enabled() || reply_salt(padata, etypes).is_some() {
         return;
     }
-    trace::init_creds_salt_princ(&salt_cname(&req.cname).default_salt(req.realm));
+    let text = String::from_utf8_lossy(realm.as_bytes());
+    trace::init_creds_salt_princ(&salt_cname(cname).default_salt(&text));
+}
+
+// MIT: `init_creds_step_reply` (lib/krb5/krb/get_in_tkt.c:1802-1820)
+pub(super) fn fallback_s2k(
+    padata: Option<&[PaData]>,
+    etypes: &[i32],
+    learned: Option<LearnedSalt>,
+    reply_cname: &PrincipalName,
+    reply_realm: &krb5_types::Realm,
+) -> LearnedSalt {
+    if let Some(salt) = reply_salt(padata, etypes) {
+        return (salt, reply_s2kparams(padata, etypes));
+    }
+    if let Some(learned) = learned {
+        return learned;
+    }
+    let text = String::from_utf8_lossy(reply_realm.as_bytes());
+    (salt_cname(reply_cname).default_salt(&text), None)
 }
 
 fn trace_gak(req: &AsRequest<'_>, padata: Option<&[PaData]>, etypes: &[i32], keytab: bool) {
@@ -2159,6 +2313,15 @@ fn reply_salt(padata: Option<&[PaData]>, etypes: &[i32]) -> Option<Vec<u8>> {
         .iter()
         .find_map(|want| info.iter().find(|e| e.etype == *want))?;
     entry.salt.as_ref().map(|s| s.as_bytes().to_vec())
+}
+
+fn reply_s2kparams(padata: Option<&[PaData]>, etypes: &[i32]) -> Option<Vec<u8>> {
+    let p = find_pa(padata?, pa::ETYPE_INFO2)?;
+    let info = decode::<EtypeInfo2>(p.padata_value.as_ref()).ok()?;
+    let entry = etypes
+        .iter()
+        .find_map(|want| info.iter().find(|e| e.etype == *want))?;
+    entry.s2kparams.as_ref().map(|p| p.as_ref().to_vec())
 }
 
 // MIT: `krb5_kt_get_entry` (lib/krb5/keytab/ktfns.c:57-80)

@@ -3,8 +3,8 @@
 use krb5_asn1::{decode, encode};
 use krb5_config::Krb5Conf;
 use krb5_crypto::{
-    ProtocolKey, SPAKE_DEFAULT_GROUPS_CLIENT, SpakeGroup, spake_group_words, spake_parse_groups,
-    string_to_key,
+    EncryptionType, ProtocolKey, SPAKE_DEFAULT_GROUPS_CLIENT, SpakeGroup, spake_group_words,
+    spake_parse_groups, string_to_key,
 };
 use krb5_types::spake::{PaSpake, SF_NONE, SpakeChallenge};
 use krb5_types::{KrbError, PaData, err, pa};
@@ -14,10 +14,10 @@ use super::fast::ask_responder;
 use super::password::{CANTREADPWD, ModuleFail, PasswordCell};
 use super::{
     AsOutcome, AsRequest, KdcMsg, S2kMaterial, allowed_padata, build_as_req_from,
-    classify_kdc_error, conf_preferred_preauth_types_for, find_pa, finish_as_rep,
-    method_from_error, pick_key, req_sname, request_times, retried, salt_cname, select_s2k,
-    select_s2k_after, send_as, sort_krb5_padata_sequence, trace_keytab_gak, trace_preauth_input,
-    trace_reply_padata,
+    classify_kdc_error, conf_preferred_preauth_types_for, error_has_salt, fallback_s2k, find_pa,
+    finish_as_rep, method_from_error, pick_key, req_sname, request_times, retried, salt_cname,
+    select_s2k, select_s2k_after, send_as, sort_krb5_padata_sequence, trace_keytab_gak,
+    trace_preauth_input, trace_reply_padata,
 };
 use crate::error::Error;
 use crate::preauth::{pa_spake_response, pa_spake_support};
@@ -200,6 +200,7 @@ fn spake_round(
 pub(super) struct FastSpake {
     st: SpakeState,
     hint: S2kMaterial,
+    supplied: bool,
 }
 
 impl FastSpake {
@@ -215,7 +216,13 @@ impl FastSpake {
                 responded: false,
             },
             hint: select_s2k(err, &salt_cname(&req.cname), req.realm, etypes)?,
+            supplied: error_has_salt(err),
         })
+    }
+
+    pub(super) fn learned(&self) -> Option<super::LearnedSalt> {
+        self.supplied
+            .then(|| (self.hint.1.clone(), self.hint.2.clone()))
     }
 
     /// The PA-SPAKE for this request, and the key FAST will strengthen.
@@ -228,6 +235,9 @@ impl FastSpake {
         body_der: &[u8],
         pw: &mut PasswordCell<'_, '_>,
     ) -> Result<FastRound, Error> {
+        if error_has_salt(current) {
+            self.supplied = true;
+        }
         let method = method_from_error(current)?;
         let Some(p) = find_pa(&method, pa::SPAKE) else {
             let fail = generic_failure();
@@ -337,8 +347,12 @@ pub(super) fn continue_spake(
     let mut method_err = err.clone();
     let mut current = err.clone();
     let mut hint = select_s2k(err, &salt_cname(&req.cname), req.realm, etypes)?;
+    let mut supplied = error_has_salt(err);
     let mut again: Option<i32> = None;
     loop {
+        if error_has_salt(&current) {
+            supplied = true;
+        }
         let method = method_from_error(&current)?;
         trace_round(again, req, &method, etypes);
         if again.is_some() {
@@ -396,6 +410,7 @@ pub(super) fn continue_spake(
             KdcMsg::AsRep(rep) => {
                 trace_reply_padata(rep.0.padata.as_deref(), etypes, None);
                 // No challenge key yet: a keytab key, else the password, if no module has read it.
+                let from_preauth = k0.is_some();
                 let key = match k0 {
                     Some(k) => {
                         trace::init_creds_as_key_preauth((&k).into());
@@ -407,6 +422,17 @@ pub(super) fn continue_spake(
                     pw.get().map_err(ModuleFail::unwrapped)?
                 } else {
                     zeroize::Zeroizing::new(Vec::new())
+                };
+                let learned = supplied.then(|| (hint.1.clone(), hint.2.clone()));
+                let (fsalt, fparams) = fallback_s2k(
+                    rep.0.padata.as_deref(),
+                    etypes,
+                    learned,
+                    &rep.0.cname,
+                    &rep.0.crealm,
+                );
+                let mut fallback = |et: EncryptionType| {
+                    super::long_term_as_key(req, keys, pw, et, &fsalt, fparams.as_deref())
                 };
                 return finish_as_rep(
                     req.profile,
@@ -422,6 +448,7 @@ pub(super) fn continue_spake(
                     &bound,
                     Some(&wire),
                     false,
+                    from_preauth.then_some(&mut fallback),
                 )
                 .map(|out| SpakeEnd::Done(Box::new(out)));
             }

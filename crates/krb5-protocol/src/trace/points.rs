@@ -221,6 +221,14 @@ pub fn init_creds_gak(salt: &[u8], s2kparams: &[u8]) {
     );
 }
 
+// MIT: `TRACE_INIT_CREDS_PREAUTH_DECRYPT_FAIL` (include/k5-trace.h:239-240)
+pub fn init_creds_preauth_decrypt_fail(code: i64) {
+    krb5int_trace(
+        "Decrypt with preauth AS key failed: {kerr}",
+        &[Arg::Kerr(code, None)],
+    );
+}
+
 // MIT: `TRACE_INIT_CREDS_KEYTAB_LOOKUP` (include/k5-trace.h:233-234)
 pub fn init_creds_keytab_lookup(client: Princ<'_>, etypes: &[i32]) {
     krb5int_trace(

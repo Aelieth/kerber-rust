@@ -10,10 +10,11 @@ use super::responder::{QUESTION_PASSWORD, ResponderItems};
 use super::spake::{FastRound, trace_round};
 use super::{
     AsOutcome, AsPrompt, AsReqTimes, AsRequest, ENCTS_MODULE, KdcMsg, Pkinit, PkinitClient,
-    allowed_padata, build_as_req_from, classify_kdc_error, encrypted_timestamp_disabled, find_pa,
-    finish_as_rep, first_etype, gak_found, kdc_error, method_from_error, pa_enc_timestamp_at,
-    pick_info2, pick_key, req_sname, request_times, salt_cname, select_s2k, send_as,
-    sort_krb5_padata_sequence, trace_keytab_gak, trace_preauth_input, trace_reply_padata,
+    allowed_padata, build_as_req_from, classify_kdc_error, encrypted_timestamp_disabled,
+    fallback_s2k, find_pa, finish_as_rep, first_etype, gak_found, kdc_error, learned_s2k,
+    long_term_as_key, method_from_error, pa_enc_timestamp_at, pick_info2, pick_key, req_sname,
+    request_times, salt_cname, select_s2k, send_as, sort_krb5_padata_sequence, trace_keytab_gak,
+    trace_preauth_input, trace_reply_padata,
 };
 use crate::error::Error;
 use crate::keytab::KeytabFailure;
@@ -188,6 +189,13 @@ pub(super) fn continue_fast(
                                         cookie_slot,
                                         pa142,
                                         &config,
+                                        learned_s2k(
+                                            &current,
+                                            &salt_cname(&req.cname),
+                                            req.realm,
+                                            etypes,
+                                        ),
+                                        &mut pw,
                                     );
                                 }
                                 Err(f) => {
@@ -343,7 +351,12 @@ fn fast_key_mechanism(
             nonce,
             etypes,
             akey,
-            ReplyKey::Preauth(client_key, mech),
+            ReplyKey::Preauth(
+                client_key,
+                mech,
+                learned_s2k(current, &salt_cname(&req.cname), req.realm, etypes),
+                pw,
+            ),
             rep,
             &wire,
             bound,
@@ -454,6 +467,8 @@ fn finish_fast_otp(
     cookie: Option<PaData>,
     pa142: PaData,
     config: &Value,
+    learned: Option<super::LearnedSalt>,
+    pw: &mut PasswordCell<'_, '_>,
 ) -> Result<AsOutcome, Error> {
     let mut inner_pa = Vec::new();
     if let Some(c) = cookie {
@@ -476,7 +491,7 @@ fn finish_fast_otp(
                 nonce,
                 etypes,
                 akey,
-                ReplyKey::Preauth(akey.clone(), pa::OTP_CHALLENGE),
+                ReplyKey::Preauth(akey.clone(), pa::OTP_CHALLENGE, learned, pw),
                 rep,
                 &wire,
                 bound,
@@ -556,6 +571,7 @@ fn finish_fast_spake(
         sent = true;
         match send_as(req, &wire)? {
             KdcMsg::AsRep(rep) => {
+                let learned = spake.learned();
                 let client_key = match as_key {
                     Some(k) => k,
                     None => spake.long_term_key(keys, pw)?,
@@ -566,7 +582,7 @@ fn finish_fast_spake(
                     nonce,
                     etypes,
                     akey,
-                    ReplyKey::Preauth(client_key, pa::SPAKE),
+                    ReplyKey::Preauth(client_key, pa::SPAKE, learned, pw),
                     rep,
                     &wire,
                     &bound,
@@ -599,9 +615,19 @@ fn finish_fast_spake(
 }
 
 enum ReplyKey<'a, 'p, 'g> {
-    Preauth(ProtocolKey, i32),
+    Preauth(
+        ProtocolKey,
+        i32,
+        Option<super::LearnedSalt>,
+        &'a mut PasswordCell<'p, 'g>,
+    ),
     Gak(&'a mut PasswordCell<'p, 'g>),
-    Pkinit(&'a KxKey, &'a PkinitClient, &'a mut PasswordCell<'p, 'g>),
+    Pkinit(
+        &'a KxKey,
+        &'a PkinitClient,
+        Option<super::LearnedSalt>,
+        &'a mut PasswordCell<'p, 'g>,
+    ),
 }
 
 #[expect(
@@ -663,13 +689,14 @@ fn finish_fast_pkinit(
         let wire = encode(&req2)?;
         match send_as(req, &wire)? {
             KdcMsg::AsRep(rep) => {
+                let learned = learned_s2k(current, &salt_cname(&req.cname), req.realm, etypes);
                 return finish_fast_as(
                     req,
                     keys,
                     nonce,
                     etypes,
                     akey,
-                    ReplyKey::Pkinit(&kp, pk, pw),
+                    ReplyKey::Pkinit(&kp, pk, learned, pw),
                     rep,
                     &wire,
                     bound,
@@ -718,7 +745,7 @@ fn finish_fast_as(
     trace::fast_decode();
     let fast = unwrap_fast_rep_checked(akey, &rep.0.padata, nonce)?;
     let module = match &reply_key {
-        ReplyKey::Preauth(k, pa::ENCRYPTED_CHALLENGE) => {
+        ReplyKey::Preauth(k, pa::ENCRYPTED_CHALLENGE, _, _) => {
             reply_code(&fast.padata, akey, k).map(|code| (EC_MODULE, pa::ENCRYPTED_CHALLENGE, code))
         }
         _ => None,
@@ -729,16 +756,16 @@ fn finish_fast_as(
         trace_reply_padata(Some(&fast.padata), etypes, module);
     }
     let pa_type = match &reply_key {
-        ReplyKey::Preauth(_, mech) => Some(*mech),
+        ReplyKey::Preauth(_, mech, _, _) => Some(*mech),
         ReplyKey::Pkinit(..) => Some(pa::PK_AS_REQ),
         ReplyKey::Gak(_) => None,
     };
-    let client_key = match reply_key {
-        ReplyKey::Preauth(k, _) => {
+    let (client_key, held) = match reply_key {
+        ReplyKey::Preauth(k, _, learned, pw) => {
             trace::init_creds_as_key_preauth((&k).into());
-            k
+            (k, Some((learned, pw)))
         }
-        ReplyKey::Pkinit(kp, pk, pw) => match pkinit_reply_key_agile(
+        ReplyKey::Pkinit(kp, pk, learned, pw) => match pkinit_reply_key_agile(
             kp,
             &Some(fast.padata.clone()),
             EncryptionType::known(rep.0.enc_part.etype)?,
@@ -753,16 +780,22 @@ fn finish_fast_as(
                 }
                 trace::preauth_output(&[]);
                 trace::init_creds_as_key_preauth((&k).into());
-                k
+                (k, Some((learned, pw)))
             }
             Err(Error::PkinitReply { code, text }) => {
                 super::ModuleFail::new(code, &text).trace(super::PKINIT_MODULE, pa::PK_AS_REP);
                 trace::preauth_output(&[]);
-                fast_base_key(req, keys, etypes, &fast, rep.0.enc_part.etype, pw)?
+                (
+                    fast_base_key(req, keys, etypes, &fast, rep.0.enc_part.etype, pw)?,
+                    None,
+                )
             }
             Err(e) => return Err(e),
         },
-        ReplyKey::Gak(pw) => fast_base_key(req, keys, etypes, &fast, rep.0.enc_part.etype, pw)?,
+        ReplyKey::Gak(pw) => (
+            fast_base_key(req, keys, etypes, &fast, rep.0.enc_part.etype, pw)?,
+            None,
+        ),
     };
     let reply_key = match &fast.strengthen_key {
         Some(sk) => {
@@ -782,21 +815,59 @@ fn finish_fast_as(
     rep.0.crealm = finished.crealm.clone();
     rep.0.cname = finished.cname.clone();
     rep.0.padata = Some(fast.padata.clone());
-    finish_as_rep(
-        req.profile,
-        rep,
-        nonce,
-        Some(reply_key),
-        req.password,
-        &req.cname,
-        req.realm,
-        pa_type,
-        req.canonicalize,
-        &req_sname(req),
-        bound,
-        Some(wire),
-        true,
-    )
+    if let Some((learned, pw)) = held {
+        let (salt, params) = fallback_s2k(
+            rep.0.padata.as_deref(),
+            etypes,
+            learned,
+            &rep.0.cname,
+            &rep.0.crealm,
+        );
+        let mut fallback = |et: EncryptionType| {
+            let base = long_term_as_key(req, keys, pw, et, &salt, params.as_deref())?;
+            match &fast.strengthen_key {
+                Some(sk) => {
+                    let k = apply_strengthen(sk, &base)?;
+                    trace::fast_reply_key((&k).into());
+                    Ok(k)
+                }
+                None => Ok(base),
+            }
+        };
+        finish_as_rep(
+            req.profile,
+            rep,
+            nonce,
+            Some(reply_key),
+            req.password,
+            &req.cname,
+            req.realm,
+            pa_type,
+            req.canonicalize,
+            &req_sname(req),
+            bound,
+            Some(wire),
+            true,
+            Some(&mut fallback),
+        )
+    } else {
+        finish_as_rep(
+            req.profile,
+            rep,
+            nonce,
+            Some(reply_key),
+            req.password,
+            &req.cname,
+            req.realm,
+            pa_type,
+            req.canonicalize,
+            &req_sname(req),
+            bound,
+            Some(wire),
+            true,
+            None,
+        )
+    }
 }
 
 // MIT: `enc_ts_get` (kdc/kdc_preauth_encts.c:37-41)
