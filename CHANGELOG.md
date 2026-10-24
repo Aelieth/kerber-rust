@@ -18,6 +18,7 @@ any other `###` heading.
 
 ### Security
 
+- **crypto.** crypto-bigint 0.7.6 fixes RUSTSEC-2026-0387, timing variability in constant-time operations used by PKINIT (DH, RSA, ECDSA) and SPAKE's curves.
 - **kdc.** The KDC drops an AS-REQ, or answers a TGS-REQ with a generic error, when it cannot make the audit id, as MIT does.
 - **kdc.** A PKINIT signedAuthPack whose SignedData or SignerInfo has an extra or mistyped element is refused at decode, as MIT's CMS template; it was taken before.
 - **pkinit.** P-384 compiles in only with `--cfg p384_backend="fiat"`, p384's constant-time field, which our cargo config sets; a build without it refuses the curve.
