@@ -34,7 +34,11 @@ pub(super) fn as_reply(
 ) -> Result<(Vec<u8>, Option<String>), Error> {
     let body = Some(&req.0.req_body);
     let hide = peek_as_hides_client(store, req, raw);
-    match issue_as_from(store, req, Some(raw)) {
+    let issued = issue_as_from(store, req, Some(raw));
+    if crate::plugins::otp_park_pending() {
+        return Ok((Vec::new(), None));
+    }
+    match issued {
         Ok(issued) => Ok((encode(&issued.rep)?, None)),
         Err(Error::PreauthRequired { e_data }) => Ok((
             encode_krb_error(

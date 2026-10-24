@@ -1,6 +1,7 @@
 //! AS and TGS dispatch, the lookaside, and the UDP size cap.
 
 use std::net::SocketAddr;
+use std::os::fd::OwnedFd;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::time::Instant;
@@ -523,6 +524,36 @@ impl KdcDispatch {
         }
     }
 
+    fn run_contained(&self, remote: SocketAddr, request: &[u8]) -> Option<Done> {
+        crate::audit::set_client_port(u32::from(remote.port()));
+        let sender = HostAddress::from_socket(remote);
+        crate::plugins::set_request_peer(Some(sender.clone()));
+        let store = &self.store;
+        #[cfg(test)]
+        let panics = self.panic_on.as_deref() == Some(request);
+        let run = catch_unwind(AssertUnwindSafe(|| {
+            #[cfg(test)]
+            assert!(!panics, "a request set to panic");
+            read_store(store, |s| process(s, request, &sender))
+        }));
+        crate::plugins::set_request_peer(None);
+        run.ok()
+    }
+
+    fn dispatch_panic(&mut self, request: &[u8]) -> Reply {
+        crate::plugins::set_otp_resume(None);
+        drop(crate::plugins::take_otp_park());
+        self.lookaside.finish(request, None);
+        tracing::error!(
+            event = krb5_log::events::KDC_TRANSPORT,
+            correlation_id = krb5_log::current_correlation_id(),
+            component = "krb5-kdc",
+            outcome = "error",
+            error = "request panic isolated",
+        );
+        Reply::Nothing
+    }
+
     // MIT: `finish_dispatch_cache` (kdc/dispatch.c:77-83)
     fn finish_dispatch_cache(&mut self, request: &[u8], is_tcp: bool, done: Done) -> Reply {
         match &done {
@@ -597,31 +628,41 @@ impl Dispatch for KdcDispatch {
             }
             Check::Fresh => {}
         }
-        crate::audit::set_client_port(u32::from(remote.port()));
-        let sender = HostAddress::from_socket(remote);
-        crate::plugins::set_request_peer(Some(sender.clone()));
-        let store = &self.store;
-        #[cfg(test)]
-        let panics = self.panic_on.as_deref() == Some(request);
-        // A panic sends nothing and drops the lookaside mark.
-        let run = catch_unwind(AssertUnwindSafe(|| {
-            #[cfg(test)]
-            assert!(!panics, "a request set to panic");
-            read_store(store, |s| process(s, request, &sender))
-        }));
-        crate::plugins::set_request_peer(None);
-        let Ok(done) = run else {
-            self.lookaside.finish(request, None);
-            tracing::error!(
-                event = krb5_log::events::KDC_TRANSPORT,
-                correlation_id = krb5_log::current_correlation_id(),
-                component = "krb5-kdc",
-                outcome = "error",
-                error = "request panic isolated",
-            );
-            return Reply::Nothing;
+        crate::plugins::set_otp_resume(None);
+        drop(crate::plugins::take_otp_park());
+        let Some(done) = self.run_contained(remote, request) else {
+            return self.dispatch_panic(request);
         };
+        // OTP verify pending: hold the lookaside mark; the loop resumes us.
+        if crate::plugins::otp_park_pending() {
+            return Reply::Parked;
+        }
         self.finish_dispatch_cache(request, is_tcp, done)
+    }
+
+    // MIT: `finish_dispatch_cache` (kdc/dispatch.c:77-83)
+    fn dispatch_resume(
+        &mut self,
+        _local: SocketAddr,
+        remote: SocketAddr,
+        request: &[u8],
+        is_tcp: bool,
+        _log: &mut dyn Log,
+    ) -> Reply {
+        let Some(done) = self.run_contained(remote, request) else {
+            return self.dispatch_panic(request);
+        };
+        if crate::plugins::otp_park_pending() {
+            return Reply::Parked;
+        }
+        crate::plugins::set_otp_resume(None);
+        self.finish_dispatch_cache(request, is_tcp, done)
+    }
+
+    fn otp_wake_fd(&self) -> Option<OwnedFd> {
+        read_store(&self.store, |s| {
+            s.otp_runtime().and_then(|rt| rt.pool().wake_read_fd())
+        })
     }
 
     // MIT: `make_toolong_error` (kdc/kdc_util.c:1882-1913)

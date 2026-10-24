@@ -19,7 +19,7 @@
 #   V6 -keepold  an old -keepold password does not pass the password half (keep-old refused, keep-new passes)
 #   V7  replay in-window refused, and again after a KDC restart
 #   V8  lockout, max_fail=3: three wrong, then the 4th with a right code is CLIENT_REVOKED
-#   V9  (ours, chaos) a slow verifier blocks only its own request; a second user is unaffected
+#   V9  (ours, chaos) a hung verifier fails at the 5s deadline; a second user is served while it is pending
 #   V10 (ours, chaos) a panicking / erroring verifier is refused and the KDC stays up
 #   V11 (ours) an unknown token type is refused; a plain principal still logs in
 #   V12 a renewed ticket keeps the mfa indicator; the require_auth service still issues
@@ -151,10 +151,17 @@ section "V11 (ours): an unknown token type is refused; a plain principal still l
 g ours-v11-otp   'CELL ours-v11-otp rc 1'
 g ours-v11-plain 'CELL ours-v11-plain rc 0'
 
-section "V9/V10 (ours, chaos build): a slow verifier blocks only itself; panic/error stay up"
+section "V9/V10 (ours, chaos build): a hung verifier fails at its deadline; the other user is served meanwhile"
 g ours-v9-slow       'CELL ours-v9-slow rc 1'
 o ours-v9-slow.s     'ours-v9-slow seconds [0-9.]+'
+check ours-v9-slow.at-deadline '^at-deadline$' host \
+    "python3 -c \"import re; t=open('$STATE/guest.out').read(); m=re.search(r'CELL ours-v9-slow seconds ([0-9.]+)', t); s=float(m.group(1)) if m else -1; print('at-deadline' if 4.0 <= s <= 8.0 else 'not-deadline %s' % s)\""
 g ours-v9-other      'CELL ours-v9-other rc 0'
+o ours-v9-other.s    'ours-v9-other seconds [0-9.]+'
+check ours-v9-other.at-once '^at-once$' host \
+    "python3 -c \"import re; t=open('$STATE/guest.out').read(); m=re.search(r'CELL ours-v9-other seconds ([0-9.]+)', t); s=float(m.group(1)) if m else -1; print('at-once' if 0 <= s < 1.5 else 'not-at-once %s' % s)\""
+check ours-v9-overlap '^overlap$' host \
+    "python3 -c \"import re; t=open('$STATE/guest.out').read(); a=re.search(r'CELL ours-v9-slow done ([0-9.]+)', t); b=re.search(r'CELL ours-v9-other done ([0-9.]+)', t); ok=a and b and float(b.group(1)) < float(a.group(1)); print('overlap' if ok else 'no-overlap')\""
 g ours-v10-panic     'CELL ours-v10-panic rc 1'
 g ours-v10-error     'CELL ours-v10-error rc 1'
 g ours-v10-alive     'CELL ours-v10-alive rc 0'

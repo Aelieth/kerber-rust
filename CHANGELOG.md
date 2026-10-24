@@ -57,6 +57,7 @@ any other `###` heading.
 
 ### Changed
 
+- **kdc.** A pending OTP verify no longer blocks the KDC loop: other clients are served while it runs and it resumes with the verdict, as in MIT.
 - **client.** kinit and kpasswd warn when a deprecated enctype was used to authenticate.
 - **protocol.** A preauth key that does not decrypt the AS reply is dropped, and the long-term key is tried.
 - **protocol.** A TGT for a realm off the client path is chased to the server realm, and a repeated realm ends it.

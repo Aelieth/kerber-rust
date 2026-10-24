@@ -3,6 +3,7 @@ use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::os::fd::{AsFd as _, AsRawFd as _, OwnedFd, RawFd};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::TryRecvError;
 use std::time::{Duration, Instant, SystemTime};
 
 use krb5_log::klog::{self, Severity, os_error_text};
@@ -11,7 +12,12 @@ use nix::sys::socket::{setsockopt, sockopt};
 use zeroize::Zeroizing;
 
 use crate::daemon::{Shutdown, Signals};
-use crate::listen::{WHILE_DISPATCHING_TCP, WHILE_DISPATCHING_UDP, recv_from_to, send_udp_reply};
+use crate::listen::{
+    Datagram, WHILE_DISPATCHING_TCP, WHILE_DISPATCHING_UDP, recv_from_to, send_udp_reply,
+};
+use crate::plugins::{
+    OtpOutcome, OtpResume, ParkedOtp, set_otp_park_enabled, set_otp_resume, take_otp_park,
+};
 
 // MIT: `max_stream_data_connections` (lib/apputils/net-server.c:85-85)
 pub const MAX_STREAM_DATA_CONNECTIONS: usize = 45;
@@ -57,6 +63,7 @@ pub enum Reply {
     Send(Vec<u8>),
     Nothing,
     Failed(String),
+    Parked,
 }
 
 // MIT: `dispatch` (include/net-server.h:84-86)
@@ -69,6 +76,22 @@ pub trait Dispatch {
         is_tcp: bool,
         log: &mut dyn Log,
     ) -> Reply;
+
+    fn dispatch_resume(
+        &mut self,
+        local: SocketAddr,
+        remote: SocketAddr,
+        request: &[u8],
+        is_tcp: bool,
+        log: &mut dyn Log,
+    ) -> Reply {
+        let _ = (local, remote, request, is_tcp, log);
+        Reply::Nothing
+    }
+
+    fn otp_wake_fd(&self) -> Option<OwnedFd> {
+        None
+    }
 
     fn make_toolong_error(&mut self) -> Result<Vec<u8>, String>;
 
@@ -148,6 +171,8 @@ enum Io {
         sent: usize,
     },
     Rpc(Box<dyn RpcSession>),
+    // Held while an OTP verify runs: not polled, not LRU-killed, resumed once the verdict lands.
+    Parked,
 }
 
 pub(crate) struct Conn<S> {
@@ -166,12 +191,17 @@ impl<S> Conn<S> {
     pub(crate) fn writing(&self) -> bool {
         matches!(self.io, Io::Write { .. })
     }
+
+    fn parked(&self) -> bool {
+        matches!(self.io, Io::Parked)
+    }
 }
 
 enum Step {
     Wait,
     Close,
     Respond(Reply),
+    Park(Box<Parked>),
 }
 
 pub(crate) struct Streams<S> {
@@ -203,6 +233,11 @@ impl<S: Stream> Streams<S> {
     #[cfg(test)]
     fn is_empty(&self) -> bool {
         self.conns.is_empty()
+    }
+
+    #[cfg(test)]
+    fn read_drive(&mut self, id: u64, app: &mut dyn Dispatch, log: &mut dyn Log) {
+        self.readable(id, app, &mut Vec::new(), log);
     }
 
     pub(crate) fn conns(&self) -> impl Iterator<Item = &Conn<S>> {
@@ -287,7 +322,7 @@ impl<S: Stream> Streams<S> {
         log.syslog(Severity::Info, "too many connections");
         let mut oldest: Option<usize> = None;
         for (i, c) in self.conns.iter().enumerate().rev() {
-            if c.id == newest {
+            if c.id == newest || c.parked() {
                 continue;
             }
             if oldest.is_none_or(|o| self.conns[o].start_time > c.start_time) {
@@ -319,7 +354,13 @@ impl<S: Stream> Streams<S> {
 
     // MIT: `process_stream_connection_read` (lib/apputils/net-server.c:1375-1453)
     /// Deviation: a failed getsockname closes the stream; MIT uses that freed event.
-    pub(crate) fn readable(&mut self, id: u64, app: &mut dyn Dispatch, log: &mut dyn Log) {
+    pub(crate) fn readable(
+        &mut self,
+        id: u64,
+        app: &mut dyn Dispatch,
+        parks: &mut Vec<Parked>,
+        log: &mut dyn Log,
+    ) {
         let Some(i) = self.position(id) else {
             return;
         };
@@ -332,7 +373,18 @@ impl<S: Stream> Streams<S> {
             Step::Wait => {}
             Step::Close => self.free_socket(i, log),
             Step::Respond(reply) => self.respond(i, reply, log),
+            Step::Park(p) => {
+                self.conns[i].io = Io::Parked;
+                parks.push(*p);
+            }
         }
+    }
+
+    pub(crate) fn resume(&mut self, conn_id: u64, reply: Reply, log: &mut dyn Log) {
+        let Some(i) = self.position(conn_id) else {
+            return;
+        };
+        self.respond(i, reply, log);
     }
 
     fn read_step(&mut self, i: usize, app: &mut dyn Dispatch, log: &mut dyn Log) -> Step {
@@ -413,7 +465,21 @@ impl<S: Stream> Streams<S> {
         };
         let request = std::mem::take(body);
         let remote = conn.remote;
-        Step::Respond(dispatch_contained(app, local, remote, &request, true, log))
+        let conn_id = conn.id;
+        let reply = dispatch_contained(app, local, remote, &request, true, log);
+        if matches!(reply, Reply::Parked) {
+            return match take_otp_park() {
+                Some(otp) => Step::Park(Box::new(Parked {
+                    otp,
+                    request,
+                    local,
+                    remote,
+                    target: ParkTarget::Tcp { conn: conn_id },
+                })),
+                None => Step::Wait,
+            };
+        }
+        Step::Respond(reply)
     }
 
     // MIT: `process_rpc_connection` (lib/apputils/net-server.c:1577-1587)
@@ -464,6 +530,7 @@ impl<S: Stream> Streams<S> {
             }
             Reply::Nothing => {}
             Reply::Failed(text) => log.com_err(&text, WHILE_DISPATCHING_TCP),
+            Reply::Parked => debug_assert!(false, "Reply::Parked reached respond"),
         }
     }
 
@@ -711,6 +778,130 @@ fn panic_isolated() {
     );
 }
 
+pub(crate) struct Parked {
+    otp: ParkedOtp,
+    request: Vec<u8>,
+    local: SocketAddr,
+    remote: SocketAddr,
+    target: ParkTarget,
+}
+
+enum ParkTarget {
+    Udp { sock: usize, recv: Datagram },
+    Tcp { conn: u64 },
+}
+
+fn shrink_timeout(base: PollTimeout, until: Instant, now: Instant) -> PollTimeout {
+    let left = until.saturating_duration_since(now).as_millis();
+    let cut = PollTimeout::from(u16::try_from(left).unwrap_or(u16::MAX).max(1));
+    if base.is_some() && base <= cut {
+        base
+    } else {
+        cut
+    }
+}
+
+fn dispatch_resume_contained(
+    app: &mut dyn Dispatch,
+    local: SocketAddr,
+    remote: SocketAddr,
+    request: &[u8],
+    is_tcp: bool,
+    log: &mut dyn Log,
+) -> Reply {
+    let run = catch_unwind(AssertUnwindSafe(|| {
+        app.dispatch_resume(local, remote, request, is_tcp, log)
+    }));
+    run.unwrap_or_else(|_| {
+        panic_isolated();
+        Reply::Nothing
+    })
+}
+
+// Verdict in -> resume; deadline passed -> fail closed; else keep waiting.
+fn resolve_parks(
+    parks: &mut Vec<Parked>,
+    app: &mut dyn Dispatch,
+    sockets: &Sockets<'_>,
+    streams: &mut Streams<TcpStream>,
+    log: &mut dyn Log,
+) {
+    if parks.is_empty() {
+        return;
+    }
+    let now = Instant::now();
+    let mut still = Vec::new();
+    for p in std::mem::take(parks) {
+        let outcome = match p.otp.rx.try_recv() {
+            Ok(v) => OtpOutcome::Verdict(v),
+            Err(TryRecvError::Empty) if now < p.otp.deadline => {
+                still.push(p);
+                continue;
+            }
+            Err(TryRecvError::Empty | TryRecvError::Disconnected) => OtpOutcome::TimedOut,
+        };
+        if let Some(reparked) = resume_one(p, outcome, app, sockets, streams, log) {
+            still.push(reparked);
+        }
+    }
+    *parks = still;
+}
+
+fn resume_one(
+    p: Parked,
+    outcome: OtpOutcome,
+    app: &mut dyn Dispatch,
+    sockets: &Sockets<'_>,
+    streams: &mut Streams<TcpStream>,
+    log: &mut dyn Log,
+) -> Option<Parked> {
+    let Parked {
+        otp,
+        request,
+        local,
+        remote,
+        target,
+    } = p;
+    let is_tcp = matches!(target, ParkTarget::Tcp { .. });
+    set_otp_resume(Some(OtpResume {
+        token_index: otp.token_index,
+        started: otp.started,
+        token_type: otp.token_type,
+        username: otp.username,
+        outcome,
+    }));
+    let reply = dispatch_resume_contained(app, local, remote, &request, is_tcp, log);
+    if matches!(reply, Reply::Parked) {
+        let otp = take_otp_park()?;
+        return Some(Parked {
+            otp,
+            request,
+            local,
+            remote,
+            target,
+        });
+    }
+    match target {
+        ParkTarget::Udp { sock, recv } => match reply {
+            Reply::Send(bytes) => {
+                if let Err(e) = send_udp_reply(&sockets.udp[sock], &bytes, &recv) {
+                    tracing::error!(
+                        event = krb5_log::events::KDC_TRANSPORT,
+                        correlation_id = krb5_log::current_correlation_id(),
+                        component = "krb5-kdc",
+                        outcome = "error",
+                        error = %e,
+                    );
+                }
+            }
+            Reply::Failed(text) => log.com_err(&text, WHILE_DISPATCHING_UDP),
+            Reply::Nothing | Reply::Parked => {}
+        },
+        ParkTarget::Tcp { conn } => streams.resume(conn, reply, log),
+    }
+    None
+}
+
 pub enum Wake<'a> {
     Signals(&'a Signals),
     Shutdown(&'a Shutdown),
@@ -735,6 +926,7 @@ fn now_secs() -> u64 {
 
 enum Ready {
     Wake,
+    OtpWake,
     Udp(usize),
     Listener(usize),
     Rpc(usize),
@@ -777,6 +969,14 @@ impl Paused {
     }
 }
 
+struct ParkEnabledGuard;
+
+impl Drop for ParkEnabledGuard {
+    fn drop(&mut self) {
+        set_otp_park_enabled(false);
+    }
+}
+
 // MIT: `loop_setup_signals` (lib/apputils/net-server.c:265-284)
 /// Runtime ignores SIGPIPE.
 // MIT: `setup_socket` (lib/apputils/net-server.c:844-851)
@@ -797,6 +997,10 @@ pub fn run(
     let mut streams: Streams<TcpStream> = Streams::new(max_streams, cap);
     let mut paused = Paused::new(sockets.tcp.len() + sockets.rpc.len());
     let mut pkt = vec![0u8; MAX_DGRAM_SIZE];
+    let otp_fd = app.otp_wake_fd();
+    set_otp_park_enabled(otp_fd.is_some());
+    let _park_enabled = ParkEnabledGuard;
+    let mut parks: Vec<Parked> = Vec::new();
     let (pipe, timeout) = match wake {
         Wake::Signals(s) => match s.wake_fd() {
             Some(fd) => (Some(fd), PollTimeout::NONE),
@@ -821,11 +1025,23 @@ pub fn run(
         return Ok(streams.open_fds());
     }
     loop {
-        let ready = wait(pipe, sockets, &streams, &paused, timeout)?;
+        let park_deadline = parks.iter().map(|p| p.otp.deadline).min();
+        let ready = wait(
+            pipe,
+            otp_fd.as_ref(),
+            sockets,
+            &streams,
+            &paused,
+            timeout,
+            park_deadline,
+        )?;
         for r in ready {
             match r {
                 Ready::Wake => drain(pipe),
-                Ready::Udp(i) => process_packet(&sockets.udp[i], &mut pkt, app, log),
+                Ready::OtpWake => drain(otp_fd.as_ref()),
+                Ready::Udp(i) => {
+                    process_packet(i, &sockets.udp[i], &mut pkt, app, &mut parks, log);
+                }
                 Ready::Listener(i) => {
                     if streams.accept(&sockets.tcp[i], now_secs(), log).is_err() {
                         paused.pause(i, Instant::now());
@@ -839,10 +1055,13 @@ pub fn run(
                         paused.pause(sockets.tcp.len() + i, Instant::now());
                     }
                 }
-                Ready::Stream { id, writing: false } => streams.readable(id, app, log),
+                Ready::Stream { id, writing: false } => {
+                    streams.readable(id, app, &mut parks, log);
+                }
                 Ready::Stream { id, writing: true } => streams.writable(id, log),
             }
         }
+        resolve_parks(&mut parks, app, sockets, &mut streams, log);
         match wake {
             Wake::Signals(s) => {
                 if s.take_hup() {
@@ -872,10 +1091,12 @@ pub fn run(
 
 fn wait(
     pipe: Option<&OwnedFd>,
+    otp: Option<&OwnedFd>,
     sockets: &Sockets<'_>,
     streams: &Streams<TcpStream>,
     paused: &Paused,
     timeout: PollTimeout,
+    park_deadline: Option<Instant>,
 ) -> io::Result<Vec<Ready>> {
     let input = PollFlags::POLLIN;
     let now = Instant::now();
@@ -884,6 +1105,10 @@ fn wait(
     if let Some(p) = pipe {
         what.push(Ready::Wake);
         fds.push(PollFd::new(p.as_fd(), input));
+    }
+    if let Some(fd) = otp {
+        what.push(Ready::OtpWake);
+        fds.push(PollFd::new(fd.as_fd(), input));
     }
     for (i, u) in sockets.udp.iter().enumerate() {
         what.push(Ready::Udp(i));
@@ -902,12 +1127,19 @@ fn wait(
         }
     }
     for c in streams.conns() {
+        if c.parked() {
+            continue;
+        }
         let writing = c.writing();
         what.push(Ready::Stream { id: c.id, writing });
         let flags = if writing { PollFlags::POLLOUT } else { input };
         fds.push(PollFd::new(c.stream.as_fd(), flags));
     }
-    match poll(&mut fds, paused.timeout(timeout, now)) {
+    let base = match park_deadline {
+        Some(dl) => shrink_timeout(timeout, dl, now),
+        None => timeout,
+    };
+    match poll(&mut fds, paused.timeout(base, now)) {
         Ok(_) => {}
         Err(nix::errno::Errno::EINTR) => return Ok(Vec::new()),
         Err(e) => return Err(e.into()),
@@ -930,7 +1162,14 @@ fn drain(pipe: Option<&OwnedFd>) {
 
 // MIT: `process_packet` (lib/apputils/net-server.c:1150-1188)
 // MIT: `process_packet_response` (lib/apputils/net-server.c:1101-1105)
-fn process_packet(sock: &UdpSocket, buf: &mut [u8], app: &mut dyn Dispatch, log: &mut dyn Log) {
+fn process_packet(
+    sock_i: usize,
+    sock: &UdpSocket,
+    buf: &mut [u8],
+    app: &mut dyn Dispatch,
+    parks: &mut Vec<Parked>,
+    log: &mut dyn Log,
+) {
     let d = match recv_from_to(sock, buf) {
         Ok(d) => d,
         Err(e)
@@ -972,7 +1211,31 @@ fn process_packet(sock: &UdpSocket, buf: &mut [u8], app: &mut dyn Dispatch, log:
         }
         Reply::Nothing => {}
         Reply::Failed(text) => log.com_err(&text, WHILE_DISPATCHING_UDP),
+        Reply::Parked => {
+            if let Some(otp) = take_otp_park() {
+                parks.push(Parked {
+                    otp,
+                    request: request.to_vec(),
+                    local,
+                    remote: d.from,
+                    target: ParkTarget::Udp {
+                        sock: sock_i,
+                        recv: d,
+                    },
+                });
+            }
+        }
     }
+}
+
+#[cfg(test)]
+fn process_packet_test(
+    sock: &UdpSocket,
+    buf: &mut [u8],
+    app: &mut dyn Dispatch,
+    log: &mut dyn Log,
+) {
+    process_packet(0, sock, buf, app, &mut Vec::new(), log);
 }
 
 fn retry(e: &io::Error) -> bool {
@@ -1173,6 +1436,7 @@ mod tests {
                 Reply::Send(r) => Reply::Send(r.clone()),
                 Reply::Nothing => Reply::Nothing,
                 Reply::Failed(t) => Reply::Failed(t.clone()),
+                Reply::Parked => Reply::Parked,
             }
         }
 
@@ -1298,7 +1562,7 @@ mod tests {
             arrive(&wire, Arrival::Bytes(msg[at..at + k].to_vec()));
             at += k;
             assert_eq!(app.requests.len(), 0, "dispatched before the last piece");
-            t.readable(id, &mut app, &mut log);
+            t.read_drive(id, &mut app, &mut log);
         }
         assert_eq!(app.requests.len(), 1);
         let (local, remote, request, is_tcp) = &app.requests[0];
@@ -1322,13 +1586,13 @@ mod tests {
         let mut both = framed(b"first");
         both.extend(framed(b"second"));
         arrive(&wire, Arrival::Bytes(both));
-        t.readable(id, &mut app, &mut log);
+        t.read_drive(id, &mut app, &mut log);
         assert_eq!(wire.borrow().reads, 1);
         assert_eq!(app.requests.len(), 0, "the length word alone");
-        t.readable(id, &mut app, &mut log);
+        t.read_drive(id, &mut app, &mut log);
         assert_eq!(app.requests.len(), 1);
         assert_eq!(app.requests[0].2, b"first");
-        t.readable(id, &mut app, &mut log);
+        t.read_drive(id, &mut app, &mut log);
         assert_eq!(wire.borrow().reads, 2, "a writing stream reads nothing");
         match wire.borrow().incoming.front() {
             Some(Arrival::Bytes(rest)) => assert_eq!(rest, &framed(b"second")),
@@ -1351,11 +1615,11 @@ mod tests {
                 arrive(&wire, end);
                 let reads = if cut > 4 { 2 } else { usize::from(cut > 0) };
                 for _ in 0..reads {
-                    t.readable(id, &mut app, &mut log);
+                    t.read_drive(id, &mut app, &mut log);
                     assert_eq!(t.len(), 1);
                 }
-                t.readable(id, &mut app, &mut log);
-                t.readable(id, &mut app, &mut log);
+                t.read_drive(id, &mut app, &mut log);
+                t.read_drive(id, &mut app, &mut log);
                 assert!(t.is_empty(), "cut {cut}");
                 assert_eq!(app.requests.len(), 0);
                 assert_eq!(wire.borrow().out, NO_BYTES);
@@ -1365,9 +1629,9 @@ mod tests {
         }
         let (mut t, id, wire, mut log) = one(100);
         let mut app = App::default();
-        t.readable(id, &mut app, &mut log);
+        t.read_drive(id, &mut app, &mut log);
         arrive(&wire, Arrival::Fail(io::ErrorKind::Interrupted));
-        t.readable(id, &mut app, &mut log);
+        t.read_drive(id, &mut app, &mut log);
         assert_eq!(t.len(), 1, "WouldBlock and EINTR wait for the next event");
         assert_eq!(log.take(), NO_LINES);
     }
@@ -1387,7 +1651,7 @@ mod tests {
             let (mut t, id, wire, mut log) = one(100);
             let mut app = App::default();
             arrive(&wire, Arrival::Bytes(n.to_be_bytes().to_vec()));
-            t.readable(id, &mut app, &mut log);
+            t.read_drive(id, &mut app, &mut log);
             assert_eq!(log.take(), [err(line)]);
             assert_eq!(app.requests.len(), 0);
             t.writable(id, &mut log);
@@ -1398,7 +1662,7 @@ mod tests {
         let (mut t, id, wire, mut log) = one(100);
         let mut app = App::default();
         arrive(&wire, Arrival::Bytes(1_048_572_u32.to_be_bytes().to_vec()));
-        t.readable(id, &mut app, &mut log);
+        t.read_drive(id, &mut app, &mut log);
         assert_eq!(log.take(), NO_LINES, "the cap itself is taken");
         assert!(!t.conns().next().unwrap().writing());
         let (mut t, id, wire, mut log) = one(100);
@@ -1410,7 +1674,7 @@ mod tests {
             &wire,
             Arrival::Bytes(0x8000_0000_u32.to_be_bytes().to_vec()),
         );
-        t.readable(id, &mut app, &mut log);
+        t.read_drive(id, &mut app, &mut log);
         assert!(t.is_empty());
         assert_eq!(wire.borrow().out, NO_BYTES);
         assert_eq!(
@@ -1430,10 +1694,10 @@ mod tests {
             let (mut t, id, wire, mut log) = one(100);
             let mut app = App::default();
             arrive(&wire, Arrival::Bytes(vec![0; 4]));
-            t.readable(id, &mut app, &mut log);
+            t.read_drive(id, &mut app, &mut log);
             assert_eq!(t.len(), 1);
             arrive(&wire, next);
-            t.readable(id, &mut app, &mut log);
+            t.read_drive(id, &mut app, &mut log);
             assert!(t.is_empty());
             assert_eq!(app.requests.len(), 0);
             assert_eq!(wire.borrow().out, NO_BYTES);
@@ -1449,8 +1713,8 @@ mod tests {
             ..App::default()
         };
         arrive(&wire, Arrival::Bytes(framed(b"req")));
-        t.readable(id, &mut app, &mut log);
-        t.readable(id, &mut app, &mut log);
+        t.read_drive(id, &mut app, &mut log);
+        t.read_drive(id, &mut app, &mut log);
         let want = framed(b"a reply of some length");
         for _ in 0..want.len() {
             wire.borrow_mut().writes.push_back(Take::Upto(3));
@@ -1468,8 +1732,8 @@ mod tests {
         assert_eq!(log.take(), [info("closing down fd 7")]);
         let (mut t, id, wire, mut log) = one(100);
         arrive(&wire, Arrival::Bytes(framed(b"req")));
-        t.readable(id, &mut app, &mut log);
-        t.readable(id, &mut app, &mut log);
+        t.read_drive(id, &mut app, &mut log);
+        t.read_drive(id, &mut app, &mut log);
         wire.borrow_mut().writes.push_back(Take::Upto(2));
         wire.borrow_mut()
             .writes
@@ -1499,8 +1763,8 @@ mod tests {
                 ..App::default()
             };
             arrive(&wire, Arrival::Bytes(framed(b"req")));
-            t.readable(id, &mut app, &mut log);
-            t.readable(id, &mut app, &mut log);
+            t.read_drive(id, &mut app, &mut log);
+            t.read_drive(id, &mut app, &mut log);
             assert_eq!(app.requests.len(), 1);
             assert!(t.is_empty());
             assert!(wire.borrow().closed);
@@ -1525,14 +1789,14 @@ mod tests {
             panic: true,
             ..App::default()
         };
-        t.readable(ida, &mut app, &mut log);
-        t.readable(ida, &mut app, &mut log);
+        t.read_drive(ida, &mut app, &mut log);
+        t.read_drive(ida, &mut app, &mut log);
         assert!(a.borrow().closed);
         assert_eq!(a.borrow().out, NO_BYTES);
         assert_eq!(t.len(), 1);
         app.panic = false;
-        t.readable(idb, &mut app, &mut log);
-        t.readable(idb, &mut app, &mut log);
+        t.read_drive(idb, &mut app, &mut log);
+        t.read_drive(idb, &mut app, &mut log);
         t.writable(idb, &mut log);
         assert_eq!(b.borrow().out, framed(b"the reply"));
         assert_eq!(log.take(), [info("closing down fd 8")]);
@@ -1602,8 +1866,8 @@ mod tests {
         let (id1, w1) = &conns[0];
         arrive(w1, Arrival::Bytes(framed(b"req")));
         let mut app = App::default();
-        t.readable(*id1, &mut app, &mut log);
-        t.readable(*id1, &mut app, &mut log);
+        t.read_drive(*id1, &mut app, &mut log);
+        t.read_drive(*id1, &mut app, &mut log);
         let order: Vec<u64> = t.conns().map(|c| c.id).collect();
         assert_eq!(
             order,
@@ -1659,7 +1923,7 @@ mod tests {
         let mut app = App::default();
         arrive(&wire, Arrival::Bytes(fragment(b"ab", false)));
         arrive(&wire, Arrival::Bytes(fragment(b"cd", true)));
-        t.readable(id, &mut app, &mut log);
+        t.read_drive(id, &mut app, &mut log);
         assert_eq!(*calls.borrow(), [b"abcd".to_vec()]);
         assert_eq!(wire.borrow().out, fragment(b"answer", true));
         assert_eq!(t.len(), 1, "waiting for the next record");
@@ -1671,11 +1935,11 @@ mod tests {
                 .all(|w| *w == Duration::from_secs(35))
         );
         arrive(&wire, Arrival::Bytes(fragment(b"second", true)));
-        t.readable(id, &mut app, &mut log);
+        t.read_drive(id, &mut app, &mut log);
         assert_eq!(calls.borrow().len(), 2);
         assert_eq!(log.take(), NO_LINES);
         arrive(&wire, Arrival::Eof);
-        t.readable(id, &mut app, &mut log);
+        t.read_drive(id, &mut app, &mut log);
         assert!(t.is_empty());
         assert!(wire.borrow().closed);
         assert_eq!(log.take(), [info("closing down fd 7")]);
@@ -1688,7 +1952,7 @@ mod tests {
         let past = u32::try_from(MAX_RPC_RECORD + 1).unwrap() | LAST_FRAG;
         arrive(&wire, Arrival::Bytes(past.to_be_bytes().to_vec()));
         arrive(&wire, Arrival::Bytes(vec![0; 16]));
-        t.readable(id, &mut App::default(), &mut log);
+        t.read_drive(id, &mut App::default(), &mut log);
         assert!(t.is_empty());
         assert_eq!(calls.borrow().len(), 0);
         assert_eq!(wire.borrow().reads, 1, "the mark alone");
@@ -1700,7 +1964,7 @@ mod tests {
         let second = u32::try_from(frag.len()).unwrap().to_be_bytes().to_vec();
         arrive(&wire, Arrival::Bytes(second));
         arrive(&wire, Arrival::Bytes(frag.clone()));
-        t.readable(id, &mut App::default(), &mut log);
+        t.read_drive(id, &mut App::default(), &mut log);
         assert!(t.is_empty());
         assert_eq!(calls.borrow().len(), 0);
         assert!(
@@ -1713,7 +1977,7 @@ mod tests {
             &wire,
             Arrival::Bytes(fragment(&vec![1u8; MAX_RPC_RECORD - 4], true)),
         );
-        t.readable(id, &mut App::default(), &mut log);
+        t.read_drive(id, &mut App::default(), &mut log);
         assert_eq!(calls.borrow().len(), 1);
         assert_eq!(calls.borrow()[0].len(), MAX_RPC_RECORD - 4);
         assert_eq!(t.len(), 1);
@@ -1727,7 +1991,7 @@ mod tests {
         for _ in 0..300_000 {
             arrive(&wire, Arrival::Bytes(vec![0; 4]));
         }
-        t.readable(id, &mut App::default(), &mut log);
+        t.read_drive(id, &mut App::default(), &mut log);
         assert!(t.is_empty(), "closed");
         assert!(wire.borrow().closed);
         assert_eq!(calls.borrow().len(), 0);
@@ -1754,7 +2018,7 @@ mod tests {
             arrive(&wire, Arrival::Bytes(rec[..cut].to_vec()));
             arrive(&wire, Arrival::Stall);
             arrive(&wire, Arrival::Bytes(rec[cut..].to_vec()));
-            t.readable(id, &mut App::default(), &mut log);
+            t.read_drive(id, &mut App::default(), &mut log);
             assert!(t.is_empty(), "cut {cut}");
             assert_eq!(calls.borrow().len(), 0);
             assert_eq!(wire.borrow().out, NO_BYTES);
@@ -1774,23 +2038,23 @@ mod tests {
         let (c, wc, _) = rpc_add(&mut t, 9, 3, (vec![], false), &mut log);
         let (d, wd, cd) = rpc_add(&mut t, 10, 4, (vec![], false), &mut log);
         arrive(&wa, Arrival::Bytes(fragment(b"quiet", true)));
-        t.readable(a, &mut app, &mut log);
+        t.read_drive(a, &mut app, &mut log);
         assert_eq!((t.len(), wa.borrow().out.len()), (4, 0));
         arrive(&wa, Arrival::Bytes(fragment(b"bye", true)));
-        t.readable(a, &mut app, &mut log);
+        t.read_drive(a, &mut app, &mut log);
         assert_eq!((ca.borrow().len(), t.len()), (2, 3));
         arrive(&wb, Arrival::Bytes(fragment(b"boom", true)));
-        t.readable(b, &mut app, &mut log);
+        t.read_drive(b, &mut app, &mut log);
         assert_eq!((cb.borrow().len(), t.len()), (1, 2));
         assert_eq!(wb.borrow().out, NO_BYTES);
         arrive(&wc, Arrival::Bytes(fragment(b"x", true)));
         wc.borrow_mut()
             .writes
             .push_back(Take::Fail(io::ErrorKind::BrokenPipe));
-        t.readable(c, &mut app, &mut log);
+        t.read_drive(c, &mut app, &mut log);
         assert_eq!(t.len(), 1);
         arrive(&wd, Arrival::Bytes(fragment(b"fine", true)));
-        t.readable(d, &mut app, &mut log);
+        t.read_drive(d, &mut app, &mut log);
         assert_eq!(cd.borrow().len(), 1);
         assert_eq!(wd.borrow().out, fragment(b"answer", true));
         assert_eq!(
@@ -1834,8 +2098,8 @@ mod tests {
         let (id1, w1) = &conns[0];
         arrive(w1, Arrival::Bytes(framed(b"req")));
         let mut app = App::default();
-        t.readable(*id1, &mut app, &mut log);
-        t.readable(*id1, &mut app, &mut log);
+        t.read_drive(*id1, &mut app, &mut log);
+        t.read_drive(*id1, &mut app, &mut log);
         assert_eq!(t.open_fds(), [10, 13, 12, 11]);
     }
 
@@ -1971,7 +2235,7 @@ mod tests {
         };
         client.send_to(b"ping", addr).unwrap();
         wait();
-        process_packet(&server, &mut buf, &mut app, &mut log);
+        process_packet_test(&server, &mut buf, &mut app, &mut log);
         let mut got = [0u8; 16];
         let (n, from) = client.recv_from(&mut got).unwrap();
         assert_eq!((&got[..n], from), (&b"pong"[..], addr));
@@ -1990,20 +2254,20 @@ mod tests {
             app.reply = reply;
             client.send_to(b"ping", addr).unwrap();
             wait();
-            process_packet(&server, &mut buf, &mut app, &mut log);
+            process_packet_test(&server, &mut buf, &mut app, &mut log);
             assert!(client.recv_from(&mut got).is_err(), "no reply");
             assert_eq!(log.take(), lines);
         }
         let before = app.requests.len();
         client.send_to(b"", addr).unwrap();
         wait();
-        process_packet(&server, &mut buf, &mut app, &mut log);
+        process_packet_test(&server, &mut buf, &mut app, &mut log);
         assert_eq!(
             app.requests.len(),
             before,
             "an empty datagram is not dispatched"
         );
-        process_packet(&server, &mut buf, &mut app, &mut log);
+        process_packet_test(&server, &mut buf, &mut app, &mut log);
         assert_eq!(log.take(), NO_LINES, "nothing to read is not logged");
     }
 

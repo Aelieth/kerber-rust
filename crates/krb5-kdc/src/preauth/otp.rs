@@ -16,9 +16,10 @@ use crate::asn1_text::decode_failure_text;
 use crate::error::Error;
 use crate::kdb::PrincipalRead;
 use crate::plugins::{
-    OtpOutcome, OtpTokenFields, OtpVerdict, OtpVerifyRequest, PreauthAction, PreauthHint,
-    PreauthRock, bounded_verify, find_otp_verifier, kdc_otp_event, otp_log_refusal,
-    otp_verifier_names, request_peer, sanitize_otp_error,
+    OtpOutcome, OtpTokenFields, OtpVerdict, OtpVerifyRequest, ParkedOtp, PreauthAction,
+    PreauthHint, PreauthRock, bounded_verify, find_otp_verifier, kdc_otp_event, otp_log_refusal,
+    otp_park_enabled, otp_verifier_names, request_peer, sanitize_otp_error, set_otp_park,
+    take_otp_resume,
 };
 use crate::store::{Principal, unix_now_u32};
 
@@ -356,7 +357,12 @@ fn otp_verify(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, OtpFail> 
     let pool = runtime.map(crate::plugins::OtpRuntime::pool);
     let principal_label = rock.client.name.unparse_with_realm(realm);
     let peer = request_peer();
-    for tok in &tokens {
+    let mut resume = take_otp_resume();
+    for (i, tok) in tokens.iter().enumerate() {
+        // Already rejected on an earlier pass; skip without a second submit or audit event.
+        if resume.as_ref().is_some_and(|r| i < r.token_index) {
+            continue;
+        }
         // A bad length fails before a verifier runs.
         if !attr_sizes_ok(&tok.username, otp_value) {
             return Err(fail(24, E_MSG_SIZE));
@@ -386,25 +392,58 @@ fn otp_verify(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, OtpFail> 
         };
         let timeout = Duration::from_millis(timeout_ms);
         let now = Instant::now();
-        let request = OtpVerifyRequest {
-            principal: rock.client.clone(),
-            realm: realm.to_owned(),
-            token_type: tok.ty.name.clone(),
-            username: tok.username.clone(),
-            otp_value: Zeroizing::new(otp_value.to_vec()),
-            peer: peer.clone(),
-            request_time: now,
-            deadline: now + timeout,
-            token: OtpTokenFields {
-                ty_name: tok.ty.name.clone(),
-                indicators: tok
-                    .indicators
-                    .clone()
-                    .unwrap_or_else(|| tok.ty.indicators.clone()),
-            },
+        // `started` dates from the submit so a resumed token reports its real verify time.
+        let started;
+        let outcome = if let Some(r) = resume.take_if(|r| i == r.token_index) {
+            // Bind the verdict to its token: a reload between park and resume could reorder tokens.
+            if r.token_type != tok.ty.name || r.username != tok.username {
+                return Err(fail(24, "OTP token set changed during verify"));
+            }
+            started = r.started;
+            r.outcome
+        } else {
+            started = now;
+            let request = OtpVerifyRequest {
+                principal: rock.client.clone(),
+                realm: realm.to_owned(),
+                token_type: tok.ty.name.clone(),
+                username: tok.username.clone(),
+                otp_value: Zeroizing::new(otp_value.to_vec()),
+                peer: peer.clone(),
+                request_time: now,
+                deadline: now + timeout,
+                token: OtpTokenFields {
+                    ty_name: tok.ty.name.clone(),
+                    indicators: tok
+                        .indicators
+                        .clone()
+                        .unwrap_or_else(|| tok.ty.indicators.clone()),
+                },
+            };
+            let deadline = request.deadline;
+            // Don't block the loop: submit and park so others are served; a loop-less caller blocks.
+            if otp_park_enabled()
+                && let Some(p) = pool
+            {
+                match p.submit(request, verifier) {
+                    Some(rx) => {
+                        set_otp_park(ParkedOtp {
+                            rx,
+                            deadline,
+                            started: now,
+                            token_index: i,
+                            token_type: tok.ty.name.clone(),
+                            username: tok.username.clone(),
+                        });
+                        return Err(fail(24, "OTP verify parked"));
+                    }
+                    None => OtpOutcome::QueueFull,
+                }
+            } else {
+                bounded_verify(pool, verifier, request, timeout)
+            }
         };
-        let outcome = bounded_verify(pool, verifier, request, timeout);
-        let duration_us = u64::try_from(now.elapsed().as_micros()).unwrap_or(u64::MAX);
+        let duration_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
         match outcome {
             OtpOutcome::Verdict(OtpVerdict::Accept) => {
                 kdc_otp_event(&principal_label, &tok.ty.name, "accept", duration_us);

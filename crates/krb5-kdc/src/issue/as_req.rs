@@ -91,8 +91,12 @@ pub(super) fn issue_as_from(
         None => None,
     };
     let body = inner_owned.as_ref().unwrap_or(outer);
-    issue_as_body(store, req, raw, body, fast.as_ref())
-        .map_err(|e| wrap_as_fast(store, fast.as_ref(), e, body))
+    issue_as_body(store, req, raw, body, fast.as_ref()).map_err(|e| {
+        if crate::plugins::otp_park_pending() {
+            return e;
+        }
+        wrap_as_fast(store, fast.as_ref(), e, body)
+    })
 }
 
 struct AsLookup {
@@ -135,6 +139,10 @@ fn issue_as_body(
     let kdc_time = crate::store::unix_now_u32();
     let mut client = None;
     let out = issue_as_steps(store, req, raw, body, fast, kdc_time, &mut client);
+    // Parked: not an outcome yet; skip the audit, the resume pass counts the one attempt once.
+    if crate::plugins::otp_park_pending() {
+        return out;
+    }
     if let Some(client) = &client {
         crate::lockout::lockout_audit(store, client, kdc_time, crate::lockout::as_outcome(&out));
     }
@@ -324,6 +332,9 @@ fn finish_preauth(
         cname: &cname,
     })
     .map_err(|e| {
+        if crate::plugins::otp_park_pending() {
+            return e;
+        }
         attach_preauth_hint(
             store,
             &client,

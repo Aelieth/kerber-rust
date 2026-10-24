@@ -1,5 +1,6 @@
 //! kdcpreauth, kdcpolicy, and kdcauthdata, as Rust traits.
 
+use std::os::fd::OwnedFd;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -669,22 +670,30 @@ type OtpJob = (
 
 pub(crate) struct OtpPool {
     tx: SyncSender<OtpJob>,
+    wake_read: Option<OwnedFd>,
 }
 
 impl OtpPool {
     fn new(threads: usize) -> Self {
         let (tx, rx) = sync_channel::<OtpJob>(OTP_QUEUE);
         let rx = Arc::new(Mutex::new(rx));
+        let (wake_read, wake_write) = match nix::unistd::pipe2(
+            nix::fcntl::OFlag::O_CLOEXEC | nix::fcntl::OFlag::O_NONBLOCK,
+        ) {
+            Ok((r, w)) => (Some(r), Some(Arc::new(w))),
+            Err(_) => (None, None),
+        };
         for _ in 0..threads.max(1) {
             let rx = Arc::clone(&rx);
+            let wake = wake_write.clone();
             let _ = std::thread::Builder::new()
                 .name("otp-verify".to_owned())
-                .spawn(move || run_otp_worker(&rx));
+                .spawn(move || run_otp_worker(&rx, wake.as_deref()));
         }
-        Self { tx }
+        Self { tx, wake_read }
     }
 
-    fn submit(
+    pub(crate) fn submit(
         &self,
         req: OtpVerifyRequest,
         verifier: Arc<dyn OtpVerifier>,
@@ -693,9 +702,13 @@ impl OtpPool {
         self.tx.try_send((req, verifier, reply_tx)).ok()?;
         Some(reply_rx)
     }
+
+    pub(crate) fn wake_read_fd(&self) -> Option<OwnedFd> {
+        self.wake_read.as_ref().and_then(|fd| fd.try_clone().ok())
+    }
 }
 
-fn run_otp_worker(rx: &Mutex<Receiver<OtpJob>>) {
+fn run_otp_worker(rx: &Mutex<Receiver<OtpJob>>, wake: Option<&OwnedFd>) {
     loop {
         let job = {
             let guard = rx.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -711,6 +724,9 @@ fn run_otp_worker(rx: &Mutex<Receiver<OtpJob>>) {
         let verdict = catch_unwind(AssertUnwindSafe(|| verifier.verify(&req)))
             .unwrap_or_else(|_| OtpVerdict::Error("the OTP verifier panicked".to_owned()));
         let _ = reply.send(verdict);
+        if let Some(w) = wake {
+            let _ = nix::unistd::write(w, &[1u8]);
+        }
     }
 }
 
@@ -749,6 +765,57 @@ pub(crate) enum OtpOutcome {
     Verdict(OtpVerdict),
     TimedOut,
     QueueFull,
+}
+
+pub(crate) struct ParkedOtp {
+    pub(crate) rx: Receiver<OtpVerdict>,
+    pub(crate) deadline: Instant,
+    pub(crate) started: Instant,
+    pub(crate) token_index: usize,
+    pub(crate) token_type: String,
+    pub(crate) username: Vec<u8>,
+}
+
+pub(crate) struct OtpResume {
+    pub(crate) token_index: usize,
+    pub(crate) started: Instant,
+    pub(crate) token_type: String,
+    pub(crate) username: Vec<u8>,
+    pub(crate) outcome: OtpOutcome,
+}
+
+thread_local! {
+    static OTP_PARK: std::cell::RefCell<Option<ParkedOtp>> = const { std::cell::RefCell::new(None) };
+    static OTP_RESUME: std::cell::RefCell<Option<OtpResume>> = const { std::cell::RefCell::new(None) };
+    static OTP_PARK_ENABLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+pub(crate) fn set_otp_park(p: ParkedOtp) {
+    OTP_PARK.with(|t| *t.borrow_mut() = Some(p));
+}
+
+pub(crate) fn take_otp_park() -> Option<ParkedOtp> {
+    OTP_PARK.with(|t| t.borrow_mut().take())
+}
+
+pub(crate) fn otp_park_pending() -> bool {
+    OTP_PARK.with(|t| t.borrow().is_some())
+}
+
+pub(crate) fn set_otp_resume(r: Option<OtpResume>) {
+    OTP_RESUME.with(|t| *t.borrow_mut() = r);
+}
+
+pub(crate) fn take_otp_resume() -> Option<OtpResume> {
+    OTP_RESUME.with(|t| t.borrow_mut().take())
+}
+
+pub(crate) fn set_otp_park_enabled(on: bool) {
+    OTP_PARK_ENABLED.with(|t| t.set(on));
+}
+
+pub(crate) fn otp_park_enabled() -> bool {
+    OTP_PARK_ENABLED.with(std::cell::Cell::get)
 }
 
 pub(crate) fn bounded_verify(
@@ -1035,7 +1102,12 @@ pub fn run_as_preauth(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, E
                 return Ok(Some(a));
             }
             Ok(None) => {}
-            Err(e) => return Err(finish_verify_padata(m.name(), e)),
+            Err(e) => {
+                if otp_park_pending() {
+                    return Err(e);
+                }
+                return Err(finish_verify_padata(m.name(), e));
+            }
         }
     }
     Ok(None)

@@ -4,6 +4,7 @@ import secrets
 import shutil
 import socket
 import subprocess
+import threading
 import time
 
 ROOT = "/var/tmp/ov3"
@@ -92,11 +93,17 @@ def totp(offset):
     return proc.stdout.strip()
 
 
-def kinit(env, tag, principal, token):
+def kinit(env, tag, principal, token, timeout=None):
     cell_env = dict(env)
     cell_env["KRB5CCNAME"] = "FILE:" + ROOT + "/cc-" + tag
     argv = ["kinit", "-V", "-T", ROOT + "/armor.cc", principal]
-    proc = subprocess.run(argv, env=cell_env, input=token + "\n", text=True, capture_output=True)
+    try:
+        proc = subprocess.run(
+            argv, env=cell_env, input=token + "\n", text=True, capture_output=True, timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        say(f"CELL {tag} rc 124")
+        return 124
     err = redact((proc.stdout or "") + (proc.stderr or ""))
     summary = ""
     for line in err.splitlines():
@@ -250,7 +257,7 @@ def main():
     commands.append(f"addprinc -pw {PW} +requires_preauth -policy lock3 v8user")
     for name in ("v6user", "v7user", "v8user", "keepuser", "v1user"):
         commands.append(f'setstr {name} otp "[{{""type"":""totp""}}]"')
-    commands.append('setstr chaosslow otp "[{""type"":""totp"",""username"":""chaos:slow:2000""}]"')
+    commands.append('setstr chaosslow otp "[{""type"":""totp"",""username"":""chaos:hang""}]"')
     commands.append('setstr chaospanic otp "[{""type"":""totp"",""username"":""chaos:panic""}]"')
     commands.append('setstr chaoserr otp "[{""type"":""totp"",""username"":""chaos:error""}]"')
     commands.append('setstr v11user otp "[{""type"":""nosuch""}]"')
@@ -410,12 +417,30 @@ def main():
         stdout=open(ROOT + "/chaos-kdc.out", "w"), stderr=subprocess.STDOUT,
     )
     say(f"CHAOS pid {chaos.pid} up {wait_log(ROOT + '/ours-kdc.log', 'commencing operation', 15)}")
-    t0 = time.time()
-    kinit(chaos_env, "ours-v9-slow", f"chaosslow@{REALM}", PW + "000000")
-    say(f"CELL ours-v9-slow seconds {time.time() - t0:.2f}")
-    t1 = time.time()
-    kinit(chaos_env, "ours-v9-other", principal, PW + totp(1))
-    say(f"CELL ours-v9-other seconds {time.time() - t1:.2f}")
+    # A hangs in the verifier. B starts while that verify is pending. The OTP
+    # deadline is 5s, so A must fail then, and B must finish before A does.
+    other_tok = PW + totp(1)
+    base = time.time()
+
+    def run_slow():
+        t0 = time.time()
+        kinit(chaos_env, "ours-v9-slow", f"chaosslow@{REALM}", PW + "000000", timeout=20)
+        say(f"CELL ours-v9-slow seconds {time.time() - t0:.2f}")
+        say(f"CELL ours-v9-slow done {time.time() - base:.2f}")
+
+    def run_other():
+        time.sleep(0.4)
+        t1 = time.time()
+        kinit(chaos_env, "ours-v9-other", principal, other_tok, timeout=20)
+        say(f"CELL ours-v9-other seconds {time.time() - t1:.2f}")
+        say(f"CELL ours-v9-other done {time.time() - base:.2f}")
+
+    slow_th = threading.Thread(target=run_slow)
+    other_th = threading.Thread(target=run_other)
+    slow_th.start()
+    other_th.start()
+    other_th.join(timeout=30)
+    slow_th.join(timeout=30)
     kinit(chaos_env, "ours-v10-panic", f"chaospanic@{REALM}", PW + "000000")
     kinit(chaos_env, "ours-v10-error", f"chaoserr@{REALM}", PW + "000000")
     alive = kinit(chaos_env, "ours-v10-alive", f"plainuser@{REALM}", PW)
