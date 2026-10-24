@@ -771,8 +771,17 @@ fn listener_setup_logs_mits_lines() {
         let line = format!("(debug): Setting pktinfo on socket {a}\n");
         assert!(text.contains(&line), "{line}in\n{text}");
     }
-    for port in [tcp_port, rpc_port] {
-        assert!(!text.contains(&format!("pktinfo on socket 0.0.0.0:{port}\n")));
+    // A UDP socket and a TCP or RPC socket can share a port number. The
+    // pktinfo line names the address, so the check follows the socket kind.
+    let udp_addrs: Vec<std::net::SocketAddr> =
+        udp.iter().map(|s| s.local_addr().unwrap()).collect();
+    for sock in tcp.iter().chain(rpc.iter()) {
+        let addr = sock.local_addr().unwrap();
+        if udp_addrs.contains(&addr) {
+            continue;
+        }
+        let line = format!("pktinfo on socket {addr}\n");
+        assert!(!text.contains(&line), "{line}in\n{text}");
     }
     let v6_fds: Vec<i32> = udp
         .iter()

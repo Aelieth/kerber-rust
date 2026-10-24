@@ -94,6 +94,7 @@ any other `###` heading.
 
 ### Tests and CI
 
+- **kdc.** The listener test tells a TCP socket from a UDP socket when they share a port number.
 - **ci.** The no-features nextest run and the fuzz-crate check are their own jobs. The `test` and `doc` budgets stay 360 s and 90 s. No test was removed.
 - **ci.** `form:` counts product comment characters against code characters; a `// MIT:` cite is exempt only as one line of at most 100 columns, else it fails.
 - **ci.** The anchor-form check leaves a `// MIT:` cite to the character gate, so a converted cite is not a stray line cite.

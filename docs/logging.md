@@ -156,6 +156,10 @@ attributes in memory until it can write the file; from then on the
 file's are the only ones. A KDC that opened the file read-only keeps
 them in memory until it is restarted, even once the file is writable.
 
+A realm MIT's `kdb5_util` made has no `principal.lockout`. The KS oracle
+realm is one of these, so the first counted login logs that warning until
+the file is created beside the database, as an upgrade does.
+
 The `KdcAudit` registry (`kdc_audit.c`) writes `event=kdc.audit`
 with MIT `j_dict.h` field names (`event_name`, `event_success`,
 `stage`, `tkt_out_id`, `req_id`, `fromport`, `fromaddr`, …).
