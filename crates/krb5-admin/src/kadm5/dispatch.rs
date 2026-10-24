@@ -33,7 +33,7 @@ use super::principal::{
     encode_extract_keys, encode_gprinc, encode_gprincs, encode_gstrings,
     impose_request_restrictions, modify_princ_mask_err, parse_alias, parse_chpass, parse_chrand,
     parse_create, parse_extract, parse_get, parse_gprincs, parse_gstrings, parse_ks, parse_modify,
-    parse_one_princ, parse_purgekeys, parse_rename, parse_setkey, parse_sstring, unix_now,
+    parse_one_princ, parse_purgekeys, parse_rename, parse_setkey, parse_sstring,
 };
 use super::rpc::RpcCtx;
 use super::xdr::XdrW;
@@ -388,7 +388,7 @@ pub(super) fn dispatch_kadm5_ticket(
                 return Ok(generic_ret(API_V2, KADM5_AUTH_ADD));
             }
             for rs in &rss {
-                rs.impose(&mut c.ent, unix_now());
+                rs.impose(&mut c.ent, krb5_types::unix_now());
             }
             if let Some(code) =
                 create_princ_mask_err(c.ent.mask, c.ent.policy.as_deref(), c.n_key_data)

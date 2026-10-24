@@ -2,7 +2,7 @@ use std::ops::{Deref, DerefMut};
 
 use zeroize::Zeroize;
 
-/// The allocation is resized to its capacity before it is zeroed, so the slack is cleared too.
+/// Slack past the length is cleared too.
 /// A `Wiped` buffer is wiped on drop, and that includes every `?` return.
 /// `DerefMut` can grow or clone a copy nothing wipes, so every caller sizes the buffer first.
 pub(crate) fn wipe(buf: &mut Vec<u8>) {

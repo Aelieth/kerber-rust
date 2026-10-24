@@ -6,7 +6,7 @@ use krb5_types::PrincipalName;
 use super::flags::{KDB_DISALLOW_ALL_TIX, KDB_REQUIRES_PRE_AUTH, KDB_V1_BASE_LENGTH};
 use super::keys::{KeyEntry, KeyLookup, random_key};
 use super::password::{apply_keysalt_policy, c_password, keys_from_password};
-use super::{PrincipalStore, kadm5_mask, unix_now, unix_now_u32};
+use super::{PrincipalStore, kadm5_mask, unix_now_u32};
 use crate::acl::{Acl, AdminOp, Restrictions};
 use crate::error::Error;
 use crate::kdb_dump::{
@@ -632,7 +632,7 @@ impl PrincipalStore {
                 },
             )?;
         }
-        let now = unix_now();
+        let now = unix_now_u32();
         let use_etypes = apply_keysalt_policy(
             polent.as_ref().and_then(|p| p.allowed_keysalts.as_deref()),
             etypes,
@@ -809,7 +809,7 @@ impl PrincipalStore {
     ) -> Result<(), Error> {
         self.inside_change()?;
         let id = self.canonical_id(name, princ_realm)?;
-        let now = unix_now();
+        let now = unix_now_u32();
         {
             let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
             p.fail_auth_count = 0;
@@ -1144,7 +1144,7 @@ impl PrincipalStore {
     fn apply_acl_restrictions(&mut self, id: &str, rs: &Restrictions) -> Result<(), Error> {
         self.inside_change()?;
         let mut ent = AdminEnt::default();
-        rs.impose(&mut ent, unix_now());
+        rs.impose(&mut ent, unix_now_u32());
         let p = self.map.get_mut(id).ok_or(Error::NotFound)?;
         if ent.mask & kadm5_mask::ATTRIBUTES != 0 {
             p.attributes = ent.attributes;

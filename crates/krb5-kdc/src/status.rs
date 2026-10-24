@@ -1,7 +1,5 @@
 //! e_text; detail is off the wire.
 
-#![allow(dead_code)]
-
 pub(crate) const ADD_TO_TRANSITED_LIST: &str = "ADD_TO_TRANSITED_LIST";
 pub(crate) const ANONYMOUS_NOT_ALLOWED: &str = "ANONYMOUS NOT ALLOWED";
 pub(crate) const BAD_ENCRYPTION_TYPE: &str = "BAD_ENCRYPTION_TYPE";

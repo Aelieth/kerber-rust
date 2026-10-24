@@ -22,7 +22,6 @@ mod tests;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use krb5_types::PrincipalName;
 use krb5_types::pac::RpcSid;
@@ -34,14 +33,6 @@ use iprop_ulog::{LogContext, LogNote, PrincipalMap};
 use kadm5_hook::Post;
 use principal::default_mod_actor;
 use rid::generate_domain_sid;
-
-fn unix_now() -> u32 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .ok()
-        .and_then(|d| u32::try_from(d.as_secs()).ok())
-        .unwrap_or(0)
-}
 
 #[cfg(test)]
 use std::cell::Cell;
@@ -165,12 +156,7 @@ impl Before {
 }
 
 pub(crate) fn unix_now_u32() -> u32 {
-    u32::try_from(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs()),
-    )
-    .unwrap_or(u32::MAX)
+    krb5_types::unix_now()
 }
 
 impl PrincipalStore {

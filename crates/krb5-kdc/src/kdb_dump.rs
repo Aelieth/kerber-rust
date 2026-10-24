@@ -676,7 +676,7 @@ fn write_dump_nra(
     mkey: &ProtocolKey,
     omit_nra: bool,
 ) -> Result<String, DumpError> {
-    let now = unix_now();
+    let now = krb5_types::unix_now();
     let mut princs: Vec<&Principal> = store.debug_principals().collect();
     princs.sort_by_key(|p| {
         (
@@ -1110,15 +1110,6 @@ pub(crate) fn mkvno_from_tl(tl: &[TlData]) -> u16 {
         .map_or(1, |t| u16::from_le_bytes([t.contents[0], t.contents[1]]))
 }
 
-fn unix_now() -> u32 {
-    u32::try_from(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs()),
-    )
-    .unwrap_or(u32::MAX)
-}
-
 pub(crate) fn dump_attributes(p: &Principal) -> u32 {
     p.attributes
 }
@@ -1146,7 +1137,7 @@ fn write_princ_record(
     let mut tl = if p.tl_data.is_empty() {
         synthesize_tl(
             &p.realm,
-            unix_now(),
+            krb5_types::unix_now(),
             p.mkvno,
             p.name.components_joined() == "K/M",
         )
@@ -1288,17 +1279,6 @@ pub(crate) fn merge_kadm_tl(tl: &mut Vec<TlData>, p: &Principal) {
     crate::store::refresh_kadm_tl(&mut fresh);
     tl.retain(|t| t.ty != TL_KERBER_POLICY);
     tl.extend(fresh.tl_data.into_iter().filter(|t| t.ty == TL_KADM_DATA));
-}
-
-#[allow(dead_code)]
-fn merge_policy_tl(tl: &mut Vec<TlData>, policy: Option<&str>) {
-    tl.retain(|t| t.ty != TL_KERBER_POLICY);
-    if let Some(name) = policy.filter(|s| !s.is_empty()) {
-        tl.push(TlData {
-            ty: TL_KERBER_POLICY,
-            contents: name.as_bytes().to_vec(),
-        });
-    }
 }
 
 fn merge_hist_tl(

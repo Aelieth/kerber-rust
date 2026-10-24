@@ -268,17 +268,14 @@ fn code_text(code: Code) -> &'static str {
         // MIT KRB5_FCC_NOFILE; see docs/parity/b1-client.md
         Code::FccNofile => "No credentials cache found",
         // MIT: `KRB5_FCC_PERM` (krb5_err.et:262-262)
-        // the text.
         Code::FccPerm => "Credentials cache permissions incorrect",
         // MIT KRB5_CC_NOTFOUND; see docs/parity/b1-client.md
         Code::CcNotfound => "Matching credential not found",
         // MIT KRB5_CC_UNKNOWN_TYPE; see docs/parity/b1-client.md
         Code::CcUnknownType => "Unknown credential cache type",
         // MIT: `KRB5_KT_UNKNOWN_TYPE` (krb5_err.et:244-244)
-        // the text.
         Code::KtUnknownType => "Unknown Key table type",
         // MIT: `KRB5KRB_AP_WRONG_PRINC` (krb5_err.et:196-196)
-        // the text.
         Code::WrongPrinc => "Wrong principal in request",
         // MIT KRB5KRB_AP_ERR_TKT_INVALID; see docs/parity/b1-client.md
         Code::TktInvalid => "Ticket has invalid flag set",
@@ -287,27 +284,21 @@ fn code_text(code: Code) -> &'static str {
         // MIT KRB5_REALM_UNKNOWN; see docs/parity/b1-client.md
         Code::RealmUnknown => "Cannot find KDC for requested realm",
         // MIT: `KRB5_PARSE_MALFORMED` (krb5_err.et:181-181)
-        // the text.
         Code::ParseMalformed => "Malformed representation of principal",
         // MIT: `KRB5_CONFIG_NODEFREALM` (krb5_err.et:310-310)
-        // the text.
         Code::NoDefRealm => "Configuration file does not specify default realm",
         Code::Profile(p) => p.text(),
         // MIT: `KRB5_FCC_INTERNAL` (krb5_err.et:264-264)
-        // the text.
         Code::FccInternal => "Internal credentials cache error",
         // MIT KRB5_KDCREP_MODIFIED; see docs/parity/b1-client.md
         Code::KdcrepModified => "KDC reply did not match expectations",
         // MIT: `KRB5_KDCREP_SKEW` (krb5_err.et:201-201)
-        // the text.
         Code::KdcrepSkew => "Clock skew too great in KDC reply",
         // MIT: `KRB5_CC_IO` (krb5_err.et:261-261)
-        // the text.
         Code::CcIo => "Credentials cache I/O operation failed",
         // MIT KRB5_CC_FORMAT; see docs/parity/b1-client.md
         Code::CcFormat => "Bad format in credentials cache",
         // MIT: `KRB5_CCACHE_BADVNO` (krb5_err.et:292-292)
-        // the text.
         Code::CcBadVno => "Unsupported credentials cache format version number",
         // MIT KRB5_KCM_NO_SERVER; see docs/parity/b1-client.md
         Code::KcmNoServer => "No KCM server found",

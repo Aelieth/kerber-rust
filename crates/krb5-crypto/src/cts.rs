@@ -64,26 +64,6 @@ pub(crate) fn camellia_decrypt(
     }
 }
 
-#[allow(dead_code)]
-pub(crate) fn camellia_encrypt_block(
-    key: &[u8],
-    block: &[u8; BLOCK],
-) -> Result<[u8; BLOCK], Error> {
-    let mut out = *block;
-    match key.len() {
-        16 => {
-            let cipher = keyed::<Camellia128>(key)?;
-            cipher.encrypt_block((&mut out).into());
-        }
-        32 => {
-            let cipher = keyed::<Camellia256>(key)?;
-            cipher.encrypt_block((&mut out).into());
-        }
-        _ => return Err(Error::InvalidKeyLength),
-    }
-    Ok(out)
-}
-
 fn keyed<C: KeyInit>(key: &[u8]) -> Result<C, Error> {
     C::new_from_slice(key).map_err(|_| Error::InvalidKeyLength)
 }

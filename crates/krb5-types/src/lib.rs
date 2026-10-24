@@ -1214,6 +1214,16 @@ pub fn kerberos_time_from_utc_z(s: &str) -> Result<KerberosTime, TimeError> {
     Ok(KerberosTime(tz.from_utc_datetime(&naive)))
 }
 
+#[must_use]
+pub fn unix_now() -> u32 {
+    u32::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs()),
+    )
+    .unwrap_or(u32::MAX)
+}
+
 impl KerberosTime {
     /// RFC 4120 forbids fractional seconds; nanoseconds are zeroed so DER
     #[must_use]

@@ -751,7 +751,5 @@ pub fn string_to_enctype(name: &str) -> Result<i32, Krb5Error> {
 
 #[must_use]
 pub fn unix_now() -> u32 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| u32::try_from(d.as_secs()).unwrap_or(u32::MAX))
+    krb5_types::unix_now()
 }

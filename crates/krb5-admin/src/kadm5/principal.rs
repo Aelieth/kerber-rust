@@ -15,16 +15,6 @@ use super::iprop::tl_u32;
 use super::xdr::{XdrR, XdrW, opaque_len, xdr_tl_type};
 use crate::Error;
 
-/// `krb5_timeofday` for `impose_restrictions`' `-expire`/`-pwexpire` caps.
-pub(super) fn unix_now() -> u32 {
-    u32::try_from(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs()),
-    )
-    .unwrap_or(u32::MAX)
-}
-
 /// `auth_restrict` for a modify request: the actor's ACL restrictions, if any, imposed on the parsed `(mask, fields)`.
 pub(super) fn impose_request_restrictions(
     rss: &[krb5_kdc::Restrictions],
@@ -36,7 +26,7 @@ pub(super) fn impose_request_restrictions(
     }
     let mut ent = fields.admin_ent(mask);
     for rs in rss {
-        rs.impose(&mut ent, unix_now());
+        rs.impose(&mut ent, krb5_types::unix_now());
     }
     let mask = fields.take_admin_ent(ent);
     (mask, fields)

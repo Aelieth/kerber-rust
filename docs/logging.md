@@ -264,7 +264,7 @@ referrals and S4U, the cache and keytab lookups and stores, and the
 kpasswd exchange. Where our flow differs from MIT's, the lines show
 ours: under FAST, when the KDC offers SPAKE, MIT's `kinit` tries SPAKE
 before the encrypted challenge and ours sends the challenge. PKINIT's own lines
-(`pkinit_trace.h`) and the DNS lookups are not traced.
+(`pkinit_trace.h`) are not traced.
 
 A key prints as its enctype and the first two bytes of its SHA-1
 (`aes256-sha2/4149`), as MIT prints it. No line carries key, password

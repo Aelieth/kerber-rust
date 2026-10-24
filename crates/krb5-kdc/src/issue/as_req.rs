@@ -867,7 +867,6 @@ fn kdc_encrypted_challenge(
 }
 
 // MIT: `enc_ts_verify` (kdc/kdc_preauth_encts.c:94-101)
-/// Inside the skew a replay verifies again.
 pub(crate) fn verify_enc_timestamp(
     store: &dyn PrincipalRead,
     key: &ProtocolKey,
