@@ -21,3 +21,18 @@ open is.
 `admin.keytab` beside the database. A store takes the realm's lifetimes, flags,
 and enctypes only after `apply_profile`, and `embed-realm` applies it before
 `--create-trust` and `--allow-to-delegate`.
+
+## Logging
+
+`serve`, `serve_all`, `serve_until`, `serve_all_until`, and `serve_daemon`
+take `&KdcLog` as the last argument. `KdcLog::process` uses the process log.
+`KdcLog::with_sink` installs an `Arc<dyn klog::LogSink>` for that serve loop.
+`klog::set_sink` sets the process sink. A sink is used before an initialized
+logger. With neither, a klog line goes to tracing on the target `krb5_klog`.
+`LogSink::line` receives the severity and the message. The MIT-format
+per-request line comes from a klog sink (`klog::set_sink` or
+`KdcLog::with_sink`). A subscriber with no sink and no `klog::init`
+gets the structured `kdc.issue` event. Startup and the other klog lines
+still reach tracing on `krb5_klog`. A `TracingAdmin` embed gets one `admin`
+event per kadm5 operation and per password change. The MIT-format line for
+that operation goes to a klog logger, not to the subscriber.

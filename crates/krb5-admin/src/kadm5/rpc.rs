@@ -314,7 +314,7 @@ pub(super) fn handle_rpc(
         return Err(Error::GarbageArgs);
     }
 
-    tracing::info!(
+    tracing::debug!(
         event = krb5_log::events::ADMIN,
         component = "krb5-admin",
         outcome = "ok",

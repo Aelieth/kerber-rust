@@ -13,7 +13,7 @@ use std::path::PathBuf;
 
 use krb5_crypto::EncryptionType;
 use krb5_kdc::{
-    ListenLimits, OpenFailure, PrincipalStore, Signals, bind_tcp_listeners_with_backlog,
+    KdcLog, ListenLimits, OpenFailure, PrincipalStore, Signals, bind_tcp_listeners_with_backlog,
     bind_udp_listeners, copy_persist_master, detach, manual_master_key, mkey_log_context,
     names_relative_database, open_database, open_database_with_key, open_database_with_password,
     serve_daemon, shared_store, write_pid_file,
@@ -177,9 +177,7 @@ fn main() {
         let _ = tracing_subscriber::fmt()
             .json()
             .with_writer(json.make_writer())
-            .with_env_filter(krb5_kdc::json_log_filter(
-                "krb5_kdc=info,krb5_crypto=info,krb5_asn1=info,krb5_protocol=warn",
-            ))
+            .with_env_filter(krb5_kdc::json_log_filter("krb5_kdc=info,krb5_admin=info"))
             .try_init();
     }
     // -T must be 0.
@@ -402,7 +400,14 @@ fn main() {
         max_dgram_reply_size: max_dgram,
         ..ListenLimits::default()
     };
-    let served = serve_daemon(store.clone(), udp, tcp, &signals, limits);
+    let served = serve_daemon(
+        store.clone(),
+        udp,
+        tcp,
+        &signals,
+        limits,
+        &KdcLog::process(),
+    );
     if let Err(e) = served {
         {
             let g = store

@@ -88,16 +88,17 @@ fn process_logged(
                     code,
                     &e_text,
                     detail.as_deref(),
+                    duration_us,
                 );
             } else {
-                tracing::info!(
+                tracing::debug!(
                     event = krb5_log::events::KDC_ISSUE,
                     correlation_id = krb5_log::current_correlation_id(),
                     component = "krb5-kdc",
                     duration_us,
                     outcome = "ok",
                 );
-                crate::audit::log_success(store, raw, sender, &bytes);
+                crate::audit::log_success(store, raw, sender, &bytes, duration_us);
             }
             Ok(Processed::Reply(bytes))
         }
@@ -134,7 +135,7 @@ fn audit_id_failure(store: &dyn PrincipalRead, raw: &[u8], e: getrandom::Error) 
 
 fn log_krb_error(duration_us: u64, code: i32, e_text: &str, detail: Option<&str>) {
     if let Some(d) = detail.filter(|s| !s.is_empty()) {
-        tracing::info!(
+        tracing::debug!(
             event = krb5_log::events::KDC_ISSUE,
             correlation_id = krb5_log::current_correlation_id(),
             component = "krb5-kdc",
@@ -145,7 +146,7 @@ fn log_krb_error(duration_us: u64, code: i32, e_text: &str, detail: Option<&str>
             detail = d,
         );
     } else {
-        tracing::info!(
+        tracing::debug!(
             event = krb5_log::events::KDC_ISSUE,
             correlation_id = krb5_log::current_correlation_id(),
             component = "krb5-kdc",
@@ -481,7 +482,7 @@ const RESENDING: &str = "DISPATCH: repeated (retransmitted?) request from [unkno
 const DROPPING: &str = "DISPATCH: repeated (retransmitted?) request from [unknown address type] during request processing, dropping repeated request";
 
 fn log_dispatch_resend() {
-    tracing::info!(
+    tracing::debug!(
         event = krb5_log::events::KDC_ISSUE,
         correlation_id = krb5_log::current_correlation_id(),
         component = "krb5-kdc",
@@ -491,7 +492,7 @@ fn log_dispatch_resend() {
 }
 
 fn log_dispatch_inflight_drop() {
-    tracing::info!(
+    tracing::debug!(
         event = krb5_log::events::KDC_ISSUE,
         correlation_id = krb5_log::current_correlation_id(),
         component = "krb5-kdc",

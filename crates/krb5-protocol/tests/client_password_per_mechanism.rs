@@ -169,7 +169,7 @@ fn kdc(spake: Spake) -> KdcAddr {
     let port = udp.local_addr().unwrap().port();
     let store = shared_store(store(spake));
     thread::spawn(move || {
-        let _ = serve(store, udp, tcp);
+        let _ = serve(store, udp, tcp, &krb5_kdc::KdcLog::process());
     });
     KdcAddr {
         host: "127.0.0.1".into(),

@@ -378,7 +378,7 @@ pub fn verify_ap_req_ex(
     let result = verify_inner(raw, params, replay, app_cksum);
     let duration_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
     match &result {
-        Ok(_) => tracing::info!(
+        Ok(_) => tracing::debug!(
             event = krb5_log::events::PROTOCOL_AP,
             correlation_id = krb5_log::current_correlation_id(),
             component = "krb5-protocol",

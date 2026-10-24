@@ -569,7 +569,7 @@ fn exchange_one(
     }
     let reply = match exchange_udp(dest, request, deadline) {
         Ok(reply) if is_response_too_big(&reply) => {
-            tracing::info!(
+            tracing::debug!(
                 event = krb5_log::events::PROTOCOL_TRANSPORT,
                 correlation_id = krb5_log::current_correlation_id(),
                 component = "krb5-protocol",
@@ -710,7 +710,7 @@ fn exchange_udp(
             match sock.recv_from(&mut buf) {
                 Ok((n, src)) => {
                     if src.ip() != dest.ip() || src.port() != dest.port() {
-                        tracing::info!(
+                        tracing::debug!(
                             event = krb5_log::events::PROTOCOL_TRANSPORT,
                             correlation_id = krb5_log::current_correlation_id(),
                             component = "krb5-protocol",

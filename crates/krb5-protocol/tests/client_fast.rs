@@ -191,7 +191,7 @@ fn as_exchange_records_fast_availability() {
     let port = addr.port();
     let store = shared_store(store);
     thread::spawn(move || {
-        let _ = serve(store, udp, tcp);
+        let _ = serve(store, udp, tcp, &krb5_kdc::KdcLog::process());
     });
 
     let out = as_exchange(&AsRequest {
@@ -254,7 +254,7 @@ fn fast_exchange_negotiates_through_the_armor_like_mit() {
     let port = addr.port();
     let store = shared_store(store);
     thread::spawn(move || {
-        let _ = serve(store, udp, tcp);
+        let _ = serve(store, udp, tcp, &krb5_kdc::KdcLog::process());
     });
     let kdc = KdcAddr {
         host: "127.0.0.1".into(),
@@ -835,7 +835,7 @@ fn a_keytab_key_of_bad_parity_fails_the_encrypted_timestamp_module_under_armor()
     let port = udp.local_addr().unwrap().port();
     let store = shared_store(store);
     thread::spawn(move || {
-        let _ = serve(store, udp, tcp);
+        let _ = serve(store, udp, tcp, &krb5_kdc::KdcLog::process());
     });
     let kdc = KdcAddr {
         host: "127.0.0.1".into(),

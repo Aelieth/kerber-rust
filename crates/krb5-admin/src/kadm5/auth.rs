@@ -426,7 +426,7 @@ pub(super) fn svcauth_gssapi(
     if version != AUTH_GSSAPI_CREDS_VERS {
         return agss_denied(addr, AUTH_BADCRED, "unsupported client credentials version");
     }
-    tracing::info!(
+    tracing::debug!(
         event = krb5_log::events::ADMIN,
         component = "krb5-admin",
         outcome = "ok",

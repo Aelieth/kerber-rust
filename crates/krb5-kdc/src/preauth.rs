@@ -517,7 +517,7 @@ pub(crate) fn process_pkinit(
     }
     let inner = pack.e_content;
     let (ctime, _) = krb5_types::pkinit::parse_authpack_freshness(&inner).ok_or_else(|| {
-        tracing::info!(
+        tracing::debug!(
             event = krb5_log::events::KDC_PKINIT,
             component = "krb5-kdc",
             outcome = "denied",
@@ -531,7 +531,7 @@ pub(crate) fn process_pkinit(
         return Err(proto(err::SKEW, status::PREAUTH_FAILED));
     }
     let (nonce, spki) = krb5_types::pkinit::parse_authpack_maybe_dh(&inner).ok_or_else(|| {
-        tracing::info!(
+        tracing::debug!(
             event = krb5_log::events::KDC_PKINIT,
             component = "krb5-kdc",
             outcome = "denied",
@@ -553,7 +553,7 @@ pub(crate) fn process_pkinit(
         None => None,
     };
     if let Err(e) = krb5_types::pkinit::authpack_pa_checksum_ok(&inner, body_der) {
-        tracing::info!(
+        tracing::debug!(
             event = krb5_log::events::KDC_PKINIT,
             component = "krb5-kdc",
             outcome = "denied",
@@ -613,7 +613,7 @@ pub(crate) fn process_pkinit(
         .ok_or_else(|| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
     }
     let reply_key = if agile {
-        tracing::info!(
+        tracing::debug!(
             event = krb5_log::events::KDC_PKINIT,
             component = "krb5-kdc",
             outcome = "ok",
@@ -652,7 +652,7 @@ fn cms_fault(
     fault: krb5_types::pkinit::CmsFault,
 ) -> Error {
     use krb5_types::pkinit::CmsFault;
-    tracing::info!(
+    tracing::debug!(
         event = krb5_log::events::KDC_PKINIT,
         component = "krb5-kdc",
         outcome = "denied",
@@ -708,7 +708,7 @@ fn authorize_cert(
     realm: &str,
 ) -> Result<(), Error> {
     let denied = |code, error: &'static str| {
-        tracing::info!(
+        tracing::debug!(
             event = krb5_log::events::KDC_PKINIT,
             component = "krb5-kdc",
             outcome = "denied",
@@ -765,7 +765,7 @@ fn authorize_cert(
             Ok(true) => accepted = true,
             Ok(false) => return Err(denied(err::CERTIFICATE_MISMATCH, "pkinit_cert_match")),
             Err(e) => {
-                tracing::info!(
+                tracing::debug!(
                     event = krb5_log::events::KDC_PKINIT,
                     component = "krb5-kdc",
                     outcome = "denied",
@@ -840,7 +840,7 @@ fn server_check_dh(
         g => {
             let desc = g.map_or("(unknown)", KxGroup::desc);
             krb5_protocol::trace::pkinit_dh_rejecting_group(desc, group_desc(min_bits));
-            tracing::info!(
+            tracing::debug!(
                 event = krb5_log::events::KDC_PKINIT,
                 component = "krb5-kdc",
                 outcome = "denied",

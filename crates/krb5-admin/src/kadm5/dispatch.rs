@@ -243,7 +243,7 @@ pub(super) fn dispatch_kadm5_ticket(
                     {
                         return Ok(generic_ret(API_V2, KADM5_AUTH_GET));
                     }
-                    tracing::info!(
+                    tracing::debug!(
                         event = krb5_log::events::ADMIN,
                         component = "krb5-admin",
                         outcome = "ok",
@@ -700,7 +700,7 @@ pub(super) fn dispatch_kadm5_ticket(
             if p.attributes & KDB_LOCKDOWN_KEYS != 0 {
                 return Ok(generic_ret(api, KADM5_AUTH_EXTRACT));
             }
-            tracing::info!(
+            tracing::debug!(
                 event = krb5_log::events::ADMIN,
                 component = "krb5-admin",
                 outcome = "ok",
@@ -726,7 +726,7 @@ pub(super) fn dispatch_kadm5_ticket(
                 s.purgekeys_in(&name, &req, keepkvno, actor)
             }) {
                 Ok(()) => {
-                    tracing::info!(
+                    tracing::debug!(
                         event = krb5_log::events::ADMIN,
                         component = "krb5-admin",
                         outcome = "ok",

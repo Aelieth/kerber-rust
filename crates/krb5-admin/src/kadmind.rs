@@ -97,6 +97,10 @@ pub struct KadmindConfig {
 pub trait AdminLog: Send + Sync {
     fn syslog(&self, severity: Severity, msg: &str);
 
+    fn syslog_open(&self, severity: Severity, msg: &str) {
+        self.syslog(severity, msg);
+    }
+
     fn reopen(&self) {}
 }
 
@@ -105,6 +109,10 @@ pub struct KlogAdmin;
 impl AdminLog for KlogAdmin {
     fn syslog(&self, severity: Severity, msg: &str) {
         klog::syslog(severity, msg);
+    }
+
+    fn syslog_open(&self, severity: Severity, msg: &str) {
+        klog::syslog_open(severity, msg);
     }
 
     fn reopen(&self) {
@@ -118,12 +126,16 @@ impl AdminLog for TracingAdmin {
     fn syslog(&self, severity: Severity, msg: &str) {
         match severity {
             Severity::Emerg | Severity::Alert | Severity::Crit | Severity::Err => {
-                tracing::error!(target: "krb5-admin", "{msg}");
+                tracing::error!(target: "krb5_admin", "{msg}");
             }
-            Severity::Warning => tracing::warn!(target: "krb5-admin", "{msg}"),
-            Severity::Debug => tracing::debug!(target: "krb5-admin", "{msg}"),
-            Severity::Notice | Severity::Info => tracing::info!(target: "krb5-admin", "{msg}"),
+            Severity::Warning => tracing::warn!(target: "krb5_admin", "{msg}"),
+            Severity::Debug => tracing::debug!(target: "krb5_admin", "{msg}"),
+            Severity::Notice | Severity::Info => tracing::info!(target: "krb5_admin", "{msg}"),
         }
+    }
+
+    fn syslog_open(&self, severity: Severity, msg: &str) {
+        klog::syslog_open(severity, msg);
     }
 }
 
@@ -156,6 +168,21 @@ pub(crate) fn admin_syslog(severity: Severity, msg: &str) {
     });
     if !sent {
         klog::syslog(severity, msg);
+    }
+}
+
+pub(crate) fn admin_syslog_open(severity: Severity, msg: &str) {
+    let sent = THREAD_ADMIN_LOG.with(|slot| {
+        let slot = slot.borrow();
+        if let Some(log) = slot.as_ref() {
+            log.syslog_open(severity, msg);
+            true
+        } else {
+            false
+        }
+    });
+    if !sent {
+        klog::syslog_open(severity, msg);
     }
 }
 

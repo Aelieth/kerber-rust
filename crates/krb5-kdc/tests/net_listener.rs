@@ -96,7 +96,7 @@ fn udp_listener_answers_wrong_password() {
     let addr = udp.local_addr().unwrap();
     let store = shared_store(store);
     thread::spawn(move || {
-        let _ = serve(store, udp, tcp);
+        let _ = serve(store, udp, tcp, &krb5_kdc::KdcLog::process());
     });
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let req = as_req(cname, TEST_REALM, 1, None).unwrap();
@@ -123,7 +123,7 @@ fn listener_retransmit_resends_the_cached_reply_like_replay_c() {
     let addr = udp.local_addr().unwrap();
     let store = shared_store(store);
     thread::spawn(move || {
-        let _ = serve(store, udp, tcp);
+        let _ = serve(store, udp, tcp, &krb5_kdc::KdcLog::process());
     });
 
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -199,6 +199,7 @@ fn a_connection_past_the_cap_evicts_and_is_served() {
                 shutdown_poll: Duration::from_millis(50),
                 ..ListenLimits::default()
             },
+            &krb5_kdc::KdcLog::process(),
         )
         .unwrap();
     });
@@ -243,6 +244,7 @@ fn an_idle_stream_is_not_timed_out() {
                 shutdown_poll: Duration::from_millis(50),
                 ..ListenLimits::default()
             },
+            &krb5_kdc::KdcLog::process(),
         )
         .unwrap();
     });
@@ -291,7 +293,15 @@ fn served_on_this_thread(nonce: u32) -> Vec<u8> {
         shutdown_poll: Duration::from_millis(50),
         ..ListenLimits::default()
     };
-    serve_until(shared_store(store), udp, tcp, flag, limits).unwrap();
+    serve_until(
+        shared_store(store),
+        udp,
+        tcp,
+        flag,
+        limits,
+        &krb5_kdc::KdcLog::process(),
+    )
+    .unwrap();
     client.join().unwrap()
 }
 
@@ -396,6 +406,7 @@ fn listener_chaos_udp_garbage_then_valid() {
                 max_dgram_reply_size: krb5_kdc::MAX_DGRAM_REPLY,
                 shutdown_poll: Duration::from_millis(50),
             },
+            &krb5_kdc::KdcLog::process(),
         );
     });
     let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
@@ -521,6 +532,7 @@ fn serve_until_honours_shutdown_within_the_poll_interval() {
                 max_dgram_reply_size: krb5_kdc::MAX_DGRAM_REPLY,
                 shutdown_poll: Duration::from_millis(100),
             },
+            &krb5_kdc::KdcLog::process(),
         );
     });
     // Prove the loop is serving: send a real AS-REQ and read the KRB-ERROR before storing the
@@ -611,7 +623,7 @@ fn kdc_listen_list_is_served_on_every_address_like_mit() {
     let (store, _) = bootstrap_documented().unwrap();
     let store = shared_store(store);
     thread::spawn(move || {
-        let _ = serve_all(store, udp, tcp);
+        let _ = serve_all(store, udp, tcp, &krb5_kdc::KdcLog::process());
     });
     for a in udp_addrs {
         assert!(udp_as_answers(a), "no UDP answer on {a}");
@@ -722,7 +734,7 @@ fn bare_port_listens_on_ipv4_and_ipv6_like_mit() {
     let (store, _) = bootstrap_documented().unwrap();
     let store = shared_store(store);
     thread::spawn(move || {
-        let _ = serve_all(store, udp, tcp);
+        let _ = serve_all(store, udp, tcp, &krb5_kdc::KdcLog::process());
     });
     for (is_udp, a) in probes {
         let ok = if is_udp {
@@ -848,7 +860,7 @@ fn a_udp_reply_leaves_from_the_address_the_request_was_sent_to_like_mit() {
     let (store, _) = bootstrap_documented().unwrap();
     let store = shared_store(store);
     thread::spawn(move || {
-        let _ = serve_all(store, udp, Vec::new());
+        let _ = serve_all(store, udp, Vec::new(), &krb5_kdc::KdcLog::process());
     });
     let v4 = std::net::SocketAddr::from(([127, 0, 0, 2], addrs[0].port()));
     let plain = UdpSocket::bind("127.0.0.1:0").unwrap();

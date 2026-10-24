@@ -307,7 +307,7 @@ fn tgs_req_lines(
 }
 
 fn klog_as_req(req_etypes: &str, from: &str, outcome: &MitOutcome<'_>, client: &str, server: &str) {
-    krb5_log::klog::syslog(
+    krb5_log::klog::syslog_open(
         krb5_log::klog::Severity::Info,
         &as_req_line(req_etypes, from, outcome, client, server),
     );
@@ -322,7 +322,7 @@ fn klog_tgs_req(
     s4u: Option<(&str, &str)>,
 ) {
     for line in tgs_req_lines(req_etypes, from, outcome, client, server, s4u) {
-        krb5_log::klog::syslog(krb5_log::klog::Severity::Info, &line);
+        krb5_log::klog::syslog_open(krb5_log::klog::Severity::Info, &line);
     }
 }
 
@@ -507,7 +507,17 @@ fn active_audits(store: &dyn PrincipalRead) -> Vec<Arc<dyn KdcAudit>> {
     {
         return vec![module];
     }
-    let mut modules: Vec<Arc<dyn KdcAudit>> = vec![Arc::new(JsonAudit)];
+    let mut modules: Vec<Arc<dyn KdcAudit>> = Vec::new();
+    // MIT: `load_audit_modules` (kdc/kdc_audit.c:84)
+    if store
+        .policy()
+        .audit
+        .enable_only
+        .as_ref()
+        .is_some_and(|names| names.iter().any(|name| name == "json"))
+    {
+        modules.push(Arc::new(JsonAudit));
+    }
     modules.extend(
         NAMED_AUDITS
             .lock()
@@ -525,7 +535,7 @@ fn each_audit(store: &dyn PrincipalRead, mut call: impl FnMut(&dyn KdcAudit)) {
 }
 
 // MIT: `kau_kdc_start` (kdc/kdc_audit.c:244-256)
-/// Disabling json drops the built-in; an empty selection records nothing.
+/// `json` loads when `enable_only` names it.
 pub fn audit_kdc_start(store: &dyn PrincipalRead, success: bool) {
     each_audit(store, |module| module.kdc_start(success));
 }
@@ -682,6 +692,7 @@ pub fn log_success(
     raw: &[u8],
     sender: Option<&HostAddress>,
     bytes: &[u8],
+    duration_us: u64,
 ) {
     if raw.is_empty() || bytes.is_empty() || bytes.starts_with(&[0x7e]) {
         return;
@@ -689,18 +700,22 @@ pub fn log_success(
     match raw.first().copied() {
         Some(0x6a) => {
             if let Ok(req) = decode::<AsReq>(raw) {
-                as_success(store, &req, sender, bytes);
+                as_success(store, &req, sender, bytes, duration_us);
             }
         }
         Some(0x6c) => {
             if let Ok(req) = decode::<TgsReq>(raw) {
-                tgs_success(store, &req, sender, bytes);
+                tgs_success(store, &req, sender, bytes, duration_us);
             }
         }
         _ => {}
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "request log, not a params struct"
+)]
 pub fn log_failure(
     store: &dyn PrincipalRead,
     raw: &[u8],
@@ -709,24 +724,31 @@ pub fn log_failure(
     code: i32,
     e_text: &str,
     detail: Option<&str>,
+    duration_us: u64,
 ) {
     let emsg = detail.unwrap_or("");
     match raw.first().copied() {
         Some(0x6a) => {
             if let Ok(req) = decode::<AsReq>(raw) {
-                as_failure(store, &req, sender, code, e_text, emsg);
+                as_failure(store, &req, sender, code, e_text, emsg, duration_us);
             }
         }
         Some(0x6c) => {
             if let Ok(req) = decode::<TgsReq>(raw) {
-                tgs_failure(store, &req, sender, code, e_text, emsg);
+                tgs_failure(store, &req, sender, code, e_text, emsg, duration_us);
             }
         }
         _ => {}
     }
 }
 
-fn as_success(store: &dyn PrincipalRead, req: &AsReq, sender: Option<&HostAddress>, bytes: &[u8]) {
+fn as_success(
+    store: &dyn PrincipalRead,
+    req: &AsReq,
+    sender: Option<&HostAddress>,
+    bytes: &[u8],
+    duration_us: u64,
+) {
     let Ok(rep) = decode::<AsRep>(bytes) else {
         return;
     };
@@ -754,6 +776,7 @@ fn as_success(store: &dyn PrincipalRead, req: &AsReq, sender: Option<&HostAddres
         None,
         false,
         "",
+        duration_us,
     );
     klog_as_req(
         &req_etypes,
@@ -779,6 +802,7 @@ fn as_failure(
     code: i32,
     e_text: &str,
     emsg: &str,
+    duration_us: u64,
 ) {
     seed_as_req(store, req, sender);
     let body = &req.0.req_body;
@@ -804,6 +828,7 @@ fn as_failure(
         None,
         false,
         emsg,
+        duration_us,
     );
     klog_as_req(
         &req_etypes,
@@ -829,6 +854,7 @@ fn tgs_success(
     req: &TgsReq,
     sender: Option<&HostAddress>,
     bytes: &[u8],
+    duration_us: u64,
 ) {
     let Ok(rep) = decode::<TgsRep>(bytes) else {
         return;
@@ -858,6 +884,7 @@ fn tgs_success(
         s4u.as_ref().map(|(k, c)| (*k, c.as_str())),
         false,
         "",
+        duration_us,
     );
     klog_tgs_req(
         &req_etypes,
@@ -915,6 +942,7 @@ fn tgs_failure(
     code: i32,
     e_text: &str,
     emsg: &str,
+    duration_us: u64,
 ) {
     seed_tgs_req(store, req, sender);
     let body = &req.0.req_body;
@@ -946,6 +974,7 @@ fn tgs_failure(
         } else {
             emsg
         },
+        duration_us,
     );
     let early = tgs_failed_before_authtime(status);
     let s4u = (!early || status == status::RBCD_PAC_PRINC)
@@ -1005,17 +1034,24 @@ fn emit_issue(
     s4u: Option<(&str, &str)>,
     server_nomatch: bool,
     emsg: &str,
+    duration_us: u64,
 ) {
+    let outcome = if server_nomatch || status != "ISSUE" {
+        "krb-error"
+    } else {
+        "ok"
+    };
     if server_nomatch {
         tracing::info!(
             event = krb5_log::events::KDC_ISSUE,
             correlation_id = krb5_log::current_correlation_id(),
             component = "krb5-kdc",
-            outcome = "krb-error",
+            outcome,
             kind,
             from,
             status,
             authtime,
+            duration_us,
             client,
             server,
             nomatch = true,
@@ -1023,29 +1059,41 @@ fn emit_issue(
         );
         return;
     }
-    tracing::info!(
-        event = krb5_log::events::KDC_ISSUE,
-        correlation_id = krb5_log::current_correlation_id(),
-        component = "krb5-kdc",
-        outcome = if status == "ISSUE" { "ok" } else { "krb-error" },
-        kind,
-        req_etypes,
-        from,
-        status,
-        authtime,
-        etypes,
-        client,
-        server,
-        emsg,
-    );
-    if let Some((kind, s4u_client)) = s4u {
+    if let Some((s4u_kind, s4u_client)) = s4u {
         tracing::info!(
             event = krb5_log::events::KDC_ISSUE,
             correlation_id = krb5_log::current_correlation_id(),
             component = "krb5-kdc",
-            outcome = "ok",
-            s4u = kind,
+            outcome,
+            kind,
+            req_etypes,
+            from,
+            status,
+            authtime,
+            etypes,
+            duration_us,
+            client,
+            server,
+            s4u = s4u_kind,
             s4u_client,
+            emsg,
+        );
+    } else {
+        tracing::info!(
+            event = krb5_log::events::KDC_ISSUE,
+            correlation_id = krb5_log::current_correlation_id(),
+            component = "krb5-kdc",
+            outcome,
+            kind,
+            req_etypes,
+            from,
+            status,
+            authtime,
+            etypes,
+            duration_us,
+            client,
+            server,
+            emsg,
         );
     }
 }
@@ -1868,7 +1916,7 @@ mod tests {
         let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::testrealm::TEST_USER]);
         let req =
             krb5_protocol::as_req(cname, crate::testrealm::TEST_REALM, 1, None).expect("as-req");
-        as_failure(&store, &req, None, 24, "NEEDED_PREAUTH", "");
+        as_failure(&store, &req, None, 24, "NEEDED_PREAUTH", "", 0);
         assert_eq!(loud.hits.load(std::sync::atomic::Ordering::SeqCst), 2);
         assert_eq!(quiet.hits.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
@@ -1891,15 +1939,21 @@ mod tests {
     }
 
     #[test]
-    fn json_is_the_builtin_and_disable_drops_it() {
+    fn json_loads_only_when_enable_only_names_it() {
         let (mut store, _) = crate::testrealm::bootstrap_documented().unwrap();
+        assert!(active_audits(&store).is_empty());
+        store.policy.audit = krb5_config::Krb5Conf::parse(
+            "[plugins]\n    audit = {\n        enable_only = json\n    }\n",
+        )
+        .expect("stanza")
+        .plugin_relations("audit");
         let names: Vec<&str> = active_audits(&store)
             .iter()
             .map(|module| module.name())
             .collect();
         assert_eq!(names, ["json"]);
         store.policy.audit = krb5_config::Krb5Conf::parse(
-            "[plugins]\n    audit = {\n        disable = json\n    }\n",
+            "[plugins]\n    audit = {\n        disable = json\n        enable_only = json\n    }\n",
         )
         .expect("stanza")
         .plugin_relations("audit");

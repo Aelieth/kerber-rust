@@ -60,6 +60,9 @@ any other `###` heading.
 
 ### Changed
 
+- **kdc.** One info record per request: `kdc.issue` or `admin` for the stream, the MIT line for the log.
+- **kdc.** The json audit loads only when `enable_only` names json.
+- **kdc.** Library events log at debug. A serve loop takes a log sink, and klog lines with no destination go to tracing.
 - **examples.** krb5-embed-realm applies the realm profile before a trust or a delegation grant.
 - **examples.** krb5-embed-realm records an allowed-to-delegate target from `--allow-to-delegate`.
 - **examples.** krb5-embed-realm creates both trust principals from `--create-trust` and a key file.

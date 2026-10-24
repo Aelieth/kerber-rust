@@ -326,7 +326,7 @@ impl PrincipalStore {
 
     // MIT: `open_db` (plugins/kdb/db2/kdb_db2.c:386-389)
     pub(crate) fn reread(&mut self, lock: &Arc<DbLock>) -> Result<(), Error> {
-        tracing::info!(
+        tracing::debug!(
             event = krb5_log::events::KDC_LISTEN,
             correlation_id = krb5_log::current_correlation_id(),
             component = "krb5-kdc",
@@ -545,7 +545,7 @@ impl PrincipalStore {
                             _ => DbStamp::now(&lock, &db, self.map.len_u64()),
                         };
                         self.lockout_stamp = crate::lockout::lockout_file_stamp(&db);
-                        tracing::info!(
+                        tracing::debug!(
                             event = krb5_log::events::ADMIN,
                             component = "krb5-kdc",
                             outcome = "ok",

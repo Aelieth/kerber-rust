@@ -627,7 +627,7 @@ impl Ulog {
                 .read_at(&mut buf[..old_block], Self::ent_at(i, hdr.block))?;
             self.backing.write_at(&buf, Self::ent_at(i, new_block16))?;
         }
-        tracing::info!(
+        tracing::debug!(
             event = krb5_log::events::ADMIN,
             component = "krb5-kdc",
             outcome = "ok",

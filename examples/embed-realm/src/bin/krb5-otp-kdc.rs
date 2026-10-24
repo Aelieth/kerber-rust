@@ -192,7 +192,14 @@ fn main() {
         max_dgram_reply_size: max_dgram,
         ..ListenLimits::default()
     };
-    match krb5_kdc::serve_all_until(store.clone(), udp, tcp, shutdown, limits) {
+    match krb5_kdc::serve_all_until(
+        store.clone(),
+        udp,
+        tcp,
+        shutdown,
+        limits,
+        &krb5_kdc::KdcLog::process(),
+    ) {
         Ok(()) => {
             audit_stop(&store, true);
             klog::syslog(Severity::Info, "shutting down");

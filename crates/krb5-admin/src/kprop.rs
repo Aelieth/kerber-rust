@@ -58,7 +58,7 @@ pub fn kprop_load_with_stash(bytes: &[u8], stash: &Path) -> Result<PrincipalStor
     kprop_load_stash_bytes(bytes, &read_stash_file(stash)?)
 }
 
-/// The stash file's bytes, in a wiped buffer sized from the file; a stash that cannot be read is named.
+/// The stash file's bytes, in a wiped buffer; a stash that cannot be read is named.
 fn read_stash_file(stash: &Path) -> Result<zeroize::Zeroizing<Vec<u8>>, Error> {
     krb5_protocol::read_stash_file(stash)
         .map_err(|e| Error::Inner(format!("stash {}: {e}", stash.display())))
@@ -1253,7 +1253,7 @@ pub fn kpropd_handle_conn(
     };
     load_replica(&store, db, stash, iprop_last)?;
     kpropd_send_ack(&mut ds, &mut auth, dump.len() as u64)?;
-    tracing::info!(
+    tracing::debug!(
         event = krb5_log::events::ADMIN,
         component = "krb5-admin",
         outcome = "ok",

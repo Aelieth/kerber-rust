@@ -596,7 +596,7 @@ pub(crate) fn handle_kpasswd_from(
         client = client.as_str(),
         "{log_line}"
     );
-    crate::kadmind::admin_syslog(krb5_log::klog::Severity::Notice, &log_line);
+    crate::kadmind::admin_syslog_open(krb5_log::klog::Severity::Notice, &log_line);
     let mut body = Vec::with_capacity(2 + text.len());
     body.extend_from_slice(&code.to_be_bytes());
     body.extend_from_slice(text.as_bytes());

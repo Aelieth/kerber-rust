@@ -139,7 +139,7 @@ fn emit(
             error = %e,
         );
     } else {
-        tracing::info!(
+        tracing::debug!(
             event,
             correlation_id,
             component = "krb5-asn1",

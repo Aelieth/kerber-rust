@@ -317,7 +317,7 @@ pub(super) fn kadm5_service_name(ctx: &GssContext) -> String {
 pub(super) fn kadm5_log_op(proc: u32, args: &[u8], who: &Caller<'_>, reply: &[u8]) {
     for line in kadm5_log_lines(proc, args, who, reply) {
         let unauthorized = line.starts_with("Unauthorized");
-        crate::kadmind::admin_syslog(Severity::Notice, &line);
+        crate::kadmind::admin_syslog_open(Severity::Notice, &line);
         tracing::info!(
             event = krb5_log::events::ADMIN,
             component = "krb5-admin",

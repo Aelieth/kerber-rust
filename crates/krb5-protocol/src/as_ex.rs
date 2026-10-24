@@ -1228,7 +1228,7 @@ fn continue_pkinit(
             }
         }
         let wire = encode(&req2)?;
-        tracing::info!(
+        tracing::debug!(
             event = krb5_log::events::CLIENT_PKINIT,
             component = "krb5-protocol",
             outcome = "ok",
@@ -2411,7 +2411,7 @@ fn emit(event: &'static str, correlation_id: &str, started: Instant, err: Option
             error = %e,
         );
     } else {
-        tracing::info!(
+        tracing::debug!(
             event,
             correlation_id,
             component = "krb5-protocol",

@@ -118,7 +118,7 @@ pub fn tgs_exchange_path(
     let result = tgs_inner(profile, kdc, tgt, &sname, realm, opts);
     let duration_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
     match &result {
-        Ok(_) => tracing::info!(
+        Ok(_) => tracing::debug!(
             event = krb5_log::events::PROTOCOL_TGS,
             correlation_id,
             component = "krb5-protocol",
@@ -707,7 +707,7 @@ fn tgs_fast_reply_key(
         .strengthen_key
         .as_ref()
         .ok_or_else(|| Error::ReplyMismatch("FAST TGS reply missing strengthen-key".into()))?;
-    tracing::info!(
+    tracing::debug!(
         event = krb5_log::events::CLIENT_TGS,
         component = "krb5-protocol",
         outcome = "ok",

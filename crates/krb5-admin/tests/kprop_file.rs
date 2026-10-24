@@ -107,7 +107,7 @@ fn realm_with(tag: &str, requires_preauth: bool, libdefaults: &str) -> Realm {
         .collect();
     let store = shared_store(store);
     thread::spawn(move || {
-        let _ = serve(store, udp, tcp);
+        let _ = serve(store, udp, tcp, &krb5_kdc::KdcLog::process());
     });
     Realm {
         dir,

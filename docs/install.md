@@ -257,8 +257,9 @@ That address is the peer the KDC accepted, not the addresses the client put
 in the request.
 
 `[plugins] audit` `disable` and `enable_only` select named audit modules
-the same way. The built-in module is `json`. Every loaded module records
-the request. `disable = json` leaves no plugin record. The same relations
+the same way. `json` loads only when `enable_only` names it. Every loaded
+module records the request. With nothing named there is no plugin record.
+The same relations
 in krb5.conf apply after this file. `module` is not read.
 
 `[plugins] pwqual` `disable` and `enable_only` select the password-quality

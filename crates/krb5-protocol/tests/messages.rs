@@ -696,7 +696,7 @@ fn fast_client_continue_uses_etype20_from_info2() {
     let tgt_first = store.krbtgt().unwrap().first_current_key().unwrap().etype;
     let store = shared_store(store);
     thread::spawn(move || {
-        let _ = serve(store, udp, tcp);
+        let _ = serve(store, udp, tcp, &krb5_kdc::KdcLog::process());
     });
 
     let etypes = [

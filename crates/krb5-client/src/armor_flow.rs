@@ -36,7 +36,7 @@ fn boot(strip_fx_fast: bool) -> Captured {
     let kdc_tcp_addr = kdc_tcp.local_addr().expect("kdc tcp");
     let store = shared_store(store);
     thread::spawn(move || {
-        let _ = serve(store, kdc_udp, kdc_tcp);
+        let _ = serve(store, kdc_udp, kdc_tcp, &krb5_kdc::KdcLog::process());
     });
     let (proxy_udp, proxy_tcp) = krb5_testkit::loopback_udp_tcp();
     let port = proxy_udp.local_addr().expect("proxy udp").port();

@@ -889,7 +889,7 @@ pub(crate) fn sanitize_otp_error(text: &str) -> String {
 }
 
 pub(crate) fn kdc_otp_event(principal: &str, token_type: &str, verdict: &str, duration_us: u64) {
-    tracing::info!(
+    tracing::debug!(
         target: "kdc.otp",
         principal = principal,
         token_type = token_type,

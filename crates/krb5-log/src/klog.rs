@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::os::unix::fs::OpenOptionsExt as _;
@@ -425,9 +426,65 @@ pub fn init(whoami: &str, specs: &[String], debug: bool) {
     *LOG.lock().unwrap_or_else(PoisonError::into_inner) = Some(logger);
 }
 
+pub trait LogSink: Send + Sync {
+    fn line(&self, severity: Severity, msg: &str);
+}
+
+static SINK: Mutex<Option<Arc<dyn LogSink>>> = Mutex::new(None);
+
+thread_local! {
+    static THREAD_SINK: RefCell<Option<Arc<dyn LogSink>>> = const { RefCell::new(None) };
+}
+
+pub fn set_sink(sink: Option<Arc<dyn LogSink>>) {
+    *SINK.lock().unwrap_or_else(PoisonError::into_inner) = sink;
+}
+
+pub struct ThreadSinkGuard {
+    prev: Option<Arc<dyn LogSink>>,
+}
+
+impl Drop for ThreadSinkGuard {
+    fn drop(&mut self) {
+        let prev = self.prev.take();
+        THREAD_SINK.with(|slot| *slot.borrow_mut() = prev);
+    }
+}
+
+pub fn push_thread_sink(sink: Arc<dyn LogSink>) -> ThreadSinkGuard {
+    THREAD_SINK.with(|slot| ThreadSinkGuard {
+        prev: slot.replace(Some(sink)),
+    })
+}
+
+fn chosen_sink() -> Option<Arc<dyn LogSink>> {
+    let local = THREAD_SINK.with(|slot| slot.borrow().clone());
+    if local.is_some() {
+        return local;
+    }
+    SINK.lock().unwrap_or_else(PoisonError::into_inner).clone()
+}
+
+fn trace_unsent(severity: Severity, msg: &str) {
+    match severity {
+        Severity::Emerg | Severity::Alert | Severity::Crit | Severity::Err => {
+            tracing::error!(target: "krb5_klog", "{msg}");
+        }
+        Severity::Warning => tracing::warn!(target: "krb5_klog", "{msg}"),
+        Severity::Debug => tracing::debug!(target: "krb5_klog", "{msg}"),
+        Severity::Notice | Severity::Info => tracing::info!(target: "krb5_klog", "{msg}"),
+    }
+}
+
 // MIT krb5_klog_syslog; see docs/parity/a3-preauth.md
 pub fn syslog(severity: Severity, msg: &str) {
-    with_log(|l| l.write(severity, msg));
+    if !write_open(severity, msg) {
+        trace_unsent(severity, msg);
+    }
+}
+
+pub fn syslog_open(severity: Severity, msg: &str) {
+    write_open(severity, msg);
 }
 
 // MIT klog_com_err_proc; see docs/parity/a3-preauth.md
@@ -445,6 +502,19 @@ pub fn reopen() {
 // MIT krb5_klog_close; see docs/parity/a3-preauth.md
 pub fn close() {
     *LOG.lock().unwrap_or_else(PoisonError::into_inner) = None;
+}
+
+fn write_open(severity: Severity, msg: &str) -> bool {
+    if let Some(sink) = chosen_sink() {
+        sink.line(severity, msg);
+        return true;
+    }
+    let mut held = LOG.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(logger) = held.as_mut() {
+        logger.write(severity, msg);
+        return true;
+    }
+    false
 }
 
 #[derive(Clone, Debug)]

@@ -281,7 +281,7 @@ impl Acl {
 
     pub fn check(&self, actor: &str, op: AdminOp, target: Option<&str>) -> Result<(), Error> {
         if self.allows(actor, op, target) {
-            tracing::info!(
+            tracing::debug!(
                 event = krb5_log::events::KDC_ACL,
                 component = "krb5-kdc",
                 outcome = "ok",

@@ -222,7 +222,7 @@ pub fn bind_preferred(candidates: &[&str]) -> io::Result<(SocketAddr, UdpSocket,
         match bind_udp_tcp(addr) {
             Ok((udp, tcp)) => {
                 let local = udp.local_addr().unwrap_or(addr);
-                tracing::info!(
+                tracing::debug!(
                     event = krb5_log::events::KDC_LISTEN,
                     correlation_id = krb5_log::current_correlation_id(),
                     component = "krb5-kdc",
@@ -298,7 +298,7 @@ fn bind_listeners(addrs: &[ListenAddr], kind: BindType, backlog: i32) -> io::Res
         for a in resolved {
             match setup_socket(a, kind, backlog) {
                 Ok(fd) => {
-                    tracing::info!(
+                    tracing::debug!(
                         event = krb5_log::events::KDC_LISTEN,
                         correlation_id = krb5_log::current_correlation_id(),
                         component = "krb5-kdc",
@@ -624,7 +624,7 @@ pub fn drop_privileges() -> io::Result<bool> {
 #[cfg(any(test, feature = "test-hooks"))]
 pub(crate) fn drop_privileges_to(username: &str) -> io::Result<bool> {
     if !nix::unistd::Uid::effective().is_root() {
-        tracing::info!(
+        tracing::debug!(
             event = krb5_log::events::KDC_LISTEN,
             correlation_id = krb5_log::current_correlation_id(),
             component = "krb5-kdc",
@@ -638,7 +638,7 @@ pub(crate) fn drop_privileges_to(username: &str) -> io::Result<bool> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("no user {username}")))?;
     nix::unistd::setgid(user.gid).map_err(|e| io::Error::other(e.to_string()))?;
     nix::unistd::setuid(user.uid).map_err(|e| io::Error::other(e.to_string()))?;
-    tracing::info!(
+    tracing::debug!(
         event = krb5_log::events::KDC_LISTEN,
         correlation_id = krb5_log::current_correlation_id(),
         component = "krb5-kdc",
@@ -654,14 +654,36 @@ fn install_shutdown_flag(flag: &Arc<AtomicBool>) {
     }
 }
 
-pub fn serve(store: SharedStore, udp: UdpSocket, tcp: TcpListener) -> io::Result<()> {
-    serve_all(store, vec![udp], vec![tcp])
+#[derive(Clone, Default)]
+pub struct KdcLog {
+    sink: Option<Arc<dyn klog::LogSink>>,
 }
 
-pub fn serve_all(store: SharedStore, udp: Vec<UdpSocket>, tcp: Vec<TcpListener>) -> io::Result<()> {
+impl KdcLog {
+    #[must_use]
+    pub fn process() -> Self {
+        Self { sink: None }
+    }
+
+    #[must_use]
+    pub fn with_sink(sink: Arc<dyn klog::LogSink>) -> Self {
+        Self { sink: Some(sink) }
+    }
+}
+
+pub fn serve(store: SharedStore, udp: UdpSocket, tcp: TcpListener, log: &KdcLog) -> io::Result<()> {
+    serve_all(store, vec![udp], vec![tcp], log)
+}
+
+pub fn serve_all(
+    store: SharedStore,
+    udp: Vec<UdpSocket>,
+    tcp: Vec<TcpListener>,
+    log: &KdcLog,
+) -> io::Result<()> {
     let shutdown = Arc::new(AtomicBool::new(false));
     install_shutdown_flag(&shutdown);
-    serve_all_until(store, udp, tcp, shutdown, ListenLimits::default())
+    serve_all_until(store, udp, tcp, shutdown, ListenLimits::default(), log)
 }
 
 pub fn serve_until(
@@ -670,8 +692,9 @@ pub fn serve_until(
     tcp: TcpListener,
     shutdown: Arc<AtomicBool>,
     limits: ListenLimits,
+    log: &KdcLog,
 ) -> io::Result<()> {
-    serve_all_until(store, vec![udp], vec![tcp], shutdown, limits)
+    serve_all_until(store, vec![udp], vec![tcp], shutdown, limits, log)
 }
 
 #[allow(clippy::needless_pass_by_value)] // the loop owns the store and the stop flag
@@ -681,6 +704,7 @@ pub fn serve_all_until(
     tcp: Vec<TcpListener>,
     shutdown: Arc<AtomicBool>,
     limits: ListenLimits,
+    log: &KdcLog,
 ) -> io::Result<()> {
     if limits.shutdown_poll.is_zero() {
         return Err(io::Error::new(
@@ -692,7 +716,7 @@ pub fn serve_all_until(
         stop: &shutdown,
         every: limits.shutdown_poll,
     };
-    serve_loop(store, &udp, &tcp, &wake, limits)
+    serve_loop(store, &udp, &tcp, &wake, limits, log)
 }
 
 // MIT: `main` (kdc/main.c:1030-1030)
@@ -703,8 +727,9 @@ pub fn serve_daemon(
     tcp: Vec<TcpListener>,
     signals: &Signals,
     limits: ListenLimits,
+    log: &KdcLog,
 ) -> io::Result<()> {
-    serve_loop(store, &udp, &tcp, &Wake::Signals(signals), limits)
+    serve_loop(store, &udp, &tcp, &Wake::Signals(signals), limits, log)
 }
 
 fn otp_serve_start(store: &SharedStore) {
@@ -712,7 +737,7 @@ fn otp_serve_start(store: &SharedStore) {
     let empty = verifiers.is_empty();
     if !empty {
         if crate::plugins::thread_otp_present() {
-            tracing::info!(
+            tracing::debug!(
                 target: "kdc.otp",
                 "captured {} thread-local OTP verifier(s) for this serving instance",
                 verifiers.len()
@@ -733,7 +758,9 @@ fn serve_loop(
     tcp: &[TcpListener],
     wake: &Wake<'_>,
     limits: ListenLimits,
+    log: &KdcLog,
 ) -> io::Result<()> {
+    let _sink = log.sink.clone().map(klog::push_thread_sink);
     let _slots = ThreadSlots::take();
     otp_serve_start(&store);
     let teardown = Arc::clone(&store);
@@ -925,7 +952,15 @@ mod tests {
         let flag = Arc::new(AtomicBool::new(false));
         let stop = Arc::clone(&flag);
         let h = thread::spawn(move || {
-            serve_until(shared_store(store), udp, tcp, stop, limits).unwrap();
+            serve_until(
+                shared_store(store),
+                udp,
+                tcp,
+                stop,
+                limits,
+                &KdcLog::process(),
+            )
+            .unwrap();
         });
         (addr, flag, h)
     }
@@ -1076,7 +1111,15 @@ mod tests {
             shutdown_poll: Duration::ZERO,
             ..ListenLimits::default()
         };
-        let e = serve_until(shared_store(store), udp, tcp, flag, zero).unwrap_err();
+        let e = serve_until(
+            shared_store(store),
+            udp,
+            tcp,
+            flag,
+            zero,
+            &KdcLog::process(),
+        )
+        .unwrap_err();
         assert_eq!(e.kind(), io::ErrorKind::InvalidInput);
     }
 

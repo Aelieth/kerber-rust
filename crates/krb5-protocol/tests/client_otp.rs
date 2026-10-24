@@ -127,7 +127,7 @@ fn realm(attr: &str) -> (KdcAddr, FastArmor) {
     let port = udp.local_addr().unwrap().port();
     let store = shared(store);
     thread::spawn(move || {
-        let _ = serve(store, udp, tcp);
+        let _ = serve(store, udp, tcp, &krb5_kdc::KdcLog::process());
     });
     let kdc = KdcAddr {
         host: "127.0.0.1".into(),

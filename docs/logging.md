@@ -19,14 +19,24 @@ apply in the foreground only, since a detached daemon has neither;
 `FILE:` applies in both. MIT does not read the relation, so a kdc.conf
 shared with MIT may carry it (settled live beside MIT 1.22.2's
 `krb5kdc` and `kadmind`). Each program filters the stream with its own
-filter: `krb5_kdc=info,krb5_crypto=info,krb5_asn1=info,krb5_protocol=warn`
-for `krb5kdc`, and `krb5_admin=info,krb5_kdc=info,krb5_protocol=warn` for
-`kadmind` and `kpropd`. Only a `test-hooks` build (the gates')
-takes `RUST_LOG` instead; a release build reads no `RUST_LOG`, as MIT's
-programs read none. The daemons write the stream from the one loop
-that serves every client, so a destination that blocks, a pipe its
-reader stops draining (`STDOUT` into a pipe, or a `FILE:` that is a
-FIFO), holds every client until it takes the line.
+filter: `krb5_kdc=info,krb5_admin=info` for `krb5kdc`, `kadmind` and
+`kpropd`. Library events from crypto, ASN.1 and protocol, and the KDC's
+own bookkeeping, are `debug`. One `info` record remains per AS or TGS
+request and per kadm5 or kpasswd operation, in each output. The daemon
+log and a klog sink get the MIT-format line. The KDC's JSON stream and
+an embed subscriber get one `kdc.issue`, with `duration_us` on a success
+and on a Kerberos error. kadmind's JSON stream gets one `admin` record
+per kadm5 operation and per password change. A hard server error stays
+at `error`. `klog::set_sink` sends the MIT-format lines to the
+embedder. The per-request line and the per-operation admin line are
+not also sent to tracing. With no sink and no `klog::init`, the other
+klog lines are `tracing` events on target `krb5_klog`. A `KdcLog`
+passed to the serve loop is that KDC's sink. Only a `test-hooks`
+build (the gates') takes `RUST_LOG` instead; a release build reads
+no `RUST_LOG`, as MIT's programs read none. The daemons write the
+stream from the one loop that serves every client, so a destination
+that blocks, a pipe its reader stops draining (`STDOUT` into a pipe,
+or a `FILE:` that is a FIFO), holds every client until it takes the line.
 
 The gates read the stream from the daemons' standard output:
 `json_log_on` (`scripts/lib/gate-common.sh`) puts `json = STDOUT` in
@@ -161,7 +171,8 @@ realm is one of these, so the first counted login logs that warning until
 the file is created beside the database, as an upgrade does.
 
 The `KdcAudit` registry (`kdc_audit.c`) writes `event=kdc.audit`
-with MIT `j_dict.h` field names (`event_name`, `event_success`,
+when `[plugins] audit` `enable_only` names `json`, with MIT
+`j_dict.h` field names (`event_name`, `event_success`,
 `stage`, `tkt_out_id`, `req_id`, `fromport`, `fromaddr`, …).
 `tkt_out_id` is SHA-256 of `ticket.enc_part.ciphertext` as 64
 uppercase hex digits. `req_id` is 31 alphanumeric characters

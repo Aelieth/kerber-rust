@@ -102,7 +102,7 @@ KLLDAP 0.7.6's catalog (its domain-handlers policies module, `POLICY_ITEM_CATALO
 | `login-hours` | not built in. An embedder `KdcPolicy` denies outside the window. `check_as` / `check_tgs` are enough; the request time is the KDC's clock. |
 | `allowed-networks` | not built in. An embedder `KdcPolicy` reads the socket peer from `check_as_from` / `check_tgs_from`. That address is the accepted socket, not `request.addresses`. |
 
-`[plugins] kdcpolicy` and `[plugins] audit` select those embedder modules by name. The audit built-in is `json`. KLLDAP's `[logging]` templates stay the kdc.conf lines already in `kerberos/kdc.template.conf` (`kdc_ports = 750,88` and the enctype list).
+`[plugins] kdcpolicy` and `[plugins] audit` select those embedder modules by name. The audit name `json` loads only when `enable_only` lists it. KLLDAP's `[logging]` templates stay the kdc.conf lines already in `kerberos/kdc.template.conf` (`kdc_ports = 750,88` and the enctype list).
 
 ## What the embed still has to build
 
@@ -123,7 +123,9 @@ kerber-rust point release:
   acceptor names, and takes the kpasswd key when the service set asks for it.
   `Listeners::bind` binds the sockets, and `Kadmind::serve` runs the loop on
   the caller's thread until a `Shutdown`. The binary's log is `KlogAdmin`;
-  an embedder passes `TracingAdmin` or its own `AdminLog`. Password-quality
+  an embedder passes `TracingAdmin` or its own `AdminLog`. `TracingAdmin`
+  gets one `admin` event per operation; the MIT-format line stays with klog.
+  Password-quality
   modules and kadm5 hooks on `KadmindConfig` apply to that kadmind alone;
   empty lists keep `register_pwqual` and `register_kadm5_hook`. Remote MIT
   `kadmin` on 749 is that loop on a thread beside the KDC's, or
