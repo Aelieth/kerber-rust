@@ -480,6 +480,11 @@ impl PrincipalStore {
             let principal = self.map.get(id).ok_or(Error::NotFound)?;
             (principal.name.clone(), principal.realm.clone())
         };
+        if realm == self.realm && name.components_joined() == "K/M" {
+            return Err(Error::InvalidArgument(
+                "Cannot change protected principal".into(),
+            ));
+        }
         super::kadm5_hook::hook_remove(
             self,
             super::kadm5_hook::HookStage::Precommit,
@@ -640,6 +645,9 @@ impl PrincipalStore {
         )?;
         let salt = name.default_salt(princ_realm);
         let kvno = if ent.mask & kadm5_mask::KVNO != 0 {
+            if ent.kvno > 65535 {
+                return Err(Error::InvalidArgument("invalid kvno".into()));
+            }
             ent.kvno
         } else {
             1
@@ -854,6 +862,9 @@ impl PrincipalStore {
         actor: &str,
     ) -> Result<(), Error> {
         self.inside_change()?;
+        if kvno > 65535 {
+            return Err(Error::InvalidArgument("invalid kvno".into()));
+        }
         let id = self.canonical_id(name, princ_realm)?;
         {
             let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
@@ -969,6 +980,10 @@ impl PrincipalStore {
             new,
             new_realm,
         )?;
+        {
+            let p = self.map.get_mut(&old_id).ok_or(Error::NotFound)?;
+            crate::kdb_dump::specialize_salts(p)?;
+        }
         let mut p = self.map.remove(&old_id).ok_or(Error::NotFound)?;
         p.name = new.clone();
         new_realm.clone_into(&mut p.realm);

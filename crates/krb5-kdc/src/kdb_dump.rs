@@ -61,6 +61,8 @@ pub(crate) const TL_KERBER_POLICY: i32 = 0x4B02;
 pub const TL_KERBER_SERIAL: i32 = 0x4B03;
 pub const TL_KERBER_HIST: i32 = 0x4B04;
 pub const SALTTYPE_NORMAL: i32 = 0;
+pub(crate) const SALTTYPE_NOREALM: i32 = 2;
+pub(crate) const SALTTYPE_ONLYREALM: i32 = 3;
 pub(crate) const SALTTYPE_SPECIAL: i32 = 4;
 
 #[derive(Debug, thiserror::Error)]
@@ -1086,22 +1088,50 @@ fn parse_unparsed(s: &str) -> Result<(PrincipalName, String), DumpError> {
 }
 
 pub(crate) fn salt_of_keys(keys: &[KeyEntry], name: &PrincipalName, realm: &str) -> Vec<u8> {
-    keys.iter()
-        .find_map(|k| match (k.salt_type, k.kdb_salt.as_ref()) {
-            (Some(SALTTYPE_NORMAL | SALTTYPE_SPECIAL), Some(salt)) if !salt.is_empty() => {
-                Some(salt.clone())
-            }
-            _ => None,
-        })
-        .unwrap_or_else(|| name.default_salt(realm))
+    keys.first()
+        .map_or_else(|| name.default_salt(realm), |k| key_salt(k, name, realm))
 }
 
+// MIT: `krb5_dbe_compute_salt` (lib/kdb/kdb5.c:2345-2388)
 #[must_use]
 pub fn key_salt(key: &KeyEntry, name: &PrincipalName, realm: &str) -> Vec<u8> {
-    match (key.salt_type, &key.kdb_salt) {
-        (Some(SALTTYPE_NORMAL | SALTTYPE_SPECIAL), Some(salt)) if !salt.is_empty() => salt.clone(),
+    match key.salt_type.unwrap_or(SALTTYPE_NORMAL) {
+        SALTTYPE_NOREALM => {
+            let mut salt = Vec::new();
+            for part in &name.name_string {
+                salt.extend_from_slice(part.as_bytes());
+            }
+            salt
+        }
+        SALTTYPE_ONLYREALM => realm.as_bytes().to_vec(),
+        SALTTYPE_SPECIAL => key.kdb_salt.clone().unwrap_or_default(),
         _ => name.default_salt(realm),
     }
+}
+
+fn known_salt(salt_type: Option<i32>) -> bool {
+    matches!(
+        salt_type.unwrap_or(SALTTYPE_NORMAL),
+        SALTTYPE_NORMAL | SALTTYPE_NOREALM | SALTTYPE_ONLYREALM | SALTTYPE_SPECIAL
+    )
+}
+
+// MIT: `krb5_dbe_specialize_salt` (lib/kdb/kdb5.c:2391-2419)
+pub(crate) fn specialize_salts(p: &mut Principal) -> Result<(), KdcError> {
+    if p.keys.iter().any(|k| !known_salt(k.salt_type)) {
+        return Err(KdcError::InvalidArgument("Unsupported salt type".into()));
+    }
+    for k in &mut p.keys {
+        let salt = key_salt(k, &p.name, &p.realm);
+        k.salt_type = Some(SALTTYPE_SPECIAL);
+        k.kdb_salt = Some(salt);
+    }
+    p.salt = p
+        .keys
+        .first()
+        .and_then(|k| k.kdb_salt.clone())
+        .unwrap_or_else(|| p.name.default_salt(&p.realm));
+    Ok(())
 }
 
 pub(crate) fn mkvno_from_tl(tl: &[TlData]) -> u16 {

@@ -7,7 +7,7 @@ use subtle::ConstantTimeEq;
 
 use super::flags::KDB_REQUIRES_PWCHANGE;
 use super::history::record_history;
-use super::keys::{KeyEntry, cap_key_versions};
+use super::keys::{KeyEntry, cap_key_versions, next_kvno};
 use super::policy::NamedPolicy;
 use super::principal::{Principal, TlData, default_mod_actor, refresh_kadm_tl, stamp_admin_tl};
 use super::{PrincipalStore, unix_now_u32};
@@ -236,6 +236,11 @@ impl PrincipalStore {
         etypes: &[EncryptionType],
     ) -> Result<(), Error> {
         self.inside_change()?;
+        if princ_realm == self.realm && name.components_joined() == "kadmin/history" {
+            return Err(Error::InvalidArgument(
+                "Cannot change protected principal".into(),
+            ));
+        }
         // MIT: `add_key_pwd` (lib/kdb/kdb_cpw.c:315-315)
         let password = c_password(password);
         let id = self.canonical_id(name, princ_realm)?;
@@ -260,15 +265,8 @@ impl PrincipalStore {
             return Err(Error::NotFound);
         };
         let salt = existing.salt.clone();
-        let next_kvno = existing
-            .keys
-            .iter()
-            .chain(existing.key_history.iter())
-            .map(|k| k.kvno)
-            .max()
-            .unwrap_or(0)
-            .saturating_add(1);
-        let new_keys = keys_from_password(&use_etypes, password, &salt, next_kvno)?;
+        let kvno = next_kvno(&existing.keys);
+        let new_keys = keys_from_password(&use_etypes, password, &salt, kvno)?;
         super::kadm5_hook::hook_chpass(
             self,
             super::kadm5_hook::HookStage::Precommit,

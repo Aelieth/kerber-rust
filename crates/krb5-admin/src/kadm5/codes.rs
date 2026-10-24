@@ -122,6 +122,7 @@ pub(super) const KADM5_FAILURE: u32 = 43_787_520;
 /// MIT `kadm_err.et` codes a kadm5 client's init returns: `KADM5_RPC_ERROR` (`:15`), `KADM5_BAD_PASSWORD` (`:36`), `KADM5_SECURE_PRINC_MISSING` (`:47`), `KADM5_GSS_ERROR` (`:53`), `KADM5_MISSING_KRB5_CONF_PARAMS` (`:61`) and `KADM5_CANT_RESOLVE` (`:63`).
 pub(crate) const KADM5_RPC_ERROR: u32 = KADM5_FAILURE + 8;
 pub(crate) const KADM5_BAD_PASSWORD: u32 = KADM5_FAILURE + 29;
+pub(super) const KADM5_PROTECT_PRINCIPAL: u32 = KADM5_FAILURE + 30;
 pub(crate) const KADM5_SECURE_PRINC_MISSING: u32 = KADM5_FAILURE + 40;
 pub(crate) const KADM5_GSS_ERROR: u32 = KADM5_FAILURE + 46;
 pub(crate) const KADM5_MISSING_KRB5_CONF_PARAMS: u32 = KADM5_FAILURE + 54;

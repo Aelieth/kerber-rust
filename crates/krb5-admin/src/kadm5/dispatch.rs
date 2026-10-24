@@ -15,11 +15,11 @@ use super::codes::{
     KADM5_BAD_TL_TYPE, KADM5_DUP, KADM5_FAIL_AUTH_COUNT, KADM5_FAILURE, KADM5_KVNO, KADM5_MAX_LIFE,
     KADM5_MAX_RLIFE, KADM5_PASS_Q_CLASS, KADM5_PASS_Q_DICT, KADM5_PASS_Q_TOOSHORT,
     KADM5_PASS_REUSE, KADM5_PASS_TOOSOON, KADM5_POLICY, KADM5_POLICY_ALLOWED_KEYSALTS,
-    KADM5_POLICY_CLR, KADM5_PRINC_EXPIRE_TIME, KADM5_PW_EXPIRATION, KADM5_PW_MAX_LIFE,
-    KADM5_PW_MIN_LIFE, KADM5_SETKEY_BAD_KVNO, KADM5_TL_DATA, KADM5_UNK_POLICY, KADM5_UNK_PRINC,
-    KRB5_KDB_ALIAS_UNSUPPORTED, KRB5_KDB_CANTLOCK_DB, MODIFY_POLICY, MODIFY_PRINCIPAL, OSA_ADB_DUP,
-    OSA_ADB_NOENT, PURGEKEYS, RENAME_PRINCIPAL, SET_STRING, SETKEY_PRINCIPAL, SETKEY_PRINCIPAL3,
-    SETKEY_PRINCIPAL4,
+    KADM5_POLICY_CLR, KADM5_PRINC_EXPIRE_TIME, KADM5_PROTECT_PRINCIPAL, KADM5_PW_EXPIRATION,
+    KADM5_PW_MAX_LIFE, KADM5_PW_MIN_LIFE, KADM5_SETKEY_BAD_KVNO, KADM5_TL_DATA, KADM5_UNK_POLICY,
+    KADM5_UNK_PRINC, KRB5_KDB_ALIAS_UNSUPPORTED, KRB5_KDB_CANTLOCK_DB, MODIFY_POLICY,
+    MODIFY_PRINCIPAL, OSA_ADB_DUP, OSA_ADB_NOENT, PURGEKEYS, RENAME_PRINCIPAL, SET_STRING,
+    SETKEY_PRINCIPAL, SETKEY_PRINCIPAL3, SETKEY_PRINCIPAL4,
 };
 use super::glob::{glob_pattern_ok, policies_matching, principals_matching};
 use super::iprop::dispatch_iprop;
@@ -229,7 +229,7 @@ pub(super) fn dispatch_kadm5_ticket(
             Ok(w.b)
         }
         GET_PRINCIPAL => {
-            let (name, prealm, _mask) = parse_get(args)?;
+            let (name, prealm, mask) = parse_get(args)?;
             let req = req_realm(&prealm, &realm);
             let g = match read_store(store, proc, API_V2) {
                 Ok(g) => g,
@@ -252,7 +252,7 @@ pub(super) fn dispatch_kadm5_ticket(
                     );
                     let mut p = p.clone();
                     g.merge_lockout(&mut p);
-                    Ok(encode_gprinc(&p))
+                    Ok(encode_gprinc(&p, mask))
                 }
             }
         }
@@ -860,6 +860,8 @@ pub(super) fn kadm5_code(proc: u32, e: &Error) -> u32 {
         KADM5_SETKEY_BAD_KVNO
     } else if s == "Invalid key/salt tuples" {
         KADM5_BAD_KEYSALTS
+    } else if s == "Cannot change protected principal" {
+        KADM5_PROTECT_PRINCIPAL
     } else if s.contains("principal exists") {
         KADM5_DUP
     } else if s == "Alias target must be within the same realm" {

@@ -131,6 +131,15 @@ impl KeyEntry {
     }
 }
 
+// MIT: `rekey` (lib/kdb/kdb_cpw.c:355-362)
+pub(super) fn next_kvno(keys: &[KeyEntry]) -> u32 {
+    match keys.iter().map(|k| k.kvno).max() {
+        Some(n) if n >= 65535 => 1,
+        Some(n) => n + 1,
+        None => 1,
+    }
+}
+
 pub(super) fn cap_key_versions(keys: &mut Vec<KeyEntry>, n: u32) {
     let mut kvnos: Vec<u32> = keys.iter().map(|k| k.kvno).collect();
     kvnos.sort_unstable();
@@ -268,25 +277,28 @@ impl PrincipalStore {
         actor: &str,
     ) -> Result<Vec<KeyEntry>, Error> {
         self.inside_change()?;
+        let history = princ_realm == self.realm && name.components_joined() == "kadmin/history";
+        if history && keepold > 0 {
+            return Err(Error::InvalidArgument(
+                "Cannot change protected principal".into(),
+            ));
+        }
         let id = self.canonical_id(name, princ_realm)?;
         let existing = self.map.get(&id).ok_or(Error::NotFound)?;
-        let next_kvno = existing
-            .keys
-            .iter()
-            .map(|k| k.kvno)
-            .max()
-            .unwrap_or(0)
-            .saturating_add(1);
+        let kvno = next_kvno(&existing.keys);
         let allowed = existing
             .pw_policy
             .as_ref()
             .and_then(|n| self.policies.get(n))
             .and_then(|p| p.allowed_keysalts.clone());
-        let use_etypes =
+        let mut use_etypes =
             apply_keysalt_policy(allowed.as_deref(), etypes, &self.policy.password_etypes())?;
+        if history {
+            use_etypes.truncate(1);
+        }
         let mut new_keys = Vec::new();
         for etype in &use_etypes {
-            new_keys.push(KeyEntry::new(*etype, random_key(*etype)?, next_kvno));
+            new_keys.push(KeyEntry::new(*etype, random_key(*etype)?, kvno));
         }
         super::kadm5_hook::hook_chpass(
             self,
@@ -399,14 +411,13 @@ impl PrincipalStore {
             if keys.iter().any(|k| k.kvno != want) {
                 return Err(Error::Crypto("setkey kvno".into()));
             }
+            if princ_realm == self.realm && name.components_joined() == "kadmin/history" {
+                return Err(Error::InvalidArgument(
+                    "Cannot change protected principal".into(),
+                ));
+            }
             let kvno = if want == 0 {
-                p.keys
-                    .iter()
-                    .chain(p.key_history.iter())
-                    .map(|k| k.kvno)
-                    .max()
-                    .unwrap_or(0)
-                    .saturating_add(1)
+                next_kvno(&p.keys)
             } else {
                 if keepold > 0 && p.keys.iter().any(|k| k.kvno == want) {
                     return Err(Error::Crypto("setkey kvno".into()));

@@ -8,7 +8,8 @@ use super::codes::{
     ALL_PRINC_MASK, API_V2, EINVAL, KADM5_AUX_ATTRIBUTES, KADM5_BAD_KEYSALTS, KADM5_BAD_MASK,
     KADM5_FAIL_AUTH_COUNT, KADM5_KEY_DATA, KADM5_LAST_FAILED, KADM5_LAST_PWD_CHANGE,
     KADM5_LAST_SUCCESS, KADM5_MKVNO, KADM5_MOD_NAME, KADM5_MOD_TIME, KADM5_POLICY,
-    KADM5_POLICY_CLR, KADM5_PRINCIPAL, SETKEY_PRINCIPAL, SETKEY_PRINCIPAL3, SETKEY_PRINCIPAL4,
+    KADM5_POLICY_CLR, KADM5_PRINCIPAL, KADM5_TL_DATA, SETKEY_PRINCIPAL, SETKEY_PRINCIPAL3,
+    SETKEY_PRINCIPAL4,
 };
 use super::dispatch::generic_ret;
 use super::iprop::tl_u32;
@@ -448,16 +449,16 @@ pub(super) fn parse_modify(args: &[u8]) -> Result<(PrincipalName, String, u32, M
     ))
 }
 
-pub(super) fn encode_gprinc(p: &krb5_kdc::Principal) -> Vec<u8> {
+pub(super) fn encode_gprinc(p: &krb5_kdc::Principal, mask: u32) -> Vec<u8> {
     let mut w = XdrW::default();
     w.u32(API_V2);
     w.u32(0);
-    encode_principal_ent(&mut w, p);
+    encode_principal_ent(&mut w, p, mask);
     w.b
 }
 
 /// This encoder never sends the null pointer; a missing mod-princ record is written as kadmin/admin in the entry realm.
-fn encode_principal_ent(w: &mut XdrW, p: &krb5_kdc::Principal) {
+fn encode_principal_ent(w: &mut XdrW, p: &krb5_kdc::Principal, mask: u32) {
     let id = p.id();
     w.nullstring(Some(&id));
     w.u32(p.expiration);
@@ -488,17 +489,29 @@ fn encode_principal_ent(w: &mut XdrW, p: &krb5_kdc::Principal) {
     w.u32(p.last_failed);
     w.u32(p.fail_auth_count);
     let n_key = u32::try_from(p.keys.len()).unwrap_or(0);
-    let n_tl = u32::try_from(p.tl_data.len()).unwrap_or(0);
+    // MIT: `kadm5_get_principal` (lib/kadm5/srv/svr_principal.c:848-866)
+    let tl: Vec<_> = if mask & KADM5_TL_DATA == 0 {
+        Vec::new()
+    } else {
+        p.tl_data
+            .iter()
+            .rev()
+            .filter(|t| {
+                t.ty > 255 && t.ty != krb5_kdc::TL_KERBER_SID && t.ty != krb5_kdc::TL_KERBER_HIST
+            })
+            .collect()
+    };
+    let n_tl = u32::try_from(tl.len()).unwrap_or(0);
     w.u32(n_key);
     w.u32(n_tl);
-    if p.tl_data.is_empty() {
+    if tl.is_empty() {
         w.u32(1);
     } else {
         w.u32(0);
-        for tl in &p.tl_data {
+        for t in &tl {
             w.u32(1);
-            w.u32(u32::try_from(tl.ty).unwrap_or(0));
-            w.opaque(&tl.contents);
+            w.u32(u32::try_from(t.ty).unwrap_or(0));
+            w.opaque(&t.contents);
         }
         w.u32(0);
     }

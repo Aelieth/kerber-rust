@@ -57,6 +57,9 @@ any other `###` heading.
 
 ### Changed
 
+- **kdc.** Rename stores each current key's salt, a kvno wraps from 65535 to 1, and getprinc sends tl types above 255 except the vendor SID and history records.
+- **kdc.** Deleting K/M is refused, as is a password change, a keepold random key, or setkey of kadmin/history.
+- **kdc.** A norealm salt is the principal name alone, and an onlyrealm salt is the realm.
 - **admin.** An embedder supplies kadmind's log and its own password-quality and hook modules.
 - **kdc.** A pending OTP verify no longer blocks the KDC loop: other clients are served while it runs and it resumes with the verdict, as in MIT.
 - **client.** kinit and kpasswd warn when a deprecated enctype was used to authenticate.
