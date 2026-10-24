@@ -56,6 +56,7 @@ any other `###` heading.
 
 ### Changed
 
+- **protocol.** A cached TGT for the next realm on a cross-realm walk is used, and the walk advances.
 - **protocol.** A TGS reply for another server is accepted only when canonicalize was asked, or when both are TGTs, as MIT's is.
 - **protocol.** A referral reply whose server is not a TGT, or whose TGT is for the current realm, is requested again without referrals.
 - **protocol.** An unknown SPAKE group is traced once at the start of an AS exchange when SPAKE is loaded, and a canonicalized reply whose server differs is traced.

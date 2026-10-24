@@ -51,6 +51,9 @@ pub enum Error {
     Referral,
     #[error("no mutually supported etype")]
     NoEtype,
+    // MIT: `KRB5_CC_NOT_KTYPE` (krb5_err.et:268-268)
+    #[error("No credentials found with supported encryption types")]
+    CcNotKtype,
     /// An enctype this client has, but not one the request asked for.
     // MIT: `KRB5_CONFIG_ETYPE_NOSUPP` (krb5_err.et:326-326)
     #[error("No supported encryption types (config file error?)")]
@@ -148,6 +151,7 @@ impl Clone for Error {
             Self::KdcReplySkew => Self::KdcReplySkew,
             Self::Referral => Self::Referral,
             Self::NoEtype => Self::NoEtype,
+            Self::CcNotKtype => Self::CcNotKtype,
             Self::ConfigEtypeNosupp => Self::ConfigEtypeNosupp,
             Self::ProgEtypeNosupp => Self::ProgEtypeNosupp,
             Self::BadEnctype => Self::BadEnctype,

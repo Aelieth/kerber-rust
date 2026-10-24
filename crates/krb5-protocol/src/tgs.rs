@@ -16,6 +16,7 @@ use krb5_types::{
 };
 
 use crate::as_ex::AsOutcome;
+use crate::ccache::CcacheCred;
 use crate::error::Error;
 use crate::preauth::{
     apply_strengthen, fx_fast_padata_over, unwrap_fast_rep_checked, verify_fast_finished,
@@ -39,7 +40,7 @@ pub struct TgsOutcome {
 
 // MIT: `krb5_tkt_creds_init` (get_creds.c:1107-1113)
 // MIT: `make_request_for_service` (get_creds.c:358-363)
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct TgsCredsOptions {
     /// `KRB5_GC_CANONICALIZE` (`kvno -C`): `canonicalize` on the non-referral retry too.
     pub canonicalize: bool,
@@ -52,6 +53,23 @@ pub struct TgsCredsOptions {
     // MIT: `begin` (lib/krb5/krb/get_creds.c:1074-1083)
     /// a server in the referral realm is asked for in the start realm, as a referral request.
     pub referral_realm: bool,
+    // MIT: `get_cached_tgt` (lib/krb5/krb/get_creds.c:759-793)
+    pub cached_creds: Vec<CcacheCred>,
+}
+
+impl std::fmt::Debug for TgsCredsOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut s = f.debug_struct("TgsCredsOptions");
+        s.field("canonicalize", &self.canonicalize);
+        s.field("forwardable", &self.forwardable);
+        s.field("enctype", &self.enctype);
+        s.field("second_ticket", &self.second_ticket);
+        #[cfg(feature = "test-hooks")]
+        s.field("no_transit_check", &self.no_transit_check);
+        s.field("referral_realm", &self.referral_realm);
+        s.field("cached_creds", &self.cached_creds.len());
+        s.finish()
+    }
 }
 
 pub fn tgs_exchange(
@@ -245,7 +263,7 @@ fn tgs_inner(
     let mut cur_tgt = tgt.clone();
     let mut path = Vec::new();
     if tgt_served_realm(&cur_tgt) != realm {
-        let (dest, hops) = get_dest_tgt(profile, kdc, &cur_tgt, realm)?;
+        let (dest, hops) = get_dest_tgt(profile, kdc, &cur_tgt, realm, creds_opts)?;
         cur_tgt = dest;
         path = hops;
         cur_kdc = kdc_for_realm(profile, &tgt_served_realm(&cur_tgt), kdc)?;
@@ -340,7 +358,7 @@ fn tgs_fallback_realm(
     mut path: Vec<AsOutcome>,
 ) -> Result<(TgsOutcome, Vec<AsOutcome>), Error> {
     trace::tkt_creds_fallback(realm.as_bytes());
-    let (dest, hops) = get_dest_tgt(profile, kdc, tgt, realm)?;
+    let (dest, hops) = get_dest_tgt(profile, kdc, tgt, realm, creds_opts)?;
     path.extend(hops);
     let served = tgt_served_realm(&dest);
     let dest_kdc = kdc_for_realm(profile, &served, kdc)?;
@@ -370,6 +388,7 @@ fn get_dest_tgt(
     kdc: &KdcAddr,
     tgt: &AsOutcome,
     dest: &str,
+    creds_opts: &TgsCredsOptions,
 ) -> Result<(AsOutcome, Vec<AsOutcome>), Error> {
     let start = tgt_served_realm(tgt);
     let path = krb5_config::client_realm_path(&profile.capaths, &start, dest);
@@ -378,10 +397,34 @@ fn get_dest_tgt(
     let mut cur_kdc = kdc.clone();
     let mut cur_tgt = tgt.clone();
     let mut next = dest.to_owned();
+    let now = krb5_types::unix_now();
     for _ in 0..REFERRAL_MAX_HOPS {
         let served = tgt_served_realm(&cur_tgt);
         if served == dest {
             return Ok((cur_tgt, cached));
+        }
+        // MIT: `get_tgt_request` (lib/krb5/krb/get_creds.c:890-914)
+        let cred = cached_tgt(
+            &creds_opts.cached_creds,
+            &cur_tgt.cname,
+            cur_tgt.crealm.as_bytes(),
+            &next,
+            now,
+            &crate::as_ex::conf_etypes(profile, true),
+        )?;
+        if let Some(cred) = cred {
+            trace::tkt_creds_cached_intermediate_tgt(
+                trace::Princ::new(&cred.client.1, cred.client.0.as_bytes()),
+                trace::Princ::new(&cred.server.1, cred.server.0.as_bytes()),
+            );
+            cur_tgt = tgt_from_cached(&cur_tgt, cred)?;
+            let got = tgt_served_realm(&cur_tgt);
+            if got == dest {
+                return Ok((cur_tgt, cached));
+            }
+            cur_kdc = kdc_for_realm(profile, &got, kdc)?;
+            dest.clone_into(&mut next);
+            continue;
         }
         let hop = PrincipalName::try_new(PrincipalName::NT_SRV_INST, ["krbtgt", next.as_str()])
             .map_err(|e| Error::ReplyMismatch(e.to_string()))?;
@@ -429,6 +472,88 @@ fn get_dest_tgt(
         }
     }
     Err(Error::Referral)
+}
+
+// MIT: `get_cached_tgt` (lib/krb5/krb/get_creds.c:759-793)
+// MIT: `krb5_cc_retrieve_cred_seq` (lib/krb5/ccache/cc_retr.c:195-250)
+fn cached_tgt<'a>(
+    creds: &'a [CcacheCred],
+    client: &PrincipalName,
+    client_realm: &[u8],
+    realm: &str,
+    now: u32,
+    ktypes: &[i32],
+) -> Result<Option<&'a CcacheCred>, Error> {
+    let mut best: Option<(usize, &'a CcacheCred)> = None;
+    let mut named = false;
+    for c in creds {
+        if c.is_config()
+            || c.is_removed()
+            || c.client.1.name_string != client.name_string
+            || c.client.0.as_bytes() != client_realm
+            || !c.server.1.is_krbtgt_for(realm)
+            || c.endtime < now
+        {
+            continue;
+        }
+        named = true;
+        let Some(rank) = ktypes.iter().position(|k| *k == i32::from(c.key.etype)) else {
+            continue;
+        };
+        if c.session_key().is_err() {
+            continue;
+        }
+        if best.is_none_or(|(prev, _)| rank < prev) {
+            best = Some((rank, c));
+        }
+    }
+    if let Some((_, cred)) = best {
+        return Ok(Some(cred));
+    }
+    if named {
+        return Err(Error::CcNotKtype);
+    }
+    Ok(None)
+}
+
+fn tgt_from_cached(prev: &AsOutcome, cred: &CcacheCred) -> Result<AsOutcome, Error> {
+    let ticket = decode::<Ticket>(&cred.ticket).map_err(|e| Error::Asn1(e.to_string()))?;
+    let session = cred
+        .session_key()
+        .map_err(|e| Error::Crypto(e.to_string()))?;
+    let end = KerberosTime::from_unix_seconds(cred.endtime);
+    Ok(AsOutcome {
+        ticket,
+        enc_part: krb5_types::EncKdcRepPart {
+            key: krb5_types::EncryptionKey {
+                keytype: session.etype().to_iana(),
+                keyvalue: session.as_bytes().to_vec().into(),
+            },
+            last_req: Vec::new(),
+            nonce: 0,
+            key_expiration: None,
+            flags: krb5_types::TicketFlags::from_u32(cred.ticket_flags),
+            authtime: KerberosTime::from_unix_seconds(cred.authtime),
+            starttime: (cred.starttime > 0)
+                .then(|| KerberosTime::from_unix_seconds(cred.starttime)),
+            endtime: end,
+            renew_till: (cred.renew_till > 0)
+                .then(|| KerberosTime::from_unix_seconds(cred.renew_till)),
+            srealm: cred.server.0.clone(),
+            sname: cred.server.1.clone(),
+            caddr: None,
+            encrypted_pa_data: None,
+        },
+        client_key: prev.client_key.clone(),
+        session_key: session,
+        cname: cred.client.1.clone(),
+        crealm: cred.client.0.clone(),
+        fast_avail: prev.fast_avail,
+        used_fast: prev.used_fast,
+        pa_type: prev.pa_type,
+        pa_config: None,
+        time_offset: prev.time_offset,
+    })
 }
 
 fn closer_hop<'a>(path: &'a [String], cur: &str, next: &str) -> Option<&'a str> {

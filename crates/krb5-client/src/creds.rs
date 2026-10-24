@@ -414,6 +414,19 @@ fn request_service(
     }
     crate::trace::tgt_for(cache, &srealm);
     let (presented, hop) = cache.tgt_for(&srealm)?;
+    tgs.cached_creds = cache
+        .cc
+        .creds
+        .iter()
+        .filter(|c| {
+            !c.is_config()
+                && !c.is_removed()
+                && c.server.1.is_krbtgt()
+                && c.client.0 == presented.client.0
+                && c.client.1.name_string == presented.client.1.name_string
+        })
+        .cloned()
+        .collect();
     let kdc = opts.kdc(&cache.ctx.profile, &hop)?;
     let tgt = outcome_from_presented(cache, &presented)?;
     tgs_exchange_path(

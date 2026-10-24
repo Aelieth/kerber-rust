@@ -795,6 +795,14 @@ pub fn tkt_creds_advance(realm: &[u8]) {
     );
 }
 
+// MIT: `TRACE_TKT_CREDS_CACHED_INTERMEDIATE_TGT` (include/k5-trace.h:459-460)
+pub fn tkt_creds_cached_intermediate_tgt(client: Princ<'_>, server: Princ<'_>) {
+    krb5int_trace(
+        "Found cached TGT for intermediate realm: {creds}",
+        &[Arg::Creds(Some(client), server)],
+    );
+}
+
 // MIT: `TRACE_TKT_CREDS_CACHED_SERVICE_TGT` (include/k5-trace.h:461-462)
 pub fn tkt_creds_cached_service_tgt(client: Princ<'_>, server: Princ<'_>) {
     krb5int_trace(
