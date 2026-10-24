@@ -691,6 +691,7 @@ dependencies = [
  "sha1",
  "signal-hook",
  "subtle",
+ "tracing-subscriber",
  "zeroize",
 ]
 

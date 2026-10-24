@@ -3,6 +3,8 @@
 Library crates emit [`tracing`](https://docs.rs/tracing) events. They
 never install a subscriber. The programs do, where `[logging] json`
 asks for the stream (below), and tests install their own.
+`krb5-embed-realm` always installs a stock fmt subscriber at info
+(`krb5_kdc=info,krb5_admin=info`), on standard error.
 
 ## Where the stream goes
 

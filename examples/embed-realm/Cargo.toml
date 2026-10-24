@@ -34,6 +34,7 @@ krb5-types.workspace = true
 sha1.workspace = true
 signal-hook.workspace = true
 subtle.workspace = true
+tracing-subscriber.workspace = true
 zeroize.workspace = true
 
 [lints]

@@ -60,6 +60,8 @@ any other `###` heading.
 
 ### Changed
 
+- **examples.** krb5-embed-realm installs a tracing subscriber at info.
+
 - **kdc.** One info record per request: `kdc.issue` or `admin` for the stream, the MIT line for the log.
 - **kdc.** The json audit loads only when `enable_only` names json.
 - **kdc.** Library events log at debug. A serve loop takes a log sink, and klog lines with no destination go to tracing.

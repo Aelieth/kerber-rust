@@ -2,7 +2,9 @@
 //! [`Listeners::bind`] and [`Kadmind::serve`] with a [`Shutdown`] — over a realm's shared store,
 //! the way an embedder (the KLLDAP seam) starts the admin service. It is the kadmind half of this
 //! example, beside the `krb5-otp-kdc` KDC, kept to prove the embed path end to end against MIT
-//! `kadmin` and `kpasswd`; it is not a shipped product.
+//! `kadmin` and `kpasswd`; it is not a shipped product. It installs a stock
+//! tracing fmt subscriber at info, so each kadm5 operation and each password
+//! change shows one `admin` event.
 //!
 //! It reads the profile the daemon reads (kdc.conf over krb5.conf), opens the realm's database and
 //! stash, binds kpasswd (464) and the kadm5 RPC program (749) over the shared store, and serves one
@@ -83,6 +85,9 @@ fn main() {
     }
     let specs = LogSpecs::load("admin_server");
     klog::init(&progname, &specs.specs, specs.debug);
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter("krb5_kdc=info,krb5_admin=info")
+        .try_init();
 
     // The profile names the realm. A missing database is created; a present one is opened.
     let paths = KdcPaths::resolve(None)
