@@ -40,10 +40,11 @@ pub use ad::{
 };
 pub use audit::{
     AUTHN_REQ_CL, AuditState, ENCR_REP, JsonAudit, KdcAudit, REQID_LEN, SRVC_PRINC,
-    audit_kdc_start, audit_kdc_stop, clear_thread_audit, clear_thread_audits, current_audit,
-    enctype_name, ktypes2str, make_tkt_id, new_req_id, register_audit, rep_etypes2str, set_audit,
-    set_thread_audit, set_thread_audits,
+    audit_kdc_start, audit_kdc_stop, current_audit, enctype_name, ktypes2str, make_tkt_id,
+    new_req_id, register_audit, rep_etypes2str, set_audit,
 };
+#[cfg(test)]
+pub use audit::{clear_thread_audit, clear_thread_audits, set_thread_audit, set_thread_audits};
 #[cfg(feature = "test-hooks")]
 pub use create::seed_test_principals;
 pub use create::{
@@ -108,11 +109,14 @@ pub use pkinit::PkinitKdc;
 pub use plugins::OtpRuntime;
 pub use plugins::{
     KdcAuthdata, KdcPolicy, KdcPreauth, OtpTokenFields, OtpVerdict, OtpVerifier, OtpVerifyRequest,
-    PolicyAdjustment, PreauthAction, PreauthHint, PreauthRock, apply_policy_times,
+    PluginSet, PolicyAdjustment, PreauthAction, PreauthHint, PreauthRock, apply_policy_times,
+    current_policy, register_authdata, register_kdcpolicy, register_kdcpolicy_test_if_selected,
+    register_otp_verifier, register_preauth, set_policy,
+};
+#[cfg(test)]
+pub use plugins::{
     clear_thread_authdata, clear_thread_kdcpolicies, clear_thread_otp_verifiers,
-    clear_thread_policy, clear_thread_preauth, current_policy, register_authdata,
-    register_kdcpolicy, register_kdcpolicy_test_if_selected, register_otp_verifier,
-    register_preauth, set_policy, set_thread_authdata, set_thread_kdcpolicies,
+    clear_thread_policy, clear_thread_preauth, set_thread_authdata, set_thread_kdcpolicies,
     set_thread_otp_verifiers, set_thread_policy, set_thread_preauth,
 };
 pub use plugins::{otp_startup_lines, preauth_startup_lines};

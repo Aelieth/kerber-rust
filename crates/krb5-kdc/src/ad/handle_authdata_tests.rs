@@ -25,9 +25,19 @@ fn copy_tgt_strips_issued_keeps_other() {
         .into(),
     };
     let tgt = vec![pac, keep.clone()];
-    let out = handle_authdata(true, false, None, None, None, Some(&tgt), None, None)
-        .unwrap()
-        .unwrap();
+    let out = handle_authdata(
+        &crate::store::Policy::default(),
+        true,
+        false,
+        None,
+        None,
+        None,
+        Some(&tgt),
+        None,
+        None,
+    )
+    .unwrap()
+    .unwrap();
     assert!(out.iter().any(|e| e.ad_type == pa::AD_AND_OR));
     assert!(out.iter().all(|e| !is_kdc_issued_authdatum(e)));
 }
@@ -38,7 +48,18 @@ fn tgt_mandatory_is_handle_authdata() {
         ad_type: pa::AD_MANDATORY_FOR_KDC,
         ad_data: Vec::<u8>::new().into(),
     }];
-    let err = handle_authdata(true, false, None, None, None, Some(&tgt), None, None).unwrap_err();
+    let err = handle_authdata(
+        &crate::store::Policy::default(),
+        true,
+        false,
+        None,
+        None,
+        None,
+        Some(&tgt),
+        None,
+        None,
+    )
+    .unwrap_err();
     match err {
         Error::Protocol { code, text, .. } => {
             assert_eq!(code, err::POLICY);
@@ -245,7 +266,17 @@ fn module_error_is_logged_as_kdc_authdata_module_with_the_schema_fields() {
         .with_writer(move || Mem(Arc::clone(&writer)))
         .finish();
     let out = tracing::subscriber::with_default(subscriber, || {
-        handle_authdata(false, false, None, None, None, None, None, None)
+        handle_authdata(
+            &crate::store::Policy::default(),
+            false,
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
     });
     crate::plugins::clear_thread_authdata();
     assert!(out.is_ok(), "a module error is logged, not returned");

@@ -102,6 +102,7 @@ pub struct Policy {
     // MIT: `otp_state_new` (plugins/preauth/otp/otp_state.c:579-585)
     // MIT: `reset_for_hangup` (kdc/kdc_util.c:1916-1922)
     pub otp: Result<Vec<krb5_config::OtpType>, krb5_config::OtpInitError>,
+    pub plugins: crate::plugins::PluginSet,
 }
 
 impl Default for Policy {
@@ -143,6 +144,7 @@ impl Default for Policy {
             otp: Ok(vec![krb5_config::OtpType::builtin(
                 krb5_config::DEFAULT_OTP_TYPE,
             )]),
+            plugins: crate::plugins::PluginSet::snapshot(),
         }
     }
 }

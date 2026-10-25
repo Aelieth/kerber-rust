@@ -9,7 +9,9 @@ use std::time::Duration;
 
 use crate::Error;
 use crate::daemon::Signals;
-use crate::issue::{KdcDispatch, ThreadSlots};
+use crate::issue::KdcDispatch;
+#[cfg(test)]
+use crate::issue::ThreadSlots;
 use crate::kdb::{KdcEnv, PrincipalRead, Store};
 use crate::net_server::{Klog, Sockets, Wake};
 use crate::store::{Policy, Principal};
@@ -733,16 +735,9 @@ pub fn serve_daemon(
 }
 
 fn otp_serve_start(store: &SharedStore) {
-    let verifiers = crate::plugins::otp_verifiers();
+    let verifiers = read_store(store, |s| crate::plugins::otp_verifiers(s.policy()));
     let empty = verifiers.is_empty();
     if !empty {
-        if crate::plugins::thread_otp_present() {
-            tracing::debug!(
-                target: "kdc.otp",
-                "captured {} thread-local OTP verifier(s) for this serving instance",
-                verifiers.len()
-            );
-        }
         let rt = Arc::new(crate::plugins::OtpRuntime::new(verifiers));
         store
             .write()
@@ -761,6 +756,7 @@ fn serve_loop(
     log: &KdcLog,
 ) -> io::Result<()> {
     let _sink = log.sink.clone().map(klog::push_thread_sink);
+    #[cfg(test)]
     let _slots = ThreadSlots::take();
     otp_serve_start(&store);
     let teardown = Arc::clone(&store);

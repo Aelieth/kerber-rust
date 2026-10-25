@@ -140,11 +140,18 @@ fn main() {
             "KERBER_EXAMPLE_TOTP_STATE is unset: replay memory does not survive a restart",
         );
     }
-    if let Err(e) = krb5_kdc::register_otp_verifier(Arc::new(TotpVerifier::from_env())) {
-        eprintln!("{progname}: cannot register the totp verifier: {e}");
+    if let Err(e) = store
+        .policy
+        .plugins
+        .register_otp_verifier(Arc::new(TotpVerifier::from_env()))
+    {
+        eprintln!("{progname}: {e}");
         exit(1);
     }
-    krb5_kdc::register_kdcpolicy(Arc::new(RequireMfa::from_env()));
+    store
+        .policy
+        .plugins
+        .register_kdcpolicy(Arc::new(RequireMfa::from_env()));
 
     let store = krb5_kdc::shared_store(store);
     let shutdown = Arc::new(AtomicBool::new(false));

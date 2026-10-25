@@ -248,7 +248,8 @@ fn main() {
     {
         klog::syslog(Severity::Warning, &line);
     }
-    krb5_kdc::register_kdcpolicy_test_if_selected(&store.policy().kdcpolicy);
+    let kdcpolicy_relations = store.policy.kdcpolicy.clone();
+    krb5_kdc::register_kdcpolicy_test_if_selected(&mut store.policy.plugins, &kdcpolicy_relations);
     let pkinit_failure = store.init_pkinit(&profile);
     #[cfg(feature = "test-hooks")]
     hooks::before_serving(&mut store, &opts.hooks);
@@ -600,12 +601,15 @@ mod hooks {
 
     pub(super) fn before_serving(store: &mut PrincipalStore, args: &Args) {
         if std::env::var("KRB5_KDCPOLICY").ok().as_deref() == Some("test") {
-            krb5_kdc::set_policy(std::sync::Arc::new(krb5_kdc::testrealm::TestPolicy));
+            store
+                .policy
+                .plugins
+                .set_policy(std::sync::Arc::new(krb5_kdc::testrealm::TestPolicy));
         }
         if std::env::var("KRB5_KDC_AUDIT").ok().as_deref() == Some("test") {
             let path = std::env::var("KRB5_KDC_AUDIT_LOG").unwrap_or_else(|_| "au.log".into());
             match krb5_kdc::testrealm::TestAudit::open(&path) {
-                Ok(a) => krb5_kdc::set_audit(std::sync::Arc::new(a)),
+                Ok(a) => store.policy.plugins.set_audit(std::sync::Arc::new(a)),
                 Err(e) => {
                     eprintln!("krb5-kdc: KRB5_KDC_AUDIT_LOG {path}: {e}");
                     std::process::exit(1);

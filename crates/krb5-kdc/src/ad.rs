@@ -1339,6 +1339,7 @@ fn copy_tgt_authdata(
 // MIT: `handle_authdata` (kdc_authdata.c:576-628)
 #[expect(clippy::too_many_arguments, reason = "MIT passes args positionally")]
 pub(crate) fn handle_authdata(
+    policy: &crate::store::Policy,
     is_tgs: bool,
     anonymous: bool,
     body_enc_ad: Option<&EncryptedData>,
@@ -1355,7 +1356,7 @@ pub(crate) fn handle_authdata(
         copy_request_authdata(enc, session, client_key, &mut out).map_err(map_ad_fail)?;
     }
     if !anonymous {
-        for m in authdata_modules() {
+        for m in authdata_modules(policy) {
             if let Err(e) = m.handle(is_tgs, &mut out, reply_session, issuer) {
                 tracing::error!(
                     event = krb5_log::events::KDC_AUTHDATA_MODULE,

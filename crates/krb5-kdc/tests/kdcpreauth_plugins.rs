@@ -7,22 +7,12 @@ use std::sync::Arc;
 
 use krb5_asn1::decode;
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented};
-use krb5_kdc::{
-    Error, KdcPreauth, PreauthAction, PreauthRock, PrincipalStore, clear_thread_preauth,
-    set_thread_preauth,
-};
+use krb5_kdc::{Error, KdcPreauth, PreauthAction, PreauthRock, PrincipalStore};
 use krb5_protocol::{as_req, pa_enc_timestamp};
 use krb5_testkit::password_key;
 use krb5_types::{MethodData, PaData, PrincipalName, pa};
 
 const WIDGET: i32 = 211;
-
-struct Guard;
-impl Drop for Guard {
-    fn drop(&mut self) {
-        clear_thread_preauth();
-    }
-}
 
 struct Widget;
 
@@ -153,9 +143,9 @@ fn an_unknown_enable_only_name_keeps_no_module() {
 
 #[test]
 fn an_embedder_module_is_selected_and_dropped_by_name() {
-    let _guard = Guard;
-    set_thread_preauth(vec![Arc::new(Widget)]);
-    let selected = realm("[plugins]\n    kdcpreauth = {\n        enable_only = widget\n    }\n");
+    let mut selected =
+        realm("[plugins]\n    kdcpreauth = {\n        enable_only = widget\n    }\n");
+    selected.policy.plugins.register_preauth(Arc::new(Widget));
     let types = hint_types(&selected, 71_030);
     assert!(
         types.contains(&WIDGET),
@@ -165,7 +155,8 @@ fn an_embedder_module_is_selected_and_dropped_by_name() {
         !types.contains(&pa::ENC_TIMESTAMP) && !types.contains(&pa::SPAKE),
         "enable_only drops the modules it does not name: {types:?}"
     );
-    let dropped = realm("[plugins]\n    kdcpreauth = {\n        disable = widget\n    }\n");
+    let mut dropped = realm("[plugins]\n    kdcpreauth = {\n        disable = widget\n    }\n");
+    dropped.policy.plugins.register_preauth(Arc::new(Widget));
     let types = hint_types(&dropped, 71_031);
     assert!(
         !types.contains(&WIDGET),

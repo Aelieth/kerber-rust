@@ -2,6 +2,7 @@
 
 use std::os::fd::OwnedFd;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -473,9 +474,9 @@ impl KdcPreauth for EncChallengeMod {
     }
 }
 
-static EXTRA: Mutex<Vec<Arc<dyn KdcPreauth>>> = Mutex::new(Vec::new());
 static BUILTIN: OnceLock<Vec<Arc<dyn KdcPreauth>>> = OnceLock::new();
 
+#[cfg(test)]
 thread_local! {
     static THREAD_EXTRA: std::cell::RefCell<Option<Vec<Arc<dyn KdcPreauth>>>> =
         const { std::cell::RefCell::new(None) };
@@ -494,43 +495,42 @@ fn builtins() -> &'static [Arc<dyn KdcPreauth>] {
     })
 }
 
+#[doc(hidden)]
 pub fn register_preauth(m: Arc<dyn KdcPreauth>) {
-    EXTRA
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .push(m);
+    let name = m.name();
+    lock_plugins().register_preauth(m);
+    note_late_register("kdcpreauth", name);
 }
 
+#[cfg(test)]
 pub fn set_thread_preauth(modules: Vec<Arc<dyn KdcPreauth>>) {
     THREAD_EXTRA.with(|t| *t.borrow_mut() = Some(modules));
 }
 
+#[cfg(test)]
 pub fn clear_thread_preauth() {
     THREAD_EXTRA.with(|t| *t.borrow_mut() = None);
 }
 
+#[cfg(test)]
 pub(crate) fn take_thread_preauth() -> Option<Vec<Arc<dyn KdcPreauth>>> {
     THREAD_EXTRA.with(|t| t.borrow_mut().take())
 }
 
+#[cfg(test)]
 pub(crate) fn restore_thread_preauth(modules: Option<Vec<Arc<dyn KdcPreauth>>>) {
     THREAD_EXTRA.with(|t| *t.borrow_mut() = modules);
 }
 
 #[must_use]
-pub(crate) fn preauth_modules() -> Vec<Arc<dyn KdcPreauth>> {
+pub(crate) fn preauth_modules(policy: &Policy) -> Vec<Arc<dyn KdcPreauth>> {
     let mut v: Vec<Arc<dyn KdcPreauth>> = builtins().to_vec();
+    #[cfg(test)]
     if let Some(extra) = THREAD_EXTRA.with(|t| t.borrow().clone()) {
         v.extend(extra);
         return v;
     }
-    v.extend(
-        EXTRA
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .iter()
-            .cloned(),
-    );
+    v.extend(policy.plugins.preauth());
     v
 }
 
@@ -599,64 +599,67 @@ pub trait OtpVerifier: Send + Sync {
     fn verify(&self, req: &OtpVerifyRequest) -> OtpVerdict;
 }
 
-static OTP_VERIFIERS: Mutex<Vec<Arc<dyn OtpVerifier>>> = Mutex::new(Vec::new());
-
+#[cfg(test)]
 thread_local! {
     static THREAD_OTP: std::cell::RefCell<Option<Vec<Arc<dyn OtpVerifier>>>> =
         const { std::cell::RefCell::new(None) };
 }
 
-/// Errs on a duplicate `name()`.
+#[doc(hidden)]
 pub fn register_otp_verifier(v: Arc<dyn OtpVerifier>) -> Result<(), Error> {
-    let mut reg = OTP_VERIFIERS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if reg.iter().any(|e| e.name() == v.name()) {
-        return Err(Error::InvalidArgument(format!(
-            "an OTP verifier named '{}' is already registered",
-            v.name()
-        )));
-    }
-    reg.push(v);
+    let name = v.name();
+    lock_plugins().register_otp_verifier(v)?;
+    note_late_register("otp", name);
     Ok(())
 }
 
+#[cfg(test)]
 pub fn set_thread_otp_verifiers(v: Vec<Arc<dyn OtpVerifier>>) {
     THREAD_OTP.with(|t| *t.borrow_mut() = Some(v));
 }
 
+#[cfg(test)]
 pub fn clear_thread_otp_verifiers() {
     THREAD_OTP.with(|t| *t.borrow_mut() = None);
 }
 
+#[cfg(test)]
 pub(crate) fn take_thread_otp_verifiers() -> Option<Vec<Arc<dyn OtpVerifier>>> {
     THREAD_OTP.with(|t| t.borrow_mut().take())
 }
 
-pub(crate) fn thread_otp_present() -> bool {
-    THREAD_OTP.with(|t| t.borrow().is_some())
-}
-
+#[cfg(test)]
 pub(crate) fn restore_thread_otp_verifiers(v: Option<Vec<Arc<dyn OtpVerifier>>>) {
     THREAD_OTP.with(|t| *t.borrow_mut() = v);
 }
 
-pub(crate) fn otp_verifiers() -> Vec<Arc<dyn OtpVerifier>> {
+pub(crate) fn otp_verifiers(policy: &Policy) -> Vec<Arc<dyn OtpVerifier>> {
+    #[cfg(test)]
     if let Some(v) = THREAD_OTP.with(|t| t.borrow().clone()) {
         return v;
     }
-    OTP_VERIFIERS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone()
+    policy.plugins.otp()
 }
 
-pub(crate) fn find_otp_verifier(name: &str) -> Option<Arc<dyn OtpVerifier>> {
-    otp_verifiers().into_iter().find(|v| v.name() == name)
+pub(crate) fn find_otp_verifier(policy: &Policy, name: &str) -> Option<Arc<dyn OtpVerifier>> {
+    #[cfg(test)]
+    if let Some(v) = THREAD_OTP.with(|t| t.borrow().clone()) {
+        return v.into_iter().find(|module| module.name() == name);
+    }
+    policy.plugins.find_otp(name)
 }
 
-pub(crate) fn otp_verifier_names() -> Vec<&'static str> {
-    otp_verifiers().iter().map(|v| v.name()).collect()
+pub(crate) fn otp_verifier_names(policy: &Policy) -> Vec<&'static str> {
+    otp_verifiers(policy).iter().map(|v| v.name()).collect()
+}
+
+#[cfg(test)]
+pub(crate) fn thread_otp_names() -> Vec<&'static str> {
+    #[cfg(test)]
+    if let Some(v) = THREAD_OTP.with(|t| t.borrow().clone()) {
+        return v.iter().map(|module| module.name()).collect();
+    }
+    Vec::new()
 }
 
 const OTP_WORKERS: usize = 4;
@@ -912,45 +915,246 @@ pub trait KdcAuthdata: Send + Sync {
     ) -> Result<(), Error>;
 }
 
-static EXTRA_AD: Mutex<Vec<Arc<dyn KdcAuthdata>>> = Mutex::new(Vec::new());
+fn push_module<T: ?Sized>(list: &mut Vec<Arc<T>>, module: Arc<T>) {
+    if list.iter().any(|item| Arc::ptr_eq(item, &module)) {
+        return;
+    }
+    list.push(module);
+}
 
+fn drop_named<T: ?Sized>(list: &mut Vec<Arc<T>>, name: &str, name_of: impl Fn(&T) -> &str) {
+    list.retain(|item| name_of(item.as_ref()) != name);
+}
+
+#[derive(Clone)]
+pub struct PluginSet {
+    preauth: Vec<Arc<dyn KdcPreauth>>,
+    sole_policy: Option<Arc<dyn KdcPolicy>>,
+    policies: Vec<Arc<dyn KdcPolicy>>,
+    sole_audit: Option<Arc<dyn crate::audit::KdcAudit>>,
+    audits: Vec<Arc<dyn crate::audit::KdcAudit>>,
+    authdata: Vec<Arc<dyn KdcAuthdata>>,
+    otp: Vec<Arc<dyn OtpVerifier>>,
+}
+
+impl std::fmt::Debug for PluginSet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PluginSet")
+            .field("preauth", &self.preauth.len())
+            .field("policies", &self.policies.len())
+            .field("audits", &self.audits.len())
+            .field("authdata", &self.authdata.len())
+            .field("otp", &self.otp.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl PluginSet {
+    const fn empty() -> Self {
+        Self {
+            preauth: Vec::new(),
+            sole_policy: None,
+            policies: Vec::new(),
+            sole_audit: None,
+            audits: Vec::new(),
+            authdata: Vec::new(),
+            otp: Vec::new(),
+        }
+    }
+
+    pub(crate) fn snapshot() -> Self {
+        let set = default_plugins()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        COPIED.fetch_add(1, Ordering::Relaxed);
+        set
+    }
+
+    pub fn register_preauth(&mut self, module: Arc<dyn KdcPreauth>) {
+        push_module(&mut self.preauth, module);
+    }
+
+    pub fn unregister_preauth(&mut self, name: &str) {
+        drop_named(&mut self.preauth, name, |module| module.name());
+    }
+
+    pub fn register_kdcpolicy(&mut self, module: Arc<dyn KdcPolicy>) {
+        push_module(&mut self.policies, module);
+    }
+
+    pub fn unregister_kdcpolicy(&mut self, name: &str) {
+        drop_named(&mut self.policies, name, |module| module.name());
+        if self
+            .sole_policy
+            .as_ref()
+            .is_some_and(|module| module.name() == name)
+        {
+            self.sole_policy = None;
+        }
+    }
+
+    pub fn set_policy(&mut self, module: Arc<dyn KdcPolicy>) {
+        self.sole_policy = Some(module);
+    }
+
+    pub fn clear_policy(&mut self) {
+        self.sole_policy = None;
+    }
+
+    pub fn register_audit(&mut self, module: Arc<dyn crate::audit::KdcAudit>) {
+        push_module(&mut self.audits, module);
+    }
+
+    pub fn unregister_audit(&mut self, name: &str) {
+        drop_named(&mut self.audits, name, |module| module.name());
+        if self
+            .sole_audit
+            .as_ref()
+            .is_some_and(|module| module.name() == name)
+        {
+            self.sole_audit = None;
+        }
+    }
+
+    pub fn set_audit(&mut self, module: Arc<dyn crate::audit::KdcAudit>) {
+        self.sole_audit = Some(module);
+    }
+
+    pub fn clear_audit(&mut self) {
+        self.sole_audit = None;
+    }
+
+    pub fn register_authdata(&mut self, module: Arc<dyn KdcAuthdata>) {
+        push_module(&mut self.authdata, module);
+    }
+
+    pub fn unregister_authdata(&mut self, name: &str) {
+        drop_named(&mut self.authdata, name, |module| module.name());
+    }
+
+    pub fn register_otp_verifier(&mut self, module: Arc<dyn OtpVerifier>) -> Result<(), Error> {
+        if self.otp.iter().any(|item| item.name() == module.name()) {
+            return Err(Error::InvalidArgument(format!(
+                "an OTP verifier named '{}' is already registered",
+                module.name()
+            )));
+        }
+        self.otp.push(module);
+        Ok(())
+    }
+
+    pub fn unregister_otp_verifier(&mut self, name: &str) {
+        drop_named(&mut self.otp, name, |module| module.name());
+    }
+
+    pub fn clear_otp_verifiers(&mut self) {
+        self.otp.clear();
+    }
+
+    pub fn set_otp_verifiers(&mut self, modules: Vec<Arc<dyn OtpVerifier>>) {
+        self.otp = modules;
+    }
+
+    pub(crate) fn preauth(&self) -> Vec<Arc<dyn KdcPreauth>> {
+        self.preauth.clone()
+    }
+
+    pub(crate) fn sole_policy(&self) -> Option<Arc<dyn KdcPolicy>> {
+        self.sole_policy.clone()
+    }
+
+    pub(crate) fn policies(&self) -> Vec<Arc<dyn KdcPolicy>> {
+        self.policies.clone()
+    }
+
+    pub(crate) fn sole_audit(&self) -> Option<Arc<dyn crate::audit::KdcAudit>> {
+        self.sole_audit.clone()
+    }
+
+    pub(crate) fn audits(&self) -> Vec<Arc<dyn crate::audit::KdcAudit>> {
+        self.audits.clone()
+    }
+
+    pub(crate) fn authdata(&self) -> Vec<Arc<dyn KdcAuthdata>> {
+        self.authdata.clone()
+    }
+
+    pub(crate) fn otp(&self) -> Vec<Arc<dyn OtpVerifier>> {
+        self.otp.clone()
+    }
+
+    pub(crate) fn find_otp(&self, name: &str) -> Option<Arc<dyn OtpVerifier>> {
+        self.otp
+            .iter()
+            .find(|module| module.name() == name)
+            .cloned()
+    }
+}
+
+fn default_plugins() -> &'static Mutex<PluginSet> {
+    static SET: Mutex<PluginSet> = Mutex::new(PluginSet::empty());
+    &SET
+}
+
+static COPIED: AtomicUsize = AtomicUsize::new(0);
+
+pub(crate) fn note_late_register(kind: &str, name: &str) {
+    if COPIED.load(Ordering::Relaxed) == 0 {
+        return;
+    }
+    tracing::error!(
+        target: "krb5_kdc",
+        "{kind} {name} registered on the process default after a store copied it; it applies only to stores opened later"
+    );
+}
+
+pub(crate) fn lock_plugins() -> std::sync::MutexGuard<'static, PluginSet> {
+    default_plugins()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+#[cfg(test)]
 thread_local! {
     static THREAD_EXTRA_AD: std::cell::RefCell<Option<Vec<Arc<dyn KdcAuthdata>>>> =
         const { std::cell::RefCell::new(None) };
 }
 
+#[doc(hidden)]
 pub fn register_authdata(m: Arc<dyn KdcAuthdata>) {
-    EXTRA_AD
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .push(m);
+    let name = m.name();
+    lock_plugins().register_authdata(m);
+    note_late_register("authdata", name);
 }
 
+#[cfg(test)]
 pub fn set_thread_authdata(modules: Vec<Arc<dyn KdcAuthdata>>) {
     THREAD_EXTRA_AD.with(|t| *t.borrow_mut() = Some(modules));
 }
 
+#[cfg(test)]
 pub fn clear_thread_authdata() {
     THREAD_EXTRA_AD.with(|t| *t.borrow_mut() = None);
 }
 
+#[cfg(test)]
 pub(crate) fn take_thread_authdata() -> Option<Vec<Arc<dyn KdcAuthdata>>> {
     THREAD_EXTRA_AD.with(|t| t.borrow_mut().take())
 }
 
+#[cfg(test)]
 pub(crate) fn restore_thread_authdata(modules: Option<Vec<Arc<dyn KdcAuthdata>>>) {
     THREAD_EXTRA_AD.with(|t| *t.borrow_mut() = modules);
 }
 
 #[must_use]
-pub(crate) fn authdata_modules() -> Vec<Arc<dyn KdcAuthdata>> {
+pub(crate) fn authdata_modules(policy: &Policy) -> Vec<Arc<dyn KdcAuthdata>> {
+    #[cfg(test)]
     if let Some(modules) = THREAD_EXTRA_AD.with(|t| t.borrow().clone()) {
         return modules;
     }
-    EXTRA_AD
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone()
+    policy.plugins.authdata()
 }
 
 // MIT: `get_plugin_vtables` (kdc/kdc_preauth.c:117-163)
@@ -958,7 +1162,7 @@ pub(crate) fn authdata_modules() -> Vec<Arc<dyn KdcAuthdata>> {
 pub(crate) fn selected_preauth(policy: &Policy) -> Vec<Arc<dyn KdcPreauth>> {
     let mut fast = Vec::new();
     let mut named = Vec::new();
-    for module in preauth_modules() {
+    for module in preauth_modules(policy) {
         if module.name() == "fast" {
             fast.push(module);
         } else if module.name() != "otp" || policy.otp.is_ok() {
@@ -1367,71 +1571,80 @@ impl KdcPolicy for DefaultPolicy {
     }
 }
 
-static POLICY: Mutex<Option<Arc<dyn KdcPolicy>>> = Mutex::new(None);
-static NAMED_POLICIES: Mutex<Vec<Arc<dyn KdcPolicy>>> = Mutex::new(Vec::new());
-
+#[cfg(test)]
 thread_local! {
     static THREAD_POLICY: std::cell::RefCell<Option<Arc<dyn KdcPolicy>>> =
         const { std::cell::RefCell::new(None) };
     static THREAD_POLICIES: std::cell::RefCell<Option<Vec<Arc<dyn KdcPolicy>>>> =
         const { std::cell::RefCell::new(None) };
+}
+
+thread_local! {
     static REQUEST_PEER: std::cell::RefCell<Option<HostAddress>> =
         const { std::cell::RefCell::new(None) };
 }
 
+#[doc(hidden)]
 pub fn set_policy(p: Arc<dyn KdcPolicy>) {
-    *POLICY
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(p);
+    let name = p.name();
+    lock_plugins().set_policy(p);
+    note_late_register("kdcpolicy", name);
 }
 
+#[cfg(test)]
 pub fn set_thread_policy(p: Arc<dyn KdcPolicy>) {
     THREAD_POLICY.with(|t| *t.borrow_mut() = Some(p));
 }
 
+#[cfg(test)]
 pub fn clear_thread_policy() {
     THREAD_POLICY.with(|t| *t.borrow_mut() = None);
 }
 
+#[cfg(test)]
 pub(crate) fn take_thread_policy() -> Option<Arc<dyn KdcPolicy>> {
     THREAD_POLICY.with(|t| t.borrow_mut().take())
 }
 
+#[cfg(test)]
 pub(crate) fn restore_thread_policy(p: Option<Arc<dyn KdcPolicy>>) {
     THREAD_POLICY.with(|t| *t.borrow_mut() = p);
 }
 
 #[must_use]
 pub fn current_policy() -> Arc<dyn KdcPolicy> {
+    #[cfg(test)]
     if let Some(p) = THREAD_POLICY.with(|t| t.borrow().clone()) {
         return p;
     }
-    POLICY
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone()
+    lock_plugins()
+        .sole_policy()
         .unwrap_or_else(|| Arc::new(DefaultPolicy))
 }
 
+#[doc(hidden)]
 pub fn register_kdcpolicy(module: Arc<dyn KdcPolicy>) {
-    NAMED_POLICIES
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .push(module);
+    let name = module.name();
+    lock_plugins().register_kdcpolicy(module);
+    note_late_register("kdcpolicy", name);
 }
 
+#[cfg(test)]
 pub fn set_thread_kdcpolicies(modules: Vec<Arc<dyn KdcPolicy>>) {
     THREAD_POLICIES.with(|slot| *slot.borrow_mut() = Some(modules));
 }
 
+#[cfg(test)]
 pub fn clear_thread_kdcpolicies() {
     THREAD_POLICIES.with(|slot| *slot.borrow_mut() = None);
 }
 
+#[cfg(test)]
 pub(crate) fn take_thread_kdcpolicies() -> Option<Vec<Arc<dyn KdcPolicy>>> {
     THREAD_POLICIES.with(|slot| slot.borrow_mut().take())
 }
 
+#[cfg(test)]
 pub(crate) fn restore_thread_kdcpolicies(modules: Option<Vec<Arc<dyn KdcPolicy>>>) {
     THREAD_POLICIES.with(|slot| *slot.borrow_mut() = modules);
 }
@@ -1464,24 +1677,19 @@ fn selected_kdcpolicies(
 
 // MIT: `check_kdcpolicy_as` (kdc/policy.c:104-136)
 fn active_kdcpolicies(store: &dyn PrincipalRead) -> Vec<Arc<dyn KdcPolicy>> {
+    #[cfg(test)]
     if let Some(module) = THREAD_POLICY.with(|slot| slot.borrow().clone()) {
         return vec![module];
     }
+    #[cfg(test)]
     if let Some(modules) = THREAD_POLICIES.with(|slot| slot.borrow().clone()) {
         return selected_kdcpolicies(&store.policy().kdcpolicy, modules);
     }
-    if let Some(module) = POLICY
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone()
-    {
+    let plugins = &store.policy().plugins;
+    if let Some(module) = plugins.sole_policy() {
         return vec![module];
     }
-    let modules = NAMED_POLICIES
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone();
-    selected_kdcpolicies(&store.policy().kdcpolicy, modules)
+    selected_kdcpolicies(&store.policy().kdcpolicy, plugins.policies())
 }
 
 #[expect(
@@ -1677,8 +1885,18 @@ mod tests {
             let req = no_padata(21);
             move || {
                 let as_err = crate::issue_as(&store, &req).unwrap_err();
-                crate::ad::handle_authdata(true, false, None, None, None, None, None, None)
-                    .expect("handle_authdata");
+                crate::ad::handle_authdata(
+                    &crate::store::Policy::default(),
+                    true,
+                    false,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .expect("handle_authdata");
                 as_err
             }
         })
@@ -1699,15 +1917,35 @@ mod tests {
             "another thread must not run this thread's authdata module"
         );
         let _ = crate::issue_as(&store, &no_padata(22)).unwrap_err();
-        crate::ad::handle_authdata(true, false, None, None, None, None, None, None)
-            .expect("handle_authdata");
+        crate::ad::handle_authdata(
+            &crate::store::Policy::default(),
+            true,
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("handle_authdata");
         assert_eq!(demo.procs.load(Ordering::SeqCst), 1, "this thread's AS");
         assert_eq!(counting.0.load(Ordering::SeqCst), 1, "this thread's TGS");
         clear_thread_preauth();
         clear_thread_authdata();
         let _ = crate::issue_as(&store, &no_padata(23)).unwrap_err();
-        crate::ad::handle_authdata(true, false, None, None, None, None, None, None)
-            .expect("handle_authdata");
+        crate::ad::handle_authdata(
+            &crate::store::Policy::default(),
+            true,
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("handle_authdata");
         assert_eq!(
             (
                 demo.procs.load(Ordering::SeqCst),
@@ -1860,9 +2098,7 @@ mod tests {
         })
         .join()
         .expect("join");
-        *POLICY
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        lock_plugins().clear_policy();
         assert!(
             hits >= 1,
             "serve-thread current_policy must see set_policy, got {hits}"
@@ -2549,7 +2785,8 @@ mod tests {
             .unwrap()
             .clone();
         let verdict = |name: &str| {
-            let v = find_otp_verifier(name).expect("a verifier of that name");
+            let policy = crate::store::Policy::default();
+            let v = find_otp_verifier(&policy, name).expect("a verifier of that name");
             v.verify(&OtpVerifyRequest::for_test(
                 client.clone(),
                 TEST_REALM,
@@ -2559,7 +2796,6 @@ mod tests {
             ))
         };
         register_otp_verifier(Arc::new(Tagged("registry-first", OtpVerdict::Accept))).unwrap();
-        // The same name a second time is rejected; the first registration stands.
         assert!(
             register_otp_verifier(Arc::new(Tagged("registry-first", OtpVerdict::Reject))).is_err()
         );
@@ -2568,6 +2804,7 @@ mod tests {
         assert_eq!(verdict("registry-first"), OtpVerdict::Reject);
         clear_thread_otp_verifiers();
         assert_eq!(verdict("registry-first"), OtpVerdict::Accept);
+        lock_plugins().unregister_otp_verifier("registry-first");
     }
 
     #[test]
@@ -2850,20 +3087,15 @@ mod tests {
 #[path = "kdcpolicy_test.rs"]
 mod kdcpolicy_test;
 
-pub fn register_kdcpolicy_test_if_selected(relations: &krb5_config::PluginRelations) {
+pub fn register_kdcpolicy_test_if_selected(
+    plugins: &mut PluginSet,
+    relations: &krb5_config::PluginRelations,
+) {
     let Some(names) = relations.enable_only.as_ref() else {
         return;
     };
     if !names.iter().any(|name| name == "test") {
         return;
     }
-    let already = NAMED_POLICIES
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .iter()
-        .any(|module| module.name() == "test");
-    if already {
-        return;
-    }
-    register_kdcpolicy(std::sync::Arc::new(kdcpolicy_test::TestModule));
+    plugins.register_kdcpolicy(std::sync::Arc::new(kdcpolicy_test::TestModule));
 }

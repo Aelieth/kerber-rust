@@ -4,10 +4,7 @@
 use krb5_asn1::encode;
 use krb5_kdc::testrealm::TestAudit;
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
-use krb5_kdc::{
-    AUTHN_REQ_CL, ENCR_REP, SRVC_PRINC, clear_thread_audit, ktypes2str, make_tkt_id,
-    set_thread_audit,
-};
+use krb5_kdc::{AUTHN_REQ_CL, ENCR_REP, SRVC_PRINC, ktypes2str, make_tkt_id};
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
 use krb5_testkit::{issue_tgt, scratch_dir, user};
@@ -126,9 +123,11 @@ fn tkt_id_is_sha256_of_ticket_ciphertext() {
 fn test_audit_writes_mit_field_names() {
     let dir = scratch_dir("a4-20-audit");
     let path = dir.join("au.log");
-    let sink = TestAudit::open(&path).unwrap();
-    set_thread_audit(Arc::new(sink));
-    let (store, _) = bootstrap_documented().unwrap();
+    let (mut store, _) = bootstrap_documented().unwrap();
+    store
+        .policy
+        .plugins
+        .set_audit(Arc::new(TestAudit::open(&path).unwrap()));
     let key = store
         .get_name(&user())
         .unwrap()
@@ -144,7 +143,6 @@ fn test_audit_writes_mit_field_names() {
     )
     .unwrap();
     let _ = krb5_kdc::handle_request(&store, &encode(&req).unwrap()).unwrap();
-    clear_thread_audit();
     let text = std::fs::read_to_string(&path).unwrap();
     let line = text
         .lines()
@@ -218,8 +216,11 @@ fn json_field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
 fn tgs_seed_is_authn_req_cl_without_tkt_out() {
     let dir = scratch_dir("f5-tgs-seed");
     let path = dir.join("au.log");
-    set_thread_audit(Arc::new(TestAudit::open(&path).unwrap()));
-    let (store, _) = bootstrap_documented().unwrap();
+    let (mut store, _) = bootstrap_documented().unwrap();
+    store
+        .policy
+        .plugins
+        .set_audit(Arc::new(TestAudit::open(&path).unwrap()));
     let tgt = issue_tgt(&store, TEST_USER, 5101);
     let tgs = tgs_req(
         tgt.rep.0.ticket.clone(),
@@ -233,7 +234,6 @@ fn tgs_seed_is_authn_req_cl_without_tkt_out() {
     .unwrap();
     let bytes = krb5_kdc::handle_request(&store, &encode(&tgs).unwrap()).unwrap();
     assert!(!bytes.starts_with(&[0x7e]), "TGS should succeed");
-    clear_thread_audit();
     let lines = audit_lines(&path);
     let seed = lines
         .iter()
@@ -263,8 +263,11 @@ fn tgs_seed_is_authn_req_cl_without_tkt_out() {
 fn unknown_server_failure_is_srvc_princ() {
     let dir = scratch_dir("f5-tgs-srvc");
     let path = dir.join("au.log");
-    set_thread_audit(Arc::new(TestAudit::open(&path).unwrap()));
-    let (store, _) = bootstrap_documented().unwrap();
+    let (mut store, _) = bootstrap_documented().unwrap();
+    store
+        .policy
+        .plugins
+        .set_audit(Arc::new(TestAudit::open(&path).unwrap()));
     let tgt = issue_tgt(&store, TEST_USER, 5103);
     let nosuch = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "nosuch.kerber.test"]);
     let tgs = tgs_req(
@@ -279,7 +282,6 @@ fn unknown_server_failure_is_srvc_princ() {
     .unwrap();
     let bytes = krb5_kdc::handle_request(&store, &encode(&tgs).unwrap()).unwrap();
     assert!(bytes.starts_with(&[0x7e]), "unknown server should fail");
-    clear_thread_audit();
     let lines = audit_lines(&path);
     let fail = lines
         .iter()

@@ -87,7 +87,7 @@ kerber-rust's `PrincipalStore`, so the directory stays the writer:
 | `set_principal_enabled` | `set_status` (sets / clears `KDB_DISALLOW_ALL_TIX`) | it also writes `pw_expire`: pass the current value, and the directory's admin as the actor |
 | `export_keytab_for_keycloak` | `insert_new_randkey` when missing, then `ktadd_local_atomic` / `chrand_etypes_keepold_in` with aes256 + aes128, and `Keytab::write_file` | MIT's `ktadd` re-keys, so the kvno moves on every export |
 | persistence | `load_store` / `save_store` (dump-v7 text + a stash in MIT keytab form) | an existing KLLDAP volume is MIT db2: migrate once with MIT `kdb5_util dump`, then `krb5-kdb load` |
-| the KDC | `bind_udp_listeners` / `bind_tcp_listeners` on `KdcConf::kdc_udp_listeners` / `kdc_tcp_listeners`, then `serve_all_until` with the embedder's shutdown flag | not `serve` / `serve_all`: those install SIGTERM / SIGINT handlers; `serve_all_until` runs MIT's one loop on the thread that calls it, and a plugin module set for that thread alone does not apply while it runs |
+| the KDC | `bind_udp_listeners` / `bind_tcp_listeners` on `KdcConf::kdc_udp_listeners` / `kdc_tcp_listeners`, then `serve_all_until` with the embedder's shutdown flag | not `serve` / `serve_all`: those install SIGTERM / SIGINT handlers; `serve_all_until` runs MIT's one loop on the thread that calls it. Register on that store, or before open; a module registered on the process default after open is not on that store |
 
 ## Policy and audit
 
@@ -102,7 +102,7 @@ KLLDAP 0.7.6's catalog (its domain-handlers policies module, `POLICY_ITEM_CATALO
 | `login-hours` | not built in. An embedder `KdcPolicy` denies outside the window. `check_as` / `check_tgs` are enough; the request time is the KDC's clock. |
 | `allowed-networks` | not built in. An embedder `KdcPolicy` reads the socket peer from `check_as_from` / `check_tgs_from`. That address is the accepted socket, not `request.addresses`. |
 
-`[plugins] kdcpolicy` and `[plugins] audit` select those embedder modules by name. The audit name `json` loads only when `enable_only` lists it. KLLDAP's `[logging]` templates stay the kdc.conf lines already in `kerberos/kdc.template.conf` (`kdc_ports = 750,88` and the enctype list).
+`[plugins] kdcpolicy` and `[plugins] audit` select those embedder modules by name. Register a kdcpolicy or audit module on the store, or before the store is opened. A global register after open applies only to stores opened later, and the KDC logs that at error. The audit name `json` loads only when `enable_only` lists it. KLLDAP's `[logging]` templates stay the kdc.conf lines already in `kerberos/kdc.template.conf` (`kdc_ports = 750,88` and the enctype list).
 
 ## What the embed still has to build
 

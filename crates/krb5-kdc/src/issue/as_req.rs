@@ -590,6 +590,7 @@ fn finish_process_as_req(
         sname.clone()
     };
     let extra_ad = handle_authdata(
+        store.policy(),
         false,
         flags.bit(flag_bit::ANONYMOUS),
         None,

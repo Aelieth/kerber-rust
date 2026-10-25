@@ -180,6 +180,9 @@ when `[plugins] audit` `enable_only` names `json`, with MIT
 uppercase hex digits. `req_id` is 31 alphanumeric characters
 (MIT `REQID_LEN` including NUL). `KRB5_KDC_AUDIT=test` appends
 the same JSON to `KRB5_KDC_AUDIT_LOG` (default `au.log`).
+Each store keeps its own audit modules. A new store copies the
+process default, and a module registered on one store is not on
+another.
 
 ## The daemon log (`[logging]`)
 

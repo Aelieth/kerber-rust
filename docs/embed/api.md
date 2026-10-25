@@ -20,7 +20,12 @@ open is.
 `examples/embed-realm --bootstrap-only` does that open-or-create and writes
 `admin.keytab` beside the database. A store takes the realm's lifetimes, flags,
 and enctypes only after `apply_profile`, and `embed-realm` applies it before
-`--create-trust` and `--allow-to-delegate`.
+`--create-trust` and `--allow-to-delegate`. A store keeps its own kdcpreauth,
+kdcpolicy, audit, authdata, and OTP modules. Register on the store, or before
+open. A global register after a store has opened applies only to stores opened
+later, and the KDC logs that at error. The same module again is a no-op, and a
+different module of that name is added. A second OTP verifier of a taken name
+is an error.
 
 ## Logging
 

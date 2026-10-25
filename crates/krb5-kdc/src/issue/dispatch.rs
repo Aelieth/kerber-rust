@@ -3,6 +3,7 @@
 use std::net::SocketAddr;
 use std::os::fd::OwnedFd;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+#[cfg(test)]
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -15,6 +16,7 @@ use crate::asn1_text::{
     APPLICATION, ASN1_BAD_FORMAT, ASN1_BAD_ID, ASN1_BAD_LENGTH, ASN1_INDEF, ASN1_MISSING_FIELD,
     ASN1_OVERFLOW, ASN1_PARSE_ERROR, CONTEXT, Tlv, UNIVERSAL, get_tag,
 };
+#[cfg(test)]
 use crate::audit::{
     KdcAudit, restore_thread_audit, restore_thread_audits, take_thread_audit, take_thread_audits,
 };
@@ -23,6 +25,7 @@ use crate::kdb::PrincipalRead;
 use crate::listen::{SharedStore, plain_store, read_store};
 use crate::lookaside::{Check, Lookaside};
 use crate::net_server::{Dispatch, Log, Reply};
+#[cfg(test)]
 use crate::plugins::{
     KdcAuthdata, KdcPolicy, KdcPreauth, OtpVerifier, restore_thread_authdata,
     restore_thread_kdcpolicies, restore_thread_otp_verifiers, restore_thread_policy,
@@ -674,6 +677,7 @@ impl Dispatch for KdcDispatch {
     }
 }
 
+#[cfg(test)]
 pub(crate) struct ThreadSlots {
     policy: Option<Arc<dyn KdcPolicy>>,
     policies: Option<Vec<Arc<dyn KdcPolicy>>>,
@@ -684,6 +688,7 @@ pub(crate) struct ThreadSlots {
     audits: Option<Vec<Arc<dyn KdcAudit>>>,
 }
 
+#[cfg(test)]
 impl ThreadSlots {
     pub(crate) fn take() -> Self {
         Self {
@@ -698,6 +703,7 @@ impl ThreadSlots {
     }
 }
 
+#[cfg(test)]
 impl Drop for ThreadSlots {
     fn drop(&mut self) {
         restore_thread_policy(self.policy.take());
@@ -1056,7 +1062,8 @@ mod tests {
         let authdata: Arc<dyn KdcAuthdata> = Arc::new(NoAuthdata);
         let otp: Arc<dyn OtpVerifier> = Arc::new(NoOtp);
         let own_otp = |v: &Arc<dyn OtpVerifier>| {
-            crate::plugins::find_otp_verifier(v.name()).is_some_and(|f| Arc::ptr_eq(&f, v))
+            crate::plugins::find_otp_verifier(&crate::store::Policy::default(), v.name())
+                .is_some_and(|f| Arc::ptr_eq(&f, v))
         };
         crate::plugins::set_thread_policy(Arc::clone(&policy));
         crate::audit::set_thread_audit(Arc::clone(&audit));
@@ -1067,27 +1074,48 @@ mod tests {
             let _slots = ThreadSlots::take();
             assert!(!Arc::ptr_eq(&crate::plugins::current_policy(), &policy));
             assert!(!Arc::ptr_eq(&crate::audit::current_audit(), &audit));
-            assert!(!is_own(&preauth_modules(), &preauth));
-            assert!(!is_own(&authdata_modules(), &authdata));
+            assert!(!is_own(
+                &preauth_modules(&crate::store::Policy::default()),
+                &preauth
+            ));
+            assert!(!is_own(
+                &authdata_modules(&crate::store::Policy::default()),
+                &authdata
+            ));
             assert!(!own_otp(&otp));
         }
         assert!(Arc::ptr_eq(&crate::plugins::current_policy(), &policy));
         assert!(Arc::ptr_eq(&crate::audit::current_audit(), &audit));
-        assert!(is_own(&preauth_modules(), &preauth));
-        assert!(is_own(&authdata_modules(), &authdata));
+        assert!(is_own(
+            &preauth_modules(&crate::store::Policy::default()),
+            &preauth
+        ));
+        assert!(is_own(
+            &authdata_modules(&crate::store::Policy::default()),
+            &authdata
+        ));
         assert!(own_otp(&otp));
         // A loop that ends by a panic puts the slots back as it unwinds.
         let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _slots = ThreadSlots::take();
-            assert!(!is_own(&preauth_modules(), &preauth));
+            assert!(!is_own(
+                &preauth_modules(&crate::store::Policy::default()),
+                &preauth
+            ));
             assert!(!own_otp(&otp));
             panic!("the loop ends by a panic");
         }));
         assert!(unwound.is_err());
         assert!(Arc::ptr_eq(&crate::plugins::current_policy(), &policy));
         assert!(Arc::ptr_eq(&crate::audit::current_audit(), &audit));
-        assert!(is_own(&preauth_modules(), &preauth));
-        assert!(is_own(&authdata_modules(), &authdata));
+        assert!(is_own(
+            &preauth_modules(&crate::store::Policy::default()),
+            &preauth
+        ));
+        assert!(is_own(
+            &authdata_modules(&crate::store::Policy::default()),
+            &authdata
+        ));
         assert!(own_otp(&otp));
         crate::plugins::clear_thread_policy();
         crate::audit::clear_thread_audit();

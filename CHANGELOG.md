@@ -60,6 +60,10 @@ any other `###` heading.
 
 ### Changed
 
+- **kdc.** A store keeps its own kdcpreauth, kdcpolicy, audit, authdata, and OTP modules. The same module again is a no-op, and a different module of that name is added.
+- **kdc.** `unregister` removes one named module from that store, and a new store copies the process default.
+- **kdc.** A global register after a store has opened is logged at error and applies only to stores opened later.
+
 - **examples.** krb5-embed-realm installs a tracing subscriber at info.
 
 - **kdc.** One info record per request: `kdc.issue` or `admin` for the stream, the MIT line for the log.

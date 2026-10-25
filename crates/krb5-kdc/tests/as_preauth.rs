@@ -79,8 +79,7 @@ use krb5_kdc::testrealm::{
 };
 use krb5_kdc::{
     Error, KdcEnv, KdcPolicy, KdcPreauth, KeyEntry, Policy, PolicyAdjustment, Principal,
-    PrincipalRead, PrincipalStore, S2K_ITERS, clear_thread_policy, random_key, register_preauth,
-    set_thread_policy,
+    PrincipalRead, PrincipalStore, S2K_ITERS, random_key, register_preauth,
 };
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
@@ -1500,8 +1499,11 @@ impl KdcPolicy for RawCodePolicy {
 }
 
 fn wire_error_code(raw_policy_code: i32) -> i32 {
-    set_thread_policy(Arc::new(RawCodePolicy(raw_policy_code)));
-    let (store, _) = bootstrap_documented().unwrap();
+    let (mut store, _) = bootstrap_documented().unwrap();
+    store
+        .policy
+        .plugins
+        .set_policy(Arc::new(RawCodePolicy(raw_policy_code)));
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let key = store
         .get_name(&user)
@@ -1519,7 +1521,6 @@ fn wire_error_code(raw_policy_code: i32) -> i32 {
     .unwrap();
     let raw = krb5_asn1::encode(&req).unwrap();
     let reply = krb5_kdc::handle_request(&store, &raw).expect("a KRB-ERROR reply");
-    clear_thread_policy();
     decode::<KrbError>(&reply).expect("KRB-ERROR").error_code
 }
 

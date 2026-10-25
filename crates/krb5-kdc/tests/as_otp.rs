@@ -12,10 +12,7 @@ use std::sync::{Arc, Mutex};
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt};
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented};
-use krb5_kdc::{
-    Error, OtpVerdict, OtpVerifier, OtpVerifyRequest, PrincipalStore, clear_thread_otp_verifiers,
-    set_thread_otp_verifiers,
-};
+use krb5_kdc::{Error, OtpVerdict, OtpVerifier, OtpVerifyRequest, PrincipalStore};
 use krb5_protocol::{
     apply_strengthen, armor_key, as_req, as_req_sname, attach_fast, build_fast_armor,
     unwrap_fast_rep,
@@ -75,13 +72,8 @@ impl OtpVerifier for Scripted {
     }
 }
 
-/// Clears this thread's verifiers when a test ends, pass or fail.
-struct Guard;
-
-impl Drop for Guard {
-    fn drop(&mut self) {
-        clear_thread_otp_verifiers();
-    }
+fn put_otp(store: &mut PrincipalStore, verifiers: Vec<Arc<dyn OtpVerifier>>) {
+    store.policy.plugins.set_otp_verifiers(verifiers);
 }
 
 fn user() -> PrincipalName {
@@ -220,19 +212,21 @@ fn hint_nonce(a: &Armor, e: &Error) -> Vec<u8> {
 
 /// Installs verifiers, then runs one AS-REQ with the token built from `plain`.
 fn run_with(
-    store: &PrincipalStore,
+    store: &mut PrincipalStore,
     a: &Armor,
     verifiers: Vec<Arc<Scripted>>,
     plain: &[u8],
     n: u32,
 ) -> Result<krb5_kdc::IssuedAs, Error> {
-    set_thread_otp_verifiers(
+    store.policy.plugins.set_otp_verifiers(
         verifiers
             .into_iter()
             .map(|v| v as Arc<dyn OtpVerifier>)
             .collect(),
     );
-    krb5_kdc::issue_as(store, &fast_req(a, vec![pa_otp(&a.key, plain, b"1")], n))
+    let result = krb5_kdc::issue_as(store, &fast_req(a, vec![pa_otp(&a.key, plain, b"1")], n));
+    store.policy.plugins.clear_otp_verifiers();
+    result
 }
 
 /// The hint carries the PA-OTP-CHALLENGE only with the attribute and the armor.
@@ -477,10 +471,9 @@ fn keyless_first_flight_offers_otp() {
 /// An OTP accepted for the principal issues, and its reply key is the armor key.
 #[test]
 fn accept_replaces_reply_key_with_the_armor_key() {
-    let _g = Guard;
     let v = Scripted::new("DEFAULT", vec![OtpVerdict::Accept]);
-    set_thread_otp_verifiers(vec![v.clone()]);
-    let store = realm(Some(r#"[{"indicators":["a","b"]}]"#));
+    let mut store = realm(Some(r#"[{"indicators":["a","b"]}]"#));
+    put_otp(&mut store, vec![v.clone()]);
     let a = armor(&store, 9101);
     let plain = enc_req_plain(&fresh_nonce(a.key.as_bytes().len()));
     let req = fast_req(&a, vec![pa_otp(&a.key, &plain, b"123456")], 9102);
@@ -521,10 +514,9 @@ fn accept_replaces_reply_key_with_the_armor_key() {
 /// A Reject is 24 with a fresh hint nonce and no detail.
 #[test]
 fn reject_is_24_with_a_fresh_hint() {
-    let _g = Guard;
     let v = Scripted::new("DEFAULT", vec![OtpVerdict::Reject]);
-    set_thread_otp_verifiers(vec![v]);
-    let store = realm(Some("[]"));
+    let mut store = realm(Some("[]"));
+    put_otp(&mut store, vec![v]);
     let a = armor(&store, 9201);
     let e0 = krb5_kdc::issue_as(&store, &fast_req(&a, vec![], 9202)).unwrap_err();
     let n0 = hint_nonce(&a, &e0);
@@ -547,10 +539,9 @@ fn reject_is_24_with_a_fresh_hint() {
 /// the module's failure is logged once, under its name, with the message of its code.
 #[test]
 fn a_rejection_is_logged_once_as_the_modules_verify_failure() {
-    let _g = Guard;
     let v = Scripted::new("DEFAULT", vec![OtpVerdict::Reject]);
-    set_thread_otp_verifiers(vec![v]);
-    let store = realm(Some("[]"));
+    let mut store = realm(Some("[]"));
+    put_otp(&mut store, vec![v]);
     let a = armor(&store, 9211);
     let plain = enc_req_plain(&fresh_nonce(32));
     let raw = encode(&fast_req(&a, vec![pa_otp(&a.key, &plain, b"000000")], 9212)).unwrap();
@@ -568,12 +559,12 @@ fn a_rejection_is_logged_once_as_the_modules_verify_failure() {
 /// The nonce and timestamp checks with a verifier that accepts.
 #[test]
 fn nonce_and_timestamp_paths() {
-    let _g = Guard;
     let store = realm(Some("[{}]"));
     let a = armor(&store, 9301);
-    let run = |plain: &[u8], n: u32| {
+    let mut store = store;
+    let mut run = |plain: &[u8], n: u32| {
         let v = Scripted::new("DEFAULT", vec![OtpVerdict::Accept]);
-        set_thread_otp_verifiers(vec![v]);
+        put_otp(&mut store, vec![v]);
         krb5_kdc::issue_as(&store, &fast_req(&a, vec![pa_otp(&a.key, plain, b"1")], n))
     };
     // A fresh nonce of the armor's length issues.
@@ -603,7 +594,7 @@ fn nonce_and_timestamp_paths() {
     // encData under another key is 31.
     let other = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[9; 32]).unwrap();
     let v = Scripted::new("DEFAULT", vec![OtpVerdict::Accept]);
-    set_thread_otp_verifiers(vec![v]);
+    put_otp(&mut store, vec![v]);
     let bad = pa_otp(&other, &enc_req_plain(&fresh_nonce(32)), b"1");
     let (c, _, _) = code(&krb5_kdc::issue_as(&store, &fast_req(&a, vec![bad], 9308)).unwrap_err());
     assert_eq!(c, err::BAD_INTEGRITY);
@@ -612,12 +603,11 @@ fn nonce_and_timestamp_paths() {
 /// The config errors never call a verifier, and the token loop stops at the first Accept or Error.
 #[test]
 fn config_errors_and_token_loop() {
-    let _g = Guard;
     let go = |attr: &str, verifiers: Vec<Arc<Scripted>>, n: u32| {
-        let store = realm(Some(attr));
+        let mut store = realm(Some(attr));
         let a = armor(&store, n);
         let plain = enc_req_plain(&fresh_nonce(32));
-        run_with(&store, &a, verifiers, &plain, n + 1)
+        run_with(&mut store, &a, verifiers, &plain, n + 1)
     };
     // An unknown type is 24 before any call.
     let v = Scripted::new("DEFAULT", vec![OtpVerdict::Accept]);
@@ -660,7 +650,6 @@ fn config_errors_and_token_loop() {
 /// the OTP module replaces the reply key.
 #[test]
 fn keyless_otp_login_issues() {
-    let _g = Guard;
     let mut store = realm(Some("[{}]"));
     let a = armor(&store, 9500);
     let aes128 = EncryptionType::Aes128CtsHmacSha196;
@@ -689,7 +678,7 @@ fn keyless_otp_login_issues() {
         req
     };
     let v = Scripted::new("DEFAULT", vec![OtpVerdict::Accept]);
-    set_thread_otp_verifiers(vec![v]);
+    put_otp(&mut store, vec![v]);
     let plain = enc_req_plain(&fresh_nonce(32));
     let issued = krb5_kdc::issue_as(&store, &mk(vec![pa_otp(&a.key, &plain, b"1")], 9502))
         .expect("keyless OTP login");
@@ -703,11 +692,10 @@ fn keyless_otp_login_issues() {
 /// accepts "a" and "b" and refuses "d" with HIGHER_AUTHENTICATION_REQUIRED.
 #[test]
 fn indicators_and_require_auth() {
-    let _g = Guard;
     let run = |require: &str, n: u32| {
         let v = Scripted::new("DEFAULT", vec![OtpVerdict::Accept]);
-        set_thread_otp_verifiers(vec![v]);
         let mut store = realm(Some(r#"[{"indicators":["a","b"]}]"#));
+        put_otp(&mut store, vec![v]);
         // Before require_auth: the armor TGT is itself a krbtgt service ticket request.
         let a = armor(&store, n);
         store
@@ -741,7 +729,6 @@ fn indicators_and_require_auth() {
 /// strengthen key, the enc-part and the key info all follow the replaced (armor) key.
 #[test]
 fn armor_etype_wins_over_the_client_key_etype() {
-    let _g = Guard;
     let mut store = realm(Some("[{}]"));
     let a = armor(&store, 9900);
     let aes128 = EncryptionType::Aes128CtsHmacSha196;
@@ -757,7 +744,7 @@ fn armor_etype_wins_over_the_client_key_etype() {
         )
         .unwrap();
     let v = Scripted::new("DEFAULT", vec![OtpVerdict::Accept]);
-    set_thread_otp_verifiers(vec![v]);
+    put_otp(&mut store, vec![v]);
     let plain = enc_req_plain(&fresh_nonce(32));
     let issued = krb5_kdc::issue_as(
         &store,
@@ -783,15 +770,14 @@ fn armor_etype_wins_over_the_client_key_etype() {
 /// OTP value of 0 or over 128 octets, fail the whole request before a verifier runs.
 #[test]
 fn radius_sizes_fail_before_the_verifier() {
-    let _g = Guard;
     let plain = enc_req_plain(&fresh_nonce(32));
     // The outcome of one token of the given username and OTP value sizes: issued, and the calls.
     let outcome = |name_len: usize, value_len: usize| -> (bool, usize) {
         let attr = format!("[{{\"username\":\"{}\"}}]", "u".repeat(name_len));
-        let store = realm(Some(&attr));
+        let mut store = realm(Some(&attr));
         let a = armor(&store, 9600);
         let v = Scripted::new("DEFAULT", vec![OtpVerdict::Accept]);
-        set_thread_otp_verifiers(vec![v.clone()]);
+        put_otp(&mut store, vec![v.clone()]);
         let value = vec![b'1'; value_len];
         let req = fast_req(&a, vec![pa_otp(&a.key, &plain, &value)], 9601);
         let issued = krb5_kdc::issue_as(&store, &req).is_ok();
@@ -813,7 +799,6 @@ fn radius_sizes_fail_before_the_verifier() {
 /// token's own `indicators` even when empty, and a token that is asked and rejects adds none.
 #[test]
 fn otp_section_indicators_reach_the_ticket() {
-    let _g = Guard;
     let kdc = "[otp]\n    DEFAULT = {\n        indicator = typeind\n    }\n    A = {\n        indicator = aind\n    }\n    B = {\n        indicator = bind1\n        indicator = bind2\n    }\n";
     // Whether a login with `attr` under `require_auth` = `require` issues, A rejecting and the rest accepting.
     let issues = |attr: &str, require: &str, n: u32| -> bool {
@@ -822,8 +807,8 @@ fn otp_section_indicators_reach_the_ticket() {
             Scripted::new("A", vec![OtpVerdict::Reject]),
             Scripted::new("B", vec![OtpVerdict::Accept]),
         ];
-        set_thread_otp_verifiers(verifiers);
         let mut store = realm(Some(attr));
+        put_otp(&mut store, verifiers);
         let a = armor(&store, n);
         store
             .apply_kdc_conf(&krb5_config::KdcConf::parse(kdc).unwrap())
@@ -871,14 +856,13 @@ fn otp_section_indicators_reach_the_ticket() {
 /// `strip_realm = false`.
 #[test]
 fn strip_realm_splits_defined_sections_from_the_builtin_types() {
-    let _g = Guard;
     let with_realm = format!("{TEST_USER}@{TEST_REALM}").into_bytes();
     let bare = TEST_USER.as_bytes().to_vec();
     // The username a login of `token_type` is given, for the kdc.conf text.
     let username = |kdc: &str, token_type: &'static str, n: u32| -> Vec<u8> {
         let v = Scripted::new(token_type, vec![OtpVerdict::Accept]);
-        set_thread_otp_verifiers(vec![v.clone()]);
         let mut store = realm(Some(&format!(r#"[{{"type":"{token_type}"}}]"#)));
+        put_otp(&mut store, vec![v.clone()]);
         let a = armor(&store, n);
         store
             .apply_kdc_conf(&krb5_config::KdcConf::parse(kdc).unwrap())

@@ -841,6 +841,7 @@ fn tgs_issue_ticket(
         None
     };
     let extra_ad = handle_authdata(
+        store.policy(),
         true,
         flags.bit(flag_bit::ANONYMOUS),
         body.enc_authorization_data.as_ref(),

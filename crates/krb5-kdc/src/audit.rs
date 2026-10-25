@@ -1,7 +1,7 @@
 //! The ISSUE tuple records the decision. It is not the reply.
 
 use std::fmt::Write as _;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use krb5_asn1::decode;
 use krb5_crypto::EncryptionType;
@@ -404,73 +404,81 @@ impl KdcAudit for JsonAudit {
     }
 }
 
-static AUDIT: Mutex<Option<Arc<dyn KdcAudit>>> = Mutex::new(None);
-static NAMED_AUDITS: Mutex<Vec<Arc<dyn KdcAudit>>> = Mutex::new(Vec::new());
-
+#[cfg(test)]
 thread_local! {
     static THREAD_AUDIT: std::cell::RefCell<Option<Arc<dyn KdcAudit>>> =
         const { std::cell::RefCell::new(None) };
     static THREAD_AUDITS: std::cell::RefCell<Option<Vec<Arc<dyn KdcAudit>>>> =
         const { std::cell::RefCell::new(None) };
+}
+
+thread_local! {
     static CL_PORT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
     static CUR_REQ_ID: std::cell::RefCell<Option<String>> =
         const { std::cell::RefCell::new(None) };
 }
 
+#[doc(hidden)]
 pub fn set_audit(a: Arc<dyn KdcAudit>) {
-    *AUDIT
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(a);
+    let name = a.name();
+    crate::plugins::lock_plugins().set_audit(a);
+    crate::plugins::note_late_register("audit", name);
 }
 
+#[cfg(test)]
 pub fn set_thread_audit(a: Arc<dyn KdcAudit>) {
     THREAD_AUDIT.with(|t| *t.borrow_mut() = Some(a));
 }
 
+#[cfg(test)]
 pub fn clear_thread_audit() {
     THREAD_AUDIT.with(|t| *t.borrow_mut() = None);
 }
 
+#[cfg(test)]
 pub(crate) fn take_thread_audit() -> Option<Arc<dyn KdcAudit>> {
     THREAD_AUDIT.with(|t| t.borrow_mut().take())
 }
 
+#[cfg(test)]
 pub(crate) fn restore_thread_audit(a: Option<Arc<dyn KdcAudit>>) {
     THREAD_AUDIT.with(|t| *t.borrow_mut() = a);
 }
 
 #[must_use]
 pub fn current_audit() -> Arc<dyn KdcAudit> {
+    #[cfg(test)]
     if let Some(a) = THREAD_AUDIT.with(|t| t.borrow().clone()) {
         return a;
     }
-    AUDIT
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone()
+    crate::plugins::lock_plugins()
+        .sole_audit()
         .unwrap_or_else(|| Arc::new(JsonAudit))
 }
 
-/// Reached only when set_thread_audit, set_thread_audits, and set_audit are unset.
+#[doc(hidden)]
 pub fn register_audit(module: Arc<dyn KdcAudit>) {
-    NAMED_AUDITS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .push(module);
+    let name = module.name();
+    crate::plugins::lock_plugins().register_audit(module);
+    crate::plugins::note_late_register("audit", name);
 }
 
+#[cfg(test)]
 pub fn set_thread_audits(modules: Vec<Arc<dyn KdcAudit>>) {
     THREAD_AUDITS.with(|slot| *slot.borrow_mut() = Some(modules));
 }
 
+#[cfg(test)]
 pub fn clear_thread_audits() {
     THREAD_AUDITS.with(|slot| *slot.borrow_mut() = None);
 }
 
+#[cfg(test)]
 pub(crate) fn take_thread_audits() -> Option<Vec<Arc<dyn KdcAudit>>> {
     THREAD_AUDITS.with(|slot| slot.borrow_mut().take())
 }
 
+#[cfg(test)]
 pub(crate) fn restore_thread_audits(modules: Option<Vec<Arc<dyn KdcAudit>>>) {
     THREAD_AUDITS.with(|slot| *slot.borrow_mut() = modules);
 }
@@ -494,17 +502,15 @@ fn selected_audits(
 
 // MIT: `kau_as_req` (kdc/kdc_audit.c:260-272)
 fn active_audits(store: &dyn PrincipalRead) -> Vec<Arc<dyn KdcAudit>> {
+    #[cfg(test)]
     if let Some(module) = THREAD_AUDIT.with(|slot| slot.borrow().clone()) {
         return vec![module];
     }
+    #[cfg(test)]
     if let Some(modules) = THREAD_AUDITS.with(|slot| slot.borrow().clone()) {
         return selected_audits(&store.policy().audit, modules);
     }
-    if let Some(module) = AUDIT
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone()
-    {
+    if let Some(module) = store.policy().plugins.sole_audit() {
         return vec![module];
     }
     let mut modules: Vec<Arc<dyn KdcAudit>> = Vec::new();
@@ -518,12 +524,7 @@ fn active_audits(store: &dyn PrincipalRead) -> Vec<Arc<dyn KdcAudit>> {
     {
         modules.push(Arc::new(JsonAudit));
     }
-    modules.extend(
-        NAMED_AUDITS
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone(),
-    );
+    modules.extend(store.policy().plugins.audits());
     selected_audits(&store.policy().audit, modules)
 }
 

@@ -3,12 +3,12 @@
 
 use krb5_asn1::decode_enc_kdc_rep_part;
 use krb5_crypto::{KeyUsage, decrypt};
+use krb5_kdc::KdcPolicy;
 use krb5_kdc::testrealm::TestPolicy;
 use krb5_kdc::testrealm::{
     TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
     bootstrap_documented, documented_admin_id, documented_host,
 };
-use krb5_kdc::{KdcPolicy, clear_thread_policy, set_thread_policy};
 
 use krb5_protocol::{as_req, pa_enc_timestamp};
 use krb5_testkit::status;
@@ -16,8 +16,11 @@ use krb5_types::{PrincipalName, err, ku};
 
 #[test]
 fn test_policy_fail_client_is_local_policy() {
-    set_thread_policy(std::sync::Arc::new(TestPolicy));
     let (mut store, acl) = bootstrap_documented().unwrap();
+    store
+        .policy
+        .plugins
+        .set_policy(std::sync::Arc::new(TestPolicy));
     let fail = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["fail"]);
     store
         .create_password(&acl, &documented_admin_id(), &fail, b"fail-secret")
@@ -40,12 +43,10 @@ fn test_policy_fail_client_is_local_policy() {
     let (code, text) = status(&err);
     assert_eq!(code, err::POLICY);
     assert_eq!(text, Some("LOCAL_POLICY"));
-    clear_thread_policy();
 }
 
 #[test]
 fn test_policy_foreign_indicator_is_local_policy() {
-    set_thread_policy(std::sync::Arc::new(TestPolicy));
     let store = krb5_kdc::PrincipalStore::bootstrap(
         TEST_REALM,
         TEST_USER,
@@ -73,12 +74,10 @@ fn test_policy_foreign_indicator_is_local_policy() {
     let (code, text) = status(&err);
     assert_eq!(code, err::POLICY);
     assert_eq!(text, Some("LOCAL_POLICY"));
-    clear_thread_policy();
 }
 
 #[test]
 fn test_policy_one_hour_rewrites_endtime() {
-    set_thread_policy(std::sync::Arc::new(TestPolicy));
     let store = krb5_kdc::PrincipalStore::bootstrap(
         TEST_REALM,
         TEST_USER,
@@ -113,7 +112,6 @@ fn test_policy_one_hour_rewrites_endtime() {
         .unwrap();
     assert_eq!(seven.lifetime, 7 * 3600);
     assert_eq!(seven.renew_lifetime, 14 * 3600);
-    clear_thread_policy();
 }
 
 #[test]

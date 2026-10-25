@@ -33,10 +33,15 @@ pub(crate) struct OtpTypes(Vec<OtpTypeConfig>);
 impl OtpTypes {
     // MIT: `token_type_default` (plugins/preauth/otp/otp_state.c:152-166)
     /// A verifier with no section is still a type.
+    #[cfg(test)]
     pub(crate) fn from_config(configured: &[OtpTypeConfig]) -> Self {
+        Self::from_names(configured, &crate::plugins::thread_otp_names())
+    }
+
+    pub(crate) fn from_names(configured: &[OtpTypeConfig], names: &[&str]) -> Self {
         let mut v = configured.to_vec();
-        for n in otp_verifier_names() {
-            if !v.iter().any(|t| t.name == n) {
+        for n in names {
+            if !v.iter().any(|t| t.name == *n) {
                 v.push(OtpTypeConfig::builtin(n));
             }
         }
@@ -58,7 +63,7 @@ impl OtpTypes {
 // MIT: `otp_state_new` (plugins/preauth/otp/otp_state.c:564-610)
 fn otp_types(store: &dyn PrincipalRead) -> OtpTypes {
     match store.policy().otp_kdc() {
-        Ok(configured) => OtpTypes::from_config(configured),
+        Ok(configured) => OtpTypes::from_names(configured, &otp_verifier_names(store.policy())),
         Err(_) => OtpTypes(Vec::new()),
     }
 }
@@ -369,7 +374,7 @@ fn otp_verify(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, OtpFail> 
         }
         let verifier = match runtime {
             Some(rt) => rt.find(&tok.ty.name),
-            None => find_otp_verifier(&tok.ty.name),
+            None => find_otp_verifier(rock.store.policy(), &tok.ty.name),
         };
         let Some(verifier) = verifier else {
             otp_log_refusal(&format!(
