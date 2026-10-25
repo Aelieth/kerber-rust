@@ -60,6 +60,7 @@ any other `###` heading.
 
 ### Changed
 
+- **kdc.** A write at 5,000 principals is 0.80 to 0.86 times MIT and flat as the realm grows. Each write flushes once and does not rename, and a crash leaves the change unread.
 - **kdc.** A store keeps its own kdcpreauth, kdcpolicy, audit, authdata, and OTP modules. The same module again is a no-op, and a different module of that name is added.
 - **kdc.** `unregister` removes one named module from that store, and a new store copies the process default.
 - **kdc.** A global register after a store has opened is logged at error and applies only to stores opened later.

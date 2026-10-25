@@ -226,12 +226,10 @@ REQUESTER_SID). A presented PAC that carries LOGON_INFO, such as an AD user's ov
 that shape in any realm.
 
 The KDC's TCP listeners default to a `listen` backlog of 128. MIT's default is 5; set
-`kdc_tcp_listen_backlog = 5` under `[kdcdefaults]` for that behaviour. The KDC accepts no
-connection while it rereads the database after a write, so in a burst of 50 a kinit can wait
-about 1.2 seconds for its connection to be retried: with backlog 5, 24, 178 and 428 of 500
-did at 10, 1,000 and 5,000 principals. At backlog 5, idle bursts wait too, as on
-MIT's KDC: 19, 46 and 67 of 500 at 10, 1,000 and 5,000 principals. With 128, none
-waited a second, on MIT's KDC or on kerber-rust.
+`kdc_tcp_listen_backlog = 5` under `[kdcdefaults]` for that behaviour. After a write the
+accept stall is 0.271, 0.265 and 0.319 ms. At backlog 5,
+idle bursts wait, as on MIT's KDC: 19, 46 and 67 of 500 at 10, 1,000 and 5,000 principals.
+With 128, none waited a second, on MIT's KDC or on kerber-rust.
 
 The KDC and kadmind read `kdc.conf` and `krb5.conf` once, when they start, so an edit takes a
 restart (SIGHUP reopens the logs only). As MIT's, `kdc.conf`'s `[libdefaults]` values come
@@ -305,7 +303,9 @@ its update log `principal.ulog` (MIT's), MIT's lock files `principal.ok` and `pr
 tools and daemons lock the database through them, as MIT's do), `principal.lockout` (0600: each
 principal's failed password attempts and last successful and failed authentication, which the
 KDC records there in place, as MIT's KDC records them in its database), the stash, `kdc.conf`
-and `kadm5.acl`. Fedora builds MIT's tools with a patch that sets each new file's SELinux label from
+and `kadm5.acl`. A principal change is appended to the database file and flushed before the
+change returns. The file is rewritten whole once the replaced records outnumber the principals,
+256 at least. A change a crash cuts short is not read. Fedora builds MIT's tools with a patch that sets each new file's SELinux label from
 the policy, and kerber-rust's tools do the same (MIT's `krb5kdc_principal_t` for the database);
 a save keeps the label of the file it replaces. `restorecon` changes nothing the tools made: it
 is there for the directory, for files made by hand, and for a realm an earlier release saved

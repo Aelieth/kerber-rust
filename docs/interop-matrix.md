@@ -32,12 +32,17 @@ from that tree by one test-only change, the version, the docs and the CHANGELOG.
 | KLLDAP (`079a564`) with `krb5-server` swapped for kerber-rust | its own gate, all phases, with the same lines as on MIT; its live-KDC FFI lane on two MIT client libraries; phase 80 on a realm migrated by install.md's container steps | `klldap-swap`; the VM legs by hand |
 | An in-place upgrade of kerber-rust | install.md's upgrade blocks as written: listeners, MIT's log lines, principals unchanged, MIT clients over UDP and TCP | `upgrade` |
 
+### Write cost
+
+Measured beside MIT 1.22.2, MIT first, at 5,000 principals. A password create is 0.80 times MIT's median, a
+random-key create 0.86 times and a password change 0.84 times. Ours at 5,000 over ours at 10 is 0.99, 0.99 and
+0.98 times. Each write is one flush and no rename, 350 to 411 bytes written and 64 bytes read. With fsync off, a
+random-key create is 0.3 ms. While kadmind changes passwords, a kinit is 1.10 times MIT. With the update log on,
+a write is 1.2 times MIT. After a write the accept stall is 0.271, 0.265 and 0.319 ms. A run of 220 kills, 50 of
+them during a rewrite, left no torn change, and MIT loaded all 222 dumps.
+
 ### Not yet matched in 1.1
 
-- **Write cost.** A kadm5 write takes 4.1 times MIT's median at 10 principals and 11.2 times at 5,000 (101 and 299 ms
-  against 25 and 27 ms with fsync on): the store rereads and rewrites the whole realm. While kadmind writes, a
-  kinit takes a median of 60, 156 and 473 ms at 10, 1,000 and 5,000 principals, where MIT's is 15 to 18 ms. Reads
-  match. The store redesign is after 1.1.
 - **Client messages and logs.** None changes an outcome.
   - The KDC's AS_REQ line for a wrong encrypted-challenge password ends `Preauthentication failed`, where MIT's ends
     `Incorrect password in encrypted challenge`.
