@@ -26,15 +26,12 @@ use krb5_admin::{
     Kadmind, KadmindConfig, Listeners, ServeLimits, Services, Shutdown, TracingAdmin,
 };
 use krb5_config::{KadmindListen, KdcPaths, LogSpecs, ProfileSet};
-use krb5_kdc::OpenFailure;
 use krb5_log::klog::{self, Severity, os_error_text};
 
 mod auth_modules;
 
 /// The name used when `argv[0]` has none.
 const DEFAULT_PROGNAME: &str = "krb5-embed-realm";
-/// The master key principal the database opens with, as the daemon opens it without `-m`.
-const MKEY_NAME: &str = "K/M";
 /// The signals that trigger the shutdown, as the daemon's do.
 const STOP_SIGNALS: [i32; 2] = [signal_hook::consts::SIGTERM, signal_hook::consts::SIGINT];
 
@@ -101,7 +98,7 @@ fn main() {
             &format!("{} while initializing context", e.init_text()),
         );
     });
-    let mut store = open_or_create(&progname, &paths, &profile, &realm);
+    let mut store = open_or_create(&progname, &paths, &profile);
     match job {
         Job::Trust(trust) => {
             store
@@ -363,74 +360,18 @@ fn open_or_create(
     progname: &str,
     paths: &KdcPaths,
     profile: &ProfileSet,
-    realm: &str,
 ) -> krb5_kdc::PrincipalStore {
-    use krb5_kdc::{
-        AdminSpec, MasterKey, PrincipalStore, RealmSpec, StashTarget, bootstrap_realm_into,
-        create_database, read_stashed_master,
-    };
+    use krb5_kdc::AdminSpec;
     use krb5_types::PrincipalName;
 
-    let db = &paths.database_name;
-    let stash_path = &paths.key_stash_file;
-    let resumed = if db.exists() || !stash_path.exists() {
-        None
-    } else {
-        match read_stashed_master(stash_path) {
-            Ok((key, kvno)) => {
-                let Ok(mkvno) = u16::try_from(kvno) else {
-                    cannot_start(progname, "master kvno does not fit while initializing");
-                };
-                Some((MasterKey::Key(key), mkvno))
-            }
-            Err(e) => cannot_start(progname, &format!("{e} while initializing")),
-        }
-    };
-    let (master, mkvno) = match resumed {
-        Some(pair) => pair,
-        None => (MasterKey::Random { etype: None }, 1),
-    };
-    let mut store = if db.exists() {
-        match krb5_kdc::open_database(paths, &[], MKEY_NAME) {
-            Ok(store) => store,
-            Err(OpenFailure::Database(e) | OpenFailure::MasterKey(e)) => {
-                cannot_start(progname, &format!("{e} while initializing"));
-            }
-        }
-    } else {
-        PrincipalStore::try_new(realm)
-            .unwrap_or_else(|e| cannot_start(progname, &format!("{e} while initializing")))
-    };
-    let spec = RealmSpec {
-        realm,
-        profile,
-        mkvno,
-        admin: Some(AdminSpec::new(PrincipalName::new(
-            PrincipalName::NT_PRINCIPAL,
-            ["admin", "admin"],
-        ))),
-    };
-    let boot = bootstrap_realm_into(&mut store, master, &spec)
+    let admin = Some(AdminSpec::new(PrincipalName::new(
+        PrincipalName::NT_PRINCIPAL,
+        ["admin", "admin"],
+    )));
+    let (store, boot) = krb5_kdc::open_or_create(paths, profile, admin)
         .unwrap_or_else(|e| cannot_start(progname, &format!("{e} while initializing")));
-    if !db.exists() {
-        create_database(
-            &store,
-            db,
-            &StashTarget {
-                path: &paths.key_stash_file,
-            },
-            &boot,
-        )
-        .unwrap_or_else(|e| cannot_start(progname, &format!("{e} while initializing")));
-        store = match krb5_kdc::open_database(paths, &[], MKEY_NAME) {
-            Ok(store) => store,
-            Err(OpenFailure::Database(e) | OpenFailure::MasterKey(e)) => {
-                cannot_start(progname, &format!("{e} while initializing"));
-            }
-        };
-    }
     if let Some(keytab) = &boot.admin_keytab {
-        let path = db.with_file_name("admin.keytab");
+        let path = paths.database_name.with_file_name("admin.keytab");
         if let Err(e) = keytab.write_file(&path) {
             cannot_start(progname, &format!("{e} while writing {}", path.display()));
         }

@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use krb5_config::{KdcConf, ProfileSet};
+use krb5_config::{KdcConf, KdcPaths, ProfileSet};
 use krb5_crypto::{EncryptionType, ProtocolKey};
 use krb5_protocol::{Keytab, KeytabEntry};
 use krb5_types::PrincipalName;
@@ -495,6 +495,55 @@ pub fn create_database(
     }
     ensure_lock_files(db)?;
     commit_store(store, db, &boot.master)
+}
+
+pub fn open_or_create(
+    paths: &KdcPaths,
+    profile: &ProfileSet,
+    admin: Option<AdminSpec>,
+) -> Result<(PrincipalStore, Bootstrapped), Error> {
+    let Some(realm) = paths.realm.as_deref() else {
+        return Err(Error::InvalidArgument("no default realm".to_owned()));
+    };
+    let db = &paths.database_name;
+    let stash = &paths.key_stash_file;
+    let resumed = if db.exists() || !stash.exists() {
+        None
+    } else {
+        let (key, kvno) = crate::persist::read_stashed_master(stash).map_err(|e| db_err(&e))?;
+        let mkvno = u16::try_from(kvno)
+            .map_err(|_| Error::InvalidArgument("master kvno does not fit".to_owned()))?;
+        Some((MasterKey::Key(key), mkvno))
+    };
+    let (master, mkvno) = resumed.unwrap_or((MasterKey::Random { etype: None }, 1));
+    let mut store = if db.exists() {
+        crate::daemon::open_database(paths, &[], "K/M").map_err(open_failure)?
+    } else {
+        PrincipalStore::try_new(realm)?
+    };
+    let boot = bootstrap_realm_into(
+        &mut store,
+        master,
+        &RealmSpec {
+            realm,
+            profile,
+            mkvno,
+            admin,
+        },
+    )?;
+    if !db.exists() {
+        create_database(&store, db, &StashTarget { path: stash }, &boot)?;
+        store = crate::daemon::open_database(paths, &[], "K/M").map_err(open_failure)?;
+    }
+    Ok((store, boot))
+}
+
+fn open_failure(f: crate::daemon::OpenFailure) -> Error {
+    match f {
+        crate::daemon::OpenFailure::Database(e) | crate::daemon::OpenFailure::MasterKey(e) => {
+            Error::InvalidArgument(e)
+        }
+    }
 }
 
 fn db_err(err: &impl std::fmt::Display) -> Error {

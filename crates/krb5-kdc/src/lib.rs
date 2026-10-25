@@ -50,7 +50,7 @@ pub use create::seed_test_principals;
 pub use create::{
     AdminSpec, Bootstrapped, MasterKey, RealmSpec, StashTarget, add_admin_principals,
     bootstrap_realm_into, create_database, create_realm, create_realm_db, kdc_conf_for_realm,
-    realm_rows,
+    open_or_create, realm_rows,
 };
 pub use daemon::{
     OpenFailure, Shutdown, Signals, copy_persist_master, database_path, detach, json_log_filter,

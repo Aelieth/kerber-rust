@@ -17,7 +17,10 @@ place. That rename is the commit. A re-run that finds the stash and no database
 reuses that master and kvno. A database with no lock file is refused, as an
 open is.
 
-`examples/embed-realm --bootstrap-only` does that open-or-create and writes
+`open_or_create` does that open-or-create — a present database is opened, a stash
+with no database resumes its master and kvno, else a new random master — then
+`bootstrap_realm_into` and `create_database`, returning the store and `Bootstrapped`.
+`examples/embed-realm --bootstrap-only` calls it and writes
 `admin.keytab` beside the database. A store takes the realm's lifetimes, flags,
 and enctypes only after `apply_profile`, and `embed-realm` applies it before
 `--create-trust` and `--allow-to-delegate`. A store keeps its own kdcpreauth,
