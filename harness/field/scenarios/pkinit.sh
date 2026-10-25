@@ -74,7 +74,7 @@
 #          KDC and sends alice seven PKINIT AS-REQs whose client signature is faulted on a P-256 identity -- empty, a
 #          wrong value or a truncated value, with the signed attributes (OpenSSL's EVP_DigestVerify) and without
 #          (EVP_PKEY_verify) -- each KRB-ERROR 80, and the leg's KDC log carries OpenSSL 3.5's "provider signature
-#          failure" seven times, MIT = ours; unset, the cell is skipped (the code 80 is MIT = ours in the CI
+#          failure" once per fault, MIT = ours; unset, the cell is skipped (the code 80 is MIT = ours in the CI
 #          differential; 3.0 logs "verification failure" for these seven, so the reason is lab-only);
 #   PK.dh: the KDC's realm has pkinit_dh_min_bits = 4096 and client2's kinit 2048 (~/pk/dh.conf first): the KDC
 #          refuses its 2048-bit DH with 65 and its groups, and kinit tries again with P-384 and gets a TGT;
@@ -538,9 +538,9 @@ if [ -n "${FIELD_DIFFSEND:-}" ] && [ -r "$FIELD_DIFFSEND" ]; then
     kdcmark PK.b17.as
     # Each fault goes once to the leg's KDC; diffsend grades the wire reply as KRB-ERROR 80 and prints a plain summary.
     check PK.b17.send '^b17lab cases=7 ok=7$' run kdc "KERBER_DIFF_REALM=$REALM KERBER_DIFF_B17_PRINC=alice KERBER_PKINIT_USER=\$HOME/pkb17/id.pem \$HOME/pkb17/diffsend 127.0.0.1:88 127.0.0.1:88 \$HOME/pkb17/out b17lab 2>&1"
-    # The leg's KDC logged OpenSSL 3.5's reason for each fault: seven lines since the mark, MIT = ours.
+    # Each fault's pkinit verify-failure line carries OpenSSL 3.5's reason: seven, MIT = ours (the AS_REQ line repeats it).
     kdcsince PK.b17.as 'provider signature failure'
-    countlast PK.b17.reason 'provider signature failure' 7
+    countlast PK.b17.reason 'verify failure: Failed to verify CMS message: provider signature failure' 7
     check PK.b17.clean rc run kdc "rm -rf ~/pkb17"
 else
     note "PK.b17: FIELD_DIFFSEND is unset or unreadable, so the provider-signature-failure reason is not checked live on either leg (the error code 80 is MIT = ours in the CI differential); set it to a prebuilt diffsend to run the cell"
