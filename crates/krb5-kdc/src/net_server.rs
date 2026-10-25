@@ -42,19 +42,11 @@ const ACCEPT_FAILURE_PAUSE: Duration = Duration::from_millis(20);
 
 pub(crate) trait Stream: Read + Write {
     fn local_addr(&self) -> io::Result<SocketAddr>;
-
-    fn wait_readable(&self, timeout: Duration) -> io::Result<bool>;
 }
 
 impl Stream for TcpStream {
     fn local_addr(&self) -> io::Result<SocketAddr> {
         TcpStream::local_addr(self)
-    }
-
-    fn wait_readable(&self, timeout: Duration) -> io::Result<bool> {
-        let mut fds = [PollFd::new(self.as_fd(), PollFlags::POLLIN)];
-        let wait = PollTimeout::try_from(timeout).unwrap_or(PollTimeout::MAX);
-        Ok(poll(&mut fds, wait)? > 0)
     }
 }
 
@@ -111,6 +103,10 @@ pub trait Dispatch {
 
 pub trait RpcSession {
     fn call(&mut self, record: &[u8]) -> RpcReply;
+
+    fn authenticated(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -170,9 +166,69 @@ enum Io {
         reply: Vec<u8>,
         sent: usize,
     },
-    Rpc(Box<dyn RpcSession>),
+    Rpc(RpcConn),
     // Held while an OTP verify runs: not polled, not LRU-killed, resumed once the verdict lands.
     Parked,
+}
+
+struct RpcConn {
+    session: Box<dyn RpcSession>,
+    phase: RpcPhase,
+    authenticated: bool,
+    last_active: Instant,
+}
+
+enum RpcPhase {
+    Read(RpcRead),
+    Write(RpcWrite),
+}
+
+struct RpcRead {
+    mark: [u8; 4],
+    mark_off: usize,
+    frag_left: usize,
+    last: bool,
+    record: Zeroizing<Vec<u8>>,
+    taken: usize,
+    started: Option<Instant>,
+}
+
+impl RpcRead {
+    fn new() -> Self {
+        Self {
+            mark: [0; 4],
+            mark_off: 0,
+            frag_left: 0,
+            last: false,
+            record: Zeroizing::new(Vec::new()),
+            taken: 0,
+            started: None,
+        }
+    }
+}
+
+struct RpcWrite {
+    framed: Zeroizing<Vec<u8>>,
+    sent: usize,
+}
+
+#[derive(Clone)]
+pub struct ServeLimits {
+    pub max_record: usize,
+    pub rpc_record_deadline: Duration,
+    pub idle_timeout: Option<Duration>,
+    pub per_ip_conns: Option<usize>,
+}
+
+impl Default for ServeLimits {
+    fn default() -> Self {
+        Self {
+            max_record: MAX_RPC_RECORD,
+            rpc_record_deadline: RPC_READ_WAIT,
+            idle_timeout: None,
+            per_ip_conns: None,
+        }
+    }
 }
 
 pub(crate) struct Conn<S> {
@@ -190,6 +246,13 @@ pub(crate) struct Conn<S> {
 impl<S> Conn<S> {
     pub(crate) fn writing(&self) -> bool {
         matches!(self.io, Io::Write { .. })
+            || matches!(
+                &self.io,
+                Io::Rpc(RpcConn {
+                    phase: RpcPhase::Write(_),
+                    ..
+                })
+            )
     }
 
     fn parked(&self) -> bool {
@@ -211,6 +274,7 @@ pub(crate) struct Streams<S> {
     next_id: u64,
     next_event: u64,
     scratch: Vec<u8>,
+    limits: ServeLimits,
 }
 
 impl<S: Stream> Streams<S> {
@@ -222,6 +286,7 @@ impl<S: Stream> Streams<S> {
             next_id: 0,
             next_event: 0,
             scratch: vec![0; READ_SIZE],
+            limits: ServeLimits::default(),
         }
     }
 
@@ -300,7 +365,12 @@ impl<S: Stream> Streams<S> {
             remote,
             addrbuf,
             start_time: now,
-            io: Io::Rpc(session),
+            io: Io::Rpc(RpcConn {
+                session,
+                phase: RpcPhase::Read(RpcRead::new()),
+                authenticated: false,
+                last_active: Instant::now(),
+            }),
         };
         self.insert(conn, log)
     }
@@ -320,16 +390,31 @@ impl<S: Stream> Streams<S> {
     // MIT: `kill_lru_stream_connection` (lib/apputils/net-server.c:1198-1223)
     fn kill_lru(&mut self, newest: u64, log: &mut dyn Log) {
         log.syslog(Severity::Info, "too many connections");
-        let mut oldest: Option<usize> = None;
+        // Evict an unauthenticated RPC connection before an authenticated one, else the oldest, as MIT.
+        let mut victim: Option<usize> = None;
+        let mut victim_unauth = false;
         for (i, c) in self.conns.iter().enumerate().rev() {
             if c.id == newest || c.parked() {
                 continue;
             }
-            if oldest.is_none_or(|o| self.conns[o].start_time > c.start_time) {
-                oldest = Some(i);
+            let unauth = matches!(
+                &c.io,
+                Io::Rpc(RpcConn {
+                    authenticated: false,
+                    ..
+                })
+            );
+            let better = match victim {
+                None => true,
+                Some(_) if unauth != victim_unauth => unauth,
+                Some(o) => self.conns[o].start_time > c.start_time,
+            };
+            if better {
+                victim = Some(i);
+                victim_unauth = unauth;
             }
         }
-        if let Some(i) = oldest {
+        if let Some(i) = victim {
             let c = &self.conns[i];
             log.syslog(
                 Severity::Info,
@@ -343,6 +428,56 @@ impl<S: Stream> Streams<S> {
     fn free_socket(&mut self, i: usize, log: &mut dyn Log) {
         let conn = self.conns.swap_remove(i);
         log.syslog(Severity::Info, &format!("closing down fd {}", conn.fd));
+    }
+
+    fn next_rpc_deadline(&self) -> Option<Instant> {
+        let deadline = self.limits.rpc_record_deadline;
+        let idle = self.limits.idle_timeout;
+        self.conns
+            .iter()
+            .filter_map(|c| match &c.io {
+                Io::Rpc(rpc) => {
+                    let rec = match &rpc.phase {
+                        RpcPhase::Read(rd) => rd.started.map(|s| s + deadline),
+                        RpcPhase::Write(_) => None,
+                    };
+                    let idl = idle.map(|d| rpc.last_active + d);
+                    [rec, idl].into_iter().flatten().min()
+                }
+                _ => None,
+            })
+            .min()
+    }
+
+    fn sweep_rpc(&mut self, now: Instant, log: &mut dyn Log) {
+        let deadline = self.limits.rpc_record_deadline;
+        let idle = self.limits.idle_timeout;
+        let mut i = 0;
+        while i < self.conns.len() {
+            let over = match &self.conns[i].io {
+                Io::Rpc(rpc) => {
+                    let record_over = matches!(&rpc.phase, RpcPhase::Read(rd)
+                        if rd.started.is_some_and(|s| now.saturating_duration_since(s) > deadline));
+                    let idle_over =
+                        idle.is_some_and(|d| now.saturating_duration_since(rpc.last_active) > d);
+                    record_over || idle_over
+                }
+                _ => false,
+            };
+            if over {
+                let c = &self.conns[i];
+                log.syslog(
+                    Severity::Info,
+                    &format!(
+                        "RPC record timed out, dropping fd {} from {}",
+                        c.fd, c.addrbuf
+                    ),
+                );
+                self.free_socket(i, log);
+            } else {
+                i += 1;
+            }
+        }
     }
 
     // MIT: `verto_free` (util/verto/verto.c:593-595)
@@ -486,25 +621,86 @@ impl<S: Stream> Streams<S> {
     // MIT: `svc_do_xprt` (lib/rpc/svc.c:469-531)
     /// Deviation: a panic closes that connection; MIT's process would end.
     fn rpc_step(&mut self, i: usize) -> Step {
+        let max_record = self.limits.max_record;
+        let now = Instant::now();
         let conn = &mut self.conns[i];
-        let Io::Rpc(session) = &mut conn.io else {
+        let Io::Rpc(rpc) = &mut conn.io else {
             return Step::Wait;
         };
-        let Ok(record) = read_rpc_record(&mut conn.stream) else {
-            return Step::Close;
+        let RpcPhase::Read(rd) = &mut rpc.phase else {
+            return Step::Wait;
         };
-        let called = catch_unwind(AssertUnwindSafe(|| session.call(&record)));
+        // Assemble the record non-blocking across polls, so a slow or stalled peer never holds the thread.
+        loop {
+            if rd.mark_off < 4 {
+                match conn.stream.read(&mut rd.mark[rd.mark_off..]) {
+                    Ok(0) => return Step::Close,
+                    Ok(n) => {
+                        rd.started.get_or_insert(now);
+                        rpc.last_active = now;
+                        rd.mark_off += n;
+                        if rd.mark_off == 4 {
+                            let mark = u32::from_be_bytes(rd.mark);
+                            rd.last = mark & LAST_FRAG != 0;
+                            rd.frag_left = usize::try_from(mark & !LAST_FRAG).unwrap_or(usize::MAX);
+                            rd.taken = rd.taken.saturating_add(4).saturating_add(rd.frag_left);
+                            if rd.taken > max_record {
+                                return Step::Close;
+                            }
+                        }
+                    }
+                    Err(e) if retry(&e) => return Step::Wait,
+                    Err(_) => return Step::Close,
+                }
+            } else if rd.frag_left > 0 {
+                let chunk = rd.frag_left.min(READ_SIZE);
+                let base = rd.record.len();
+                reserve_wiped(&mut rd.record, chunk);
+                rd.record.resize(base + chunk, 0);
+                match conn.stream.read(&mut rd.record[base..]) {
+                    Ok(0) => return Step::Close,
+                    Ok(n) => {
+                        rpc.last_active = now;
+                        rd.record.truncate(base + n);
+                        rd.frag_left -= n;
+                    }
+                    Err(e) if retry(&e) => {
+                        rd.record.truncate(base);
+                        return Step::Wait;
+                    }
+                    Err(_) => {
+                        rd.record.truncate(base);
+                        return Step::Close;
+                    }
+                }
+            } else if rd.last {
+                break;
+            } else {
+                rd.mark_off = 0;
+            }
+        }
+        let record = std::mem::replace(&mut rd.record, Zeroizing::new(Vec::new()));
+        let called = catch_unwind(AssertUnwindSafe(|| {
+            (rpc.session.call(&record), rpc.session.authenticated())
+        }));
         drop(record);
         match called {
-            Ok(RpcReply::Send(reply)) => {
-                let reply = Zeroizing::new(reply);
-                match write_rpc_record(&mut conn.stream, &reply) {
-                    Ok(()) => Step::Wait,
+            Ok((RpcReply::Send(reply), authed)) => {
+                rpc.authenticated |= authed;
+                match frame_rpc_record(&reply) {
+                    Ok(framed) => {
+                        rpc.phase = RpcPhase::Write(RpcWrite { framed, sent: 0 });
+                        Step::Wait
+                    }
                     Err(_) => Step::Close,
                 }
             }
-            Ok(RpcReply::Nothing) => Step::Wait,
-            Ok(RpcReply::Close) => Step::Close,
+            Ok((RpcReply::Nothing, authed)) => {
+                rpc.authenticated |= authed;
+                rpc.phase = RpcPhase::Read(RpcRead::new());
+                Step::Wait
+            }
+            Ok((RpcReply::Close, _)) => Step::Close,
             Err(_) => {
                 panic_isolated();
                 Step::Close
@@ -540,31 +736,55 @@ impl<S: Stream> Streams<S> {
             return;
         };
         let conn = &mut self.conns[i];
-        let Io::Write {
-            lenbuf,
-            reply,
-            sent,
-        } = &mut conn.io
-        else {
-            return;
-        };
-        let total = 4 + reply.len();
-        let wrote = if *sent < 4 {
-            conn.stream
-                .write_vectored(&[IoSlice::new(&lenbuf[*sent..]), IoSlice::new(reply)])
-        } else {
-            conn.stream
-                .write_vectored(&[IoSlice::new(&reply[*sent - 4..])])
-        };
-        match wrote {
-            Ok(n) if n > 0 => {
-                *sent = (*sent + n).min(total);
-                if *sent < total {
+        match &mut conn.io {
+            Io::Write {
+                lenbuf,
+                reply,
+                sent,
+            } => {
+                let total = 4 + reply.len();
+                let wrote = if *sent < 4 {
+                    conn.stream
+                        .write_vectored(&[IoSlice::new(&lenbuf[*sent..]), IoSlice::new(reply)])
+                } else {
+                    conn.stream
+                        .write_vectored(&[IoSlice::new(&reply[*sent - 4..])])
+                };
+                match wrote {
+                    Ok(n) if n > 0 => {
+                        *sent = (*sent + n).min(total);
+                        if *sent < total {
+                            return;
+                        }
+                    }
+                    Err(e) if retry(&e) => return,
+                    _ => {}
+                }
+            }
+            Io::Rpc(rpc) => {
+                rpc.last_active = Instant::now();
+                let finished = {
+                    let RpcPhase::Write(w) = &mut rpc.phase else {
+                        return;
+                    };
+                    match conn.stream.write(&w.framed[w.sent..]) {
+                        Ok(n) if n > 0 => {
+                            w.sent += n;
+                            if w.sent < w.framed.len() {
+                                return;
+                            }
+                            true
+                        }
+                        Err(e) if retry(&e) => return,
+                        _ => false,
+                    }
+                };
+                if finished {
+                    rpc.phase = RpcPhase::Read(RpcRead::new());
                     return;
                 }
             }
-            Err(e) if retry(&e) => return,
-            _ => {}
+            _ => return,
         }
         self.free_socket(i, log);
     }
@@ -642,6 +862,24 @@ impl Streams<TcpStream> {
             let _ = writeln!(io::stderr(), "svc_tcp: makefd_xprt: fd too high");
             return;
         }
+        if let Some(cap) = self.limits.per_ip_conns {
+            let from_ip = self
+                .conns
+                .iter()
+                .filter(|c| matches!(c.ctype, ConnType::Rpc) && c.remote.ip() == remote.ip())
+                .count();
+            if from_ip >= cap {
+                log.syslog(
+                    Severity::Info,
+                    &format!("too many RPC connections from {}", remote.ip()),
+                );
+                return;
+            }
+        }
+        // An accepted socket does not inherit O_NONBLOCK; set it so rpc_step never blocks (fail closed, as admit).
+        if stream.set_nonblocking(true).is_err() {
+            return;
+        }
         let addrbuf = stream
             .peer_addr()
             .map_or_else(|_| "<unknown>".to_owned(), |a| print_addr_port(&a));
@@ -665,34 +903,6 @@ fn passing_accept_failure(e: &io::Error) -> bool {
         e.kind(),
         io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted | io::ErrorKind::ConnectionAborted
     )
-}
-
-// MIT: `readtcp` (lib/rpc/svc_tcp.c:352-392)
-fn readtcp<S: Stream>(stream: &mut S, buf: &mut [u8]) -> io::Result<usize> {
-    loop {
-        match stream.wait_readable(RPC_READ_WAIT) {
-            Ok(true) => break,
-            Ok(false) => return Err(io::ErrorKind::TimedOut.into()),
-            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
-            Err(e) => return Err(e),
-        }
-    }
-    match stream.read(buf)? {
-        0 => Err(io::ErrorKind::UnexpectedEof.into()),
-        n => Ok(n),
-    }
-}
-
-fn readtcp_exact<S: Stream>(stream: &mut S, buf: &mut [u8]) -> io::Result<()> {
-    let mut at = 0;
-    while at < buf.len() {
-        at += readtcp(stream, &mut buf[at..])?;
-    }
-    Ok(())
-}
-
-fn read_rpc_record<S: Stream>(stream: &mut S) -> io::Result<Zeroizing<Vec<u8>>> {
-    read_rpc_record_with(|buf| readtcp_exact(stream, buf))
 }
 
 // MIT: `xdrrec_getbytes` (lib/rpc/xdr_rec.c:245-266)
@@ -734,12 +944,8 @@ fn reserve_wiped(buf: &mut Zeroizing<Vec<u8>>, more: usize) {
     *buf = grown;
 }
 
-// MIT: `writetcp` (lib/rpc/svc_tcp.c:399-414)
 // MIT: `flush_out` (lib/rpc/xdr_rec.c:475-489)
-/// Deviation: a reply is one fragment; MIT splits a reply past 4000 bytes.
-// MIT: `writetcp` (lib/rpc/svc_tcp.c:399-414)
-// MIT: `flush_out` (lib/rpc/xdr_rec.c:475-489)
-fn write_rpc_record<S: Stream>(stream: &mut S, body: &[u8]) -> io::Result<()> {
+fn frame_rpc_record(body: &[u8]) -> io::Result<Zeroizing<Vec<u8>>> {
     let len = u32::try_from(body.len())
         .ok()
         .filter(|n| n & LAST_FRAG == 0)
@@ -747,8 +953,7 @@ fn write_rpc_record<S: Stream>(stream: &mut S, body: &[u8]) -> io::Result<()> {
     let mut record = Zeroizing::new(Vec::with_capacity(4 + body.len()));
     record.extend_from_slice(&(len | LAST_FRAG).to_be_bytes());
     record.extend_from_slice(body);
-    stream.write_all(&record)?;
-    stream.flush()
+    Ok(record)
 }
 
 fn dispatch_contained(
@@ -985,6 +1190,7 @@ pub fn run(
     sockets: &Sockets<'_>,
     max_streams: usize,
     cap: usize,
+    limits: ServeLimits,
     wake: &Wake<'_>,
     log: &mut dyn Log,
 ) -> io::Result<Vec<RawFd>> {
@@ -995,9 +1201,10 @@ pub fn run(
         t.set_nonblocking(true)?;
     }
     let mut streams: Streams<TcpStream> = Streams::new(max_streams, cap);
+    streams.limits = limits;
     let mut paused = Paused::new(sockets.tcp.len() + sockets.rpc.len());
     let mut pkt = vec![0u8; MAX_DGRAM_SIZE];
-    let otp_fd = app.otp_wake_fd();
+    let mut otp_fd = app.otp_wake_fd();
     set_otp_park_enabled(otp_fd.is_some());
     let _park_enabled = ParkEnabledGuard;
     let mut parks: Vec<Parked> = Vec::new();
@@ -1025,7 +1232,11 @@ pub fn run(
         return Ok(streams.open_fds());
     }
     loop {
-        let park_deadline = parks.iter().map(|p| p.otp.deadline).min();
+        let next_deadline = parks
+            .iter()
+            .map(|p| p.otp.deadline)
+            .chain(streams.next_rpc_deadline())
+            .min();
         let ready = wait(
             pipe,
             otp_fd.as_ref(),
@@ -1033,12 +1244,19 @@ pub fn run(
             &streams,
             &paused,
             timeout,
-            park_deadline,
+            next_deadline,
         )?;
         for r in ready {
             match r {
-                Ready::Wake => drain(pipe),
-                Ready::OtpWake => drain(otp_fd.as_ref()),
+                Ready::Wake => {
+                    drain(pipe);
+                }
+                Ready::OtpWake => {
+                    if drain(otp_fd.as_ref()) {
+                        otp_fd = None;
+                        set_otp_park_enabled(false);
+                    }
+                }
                 Ready::Udp(i) => {
                     process_packet(i, &sockets.udp[i], &mut pkt, app, &mut parks, log);
                 }
@@ -1062,6 +1280,7 @@ pub fn run(
             }
         }
         resolve_parks(&mut parks, app, sockets, &mut streams, log);
+        streams.sweep_rpc(Instant::now(), log);
         match wake {
             Wake::Signals(s) => {
                 if s.take_hup() {
@@ -1152,12 +1371,18 @@ fn wait(
         .collect())
 }
 
-fn drain(pipe: Option<&OwnedFd>) {
+fn drain(pipe: Option<&OwnedFd>) -> bool {
     let Some(p) = pipe else {
-        return;
+        return false;
     };
     let mut buf = [0u8; 64];
-    while matches!(nix::unistd::read(p, &mut buf), Ok(n) if n > 0) {}
+    loop {
+        match nix::unistd::read(p, &mut buf) {
+            Ok(0) => return true,
+            Ok(_) => {}
+            Err(_) => return false,
+        }
+    }
 }
 
 // MIT: `process_packet` (lib/apputils/net-server.c:1150-1188)
@@ -1286,7 +1511,6 @@ mod tests {
         out: Vec<u8>,
         writes: VecDeque<Take>,
         reads: usize,
-        waits: Vec<Duration>,
         closed: bool,
     }
 
@@ -1352,19 +1576,6 @@ mod tests {
         fn local_addr(&self) -> io::Result<SocketAddr> {
             Ok("192.0.2.88:88".parse().unwrap())
         }
-
-        fn wait_readable(&self, timeout: Duration) -> io::Result<bool> {
-            let mut w = self.0.borrow_mut();
-            w.waits.push(timeout);
-            match w.incoming.front() {
-                None => Ok(false),
-                Some(Arrival::Stall) => {
-                    w.incoming.pop_front();
-                    Ok(false)
-                }
-                Some(_) => Ok(true),
-            }
-        }
     }
 
     #[derive(Default)]
@@ -1406,6 +1617,7 @@ mod tests {
         toolong: Result<Vec<u8>, String>,
         panic: bool,
         rpc: Option<Calls>,
+        otp: RefCell<Option<OwnedFd>>,
     }
 
     impl Default for App {
@@ -1416,6 +1628,7 @@ mod tests {
                 toolong: Ok(b"too long".to_vec()),
                 panic: false,
                 rpc: None,
+                otp: RefCell::new(None),
             }
         }
     }
@@ -1442,6 +1655,10 @@ mod tests {
 
         fn make_toolong_error(&mut self) -> Result<Vec<u8>, String> {
             self.toolong.clone()
+        }
+
+        fn otp_wake_fd(&self) -> Option<OwnedFd> {
+            self.otp.borrow_mut().take()
         }
 
         fn rpc_session(
@@ -1925,18 +2142,20 @@ mod tests {
         arrive(&wire, Arrival::Bytes(fragment(b"cd", true)));
         t.read_drive(id, &mut app, &mut log);
         assert_eq!(*calls.borrow(), [b"abcd".to_vec()]);
+        // The reply is queued, not written inline; a writable event flushes it.
+        assert_eq!(t.len(), 1, "waiting to write the reply");
+        assert!(t.conns().next().unwrap().writing());
+        t.writable(id, &mut log);
         assert_eq!(wire.borrow().out, fragment(b"answer", true));
-        assert_eq!(t.len(), 1, "waiting for the next record");
         assert!(!t.conns().next().unwrap().writing());
-        assert!(
-            wire.borrow()
-                .waits
-                .iter()
-                .all(|w| *w == Duration::from_secs(35))
-        );
         arrive(&wire, Arrival::Bytes(fragment(b"second", true)));
         t.read_drive(id, &mut app, &mut log);
         assert_eq!(calls.borrow().len(), 2);
+        t.writable(id, &mut log);
+        assert_eq!(
+            wire.borrow().out,
+            [fragment(b"answer", true), fragment(b"answer", true)].concat()
+        );
         assert_eq!(log.take(), NO_LINES);
         arrive(&wire, Arrival::Eof);
         t.read_drive(id, &mut app, &mut log);
@@ -2010,20 +2229,35 @@ mod tests {
         assert_eq!(grown.capacity(), 0, "an empty fragment takes no room");
     }
 
+    /// A record that never completes is held, then closed at the per-record deadline by the serve sweep.
     #[test]
-    fn an_rpc_read_that_waits_35_s_closes_the_connection() {
+    fn an_unfinished_rpc_record_closes_at_the_deadline() {
         let rec = fragment(b"0123456789", true);
         for cut in [2, 4, 6] {
             let (mut t, id, wire, calls, mut log) = rpc_one(vec![]);
+            let deadline = t.limits.rpc_record_deadline;
             arrive(&wire, Arrival::Bytes(rec[..cut].to_vec()));
             arrive(&wire, Arrival::Stall);
-            arrive(&wire, Arrival::Bytes(rec[cut..].to_vec()));
             t.read_drive(id, &mut App::default(), &mut log);
-            assert!(t.is_empty(), "cut {cut}");
+            assert_eq!(t.len(), 1, "cut {cut}: the partial record is held");
             assert_eq!(calls.borrow().len(), 0);
             assert_eq!(wire.borrow().out, NO_BYTES);
-            assert_eq!(wire.borrow().waits.last(), Some(&Duration::from_secs(35)));
-            assert_eq!(log.take(), [info("closing down fd 7")]);
+            assert_eq!(log.take(), NO_LINES);
+
+            t.sweep_rpc(Instant::now(), &mut log);
+            assert_eq!(t.len(), 1, "cut {cut}: within the deadline it is left");
+            assert_eq!(log.take(), NO_LINES);
+
+            t.sweep_rpc(Instant::now() + deadline + Duration::from_secs(1), &mut log);
+            assert!(t.is_empty(), "cut {cut}: past the deadline it closes");
+            assert!(wire.borrow().closed);
+            assert_eq!(calls.borrow().len(), 0);
+            assert_eq!(wire.borrow().out, NO_BYTES);
+            let dropped = format!(
+                "RPC record timed out, dropping fd 7 from {}",
+                print_addr_port(&peer(4242))
+            );
+            assert_eq!(log.take(), [info(&dropped), info("closing down fd 7")]);
         }
     }
 
@@ -2047,14 +2281,18 @@ mod tests {
         t.read_drive(b, &mut app, &mut log);
         assert_eq!((cb.borrow().len(), t.len()), (1, 2));
         assert_eq!(wb.borrow().out, NO_BYTES);
+        // c: the queued reply's write error surfaces on the writable event.
         arrive(&wc, Arrival::Bytes(fragment(b"x", true)));
         wc.borrow_mut()
             .writes
             .push_back(Take::Fail(io::ErrorKind::BrokenPipe));
         t.read_drive(c, &mut app, &mut log);
+        assert_eq!(t.len(), 2, "the reply is queued, not yet written");
+        t.writable(c, &mut log);
         assert_eq!(t.len(), 1);
         arrive(&wd, Arrival::Bytes(fragment(b"fine", true)));
         t.read_drive(d, &mut app, &mut log);
+        t.writable(d, &mut log);
         assert_eq!(cd.borrow().len(), 1);
         assert_eq!(wd.borrow().out, fragment(b"answer", true));
         assert_eq!(
@@ -2122,7 +2360,7 @@ mod tests {
         let conn = t.conns().next().unwrap();
         assert_eq!(conn.ctype, ConnType::Rpc);
         let flags = OFlag::from_bits_truncate(fcntl(&conn.stream, FcntlArg::F_GETFL).unwrap());
-        assert!(!flags.contains(OFlag::O_NONBLOCK), "blocking");
+        assert!(flags.contains(OFlag::O_NONBLOCK), "non-blocking");
         assert!(!getsockopt(&conn.stream, sockopt::KeepAlive).unwrap());
         assert_eq!(conn.addrbuf, client.local_addr().unwrap().to_string());
         assert_eq!(conn.start_time, 100);
@@ -2204,6 +2442,7 @@ mod tests {
                 &sockets,
                 MAX_STREAM_DATA_CONNECTIONS,
                 MAX_REQUEST,
+                ServeLimits::default(),
                 &wake,
                 &mut Lines::default(),
             )
@@ -2211,6 +2450,44 @@ mod tests {
             let used = thread_cpu_ticks() - before;
             assert!(used < 10, "{used} ticks of CPU in 300 ms");
             assert_eq!(open, Vec::<RawFd>::new());
+        });
+    }
+
+    /// An OTP wake fd whose write end is gone reads POLLHUP every poll; the loop drops it rather than
+    /// spin: a second embed loop on one store replaced the runtime and closed this pool.
+    #[test]
+    fn a_hung_up_otp_wake_fd_does_not_spin_the_loop() {
+        let (rd, wr) =
+            nix::unistd::pipe2(nix::fcntl::OFlag::O_CLOEXEC | nix::fcntl::OFlag::O_NONBLOCK)
+                .unwrap();
+        drop(wr);
+        let mut app = App {
+            otp: RefCell::new(Some(rd)),
+            ..App::default()
+        };
+        let stop = AtomicBool::new(false);
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                std::thread::sleep(Duration::from_millis(300));
+                stop.store(true, Ordering::SeqCst);
+            });
+            let wake = Wake::Flag {
+                stop: &stop,
+                every: Duration::from_millis(50),
+            };
+            let before = thread_cpu_ticks();
+            run(
+                &mut app,
+                &Sockets::default(),
+                MAX_STREAM_DATA_CONNECTIONS,
+                MAX_REQUEST,
+                ServeLimits::default(),
+                &wake,
+                &mut Lines::default(),
+            )
+            .unwrap();
+            let used = thread_cpu_ticks() - before;
+            assert!(used < 10, "{used} ticks of CPU in 300 ms");
         });
     }
 
@@ -2329,6 +2606,7 @@ mod tests {
             &sockets,
             MAX_STREAM_DATA_CONNECTIONS,
             MAX_REQUEST,
+            ServeLimits::default(),
             &wake,
             &mut log,
         )

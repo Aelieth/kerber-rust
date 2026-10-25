@@ -771,6 +771,7 @@ fn serve_loop(
         &sockets,
         limits.max_tcp_workers,
         limits.max_tcp_request,
+        crate::net_server::ServeLimits::default(),
         wake,
         &mut Klog,
     )

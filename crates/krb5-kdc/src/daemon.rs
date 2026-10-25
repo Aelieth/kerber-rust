@@ -540,6 +540,7 @@ mod tests {
                     &Sockets::default(),
                     crate::net_server::MAX_STREAM_DATA_CONNECTIONS,
                     crate::net_server::MAX_REQUEST,
+                    crate::net_server::ServeLimits::default(),
                     &Wake::Signals(&signals),
                     &mut Klog,
                 )

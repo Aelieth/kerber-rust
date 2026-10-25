@@ -44,6 +44,7 @@ any other `###` heading.
 - **admin.** kpropd and kprop bound their input: a handler cap, read, write, transfer and connect timeouts, and caps on the dump buffer and the dump's record counts.
 - **admin/kdc.** A CSPRNG failure fails a kadm5 request closed, a logged policy name or glob escapes control characters, and a CMS ContentInfo type is checked.
 - **kdc.** A bounded worker pool runs each OTP verifier under the `[otp] timeout`; a hang, panic, late answer or full queue is 24, counted, so no verifier can stall the KDC.
+- **admin.** kadmind assembles each RPC record without blocking and closes one stalled past 35 s; at the cap an unauthenticated connection is dropped first.
 
 ### Added
 

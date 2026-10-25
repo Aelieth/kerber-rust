@@ -222,6 +222,11 @@ impl RpcSession for Kadm5Conn {
             }
         }
     }
+
+    // Authenticated = an established RPCSEC_GSS or a completed AUTH_GSSAPI context.
+    fn authenticated(&self) -> bool {
+        self.sess.gss.is_some() || self.sess.agss.as_ref().is_some_and(|a| a.ctx.is_some())
+    }
 }
 
 // No CSPRNG, no handle.

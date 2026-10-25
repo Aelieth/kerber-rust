@@ -6,6 +6,7 @@ use std::net::{SocketAddr, TcpListener, UdpSocket};
 use std::os::fd::RawFd;
 use std::path::PathBuf;
 use std::sync::{Arc, PoisonError};
+use std::time::Duration;
 
 use krb5_config::listen::{BindAddresses, BindType, ListenLog};
 use krb5_config::{KadmindListen, ProfileSet};
@@ -60,6 +61,8 @@ impl Services {
 pub struct ServeLimits {
     pub max_connections: usize,
     pub max_request: usize,
+    pub idle_timeout: Option<Duration>,
+    pub per_ip_conns: Option<usize>,
 }
 
 impl Default for ServeLimits {
@@ -67,6 +70,8 @@ impl Default for ServeLimits {
         Self {
             max_connections: MAX_STREAM_DATA_CONNECTIONS,
             max_request: MAX_REQUEST,
+            idle_timeout: None,
+            per_ip_conns: None,
         }
     }
 }
@@ -620,7 +625,20 @@ fn run_logged(
     }
     set_thread_admin_log(Some(Arc::clone(&kadmind.log)));
     let mut log = AdminLogFwd(Arc::clone(&kadmind.log));
-    let result = net_server::run(kadmind, sockets, max_conns, max_req, wake, &mut log);
+    let serve_limits = net_server::ServeLimits {
+        idle_timeout: kadmind.limits.idle_timeout,
+        per_ip_conns: kadmind.limits.per_ip_conns,
+        ..net_server::ServeLimits::default()
+    };
+    let result = net_server::run(
+        kadmind,
+        sockets,
+        max_conns,
+        max_req,
+        serve_limits,
+        wake,
+        &mut log,
+    );
     set_thread_admin_log(None);
     if set_pw {
         clear_thread_pwqual();

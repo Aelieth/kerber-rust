@@ -55,3 +55,12 @@ gets the structured `kdc.issue` event. Startup and the other klog lines
 still reach tracing on `krb5_klog`. A `TracingAdmin` embed gets one `admin`
 event per kadm5 operation and per password change. The MIT-format line for
 that operation goes to a klog logger, not to the subscriber.
+
+## kadmind serve limits
+
+`kadmind::ServeLimits` caps what one kadmind loop takes on. `max_connections`
+(45) and `max_request` (1 MiB) are MIT's defaults. `idle_timeout` and
+`per_ip_conns` are `None` by default, as MIT keeps neither; set them to shed an
+idle RPC connection or to refuse a new one past a per-source-IP count. A record
+that stalls is always closed at the loop's 35 s per-record deadline, whatever
+these are set to.
