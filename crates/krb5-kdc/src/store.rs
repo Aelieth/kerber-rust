@@ -45,14 +45,14 @@ thread_local! {
 
 pub mod kadm5_mask {
     pub const PRINCIPAL: u32 = 0x0000_0001;
-    pub(crate) const PRINC_EXPIRE_TIME: u32 = 0x0000_0002;
-    pub(crate) const PW_EXPIRATION: u32 = 0x0000_0004;
+    pub const PRINC_EXPIRE_TIME: u32 = 0x0000_0002;
+    pub const PW_EXPIRATION: u32 = 0x0000_0004;
     pub const ATTRIBUTES: u32 = 0x0000_0010;
     pub const MAX_LIFE: u32 = 0x0000_0020;
     pub const KVNO: u32 = 0x0000_0100;
     pub const POLICY: u32 = 0x0000_0800;
     pub const POLICY_CLR: u32 = 0x0000_1000;
-    pub(crate) const MAX_RLIFE: u32 = 0x0000_2000;
+    pub const MAX_RLIFE: u32 = 0x0000_2000;
     pub const KEY_DATA: u32 = 0x0002_0000;
 }
 
