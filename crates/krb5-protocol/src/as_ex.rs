@@ -1188,7 +1188,7 @@ fn continue_pkinit(
     let mut tryagain: Option<Retry> = None;
     for _ in 1..MAX_IN_TKT_LOOPS {
         let group = KxGroup::for_bits(dh_size).unwrap_or(KxGroup::Modp2048);
-        // A fresh nonce and request times each pass, as RFC 6113 requires for each try.
+        // MIT: `init_creds_step_request` (lib/krb5/krb/get_in_tkt.c:1273-1281)
         let bound = request_times(req, clock);
         let nonce = random_nonce()?;
         let extra = match &tryagain {
@@ -1312,8 +1312,6 @@ enum PkinitEnd {
         wire: Vec<u8>,
         reply_key: ProtocolKey,
         learned: Option<LearnedSalt>,
-        // The answered request's nonce and times; a tryagain regenerates both (RFC 6113), so the
-        // reply check must use these, not the first request's.
         nonce: u32,
         bound: AsReqTimes,
     },
