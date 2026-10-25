@@ -250,6 +250,8 @@ fn main() {
     }
     let kdcpolicy_relations = store.policy.kdcpolicy.clone();
     krb5_kdc::register_kdcpolicy_test_if_selected(&mut store.policy.plugins, &kdcpolicy_relations);
+    #[cfg(feature = "test-hooks")]
+    hooks::install_greet(&mut store.policy.plugins);
     let pkinit_failure = store.init_pkinit(&profile);
     #[cfg(feature = "test-hooks")]
     hooks::before_serving(&mut store, &opts.hooks);
@@ -720,9 +722,9 @@ mod hooks {
         }
     }
 
-    fn authdata() {
+    pub(super) fn install_greet(plugins: &mut krb5_kdc::PluginSet) {
         if std::env::var("KERBER_KDC_GREET").ok().as_deref() == Some("1") {
-            krb5_kdc::register_authdata(std::sync::Arc::new(krb5_kdc::testrealm::GreetAuth));
+            plugins.register_authdata(std::sync::Arc::new(krb5_kdc::testrealm::GreetAuth));
         }
     }
 
@@ -755,7 +757,6 @@ mod hooks {
         } else {
             eprintln!("{progname}: privilege drop skipped (shared persist db)");
         }
-        authdata();
         let udp_addrs: Vec<_> = udp.iter().filter_map(|u| u.local_addr().ok()).collect();
         for a in &udp_addrs {
             println!("listening {a}");
