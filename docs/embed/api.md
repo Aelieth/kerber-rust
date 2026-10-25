@@ -30,6 +30,17 @@ later, and the KDC logs that at error. The same module again is a no-op, and a
 different module of that name is added. A second OTP verifier of a taken name
 is an error.
 
+## One store
+
+`shared_dump` returns a `SharedDump` (`Arc<RwLock<PrincipalStore>>`). Cloning it
+into a `SharedStore` (`let kdc: SharedStore = dump.clone()`) is that same lock,
+so the KDC loop and kadmind serve one store. A write on either is what the next
+AS, TGS, or admin read sees, with no file round trip. `serve_all_until` runs on
+the caller's thread until its flag is set. `Kadmind::serve` runs on the caller's
+thread until `Shutdown::trigger`. `Shutdown::stop_flag` is the flag
+`serve_all_until` takes, so one `Shutdown` stops both. A plugin or a kadm5 hook
+must not take the store's write guard, and must not re-enter the store.
+
 ## Logging
 
 `serve`, `serve_all`, `serve_until`, `serve_all_until`, and `serve_daemon`

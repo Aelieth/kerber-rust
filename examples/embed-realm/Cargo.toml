@@ -1,6 +1,6 @@
 [package]
 name = "krb5-embed-realm-example"
-description = "Example embedder: kadmind run in-process through the embed API — Kadmind::new, Listeners::bind and serve(&Shutdown)"
+description = "Example embedder: one store, the KDC loop and kadmind, one Shutdown"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

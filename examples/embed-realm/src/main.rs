@@ -1,24 +1,22 @@
-//! `krb5-embed-realm`: kadmind run in-process through the library's embed API — [`Kadmind::new`],
-//! [`Listeners::bind`] and [`Kadmind::serve`] with a [`Shutdown`] — over a realm's shared store,
-//! the way an embedder (the KLLDAP seam) starts the admin service. It is the kadmind half of this
-//! example, beside the `krb5-otp-kdc` KDC, kept to prove the embed path end to end against MIT
-//! `kadmin` and `kpasswd`; it is not a shipped product. It installs a stock
-//! tracing fmt subscriber at info, so each kadm5 operation and each password
-//! change shows one `admin` event.
+//! `krb5-embed-realm`: one process, one store, two loops. [`Kadmind::serve`] runs kadmind and
+//! kpasswd on this thread. [`krb5_kdc::serve_all_until`] runs the KDC on another. One [`Shutdown`]
+//! stops both. It is an embedder's skeleton, beside `krb5-otp-kdc`, kept to prove the path against
+//! MIT `kadmin`, `kpasswd`, and `kinit`. It is not a shipped product. A tracing subscriber at info
+//! shows one `admin` event per kadm5 operation and per password change.
 //!
-//! It reads the profile the daemon reads (kdc.conf over krb5.conf), opens the realm's database and
-//! stash, binds kpasswd (464) and the kadm5 RPC program (749) over the shared store, and serves one
-//! loop on this thread until SIGTERM or SIGINT trigger the `Shutdown`. Unlike the daemon it never
-//! detaches and writes no pid file: a bad dictionary, profile or port stops it in the foreground,
-//! where `Listeners::bind` and `Kadmind::new` return a `StartError`.
+//! It reads the profile the daemon reads (kdc.conf over krb5.conf), opens or creates the database,
+//! and binds the KDC ports from that profile plus kpasswd (464) and kadm5 (749). Unlike the daemon
+//! it never detaches and writes no pid file. A bad dictionary, profile, or port stops it in the
+//! foreground.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+use std::net::{TcpListener, UdpSocket};
 use std::process::exit;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::Duration;
 
@@ -127,6 +125,8 @@ fn main() {
         } => {}
     }
     let shared = krb5_kdc::shared_dump(store);
+    let kdc_store: krb5_kdc::SharedStore = shared.clone();
+    let (kdc_udp, kdc_tcp, kdc_limits) = bind_kdc(&progname, &profile);
 
     // The listen ports and the ACL the realm's profile names; kpasswd and kadm5, no iprop.
     let listen = KadmindListen::for_realm(Some(&profile.kdc_context), &realm, None);
@@ -153,11 +153,10 @@ fn main() {
     let mut kadmind = Kadmind::new(shared, cfg)
         .unwrap_or_else(|e| cannot_start(&progname, &format!("{e} while initializing")));
 
-    // SIGTERM and SIGINT trigger the one `Shutdown`. The serve loop blocks on the shutdown pipe with
-    // no poll of its own, so a watcher thread notices the signal flag within 100 ms and triggers the
-    // shutdown, which then wakes the loop at once.
+    // One `Shutdown`. SIGTERM and SIGINT set its flag, which the KDC loop polls. Kadmind waits on
+    // the pipe, so a watcher calls `trigger` within 100 ms of the flag.
     let stop = Shutdown::new();
-    let flagged = Arc::new(AtomicBool::new(false));
+    let flagged = stop.stop_flag();
     for sig in STOP_SIGNALS {
         if let Err(e) = signal_hook::flag::register(sig, Arc::clone(&flagged)) {
             cannot_start(
@@ -167,22 +166,41 @@ fn main() {
         }
     }
     let trigger = stop.clone();
+    let watch = Arc::clone(&flagged);
     thread::spawn(move || {
-        while !flagged.load(Ordering::Relaxed) {
+        while !watch.load(Ordering::Relaxed) {
             thread::sleep(Duration::from_millis(100));
         }
         trigger.trigger();
     });
+    let kdc_flag = Arc::clone(&flagged);
+    let kdc_stop = stop.clone();
+    let kdc = thread::spawn(move || {
+        let log = krb5_kdc::KdcLog::process();
+        let served =
+            krb5_kdc::serve_all_until(kdc_store, kdc_udp, kdc_tcp, kdc_flag, kdc_limits, &log);
+        if served.is_err() {
+            kdc_stop.trigger();
+        }
+        served
+    });
 
     // "starting" is MIT kadmind's line just before it serves, and our daemon's too.
     klog::syslog(Severity::Info, "starting");
-    eprintln!("{progname}: serving {realm} (kpasswd 464, kadm5 749); SIGTERM or SIGINT to stop");
-    match kadmind.serve(&listeners, &stop) {
-        Ok(_summary) => {
+    eprintln!(
+        "{progname}: serving {realm} (kdc, kpasswd 464, kadm5 749); SIGTERM or SIGINT to stop"
+    );
+    let served = kadmind.serve(&listeners, &stop);
+    flagged.store(true, Ordering::Relaxed);
+    let Ok(kdc_served) = kdc.join() else {
+        cannot_start(&progname, "kdc loop stopped while serving");
+    };
+    match (served, kdc_served) {
+        (Ok(_summary), Ok(())) => {
             klog::syslog(Severity::Info, "shutting down");
             klog::close();
         }
-        Err(e) => {
+        (Err(e), _) | (_, Err(e)) => {
             klog::com_err(Some(&os_error_text(&e)), "while serving");
             eprintln!("{progname}: serve: {e}");
             exit(1);
@@ -345,6 +363,38 @@ fn read_trust_key(progname: &str, path: &str) -> krb5_crypto::ProtocolKey {
     }
     krb5_crypto::ProtocolKey::from_bytes(krb5_crypto::EncryptionType::Aes256CtsHmacSha196, &bytes)
         .unwrap_or_else(|e| cannot_start(progname, &format!("{e} while reading {path}")))
+}
+
+/// Bind the KDC ports the profile names, and take its datagram reply cap.
+fn bind_kdc(
+    progname: &str,
+    profile: &ProfileSet,
+) -> (Vec<UdpSocket>, Vec<TcpListener>, krb5_kdc::ListenLimits) {
+    let default_conf = krb5_config::KdcConf::default();
+    let conf = profile.kdc.as_ref().unwrap_or(&default_conf);
+    let udp_addrs = conf.kdc_udp_listeners().unwrap_or_else(|e| {
+        cannot_start(progname, &format!("kdc.conf: {e}"));
+    });
+    let tcp_addrs = conf.kdc_tcp_listeners().unwrap_or_else(|e| {
+        cannot_start(progname, &format!("kdc.conf: {e}"));
+    });
+    let udp = krb5_kdc::bind_udp_listeners(&udp_addrs).unwrap_or_else(|e| {
+        cannot_start(progname, &format!("{e} while initializing network"));
+    });
+    let tcp = krb5_kdc::bind_tcp_listeners_with_backlog(&tcp_addrs, conf.kdc_tcp_listen_backlog)
+        .unwrap_or_else(|e| {
+            cannot_start(progname, &format!("{e} while initializing network"));
+        });
+    let max_dgram =
+        usize::try_from(conf.kdc_max_dgram_reply_size.cast_unsigned()).unwrap_or(usize::MAX);
+    (
+        udp,
+        tcp,
+        krb5_kdc::ListenLimits {
+            max_dgram_reply_size: max_dgram,
+            ..krb5_kdc::ListenLimits::default()
+        },
+    )
 }
 
 fn nibble(b: u8) -> Option<u8> {

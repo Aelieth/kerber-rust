@@ -1,24 +1,28 @@
 # krb5-embed-realm
 
-Two embedders run in-process through the library's embed API: `krb5-embed-realm` runs `kadmind`,
-and `krb5-otp-kdc` ([below](#the-otp-kdc-krb5-otp-kdc)) runs the KDC with an example TOTP
-`OtpVerifier` and a `require_mfa` policy. Both prove the embed path end to end against MIT `kadmin`
-and `kpasswd` and `kinit -T`; neither is a shipped product.
+Two embedders run in-process through the library's embed API. `krb5-embed-realm` serves one store:
+the KDC loop (`serve_all_until`) on a thread and kadmind (`Kadmind::serve`, kpasswd included) on
+this thread, stopped by one `Shutdown`. `krb5-otp-kdc` ([below](#the-otp-kdc-krb5-otp-kdc)) is the
+KDC alone, with an example TOTP `OtpVerifier` and a `require_mfa` policy. Both prove the embed path
+against MIT `kadmin`, `kpasswd`, and `kinit`; neither is a shipped product.
 
-The kadmind half is the whole of what an embedder (the KLLDAP seam) does to start the admin service over a realm
-it already has a store for:
+An embedder that already holds the store does this:
 
 ```rust
-let listeners = Listeners::bind(&listen, Services::DAEMON, None)?;   // kpasswd 464, kadm5 749
-let mut kadmind = Kadmind::new(shared_store, config)?;              // password modules, GSS names
+let shared = shared_dump(store);
+let kdc_store: SharedStore = shared.clone(); // one lock
+let listeners = Listeners::bind(&listen, Services::DAEMON, None)?; // kpasswd 464, kadm5 749
+let mut kadmind = Kadmind::new(shared, config)?; // applies the profile, then GSS names
 let stop = Shutdown::new();
-kadmind.serve(&listeners, &stop)?;                                 // one loop, until stop.trigger()
+let flag = stop.stop_flag();
+thread::spawn(move || serve_all_until(kdc_store, udp, tcp, flag, limits, &KdcLog::process()));
+kadmind.serve(&listeners, &stop)?; // this thread, until stop.trigger()
 ```
 
-Unlike the daemon it never detaches and writes no pid file. `Listeners::bind` and `Kadmind::new`
-run every start-up check in the foreground, so a bad dictionary, profile or port stops it here with
-a `StartError`, leaving nothing behind. `Shutdown::trigger` — wired to SIGTERM and SIGINT — stops the
-loop at once.
+The KDC ports come from the same kdc.conf the daemon reads. Unlike the daemon it never detaches and
+writes no pid file. `Listeners::bind`, `Kadmind::new`, and the KDC bind run in the foreground, so a
+bad dictionary, profile, or port stops it here and leaves nothing behind. SIGTERM and SIGINT set the
+one flag; `trigger` wakes kadmind at once.
 
 ## Running it
 

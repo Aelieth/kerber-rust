@@ -307,6 +307,11 @@ impl Shutdown {
         }
     }
 
+    #[must_use]
+    pub fn stop_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.stop)
+    }
+
     pub(crate) fn wake_fd(&self) -> Option<&OwnedFd> {
         self.read.as_deref()
     }
