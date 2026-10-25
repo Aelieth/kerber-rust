@@ -70,6 +70,12 @@
 #   PK.bp320: a brainpoolP320r1 KDC identity: MIT's KDC loads it and alice's bp320 certificate kinit gets a TGT; ours
 #          refuses the key ("Cannot use key file ...: only ... brainpool P256, P384 and P512 EC keys and RSA keys are
 #          supported"), serves the realm without PKINIT, and the kinit ends rc 1 (fail closed, MIT first);
+#   PK.b17: with FIELD_DIFFSEND set to a prebuilt diffsend (a Fedora binary the VMs run), it is piped to the leg's
+#          KDC and sends alice seven PKINIT AS-REQs whose client signature is faulted on a P-256 identity -- empty, a
+#          wrong value or a truncated value, with the signed attributes (OpenSSL's EVP_DigestVerify) and without
+#          (EVP_PKEY_verify) -- each KRB-ERROR 80, and the leg's KDC log carries OpenSSL 3.5's "provider signature
+#          failure" seven times, MIT = ours; unset, the cell is skipped (the code 80 is MIT = ours in the CI
+#          differential; 3.0 logs "verification failure" for these seven, so the reason is lab-only);
 #   PK.dh: the KDC's realm has pkinit_dh_min_bits = 4096 and client2's kinit 2048 (~/pk/dh.conf first): the KDC
 #          refuses its 2048-bit DH with 65 and its groups, and kinit tries again with P-384 and gets a TGT;
 #   PK.dh1024: client2's kinit at pkinit_dh_min_bits = 1024 (~/pk/dh1024.conf first): MIT's kinit fails to make its
@@ -112,7 +118,7 @@ PREAUTH=0
 DBMATCH=0
 CHPW=0
 cleanup() {
-    timeout -k 5 60 "$LAB" ssh kdc -- "[ -e $KC.pk ] && sudo mv $KC.pk $KC && sudo systemctl restart krb5kdc; [ $ANON = 1 ] && sudo kadmin.local -q 'delprinc -force WELLKNOWN/ANONYMOUS'; [ $PREAUTH = 1 ] && sudo kadmin.local -q 'modprinc -requires_preauth alice'; [ $DBMATCH = 1 ] && sudo kadmin.local -q 'delstr alice pkinit_cert_match'; [ $CHPW = 1 ] && sudo kadmin.local -q 'delprinc -force pkexp'; sudo rm -rf $BIG $EC $KDCC; true" < /dev/null > /dev/null 2>&1
+    timeout -k 5 60 "$LAB" ssh kdc -- "[ -e $KC.pk ] && sudo mv $KC.pk $KC && sudo systemctl restart krb5kdc; [ $ANON = 1 ] && sudo kadmin.local -q 'delprinc -force WELLKNOWN/ANONYMOUS'; [ $PREAUTH = 1 ] && sudo kadmin.local -q 'modprinc -requires_preauth alice'; [ $DBMATCH = 1 ] && sudo kadmin.local -q 'delstr alice pkinit_cert_match'; [ $CHPW = 1 ] && sudo kadmin.local -q 'delprinc -force pkexp'; sudo rm -rf $BIG $EC $KDCC; rm -rf ~/pkb17; true" < /dev/null > /dev/null 2>&1
     timeout -k 5 60 "$LAB" ssh client2 -- 'rm -rf ~/pk; true' < /dev/null > /dev/null 2>&1
 }
 trap cleanup EXIT
@@ -519,6 +525,26 @@ for k in mit ${OURS:+ours}; do
     [ "$k" = ours ] && kinit=$OURS
     check "PK.bp320.$k" "^kinit $rc\$" run client2 "kdestroy -c FILE:\$HOME/pk/e.cc 2> /dev/null; $kinit -X X509_anchors=FILE:\$HOME/pk/bp320r1/ca.pem -X X509_user_identity=FILE:\$HOME/pk/bp320r1/client.pem,\$HOME/pk/bp320r1/client.key -c FILE:\$HOME/pk/e.cc alice < /dev/null 2>&1; echo \"kinit rc=\$?\""
 done
+
+section "PK.b17 seven faulted client signatures the KDC logs as OpenSSL 3.5's 'provider signature failure' (MIT and ours): diffsend sends them to the leg's KDC, each KRB-ERROR 80, the reason seven times in its log"
+if [ -n "${FIELD_DIFFSEND:-}" ] && [ -r "$FIELD_DIFFSEND" ]; then
+    # A fresh P-256 CA, KDC identity and alice certificate, as PK.ec, so the KDC reaches the signature check.
+    check PK.b17.make "^ec certs in $EC/b17\$" runin kdc "scripts/lib/pkinit-ec-certs.sh" "sudo sh -s -- $EC/b17 $REALM alice P-256" < "$HERE/../../../scripts/lib/pkinit-ec-certs.sh"
+    # The prebuilt diffsend (a Fedora binary the VMs run) piped from the host to the leg's KDC; the sha confirms it landed.
+    check PK.b17.ship '^[0-9a-f]{64}$' hostin "diffsend (prebuilt)" "$LABQ ssh kdc -- 'install -d ~/pkb17 && cat > ~/pkb17/diffsend && chmod 0755 ~/pkb17/diffsend && sha256sum < ~/pkb17/diffsend | cut -c1-64'" < "$FIELD_DIFFSEND"
+    # alice's certificate and key in one file for KERBER_PKINIT_USER; the key is read, never printed.
+    check PK.b17.id '^alice P-256 identity$' run kdc "sudo cat $EC/b17/client.pem $EC/b17/client.key > ~/pkb17/id.pem && openssl x509 -in ~/pkb17/id.pem -noout -text | grep -qE 'ASN1 OID: prime256v1' && echo 'alice P-256 identity'"
+    pkkdc PK.b17.kdc "\n[kdcdefaults]\n    pkinit_identity = FILE:$EC/b17/kdc.pem,$EC/b17/kdc.key\n    pkinit_anchors = FILE:$EC/b17/ca.pem\n"
+    kdcmark PK.b17.as
+    # Each fault goes once to the leg's KDC; diffsend grades the wire reply as KRB-ERROR 80 and prints a plain summary.
+    check PK.b17.send '^b17lab cases=7 ok=7$' run kdc "KERBER_DIFF_REALM=$REALM KERBER_DIFF_B17_PRINC=alice KERBER_PKINIT_USER=\$HOME/pkb17/id.pem \$HOME/pkb17/diffsend 127.0.0.1:88 127.0.0.1:88 \$HOME/pkb17/out b17lab 2>&1"
+    # The leg's KDC logged OpenSSL 3.5's reason for each fault: seven lines since the mark, MIT = ours.
+    kdcsince PK.b17.as 'provider signature failure'
+    countlast PK.b17.reason 'provider signature failure' 7
+    check PK.b17.clean rc run kdc "rm -rf ~/pkb17"
+else
+    note "PK.b17: FIELD_DIFFSEND is unset or unreadable, so the provider-signature-failure reason is not checked live on either leg (the error code 80 is MIT = ours in the CI differential); set it to a prebuilt diffsend to run the cell"
+fi
 
 section "PK.dh the KDC's pkinit_dh_min_bits = 4096: kinit's 2048-bit DH gets 65 and the KDC's groups, and kinit tries again with P-384 for a TGT (MIT and ours)"
 pkkdc PK.dh.kdc "\n[kdcdefaults]\n    pkinit_identity = FILE:$D/kdc.pem,$D/kdc.key\n    pkinit_anchors = FILE:$D/cacert.pem\n\n[realms]\n    $REALM = {\n        pkinit_dh_min_bits = 4096\n    }\n"

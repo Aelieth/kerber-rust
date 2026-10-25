@@ -48,6 +48,7 @@ struct Cfg {
     pauser_pw: Vec<u8>,
     krbtgt: Option<Keytab>,
     host: Option<Keytab>,
+    b17lab: bool,
 }
 
 fn parse_addr(s: &str) -> KdcAddr {
@@ -1170,6 +1171,8 @@ fn load_cfg() -> Result<Cfg, String> {
         .next()
         .ok_or_else(|| "missing mit-host:port".to_string())?;
     let out = PathBuf::from(args.next().unwrap_or_else(|| "/tmp/diff-corpus".into()));
+    // A 4th positional `b17lab` runs only the lab-only provider-signature-failure cases.
+    let b17lab = args.next().as_deref() == Some("b17lab");
     let realm = env::var("KERBER_DIFF_REALM").unwrap_or_else(|_| "KERBER.TEST".into());
     let user_pw = env::var("KRB5_PASSWORD")
         .unwrap_or_else(|_| "userpassword".into())
@@ -1195,6 +1198,7 @@ fn load_cfg() -> Result<Cfg, String> {
         pauser_pw,
         krbtgt,
         host,
+        b17lab,
     })
 }
 
@@ -1202,6 +1206,9 @@ fn run() -> Result<(), String> {
     let cfg = load_cfg()?;
     let realm = cfg.realm.as_str();
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
+    if cfg.b17lab {
+        return b17_lab_cases(&cfg, realm, &user);
+    }
     let pauser = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["pauser"]);
     let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "testhost.kerber.test"]);
     let etypes: Vec<i32> = EncryptionType::preferred()
@@ -5603,6 +5610,186 @@ fn b17_cms_cases(cfg: &Cfg, realm: &str, user: &PrincipalName) -> Result<(), Str
         err::PREAUTH_FAILED,
     )?;
 
+    Ok(())
+}
+
+/// The seven ECDSA value faults whose KDC-log reason differs by OpenSSL version -- 3.5 logs
+/// `provider signature failure`, 3.0 `verification failure` -- so CI gates only the code (80).
+fn b17_lab_cases(cfg: &Cfg, realm: &str, user: &PrincipalName) -> Result<(), String> {
+    let labuser = match env::var("KERBER_DIFF_B17_PRINC") {
+        Ok(p) => PrincipalName::new(PrincipalName::NT_PRINCIPAL, [p.as_str()]),
+        Err(_) => user.clone(),
+    };
+    let user = &labuser;
+    let base_cms = |nonce: u32| -> Result<Vec<u8>, String> {
+        let pem_path =
+            env::var("KERBER_PKINIT_USER").unwrap_or_else(|_| "/tmp/pkinit/user.pem".into());
+        let pem = fs::read_to_string(&pem_path)
+            .map_err(|e| format!("pkinit user pem {pem_path}: {e}"))?;
+        let (cert, leaf) = krb5_types::pkinit::parse_identity_pem(&pem)
+            .ok_or_else(|| format!("parse {pem_path}"))?;
+        let leaf = krb5_types::pkinit::IdentityKey::p256(leaf);
+        let kp = p256_generate().map_err(|e| e.to_string())?;
+        let req = as_req(user.clone(), realm, nonce, None).map_err(|e| e.to_string())?;
+        let body = encode(&req.0.req_body).map_err(|e| e.to_string())?;
+        let mut h = Sha1::new();
+        h.update(&body);
+        let pa = pa_pk_as_req_signed(&kp.public, &cert, &leaf, nonce, &h.finalize(), None)
+            .map_err(|e| e.to_string())?;
+        let req = decode::<krb5_types::pkinit::PaPkAsReq>(&pa.padata_value)
+            .map_err(|e| format!("decode PaPkAsReq: {e}"))?;
+        Ok(req.signed_auth_pack.as_ref().to_vec())
+    };
+    let as_with = |nonce: u32, cms: Vec<u8>| -> Result<Vec<u8>, String> {
+        let mut req = as_req(user.clone(), realm, nonce, None).map_err(|e| e.to_string())?;
+        let pa_req = krb5_types::pkinit::PaPkAsReq {
+            signed_auth_pack: cms.into(),
+            trusted_certifiers: None,
+            kdc_pk_id: None,
+        };
+        req.0.padata = Some(vec![PaData {
+            padata_type: pa::PK_AS_REQ,
+            padata_value: encode(&pa_req).map_err(|e| e.to_string())?.into(),
+        }]);
+        encode(&req).map_err(|e| e.to_string())
+    };
+    let edit_sd = |cms: &[u8], f: &dyn Fn(&mut Vec<der::Der>)| -> Result<Vec<u8>, String> {
+        let root = ra_root(cms)?;
+        let new_sd = {
+            let sd = der::at(&root, &[1, 0]).ok_or("no SignedData")?;
+            let der::Der::Cons(sd_tag, sd) = sd else {
+                return Err("SignedData not a SEQUENCE".into());
+            };
+            let mut kids = sd.clone();
+            f(&mut kids);
+            der::Der::Cons(*sd_tag, kids)
+        };
+        Ok(der::edit(&root, &[1, 0], Some(&new_sd)).bytes())
+    };
+    let get_sig = |cms: &[u8]| -> Result<Vec<u8>, String> {
+        let root = ra_root(cms)?;
+        let der::Der::Cons(_, sd) = der::at(&root, &[1, 0]).ok_or("no SignedData")? else {
+            return Err("SignedData not a SEQUENCE".into());
+        };
+        let Some(der::Der::Cons(_, infos)) = sd.iter().rev().find(|k| k.tag() == 0x31) else {
+            return Err("no signerInfos".into());
+        };
+        let Some(der::Der::Cons(_, si)) = infos.first() else {
+            return Err("no signerInfo".into());
+        };
+        match si.iter().find(|k| k.tag() == 0x04) {
+            Some(der::Der::Prim(_, sig)) => Ok(sig.clone()),
+            _ => Err("no signature".into()),
+        }
+    };
+    let set_sig = |cms: &[u8], sig: Vec<u8>| -> Result<Vec<u8>, String> {
+        edit_sd(cms, &move |kids: &mut Vec<der::Der>| {
+            if let Some(der::Der::Cons(_, infos)) = kids.iter_mut().rev().find(|k| k.tag() == 0x31)
+                && let Some(der::Der::Cons(_, si)) = infos.first_mut()
+                && let Some(s) = si.iter_mut().find(|k| k.tag() == 0x04)
+            {
+                *s = der::Der::Prim(0x04, sig.clone());
+            }
+        })
+    };
+    let drop_attrs = |cms: &[u8]| -> Result<Vec<u8>, String> {
+        edit_sd(cms, &|kids: &mut Vec<der::Der>| {
+            if let Some(der::Der::Cons(_, infos)) = kids.iter_mut().rev().find(|k| k.tag() == 0x31)
+                && let Some(der::Der::Cons(_, si)) = infos.first_mut()
+            {
+                si.retain(|k| k.tag() != 0xa0);
+            }
+        })
+    };
+    let flip = |mut sig: Vec<u8>| {
+        if let Some(b) = sig.last_mut() {
+            *b ^= 0x01;
+        }
+        sig
+    };
+    let trail = |mut sig: Vec<u8>| {
+        sig.push(0x00);
+        sig
+    };
+    // A short ECDSA-Sig-Value (r = s = 1): valid DER, not the signature.
+    let truncated = || vec![0x30u8, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x01];
+
+    let mut reqs: Vec<(&str, Vec<u8>)> = Vec::new();
+    let n = 0x1000_0230;
+    reqs.push((
+        "pkinit-provider-attrs-empty",
+        as_with(n, set_sig(&base_cms(n)?, Vec::new())?)?,
+    ));
+    let n = 0x1000_0231;
+    let base = base_cms(n)?;
+    let flipped = flip(get_sig(&base)?);
+    reqs.push((
+        "pkinit-provider-attrs-bit-flip",
+        as_with(n, set_sig(&base, flipped)?)?,
+    ));
+    let n = 0x1000_0232;
+    reqs.push((
+        "pkinit-provider-attrs-truncated",
+        as_with(n, set_sig(&base_cms(n)?, truncated())?)?,
+    ));
+    let n = 0x1000_0233;
+    reqs.push((
+        "pkinit-provider-noattrs-empty",
+        as_with(n, set_sig(&drop_attrs(&base_cms(n)?)?, Vec::new())?)?,
+    ));
+    let n = 0x1000_0234;
+    let base = drop_attrs(&base_cms(n)?)?;
+    let trailing = trail(get_sig(&base)?);
+    reqs.push((
+        "pkinit-provider-noattrs-non-der",
+        as_with(n, set_sig(&base, trailing)?)?,
+    ));
+    let n = 0x1000_0235;
+    let base = drop_attrs(&base_cms(n)?)?;
+    let flipped = flip(get_sig(&base)?);
+    reqs.push((
+        "pkinit-provider-noattrs-bit-flip",
+        as_with(n, set_sig(&base, flipped)?)?,
+    ));
+    let n = 0x1000_0236;
+    reqs.push((
+        "pkinit-provider-noattrs-truncated",
+        as_with(n, set_sig(&drop_attrs(&base_cms(n)?)?, truncated())?)?,
+    ));
+
+    let mut ok = 0;
+    for (case, req) in &reqs {
+        b17_lab_send(cfg, case, req)?;
+        ok += 1;
+    }
+    println!("b17lab cases={} ok={ok}", reqs.len());
+    Ok(())
+}
+
+fn b17_lab_send(cfg: &Cfg, case: &str, req: &[u8]) -> Result<(), String> {
+    write_der(&cfg.out, &format!("{case}.req.der"), req);
+    let raw = exchange_on_tcp(&cfg.rust, req).map_err(|e| format!("{case}: send: {e}"))?;
+    if raw.first() != Some(&0x7e) {
+        return Err(format!(
+            "{case}: tag {:02x} want 0x7e",
+            raw.first().unwrap_or(&0)
+        ));
+    }
+    let ke: KrbError = decode(&raw).map_err(|e| format!("{case} decode: {e}"))?;
+    if ke.error_code != err::DIGEST_IN_SIGNED_DATA_NOT_ACCEPTED {
+        return Err(format!("{case}: error_code {} want 80", ke.error_code));
+    }
+    write_der(&cfg.out, &format!("{case}.rep.der"), &raw);
+    let etext = ke
+        .e_text
+        .as_ref()
+        .and_then(|t| std::str::from_utf8(t.as_bytes()).ok())
+        .unwrap_or("");
+    println!(
+        r#"{{"event":"diffsend","case":"{case}","outcome":"ok","error_code":{},"e_text":"{etext}","req_sha1":"{}"}}"#,
+        ke.error_code,
+        sha1_hex(req)
+    );
     Ok(())
 }
 
