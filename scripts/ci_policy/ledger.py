@@ -396,6 +396,7 @@ _MIT_NA = re.compile(r"^\s*(?:n/a|absent|—|-|RFC\s*\d)", re.I)
 _PROOF_UNIT = re.compile(r"`([a-z][a-z0-9]*(?:_[a-z0-9]+)+)`")
 _PROOF_CASE = re.compile(r"`([a-z][a-z0-9]*(?:-[a-z0-9]+)+)`")
 _PROOF_GATE = re.compile(r"\b([\w-]+-gate\.sh)\b")
+_PROOF_FIELD = re.compile(r"\bfield `([a-z][a-z0-9-]*)`")
 _HISTORIC_PROOF = re.compile(r"\bsince removed\b")
 _FN_NAMES: set[str] | None = None
 _CASE_TEXT: str | None = None
@@ -429,7 +430,7 @@ def _case_text() -> str:
 
 
 def _proof_exists(proof: str) -> bool:
-    """A live fn, a gate script on disk, a diffsend case, or a removed fn the cell still names.
+    """A live fn, a gate script or field scenario on disk, a diffsend case, or a named removed fn.
 
     The removed-fn form is the words `since removed` plus at least one backticked
     unit. The phrase alone verifies nothing.
@@ -440,6 +441,9 @@ def _proof_exists(proof: str) -> bool:
     if units and _HISTORIC_PROOF.search(proof):
         return True
     if any((ROOT / "scripts" / g).is_file() for g in _PROOF_GATE.findall(proof)):
+        return True
+    scenarios = ROOT / "harness/field/scenarios"
+    if any((scenarios / f"{s}.sh").is_file() for s in _PROOF_FIELD.findall(proof)):
         return True
     return any(f'"{c}"' in _case_text() or f"'{c}'" in _case_text() for c in _PROOF_CASE.findall(proof))
 _CRATE_ALIASES = {

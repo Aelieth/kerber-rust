@@ -11,7 +11,7 @@ logs. Unit tests alone do not promote a stage.
 | 3 | Protocol library + minimal client (AS/TGS), ccache/keytab, first live MIT production gate | **In tree** (`krb5-protocol`, `krb5-client`; gate: `scripts/client-gate.sh`) |
 | 4 | Higher-level client, GSS-API/SPNEGO (RFC 4121) | **In tree** (`krb5-gss` wrap/unwrap/MIC, SPNEGO framing; MIT GSS is out-of-process) |
 | 5 | KDC core (AS+TGS) + database backend, bidirectional interop | **In tree** (in-memory + dump-v7 at-rest; one-release KDB3 load; MIT `kdb5_util` dump/load; ACL; AP-REQ; gates: `kdc-gate.sh`, `bidirectional-gate.sh`, `kdb-dump-gate.sh`). MIT `kinit` both directions is the database oracle. |
-| 6 | Admin tools, plugins, propagation, remaining parity | **In tree** (1.0: kadmind AUTH_GSSAPI, kpasswd, full-dump kprop both ways). **Era III Tier 1:** KDB traits + registries ([`plugins.md`](plugins.md), not dlopen); named policies (`policy-gate.sh`); iprop serial/ulog (`iprop-gate.sh`). |
+| 6 | Admin tools, plugins, propagation, remaining parity | **In tree** (1.0: kadmind AUTH_GSSAPI, kpasswd, full-dump kprop both ways). **Era III Tier 1:** KDB traits + registries ([`plugins.md`](plugins.md), not dlopen); named policies (`ticket-flags.sh`); iprop serial/ulog (`iprop-gate.sh`). |
 | 7–8 | Hardening, stress, chaos, adversarial, observability, final gates | **In tree (1.0).** MIT-oracle gates exist for AS/TGS, FAST TGS `kvno`, GSS wrap, PKINIT `kinit`, SPAKE `kinit` (`pa_type` 151 / group 2), two-realm `kvno`, and SHA-2 `kinit`/`kvno`. Golden MIT DER is byte-diffed; published crypto KATs; 9 cargo-fuzz targets; panic-deny lints (`unwrap_used` / `expect_used` / `panic`) on all twelve library roots (every crate but the test-only `krb5-testkit`) and every binary but the four harness-only `krb5-tools` probes (`ccache-probe`, `diffsend`, `kprop-expired-apreq`, `loadgen`) (the gap on `krb5-admin`, `krb5-asn1` and `krb5-log` closed at zero code cost). AD PAC NDR is golden-gated. Differential-vs-MIT is `scripts/differential-gate.sh` (same AS/TGS bytes to Rust and MIT 1.22.2 on one dump). Inventory: [`interop-matrix.md`](interop-matrix.md). Live SSPI remains environment-dependent. |
 
 Stage 2 production-gate of a *Rust client* is Stage 3. This repository
@@ -78,7 +78,7 @@ remains. Differential-vs-MIT is `differential-gate` (in CI). **kprop** on 754
 is gated both directions (`kprop-gate` MIT→Rust; `kprop-reverse-gate`
 Rust→MIT, additive to the in-process dump/send tests). **kadmind** MIT-gates add/get/list/mod/chrand/
 `renprinc`/del. Per push, `ci.yml` spreads them over four jobs, for example: `harness`
-(`pkinit-gate`, `policy-gate`, `kadmin-rust-gate`, `kadmin-rust-acl-gate`,
+(`pkinit-gate`, `kadmin-rust-gate`, `kadmin-rust-acl-gate`,
 `kadmin-mit-gate`, `kadmin-both-gate`), `harness-2`
 (`kpasswd-rust-gate` / `kpasswd-mit-gate`, `kdb-dump-gate`,
 `differential-gate`, `kprop-gate`, `kprop-reverse-gate`, `iprop-gate`), `mit-extra` (the
@@ -99,8 +99,8 @@ before it counts as done:
 
 | Phase | Delivers |
 | --- | --- |
-| **G1** | **Faithfulness — landed.** Principal/password expiration, stored `DISALLOW_*` / `OK_AS_DELEGATE` / `REQUIRES_HW_AUTH` / `NO_AUTH_DATA_REQUIRED`, real `GET_PRIVS`, iprop/kpropd ACLs. Gates: `ticket-flags`, `flags-gate`, `getprivs-gate`, `prop-acl-gate` |
-| **G2** | **Renewal & postdating — landed.** `kinit -R`, MAY-POSTDATE / POSTDATED / VALIDATE, the PROXIABLE flag. Gates: `renew-gate`, `postdate-gate` |
+| **G1** | **Faithfulness — landed.** Principal/password expiration, stored `DISALLOW_*` / `OK_AS_DELEGATE` / `REQUIRES_HW_AUTH` / `NO_AUTH_DATA_REQUIRED`, real `GET_PRIVS`, iprop/kpropd ACLs. Gates: `ticket-flags`, `getprivs-gate`, `prop-acl-gate` |
+| **G2** | **Renewal & postdating — landed.** `kinit -R`, MAY-POSTDATE / POSTDATED / VALIDATE, the PROXIABLE flag. Gates: `ticket-flags` |
 | **G3** | **kadmin completeness — landed.** `getprinc` key metadata, `EXTRACT_KEYS` (`ktadd -norandkey`), PURGEKEYS, SETKEY, GET/SET_STRINGS. Gate: `kadmin-rust-gate`, `kadmin-mit-gate`. MIT `*`/`x` do not grant extract (`e`). SETKEY is unit-tested (no MIT `setkey` verb) |
 | **G4** | **iprop fidelity — landed.** Incremental kdbe carries string-attrs / history / policy / lockout; ulog persists across master restart. Gates: `iprop-gate`, `differential-gate` |
 | **G5** | **GSS breadth — landed.** Credential delegation, real SPNEGO negotiation, `wrap_iov`/`unwrap_iov` for NFSv4 `RPCSEC_GSS` / SSH / HTTP · *hard requirement*. Gate: `gss-gate` |
@@ -146,6 +146,6 @@ See [`embed/klldap.md`](embed/klldap.md). Replacing
 
 **Tier 1 §6** (plugins / named policies / iprop) is in tree: KDB
 traits + `MemoryStore`, kdcpreauth/kdcpolicy registries, named
-policies + lockout (`policy-gate.sh`), iprop serial/ulog
+policies + lockout (`ticket-flags.sh`), iprop serial/ulog
 (`iprop-gate.sh`). Plugin shape is Rust traits, not dlopen
 ([`plugins.md`](plugins.md)).

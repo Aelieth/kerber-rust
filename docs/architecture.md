@@ -105,7 +105,7 @@ MIT `kprop` then MIT `kinit` is gated by `scripts/kprop-gate.sh`.
 MIT `kinit` is `scripts/kprop-reverse-gate.sh`: kprop, as MIT's, opens no database.
 MIT 1.22.2 `kadmin` add/get/list/mod/chrand/del is gated by
 `scripts/kadmin-rust-gate.sh` and `scripts/kadmin-mit-gate.sh`. Named policies and lockout:
-`scripts/policy-gate.sh`. Iprop serial/ulog and `kpropd -A`:
+`ticket-flags.sh`. Iprop serial/ulog and `kpropd -A`:
 `scripts/iprop-gate.sh`. Extension points: [`plugins.md`](plugins.md)
 (traits, not dlopen). The database is locked between
 processes as MIT's db2 module locks it (`dblock.rs`): `principal.ok` and

@@ -103,7 +103,7 @@ fn default_principal_flags_is_params_flags_for_a_create() {
     );
     // A random-key (service) create without the stanza is MIT's
     // KRB5_KDB_DEF_FLAGS 0: the knob's scope is password-keyed creates, so
-    // U2U to a fresh `-randkey` service is not `NO PREAUTH` (flags-gate).
+    // U2U to a fresh `-randkey` service is not `NO PREAUTH`.
     store
         .insert_new_randkey(&name("host/z1knob.kerber.test"), TEST_REALM, &[], ACTOR)
         .unwrap();

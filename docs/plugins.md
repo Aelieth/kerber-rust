@@ -87,7 +87,7 @@ decrypted under the `kadmin/history` key on apply (`scripts/iprop-gate.sh`
 history cell); policies themselves reach a replica only by full resync,
 as with MIT (`kdb5.c` starts the log over on a policy change).
 
-Gates: `scripts/policy-gate.sh` (MIT `kadmin` policies + `kinit`
+Gates: `ticket-flags.sh` (MIT `kadmin` policies + `kinit`
 `CLIENT_REVOKED`, minclasses 5, lockout time, history-N);
 `scripts/iprop-gate.sh`
 (`kpropd -A` serial-delta then MIT `kinit extra`; MIT kadmind → Rust

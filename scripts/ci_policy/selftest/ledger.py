@@ -250,6 +250,8 @@ def _self_test_ledger() -> None:
     _must_die(check_ledger_anchors, _row("krb5-kdc/plugins.rs advertise:1", verdict="absent"))
     _must_die(check_ledger_anchors, _row("krb5-kdc/dispatch.rs make_toolong_error", "no status word"))
     _must_die(check_ledger_anchors, _row("krb5-kdc/dispatch.rs make_toolong_error", proof="`no_such_unit_anywhere`"))
+    check_ledger_anchors(_row("krb5-kdc/dispatch.rs make_toolong_error", proof="field `client-tools` CT.dir.missing"))
+    _must_die(check_ledger_anchors, _row("krb5-kdc/dispatch.rs make_toolong_error", proof="field `no-such-scenario` X"))
     check_ledger_anchors(
         _row(
             "krb5-kdc/dispatch.rs make_toolong_error",

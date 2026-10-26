@@ -262,7 +262,7 @@ docker exec -d \
     "$NAME" sh -c 'krb5kdc >/tmp/mit-kdc-d.log 2>&1'
 require_port_in "$NAME" 88 "MIT krb5kdc listen (D)"
 # The Rust KDC's UDP loop leaves the shutdown flag unread until its read
-# timeout, so a plain kill can keep :8888 bound; kill -9 like policy-gate, and
+# timeout, so a plain kill can keep :8888 bound; kill -9, and
 # relaunch on the persisted DB without --test-realm like restart-gate.
 docker exec "$NAME" sh -c '
 for comm in /proc/[0-9]*/comm; do
