@@ -540,9 +540,9 @@ fi
 
 # W1-Z Z1.2: client FAST reply processing, MIT kinit -T and Rust krb5-kinit
 # --fast side by side against the MIT KDC behind a rewriting MITM
-# (scripts/lib/kdc-rewrite-proxy.py). `user` is +requires_preauth on this leg
+# (harness/field/lib/kdc-rewrite-proxy.py). `user` is +requires_preauth on this leg
 # (above), /tmp/krb5cc_armor is its MIT armor TGT.
-docker cp "$ROOT/scripts/lib/kdc-rewrite-proxy.py" "$MITNAME":/tmp/kdc-rewrite-proxy.py
+docker cp "$ROOT/harness/field/lib/kdc-rewrite-proxy.py" "$MITNAME":/tmp/kdc-rewrite-proxy.py
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kinit" "$MITNAME":/tmp/krb5-kinit
 docker exec "$MITNAME" chmod +x /tmp/krb5-kinit
 docker exec "$MITNAME" python3 /tmp/kdc-rewrite-proxy.py --self-test

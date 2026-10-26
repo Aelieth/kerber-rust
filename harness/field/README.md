@@ -256,6 +256,7 @@ harness/field/run.sh --profile kill-loop --ref plan-12   # SW-3's kill loop (lab
 | `acl-variant.sh` | The `svc/setup` ACL-settle helper (promoted from the L2 hand record): `acl_variant <letters> <tag>` writes `kadm5.acl` giving `svc/setup` those letters on `host/*` and `nfs/*`, restarts kadmind, then grades the `addprinc` and `ktadd` from client2 against the outcome the letters dictate (MIT's refusal texts); both legs run it |
 | `kt-vs-kdc.py` | A keytab's newest kvno and enctypes (`klist -k -e`) against the KDC's `getprinc` |
 | `kt-records.py` | `client-tools`' keytab helper on client2: a v2 keytab with an unknown enctype, and two keytabs compared record by record with the timestamps zeroed (it never prints a key) |
+| `kdc-rewrite-proxy.py` | A UDP/TCP man-in-the-middle in front of a KDC: it rewrites replies (`as-rep-cname`, `strip-fx-fast`; `scripts/mit-fast-kdc-gate.sh`), or answers a named realm's AS-REQ itself with a client referral (`refer`; `client-tools`' CR cells). It logs each request's realm and each reply's error code, never a key |
 | `nfs-probe.sh`, `spnego-probe.sh`, `check_spnego.lab.sh` | S2's probes, run in throwaway containers on services (image `localhost/s2-nfs-probe:f43`, own network namespace): the kit's NFS client set-up and alice's, root's and bob's NFS access; the kit's `check_spnego` (its helper block and function verbatim from kit commit `e9f3325`, only the four SSO constants set to the lab's) and the two requests by hand |
 | `kc-events.sh` | Keycloak's events since a time, read-only through the admin API from the host (the admin password on stdin, the token through a pipe) |
 | `lldap-membership.sh` | S1's: one lldap group membership added or removed on services (lldap's admin password on stdin) |
@@ -485,7 +486,10 @@ would remove it.
   on FILE: caches and on the default `FILE:/tmp/krb5cc_%{uid}`, `kinit -k -t` with `-c` and
   with `KRB5CCNAME`, `klist -k` as the kit parses it. Each request kinit and kvno send goes
   through `scripts/lib/kdc-req-proxy.py` on client2 (request shapes only), and ours are
-  compared with MIT's. Also: MIT's klist and kvno on our caches and ours on MIT's, DIR:
+  compared with MIT's. CR: client referrals, from made-up realms whose KDC is
+  `lib/kdc-rewrite-proxy.py refer` (68 and 6 followed with `-C`, the password asked for the
+  rewritten client; no `-C`, no restart; a referral loop stops after 16 requests). Also:
+  MIT's klist and kvno on our caches and ours on MIT's, DIR:
   collections and kswitch, ktutil's v1 and v2 keytabs (`lib/kt-records.py`), `+needchange`,
   and the refusals in MIT's text. The rows run with `LC_ALL=C`, since MIT's klist dates
   follow the locale and ours print the C locale's; one INFO pair records the session's own

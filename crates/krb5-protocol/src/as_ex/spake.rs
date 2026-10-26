@@ -14,8 +14,8 @@ use super::fast::ask_responder;
 use super::password::{CANTREADPWD, ModuleFail, PasswordCell};
 use super::{
     AsOutcome, AsRequest, KdcMsg, S2kMaterial, allowed_padata, build_as_req_from,
-    classify_kdc_error, conf_preferred_preauth_types_for, error_has_salt, fallback_s2k, find_pa,
-    finish_as_rep, method_from_error, pick_key, req_sname, request_times, retried, salt_cname,
+    conf_preferred_preauth_types_for, error_has_salt, fallback_s2k, find_pa, finish_as_rep,
+    kdc_error, method_from_error, pick_key, req_sname, request_times, retried, salt_cname,
     select_s2k, select_s2k_after, send_as, sort_krb5_padata_sequence, trace_keytab_gak,
     trace_preauth_input, trace_reply_padata,
 };
@@ -480,7 +480,7 @@ pub(super) fn continue_spake(
                 current = e;
             }
             KdcMsg::Error(e) => {
-                return classify_kdc_error(&e).map(|out| SpakeEnd::Done(Box::new(out)));
+                return Err(kdc_error(req, &e));
             }
             KdcMsg::TgsRep => return Err(Error::UnexpectedPdu),
         }

@@ -2,6 +2,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+use std::borrow::Cow;
 use std::path::Path;
 
 use krb5_asn1::decode;
@@ -356,7 +357,7 @@ pub fn kinit_ex(
         enterprise,
         ..KinitParams::default()
     };
-    kinit_with(ctx, kdc, principal, password, &spec, params)
+    kinit_with(ctx, kdc, principal, password, &spec, &params)
 }
 
 pub fn kinit_to_spec(
@@ -381,7 +382,7 @@ pub fn kinit_to_spec(
         principal,
         password,
         spec,
-        KinitParams {
+        &KinitParams {
             service,
             want_spake,
             armor_ccache,
@@ -400,7 +401,7 @@ pub fn kinit_with(
     principal: &str,
     password: &mut [u8],
     spec: &CcSpec,
-    params: KinitParams<'_>,
+    params: &KinitParams<'_>,
 ) -> Result<KinitResult, Box<dyn std::error::Error + Send + Sync>> {
     match client_princ(ctx, principal, params.enterprise) {
         Ok(me) => kinit_with_princ(ctx, kdc, &me, password, spec, params),
@@ -417,7 +418,7 @@ pub fn kinit_with_princ(
     me: &creds::Princ,
     password: &mut [u8],
     spec: &CcSpec,
-    params: KinitParams<'_>,
+    params: &KinitParams<'_>,
 ) -> Result<KinitResult, Box<dyn std::error::Error + Send + Sync>> {
     let mut lazy = LazyPassword {
         given: password,
@@ -425,6 +426,7 @@ pub fn kinit_with_princ(
         read: None,
         failed: None,
         otp: params.preauth_prompter,
+        client: String::new(),
     };
     let built = kinit_inner(ctx, kdc, me, &mut lazy, params);
     let result = match built {
@@ -481,9 +483,9 @@ pub fn kinit_prompted(
     ctx: &ClientContext,
     kdc: &KdcAddr,
     principal: &str,
-    prompt: &mut dyn FnMut() -> Result<Zeroizing<Vec<u8>>, Krb5Error>,
+    prompt: &mut ReadPassword<'_>,
     spec: &CcSpec,
-    params: KinitParams<'_>,
+    params: &KinitParams<'_>,
 ) -> Result<KinitResult, Box<dyn std::error::Error + Send + Sync>> {
     let me = client_princ(ctx, principal, params.enterprise)?;
     kinit_prompted_princ(ctx, kdc, &me, prompt, spec, params)
@@ -493,9 +495,9 @@ pub fn kinit_prompted_princ(
     ctx: &ClientContext,
     kdc: &KdcAddr,
     me: &creds::Princ,
-    prompt: &mut dyn FnMut() -> Result<Zeroizing<Vec<u8>>, Krb5Error>,
+    prompt: &mut ReadPassword<'_>,
     spec: &CcSpec,
-    params: KinitParams<'_>,
+    params: &KinitParams<'_>,
 ) -> Result<KinitResult, Box<dyn std::error::Error + Send + Sync>> {
     let mut lazy = LazyPassword {
         given: b"",
@@ -503,6 +505,7 @@ pub fn kinit_prompted_princ(
         read: None,
         failed: None,
         otp: params.preauth_prompter,
+        client: String::new(),
     };
     match kinit_inner(ctx, kdc, me, &mut lazy, params) {
         Ok((r, cc)) => write_out_ccache(ctx, spec, cc).map(|()| r),
@@ -523,12 +526,15 @@ fn client_princ(
     Ok((krb5_protocol::realm(&realm_s), cname))
 }
 
+pub type ReadPassword<'p> = dyn FnMut(&str) -> Result<Zeroizing<Vec<u8>>, Krb5Error> + 'p;
+
 struct LazyPassword<'p> {
     given: &'p [u8],
-    prompt: Option<&'p mut dyn FnMut() -> Result<Zeroizing<Vec<u8>>, Krb5Error>>,
+    prompt: Option<&'p mut ReadPassword<'p>>,
     read: Option<Zeroizing<Vec<u8>>>,
     failed: Option<Krb5Error>,
     otp: Option<PreauthPrompter<'p>>,
+    client: String,
 }
 
 struct KinitPrompt<'a, 'p>(&'a mut LazyPassword<'p>);
@@ -575,7 +581,7 @@ impl LazyPassword<'_> {
         let Some(prompt) = self.prompt.as_mut() else {
             return Ok(Zeroizing::new(self.given.to_vec()));
         };
-        match prompt() {
+        match prompt(&self.client) {
             Ok(p) => {
                 self.read = Some(p.clone());
                 Ok(p)
@@ -1068,7 +1074,7 @@ fn exchange_shape_direct(
     cc: Option<&ArmorCcache>,
     shape: &AsShape<'_>,
     password: &[u8],
-) -> Result<AsOutcome, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<Result<AsOutcome, ProtocolError>, Box<dyn std::error::Error + Send + Sync>> {
     let defer = cc.is_some() && armor.is_none();
     let first = {
         let req = shape.request(armor.as_ref(), password);
@@ -1078,40 +1084,193 @@ fn exchange_shape_direct(
             as_exchange(&req)
         }
     };
-    match first {
-        Err(ProtocolError::FastUpgrade) => {
-            load_armor_for_upgrade(ctx, armor, cc, shape.realm)?;
-            let req = shape.request(armor.as_ref(), password);
-            as_exchange(&req).map_err(Into::into)
+    if !matches!(first, Err(ProtocolError::FastUpgrade)) {
+        return Ok(first);
+    }
+    load_armor_for_upgrade(ctx, armor, cc, shape.realm)?;
+    let req = shape.request(armor.as_ref(), password);
+    Ok(as_exchange(&req))
+}
+
+// MIT: `MAX_IN_TKT_LOOPS` (lib/krb5/krb/get_in_tkt.c:398-398)
+const MAX_IN_TKT_LOOPS: usize = 16;
+
+/// A request's realm-independent part.
+#[derive(Clone, Copy)]
+struct Ask<'a> {
+    sname: Option<&'a krb5_types::PrincipalName>,
+    ticket: &'a AsTicketOpts,
+    want_spake: bool,
+    service: bool,
+    keytab: bool,
+    new_password: Option<&'a [u8]>,
+}
+
+/// None: the first realm's.
+struct Leg<'c> {
+    realm: String,
+    kdc: KdcAddr,
+    profile: Cow<'c, Krb5Conf>,
+    armor: Option<FastArmor>,
+    pkinit: Option<ClientPkinit>,
+    keys: Option<Result<Vec<krb5_crypto::ProtocolKey>, KeytabFailure>>,
+}
+
+impl<'c> Leg<'c> {
+    fn first(ctx: &'c ClientContext, realm: &str, kdc: &KdcAddr, armor: Option<FastArmor>) -> Self {
+        Self {
+            realm: realm.to_owned(),
+            kdc: kdc.clone(),
+            profile: Cow::Borrowed(&ctx.profile),
+            armor,
+            pkinit: None,
+            keys: None,
         }
-        other => other.map_err(Into::into),
+    }
+
+    // MIT: `restart_init_creds_loop` (lib/krb5/krb/get_in_tkt.c:780-848)
+    fn referred(
+        ctx: &'c ClientContext,
+        params: &KinitParams<'_>,
+        cname: &krb5_types::PrincipalName,
+        prev: &Self,
+        realm: String,
+        ask: Ask<'_>,
+        kt: (Option<&Keytab>, Option<&KeytabFailure>),
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let kdc = creds::kdc_for_realm(&ctx.profile, &realm)?;
+        let profile = if prev.profile.encrypted_timestamp_disabled(&prev.realm)
+            && !ctx.profile.encrypted_timestamp_disabled(&realm)
+        {
+            let mut p = ctx.profile.clone();
+            p.disable_encrypted_timestamp.insert(realm.clone(), true);
+            Cow::Owned(p)
+        } else {
+            Cow::Borrowed(&ctx.profile)
+        };
+        let armor = initial_armor(ctx, params.armor_ccache, &realm, ask.service)?;
+        let pkinit = client_pkinit(ctx, params, &realm)?;
+        // MIT: `krb5_ktfile_get_entry` (lib/krb5/keytab/kt_file.c:379-391)
+        let keys = match kt {
+            (_, Some(failure)) => Some(Err(failure.clone())),
+            (Some(kt), None) => Some(
+                krb5_protocol::keytab_init_creds_keys(kt, cname, &realm)
+                    .map(|(keys, _)| keys)
+                    .ok_or_else(|| KeytabFailure {
+                        code: krb5_protocol::trace::KRB5_KT_NOTFOUND,
+                        text: format!(
+                            "No key table entry found for {}",
+                            cname.unparse_with_realm(&realm)
+                        ),
+                    }),
+            ),
+            (None, None) => None,
+        };
+        Ok(Self {
+            realm,
+            kdc,
+            profile,
+            armor,
+            pkinit: Some(pkinit),
+            keys,
+        })
     }
 }
 
-fn kinit_inner(
-    ctx: &ClientContext,
-    kdc: &KdcAddr,
-    me: &creds::Princ,
+// MIT: `init_creds_step_reply` (lib/krb5/krb/get_in_tkt.c:1745-1758)
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one request's state across its realms"
+)]
+fn follow_referrals<'c>(
+    ctx: &'c ClientContext,
+    params: &KinitParams<'_>,
+    cname: &krb5_types::PrincipalName,
+    etypes: &[i32],
+    pkinit0: &ClientPkinit,
+    keytab0: Option<KeytabArg<'_>>,
+    kt: (Option<&Keytab>, Option<&KeytabFailure>),
+    ask: Ask<'_>,
+    mut leg: Leg<'c>,
     password: &mut LazyPassword<'_>,
-    params: KinitParams<'_>,
-) -> Result<(KinitResult, FileCcache), Box<dyn std::error::Error + Send + Sync>> {
-    let cname = me.1.clone();
-    let realm_s = String::from_utf8_lossy(me.0.as_bytes()).into_owned();
-    trace::init_creds(&cname, &realm_s, params.in_tkt_service);
-    let resolved = resolve_kdc(&ctx.profile, &realm_s, kdc)?;
-    let mut armor = initial_armor(
-        ctx,
-        params.armor_ccache,
-        &realm_s,
-        params.in_tkt_service.is_some(),
-    )?;
+) -> Result<(Result<AsOutcome, ProtocolError>, Leg<'c>), Box<dyn std::error::Error + Send + Sync>> {
+    let realm0 = leg.realm.clone();
+    for _ in 0..MAX_IN_TKT_LOOPS {
+        password.client = cname.unparse_with_realm(&leg.realm);
+        let out = {
+            // MIT: `restart_init_creds_loop` (lib/krb5/krb/get_in_tkt.c:823-844)
+            let server = ask
+                .sname
+                .cloned()
+                .unwrap_or_else(|| krb5_types::PrincipalName::krbtgt(&leg.realm));
+            let mut ticket = ask.ticket.clone();
+            ticket.allowed_preauth_type =
+                allowed_preauth_type(params.in_ccache, &server, &leg.realm);
+            ticket.pa_config_in = pa_config_in(params.in_ccache, &server, &leg.realm);
+            let shape = AsShape {
+                cname: cname.clone(),
+                realm: &leg.realm,
+                kdc: &leg.kdc,
+                profile: &leg.profile,
+                want_spake: ask.want_spake,
+                pkinit: Some(leg.pkinit.as_ref().unwrap_or(pkinit0).arg()),
+                canonicalize: params.canonicalize,
+                sname: ask.sname,
+                etypes,
+                ticket,
+            };
+            let keytab = match (&leg.keys, params.keytab) {
+                _ if !ask.keytab => None,
+                (None, _) => keytab0,
+                (Some(Ok(keys)), Some(path)) => Some(KeytabArg::Keys(keys, path)),
+                (Some(Err(failure)), Some(path)) => Some(KeytabArg::Unreadable(failure, path)),
+                (Some(_), None) => None,
+            };
+            match ask.new_password {
+                Some(pw) => {
+                    exchange_shape_direct(ctx, &mut leg.armor, params.armor_ccache, &shape, pw)?
+                }
+                None => exchange_shape(
+                    ctx,
+                    password,
+                    keytab,
+                    &mut leg.armor,
+                    params.armor_ccache,
+                    &shape,
+                )?,
+            }
+        };
+        // MIT's text names the rewritten client.
+        let realm = match out {
+            Err(ProtocolError::ClientReferral { realm, .. }) => realm,
+            Err(
+                ref e @ (ProtocolError::KrbError {
+                    code: krb5_types::err::C_PRINCIPAL_UNKNOWN,
+                    ..
+                }
+                | ProtocolError::Io { .. }),
+            ) if leg.realm != realm0 => {
+                return Err(Krb5Error::from_as(e, &password.client, &leg.realm).into());
+            }
+            out => return Ok((out, leg)),
+        };
+        leg = Leg::referred(ctx, params, cname, &leg, realm, ask, kt)?;
+    }
+    Err(Krb5Error::new(Code::Other, "Looping detected inside krb5_get_in_tkt").into())
+}
+
+fn client_pkinit(
+    ctx: &ClientContext,
+    params: &KinitParams<'_>,
+    realm: &str,
+) -> Result<ClientPkinit, Box<dyn std::error::Error + Send + Sync>> {
     let PkinitConf {
         identities: conf_ids,
         anchors: conf_an,
         pool,
         rules,
         opts,
-    } = pkinit_from_conf(&ctx.profile, &realm_s);
+    } = pkinit_from_conf(&ctx.profile, realm);
     let identities = match params.pkinit_identity {
         _ if params.anonymous => Vec::new(),
         Some(p) => vec![p.to_string_lossy().into_owned()],
@@ -1122,7 +1281,7 @@ fn kinit_inner(
     } else {
         params.pkinit_anchors
     };
-    let pkinit = match (anchors.is_empty(), params.anonymous) {
+    Ok(match (anchors.is_empty(), params.anonymous) {
         (false, true) => match load_pkinit_anchors(anchors, &pool, opts)? {
             pk if pk.anchors.is_empty() => ClientPkinit::Failed(PkinitFailure {
                 code: krb5_protocol::trace::ERROR_TABLE_BASE_KRB5 + 24,
@@ -1134,11 +1293,32 @@ fn kinit_inner(
         },
         (true, true) => return Err("anonymous PKINIT requires pkinit_anchors".into()),
         (_, false) => load_pkinit(&identities, anchors, &pool, &rules, opts)?,
-    };
+    })
+}
+
+fn kinit_inner(
+    ctx: &ClientContext,
+    kdc: &KdcAddr,
+    me: &creds::Princ,
+    password: &mut LazyPassword<'_>,
+    params: &KinitParams<'_>,
+) -> Result<(KinitResult, FileCcache), Box<dyn std::error::Error + Send + Sync>> {
+    let cname = me.1.clone();
+    let realm_s = String::from_utf8_lossy(me.0.as_bytes()).into_owned();
+    trace::init_creds(&cname, &realm_s, params.in_tkt_service);
+    let resolved = resolve_kdc(&ctx.profile, &realm_s, kdc)?;
+    let armor = initial_armor(
+        ctx,
+        params.armor_ccache,
+        &realm_s,
+        params.in_tkt_service.is_some(),
+    )?;
+    let pkinit = client_pkinit(ctx, params, &realm_s)?;
     let mut etypes = krb5_protocol::conf_etypes(&ctx.profile, false);
-    let mut ticket = params.ticket;
+    let mut ticket = params.ticket.clone();
     ticket.anonymous |= params.anonymous;
     let mut keytab_failure: Option<KeytabFailure> = None;
+    let mut kt = None;
     let keytab_keys = if let Some(ktpath) = params.keytab {
         match read_keytab_file(ktpath) {
             Err(failure) => {
@@ -1150,9 +1330,9 @@ fn kinit_inner(
                 None
             }
             Ok(bytes) => {
-                let kt = Keytab::parse(&bytes)?;
+                let parsed = Keytab::parse(&bytes)?;
                 let (keys, kt_etypes) = krb5_protocol::keytab_init_creds_keys(
-                    &kt, &cname, &realm_s,
+                    &parsed, &cname, &realm_s,
                 )
                 .ok_or_else(|| {
                     Krb5Error::new(
@@ -1168,6 +1348,7 @@ fn kinit_inner(
                     &kt_etypes,
                 );
                 krb5_protocol::sort_etypes_keytab_first(&mut etypes, &kt_etypes);
+                kt = Some(parsed);
                 Some(keys)
             }
         }
@@ -1184,11 +1365,6 @@ fn kinit_inner(
         ),
         None => None,
     };
-    let pa_server = in_tkt_sname
-        .clone()
-        .unwrap_or_else(|| krb5_types::PrincipalName::krbtgt(&realm_s));
-    ticket.allowed_preauth_type = allowed_preauth_type(params.in_ccache, &pa_server, &realm_s);
-    ticket.pa_config_in = pa_config_in(params.in_ccache, &pa_server, &realm_s);
     let pac_request = ticket.pac_request;
     let keytab = match (
         keytab_keys.as_deref(),
@@ -1199,27 +1375,21 @@ fn kinit_inner(
         (None, Some(failure), Some(path)) => Some(KeytabArg::Unreadable(failure, path)),
         _ => None,
     };
-    let shape = AsShape {
-        cname: cname.clone(),
-        realm: &realm_s,
-        kdc: &resolved,
-        profile: &ctx.profile,
-        want_spake: params.want_spake,
-        pkinit: Some(pkinit.arg()),
-        canonicalize: params.canonicalize,
+    let kt = (kt.as_ref(), keytab_failure.as_ref());
+    let ask = Ask {
         sname: in_tkt_sname.as_ref(),
-        etypes: &etypes,
-        ticket,
+        ticket: &ticket,
+        want_spake: params.want_spake,
+        service: params.in_tkt_service.is_some(),
+        keytab: true,
+        new_password: None,
     };
-    let as_out = match exchange_shape(
-        ctx,
-        password,
-        keytab,
-        &mut armor,
-        params.armor_ccache,
-        &shape,
-    )? {
-        Ok(o) => o,
+    let first = Leg::first(ctx, &realm_s, &resolved, armor);
+    let (out, leg) = follow_referrals(
+        ctx, params, &cname, &etypes, &pkinit, keytab, kt, ask, first, password,
+    )?;
+    let (as_out, leg) = match out {
+        Ok(o) => (o, leg),
         Err(e)
             if krb5_protocol::key_exp_should_changepw(
                 &e,
@@ -1249,29 +1419,34 @@ fn kinit_inner(
                 anonymous: false,
                 starttime: None,
                 pac_request,
-                allowed_preauth_type: allowed_preauth_type(params.in_ccache, &changepw, &realm_s),
-                pa_config_in: pa_config_in(params.in_ccache, &changepw, &realm_s),
+                allowed_preauth_type: None,
+                pa_config_in: None,
             };
-            let chpw_shape = AsShape {
-                cname: cname.clone(),
-                realm: &realm_s,
-                kdc: &resolved,
-                profile: &ctx.profile,
-                want_spake: false,
-                pkinit: Some(pkinit.arg()),
-                canonicalize: params.canonicalize,
+            // MIT: `krb5_get_init_creds_password` (lib/krb5/krb/gic_pwd.c:213-263)
+            // each AS starts again in the client's own realm.
+            let chpw_ask = Ask {
                 sname: Some(&changepw),
-                etypes: &etypes,
-                ticket: chpw_ticket,
+                ticket: &chpw_ticket,
+                want_spake: false,
+                service: true,
+                keytab: false,
+                new_password: None,
             };
-            let chpw_as = exchange_shape(
+            let chpw_armor = initial_armor(ctx, params.armor_ccache, &realm_s, true)?;
+            let (chpw, chpw_leg) = follow_referrals(
                 ctx,
-                password,
+                params,
+                &cname,
+                &etypes,
+                &pkinit,
                 None,
-                &mut initial_armor(ctx, params.armor_ccache, &realm_s, true)?,
-                params.armor_ccache,
-                &chpw_shape,
-            )??;
+                kt,
+                chpw_ask,
+                Leg::first(ctx, &realm_s, &resolved, chpw_armor),
+                password,
+            )?;
+            let chpw_as = chpw?;
+            let kp_realm = chpw_leg.realm.as_str();
             let new_pw = match (params.new_password, params.prompter) {
                 (Some(p), _) => {
                     krb5_protocol::trace::gic_pwd_changepw(3);
@@ -1280,21 +1455,21 @@ fn kinit_inner(
                     }
                     krb5_protocol::change_password(
                         &ctx.profile
-                            .locate_kpasswd_traced(&realm_s, &mut crate::trace::dns_srv)?,
+                            .locate_kpasswd_traced(kp_realm, &mut crate::trace::dns_srv)?,
                         &chpw_as,
                         p,
                         ctx.profile.request_timeout,
                         Some(&ctx.profile),
                     )
-                    .map_err(|e| chpw_error(e, &realm_s))?;
+                    .map_err(|e| chpw_error(e, kp_realm))?;
                     Zeroizing::new(p.to_vec())
                 }
                 (None, Some(prompter)) => prompt_and_change(
                     &ctx.profile
-                        .locate_kpasswd_traced(&realm_s, &mut crate::trace::dns_srv)?,
+                        .locate_kpasswd_traced(kp_realm, &mut crate::trace::dns_srv)?,
                     &chpw_as,
                     prompter,
-                    &realm_s,
+                    kp_realm,
                     ctx.profile.request_timeout,
                     &ctx.profile,
                 )?,
@@ -1302,16 +1477,25 @@ fn kinit_inner(
             };
             krb5_protocol::trace::gic_pwd_changed();
             trace::init_creds(&cname, &realm_s, params.in_tkt_service);
-            let mut armor = initial_armor(
+            let armor = initial_armor(
                 ctx,
                 params.armor_ccache,
                 &realm_s,
                 params.in_tkt_service.is_some(),
             )?;
-            exchange_shape_direct(ctx, &mut armor, params.armor_ccache, &shape, &new_pw)?
+            let direct = Ask {
+                new_password: Some(&new_pw),
+                ..ask
+            };
+            let first = Leg::first(ctx, &realm_s, &resolved, armor);
+            let (out, leg) = follow_referrals(
+                ctx, params, &cname, &etypes, &pkinit, keytab, kt, direct, first, password,
+            )?;
+            (out?, leg)
         }
         Err(e) => return Err(e.into()),
     };
+    let (realm_s, resolved) = (leg.realm, leg.kdc);
     if params.prompter.is_some() || params.preauth_prompter.is_some() {
         krb5_protocol::warn_deprecated_enctype(&as_out);
     }

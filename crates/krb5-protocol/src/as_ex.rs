@@ -68,7 +68,6 @@ pub struct AsRequest<'a> {
     pub fast_armor: Option<&'a FastArmor>,
     /// Empty PA-150 first; PA-16 on the retry.
     pub pkinit: Option<Pkinit<'a>>,
-    /// For an NT-ENTERPRISE name.
     pub canonicalize: bool,
     /// None is krbtgt/REALM.
     pub sname: Option<&'a PrincipalName>,
@@ -418,7 +417,6 @@ fn as_exchange_inner(
                     Some(&mut fallback),
                 );
             }
-            PkinitEnd::Done(out) => return Ok(*out),
             PkinitEnd::Reply {
                 rep,
                 wire,
@@ -502,7 +500,7 @@ fn as_exchange_inner(
             .with_unreadable_keytab(unreadable);
             continue_from_hint(req, keys, nonce, &etypes, &e, &clock, &mut pw)
         }
-        KdcMsg::Error(e) => classify_kdc_error(&e),
+        KdcMsg::Error(e) => Err(kdc_error(req, &e)),
         KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
     }
 }
@@ -840,7 +838,7 @@ fn continue_from_hint(
                 }
                 None => {
                     return Err(match (refused, first_failure) {
-                        (Some(e), _) => kdc_error(&e),
+                        (Some(e), _) => kdc_error(req, &e),
                         (None, Some(first)) => Error::PreauthFailed(Box::new(first)),
                         (None, None) => preauth_failed(),
                     });
@@ -956,7 +954,7 @@ fn continue_preauth(
         KdcMsg::AsRep(rep) => finish(rep, &wire, etypes, client_key, &bound),
         KdcMsg::Error(e) => {
             encts_tryagain(&e);
-            classify_kdc_error(&e)
+            Err(kdc_error(req, &e))
         }
         KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
     }
@@ -997,7 +995,7 @@ fn continue_embedder(
         KdcMsg::AsRep(rep) => {
             finish_as_rep_keys(req, rep, nonce, keys, etypes, &bound, Some(&wire), pw)
         }
-        KdcMsg::Error(e) => classify_kdc_error(&e),
+        KdcMsg::Error(e) => Err(kdc_error(req, &e)),
         KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
     }
 }
@@ -1165,7 +1163,7 @@ fn continue_pkinit(
             let cookie = find_pa(&method, pa::FX_COOKIE).cloned();
             (token, cookie, learned)
         }
-        KdcMsg::Error(e) => return classify_kdc_error(&e).map(|o| PkinitEnd::Done(Box::new(o))),
+        KdcMsg::Error(e) => return Err(kdc_error(req, &e)),
         KdcMsg::AsRep(rep) => {
             return Ok(PkinitEnd::Reply {
                 rep: Box::new(rep),
@@ -1278,7 +1276,7 @@ fn continue_pkinit(
                 });
             }
             KdcMsg::Error(e) => {
-                tryagain = Some(pkinit_refused(&e, &mut dh_size)?);
+                tryagain = Some(pkinit_refused(req, &e, &mut dh_size)?);
             }
             KdcMsg::TgsRep => return Err(Error::UnexpectedPdu),
         }
@@ -1315,7 +1313,6 @@ enum PkinitEnd {
         nonce: u32,
         bound: AsReqTimes,
     },
-    Done(Box<AsOutcome>),
     Walk(Box<KrbError>),
     Reply {
         rep: Box<AsRep>,
@@ -1332,7 +1329,7 @@ pub(crate) struct Retry(Option<PaData>);
 // Sending the PK-AS-REQ disables fallback.
 // MIT: `init_creds_step_request` (get_in_tkt.c:1315-1336)
 // PREAUTH_FAILED, or a refusal tryagain does not answer, ends it.
-fn pkinit_refused(e: &KrbError, dh_size: &mut u32) -> Result<Retry, Error> {
+fn pkinit_refused(req: &AsRequest<'_>, e: &KrbError, dh_size: &mut u32) -> Result<Retry, Error> {
     let handled = matches!(
         e.error_code,
         err::PREAUTH_REQUIRED | err::MORE_PREAUTH_DATA_REQUIRED | err::PREAUTH_FAILED
@@ -1343,7 +1340,7 @@ fn pkinit_refused(e: &KrbError, dh_size: &mut u32) -> Result<Retry, Error> {
     {
         return Ok(retry);
     }
-    Err(kdc_error(e))
+    Err(kdc_error(req, e))
 }
 
 fn pkinit_tryagain(e: &KrbError, dh_size: &mut u32) -> Option<Retry> {
@@ -1405,35 +1402,36 @@ fn error_cookie(e: &KrbError) -> Vec<PaData> {
         .collect()
 }
 
-fn kdc_error(err: &KrbError) -> Error {
-    match classify_kdc_error(err) {
-        Err(e) => e,
-        Ok(_) => Error::UnexpectedPdu,
+// MIT: `init_creds_step_reply` (lib/krb5/krb/get_in_tkt.c:1688-1766)
+fn kdc_error(req: &AsRequest<'_>, e: &KrbError) -> Error {
+    let canon = req.canonicalize || req.cname.name_type == PrincipalName::NT_ENTERPRISE;
+    if canon && let Some(realm) = referral_realm(e, req.realm) {
+        trace::init_creds_referral(realm.as_bytes());
+        return Error::ClientReferral {
+            code: e.error_code,
+            realm,
+        };
+    }
+    match e.error_code {
+        err::SKEW => Error::KrbError {
+            code: err::SKEW,
+            text: Some("clock skew; resync local clock and retry".into()),
+        },
+        err::ETYPE_NOSUPP => Error::KrbError {
+            code: err::ETYPE_NOSUPP,
+            text: Some("no common etype".into()),
+        },
+        _ => krb_err(e),
     }
 }
 
-fn classify_kdc_error(e: &KrbError) -> Result<AsOutcome, Error> {
-    match e.error_code {
-        err::SKEW => Err(Error::KrbError {
-            code: err::SKEW,
-            text: Some("clock skew; resync local clock and retry".into()),
-        }),
-        err::ETYPE_NOSUPP => Err(Error::KrbError {
-            code: err::ETYPE_NOSUPP,
-            text: Some("no common etype".into()),
-        }),
-        err::WRONG_REALM => {
-            let realm = e.realm.as_bytes().to_vec();
-            Err(Error::KrbError {
-                code: err::WRONG_REALM,
-                text: Some(format!(
-                    "wrong realm; chase {}",
-                    String::from_utf8_lossy(&realm)
-                )),
-            })
-        }
-        _ => krb_err(e),
-    }
+// MIT: `is_referral` (lib/krb5/krb/get_in_tkt.c:1450-1458)
+fn referral_realm(e: &KrbError, realm: &str) -> Option<String> {
+    let crealm = e.crealm.as_ref()?;
+    ((e.error_code == err::WRONG_REALM || e.error_code == err::C_PRINCIPAL_UNKNOWN)
+        && e.cname.is_some()
+        && crealm.as_bytes() != realm.as_bytes())
+    .then(|| String::from_utf8_lossy(crealm.as_bytes()).into_owned())
 }
 
 enum KdcMsg {
@@ -1457,7 +1455,7 @@ fn classify(bytes: &[u8]) -> Result<KdcMsg, Error> {
     }
 }
 
-fn krb_err(e: &KrbError) -> Result<AsOutcome, Error> {
+fn krb_err(e: &KrbError) -> Error {
     let text = e
         .e_text
         .as_ref()
@@ -1470,10 +1468,10 @@ fn krb_err(e: &KrbError) -> Result<AsOutcome, Error> {
         error_code = e.error_code,
         error = text.as_deref().unwrap_or(""),
     );
-    Err(Error::KrbError {
+    Error::KrbError {
         code: e.error_code,
         text,
-    })
+    }
 }
 
 // MIT: `warn_deprecated` (lib/krb5/krb/get_in_tkt.c:1584-1607)
@@ -2136,8 +2134,6 @@ pub enum IdentifyReply {
     Referral(String),
 }
 
-// MIT: `is_referral` (lib/krb5/krb/get_in_tkt.c:1450-1458)
-/// A referral is WRONG_REALM or C_PRINCIPAL_UNKNOWN.
 pub fn as_identify_realm(req: &AsRequest<'_>) -> Result<IdentifyReply, Error> {
     let _ = krb5_types::try_ascii(req.realm).map_err(|e| Error::ReplyMismatch(e.to_string()))?;
     let etypes: Vec<i32> = match req.etypes {
@@ -2158,21 +2154,13 @@ pub fn as_identify_realm(req: &AsRequest<'_>) -> Result<IdentifyReply, Error> {
         {
             Ok(IdentifyReply::Here)
         }
-        KdcMsg::Error(e) => {
-            let referral = (e.error_code == err::WRONG_REALM
-                || e.error_code == err::C_PRINCIPAL_UNKNOWN)
-                && e.cname.is_some();
-            if referral
-                && let Some(crealm) = e.crealm.as_ref()
-                && crealm.as_bytes() != req.realm.as_bytes()
-            {
-                let realm = String::from_utf8_lossy(crealm.as_bytes()).into_owned();
+        KdcMsg::Error(e) => match referral_realm(&e, req.realm) {
+            Some(realm) => {
                 trace::init_creds_referral(realm.as_bytes());
                 Ok(IdentifyReply::Referral(realm))
-            } else {
-                classify_kdc_error(&e).map(|_| IdentifyReply::Here)
             }
-        }
+            None => Err(kdc_error(req, &e)),
+        },
     }
 }
 

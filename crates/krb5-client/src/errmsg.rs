@@ -81,7 +81,8 @@ impl Krb5Error {
     #[must_use]
     pub fn from_protocol(e: &krb5_protocol::Error, realm: &str) -> Self {
         match e {
-            krb5_protocol::Error::KrbError { code, .. } => {
+            krb5_protocol::Error::KrbError { code, .. }
+            | krb5_protocol::Error::ClientReferral { code, .. } => {
                 Self::new(Code::Kdc(*code), kdc_error_text(*code))
             }
             krb5_protocol::Error::PreauthFailed(inner) => Self::new(

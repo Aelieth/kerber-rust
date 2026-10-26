@@ -27,7 +27,6 @@ MIT 1.22.2 and Samba peers; [`docs/gates.md`](../docs/gates.md) lists what each 
 | `lib/kdc-error-proxy.py` | UDP proxy printing each KRB-ERROR's code, e-text, client and e-data types. |
 | `lib/kdc-padata-proxy.py` | UDP proxy printing the padata types of each KDC-REQ. |
 | `lib/kdc-req-proxy.py` | UDP/TCP proxy printing the shape of each KDC-REQ. |
-| `lib/kdc-rewrite-proxy.py` | UDP/TCP man-in-the-middle that rewrites KDC replies. |
 | `lib/otp-common.sh` | The OTP gates' shared cells: the realm's files, one login per client with its bytes captured, the byte and ccache checks, the KDC-log slices. |
 | `lib/otp-radius-stub.py` | A standard-library RADIUS responder on a UNIX socket (Access-Accept for the codes it is given): the verdict source MIT's `otp` module asks. |
 | `lib/otp-fast-shim.c` | An `LD_PRELOAD` observer: the plaintext of the FAST request, the FAST response and the OTP nonce passing through `krb5_c_decrypt` / `krb5_c_encrypt` in `krb5kdc` or `kinit`. |

@@ -105,6 +105,9 @@ pub enum Error {
     /// The exchange restarts. as_exchange does not return this.
     #[error("FAST upgrade")]
     FastUpgrade,
+    // MIT: `is_referral` (lib/krb5/krb/get_in_tkt.c:1450-1458)
+    #[error("KRB-ERROR {code}: client referral to {realm}")]
+    ClientReferral { code: i32, realm: String },
     /// Encrypted timestamp is off for this realm.
     // MIT: `encts_process` (lib/krb5/krb/preauth_encts.c:68-73)
     #[error("Encrypted timestamp is disabled")]
@@ -164,6 +167,10 @@ impl Clone for Error {
             Self::PreauthNoMech => Self::PreauthNoMech,
             Self::TruncatedReply => Self::TruncatedReply,
             Self::FastUpgrade => Self::FastUpgrade,
+            Self::ClientReferral { code, realm } => Self::ClientReferral {
+                code: *code,
+                realm: realm.clone(),
+            },
             Self::EnctsDisabled => Self::EnctsDisabled,
             Self::Message(s) => Self::Message(s.clone()),
             Self::PkinitReply { code, text } => Self::PkinitReply {

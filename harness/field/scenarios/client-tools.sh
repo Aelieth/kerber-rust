@@ -8,7 +8,8 @@
 # ~/ct/bin/<name> and run by path, so MIT's stay the ones on PATH); ours are graded on the same text, and
 # <row>.same diffs the two outputs. Each request kinit and kvno send also goes through scripts/lib/
 # kdc-req-proxy.py on client2 (shapes only: options, padata types, etypes, time classes), and the rust leg
-# compares ours with MIT's request by request. Then the caches and keytabs cross: MIT's klist and kvno on ours,
+# compares ours with MIT's request by request; CR sends kinit to made-up realms whose KDC, lib/kdc-rewrite-proxy.py,
+# answers with a client referral to $REALM. Then the caches and keytabs cross: MIT's klist and kvno on ours,
 # ours on MIT's, MIT's cache entries kept through our rewrite. Scratch principals only, removed at the end.
 # MIT 1.22.2: clients/kinit/kinit.c (k5_kinit :747-793), clients/klist/klist.c (show_credential, list_ccaches
 # :376-410, the keytab listing :300-345), clients/kvno/kvno.c (:165, :376-381), clients/kdestroy/kdestroy.c
@@ -42,18 +43,21 @@ T='[0-9]{2}/[0-9]{2}/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}'
 cleanup() {
     timeout -k 5 60 "$LAB" ssh kdc -- "for p in $PRINCS; do sudo kadmin.local -q \"delprinc -force \$p\" > /dev/null 2>&1; done; true" < /dev/null > /dev/null 2>&1
     # shellcheck disable=SC2016 # the pid file is client2's
-    timeout -k 5 60 "$LAB" ssh client2 -- '[ -f ~/ct/px/pid ] && kill "$(cat ~/ct/px/pid)"; kdestroy -q 2> /dev/null; rm -rf ~/ct; true' < /dev/null > /dev/null 2>&1
+    timeout -k 5 60 "$LAB" ssh client2 -- 'for f in ~/ct/px/pid ~/ct/px/cr.pid; do [ -f "$f" ] && kill "$(cat "$f")"; done; kdestroy -q 2> /dev/null; rm -rf ~/ct; true' < /dev/null > /dev/null 2>&1
 }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
 # E <k>: the start of a client2 command line for <k>'s programs in $B (mit: /usr/bin, ours: ~/ct/bin), with no
-# KRB5CCNAME and LC_ALL=C. P <k>: the same through the shape proxy (~/ct/px.conf names it as the KDC).
+# KRB5CCNAME and LC_ALL=C. P <k>: the same through the shape proxy (~/ct/px.conf names it as the KDC). C <k>: with
+# ~/ct/cr.conf, whose made-up realms' KDC is the referral proxy, its log and the shape capture emptied first.
 # shellcheck disable=SC2016 # $HOME is client2's
 E() { printf 'unset KRB5CCNAME KRB5_CONFIG; export LC_ALL=C B=%s;' "$([ "$1" = ours ] && echo '$HOME/ct/bin' || echo /usr/bin)"; }
 # shellcheck disable=SC2016 # $HOME is client2's
 P() { printf '%s export KRB5_CONFIG=$HOME/ct/px.conf;' "$(E "$1")"; }
+# shellcheck disable=SC2016 # $HOME is client2's
+C() { printf '%s export KRB5_CONFIG=$HOME/ct/cr.conf; : > $HOME/ct/px/cr.log; : > $HOME/ct/px/live.jsonl;' "$(E "$1")"; }
 # keep <step> <k>: the last output, kept for <step>.same.
 keep() { cp "$LAST_OUT" "$STATE/$1.$2"; }
 # M: what a .same diff masks: the dates, which program set's file it is (mit / ours), the uid, DIR: cache names.
@@ -218,7 +222,34 @@ if [ -n "$OURS" ]; then
     check CT.px.plain.life.ours '^asked: rtime - till = 518400 s$' run client2 "jq -r 'select(.kind == \"req\") | \"asked: rtime - till = \\(.rtime_unix - .till_unix) s\"' \$HOME/ct/px/plain.ours.jsonl | head -n 1"
     check CT.px.plain.life.same '^till: within [0-9]+ s of MIT.s$' run client2 "a=\$(jq -s '[.[] | select(.kind == \"req\")][0].till_unix' \$HOME/ct/px/plain.mit.jsonl); b=\$(jq -s '[.[] | select(.kind == \"req\")][0].till_unix' \$HOME/ct/px/plain.ours.jsonl); d=\$((b - a)); [ \"\$d\" -ge 0 ] && [ \"\$d\" -le 300 ] && echo \"till: within \$d s of MIT's\""
 fi
-run client2 "kill \$(cat ~/ct/px/pid) && rm -f ~/ct/px/pid; cat ~/ct/px/proxy.err"
+
+section "CR: client referrals (get_in_tkt.c:1450-1458, :1745-1758, :1268-1270): lib/kdc-rewrite-proxy.py answers an AS-REQ for a made-up realm with WRONG_REALM (68) or C_PRINCIPAL_UNKNOWN (6) naming $REALM; kinit -C restarts there and asks for the password of the rewritten client, without -C the error stands, and LOOPA <-> LOOPB stops after 16 requests"
+check cr.copy '^kdc-rewrite-proxy self-test ok$' hostin "lib/kdc-rewrite-proxy.py" "$LABQ ssh client2 -- 'cat > ~/ct/kdc-rewrite-proxy.py && python3 ~/ct/kdc-rewrite-proxy.py --self-test | tail -n 1'" < "$FIELD_LIB/kdc-rewrite-proxy.py"
+check cr.conf '^referred realms: 4 in \[realms\]$' run client2 "{ sed -n '1,/^\\[realms\\]/p' ~/ct/px.conf; for r in REFER CPU LOOPA LOOPB; do printf '    %s.TEST = {\\n        kdc = 127.0.0.1:1893\\n    }\\n' \$r; done; sed '1,/^\\[realms\\]/d' ~/ct/px.conf; } | sed '/^[[:space:]]*canonicalize[[:space:]]*=/d' > ~/ct/cr.conf && awk '/^\\[/ { s = \$1 } /= 127\\.0\\.0\\.1:1893\$/ { n++; if (s != \"[realms]\") bad = 1 } END { print \"referred realms: \" n (bad ? \" outside [realms]\" : \" in [realms]\") }' ~/ct/cr.conf"
+check cr.up '^refer: listening on 127\.0\.0\.1:1893$' run client2 "setsid python3 -u ~/ct/kdc-rewrite-proxy.py 1893 127.0.0.1 1891 ~/ct/px/cr.log refer 'REFER.TEST=$REALM,CPU.TEST=$REALM/6,LOOPA.TEST=LOOPB.TEST,LOOPB.TEST=LOOPA.TEST' > /dev/null 2> ~/ct/px/cr.err < /dev/null & echo \$! > ~/ct/px/cr.pid; sleep 1; ss -Hlun 'sport = :1893' | grep -q . && echo 'refer: listening on 127.0.0.1:1893'"
+for k in mit $OURS; do
+    for c in 68 6; do
+        cr=REFER.TEST
+        [ "$c" = 6 ] && cr=CPU.TEST
+        check "CR.$c.$k" "^Default principal: ctuser@$R\$" runin client2 "ctuser's password ($ALICE)" "$(C "$k") \$B/kinit -C -c FILE:\$HOME/ct/$k-cr$c.cc ctuser@$cr && \$B/klist -c FILE:\$HOME/ct/$k-cr$c.cc" < <(once "$ALICE")
+        checklast "CR.$c.prompt.$k" "^Password for ctuser@$R: "
+        keep "CR.$c" "$k"
+        check "CR.$c.asked.$k" "^$cr asked once: rep#1 kind=error error_code=$c rewritten=answered\$" run client2 "echo \"$cr asked \$([ \"\$(grep -c '^req#' \$HOME/ct/px/cr.log)\" = 1 ] && echo once || echo more): \$(grep '^rep#' \$HOME/ct/px/cr.log)\"; cp \$HOME/ct/px/live.jsonl \$HOME/ct/px/cr$c.$k.jsonl"
+        check "CR.$c.restart.$k" "^restarted: realm $R, sname krbtgt/$R, cname ctuser, canonicalize\$" run client2 "jq -rs '[.[] | select(.kind == \"req\")][0] // empty | \"restarted: realm \\(.realm), sname \\(.sname), cname \\(.cname), \\(if any(.kdc_options[]; . == \"canonicalize\") then \"canonicalize\" else \"no canonicalize\" end)\"' \$HOME/ct/px/cr$c.$k.jsonl"
+    done
+    check "CR.nocanon.$k" '^kinit: Realm not local to KDC while getting initial credentials$' run client2 "$(C "$k") \$B/kinit -c FILE:\$HOME/ct/$k-crn.cc ctuser@REFER.TEST < /dev/null 2>&1; echo \"rc=\$?, requests \$(grep -c '^req#' \$HOME/ct/px/cr.log)\""
+    checklast "CR.nocanon.once.$k" 'line:rc=1, requests 1'
+    keep CR.nocanon "$k"
+    check "CR.loop.$k" '^kinit: Looping detected inside krb5_get_in_tkt while getting initial credentials$' run client2 "$(C "$k") \$B/kinit -C -c FILE:\$HOME/ct/$k-crl.cc ctuser@LOOPA.TEST < /dev/null 2>&1; echo \"rc=\$?, requests \$(grep -c '^req#' \$HOME/ct/px/cr.log)\""
+    checklast "CR.loop.16.$k" 'line:rc=1, requests 16'
+    keep CR.loop "$k"
+done
+if [ -n "$OURS" ]; then
+    for c in 68 6; do
+        check "CR.$c.px.same" "^FLOW_cr${c}_equal\$" run client2 "python3 \$HOME/ct/kdc-req-proxy.py --compare \$HOME/ct/px/cr$c.mit.jsonl \$HOME/ct/px/cr$c.ours.jsonl cr$c"
+    done
+fi
+run client2 "kill \$(cat ~/ct/px/cr.pid) && rm -f ~/ct/px/cr.pid; cat ~/ct/px/cr.err; kill \$(cat ~/ct/px/pid) && rm -f ~/ct/px/pid; cat ~/ct/px/proxy.err"
 
 if [ -n "$OURS" ]; then
     section "CT.cross: MIT's klist and kvno on our cache, ours on MIT's; our kvno adds a second service ticket to MIT's preauth cache, MIT's klist reads all three back with its config entries kept; each kdestroy on the other's cache"
@@ -318,7 +349,8 @@ if [ -n "$OURS" ]; then
     section "CT.same: ours printed what MIT's printed, step by step (the dates, the program set's file names, the uid and DIR: cache names masked)"
     for s in CT.kinit CT.klist CT.klist-s CT.kvno CT.klist-fe CT.renew CT.kdestroy CT.klist.gone CT.d.klist CT.kt.c CT.kt.env CT.klist-k \
         CT.x.cc CT.dir.two CT.dir.primary CT.dir.switch-p CT.dir.switch-c CT.dir.destroy-a CT.dir.missing CT.kt.v1 CT.kt.wkt CT.kt.addent CT.kt.multi CT.pwexp \
-        CT.err.client CT.err.svc CT.err.kt CT.err.klist-k CT.err.kdestroy CT.err.cctype CT.err.ccdir CT.err.nokdc CT.err.expired CT.err.revoked CT.err.pw; do
+        CT.err.client CT.err.svc CT.err.kt CT.err.klist-k CT.err.kdestroy CT.err.cctype CT.err.ccdir CT.err.nokdc CT.err.expired CT.err.revoked CT.err.pw \
+        CR.68 CR.6 CR.nocanon CR.loop; do
         same "$s"
     done
     same CT.klist-ket "$MX"

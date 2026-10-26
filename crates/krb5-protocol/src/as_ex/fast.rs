@@ -10,10 +10,10 @@ use super::responder::{QUESTION_PASSWORD, ResponderItems};
 use super::spake::{FastRound, trace_round};
 use super::{
     AsOutcome, AsPrompt, AsReqTimes, AsRequest, ENCTS_MODULE, KdcMsg, Pkinit, PkinitClient,
-    allowed_padata, build_as_req_from, classify_kdc_error, encrypted_timestamp_disabled,
-    fallback_s2k, find_pa, finish_as_rep, first_etype, gak_found, kdc_error, learned_s2k,
-    long_term_as_key, method_from_error, pa_enc_timestamp_at, pick_info2, pick_key, req_sname,
-    request_times, salt_cname, select_s2k, send_as, sort_krb5_padata_sequence, trace_keytab_gak,
+    allowed_padata, build_as_req_from, encrypted_timestamp_disabled, fallback_s2k, find_pa,
+    finish_as_rep, first_etype, gak_found, kdc_error, learned_s2k, long_term_as_key,
+    method_from_error, pa_enc_timestamp_at, pick_info2, pick_key, req_sname, request_times,
+    salt_cname, select_s2k, send_as, sort_krb5_padata_sequence, trace_keytab_gak,
     trace_preauth_input, trace_reply_padata,
 };
 use crate::error::Error;
@@ -89,7 +89,7 @@ pub(super) fn continue_fast(
                 retry,
             } = fast_error_material(&akey, &e, nonce)?;
             if !retry || inner.error_code != err::PREAUTH_REQUIRED {
-                return classify_kdc_error(&inner);
+                return Err(kdc_error(req, &inner));
             }
             clock.note(&inner, true);
             // MIT: `get_as_key` (lib/krb5/krb/preauth2.c:438-457)
@@ -146,7 +146,7 @@ pub(super) fn continue_fast(
                         Ok(mech) => mech,
                         Err(e) => {
                             return match (last_fail, first_failure) {
-                                (Some(err), _) => Err(kdc_error(&err)),
+                                (Some(err), _) => Err(kdc_error(req, &err)),
                                 (None, Some(first)) => Err(Error::PreauthFailed(Box::new(first))),
                                 (None, None) => Err(e),
                             };
@@ -361,7 +361,7 @@ fn fast_key_mechanism(
             &wire,
             bound,
         ),
-        KdcMsg::Error(e) => classify_kdc_error(&fast_error_material(akey, &e, nonce)?.err),
+        KdcMsg::Error(e) => Err(kdc_error(req, &fast_error_material(akey, &e, nonce)?.err)),
         KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
     }
     .map(Ok)
@@ -499,7 +499,7 @@ fn finish_fast_otp(
             out.pa_config = otp::config_string(config);
             Ok(out)
         }
-        KdcMsg::Error(e) => classify_kdc_error(&fast_error_material(akey, &e, nonce)?.err),
+        KdcMsg::Error(e) => Err(kdc_error(req, &fast_error_material(akey, &e, nonce)?.err)),
         KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
     }
 }
@@ -601,7 +601,7 @@ fn finish_fast_spake(
                 if !mat.retry
                     || (code != err::PREAUTH_REQUIRED && code != err::MORE_PREAUTH_DATA_REQUIRED)
                 {
-                    return Err(kdc_error(&mat.err));
+                    return Err(kdc_error(req, &mat.err));
                 }
                 clock.note(&mat.err, true);
                 cookie = mat.cookie;
@@ -716,7 +716,7 @@ fn finish_fast_pkinit(
                         tryagain = Some(retry);
                         nonce = super::random_nonce()?;
                     }
-                    None => return classify_kdc_error(&mat.err),
+                    None => return Err(kdc_error(req, &mat.err)),
                 }
             }
             KdcMsg::TgsRep => return Err(Error::UnexpectedPdu),

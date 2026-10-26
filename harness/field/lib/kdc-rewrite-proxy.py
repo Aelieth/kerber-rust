@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""UDP/TCP man-in-the-middle in front of a KDC that rewrites replies.
+"""UDP/TCP man-in-the-middle in front of a KDC that rewrites replies, or answers.
 
 usage:
   kdc-rewrite-proxy.py <listen-port> <kdc-host> <kdc-port> <out-file> <mode> [arg]
@@ -14,10 +14,16 @@ modes:
                         from the e_data padata sequence (an emptied sequence
                         stays as `30 00`) — the outer error must be fatal
                         (fast.c:445-458)
+  refer <R=T[/c],...>   an AS-REQ (0x6a) for realm R is not forwarded: the
+                        answer is a KRB-ERROR with error-code c (68, WRONG_REALM,
+                        if none), crealm T and the request's own cname, a
+                        client referral (get_in_tkt.c:1450-1458); any other
+                        request is forwarded untouched
 
-Every forwarded request appends `req#<n> transport=<udp|tcp> msg_type=<10|12>`
-to <out-file>; every reply appends `rep#<n> kind=<as-rep|tgs-rep|error|other>
-[error_code=<c>] rewritten=<yes|no>`. A KDC timeout is `rep#<n> timeout`.
+Every request appends `req#<n> transport=<udp|tcp> msg_type=<10|12>
+realm=<realm>` to <out-file>; every reply appends `rep#<n>
+kind=<as-rep|tgs-rep|error|other> [error_code=<c>]
+rewritten=<yes|no|answered>`. A KDC timeout is `rep#<n> timeout`.
 The gate counts `req#` lines to prove a client sent no second request.
 """
 from __future__ import annotations
@@ -27,8 +33,10 @@ import socket
 import struct
 import sys
 import threading
+import time
 
 PA_FX_FAST = 136
+WRONG_REALM = 68
 
 
 def _read_len(buf: bytes, i: int) -> tuple[int, int]:
@@ -185,14 +193,76 @@ def req_msg_type(pdu: bytes) -> int | None:
     return None
 
 
+def _req_body(pdu: bytes) -> dict[int, bytes]:
+    """The KDC-REQ-BODY fields of an AS-REQ or TGS-REQ, by context tag."""
+    _, seq, _ = _tlv(pdu, 0)
+    _, body, _ = _tlv(seq, 0)
+    for tag, val in _fields(body):
+        if tag == 0xA4:
+            _, req_body, _ = _tlv(val, 0)
+            return dict(_fields(req_body))
+    return {}
+
+
+def req_realm(pdu: bytes) -> str | None:
+    if not pdu or pdu[0] not in (0x6A, 0x6C):
+        return None
+    realm = _req_body(pdu).get(0xA2)
+    if realm is None:
+        return None
+    _, name, _ = _tlv(realm, 0)
+    return name.decode("ascii", "replace")
+
+
+def referral_error(pdu: bytes, crealm: str, code: int) -> bytes:
+    """A KRB-ERROR naming the request's own cname in crealm, as a KDC's client referral."""
+    body = _req_body(pdu)
+    fields = [
+        (0xA0, _enc(0x02, _int_enc(5))),
+        (0xA1, _enc(0x02, _int_enc(30))),
+        (0xA4, _enc(0x18, time.strftime("%Y%m%d%H%M%SZ", time.gmtime()).encode("ascii"))),
+        (0xA5, _enc(0x02, _int_enc(0))),
+        (0xA6, _enc(0x02, _int_enc(code))),
+        (0xA7, _enc(0x1B, crealm.encode("ascii"))),
+        (0xA8, body[0xA1]),
+        (0xA9, body[0xA2]),
+        (0xAA, body[0xA3]),
+    ]
+    return _rebuild(0x7E, fields)
+
+
+def _refer_map(arg: str) -> dict[str, tuple[str, int]]:
+    out = {}
+    for item in arg.split(","):
+        realm, _, target = item.partition("=")
+        target, _, code = target.partition("/")
+        if not realm or not target:
+            raise SystemExit(f"refer: bad entry {item!r}")
+        out[realm] = (target, int(code) if code else WRONG_REALM)
+    return out
+
+
 class Rewriter:
     def __init__(self, mode: str, arg: str | None) -> None:
-        if mode not in ("none", "as-rep-cname", "strip-fx-fast"):
+        if mode not in ("none", "as-rep-cname", "strip-fx-fast", "refer"):
             raise SystemExit(f"unknown mode {mode}")
-        if mode == "as-rep-cname" and not arg:
-            raise SystemExit("as-rep-cname needs a name")
+        if mode in ("as-rep-cname", "refer") and not arg:
+            raise SystemExit(f"{mode} needs an argument")
         self.mode = mode
         self.arg = arg
+        self.refer = _refer_map(arg or "") if mode == "refer" else {}
+
+    def answer(self, request: bytes) -> bytes | None:
+        """The proxy's own reply to a request, or None to forward it."""
+        try:
+            if not request or request[0] != 0x6A:
+                return None
+            target = self.refer.get(req_realm(request) or "")
+            if target is None:
+                return None
+            return referral_error(request, target[0], target[1])
+        except (ValueError, IndexError, KeyError):
+            return None
 
     def apply(self, reply: bytes) -> tuple[bytes, bool]:
         try:
@@ -226,7 +296,7 @@ class Log:
                 f.write(s + "\n")
 
 
-def _describe_reply(n: int, reply: bytes, rewritten: bool) -> str:
+def _describe_reply(n: int, reply: bytes, rewritten: str) -> str:
     kind = _kind(reply)
     extra = ""
     if kind == "error":
@@ -234,15 +304,20 @@ def _describe_reply(n: int, reply: bytes, rewritten: bool) -> str:
             extra = f" error_code={error_code(reply)}"
         except (ValueError, IndexError):
             extra = " error_code=?"
-    return f"rep#{n} kind={kind}{extra} rewritten={'yes' if rewritten else 'no'}"
+    return f"rep#{n} kind={kind}{extra} rewritten={rewritten}"
 
 
 def _handle(data: bytes, kdc: tuple, rw: Rewriter, log: Log, n: int, transport: str) -> bytes | None:
     try:
         mt = req_msg_type(data)
+        realm = req_realm(data)
     except (ValueError, IndexError):
-        mt = None
-    log.line(f"req#{n} transport={transport} msg_type={mt}")
+        mt = realm = None
+    log.line(f"req#{n} transport={transport} msg_type={mt} realm={realm}")
+    own = rw.answer(data)
+    if own is not None:
+        log.line(_describe_reply(n, own, "answered"))
+        return own
     if transport == "udp":
         fwd = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         fwd.settimeout(5.0)
@@ -270,7 +345,7 @@ def _handle(data: bytes, kdc: tuple, rw: Rewriter, log: Log, n: int, transport: 
             log.line(f"rep#{n} timeout")
             return None
     reply, rewritten = rw.apply(reply)
-    log.line(_describe_reply(n, reply, rewritten))
+    log.line(_describe_reply(n, reply, "yes" if rewritten else "no"))
     return reply
 
 
@@ -404,6 +479,30 @@ def _self_test() -> int:
     # Pass-through: a TGS-REP and an error without e_data are untouched.
     assert rewrite_as_rep_cname(_rebuild(0x6D, fields), "mitm") == (_rebuild(0x6D, fields), False)
     assert strip_fx_fast(_rebuild(0x7E, efields[:3])) == (_rebuild(0x7E, efields[:3]), False)
+
+    # refer: a mapped realm's AS-REQ is answered with a referral naming its own cname.
+    def kdc_req(app: int, realm: bytes) -> bytes:
+        body = _enc(0x30, _enc(0xA0, _enc(0x03, b"\x00" * 5)) + _enc(0xA1, cname)
+                    + _enc(0xA2, _enc(0x1B, realm)) + _enc(0xA3, principal_name("krbtgt")))
+        return _enc(app, _enc(0x30, _enc(0xA1, _enc(0x02, _int_enc(5)))
+                              + _enc(0xA2, _enc(0x02, _int_enc(app - 0x60))) + _enc(0xA4, body)))
+
+    rw = Rewriter("refer", "REFER.TEST=KERBER.TEST,CPU.TEST=KERBER.TEST/6")
+    as_req = kdc_req(0x6A, b"REFER.TEST")
+    assert req_realm(as_req) == "REFER.TEST" and req_msg_type(as_req) == 10
+    ref = rw.answer(as_req)
+    assert ref is not None and error_code(ref) == WRONG_REALM
+    _, seq, _ = _tlv(ref, 0)
+    _, body, _ = _tlv(seq, 0)
+    got = dict(_fields(body))
+    assert got[0xA7] == _enc(0x1B, b"KERBER.TEST"), "crealm"
+    assert got[0xA8] == cname, "cname echoed"
+    assert got[0xA9] == _enc(0x1B, b"REFER.TEST"), "realm"
+    assert got[0xAA] == principal_name("krbtgt"), "sname echoed"
+    assert got[0xA4][0] == 0x18 and got[0xA5] == _enc(0x02, b"\x00"), "stime, susec"
+    assert error_code(rw.answer(kdc_req(0x6A, b"CPU.TEST")) or b"") == 6
+    assert rw.answer(kdc_req(0x6A, b"KERBER.TEST")) is None, "another realm is forwarded"
+    assert rw.answer(kdc_req(0x6C, b"REFER.TEST")) is None, "a TGS-REQ is forwarded"
     print("kdc-rewrite-proxy self-test ok")
     return 0
 

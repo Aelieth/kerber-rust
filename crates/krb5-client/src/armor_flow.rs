@@ -192,7 +192,7 @@ fn disable_encrypted_timestamp_does_not_prompt_and_fails() {
     ));
     let cap = boot(false);
     let mut prompts = 0u32;
-    let mut prompt = || {
+    let mut prompt = |_: &str| {
         prompts += 1;
         Ok(zeroize::Zeroizing::new(TEST_USER_PASSWORD.to_vec()))
     };
@@ -202,7 +202,7 @@ fn disable_encrypted_timestamp_does_not_prompt_and_fails() {
         &format!("{TEST_USER}@{TEST_REALM}"),
         &mut prompt,
         &out_spec("p6g-r5-encts"),
-        KinitParams::default(),
+        &KinitParams::default(),
     );
     let Err(err) = result else {
         panic!("disable_encrypted_timestamp must fail, prompts={prompts}");

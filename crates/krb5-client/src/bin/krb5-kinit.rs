@@ -464,9 +464,9 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
     let pw_auth = !(opts.keytab || opts.anonymous);
     let given = if pw_auth { env_password() } else { None };
     let prompted = std::cell::Cell::new(given.is_some());
-    let mut read_password = || {
+    let mut read_password = |client: &str| {
         prompted.set(true);
-        read_password_line(&k5.name).map_err(|e| {
+        read_password_line(client).map_err(|e| {
             let code = if e == krb5_cli::PromptError::Interrupted {
                 Code::PwdInterrupted
             } else {
@@ -520,11 +520,11 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
     let addr = kdc(&k5.ctx, opts, &realm).map_err(Failure::Error)?;
     let spec = &k5.out_spec;
     let result = match given {
-        Some(mut p) => kinit_with_princ(&k5.ctx, &addr, &k5.me, &mut p, spec, params),
+        Some(mut p) => kinit_with_princ(&k5.ctx, &addr, &k5.me, &mut p, spec, &params),
         None if pw_auth => {
-            kinit_prompted_princ(&k5.ctx, &addr, &k5.me, &mut read_password, spec, params)
+            kinit_prompted_princ(&k5.ctx, &addr, &k5.me, &mut read_password, spec, &params)
         }
-        None => kinit_with_princ(&k5.ctx, &addr, &k5.me, &mut [], spec, params),
+        None => kinit_with_princ(&k5.ctx, &addr, &k5.me, &mut [], spec, &params),
     };
     if let Some(mut n) = new_password {
         n.zeroize();
