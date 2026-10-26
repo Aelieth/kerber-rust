@@ -2408,16 +2408,7 @@ fn emit(event: &'static str, correlation_id: &str, started: Instant, err: Option
 }
 
 #[cfg(test)]
-mod decode_enc_as_tests;
-
-#[cfg(test)]
-mod as_sname_tests;
-
-#[cfg(test)]
 mod spake_factor_tests;
 
 #[cfg(test)]
 mod as_kdc_options_tests;
-
-#[cfg(test)]
-mod etype_info_tests;

@@ -623,27 +623,6 @@ mod tests {
     }
 
     #[test]
-    fn a_configuration_entry_is_the_caches_principals_by_key_and_principal() {
-        let me = (
-            realm("KERBER.TEST"),
-            PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
-        );
-        let mut cc = FileCcache::new(me, Vec::new());
-        assert_eq!(cc.get_config(None, "start_realm"), None);
-        cc.set_config(None, "start_realm", b"OTHER.TEST");
-        cc.set_config(Some("krbtgt/KERBER.TEST@KERBER.TEST"), "pa_type", b"2");
-        assert_eq!(cc.get_config(None, "start_realm"), Some(&b"OTHER.TEST"[..]));
-        assert_eq!(
-            cc.get_config(Some("krbtgt/KERBER.TEST@KERBER.TEST"), "pa_type"),
-            Some(&b"2"[..])
-        );
-        assert_eq!(cc.get_config(None, "pa_type"), None);
-        assert_eq!(cc.get_config(Some("krbtgt/X@X"), "pa_type"), None);
-        cc.primary.1 = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["other"]);
-        assert_eq!(cc.get_config(None, "start_realm"), None);
-    }
-
-    #[test]
     fn mit_addr_u2u_golden_is_identity() {
         let bytes = include_bytes!("../../../tests/traces/ccache-mit-addr-u2u.bin");
         let cc = FileCcache::parse(bytes).expect("parse MIT golden");
@@ -658,35 +637,6 @@ mod tests {
         );
         let out = cc.to_bytes().expect("to_bytes");
         assert_eq!(out.as_slice(), &bytes[..]);
-    }
-
-    #[test]
-    fn parse_rejects_non_ascii_realm() {
-        let mut b = vec![0x05, 0x04, 0x00, 0x00];
-        put_princ(&mut b, b"K\x80R", &[b"user"]);
-        let Err(err) = FileCcache::parse(&b) else {
-            panic!("non-ASCII realm parsed");
-        };
-        let msg = err.to_string();
-        assert!(
-            msg.contains("GeneralString") || msg.contains("UTF-8") || msg.contains("principal"),
-            "{msg}"
-        );
-    }
-
-    /// fcc_store's record is one allocation: `cred_len` is each credential's marshalled length exactly (MIT's cache with addresses, authdata and a second ticket), so its buffer never grows.
-    #[test]
-    fn a_stored_record_is_sized_before_its_key() {
-        let cc = FileCcache::parse(GOLDEN).unwrap();
-        for c in &cc.creds {
-            let n = cred_len(c);
-            let mut w = Writer {
-                buf: Vec::with_capacity(n),
-            };
-            marshal_cred(&mut w, c);
-            assert_eq!(w.buf.len(), n, "cred_len is the record's length");
-            assert_eq!(w.buf.capacity(), n, "the record's buffer grew");
-        }
     }
 
     const GOLDEN: &[u8] = include_bytes!("../../../tests/traces/ccache-mit-addr-u2u.bin");

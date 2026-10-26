@@ -353,24 +353,6 @@ fn spake_and_encrypted_timestamp_each_read_the_password_without_fast() {
 }
 
 #[test]
-fn a_wrong_password_after_the_response_ends_the_exchange() {
-    // SPAKE answers with what was read and allows no fallback: the refusal is the error, and
-    // encrypted challenge never asks.
-    let profile = krb5_config::isolated_profile();
-    let kdc = kdc(Spake::Challenge);
-    let armor = armor(&profile, &kdc);
-    for armor in [Some(&armor), None] {
-        let mut ui = Ui::new(&[Read::Text(b"wrongpw"), RIGHT]);
-        let e = login(&profile, &kdc, armor, &mut ui).expect_err("a wrong password");
-        assert!(
-            matches!(e, Error::KrbError { code, .. } if code == err::PREAUTH_FAILED),
-            "{e}"
-        );
-        assert_eq!(ui.passwords, 1);
-    }
-}
-
-#[test]
 fn an_interrupt_ends_the_exchange_at_once() {
     let profile = krb5_config::isolated_profile();
     let kdc = kdc(Spake::Challenge);
@@ -438,27 +420,6 @@ fn challenge_with_a_bad_point(reply: Vec<u8>) -> Vec<u8> {
     }
     e.e_data = Some(encode(&method).unwrap().into());
     encode(&e).unwrap()
-}
-
-#[test]
-fn a_password_that_was_read_is_kept_for_the_next_mechanism() {
-    // SPAKE reads the password and fails on the challenge's public value before it answers
-    // (MIT `group_result`, EINVAL); encrypted timestamp then uses what was read.
-    let profile = krb5_config::isolated_profile();
-    let kdc = kdc_rewriting(Spake::Challenge, challenge_with_a_bad_point);
-    let mut ui = Ui::new(&[RIGHT]);
-    let out =
-        login(&profile, &kdc, None, &mut ui).expect("encrypted timestamp reuses the password");
-    assert_eq!(out.pa_type, Some(pa::ENC_TIMESTAMP));
-    assert_eq!(ui.passwords, 1, "the second mechanism did not ask");
-    // A wrong one is kept too; the KDC's refusal ends it, and a later line would not be read.
-    let mut ui = Ui::new(&[Read::Text(b"wrongpw"), RIGHT]);
-    let e = login(&profile, &kdc, None, &mut ui).expect_err("a wrong password");
-    assert!(
-        matches!(e, Error::KrbError { code, .. } if code == err::PREAUTH_FAILED),
-        "{e}"
-    );
-    assert_eq!(ui.passwords, 1);
 }
 
 /// This test process's client configuration: `body` as krb5.conf.

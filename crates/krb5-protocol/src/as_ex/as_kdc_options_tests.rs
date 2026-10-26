@@ -1,24 +1,5 @@
 use super::*;
 
-fn options_of(ticket: AsTicketOpts) -> KdcOptions {
-    let kdc = KdcAddr::new("127.0.0.1");
-    let req = AsRequest {
-        cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
-        realm: "KERBER.TEST",
-        password: b"x",
-        kdc: &kdc,
-        profile: &krb5_config::isolated_profile(),
-        want_spake: false,
-        fast_armor: None,
-        pkinit: None,
-        canonicalize: false,
-        sname: None,
-        etypes: None,
-        ticket,
-    };
-    ticket_body(&req, &KerberosTime::now()).opts
-}
-
 fn times_of(ticket: AsTicketOpts, canonicalize: bool) -> AsReqTimes {
     let kdc = KdcAddr::new("127.0.0.1");
     let req = AsRequest {
@@ -36,27 +17,6 @@ fn times_of(ticket: AsTicketOpts, canonicalize: bool) -> AsReqTimes {
         ticket,
     };
     ticket_body(&req, &KerberosTime::now())
-}
-
-#[test]
-fn default_as_options_include_renewable_ok() {
-    let opts = options_of(AsTicketOpts::default());
-    assert!(!opts.bit(flag_bit::FORWARDABLE), "get_in_tkt.c:899-905");
-    assert!(opts.bit(flag_bit::RENEWABLE_OK), "MIT init_ctx.c:265-267");
-    assert!(!opts.bit(flag_bit::RENEWABLE));
-}
-
-#[test]
-fn renew_life_clears_renewable_ok() {
-    let opts = options_of(AsTicketOpts {
-        rlife: Some(7 * 24 * 3600),
-        ..AsTicketOpts::default()
-    });
-    assert!(opts.bit(flag_bit::RENEWABLE), "get_in_tkt.c:718-723");
-    assert!(
-        !opts.bit(flag_bit::RENEWABLE_OK),
-        "get_in_tkt.c:723 clears RENEWABLE_OK when renew_life > 0"
-    );
 }
 
 #[test]

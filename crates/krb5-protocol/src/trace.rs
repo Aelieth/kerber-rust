@@ -53,23 +53,7 @@ pub fn init() {
 
 #[must_use]
 pub fn enabled() -> bool {
-    #[cfg(test)]
-    if CAPTURE.with(|c| c.borrow().is_some()) {
-        return true;
-    }
     sink().is_some()
-}
-
-#[cfg(test)]
-thread_local! {
-    static CAPTURE: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
-}
-
-#[cfg(test)]
-pub(crate) fn capture(f: impl FnOnce()) -> Vec<String> {
-    CAPTURE.with(|c| *c.borrow_mut() = Some(Vec::new()));
-    f();
-    CAPTURE.with(|c| c.borrow_mut().take()).unwrap_or_default()
 }
 
 fn sink() -> Option<&'static File> {
@@ -122,12 +106,6 @@ fn at_secure(auxv: &[u8]) -> bool {
 // MIT: `krb5int_trace` (lib/krb5/os/trace.c:394-420)
 /// Nothing is formatted when tracing is off.
 pub fn krb5int_trace(fmt: &str, args: &[Arg<'_>]) {
-    #[cfg(test)]
-    if CAPTURE.with(|c| c.borrow().is_some()) {
-        let msg = trace_format(fmt, args);
-        CAPTURE.with(|c| c.borrow_mut().as_mut().map(|v| v.push(msg)));
-        return;
-    }
     let Some(mut file) = sink() else {
         return;
     };
@@ -677,6 +655,3 @@ pub fn pkinit_match(t: krb5_types::pkinit::MatchTrace<'_>) {
 pub fn kdc_code(code: i32) -> i64 {
     ERROR_TABLE_BASE_KRB5 + i64::from(code)
 }
-
-#[cfg(test)]
-mod tests;

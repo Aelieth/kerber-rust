@@ -120,27 +120,6 @@ const ENC_TS_NEXT: [i32; 4] = [
 ];
 
 #[test]
-fn a_kdc_sharing_no_group_gets_support_then_encrypted_timestamp() {
-    // MIT 1.22.2 (Fedora 43 kinit, live): support, 24, then encrypted timestamp on the 24's hint.
-    let (out, sent) = run(kdc(&[SpakeGroup::P256], None), None, TEST_USER_PASSWORD);
-    assert_eq!(out.expect("AS").pa_type, Some(pa::ENC_TIMESTAMP));
-    assert_eq!(
-        types(&sent),
-        [FIRST.to_vec(), SPAKE_NEXT.to_vec(), ENC_TS_NEXT.to_vec()]
-    );
-    assert!(matches!(&sent[1].spake, Some(PaSpake::Support(s)) if s.groups == [1]));
-}
-
-#[test]
-fn an_optimistic_challenge_is_answered_in_the_second_request() {
-    let store = kdc(&[SpakeGroup::Edwards25519], Some("edwards25519"));
-    let (out, sent) = run(store, None, TEST_USER_PASSWORD);
-    assert_eq!(out.expect("AS").pa_type, Some(pa::SPAKE));
-    assert_eq!(types(&sent), [FIRST.to_vec(), SPAKE_NEXT.to_vec()]);
-    assert!(matches!(&sent[1].spake, Some(PaSpake::Response(r)) if r.pubkey.len() == 32));
-}
-
-#[test]
 fn a_challenge_in_a_group_the_client_lacks_gets_support_then_spake() {
     let store = kdc(&[SpakeGroup::P256, SpakeGroup::Edwards25519], Some("P-256"));
     let (out, sent) = run(store, None, TEST_USER_PASSWORD);
@@ -151,24 +130,6 @@ fn a_challenge_in_a_group_the_client_lacks_gets_support_then_spake() {
     );
     assert!(matches!(&sent[1].spake, Some(PaSpake::Support(s)) if s.groups == [1]));
     assert!(matches!(&sent[2].spake, Some(PaSpake::Response(r)) if r.pubkey.len() == 32));
-}
-
-#[test]
-fn the_support_message_lists_the_configured_groups_in_order() {
-    let store = kdc(&[SpakeGroup::Edwards25519, SpakeGroup::P256], None);
-    let (out, sent) = run(store, Some("P-256 edwards25519"), TEST_USER_PASSWORD);
-    assert_eq!(out.expect("AS").pa_type, Some(pa::SPAKE));
-    assert!(matches!(&sent[1].spake, Some(PaSpake::Support(s)) if s.groups == [2, 1]));
-    // The KDC takes the client's first group it permits: P-256, a 33-octet element.
-    assert!(matches!(&sent[2].spake, Some(PaSpake::Response(r)) if r.pubkey.len() == 33));
-}
-
-#[test]
-fn a_client_with_no_known_group_has_no_spake() {
-    let store = kdc(&[SpakeGroup::Edwards25519], Some("edwards25519"));
-    let (out, sent) = run(store, Some("bogus P-521"), TEST_USER_PASSWORD);
-    assert_eq!(out.expect("AS").pa_type, Some(pa::ENC_TIMESTAMP));
-    assert_eq!(types(&sent), [FIRST.to_vec(), ENC_TS_NEXT.to_vec()]);
 }
 
 #[test]

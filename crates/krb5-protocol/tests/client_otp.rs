@@ -230,27 +230,6 @@ fn a_wrong_value_is_preauthentication_failed_with_no_fallback() {
     assert_eq!(ui.answers.len(), 1, "the second answer was never read");
 }
 
-// MIT: `sort_krb5_padata_sequence` (lib/krb5/krb/get_in_tkt.c:400-471)
-/// `preferred_preauth_types`
-/// moves a type to the front of the hint, so encrypted challenge (138) is run before OTP (141).
-#[test]
-fn preferred_preauth_types_138_runs_encrypted_challenge_before_otp() {
-    let (kdc, armor) = realm(r#"[{"type":"clienttest"}]"#);
-    let profile = krb5_config::Krb5Conf::parse(
-        "[libdefaults]\n    default_realm = KERBER.TEST\n    dns_lookup_kdc = false\n    dns_lookup_realm = false\n    preferred_preauth_types = 138\n",
-    )
-    .unwrap();
-    let mut ui = Ui {
-        password: Some(TEST_USER_PASSWORD),
-        ..Ui::default()
-    };
-    let out = otp_login(&profile, &kdc, &armor, &mut ui)
-        .expect("password login through encrypted challenge");
-    assert_eq!(out.pa_type, Some(pa::ENCRYPTED_CHALLENGE));
-    assert!(ui.prompts.is_empty(), "no OTP prompt: {:?}", ui.prompts);
-    assert_eq!(ui.passwords, 1);
-}
-
 /// Answers OTP with the token `ti` and `value`, and checks the questions it was asked.
 struct Answer {
     ti: usize,

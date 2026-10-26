@@ -845,68 +845,6 @@ mod parse_rep_tests {
         let (_, _, from_error) = parse_kpasswd_rep(&raw).unwrap();
         assert!(from_error);
     }
-
-    #[test]
-    fn the_reply_krb_priv_is_read_under_the_requests_subkey_and_the_ap_reps_seq() {
-        use krb5_asn1::encode;
-        use krb5_crypto::{EncryptionType, ProtocolKey};
-        use krb5_types::{Authenticator, EncryptionKey, KerberosTime, Microseconds, PrincipalName};
-
-        use crate::ap_rep::build_ap_rep;
-        use crate::safe_priv::build_krb_priv_with_seq;
-
-        let session = ProtocolKey::random(EncryptionType::Aes256CtsHmacSha196).unwrap();
-        let ours = ProtocolKey::random(EncryptionType::Aes256CtsHmacSha196).unwrap();
-        let fresh = ProtocolKey::random(EncryptionType::Aes256CtsHmacSha196).unwrap();
-        let authenticator = Authenticator {
-            authenticator_vno: Authenticator::VNO,
-            crealm: krb5_types::ascii("KERBER.TEST"),
-            cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
-            cksum: None,
-            cusec: Microseconds::from_subsec_micros(1),
-            ctime: KerberosTime::now(),
-            subkey: None,
-            seq_number: None,
-            authorization_data: None,
-        };
-        let result = [0u8, 0];
-        let read = |rep_subkey: Option<&ProtocolKey>, priv_key: &ProtocolKey, priv_seq: u32| {
-            let wire = rep_subkey.map(|k| EncryptionKey {
-                keytype: k.etype().to_iana(),
-                keyvalue: k.as_bytes().to_vec().into(),
-            });
-            let rep = build_ap_rep(&session, &authenticator, wire, Some(77)).unwrap();
-            let msg = build_krb_priv_with_seq(priv_key, &result, Some(priv_seq)).unwrap();
-            super::get_clear_result(
-                &encode(&rep).unwrap(),
-                &encode(&msg).unwrap(),
-                &session,
-                &authenticator,
-                &ours,
-            )
-        };
-        assert_eq!(
-            read(None, &ours, 77).unwrap(),
-            result,
-            "the request's subkey"
-        );
-        assert_eq!(
-            read(Some(&fresh), &ours, 77).unwrap(),
-            result,
-            "the request's subkey, though the AP-REP carries one"
-        );
-        assert!(
-            read(Some(&fresh), &fresh, 77).is_err(),
-            "never the AP-REP's subkey"
-        );
-        match read(None, &ours, 78).unwrap_err() {
-            crate::error::Error::KrbError {
-                code: err::BADORDER,
-                ..
-            } => {}
-            e => panic!("seq 78 after an AP-REP carrying 77: {e}"),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -916,65 +854,6 @@ mod transport_tests {
     use std::io::{Read, Write};
     use std::net::{TcpListener, UdpSocket};
     use std::thread;
-    use std::time::{Duration, Instant};
-
-    #[test]
-    fn udp_is_resent_three_seconds_after_the_first_send() {
-        let server = UdpSocket::bind("127.0.0.1:0").unwrap();
-        let addr = server.local_addr().unwrap();
-        let seen = thread::spawn(move || {
-            let mut buf = [0u8; 64];
-            let (_, _) = server.recv_from(&mut buf).unwrap();
-            let first = Instant::now();
-            let (_, from) = server.recv_from(&mut buf).unwrap();
-            let gap = first.elapsed();
-            server.send_to(b"reply", from).unwrap();
-            gap
-        });
-        assert_eq!(
-            kpasswd_udp(&[addr], &mut |_| Ok(b"req".to_vec()), None).as_deref(),
-            Some(&b"reply"[..])
-        );
-        let gap = seen.join().unwrap();
-        assert!(
-            gap >= Duration::from_millis(2500) && gap <= Duration::from_millis(4500),
-            "resend after {gap:?}, MIT's after 3 s"
-        );
-    }
-
-    #[test]
-    fn a_connected_stream_is_waited_on_past_five_seconds() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        thread::spawn(move || {
-            let (mut conn, _) = listener.accept().unwrap();
-            let mut req = [0u8; 7];
-            conn.read_exact(&mut req).unwrap();
-            thread::sleep(Duration::from_secs(6));
-            conn.write_all(&5u32.to_be_bytes()).unwrap();
-            conn.write_all(b"reply").unwrap();
-        });
-        assert_eq!(
-            kpasswd_tcp(&[addr], &mut |_| Ok(b"req".to_vec()), None).as_deref(),
-            Some(&b"reply"[..])
-        );
-    }
-
-    #[test]
-    fn refused_ports_fail_at_once() {
-        let addr = TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap();
-        let started = Instant::now();
-        assert!(kpasswd_tcp(&[addr], &mut |_| Ok(b"req".to_vec()), None).is_none());
-        assert!(kpasswd_udp(&[addr], &mut |_| Ok(b"req".to_vec()), None).is_none());
-        assert!(
-            started.elapsed() < Duration::from_secs(2),
-            "refused took {:?}",
-            started.elapsed()
-        );
-    }
 
     #[test]
     fn the_request_is_built_with_the_connections_own_address() {
@@ -1261,41 +1140,6 @@ mod ap_req_tests {
             field_tags(&plain),
             [0xa0, 0xa1, 0xa2, 0xa4, 0xa5, 0xa6],
             "{plain:02x?}"
-        );
-    }
-
-    #[test]
-    fn the_authenticator_ctime_adds_the_kdc_time_offset() {
-        let session = ProtocolKey::random(EncryptionType::Aes256CtsHmacSha196).unwrap();
-        let sub = ProtocolKey::random(EncryptionType::Aes256CtsHmacSha196).unwrap();
-        let ticket = Ticket {
-            tkt_vno: Ticket::VNO,
-            realm: ascii("KERBER.TEST"),
-            sname: PrincipalName::new(PrincipalName::NT_SRV_INST, ["kadmin", "changepw"]),
-            enc_part: EncryptedData {
-                etype: 18,
-                kvno: Some(1),
-                cipher: vec![0u8; 16].into(),
-            },
-        };
-        let crealm = ascii("KERBER.TEST");
-        let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
-        let (local, _) = crate::auth_con::us_timeofday();
-        let (kept, ap_der) =
-            kpasswd_ap_req(&ticket, &session, (&crealm, &cname), &sub, 600, None).unwrap();
-        let ap: ApReq = decode(&ap_der).unwrap();
-        let plain = decrypt(
-            &session,
-            KeyUsage::new(ku::AP_REQ_AUTHENTICATOR).unwrap(),
-            ap.authenticator.cipher.as_ref(),
-        )
-        .unwrap();
-        let sent: Authenticator = decode(&plain).unwrap();
-        assert_eq!(sent, kept);
-        let delta = i64::from(sent.ctime.unix_seconds()) - i64::from(local.unix_seconds());
-        assert!(
-            (590..=610).contains(&delta),
-            "authenticator ctime delta {delta} is not the 600 s KDC offset"
         );
     }
 

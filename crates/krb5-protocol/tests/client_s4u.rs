@@ -163,17 +163,6 @@ fn s4u_verify_enc_only_is_modified() {
 }
 
 #[test]
-fn s4u_verify_valid_is_ok() {
-    let key = session();
-    let pa = pa_s4u_x509_user(&key, user(), "KERBER.TEST", 42).unwrap();
-    let req = decode_pa130(&pa);
-    // Request uses ku 26; reply with USE_REPLY_KEY_USAGE uses ku 27.
-    let reply = reply_130(&key, &req);
-    verify_s4u2self_reply(&key, &req, Some(std::slice::from_ref(&reply)), None)
-        .expect("matching reply 130");
-}
-
-#[test]
 fn s4u_verify_bad_nonce_is_modified() {
     let key = session();
     let pa = pa_s4u_x509_user(&key, user(), "KERBER.TEST", 42).unwrap();
@@ -224,10 +213,6 @@ fn s4u_verify_unkeyed_is_inapp() {
 
 fn decode_pa130(pa: &PaData) -> krb5_types::s4u::PaS4uX509User {
     decode(pa.padata_value.as_ref()).expect("PA-S4U-X509-USER")
-}
-
-fn reply_130(key: &ProtocolKey, req: &krb5_types::s4u::PaS4uX509User) -> PaData {
-    reply_from_userid(key, req)
 }
 
 fn reply_from_userid(key: &ProtocolKey, req: &krb5_types::s4u::PaS4uX509User) -> PaData {

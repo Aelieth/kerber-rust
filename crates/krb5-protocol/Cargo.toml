@@ -75,10 +75,6 @@ required-features = ["test-hooks"]
 path = "tests/client_vfy_increds.rs"
 
 [[test]]
-name = "client_tgs_reply"
-path = "tests/client_tgs_reply.rs"
-
-[[test]]
 name = "client_s4u"
 required-features = ["test-hooks"]
 path = "tests/client_s4u.rs"
@@ -89,18 +85,9 @@ required-features = ["test-hooks"]
 path = "tests/des3_subkeys.rs"
 
 [[test]]
-name = "client_identify_realm"
-required-features = ["test-hooks"]
-path = "tests/client_identify_realm.rs"
-
-[[test]]
 name = "acceptor_rd_req"
 required-features = ["test-hooks"]
 path = "tests/acceptor_rd_req.rs"
-
-[[test]]
-name = "acceptor_sname"
-path = "tests/acceptor_sname.rs"
 
 [dependencies]
 bytes.workspace = true

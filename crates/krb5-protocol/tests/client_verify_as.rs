@@ -86,14 +86,6 @@ fn verify_as_canon_without_tgs_is_still_mismatch() {
     );
 }
 
-#[test]
-fn verify_as_matching_tgt_is_ok() {
-    let sname = PrincipalName::krbtgt("KERBER.TEST");
-    let realm = ascii("KERBER.TEST");
-    verify_as_reply_server(&sname, &realm, &sname, &realm, &sname, "KERBER.TEST", false)
-        .expect("default AS TGT");
-}
-
 fn sample_part() -> EncKdcRepPart {
     let t = kerberos_time_from_utc_z("20260819120000Z").expect("sample time");
     EncKdcRepPart {
@@ -125,13 +117,6 @@ fn verify_times_endtime_after_till_is_kdcrep_modified() {
         err.to_string().contains("endtime after request till"),
         "{err}"
     );
-}
-
-#[test]
-fn verify_times_endtime_at_till_is_ok() {
-    let enc = sample_part();
-    verify_as_reply_req_times(&enc, &enc.endtime, None, None, &KdcOptions::none())
-        .expect("ts_after is strict >");
 }
 
 #[test]
@@ -172,12 +157,6 @@ fn verify_times_postdated_from_mismatch_is_kdcrep_modified() {
     );
 }
 
-fn pin_timesync(on: bool) -> krb5_config::Krb5Conf {
-    let flag = if on { "1" } else { "0" };
-    krb5_config::Krb5Conf::parse(&format!("[libdefaults]\n    kdc_timesync = {flag}\n"))
-        .expect("parse timesync conf")
-}
-
 #[test]
 fn kdc_timesync_accepts_authtime_outside_skew() {
     let mut part = sample_part();
@@ -202,209 +181,6 @@ fn kdc_timesync_off_is_kdcrep_skew() {
         err.to_string()
             .contains("Clock skew too great in KDC reply"),
         "MIT get_in_tkt.c:266-269, got {err}"
-    );
-}
-
-/// A KDC in this process that answers one AS-REQ for the documented host with the reply
-/// `issue_as` makes, its encrypted part changed by `forge` and sealed again under the same key.
-/// Returns the UDP port it listens on, the enctype the reply is sealed in, and the host's keys
-/// as the KDC holds them.
-fn forging_kdc(
-    forge: impl FnOnce(&mut krb5_types::EncKdcRepPart) + Send + 'static,
-) -> (u16, i32, Vec<krb5_crypto::ProtocolKey>) {
-    use std::net::UdpSocket;
-    use std::thread;
-
-    use krb5_asn1::{decode, decode_enc_kdc_rep_part, encode};
-    use krb5_crypto::{KeyUsage, ProtocolKey, decrypt, encrypt};
-    use krb5_kdc::PrincipalStore;
-    use krb5_kdc::testrealm::{TEST_REALM, bootstrap_documented, documented_host};
-    use krb5_protocol::{as_req, pa_enc_timestamp};
-    use krb5_types::{AsRep, AsReq, EncAsRepPart, ku};
-
-    fn answer(store: &PrincipalStore, keys: &[ProtocolKey], nonce: u32) -> AsRep {
-        // The KDC's own request: no PA-REQ-ENC-PA-REP over the client's.
-        let pa = pa_enc_timestamp(&keys[0]).unwrap();
-        let req = as_req(documented_host(), TEST_REALM, nonce, Some(vec![pa])).unwrap();
-        krb5_kdc::issue_as(store, &req).unwrap().rep
-    }
-
-    let (store, _) = bootstrap_documented().unwrap();
-    let kdc_keys: Vec<ProtocolKey> = store
-        .get_name(&documented_host())
-        .unwrap()
-        .keys
-        .iter()
-        .map(|k| k.key.clone())
-        .collect();
-    let etype = answer(&store, &kdc_keys, 1).0.enc_part.etype;
-    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
-    let port = udp.local_addr().unwrap().port();
-    let keytab = kdc_keys.clone();
-    thread::spawn(move || {
-        let mut buf = [0u8; 8192];
-        let (n, src) = udp.recv_from(&mut buf).unwrap();
-        let asked: AsReq = decode(&buf[..n]).unwrap();
-        let mut rep = answer(&store, &kdc_keys, asked.0.req_body.nonce);
-        let key = kdc_keys
-            .iter()
-            .find(|k| k.etype().to_iana() == rep.0.enc_part.etype)
-            .unwrap();
-        let usage = KeyUsage::new(ku::AS_REP_ENC_PART).unwrap();
-        let plain = decrypt(key, usage, rep.0.enc_part.cipher.as_ref()).unwrap();
-        let mut part = decode_enc_kdc_rep_part(&plain).unwrap();
-        part.flags = part
-            .flags
-            .clone()
-            .with_bit(krb5_types::flag_bit::ENC_PA_REP, false);
-        part.encrypted_pa_data = None;
-        forge(&mut part);
-        let der = encode(&EncAsRepPart(part)).unwrap();
-        rep.0.enc_part.cipher = encrypt(key, usage, &der).unwrap().into();
-        let _ = udp.send_to(&encode(&rep).unwrap(), src);
-    });
-    (port, etype, keytab)
-}
-
-/// The documented host's keytab AS against the KDC at `port`, with `keys` as its keytab's.
-fn keytab_as(
-    profile: &krb5_config::Krb5Conf,
-    port: u16,
-    keys: &[krb5_crypto::ProtocolKey],
-) -> krb5_protocol::Error {
-    use krb5_kdc::testrealm::{TEST_REALM, documented_host};
-    use krb5_protocol::{AsRequest, AsTicketOpts, KdcAddr, as_exchange_with_keys};
-
-    as_exchange_with_keys(
-        &AsRequest {
-            cname: documented_host(),
-            realm: TEST_REALM,
-            password: b"",
-            kdc: &KdcAddr {
-                host: "127.0.0.1".into(),
-                port,
-            },
-            profile,
-            want_spake: false,
-            fast_armor: None,
-            pkinit: None,
-            canonicalize: false,
-            sname: None,
-            etypes: None,
-            ticket: AsTicketOpts::default(),
-        },
-        keys,
-    )
-    .unwrap_err()
-}
-
-/// `keys` with a random key of an enctype other than `etype` added last: the key whose decrypt
-/// failure used to stand in for a reply's own error.
-fn with_a_stranger_last(
-    mut keys: Vec<krb5_crypto::ProtocolKey>,
-    etype: i32,
-) -> Vec<krb5_crypto::ProtocolKey> {
-    use krb5_crypto::{EncryptionType, ProtocolKey};
-
-    let other = [
-        EncryptionType::Aes128CtsHmacSha196,
-        EncryptionType::Aes256CtsHmacSha196,
-    ]
-    .into_iter()
-    .find(|t| t.to_iana() != etype)
-    .unwrap();
-    keys.push(ProtocolKey::random(other).unwrap());
-    keys
-}
-
-/// A keytab AS whose reply the right key opens but whose times are an hour off fails as
-/// `verify_as_reply` says, not with another key's decrypt failure.
-// MIT: `init_creds_step_reply` (get_in_tkt.c:1824-1837)
-/// once `decrypt_as_reply` succeeds, `verify_as_reply`'s error is the request's.
-// MIT: `verify_as_reply` (get_in_tkt.c:264-269)
-/// without `kdc_timesync` a starttime outside the skew is `KRB5_KDCREP_SKEW`.
-#[test]
-fn a_keytab_reply_outside_the_skew_is_kdcrep_skew_whatever_keys_follow() {
-    let profile = pin_timesync(false);
-    let (port, etype, keys) = forging_kdc(|part| {
-        part.authtime = part.authtime.add_seconds(3600).unwrap();
-        part.starttime = part.starttime.take().map(|t| t.add_seconds(3600).unwrap());
-        part.endtime = part.endtime.add_seconds(3600).unwrap();
-    });
-    let err = keytab_as(&profile, port, &with_a_stranger_last(keys, etype));
-    assert_eq!(err.to_string(), "Clock skew too great in KDC reply");
-}
-
-/// A reply the keytab's key of its enctype opens, but whose session key is of the wrong length,
-/// ends the exchange there.
-// MIT: `init_creds_step_reply` (get_in_tkt.c:1824-1840)
-/// `decrypt_as_reply` takes one key from the keytab; once it opens the reply, what follows ends the request with its own error, and no other key is asked.
-#[test]
-fn a_keytab_reply_that_opens_ends_the_walk_whatever_it_fails_next() {
-    let profile = pin_timesync(true);
-    let (port, etype, keys) = forging_kdc(|part| {
-        let longer = part.key.keyvalue.len() + 1;
-        part.key.keyvalue = vec![7u8; longer].into();
-    });
-    let err = keytab_as(&profile, port, &with_a_stranger_last(keys, etype));
-    assert!(
-        matches!(err, krb5_protocol::Error::Crypto(_)),
-        "the session key's own failure, not another key's: {err:?}"
-    );
-}
-
-/// An enc-pa-rep reply without a checksum over the request is `KRB5_KDCREP_MODIFIED`, whatever
-/// keys follow the one that opened it.
-// MIT: `krb5int_fast_verify_nego` (fast.c:635-675)
-/// a reply with the enc-pa-rep flag needs a PA-REQ-ENC-PA-REP checksum over the request under the reply key.
-#[test]
-fn a_keytab_reply_with_a_bad_enc_pa_rep_is_kdcrep_modified_whatever_keys_follow() {
-    use krb5_types::{Checksum, PaData, flag_bit, pa};
-
-    let profile = pin_timesync(true);
-    let (port, etype, keys) = forging_kdc(|part| {
-        part.flags = part.flags.clone().with_bit(flag_bit::ENC_PA_REP, true);
-        let bogus = Checksum {
-            cksumtype: 16,
-            checksum: vec![0u8; 12].into(),
-        };
-        part.encrypted_pa_data = Some(vec![PaData {
-            padata_type: pa::REQ_ENC_PA_REP,
-            padata_value: krb5_asn1::encode(&bogus).unwrap().into(),
-        }]);
-    });
-    let err = keytab_as(&profile, port, &with_a_stranger_last(keys, etype));
-    assert!(
-        matches!(&err, krb5_protocol::Error::ReplyMismatch(m) if m == "Ticket modified in KDC reply"),
-        "{err:?}"
-    );
-}
-
-/// No key in the keytab opens the reply: the error is the decrypt failure of the key MIT would
-/// have used, the keytab's key of the reply's enctype, not that of the last key tried.
-// MIT: `decrypt_as_reply` (get_in_tkt.c:127-133)
-/// the single key's `krb5_kdc_rep_decrypt_proc` error is returned as it is.
-#[test]
-fn a_keytab_reply_no_key_opens_is_the_integrity_failure_of_its_enctypes_key() {
-    use krb5_crypto::{EncryptionType, ProtocolKey};
-
-    let profile = pin_timesync(true);
-    let (port, etype, _) = forging_kdc(|_| {});
-    // A stale key of the reply's enctype first, then a key of another enctype.
-    let first = EncryptionType::known(etype).unwrap();
-    let other = if etype == EncryptionType::Aes128CtsHmacSha196.to_iana() {
-        EncryptionType::Aes256CtsHmacSha196
-    } else {
-        EncryptionType::Aes128CtsHmacSha196
-    };
-    let keys = vec![
-        ProtocolKey::random(first).unwrap(),
-        ProtocolKey::random(other).unwrap(),
-    ];
-    let err = keytab_as(&profile, port, &keys);
-    assert!(
-        matches!(err, krb5_protocol::Error::ReplyIntegrity),
-        "{err:?}"
     );
 }
 

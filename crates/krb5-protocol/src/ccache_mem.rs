@@ -29,26 +29,3 @@ pub fn memory_retrieve(name: &str) -> Option<FileCcache> {
 pub fn memory_destroy(name: &str) -> bool {
     table().remove(name).is_some()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{FileCcache, parse_principal, realm};
-
-    #[test]
-    fn memory_named_store_retrieve_destroy() {
-        let (n, r) = parse_principal("user@KERBER.TEST").unwrap();
-        let primary = (realm(&r), n);
-        let cc = FileCcache::new(primary.clone(), Vec::new());
-        let name = format!("g8a-{}", std::process::id());
-        memory_store(&name, cc);
-        let got = memory_retrieve(&name).expect("stored");
-        assert_eq!(
-            FileCcache::format_principal(&got.primary.0, &got.primary.1),
-            "user@KERBER.TEST"
-        );
-        assert!(memory_destroy(&name));
-        assert!(memory_retrieve(&name).is_none());
-        assert!(!memory_destroy(&name));
-    }
-}

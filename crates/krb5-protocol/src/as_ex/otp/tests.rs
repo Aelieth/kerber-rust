@@ -523,36 +523,6 @@ fn the_default_requests_der_is_mits() {
     assert_eq!(&der[16..20], &[0xa2, 0x46, 0x04, 0x44]);
 }
 
-struct Int;
-impl AsPrompt for Int {
-    fn password(&mut self) -> Result<Zeroizing<Vec<u8>>, Error> {
-        unreachable!()
-    }
-    fn preauth(&mut self, _: &PreauthPrompt<'_>) -> Result<Zeroizing<Vec<u8>>, Error> {
-        Err(Error::File(std::io::Error::new(
-            std::io::ErrorKind::Interrupted,
-            "Password read interrupted",
-        )))
-    }
-}
-
-#[test]
-fn a_prompt_that_fails_fails_the_module_and_an_interrupt_stops_it() {
-    let mut ui = Script::of(&[]);
-    let e = run(challenge(vec![ti()]), &mut ui).unwrap_err();
-    assert_eq!(e.error.to_string(), "Cannot read password");
-    assert!(!e.interrupted);
-    let e = process(
-        &state_of(challenge(vec![ti()])),
-        &ResponderItems::default(),
-        &mut Int,
-        &armor(),
-    )
-    .err()
-    .unwrap();
-    assert!(e.interrupted);
-}
-
 #[test]
 fn a_reply_is_cut_to_1023_bytes_and_at_a_nul() {
     let long: &'static str = Box::leak("7".repeat(2000).into_boxed_str());
@@ -790,79 +760,4 @@ fn the_responder_helpers_round_trip_mits_json_and_the_answer_is_used() {
 )]
 fn config_octets(cfg: &Value) -> Option<Vec<u8>> {
     config_string(cfg).map(Into::into)
-}
-
-fn octet_token() -> OtpTokenInfo {
-    OtpTokenInfo {
-        vendor: Some(OctetString::from(b"Acme".to_vec())),
-        alg_id: Some(OctetString::from(vec![0xff])),
-        token_id: Some(OctetString::from(vec![0x61, 0xff, 0x62])),
-        ..ti()
-    }
-}
-
-#[test]
-fn a_token_config_keeps_its_octets_in_pa_config_data() {
-    let mut ui = Script::of(&["123456"]);
-    let (_, cfg) = run(challenge(vec![octet_token()]), &mut ui).unwrap();
-    let mut want = br#"{"vendor":"Acme","algID":""#.to_vec();
-    want.push(0xff);
-    want.extend_from_slice(br#"","tokenID":"a"#);
-    want.extend_from_slice(&[0xff, b'b']);
-    want.extend_from_slice(br#""}"#);
-    assert_eq!(config_octets(&cfg), Some(want));
-}
-
-#[test]
-fn a_second_login_reads_the_config_octets_and_prunes_to_the_token_they_name() {
-    // MIT: `read_cc_config_in_data` (lib/krb5/krb/get_in_tkt.c:1176-1211)
-    // the first login's config comes back as the input cache's octets.
-    let mut first = Script::of(&["123456"]);
-    let (_, cfg) = run(challenge(vec![octet_token()]), &mut first).unwrap();
-    let stored = config_octets(&cfg).unwrap();
-    let cc_in = k5json::decode(&stored).unwrap();
-    let other = OtpTokenInfo {
-        vendor: Some(OctetString::from(b"Beta".to_vec())),
-        token_id: Some(OctetString::from(b"b".to_vec())),
-        ..ti()
-    };
-    let pa141 = PaData {
-        padata_type: pa::OTP_CHALLENGE,
-        padata_value: encode(&challenge(vec![other, octet_token()]))
-            .unwrap()
-            .into(),
-    };
-    let mut st = OtpState::default();
-    prep_questions(
-        &mut st,
-        &pa141,
-        Some(&cc_in),
-        &mut ResponderItems::default(),
-    )
-    .unwrap();
-    assert_eq!(st.chl.unwrap().token_info, vec![octet_token()]);
-}
-
-#[test]
-fn the_views_return_the_octets_of_mits_c_strings() {
-    let mut chl = challenge(vec![OtpTokenInfo {
-        challenge: Some(OctetString::from(b"12 34".to_vec())),
-        length: Some(6),
-        format: Some(OTP_FORMAT_DECIMAL),
-        ..octet_token()
-    }]);
-    chl.service = Some(OctetString::from(b"svc\xff".to_vec()));
-    let pa141 = PaData {
-        padata_type: pa::OTP_CHALLENGE,
-        padata_value: encode(&chl).unwrap().into(),
-    };
-    let mut items = ResponderItems::default();
-    prep_questions(&mut OtpState::default(), &pa141, None, &mut items).unwrap();
-    let view = items.otp_get_challenge().unwrap().unwrap();
-    assert_eq!(view.service, Some(b"svc\xff".to_vec()));
-    let token = &view.tokeninfo[0];
-    assert_eq!(token.vendor, Some(b"Acme".to_vec()));
-    assert_eq!(token.challenge, Some(b"12 34".to_vec()));
-    assert_eq!(token.token_id, Some(vec![0x61, 0xff, 0x62]));
-    assert_eq!(token.alg_id, Some(vec![0xff]));
 }

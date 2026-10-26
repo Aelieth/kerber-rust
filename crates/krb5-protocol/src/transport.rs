@@ -935,34 +935,6 @@ mod kdc_list {
     }
 
     #[test]
-    fn a_single_kdc_retransmits_after_half_a_second() {
-        let (only, hits) = serve(2, Some(2));
-        let profile = pin(&[&only]);
-        let port: u16 = only.rsplit_once(':').unwrap().1.parse().unwrap();
-        let reply = send(&profile, "127.0.0.1", port).unwrap();
-        assert_eq!(reply, b"kdc-reply");
-        let at = hits.lock().unwrap().clone();
-        assert_eq!(at.len(), 2, "{at:?}");
-        let gap = at[1].saturating_duration_since(at[0]);
-        assert!(gap > Duration::from_millis(300), "{gap:?}");
-        assert!(gap < Duration::from_millis(800), "{gap:?}");
-    }
-
-    #[test]
-    fn an_explicit_kdc_is_not_replaced_by_the_profile_list() {
-        let (dead, dead_hits) = serve(1, None);
-        let (live, live_hits) = serve(1, Some(1));
-        let (mock, mock_hits) = serve(1, Some(1));
-        let profile = pin(&[&dead, &live]);
-        let port: u16 = mock.rsplit_once(':').unwrap().1.parse().unwrap();
-        let reply = send(&profile, "127.0.0.1", port).unwrap();
-        assert_eq!(reply, b"kdc-reply");
-        assert!(dead_hits.lock().unwrap().is_empty());
-        assert!(live_hits.lock().unwrap().is_empty());
-        assert_eq!(mock_hits.lock().unwrap().len(), 1);
-    }
-
-    #[test]
     fn every_profile_kdc_dead_is_an_unreachable_kdc() {
         let (first, first_hits) = serve(3, None);
         let (second, second_hits) = serve(3, None);

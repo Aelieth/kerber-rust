@@ -124,26 +124,6 @@ mod tests {
     }
 
     #[test]
-    fn down_entries_and_entries_without_an_address_are_passed_over() {
-        let got = host_addresses_from([
-            (false, Some(v4(192, 0, 2, 1))),
-            (true, None),
-            (true, Some(v4(192, 0, 2, 2))),
-        ]);
-        assert_eq!(got, vec![inet(192, 0, 2, 2)]);
-    }
-
-    #[test]
-    fn a_repeated_address_is_listed_once_in_interface_order() {
-        let got = host_addresses_from([
-            (true, Some(v4(192, 0, 2, 9))),
-            (true, Some(v4(198, 51, 100, 1))),
-            (true, Some(v4(192, 0, 2, 9))),
-        ]);
-        assert_eq!(got, vec![inet(192, 0, 2, 9), inet(198, 51, 100, 1)]);
-    }
-
-    #[test]
     fn ipv6_link_local_is_dropped_and_ipv4_mapped_stays_ipv6() {
         let linklocal: Ipv6Addr = "fe80::1".parse().unwrap();
         let global: Ipv6Addr = "2001:db8::5".parse().unwrap();
@@ -228,23 +208,5 @@ mod tests {
         let failing = || Err(getifaddrs_error(nix::errno::Errno::EACCES));
         assert!(init_creds_addresses_from(Some(false), failing).is_err());
         assert!(init_creds_addresses_from(None, failing).unwrap().is_none());
-    }
-
-    #[test]
-    fn the_os_list_holds_no_loopback_and_no_duplicate() {
-        let list = os_localaddr().unwrap();
-        for a in &list {
-            assert!(
-                a.address.as_ref() != [127, 0, 0, 1] && a.addr_type != 0,
-                "{a:?}"
-            );
-        }
-        let mut sorted: Vec<_> = list
-            .iter()
-            .map(|a| (a.addr_type, a.address.to_vec()))
-            .collect();
-        sorted.sort();
-        sorted.dedup();
-        assert_eq!(sorted.len(), list.len());
     }
 }

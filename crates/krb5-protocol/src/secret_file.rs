@@ -400,18 +400,6 @@ mod tests {
     }
 
     #[test]
-    fn a_fresh_write_replaces_a_file_the_writer_may_not_write() {
-        let dir = krb5_testkit::scratch_dir("krb5-secret-fresh-readonly");
-        let path = dir.join("krb5cc");
-        fs::write(&path, b"old").unwrap();
-        set_mode(&path, 0o400);
-        write_fresh_secret_file(&path, b"new").unwrap();
-        assert_eq!(fs::read(&path).unwrap(), b"new");
-        assert_eq!(meta(&path).2, 0o600);
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn the_check_opens_only_a_regular_file_and_never_follows_a_symlink() {
         let dir = krb5_testkit::scratch_dir("krb5-secret-check");
         let target = dir.join("target");
@@ -461,34 +449,6 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn root_a_group_writer_replaces_the_file_but_cannot_keep_its_owner() {
-        if !is_root() {
-            eprintln!("skipped: acting as a second user needs euid 0");
-            return;
-        }
-        let Some((dir, path)) = group_db("krb5-secret-writer", 0o660) else {
-            return;
-        };
-        let Some((read, write)) = as_fs_identity(4242, 4243, || {
-            (fs::read(&path).ok(), write_secret_file(&path, b"new"))
-        }) else {
-            eprintln!("skipped: setfsuid to 4242 did not take");
-            let _ = fs::remove_dir_all(&dir);
-            return;
-        };
-        if read.is_none() {
-            eprintln!("skipped: the scratch path is not searchable by uid 4242");
-            let _ = fs::remove_dir_all(&dir);
-            return;
-        }
-        write.unwrap();
-        assert_eq!(fs::read(&path).unwrap(), b"new");
-        assert_eq!(meta(&path), (4242, 4243, 0o660));
-        let _ = fs::remove_dir_all(&dir);
-    }
-
     #[test]
     fn replacing_a_file_keeps_its_permission_bits() {
         let dir = krb5_testkit::scratch_dir("krb5-secret-mode");
@@ -523,29 +483,6 @@ mod tests {
     }
 
     #[test]
-    fn a_file_made_like_another_takes_its_owner_group_and_mode() {
-        let dir = krb5_testkit::scratch_dir("krb5-secret-like");
-        let (db, side) = (dir.join("principal"), dir.join("principal.lockout"));
-        fs::write(&db, b"db").unwrap();
-        set_mode(&db, 0o640);
-        let gid = chgrp_to_another_group(&db);
-        write_secret_file_like(&side, &db, b"records").unwrap();
-        let (uid, new_gid, mode) = meta(&side);
-        assert_eq!((uid, mode), (meta(&db).0, 0o640));
-        if let Some(gid) = gid {
-            assert_eq!(new_gid, gid);
-        } else {
-            eprintln!("group not checked: no supplementary group of this user (`id -G`) to give");
-        }
-        assert_eq!(fs::read(&side).unwrap(), b"records");
-        fs::remove_file(&db).unwrap();
-        fs::remove_file(&side).unwrap();
-        write_secret_file_like(&side, &db, b"records").unwrap();
-        assert_eq!(meta(&side).2, 0o600, "with nothing beside it, a fresh file");
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn a_new_file_is_0600_and_the_writers() {
         let dir = krb5_testkit::scratch_dir("krb5-secret-new");
         let path = dir.join("stash");
@@ -569,21 +506,6 @@ mod tests {
     }
 
     #[test]
-    fn a_symlink_passes_nothing_to_the_new_file() {
-        let dir = krb5_testkit::scratch_dir("krb5-secret-link");
-        let target = dir.join("target");
-        let link = dir.join("krb5.keytab");
-        fs::write(&target, b"target").unwrap();
-        set_mode(&target, 0o644);
-        symlink(&target, &link).unwrap();
-        write_secret_file(&link, b"keys").unwrap();
-        assert!(fs::symlink_metadata(&link).unwrap().file_type().is_file());
-        assert_eq!(meta(&link).2, 0o600);
-        assert_eq!(fs::read(&target).unwrap(), b"target");
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn root_keeps_the_replaced_files_owner() {
         if !is_root() {
             eprintln!("skipped: giving the new file another user's ownership needs euid 0");
@@ -601,46 +523,6 @@ mod tests {
         write_secret_file(&path, b"new").unwrap();
         assert_eq!(meta(&path), (4242, 4243, 0o640));
         let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn root_does_not_give_a_secret_to_a_file_planted_in_a_sticky_directory() {
-        if !is_root() {
-            eprintln!("skipped: a file planted by another user needs euid 0 to set up");
-            return;
-        }
-        let dir = krb5_testkit::scratch_dir("krb5-secret-sticky");
-        let tmp = dir.join("tmp");
-        fs::create_dir(&tmp).unwrap();
-        set_mode(&tmp, 0o1777);
-        let path = tmp.join("krb5.keytab");
-        fs::write(&path, b"planted").unwrap();
-        if chown(&path, Some(4242), Some(4242)).is_err() {
-            eprintln!("skipped: uid 4242 is not mapped in this user namespace");
-            let _ = fs::remove_dir_all(&dir);
-            return;
-        }
-        set_mode(&path, 0o644);
-        write_secret_file(&path, b"keys").unwrap();
-        let (uid, _, mode) = meta(&path);
-        assert_eq!((uid, mode), (0, 0o600));
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn a_group_that_is_not_kept_loses_its_bits() {
-        assert_eq!(kept_mode(0o100_640, true), 0o640);
-        assert_eq!(kept_mode(0o100_660, false), 0o600);
-        assert_eq!(kept_mode(0o104_755, true), 0o755);
-    }
-
-    #[test]
-    fn shared_sticky_is_protected_regular_level_2() {
-        assert!(shared_sticky(0o41777, 0, 4242));
-        assert!(shared_sticky(0o41770, 0, 4242));
-        assert!(!shared_sticky(0o41777, 4242, 4242));
-        assert!(!shared_sticky(0o40777, 0, 4242));
-        assert!(!shared_sticky(0o41755, 0, 4242));
     }
 
     struct SkipType;

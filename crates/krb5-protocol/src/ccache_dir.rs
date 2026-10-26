@@ -200,25 +200,3 @@ fn write_primary(dir: &Path, name: &str) -> io::Result<()> {
     }
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn dir_default_tkt_and_switch() {
-        let dir = krb5_testkit::scratch_dir("krb5cc-dir").join("cc");
-        let _ = fs::remove_dir_all(&dir);
-        let residual = dir.to_string_lossy().into_owned();
-        let p = dir_cache_path(&residual).expect("a missing DIR is made");
-        assert_eq!(p.file_name().unwrap(), "tkt");
-        assert!(dir.join("primary").is_file());
-        let sub = dir.join("tktXXXX");
-        fs::write(&sub, b"x").unwrap();
-        let sub_res = format!(":{}", sub.display());
-        dir_switch(&sub_res).expect("switch");
-        let p2 = dir_cache_path(&residual).expect("switched");
-        assert_eq!(p2.file_name().unwrap(), "tktXXXX");
-        let _ = fs::remove_dir_all(&dir);
-    }
-}

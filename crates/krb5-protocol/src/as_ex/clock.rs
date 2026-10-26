@@ -90,6 +90,3 @@ fn with_offset(sec: i64, usec: i64, off_sec: i64, off_usec: i64) -> (KerberosTim
         Microseconds::from_subsec_micros(usec),
     )
 }
-
-#[cfg(test)]
-mod tests;

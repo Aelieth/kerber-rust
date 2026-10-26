@@ -536,7 +536,7 @@ thread_local! {
     static TEST_SEQ_RANDOM: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
 }
 
-#[cfg(any(test, feature = "test-hooks"))]
+#[cfg(feature = "test-hooks")]
 pub fn set_test_seq_random(raw: Option<u32>) {
     TEST_SEQ_RANDOM.with(|c| c.set(raw));
 }

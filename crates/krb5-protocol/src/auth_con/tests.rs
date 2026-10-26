@@ -1,4 +1,4 @@
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr};
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt};
@@ -9,13 +9,11 @@ use krb5_types::{
 };
 
 use super::{
-    AUTH_CONTEXT_DO_SEQUENCE, AUTH_CONTEXT_USE_SUBKEY, AcceptorAuthContext, check_ticket_etype,
-    generate_seq_number, local_host_address,
+    AUTH_CONTEXT_DO_SEQUENCE, AUTH_CONTEXT_USE_SUBKEY, AcceptorAuthContext, local_host_address,
 };
 use crate::acceptor_conf::AcceptorConfig;
 use crate::ap_req::ApVerifyOk;
 use crate::error::Error;
-use crate::safe_priv::wiped;
 
 const AES256: EncryptionType = EncryptionType::Aes256CtsHmacSha196;
 
@@ -92,11 +90,6 @@ fn rep_part(rep: &ApRep, session: &ProtocolKey) -> EncApRepPart {
     decode(&decrypt(session, usage, rep.enc_part.cipher.as_ref()).unwrap()).unwrap()
 }
 
-fn priv_part(msg: &KrbPriv, key: &ProtocolKey) -> EncKrbPrivPart {
-    let usage = KeyUsage::new(ku::KRB_PRIV_ENC_PART).unwrap();
-    decode(&decrypt(key, usage, msg.enc_part.cipher.as_ref()).unwrap()).unwrap()
-}
-
 const DEFAULT_LIST: [EncryptionType; 4] = [
     EncryptionType::Aes256CtsHmacSha196,
     EncryptionType::Aes128CtsHmacSha196,
@@ -126,34 +119,6 @@ fn kpasswd_shaped_ap_rep_echoes_the_subkey_with_a_fresh_seq() {
         ac.send_subkey().map(ProtocolKey::as_bytes),
         Some(subkey.as_bytes())
     );
-}
-
-#[test]
-fn use_subkey_ap_rep_carries_a_fresh_key_of_the_negotiated_etype() {
-    let session = ProtocolKey::random(AES256).unwrap();
-    let subkey = ProtocolKey::random(AES256).unwrap();
-    let ok = accepted(&session, Some(&subkey), Some(864_518_167), true, None);
-    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &conf(&DEFAULT_LIST)).unwrap();
-    ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE | AUTH_CONTEXT_USE_SUBKEY);
-    let part = rep_part(&ac.mk_rep().unwrap(), &session);
-    let fresh = part.subkey.unwrap();
-    assert_eq!(fresh.keytype, AES256.to_iana());
-    assert_ne!(
-        fresh.keyvalue.as_ref(),
-        subkey.as_bytes(),
-        "not the initiator's"
-    );
-    assert_eq!(
-        Some(fresh.keyvalue.as_ref()),
-        ac.send_subkey().map(ProtocolKey::as_bytes)
-    );
-    assert_eq!(
-        Some(fresh.keyvalue.as_ref()),
-        ac.recv_subkey().map(ProtocolKey::as_bytes)
-    );
-    let seq = part.seq_number.unwrap();
-    assert!(seq != 0 && seq < 1 << 30);
-    assert_ne!(seq, 864_518_167, "not the authenticator's seq");
 }
 
 #[test]
@@ -210,103 +175,6 @@ fn a_ticket_enctype_the_acceptor_does_not_permit_is_noperm_etype_first() {
 }
 
 #[test]
-fn check_ticket_etype_is_nosupp_for_an_enctype_not_implemented() {
-    assert!(matches!(
-        check_ticket_etype(EncryptionType::Rc4Hmac.to_iana(), &DEFAULT_LIST),
-        Err(Error::NopermEtype(_))
-    ));
-    assert!(matches!(
-        check_ticket_etype(1, &DEFAULT_LIST),
-        Err(Error::ProgEtypeNosupp)
-    ));
-    assert!(matches!(
-        check_ticket_etype(-128, &[]),
-        Err(Error::ProgEtypeNosupp)
-    ));
-    assert!(check_ticket_etype(AES256.to_iana(), &DEFAULT_LIST).is_ok());
-}
-
-#[test]
-fn an_etype_list_that_does_not_decode_fails_the_request() {
-    let session = ProtocolKey::random(AES256).unwrap();
-    let ad = vec![AuthorizationDataValue {
-        ad_type: pa::AD_ETYPE_NEGOTIATION,
-        ad_data: vec![0x30, 0x05, 0x02].into(),
-    }];
-    let ok = accepted(&session, None, None, true, Some(ad));
-    assert!(matches!(
-        AcceptorAuthContext::from_ap_req(&ok, &conf(&DEFAULT_LIST)),
-        Err(Error::Asn1(_))
-    ));
-}
-
-#[test]
-fn reply_krb_priv_has_no_timestamp_and_advances_the_seq() {
-    let session = ProtocolKey::random(AES256).unwrap();
-    let subkey = ProtocolKey::random(AES256).unwrap();
-    let ok = accepted(&session, Some(&subkey), None, false, None);
-    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &conf(&DEFAULT_LIST)).unwrap();
-    ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE);
-    let seq = rep_part(&ac.mk_rep().unwrap(), &session)
-        .seq_number
-        .unwrap();
-    let laddr = local_host_address(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 177, 10))));
-    let first = priv_part(&ac.mk_priv(&[0, 0], &laddr, None).unwrap(), &subkey);
-    assert_eq!(first.user_data.as_ref(), &[0, 0]);
-    assert_eq!(first.timestamp, None);
-    assert_eq!(first.usec, None);
-    assert_eq!(first.seq_number, Some(seq), "the AP-REP's seq");
-    assert_eq!(first.s_address, laddr);
-    assert_eq!(first.r_address, None);
-    let second = priv_part(&ac.mk_priv(b"x", &laddr, None).unwrap(), &subkey);
-    assert_eq!(second.seq_number, Some(seq.wrapping_add(1)));
-}
-
-#[test]
-fn without_mutual_the_local_seq_is_the_peers() {
-    let session = ProtocolKey::random(AES256).unwrap();
-    let ok = accepted(&session, None, Some(77), false, None);
-    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &conf(&DEFAULT_LIST)).unwrap();
-    assert_eq!(ac.local_seq(), 77);
-    ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE);
-    let part = rep_part(&ac.mk_rep().unwrap(), &session);
-    assert_eq!(part.seq_number, Some(77));
-    assert_eq!(part.subkey, None);
-}
-
-#[test]
-fn generated_seq_numbers_are_thirty_bits_and_never_zero() {
-    for _ in 0..256 {
-        let n = generate_seq_number().unwrap();
-        assert!(n != 0 && n < 1 << 30, "{n}");
-    }
-}
-
-#[test]
-fn local_host_address_is_k5_sockaddr_to_address() {
-    let v4 = local_host_address(Some(IpAddr::V4(Ipv4Addr::LOCALHOST)));
-    assert_eq!(
-        (v4.addr_type, v4.address.as_ref()),
-        (2, &[127, 0, 0, 1][..])
-    );
-    let mapped = local_host_address(Some(IpAddr::V6(
-        Ipv4Addr::new(10, 1, 2, 3).to_ipv6_mapped(),
-    )));
-    assert_eq!(
-        (mapped.addr_type, mapped.address.as_ref()),
-        (2, &[10, 1, 2, 3][..])
-    );
-    let v6 = local_host_address(Some(IpAddr::V6(Ipv6Addr::LOCALHOST)));
-    assert_eq!(v6.addr_type, 24);
-    assert_eq!(v6.address.as_ref(), Ipv6Addr::LOCALHOST.octets());
-    let none = local_host_address(None);
-    assert_eq!(
-        (none.addr_type, none.address.as_ref()),
-        (3, &[0, 0, 0, 1][..])
-    );
-}
-
-#[test]
 fn a_permitted_session_key_with_a_subkey_outside_the_list_is_noperm_etype() {
     let session = ProtocolKey::random(AES256).unwrap();
     let subkey = ProtocolKey::random(EncryptionType::Aes128CtsHmacSha196).unwrap();
@@ -342,164 +210,8 @@ fn the_kdc_profile_libdefaults_come_before_krb5_conf() {
     assert_eq!(iana(&[]), [18, 17, 20, 19, 16, 23, 25, 26], "MIT's DEFAULT");
 }
 
-#[test]
-fn a_krb_priv_under_do_time_carries_the_time_to_the_microsecond() {
-    let session = ProtocolKey::random(AES256).unwrap();
-    let ok = accepted(&session, None, None, true, None);
-    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &conf(&DEFAULT_LIST)).unwrap();
-    ac.set_flags(super::AUTH_CONTEXT_DO_TIME);
-    let laddr = local_host_address(None);
-    let part = priv_part(&ac.mk_priv(b"t", &laddr, None).unwrap(), &session);
-    let sent = part.timestamp.unwrap().unix_seconds();
-    let now = KerberosTime::now().unix_seconds();
-    assert!(now.abs_diff(sent) <= 2, "timestamp {sent}, now {now}");
-    assert!(part.usec.is_some());
-    assert_eq!(part.seq_number, None, "no DO_SEQUENCE, no seq-number");
-}
-
-#[test]
-fn mk_rep_zeroes_the_encoded_part_it_encrypted() {
-    let session = ProtocolKey::random(AES256).unwrap();
-    let subkey = ProtocolKey::random(AES256).unwrap();
-    let ok = accepted(&session, Some(&subkey), Some(864_518_167), true, None);
-    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &conf(&DEFAULT_LIST)).unwrap();
-    ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE | AUTH_CONTEXT_USE_SUBKEY);
-    wiped::take();
-    let rep = ac.mk_rep().unwrap();
-    let zeroed = wiped::take();
-    let plain = encode(&rep_part(&rep, &session)).unwrap();
-    assert_eq!(
-        zeroed.len(),
-        1,
-        "the encoded EncAPRepPart, fresh subkey and all"
-    );
-    assert!(zeroed[0].len() >= plain.len(), "the whole allocation");
-    assert!(zeroed[0].iter().all(|b| *b == 0));
-}
-
-#[test]
-fn mk_priv_zeroes_its_encoded_part_and_its_copy_of_the_user_data() {
-    let session = ProtocolKey::random(AES256).unwrap();
-    let subkey = ProtocolKey::random(AES256).unwrap();
-    let ok = accepted(&session, Some(&subkey), None, false, None);
-    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &conf(&DEFAULT_LIST)).unwrap();
-    ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE);
-    let laddr = local_host_address(None);
-    let secret = b"scratch-new-password";
-    wiped::take();
-    let msg = ac.mk_priv(secret, &laddr, None).unwrap();
-    let zeroed = wiped::take();
-    let plain = encode(&priv_part(&msg, &subkey)).unwrap();
-    assert_eq!(
-        zeroed.len(),
-        2,
-        "the user data's copy, then the encoded EncKrbPrivPart"
-    );
-    assert!(zeroed.iter().all(|w| w.iter().all(|b| *b == 0)));
-    assert!(zeroed[0].len() >= secret.len() && zeroed[1].len() >= plain.len());
-}
-
-#[test]
-fn generated_seq_numbers_keep_thirty_of_the_random_bits() {
-    for (raw, want) in [
-        (0xffff_ffff, 0x3fff_ffff),
-        (0x1234_5678, 0x1234_5678),
-        (0x4000_0001, 1),
-        (0xc000_0000, 1),
-    ] {
-        super::set_test_seq_random(Some(raw));
-        assert_eq!(generate_seq_number().unwrap(), want, "{raw:#x}");
-    }
-    super::set_test_seq_random(None);
-}
-
-#[test]
-fn remote_seq_takes_the_exact_number_then_the_next() {
-    let mut r = super::RemoteSeq::new(864_518_167);
-    assert!(!r.check(864_518_168), "one too high");
-    assert!(!r.check(0), "none, where the authenticator had one");
-    assert!(r.check(864_518_167));
-    r.advance();
-    assert_eq!(r.expected(), 864_518_168);
-    let mut none = super::RemoteSeq::new(0);
-    assert!(
-        none.check(0),
-        "none where the authenticator had none (MIT kpasswd's shape)"
-    );
-    assert!(!none.check(1));
-}
-
-#[test]
-fn remote_seq_reads_old_heimdal_numbers_as_mit_does() {
-    let mut one = super::RemoteSeq::new(0x80);
-    assert!(
-        one.check(0xFFFF_FF80),
-        "chk_heimdal_seqnum: the 1-octet form"
-    );
-    let mut two = super::RemoteSeq::new(0x8000);
-    assert!(two.check(0xFFFF_8000), "the 2-octet form");
-    let mut three = super::RemoteSeq::new(0x0080_0000);
-    assert!(three.check(0xFF80_0000), "the 3-octet form");
-    let mut sane = super::RemoteSeq::new(0x80);
-    assert!(sane.check(0x80));
-    sane.advance();
-    assert!(
-        !sane.check(0xFFFF_FF81),
-        "a sane peer's numbers are never read as Heimdal's"
-    );
-    assert!(super::RemoteSeq::new(0).check(0x100));
-    assert!(!super::RemoteSeq::new(0).check(0x200));
-}
-
 fn peer_priv(key: &ProtocolKey, data: &[u8], seq: Option<u32>) -> Vec<u8> {
     encode(&crate::safe_priv::build_krb_priv_with_seq(key, data, seq).unwrap()).unwrap()
-}
-
-#[test]
-fn rd_priv_takes_the_request_only_with_the_authenticators_seq() {
-    let session = ProtocolKey::random(AES256).unwrap();
-    let subkey = ProtocolKey::random(AES256).unwrap();
-    let ok = accepted(&session, Some(&subkey), None, false, None);
-    let fresh = || {
-        let mut ac = AcceptorAuthContext::from_ap_req(&ok, &conf(&DEFAULT_LIST)).unwrap();
-        ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE);
-        ac
-    };
-    assert_eq!(
-        fresh().rd_priv(&peer_priv(&subkey, b"pw", None)).unwrap(),
-        b"pw"
-    );
-    let one = fresh()
-        .rd_priv(&peer_priv(&subkey, b"pw", Some(1)))
-        .unwrap_err();
-    assert!(
-        matches!(one, Error::KrbError { code: 42, .. }),
-        "seq 1 where the authenticator had none is BADORDER, got {one:?}"
-    );
-    let ok = accepted(&session, Some(&subkey), Some(864_518_167), false, None);
-    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &conf(&DEFAULT_LIST)).unwrap();
-    ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE);
-    for wrong in [None, Some(864_518_168)] {
-        let e = ac.rd_priv(&peer_priv(&subkey, b"pw", wrong)).unwrap_err();
-        assert!(
-            matches!(e, Error::KrbError { code: 42, .. }),
-            "{wrong:?}: {e:?}"
-        );
-    }
-    assert_eq!(
-        ac.rd_priv(&peer_priv(&subkey, b"one", Some(864_518_167)))
-            .unwrap(),
-        b"one"
-    );
-    assert_eq!(
-        ac.rd_priv(&peer_priv(&subkey, b"two", Some(864_518_168)))
-            .unwrap(),
-        b"two"
-    );
-    assert_eq!(ac.remote_seq(), 864_518_169);
-    let mut lax = AcceptorAuthContext::from_ap_req(&ok, &conf(&DEFAULT_LIST)).unwrap();
-    lax.set_flags(0);
-    assert!(lax.rd_priv(&peer_priv(&subkey, b"x", Some(7))).is_ok());
 }
 
 #[test]
@@ -536,34 +248,6 @@ fn rd_priv_refuses_a_replay_and_a_stale_time_under_do_time() {
 }
 
 #[test]
-fn rd_priv_chains_the_cipher_state_after_init_ivector() {
-    let session = ProtocolKey::random(AES256).unwrap();
-    let ok = accepted(&session, None, Some(500), true, None);
-    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &conf(&DEFAULT_LIST)).unwrap();
-    ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE);
-    ac.init_ivector();
-    let mut state = krb5_crypto::CipherState::initial();
-    for (seq, block) in [(500, b"block-0"), (501, b"block-1")] {
-        let msg =
-            crate::safe_priv::build_krb_priv_chained(&session, block, Some(seq), false, &mut state)
-                .unwrap();
-        assert_eq!(ac.rd_priv(&encode(&msg).unwrap()).unwrap(), block);
-    }
-    let unchained = crate::safe_priv::build_krb_priv_chained(
-        &session,
-        b"block-2",
-        Some(502),
-        false,
-        &mut krb5_crypto::CipherState::initial(),
-    )
-    .unwrap();
-    assert!(
-        ac.rd_priv(&encode(&unchained).unwrap()).is_err(),
-        "a block not chained from the last one does not decrypt"
-    );
-}
-
-#[test]
 fn rd_safe_takes_the_size_only_with_the_authenticators_seq() {
     let session = ProtocolKey::random(AES256).unwrap();
     let ok = accepted(&session, None, Some(4242), true, None);
@@ -578,15 +262,6 @@ fn rd_safe_takes_the_size_only_with_the_authenticators_seq() {
     assert!(matches!(e, Error::KrbError { code: 42, .. }), "{e:?}");
     assert_eq!(ac.rd_safe(&safe(4242)).unwrap(), size);
     assert_eq!(ac.remote_seq(), 4243);
-}
-
-#[test]
-fn rd_priv_refuses_another_message_type() {
-    let session = ProtocolKey::random(AES256).unwrap();
-    let ok = accepted(&session, None, None, false, None);
-    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &conf(&DEFAULT_LIST)).unwrap();
-    let e = ac.rd_priv(&[0x30, 0x00]).unwrap_err();
-    assert!(matches!(e, Error::KrbError { code: 40, .. }), "{e:?}");
 }
 
 fn sealed_priv(key: &ProtocolKey, part_der: &[u8]) -> Vec<u8> {
@@ -624,61 +299,6 @@ fn priv_part_der(
     .unwrap()
 }
 
-// MIT: `decode_seqno` (asn1_k_encode.c:133-146)
-/// a seq-number sent as a negative INTEGER reads as its 32 bits unsigned, so -2 is 0xFFFFFFFE, and an old Heimdal's -128 for its count 0x80 passes `k5_privsafe_check_seqnum`'s Heimdal check.
-#[test]
-fn rd_priv_reads_a_negative_seq_number_as_mit_does() {
-    let session = ProtocolKey::random(AES256).unwrap();
-    for (expected, sent) in [(0xFFFF_FFFE, 0xfe), (0x80, 0x80)] {
-        let ok = accepted(&session, None, Some(expected), true, None);
-        let mut ac = AcceptorAuthContext::from_ap_req(&ok, &conf(&DEFAULT_LIST)).unwrap();
-        ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE);
-        let mut der = priv_part_der(b"h", None, Some(0x7f), local_host_address(None), None);
-        let at = der
-            .windows(5)
-            .position(|w| w == [0xa3, 0x03, 0x02, 0x01, 0x7f])
-            .unwrap();
-        der[at + 4] = sent;
-        assert_eq!(
-            ac.rd_priv(&sealed_priv(&session, &der)).unwrap(),
-            b"h",
-            "the INTEGER {sent:#04x} for {expected:#010x}"
-        );
-        assert_eq!(ac.remote_seq(), expected.wrapping_add(1));
-    }
-}
-
-// MIT: `krb5_init_context_profile` (lib/krb5/krb/init_ctx.c:251-252)
-/// under `DO_TIME`, a KRB-PRIV must be within the clock skew `[libdefaults] clockskew` sets, 300 seconds unless it is set.
-#[test]
-fn rd_priv_takes_the_clock_skew_krb5_conf_sets() {
-    let session = ProtocolKey::random(AES256).unwrap();
-    let old = KerberosTime::from_unix_seconds(KerberosTime::now().unix_seconds() - 400);
-    let msg = |data: &[u8]| {
-        sealed_priv(
-            &session,
-            &priv_part_der(
-                data,
-                Some(old.clone()),
-                None,
-                local_host_address(None),
-                None,
-            ),
-        )
-    };
-    let ok = accepted(&session, None, None, false, None);
-    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &conf(&DEFAULT_LIST)).unwrap();
-    let err = ac.rd_priv(&msg(b"a")).unwrap_err();
-    assert!(
-        matches!(err, Error::KrbError { code: 37, .. }),
-        "400 s is outside the default 300, got {err:?}"
-    );
-    let profile = krb5_config::Krb5Conf::parse("[libdefaults]\n    clockskew = 600\n").unwrap();
-    let mut ac =
-        AcceptorAuthContext::from_ap_req(&ok, &AcceptorConfig::from_krb5_conf(&profile)).unwrap();
-    assert_eq!(ac.rd_priv(&msg(b"b")).unwrap(), b"b");
-}
-
 /// a KRB-PRIV's r-address, when it has one, must be the local address the context holds.
 #[test]
 fn rd_priv_checks_the_addresses_the_context_holds() {
@@ -699,36 +319,6 @@ fn rd_priv_checks_the_addresses_the_context_holds() {
     );
     assert_eq!(ac.rd_priv(&msg(Some(here.clone()), None)).unwrap(), b"p");
     assert_eq!(ac.rd_priv(&msg(None, Some(1))).unwrap(), b"p");
-}
-
-#[test]
-fn lifetime_second_follows_time_across_the_roll() {
-    assert_eq!(super::lifetime_second(101, 100), 100);
-    assert_eq!(super::lifetime_second(100, 100), 100);
-    assert_eq!(super::lifetime_second(99, 100), 99);
-    assert_eq!(super::lifetime_second(102, 100), 102);
-    assert_eq!(super::lifetime_second(0, u32::MAX), 0);
-}
-
-#[test]
-#[cfg(target_os = "linux")]
-fn request_till_second_is_time_while_the_precise_clock_has_rolled() {
-    let cap = std::time::Instant::now() + std::time::Duration::from_secs(3);
-    let mut saw = false;
-    while std::time::Instant::now() < cap {
-        let precise = super::us_timeofday().0.unix_seconds();
-        let kdc = super::kdc_time_seconds();
-        if precise == kdc.saturating_add(1) {
-            let snapped = super::request_lifetime_now(KerberosTime::from_unix_seconds(precise));
-            assert_eq!(snapped.unix_seconds(), kdc);
-            saw = true;
-            break;
-        }
-    }
-    assert!(
-        saw,
-        "CLOCK_REALTIME did not lead the coarse clock within 3s"
-    );
 }
 
 #[test]

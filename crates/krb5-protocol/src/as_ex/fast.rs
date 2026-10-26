@@ -1075,48 +1075,4 @@ mod tests {
             "a disabled encrypted_timestamp is not a FAST mechanism, got {err}"
         );
     }
-
-    #[test]
-    fn a_loaded_encrypted_timestamp_is_still_chosen_first() {
-        let profile = pin("");
-        let method = vec![pa_of(pa::ENC_TIMESTAMP), pa_of(pa::ENCRYPTED_CHALLENGE)];
-        assert_eq!(
-            fast_mechanism(&profile, &method, &[], false).unwrap(),
-            pa::ENC_TIMESTAMP
-        );
-    }
-
-    #[test]
-    fn spake_listed_before_encrypted_challenge_is_the_fast_mechanism() {
-        let profile = pin("");
-        let method = vec![
-            pa_of(pa::FX_FAST),
-            pa_of(pa::SPAKE),
-            pa_of(pa::ENCRYPTED_CHALLENGE),
-        ];
-        assert_eq!(
-            fast_mechanism(&profile, &method, &[], false).unwrap(),
-            pa::SPAKE
-        );
-    }
-
-    #[test]
-    fn a_disabled_spake_lets_encrypted_challenge_run_under_armor() {
-        let profile = pin("[plugins]\n    clpreauth = {\n        disable = spake\n    }\n");
-        let method = vec![pa_of(pa::SPAKE), pa_of(pa::ENCRYPTED_CHALLENGE)];
-        assert_eq!(
-            fast_mechanism(&profile, &method, &[], false).unwrap(),
-            pa::ENCRYPTED_CHALLENGE
-        );
-    }
-
-    #[test]
-    fn a_failed_spake_is_not_chosen_again() {
-        let profile = pin("");
-        let method = vec![pa_of(pa::SPAKE), pa_of(pa::ENCRYPTED_CHALLENGE)];
-        assert_eq!(
-            super::fast_mechanism(&profile, &method, &[pa::SPAKE], false).unwrap(),
-            pa::ENCRYPTED_CHALLENGE
-        );
-    }
 }

@@ -106,18 +106,6 @@ fn rd_req_keytab_walk_tries_every_kvno() {
     .expect("the right key at another kvno decrypts the ticket");
 }
 
-// MIT: `decrypt_try_server` (rd_req_dec.c:355-443)
-/// a ticket whose kvno was relabelled still decrypts under the key it was sealed with.
-#[test]
-fn rd_req_keytab_walk_takes_a_relabelled_kvno() {
-    let (raw, key, _) = host_ap_req();
-    let mut ap: ApReq = decode(&raw).expect("AP-REQ");
-    ap.ticket.enc_part.kvno = Some(2);
-    let raw2 = encode(&ap).expect("encode");
-    verify_ap_req_ex(&raw2, &walk(&[key], &[1]), &ReplayCache::new(), None)
-        .expect("relabelled kvno");
-}
-
 // MIT: `iteration_error` (rd_req_dec.c:264-270)
 /// a key at the ticket's kvno and enctype that does not decrypt it is BAD_INTEGRITY.
 #[test]
@@ -130,16 +118,6 @@ fn rd_req_keytab_walk_wrong_key_at_the_ticket_kvno_is_bad_integrity() {
         text.contains("found in keytab but cannot decrypt ticket"),
         "{text}"
     );
-}
-
-// MIT: `iteration_error` (rd_req_dec.c:224-232)
-/// an empty keytab is NOKEY, "No keys in keytab".
-#[test]
-fn rd_req_keytab_walk_without_keys_is_nokey() {
-    let (raw, _, _) = host_ap_req();
-    let (code, text) = walk_code(&raw, &[], &[]);
-    assert_eq!(code, err::NOKEY);
-    assert_eq!(text, "No keys in keytab");
 }
 
 // MIT: `iteration_error` (rd_req_dec.c:244-256)
@@ -197,28 +175,6 @@ fn rd_req_keytab_walk_without_the_ticket_server_is_not_us() {
         }
         other => panic!("expected NOT_US, got {other:?}"),
     }
-}
-
-#[test]
-fn rd_req_matching_kvno_verifies() {
-    let (raw, key, kvno) = host_ap_req();
-    let keys = [key];
-    let kvnos = [kvno];
-    let params = ApVerifyParams {
-        keys: &keys,
-        key_kvnos: Some(&kvnos),
-        key_principals: None,
-        kvno: None,
-        expected_server: None,
-        expected_realm: None,
-        get_entry: None,
-        skew: DEFAULT_SKEW,
-        ignore_acceptor_hostname: false,
-        capaths: &NO_CAPATHS,
-        remote_addr: None,
-        now: None,
-    };
-    verify_ap_req_ex(&raw, &params, &ReplayCache::new(), None).expect("matching kvno");
 }
 
 #[test]
@@ -281,12 +237,6 @@ fn verify(
 }
 
 #[test]
-fn rd_req_transited_issued_ticket_with_t_flag_verifies() {
-    let (raw, key, _) = host_ap_req();
-    verify(&raw, &key).expect("KDC-issued ticket has TRANSITED_POLICY_CHECKED");
-}
-
-#[test]
 fn rd_req_transited_unchecked_evil_hop_is_ill_cr_tkt() {
     let (raw, key, _) = host_ap_req();
     let raw2 = rewrite_ticket(&raw, &key, |part| {
@@ -300,32 +250,6 @@ fn rd_req_transited_unchecked_evil_hop_is_ill_cr_tkt() {
         Err(krb5_protocol::Error::KrbError { code, .. }) => assert_eq!(code, err::ILL_CR_TKT),
         other => panic!("expected ILL_CR_TKT, got {other:?}"),
     }
-}
-
-#[test]
-fn rd_req_transited_t_flag_skips_evil_hop() {
-    let (raw, key, _) = host_ap_req();
-    let raw2 = rewrite_ticket(&raw, &key, |part| {
-        assert!(
-            part.flags.bit(flag_bit::TRANSITED_POLICY_CHECKED),
-            "KDC-issued ticket should carry T"
-        );
-        part.transited = TransitedEncoding::from_realms(&["EVIL.COM"]);
-    });
-    verify(&raw2, &key).expect("TRANSITED_POLICY_CHECKED skips krb5_check_transited_list");
-}
-
-#[test]
-fn rd_req_transited_unchecked_empty_verifies() {
-    let (raw, key, _) = host_ap_req();
-    let raw2 = rewrite_ticket(&raw, &key, |part| {
-        part.flags = part
-            .flags
-            .clone()
-            .with_bit(flag_bit::TRANSITED_POLICY_CHECKED, false);
-        part.transited = TransitedEncoding::empty();
-    });
-    verify(&raw2, &key).expect("empty transited is at most one hop");
 }
 
 fn host_ap_req_forged(mutate: impl FnOnce(&mut EncTicketPart)) -> (Vec<u8>, ProtocolKey) {

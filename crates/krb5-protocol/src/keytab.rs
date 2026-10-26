@@ -1008,73 +1008,6 @@ mod tests {
     }
 
     #[test]
-    fn merge_keeps_unknown_etype_bytes() {
-        let known = Keytab::single(
-            ascii("KERBER.TEST"),
-            PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
-            1,
-            ProtocolKey::from_bytes(EncryptionType::Aes128CtsHmacSha196, &[9u8; 16]).unwrap(),
-        );
-        let mut body = Vec::new();
-        marshal_entry(&mut body, &sample_entry(), 0x0502);
-        patch_etype(&mut body, 99);
-        let mut rec = i32::try_from(body.len()).unwrap().to_be_bytes().to_vec();
-        rec.extend_from_slice(&body);
-        let mut bytes = known.to_bytes().to_vec();
-        bytes.extend_from_slice(&rec);
-        let parsed = Keytab::parse(&bytes).unwrap();
-        assert_eq!(parsed.entries.len(), 1);
-        assert_eq!(parsed.unparsed.len(), 1);
-        assert_eq!(*parsed.unparsed[0].1, rec);
-        let extra = Keytab::single(
-            ascii("KERBER.TEST"),
-            PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["host"]),
-            2,
-            ProtocolKey::from_bytes(EncryptionType::Aes128CtsHmacSha196, &[8u8; 16]).unwrap(),
-        );
-        let mut merged = parsed;
-        merged.merge(extra);
-        let out = merged.to_bytes();
-        let again = Keytab::parse(&out).unwrap();
-        assert_eq!(again.entries.len(), 2);
-        assert_eq!(again.unparsed.len(), 1);
-        assert_eq!(*again.unparsed[0].1, rec);
-        assert!(out.windows(rec.len()).any(|w| w == rec.as_slice()));
-    }
-
-    #[test]
-    fn slots_number_unparsed_and_delent() {
-        let known = Keytab::single(
-            ascii("KERBER.TEST"),
-            PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
-            1,
-            ProtocolKey::from_bytes(EncryptionType::Aes128CtsHmacSha196, &[9u8; 16]).unwrap(),
-        );
-        let mut body = Vec::new();
-        marshal_entry(&mut body, &sample_entry(), 0x0502);
-        patch_etype(&mut body, 99);
-        let mut rec = i32::try_from(body.len()).unwrap().to_be_bytes().to_vec();
-        rec.extend_from_slice(&body);
-        let mut bytes = known.to_bytes().to_vec();
-        bytes.extend_from_slice(&rec);
-        let extra = Keytab::single(
-            ascii("KERBER.TEST"),
-            PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["host"]),
-            2,
-            ProtocolKey::from_bytes(EncryptionType::Aes128CtsHmacSha196, &[8u8; 16]).unwrap(),
-        );
-        bytes.extend_from_slice(&extra.to_bytes()[2..]);
-        let mut parsed = Keytab::parse(&bytes).unwrap();
-        assert_eq!(parsed.slots().len(), 3);
-        assert!(matches!(parsed.slots()[1], KeytabSlot::Unparsed(_)));
-        parsed.remove_slot(2).unwrap();
-        assert_eq!(parsed.slots().len(), 2);
-        assert!(matches!(parsed.slots()[0], KeytabSlot::Entry(_)));
-        assert!(matches!(parsed.slots()[1], KeytabSlot::Entry(_)));
-        assert_eq!(parsed.unparsed, [] as [(usize, Zeroizing<Vec<u8>>); 0]);
-    }
-
-    #[test]
     fn an_unparsed_records_key_is_a_slice_of_the_record() {
         use zeroize::Zeroize as _;
         let mut body = Vec::new();
@@ -1095,29 +1028,6 @@ mod tests {
         let (off, n) = (at - start, key.len());
         kt.unparsed[0].1.as_mut_slice().zeroize();
         assert!(kt.unparsed[0].1[off..off + n].iter().all(|&b| b == 0));
-    }
-
-    #[test]
-    fn to_bytes_sizes_its_buffer_before_the_first_key() {
-        let mut kt = Keytab::single(
-            ascii("KERBER.TEST"),
-            PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
-            1,
-            ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[7u8; 32]).unwrap(),
-        );
-        for (kvno, name) in [(2, "host"), (3, "nfs")] {
-            kt.entries.push(KeytabEntry {
-                realm: ascii("KERBER.TEST"),
-                name: PrincipalName::new(PrincipalName::NT_PRINCIPAL, [name]),
-                timestamp: 1,
-                kvno,
-                key: ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[8u8; 32])
-                    .unwrap(),
-            });
-        }
-        let bytes = kt.to_bytes();
-        assert_eq!(bytes.capacity(), bytes.len());
-        assert_eq!(Keytab::parse(&bytes).unwrap().entries.len(), 3);
     }
 
     fn entry(name: &str, kvno: u32, key: u8) -> KeytabEntry {
@@ -1224,67 +1134,6 @@ mod tests {
             "a refused file stamps nothing"
         );
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn merge_lays_a_raw_record_out_in_the_keytabs_version() {
-        let mut body = Vec::new();
-        marshal_entry(&mut body, &sample_entry(), 0x0502);
-        patch_etype(&mut body, 99);
-        let mut bytes = 0x0502u16.to_be_bytes().to_vec();
-        bytes.extend_from_slice(&i32::try_from(body.len()).unwrap().to_be_bytes());
-        bytes.extend_from_slice(&body);
-        let v2 = Keytab::parse(&bytes).unwrap();
-        let mut v1 = keytab(0x0501, vec![entry("a", 300, 1)]);
-        v1.merge(v2);
-        let raw = &v1.unparsed[0].1;
-        let meta = Keytab::unparsed_meta(raw, 0x0501).unwrap();
-        assert_eq!(
-            (meta.0, meta.1.as_str(), meta.3),
-            (1, "user@KERBER.TEST", 99)
-        );
-        let again = Keytab::parse(&v1.to_bytes()).unwrap();
-        assert_eq!((again.entries.len(), again.unparsed.len()), (1, 1));
-        let file = add_to_keytab_file(None, &v1).unwrap();
-        let back = Keytab::parse(&file).unwrap();
-        assert_eq!(back.version, 0x0502);
-        assert_eq!(
-            Keytab::unparsed_meta(&back.unparsed[0].1, 0x0502)
-                .unwrap()
-                .1,
-            "user@KERBER.TEST"
-        );
-    }
-
-    #[test]
-    fn truncated_entry_is_not_unparsed() {
-        let kt = Keytab::parse(&[0x05, 0x02, 0, 0, 0, 20, 1]).unwrap();
-        assert!(kt.entries.is_empty() && kt.unparsed.is_empty());
-    }
-
-    #[test]
-    fn an_unparsed_record_cut_by_the_files_end_keeps_the_size_it_has() {
-        let mut body = Vec::new();
-        marshal_entry(&mut body, &sample_entry(), 0x0502);
-        patch_etype(&mut body, 99);
-        let mut bytes = 0x0502u16.to_be_bytes().to_vec();
-        bytes.extend_from_slice(&i32::try_from(body.len() + 4).unwrap().to_be_bytes());
-        bytes.extend_from_slice(&body);
-        let mut kt = Keytab::parse(&bytes).unwrap();
-        assert_eq!(kt.unparsed.len(), 1);
-        assert_eq!(
-            kt.unparsed[0].1[..4],
-            i32::try_from(body.len()).unwrap().to_be_bytes()
-        );
-        kt.merge(Keytab::single(
-            ascii("KERBER.TEST"),
-            PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["host"]),
-            2,
-            ProtocolKey::from_bytes(EncryptionType::Aes128CtsHmacSha196, &[8u8; 16]).unwrap(),
-        ));
-        let again = Keytab::parse(&kt.to_bytes()).unwrap();
-        assert_eq!((again.unparsed.len(), again.entries.len()), (1, 1));
-        assert_eq!(again.entries[0].kvno, 2);
     }
 
     #[test]

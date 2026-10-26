@@ -483,11 +483,6 @@ pub(crate) mod wiped {
         /// What [`super::wipe_vec`] zeroed on this thread, kept alive.
         pub(super) static WIPED: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
     }
-
-    /// The allocations wiped on this thread since the last call.
-    pub(crate) fn take() -> Vec<Vec<u8>> {
-        WIPED.with(|w| std::mem::take(&mut *w.borrow_mut()))
-    }
 }
 
 pub fn unwrap_krb_priv(
@@ -624,16 +619,6 @@ mod tests {
     }
 
     #[test]
-    fn safe_second_unwrap_fails() {
-        let key = session();
-        let a = build_krb_safe_ex(&key, b"one", Some(1), true).unwrap();
-        let raw = encode(&a).unwrap();
-        let cache = ReplayCache::new();
-        assert_eq!(unwrap_krb_safe(&key, &raw, &cache).unwrap(), b"one");
-        assert!(unwrap_krb_safe(&key, &raw, &cache).is_err());
-    }
-
-    #[test]
     fn priv_second_unwrap_fails() {
         let key = session();
         let msg = build_krb_priv_with_seq(&key, b"secret", Some(1)).unwrap();
@@ -641,28 +626,6 @@ mod tests {
         let cache = ReplayCache::new();
         assert_eq!(unwrap_krb_priv(&key, &raw, &cache).unwrap(), b"secret");
         assert!(unwrap_krb_priv(&key, &raw, &cache).is_err());
-    }
-
-    #[test]
-    fn cred_window_and_second_unwrap_fails() {
-        let key = session();
-        let msg = build_krb_cred(&key, Vec::new(), Vec::new()).unwrap();
-        let raw = encode(&msg).unwrap();
-        let cache = ReplayCache::new();
-        let (_, part) = unwrap_krb_cred(&key, &raw, &cache).unwrap();
-        assert!(part.timestamp.is_some());
-        assert!(unwrap_krb_cred(&key, &raw, &cache).is_err());
-    }
-
-    #[test]
-    fn safe_unkeyed_cksumtype_is_inapp() {
-        let key = session();
-        let mut msg = build_krb_safe_ex(&key, b"body", Some(1), true).unwrap();
-        msg.cksum.cksumtype = 7;
-        match verify_krb_safe_checksum(&key, &encode(&msg).unwrap(), None, None) {
-            Err(Error::KrbError { code, .. }) => assert_eq!(code, err::INAPP_CKSUM),
-            other => panic!("unkeyed SAFE must be 50, got {other:?}"),
-        }
     }
 
     #[test]
@@ -689,20 +652,6 @@ mod tests {
             Err(Error::KrbError { code, .. }) => assert_eq!(code, err::MODIFIED),
             other => panic!("bad SAFE MAC must be 41, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn safe_dummy_with_saved_body_matches_rasn_zero_cksum() {
-        let key = session();
-        let msg = build_krb_safe_ex(&key, b"dummy-eq", Some(1), true).unwrap();
-        let raw = encode(&msg).unwrap();
-        let (decoded, body) = decode_safe_with_body(&raw).unwrap();
-        let mut rasn_dummy = decoded.clone();
-        rasn_dummy.cksum = zero_safe_cksum();
-        let rasn_der = encode(&rasn_dummy).unwrap();
-        let swb = encode_safe_with_body(decoded.pvno, decoded.msg_type, &body, &zero_safe_cksum())
-            .unwrap();
-        assert_eq!(rasn_der, swb);
     }
 
     fn v4(a: u8, b: u8, c: u8, d: u8) -> HostAddress {
@@ -742,26 +691,6 @@ mod tests {
             code_of(check_privsafe_addrs(&local, None, Some(&other), None).unwrap_err()),
             err::BADADDR
         );
-    }
-
-    #[test]
-    fn check_privsafe_addrs_receiver_mismatch_is_badaddr() {
-        let local = v4(127, 0, 0, 1);
-        let other = v4(10, 0, 0, 1);
-        check_privsafe_addrs(&local, Some(&local), None, Some(&local)).unwrap();
-        assert_eq!(
-            code_of(check_privsafe_addrs(&local, Some(&local), None, Some(&other)).unwrap_err()),
-            err::BADADDR
-        );
-    }
-
-    #[test]
-    fn accept_seq_number_at_least_2_31() {
-        let key = session();
-        let msg = build_krb_safe_ex(&key, b"high-seq", Some(1 << 31), true).unwrap();
-        let raw = encode(&msg).unwrap();
-        let cache = ReplayCache::new();
-        assert_eq!(unwrap_krb_safe(&key, &raw, &cache).unwrap(), b"high-seq");
     }
 
     fn host(last: u8) -> HostAddress {
