@@ -54,7 +54,7 @@ docrun() {
         _checkrow "doc.$n.$i" "$res" "$exp" "$rc" "rc=$rc, $nout lines: $first"
     done < "$STATE/$n.results"
 }
-# The realm's config files on $STATE, tee'd to kdc (realm is always KERBER.TEST; rust adds the 4 listen lines).
+# The realm's config files on $STATE, tee'd to kdc (realm is always KERBER.TEST).
 kdcconf() {
     cat > "$STATE/kdc.conf" <<EOF
 [kdcdefaults]
@@ -72,7 +72,6 @@ $R = {
      max_life = 24h
      max_renewable_life = 7d
 EOF
-    [ "$1" = rust ] && printf '     kdc_listen = [::]:88\n     kdc_tcp_listen = [::]:88\n     kadmind_listen = [::]:749\n     kpasswd_listen = [::]:464\n' >> "$STATE/kdc.conf"
     printf '     supported_enctypes = aes256-cts-hmac-sha1-96:normal aes128-cts-hmac-sha1-96:normal\n}\n' >> "$STATE/kdc.conf"
     check conf.kdc rc hostin kdc.conf "$LABQ ssh kdc -- 'sudo install -d -m 0755 $KD && sudo tee $KD/kdc.conf >/dev/null && sudo restorecon $KD/kdc.conf'" < "$STATE/kdc.conf"
     printf '[libdefaults]\n    default_realm = %s\n    dns_lookup_kdc = false\n\n[realms]\n    %s = {\n        kdc = %s\n        admin_server = %s\n        kpasswd_server = %s\n    }\n\n[domain_realm]\n    .%s = %s\n    %s = %s\n' "$R" "$R" "$KDC_HOST" "$KDC_HOST" "$KDC_HOST" "$DOMAIN" "$R" "$DOMAIN" "$R" > "$STATE/krb5.conf"
@@ -107,21 +106,21 @@ make_principals() {
 # stage_svc_keytab: svc/setup's keytab on client2 via admin/admin's ktadd (rotates it to kvno 2; the keytab is
 # made locally on client2, so no key bytes cross the host or land in the record).
 stage_svc_keytab() {
-    check svc.keytab 'Entry for principal svc/setup@'"$R"' with kvno 2, .*added to keytab' runin client2 "admin pw" \
+    check svc.keytab 'Entry for principal svc/setup with kvno 2, .*added to keytab' runin client2 "admin pw" \
         "install -d -m 0700 ~/field && kadmin -p admin/admin@$R -q \"ktadd -k \$HOME/field/svc-setup.keytab svc/setup\" 2>&1" < <(once "$ADMIN")
 }
 # refusals: the eight svc/setup refusals under the settled aci ACL, from client2 (host/aci exists: the aci
-# variant made it, and the variant loop ends on aci, so the ACL is aci). Each prints its exit; MIT's exact texts.
+# variant made it, and the variant loop ends on aci, so the ACL is aci). MIT's exact texts.
 refusals() {
     local K="kadmin -p svc/setup@$R -k -t \$HOME/field/svc-setup.keytab -s $KDC_HOST" H="host/aci.$DOMAIN@$R"
-    check refuse.add "add_principal: Operation requires .add. privilege while creating \"HTTP/negative\\.$DOMAIN@$R\"\\." run client2 "$K -q 'addprinc -randkey HTTP/negative.$DOMAIN@$R' 2>&1; echo exit=\$?"
-    check refuse.ktadd "Operation requires .change-password. privilege while changing alice@$R's key" run client2 "$K -q \"ktadd -k \$HOME/field/x.keytab alice@$R\" 2>&1; echo exit=\$?"
-    check refuse.getprinc "get_principal: Operation requires .get. privilege while retrieving \"alice@$R\"\\." run client2 "$K -q 'getprinc alice@$R' 2>&1; echo exit=\$?"
-    check refuse.modget "modify_principal: Operation requires .get. privilege while getting \"alice@$R\"\\." run client2 "$K -q 'modprinc -allow_tix alice@$R' 2>&1; echo exit=\$?"
-    check refuse.modify "modify_principal: Operation requires .modify. privilege while modifying \"$H\"\\." run client2 "$K -q 'modprinc -maxrenewlife 1d $H' 2>&1; echo exit=\$?"
-    check refuse.delete "delete_principal: Operation requires .delete. privilege while deleting principal \"$H\"" run client2 "$K -q 'delprinc -force $H' 2>&1; echo exit=\$?"
-    check refuse.list "get_principals: Operation requires .list. privilege while retrieving list\\." run client2 "$K -q 'listprincs' 2>&1; echo exit=\$?"
-    check refuse.extract "Operation requires .extract-keys. privilege while changing host/aci\\.$DOMAIN@$R's key" run client2 "$K -q \"ktadd -norandkey -k \$HOME/field/n.keytab $H\" 2>&1; echo exit=\$?"
+    check refuse.add "add_principal: Operation requires \`\`add'' privilege while creating \"HTTP/negative\\.$DOMAIN@$R\"\\." run client2 "$K -q 'addprinc -randkey HTTP/negative.$DOMAIN@$R' 2>&1"
+    check refuse.ktadd "Operation requires \`\`change-password'' privilege while changing alice@$R's key" run client2 "$K -q \"ktadd -k \$HOME/field/x.keytab alice@$R\" 2>&1"
+    check refuse.getprinc "get_principal: Operation requires \`\`get'' privilege while retrieving \"alice@$R\"\\." run client2 "$K -q 'getprinc alice@$R' 2>&1"
+    check refuse.modget "modify_principal: Operation requires \`\`get'' privilege while getting \"alice@$R\"\\." run client2 "$K -q 'modprinc -allow_tix alice@$R' 2>&1"
+    check refuse.modify "modify_principal: Operation requires \`\`modify'' privilege while modifying \"$H\"\\." run client2 "$K -q 'modprinc -maxrenewlife 1d $H' 2>&1"
+    check refuse.delete "delete_principal: Operation requires \`\`delete'' privilege while deleting principal \"$H\"" run client2 "$K -q 'delprinc -force $H' 2>&1"
+    check refuse.list "get_principals: Operation requires \`\`list'' privilege while retrieving list\\." run client2 "$K -q 'listprincs' 2>&1"
+    check refuse.extract "Operation requires \`\`extract-keys'' privilege while changing host/aci\\.$DOMAIN@$R's key" run client2 "$K -q \"ktadd -norandkey -k \$HOME/field/n.keytab $H\" 2>&1"
     check refuse.allowed '^Principal: host/aci\.'"$DOMAIN"'@'"$R"'$' run client2 "$K -q 'getprinc $H' 2>&1"
 }
 # realm_and_population <leg>: the shared build, from a KDC program already present on kdc, through the population.

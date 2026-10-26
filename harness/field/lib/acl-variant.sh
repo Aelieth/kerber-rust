@@ -19,13 +19,13 @@ acl_variant() {
         pf="$p/$T.$DOMAIN@$R"
         # addprinc: succeeds iff the letters carry 'a', else the "add" refusal.
         if [[ $L == *a* ]]; then ere="Principal \"$p/$T\\.$DOMAIN@$R\" created\\."
-        else ere="add_principal: Operation requires .add. privilege while creating \"$p/$T\\.$DOMAIN@$R\"\\."; fi
-        check "acl.$L.$p.addprinc" "$ere" run client2 "$K -q 'addprinc -randkey $pf' 2>&1; echo rc=\$?"
+        else ere="add_principal: Operation requires \`\`add'' privilege while creating \"$p/$T\\.$DOMAIN@$R\"\\."; fi
+        check "acl.$L.$p.addprinc" "$ere" run client2 "$K -q 'addprinc -randkey $pf' 2>&1"
         # ktadd: needs c (randkey) and i (get) once the principal exists; with no 'a' it never got created.
         if [[ $L != *a* ]]; then ere="kadmin: Principal $p/$T\\.$DOMAIN@$R does not exist\\."
         elif [[ $L == *c* && $L == *i* ]]; then ere="Entry for principal $p/$T\\.$DOMAIN@$R with kvno 2, .*added to keytab"
-        elif [[ $L != *c* ]]; then ere="Operation requires .change-password. privilege while changing $p/$T\\.$DOMAIN@$R's key"
-        else ere="Operation requires .get. privilege while changing $p/$T\\.$DOMAIN@$R's key"; fi
-        check "acl.$L.$p.ktadd" "$ere" run client2 "rm -f \$HOME/field/$p-$T.keytab; $K -q \"ktadd -k \$HOME/field/$p-$T.keytab $pf\" 2>&1; echo rc=\$?"
+        elif [[ $L != *c* ]]; then ere="Operation requires \`\`change-password'' privilege while changing $p/$T\\.$DOMAIN@$R's key"
+        else ere="Operation requires \`\`get'' privilege while changing $p/$T\\.$DOMAIN@$R's key"; fi
+        check "acl.$L.$p.ktadd" "$ere" run client2 "rm -f \$HOME/field/$p-$T.keytab; $K -q \"ktadd -k \$HOME/field/$p-$T.keytab $pf\" 2>&1"
     done
 }
