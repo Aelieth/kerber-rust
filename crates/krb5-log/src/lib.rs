@@ -64,7 +64,7 @@ pub fn current_correlation_id() -> String {
     CURRENT.with(|c| c.borrow().clone().unwrap_or_else(|| "none".into()))
 }
 
-/// 32 lowercase hex characters; a timestamp mix if the CSPRNG fails.
+/// 32 hex chars, else a time mix.
 #[must_use]
 pub fn new_correlation_id() -> String {
     let mut bytes = [0u8; 16];
