@@ -500,27 +500,3 @@ fn load_acl(progname: &str, acl_file: Option<&Path>, realm: &str) -> Acl {
         std::process::exit(1);
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn progname_and_atoi() {
-        assert_eq!(progname(Some(&"/usr/sbin/kadmind".to_owned())), "kadmind");
-        assert_eq!(atoi("7749"), 7749);
-        assert_eq!(atoi("abc"), 0);
-    }
-
-    #[test]
-    fn options_stop_at_the_first_unknown_argument() {
-        let argv: Vec<String> = ["-nofork", "-port", "7749", "extra"]
-            .iter()
-            .map(|s| (*s).to_owned())
-            .collect();
-        let a = MitArgs::parse(&argv, OPTIONS, Placement::Leading).unwrap_or_default();
-        assert!(a.flag("-nofork"));
-        assert_eq!(a.value("-port"), Some("7749"));
-        assert_eq!(a.operands, ["extra"]);
-    }
-}

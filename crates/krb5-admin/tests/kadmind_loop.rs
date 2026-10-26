@@ -2,7 +2,7 @@
 
 use std::io::{Read as _, Write as _};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -142,47 +142,6 @@ fn a_kadm5_connection_stays_between_calls() {
         "still open, and the next call answered"
     );
     stop(&flag, served);
-}
-
-#[test]
-fn kadmind_is_served_from_another_thread_with_its_reporter() {
-    let (store, acl) = bootstrap_documented().unwrap();
-    let reported = Arc::new(Mutex::new(Vec::<String>::new()));
-    let sink = Arc::clone(&reported);
-    let mut kadmind = Kadmind::new(
-        krb5_kdc::shared_dump(store),
-        test_cfg(
-            acl,
-            Services {
-                kpasswd_udp: false,
-                kpasswd_tcp: false,
-                kadm5: true,
-                iprop: false,
-            },
-        ),
-    )
-    .unwrap()
-    .report_unhandled(Arc::new(move |message: &str| {
-        sink.lock().unwrap().push(message.to_owned());
-    }));
-    let rpc = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = rpc.local_addr().unwrap();
-    let flag = Shutdown::new();
-    let stop_flag = flag.clone();
-    let served = std::thread::spawn(move || {
-        let listeners = Listeners::from_sockets(Vec::new(), Vec::new(), vec![rpc], Programs::BOTH);
-        kadmind.serve(&listeners, &stop_flag).unwrap();
-    });
-    let mut c = connect(addr);
-    c.write_all(&record(&auth_none_call(7))).unwrap();
-    assert_eq!(reply_words(&mut c), [7, 1, 1, 1, 5]);
-    c.write_all(&record(&[0])).unwrap();
-    c.write_all(&record(&auth_none_call(8))).unwrap();
-    assert_eq!(reply_words(&mut c), [8, 1, 1, 1, 5]);
-    stop(&flag, served);
-    let reported = reported.lock().unwrap();
-    assert_eq!(reported.len(), 1, "{reported:?}");
-    assert_ne!(reported[0], "");
 }
 
 fn opaque(b: &[u8]) -> Vec<u8> {

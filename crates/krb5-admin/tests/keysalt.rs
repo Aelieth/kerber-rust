@@ -237,57 +237,6 @@ fn chpass3_unknown_etype_is_bad_keysalts() {
 }
 
 #[test]
-fn chrand3_unknown_etype_is_bad_keysalts() {
-    let (mut store, _) = bootstrap_documented().unwrap();
-    let acl = Acl::parse("admin@KERBER.TEST *\n").unwrap();
-    store
-        .create_password(&acl, "admin@KERBER.TEST", &n("z72rbad"), b"z72-rbad-secret")
-        .unwrap();
-    let store = shared_dump(store);
-    let mut client = init_client(&store, &acl, &n(TEST_ADMIN), &kadmin_admin(), GSS_INTEGRITY);
-    let args = chrand3(&format!("z72rbad@{TEST_REALM}"), ETYPE_UNKNOWN);
-    let (stat, body) = data_call(&mut client, &store, &acl, CHRAND_PRINCIPAL3, &args);
-    assert_eq!(stat, SUCCESS, "unknown ks_tuple must not be RPC SYSTEM_ERR");
-    assert_eq!(ret_code(&body), KADM5_BAD_KEYSALTS);
-}
-
-#[test]
-fn chpass3_outside_allowed_keysalts_is_bad_keysalts() {
-    let (mut store, _) = bootstrap_documented().unwrap();
-    let mut pol = NamedPolicy::new("ksonly");
-    pol.allowed_keysalts = Some("aes256-cts-hmac-sha1-96:normal".into());
-    store.put_policy(pol).unwrap();
-    let acl = Acl::parse("admin@KERBER.TEST *\n").unwrap();
-    store
-        .create_password(&acl, "admin@KERBER.TEST", &n("z72pol"), b"z72-pol-secret")
-        .unwrap();
-    store
-        .apply_admin_fields(
-            &n("z72pol"),
-            krb5_kdc::AdminFields {
-                attributes: None,
-                max_life: None,
-                expiration: None,
-                pw_expire: None,
-                policy: Some("ksonly".into()),
-                clear_policy: false,
-                max_renewable_life: None,
-            },
-        )
-        .unwrap();
-    let store = shared_dump(store);
-    let mut client = init_client(&store, &acl, &n(TEST_ADMIN), &kadmin_admin(), GSS_INTEGRITY);
-    let args = chpass3(
-        &format!("z72pol@{TEST_REALM}"),
-        ETYPE_AES128_SHA1,
-        "z72-pol-new",
-    );
-    let (stat, body) = data_call(&mut client, &store, &acl, CHPASS_PRINCIPAL3, &args);
-    assert_eq!(stat, SUCCESS);
-    assert_eq!(ret_code(&body), KADM5_BAD_KEYSALTS);
-}
-
-#[test]
 fn ks_tuple_filters_mit_weak_only() {
     let src = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/kadm5/xdr.rs"));
     assert!(

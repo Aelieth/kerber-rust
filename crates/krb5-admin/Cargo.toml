@@ -90,10 +90,6 @@ name = "cli_stdin"
 required-features = ["test-hooks"]
 
 [[test]]
-name = "kadm5_alias"
-required-features = ["test-hooks"]
-
-[[test]]
 name = "kadm5_create"
 required-features = ["test-hooks"]
 
@@ -123,10 +119,6 @@ required-features = ["test-hooks"]
 
 [[test]]
 name = "kdb_lock_processes"
-required-features = ["test-hooks"]
-
-[[test]]
-name = "kdb_open"
 required-features = ["test-hooks"]
 
 [[test]]

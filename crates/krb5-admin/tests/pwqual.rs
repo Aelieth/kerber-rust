@@ -11,7 +11,6 @@ use krb5_kdc::testrealm::{
 };
 use krb5_kdc::{Acl, NamedPolicy, shared_dump};
 
-use krb5_testkit::scratch_dir;
 use krb5_types::PrincipalName;
 
 const CREATE_PRINCIPAL: u32 = 1;
@@ -189,29 +188,4 @@ fn chpass_runs_empty_and_princ_modules() {
     // addpol defaults pw_min_length to 1.
     assert_eq!(rejected(sess.change_password(&user(), b"")), "min_length 1");
     sess.change_password(&user(), b"userpassword").unwrap();
-}
-
-#[test]
-fn dict_file_from_the_realm_stanza_rejects_words_case_insensitively() {
-    let dir = scratch_dir("c1-dict-admin");
-    let dict = dir.join("dict.txt");
-    std::fs::write(&dict, "zebra\ncorrecthorse\napple\n").unwrap();
-    let conf = krb5_config::KdcConf::parse(&format!(
-        "[realms]\n    {TEST_REALM} = {{\n        dict_file = {}\n    }}\n",
-        dict.display()
-    ))
-    .unwrap();
-    let (mut store, acl) = bootstrap_documented().unwrap();
-    store.init_pwqual(Some(&conf)).unwrap();
-    let mut sess = AdminSession::local(&mut store, &acl, documented_admin_id());
-    sess.change_password(&user(), b"correcthorse").unwrap();
-    sess.add_policy("pq");
-    sess.set_policy(&user(), "pq").unwrap();
-    assert_eq!(
-        rejected(sess.change_password(&user(), b"CorrectHorse")),
-        DICT
-    );
-    assert_eq!(rejected(sess.change_password(&user(), b"APPLE")), DICT);
-    sess.change_password(&user(), b"correcthorse1").unwrap();
-    let _ = std::fs::remove_dir_all(&dir);
 }

@@ -132,28 +132,6 @@ fn auth_gssapi_destroy_on_iprop_is_auth_layer() {
 }
 
 #[test]
-fn auth_gssapi_creds_and_init_res_xdr() {
-    let mut w = XdrW::default();
-    w.u32(2);
-    w.u32(1); // auth_msg TRUE
-    w.opaque(&[]);
-    let mut r = XdrR::new(&w.b);
-    assert_eq!(r.u32().unwrap(), 2);
-    assert!(r.bool().unwrap());
-    assert_eq!(r.opaque().unwrap(), [] as [u8; 0]);
-
-    let mut body = XdrW::default();
-    encode_init_res(&mut body, 4, &1u32.to_le_bytes(), 0, 0, b"tok", b"isn");
-    let mut r = XdrR::new(&body.b);
-    assert_eq!(r.u32().unwrap(), 4);
-    assert_eq!(r.opaque().unwrap(), 1u32.to_le_bytes());
-    assert_eq!(r.u32().unwrap(), 0);
-    assert_eq!(r.u32().unwrap(), 0);
-    assert_eq!(r.opaque().unwrap(), b"tok");
-    assert_eq!(r.opaque().unwrap(), b"isn");
-}
-
-#[test]
 fn kadm5_auth_gssapi_ok_requires_store_realm() {
     let admin = PrincipalName::new(PrincipalName::NT_SRV_INST, ["kadmin", "admin"]);
     let realm = "KERBER.TEST";

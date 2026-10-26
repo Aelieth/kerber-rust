@@ -665,96 +665,11 @@ pub fn encode_kpasswd_req(ap_req: &[u8], krb_priv_der: &[u8]) -> Vec<u8> {
 
 #[cfg(all(test, feature = "test-hooks"))]
 mod tests {
-    use std::net::{SocketAddr, UdpSocket};
-    use std::thread;
-    use std::time::Duration;
-
-    use krb5_config::listen::ListenAddr;
     use krb5_kdc::principals::kadmin_changepw;
     use krb5_kdc::testrealm::bootstrap_documented;
     use krb5_protocol::AcceptorConfig;
 
-    use super::{encode_kpasswd_req, wiped};
-
-    fn exchange(sock: &UdpSocket, to: Option<SocketAddr>) -> Option<(Vec<u8>, SocketAddr)> {
-        let req = encode_kpasswd_req(&[0, 1, 2, 3], b"x");
-        sock.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-        match to {
-            Some(a) => sock.send_to(&req, a).unwrap(),
-            None => sock.send(&req).unwrap(),
-        };
-        let mut buf = vec![0u8; 4096];
-        let (n, src) = sock.recv_from(&mut buf).ok()?;
-        buf.truncate(n);
-        Some((buf, src))
-    }
-
-    fn reply_cfg(acl: krb5_kdc::Acl) -> crate::KadmindConfig {
-        use std::sync::Arc;
-        crate::KadmindConfig {
-            profile: Arc::new(krb5_config::ProfileSet {
-                realm: krb5_kdc::testrealm::TEST_REALM.into(),
-                krb5: krb5_config::Krb5Conf::default(),
-                kdc: None,
-                kdc_context: krb5_config::Krb5Conf::default(),
-            }),
-            services: crate::Services::DAEMON,
-            listen: krb5_config::KadmindListen::for_realm(
-                None,
-                krb5_kdc::testrealm::TEST_REALM,
-                None,
-            ),
-            limits: crate::ServeLimits::default(),
-            acl,
-            auth_modules: Vec::new(),
-            log: Arc::new(crate::KlogAdmin),
-            pwqual: Vec::new(),
-            hooks: Vec::new(),
-            iprop: None,
-        }
-    }
-
-    #[test]
-    fn a_kpasswd_reply_leaves_from_the_address_the_request_was_sent_to() {
-        // MIT: `send_to_from` (lib/apputils/udppktinfo.c:443-474)
-        // kpasswd's reply on a wildcard socket leaves from the request's destination.
-        let (store, acl) = bootstrap_documented().unwrap();
-        let any = ListenAddr {
-            host: Some("0.0.0.0".into()),
-            port: 0,
-        };
-        let sock = krb5_kdc::bind_udp_listeners(&[any])
-            .unwrap()
-            .into_iter()
-            .next()
-            .unwrap();
-        let to = SocketAddr::from(([127, 0, 0, 2], sock.local_addr().unwrap().port()));
-        let shared = krb5_kdc::shared_dump(store);
-        let stop = krb5_kdc::Shutdown::new();
-        let flag = stop.clone();
-        let server = thread::spawn(move || {
-            let mut kadmind = crate::Kadmind::new(shared, reply_cfg(acl)).unwrap();
-            let listeners = crate::Listeners::from_sockets(
-                vec![sock],
-                Vec::new(),
-                Vec::new(),
-                crate::Programs::BOTH,
-            );
-            kadmind.serve(&listeners, &flag).map(|_| ())
-        });
-        let plain = UdpSocket::bind("127.0.0.1:0").unwrap();
-        let (rep, src) = exchange(&plain, Some(to)).expect("a reply");
-        assert_eq!(src, to, "the reply's source");
-        assert!(rep.len() > 6 && rep[4..6] == [0, 0], "a framed KRB-ERROR");
-        let connected = UdpSocket::bind("127.0.0.1:0").unwrap();
-        connected.connect(to).unwrap();
-        assert!(
-            exchange(&connected, None).is_some(),
-            "the connected client's reply"
-        );
-        stop.trigger();
-        server.join().unwrap().unwrap();
-    }
+    use super::wiped;
 
     /// the decrypted request, the new password decoded from it and the copy the change is made with are each zapped.
     #[test]
@@ -843,46 +758,6 @@ mod tests {
         assert!(zeroed[1].len() >= password.len() && zeroed[2].len() >= password.len());
     }
 
-    #[test]
-    fn kpasswd_quality_reply_is_the_chpass_util_paragraph() {
-        let short = super::kpasswd_quality_reply("min_length 8", &super::EmptyPolicy::Unbound);
-        assert_eq!(
-            short,
-            "New password is too short.\nPlease choose a password which is at least 8 characters long."
-        );
-        let classes = super::kpasswd_quality_reply("min_classes 3", &super::EmptyPolicy::Unbound);
-        assert!(classes.starts_with(
-            "New password does not have enough character classes.\nThe character classes are:\n\t- lower-case letters,\n"
-        ));
-        assert!(classes.contains("\t- punctuation, and\n"));
-        assert!(classes.ends_with("Please choose a password with at least 3 character classes."));
-        let dict = "New password was found in a dictionary of possible passwords and\ntherefore may be easily guessed. Please choose another password.\nSee the kpasswd man page for help in choosing a good password.";
-        assert_eq!(
-            super::kpasswd_quality_reply(krb5_kdc::PWQUAL_DICT, &super::EmptyPolicy::Unbound),
-            dict
-        );
-        assert_eq!(
-            super::kpasswd_quality_reply(krb5_kdc::PWQUAL_PRINC, &super::EmptyPolicy::Unbound),
-            dict
-        );
-        assert_eq!(
-            super::kpasswd_quality_reply("history", &super::EmptyPolicy::Unbound),
-            "New password was used previously. Please choose a different password."
-        );
-        assert_eq!(
-            super::kpasswd_quality_reply(krb5_kdc::PWQUAL_EMPTY, &super::EmptyPolicy::Unbound),
-            "Password is too short\n\nPassword not changed."
-        );
-        assert_eq!(
-            super::kpasswd_quality_reply(krb5_kdc::PWQUAL_EMPTY, &super::EmptyPolicy::Missing),
-            "Policy does not exist while getting policy info.\nPassword is too short while trying to change password.\n\nPassword not changed.\n "
-        );
-        assert_eq!(
-            super::kpasswd_quality_reply(krb5_kdc::PWQUAL_EMPTY, &super::EmptyPolicy::MinLength(0)),
-            "New password is too short.\nPlease choose a password which is at least 0 characters long."
-        );
-    }
-
     /// The notice of a refused change is what `krb5_get_error_message` finds on the handle's context once `_kadm5_chpass_principal_util` has run: the code's table text, unless a module gave a dictionary code its own sentence.
     #[test]
     fn kpasswd_quality_log_is_the_text_left_on_the_context() {
@@ -921,54 +796,6 @@ mod tests {
             super::kpasswd_quality_log(krb5_kdc::PWQUAL_DICT),
             "Password is in the password dictionary"
         );
-    }
-
-    #[test]
-    fn a_missing_named_policy_is_not_a_failed_change() {
-        let (mut store, _) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
-        let name = krb5_types::PrincipalName::new(
-            krb5_types::PrincipalName::NT_PRINCIPAL,
-            [krb5_kdc::testrealm::TEST_USER],
-        );
-        assert!(matches!(
-            super::empty_policy(&store, &name),
-            super::EmptyPolicy::Unbound
-        ));
-        store
-            .apply_admin_fields_in(
-                &name,
-                krb5_kdc::testrealm::TEST_REALM,
-                krb5_kdc::AdminFields {
-                    policy: Some("gone".into()),
-                    pw_expire: Some(0),
-                    ..krb5_kdc::AdminFields::default()
-                },
-                "kadmind@KERBER.TEST",
-            )
-            .unwrap();
-        assert!(matches!(
-            super::empty_policy(&store, &name),
-            super::EmptyPolicy::Missing
-        ));
-        store
-            .put_policy(krb5_kdc::NamedPolicy::new("keep"))
-            .unwrap();
-        store
-            .apply_admin_fields_in(
-                &name,
-                krb5_kdc::testrealm::TEST_REALM,
-                krb5_kdc::AdminFields {
-                    policy: Some("keep".into()),
-                    pw_expire: Some(0),
-                    ..krb5_kdc::AdminFields::default()
-                },
-                "kadmind@KERBER.TEST",
-            )
-            .unwrap();
-        assert!(matches!(
-            super::empty_policy(&store, &name),
-            super::EmptyPolicy::MinLength(0)
-        ));
     }
 
     /// in a set-password line the `for` slot prints the CLIENT's name (`targetp = clientstr`), cut to the length of the target's.

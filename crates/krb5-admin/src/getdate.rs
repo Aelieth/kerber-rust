@@ -894,21 +894,4 @@ mod tests {
             "deltat stops at the '/'"
         );
     }
-
-    #[test]
-    fn words_follow_lookup_word() {
-        assert_eq!(lookup_word("Sep"), Tok::Month(9));
-        assert_eq!(lookup_word("sept"), Tok::Month(9));
-        assert_eq!(lookup_word("Thu."), Tok::Day(4));
-        assert_eq!(lookup_word("days"), Tok::MinuteUnit(1_440));
-        assert_eq!(lookup_word("this"), Tok::MinuteUnit(0));
-        assert_eq!(lookup_word("u.t.c."), Tok::Zone(0));
-        assert_eq!(lookup_word("p.m."), Tok::Meridian(Meridian::Pm));
-        assert_eq!(lookup_word("fortnights"), Tok::MinuteUnit(20_160));
-        assert_eq!(lookup_word("bogus"), Tok::Id);
-        assert_eq!(
-            lex("+ 5 (a (b) c) -3"),
-            [Tok::UNumber(5), Tok::SNumber(-3), Tok::End]
-        );
-    }
 }

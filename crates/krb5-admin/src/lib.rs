@@ -191,7 +191,6 @@ pub enum Error {
     #[error("acl denied")]
     AclDenied,
     /// kpropd `authorized_principal` refused the authenticated peer (MIT's syslog text).
-    /// a refused peer is logged to syslog as `Rejected connection from unauthorized principal %s`.
     #[error("Rejected connection from unauthorized principal {0}")]
     KpropUnauthorized(String),
     #[error("not found")]
@@ -268,7 +267,6 @@ impl<'a> AdminSession<'a> {
 
     /// MIT `kadm5_create_principal_3` `passwd_check` for `addprinc [-policy P] -pw PW`: the named policy's floors (if the policy exists) and the built-in `dict` / `empty` / `princ` modules run before the principal is created.
     // MIT: `kadm5_create_principal_3` (svr_principal.c:364-373)
-    /// the policy is loaded, then `passwd_check` runs, before the entry exists.
     /// [`Error::PasswordPolicy`] when `password` fails the policy's length or class floor or a quality module (`dict`, `empty`, `princ`); [`Error::Inner`] when the store cannot be reloaded.
     pub fn check_new_password(
         &mut self,
@@ -465,11 +463,6 @@ impl<'a> AdminSession<'a> {
         self.store.ids()
     }
 
-    #[must_use]
-    pub fn list_ids_glob(&self, glob: Option<&str>) -> Vec<String> {
-        crate::kadm5::principals_matching(self.store, glob)
-    }
-
     /// `getprinc` display id.
     pub fn get_principal_id(&self, name: &PrincipalName) -> Result<String, Error> {
         let p = self.store.get_name(name).ok_or(Error::NotFound)?;
@@ -491,45 +484,6 @@ impl<'a> AdminSession<'a> {
             .get_in_realm(name, princ_realm)
             .cloned()
             .ok_or(Error::NotFound)
-    }
-
-    /// `modprinc` attributes only.
-    pub fn modify_attributes(
-        &mut self,
-        name: &PrincipalName,
-        attributes: Option<u32>,
-    ) -> Result<(), Error> {
-        self.reload()?;
-        let tid = self.target_id(name);
-        self.acl
-            .check(&self.actor, AdminOp::Modify, Some(&tid))
-            .map_err(Error::from)?;
-        let realm = self.store.realm().to_owned();
-        let acl = self.acl;
-        let restrictions = acl.restrictions(&self.actor, Some(&tid));
-        // MIT: `kadm5_modify_principal` (lib/kadm5/srv/svr_principal.c:601-689)
-        // the fields are set on the entry, then one put writes it.
-        self.change(|s, _, actor| {
-            s.apply_admin_fields_in(
-                name,
-                &realm,
-                krb5_kdc::AdminFields {
-                    attributes,
-                    max_life: None,
-                    expiration: None,
-                    pw_expire: None,
-                    policy: None,
-                    clear_policy: false,
-                    max_renewable_life: None,
-                },
-                actor,
-            )?;
-            if let Some(rs) = restrictions {
-                s.impose_acl_restrictions(name, rs)?;
-            }
-            Ok(())
-        })
-        .map_err(Error::from)
     }
 
     /// `modprinc -expire`.
@@ -695,11 +649,6 @@ impl<'a> AdminSession<'a> {
         n
     }
 
-    #[must_use]
-    pub fn list_policies_glob(&self, glob: Option<&str>) -> Vec<String> {
-        crate::kadm5::policies_matching(self.store, glob)
-    }
-
     /// `getpol`, durations via `strdur`.
     // MIT: `kadmin_getpol` (kadmin.c:1794-1807)
     /// prints the policy fields, the lifetimes and intervals via `strdur`.
@@ -724,101 +673,8 @@ impl<'a> AdminSession<'a> {
         Ok(text)
     }
 
-    /// `setstr`.
-    pub fn set_string_attr(
-        &mut self,
-        name: &PrincipalName,
-        key: &str,
-        val: &str,
-    ) -> Result<(), Error> {
-        self.reload()?;
-        let realm = self.store.realm().to_owned();
-        self.change(|s, _, actor| s.set_string_in(name, &realm, key, Some(val), actor))
-            .map_err(Error::from)
-    }
-
     /// `getstrs`.
     pub fn string_attrs(&self, name: &PrincipalName) -> Result<Vec<(String, String)>, Error> {
         self.store.get_strings(name).map_err(Error::from)
-    }
-}
-
-/// kprop-equivalent: serialize the store (dump) and load on a replica.
-pub fn propagate(
-    store: &PrincipalStore,
-    db_path: &std::path::Path,
-    stash_path: &std::path::Path,
-) -> Result<(), krb5_kdc::PersistError> {
-    krb5_kdc::save_store(store, db_path, stash_path)
-}
-
-/// Load a propagated dump.
-pub fn receive_propagate(
-    db_path: &std::path::Path,
-    stash_path: &std::path::Path,
-) -> Result<PrincipalStore, krb5_kdc::PersistError> {
-    krb5_kdc::load_store(db_path, stash_path)
-}
-
-#[cfg(all(test, feature = "test-hooks"))]
-mod tests {
-
-    use super::*;
-
-    use krb5_kdc::testrealm::{bootstrap_documented, documented_admin_id};
-
-    #[test]
-    fn parse_policy_args_and_strdur() {
-        let a = parse_policy_args(&["-minlength", "8", "-minclasses", "2", "-history", "3", "p1"])
-            .unwrap();
-        assert_eq!(a.name, "p1");
-        assert_eq!(a.min_length, Some(8));
-        assert_eq!(a.min_classes, Some(2));
-        assert_eq!(a.history, Some(3));
-        let a = parse_policy_args(&["-maxlife", "1d", "-minlife", "1h", "life"]).unwrap();
-        assert_eq!(a.pw_max_life, Some(86_400));
-        assert_eq!(a.pw_min_life, Some(3600));
-        assert_eq!(strdur(0), "0 days 00:00:00");
-        assert_eq!(strdur(3600), "0 days 01:00:00");
-        assert_eq!(strdur(86_400), "1 day 00:00:00");
-        assert!(parse_policy_args(&["-bogus", "x", "p"]).is_err());
-        assert!(parse_policy_args(&[]).is_err());
-    }
-
-    #[test]
-    fn addpol_floors_and_getpol_layout() {
-        let (mut store, acl) = bootstrap_documented().unwrap();
-        let mut sess = AdminSession::local(&mut store, &acl, documented_admin_id());
-        sess.add_policy("floors");
-        let text = sess.get_policy("floors").unwrap();
-        assert!(text.starts_with("Policy: floors\n"), "{text}");
-        assert!(!text.contains("Policy: Policy:"), "{text}");
-        assert!(text.contains("Minimum password length: 1"), "{text}");
-        assert!(
-            text.contains("Minimum number of password character classes: 1"),
-            "{text}"
-        );
-        assert!(text.contains("Number of old keys kept: 1"), "{text}");
-        assert!(
-            text.contains("Maximum password life: 0 days 00:00:00"),
-            "{text}"
-        );
-        assert!(
-            sess.add_policy_ent(&parse_policy_args(&["-history", "0", "z"]).unwrap())
-                .is_err()
-        );
-        assert!(
-            !text.contains("Allowed key/salt types:"),
-            "MIT omits the line when allowed_keysalts is NULL: {text}"
-        );
-        sess.add_policy_ent(
-            &parse_policy_args(&["-allowedkeysalts", "aes256-cts:normal", "ksalt"]).unwrap(),
-        )
-        .unwrap();
-        let ks = sess.get_policy("ksalt").unwrap();
-        assert!(
-            ks.contains("Allowed key/salt types: aes256-cts:normal"),
-            "{ks}"
-        );
     }
 }

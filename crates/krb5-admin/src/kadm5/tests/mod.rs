@@ -11,11 +11,8 @@ use krb5_kdc::{Acl, KDB_LOCKDOWN_KEYS, SharedDump as SharedStore, TL_LAST_PWD_CH
 use krb5_protocol::AcceptorConfig;
 use krb5_types::PrincipalName;
 
-use super::{
-    auth::*, codes::*, dispatch::*, glob::*, iprop::*, log::*, policy::*, principal::*, rpc::*,
-    xdr::*,
-};
-use crate::{AdminSession, Error};
+use super::{auth::*, codes::*, dispatch::*, glob::*, iprop::*, log::*, policy::*, rpc::*, xdr::*};
+use crate::Error;
 
 fn rpc_call(xid: u32, prog: u32, vers: u32, proc: u32, flavor: u32) -> Vec<u8> {
     let mut w = XdrW::default();
@@ -455,15 +452,6 @@ fn modify_args(name: &str) -> Vec<u8> {
     w.b
 }
 
-fn setstr_args(name: &str, key: &str, value: &str) -> Vec<u8> {
-    let mut w = XdrW::default();
-    w.u32(API_V2);
-    w.nullstring(Some(name));
-    w.nullstring(Some(key));
-    w.nullstring(Some(value));
-    w.b
-}
-
 fn cpw_dispatch(
     store: &krb5_kdc::SharedDump,
     acl: &Acl,
@@ -500,67 +488,6 @@ fn ret_code(b: &[u8]) -> u32 {
     let mut r = XdrR::new(b);
     let _ = r.u32().unwrap();
     r.u32().unwrap()
-}
-
-fn gprinc_key_kvnos(out: &[u8]) -> (u32, Vec<u32>) {
-    let mut r = XdrR::new(out);
-    r.u32().unwrap();
-    r.u32().unwrap();
-    let _ = r.nullstring().unwrap();
-    for _ in 0..4 {
-        r.u32().unwrap();
-    }
-    assert_eq!(r.u32().unwrap(), 0);
-    let _ = r.nullstring().unwrap();
-    for _ in 0..4 {
-        r.u32().unwrap();
-    }
-    let _ = r.nullstring().unwrap();
-    for _ in 0..5 {
-        r.u32().unwrap();
-    }
-    let n_key = r.u32().unwrap();
-    let n_tl = r.u32().unwrap();
-    let tl_null = r.u32().unwrap();
-    if tl_null == 0 {
-        loop {
-            let more = r.u32().unwrap();
-            if more == 0 {
-                break;
-            }
-            r.u32().unwrap();
-            let _ = r.opaque().unwrap();
-        }
-    } else {
-        assert_eq!(n_tl, 0);
-    }
-    let n = r.u32().unwrap();
-    assert_eq!(n, n_key);
-    let mut kvnos = Vec::new();
-    for _ in 0..n {
-        let ver = r.u32().unwrap();
-        kvnos.push(r.u32().unwrap());
-        r.u32().unwrap();
-        if ver > 1 {
-            r.u32().unwrap();
-        }
-    }
-    (n_key, kvnos)
-}
-
-fn gprinc_pwd_and_mod(out: &[u8]) -> (u32, u32) {
-    let mut r = XdrR::new(out);
-    assert_eq!(r.u32().unwrap(), API_V2);
-    assert_eq!(r.u32().unwrap(), 0);
-    let _ = r.nullstring().unwrap();
-    let _ = r.u32().unwrap();
-    let last_pwd = r.u32().unwrap();
-    let _ = r.u32().unwrap();
-    let _ = r.u32().unwrap();
-    assert_eq!(r.u32().unwrap(), 0);
-    let _ = r.nullstring().unwrap();
-    let mod_date = r.u32().unwrap();
-    (last_pwd, mod_date)
 }
 
 fn create_rec(name: &str, pass: &str) -> Vec<u8> {
@@ -727,31 +654,6 @@ fn encode_cpol(api: u32, p: &krb5_kdc::NamedPolicy, mask: u32) -> Vec<u8> {
     encode_policy_rec(&mut w, api, p);
     w.u32(mask);
     w.b
-}
-
-fn modify_policy_floor_code(mask: u32, set: impl Fn(&mut krb5_kdc::NamedPolicy)) -> u32 {
-    let (store, acl, actor) = setup();
-    let pol = krb5_kdc::NamedPolicy::new("fl");
-    let created = dispatch_kadm5(
-        &store,
-        &acl,
-        &actor,
-        CREATE_POLICY,
-        &encode_cpol(API_V2, &pol, KADM5_POLICY),
-    )
-    .unwrap();
-    assert_eq!(ret_code(&created), 0);
-    let mut rec = pol;
-    set(&mut rec);
-    let out = dispatch_kadm5(
-        &store,
-        &acl,
-        &actor,
-        MODIFY_POLICY,
-        &encode_cpol(API_V2, &rec, mask),
-    )
-    .unwrap();
-    ret_code(&out)
 }
 
 // no master key and the encoder refuses to ship keys (see the negative test).

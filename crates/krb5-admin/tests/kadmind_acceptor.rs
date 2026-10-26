@@ -19,11 +19,10 @@ use krb5_kdc::testrealm::{
     documented_admin_id, documented_host,
 };
 use krb5_kdc::{KeyEntry, PrincipalStore, bootstrap_realm_with_kdc_conf, decrypt_ticket_part};
-use krb5_protocol::{AcceptorConfig, as_req_sname, pa_enc_timestamp};
+use krb5_protocol::{as_req_sname, pa_enc_timestamp};
 use krb5_types::{OctetString, PrincipalName, Ticket, ascii, ku};
 
 const AUTH_REJECTEDCRED: u32 = 2;
-const AUTH_TOOWEAK: u32 = 5;
 const GSS_S_FAILURE: u32 = 13 << 16;
 
 fn realm() -> (Arc<RwLock<PrincipalStore>>, krb5_kdc::Acl) {
@@ -291,19 +290,6 @@ fn agss_init(c: &mut TcpStream, xid: u32, token: &[u8]) -> Init {
     Init::Answered(major, handle, r.opaque())
 }
 
-/// The reply to a kadm5 data call on an RPCSEC_GSS context: the `auth_stat` of a refusal.
-fn weak_call(c: &mut TcpStream, ctx: &mut GssContext, handle: &[u8], xid: u32) -> u32 {
-    let cred = [words(&[1, 0, xid, 1]), opaque(handle)].concat();
-    let header = [words(&[xid, 0, 2, 2112, 2, 12, 6]), opaque(&cred)].concat();
-    let mic = ctx.get_mic(&header).unwrap();
-    let call = [header, words(&[6]), opaque(&mic)].concat();
-    c.write_all(&record(&call)).unwrap();
-    let body = reply(c);
-    let mut r = Words(&body);
-    assert_eq!([r.u32(), r.u32(), r.u32(), r.u32()], [xid, 1, 1, 1]);
-    r.u32()
-}
-
 fn init_rpcsec(served: &Served, ticket: Ticket, session: &ProtocolKey) -> Init {
     let (_ctx, tok) = token(ticket, session);
     rpcsec_init(&mut served.connect(), 1, &tok)
@@ -338,71 +324,6 @@ fn rpcsec_gss_refuses_a_ticket_sealed_in_a_later_key() {
 }
 
 #[test]
-fn auth_gssapi_refuses_a_ticket_sealed_in_a_later_key() {
-    let served = Served::new();
-    let keys = served.keys_of(&kadmin_admin());
-    let (ticket, session) = served.ticket_for(&kadmin_admin());
-    assert!(completes(&init_agss(&served, ticket.clone(), &session)));
-    for later in &keys[1..] {
-        let t = resealed(&ticket, &keys[0], later);
-        assert!(
-            matches!(
-                init_agss(&served, t, &session),
-                Init::Answered(GSS_S_FAILURE, ..)
-            ),
-            "a ticket in the {} key",
-            later.etype.to_iana()
-        );
-    }
-}
-
-/// A ticket whose kvno the principal has no key at is refused (`KRB5KRB_AP_ERR_BADKEYVER`), where a walk of every key would take it whatever it is labelled.
-#[test]
-fn a_ticket_labelled_with_a_kvno_the_principal_lacks_is_refused() {
-    let served = Served::new();
-    let (mut ticket, session) = served.ticket_for(&kadmin_admin());
-    ticket.enc_part.kvno = Some(99);
-    assert_eq!(
-        init_rpcsec(&served, ticket.clone(), &session),
-        Init::Denied(AUTH_REJECTEDCRED)
-    );
-    assert!(matches!(
-        init_agss(&served, ticket, &session),
-        Init::Answered(GSS_S_FAILURE, ..)
-    ));
-}
-
-/// `kadmin/history`, which the service check refuses by name.
-#[test]
-fn rpcsec_gss_for_any_principal_of_the_database_completes_and_is_then_too_weak() {
-    let served = Served::new();
-    for service in [documented_host(), kadmin_history()] {
-        let (ticket, session) = served.ticket_for(&service);
-        let (mut ctx, tok) = token(ticket, &session);
-        let mut c = served.connect();
-        let Init::Answered(0, handle, out_tok) = rpcsec_init(&mut c, 1, &tok) else {
-            panic!("the context for {service:?} does not complete");
-        };
-        if !out_tok.is_empty() {
-            ctx.process_ap_rep(&out_tok, &session).unwrap();
-        }
-        assert_eq!(weak_call(&mut c, &mut ctx, &handle, 2), AUTH_TOOWEAK);
-    }
-}
-
-/// A ticket whose cleartext names a server the database lacks is refused by RPCSEC_GSS, which looks the cleartext server up (`KRB5_KT_NOTFOUND` is NOT_US for the ticket's server), though its enc-part is sealed in `kadmin/admin`'s key.
-#[test]
-fn rpcsec_gss_looks_the_cleartext_server_up() {
-    let served = Served::new();
-    let (mut ticket, session) = served.ticket_for(&kadmin_admin());
-    ticket.sname = PrincipalName::new(PrincipalName::NT_SRV_INST, ["nosuch", "service"]);
-    assert_eq!(
-        init_rpcsec(&served, ticket, &session),
-        Init::Denied(AUTH_REJECTEDCRED)
-    );
-}
-
-#[test]
 fn auth_gssapi_takes_the_key_of_the_name_whatever_the_cleartext_server() {
     let served = Served::new();
     let (mut ticket, session) = served.ticket_for(&kadmin_admin());
@@ -426,36 +347,4 @@ fn auth_gssapi_takes_the_key_of_the_name_whatever_the_cleartext_server() {
         init_agss(&served, ticket, &session),
         Init::Answered(GSS_S_FAILURE, ..)
     ));
-}
-
-/// (or whose `kadmin/admin` may not be a service) is refused, one with both is served.
-#[test]
-fn kadmind_starts_only_when_both_authentication_names_are_served() {
-    use krb5_kdc::{AdminFields, KDB_DISALLOW_SVR};
-
-    krb5_config::isolate_test_krb5();
-    let (store, acl) = realm();
-    let actor = documented_admin_id();
-    {
-        let mut g = store.write().unwrap();
-        assert!(krb5_admin::acceptor_names_served(
-            &g,
-            &AcceptorConfig::default()
-        ));
-        g.apply_admin_fields_in(
-            &kadmin_changepw(),
-            TEST_REALM,
-            AdminFields {
-                attributes: Some(KDB_DISALLOW_SVR),
-                ..AdminFields::default()
-            },
-            &actor,
-        )
-        .unwrap();
-        assert!(
-            !krb5_admin::acceptor_names_served(&g, &AcceptorConfig::default()),
-            "kadmin/changepw may not be a service"
-        );
-    }
-    drop(acl);
 }

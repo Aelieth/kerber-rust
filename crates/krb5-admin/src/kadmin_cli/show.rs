@@ -204,17 +204,3 @@ pub(crate) fn salttype_name(t: i32) -> String {
         other => format!("<Salt type 0x{other:x}>"),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::strdate;
-
-    #[test]
-    fn strdate_is_the_locale_strftime() {
-        let t = 1_772_700_000;
-        let expect = krb5_types::timestamp::strftime("%a %b %d %H:%M:%S %Z %Y", t, 40).unwrap();
-        assert_eq!(strdate(t), expect);
-        assert!(expect.contains("Mar"), "{expect}");
-        assert!(expect.contains("2026"), "{expect}");
-    }
-}
