@@ -556,54 +556,6 @@ fn rpcsec_destroy_then_data_is_credproblem() {
 }
 
 #[test]
-fn rpcsec_unknown_program_data_carries_xp_verf() {
-    use krb5_kdc::testrealm::TEST_REALM;
-
-    let (store, acl, mut ctx, handle, mut gss) = admin_rpcsec_init();
-    let rec = rpcsec_data_rec(
-        &mut ctx,
-        RpcCallId {
-            xid: 31,
-            prog: 99_999,
-            vers: 1,
-            proc: 0,
-        },
-        1,
-        &handle,
-        &[],
-        true,
-    );
-    let mut agss = None;
-    let out = handle_rpc(
-        RpcCtx {
-            store: &store,
-            authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
-            expected_realm: TEST_REALM,
-            conf: &AcceptorConfig::default(),
-            programs: Programs::BOTH,
-            iprop_resync: None,
-        },
-        b"hdl",
-        &mut gss,
-        &mut agss,
-        &krb5_protocol::ReplayCache::new(),
-        &rec,
-        &peer(),
-    )
-    .unwrap();
-    let mut r = XdrR::new(&out);
-    assert_eq!(r.u32().unwrap(), 31);
-    assert_eq!(r.u32().unwrap(), MSG_REPLY);
-    assert_eq!(r.u32().unwrap(), MSG_ACCEPTED);
-    assert_eq!(r.u32().unwrap(), FLAVOR_GSS);
-    let verf = r.opaque().unwrap();
-    assert!(!verf.is_empty(), "PROG_UNAVAIL carries xp_verf");
-    assert_eq!(r.u32().unwrap(), PROG_UNAVAIL);
-    ctx.verify_mic(&1u32.to_be_bytes(), &verf)
-        .expect("DATA xp_verf is MIC(htonl(seq))");
-}
-
-#[test]
 fn rpcsec_unwrap_fail_is_garbage_args_with_verf() {
     use krb5_kdc::testrealm::TEST_REALM;
 

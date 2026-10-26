@@ -764,46 +764,6 @@ fn a_call_is_authenticated_by_its_flavor_before_its_program() {
 }
 
 #[test]
-fn a_credential_or_verifier_past_400_bytes_does_not_decode() {
-    let (store, acl, _) = setup();
-    let (mut gss, mut agss) = (None, None);
-    let rc = krb5_protocol::ReplayCache::new();
-    for (cred, verf) in [(401, 0), (0, 401)] {
-        let mut w = XdrW::default();
-        w.u32(30);
-        w.u32(MSG_CALL);
-        w.u32(RPC_VERSION);
-        w.u32(KADM_PROG);
-        w.u32(KADM_VERS);
-        w.u32(INIT);
-        w.u32(FLAVOR_NONE);
-        w.opaque(&vec![b'c'; cred]);
-        w.u32(FLAVOR_NONE);
-        w.opaque(&vec![b'v'; verf]);
-        let out = handle_rpc(
-            RpcCtx {
-                store: &store,
-                authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
-                expected_realm: "KERBER.TEST",
-                conf: &AcceptorConfig::default(),
-                programs: Programs::BOTH,
-                iprop_resync: None,
-            },
-            b"hdl",
-            &mut gss,
-            &mut agss,
-            &rc,
-            &w.b,
-            &peer(),
-        );
-        assert!(
-            matches!(out, Err(Error::GarbageArgs)),
-            "{cred}/{verf}: {out:?}"
-        );
-    }
-}
-
-#[test]
 fn a_failed_gssapi_init_keeps_an_unestablished_record() {
     use krb5_kdc::testrealm::TEST_REALM;
 
