@@ -110,7 +110,7 @@ fn p256_cert_window(
     Some(tlv(0x30, &[tbs, alg_id, tlv(0x03, &sig_bit)].concat()))
 }
 
-// MIT verify_kdc_eku; see docs/parity/b1-client-preauth.md
+// MIT: `verify_kdc_eku` (plugins/preauth/pkinit/pkinit_clnt.c:451-487)
 fn cert_extensions(kind: CertKind, subject_cn: &str, realm: &str) -> Vec<u8> {
     let is_ca = matches!(
         kind,

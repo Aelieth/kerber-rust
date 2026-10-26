@@ -1,4 +1,4 @@
-// MIT krb5_string_to_timestamp; see docs/parity/a4-kadmin.md
+// MIT: `krb5_string_to_timestamp` (lib/krb5/krb/str_conv.c:145-196)
 
 use std::sync::OnceLock;
 

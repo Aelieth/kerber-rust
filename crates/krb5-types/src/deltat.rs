@@ -155,7 +155,7 @@ fn opt_hms(b: &[u8], i: &mut usize) -> Result<i32, DeltatError> {
     }
 }
 
-// MIT krb5_string_to_deltat; see docs/parity/b1-client.md
+// MIT: `krb5_string_to_deltat` (lib/krb5/krb/deltat.c:1574-1584)
 fn deltat(b: &[u8], i: &mut usize) -> Result<i32, DeltatError> {
     let n = num(b, i)?;
     if eat(b, i, b'd') {

@@ -213,7 +213,7 @@ pub fn cms_wrap_signed(
     let signed_data = oid_der(&[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x07, 0x02]);
     let ectype = oid_der(econtent_oid);
     let sha256_alg = tlv(0x30, &[sha256.clone(), tlv(0x05, &[])].concat());
-    // MIT cms_signeddata_create; see docs/parity/a3-preauth.md
+    // MIT: `cms_signeddata_create` (plugins/preauth/pkinit/pkinit_crypto_openssl.c:1713-1928)
     let sig_alg = tlv(0x30, &[oid_der(sig_alg), tlv(0x05, &[])].concat());
     let digest_algs = tlv(0x31, &sha256_alg);
     let econt = tlv(0xa0, &tlv(0x04, e_content));
@@ -1208,7 +1208,7 @@ fn cert_key_id(cert: &[u8]) -> Option<Vec<u8>> {
     id
 }
 
-// MIT create_identifiers_from_stack; see docs/parity/a3-preauth.md
+// MIT: `create_identifiers_from_stack` (plugins/preauth/pkinit/pkinit_crypto_openssl.c:5223-5316)
 #[must_use]
 pub fn encode_td_certifiers(certs: &[&[u8]]) -> Vec<u8> {
     let ids: Vec<super::ExternalPrincipalIdentifier> = certs
@@ -1569,7 +1569,7 @@ pub struct CertSans {
     pub dns_names: Vec<String>,
 }
 
-// MIT crypto_retrieve_X509_sans; see docs/parity/a3-preauth.md
+// MIT: `crypto_retrieve_X509_sans` (plugins/preauth/pkinit/pkinit_crypto_openssl.c:2304-2465)
 #[must_use]
 pub fn cert_sans(cert: &[u8], upns: bool) -> Option<CertSans> {
     let mut out = CertSans::default();
@@ -1635,7 +1635,7 @@ pub enum EkuCheck {
 
 const OID_KP_SERVER_AUTH: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01];
 
-// MIT crypto_check_cert_eku; see docs/parity/a3-preauth.md
+// MIT: `crypto_check_cert_eku` (plugins/preauth/pkinit/pkinit_crypto_openssl.c:2498-2572)
 #[must_use]
 pub fn cert_eku(cert: &[u8], kdc: bool, accept_secondary: bool) -> EkuCheck {
     let (main, secondary) = if kdc {

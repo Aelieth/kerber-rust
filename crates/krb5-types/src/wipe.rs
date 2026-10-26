@@ -4,7 +4,8 @@ use rasn::types::OctetString;
 use zeroize::Zeroize;
 
 /// Zeroizes every byte of `octets`' allocation in place, then frees it, when `octets` is the last
-/// A key wipes its buffer only while it holds the last handle; a shared buffer is released untouched.
+/// A key wipes its buffer only while it holds the last handle; a shared buffer is released
+/// untouched.
 pub(crate) fn wipe_octets(octets: OctetString) {
     let Ok(last) = bytes::Bytes::from(octets).try_into_mut() else {
         return;
@@ -24,7 +25,8 @@ pub(crate) fn wipe_vec(buf: &mut Vec<u8>) {
     let _ = tests::WIPED.try_with(|w| w.borrow_mut().push(owned));
 }
 
-/// `DerefMut` hands out the `&mut Vec<u8>`, so a push past its capacity, a `.clone()` or a `.to_vec()` leaves a copy nothing wipes. Every site sizes its buffer up front.
+/// `DerefMut` hands out the `&mut Vec<u8>`, so a push past its capacity, a `.clone()` or a
+/// `.to_vec()` leaves a copy nothing wipes. Every site sizes its buffer up front.
 pub(crate) struct Wiped(pub(crate) Vec<u8>);
 
 impl Drop for Wiped {

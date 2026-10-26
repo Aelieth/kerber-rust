@@ -22,7 +22,8 @@ impl ApRep {
 }
 
 // MIT: `ap_rep_msg_type` (lib/krb5/asn.1/asn1_k_encode.c:760-760)
-// the msg-type is an immediate with no error, so any INTEGER of up to eight octets decodes and none is kept.
+// the msg-type is an immediate with no error, so any INTEGER of up to eight octets decodes and none
+// is kept.
 #[derive(AsnType, Decode)]
 #[rasn(tag(explicit(application, 15)))]
 struct ApRepOnWire {
@@ -81,7 +82,7 @@ impl KrbSafe {
     pub const MSG_TYPE: i32 = 20;
 }
 
-// MIT safe_msg_type; see docs/parity/b1-client.md
+// MIT: `safe_msg_type` (lib/krb5/asn.1/asn1_k_encode.c:816-816)
 #[derive(AsnType, Decode)]
 #[rasn(tag(explicit(application, 20)))]
 struct KrbSafeOnWire {
@@ -158,7 +159,8 @@ impl KrbPriv {
 }
 
 // MIT: `priv_msg_type` (lib/krb5/asn.1/asn1_k_encode.c:845-845)
-// the msg-type is an immediate with no error, so any INTEGER of up to eight octets decodes and none is kept.
+// the msg-type is an immediate with no error, so any INTEGER of up to eight octets decodes and none
+// is kept.
 #[derive(AsnType, Decode)]
 #[rasn(tag(explicit(application, 21)))]
 struct KrbPrivOnWire {
@@ -217,7 +219,8 @@ impl std::fmt::Debug for EncKrbPrivPart {
 }
 
 // MIT: `decode_seqno` (lib/krb5/asn.1/asn1_k_encode.c:133-146)
-// an INTEGER from `INT32_MIN` to `0xFFFFFFFF` decodes, a negative one (an old Heimdal's) as the same 32 bits unsigned, and a wider one is `ASN1_OVERFLOW`, which fails the message.
+// an INTEGER from `INT32_MIN` to `0xFFFFFFFF` decodes, a negative one (an old Heimdal's) as the
+// same 32 bits unsigned, and a wider one is `ASN1_OVERFLOW`, which fails the message.
 // MIT: `encode_seqno` (asn1_k_encode.c:124-132)
 // written unsigned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -434,7 +437,8 @@ impl KrbCred {
 }
 
 // MIT: `cred_msg_type` (lib/krb5/asn.1/asn1_k_encode.c:877-877)
-// the msg-type is an immediate with no error, so any INTEGER of up to eight octets decodes and none is kept.
+// the msg-type is an immediate with no error, so any INTEGER of up to eight octets decodes and none
+// is kept.
 #[derive(AsnType, Decode)]
 #[rasn(tag(explicit(application, 22)))]
 struct KrbCredOnWire {
@@ -513,7 +517,7 @@ pub struct KrbCredInfo {
 pub struct ChangePasswdData {
     #[rasn(tag(explicit(0)))]
     pub newpasswd: OctetString,
-    // MIT setpw_req; see docs/parity/a4-kadmin.md
+    // MIT: `setpw_req` (lib/krb5/asn.1/asn1_k_encode.c:947-947)
     #[rasn(tag(explicit(1)))]
     pub targname: PrincipalName,
     #[rasn(tag(explicit(2)))]

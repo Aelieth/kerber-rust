@@ -621,7 +621,7 @@ pub fn encode_party_u(cname: &crate::PrincipalName, realm: &str) -> Vec<u8> {
     encode_principal(cname, realm)
 }
 
-// MIT pkinit_as_rep_parse; see docs/parity/b1-client-preauth.md
+// MIT: `pkinit_as_rep_parse` (plugins/preauth/pkinit/pkinit_clnt.c:489-644)
 // MIT: `pkinit_server_return_padata` (pkinit_srv.c:880-881)
 // and so does the KDC.
 #[must_use]

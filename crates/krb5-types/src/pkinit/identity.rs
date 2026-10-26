@@ -53,7 +53,7 @@ impl IdentityKey {
         pkcs8_ec(der).or_else(|| RsaKey::from_pkcs8(der).map(|k| Self::Rsa(Box::new(k))))
     }
 
-    // MIT cert_sig_alg; see docs/parity/a3-preauth.md
+    // MIT: `cert_sig_alg` (plugins/preauth/pkinit/pkinit_crypto_openssl.c:1696-1711)
     #[must_use]
     pub fn sign_sha256(&self, msg: &[u8]) -> Option<(Vec<u8>, &'static [u8])> {
         match self {
@@ -178,8 +178,8 @@ impl std::fmt::Debug for PkinitIdentity {
     }
 }
 
-// MIT process_option_identity; see docs/parity/a3-preauth.md
-// MIT crypto_cert_select_default; see docs/parity/a3-preauth.md
+// MIT: `process_option_identity` (plugins/preauth/pkinit/pkinit_identity.c:377-465)
+// MIT: `crypto_cert_select_default` (plugins/preauth/pkinit/pkinit_crypto_openssl.c:4970-4992)
 pub fn load_identity(
     value: &str,
     trace: &mut dyn FnMut(MatchTrace<'_>),
@@ -227,7 +227,7 @@ fn parse_fs_options(residual: &str) -> Option<(&str, &str)> {
     Some((cert, names.next().unwrap_or(cert)))
 }
 
-// MIT pkinit_load_fs_cert_and_key; see docs/parity/a3-preauth.md
+// MIT: `pkinit_load_fs_cert_and_key` (plugins/preauth/pkinit/pkinit_crypto_openssl.c:4209-4268)
 fn load_cert_and_key(cert_file: &str, key_file: &str) -> Result<PkinitIdentity, IdentityError> {
     let fsname = format!("FILE:{cert_file},{key_file}");
     let cert = read_cert(cert_file).map_err(|(code, why)| {
@@ -255,7 +255,7 @@ fn load_cert_and_key(cert_file: &str, key_file: &str) -> Result<PkinitIdentity, 
     Ok(PkinitIdentity::new(cert, key))
 }
 
-// MIT pkinit_get_certs_dir; see docs/parity/a3-preauth.md
+// MIT: `pkinit_get_certs_dir` (plugins/preauth/pkinit/pkinit_crypto_openssl.c:4297-4373)
 fn load_identity_dir(dir: &str) -> Result<Vec<PkinitIdentity>, IdentityError> {
     let mut found = Vec::new();
     for name in dir_names(dir)? {

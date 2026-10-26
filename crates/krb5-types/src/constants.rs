@@ -75,8 +75,8 @@ pub mod err {
     // clamps offsets over 128 to `GENERIC`
     pub const TKT_INVALID: i32 = 145;
     /// com_err base ×256 with the 2³² wrap). Library-local: not an RFC 4120
-    // MIT filter_preauth_error; see docs/parity/a3-preauth.md
-    // MIT finish_process_as_req; see docs/parity/b1-crypto-keys.md
+    // MIT: `filter_preauth_error` (kdc/kdc_preauth.c:1090-1134)
+    // MIT: `finish_process_as_req` (kdc/do_as_req.c:193-423)
     // MIT: `finish_dispatch_cache` (dispatch.c:78-78)
     // Keeps the request's null lookaside entry for it, so a resend gets no reply either.
     pub const DISCARD: i32 = -1_750_600_189;
@@ -106,7 +106,7 @@ pub mod ku {
     pub const GSS_INITIATOR_SIGN: u32 = 25;
     // MIT: `verify_s4u_x509_user_checksum` (kdc_util.c:1374-1374)
     pub const PA_S4U_X509_USER_REQUEST: u32 = 26;
-    // MIT kdc_make_s4u2self_rep; see docs/parity/a2-as.md
+    // MIT: `kdc_make_s4u2self_rep` (kdc/kdc_util.c:1452-1531)
     pub const PA_S4U_X509_USER_REPLY: u32 = 27;
     pub const FAST_REQ_CHKSUM: u32 = 50;
     pub const FAST_ENC: u32 = 51;

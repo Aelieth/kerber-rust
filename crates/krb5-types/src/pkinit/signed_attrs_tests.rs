@@ -41,7 +41,8 @@ fn ecdsa_der_takes_only_its_own_der() {
     // r = 1, s = 2 as a minimal ECDSA-Sig-Value.
     let ok = [0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x02];
     assert_eq!(ecdsa_der(&ok), Some((&[1u8][..], &[2u8][..])));
-    // A trailing byte, a non-minimal length, a leading-zero INTEGER and a wrong tag are each refused,
+    // A trailing byte, a non-minimal length, a leading-zero INTEGER and a wrong tag are each
+    // refused,
     // as OpenSSL's d2i_ECDSA_SIG refuses a signature that is not exactly its own encoding.
     assert_eq!(ecdsa_der(&[&ok[..], &[0x00]].concat()), None);
     assert_eq!(

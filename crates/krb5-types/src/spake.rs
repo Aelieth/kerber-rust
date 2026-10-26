@@ -38,8 +38,8 @@ pub struct SpakeResponse {
     pub factor: EncryptedData,
 }
 
-// MIT decode_cntype; see docs/parity/a3-preauth.md
-// MIT spake_verify; see docs/parity/a3-preauth.md
+// MIT: `decode_cntype` (lib/krb5/asn.1/asn1_encode.c:1245-1300)
+// MIT: `spake_verify` (plugins/preauth/spake/spake_kdc.c:501-539)
 // MIT: `spake_process` (plugins/preauth/spake/spake_client.c:357-359)
 // the client takes it as an unexpected message, as it takes a support or a response.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

@@ -1,4 +1,4 @@
-// MIT k5_der_len_len; see docs/parity/b1-gss.md
+// MIT: `k5_der_len_len` (include/k5-der.h:68-68)
 #[must_use]
 pub const fn len_len(len: usize) -> usize {
     if len < 128 {
@@ -13,7 +13,7 @@ pub const fn len_len(len: usize) -> usize {
     llen
 }
 
-// MIT k5_der_add_taglen; see docs/parity/b1-gss.md
+// MIT: `k5_der_add_taglen` (include/k5-der.h:102-102)
 pub fn push_len(out: &mut Vec<u8>, len: usize) {
     let llen = len_len(len);
     if llen == 1 {
@@ -25,14 +25,14 @@ pub fn push_len(out: &mut Vec<u8>, len: usize) {
     out.extend_from_slice(&bytes[bytes.len() - (llen - 1)..]);
 }
 
-// MIT k5_der_add_value; see docs/parity/b1-gss.md
+// MIT: `k5_der_add_value` (include/k5-der.h:99-101)
 pub fn push_tlv(out: &mut Vec<u8>, tag: u8, value: &[u8]) {
     out.push(tag);
     push_len(out, value.len());
     out.extend_from_slice(value);
 }
 
-// MIT get_tag; see docs/parity/b1-gss.md
+// MIT: `get_tag` (lib/krb5/asn.1/asn1_encode.c:351-425)
 #[must_use]
 pub fn read_len(input: &[u8]) -> Option<(usize, usize)> {
     let first = *input.first()?;

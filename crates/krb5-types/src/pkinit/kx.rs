@@ -73,7 +73,7 @@ impl KxGroup {
         Self::Modp1024,
     ];
 
-    // MIT check_dh_wellknown; see docs/parity/a3-preauth.md
+    // MIT: `check_dh_wellknown` (plugins/preauth/pkinit/pkinit_crypto_openssl.c:2870-2890)
     #[must_use]
     pub const fn bits(self) -> u32 {
         match self {
@@ -166,7 +166,7 @@ impl KxGroup {
     }
 }
 
-// MIT decode_spki; see docs/parity/a3-preauth.md
+// MIT: `decode_spki` (plugins/preauth/pkinit/pkinit_crypto_openssl.c:421-427)
 #[must_use]
 pub fn decode_spki(spki: &[u8]) -> Option<(Option<KxGroup>, Vec<u8>)> {
     let (0x30, body, _) = take_tlv(spki)? else {
@@ -198,7 +198,7 @@ pub fn decode_spki(spki: &[u8]) -> Option<(Option<KxGroup>, Vec<u8>)> {
     decodes.then_some((group, public))
 }
 
-// MIT pkinit_create_td_dh_parameters; see docs/parity/a3-preauth.md
+// MIT: `pkinit_create_td_dh_parameters` (plugins/preauth/pkinit/pkinit_crypto_openssl.c:3205-3272)
 #[must_use]
 pub fn encode_td_dh_parameters(min_bits: u32) -> Vec<u8> {
     let algs: Vec<u8> = KxGroup::ALL
@@ -209,7 +209,7 @@ pub fn encode_td_dh_parameters(min_bits: u32) -> Vec<u8> {
     tlv(0x30, &algs)
 }
 
-// MIT pkinit_process_td_dh_params; see docs/parity/a3-preauth.md
+// MIT: `pkinit_process_td_dh_params` (plugins/preauth/pkinit/pkinit_crypto_openssl.c:3308-3351)
 #[must_use]
 pub fn choose_td_group(td: &[u8], min_bits: u32) -> Option<Option<KxGroup>> {
     let (0x30, mut list, _) = take_tlv(td)? else {
@@ -233,7 +233,7 @@ pub fn choose_td_group(td: &[u8], min_bits: u32) -> Option<Option<KxGroup>> {
     )
 }
 
-// MIT group_desc; see docs/parity/a3-preauth.md
+// MIT: `group_desc` (plugins/preauth/pkinit/pkinit_crypto_openssl.c:2892-2906)
 #[must_use]
 pub fn group_desc(bits: u32) -> &'static str {
     KxGroup::for_bits(bits).map_or("(unknown)", KxGroup::desc)
@@ -252,7 +252,7 @@ fn half(n: &[u8]) -> Vec<u8> {
     strip_leading_zeros(&out)
 }
 
-// MIT parse_dh_min_bits; see docs/parity/a3-preauth.md
+// MIT: `parse_dh_min_bits` (plugins/preauth/pkinit/pkinit_crypto_openssl.c:5665-5700)
 pub fn parse_dh_min_bits(value: Option<&str>) -> Result<u32, String> {
     let Some(s) = value else {
         return Ok(2048);
@@ -365,7 +365,7 @@ impl KxKey {
         tlv(0x30, &[self.group.algorithm_identifier(), bits].concat())
     }
 
-    // MIT dh_result; see docs/parity/a3-preauth.md
+    // MIT: `dh_result` (plugins/preauth/pkinit/pkinit_crypto_openssl.c:676-733)
     #[must_use]
     pub fn shared(&self, peer: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
         match self.group {

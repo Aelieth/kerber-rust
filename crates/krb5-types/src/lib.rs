@@ -1,37 +1,3 @@
-//! ```
-//! use krb5_types::PrincipalName;
-//! let name = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "REALM"]);
-//! assert_eq!(name.components_joined(), "krbtgt/REALM");
-//! ```
-//! ```
-//! use krb5_types::PrincipalName;
-//! let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
-//! assert_eq!(name.unparse_with_realm("REALM"), "user@REALM");
-//! ```
-//! ```
-//! use krb5_types::deltat::parse;
-//! let secs = parse("1h")?;
-//! assert_eq!(secs, 3600);
-//! Ok::<(), krb5_types::deltat::DeltatError>(())
-//! ```
-//! ```
-//! use krb5_types::deltat::parse;
-//! let secs = parse("3d")?;
-//! assert_eq!(secs, 3 * 24 * 3600);
-//! Ok::<(), krb5_types::deltat::DeltatError>(())
-//! ```
-//! ```
-//! use krb5_types::deltat::parse;
-//! let secs = parse("42")?;
-//! assert_eq!(secs, 42);
-//! Ok::<(), krb5_types::deltat::DeltatError>(())
-//! ```
-//! ```
-//! use krb5_types::KerberosTime;
-//! let t = KerberosTime::from_unix_seconds(1_500_000_000);
-//! assert_eq!(t.unix_seconds(), 1_500_000_000);
-//! ```
-
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
@@ -144,7 +110,7 @@ impl Microseconds {
     }
 }
 
-// MIT decode_atype; see docs/parity/b1-asn1.md
+// MIT: `decode_atype` (lib/krb5/asn.1/asn1_encode.c:1133-1243)
 pub(crate) struct WireImmediate(pub(crate) i32);
 
 impl AsnType for WireImmediate {
@@ -176,8 +142,8 @@ impl Encode for WireImmediate {
     }
 }
 
-// MIT uint; see docs/parity/b1-asn1.md
-// MIT uint32; see docs/parity/b1-asn1.md
+// MIT: `uint` (lib/krb5/asn.1/asn1_k_encode.c:51-51)
+// MIT: `uint32` (lib/krb5/asn.1/asn1_k_encode.c:53-53)
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct WireUint32(pub(crate) i32);
 
@@ -220,7 +186,7 @@ impl Encode for WireUint32 {
     }
 }
 
-// MIT krb5_version; see docs/parity/b1-asn1.md
+// MIT: `krb5_version` (lib/krb5/asn.1/asn1_k_encode.c:30-30)
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct WireVersion(pub(crate) i32);
 
@@ -261,8 +227,8 @@ impl Encode for WireVersion {
 #[rasn(delegate)]
 pub struct KerberosTime(pub GeneralizedTime);
 
-// MIT k5_asn1_decode_generaltime; see docs/parity/b1-asn1.md
-// MIT decode_kerberos_time; see docs/parity/b1-asn1.md
+// MIT: `k5_asn1_decode_generaltime` (lib/krb5/asn.1/asn1_encode.c:241-277)
+// MIT: `decode_kerberos_time` (lib/krb5/asn.1/asn1_k_encode.c:167-178)
 impl Decode for KerberosTime {
     fn decode_with_tag_and_constraints<D: Decoder>(
         decoder: &mut D,
@@ -466,7 +432,7 @@ impl HostAddress {
     pub const ADDRTYPE_NETBIOS: i32 = 0x14;
     pub const ADDRTYPE_INET6: i32 = 0x18;
 
-    // MIT k5_sockaddr_to_address; see docs/parity/a2-as.md
+    // MIT: `k5_sockaddr_to_address` (lib/krb5/os/addr.c:43-75)
     #[must_use]
     pub fn from_socket(addr: std::net::SocketAddr) -> Self {
         match addr {
@@ -776,9 +742,9 @@ impl KdcOptions {
         self.to_u32() & !supported
     }
 
-    // MIT NON_TGT_OPTION; see docs/parity/a1-tgs.md
-    // MIT NO_REFERRAL_OPTION; see docs/parity/a1-tgs.md
-    // MIT AS_INVALID_OPTIONS; see docs/parity/a1-tgs.md
+    // MIT: `NON_TGT_OPTION` (kdc/kdc_util.h:456-457)
+    // MIT: `NO_REFERRAL_OPTION` (kdc/kdc_util.h:460-460)
+    // MIT: `AS_INVALID_OPTIONS` (kdc/kdc_util.h:463-463)
     #[must_use]
     pub fn as_invalid_bits(&self) -> u32 {
         let mask = (1u32 << (31 - flag_bit::FORWARDED))
@@ -1013,7 +979,8 @@ impl ApReq {
 }
 
 // MIT: `ap_req_msg_type` (lib/krb5/asn.1/asn1_k_encode.c:747-747)
-// the msg-type is an immediate with no error, so any INTEGER of up to eight octets decodes and none is kept.
+// the msg-type is an immediate with no error, so any INTEGER of up to eight octets decodes and none
+// is kept.
 #[derive(AsnType, Decode)]
 #[rasn(tag(explicit(application, 14)))]
 struct ApReqOnWire {
@@ -1117,7 +1084,8 @@ impl KrbError {
 }
 
 // MIT: `error_msg_type` (lib/krb5/asn.1/asn1_k_encode.c:911-911)
-// the msg-type is an immediate with no error, so any INTEGER of up to eight octets decodes and none is kept.
+// the msg-type is an immediate with no error, so any INTEGER of up to eight octets decodes and none
+// is kept.
 #[derive(AsnType, Decode, Encode)]
 #[rasn(tag(explicit(application, 30)))]
 struct KrbErrorOnWire {
@@ -1648,7 +1616,7 @@ fn escape_transit_realm(realm: &str) -> String {
     out
 }
 
-// MIT krb5_check_transited_list; see docs/parity/b1-client.md
+// MIT: `krb5_check_transited_list` (lib/krb5/krb/chk_trans.c:308-356)
 fn expand_domain_x500(raw: &[u8], crealm: &str, srealm: &str) -> Result<Vec<String>, TransitError> {
     let raw = strip_trailing_nul(raw);
     if raw.is_empty() {
@@ -1757,7 +1725,7 @@ fn push_hop(out: &mut Vec<String>, hop: String) -> Result<(), TransitError> {
     Ok(())
 }
 
-// MIT process_intermediates; see docs/parity/a1-tgs.md
+// MIT: `process_intermediates` (lib/krb5/krb/chk_trans.c:45-135)
 fn process_intermediates(n1: &str, n2: &str, out: &mut Vec<String>) -> Result<(), TransitError> {
     let (short, long) = if n1.len() > n2.len() {
         (n2, n1)

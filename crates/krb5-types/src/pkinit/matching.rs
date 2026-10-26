@@ -26,7 +26,7 @@ enum Keyword {
 }
 
 impl Keyword {
-    // MIT keyword2string; see docs/parity/a3-preauth.md
+    // MIT: `keyword2string` (plugins/preauth/pkinit/pkinit_matching.c:50-62)
     fn name(self) -> &'static str {
         match self {
             Self::Ku => "KU",
@@ -113,7 +113,7 @@ impl std::fmt::Display for CertMatchError {
     }
 }
 
-// MIT pkinit_client_cert_match; see docs/parity/a3-preauth.md
+// MIT: `pkinit_client_cert_match` (plugins/preauth/pkinit/pkinit_matching.c:715-750)
 pub fn cert_match(
     rule: &str,
     cert: &[u8],
@@ -132,7 +132,7 @@ pub fn cert_match(
     Ok(matched)
 }
 
-// MIT pkinit_cert_matching; see docs/parity/a3-preauth.md
+// MIT: `pkinit_cert_matching` (plugins/preauth/pkinit/pkinit_matching.c:616-713)
 pub fn select_cert(
     rules: &[String],
     certs: &[&[u8]],
@@ -170,7 +170,7 @@ pub fn select_cert(
     Err(CertMatchError::Code(ENOENT))
 }
 
-// MIT check_all_certs; see docs/parity/a3-preauth.md
+// MIT: `check_all_certs` (plugins/preauth/pkinit/pkinit_matching.c:536-614)
 fn check_all_certs(
     relation: &Relation,
     components: &[Component],
@@ -211,7 +211,7 @@ fn keyword_at(rule: &[u8]) -> Option<(Keyword, usize)> {
         .map(|(k, kw)| (*kw, k.len()))
 }
 
-// MIT parse_rule_set; see docs/parity/a3-preauth.md
+// MIT: `parse_rule_set` (plugins/preauth/pkinit/pkinit_matching.c:374-447)
 fn parse_rule_set(rule: &[u8]) -> Result<(Relation, Vec<Component>), i32> {
     let mut rest = rule;
     let mut relation = Relation::None;
@@ -294,7 +294,7 @@ struct MatchData {
     eku: u32,
 }
 
-// MIT get_matching_data; see docs/parity/a3-preauth.md
+// MIT: `get_matching_data` (plugins/preauth/pkinit/pkinit_crypto_openssl.c:4846-4890)
 fn matching_data(cert: &[u8]) -> Result<MatchData, i32> {
     let w = walk_tbs(cert).ok_or(EINVAL)?;
     let subject = print_name(w.subject).ok_or(ENOMEM)?;
@@ -315,14 +315,14 @@ fn matching_data(cert: &[u8]) -> Result<MatchData, i32> {
     })
 }
 
-// MIT component_match; see docs/parity/a3-preauth.md
+// MIT: `component_match` (plugins/preauth/pkinit/pkinit_matching.c:467-535)
 fn component_match(
     c: &Component,
     md: &MatchData,
     cert: usize,
     trace: &mut dyn FnMut(MatchTrace<'_>),
 ) -> Result<bool, CertMatchError> {
-    // MIT regexp_match; see docs/parity/a3-preauth.md
+    // MIT: `regexp_match` (plugins/preauth/pkinit/pkinit_matching.c:449-465)
     let mut is = |kw: &Keyword, re: &Ere, rule: &[u8], value: &[u8]| {
         let matched = re.is_match(value).ok_or(CertMatchError::BackReference)?;
         trace(MatchTrace::Regexp {
