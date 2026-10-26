@@ -221,6 +221,10 @@ section "0. the VM: alien's docker state is recorded (read-only), the leg's stal
 check alien.docker.before '^alien docker: [0-9]+ images, [0-9]+ containers$' host "printf 'alien docker: %s images, %s containers\n' \"\$(docker image ls -q | sort -u | wc -l)\" \"\$(docker ps -aq | wc -l)\""
 aliendocker > "$T/alien-docker.before"
 check vm.preclean '^pre-clean: done$' run "$VM" "docker version --format '{{.Server.Version}}' > /dev/null && docker ps -aq --filter name=$N- | xargs -r docker rm -f && docker network ls -q --filter name=$N- | xargs -r docker network rm && docker volume ls -q --filter name=$N- | xargs -r docker volume rm && docker images --format '{{.Repository}}:{{.Tag}}' $N | xargs -r docker rmi && sudo rm -rf $(q "$VT") $(q "$VTS") && mkdir -p $(q "$VT") $(q "$VCACHE") && mkdir -m 0700 -p $(q "$VTS") && echo 'pre-clean: done'"
+# Under SELinux the VM's containers (container_t) cannot use tmp_t: VT and VCACHE get container_file_t, as -v's :z would
+# give them, so the lanes, the build, the doc's blocks and the gate's own mounts (its phase 80 copies with cp -a, which
+# keeps the label) can; what is made under them later takes it. Nothing else is relabelled, and VTS keeps tmp_t.
+check vm.label '^labels: (container_file_t container_file_t|SELinux is off)$' run "$VM" "if selinuxenabled; then sudo chcon -R -t container_file_t $(q "$VT") $(q "$VCACHE") && echo \"labels: \$(stat -c %C $(q "$VT") | cut -d: -f3) \$(stat -c %C $(q "$VCACHE") | cut -d: -f3)\"; else echo 'labels: SELinux is off'; fi"
 # the VM's docker inventory recorded for debugging (not a row: a count would differ between legs)
 run "$VM" "docker ps -a --format '{{.Names}} {{.Image}}'; docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}'; docker volume ls -q; docker network ls --format '{{.Name}}'"
 
