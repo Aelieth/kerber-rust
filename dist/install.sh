@@ -271,7 +271,7 @@ do_uninstall() {
     if systemd_running; then
         systemctl daemon-reload || say "systemctl daemon-reload failed"
     fi
-    say "left in place: $KDCDIR (the database, stash, kdc.conf and kadm5.acl), $SYSCONFIGDIR/{krb5kdc,kadmin} and $LOGROTATEDIR/{krb5kdc,kadmind}"
+    say "left in place: $KDCDIR (the database, stash, kdc.conf and kadm5.acl), $SYSCONFIGDIR/{krb5kdc,kadmin,kprop} and $LOGROTATEDIR/{krb5kdc,kadmind}"
 }
 
 case $action in

@@ -546,7 +546,7 @@ rest. Put the saved ones back before installing:
 
 ```sh
 for f in /var/kerberos/krb5kdc/kdc.conf /var/kerberos/krb5kdc/kadm5.acl /etc/sysconfig/krb5kdc \
-         /etc/sysconfig/kadmin /etc/logrotate.d/krb5kdc /etc/logrotate.d/kadmind; do
+         /etc/sysconfig/kadmin /etc/sysconfig/kprop /etc/logrotate.d/krb5kdc /etc/logrotate.d/kadmind; do
     if [ -e $f.rpmsave ]; then sudo mv $f.rpmsave $f; fi
 done
 sudo make install PREFIX=/usr
