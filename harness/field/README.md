@@ -255,6 +255,7 @@ harness/field/run.sh --profile kill-loop --ref plan-12   # SW-3's kill loop (lab
 | `leg.sh` | A scenario's leg from `baseline.env`'s `MIT_*` or `RUST_*` set: `legset` (secret file names), `resetvm`, `kdcis` (kdc runs the leg's KDC: MIT's packaged binaries, or the install manifest and the ref's build), `servicesready`, `ktcheck` (a keytab against the KDC's keys), `tgtline` / `tktcheck` (a ticket's life, renewable span and flags from `klist -f`), `countlast` |
 | `acl-variant.sh` | The `svc/setup` ACL-settle helper (promoted from the L2 hand record): `acl_variant <letters> <tag>` writes `kadm5.acl` giving `svc/setup` those letters on `host/*` and `nfs/*`, restarts kadmind, then grades the `addprinc` and `ktadd` from client2 against the outcome the letters dictate (MIT's refusal texts); both legs run it |
 | `kt-vs-kdc.py` | A keytab's newest kvno and enctypes (`klist -k -e`) against the KDC's `getprinc` |
+| `kt-records.py` | `client-tools`' keytab helper on client2: a v2 keytab with an unknown enctype, and two keytabs compared record by record with the timestamps zeroed (it never prints a key) |
 | `nfs-probe.sh`, `spnego-probe.sh`, `check_spnego.lab.sh` | S2's probes, run in throwaway containers on services (image `localhost/s2-nfs-probe:f43`, own network namespace): the kit's NFS client set-up and alice's, root's and bob's NFS access; the kit's `check_spnego` (its helper block and function verbatim from kit commit `e9f3325`, only the four SSO constants set to the lab's) and the two requests by hand |
 | `kc-events.sh` | Keycloak's events since a time, read-only through the admin API from the host (the admin password on stdin, the token through a pipe) |
 | `lldap-membership.sh` | S1's: one lldap group membership added or removed on services (lldap's admin password on stdin) |
@@ -276,7 +277,8 @@ harness/field/run.sh --profile kill-loop --ref plan-12   # SW-3's kill loop (lab
 | `klldap-swap` | nightly, weekly | mit, rust | klldap (not reset; the leg cleans its own artifacts) | f-F3-mit (mit leg), f-F3 (rust leg) | about 4 min (mit) and 8 min (rust) with BuildKit's cache warm; much longer cold (see below) |
 | `kdc-profile` | weekly; on demand with `--only upgrade,kdc-profile` for a change to how kdc.conf is read | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it, its kdc.conf restored after each cell | none: the CF cells' first record | about 6 / 6 min |
 | `kdb-writes` | weekly; on demand with `--only upgrade,kdb-writes` for a change to how the store writes | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it, its scratch principals and policies removed at the end | none: the SW cells' first record | about 1 / 1 min |
-| `ticket-flags` | weekly, after `kdb-writes` and before `pkinit`; on demand with `--only upgrade,ticket-flags` | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it; scratch principals and policies removed; `kadmin/changepw`'s PWCHANGE flag restored | none: the TF cells' first record | first run not yet timed |
+| `ticket-flags` | weekly, after `kdb-writes` and before `client-tools`; on demand with `--only upgrade,ticket-flags` | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it; scratch principals and policies removed; `kadmin/changepw`'s PWCHANGE flag restored | none: the TF cells' first record | first run not yet timed |
+| `client-tools` | weekly, after `ticket-flags` and before `pkinit`; on demand with `--only upgrade,client-tools` | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it; in the rust leg kdc's build of our client programs is piped to client2's `~/ct/bin`; scratch principals removed | none: the CT cells' first record | first run not yet timed |
 | `pkinit` | weekly; on demand with `--only upgrade,pkinit` for a change to PKINIT | mit, rust | client2: `$PK_SNAPSHOT_CLIENT2` when set (reset), else as it stands; kdc as `upgrade` left it, the L6 certificates made on it for the run (`lib/l6-certs.sh`) and client2's piped there, its kdc.conf restored after | none: the PK cells' first record | about 2 / 2 min |
 | `kpasswd` | weekly, last but `replica` and `install` (on a leg that allows it, it changes krbtgt's and kadmin/changepw's keys); on demand with `--only upgrade,kpasswd` for a change to kpasswd or chpass | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it | none: the KH cells' first record | about 2 / 2 min |
 | `rollback` | weekly, last but `replica` and `install` (it leaves kdc on MIT, and `replica` resets it); on demand with `--only upgrade,rollback` | mit, rust | kdc as `upgrade` left it, on MIT afterwards; client2: `f4-mit` / `rust-ssh` as the run left it | none: SW-2's export bar, docs/install.md "Going back to MIT" | about 1 / 3 min (estimate; the rust leg's dnf install from the mirrors) |
@@ -473,6 +475,16 @@ would remove it.
   (etype 20) with MIT's kinit against this leg's KDC. Scratch principals and
   policies are removed at the end, and `kadmin/changepw`'s
   password-changing-service flag is restored, also when the scenario stops early.
+- **`client-tools.sh`** (CT, client2's kinit, klist, kvno, kdestroy, ktutil and kswitch:
+  MIT's, and in the rust leg ours from kdc's build, run by path): the satomlin kit's calls
+  on FILE: caches and on the default `FILE:/tmp/krb5cc_%{uid}`, `kinit -k -t` with `-c` and
+  with `KRB5CCNAME`, `klist -k` as the kit parses it. Each request kinit and kvno send goes
+  through `scripts/lib/kdc-req-proxy.py` on client2 (request shapes only), and ours are
+  compared with MIT's. Also: MIT's klist and kvno on our caches and ours on MIT's, DIR:
+  collections and kswitch, ktutil's v1 and v2 keytabs (`lib/kt-records.py`), `+needchange`,
+  and the refusals in MIT's text. The rows run with `LC_ALL=C`, since MIT's klist dates
+  follow the locale and ours print the C locale's; one INFO pair records the session's own
+  locale. Scratch principals are removed at the end.
 - **`kpasswd.sh`** (KH, client2 against kdc's 464; `lib/setpw.py` drives MIT's
   libkrb5): admin/admin sets a fresh principal's password (0, kvno + 1); an
   unprivileged user is refused (5, kvno kept); a self change with a changepw
@@ -619,9 +631,10 @@ scenario, never by editing an `.expect` so the red passes.
 The run holds the lab lock (*Field runs* above), so one runs at a time, and its
 host checks (`post.host.tmp`, `post.secret.scan`) must stay green.
 
-**Before a release re-pass**, a burn-in of seven consecutive nightly runs on the
-branch the release is cut from (each night's tip, its sha recorded) plus one
-weekly, all green, is the gate; a REGRESSION stops it and becomes a package. It is
+**After the release re-pass**, a burn-in of seven consecutive nightly runs on the
+frozen release candidate (the same sha every night) plus one weekly (the re-pass's
+weekly counts), all green, is the last gate before the cut. Any change to the
+candidate restarts it, and a REGRESSION stops it and becomes a package. It is
 calendar time, dispatched like any other run.
 
 **No timer, by design.** A standing constant keeps the daemons, the systemd units

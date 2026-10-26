@@ -458,7 +458,7 @@ def reqs_only(rows: list[dict], msg_type: int | None = None) -> list[dict]:
 
 
 # kinit -R is a TGS RENEW; kvno* are TGS. Everything else is AS.
-_TGS_FLOWS = frozenset({"renew", "kvno_plain", "kvno_s4u", "kvno_u2u"})
+_TGS_FLOWS = frozenset({"renew", "validate", "kvno_plain", "kvno_s4u", "kvno_u2u"})
 
 
 def expected_msg(flow: str) -> int:

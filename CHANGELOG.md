@@ -122,6 +122,7 @@ any other `###` heading.
 ### Tests and CI
 
 - **field.** Weekly ticket-flags after kdb-writes: expiry, flags, renew, postdate, policy, aes-sha2.
+- **field.** Weekly client-tools: our kinit, klist, kvno, kdestroy, ktutil and kswitch beside MIT's on client2, with request shapes and crossed caches and keytabs.
 - **field.** `ad-trust` (`run.sh ad-trust`, recorded DC) does an AD ssh login, KERBER.TEST users at SMB and LDAP, the DC's SPNEGO Apache, then undoes those changes.
 - **kdc.** The listener test separates a TCP socket from a UDP socket on one port.
 - **gss.** The nightly gate checks both acceptors' host-ticket lifetimes agree within 60 s.
