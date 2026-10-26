@@ -11,7 +11,7 @@ use nix::sys::termios::{LocalFlags, SetArg, tcgetattr, tcsetattr};
 use zeroize::Zeroize;
 
 /// A terminal stdin is put back in line mode, with echo and its signal keys on.
-// MIT readline; see docs/parity/a4-kadmin.md
+// MIT: `readline` (util/ss/listen.c:32-50)
 pub fn line_mode() {
     let stdin = io::stdin();
     if let Ok(mut mode) = tcgetattr(&stdin) {
@@ -51,8 +51,8 @@ thread_local! {
 
 #[must_use = "the signals are caught only while the catch lives"]
 /// `SIGINT` during a read is returned, instead of ending the process.
-// MIT catch_signals; see docs/parity/b1-client.md
-// MIT ss_listen; see docs/parity/a4-kadmin.md
+// MIT: `catch_signals` (lib/krb5/os/prompter.c:134-146)
+// MIT: `ss_listen` (util/ss/listen.c:67-169)
 pub struct SignalCatch {
     added: SigSet,
 }

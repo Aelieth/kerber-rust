@@ -13,7 +13,6 @@ pub struct LongOpt {
 }
 
 /// A leading plus in the optstring stops at the first operand.
-/// # Errors
 pub fn getopt(
     args: &[String],
     optstring: &str,

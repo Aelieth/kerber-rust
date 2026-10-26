@@ -23,7 +23,7 @@ impl MitOpt {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-// MIT main; see docs/parity/a4-kadmin.md
+// MIT: `main` (kadmin/cli/ss_wrapper.c:41-77)
 pub enum Placement {
     Anywhere,
     Leading,
@@ -36,14 +36,13 @@ pub struct MitArgs {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-// MIT ARG_VAL; see docs/parity/a4-kdb.md
+// MIT: `ARG_VAL` (kadmin/dbutil/kdb5_util.c:160-160)
 pub enum ArgError {
     #[error("option {0} requires an argument")]
     MissingValue(&'static str),
 }
 
 impl MitArgs {
-    /// # Errors
     pub fn parse(
         args: &[String],
         table: &[MitOpt],

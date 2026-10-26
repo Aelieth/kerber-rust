@@ -7,9 +7,9 @@ use zeroize::{Zeroize, Zeroizing};
 use crate::stdin::{LineEnd, SignalCatch, Stdin, fgets};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-// MIT KRB5_LIBOS_CANTREADPWD; see docs/parity/b1-client-preauth.md
-// MIT KRB5_LIBOS_BADPWDMATCH; see docs/parity/b1-client.md
-// MIT KRB5_LIBOS_PWDINTR; see docs/parity/b1-client-preauth.md
+// MIT: `KRB5_LIBOS_CANTREADPWD` (lib/krb5/error_tables/krb5_err.et:176-176)
+// MIT: `KRB5_LIBOS_BADPWDMATCH` (lib/krb5/error_tables/krb5_err.et:177-177)
+// MIT: `KRB5_LIBOS_PWDINTR` (lib/krb5/error_tables/krb5_err.et:178-178)
 pub enum PromptError {
     #[error("Cannot read password")]
     CantRead,
@@ -52,13 +52,11 @@ impl<R: BufRead, W: Write> Prompter<R, W> {
     }
 
     /// A hidden prompt clears `ECHO` and `ECHONL` on a terminal and restores them after.
-    /// # Errors
-    // MIT krb5_prompter_posix; see docs/parity/b1-client.md
+    // MIT: `krb5_prompter_posix` (lib/krb5/os/prompter.c:32-125)
     pub fn hidden(&mut self, prompt: &str) -> Result<Zeroizing<Vec<u8>>, PromptError> {
         self.hidden_with(None, prompt, usize::MAX)
     }
 
-    /// # Errors
     pub fn hidden_with(
         &mut self,
         banner: Option<&str>,
@@ -110,7 +108,6 @@ impl<R: BufRead, W: Write> Prompter<R, W> {
         }
     }
 
-    /// # Errors
     pub fn password(
         &mut self,
         prompt: &str,
@@ -129,13 +126,11 @@ impl<R: BufRead, W: Write> Prompter<R, W> {
     }
 }
 
-/// # Errors
 pub fn prompt_hidden(prompt: &str) -> Result<Zeroizing<Vec<u8>>, PromptError> {
     Prompter::stdio().hidden(prompt)
 }
 
-/// # Errors
-// MIT krb5_read_password; see docs/parity/b1-client.md
+// MIT: `krb5_read_password` (lib/krb5/os/read_pwd.c:41-77)
 pub fn read_password(
     prompt: &str,
     verify: Option<&str>,
@@ -148,7 +143,7 @@ struct EchoOff {
 }
 
 impl EchoOff {
-    // MIT setup_tty; see docs/parity/b1-client.md
+    // MIT: `setup_tty` (lib/krb5/os/prompter.c:159-189)
     fn on_stdin() -> Result<Option<Self>, PromptError> {
         let stdin = io::stdin();
         if !stdin.is_terminal() {
@@ -168,7 +163,7 @@ impl EchoOff {
 }
 
 impl Drop for EchoOff {
-    // MIT restore_tty; see docs/parity/b1-client.md
+    // MIT: `restore_tty` (lib/krb5/os/prompter.c:192-207)
     fn drop(&mut self) {
         let _ = tcsetattr(io::stdin(), SetArg::TCSANOW, &self.saved);
     }
