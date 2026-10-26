@@ -467,7 +467,12 @@ would remove it.
   principal twice, `swlock` fails twice more and kadmind writes once more:
   `getprinc` shows five failed attempts, so no kadmind write puts a stale count
   back over the KDC's. A `cpw` the principal's policy refuses leaves its keys,
-  and the next `cpw -randkey` changes them. The scratch principals and policies
+  and the next `cpw -randkey` changes them. A KD block checks `kdb5_util dump`'s
+  POSIX-ERE name filter. A KA block checks kadmin as MIT has it: `getprivs`
+  names all four privileges whoever asks; a principal with no `kadm5.acl` line
+  is refused in MIT's words; `cpw -keepold` keeps every key version for an admin
+  and five for a principal changing its own; `kadmin.local` parses and refuses
+  dates and intervals as MIT's getdate does. The scratch principals and policies
   go at the end, also when the scenario stops early.
 - **`ticket-flags.sh`** (TF, MIT kinit and kadmin from client2): principal, password
   and server expiry; forwardable, proxiable, renewable and postdate, and the flag
