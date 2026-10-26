@@ -52,7 +52,6 @@ Rows: [OTP](gates-otp.md).
 | scripts/cross-kdc-gate.sh | MIT | `ci:harness-2` | fail-red | one identical dump; MIT `krb5kdc` :88 and Rust KDC :8888: a TGT issued by either KDC is accepted by the other's TGS (`kvno` both ways); the TGT enc-part etype (`klist -e`) is the same on both KDCs; with no AD data (no `domain_sid`) the AS TGT's, the TGS and AS service tickets' and S4U2Self's PAC is MIT's buffer for buffer (`pac_layout`), the AS tickets are MIT's size, and one MIT TGT renewed by each KDC keeps the same PAC bytes; a cross-realm S4U2Self (`kvno -I`) both ways with OTHER.TEST, an MIT db2 realm: for its user either KDC's last hop gives MIT's PAC, and for a KERBER.TEST user MIT's last hop takes either KDC's referral |
 | scripts/cross-realm-gate.sh | MIT | `ci:mit-extra` | fail-red | MIT `kinit` + `kvno host/svc.other.test@OTHER.TEST`: `klist` has `krbtgt/OTHER.TEST` and the host ticket |
 | `scripts/differential-gate.sh` | MIT | `ci:harness-2` | fail-red | same AS/TGS bytes to Rust and MIT on one dump (diffsend encodes each case once): stable-rep / error-code compare; diffsend rc 0 and all 123 cases `"outcome":"ok"` (`DIFFSEND_RATCHET=123`; any mismatch is red); a `"whitelist"` key is red |
-| `scripts/expire-gate.sh` | MIT | `ci:harness-2` | fail-red | MIT `kinit` vs Rust KDC after `modprinc -expire`/`-pwexpire`/`+needchange`: NAME_EXP vs KEY_EXPIRED; TGS `kvno` after client expiry; `kinit -S kadmin/changepw`; `+needchange` KEY_EXPIRED |
 | `scripts/flags-gate.sh` | MIT | `ci:harness-2` | fail-red | MIT `modprinc` +flag then `kinit`/`kvno`/`klist -f`: ALL_TIX revoked; no `F` when DISALLOW_FORWARDABLE; `O` when OK_AS_DELEGATE; DISALLOW_SVR `kvno` error matches `user2user`, `MUST_USE_USER2USER`, `KDC policy` or `cannot accommodate`; TGT_BASED POLICY; REQUIRES_HW_AUTH `kinit` trace has `Received error from KDC:.*Additional pre-authentication required` |
 | `scripts/getprivs-gate.sh` | MIT | `ci:harness-2` | fail-red | MIT `kadmin getprivs` vs Rust kadmind ACL: the admin (`*`) and an actor whose ACL is `i` alone both print `INQUIRE` (or `GET`), `ADD` and `MODIFY`; the `i` actor's `cpw -randkey` is refused as AUTH_CHANGEPW (`change-password`), not AUTH_GET |
 | scripts/gss-gate.sh | MIT | `ci:harness` | fail-red | MIT `libgssapi_krb5` initiator vs `krb5-gss-accept`: unwrap of `hello-from-mit-gss`; `GSS_C_DELEG_FLAG` both directions names `user@KERBER.TEST`; MIT SPNEGO handshake (`gss-accept spnego mic ok`, `gss-accept spnego peer mic ok`); MIT `gss_wrap_iov` unwraps on the Rust acceptor (with `SIGN_ONLY` through Rust `unwrap_iov`); Rust `wrap_iov` / MIT `gss_unwrap_iov`; MIT DCE `wrap_iov` → Rust and → MIT unwrap; inquire lifetime > 0; replayed AP-REQ is 34 on both (MIT KRB-ERROR 34 `Request is a replay`; Rust `accept_sec_context: KRB-ERROR 34: authenticator replay`); direction/filler/EC mutations rejected on both acceptors |
@@ -91,7 +90,6 @@ Rows: [OTP](gates-otp.md).
 | `scripts/samba-pac-l2-gate.sh` | Samba | `peers:peers` | nightly | a realm with an AD identity (`domain_sid`); vendored Samba `kcrypto` 6/7/16/19 (L2): recompute; a type-6 MAC byte flip, and a pre-PAC EncTicketPart byte flip (type 16's signed bytes), → `L2_MISMATCH` |
 | `scripts/samba-pac-verify-gate.sh` | Samba | `peers:peers` | nightly | a realm with an AD identity (`domain_sid`); Samba decode of a Rust PAC (L1): all nine buffers of `pac_l1.py`'s `NEED` (`L1_OK`); a dummy requester SID fails |
 | `scripts/samba-realtrust-gate.sh` | Samba | `peers:peers` | nightly | `samba-tool domain trust create` + reverse PAC: reverse LOGON_INFO SID/RID = live Samba-A `kbruser` `objectSid` |
-| scripts/sha2-gate.sh | MIT | `ci:mit-extra` | fail-red | MIT `kinit`/`kvno` etype 20 vs Rust KDC: `klist -e` names `aes256-cts-hmac-sha384-192` |
 | `scripts/spake-gate.sh` | MIT | `ci:mit-extra` | fail-red | MIT `kinit` `pa_type` 151 / group 2 vs Rust KDC: TRACE `Preauth module spake (151) (real) returned: 0/Success` + group 2; `klist` `user@KERBER.TEST`; then MIT `kinit` with its default group vs Rust KDC with Fedora's SPAKE settings: challenge group 1 in the 25, e-data `[136, 19, 151, 2, 133]`, `[133, 151, 150, 149]`, AS-REP `[19]` |
 
 ## Notes by gate
@@ -223,10 +221,12 @@ not check (a unit test, or "not asserted").
   PAC checksums of an issued ticket. **Transited flag:** the full
   flag-word compare holds `TRANSITED_POLICY_CHECKED` (bit 12) to MIT's in
   `as-success` and `tgs-success`.
-- `scripts/expire-gate.sh` — MIT `kinit` NAME_EXP vs KEY_EXPIRED;
-  `kinit -S kadmin/changepw` on a password-expired client; TGS `kvno` after
-  client `-pwexpire`/`-expire` still succeeds; `modprinc +needchange` is
-  `KEY_EXPIRED` unless the server is `PWCHANGE_SERVICE`.
+- `ticket-flags.sh` `TF.expire.kinit`, `TF.pw.kinit`, `TF.pw.changepw`,
+  `TF.tgs.pw.kvno`, `TF.tgs.acct.kvno`, `TF.need.kinit`, `TF.need.changepw` —
+  MIT `kinit` NAME_EXP vs KEY_EXPIRED; `kinit -S kadmin/changepw` on a
+  password-expired client; TGS `kvno` after client `-pwexpire`/`-expire`
+  still succeeds; `modprinc +needchange` is `KEY_EXPIRED` unless the server
+  is `PWCHANGE_SERVICE`.
 - `scripts/flags-gate.sh` — MIT `modprinc` DISALLOW_*/OK_AS_DELEGATE/
   REQUIRES_HW_AUTH then `kinit`/`kvno`/`klist -f`.
 - `scripts/getprivs-gate.sh` — MIT `kadmin getprivs` prints `INQUIRE` (or
@@ -487,11 +487,10 @@ not check (a unit test, or "not asserted").
   `samba-tool domain trust create` (fail with images present is `exit 1`);
   both-direction `kvno`; reverse Rust service PAC LOGON_INFO SID/RID equals
   live Samba-A `kbruser` `objectSid`. Missing images `exit 2`.
-- scripts/sha2-gate.sh — a live MIT 1.22.2 gate. It copies the Rust KDC
-  into the MIT image, points `KRB5_CONFIG` at `/etc/krb5-sha2.conf` (etype
-  20 only), and requires `kinit`/`kvno`/`klist -e` to name
-  `aes256-cts-hmac-sha384-192`. Without Docker, `provenance.sh` exits 2
-  (`docker not available`) before the gate's own `exit 1`.
+- `ticket-flags.sh` `TF.sha2.krbtgt`, `TF.sha2.host` — MIT `kinit`/`kvno`
+  with only etype 20. The krbtgt session key and the host ticket key are
+  `aes256-cts-hmac-sha384-192`. The TGT ticket key stays the long-term
+  sha1 key.
 - `scripts/spake-gate.sh` — runs MIT `kinit` against the Rust KDC with
   `preferred_preauth_types = 151` and `spake_preauth_groups = P-256`. It
   fails unless TRACE contains `Preauth module spake (151) (real) returned: 0/Success`

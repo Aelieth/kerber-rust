@@ -22,7 +22,7 @@ def _self_test_ledger() -> None:
     ledger_ok = (
         "| MIT file:line | check | MIT | Rust | e_text | verdict | proof |\n"
         "| --- | --- | --- | --- | --- | --- | --- |\n"
-        "| kdc_util.c:1 | x | y | z | w | exact | diffsend `unknown-cname`; `scripts/expire-gate.sh` |\n"
+        "| kdc_util.c:1 | x | y | z | w | exact | diffsend `unknown-cname`; `scripts/kdcpolicy-gate.sh` |\n"
         "| kdc_util.c:2 | x | y | z | w | absent | proposed: diffsend `no-such-case`; proposed kdc-lookaside-gate.sh |\n"
     )
     check_ledger_proof_column(ledger_ok)

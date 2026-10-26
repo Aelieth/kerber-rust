@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # MIT 1.22.2 modprinc +flag vs Rust KDC: DISALLOW_* / OK_AS_DELEGATE /
-# REQUIRES_HW_AUTH / NO_AUTH_DATA_REQUIRED / PWCHANGE_SERVICE already in
-# expire-gate. Isolated: never touches host /etc/krb5.conf.
+# REQUIRES_HW_AUTH / NO_AUTH_DATA_REQUIRED. PWCHANGE_SERVICE is ticket-flags.
+# Isolated: never touches host /etc/krb5.conf.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"

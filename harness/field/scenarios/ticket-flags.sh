@@ -12,7 +12,7 @@
 #   lib/kadm5/srv/server_misc.c check_against_policy 81-100 (length, classes).
 #   lib/kadm5/chpass_util.c KADM5_PASS_TOOSOON 213-228. History and lockout are kadm5 policy on kinit.
 #   The policy dump and load of the history TL is not in this scenario.
-#   sha2-gate.sh: MIT kinit/kvno with only etype 20. The session key and the ticket key
+#   TF.sha2: MIT kinit/kvno with only etype 20. The session key and the ticket key
 #   of krbtgt and of the host are both aes256-cts-hmac-sha384-192. Both legs are the two
 #   KDCs. Our kinit is TF-2.
 #   kvno uses the ccache (kvno.c krb5_get_credentials). The flag rows kinit into a
@@ -286,7 +286,7 @@ kadm TF.hist.2 'changed' 'cpw -pw Hist-pw2 tfhist'
 kadm TF.hist.reject "Cannot reuse password" 'cpw -pw Hist-pw1 tfhist'
 kadm TF.hist.allow 'changed' 'cpw -pw Hist-pw0 tfhist'
 
-section "TF.sha2 MIT kinit and kvno with only etype 20 (sha2-gate.sh, this leg's KDC)"
+section "TF.sha2 MIT kinit and kvno with only etype 20 (this leg's KDC)"
 check TF.sha2.sess 'Attribute set for principal' run kdc "sudo kadmin.local -q 'setstr krbtgt/$REALM session_enctypes \"aes256-cts-hmac-sha384-192 aes256-cts-hmac-sha1-96 aes128-cts-hmac-sha1-96\"' 2>&1"
 check TF.sha2.hostkey 'Key for .* randomized' run kdc "sudo kadmin.local -q 'cpw -randkey -keepold -e aes256-cts-hmac-sha384-192:normal $H' 2>&1"
 check TF.sha2.key 'session_enctypes: aes256-cts-hmac-sha384-192' run kdc "sudo kadmin.local -q 'getstrs krbtgt/$REALM' 2>&1"

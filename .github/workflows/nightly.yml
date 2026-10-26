@@ -148,9 +148,6 @@ jobs:
       - name: "iprop-gate (MIT kpropd -A vs Rust kadmind + serial-delta)"
         if: ${{ matrix.group == 'harness-2' && (success() || failure()) }}
         run: ./scripts/iprop-gate.sh
-      - name: "expire-gate (MIT kinit NAME_EXP / KEY_EXPIRED / PWCHANGE_SERVICE)"
-        if: ${{ matrix.group == 'harness-2' && (success() || failure()) }}
-        run: ./scripts/expire-gate.sh
       - name: "kdcpolicy-gate"
         if: ${{ matrix.group == 'harness-2' && (success() || failure()) }}
         run: ./scripts/kdcpolicy-gate.sh
@@ -205,9 +202,6 @@ jobs:
       - name: "rust-kpasswd-mit-gate"
         if: ${{ matrix.group == 'mit-extra' && (success() || failure()) }}
         run: ./scripts/rust-kpasswd-mit-gate.sh
-      - name: "sha2-gate"
-        if: ${{ matrix.group == 'mit-extra' && (success() || failure()) }}
-        run: ./scripts/sha2-gate.sh
       - name: "rc4-session-gate"
         if: ${{ matrix.group == 'mit-extra' && (success() || failure()) }}
         run: ./scripts/rc4-session-gate.sh

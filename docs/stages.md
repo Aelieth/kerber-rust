@@ -99,7 +99,7 @@ before it counts as done:
 
 | Phase | Delivers |
 | --- | --- |
-| **G1** | **Faithfulness — landed.** Principal/password expiration, stored `DISALLOW_*` / `OK_AS_DELEGATE` / `REQUIRES_HW_AUTH` / `NO_AUTH_DATA_REQUIRED`, real `GET_PRIVS`, iprop/kpropd ACLs. Gates: `expire-gate`, `flags-gate`, `getprivs-gate`, `prop-acl-gate` |
+| **G1** | **Faithfulness — landed.** Principal/password expiration, stored `DISALLOW_*` / `OK_AS_DELEGATE` / `REQUIRES_HW_AUTH` / `NO_AUTH_DATA_REQUIRED`, real `GET_PRIVS`, iprop/kpropd ACLs. Gates: `ticket-flags`, `flags-gate`, `getprivs-gate`, `prop-acl-gate` |
 | **G2** | **Renewal & postdating — landed.** `kinit -R`, MAY-POSTDATE / POSTDATED / VALIDATE, the PROXIABLE flag. Gates: `renew-gate`, `postdate-gate` |
 | **G3** | **kadmin completeness — landed.** `getprinc` key metadata, `EXTRACT_KEYS` (`ktadd -norandkey`), PURGEKEYS, SETKEY, GET/SET_STRINGS. Gate: `kadmin-rust-gate`, `kadmin-mit-gate`. MIT `*`/`x` do not grant extract (`e`). SETKEY is unit-tested (no MIT `setkey` verb) |
 | **G4** | **iprop fidelity — landed.** Incremental kdbe carries string-attrs / history / policy / lockout; ulog persists across master restart. Gates: `iprop-gate`, `differential-gate` |
