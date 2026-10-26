@@ -135,6 +135,34 @@ observelast obs.testB.ad-error '(KDC policy rejects request|Generic error \(see 
 check testB.modprinc '^Attributes: REQUIRES_PRE_AUTH NO_AUTH_DATA_REQUIRED$' run kdc 'sudo kadmin.local -q "modprinc +no_auth_data_required krbtgt/AD.KERBER.TEST@KERBER.TEST"; sudo kadmin.local -q "getprinc krbtgt/AD.KERBER.TEST@KERBER.TEST" | grep -E "^(Attributes|Key)"'
 check testB.kvno '^cifs/test-server\.ad\.kerber\.test@AD\.KERBER\.TEST: kvno = [0-9]+$' runin client2 "user@$REALM's password ($KUSER)" "$RAENV; export KRB5CCNAME=FILE:\$HOME/ra/user2.cc; kinit user@$REALM > /dev/null && kvno cifs/test-server.ad.kerber.test@AD.KERBER.TEST" < <(once "$KUSER")
 
+section "RA0. TG-1, in Test B's window: kvno host/test-server@AD.KERBER.TEST through the trust, referrals on (get_creds.c:563-591); if AD answers under another name that is no TGT, MIT says so and asks again without referrals: MIT's kvno, then in the rust leg ours"
+EV=
+if [ "$LEG" = rust ]; then
+    b=kerber-rust-${FIELD_SHA:0:12}/target/release/krb5-kvno
+    check tg1.ours.build '^[0-9a-f]{64}$' run kdc "sha256sum < ~/$b | cut -c1-64"
+    h=$(grep -m1 -oE '^[0-9a-f]{64}$' "$LAST_OUT")
+    check tg1.ours.copy "^client2: ~/ra/kvno ${h:-none}\$" host "$LABQ ssh kdc -- 'cat ~/$b' | $LABQ ssh client2 -- 'cat > ~/ra/kvno && chmod 0755 ~/ra/kvno && echo \"client2: ~/ra/kvno \$(sha256sum < ~/ra/kvno | cut -c1-64)\"'"
+    [ -n "$h" ] && grep -q "^client2: ~/ra/kvno $h\$" "$LAST_OUT" && EV="\$HOME/ra/kvno"
+fi
+TG1RW=
+for k in mit ${EV:+ours}; do
+    kv=kvno
+    [ "$k" = ours ] && kv=$EV
+    # The trace stays on client2; only the referral loop's step lines are recorded.
+    check "tg1.kvno.$k" '^host/test-server@AD\.KERBER\.TEST: kvno = [0-9]+$' runin client2 "user@$REALM's password ($KUSER)" "$RAENV; export KRB5CCNAME=FILE:\$HOME/ra/tg1-$k.cc; kinit user@$REALM > /dev/null && KRB5_TRACE=\$HOME/ra/tg1-$k.trace $kv host/test-server@AD.KERBER.TEST" < <(once "$KUSER")
+    run client2 "grep -oE '(Requesting tickets for|Received non-TGT referral response|Received TGT referral back to same realm|Retrying TGS request with desired service ticket enctypes|Received creds for desired service).*' ~/ra/tg1-$k.trace | tee ~/ra/tg1-$k.steps"
+    [ "$k" = mit ] && grep -q '^Received non-TGT referral response' "$LAST_OUT" && TG1RW=1
+done
+observe obs.tg1.ad '^(AD (rewrote the server name: .*|answers under the requested name)|MIT got no ticket)$' run client2 "n=\$(sed -n 's/^Received non-TGT referral response (\\([^)]*\\)).*/\\1/p' ~/ra/tg1-mit.steps | head -n 1); if [ -n \"\$n\" ]; then echo \"AD rewrote the server name: \$n\"; elif grep -q '^Received creds for desired service' ~/ra/tg1-mit.steps; then echo 'AD answers under the requested name'; else echo 'MIT got no ticket'; fi"
+if [ -n "$EV" ]; then
+    # MIT's retry is the row; with no rewrite the comparison is recorded only.
+    if [ -n "$TG1RW" ]; then
+        check tg1.same '^same steps: [0-9]+ \(referrals off: [1-9][0-9]*\)$' run client2 "cmp -s ~/ra/tg1-mit.steps ~/ra/tg1-ours.steps && echo \"same steps: \$(wc -l < ~/ra/tg1-mit.steps) (referrals off: \$(grep -c 'referrals off\$' ~/ra/tg1-mit.steps))\""
+    else
+        observe obs.tg1.same '^same steps: .*' run client2 "if cmp -s ~/ra/tg1-mit.steps ~/ra/tg1-ours.steps; then echo \"same steps: \$(wc -l < ~/ra/tg1-mit.steps)\"; else echo 'same steps: no'; fi"
+    fi
+fi
+
 section "SB.ad-user-in (RA1): kbruser@AD.KERBER.TEST logs into client2's sshd (gssapi-with-mic) as the local kbruser"
 check in.sshd '^gssapiauthentication yes$' run client2 'printf "%s\n" "GSSAPIAuthentication yes" "GSSAPICleanupCredentials yes" "GSSAPIStrictAcceptorCheck no" | sudo install -m 0600 /dev/stdin /etc/ssh/sshd_config.d/49-kerber-ad-gssapi.conf && sudo sshd -t && sudo systemctl reload sshd && sudo sshd -T | grep -E "^gssapi(authentication|strictacceptorcheck)"'
 # The local account joins whichever local groups sshd's AllowGroups names (rust-ssh's kit allows "admins" only).
