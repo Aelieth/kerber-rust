@@ -27,7 +27,8 @@ kerber-rust stays Apache-2.0 OR MIT; `publish = false`.
 | Crate | Status |
 | --- | --- |
 | `nix` | **0.31** on both sides (klldap resolves 0.31.3) |
-| chrono 0.4, thiserror 2, tracing 0.1, sha2/hmac/md-5 0.10, zeroize 1, getrandom 0.2, serde 1 | already the same major |
+| chrono 0.4, thiserror 2, tracing 0.1, zeroize 1, getrandom 0.2, serde 1 | already the same major |
+| sha2, hmac, md-5 | a RustCrypto generation apart (see below): KLLDAP 0.10.9 / 0.12.1 / 0.10.6, kerber-rust 0.11.1 / 0.13.0 / 0.11.0 |
 | rasn, aes/des/rc4/camellia/cmac, p256, md4, pbkdf2 | kerber-only (additive) |
 
 P-384 needs `--cfg p384_backend="fiat"` in klldap's own build too (its `.cargo/config.toml`:
@@ -40,15 +41,20 @@ field, which is not constant-time.
 checked-in `tests/traces/mit-*.der`. Dual `getrandom` 0.2/0.4 remains
 via `rasn-derive-impl` → `uuid` (proc-macro only).
 
-A scratch path-dep of `krb5-kdc` into klldap `crates/kerberos`, then
-`cargo tree -d`, showed **no new runtime duplicate major**. The klldap tree
-was reverted; nothing was committed there.
+kerber-rust has since moved to the newer RustCrypto generation (sha2 0.11.1,
+hmac 0.13.0, md-5 0.11.0); KLLDAP 0.7.6 is on the older (sha2 0.10.9, hmac 0.12.1,
+md-5 0.10.6). A co-build therefore compiles both generations of these three, which
+is build size only: nothing crosses `KerberosSync`, which passes `&str`, `String`,
+`bool` and `Result<_, String>`, so there is no type conflict and no behaviour
+change. The earlier scratch path-dep + `cargo tree -d` that showed no duplicate
+predates the bump; rerun it when KLLDAP wires the dependency.
 
 ## Drift guard
 
-When either tree bumps a shared crate, the other follows the same
-generation. Optional check: co-located checkouts, temporary path-dep,
-`cargo tree -d`, revert.
+When either tree bumps a shared crate, the other follows the same generation.
+kerber-rust is currently a generation ahead on sha2 / hmac / md-5; realigning
+KLLDAP is a KLLDAP-side item below. Optional check: co-located checkouts, a
+temporary path-dep, `cargo tree -d`, revert.
 
 ## What KLLDAP runs today
 
@@ -77,7 +83,7 @@ container's non-loopback address.
 KLLDAP reaches its KDC through the `KerberosSync` trait
 (klldap's `domain-handlers` crate, `src/kerberos.rs`), registered with
 `set_kerberos_backend`; errors are `String`. The embed implements it over
-kerber-rust's `PrincipalStore`, so the directory stays the writer:
+kerber-rust's `PrincipalStore`, so the directory stays the writer; its mutating seam calls run inside `PrincipalStore::change` (see [`api.md`](api.md)):
 
 | `KerberosSync` | kerber-rust (`krb5_kdc::PrincipalStore` unless named) | Note |
 | --- | --- | --- |
@@ -85,7 +91,7 @@ kerber-rust's `PrincipalStore`, so the directory stays the writer:
 | `sync_principal` (chpass, else create) | `set_password`; `create_principal_3_in` for a new user | `user@REALM`, keys per `supported_enctypes` |
 | `delete_principal` (missing is Ok) | `remove_in` | the ACL-gated `delete` is for kadmind |
 | `set_principal_enabled` | `set_status` (sets / clears `KDB_DISALLOW_ALL_TIX`) | it also writes `pw_expire`: pass the current value, and the directory's admin as the actor |
-| `export_keytab_for_keycloak` | `insert_new_randkey` when missing, then `ktadd_local_atomic` (re-keys with the principal's enctypes, writes atomically), or `chrand_etypes_keepold_in` with chosen enctypes such as aes256 + aes128 then `Keytab::write_file` | MIT's `ktadd` re-keys, so the kvno moves on every export |
+| `export_keytab_for_keycloak` | `insert_new_randkey` when missing, then `ktadd_local` (store `ktadd_local_atomic`): with `rotate` set it re-randomizes the principal's keys before extracting, `-norandkey` extracts the current keys, and the rotation persists only after the write succeeds; or `chrand_etypes_keepold_in` with chosen enctypes such as aes256 + aes128 then `Keytab::write_file` | a rotating export moves the kvno each time; `-norandkey` does not |
 | persistence | `load_store` / `save_store` (dump-v7 text + a stash in MIT keytab form) | an existing KLLDAP volume is MIT db2: migrate once with MIT `kdb5_util dump`, then `krb5-kdb load` |
 | the KDC | `bind_udp_listeners` / `bind_tcp_listeners` on `KdcConf::kdc_udp_listeners` / `kdc_tcp_listeners`, then `serve_all_until` with the embedder's shutdown flag | not `serve` / `serve_all`: those install SIGTERM / SIGINT handlers; `serve_all_until` runs MIT's one loop on the thread that calls it. Register on that store, or before open; a module registered on the process default after open is not on that store |
 
@@ -106,41 +112,15 @@ KLLDAP 0.7.6's catalog (its domain-handlers policies module, `POLICY_ITEM_CATALO
 
 ## What the embed still has to build
 
-These are larger than a release touch-up and belong to the embed or a later
-kerber-rust point release:
-
-- **One store for the KDC and the admin verbs.** The KDC serves a
-  `SharedStore` (`Arc<RwLock<dyn Store>>`); the admin verbs above are
-  methods of the concrete `PrincipalStore`, which a `SharedDump`
-  (`Arc<RwLock<PrincipalStore>>`) holds. A `SharedDump` is a `SharedStore`
-  too (`let kdc: SharedStore = dump.clone();`), so the KDC's loop and
-  kadmind's share one store and one lock. The trait writes and
-  `put_policy` / `delete_policy` commit themselves; every other write runs
-  inside `PrincipalStore::change` and is refused outside it before it touches
-  the store. A kadm5 hook runs after the write and must not take the store's
-  write guard.
-- **kadmind as a library.** `Kadmind::new` prepares the store, checks the
-  acceptor names, and takes the kpasswd key when the service set asks for it.
-  `Listeners::bind` binds the sockets, and `Kadmind::serve` runs the loop on
-  the caller's thread until a `Shutdown`. The binary's log is `KlogAdmin`;
-  an embedder passes `TracingAdmin` or its own `AdminLog`. `TracingAdmin`
-  gets one `admin` event per operation; the MIT-format line stays with klog.
-  Password-quality
-  modules and kadm5 hooks on `KadmindConfig` apply to that kadmind alone;
-  empty lists keep `register_pwqual` and `register_kadm5_hook`. Remote MIT
-  `kadmin` on 749 is that loop on a thread beside the KDC's, or
-  `krb5-kadmind` run beside KLLDAP.
-- **Bootstrap.** `bootstrap_realm_into` creates K/M, krbtgt, `kadmin/*` and a
-  random-key admin that requires pre-auth, and returns the admin keytab.
-  `create_database` writes the stash, then the lock files, then the database.
-  A re-run with a stash and no database reuses that master. A restart creates
-  nothing that is already there.
-- **`kadm5_hook`** is [`Kadm5Hook`](../../crates/krb5-kdc/src/store/kadm5_hook.rs):
-  an embedder registers a module with `register_kadm5_hook`. The directory does
-  not have to. **`kadm5_auth`** is still not implemented (`docs/parity/a4-kadmin.md`).
+The embed surface — one shared store and its `change()` lock, bootstrap and
+`open_or_create`, kadmind as a library, and the `kadm5_hook` and `kadm5_auth` interfaces — is in
+[`api.md`](api.md).
 
 ## KLLDAP-side items the embed should carry
 
+- Realign KLLDAP's RustCrypto hashes to sha2 0.11 / hmac 0.13 / md-5 0.11 (as
+  kerber-rust resolves), or accept the duplicate generation in a co-build. A
+  KLLDAP-repo change; kerber-rust only reads KLLDAP here.
 - `kdc.template.conf` sets no `max_renewable_life`, so new principals get 0 and
   tickets are not renewable (the satomlin fleet fixes each user by hand with
   `modprinc -maxrenewlife`). MIT and kerber-rust agree on that default; the
