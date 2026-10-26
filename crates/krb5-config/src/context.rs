@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 
 use super::{Error, Krb5Conf, init_profile};
 
-// MIT k5_os_init_context; see docs/parity/b1-client.md
+// MIT: `k5_os_init_context` (lib/krb5/os/init_os_ctx.c)
 #[derive(Debug)]
 pub struct ClientContext {
     pub profile: Krb5Conf,
@@ -65,7 +65,7 @@ impl ClientContext {
             .then(|| self.kdc_offset.load(Ordering::Relaxed))
     }
 
-    // MIT krb5_cc_default_name; see docs/parity/b1-client.md
+    // MIT: `krb5_cc_default_name` (lib/krb5/os/ccdefname.c)
     pub fn ccname(&self) -> Option<&str> {
         self.ccname.get_or_init(|| env("KRB5CCNAME")).as_deref()
     }

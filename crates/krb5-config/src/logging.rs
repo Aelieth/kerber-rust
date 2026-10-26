@@ -8,7 +8,7 @@ pub struct LogSpecs {
 }
 
 impl LogSpecs {
-    // MIT krb5_klog_init; see docs/parity/a3-preauth.md
+    // MIT: `krb5_klog_init` (lib/kadm5/logger.c)
     #[must_use]
     pub fn for_program(kdc: Option<&KdcConf>, krb5: Option<&Krb5Conf>, ename: &str) -> Self {
         let relations = relations(kdc, krb5);
@@ -72,7 +72,7 @@ fn json_value(relations: &[&(String, String)]) -> Option<String> {
         .map(|(_, v)| v.clone())
 }
 
-// MIT profile_parse_boolean; see docs/parity/b1-client.md
+// MIT: `profile_parse_boolean` (util/profile/prof_get.c)
 fn profile_boolean(v: &str) -> Option<bool> {
     const YES: [&str; 6] = ["y", "yes", "true", "t", "1", "on"];
     const NO: [&str; 6] = ["n", "no", "false", "nil", "0", "off"];

@@ -24,8 +24,8 @@ pub fn local_host_name(conf: &Krb5Conf) -> String {
 }
 
 // MIT: `expand_hostname` (lib/krb5/os/sn2princ.c:121-144)
-// a one-component name is qualified when DNS was not used, then lowercased, then a trailing dot removed.
-// MIT qualify_shortname; see docs/parity/a5-prop.md
+// no DNS: qualify one component, lowercase it, drop a trailing dot.
+// MIT: `qualify_shortname` (lib/krb5/os/sn2princ.c)
 #[must_use]
 pub fn expand_hostname_no_dns(
     host: &str,
@@ -92,7 +92,7 @@ pub fn sname_to_principal(
 }
 
 // MIT: `k5_canonprinc` (lib/krb5/os/sn2princ.c:279-285)
-// a name that is not a two-part host-based name with a hostname is its only candidate.
+// not a two-part host-based name with a hostname: its only candidate.
 #[derive(Debug)]
 pub struct CanonPrinc<'a> {
     conf: &'a Krb5Conf,
@@ -150,7 +150,7 @@ impl<'a> CanonPrinc<'a> {
     }
 
     // MIT: `canonicalize_princ` (lib/krb5/os/sn2princ.c:195-221)
-    // the hostname is split from its trailer, expanded only for a host-based name, and the trailer put back.
+    // trailer off, expand a host-based name only, trailer back.
     fn expand(&self) -> (String, String) {
         let host = match self.princ.1.name_string.as_slice() {
             [_, host] => String::from_utf8_lossy(host.as_bytes()).into_owned(),
@@ -194,11 +194,11 @@ impl<'a> CanonPrinc<'a> {
     }
 }
 
-// MIT krb5_get_fallback_host_realm; see docs/parity/b1-client.md
+// MIT: `krb5_get_fallback_host_realm` (lib/krb5/os/hostrealm.c)
 // MIT: `clean_hostname` (lib/krb5/os/hostrealm.c:301-310)
 // the name is lowercased and loses a trailing dot.
 // MIT: `domain_fallback_realm` (lib/krb5/os/hostrealm_domain.c:57-102)
-// an address has no answer; `realm_try_domains` suffixes with KDCs come first, then the upper-cased parent domain whether or not it is a realm, and a name with no dot has none.
+// address: no answer. KDC suffixes, then the upper-cased parent, realm or not. No dot: none.
 #[must_use]
 pub fn fallback_host_realm(conf: &Krb5Conf, host: &str) -> Option<String> {
     fallback_host_realm_traced(conf, host, &mut |_| {})
@@ -244,7 +244,7 @@ pub fn fallback_host_realm_traced(
 }
 
 // MIT: `parse_int` (util/profile/prof_get.c:288-305)
-// an empty value, an overflow, a value outside `int`, or anything after the digits is `PROF_BAD_INTEGER`.
+// empty, overflow, outside `int`, or trailing junk is `PROF_BAD_INTEGER`.
 fn parse_int(value: &str) -> Option<i32> {
     let t = value.trim_start_matches(|c: char| c.is_ascii_whitespace() || c == '\x0b');
     let digits = t.strip_prefix(['+', '-']).unwrap_or(t);
@@ -255,7 +255,7 @@ fn parse_int(value: &str) -> Option<i32> {
 }
 
 // MIT: `split_trailer` (lib/krb5/os/sn2princ.c:170-181)
-// only a single colon followed by one or more characters starts a trailer.
+// only one colon plus one or more characters starts a trailer.
 fn split_trailer(host: &str) -> (&str, &str) {
     match host.split_once(':') {
         Some((name, rest)) if !rest.is_empty() && !rest.contains(':') => {

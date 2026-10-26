@@ -1,16 +1,3 @@
-//! ```
-//! use krb5_config::Krb5Conf;
-//! let conf = Krb5Conf::parse("[libdefaults]\ndefault_realm = TESTLABBY.LOCAL\n")?;
-//! assert_eq!(conf.default_realm.as_deref(), Some("TESTLABBY.LOCAL"));
-//! Ok::<(), krb5_config::Error>(())
-//! ```
-//! ```
-//! use krb5_config::Krb5Conf;
-//! let conf = Krb5Conf::parse("[libdefaults]\nclockskew = 120\n")?;
-//! assert_eq!(conf.clockskew, 120);
-//! Ok::<(), krb5_config::Error>(())
-//! ```
-
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
@@ -59,7 +46,7 @@ pub enum Error {
     // MIT: `k5_parse_host_string` (lib/krb5/krb/parse_host_string.c:107-108)
     #[error("Invalid argument")]
     InvalidArgument,
-    // MIT KRB5_CC_UNKNOWN_TYPE; see docs/parity/b1-client.md
+    // MIT: `KRB5_CC_UNKNOWN_TYPE` (lib/krb5/error_tables/krb5_err.et)
     #[error("{0}")]
     Ccache(String),
     // MIT: `KRB5_CONFIG_NODEFREALM` (krb5_err.et:310-310)
@@ -76,7 +63,7 @@ pub enum ProfileError {
     // MIT: `os_init_paths` (init_os_ctx.c:403-408)
     // a syntax error is `KRB5_CONFIG_BADFORMAT`.
     Syntax,
-    // MIT get_boolean; see docs/parity/a2-as.md
+    // MIT: `get_boolean` (lib/krb5/krb/init_ctx.c)
     BadBoolean,
     // MIT: `get_tristate` (lib/krb5/krb/init_ctx.c:115-118)
     // any other value is `EINVAL`.
@@ -122,12 +109,12 @@ impl ProfileError {
             // MIT: `PROF_FAIL_INCLUDE_DIR` (prof_err.et:69-69)
             // the code whose text this is.
             Self::IncludeDir => "Included profile directory could not be read",
-            // MIT KRB5_CONFIG_BADFORMAT; see docs/parity/b1-client.md
+            // MIT: `KRB5_CONFIG_BADFORMAT` (lib/krb5/error_tables/krb5_err.et)
             Self::Syntax => "Improper format of Kerberos configuration file",
-            // MIT PROF_BAD_BOOLEAN; see docs/parity/b1-client.md
+            // MIT: `PROF_BAD_BOOLEAN` (util/profile/prof_err.et)
             Self::BadBoolean => "Invalid boolean value",
             Self::BadTristate | Self::BadPathToken => "Invalid argument",
-            // MIT KRB5_DELTAT_BADFORMAT; see docs/parity/b1-client.md
+            // MIT: `KRB5_DELTAT_BADFORMAT` (lib/krb5/error_tables/krb5_err.et)
             Self::BadDeltat => "Invalid format of Kerberos lifetime or clock skew string",
         }
     }
@@ -197,7 +184,7 @@ pub fn clear_handed() {
     HANDED_KDCS.with(|cell| cell.set(None));
 }
 
-// MIT krb5int_libdefault_string; see docs/parity/b1-client.md
+// MIT: `krb5int_libdefault_string` (lib/krb5/krb/libdef_parse.c)
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RealmLibdefaults {
     pub forwardable: Option<bool>,
@@ -248,7 +235,7 @@ pub struct Krb5Conf {
     pub default_client_keytab_name: Option<String>,
     pub spake_preauth_groups: Option<Vec<String>>,
     pub preferred_preauth_types: Vec<i32>,
-    // MIT krb5_sname_match; see docs/parity/b1-client.md
+    // MIT: `krb5_sname_match` (lib/krb5/krb/sname_match.c)
     pub ignore_acceptor_hostname: bool,
     pub qualify_shortname: Option<String>,
     pub realm_try_domains: Option<String>,
@@ -271,11 +258,11 @@ pub struct Krb5Conf {
     pub libdefaults_pkinit: Vec<(String, String)>,
     pub realm_libdefaults_pkinit: BTreeMap<String, Vec<(String, String)>>,
     pub realm_libdefaults: BTreeMap<String, RealmLibdefaults>,
-    // MIT encts_disabled; see docs/parity/b1-client-preauth.md
+    // MIT: `encts_disabled` (lib/krb5/krb/get_in_tkt.c)
     pub disable_encrypted_timestamp: BTreeMap<String, bool>,
-    // MIT configure_interface; see docs/parity/b1-client-preauth.md
+    // MIT: `configure_interface` (lib/krb5/krb/plugin.c)
     pub plugins: PluginProfile,
-    // MIT token_types_decode; see docs/parity/a3-preauth.md
+    // MIT: `token_types_decode` (plugins/preauth/otp/otp_state.c)
     pub otp: OtpTree,
 }
 

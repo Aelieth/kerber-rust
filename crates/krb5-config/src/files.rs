@@ -14,7 +14,7 @@ thread_local! {
     static READ: RefCell<Option<Read>> = const { RefCell::new(None) };
 }
 
-// MIT profile_open_file; see docs/parity/b1-client.md
+// MIT: `profile_open_file` (util/profile/prof_file.c)
 pub struct ReadOnce(Option<Read>);
 
 impl ReadOnce {

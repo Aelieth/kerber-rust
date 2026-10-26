@@ -413,7 +413,7 @@ fn include_dir_text(dir: &Path, stack: &mut Vec<PathBuf>) -> Result<String, Erro
     Ok(out)
 }
 
-// MIT k5_is_numeric_address; see docs/parity/a1-tgs.md
+// MIT: `k5_is_numeric_address` (lib/krb5/os/hostrealm.c)
 #[must_use]
 pub fn is_numeric_address(name: &str) -> bool {
     if name.contains(':') {
@@ -1311,7 +1311,7 @@ pub fn init_kdc_profile() -> Result<(), Error> {
 }
 
 // MIT: `locate_server` (lib/krb5/os/locate_kdc.c:823-836)
-// DNS only when the `kdc` list is empty; a `..` SRV target stays in the list.
+// DNS only when the `kdc` list is empty; a `..` SRV target stays.
 pub fn discover_kdc_in<P: AsRef<Path>>(
     paths: impl IntoIterator<Item = P>,
     realm: &str,

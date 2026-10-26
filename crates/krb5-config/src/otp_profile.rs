@@ -15,7 +15,7 @@ const BAD_INTEGER: &str = "Invalid integer value";
 const EINVAL: &str = "Invalid argument";
 
 // MIT: `profile_add_node` (util/profile/prof_tree.c:197-250)
-// a node goes after the last node whose name is not greater, a repeated subsection is the first one, and a relation is dropped when a final relation of that name is already there.
+// sort by name; a repeated subsection is the first; a final relation drops a later one.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct OtpTree {
     section_final: bool,
@@ -37,7 +37,7 @@ struct Relation {
 
 impl OtpTree {
     // MIT: `profile_node_iterator` (util/profile/prof_tree.c:518-653)
-    // a final section or subsection stops the walk at the end of its file.
+    // a final section or subsection stops the walk at that file's end.
     fn node(&self, ty: &str) -> (Option<&TypeNode>, bool) {
         let node = self.types.get(ty);
         (node, self.section_final || node.is_some_and(|n| n.is_final))
@@ -57,7 +57,7 @@ impl<'a> OtpProfile<'a> {
         }
     }
 
-    // MIT profile_get_subsection_names; see docs/parity/a3-preauth.md
+    // MIT: `profile_get_subsection_names` (util/profile/prof_get.c)
     #[must_use]
     pub fn subsection_names(&self) -> Vec<&'a str> {
         let mut out = Vec::new();
@@ -74,7 +74,7 @@ impl<'a> OtpProfile<'a> {
         out
     }
 
-    // MIT profile_get_value; see docs/parity/a3-preauth.md
+    // MIT: `profile_get_value` (util/profile/prof_get.c)
     #[must_use]
     pub fn value(&self, ty: &str, relation: &str) -> Option<&'a str> {
         for file in &self.files {
@@ -89,7 +89,7 @@ impl<'a> OtpProfile<'a> {
         None
     }
 
-    // MIT profile_get_values; see docs/parity/a3-preauth.md
+    // MIT: `profile_get_values` (util/profile/prof_get.c)
     #[must_use]
     pub fn values(&self, ty: &str, relation: &str) -> Vec<&'a str> {
         let mut out = Vec::new();
@@ -122,7 +122,7 @@ pub struct OtpType {
 
 impl OtpType {
     // MIT: `token_type_default` (plugins/preauth/otp/otp_state.c:152-166)
-    // the realm stays in the username, there are no indicators, the timeout is 5 s and there are 3 retries.
+    // the realm stays in the username; no indicators; timeout 5 s; 3 retries.
     #[must_use]
     pub fn builtin(name: &str) -> Self {
         Self {
@@ -135,7 +135,7 @@ impl OtpType {
     }
 }
 
-// MIT load_preauth_plugins; see docs/parity/a3-preauth.md
+// MIT: `load_preauth_plugins` (kdc/kdc_preauth.c)
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OtpInitError {
     pub emsg: String,
@@ -161,13 +161,13 @@ fn integer(
     }
 }
 
-// MIT token_type_decode; see docs/parity/a3-preauth.md
+// MIT: `token_type_decode` (plugins/preauth/otp/otp_state.c)
 fn token_type_decode(profile: &OtpProfile<'_>, name: &str) -> Result<OtpType, OtpInitError> {
     let strip_realm = match profile.value(name, "strip_realm") {
         None => true,
         Some(v) => mit_boolean(v).ok_or_else(|| init_error(BAD_BOOLEAN))?,
     };
-    // A `server` or `secret` relation in `[otp]` fails the section (EINVAL, MIT's order of reads). We don't run RADIUS.
+    // `server` or `secret` in `[otp]` is EINVAL (MIT's read order). No RADIUS.
     for relation in ["server", "secret"] {
         if profile.value(name, relation).is_some() {
             return Err(OtpInitError {
@@ -207,13 +207,13 @@ pub fn token_types_decode(profile: &OtpProfile<'_>) -> Result<Vec<OtpType>, OtpI
 }
 
 // MIT: `otp_state_new` (plugins/preauth/otp/otp_state.c:579-585)
-// the types come from the KDC context's profile, whose files are kdc.conf, then krb5.conf.
+// token types: kdc.conf, then krb5.conf.
 pub fn kdc_otp_types(kdc: &KdcConf, krb5: &Krb5Conf) -> Result<Vec<OtpType>, OtpInitError> {
     token_types_decode(&OtpProfile::new(&[&kdc.otp, &krb5.otp]))
 }
 
 // MIT: `parse_std_line` (util/profile/prof_parse.c:92-124)
-// the name is the text up to the first `]`, a `*` after it marks the section final, and only blanks may follow.
+// the name ends at `]`; a later `*` is final; only blanks may follow.
 pub(crate) fn section_header(line: &str) -> Option<(&str, bool)> {
     let rest = line.strip_prefix('[')?;
     let (body, after) = rest.split_once(']')?;

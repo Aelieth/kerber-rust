@@ -22,8 +22,8 @@ impl PkinitParams {
     // the realm's values, else `[kdcdefaults]`'s.
     // MIT: `pkinit_kdcdefault_string` (plugins/preauth/pkinit/pkinit_profile.c:147-167)
     // the first of those values.
-    // MIT pkinit_kdcdefault_boolean; see docs/parity/a2-as.md
-    // MIT pkinit_init_kdc_profile; see docs/parity/a3-preauth.md
+    // MIT: `pkinit_kdcdefault_boolean` (plugins/preauth/pkinit/pkinit_profile.c)
+    // MIT: `pkinit_init_kdc_profile` (plugins/preauth/pkinit/pkinit_srv.c)
     #[must_use]
     pub fn for_realm(profile: &Krb5Conf, realm: &str) -> Self {
         let realm_relations = profile.pkinit.get(realm).map_or(&[][..], Vec::as_slice);
@@ -67,7 +67,7 @@ impl PkinitParams {
 }
 
 impl Krb5Conf {
-    // MIT pkinit_libdefault_strings; see docs/parity/b1-client-preauth.md
+    // MIT: `pkinit_libdefault_strings` (plugins/preauth/pkinit/pkinit_profile.c)
     #[must_use]
     pub fn pkinit_libdefault_strings(&self, realm: &str, option: &str) -> Vec<String> {
         let values = |rels: Option<&Vec<(String, String)>>| -> Vec<String> {

@@ -1,6 +1,6 @@
 // MIT: `loop_add_addresses` (lib/apputils/net-server.c:381-433)
 // MIT: `k5_parse_host_string` (lib/krb5/krb/parse_host_string.c:70-124)
-// A `/path` entry is a UNIX-domain listener, skipped here: this port binds no UNIX sockets.
+// `/path` is a UNIX listener, skipped: this port binds none.
 // MIT: `loop_add_address` (lib/apputils/net-server.c:304-361)
 
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
@@ -15,7 +15,7 @@ pub const DEFAULT_KDC_PORTLIST: &str = "88";
 // MIT: `DEFAULT_KADM5_PORT` (include/osconf.hin:107-107)
 // kadmind's port.
 pub const KADMIND_PORT: u16 = 749;
-// MIT DEFAULT_KPASSWD_PORT; see docs/parity/b1-client.md
+// MIT: `DEFAULT_KPASSWD_PORT` (include/osconf.hin)
 pub const KPASSWD_PORT: u16 = 464;
 // MIT: `ADDRESSES_DELIM` (include/net-server.h:36-36)
 // the list separators.
@@ -244,7 +244,7 @@ impl<S: Clone> BindAddresses<S> {
 }
 
 // MIT: `parse_admin_server_port` (lib/kadm5/alt_prof.c:395-417)
-// a written port is read with `atoi`, so one that is no number is 0, and it is kept.
+// a written port is `atoi`, so a non-number is 0 and is kept.
 #[must_use]
 pub fn admin_server_port(server: &str) -> Option<i32> {
     let port = if let Some(rest) = server.strip_prefix('[')

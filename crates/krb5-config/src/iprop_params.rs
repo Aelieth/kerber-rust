@@ -19,7 +19,7 @@ pub struct IpropParams {
 }
 
 impl IpropParams {
-    // MIT kadm5_get_config_params; see docs/parity/a4-kadmin.md
+    // MIT: `kadm5_get_config_params` (lib/kadm5/alt_prof.c)
     #[must_use]
     pub fn for_realm(profile: Option<&Krb5Conf>, realm: &str, dbname: &Path) -> Self {
         let last = |name: &str| last_value(profile, realm, name);
@@ -60,7 +60,7 @@ impl IpropParams {
         Self::for_realm(profile.as_ref(), realm, dbname)
     }
 
-    // MIT kadm5_init; see docs/parity/a4-kadmin.md
+    // MIT: `kadm5_init` (lib/kadm5/srv/server_init.c)
     #[must_use]
     pub fn missing_required(&self) -> bool {
         self.enabled && self.port.is_none()
@@ -77,7 +77,7 @@ pub struct KadmindListen {
 
 impl KadmindListen {
     // MIT: `get_port_param` (lib/kadm5/alt_prof.c:342-362)
-    // a port already set stays; else the caller's, else the last value that scans as `%d`, else the default.
+    // set port stays; else the caller's; else the last `%d`; else the default.
     #[must_use]
     pub fn for_realm(profile: Option<&Krb5Conf>, realm: &str, port_arg: Option<i32>) -> Self {
         let last = |name: &str| last_value(profile, realm, name);
@@ -110,10 +110,10 @@ fn last_value<'a>(profile: Option<&'a Krb5Conf>, realm: &str, name: &str) -> Opt
         .map(|(_, v)| v.as_str())
 }
 
-// MIT KADM5_MISSING_CONF_PARAMS; see docs/parity/a4-kadmin.md
+// MIT: `KADM5_MISSING_CONF_PARAMS` (lib/kadm5/kadm_err.et)
 pub const MISSING_CONF_PARAMS: &str = "Required parameters in kdc.conf missing";
 
-// MIT string_to_boolean; see docs/parity/a2-as.md
+// MIT: `string_to_boolean` (lib/kadm5/alt_prof.c)
 fn yes_word(v: &str) -> bool {
     ["y", "yes", "true", "t", "1", "on"]
         .iter()

@@ -464,7 +464,7 @@ fn srv_targets(msg: &[u8], transport: super::KdcTransport, trace: &mut dyn FnMut
     for rec in &mut recs {
         rec.0 = mit_host(&rec.0);
     }
-    // MIT place_srv_entry; see docs/parity/b1-client.md
+    // MIT: `place_srv_entry` (lib/krb5/os/dnssrv.c)
     let mut order: Vec<usize> = (0..recs.len()).collect();
     order.sort_by(|&a, &b| recs[a].1.cmp(&recs[b].1).then(a.cmp(&b)));
     Find::Hit(
