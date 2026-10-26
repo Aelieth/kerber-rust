@@ -98,7 +98,9 @@ if [ "$LEG" = rust ]; then
     [ -n "$h" ] && grep -q "^client2: ~/ra/kinit $h\$" "$LAST_OUT" && EK="\$HOME/ra/kinit"
 fi
 check ent.px.copy '^self-test ok$' hostin "scripts/lib/kdc-req-proxy.py" "$LABQ ssh client2 -- 'cat > ~/ra/kdc-req-proxy.py && python3 ~/ra/kdc-req-proxy.py --self-test | tail -n 1'" < "$HERE/../../../scripts/lib/kdc-req-proxy.py"
-check ent.px.conf '^ +kdc = 127\.0\.0\.1:1891$' run client2 "sed 's/^\\( *kdc = \\)10\\.10\\.38\\.38\$/\\1127.0.0.1:1891/' ~/ra/krb5.conf > ~/ra/px.conf && grep -E '^ +kdc = 127' ~/ra/px.conf"
+# The UPN is asked in the AD realm, as a fleet user's kinit -E is (the RA conf's own default is our realm).
+check ent.px.conf '^ +kdc = 127\.0\.0\.1:1891$' run client2 "sed -e 's/^\\( *kdc = \\)10\\.10\\.38\\.38\$/\\1127.0.0.1:1891/' -e 's/^\\([[:space:]]*default_realm[[:space:]]*=[[:space:]]*\\).*/\\1AD.KERBER.TEST/' ~/ra/krb5.conf > ~/ra/px.conf && grep -E '^ +kdc = 127|default_realm' ~/ra/px.conf"
+checklast ent.px.realm '^[[:space:]]*default_realm[[:space:]]*=[[:space:]]*AD\.KERBER\.TEST$'
 check ent.px.up '^proxy: listening on 127\.0\.0\.1:1891$' run client2 "setsid python3 -u ~/ra/kdc-req-proxy.py 1891 10.10.38.38 88 ~/ra/px.jsonl > /dev/null 2> ~/ra/px.err < /dev/null & echo \$! > ~/ra/px.pid; sleep 1; ss -Hltn 'sport = :1891' | grep -q . && echo 'proxy: listening on 127.0.0.1:1891'"
 for k in mit ${EK:+ours}; do
     kin=kinit
@@ -107,7 +109,7 @@ for k in mit ${EK:+ours}; do
     check "ent.kinit.$k" '^Default principal: kbruser\\@ad\.kerber\.test@AD\.KERBER\.TEST$' runin client2 "AD_KBRUSER_PASSWORD" "export KRB5_CONFIG=\$HOME/ra/px.conf KRB5CCNAME=FILE:\$HOME/ra/ent-$k.cc; $kin -E kbruser@ad.kerber.test > /dev/null && klist" < <(adonce AD_KBRUSER_PASSWORD)
     run client2 "cp ~/ra/px.jsonl ~/ra/ent-$k.jsonl; jq -c 'select(.kind == \"req\") | [.msg_type, .cname, .cname_nt, .kdc_options, .padata]' ~/ra/ent-$k.jsonl"
 done
-check ent.req.mit '^first AS-REQ: kbruser@ad\.kerber\.test, name type 10, no canonicalize$' run client2 "jq -rs '[.[] | select(.kind == \"req\")][0] | \"first AS-REQ: \\(.cname), name type \\(.cname_nt), \\(if any(.kdc_options[]; . == \"canonicalize\") then \"canonicalize\" else \"no canonicalize\" end)\"' ~/ra/ent-mit.jsonl"
+check ent.req.mit '^first AS-REQ: kbruser@ad\.kerber\.test, name type 10, no canonicalize$' run client2 "jq -rs '[.[] | select(.kind == \"req\")][0] // empty | \"first AS-REQ: \\(.cname), name type \\(.cname_nt), \\(if any(.kdc_options[]; . == \"canonicalize\") then \"canonicalize\" else \"no canonicalize\" end)\"' ~/ra/ent-mit.jsonl"
 [ -n "$EK" ] && check ent.req.same '^FLOW_ad_kinit_e_equal$' run client2 "python3 ~/ra/kdc-req-proxy.py --compare ~/ra/ent-mit.jsonl ~/ra/ent-ours.jsonl ad_kinit_e"
 run client2 "kill \$(cat ~/ra/px.pid) && rm -f ~/ra/px.pid; cat ~/ra/px.err"
 
