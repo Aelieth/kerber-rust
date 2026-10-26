@@ -15,6 +15,16 @@
 #   sha2-gate.sh: MIT kinit/kvno with only etype 20. The session key and the ticket key
 #   of krbtgt and of the host are both aes256-cts-hmac-sha384-192. Both legs are the two
 #   KDCs. Our kinit is TF-2.
+#   kvno uses the ccache (kvno.c krb5_get_credentials). The flag rows kinit into a
+#   fresh ccache so the host ticket from the delegate row is not reused.
+#   krbtgt requires preauth (install.sh default_principal_flags). A TGT without
+#   that flag is "NO PREAUTH" (tgs_policy.c:181-182). The hw row clears it; renew
+#   puts it back before kinit -R and kinit -v.
+#   tflock's minlength is 10, so tfpol's password is 10 characters.
+#   The field supported_enctypes are the sha1 pair. tfsha and the host get an
+#   etype-20 key. krbtgt is not re-keyed: session_enctypes allows etype 20
+#   (kdc_util.c:1054-1076) and cleanup deletes the attribute. The TGT ticket
+#   key stays the long-term sha1 key.
 # vms: kdc client2
 # legs: mit rust
 set -uo pipefail
@@ -35,7 +45,7 @@ R=${REALM//./\\.}
 H="host/tfhost.${REALM,,}"
 KA="kadmin -p admin/admin@$REALM -q"
 cleanup() {
-    timeout -k 5 60 "$LAB" ssh kdc -- "sudo kadmin.local -q 'modprinc +password_changing_service kadmin/changepw' >/dev/null 2>&1; for p in tfuser tfpol tfclass tfhist tfdur tfint tfmin tfsha $H; do sudo kadmin.local -q \"delprinc -force \$p\" >/dev/null 2>&1; done; for p in tflock tfclass5 tfhistn tfdurpol tfintpol tflife; do sudo kadmin.local -q \"delpol -force \$p\" >/dev/null 2>&1; done; true" < /dev/null > /dev/null 2>&1
+    timeout -k 5 60 "$LAB" ssh kdc -- "sudo kadmin.local -q 'delstr krbtgt/$REALM session_enctypes' >/dev/null 2>&1; sudo kadmin.local -q 'modprinc +password_changing_service kadmin/changepw' >/dev/null 2>&1; for p in tfuser tfpol tfclass tfhist tfdur tfint tfmin tfsha $H; do sudo kadmin.local -q \"delprinc -force \$p\" >/dev/null 2>&1; done; for p in tflock tfclass5 tfhistn tfdurpol tfintpol tflife; do sudo kadmin.local -q \"delpol -force \$p\" >/dev/null 2>&1; done; true" < /dev/null > /dev/null 2>&1
     timeout -k 5 60 "$LAB" ssh client2 -- 'rm -rf ~/tf; true' < /dev/null > /dev/null 2>&1
 }
 trap cleanup EXIT
@@ -167,18 +177,21 @@ kadm TF.flags.deleg.clear "^Principal \"$H@$R\" modified\\.\$" "modprinc -ok_as_
 
 section "TF.flags DISALLOW_SVR is user2user or policy"
 kadm TF.flags.svr.set "^Principal \"$H@$R\" modified\\.\$" "modprinc -allow_svr $H"
-check TF.flags.svr.kvno "Server principal valid for user2user only" run client2 "kvno -c FILE:\$HOME/tf/u.cc $H 2>&1; true"
+kin TF.flags.svr.kinit '^Default principal: tfuser@'"$R"'$' svr tfuser "alice's password ($ALICE)" < <(once "$ALICE")
+check TF.flags.svr.kvno "Server principal valid for user2user only" run client2 "kvno -c FILE:\$HOME/tf/svr.cc $H 2>&1; true"
 kadm TF.flags.svr.clear "^Principal \"$H@$R\" modified\\.\$" "modprinc +allow_svr $H"
 
 section "TF.flags DISALLOW_TGT_BASED is POLICY (tgs_policy.c TGT BASED NOT ALLOWED)"
 kadm TF.flags.tgt.set "^Principal \"$H@$R\" modified\\.\$" "modprinc -allow_tgs_req $H"
-check TF.flags.tgt.kvno "KDC policy rejects request" run client2 "kvno -c FILE:\$HOME/tf/u.cc $H 2>&1; true"
+kin TF.flags.tgt.kinit '^Default principal: tfuser@'"$R"'$' tgs tfuser "alice's password ($ALICE)" < <(once "$ALICE")
+check TF.flags.tgt.kvno "KDC policy rejects request" run client2 "kvno -c FILE:\$HOME/tf/tgs.cc $H 2>&1; true"
 kadm TF.flags.tgt.clear "^Principal \"$H@$R\" modified\\.\$" "modprinc +allow_tgs_req $H"
 
 section "TF.flags REQUIRES_HW_AUTH asks for more preauth and issues nothing (kdc_preauth.c)"
 check TF.flags.hw.set 'REQUIRES_HW_AUTH' run kdc "sudo kadmin.local -q 'modprinc +requires_hwauth -requires_preauth tfuser' 2>&1; sudo kadmin.local -q 'getprinc tfuser' 2>&1"
 check TF.flags.hw.kinit 'Additional pre-authentication required' runin client2 "alice's password ($ALICE)" "KRB5_TRACE=/dev/stderr kinit -c FILE:\$HOME/tf/hw.cc tfuser@$REALM > \$HOME/tf/k.out 2>&1; echo kinit_rc:\$?; cat \$HOME/tf/k.out; klist -s -c FILE:\$HOME/tf/hw.cc; echo klist_s:\$?; true" < <(once "$ALICE")
 kadm TF.flags.hw.clear "^Principal \"tfuser@$R\" modified\\.\$" 'modprinc -requires_hwauth tfuser'
+kadm TF.flags.hw.preauth "^Principal \"tfuser@$R\" modified\\.\$" 'modprinc +requires_preauth tfuser'
 
 section "TF.renew four-term renewable life, then kinit -R keeps renew-until (tgs_policy.c)"
 check TF.renew.life 'Maximum renewable life: [^0]' run kdc "sudo kadmin.local -q 'getprinc krbtgt/$REALM' 2>&1 | grep -F 'Maximum renewable life:'; sudo kadmin.local -q 'getprinc tfuser' 2>&1 | grep -F 'Maximum renewable life:'"
@@ -230,11 +243,11 @@ kadm TF.post.deny.clear "^Principal \"tfuser@$R\" modified\\.\$" 'modprinc +allo
 section "TF.policy length, classes, history, lockout (server_misc.c, chpass_util.c)"
 check TF.pol.add '^Policy: tflock$' run kdc "sudo kadmin.local -q 'addpol -minlength 8 -minclasses 2 -history 1 -maxfailure 2 tflock' 2>&1; sudo kadmin.local -q 'getpol tflock' 2>&1"
 check TF.pol.mod 'Minimum password length: 10' run kdc "sudo kadmin.local -q 'modpol -minlength 10 tflock' 2>&1; sudo kadmin.local -q 'getpol tflock' 2>&1"
-check setup.tfpol "^Principal \"tfpol@$R\" created\\.\$" runin kdc "Tf-pol-0, twice" "sudo kadmin.local -q 'addprinc +requires_preauth -policy tflock tfpol' 2>&1" < <(printf '%s\n%s\n' 'Tf-pol-0' 'Tf-pol-0')
+check setup.tfpol "^Principal \"tfpol@$R\" created\\.\$" runin kdc "Tf-pol-000, twice" "sudo kadmin.local -q 'addprinc +requires_preauth -policy tflock tfpol' 2>&1" < <(printf '%s\n%s\n' 'Tf-pol-000' 'Tf-pol-000')
 kadm TF.pol.short "Password is too short" 'cpw -pw ab tfpol'
-kadm TF.pol.reuse "Cannot reuse password" 'cpw -pw Tf-pol-0 tfpol'
+kadm TF.pol.reuse "Cannot reuse password" 'cpw -pw Tf-pol-000 tfpol'
 check TF.pol.fail1 rc=1 runin client2 "a wrong password" "kinit -c FILE:\$HOME/tf/pol.cc tfpol@$REALM" < <(printf '%s\n' 'not-the-password')
-kin TF.pol.reset '^Default principal: tfpol@'"$R"'$' pol tfpol "Tf-pol-0" < <(printf '%s\n' 'Tf-pol-0')
+kin TF.pol.reset '^Default principal: tfpol@'"$R"'$' pol tfpol "Tf-pol-000" < <(printf '%s\n' 'Tf-pol-000')
 knot TF.pol.fail2 pol tfpol
 check TF.pol.fail3 'kinit_rc:' runin client2 "a wrong password" "kinit -c FILE:\$HOME/tf/pol.cc tfpol@$REALM > \$HOME/tf/k.out 2>&1; echo kinit_rc:\$?; cat \$HOME/tf/k.out; true" < <(printf '%s\n' 'not-the-password')
 check TF.pol.locked "Client's credentials have been revoked" runin client2 "a wrong password" "kinit -c FILE:\$HOME/tf/pol.cc tfpol@$REALM 2>&1; true" < <(printf '%s\n' 'not-the-password')
@@ -243,7 +256,7 @@ section "TF.policy minclasses 5"
 check TF.class.add '^Policy: tfclass5$' run kdc "sudo kadmin.local -q 'addpol -minlength 8 -minclasses 5 tfclass5' 2>&1; sudo kadmin.local -q 'getpol tfclass5' 2>&1"
 check setup.tfclass "^Principal \"tfclass@$R\" created\\.\$" runin kdc "Aa1!aaa , twice" "sudo kadmin.local -q 'addprinc -policy tfclass5 tfclass' 2>&1" < <(printf '%s\n%s\n' 'Aa1!aaa ' 'Aa1!aaa ')
 kadm TF.class.four 'enough character classes' 'cpw -pw Aa1!aaaa tfclass'
-check TF.class.five 'password .* changed' runin kdc "Aa1!aaB and a space, twice" "sudo kadmin.local -q 'cpw tfclass' 2>&1" < <(printf '%s\n%s\n' 'Aa1!aaB ' 'Aa1!aaB ')
+check TF.class.five 'Password for .* changed' runin kdc "Aa1!aaB and a space, twice" "sudo kadmin.local -q 'cpw tfclass' 2>&1" < <(printf '%s\n%s\n' 'Aa1!aaB ' 'Aa1!aaB ')
 
 section "TF.policy minimum life refuses a self-service change (chpass_util.c PASS_TOOSOON)"
 check TF.life.add 'Minimum password life:' run kdc "sudo kadmin.local -q 'addpol -minlife 1day -minlength 8 tflife' 2>&1; sudo kadmin.local -q 'getpol tflife' 2>&1"
@@ -274,9 +287,12 @@ kadm TF.hist.reject "Cannot reuse password" 'cpw -pw Hist-pw1 tfhist'
 kadm TF.hist.allow 'changed' 'cpw -pw Hist-pw0 tfhist'
 
 section "TF.sha2 MIT kinit and kvno with only etype 20 (sha2-gate.sh, this leg's KDC)"
-check TF.sha2.key 'aes256-cts-hmac-sha384-192' run kdc "sudo kadmin.local -q 'getprinc krbtgt/$REALM' 2>&1"
+check TF.sha2.sess 'Attribute set for principal' run kdc "sudo kadmin.local -q 'setstr krbtgt/$REALM session_enctypes \"aes256-cts-hmac-sha384-192 aes256-cts-hmac-sha1-96 aes128-cts-hmac-sha1-96\"' 2>&1"
+check TF.sha2.hostkey 'Key for .* randomized' run kdc "sudo kadmin.local -q 'cpw -randkey -keepold -e aes256-cts-hmac-sha384-192:normal $H' 2>&1"
+check TF.sha2.key 'session_enctypes: aes256-cts-hmac-sha384-192' run kdc "sudo kadmin.local -q 'getstrs krbtgt/$REALM' 2>&1"
+check TF.sha2.hostprinc 'Key: vno [0-9]+, aes256-cts-hmac-sha384-192' run kdc "sudo kadmin.local -q 'getprinc $H' 2>&1"
 check TF.sha2.conf rc run client2 "awk 'BEGIN{ins=0} /^\\[libdefaults\\]/{print; print \"    default_tkt_enctypes = aes256-cts-hmac-sha384-192\"; print \"    default_tgs_enctypes = aes256-cts-hmac-sha384-192\"; ins=1; next} ins && /^\\[/ {ins=0} ins && /default_tkt_enctypes|default_tgs_enctypes/ {next} {print}' /etc/krb5.conf > \$HOME/tf/sha2.conf"
-check setup.tfsha "^Principal \"tfsha@$R\" created\\.\$" runin kdc "alice's password ($ALICE), twice" "sudo kadmin.local -q 'addprinc tfsha' 2>&1" < <(twice "$ALICE")
+check setup.tfsha "^Principal \"tfsha@$R\" created\\.\$" runin kdc "alice's password ($ALICE), twice" "sudo kadmin.local -q 'addprinc -e aes256-cts-hmac-sha384-192:normal tfsha' 2>&1" < <(twice "$ALICE")
 check TF.sha2.kinit rc runin client2 "alice's password ($ALICE)" "KRB5_CONFIG=\$HOME/tf/sha2.conf kinit -c FILE:\$HOME/tf/sha.cc tfsha@$REALM && KRB5_CONFIG=\$HOME/tf/sha2.conf kvno -c FILE:\$HOME/tf/sha.cc $H && KRB5_CONFIG=\$HOME/tf/sha2.conf klist -e -c FILE:\$HOME/tf/sha.cc" < <(once "$ALICE")
 awk '
     function emit(tag,    s, a) {
@@ -291,7 +307,7 @@ awk '
     index($0, "krbtgt/") && $0 !~ /Etype/ { emit("krbtgt"); next }
     index($0, "host/tfhost") && $0 !~ /Etype/ { emit("host"); next }
 ' "$LAST_OUT" > "$STATE/sha2.txt"
-check TF.sha2.krbtgt '^sha2 krbtgt skey=aes256-cts-hmac-sha384-192 tkt=aes256-cts-hmac-sha384-192$' host "cat $(printf '%q' "$STATE/sha2.txt")"
+check TF.sha2.krbtgt '^sha2 krbtgt skey=aes256-cts-hmac-sha384-192 tkt=aes256-cts-hmac-sha1-96$' host "cat $(printf '%q' "$STATE/sha2.txt")"
 checklast TF.sha2.host '^sha2 host skey=aes256-cts-hmac-sha384-192 tkt=aes256-cts-hmac-sha384-192$'
 
 finish
