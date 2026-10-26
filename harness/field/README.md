@@ -263,6 +263,7 @@ harness/field/run.sh --profile kill-loop --ref plan-12   # SW-3's kill loop (lab
 | `lldap-membership.sh` | S1's: one lldap group membership added or removed on services (lldap's admin password on stdin) |
 | `ad.sh`, `ad/*.ps1`, `dc-ps.py` | `ad-trust`'s DC: each PowerShell script run over WinRM (`dc-ps.py`, the AD secrets from `FIELD_ADLAB_ENV`) and shown whole in the record; the DC's state against `ad/baseline.txt` before and after; every change logged before it is made and undone by `ad/undo.ps1`, which touches only those changes |
 | `ptydrive.py` | R2's pty driver: `su`, `passwd` and `pamtester` on a pseudo-terminal, their prompts answered from stdin |
+| `cc-remove.py` | `client-tools`' ccache helper on client2: MIT's `krb5_cc_remove_cred` (ctypes on client2's libkrb5) on one credential of a cache, by its server, and a `--self-test` on made-up credentials. It never reads a key |
 | `setpw.py`, `udp-send.py` | `kpasswd`'s drivers on client2: one set-password request through MIT's libkrb5 (ctypes; `krb5_set_password_using_ccache`, or with `--frame` the request built from `krb5_mk_req_extended` and `krb5_mk_priv` so the password may hold a NUL), and kpasswd's own error frame sent back to it |
 | `kill-loop.py` | `kill-loop`'s driver, run as root: `drive` on kdc (the ops, the kills, a dump after each kill, `expect.jsonl` of what the acknowledged ops left) and `judge` on kdc2 (each dump through MIT's `kdb5_util load`, then MIT's `listprincs` and `getprinc`) |
 
@@ -389,7 +390,8 @@ would remove it.
   `pkinit_anchors` there is no such line and alice's certificate gets a TGT; `kinit -n` gets an
   anonymous ticket (`WELLKNOWN/ANONYMOUS` is made for the cell when missing, and deleted after); an
   identity file that is not there gives MIT's `Cannot read certificate file '<file>': (null)`; the
-  realm's `pkinit_identity` wins over `[kdcdefaults]`'. When client2 also holds `alice-noeku` (alice's
+  realm's `pkinit_identity` wins over `[kdcdefaults]`'; alice's certificate kinit and `kinit -n`
+  through client2's request proxy send `[133, 16, 150, 149]` with PK-AS-REQ, ours as MIT's. When client2 also holds `alice-noeku` (alice's
   SAN, no extended key usage), its kinit is refused with 77 (`Inconsistent key purpose` in the KDC's
   verify-failure line), and with `pkinit_eku_checking = none` it gets a TGT. `alice-wrongsan` (another
   principal's SAN) is refused with `Client name mismatch` (75); `alice-unknownca`, from a CA client2
@@ -487,7 +489,7 @@ would remove it.
   (etype 20) with MIT's kinit against this leg's KDC. Scratch principals and
   policies are removed at the end, and `kadmin/changepw`'s
   password-changing-service flag is restored, also when the scenario stops early.
-- **`client-tools.sh`** (CT, client2's kinit, klist, kvno, kdestroy, ktutil and kswitch:
+- **`client-tools.sh`** (CT, client2's kinit, klist, kvno, kdestroy, ktutil, kswitch and kpasswd:
   MIT's, and in the rust leg ours from kdc's build, run by path): the satomlin kit's calls
   on FILE: caches and on the default `FILE:/tmp/krb5cc_%{uid}`, `kinit -k -t` with `-c` and
   with `KRB5CCNAME`, `klist -k` as the kit parses it. Each request kinit and kvno send goes
@@ -497,7 +499,11 @@ would remove it.
   rewritten client; no `-C`, no restart; a referral loop stops after 16 requests). Also:
   MIT's klist and kvno on our caches and ours on MIT's, DIR:
   collections and kswitch, ktutil's v1 and v2 keytabs (`lib/kt-records.py`), `+needchange`,
-  and the refusals in MIT's text. The rows run with `LC_ALL=C`, since MIT's klist dates
+  and the refusals in MIT's text. The request shapes of FAST under `-T` (its outer till
+  zero), SPAKE with `preferred_preauth_types = 151`, the preauth cascade, the enctypes
+  nothing configures, `kvno -U -P`, and no `ticket_lifetime` with and without `-r 12h`;
+  kpasswd refused by a minimum-length policy; MIT's `krb5_cc_remove_cred`
+  (`lib/cc-remove.py`) on a cache ours wrote. The rows run with `LC_ALL=C`, since MIT's klist dates
   follow the locale and ours print the C locale's; one INFO pair records the session's own
   locale. Scratch principals are removed at the end.
 - **`kpasswd.sh`** (KH, client2 against kdc's 464; `lib/setpw.py` drives MIT's

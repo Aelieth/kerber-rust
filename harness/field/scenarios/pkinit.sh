@@ -29,6 +29,8 @@
 #          Certificate mismatch" (66); "<SUBJECT>(" does not compile (regcomp's REG_EPAREN, 8, which the KDC reports
 #          as an errno): "preauth (pkinit) verify failure: Exec format error" (24);
 #   PK.6:  kinit -n with client2's anchors: a WELLKNOWN/ANONYMOUS ticket (the principal is made for the cell);
+#   PK.px: alice's certificate kinit and kinit -n through client2's request proxy: the AS-REQ carrying PK-AS-REQ is
+#          [133, 16, 150, 149] on both, and ours asks as MIT's does;
 #   PK.fast: with that anonymous ticket as FAST armor (-T), alice's certificate kinit runs pkinit inside the armored
 #          request: a TGT, the trace's pkinit, FAST-encoding and FAST reply key lines;
 #   PK.chpw: pkexp's password expired, kinit under the same -T changes it (old password, then the new one twice on
@@ -119,7 +121,8 @@ DBMATCH=0
 CHPW=0
 cleanup() {
     timeout -k 5 60 "$LAB" ssh kdc -- "[ -e $KC.pk ] && sudo mv $KC.pk $KC && sudo systemctl restart krb5kdc; [ $ANON = 1 ] && sudo kadmin.local -q 'delprinc -force WELLKNOWN/ANONYMOUS'; [ $PREAUTH = 1 ] && sudo kadmin.local -q 'modprinc -requires_preauth alice'; [ $DBMATCH = 1 ] && sudo kadmin.local -q 'delstr alice pkinit_cert_match'; [ $CHPW = 1 ] && sudo kadmin.local -q 'delprinc -force pkexp'; sudo rm -rf $BIG $EC $KDCC; rm -rf ~/pkb17; true" < /dev/null > /dev/null 2>&1
-    timeout -k 5 60 "$LAB" ssh client2 -- 'rm -rf ~/pk; true' < /dev/null > /dev/null 2>&1
+    # shellcheck disable=SC2016 # the pid file is client2's
+    timeout -k 5 60 "$LAB" ssh client2 -- '[ -f ~/pk/px/pid ] && kill "$(cat ~/pk/px/pid)"; rm -rf ~/pk; true' < /dev/null > /dev/null 2>&1
 }
 trap cleanup EXIT
 trap 'exit 130' INT
@@ -291,6 +294,25 @@ for k in mit ${OURS:+ours}; do
     check "PK.6.$k" '^Default principal: WELLKNOWN/ANONYMOUS@WELLKNOWN:ANONYMOUS$' run client2 "mkdir -p ~/pk && kdestroy -c FILE:\$HOME/pk/n.cc 2> /dev/null; $kinit -n -X X509_anchors=FILE:$C/cacert.pem -c FILE:\$HOME/pk/n.cc < /dev/null 2>&1; echo \"kinit rc=\$?\"; klist -c FILE:\$HOME/pk/n.cc 2>&1 | grep -E '^Default principal|krbtgt/'"
     checklast "PK.6.$k.rc" '^kinit rc=0$'
 done
+
+section "PK.px alice's certificate kinit and kinit -n through client2's request proxy: the AS-REQ that carries PK-AS-REQ (16) is the cookie, 16, freshness and REQ-ENC-PA-REP, and ours asks as MIT's does (preauth2.c, pkinit_clnt.c)"
+check pkpx.copy '^self-test ok$' hostin "scripts/lib/kdc-req-proxy.py" "$LABQ ssh client2 -- 'mkdir -p ~/pk/px && cat > ~/pk/kdc-req-proxy.py && python3 ~/pk/kdc-req-proxy.py --self-test | tail -n 1'" < "$HERE/../../../scripts/lib/kdc-req-proxy.py"
+check pkpx.conf '^ +kdc = 127\.0\.0\.1:1891$' run client2 "sed -E 's/^([[:space:]]*kdc[[:space:]]*=[[:space:]]*).*/\\1127.0.0.1:1891/' /etc/krb5.conf > ~/pk/px.conf && grep -m1 -E '^[[:space:]]*kdc[[:space:]]*=' ~/pk/px.conf"
+check pkpx.up '^proxy: listening on 127\.0\.0\.1:1891$' run client2 "setsid python3 -u ~/pk/kdc-req-proxy.py 1891 kdc.${REALM,,} 88 ~/pk/px/live.jsonl > /dev/null 2> ~/pk/px/proxy.err < /dev/null & echo \$! > ~/pk/px/pid; sleep 1; ss -Hltn 'sport = :1891' | grep -q . && echo 'proxy: listening on 127.0.0.1:1891'"
+for f in pkinit anon; do
+    for k in mit ${OURS:+ours}; do
+        kinit=kinit
+        [ "$k" = ours ] && kinit=$OURS
+        case $f in
+            pkinit) a="-X X509_user_identity=FILE:$C/alice.pem,$C/alice.key -c FILE:\$HOME/pk/px.$k.cc alice" ;;
+            anon) a="-n -c FILE:\$HOME/pk/px.$k.cc" ;;
+        esac
+        check "PK.px.$f.$k" '^kinit rc=0$' run client2 ": > ~/pk/px/live.jsonl; kdestroy -c FILE:\$HOME/pk/px.$k.cc 2> /dev/null; KRB5_CONFIG=\$HOME/pk/px.conf $kinit -X X509_anchors=FILE:$C/cacert.pem $a < /dev/null > /dev/null 2>&1; echo \"kinit rc=\$?\"; cp ~/pk/px/live.jsonl ~/pk/px/$f.$k.jsonl"
+        check "PK.px.$f.pa.$k" '^pa: \[133,16,150,149\]$' run client2 "jq -rs '[.[] | select(.kind == \"req\" and .msg_type == 10 and any(.padata[]?; . == 16))][0].padata // empty | \"pa: \\(tojson)\"' ~/pk/px/$f.$k.jsonl"
+    done
+    [ -n "${OURS:-}" ] && check "PK.px.$f.same" "^FLOW_${f}_equal\$" run client2 "python3 ~/pk/kdc-req-proxy.py --compare ~/pk/px/$f.mit.jsonl ~/pk/px/$f.ours.jsonl $f"
+done
+run client2 "kill \$(cat ~/pk/px/pid) && rm -f ~/pk/px/pid; cat ~/pk/px/proxy.err"
 
 section "PK.fast PKINIT inside FAST: an anonymous armor ticket, then alice's certificate under -T (MIT and ours)"
 for k in mit ${OURS:+ours}; do

@@ -10,13 +10,17 @@
 # kdc-req-proxy.py on client2 (shapes only: options, padata types, etypes, time classes), and the rust leg
 # compares ours with MIT's request by request; CR sends kinit to made-up realms whose KDC, lib/kdc-rewrite-proxy.py,
 # answers with a client referral to $REALM. Then the caches and keytabs cross: MIT's klist and kvno on ours,
-# ours on MIT's, MIT's cache entries kept through our rewrite. Scratch principals only, removed at the end.
+# ours on MIT's, MIT's cache entries kept through our rewrite. Then the request shapes of FAST under -T, SPAKE,
+# the preauth cascade, the enctypes nothing configures, kvno -U -P and no ticket_lifetime; kpasswd refused by a
+# policy; MIT's krb5_cc_remove_cred on a cache ours wrote. Scratch principals and the scratch policy only, removed at
+# the end.
 # MIT 1.22.2: clients/kinit/kinit.c (k5_kinit :747-793), clients/klist/klist.c (show_credential, list_ccaches
 # :376-410, the keytab listing :300-345), clients/kvno/kvno.c (:165, :376-381), clients/kdestroy/kdestroy.c
 # (:207-219), kadmin/ktutil/ktutil.c (:217-269); lib/krb5/os/prompter.c (the prompt on stdout, the reply from
 # stdin with no tty); lib/krb5/krb/gic_pwd.c (:240-253, the expired-password change); lib/krb5/ccache/cc_file.c
 # (:117-123, the "(filename: ...)" messages); lib/krb5/krb/str_conv.c (:224-245: klist's dates follow the
-# locale, so the rows run with LC_ALL=C; ours print the C locale's).
+# locale, so the rows run with LC_ALL=C; ours print the C locale's); lib/krb5/krb/get_in_tkt.c (:718-722,
+# :936-947); clients/kpasswd/kpasswd.c; lib/krb5/ccache/cc_file.c (fcc_remove_cred).
 # vms: kdc client2
 # legs: mit rust
 set -uo pipefail
@@ -36,12 +40,12 @@ legset ALICE ADMIN
 R=${REALM//./\\.}
 D=client2.${REALM,,}
 SVC=ctsvc/$D WEB=ctweb/$D S=ctsvc/${D//./\\.} W=ctweb/${D//./\\.}
-PRINCS="ctuser ctpre ctbad ctchg ctkv $SVC $WEB"
-TOOLS="kinit klist kvno kdestroy ktutil kswitch"
+PRINCS="ctuser ctpre ctbad ctchg ctpw ctkv $SVC $WEB"
+TOOLS="kinit klist kvno kdestroy ktutil kswitch kpasswd"
 PROXY=$HERE/../../../scripts/lib/kdc-req-proxy.py
 T='[0-9]{2}/[0-9]{2}/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}'
 cleanup() {
-    timeout -k 5 60 "$LAB" ssh kdc -- "for p in $PRINCS; do sudo kadmin.local -q \"delprinc -force \$p\" > /dev/null 2>&1; done; true" < /dev/null > /dev/null 2>&1
+    timeout -k 5 60 "$LAB" ssh kdc -- "for p in $PRINCS; do sudo kadmin.local -q \"delprinc -force \$p\" > /dev/null 2>&1; done; sudo kadmin.local -q 'delpol -force ctpol' > /dev/null 2>&1; true" < /dev/null > /dev/null 2>&1
     # shellcheck disable=SC2016 # the pid file is client2's
     timeout -k 5 60 "$LAB" ssh client2 -- 'for f in ~/ct/px/pid ~/ct/px/cr.pid; do [ -f "$f" ] && kill "$(cat "$f")"; done; kdestroy -q 2> /dev/null; rm -rf ~/ct; true' < /dev/null > /dev/null 2>&1
 }
@@ -114,14 +118,16 @@ check client2.ccache '^default_ccache_name = FILE:/tmp/krb5cc_%\{uid\}, no inclu
 # MIT's package, the session's locale and KRB5CCNAME, for the record (not a row: the two snapshots' builds may differ)
 run client2 "rpm -q krb5-workstation krb5-libs | paste -sd' ' -; locale | grep -E '^(LANG|LC_TIME)='; echo \"KRB5CCNAME=\${KRB5CCNAME-unset}\""
 run client2 "kdestroy -q 2> /dev/null; rm -rf ~/ct; mkdir -m 0700 ~/ct ~/ct/bin ~/ct/px && echo 'client2: ~/ct made'"
-run kdc "for p in $PRINCS; do sudo kadmin.local -q \"delprinc -force \$p\" 2>&1 | grep -v '^Authenticating'; done; true"
+run kdc "for p in $PRINCS; do sudo kadmin.local -q \"delprinc -force \$p\" 2>&1 | grep -v '^Authenticating'; done; sudo kadmin.local -q 'delpol -force ctpol' 2>&1 | grep -v '^Authenticating'; true"
+check setup.ctpol '^Minimum password length: 8$' run kdc "sudo kadmin.local -q 'addpol -minlength 8 ctpol' > /dev/null 2>&1; sudo kadmin.local -q 'getpol ctpol' | grep -E '^Minimum password length:'"
 # Both legs' kdc.conf set default_principal_flags = +preauth, so these principals require preauth like the services
 # (a TGT without it is refused a preauth service, NO PREAUTH); ctuser's TGT is renewed below, so it gets a renewable
 # life (a new principal's default is 0).
-for p in ctuser ctpre ctbad ctchg; do
+for p in ctuser ctpre ctbad ctchg ctpw; do
     case $p in
         ctuser) o='-maxrenewlife 7d' ;;
         ctpre) o='+requires_preauth' ;;
+        ctpw) o='-policy ctpol' ;;
         *) o='' ;;
     esac
     check "setup.$p" "^Principal \"$p@$R\" created\\.\$" runin kdc "alice's password ($ALICE), twice" "sudo kadmin.local -q 'addprinc $o $p' 2>&1" < <(twice "$ALICE")
@@ -143,7 +149,7 @@ if [ "$LEG" = rust ]; then
         check "ours.$t.copy" "^client2: ~/ct/bin/$t ${h:-none}\$" host "$LABQ ssh kdc -- 'cat ~/$b' | $LABQ ssh client2 -- 'cat > ~/ct/bin/$t && chmod 0755 ~/ct/bin/$t && echo \"client2: ~/ct/bin/$t \$(sha256sum < ~/ct/bin/$t | cut -c1-64)\"'"
         [ -n "$h" ] && grep -q "^client2: ~/ct/bin/$t $h\$" "$LAST_OUT" && n=$((n + 1))
     done
-    [ "$n" = 6 ] && OURS=ours
+    [ "$n" = "$(wc -w <<< "$TOOLS")" ] && OURS=ours
 fi
 check client2.kt-records rc runin client2 "lib/kt-records.py" "cat > ~/ct/kt-records.py" < "$FIELD_LIB/kt-records.py"
 check client2.ptydrive rc runin client2 "lib/ptydrive.py" "cat > ~/ct/ptydrive.py" < "$FIELD_LIB/ptydrive.py"
@@ -221,6 +227,66 @@ check CT.px.plain.life '^asked: rtime - till = 518400 s$' run client2 "jq -r 'se
 if [ -n "$OURS" ]; then
     check CT.px.plain.life.ours '^asked: rtime - till = 518400 s$' run client2 "jq -r 'select(.kind == \"req\") | \"asked: rtime - till = \\(.rtime_unix - .till_unix) s\"' \$HOME/ct/px/plain.ours.jsonl | head -n 1"
     check CT.px.plain.life.same '^till: within [0-9]+ s of MIT.s$' run client2 "a=\$(jq -s '[.[] | select(.kind == \"req\")][0].till_unix' \$HOME/ct/px/plain.mit.jsonl); b=\$(jq -s '[.[] | select(.kind == \"req\")][0].till_unix' \$HOME/ct/px/plain.ours.jsonl); d=\$((b - a)); [ \"\$d\" -ge 0 ] && [ \"\$d\" -le 300 ] && echo \"till: within \$d s of MIT's\""
+fi
+
+section "CT.shape2: FAST under -T, SPAKE preferred, the preauth cascade, the enctypes nothing configures, kvno -U -P, no ticket_lifetime with and without -r 12h (get_in_tkt.c, fast.c, s4u_creds.c, init_ctx.c)"
+# Each conf is px.conf with one change, and a row shows the change took.
+check CT.conf.spake '^preferred_preauth_types = 151$' run client2 "sed '0,/^\\[libdefaults\\]/s//[libdefaults]\\n    preferred_preauth_types = 151/' ~/ct/px.conf > ~/ct/spake.conf && grep -E '^[[:space:]]*preferred_preauth_types' ~/ct/spake.conf | sed 's/^[[:space:]]*//'"
+check CT.conf.etypes '^enctype lines left: 0$' run client2 "grep -v -E '^[[:space:]]*(permitted_enctypes|default_tkt_enctypes|default_tgs_enctypes)[[:space:]]*=' ~/ct/px.conf > ~/ct/noetype.conf && [ -s ~/ct/noetype.conf ] && echo \"enctype lines left: \$(grep -c -E 'enctypes[[:space:]]*=' ~/ct/noetype.conf)\""
+check CT.conf.z71 '^ticket_lifetime lines left: 0$' run client2 "grep -v -E '^[[:space:]]*ticket_lifetime[[:space:]]*=' ~/ct/px.conf > ~/ct/z71.conf && [ -s ~/ct/z71.conf ] && echo \"ticket_lifetime lines left: \$(grep -c -E 'ticket_lifetime' ~/ct/z71.conf)\""
+for k in mit $OURS; do
+    check "CT.armor.$k" "^Default principal: $S@$R\$" run client2 "$(E "$k") \$B/kinit -k -t \$HOME/ct/svc.keytab -c FILE:\$HOME/ct/$k.armor.cc $SVC@$REALM && \$B/kinit -k -t \$HOME/ct/svc.keytab -c FILE:\$HOME/ct/$k.s4up.cc $SVC@$REALM && \$B/klist -c FILE:\$HOME/ct/$k.armor.cc"
+done
+shape fast "$ALICE" "\$B/kinit -T FILE:\$HOME/ct/_K_.armor.cc -c FILE:\$HOME/ct/_K_.fast.cc ctuser@$REALM"
+shape spake "$ALICE" "KRB5_CONFIG=\$HOME/ct/spake.conf \$B/kinit -c FILE:\$HOME/ct/_K_.spake.cc ctpre@$REALM"
+# MIT's DB2 back end holds no delegation target, so its KDC refuses the proxy step: the request is graded, not the answer.
+shape kvno_s4u_proxy - "\$B/kvno -c FILE:\$HOME/ct/_K_.s4up.cc -U ctuser -P $SVC@$REALM; true"
+shape z71 "$ALICE" "KRB5_CONFIG=\$HOME/ct/z71.conf \$B/kinit -c FILE:\$HOME/ct/_K_.z71.cc ctuser@$REALM"
+shape z82 "$ALICE" "KRB5_CONFIG=\$HOME/ct/z71.conf \$B/kinit -r 12h -c FILE:\$HOME/ct/_K_.z82.cc ctuser@$REALM"
+for k in mit $OURS; do
+    run client2 ": > \$HOME/ct/px/live.jsonl"
+    runin client2 "ctuser's password ($ALICE)" "$(P "$k") KRB5_CONFIG=\$HOME/ct/noetype.conf \$B/kinit -c FILE:\$HOME/ct/$k.et.cc ctuser@$REALM" < <(once "$ALICE")
+    run client2 "cp \$HOME/ct/px/live.jsonl \$HOME/ct/px/etypes.$k.jsonl"
+done
+# J <flow> <k> <jq on the AS-REQs (10) or TGS-REQs (12), as one array>: one line from that capture.
+J() { run client2 "jq -rs '[.[] | select(.kind == \"req\" and .msg_type == $3)] | $4' \$HOME/ct/px/$1.$2.jsonl"; }
+for k in mit $OURS; do
+    J fast "$k" 10 '"till: \(.[0].till // "none")"'
+    checklast "CT.px.fast.till.$k" '^till: zero$'
+    J spake "$k" 10 '"first: \(.[0].padata | tojson)"'
+    checklast "CT.px.spake.first.$k" '^first: \[150,149\]$'
+    J preauth "$k" 10 '"cascade: \(map(.padata) | tojson)"'
+    checklast "CT.px.preauth.cascade.$k" '^cascade: \[\[150,149\],\[133,151,150,149\]\]$'
+    J kvno_s4u_proxy "$k" 12 '"tgs: \(map(.padata | tojson) | join(" "))"'
+    checklast "CT.px.kvno_s4u_proxy.tgs.$k" '^tgs: \[1,136,130,129\] \[1,136,167\]$'
+    J z82 "$k" 10 'if .[0].rtime_unix != null and .[0].rtime_unix == .[0].till_unix then "rtime: till" else "rtime: \(.[0].rtime_unix) till \(.[0].till_unix)" end'
+    checklast "CT.px.z82.rtime.$k" '^rtime: till$'
+    check "CT.px.z71.till.$k" '^till: now \+ 24 h$' run client2 "n=\$(date +%s); t=\$(jq -s '[.[] | select(.kind == \"req\" and .msg_type == 10)][0].till_unix // empty' \$HOME/ct/px/z71.$k.jsonl); d=\$((\${t:-0} - n - 86400)); if [ -n \"\$t\" ] && [ \"\${d#-}\" -le 300 ]; then echo 'till: now + 24 h'; else echo \"till: \${t:-none}, now \$n\"; fi"
+done
+# Nothing configured: MIT's list is Fedora's build's (recorded); ours is its documented default (docs/mit-deviations.md).
+J etypes mit 10 '"etypes: \(.[0].etypes | tojson)"'
+observelast obs.CT.px.etypes.mit 'etypes: .*'
+if [ -n "$OURS" ]; then
+    J etypes ours 10 '"etypes: \(.[0].etypes | tojson)"'
+    checklast CT.px.etypes.ours '^etypes: \[18,17,20,19\]$'
+fi
+
+section "CT.chpw: kpasswd on ctpw, whose policy wants 8 characters, to 'short': each program set's refusal (chpw.c)"
+for k in mit $OURS; do
+    check "CT.chpw.$k" '^((Password for [^:]*|Enter new password|Enter it again): )*Password change rejected' runin client2 "ctpw's password ($ALICE), then 'short' twice" "$(E "$k") \$B/kpasswd ctpw@$REALM 2>&1; echo \"rc=\$?\"" < <(once "$ALICE"; printf 'short\nshort\n')
+    keep CT.chpw "$k"
+done
+[ -n "$OURS" ] && same CT.chpw
+
+if [ -n "$OURS" ]; then
+    section "CT.ccrm: MIT's krb5_cc_remove_cred (lib/cc-remove.py, client2's libkrb5) on a cache ours wrote: the service ticket goes, the TGT and the config entries stay, in both klists (cc_file.c fcc_remove_cred)"
+    check client2.cc-remove '^cc-remove self-test ok$' hostin "lib/cc-remove.py" "$LABQ ssh client2 -- 'cat > ~/ct/cc-remove.py && python3 ~/ct/cc-remove.py --self-test \$HOME/ct/ccrm-self.cc | tail -n 1'" < "$FIELD_LIB/cc-remove.py"
+    check CT.ccrm.make "^$W@$R: kvno = [0-9]+\$" runin client2 "ctuser's password ($ALICE)" "$(E ours) \$B/kinit -c FILE:\$HOME/ct/rm.cc ctuser@$REALM > /dev/null && \$B/kvno -c FILE:\$HOME/ct/rm.cc $WEB@$REALM && LC_ALL=C /usr/bin/klist -C -c FILE:\$HOME/ct/rm.cc | grep -E '^config: ' > \$HOME/ct/rm.config.before" < <(once "$ALICE")
+    check CT.ccrm.remove "^removed: $W@$R\$" run client2 "python3 \$HOME/ct/cc-remove.py FILE:\$HOME/ct/rm.cc $WEB@$REALM"
+    for k in mit ours; do
+        check "CT.ccrm.$k" "^tickets: krbtgt/$R@$R, no $W@$R\$" run client2 "$(E "$k") l=\$(\$B/klist -c FILE:\$HOME/ct/rm.cc) && echo \"tickets: \$(echo \"\$l\" | grep -o 'krbtgt/$REALM@$REALM' | head -n 1), \$(echo \"\$l\" | grep -q '$WEB@$REALM' && echo has || echo no) $WEB@$REALM\""
+    done
+    check CT.ccrm.config '^config entries kept: [0-9]+$' run client2 "LC_ALL=C /usr/bin/klist -C -c FILE:\$HOME/ct/rm.cc | grep -E '^config: ' | diff -q - \$HOME/ct/rm.config.before > /dev/null && echo \"config entries kept: \$(wc -l < \$HOME/ct/rm.config.before)\""
 fi
 
 section "CR: client referrals (get_in_tkt.c:1450-1458, :1745-1758, :1268-1270): lib/kdc-rewrite-proxy.py answers an AS-REQ for a made-up realm with WRONG_REALM (68) or C_PRINCIPAL_UNKNOWN (6) naming $REALM; kinit -C restarts there and asks for the password of the rewritten client, without -C the error stands, and LOOPA <-> LOOPB stops after 16 requests"
