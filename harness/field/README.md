@@ -276,6 +276,7 @@ harness/field/run.sh --profile kill-loop --ref plan-12   # SW-3's kill loop (lab
 | `klldap-swap` | nightly, weekly | mit, rust | klldap (not reset; the leg cleans its own artifacts) | f-F3-mit (mit leg), f-F3 (rust leg) | about 4 min (mit) and 8 min (rust) with BuildKit's cache warm; much longer cold (see below) |
 | `kdc-profile` | weekly; on demand with `--only upgrade,kdc-profile` for a change to how kdc.conf is read | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it, its kdc.conf restored after each cell | none: the CF cells' first record | about 6 / 6 min |
 | `kdb-writes` | weekly; on demand with `--only upgrade,kdb-writes` for a change to how the store writes | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it, its scratch principals and policies removed at the end | none: the SW cells' first record | about 1 / 1 min |
+| `ticket-flags` | weekly, after `kdb-writes` and before `pkinit`; on demand with `--only upgrade,ticket-flags` | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it; scratch principals and policies removed; `kadmin/changepw`'s PWCHANGE flag restored | none: the TF cells' first record | first run not yet timed |
 | `pkinit` | weekly; on demand with `--only upgrade,pkinit` for a change to PKINIT | mit, rust | client2: `$PK_SNAPSHOT_CLIENT2` when set (reset), else as it stands; kdc as `upgrade` left it, the L6 certificates made on it for the run (`lib/l6-certs.sh`) and client2's piped there, its kdc.conf restored after | none: the PK cells' first record | about 2 / 2 min |
 | `kpasswd` | weekly, last but `replica` and `install` (on a leg that allows it, it changes krbtgt's and kadmin/changepw's keys); on demand with `--only upgrade,kpasswd` for a change to kpasswd or chpass | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it | none: the KH cells' first record | about 2 / 2 min |
 | `rollback` | weekly, last but `replica` and `install` (it leaves kdc on MIT, and `replica` resets it); on demand with `--only upgrade,rollback` | mit, rust | kdc as `upgrade` left it, on MIT afterwards; client2: `f4-mit` / `rust-ssh` as the run left it | none: SW-2's export bar, docs/install.md "Going back to MIT" | about 1 / 3 min (estimate; the rust leg's dnf install from the mirrors) |
@@ -466,6 +467,12 @@ would remove it.
   back over the KDC's. A `cpw` the principal's policy refuses leaves its keys,
   and the next `cpw -randkey` changes them. The scratch principals and policies
   go at the end, also when the scenario stops early.
+- **`ticket-flags.sh`** (TF, MIT kinit and kadmin from client2): principal, password
+  and server expiry; forwardable, proxiable, renewable and postdate, and the flag
+  refusals; policy length, classes, history, lockout and minimum life; aes-sha2
+  (etype 20) with MIT's kinit against this leg's KDC. Scratch principals and
+  policies are removed at the end, and `kadmin/changepw`'s
+  password-changing-service flag is restored, also when the scenario stops early.
 - **`kpasswd.sh`** (KH, client2 against kdc's 464; `lib/setpw.py` drives MIT's
   libkrb5): admin/admin sets a fresh principal's password (0, kvno + 1); an
   unprivileged user is refused (5, kvno kept); a self change with a changepw
