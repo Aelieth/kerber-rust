@@ -33,14 +33,14 @@ pub fn encode<T: Encode>(value: &T) -> Result<Vec<u8>, Error> {
     encode_named(value, std::any::type_name::<T>())
 }
 
-/// A nonzero remainder after the value still decodes.
-// MIT k5_asn1_full_decode; see docs/parity/b1-asn1.md
+/// Nonzero remainder still decodes.
+// MIT: `k5_asn1_full_decode` (lib/krb5/asn.1/asn1_encode.c:1567-1585)
 pub fn decode<T: Decode>(bytes: &[u8]) -> Result<T, Error> {
     decode_named(bytes, std::any::type_name::<T>())
 }
 
-/// APPLICATION 26, then 25, then untagged. A failed tag probe is silent.
-// MIT decode_krb5_enc_kdc_rep_part; see docs/parity/b1-asn1.md
+/// 26, then 25, untagged. A miss is silent.
+// MIT: `decode_krb5_enc_kdc_rep_part` (lib/krb5/asn.1/asn1_k_encode.c:1135-1155)
 pub fn decode_enc_kdc_rep_part(bytes: &[u8]) -> Result<EncKdcRepPart, Error> {
     if let Ok(EncTgsRepPart(part)) = rasn::der::decode(bytes) {
         return Ok(part);
