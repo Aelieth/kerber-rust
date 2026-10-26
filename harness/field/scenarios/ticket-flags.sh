@@ -285,7 +285,7 @@ kadm TF.preauth.host "^Principal \"$H@$R\" modified\\.\$" "modprinc +requires_pr
 check TF.preauth.mark rc run kdc "sudo stat -c %s /var/log/krb5kdc.log > /var/tmp/tf-log.sz"
 kin TF.preauth.kinit '^Default principal: tfuser@'"$R"'$' na tfuser "alice's password ($ALICE)" < <(once "$ALICE")
 checklast TF.preauth.bits 'Flags: [^A]*$'
-check TF.preauth.kvno 'KDC policy rejects request' run client2 "kvno -c FILE:\$HOME/tf/na.cc $H 2>&1; true"
+check TF.preauth.kvno 'KDC returned error string: NO PREAUTH' run client2 "kvno -c FILE:\$HOME/tf/na.cc $H 2>&1; true"
 check TF.preauth.log 'NO PREAUTH' run kdc "sudo tail -c +\$(( \$(cat /var/tmp/tf-log.sz) + 1 )) /var/log/krb5kdc.log; sudo rm -f /var/tmp/tf-log.sz"
 kadm TF.preauth.on "^Principal \"tfuser@$R\" modified\\.\$" 'modprinc +requires_preauth tfuser'
 
@@ -294,7 +294,7 @@ check TF.z71.before 'Maximum renewable life: 7 days' run kdc "sudo kadmin.local 
 check TF.z71.save '^saved$' run kdc "sudo cp -p /var/kerberos/krb5kdc/kdc.conf /var/kerberos/krb5kdc/kdc.conf.tf && echo saved"
 check TF.z71.conf '^edited, krb5kdc active$' run kdc "sudo sed -i -E '/^[[:space:]]*max_renewable_life[[:space:]]*=/d; s/^([[:space:]]*)max_life[[:space:]]*=.*/\\1max_life = 1h/' /var/kerberos/krb5kdc/kdc.conf && ! sudo grep -E '^[[:space:]]*max_renewable_life[[:space:]]*=' /var/kerberos/krb5kdc/kdc.conf && sudo grep -q 'max_life = 1h' /var/kerberos/krb5kdc/kdc.conf && sudo systemctl restart krb5kdc && systemctl is-active krb5kdc >/dev/null && echo 'edited, krb5kdc active'"
 kadm TF.z71.user "^Principal \"tfuser@$R\" modified\\.\$" 'modprinc -maxrenewlife "10 days" tfuser'
-kadm TF.z71.tgt "^Principal \"krbtgt/$R\" modified\\.\$" 'modprinc -maxrenewlife "10 days" krbtgt/'"$REALM"
+kadm TF.z71.tgt "^Principal \"krbtgt/$R@$R\" modified\\.\$" 'modprinc -maxrenewlife "10 days" krbtgt/'"$REALM"
 kin TF.z71.kinit 'Flags:.*R' z71 tfuser "alice's password ($ALICE)" -l 1h -r 8d < <(once "$ALICE")
 klist_times "$LAST_OUT" > "$STATE/z71.txt"
 QSTART=$(sed -n '1p' "$STATE/z71.txt")
@@ -306,7 +306,7 @@ else
 fi
 check TF.z71.delta '^z71_delta: (59[0-9]{4}|6[01][0-9]{4})$' host "cat $(printf '%q' "$STATE/z71delta.txt")"
 kadm TF.z71.user.back "^Principal \"tfuser@$R\" modified\\.\$" 'modprinc -maxrenewlife "7 days" tfuser'
-kadm TF.z71.tgt.back "^Principal \"krbtgt/$R\" modified\\.\$" 'modprinc -maxrenewlife 7d krbtgt/'"$REALM"
+kadm TF.z71.tgt.back "^Principal \"krbtgt/$R@$R\" modified\\.\$" 'modprinc -maxrenewlife 7d krbtgt/'"$REALM"
 check TF.z71.restore '^restored, krb5kdc active$' run kdc "sudo mv /var/kerberos/krb5kdc/kdc.conf.tf /var/kerberos/krb5kdc/kdc.conf && sudo systemctl restart krb5kdc && systemctl is-active krb5kdc >/dev/null && sudo grep -q 'max_renewable_life' /var/kerberos/krb5kdc/kdc.conf && echo 'restored, krb5kdc active'"
 
 section "TF.postdate kinit -s is INVALID, kvno is not yet valid, kinit -v then works"
