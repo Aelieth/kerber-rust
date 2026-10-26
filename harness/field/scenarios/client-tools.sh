@@ -111,20 +111,21 @@ check client2.ccache '^default_ccache_name = FILE:/tmp/krb5cc_%\{uid\}, no inclu
 run client2 "rpm -q krb5-workstation krb5-libs | paste -sd' ' -; locale | grep -E '^(LANG|LC_TIME)='; echo \"KRB5CCNAME=\${KRB5CCNAME-unset}\""
 run client2 "kdestroy -q 2> /dev/null; rm -rf ~/ct; mkdir -m 0700 ~/ct ~/ct/bin ~/ct/px && echo 'client2: ~/ct made'"
 run kdc "for p in $PRINCS; do sudo kadmin.local -q \"delprinc -force \$p\" 2>&1 | grep -v '^Authenticating'; done; true"
-# Both legs' principals alike: our addprinc sets REQUIRES_PRE_AUTH by default (docs/mit-deviations.md), so it is set
-# or cleared here; ctuser's TGT is renewed below, so it gets a renewable life (a new principal's default is 0).
+# Both legs' kdc.conf set default_principal_flags = +preauth, so these principals require preauth like the services
+# (a TGT without it is refused a preauth service, NO PREAUTH); ctuser's TGT is renewed below, so it gets a renewable
+# life (a new principal's default is 0).
 for p in ctuser ctpre ctbad ctchg; do
     case $p in
-        ctuser) o='-requires_preauth -maxrenewlife 7d' ;;
+        ctuser) o='-maxrenewlife 7d' ;;
         ctpre) o='+requires_preauth' ;;
-        *) o='-requires_preauth' ;;
+        *) o='' ;;
     esac
     check "setup.$p" "^Principal \"$p@$R\" created\\.\$" runin kdc "alice's password ($ALICE), twice" "sudo kadmin.local -q 'addprinc $o $p' 2>&1" < <(twice "$ALICE")
 done
 for p in ctkv $SVC $WEB; do
     check "setup.${p%%/*}" "^Principal \"${p//./\\.}@$R\" created\\.\$" run kdc "sudo kadmin.local -q 'addprinc -randkey $p' 2>&1"
 done
-check setup.flags '^preauth: ctpre yes, ctuser no; ctuser renewable 7 days 00:00:00$' run kdc "a=\$(sudo kadmin.local -q 'getprinc ctpre' | grep -c REQUIRES_PRE_AUTH); b=\$(sudo kadmin.local -q 'getprinc ctuser' | grep -c REQUIRES_PRE_AUTH); r=\$(sudo kadmin.local -q 'getprinc ctuser' | sed -n 's/^Maximum renewable life: //p'); echo \"preauth: ctpre \$([ \"\$a\" -ge 1 ] && echo yes || echo no), ctuser \$([ \"\$b\" = 0 ] && echo no || echo yes); ctuser renewable \$r\""
+check setup.flags '^preauth: ctpre yes, ctuser yes; ctuser renewable 7 days 00:00:00$' run kdc "a=\$(sudo kadmin.local -q 'getprinc ctpre' | grep -c REQUIRES_PRE_AUTH); b=\$(sudo kadmin.local -q 'getprinc ctuser' | grep -c REQUIRES_PRE_AUTH); r=\$(sudo kadmin.local -q 'getprinc ctuser' | sed -n 's/^Maximum renewable life: //p'); echo \"preauth: ctpre \$([ \"\$a\" -ge 1 ] && echo yes || echo no), ctuser \$([ \"\$b\" = 0 ] && echo no || echo yes); ctuser renewable \$r\""
 check setup.krbtgt '^krbtgt: Maximum renewable life: ' run kdc "l=\$(sudo kadmin.local -q 'getprinc krbtgt/$REALM' 2>&1 | grep -F 'Maximum renewable life:'); echo \"krbtgt: \$l\"; case \"\$l\" in '' | *': 0 days 00:00:00') exit 1 ;; esac"
 check setup.keytab "^Entry for principal $S with kvno 2, encryption type aes256-cts-hmac-sha1-96 added to keytab WRFILE:/home/[^/]+/ct/svc\\.keytab\\.\$" \
     runin client2 "admin/admin's password ($ADMIN)" "kadmin -p admin/admin@$REALM -q \"ktadd -k \$HOME/ct/svc.keytab $SVC\" 2>&1" < <(once "$ADMIN")
@@ -143,7 +144,7 @@ fi
 check client2.kt-records rc runin client2 "lib/kt-records.py" "cat > ~/ct/kt-records.py" < "$FIELD_LIB/kt-records.py"
 check client2.ptydrive rc runin client2 "lib/ptydrive.py" "cat > ~/ct/ptydrive.py" < "$FIELD_LIB/ptydrive.py"
 check px.copy '^self-test ok$' hostin "scripts/lib/kdc-req-proxy.py" "$LABQ ssh client2 -- 'cat > ~/ct/kdc-req-proxy.py && python3 ~/ct/kdc-req-proxy.py --self-test | tail -n 1'" < "$PROXY"
-check px.conf '^    kdc = 127\.0\.0\.1:1891$' run client2 "sed -E 's/^([[:space:]]*kdc[[:space:]]*=[[:space:]]*).*/\\1127.0.0.1:1891/' /etc/krb5.conf > ~/ct/px.conf && grep -E '^[[:space:]]*kdc[[:space:]]*=' ~/ct/px.conf"
+check px.conf '^ +kdc = 127\.0\.0\.1:1891$' run client2 "sed -E 's/^([[:space:]]*kdc[[:space:]]*=[[:space:]]*).*/\\1127.0.0.1:1891/' /etc/krb5.conf > ~/ct/px.conf && grep -E '^[[:space:]]*kdc[[:space:]]*=' ~/ct/px.conf"
 check px.up '^proxy: listening on 127\.0\.0\.1:1891$' run client2 "setsid python3 -u ~/ct/kdc-req-proxy.py 1891 kdc.${REALM,,} 88 ~/ct/px/live.jsonl > /dev/null 2> ~/ct/px/proxy.err < /dev/null & echo \$! > ~/ct/px/pid; sleep 1; ss -Hltn 'sport = :1891' | grep -q . && echo 'proxy: listening on 127.0.0.1:1891'"
 
 section "CT.flow: each program set on its own FILE: cache: the password on stdin, klist, klist -s, kvno, klist -f -e, kinit -R, kdestroy, then the cache is gone"
@@ -242,13 +243,13 @@ if [ -n "$OURS" ]; then
     check CT.x.mitkdestroy.ours rc=1 run client2 "$(E ours) \$B/klist -s -c FILE:\$HOME/ct/ours.cc"
 fi
 
-section "CT.dir: a DIR: collection: two principals, klist -l, kswitch -p and -c, kdestroy -A; a missing DIR: is not made"
+section "CT.dir: a DIR: collection: two principals, klist -l, kswitch -p and -c, kdestroy -A; a missing DIR: is made on resolve, 0700 (MIT's verify_dir)"
 both CT.dir.two '^Principal name                 Cache name$' "$ALICE" "export KRB5CCNAME=DIR:\$HOME/ct/_K_.dir && mkdir -m 0700 \$HOME/ct/_K_.dir && \$B/kinit ctuser@$REALM > /dev/null && \$B/kinit -k -t \$HOME/ct/svc.keytab $SVC@$REALM && \$B/klist -l"
 both CT.dir.primary "^Default principal: $S@$R\$" - "export KRB5CCNAME=DIR:\$HOME/ct/_K_.dir && \$B/klist"
 both CT.dir.switch-p "^Default principal: ctuser@$R\$" - "export KRB5CCNAME=DIR:\$HOME/ct/_K_.dir && \$B/kswitch -p ctuser@$REALM && \$B/klist"
 both CT.dir.switch-c "^Default principal: $S@$R\$" - "export KRB5CCNAME=DIR:\$HOME/ct/_K_.dir && f=\$(grep -l -a ctsvc \$HOME/ct/_K_.dir/tkt*) && \$B/kswitch -c DIR::\$f && \$B/klist"
 both CT.dir.destroy-a '^left: 0$' - "export KRB5CCNAME=DIR:\$HOME/ct/_K_.dir && \$B/kdestroy -A && echo \"left: \$(ls \$HOME/ct/_K_.dir | grep -c '^tkt')\""
-both CT.dir.missing '^rc=1, absent$' - "\$B/klist -c DIR:\$HOME/ct/_K_.nodir > /dev/null 2>&1; echo \"rc=\$?, \$(test -e \$HOME/ct/_K_.nodir && echo made || echo absent)\""
+both CT.dir.missing '^rc=1, made 700$' - "\$B/klist -c DIR:\$HOME/ct/_K_.nodir > /dev/null 2>&1; echo \"rc=\$?, \$(test -e \$HOME/ct/_K_.nodir && echo made \$(stat -c %a \$HOME/ct/_K_.nodir) || echo absent)\""
 
 section "CT.ktutil: rkt and list -e; an unknown enctype; a v1 keytab (kvno past 255) read; wkt keeps a v1 file v1 and makes a new one v2, the records MIT's; addent -password on a tty (lib/ptydrive.py), the keytab MIT's kinit -k uses; a keytab with kvnos 2 and 3"
 both CT.kt.list "^   1    2 +$S@$R \\(aes256-cts-hmac-sha1-96\\) *\$" - "printf 'rkt %s\\nlist -e\\nquit\\n' \$HOME/ct/svc.keytab | \$B/ktutil 2>&1"
@@ -284,15 +285,15 @@ done
 section "CT.refusals: MIT's text and exit code: an unknown client, an unknown service, a missing keytab (kinit -k, klist -k), kdestroy of no cache, an unknown cache type (and KEYRING: for ours, which have none), a missing cache directory, no KDC, an expired client, a revoked one, kvno -P alone; a wrong password last"
 both CT.err.client "kinit: Client 'nosuch@$R' not found in Kerberos database while getting initial credentials\$" "$ALICE" "\$B/kinit -c FILE:\$HOME/ct/_K_-e.cc nosuch@$REALM 2>&1; echo \"rc=\$?\""
 both CT.err.svc "^kvno: Server nosuch/x@$R not found in Kerberos database while getting credentials for nosuch/x@$R\$" - "\$B/kinit -k -t \$HOME/ct/svc.keytab -c FILE:\$HOME/ct/_K_-e.cc $SVC@$REALM && \$B/kvno -c FILE:\$HOME/ct/_K_-e.cc nosuch/x@$REALM 2>&1; echo \"rc=\$?\""
-both CT.err.kt "^kinit: Key table file '/home/[^/]+/ct/none\\.keytab' not found while getting initial credentials\$" - "\$B/kinit -k -t \$HOME/ct/none.keytab -c FILE:\$HOME/ct/_K_-e.cc $SVC@$REALM 2>&1; echo \"rc=\$?\""
-both CT.err.klist-k "^klist: Key table file '/home/[^/]+/ct/none\\.keytab' not found while starting keytab scan\$" - "\$B/klist -k \$HOME/ct/none.keytab 2>&1; echo \"rc=\$?\""
-both CT.err.kdestroy "^kdestroy: No credentials cache found \\(filename: /home/[^/]+/ct/none\\.cc\\) while destroying cache\$" - "\$B/kdestroy -c FILE:\$HOME/ct/none.cc 2>&1; echo \"rc=\$?\""
+both CT.err.kt "^kinit: Pre-authentication failed: Key table file '/home/[^/]+/ct/none\\.keytab' not found while getting initial credentials\$" - "\$B/kinit -k -t \$HOME/ct/none.keytab -c FILE:\$HOME/ct/_K_-e.cc $SVC@$REALM 2>&1; echo \"rc=\$?\""
+both CT.err.klist-k "^klist: Key table file '/home/[^/]+/ct/none\\.keytab' not found while starting keytab scan\$" - "o=\$(\$B/klist -k \$HOME/ct/none.keytab 2> \$HOME/ct/_K_-kerr); r=\$?; cat \$HOME/ct/_K_-kerr; printf '%s\\n' \"\$o\"; echo \"rc=\$r\""
+both CT.err.kdestroy '^kdestroy: No credentials cache found while destroying cache$' - "\$B/kdestroy -c FILE:\$HOME/ct/none.cc 2>&1; echo \"rc=\$?\""
 both CT.err.cctype '^klist: Unknown credential cache type while resolving ccache$' - "\$B/klist -c XYZ:nosuch 2>&1; echo \"rc=\$?\""
 if [ -n "$OURS" ]; then
     check CT.keyring.ours '^klist: Unknown credential cache type while resolving ccache$' run client2 "$(E ours) \$B/klist -c KEYRING:persistent:\$(id -u) 2>&1; echo \"rc=\$?\""
     checklast CT.keyring.ours.rc 'line:rc=1'
 fi
-both CT.err.ccdir "kinit: No credentials cache found \\(filename: /home/[^/]+/ct/nodir/cc\\) while getting initial credentials\$" "$ALICE" "\$B/kinit -c FILE:\$HOME/ct/nodir/cc ctuser@$REALM 2>&1; echo \"rc=\$?\""
+both CT.err.ccdir 'kinit: Failed to store credentials: No credentials cache found while getting initial credentials$' "$ALICE" "\$B/kinit -c FILE:\$HOME/ct/nodir/cc ctuser@$REALM 2>&1; echo \"rc=\$?\""
 both CT.err.nokdc "kinit: Cannot contact any KDC for realm '$R' while getting initial credentials\$" "$ALICE" "sed -E 's/^([[:space:]]*kdc[[:space:]]*=[[:space:]]*).*/\\1127.0.0.1:1/' /etc/krb5.conf > \$HOME/ct/_K_-nokdc.conf && KRB5_CONFIG=\$HOME/ct/_K_-nokdc.conf \$B/kinit -c FILE:\$HOME/ct/_K_-e.cc ctuser@$REALM 2>&1; echo \"rc=\$?\""
 check CT.err.expired.set "^Principal \"ctbad@$R\" modified\\.\$" run kdc "sudo kadmin.local -q 'modprinc -expire \"Jan 1, 2020 00:00:00 UTC\" ctbad' 2>&1"
 both CT.err.expired "kinit: Client's entry in database has expired while getting initial credentials\$" "$ALICE" "\$B/kinit -c FILE:\$HOME/ct/_K_-e.cc ctbad@$REALM 2>&1; echo \"rc=\$?\""
