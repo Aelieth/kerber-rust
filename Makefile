@@ -56,13 +56,13 @@ gate:
 # One field run on the lab: the ref's `git archive`, never this working tree, driven through the real
 # products on the lab VMs; records under ~/kerber-lab/runs (harness/field/README.md, "Scenarios").
 PROFILE ?= nightly
-REF ?= f-functional
+REF ?=
 ONLY ?=
 LEG ?=
 
 .PHONY: field
 field:
-	$(ROOT)/harness/field/run.sh --profile $(PROFILE) --ref $(REF) $(if $(ONLY),--only $(ONLY)) $(if $(LEG),--leg $(LEG))
+	$(ROOT)/harness/field/run.sh --profile $(PROFILE) $(if $(REF),--ref $(REF)) $(if $(ONLY),--only $(ONLY)) $(if $(LEG),--leg $(LEG))
 
 # The product as Fedora's krb5-server and krb5-workstation lay out MIT's (docs/install.md;
 # dist/install.sh does the copying and keeps the manifest uninstall reads). `make build` is the

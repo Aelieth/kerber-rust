@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # harness/field/run.sh: one field run on the lab (harness/field/README.md, "Field runs" and "Scenarios").
 #
-#   run.sh --profile nightly|weekly|kill-loop [--ref <git ref>] [--only <scenario,...>] [--leg mit|rust|both]
-#   run.sh ad-trust [--ref <git ref>] [--leg mit|rust|both]   (upgrade, then the real AD DC: scenarios/ad-trust.sh)
+#   run.sh --profile nightly|weekly|kill-loop --ref <git ref> [--only <scenario,...>] [--leg mit|rust|both]
+#   run.sh ad-trust --ref <git ref> [--leg mit|rust|both]   (upgrade, then the real AD DC: scenarios/ad-trust.sh)
 #
 # The tree under test is `git archive <ref>` of the repository run.sh lives in (read-only, GIT_OPTIONAL_LOCKS=0;
 # FIELD_REPO in field.env names another), never a working tree. Each selected scenario's leg drives the real
@@ -36,7 +36,7 @@ declare -A PROFILES=([nightly]="upgrade kadmind-start services nfs-client sssd-l
 
 die() { printf 'run.sh: %s\n' "$*" >&2; exit 1; }
 usage() { sed -n '4,5p' "${BASH_SOURCE[0]}" | sed 's/^# *//'; }
-PROFILE='' REF=f-functional ONLY='' LEG=rust
+PROFILE='' REF='' ONLY='' LEG=rust
 # The AD DC scenario changes the DC (and undoes it), so it runs only in this one form.
 if [ "${1:-}" = ad-trust ]; then PROFILE=ad-trust; shift; fi
 while [ $# -gt 0 ]; do
@@ -53,6 +53,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 [ -n "${PROFILES[$PROFILE]+x}" ] || { usage >&2; die "--profile must be one of: ${!PROFILES[*]}"; }
+[ -n "$REF" ] || { usage >&2; die "--ref is required (no default branch)"; }
 case $LEG in
     mit | rust) LEGS=("$LEG") ;;
     both) LEGS=(mit rust) ;;

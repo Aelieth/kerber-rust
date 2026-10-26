@@ -152,9 +152,9 @@ clients on client2) and keeps their logs, one line per check. It is a harness,
 not a gate: no ci-policy judge, ledger row or CI job runs it.
 
 ```sh
-make field PROFILE=nightly REF=f-functional               # every scenario of the profile
-make field PROFILE=nightly REF=f-functional ONLY=upgrade  # one of them
-harness/field/run.sh --profile nightly --ref f-functional --only upgrade   # the same, without make
+make field PROFILE=nightly REF=plan-12               # every scenario of the profile
+make field PROFILE=nightly REF=plan-12 ONLY=upgrade  # one of them
+harness/field/run.sh --profile nightly --ref plan-12 --only upgrade   # the same, without make
 harness/field/run.sh ad-trust --ref plan-12 --leg both   # the real AD DC: upgrade, then ad-trust
 harness/field/run.sh --profile weekly --ref plan-12 --only upgrade,kpasswd --leg both   # 464's cells, on demand
 harness/field/run.sh --profile weekly --ref plan-12 --only upgrade,kdc-profile --leg both   # kdc.conf's cells, on demand
@@ -268,6 +268,7 @@ harness/field/run.sh --profile kill-loop --ref plan-12   # SW-3's kill loop (lab
 | Scenario | Profiles | Legs | VMs: baseline snapshot (MIT / rust) | Reference hand records (MIT; rust) | Duration (MIT / rust) |
 | --- | --- | --- | --- | --- | --- |
 | `upgrade` | nightly, weekly | mit, rust | kdc: `f4-mit` / `rust-field-p12` (reset; the rust leg leaves it on the ref's install); client2: `rust-ssh` (rust leg, reset) | f-UP1 | under 1 / about 3.5 min (the build about 2) |
+| `kadmind-start` | nightly, weekly | mit, rust | kdc as `upgrade` left it (the running kadmind holds 464/749, which cell A1c needs) | f-AL1-start | under 1 / under 1 min |
 | `services` | nightly, weekly | mit, rust | services: `f4-mit` / `services-rust` (reset); kdc as `upgrade` left it | f-S2-services; f-S2-rust | about 2 / 2 min |
 | `nfs-client` | nightly, weekly | mit, rust | client2: `f4-mit` / `rust-ssh`, services: `f4-mit` / `services-rust` (both reset); kdc as `upgrade` left it | f-R4-mit + f-R5-mit; f-R4 + f-R5 (client2's legs) | about 1.5 / 1.5 min |
 | `sssd-login` | nightly, weekly | mit, rust | client1: `f4-mit` / `rust-nfs-sso`, services: `f4-mit` / `services-rust` (both reset); kdc as `upgrade` left it | f-R2-mit; f-R2 (headless) | about 2 / 2 min |
@@ -585,6 +586,43 @@ pin (`--no-optional-locks`), never a copy of the checkout's working tree.
   values, the fixture's `key_seed` and its admin keytab's keys, with its planted
   control; and the VM scratch for the boot's secrets and the admin password, by
   file name only.
+
+## Cadence
+
+The field suite is dispatched by hand -- by a person or the director -- never by
+a timer (see the end of this section). Every command names the branch with
+`REF`; for v1.2.0 that is `plan-12`.
+
+- **Nightly** (`make field PROFILE=nightly LEG=both REF=plan-12`, about 30 min),
+  at each package landing, the MIT leg first so a regression shows against the
+  parent build the same day.
+- **Weekly** (`make field PROFILE=weekly LEG=both REF=plan-12`, about 1.3 to
+  1.5 h), once a calendar week and again before a release re-pass.
+
+Which scenarios a profile runs is `run.sh`'s `PROFILES` and the Scenarios table's
+Profiles column; `install` runs last, as it resets kdc. Any passing MIT leg, in
+any profile, refreshes `runs/mit-latest/`, which a later `--leg rust` run compares
+against (the `run.sh` examples are under *Field runs* above).
+
+**A REGRESSION opens a package.** A difference a scenario's `.expect` lists is
+KNOWN; any other difference between the rust leg and MIT, or a row that was green
+and is now red, is a finding -- fix it with a package against the product or the
+scenario, never by editing an `.expect` so the red passes.
+
+The run holds the lab lock (*Field runs* above), so one runs at a time, and its
+host checks (`post.host.tmp`, `post.secret.scan`) must stay green.
+
+**Before a release re-pass**, a burn-in of seven consecutive nightly runs on the
+branch the release is cut from (each night's tip, its sha recorded) plus one
+weekly, all green, is the gate; a REGRESSION stops it and becomes a package. It is
+calendar time, dispatched like any other run.
+
+**No timer, by design.** A standing constant keeps the daemons, the systemd units
+and the field runs on the lab VMs and never touches this host's setup; and no lab
+VM can host a scheduler, because `run.sh` drives libvirt and the VMs over ssh from
+this host, and giving a VM that access would open a new path into it. Scheduled
+runs, if they are wanted, are a separate decision with their own design, so no
+unit file is shipped.
 
 ## What `up` builds
 
