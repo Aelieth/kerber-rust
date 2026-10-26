@@ -476,8 +476,7 @@ fn dump_keytab(args: &[String]) -> ExitCode {
         }
     };
     for e in &kt.entries {
-        // `KEY <etype> <hex> <name> <kvno>` — the kvno trails so existing
-        // callers that read `$3` for the hex are unaffected.
+        // `KEY <etype> <hex> <name> <kvno>`: kvno trails, so `$3` is still the hex.
         println!(
             "KEY {} {} {} {}",
             e.key.etype().to_iana(),

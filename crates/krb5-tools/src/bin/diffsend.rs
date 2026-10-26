@@ -259,9 +259,8 @@ fn expect_hidden_tgs_rep(cfg: &Cfg, case: &str, req: &[u8]) -> Result<(), String
     Ok(())
 }
 
-// AS errors echo the requested client (prepare_error_as); a TGS error uses the
-// decrypted header ticket's client. tgs-not-a-tgt decrypts a service header
-// and compares cname (check_client=true).
+// AS errors echo the client. A TGS error uses the header client.
+// tgs-not-a-tgt compares cname (check_client).
 fn expect_error_client(
     cfg: &Cfg,
     case: &str,
@@ -642,7 +641,7 @@ fn decrypt_tgs_enc(
     Ok((rep, enc, tkt, enc_tag))
 }
 
-// MIT tgs_issue_ticket; see docs/parity/a1-tgs.md
+// MIT: `tgs_issue_ticket` (kdc/do_tgs_req.c:953-1139)
 fn decrypt_u2u(
     raw: &[u8],
     header_session: &ProtocolKey,
@@ -679,9 +678,8 @@ fn decrypt_u2u(
     Ok((enc, rep.ticket, tkt))
 }
 
-// MIT dispatch; see docs/parity/a2-as.md
-// request resent from the cache, so the second reply is byte-for-byte the first on both
-// legs. Without the cache a fresh AS-REP carries a new random session key.
+// A cached AS-REQ is resent, so the second reply matches. No cache: a new session key.
+// MIT: `dispatch` (kdc/dispatch.c:89-175)
 fn expect_retransmit(cfg: &Cfg, case: &str, req: &[u8]) -> Result<(), String> {
     let (r1, m1) = send_both(cfg, case, req)?;
     let r2 = exchange_on_tcp(&cfg.rust, req).map_err(|e| format!("{case} rust#2: {e}"))?;
@@ -1265,10 +1263,8 @@ fn run() -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     expect_error(&cfg, "pauser-no-preauth", &req, err::PREAUTH_REQUIRED)?;
 
-    // hintu is keyed only aes128; the request lists only aes256.
-    // MIT have_client_keys; see docs/parity/a3-preauth.md
-    // enctype it is false → 25 with no PA 2, no ETYPE-INFO2 (`add_etype_info` skips a NULL
-    // client key), and no PA 151 (`spake_edata` omits when client_keyblock is NULL).
+    // hintu aes128-only vs aes256: no keys, so 25, no PA 2, ETYPE-INFO2 or PA 151.
+    // MIT: `have_client_keys` (kdc/kdc_preauth.c:434-447)
     let hintu = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["hintu"]);
     let req = encode(
         &as_req_sname(
@@ -1300,20 +1296,17 @@ fn run() -> Result<(), String> {
     .map_err(|e| e.to_string())?;
     expect_error(&cfg, "skewed-timestamp", &req, err::SKEW)?;
 
-    // pwchgu has REQUIRES_PWCHANGE and no preauth; a bare AS-REQ is
-    // validate_as_request "REQUIRED PWCHANGE" / KEY_EXP (23) on both legs, with
-    // its own status distinct from a lapsed pw_expire's "CLIENT KEY EXPIRED".
+    // pwchgu REQUIRES_PWCHANGE, no preauth: KEY_EXP (23) "REQUIRED PWCHANGE",
+    // not "CLIENT KEY EXPIRED".
     let pwchgu = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["pwchgu"]);
     let req = encode(&as_req(pwchgu, realm, 0x1000_000f, None).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
     expect_error(&cfg, "as-needchange", &req, err::KEY_EXPIRED)?;
 
-    // MIT AS_INVALID_OPTIONS; see docs/parity/a2-as.md
-    // INVALID AS OPTIONS / BADOPTION (13) on both legs.
-    // MIT NON_TGT_OPTION; see docs/parity/a1-tgs.md
-    // MIT NO_REFERRAL_OPTION; see docs/parity/a1-tgs.md
-    // ENC_TKT_IN_SKEY.
-    // CNAME_IN_ADDL_TKT.
+    // RENEW is BADOPTION 13. Also ENC_TKT_IN_SKEY and CNAME_IN_ADDL_TKT.
+    // MIT: `AS_INVALID_OPTIONS` (kdc/kdc_util.h:463-463)
+    // MIT: `NON_TGT_OPTION` (kdc/kdc_util.h:456-457)
+    // MIT: `NO_REFERRAL_OPTION` (kdc/kdc_util.h:460-460)
     let mut inv = as_req(user.clone(), realm, 0x1000_0010, None).map_err(|e| e.to_string())?;
     inv.0.req_body.kdc_options = inv
         .0
@@ -1323,25 +1316,21 @@ fn run() -> Result<(), String> {
     let req = encode(&inv).map_err(|e| e.to_string())?;
     expect_error(&cfg, "as-invalid-opts", &req, err::BADOPTION)?;
 
-    // pwprau requires preauth AND needs a password change.
-    // check_padata (:758), so a bare AS-REQ is "REQUIRED PWCHANGE" / KEY_EXP (23), not
-    // "NEEDED_PREAUTH" (25), on both legs.
+    // pwprau needs preauth and a password change: KEY_EXP (23),
+    // not "NEEDED_PREAUTH" (25). check_padata.
     let pwprau = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["pwprau"]);
     let req = encode(&as_req(pwprau, realm, 0x1000_0011, None).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
     expect_error(&cfg, "as-validate-before-preauth", &req, err::KEY_EXPIRED)?;
 
-    // lockedu is past its policy's maxfailure 1 with no lockout expiry.
-    // lockout is CLIENT_REVOKED (18) with the DB module's status "LOCKED_OUT", the last
-    // check of validate_as_request, before preauth.
+    // lockedu past maxfailure 1, no expiry: CLIENT_REVOKED (18) "LOCKED_OUT" before preauth.
     let lockedu = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["lockedu"]);
     let req = encode(&as_req(lockedu, realm, 0x1000_0097, None).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
     expect_error(&cfg, "as-locked-out", &req, err::CLIENT_REVOKED)?;
 
-    // PA-ENC-TIMESTAMP declaring des3 (etype 16), which pauser has no key for:
-    // enc_ts_verify krb5_dbe_search_enctype misses -> KRB5_KDB_NO_MATCHING_KEY
-    // -> KDC_ERR_PREAUTH_FAILED (24) on both legs.
+    // PA-ENC-TIMESTAMP etype 16, absent for pauser:
+    // KRB5_KDB_NO_MATCHING_KEY, PREAUTH_FAILED (24).
     let ed = EncryptedData {
         etype: 16,
         kvno: None,
@@ -1391,8 +1380,7 @@ fn run() -> Result<(), String> {
     .map_err(|e| e.to_string())?;
     let _ = expect_as_ok(&cfg, "as-success", &as_req_ok, &user)?;
 
-    // A distinct preauth AS-REQ (fresh nonce) sent twice: the lookaside resends
-    // the first reply, so the retransmit is identical on both legs.
+    // A fresh-nonce preauth AS-REQ sent twice: the lookaside resends the first reply.
     let pa_rt = pa_enc_timestamp(&ukey).map_err(|e| e.to_string())?;
     let as_req_rt = encode(
         &as_req(user.clone(), realm, 0x1000_0012, Some(vec![pa_rt])).map_err(|e| e.to_string())?,
@@ -1400,12 +1388,9 @@ fn run() -> Result<(), String> {
     .map_err(|e| e.to_string())?;
     expect_retransmit(&cfg, "as-retransmit", &as_req_rt)?;
 
-    // (non-anonymous) client is KRB5KDC_ERR_BADOPTION "VALIDATE_ANONYMOUS_PRINCIPAL",
-    // reached only after preauth.
-    // MIT validate_as_request; see docs/parity/a2-as.md
-    // lets the bit through, unlike the TGS-only options in as-invalid-opts.
-    // Both legs send code 13 with the same wire status; refusing the bit early as
-    // "INVALID AS OPTIONS" would send an e_text MIT does not.
+    // Non-anonymous VALIDATE is BADOPTION "VALIDATE_ANONYMOUS_PRINCIPAL" after preauth.
+    // Early "INVALID AS OPTIONS" is an e_text MIT does not send.
+    // MIT: `validate_as_request` (kdc/kdc_util.c:715-804)
     let pa_anon = pa_enc_timestamp(&ukey).map_err(|e| e.to_string())?;
     let mut anon =
         as_req(user.clone(), realm, 0x1000_0013, Some(vec![pa_anon])).map_err(|e| e.to_string())?;
@@ -1417,8 +1402,8 @@ fn run() -> Result<(), String> {
     let req = encode(&anon).map_err(|e| e.to_string())?;
     expect_error(&cfg, "as-request-anonymous", &req, err::BADOPTION)?;
 
-    // MIT validate_as_request; see docs/parity/a2-as.md
-    // Bit 17 is outside AS_INVALID_OPTIONS, so this bare pauser AS-REQ is still code 25.
+    // Bit 17 is outside AS_INVALID_OPTIONS, so a bare pauser AS-REQ stays code 25.
+    // MIT: `validate_as_request` (kdc/kdc_util.c:715-804)
     let mut reserved =
         as_req(pauser.clone(), realm, 0x1000_00ad, None).map_err(|e| e.to_string())?;
     reserved.0.req_body.kdc_options = reserved.0.req_body.kdc_options.with_bit(17, true);
@@ -1563,11 +1548,9 @@ fn run() -> Result<(), String> {
         true,
     )?;
 
-    // MIT krb5int_validate_times; see docs/parity/a1-tgs.md
-    // starttime by its authtime.
-    // MIT rd_req_decoded_opt; see docs/parity/b1-client.md
-    // kdc_rd_ap_req → krb5_rd_req_decoded_anyflag. A forged TGT with a future authtime and
-    // starttime absent is 33 PROCESS_TGS on both KDCs.
+    // Forged TGT, future authtime, no starttime: PROCESS_TGS (33).
+    // MIT: `krb5int_validate_times` (lib/krb5/krb/valid_times.c:35-57)
+    // MIT: `rd_req_decoded_opt` (lib/krb5/krb/rd_req_dec.c:472-787)
     let nyv_no_start = mint_tgt_times(
         tkt_key,
         tkt_kvno,
@@ -1598,9 +1581,8 @@ fn run() -> Result<(), String> {
         true,
     )?;
 
-    // An AS FAST armor AP-REQ without an authenticator subkey.
-    // MIT armor_ap_request; see docs/parity/a3-preauth.md
-    // always send a subkey, so this forge is the both-legs oracle.
+    // FAST armor AP-REQ with no subkey. MIT always sends one; this forge is the oracle.
+    // MIT: `armor_ap_request` (kdc/fast_util.c:35-90)
     let armor_tkt = mint_tgt(
         tkt_key,
         tkt_kvno,
@@ -1632,9 +1614,8 @@ fn run() -> Result<(), String> {
         err::POLICY,
     )?;
 
-    // A header ticket or authenticator carrying AD-FX-ARMOR 71.
-    // MIT kdc_process_tgs_req; see docs/parity/a1-tgs.md
-    // 12 PROCESS_TGS. Nothing in 1.22.2 emits 71.
+    // AD-FX-ARMOR 71 is PROCESS_TGS (12); 1.22.2 never emits it.
+    // MIT: `kdc_process_tgs_req` (kdc/kdc_util.c:142-280)
     let inner_ad = encode(&vec![AuthorizationDataValue {
         ad_type: pa::AD_FX_ARMOR,
         ad_data: Vec::<u8>::new().into(),
@@ -1728,13 +1709,9 @@ fn run() -> Result<(), String> {
         true,
     )?;
 
-    // AS/TGS entry validation (and kdc_rd_ap_req kvno 0).
-    // KRB5_BADMSGTYPE.
-    // MSG_TYPE, and a server realm the KDC does not serve is WRONG_REALM.
-    // MIT gather_tgs_req_info; see docs/parity/a1-tgs.md
-    // is KRB5_BADMSGTYPE.
-    // MUTUAL_REQUIRED is POLICY.
-    // MUST_USE_USER2USER.
+    // kvno 0: bad MSG_TYPE -> KRB5_BADMSGTYPE; unserved realm -> WRONG_REALM;
+    // MUTUAL_REQUIRED -> POLICY; else MUST_USE_USER2USER.
+    // MIT: `gather_tgs_req_info` (kdc/do_tgs_req.c:583-807)
     let mut bad_as = as_req(user.clone(), realm, 0x1000_0023, None).map_err(|e| e.to_string())?;
     bad_as.0.msg_type = krb5_types::KdcReq::MSG_TGS_REQ;
     expect_error(
@@ -1802,8 +1779,8 @@ fn run() -> Result<(), String> {
         err::MUST_USE_USER2USER,
     )?;
 
-    // MIT validate_as_request; see docs/parity/a2-as.md
     // An expired server is SERVICE EXPIRED on a bare AS-REQ, before preauth.
+    // MIT: `validate_as_request` (kdc/kdc_util.c:715-804)
     let expired_server = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["expiredsvc"]);
     expect_error(
         &cfg,
@@ -1823,8 +1800,8 @@ fn run() -> Result<(), String> {
         err::SERVICE_EXP,
     )?;
 
-    // MIT validate_as_request; see docs/parity/a2-as.md
-    // A server with DISALLOW_ALL_TIX is SERVICE LOCKED OUT on a bare AS-REQ, before preauth.
+    // DISALLOW_ALL_TIX is SERVICE LOCKED OUT on a bare AS-REQ, before preauth.
+    // MIT: `validate_as_request` (kdc/kdc_util.c:715-804)
     let locked_server = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["lockedsvc"]);
     expect_error(
         &cfg,
@@ -1914,8 +1891,8 @@ fn run() -> Result<(), String> {
         err::PREAUTH_REQUIRED,
     )?;
 
-    // MIT maybe_add_etype_info2; see docs/parity/a3-preauth.md
-    // (no cookie yet).
+    // no cookie yet.
+    // MIT: `maybe_add_etype_info2` (kdc/kdc_preauth.c:1136-1171)
     expect_error(
         &cfg,
         "as-spake-round1",
@@ -2856,9 +2833,8 @@ fn run() -> Result<(), String> {
         )?,
         err::ETYPE_NOSUPP,
     )?;
-    // Client offers AES128 only; stkt session is a distinct AES256 key.
-    // Ticket key = stkt session (`:997-1000`); reply session =
-    // select_session_keytype (`:352-355`) because 18 was not offered.
+    // AES128 offered, AES256 stkt session: ticket key is the session;
+    // reply key is select_session_keytype.
     let stkt_sess = random_session(EncryptionType::Aes256CtsHmacSha196)?;
     let u2u_ok_etypes = vec![EncryptionType::Aes128CtsHmacSha196.to_iana()];
     let u2u_ok = encode(
@@ -5111,7 +5087,7 @@ fn run() -> Result<(), String> {
         err::PREAUTH_FAILED,
     )?;
 
-    // MIT prepare_error_as; see docs/parity/a2-as.md
+    // MIT: `prepare_error_as` (kdc/do_as_req.c:769-849)
     let hide_sess = random_session(EncryptionType::Aes256CtsHmacSha196)?;
     let hide_tkt = mint_tgt(
         tkt_key,
@@ -5441,7 +5417,8 @@ fn tgs_rep_nonce(raw: &[u8], session: &ProtocolKey) -> Result<Vec<u8>, String> {
     }
 }
 
-/// B17: refused signedAuthPacks; only reasons equal on OpenSSL 3.0 and 3.5 (rest are lab cells).
+/// B17: refused signedAuthPacks whose reason matches on OpenSSL 3.0 and 3.5.
+/// The rest are lab cells.
 fn b17_cms_cases(cfg: &Cfg, realm: &str, user: &PrincipalName) -> Result<(), String> {
     let base_cms = |nonce: u32| -> Result<Vec<u8>, String> {
         let pem_path =
@@ -5557,7 +5534,7 @@ fn b17_cms_cases(cfg: &Cfg, realm: &str, user: &PrincipalName) -> Result<(), Str
         err::PREAUTH_FAILED,
     )?;
 
-    // oerr() cases first; the krb5_set_error_message refusals last, so none leaves a stale reason.
+    // oerr() cases first; krb5_set_error_message refusals last, so none leaves a stale reason.
     let not_der = set_sig(
         &base_cms(0x1000_0228)?,
         vec![0x31, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x02],
@@ -5613,8 +5590,8 @@ fn b17_cms_cases(cfg: &Cfg, realm: &str, user: &PrincipalName) -> Result<(), Str
     Ok(())
 }
 
-/// The seven ECDSA value faults whose KDC-log reason differs by OpenSSL version -- 3.5 logs
-/// `provider signature failure`, 3.0 `verification failure` -- so CI gates only the code (80).
+/// Seven ECDSA faults. OpenSSL 3.5 says `provider signature failure`,
+/// 3.0 `verification failure`; CI gates code 80.
 fn b17_lab_cases(cfg: &Cfg, realm: &str, user: &PrincipalName) -> Result<(), String> {
     let labuser = match env::var("KERBER_DIFF_B17_PRINC") {
         Ok(p) => PrincipalName::new(PrincipalName::NT_PRINCIPAL, [p.as_str()]),
@@ -5845,7 +5822,7 @@ fn ra_cases(
     };
     fields.push(der::Der::Cons(0xac, vec![der::Der::Prim(0x02, vec![0])]));
     let req = der::edit(&root, &body, Some(&der::Der::Cons(tag, fields))).bytes();
-    // MIT decode_sequence; see docs/parity/b1-asn1.md
+    // MIT: `decode_sequence` (lib/krb5/asn.1/asn1_encode.c:1399-1455)
     expect_both_tag(cfg, "as-req-trailing-body-field", &req, 0x6b)?;
 
     let tkt_kt = cfg.krbtgt.as_ref().ok_or("KERBER_KRBTGT_KEYTAB required")?;
@@ -5926,7 +5903,7 @@ fn ra_cases(
             .map(|(_, d)| d)
             .ok_or_else(|| "no subkey to break".to_string())
     })?;
-    // MIT errcode_to_protocol; see docs/parity/a2-as.md
+    // MIT: `errcode_to_protocol` (kdc/kdc_util.c:690-698)
     expect_error(
         cfg,
         "tgs-authenticator-malformed-subkey",
@@ -5967,9 +5944,9 @@ fn ra_cases(
     })?;
     expect_error(cfg, "tgs-authenticator-crealm-octets", &req, err::BADMATCH)?;
 
-    // An AS-REQ whose PA-SPAKE holds an element no PA-SPAKE alternative takes, [4].
-    // MIT decode_cntype; see docs/parity/a3-preauth.md
-    // MIT spake_verify; see docs/parity/a3-preauth.md
+    // PA-SPAKE holds an element no alternative takes, [4].
+    // MIT: `decode_cntype` (lib/krb5/asn.1/asn1_encode.c:1245-1300)
+    // MIT: `spake_verify` (plugins/preauth/spake/spake_kdc.c:501-539)
     let spake = PaData {
         padata_type: pa::SPAKE,
         padata_value: vec![0xa4, 0x02, 0x30, 0x00].into(),
@@ -5992,8 +5969,8 @@ fn ra_cases(
     })?;
     expect_tgs_rep(cfg, "tgs-authenticator-cusec-out-of-range", &req)?;
 
-    // An AS-REQ whose PA-ENC-TIMESTAMP carries a pausec past 999999.
-    // MIT enc_ts_verify; see docs/parity/a3-preauth.md
+    // PA-ENC-TIMESTAMP pausec past 999999.
+    // MIT: `enc_ts_verify` (kdc/kdc_preauth_encts.c:46-119)
     let ukey = client_key(18, &cfg.user_pw, user, realm)?;
     let ts = krb5_types::PaEncTsEnc {
         patimestamp: KerberosTime::now(),
@@ -6021,8 +5998,8 @@ fn ra_cases(
         user,
     )?;
 
-    // A TGS-REQ whose authenticator's EncryptedData says aes128 for an aes256 session key.
-    // MIT krb5_k_decrypt; see docs/parity/b1-client.md
+    // Authenticator EncryptedData says aes128 for an aes256 session key.
+    // MIT: `krb5_k_decrypt` (lib/crypto/krb/decrypt.c:30-85)
     let mut tgs = tgs_for(0x1000_020a, &sess)?;
     let padata = tgs.0.padata.as_mut().ok_or("no padata")?;
     let pa_tgs = padata
@@ -6039,8 +6016,8 @@ fn ra_cases(
         err::GENERIC,
     )?;
 
-    // An armored AS-REQ whose enc-fast-req says aes128 for an aes256 armor key.
-    // MIT kdc_find_fast; see docs/parity/a3-preauth.md
+    // enc-fast-req says aes128 for an aes256 armor key.
+    // MIT: `kdc_find_fast` (kdc/fast_util.c:120-247)
     let armor_sess = random_session(EncryptionType::Aes256CtsHmacSha196)?;
     let armor_sub = random_session(EncryptionType::Aes256CtsHmacSha196)?;
     let armor_tkt = mint_tgt(

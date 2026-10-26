@@ -126,9 +126,7 @@ fn main() -> ExitCode {
     if keep_cipher {
         return claim_realm_keep_cipher(&cc_path, &out_path, &tgt_sname, &claim_realm);
     }
-    // `--decrypt-keytab` picks the key matching the ticket's own etype+kvno, so
-    // callers do not have to know which enctype/kvno the KDC sealed a service
-    // ticket under (a keytab can hold several).
+    // `--decrypt-keytab` uses the ticket's etype and kvno, so the caller names no enctype.
     let keytab_keys: Option<Vec<(i32, u32, ProtocolKey)>> = match decrypt_keytab {
         None => None,
         Some(ref path) => match Keytab::parse(&fs::read(path).unwrap_or_default()) {
@@ -261,8 +259,8 @@ fn main() -> ExitCode {
             Ok(t) => t,
             Err(_) => continue,
         };
-        // Ticket enc etype is first_current_key (profile order). --key-hex
-        // bytes from dump-keytab must be wrapped as that etype, not always 18.
+        // Ticket etype is first_current_key (profile order).
+        // `--key-hex` uses that etype, not always 18.
         let key = if let Some(ref keys) = keytab_keys {
             // Match the ticket's own etype, and its kvno when it carries one
             // (else the highest kvno for that etype).

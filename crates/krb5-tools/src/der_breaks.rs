@@ -1,6 +1,4 @@
-// The DER editing behind the decode sweeps (`asn1_sweep.rs`, `rd-priv-oracle`, `diffsend`),
-// shared through `include!`: one value's DER as elements, and every way the sweeps break an
-// explicit `[n]` field, a SEQUENCE OF element or a 32-bit counter in it.
+// Break an explicit `[n]`, a SEQUENCE OF element or a 32-bit counter (`include!`).
 
 use std::fmt::Write as _;
 
@@ -182,12 +180,10 @@ pub(crate) fn flip(d: &Der) -> Der {
     Der::Raw(raw)
 }
 
-/// INTEGER: nine octets (past MIT's eight); `FF 7F FF FF FF` (-2^31-1, which an octet dropped to
-/// make it fit would read as 2^31-1); 6 (no pvno or vno, which MIT's `krb5_version` refuses);
-/// 2^31 (past an int32, inside MIT's unsigned msg-type and error-code).
-/// BOOLEAN: two octets. BIT STRING: eight unused bits. GeneralizedTime: a fraction (MIT takes
-/// fifteen octets only); month 13 (MIT's `timegm` reads it as January of the next year).
-/// GeneralString: octets that are not ASCII (MIT takes any).
+/// INTEGER: 9 octets, past MIT's eight; `FF 7F FF FF FF` (-2^31-1; an octet drop reads 2^31-1);
+/// 6 (`krb5_version` refuses); 2^31 (past int32; msg-type and error-code take it).
+/// BOOLEAN: 2 octets. BIT STRING: 8 unused. GeneralizedTime: a fraction (MIT takes 15)
+/// or month 13 (`timegm` -> next January). GeneralString: non-ASCII (MIT takes it).
 pub(crate) fn bad_content(tag: u8, form: u8) -> Option<Vec<u8>> {
     match (tag, form) {
         (0x01, 0) => Some(vec![0xff, 0x00]),

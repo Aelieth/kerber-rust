@@ -234,8 +234,8 @@ fn cases() -> Result<Vec<RdCase>, String> {
             Some(krb_safe(&broken.bytes())?),
         ));
     }
-    // The AP-REQ, KRB-PRIV and KRB-SAFE themselves broken as sent: nothing is re-encrypted or
-    // re-signed, so a KRB-SAFE-BODY broken here also fails its checksum.
+    // AP-REQ, KRB-PRIV and KRB-SAFE are broken as sent,
+    // so a broken KRB-SAFE-BODY fails its checksum.
     for (place, broken) in all_breaks(&root(&ap)?) {
         out.push((format!("ap-req/{place}"), "req", broken.bytes(), None));
     }
@@ -274,8 +274,7 @@ fn rust_answer(kind: &str, ap: &[u8], msg: Option<&[u8]>) -> String {
         return "other:key".into();
     };
     let replay = ReplayCache::new();
-    // The oracle's MEMORY keytab: one entry, the service at kvno 1. No server is named, so the
-    // acceptor walks the keytab as MIT's `krb5_rd_req` with a NULL server does.
+    // Oracle MEMORY keytab: service at kvno 1, no server, so `krb5_rd_req` walks it (NULL server).
     let keys = [service_key];
     let principal = [(
         PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "oracle.kerber.test"]),
@@ -902,7 +901,7 @@ fn auth_label(why: u32) -> &'static str {
     }
 }
 
-/// procedure 1 (an auth message), as MIT's client sends them. The record ends in the GSS token. What it
+/// procedure 1, as MIT's client sends them. The record ends in the GSS token. What it
 fn init_call(
     stream: &mut std::net::TcpStream,
     agss: bool,

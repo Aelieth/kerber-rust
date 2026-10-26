@@ -1,13 +1,7 @@
-// The decode sweep, shared by `asn1-sweep` (the gate's corpus and judge) and the unit test
-// `tests/asn1_sweep.rs` through `include!`.
-//
-// Each message type MIT 1.22.2's libkrb5 decodes (`decode_krb5_<type>`) gets one value with every
-// OPTIONAL field present and every SEQUENCE OF two elements long. In its DER, every explicit `[n]`
-// field and every SEQUENCE OF element is broken in turn ([`Break`]); the 32-bit counters (a
-// nonce, a sequence number, a kvno, a cusec) carry 0x01020304 and also take MIT's 32-bit edge
-// values. MIT's own decoder (the decode oracle under `scripts/oracle`) judges every case; the Rust
-// decoder must refuse a case exactly when MIT does, and otherwise decode it to a value that MIT
-// re-encodes as it re-encodes the case.
+// Decode sweep (`asn1-sweep`, `tests/asn1_sweep.rs`, `include!`).
+// One `decode_krb5_<type>` value: OPTIONALs set, SEQUENCE OF length 2.
+// Break each `[n]`, SEQUENCE OF element and 32-bit counter (0x01020304, MIT's edges).
+// Rust refuses exactly when MIT's oracle does, else re-encodes as MIT does.
 
 use krb5_types::cammac::{AdKdcIssued, Cammac, VerifierMac};
 use krb5_types::fast::{
@@ -29,7 +23,7 @@ use krb5_types::{
 
 include!("der_breaks.rs");
 
-/// One case: an id that names the message, the element and the break, MIT's decoder, and the DER.
+/// One case: id, element, break, MIT's decoder, and the DER.
 #[derive(Clone, Debug)]
 struct Case {
     id: String,
@@ -60,7 +54,7 @@ fn verdict_enc_kdc_rep_part(der: &[u8]) -> Verdict {
     }
 }
 
-/// A message type: its name, MIT's decoder (`decode_krb5_<mit>`), its value's DER and `Debug`,
+/// A message type: name, MIT decoder (`decode_krb5_<mit>`), DER and `Debug`,
 struct Message {
     name: &'static str,
     mit: &'static str,
@@ -160,7 +154,7 @@ fn ticket() -> Ticket {
         enc_part: enc(),
     }
 }
-/// Forwardable and renewable: MIT leaves out zero flags, and a renew-till that is not renewable.
+/// Forwardable and renewable: MIT omits zero flags, and a renew-till that is not renewable.
 fn flags() -> TicketFlags {
     TicketFlags::from_u32(0x4080_0000)
 }
@@ -719,8 +713,7 @@ fn corpus_text(cases: &[Case]) -> String {
     })
 }
 
-/// The cases the Rust decoder decodes, as a corpus of its re-encodings (same ids): MIT re-encodes
-/// each, so the two values are compared as MIT sees them.
+/// Cases the Rust decoder accepts, re-encoded so MIT compares the two values (same ids).
 fn rust_text(messages: &[Message], cases: &[Case]) -> String {
     cases.iter().fold(String::new(), |mut out, c| {
         if let Some(Verdict::Decoded(der)) = judge_case(messages, c) {
@@ -736,7 +729,7 @@ fn judge_case(messages: &[Message], c: &Case) -> Option<Verdict> {
     Some((m.judge)(&c.der))
 }
 
-/// What MIT's decoder made of one case: refused, or decoded (with the hash of what MIT's encoder
+/// MIT's decoder on one case: refused, or decoded (hash of what MIT's encoder
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Mit {
     Refused,
@@ -759,9 +752,8 @@ fn parse_mit(text: &str) -> std::collections::HashMap<String, Mit> {
         .collect()
 }
 
-/// The golden: per case, MIT's verdict and, where both decode, the hash of the Rust re-encoding
-/// MIT re-encodes as it re-encodes the case (`-` where MIT refuses; `?` where the Rust decoder parts
-/// from MIT, so no Rust value is MIT's). The first line names the corpus by its hash.
+/// Golden: MIT's verdict and the re-encoding hash (`-` refuses, `?` parts).
+/// Line 1 names the corpus.
 fn golden_text(
     messages: &[Message],
     cases: &[Case],
