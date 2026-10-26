@@ -272,7 +272,7 @@ harness/field/run.sh --profile kill-loop --ref plan-12   # SW-3's kill loop (lab
 | `nfs-client` | nightly, weekly | mit, rust | client2: `f4-mit` / `rust-ssh`, services: `f4-mit` / `services-rust` (both reset); kdc as `upgrade` left it | f-R4-mit + f-R5-mit; f-R4 + f-R5 (client2's legs) | about 1.5 / 1.5 min |
 | `sssd-login` | nightly, weekly | mit, rust | client1: `f4-mit` / `rust-nfs-sso`, services: `f4-mit` / `services-rust` (both reset); kdc as `upgrade` left it | f-R2-mit; f-R2 (headless) | about 2 / 2 min |
 | `ad-trust` | none: `run.sh ad-trust` | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it; the AD DC TEST-SERVER (WinRM; its changes undone in the run) | f-RA-mit; f-RA, f-FULL-r2 `hand/ra` | about 2 / 2 min (the hand legs: 117 / 112 s) |
-| `klldap-swap` | nightly, weekly | mit, rust | none: this host's docker | f-F3-mit (mit leg), f-F3 (rust leg) | about 4 min (mit) and 8 min (rust) with BuildKit's cache warm; much longer cold (see below) |
+| `klldap-swap` | nightly, weekly | mit, rust | klldap (not reset; the leg cleans its own artifacts) | f-F3-mit (mit leg), f-F3 (rust leg) | about 4 min (mit) and 8 min (rust) with BuildKit's cache warm; much longer cold (see below) |
 | `kdc-profile` | weekly; on demand with `--only upgrade,kdc-profile` for a change to how kdc.conf is read | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it, its kdc.conf restored after each cell | none: the CF cells' first record | about 6 / 6 min |
 | `kdb-writes` | weekly; on demand with `--only upgrade,kdb-writes` for a change to how the store writes | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it, its scratch principals and policies removed at the end | none: the SW cells' first record | about 1 / 1 min |
 | `pkinit` | weekly; on demand with `--only upgrade,pkinit` for a change to PKINIT | mit, rust | client2: `$PK_SNAPSHOT_CLIENT2` when set (reset), else as it stands; kdc as `upgrade` left it, the L6 certificates made on it for the run (`lib/l6-certs.sh`) and client2's piped there, its kdc.conf restored after | none: the PK cells' first record | about 2 / 2 min |
@@ -498,8 +498,8 @@ would remove it.
   as this run's MIT leg, else `runs/mit-latest`; with neither it fails, so give
   `--leg both`.
 
-`scenarios/klldap-swap.sh` runs KLLDAP on this host's docker, never on a lab VM
-(run.sh still holds the lab lock while it runs). It needs, from `field.env`:
+`scenarios/klldap-swap.sh` runs KLLDAP on the `klldap` lab VM's docker (`.30`; it
+ran on this host's docker before). It needs, from `field.env`:
 the KLLDAP checkout and its pin (`FIELD_KLLDAP_REPO`, `FIELD_KLLDAP_PIN`), the
 phase-80 fixture (`FIELD_KLLDAP_FIXTURE`) and Zepmann/lldap-cli
 (`FIELD_LLDAP_CLI`). All three are only read; the source is `git archive` of the
@@ -558,28 +558,33 @@ pin (`--no-optional-locks`), never a copy of the checkout's working tree.
   `docker logs`, and the lane sandbox's admin/admin attributes.
   `scenarios/klldap-swap.expect` lists the known differences, each with its
   record and the package or decision that owns it.
-- **Where things run:** docker from wherever run.sh runs. The gate runs where
-  `jq` is (lldap-cli needs it): here, or on the host through
-  `distrobox-host-exec` from the `rust-dev` distrobox, which has none. Every
-  path a container or the host writes is under the run's directory, and the
-  fixture is read in place, so it must be on a path the host sees too
-  (anything under `$HOME` is).
-- **Resources:** images, containers, volumes and networks are named
+- **Where things run:** every docker command, the ref build, the lanes and the
+  gate run on the `klldap` VM, reached with `lab.sh ssh klldap`, where `jq` (for
+  lldap-cli) lives. The inputs are generated on the host and pushed to the VM
+  over the lab key -- the source as `git archive` of the pin, the fixture as a
+  tar -- and a postflight checks the host's own docker is unchanged, so nothing
+  built or ran there.
+- **Resources:** on the VM, images, containers, volumes and networks are named
   `kerber-field-<run id>-<leg>…` and removed at the end; BuildKit's cache stays,
   and makes a run after the first one fast. The ref's build and the lanes run
-  under `nice` and `--cpus 8`; BuildKit's image builds take no CPU cap. Each leg
-  downloads rustup, the toolchains and the crates again into its tmp, and
-  deletes its scratch when it ends (several GB, with a container for what root
-  wrote), so run.sh's secret scan reads the records, not the scratch.
+  under `nice` and `--cpus 4` (the VM's vCPUs); BuildKit's image builds take no
+  CPU cap. The VM keeps the run's scratch under `/var/tmp/kf-<run id>-<leg>`
+  (removed at the end) and a rustup/cargo cache under `/var/tmp/kf-cache` (kept
+  across runs), so only the first run downloads the toolchains and crates.
   With a cold cache, or after `quay.io/almalinuxorg/10-minimal` moves (KLLDAP's
   Dockerfile does not pin it), KLLDAP's image build compiles everything again:
   F3-MIT's took 9 min with its first stage cached, so set `FIELD_CMD_TIMEOUT`
   and `FIELD_SCENARIO_TIMEOUT` higher for that run.
 - **Secrets:** each leg makes its own (the fixture's admin password, the fresh
-  `key_seed`, the boot's LLDAP secrets) in its tmp, never printed. KLLDAP's
-  gate passes the fixture admin password on `docker run`'s command line, as
-  it is written. A last check scans the leg's record for those values, the
-  fixture's `key_seed` and its admin keytab's keys, with its planted control.
+  `key_seed`, the boot's LLDAP secrets) on the host, never printed, and pushes
+  them to a `…-secrets` directory beside the VM scratch, 0700, outside the tree
+  the builds and lanes mount. The boot reads them with `--env-file`, and the
+  gate reads the admin password from that directory and passes it to its own
+  containers on `docker run`'s command line, as it is written. A last check
+  scans the records (each built image's `docker history` among them) for those
+  values, the fixture's `key_seed` and its admin keytab's keys, with its planted
+  control; and the VM scratch for the boot's secrets and the admin password, by
+  file name only.
 
 ## What `up` builds
 
