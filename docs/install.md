@@ -103,7 +103,7 @@ and `krb5kdc` logs so at start.
 
 ## Install
 
-Replace krb5-server (the usual case), or install beside it.
+In the checkout built as in [Build](#build), replace krb5-server (the usual case), or install beside it.
 
 ### Replacing krb5-server
 

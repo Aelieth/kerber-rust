@@ -108,20 +108,20 @@ make_principals() {
 # made locally on client2, so no key bytes cross the host or land in the record).
 stage_svc_keytab() {
     check svc.keytab 'Entry for principal svc/setup@'"$R"' with kvno 2, .*added to keytab' runin client2 "admin pw" \
-        "install -d -m 0700 ~/field && kadmin -p admin/admin@$R -q 'ktadd -k \$HOME/field/svc-setup.keytab svc/setup' 2>&1" < <(once "$ADMIN")
+        "install -d -m 0700 ~/field && kadmin -p admin/admin@$R -q \"ktadd -k \$HOME/field/svc-setup.keytab svc/setup\" 2>&1" < <(once "$ADMIN")
 }
 # refusals: the eight svc/setup refusals under the settled aci ACL, from client2 (host/aci exists: the aci
 # variant made it, and the variant loop ends on aci, so the ACL is aci). Each prints its exit; MIT's exact texts.
 refusals() {
     local K="kadmin -p svc/setup@$R -k -t \$HOME/field/svc-setup.keytab -s $KDC_HOST" H="host/aci.$DOMAIN@$R"
     check refuse.add "add_principal: Operation requires .add. privilege while creating \"HTTP/negative\\.$DOMAIN@$R\"\\." run client2 "$K -q 'addprinc -randkey HTTP/negative.$DOMAIN@$R' 2>&1; echo exit=\$?"
-    check refuse.ktadd "Operation requires .change-password. privilege while changing alice@$R's key" run client2 "$K -q 'ktadd -k \$HOME/field/x.keytab alice@$R' 2>&1; echo exit=\$?"
+    check refuse.ktadd "Operation requires .change-password. privilege while changing alice@$R's key" run client2 "$K -q \"ktadd -k \$HOME/field/x.keytab alice@$R\" 2>&1; echo exit=\$?"
     check refuse.getprinc "get_principal: Operation requires .get. privilege while retrieving \"alice@$R\"\\." run client2 "$K -q 'getprinc alice@$R' 2>&1; echo exit=\$?"
     check refuse.modget "modify_principal: Operation requires .get. privilege while getting \"alice@$R\"\\." run client2 "$K -q 'modprinc -allow_tix alice@$R' 2>&1; echo exit=\$?"
     check refuse.modify "modify_principal: Operation requires .modify. privilege while modifying \"$H\"\\." run client2 "$K -q 'modprinc -maxrenewlife 1d $H' 2>&1; echo exit=\$?"
     check refuse.delete "delete_principal: Operation requires .delete. privilege while deleting principal \"$H\"" run client2 "$K -q 'delprinc -force $H' 2>&1; echo exit=\$?"
     check refuse.list "get_principals: Operation requires .list. privilege while retrieving list\\." run client2 "$K -q 'listprincs' 2>&1; echo exit=\$?"
-    check refuse.extract "Operation requires .extract-keys. privilege while changing host/aci\\.$DOMAIN@$R's key" run client2 "$K -q 'ktadd -norandkey -k \$HOME/field/n.keytab $H' 2>&1; echo exit=\$?"
+    check refuse.extract "Operation requires .extract-keys. privilege while changing host/aci\\.$DOMAIN@$R's key" run client2 "$K -q \"ktadd -norandkey -k \$HOME/field/n.keytab $H\" 2>&1; echo exit=\$?"
     check refuse.allowed '^Principal: host/aci\.'"$DOMAIN"'@'"$R"'$' run client2 "$K -q 'getprinc $H' 2>&1"
 }
 # realm_and_population <leg>: the shared build, from a KDC program already present on kdc, through the population.
@@ -160,7 +160,7 @@ else
     docrun prereq
     docscript build "$STATE/install.md" '## Build' 1 --drop '^git clone ' --drop '^cd kerber-rust$' --session "$CARGO_ENV" --session "cd ~/$CO"
     docrun build
-    docscript replace "$STATE/install.md" '### Replacing krb5-server' 1
+    docscript replace "$STATE/install.md" '### Replacing krb5-server' 1 --session "$CARGO_ENV" --session "cd ~/$CO"
     docrun replace
     check install.programs '^programs: [1-9][0-9]* in the manifest, each identical to the build$' runin kdc "lib/install-check.sh" "sh -s -- ~/$CO" < "$FIELD_LIB/install-check.sh"
     realm_and_population rust

@@ -26,6 +26,6 @@ acl_variant() {
         elif [[ $L == *c* && $L == *i* ]]; then ere="Entry for principal $p/$T\\.$DOMAIN@$R with kvno 2, .*added to keytab"
         elif [[ $L != *c* ]]; then ere="Operation requires .change-password. privilege while changing $p/$T\\.$DOMAIN@$R's key"
         else ere="Operation requires .get. privilege while changing $p/$T\\.$DOMAIN@$R's key"; fi
-        check "acl.$L.$p.ktadd" "$ere" run client2 "rm -f \$HOME/field/$p-$T.keytab; $K -q 'ktadd -k \$HOME/field/$p-$T.keytab $pf' 2>&1; echo rc=\$?"
+        check "acl.$L.$p.ktadd" "$ere" run client2 "rm -f \$HOME/field/$p-$T.keytab; $K -q \"ktadd -k \$HOME/field/$p-$T.keytab $pf\" 2>&1; echo rc=\$?"
     done
 }
