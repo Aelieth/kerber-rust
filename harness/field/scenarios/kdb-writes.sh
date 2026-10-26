@@ -95,12 +95,12 @@ kself KA.privs.self '^current privileges: INQUIRE ADD MODIFY DELETE$' Ct-self-0 
 
 section "KA.deny: ctself, with no kadm5.acl line, refused in MIT's words (server_stubs.c; kadmin.c's com_err lines; modprinc reads first)"
 kself KA.deny.add "^add_principal: Operation requires \`\`add'' privilege while creating \"ctdeny@$R\"\\.\$" Ct-self-0 'addprinc -randkey ctdeny'
-kself KA.deny.delete "^delete_principal: Operation requires \`\`delete'' privilege while deleting principal \"ctdate@$R\"\$" Ct-self-0 'delprinc -force ctdate'
-kself KA.deny.list "^get_principals: Operation requires \`\`list'' privilege while retrieving list\\.\$" Ct-self-0 'listprincs'
-kself KA.deny.modify "^modify_principal: Operation requires \`\`get'' privilege while getting \"ctdate@$R\"\\.\$" Ct-self-0 'modprinc -maxlife 1h ctdate'
-kself KA.deny.addpol "^add_policy: Operation requires \`\`add'' privilege while creating policy \"ctdenypol\"\\.\$" Ct-self-0 'addpol ctdenypol'
-kself KA.deny.listpols "^get_policies: Operation requires \`\`list'' privilege while retrieving list\\.\$" Ct-self-0 'listpols'
-kself KA.deny.delpol "^delete_policy:: Operation requires \`\`delete'' privilege while deleting policy \"swpol\"\$" Ct-self-0 'delpol -force swpol'
+kself KA.deny.delete "^(Password for [^:]*: )?delete_principal: Operation requires \`\`delete'' privilege while deleting principal \"ctdate@$R\"\$" Ct-self-0 'delprinc -force ctdate'
+kself KA.deny.list "^(Password for [^:]*: )?get_principals: Operation requires \`\`list'' privilege while retrieving list\\.\$" Ct-self-0 'listprincs'
+kself KA.deny.modify "^(Password for [^:]*: )?modify_principal: Operation requires \`\`get'' privilege while getting \"ctdate@$R\"\\.\$" Ct-self-0 'modprinc -maxlife 1h ctdate'
+kself KA.deny.addpol "^(Password for [^:]*: )?add_policy: Operation requires \`\`add'' privilege while creating policy \"ctdenypol\"\\.\$" Ct-self-0 'addpol ctdenypol'
+kself KA.deny.listpols "^(Password for [^:]*: )?get_policies: Operation requires \`\`list'' privilege while retrieving list\\.\$" Ct-self-0 'listpols'
+kself KA.deny.delpol "^(Password for [^:]*: )?delete_policy:: Operation requires \`\`delete'' privilege while deleting policy \"swpol\"\$" Ct-self-0 'delpol -force swpol'
 
 section "KA.keep: cpw -keepold keeps every key version for admin/admin, and MAX_SELF_KEEPOLD (5, the new one included) when ctself changes its own (server_stubs.c:383-399, kdb_cpw.c:116-137)"
 for i in 1 2 3 4 5 6; do
