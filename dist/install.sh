@@ -33,9 +33,10 @@ fi
 # The cargo binary, then the MIT name it is installed under.
 KDC_PROGS='krb5-kdc:krb5kdc krb5-kadmind:kadmind krb5-kadmin-local:kadmin.local krb5-kdb:kdb5_util krb5-kprop:kprop krb5-kpropd:kpropd'
 CLIENT_PROGS='krb5-kinit:kinit krb5-klist:klist krb5-kdestroy:kdestroy krb5-kswitch:kswitch krb5-kvno:kvno krb5-kpasswd:kpasswd krb5-ktutil:ktutil'
-# Fedora's kprop.service runs MIT's kpropd argv as a forking daemon, which krb5-kpropd is not:
-# kprop and kpropd are installed, their unit and sysconfig file are not.
-UNITS='krb5kdc kadmin'
+# Fedora's kprop.service runs MIT's kpropd as a forking daemon; krb5-kpropd never detaches, so our
+# kprop.service is Type=simple (the one deviation; docs/mit-deviations.md). It is otherwise Fedora's, with
+# /etc/sysconfig/kprop, and starts only where a kpropd.acl marks the host a replica.
+UNITS='krb5kdc kadmin kprop'
 TMPFILE=$TMPFILESDIR/krb5-krb5kdc.conf
 
 say() { printf '%s\n' "$*"; }
@@ -193,7 +194,7 @@ $units$TMPFILE"
     done
     put 0644 "$DIST/tmpfiles.d/krb5-krb5kdc.conf" "$TMPFILE"
     record "$TMPFILE"
-    for s in krb5kdc kadmin; do
+    for s in krb5kdc kadmin kprop; do
         config 0644 "$DIST/sysconfig/$s" "$SYSCONFIGDIR/$s"
     done
     for l in krb5kdc kadmind; do

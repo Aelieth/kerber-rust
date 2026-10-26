@@ -12,17 +12,17 @@ The realm's names are set once, at the start of [A realm](#a-realm).
 | Path (with `PREFIX=/usr`) | Mode | What |
 | --- | --- | --- |
 | `/usr/sbin/krb5kdc`, `kadmind`, `kadmin.local`, `kdb5_util`, `kprop`, `kpropd` | 0755 | The KDC-side programs under MIT's names, as real files, so a daemon's `/proc/<pid>/comm` is `krb5kdc` or `kadmind` |
-| `/usr/lib/systemd/system/krb5kdc.service`, `kadmin.service` | 0644 | Fedora's units, with `ExecStart` naming the installed programs |
+| `/usr/lib/systemd/system/krb5kdc.service`, `kadmin.service`, `kprop.service` | 0644 | Fedora's units with `ExecStart` naming the installed programs; `kprop.service` (the replica propagator) is `Type=simple`, its one change, since `kpropd` does not detach ([Replica KDCs](#replica-kdcs)) |
 | `/usr/lib/tmpfiles.d/krb5-krb5kdc.conf` | 0644 | `/run/krb5kdc`, made at boot |
 | `/usr/share/kerber-rust/install-manifest` | 0644 | The files above and the `make install-clients` tools, each with its SHA-256: what `make uninstall` may remove |
-| `/etc/sysconfig/krb5kdc`, `kadmin` | 0644 | `KRB5KDC_ARGS=`, `KADMIND_ARGS=` (config) |
+| `/etc/sysconfig/krb5kdc`, `kadmin`, `kprop` | 0644 | `KRB5KDC_ARGS=`, `KADMIND_ARGS=`, `KPROPD_ARGS=` (config) |
 | `/etc/logrotate.d/krb5kdc`, `kadmind` | 0644 | `/var/log/krb5kdc.log` and `/var/log/kadmind.log`: rotated monthly, twelve kept, then `systemctl reload` (config) |
 | `/var/kerberos/krb5kdc/` | 0755 | The KDC directory, made only when it is missing |
 | `/var/kerberos/krb5kdc/kdc.conf`, `kadm5.acl` | 0600 | Fedora's shipped files, for the realm `EXAMPLE.COM` (config) |
 
 The files come from `dist/` in the source tree; the units and `kdc.conf` are Fedora's with the
-paths filled in. Fedora's third unit, `kprop.service`, is not installed (see
-[Not supported](#not-supported)). The rules are the package's:
+paths filled in. Fedora's third unit, `kprop.service`, is installed too, as `Type=simple` for its
+non-forking `kpropd` (see [Replica KDCs](#replica-kdcs)). The rules are the package's:
 
 - A config file is installed only when nothing is at its path, as dnf's `noreplace` does. An
   edited file survives every reinstall, and `make uninstall` never removes one.
@@ -463,6 +463,60 @@ order) and picks the certificate by `pkinit_cert_match`, as MIT's does; its keys
 RSA, and only the first anchor is used. Anonymous PKINIT
 (`kinit -n`) uses the same KDC identity.
 
+### Replica KDCs
+
+A replica runs `krb5kdc` from a read-only copy of the realm that the primary pushes to it with
+`kprop` (a full dump) and, with `iprop_enable`, keeps current incrementally. kerber-rust installs
+`kprop.service` for this: Fedora's own unit, but `Type=simple`, since `kpropd` never detaches where
+MIT's forks. It starts only where its `AssertPathExists` on the KDC directory's `kpropd.acl` marks
+the host a replica.
+
+On the **replica**, with the realm's `krb5.conf` and `kdc.conf` in place and the KDC directory made
+(as under [The database](#the-database)) but no database yet:
+
+```sh
+sudo kadmin -p admin/admin -q "ktadd host/replica.example.com"   # this host's key, default keytab
+printf 'host/primary.example.com@EXAMPLE.COM\n' | sudo tee /var/kerberos/krb5kdc/kpropd.acl
+sudo systemctl enable --now kprop                                # listens on TCP 754
+```
+
+On the **primary**, the first (full) sync; then start `krb5kdc` on the replica:
+
+```sh
+sudo kdb5_util dump /var/kerberos/krb5kdc/replica_datatrans
+sudo kprop -f /var/kerberos/krb5kdc/replica_datatrans replica.example.com
+```
+
+`kprop` sends the dump as `host/primary.example.com` (its ticket from a KDC, the key in `-s`, else
+the default keytab) to the replica's port 754 and writes `<file>.replica.example.com.last_prop`;
+`kpropd` accepts the connection only from a principal its `kpropd.acl` names, and loads it.
+
+For **incremental propagation**, set `iprop_enable = true` and `iprop_port` in each KDC's `kdc.conf`
+realm stanza and `iprop_replica_poll` on the replica, create `kiprop/replica.example.com` with the
+`p` ACL on the primary, and add its key to the replica's keytab:
+
+```sh
+sudo kadmin.local -q "addprinc -randkey kiprop/replica.example.com"                 # on the primary
+printf 'kiprop/replica.example.com@EXAMPLE.COM  p\n' | sudo tee -a /var/kerberos/krb5kdc/kadm5.acl
+sudo kadmin -p admin/admin -q "ktadd kiprop/replica.example.com"                    # on the replica
+```
+
+`kadmind` serves iprop on `iprop_port` (with it equal to the kadm5 port, iprop is not served, as
+MIT's is not); `kpropd` polls it as `kiprop/replica.example.com` every `iprop_replica_poll`, and
+`kadmind` sends a full dump itself once the log has run past the replica, so there is no
+`kdb5_util dump`/`kprop` by hand after the first sync (the update log is covered under
+[Upgrading kerber-rust](#upgrading-kerber-rust)). Under SELinux a confined `kadmind` binds
+`iprop_port = 754` (`kprop_port_t`); for any other port, label it first with
+`sudo semanage port -a -t kprop_port_t -p tcp <port>`.
+
+`kpropd` takes MIT's `-r`, `-s` (else the default keytab), `-a` (else `kpropd.acl` in the KDC
+directory), `-P` (else 754, on every address), `-A` (the primary, else `admin_server`), `-t`, `-d`,
+`-D` and `-S` (`-D` and `-S` are no-ops: it never detaches and is always standalone); not MIT's
+`-f`, `-F`, `-p`, `-x` or `--pid-file`. It accepts a ticket for its own `host/<this host>` only, the
+name formed **without DNS** (a short name gains `qualify_shortname`, else the resolver's first
+search domain, lowercased): MIT's DNS canonicalization is not ported, so the keytab entry and
+`kprop`'s target must be that name.
+
 ## Upgrading an MIT realm
 
 kerber-rust does not read MIT's db2 database. A realm moves over the way MIT moves one between
@@ -730,24 +784,9 @@ update log and lock files, the stash, `kdc.conf` and `kadm5.acl`.
 
 - MIT's database files (db2, LMDB) and the LDAP backend. The database is MIT's dump format, so an
   MIT realm moves over with dump and load.
-- Replica KDCs: Fedora's `kprop.service` and MIT's `kpropd` daemon. `kprop` and `kpropd` are
-  installed; `kpropd` opens the dump with the stash. `kpropd` takes MIT's `-r`, `-s` (else the
-  default keytab), `-a` (else `kpropd.acl` in the KDC directory), `-P` (else port 754, on every
-  address, as MIT's), `-A`, `-t`, `-d`, `-D` and `-S`, and an address of its own, not MIT's
-  `-f`, `-F`, `-p`, `-x` or `--pid-file`, and it does not detach. With `iprop_enable` it polls
-  the primary (`-A`, else `admin_server`) at `iprop_port` as `kiprop/<this host>`, with that
-  principal's keys from the same keytab, every `iprop_replica_poll`, as MIT's iprop mode does;
-  `-d` prints the poll's lines, not the listener's. As MIT's, it accepts a ticket for its own
-  `host/<this host>` only, its name as MIT makes it without DNS: a hostname without a dot gains
-  `qualify_shortname`, else the resolver's first search domain, and is lowercased. MIT's DNS
-  canonicalization (`dns_canonicalize_hostname = true`, its default, and the second step of
-  `fallback`) is not ported, so the replica's keytab entry and `kprop`'s target must be that name.
-  `kprop` is MIT's (`kprop [-r realm] [-f file] [-d] [-P port] [-s keytab] replica_host`): it
-  never opens the database but sends the file `kdb5_util dump` wrote (`-f`, else
-  `replica_datatrans` in the KDC directory) as `host/<this host>`, its ticket from a KDC with the
-  key in `-s` (else the default keytab), to `-P`'s port (else `krb5_prop` in `/etc/services`),
-  then writes `FILE.REPLICA.last_prop`. The replica's `kpropd.acl` names that principal. So
-  `make install` installs no `kprop.service`.
+- MIT's DNS canonicalization for a replica's name (`dns_canonicalize_hostname = true`, its default,
+  and the second step of `fallback`): a replica's `host/` name is formed without DNS ([Replica
+  KDCs](#replica-kdcs)).
 - SPAKE groups P-384 and P-521 (MIT's OpenSSL groups). `edwards25519`, the group Fedora's
   `krb5.conf` names and its `kdc.conf` challenges with, and P-256 work as MIT's.
 - RADIUS-backed OTP preauthentication (OTP works through an embedder's verifier: [OTP preauth](#otp-preauth)), PKINIT
