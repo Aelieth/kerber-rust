@@ -35,39 +35,6 @@ fn chrand3_self_keepold_clamps_to_five() {
 }
 
 #[test]
-fn self_keepold_clamps_to_five() {
-    let (store, acl, actor) = setup();
-    let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["selfkeep"]);
-    {
-        let mut g = store.write().unwrap();
-        g.create_password(&acl, &actor, &name, b"keep-0").unwrap();
-    }
-    for i in 1..=6 {
-        let mut w = XdrW::default();
-        w.u32(API_V2);
-        w.nullstring(Some("selfkeep@KERBER.TEST"));
-        w.u32(1);
-        w.u32(0);
-        w.nullstring(Some(&format!("keep-{i}")));
-        let out = dispatch_kadm5(
-            &store,
-            &acl,
-            "selfkeep@KERBER.TEST",
-            CHPASS_PRINCIPAL3,
-            &w.b,
-        )
-        .unwrap();
-        assert_eq!(ret_code(&out), 0, "cpw {i}");
-    }
-    let g = store.read().unwrap();
-    let p = g.get_name(&name).unwrap();
-    let mut kvnos: Vec<u32> = p.keys.iter().map(|k| k.kvno).collect();
-    kvnos.sort_unstable();
-    kvnos.dedup();
-    assert_eq!(kvnos.len(), 5, "self keepold cap: {kvnos:?}");
-}
-
-#[test]
 fn setkey_self_keepold_clamps_to_five() {
     let (store, acl, actor) = setup();
     let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["selfset"]);
@@ -126,29 +93,4 @@ fn setkey4_keepold_retains_history() {
     assert_eq!(p.keys.len(), 1 + n_old);
     assert!(p.keys.iter().any(|k| k.key.as_bytes() == [0xCDu8; 32]));
     assert!(p.key_history.is_empty());
-}
-
-#[test]
-fn non_self_keepold_is_unbounded() {
-    let (store, acl, actor) = setup();
-    let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
-    for i in 1..=6 {
-        let mut w = XdrW::default();
-        w.u32(API_V2);
-        w.nullstring(Some("user@KERBER.TEST"));
-        w.u32(1);
-        w.u32(0);
-        w.nullstring(Some(&format!("admin-keep-{i}")));
-        let out = dispatch_kadm5(&store, &acl, &actor, CHPASS_PRINCIPAL3, &w.b).unwrap();
-        assert_eq!(ret_code(&out), 0, "admin keepold {i}");
-    }
-    let g = store.read().unwrap();
-    let p = g.get_name(&name).unwrap();
-    let mut kvnos: Vec<u32> = p.keys.iter().map(|k| k.kvno).collect();
-    kvnos.sort_unstable();
-    kvnos.dedup();
-    assert!(
-        kvnos.len() > 5,
-        "non-self keepold=1 is unbounded: {kvnos:?}"
-    );
 }

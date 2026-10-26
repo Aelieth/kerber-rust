@@ -232,7 +232,8 @@ not check (a unit test, or "not asserted").
 - `scripts/getprivs-gate.sh` — MIT `kadmin getprivs` prints `INQUIRE` (or
   `GET`), `ADD` and `MODIFY` for the admin and for an actor whose ACL is `i`
   alone. MIT's `kadm5_get_privs` returns `~0` (`server_misc.c:147-158`); the
-  gate does not see `~0` (the unit test `get_privs_is_all_ones` holds it).
+  gate does not see `~0`. Field `kdb-writes` KA.privs shows all four names
+  for an actor with no ACL line.
   That actor's `cpw -randkey` is refused as AUTH_CHANGEPW
   (`change-password` privilege), not AUTH_GET.
 - scripts/gss-gate.sh — copies `krb5-gss-accept` into the MIT 1.22.2
