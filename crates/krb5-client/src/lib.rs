@@ -1432,5 +1432,5 @@ fn resolve_kdc(profile: &Krb5Conf, realm: &str, argv: &KdcAddr) -> Result<KdcAdd
     Ok(addr)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-hooks"))]
 mod armor_flow;

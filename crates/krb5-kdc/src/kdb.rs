@@ -1,8 +1,11 @@
 //! The KDB traits and dump-v7.
 
+#[cfg(any(test, feature = "test-hooks"))]
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
+#[cfg(any(test, feature = "test-hooks"))]
 use std::sync::Mutex;
+#[cfg(any(test, feature = "test-hooks"))]
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use krb5_types::PrincipalName;
@@ -10,7 +13,9 @@ use krb5_types::pac::{PacIdentity, RpcSid};
 
 use crate::dblock::DbLockHold;
 use crate::error::Error;
-use crate::lockout::{Lockout, LockoutUpdate};
+#[cfg(any(test, feature = "test-hooks"))]
+use crate::lockout::Lockout;
+use crate::lockout::LockoutUpdate;
 use crate::persist::{PersistError, load_store};
 use crate::store::{
     MAX_ALIAS_DEPTH, NamedPolicy, Policy, Principal, PrincipalStore, RID_FIRST_USER, strip_db_args,
@@ -262,6 +267,7 @@ pub fn open_store(
 }
 
 #[derive(Debug)]
+#[cfg(any(test, feature = "test-hooks"))]
 pub struct MemoryStore {
     realm: String,
     map: BTreeMap<String, Principal>,
@@ -274,6 +280,7 @@ pub struct MemoryStore {
     lockout: Mutex<HashMap<String, Lockout>>,
 }
 
+#[cfg(any(test, feature = "test-hooks"))]
 impl MemoryStore {
     #[must_use]
     pub fn new(realm: impl Into<String>) -> Self {
@@ -310,6 +317,7 @@ impl MemoryStore {
     }
 }
 
+#[cfg(any(test, feature = "test-hooks"))]
 impl PrincipalRead for MemoryStore {
     fn realm(&self) -> &str {
         &self.realm
@@ -379,6 +387,7 @@ impl PrincipalRead for MemoryStore {
     }
 }
 
+#[cfg(any(test, feature = "test-hooks"))]
 impl PrincipalWrite for MemoryStore {
     fn put_principal(&mut self, mut p: Principal) -> Result<(), Error> {
         strip_db_args(&mut p.tl_data)?;
@@ -392,12 +401,14 @@ impl PrincipalWrite for MemoryStore {
     }
 }
 
+#[cfg(any(test, feature = "test-hooks"))]
 impl StoreLifecycle for MemoryStore {
     fn reload_if_stale(&mut self) -> Result<(), Error> {
         Ok(())
     }
 }
 
+#[cfg(any(test, feature = "test-hooks"))]
 impl Store for MemoryStore {}
 
 impl PrincipalRead for PrincipalStore {

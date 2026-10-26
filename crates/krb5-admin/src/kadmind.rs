@@ -11,13 +11,15 @@ use std::time::Duration;
 use krb5_config::listen::{BindAddresses, BindType, ListenLog};
 use krb5_config::{KadmindListen, ProfileSet};
 use krb5_crypto::ProtocolKey;
+#[cfg(feature = "daemon")]
+use krb5_kdc::Signals;
 use krb5_kdc::net_server::{
     self, Dispatch, Log, MAX_REQUEST, MAX_STREAM_DATA_CONNECTIONS, Reply, RpcSession, Sockets, Wake,
 };
 use krb5_kdc::principals::kadmin_changepw;
 use krb5_kdc::{
     Acl, DEFAULT_TCP_LISTEN_BACKLOG, Kadm5Hook, Pwqual, SharedDump as SharedStore, Shutdown,
-    Signals, WHILE_DISPATCHING_TCP, WHILE_DISPATCHING_UDP, bind_rpc_listeners,
+    WHILE_DISPATCHING_TCP, WHILE_DISPATCHING_UDP, bind_rpc_listeners,
     bind_tcp_listeners_with_backlog, bind_udp_listeners, clear_thread_kadm5_hook,
     clear_thread_pwqual, set_thread_kadm5_hook, set_thread_pwqual,
 };
@@ -593,6 +595,7 @@ pub struct ServeSummary {
     pub open_fds: Vec<RawFd>,
 }
 
+#[cfg(feature = "daemon")]
 /// Serve `sockets` to `kadmind` from one loop on this thread until SIGINT, SIGTERM or SIGQUIT, SIGHUP reopening the log: kpasswd on `udp` and `tcp`, kadm5 and iprop on `rpc`, at most 45 connections together. Returns the descriptors of the connections still open, the newest first, for kadmind's last lines.
 pub fn serve_kadmind(
     kadmind: &mut Kadmind,

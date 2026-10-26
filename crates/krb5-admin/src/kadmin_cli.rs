@@ -676,5 +676,5 @@ pub(crate) fn atoi(s: &str) -> i64 {
     if neg { n.wrapping_neg() } else { n }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-hooks"))]
 mod tests;

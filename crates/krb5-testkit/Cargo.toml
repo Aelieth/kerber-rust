@@ -8,6 +8,9 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+[features]
+test-hooks = ["krb5-kdc/test-hooks"]
+
 [dependencies]
 krb5-asn1.workspace = true
 krb5-crypto.workspace = true

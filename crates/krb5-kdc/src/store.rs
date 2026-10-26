@@ -31,6 +31,7 @@ use crate::error::Error;
 use crate::persist::{DbStamp, Freshness, PersistError};
 use iprop_ulog::{LogContext, LogNote, PrincipalMap};
 use kadm5_hook::Post;
+#[cfg(any(test, feature = "test-hooks"))]
 use principal::default_mod_actor;
 use rid::generate_domain_sid;
 
@@ -631,6 +632,7 @@ impl PrincipalStore {
         &self.realm
     }
 
+    #[cfg(any(test, feature = "test-hooks"))]
     pub fn bootstrap(
         realm: &str,
         user: &str,
@@ -641,6 +643,7 @@ impl PrincipalStore {
         Self::bootstrap_with_kdc_conf(realm, user, user_password, admin, admin_password, None)
     }
 
+    #[cfg(any(test, feature = "test-hooks"))]
     pub fn bootstrap_with_kdc_conf(
         realm: &str,
         user: &str,

@@ -607,7 +607,7 @@ pub(crate) fn handle_kpasswd_from(
 fn wipe_secret(mut buf: Vec<u8>) {
     buf.resize(buf.capacity(), 0);
     buf.as_mut_slice().zeroize();
-    #[cfg(test)]
+    #[cfg(all(test, feature = "test-hooks"))]
     let _ = wiped::WIPED.try_with(|w| w.borrow_mut().push(buf));
 }
 
@@ -619,7 +619,7 @@ fn wipe_octets(octets: krb5_types::OctetString) {
 }
 
 /// The allocations this module's wipes zeroed on the current thread, kept for the tests.
-#[cfg(test)]
+#[cfg(all(test, feature = "test-hooks"))]
 mod wiped {
     use std::cell::RefCell;
 
@@ -629,6 +629,7 @@ mod wiped {
     }
 
     /// The allocations wiped on this thread since the last call.
+    #[cfg(all(test, feature = "test-hooks"))]
     pub(super) fn take() -> Vec<Vec<u8>> {
         WIPED.with(|w| std::mem::take(&mut *w.borrow_mut()))
     }
@@ -662,7 +663,7 @@ pub fn encode_kpasswd_req(ap_req: &[u8], krb_priv_der: &[u8]) -> Vec<u8> {
     out
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-hooks"))]
 mod tests {
     use std::net::{SocketAddr, UdpSocket};
     use std::thread;

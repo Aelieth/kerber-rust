@@ -76,6 +76,11 @@ jobs:
         run: cargo doc --workspace --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
+      - name: embed-min (embed-realm; krb5-kdc/krb5-admin default features off)
+        run: |
+          cargo build -p krb5-embed-realm-example
+          if cargo tree -p krb5-embed-realm-example -e features -i krb5-kdc --locked | grep -q 'krb5-kdc feature "daemon"'; then echo "embed-min pulls krb5-kdc daemon"; exit 1; fi
+          if cargo tree -p krb5-embed-realm-example -e features -i krb5-admin --locked | grep -q 'krb5-admin feature "daemon"'; then echo "embed-min pulls krb5-admin daemon"; exit 1; fi
 
   release:
     runs-on: ubuntu-26.04

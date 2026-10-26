@@ -48,6 +48,7 @@ any other `###` heading.
 
 ### Added
 
+- **kdc/admin.** An embedder builds without the daemon runtime (`--no-default-features`: no serve, signals, tracing-subscriber) or the test fixtures (behind `test-hooks`).
 - **admin.** An embedder runs kadmind as a library: `Kadmind::new(store, config)` sets up the password modules, `serve` runs the loop, and a `Shutdown` stops it at once.
 - **admin.** An embedder adds kadm5_auth modules via `KadmindConfig`; they join `acl` and `self`, a `Deny` overriding the ACL, selected by `[plugins] kadm5_auth`.
 - **pkinit.** Brainpool P256, P384 and P512 (r1 and t1) sign and verify. P320 is refused: crypto-bigint 0.7 has no 320-bit encoding, and a 32-bit build refuses P512.

@@ -1332,7 +1332,7 @@ pub fn kprop_send_store(
     kprop_send_dump(stream, &mut auth, &dump).map_err(|e| Error::Inner(e.to_string()))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-hooks"))]
 #[allow(
     clippy::disallowed_methods,
     reason = "a test sets up its own profile and environment"

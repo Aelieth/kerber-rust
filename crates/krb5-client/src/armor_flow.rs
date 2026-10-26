@@ -7,7 +7,7 @@ use std::time::Duration;
 use krb5_asn1::{decode, encode};
 use krb5_config::{CcSpec, ClientContext, Krb5Conf};
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented};
-use krb5_kdc::{serve, shared_store};
+use krb5_kdc::{serve_until, shared_store};
 use krb5_protocol::KdcAddr;
 use krb5_types::{AsReq, KrbError, MethodData, pa};
 
@@ -36,7 +36,14 @@ fn boot(strip_fx_fast: bool) -> Captured {
     let kdc_tcp_addr = kdc_tcp.local_addr().expect("kdc tcp");
     let store = shared_store(store);
     thread::spawn(move || {
-        let _ = serve(store, kdc_udp, kdc_tcp, &krb5_kdc::KdcLog::process());
+        let _ = serve_until(
+            store,
+            kdc_udp,
+            kdc_tcp,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            krb5_kdc::ListenLimits::default(),
+            &krb5_kdc::KdcLog::process(),
+        );
     });
     let (proxy_udp, proxy_tcp) = krb5_testkit::loopback_udp_tcp();
     let port = proxy_udp.local_addr().expect("proxy udp").port();

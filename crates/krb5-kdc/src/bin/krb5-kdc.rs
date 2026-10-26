@@ -248,7 +248,9 @@ fn main() {
     {
         klog::syslog(Severity::Warning, &line);
     }
+    #[cfg(feature = "test-hooks")]
     let kdcpolicy_relations = store.policy.kdcpolicy.clone();
+    #[cfg(feature = "test-hooks")]
     krb5_kdc::register_kdcpolicy_test_if_selected(&mut store.policy.plugins, &kdcpolicy_relations);
     #[cfg(feature = "test-hooks")]
     hooks::install_greet(&mut store.policy.plugins);
@@ -280,24 +282,27 @@ fn main() {
     #[cfg(feature = "test-hooks")]
     let persist = store.persist_paths.clone();
     #[cfg(feature = "test-hooks")]
-    let env_lib = hooks::db_library();
-    #[cfg(not(feature = "test-hooks"))]
-    let env_lib: Option<String> = None;
-    let lib = env_lib
-        .as_deref()
-        .or_else(|| kdc_conf.as_ref().and_then(|c| c.db_library.as_deref()));
-    let memory = lib == Some("memory");
+    let memory = {
+        let env_lib = hooks::db_library();
+        let lib = env_lib
+            .as_deref()
+            .or_else(|| kdc_conf.as_ref().and_then(|c| c.db_library.as_deref()));
+        lib == Some("memory")
+    };
     let keyboard = manual_master_key(opts.args.manual, &paths);
     let held_master = if keyboard {
         copy_persist_master(&store)
     } else {
         None
     };
+    #[cfg(feature = "test-hooks")]
     let store = if memory {
         shared_store(krb5_kdc::MemoryStore::from_dump(&store))
     } else {
         shared_store(store)
     };
+    #[cfg(not(feature = "test-hooks"))]
+    let store = shared_store(store);
     if let (Some(conf), Some(ports)) = (kdc_conf.as_mut(), opts.args.listen.as_deref()) {
         conf.apply_port_option(ports);
     }

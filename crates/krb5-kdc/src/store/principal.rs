@@ -1102,6 +1102,7 @@ impl PrincipalStore {
         Ok(())
     }
 
+    #[cfg(any(test, feature = "test-hooks"))]
     pub(super) fn insert_password(
         &mut self,
         name: &PrincipalName,

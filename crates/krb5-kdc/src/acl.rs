@@ -238,6 +238,7 @@ impl Acl {
         Ok(Self { entries })
     }
 
+    #[cfg(any(test, feature = "test-hooks"))]
     pub fn allow_admin(admin: impl Into<String>) -> Result<Self, Error> {
         let principal = admin.into();
         let client = Some(parse_princ_pat(&principal)?);

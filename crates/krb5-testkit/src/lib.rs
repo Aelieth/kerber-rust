@@ -11,24 +11,33 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, encrypt, string_to_key};
+#[cfg(feature = "test-hooks")]
+use krb5_crypto::string_to_key;
+use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, encrypt};
+#[cfg(feature = "test-hooks")]
+use krb5_kdc::S2K_ITERS;
+#[cfg(feature = "test-hooks")]
 use krb5_kdc::testrealm::{TEST_ADMIN, TEST_REALM, TEST_USER, documented_host};
 use krb5_kdc::{
-    IssuedAs, PacTicket, PrincipalStore, S2K_ITERS, sign_reply_pac, ticket_checksum_der,
-    wrap_win2k_pac,
+    IssuedAs, PacTicket, PrincipalStore, sign_reply_pac, ticket_checksum_der, wrap_win2k_pac,
 };
 use krb5_protocol::pa_enc_timestamp;
 
+#[cfg(feature = "test-hooks")]
 use krb5_protocol::{pa_for_user, tgs_req};
 use krb5_types::AuthorizationData;
 use krb5_types::AuthorizationDataValue;
 use krb5_types::EncTicketPart;
+#[cfg(feature = "test-hooks")]
 use krb5_types::EncryptedData;
+#[cfg(feature = "test-hooks")]
 use krb5_types::KdcOptions;
 use krb5_types::KrbError;
+#[cfg(feature = "test-hooks")]
 use krb5_types::PaData;
 use krb5_types::PrincipalName;
 use krb5_types::Realm;
+#[cfg(feature = "test-hooks")]
 use krb5_types::TgsReq;
 use krb5_types::Ticket;
 use krb5_types::ascii;
@@ -38,16 +47,19 @@ use krb5_types::pa;
 use krb5_types::pac::{PAC_CLIENT_INFO, Pac, PacBuffer, PacIdentity, RpcSid, client_info_buffer};
 
 #[must_use]
+#[cfg(feature = "test-hooks")]
 pub fn user() -> PrincipalName {
     PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER])
 }
 
 #[must_use]
+#[cfg(feature = "test-hooks")]
 pub fn admin() -> PrincipalName {
     PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN])
 }
 
 #[must_use]
+#[cfg(feature = "test-hooks")]
 pub fn host() -> PrincipalName {
     documented_host()
 }
@@ -58,11 +70,13 @@ pub fn foreign() -> PrincipalName {
 }
 
 #[must_use]
+#[cfg(feature = "test-hooks")]
 pub fn krbtgt() -> PrincipalName {
     PrincipalName::krbtgt(TEST_REALM)
 }
 
 #[must_use]
+#[cfg(feature = "test-hooks")]
 pub fn realm() -> &'static str {
     TEST_REALM
 }
@@ -160,6 +174,7 @@ pub fn aes_key(seed: u8) -> ProtocolKey {
 }
 
 #[must_use]
+#[cfg(feature = "test-hooks")]
 pub fn password_key(name: &str, password: &[u8]) -> ProtocolKey {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [name]);
     string_to_key(
@@ -226,6 +241,7 @@ pub fn issue_tgt(store: &PrincipalStore, name: &str, nonce: u32) -> IssuedAs {
 }
 
 #[must_use]
+#[cfg(feature = "test-hooks")]
 pub fn issue_tgt_password(
     store: &PrincipalStore,
     name: &str,
@@ -248,11 +264,13 @@ pub fn issue_tgt_renewable(
 }
 
 #[must_use]
+#[cfg(feature = "test-hooks")]
 pub fn user_as(store: &PrincipalStore, nonce: u32) -> IssuedAs {
     issue_tgt(store, TEST_USER, nonce)
 }
 
 #[must_use]
+#[cfg(feature = "test-hooks")]
 pub fn user_as_bits(store: &PrincipalStore, nonce: u32, bits: &[(usize, bool)]) -> IssuedAs {
     let key = store_key(store, TEST_USER);
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -267,6 +285,7 @@ pub fn user_as_bits(store: &PrincipalStore, nonce: u32, bits: &[(usize, bool)]) 
 }
 
 #[must_use]
+#[cfg(feature = "test-hooks")]
 pub fn host_tgt(store: &PrincipalStore, nonce: u32) -> IssuedAs {
     let host = documented_host();
     let key = store
@@ -367,6 +386,7 @@ pub fn err_of_cname(bytes: &[u8]) -> (i32, String, Option<String>) {
 }
 
 #[must_use]
+#[cfg(feature = "test-hooks")]
 pub fn s4u_tgs(
     tgt: &IssuedAs,
     sname: PrincipalName,
@@ -392,6 +412,7 @@ pub fn s4u_tgs(
 }
 
 #[must_use]
+#[cfg(feature = "test-hooks")]
 pub fn s4u_self(tgt: &IssuedAs, padata: Vec<PaData>, nonce: u32) -> TgsReq {
     s4u_tgs(
         tgt,
@@ -403,6 +424,7 @@ pub fn s4u_self(tgt: &IssuedAs, padata: Vec<PaData>, nonce: u32) -> TgsReq {
 }
 
 #[must_use]
+#[cfg(feature = "test-hooks")]
 pub fn s4u_admin(tgt: &IssuedAs, nonce: u32, opts: KdcOptions) -> TgsReq {
     let host = documented_host();
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
@@ -424,6 +446,7 @@ pub fn s4u_admin(tgt: &IssuedAs, nonce: u32, opts: KdcOptions) -> TgsReq {
 }
 
 #[must_use]
+#[cfg(feature = "test-hooks")]
 pub fn evidence_for_user(store: &PrincipalStore, nonce: u32) -> Ticket {
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
@@ -480,6 +503,7 @@ pub fn reseal_tgt(store: &PrincipalStore, tgt: &IssuedAs, part: &EncTicketPart) 
 }
 
 #[must_use]
+#[cfg(feature = "test-hooks")]
 pub fn reseal_incoming(key: &ProtocolKey, tgt: &IssuedAs, part: &EncTicketPart) -> Ticket {
     let der = encode(part).unwrap();
     let usage = KeyUsage::new(ku::TICKET).unwrap();

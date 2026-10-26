@@ -10,7 +10,7 @@ use common::isolate_host_krb5;
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt, encrypt};
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented};
-use krb5_kdc::{PrincipalStore, serve, shared_store};
+use krb5_kdc::{PrincipalStore, serve_until, shared_store};
 
 use krb5_protocol::{
     AsRequest, AsTicketOpts, Error, FastArmor, KdcAddr, armor_key, as_exchange, as_req,
@@ -191,7 +191,14 @@ fn as_exchange_records_fast_availability() {
     let port = addr.port();
     let store = shared_store(store);
     thread::spawn(move || {
-        let _ = serve(store, udp, tcp, &krb5_kdc::KdcLog::process());
+        let _ = serve_until(
+            store,
+            udp,
+            tcp,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            krb5_kdc::ListenLimits::default(),
+            &krb5_kdc::KdcLog::process(),
+        );
     });
 
     let out = as_exchange(&AsRequest {
@@ -254,7 +261,14 @@ fn fast_exchange_negotiates_through_the_armor_like_mit() {
     let port = addr.port();
     let store = shared_store(store);
     thread::spawn(move || {
-        let _ = serve(store, udp, tcp, &krb5_kdc::KdcLog::process());
+        let _ = serve_until(
+            store,
+            udp,
+            tcp,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            krb5_kdc::ListenLimits::default(),
+            &krb5_kdc::KdcLog::process(),
+        );
     });
     let kdc = KdcAddr {
         host: "127.0.0.1".into(),
@@ -835,7 +849,14 @@ fn a_keytab_key_of_bad_parity_fails_the_encrypted_timestamp_module_under_armor()
     let port = udp.local_addr().unwrap().port();
     let store = shared_store(store);
     thread::spawn(move || {
-        let _ = serve(store, udp, tcp, &krb5_kdc::KdcLog::process());
+        let _ = serve_until(
+            store,
+            udp,
+            tcp,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            krb5_kdc::ListenLimits::default(),
+            &krb5_kdc::KdcLog::process(),
+        );
     });
     let kdc = KdcAddr {
         host: "127.0.0.1".into(),

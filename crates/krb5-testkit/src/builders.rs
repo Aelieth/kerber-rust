@@ -1,4 +1,5 @@
 use krb5_crypto::ProtocolKey;
+#[cfg(feature = "test-hooks")]
 use krb5_kdc::testrealm::TEST_REALM;
 
 use krb5_protocol::{TgsReqParams, as_req, as_req_sname, tgs_req_ex};
@@ -21,9 +22,13 @@ pub struct AsReqBuilder {
 
 impl AsReqBuilder {
     pub fn new(cname: PrincipalName, nonce: u32) -> Self {
+        #[cfg(feature = "test-hooks")]
+        let realm = TEST_REALM.to_owned();
+        #[cfg(not(feature = "test-hooks"))]
+        let realm = String::new();
         Self {
             cname,
-            realm: TEST_REALM.to_owned(),
+            realm,
             nonce,
             padata: None,
             sname: None,

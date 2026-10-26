@@ -30,6 +30,7 @@ mod preauth;
 pub mod principals;
 mod status;
 mod store;
+#[cfg(any(test, feature = "test-hooks"))]
 pub mod testrealm;
 mod ulog;
 
@@ -53,10 +54,12 @@ pub use create::{
     open_or_create, realm_rows,
 };
 pub use daemon::{
-    OpenFailure, Shutdown, Signals, copy_persist_master, database_path, detach, json_log_filter,
-    kadmind_mkey_from_kbd, manual_master_key, mkey_log_context, names_relative_database,
-    open_database, open_database_with_key, open_database_with_password, write_pid_file,
+    OpenFailure, Shutdown, copy_persist_master, database_path, kadmind_mkey_from_kbd,
+    manual_master_key, mkey_log_context, names_relative_database, open_database,
+    open_database_with_key, open_database_with_password,
 };
+#[cfg(feature = "daemon")]
+pub use daemon::{Signals, detach, json_log_filter, write_pid_file};
 pub use dblock::{
     DbAge, DbLock, DbLockError, DbLockHold, DbLockMode, FileLockGuard, HeldFileLock, SUFFIX_LOCK,
     SUFFIX_POLICY_LOCK, lock_file_exclusive, lock_file_shared_nowait, suffixed,
@@ -67,9 +70,10 @@ pub use issue::{
     tgs_header_is_crossrealm,
 };
 pub use kadm5_params::{kadm5_params_missing, realm_kadm5_params_missing};
+#[cfg(any(test, feature = "test-hooks"))]
+pub use kdb::MemoryStore;
 pub use kdb::{
-    KdcEnv, MemoryStore, PrincipalRead, PrincipalWrite, Store, StoreLifecycle, lookup_principal_id,
-    open_store,
+    KdcEnv, PrincipalRead, PrincipalWrite, Store, StoreLifecycle, lookup_principal_id, open_store,
 };
 pub use kdb_dump::{
     DumpError, DumpFile, DumpKeyData, DumpKeySlot, DumpPrincipal, IpropHeaderError,
@@ -87,8 +91,10 @@ pub use listen::{
     MAX_TCP_REQUEST, MAX_TCP_WORKERS, PktInfo, SharedDump, SharedStore, WHILE_DISPATCHING_TCP,
     WHILE_DISPATCHING_UDP, bind_preferred, bind_rpc_listeners, bind_tcp_listeners,
     bind_tcp_listeners_with_backlog, bind_udp_listeners, read_fresh, recv_from_to, send_udp_reply,
-    serve, serve_all, serve_all_until, serve_daemon, serve_until, shared_dump, shared_store,
+    serve_all_until, serve_until, shared_dump, shared_store,
 };
+#[cfg(feature = "daemon")]
+pub use listen::{serve, serve_all, serve_daemon};
 pub use lockout::{
     Lockout, LockoutUpdate, SUFFIX_LOCKOUT, lockout_path, lockout_records, merge_lockout_file,
 };
@@ -107,11 +113,13 @@ pub use persist::{
 pub use pkinit::PkinitKdc;
 #[doc(hidden)]
 pub use plugins::OtpRuntime;
+#[cfg(any(test, feature = "test-hooks"))]
+pub use plugins::register_kdcpolicy_test_if_selected;
 pub use plugins::{
     KdcAuthdata, KdcPolicy, KdcPreauth, OtpTokenFields, OtpVerdict, OtpVerifier, OtpVerifyRequest,
     PluginSet, PolicyAdjustment, PreauthAction, PreauthHint, PreauthRock, apply_policy_times,
-    current_policy, register_authdata, register_kdcpolicy, register_kdcpolicy_test_if_selected,
-    register_otp_verifier, register_preauth, set_policy,
+    current_policy, register_authdata, register_kdcpolicy, register_otp_verifier, register_preauth,
+    set_policy,
 };
 #[cfg(test)]
 pub use plugins::{
@@ -148,10 +156,13 @@ pub use ulog::{
     ULOG_BLOCK, Ulog, UlogBatch, UlogError, UlogHeader, UlogLast, UlogUpdates,
 };
 
+#[cfg(any(test, feature = "test-hooks"))]
 use krb5_types::PrincipalName;
+#[cfg(any(test, feature = "test-hooks"))]
 use testrealm::{TEST_ADMIN, documented_kiprop};
 
 #[must_use]
+#[cfg(any(test, feature = "test-hooks"))]
 pub(crate) fn admin_id_for_realm(realm: &str) -> String {
     format!("{TEST_ADMIN}@{realm}")
 }
@@ -163,6 +174,7 @@ pub(crate) fn kdb5_util_id_for_realm(realm: &str) -> String {
 }
 
 #[must_use]
+#[cfg(any(test, feature = "test-hooks"))]
 pub(crate) fn host_for_realm(realm: &str) -> PrincipalName {
     let inst = format!("testhost.{}", realm.to_ascii_lowercase());
     PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", inst.as_str()])
@@ -210,6 +222,7 @@ pub fn acl_for_store(realm: &str, acl_file: Option<&std::path::Path>) -> Result<
     })
 }
 
+#[cfg(any(test, feature = "test-hooks"))]
 pub(crate) fn bootstrap_realm(
     realm: &str,
     user: &str,
@@ -220,6 +233,7 @@ pub(crate) fn bootstrap_realm(
     bootstrap_realm_with_kdc_conf(realm, user, user_password, admin, admin_password, None)
 }
 
+#[cfg(any(test, feature = "test-hooks"))]
 pub fn bootstrap_realm_with_kdc_conf(
     realm: &str,
     user: &str,

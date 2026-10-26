@@ -218,7 +218,6 @@ impl KdcPolicy for TestPolicy {
         client: &Principal,
         indicators: &[String],
     ) -> Result<PolicyAdjustment, Error> {
-        let _ = std::hint::black_box(0u8);
         if first_comp(&client.name).as_deref() == Some("fail") {
             return Err(proto(krb5_types::err::POLICY, status::LOCAL_POLICY));
         }
@@ -230,7 +229,6 @@ impl KdcPolicy for TestPolicy {
         sname: &PrincipalName,
         indicators: &[String],
     ) -> Result<PolicyAdjustment, Error> {
-        let _ = std::hint::black_box(0u8);
         if first_comp(sname).as_deref() == Some("fail") {
             return Err(proto(krb5_types::err::POLICY, status::LOCAL_POLICY));
         }

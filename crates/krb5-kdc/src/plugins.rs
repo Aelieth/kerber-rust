@@ -3084,9 +3084,11 @@ mod tests {
     }
 }
 
+#[cfg(any(test, feature = "test-hooks"))]
 #[path = "kdcpolicy_test.rs"]
 mod kdcpolicy_test;
 
+#[cfg(any(test, feature = "test-hooks"))]
 pub fn register_kdcpolicy_test_if_selected(
     plugins: &mut PluginSet,
     relations: &krb5_config::PluginRelations,

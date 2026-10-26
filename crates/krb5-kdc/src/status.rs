@@ -40,6 +40,7 @@ pub(crate) const DECODE_PA_FOR_USER: &str = "DECODE_PA_FOR_USER";
 pub(crate) const DECODE_PA_S4U_X509_USER: &str = "DECODE_PA_S4U_X509_USER";
 pub(crate) const LOOKING_UP_S4U2SELF_PRINCIPAL: &str = "LOOKING_UP_S4U2SELF_PRINCIPAL";
 pub(crate) const LOOKING_UP_CLIENT: &str = "LOOKING_UP_CLIENT";
+#[cfg(any(test, feature = "test-hooks"))]
 pub(crate) const LOCAL_POLICY: &str = "LOCAL_POLICY";
 pub(crate) const LOOKING_UP_SERVER: &str = "LOOKING_UP_SERVER";
 pub(crate) const NEEDED_HW_PREAUTH: &str = "NEEDED_HW_PREAUTH";

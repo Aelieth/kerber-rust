@@ -29,9 +29,11 @@ pub use kadm5::{
     kadm5_handle_rpc, kdb_rd_req,
 };
 pub use kadmin_cli::{kadmin_local_main, ss_parse};
+#[cfg(feature = "daemon")]
+pub use kadmind::serve_kadmind;
 pub use kadmind::{
     AdminLog, IpropConfig, Kadmind, KadmindConfig, KlogAdmin, Listeners, ServeLimits, ServeSummary,
-    Services, StartError, TracingAdmin, serve_kadmind,
+    Services, StartError, TracingAdmin,
 };
 pub use kprop::{
     IpropPoll, IpropWake, KPROP_SERVICE, KPROPD_IO_TIMEOUT, KpropAuth, KpropCreds, KpropDump,
@@ -63,6 +65,7 @@ pub fn handle_kpasswd_from(
 }
 
 /// Load a kadm5 ACL file. `None` is MIT `kadmin.local` full privs for `actor`.
+#[cfg(feature = "test-hooks")]
 pub fn load_acl_file(actor: &str, path: Option<&std::path::Path>) -> Result<Acl, String> {
     match path {
         Some(p) => {
@@ -757,7 +760,7 @@ pub fn receive_propagate(
     krb5_kdc::load_store(db_path, stash_path)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-hooks"))]
 mod tests {
 
     use super::*;

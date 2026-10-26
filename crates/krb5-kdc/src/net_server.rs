@@ -11,7 +11,9 @@ use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 use nix::sys::socket::{setsockopt, sockopt};
 use zeroize::Zeroizing;
 
-use crate::daemon::{Shutdown, Signals};
+use crate::daemon::Shutdown;
+#[cfg(feature = "daemon")]
+use crate::daemon::Signals;
 use crate::listen::{
     Datagram, WHILE_DISPATCHING_TCP, WHILE_DISPATCHING_UDP, recv_from_to, send_udp_reply,
 };
@@ -1108,6 +1110,7 @@ fn resume_one(
 }
 
 pub enum Wake<'a> {
+    #[cfg(feature = "daemon")]
     Signals(&'a Signals),
     Shutdown(&'a Shutdown),
     Flag {
@@ -1209,6 +1212,7 @@ pub fn run(
     let _park_enabled = ParkEnabledGuard;
     let mut parks: Vec<Parked> = Vec::new();
     let (pipe, timeout) = match wake {
+        #[cfg(feature = "daemon")]
         Wake::Signals(s) => match s.wake_fd() {
             Some(fd) => (Some(fd), PollTimeout::NONE),
             None => (None, PollTimeout::from(1000u16)),
@@ -1226,6 +1230,7 @@ pub fn run(
         Wake::Shutdown(sd) => sd.stop_requested(),
         Wake::Flag { stop, .. } => stop.load(Ordering::Relaxed),
         // Signals keeps its pipe-byte wake so a stop during start-up still logs `do_break`.
+        #[cfg(feature = "daemon")]
         Wake::Signals(_) => false,
     };
     if already_stopped {
@@ -1282,6 +1287,7 @@ pub fn run(
         resolve_parks(&mut parks, app, sockets, &mut streams, log);
         streams.sweep_rpc(Instant::now(), log);
         match wake {
+            #[cfg(feature = "daemon")]
             Wake::Signals(s) => {
                 if s.take_hup() {
                     log.syslog(Severity::Debug, "Got signal to reset");

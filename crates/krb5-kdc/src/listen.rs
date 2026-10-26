@@ -8,6 +8,7 @@ use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard};
 use std::time::Duration;
 
 use crate::Error;
+#[cfg(feature = "daemon")]
 use crate::daemon::Signals;
 use crate::issue::KdcDispatch;
 #[cfg(test)]
@@ -650,6 +651,7 @@ pub(crate) fn drop_privileges_to(username: &str) -> io::Result<bool> {
     Ok(true)
 }
 
+#[cfg(feature = "daemon")]
 fn install_shutdown_flag(flag: &Arc<AtomicBool>) {
     for sig in [signal_hook::consts::SIGTERM, signal_hook::consts::SIGINT] {
         let _ = signal_hook::flag::register(sig, Arc::clone(flag));
@@ -673,10 +675,12 @@ impl KdcLog {
     }
 }
 
+#[cfg(feature = "daemon")]
 pub fn serve(store: SharedStore, udp: UdpSocket, tcp: TcpListener, log: &KdcLog) -> io::Result<()> {
     serve_all(store, vec![udp], vec![tcp], log)
 }
 
+#[cfg(feature = "daemon")]
 pub fn serve_all(
     store: SharedStore,
     udp: Vec<UdpSocket>,
@@ -723,6 +727,7 @@ pub fn serve_all_until(
 
 // MIT: `main` (kdc/main.c:1030-1030)
 #[allow(clippy::needless_pass_by_value)] // the loop owns the store
+#[cfg(feature = "daemon")]
 pub fn serve_daemon(
     store: SharedStore,
     udp: Vec<UdpSocket>,

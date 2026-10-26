@@ -14,7 +14,7 @@ mod seqstate;
 mod spnego;
 mod wrap;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-hooks"))]
 mod tests;
 
 use krb5_crypto::ProtocolKey;

@@ -15,7 +15,7 @@ use krb5_kdc::testrealm::{
 };
 use krb5_kdc::{
     MAX_TCP_REQUEST, S2K_ITERS, WHILE_DISPATCHING_TCP, WHILE_DISPATCHING_UDP, handle_request,
-    serve, shared_store,
+    serve_until, shared_store,
 };
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
@@ -96,7 +96,14 @@ fn udp_listener_answers_wrong_password() {
     let addr = udp.local_addr().unwrap();
     let store = shared_store(store);
     thread::spawn(move || {
-        let _ = serve(store, udp, tcp, &krb5_kdc::KdcLog::process());
+        let _ = serve_until(
+            store,
+            udp,
+            tcp,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            krb5_kdc::ListenLimits::default(),
+            &krb5_kdc::KdcLog::process(),
+        );
     });
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let req = as_req(cname, TEST_REALM, 1, None).unwrap();
@@ -123,7 +130,14 @@ fn listener_retransmit_resends_the_cached_reply_like_replay_c() {
     let addr = udp.local_addr().unwrap();
     let store = shared_store(store);
     thread::spawn(move || {
-        let _ = serve(store, udp, tcp, &krb5_kdc::KdcLog::process());
+        let _ = serve_until(
+            store,
+            udp,
+            tcp,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            krb5_kdc::ListenLimits::default(),
+            &krb5_kdc::KdcLog::process(),
+        );
     });
 
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -492,7 +506,7 @@ fn kdc_listen_list_is_served_on_every_address_like_mit() {
     // every entry of a list
     // is added, and `kdc_tcp_listen` is its own list; the first-binds-wins candidate walk
     // answered on one address only.
-    use krb5_kdc::{bind_tcp_listeners, bind_udp_listeners, serve_all};
+    use krb5_kdc::{bind_tcp_listeners, bind_udp_listeners, serve_all_until};
     let conf = krb5_config::KdcConf::parse(
         "[kdcdefaults]\n    kdc_listen = 127.0.0.1:0, 127.0.0.2:0\n    kdc_tcp_listen = 127.0.0.1:0;127.0.0.2:0\n",
     )
@@ -508,7 +522,14 @@ fn kdc_listen_list_is_served_on_every_address_like_mit() {
     let (store, _) = bootstrap_documented().unwrap();
     let store = shared_store(store);
     thread::spawn(move || {
-        let _ = serve_all(store, udp, tcp, &krb5_kdc::KdcLog::process());
+        let _ = serve_all_until(
+            store,
+            udp,
+            tcp,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            krb5_kdc::ListenLimits::default(),
+            &krb5_kdc::KdcLog::process(),
+        );
     });
     for a in udp_addrs {
         assert!(udp_as_answers(a), "no UDP answer on {a}");
@@ -600,7 +621,7 @@ fn the_wildcard_is_an_ipv4_and_an_ipv6_only_socket_on_one_port_like_mit() {
 fn bare_port_listens_on_ipv4_and_ipv6_like_mit() {
     // A bare port is MIT's wildcard (`loop_add_addresses` with no host): IPv4 peers reach the
     // `0.0.0.0` socket and, where the host has IPv6, IPv6 peers the `[::]` one.
-    use krb5_kdc::{bind_tcp_listeners, bind_udp_listeners, serve_all};
+    use krb5_kdc::{bind_tcp_listeners, bind_udp_listeners, serve_all_until};
     let (_, udp) = bind_wildcard(bind_udp_listeners);
     let (_, tcp) = bind_wildcard(bind_tcp_listeners);
     let probes: Vec<(bool, std::net::SocketAddr)> = udp
@@ -619,7 +640,14 @@ fn bare_port_listens_on_ipv4_and_ipv6_like_mit() {
     let (store, _) = bootstrap_documented().unwrap();
     let store = shared_store(store);
     thread::spawn(move || {
-        let _ = serve_all(store, udp, tcp, &krb5_kdc::KdcLog::process());
+        let _ = serve_all_until(
+            store,
+            udp,
+            tcp,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            krb5_kdc::ListenLimits::default(),
+            &krb5_kdc::KdcLog::process(),
+        );
     });
     for (is_udp, a) in probes {
         let ok = if is_udp {
@@ -729,7 +757,7 @@ fn a_udp_reply_leaves_from_the_address_the_request_was_sent_to_like_mit() {
     // MIT: `send_to_from` (lib/apputils/udppktinfo.c:443-474)
     // a wildcard socket's reply leaves from the request's destination.
     // A client whose UDP socket is connected to that address, as MIT's is, takes no reply from any other.
-    use krb5_kdc::{bind_udp_listeners, serve_all};
+    use krb5_kdc::{bind_udp_listeners, serve_all_until};
     let mut entries = vec![ListenAddr {
         host: Some("0.0.0.0".into()),
         port: 0,
@@ -745,7 +773,14 @@ fn a_udp_reply_leaves_from_the_address_the_request_was_sent_to_like_mit() {
     let (store, _) = bootstrap_documented().unwrap();
     let store = shared_store(store);
     thread::spawn(move || {
-        let _ = serve_all(store, udp, Vec::new(), &krb5_kdc::KdcLog::process());
+        let _ = serve_all_until(
+            store,
+            udp,
+            Vec::new(),
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            krb5_kdc::ListenLimits::default(),
+            &krb5_kdc::KdcLog::process(),
+        );
     });
     let v4 = std::net::SocketAddr::from(([127, 0, 0, 2], addrs[0].port()));
     let plain = UdpSocket::bind("127.0.0.1:0").unwrap();

@@ -9,7 +9,7 @@ mod common;
 use common::isolate_host_krb5;
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented};
 use krb5_kdc::{
-    OtpVerdict, OtpVerifier, OtpVerifyRequest, PrincipalStore, register_otp_verifier, serve,
+    OtpVerdict, OtpVerifier, OtpVerifyRequest, PrincipalStore, register_otp_verifier, serve_until,
     shared_store,
 };
 use krb5_protocol::{
@@ -127,7 +127,14 @@ fn realm(attr: &str) -> (KdcAddr, FastArmor) {
     let port = udp.local_addr().unwrap().port();
     let store = shared(store);
     thread::spawn(move || {
-        let _ = serve(store, udp, tcp, &krb5_kdc::KdcLog::process());
+        let _ = serve_until(
+            store,
+            udp,
+            tcp,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            krb5_kdc::ListenLimits::default(),
+            &krb5_kdc::KdcLog::process(),
+        );
     });
     let kdc = KdcAddr {
         host: "127.0.0.1".into(),

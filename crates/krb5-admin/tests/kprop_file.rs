@@ -17,7 +17,7 @@ use std::time::{Duration, SystemTime};
 use krb5_admin::{kpropd_recv_dump, kpropd_recvauth, kpropd_send_ack};
 use krb5_crypto::ProtocolKey;
 use krb5_kdc::testrealm::{TEST_REALM, bootstrap_documented, documented_admin_id};
-use krb5_kdc::{serve, shared_store};
+use krb5_kdc::{serve_until, shared_store};
 use krb5_protocol::{AcceptorConfig, Keytab, ReplayCache};
 use krb5_testkit::scratch_dir;
 use krb5_types::PrincipalName;
@@ -107,7 +107,14 @@ fn realm_with(tag: &str, requires_preauth: bool, libdefaults: &str) -> Realm {
         .collect();
     let store = shared_store(store);
     thread::spawn(move || {
-        let _ = serve(store, udp, tcp, &krb5_kdc::KdcLog::process());
+        let _ = serve_until(
+            store,
+            udp,
+            tcp,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            krb5_kdc::ListenLimits::default(),
+            &krb5_kdc::KdcLog::process(),
+        );
     });
     Realm {
         dir,

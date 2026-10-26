@@ -194,7 +194,7 @@ fn req_realm(prealm: &str, store_realm: &str) -> String {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-hooks"))]
 pub(super) fn dispatch_kadm5(
     store: &SharedStore,
     acl: &krb5_kdc::Acl,

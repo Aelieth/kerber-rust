@@ -657,7 +657,7 @@ fn fast_client_continue_uses_etype20_from_info2() {
 
     use krb5_crypto::{EncryptionType, string_to_key};
     use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented};
-    use krb5_kdc::{s2k_params, serve, shared_store};
+    use krb5_kdc::{s2k_params, serve_until, shared_store};
 
     use krb5_protocol::{AsTicketOpts, FastArmor, as_exchange, as_req_sname, pa_enc_timestamp};
     use krb5_types::{PrincipalName, ascii};
@@ -696,7 +696,14 @@ fn fast_client_continue_uses_etype20_from_info2() {
     let tgt_first = store.krbtgt().unwrap().first_current_key().unwrap().etype;
     let store = shared_store(store);
     thread::spawn(move || {
-        let _ = serve(store, udp, tcp, &krb5_kdc::KdcLog::process());
+        let _ = serve_until(
+            store,
+            udp,
+            tcp,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            krb5_kdc::ListenLimits::default(),
+            &krb5_kdc::KdcLog::process(),
+        );
     });
 
     let etypes = [

@@ -15,9 +15,9 @@ import tempfile
 from .common import ROOT, SCRIPTS, _die
 
 
-CFG_TEST_RE = re.compile(r"^\s*#\[cfg\(test\)\]\s*$")
+CFG_TEST_RE = re.compile(r'^\s*#\[cfg\((?:test|all\(test,\s*feature\s*=\s*"test-hooks"\))\)\]\s*$')
 CFG_TEST_MOD_SEMI_RE = re.compile(
-    r"^\s*#\[cfg\(test\)\]\s+(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;\s*$"
+    r'^\s*#\[cfg\((?:test|all\(test,\s*feature\s*=\s*"test-hooks"\))\)\]\s+(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;\s*$'
 )
 MOD_OPEN_RE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+[A-Za-z_][A-Za-z0-9_]*\s*\{")
 MOD_SEMI_RE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;")

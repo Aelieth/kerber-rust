@@ -17,7 +17,7 @@ use common::isolate_host_krb5;
 use krb5_asn1::{decode, encode};
 use krb5_crypto::SpakeGroup;
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented};
-use krb5_kdc::{PrincipalStore, serve, shared_store};
+use krb5_kdc::{PrincipalStore, serve_until, shared_store};
 use krb5_protocol::{
     AsOutcome, AsPrompt, AsRequest, AsTicketOpts, Error, FastArmor, KdcAddr, QUESTION_PASSWORD,
     Responder, ResponderItems, as_exchange, as_exchange_interactive,
@@ -169,7 +169,14 @@ fn kdc(spake: Spake) -> KdcAddr {
     let port = udp.local_addr().unwrap().port();
     let store = shared_store(store(spake));
     thread::spawn(move || {
-        let _ = serve(store, udp, tcp, &krb5_kdc::KdcLog::process());
+        let _ = serve_until(
+            store,
+            udp,
+            tcp,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            krb5_kdc::ListenLimits::default(),
+            &krb5_kdc::KdcLog::process(),
+        );
     });
     KdcAddr {
         host: "127.0.0.1".into(),

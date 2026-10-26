@@ -1,6 +1,7 @@
 //! Daemon setup shared by the KDC and kadmind.
 
 use std::fs::File;
+#[cfg(feature = "daemon")]
 use std::io::{self, Write as _};
 use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
@@ -189,12 +190,14 @@ pub fn names_relative_database(paths: &krb5_config::KdcPaths, db_args: &[String]
 
 // MIT: `main` (kdc/main.c:996-999)
 /// Forks via daemon(3); call it before any thread is started.
+#[cfg(feature = "daemon")]
 pub fn detach() -> io::Result<()> {
     nix::unistd::daemon(false, false).map_err(io::Error::from)
 }
 
 // MIT: `write_pid_file` (kdc/main.c:834-847)
 /// The pid file refuses a symlink; MIT empties its target.
+#[cfg(feature = "daemon")]
 pub fn write_pid_file(path: &Path) -> io::Result<()> {
     use std::os::unix::fs::OpenOptionsExt as _;
     let mut f = std::fs::OpenOptions::new()
@@ -208,6 +211,7 @@ pub fn write_pid_file(path: &Path) -> io::Result<()> {
 }
 
 #[must_use]
+#[cfg(feature = "daemon")]
 pub fn json_log_filter(default: &str) -> tracing_subscriber::EnvFilter {
     #[cfg(feature = "test-hooks")]
     if let Ok(filter) = tracing_subscriber::EnvFilter::try_from_default_env() {
@@ -218,12 +222,14 @@ pub fn json_log_filter(default: &str) -> tracing_subscriber::EnvFilter {
 
 // MIT: `loop_setup_signals` (lib/apputils/net-server.c:263-286)
 #[derive(Clone)]
+#[cfg(feature = "daemon")]
 pub struct Signals {
     stop: Arc<AtomicBool>,
     hup: Arc<AtomicBool>,
     wake: Option<Arc<OwnedFd>>,
 }
 
+#[cfg(feature = "daemon")]
 impl Signals {
     #[must_use]
     pub fn install() -> Self {
@@ -273,9 +279,8 @@ impl Signals {
     }
 }
 
-/// A programmatic stop for [`net_server::run`](crate::net_server::run)'s loop: [`Shutdown::trigger`]
-/// wakes the poll at once through a self-pipe, or, if the pipe cannot be made, the loop polls the
-/// flag every 1000 ms.
+/// A programmatic stop for [`net_server::run`](crate::net_server::run)'s loop: `Shutdown::trigger`
+/// wakes the poll through a self-pipe, else the loop polls the flag.
 #[derive(Clone)]
 pub struct Shutdown {
     stop: Arc<AtomicBool>,

@@ -13,7 +13,7 @@ mod principal;
 mod rpc;
 mod xdr;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-hooks"))]
 mod tests;
 
 pub use acceptor::{acceptor_names_served, kdb_rd_req};
