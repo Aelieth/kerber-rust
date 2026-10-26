@@ -1,4 +1,5 @@
-//! Field generator 2 is a quadratic non-residue; p - 1 is not fully factored, and S = 1 so the root of unity is -1. Scalar generator 7 is the least non-residue mod n.
+//! Gen 2 is a non-residue. p-1 is not fully factored. S = 1, so the root is -1.
+//! Scalar gen 7 is the least non-residue mod n.
 
 pub mod r1;
 pub mod t1;

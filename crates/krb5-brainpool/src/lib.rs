@@ -1,4 +1,4 @@
-//! brainpoolP512, r1 and t1, on a fiat field. A 32-bit build does not compile it.
+//! brainpoolP512 r1, t1. 32-bit builds do not compile.
 
 #![no_std]
 #![forbid(unsafe_code)]

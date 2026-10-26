@@ -1,4 +1,4 @@
-//! The arithmetic in `../fiat/` is fiat-crypto's output (MIT, Apache-2.0 or BSD-1-Clause).
+//! fiat-crypto: MIT OR Apache-2.0 OR BSD-1-Clause.
 
 use elliptic_curve::{
     bigint::U512,
