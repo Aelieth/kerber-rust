@@ -81,8 +81,7 @@ pub use ccache::{
     parse_principal_ex, read_cache_file, realm, tgt_cred,
 };
 pub use ccache_dir::{
-    dir_cache_path, dir_cache_path_for_store, dir_display_name, dir_gen_new, dir_primary,
-    dir_subsidiaries, dir_switch,
+    dir_cache_path, dir_display_name, dir_gen_new, dir_primary, dir_subsidiaries, dir_switch,
 };
 pub use ccache_mem::{memory_destroy, memory_retrieve, memory_store};
 pub use ccmarshal::FCC_TAG_DELTATIME;

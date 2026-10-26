@@ -80,8 +80,8 @@ prefixes are `KRB5_CC_UNKNOWN_TYPE` with no FILE fallback. `KCM:` is a
 real type (sssd-kcm); `KEYRING:` stays unknown. Fleet default stays FILE
 until NFS `sec=krb5i` cells run — [`kcm-nfs-verdict.md`](labs/kcm-nfs-verdict.md). FILE
 principal and realm octets must be ASCII GeneralString; non-ASCII MIT
-caches fail parse (no silent corruption). DIR resolve does not create
-`primary`.
+caches fail parse (no silent corruption). A DIR resolve makes a missing
+directory (0700) and its `primary`, as MIT's does.
 
 **Knobs honored by ignoring:** `kdc_timeout` and `max_retries` have no
 MIT 1.22.2 parse site (Heimdal spellings; `sendto_kdc.c` `MAX_PASS 3`).

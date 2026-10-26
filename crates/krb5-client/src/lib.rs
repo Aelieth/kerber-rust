@@ -12,9 +12,8 @@ use krb5_protocol::{
     PkinitClient, PkinitFailure, PreauthPrompt, TgsOutcome, as_exchange, as_exchange_defer_fast,
     as_exchange_interactive, as_exchange_with_keys, as_exchange_with_keys_defer_fast,
     as_exchange_with_unreadable_keytab, as_exchange_with_unreadable_keytab_defer_fast,
-    dir_cache_path, dir_cache_path_for_store, kcm_destroy, kcm_load, kcm_store,
-    kcm_store_keep_default, memory_destroy, memory_retrieve, memory_store, parse_principal_ex,
-    read_keytab_file, tgs_exchange_path,
+    dir_cache_path, kcm_destroy, kcm_load, kcm_store, kcm_store_keep_default, memory_destroy,
+    memory_retrieve, memory_store, parse_principal_ex, read_keytab_file, tgs_exchange_path,
 };
 use krb5_types::Ticket;
 use krb5_types::pkinit::{CertMatchError, IdentityError};
@@ -50,19 +49,9 @@ use errmsg::{Code, Krb5Error};
 pub fn cache_file_path(spec: &CcSpec) -> Option<std::path::PathBuf> {
     match spec {
         CcSpec::File(p) => Some(p.clone()),
-        CcSpec::Dir(r) => dir_read_path(r).ok(),
+        CcSpec::Dir(r) => dir_cache_path(r).ok(),
         CcSpec::Memory(_) | CcSpec::Kcm(_) => None,
     }
-}
-
-pub fn dir_read_path(residual: &str) -> std::io::Result<std::path::PathBuf> {
-    let dir = Path::new(residual);
-    if !residual.starts_with(':')
-        && std::fs::symlink_metadata(dir).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
-    {
-        return Ok(dir.join("tkt"));
-    }
-    dir_cache_path(residual)
 }
 
 // MIT: `kcm_get_princ` (cc_kcm.c:933-953)
@@ -643,7 +632,7 @@ pub fn load_ccache(
         CcSpec::File(p) => Ok(FileCcache::parse(&krb5_protocol::read_cache_file(p)?)?),
         CcSpec::Memory(n) => memory_retrieve(n).ok_or_else(|| "No credentials cache found".into()),
         CcSpec::Dir(r) => {
-            let p = dir_read_path(r)?;
+            let p = dir_cache_path(r)?;
             Ok(FileCcache::parse(&krb5_protocol::read_cache_file(&p)?)?)
         }
         CcSpec::Kcm(n) => kcm_load(&ctx.profile, n).map_err(Into::into),
@@ -662,7 +651,7 @@ pub fn store_ccache(
             Ok(())
         }
         CcSpec::Dir(r) => {
-            let p = dir_cache_path_for_store(r)?;
+            let p = dir_cache_path(r)?;
             cc.write_file(p).map_err(Into::into)
         }
         CcSpec::Kcm(n) => kcm_store(&ctx.profile, n, &cc).map_err(Into::into),
@@ -694,7 +683,7 @@ pub fn destroy_ccache(
             }
         }
         CcSpec::Dir(r) => {
-            let p = dir_read_path(r)?;
+            let p = dir_cache_path(r)?;
             krb5_protocol::destroy_secret_file(&p).map_err(Into::into)
         }
         CcSpec::Kcm(n) => kcm_destroy(&ctx.profile, n).map_err(Into::into),

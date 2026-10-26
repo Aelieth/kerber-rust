@@ -88,15 +88,21 @@ MEM="$(docker exec "$NAME" /tmp/ccache-probe memory-from /tmp/krb5cc_ident)"
 echo "$MEM"
 echo "$MEM" | grep -q 'memory_ok principal=user@KERBER.TEST'
 
-echo "==== DIR list of missing path does not create ===="
-docker exec "$NAME" rm -rf /tmp/dcc-missing
+echo "==== DIR list of a missing path makes it 0700 with a tkt primary, as MIT's klist does (cc_dir.c verify_dir) ===="
+docker exec "$NAME" rm -rf /tmp/dcc-missing /tmp/dcc-missing-mit
 set +e
+MITMISS="$(docker exec "$NAME" klist -c DIR:/tmp/dcc-missing-mit 2>&1)"
+mrc=$?
 DIRMISS="$(docker exec "$NAME" /tmp/krb5-klist -c DIR:/tmp/dcc-missing 2>&1)"
 drc=$?
 set -e
+echo "$MITMISS"
 echo "$DIRMISS"
+test "$mrc" -ne 0
 test "$drc" -ne 0
-docker exec "$NAME" sh -c 'test ! -e /tmp/dcc-missing'
+MADE="$(docker exec "$NAME" sh -c 'stat -c %a /tmp/dcc-missing-mit /tmp/dcc-missing; cat /tmp/dcc-missing-mit/primary /tmp/dcc-missing/primary')"
+echo "$MADE"
+test "$MADE" = "$(printf '700\n700\ntkt\ntkt')"
 
 echo "==== DIR collection MIT kinit + kswitch both ways ===="
 docker exec "$NAME" rm -rf /tmp/dcc

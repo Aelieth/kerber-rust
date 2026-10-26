@@ -1,61 +1,23 @@
 //! DIR collection (`cc_dir.c`): `DIR:dirname` and `DIR::filepath`.
 
-use std::fs::{self, OpenOptions};
+use std::fs::{self, DirBuilder, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::DirBuilderExt;
 
 const DEFAULT_SUB: &str = "tkt";
 
-/// Does not create the collection.
+// MIT: `dcc_resolve` (lib/krb5/ccache/cc_dir.c:332-385)
 pub fn dir_cache_path(residual: &str) -> io::Result<PathBuf> {
-    resolve_dir(residual, false)
-}
-
-/// Creates the collection on the first store.
-pub fn dir_cache_path_for_store(residual: &str) -> io::Result<PathBuf> {
-    resolve_dir(residual, true)
-}
-
-fn resolve_dir(residual: &str, init: bool) -> io::Result<PathBuf> {
     if let Some(path) = residual.strip_prefix(':') {
-        let p = Path::new(path);
-        let name = file_name(p)?;
-        if !name.starts_with("tkt") {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "DIR subsidiary name must begin with tkt",
-            ));
-        }
-        let dir = p
-            .parent()
-            .filter(|d| !d.as_os_str().is_empty())
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "DIR subsidiary has no parent directory",
-                )
-            })?;
-        if init {
-            ensure_dir(dir)?;
-        }
-        return Ok(p.to_path_buf());
+        verify_dir(subsidiary(path)?.0)?;
+        return Ok(PathBuf::from(path));
     }
     let dir = Path::new(residual);
-    if init {
-        ensure_dir(dir)?;
-    } else {
-        let m = fs::metadata(dir)?;
-        if !m.is_dir() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "not a directory",
-            ));
-        }
-    }
-    let name = read_primary(dir, init)?;
+    verify_dir(dir)?;
+    let name = read_primary(dir, true)?;
     Ok(dir.join(name))
 }
 
@@ -69,24 +31,8 @@ pub fn dir_switch(residual: &str) -> io::Result<()> {
     let path = residual.strip_prefix(':').ok_or_else(|| {
         io::Error::new(io::ErrorKind::InvalidInput, "kswitch needs DIR::subsidiary")
     })?;
-    let p = Path::new(path);
-    let name = file_name(p)?;
-    if !name.starts_with("tkt") {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "DIR subsidiary name must begin with tkt",
-        ));
-    }
-    let dir = p
-        .parent()
-        .filter(|d| !d.as_os_str().is_empty())
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "DIR subsidiary has no parent directory",
-            )
-        })?;
-    ensure_dir(dir)?;
+    let (dir, name) = subsidiary(path)?;
+    verify_dir(dir)?;
     write_primary(dir, name)
 }
 
@@ -106,7 +52,7 @@ pub fn dir_primary(dir: &Path) -> Option<PathBuf> {
 /// The collection directory is created if it is missing.
 pub fn dir_gen_new(dir: &Path) -> io::Result<PathBuf> {
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    ensure_dir(dir)?;
+    verify_dir(dir)?;
     loop {
         let mut raw = [0u8; 6];
         getrandom::getrandom(&mut raw).map_err(|e| io::Error::other(e.to_string()))?;
@@ -144,43 +90,76 @@ pub fn dir_subsidiaries(dir: &Path) -> io::Result<Vec<PathBuf>> {
     Ok(v)
 }
 
-fn file_name(p: &Path) -> io::Result<&str> {
-    p.file_name()
-        .and_then(|s| s.to_str())
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "DIR subsidiary"))
-}
-
-fn ensure_dir(dir: &Path) -> io::Result<()> {
-    match fs::metadata(dir) {
-        Ok(m) if m.is_dir() => Ok(()),
-        Ok(_) => Err(io::Error::new(
+// MIT: `split_path` (lib/krb5/ccache/cc_dir.c:107-141)
+fn subsidiary(path: &str) -> io::Result<(&Path, &str)> {
+    let p = Path::new(path);
+    let bad = |what: &str| {
+        io::Error::new(
             io::ErrorKind::InvalidInput,
-            "not a directory",
-        )),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            fs::create_dir(dir)?;
-            #[cfg(unix)]
-            {
-                let _ = fs::set_permissions(dir, fs::Permissions::from_mode(0o700));
-            }
-            Ok(())
-        }
-        Err(e) => Err(e),
+            format!("Subsidiary cache path {path} {what}"),
+        )
+    };
+    let dir = p
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .ok_or_else(|| bad("has no parent directory"))?;
+    match p.file_name().and_then(|s| s.to_str()) {
+        Some(name) if name.starts_with("tkt") => Ok((dir, name)),
+        _ => Err(bad("filename does not begin with \"tkt\"")),
     }
 }
 
+// MIT: `verify_dir` (lib/krb5/ccache/cc_dir.c:221-240)
+fn verify_dir(dir: &Path) -> io::Result<()> {
+    match fs::metadata(dir) {
+        Ok(m) if m.is_dir() => Ok(()),
+        Ok(_) => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "Credential cache directory {} exists but is not a directory",
+                dir.display()
+            ),
+        )),
+        Err(e) if e.kind() == io::ErrorKind::NotFound && make_dir(dir).is_ok() => Ok(()),
+        Err(_) => Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!(
+                "Credential cache directory {} does not exist",
+                dir.display()
+            ),
+        )),
+    }
+}
+
+fn make_dir(dir: &Path) -> io::Result<()> {
+    let mut b = DirBuilder::new();
+    #[cfg(unix)]
+    b.mode(0o700);
+    b.create(dir)
+}
+
+// MIT: `read_primary_file` (lib/krb5/ccache/cc_dir.c:146-176)
 fn read_primary(dir: &Path, init: bool) -> io::Result<String> {
     let p = dir.join("primary");
     match fs::read_to_string(&p) {
+        Ok(s) if s.is_empty() => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Credentials cache I/O operation failed",
+        )),
         Ok(s) => {
-            let line = s.lines().next().unwrap_or("");
-            if line.starts_with("tkt") && !line.contains('/') && !line.contains('\\') {
-                Ok(line.to_owned())
-            } else {
-                Err(io::Error::new(
+            let line = s.split_inclusive('\n').next().unwrap_or("");
+            match line.strip_suffix('\n') {
+                Some(name)
+                    if line.len() < 64
+                        && name.starts_with("tkt")
+                        && !name.contains(['/', '\\']) =>
+                {
+                    Ok(name.to_owned())
+                }
+                _ => Err(io::Error::new(
                     io::ErrorKind::InvalidData,
-                    "invalid primary file",
-                ))
+                    format!("{} contains invalid filename", p.display()),
+                )),
             }
         }
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
@@ -231,9 +210,7 @@ mod tests {
         let dir = krb5_testkit::scratch_dir("krb5cc-dir").join("cc");
         let _ = fs::remove_dir_all(&dir);
         let residual = dir.to_string_lossy().into_owned();
-        assert!(dir_cache_path(&residual).is_err());
-        assert!(!dir.exists());
-        let p = dir_cache_path_for_store(&residual).expect("primary tkt");
+        let p = dir_cache_path(&residual).expect("a missing DIR is made");
         assert_eq!(p.file_name().unwrap(), "tkt");
         assert!(dir.join("primary").is_file());
         let sub = dir.join("tktXXXX");
@@ -242,21 +219,6 @@ mod tests {
         dir_switch(&sub_res).expect("switch");
         let p2 = dir_cache_path(&residual).expect("switched");
         assert_eq!(p2.file_name().unwrap(), "tktXXXX");
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn dir_resolve_does_not_create() {
-        let dir = krb5_testkit::scratch_dir("krb5cc-dir-ro").join("cc");
-        let _ = fs::remove_dir_all(&dir);
-        let residual = dir.to_string_lossy().into_owned();
-        let err = dir_cache_path(&residual).expect_err("missing DIR");
-        assert_eq!(err.kind(), io::ErrorKind::NotFound);
-        assert!(!dir.exists());
-        fs::create_dir_all(&dir).unwrap();
-        let p = dir_cache_path(&residual).expect("existing empty DIR");
-        assert_eq!(p.file_name().unwrap(), "tkt");
-        assert!(!dir.join("primary").exists());
         let _ = fs::remove_dir_all(&dir);
     }
 }

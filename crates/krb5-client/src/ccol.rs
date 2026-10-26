@@ -110,7 +110,6 @@ impl Cache {
 }
 
 // MIT: `dcc_resolve` (cc_dir.c:331-385)
-// a DIR collection name stands for its primary, `tkt`
 // MIT: `kcm_resolve` (cc_kcm.c:740-768)
 pub fn resolve(ctx: &ClientContext, spec: &CcSpec) -> Result<Cache, Krb5Error> {
     let other = |e: std::io::Error| Krb5Error::new(Code::Other, e.to_string());
@@ -118,7 +117,7 @@ pub fn resolve(ctx: &ClientContext, spec: &CcSpec) -> Result<Cache, Krb5Error> {
     Ok(match spec {
         CcSpec::File(p) => Cache::File(p.clone()),
         CcSpec::Memory(n) => Cache::Memory(n.clone()),
-        CcSpec::Dir(r) => Cache::Dir(crate::dir_read_path(r).map_err(other)?),
+        CcSpec::Dir(r) => Cache::Dir(krb5_protocol::dir_cache_path(r).map_err(other)?),
         CcSpec::Kcm(n) if n.is_empty() => {
             Cache::Kcm(krb5_protocol::kcm_primary_name(&ctx.profile).map_err(kcm)?)
         }

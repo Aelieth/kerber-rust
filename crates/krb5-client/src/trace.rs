@@ -9,7 +9,7 @@ pub fn ccname(ctx: &ClientContext, spec: &CcSpec) -> String {
     match spec {
         CcSpec::File(p) => format!("FILE:{}", p.display()),
         CcSpec::Dir(r) if r.starts_with(':') => format!("DIR:{r}"),
-        CcSpec::Dir(r) => crate::dir_read_path(r)
+        CcSpec::Dir(r) => krb5_protocol::dir_cache_path(r)
             .map_or_else(|_| format!("DIR:{r}"), |p| format!("DIR::{}", p.display())),
         CcSpec::Memory(n) => format!("MEMORY:{n}"),
         CcSpec::Kcm(n) if n.is_empty() => format!(
