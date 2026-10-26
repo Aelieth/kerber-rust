@@ -122,7 +122,7 @@ The toolchain, lld, and `rust-cache` steps are one composite,
 | --- | --- |
 | `harness` | `ccache`, `bidirectional`, `gss`, `pkinit`, `kadmin-rust`, `kadmin-rust-acl`, `kadmin-mit`, `kadmin-both`, `history-mit` |
 | `harness-2` | `kpasswd-rust`, `kpasswd-mit`, `kdb-dump`, `kprop`, `kprop-reverse`, `cross-kdc`, `iprop`, `expire`, `kdcpolicy`, `flags`, `renew`, `postdate`, `getprivs`, `policy`, `prop-acl` |
-| `mit-extra` | `cross-realm`, `capaths-compress`, `spake`, `rust-kinit-spake`, `mit-fast-kdc`, `rust-kinit-fast`, `rust-kinit-pkinit`, `rust-kinit-enterprise`, `ktutil`, `kadmin-local`, `rust-kpasswd-mit`, `sha2`, `rc4-session` |
+| `mit-extra` | `cross-realm`, `capaths-compress`, `spake`, `rust-kinit-spake`, `mit-fast-kdc`, `rust-kinit-fast`, `rust-kinit-pkinit`, `rust-kinit-enterprise`, `kadmin-local`, `rust-kpasswd-mit`, `sha2`, `rc4-session` |
 | `mit-extra-2` | `client-differential-flows`, `client-differential-cli`, `knobs`, `config-include`, `s4u-mit`, `capaths-transit`, `otp`, `rust-kinit-otp` |
 
 | Job | Runs |

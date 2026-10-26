@@ -193,9 +193,6 @@ jobs:
       - name: "rust-kinit-enterprise-gate"
         if: ${{ matrix.group == 'mit-extra' && (success() || failure()) }}
         run: ./scripts/rust-kinit-enterprise-gate.sh
-      - name: "ktutil-gate"
-        if: ${{ matrix.group == 'mit-extra' && (success() || failure()) }}
-        run: ./scripts/ktutil-gate.sh
       - name: "kadmin-local-gate"
         if: ${{ matrix.group == 'mit-extra' && (success() || failure()) }}
         run: ./scripts/kadmin-local-gate.sh

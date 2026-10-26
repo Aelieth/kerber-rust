@@ -151,6 +151,7 @@ any other `###` heading.
 - **admin.** The kadmind-equivalent framing, an op byte plus an AP-REQ, is gone.
 - **protocol.** `build_krb_safe` and `build_krb_priv` are gone; a caller passes the sequence to the longer builder.
 - **ci.** The budget workflow is gone. The six per-push walls live in `ci-budget.toml`.
+- **ci.** The ktutil nightly gate is gone; field client-tools' keytab rows check each thing it checked, MIT first.
 
 ### Fixed
 - **client.** `kinit -E` sends the UPN as one enterprise component, as MIT does, so the real AD finds the user; `-E` alone no longer asks to canonicalize.
