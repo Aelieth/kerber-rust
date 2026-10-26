@@ -15,14 +15,14 @@ pub enum Error {
     InappChecksum,
     Rng,
     IterationLimit,
-    // MIT krb5_k_decrypt; see docs/parity/b1-client.md
-    // MIT KRB5_BAD_ENCTYPE; see docs/parity/b1-client.md
+    // MIT: `krb5_k_decrypt` (lib/crypto/krb/decrypt.c:30-85)
+    // MIT: `KRB5_BAD_ENCTYPE` (lib/krb5/error_tables/krb5_err.et:254-254)
     BadEnctype(i32),
-    // MIT mit_des3_key_sched; see docs/parity/b1-crypto-keys.md
-    // MIT validate_and_schedule; see docs/parity/b1-crypto-keys.md
-    // MIT KRB5DES_BAD_KEYPAR; see docs/parity/b1-crypto-keys.md
+    // MIT: `mit_des3_key_sched` (lib/crypto/builtin/des/d3_kysched.c:29-53)
+    // MIT: `validate_and_schedule` (lib/crypto/builtin/enc_provider/des3.c:33-53)
+    // MIT: `KRB5DES_BAD_KEYPAR` (lib/krb5/error_tables/krb5_err.et:251-251)
     DesBadParity,
-    // MIT KRB5DES_WEAK_KEY; see docs/parity/b1-crypto-keys.md
+    // MIT: `KRB5DES_WEAK_KEY` (lib/krb5/error_tables/krb5_err.et:252-252)
     DesWeakKey,
 }
 

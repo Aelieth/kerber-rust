@@ -20,7 +20,7 @@ impl ProtocolKey {
         })
     }
 
-    // MIT krb5_c_make_random_key; see docs/parity/b1-crypto-keys.md
+    // MIT: `krb5_c_make_random_key` (lib/crypto/krb/make_random_key.c:30-76)
     pub fn random(etype: EncryptionType) -> Result<Self, Error> {
         let mut raw = vec![0u8; etype.keybytes()];
         getrandom::getrandom(&mut raw).map_err(|_| Error::Rng)?;
@@ -36,8 +36,8 @@ impl ProtocolKey {
         key
     }
 
-    // MIT k5_rand2key_direct; see docs/parity/b1-crypto-keys.md
-    // MIT k5_rand2key_des3; see docs/parity/b1-crypto-keys.md
+    // MIT: `k5_rand2key_direct` (lib/crypto/krb/random_to_key.c:64-73)
+    // MIT: `k5_rand2key_des3` (lib/crypto/krb/random_to_key.c:83-101)
     pub(crate) fn from_random(etype: EncryptionType, random: &[u8]) -> Result<Self, Error> {
         if random.len() != etype.keybytes() {
             return Err(Error::InvalidKeyLength);

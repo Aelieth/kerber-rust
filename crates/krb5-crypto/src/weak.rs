@@ -150,8 +150,8 @@ pub(crate) fn des3_decrypt(
     Ok(p[DES_BLOCK..].to_vec())
 }
 
-// MIT weak; see docs/parity/b1-crypto-keys.md
-// MIT mit_des_is_weak_key; see docs/parity/b1-crypto-keys.md
+// MIT: `weak` (lib/crypto/builtin/des/weak_key.c:41-69)
+// MIT: `mit_des_is_weak_key` (lib/crypto/builtin/des/weak_key.c:71-88)
 const WEAK_DES_KEYS: [[u8; 8]; 16] = [
     [0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01],
     [0xfe, 0xfe, 0xfe, 0xfe, 0xfe, 0xfe, 0xfe, 0xfe],
@@ -171,7 +171,7 @@ const WEAK_DES_KEYS: [[u8; 8]; 16] = [
     [0xfe, 0xe0, 0xfe, 0xe0, 0xfe, 0xf1, 0xfe, 0xf1],
 ];
 
-// MIT mit_des_check_key_parity; see docs/parity/b1-crypto-keys.md
+// MIT: `mit_des_check_key_parity` (lib/crypto/builtin/des/f_parity.c:43-62)
 fn des_check_key_parity(key: [u8; 8]) -> bool {
     key.iter().all(|b| b.count_ones() % 2 == 1)
 }
@@ -278,7 +278,7 @@ pub(crate) fn des3_random_to_key(raw21: &[u8]) -> [u8; 24] {
     out
 }
 
-// MIT eighth_byte; see docs/parity/b1-crypto-keys.md
+// MIT: `eighth_byte` (lib/crypto/krb/random_to_key.c:75-81)
 fn eighth_byte(b: &mut [u8; 8]) {
     b[7] = ((b[0] & 1) << 1)
         | ((b[1] & 1) << 2)
@@ -289,7 +289,7 @@ fn eighth_byte(b: &mut [u8; 8]) {
         | ((b[6] & 1) << 7);
 }
 
-// MIT k5_des_fixup_key_parity; see docs/parity/b1-crypto-keys.md
+// MIT: `k5_des_fixup_key_parity` (lib/crypto/builtin/des/des_keys.c:32-36)
 fn fixup_key_parity(key: &mut [u8; 8]) {
     for b in key {
         let mut x = *b & 0xfe;
@@ -354,7 +354,7 @@ pub(crate) fn camellia_decrypt(
     let ke = dk_camellia(key.as_bytes(), &usage.derivation_constant(0xAA))?;
     let ki = dk_camellia(key.as_bytes(), &usage.derivation_constant(0x55))?;
     let p = crate::cts::camellia_decrypt(&ke, &state.iv, c)?;
-    // MIT krb5int_dk_cmac_decrypt; see docs/parity/b1-crypto-state.md
+    // MIT: `krb5int_dk_cmac_decrypt` (lib/crypto/krb/enc_dk_cmac.c:136-182)
     crate::ops::update_iv(state, c);
     let expected = cmac_camellia(&ki, &p)?;
     crate::derive::mac_verify(mac, &expected)?;

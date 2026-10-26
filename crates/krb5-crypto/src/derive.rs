@@ -165,7 +165,7 @@ pub(crate) fn derive_usage_keys(
         let ki = crate::weak::dk_camellia(base, &usage.derivation_constant(0x55))?;
         Ok(UsageKeys { kc, ke, ki })
     } else if etype == EncryptionType::Des3CbcSha1 {
-        // MIT krb5int_derive_key; see docs/parity/b1-crypto-keys.md
+        // MIT: `krb5int_derive_key` (lib/crypto/krb/derive.c:134-174)
         let kc = crate::weak::dk_des3(base, &usage.derivation_constant(0x99))?;
         let ke = crate::weak::dk_des3(base, &usage.derivation_constant(0xAA))?;
         let ki = crate::weak::dk_des3(base, &usage.derivation_constant(0x55))?;

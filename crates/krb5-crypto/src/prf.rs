@@ -50,7 +50,7 @@ pub fn prf_plus(key: &ProtocolKey, seed: &[u8], len: usize) -> Result<Vec<u8>, E
     Ok(std::mem::take(&mut out.0))
 }
 
-// MIT krb5_c_derive_prfplus; see docs/parity/b1-crypto-keys.md
+// MIT: `krb5_c_derive_prfplus` (lib/crypto/krb/cf2.c:81-121)
 pub fn derive_prfplus(key: &ProtocolKey, input: &[u8]) -> Result<ProtocolKey, Error> {
     derive_prfplus_enctype(key, input, key.etype())
 }

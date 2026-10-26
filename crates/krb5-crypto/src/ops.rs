@@ -31,7 +31,7 @@ fn parse_iterations(etype: EncryptionType, params: Option<&[u8]>) -> Result<u32,
     }
 }
 
-// MIT krb5int_dk_string_to_key; see docs/parity/b1-crypto-keys.md
+// MIT: `krb5int_dk_string_to_key` (lib/crypto/krb/s2k_pbkdf2.c:33-101)
 pub fn string_to_key(
     etype: EncryptionType,
     password: impl AsRef<[u8]>,
@@ -52,7 +52,7 @@ pub fn string_to_key(
     result
 }
 
-// MIT krb5_c_string_to_key_with_params; see docs/parity/b1-crypto-keys.md
+// MIT: `krb5_c_string_to_key_with_params` (lib/crypto/krb/string_to_key.c:39-79)
 fn string_to_key_inner(
     etype: EncryptionType,
     password: &[u8],
@@ -217,7 +217,7 @@ pub fn encrypt_with_confounder_and_state(
     encrypt_inner_state(key, usage, confounder, plaintext, state)
 }
 
-// MIT krb5int_dk_encrypt; see docs/parity/b1-crypto-keys.md
+// MIT: `krb5int_dk_encrypt` (lib/crypto/krb/enc_dk_hmac.c:68-176)
 fn encrypt_inner_state(
     key: &ProtocolKey,
     usage: KeyUsage,
@@ -281,7 +281,7 @@ pub(crate) fn update_iv(state: &mut CipherState, ciphertext: &[u8]) {
     }
 }
 
-// MIT ENCTYPE_UNKNOWN; see docs/parity/b1-client.md
+// MIT: `ENCTYPE_UNKNOWN` (include/krb5/krb5.hin:449-449)
 pub const ENCTYPE_UNKNOWN: i32 = 0x01ff;
 
 pub fn check_enc_data_etype(key: &ProtocolKey, etype: i32) -> Result<(), Error> {
@@ -341,8 +341,8 @@ pub fn decrypt_with_state(
     decrypt_inner_state(key, usage, ciphertext, state)
 }
 
-// MIT krb5int_dk_decrypt; see docs/parity/b1-crypto-state.md
-// MIT krb5int_etm_decrypt; see docs/parity/b1-crypto-state.md
+// MIT: `krb5int_dk_decrypt` (lib/crypto/krb/enc_dk_hmac.c:178-269)
+// MIT: `krb5int_etm_decrypt` (lib/crypto/krb/enc_etm.c:209-257)
 fn decrypt_inner_state(
     key: &ProtocolKey,
     usage: KeyUsage,
@@ -431,7 +431,7 @@ pub fn decrypt_cts(
     Ok((conf, plain))
 }
 
-// MIT krb5int_dk_checksum; see docs/parity/b1-crypto-keys.md
+// MIT: `krb5int_dk_checksum` (lib/crypto/krb/checksum_dk_hmac.c:32-59)
 pub fn checksum(key: &ProtocolKey, usage: KeyUsage, message: &[u8]) -> Result<Vec<u8>, Error> {
     let correlation_id = krb5_log::current_correlation_id();
     let started = Instant::now();
@@ -479,8 +479,8 @@ fn hmac_md5_simple(key: &[u8], data: &[u8]) -> Result<Vec<u8>, Error> {
     Ok(mac.finalize().into_bytes().to_vec())
 }
 
-// MIT krb5int_hmacmd5_checksum; see docs/parity/b1-crypto-keys.md
-// MIT krb5int_arcfour_translate_usage; see docs/parity/b1-crypto-keys.md
+// MIT: `krb5int_hmacmd5_checksum` (lib/crypto/krb/checksum_hmac_md5.c:36-94)
+// MIT: `krb5int_arcfour_translate_usage` (lib/crypto/krb/enc_rc4.c:16-35)
 pub fn hmac_md5_arcfour_checksum(
     key: &[u8],
     usage: u32,
@@ -519,7 +519,7 @@ pub fn checksum_output_size(cksumtype: i32) -> Option<usize> {
     }
 }
 
-// MIT krb5int_unkeyed_checksum; see docs/parity/b1-crypto-keys.md
+// MIT: `krb5int_unkeyed_checksum` (lib/crypto/krb/checksum_unkeyed.c:29-36)
 pub fn unkeyed_checksum(cksumtype: i32, message: &[u8]) -> Result<Vec<u8>, Error> {
     match cksumtype {
         2 => {
@@ -538,7 +538,7 @@ pub fn unkeyed_checksum(cksumtype: i32, message: &[u8]) -> Result<Vec<u8>, Error
     }
 }
 
-// MIT krb5_c_verify_checksum; see docs/parity/b1-crypto-keys.md
+// MIT: `krb5_c_verify_checksum` (lib/crypto/krb/verify_checksum.c:82-98)
 pub fn verify_checksum_type(
     key: &ProtocolKey,
     usage: KeyUsage,
@@ -554,7 +554,7 @@ pub fn verify_checksum_type(
     let Some(want) = checksum_output_size(ctype) else {
         return Err(Error::UnsupportedChecksum(ctype));
     };
-    // MIT krb5_k_verify_checksum; see docs/parity/b1-crypto-keys.md
+    // MIT: `krb5_k_verify_checksum` (lib/crypto/krb/verify_checksum.c:30-80)
     if crate::etype::cksumtype_is_unkeyed(ctype) {
         if mac.len() != want {
             return Err(Error::BadChecksumSize);
@@ -565,7 +565,7 @@ pub fn verify_checksum_type(
     if !crate::etype::cksumtype_is_keyed(ctype) {
         return Err(Error::UnsupportedChecksum(ctype));
     }
-    // MIT verify_key; see docs/parity/b1-crypto-keys.md
+    // MIT: `verify_key` (lib/crypto/krb/crypto_int.h:598-599)
     if !keyed_cksum_accepts_key(ctype, key.etype()) {
         return Err(Error::UnsupportedChecksum(ctype));
     }
@@ -576,8 +576,8 @@ pub fn verify_checksum_type(
     mac_verify(mac, &expected)
 }
 
-// MIT verify_for_user_checksum; see docs/parity/a1-tgs.md
-// MIT verify_checksum; see docs/parity/a1-tgs.md
+// MIT: `verify_for_user_checksum` (kdc/kdc_util.c:1232-1302)
+// MIT: `verify_checksum` (lib/krb5/krb/pac.c:478-515)
 pub fn verify_checksum_keyed(
     key: &ProtocolKey,
     usage: KeyUsage,
@@ -591,7 +591,7 @@ pub fn verify_checksum_keyed(
     verify_checksum_type(key, usage, message, cksumtype, mac)
 }
 
-// MIT read_krbsafe; see docs/parity/b1-client.md
+// MIT: `read_krbsafe` (lib/krb5/krb/rd_safe.c:37-125)
 pub fn verify_checksum_collproof(
     key: &ProtocolKey,
     usage: KeyUsage,
@@ -722,7 +722,7 @@ mod tests {
     use super::*;
     use md5::{Digest, Md5};
 
-    // MIT krb5_c_decrypt; see docs/parity/b1-crypto-state.md
+    // MIT: `krb5_c_decrypt` (lib/crypto/krb/decrypt.c:87-101)
     #[test]
     fn enc_data_etype_check_is_krb5_k_decrypts() {
         let key =

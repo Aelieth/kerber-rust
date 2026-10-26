@@ -63,7 +63,7 @@ any other `###` heading.
 ### Changed
 
 - **ccache.** A `DIR:` name makes its missing directory (0700) and `primary` file whenever it is resolved, as MIT does; before, only a store made them.
-- **form.** tools, config and types: comments are within 3% of the code characters. A safety, wire or MIT-quirk fact keeps its line.
+- **form.** tools, config, types and crypto: comments are within 3% of the code characters. A safety, wire or MIT-quirk fact keeps its line.
 - **examples.** krb5-embed-realm serves the KDC and kadmind from one store, one loop each; one Shutdown stops both.
 - **kdc.** A write at 5,000 principals is 0.80 to 0.86 times MIT and stays flat as the realm grows. Each write flushes once, does not rename, and a crash leaves it unread.
 - **kdc.** A store keeps its own kdcpreauth, kdcpolicy, audit, authdata, and OTP modules. The same module again is a no-op, and a different module of that name is added.

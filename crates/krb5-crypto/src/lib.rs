@@ -1,5 +1,5 @@
-// MIT allow_weak_crypto; see docs/parity/b1-client.md
-// MIT krb5int_enctypes_list; see docs/parity/b1-crypto-keys.md
+// MIT: `KRB5_CONF_ALLOW_WEAK_CRYPTO` (include/k5-int.h:185-185)
+// MIT: `krb5int_enctypes_list` (lib/crypto/krb/etypes.c:36-149)
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]

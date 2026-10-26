@@ -10,32 +10,32 @@ use crate::krb_fx_cf2;
 use crate::prf::prf_plus;
 use crate::wipe::wipe;
 
-// MIT spake_iana_edwards25519; see docs/parity/b1-crypto-keys.md
-// MIT spake_iana_p256; see docs/parity/b1-crypto-keys.md
+// MIT: `spake_iana_edwards25519` (plugins/preauth/spake/iana.c:93-96)
+// MIT: `spake_iana_p256` (plugins/preauth/spake/iana.c:98-100)
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SpakeGroup {
     Edwards25519,
     P256,
 }
 
-// MIT DEFAULT_GROUPS_CLIENT; see docs/parity/b1-crypto-keys.md
-// MIT spake_preauth_groups; see docs/parity/a2-as.md
+// MIT: `DEFAULT_GROUPS_CLIENT` (plugins/preauth/spake/groups.c:59-59)
+// MIT: `KRB5_CONF_SPAKE_PREAUTH_GROUPS` (include/k5-int.h:301-301)
 pub const SPAKE_DEFAULT_GROUPS_CLIENT: &str = "edwards25519";
 
-// MIT DEFAULT_GROUPS_KDC; see docs/parity/b1-crypto-keys.md
+// MIT: `DEFAULT_GROUPS_KDC` (plugins/preauth/spake/groups.c:60-60)
 pub const SPAKE_DEFAULT_GROUPS_KDC: &str = "";
 
 impl SpakeGroup {
-    // MIT groupdefs; see docs/parity/b1-crypto-keys.md
+    // MIT: `groupdefs` (plugins/preauth/spake/groups.c:89-97)
     pub const ALL: [Self; 2] = [Self::Edwards25519, Self::P256];
 
-    // MIT find_gdef; see docs/parity/b1-crypto-keys.md
+    // MIT: `find_gdef` (plugins/preauth/spake/groups.c:99-111)
     #[must_use]
     pub fn from_number(group: i32) -> Option<Self> {
         Self::ALL.into_iter().find(|g| g.number() == group)
     }
 
-    // MIT find_gnum; see docs/parity/b1-crypto-keys.md
+    // MIT: `find_gnum` (plugins/preauth/spake/groups.c:113-124)
     #[must_use]
     pub fn from_name(name: &str) -> Option<Self> {
         Self::ALL
@@ -100,7 +100,7 @@ pub fn spake_group_words(value: &str) -> impl Iterator<Item = &str> {
         .filter(|word| !word.is_empty())
 }
 
-// MIT parse_groups; see docs/parity/b1-crypto-keys.md
+// MIT: `parse_groups` (plugins/preauth/spake/groups.c:176-211)
 #[must_use]
 pub fn spake_parse_groups(value: &str) -> Vec<SpakeGroup> {
     let mut out = Vec::new();
@@ -116,14 +116,14 @@ pub fn spake_parse_groups(value: &str) -> Vec<SpakeGroup> {
     out
 }
 
-// MIT derive_wbytes; see docs/parity/b1-crypto-keys.md
+// MIT: `derive_wbytes` (plugins/preauth/spake/util.c:101-141)
 pub fn spake_wbytes(ikey: &ProtocolKey, group: SpakeGroup) -> Result<Zeroizing<Vec<u8>>, Error> {
     let mut input = b"SPAKEsecret".to_vec();
     input.extend_from_slice(&group.number().to_be_bytes());
     Ok(Zeroizing::new(prf_plus(ikey, &input, group.mult_len())?))
 }
 
-// MIT group_keygen; see docs/parity/b1-crypto-keys.md
+// MIT: `group_keygen` (plugins/preauth/spake/groups.c:332-371)
 pub fn spake_keygen(
     group: SpakeGroup,
     wbytes: &[u8],
@@ -153,7 +153,7 @@ pub fn spake_public(
     }
 }
 
-// MIT group_result; see docs/parity/b1-crypto-keys.md
+// MIT: `group_result` (plugins/preauth/spake/groups.c:373-412)
 pub fn spake_result(
     group: SpakeGroup,
     wbytes: &[u8],
@@ -183,8 +183,8 @@ pub fn spake_decode_point(group: SpakeGroup, bytes: &[u8]) -> Result<(), Error> 
     }
 }
 
-// MIT builtin_sha256; see docs/parity/b1-crypto-keys.md
-// MIT ossl_hash; see docs/parity/b1-crypto-keys.md
+// MIT: `builtin_sha256` (plugins/preauth/spake/edwards25519.c:1741-1746)
+// MIT: `ossl_hash` (plugins/preauth/spake/openssl.c:271-288)
 fn group_hash(group: SpakeGroup, parts: &[&[u8]]) -> sha2::digest::Output<Sha256> {
     match group {
         SpakeGroup::Edwards25519 | SpakeGroup::P256 => {
@@ -197,7 +197,7 @@ fn group_hash(group: SpakeGroup, parts: &[&[u8]]) -> sha2::digest::Output<Sha256
     }
 }
 
-// MIT update_thash; see docs/parity/b1-crypto-keys.md
+// MIT: `update_thash` (plugins/preauth/spake/util.c:69-99)
 #[must_use]
 pub fn spake_thash_update(group: SpakeGroup, thash: &[u8], data1: &[u8], data2: &[u8]) -> Vec<u8> {
     let zeros = vec![0u8; group.hash_len()];
@@ -205,7 +205,7 @@ pub fn spake_thash_update(group: SpakeGroup, thash: &[u8], data1: &[u8], data2: 
     group_hash(group, &[old, data1, data2]).to_vec()
 }
 
-// MIT derive_key; see docs/parity/b1-crypto-keys.md
+// MIT: `derive_key` (plugins/preauth/spake/util.c:143-212)
 pub fn spake_derive_key(
     ikey: &ProtocolKey,
     group: SpakeGroup,

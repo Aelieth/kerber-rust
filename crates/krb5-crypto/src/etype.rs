@@ -68,7 +68,7 @@ impl EncryptionType {
         }
     }
 
-    // MIT krb5int_c_deprecated_enctype; see docs/parity/b1-crypto-keys.md
+    // MIT: `krb5int_c_deprecated_enctype` (lib/crypto/krb/enctype_util.c:66-71)
     #[must_use]
     pub const fn is_deprecated(self) -> bool {
         matches!(self, Self::Des3CbcSha1 | Self::Rc4Hmac)
@@ -146,7 +146,7 @@ impl EncryptionType {
         }
     }
 
-    // MIT default_enctype_list; see docs/parity/b1-crypto-keys.md
+    // MIT: `default_enctype_list` (lib/krb5/krb/init_ctx.c:59-66)
     #[must_use]
     pub const fn preferred() -> [Self; 4] {
         [
@@ -226,7 +226,7 @@ impl EncryptionType {
         }
     }
 
-    // MIT ETYPE_WEAK; see docs/parity/a4-kadmin.md
+    // MIT: `ETYPE_WEAK` (lib/crypto/krb/crypto_int.h:179-179)
     #[must_use]
     pub const fn is_mit_weak(self) -> bool {
         false
@@ -247,8 +247,8 @@ impl EncryptionType {
     }
 }
 
-// MIT krb5_c_is_keyed_cksum; see docs/parity/a3-preauth.md
-// MIT CKSUM_UNKEYED; see docs/parity/b1-crypto-keys.md
+// MIT: `krb5_c_is_keyed_cksum` (lib/crypto/krb/keyed_cksum.c:30-39)
+// MIT: `CKSUM_UNKEYED` (lib/crypto/krb/crypto_int.h:230-230)
 #[must_use]
 pub const fn cksumtype_is_keyed(cksumtype: i32) -> bool {
     matches!(cksumtype, 12 | 15 | 16 | 17 | 18 | 19 | 20 | -137 | -138)
@@ -259,13 +259,13 @@ pub const fn cksumtype_is_unkeyed(cksumtype: i32) -> bool {
     matches!(cksumtype, 2 | 7 | 9 | 14)
 }
 
-// MIT krb5_c_valid_cksumtype; see docs/parity/b1-crypto-keys.md
+// MIT: `krb5_c_valid_cksumtype` (lib/crypto/krb/valid_cksumtype.c:30-39)
 #[must_use]
 pub const fn cksumtype_is_known(cksumtype: i32) -> bool {
     cksumtype_is_keyed(cksumtype) || cksumtype_is_unkeyed(cksumtype)
 }
 
-// MIT krb5_c_is_coll_proof_cksum; see docs/parity/b1-crypto-keys.md
+// MIT: `krb5_c_is_coll_proof_cksum` (lib/crypto/krb/coll_proof_cksum.c:30-37)
 #[must_use]
 pub const fn cksumtype_is_coll_proof(cksumtype: i32) -> bool {
     cksumtype_is_known(cksumtype)
@@ -285,8 +285,8 @@ pub const fn default_enctype_list() -> [EncryptionType; 8] {
     ]
 }
 
-// MIT krb5int_parse_enctype_list; see docs/parity/b1-crypto-keys.md
-// MIT KRB5_CONFIG_ETYPE_NOSUPP; see docs/parity/b1-crypto-keys.md
+// MIT: `krb5int_parse_enctype_list` (lib/krb5/krb/init_ctx.c:442-503)
+// MIT: `KRB5_CONFIG_ETYPE_NOSUPP` (lib/krb5/error_tables/krb5_err.et:326-326)
 #[must_use]
 pub fn parse_enctype_list(profstr: &str, allow_weak: bool) -> Option<Vec<EncryptionType>> {
     let mut list = Vec::new();
@@ -338,7 +338,7 @@ pub fn parse_enctype_list(profstr: &str, allow_weak: bool) -> Option<Vec<Encrypt
     if list.is_empty() { None } else { Some(list) }
 }
 
-// MIT krb5_string_to_keysalts; see docs/parity/a4-kadmin.md
+// MIT: `krb5_string_to_keysalts` (lib/kadm5/str_conv.c:314-366)
 #[must_use]
 pub fn parse_keysalt_list(s: &str) -> Vec<EncryptionType> {
     let mut out = Vec::new();

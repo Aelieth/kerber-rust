@@ -74,7 +74,7 @@ fn xor_in_place(block: &mut [u8; BLOCK], mask: &[u8; BLOCK]) {
     }
 }
 
-// MIT krb5int_aes_encrypt; see docs/parity/b1-crypto-state.md
+// MIT: `krb5int_aes_encrypt` (lib/crypto/openssl/enc_provider/aes.c:327-345)
 fn encrypt_with<C: BlockCipherEncrypt<BlockSize = U16>>(
     cipher: C,
     iv: &[u8; BLOCK],
@@ -129,7 +129,7 @@ fn encrypt_with<C: BlockCipherEncrypt<BlockSize = U16>>(
     Ok(out)
 }
 
-// MIT krb5int_aes_decrypt; see docs/parity/b1-crypto-state.md
+// MIT: `krb5int_aes_decrypt` (lib/crypto/openssl/enc_provider/aes.c:347-365)
 fn decrypt_with<C: BlockCipherDecrypt<BlockSize = U16>>(
     cipher: C,
     iv: &[u8; BLOCK],

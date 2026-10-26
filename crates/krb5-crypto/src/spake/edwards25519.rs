@@ -4,19 +4,19 @@ use zeroize::Zeroizing;
 
 use crate::error::Error;
 
-// MIT edwards25519_M; see docs/parity/b1-crypto-keys.md
+// MIT: `edwards25519_M` (plugins/preauth/spake/iana.c:35-39)
 pub(super) const M: [u8; 32] = [
     0xd0, 0x48, 0x03, 0x2c, 0x6e, 0xa0, 0xb6, 0xd6, 0x97, 0xdd, 0xc2, 0xe8, 0x6b, 0xda, 0x85, 0xa3,
     0x3a, 0xda, 0xc9, 0x20, 0xf1, 0xbf, 0x18, 0xe1, 0xb0, 0xc6, 0xd1, 0x66, 0xa5, 0xce, 0xcd, 0xaf,
 ];
 
-// MIT edwards25519_N; see docs/parity/b1-crypto-keys.md
+// MIT: `edwards25519_N` (plugins/preauth/spake/iana.c:41-45)
 pub(super) const N: [u8; 32] = [
     0xd3, 0xbf, 0xb5, 0x18, 0xf4, 0x4f, 0x34, 0x30, 0xf2, 0x9d, 0x0c, 0x92, 0xaf, 0x50, 0x38, 0x65,
     0xa1, 0xed, 0x32, 0x81, 0xdc, 0x69, 0xb3, 0x5d, 0xd8, 0x68, 0xba, 0x85, 0xf8, 0x86, 0xc4, 0xab,
 ];
 
-// MIT x25519_ge_frombytes_vartime; see docs/parity/b1-crypto-keys.md
+// MIT: `x25519_ge_frombytes_vartime` (plugins/preauth/spake/edwards25519.c:618-662)
 pub(super) fn element(bytes: &[u8]) -> Result<EdwardsPoint, Error> {
     let encoded: [u8; 32] = bytes.try_into().map_err(|_| Error::Integrity)?;
     CompressedEdwardsY(encoded)
@@ -28,7 +28,7 @@ fn constant(use_m: bool) -> Result<EdwardsPoint, Error> {
     element(if use_m { &M } else { &N })
 }
 
-// MIT x25519_sc_reduce; see docs/parity/b1-crypto-keys.md
+// MIT: `x25519_sc_reduce` (plugins/preauth/spake/edwards25519.c:1044-1382)
 fn reduce(bytes: &[u8]) -> Result<Zeroizing<Scalar>, Error> {
     let mut wide = Zeroizing::new([0u8; 32]);
     if bytes.len() != wide.len() {
@@ -38,7 +38,7 @@ fn reduce(bytes: &[u8]) -> Result<Zeroizing<Scalar>, Error> {
     Ok(Zeroizing::new(Scalar::from_bytes_mod_order(*wide)))
 }
 
-// MIT left_shift_3; see docs/parity/b1-crypto-keys.md
+// MIT: `left_shift_3` (plugins/preauth/spake/edwards25519.c:1633-1644)
 fn left_shift_3(n: &[u8; 32]) -> Zeroizing<[u8; 32]> {
     let mut out = Zeroizing::new([0u8; 32]);
     let mut carry = 0u8;
@@ -49,7 +49,7 @@ fn left_shift_3(n: &[u8; 32]) -> Zeroizing<[u8; 32]> {
     out
 }
 
-// MIT builtin_edwards25519_keygen; see docs/parity/b1-crypto-keys.md
+// MIT: `builtin_edwards25519_keygen` (plugins/preauth/spake/edwards25519.c:1646-1693)
 pub(super) fn keygen(wbytes: &[u8], use_m: bool) -> Result<(Zeroizing<Vec<u8>>, Vec<u8>), Error> {
     let mut random = Zeroizing::new([0u8; 32]);
     getrandom::getrandom(random.as_mut_slice()).map_err(|_| Error::Rng)?;
@@ -68,7 +68,7 @@ pub(super) fn public(wbytes: &[u8], private: &[u8], use_m: bool) -> Result<Vec<u
     Ok(masked.compress().to_bytes().to_vec())
 }
 
-// MIT builtin_edwards25519_result; see docs/parity/b1-crypto-keys.md
+// MIT: `builtin_edwards25519_result` (plugins/preauth/spake/edwards25519.c:1695-1739)
 pub(super) fn result(
     wbytes: &[u8],
     ourpriv: &[u8],

@@ -8,7 +8,7 @@ use crate::key::ProtocolKey;
 use crate::prf::prf_plus;
 use crate::wipe::Wiped;
 
-// MIT krb5_c_fx_cf2_simple; see docs/parity/b1-crypto-keys.md
+// MIT: `krb5_c_fx_cf2_simple` (lib/crypto/krb/cf2.c:123-176)
 pub fn krb_fx_cf2(
     k1: &ProtocolKey,
     k2: &ProtocolKey,
@@ -108,7 +108,7 @@ fn scalar_from_bytes32(b: &[u8; 32]) -> Result<p256::Scalar, Error> {
     Ok(s)
 }
 
-// MIT octetstring2key; see docs/parity/b1-crypto-keys.md
+// MIT: `octetstring2key` (plugins/preauth/pkinit/pkinit_crypto_openssl.c:2574-2646)
 pub fn octetstring2key(etype: EncryptionType, x: &[u8]) -> Result<ProtocolKey, Error> {
     let n = etype.keybytes();
     let mut buf = Wiped(Vec::with_capacity(n + 20));
@@ -127,7 +127,7 @@ pub fn octetstring2key(etype: EncryptionType, x: &[u8]) -> Result<ProtocolKey, E
     ProtocolKey::from_random(etype, &buf)
 }
 
-// MIT pkinit_kdf; see docs/parity/b1-crypto-keys.md
+// MIT: `pkinit_kdf` (plugins/preauth/pkinit/pkinit_crypto_openssl.c:2781-2868)
 pub fn pkinit_kdf_agile(
     etype: EncryptionType,
     shared: &[u8],
@@ -161,7 +161,7 @@ mod tests {
         octets.iter().all(|b| b.count_ones() % 2 == 1)
     }
 
-    // MIT krb5_c_random_to_key; see docs/parity/b1-crypto-keys.md
+    // MIT: `krb5_c_random_to_key` (lib/crypto/krb/random_to_key.c:39-62)
     #[test]
     fn the_pkinit_keys_of_des3_are_made_through_random_to_key() {
         use sha1::{Digest as _, Sha1};

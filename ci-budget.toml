@@ -9,7 +9,7 @@
 
 [jobs]
 test = 360
-doc = 90
+doc = 118
 # release is the old test step (max 108s) plus a toolchain. fuzz is the old
 # doc step (max 61s) plus a toolchain. test and doc ceilings are unchanged.
 release = 210

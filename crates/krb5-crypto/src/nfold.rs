@@ -1,4 +1,4 @@
-// MIT krb5int_nfold; see docs/parity/b1-crypto-keys.md
+// MIT: `krb5int_nfold` (lib/crypto/krb/nfold.c:46-117)
 
 pub fn nfold(input: &[u8], out_len: usize) -> Result<Vec<u8>, crate::error::Error> {
     if input.is_empty() || out_len == 0 {
