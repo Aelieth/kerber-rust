@@ -149,7 +149,7 @@ struct Ctx<'a> {
     opts: &'a GetCredsOptions,
 }
 
-// MIT kvno; see docs/parity/b1-tools.md
+// MIT: `kvno` (clients/kvno/kvno.c:290-411)
 fn kvno(ctx: &Ctx<'_>, cache: &mut OpenCache, name: &str) -> Result<CcacheCred, ()> {
     let prog = ctx.prog;
     let args = ctx.args;

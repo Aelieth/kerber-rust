@@ -42,7 +42,7 @@ struct Args {
 
 #[derive(Debug, PartialEq, Eq)]
 enum Parsed {
-    // MIT main; see docs/parity/b1-client-preauth.md
+    // MIT: `main` (clients/kdestroy/kdestroy.c:85-229)
     Krb4(UsageError),
     Usage(UsageError),
 }

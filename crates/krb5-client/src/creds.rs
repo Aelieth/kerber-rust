@@ -119,7 +119,8 @@ impl<'c> OpenCache<'c> {
     }
 
     // MIT: `krb5_cc_retrieve_cred` (lib/krb5/ccache/ccfns.c:97-111)
-    // a lookup that finds nothing for a server in the referral realm is made again with the client's realm.
+    // a lookup that finds nothing for a server in the referral realm is made again with the
+    // client's realm.
     #[must_use]
     pub fn retrieve_referral(&self, m: &MatchCreds<'_>) -> Option<&CcacheCred> {
         let client = m.client?;
@@ -313,14 +314,15 @@ impl GetCredsOptions {
     }
 }
 
-// MIT krb5_get_credentials; see docs/parity/b1-client.md
+// MIT: `krb5_get_credentials` (lib/krb5/krb/get_creds.c:1308-1349)
 // MIT: `check_cache` (get_creds.c:1042-1065)
 // MIT: `complete` (get_creds.c:468-471)
 // the store's failure is ignored; so is a cross-realm TGT's.
 // MIT: `step_get_tgt` (get_creds.c:952-954)
 // a cross-realm TGT asked for on the path is stored, its failure ignored.
 // MIT: `krb5_tkt_creds_step` (lib/krb5/krb/get_creds.c:1292-1305)
-// a request the KDC answers with an unknown server is made again for the next candidate; with none left that error stands.
+// a request the KDC answers with an unknown server is made again for the next candidate; with none
+// left that error stands.
 pub fn get_credentials(
     cache: &mut OpenCache,
     me: &Princ,
@@ -392,7 +394,8 @@ pub fn get_credentials(
 }
 
 // MIT: `begin` (lib/krb5/krb/get_creds.c:1074-1087)
-// a server in the referral realm takes the start realm, and the request starts with the TGT for the server's realm.
+// a server in the referral realm takes the start realm, and the request starts with the TGT for the
+// server's realm.
 fn request_service(
     cache: &OpenCache,
     server: &Princ,
@@ -440,7 +443,7 @@ fn request_service(
     .map_err(|e| Krb5Error::from_tgs(&e, &hop))
 }
 
-// MIT krb5_get_credentials_for_user; see docs/parity/b1-client.md
+// MIT: `krb5_get_credentials_for_user` (lib/krb5/krb/s4u_creds.c:647-738)
 pub fn get_credentials_for_user(
     cache: &mut OpenCache,
     for_user: &Princ,
@@ -538,8 +541,9 @@ fn s4u_identify_user(
 }
 
 // MIT: `k5_identify_realm` (lib/krb5/krb/get_in_tkt.c:2062-2083)
-// the request asks for a 15-second ticket, neither renewable nor forwardable nor proxiable, canonicalized, and the realm it ends in is the client's.
-// MIT init_creds_step_request; see docs/parity/b1-client-preauth.md
+// the request asks for a 15-second ticket, neither renewable nor forwardable nor proxiable,
+// canonicalized, and the realm it ends in is the client's.
+// MIT: `init_creds_step_request` (lib/krb5/krb/get_in_tkt.c:1257-1409)
 fn identify_realm(
     profile: &Krb5Conf,
     client: &PrincipalName,

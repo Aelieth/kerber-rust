@@ -709,7 +709,7 @@ fn start_time(arg: &str) -> Option<i64> {
     }
 }
 
-// MIT krb5_get_as_key_password; see docs/parity/b1-client-preauth.md
+// MIT: `krb5_get_as_key_password` (lib/krb5/krb/gic_pwd.c:8-115)
 pub fn read_password_line(
     principal: &str,
 ) -> Result<zeroize::Zeroizing<Vec<u8>>, krb5_cli::PromptError> {

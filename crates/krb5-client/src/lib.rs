@@ -126,7 +126,7 @@ pub fn kt_default_name(ctx: &ClientContext) -> String {
     )
 }
 
-// MIT k5_kt_client_default_name; see docs/parity/b1-client.md
+// MIT: `k5_kt_client_default_name` (lib/krb5/os/ktdefname.c:59-78)
 #[must_use]
 pub fn kt_client_default_name(ctx: &ClientContext) -> String {
     if let Some(v) = ctx.client_ktname() {
@@ -233,7 +233,7 @@ fn allowed_preauth_type(
     i32::try_from(n).ok().filter(|&n| n != 0)
 }
 
-// MIT read_cc_config_in_data; see docs/parity/b1-client-preauth.md
+// MIT: `read_cc_config_in_data` (lib/krb5/krb/get_in_tkt.c:1175-1211)
 fn pa_config_in(
     in_ccache: Option<InputCcache<'_>>,
     server: &krb5_types::PrincipalName,
@@ -248,7 +248,7 @@ fn pa_config_in(
 #[derive(Clone, Copy)]
 pub struct NewPasswordPrompter<'a>(pub &'a (dyn Fn(&str) -> PromptReply + 'a));
 
-// MIT doprompt; see docs/parity/a3-preauth.md
+// MIT: `doprompt` (lib/krb5/krb/preauth_otp.c:472-500)
 pub type PreauthPromptFn<'a> =
     dyn Fn(&PreauthPrompt<'_>) -> Result<Zeroizing<Vec<u8>>, krb5_cli::PromptError> + 'a;
 
@@ -383,7 +383,7 @@ pub fn kinit_to_spec(
     )
 }
 
-// MIT write_out_ccache; see docs/parity/b1-client-preauth.md
+// MIT: `write_out_ccache` (lib/krb5/krb/get_in_tkt.c:1610-1663)
 pub fn kinit_with(
     ctx: &ClientContext,
     kdc: &KdcAddr,
@@ -732,9 +732,10 @@ impl ClientPkinit {
 }
 
 // MIT: `pkinit_identity_initialize` (plugins/preauth/pkinit/pkinit_identity.c:509-562)
-// `X509_user_identity`, else each `pkinit_identities` value until one loads; none is "No user identity options specified".
-// MIT pkinit_client_process; see docs/parity/b1-client-preauth.md
-// MIT pkinit_identity_prompt; see docs/parity/a3-preauth.md
+// `X509_user_identity`, else each `pkinit_identities` value until one loads; none is "No user
+// identity options specified".
+// MIT: `pkinit_client_process` (plugins/preauth/pkinit/pkinit_clnt.c:906-1020)
+// MIT: `pkinit_identity_prompt` (plugins/preauth/pkinit/pkinit_identity.c:564-676)
 fn load_pkinit(
     identities: &[String],
     anchors: &[String],
@@ -800,10 +801,10 @@ fn load_pkinit(
 
 // MIT: `create_krb5_trustedCertifiers` (pkinit_crypto_openssl.c:5396-5397)
 // with no anchor loaded no request is made.
-// MIT pa_pkinit_gen_req; see docs/parity/b1-client-preauth.md
+// MIT: `pa_pkinit_gen_req` (plugins/preauth/pkinit/pkinit_clnt.c:71-171)
 const NO_TRUSTED_CA: &str = "Preauthentication failed";
 
-// MIT load_cas_and_crls; see docs/parity/b1-client-preauth.md
+// MIT: `load_cas_and_crls` (plugins/preauth/pkinit/pkinit_crypto_openssl.c:4996-5152)
 fn ca_certs(values: &[String]) -> Result<Vec<Vec<u8>>, String> {
     let mut certs = Vec::new();
     for value in values {
@@ -846,7 +847,7 @@ struct PkinitOpts {
     eku_checking: Option<String>,
 }
 
-// MIT pkinit_client_profile; see docs/parity/b1-client-preauth.md
+// MIT: `pkinit_client_profile` (plugins/preauth/pkinit/pkinit_clnt.c:646-712)
 fn pkinit_from_conf(conf: &Krb5Conf, realm: &str) -> PkinitConf {
     let strings = |option| conf.pkinit_libdefault_strings(realm, option);
     PkinitConf {
@@ -870,7 +871,7 @@ pub fn profile_pkinit(
     load_pkinit(&pk.identities, &pk.anchors, &pk.pool, &pk.rules, pk.opts)
 }
 
-// MIT krb5int_fast_as_armor; see docs/parity/b1-client-preauth.md
+// MIT: `krb5int_fast_as_armor` (lib/krb5/krb/fast.c:171-224)
 fn armor_build_error(err: &(dyn std::error::Error + Send + Sync + 'static)) -> Krb5Error {
     if let Some(k) = err.downcast_ref::<Krb5Error>() {
         return Krb5Error::new(
@@ -928,7 +929,7 @@ fn initial_armor(
 #[derive(Clone, Copy)]
 enum KeytabArg<'a> {
     Keys(&'a [krb5_crypto::ProtocolKey], &'a Path),
-    // MIT krb5_init_creds_set_keytab; see docs/parity/b1-client-keytab.md
+    // MIT: `krb5_init_creds_set_keytab` (lib/krb5/krb/gic_keytab.c:176-232)
     Unreadable(&'a KeytabFailure, &'a Path),
 }
 

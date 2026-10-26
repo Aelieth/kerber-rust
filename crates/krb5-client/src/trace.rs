@@ -31,7 +31,7 @@ fn static_tgt(realm: &str) -> Option<(krb5_types::Realm, PrincipalName)> {
     Some((ks, name))
 }
 
-// MIT krb5_init_creds_set_service; see docs/parity/b1-client-preauth.md
+// MIT: `krb5_init_creds_set_service` (lib/krb5/krb/get_in_tkt.c:1056-1073)
 thread_local! {
     static SKIP_NEXT_INIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
@@ -188,7 +188,7 @@ fn cached_tgt<'c>(cache: &'c OpenCache, realm: &str) -> Option<&'c CcacheCred> {
         .find(|c| c.server.1.is_krbtgt_for(realm))
 }
 
-// MIT begin_get_tgt; see docs/parity/b1-client.md
+// MIT: `begin_get_tgt` (lib/krb5/krb/get_creds.c:979-1031)
 pub fn tgt_for(cache: &OpenCache, srealm: &str) {
     if !trace::enabled() {
         return;

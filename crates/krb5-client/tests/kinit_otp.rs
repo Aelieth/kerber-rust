@@ -211,7 +211,7 @@ fn at(lines: &[String], needle: &str) -> usize {
     hits[0]
 }
 
-// MIT encts_process; see docs/parity/b1-client-preauth.md
+// MIT: `encts_process` (lib/krb5/krb/preauth_encts.c:49-132)
 
 const ENCTS_OFF: &str = "Ignoring encrypted timestamp because it is disabled";
 const ENCTS_OFF_RETURNED: &str = "Preauth module encrypted_timestamp (2) (real) returned: -1765328174/Encrypted timestamp is disabled";

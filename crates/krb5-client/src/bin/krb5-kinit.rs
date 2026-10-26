@@ -478,7 +478,7 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
     let new_password = env_new_password();
     // MIT: `krb5_get_init_creds_password` (gic_pwd.c:238-263)
     let prompter = |banner: &str| -> PromptReply {
-        // MIT krb5_prompter_posix; see docs/parity/b1-client.md
+        // MIT: `krb5_prompter_posix` (lib/krb5/os/prompter.c:32-125)
         println!("{banner}");
         let a = read_prompt_line("Enter new password")?;
         let b = read_prompt_line("Enter it again")?;

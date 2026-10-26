@@ -203,7 +203,7 @@ fn do_ccache(
     }
 }
 
-// MIT check_ccache; see docs/parity/b1-tools.md
+// MIT: `check_ccache` (clients/klist/klist.c:531-576)
 fn check(ctx: &ClientContext, cache: &Cache, now: u32) -> i32 {
     load_ccache(ctx, &cache.spec()).map_or(1, |cc| check_ccache(&cc, now))
 }
@@ -390,7 +390,7 @@ fn one_addr(addrtype: u16, a: &[u8]) -> String {
     }
 }
 
-// MIT etype_string; see docs/parity/b1-tools.md
+// MIT: `etype_string` (clients/klist/klist.c:587-603)
 fn etype_string(etype: i32) -> String {
     match EncryptionType::known(etype) {
         Ok(e) if e.is_deprecated() => format!("DEPRECATED:{}", e.to_mit_name()),

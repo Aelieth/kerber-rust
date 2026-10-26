@@ -92,7 +92,7 @@ impl Cache {
         matches!(self, Self::Dir(_) | Self::Kcm(_))
     }
 
-    // MIT krb5_cc_switch; see docs/parity/b1-client.md
+    // MIT: `krb5_cc_switch` (lib/krb5/ccache/ccfns.c:294-300)
     // MIT: `dcc_switch_to` (cc_dir.c:719-741)
     // a DIR collection's `primary` file names it.
     // MIT: `kcm_switch_to` (cc_kcm.c:1330-1340)
