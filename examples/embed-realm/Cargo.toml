@@ -24,10 +24,10 @@ chaos = []
 
 [dependencies]
 hmac.workspace = true
-krb5-admin = { workspace = true, default-features = false }
+krb5-admin = { path = "../../crates/krb5-admin", default-features = false }
 krb5-config.workspace = true
 krb5-crypto.workspace = true
-krb5-kdc = { workspace = true, default-features = false }
+krb5-kdc = { path = "../../crates/krb5-kdc", default-features = false }
 krb5-log.workspace = true
 krb5-protocol.workspace = true
 krb5-types.workspace = true
