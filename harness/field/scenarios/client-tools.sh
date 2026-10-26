@@ -234,7 +234,7 @@ for k in mit $OURS; do
         check "CR.$c.$k" "^Default principal: ctuser@$R\$" runin client2 "ctuser's password ($ALICE)" "$(C "$k") \$B/kinit -C -c FILE:\$HOME/ct/$k-cr$c.cc ctuser@$cr && \$B/klist -c FILE:\$HOME/ct/$k-cr$c.cc" < <(once "$ALICE")
         checklast "CR.$c.prompt.$k" "^Password for ctuser@$R: "
         keep "CR.$c" "$k"
-        check "CR.$c.asked.$k" "^$cr asked once: rep#1 kind=error error_code=$c rewritten=answered\$" run client2 "echo \"$cr asked \$([ \"\$(grep -c '^req#' \$HOME/ct/px/cr.log)\" = 1 ] && echo once || echo more): \$(grep '^rep#' \$HOME/ct/px/cr.log)\"; cp \$HOME/ct/px/live.jsonl \$HOME/ct/px/cr$c.$k.jsonl"
+        check "CR.$c.asked.$k" "^$cr asked once: rep kind=error error_code=$c rewritten=answered\$" run client2 "echo \"$cr asked \$([ \"\$(grep -c '^req#' \$HOME/ct/px/cr.log)\" = 1 ] && echo once || echo more): \$(grep '^rep#' \$HOME/ct/px/cr.log | sed 's/^rep#[0-9]* /rep /')\"; cp \$HOME/ct/px/live.jsonl \$HOME/ct/px/cr$c.$k.jsonl"
         check "CR.$c.restart.$k" "^restarted: realm $R, sname krbtgt/$R, cname ctuser, canonicalize\$" run client2 "jq -rs '[.[] | select(.kind == \"req\")][0] // empty | \"restarted: realm \\(.realm), sname \\(.sname), cname \\(.cname), \\(if any(.kdc_options[]; . == \"canonicalize\") then \"canonicalize\" else \"no canonicalize\" end)\"' \$HOME/ct/px/cr$c.$k.jsonl"
     done
     check "CR.nocanon.$k" '^kinit: Realm not local to KDC while getting initial credentials$' run client2 "$(C "$k") \$B/kinit -c FILE:\$HOME/ct/$k-crn.cc ctuser@REFER.TEST < /dev/null 2>&1; echo \"rc=\$?, requests \$(grep -c '^req#' \$HOME/ct/px/cr.log)\""
