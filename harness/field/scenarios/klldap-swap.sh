@@ -205,7 +205,7 @@ for l in sys.stdin: print(\"%.3f %s\" % (time.time(), l), end=\"\", flush=True)'
     vrun "gate-$1" 'rc=0|1' "bash $(q "$w")"
     grep -E '^[0-9.]+ (KLLDAP gate|Gate results|\[FAIL\]|\[SKIP\])' "$REC_DIR/logs/gate-$1.log" || true
     RID=$(sed -nE 's/^[0-9.]+ KLLDAP gate: .* run=([0-9]+-[0-9]+-[0-9]+)$/\1/p' "$log" | head -n 1)
-    check "gate.$1.left" '^left: 0 containers, 0 volumes, 0 networks$' run "$VM" "[ -n '$RID' ] || { echo 'no gate run id in its log'; exit 1; }; printf 'left: %s containers, %s volumes, %s networks\n' \"\$(docker ps -aq --filter name=$RID | wc -l)\" \"\$(docker volume ls -q --filter name=$RID | wc -l)\" \"\$(docker network ls -q --filter name=$RID | wc -l)\""
+    check "gate.$1.left" '^left: 0 containers, 0 volumes, 0 networks$' run "$VM" "[ -n '$RID' ] || { echo 'no gate run id in its log'; exit 1; }; docker version --format '{{.Server.Version}}' > /dev/null && printf 'left: %s containers, %s volumes, %s networks\n' \"\$(docker ps -aq --filter name=$RID | wc -l)\" \"\$(docker volume ls -q --filter name=$RID | wc -l)\" \"\$(docker network ls -q --filter name=$RID | wc -l)\""
 }
 # cmpref <name> <file>: this leg's <file> against the reference MIT leg's (docker bridge addresses masked). On alien.
 cmpref() {
@@ -220,7 +220,7 @@ section "klldap-swap --leg $LEG: KLLDAP ${PIN:-<no pin>} on the klldap VM's dock
 section "0. the VM: alien's docker state is recorded (read-only), the leg's stale artifacts are pre-cleaned, VT is made"
 check alien.docker.before '^alien docker: [0-9]+ images, [0-9]+ containers$' host "printf 'alien docker: %s images, %s containers\n' \"\$(docker image ls -q | sort -u | wc -l)\" \"\$(docker ps -aq | wc -l)\""
 aliendocker > "$T/alien-docker.before"
-check vm.preclean '^pre-clean: done$' run "$VM" "docker ps -aq --filter name=$N- | xargs -r docker rm -f; docker network ls -q --filter name=$N- | xargs -r docker network rm; docker volume ls -q --filter name=$N- | xargs -r docker volume rm; docker images --format '{{.Repository}}:{{.Tag}}' $N | xargs -r docker rmi; sudo rm -rf $(q "$VT") $(q "$VTS"); mkdir -p $(q "$VT") $(q "$VCACHE") && mkdir -m 0700 -p $(q "$VTS"); echo 'pre-clean: done'"
+check vm.preclean '^pre-clean: done$' run "$VM" "docker version --format '{{.Server.Version}}' > /dev/null && docker ps -aq --filter name=$N- | xargs -r docker rm -f && docker network ls -q --filter name=$N- | xargs -r docker network rm && docker volume ls -q --filter name=$N- | xargs -r docker volume rm && docker images --format '{{.Repository}}:{{.Tag}}' $N | xargs -r docker rmi && sudo rm -rf $(q "$VT") $(q "$VTS") && mkdir -p $(q "$VT") $(q "$VCACHE") && mkdir -m 0700 -p $(q "$VTS") && echo 'pre-clean: done'"
 # the VM's docker inventory recorded for debugging (not a row: a count would differ between legs)
 run "$VM" "docker ps -a --format '{{.Names}} {{.Image}}'; docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}'; docker volume ls -q; docker network ls --format '{{.Name}}'"
 
@@ -228,7 +228,7 @@ section "1. the inputs: KLLDAP's pin (git archive to the VM), the phase-80 fixtu
 check input.pin '^commit [0-9a-f]{40}$' host "[ -n $(q "$REPO") ] && [ -n $(q "$PIN") ] && c=\$(git -C $(q "$REPO") --no-optional-locks rev-parse --verify --quiet $(q "$PIN^{commit}")) || { echo 'FIELD_KLLDAP_REPO / FIELD_KLLDAP_PIN (field.env) name no commit'; exit 1; }; echo \"commit \$c\"; git -C $(q "$REPO") --no-optional-locks log -1 --format='%ci %s' \$c"
 check input.fixture '^realm: [A-Z0-9.-]+$' host "[ -n $(q "$FIX") ] && cd $(q "$FIX") && ls -A data krb5kdc && ls krb5kdc/.k5.* | sed 's|^krb5kdc/\.k5\.|realm: |'"
 REALM=$(sed -n 's/^realm: //p' "$LAST_OUT" | head -n 1)
-check input.docker '^docker [0-9.]+ / [0-9.]+$' run "$VM" "docker version --format 'docker {{.Client.Version}} / {{.Server.Version}}'"
+check input.docker '^docker [0-9.]+ / [0-9.]+$' run "$VM" "docker version --format 'docker {{.Client.Version}} / {{.Server.Version}}' && docker buildx version"
 check input.gate.host '^gate host: ' run "$VM" "for c in docker jq python3 curl column timeout ldapsearch ldapmodify ldapwhoami ldappasswd; do command -v \$c > /dev/null || { echo \"gate host: no \$c\"; exit 1; }; done; echo \"gate host: \$(uname -n), with every tool the gate and lldap-cli run\""
 check input.secrets '^this leg.s values: ' host "python3 -B $(q "$T/klldap-swap.py") secrets $(q "$T") $(q "$FIX")"
 vpush "klldap-swap.py" "$T/klldap-swap.py" "mkdir -p $VTS $VT/empty && cat > $VT/klldap-swap.py"
@@ -239,7 +239,7 @@ check input.lldap-cli rc host "git -C \"\$(dirname $(q "$CLI"))\" --no-optional-
 vpush "lldap-cli" "$CLI" "cat > $VT/lldap-cli && chmod 0700 $VT/lldap-cli"
 
 section "2. the KLLDAP source: git archive of the pin to the VM (the checkout is only read)"
-check src.archive '^files: [0-9]+, as the commit lists$' host "set -o pipefail; b=\$(git -C $(q "$REPO") --no-optional-locks ls-tree -r $(q "$PIN") | wc -l); (umask 022 && git -C $(q "$REPO") --no-optional-locks archive $(q "$PIN")) | $LABQ ssh $VM -- \"rm -rf $(q "$SRC") && mkdir -p $(q "$SRC") && tar -x -C $(q "$SRC") && a=\\\$(find $(q "$SRC") ! -type d | wc -l); if [ \\\"\\\$a\\\" = $b ]; then echo \\\"files: \\\$a, as the commit lists\\\"; else echo \\\"files: \\\$a, the commit lists $b\\\"; exit 1; fi\""
+check src.archive '^files: [0-9]+, as the commit lists$' host "set -o pipefail; b=\$(git -C $(q "$REPO") --no-optional-locks ls-tree -r $(q "$PIN") | wc -l); (umask 022 && git -C $(q "$REPO") --no-optional-locks archive $(q "$PIN")) | $LABQ ssh $VM -- \"rm -rf $(q "$SRC") && mkdir -p $(q "$SRC") && tar -x -C $(q "$SRC") && a=\\\$(find $(q "$SRC") ! -type d | wc -l); if [ \\\"\\\$a\\\" = \$b ]; then echo \\\"files: \\\$a, as the commit lists\\\"; else echo \\\"files: \\\$a, the commit lists \$b\\\"; exit 1; fi\""
 run "$VM" "sed -n 's/^version = \"\(.*\)\"/\1/p' $(q "$SRC/Cargo.toml") 2>/dev/null | head -n 1"
 VER=$(grep -m1 . "$LAST_OUT" 2>/dev/null)
 
@@ -385,7 +385,7 @@ check alien.docker.control '^control: the check reds on an altered before$' host
 run "$VM" "for t in \$(docker images --format '{{.Repository}}:{{.Tag}}' $N | sort -u); do echo \"=== \$t ===\"; docker history --no-trunc \"\$t\" 2>&1; done"
 cp "$LAST_OUT" "$REC_DIR/logs/image-history.log"
 check image.histories '^histories: [1-9][0-9]* images in the records$' host "n=\$(grep -c '^=== ' $(q "$REC_DIR/logs/image-history.log")); [ \"\$n\" -ge 1 ] && echo \"histories: \$n images in the records\" || { echo 'no image histories captured'; exit 1; }"
-check secrets.vt.clean '^VT holds none of the injected secrets$' run "$VM" "s=\$(sed -n 's/^LLDAP_[A-Z_]*=\([0-9a-f]\{32,\}\)\$/\1/p' $(q "$VTS/boot.env"); cat $(q "$VTS/fixture-admin.password")); h=; for v in \$s; do f=\$(grep -rlF -e \"\$v\" $(q "$VT") 2>/dev/null) && h=\"\$h \$f\"; done; if [ -n \"\$h\" ]; then echo \"an injected secret is under VT:\$h\"; exit 1; fi; echo 'VT holds none of the injected secrets'"
+check secrets.vt.clean '^VT holds none of the injected secrets$' run "$VM" "s=\$(sed -n 's/^LLDAP_[A-Z_]*=\([0-9a-f]\{32,\}\)\$/\1/p' $(q "$VTS/boot.env"); cat $(q "$VTS/fixture-admin.password")); set -- \$s; [ \$# = 4 ] || { echo \"injected secrets to look for: \$#, not 4\"; exit 1; }; h=; for v in \$s; do f=\$(grep -rlF -e \"\$v\" $(q "$VT") 2>/dev/null) && h=\"\$h \$f\"; done; if [ -n \"\$h\" ]; then echo \"an injected secret is under VT:\$h\"; exit 1; fi; echo 'VT holds none of the injected secrets'"
 check secrets.leg rc host "KERBER_LAB_HOME=$(q "$T/scan") FIELD_ADLAB_ENV=/dev/null python3 -B $(q "$FIELD_LIB/scan-secrets.py") $(q "$REC_DIR")"
 check secrets.history.control '^control: a planted key_seed reds the history scan$' host "d=\$(mktemp -d $(q "$T/hist-ctl.XXXXXX")); cp $(q "$REC_DIR/logs/image-history.log") \"\$d/image-history.log\"; sed -n 's/^LLDAP_KEY_SEED=/planted /p' $(q "$T/scan/secrets/run.env") >> \"\$d/image-history.log\"; if KERBER_LAB_HOME=$(q "$T/scan") FIELD_ADLAB_ENV=/dev/null python3 -B $(q "$FIELD_LIB/scan-secrets.py") \"\$d\" > /dev/null 2>&1; then rm -rf \"\$d\"; echo 'control: the planted key_seed did not red the scan'; exit 1; fi; rm -rf \"\$d\"; echo 'control: a planted key_seed reds the history scan'"
 # the VM's docker inventory again, before cleanup removes the leg's artifacts
