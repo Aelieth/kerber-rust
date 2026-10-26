@@ -2,6 +2,8 @@
 # harness/field/scenarios/ad-trust.sh --leg mit|rust: the real AD DC (TEST-SERVER, AD.KERBER.TEST, a two-way trust
 # with KERBER.TEST) against the leg's KDC as upgrade.sh left it on kdc; the RA hand legs of FULL-r2 as a field cell:
 #   RA0: the DC's clock and state, the trust principals made the admin way, Test A (AD to us) and Test B (us to AD);
+#   kinit -E of kbruser's UPN at the DC: MIT's, then in the rust leg ours, each first AS-REQ through
+#   scripts/lib/kdc-req-proxy.py on client2 and compared request by request;
 #   SB.ad-user-in (RA1): kbruser@AD.KERBER.TEST logs into client2's sshd with gssapi-with-mic;
 #   SB.ad-user-out (RA2): KERBER.TEST users at the DC's SMB and LDAP: bob refused, user and alice (#1) served;
 #   SB.ad-spnego (RA3): the DC as the SPNEGO client of Apache on kdc's LAN address (#2-#4), with -Credential
@@ -37,7 +39,8 @@ KDC_LAN=''
 . "$FIELD_LIB/ad.sh"
 cleanup() {
     adundo
-    timeout -k 5 60 "$LAB" ssh client2 -- 'rm -rf ~/ra; true' < /dev/null > /dev/null 2>&1
+    # shellcheck disable=SC2016 # the pid file is client2's
+    timeout -k 5 60 "$LAB" ssh client2 -- '[ -f ~/ra/px.pid ] && kill "$(cat ~/ra/px.pid)"; rm -rf ~/ra; true' < /dev/null > /dev/null 2>&1
 }
 trap cleanup EXIT
 trap 'exit 130' INT
@@ -84,6 +87,29 @@ check testA.kvno "^svc/setup@$R: kvno = [0-9]+\$" run client2 "$RAENV; export KR
 checklast testA.referral "Received TGT for service realm: krbtgt/$R@$AR\$"
 kdcsince ra0 "kbruser@$AR"
 checklast testA.kdc-issue "TGS_REQ .* 192\\.168\\.177\\.22: ISSUE: authtime [0-9]+, $I3, kbruser@$AR for svc/setup@$R\$"
+
+section "RA0. kinit -E kbruser@ad.kerber.test, the UPN as one enterprise component (kinit.c:418, get_in_tkt.c:921-930): MIT's, then in the rust leg ours, each first AS-REQ through kdc-req-proxy.py on client2"
+EK=
+if [ "$LEG" = rust ]; then
+    b=kerber-rust-${FIELD_SHA:0:12}/target/release/krb5-kinit
+    check ent.ours.build '^[0-9a-f]{64}$' run kdc "sha256sum < ~/$b | cut -c1-64"
+    h=$(grep -m1 -oE '^[0-9a-f]{64}$' "$LAST_OUT")
+    check ent.ours.copy "^client2: ~/ra/kinit ${h:-none}\$" host "$LABQ ssh kdc -- 'cat ~/$b' | $LABQ ssh client2 -- 'cat > ~/ra/kinit && chmod 0755 ~/ra/kinit && echo \"client2: ~/ra/kinit \$(sha256sum < ~/ra/kinit | cut -c1-64)\"'"
+    [ -n "$h" ] && grep -q "^client2: ~/ra/kinit $h\$" "$LAST_OUT" && EK="\$HOME/ra/kinit"
+fi
+check ent.px.copy '^self-test ok$' hostin "scripts/lib/kdc-req-proxy.py" "$LABQ ssh client2 -- 'cat > ~/ra/kdc-req-proxy.py && python3 ~/ra/kdc-req-proxy.py --self-test | tail -n 1'" < "$HERE/../../../scripts/lib/kdc-req-proxy.py"
+check ent.px.conf '^ +kdc = 127\.0\.0\.1:1891$' run client2 "sed 's/^\\( *kdc = \\)10\\.10\\.38\\.38\$/\\1127.0.0.1:1891/' ~/ra/krb5.conf > ~/ra/px.conf && grep -E '^ +kdc = 127' ~/ra/px.conf"
+check ent.px.up '^proxy: listening on 127\.0\.0\.1:1891$' run client2 "setsid python3 -u ~/ra/kdc-req-proxy.py 1891 10.10.38.38 88 ~/ra/px.jsonl > /dev/null 2> ~/ra/px.err < /dev/null & echo \$! > ~/ra/px.pid; sleep 1; ss -Hltn 'sport = :1891' | grep -q . && echo 'proxy: listening on 127.0.0.1:1891'"
+for k in mit ${EK:+ours}; do
+    kin=kinit
+    [ "$k" = ours ] && kin=$EK
+    run client2 ": > ~/ra/px.jsonl"
+    check "ent.kinit.$k" '^Default principal: kbruser\\@ad\.kerber\.test@AD\.KERBER\.TEST$' runin client2 "AD_KBRUSER_PASSWORD" "export KRB5_CONFIG=\$HOME/ra/px.conf KRB5CCNAME=FILE:\$HOME/ra/ent-$k.cc; $kin -E kbruser@ad.kerber.test > /dev/null && klist" < <(adonce AD_KBRUSER_PASSWORD)
+    run client2 "cp ~/ra/px.jsonl ~/ra/ent-$k.jsonl; jq -c 'select(.kind == \"req\") | [.msg_type, .cname, .cname_nt, .kdc_options, .padata]' ~/ra/ent-$k.jsonl"
+done
+check ent.req.mit '^first AS-REQ: kbruser@ad\.kerber\.test, name type 10, no canonicalize$' run client2 "jq -rs '[.[] | select(.kind == \"req\")][0] | \"first AS-REQ: \\(.cname), name type \\(.cname_nt), \\(if any(.kdc_options[]; . == \"canonicalize\") then \"canonicalize\" else \"no canonicalize\" end)\"' ~/ra/ent-mit.jsonl"
+[ -n "$EK" ] && check ent.req.same '^FLOW_ad_kinit_e_equal$' run client2 "python3 ~/ra/kdc-req-proxy.py --compare ~/ra/ent-mit.jsonl ~/ra/ent-ours.jsonl ad_kinit_e"
+run client2 "kill \$(cat ~/ra/px.pid) && rm -f ~/ra/px.pid; cat ~/ra/px.err"
 
 section "RA0. Test B (us to AD): user@KERBER.TEST to cifs/test-server; AD refuses while our referral TGT carries a PAC, then +no_auth_data_required"
 check testB.kinit "^Default principal: user@$R\$" runin client2 "user@$REALM's password ($KUSER)" "$RAENV; export KRB5CCNAME=FILE:\$HOME/ra/user.cc; kinit user@$REALM && klist -e" < <(once "$KUSER")

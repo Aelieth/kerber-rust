@@ -19,8 +19,8 @@ use krb5_client::creds::{
 use krb5_client::errmsg::{Code, Krb5Error};
 use krb5_client::{
     ArmorCcache, FileCcache, KeyExpNotice, KeytabName, KinitParams, NewPasswordPrompter,
-    PromptReply, kinit_prompted, kinit_with, kt_client_default_name, kt_default_name, kt_resolve,
-    mit_error_code, store_ccache_keep_default,
+    PromptReply, kinit_prompted_princ, kinit_with_princ, kt_client_default_name, kt_default_name,
+    kt_resolve, mit_error_code, store_ccache_keep_default,
 };
 use krb5_config::{
     CcSpec, ClientContext, env_new_password, env_password, parse_ccspec, resolve_ccspec,
@@ -507,7 +507,7 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
         keytab: keytab.as_deref(),
         ticket,
         anonymous: opts.anonymous,
-        canonicalize: opts.canonicalize || opts.enterprise || conf.canonicalize_for(&realm),
+        canonicalize: opts.canonicalize || conf.canonicalize_for(&realm),
         new_password: new_password.as_deref(),
         prompter: (!opts.keytab).then_some(NewPasswordPrompter(&prompter)),
         key_exp_notice: Some(KeyExpNotice(&key_exp_notice)),
@@ -520,11 +520,11 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
     let addr = kdc(&k5.ctx, opts, &realm).map_err(Failure::Error)?;
     let spec = &k5.out_spec;
     let result = match given {
-        Some(mut p) => kinit_with(&k5.ctx, &addr, &k5.name, &mut p, spec, params),
+        Some(mut p) => kinit_with_princ(&k5.ctx, &addr, &k5.me, &mut p, spec, params),
         None if pw_auth => {
-            kinit_prompted(&k5.ctx, &addr, &k5.name, &mut read_password, spec, params)
+            kinit_prompted_princ(&k5.ctx, &addr, &k5.me, &mut read_password, spec, params)
         }
-        None => kinit_with(&k5.ctx, &addr, &k5.name, &mut [], spec, params),
+        None => kinit_with_princ(&k5.ctx, &addr, &k5.me, &mut [], spec, params),
     };
     if let Some(mut n) = new_password {
         n.zeroize();

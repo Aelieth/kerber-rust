@@ -402,6 +402,23 @@ pub fn kinit_with(
     spec: &CcSpec,
     params: KinitParams<'_>,
 ) -> Result<KinitResult, Box<dyn std::error::Error + Send + Sync>> {
+    match client_princ(ctx, principal, params.enterprise) {
+        Ok(me) => kinit_with_princ(ctx, kdc, &me, password, spec, params),
+        Err(e) => {
+            password.zeroize();
+            Err(e)
+        }
+    }
+}
+
+pub fn kinit_with_princ(
+    ctx: &ClientContext,
+    kdc: &KdcAddr,
+    me: &creds::Princ,
+    password: &mut [u8],
+    spec: &CcSpec,
+    params: KinitParams<'_>,
+) -> Result<KinitResult, Box<dyn std::error::Error + Send + Sync>> {
     let mut lazy = LazyPassword {
         given: password,
         prompt: None,
@@ -409,7 +426,7 @@ pub fn kinit_with(
         failed: None,
         otp: params.preauth_prompter,
     };
-    let built = kinit_inner(ctx, kdc, principal, &mut lazy, params);
+    let built = kinit_inner(ctx, kdc, me, &mut lazy, params);
     let result = match built {
         Ok((r, cc)) => write_out_ccache(ctx, spec, cc).map(|()| r),
         Err(e) => Err(e),
@@ -468,6 +485,18 @@ pub fn kinit_prompted(
     spec: &CcSpec,
     params: KinitParams<'_>,
 ) -> Result<KinitResult, Box<dyn std::error::Error + Send + Sync>> {
+    let me = client_princ(ctx, principal, params.enterprise)?;
+    kinit_prompted_princ(ctx, kdc, &me, prompt, spec, params)
+}
+
+pub fn kinit_prompted_princ(
+    ctx: &ClientContext,
+    kdc: &KdcAddr,
+    me: &creds::Princ,
+    prompt: &mut dyn FnMut() -> Result<Zeroizing<Vec<u8>>, Krb5Error>,
+    spec: &CcSpec,
+    params: KinitParams<'_>,
+) -> Result<KinitResult, Box<dyn std::error::Error + Send + Sync>> {
     let mut lazy = LazyPassword {
         given: b"",
         prompt: Some(prompt),
@@ -475,10 +504,23 @@ pub fn kinit_prompted(
         failed: None,
         otp: params.preauth_prompter,
     };
-    match kinit_inner(ctx, kdc, principal, &mut lazy, params) {
+    match kinit_inner(ctx, kdc, me, &mut lazy, params) {
         Ok((r, cc)) => write_out_ccache(ctx, spec, cc).map(|()| r),
         Err(e) => Err(e),
     }
+}
+
+// MIT: `k5_begin` (clients/kinit/kinit.c:418-470)
+fn client_princ(
+    ctx: &ClientContext,
+    principal: &str,
+    enterprise: bool,
+) -> Result<creds::Princ, Box<dyn std::error::Error + Send + Sync>> {
+    let (cname, mut realm_s) = parse_principal_ex(principal, enterprise)?;
+    if realm_s.is_empty() {
+        realm_s = conf_default_realm(ctx).ok_or("Cannot find KDC for requested realm")?;
+    }
+    Ok((krb5_protocol::realm(&realm_s), cname))
 }
 
 struct LazyPassword<'p> {
@@ -1049,14 +1091,12 @@ fn exchange_shape_direct(
 fn kinit_inner(
     ctx: &ClientContext,
     kdc: &KdcAddr,
-    principal: &str,
+    me: &creds::Princ,
     password: &mut LazyPassword<'_>,
     params: KinitParams<'_>,
 ) -> Result<(KinitResult, FileCcache), Box<dyn std::error::Error + Send + Sync>> {
-    let (cname, mut realm_s) = parse_principal_ex(principal, params.enterprise)?;
-    if realm_s.is_empty() {
-        realm_s = conf_default_realm(ctx).ok_or("Cannot find KDC for requested realm")?;
-    }
+    let cname = me.1.clone();
+    let realm_s = String::from_utf8_lossy(me.0.as_bytes()).into_owned();
     trace::init_creds(&cname, &realm_s, params.in_tkt_service);
     let resolved = resolve_kdc(&ctx.profile, &realm_s, kdc)?;
     let mut armor = initial_armor(
@@ -1166,7 +1206,7 @@ fn kinit_inner(
         profile: &ctx.profile,
         want_spake: params.want_spake,
         pkinit: Some(pkinit.arg()),
-        canonicalize: params.canonicalize || params.enterprise,
+        canonicalize: params.canonicalize,
         sname: in_tkt_sname.as_ref(),
         etypes: &etypes,
         ticket,
@@ -1219,7 +1259,7 @@ fn kinit_inner(
                 profile: &ctx.profile,
                 want_spake: false,
                 pkinit: Some(pkinit.arg()),
-                canonicalize: params.canonicalize || params.enterprise,
+                canonicalize: params.canonicalize,
                 sname: Some(&changepw),
                 etypes: &etypes,
                 ticket: chpw_ticket,
