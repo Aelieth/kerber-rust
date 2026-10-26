@@ -78,12 +78,7 @@ pub fn keytab_lookup_failed(e: &std::io::Error, path: &std::path::Path) {
     trace::init_creds_keytab_lookup_failed(code, msg.as_deref());
 }
 
-pub fn fast_armor(
-    ctx: &ClientContext,
-    cc: &crate::ArmorCcache,
-    realm: &str,
-    armor: Option<&krb5_protocol::FastArmor>,
-) {
+pub fn fast_armor(ctx: &ClientContext, cc: &crate::ArmorCcache, realm: &str) {
     if !trace::enabled() {
         return;
     }
@@ -92,7 +87,7 @@ pub fn fast_armor(
         return;
     };
     let name = ccname(cache.ctx, &cache.spec);
-    let Some((realm_ks, tgs)) = static_tgt(realm) else {
+    let Some((_, tgs)) = static_tgt(realm) else {
         return;
     };
     let tgs_name = tgs.unparse_with_realm(realm);
@@ -113,13 +108,6 @@ pub fn fast_armor(
     if avail.is_some() {
         trace::fast_ccache_config();
     }
-    let Some(armor) = armor else {
-        return;
-    };
-    let me = (armor.crealm.clone(), armor.cname.clone());
-    let server = (realm_ks, tgs);
-    tkt_creds_begin(&cache, &me, &server);
-    retrieve(&cache, Some(&me), &server, true);
 }
 
 pub fn tkt_creds_begin(cache: &OpenCache, me: &Princ, server: &Princ) {

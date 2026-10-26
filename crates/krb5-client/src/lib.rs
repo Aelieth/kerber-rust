@@ -691,17 +691,18 @@ pub fn destroy_ccache(
 }
 
 // MIT: `fast_armor_ap_request` (lib/krb5/krb/fast.c:52-108)
-// the armor cache's TGT is read when the request is armored.
 fn load_fast_armor(
     ctx: &ClientContext,
     spec: &CcSpec,
+    realm: &str,
 ) -> Result<FastArmor, Box<dyn std::error::Error + Send + Sync>> {
-    let cc = load_ccache(ctx, spec).map_err(|e| cache_read_error(ctx, spec, e.as_ref()))?;
-    let cred = cc
-        .creds
-        .iter()
-        .find(|c| !c.is_config() && c.server.1.components_joined().starts_with("krbtgt/"))
-        .ok_or("armor ccache has no TGT")?;
+    let mut cache = creds::OpenCache::open(ctx, spec.clone())?;
+    let me = cache.cc.primary.clone();
+    let tgs = (
+        krb5_protocol::realm(realm),
+        krb5_types::PrincipalName::krbtgt(realm),
+    );
+    let cred = creds::get_credentials(&mut cache, &me, &tgs, &creds::GetCredsOptions::default())?;
     let ticket: Ticket = decode(&cred.ticket)?;
     Ok(FastArmor {
         ticket,
@@ -904,21 +905,24 @@ fn initial_armor(
     };
     if !load_ccache(ctx, &cc.spec).is_ok_and(|cache| cache_has_fast_avail(&cache, realm)) {
         for _ in 0..=u8::from(service) {
-            trace::fast_armor(ctx, cc, realm, None);
+            trace::fast_armor(ctx, cc, realm);
         }
         return Ok(None);
     }
-    let armor = load_fast_armor(ctx, &cc.spec).map_err(
-        |e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(armor_build_error(e.as_ref())) },
-    )?;
+    let load = || {
+        trace::fast_armor(ctx, cc, realm);
+        load_fast_armor(ctx, &cc.spec, realm).map_err(
+            |e| -> Box<dyn std::error::Error + Send + Sync> {
+                Box::new(armor_build_error(e.as_ref()))
+            },
+        )
+    };
     if service {
-        trace::fast_armor(ctx, cc, realm, Some(&armor));
-        krb5_protocol::set_service_restart(&armor).map_err(
+        krb5_protocol::set_service_restart(&load()?).map_err(
             |e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(armor_build_error(&e)) },
         )?;
     }
-    trace::fast_armor(ctx, cc, realm, Some(&armor));
-    Ok(Some(armor))
+    Ok(Some(load()?))
 }
 
 #[derive(Clone, Copy)]
@@ -1010,10 +1014,10 @@ fn load_armor_for_upgrade(
     let Some(cc) = cc else {
         return Err(ProtocolError::FastUpgrade.into());
     };
-    let loaded = load_fast_armor(ctx, &cc.spec).map_err(
+    trace::fast_armor(ctx, cc, realm);
+    let loaded = load_fast_armor(ctx, &cc.spec, realm).map_err(
         |e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(armor_build_error(e.as_ref())) },
     )?;
-    trace::fast_armor(ctx, cc, realm, Some(&loaded));
     *armor = Some(loaded);
     Ok(())
 }

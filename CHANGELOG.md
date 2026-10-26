@@ -155,6 +155,7 @@ any other `###` heading.
 ### Fixed
 - **client.** `kinit -E` sends the UPN as one enterprise component, as MIT does, so the real AD finds the user; `-E` alone no longer asks to canonicalize.
 - **client.** With `-C` or an enterprise name, kinit follows a KDC's client referral to another realm, as MIT does, for up to 16 requests.
+- **client.** `kinit -T` arms with a TGT for the request's realm, from the armor cache or fetched through it and stored there, as MIT does; it took the cache's first TGT.
 - **client.** A PKINIT retry after the KDC offers a larger DH group checks the reply against the retried request, as MIT's does.
 - **kdc.** The lockout side file is read per principal and written only for the fields a change sets, not read or rewritten whole per operation. Lab beside MIT.
 - **kdc/client.** RFC 8636's partyVInfo is the AS-REQ's server as sent, as MIT's is, not `krbtgt`: MIT's kpasswd could not decrypt our `kadmin/changepw` reply.

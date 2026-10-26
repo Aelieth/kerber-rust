@@ -4,6 +4,7 @@
 #   RA0: the DC's clock and state, the trust principals made the admin way, Test A (AD to us) and Test B (us to AD);
 #   kinit -E of kbruser's UPN at the DC: MIT's, then in the rust leg ours, each first AS-REQ through
 #   scripts/lib/kdc-req-proxy.py on client2 and compared request by request;
+#   kinit -T with kbruser's AD cache as the armor for user@KERBER.TEST: MIT's, then in the rust leg ours;
 #   SB.ad-user-in (RA1): kbruser@AD.KERBER.TEST logs into client2's sshd with gssapi-with-mic;
 #   SB.ad-user-out (RA2): KERBER.TEST users at the DC's SMB and LDAP: bob refused, user and alice (#1) served;
 #   SB.ad-spnego (RA3): the DC as the SPNEGO client of Apache on kdc's LAN address (#2-#4), with -Credential
@@ -112,6 +113,20 @@ done
 check ent.req.mit '^first AS-REQ: kbruser@ad\.kerber\.test, name type 10, no canonicalize$' run client2 "jq -rs '[.[] | select(.kind == \"req\")][0] // empty | \"first AS-REQ: \\(.cname), name type \\(.cname_nt), \\(if any(.kdc_options[]; . == \"canonicalize\") then \"canonicalize\" else \"no canonicalize\" end)\"' ~/ra/ent-mit.jsonl"
 [ -n "$EK" ] && check ent.req.same '^FLOW_ad_kinit_e_equal$' run client2 "python3 ~/ra/kdc-req-proxy.py --compare ~/ra/ent-mit.jsonl ~/ra/ent-ours.jsonl ad_kinit_e"
 run client2 "kill \$(cat ~/ra/px.pid) && rm -f ~/ra/px.pid; cat ~/ra/px.err"
+
+section "RA0. kinit -T with kbruser@AD.KERBER.TEST's cache as the armor for user@KERBER.TEST (fast.c:52-108, :172-224): MIT's, then in the rust leg ours; FAST comes by upgrade, and the armor is krbtgt/KERBER.TEST@KERBER.TEST, fetched through the trust and stored in the armor cache"
+check fx.armor '^Default principal: kbruser@AD\.KERBER\.TEST$' runin client2 "AD_KBRUSER_PASSWORD" "$RAENV; kinit -c FILE:\$HOME/ra/fx-armor.cc kbruser@AD.KERBER.TEST > /dev/null && klist -c FILE:\$HOME/ra/fx-armor.cc" < <(adonce AD_KBRUSER_PASSWORD)
+for k in mit ${EK:+ours}; do
+    kin=kinit
+    [ "$k" = ours ] && kin=$EK
+    # The trace stays on client2 (it holds key hashes); only the lines below are recorded.
+    check "fx.kinit.$k" "^Default principal: user@$R\$" runin client2 "user@$REALM's password ($KUSER)" "$RAENV; cp ~/ra/fx-armor.cc ~/ra/fx-armor-$k.cc && KRB5_TRACE=\$HOME/ra/fx-$k.trace $kin -T FILE:\$HOME/ra/fx-armor-$k.cc -c FILE:\$HOME/ra/fx-$k.cc user@$REALM > /dev/null && klist -c FILE:\$HOME/ra/fx-$k.cc" < <(once "$KUSER")
+    check "fx.offer.$k" '^PA-FX-FAST \(136\)$' run client2 "grep -m1 'Processing preauth types:' ~/ra/fx-$k.trace | grep -o 'PA-FX-FAST (136)'"
+    check "fx.fast.$k" '^upgraded: 1, armored: yes$' run client2 "echo \"upgraded: \$(grep -c 'Upgrading to FAST due to presence of PA_FX_FAST in reply' ~/ra/fx-$k.trace), armored: \$(grep -q 'FAST armor key' ~/ra/fx-$k.trace && echo yes || echo no)\""
+    check "fx.fetched.$k" "^armor: kbruser@$AR -> krbtgt/$R@$R\$" run client2 "grep -o 'Getting credentials kbruser@AD.KERBER.TEST -> krbtgt/$REALM@$REALM' ~/ra/fx-$k.trace | head -n 1 | sed 's/^Getting credentials /armor: /'"
+    check "fx.stored.$k" "krbtgt/$R@$R\$" run client2 "klist -c FILE:\$HOME/ra/fx-armor-$k.cc"
+    checklast "fx.stored.cross.$k" "krbtgt/$R@$AR\$"
+done
 
 section "RA0. Test B (us to AD): user@KERBER.TEST to cifs/test-server; AD refuses while our referral TGT carries a PAC, then +no_auth_data_required"
 check testB.kinit "^Default principal: user@$R\$" runin client2 "user@$REALM's password ($KUSER)" "$RAENV; export KRB5CCNAME=FILE:\$HOME/ra/user.cc; kinit user@$REALM && klist -e" < <(once "$KUSER")
