@@ -13,6 +13,8 @@
 #       has no kadm5.acl line); ctself refused in MIT's words (add, delete, list, modify's get, a policy's add, list
 #       and delete); cpw -keepold keeps every key version for admin/admin and 5 when ctself changes its own; and
 #       kadmin.local's dates and intervals as MIT's getdate parses and refuses them.
+#   KR: kadmind's RPC layer from kdc (lib/rpc-probe.py): flavor before program, AUTH_UNIX's bounds, past 400 bytes
+#       unanswered, kadm's weak-flavor refusal and its log line, the connection kept; MIT's kadmin on flavor 6.
 # Graded on both legs, MIT's first.
 # vms: kdc client2
 # legs: mit rust
@@ -149,4 +151,28 @@ checklast KA.date.int.bad 'line:42  => Invalid date specification "42 ".'
 checklast KA.date.int.past 'line:Jan 1, 1990 => Interval specification "Jan 1, 1990" is in the past.'
 checklast KA.date.int.ago 'line:2 days ago => Interval specification "2 days ago" is in the past.'
 check KA.date.rel '^tomorrow: 1440 min ahead; \+90 days: 129600 min ahead$' run kdc "for f in tomorrow '+90 days'; do sudo kadmin.local -q \"modprinc -expire \\\"\$f\\\" ctdate\" > /dev/null 2>&1; e=\$(sudo kadmin.local -q 'getprinc ctdate' | sed -n 's/^Expiration date: //p'); printf '%s: %s min ahead\\n' \"\$f\" \$(( (\$(date -u -d \"\$e\" +%s) - \$(date -u +%s) + 30) / 60 )); done | paste -sd';' - | sed 's/;/; /'"
+
+section "KR: kadmind's RPC layer, from kdc itself (lib/rpc-probe.py to 127.0.0.1:749): a call is authenticated by its flavor before its program is looked up (svc.c:472-493, svc_auth.c:84-106); AUTH_UNIX's bounds (svc_auth_unix.c:55-126); a credential or verifier past 400 bytes is not answered (rpc_callmsg.c:119-122,155-158); kadm_1 refuses a flavor before its procedure switch (kadm_rpc_svc.c:80-88); after each, the same connection answers 2112/2's NULLPROC"
+# rpc <check> <ERE> <program> <version> [probe options]: the probe on kdc, then its --then call on the same connection.
+rpc() { local c=$1 e=$2; shift 2; check "$c" "$e" runin kdc "lib/rpc-probe.py" "python3 - 127.0.0.1 749 $* --then --wait 3" < "$FIELD_LIB/rpc-probe.py"; }
+P='^400100/1 on 127\.0\.0\.1:749: '
+rpc KR.flavor.unknown "${P}AUTH_REJECTEDCRED; then: AUTH_TOOWEAK\$" 400100 1 --flavor 7
+rpc KR.flavor.short "${P}AUTH_REJECTEDCRED; then: AUTH_TOOWEAK\$" 400100 1 --flavor 2
+rpc KR.unix.ok "${P}PROG_UNAVAIL; then: AUTH_TOOWEAK\$" 400100 1 --flavor 1 --cred unix
+rpc KR.unix.name "${P}AUTH_BADCRED; then: AUTH_TOOWEAK\$" 400100 1 --flavor 1 --cred unix:name=256
+rpc KR.unix.gids "${P}AUTH_BADCRED; then: AUTH_TOOWEAK\$" 400100 1 --flavor 1 --cred unix:gids=17
+rpc KR.big.cred "${P}no answer; then: AUTH_TOOWEAK\$" 400100 1 --cred len:401
+rpc KR.big.verf "${P}no answer; then: AUTH_TOOWEAK\$" 400100 1 --verf-len 401
+kdcmark kr
+rpc KR.kadm.none '^2112/2 on 127\.0\.0\.1:749: AUTH_TOOWEAK; then: AUTH_TOOWEAK$' 2112 2
+rpc KR.kadm.unix '^2112/2 on 127\.0\.0\.1:749: AUTH_TOOWEAK; then: AUTH_TOOWEAK$' 2112 2 --flavor 1 --cred unix
+kdcsince kr 'Authentication attempt failed'
+checklast KR.kadm.log.none 'Authentication attempt failed: 127\.0\.0\.1, RPC authentication flavor 0$'
+checklast KR.kadm.log.unix 'Authentication attempt failed: 127\.0\.0\.1, RPC authentication flavor 1$'
+
+section "KR.gss: MIT's kadmin speaks RPCSEC_GSS (flavor 6) to the leg's kadmind, not its silent AUTH_GSSAPI fallback (client_init.c:654-681): every call to 2112 in a capture of kdc's 749"
+capstart kdc kr749 'tcp port 749'
+kadm KR.gss.call '^current privileges: INQUIRE ADD MODIFY DELETE$' 'getprivs'
+capstop kdc kr749
+check KR.gss.flavor '^kadm calls: [1-9][0-9]*, flavors: 6, DATA calls: [1-9][0-9]*$' host "tshark -r $(printf '%q' "$REC_DIR/pcap/kr749.pcap") -d tcp.port==749,rpc -Y 'rpc.msgtyp == 0 && rpc.program == 2112' -T fields -E occurrence=f -e rpc.auth.flavor -e rpc.authgss.procedure 2>/dev/null | awk -F'\\t' '{ n++; f[\$1] = 1; if (\$1 == 6 && \$2 == 0) d++ } END { s = \"\"; for (k in f) s = s (s ? \",\" : \"\") k; printf \"kadm calls: %d, flavors: %s, DATA calls: %d\\n\", n, s, d + 0 }'"
 finish

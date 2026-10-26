@@ -257,6 +257,7 @@ harness/field/run.sh --profile kill-loop --ref plan-12   # SW-3's kill loop (lab
 | `kt-vs-kdc.py` | A keytab's newest kvno and enctypes (`klist -k -e`) against the KDC's `getprinc` |
 | `kt-records.py` | `client-tools`' keytab helper on client2: a v2 keytab with an unknown enctype, and two keytabs compared record by record with the timestamps zeroed (it never prints a key) |
 | `kdc-rewrite-proxy.py` | A UDP/TCP man-in-the-middle in front of a KDC: it rewrites replies (`as-rep-cname`, `strip-fx-fast`; `scripts/mit-fast-kdc-gate.sh`), or answers a named realm's AS-REQ itself with a client referral (`refer`; `client-tools`' CR cells). It logs each request's realm and each reply's error code, never a key |
+| `rpc-probe.py` | One ONC RPC call over TCP and its answer on one line (the accept_stat or auth_stat, or none): procedure 0 under AUTH_NONE by default; `--proc`, `--flavor`, `--cred` and `--verf-len` shape the call, and `--then` makes a second one on the same connection (`kdc-profile`, `kdb-writes` KR) |
 | `nfs-probe.sh`, `spnego-probe.sh`, `check_spnego.lab.sh` | S2's probes, run in throwaway containers on services (image `localhost/s2-nfs-probe:f43`, own network namespace): the kit's NFS client set-up and alice's, root's and bob's NFS access; the kit's `check_spnego` (its helper block and function verbatim from kit commit `e9f3325`, only the four SSO constants set to the lab's) and the two requests by hand |
 | `kc-events.sh` | Keycloak's events since a time, read-only through the admin API from the host (the admin password on stdin, the token through a pipe) |
 | `lldap-membership.sh` | S1's: one lldap group membership added or removed on services (lldap's admin password on stdin) |
@@ -473,8 +474,13 @@ would remove it.
   names all four privileges whoever asks; a principal with no `kadm5.acl` line
   is refused in MIT's words; `cpw -keepold` keeps every key version for an admin
   and five for a principal changing its own; `kadmin.local` parses and refuses
-  dates and intervals as MIT's getdate does. The scratch principals and policies
-  go at the end, also when the scenario stops early.
+  dates and intervals as MIT's getdate does. A KR block probes kadmind's RPC
+  layer from kdc (`lib/rpc-probe.py`): a call is authenticated by its flavor
+  before its program is looked up, AUTH_UNIX's bounds and a credential or
+  verifier past 400 bytes are MIT's, kadm refuses a weak flavor with MIT's log
+  line, and each time the same connection answers the next call; a capture of
+  749 shows MIT's kadmin on RPCSEC_GSS (flavor 6). The scratch principals and
+  policies go at the end, also when the scenario stops early.
 - **`ticket-flags.sh`** (TF, MIT kinit and kadmin from client2): principal, password
   and server expiry; forwardable, proxiable, renewable and postdate, and the flag
   refusals; policy length, classes, history, lockout and minimum life; aes-sha2
