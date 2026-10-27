@@ -1,4 +1,4 @@
-//! How `getprinc` shows a principal record: MIT `kadmin_getprinc` and the `strdate`, `strdur`, flag and salt-type names it prints with.
+//! MIT `kadmin_getprinc` and the date, duration, flag and salt names it prints.
 
 use std::fmt::Write as _;
 
@@ -138,7 +138,7 @@ pub(crate) fn principal_terse(p: &Principal) -> String {
 }
 
 // MIT: `strdate` (kadmin.c:142-153)
-/// `%a %b %d %H:%M:%S %Z %Y` in local time; the zone is `UTC` at offset zero and the numeric offset elsewhere (no zone abbreviations).
+/// The zone is `UTC` at offset zero and a numeric offset elsewhere: no abbreviations.
 pub(crate) fn strdate(when: u32) -> String {
     krb5_types::timestamp::strftime("%a %b %d %H:%M:%S %Z %Y", when, 40)
         .unwrap_or_else(|| "(error)".to_owned())
@@ -149,7 +149,6 @@ pub(crate) fn strdur(duration: u64) -> String {
 }
 
 // MIT: `krb5_flags_to_strings` (kadm5/str_conv.c:229-261)
-/// one name per set bit, in bit order, each after a space; a bit with no name is `0x%08lx`.
 pub(crate) fn flags_to_string(attributes: u32) -> String {
     const NAMES: [Option<&str>; 24] = [
         Some("DISALLOW_POSTDATED"),
@@ -194,7 +193,6 @@ pub(crate) fn flags_to_string(attributes: u32) -> String {
 }
 
 // MIT: `krb5_salttype_to_string` (krb/str_conv.c:95-114)
-/// normal, norealm, onlyrealm and special; any other is `<Salt type 0x..>`.
 pub(crate) fn salttype_name(t: i32) -> String {
     match t {
         0 => "normal".into(),

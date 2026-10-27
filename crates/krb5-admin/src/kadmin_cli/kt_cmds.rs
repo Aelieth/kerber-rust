@@ -1,4 +1,4 @@
-//! `ktadd` and `ktremove`: MIT `kadmin/cli/keytab.c`.
+//! MIT `kadmin/cli/keytab.c`: `ktadd` and `ktremove`.
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
@@ -16,7 +16,6 @@ struct Kt {
     path: Option<PathBuf>,
 }
 
-/// `KRB5_KTNAME`, else the context's `default_keytab_name`, else `FILE:/etc/krb5.keytab`, with `%{…}` parameters expanded; `None` when they do not expand.
 fn default_keytab_name_of(ctx: &ClientContext) -> Option<String> {
     if let Some(name) = ctx.ktname() {
         return Some(name);
@@ -47,7 +46,8 @@ impl KtType {
 }
 
 // MIT: `krb5_kt_resolve` (lib/krb5/keytab/ktbase.c:152-209)
-/// a name with no `:` is a `FILE` keytab, and so is one whose prefix is a single letter (a drive) or that starts with `/`, the whole name being the file; any other prefix names the type. The type and the name it keeps.
+/// A one-letter prefix is a drive and a leading `/` a path, so both name a `FILE`
+/// keytab; any other prefix names the type.
 pub(super) fn resolve(name: &str) -> Result<(KtType, &str), &'static str> {
     let Some(colon) = name.find(':') else {
         return Ok((KtType::File, name));
@@ -66,7 +66,7 @@ pub(super) fn resolve(name: &str) -> Result<(KtType, &str), &'static str> {
     }
 }
 
-/// The file of the keytab `name` names, else of the context's default keytab ([`default_keytab_name_of`]), as `krb5_kt_resolve` resolves it; `Ok(None)` for a `MEMORY:` keytab, which a new process holds empty.
+/// `MEMORY:` has no file, and a new process holds it empty.
 pub(crate) fn keytab_file_of(
     name: Option<&str>,
     ctx: &ClientContext,
@@ -80,7 +80,8 @@ pub(crate) fn keytab_file_of(
 }
 
 // MIT: `process_keytab` (kadmin/cli/keytab.c:67-111)
-/// `-k NAME` (a name without a `:` is a `WRFILE`), printed as given; else the default keytab, printed as `krb5_kt_get_name` names it.
+/// `-k`'s name is taken as given, and a name with no `:` becomes a `WRFILE`,
+/// unlike [`resolve`], which calls it a `FILE`.
 fn process_keytab(s: &mut Session<'_>, keytab_str: Option<&str>) -> Option<Kt> {
     let Some(given) = keytab_str else {
         let resolved = default_keytab_name_of(&s.h.ctx)
@@ -124,7 +125,7 @@ fn file_of(ty: KtType, residual: &str) -> Option<PathBuf> {
 }
 
 // MIT: `kadmin_keytab_add` (kadmin/cli/keytab.c:114-203)
-/// the options, then each principal (a `-glob` pattern adds every match, and is then read as a name itself, as MIT reads it).
+/// A `-glob` expands to matches, and MIT then reads each match as a name again.
 pub(crate) fn ktadd(s: &mut Session<'_>, argv: &[String]) {
     let mut rest = argv.get(1..).unwrap_or_default();
     let mut keytab_str: Option<&str> = None;
@@ -224,7 +225,6 @@ struct AddOpts {
 }
 
 // MIT: `add_principal` (kadmin/cli/keytab.c:299-358)
-/// new random keys (`randkey_princ`, then the entry's kvno), or with `-norandkey` the keys the entry has; each is added to the keytab and reported.
 fn add_principal(s: &mut Session<'_>, kt: &Kt, opts: &AddOpts, princ_str: &str) {
     let (name, realm) = match s.h.parse_name(princ_str) {
         Ok(n) => n,
@@ -326,7 +326,6 @@ fn add_entries(
 }
 
 // MIT: `kadmin_keytab_remove` (kadmin/cli/keytab.c:206-243)
-/// the options, then one principal and an optional kvno, `all` or `old`.
 pub(crate) fn ktremove(s: &mut Session<'_>, argv: &[String]) {
     let mut rest = argv.get(1..).unwrap_or_default();
     let mut keytab_str: Option<&str> = None;
@@ -367,7 +366,6 @@ enum Mode {
 }
 
 // MIT: `remove_principal` (kadmin/cli/keytab.c:361-491)
-/// the highest kvno's entries, those of one kvno, all, or all but the highest.
 fn remove_principal(
     s: &mut Session<'_>,
     kt: &Kt,
