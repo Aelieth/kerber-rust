@@ -1,5 +1,3 @@
-//! Questions a module asks, answered before the prompter.
-
 use std::fmt;
 
 use zeroize::Zeroizing;
@@ -7,13 +5,13 @@ use zeroize::Zeroizing;
 use crate::error::Error;
 
 // MIT: `KRB5_RESPONDER_QUESTION_PASSWORD` (include/krb5/krb5.hin:6502-6502)
-/// The password. An answer skips the prompter.
+/// An answer skips the prompter.
 pub const QUESTION_PASSWORD: &str = "password";
 
 // MIT: `KRB5_RESPONDER_QUESTION_OTP` (include/krb5/krb5.hin:6539-6539)
 pub const QUESTION_OTP: &str = "otp";
 
-/// The challenge and the answer are wiped on drop.
+/// Challenge and answer: wiped on drop.
 struct Item {
     question: String,
     challenge: Option<Zeroizing<Vec<u8>>>,
@@ -56,7 +54,6 @@ impl ResponderItems {
     }
 
     // MIT: `k5_response_items_get_challenge` (lib/krb5/krb/response_items.c:178-189)
-    /// None when it was not asked, or asked with no challenge.
     #[must_use]
     pub fn get_challenge(&self, question: &str) -> Option<&[u8]> {
         self.items
@@ -67,8 +64,6 @@ impl ResponderItems {
     }
 
     // MIT: `k5_response_items_set_answer` (lib/krb5/krb/response_items.c:191-211)
-    /// None clears it.
-    /// A question not asked is refused.
     pub fn set_answer(&mut self, question: &str, answer: Option<&str>) -> Result<(), Error> {
         let item = self
             .items
@@ -80,7 +75,6 @@ impl ResponderItems {
     }
 
     // MIT: `k5_response_items_ask_question` (lib/krb5/krb/response_items.c:156-176)
-    /// Asked again, it keeps its place and takes the new challenge.
     pub(crate) fn ask_question(&mut self, question: &str, challenge: Option<&[u8]>) {
         let challenge = challenge.map(|c| Zeroizing::new(c.to_vec()));
         if let Some(item) = self.items.iter_mut().find(|i| i.question == question) {
@@ -95,7 +89,6 @@ impl ResponderItems {
     }
 
     // MIT: `k5_response_items_get_answer` (lib/krb5/krb/response_items.c:213-224)
-    /// None when it was not asked, or not answered.
     pub(crate) fn get_answer(&self, question: &str) -> Option<&str> {
         self.items
             .iter()

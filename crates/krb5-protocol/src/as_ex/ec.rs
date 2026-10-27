@@ -1,5 +1,3 @@
-//! The encrypted challenge clpreauth module (`lib/krb5/krb/preauth_ec.c`).
-
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{KeyUsage, ProtocolKey, decrypt_enc_data, encrypt, krb_fx_cf2};
 use krb5_types::{EncryptedData, KerberosTime, Microseconds, PaData, PaEncTsEnc, ku, pa};
@@ -7,13 +5,11 @@ use krb5_types::{EncryptedData, KerberosTime, Microseconds, PaData, PaEncTsEnc, 
 use crate::error::Error;
 use crate::trace::kdc_code;
 
-/// MIT's module name.
 pub(super) const EC_MODULE: &str = "encrypted_challenge";
 
 const ASN1_BAD_ID: i64 = 1_859_794_438;
 
 // MIT: `pa_enc_ts_1` (lib/krb5/asn.1/asn1_k_encode.c:935-935)
-/// pausec is omitted when 0.
 pub(super) fn pa_enc_ts(sec: &KerberosTime, usec: Microseconds) -> PaEncTsEnc {
     PaEncTsEnc {
         patimestamp: sec.clone(),
@@ -22,7 +18,6 @@ pub(super) fn pa_enc_ts(sec: &KerberosTime, usec: Microseconds) -> PaEncTsEnc {
 }
 
 // MIT: `ec_process` (lib/krb5/krb/preauth_ec.c:96-145)
-/// CF2 of the armor key and the AS key, usage 54.
 pub(super) fn client_challenge(
     armor_key: &ProtocolKey,
     as_key: &ProtocolKey,
@@ -52,7 +47,7 @@ pub(super) fn client_challenge(
 }
 
 // MIT: `process_pa_data` (lib/krb5/krb/preauth2.c:679-712)
-/// A non-zero code is noted, and the reply is still accepted.
+/// Non-zero code: noted; reply still accepted.
 pub(super) fn verify_kdc_challenge(
     armor_key: &ProtocolKey,
     as_key: &ProtocolKey,
@@ -70,7 +65,6 @@ pub(super) fn verify_kdc_challenge(
         return KRB5_BAD_ENCTYPE;
     };
     // MIT: `krb5_k_decrypt` (lib/crypto/krb/decrypt.c:45-52)
-    // Another enctype is KRB5_BAD_ENCTYPE, a short one KRB5_BAD_MSIZE.
     let decrypted = KeyUsage::new(ku::ENC_CHALLENGE_KDC)
         .and_then(|usage| decrypt_enc_data(&key, usage, enc.etype, enc.cipher.as_ref()));
     match decrypted {
@@ -85,7 +79,6 @@ const KRB5_BAD_ENCTYPE: i64 = crate::trace::ERROR_TABLE_BASE_KRB5 + 188;
 
 const KRB5_BAD_MSIZE: i64 = crate::trace::ERROR_TABLE_BASE_KRB5 + 190;
 
-/// None when the reply has none, an empty value included.
 pub(super) fn reply_code(
     padata: &[PaData],
     armor_key: &ProtocolKey,

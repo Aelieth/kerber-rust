@@ -1,5 +1,3 @@
-//! The SPAKE clpreauth module.
-
 use krb5_asn1::{decode, encode};
 use krb5_config::Krb5Conf;
 use krb5_crypto::{
@@ -42,7 +40,6 @@ pub(super) fn trace_unknown_groups(profile: &Krb5Conf) {
 }
 
 // MIT: `group_init_state` (groups.c:213-239)
-/// Unset uses the client default. No permitted group fails init.
 pub(super) fn client_groups(profile: &Krb5Conf) -> Vec<SpakeGroup> {
     let value = profile
         .spake_preauth_groups
@@ -52,7 +49,7 @@ pub(super) fn client_groups(profile: &Krb5Conf) -> Vec<SpakeGroup> {
 }
 
 // MIT: `reqstate` (spake_client.c:41-47)
-/// The support message, kept for the transcript, and whether a challenge was answered.
+/// Support message: kept for the transcript.
 struct SpakeState {
     groups: Vec<SpakeGroup>,
     support: Option<Vec<u8>>,
@@ -61,9 +58,8 @@ struct SpakeState {
 
 pub(super) enum SpakeEnd {
     Done(Box<AsOutcome>),
-    /// The module's own failure. None when the KDC refused the support message.
-    /// That PREAUTH_FAILED is kept, and reported if the later mechanisms fail.
-    /// new_walk: a request went out, so the next mechanism starts a new walk.
+    /// Kept PREAUTH_FAILED: reported if later mechanisms fail.
+    /// new_walk: a request went out; the next mechanism walks afresh.
     Fallback {
         hint: Box<KrbError>,
         fail: Option<ModuleFail>,
@@ -90,7 +86,6 @@ fn generic_failure() -> ModuleFail {
 }
 
 // MIT: `send_support` (spake_client.c:149-178)
-/// The permitted groups, saved for the transcript.
 fn send_support(st: &mut SpakeState) -> PaData {
     let support = pa_spake_support(&st.groups);
     st.support = Some(support.padata_value.as_ref().to_vec());
@@ -160,7 +155,6 @@ fn process_challenge(
 }
 
 // MIT: `spake_process` (spake_client.c:322-363)
-/// Empty gets support, once. A challenge is processed. Anything else fails.
 #[expect(
     clippy::too_many_arguments,
     reason = "the AS round's state, no value type"
@@ -190,7 +184,6 @@ fn spake_round(
             st, req, keys, etypes, current, hint, &ch, pa_in, body_der, pw,
         ),
         // MIT: `process_encdata` (spake_client.c:300-320)
-        // No second factors, so encdata fails.
         PaSpake::EncData(_) | PaSpake::Support(_) | PaSpake::Response(_) | PaSpake::Unknown => {
             Ok(Round::Failed(generic_failure()))
         }
@@ -225,7 +218,7 @@ impl FastSpake {
             .then(|| (self.hint.1.clone(), self.hint.2.clone()))
     }
 
-    /// The PA-SPAKE for this request, and the key FAST will strengthen.
+    /// PA-SPAKE for this request; its key FAST strengthens.
     pub(super) fn round(
         &mut self,
         req: &AsRequest<'_>,
@@ -267,7 +260,6 @@ impl FastSpake {
         }
     }
 
-    /// A keytab key, or the password, read now if no module has read it.
     pub(super) fn long_term_key(
         &self,
         keys: &[ProtocolKey],
@@ -281,14 +273,12 @@ impl FastSpake {
         Ok(string_to_key(etype, &password, &salt, params.as_deref())?)
     }
 
-    /// A challenge response was sent, so fallback is disabled.
+    /// Challenge response sent: fallback disabled.
     pub(super) fn answered(&self) -> bool {
         self.st.responded
     }
 }
 
-/// Empty, or a message that does not decode, asks nothing.
-/// A permitted challenge that lists SF-NONE asks for the password.
 pub(super) fn prep_needs_key(profile: &Krb5Conf, pa_in: &[u8]) -> bool {
     if pa_in.is_empty() {
         return false;
@@ -409,7 +399,6 @@ pub(super) fn continue_spake(
         match send_as(req, &wire)? {
             KdcMsg::AsRep(rep) => {
                 trace_reply_padata(rep.0.padata.as_deref(), etypes, None);
-                // No challenge key yet: a keytab key, else the password, if no module has read it.
                 let from_preauth = k0.is_some();
                 let key = match k0 {
                     Some(k) => {
@@ -487,7 +476,6 @@ pub(super) fn continue_spake(
     }
 }
 
-/// SPAKE only, with the configured groups, and no fallback.
 pub(super) fn spake_forced(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
@@ -511,7 +499,7 @@ pub(super) fn spake_forced(
 }
 
 // MIT: `contains_sf_none` (spake_client.c:51-51)
-/// True when the challenge lists SF-NONE, the only factor this client answers.
+/// SF-NONE, the only factor this client answers.
 pub(super) fn spake_contains_sf_none(chal: &SpakeChallenge) -> bool {
     chal.factors.iter().any(|f| f.factor_type == SF_NONE)
 }

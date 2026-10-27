@@ -25,7 +25,7 @@ const R_COLLECT_PIN: i64 = 0x2;
 // MIT: `KRB5_RESPONDER_OTP_FLAGS_NEXTOTP` (include/krb5/krb5.hin:6563-6563)
 const R_NEXTOTP: i64 = 0x4;
 
-/// The reply buffers of `doprompt` callers are 1024 bytes, so a reply is at most 1023.
+/// doprompt reply buffers: 1024 bytes.
 const REPLY_MAX: usize = 1023;
 
 const EINVAL: i64 = 22;
@@ -127,8 +127,7 @@ fn string_value(b: &[u8]) -> Value {
 }
 
 // MIT: `codec_encode_tokeninfo` (lib/krb5/krb/preauth_otp.c:149-206)
-/// A PIN is flags 3; a separate PIN is 7. Formats 3 and 4 are left out.
-/// MIT sets NEXTOTP, not SEPARATE_PIN, for a separate PIN.
+/// Separate PIN: MIT sets NEXTOTP, not SEPARATE_PIN.
 fn tokeninfo_json(ti: &OtpTokenInfo) -> Value {
     let f = flags_u32(&ti.flags);
     let mut flags = R_COLLECT_TOKEN;
@@ -448,7 +447,7 @@ pub(super) fn config_string(config: &Value) -> Option<Vec<u8>> {
     }
 }
 
-/// The answer holds the OTP and the PIN.
+/// The answer holds the OTP and PIN: wiped.
 fn wipe(v: &mut Value) {
     match v {
         Value::String(s) => s.zeroize(),
@@ -464,7 +463,7 @@ fn wipe(v: &mut Value) {
 }
 
 // MIT: `codec_decode_answer` (lib/krb5/krb/preauth_otp.c:374-422)
-/// MIT returns nothing set, or an uninitialised value. Both are no answer here.
+/// Unset or uninitialised answer: none, as MIT.
 fn decode_answer(answer: Option<&str>, n_tokens: usize) -> Option<Chosen> {
     let mut v = k5json::decode(answer?.as_bytes()).ok()?;
     let chosen = read_answer(&v, n_tokens);
@@ -524,13 +523,10 @@ pub(super) fn process(
 }
 
 // MIT: `krb5_responder_otp_tokeninfo` (include/krb5/krb5.hin:6713-6721)
-/// String fields are octets up to the first NUL.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OtpTokenView {
     pub flags: i32,
-    /// The token's format, `-1` when not given.
     pub format: i32,
-    /// The token's value length, `-1` when not given.
     pub length: i32,
     pub vendor: Option<Vec<u8>>,
     pub challenge: Option<Vec<u8>>,
@@ -539,7 +535,6 @@ pub struct OtpTokenView {
 }
 
 // MIT: `krb5_responder_otp_challenge` (include/krb5/krb5.hin:6723-6726)
-/// String fields are octets up to the first NUL.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OtpChallengeView {
     pub service: Option<Vec<u8>>,
@@ -605,7 +600,7 @@ fn challenge_view(json: &[u8]) -> Option<OtpChallengeView> {
 
 impl ResponderItems {
     // MIT: `krb5_responder_otp_get_challenge` (lib/krb5/krb/preauth_otp.c:1168-1189)
-    /// the challenge JSON decoded; one that does not decode is `ENOMEM`, as MIT returns it.
+    /// Undecodable challenge JSON: ENOMEM, as MIT returns it.
     pub fn otp_get_challenge(&self) -> Result<Option<OtpChallengeView>, Error> {
         let Some(json) = self.get_challenge(QUESTION_OTP) else {
             return Ok(None);
