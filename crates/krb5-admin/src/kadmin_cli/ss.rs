@@ -1,4 +1,4 @@
-//! The `ss` subsystem `kadmin.local` runs its commands in (`util/ss`): the request table, line parsing, the prompt loop, `list_requests` and the `!` shell escape.
+//! MIT's `util/ss`.
 
 use std::fmt::Write as _;
 use std::io::Write as _;
@@ -146,7 +146,7 @@ fn quit_request(s: &mut Session<'_>, _argv: &[String]) {
 }
 
 // MIT: `ss_page_stdin` (pager.c:69-110)
-/// the list is copied to stdout as the pager process writes it there, past what stdout still buffers; no pager is run.
+/// Past the buffer, as MIT's pager writes it; no pager runs.
 fn list_requests(s: &mut Session<'_>, _argv: &[String]) {
     let mut text = format!("Available {WHOAMI} requests:\n\n");
     for r in REQUESTS {
@@ -165,7 +165,6 @@ fn list_requests(s: &mut Session<'_>, _argv: &[String]) {
 }
 
 // MIT: `check_request_table` (execute_cmd.c:56-79)
-/// run the request `argv[0]` names; false when no request has that name.
 fn dispatch(s: &mut Session<'_>, argv: &[String]) -> bool {
     let Some(name) = argv.first() else {
         return true;
@@ -180,12 +179,10 @@ fn dispatch(s: &mut Session<'_>, argv: &[String]) -> bool {
 }
 
 // MIT: `ss_execute_command` (execute_cmd.c:134-151)
-/// the command line's own words, unparsed.
 pub(crate) fn execute_command(s: &mut Session<'_>, argv: &[String]) -> bool {
     dispatch(s, argv)
 }
 
-/// What `ss_execute_line` returns for a line it did not run.
 pub(crate) enum Unrun {
     NotFound { lead: String, word: String },
     EscapeDisabled,
@@ -213,18 +210,15 @@ pub(crate) fn execute_line(s: &mut Session<'_>, line: &str) -> Option<Unrun> {
 }
 
 // MIT: `ss_perror` (error.c:66-69)
-/// `kadmin.local: <error> <text>`.
 pub(crate) fn perror(io: &mut Io, code: &str, shown: &str) {
     io.com_err(WHOAMI, Some(code), shown);
 }
 
-/// `ss_err.et`: the text of `SS_ET_COMMAND_NOT_FOUND`.
 pub(crate) const COMMAND_NOT_FOUND: &str = "Command not found";
-/// `ss_err.et`: the text of `SS_ET_ESCAPE_DISABLED`.
 pub(crate) const ESCAPE_DISABLED: &str = "Shell escapes are disabled";
 
 // MIT: `ss_parse` (util/ss/parse.c:57-169)
-/// words split on blanks; `"` quotes, inside a word too, and `""` within quotes is one `"`; an open quote is `Unbalanced quotes in command line`.
+/// Blanks split words; `"` quotes in a word, `""` is one; an open quote errors.
 pub fn parse(line: &str) -> Result<Vec<String>, &'static str> {
     let mut argv = Vec::new();
     let mut cur = String::new();
@@ -263,7 +257,8 @@ pub fn parse(line: &str) -> Result<Vec<String>, &'static str> {
     Ok(argv)
 }
 
-/// an unknown request is reported; until `quit` or the end of input. `SIGINT` is caught through the loop and `SIGCONT` while the prompt waits: either prints a newline and prompts again. A request one comes during runs to its end first, as this port never stops one halfway, and the newline comes before the next prompt; one reading a reply ends there, quietly.
+/// Until `quit` or end of input; `SIGINT` re-prompts, a running request finishes
+/// first.
 pub(crate) fn listen(s: &mut Session<'_>) {
     let _sigint = krb5_cli::SignalCatch::new(&[krb5_cli::Signal::SIGINT]);
     s.abort = false;
@@ -313,7 +308,7 @@ fn unknown_request(io: &mut Io, word: &[u8]) {
     io.eprint_bytes(&text);
 }
 
-/// a principal of them; this store keeps names as UTF-8, so a line naming a request is refused whole, and an unknown request is reported with its word byte for byte, as MIT reports it.
+/// Non-UTF-8 names are refused; an unknown request is echoed byte for byte.
 fn not_utf8(s: &mut Session<'_>, raw: &[u8]) {
     let bytes: String = raw.iter().copied().map(char::from).collect();
     let trimmed = bytes.trim_start_matches([' ', '\t']);

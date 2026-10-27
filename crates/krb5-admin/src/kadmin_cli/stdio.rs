@@ -1,10 +1,9 @@
-//! The C stdio `kadmin.local` writes through, so its streams interleave as MIT's do: stdout buffered as glibc buffers it (by line on a terminal, by block otherwise), stderr unbuffered.
+//! glibc's stdio buffering, so the streams interleave as MIT's.
 
 use std::io::{self, Write};
 
 const BLOCK: usize = 4096;
 
-/// stdout with glibc's buffering.
 pub(crate) struct Stdout {
     raw: Box<dyn Write>,
     buf: Vec<u8>,
@@ -12,7 +11,6 @@ pub(crate) struct Stdout {
 }
 
 impl Stdout {
-    /// `raw` is the unbuffered descriptor; `line` when it is a terminal.
     pub(crate) fn new(raw: Box<dyn Write>, line: bool) -> Self {
         Self {
             raw,
@@ -21,7 +19,6 @@ impl Stdout {
         }
     }
 
-    /// Bytes written to the descriptor itself, as MIT's pager process writes them: they pass what is still buffered.
     pub(crate) fn write_raw(&mut self, bytes: &[u8]) {
         let _ = self.raw.write_all(bytes);
         let _ = self.raw.flush();
@@ -34,7 +31,6 @@ impl Stdout {
         self.raw.flush()
     }
 
-    /// Before a read from a terminal: glibc flushes line-buffered output when stdin needs input.
     pub(crate) fn flush_for_input(&mut self) {
         if self.line {
             let _ = self.flush();
@@ -60,23 +56,18 @@ impl Write for Stdout {
     }
 }
 
-/// The session's streams and MIT's message helpers.
 pub(crate) struct Io {
     pub(crate) out: Stdout,
     pub(crate) err: Box<dyn Write>,
     pub(crate) input: Box<dyn io::BufRead>,
-    /// stdin is a terminal: password replies are read with echo off.
     pub(crate) tty_in: bool,
-    /// MIT `script_mode`: the command came after the options on the command line.
     pub(crate) script_mode: bool,
     pub(crate) exit_status: i32,
-    /// A signal the prompt loop catches cut a reply short: MIT's handler prints a newline and goes back to the prompt, so the request says nothing more.
     pub(crate) interrupted: bool,
 }
 
 const BUFSIZ: usize = 8192;
 
-/// What a read of the next command line got.
 pub(crate) enum LineRead {
     Line(Vec<u8>),
     End,
@@ -85,20 +76,17 @@ pub(crate) enum LineRead {
 
 impl Io {
     // MIT: `info` (kadmin.c:76-85)
-    /// printed only outside script mode.
     pub(crate) fn info(&mut self, text: &str) {
         if !self.script_mode {
             let _ = self.out.write_all(text.as_bytes());
         }
     }
 
-    /// stdout, as `printf`.
     pub(crate) fn print(&mut self, text: &str) {
         let _ = self.out.write_all(text.as_bytes());
     }
 
     // MIT: `error` (kadmin.c:89-98)
-    /// stderr, and in script mode the exit status becomes 1.
     pub(crate) fn error(&mut self, text: &str) {
         if self.script_mode {
             self.exit_status = 1;
@@ -106,18 +94,15 @@ impl Io {
         let _ = self.err.write_all(text.as_bytes());
     }
 
-    /// stderr, as `fprintf(stderr, …)`: no effect on the exit status.
     pub(crate) fn eprint(&mut self, text: &str) {
         let _ = self.err.write_all(text.as_bytes());
     }
 
-    /// stderr, the bytes as they are: what MIT echoes of input that is not UTF-8.
     pub(crate) fn eprint_bytes(&mut self, bytes: &[u8]) {
         let _ = self.err.write_all(bytes);
     }
 
     // MIT: `extended_com_err_fn` (kadmin.c:228-242)
-    /// `prog: message text` through `error`.
     pub(crate) fn com_err(&mut self, prog: &str, message: Option<&str>, text: &str) {
         match message {
             Some(m) => self.error(&format!("{prog}: {m} ")),
@@ -127,7 +112,6 @@ impl Io {
         self.error("\n");
     }
 
-    /// The next command line, as MIT's prompt loop reads it with `fgets(input, BUFSIZ, stdin)`.
     pub(crate) fn read_line(&mut self) -> LineRead {
         self.out.flush_for_input();
         let mut line = Vec::new();
@@ -138,7 +122,7 @@ impl Io {
         }
     }
 
-    /// A reply as `fgets(buf, size, stdin)` reads it: at most `size - 1` bytes, up to and including a newline; the rest of a longer line stays for the next read. `None` at the end of input, or when a caught signal cuts it short ([`Self::interrupted`] is then set).
+    /// As `fgets`: `size - 1` bytes, newline kept, the rest left for the next read.
     pub(crate) fn fgets(&mut self, size: usize) -> Option<Vec<u8>> {
         self.out.flush_for_input();
         let mut line = Vec::new();
@@ -153,7 +137,6 @@ impl Io {
     }
 
     // MIT: `krb5_read_password` (read_pwd.c:41-77)
-    /// `prompt`, then `verify` when given, echo off on a terminal.
     pub(crate) fn read_password(
         &mut self,
         prompt: &str,
