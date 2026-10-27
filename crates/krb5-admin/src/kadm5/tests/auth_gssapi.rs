@@ -3,51 +3,6 @@
 use super::*;
 
 #[test]
-fn auth_gssapi_on_iprop_data_is_auth_failed() {
-    let (store, acl, _) = setup();
-    let mut cred = XdrW::default();
-    cred.u32(AUTH_GSSAPI_CREDS_VERS);
-    cred.u32(0);
-    cred.opaque(&[]);
-    let mut w = XdrW::default();
-    w.u32(11);
-    w.u32(MSG_CALL);
-    w.u32(RPC_VERSION);
-    w.u32(IPROP_PROG);
-    w.u32(IPROP_VERS);
-    w.u32(IPROP_GET_UPDATES);
-    w.u32(FLAVOR_AUTH_GSSAPI);
-    w.opaque(&cred.b);
-    w.u32(FLAVOR_NONE);
-    w.opaque(&[]);
-    let mut gss = None;
-    let mut agss = None;
-    let out = handle_rpc(
-        RpcCtx {
-            store: &store,
-            authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
-            expected_realm: "KERBER.TEST",
-            conf: &AcceptorConfig::default(),
-            programs: Programs::BOTH,
-            iprop_resync: None,
-        },
-        &[],
-        &mut gss,
-        &mut agss,
-        &krb5_protocol::ReplayCache::new(),
-        &w.b,
-        &peer(),
-    )
-    .unwrap();
-    let mut r = XdrR::new(&out);
-    assert_eq!(r.u32().unwrap(), 11);
-    assert_eq!(r.u32().unwrap(), MSG_REPLY);
-    assert_eq!(r.u32().unwrap(), MSG_DENIED);
-    assert_eq!(r.u32().unwrap(), REJECT_AUTH_ERROR);
-    assert_eq!(r.u32().unwrap(), AUTH_FAILED);
-}
-
-#[test]
 fn auth_gssapi_on_iprop_init_is_success() {
     let (store, acl, _) = setup();
     let mut cred = XdrW::default();

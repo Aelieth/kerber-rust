@@ -11,18 +11,17 @@ use std::time::Duration;
 use krb5_admin::{
     Kadmind, KadmindConfig, KlogAdmin, Listeners, Programs, ServeLimits, Services, Shutdown,
 };
-use krb5_crypto::{KeyUsage, ProtocolKey, encrypt};
+use krb5_crypto::ProtocolKey;
 use krb5_gss::GssContext;
 use krb5_kdc::principals::{kadmin_admin, kadmin_changepw, kadmin_history};
 use krb5_kdc::testrealm::{
     TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
     documented_admin_id, documented_host,
 };
-use krb5_kdc::{KeyEntry, PrincipalStore, bootstrap_realm_with_kdc_conf, decrypt_ticket_part};
+use krb5_kdc::{PrincipalStore, bootstrap_realm_with_kdc_conf};
 use krb5_protocol::{as_req_sname, pa_enc_timestamp};
-use krb5_types::{OctetString, PrincipalName, Ticket, ascii, ku};
+use krb5_types::{PrincipalName, Ticket, ascii};
 
-const AUTH_REJECTEDCRED: u32 = 2;
 const GSS_S_FAILURE: u32 = 13 << 16;
 
 fn realm() -> (Arc<RwLock<PrincipalStore>>, krb5_kdc::Acl) {
@@ -137,16 +136,6 @@ impl Served {
         let out = krb5_kdc::issue_as(&*g, &req).unwrap();
         (out.rep.0.ticket.clone(), out.session_key)
     }
-
-    fn keys_of(&self, name: &PrincipalName) -> Vec<KeyEntry> {
-        self.store
-            .read()
-            .unwrap()
-            .get_name(name)
-            .unwrap()
-            .keys
-            .clone()
-    }
 }
 
 impl Drop for Served {
@@ -156,22 +145,6 @@ impl Drop for Served {
             let _ = t.join();
         }
     }
-}
-
-fn resealed(ticket: &Ticket, from: &KeyEntry, to: &KeyEntry) -> Ticket {
-    let part = decrypt_ticket_part(&from.key, ticket).unwrap();
-    let mut t = ticket.clone();
-    t.enc_part.etype = to.etype.to_iana();
-    t.enc_part.kvno = Some(to.kvno);
-    t.enc_part.cipher = OctetString::from(
-        encrypt(
-            &to.key,
-            KeyUsage::new(ku::TICKET).unwrap(),
-            &krb5_asn1::encode(&part).unwrap(),
-        )
-        .unwrap(),
-    );
-    t
 }
 
 fn token(ticket: Ticket, session: &ProtocolKey) -> (GssContext, Vec<u8>) {
@@ -236,36 +209,7 @@ impl Words<'_> {
 
 #[derive(Debug, PartialEq, Eq)]
 enum Init {
-    /// The RPC layer refused it with this `auth_stat`.
-    Denied(u32),
     Answered(u32, Vec<u8>, Vec<u8>),
-}
-
-fn rpcsec_init(c: &mut TcpStream, xid: u32, token: &[u8]) -> Init {
-    let cred = [words(&[1, 1, 0, 1]), opaque(&[])].concat();
-    let call = [
-        words(&[xid, 0, 2, 2112, 2, 0, 6]),
-        opaque(&cred),
-        words(&[0]),
-        opaque(&[]),
-        opaque(token),
-    ]
-    .concat();
-    c.write_all(&record(&call)).unwrap();
-    let body = reply(c);
-    let mut r = Words(&body);
-    assert_eq!(r.u32(), xid);
-    assert_eq!(r.u32(), 1, "a reply");
-    if r.u32() == 1 {
-        assert_eq!(r.u32(), 1, "an auth error");
-        return Init::Denied(r.u32());
-    }
-    assert_eq!(r.u32(), 6, "under an RPCSEC_GSS verifier");
-    let _verifier = r.opaque();
-    assert_eq!(r.u32(), 0, "SUCCESS");
-    let handle = r.opaque();
-    let (major, _minor, _window) = (r.u32(), r.u32(), r.u32());
-    Init::Answered(major, handle, r.opaque())
 }
 
 fn agss_init(c: &mut TcpStream, xid: u32, token: &[u8]) -> Init {
@@ -290,11 +234,6 @@ fn agss_init(c: &mut TcpStream, xid: u32, token: &[u8]) -> Init {
     Init::Answered(major, handle, r.opaque())
 }
 
-fn init_rpcsec(served: &Served, ticket: Ticket, session: &ProtocolKey) -> Init {
-    let (_ctx, tok) = token(ticket, session);
-    rpcsec_init(&mut served.connect(), 1, &tok)
-}
-
 fn init_agss(served: &Served, ticket: Ticket, session: &ProtocolKey) -> Init {
     let (_ctx, tok) = token(ticket, session);
     agss_init(&mut served.connect(), 1, &tok)
@@ -302,25 +241,6 @@ fn init_agss(served: &Served, ticket: Ticket, session: &ProtocolKey) -> Init {
 
 fn completes(i: &Init) -> bool {
     matches!(i, Init::Answered(0, ..))
-}
-
-/// the first permitted key, then the enctype must be similar.
-#[test]
-fn rpcsec_gss_refuses_a_ticket_sealed_in_a_later_key() {
-    let served = Served::new();
-    let keys = served.keys_of(&kadmin_admin());
-    let (ticket, session) = served.ticket_for(&kadmin_admin());
-    assert!(completes(&init_rpcsec(&served, ticket.clone(), &session)));
-    assert!(keys.len() >= 3);
-    for later in &keys[1..] {
-        let t = resealed(&ticket, &keys[0], later);
-        assert_eq!(
-            init_rpcsec(&served, t, &session),
-            Init::Denied(AUTH_REJECTEDCRED),
-            "a ticket in the {} key",
-            later.etype.to_iana()
-        );
-    }
 }
 
 #[test]

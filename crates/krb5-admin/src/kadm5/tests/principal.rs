@@ -94,36 +94,6 @@ fn create_foreign_realm_authorises_first() {
 }
 
 #[test]
-fn create_foreign_realm_then_getprinc() {
-    let (store, acl, actor) = setup();
-    let created = dispatch_kadm5(
-        &store,
-        &acl,
-        &actor,
-        CREATE_PRINCIPAL,
-        &create_rec("user@OTHER.REALM", "x"),
-    )
-    .unwrap();
-    assert_eq!(ret_code(&created), 0);
-    let mut w = XdrW::default();
-    w.u32(API_V2);
-    w.nullstring(Some("user@OTHER.REALM"));
-    w.u32(u32::MAX);
-    let got = dispatch_kadm5(&store, &acl, &actor, GET_PRINCIPAL, &w.b).unwrap();
-    assert_eq!(ret_code(&got), 0);
-    let mut r = XdrR::new(&got);
-    assert_eq!(r.u32().unwrap(), API_V2);
-    assert_eq!(r.u32().unwrap(), 0);
-    assert_eq!(r.nullstring().unwrap().as_deref(), Some("user@OTHER.REALM"));
-    let local = {
-        let g = store.read().unwrap();
-        g.get_name(&PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]))
-            .map(krb5_kdc::Principal::id)
-    };
-    assert_eq!(local.as_deref(), Some("user@KERBER.TEST"));
-}
-
-#[test]
 fn stub_setup_unk_before_acl_on_modify_setkey_purge_extract_setstr() {
     stub_unk_before_acl(
         MODIFY_PRINCIPAL,

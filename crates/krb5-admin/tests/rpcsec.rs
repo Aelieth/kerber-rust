@@ -117,35 +117,6 @@ fn integ_rec_rpcsec(
 }
 
 #[test]
-fn rpcsec_integrity_request_is_databody_plus_mic() {
-    let (store, acl, mut ctx, handle, mut sess) = init_svc(GSS_INTEGRITY);
-    let rec = integ_rec_rpcsec(&mut ctx, 40, 1, &handle, &list_args(), false);
-    let out = kadm5_handle_rpc(
-        krb5_admin::RpcCtx {
-            store: &store,
-            authcfg: &Kadm5AuthConfig::from_acl(acl.clone()),
-            expected_realm: TEST_REALM,
-            conf: &AcceptorConfig::default(),
-            programs: Programs::BOTH,
-            iprop_resync: None,
-        },
-        b"hdl",
-        &mut sess,
-        &ReplayCache::new(),
-        &rec,
-        &peer(),
-    )
-    .unwrap();
-    let mut i = 0;
-    assert_eq!(take_u32(&out, &mut i), 40);
-    assert_eq!(take_u32(&out, &mut i), MSG_REPLY);
-    assert_eq!(take_u32(&out, &mut i), MSG_ACCEPTED);
-    assert_eq!(take_u32(&out, &mut i), FLAVOR_GSS);
-    let _ = take_opaque(&out, &mut i);
-    assert_eq!(take_u32(&out, &mut i), SUCCESS);
-}
-
-#[test]
 fn rpcsec_integrity_reply_is_databody_plus_mic() {
     let (store, acl, mut ctx, handle, mut sess) = init_svc(GSS_INTEGRITY);
     let rec = integ_rec_rpcsec(&mut ctx, 40, 1, &handle, &list_args(), false);

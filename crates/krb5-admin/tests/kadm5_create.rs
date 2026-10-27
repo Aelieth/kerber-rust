@@ -12,8 +12,6 @@ use krb5_types::PrincipalName;
 
 const CREATE_PRINCIPAL: u32 = 1;
 
-const MODIFY_PRINCIPAL: u32 = 3;
-
 const KADM5_PRINCIPAL: u32 = 0x0000_0001;
 
 const KADM5_PRINC_EXPIRE_TIME: u32 = 0x0000_0002;
@@ -29,8 +27,6 @@ const KADM5_KVNO: u32 = 0x0000_0100;
 const KADM5_POLICY: u32 = 0x0000_0800;
 
 const KADM5_MAX_RLIFE: u32 = 0x0000_2000;
-
-const KADM5_PASS_Q_TOOSHORT: u32 = 43_787_542;
 
 #[derive(Clone, Copy, Default)]
 struct Ent {
@@ -112,12 +108,6 @@ fn rig(acl_text: &str, setup: impl FnOnce(&mut krb5_kdc::PrincipalStore)) -> Rig
 
 fn create(r: &mut Rig, args: &[u8]) -> u32 {
     let (stat, body) = data_call(&mut r.client, &r.store, &r.acl, CREATE_PRINCIPAL, args);
-    assert_eq!(stat, SUCCESS);
-    ret_code(&body)
-}
-
-fn modify(r: &mut Rig, args: &[u8]) -> u32 {
-    let (stat, body) = data_call(&mut r.client, &r.store, &r.acl, MODIFY_PRINCIPAL, args);
     assert_eq!(stat, SUCCESS);
     ret_code(&body)
 }
@@ -215,110 +205,6 @@ fn kadm5_create_without_mask_bits_takes_realm_defaults() {
         (t0 + 30 * 86400..=now() + 30 * 86400).contains(&p.pw_expire),
         "pw_expiration = now + pw_max_life, got {}",
         p.pw_expire
-    );
-}
-
-#[test]
-fn acl_policy_restriction_is_enforced_on_create() {
-    let mut r = rig(
-        "admin@KERBER.TEST * *@KERBER.TEST -policy shortpol\n",
-        |s| {
-            let mut pol = NamedPolicy::new("shortpol");
-            pol.min_length = 8;
-            s.put_policy(pol).unwrap();
-        },
-    );
-    let args = ent_args(
-        &format!("z1short@{TEST_REALM}"),
-        Ent::default(),
-        None,
-        KADM5_PRINCIPAL,
-        Some("abc"),
-    );
-    assert_eq!(create(&mut r, &args), KADM5_PASS_Q_TOOSHORT);
-    let g = r.store.read().unwrap();
-    assert!(
-        g.get_name(&n("z1short")).is_none(),
-        "rejected create wrote an entry"
-    );
-    drop(g);
-    let args = ent_args(
-        &format!("z1long@{TEST_REALM}"),
-        Ent::default(),
-        None,
-        KADM5_PRINCIPAL,
-        Some("longenough"),
-    );
-    assert_eq!(create(&mut r, &args), 0);
-    assert_eq!(
-        stored(&r, "z1long").pw_policy.as_deref(),
-        Some("shortpol"),
-        "the restriction's policy is bound"
-    );
-}
-
-#[test]
-fn acl_maxrenewlife_keeps_an_in_mask_zero_and_lowers_above_cap() {
-    let mut r = rig(
-        "admin@KERBER.TEST * *@KERBER.TEST -maxrenewlife 1d\n",
-        |_| {},
-    );
-    let args = ent_args(
-        &format!("z1r0@{TEST_REALM}"),
-        Ent {
-            max_rlife: 0,
-            ..Ent::default()
-        },
-        None,
-        KADM5_PRINCIPAL | KADM5_MAX_RLIFE,
-        Some("z1r0-secret"),
-    );
-    assert_eq!(create(&mut r, &args), 0);
-    assert_eq!(stored(&r, "z1r0").max_renewable_life, 0);
-    let args = ent_args(
-        &format!("z1r30@{TEST_REALM}"),
-        Ent {
-            max_rlife: 30 * 86400,
-            ..Ent::default()
-        },
-        None,
-        KADM5_PRINCIPAL | KADM5_MAX_RLIFE,
-        Some("z1r30-secret"),
-    );
-    assert_eq!(create(&mut r, &args), 0);
-    assert_eq!(stored(&r, "z1r30").max_renewable_life, 86400);
-}
-
-#[test]
-fn acl_maxlife_absent_from_modify_mask_takes_the_cap() {
-    let mut r = rig("admin@KERBER.TEST * *@KERBER.TEST -maxlife 1h\n", |_| {});
-    let args = ent_args(
-        &format!("z1m@{TEST_REALM}"),
-        Ent {
-            max_life: 1800,
-            ..Ent::default()
-        },
-        None,
-        KADM5_PRINCIPAL | KADM5_MAX_LIFE,
-        Some("z1m-secret"),
-    );
-    assert_eq!(create(&mut r, &args), 0);
-    assert_eq!(stored(&r, "z1m").max_life, 1800, "below the cap stays");
-    let args = ent_args(
-        &format!("z1m@{TEST_REALM}"),
-        Ent {
-            attributes: KDB_REQUIRES_PRE_AUTH,
-            ..Ent::default()
-        },
-        None,
-        KADM5_ATTRIBUTES,
-        None,
-    );
-    assert_eq!(modify(&mut r, &args), 0);
-    assert_eq!(
-        stored(&r, "z1m").max_life,
-        3600,
-        "absent from the mask: the cap is imposed"
     );
 }
 

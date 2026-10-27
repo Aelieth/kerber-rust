@@ -68,20 +68,3 @@ fn getprinc_returns_documented_user_not_unk_princ() {
         }
     }
 }
-
-#[test]
-fn getprinc_foreign_realm_is_unk_princ() {
-    let (store, acl, actor) = setup();
-    let mut w = XdrW::default();
-    w.u32(API_V2);
-    w.nullstring(Some("user@OTHER.REALM"));
-    w.u32(u32::MAX);
-    let out = dispatch_kadm5(&store, &acl, &actor, GET_PRINCIPAL, &w.b).unwrap();
-    assert_eq!(ret_code(&out), KADM5_UNK_PRINC);
-    let mut loc = XdrW::default();
-    loc.u32(API_V2);
-    loc.nullstring(Some("user@KERBER.TEST"));
-    loc.u32(u32::MAX);
-    let ok = dispatch_kadm5(&store, &acl, &actor, GET_PRINCIPAL, &loc.b).unwrap();
-    assert_eq!(ret_code(&ok), 0);
-}

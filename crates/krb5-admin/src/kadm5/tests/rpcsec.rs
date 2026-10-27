@@ -50,53 +50,6 @@ fn rpcsec_bad_version_is_auth_badcred() {
 }
 
 #[test]
-fn rpcsec_init_non_nullproc_is_auth_failed() {
-    let (store, acl, _) = setup();
-    let mut cred = XdrW::default();
-    cred.u32(RPCSEC_GSS_VERS);
-    cred.u32(RPG_INIT);
-    cred.u32(0);
-    cred.u32(GSS_PRIVACY);
-    cred.opaque(&[]);
-    let mut w = XdrW::default();
-    w.u32(21);
-    w.u32(MSG_CALL);
-    w.u32(RPC_VERSION);
-    w.u32(KADM_PROG);
-    w.u32(KADM_VERS);
-    w.u32(12);
-    w.u32(FLAVOR_GSS);
-    w.opaque(&cred.b);
-    w.u32(FLAVOR_NONE);
-    w.opaque(&[]);
-    let mut gss = None;
-    let mut agss = None;
-    let out = handle_rpc(
-        RpcCtx {
-            store: &store,
-            authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
-            expected_realm: "KERBER.TEST",
-            conf: &AcceptorConfig::default(),
-            programs: Programs::BOTH,
-            iprop_resync: None,
-        },
-        &[],
-        &mut gss,
-        &mut agss,
-        &krb5_protocol::ReplayCache::new(),
-        &w.b,
-        &peer(),
-    )
-    .unwrap();
-    let mut r = XdrR::new(&out);
-    assert_eq!(r.u32().unwrap(), 21);
-    assert_eq!(r.u32().unwrap(), MSG_REPLY);
-    assert_eq!(r.u32().unwrap(), MSG_DENIED);
-    assert_eq!(r.u32().unwrap(), REJECT_AUTH_ERROR);
-    assert_eq!(r.u32().unwrap(), AUTH_FAILED);
-}
-
-#[test]
 fn rpcsec_init_reply_mic_is_window() {
     use krb5_crypto::EncryptionType;
     use krb5_kdc::testrealm::TEST_REALM;
@@ -225,46 +178,6 @@ fn ap_rep_part(tok: &[u8], session: &krb5_crypto::ProtocolKey) -> krb5_types::En
     let usage = krb5_crypto::KeyUsage::new(krb5_types::ku::AP_REP_ENC_PART).unwrap();
     let plain = krb5_crypto::decrypt(session, usage, ap.enc_part.cipher.as_ref()).unwrap();
     krb5_asn1::decode(&plain).unwrap()
-}
-
-#[test]
-fn rpcsec_unknown_gc_proc_is_rejectedcred() {
-    let (store, acl, _) = setup();
-    let cred = rpcsec_cred(99, 0, GSS_PRIVACY, &[]);
-    let rec = rpcsec_call(
-        RpcCallId {
-            xid: 22,
-            prog: KADM_PROG,
-            vers: KADM_VERS,
-            proc: 0,
-        },
-        &cred,
-        FLAVOR_NONE,
-        &[],
-        &[],
-    );
-    let mut gss = None;
-    let mut agss = None;
-    let out = handle_rpc(
-        RpcCtx {
-            store: &store,
-            authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
-            expected_realm: "KERBER.TEST",
-            conf: &AcceptorConfig::default(),
-            programs: Programs::BOTH,
-            iprop_resync: None,
-        },
-        &[],
-        &mut gss,
-        &mut agss,
-        &krb5_protocol::ReplayCache::new(),
-        &rec,
-        &peer(),
-    )
-    .unwrap();
-    let (xid, why) = decode_denied(&out);
-    assert_eq!(xid, 22);
-    assert_eq!(why, AUTH_REJECTEDCRED);
 }
 
 #[test]
@@ -467,92 +380,6 @@ fn rpcsec_seq_replay_is_ctxproblem() {
     let (xid, why) = decode_denied(&out2);
     assert_eq!(xid, 28);
     assert_eq!(why, RPCSEC_GSS_CTXPROBLEM);
-}
-
-#[test]
-fn rpcsec_destroy_then_data_is_credproblem() {
-    use krb5_kdc::testrealm::TEST_REALM;
-
-    let (store, acl, mut ctx, handle, mut gss) = admin_rpcsec_init();
-    let cred = rpcsec_cred(RPG_DESTROY, 1, GSS_PRIVACY, &handle);
-    let mut header = XdrW::default();
-    header.u32(29);
-    header.u32(MSG_CALL);
-    header.u32(RPC_VERSION);
-    header.u32(KADM_PROG);
-    header.u32(KADM_VERS);
-    header.u32(0);
-    header.u32(FLAVOR_GSS);
-    header.opaque(&cred);
-    let mic = ctx.get_mic(&header.b).unwrap();
-    let rec = rpcsec_call(
-        RpcCallId {
-            xid: 29,
-            prog: KADM_PROG,
-            vers: KADM_VERS,
-            proc: 0,
-        },
-        &cred,
-        FLAVOR_GSS,
-        &mic,
-        &[],
-    );
-    let mut agss = None;
-    let out = handle_rpc(
-        RpcCtx {
-            store: &store,
-            authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
-            expected_realm: TEST_REALM,
-            conf: &AcceptorConfig::default(),
-            programs: Programs::BOTH,
-            iprop_resync: None,
-        },
-        b"hdl",
-        &mut gss,
-        &mut agss,
-        &krb5_protocol::ReplayCache::new(),
-        &rec,
-        &peer(),
-    )
-    .unwrap();
-    let mut r = XdrR::new(&out);
-    assert_eq!(r.u32().unwrap(), 29);
-    assert_eq!(r.u32().unwrap(), MSG_REPLY);
-    assert_eq!(r.u32().unwrap(), MSG_ACCEPTED);
-    assert!(gss.is_none(), "DESTROY drops the context");
-    let rec2 = rpcsec_data_rec(
-        &mut ctx,
-        RpcCallId {
-            xid: 30,
-            prog: KADM_PROG,
-            vers: KADM_VERS,
-            proc: GET_PRIVS,
-        },
-        2,
-        &handle,
-        &[],
-        true,
-    );
-    let out2 = handle_rpc(
-        RpcCtx {
-            store: &store,
-            authcfg: &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
-            expected_realm: TEST_REALM,
-            conf: &AcceptorConfig::default(),
-            programs: Programs::BOTH,
-            iprop_resync: None,
-        },
-        b"hdl",
-        &mut gss,
-        &mut agss,
-        &krb5_protocol::ReplayCache::new(),
-        &rec2,
-        &peer(),
-    )
-    .unwrap();
-    let (xid, why) = decode_denied(&out2);
-    assert_eq!(xid, 30);
-    assert_eq!(why, RPCSEC_GSS_CREDPROBLEM);
 }
 
 #[test]

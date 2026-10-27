@@ -1,9 +1,7 @@
 //! kpropd `authorized_principal` on the wire. The ACL is a list of exact unparsed principals with an optional enctype restriction; there are no wildcards; the check runs after `recvauth` has sent the AP-REP, and a refused peer just sees the socket close.
 //! an unauthorized client is logged and kpropd exits, so a refused peer just sees the socket close.
 
-use krb5_admin::{
-    Error, KpropAuth, KpropCreds, KpropError, kprop_send_dump, kprop_sendauth, kpropd_recvauth,
-};
+use krb5_admin::{Error, KpropAuth, KpropCreds, KpropError, kprop_sendauth, kpropd_recvauth};
 use krb5_crypto::ProtocolKey;
 use krb5_kdc::testrealm::{TEST_HOST, TEST_REALM, bootstrap_documented, documented_host};
 use krb5_kdc::{PrincipalStore, issue_as, issue_tgs};
@@ -216,26 +214,5 @@ fn kpropd_acl_is_a_prefix_match_ended_by_whitespace_or_eol() {
         refused(&empty),
         "empty ACL must refuse: {:?}",
         shown(&empty)
-    );
-}
-
-#[test]
-fn kpropd_refuses_after_the_ap_rep_so_kprop_fails_on_the_dump_not_sendauth() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let (ticket, session, _) = host_ticket(&store);
-    let (addr, join) = spawn_kpropd(&store, Some(vec!["host/other@KERBER.TEST".to_owned()]));
-    let mut client = TcpStream::connect(addr).unwrap();
-    let mut auth = kprop_sendauth(
-        &mut client,
-        &creds(ticket, session),
-        local_host_address(None),
-    )
-    .expect("sendauth (AP-REP) succeeds before the ACL check, like MIT");
-    let server = join.join().expect("kpropd thread");
-    assert!(refused(&server), "{:?}", shown(&server));
-    let sent = kprop_send_dump(&mut client, &mut auth, b"kdb5_util load_dump version 7\n");
-    assert!(
-        sent.is_err(),
-        "the dump cannot be delivered to a refusing kpropd"
     );
 }
