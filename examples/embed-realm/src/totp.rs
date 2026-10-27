@@ -296,3 +296,60 @@ mod chaos {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const KEY: &[u8] = b"12345678901234567890";
+    const KEY_BASE32: &[u8] = b"GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+
+    #[test]
+    fn appendix_b_sha1_vectors_at_their_low_six_digits() {
+        for (time, want) in [
+            (59, "94287082"),
+            (1_111_111_109, "07081804"),
+            (1_111_111_111, "14050471"),
+            (1_234_567_890, "89005924"),
+            (2_000_000_000, "69279037"),
+            (20_000_000_000, "65353130"),
+        ] {
+            let code = hotp(KEY, time / STEP_SECS).expect("a code");
+            assert_eq!(format!("{code:06}"), want[2..], "time {time}");
+        }
+    }
+
+    #[test]
+    fn appendix_d_hotp_vectors_at_six_digits() {
+        let want = [
+            "755224", "287082", "359152", "969429", "338314", "254676", "287922", "162583",
+            "399871", "520489",
+        ];
+        for (counter, want) in (0u64..).zip(want) {
+            let code = hotp(KEY, counter).expect("a code");
+            assert_eq!(format!("{code:06}"), want, "counter {counter}");
+        }
+    }
+
+    #[test]
+    fn base32_decodes_the_rfc4648_vectors() {
+        assert_eq!(base32_decode(b"MY======"), Some(b"f".to_vec()));
+        assert_eq!(base32_decode(b"MZXQ===="), Some(b"fo".to_vec()));
+        assert_eq!(base32_decode(b"MZXW6==="), Some(b"foo".to_vec()));
+        assert_eq!(base32_decode(b"MZXW6YQ="), Some(b"foob".to_vec()));
+        assert_eq!(base32_decode(b"MZXW6YTB"), Some(b"fooba".to_vec()));
+        assert_eq!(base32_decode(b"MZXW6YTBOI======"), Some(b"foobar".to_vec()));
+        assert_eq!(base32_decode(b"mzxw6ytboi"), Some(b"foobar".to_vec()));
+        assert_eq!(base32_decode(KEY_BASE32), Some(KEY.to_vec()));
+    }
+
+    #[test]
+    fn a_reused_code_is_refused_for_its_user_and_step() {
+        let v = TotpVerifier::new(Box::new(FileSeeds::new(None)), None, false);
+        let now = 1_111_111_115;
+        let code = format!("{:06}", hotp(KEY, now / STEP_SECS).expect("a code"));
+        assert!(v.accept("alice", KEY, code.as_bytes(), now));
+        assert!(!v.accept("alice", KEY, code.as_bytes(), now + 1));
+        assert!(v.accept("bob", KEY, code.as_bytes(), now + 1));
+    }
+}
