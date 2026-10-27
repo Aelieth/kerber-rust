@@ -12,8 +12,9 @@
 # answers with a client referral to $REALM. Then the caches and keytabs cross: MIT's klist and kvno on ours,
 # ours on MIT's, MIT's cache entries kept through our rewrite. Then the request shapes of FAST under -T (armored at
 # once, and after an upgrade from an armor cache without fast_avail), SPAKE, the preauth cascade, the enctypes
-# nothing configures, kvno -U -P and no ticket_lifetime; kpasswd refused by a policy; MIT's krb5_cc_remove_cred on a
-# cache ours wrote. Scratch principals and the scratch policy only, removed at the end.
+# nothing configures, kvno -U -P, no ticket_lifetime and canonicalize = true; each flow's exit status; kpasswd
+# refused by a policy; MIT's krb5_cc_remove_cred on a cache ours wrote. Scratch principals and the scratch policy
+# only, removed at the end.
 # MIT 1.22.2: clients/kinit/kinit.c (k5_kinit :747-793), clients/klist/klist.c (show_credential, list_ccaches
 # :376-410, the keytab listing :300-345), clients/kvno/kvno.c (:165, :376-381), clients/kdestroy/kdestroy.c
 # (:207-219), kadmin/ktutil/ktutil.c (:217-269); lib/krb5/os/prompter.c (the prompt on stdout, the reply from
@@ -95,10 +96,11 @@ both() {
         keep "$step" "$k"
     done
 }
-# shape <flow> <secret|-> <cmd>: <cmd> through the proxy for each program set; its requests kept in
+# shape <flow> <secret|-> <cmd> [rc0]: <cmd> through the proxy for each program set; its requests kept in
 # ~/ct/px/<flow>.<k>.jsonl. MIT's request shapes are an observation (compared across the legs); ours = MIT's.
+# With rc0 each set's command must exit 0; without it ours must exit as MIT's did.
 shape() {
-    local f=$1 sec=$2 cmd=$3 k
+    local f=$1 sec=$2 cmd=$3 want=${4:-} k mrc=
     for k in mit $OURS; do
         run client2 ": > \$HOME/ct/px/live.jsonl"
         if [ "$sec" = - ]; then
@@ -106,6 +108,8 @@ shape() {
         else
             runin client2 "the password ($sec)" "$(P "$k") ${cmd//_K_/$k}" < <(once "$sec")
         fi
+        [ "$k" = mit ] && mrc=$LAST_RC
+        if [ "$want" = rc0 ]; then checklast "CT.px.$f.rc.$k" rc; else checklast "CT.px.$f.rc.$k" "rc=$mrc"; fi
         check "CT.px.$f.$k" '^requests: [1-9][0-9]*$' run client2 "cp \$HOME/ct/px/live.jsonl \$HOME/ct/px/$f.$k.jsonl && echo \"requests: \$(grep -c '\"kind\": \"req\"' \$HOME/ct/px/$f.$k.jsonl)\""
     done
     observe "obs.CT.px.$f" 'shape: .*' run client2 "printf 'shape: %s\\n' \"\$(jq -c 'select(.kind == \"req\") | [.msg_type, .kdc_options, .padata, .etypes, .from, .till, .rtime, .addl_tickets]' \$HOME/ct/px/$f.mit.jsonl | paste -sd' ' -)\""
@@ -215,13 +219,13 @@ section "CT.shape: the requests themselves, through the proxy: AS plain, preauth
 shape plain "$ALICE" "\$B/kinit -c FILE:\$HOME/ct/_K_.px.cc ctuser@$REALM"
 shape preauth "$ALICE" "\$B/kinit -c FILE:\$HOME/ct/_K_.pre.cc ctpre@$REALM"
 shape keytab - "\$B/kinit -k -t \$HOME/ct/svc.keytab -c FILE:\$HOME/ct/_K_.svc.cc $SVC@$REALM"
-shape kvno_s4u - "\$B/kvno -c FILE:\$HOME/ct/_K_.svc.cc -U ctuser $SVC@$REALM; true"
+shape kvno_s4u - "\$B/kvno -c FILE:\$HOME/ct/_K_.svc.cc -U ctuser $SVC@$REALM" rc0
 shape kvno_plain - "\$B/kvno -c FILE:\$HOME/ct/_K_.px.cc $WEB@$REALM"
 shape renew - "\$B/kinit -R -c FILE:\$HOME/ct/_K_.px.cc"
-shape kvno_u2u - "\$B/kvno -c FILE:\$HOME/ct/_K_.px.cc --u2u FILE:\$HOME/ct/_K_.svc.cc $SVC@$REALM"
-shape canonicalize "$ALICE" "\$B/kinit -C -c FILE:\$HOME/ct/_K_.c.cc ctuser@$REALM"
-shape postdate "$ALICE" "\$B/kinit -s 1h -c FILE:\$HOME/ct/_K_.v.cc ctuser@$REALM"
-shape validate - "\$B/kinit -v -c FILE:\$HOME/ct/_K_.v.cc; true"
+shape kvno_u2u - "\$B/kvno -c FILE:\$HOME/ct/_K_.px.cc --u2u FILE:\$HOME/ct/_K_.svc.cc $SVC@$REALM" rc0
+shape canonicalize "$ALICE" "\$B/kinit -C -c FILE:\$HOME/ct/_K_.c.cc ctuser@$REALM" rc0
+shape postdate "$ALICE" "\$B/kinit -s 1h -c FILE:\$HOME/ct/_K_.v.cc ctuser@$REALM" rc0
+shape validate - "\$B/kinit -v -c FILE:\$HOME/ct/_K_.v.cc"
 check CT.px.renew.opt '^renew: set$' run client2 "jq -r 'select(.kind == \"req\" and .msg_type == 12) | .kdc_options | if any(.[]; . == \"renew\") then \"renew: set\" else \"renew: not set\" end' \$HOME/ct/px/renew.mit.jsonl"
 check CT.px.validate.opt '^validate: set$' run client2 "jq -r 'select(.kind == \"req\" and .msg_type == 12) | .kdc_options | if any(.[]; . == \"validate\") then \"validate: set\" else \"validate: not set\" end' \$HOME/ct/px/validate.mit.jsonl"
 check CT.px.plain.life '^asked: rtime - till = 518400 s$' run client2 "jq -r 'select(.kind == \"req\") | \"asked: rtime - till = \\(.rtime_unix - .till_unix) s\"' \$HOME/ct/px/plain.mit.jsonl | head -n 1"
@@ -234,6 +238,7 @@ section "CT.shape2: FAST under -T and its upgrade, SPAKE preferred, the preauth 
 # Each conf is px.conf with one change, and a row shows the change took.
 check CT.conf.spake '^preferred_preauth_types = 151$' run client2 "sed '0,/^\\[libdefaults\\]/s//[libdefaults]\\n    preferred_preauth_types = 151/' ~/ct/px.conf > ~/ct/spake.conf && grep -E '^[[:space:]]*preferred_preauth_types' ~/ct/spake.conf | sed 's/^[[:space:]]*//'"
 check CT.conf.etypes '^enctype lines left: 0$' run client2 "grep -v -E '^[[:space:]]*(permitted_enctypes|default_tkt_enctypes|default_tgs_enctypes)[[:space:]]*=' ~/ct/px.conf > ~/ct/noetype.conf && [ -s ~/ct/noetype.conf ] && echo \"enctype lines left: \$(grep -c -E 'enctypes[[:space:]]*=' ~/ct/noetype.conf)\""
+check CT.conf.canon '^canonicalize = true$' run client2 "sed '0,/^\\[libdefaults\\]/s//[libdefaults]\\n    canonicalize = true/' ~/ct/px.conf > ~/ct/canon.conf && grep -E '^[[:space:]]*canonicalize' ~/ct/canon.conf | sed 's/^[[:space:]]*//'"
 check CT.conf.z71 '^ticket_lifetime lines left: 0$' run client2 "grep -v -E '^[[:space:]]*ticket_lifetime[[:space:]]*=' ~/ct/px.conf > ~/ct/z71.conf && [ -s ~/ct/z71.conf ] && echo \"ticket_lifetime lines left: \$(grep -c -E 'ticket_lifetime' ~/ct/z71.conf)\""
 for k in mit $OURS; do
     check "CT.armor.$k" "^Default principal: $S@$R\$" run client2 "$(E "$k") \$B/kinit -k -t \$HOME/ct/svc.keytab -c FILE:\$HOME/ct/$k.armor.cc $SVC@$REALM && \$B/kinit -k -t \$HOME/ct/svc.keytab -c FILE:\$HOME/ct/$k.s4up.cc $SVC@$REALM && \$B/klist -c FILE:\$HOME/ct/$k.armor.cc"
@@ -245,11 +250,12 @@ for k in mit $OURS; do
     check "CT.armorx.$k" '^fast_avail: 1 then 0$' run client2 "cp \$HOME/ct/$k.armor.cc \$HOME/ct/$k.armorx.cc && b=\$(LC_ALL=C /usr/bin/klist -C -c FILE:\$HOME/ct/$k.armorx.cc | grep -c '^config: fast_avail') && python3 \$HOME/ct/cc-remove.py FILE:\$HOME/ct/$k.armorx.cc 'krb5_ccache_conf_data/fast_avail/krbtgt\\/$REALM\\@$REALM@X-CACHECONF:' > /dev/null && echo \"fast_avail: \$b then \$(LC_ALL=C /usr/bin/klist -C -c FILE:\$HOME/ct/$k.armorx.cc | grep -c '^config: fast_avail')\""
 done
 shape fast_upgrade "$ALICE" "\$B/kinit -T FILE:\$HOME/ct/_K_.armorx.cc -c FILE:\$HOME/ct/_K_.fu.cc ctuser@$REALM"
-shape spake "$ALICE" "KRB5_CONFIG=\$HOME/ct/spake.conf \$B/kinit -c FILE:\$HOME/ct/_K_.spake.cc ctpre@$REALM"
-# MIT's DB2 back end holds no delegation target, so its KDC refuses the proxy step: the request is graded, not the answer.
-shape kvno_s4u_proxy - "\$B/kvno -c FILE:\$HOME/ct/_K_.s4up.cc -U ctuser -P $SVC@$REALM; true"
-shape z71 "$ALICE" "KRB5_CONFIG=\$HOME/ct/z71.conf \$B/kinit -c FILE:\$HOME/ct/_K_.z71.cc ctuser@$REALM"
-shape z82 "$ALICE" "KRB5_CONFIG=\$HOME/ct/z71.conf \$B/kinit -r 12h -c FILE:\$HOME/ct/_K_.z82.cc ctuser@$REALM"
+shape spake "$ALICE" "KRB5_CONFIG=\$HOME/ct/spake.conf \$B/kinit -c FILE:\$HOME/ct/_K_.spake.cc ctpre@$REALM" rc0
+# Neither KDC holds a delegation target, so the proxy step is refused: ours must fail as MIT's kvno does.
+shape kvno_s4u_proxy - "\$B/kvno -c FILE:\$HOME/ct/_K_.s4up.cc -U ctuser -P $SVC@$REALM"
+shape z71 "$ALICE" "KRB5_CONFIG=\$HOME/ct/z71.conf \$B/kinit -c FILE:\$HOME/ct/_K_.z71.cc ctuser@$REALM" rc0
+shape z82 "$ALICE" "KRB5_CONFIG=\$HOME/ct/z71.conf \$B/kinit -r 12h -c FILE:\$HOME/ct/_K_.z82.cc ctuser@$REALM" rc0
+shape canonconf "$ALICE" "KRB5_CONFIG=\$HOME/ct/canon.conf \$B/kinit -c FILE:\$HOME/ct/_K_.canon.cc ctuser@$REALM" rc0
 for k in mit $OURS; do
     run client2 ": > \$HOME/ct/px/live.jsonl"
     runin client2 "ctuser's password ($ALICE)" "$(P "$k") KRB5_CONFIG=\$HOME/ct/noetype.conf \$B/kinit -c FILE:\$HOME/ct/$k.et.cc ctuser@$REALM" < <(once "$ALICE")
@@ -275,11 +281,13 @@ for k in mit $OURS; do
     checklast "CT.px.kvno_s4u_proxy.tgs.$k" '^tgs: \[1,136,130,129\] \[1,136,167\]$'
     J z82 "$k" 10 'if .[0].rtime_unix != null and .[0].rtime_unix == .[0].till_unix then "rtime: till" else "rtime: \(.[0].rtime_unix) till \(.[0].till_unix)" end'
     checklast "CT.px.z82.rtime.$k" '^rtime: till$'
+    J canonconf "$k" 10 '"canonicalize: \(.[0].kdc_options | any(. == "canonicalize"))"'
+    checklast "CT.px.canonconf.opt.$k" '^canonicalize: true$'
     check "CT.px.z71.till.$k" '^till: now \+ 24 h$' run client2 "n=\$(date +%s); t=\$(jq -s '[.[] | select(.kind == \"req\" and .msg_type == 10)][0].till_unix // empty' \$HOME/ct/px/z71.$k.jsonl); d=\$((\${t:-0} - n - 86400)); if [ -n \"\$t\" ] && [ \"\${d#-}\" -le 300 ]; then echo 'till: now + 24 h'; else echo \"till: \${t:-none}, now \$n\"; fi"
 done
-# Nothing configured: MIT's list is Fedora's build's (recorded); ours is its documented default (docs/mit-deviations.md).
+# Nothing configured: MIT's list is Fedora's build's (no DES3); ours is its documented default (docs/mit-deviations.md).
 J etypes mit 10 '"etypes: \(.[0].etypes | tojson)"'
-observelast obs.CT.px.etypes.mit 'etypes: .*'
+checklast CT.px.etypes.mit '^etypes: \[18,17,20,19,23,25,26\]$'
 if [ -n "$OURS" ]; then
     J etypes ours 10 '"etypes: \(.[0].etypes | tojson)"'
     checklast CT.px.etypes.ours '^etypes: \[18,17,20,19\]$'
@@ -293,11 +301,11 @@ done
 [ -n "$OURS" ] && same CT.chpw
 
 if [ -n "$OURS" ]; then
-    section "CT.ccrm: MIT's krb5_cc_remove_cred (lib/cc-remove.py, client2's libkrb5) on a cache ours wrote: the service ticket goes, the TGT and the config entries stay, in both klists (cc_file.c fcc_remove_cred)"
+    section "CT.ccrm: MIT's krb5_cc_remove_cred (lib/cc-remove.py, client2's libkrb5) on a cache ours wrote: the service ticket goes, the default principal, the TGT and the config entries stay, in both klists (cc_file.c fcc_remove_cred)"
     check CT.ccrm.make "^$W@$R: kvno = [0-9]+\$" runin client2 "ctuser's password ($ALICE)" "$(E ours) \$B/kinit -c FILE:\$HOME/ct/rm.cc ctuser@$REALM > /dev/null && \$B/kvno -c FILE:\$HOME/ct/rm.cc $WEB@$REALM && LC_ALL=C /usr/bin/klist -C -c FILE:\$HOME/ct/rm.cc | grep -E '^config: ' > \$HOME/ct/rm.config.before" < <(once "$ALICE")
     check CT.ccrm.remove "^removed: $W@$R\$" run client2 "python3 \$HOME/ct/cc-remove.py FILE:\$HOME/ct/rm.cc $WEB@$REALM"
     for k in mit ours; do
-        check "CT.ccrm.$k" "^tickets: krbtgt/$R@$R, no $W@$R\$" run client2 "$(E "$k") l=\$(\$B/klist -c FILE:\$HOME/ct/rm.cc) && echo \"tickets: \$(echo \"\$l\" | grep -o 'krbtgt/$REALM@$REALM' | head -n 1), \$(echo \"\$l\" | grep -q '$WEB@$REALM' && echo has || echo no) $WEB@$REALM\""
+        check "CT.ccrm.$k" "^principal ctuser@$R; tickets: krbtgt/$R@$R, no $W@$R\$" run client2 "$(E "$k") l=\$(\$B/klist -c FILE:\$HOME/ct/rm.cc) && echo \"principal \$(echo \"\$l\" | sed -n 's/^Default principal: //p'); tickets: \$(echo \"\$l\" | grep -o 'krbtgt/$REALM@$REALM' | head -n 1), \$(echo \"\$l\" | grep -q '$WEB@$REALM' && echo has || echo no) $WEB@$REALM\""
     done
     check CT.ccrm.config '^config entries kept: [0-9]+$' run client2 "LC_ALL=C /usr/bin/klist -C -c FILE:\$HOME/ct/rm.cc | grep -E '^config: ' | diff -q - \$HOME/ct/rm.config.before > /dev/null && echo \"config entries kept: \$(wc -l < \$HOME/ct/rm.config.before)\""
 fi
@@ -353,13 +361,22 @@ if [ -n "$OURS" ]; then
     check CT.x.mitkdestroy.ours rc=1 run client2 "$(E ours) \$B/klist -s -c FILE:\$HOME/ct/ours.cc"
 fi
 
-section "CT.dir: a DIR: collection: two principals, klist -l, kswitch -p and -c, kdestroy -A; a missing DIR: is made on resolve, 0700 (MIT's verify_dir)"
+section "CT.dir: a DIR: collection: two principals, klist -l, kswitch -p and -c, kdestroy -A; in the rust leg one collection crossed between the program sets; a missing DIR: is made on resolve, 0700, primary tkt (MIT's verify_dir)"
 both CT.dir.two '^Principal name                 Cache name$' "$ALICE" "export KRB5CCNAME=DIR:\$HOME/ct/_K_.dir && mkdir -m 0700 \$HOME/ct/_K_.dir && \$B/kinit ctuser@$REALM > /dev/null && \$B/kinit -k -t \$HOME/ct/svc.keytab $SVC@$REALM && \$B/klist -l"
 both CT.dir.primary "^Default principal: $S@$R\$" - "export KRB5CCNAME=DIR:\$HOME/ct/_K_.dir && \$B/klist"
 both CT.dir.switch-p "^Default principal: ctuser@$R\$" - "export KRB5CCNAME=DIR:\$HOME/ct/_K_.dir && \$B/kswitch -p ctuser@$REALM && \$B/klist"
 both CT.dir.switch-c "^Default principal: $S@$R\$" - "export KRB5CCNAME=DIR:\$HOME/ct/_K_.dir && f=\$(grep -l -a ctsvc \$HOME/ct/_K_.dir/tkt*) && \$B/kswitch -c DIR::\$f && \$B/klist"
 both CT.dir.destroy-a '^left: 0$' - "export KRB5CCNAME=DIR:\$HOME/ct/_K_.dir && \$B/kdestroy -A && echo \"left: \$(ls \$HOME/ct/_K_.dir | grep -c '^tkt')\""
-both CT.dir.missing '^rc=1, made 700$' - "\$B/klist -c DIR:\$HOME/ct/_K_.nodir > /dev/null 2>&1; echo \"rc=\$?, \$(test -e \$HOME/ct/_K_.nodir && echo made \$(stat -c %a \$HOME/ct/_K_.nodir) || echo absent)\""
+if [ -n "$OURS" ]; then
+    # One collection both program sets use: MIT's kinit and kswitch -p read by our klist, our kswitch -c read by MIT's.
+    check CT.dir.x.mitkinit.mit "^Default principal: $S@$R\$" runin client2 "ctuser's password ($ALICE)" "$(E mit) export KRB5CCNAME=DIR:\$HOME/ct/x.dir && mkdir -m 0700 \$HOME/ct/x.dir && \$B/kinit ctuser@$REALM > /dev/null && \$B/kinit -k -t \$HOME/ct/svc.keytab $SVC@$REALM && \$B/klist" < <(once "$ALICE")
+    check CT.dir.x.mitkinit.ours "^Default principal: $S@$R\$" run client2 "$(E ours) \$B/klist -c DIR:\$HOME/ct/x.dir"
+    check CT.dir.x.mitswitch.mit "^Default principal: ctuser@$R\$" run client2 "$(E mit) export KRB5CCNAME=DIR:\$HOME/ct/x.dir && \$B/kswitch -p ctuser@$REALM && \$B/klist"
+    check CT.dir.x.mitswitch.ours "^Default principal: ctuser@$R\$" run client2 "$(E ours) \$B/klist -c DIR:\$HOME/ct/x.dir"
+    check CT.dir.x.ourswitch.ours "^Default principal: $S@$R\$" run client2 "$(E ours) export KRB5CCNAME=DIR:\$HOME/ct/x.dir && f=\$(grep -l -a ctsvc \$HOME/ct/x.dir/tkt*) && \$B/kswitch -c DIR::\$f && \$B/klist"
+    check CT.dir.x.ourswitch.mit "^Default principal: $S@$R\$" run client2 "$(E mit) \$B/klist -c DIR:\$HOME/ct/x.dir"
+fi
+both CT.dir.missing '^rc=1, made 700, primary tkt$' - "\$B/klist -c DIR:\$HOME/ct/_K_.nodir > /dev/null 2>&1; echo \"rc=\$?, \$(test -e \$HOME/ct/_K_.nodir && echo made \$(stat -c %a \$HOME/ct/_K_.nodir), primary \$(cat \$HOME/ct/_K_.nodir/primary 2> /dev/null) || echo absent)\""
 
 section "CT.ktutil: rkt and list -e; an unknown enctype; a v1 keytab (kvno past 255) read; wkt keeps a v1 file v1 and makes a new one v2, the records MIT's; addent -password on a tty (lib/ptydrive.py), the keytab MIT's kinit -k uses; a keytab with kvnos 2 and 3"
 both CT.kt.list "^   1    2 +$S@$R \\(aes256-cts-hmac-sha1-96\\) *\$" - "printf 'rkt %s\\nlist -e\\nquit\\n' \$HOME/ct/svc.keytab | \$B/ktutil 2>&1"

@@ -126,6 +126,7 @@ any other `###` heading.
 - **field.** Weekly ticket-flags after kdb-writes covers expiry, flags, renew, postdate, policy and aes-sha2. Those gates are retired.
 - **field.** Weekly client-tools: our kinit, klist, kvno, kdestroy, ktutil and kswitch beside MIT's on client2, with request shapes and crossed caches and keytabs.
 - **field.** client-tools adds FAST, SPAKE, S4U2Proxy, lifetime, enctype, kpasswd and ccache-removal rows; pkinit compares PKINIT and anonymous requests.
+- **field.** client-tools grades each request flow's exit status, crosses one DIR collection between both program sets, and asks with `canonicalize = true`.
 - **field.** `ad-trust` (`run.sh ad-trust`, recorded DC) does an AD ssh login, KERBER.TEST users at SMB and LDAP, the DC's SPNEGO Apache, then undoes those changes.
 - **kdc.** The listener test separates a TCP socket from a UDP socket on one port.
 - **gss.** The nightly gate checks both acceptors' host-ticket lifetimes agree within 60 s.
