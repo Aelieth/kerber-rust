@@ -10,120 +10,20 @@ use krb5_kdc::testrealm::{
     bootstrap_documented, documented_admin_id, documented_host,
 };
 use krb5_kdc::{
-    Acl, Error, KDB_DISALLOW_ALL_TIX, PacTicket, PrincipalStore, decrypt_ticket_part,
-    pac_from_ticket_part, sign_reply_pac, ticket_checksum_der, wrap_win2k_pac,
+    Acl, Error, KDB_DISALLOW_ALL_TIX, PrincipalStore, decrypt_ticket_part, pac_from_ticket_part,
 };
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
 use krb5_protocol::{pa_for_user, pa_s4u_x509_user};
 use krb5_testkit::{
-    TgsReqBuilder, aes_key, attach_pac, expect_status, foreign, host_tgt, issue_tgt_password,
-    pref_etypes, reseal_incoming, reseal_mut, reseal_tgt, s4u_self, s4u_tgs,
+    TgsReqBuilder, aes_key, attach_pac, expect_status, host_tgt, issue_tgt_password, pref_etypes,
+    reseal_incoming, reseal_mut, s4u_self, s4u_tgs,
 };
 use krb5_types::pac::{
     PAC_CLIENT_INFO, PAC_LOGON_INFO, Pac, PacBuffer, PacIdentity, RpcSid, client_info_buffer,
     parse_kerb_validation_info,
 };
-use krb5_types::{EncTicketPart, KdcOptions, PaData, PrincipalName, err, flag_bit, ku, pa};
-
-fn attach_client_info_pac(store: &PrincipalStore, part: &mut EncTicketPart, info_name: &str) {
-    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
-    let stub = Pac::built(
-        0,
-        vec![PacBuffer::new(
-            PAC_CLIENT_INFO,
-            client_info_buffer(part.authtime.unix_seconds(), info_name),
-        )],
-    )
-    .to_bytes();
-    part.authorization_data = Some(wrap_win2k_pac(&[0]).unwrap());
-    let der = ticket_checksum_der(part).unwrap();
-    let ident = PacIdentity {
-        sam: part.cname.components_joined(),
-        realm: String::new(),
-        domain_sid: RpcSid::nt_domain(1, 2, 3),
-        rid: 1,
-    };
-    let pac = sign_reply_pac(
-        &part.cname,
-        part.authtime.unix_seconds(),
-        &PacTicket {
-            server: &krbtgt.key,
-            kdc: &krbtgt.key,
-            enc_tkt_der: &der,
-            is_service_tkt: false,
-        },
-        &ident,
-        None,
-        Some(&stub),
-    )
-    .unwrap();
-    part.authorization_data = Some(wrap_win2k_pac(&pac).unwrap());
-}
-
-#[test]
-// oracle: differential-gate.sh s4u2self-no-pac
-fn s4u2self_no_pac_is_tgt_revoked() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let tgt = host_tgt(&store, 7100);
-    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
-    let mut part = decrypt_ticket_part(&krbtgt.key, &tgt.rep.0.ticket).unwrap();
-    part.authorization_data = None;
-    let tkt = reseal_tgt(&store, &tgt, &part);
-    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
-    let pa = pa_for_user(&tgt.session_key, admin, TEST_REALM).unwrap();
-    let host = documented_host();
-    let req = TgsReqBuilder::new(
-        tkt,
-        &tgt.session_key,
-        TEST_REALM,
-        &host,
-        host.clone(),
-        TEST_REALM,
-        7101,
-    )
-    .options(KdcOptions::forwardable())
-    .additional_tickets(None)
-    .padata(vec![pa])
-    .etypes(pref_etypes())
-    .build()
-    .unwrap();
-    let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
-    assert_eq!(c, err::TGT_REVOKED);
-    assert_eq!(text.as_deref(), Some("S4U2SELF_NO_PAC"));
-}
-
-#[test]
-// oracle: differential-gate.sh s4u2self-pac-client-mismatch
-fn s4u2self_local_pac_mismatch_is_badoption() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let tgt = host_tgt(&store, 7102);
-    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
-    let mut part = decrypt_ticket_part(&krbtgt.key, &tgt.rep.0.ticket).unwrap();
-    attach_client_info_pac(&store, &mut part, TEST_ADMIN);
-    let tkt = reseal_tgt(&store, &tgt, &part);
-    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
-    let pa = pa_for_user(&tgt.session_key, admin, TEST_REALM).unwrap();
-    let host = documented_host();
-    let req = TgsReqBuilder::new(
-        tkt,
-        &tgt.session_key,
-        TEST_REALM,
-        &host,
-        host.clone(),
-        TEST_REALM,
-        7103,
-    )
-    .options(KdcOptions::forwardable())
-    .additional_tickets(None)
-    .padata(vec![pa])
-    .etypes(pref_etypes())
-    .build()
-    .unwrap();
-    let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
-    assert_eq!(c, err::BADOPTION);
-    assert_eq!(text.as_deref(), Some("S4U2SELF_LOCAL_PAC_CLIENT"));
-}
+use krb5_types::{EncTicketPart, KdcOptions, PaData, PrincipalName, err, ku, pa};
 
 #[test]
 // oracle: differential-gate.sh pa-s4u-x509-user-nonce
@@ -155,19 +55,6 @@ fn s4u2self_x509_bad_checksum_is_modified() {
         expect_status(krb5_kdc::issue_tgs(&store, &s4u_self(&tgt, vec![pa], 7113)).unwrap_err());
     assert_eq!(c, err::MODIFIED);
     assert_eq!(text.as_deref(), Some("INVALID_S4U2SELF_CHECKSUM"));
-}
-
-#[test]
-// oracle: differential-gate.sh pa-s4u-x509-user-empty
-fn s4u2self_x509_empty_is_invalid_request() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let tgt = host_tgt(&store, 7120);
-    let empty = PrincipalName::new(PrincipalName::NT_UNKNOWN, std::iter::empty::<&str>());
-    let pa = pa_s4u_x509_user(&tgt.session_key, empty, TEST_REALM, 7121).unwrap();
-    let (c, text) =
-        expect_status(krb5_kdc::issue_tgs(&store, &s4u_self(&tgt, vec![pa], 7121)).unwrap_err());
-    assert_eq!(c, err::C_PRINCIPAL_UNKNOWN);
-    assert_eq!(text.as_deref(), Some("INVALID_S4U2SELF_REQUEST"));
 }
 
 #[test]
@@ -219,145 +106,7 @@ fn s4u2self_x509_issues_and_replies_130() {
     );
 }
 
-#[test]
-fn s4u2self_pw_expired_user_still_issues() {
-    let (mut store, _) = bootstrap_documented().unwrap();
-    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
-    store
-        .apply_admin_fields(
-            &admin,
-            krb5_kdc::AdminFields {
-                attributes: None,
-                max_life: None,
-                expiration: None,
-                pw_expire: Some(1),
-                policy: None,
-                clear_policy: false,
-                max_renewable_life: None,
-            },
-        )
-        .unwrap();
-    let tgt = host_tgt(&store, 7140);
-    let pa = pa_for_user(&tgt.session_key, admin, TEST_REALM).unwrap();
-    krb5_kdc::issue_tgs(&store, &s4u_self(&tgt, vec![pa], 7141)).unwrap();
-}
-
-#[test]
-// oracle: differential-gate.sh pa-for-user-undecodable
-fn s4u2self_for_user_undecodable_is_generic() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let tgt = host_tgt(&store, 7160);
-    let pa = PaData {
-        padata_type: pa::FOR_USER,
-        padata_value: b"\x30\x03\x01\x01".to_vec().into(),
-    };
-    let (c, text) =
-        expect_status(krb5_kdc::issue_tgs(&store, &s4u_self(&tgt, vec![pa], 7161)).unwrap_err());
-    assert_eq!(c, err::GENERIC);
-    assert_eq!(text.as_deref(), Some("DECODE_PA_FOR_USER"));
-}
-
 const FOREIGN: &str = "OTHER.TEST";
-
-#[test]
-fn s4u2self_keeps_f_without_clearing_targets() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let tgt = host_tgt(&store, 17000);
-    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
-    let pa = pa_for_user(&tgt.session_key, admin, TEST_REALM).unwrap();
-    let out = krb5_kdc::issue_tgs(
-        &store,
-        &s4u_tgs(
-            &tgt,
-            documented_host(),
-            vec![pa],
-            17001,
-            KdcOptions::forwardable(),
-        ),
-    )
-    .unwrap();
-    let hostk = store
-        .get_name(&documented_host())
-        .unwrap()
-        .best_key()
-        .unwrap();
-    let part: EncTicketPart = decrypt_ticket_part(&hostk.key, &out.rep.0.ticket).unwrap();
-    assert!(part.flags.forwardable());
-}
-
-#[test]
-fn explicit_cross_tgs_is_server_mismatch() {
-    let (mut store, acl) = bootstrap_documented().unwrap();
-    store
-        .create_interrealm_key(&acl, &documented_admin_id(), FOREIGN, aes_key(0x11), None)
-        .unwrap();
-    let tgt = host_tgt(&store, 17010);
-    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
-    let pa = pa_for_user(&tgt.session_key, admin, TEST_REALM).unwrap();
-    let other = foreign();
-    let (c, text) = expect_status(
-        krb5_kdc::issue_tgs(
-            &store,
-            &s4u_tgs(&tgt, other, vec![pa], 17011, KdcOptions::forwardable()),
-        )
-        .unwrap_err(),
-    );
-    assert_eq!(c, err::BADMATCH);
-    assert_eq!(
-        text.as_deref(),
-        Some("INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH")
-    );
-}
-
-#[test]
-// oracle: differential-gate.sh s4u2self-renew-options
-fn s4u2self_u2u_is_invalid_options() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let tgt = host_tgt(&store, 17020);
-    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
-    let pa = pa_for_user(&tgt.session_key, admin, TEST_REALM).unwrap();
-    let (c, text) = expect_status(
-        krb5_kdc::issue_tgs(
-            &store,
-            &s4u_tgs(
-                &tgt,
-                documented_host(),
-                vec![pa],
-                17021,
-                KdcOptions::forwardable().with_bit(flag_bit::ENC_TKT_IN_SKEY, true),
-            ),
-        )
-        .unwrap_err(),
-    );
-    assert_eq!(c, err::BADOPTION);
-    assert_eq!(text.as_deref(), Some("INVALID S4U2SELF OPTIONS"));
-}
-
-#[test]
-// oracle: differential-gate.sh pa-s4u-x509-user-truncated
-fn truncated_x509_is_decode() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let tgt = host_tgt(&store, 17030);
-    let pa = PaData {
-        padata_type: pa::FOR_X509_USER,
-        padata_value: b"\x30\x03\x01\x01".to_vec().into(),
-    };
-    let (c, text) = expect_status(
-        krb5_kdc::issue_tgs(
-            &store,
-            &s4u_tgs(
-                &tgt,
-                documented_host(),
-                vec![pa],
-                17031,
-                KdcOptions::forwardable(),
-            ),
-        )
-        .unwrap_err(),
-    );
-    assert_eq!(c, err::GENERIC);
-    assert_eq!(text.as_deref(), Some("DECODE_PA_S4U_X509_USER"));
-}
 
 #[test]
 fn foreign_pac_client() {
@@ -597,35 +346,6 @@ fn s4u2self_cross_tgt_local_user_local_server_is_not_cross_realm() {
     assert_eq!(text.as_deref(), Some("NOT_CROSS_REALM_REQUEST"));
 }
 
-#[test]
-fn s4u2self_cross_tgt_foreign_client_named_like_local_server_is_badmatch() {
-    let (_a, _b, c, _ir, _host_c, bc) = three_realm();
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
-    let pa = pa_for_user(&bc.session_key, admin, "A.TEST").expect("PA-FOR-USER");
-    let req = TgsReqBuilder::new(
-        bc.rep.0.ticket.clone(),
-        &bc.session_key,
-        "A.TEST",
-        &user,
-        user.clone(),
-        "C.TEST",
-        986,
-    )
-    .options(KdcOptions::forwardable())
-    .additional_tickets(None)
-    .padata(vec![pa])
-    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
-    .build()
-    .expect("s4u");
-    let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&c, &req));
-    assert_eq!(code, err::BADMATCH);
-    assert_eq!(
-        text.as_deref(),
-        Some("INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH")
-    );
-}
-
 /// The header PAC the user's realm puts on its referral back: LOGON_INFO for the user from that
 /// realm's domain, and CLIENT_INFO naming the user with its realm.
 fn attach_foreign_logon_pac(
@@ -849,41 +569,6 @@ fn s4u_code(e: Error) -> i32 {
     match e {
         Error::Protocol { code, .. } => code,
         other => panic!("expected protocol error, got {other:?}"),
-    }
-}
-
-#[test]
-fn s4u2self_user_tgt_host_sname_is_badmatch() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
-    let tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 640);
-    let pa = pa_for_user(&tgt.session_key, admin, TEST_REALM).expect("PA-FOR-USER");
-    let tgs = TgsReqBuilder::new(
-        tgt.rep.0.ticket.clone(),
-        &tgt.session_key,
-        TEST_REALM,
-        &user,
-        documented_host(),
-        TEST_REALM,
-        641,
-    )
-    .options(KdcOptions::forwardable())
-    .additional_tickets(None)
-    .padata(vec![pa])
-    .etypes(pref_etypes())
-    .build()
-    .expect("S4U TGS-REQ");
-    let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
-    match err {
-        Error::Protocol { code, text, .. } => {
-            assert_eq!(code, err::BADMATCH);
-            assert_eq!(
-                text.as_deref(),
-                Some("INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH")
-            );
-        }
-        other => panic!("expected BADMATCH, got {other:?}"),
     }
 }
 

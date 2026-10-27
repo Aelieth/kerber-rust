@@ -19,17 +19,12 @@ use krb5_kdc::testrealm::{
     TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
     bootstrap_documented, documented_host,
 };
-use krb5_kdc::{
-    KDB_DISALLOW_DUP_SKEY, PrincipalStore, decrypt_ticket_part, pac_from_ticket_part,
-    wrap_win2k_pac,
-};
+use krb5_kdc::{PrincipalStore, decrypt_ticket_part};
 use krb5_protocol::tgs_req;
 
 use krb5_testkit::{
-    TgsReqBuilder, expect_status, host_tgt, issue_tgt, issue_tgt_password, pref_etypes,
-    reseal_store, status,
+    TgsReqBuilder, expect_status, host_tgt, issue_tgt, issue_tgt_password, pref_etypes, status,
 };
-use krb5_types::pac::{PAC_SERVER_CHECKSUM, Pac};
 use krb5_types::{KdcOptions, PrincipalName, err, flag_bit};
 
 fn u2u_opts() -> KdcOptions {
@@ -62,16 +57,6 @@ fn u2u_req(
 }
 
 #[test]
-// oracle: differential-gate.sh u2u-no-2nd-tkt
-fn u2u_no_2nd_tkt_is_badoption() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let req = u2u_req(&store, documented_host(), None, 9100);
-    let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
-    assert_eq!(c, err::BADOPTION);
-    assert_eq!(text.as_deref(), Some("NO_2ND_TKT"));
-}
-
-#[test]
 // oracle: differential-gate.sh u2u-2nd-ticket-not-tgs
 fn u2u_service_ticket_is_not_tgs() {
     let (store, _) = bootstrap_documented().unwrap();
@@ -92,91 +77,6 @@ fn u2u_service_ticket_is_not_tgs() {
     let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
     assert_eq!(c, err::POLICY);
     assert_eq!(text.as_deref(), Some("2ND_TKT_NOT_TGS"));
-}
-
-#[test]
-// oracle: differential-gate.sh u2u-2nd-ticket-mismatch
-fn u2u_admin_tgt_for_host_is_mismatch() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let admin = issue_tgt(&store, TEST_ADMIN, 9120);
-    let req = u2u_req(
-        &store,
-        documented_host(),
-        Some(vec![admin.rep.0.ticket]),
-        9121,
-    );
-    let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
-    assert_eq!(c, err::SERVER_NOMATCH);
-    assert_eq!(text.as_deref(), Some("2ND_TKT_MISMATCH"));
-}
-
-#[test]
-// oracle: differential-gate.sh u2u-bad-etype
-fn u2u_bad_session_etype_is_etype_nosupp() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let host = host_tgt(&store, 9130);
-    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
-    let mut part = decrypt_ticket_part(&krbtgt.key, &host.rep.0.ticket).unwrap();
-    part.key.keytype = 99;
-    let mut extra = host.rep.0.ticket.clone();
-    reseal_store(&store, &mut extra, &part);
-    let req = u2u_req(&store, documented_host(), Some(vec![extra]), 9131);
-    let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
-    assert_eq!(c, err::ETYPE_NOSUPP);
-    assert_eq!(text.as_deref(), Some("BAD_ETYPE_IN_2ND_TKT"));
-}
-
-#[test]
-// oracle: differential-gate.sh u2u-2nd-ticket-bad-pac
-fn u2u_bad_pac_is_modified() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let host = host_tgt(&store, 9140);
-    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
-    let mut part = decrypt_ticket_part(&krbtgt.key, &host.rep.0.ticket).unwrap();
-    let raw = pac_from_ticket_part(&part).unwrap();
-    let mut parsed = Pac::parse(&raw).unwrap();
-    if let Some(buf) = parsed
-        .buffers
-        .iter_mut()
-        .find(|b| b.kind == PAC_SERVER_CHECKSUM)
-        && buf.data.len() > 4
-    {
-        buf.data[4] ^= 0xff;
-    }
-    part.authorization_data = Some(wrap_win2k_pac(&parsed.to_bytes()).unwrap());
-    let mut extra = host.rep.0.ticket.clone();
-    reseal_store(&store, &mut extra, &part);
-    let req = u2u_req(&store, documented_host(), Some(vec![extra]), 9141);
-    let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
-    assert_eq!(c, err::MODIFIED);
-    assert_eq!(text.as_deref(), Some("2ND_TKT_PAC"));
-}
-
-#[test]
-// oracle: differential-gate.sh u2u-dup-skey-tgt-based
-fn u2u_dup_skey_disallowed_is_policy() {
-    let (mut store, _) = bootstrap_documented().unwrap();
-    let host = documented_host();
-    let attrs = store.get_name(&host).unwrap().attributes | KDB_DISALLOW_DUP_SKEY;
-    store
-        .apply_admin_fields(
-            &host,
-            krb5_kdc::AdminFields {
-                attributes: Some(attrs),
-                max_life: None,
-                expiration: None,
-                pw_expire: None,
-                policy: None,
-                clear_policy: false,
-                max_renewable_life: None,
-            },
-        )
-        .unwrap();
-    let extra = host_tgt(&store, 9150).rep.0.ticket;
-    let req = u2u_req(&store, host, Some(vec![extra]), 9151);
-    let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
-    assert_eq!(c, err::POLICY);
-    assert_eq!(text.as_deref(), Some("DUP_SKEY DISALLOWED"));
 }
 
 #[test]

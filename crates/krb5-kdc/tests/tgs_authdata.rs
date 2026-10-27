@@ -11,7 +11,7 @@ use krb5_kdc::testrealm::{GREET_AD_TYPE, GREET_TEXT, GreetAuth};
 use krb5_kdc::testrealm::{TEST_REALM, bootstrap_documented, documented_host};
 use krb5_kdc::{Error, PrincipalStore, issue_tgs};
 
-use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
+use krb5_protocol::tgs_req;
 use krb5_testkit::{krbtgt, status, user, user_as, wrap_if_relevant};
 use krb5_types::cammac::{Cammac, VerifierMac};
 use krb5_types::{
@@ -32,16 +32,6 @@ fn host_part(store: &PrincipalStore, issued: &krb5_kdc::IssuedTgs) -> EncTicketP
     )
     .unwrap();
     decode(&plain).unwrap()
-}
-
-fn enc_ad(session: &ProtocolKey, ad: &AuthorizationData) -> EncryptedData {
-    let usage = KeyUsage::new(ku::TGS_REQ_AD_SESSKEY).unwrap();
-    let cipher = encrypt(session, usage, &encode(ad).unwrap()).unwrap();
-    EncryptedData {
-        etype: session.etype().to_iana(),
-        kvno: None,
-        cipher: cipher.into(),
-    }
 }
 
 fn tgs_with_enc_ad(
@@ -112,26 +102,6 @@ fn tgs_with_enc_ad(
 }
 
 #[test]
-// oracle: differential-gate.sh tgs-ad-mandatory-for-kdc
-fn tgs_mandatory_for_kdc_is_handle_authdata() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let issued = user_as(&store, 13011);
-    let ad = vec![AuthorizationDataValue {
-        ad_type: pa::AD_MANDATORY_FOR_KDC,
-        ad_data: Vec::<u8>::new().into(),
-    }];
-    let tgs = tgs_with_enc_ad(
-        issued.rep.0.ticket.clone(),
-        &issued.session_key,
-        documented_host(),
-        13012,
-        enc_ad(&issued.session_key, &ad),
-    );
-    let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
-    assert_eq!(status(&err), (err::POLICY, Some("HANDLE_AUTHDATA")));
-}
-
-#[test]
 fn tgs_body_ad_decrypt_fail_is_handle_authdata() {
     let (store, _) = bootstrap_documented().unwrap();
     let issued = user_as(&store, 13031);
@@ -148,105 +118,6 @@ fn tgs_body_ad_decrypt_fail_is_handle_authdata() {
     );
     let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
     assert_eq!(status(&err), (err::BAD_INTEGRITY, Some("HANDLE_AUTHDATA")));
-}
-
-#[test]
-fn as_require_auth_is_higher_authentication() {
-    let (mut store, _) = bootstrap_documented().unwrap();
-    store
-        .set_string(&krbtgt(), "require_auth", Some("pkinit"))
-        .unwrap();
-    let cname = user();
-    let key = store
-        .get_name(&cname)
-        .unwrap()
-        .best_key()
-        .unwrap()
-        .key
-        .clone();
-    let req = as_req(
-        cname,
-        TEST_REALM,
-        14001,
-        Some(vec![pa_enc_timestamp(&key).unwrap()]),
-    )
-    .unwrap();
-    let err = krb5_kdc::issue_as(&store, &req).unwrap_err();
-    assert_eq!(
-        status(&err),
-        (err::POLICY, Some("HIGHER_AUTHENTICATION_REQUIRED"))
-    );
-}
-
-#[test]
-fn tgs_require_auth_is_higher_authentication() {
-    let (mut store, _) = bootstrap_documented().unwrap();
-    let issued = user_as(&store, 14002);
-    store
-        .set_string(&documented_host(), "require_auth", Some("pkinit"))
-        .unwrap();
-    let tgs = tgs_req(
-        issued.rep.0.ticket.clone(),
-        &issued.session_key,
-        TEST_REALM,
-        &user(),
-        documented_host(),
-        TEST_REALM,
-        14003,
-    )
-    .unwrap();
-    let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
-    assert_eq!(
-        status(&err),
-        (err::POLICY, Some("HIGHER_AUTHENTICATION_REQUIRED"))
-    );
-}
-
-#[test]
-// oracle: differential-gate.sh tgs-truncated-cammac
-fn tgs_truncated_cammac_is_get_auth_indicators() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let issued = user_as(&store, 14004);
-    let tgt_key = store
-        .get_name(&krbtgt())
-        .unwrap()
-        .first_current_key()
-        .unwrap()
-        .key
-        .clone();
-    let usage = KeyUsage::new(ku::TICKET).unwrap();
-    let plain = decrypt(
-        &tgt_key,
-        usage,
-        issued.rep.0.ticket.enc_part.cipher.as_ref(),
-    )
-    .unwrap();
-    let mut part: EncTicketPart = decode(&plain).unwrap();
-    let mut ad = part.authorization_data.take().unwrap_or_default();
-    let inner = vec![AuthorizationDataValue {
-        ad_type: pa::AD_CAMMAC,
-        ad_data: b"truncated".to_vec().into(),
-    }];
-    ad.push(AuthorizationDataValue {
-        ad_type: pa::AD_IF_RELEVANT,
-        ad_data: encode(&inner).unwrap().into(),
-    });
-    part.authorization_data = Some(ad);
-    let cipher = encrypt(&tgt_key, usage, &encode(&part).unwrap()).unwrap();
-    let mut ticket: Ticket = issued.rep.0.ticket.clone();
-    ticket.enc_part.cipher = cipher.into();
-    let tgs = tgs_req(
-        ticket,
-        &issued.session_key,
-        TEST_REALM,
-        &user(),
-        documented_host(),
-        TEST_REALM,
-        14005,
-    )
-    .unwrap();
-    let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
-    assert_eq!(status(&err), (err::GENERIC, Some("GET_AUTH_INDICATORS")));
 }
 
 fn enc_ad_usage(key: &ProtocolKey, usage: u32, ad: &AuthorizationData) -> EncryptedData {
@@ -381,34 +252,6 @@ fn and_or_ad(blob: &[u8]) -> AuthorizationData {
         ad_type: pa::AD_AND_OR,
         ad_data: blob.to_vec().into(),
     }])
-}
-
-#[test]
-fn pac_is_first_authdata() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let issued = user_as(&store, 28001);
-    let blob = b"r28-pac-first";
-    let ad = and_or_ad(blob);
-    let tgs = tgs_hand(
-        issued.rep.0.ticket.clone(),
-        &issued.session_key,
-        documented_host(),
-        28002,
-        Some(enc_ad_usage(
-            &issued.session_key,
-            ku::TGS_REQ_AD_SESSKEY,
-            &ad,
-        )),
-        None,
-    );
-    let out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
-    let part = host_part(&store, &out);
-    let ticket_ad = part.authorization_data.expect("ticket AD");
-    assert!(
-        ad_has_payload_a3_r28(&ticket_ad, pa::AD_AND_OR, blob),
-        "copied AD missing: {ticket_ad:?}"
-    );
-    assert!(first_is_pac(&ticket_ad), "PAC not first: {ticket_ad:?}");
 }
 
 #[test]

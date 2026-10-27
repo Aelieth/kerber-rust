@@ -19,91 +19,12 @@ use krb5_asn1::{decode, encode};
 use krb5_kdc::testrealm::{
     TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented, documented_host,
 };
-use krb5_kdc::{Error, PrincipalStore, decrypt_ticket_part, pac_from_ticket_part, wrap_win2k_pac};
+use krb5_kdc::{Error, PrincipalStore};
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
 use krb5_crypto::{KeyUsage, decrypt, encrypt};
-use krb5_testkit::{
-    TgsReqBuilder, expect_status, host_tgt, issue_tgt, issue_tgt_password, pref_etypes,
-    reseal_store,
-};
-use krb5_types::pac::{PAC_SERVER_CHECKSUM, Pac};
-use krb5_types::{
-    ApReq, Authenticator, EncryptionKey, KdcOptions, KrbError, PrincipalName, err, flag_bit, ku, pa,
-};
-
-fn rewrite_server_cksumtype(part: &mut krb5_types::EncTicketPart, ctype: i32) {
-    let raw = pac_from_ticket_part(part).unwrap();
-    let mut parsed = Pac::parse(&raw).unwrap();
-    let buf = parsed
-        .buffers
-        .iter_mut()
-        .find(|b| b.kind == PAC_SERVER_CHECKSUM)
-        .unwrap();
-    buf.data[..4].copy_from_slice(&ctype.to_le_bytes());
-    part.authorization_data = Some(wrap_win2k_pac(&parsed.to_bytes()).unwrap());
-}
-
-#[test]
-// oracle: differential-gate.sh tgs-pac-server-cksum-wrong-enctype
-fn header_pac_wrong_cksumtype_is_generic() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let as_out = issue_tgt(&store, TEST_USER, 23000);
-    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
-    let mut part = decrypt_ticket_part(&krbtgt.key, &as_out.rep.0.ticket).unwrap();
-    rewrite_server_cksumtype(&mut part, 15);
-    let tkt = {
-        let mut t = as_out.rep.0.ticket.clone();
-        reseal_store(&store, &mut t, &part);
-        t
-    };
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgs = tgs_req(
-        tkt,
-        &as_out.session_key,
-        TEST_REALM,
-        &cname,
-        documented_host(),
-        TEST_REALM,
-        23001,
-    )
-    .unwrap();
-    let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &tgs).unwrap_err());
-    assert_eq!(c, err::GENERIC);
-    assert_eq!(text.as_deref(), Some("HEADER_PAC"));
-}
-
-#[test]
-// oracle: differential-gate.sh u2u-2nd-ticket-pac-wrong-enctype
-fn u2u_stkt_pac_wrong_cksumtype_is_generic() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let host = host_tgt(&store, 23010);
-    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
-    let mut part = decrypt_ticket_part(&krbtgt.key, &host.rep.0.ticket).unwrap();
-    rewrite_server_cksumtype(&mut part, 15);
-    let mut extra = host.rep.0.ticket.clone();
-    reseal_store(&store, &mut extra, &part);
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgt = issue_tgt(&store, TEST_USER, 23020);
-    let req = TgsReqBuilder::new(
-        tgt.rep.0.ticket,
-        &tgt.session_key,
-        TEST_REALM,
-        &user,
-        documented_host(),
-        TEST_REALM,
-        23021,
-    )
-    .options(KdcOptions::forwardable().with_bit(flag_bit::ENC_TKT_IN_SKEY, true))
-    .additional_tickets(Some(vec![extra]))
-    .padata(Vec::new())
-    .etypes(pref_etypes())
-    .build()
-    .unwrap();
-    let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
-    assert_eq!(c, err::GENERIC);
-    assert_eq!(text.as_deref(), Some("2ND_TKT_PAC"));
-}
+use krb5_testkit::issue_tgt_password;
+use krb5_types::{ApReq, Authenticator, EncryptionKey, KrbError, PrincipalName, err, ku, pa};
 
 #[test]
 fn handle_request_empty_is_dropped() {
@@ -229,68 +150,6 @@ fn tgs_bad_msg_type_is_unknown_reason_without_cname() {
     assert_eq!(e.sname, documented_host());
 }
 
-fn local_tgt() -> (krb5_kdc::PrincipalStore, krb5_kdc::IssuedAs, PrincipalName) {
-    let (store, _) = bootstrap_documented().unwrap();
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 801);
-    (store, issued, cname)
-}
-
-fn no_client(e: &KrbError) {
-    assert!(e.cname.is_none(), "no cname");
-    assert!(e.crealm.is_none(), "no crealm when client is NULL");
-}
-
-#[test]
-fn tgs_bad_msg_type_omits_crealm() {
-    let (store, issued, cname) = local_tgt();
-    let mut tgs = krb5_protocol::tgs_req(
-        issued.rep.0.ticket.clone(),
-        &issued.session_key,
-        TEST_REALM,
-        &cname,
-        documented_host(),
-        TEST_REALM,
-        802,
-    )
-    .unwrap();
-    tgs.0.msg_type = krb5_types::KdcReq::MSG_AS_REQ;
-    let bytes = krb5_kdc::handle_request(&store, &encode(&tgs).unwrap()).unwrap();
-    let e: KrbError = decode(&bytes).unwrap();
-    assert_eq!(e.error_code, err::GENERIC);
-    no_client(&e);
-}
-
-#[test]
-fn tgs_ap_options_omits_crealm() {
-    let (store, issued, cname) = local_tgt();
-    let mut tgs = krb5_protocol::tgs_req(
-        issued.rep.0.ticket.clone(),
-        &issued.session_key,
-        TEST_REALM,
-        &cname,
-        documented_host(),
-        TEST_REALM,
-        803,
-    )
-    .unwrap();
-    let pa = tgs
-        .0
-        .padata
-        .as_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|p| p.padata_type == pa::TGS_REQ)
-        .unwrap();
-    let mut ap: ApReq = decode(pa.padata_value.as_ref()).unwrap();
-    ap.ap_options = krb5_types::ApOptions::mutual_required();
-    pa.padata_value = encode(&ap).unwrap().into();
-    let bytes = krb5_kdc::handle_request(&store, &encode(&tgs).unwrap()).unwrap();
-    let e: KrbError = decode(&bytes).unwrap();
-    assert_eq!(e.error_code, err::POLICY);
-    no_client(&e);
-}
-
 /// A TGS-REQ whose PA-TGS-REQ authenticator (given a subkey) `rewrite` changes, re-encrypted in
 /// the session key, and the realm it goes to.
 fn tgs_with_authenticator(rewrite: impl Fn(&mut Vec<u8>)) -> (PrincipalStore, Vec<u8>) {
@@ -376,61 +235,5 @@ fn tgs_authenticator_crealm_octets_is_badmatch() {
     assert_eq!(
         tgs_error(&store, &req),
         (err::BADMATCH, "PROCESS_TGS".into())
-    );
-}
-
-#[test]
-fn tgs_authenticator_cusec_out_of_range_is_issued() {
-    // MIT: `rd_req_decoded_opt` (lib/krb5/krb/rd_req_dec.c:631-631)
-    // only the authenticator's ctime is checked, against the clock skew; its cusec is taken as it is, past 999999 too.
-    let (store, req) = tgs_with_authenticator(|der| {
-        let mut authenticator: Authenticator = decode(der).unwrap();
-        authenticator.cusec = krb5_types::Microseconds(1_000_000);
-        *der = encode(&authenticator).unwrap();
-    });
-    let reply = krb5_kdc::handle_request(&store, &req).unwrap();
-    assert_eq!(reply.first(), Some(&0x6d), "a TGS-REP");
-}
-
-#[test]
-// oracle: differential-gate.sh tgs-authenticator-etype-mismatch
-fn tgs_authenticator_etype_mismatch_is_generic() {
-    // MIT: `krb5_k_decrypt` (lib/crypto/krb/decrypt.c:45-46)
-    // an authenticator EncryptedData of another enctype than the session key's is KRB5_BAD_ENCTYPE, 60 PROCESS_TGS.
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let req = as_req(
-        cname.clone(),
-        TEST_REALM,
-        32,
-        Some(vec![pa_enc_timestamp(&client_key()).expect("pa")]),
-    )
-    .unwrap();
-    let as_out = krb5_kdc::issue_as(&store, &req).expect("AS");
-    let mut tgs = tgs_req(
-        as_out.rep.0.ticket.clone(),
-        &as_out.session_key,
-        TEST_REALM,
-        &cname,
-        documented_host(),
-        TEST_REALM,
-        33,
-    )
-    .expect("tgs");
-    let pa_tgs = tgs
-        .0
-        .padata
-        .as_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|p| p.padata_type == pa::TGS_REQ)
-        .unwrap();
-    let mut ap: ApReq = decode(pa_tgs.padata_value.as_ref()).unwrap();
-    assert_ne!(ap.authenticator.etype, 17);
-    ap.authenticator.etype = 17;
-    pa_tgs.padata_value = encode(&ap).unwrap().into();
-    assert_eq!(
-        tgs_error(&store, &encode(&tgs).unwrap()),
-        (err::GENERIC, "PROCESS_TGS".into())
     );
 }

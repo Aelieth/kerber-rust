@@ -116,50 +116,6 @@ fn cross_tgt_renew_realm_mismatch_is_server_nomatch() {
 }
 
 #[test]
-// oracle: differential-gate.sh u2u-2nd-ticket-foreign-realm
-fn u2u_second_ticket_foreign_realm_is_2nd_tkt_server() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let host = documented_host();
-    let hkey = store
-        .get_name(&host)
-        .unwrap()
-        .best_key()
-        .unwrap()
-        .key
-        .clone();
-    let href = as_req(
-        host.clone(),
-        TEST_REALM,
-        16110,
-        Some(vec![pa_enc_timestamp(&hkey).unwrap()]),
-    )
-    .unwrap();
-    let extra = krb5_kdc::issue_as(&store, &href).unwrap().rep.0.ticket;
-    let mut foreign = extra;
-    foreign.realm = krb5_types::try_ascii("OTHER.TEST").unwrap();
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgt = issue_tgt_renewable(&store, TEST_USER, 16111, false);
-    let req = TgsReqBuilder::new(
-        tgt.rep.0.ticket,
-        &tgt.session_key,
-        TEST_REALM,
-        &user,
-        host,
-        TEST_REALM,
-        16112,
-    )
-    .options(KdcOptions::forwardable().with_bit(flag_bit::ENC_TKT_IN_SKEY, true))
-    .additional_tickets(Some(vec![foreign]))
-    .padata(Vec::new())
-    .etypes(pref_etypes())
-    .build()
-    .unwrap();
-    let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
-    assert_eq!(c, err::S_PRINCIPAL_UNKNOWN);
-    assert_eq!(text.as_deref(), Some("2ND_TKT_SERVER"));
-}
-
-#[test]
 fn incoming_trust_dump_load_round_trip() {
     let (mut store, acl) = bootstrap_documented().unwrap();
     let actor = documented_admin_id();

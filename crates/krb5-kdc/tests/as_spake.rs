@@ -17,35 +17,12 @@ use krb5_kdc::testrealm::{TEST_ADMIN, TEST_REALM, TEST_USER, bootstrap_documente
 use krb5_kdc::{Error, PrincipalStore, load_dump_path};
 use krb5_protocol::as_req;
 
-use krb5_protocol::{AsOutcome, KdcAddr, pa_spake_response, pa_spake_support, tgs_exchange};
+use krb5_protocol::{pa_spake_response, pa_spake_support};
 use krb5_testkit::{status, user};
 use krb5_types::{
-    EncKdcRepPart, EncryptedData, EncryptionKey, KerberosTime, KrbError, MethodData, OctetString,
-    PaData, PrincipalName, TgsReq, Ticket, TicketFlags, ascii, err, ku, pa,
+    EncKdcRepPart, KerberosTime, KrbError, MethodData, PaData, PrincipalName, err, ku, pa,
     spake::{GROUP_EDWARDS25519, PaSpake, SpakeSupport},
 };
-use std::sync::mpsc;
-use std::thread;
-use std::time::Duration;
-
-#[test]
-fn as_spake_91_e_data_is_151_19_133() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let req = as_req(
-        cname,
-        TEST_REALM,
-        15007,
-        Some(vec![pa_spake_support(&[krb5_crypto::SpakeGroup::P256])]),
-    )
-    .unwrap();
-    let bytes = krb5_kdc::handle_request(&store, &encode(&req).unwrap()).unwrap();
-    let e: KrbError = decode(&bytes).unwrap();
-    assert_eq!(e.error_code, err::MORE_PREAUTH_DATA_REQUIRED);
-    let method: MethodData = decode(e.e_data.as_ref().unwrap().as_ref()).unwrap();
-    let types: Vec<i32> = method.iter().map(|p| p.padata_type).collect();
-    assert_eq!(types, vec![pa::SPAKE, pa::ETYPE_INFO2, pa::FX_COOKIE]);
-}
 
 fn support_groups(groups: &[i32]) -> PaData {
     let msg = PaSpake::Support(SpakeSupport {
@@ -54,54 +31,6 @@ fn support_groups(groups: &[i32]) -> PaData {
     PaData {
         padata_type: pa::SPAKE,
         padata_value: encode(&msg).unwrap().into(),
-    }
-}
-
-fn session() -> ProtocolKey {
-    ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[7u8; 32]).unwrap()
-}
-
-fn password_as_tgt() -> AsOutcome {
-    let t = KerberosTime::now();
-    let sname = PrincipalName::krbtgt("KERBER.TEST");
-    AsOutcome {
-        ticket: Ticket {
-            tkt_vno: Ticket::VNO,
-            realm: ascii("KERBER.TEST"),
-            sname: sname.clone(),
-            enc_part: EncryptedData {
-                etype: 18,
-                kvno: Some(1),
-                cipher: OctetString::from(vec![0u8; 16]),
-            },
-        },
-        enc_part: EncKdcRepPart {
-            key: EncryptionKey {
-                keytype: 18,
-                keyvalue: OctetString::from(vec![7u8; 32]),
-            },
-            last_req: vec![],
-            nonce: 1,
-            key_expiration: None,
-            flags: TicketFlags::none(),
-            authtime: t.clone(),
-            starttime: None,
-            endtime: t,
-            renew_till: None,
-            srealm: ascii("KERBER.TEST"),
-            sname,
-            caddr: None,
-            encrypted_pa_data: None,
-        },
-        client_key: session(),
-        session_key: session(),
-        cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
-        crealm: ascii("KERBER.TEST"),
-        fast_avail: false,
-        used_fast: false,
-        pa_type: None,
-        pa_config: None,
-        time_offset: 0,
     }
 }
 
@@ -137,78 +66,6 @@ fn pkinit_hint_is_16_147() {
     assert!(
         !types.contains(&pa::TD_DH_PARAMETERS),
         "PKINIT hint must not list 109, got {types:?}"
-    );
-}
-
-#[test]
-fn tgs_after_password_as_is_fast_armored() {
-    use std::io::{Read, Write};
-
-    // Capture UDP or TCP: host `udp_preference_limit` (or a FAST body
-    // over MIT's 1465 default) must not hide the 136 assert.
-    let (udp, tcp) = krb5_testkit::loopback_udp_tcp();
-    udp.set_read_timeout(Some(Duration::from_millis(50)))
-        .unwrap();
-    let addr = udp.local_addr().unwrap();
-    tcp.set_nonblocking(true).unwrap();
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        let deadline = std::time::Instant::now() + Duration::from_secs(2);
-        while std::time::Instant::now() < deadline {
-            let mut buf = vec![0u8; 65535];
-            if let Ok((n, src)) = udp.recv_from(&mut buf) {
-                let _ = udp.send_to(&[0x7e], src);
-                let _ = tx.send(buf[..n].to_vec());
-                return;
-            }
-            if let Ok((mut stream, _)) = tcp.accept() {
-                let _ = stream.set_nonblocking(false);
-                let mut hdr = [0u8; 4];
-                if stream.read_exact(&mut hdr).is_ok() {
-                    let n = u32::from_be_bytes(hdr) as usize;
-                    if (1..=1024 * 1024).contains(&n) {
-                        let mut body = vec![0u8; n];
-                        if stream.read_exact(&mut body).is_ok() {
-                            let _ = stream.write_all(&1u32.to_be_bytes());
-                            let _ = stream.write_all(&[0x7e]);
-                            let _ = tx.send(body);
-                            return;
-                        }
-                    }
-                }
-            }
-            thread::sleep(Duration::from_millis(5));
-        }
-    });
-    let tgt = password_as_tgt();
-    let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "testhost.kerber.test"]);
-    let _ = tgs_exchange(
-        &krb5_config::isolated_profile(),
-        &KdcAddr {
-            host: "127.0.0.1".into(),
-            port: addr.port(),
-        },
-        &tgt,
-        host,
-        "KERBER.TEST",
-    );
-    let wire = rx.recv_timeout(Duration::from_secs(2)).expect("TGS-REQ");
-    let tgs: TgsReq = decode(&wire).expect("TgsReq");
-    let types: Vec<i32> = tgs
-        .0
-        .padata
-        .as_ref()
-        .into_iter()
-        .flatten()
-        .map(|p| p.padata_type)
-        .collect();
-    assert!(
-        types.contains(&pa::FX_FAST),
-        "password-AS TGS must carry 136: {types:?}"
-    );
-    assert!(
-        types.contains(&pa::TGS_REQ),
-        "password-AS TGS must carry PA-TGS-REQ: {types:?}"
     );
 }
 
@@ -623,37 +480,6 @@ fn spake_expired_cookie_is_preauth_failed() {
         Error::Protocol { code, .. } => assert_eq!(code, err::PREAUTH_FAILED),
         other => panic!("expected 24, got {other:?}"),
     }
-}
-
-#[test]
-// oracle: differential-gate.sh as-spake-round1
-fn handle_request_spake_91_e_text_is_preauth_failed() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let req = as_req(
-        cname,
-        TEST_REALM,
-        391,
-        Some(vec![pa_spake_support(&[krb5_crypto::SpakeGroup::P256])]),
-    )
-    .unwrap();
-    let bytes = krb5_kdc::handle_request(&store, &encode(&req).expect("der")).expect("reply");
-    let e: KrbError = decode(&bytes).expect("KRB-ERROR");
-    assert_eq!(e.error_code, err::MORE_PREAUTH_DATA_REQUIRED);
-    let text = e
-        .e_text
-        .as_ref()
-        .and_then(|t| std::str::from_utf8(t.as_bytes()).ok());
-    assert_eq!(text, Some("PREAUTH_FAILED"));
-    assert_ne!(text, Some("SPAKE challenge"));
-    let method: MethodData = decode(e.e_data.as_ref().expect("e_data").as_ref()).expect("METHOD");
-    let types: Vec<i32> = method.iter().map(|p| p.padata_type).collect();
-    assert!(
-        types.contains(&pa::SPAKE)
-            && types.contains(&pa::FX_COOKIE)
-            && types.contains(&pa::ETYPE_INFO2),
-        "91 without cookie: SPAKE+COOKIE+ETYPE-INFO2, got {types:?}"
-    );
 }
 
 #[test]

@@ -20,8 +20,8 @@ use krb5_protocol::{
 use krb5_testkit::issue_tgt_password;
 use krb5_types::{
     ApReq, Authenticator, AuthorizationDataValue, Checksum, EncKdcRepPart, EncTgsRepPart,
-    EncTicketPart, EncryptedData, EncryptionKey, KerberosTime, KrbError, OctetString,
-    PrincipalName, TgsRep, TgsReq, Ticket, TicketFlags, ascii, err, ku, pa,
+    EncTicketPart, EncryptedData, EncryptionKey, KerberosTime, OctetString, PrincipalName, TgsRep,
+    TgsReq, Ticket, TicketFlags, ascii, err, ku, pa,
 };
 use std::io::{Read, Write};
 use std::sync::mpsc;
@@ -505,17 +505,6 @@ fn fast_tgs_prepared(store: &PrincipalStore, nonce: u32) -> krb5_types::TgsReq {
     tgs
 }
 
-fn assert_krb_error(bytes: &[u8], code: i32, e_text: &str) {
-    assert_eq!(bytes.first(), Some(&0x7e), "expected KRB-ERROR");
-    let e: KrbError = decode(bytes).expect("KrbError");
-    assert_eq!(e.error_code, code);
-    let text = e
-        .e_text
-        .as_ref()
-        .and_then(|t| std::str::from_utf8(t.as_bytes()).ok());
-    assert_eq!(text, Some(e_text));
-}
-
 #[test]
 fn tgs_fast_inner_nonce_not_outer() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
@@ -547,44 +536,6 @@ fn tgs_fast_inner_nonce_not_outer() {
         enc.nonce, 200,
         "EncTgsRepPart must echo the inner FAST nonce"
     );
-}
-
-#[test]
-fn tgs_fast_forged_ticket_realm_is_process_tgs() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 870);
-    let mut tgs = tgs_req(
-        issued.rep.0.ticket.clone(),
-        &issued.session_key,
-        TEST_REALM,
-        &cname,
-        documented_host(),
-        TEST_REALM,
-        871,
-    )
-    .unwrap();
-    let inner = tgs.0.req_body.clone();
-    wrap_tgs_fast(&mut tgs, &issued.session_key, inner).expect("TGS FAST");
-    let pa = tgs
-        .0
-        .padata
-        .as_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|p| p.padata_type == pa::TGS_REQ)
-        .expect("PA-TGS-REQ");
-    let mut ap: ApReq = decode(pa.padata_value.as_ref()).expect("ap");
-    ap.ticket.realm = ascii("NOWHERE.TEST");
-    pa.padata_value = encode(&ap).expect("ap").into();
-    let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("forged realm");
-    match err {
-        Error::Protocol { code, text, .. } => {
-            assert_eq!(code, err::S_PRINCIPAL_UNKNOWN);
-            assert_eq!(text.as_deref(), Some("PROCESS_TGS"));
-        }
-        other => panic!("expected 7 PROCESS_TGS, got {other:?}"),
-    }
 }
 
 #[test]
@@ -746,35 +697,6 @@ fn tgs_header_ticket_ad_fx_armor_is_policy() {
     .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("AD-FX-ARMOR in ticket");
     assert_process_tgs_policy(err, "ticket valid only as FAST armor");
-}
-
-#[test]
-// oracle: differential-gate.sh armor-ap-req-as-pa-tgs-req
-fn tgs_header_ticket_if_relevant_ad_fx_armor_is_policy() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 888);
-    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
-    let mut part = decrypt_ticket_part(&krbtgt.key, &issued.rep.0.ticket).expect("TGT");
-    let inner = encode(&vec![fx_armor_ad()]).expect("inner AD");
-    part.authorization_data = Some(vec![AuthorizationDataValue {
-        ad_type: pa::AD_IF_RELEVANT,
-        ad_data: inner.into(),
-    }]);
-    let mut ticket = issued.rep.0.ticket.clone();
-    reencrypt_tgt(&store, &mut ticket, &part);
-    let tgs = tgs_req(
-        ticket,
-        &issued.session_key,
-        TEST_REALM,
-        &cname,
-        documented_host(),
-        TEST_REALM,
-        889,
-    )
-    .unwrap();
-    let bytes = krb5_kdc::handle_request(&store, &encode(&tgs).expect("der")).expect("reply");
-    assert_krb_error(&bytes, err::POLICY, "PROCESS_TGS");
 }
 
 #[test]

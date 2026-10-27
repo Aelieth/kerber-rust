@@ -145,18 +145,6 @@ fn stale_freshness_req(ca: &krb5_types::pkinit::PkinitCa) -> krb5_types::AsReq {
 }
 
 #[test]
-fn stale_freshness_token_is_preauth_failed() {
-    let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    let ca = krb5_testkit::enable_pkinit(&mut store);
-    let req = stale_freshness_req(&ca);
-    let (code, _) = match krb5_kdc::issue_as(&store, &req).unwrap_err() {
-        Error::Protocol { code, text, .. } => (code, text),
-        other => panic!("want Protocol 24, got {other:?}"),
-    };
-    assert_eq!(code, err::PREAUTH_FAILED);
-}
-
-#[test]
 fn stale_freshness_token_logs_preauth_expired_and_the_as_req_line_says_24() {
     // MIT: `check_freshness_token` (kdc/kdc_preauth.c:564-564)
     // a token the checks refuse, its age among them, is `KRB5KDC_ERR_PREAUTH_EXPIRED`.

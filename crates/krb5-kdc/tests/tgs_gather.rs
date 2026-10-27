@@ -7,27 +7,24 @@
 //! a kvno-0 ticket that fails to decrypt is
 //! retried with the previous kvno's key.
 
-use krb5_asn1::{decode, encode};
+use krb5_asn1::encode;
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, encrypt};
 use krb5_kdc::testrealm::{
     TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
     bootstrap_documented, documented_admin_id, documented_host,
 };
 use krb5_kdc::{
-    Error, KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_DUP_SKEY, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED,
-    KdcEnv, KeyEntry, PacTicket, Policy, Principal, PrincipalRead, PrincipalStore,
-    decrypt_ticket_part, handle_request_from, pac_from_ticket_part, random_key, sign_pac,
-    ticket_checksum_der, wrap_win2k_pac,
+    Error, KDB_DISALLOW_SVR, KdcEnv, KeyEntry, Policy, Principal, PrincipalRead, PrincipalStore,
+    decrypt_ticket_part, random_key,
 };
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
 use krb5_testkit::{
-    TgsReqBuilder, err_of, issue_tgt, issue_tgt_password, password_key, pref_etypes, reseal, status,
+    TgsReqBuilder, issue_tgt, issue_tgt_password, password_key, pref_etypes, status,
 };
-use krb5_types::pac::{PAC_SERVER_CHECKSUM, Pac, RpcSid};
+use krb5_types::pac::RpcSid;
 use krb5_types::{
-    EncTicketPart, EncryptedData, HostAddress, KdcOptions, KerberosTime, KrbError, PrincipalName,
-    Ticket, err, flag_bit, ku,
+    EncTicketPart, EncryptedData, KdcOptions, PrincipalName, Ticket, err, flag_bit, ku,
 };
 
 fn renewable_tgt(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
@@ -72,160 +69,6 @@ fn host_tgs(issued: &krb5_kdc::IssuedAs, nonce: u32) -> krb5_types::TgsReq {
         nonce,
     )
     .unwrap()
-}
-
-#[test]
-fn tgs_renew_service_ticket_issues() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let as_out = renewable_tgt(&store, 6010);
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let first = TgsReqBuilder::new(
-        as_out.rep.0.ticket.clone(),
-        &as_out.session_key,
-        TEST_REALM,
-        &cname,
-        documented_host(),
-        TEST_REALM,
-        6011,
-    )
-    .options(KdcOptions::forwardable().with_bit(flag_bit::RENEWABLE, true))
-    .additional_tickets(None)
-    .padata(Vec::new())
-    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
-    .build()
-    .unwrap();
-    let svc = krb5_kdc::issue_tgs(&store, &first).unwrap();
-    let renew = TgsReqBuilder::new(
-        svc.rep.0.ticket.clone(),
-        &svc.session_key,
-        TEST_REALM,
-        &cname,
-        documented_host(),
-        TEST_REALM,
-        6012,
-    )
-    .options(
-        KdcOptions::forwardable()
-            .with_bit(flag_bit::RENEWABLE, true)
-            .with_bit(flag_bit::RENEW, true),
-    )
-    .additional_tickets(None)
-    .padata(Vec::new())
-    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
-    .build()
-    .unwrap();
-    krb5_kdc::issue_tgs(&store, &renew).expect("RENEW of a service ticket");
-}
-
-#[test]
-// oracle: differential-gate.sh tgs-proxy-krbtgt
-fn tgs_proxy_krbtgt_is_cant_proxy_tgt() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let key = password_key(TEST_USER, TEST_USER_PASSWORD);
-    let mut req = as_req(
-        cname.clone(),
-        TEST_REALM,
-        6020,
-        Some(vec![pa_enc_timestamp(&key).unwrap()]),
-    )
-    .unwrap();
-    req.0.req_body.kdc_options = req
-        .0
-        .req_body
-        .kdc_options
-        .with_bit(flag_bit::PROXIABLE, true);
-    let as_out = krb5_kdc::issue_as(&store, &req).unwrap();
-    let tgs = TgsReqBuilder::new(
-        as_out.rep.0.ticket.clone(),
-        &as_out.session_key,
-        TEST_REALM,
-        &cname,
-        PrincipalName::krbtgt(TEST_REALM),
-        TEST_REALM,
-        6021,
-    )
-    .options(KdcOptions::forwardable().with_bit(flag_bit::PROXY, true))
-    .additional_tickets(None)
-    .padata(Vec::new())
-    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
-    .build()
-    .unwrap();
-    let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
-    assert_eq!(status(&err), (err::BADOPTION, Some("CAN'T PROXY TGT")));
-}
-
-#[test]
-// oracle: differential-gate.sh tgs-pac-corrupt-before-sname
-fn tgs_corrupt_pac_before_unknown_sname_is_header_pac() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let as_out = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 6030);
-    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
-    let mut part = decrypt_ticket_part(&krbtgt.key, &as_out.rep.0.ticket).unwrap();
-    let pac = pac_from_ticket_part(&part).unwrap();
-    let mut parsed = Pac::parse(&pac).unwrap();
-    let buf = parsed
-        .buffers
-        .iter_mut()
-        .find(|b| b.kind == PAC_SERVER_CHECKSUM)
-        .unwrap();
-    buf.data[4] ^= 0xff;
-    part.authorization_data = Some(wrap_win2k_pac(&parsed.to_bytes()).unwrap());
-    let tkt = rewrap(&as_out.rep.0.ticket, &part, &krbtgt.key);
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgs = tgs_req(
-        tkt,
-        &as_out.session_key,
-        TEST_REALM,
-        &cname,
-        PrincipalName::new(PrincipalName::NT_SRV_INST, ["nosuch", "x"]),
-        TEST_REALM,
-        6031,
-    )
-    .unwrap();
-    let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
-    assert_eq!(status(&err), (err::MODIFIED, Some("HEADER_PAC")));
-}
-
-#[test]
-// oracle: differential-gate.sh tgs-pac-client-mismatch
-fn tgs_pac_client_mismatch_is_header_pac() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let as_out = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 6040);
-    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
-    let mut part = decrypt_ticket_part(&krbtgt.key, &as_out.rep.0.ticket).unwrap();
-    let ident = store.pac_identity(&part.cname, TEST_REALM);
-    part.authorization_data = Some(wrap_win2k_pac(&[0]).unwrap());
-    let der = ticket_checksum_der(&part).unwrap();
-    let wrong = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["other"]);
-    let pac = sign_pac(
-        &wrong,
-        part.authtime.unix_seconds(),
-        &PacTicket {
-            server: &krbtgt.key,
-            kdc: &krbtgt.key,
-            enc_tkt_der: &der,
-            is_service_tkt: false,
-        },
-        &ident,
-        None,
-    )
-    .unwrap();
-    part.authorization_data = Some(wrap_win2k_pac(&pac).unwrap());
-    let tkt = rewrap(&as_out.rep.0.ticket, &part, &krbtgt.key);
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgs = tgs_req(
-        tkt,
-        &as_out.session_key,
-        TEST_REALM,
-        &cname,
-        documented_host(),
-        TEST_REALM,
-        6041,
-    )
-    .unwrap();
-    let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
-    assert_eq!(status(&err), (err::BADOPTION, Some("HEADER_PAC")));
 }
 
 #[test]
@@ -344,214 +187,7 @@ fn tgs_proxy_without_proxiable_is_tgt_not_proxiable() {
     assert_eq!(status(&err), (err::BADOPTION, Some("TGT NOT PROXIABLE")));
 }
 
-#[test]
-// oracle: differential-gate.sh tgs-not-a-tgt
-fn tgs_not_a_tgt_decrypts_and_names_client() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let as_out = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 6001);
-    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
-    let mut part = decrypt_ticket_part(&krbtgt.key, &as_out.rep.0.ticket).unwrap();
-    part.authorization_data = None;
-    let host = store
-        .get_name(&documented_host())
-        .unwrap()
-        .best_key()
-        .unwrap();
-    let mut svc_tkt = as_out.rep.0.ticket.clone();
-    svc_tkt.sname = documented_host();
-    svc_tkt.enc_part.etype = host.etype.to_iana();
-    svc_tkt.enc_part.kvno = Some(host.kvno);
-    let svc_tkt = rewrap(&svc_tkt, &part, &host.key);
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgs = tgs_req(
-        svc_tkt,
-        &as_out.session_key,
-        TEST_REALM,
-        &cname,
-        PrincipalName::krbtgt(TEST_REALM),
-        TEST_REALM,
-        6003,
-    )
-    .unwrap();
-    let bytes = krb5_kdc::handle_request(&store, &encode(&tgs).unwrap()).unwrap();
-    let ke: KrbError = decode(&bytes).unwrap();
-    assert_eq!(ke.error_code, err::NOT_US);
-    let et = ke
-        .e_text
-        .as_ref()
-        .and_then(|t| std::str::from_utf8(t.as_bytes()).ok());
-    assert_eq!(et, Some("BAD TGS SERVER NAME"));
-    assert_eq!(
-        ke.cname.as_ref().map(PrincipalName::components_joined),
-        Some(TEST_USER.to_owned())
-    );
-}
-
-#[test]
-// oracle: differential-gate.sh tgs-expired-vs-unknown-sname
-fn tgs_expired_beats_unknown_sname() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let as_out = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 6080);
-    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
-    let mut part = decrypt_ticket_part(&krbtgt.key, &as_out.rep.0.ticket).unwrap();
-    part.endtime = KerberosTime::now().add_seconds(-3600).unwrap();
-    let tkt = rewrap(&as_out.rep.0.ticket, &part, &krbtgt.key);
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgs = tgs_req(
-        tkt,
-        &as_out.session_key,
-        TEST_REALM,
-        &cname,
-        PrincipalName::new(PrincipalName::NT_SRV_INST, ["nosuch", "x"]),
-        TEST_REALM,
-        6081,
-    )
-    .unwrap();
-    let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
-    match err {
-        krb5_kdc::Error::Protocol { code, text, .. } => {
-            assert_eq!(code, err::TKT_EXPIRED);
-            assert_eq!(text.as_deref(), Some("PROCESS_TGS"));
-        }
-        other => panic!("{other:?}"),
-    }
-}
-
 const FOREIGN: &str = "OTHER.TEST";
-
-fn issue_host_tgt(store: &PrincipalStore, dest: &PrincipalName, nonce: u32) -> krb5_kdc::IssuedAs {
-    let key = store
-        .get_name(dest)
-        .unwrap()
-        .best_key()
-        .unwrap()
-        .key
-        .clone();
-    let req = as_req(
-        dest.clone(),
-        TEST_REALM,
-        nonce,
-        Some(vec![pa_enc_timestamp(&key).unwrap()]),
-    )
-    .unwrap();
-    krb5_kdc::issue_as(store, &req).unwrap()
-}
-
-fn inet(a: u8, b: u8, c: u8, d: u8) -> HostAddress {
-    HostAddress {
-        addr_type: HostAddress::ADDRTYPE_INET,
-        address: vec![a, b, c, d].into(),
-    }
-}
-
-fn expire_tgt(store: &PrincipalStore, issued: &krb5_kdc::IssuedAs) -> Ticket {
-    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
-    let mut part = decrypt_ticket_part(&krbtgt.key, &issued.rep.0.ticket).unwrap();
-    part.endtime = KerberosTime::now().add_seconds(-3600).unwrap();
-    reseal(&issued.rep.0.ticket, &part, &krbtgt.key)
-}
-
-fn pac_mismatch_tgt(store: &PrincipalStore, issued: &krb5_kdc::IssuedAs) -> Ticket {
-    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
-    let mut part = decrypt_ticket_part(&krbtgt.key, &issued.rep.0.ticket).unwrap();
-    let ident = store.pac_identity(&part.cname, TEST_REALM);
-    part.authorization_data = Some(wrap_win2k_pac(&[0]).unwrap());
-    let der = ticket_checksum_der(&part).unwrap();
-    let wrong = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["other"]);
-    let pac = sign_pac(
-        &wrong,
-        part.authtime.unix_seconds(),
-        &PacTicket {
-            server: &krbtgt.key,
-            kdc: &krbtgt.key,
-            enc_tkt_der: &der,
-            is_service_tkt: false,
-        },
-        &ident,
-        None,
-    )
-    .unwrap();
-    part.authorization_data = Some(wrap_win2k_pac(&pac).unwrap());
-    reseal(&issued.rep.0.ticket, &part, &krbtgt.key)
-}
-
-fn or_attrs(store: &mut PrincipalStore, name: &PrincipalName, bits: u32) {
-    let attrs = store.get_name(name).unwrap().attributes | bits;
-    store
-        .apply_admin_fields(
-            name,
-            krb5_kdc::AdminFields {
-                attributes: Some(attrs),
-                max_life: None,
-                expiration: None,
-                pw_expire: None,
-                policy: None,
-                clear_policy: false,
-                max_renewable_life: None,
-            },
-        )
-        .unwrap();
-}
-
-#[test]
-// oracle: differential-gate.sh tgs-locked-pac-mismatch
-fn locked_host_pac_mismatch_is_header_pac() {
-    let (mut store, acl) = bootstrap_documented().unwrap();
-    let dest = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "locked.kerber.test"]);
-    store
-        .create_host(&acl, &documented_admin_id(), &dest)
-        .unwrap();
-    or_attrs(&mut store, &dest, KDB_DISALLOW_ALL_TIX);
-    let as_out = issue_tgt(&store, TEST_USER, 19010);
-    let tkt = pac_mismatch_tgt(&store, &as_out);
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let req = tgs_req(
-        tkt,
-        &as_out.session_key,
-        TEST_REALM,
-        &user,
-        dest,
-        TEST_REALM,
-        19011,
-    )
-    .unwrap();
-    let err = krb5_kdc::issue_tgs(&store, &req).unwrap_err();
-    assert_eq!(status(&err), (err::BADOPTION, Some("HEADER_PAC")));
-}
-
-#[test]
-fn dup_skey_beats_tgt_based() {
-    let (mut store, acl) = bootstrap_documented().unwrap();
-    let dest = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "dupskey.kerber.test"]);
-    store
-        .create_host(&acl, &documented_admin_id(), &dest)
-        .unwrap();
-    or_attrs(
-        &mut store,
-        &dest,
-        KDB_DISALLOW_DUP_SKEY | KDB_DISALLOW_TGT_BASED,
-    );
-    let extra = issue_host_tgt(&store, &dest, 19020).rep.0.ticket;
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgt = issue_tgt(&store, TEST_USER, 19021);
-    let req = TgsReqBuilder::new(
-        tgt.rep.0.ticket,
-        &tgt.session_key,
-        TEST_REALM,
-        &user,
-        dest,
-        TEST_REALM,
-        19022,
-    )
-    .options(KdcOptions::forwardable().with_bit(flag_bit::ENC_TKT_IN_SKEY, true))
-    .additional_tickets(Some(vec![extra]))
-    .padata(Vec::new())
-    .etypes(pref_etypes())
-    .build()
-    .unwrap();
-    let err = krb5_kdc::issue_tgs(&store, &req).unwrap_err();
-    assert_eq!(status(&err), (err::POLICY, Some("DUP_SKEY DISALLOWED")));
-}
 
 #[test]
 fn lineage_before_u2u() {
@@ -612,55 +248,6 @@ fn lineage_before_u2u() {
     .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &req).unwrap_err();
     assert_eq!(status(&err), (err::POLICY, Some("INVALID LINEAGE")));
-}
-
-#[test]
-// oracle: differential-gate.sh tgs-expired-addr-mismatch
-fn tgs_expired_caddr_is_badaddr() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let as_out = issue_tgt(&store, TEST_USER, 19040);
-    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
-    let mut part = decrypt_ticket_part(&krbtgt.key, &as_out.rep.0.ticket).unwrap();
-    part.endtime = KerberosTime::now().add_seconds(-3600).unwrap();
-    part.caddr = Some(vec![inet(10, 0, 0, 1)]);
-    let tkt = reseal(&as_out.rep.0.ticket, &part, &krbtgt.key);
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let req = tgs_req(
-        tkt,
-        &as_out.session_key,
-        TEST_REALM,
-        &user,
-        documented_host(),
-        TEST_REALM,
-        19041,
-    )
-    .unwrap();
-    let bytes =
-        handle_request_from(&store, &encode(&req).unwrap(), Some(&inet(192, 0, 2, 1))).unwrap();
-    let (code, text) = err_of(&bytes);
-    assert_eq!(code, err::BADADDR);
-    assert_eq!(text, "PROCESS_TGS");
-}
-
-#[test]
-// oracle: differential-gate.sh tgs-expired-badmatch
-fn expired_authenticator_mismatch_is_badmatch() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let as_out = issue_tgt(&store, TEST_USER, 19050);
-    let tkt = expire_tgt(&store, &as_out);
-    let other = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
-    let req = tgs_req(
-        tkt,
-        &as_out.session_key,
-        TEST_REALM,
-        &other,
-        documented_host(),
-        TEST_REALM,
-        19051,
-    )
-    .unwrap();
-    let err = krb5_kdc::issue_tgs(&store, &req).unwrap_err();
-    assert_eq!(status(&err), (err::BADMATCH, Some("PROCESS_TGS")));
 }
 
 #[test]

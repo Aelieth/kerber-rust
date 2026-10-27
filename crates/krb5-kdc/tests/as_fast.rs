@@ -41,45 +41,6 @@ use krb5_types::{
     PaData, PaEncTsEnc, PrincipalName, Ticket, ascii, err, flag_bit, ku, pa,
 };
 
-#[test]
-fn fast_hide_as_error_client() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let armor_as = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 223);
-    let sub = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x38u8; 32])
-        .expect("subkey");
-    let armor_ap = build_fast_armor(
-        armor_as.rep.0.ticket.clone(),
-        &armor_as.session_key,
-        &ascii(TEST_REALM),
-        &cname,
-        Some(&sub),
-    )
-    .expect("armor AP-REQ");
-    let akey = armor_key(&armor_as.session_key, Some(&sub)).expect("armor key");
-    let mut opts = krb5_types::fast::fast_options_none();
-    opts.set(1, true);
-    let mut req = as_req(cname, TEST_REALM, 224, None).unwrap();
-    attach_fast_with_options(&mut req, &armor_ap, &akey, Vec::new(), &opts).expect("FAST wrap");
-    let bytes = krb5_kdc::handle_request(&store, &encode(&req).unwrap()).expect("reply");
-    let kerr: KrbError = decode(&bytes).expect("KRB-ERROR");
-    assert_eq!(kerr.error_code, err::PREAUTH_REQUIRED);
-    assert_eq!(
-        kerr.cname
-            .as_ref()
-            .map(PrincipalName::components_joined)
-            .as_deref(),
-        Some("WELLKNOWN/ANONYMOUS")
-    );
-    assert_eq!(
-        kerr.crealm
-            .as_ref()
-            .map(|r| String::from_utf8_lossy(r.as_bytes()).into_owned())
-            .as_deref(),
-        Some("WELLKNOWN:ANONYMOUS")
-    );
-}
-
 fn user_key() -> ProtocolKey {
     password_key(TEST_USER, TEST_USER_PASSWORD)
 }

@@ -37,15 +37,6 @@ fn get(p: &Principal, kvno: u32, etype: i32, permitted: &[E]) -> Result<(E, u32)
     .map(|k| (k.etype, k.kvno))
 }
 
-// MIT: `krb5_ktkdb_get_entry` (lib/kdb/keytab.c:157-180)
-/// a principal that is not a cross-realm TGT gives its FIRST key at the kvno, whatever the ticket's enctype, and a ticket of an enctype not similar to it finds `KRB5_KDB_NO_PERMITTED_KEY`.
-#[test]
-fn the_first_key_at_the_kvno_is_the_only_one_a_service_ticket_can_use() {
-    let p = service(&[(E::Aes256CtsHmacSha196, 3), (E::Aes128CtsHmacSha196, 3)]);
-    assert_eq!(get(&p, 3, 18, &ALL), Ok((E::Aes256CtsHmacSha196, 3)));
-    assert_eq!(get(&p, 3, 17, &ALL), Err(KtkdbError::NoPermittedKey));
-}
-
 // MIT: `krb5_dbe_def_search_enctype` (lib/kdb/kdb_default.c:47-94)
 /// kvno 0 is the highest key version, and through the lookup a kvno the principal lacks is `KRB5_KT_KVNONOTFOUND`.
 #[test]

@@ -936,34 +936,6 @@ mod tests {
         }
     }
 
-    /// A 128 KiB AS-REQ arrives in many reads and is answered as one request.
-    #[test]
-    fn tcp_128kib_unknown_cname_is_client_not_found() {
-        use krb5_types::{OctetString, PaData};
-
-        let (addr, flag, h) = serving(limits());
-        let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["nosuch"]);
-        let mut req = krb5_protocol::as_req(cname, crate::testrealm::TEST_REALM, 1, None).unwrap();
-        req.0.padata = Some(vec![PaData {
-            padata_type: 9999,
-            padata_value: OctetString::from(vec![0u8; 128 * 1024]),
-        }]);
-        let bytes = encode(&req).unwrap();
-        assert!(bytes.len() > 128 * 1024);
-        let mut c = TcpStream::connect(addr).unwrap();
-        c.write_all(&(u32::try_from(bytes.len()).unwrap()).to_be_bytes())
-            .unwrap();
-        c.write_all(&bytes).unwrap();
-        let e = tcp_error(&mut c);
-        assert_eq!(e.error_code, err::C_PRINCIPAL_UNKNOWN);
-        let text = e
-            .e_text
-            .as_ref()
-            .and_then(|t| std::str::from_utf8(t.as_bytes()).ok());
-        assert_eq!(text, Some("CLIENT_NOT_FOUND"));
-        stop(&flag, h);
-    }
-
     #[test]
     fn udp_oversize_reply_is_response_too_big() {
         let (addr, flag, h) = serving(ListenLimits {

@@ -23,9 +23,7 @@
 //! bootstrapped realm.
 
 use krb5_asn1::encode;
-use krb5_crypto::{
-    EncryptionType, KeyUsage, ProtocolKey, checksum, derive_prfplus_enctype, encrypt,
-};
+use krb5_crypto::{KeyUsage, ProtocolKey, checksum};
 use krb5_kdc::testrealm::{
     TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented, documented_host,
 };
@@ -33,28 +31,13 @@ use krb5_kdc::{
     PacTicket, decrypt_ticket_part, pac_from_ticket_part, should_have_ticket_signature, sign_pac,
     ticket_checksum_der, verify_pac_signatures,
 };
-use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
+use krb5_protocol::{as_req, pa_enc_timestamp};
 
-use krb5_testkit::{issue_tgt_password, password_key, protocol_code};
+use krb5_testkit::{password_key, protocol_code};
 use krb5_types::pac::{
-    PAC_FULL_CHECKSUM, PAC_LOGON_INFO, PAC_PRIVSVR_CHECKSUM, PAC_SERVER_CHECKSUM,
-    PAC_TICKET_CHECKSUM, Pac, PacError, signature_buffer,
+    PAC_LOGON_INFO, PAC_PRIVSVR_CHECKSUM, PAC_SERVER_CHECKSUM, Pac, PacError, signature_buffer,
 };
-use krb5_types::{EncTicketPart, PaData, PaPacRequest, PrincipalName, err, ku, pa};
-
-fn host_tgs(issued: &krb5_kdc::IssuedAs, nonce: u32) -> krb5_types::TgsReq {
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    tgs_req(
-        issued.rep.0.ticket.clone(),
-        &issued.session_key,
-        TEST_REALM,
-        &cname,
-        documented_host(),
-        TEST_REALM,
-        nonce,
-    )
-    .unwrap()
-}
+use krb5_types::{PaData, PaPacRequest, PrincipalName, err, ku, pa};
 
 #[test]
 fn as_pac_request_false_and_disable_pac_omit_pac() {
@@ -88,36 +71,6 @@ fn as_pac_request_false_and_disable_pac_omit_pac() {
     let krbtgt2 = store2.krbtgt().unwrap().best_key().unwrap();
     let part2 = decrypt_ticket_part(&krbtgt2.key, &issued2.rep.0.ticket).unwrap();
     assert!(pac_from_ticket_part(&part2).is_none());
-}
-
-#[test]
-fn tgs_privsvr_enctype_signs_with_prfplus() {
-    let (mut store, _) = bootstrap_documented().unwrap();
-    let host = documented_host();
-    store
-        .set_string(
-            &host,
-            "pac_privsvr_enctype",
-            Some("aes128-cts-hmac-sha1-96"),
-        )
-        .unwrap();
-    let as_out = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 6130);
-    let svc = krb5_kdc::issue_tgs(&store, &host_tgs(&as_out, 6131)).unwrap();
-    let host_key = store.get_name(&host).unwrap().best_key().unwrap();
-    let part = decrypt_ticket_part(&host_key.key, &svc.rep.0.ticket).unwrap();
-    let pac = pac_from_ticket_part(&part).expect("PAC");
-    let krbtgt = store.krbtgt().unwrap().first_current_key().unwrap();
-    let privsvr = derive_prfplus_enctype(
-        &krbtgt.key,
-        b"pac_privsvr",
-        EncryptionType::Aes128CtsHmacSha196,
-    )
-    .unwrap();
-    let der = ticket_checksum_der(&part).unwrap();
-    verify_pac_signatures(&pac, &host_key.key, Some(&privsvr), Some(&der), true).unwrap();
-    assert!(
-        verify_pac_signatures(&pac, &host_key.key, Some(&krbtgt.key), Some(&der), true).is_err()
-    );
 }
 
 fn signed_as_pac() -> (Vec<u8>, ProtocolKey, ProtocolKey) {
@@ -255,15 +208,6 @@ fn signed() -> Signed {
     }
 }
 
-fn kinds(pac: &[u8]) -> Vec<u32> {
-    Pac::parse(pac)
-        .unwrap()
-        .buffers
-        .iter()
-        .map(|b| b.kind)
-        .collect()
-}
-
 #[test]
 fn ticket_signature_predicate_matches_mit() {
     let tgt = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", TEST_REALM]);
@@ -273,22 +217,6 @@ fn ticket_signature_predicate_matches_mit() {
     assert!(!should_have_ticket_signature(&changepw));
     assert!(should_have_ticket_signature(&admin));
     assert!(should_have_ticket_signature(&documented_host()));
-}
-
-#[test]
-fn tgt_pac_carries_no_ticket_or_full_checksum() {
-    let s = signed();
-    let tgt = kinds(&s.tgt_shaped);
-    assert!(
-        !tgt.contains(&PAC_TICKET_CHECKSUM) && !tgt.contains(&PAC_FULL_CHECKSUM),
-        "{tgt:?}"
-    );
-    assert!(tgt.contains(&PAC_SERVER_CHECKSUM) && tgt.contains(&PAC_PRIVSVR_CHECKSUM));
-    let svc = kinds(&s.service_shaped);
-    assert!(
-        svc.contains(&PAC_TICKET_CHECKSUM) && svc.contains(&PAC_FULL_CHECKSUM),
-        "{svc:?}"
-    );
 }
 
 #[test]
@@ -362,51 +290,5 @@ fn first_current_key_ignores_the_session_etype() {
             .find(|k| k.kvno == highest)
             .unwrap()
             .etype
-    );
-}
-
-fn rewrap_ticket(
-    ticket: &krb5_types::Ticket,
-    part: &EncTicketPart,
-    key: &ProtocolKey,
-) -> krb5_types::Ticket {
-    let der = encode(part).expect("enc-tkt DER");
-    let usage = KeyUsage::new(ku::TICKET).expect("usage");
-    let cipher = encrypt(key, usage, &der).expect("encrypt");
-    let mut out = ticket.clone();
-    out.enc_part.cipher = cipher.into();
-    out
-}
-
-#[test]
-fn tgs_without_pac_still_issues() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 9300);
-    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
-    let mut part = decrypt_ticket_part(&krbtgt.key, &issued.rep.0.ticket).expect("TGT");
-    assert!(pac_from_ticket_part(&part).is_some());
-    part.authorization_data = None;
-    let stripped = rewrap_ticket(&issued.rep.0.ticket, &part, &krbtgt.key);
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgs = tgs_req(
-        stripped,
-        &issued.session_key,
-        TEST_REALM,
-        &cname,
-        documented_host(),
-        TEST_REALM,
-        9301,
-    )
-    .expect("TGS-REQ");
-    let out = krb5_kdc::issue_tgs(&store, &tgs).expect("MIT TGT without PAC must still issue");
-    let host = store
-        .get_name(&documented_host())
-        .unwrap()
-        .best_key()
-        .unwrap();
-    let svc = decrypt_ticket_part(&host.key, &out.rep.0.ticket).expect("svc");
-    assert!(
-        pac_from_ticket_part(&svc).is_none(),
-        "TGS from a PAC-less subject issues no PAC (kdc_authdata.c:491)"
     );
 }

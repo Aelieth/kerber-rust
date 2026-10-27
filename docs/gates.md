@@ -428,9 +428,9 @@ not check (a unit test, or "not asserted").
   (`KRB5_TEST_S4U_TO` unset on the Rust KDC) is `KDC can't fulfill requested option`
   on MIT db2 and the Rust KDC; the Rust KDC logs e_text `NOT_ALLOWED_TO_DELEGATE`,
   MIT db2 `UNSUPPORTED_S4U2PROXY_REQUEST`.
-  A non-forwardable evidence ticket (`BADOPTION`) and PA-PAC-OPTIONS (167)
-  are Rust tests (`s4u2proxy_rejects_non_forwardable_evidence`,
-  `s4u2proxy_rejects_malformed_pac_options`), not gate cells.
+  A non-forwardable evidence ticket (`BADOPTION`) is diffsend
+  `s4u2proxy-not-forwardable`. PA-PAC-OPTIONS (167) is a Rust test
+  (`s4u2proxy_rejects_malformed_pac_options`), not a gate cell.
 - `scripts/samba-ad-gate.sh` — Samba 4 AD DC. The only `exit 0` is after a
   live `kinit`/`kvno`/`klist`. Missing image or KDC is `exit 2` plus
   `samba-ad-gate-unavailable.log`; missing docker is `exit 2`.

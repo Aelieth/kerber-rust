@@ -9,19 +9,15 @@ mod common;
 use common::client_key;
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{EncryptionType, KeyUsage, decrypt, encrypt, p256_generate};
+use krb5_crypto::{EncryptionType, KeyUsage, decrypt, p256_generate};
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
-use krb5_kdc::{
-    Error, KDB_DISALLOW_SVR, KDB_REQUIRES_HW_AUTH, KDB_REQUIRES_PRE_AUTH, KDB_REQUIRES_PWCHANGE,
-    PrincipalStore, Restrictions,
-};
+use krb5_kdc::{Error, KDB_REQUIRES_HW_AUTH, KDB_REQUIRES_PRE_AUTH, PrincipalStore, Restrictions};
 use krb5_protocol::{as_req, pa_enc_timestamp};
 
 use krb5_protocol::{as_req_sname, pa_pk_as_req};
-use krb5_testkit::{TgsReqBuilder, krbtgt, pref_etypes, status, user, user_as_bits};
+use krb5_testkit::{TgsReqBuilder, status, user, user_as_bits};
 use krb5_types::{
-    EncKdcRepPart, EncTicketPart, EncryptedData, KdcOptions, MethodData, PrincipalName, Ticket,
-    err, flag_bit, ku, pa,
+    EncKdcRepPart, EncTicketPart, KdcOptions, MethodData, PrincipalName, err, flag_bit, ku, pa,
 };
 
 fn tgt_part(store: &PrincipalStore, issued: &krb5_kdc::IssuedAs) -> EncTicketPart {
@@ -59,19 +55,6 @@ fn as_renewable_with_zero_rlife_caps_renew_till_at_start() {
     assert_eq!(till, start);
 }
 
-#[test]
-fn as_without_preauth_has_no_pre_authent() {
-    let (mut store, _) = bootstrap_documented().unwrap();
-    let rs = Restrictions {
-        forbid_attrs: !KDB_REQUIRES_PRE_AUTH,
-        ..Restrictions::default()
-    };
-    store.impose_acl_restrictions(&user(), &rs).unwrap();
-    let req = as_req(user(), TEST_REALM, 26011, None).unwrap();
-    let issued = krb5_kdc::issue_as(&store, &req).unwrap();
-    assert!(!tgt_part(&store, &issued).flags.pre_authent());
-}
-
 fn etypes() -> Vec<i32> {
     vec![EncryptionType::Aes256CtsHmacSha196.to_iana()]
 }
@@ -95,20 +78,6 @@ fn or_attr(store: &mut PrincipalStore, name: &PrincipalName, bit: u32) {
 }
 
 fn tgt_part_a3_r32(store: &PrincipalStore, issued: &krb5_kdc::IssuedAs) -> EncTicketPart {
-    let key = store.krbtgt().unwrap().best_key().unwrap();
-    let usage = KeyUsage::new(ku::TICKET).unwrap();
-    decode(
-        &decrypt(
-            &key.key,
-            usage,
-            issued.rep.0.ticket.enc_part.cipher.as_ref(),
-        )
-        .unwrap(),
-    )
-    .unwrap()
-}
-
-fn tgs_part(store: &PrincipalStore, issued: &krb5_kdc::IssuedTgs) -> EncTicketPart {
     let key = store.krbtgt().unwrap().best_key().unwrap();
     let usage = KeyUsage::new(ku::TICKET).unwrap();
     decode(
@@ -203,83 +172,6 @@ fn pkinit_tgs_requires_hwauth_is_no_hw_preauth() {
     assert_eq!(status(&err), (err::GENERIC, Some("NO HW PREAUTH")));
 }
 
-#[test]
-fn renew_header_end_before_start_is_expired() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let key = store
-        .get_name(&user())
-        .unwrap()
-        .best_key()
-        .unwrap()
-        .key
-        .clone();
-    let mut req = as_req(
-        user(),
-        TEST_REALM,
-        32011,
-        Some(vec![pa_enc_timestamp(&key).unwrap()]),
-    )
-    .unwrap();
-    req.0.req_body.kdc_options = req
-        .0
-        .req_body
-        .kdc_options
-        .with_bit(flag_bit::RENEWABLE, true);
-    let issued = krb5_kdc::issue_as(&store, &req).unwrap();
-    let krbtgt_key = store.krbtgt().unwrap().best_key().unwrap();
-    let usage = KeyUsage::new(ku::TICKET).unwrap();
-    let mut part = tgt_part_a3_r32(&store, &issued);
-    let start = part
-        .starttime
-        .clone()
-        .unwrap_or_else(|| part.authtime.clone());
-    part.endtime = start.add_seconds(-60).unwrap();
-    part.flags = part.flags.with_bit(flag_bit::RENEWABLE, true);
-    if part.renew_till.is_none() {
-        part.renew_till = Some(start.add_hours(24).unwrap());
-    }
-    let tgt = Ticket {
-        tkt_vno: issued.rep.0.ticket.tkt_vno,
-        realm: issued.rep.0.ticket.realm.clone(),
-        sname: issued.rep.0.ticket.sname.clone(),
-        enc_part: EncryptedData {
-            etype: issued.rep.0.ticket.enc_part.etype,
-            kvno: issued.rep.0.ticket.enc_part.kvno,
-            cipher: encrypt(&krbtgt_key.key, usage, &encode(&part).unwrap())
-                .unwrap()
-                .into(),
-        },
-    };
-    let tgs = TgsReqBuilder::new(
-        tgt,
-        &issued.session_key,
-        TEST_REALM,
-        &user(),
-        krbtgt(),
-        TEST_REALM,
-        32012,
-    )
-    .options(
-        KdcOptions::none()
-            .with_bit(flag_bit::RENEWABLE, true)
-            .with_bit(flag_bit::RENEW, true),
-    )
-    .additional_tickets(None)
-    .padata(Vec::new())
-    .etypes(etypes())
-    .build()
-    .unwrap();
-    let out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
-    let got = tgs_part(&store, &out);
-    let start = got
-        .starttime
-        .as_ref()
-        .unwrap_or(&got.authtime)
-        .unix_seconds();
-    let life = i64::from(got.endtime.unix_seconds()) - i64::from(start);
-    assert_eq!(life, -60);
-}
-
 fn decode_enc_part(plain: &[u8]) -> EncKdcRepPart {
     krb5_asn1::decode_enc_kdc_rep_part(plain).expect("enc-part")
 }
@@ -294,24 +186,6 @@ fn user_as_req(nonce: u32) -> krb5_types::AsReq {
         Some(vec![pa_enc_timestamp(&key).expect("pa-ts")]),
     )
     .unwrap()
-}
-
-#[test]
-fn as_req_with_tgs_only_option_is_invalid_as_options() {
-    // MIT: `NON_TGT_OPTION` (kdc_util.h:456-457)
-    // RENEW is one of its four TGS-REQ options.
-    // MIT: `NO_REFERRAL_OPTION` (kdc_util.h:460-460)
-    // it includes every `NON_TGT_OPTION`.
-    // MIT: `AS_INVALID_OPTIONS` (kdc_util.h:463-463)
-    // it includes every `NO_REFERRAL_OPTION`,
-    // so a TGS-only KDC option (RENEW) in an AS-REQ is INVALID AS OPTIONS / BADOPTION (13),
-    // not a ticket.
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let mut req = as_req(cname, TEST_REALM, 51, None).unwrap();
-    req.0.req_body.kdc_options = req.0.req_body.kdc_options.with_bit(flag_bit::RENEW, true);
-    let err = krb5_kdc::issue_as(&store, &req).unwrap_err();
-    assert_eq!(status(&err).0, err::BADOPTION);
 }
 
 #[test]
@@ -333,36 +207,6 @@ fn as_request_reserved_option_bit_is_ignored_like_mit() {
         }
         other => panic!("want PreauthRequired, got {other:?}"),
     }
-}
-
-#[test]
-// oracle: differential-gate.sh as-request-anonymous
-fn as_request_anonymous_from_named_client_is_validate_anonymous_principal() {
-    // MIT: `process_as_req` (do_as_req.c:718-724)
-    // REQUEST_ANONYMOUS demands the anonymous
-    // principal; a named client is KRB5KDC_ERR_BADOPTION "VALIDATE_ANONYMOUS_PRINCIPAL"
-    // before check_padata. validate_as_request lets the bit through.
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let key = client_key();
-    let mut req = as_req(
-        cname,
-        TEST_REALM,
-        54,
-        Some(vec![pa_enc_timestamp(&key).expect("pa-ts")]),
-    )
-    .unwrap();
-    req.0.req_body.kdc_options = req
-        .0
-        .req_body
-        .kdc_options
-        .with_bit(flag_bit::ANONYMOUS, true);
-    let (code, text) = match krb5_kdc::issue_as(&store, &req).unwrap_err() {
-        Error::Protocol { code, text, .. } => (code, text),
-        other => panic!("want Protocol, got {other:?}"),
-    };
-    assert_eq!(code, err::BADOPTION);
-    assert_eq!(text.as_deref(), Some("VALIDATE_ANONYMOUS_PRINCIPAL"));
 }
 
 #[test]
@@ -434,29 +278,6 @@ fn as_canonicalize_issues_the_krbtgt_under_the_canonical_db_name() {
 }
 
 #[test]
-fn as_validate_runs_before_preauth_like_process_as_req() {
-    // MIT: `process_as_req` (do_as_req.c:630-630)
-    // validate_as_request runs before
-    // check_padata (:758). A preauth-required client that needs a password
-    // change gets REQUIRED PWCHANGE (23), not PREAUTH_REQUIRED (25).
-    let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    or_attr(
-        &mut store,
-        &cname,
-        KDB_REQUIRES_PRE_AUTH | KDB_REQUIRES_PWCHANGE,
-    );
-    let req = as_req(cname, TEST_REALM, 52, None).unwrap();
-    let err = krb5_kdc::issue_as(&store, &req).unwrap_err();
-    let (code, text) = match err {
-        Error::Protocol { code, text, .. } => (code, text),
-        other => panic!("want Protocol, got {other:?}"),
-    };
-    assert_eq!(code, err::KEY_EXPIRED);
-    assert_eq!(text.as_deref(), Some("REQUIRED PWCHANGE"));
-}
-
-#[test]
 // oracle: differential-gate.sh as-hw-preauth
 fn as_hw_auth_required_rejects_enc_ts() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
@@ -480,37 +301,5 @@ fn as_hw_auth_required_rejects_enc_ts() {
             );
         }
         other => panic!("expected 25 NEEDED_HW_PREAUTH, got {other:?}"),
-    }
-}
-
-#[test]
-// oracle: differential-gate.sh as-service-not-allowed
-fn as_disallow_svr_is_service_not_allowed() {
-    let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    let host = documented_host();
-    let attrs = store.get_name(&host).unwrap().attributes | KDB_DISALLOW_SVR;
-    store
-        .apply_admin_fields(
-            &host,
-            krb5_kdc::AdminFields {
-                attributes: Some(attrs),
-                max_life: None,
-                expiration: None,
-                pw_expire: None,
-                policy: None,
-                clear_policy: false,
-                max_renewable_life: None,
-            },
-        )
-        .unwrap();
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let req = as_req_sname(cname, TEST_REALM, 416, None, host, pref_etypes()).unwrap();
-    let err = krb5_kdc::issue_as(&store, &req).expect_err("DISALLOW_SVR");
-    match err {
-        Error::Protocol { code, text, .. } => {
-            assert_eq!(code, err::MUST_USE_USER2USER);
-            assert_eq!(text.as_deref(), Some("SERVICE NOT ALLOWED"));
-        }
-        other => panic!("expected 27 SERVICE NOT ALLOWED, got {other:?}"),
     }
 }

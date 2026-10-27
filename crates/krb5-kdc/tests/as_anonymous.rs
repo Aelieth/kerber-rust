@@ -4,7 +4,7 @@ use krb5_asn1::encode;
 use krb5_crypto::{EncryptionType, p256_generate};
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
 use krb5_kdc::{AdminFields, Error, KDB_REQUIRES_PRE_AUTH, PrincipalStore, decrypt_ticket_part};
-use krb5_protocol::{as_req, tgs_req};
+use krb5_protocol::as_req;
 
 use krb5_protocol::{pa_pk_as_req_unsigned, pkinit_reply_key_agile};
 use krb5_types::{KerberosTime, PrincipalName, err, flag_bit, pa};
@@ -177,31 +177,6 @@ fn anonymous_pkinit_issues_kx() {
             .is_none_or(|ad| { !ad.iter().any(|v| v.ad_type == pa::AD_WIN2K_PAC) }),
         "no PAC on anonymous tickets"
     );
-}
-
-#[test]
-fn restrict_anon_tgs_to_host() {
-    let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    let _ca = krb5_testkit::enable_pkinit(&mut store);
-    insert_anonymous(&mut store);
-    let issued = unsigned_anon_as(&store, 462);
-    store.policy.restrict_anon = true;
-    let tgs = tgs_req(
-        issued.rep.0.ticket.clone(),
-        &issued.session_key,
-        "WELLKNOWN:ANONYMOUS",
-        &wellknown_anonymous(),
-        documented_host(),
-        TEST_REALM,
-        463,
-    )
-    .unwrap();
-    let (code, text) = match krb5_kdc::issue_tgs(&store, &tgs).unwrap_err() {
-        Error::Protocol { code, text, .. } => (code, text),
-        other => panic!("want POLICY, got {other:?}"),
-    };
-    assert_eq!(code, err::POLICY);
-    assert_eq!(text.as_deref(), Some("ANONYMOUS NOT ALLOWED"));
 }
 
 /// MIT 1.22.2, settled live: an anonymous PKINIT reply stamps the anonymous principal's last

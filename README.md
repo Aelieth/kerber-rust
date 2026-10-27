@@ -142,7 +142,7 @@ config `kdc-gate.sh` runs.
 [parity ledger](docs/parity/README.md) →
 [logging](docs/logging.md) → [interop](docs/interop-matrix.md) →
 [plugins](docs/plugins.md) → [RFC mapping](docs/rfc-mapping.md) →
-[gate-unit index](docs/gate-unit-index.md) → the labs
+the labs
 ([AD](docs/labs/ad-lab.md), [Samba](docs/labs/samba-lab.md),
 [KCM / NFS verdict](docs/labs/kcm-nfs-verdict.md)) → the
 [KLLDAP embed](docs/embed/klldap.md) →

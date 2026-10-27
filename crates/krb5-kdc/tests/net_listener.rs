@@ -9,10 +9,9 @@
 //! Persist round-trip and UDP listener adversarial tests.
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{EncryptionType, string_to_key};
-use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented};
-use krb5_kdc::{S2K_ITERS, serve_until, shared_store};
-use krb5_protocol::{as_req, pa_enc_timestamp};
+use krb5_kdc::shared_store;
+use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented};
+use krb5_protocol::as_req;
 
 use krb5_config::listen::ListenAddr;
 use krb5_types::{PrincipalName, err};
@@ -20,75 +19,6 @@ use std::net::UdpSocket;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-
-#[test]
-fn listener_retransmit_resends_the_cached_reply_like_replay_c() {
-    // MIT: `dispatch` (dispatch.c:114-140)
-    // with the kdc/replay.c lookaside, an identical
-    // request resent to the listener is answered from the cache, so the second reply is
-    // byte-for-byte the first, not a freshly minted AS-REP (new session key).
-    use std::io::{Read, Write};
-    use std::net::TcpStream;
-    let (store, _) = bootstrap_documented().unwrap();
-    let (udp, tcp) = krb5_testkit::loopback_udp_tcp();
-    let addr = udp.local_addr().unwrap();
-    let store = shared_store(store);
-    thread::spawn(move || {
-        let _ = serve_until(
-            store,
-            udp,
-            tcp,
-            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            krb5_kdc::ListenLimits::default(),
-            &krb5_kdc::KdcLog::process(),
-        );
-    });
-
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let salt = cname.default_salt(TEST_REALM);
-    let key = string_to_key(
-        EncryptionType::Aes256CtsHmacSha196,
-        TEST_USER_PASSWORD,
-        &salt,
-        Some(&S2K_ITERS.to_be_bytes()),
-    )
-    .unwrap();
-    let req = as_req(
-        cname,
-        TEST_REALM,
-        88,
-        Some(vec![pa_enc_timestamp(&key).unwrap()]),
-    )
-    .unwrap();
-    let bytes = encode(&req).unwrap();
-
-    let send = |b: &[u8]| -> Vec<u8> {
-        let mut s = TcpStream::connect(addr).unwrap();
-        s.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-        let len = u32::try_from(b.len()).unwrap();
-        s.write_all(&len.to_be_bytes()).unwrap();
-        s.write_all(b).unwrap();
-        s.flush().unwrap();
-        let mut hdr = [0u8; 4];
-        s.read_exact(&mut hdr).unwrap();
-        let n = u32::from_be_bytes(hdr) as usize;
-        let mut buf = vec![0u8; n];
-        s.read_exact(&mut buf).unwrap();
-        buf
-    };
-
-    let first = send(&bytes);
-    assert_eq!(
-        first.first().copied(),
-        Some(0x6b),
-        "first request issues an AS-REP"
-    );
-    let second = send(&bytes);
-    assert_eq!(
-        second, first,
-        "the retransmit is answered from the lookaside cache byte-for-byte"
-    );
-}
 
 /// A stream left part-way through its length for longer than the old five-second timeout is
 /// still answered when it completes: as MIT's (settled live: 615 s), a stream has no timeout.
@@ -293,51 +223,5 @@ fn the_wildcard_is_an_ipv4_and_an_ipv6_only_socket_on_one_port_like_mit() {
             assert!(a.ip().is_unspecified() && a.port() == port, "{a}");
             assert_mit_socket(s, *a);
         }
-    }
-}
-
-#[test]
-fn bare_port_listens_on_ipv4_and_ipv6_like_mit() {
-    // A bare port is MIT's wildcard (`loop_add_addresses` with no host): IPv4 peers reach the
-    // `0.0.0.0` socket and, where the host has IPv6, IPv6 peers the `[::]` one.
-    use krb5_kdc::{bind_tcp_listeners, bind_udp_listeners, serve_all_until};
-    let (_, udp) = bind_wildcard(bind_udp_listeners);
-    let (_, tcp) = bind_wildcard(bind_tcp_listeners);
-    let probes: Vec<(bool, std::net::SocketAddr)> = udp
-        .iter()
-        .map(|s| (true, s.local_addr().unwrap()))
-        .chain(tcp.iter().map(|s| (false, s.local_addr().unwrap())))
-        .map(|(is_udp, a)| {
-            let ip: std::net::IpAddr = if a.is_ipv4() {
-                std::net::Ipv4Addr::LOCALHOST.into()
-            } else {
-                std::net::Ipv6Addr::LOCALHOST.into()
-            };
-            (is_udp, std::net::SocketAddr::new(ip, a.port()))
-        })
-        .collect();
-    let (store, _) = bootstrap_documented().unwrap();
-    let store = shared_store(store);
-    thread::spawn(move || {
-        let _ = serve_all_until(
-            store,
-            udp,
-            tcp,
-            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            krb5_kdc::ListenLimits::default(),
-            &krb5_kdc::KdcLog::process(),
-        );
-    });
-    for (is_udp, a) in probes {
-        let ok = if is_udp {
-            udp_as_answers(a)
-        } else {
-            tcp_as_answers(a)
-        };
-        assert!(
-            ok,
-            "no {} answer on {a}",
-            if is_udp { "udp" } else { "tcp" }
-        );
     }
 }

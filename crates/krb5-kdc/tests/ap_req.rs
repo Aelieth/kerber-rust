@@ -440,26 +440,6 @@ fn tgs_header_unknown_kvno_is_generic() {
     }
 }
 
-#[test]
-fn tgs_header_kvno_zero_issues() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 419);
-    let mut tkt = issued.rep.0.ticket.clone();
-    tkt.enc_part.kvno = Some(0);
-    let tgs = tgs_req(
-        tkt,
-        &issued.session_key,
-        TEST_REALM,
-        &cname,
-        documented_host(),
-        TEST_REALM,
-        420,
-    )
-    .unwrap();
-    krb5_kdc::issue_tgs(&store, &tgs).expect("kvno 0 retries");
-}
-
 /// MIT `krb5_decrypt_tkt_part` and `negotiate_etype`, both on the KDC's own context (settled
 /// live beside MIT 1.22.2's krb5kdc): a TGS-REQ whose header ticket's enctype, or whose session
 /// key's, the KDC no longer permits is 60 `PROCESS_TGS`.

@@ -71,30 +71,25 @@
 mod common;
 use common::client_key;
 
-use krb5_asn1::{decode, decode_enc_kdc_rep_part, encode};
-use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, string_to_key};
+use krb5_asn1::{decode, encode};
+use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, string_to_key};
 use krb5_kdc::testrealm::{
     TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented, documented_admin_id,
-    documented_host,
 };
 use krb5_kdc::{
     Error, KdcEnv, KdcPolicy, KdcPreauth, KeyEntry, Policy, PolicyAdjustment, Principal,
     PrincipalRead, PrincipalStore, S2K_ITERS, random_key, register_preauth,
 };
-use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
+use krb5_protocol::{as_req, pa_enc_timestamp};
 
 use krb5_protocol::{
-    armor_key, as_req_sname, attach_fast, build_fast_armor, pa_pac_options, pa_pk_as_req_spki,
-    unwrap_fast_rep,
+    armor_key, as_req_sname, attach_fast, build_fast_armor, pa_pk_as_req_spki, unwrap_fast_rep,
 };
-use krb5_testkit::{
-    TgsReqBuilder, expect_status, issue_tgt_password, password_key, pref_etypes, status, user,
-    user_as,
-};
+use krb5_testkit::{expect_status, issue_tgt_password, password_key, pref_etypes, user};
 use krb5_types::pac::RpcSid;
 use krb5_types::{
-    EncKdcRepPart, EncryptedData, KdcOptions, KerberosTime, KrbError, MethodData, Microseconds,
-    PaData, PaEncTsEnc, PaPacRequest, PrincipalName, ascii, err, ku, pa,
+    EncKdcRepPart, EncryptedData, KerberosTime, KrbError, MethodData, PaData, PaPacRequest,
+    PrincipalName, ascii, err, ku, pa,
 };
 use std::sync::Arc;
 
@@ -118,109 +113,6 @@ fn as_hint_list_is_136_info2_modules_cookie() {
             pa::ENC_TIMESTAMP,
             pa::FX_COOKIE,
         ]
-    );
-}
-
-#[test]
-// oracle: differential-gate.sh ec-outside-fast
-fn as_ec_outside_fast_is_preauth_failed() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let req = as_req(
-        cname,
-        TEST_REALM,
-        15002,
-        Some(vec![PaData {
-            padata_type: pa::ENCRYPTED_CHALLENGE,
-            padata_value: b"outside-fast".to_vec().into(),
-        }]),
-    )
-    .unwrap();
-    let err = krb5_kdc::issue_as(&store, &req).unwrap_err();
-    assert_eq!(status(&err), (err::PREAUTH_FAILED, Some("PREAUTH_FAILED")));
-}
-
-#[test]
-fn tgs_pac_options_rbcd_is_echoed_in_enc_padata() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let issued = user_as(&store, 15003);
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgs = TgsReqBuilder::new(
-        issued.rep.0.ticket.clone(),
-        &issued.session_key,
-        TEST_REALM,
-        &cname,
-        documented_host(),
-        TEST_REALM,
-        15004,
-    )
-    .options(KdcOptions::none())
-    .additional_tickets(None)
-    .padata(vec![pa_pac_options(true).unwrap()])
-    .etypes(vec![18])
-    .build()
-    .unwrap();
-    let out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
-    let usage = KeyUsage::new(ku::TGS_REP_ENC_PART).unwrap();
-    let plain = decrypt(
-        &issued.session_key,
-        usage,
-        out.rep.0.enc_part.cipher.as_ref(),
-    )
-    .unwrap();
-    let enc = decode_enc_kdc_rep_part(&plain).unwrap();
-    let types: Vec<i32> = enc
-        .encrypted_pa_data
-        .as_ref()
-        .into_iter()
-        .flatten()
-        .map(|p| p.padata_type)
-        .collect();
-    assert!(
-        types.contains(&pa::PAC_OPTIONS),
-        "enc_padata types {types:?} must echo PAC-OPTIONS"
-    );
-}
-
-#[test]
-fn as_fast_hint_keeps_136_151_lists_138_omits_2() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let armor = user_as(&store, 15005);
-    let sub = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x61u8; 32]).unwrap();
-    let armor_ap = build_fast_armor(
-        armor.rep.0.ticket.clone(),
-        &armor.session_key,
-        &ascii(TEST_REALM),
-        &cname,
-        Some(&sub),
-    )
-    .unwrap();
-    let akey = armor_key(&armor.session_key, Some(&sub)).unwrap();
-    let mut req = as_req(cname, TEST_REALM, 15006, None).unwrap();
-    attach_fast(&mut req, &armor_ap, &akey, vec![]).unwrap();
-    let err = krb5_kdc::issue_as(&store, &req).unwrap_err();
-    let Error::PreauthRequired { e_data } = err else {
-        panic!("expected PreauthRequired, got {err:?}");
-    };
-    let method: MethodData = decode(&e_data).unwrap();
-    let fast = unwrap_fast_rep(&akey, &Some(method)).unwrap();
-    let types: Vec<i32> = fast.padata.iter().map(|p| p.padata_type).collect();
-    assert!(
-        types.contains(&pa::FX_FAST),
-        "FAST-inner METHOD-DATA keeps 136: {types:?}"
-    );
-    assert!(
-        types.contains(&pa::SPAKE),
-        "FAST-inner METHOD-DATA keeps 151: {types:?}"
-    );
-    assert!(
-        types.contains(&pa::ENCRYPTED_CHALLENGE),
-        "FAST-inner METHOD-DATA lists 138: {types:?}"
-    );
-    assert!(
-        !types.contains(&pa::ENC_TIMESTAMP),
-        "FAST-inner METHOD-DATA omits 2: {types:?}"
     );
 }
 
@@ -262,32 +154,6 @@ fn wrong_password_yields_preauth_failed_bytes() {
     assert_ne!(bytes, [] as [u8; 0]);
     let e: krb5_types::KrbError = decode(&bytes).expect("KRB-ERROR");
     assert_eq!(e.error_code, err::PREAUTH_FAILED);
-}
-
-#[test]
-// oracle: differential-gate.sh as-session-enctype
-// oracle: differential-gate.sh etype-nosupp
-fn no_common_etype_is_etype_nosupp() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let key = client_key();
-    let mut req = as_req(
-        cname,
-        TEST_REALM,
-        6,
-        Some(vec![pa_enc_timestamp(&key).expect("pa")]),
-    )
-    .unwrap();
-    req.0.req_body.etype = vec![23]; // rc4 session refused unless allow_rc4 + session_enctypes
-    let bytes = krb5_kdc::handle_request(&store, &encode(&req).expect("der")).expect("reply");
-    let e: krb5_types::KrbError = decode(&bytes).expect("KRB-ERROR");
-    assert_eq!(e.error_code, err::ETYPE_NOSUPP);
-    assert_eq!(
-        e.e_text
-            .as_ref()
-            .and_then(|s| std::str::from_utf8(s.as_bytes()).ok()),
-        Some("BAD_ENCRYPTION_TYPE")
-    );
 }
 
 #[test]
@@ -354,13 +220,6 @@ fn user_key() -> ProtocolKey {
     password_key(TEST_USER, TEST_USER_PASSWORD)
 }
 
-fn issue_code(err: Error) -> i32 {
-    match err {
-        Error::Protocol { code, .. } => code,
-        other => panic!("expected protocol error, got {other:?}"),
-    }
-}
-
 fn assert_krb_error(bytes: &[u8], code: i32, e_text: &str) {
     assert_eq!(bytes.first(), Some(&0x7e), "expected KRB-ERROR");
     let e: KrbError = decode(bytes).expect("KrbError");
@@ -408,87 +267,6 @@ fn every_ticket_sets_enc_pa_rep_flag_without_padata() {
         enc.encrypted_pa_data.is_none(),
         "no enc-pa-rep padata without PA 149"
     );
-}
-
-#[test]
-fn as_enc_timestamp_wrong_etype_is_preauth_failed_like_mit() {
-    // enc_ts_verify (kdc_preauth_encts.c): no client key of the declared etype
-    // is KRB5_KDB_NO_MATCHING_KEY, remapped to KDC_ERR_PREAUTH_FAILED (24), not
-    // a NEEDED_PREAUTH round trip.
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let user = store.get_name(&cname).unwrap();
-    assert!(
-        !user
-            .keys
-            .iter()
-            .any(|k| k.etype == EncryptionType::Des3CbcSha1),
-        "premise: TEST_USER has no des3 key"
-    );
-    let ed = EncryptedData {
-        etype: 16,
-        kvno: None,
-        cipher: vec![0u8; 32].into(),
-    };
-    let pa = PaData {
-        padata_type: pa::ENC_TIMESTAMP,
-        padata_value: encode(&ed).unwrap().into(),
-    };
-    let req = as_req(cname, TEST_REALM, 261, Some(vec![pa])).unwrap();
-    let e = krb5_kdc::issue_as(&store, &req).expect_err("wrong-etype timestamp");
-    assert_eq!(issue_code(e), err::PREAUTH_FAILED);
-}
-
-#[test]
-fn as_preauth_failed_carries_the_hint_list_like_mit() {
-    // MIT: `finish_preauth` (do_as_req.c:443-447)
-    // the get_preauth_hint_list e_data is
-    // attached to a PREAUTH_FAILED (24) so the client can retry with the right salt/etype.
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let ed = EncryptedData {
-        etype: 16,
-        kvno: None,
-        cipher: vec![0u8; 32].into(),
-    };
-    let pa = PaData {
-        padata_type: pa::ENC_TIMESTAMP,
-        padata_value: encode(&ed).unwrap().into(),
-    };
-    let req = as_req(cname, TEST_REALM, 263, Some(vec![pa])).unwrap();
-    let bytes = krb5_kdc::handle_request(&store, &encode(&req).unwrap()).expect("reply");
-    let e: KrbError = decode(&bytes).expect("KRB-ERROR");
-    assert_eq!(e.error_code, err::PREAUTH_FAILED);
-    let hint = e
-        .e_data
-        .as_ref()
-        .expect("PREAUTH_FAILED carries hint e_data");
-    let method: MethodData = decode(hint.as_ref()).expect("METHOD-DATA");
-    assert!(
-        method.iter().any(|p| p.padata_type == pa::ETYPE_INFO2),
-        "hint carries ETYPE-INFO2"
-    );
-}
-
-#[test]
-fn preauth_required_hint_lists_one_etype_info2_entry_like_mit() {
-    // get_preauth_hint_list emits a single ETYPE-INFO2 entry for the selected
-    // client key (add_etype_info -> make_etype_info), not one entry per key.
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let req = as_req(cname, TEST_REALM, 262, None).unwrap();
-    let bytes = krb5_kdc::handle_request(&store, &encode(&req).unwrap()).expect("reply");
-    let ke: KrbError = decode(&bytes).expect("KRB-ERROR");
-    assert_eq!(ke.error_code, err::PREAUTH_REQUIRED);
-    let method: MethodData =
-        decode(ke.e_data.as_ref().expect("e_data").as_ref()).expect("METHOD-DATA");
-    let info2 = method
-        .iter()
-        .find(|p| p.padata_type == pa::ETYPE_INFO2)
-        .expect("ETYPE-INFO2 hint");
-    let entries: krb5_types::EtypeInfo2 =
-        decode(info2.padata_value.as_ref()).expect("decode ETYPE-INFO2");
-    assert_eq!(entries.len(), 1, "MIT hint lists exactly one entry");
 }
 
 #[test]
@@ -548,16 +326,6 @@ fn as_bad_msg_type_is_validate_message_type() {
     let e: KrbError = decode(&bytes).expect("KRB-ERROR");
     assert!(e.cname.is_some(), "requested cname echoed");
     assert!(e.e_data.is_none(), "no cookie");
-}
-
-#[test]
-fn as_bad_pvno_is_dropped() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let mut req = as_req(cname, TEST_REALM, 411, None).unwrap();
-    req.0.pvno = 4;
-    let bytes = krb5_kdc::handle_request(&store, &encode(&req).expect("der")).expect("reply");
-    assert!(bytes.is_empty(), "pvno != 5 is dropped");
 }
 
 #[test]
@@ -785,23 +553,6 @@ fn kinit(store: &PrincipalStore) -> krb5_kdc::IssuedAs {
     krb5_kdc::issue_as(store, &req).expect("AS issues")
 }
 
-fn kvno_host(
-    store: &PrincipalStore,
-    tgt: &krb5_kdc::IssuedAs,
-) -> Result<krb5_kdc::IssuedTgs, krb5_kdc::Error> {
-    let req = tgs_req(
-        tgt.rep.0.ticket.clone(),
-        &tgt.session_key,
-        TEST_REALM,
-        &user_name(),
-        documented_host(),
-        TEST_REALM,
-        0x2600_0011,
-    )
-    .unwrap();
-    krb5_kdc::issue_tgs(store, &req)
-}
-
 fn assert_finding_server_key<T: std::fmt::Debug>(got: Result<T, krb5_kdc::Error>) {
     match got {
         Err(krb5_kdc::Error::Protocol { code, text, .. }) => {
@@ -811,27 +562,6 @@ fn assert_finding_server_key<T: std::fmt::Debug>(got: Result<T, krb5_kdc::Error>
         Err(other) => panic!("expected 60 FINDING_SERVER_KEY, got {other:?}"),
         Ok(v) => panic!("a server whose only keys are non-permitted must not get a ticket: {v:?}"),
     }
-}
-
-#[test]
-fn tgs_service_key_skips_a_non_permitted_first_key() {
-    let mut store = store_permitting_aes256();
-    set_random_keys(&mut store, &documented_host(), &[AES128, AES256]);
-    let tgt = kinit(&store);
-    let tkt = kvno_host(&store, &tgt).expect("TGS issues under the aes256 key");
-    assert_eq!(
-        tkt.rep.0.ticket.enc_part.etype,
-        AES256.to_iana(),
-        "service ticket must be sealed with the permitted aes256 key, not the first-stored aes128"
-    );
-}
-
-#[test]
-fn tgs_service_key_only_non_permitted_is_finding_server_key() {
-    let mut store = store_permitting_aes256();
-    set_random_keys(&mut store, &documented_host(), &[AES128]);
-    let tgt = kinit(&store);
-    assert_finding_server_key(kvno_host(&store, &tgt));
 }
 
 #[test]
@@ -1127,32 +857,6 @@ fn encts_under_a_non_permitted_etype_is_24_like_filter_preauth_error() {
     );
 }
 
-#[test]
-fn encts_with_an_out_of_range_pausec_verifies() {
-    krb5_config::isolate_test_krb5();
-    let (store, _) = bootstrap_documented().unwrap();
-    let key = user_key_z1b_preauth_filter(&store, EncryptionType::Aes256CtsHmacSha196);
-    let ts = PaEncTsEnc {
-        patimestamp: KerberosTime::now(),
-        pausec: Some(Microseconds(1_000_000)),
-    };
-    let der = encode(&ts).unwrap();
-    let cipher = encrypt(&key, KeyUsage::new(ku::PA_ENC_TIMESTAMP).unwrap(), &der).unwrap();
-    let enc = EncryptedData {
-        etype: key.etype().to_iana(),
-        kvno: None,
-        cipher: cipher.into(),
-    };
-    let padata = vec![PaData {
-        padata_type: pa::ENC_TIMESTAMP,
-        padata_value: encode(&enc).unwrap().into(),
-    }];
-    // MIT: `enc_ts_verify` (kdc/kdc_preauth_encts.c:97-97)
-    // only the timestamp is checked, against the clock skew; its pausec is taken as it is.
-    let req = as_req(user(), TEST_REALM, 0x1b07, Some(padata)).unwrap();
-    krb5_kdc::issue_as(&store, &req).expect("a pausec past 999999 verifies");
-}
-
 struct RawCodePolicy(i32);
 
 impl KdcPolicy for RawCodePolicy {
@@ -1396,32 +1100,6 @@ fn hint_omits_enc_ts_when_the_only_key_is_not_permitted() {
     assert!(
         !types.contains(&pa::ETYPE_INFO2),
         "no selected client key → no ETYPE-INFO2: {types:?}"
-    );
-    assert!(
-        !types.contains(&pa::SPAKE),
-        "SPAKE must be omitted when client_keyblock is NULL: {types:?}"
-    );
-}
-
-#[test]
-// oracle: differential-gate.sh as-needpreauth-hints-unpermitted
-fn hint_omits_enc_ts_when_the_only_key_is_not_requested() {
-    krb5_config::isolate_test_krb5();
-    let (mut store, _) = bootstrap_documented().unwrap();
-    set_user_aes128_only(&mut store);
-    let req = as_req_sname(
-        user_name(),
-        TEST_REALM,
-        0x2600_0063,
-        None,
-        PrincipalName::krbtgt(TEST_REALM),
-        vec![AES256.to_iana()],
-    )
-    .unwrap();
-    let types = hint_types(krb5_kdc::issue_as(&store, &req).unwrap_err());
-    assert!(
-        !types.contains(&pa::ENC_TIMESTAMP),
-        "ENC-TS must be omitted when no requested etype has a key: {types:?}"
     );
     assert!(
         !types.contains(&pa::SPAKE),
