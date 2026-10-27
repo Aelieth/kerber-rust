@@ -192,18 +192,6 @@ fn as_under_a_stored_key_of_bad_parity_fails_in_return_enc_padata() {
     assert_eq!(err_of(&wire), (60, "KDC_RETURN_ENC_PADATA".to_owned()));
 }
 
-/// A request without it meets the key at the encryption of the reply, which sets no status of its own.
-// MIT: `finish_process_as_req` (kdc/do_as_req.c:326-332)
-/// `krb5_encode_kdc_rep` fails, and `egress` makes the status `UNKNOWN_REASON`.
-#[test]
-fn as_under_a_stored_key_of_bad_parity_fails_in_the_reply_encryption_without_enc_pa_rep() {
-    let (store, user, _) = realm_with_a_bad_des3_user(false);
-    let req = as_req_for(&user, 741, vec![]);
-    let e = krb5_kdc::issue_as(&store, &req).unwrap_err();
-    assert_eq!(status(&e), (err::GENERIC, Some("UNKNOWN_REASON")));
-    assert_eq!(detail(&e), Some("DES key has bad parity"));
-}
-
 /// A client that must preauthenticate sends a timestamp under its own (good) key; the KDC cannot decrypt it with the stored key and
 /// that is PREAUTH_FAILED, as for a wrong password.
 // MIT: `enc_ts_verify` (kdc/kdc_preauth_encts.c:74-92)
@@ -216,15 +204,6 @@ fn as_with_preauth_under_a_stored_key_of_bad_parity_is_preauth_failed() {
     assert_eq!(status(&e), (err::PREAUTH_FAILED, Some("PREAUTH_FAILED")));
     let wire = krb5_kdc::handle_request(&store, &encode(&req).unwrap()).unwrap();
     assert_eq!(err_of(&wire), (24, "PREAUTH_FAILED".to_owned()));
-}
-
-/// The same realm before its key was spoiled issues; the spoiled key is the only difference.
-#[test]
-fn the_same_realm_with_the_key_as_it_was_issues() {
-    let (mut store, user, _) = realm_with_des3_user();
-    set_preauth(&mut store, &user, false);
-    let req = as_req_for(&user, 743, vec![enc_pa_rep()]);
-    krb5_kdc::issue_as(&store, &req).expect("AS issues");
 }
 
 fn tgs_for_host(

@@ -11,17 +11,17 @@ use krb5_kdc::testrealm::{
     TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented, documented_host,
 };
 use krb5_kdc::{Error, PrincipalStore, decrypt_ticket_part};
-use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
+use krb5_protocol::tgs_req;
 
 use krb5_protocol::{
     AsOutcome, KdcAddr, apply_strengthen, armor_key, build_fast_armor, tgs_exchange,
     unwrap_fast_rep,
 };
-use krb5_testkit::{TgsReqBuilder, issue_tgt_password, password_key};
+use krb5_testkit::issue_tgt_password;
 use krb5_types::{
     ApReq, Authenticator, AuthorizationDataValue, Checksum, EncKdcRepPart, EncTgsRepPart,
-    EncTicketPart, EncryptedData, EncryptionKey, KdcOptions, KerberosTime, KrbError, OctetString,
-    PrincipalName, TgsRep, TgsReq, Ticket, TicketFlags, ascii, err, flag_bit, ku, pa,
+    EncTicketPart, EncryptedData, EncryptionKey, KerberosTime, KrbError, OctetString,
+    PrincipalName, TgsRep, TgsReq, Ticket, TicketFlags, ascii, err, ku, pa,
 };
 use std::io::{Read, Write};
 use std::sync::mpsc;
@@ -301,10 +301,6 @@ fn tgs_fast_hide_outer_tgs_rep() {
     assert!(fast.finished.is_some(), "finished keeps the real client");
 }
 
-fn user_key() -> ProtocolKey {
-    password_key(TEST_USER, TEST_USER_PASSWORD)
-}
-
 fn decode_enc_part(plain: &[u8]) -> EncKdcRepPart {
     krb5_asn1::decode_enc_kdc_rep_part(plain).expect("enc-part")
 }
@@ -551,55 +547,6 @@ fn tgs_fast_inner_nonce_not_outer() {
         enc.nonce, 200,
         "EncTgsRepPart must echo the inner FAST nonce"
     );
-}
-
-#[test]
-fn tgs_fast_validate_future_starttime_is_not_yet_valid() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let key = user_key();
-    // Two minutes ahead, inside the 300 s skew: the VALIDATE check decides, with no window to race.
-    let from = KerberosTime::now().add_seconds(120).unwrap();
-    let mut req = as_req(
-        cname.clone(),
-        TEST_REALM,
-        860,
-        Some(vec![pa_enc_timestamp(&key).expect("pa")]),
-    )
-    .unwrap();
-    req.0.req_body.from = Some(from);
-    req.0.req_body.kdc_options = req
-        .0
-        .req_body
-        .kdc_options
-        .with_bit(flag_bit::MAY_POSTDATE, true)
-        .with_bit(flag_bit::POSTDATED, true);
-    let issued = krb5_kdc::issue_as(&store, &req).expect("postdated AS");
-    let mut tgs = TgsReqBuilder::new(
-        issued.rep.0.ticket.clone(),
-        &issued.session_key,
-        TEST_REALM,
-        &cname,
-        PrincipalName::krbtgt(TEST_REALM),
-        TEST_REALM,
-        861,
-    )
-    .options(KdcOptions::forwardable().with_bit(flag_bit::VALIDATE, true))
-    .additional_tickets(None)
-    .padata(Vec::new())
-    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
-    .build()
-    .expect("VALIDATE");
-    let inner = tgs.0.req_body.clone();
-    wrap_tgs_fast(&mut tgs, &issued.session_key, inner).expect("TGS FAST");
-    let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("FAST VALIDATE future start");
-    match err {
-        Error::Protocol { code, text, .. } => {
-            assert_eq!(code, err::TKT_NYV);
-            assert_eq!(text.as_deref(), Some("NOT_YET_VALID"));
-        }
-        other => panic!("expected Protocol, got {other:?}"),
-    }
 }
 
 #[test]

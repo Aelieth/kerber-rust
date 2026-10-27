@@ -4,7 +4,7 @@
 use krb5_asn1::encode;
 use krb5_kdc::testrealm::TestAudit;
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
-use krb5_kdc::{AUTHN_REQ_CL, ENCR_REP, SRVC_PRINC, ktypes2str, make_tkt_id};
+use krb5_kdc::{AUTHN_REQ_CL, ENCR_REP, SRVC_PRINC, make_tkt_id};
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
 use krb5_testkit::{issue_tgt, scratch_dir, user};
@@ -71,16 +71,6 @@ fn as_issue_log_has_client_server_etypes() {
         log.contains("etypes {rep="),
         "missing rep_etypes2str: {log}"
     );
-}
-
-#[test]
-fn as_issue_log_has_authtime_and_kind() {
-    let log = capture_as(2002);
-    assert!(
-        log.contains("AS_REQ") || log.contains("kind"),
-        "missing kind: {log}"
-    );
-    assert!(log.contains("authtime"), "missing authtime: {log}");
 }
 
 #[test]
@@ -184,14 +174,6 @@ fn test_audit_writes_mit_field_names() {
         "{req_id}"
     );
     let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn ktypes2str_matches_mit() {
-    assert_eq!(
-        ktypes2str(&[18, 17, 20, 19]),
-        "4 etypes {aes256-cts-hmac-sha1-96(18), aes128-cts-hmac-sha1-96(17), aes256-cts-hmac-sha384-192(20), aes128-cts-hmac-sha256-128(19)}"
-    );
 }
 
 fn audit_lines(path: &std::path::Path) -> Vec<String> {

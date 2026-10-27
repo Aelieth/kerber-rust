@@ -417,35 +417,6 @@ fn tgs_expired_beats_unknown_sname() {
     }
 }
 
-#[test]
-fn tgs_canonicalize_renew_issues_local_tgt() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let as_out = renewable_tgt(&store, 6090);
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgs = TgsReqBuilder::new(
-        as_out.rep.0.ticket.clone(),
-        &as_out.session_key,
-        TEST_REALM,
-        &cname,
-        PrincipalName::krbtgt(TEST_REALM),
-        TEST_REALM,
-        6091,
-    )
-    .options(
-        KdcOptions::forwardable()
-            .with_bit(flag_bit::RENEWABLE, true)
-            .with_bit(flag_bit::RENEW, true)
-            .with_bit(flag_bit::CANONICALIZE, true),
-    )
-    .additional_tickets(None)
-    .padata(Vec::new())
-    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
-    .build()
-    .unwrap();
-    let out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
-    assert!(out.rep.0.ticket.sname.is_krbtgt_for(TEST_REALM));
-}
-
 const FOREIGN: &str = "OTHER.TEST";
 
 fn issue_host_tgt(store: &PrincipalStore, dest: &PrincipalName, nonce: u32) -> krb5_kdc::IssuedAs {

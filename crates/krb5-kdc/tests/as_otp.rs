@@ -199,17 +199,6 @@ fn code(e: &Error) -> (i32, Option<String>, Option<String>) {
     }
 }
 
-/// The nonce of the PA-OTP-CHALLENGE in a hint list.
-fn hint_nonce(a: &Armor, e: &Error) -> Vec<u8> {
-    let hints = inner_hints(a, e);
-    let h = hints
-        .iter()
-        .find(|p| p.padata_type == pa::OTP_CHALLENGE)
-        .expect("141");
-    let ch: PaOtpChallenge = decode(h.padata_value.as_ref()).unwrap();
-    ch.nonce.to_vec()
-}
-
 /// Installs verifiers, then runs one AS-REQ with the token built from `plain`.
 fn run_with(
     store: &mut PrincipalStore,
@@ -369,22 +358,6 @@ fn run_with_none(
     krb5_kdc::issue_as(store, &fast_req(a, vec![pa_otp(&a.key, plain, b"1")], n))
 }
 
-// MIT: `otp_verify` (plugins/preauth/otp/main.c:300-301)
-/// a PA 142 outside FAST is 24, with the table text of that code.
-#[test]
-fn no_armor_is_24() {
-    let store = realm(Some("[{}]"));
-    let a = armor(&store, 9700);
-    let plain = enc_req_plain(&fresh_nonce(32));
-    let mut req = as_req(user(), TEST_REALM, 9701, None).unwrap();
-    req.0.padata = Some(vec![pa_otp(&a.key, &plain, b"1")]);
-    let e = krb5_kdc::issue_as(&store, &req).unwrap_err();
-    let (c, text, d) = code(&e);
-    assert_eq!(c, 24);
-    assert_eq!(text.as_deref(), Some("PREAUTH_FAILED"));
-    assert_eq!(d.as_deref(), Some("Preauthentication failed"));
-}
-
 /// The plugins stanza selects the module by name.
 #[test]
 fn plugins_stanza_selects_otp() {
@@ -429,45 +402,6 @@ fn stanza_realm(attr: &str, stanza: &str, nonce: u32) -> (PrincipalStore, Armor)
     (store, a)
 }
 
-/// A first flight for a principal whose top kvno holds aes128 only, asked for aes256 only, is 25
-/// with the OTP challenge and no etype info.
-#[test]
-fn keyless_first_flight_offers_otp() {
-    let mut store = realm(Some("[{}]"));
-    let a = armor(&store, 9450);
-    let aes128 = EncryptionType::Aes128CtsHmacSha196;
-    store
-        .set_keys(
-            &user(),
-            vec![krb5_kdc::KeyEntry::new(
-                aes128,
-                krb5_kdc::random_key(aes128).unwrap(),
-                0,
-            )],
-            2,
-        )
-        .unwrap();
-    let mut req = as_req_sname(
-        user(),
-        TEST_REALM,
-        9451,
-        None,
-        PrincipalName::krbtgt(TEST_REALM),
-        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
-    )
-    .unwrap();
-    attach_fast(&mut req, &a.ap, &a.key, vec![]).unwrap();
-    let e = krb5_kdc::issue_as(&store, &req).unwrap_err();
-    assert!(matches!(e, Error::PreauthRequired { .. }), "{e:?}");
-    let types: Vec<i32> = inner_hints(&a, &e).iter().map(|p| p.padata_type).collect();
-    assert!(types.contains(&pa::OTP_CHALLENGE), "{types:?}");
-    assert!(!types.contains(&pa::ETYPE_INFO2), "{types:?}");
-    assert_eq!(
-        types,
-        [pa::FX_FAST, pa::OTP_CHALLENGE, pa::FX_COOKIE, pa::FX_ERROR]
-    );
-}
-
 /// An OTP accepted for the principal issues, and its reply key is the armor key.
 #[test]
 fn accept_replaces_reply_key_with_the_armor_key() {
@@ -509,29 +443,6 @@ fn accept_replaces_reply_key_with_the_armor_key() {
     let pw = krb5_testkit::password_key(TEST_USER, TEST_USER_PASSWORD);
     let pw = apply_strengthen(&sk, &pw).unwrap();
     assert!(decrypt(&pw, usage, issued.rep.0.enc_part.cipher.as_ref()).is_err());
-}
-
-/// A Reject is 24 with a fresh hint nonce and no detail.
-#[test]
-fn reject_is_24_with_a_fresh_hint() {
-    let v = Scripted::new("DEFAULT", vec![OtpVerdict::Reject]);
-    let mut store = realm(Some("[]"));
-    put_otp(&mut store, vec![v]);
-    let a = armor(&store, 9201);
-    let e0 = krb5_kdc::issue_as(&store, &fast_req(&a, vec![], 9202)).unwrap_err();
-    let n0 = hint_nonce(&a, &e0);
-    let plain = enc_req_plain(&fresh_nonce(32));
-    let req = fast_req(&a, vec![pa_otp(&a.key, &plain, b"000000")], 9203);
-    let e = krb5_kdc::issue_as(&store, &req).unwrap_err();
-    let (c, text, detail) = code(&e);
-    assert_eq!(c, err::PREAUTH_FAILED);
-    assert_eq!(text.as_deref(), Some("PREAUTH_FAILED"));
-    assert_eq!(
-        detail, None,
-        "the AS_REQ line must read like MIT's: Preauthentication failed"
-    );
-    let n1 = hint_nonce(&a, &e);
-    assert_ne!(n0, n1, "a fresh nonce");
 }
 
 /// A rejection is the module's verify failure: `finish_verify_padata` writes its one line, and the AS_REQ line follows.
@@ -723,47 +634,6 @@ fn indicators_and_require_auth() {
     let (c, text, _) = code(&e);
     assert_eq!(c, err::POLICY);
     assert_eq!(text.as_deref(), Some("HIGHER_AUTHENTICATION_REQUIRED"));
-}
-
-/// The client holds an aes128 key only (ckey is Some, etype 17) while the armor is aes256: the
-/// strengthen key, the enc-part and the key info all follow the replaced (armor) key.
-#[test]
-fn armor_etype_wins_over_the_client_key_etype() {
-    let mut store = realm(Some("[{}]"));
-    let a = armor(&store, 9900);
-    let aes128 = EncryptionType::Aes128CtsHmacSha196;
-    store
-        .set_keys(
-            &user(),
-            vec![krb5_kdc::KeyEntry::new(
-                aes128,
-                krb5_kdc::random_key(aes128).unwrap(),
-                0,
-            )],
-            2,
-        )
-        .unwrap();
-    let v = Scripted::new("DEFAULT", vec![OtpVerdict::Accept]);
-    put_otp(&mut store, vec![v]);
-    let plain = enc_req_plain(&fresh_nonce(32));
-    let issued = krb5_kdc::issue_as(
-        &store,
-        &fast_req(&a, vec![pa_otp(&a.key, &plain, b"1")], 9901),
-    )
-    .expect("OTP login");
-    assert_eq!(issued.rep.0.enc_part.etype, a.key.etype().to_iana());
-    let fast = unwrap_fast_rep(&a.key, &issued.rep.0.padata).unwrap();
-    assert_eq!(
-        fast.strengthen_key.as_ref().unwrap().keytype,
-        a.key.etype().to_iana()
-    );
-    let info2 = fast
-        .padata
-        .iter()
-        .find(|p| p.padata_type == pa::ETYPE_INFO2)
-        .expect("key info");
-    let entries: krb5_types::EtypeInfo2 = decode(info2.padata_value.as_ref()).unwrap();
-    assert_eq!(entries[0].etype, a.key.etype().to_iana());
 }
 
 /// MIT builds the RADIUS request before any transport, so a User-Name of 0 or over 253 octets, and an

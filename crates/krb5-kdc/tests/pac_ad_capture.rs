@@ -346,12 +346,3 @@ fn captured_ticket_checksum_structurally_present() {
         "server checksum still holds when ticket-checksum DER is supplied without krbtgt"
     );
 }
-
-#[test]
-fn absent_keytab_is_not_a_hard_fail() {
-    // The golden NDR test above always runs. This assertion documents that
-    // checksum tests return rather than panic when fixtures are missing.
-    if fixture_dir().is_none() {
-        eprintln!("ad_pac: fixtures absent (ok)");
-    }
-}

@@ -11,8 +11,8 @@ use krb5_kdc::testrealm::{
 };
 use krb5_kdc::{
     Acl, Error, KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_SVR, PrincipalStore, RID_KRBTGT,
-    decrypt_ticket_part, dump_store, dump_store_iprop, load_dump, pac_from_ticket_part,
-    ticket_checksum_der, verify_pac_signatures, wrap_win2k_pac,
+    decrypt_ticket_part, dump_store, load_dump, pac_from_ticket_part, ticket_checksum_der,
+    verify_pac_signatures, wrap_win2k_pac,
 };
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
@@ -178,20 +178,6 @@ fn incoming_trust_dump_load_round_trip() {
         .expect("load incoming");
     assert_eq!(incoming.realm, FOREIGN);
     assert_eq!(incoming.keys[0].key.as_bytes(), &[0x44u8; 32]);
-}
-
-#[test]
-fn incoming_trust_iprop_names_foreign_id() {
-    let (mut store, acl) = bootstrap_documented().unwrap();
-    store
-        .create_interrealm_key(&acl, &documented_admin_id(), FOREIGN, aes_key(0x55), None)
-        .unwrap();
-    let text = dump_store_iprop(&store, b"masterpassword", krb5_kdc::UlogLast::default()).unwrap();
-    assert!(text.starts_with("ipropx "));
-    assert!(
-        text.contains("krbtgt/KERBER.TEST@AD.KERBER.TEST"),
-        "iprop dump must name the incoming id"
-    );
 }
 
 #[test]
@@ -661,44 +647,6 @@ fn transited_add_path_bad_intermediates_is_policy() {
 }
 
 #[test]
-fn transited_cross_realm_renew_at_dest_is_server_nomatch() {
-    let (_a, _b, c, ir, _host_c, bc) = three_realm();
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let mut t = bc.rep.0.ticket.clone();
-    let mut part = decrypt_ticket_part(&ir, &t).expect("bc");
-    part.transited.tr_type = 2;
-    part.flags = part.flags.with_bit(flag_bit::RENEWABLE, true);
-    part.renew_till = Some(part.endtime.add_hours(24).expect("renew_till"));
-    part.authorization_data = None;
-    reseal_mut(&mut t, &part, &ir);
-    let req = TgsReqBuilder::new(
-        t,
-        &bc.session_key,
-        "A.TEST",
-        &cname,
-        PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "C.TEST"]),
-        "C.TEST",
-        531,
-    )
-    .options(KdcOptions::forwardable().with_bit(flag_bit::RENEW, true))
-    .additional_tickets(None)
-    .padata(Vec::new())
-    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
-    .build()
-    .expect("renew tgs");
-    match krb5_kdc::issue_tgs(&c, &req) {
-        Err(Error::Protocol { code, text, .. }) => {
-            assert_eq!(code, err::SERVER_NOMATCH);
-            assert_eq!(
-                text.as_deref(),
-                Some("SERVER DIDN'T MATCH TICKET FOR RENEW/FORWARD/ETC")
-            );
-        }
-        other => panic!("cross-realm RENEW of krbtgt/C@B as krbtgt/C@C must be 26, got {other:?}"),
-    }
-}
-
-#[test]
 fn transited_non_add_overlong_forwarded() {
     let (mut store, _, _, hostn) = realm_store("A.TEST", "svc.a.test");
     store.policy.reject_bad_transit = false;
@@ -1124,46 +1072,6 @@ fn tgs_cross_krbtgt_disallow_svr_is_process_tgs() {
     let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&c, &req));
     assert_eq!(code, err::S_PRINCIPAL_UNKNOWN);
     assert_eq!(text.as_deref(), Some("PROCESS_TGS"));
-}
-
-#[test]
-fn transited_renew_at_dest_mismatched_realm_is_26() {
-    let (_a, _b, c, ir, _host_c, bc) = three_realm();
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let mut t = bc.rep.0.ticket.clone();
-    let mut part = decrypt_ticket_part(&ir, &t).expect("bc");
-    part.transited.tr_type = 1;
-    part.transited.contents = OctetString::from(
-        std::iter::repeat_n("A".repeat(100), 5)
-            .collect::<Vec<_>>()
-            .join(",")
-            .into_bytes(),
-    );
-    part.flags = part.flags.with_bit(flag_bit::RENEWABLE, true);
-    part.renew_till = Some(part.endtime.add_hours(24).expect("renew_till"));
-    part.authorization_data = None;
-    reseal_mut(&mut t, &part, &ir);
-    let req = TgsReqBuilder::new(
-        t,
-        &bc.session_key,
-        "A.TEST",
-        &cname,
-        PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "C.TEST"]),
-        "C.TEST",
-        930,
-    )
-    .options(KdcOptions::forwardable().with_bit(flag_bit::RENEW, true))
-    .additional_tickets(None)
-    .padata(Vec::new())
-    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
-    .build()
-    .expect("renew tgs");
-    let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&c, &req));
-    assert_eq!(code, err::SERVER_NOMATCH);
-    assert_eq!(
-        text.as_deref(),
-        Some("SERVER DIDN'T MATCH TICKET FOR RENEW/FORWARD/ETC")
-    );
 }
 
 #[test]

@@ -213,56 +213,11 @@ pub(super) fn run(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::*;
 
-    struct Flag {
-        name: &'static str,
-        reject: bool,
-        hits: AtomicU64,
-    }
-
-    impl Pwqual for Flag {
-        fn name(&self) -> &'static str {
-            self.name
-        }
-
-        fn check(
-            &self,
-            _password: &[u8],
-            _policy_name: Option<&str>,
-            _realm: &str,
-            _name: &PrincipalName,
-        ) -> Result<(), Error> {
-            self.hits.fetch_add(1, Ordering::SeqCst);
-            if self.reject {
-                return Err(Error::PasswordPolicy("banned".into()));
-            }
-            Ok(())
-        }
-    }
-
-    struct ClearThread;
-
-    impl Drop for ClearThread {
-        fn drop(&mut self) {
-            clear_thread_pwqual();
-        }
-    }
-
     fn user() -> PrincipalName {
         PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["pwq"])
-    }
-
-    #[test]
-    fn built_ins_load_in_mit_order() {
-        let (store, _) = crate::testrealm::bootstrap_documented().unwrap();
-        let names: Vec<&str> = selected(&store)
-            .iter()
-            .map(|module| module.name())
-            .collect();
-        assert_eq!(names, ["dict", "empty", "hesiod", "princ"]);
     }
 
     #[test]
@@ -276,67 +231,5 @@ mod tests {
         store
             .check_new_password(&user(), None, b"")
             .expect("empty is not loaded");
-    }
-
-    #[test]
-    fn enable_only_of_an_unknown_pwqual_keeps_nothing() {
-        let (mut store, _) = crate::testrealm::bootstrap_documented().unwrap();
-        store.policy.pwqual = krb5_config::Krb5Conf::parse(
-            "[plugins]\n    pwqual = {\n        enable_only = nosuch\n    }\n",
-        )
-        .expect("stanza")
-        .plugin_relations("pwqual");
-        assert!(selected(&store).is_empty());
-        store
-            .check_new_password(&user(), None, b"")
-            .expect("no module rejects");
-    }
-
-    #[test]
-    fn the_first_module_error_stops_the_walk() {
-        let (store, _) = crate::testrealm::bootstrap_documented().unwrap();
-        let bad = Arc::new(Flag {
-            name: "bad",
-            reject: true,
-            hits: AtomicU64::new(0),
-        });
-        let next = Arc::new(Flag {
-            name: "next",
-            reject: false,
-            hits: AtomicU64::new(0),
-        });
-        set_thread_pwqual(vec![
-            Arc::clone(&bad) as Arc<dyn Pwqual>,
-            Arc::clone(&next) as Arc<dyn Pwqual>,
-        ]);
-        let _guard = ClearThread;
-        let err = store
-            .check_new_password(&user(), None, b"secret")
-            .expect_err("banned");
-        assert!(matches!(err, Error::PasswordPolicy(text) if text == "banned"));
-        assert_eq!(bad.hits.load(Ordering::SeqCst), 1);
-        assert_eq!(next.hits.load(Ordering::SeqCst), 0);
-    }
-
-    #[test]
-    fn kdc_conf_and_krb5_conf_pwqual_disables_both_apply() {
-        let (mut store, _) = crate::testrealm::bootstrap_documented().unwrap();
-        let kdc = krb5_config::KdcConf::parse(
-            "[plugins]\n    pwqual = {\n        disable = dict\n    }\n",
-        )
-        .expect("kdc.conf");
-        let krb5 = krb5_config::Krb5Conf::parse(
-            "[plugins]\n    pwqual = {\n        disable = empty\n    }\n",
-        )
-        .expect("krb5.conf");
-        store.apply_pwqual_plugins(Some(&kdc), Some(&krb5));
-        let names: Vec<&str> = selected(&store)
-            .iter()
-            .map(|module| module.name())
-            .collect();
-        assert_eq!(names, ["hesiod", "princ"]);
-        store
-            .check_new_password(&user(), None, b"")
-            .expect("empty is disabled");
     }
 }

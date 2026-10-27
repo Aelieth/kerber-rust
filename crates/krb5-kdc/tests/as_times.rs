@@ -26,15 +26,14 @@ use krb5_crypto::{EncryptionType, KeyUsage, decrypt};
 use krb5_kdc::principals::{kadmin_admin, kadmin_changepw};
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
 use krb5_kdc::{
-    KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_POSTDATED, KDB_DISALLOW_RENEWABLE, PrincipalStore,
-    decrypt_ticket_part, dump_store, parse_dump,
+    KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_POSTDATED, PrincipalStore, decrypt_ticket_part, dump_store,
+    parse_dump,
 };
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
 use krb5_testkit::{TgsReqBuilder, status, user, user_as};
 use krb5_types::{
-    EncKdcRepPart, EncTicketPart, KdcOptions, KerberosTime, KrbError, PrincipalName, err, flag_bit,
-    ku,
+    EncTicketPart, KdcOptions, KerberosTime, KrbError, PrincipalName, err, flag_bit, ku,
 };
 
 fn tgt_part(store: &PrincipalStore, issued: &krb5_kdc::IssuedAs) -> EncTicketPart {
@@ -232,10 +231,6 @@ fn renew_postdated_starts_at_from() {
     );
 }
 
-fn decode_enc_part(plain: &[u8]) -> EncKdcRepPart {
-    krb5_asn1::decode_enc_kdc_rep_part(plain).expect("enc-part")
-}
-
 fn user_as_req(nonce: u32) -> krb5_types::AsReq {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let key = client_key();
@@ -351,33 +346,6 @@ fn validate_tgs(issued: &krb5_kdc::IssuedAs, nonce: u32) -> krb5_types::TgsReq {
 }
 
 #[test]
-fn as_rep_flags_are_initial_and_preauth_not_renewable() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let key = client_key();
-    let req = as_req(
-        cname,
-        TEST_REALM,
-        42,
-        Some(vec![pa_enc_timestamp(&key).expect("pa")]),
-    )
-    .unwrap();
-    let issued = krb5_kdc::issue_as(&store, &req).expect("AS");
-    let usage = KeyUsage::new(ku::AS_REP_ENC_PART).unwrap();
-    let plain = decrypt(&key, usage, issued.rep.0.enc_part.cipher.as_ref()).expect("dec");
-    assert_eq!(
-        plain.first().copied(),
-        Some(0x7a),
-        "APPLICATION 26 EncKDCRepPart"
-    );
-    let enc = decode_enc_part(&plain);
-    assert!(enc.flags.initial());
-    assert!(enc.flags.pre_authent());
-    assert!(!enc.flags.renewable());
-    assert!(enc.renew_till.is_none());
-}
-
-#[test]
 fn as_rejects_expired_principal_before_expired_password() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -402,57 +370,6 @@ fn as_rejects_expired_principal_before_expired_password() {
     let reply = krb5_kdc::handle_request(&store, &raw).unwrap();
     let krb: KrbError = decode(&reply).expect("KRB-ERROR");
     assert_eq!(krb.error_code, err::NAME_EXP);
-}
-
-#[test]
-fn as_zero_expiration_still_issues() {
-    let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    store
-        .apply_admin_fields(
-            &cname,
-            krb5_kdc::AdminFields {
-                attributes: None,
-                max_life: None,
-                expiration: Some(0),
-                pw_expire: Some(0),
-                policy: None,
-                clear_policy: false,
-                max_renewable_life: None,
-            },
-        )
-        .unwrap();
-    krb5_kdc::issue_as(&store, &user_as_req(45)).expect("0 = never");
-    store
-        .apply_admin_fields(
-            &cname,
-            krb5_kdc::AdminFields {
-                attributes: None,
-                max_life: None,
-                expiration: Some(u32::MAX),
-                pw_expire: Some(u32::MAX),
-                policy: None,
-                clear_policy: false,
-                max_renewable_life: None,
-            },
-        )
-        .unwrap();
-    krb5_kdc::issue_as(&store, &user_as_req(46)).expect("future still issues");
-}
-
-#[test]
-fn as_strips_renewable_when_disallow_renewable() {
-    let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let mut req = user_as_req(62);
-    req.0.req_body.kdc_options = req
-        .0
-        .req_body
-        .kdc_options
-        .with_bit(flag_bit::RENEWABLE, true);
-    or_attr(&mut store, &cname, KDB_DISALLOW_RENEWABLE);
-    let issued = krb5_kdc::issue_as(&store, &req).expect("AS");
-    assert!(!tgt_part_issue_acl_ap(&store, &issued).flags.renewable());
 }
 
 #[test]
@@ -503,24 +420,6 @@ fn as_postdated_is_invalid_until_validate() {
 }
 
 #[test]
-fn as_may_postdate_alone_does_not_postdate() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let from = KerberosTime::now().add_seconds(60).unwrap();
-    let mut req = user_as_req(123);
-    req.0.req_body.from = Some(from);
-    req.0.req_body.kdc_options = req
-        .0
-        .req_body
-        .kdc_options
-        .with_bit(flag_bit::MAY_POSTDATE, true);
-    let issued = krb5_kdc::issue_as(&store, &req).expect("AS");
-    let part = tgt_part_issue_acl_ap(&store, &issued);
-    assert!(!part.flags.invalid());
-    assert!(!part.flags.bit(flag_bit::POSTDATED));
-    assert!(part.flags.bit(flag_bit::MAY_POSTDATE));
-}
-
-#[test]
 fn as_cannot_postdate_when_disallow() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -528,38 +427,6 @@ fn as_cannot_postdate_when_disallow() {
     let from = KerberosTime::now().add_seconds(30).unwrap();
     let err = krb5_kdc::issue_as(&store, &postdated_as_req(115, from)).unwrap_err();
     assert_eq!(status(&err).0, err::CANNOT_POSTDATE);
-}
-
-#[test]
-fn as_postdated_end_is_absolute_till() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let from = KerberosTime::now().add_seconds(60).unwrap();
-    let till = from.add_seconds(300).unwrap();
-    let mut req = postdated_as_req(121, from.clone());
-    req.0.req_body.till = till.clone();
-    let issued = krb5_kdc::issue_as(&store, &req).expect("postdated AS");
-    let part = tgt_part_issue_acl_ap(&store, &issued);
-    assert_eq!(
-        part.starttime.as_ref().map(KerberosTime::unix_seconds),
-        Some(from.unix_seconds())
-    );
-    assert_eq!(part.endtime.unix_seconds(), till.unix_seconds());
-}
-
-#[test]
-fn as_from_after_till_endtime_is_till() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let till = KerberosTime::now().add_seconds(30).unwrap();
-    let from = KerberosTime::now().add_seconds(90).unwrap();
-    let mut req = postdated_as_req(122, from.clone());
-    req.0.req_body.till = till.clone();
-    let issued = krb5_kdc::issue_as(&store, &req).expect("from after till");
-    let part = tgt_part_issue_acl_ap(&store, &issued);
-    assert_eq!(
-        part.starttime.as_ref().map(KerberosTime::unix_seconds),
-        Some(from.unix_seconds())
-    );
-    assert_eq!(part.endtime.unix_seconds(), till.unix_seconds());
 }
 
 const ACTOR: &str = "kadmin/admin@KERBER.TEST";

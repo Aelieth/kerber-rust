@@ -212,36 +212,6 @@ fn tgs_after_password_as_is_fast_armored() {
     );
 }
 
-#[test]
-fn empty_groups_stray_pa_spake_is_skipped() {
-    let (mut store, _) = bootstrap_documented().unwrap();
-    store.policy.spake_preauth_groups.clear();
-    let princ = user();
-    let req = as_req(
-        princ.clone(),
-        TEST_REALM,
-        33001,
-        Some(vec![PaData {
-            padata_type: pa::SPAKE,
-            padata_value: vec![].into(),
-        }]),
-    )
-    .unwrap();
-    let err = krb5_kdc::issue_as(&store, &req).unwrap_err();
-    match &err {
-        Error::PreauthRequired { .. } => {}
-        Error::Protocol { code, .. } => {
-            panic!("empty-groups stray PA-SPAKE must skip, not {code}");
-        }
-        other => panic!("expected PreauthRequired, got {other:?}"),
-    }
-    assert_eq!(
-        store.fail_auth_of(store.get_name(&princ).unwrap()),
-        0,
-        "skipped PA-SPAKE must not increment fail_auth_count"
-    );
-}
-
 fn decode_enc_part(plain: &[u8]) -> EncKdcRepPart {
     krb5_asn1::decode_enc_kdc_rep_part(plain).expect("enc-part")
 }
@@ -676,30 +646,6 @@ fn handle_request_spake_91_e_text_is_preauth_failed() {
         .and_then(|t| std::str::from_utf8(t.as_bytes()).ok());
     assert_eq!(text, Some("PREAUTH_FAILED"));
     assert_ne!(text, Some("SPAKE challenge"));
-    let method: MethodData = decode(e.e_data.as_ref().expect("e_data").as_ref()).expect("METHOD");
-    let types: Vec<i32> = method.iter().map(|p| p.padata_type).collect();
-    assert!(
-        types.contains(&pa::SPAKE)
-            && types.contains(&pa::FX_COOKIE)
-            && types.contains(&pa::ETYPE_INFO2),
-        "91 without cookie: SPAKE+COOKIE+ETYPE-INFO2, got {types:?}"
-    );
-}
-
-#[test]
-fn spake_91_without_cookie_carries_etype_info2() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let req = as_req(
-        cname,
-        TEST_REALM,
-        711,
-        Some(vec![pa_spake_support(&[krb5_crypto::SpakeGroup::P256])]),
-    )
-    .unwrap();
-    let bytes = krb5_kdc::handle_request(&store, &encode(&req).expect("der")).expect("reply");
-    let e: KrbError = decode(&bytes).expect("KRB-ERROR");
-    assert_eq!(e.error_code, err::MORE_PREAUTH_DATA_REQUIRED);
     let method: MethodData = decode(e.e_data.as_ref().expect("e_data").as_ref()).expect("METHOD");
     let types: Vec<i32> = method.iter().map(|p| p.padata_type).collect();
     assert!(

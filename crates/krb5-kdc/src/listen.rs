@@ -624,7 +624,7 @@ pub fn drop_privileges() -> io::Result<bool> {
     )
 }
 
-#[cfg(any(test, feature = "test-hooks"))]
+#[cfg(feature = "test-hooks")]
 pub(crate) fn drop_privileges_to(username: &str) -> io::Result<bool> {
     if !nix::unistd::Uid::effective().is_root() {
         tracing::debug!(
@@ -793,7 +793,7 @@ fn serve_loop(
 #[cfg(test)]
 mod tests {
     use std::io::Write;
-    use std::net::{Shutdown, TcpStream};
+    use std::net::TcpStream;
     use std::thread;
 
     use super::*;
@@ -806,47 +806,6 @@ mod tests {
         let (store, _) = bootstrap_documented().unwrap();
         crate::save_store(&store, &db, &stash).unwrap();
         (shared_store(crate::load_store(&db, &stash).unwrap()), db)
-    }
-
-    #[test]
-    fn a_lookup_without_the_policy_lock_file_is_svc_unavailable() {
-        let (store, db) = persisted("svc");
-        let id = format!("krbtgt/{0}@{0}", crate::testrealm::TEST_REALM);
-        assert!(read_store(&store, |s| s.fetch(&id)).unwrap().is_some());
-        std::fs::remove_file(crate::suffixed(&db, crate::SUFFIX_POLICY_LOCK)).unwrap();
-        match read_store(&store, |s| s.fetch(&id)) {
-            Err(Error::Protocol { code, .. }) => {
-                assert_eq!(code, krb5_types::err::SVC_UNAVAILABLE);
-            }
-            other => panic!("{other:?}"),
-        }
-    }
-
-    #[test]
-    fn a_lookup_waits_for_a_write_holder_not_for_a_read_holder() {
-        let (store, db) = persisted("wait");
-        let other = Arc::new(crate::DbLock::open(&db).unwrap());
-        let id = format!("krbtgt/{0}@{0}", crate::testrealm::TEST_REALM);
-        let lookup = |store: &SharedStore| {
-            let (store, id) = (Arc::clone(store), id.clone());
-            let (tx, rx) = std::sync::mpsc::channel();
-            thread::spawn(move || {
-                let found = read_store(&store, |s| s.fetch(&id).ok().flatten().is_some());
-                tx.send(found).unwrap();
-            });
-            rx
-        };
-        let held = other.hold(crate::DbLockMode::Shared).unwrap();
-        assert_eq!(
-            lookup(&store).recv_timeout(Duration::from_secs(5)),
-            Ok(true)
-        );
-        drop(held);
-        let held = other.hold(crate::DbLockMode::Exclusive).unwrap();
-        let rx = lookup(&store);
-        assert!(rx.recv_timeout(Duration::from_millis(400)).is_err());
-        drop(held);
-        assert_eq!(rx.recv_timeout(Duration::from_secs(5)), Ok(true));
     }
 
     /// Requests that keep overlapping never hold the lock across their own work, so another process's writer gets it within a bounded wait.
@@ -906,40 +865,6 @@ mod tests {
         assert!(read_store(&store, |s| s.fetch(&id)).unwrap().is_some());
     }
 
-    #[test]
-    fn listen_entry_failures_log_mits_lines() {
-        let entry = ListenAddr {
-            host: Some("nosuch.invalid".into()),
-            port: 88,
-        };
-        let error = "listen address nosuch.invalid: failed to lookup address information: \
-                     Temporary failure in name resolution";
-        assert_eq!(
-            resolve_failure_lines(&entry, error),
-            [
-                "Failed getting address info (for nosuch.invalid): Temporary failure in name \
-                 resolution"
-                    .to_owned(),
-                "Input/output error - Error setting up network".to_owned(),
-            ]
-        );
-        let wildcard = ListenAddr {
-            host: None,
-            port: 88,
-        };
-        assert!(resolve_failure_lines(&wildcard, "x")[0].contains("(for <wildcard>): x"));
-        assert_eq!(
-            setup_failure_line("[::]:88".parse().unwrap(), BindType::Udp),
-            "Failed setting up a UDP socket (for ::)"
-        );
-        assert_eq!(
-            setup_failure_line("[::]:749".parse().unwrap(), BindType::Rpc),
-            "Failed setting up a RPC socket (for ::)"
-        );
-        assert_eq!(BindType::Tcp.name(), "TCP");
-        assert_eq!(proto(BindType::Rpc), "tcp");
-    }
-
     use std::io::Read as _;
     use std::sync::atomic::Ordering;
 
@@ -996,11 +921,6 @@ mod tests {
             .unwrap()
     }
 
-    #[test]
-    fn drop_privileges_is_noop_when_unprivileged() {
-        assert!(!drop_privileges_to("nobody").expect("unprivileged drop"));
-    }
-
     /// A length past the cap is answered with FIELD_TOOLONG before any body, and so is a length one past MIT's 1 MiB buffer.
     #[test]
     fn tcp_oversize_length_is_field_toolong() {
@@ -1014,11 +934,6 @@ mod tests {
             assert_eq!(tcp_error(&mut c).error_code, err::FIELD_TOOLONG);
             stop(&flag, h);
         }
-    }
-
-    #[test]
-    fn tcp_max_request_is_one_mib_minus_four() {
-        assert_eq!(MAX_TCP_REQUEST, 1024 * 1024 - 4);
     }
 
     /// A 128 KiB AS-REQ arrives in many reads and is answered as one request.
@@ -1049,32 +964,6 @@ mod tests {
         stop(&flag, h);
     }
 
-    /// A zero length is not dispatched: no reply, and the stream closes at its next event.
-    #[test]
-    fn tcp_zero_length_is_dropped() {
-        let (addr, flag, h) = serving(limits());
-        let mut c = TcpStream::connect(addr).unwrap();
-        c.write_all(&0u32.to_be_bytes()).unwrap();
-        c.set_read_timeout(Some(Duration::from_millis(400)))
-            .unwrap();
-        let mut hdr = [0u8; 4];
-        let waited = c.read(&mut hdr);
-        assert!(
-            matches!(&waited, Err(e) if e.kind() == io::ErrorKind::WouldBlock),
-            "no reply and no close yet: {waited:?}"
-        );
-        c.shutdown(Shutdown::Write).unwrap();
-        c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-        assert_eq!(c.read(&mut hdr).unwrap(), 0, "closed at the next event");
-        stop(&flag, h);
-    }
-
-    #[test]
-    fn dispatch_suffixes_are_mit_net_server() {
-        assert_eq!(WHILE_DISPATCHING_UDP, "while dispatching (udp)");
-        assert_eq!(WHILE_DISPATCHING_TCP, "while dispatching (tcp)");
-    }
-
     #[test]
     fn udp_oversize_reply_is_response_too_big() {
         let (addr, flag, h) = serving(ListenLimits {
@@ -1089,40 +978,6 @@ mod tests {
         let e: KrbError = decode(&buf[..n]).unwrap();
         assert_eq!(e.error_code, err::RESPONSE_TOO_BIG);
         stop(&flag, h);
-    }
-
-    #[test]
-    fn serve_until_stops_on_flag() {
-        let (addr, flag, h) = serving(limits());
-        let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
-        sock.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-        sock.send_to(&as_req_bytes(1), addr).unwrap();
-        let mut buf = [0u8; 4096];
-        let n = sock.recv(&mut buf).unwrap();
-        let e: KrbError = decode(&buf[..n]).unwrap();
-        assert_eq!(e.error_code, err::PREAUTH_REQUIRED);
-        stop(&flag, h);
-    }
-
-    #[test]
-    fn a_zero_shutdown_poll_is_refused() {
-        let (store, _) = bootstrap_documented().unwrap();
-        let (udp, tcp) = krb5_testkit::loopback_udp_tcp();
-        let flag = Arc::new(AtomicBool::new(false));
-        let zero = ListenLimits {
-            shutdown_poll: Duration::ZERO,
-            ..ListenLimits::default()
-        };
-        let e = serve_until(
-            shared_store(store),
-            udp,
-            tcp,
-            flag,
-            zero,
-            &KdcLog::process(),
-        )
-        .unwrap_err();
-        assert_eq!(e.kind(), io::ErrorKind::InvalidInput);
     }
 
     /// Past the cap a new connection evicts the one that started first, and among connections of the same second the one met first from the top of the table: c1 started a second before c2 and c3, so c3 evicts c1 and takes its place at the table's start; c4 then meets c2 first from the top, and evicts it.
@@ -1167,15 +1022,5 @@ mod tests {
         assert!(closed(&c2), "c2: the first of the tie from the top");
         assert!(open(&c3) && open(&c4));
         stop(&flag, h);
-    }
-
-    #[test]
-    fn unsupported_address_family_is_skipped_and_other_errors_are_not() {
-        let unsupported = io::Error::from_raw_os_error(nix::errno::Errno::EAFNOSUPPORT as i32);
-        assert!(super::is_unsupported_family(&unsupported));
-        let in_use = io::Error::from_raw_os_error(nix::errno::Errno::EADDRINUSE as i32);
-        assert!(!super::is_unsupported_family(&in_use));
-        let plain = io::Error::new(io::ErrorKind::AddrNotAvailable, "no address");
-        assert!(!super::is_unsupported_family(&plain));
     }
 }

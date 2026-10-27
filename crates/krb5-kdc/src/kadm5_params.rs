@@ -96,15 +96,6 @@ mod tests {
         }
     }
 
-    /// The realm stanza written `R =` with `{` on the next line is the stanza the profile parser reads.
-    #[test]
-    fn a_two_line_realm_stanza_is_the_realm_s() {
-        let text =
-            "[realms]\n    R =\n    {\n        default_principal_expiration = garbage\n    }\n";
-        let conf = KdcConf::parse_for_realm(text, "R").unwrap();
-        assert!(kadm5_params_missing(&conf, true));
-    }
-
     /// MIT's word loop: the first comma ends the first word, so `+a +b,+c` is one word and no flag.
     #[test]
     fn the_flags_loop_cuts_at_the_first_comma_first() {

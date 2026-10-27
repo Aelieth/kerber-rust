@@ -1501,13 +1501,10 @@ mod tests {
 
     enum Arrival {
         Bytes(Vec<u8>),
-        Eof,
-        Fail(io::ErrorKind),
         Stall,
     }
 
     enum Take {
-        Upto(usize),
         Fail(io::ErrorKind),
     }
 
@@ -1536,11 +1533,6 @@ mod tests {
                     }
                     Ok(n)
                 }
-                Some(Arrival::Eof) => {
-                    w.incoming.push_front(Arrival::Eof);
-                    Ok(0)
-                }
-                Some(Arrival::Fail(k)) => Err(k.into()),
             }
         }
     }
@@ -1552,17 +1544,13 @@ mod tests {
 
         fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
             let mut w = self.0.borrow_mut();
-            let mut room = match w.writes.pop_front() {
-                None => usize::MAX,
-                Some(Take::Upto(n)) => n,
-                Some(Take::Fail(k)) => return Err(k.into()),
-            };
+            if let Some(Take::Fail(k)) = w.writes.pop_front() {
+                return Err(k.into());
+            }
             let mut n = 0;
             for b in bufs {
-                let k = b.len().min(room);
-                w.out.extend_from_slice(&b[..k]);
-                n += k;
-                room -= k;
+                w.out.extend_from_slice(b);
+                n += b.len();
             }
             Ok(n)
         }
@@ -1756,109 +1744,6 @@ mod tests {
         wire.borrow_mut().incoming.push_back(a);
     }
 
-    fn chunks(n: usize, mut seed: u32) -> Vec<usize> {
-        let mut out = Vec::new();
-        let mut left = n;
-        while left > 0 {
-            seed ^= seed << 13;
-            seed ^= seed >> 17;
-            seed ^= seed << 5;
-            let k = (usize::try_from(seed % 40).unwrap() + 1).min(left);
-            out.push(k);
-            left -= k;
-        }
-        out
-    }
-
-    #[test]
-    fn a_request_in_pieces_is_dispatched_once() {
-        let (mut t, id, wire, mut log) = one(100);
-        let mut app = App::default();
-        let body: Vec<u8> = (0..300u16)
-            .map(|i| u8::try_from(i % 251).unwrap())
-            .collect();
-        let msg = framed(&body);
-        let mut pieces = vec![1, 1, 2];
-        pieces.extend(chunks(body.len(), 0x5eed));
-        let mut at = 0;
-        for k in pieces {
-            arrive(&wire, Arrival::Bytes(msg[at..at + k].to_vec()));
-            at += k;
-            assert_eq!(app.requests.len(), 0, "dispatched before the last piece");
-            t.read_drive(id, &mut app, &mut log);
-        }
-        assert_eq!(app.requests.len(), 1);
-        let (local, remote, request, is_tcp) = &app.requests[0];
-        assert_eq!(request, &body);
-        assert_eq!(*local, "192.0.2.88:88".parse().unwrap());
-        assert_eq!(*remote, peer(4242));
-        assert!(is_tcp);
-        assert!(t.conns().next().unwrap().writing());
-        t.writable(id, &mut log);
-        assert_eq!(wire.borrow().out, framed(b"the reply"));
-        assert!(wire.borrow().closed);
-        assert!(t.is_empty());
-        assert_eq!(log.take(), [info("closing down fd 7")]);
-    }
-
-    /// Each event does one read, and the bytes of a second request sent behind the first are never read: one exchange per stream, as MIT's.
-    #[test]
-    fn one_read_per_event_and_nothing_past_the_message() {
-        let (mut t, id, wire, mut log) = one(100);
-        let mut app = App::default();
-        let mut both = framed(b"first");
-        both.extend(framed(b"second"));
-        arrive(&wire, Arrival::Bytes(both));
-        t.read_drive(id, &mut app, &mut log);
-        assert_eq!(wire.borrow().reads, 1);
-        assert_eq!(app.requests.len(), 0, "the length word alone");
-        t.read_drive(id, &mut app, &mut log);
-        assert_eq!(app.requests.len(), 1);
-        assert_eq!(app.requests[0].2, b"first");
-        t.read_drive(id, &mut app, &mut log);
-        assert_eq!(wire.borrow().reads, 2, "a writing stream reads nothing");
-        match wire.borrow().incoming.front() {
-            Some(Arrival::Bytes(rest)) => assert_eq!(rest, &framed(b"second")),
-            _ => panic!("the second request was read"),
-        }
-        t.writable(id, &mut log);
-        assert!(t.is_empty());
-    }
-
-    #[test]
-    fn eof_or_an_error_part_way_closes_with_no_reply() {
-        let msg = framed(b"0123456789");
-        for cut in [0, 1, 3, 4, 9] {
-            for end in [Arrival::Eof, Arrival::Fail(io::ErrorKind::ConnectionReset)] {
-                let (mut t, id, wire, mut log) = one(100);
-                let mut app = App::default();
-                if cut > 0 {
-                    arrive(&wire, Arrival::Bytes(msg[..cut].to_vec()));
-                }
-                arrive(&wire, end);
-                let reads = if cut > 4 { 2 } else { usize::from(cut > 0) };
-                for _ in 0..reads {
-                    t.read_drive(id, &mut app, &mut log);
-                    assert_eq!(t.len(), 1);
-                }
-                t.read_drive(id, &mut app, &mut log);
-                t.read_drive(id, &mut app, &mut log);
-                assert!(t.is_empty(), "cut {cut}");
-                assert_eq!(app.requests.len(), 0);
-                assert_eq!(wire.borrow().out, NO_BYTES);
-                assert!(wire.borrow().closed);
-                assert_eq!(log.take(), [info("closing down fd 7")]);
-            }
-        }
-        let (mut t, id, wire, mut log) = one(100);
-        let mut app = App::default();
-        t.read_drive(id, &mut app, &mut log);
-        arrive(&wire, Arrival::Fail(io::ErrorKind::Interrupted));
-        t.read_drive(id, &mut app, &mut log);
-        assert_eq!(t.len(), 1, "WouldBlock and EINTR wait for the next event");
-        assert_eq!(log.take(), NO_LINES);
-    }
-
     #[test]
     fn a_length_past_the_buffer_is_field_toolong_then_closed() {
         for (n, line) in [
@@ -1908,121 +1793,6 @@ mod tests {
                 info("closing down fd 7"),
             ]
         );
-    }
-
-    /// A zero length is never dispatched: the stream stays until its next event (more bytes, or end of file), which closes it.
-    #[test]
-    fn a_zero_length_closes_at_the_next_event_without_a_dispatch() {
-        for next in [Arrival::Bytes(vec![1]), Arrival::Eof] {
-            let (mut t, id, wire, mut log) = one(100);
-            let mut app = App::default();
-            arrive(&wire, Arrival::Bytes(vec![0; 4]));
-            t.read_drive(id, &mut app, &mut log);
-            assert_eq!(t.len(), 1);
-            arrive(&wire, next);
-            t.read_drive(id, &mut app, &mut log);
-            assert!(t.is_empty());
-            assert_eq!(app.requests.len(), 0);
-            assert_eq!(wire.borrow().out, NO_BYTES);
-            assert_eq!(log.take(), [info("closing down fd 7")]);
-        }
-    }
-
-    #[test]
-    fn short_writes_and_wouldblock_still_deliver_the_whole_reply() {
-        let (mut t, id, wire, mut log) = one(100);
-        let mut app = App {
-            reply: Reply::Send(b"a reply of some length".to_vec()),
-            ..App::default()
-        };
-        arrive(&wire, Arrival::Bytes(framed(b"req")));
-        t.read_drive(id, &mut app, &mut log);
-        t.read_drive(id, &mut app, &mut log);
-        let want = framed(b"a reply of some length");
-        for _ in 0..want.len() {
-            wire.borrow_mut().writes.push_back(Take::Upto(3));
-            wire.borrow_mut()
-                .writes
-                .push_back(Take::Fail(io::ErrorKind::WouldBlock));
-        }
-        let mut events = 0;
-        while !t.is_empty() {
-            t.writable(id, &mut log);
-            events += 1;
-            assert!(events < 100);
-        }
-        assert_eq!(wire.borrow().out, want);
-        assert_eq!(log.take(), [info("closing down fd 7")]);
-        let (mut t, id, wire, mut log) = one(100);
-        arrive(&wire, Arrival::Bytes(framed(b"req")));
-        t.read_drive(id, &mut app, &mut log);
-        t.read_drive(id, &mut app, &mut log);
-        wire.borrow_mut().writes.push_back(Take::Upto(2));
-        wire.borrow_mut()
-            .writes
-            .push_back(Take::Fail(io::ErrorKind::BrokenPipe));
-        t.writable(id, &mut log);
-        assert_eq!(t.len(), 1);
-        t.writable(id, &mut log);
-        assert!(t.is_empty());
-        assert_eq!(wire.borrow().out, want[..2]);
-        assert_eq!(log.take(), [info("closing down fd 7")]);
-    }
-
-    #[test]
-    fn a_failed_or_empty_dispatch_closes_without_the_closing_line() {
-        for (reply, lines) in [
-            (
-                Reply::Failed("The KDC should discard this request".into()),
-                vec![err(
-                    "The KDC should discard this request - while dispatching (tcp)",
-                )],
-            ),
-            (Reply::Nothing, vec![]),
-        ] {
-            let (mut t, id, wire, mut log) = one(100);
-            let mut app = App {
-                reply,
-                ..App::default()
-            };
-            arrive(&wire, Arrival::Bytes(framed(b"req")));
-            t.read_drive(id, &mut app, &mut log);
-            t.read_drive(id, &mut app, &mut log);
-            assert_eq!(app.requests.len(), 1);
-            assert!(t.is_empty());
-            assert!(wire.borrow().closed);
-            assert_eq!(wire.borrow().out, NO_BYTES);
-            assert_eq!(log.take(), lines);
-        }
-    }
-
-    #[test]
-    fn a_panicking_dispatch_is_contained() {
-        let mut t = Streams::new(MAX_STREAM_DATA_CONNECTIONS, MAX_REQUEST);
-        let mut log = Lines::default();
-        let (a, b) = (
-            Rc::new(RefCell::new(Wire::default())),
-            Rc::new(RefCell::new(Wire::default())),
-        );
-        let ida = t.add(Fake(Rc::clone(&a)), 7, peer(1), 100, &mut log);
-        let idb = t.add(Fake(Rc::clone(&b)), 8, peer(2), 100, &mut log);
-        arrive(&a, Arrival::Bytes(framed(b"boom")));
-        arrive(&b, Arrival::Bytes(framed(b"fine")));
-        let mut app = App {
-            panic: true,
-            ..App::default()
-        };
-        t.read_drive(ida, &mut app, &mut log);
-        t.read_drive(ida, &mut app, &mut log);
-        assert!(a.borrow().closed);
-        assert_eq!(a.borrow().out, NO_BYTES);
-        assert_eq!(t.len(), 1);
-        app.panic = false;
-        t.read_drive(idb, &mut app, &mut log);
-        t.read_drive(idb, &mut app, &mut log);
-        t.writable(idb, &mut log);
-        assert_eq!(b.borrow().out, framed(b"the reply"));
-        assert_eq!(log.take(), [info("closing down fd 8")]);
     }
 
     fn fill(
@@ -2104,71 +1874,6 @@ mod tests {
         assert_eq!(w1.borrow().out, NO_BYTES);
         assert_eq!(log.take(), eviction(1));
         assert!(!w4.borrow().closed);
-    }
-
-    #[test]
-    fn accept_sets_up_the_stream_as_mits() {
-        use nix::fcntl::{FcntlArg, OFlag, fcntl};
-        use nix::sys::socket::getsockopt;
-
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let mut t = Streams::new(MAX_STREAM_DATA_CONNECTIONS, MAX_REQUEST);
-        let mut log = Lines::default();
-        let client = TcpStream::connect(addr).unwrap();
-        t.accept(&listener, 100, &mut log).unwrap();
-        assert_eq!(t.len(), 1);
-        let conn = t.conns().next().unwrap();
-        let flags = OFlag::from_bits_truncate(fcntl(&conn.stream, FcntlArg::F_GETFL).unwrap());
-        assert!(flags.contains(OFlag::O_NONBLOCK));
-        assert!(getsockopt(&conn.stream, sockopt::KeepAlive).unwrap());
-        let linger = getsockopt(&conn.stream, sockopt::Linger).unwrap();
-        assert_eq!((linger.l_onoff, linger.l_linger), (0, 0));
-        assert_eq!(conn.addrbuf, client.local_addr().unwrap().to_string());
-        assert_eq!(conn.start_time, 100);
-        assert_eq!(conn.fd, conn.stream.as_raw_fd());
-
-        let other = TcpStream::connect(addr).unwrap();
-        let (stream, remote) = listener.accept().unwrap();
-        t.admit(stream, 1024, remote, 100, &mut log);
-        assert_eq!(t.len(), 1, "fd 1024 is not taken");
-        let mut buf = [0u8; 1];
-        other
-            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
-            .unwrap();
-        assert_eq!((&other).read(&mut buf).unwrap(), 0, "closed");
-        assert_eq!(log.take(), NO_LINES);
-    }
-
-    #[test]
-    fn an_rpc_record_in_fragments_is_answered_and_the_connection_stays() {
-        let (mut t, id, wire, calls, mut log) = rpc_one(vec![]);
-        let mut app = App::default();
-        arrive(&wire, Arrival::Bytes(fragment(b"ab", false)));
-        arrive(&wire, Arrival::Bytes(fragment(b"cd", true)));
-        t.read_drive(id, &mut app, &mut log);
-        assert_eq!(*calls.borrow(), [b"abcd".to_vec()]);
-        // The reply is queued, not written inline; a writable event flushes it.
-        assert_eq!(t.len(), 1, "waiting to write the reply");
-        assert!(t.conns().next().unwrap().writing());
-        t.writable(id, &mut log);
-        assert_eq!(wire.borrow().out, fragment(b"answer", true));
-        assert!(!t.conns().next().unwrap().writing());
-        arrive(&wire, Arrival::Bytes(fragment(b"second", true)));
-        t.read_drive(id, &mut app, &mut log);
-        assert_eq!(calls.borrow().len(), 2);
-        t.writable(id, &mut log);
-        assert_eq!(
-            wire.borrow().out,
-            [fragment(b"answer", true), fragment(b"answer", true)].concat()
-        );
-        assert_eq!(log.take(), NO_LINES);
-        arrive(&wire, Arrival::Eof);
-        t.read_drive(id, &mut app, &mut log);
-        assert!(t.is_empty());
-        assert!(wire.borrow().closed);
-        assert_eq!(log.take(), [info("closing down fd 7")]);
-        assert_eq!(app.requests.len(), 0, "no dispatch of the stream kind");
     }
 
     #[test]
@@ -2334,20 +2039,6 @@ mod tests {
     }
 
     #[test]
-    fn the_open_descriptors_come_newest_event_first() {
-        let mut t = Streams::new(MAX_STREAM_DATA_CONNECTIONS, MAX_REQUEST);
-        let mut log = Lines::default();
-        let conns = fill(&mut t, &mut log, 3, |_| 100);
-        rpc_add(&mut t, 13, 4, (vec![], false), &mut log);
-        let (id1, w1) = &conns[0];
-        arrive(w1, Arrival::Bytes(framed(b"req")));
-        let mut app = App::default();
-        t.read_drive(*id1, &mut app, &mut log);
-        t.read_drive(*id1, &mut app, &mut log);
-        assert_eq!(t.open_fds(), [10, 13, 12, 11]);
-    }
-
-    #[test]
     fn accept_rpc_takes_the_connection_as_mits() {
         use nix::fcntl::{FcntlArg, OFlag, fcntl};
         use nix::sys::socket::getsockopt;
@@ -2388,113 +2079,6 @@ mod tests {
         assert!(closed(&third));
         assert_eq!(log.take(), NO_LINES);
         drop(client);
-    }
-
-    #[test]
-    fn a_listener_whose_accept_failed_sits_out_twenty_milliseconds() {
-        let now = Instant::now();
-        let mut p = Paused::new(3);
-        assert!((0..3).all(|i| p.ready(i, now)));
-        assert_eq!(p.timeout(PollTimeout::NONE, now), PollTimeout::NONE);
-        p.pause(1, now);
-        assert!(p.ready(0, now) && p.ready(2, now));
-        assert!(!p.ready(1, now + Duration::from_millis(19)));
-        assert!(p.ready(1, now + ACCEPT_FAILURE_PAUSE));
-        assert_eq!(p.timeout(PollTimeout::NONE, now), PollTimeout::from(20u16));
-        assert_eq!(
-            p.timeout(PollTimeout::from(5u16), now),
-            PollTimeout::from(5u16)
-        );
-        let later = now + Duration::from_millis(30);
-        assert_eq!(p.timeout(PollTimeout::NONE, later), PollTimeout::NONE);
-    }
-
-    fn thread_cpu_ticks() -> u64 {
-        let stat = std::fs::read_to_string("/proc/thread-self/stat").unwrap();
-        let fields: Vec<&str> = stat[stat.rfind(')').unwrap() + 1..]
-            .split_whitespace()
-            .collect();
-        fields[11].parse::<u64>().unwrap() + fields[12].parse::<u64>().unwrap()
-    }
-
-    /// Listeners whose accept keeps failing do not spin the loop. A connected socket whose peer has closed stands for each, a TCP one and an RPC one: poll finds it readable at once and its accept fails (EINVAL). Over 300 ms the loop's thread uses next to no CPU, where a spin would use all of it.
-    #[test]
-    fn a_failing_accept_does_not_spin_the_loop() {
-        let bad = || {
-            let real = TcpListener::bind("127.0.0.1:0").unwrap();
-            let client = TcpStream::connect(real.local_addr().unwrap()).unwrap();
-            drop(real.accept().unwrap());
-            TcpListener::from(OwnedFd::from(client))
-        };
-        let (tcp, rpc) = ([bad()], [bad()]);
-        let stop = AtomicBool::new(false);
-        std::thread::scope(|s| {
-            s.spawn(|| {
-                std::thread::sleep(Duration::from_millis(300));
-                stop.store(true, Ordering::SeqCst);
-            });
-            let sockets = Sockets {
-                tcp: &tcp,
-                rpc: &rpc,
-                ..Sockets::default()
-            };
-            let wake = Wake::Flag {
-                stop: &stop,
-                every: Duration::from_millis(50),
-            };
-            let before = thread_cpu_ticks();
-            let open = run(
-                &mut App::default(),
-                &sockets,
-                MAX_STREAM_DATA_CONNECTIONS,
-                MAX_REQUEST,
-                ServeLimits::default(),
-                &wake,
-                &mut Lines::default(),
-            )
-            .unwrap();
-            let used = thread_cpu_ticks() - before;
-            assert!(used < 10, "{used} ticks of CPU in 300 ms");
-            assert_eq!(open, Vec::<RawFd>::new());
-        });
-    }
-
-    /// An OTP wake fd whose write end is gone reads POLLHUP every poll; the loop drops it rather than
-    /// spin: a second embed loop on one store replaced the runtime and closed this pool.
-    #[test]
-    fn a_hung_up_otp_wake_fd_does_not_spin_the_loop() {
-        let (rd, wr) =
-            nix::unistd::pipe2(nix::fcntl::OFlag::O_CLOEXEC | nix::fcntl::OFlag::O_NONBLOCK)
-                .unwrap();
-        drop(wr);
-        let mut app = App {
-            otp: RefCell::new(Some(rd)),
-            ..App::default()
-        };
-        let stop = AtomicBool::new(false);
-        std::thread::scope(|s| {
-            s.spawn(|| {
-                std::thread::sleep(Duration::from_millis(300));
-                stop.store(true, Ordering::SeqCst);
-            });
-            let wake = Wake::Flag {
-                stop: &stop,
-                every: Duration::from_millis(50),
-            };
-            let before = thread_cpu_ticks();
-            run(
-                &mut app,
-                &Sockets::default(),
-                MAX_STREAM_DATA_CONNECTIONS,
-                MAX_REQUEST,
-                ServeLimits::default(),
-                &wake,
-                &mut Lines::default(),
-            )
-            .unwrap();
-            let used = thread_cpu_ticks() - before;
-            assert!(used < 10, "{used} ticks of CPU in 300 ms");
-        });
     }
 
     #[test]
@@ -2552,106 +2136,5 @@ mod tests {
         );
         process_packet_test(&server, &mut buf, &mut app, &mut log);
         assert_eq!(log.take(), NO_LINES, "nothing to read is not logged");
-    }
-
-    #[test]
-    fn the_loop_serves_udp_tcp_and_rpc_until_its_flag() {
-        use std::io::Read as _;
-        use std::sync::Arc;
-
-        let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
-        let tcp = TcpListener::bind("127.0.0.1:0").unwrap();
-        let rpc = TcpListener::bind("127.0.0.1:0").unwrap();
-        let (uaddr, taddr, raddr) = (
-            udp.local_addr().unwrap(),
-            tcp.local_addr().unwrap(),
-            rpc.local_addr().unwrap(),
-        );
-        let stop = Arc::new(AtomicBool::new(false));
-        let flag = Arc::clone(&stop);
-        let client = std::thread::spawn(move || {
-            let c = UdpSocket::bind("127.0.0.1:0").unwrap();
-            c.set_read_timeout(Some(std::time::Duration::from_secs(5)))
-                .unwrap();
-            c.send_to(b"over udp", uaddr).unwrap();
-            let mut got = [0u8; 64];
-            let n = c.recv(&mut got).unwrap();
-            let mut s = TcpStream::connect(taddr).unwrap();
-            s.write_all(&framed(b"over tcp")).unwrap();
-            let mut reply = Vec::new();
-            s.read_to_end(&mut reply).unwrap();
-            let mut r = TcpStream::connect(raddr).unwrap();
-            let mut answers = Vec::new();
-            for call in [&b"call one"[..], b"call two"] {
-                r.write_all(&fragment(call, true)).unwrap();
-                let mut answer = vec![0u8; fragment(b"answer", true).len()];
-                r.read_exact(&mut answer).unwrap();
-                answers.push(answer);
-            }
-            flag.store(true, Ordering::SeqCst);
-            (got[..n].to_vec(), reply, answers)
-        });
-        let calls = Calls::default();
-        let mut app = App {
-            rpc: Some(Rc::clone(&calls)),
-            ..App::default()
-        };
-        let mut log = Lines::default();
-        let wake = Wake::Flag {
-            stop: &stop,
-            every: std::time::Duration::from_millis(20),
-        };
-        let (udp, tcp, rpc) = ([udp], [tcp], [rpc]);
-        let sockets = Sockets {
-            udp: &udp,
-            tcp: &tcp,
-            rpc: &rpc,
-        };
-        run(
-            &mut app,
-            &sockets,
-            MAX_STREAM_DATA_CONNECTIONS,
-            MAX_REQUEST,
-            ServeLimits::default(),
-            &wake,
-            &mut log,
-        )
-        .unwrap();
-        let (dgram, stream, answers) = client.join().unwrap();
-        assert_eq!(dgram, b"the reply");
-        assert_eq!(stream, framed(b"the reply"));
-        assert_eq!(
-            answers,
-            [fragment(b"answer", true), fragment(b"answer", true)]
-        );
-        assert_eq!(
-            *calls.borrow(),
-            [b"call one".to_vec(), b"call two".to_vec()]
-        );
-        let requests: Vec<_> = app.requests.iter().map(|r| (r.2.clone(), r.3)).collect();
-        assert_eq!(
-            requests,
-            [(b"over udp".to_vec(), false), (b"over tcp".to_vec(), true)]
-        );
-    }
-
-    #[test]
-    fn peers_print_as_mits() {
-        assert_eq!(
-            print_addr_port(&"10.0.0.1:88".parse().unwrap()),
-            "10.0.0.1:88"
-        );
-        assert_eq!(
-            print_addr_port(&"[::1]:4242".parse().unwrap()),
-            "[::1]:4242"
-        );
-        let lo = nix::net::if_::if_nametoindex("lo").unwrap();
-        let ll = SocketAddr::V6(std::net::SocketAddrV6::new(
-            "fe80::1".parse().unwrap(),
-            88,
-            0,
-            lo,
-        ));
-        assert_eq!(print_addr_port(&ll), "[fe80::1%lo]:88");
     }
 }

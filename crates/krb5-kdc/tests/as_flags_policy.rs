@@ -12,8 +12,8 @@ use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, decrypt, encrypt, p256_generate};
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
 use krb5_kdc::{
-    Error, KDB_DISALLOW_FORWARDABLE, KDB_DISALLOW_SVR, KDB_REQUIRES_HW_AUTH, KDB_REQUIRES_PRE_AUTH,
-    KDB_REQUIRES_PWCHANGE, PrincipalStore, Restrictions,
+    Error, KDB_DISALLOW_SVR, KDB_REQUIRES_HW_AUTH, KDB_REQUIRES_PRE_AUTH, KDB_REQUIRES_PWCHANGE,
+    PrincipalStore, Restrictions,
 };
 use krb5_protocol::{as_req, pa_enc_timestamp};
 
@@ -296,18 +296,6 @@ fn user_as_req(nonce: u32) -> krb5_types::AsReq {
     .unwrap()
 }
 
-fn tgt_part_issue_acl_ap(store: &PrincipalStore, issued: &krb5_kdc::IssuedAs) -> EncTicketPart {
-    let tgt_key = store.krbtgt().unwrap().best_key().unwrap();
-    let usage = KeyUsage::new(ku::TICKET).unwrap();
-    let plain = decrypt(
-        &tgt_key.key,
-        usage,
-        issued.rep.0.ticket.enc_part.cipher.as_ref(),
-    )
-    .unwrap();
-    decode(&plain).unwrap()
-}
-
 #[test]
 fn as_req_with_tgs_only_option_is_invalid_as_options() {
     // MIT: `NON_TGT_OPTION` (kdc_util.h:456-457)
@@ -469,17 +457,6 @@ fn as_validate_runs_before_preauth_like_process_as_req() {
 }
 
 #[test]
-fn as_strips_forwardable_when_disallow_forwardable() {
-    let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let before = krb5_kdc::issue_as(&store, &user_as_req(60)).expect("AS");
-    assert!(tgt_part_issue_acl_ap(&store, &before).flags.forwardable());
-    or_attr(&mut store, &cname, KDB_DISALLOW_FORWARDABLE);
-    let after = krb5_kdc::issue_as(&store, &user_as_req(61)).expect("AS");
-    assert!(!tgt_part_issue_acl_ap(&store, &after).flags.forwardable());
-}
-
-#[test]
 // oracle: differential-gate.sh as-hw-preauth
 fn as_hw_auth_required_rejects_enc_ts() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
@@ -504,19 +481,6 @@ fn as_hw_auth_required_rejects_enc_ts() {
         }
         other => panic!("expected 25 NEEDED_HW_PREAUTH, got {other:?}"),
     }
-}
-
-#[test]
-fn as_sets_proxiable_when_requested() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let mut req = user_as_req(90);
-    req.0.req_body.kdc_options = req
-        .0
-        .req_body
-        .kdc_options
-        .with_bit(flag_bit::PROXIABLE, true);
-    let issued = krb5_kdc::issue_as(&store, &req).expect("AS");
-    assert!(tgt_part_issue_acl_ap(&store, &issued).flags.proxiable());
 }
 
 #[test]

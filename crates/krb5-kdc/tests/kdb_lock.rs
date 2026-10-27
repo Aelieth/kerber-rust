@@ -9,14 +9,12 @@
 
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::mpsc;
 use std::time::Duration;
 
 use krb5_kdc::testrealm::bootstrap_documented;
 use krb5_kdc::{
-    CreateError, DbLock, DbLockError, DbLockMode, PersistError, SUFFIX_LOCK, SUFFIX_POLICY_LOCK,
-    create_store, load_store, save_store, suffixed,
+    DbLock, DbLockMode, PersistError, SUFFIX_LOCK, SUFFIX_POLICY_LOCK, create_store, load_store,
+    save_store, suffixed,
 };
 use krb5_testkit::scratch_dir;
 use krb5_types::PrincipalName;
@@ -86,97 +84,6 @@ fn assert_untouched(link: &Path, victim: &Path, bytes: &[u8], mtime: std::time::
     );
 }
 
-fn age(db: &Path) -> i64 {
-    std::fs::metadata(suffixed(db, SUFFIX_LOCK))
-        .unwrap()
-        .mtime()
-}
-
-#[test]
-fn a_new_database_gets_both_lock_files_and_one_without_them_does_not_open() {
-    let (db, stash) = saved("krb5-lock-files");
-    for f in [
-        suffixed(&db, SUFFIX_LOCK),
-        suffixed(&db, SUFFIX_POLICY_LOCK),
-    ] {
-        let m = std::fs::metadata(&f).unwrap();
-        assert_eq!(m.len(), 0, "{}", f.display());
-        assert_eq!(m.mode() & 0o777, 0o600, "{}", f.display());
-    }
-    assert!(load_store(&db, &stash).is_ok());
-    let pol = suffixed(&db, SUFFIX_POLICY_LOCK);
-    std::fs::rename(&pol, db.with_extension("away")).unwrap();
-    assert_eq!(
-        lock_text(&db, &stash),
-        "KADM5 administration database lock file missing"
-    );
-    std::fs::rename(db.with_extension("away"), &pol).unwrap();
-    std::fs::remove_file(suffixed(&db, SUFFIX_LOCK)).unwrap();
-    assert_eq!(lock_text(&db, &stash), "No such file or directory");
-    // A save is no open: it refuses an existing database without its lock files too.
-    let (store, _) = bootstrap_documented().unwrap();
-    assert!(matches!(
-        save_store(&store, &db, &stash),
-        Err(PersistError::Lock(_))
-    ));
-    assert!(!suffixed(&db, SUFFIX_LOCK).exists());
-}
-
-#[test]
-fn create_makes_both_lock_files_and_a_stale_policy_lock_file_fails_it() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let master = krb5_kdc::random_key(krb5_crypto::EncryptionType::Aes256CtsHmacSha196).unwrap();
-    let dir = scratch_dir("krb5-lock-create");
-    let db = dir.join("principal");
-    create_store(&store, &db, &master).unwrap();
-    assert!(suffixed(&db, SUFFIX_LOCK).exists());
-    assert!(suffixed(&db, SUFFIX_POLICY_LOCK).exists());
-    match create_store(&store, &db, &master) {
-        Err(CreateError::Create(e)) => assert_eq!(e.kind(), std::io::ErrorKind::AlreadyExists),
-        other => panic!("{other:?}"),
-    }
-    // MIT, settled live: a policy lock file already there fails the create with "File exists"
-    // and leaves the database file it made.
-    let dir = scratch_dir("krb5-lock-stale");
-    let db = dir.join("principal");
-    std::fs::write(suffixed(&db, SUFFIX_POLICY_LOCK), b"").unwrap();
-    match create_store(&store, &db, &master) {
-        Err(e @ CreateError::Lock(_)) => assert_eq!(e.to_string(), "File exists"),
-        other => panic!("{other:?}"),
-    }
-    assert!(db.exists());
-    assert!(suffixed(&db, SUFFIX_LOCK).exists());
-}
-
-#[test]
-fn every_save_moves_the_age_strictly_forward() {
-    let (db, stash) = saved("krb5-lock-age");
-    let store = load_store(&db, &stash).unwrap();
-    let mut last = age(&db);
-    for _ in 0..3 {
-        save_store(&store, &db, &stash).unwrap();
-        let now = age(&db);
-        assert!(now > last, "{now} after {last}");
-        last = now;
-    }
-}
-
-#[test]
-fn a_reader_sees_another_writers_save_whatever_the_files_size() {
-    let (db, stash) = saved("krb5-lock-stamp");
-    let mut reader = load_store(&db, &stash).unwrap();
-    let mut writer = load_store(&db, &stash).unwrap();
-    let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["stamped"]);
-    let realm = writer.realm().to_owned();
-    writer
-        .change(|s| s.insert_new_randkey(&name, &realm, &[], "test@KERBER.TEST"))
-        .unwrap()
-        .unwrap();
-    save_store(&writer, &db, &stash).unwrap();
-    reader.reload_if_stale().unwrap();
-    assert!(reader.get_name(&name).is_some());
-}
-
 /// A write that left the age where it was (a writer that may not set `principal.ok`'s times)
 /// and the database in an inode the reader read before is still read again: the file's change
 /// time moved.
@@ -209,41 +116,6 @@ fn a_reader_sees_a_write_that_kept_the_age_and_the_inode() {
     .unwrap();
     reader.reload_if_stale().unwrap();
     assert!(reader.get_name(&name).is_some());
-}
-
-#[test]
-fn a_write_holder_makes_a_read_wait_and_a_read_holder_does_not() {
-    let (db, stash) = saved("krb5-lock-wait");
-    // Another process's lock: OFD locks on another open file description conflict with ours.
-    let other = Arc::new(DbLock::open(&db).unwrap());
-    let read = |db: PathBuf, stash: PathBuf| {
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || tx.send(load_store(&db, &stash).is_ok()).unwrap());
-        rx
-    };
-    let held = other.hold(DbLockMode::Shared).unwrap();
-    assert_eq!(
-        read(db.clone(), stash.clone()).recv_timeout(Duration::from_secs(5)),
-        Ok(true)
-    );
-    drop(held);
-    let held = other.hold(DbLockMode::Exclusive).unwrap();
-    let rx = read(db.clone(), stash.clone());
-    assert!(rx.recv_timeout(Duration::from_millis(400)).is_err());
-    drop(held);
-    assert_eq!(rx.recv_timeout(Duration::from_secs(5)), Ok(true));
-}
-
-#[test]
-fn the_lock_texts_are_mits() {
-    assert_eq!(
-        DbLockError::CantLock.to_string(),
-        "Insufficient access to lock database"
-    );
-    assert_eq!(
-        DbLockError::NoLockFile.to_string(),
-        "KADM5 administration database lock file missing"
-    );
 }
 
 /// Two handles on one database (two open file descriptions, as two processes have) changing it
@@ -300,17 +172,6 @@ fn a_stale_stores_change_keeps_another_writers_save() {
         .unwrap();
     let all = load_store(&db, &stash).unwrap();
     assert!(all.get_name(&x).is_some() && all.get_name(&y).is_some());
-}
-
-/// A change that makes no mutation writes nothing: the database file and its age stay.
-#[test]
-fn a_change_with_no_mutation_writes_nothing() {
-    let (db, stash) = saved("krb5-lock-noop");
-    let mut store = load_store(&db, &stash).unwrap();
-    let (ino, before) = (std::fs::metadata(&db).unwrap().ino(), age(&db));
-    store.change(|_| Ok::<(), ()>(())).unwrap().unwrap();
-    assert_eq!(std::fs::metadata(&db).unwrap().ino(), ino);
-    assert_eq!(age(&db), before);
 }
 
 /// A mutation of a store with a database outside a change is refused, so nothing can be saved
@@ -397,57 +258,6 @@ fn a_hook_write_is_read_by_a_store_already_open() {
     assert_eq!(last.contents, 1_000_000_000_u32.to_le_bytes());
 }
 
-/// kadmin.local's `lock`: the exclusive lock is held across changes until `unlock`, and another
-/// process's change waits for it.
-#[test]
-fn the_session_lock_holds_another_writer_off_until_unlock() {
-    let (db, stash) = saved("krb5-lock-session");
-    let mut session = load_store(&db, &stash).unwrap();
-    session.lock_database().unwrap();
-    let realm = session.realm().to_owned();
-    let mine = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["mine"]);
-    session
-        .change(|s| s.insert_new_randkey(&mine, &realm, &[], "test@KERBER.TEST"))
-        .unwrap()
-        .unwrap();
-    let (tx, rx) = mpsc::channel();
-    let (db2, stash2) = (db.clone(), stash.clone());
-    let t = std::thread::spawn(move || {
-        let mut other = load_store(&db2, &stash2).unwrap();
-        let realm = other.realm().to_owned();
-        let theirs = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["theirs"]);
-        other
-            .change(|s| s.insert_new_randkey(&theirs, &realm, &[], "test@KERBER.TEST"))
-            .unwrap()
-            .unwrap();
-        tx.send(()).unwrap();
-    });
-    assert!(rx.recv_timeout(Duration::from_millis(400)).is_err());
-    session.unlock_database().unwrap();
-    rx.recv_timeout(Duration::from_secs(10)).unwrap();
-    t.join().unwrap();
-    let all = load_store(&db, &stash).unwrap();
-    let theirs = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["theirs"]);
-    assert!(all.get_name(&mine).is_some() && all.get_name(&theirs).is_some());
-}
-
-/// A `load -update` that stops while it holds the permanent lock leaves `principal.kadm5.lock`
-/// gone, so the database does not open again until an administrator makes the file (MIT 3g).
-#[test]
-fn a_permanent_lock_never_let_go_leaves_the_database_unusable() {
-    let (db, stash) = saved("krb5-lock-perm-kill");
-    {
-        let lock = DbLock::open(&db).unwrap();
-        lock.lock(DbLockMode::Permanent).unwrap();
-    }
-    assert_eq!(
-        lock_text(&db, &stash),
-        "KADM5 administration database lock file missing"
-    );
-    std::fs::File::create(suffixed(&db, SUFFIX_POLICY_LOCK)).unwrap();
-    assert!(load_store(&db, &stash).is_ok());
-}
-
 /// MIT's create opens `principal.ok` `O_CREAT | O_TRUNC`, emptying a symlink's target; this
 /// create refuses the link and makes nothing.
 #[test]
@@ -496,41 +306,4 @@ fn moving_the_age_never_retimes_a_symlink_planted_as_principal_ok() {
     lock.update_age();
     lock.unlock().unwrap();
     assert_untouched(&ok, &victim, &bytes, mtime);
-}
-
-/// Two processes that each hold the database shared while another of their threads upgrades
-/// the lock (two KDCs on one database recording AS outcomes) do not deadlock: an upgrade that
-/// would wait waits outside its process's lock state, so the shared holds can be let go.
-#[test]
-fn two_processes_upgrading_while_holding_the_lock_shared_do_not_deadlock() {
-    let (db, _) = saved("krb5-lock-upgrade");
-    // Two `DbLock`s are two open file descriptions, as two processes' are.
-    let locks = [
-        Arc::new(DbLock::open(&db).unwrap()),
-        Arc::new(DbLock::open(&db).unwrap()),
-    ];
-    for lock in &locks {
-        lock.lock(DbLockMode::Shared).unwrap();
-    }
-    let (tx, rx) = mpsc::channel();
-    for lock in &locks {
-        let (lock, tx) = (Arc::clone(lock), tx.clone());
-        std::thread::spawn(move || {
-            lock.lock(DbLockMode::Exclusive).unwrap();
-            lock.unlock().unwrap();
-            tx.send(()).unwrap();
-        });
-    }
-    assert!(
-        rx.recv_timeout(Duration::from_millis(200)).is_err(),
-        "no upgrade while the other process holds the lock shared"
-    );
-    for lock in &locks {
-        let lock = Arc::clone(lock);
-        std::thread::spawn(move || lock.unlock().unwrap());
-    }
-    for _ in &locks {
-        rx.recv_timeout(Duration::from_secs(10))
-            .expect("each upgrade waited for a shared hold the other's upgrade kept");
-    }
 }

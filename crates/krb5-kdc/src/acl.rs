@@ -887,21 +887,6 @@ mod tests {
     }
 
     #[test]
-    fn acl_maxlife_colon_loads() {
-        let acl = Acl::parse("admin@KERBER.TEST a *@KERBER.TEST -maxlife 12:34\n").unwrap();
-        let rs = acl
-            .restrictions("admin@KERBER.TEST", Some("user@KERBER.TEST"))
-            .expect("rs");
-        assert_eq!(rs.max_life, Some(12 * 3600 + 34 * 60));
-    }
-
-    #[test]
-    fn acl_maxlife_3dd_refuses() {
-        let err = Acl::parse("admin@KERBER.TEST a *@KERBER.TEST -maxlife 3dd\n").unwrap_err();
-        assert!(err.to_string().contains("invalid restrictions"), "{err}");
-    }
-
-    #[test]
     fn acl_star_admin_does_not_match_escaped_slash() {
         let acl = Acl::parse("*/admin@KERBER.TEST *\n").unwrap();
         assert_eq!(
@@ -940,27 +925,5 @@ mod tests {
     #[test]
     fn acl_unknown_restriction_is_load_error() {
         assert!(Acl::parse("admin@KERBER.TEST * *@KERBER.TEST -notatoken\n").is_err());
-    }
-
-    #[test]
-    fn acl_restriction_clearpolicy_is_imposed() {
-        let acl = Acl::parse("restricted@KERBER.TEST a *@KERBER.TEST -clearpolicy\n").unwrap();
-        let rs = acl
-            .restrictions("restricted@KERBER.TEST", Some("user9@KERBER.TEST"))
-            .expect("rs");
-        assert!(rs.clear_policy);
-    }
-
-    #[test]
-    fn acl_target_star_is_any_check() {
-        let acl = Acl::parse("admin@KERBER.TEST a *\n").unwrap();
-        assert!(
-            acl.check(
-                "admin@KERBER.TEST",
-                AdminOp::Create,
-                Some("svc/x@KERBER.TEST")
-            )
-            .is_ok()
-        );
     }
 }

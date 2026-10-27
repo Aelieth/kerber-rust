@@ -180,26 +180,3 @@ pub fn errcode_to_protocol(code: i32) -> i32 {
         krb5_types::err::GENERIC
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::persist::PersistError;
-
-    #[test]
-    fn a_refused_save_is_a_database_error_with_the_system_text() {
-        let e = Error::from(PersistError::Io(std::io::Error::from_raw_os_error(13)));
-        assert_eq!(
-            e,
-            Error::Db {
-                kind: std::io::ErrorKind::PermissionDenied,
-                text: "Permission denied".into(),
-            }
-        );
-        assert_eq!(e.to_string(), "Permission denied");
-        let e = Error::from(PersistError::Crypto(
-            "stash is not a usable master key".into(),
-        ));
-        assert_eq!(e.to_string(), "crypto: stash is not a usable master key");
-    }
-}

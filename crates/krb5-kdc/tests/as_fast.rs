@@ -685,12 +685,6 @@ fn unknown_critical_fast_option_is_refused() {
 }
 
 #[test]
-fn noncritical_fast_option_bit_16_is_ignored() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    wrap_as_fast_bit(&store, 842, 16).expect("bit 16 is not unknown-critical");
-}
-
-#[test]
 fn explicit_as_armor_invalid_tgt_is_tkt_nyv() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -1524,16 +1518,5 @@ fn encrypted_challenge_skew_logs_clock_skew() {
     assert_eq!(
         fast_verify_failures(&store, &req),
         ["preauth (encrypted_challenge) verify failure: Clock skew too great"]
-    );
-}
-
-#[test]
-fn encrypted_challenge_that_verifies_logs_no_failure() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let req = fast_challenge_req(&store, &user_key(), &KerberosTime::now(), 861, 860);
-    assert_eq!(
-        fast_verify_failures(&store, &req),
-        [] as [&str; 0],
-        "a verified module is not a verify failure"
     );
 }

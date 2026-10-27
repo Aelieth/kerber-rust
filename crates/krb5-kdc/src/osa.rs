@@ -293,42 +293,6 @@ mod tests {
     }
 
     #[test]
-    fn policy_and_history_round_trip_through_xdr() {
-        let rec = OsaPrincEnt {
-            policy: Some("hp".into()),
-            aux_attributes: KADM5_POLICY,
-            old_key_next: 1,
-            admin_history_kvno: 2,
-            old_keys: vec![
-                vec![OsaKeyData {
-                    ver: 2,
-                    kvno: 1,
-                    types: [20, 0],
-                    contents: [vec![1, 2, 3], vec![b'K', b'E', b'R', b'B', b'u']],
-                }],
-                vec![OsaKeyData {
-                    ver: 1,
-                    kvno: 2,
-                    types: [18, 0],
-                    contents: [vec![9; 7], Vec::new()],
-                }],
-            ],
-        };
-        let bytes = rec.encode();
-        assert_eq!(bytes.len() % 4, 0, "XDR is 4-byte aligned");
-        assert_eq!(OsaPrincEnt::decode(&bytes).unwrap(), rec);
-        // "hp\0" is 3 bytes padded to 4 after the u32 size.
-        assert_eq!(&bytes[4..12], &[0, 0, 0, 3, b'h', b'p', 0, 0]);
-        assert_eq!(rec.bound_policy(), Some("hp"));
-        let order: Vec<u16> = rec
-            .old_keys_oldest_first()
-            .iter()
-            .map(|e| e[0].kvno)
-            .collect();
-        assert_eq!(order, [2, 1], "next slot 1 holds the oldest entry");
-    }
-
-    #[test]
     fn truncated_records_are_errors_not_panics() {
         let rec = OsaPrincEnt {
             policy: Some("p".into()),

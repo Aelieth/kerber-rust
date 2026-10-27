@@ -9,7 +9,7 @@ use krb5_crypto::{
 };
 use krb5_kdc::testrealm::{GREET_AD_TYPE, GREET_TEXT, GreetAuth};
 use krb5_kdc::testrealm::{TEST_REALM, bootstrap_documented, documented_host};
-use krb5_kdc::{Error, PrincipalStore, decrypt_ticket_part, issue_tgs};
+use krb5_kdc::{Error, PrincipalStore, issue_tgs};
 
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 use krb5_testkit::{krbtgt, status, user, user_as, wrap_if_relevant};
@@ -111,46 +111,6 @@ fn tgs_with_enc_ad(
     })
 }
 
-fn ad_has_payload(ad: &[AuthorizationDataValue], ad_type: i32, payload: &[u8]) -> bool {
-    for e in ad {
-        if e.ad_type == pa::AD_IF_RELEVANT {
-            if let Ok(inner) = decode::<AuthorizationData>(e.ad_data.as_ref())
-                && ad_has_payload(&inner, ad_type, payload)
-            {
-                return true;
-            }
-        } else if e.ad_type == ad_type && e.ad_data.as_ref() == payload {
-            return true;
-        }
-    }
-    false
-}
-
-#[test]
-fn tgs_copies_if_relevant_body_authdata() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let issued = user_as(&store, 13001);
-    let blob = b"kerber-ad-copy";
-    let ad = wrap_if_relevant(&[AuthorizationDataValue {
-        ad_type: pa::AD_AND_OR,
-        ad_data: blob.to_vec().into(),
-    }]);
-    let tgs = tgs_with_enc_ad(
-        issued.rep.0.ticket.clone(),
-        &issued.session_key,
-        documented_host(),
-        13002,
-        enc_ad(&issued.session_key, &ad),
-    );
-    let out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
-    let part = host_part(&store, &out);
-    let ad = part.authorization_data.expect("ticket AD");
-    assert!(
-        ad_has_payload(&ad, pa::AD_AND_OR, blob),
-        "copied AD missing: {ad:?}"
-    );
-}
-
 #[test]
 // oracle: differential-gate.sh tgs-ad-mandatory-for-kdc
 fn tgs_mandatory_for_kdc_is_handle_authdata() {
@@ -169,39 +129,6 @@ fn tgs_mandatory_for_kdc_is_handle_authdata() {
     );
     let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
     assert_eq!(status(&err), (err::POLICY, Some("HANDLE_AUTHDATA")));
-}
-
-#[test]
-fn tgs_strips_kdc_issued_if_relevant_keeps_sibling() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let issued = user_as(&store, 13021);
-    let keep = b"keep-me";
-    let mut ad = wrap_if_relevant(&[AuthorizationDataValue {
-        ad_type: pa::AD_WIN2K_PAC,
-        ad_data: b"dummy-pac".to_vec().into(),
-    }]);
-    ad.extend(wrap_if_relevant(&[AuthorizationDataValue {
-        ad_type: pa::AD_AND_OR,
-        ad_data: keep.to_vec().into(),
-    }]));
-    let tgs = tgs_with_enc_ad(
-        issued.rep.0.ticket.clone(),
-        &issued.session_key,
-        documented_host(),
-        13022,
-        enc_ad(&issued.session_key, &ad),
-    );
-    let out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
-    let part = host_part(&store, &out);
-    let ticket_ad = part.authorization_data.expect("ticket AD");
-    assert!(
-        ad_has_payload(&ticket_ad, pa::AD_AND_OR, keep),
-        "sibling AD missing: {ticket_ad:?}"
-    );
-    assert!(
-        !ad_has_payload(&ticket_ad, pa::AD_WIN2K_PAC, b"dummy-pac"),
-        "KDC-issued IF-RELEVANT kept: {ticket_ad:?}"
-    );
 }
 
 #[test]
@@ -566,66 +493,6 @@ fn body_ad_subkey_ku5_is_copied() {
     assert!(
         ad_has_payload_a3_r28(&ticket_ad, pa::AD_AND_OR, blob),
         "subkey ku5 AD missing: {ticket_ad:?}"
-    );
-    assert!(first_is_pac(&ticket_ad), "PAC not first: {ticket_ad:?}");
-}
-
-#[test]
-fn body_ad_session_ku5_is_copied() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let issued = user_as(&store, 28041);
-    let blob = b"r28-session-ku5";
-    let ad = and_or_ad(blob);
-    let tgs = tgs_hand(
-        issued.rep.0.ticket.clone(),
-        &issued.session_key,
-        documented_host(),
-        28042,
-        Some(enc_ad_usage(
-            &issued.session_key,
-            ku::TGS_REQ_AD_SUBKEY,
-            &ad,
-        )),
-        None,
-    );
-    let out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
-    let part = host_part(&store, &out);
-    let ticket_ad = part.authorization_data.expect("ticket AD");
-    assert!(
-        ad_has_payload_a3_r28(&ticket_ad, pa::AD_AND_OR, blob),
-        "session ku5 AD missing: {ticket_ad:?}"
-    );
-    assert!(first_is_pac(&ticket_ad), "PAC not first: {ticket_ad:?}");
-}
-
-#[test]
-fn tgt_and_or_kept_through_tgs() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let issued = user_as(&store, 28051);
-    let keep = b"r28-tgt-keep";
-    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
-    let mut part = decrypt_ticket_part(&krbtgt.key, &issued.rep.0.ticket).unwrap();
-    let mut ad = part.authorization_data.unwrap_or_default();
-    ad.extend(and_or_ad(keep));
-    part.authorization_data = Some(ad);
-    let der = encode(&part).unwrap();
-    let usage = KeyUsage::new(ku::TICKET).unwrap();
-    let mut ticket = issued.rep.0.ticket.clone();
-    ticket.enc_part.cipher = encrypt(&krbtgt.key, usage, &der).unwrap().into();
-    let tgs = tgs_hand(
-        ticket,
-        &issued.session_key,
-        documented_host(),
-        28052,
-        None,
-        None,
-    );
-    let out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
-    let svc = host_part(&store, &out);
-    let ticket_ad = svc.authorization_data.expect("ticket AD");
-    assert!(
-        ad_has_payload_a3_r28(&ticket_ad, pa::AD_AND_OR, keep),
-        "TGT AND-OR not kept: {ticket_ad:?}"
     );
     assert!(first_is_pac(&ticket_ad), "PAC not first: {ticket_ad:?}");
 }

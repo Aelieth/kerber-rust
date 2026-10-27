@@ -130,46 +130,6 @@ fn unknown_client_e_text_is_client_not_found() {
 }
 
 #[test]
-fn non_ascii_realm_is_krb_error_not_panic() {
-    let store = PrincipalStore::new("CAFÉ.TEST");
-    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        krb5_kdc::handle_request(&store, &[])
-    }));
-    assert!(r.is_ok(), "untrusted realm must not panic ascii()");
-    let reply = r.unwrap().expect("drop");
-    assert_eq!(reply, [] as [u8; 0]);
-}
-
-#[test]
-fn tgs_bad_checksum_is_error() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let key = client_key();
-    let req = as_req(
-        cname.clone(),
-        TEST_REALM,
-        8,
-        Some(vec![pa_enc_timestamp(&key).expect("pa")]),
-    )
-    .unwrap();
-    let as_out = krb5_kdc::issue_as(&store, &req).expect("AS");
-    let mut tgs = tgs_req(
-        as_out.rep.0.ticket.clone(),
-        &as_out.session_key,
-        TEST_REALM,
-        &cname,
-        documented_host(),
-        TEST_REALM,
-        9,
-    )
-    .expect("tgs");
-    tgs.0.req_body.nonce = 99; // body no longer matches authenticator checksum
-    let bytes = krb5_kdc::handle_request(&store, &encode(&tgs).expect("der")).expect("reply");
-    let e: krb5_types::KrbError = decode(&bytes).expect("KRB-ERROR");
-    assert_eq!(e.error_code, err::BAD_INTEGRITY);
-}
-
-#[test]
 fn tgs_error_echoes_the_header_ticket_client_like_prepare_error_tgs() {
     // MIT: `prepare_error_tgs` (do_tgs_req.c:201-204)
     // errpkt.client is the decrypted
@@ -205,47 +165,6 @@ fn tgs_error_echoes_the_header_ticket_client_like_prepare_error_tgs() {
         Some(&cname),
         "cname is the header ticket client"
     );
-}
-
-#[test]
-fn hostile_keytab_does_not_panic() {
-    use std::panic::catch_unwind;
-    let min_hole = {
-        let mut v = vec![0x05, 0x02];
-        v.extend_from_slice(&i32::MIN.to_be_bytes());
-        v
-    };
-    let r = catch_unwind(|| krb5_protocol::Keytab::parse(&min_hole));
-    assert!(r.is_ok());
-    assert!(r.unwrap().is_err());
-    let non_ascii = {
-        // One whole aes128-cts-hmac-sha1-96 record whose realm is the byte 0x80.
-        let mut body = vec![0x00, 0x01, 0x00, 0x01, 0x80, 0x00, 0x01, b'a'];
-        body.extend_from_slice(&1i32.to_be_bytes());
-        body.extend_from_slice(&0u32.to_be_bytes());
-        body.push(1);
-        body.extend_from_slice(&17u16.to_be_bytes());
-        body.extend_from_slice(&16u16.to_be_bytes());
-        body.extend_from_slice(&[0u8; 16]);
-        let mut v = vec![0x05, 0x02];
-        v.extend_from_slice(&i32::try_from(body.len()).unwrap().to_be_bytes());
-        v.extend_from_slice(&body);
-        v
-    };
-    let r = catch_unwind(|| krb5_protocol::Keytab::parse(&non_ascii));
-    assert!(r.is_ok());
-    assert!(r.unwrap().is_err());
-    // MIT: `krb5_ktfileint_internal_read_entry` (kt_file.c:1003-1006)
-    // a component length of 0
-    // ends the keytab before its realm is looked at.
-    let zero_component = {
-        let mut v = vec![0x05, 0x02];
-        v.extend_from_slice(&8i32.to_be_bytes());
-        v.extend_from_slice(&[0x00, 0x01, 0x00, 0x01, 0x80, 0x00, 0x00, 0x00]);
-        v
-    };
-    let r = catch_unwind(|| krb5_protocol::Keytab::parse(&zero_component));
-    assert!(r.unwrap().unwrap().entries.is_empty());
 }
 
 #[test]

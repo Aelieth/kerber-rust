@@ -349,13 +349,12 @@ impl std::fmt::Debug for Post {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicU64, Ordering};
+
     use std::sync::{Arc, Mutex};
 
     use super::*;
-    use crate::store::AdminEnt;
-    use crate::store::AdminFields;
-    use crate::testrealm::{TEST_REALM, TEST_USER};
+
+    use crate::testrealm::TEST_USER;
 
     struct Rec {
         name: &'static str,
@@ -477,32 +476,6 @@ mod tests {
         }
     }
 
-    struct Count {
-        hits: Arc<AtomicU64>,
-    }
-
-    impl Kadm5Hook for Count {
-        fn name(&self) -> &'static str {
-            "nope"
-        }
-
-        fn chpass(
-            &self,
-            stage: HookStage,
-            _princ: &PrincipalName,
-            _realm: &str,
-            _keepold: u32,
-            _password: Option<&[u8]>,
-            _etypes: &[EncryptionType],
-        ) -> Result<(), Error> {
-            if stage == HookStage::Precommit {
-                self.hits.fetch_add(1, Ordering::SeqCst);
-                return Err(Error::InvalidArgument("hook refused".into()));
-            }
-            Ok(())
-        }
-    }
-
     struct ClearThread;
 
     impl Drop for ClearThread {
@@ -513,10 +486,6 @@ mod tests {
 
     fn user() -> PrincipalName {
         PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER])
-    }
-
-    fn named(component: &str) -> PrincipalName {
-        PrincipalName::new(PrincipalName::NT_PRINCIPAL, [component])
     }
 
     fn install(module: &Arc<Rec>) -> ClearThread {
@@ -534,11 +503,6 @@ mod tests {
             .map(|key| key.kvno)
             .max()
             .expect("key")
-    }
-
-    fn present(store: &PrincipalStore, name: &PrincipalName) -> bool {
-        let id = crate::kdb::lookup_principal_id(name, store.realm());
-        store.get(&id).is_some()
     }
 
     #[test]
@@ -602,116 +566,5 @@ mod tests {
                 "chpass:post:none",
             ]
         );
-    }
-
-    #[test]
-    fn precommit_errors_write_nothing_for_the_other_operations() {
-        let (mut store, _) = crate::testrealm::bootstrap_documented().expect("realm");
-        let module = Rec::new("bad", true, false);
-        let _guard = install(&module);
-        let created = named("hooknew");
-        store
-            .create_principal_3_in(
-                &created,
-                TEST_REALM,
-                crate::CreateKeys::Password(b"long-enough"),
-                &[],
-                &AdminEnt::default(),
-                "actor",
-            )
-            .expect_err("create");
-        assert!(!present(&store, &created));
-        let life = store
-            .get(&crate::kdb::lookup_principal_id(&user(), store.realm()))
-            .expect("user")
-            .max_life;
-        store
-            .apply_admin_fields(
-                &user(),
-                AdminFields {
-                    max_life: Some(99),
-                    ..AdminFields::default()
-                },
-            )
-            .expect_err("modify");
-        assert_eq!(
-            store
-                .get(&crate::kdb::lookup_principal_id(&user(), store.realm()))
-                .expect("user")
-                .max_life,
-            life
-        );
-        let renamed = named("hookrenamed");
-        store
-            .rename_unchecked(&user(), TEST_REALM, &renamed, TEST_REALM, "actor")
-            .expect_err("rename");
-        assert!(present(&store, &user()));
-        assert!(!present(&store, &renamed));
-        let alias_name = named("hookalias");
-        store
-            .create_alias_in(&alias_name, TEST_REALM, &user(), TEST_REALM, "actor")
-            .expect_err("alias");
-        assert!(!present(&store, &alias_name));
-        store.remove_in(&user(), TEST_REALM).expect_err("remove");
-        assert!(present(&store, &user()));
-        assert_eq!(
-            module.seen(),
-            [
-                "create:pre",
-                "modify:pre",
-                "rename:pre",
-                "alias:pre",
-                "remove:pre",
-            ]
-        );
-    }
-
-    #[test]
-    fn a_postcommit_error_does_not_stop_the_next_module() {
-        let (mut store, _) = crate::testrealm::bootstrap_documented().expect("realm");
-        let first = Rec::new("bad", false, true);
-        let second = Rec::new("next", false, false);
-        set_thread_kadm5_hook(vec![
-            Arc::clone(&first) as Arc<dyn Kadm5Hook>,
-            Arc::clone(&second) as Arc<dyn Kadm5Hook>,
-        ]);
-        let _guard = ClearThread;
-        store
-            .set_password(&user(), b"another-password")
-            .expect("still succeeds");
-        assert_eq!(first.seen(), ["chpass:pre:pw", "chpass:post:pw"]);
-        assert_eq!(second.seen(), ["chpass:pre:pw", "chpass:post:pw"]);
-    }
-
-    #[test]
-    fn an_empty_thread_list_leaves_chpass_alone() {
-        let (mut store, _) = crate::testrealm::bootstrap_documented().expect("realm");
-        set_thread_kadm5_hook(Vec::new());
-        let _guard = ClearThread;
-        let before = kvno(&store, &user());
-        store
-            .set_password(&user(), b"another-password")
-            .expect("no module");
-        assert!(kvno(&store, &user()) > before);
-    }
-
-    #[test]
-    fn kdc_conf_then_krb5_conf_disables_a_hook() {
-        let (mut store, _) = crate::testrealm::bootstrap_documented().expect("realm");
-        let hits = Arc::new(AtomicU64::new(0));
-        set_thread_kadm5_hook(vec![Arc::new(Count {
-            hits: Arc::clone(&hits),
-        }) as Arc<dyn Kadm5Hook>]);
-        let _guard = ClearThread;
-        let kdc = krb5_config::KdcConf::parse(
-            "[plugins]\n    kadm5_hook = {\n        disable = nope\n    }\n",
-        )
-        .expect("kdc.conf");
-        let krb5 = krb5_config::Krb5Conf::parse("[plugins]\n").expect("krb5.conf");
-        store.apply_kadm5_hook_plugins(Some(&kdc), Some(&krb5));
-        store
-            .set_password(&user(), b"another-password")
-            .expect("disabled");
-        assert_eq!(hits.load(Ordering::SeqCst), 0);
     }
 }

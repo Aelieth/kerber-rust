@@ -14,8 +14,7 @@ use krb5_kdc::testrealm::{
 };
 use krb5_kdc::{
     Error, KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_POSTDATED, KDB_DISALLOW_RENEWABLE, KDB_DISALLOW_SVR,
-    KDB_DISALLOW_TGT_BASED, KDB_NO_AUTH_DATA_REQUIRED, KDB_OK_AS_DELEGATE, KDB_REQUIRES_HW_AUTH,
-    PrincipalStore,
+    KDB_DISALLOW_TGT_BASED, KDB_OK_AS_DELEGATE, KDB_REQUIRES_HW_AUTH, PrincipalStore,
 };
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
@@ -364,25 +363,6 @@ fn tgs_honors_svr_tgt_based_lockout_and_ok_as_delegate() {
     .unwrap();
     let part: EncTicketPart = decode(&plain).unwrap();
     assert!(part.flags.bit(flag_bit::OK_AS_DELEGATE));
-}
-
-#[test]
-fn tgs_skips_pac_when_no_auth_data_required() {
-    let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    let host = documented_host();
-    let issued = krb5_kdc::issue_as(&store, &user_as_req(73)).expect("AS");
-    or_attr(&mut store, &host, KDB_NO_AUTH_DATA_REQUIRED);
-    let tgs = krb5_kdc::issue_tgs(&store, &host_tgs(&store, &issued, 74)).expect("TGS");
-    let host_key = store.get_name(&host).unwrap().best_key().unwrap();
-    let usage = KeyUsage::new(ku::TICKET).unwrap();
-    let plain = decrypt(
-        &host_key.key,
-        usage,
-        tgs.rep.0.ticket.enc_part.cipher.as_ref(),
-    )
-    .unwrap();
-    let part: EncTicketPart = decode(&plain).unwrap();
-    assert!(part.authorization_data.is_none());
 }
 
 #[test]

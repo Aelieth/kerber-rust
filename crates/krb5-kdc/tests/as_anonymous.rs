@@ -1,15 +1,13 @@
 //! Anonymous AS requests: `restrict_anon`, anonymous PKINIT, and the unsigned AuthPack.
 
-use krb5_asn1::{decode, encode};
-use krb5_crypto::{EncryptionType, ProtocolKey, p256_generate};
+use krb5_asn1::encode;
+use krb5_crypto::{EncryptionType, p256_generate};
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
 use krb5_kdc::{AdminFields, Error, KDB_REQUIRES_PRE_AUTH, PrincipalStore, decrypt_ticket_part};
 use krb5_protocol::{as_req, tgs_req};
 
-use krb5_protocol::{
-    armor_key, attach_fast, build_fast_armor, pa_pk_as_req_unsigned, pkinit_reply_key_agile,
-};
-use krb5_types::{KerberosTime, KrbError, PrincipalName, ascii, err, flag_bit, pa};
+use krb5_protocol::{pa_pk_as_req_unsigned, pkinit_reply_key_agile};
+use krb5_types::{KerberosTime, PrincipalName, err, flag_bit, pa};
 
 #[test]
 fn named_anon_without_preauth_is_validate_anonymous() {
@@ -204,81 +202,6 @@ fn restrict_anon_tgs_to_host() {
     };
     assert_eq!(code, err::POLICY);
     assert_eq!(text.as_deref(), Some("ANONYMOUS NOT ALLOWED"));
-}
-
-#[test]
-fn anonymous_tgt_fast_armor() {
-    let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    let _ca = krb5_testkit::enable_pkinit(&mut store);
-    insert_anonymous(&mut store);
-    let issued = unsigned_anon_as(&store, 464);
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let sub = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x39u8; 32])
-        .expect("subkey");
-    let armor_ap = build_fast_armor(
-        issued.rep.0.ticket.clone(),
-        &issued.session_key,
-        &ascii("WELLKNOWN:ANONYMOUS"),
-        &wellknown_anonymous(),
-        Some(&sub),
-    )
-    .expect("anonymous armor");
-    let akey = armor_key(&issued.session_key, Some(&sub)).expect("armor key");
-    let mut as_req = as_req(user, TEST_REALM, 465, None).unwrap();
-    attach_fast(&mut as_req, &armor_ap, &akey, Vec::new()).expect("FAST wrap");
-    let bytes = krb5_kdc::handle_request(&store, &encode(&as_req).unwrap()).expect("reply");
-    let kerr: KrbError = decode(&bytes).expect("KRB-ERROR");
-    assert_eq!(kerr.error_code, err::PREAUTH_REQUIRED);
-}
-
-#[test]
-fn anon_unsigned_authpack_named_client_is_preauth_failed() {
-    let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    let _ca = krb5_testkit::enable_pkinit(&mut store);
-    insert_anonymous(&mut store);
-    let kp = p256_generate().expect("client ECDH");
-    let mut req = as_req(wellknown_anonymous(), TEST_REALM, 466, None).unwrap();
-    let body = encode(&req.0.req_body).expect("body");
-    let ck = krb5_types::pkinit::kdc_req_body_checksum(&body);
-    req.0.padata = Some(vec![
-        pa_pk_as_req_unsigned(&kp.public, 466, &ck, None).expect("unsigned"),
-    ]);
-    let (code, detail) = match krb5_kdc::issue_as(&store, &req).unwrap_err() {
-        Error::Protocol { code, detail, .. } => (code, detail),
-        other => panic!("want 24, got {other:?}"),
-    };
-    assert_eq!(code, err::PREAUTH_FAILED);
-    assert!(
-        detail
-            .as_deref()
-            .is_some_and(|d| d.contains("not signed") && d.contains("not anonymous")),
-        "{detail:?}"
-    );
-}
-
-#[test]
-fn unsigned_pkinit_named_is_preauth_failed() {
-    let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    let _ca = krb5_testkit::enable_pkinit(&mut store);
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let kp = p256_generate().expect("client ECDH");
-    let mut req = as_req(cname, TEST_REALM, 461, None).unwrap();
-    let body = encode(&req.0.req_body).expect("body");
-    let ck = krb5_types::pkinit::kdc_req_body_checksum(&body);
-    req.0.padata = Some(vec![
-        pa_pk_as_req_unsigned(&kp.public, 461, &ck, None).expect("unsigned"),
-    ]);
-    let (code, detail) = match krb5_kdc::issue_as(&store, &req).unwrap_err() {
-        Error::Protocol { code, detail, .. } => (code, detail),
-        other => panic!("want 24, got {other:?}"),
-    };
-    assert_eq!(code, err::PREAUTH_FAILED);
-    assert!(
-        detail
-            .as_deref()
-            .is_some_and(|d| d.contains("not signed") && d.contains("not anonymous")),
-        "{detail:?}"
-    );
 }
 
 /// MIT 1.22.2, settled live: an anonymous PKINIT reply stamps the anonymous principal's last

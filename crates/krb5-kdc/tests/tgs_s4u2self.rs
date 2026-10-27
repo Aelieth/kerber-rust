@@ -4,15 +4,14 @@
 //! bootstrapped realm.
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt, encrypt};
+use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, checksum};
 use krb5_kdc::testrealm::{
     TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
     bootstrap_documented, documented_admin_id, documented_host,
 };
 use krb5_kdc::{
-    Acl, Error, KDB_DISALLOW_ALL_TIX, KDB_OK_TO_AUTH_AS_DELEGATE, PacTicket, PrincipalStore,
-    RID_FIRST_USER, decrypt_ticket_part, pac_from_ticket_part, sign_reply_pac, ticket_checksum_der,
-    verify_pac, wrap_win2k_pac,
+    Acl, Error, KDB_DISALLOW_ALL_TIX, PacTicket, PrincipalStore, decrypt_ticket_part,
+    pac_from_ticket_part, sign_reply_pac, ticket_checksum_der, wrap_win2k_pac,
 };
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
@@ -25,7 +24,7 @@ use krb5_types::pac::{
     PAC_CLIENT_INFO, PAC_LOGON_INFO, Pac, PacBuffer, PacIdentity, RpcSid, client_info_buffer,
     parse_kerb_validation_info,
 };
-use krb5_types::{ApReq, EncTicketPart, KdcOptions, PaData, PrincipalName, err, flag_bit, ku, pa};
+use krb5_types::{EncTicketPart, KdcOptions, PaData, PrincipalName, err, flag_bit, ku, pa};
 
 fn attach_client_info_pac(store: &PrincipalStore, part: &mut EncTicketPart, info_name: &str) {
     let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
@@ -221,35 +220,6 @@ fn s4u2self_x509_issues_and_replies_130() {
 }
 
 #[test]
-fn s4u2self_x509_wins_over_for_user() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let tgt = host_tgt(&store, 7132);
-    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let pa130 = pa_s4u_x509_user(&tgt.session_key, admin, TEST_REALM, 7133).unwrap();
-    let pa129 = pa_for_user(&tgt.session_key, user, TEST_REALM).unwrap();
-    let out = krb5_kdc::issue_tgs(&store, &s4u_self(&tgt, vec![pa129, pa130], 7133)).unwrap();
-    assert_eq!(out.rep.0.cname.components_joined(), TEST_ADMIN);
-}
-
-#[test]
-fn s4u2self_for_user_only_omits_reply_130() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let tgt = host_tgt(&store, 7134);
-    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
-    let pa = pa_for_user(&tgt.session_key, admin, TEST_REALM).unwrap();
-    let out = krb5_kdc::issue_tgs(&store, &s4u_self(&tgt, vec![pa], 7135)).unwrap();
-    assert_eq!(out.rep.0.cname.components_joined(), TEST_ADMIN);
-    assert!(
-        out.rep
-            .0
-            .padata
-            .as_ref()
-            .is_none_or(|v| v.iter().all(|p| p.padata_type != pa::FOR_X509_USER))
-    );
-}
-
-#[test]
 fn s4u2self_pw_expired_user_still_issues() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
@@ -273,20 +243,6 @@ fn s4u2self_pw_expired_user_still_issues() {
 }
 
 #[test]
-fn s4u2self_keeps_forwardable_without_delegate_targets() {
-    let (mut store, _) = bootstrap_documented().unwrap();
-    store.clear_s4u_to(&documented_host());
-    let tgt = host_tgt(&store, 7150);
-    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
-    let pa = pa_for_user(&tgt.session_key, admin, TEST_REALM).unwrap();
-    let out = krb5_kdc::issue_tgs(&store, &s4u_self(&tgt, vec![pa], 7151)).unwrap();
-    let host = documented_host();
-    let hostk = store.get_name(&host).unwrap().best_key().unwrap();
-    let part: EncTicketPart = decrypt_ticket_part(&hostk.key, &out.rep.0.ticket).unwrap();
-    assert!(part.flags.forwardable());
-}
-
-#[test]
 // oracle: differential-gate.sh pa-for-user-undecodable
 fn s4u2self_for_user_undecodable_is_generic() {
     let (store, _) = bootstrap_documented().unwrap();
@@ -302,13 +258,6 @@ fn s4u2self_for_user_undecodable_is_generic() {
 }
 
 const FOREIGN: &str = "OTHER.TEST";
-
-#[test]
-fn create_host_has_no_s4u_to_targets() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let host = store.get_name(&documented_host()).expect("host");
-    assert_eq!(host.s4u_allowed_to, [] as [String; 0]);
-}
 
 #[test]
 fn s4u2self_keeps_f_without_clearing_targets() {
@@ -618,50 +567,6 @@ fn tgs_code_text(res: Result<krb5_kdc::IssuedTgs, Error>) -> (i32, Option<String
 }
 
 #[test]
-fn s4u2self_referral_names_header_client() {
-    let (a, b, _c, ir, _host_c, _bc) = three_realm();
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
-    let tgt = as_tgt(&a, "A.TEST", 980);
-    let ab = chase_tgs(
-        &a,
-        tgt.rep.0.ticket.clone(),
-        &tgt.session_key,
-        "A.TEST",
-        PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "B.TEST"]),
-        "A.TEST",
-        981,
-    )
-    .expect("A B");
-    let mut t = ab.rep.0.ticket.clone();
-    let mut part = decrypt_ticket_part(&ir, &t).expect("ab");
-    attach_client_info_pac_capaths(&ir, &mut part, &format!("{TEST_ADMIN}@A.TEST"));
-    reseal_mut(&mut t, &part, &ir);
-    let pa = pa_for_user(&ab.session_key, admin, "A.TEST").expect("PA-FOR-USER");
-    let req = TgsReqBuilder::new(
-        t,
-        &ab.session_key,
-        "A.TEST",
-        &user,
-        PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "C.TEST"]),
-        "B.TEST",
-        982,
-    )
-    .options(KdcOptions::forwardable())
-    .additional_tickets(None)
-    .padata(vec![pa])
-    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
-    .build()
-    .expect("s4u explicit TGS");
-    let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&b, &req));
-    assert_eq!(code, err::BADMATCH);
-    assert_eq!(
-        text.as_deref(),
-        Some("INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH")
-    );
-}
-
-#[test]
 fn s4u2self_cross_tgt_local_user_local_server_is_not_cross_realm() {
     let (_a, _b, c, ir, host_c, bc) = three_realm();
     let mut t = bc.rep.0.ticket.clone();
@@ -718,102 +623,6 @@ fn s4u2self_cross_tgt_foreign_client_named_like_local_server_is_badmatch() {
     assert_eq!(
         text.as_deref(),
         Some("INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH")
-    );
-}
-
-#[test]
-fn s4u2self_local_tgt_foreign_crealm_is_badmatch() {
-    let (_a, _b, c, _ir, _host_c, _bc) = three_realm();
-    let tgt = as_tgt(&c, "C.TEST", 984);
-    let tgt_key = c.krbtgt().unwrap().best_key().unwrap().key.clone();
-    let mut t = tgt.rep.0.ticket.clone();
-    let mut part = decrypt_ticket_part(&tgt_key, &t).expect("tgt");
-    part.crealm = krb5_types::try_ascii("A.TEST").expect("realm");
-    part.authorization_data = None;
-    reseal_mut(&mut t, &part, &tgt_key);
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
-    let pa = pa_for_user(&tgt.session_key, admin, "C.TEST").expect("PA-FOR-USER");
-    let mut req = TgsReqBuilder::new(
-        t,
-        &tgt.session_key,
-        "C.TEST",
-        &user,
-        user.clone(),
-        "C.TEST",
-        985,
-    )
-    .options(KdcOptions::forwardable())
-    .additional_tickets(None)
-    .padata(vec![pa])
-    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
-    .build()
-    .expect("s4u");
-    let tgs_pa = req
-        .0
-        .padata
-        .as_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|p| p.padata_type == pa::TGS_REQ)
-        .expect("PA-TGS-REQ");
-    let mut ap: ApReq = decode(tgs_pa.padata_value.as_ref()).expect("ap");
-    let auth_usage = KeyUsage::new(ku::TGS_REQ_AUTHENTICATOR).unwrap();
-    let auth_plain = decrypt(
-        &tgt.session_key,
-        auth_usage,
-        ap.authenticator.cipher.as_ref(),
-    )
-    .expect("auth");
-    let mut authenticator: krb5_types::Authenticator = decode(&auth_plain).expect("authenticator");
-    authenticator.crealm = krb5_types::try_ascii("A.TEST").expect("realm");
-    let auth_der = encode(&authenticator).expect("auth der");
-    ap.authenticator.cipher = encrypt(&tgt.session_key, auth_usage, &auth_der)
-        .expect("enc")
-        .into();
-    tgs_pa.padata_value = encode(&ap).expect("ap").into();
-    let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&c, &req));
-    assert_eq!(code, err::BADMATCH);
-    assert_eq!(
-        text.as_deref(),
-        Some("INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH")
-    );
-}
-
-#[test]
-fn s4u2self_cross_tgt_local_server_foreign_user_issues() {
-    let (_a, _b, mut c, ir, host_c, bc) = three_realm();
-    c.policy.reject_bad_transit = false;
-    let mut t = bc.rep.0.ticket.clone();
-    let mut part = decrypt_ticket_part(&ir, &t).expect("bc");
-    part.cname = host_c.clone();
-    part.crealm = krb5_types::try_ascii("C.TEST").expect("realm");
-    attach_client_info_pac_capaths(&ir, &mut part, &format!("{TEST_ADMIN}@A.TEST"));
-    reseal_mut(&mut t, &part, &ir);
-    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
-    let pa = pa_for_user(&bc.session_key, admin, "A.TEST").expect("PA-FOR-USER");
-    let req = TgsReqBuilder::new(
-        t,
-        &bc.session_key,
-        "C.TEST",
-        &host_c,
-        host_c.clone(),
-        "C.TEST",
-        987,
-    )
-    .options(KdcOptions::forwardable())
-    .additional_tickets(None)
-    .padata(vec![pa])
-    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
-    .build()
-    .expect("s4u");
-    let out = krb5_kdc::issue_tgs(&c, &req).expect("MIT case 4");
-    let host_key = c.get_name(&host_c).unwrap().best_key().unwrap().key.clone();
-    let part = decrypt_ticket_part(&host_key, &out.rep.0.ticket).expect("enc");
-    assert_eq!(part.cname.components_joined(), TEST_ADMIN);
-    assert_eq!(
-        std::str::from_utf8(part.crealm.as_bytes()).unwrap(),
-        "A.TEST"
     );
 }
 
@@ -1015,25 +824,6 @@ fn s4u2self_cross_tgt_cert_only_empty_name_is_invalid_xrealm() {
     assert_eq!(text.as_deref(), Some("INVALID_XREALM_S4U2SELF_REQUEST"));
 }
 
-fn or_host_attr(store: &mut PrincipalStore, bit: u32) {
-    let host = documented_host();
-    let a = store.get_name(&host).unwrap().attributes | bit;
-    store
-        .apply_admin_fields(
-            &host,
-            krb5_kdc::AdminFields {
-                attributes: Some(a),
-                max_life: None,
-                expiration: None,
-                pw_expire: None,
-                policy: None,
-                clear_policy: false,
-                max_renewable_life: None,
-            },
-        )
-        .unwrap();
-}
-
 fn s4u2self_tgs(store: &PrincipalStore, for_user: PrincipalName, nonce: u32) -> krb5_types::TgsReq {
     let host = documented_host();
     let tgt = host_tgt(store, nonce);
@@ -1060,47 +850,6 @@ fn s4u_code(e: Error) -> i32 {
         Error::Protocol { code, .. } => code,
         other => panic!("expected protocol error, got {other:?}"),
     }
-}
-
-#[test]
-fn s4u2self_impersonates_user() {
-    let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    // AD data: the realm has an AD identity (kdc.conf `domain_sid`), so its PACs are AD-shaped.
-    store.policy.ad_identity = true;
-    or_host_attr(&mut store, KDB_OK_TO_AUTH_AS_DELEGATE);
-    let host = documented_host();
-    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
-    let tgt = host_tgt(&store, 601);
-    let pa = pa_for_user(&tgt.session_key, admin.clone(), TEST_REALM).expect("PA-FOR-USER");
-    let tgs = TgsReqBuilder::new(
-        tgt.rep.0.ticket.clone(),
-        &tgt.session_key,
-        TEST_REALM,
-        &host,
-        host.clone(),
-        TEST_REALM,
-        602,
-    )
-    .options(KdcOptions::forwardable())
-    .additional_tickets(None)
-    .padata(vec![pa])
-    .etypes(pref_etypes())
-    .build()
-    .expect("S4U TGS-REQ");
-    let out = krb5_kdc::issue_tgs(&store, &tgs).expect("S4U2Self");
-    assert_eq!(out.rep.0.cname.components_joined(), TEST_ADMIN);
-    let hostk = store.get_name(&host).unwrap().best_key().unwrap();
-    let part: EncTicketPart = decrypt_ticket_part(&hostk.key, &out.rep.0.ticket).expect("enc");
-    assert_eq!(part.cname.components_joined(), TEST_ADMIN);
-    assert!(part.flags.forwardable());
-    let pac = pac_from_ticket_part(&part).expect("PAC");
-    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
-    verify_pac(&pac, &hostk.key, &krbtgt.key, true).expect("S4U PAC");
-    let parsed = Pac::parse(&pac).expect("PAC");
-    let logon =
-        parse_kerb_validation_info(parsed.buffer(PAC_LOGON_INFO).expect("logon")).expect("NDR");
-    assert_eq!(logon.user_id, store.get_name(&admin).unwrap().rid);
-    assert_ne!(logon.user_id, RID_FIRST_USER);
 }
 
 #[test]

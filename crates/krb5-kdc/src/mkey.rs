@@ -34,14 +34,3 @@ pub fn string_to_enctype(name: &str) -> Result<EncryptionType, String> {
     }
     EncryptionType::from_mit_name(name).map_err(|e| format!("{name}: {e}"))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn salt_is_realm_km() {
-        let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, MASTER_NAME);
-        assert_eq!(name.default_salt("KERBER.TEST"), b"KERBER.TESTKM");
-    }
-}

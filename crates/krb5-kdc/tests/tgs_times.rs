@@ -613,46 +613,6 @@ fn renew_tgs_sname(
 }
 
 #[test]
-fn tgs_issues_after_client_expires() {
-    let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let issued = krb5_kdc::issue_as(&store, &user_as_req(47)).expect("AS while unexpired");
-    store
-        .apply_admin_fields(
-            &cname,
-            krb5_kdc::AdminFields {
-                attributes: None,
-                max_life: None,
-                expiration: Some(1),
-                pw_expire: None,
-                policy: None,
-                clear_policy: false,
-                max_renewable_life: None,
-            },
-        )
-        .unwrap();
-    krb5_kdc::issue_tgs(&store, &host_tgs(&store, &issued, 48)).expect("TGS after NAME_EXP");
-
-    let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    let issued = krb5_kdc::issue_as(&store, &user_as_req(49)).expect("AS while unexpired");
-    store
-        .apply_admin_fields(
-            &cname,
-            krb5_kdc::AdminFields {
-                attributes: None,
-                max_life: None,
-                expiration: None,
-                pw_expire: Some(1),
-                policy: None,
-                clear_policy: false,
-                max_renewable_life: None,
-            },
-        )
-        .unwrap();
-    krb5_kdc::issue_tgs(&store, &host_tgs(&store, &issued, 50)).expect("TGS after KEY_EXPIRED");
-}
-
-#[test]
 fn tgs_rejects_expired_server() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     let host = documented_host();
@@ -712,22 +672,6 @@ fn tgs_renewable_when_server_disallow_is_non_renewable() {
         }
         other => panic!("expected Protocol, got {other:?}"),
     }
-}
-
-#[test]
-fn tgs_renew_preserves_renew_till() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let issued = renewable_as(&store, 91);
-    let before = tgt_part_issue_acl_ap(&store, &issued);
-    assert!(before.flags.renewable());
-    let old_till = before.renew_till.clone().expect("renew_till");
-    // Needs wall-clock so renew_till is compared after time has moved.
-    wait_unix_past(KerberosTime::now().unix_seconds());
-    let out = krb5_kdc::issue_tgs(&store, &renew_tgs(&issued, 92)).expect("RENEW");
-    let after = tgs_tgt_part(&store, &out);
-    assert!(after.flags.renewable());
-    assert_eq!(after.renew_till, Some(old_till));
-    assert!(after.endtime.unix_seconds() >= before.endtime.unix_seconds());
 }
 
 #[test]

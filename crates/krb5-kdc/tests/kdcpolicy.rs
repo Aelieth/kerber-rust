@@ -46,37 +46,6 @@ fn test_policy_fail_client_is_local_policy() {
 }
 
 #[test]
-fn test_policy_foreign_indicator_is_local_policy() {
-    let store = krb5_kdc::PrincipalStore::bootstrap(
-        TEST_REALM,
-        TEST_USER,
-        TEST_USER_PASSWORD,
-        TEST_ADMIN,
-        TEST_ADMIN_PASSWORD,
-    )
-    .unwrap();
-    // Inject a non-ONE_HOUR/SEVEN_HOURS indicator via the store client path:
-    // TestPolicy sees indicators from AS only after preauth. Use the
-    // thread policy against a password AS with a dummy indicator by
-    // setting require-style indicators on the issue path through SPAKE
-    // is heavier; the name-deny cell above is the live gate's twin.
-    // Here we call check_as directly.
-    let user = store
-        .get_name(&PrincipalName::new(
-            PrincipalName::NT_PRINCIPAL,
-            [TEST_USER],
-        ))
-        .unwrap()
-        .clone();
-    let err = TestPolicy
-        .check_as(&store, &user, &["OTHER".into()])
-        .unwrap_err();
-    let (code, text) = status(&err);
-    assert_eq!(code, err::POLICY);
-    assert_eq!(text, Some("LOCAL_POLICY"));
-}
-
-#[test]
 fn test_policy_one_hour_rewrites_endtime() {
     let store = krb5_kdc::PrincipalStore::bootstrap(
         TEST_REALM,

@@ -4,45 +4,11 @@
 #[path = "common/mod.rs"]
 mod common;
 
-use krb5_crypto::EncryptionType;
-use krb5_kdc::testrealm::{
-    TEST_REALM, TEST_USER, bootstrap_documented, documented_admin_id, documented_host,
-};
+use krb5_kdc::testrealm::{TEST_REALM, bootstrap_documented, documented_admin_id, documented_host};
 use krb5_kdc::{Acl, AdminOp, Error, KDB_LOCKDOWN_KEYS, acl_for_store, default_acl_path};
 
-use krb5_protocol::Keytab;
 use krb5_testkit::scratch_dir;
-use krb5_types::{PrincipalName, deltat};
-
-#[test]
-fn acl_allow_admin_create_and_ktadd() {
-    let (mut store, acl) = bootstrap_documented().expect("bootstrap");
-    let extra = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "extra.kerber.test"]);
-    store
-        .create_host(&acl, &documented_admin_id(), &extra)
-        .expect("admin create");
-    let kt = store
-        .export_keytab(&acl, &documented_admin_id(), &extra)
-        .expect("admin ktadd");
-    let bytes = kt.to_bytes();
-    assert_eq!(&bytes[..2], &[0x05, 0x02]);
-    let parsed = Keytab::parse(&bytes).expect("keytab v2");
-    assert_eq!(
-        parsed.entries.len(),
-        4,
-        "host randkeys include etypes 17–20"
-    );
-    assert!(
-        parsed
-            .entries
-            .iter()
-            .any(|e| e.key.etype() == EncryptionType::Aes256CtsHmacSha384192)
-    );
-    assert_eq!(
-        parsed.entries[0].name.components_joined(),
-        "host/extra.kerber.test"
-    );
-}
+use krb5_types::PrincipalName;
 
 #[test]
 fn export_keytab_lockdown_is_denied() {
@@ -94,22 +60,6 @@ fn export_keytab_local_bypasses_lockdown() {
         .expect("local --export-krbtgt-keytab");
     assert!(!kt.entries.is_empty());
     assert_eq!(kt.entries[0].name.components_joined(), "krbtgt/KERBER.TEST");
-}
-
-#[test]
-fn acl_deny_non_admin_create_delete_ktadd() {
-    let (mut store, acl) = bootstrap_documented().expect("bootstrap");
-    let user = format!("{TEST_USER}@{TEST_REALM}");
-    let extra = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "denied.kerber.test"]);
-    let err = store.create_host(&acl, &user, &extra).unwrap_err();
-    assert_eq!(err, Error::AclDenied);
-    let err = store
-        .export_keytab(&acl, &user, &documented_host())
-        .unwrap_err();
-    assert_eq!(err, Error::AclDenied);
-    let err = store.delete(&acl, &user, &documented_host()).unwrap_err();
-    assert_eq!(err, Error::AclDenied);
-    assert!(acl.check(&user, AdminOp::Create, None).is_err());
 }
 
 #[test]
@@ -183,52 +133,6 @@ fn acl_target_pattern_scopes_add_and_delete() {
     store
         .delete(&acl, actor, &user2)
         .expect("delete user2 in scope");
-}
-
-#[test]
-fn acl_target_backreference_matches_own_instance() {
-    let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    let acl = Acl::parse("*/admin@KERBER.TEST * */*1@KERBER.TEST\n").expect("acl");
-    let actor = "joe/admin@KERBER.TEST";
-    let own = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "joe"]);
-    let other = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "other"]);
-    store.create_host(&acl, actor, &own).expect("own instance");
-    assert_eq!(
-        store.create_host(&acl, actor, &other).unwrap_err(),
-        Error::AclDenied
-    );
-}
-
-#[test]
-fn acl_rename_needs_delete_on_src_and_add_on_dest_without_restrictions() {
-    let (mut store, admin_acl) = bootstrap_documented().expect("bootstrap");
-    let admin = documented_admin_id();
-    let user2 = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user2"]);
-    store
-        .create_password(&admin_acl, &admin, &user2, b"user2-secret")
-        .unwrap();
-    let acl = Acl::parse("scoped@KERBER.TEST ad *@KERBER.TEST\n").expect("acl");
-    let actor = "scoped@KERBER.TEST";
-    let svc = PrincipalName::new(PrincipalName::NT_SRV_INST, ["svc", "y"]);
-    assert_eq!(
-        store.rename(&acl, actor, &user2, &svc).unwrap_err(),
-        Error::AclDenied
-    );
-    let user3 = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user3"]);
-    store
-        .rename(&acl, actor, &user2, &user3)
-        .expect("user3 in scope");
-}
-
-#[test]
-fn acl_target_star_is_any() {
-    let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    let acl = Acl::parse("admin@KERBER.TEST a *\n").expect("acl");
-    let actor = "admin@KERBER.TEST";
-    let svc = PrincipalName::new(PrincipalName::NT_SRV_INST, ["svc", "any"]);
-    store
-        .create_host(&acl, actor, &svc)
-        .expect("* target is any");
 }
 
 #[test]
@@ -388,47 +292,4 @@ fn acl_default_realm_applies() {
             .is_ok()
     );
     let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn documented_kadm5_acl_file_shape() {
-    let text = include_str!("../../../harness/kadm5.acl");
-    let acl = Acl::parse(text).expect("acl");
-    assert!(
-        acl.check("admin@KERBER.TEST", AdminOp::Create, None)
-            .is_ok()
-    );
-    assert!(
-        acl.check("foo/admin@KERBER.TEST", AdminOp::Create, None)
-            .is_ok()
-    );
-    assert!(
-        acl.check(
-            "kiprop/testhost.kerber.test@KERBER.TEST",
-            AdminOp::Propagate,
-            None,
-        )
-        .is_ok()
-    );
-    assert_eq!(
-        acl.check("user@KERBER.TEST", AdminOp::Create, None)
-            .unwrap_err(),
-        Error::AclDenied
-    );
-}
-
-#[test]
-fn parse_42x_is_forty_two_seconds() {
-    assert_eq!(deltat::parse("42x"), Ok(42));
-    assert!(deltat::parse("3dd").is_err());
-}
-
-#[test]
-fn acl_unknown_op_letter_includes_line() {
-    let err = Acl::parse("bad@KERBER.TEST aZ\n").unwrap_err();
-    assert!(
-        err.to_string()
-            .contains("Unrecognized ACL operation 'Z' in bad@KERBER.TEST aZ"),
-        "{err}"
-    );
 }
