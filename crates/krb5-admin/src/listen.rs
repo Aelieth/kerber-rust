@@ -1,5 +1,4 @@
-//! TCP/UDP listeners for kadmind (749), kpasswd (464), and kprop (754).
-//! The ticket must be for `kadmin/changepw`.
+//! kadmind (749), kpasswd (464) and kprop (754) listeners.
 
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
@@ -19,15 +18,11 @@ use krb5_types::{
 };
 use zeroize::Zeroize;
 
-/// Ports from the Kerberos assigned set.
 pub const KADMIND_PORT: u16 = 749;
-/// RFC 3244.
 pub const KPASSWD_PORT: u16 = 464;
-/// kprop.
 pub const KPROP_PORT: u16 = 754;
 
 // MIT: `client_addr` (kadmin/server/server_stubs.c:152-162)
-/// `k5_print_addr` of the peer, without the port.
 #[must_use]
 pub fn client_addr(ip: std::net::IpAddr) -> String {
     match ip {
@@ -38,7 +33,6 @@ pub fn client_addr(ip: std::net::IpAddr) -> String {
     }
 }
 
-/// UDP kpasswd: send `body` to `dest` and accept only that peer's reply.
 pub fn kpasswd_udp_exchange_to(dest: SocketAddr, body: &[u8]) -> io::Result<Vec<u8>> {
     let bind = if dest.ip().is_loopback() {
         "127.0.0.1:0"
@@ -148,14 +142,12 @@ fn kpasswd_chpwfail_error(realm: &str, result: u16, text: &str) -> Result<Vec<u8
 
 fn kpasswd_krb_error(realm: &str, e_data: Vec<u8>) -> Result<Vec<u8>, Error> {
     // MIT: `process_chpw_request` (schpw.c:273-345)
-    // alloc_data overwrites `ret` with 0, so `error -= ERROR_TABLE_BASE_krb5` wraps past KRB_ERR_MAX → 60.
+    // `alloc_data` zeroes `ret`, so the wrap lands on 60, not 0.
     let der = changepw_krb_error(realm, err::GENERIC, Some(e_data))?;
     Ok(frame_kpasswd_rep(&[], &der))
 }
 
-/// The reply to a kpasswd TCP request whose length is past the buffer: `KRB_ERR_FIELD_TOOLONG` from `kadmin/changepw`, not framed as a kpasswd reply.
 // MIT: `make_toolong_error` (kadmin/server/misc.c:139-161)
-/// the time, `KRB_ERR_FIELD_TOOLONG` and `kadmin/changepw` in the realm, with no client, text or data.
 pub(crate) fn kpasswd_toolong_error(realm: &str) -> Result<Vec<u8>, Error> {
     changepw_krb_error(realm, err::FIELD_TOOLONG, None)
 }
@@ -179,38 +171,27 @@ impl KpasswdReply {
     }
 }
 
-/// RFC 3244 / MIT changepw request: `len, version, ap-req-len, AP-REQ, KRB-PRIV`.
-/// Version 1 (MIT `kpasswd`) carries the raw password in KRB-PRIV. Version `0xff80` (setpw) carries `ChangePasswdData`. KRB-PRIV is encrypted with the authenticator subkey when present (MIT always sends one).
-/// built. A bad AP-REQ, KRB-PRIV, ACL, or password change is an `Ok` framed result code.
+/// `0xff80` carries `ChangePasswdData`; v1 the raw password.
 const RFC3244_VERSION: u16 = 0xff80;
 const UNK_PRINC_PRIV: &str =
     "Password not changed.\nPrincipal does not exist while trying to change password.\n";
 const DECODE_FAIL: &str = "Failed decoding ChangePasswdData";
 
-/// What `process_chpw_request` holds once the AP-REQ is accepted: the request as verified, the auth context it leaves and the AP-REP that answers it.
 pub struct ChangepwAccepted {
-    /// The verified AP-REQ (the ticket's server is `kadmin/changepw`, as the KDB keytab names it).
     pub ok: ApVerifyOk,
-    /// The context after it: `DO_SEQUENCE` only, no address set.
     pub ac: AcceptorAuthContext,
-    /// The AP-REP, DER.
     pub ap_rep: Vec<u8>,
 }
 
-/// Which of `process_chpw_request`'s two AUTHERROR answers a refused AP-REQ gets.
 #[derive(Debug)]
 pub enum ChangepwRefused {
     Read(krb5_protocol::Error),
     Reply(krb5_protocol::Error),
 }
 
-/// The AP-REQ half of kpasswd's request: MIT's `krb5_rd_req` for `kadmin/changepw` in the realm, on kadmind's acceptor profile values `conf`, its key looked up in the KDB as the KDB keytab does, then the AP-REP.
-/// `krb5_rd_req` names `kadmin/changepw` against the `KDB:` keytab, and a refusal is AUTHERROR "Failed reading application request".
 // MIT: `krb5_ktkdb_get_entry` (lib/kdb/keytab.c:117-185)
-/// the KDB keytab gives the principal's first permitted key at the ticket's kvno and refuses another enctype.
+/// The first permitted key at the kvno; other enctypes refused.
 // MIT: `rd_req_decoded_opt` (lib/krb5/krb/rd_req_dec.c:631-631)
-/// the authenticator's time is checked against kadmind's context's `clockskew`.
-/// [`ChangepwRefused`], with the error that refused the request.
 pub fn changepw_accept(
     ap_req: &[u8],
     changepw: Option<&Principal>,
@@ -252,8 +233,6 @@ pub fn changepw_accept(
 }
 
 // MIT: `_kadm5_chpass_principal_util` (lib/kadm5/chpass_util.c:195-200)
-/// too short names the policy minimum.
-/// a too-short code with no policy uses the code text and Password not changed.
 fn kpasswd_quality_reply(msg: &str, empty_policy: &EmptyPolicy) -> String {
     if let Some(n) = quality_count(msg, "min_length ") {
         return too_short_text(n);
@@ -313,24 +292,17 @@ Password is too short while trying to change password.\n\
 \n\
 Password not changed.\n ";
 
-/// How an empty-password refusal relates to the principal's named policy.
 enum EmptyPolicy {
-    /// No policy name. The reply is the code text plus `Password not changed.`
     Unbound,
     MinLength(u32),
     Missing,
 }
 
 // MIT: `kadm5_get_principal` (lib/kadm5/srv/svr_principal.c:759-759)
-/// the lookup clears that message, so the notice is the code's table text.
 // MIT: `empty_check` (lib/kadm5/srv/pwqual_empty.c:41-43)
-/// an empty password sets Empty passwords are not allowed with the too-short code, so the notice reads the table text.
 // MIT: `KADM5_PASS_Q_TOOSHORT` (lib/kadm5/kadm_err.et:29-29)
-/// the table text is Password is too short.
 // MIT: `passwd_check` (lib/kadm5/srv/server_misc.c:122-129)
-/// the Error line is written before the clear and keeps the module's sentence.
 // MIT: `princ_check` (lib/kadm5/srv/pwqual_princ.c:52-55)
-/// a component match sets Password may not match principal name for that code.
 fn kpasswd_quality_log(msg: &str) -> String {
     if msg == krb5_kdc::PWQUAL_PRINC {
         return msg.to_owned();
@@ -339,7 +311,6 @@ fn kpasswd_quality_log(msg: &str) -> String {
 }
 
 // MIT: `get_policy` (lib/kadm5/srv/svr_principal.c:112-117)
-/// a missing policy is not a failed change. It only changes the too-short reply.
 fn empty_policy(store: &krb5_kdc::PrincipalStore, name: &PrincipalName) -> EmptyPolicy {
     let Some(pol_name) = store
         .get_name(name)
@@ -368,7 +339,6 @@ security administrator."
 }
 
 // MIT: `trunc_name` (kadmin/server/misc.c:124-131)
-/// at most `MAXPRINCLEN` (125) bytes of a name, and `...` after them when it is longer.
 fn kpasswd_trunc_len(len: usize) -> (usize, &'static str) {
     if len > 125 { (125, "...") } else { (len, "") }
 }
@@ -381,8 +351,8 @@ fn first_bytes(s: &str, n: usize) -> &str {
     &s[..end]
 }
 
-/// The line `process_chpw_request` logs once a change is made or refused.
-/// `trunc_name` cuts the client to 125 bytes in both lines; a set-password line also cuts the target, and prints at that length the CLIENT's name (`targetp = clientstr`) in the `for` slot, not the target's.
+/// As MIT's, a setpw line prints the client's name in the `for` slot
+/// (`targetp = clientstr`).
 fn kpasswd_log_line(setpw: bool, from: &str, client: &str, target: &str, text: &str) -> String {
     let (clen, cdots) = kpasswd_trunc_len(client.len());
     let by = first_bytes(client, clen);
@@ -395,7 +365,7 @@ fn kpasswd_log_line(setpw: bool, from: &str, client: &str, target: &str, text: &
     }
 }
 
-/// That mismatch returns an error and no datagram is sent. The AP-REQ is verified only as a ticket for `kadmin/changepw` in this realm; any failure, a ticket for another service included, is answered with a framed KRB-ERROR (code 60) whose e-data carries result code 3.
+/// Any failure is KRB-ERROR 60, e-data code 3.
 pub(crate) fn handle_kpasswd_from(
     store: &SharedStore,
     authcfg: &crate::kadm5::Kadm5AuthConfig,
@@ -426,13 +396,14 @@ pub(crate) fn handle_kpasswd_from(
         return Err(Error::Inner("Message stream modified".into()));
     }
     let ap_req = &raw[6..6 + ap_len];
-    // Stricter than MIT, which answers these with a KRB-ERROR: a kpasswd reply or error is not answered, so a spoofed datagram cannot set two servers answering each other (CVE-2002-2443).
+    // Stricter than MIT: a reply is never answered, so spoofed servers
+    // cannot answer each other (CVE-2002-2443).
     if ap_len == 0 || is_app_tag(ap_req, 15) || is_app_tag(ap_req, 30) {
         return Err(Error::Inner("Invalid message type".into()));
     }
     let priv_raw = &raw[6 + ap_len..];
     let (store_realm, changepw) = {
-        // that does not read leaves the KDB keytab without it, so the AP-REQ is refused.
+        // A failed read leaves no key, so the AP-REQ is refused.
         let (g, read) = krb5_kdc::read_fresh(store);
         (
             g.realm().to_owned(),
@@ -442,7 +413,7 @@ pub(crate) fn handle_kpasswd_from(
             }),
         )
     };
-    // the auth context does sequence numbers only, `krb5_rd_req` names `kadmin/changepw` against the KDB keytab and also refuses an enctype the server (on kadmind's KDC profile) does not permit, and the AP-REP is made before the request is decrypted.
+    // Sequence numbers only; a forbidden enctype is refused; AP-REP first.
     let accepted = match changepw_accept(ap_req, changepw.as_ref(), &store_realm, conf, replay) {
         Ok(a) => a,
         Err(ChangepwRefused::Read(_)) => {
@@ -473,7 +444,7 @@ pub(crate) fn handle_kpasswd_from(
         wipe_secret(user_data);
         if let Ok(cpw) = decoded {
             // MIT: `decode_krb5_setpw_req` (lib/krb5/asn.1/asn1_k_encode.c:1253-1276)
-            // the target is required, so a request that names none, or a target that does not decode, is MALFORMED; it never changes the caller's own password.
+            // No target is MALFORMED: never the caller's own password.
             let name = cpw.targname;
             let realm = String::from_utf8_lossy(cpw.targrealm.as_bytes()).into_owned();
             let newpass = cpw.newpasswd.to_vec();
@@ -495,7 +466,7 @@ pub(crate) fn handle_kpasswd_from(
     let client = ok.ticket_part.cname.unparse_with_realm(&ticket_crealm);
     let target_unparsed = targ.unparse_with_realm(&targ_realm);
     // MIT: `schpw_util_wrapper` (misc.c:33-54)
-    // compare first, INITIAL, auth(OP_CPW), then DB.
+    // Compare, INITIAL, auth(CPW), then the DB.
     let self_change = principal_compare(&targ, &targ_realm, &ok.ticket_part.cname, &ticket_crealm);
     let (code, text, log_err) = if self_change && !ok.ticket_part.flags.initial() {
         (
@@ -519,16 +490,15 @@ pub(crate) fn handle_kpasswd_from(
         let mut g = store
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // of the database to its write, as `AdminSession::change_password` makes it.
-        // the changepw dispatcher uses the global handle, so `current_caller` is `kadmind@REALM`, not the ticket client.
+        // The change locks the database before its write.
+        // `current_caller` is `kadmind@REALM`, not the client.
         let stamp = format!("kadmind@{store_realm}");
         // MIT: `ctx_lock` (plugins/kdb/db2/kdb_db2.c:438-447)
-        // the change locks the database first, and a database the server may not write changes nothing.
         let changed = (|| -> Result<(), krb5_kdc::Error> {
             g.reload_if_stale()?;
-            // Stricter than MIT, whose kpasswd path has no lockdown test: the target's keys are refused as the kadm5 chpass stub refuses them.
+            // Stricter than MIT: lockdown keys are refused, as chpass does.
             // MIT: `chpass_principal_2_svc` (kadmin/server/server_stubs.c:855-861)
-            // KADM5_PROTECT_KEYS is answered as KADM5_AUTH_CHANGEPW.
+            // PROTECT_KEYS is answered as AUTH_CHANGEPW.
             if g.get_in_realm(&targ, &targ_realm)
                 .is_some_and(|p| p.attributes & krb5_kdc::KDB_LOCKDOWN_KEYS != 0)
             {
@@ -578,7 +548,7 @@ pub(crate) fn handle_kpasswd_from(
             ),
         }
     };
-    // both copies of the new password are zapped once the change is made or refused.
+    // Both password copies are zapped, made or refused.
     wipe_secret(newpass);
     let log_outcome = if code == 0 { "ok" } else { "error" };
     let log_line = kpasswd_log_line(
@@ -603,7 +573,7 @@ pub(crate) fn handle_kpasswd_from(
     reply.result(&store_realm, &body)
 }
 
-/// Zeroizes every byte of `buf`'s allocation, then frees it: a new password a kpasswd request carried, or the request plaintext holding one. A test build keeps each wiped allocation ([`wiped::take`]) instead of freeing it, so a test can see it zeroed, whole.
+/// Zeroizes the allocation before freeing: it may hold a password.
 fn wipe_secret(mut buf: Vec<u8>) {
     buf.resize(buf.capacity(), 0);
     buf.as_mut_slice().zeroize();
@@ -611,31 +581,27 @@ fn wipe_secret(mut buf: Vec<u8>) {
     let _ = wiped::WIPED.try_with(|w| w.borrow_mut().push(buf));
 }
 
-/// Wipes an octet string's bytes when it holds the only reference to them, as a field decoded from a request does.
+/// Wipes only as sole owner; a shared buffer is left alone.
 fn wipe_octets(octets: krb5_types::OctetString) {
     if let Ok(buf) = bytes::Bytes::from(octets).try_into_mut() {
         wipe_secret(Vec::<u8>::from(buf));
     }
 }
 
-/// The allocations this module's wipes zeroed on the current thread, kept for the tests.
 #[cfg(all(test, feature = "test-hooks"))]
 mod wiped {
     use std::cell::RefCell;
 
     thread_local! {
-        /// What [`super::wipe_secret`] zeroed on this thread, kept alive.
         pub(super) static WIPED: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
     }
 
-    /// The allocations wiped on this thread since the last call.
     #[cfg(all(test, feature = "test-hooks"))]
     pub(super) fn take() -> Vec<Vec<u8>> {
         WIPED.with(|w| std::mem::take(&mut *w.borrow_mut()))
     }
 }
 
-/// Parse a kpasswd reply (`len,ver,AP-REP-len,AP-REP,KRB-PRIV`).
 pub fn parse_kpasswd_rep(raw: &[u8]) -> Result<(Vec<u8>, Vec<u8>), Error> {
     if raw.len() < 6 {
         return Err(Error::Inner("kpasswd truncated".into()));
@@ -671,7 +637,6 @@ mod tests {
 
     use super::wiped;
 
-    /// the decrypted request, the new password decoded from it and the copy the change is made with are each zapped.
     #[test]
     fn kpasswd_zeroes_every_copy_of_the_new_password() {
         use krb5_asn1::encode;
@@ -758,7 +723,6 @@ mod tests {
         assert!(zeroed[1].len() >= password.len() && zeroed[2].len() >= password.len());
     }
 
-    /// The notice of a refused change is what `krb5_get_error_message` finds on the handle's context once `_kadm5_chpass_principal_util` has run: the code's table text, unless a module gave a dictionary code its own sentence.
     #[test]
     fn kpasswd_quality_log_is_the_text_left_on_the_context() {
         assert_eq!(
@@ -775,7 +739,6 @@ mod tests {
             "Password may not match principal name"
         );
         // MIT: `check_against_policy` (lib/kadm5/srv/server_misc.c:82-101)
-        // the floors return their codes with no sentence.
         assert_eq!(
             super::kpasswd_quality_log("min_length 8"),
             "Password is too short"
@@ -785,20 +748,17 @@ mod tests {
             "Password does not contain enough character classes"
         );
         // MIT: `check_pw_reuse` (lib/kadm5/srv/svr_principal.c:959-959)
-        // reuse returns its code with no sentence.
         assert_eq!(
             super::kpasswd_quality_log("history"),
             "Cannot reuse password"
         );
         // MIT: `dict_check` (lib/kadm5/srv/pwqual_dict.c:228-231)
-        // a dictionary hit returns its code with no sentence.
         assert_eq!(
             super::kpasswd_quality_log(krb5_kdc::PWQUAL_DICT),
             "Password is in the password dictionary"
         );
     }
 
-    /// in a set-password line the `for` slot prints the CLIENT's name (`targetp = clientstr`), cut to the length of the target's.
     #[test]
     fn a_setpw_log_line_names_the_client_cut_to_the_targets_length() {
         let line = super::kpasswd_log_line(
@@ -816,7 +776,6 @@ mod tests {
         assert_eq!(line, "setpw request from h by u@R for u@R: ok");
     }
 
-    /// the client is cut so in both log lines, and the target in a set-password line.
     #[test]
     fn a_name_past_125_bytes_is_cut_with_dots_in_both_log_lines() {
         let client = format!("{}@R", "c".repeat(130));

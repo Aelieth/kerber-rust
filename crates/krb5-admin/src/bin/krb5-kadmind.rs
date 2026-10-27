@@ -1,12 +1,6 @@
-//! `kadmind`: the kadm5 (TCP 749) and kpasswd (UDP and TCP 464) daemon, started as MIT's.
-//! ```text
-//! kadmind [-x db_args]* [-r realm] [-m] [-nofork] [-port port-number] [-proponly]
-//!         [-p path-to-kdb5_util] [-F dump-file] [-K path-to-kprop] [-k kprop-port]
-//!         [-P pid_file]
-//! ```
-//! - `-proponly` sets up the iprop listeners alone; without `iprop_enable` it is refused with MIT's text (`-proponly can only be used when iprop_enable is true`).
-//!
-//! With `iprop_enable` set for the realm, kadmind maps the update log as the primary's, logs every principal put and delete there, and serves the iprop program (100423); without it the log is never touched and the program is not served.
+//! `kadmind`: kadm5 (749) and kpasswd (464).
+//! `-proponly` serves iprop alone; refused without `iprop_enable`.
+//! With `iprop_enable` the log is mapped as primary.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -53,7 +47,6 @@ const OPTIONS: &[MitOpt] = &[
 ];
 
 // MIT: `usage` (kadmin/server/ovsec_kadmd.c:80-91)
-/// the text on standard error, then exit 1.
 fn usage() -> ! {
     eprint!(
         "Usage: kadmind [-x db_args]* [-r realm] [-m] [-nofork] [-port port-number]\n\
@@ -68,7 +61,6 @@ fn usage() -> ! {
 }
 
 // MIT: `fail_to_start` (kadmin/server/ovsec_kadmd.c:100-114)
-/// with an error, `<error> while <doing>, aborting` (the log line keeps MIT's trailing newline); without, `<what>, aborting`.
 fn fail_to_start(progname: &str, error: Option<&str>, msg: &str) -> ! {
     if let Some(e) = error {
         eprintln!("{progname}: {e} while {msg}, aborting");
@@ -80,9 +72,6 @@ fn fail_to_start(progname: &str, error: Option<&str>, msg: &str) -> ! {
     std::process::exit(1);
 }
 
-/// Map a `Listeners::bind` failure to MIT's two paths: a bad or empty listen list stops kadmind
-/// "while initializing network"; a socket that will not bind has already been logged by the bind
-/// helper ("Error setting up network"), so this just exits 1, as MIT and the tip do.
 fn bind_fail(progname: &str, e: StartError) -> ! {
     match e {
         StartError::Bind(_) => std::process::exit(1),
@@ -136,7 +125,6 @@ fn main() {
     };
     let nofork = args.flag("-nofork") || test_realm || pinned.is_some();
 
-    // the KDC context once the options are read; a profile it refuses ends kadmind.
     let profile_read = krb5_config::ReadOnce::start();
     if let Err(e) = krb5_config::init_kdc_profile() {
         eprintln!(
@@ -189,7 +177,6 @@ fn main() {
         None
     };
     let shared = shared_store(store);
-    // Before the network, as MIT does.
     Kadmind::prepare_store(&shared, &profile).unwrap_or_else(|e| match e {
         StartError::Pwqual(err) => {
             fail_to_start(&progname, Some(&os_error_text(&err)), "initializing")
@@ -233,7 +220,6 @@ fn main() {
     });
 
     let signals = Signals::install();
-    // MIT sets up the network before the names check; test-hooks hands pre-bound sockets.
     #[cfg(feature = "test-hooks")]
     let listeners = if test_realm || pinned.is_some() {
         let (rpc, udp, tcp) = legacy_sockets(&progname, pinned);
@@ -280,7 +266,6 @@ fn main() {
         hooks: Vec::new(),
         iprop: iprop_cfg,
     };
-    // Before daemonizing, as MIT does; the names check is after the network above.
     let mut kadmind = Kadmind::new(Arc::clone(&shared), cfg)
         .unwrap_or_else(|e| match e {
             StartError::Pwqual(err) => {

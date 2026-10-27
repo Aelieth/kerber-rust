@@ -1,4 +1,4 @@
-//! kadmind's one loop: kpasswd over UDP and TCP and the kadm5 and iprop RPC programs, served from MIT's net-server loop on the caller's thread, as MIT's kadmind serves them from the loop `setup_loop` builds. Every connection, kpasswd's and kadm5's alike, counts toward the one cap of 45.
+//! One loop: kpasswd, kadm5, iprop; one cap of 45 connections.
 
 use std::fmt;
 use std::io;
@@ -30,7 +30,6 @@ use crate::kadm5::{IpropResync, Kadm5Auth, Kadm5AuthConfig, Kadm5Conn};
 use crate::listen::{client_addr, handle_kpasswd_from, kpasswd_toolong_error};
 use crate::{Programs, RpcPeer, UnhandledRpc, acceptor_names_served};
 
-/// Which of kadmind's services to serve.
 #[derive(Clone, Copy, Debug)]
 pub struct Services {
     pub kpasswd_udp: bool,
@@ -58,7 +57,6 @@ impl Services {
     }
 }
 
-/// How much kadmind takes on at once; the defaults are MIT's 45 connections and 1 MiB request.
 #[derive(Clone, Copy, Debug)]
 pub struct ServeLimits {
     pub max_connections: usize,
@@ -86,14 +84,12 @@ pub struct IpropConfig {
     pub kprop_port: Option<String>,
 }
 
-/// What an embedder hands [`Kadmind::new`] to start kadm5 and kpasswd over a shared store.
 pub struct KadmindConfig {
     pub profile: Arc<ProfileSet>,
     pub services: Services,
     pub listen: KadmindListen,
     pub limits: ServeLimits,
     pub acl: Acl,
-    /// Loaded kadm5_auth modules; `[plugins] kadm5_auth` selects them.
     pub auth_modules: Vec<Arc<dyn Kadm5Auth>>,
     pub log: Arc<dyn AdminLog>,
     pub pwqual: Vec<Arc<dyn Pwqual>>,
@@ -197,15 +193,12 @@ pub(crate) fn set_thread_admin_log(log: Option<Arc<dyn AdminLog>>) {
     THREAD_ADMIN_LOG.with(|slot| *slot.borrow_mut() = log);
 }
 
-/// Why kadmind could not start.
 #[derive(Debug)]
 pub enum StartError {
     Pwqual(io::Error),
     Config(String),
     AcceptorNames,
-    /// The listen addresses are bad or empty ("Invalid argument"), before any socket is bound.
     Listen(String),
-    /// A listener could not be bound to its address.
     Bind(io::Error),
 }
 
@@ -228,7 +221,6 @@ enum BindService {
     Iprop,
 }
 
-/// kadmind's side of the loop: kpasswd's requests and each kadm5 connection's session, over one store, one ACL, one replay cache for the kadm5 acceptor and one set of acceptor profile values.
 pub struct Kadmind {
     store: SharedStore,
     authcfg: Arc<Kadm5AuthConfig>,
@@ -245,8 +237,6 @@ pub struct Kadmind {
 }
 
 impl Kadmind {
-    /// Set up the password-quality modules and apply the admin-side profile to `store`; [`new`](Self::new)
-    /// calls this, and the daemon calls it before binding so a bad dictionary or profile stops it early.
     // MIT: `kadm5_init` (lib/kadm5/srv/server_init.c:158-276)
     pub fn prepare_store(store: &SharedStore, profile: &ProfileSet) -> Result<(), StartError> {
         let mut guard = store.write().unwrap_or_else(PoisonError::into_inner);
@@ -259,8 +249,6 @@ impl Kadmind {
         Ok(())
     }
 
-    /// Start kadmind over `store`: [`prepare_store`](Self::prepare_store), then check the acceptor
-    /// serves its GSS names and take the kadmin/changepw key when `services` asks for kpasswd.
     pub fn new(store: SharedStore, cfg: KadmindConfig) -> Result<Self, StartError> {
         Self::prepare_store(&store, &cfg.profile)?;
         // MIT: `kadm5_init_krb5_context` (lib/kadm5/srv/server_init.c:334-345)
@@ -333,8 +321,6 @@ impl Kadmind {
         self
     }
 
-    /// Serve `listeners` on the calling thread (blocking) until `stop` is triggered: kpasswd over
-    /// UDP and TCP, kadm5 and iprop over the RPC listeners. Returns the descriptors still open.
     pub fn serve(&mut self, listeners: &Listeners, stop: &Shutdown) -> io::Result<ServeSummary> {
         self.programs = listeners.programs;
         let (max_conns, max_req) = (self.limits.max_connections, self.limits.max_request);
@@ -347,7 +333,6 @@ impl Kadmind {
             .map(|open_fds| ServeSummary { open_fds })
     }
 
-    /// Whether kpasswd is served: `services` asked for it and the kadmin/changepw key is present.
     #[must_use]
     pub fn serves_kpasswd(&self) -> bool {
         self.cpw_key.is_some()
@@ -364,7 +349,7 @@ impl Kadmind {
 
 impl Dispatch for Kadmind {
     // MIT: `dispatch` (kadmin/server/schpw.c:420-436)
-    /// the request goes through `process_chpw_request`, and a failure is handed to the loop with no response.
+    /// A failure answers nothing; the loop is told.
     fn dispatch(
         &mut self,
         local: SocketAddr,
@@ -412,7 +397,7 @@ impl Dispatch for Kadmind {
     }
 
     // MIT: `krb5_db2_get_principal` (plugins/kdb/db2/kdb_db2.c:769-773)
-    /// the KDB keytab's lookup takes the shared lock, and fails when it cannot.
+    /// The keytab lookup takes the shared lock and fails if it cannot.
     fn rpc_session(
         &mut self,
         remote: SocketAddr,
@@ -432,8 +417,6 @@ impl Dispatch for Kadmind {
     }
 }
 
-/// The pre-bound sockets kadmind serves: `udp` and `tcp` are kpasswd, `rpc` is kadm5 and iprop,
-/// with `programs` naming which of the two the `rpc` listeners carry.
 pub struct Listeners {
     pub(crate) udp: Vec<UdpSocket>,
     pub(crate) tcp: Vec<TcpListener>,
@@ -442,8 +425,6 @@ pub struct Listeners {
 }
 
 impl Listeners {
-    /// Bind the listeners `services`, `listen` and `iprop` call for: kpasswd over UDP and TCP, the
-    /// kadm5 program on its port, and the iprop program. Returns them with the RPC programs they carry.
     // MIT: `setup_loop` (kadmin/server/ovsec_kadmd.c:134-174)
     pub fn bind(
         listen: &KadmindListen,
@@ -476,7 +457,7 @@ impl Listeners {
                 });
             }
             // MIT: `loop_add_unix_socket` (lib/apputils/net-server.c:461-468)
-            // a `/path` kpasswd entry is a UNIX-domain socket, which this port does not bind.
+            // A `/path` entry is a UNIX socket; it is not bound.
             for entry in kpasswd
                 .into_iter()
                 .flat_map(|l| l.split([',', ';', ' ']))
@@ -516,7 +497,7 @@ impl Listeners {
                 ListenLog::Err(l) => log.syslog(Severity::Err, &l),
             }
         }
-        // An add refusal or an empty list stops kadmind before any socket is bound.
+        // A refusal or empty list stops kadmind before it binds.
         if added.is_err() || list.entries().is_empty() {
             return Err(StartError::Listen("Invalid argument".into()));
         }
@@ -573,7 +554,6 @@ impl Listeners {
         }
     }
 
-    /// These listeners as a [`Sockets`] for the loop.
     #[must_use]
     pub fn sockets(&self) -> Sockets<'_> {
         Sockets {
@@ -583,20 +563,18 @@ impl Listeners {
         }
     }
 
-    /// The RPC programs the bound listeners carry.
     #[must_use]
     pub fn programs(&self) -> Programs {
         self.programs
     }
 }
 
-/// What [`Kadmind::serve`] leaves open when it stops, newest first.
 pub struct ServeSummary {
     pub open_fds: Vec<RawFd>,
 }
 
 #[cfg(feature = "daemon")]
-/// Serve `sockets` to `kadmind` from one loop on this thread until SIGINT, SIGTERM or SIGQUIT, SIGHUP reopening the log: kpasswd on `udp` and `tcp`, kadm5 and iprop on `rpc`, at most 45 connections together. Returns the descriptors of the connections still open, the newest first, for kadmind's last lines.
+/// Until SIGINT/TERM/QUIT; SIGHUP reopens the log.
 pub fn serve_kadmind(
     kadmind: &mut Kadmind,
     sockets: &Sockets<'_>,
