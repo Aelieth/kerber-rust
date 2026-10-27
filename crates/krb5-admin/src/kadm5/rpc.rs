@@ -1,5 +1,4 @@
-//! ONC RPC over TCP for kadmind: record marking (`lib/rpc/xdr_rec.c`), the call header and flavor routing of `svc.c` / `svc_tcp.c`, the reply builders (`rpc_prot.c` `MSG_ACCEPTED` / `MSG_DENIED`) and the RPCSEC_GSS credential (`svc_auth_gss.c` `rpc_gss_cred`). `Kadm5Conn` is one connection's server side, which kadmind's loop calls for each record and
-//! are wiped once used: they can carry passwords and keys.
+//! Record buffers can carry passwords and keys.
 
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream};
@@ -24,42 +23,32 @@ use super::xdr::{XdrR, XdrW, opaque_len};
 use crate::Error;
 
 // MIT: `kadm5_server_handle_rec` (lib/kadm5/server_internal.h:53-53)
-/// the kadmind server handle record (context, current caller, config params with the realm).
 #[derive(Clone, Copy)]
 pub struct RpcCtx<'a> {
-    /// KDC store the procedure reads and writes, and the acceptor's keytab.
     pub store: &'a SharedStore,
-    /// Kadm5 authorization: the ACL and the selected module stack.
     pub authcfg: &'a Kadm5AuthConfig,
-    /// Realm the acceptor name must belong to.
     pub expected_realm: &'a str,
-    /// The acceptor's profile values, kadmind's KDC context's.
     pub conf: &'a AcceptorConfig,
-    /// The programs served.
     pub programs: Programs,
     #[doc(hidden)]
     pub iprop_resync: Option<&'a Arc<IpropResync>>,
 }
 
 // MIT: `svc_register` (lib/rpc/svc.c:161-191)
-/// the programs are one callout list for the process, whichever transport registered them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Programs {
-    /// The kadm5 program (2112).
     pub kadm: bool,
-    /// The iprop program (100423), served only with an update log.
     pub iprop: bool,
 }
 
 impl Programs {
-    /// Both programs: kadmind's when its kadm5 and iprop listeners are both set up.
     pub const BOTH: Self = Self {
         kadm: true,
         iprop: true,
     };
 }
 
-/// Serve one TCP connection until EOF, each record on this socket in turn; a call that does not decode gets no reply, and the connection goes on (see [`kadm5_handle_rpc`]).
+/// Undecoded call: no reply; connection goes on.
 #[cfg(feature = "test-hooks")]
 pub fn serve_kadm5_conn(
     store: SharedStore,
@@ -99,7 +88,6 @@ pub fn serve_kadm5_conn(
     }
 }
 
-/// What a server does with the message of a kadm5 call that does not decode, which gets no reply: `krb5-kadmind` prints it as `kadm5: <message>`. It may be called from the thread that runs kadmind's loop, whichever that is.
 pub type UnhandledRpc = Arc<dyn Fn(&str) + Send + Sync>;
 
 #[derive(Clone, Debug)]
@@ -124,19 +112,17 @@ impl RpcPeer {
         &self.addr
     }
 
-    /// The four octets MIT's RPC transport reads as the client's IPv4 address (see [`sockaddr_in_addr`]).
     pub(super) fn remote_inet(&self) -> [u8; 4] {
         self.remote.as_ref().map_or([0; 4], sockaddr_in_addr)
     }
 
-    /// The four octets of the connection's own address, or none when it is not known.
     pub(super) fn local_inet(&self) -> Option<[u8; 4]> {
         self.local.as_ref().map(sockaddr_in_addr)
     }
 }
 
 // MIT: `rendezvous_request` (lib/rpc/svc_tcp.c:280-307)
-/// `accept` and `getsockname` fill `sockaddr_in` buffers, so an IPv6 end's flow information lies where an IPv4 address does; std keeps `sin6_flowinfo` as the kernel stored it, so its native bytes are the buffer's.
+/// IPv6 flow info is read where IPv4 octets lie.
 fn sockaddr_in_addr(a: &SocketAddr) -> [u8; 4] {
     match a {
         SocketAddr::V4(v4) => v4.ip().octets(),
@@ -144,7 +130,6 @@ fn sockaddr_in_addr(a: &SocketAddr) -> [u8; 4] {
     }
 }
 
-/// One kadm5 connection's server side: its handle, its GSS state and its peer, over kadmind's store (its acceptor keytab too), ACL, replay cache and acceptor profile values.
 pub(crate) struct Kadm5Conn {
     store: SharedStore,
     authcfg: Arc<Kadm5AuthConfig>,
@@ -203,7 +188,6 @@ impl Kadm5Conn {
 
 impl RpcSession for Kadm5Conn {
     // MIT: `svc_do_xprt` (lib/rpc/svc.c:473-474)
-    /// a call that does not decode is not answered.
     fn call(&mut self, record: &[u8]) -> RpcReply {
         match self.handle(record) {
             Ok(reply) if reply.is_empty() => RpcReply::Nothing,
@@ -223,29 +207,25 @@ impl RpcSession for Kadm5Conn {
         }
     }
 
-    // Authenticated = an established RPCSEC_GSS or a completed AUTH_GSSAPI context.
     fn authenticated(&self) -> bool {
         self.sess.gss.is_some() || self.sess.agss.as_ref().is_some_and(|a| a.ctx.is_some())
     }
 }
 
-// No CSPRNG, no handle.
 fn random_handle() -> Option<Vec<u8>> {
     let mut h = [0u8; 8];
     getrandom::getrandom(&mut h).ok()?;
     Some(h.to_vec())
 }
 
-/// One record from a socket that blocks for it, read as kadmind's loop reads one ([`read_rpc_record_with`]): at most 1 MiB, its marks counted, in one buffer wiped when dropped.
+/// At most 1 MiB.
 pub(super) fn read_record(stream: &mut TcpStream) -> io::Result<Zeroizing<Vec<u8>>> {
     read_rpc_record_with(|buf| stream.read_exact(buf))
 }
 
-/// One ONC RPC record: the record mark (the length with the last-fragment bit) and the body in one write, so a reply leaves in one segment rather than waiting on the client's delayed ACK. The record is one fragment whatever its length.
 // MIT: `flush_out` (lib/rpc/xdr_rec.c:475-489)
-/// the record mark is set ahead of the body in xdrrec's buffer, and the buffer goes out in one write.
 // MIT: `fix_buf_size` (lib/rpc/xdr_rec.c:566-571)
-/// kadmind's listener asks for no size (`svctcp_create(sock, 0, 0)`), so that buffer is 4000 bytes and a longer record leaves as several fragments.
+/// One fragment, one write: no delayed-ACK stall. MIT fragments past 4000 B.
 pub(super) fn write_record(stream: &mut impl Write, body: &[u8]) -> io::Result<()> {
     let n = u32::try_from(body.len()).unwrap_or(0) | LAST_FRAG;
     let mut rec = Zeroizing::new(Vec::with_capacity(4 + body.len()));
@@ -261,7 +241,6 @@ pub struct Kadm5RpcSession {
     agss: Option<Agss>,
 }
 
-/// One ONC RPC record through `handle_rpc`.
 pub fn kadm5_handle_rpc(
     ctx: RpcCtx<'_>,
     handle: &[u8],
@@ -281,12 +260,8 @@ pub fn kadm5_handle_rpc(
     )
 }
 
-/// One record of a kadmind connection, as MIT's RPC layer takes a call.
 // MIT: `xdr_callmsg` (lib/rpc/rpc_callmsg.c:101-193)
-/// a record that is not an RPC version 2 call, or whose credential or verifier is past `MAX_AUTH_BYTES`, does not decode.
 // MIT: `gssrpc__authenticate` (lib/rpc/svc_auth.c:84-106)
-/// the flavor's authenticator comes first: AUTH_NONE passes, AUTH_UNIX once its credential decodes (AUTH_BADCRED else), AUTH_GSSAPI and RPCSEC_GSS decide for themselves, and AUTH_SHORT and any other flavor are AUTH_REJECTEDCRED.
-/// a refusal is answered with its `auth_stat` (`svcerr_auth`), and the connection waits for the next call.
 pub(super) fn handle_rpc(
     ctx: RpcCtx<'_>,
     handle: &[u8],
@@ -405,7 +380,6 @@ pub(super) fn handle_rpc(
 }
 
 // MIT: `gssrpc__svcauth_unix` (lib/rpc/svc_auth_unix.c:55-126)
-/// a stamp, a machine name of at most 255 bytes, a uid, a gid and at most 16 groups, all inside the credential.
 fn authunix_parms_decode(cred: &[u8]) -> bool {
     fn parse(r: &mut XdrR<'_>) -> Result<bool, Error> {
         r.u32()?;
@@ -447,9 +421,7 @@ pub(super) enum ReplyVerf<'a> {
     AuthGssapi(&'a [u8]),
 }
 
-/// An accepted reply under `verf` whose status is `stat`, as MIT's `svcerr_noprog`, `svcerr_decode` and `svcerr_systemerr` answer.
 // MIT: `svcerr_noproc` (lib/rpc/svc.c:265-275)
-/// the status under the call's `xp_verf`.
 pub(super) fn rpc_reply_status(xid: u32, verf: ReplyVerf<'_>, stat: u32) -> Vec<u8> {
     let (flavor, body) = match verf {
         ReplyVerf::None => (FLAVOR_NONE, &[][..]),
@@ -470,9 +442,7 @@ pub(super) fn rpc_reply_accepted_verf(xid: u32, verf: Option<&[u8]>, stat: u32) 
     rpc_reply_status(xid, verf.map_or(ReplyVerf::None, ReplyVerf::Gss), stat)
 }
 
-/// PROG_MISMATCH with the lowest and highest version served, under `verf`.
 // MIT: `svcerr_progvers` (lib/rpc/svc.c:352-367)
-/// the versions follow the status, under the call's `xp_verf`.
 pub(super) fn rpc_reply_mismatch_at(xid: u32, verf: ReplyVerf<'_>, low: u32, high: u32) -> Vec<u8> {
     let mut w = rpc_reply_status(xid, verf, PROG_MISMATCH);
     w.extend_from_slice(&low.to_be_bytes());
@@ -501,7 +471,7 @@ pub(super) fn rpc_reply_clear(xid: u32, body: &[u8]) -> Vec<u8> {
     w.b
 }
 
-/// A reply whose body may carry keys in the clear, built in one buffer of its size.
+/// Reply body may carry keys in the clear.
 pub(super) fn rpc_reply_gss_verf(xid: u32, mic: &[u8], body: &[u8]) -> Vec<u8> {
     let mut w = XdrW::with_capacity(20 + opaque_len(mic.len()) + body.len());
     w.u32(xid);
@@ -532,7 +502,6 @@ pub(super) fn rpc_reply_agss(xid: u32, verf: &[u8], body: &[u8]) -> Vec<u8> {
     w
 }
 
-/// An accepted reply under the AUTH_GSSAPI verifier `verf` whose status is `stat`.
 pub(super) fn rpc_reply_agss_status(xid: u32, verf: &[u8], stat: u32) -> Vec<u8> {
     rpc_reply_status(xid, ReplyVerf::AuthGssapi(verf), stat)
 }
@@ -545,7 +514,6 @@ pub(super) struct Gcred {
 }
 
 // MIT: `xdr_rpc_gss_cred` (lib/rpc/authgss_prot.c:72-90)
-/// the credential closes with its context handle, which must decode too.
 pub(super) fn parse_gcred(data: &[u8]) -> Result<Gcred, Error> {
     let mut r = XdrR::new(data);
     let gcred = Gcred {
@@ -558,17 +526,11 @@ pub(super) fn parse_gcred(data: &[u8]) -> Result<Gcred, Error> {
     Ok(gcred)
 }
 
-/// MIT `struct call_body` (`include/gssrpc/rpc_msg.h:138-138`): the call body carries `cb_prog`, `cb_vers`, and `cb_proc`.
-/// MIT `struct rpc_msg` (`include/gssrpc/rpc_msg.h:150-150`): the message's `rm_xid` is the transaction id.
 #[derive(Clone, Copy)]
 pub(crate) struct RpcCallId {
-    /// Transaction id (`rpc_msg.xid`).
     pub xid: u32,
-    /// Remote program number.
     pub prog: u32,
-    /// Remote program version.
     pub vers: u32,
-    /// Remote procedure number.
     pub proc: u32,
 }
 

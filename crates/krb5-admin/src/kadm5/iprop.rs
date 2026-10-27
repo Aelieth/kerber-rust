@@ -1,4 +1,4 @@
-//! Incremental propagation (`kadmin/server/ipropd_svc.c`): the `IPROP_GET_UPDATES` / `IPROP_FULL_RESYNC` server side, answered from the update log ([`krb5_kdc::Ulog`]), and a replica's client of it ([`IpropClient`], kpropd's RPCSEC_GSS handle). The `kdb_incr_update_t` codec is `krb5_kdc`'s (`lib/kdb/iprop_xdr.c`): updates leave as the log stores them, keys wrapped under the master key.
+//! Keys stay wrapped under the master key.
 
 use std::io;
 use std::net::TcpStream;
@@ -31,9 +31,7 @@ use crate::kprop::{
 };
 
 // MIT: `iprop_get_updates_1_svc` (kadmin/server/ipropd_svc.c:191-200)
-/// a caller who fails the iprop ACL gets permission denied and no entries.
 // MIT: `ipropx_resync` (kadmin/server/ipropd_svc.c:400-424)
-/// a granted full resync answers `UPDATE_OK` with a zero last entry; the dump comes by kprop.
 pub(super) fn dispatch_iprop(
     store: &SharedStore,
     authcfg: &Kadm5AuthConfig,
@@ -129,7 +127,6 @@ fn resync_dump_and_send(
 }
 
 // MIT: `xdr_kdb_last_t` (lib/kdb/iprop_xdr.c:309-318)
-/// the serial, then the time's seconds and microseconds.
 fn encode_kdb_last(w: &mut XdrW, last: UlogLast) {
     w.u32(last.sno);
     w.u32(last.time.seconds);
@@ -142,7 +139,6 @@ pub(super) fn tl_u32(tl: &[TlData], ty: i32) -> Option<u32> {
     Some(u32::from_le_bytes(b))
 }
 
-/// A `kdb_incr_result_t` with no updates and a zero last entry: what MIT's reply holds before any update was sent.
 pub(super) fn encode_incr_status(status: u32) -> Vec<u8> {
     encode_incr_result(&UlogUpdates {
         status,
@@ -150,9 +146,8 @@ pub(super) fn encode_incr_status(status: u32) -> Vec<u8> {
     })
 }
 
-/// A `kdb_incr_result_t`: the last entry, the updates as the log holds them, the status.
+/// Last entry, updates as logged, status.
 // MIT: `xdr_kdb_incr_result_t` (lib/kdb/iprop_xdr.c:321-332)
-/// the last entry, the updates, then the status.
 pub(super) fn encode_incr_result(got: &UlogUpdates) -> Vec<u8> {
     let mut w = XdrW::default();
     encode_kdb_last(&mut w, got.last);
@@ -164,7 +159,6 @@ pub(super) fn encode_incr_result(got: &UlogUpdates) -> Vec<u8> {
     w.b
 }
 
-/// A `kdb_fullresync_result_t`: the last entry and the status.
 pub(super) fn encode_fullresync_status(last: UlogLast, status: u32) -> Vec<u8> {
     let mut w = XdrW::default();
     encode_kdb_last(&mut w, last);
@@ -173,7 +167,6 @@ pub(super) fn encode_fullresync_status(last: UlogLast, status: u32) -> Vec<u8> {
 }
 
 // MIT: `IPROPX_VERSION_1` (include/iprop_hdr.h:43-43)
-/// the highest dump version a replica loads.
 const IPROPX_VERSION_1: u32 = 1;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -195,9 +188,7 @@ pub enum RpcFailure {
 
 impl RpcFailure {
     // MIT: `clnt_sperror` (lib/rpc/clnt_perror.c:76-175)
-    /// `s`, the status's text, then the system's error, why, or the versions.
     // MIT: `clnt_sperrno` (lib/rpc/clnt_perror.c:233-243)
-    /// each status's text is `rpc_errlist`'s.
     #[must_use]
     pub fn sperror(&self, s: &str) -> String {
         let versions = |lo: &u32, hi: &u32| format!("; low version = {lo}, high version = {hi}");
@@ -224,7 +215,6 @@ impl RpcFailure {
 }
 
 // MIT: `auth_errmsg` (lib/rpc/clnt_perror.c:339-349)
-/// an `auth_stat`'s text, and one the table lacks named by its number.
 fn auth_errmsg(why: u32) -> String {
     const TEXTS: [&str; 8] = [
         "Authentication OK",
@@ -246,7 +236,6 @@ fn auth_errmsg(why: u32) -> String {
 }
 
 // MIT: `readtcp` (lib/rpc/clnt_tcp.c:434-490)
-/// no reply within the call's timeout is `RPC_TIMEDOUT`, an early end of stream `ECONNRESET`, any other failure the system's error.
 fn recv_failure(e: &io::Error) -> RpcFailure {
     match e.kind() {
         io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => RpcFailure::TimedOut,
@@ -263,11 +252,9 @@ enum ReplyStat {
 }
 
 // MIT: `gssrpc__seterr_reply` (lib/rpc/rpc_prot.c:238-295)
-/// an accepted status other than success, and a denial, are the failure they name.
 // MIT: `accepted` (lib/rpc/rpc_prot.c:179-212)
-/// an accepted status no table names is `RPC_FAILED`.
 // MIT: `rejected` (lib/rpc/rpc_prot.c:215-232)
-/// a version mismatch carries the versions, an authentication error why.
+/// Mismatch: versions; auth error: why.
 fn read_reply(rec: &[u8]) -> Option<(u32, ReplyStat)> {
     let mut r = XdrR::new(rec);
     let xid = r.u32().ok()?;
@@ -303,7 +290,6 @@ fn read_reply(rec: &[u8]) -> Option<(u32, ReplyStat)> {
 }
 
 // MIT: `clnttcp_call` (lib/rpc/clnt_tcp.c:246-352)
-/// replies to other xids, and records that do not read as replies, are read past.
 fn exchange(
     stream: &mut TcpStream,
     xid: u32,
@@ -322,24 +308,19 @@ fn exchange(
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IncrReply {
-    /// `ret`, an `update_status_t`.
     pub status: u32,
-    /// `lastentry`: the serial and time the primary's update log ends at.
     pub last: UlogLast,
-    /// The number of updates.
     pub count: usize,
     body: Vec<u8>,
 }
 
 impl IncrReply {
-    /// The updates, their keys opened under `mkey`.
-    /// decode or its keys do not open.
+    /// Updates, their keys opened under `mkey`.
     pub fn updates(&self, mkey: Option<&ProtocolKey>) -> Result<Vec<IpropUpdate>, Error> {
         decode_incr_result(&self.body, mkey).map(|(.., updates)| updates)
     }
 }
 
-/// A replica's handle on its primary's iprop service: the connection and the RPCSEC_GSS context made on it, as MIT's `kadm5_init_with_skey` leaves one for `kiprop`.
 pub struct IpropClient {
     stream: TcpStream,
     ctx: GssContext,
@@ -360,12 +341,10 @@ impl std::fmt::Debug for IpropClient {
 
 impl IpropClient {
     // MIT: `init_any` (lib/kadm5/clnt/client_init.c:290-294)
-    /// a kadm5 handle waits an hour for any reply.
     const TIMEOUT: Duration = Duration::from_hours(1);
 
-    /// The handle on `stream`: an RPCSEC_GSS context with privacy, made with `ticket` and its `session` key as `cname` of `crealm`, the primary's AP-REP required.
+    /// Handle on `stream`: RPCSEC_GSS with privacy.
     // MIT: `rpc_auth` (lib/kadm5/clnt/client_init.c:645-683)
-    /// RPCSEC_GSS with the krb5 mechanism, privacy, and the mutual and replay flags.
     pub fn establish(
         mut stream: TcpStream,
         ticket: Ticket,
@@ -411,10 +390,7 @@ impl IpropClient {
         let _ = self.ctx.get_mic(&[]);
     }
 
-    /// `IPROP_GET_UPDATES` for the updates after `last`.
     // MIT: `iprop_get_updates_1` (kprop/kpropd_rpc.c:34-46)
-    /// the `kdb_last_t` sent, a `kdb_incr_result_t` back.
-    /// The call's [`RpcFailure`]; results that do not decode are `RPC_CANTDECODERES`.
     pub fn get_updates(&mut self, last: UlogLast) -> Result<IncrReply, RpcFailure> {
         let mut args = XdrW::default();
         encode_kdb_last(&mut args, last);
@@ -432,9 +408,7 @@ impl IpropClient {
         })
     }
 
-    /// A full resync asked for: `IPROP_FULL_RESYNC_EXT` with the highest dump version this replica loads, else `IPROP_FULL_RESYNC` of a primary without that procedure. The status answered.
     // MIT: `full_resync` (kprop/kpropd.c:606-625)
-    /// `IPROPX_VERSION_1` to the extended procedure, then on `RPC_PROCUNAVAIL` the plain one.
     pub fn full_resync(&mut self) -> Result<u32, RpcFailure> {
         let mut vers = XdrW::default();
         vers.u32(IPROPX_VERSION_1);
@@ -450,13 +424,10 @@ impl IpropClient {
         word()
     }
 
-    /// verifier must be a MIC of the call's sequence number and whose results must unseal. A reply with another status is asked again twice before it is the failure.
+    /// MIC of the sequence; results must unseal.
     // MIT: `authgss_marshal` (lib/rpc/auth_gss.c:281-340)
-    /// each call takes the next sequence number.
     // MIT: `authgss_validate` (lib/rpc/auth_gss.c:343-392)
-    /// a verifier that is no MIC of that number is `AUTH_INVALIDRESP`.
     // MIT: `authgss_refresh` (lib/rpc/auth_gss.c:395-525)
-    /// an established context's refresh is a call again.
     fn call(&mut self, proc: u32, args: &[u8]) -> Result<Vec<u8>, RpcFailure> {
         let mut refreshes = 2;
         loop {
@@ -543,7 +514,6 @@ fn rpcsec_init(
 }
 
 // MIT: `xdr_rpc_gss_wrap_data` (lib/rpc/authgss_prot.c:130-182)
-/// with privacy, the sequence number and the arguments are sealed together.
 fn rpcsec_data_call(
     ctx: &mut GssContext,
     handle: &[u8],

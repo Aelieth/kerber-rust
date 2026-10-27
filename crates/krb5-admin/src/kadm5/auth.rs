@@ -1,5 +1,5 @@
-//! Authentication flavors on the kadm5 and iprop programs: AUTH_GSSAPI (`lib/rpc/svc_auth_gssapi.c`), RPCSEC_GSS (`svc_auth_gss.c`, RFC 2203 sequence window) and the acceptor-name checks of `kadm_rpc_svc.c` (`check_rpcsec_auth`, `KADM5_CHANGEPW_SERVICE`). A context is bound to the realm the ticket named, and the acceptor must be the kadmin or
-//! flavor refuses is answered at once with MIT's `auth_stat`.
+//! A context is bound to the ticket's realm.
+//! Refused flavors are answered at once.
 
 use krb5_gss::{ChannelBindings, GSS_C_AF_INET, GssContext};
 use krb5_log::klog::Severity;
@@ -31,18 +31,14 @@ use super::xdr::{XdrR, XdrW, opaque_len};
 use crate::Error;
 use zeroize::Zeroizing;
 
-/// A connection's AUTH_GSSAPI client record (MIT `svc_auth_gssapi_data`): its handle, when it expires and, once a GSSAPI_INIT completed, the context and the sequence number the next verifier must seal.
 pub(super) struct Agss {
-    /// The accepted context; none while the record's GSSAPI_INIT has not completed.
     pub(super) ctx: Option<GssContext>,
     pub(super) handle: Vec<u8>,
     pub(super) seq: u32,
-    /// The time (seconds since the epoch) after which the record is dropped.
     pub(super) expires: u32,
 }
 
 // MIT: `create_client` (svc_auth_gssapi.c:694-738)
-/// records are keyed 1, 2, … across the server.
 const AGSS_HANDLE: [u8; 4] = 1u32.to_le_bytes();
 
 pub(super) struct RpcsecGss {
@@ -53,7 +49,7 @@ pub(super) struct RpcsecGss {
 }
 
 // MIT: `gssrpc__svcauth_gss` (svc_auth_gss.c:460-471)
-/// a sequence above the maximum or already seen inside the window is a context problem and is not dispatched.
+/// Replayed or out-of-window: not dispatched.
 #[expect(clippy::too_many_arguments, reason = "over seven inputs after RpcCtx")]
 #[allow(clippy::unnecessary_wraps)]
 pub(super) fn handle_rpcsec_gss(
@@ -107,9 +103,7 @@ pub(super) fn handle_rpcsec_gss(
                 return Ok(rpc_reply_auth_error(xid, AUTH_REJECTEDCRED));
             };
             // MIT: `svcauth_gss_accept_sec_context` (svc_auth_gss.c:216-221)
-            // a context that does not establish is logged (`log_badauth`) and refused.
             // MIT: `svcauth_gss_acquire_cred` (svc_auth_gss.c:149-157)
-            // kadmind accepts with `GSS_C_NO_NAME` against the KDB keytab.
             let (mut ctx, out_tok) =
                 match accept_from_kdb(store, expected_realm, None, &token, None, rcache, conf) {
                     Ok(accepted) => accepted,
@@ -139,7 +133,7 @@ pub(super) fn handle_rpcsec_gss(
             Ok(rpc_reply_gss_verf(xid, &mic, &body.b))
         }
         RPG_DATA => {
-            // MIT does not compare gc_handle (`svc_auth_gss.c`); the per-connection context and the header MIC authenticate the request.
+            // MIT does not compare gc_handle.
             if !rpcsec_validate(gss, proc, &rec[..header_end], verf, addr) {
                 return Ok(rpc_reply_auth_error(xid, RPCSEC_GSS_CREDPROBLEM));
             }
@@ -168,7 +162,7 @@ pub(super) fn handle_rpcsec_gss(
             if !kadm && !iprop {
                 return Ok(rpc_reply_accepted_verf(xid, Some(&mic), PROG_UNAVAIL));
             }
-            // A body in the clear can carry a password or keys: it is wiped once used.
+            // Clear bodies carry passwords and keys.
             let databody = match gd.svc {
                 GSS_NONE => None,
                 GSS_INTEGRITY => {
@@ -185,9 +179,8 @@ pub(super) fn handle_rpcsec_gss(
                     let Ok(wrapped) = r.opaque() else {
                         return Ok(rpc_reply_accepted_verf(xid, Some(&mic), GARBAGE_ARGS));
                     };
-                    // rpc_gss_svc_privacy: the body must be sealed.
+                    // Privacy: the body must be sealed.
                     // MIT: `xdr_rpc_gss_unwrap_data` (authgss_prot.c:238-240)
-                    // rejects conf_state != TRUE.
                     let Ok((plain, conf)) = gd.ctx.unwrap_conf(&wrapped) else {
                         return Ok(rpc_reply_accepted_verf(xid, Some(&mic), GARBAGE_ARGS));
                     };
@@ -198,7 +191,7 @@ pub(super) fn handle_rpcsec_gss(
                     Some(plain)
                 }
             };
-            // a protected body opens with a sequence number that must be the credential's, for integrity and privacy alike, so a body cannot be spliced under another request's header.
+            // Body must open with the credential's sequence.
             let kadm_args = match &databody {
                 None => r.rest(),
                 Some(body) => {
@@ -241,7 +234,6 @@ pub(super) fn handle_rpcsec_gss(
 }
 
 // MIT: `svcauth_gss_validate` (svc_auth_gss.c:295-351)
-/// the call header's MIC under the connection's context, its credential (context handle and all) included; one that does not verify, or a connection with no context, is logged as a forged request with the context's client and no server name (`log_badverf`; kadmind sets no RPCSEC_GSS service name).
 fn rpcsec_validate(
     gss: &mut Option<RpcsecGss>,
     proc: u32,
@@ -283,9 +275,9 @@ fn seq_window_ok(gd: &mut RpcsecGss, seq: u32) -> bool {
 }
 
 // MIT: `check_rpcsec_auth` (kadm_rpc_svc.c:324-331)
-/// the acceptor must be two components, kadmin, not history, in the server realm; one that is not is logged as a bad service principal, then as a refused flavor, with `kadm_1`'s and `krb5_iprop_prog_1`'s lines.
+/// Acceptor: two components, `kadmin`, in the server realm.
 // MIT: `kadm_1` (kadm_rpc_svc.c:251-255)
-/// a procedure kadm5 does not serve (17, or past 27) is logged and PROC_UNAVAIL, as iprop's past FULL_RESYNC_EXT is.
+/// Procedures past 27: PROC_UNAVAIL.
 #[expect(clippy::too_many_arguments, reason = "over seven inputs after RpcCtx")]
 fn rpcsec_dispatch(
     ctx: RpcCtx<'_>,
@@ -321,7 +313,6 @@ fn rpcsec_dispatch(
         rpc_log_bad_proc(iprop, addr, proc);
         return rpc_reply_accepted_verf(xid, Some(mic), PROC_UNAVAIL);
     }
-    // clear are built in buffers of their size and wiped once used.
     let result = Zeroizing::new(
         match kadm5_or_iprop(
             ctx,
@@ -382,21 +373,17 @@ fn rpcsec_dispatch(
     }
 }
 
-/// What MIT `gssrpc__svcauth_gssapi` decides for one AUTH_GSSAPI call.
 pub(super) enum AgssAuth {
-    /// Refused: `svc_do_xprt` answers with `svcerr_auth` and this `auth_stat`.
     Denied(u32),
     Replied(Vec<u8>),
     Dispatch(Vec<u8>),
 }
 
-/// A refusal MIT logs with `LOG_MISCERR`.
 fn agss_denied(addr: &str, why: u32, error: &str) -> AgssAuth {
     rpc_log_miscerr(addr, error);
     AgssAuth::Denied(why)
 }
 
-/// One AUTH_GSSAPI call of a connection: refused with MIT's `auth_stat`, logged as MIT logs it, answered by the flavor itself, or passed on to its program under its reply verifier.
 #[expect(clippy::too_many_arguments, reason = "over seven inputs after RpcCtx")]
 pub(super) fn svcauth_gssapi(
     ctx: RpcCtx<'_>,
@@ -411,7 +398,6 @@ pub(super) fn svcauth_gssapi(
 ) -> AgssAuth {
     let addr = peer.addr();
     // MIT: `clean_client` (svc_auth_gssapi.c:894-918)
-    // a record past its expiry goes before the call is looked at, so its handle names no record.
     let now = KerberosTime::now().unix_seconds();
     if agss.as_ref().is_some_and(|st| st.expires < now) {
         *agss = None;
@@ -452,7 +438,7 @@ pub(super) fn svcauth_gssapi(
         .is_none_or(|st| client_handle.get(..4) != Some(st.handle.as_slice()))
     {
         // MIT: `get_client` (svc_auth_gssapi.c:783-801)
-        // the key is the handle's first four bytes, whatever follows them; a shorter handle, which MIT reads past, names no record here.
+        // MIT reads past a short handle; refused here.
         return agss_denied(addr, AUTH_BADCRED, "invalid client handle received");
     }
     let Some(st) = agss.as_mut() else {
@@ -468,8 +454,8 @@ pub(super) fn svcauth_gssapi(
     auth
 }
 
-/// versions 3 and 4 bind the context to the caller's and the connection's IPv4 addresses, and without the connection's own address the call is AUTH_FAILED.
-/// a failure is logged and answered in an init_res; here GSS_S_BAD_BINDINGS for bindings that do not match, GSS_S_DEFECTIVE_TOKEN for a token that does not frame, else GSS_S_FAILURE, minor 0. AUTH_GSSAPI's acceptor names are the realm's kadmin/admin and kadmin/changepw (`ovsec_kadmd.c` `svcauth_gssapi_set_names`), so a ticket for another service fails as MIT's accept against those names does.
+/// Versions 3 and 4 bind to both IPv4 addresses.
+/// Acceptor names: realm's kadmin/admin, kadmin/changepw.
 #[expect(clippy::too_many_arguments, reason = "over seven inputs after RpcCtx")]
 fn agss_init(
     ctx: RpcCtx<'_>,
@@ -542,7 +528,6 @@ fn agss_init(
         }
     };
     let mut isn = [0u8; 4];
-    // No CSPRNG, no auth.
     if getrandom::getrandom(&mut isn).is_err() {
         return agss_denied(addr, AUTH_FAILED, "cannot generate initial sequence number");
     }
@@ -565,7 +550,6 @@ fn agss_init(
     AgssAuth::Replied(reply)
 }
 
-/// bindings that do not match, GSS_S_DEFECTIVE_TOKEN for a token that does not frame, as MIT's mechanism and mechglue say, else GSS_S_FAILURE.
 fn accept_major(e: &krb5_gss::Error) -> u32 {
     match e {
         krb5_gss::Error::ChannelBindings => GSS_S_BAD_BINDINGS,
@@ -672,7 +656,7 @@ fn agss_established(
 }
 
 // MIT: `auth_gssapi_unwrap_data` (auth_gssapi_misc.c:264-339)
-/// an opaque sealed under the context whose plain text opens with the call's sequence number.
+/// Sealed opaque; opens with the call's sequence.
 fn agss_unwrap_args(
     gctx: &mut GssContext,
     call_seq: u32,
@@ -684,7 +668,7 @@ fn agss_unwrap_args(
 }
 
 // MIT: `auth_gssapi_wrap_data` (auth_gssapi_misc.c:196-262)
-/// the sequence number then the result, sealed with confidentiality, as one opaque.
+/// Sequence, then the result, sealed as one opaque.
 fn agss_result(
     gctx: &mut GssContext,
     seq: u32,
@@ -701,8 +685,7 @@ fn agss_result(
     Some(rpc_reply_agss(xid, reply_verf, &body.b))
 }
 
-/// An AUTH_GSSAPI call its flavor passed, answered under the call's reply verifier.
-/// arguments that do not unseal under the context to the call's sequence number (`auth_gssapi_unwrap_data`) or do not decode are GARBAGE_ARGS (`svcerr_decode`).
+/// Args that do not unseal or decode: GARBAGE_ARGS.
 pub(super) fn agss_dispatch(
     ctx: RpcCtx<'_>,
     st: &mut Agss,
@@ -735,7 +718,7 @@ pub(super) fn agss_dispatch(
     let Some(actor) = gctx.client.clone() else {
         return rpc_reply_weakauth(xid);
     };
-    // The result can carry keys (chrand, get_principal_keys): it is wiped once sealed.
+    // Result can carry keys.
     let result = Zeroizing::new(
         match kadm5_or_iprop(
             ctx,
