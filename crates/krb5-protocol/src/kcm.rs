@@ -1,7 +1,7 @@
-//! MIT KCM client. Credentials are FILE v4.
-//! A request is a 4-byte length, then major, minor, opcode and args.
-//! A reply is a 4-byte length and a status, then that many bytes, starting with another status.
-//! sssd-kcm answers GET_CRED_LIST. RETRIEVE and REPLACE return FCC_INTERNAL.
+//! MIT KCM client.
+//! Request: 4-byte length, then major, minor, opcode, args.
+//! Reply: 4-byte length and status, then bytes holding another status.
+//! sssd-kcm answers GET_CRED_LIST; RETRIEVE and REPLACE give FCC_INTERNAL.
 
 use std::ffi::OsStr;
 use std::io::{self, Read, Write};
@@ -42,10 +42,8 @@ const KRB5_CC_IO: i32 = -1_765_328_183;
 const KRB5_FCC_INTERNAL: i32 = -1_765_328_188;
 const KRB5_FCC_NOFILE: i32 = -1_765_328_189;
 // MIT: `KRB5_KCM_NO_SERVER` (k5e1_err.et:44-44)
-// the code for no KCM daemon on the socket.
 const KRB5_KCM_NO_SERVER: i32 = -1_750_600_181;
 
-/// The KCM socket when `kcm_socket` names none.
 // MIT: `DEFAULT_KCM_SOCKET_PATH` (kcm.h:43-43)
 pub const KCM_SOCKET_DEFAULT: &str = "/var/run/.heim_org.h5l.kcm-socket";
 
@@ -58,8 +56,6 @@ struct KcmIo {
 
 impl KcmIo {
     // MIT: `kcmio_unix_socket_connect` (cc_kcm.c:313-330)
-    /// A socket of "-", or one that is not there, is KRB5_KCM_NO_SERVER.
-    /// Any other failure to connect is its errno.
     fn connect(profile: &Krb5Conf) -> io::Result<Self> {
         Self::connect_to(kcm_socket_path(profile))
     }
@@ -220,8 +216,7 @@ fn socket_path_from(kcm_socket: Option<String>) -> PathBuf {
     PathBuf::from(kcm_socket.unwrap_or_else(|| KCM_SOCKET_DEFAULT.to_owned()))
 }
 
-/// An empty kcm_socket is the abstract socket of 107 NUL bytes, which nothing binds.
-/// With no abstract sockets, that refusal is returned as is.
+/// An empty name is the abstract socket of 107 NULs, which nothing binds.
 fn connect_unnamed() -> io::Result<UnixStream> {
     #[cfg(target_os = "linux")]
     {
@@ -235,7 +230,6 @@ fn connect_unnamed() -> io::Result<UnixStream> {
     }
 }
 
-/// A name resolves only when a KCM daemon answers.
 // MIT: `kcm_resolve` (cc_kcm.c:750-752)
 pub fn kcm_reachable(profile: &Krb5Conf) -> io::Result<()> {
     KcmIo::connect(profile).map(drop)
@@ -347,7 +341,6 @@ fn get_principal(io: &mut KcmIo, name: &str) -> io::Result<(Realm, PrincipalName
     unmarshal_princ(&raw, &mut i)
 }
 
-/// An empty residual is the default cache.
 pub fn kcm_load(profile: &Krb5Conf, residual: &str) -> io::Result<FileCcache> {
     let mut io = KcmIo::connect(profile)?;
     let name = default_or(&mut io, residual)?;
@@ -370,12 +363,10 @@ pub fn kcm_load(profile: &Krb5Conf, residual: &str) -> io::Result<FileCcache> {
     Ok(cc)
 }
 
-/// Stored, and made the collection default.
 pub fn kcm_store(profile: &Krb5Conf, residual: &str, cc: &FileCcache) -> io::Result<()> {
     kcm_put(profile, residual, cc, true)
 }
 
-/// No SET_DEFAULT_CACHE. A kvno stores back into the same cache.
 pub fn kcm_store_keep_default(
     profile: &Krb5Conf,
     residual: &str,
@@ -385,15 +376,12 @@ pub fn kcm_store_keep_default(
 }
 
 // MIT: `k5_kcm_primary_name` (cc_kcm.c:770-793)
-/// The GET_DEFAULT_CACHE answer.
 pub fn kcm_primary_name(profile: &Krb5Conf) -> io::Result<String> {
     let mut io = KcmIo::connect(profile)?;
     cstring(&io.call(OP_GET_DEFAULT_CACHE, &[])?)
 }
 
-/// The cache's other credentials stay.
 // MIT: `kcm_store` (cc_kcm.c:865-875)
-/// One STORE request per credential.
 pub fn kcm_store_creds(profile: &Krb5Conf, residual: &str, creds: &[CcacheCred]) -> io::Result<()> {
     let mut io = KcmIo::connect(profile)?;
     let name = default_or(&mut io, residual)?;
@@ -436,7 +424,6 @@ pub fn kcm_destroy(profile: &Krb5Conf, residual: &str) -> io::Result<()> {
     io.call(OP_DESTROY, &zname(&name)).map(|_| ())
 }
 
-/// SET_DEFAULT_CACHE.
 pub fn kcm_switch(profile: &Krb5Conf, residual: &str) -> io::Result<()> {
     if residual.is_empty() {
         return Err(io::Error::new(
@@ -473,7 +460,6 @@ pub fn kcm_cache_names(profile: &Krb5Conf) -> io::Result<Vec<String>> {
 }
 
 // MIT: `kcm_get_princ` (cc_kcm.c:932-954)
-/// A cache that is not initialized is KRB5_FCC_NOFILE.
 pub fn kcm_principal(profile: &Krb5Conf, name: &str) -> io::Result<(Realm, PrincipalName)> {
     let mut io = KcmIo::connect(profile)?;
     let raw = io.call(OP_GET_PRINCIPAL, &zname(name))?;
@@ -484,9 +470,7 @@ pub fn kcm_principal(profile: &Krb5Conf, name: &str) -> io::Result<(Realm, Princ
     unmarshal_princ(&raw, &mut i)
 }
 
-/// Not yet initialized.
 // MIT: `kcm_gen_new` (cc_kcm.c:795-822)
-/// The GEN_NEW answer names it.
 pub fn kcm_gen_new(profile: &Krb5Conf) -> io::Result<String> {
     let mut io = KcmIo::connect(profile)?;
     cstring(&io.call(OP_GEN_NEW, &[])?)

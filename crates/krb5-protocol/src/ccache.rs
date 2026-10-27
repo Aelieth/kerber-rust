@@ -1,4 +1,4 @@
-//! MIT FILE ccache v4. One credential is appended under the file's lock.
+//! MIT FILE ccache v4; one credential is appended under the file's lock.
 
 use std::fs::File;
 use std::io::{self, Read as _, Write as _};
@@ -23,11 +23,8 @@ pub use crate::ccmarshal::{CcacheCred, CcacheKeyblock};
 #[derive(Clone)]
 pub struct FileCcache {
     pub primary: (Realm, PrincipalName),
-    /// Includes config entries and tombstones.
     pub creds: Vec<CcacheCred>,
-    /// FCC_TAG_DELTATIME is tag 1, eight bytes.
     pub header_tags: Vec<(u16, Vec<u8>)>,
-    /// How many parsed credentials preceded each unparsed record.
     pub unparsed: Vec<(usize, Vec<u8>)>,
     pub kcm_offset: Option<i64>,
 }
@@ -108,13 +105,12 @@ impl FileCcache {
         Ok(w.buf)
     }
 
-    /// A new file, mode 0600, with no SELinux context of its own.
     pub fn write_file(&self, path: impl AsRef<Path>) -> Result<(), io::Error> {
         let bytes = self.to_bytes()?;
         write_fresh_cache_file(path.as_ref(), &bytes)
     }
 
-    /// A non-ASCII principal fails the parse. Identity is lossless only in ASCII.
+    /// A non-ASCII principal fails the parse: only ASCII is lossless.
     pub fn parse(bytes: &[u8]) -> Result<Self, io::Error> {
         if bytes.len() < 4 || bytes[0] != 0x05 || bytes[1] != 0x04 {
             return Err(io::Error::new(
@@ -190,8 +186,6 @@ impl FileCcache {
     }
 
     // MIT: `krb5_cc_get_config` (lib/krb5/ccache/ccfns.c:263-292)
-    /// The X-CACHECONF entry of this principal. Its ticket field is the value.
-    /// No other field is matched.
     #[must_use]
     pub fn get_config(&self, principal: Option<&str>, key: &str) -> Option<&[u8]> {
         let mut comps: Vec<&[u8]> = vec![b"krb5_ccache_conf_data", key.as_bytes()];
@@ -216,7 +210,6 @@ impl FileCcache {
     }
 
     // MIT: `k5_build_conf_principals` (lib/krb5/ccache/ccfns.c:184)
-    /// Replaces an existing entry. The value is the ticket field, etype 0.
     pub fn set_config(&mut self, principal: Option<&str>, key: &str, value: &[u8]) {
         let mut comps = vec!["krb5_ccache_conf_data", key];
         if let Some(p) = principal {
@@ -255,7 +248,6 @@ pub fn parse_principal(spec: &str) -> Result<(PrincipalName, String), String> {
     parse_principal_ex(spec, false)
 }
 
-/// enterprise is one NT-ENTERPRISE component.
 pub fn parse_principal_ex(spec: &str, enterprise: bool) -> Result<(PrincipalName, String), String> {
     let p = krb5_types::parse_name_ex(spec, "", enterprise).map_err(|e| e.to_string())?;
     if p.components.first().is_some_and(String::is_empty) && p.components.len() == 1 {
@@ -370,8 +362,6 @@ struct CacheFile {
 }
 
 // MIT: `open_cache_file` (cc_file.c:331-363)
-/// Shared when reading, exclusive and appending when writing. The lock waits.
-/// A refused lock closes the file and returns the lock's errno.
 fn open_cache_file(path: &Path, writable: bool) -> io::Result<CacheFile> {
     let file = std::fs::OpenOptions::new()
         .read(true)
@@ -389,7 +379,6 @@ fn open_cache_file(path: &Path, writable: bool) -> io::Result<CacheFile> {
 
 impl CacheFile {
     // MIT: `close_cache_file` (cc_file.c:366-379)
-    /// The unlock's errno, else the close's error.
     fn close(self) -> io::Result<()> {
         let Self { file, mut flocked } = self;
         let unlocked = lock_file(&file, FileLock::Unlock, &mut flocked);
@@ -408,8 +397,6 @@ fn read16(file: &mut impl io::Read) -> io::Result<u16> {
 }
 
 // MIT: `read_header` (cc_file.c:383-440)
-/// KRB5_CC_FORMAT when the header does not read. KRB5_CCACHE_BADVNO outside versions 1 to 4.
-/// Version 4 checks each tagged field's length.
 fn read_header(file: &mut impl io::Read) -> io::Result<u16> {
     let format = || FccFailure::Format.into_io();
     let mut two = [0u8; 2];
@@ -438,11 +425,8 @@ fn read_header(file: &mut impl io::Read) -> io::Result<u16> {
     Ok(version)
 }
 
-/// Under the shared lock, so an append in progress is not seen half written.
-/// Lock when the lock is refused.
 pub fn read_cache_file(path: &Path) -> io::Result<Zeroizing<Vec<u8>>> {
     let mut cf = open_cache_file(path, false)?;
-    // Sized to the length plus one before the first byte, so a key is never reallocated.
     let len = cf.file.metadata().map_or(0, |m| m.len());
     let mut bytes = Zeroizing::new(Vec::with_capacity(
         usize::try_from(len).unwrap_or(0).saturating_add(1),
@@ -453,10 +437,8 @@ pub fn read_cache_file(path: &Path) -> io::Result<Zeroizing<Vec<u8>>> {
     Ok(bytes)
 }
 
-/// One append under the exclusive lock, after a version-4 header. The record is then wiped.
-/// A version 1 to 3 file is BADVNO, and is not rewritten in its own format.
+/// A v1-3 file is `BADVNO`, and is not rewritten in its own format.
 // MIT: `fcc_store` (cc_file.c:987-1026)
-/// A short write is KRB5_CC_IO. The first error stands, else the close's.
 pub fn fcc_store(path: &Path, cred: &CcacheCred) -> io::Result<()> {
     let mut cf = open_cache_file(path, true)?;
     let stored = append_cred(&mut cf.file, cred);

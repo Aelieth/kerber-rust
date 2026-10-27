@@ -1,4 +1,4 @@
-//! MIT keytab v1 and v2. Unknown etypes are skipped.
+//! MIT keytab v1 and v2; unknown etypes are skipped.
 
 use std::io;
 use std::path::Path;
@@ -29,11 +29,9 @@ pub struct KeytabEntry {
 pub struct Keytab {
     pub version: u16,
     pub entries: Vec<KeytabEntry>,
-    /// Count of entries skipped because the etype is unknown / refused.
     pub skipped_unknown_etype: usize,
-    /// Unknown-etype records are kept raw and wiped when they drop.
     // MIT: `krb5_free_keytab_entry_contents` (ktfr_entry.c:38-41)
-    /// every entry's key is zeroed when it is freed.
+    /// Every entry's key is zeroed when it is freed.
     pub unparsed: Vec<(usize, Zeroizing<Vec<u8>>)>,
 }
 
@@ -77,9 +75,8 @@ impl Keytab {
         }
     }
 
-    /// The write buffer is sized before the first byte and wiped when it drops.
     // MIT: `krb5_ktfileint_write_entry` (lib/krb5/keytab/kt_file.c:1127-1269)
-    /// A version-1 record omits the four name-type bytes its size counts.
+    /// A v1 record omits the four name-type bytes its size counts.
     #[must_use]
     pub fn to_bytes(&self) -> Zeroizing<Vec<u8>> {
         let ver = if self.version == 0x0501 {
@@ -122,7 +119,6 @@ impl Keytab {
         out
     }
 
-    /// A new keytab is 0600; a replaced one keeps its owner and mode.
     pub fn write_file(&self, path: impl AsRef<Path>) -> Result<(), io::Error> {
         write_secret_file(path.as_ref(), &self.to_bytes())
     }
@@ -198,7 +194,6 @@ impl Keytab {
         Err(io::Error::new(io::ErrorKind::InvalidInput, "no such slot"))
     }
 
-    /// A raw record is rewritten in this keytab's version when the two differ.
     pub fn merge(&mut self, other: Keytab) {
         let n = self.entries.len();
         let (from, to) = (other.version, self.version);
@@ -214,8 +209,6 @@ impl Keytab {
     }
 
     // MIT: `ktutil_write_keytab` (kadmin/ktutil/ktutil_funcs.c:336-358)
-    /// The entry's timestamp becomes the time it is written.
-    /// A refused file changes no slot's timestamp.
     pub fn add_to_file(&mut self, path: impl AsRef<Path>) -> Result<(), io::Error> {
         let path = path.as_ref();
         if self.slots().is_empty() {
@@ -246,9 +239,8 @@ impl Keytab {
         write_secret_file(path, &bytes)
     }
 
-    /// Parse v1 or v2. Unknown etypes skip that entry rather than failing.
     // MIT: `krb5_ktfileint_internal_read_entry` (lib/krb5/keytab/kt_file.c:890-1116)
-    /// A negative size is a hole. MIT's v1 writer leaves the last record four bytes short.
+    /// A negative size is a hole; MIT's v1 writer leaves the last short.
     pub fn parse(bytes: &[u8]) -> Result<Self, io::Error> {
         let version = file_version(bytes)?;
         let mut i = 2;
@@ -273,7 +265,6 @@ impl Keytab {
             match parse_entry(body, size, version) {
                 Ok(e) => entries.push(e),
                 Err(EntryErr::UnsupportedEtype) => {
-                    // A short record is shorter only when it ran past the file's end.
                     let mut raw = Zeroizing::new(Vec::with_capacity(4 + body.len()));
                     put_u32(&mut raw, u32::try_from(body.len()).unwrap_or(0), version);
                     raw.extend_from_slice(body);
@@ -294,7 +285,6 @@ impl Keytab {
 }
 
 // MIT: `krb5_ktfileint_open` (lib/krb5/keytab/kt_file.c:731-808)
-/// A missing file is version 2; an existing one must be 1 or 2.
 pub fn add_to_keytab_file(
     existing: Option<&[u8]>,
     kt: &Keytab,
@@ -337,7 +327,6 @@ pub fn add_to_keytab_file(
 }
 
 // MIT: `krb5_ktfileint_find_slot` (lib/krb5/keytab/kt_file.c:1314-1382)
-/// A hole of size INT32_MIN is KRB5_KT_FORMAT.
 fn find_slot(out: &mut Vec<u8>, needed: usize, ver: u16) -> Result<(usize, usize), io::Error> {
     let mut pos = 2usize;
     loop {
@@ -457,7 +446,6 @@ impl<'a> Fields<'a> {
     }
 
     // MIT: `krb5_ktfileint_size_entry` (lib/krb5/keytab/kt_file.c:1282-1295)
-    /// The size counts the name type even for a version-1 record.
     fn size_needed(&self) -> usize {
         let counted = |d: &[u8]| 2 + d.len().min(usize::from(u16::MAX));
         2 + counted(self.realm)
@@ -740,9 +728,7 @@ fn eof() -> io::Error {
 }
 
 // MIT: `krb5_init_creds_set_keytab` (lib/krb5/krb/gic_keytab.c:209-213)
-/// A keytab that cannot be listed is not an error until a key is asked.
 // MIT: `get_as_key_keytab` (lib/krb5/krb/gic_keytab.c:68-71)
-/// The lookup's error is what the key callback returns.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KeytabFailure {
     pub code: i64,
@@ -781,7 +767,6 @@ pub fn read_keytab_file(path: &Path) -> Result<Zeroizing<Vec<u8>>, KeytabFailure
 }
 
 // MIT: `lookup_etypes_for_keytab` (gic_keytab.c:84-143)
-/// lists the etypes of the client's highest-kvno entries, skipping invalid enctypes.
 #[must_use]
 pub fn keytab_init_creds_keys(
     kt: &Keytab,
@@ -818,7 +803,6 @@ pub fn keytab_init_creds_keys(
 }
 
 // MIT: `sort_enctypes` (gic_keytab.c:149-174)
-/// moves the keytab's etypes to the front of the request list, preserving order otherwise.
 pub fn sort_etypes_keytab_first(req: &mut [i32], keytab: &[i32]) {
     let mut front = Vec::with_capacity(req.len());
     let mut back = Vec::with_capacity(req.len());

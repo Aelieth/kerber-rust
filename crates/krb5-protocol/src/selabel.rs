@@ -1,5 +1,4 @@
-//! Each created file's SELinux context is set as it is created, and never changed after.
-//! The context is the thread's fscreate context for the create, then cleared on every return.
+//! A created file's SELinux context is set at create, never after.
 
 use std::fs::{self, File, OpenOptions};
 use std::io;
@@ -34,9 +33,8 @@ pub(crate) struct SeLinux {
     enforcing: bool,
 }
 
-/// A new file gets the policy's context. A file already there is left as create leaves it.
-/// A context that cannot be set fails the create when enforcing, and is skipped when permissive.
-/// An enforce mode that cannot be read counts as enforcing.
+/// A context that cannot be set fails when enforcing; permissive skips it.
+/// An unreadable enforce mode counts as enforcing.
 pub fn create_labeled<T>(path: &Path, create: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
     match SeLinux::system() {
         Some(se) => se.create_labeled(path, create),
@@ -52,7 +50,6 @@ fn with_user(context: &str, user: &str) -> String {
 }
 
 impl SeLinux {
-    /// SELinux on this system, `None` when it is off.
     pub(crate) fn system() -> Option<Self> {
         Self::detect(Roots::system())
     }
@@ -86,7 +83,6 @@ impl SeLinux {
         create()
     }
 
-    /// A replaced regular file keeps its context. A new file gets the policy's.
     pub(crate) fn create_temp(
         &self,
         path: &Path,
@@ -162,7 +158,6 @@ impl SeLinux {
             .join("files")
     }
 
-    /// The regular file's context, not following a symlink.
     fn regular_file_label(&self, path: &Path) -> Option<String> {
         if !fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_file()) {
             return None;
@@ -182,7 +177,6 @@ fn attr_value(bytes: &[u8]) -> &[u8] {
     &bytes[..end]
 }
 
-/// Made absolute, with the directory's symlinks resolved: the policy labels the real location.
 fn absolute(path: &Path) -> String {
     let joined = if path.is_absolute() {
         path.to_path_buf()
@@ -196,7 +190,6 @@ fn absolute(path: &Path) -> String {
     resolved.to_string_lossy().into_owned()
 }
 
-/// Cleared on drop by an empty write, as setfscreatecon(NULL) clears it.
 struct FsCreate(File);
 
 impl FsCreate {
@@ -219,7 +212,6 @@ impl Drop for FsCreate {
     }
 }
 
-/// One write to a thread attribute, which the kernel takes whole or refuses.
 fn write_attr(file: &File, bytes: &[u8]) -> io::Result<()> {
     #[cfg(test)]
     tests::ATTR_WRITES.with(|w| w.borrow_mut().push(bytes.to_vec()));
@@ -250,7 +242,7 @@ struct FileContexts {
 }
 
 impl FileContexts {
-    /// file_contexts must exist. homedirs, local, and the two substitution files are optional.
+    /// `file_contexts` must exist; the other policy files are optional.
     fn load(dir: &Path) -> io::Result<Self> {
         let mut fc = Self::default();
         fc.add_specs(&fs::read_to_string(dir.join("file_contexts"))?);
@@ -293,8 +285,7 @@ impl FileContexts {
         }
     }
 
-    /// None for <<none>> or no match.
-    /// Rust regex, not PCRE2: anchored, no DOTALL, Unicode classes, and a bad spec is skipped.
+    /// Rust regex, not PCRE2: anchored, no DOTALL, a bad spec skipped.
     fn lookup(&self, path: &str) -> Option<String> {
         let key = self.substitute(&normalize(path));
         let candidates = self
@@ -418,7 +409,6 @@ pub(crate) mod tests {
     use std::cell::RefCell;
 
     thread_local! {
-        /// Every write to the fscreate attribute, in order: a context ends in a NUL, a clear is empty.
         pub(crate) static ATTR_WRITES: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
     }
 }

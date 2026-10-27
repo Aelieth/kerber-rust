@@ -1,4 +1,4 @@
-//! MIT FILE v4 credential marshal (`ccmarshal.c`). Shared by FILE, and later KCM.
+//! MIT FILE v4 credential marshal (`ccmarshal.c`), shared with KCM.
 
 use std::io;
 
@@ -7,13 +7,10 @@ use krb5_types::{PrincipalName, Realm, kerberos_string_from_bytes};
 use subtle::ConstantTimeEq;
 use zeroize::Zeroize;
 
-/// FILE v4 header tag: KDC time offset (`sec`, `usec`).
 pub const FCC_TAG_DELTATIME: u16 = 1;
 
-/// Enctype 0 is a config entry. Debug shows the enctype and the length, never the octets.
 #[derive(Clone)]
 pub struct CcacheKeyblock {
-    /// Stored as 16 bits, sign-extended on read.
     pub etype: i16,
     pub contents: Vec<u8>,
 }
@@ -54,7 +51,6 @@ impl CcacheKeyblock {
         }
     }
 
-    /// InvalidData when the enctype is unknown or the length does not match.
     pub fn protocol_key(&self) -> Result<ProtocolKey, io::Error> {
         let et = EncryptionType::known(i32::from(self.etype))
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
@@ -67,19 +63,14 @@ impl CcacheKeyblock {
 pub struct CcacheCred {
     pub client: (Realm, PrincipalName),
     pub server: (Realm, PrincipalName),
-    /// Etype 0 and empty, for a config entry.
     pub key: CcacheKeyblock,
-    /// u32::MAX is MIT's tombstone -1.
     pub authtime: u32,
     pub starttime: u32,
-    /// 0 with a nonzero authtime is a tombstone.
     pub endtime: u32,
     pub renew_till: u32,
     pub is_skey: u8,
-    /// MSB is RFC bit 0.
     pub ticket_flags: u32,
     pub addresses: Vec<(u16, Vec<u8>)>,
-    /// ad_type is signed.
     pub authdata: Vec<(i16, Vec<u8>)>,
     pub ticket: Vec<u8>,
     pub second_ticket: Vec<u8>,
@@ -100,7 +91,7 @@ impl CcacheCred {
         self.key.protocol_key()
     }
 
-    /// MIT FILE tombstone: `endtime = 0`, `authtime = -1`, config realm `X-RMED-CONF:`.
+    /// MIT's tombstone: `endtime = 0`, `authtime = -1`, realm `X-RMED-CONF:`.
     pub fn tombstone(&mut self) {
         self.endtime = 0;
         self.authtime = u32::MAX;
@@ -162,7 +153,6 @@ pub(crate) fn unmarshal_princ(
     for _ in 0..ncomp {
         parts.push(take_data(b, i)?);
     }
-    // FILE names are raw octets in MIT. This parse requires ASCII.
     let realm = kerberos_string_from_bytes(&realm_b)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
     let name = PrincipalName::try_from_bytes(ntype, parts)
@@ -195,9 +185,7 @@ pub(crate) fn marshal_cred(w: &mut Writer, c: &CcacheCred) {
     w.data(&c.second_ticket);
 }
 
-/// The marshalled length, so the buffer is sized before the session key is copied in.
 // MIT: `k5_marshal_cred` (ccmarshal.c:429-447)
-/// Client, server, key, times, flags, addresses, authdata, then both tickets.
 pub(crate) fn cred_len(c: &CcacheCred) -> usize {
     let data = |b: &[u8]| 4 + b.len();
     let princ = |realm: &Realm, name: &PrincipalName| {
@@ -224,8 +212,6 @@ pub(crate) fn cred_len(c: &CcacheCred) -> usize {
 }
 
 // MIT: `k5_unmarshal_cred` (ccmarshal.c:306-310)
-/// A truncated credential is a format error, not a half-parsed one.
-/// A count larger than the bytes left is rejected before the list is walked.
 pub(crate) fn unmarshal_cred(b: &[u8], i: &mut usize) -> Result<CcacheCred, io::Error> {
     let client = unmarshal_princ(b, i)?;
     let server = unmarshal_princ(b, i)?;

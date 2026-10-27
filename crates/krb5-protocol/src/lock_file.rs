@@ -1,4 +1,4 @@
-//! Whole-file locks: an OFD lock, else POSIX, else flock.
+//! Whole-file locks: OFD, else POSIX, else flock.
 
 use std::fs::File;
 use std::io;
@@ -15,7 +15,6 @@ pub enum FileLock {
 }
 
 // MIT: `ofdlock` (lib/krb5/os/lock_file.c:90-103)
-/// EINVAL, a kernel without OFD locks, uses a POSIX lock.
 fn ofdlock(file: &File, arg: &libc::flock, wait: bool) -> Result<(), Errno> {
     let ofd = if wait {
         FcntlArg::F_OFD_SETLKW(arg)
@@ -37,11 +36,8 @@ fn ofdlock(file: &File, arg: &libc::flock, wait: bool) -> Result<(), Errno> {
 }
 
 // MIT: `krb5_lock_file` (lib/krb5/os/lock_file.c:117-162)
-/// The lock covers the whole file.
 // MIT: `krb5_lock_file` (lib/krb5/os/lock_file.c:154-170)
-/// Only EINVAL falls back to flock, and that error is still returned.
-/// A flock taken stays in flocked until the unlock.
-/// EACCES is returned as EAGAIN.
+/// Only `EINVAL` falls back to flock; that error is still returned.
 pub fn lock_file(
     file: &File,
     how: FileLock,
@@ -50,7 +46,6 @@ pub fn lock_file(
     lock_file_how(file, how, flocked, true)
 }
 
-/// Without wait, a conflict is EAGAIN.
 pub fn lock_file_how(
     file: &File,
     how: FileLock,

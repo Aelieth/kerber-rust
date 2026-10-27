@@ -1,5 +1,4 @@
-//! Atomic writes for the database, stash, keytab and ccache files.
-//! Bytes go to an O_EXCL temp file, mode 0600, then rename.
+//! Atomic secret writes: `O_EXCL` temp at 0600, then rename.
 
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
@@ -24,21 +23,15 @@ enum Replace<'a> {
     Like(&'a Path),
 }
 
-/// Temp file plus rename, keeping the replaced file's owner, group and mode.
 // MIT: `ctx_lock` (plugins/kdb/db2/kdb_db2.c:450-455)
-/// the principal database is reopened `O_RDWR`, not recreated.
 // MIT: `krb5_ktfileint_open` (lib/krb5/keytab/kt_file.c:739-746)
-/// an existing keytab is opened "rb+" and written in place.
-/// A regular file the writer may not write is refused before anything changes.
-/// The temp file is O_EXCL, mode 0600, and a planted sticky-dir file is not taken.
-/// An owner or group that cannot be kept is a warning, not an error.
+/// A file the writer may not write is refused before anything changes.
+/// `O_EXCL` at 0600, so a planted sticky-dir file is never taken.
 pub fn write_secret_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     write_atomic(path, bytes, Replace::Keep, true)
 }
 
-/// A writer that may only read an existing file is refused.
-/// The update opens the existing database `O_RDWR`, so a writer that may only read it is refused.
-/// Opened O_RDWR|O_NOFOLLOW, with no create and no truncate. A symlink is not followed.
+/// `O_RDWR|O_NOFOLLOW`, no create, no truncate: no symlink follows.
 pub fn check_secret_file_writable(path: &Path) -> io::Result<()> {
     if !fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_file()) {
         return Ok(());
@@ -53,22 +46,17 @@ pub fn check_secret_file_writable(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// A new 0600 file, owned by the writer.
 // MIT: `fcc_initialize` (lib/krb5/ccache/cc_file.c:481-492)
-/// a FILE ccache is unlinked and created again `O_EXCL`, mode 0600.
 // MIT: `create_ofile` (kadmin/dbutil/dump.c:139-146)
-/// a dump goes to a new `mkstemp` file that is renamed into place.
 pub fn write_fresh_secret_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     write_atomic(path, bytes, Replace::Fresh, true)
 }
 
-/// Owner and mode come from the regular file it belongs beside.
-/// An owner or group that cannot be kept is a warning.
 pub fn write_secret_file_like(path: &Path, like: &Path, bytes: &[u8]) -> io::Result<()> {
     write_atomic(path, bytes, Replace::Like(like), true)
 }
 
-/// A ccache is not given an SELinux context.
+/// No SELinux context: `labeled` is false here.
 pub(crate) fn write_fresh_cache_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     write_atomic(path, bytes, Replace::Fresh, false)
 }
@@ -127,7 +115,7 @@ fn temp_path(path: &Path) -> PathBuf {
     ))
 }
 
-/// The buffer is sized before the first byte, so a grow does not copy a key.
+/// Sized before the first byte: a grow leaves no unwiped key copy.
 pub fn read_secret_file(path: &Path) -> io::Result<Zeroizing<Vec<u8>>> {
     use std::io::Read as _;
     let mut file = fs::File::open(path)?;
@@ -139,7 +127,6 @@ pub fn read_secret_file(path: &Path) -> io::Result<Zeroizing<Vec<u8>>> {
     Ok(bytes)
 }
 
-/// A master-key stash: no link, a regular file, at most 64 KiB.
 pub fn read_stash_file(path: &Path) -> io::Result<Zeroizing<Vec<u8>>> {
     use std::io::Read as _;
     const CAP: usize = 64 * 1024;
@@ -171,7 +158,7 @@ pub fn read_stash_file(path: &Path) -> io::Result<Zeroizing<Vec<u8>>> {
     Ok(bytes)
 }
 
-/// O_EXCL|O_NOFOLLOW, mode 0600, so a planted link is not written through.
+/// `O_EXCL|O_NOFOLLOW` at 0600: a planted link is not written through.
 pub(crate) fn new_temp(path: &Path) -> io::Result<(fs::File, PathBuf)> {
     let tmp = temp_path(path);
     Ok((create_temp_at(&tmp)?, tmp))
@@ -198,8 +185,6 @@ fn create_temp(path: &Path, replace: Replace, labeled: bool) -> io::Result<(fs::
     new_temp(path)
 }
 
-/// Mode, and for a kept file its owner and group, come from the file it replaces.
-/// A failed fchmod keeps the 0600 create mode, so its error is ignored.
 #[cfg(unix)]
 fn set_owner_and_mode(f: &fs::File, path: &Path, dir: &Path, replace: Replace) {
     let mode = match replace {
@@ -254,7 +239,6 @@ fn kept_mode(old_mode: u32, group_kept: bool) -> u32 {
     if group_kept { mode } else { mode & !0o070 }
 }
 
-/// A file another user owns in a shared sticky directory may have been planted.
 #[cfg(unix)]
 fn planted(dir: &Path, owner: u32) -> bool {
     let Ok(d) = fs::metadata(dir) else {
@@ -268,8 +252,7 @@ fn shared_sticky(dir_mode: u32, dir_uid: u32, owner: u32) -> bool {
     dir_mode & 0o1000 != 0 && dir_mode & 0o022 != 0 && owner != dir_uid
 }
 
-/// Overwrite with zeros, fsync, then unlink.
-/// O_NOFOLLOW|O_NONBLOCK, so a swapped symlink or FIFO is not followed.
+/// `O_NOFOLLOW|O_NONBLOCK`: a swapped symlink or FIFO is not followed.
 pub fn destroy_secret_file(path: &Path) -> io::Result<()> {
     let lmeta = fs::symlink_metadata(path)?;
     #[cfg(test)]
@@ -539,7 +522,6 @@ mod tests {
     }
 
     #[test]
-    /// A link planted at a temp file's name is never written through: the create fails (`O_CREAT | O_EXCL | O_NOFOLLOW`), the link stays and its target is as it was.
     fn a_temp_file_is_never_made_through_a_symlink() {
         let dir = krb5_testkit::scratch_dir("krb5-temp-link");
         let (tmp, victim) = (dir.join(".principal.tmp-planted"), dir.join("victim"));
