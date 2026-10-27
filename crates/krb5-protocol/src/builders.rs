@@ -1,5 +1,3 @@
-//! AS-REQ / TGS-REQ / PA-ENC-TIMESTAMP builders (used by tests, KDC, client).
-
 use krb5_asn1::encode;
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, checksum, encrypt};
 use krb5_types::{
@@ -66,15 +64,13 @@ pub fn as_req_sname(
     }))
 }
 
-/// Encrypted under the long-term key, usage 1.
+/// Encrypted under the long-term key, key usage 1.
 // MIT: `encts_process` (lib/krb5/krb/preauth_encts.c:87-89)
-/// The time and its microseconds come from one reading.
 pub fn pa_enc_timestamp(key: &ProtocolKey) -> Result<PaData, Error> {
     let (now, usec) = crate::auth_con::us_timeofday();
     pa_enc_timestamp_usec(key, &now, usec)
 }
 
-/// The microseconds are those of the given time.
 pub fn pa_enc_timestamp_at(key: &ProtocolKey, now: &KerberosTime) -> Result<PaData, Error> {
     pa_enc_timestamp_usec(
         key,
@@ -84,7 +80,6 @@ pub fn pa_enc_timestamp_at(key: &ProtocolKey, now: &KerberosTime) -> Result<PaDa
 }
 
 // MIT: `pa_enc_ts_1` (lib/krb5/asn.1/asn1_k_encode.c:935-935)
-/// pausec is omitted when 0.
 fn pa_enc_timestamp_usec(
     key: &ProtocolKey,
     now: &KerberosTime,
@@ -142,26 +137,21 @@ pub fn tgs_req(
 }
 
 // MIT: `k5_make_tgs_req` (lib/krb5/krb/send_tgs.c:119-119)
-/// The parameter struct for tgs_req_ex, not a wire type.
 pub struct TgsReqParams<'a> {
     pub ticket: Ticket,
-    /// Checksums the body and encrypts the authenticator.
     pub session: &'a ProtocolKey,
     pub crealm: &'a str,
     pub cname: &'a PrincipalName,
-    /// Owned because the body stores it.
     pub sname: PrincipalName,
     pub realm: &'a str,
     pub nonce: u32,
     pub kdc_options: KdcOptions,
     pub additional_tickets: Option<Vec<Ticket>>,
-    /// Appended after the PA-TGS-REQ.
     pub extra_padata: Vec<PaData>,
     pub etypes: Vec<i32>,
     pub addresses: Option<HostAddresses>,
     pub from: Option<KerberosTime>,
     pub enc_authorization_data: Option<EncryptedData>,
-    /// None is ten hours from now.
     pub till: Option<KerberosTime>,
     pub subkey: Option<&'a ProtocolKey>,
     pub time_offset: i64,

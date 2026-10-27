@@ -1,7 +1,5 @@
-//! KRB5_TRACE names the file, and a release build reads it too.
-//! Nothing is written to standard output or standard error unless that name is one of them.
 //! No line carries key, password or seed bytes.
-//! A key is its enctype and a 16-bit hash. SPAKE prints that hash, not the secret.
+//! A key is its enctype plus a 16-bit hash; SPAKE prints only the hash.
 
 use std::ffi::OsString;
 use std::fmt::Write as _;
@@ -44,9 +42,7 @@ pub fn dns_srv(ev: krb5_config::DnsSrv) {
 static SINK: OnceLock<Option<File>> = OnceLock::new();
 
 // MIT: `k5_init_trace` (lib/krb5/os/trace.c:384-392)
-/// The file KRB5_TRACE names, read with secure_getenv.
 // MIT: `krb5_init_context_profile` (lib/krb5/krb/init_ctx.c:209-217)
-/// Opened after the profile loads and before any trace, even when nothing is traced.
 pub fn init() {
     let _ = sink();
 }
@@ -62,7 +58,7 @@ fn sink() -> Option<&'static File> {
 }
 
 // MIT: `krb5_set_trace_filename` (lib/krb5/os/trace.c:449-465)
-/// Write-only, appended, created 0600. A file that does not open leaves tracing off.
+/// Write-only, appended, 0600; an unopenable file leaves tracing off.
 fn set_trace_filename(name: &std::ffi::OsStr) -> Option<File> {
     OpenOptions::new()
         .append(true)
@@ -72,7 +68,8 @@ fn set_trace_filename(name: &std::ffi::OsStr) -> Option<File> {
         .ok()
 }
 
-/// A setuid, setgid or file-capability exec gets nothing, so it never writes a caller-named file.
+/// A setuid, setgid or capability exec gets nothing, so it never writes a
+/// caller-named file.
 #[allow(
     clippy::disallowed_methods,
     reason = "MIT reads KRB5_TRACE as each context is made"
@@ -104,7 +101,6 @@ fn at_secure(auxv: &[u8]) -> bool {
 }
 
 // MIT: `krb5int_trace` (lib/krb5/os/trace.c:394-420)
-/// Nothing is formatted when tracing is off.
 pub fn krb5int_trace(fmt: &str, args: &[Arg<'_>]) {
     let Some(mut file) = sink() else {
         return;
@@ -126,7 +122,6 @@ thread_local! {
     static GAK_KEYTAB: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
 }
 
-/// The keytab name is built only when tracing is on.
 pub fn with_gak_keytab<T>(name: impl FnOnce() -> String, f: impl FnOnce() -> T) -> T {
     if !enabled() {
         return f();
@@ -164,7 +159,6 @@ impl<'a> Princ<'a> {
 #[derive(Clone, Copy)]
 pub struct Key<'a> {
     pub etype: i32,
-    /// The key bytes; never printed.
     pub bytes: &'a [u8],
 }
 
@@ -242,7 +236,6 @@ impl std::fmt::Debug for Withheld {
     }
 }
 
-/// A hash shows its length, never its bytes. A key shows only its enctype.
 impl std::fmt::Debug for Arg<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match *self {
@@ -282,8 +275,8 @@ impl std::fmt::Debug for Arg<'_> {
 }
 
 // MIT: `trace_format` (lib/krb5/os/trace.c:173-366)
-/// An unknown word prints nothing and takes no argument. A word over 199 bytes ends the message.
-/// A brace with no close ends the message.
+/// An unknown word prints nothing and takes no argument; a 199-byte word
+/// ends the message.
 #[must_use]
 pub fn trace_format(fmt: &str, args: &[Arg<'_>]) -> String {
     let mut buf = String::new();
@@ -344,7 +337,7 @@ fn is_word(word: &str) -> bool {
 }
 
 // MIT: `k5_print_addr_port` (lib/krb5/os/addr.c:94-110)
-/// IPv6 is bracketed. A scope id prints as the interface name, or its number.
+/// IPv6 is bracketed; a scope id prints as the interface name or number.
 fn print_addr_port(addr: &SocketAddr) -> String {
     match addr {
         SocketAddr::V4(v4) => format!("{}:{}", v4.ip(), v4.port()),
@@ -456,7 +449,6 @@ fn format_word(buf: &mut String, word: &str, arg: &Arg<'_>) {
 }
 
 // MIT: `buf_add_printable_len` (lib/krb5/os/trace.c:60-79)
-/// bytes 32 to 126 as they are, any other as `\xNN`.
 fn add_printable(buf: &mut String, p: &[u8]) {
     for &b in p {
         if (32..=126).contains(&b) {
@@ -474,7 +466,6 @@ fn add_hex(buf: &mut String, p: &[u8]) {
 }
 
 // MIT: `hash_bytes` (lib/krb5/os/trace.c:89-103)
-/// Four hex digits from the first two SHA-1 bytes. The rest of the digest is wiped.
 fn hash_bytes(p: &[u8]) -> String {
     let mut digest: [u8; 20] = Sha1::digest(p).into();
     let s = format!("{:02X}{:02X}", digest[0], digest[1]);
@@ -571,7 +562,6 @@ pub const fn padata_type_string(t: i32) -> Option<&'static str> {
 }
 
 // MIT: `krb5_enctype_to_name` (lib/crypto/krb/enctype_util.c:129-160)
-/// The shortest name, including DES types this build no longer has.
 #[must_use]
 pub const fn enctype_shortest_name(e: i32) -> Option<&'static str> {
     Some(match e {

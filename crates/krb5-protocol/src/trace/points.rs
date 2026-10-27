@@ -1,5 +1,3 @@
-//! One function per MIT TRACE macro, its text verbatim from the header.
-
 use krb5_types::PaData;
 
 use super::{Arg, Key, Princ, RemoteAddr, krb5int_trace};
@@ -261,7 +259,6 @@ pub fn init_creds_preauth_none() {
 }
 
 // MIT: `TRACE_INIT_CREDS_PREAUTH_TRYAGAIN` (include/k5-trace.h:247-249)
-/// The macro's patype, code are passed as the error, then the mechanism.
 // MIT: `init_creds_step_request` (lib/krb5/krb/get_in_tkt.c:1321-1322)
 pub fn init_creds_preauth_tryagain(code: i32, patype: i32) {
     krb5int_trace(
@@ -373,7 +370,6 @@ pub fn pkinit_client_rep_dh_fail() {
     krb5int_trace("PKINIT client could not verify DH reply", &[]);
 }
 
-// MIT TRACE_PKINIT_CLIENT_SAN_MATCH_PRINC; see docs/parity/b1-client-preauth.md
 pub fn pkinit_client_san_config_dnsname(host: &str) {
     krb5int_trace(
         "PKINIT client config accepts KDC dNSName SAN {str}",
@@ -440,7 +436,6 @@ pub fn pkinit_eku_no_ku() {
     );
 }
 
-// MIT TRACE_PKINIT_DH_PROPOSING_GROUP; see docs/parity/a3-preauth.md
 pub fn pkinit_dh_proposing_group(desc: &str) {
     krb5int_trace(
         "PKINIT using {str} key exchange group",
@@ -486,7 +481,6 @@ pub fn pkinit_dh_rejecting_group(desc: &str, min: &str) {
     );
 }
 
-// MIT TRACE_PKINIT_CERT_RULE; see docs/parity/a3-preauth.md
 pub fn pkinit_cert_rule(rule: &str) {
     krb5int_trace(
         "PKINIT client matching rule '{str}' against certificates",
@@ -1023,9 +1017,9 @@ pub fn spake_result(result: &[u8]) {
     );
 }
 
-/// The ciphertext prints as a hash: the trace adds no offline check the wire lacks.
+/// The ciphertext prints as a hash, adding no offline check the wire lacks.
 // MIT: `enc_ts_get` (kdc/kdc_preauth_encts.c:37-40)
-/// Under FAST, MIT sends an encrypted challenge and does not trace a timestamp.
+/// Under FAST, MIT sends an encrypted challenge, not a traced timestamp.
 pub fn preauth_enc_ts_armored(sec: i64, usec: i32, plain: &[u8], enc: &[u8]) {
     krb5int_trace(
         "Encrypted timestamp (for {long}.{int}): plain {hexdata}, encrypted {hashlenstr}",

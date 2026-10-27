@@ -1,7 +1,5 @@
-//! Compare MIT and Rust KDC replies after the volatiles are masked.
-//! KRB-ERROR times are masked. e_text is compared. Any other difference is fail-red.
-//! PREAUTH e_data is a type multiset. The differential gate pins the wire order.
-//! A success leaves out the session key, the times, last_req, both ciphers, and PAC.
+//! Compare MIT and Rust KDC replies after masking the volatiles.
+//! KRB-ERROR times masked, e_text compared, all else fail-red.
 
 use krb5_asn1::decode;
 use krb5_types::{
@@ -9,7 +7,6 @@ use krb5_types::{
     err, pa,
 };
 
-/// Stable-field mismatch (or decode failure).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DiffError(pub String);
 
@@ -21,7 +18,6 @@ impl std::fmt::Display for DiffError {
 
 impl std::error::Error for DiffError {}
 
-/// Times are stripped. e_text stays.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StableKrbError {
     pub pvno: i32,
@@ -30,12 +26,10 @@ pub struct StableKrbError {
     pub realm: String,
     pub sname: String,
     pub e_text: String,
-    /// Presence only. A missing client omits it.
     pub has_crealm: bool,
     pub has_cname: bool,
 }
 
-/// The volatiles are left out.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StableRep {
     pub pvno: i32,
@@ -50,9 +44,7 @@ pub struct StableRep {
     pub sname: String,
     pub transited_tr_type: i32,
     pub transited_contents: Vec<u8>,
-    /// TicketFlags as a big-endian bitmask.
     pub flags: u32,
-    /// Outer padata types, sorted.
     pub padata_types: Vec<i32>,
     pub tkt_crealm: String,
     pub tkt_cname: String,
@@ -76,7 +68,6 @@ pub fn stable_krb_error(e: &KrbError) -> StableKrbError {
     }
 }
 
-/// PREAUTH, MORE_PREAUTH and TYPED e_data are compared as structure.
 pub fn compare_krb_error(rust: &KrbError, mit: &KrbError) -> Result<(), DiffError> {
     let a = stable_krb_error(rust);
     let b = stable_krb_error(mit);
@@ -86,7 +77,7 @@ pub fn compare_krb_error(rust: &KrbError, mit: &KrbError) -> Result<(), DiffErro
         )));
     }
     // MIT: `finish_preauth` (do_as_req.c:443-447)
-    // PREAUTH_FAILED carries the hint list too. 91 is METHOD-DATA; 65 is TYPED-DATA.
+    // PREAUTH_FAILED carries the hints; 91 METHOD-DATA, 65 TYPED-DATA.
     if matches!(
         a.error_code,
         err::PREAUTH_REQUIRED
@@ -127,11 +118,8 @@ fn type_multiset(m: &MethodData) -> Vec<i32> {
     v
 }
 
-/// The type multisets must match. The gate's proxy pins the wire order.
-/// With FX-FAST, FX-COOKIE is required. ETYPE-INFO2 only when a leg listed it.
+/// FX-FAST needs FX-COOKIE; ETYPE-INFO2 only if a leg listed it.
 // MIT: `add_etype_info` (kdc_preauth.c:776-778)
-/// No client key skips ETYPE-INFO2.
-/// When both list it, the etype sets are equal. ENC-TIMESTAMP is the multiset.
 pub fn compare_preauth_e_data(a: Option<&[u8]>, b: Option<&[u8]>) -> Result<(), DiffError> {
     let a = a.ok_or_else(|| DiffError("rust e_data missing".into()))?;
     let b = b.ok_or_else(|| DiffError("mit e_data missing".into()))?;
@@ -145,10 +133,8 @@ pub fn compare_preauth_e_data(a: Option<&[u8]>, b: Option<&[u8]>) -> Result<(), 
         )));
     }
     if sa.contains(&pa::FX_FAST) {
-        // The outer e_data of a FAST error is one PA-FX-FAST.
         // MIT: `prepare_error_as` (do_as_req.c:785-826)
         // MIT: `kdc_fast_handle_error` (kdc/fast_util.c:380-418)
-        // Cookie and ETYPE-INFO2 live inside that encrypted response.
         if sa == [pa::FX_FAST] {
             return Ok(());
         }
@@ -158,7 +144,7 @@ pub fn compare_preauth_e_data(a: Option<&[u8]>, b: Option<&[u8]>) -> Result<(), 
                 pa::FX_COOKIE
             )));
         }
-        // The type multiset still has to match; do not require 19.
+        // The type multiset must still match; 19 is not required.
     }
     if sa.contains(&pa::ETYPE_INFO2) {
         let ea = etype_info2_etypes(&ma)?;
@@ -191,7 +177,6 @@ fn etype_info2_etypes(m: &MethodData) -> Result<Vec<i32>, DiffError> {
     Ok(out)
 }
 
-/// Tries APPLICATION 26, then 25, then untagged.
 pub fn decode_enc_kdc_rep(plain: &[u8]) -> Result<EncKdcRepPart, DiffError> {
     krb5_asn1::decode_enc_kdc_rep_part(plain).map_err(|e| DiffError(e.to_string()))
 }
@@ -228,7 +213,6 @@ pub fn stable_rep(rep: &KdcRep, enc: &EncKdcRepPart, ticket: &EncTicketPart) -> 
     }
 }
 
-/// A kvno present on only one leg is not compared.
 pub fn compare_stable_rep(
     rust_rep: &KdcRep,
     rust_enc: &EncKdcRepPart,

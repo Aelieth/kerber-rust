@@ -1,8 +1,7 @@
-//! Kerberos V5 AS, TGS, AP, SAFE/PRIV/CRED exchanges (RFC 4120).
-//! Transport is UDP, with TCP fallback.
-//! Keytabs and ccaches live here so the KDC does not depend on the client crate.
-//! There is no C FFI.
-//! Child modules stay private, except trace, which the tools call where MIT's library does.
+//! Kerberos V5 AS, TGS, AP and SAFE/PRIV/CRED exchanges (RFC 4120).
+//! UDP transport, with TCP fallback.
+//! Keytabs and ccaches live here so the KDC needs no client crate.
+//! Child modules stay private; `trace` is public for the tools.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]

@@ -1,5 +1,3 @@
-//! Host addresses a KRB-PRIV or KRB-SAFE checks when no local address is set.
-
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use krb5_types::HostAddress;
@@ -10,8 +8,7 @@ use crate::error::Error;
 
 // MIT: `krb5_os_localaddr` (lib/krb5/os/localaddr.c:1311-1315)
 // MIT: `get_localaddrs` (lib/krb5/os/localaddr.c:1317-1368)
-/// extra_addresses is not read.
-/// A failed getifaddrs is Io, with the errno text.
+/// `extra_addresses` is not read.
 pub fn os_localaddr() -> Result<Vec<HostAddress>, Error> {
     let interfaces = getifaddrs().map_err(getifaddrs_error)?;
     Ok(host_addresses_from(interfaces.map(|i| {
@@ -34,7 +31,6 @@ fn getifaddrs_error(errno: nix::errno::Errno) -> Error {
 }
 
 // MIT: `krb5_init_creds_init` (lib/krb5/krb/get_in_tkt.c:998-1005)
-/// Absent or true sends none.
 pub fn init_creds_addresses(noaddresses: Option<bool>) -> Result<Option<Vec<HostAddress>>, Error> {
     init_creds_addresses_from(noaddresses, os_localaddr)
 }
@@ -51,7 +47,7 @@ fn init_creds_addresses_from(
 }
 
 // MIT: `foreach_localaddr` (lib/krb5/os/localaddr.c:415-481)
-/// A down, empty, loopback, or repeated entry is skipped.
+/// A down, empty, loopback or repeated entry is skipped.
 // MIT: `add_addr` (lib/krb5/os/localaddr.c:1162-1195)
 #[must_use]
 pub fn host_addresses_from(
@@ -69,7 +65,6 @@ pub fn host_addresses_from(
 }
 
 // MIT: `is_loopback_address` (localaddr.c:179-190)
-/// Only 127.0.0.1 and ::1.
 fn is_loopback(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => v4 == Ipv4Addr::LOCALHOST,
@@ -85,7 +80,7 @@ fn host_address(ip: IpAddr) -> Option<HostAddress> {
         }),
         IpAddr::V6(v6) => {
             let o = v6.octets();
-            // fe80::/10 is link-local and is dropped.
+            // `fe80::/10` is link-local, and is dropped.
             if o[0] == 0xfe && o[1] & 0xc0 == 0x80 {
                 return None;
             }
@@ -163,7 +158,6 @@ mod tests {
         ]
     }
 
-    /// `kinit -a` and a false `noaddresses` send this list, not the one address a route towards 8.8.8.8 picks.
     #[test]
     fn a_multi_homed_host_lists_every_up_address_ipv6_included_in_interface_order() {
         let want = vec![

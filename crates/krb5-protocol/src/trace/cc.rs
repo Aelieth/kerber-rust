@@ -1,5 +1,3 @@
-//! Traces for a cache written as a whole file, not through a cache handle.
-
 use krb5_types::PrincipalName;
 
 use super::{
@@ -9,7 +7,6 @@ use super::{
 use crate::ccache::{CcacheCred, FileCcache};
 
 // MIT: `krb5int_random_string` (lib/krb5/krb/random_str.c:37-68)
-/// Each character is a random byte modulo 62.
 #[must_use]
 pub(crate) fn random_string(len: usize) -> String {
     const CHARS: &[u8; 62] = b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -24,7 +21,6 @@ pub(crate) fn random_string(len: usize) -> String {
 }
 
 // MIT: `write_out_ccache` (lib/krb5/krb/get_in_tkt.c:1616-1663)
-/// A new MEMORY cache is filled, then moved onto the output cache.
 pub fn write_out_ccache(dest: &str, cc: &FileCcache) {
     if !enabled() {
         return;
@@ -38,9 +34,8 @@ pub fn write_out_ccache(dest: &str, cc: &FileCcache) {
 }
 
 // MIT: `krb5_cc_store_cred` (lib/krb5/ccache/ccfns.c:80-85)
-/// Each stored credential is traced.
 // MIT: `krb5_cc_set_config` (lib/krb5/ccache/ccfns.c:236-261)
-/// Configuration is traced, then traced again as the stored credential.
+/// Configuration is traced, then again as the stored credential.
 pub fn store_creds(cache: &str, creds: &[CcacheCred]) {
     if !enabled() {
         return;
@@ -71,8 +66,6 @@ fn config_key(c: &CcacheCred) -> Option<(String, Option<String>)> {
 }
 
 // MIT: `krb5_cc_get_config` (lib/krb5/ccache/ccfns.c:264-292)
-/// A hit is traced as a credential, then as configuration.
-/// A miss is traced with the cache's own message.
 pub fn get_config(
     cache: &str,
     client: Princ<'_>,
