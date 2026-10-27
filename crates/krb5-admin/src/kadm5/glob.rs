@@ -1,9 +1,8 @@
-//! Principal and policy name globbing for `GET_PRINCS` / `GET_POLS` (`svr_iters.c` `glob_to_regexp`): the pre-flight MIT answers `EINVAL` for, and the match itself with POSIX bracket classes.
+//! Pre-flight: MIT `regcomp` EINVAL.
 
 use krb5_kdc::PrincipalStore;
 
 // MIT: `kadm5_get_either` (svr_iters.c:175-175)
-/// the converted glob is compiled with `regcomp` as a POSIX BRE.
 #[must_use]
 pub fn glob_pattern_ok(glob: &str) -> bool {
     if glob.ends_with('\\') {
@@ -67,7 +66,7 @@ fn posix_class_match(name: &[u8], c: u8) -> bool {
     }
 }
 
-/// Append `@*` when a principal glob has no realm (`svr_iters.c` implicit `@*`).
+/// Not MIT `@.*`.
 pub(crate) fn glob_expand(glob: &str, append_realm: bool) -> String {
     if append_realm && !glob.contains('@') {
         format!("{glob}@*")
@@ -76,9 +75,7 @@ pub(crate) fn glob_expand(glob: &str, append_realm: bool) -> String {
     }
 }
 
-/// `glob_to_regexp` + `regexec` as a direct anchored matcher: `?`=one, `*`=run, `[...]`=class, `\\x`=literal.
 // MIT: `get_either_iter` (svr_iters.c:111-115)
-/// a name matches when `regexec` returns 0.
 pub(crate) fn glob_is_match(pattern: &[u8], text: &[u8]) -> bool {
     let (mut p, mut t) = (0usize, 0usize);
     let (mut star_p, mut star_t): (Option<usize>, usize) = (None, 0);
@@ -179,7 +176,6 @@ fn glob_class(pat: &[u8], c: u8) -> Option<(bool, usize)> {
     Some((matched != negate, i + 1))
 }
 
-/// The principal names `expr` lists, in the store's order: no expression is `*`, every name.
 pub(crate) fn principals_matching(store: &PrincipalStore, expr: Option<&str>) -> Vec<String> {
     let ids = store.ids();
     match expr {
@@ -193,7 +189,6 @@ pub(crate) fn principals_matching(store: &PrincipalStore, expr: Option<&str>) ->
     }
 }
 
-/// The policy names `expr` lists, sorted: no expression is `*`, every name.
 pub(crate) fn policies_matching(store: &PrincipalStore, expr: Option<&str>) -> Vec<String> {
     let pat = expr.filter(|g| *g != "*").map(|g| glob_expand(g, false));
     let mut names: Vec<String> = store

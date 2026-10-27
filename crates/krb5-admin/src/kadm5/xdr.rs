@@ -1,5 +1,3 @@
-//! XDR primitives (`lib/rpc/xdr.c`): the big-endian reader `XdrR` and writer `XdrW` under every kadm5 argument and reply codec, including the `krb5_key_salt_tuple` array of `kadm_rpc_xdr.c`. A short read is `Error::GarbageArgs`; padding is consumed but never trusted.
-
 use krb5_crypto::EncryptionType;
 use krb5_types::PrincipalName;
 
@@ -54,7 +52,7 @@ impl<'a> XdrR<'a> {
         Ok(v)
     }
 
-    /// MIT `xdr_string`: the count includes the trailing NUL, and the bytes are not required to be UTF-8. A kadm5 password is this (`xdr_chpass3_arg` / `xdr_cprinc_arg` `passwd`), so `caf\xe9` reaches `passwd_check`. Principal names stay on `nullstring`.
+    /// Not UTF-8 (passwords). Count includes the NUL.
     pub(super) fn cstring_bytes(&mut self) -> Result<Option<zeroize::Zeroizing<Vec<u8>>>, Error> {
         let n = self.u32()? as usize;
         if n == 0 {
@@ -97,7 +95,6 @@ impl<'a> XdrR<'a> {
         Ok(())
     }
 
-    /// `xdr_array` of `krb5_key_salt_tuple` (`kadm_rpc_xdr.c` `xdr_krb5_key_salt_tuple`).
     pub(super) fn key_salt_tuples(&mut self) -> Result<Vec<EncryptionType>, Error> {
         let n = self.u32()?;
         let mut out = Vec::new();
@@ -106,7 +103,7 @@ impl<'a> XdrR<'a> {
             let _salttype = self.u32()?;
             let e = EncryptionType::known(et)
                 .map_err(|_| Error::Inner("Invalid key/salt tuples".into()))?;
-            // `ks_tuple` like MIT kadmind (`from_iana` stays stricter).
+            // `known`, not `from_iana`.
             if e.is_mit_weak() {
                 return Err(Error::Inner("Invalid key/salt tuples".into()));
             }
@@ -121,13 +118,12 @@ pub(super) struct XdrW {
     pub(super) b: Vec<u8>,
 }
 
-/// The bytes `XdrW::opaque` writes for `n` bytes: the length, the bytes and their padding.
 pub(super) fn opaque_len(n: usize) -> usize {
     4 + n + (4 - n % 4) % 4
 }
 
 impl XdrW {
-    /// A writer whose buffer holds `n` bytes before it grows: a reply that carries keys is built in one buffer, so no copy of them is left behind in a buffer it outgrew.
+    /// No second key copy on grow.
     pub(super) fn with_capacity(n: usize) -> Self {
         Self {
             b: Vec::with_capacity(n),
@@ -148,7 +144,6 @@ impl XdrW {
         self.cstring_bytes(s.map(str::as_bytes));
     }
 
-    /// An XDR string of raw octets plus the trailing NUL. `XdrR::cstring_bytes` reads it.
     pub(super) fn cstring_bytes(&mut self, s: Option<&[u8]>) {
         match s {
             None => self.u32(0),

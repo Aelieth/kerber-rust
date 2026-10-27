@@ -1,28 +1,22 @@
-//! kadm5_auth: MIT's kadmin authorization interface, with the built-in `acl` and `self`
-//! modules. Every authorization site routes through one [`AuthStack`]; a request is
-//! authorized when at least one module allows it and none deny it.
-
 use std::sync::Arc;
 
 use krb5_config::PluginRelations;
 use krb5_kdc::{Acl, AdminOp, Restrictions};
 use krb5_types::{principal_compare, principal_from_unparsed};
 
-/// A module's answer for one request: MIT's `0` / `KRB5_PLUGIN_NO_HANDLE` / other code.
+/// Allow=0, Abstain=`KRB5_PLUGIN_NO_HANDLE`, else Deny.
 // MIT: `kadm5_auth_addprinc_fn` (include/krb5/kadm5_auth_plugin.h)
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Decision {
     Allow,
     Abstain,
-    /// An explicit denial stops the stack, overriding any allow.
     Deny,
 }
 
-/// One kadm5_auth module. Each method abstains by default, as an unset MIT vtable slot does.
-/// `client` and the principal arguments are unparsed names (`name@REALM`); the target is the
-/// canonical principal taken from the fetched record.
+/// Unset MIT vtable slot.
+/// Unparsed `name@REALM`. Target is fetched.
 pub trait Kadm5Auth: Send + Sync {
-    /// The module's name, for `[plugins] kadm5_auth`.
+    /// `[plugins] kadm5_auth`.
     fn name(&self) -> &'static str;
 
     fn addprinc(&self, _client: &str, _target: &str) -> (Decision, Option<Restrictions>) {
@@ -73,7 +67,7 @@ pub trait Kadm5Auth: Send + Sync {
     fn delpol(&self, _client: &str, _policy: &str) -> Decision {
         Decision::Abstain
     }
-    /// `client_policy` is the caller's own policy name, looked up in the caller's realm.
+    /// `client_policy`: caller's realm.
     fn getpol(&self, _client: &str, _policy: &str, _client_policy: Option<&str>) -> Decision {
         Decision::Abstain
     }
@@ -96,7 +90,6 @@ fn allow_if(ok: bool) -> Decision {
     }
 }
 
-/// The built-in `acl` module: `kadm5.acl`, wrapping [`Acl`]. It allows or abstains, never denies.
 // MIT: `kadm5_auth_acl_initvt` (kadmin/server/auth_acl.c)
 pub struct AclModule(pub Arc<Acl>);
 
@@ -200,7 +193,6 @@ fn is_same_principal(client: &str, target: &str) -> bool {
     }
 }
 
-/// The built-in `self` module: a principal may operate on itself.
 // MIT: `kadm5_auth_self_initvt` (kadmin/server/auth_self.c)
 pub struct SelfModule;
 
@@ -230,7 +222,6 @@ impl Kadm5Auth for SelfModule {
     }
 }
 
-/// The ordered, selected stack of kadm5_auth modules, built once and shared by every request.
 pub struct AuthStack {
     modules: Vec<Arc<dyn Kadm5Auth>>,
 }
@@ -352,14 +343,13 @@ impl AuthStack {
     }
 }
 
-/// One kadmind's kadm5 authorization: the ACL and the selected, ordered module stack.
 pub struct Kadm5AuthConfig {
     acl: Arc<Acl>,
     stack: AuthStack,
 }
 
 impl Kadm5AuthConfig {
-    /// `acl` and `self` plus `extra`, ordered by `[plugins] kadm5_auth` (`enable_only = self` drops the ACL, as MIT).
+    /// `enable_only = self` drops `acl`.
     // MIT: `auth_init` (kadmin/server/auth.c:62-128)
     #[must_use]
     pub fn build(acl: Acl, extra: &[Arc<dyn Kadm5Auth>], relations: &PluginRelations) -> Self {
@@ -383,7 +373,6 @@ impl Kadm5AuthConfig {
         }
     }
 
-    /// `acl` and `self` only.
     #[must_use]
     pub fn from_acl(acl: Acl) -> Self {
         Self::build(acl, &[], &PluginRelations::default())
@@ -394,7 +383,7 @@ impl Kadm5AuthConfig {
         &self.stack
     }
 
-    /// The ACL, for the version-1 admin session.
+    /// Version-1 admin session.
     #[must_use]
     pub fn acl(&self) -> &Acl {
         &self.acl

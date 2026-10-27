@@ -1,5 +1,3 @@
-//! MIT kadm5 GSS-RPC (ONC RPC program 2112, version 2) on TCP 749.
-
 mod acceptor;
 mod auth;
 pub(crate) mod auth_plugin;
@@ -35,17 +33,16 @@ pub(crate) use rpc::Kadm5Conn;
 pub use rpc::serve_kadm5_conn;
 pub use rpc::{Kadm5RpcSession, Programs, RpcCtx, RpcPeer, UnhandledRpc, kadm5_handle_rpc};
 
-/// The message of the kadm5 code `code` (`lib/kadm5/kadm_err.et`), as `error_message` gives it.
 pub(crate) fn kadm5_error_message(code: u32) -> String {
     log::kadm5_error_text(code)
 }
 
-/// The daemon log text of a password change that failed with `e`: the message of the kadm5 code a `kadm5_chpass_principal` stub would return.
+/// MIT chpass-stub text.
 pub(crate) fn chpass_error_text(e: &crate::Error) -> String {
     log::kadm5_error_text(dispatch::kadm5_code(codes::CHPASS_PRINCIPAL, e))
 }
 
-/// The message of the kadm5 code a `kadm5_chpass_principal` stub would return for the database's error `e`, an errno's text included.
+/// Includes errno.
 pub(crate) fn chpass_store_error_text(e: &krb5_kdc::Error) -> String {
     log::kadm5_error_text(dispatch::store_code(codes::CHPASS_PRINCIPAL, e))
 }
