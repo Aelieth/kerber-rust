@@ -72,7 +72,7 @@ pub mod err {
     pub const DIGEST_IN_SIGNED_DATA_NOT_ACCEPTED: i32 = 80;
     /// invalid flag set". A library-local code, not an RFC 4120 wire number.
     // MIT: `errcode_to_protocol` (kdc_util.c:691-697)
-    // clamps offsets over 128 to `GENERIC`
+    // Offsets over 128 clamp to `GENERIC`
     pub const TKT_INVALID: i32 = 145;
     /// com_err base ×256 with the 2³² wrap). Library-local: not an RFC 4120
     // MIT: `filter_preauth_error` (kdc/kdc_preauth.c:1090-1134)
@@ -123,7 +123,6 @@ pub mod ku {
     pub const CAMMAC: u32 = 64;
     pub const SPAKE: u32 = 65;
     // MIT: `KRB5_KEYUSAGE_PA_PKINIT_KX` (krb5.hin:991-991)
-    // the PA-PKINIT-KX key usage, 44.
     pub const PA_PKINIT_KX: u32 = 44;
     // MIT: `KRB5_KEYUSAGE_PA_OTP_REQUEST` (krb5.hin:992-992)
     // 45, the key usage of PA-OTP-REQUEST (see RFC 6560 section 4.2).

@@ -318,7 +318,8 @@ fn rd_priv_checks_the_addresses_the_context_holds() {
 }
 
 // MIT: `k5_privsafe_check_addrs` (privsafe.c:355-378)
-/// with no local address (kpasswd's context sets none), a KRB-PRIV's receiver address must be one of the host's, whatever the sender says.
+/// With no local address (kpasswd sets none), a KRB-PRIV's receiver must be one of the host's,
+/// whatever the sender says.
 #[test]
 fn rd_priv_with_no_local_address_wants_the_receiver_among_the_hosts() {
     let session = ProtocolKey::random(AES256).unwrap();

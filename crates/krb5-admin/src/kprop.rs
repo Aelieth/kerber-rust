@@ -2250,7 +2250,8 @@ mod tests {
     }
 
     // MIT: `xmit_database` (kprop/kprop.c:421-439)
-    /// the size goes from kprop's own address (its auth context's local address), with no receiver, carrying the authenticator's random 30-bit sequence number; an empty dump's size is twelve zero bytes.
+    /// The size goes from kprop's own address (its auth context's local one), with no receiver,
+    /// with the authenticator's random 30-bit sequence number. Empty dump: size is 12 zero bytes.
     #[test]
     fn kprop_sends_its_size_from_its_own_address_with_the_authenticators_seq() {
         let sender = HostAddress {
@@ -2292,7 +2293,8 @@ mod tests {
     }
 
     // MIT: `verify_as_reply` (lib/krb5/krb/get_in_tkt.c:260-264)
-    /// the AS reply moves the context's clock to the KDC's, so kprop's authenticator carries the KDC's time; a host an hour off the KDC (and off kpropd) is refused by kpropd only when kprop dates it by its own clock.
+    /// The AS reply sets the context's clock to the KDC's, so the authenticator carries its time.
+    /// A host an hour off the KDC and kpropd is refused only when kprop dates it by its own clock.
     #[test]
     fn kprop_dates_its_authenticator_by_the_kdcs_clock() {
         use std::net::TcpListener;
@@ -2341,7 +2343,8 @@ mod tests {
     }
 
     // MIT: `krb5_read_message` (lib/krb5/os/read_msg.c:52-54)
-    /// a reply's length is allocated as it says; this kprop refuses one past 8 MiB as an allocation that failed (docs/mit-deviations.md).
+    /// A reply's length is allocated as stated; past 8 MiB this kprop refuses it as a failed
+    /// allocation (docs/mit-deviations.md).
     #[test]
     fn kprop_refuses_a_reply_past_eight_mib() {
         use std::net::TcpListener;

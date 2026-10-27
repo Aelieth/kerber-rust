@@ -237,7 +237,7 @@ pub(super) fn parse_purgekeys(args: &[u8]) -> Result<(u32, PrincipalName, String
 }
 
 // MIT: `xdr_kadm5_key_data` (kadm_rpc_xdr.c:1166-1174)
-/// v4 key: kvno, keyblock, salt.
+/// V4 key: kvno, keyblock, salt.
 pub(super) fn parse_setkey(
     args: &[u8],
     proc: u32,

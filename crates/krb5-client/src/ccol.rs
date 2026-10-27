@@ -69,7 +69,7 @@ impl Cache {
 
     pub fn destroy(&self, ctx: &ClientContext) -> Result<(), Krb5Error> {
         // MIT: `krb5_cc_destroy` (lib/krb5/ccache/ccfns.c:66-71)
-        // traced before the destroy.
+        // The destroy is traced first.
         if krb5_protocol::trace::enabled() {
             krb5_protocol::trace::cc_destroy(&self.full_name());
         }
@@ -94,7 +94,7 @@ impl Cache {
 
     // MIT: `krb5_cc_switch` (lib/krb5/ccache/ccfns.c:294-300)
     // MIT: `dcc_switch_to` (cc_dir.c:719-741)
-    // a DIR collection's `primary` file names it.
+    // A DIR collection's `primary` file names it.
     // MIT: `kcm_switch_to` (cc_kcm.c:1330-1340)
     // SET_DEFAULT_CACHE.
     pub fn switch_to(&self, ctx: &ClientContext) -> Result<(), Krb5Error> {
@@ -199,7 +199,7 @@ pub fn collection(ctx: &ClientContext, default: &CcSpec) -> Result<Vec<Cache>, K
 
 // MIT: `krb5_cc_cache_match` (cccursor.c:183-219)
 // MIT: `match_caches` (cccursor.c:145-181)
-// a cache that is not initialized is passed over.
+// A cache that is not initialized is passed over.
 pub fn cache_match(
     ctx: &ClientContext,
     default: &CcSpec,
@@ -213,9 +213,9 @@ pub fn cache_match(
 }
 
 // MIT: `krb5_cc_new_unique` (ccbase.c:289-307)
-// a new cache in the collection of `default`.
+// A new cache in the collection of `default`.
 // MIT: `dcc_gen_new` (cc_dir.c:387-429)
-// only a DIR collection name (not a `DIR::` subsidiary)
+// Only a DIR collection name (not a `DIR::` subsidiary)
 // MIT: `kcm_gen_new` (cc_kcm.c:795-822)
 // GEN_NEW names it.
 pub fn new_unique(ctx: &ClientContext, default: &CcSpec) -> Result<Cache, Krb5Error> {

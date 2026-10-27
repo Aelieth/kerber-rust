@@ -439,7 +439,7 @@ fn trace_host(host: &str) -> String {
 
 fn mit_host(host: &str) -> String {
     // MIT: `locate_srv_dns_1` (lib/krb5/os/locate_kdc.c:379-382)
-    // a sole empty host is no service.
+    // A sole empty host is no service.
     if host.is_empty() || host == "." || host == ".." {
         "..".to_string()
     } else {

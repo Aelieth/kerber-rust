@@ -930,7 +930,7 @@ mod tests {
 
     /// A replay the lookaside no longer holds is processed again: the AS-REQ with the same PA-ENC-TIMESTAMP and the TGS-REQ with the same authenticator each get a new ticket, where the lookaside resent the first reply while it held it.
     // MIT: `dispatch` (kdc/dispatch.c:114-140)
-    /// only the lookaside answers a repeated request, so one it no longer holds is processed again.
+    /// Only the lookaside answers a repeated request, so one it no longer holds is processed again.
     #[test]
     fn a_replay_the_lookaside_no_longer_holds_is_issued_again() {
         let (store, _) = bootstrap_documented().unwrap();

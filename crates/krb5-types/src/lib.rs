@@ -40,7 +40,7 @@ pub use name::{
 pub use name_error::{NameError, TimeError};
 
 // MIT: `krb5_principal_compare_flags` (princ_comp.c:79-124)
-// ignores name type;
+// Ignores name type; realm and components decide.
 #[must_use]
 pub fn principal_compare(
     name_a: &PrincipalName,
@@ -986,7 +986,7 @@ impl ApReq {
 }
 
 // MIT: `ap_req_msg_type` (lib/krb5/asn.1/asn1_k_encode.c:747-747)
-// the msg-type is an immediate with no error, so any INTEGER of up to eight octets decodes and none
+// The msg-type is an immediate with no error, so any INTEGER of up to eight octets decodes and none
 // is kept.
 #[derive(AsnType, Decode)]
 #[rasn(tag(explicit(application, 14)))]
@@ -1091,7 +1091,7 @@ impl KrbError {
 }
 
 // MIT: `error_msg_type` (lib/krb5/asn.1/asn1_k_encode.c:911-911)
-// the msg-type is an immediate with no error, so any INTEGER of up to eight octets decodes and none
+// The msg-type is an immediate with no error, so any INTEGER of up to eight octets decodes and none
 // is kept.
 #[derive(AsnType, Decode, Encode)]
 #[rasn(tag(explicit(application, 30)))]

@@ -66,7 +66,7 @@ pub fn timestamp_to_string(t: u32, buflen: usize) -> Option<String> {
 }
 
 // MIT: `krb5_timestamp_to_sfstring` (lib/krb5/krb/str_conv.c:216-252)
-// the first format of MIT's table that fits in `buflen`.
+// The first format of MIT's table that fits in `buflen`.
 #[must_use]
 pub fn timestamp_to_sfstring(t: u32, buflen: usize, pad: Option<u8>) -> Option<String> {
     sfstring_tm(&lc_time(), &localtime(t)?, buflen, pad)

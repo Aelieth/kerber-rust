@@ -26,7 +26,7 @@ impl Value {
     }
 
     // MIT: `k5_json_object_set` (util/support/json.c:426-469)
-    // an existing key is overwritten in place, a new one appended.
+    // An existing key is overwritten in place, a new one appended.
     pub fn set(&mut self, key: &str, value: Value) {
         if let Self::Object(members) = self {
             set_member(members, key.as_bytes().to_vec(), Some(value));
@@ -118,10 +118,10 @@ impl Decoder<'_> {
     }
 
     // MIT: `parse_number` (util/support/json.c:755-785)
-    // an optional `-` and digits, which
+    // An optional `-` and digits, which
     /// must be an integer in the signed 64-bit range. A leading zero is allowed.
     // MIT: `parse_number` (util/support/json.c:774-781)
-    /// the digits must fit the signed 64-bit range.
+    /// The digits must fit the signed 64-bit range.
     fn parse_number(&mut self) -> Result<i64, ()> {
         let negative = self.cur() == b'-';
         if negative {
@@ -272,9 +272,9 @@ impl Decoder<'_> {
         if self.cur() != b']' {
             loop {
                 // MIT: `parse_array_item` (util/support/json.c:939-950)
-                // a NULL is passed on as an element.
+                // A NULL is passed on as an element.
                 // MIT: `k5_json_array_add` (util/support/json.c:246-246)
-                // a NULL is stored as the element.
+                // A NULL is stored as the element.
                 items.push(self.parse_value()?.unwrap_or(Value::Null));
                 if !self.skip_ws() {
                     return Err(());

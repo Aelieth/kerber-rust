@@ -94,7 +94,7 @@ pub fn cache_read_error(
 }
 
 // MIT: `os_init_paths` (init_os_ctx.c:389-391)
-// no file that opens is an empty profile.
+// No file that opens is an empty profile.
 #[allow(
     clippy::disallowed_methods,
     reason = "MIT krb5_init_context: the program's one read of its profile and environment"
@@ -310,7 +310,6 @@ pub fn kinit(
 }
 
 // MIT: `krb5_get_init_creds_opt` (include/krb5/krb5.hin:6839-6851)
-// the public option block.
 #[derive(Clone, Copy)]
 pub struct InitCredsOpt<'a> {
     pub service: Option<&'a str>,
@@ -801,7 +800,7 @@ fn load_pkinit(
 }
 
 // MIT: `create_krb5_trustedCertifiers` (pkinit_crypto_openssl.c:5396-5397)
-// with no anchor loaded no request is made.
+// With no anchor loaded no request is made.
 // MIT: `pa_pkinit_gen_req` (plugins/preauth/pkinit/pkinit_clnt.c:71-171)
 const NO_TRUSTED_CA: &str = "Preauthentication failed";
 
@@ -1046,7 +1045,7 @@ pub fn as_with_fast_ccache(
 }
 
 // MIT: `restart_init_creds_loop` (lib/krb5/krb/get_in_tkt.c:800-801)
-// the upgrade sets FAST for the restarted request.
+// The upgrade sets FAST for the restarted request.
 fn exchange_shape(
     ctx: &ClientContext,
     password: &mut LazyPassword<'_>,
@@ -1424,7 +1423,7 @@ fn kinit_inner(
                 forwardable: false,
                 proxiable: false,
                 // MIT: `make_chpw_options` (lib/krb5/krb/gic_pwd.c:163-163)
-                // this request drops the address list the caller set.
+                // This request drops the address list the caller set.
                 addresses: krb5_protocol::init_creds_addresses(
                     ctx.profile.noaddresses_for(&realm_s),
                 )
@@ -1437,7 +1436,7 @@ fn kinit_inner(
                 restart: None,
             };
             // MIT: `krb5_get_init_creds_password` (lib/krb5/krb/gic_pwd.c:213-263)
-            // each AS starts again in the client's own realm.
+            // Each AS starts again in the client's own realm.
             let chpw_ask = Ask {
                 sname: Some(&changepw),
                 ticket: &chpw_ticket,

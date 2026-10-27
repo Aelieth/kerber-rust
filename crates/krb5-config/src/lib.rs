@@ -65,7 +65,7 @@ pub enum ProfileError {
     // MIT: `get_boolean` (lib/krb5/krb/init_ctx.c)
     BadBoolean,
     // MIT: `get_tristate` (lib/krb5/krb/init_ctx.c:115-118)
-    // any other value is `EINVAL`.
+    // Any other value is `EINVAL`.
     BadTristate,
     BadDeltat,
     BadPathToken,
@@ -380,7 +380,7 @@ pub struct KdcConf {
     pub kdc_tcp_listen_backlog: i32,
     pub unsupported: Vec<String>,
     // MIT: `get_profile_var` (lib/krb5/krb/plugin.c:188-203)
-    // the relations sit under the interface name.
+    // The relations sit under the interface name.
     pub plugins: PluginProfile,
     pub otp: OtpTree,
 }

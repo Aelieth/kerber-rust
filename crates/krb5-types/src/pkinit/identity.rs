@@ -191,7 +191,7 @@ pub fn load_identity(
 }
 
 // MIT: `crypto_load_certs` (plugins/preauth/pkinit/pkinit_crypto_openssl.c:4645-4688)
-// the identity's type decides how its certificates load.
+// The identity's type decides how its certificates load.
 pub fn load_identities(value: &str) -> Result<Vec<PkinitIdentity>, IdentityError> {
     load_identities_at(value, 0)
 }
@@ -281,7 +281,7 @@ fn load_identity_dir(dir: &str) -> Result<Vec<PkinitIdentity>, IdentityError> {
 }
 
 // MIT: `process_option_ca_crl` (plugins/preauth/pkinit/pkinit_identity.c:468-501)
-// the type is required, and only FILE and DIR are known.
+// The type is required, and only FILE and DIR are known.
 pub fn load_ca_certs(value: &str) -> Result<Vec<Vec<u8>>, String> {
     let Some((kind, residual)) = value.split_once(':') else {
         return Err(EINVAL.into());
@@ -304,7 +304,7 @@ pub fn load_ca_certs(value: &str) -> Result<Vec<Vec<u8>>, String> {
 }
 
 // MIT: `load_cas_and_crls` (plugins/preauth/pkinit/pkinit_crypto_openssl.c:4997-5151)
-// every certificate in the file once; a file with none loads nothing.
+// Every certificate in the file once; a file with none loads nothing.
 fn load_ca_file(path: &str) -> Result<Vec<Vec<u8>>, String> {
     let bytes =
         std::fs::read(path).map_err(|_| format!("Cannot open file '{path}': {NO_REASON}"))?;
@@ -326,7 +326,7 @@ fn load_ca_file(path: &str) -> Result<Vec<Vec<u8>>, String> {
 }
 
 // MIT: `get_cert` (plugins/preauth/pkinit/pkinit_crypto_openssl.c:1311-1345)
-// a file that does not open is its errno, one with no certificate `EIO`.
+// A file that does not open is its errno, one with no certificate `EIO`.
 fn read_cert(path: &str) -> Result<Vec<u8>, (i64, &'static str)> {
     let bytes = std::fs::read(path).map_err(|e| (errno(&e), NO_REASON))?;
     let text = String::from_utf8_lossy(&bytes);
@@ -354,7 +354,7 @@ enum KeyFault {
 }
 
 // MIT: `get_key` (plugins/preauth/pkinit/pkinit_crypto_openssl.c:1406-1444)
-// the KDC's password callback fails, so an encrypted key is an error.
+// The KDC's password callback fails, so an encrypted key is an error.
 fn read_key(path: &str) -> Result<IdentityKey, KeyFault> {
     let bytes =
         Zeroizing::new(std::fs::read(path).map_err(|e| KeyFault::Read(errno(&e), NO_REASON))?);

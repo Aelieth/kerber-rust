@@ -292,7 +292,7 @@ fn default_host_principal(ctx: &ClientContext) -> Princ {
 }
 
 // MIT: `get_name_from_os` (kinit.c:47-54)
-// the login name of the real user.
+// The login name of the real user.
 fn os_user_name() -> Option<String> {
     nix::unistd::User::from_uid(nix::unistd::Uid::current())
         .ok()
@@ -377,7 +377,7 @@ fn valrenew(prog: &str, opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
 }
 
 // MIT: `krb5_get_init_creds_opt_set_fast_ccache_name` (lib/krb5/krb/gic_opt.c:279-292)
-// stores that name for resolution.
+// It stores that name for resolution.
 fn armor_ccache_spec(name: &str) -> Result<CcSpec, Krb5Error> {
     parse_ccspec(name).map_err(|e| Krb5Error::from_ccname(&e))
 }
@@ -402,7 +402,7 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
         restart: None,
     };
     // MIT: `krb5_init_creds_init` (lib/krb5/krb/get_in_tkt.c:998-1005)
-    // with neither, `noaddresses` absent or true sends none, and false sends that list.
+    // Neither -a nor -A: `noaddresses` unset or true sends none; false sends local addresses.
     match opts.addresses {
         Some(true) => match krb5_protocol::os_localaddr() {
             Ok(list) => ticket.addresses = Some(list),
@@ -443,7 +443,7 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
         None
     };
     // MIT: `handle_gic_opt` (plugins/preauth/pkinit/pkinit_clnt.c:1307-1335)
-    // the pkinit module refuses a second `X509_user_identity`.
+    // The pkinit module refuses a second `X509_user_identity`.
     let pkinit = krb5_protocol::clpreauth_loaded(&k5.ctx.profile, "pkinit");
     let mut identity = false;
     for (attr, value) in &opts.pa_opts {

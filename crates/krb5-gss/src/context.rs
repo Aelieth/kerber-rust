@@ -96,7 +96,6 @@ pub struct InquireOk {
 }
 
 // MIT: `krb5_generate_subkey_extended` (lib/krb5/krb/gen_subkey.c:29-52)
-// a random key of the session key's enctype.
 pub(super) fn random_subkey(session: &ProtocolKey) -> Result<ProtocolKey, Error> {
     Ok(ProtocolKey::random(session.etype())?)
 }
@@ -658,13 +657,13 @@ impl GssContext {
         let usage = KeyUsage::new(ku::AP_REP_ENC_PART)?;
         let cipher = ap.enc_part.cipher.as_ref();
         // MIT: `mutual_auth` (init_sec_context.c:785-794)
-        // ticket session, then subkey.
+        // The ticket session key, then the subkey.
         let etype = ap.enc_part.etype;
         let plain = decrypt_enc_data(ticket_session, usage, etype, cipher)
             .or_else(|_| decrypt_enc_data(&self.session, usage, etype, cipher))?;
         let part: EncApRepPart = decode(&plain)?;
         // MIT: `krb5_rd_rep` (rd_rep.c:106-111)
-        // an AP-REP that does not echo the authenticator's time is not mutual authentication.
+        // An AP-REP that does not echo the authenticator's time is not mutual authentication.
         if let Some((ctime, cusec)) = &self.ap_req_time
             && (part.ctime != *ctime || part.cusec.get() != cusec.get())
         {

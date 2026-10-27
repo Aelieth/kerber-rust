@@ -41,7 +41,7 @@ pub struct SpakeResponse {
 // MIT: `decode_cntype` (lib/krb5/asn.1/asn1_encode.c:1245-1300)
 // MIT: `spake_verify` (plugins/preauth/spake/spake_kdc.c:501-539)
 // MIT: `spake_process` (plugins/preauth/spake/spake_client.c:357-359)
-// the client takes it as an unexpected message, as it takes a support or a response.
+// The client takes it as an unexpected message, as it takes a support or a response.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PaSpake {
     Support(SpakeSupport),

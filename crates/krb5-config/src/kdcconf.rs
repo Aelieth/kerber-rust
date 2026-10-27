@@ -263,7 +263,7 @@ impl KdcConf {
         }
         booleans.apply(&mut conf);
         // MIT: `initialize_realms` (kdc/main.c:622-660)
-        // the `[kdcdefaults]` lists, else `88`.
+        // The `[kdcdefaults]` lists, else `88`.
         // MIT: `init_realm` (kdc/main.c:257-282)
         if let Some(v) = realm_listen.udp().or(default_listen.udp()) {
             conf.kdc_listen.clone_from(v);

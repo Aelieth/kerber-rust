@@ -133,7 +133,7 @@ fn list_all_ccaches(
 }
 
 // MIT: `list_ccache` (klist.c:388-420)
-// a cache that is not initialized is skipped.
+// A cache that is not initialized is skipped.
 fn list_ccache(ctx: &ClientContext, out: &mut String, cache: &Cache, now: u32) -> i32 {
     let Ok(cc) = load_ccache(ctx, &cache.spec()) else {
         return 1;
@@ -147,7 +147,7 @@ fn list_ccache(ctx: &ClientContext, out: &mut String, cache: &Cache, now: u32) -
 }
 
 // MIT: `show_all_ccaches` (klist.c:422-450)
-// each cache of the collection as `show_ccache`
+// Each cache of the collection is shown as `show_ccache`
 fn show_all_ccaches(
     ctx: &ClientContext,
     prog: &str,
@@ -178,7 +178,7 @@ fn show_all_ccaches(
 }
 
 // MIT: `do_ccache` (klist.c:452-465)
-// the default cache, shown or (`-s`) checked.
+// The default cache is shown, or checked with `-s`.
 fn do_ccache(
     ctx: &ClientContext,
     prog: &str,
@@ -400,7 +400,7 @@ fn etype_string(etype: i32) -> String {
 }
 
 // MIT: `printtime` (klist.c:643-651)
-// the local time in `timestamp_width` columns, space-filled.
+// Local time in `timestamp_width` columns, space-filled.
 fn printtime(t: u32) -> String {
     timestamp_to_sfstring(t, timestamp_width() + 1, Some(b' ')).unwrap_or_default()
 }

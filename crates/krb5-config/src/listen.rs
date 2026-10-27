@@ -184,7 +184,7 @@ impl<S: Clone> BindAddresses<S> {
     // MIT: `FOREACH_ELT` (lib/apputils/net-server.c:178-179)
     // Walked from the top.
     // MIT: `DEL` (lib/apputils/net-server.c:197-198)
-    // a removed entry takes the last one's place.
+    // A removed entry takes the last one's place.
     pub fn add(
         &mut self,
         host: Option<String>,

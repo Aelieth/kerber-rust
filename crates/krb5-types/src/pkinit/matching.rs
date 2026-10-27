@@ -66,13 +66,11 @@ const KEYWORDS: [(&[u8], Keyword); 5] = [
 ];
 
 // MIT: `ku_keywords` (pkinit_matching.c:117-121)
-// the key usage words.
 const KU_WORDS: [(&[u8], u32); 2] = [
     (b"digitalSignature", KU_DIGITAL_SIGNATURE),
     (b"keyEncipherment", KU_KEY_ENCIPHERMENT),
 ];
 // MIT: `eku_keywords` (pkinit_matching.c:123-129)
-// the extended key usage words.
 const EKU_WORDS: [(&[u8], u32); 4] = [
     (b"pkinit", EKU_PKINIT),
     (b"msScLogin", EKU_MS_SC_LOGIN),
@@ -235,7 +233,7 @@ fn parse_rule_set(rule: &[u8]) -> Result<(Relation, Vec<Component>), i32> {
 }
 
 // MIT: `parse_rule_component` (pkinit_matching.c:253-372)
-// a keyword and its value up to the next.
+// A keyword and its value up to the next.
 fn parse_rule_component(rule: &mut &[u8]) -> Result<Component, i32> {
     let (kw, n) = keyword_at(rule).ok_or(ENOENT)?;
     let after = &rule[n..];
@@ -359,7 +357,7 @@ fn component_match(
 }
 
 // MIT: `crypto_retrieve_X509_key_usage` (pkinit_crypto_openssl.c:4694-4766)
-// an extension that appears twice gives none.
+// An extension that appears twice gives none.
 fn usage_bits(extensions: &[u8]) -> (u32, u32) {
     let mut ku = Vec::new();
     let mut eku = Vec::new();

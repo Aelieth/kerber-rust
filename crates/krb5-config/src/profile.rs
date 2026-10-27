@@ -61,7 +61,7 @@ impl Krb5Conf {
     }
 
     // MIT: `sort_krb5_padata_sequence` (lib/krb5/krb/get_in_tkt.c:418-424)
-    // the realm string, else "17, 16, 15, 14".
+    // The realm string, else "17, 16, 15, 14".
     #[must_use]
     pub fn preferred_preauth_for(&self, realm: &str) -> Option<&[i32]> {
         if let Some(list) = self
@@ -451,7 +451,7 @@ fn take_first(seen: &mut BTreeSet<String>, key: &str) -> bool {
 }
 
 // MIT: `profile_parse_file` (prof_parse.c:431-434)
-// a parse error is not a successful profile.
+// A parse error is not a successful profile.
 fn parse_into(
     conf: &mut Krb5Conf,
     seen: &mut BTreeSet<String>,
@@ -1162,7 +1162,7 @@ fn refuse(conf: &mut Krb5Conf, why: ProfileError) {
 }
 
 // MIT: `expand_token` (lib/krb5/os/expand_path.c:403-422)
-// an empty token, or one no table name starts with, is `EINVAL`.
+// An empty token, or one no table name starts with, is `EINVAL`.
 // MIT: `k5_expand_path_tokens_extra` (lib/krb5/os/expand_path.c:500-506)
 fn path_tokens_expand(path: &str) -> bool {
     const TOKENS: [&str; 9] = [

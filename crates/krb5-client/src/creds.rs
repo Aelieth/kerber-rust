@@ -112,14 +112,14 @@ impl<'c> OpenCache<'c> {
     }
 
     // MIT: `cache_get` (get_creds.c:114-133)
-    // the first credential matching `m`.
+    // The first credential matching `m`.
     #[must_use]
     pub fn retrieve(&self, m: &MatchCreds<'_>) -> Option<&CcacheCred> {
         self.cc.creds.iter().find(|c| m.matches(c))
     }
 
     // MIT: `krb5_cc_retrieve_cred` (lib/krb5/ccache/ccfns.c:97-111)
-    // a lookup that finds nothing for a server in the referral realm is made again with the
+    // A lookup that finds nothing for a server in the referral realm is made again with the
     // client's realm.
     #[must_use]
     pub fn retrieve_referral(&self, m: &MatchCreds<'_>) -> Option<&CcacheCred> {
@@ -142,7 +142,7 @@ impl<'c> OpenCache<'c> {
     }
 
     // MIT: `krb5_tkt_creds_init` (lib/krb5/krb/get_creds.c:1143-1151)
-    // the start realm is the cache's `start_realm` configuration, else the client's realm.
+    // The start realm is the cache's `start_realm` configuration, else the client's realm.
     fn start_realm(&self, client: &Princ) -> String {
         self.cc.get_config(None, "start_realm").map_or_else(
             || realm_str(&client.0),
@@ -151,7 +151,7 @@ impl<'c> OpenCache<'c> {
     }
 
     // MIT: `fcc_store` (cc_file.c:987-1026)
-    // one append write of the record, under the file's exclusive lock; the error names the file.
+    // One append write of the record, under the file's exclusive lock; the error names the file.
     pub fn store(&mut self, cred: CcacheCred) -> Result<(), Krb5Error> {
         crate::trace::store(self.ctx, &self.spec, &cred);
         let stored = match &self.spec {
@@ -317,11 +317,11 @@ impl GetCredsOptions {
 // MIT: `krb5_get_credentials` (lib/krb5/krb/get_creds.c:1308-1349)
 // MIT: `check_cache` (get_creds.c:1042-1065)
 // MIT: `complete` (get_creds.c:468-471)
-// the store's failure is ignored; so is a cross-realm TGT's.
+// The store's failure is ignored; so is a cross-realm TGT's.
 // MIT: `step_get_tgt` (get_creds.c:952-954)
-// a cross-realm TGT asked for on the path is stored, its failure ignored.
+// A cross-realm TGT asked for on the path is stored, its failure ignored.
 // MIT: `krb5_tkt_creds_step` (lib/krb5/krb/get_creds.c:1292-1305)
-// a request the KDC answers with an unknown server is made again for the next candidate; with none
+// A request the KDC answers with an unknown server is made again for the next candidate; with none
 // left that error stands.
 pub fn get_credentials(
     cache: &mut OpenCache,
@@ -394,7 +394,7 @@ pub fn get_credentials(
 }
 
 // MIT: `begin` (lib/krb5/krb/get_creds.c:1074-1087)
-// a server in the referral realm takes the start realm, and the request starts with the TGT for the
+// A server in the referral realm takes the start realm, and the request starts with the TGT for the
 // server's realm.
 fn request_service(
     cache: &OpenCache,
@@ -541,7 +541,7 @@ fn s4u_identify_user(
 }
 
 // MIT: `k5_identify_realm` (lib/krb5/krb/get_in_tkt.c:2062-2083)
-// the request asks for a 15-second ticket, neither renewable nor forwardable nor proxiable,
+// The request asks for a 15-second ticket, neither renewable nor forwardable nor proxiable,
 // canonicalized, and the realm it ends in is the client's.
 // MIT: `init_creds_step_request` (lib/krb5/krb/get_in_tkt.c:1257-1409)
 fn identify_realm(

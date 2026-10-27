@@ -47,7 +47,7 @@ pub const OTP_FORMAT_BINARY: i32 = 3;
 pub const OTP_FORMAT_BASE64: i32 = 4;
 
 // MIT: `otp_tokeninfo` (lib/krb5/asn.1/asn1_k_encode.c:1579-1579)
-// the SEQUENCE of `krb5_otp_tokeninfo` with the field table `otp_tokeninfo_fields`.
+// The SEQUENCE of `krb5_otp_tokeninfo` with the field table `otp_tokeninfo_fields`.
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct OtpTokenInfo {
     #[rasn(tag(0))]
@@ -57,7 +57,7 @@ pub struct OtpTokenInfo {
     #[rasn(tag(2))]
     pub challenge: Option<OctetString>,
     // MIT: `opt_int32_minus1` (lib/krb5/asn.1/asn1_k_encode.c:49-49)
-    // an int32 of -1 is absent, so `None` is MIT's -1.
+    // An int32 of -1 is absent, so `None` is MIT's -1.
     #[rasn(tag(3))]
     pub length: Option<i32>,
     #[rasn(tag(4))]
@@ -77,7 +77,7 @@ pub struct OtpTokenInfo {
 // MIT: `KRB5_PADATA_OTP_CHALLENGE` (krb5.hin:1838-1838)
 // 141, the padata type that carries it.
 // MIT: `pa_otp_challenge` (lib/krb5/asn.1/asn1_k_encode.c:1598-1598)
-// the SEQUENCE of `krb5_pa_otp_challenge` with the field table `pa_otp_challenge_fields`.
+// The SEQUENCE of `krb5_pa_otp_challenge` with the field table `pa_otp_challenge_fields`.
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct PaOtpChallenge {
     #[rasn(tag(0))]
@@ -97,7 +97,7 @@ pub struct PaOtpChallenge {
 // MIT: `KRB5_PADATA_OTP_REQUEST` (krb5.hin:1839-1839)
 // 142, the padata type that carries it.
 // MIT: `pa_otp_req` (lib/krb5/asn.1/asn1_k_encode.c:1625-1625)
-// the SEQUENCE of `krb5_pa_otp_req` with the field table `pa_otp_req_fields`.
+// The SEQUENCE of `krb5_pa_otp_req` with the field table `pa_otp_req_fields`.
 #[derive(AsnType, Clone, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct PaOtpRequest {
     #[rasn(tag(0))]
@@ -178,7 +178,7 @@ impl Drop for PaOtpRequest {
 }
 
 // MIT: `pa_otp_enc_req` (lib/krb5/asn.1/asn1_k_encode.c:1633-1633)
-// the SEQUENCE of `krb5_data` with the field table `pa_otp_enc_req_fields`.
+// The SEQUENCE of `krb5_data` with the field table `pa_otp_enc_req_fields`.
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct PaOtpEncRequest {
     #[rasn(tag(0))]

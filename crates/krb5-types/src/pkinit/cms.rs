@@ -12,12 +12,12 @@ const OID_CONTENT_TYPE: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09
 const OID_MESSAGE_DIGEST: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x04];
 
 // MIT: `algorithm_identifier` (lib/krb5/asn.1/asn1_k_encode.c:1331-1332)
-// the algorithm OID, then the parameters as their own DER.
+// The algorithm OID, then the parameters as their own DER.
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct CmsAlgorithmIdentifier {
     pub algorithm: ObjectIdentifier,
     // MIT: `opt_der_data` (lib/krb5/asn.1/asn1_k_encode.c:65-65)
-    // an optional field kept as its raw DER.
+    // An optional field kept as its raw DER.
     pub parameters: Option<Any>,
 }
 

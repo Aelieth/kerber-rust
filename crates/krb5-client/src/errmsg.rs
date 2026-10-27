@@ -128,7 +128,7 @@ impl Krb5Error {
     }
 
     // MIT: `krb5int_process_tgs_reply` (lib/krb5/krb/gc_via_tkt.c:193-216)
-    // an unknown server's error with e-text sets the message "Server <the error's server> not found
+    // An unknown server's error with e-text sets the message "Server <the error's server> not found
     // in Kerberos database"; a generic error with e-text sets "KDC returned error string:
     // \<text\>".
     #[must_use]
@@ -208,7 +208,7 @@ impl Krb5Error {
     // MIT: `set_errmsg_filename` (cc_file.c:117-124)
     // "\<message\> (filename: \<path\>)".
     // MIT: `open_cache_file` (cc_file.c:347-352)
-    // a lock failure is the lock's errno, not `interpret_errno`'s code.
+    // A lock failure is the lock's errno, not `interpret_errno`'s code.
     #[must_use]
     pub fn from_file_cache(e: &io::Error, path: &Path) -> Self {
         let code = match krb5_protocol::FccFailure::of(e) {

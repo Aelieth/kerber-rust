@@ -97,7 +97,7 @@ impl KadmindListen {
 }
 
 // MIT: `krb5_aprof_get_string` (lib/kadm5/alt_prof.c:184-211)
-// with `uselast`, the last of the values.
+// With `uselast`, the last of the values.
 // MIT: `krb5_aprof_get_int32` (lib/kadm5/alt_prof.c:277-299)
 fn last_value<'a>(profile: Option<&'a Krb5Conf>, realm: &str, name: &str) -> Option<&'a str> {
     profile

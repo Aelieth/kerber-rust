@@ -228,7 +228,7 @@ fn kvno(ctx: &Ctx<'_>, cache: &mut OpenCache, name: &str) -> Result<CcacheCred, 
 }
 
 // MIT: `s4u_identify_user` (lib/krb5/krb/s4u_creds.c:40-88)
-// an enterprise name is looked up from the service realm by that probe, not by the text after `@`.
+// An enterprise name is looked up from the service realm by that probe, not by the text after `@`.
 fn identify_user(user: Princ, _me: &Princ) -> Princ {
     user
 }

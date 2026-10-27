@@ -237,7 +237,6 @@ pub fn proxy_lookup(cache: &OpenCache, server: &Princ, found: bool, srealm: &str
 }
 
 // MIT: `krb5_cc_store_cred` (lib/krb5/ccache/ccfns.c:80-85)
-// a credential stored in the cache.
 pub fn store(ctx: &ClientContext, spec: &CcSpec, cred: &CcacheCred) {
     if trace::enabled() {
         trace::store_creds(&ccname(ctx, spec), std::slice::from_ref(cred));

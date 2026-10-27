@@ -520,9 +520,9 @@ mod tests {
 
     /// Stricter, fail-closed deviation: MIT reads a PA-ENC-TS-ENC as a wrong-length nonce, with no clock check, and this port refuses it as a nonce.
     // MIT: `decode_atype` (lib/krb5/asn.1/asn1_encode.c:1184-1199)
-    /// an implicit tag decodes its element's contents as the base type, with no tag check of its own.
+    /// An implicit tag decodes its contents as the base type, with no tag check of its own.
     // MIT: `check_atype_tag` (lib/krb5/asn.1/asn1_encode.c:1099-1105)
-    /// an implicit tag's construction bit is not checked.
+    /// An implicit tag's construction bit is not checked.
     #[test]
     fn a_pa_enc_ts_enc_is_not_read_as_a_nonce() {
         let ts = encode(&PaEncTsEnc {

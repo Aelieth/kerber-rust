@@ -471,7 +471,7 @@ fn create(util: &mut Util, args: &[String]) -> u8 {
         }
     };
     // MIT: `ctx_create_db` (plugins/kdb/db2/kdb_db2.c:710-716)
-    // a temporary database's leftover files are destroyed before it is created.
+    // A temporary database's leftover files are destroyed before it is created.
     if util.db_args.temporary {
         let _ = destroy_file(&file);
         for suffix in [".kadm5", ".kadm5.lock"] {

@@ -31,7 +31,7 @@ pub struct KinitArgs {
     pub anonymous: bool,
     pub canonicalize: bool,
     // MIT: `add_preauth_opt` (clients/kinit/kinit.c:196-219)
-    // the attribute is what precedes the first `=`.
+    // The attribute is what precedes the first `=`.
     pub pa_opts: Vec<(String, String)>,
     pub armor_ccache: Option<String>,
     pub in_ccache: Option<String>,
@@ -502,7 +502,6 @@ pub struct KvnoGateArgs {
 }
 
 // MIT: `xusage` (kvno.c:41-52)
-// the usage text, `prog` naming the program.
 #[must_use]
 pub fn kvno_usage(prog: &str) -> String {
     format!(

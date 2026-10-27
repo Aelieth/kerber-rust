@@ -703,7 +703,7 @@ fn tgs_fast_reply_key(
     );
     let reply_key = apply_strengthen(sk, sub)?;
     // MIT: `krb5int_fast_reply_key` (lib/krb5/krb/fast.c:570-592)
-    // the strengthened key is traced as a hash.
+    // The strengthened key is traced as a hash.
     trace::fast_reply_key((&reply_key).into());
     Ok((reply_key, fast.padata))
 }
@@ -1317,7 +1317,7 @@ fn tgt_is_local_realm(tgt: &AsOutcome) -> bool {
 
 #[must_use]
 // MIT: `krb5int_process_tgs_reply` (gc_via_tkt.c:247-252)
-/// ok-as-delegate dropped when a foreign TGT lacks it.
+/// Dropped when a foreign TGT lacks ok-as-delegate.
 pub fn tgs_strip_ok_as_delegate(
     tgt_local_realm: bool,
     tgt_ok_as_delegate: bool,

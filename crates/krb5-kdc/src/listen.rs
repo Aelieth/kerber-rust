@@ -954,7 +954,7 @@ mod tests {
 
     /// Past the cap a new connection evicts the one that started first, and among connections of the same second the one met first from the top of the table: c1 started a second before c2 and c3, so c3 evicts c1 and takes its place at the table's start; c4 then meets c2 first from the top, and evicts it.
     // MIT: `kill_lru_stream_connection` (lib/apputils/net-server.c:1198-1223)
-    /// the scan from the top keeps the first of a tie.
+    /// The scan from the top keeps the first of a tie.
     #[test]
     fn tcp_over_cap_evicts_the_connection_that_started_first() {
         let (addr, flag, h) = serving(ListenLimits {

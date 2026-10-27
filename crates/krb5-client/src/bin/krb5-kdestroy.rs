@@ -48,7 +48,6 @@ enum Parsed {
 }
 
 // MIT: `usage` (kdestroy.c:49-59)
-// the usage text, `prog` naming the program.
 fn usage(prog: &str) -> String {
     format!(
         "Usage: {prog} [-A] [-q] [-c cache_name] [-p princ_name]\n\

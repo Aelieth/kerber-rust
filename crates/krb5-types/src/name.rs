@@ -136,7 +136,7 @@ pub fn unparse_name(comps: &[String], realm: &str) -> String {
 }
 
 // MIT: `copy_component_quoting` (lib/krb5/krb/unparse.c:103-107)
-// with no realm, `REALM_SEP` is copied as is.
+// With no realm, `REALM_SEP` is copied as is.
 #[must_use]
 pub fn unparse_components_no_realm(comps: &[String]) -> String {
     comps

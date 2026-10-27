@@ -22,7 +22,7 @@ impl ApRep {
 }
 
 // MIT: `ap_rep_msg_type` (lib/krb5/asn.1/asn1_k_encode.c:760-760)
-// the msg-type is an immediate with no error, so any INTEGER of up to eight octets decodes and none
+// The msg-type is an immediate with no error, so any INTEGER of up to eight octets decodes and none
 // is kept.
 #[derive(AsnType, Decode)]
 #[rasn(tag(explicit(application, 15)))]
@@ -159,7 +159,7 @@ impl KrbPriv {
 }
 
 // MIT: `priv_msg_type` (lib/krb5/asn.1/asn1_k_encode.c:845-845)
-// the msg-type is an immediate with no error, so any INTEGER of up to eight octets decodes and none
+// The msg-type is an immediate with no error, so any INTEGER of up to eight octets decodes and none
 // is kept.
 #[derive(AsnType, Decode)]
 #[rasn(tag(explicit(application, 21)))]
@@ -219,10 +219,10 @@ impl std::fmt::Debug for EncKrbPrivPart {
 }
 
 // MIT: `decode_seqno` (lib/krb5/asn.1/asn1_k_encode.c:133-146)
-// an INTEGER from `INT32_MIN` to `0xFFFFFFFF` decodes, a negative one (an old Heimdal's) as the
+// An INTEGER from `INT32_MIN` to `0xFFFFFFFF` decodes, a negative one (an old Heimdal's) as the
 // same 32 bits unsigned, and a wider one is `ASN1_OVERFLOW`, which fails the message.
 // MIT: `encode_seqno` (asn1_k_encode.c:124-132)
-// written unsigned.
+// It is written unsigned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct WireSeqNumber(pub(crate) u32);
 
@@ -437,7 +437,7 @@ impl KrbCred {
 }
 
 // MIT: `cred_msg_type` (lib/krb5/asn.1/asn1_k_encode.c:877-877)
-// the msg-type is an immediate with no error, so any INTEGER of up to eight octets decodes and none
+// The msg-type is an immediate with no error, so any INTEGER of up to eight octets decodes and none
 // is kept.
 #[derive(AsnType, Decode)]
 #[rasn(tag(explicit(application, 22)))]
