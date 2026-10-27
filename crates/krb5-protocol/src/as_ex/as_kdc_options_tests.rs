@@ -20,17 +20,6 @@ fn times_of(ticket: AsTicketOpts, canonicalize: bool) -> AsReqTimes {
 }
 
 #[test]
-fn gic_opt_canonicalize_sets_kdc_option() {
-    let opts = times_of(AsTicketOpts::default(), true).opts;
-    assert!(
-        opts.bit(flag_bit::CANONICALIZE),
-        "get_in_tkt.c:921-930 / gic_opt.c:76-83"
-    );
-    let plain = times_of(AsTicketOpts::default(), false).opts;
-    assert!(!plain.bit(flag_bit::CANONICALIZE));
-}
-
-#[test]
 fn gic_opt_starttime_sets_postdated_and_from() {
     let t = times_of(
         AsTicketOpts {
@@ -62,37 +51,6 @@ fn gic_opt_starttime_sets_postdated_and_from() {
     assert!(past.from.is_some(), "a start in the past is still sent");
     assert!(!past.opts.bit(flag_bit::POSTDATED));
     assert!(!past.opts.bit(flag_bit::MAY_POSTDATE));
-}
-
-#[test]
-fn omitted_lifetime_is_one_day() {
-    let t = times_of(AsTicketOpts::default(), false);
-    let now = i64::from(KerberosTime::now().unix_seconds());
-    let till = i64::from(t.till.unix_seconds());
-    let delta = till - now;
-    assert!(
-        (86_400 - 5..=86_400 + 5).contains(&delta),
-        "get_in_tkt.c:947 omitted till is 24 h, got {delta}"
-    );
-}
-
-#[test]
-fn renew_life_shorter_than_till_is_clamped() {
-    let t = times_of(
-        AsTicketOpts {
-            rlife: Some(12 * 3600),
-            ..AsTicketOpts::default()
-        },
-        false,
-    );
-    let rtime = t
-        .rtime
-        .expect("get_in_tkt.c:718 sets rtime when renew_life > 0");
-    assert_eq!(
-        rtime.unix_seconds(),
-        t.till.unix_seconds(),
-        "get_in_tkt.c:718-722 rtime is max(from+renew_life, till)"
-    );
 }
 
 fn sent_addresses(

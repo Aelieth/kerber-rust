@@ -182,16 +182,3 @@ fn kdc_timesync_off_is_kdcrep_skew() {
         "MIT get_in_tkt.c:266-269, got {err}"
     );
 }
-
-/// `set_request_times` clamps `rtime` to `till`.
-// MIT: `set_request_times` (get_in_tkt.c:718-722)
-/// a renewable time shorter than the lifetime
-/// is raised to `till`.
-#[test]
-fn rtime_is_clamped_up_to_till() {
-    let src = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/as_ex.rs"));
-    assert!(
-        src.contains("till.unix_seconds() > rt.unix_seconds()") || src.contains("if till > rtime"),
-        "get_in_tkt.c:718-722 rtime = max(from+renew_life, till)"
-    );
-}

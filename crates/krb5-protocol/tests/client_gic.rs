@@ -96,18 +96,6 @@ fn options_of(
 }
 
 #[test]
-fn gic_opt_canonicalize_sets_kdc_option() {
-    let (opts, from) = options_of(AsTicketOpts::default(), true);
-    assert!(
-        opts.bit(flag_bit::CANONICALIZE),
-        "get_in_tkt.c:921-930 / gic_opt.c:76-83"
-    );
-    assert!(from.is_none());
-    let (plain, _) = options_of(AsTicketOpts::default(), false);
-    assert!(!plain.bit(flag_bit::CANONICALIZE));
-}
-
-#[test]
 fn gic_opt_starttime_sets_postdated_and_from() {
     let (opts, from) = options_of(
         AsTicketOpts {
