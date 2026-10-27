@@ -76,6 +76,3 @@ mod test_plugins;
 pub use test_plugins::{
     DemoPolicy, DemoPreauth, GREET_AD_TYPE, GREET_TEXT, GreetAuth, TestAudit, TestPolicy,
 };
-
-#[cfg(test)]
-pub use test_plugins::DenyPolicy;

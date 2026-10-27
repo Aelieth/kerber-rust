@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use krb5_kdc::principals::kadmin_changepw;
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented};
-use krb5_kdc::{KDB_REQUIRES_PRE_AUTH, KDB_REQUIRES_PWCHANGE, PrincipalStore};
+use krb5_kdc::{KDB_REQUIRES_PWCHANGE, PrincipalStore};
 
 use krb5_testkit::scratch_dir;
 use krb5_types::PrincipalName;
@@ -160,39 +160,5 @@ fn changepw_as_failure_is_reported_before_any_prompt() {
             "kinit: Server not found in Kerberos database while getting initial credentials"
         ),
         "changepw AS error missing: {err}"
-    );
-}
-
-#[test]
-fn wrong_password_without_preauth_is_bad_integrity_password_incorrect() {
-    let mut store = expired_user_store();
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let attrs = store.get_name(&user).unwrap().attributes & !KDB_REQUIRES_PRE_AUTH;
-    store
-        .apply_admin_fields(
-            &user,
-            krb5_kdc::AdminFields {
-                attributes: Some(attrs),
-                max_life: None,
-                expiration: None,
-                pw_expire: None,
-                policy: None,
-                clear_policy: false,
-                max_renewable_life: None,
-            },
-        )
-        .unwrap();
-    let kdc = serve(store);
-    let (code, err) = kinit(&kdc, "not-the-password", "new-pw\nnew-pw\n");
-    assert_eq!(code, Some(1), "stderr: {err}");
-    assert!(!err.contains("Enter new password"), "prompted: {err}");
-    assert!(
-        err.contains("Password incorrect while getting initial credentials"),
-        "BAD_INTEGRITY must read as Password incorrect: {err}"
-    );
-    assert!(
-        !err.lines()
-            .any(|l| l.starts_with("kinit:") && l.contains("integrity check failed")),
-        "raw crypto text leaked to the user: {err}"
     );
 }

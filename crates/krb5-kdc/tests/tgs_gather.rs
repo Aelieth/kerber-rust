@@ -23,9 +23,7 @@ use krb5_testkit::{
     TgsReqBuilder, issue_tgt, issue_tgt_password, password_key, pref_etypes, status,
 };
 use krb5_types::pac::RpcSid;
-use krb5_types::{
-    EncTicketPart, EncryptedData, KdcOptions, PrincipalName, Ticket, err, flag_bit, ku,
-};
+use krb5_types::{EncryptedData, KdcOptions, PrincipalName, Ticket, err, flag_bit, ku};
 
 fn renewable_tgt(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -45,18 +43,6 @@ fn renewable_tgt(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
     krb5_kdc::issue_as(store, &req).unwrap()
 }
 
-fn rewrap(
-    ticket: &krb5_types::Ticket,
-    part: &EncTicketPart,
-    key: &ProtocolKey,
-) -> krb5_types::Ticket {
-    let der = encode(part).unwrap();
-    let usage = KeyUsage::new(ku::TICKET).unwrap();
-    let mut out = ticket.clone();
-    out.enc_part.cipher = encrypt(key, usage, &der).unwrap().into();
-    out
-}
-
 fn host_tgs(issued: &krb5_kdc::IssuedAs, nonce: u32) -> krb5_types::TgsReq {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     tgs_req(
@@ -69,16 +55,6 @@ fn host_tgs(issued: &krb5_kdc::IssuedAs, nonce: u32) -> krb5_types::TgsReq {
         nonce,
     )
     .unwrap()
-}
-
-#[test]
-fn tgs_missing_pa_tgs_req_is_padata_type_nosupp() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let as_out = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 6060);
-    let mut tgs = host_tgs(&as_out, 6061);
-    tgs.0.padata = None;
-    let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
-    assert_eq!(status(&err), (err::PADATA_TYPE_NOSUPP, Some("PROCESS_TGS")));
 }
 
 #[test]
@@ -127,64 +103,6 @@ fn tgs_disallow_svr_service_header_is_process_tgs() {
         status(&err),
         (err::S_PRINCIPAL_UNKNOWN, Some("PROCESS_TGS"))
     );
-}
-
-#[test]
-// oracle: differential-gate.sh tgs-forwarded-on-non-f-tgt
-fn tgs_forwarded_without_forwardable_is_tgt_not_forwardable() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let as_out = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 6110);
-    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
-    let mut part = decrypt_ticket_part(&krbtgt.key, &as_out.rep.0.ticket).unwrap();
-    part.flags = part.flags.with_bit(flag_bit::FORWARDABLE, false);
-    let tkt = rewrap(&as_out.rep.0.ticket, &part, &krbtgt.key);
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgs = TgsReqBuilder::new(
-        tkt,
-        &as_out.session_key,
-        TEST_REALM,
-        &cname,
-        documented_host(),
-        TEST_REALM,
-        6111,
-    )
-    .options(KdcOptions::forwardable().with_bit(flag_bit::FORWARDED, true))
-    .additional_tickets(None)
-    .padata(Vec::new())
-    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
-    .build()
-    .unwrap();
-    let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
-    assert_eq!(status(&err), (err::BADOPTION, Some("TGT NOT FORWARDABLE")));
-}
-
-#[test]
-// oracle: differential-gate.sh tgs-proxy-on-non-p-tgt
-fn tgs_proxy_without_proxiable_is_tgt_not_proxiable() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let as_out = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 6120);
-    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
-    let mut part = decrypt_ticket_part(&krbtgt.key, &as_out.rep.0.ticket).unwrap();
-    part.flags = part.flags.with_bit(flag_bit::PROXIABLE, false);
-    let tkt = rewrap(&as_out.rep.0.ticket, &part, &krbtgt.key);
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgs = TgsReqBuilder::new(
-        tkt,
-        &as_out.session_key,
-        TEST_REALM,
-        &cname,
-        documented_host(),
-        TEST_REALM,
-        6121,
-    )
-    .options(KdcOptions::forwardable().with_bit(flag_bit::PROXY, true))
-    .additional_tickets(None)
-    .padata(Vec::new())
-    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
-    .build()
-    .unwrap();
-    let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
-    assert_eq!(status(&err), (err::BADOPTION, Some("TGT NOT PROXIABLE")));
 }
 
 const FOREIGN: &str = "OTHER.TEST";

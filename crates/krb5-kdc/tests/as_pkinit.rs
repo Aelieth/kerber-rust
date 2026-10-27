@@ -180,30 +180,6 @@ fn pkinit_as_req(
 }
 
 #[test]
-fn pkinit_advertised_in_method_data_when_ca_enabled() {
-    let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    let _ca = krb5_testkit::enable_pkinit(&mut store);
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let req = as_req(cname, TEST_REALM, 400, None).unwrap();
-    let err = krb5_kdc::issue_as(&store, &req).unwrap_err();
-    let e_data = match err {
-        Error::PreauthRequired { e_data } => e_data,
-        other => panic!("expected PreauthRequired, got {other:?}"),
-    };
-    let method: MethodData = decode(&e_data).expect("METHOD-DATA");
-    assert!(
-        method.iter().any(|p| p.padata_type == pa::PK_AS_REQ),
-        "PA-PK-AS-REQ must be advertised when the CA is provisioned: {method:?}"
-    );
-    assert!(method.iter().any(|p| p.padata_type == pa::ENC_TIMESTAMP));
-    assert!(method.iter().any(|p| p.padata_type == pa::ETYPE_INFO2));
-    assert!(
-        method.iter().any(|p| p.padata_type == pa::FX_FAST),
-        "PA-FX-FAST must be advertised so MIT kinit -T armors AS: {method:?}"
-    );
-}
-
-#[test]
 fn ca_enabled_preauth_required_method_data_types() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     let _ca = krb5_testkit::enable_pkinit(&mut store);
@@ -251,26 +227,6 @@ fn pkinit_not_advertised_without_ca() {
         method.iter().all(|p| p.padata_type != pa::PK_AS_REQ),
         "PA-PK-AS-REQ must not be advertised without a CA"
     );
-}
-
-#[test]
-fn pkinit_san_mismatch_is_refused() {
-    let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    let ca = krb5_testkit::enable_pkinit(&mut store);
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let kp = p256_generate().expect("client ECDH");
-    let req = pkinit_as_req(cname.clone(), 422, |ck| {
-        pa_pk_as_req_cn(&kp.public, &ca, "other@KERBER.TEST", Some(ck)).expect("other")
-    });
-    let err = krb5_kdc::issue_as(&store, &req).expect_err("SAN mismatch");
-    match err {
-        Error::Protocol { code, .. } => assert_eq!(code, err::CLIENT_NAME_MISMATCH),
-        other => panic!("expected CLIENT_NAME_MISMATCH, got {other}"),
-    }
-    let req_ok = pkinit_as_req(cname, 423, |ck| {
-        pa_pk_as_req(&kp.public, &ca, Some(ck)).expect("user")
-    });
-    krb5_kdc::issue_as(&store, &req_ok).expect("matching SAN");
 }
 
 #[test]

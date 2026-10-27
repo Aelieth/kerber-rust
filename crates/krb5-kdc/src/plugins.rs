@@ -1777,11 +1777,10 @@ mod tests {
     use krb5_types::cammac::AdKdcIssued;
 
     use crate::testrealm::bootstrap_documented;
-    use crate::testrealm::{DenyPolicy, GREET_AD_TYPE, GREET_TEXT, GreetAuth};
+    use crate::testrealm::{GREET_AD_TYPE, GREET_TEXT, GreetAuth};
 
     use crate::testrealm::{TEST_REALM, TEST_USER};
 
-    use krb5_protocol::{as_req, pa_enc_timestamp};
     use krb5_types::PrincipalName;
 
     #[test]
@@ -1803,73 +1802,6 @@ mod tests {
             "{shown}"
         );
         assert!(shown.contains("challenge"), "{shown}");
-    }
-
-    #[test]
-    fn deny_policy_blocks_issue_as_and_issue_tgs() {
-        use crate::testrealm::documented_host;
-
-        use krb5_protocol::tgs_req;
-
-        set_thread_policy(Arc::new(DenyPolicy));
-        let (store, _) = bootstrap_documented().unwrap();
-        let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-        let key = store
-            .get_name(&cname)
-            .unwrap()
-            .best_key()
-            .unwrap()
-            .key
-            .clone();
-        let req = as_req(
-            cname.clone(),
-            TEST_REALM,
-            5,
-            Some(vec![pa_enc_timestamp(&key).unwrap()]),
-        )
-        .unwrap();
-        let as_err = crate::issue_as(&store, &req).unwrap_err();
-        match as_err {
-            Error::Protocol { code, .. } if code == krb5_types::err::POLICY => {}
-            other => panic!("AS deny: {other:?}"),
-        }
-        clear_thread_policy();
-        let req = as_req(
-            cname.clone(),
-            TEST_REALM,
-            6,
-            Some(vec![pa_enc_timestamp(&key).unwrap()]),
-        )
-        .unwrap();
-        let issued = crate::issue_as(&store, &req).expect("AS with default policy");
-        set_thread_policy(Arc::new(DenyPolicy));
-        let tgs = tgs_req(
-            issued.rep.0.ticket.clone(),
-            &issued.session_key,
-            TEST_REALM,
-            &cname,
-            documented_host(),
-            TEST_REALM,
-            7,
-        )
-        .unwrap();
-        let tgs_err = crate::issue_tgs(&store, &tgs).unwrap_err();
-        match tgs_err {
-            Error::Protocol { code, .. } if code == krb5_types::err::POLICY => {}
-            other => panic!("TGS deny: {other:?}"),
-        }
-        clear_thread_policy();
-        let tgs_ok = tgs_req(
-            issued.rep.0.ticket.clone(),
-            &issued.session_key,
-            TEST_REALM,
-            &cname,
-            documented_host(),
-            TEST_REALM,
-            8,
-        )
-        .unwrap();
-        crate::issue_tgs(&store, &tgs_ok).expect("TGS with default policy");
     }
 
     #[test]

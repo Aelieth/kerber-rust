@@ -236,39 +236,6 @@ impl KdcPolicy for TestPolicy {
     }
 }
 
-#[cfg(test)]
-pub struct DenyPolicy;
-
-#[cfg(test)]
-impl KdcPolicy for DenyPolicy {
-    fn check_as(
-        &self,
-        _store: &dyn PrincipalRead,
-        _client: &Principal,
-        _indicators: &[String],
-    ) -> Result<PolicyAdjustment, Error> {
-        Err(Error::Protocol {
-            code: krb5_types::err::POLICY,
-            text: Some("kdcpolicy".into()),
-            e_data: None,
-            detail: None,
-        })
-    }
-    fn check_tgs(
-        &self,
-        _store: &dyn PrincipalRead,
-        _sname: &PrincipalName,
-        _indicators: &[String],
-    ) -> Result<PolicyAdjustment, Error> {
-        Err(Error::Protocol {
-            code: krb5_types::err::POLICY,
-            text: Some("kdcpolicy".into()),
-            e_data: None,
-            detail: None,
-        })
-    }
-}
-
 #[derive(Debug, Default)]
 pub struct DemoPolicy {
     pub(crate) as_checks: AtomicU64,

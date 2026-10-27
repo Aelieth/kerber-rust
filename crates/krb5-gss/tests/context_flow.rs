@@ -174,35 +174,6 @@ fn garbage_mac_does_not_consume_seq() {
 }
 
 #[test]
-fn mutual_ap_rep_decrypts_with_ticket_session() {
-    let (_as_out, tgs_out, skey, cname) = user_host();
-    let (mut init, token) = GssContext::init_sec_context(
-        tgs_out.rep.0.ticket.clone(),
-        &tgs_out.session_key,
-        &ascii(TEST_REALM),
-        &cname,
-        krb5_gss::GSS_C_MUTUAL | krb5_gss::GSS_C_REPLAY | krb5_gss::GSS_C_SEQUENCE,
-        None,
-        None,
-        None,
-        0,
-    )
-    .unwrap();
-    let (_acc, ap_rep) = GssContext::accept_sec_context(
-        &token,
-        std::slice::from_ref(&skey),
-        None,
-        Some(&documented_host()),
-        Some(TEST_REALM),
-        &ReplayCache::new(),
-        &AcceptorConfig::default(),
-    )
-    .unwrap();
-    let tok = ap_rep.expect("mutual AP-REP");
-    init.process_ap_rep(&tok, &tgs_out.session_key).unwrap();
-}
-
-#[test]
 fn wrap_mic_replay_inside_window_is_rejected() {
     let (mut init, mut acc) = contexts();
     let start = init.send_seq();

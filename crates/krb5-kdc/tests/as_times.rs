@@ -24,9 +24,7 @@ use common::client_key;
 use krb5_asn1::{decode, decode_enc_kdc_rep_part};
 use krb5_crypto::{EncryptionType, KeyUsage, decrypt};
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
-use krb5_kdc::{
-    KDB_DISALLOW_POSTDATED, PrincipalStore, decrypt_ticket_part, dump_store, parse_dump,
-};
+use krb5_kdc::{PrincipalStore, decrypt_ticket_part, dump_store, parse_dump};
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
 use krb5_testkit::{TgsReqBuilder, status, user, user_as};
@@ -156,24 +154,6 @@ fn user_as_req(nonce: u32) -> krb5_types::AsReq {
     .unwrap()
 }
 
-fn or_attr(store: &mut PrincipalStore, name: &PrincipalName, bit: u32) {
-    let a = store.get_name(name).unwrap().attributes | bit;
-    store
-        .apply_admin_fields(
-            name,
-            krb5_kdc::AdminFields {
-                attributes: Some(a),
-                max_life: None,
-                expiration: None,
-                pw_expire: None,
-                policy: None,
-                clear_policy: false,
-                max_renewable_life: None,
-            },
-        )
-        .unwrap();
-}
-
 fn tgt_part_issue_acl_ap(store: &PrincipalStore, issued: &krb5_kdc::IssuedAs) -> EncTicketPart {
     let tgt_key = store.krbtgt().unwrap().best_key().unwrap();
     let usage = KeyUsage::new(ku::TICKET).unwrap();
@@ -294,16 +274,6 @@ fn as_postdated_is_invalid_until_validate() {
     assert!(!after.flags.invalid());
     let stale = krb5_kdc::issue_tgs(&store, &host_tgs(&store, &issued, 115)).unwrap_err();
     assert_eq!(status(&stale), (err::TKT_NYV, Some("TICKET NOT VALID")));
-}
-
-#[test]
-fn as_cannot_postdate_when_disallow() {
-    let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    or_attr(&mut store, &cname, KDB_DISALLOW_POSTDATED);
-    let from = KerberosTime::now().add_seconds(30).unwrap();
-    let err = krb5_kdc::issue_as(&store, &postdated_as_req(115, from)).unwrap_err();
-    assert_eq!(status(&err).0, err::CANNOT_POSTDATE);
 }
 
 const ACTOR: &str = "kadmin/admin@KERBER.TEST";

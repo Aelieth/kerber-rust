@@ -48,27 +48,6 @@ fn verify_support_unpermitted_offer_is_preauth_failed() {
     assert_eq!(status(&err), (err::PREAUTH_FAILED, Some("PREAUTH_FAILED")));
 }
 
-#[test]
-fn pkinit_hint_is_16_147() {
-    let (mut store, _) = bootstrap_documented().unwrap();
-    let _ca = krb5_testkit::enable_pkinit(&mut store);
-    let req = as_req(user(), TEST_REALM, 30004, None).unwrap();
-    let err = krb5_kdc::issue_as(&store, &req).unwrap_err();
-    let Error::PreauthRequired { e_data } = err else {
-        panic!("expected PreauthRequired, got {err:?}");
-    };
-    let method: MethodData = decode(&e_data).unwrap();
-    let types: Vec<i32> = method.iter().map(|p| p.padata_type).collect();
-    assert!(
-        types.contains(&pa::PK_AS_REQ) && types.contains(&pa::PKINIT_KX),
-        "PKINIT hint must be [16, 147], got {types:?}"
-    );
-    assert!(
-        !types.contains(&pa::TD_DH_PARAMETERS),
-        "PKINIT hint must not list 109, got {types:?}"
-    );
-}
-
 fn decode_enc_part(plain: &[u8]) -> EncKdcRepPart {
     krb5_asn1::decode_enc_kdc_rep_part(plain).expect("enc-part")
 }

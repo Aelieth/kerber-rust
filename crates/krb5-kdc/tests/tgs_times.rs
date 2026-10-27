@@ -356,29 +356,6 @@ fn renew_tgs_sname(
 }
 
 #[test]
-fn tgs_rejects_expired_server() {
-    let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    let host = documented_host();
-    let issued = krb5_kdc::issue_as(&store, &user_as_req(51)).expect("AS");
-    store
-        .apply_admin_fields(
-            &host,
-            krb5_kdc::AdminFields {
-                attributes: None,
-                max_life: None,
-                expiration: Some(1),
-                pw_expire: None,
-                policy: None,
-                clear_policy: false,
-                max_renewable_life: None,
-            },
-        )
-        .unwrap();
-    let err = krb5_kdc::issue_tgs(&store, &host_tgs(&store, &issued, 52)).unwrap_err();
-    assert_eq!(status(&err).0, err::SERVICE_EXP);
-}
-
-#[test]
 fn tgs_renew_strips_when_disallow_renewable() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);

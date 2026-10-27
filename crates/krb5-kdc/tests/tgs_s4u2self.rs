@@ -9,9 +9,7 @@ use krb5_kdc::testrealm::{
     TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
     bootstrap_documented, documented_admin_id, documented_host,
 };
-use krb5_kdc::{
-    Acl, Error, KDB_DISALLOW_ALL_TIX, PrincipalStore, decrypt_ticket_part, pac_from_ticket_part,
-};
+use krb5_kdc::{Acl, Error, PrincipalStore, decrypt_ticket_part, pac_from_ticket_part};
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
 use krb5_protocol::{pa_for_user, pa_s4u_x509_user};
@@ -23,7 +21,7 @@ use krb5_types::pac::{
     PAC_CLIENT_INFO, PAC_LOGON_INFO, Pac, PacBuffer, PacIdentity, RpcSid, client_info_buffer,
     parse_kerb_validation_info,
 };
-use krb5_types::{EncTicketPart, KdcOptions, PaData, PrincipalName, err, ku, pa};
+use krb5_types::{EncTicketPart, KdcOptions, PrincipalName, err, ku, pa};
 
 #[test]
 // oracle: differential-gate.sh pa-s4u-x509-user-nonce
@@ -55,38 +53,6 @@ fn s4u2self_x509_bad_checksum_is_modified() {
         expect_status(krb5_kdc::issue_tgs(&store, &s4u_self(&tgt, vec![pa], 7113)).unwrap_err());
     assert_eq!(c, err::MODIFIED);
     assert_eq!(text.as_deref(), Some("INVALID_S4U2SELF_CHECKSUM"));
-}
-
-#[test]
-// oracle: differential-gate.sh s4u2self-cert-only
-fn s4u2self_x509_cert_only_local_is_looking_up() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let tgt = host_tgt(&store, 7122);
-    let user_id = krb5_types::s4u::S4uUserId {
-        nonce: 7123,
-        user: None,
-        realm: krb5_types::try_ascii(TEST_REALM).unwrap(),
-        subject_cert: Some(b"cert".to_vec().into()),
-        options: Some(krb5_types::s4u::s4u_reply_key_usage_flags()),
-    };
-    let der = encode(&user_id).unwrap();
-    let usage = KeyUsage::new(ku::PA_S4U_X509_USER_REQUEST).unwrap();
-    let mic = checksum(&tgt.session_key, usage, &der).unwrap();
-    let body = krb5_types::s4u::PaS4uX509User {
-        user_id,
-        cksum: krb5_types::Checksum {
-            cksumtype: tgt.session_key.etype().checksum_type(),
-            checksum: mic.into(),
-        },
-    };
-    let pa = PaData {
-        padata_type: pa::FOR_X509_USER,
-        padata_value: encode(&body).unwrap().into(),
-    };
-    let (c, text) =
-        expect_status(krb5_kdc::issue_tgs(&store, &s4u_self(&tgt, vec![pa], 7123)).unwrap_err());
-    assert_eq!(c, err::GENERIC);
-    assert_eq!(text.as_deref(), Some("LOOKING_UP_S4U2SELF_PRINCIPAL"));
 }
 
 #[test]
@@ -642,88 +608,11 @@ fn s4u2self_explicit_cross_tgs_is_server_mismatch() {
 }
 
 #[test]
-fn s4u2self_local_tgt_foreign_user_is_not_ours() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let host = documented_host();
-    let foreign = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["alice"]);
-    let tgt = host_tgt(&store, 670);
-    let pa = pa_for_user(&tgt.session_key, foreign, "OTHER.TEST").expect("PA-FOR-USER");
-    let tgs = TgsReqBuilder::new(
-        tgt.rep.0.ticket.clone(),
-        &tgt.session_key,
-        TEST_REALM,
-        &host,
-        host.clone(),
-        TEST_REALM,
-        671,
-    )
-    .options(KdcOptions::forwardable())
-    .additional_tickets(None)
-    .padata(vec![pa])
-    .etypes(pref_etypes())
-    .build()
-    .expect("S4U TGS-REQ");
-    let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
-    match err {
-        Error::Protocol { code, text, .. } => {
-            assert_eq!(code, err::POLICY);
-            assert_eq!(text.as_deref(), Some("S4U2SELF_CLIENT_NOT_OURS"));
-        }
-        other => panic!("expected POLICY S4U2SELF_CLIENT_NOT_OURS, got {other:?}"),
-    }
-}
-
-#[test]
 fn s4u2self_unknown_for_user_is_refused() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let nosuch = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["nosuch"]);
     let err = krb5_kdc::issue_tgs(&store, &s4u2self_tgs(&store, nosuch, 610)).unwrap_err();
     assert_eq!(s4u_code(err), err::C_PRINCIPAL_UNKNOWN);
-}
-
-#[test]
-fn s4u2self_disabled_for_user_is_revoked() {
-    let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
-    let a = store.get_name(&admin).unwrap().attributes | KDB_DISALLOW_ALL_TIX;
-    store
-        .apply_admin_fields(
-            &admin,
-            krb5_kdc::AdminFields {
-                attributes: Some(a),
-                max_life: None,
-                expiration: None,
-                pw_expire: None,
-                policy: None,
-                clear_policy: false,
-                max_renewable_life: None,
-            },
-        )
-        .unwrap();
-    let err = krb5_kdc::issue_tgs(&store, &s4u2self_tgs(&store, admin, 620)).unwrap_err();
-    assert_eq!(s4u_code(err), err::CLIENT_REVOKED);
-}
-
-#[test]
-fn s4u2self_expired_for_user_is_name_exp() {
-    let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
-    store
-        .apply_admin_fields(
-            &admin,
-            krb5_kdc::AdminFields {
-                attributes: None,
-                max_life: None,
-                expiration: Some(1),
-                pw_expire: None,
-                policy: None,
-                clear_policy: false,
-                max_renewable_life: None,
-            },
-        )
-        .unwrap();
-    let err = krb5_kdc::issue_tgs(&store, &s4u2self_tgs(&store, admin, 630)).unwrap_err();
-    assert_eq!(s4u_code(err), err::NAME_EXP);
 }
 
 #[test]

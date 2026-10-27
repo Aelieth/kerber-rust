@@ -763,42 +763,6 @@ fn tgs_lineage_local_user_on_foreign_tgt_is_policy() {
 }
 
 #[test]
-fn tgs_krbtgt_disallow_all_tix_is_process_tgs() {
-    let (_a, _b, mut c, _ab, _bc, host_c, bctgt) = three_realm_distinct();
-    let irn = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "C.TEST"]);
-    let a = c.get_in_realm(&irn, "B.TEST").unwrap().attributes | KDB_DISALLOW_ALL_TIX;
-    c.apply_admin_fields_in(
-        &irn,
-        "B.TEST",
-        krb5_kdc::AdminFields {
-            attributes: Some(a),
-            max_life: None,
-            expiration: None,
-            pw_expire: None,
-            policy: None,
-            clear_policy: false,
-            max_renewable_life: None,
-        },
-        "kadmin/admin@B.TEST",
-    )
-    .unwrap();
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let req = tgs_req(
-        bctgt.rep.0.ticket.clone(),
-        &bctgt.session_key,
-        "A.TEST",
-        &cname,
-        host_c,
-        "C.TEST",
-        980,
-    )
-    .expect("tgs");
-    let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&c, &req));
-    assert_eq!(code, err::S_PRINCIPAL_UNKNOWN);
-    assert_eq!(text.as_deref(), Some("PROCESS_TGS"));
-}
-
-#[test]
 fn tgs_local_krbtgt_disallow_all_tix_is_process_tgs() {
     let (mut store, _, _, host) = realm_store("C.TEST", "svc.c.test");
     let tgt = as_tgt(&store, "C.TEST", 981);

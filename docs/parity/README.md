@@ -102,6 +102,8 @@ is `proposed`. The listed live `diffsend` cases are `garbage-pdu`,
 `tgs-disallow-tgt-based`, `tgs-authenticator-replay`,
 `tgs-server-disallow-postdated`, `s4u2self-client-expired`,
 `s4u2self-client-locked-out`, `tgs-fast-unkeyed-bad-checksum`,
+`tgs-forwarded-on-non-f-tgt`, `tgs-proxy-on-non-p-tgt`, `s4u2self-cert-only`,
+`tgs-service-expired-require-auth`,
 `tgs-fast-explicit-armor`, `tgs-fast-armor-no-tgs-subkey`,
 `tgs-fast-armor-no-subkey`, `pkinit-cms-too-small`, `pkinit-cms-header-too-long`, `pkinit-cms-too-long`, `pkinit-cms-wrong-tag`, `pkinit-cms-field-missing`, `pkinit-cms-wrong-oid`, `pkinit-authpack-not-octet-string`, `pkinit-cms-no-signer-cert`, `pkinit-sig-not-der`, `pkinit-sig-r-zero`, `pkinit-cms-signeddata-trailing`, `pkinit-cms-algid-wrong-tag`.
 
@@ -111,8 +113,8 @@ wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 
 Counts:
 **585** = A1 131 + A2 94 + A3 118 + A4 67 + A5 34 + B1 141.
-exact 453 · stricter-documented 23 · deviation 38 ·
-absent 3 · deferred 68.
+exact 454 · stricter-documented 23 · deviation 38 ·
+absent 3 · deferred 67.
 
 When the ledger was split into these files, the one-file A4 (153 rows,
 kadm5 plus the client library) was re-cut by subject: A4 58, A5 25 and

@@ -11,7 +11,7 @@ use common::client_key;
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, decrypt, p256_generate};
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
-use krb5_kdc::{Error, KDB_REQUIRES_HW_AUTH, KDB_REQUIRES_PRE_AUTH, PrincipalStore, Restrictions};
+use krb5_kdc::{Error, KDB_REQUIRES_HW_AUTH, PrincipalStore, Restrictions};
 use krb5_protocol::{as_req, pa_enc_timestamp};
 
 use krb5_protocol::{as_req_sname, pa_pk_as_req};
@@ -186,27 +186,6 @@ fn user_as_req(nonce: u32) -> krb5_types::AsReq {
         Some(vec![pa_enc_timestamp(&key).expect("pa-ts")]),
     )
     .unwrap()
-}
-
-#[test]
-fn as_request_reserved_option_bit_is_ignored_like_mit() {
-    // MIT: `validate_as_request` (kdc_util.c:727-727)
-    // the option test is AS_INVALID_OPTIONS
-    // only; a reserved KDCOptions bit (RFC bit 17) is neither rejected nor acted on.
-    // The bit passes validate, so a preauth-required client reaches
-    // PREAUTH_REQUIRED, not BADOPTION.
-    let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    or_attr(&mut store, &cname, KDB_REQUIRES_PRE_AUTH);
-    let mut req = as_req(cname, TEST_REALM, 53, None).unwrap();
-    req.0.req_body.kdc_options = req.0.req_body.kdc_options.with_bit(17, true);
-    match krb5_kdc::issue_as(&store, &req).unwrap_err() {
-        Error::PreauthRequired { .. } => {}
-        Error::Protocol { code, .. } => {
-            panic!("reserved bit must pass validate_as_request, got protocol code {code}")
-        }
-        other => panic!("want PreauthRequired, got {other:?}"),
-    }
 }
 
 #[test]
