@@ -260,9 +260,8 @@ fn include_directive(raw: &str) -> Option<IncludeKind<'_>> {
 }
 
 // MIT: `parse_file` (prof_parse.c:351-359)
-// each `fgets` line goes to `parse_line` whole.
+// Each line goes to `parse_line` whole.
 // MIT: `strip_line` (prof_parse.c:40-45)
-// a line's trailing `\n` and `\r` characters go.
 fn profile_lines(text: &str) -> impl Iterator<Item = &str> {
     text.split_terminator('\n')
         .map(|line| line.trim_end_matches(['\r', '\n']))
@@ -1088,7 +1087,6 @@ pub(crate) fn relation_value(v: &str) -> String {
 }
 
 // MIT: `parse_quoted_string` (prof_parse.c:47-72)
-// up to the closing quote; `\n`, `\t` and `\b`
 fn parse_quoted_string(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars();
@@ -1166,7 +1164,6 @@ fn refuse(conf: &mut Krb5Conf, why: ProfileError) {
 // MIT: `expand_token` (lib/krb5/os/expand_path.c:403-422)
 // an empty token, or one no table name starts with, is `EINVAL`.
 // MIT: `k5_expand_path_tokens_extra` (lib/krb5/os/expand_path.c:500-506)
-// a `%{` with no `}` is `EINVAL`.
 fn path_tokens_expand(path: &str) -> bool {
     const TOKENS: [&str; 9] = [
         "LIBDIR", "BINDIR", "SBINDIR", "euid", "username", "TEMP", "USERID", "uid", "null",

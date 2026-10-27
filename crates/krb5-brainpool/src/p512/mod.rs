@@ -1,5 +1,5 @@
-//! Gen 2 is a non-residue. p-1 is not fully factored. S = 1, so the root is -1.
-//! Scalar gen 7 is the least non-residue mod n.
+//! Gen 2: non-residue; p-1 not fully factored; S = 1, root -1.
+//! Scalar gen 7: least non-residue mod n.
 
 pub mod r1;
 pub mod t1;

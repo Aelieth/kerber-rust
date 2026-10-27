@@ -81,7 +81,6 @@ fn merge_iface(dest: &mut IfaceRelations, later: &IfaceRelations) {
 }
 
 // MIT: `remove_disabled_modules` (lib/krb5/krb/plugin.c:255-269)
-// named modules are dropped and the rest keep their order.
 // MIT: `filter_enabled_modules` (lib/krb5/krb/plugin.c:271-299)
 // each enabled name takes the first remaining match.
 // MIT: `k5_plugin_load_all` (lib/krb5/krb/plugin.c)

@@ -1,4 +1,4 @@
-//! brainpoolP512 r1, t1. 32-bit builds do not compile.
+//! brainpoolP512 r1, t1; no 32-bit build.
 
 #![no_std]
 #![forbid(unsafe_code)]

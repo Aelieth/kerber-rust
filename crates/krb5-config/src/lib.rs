@@ -61,7 +61,6 @@ pub enum ProfileError {
     // MIT: `parse_include_dir` (prof_parse.c:271-272)
     IncludeDir,
     // MIT: `os_init_paths` (init_os_ctx.c:403-408)
-    // a syntax error is `KRB5_CONFIG_BADFORMAT`.
     Syntax,
     // MIT: `get_boolean` (lib/krb5/krb/init_ctx.c)
     BadBoolean,
@@ -104,10 +103,8 @@ impl ProfileError {
     pub const fn text(self) -> &'static str {
         match self {
             // MIT: `PROF_FAIL_INCLUDE_FILE` (prof_err.et:67-67)
-            // the code whose text this is.
             Self::IncludeFile => "Included profile file could not be read",
             // MIT: `PROF_FAIL_INCLUDE_DIR` (prof_err.et:69-69)
-            // the code whose text this is.
             Self::IncludeDir => "Included profile directory could not be read",
             // MIT: `KRB5_CONFIG_BADFORMAT` (lib/krb5/error_tables/krb5_err.et)
             Self::Syntax => "Improper format of Kerberos configuration file",
@@ -213,7 +210,7 @@ pub struct Krb5Conf {
     pub kdc_timesync: bool,
     pub kdc_default_options: i32,
     // MIT: `nofail` (vfy_increds.c:38-51)
-    // `verify_ap_req_nofail` defaults to false.
+    // Default false.
     pub verify_ap_req_nofail: bool,
     pub permitted_enctypes: Option<Vec<String>>,
     pub default_tkt_enctypes: Vec<String>,
@@ -221,7 +218,7 @@ pub struct Krb5Conf {
     pub forwardable: bool,
     pub proxiable: bool,
     // MIT: `krb5_init_creds_init` (get_in_tkt.c:921-930)
-    // `canonicalize` defaults to false.
+    // Default false.
     pub canonicalize: bool,
     pub ticket_lifetime: Option<u64>,
     pub renew_lifetime: Option<u64>,
@@ -364,7 +361,7 @@ pub struct KdcConf {
     pub master_key_type: Option<String>,
     pub db_library: Option<String>,
     // MIT: `configure_context` (plugins/kdb/db2/kdb_db2.c:267-271)
-    // `disable_last_success` from that `[dbmodules]` section, default false.
+    // From `[dbmodules]`; default false.
     pub disable_last_success: bool,
     pub disable_lockout: bool,
     pub domain_sid: Option<String>,

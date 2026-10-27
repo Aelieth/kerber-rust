@@ -5,17 +5,16 @@ use super::profile::{c_isspace, mit_boolean, parse_profile_int};
 use super::{KdcConf, Krb5Conf};
 
 // MIT: `DEFAULT_TYPE_NAME` (plugins/preauth/otp/otp_state.c:42-42)
-// the token type a token names when it names none.
+// Token type when none is named.
 pub const DEFAULT_OTP_TYPE: &str = "DEFAULT";
 
 const BAD_BOOLEAN: &str = "Invalid boolean value";
 // MIT: `PROF_BAD_INTEGER` (util/profile/prof_err.et:61-61)
-// the text of a value that is no integer.
 const BAD_INTEGER: &str = "Invalid integer value";
 const EINVAL: &str = "Invalid argument";
 
 // MIT: `profile_add_node` (util/profile/prof_tree.c:197-250)
-// sort by name; a repeated subsection is the first; a final relation drops a later one.
+// Sorted; first repeat wins; `final` drops later.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct OtpTree {
     section_final: bool,
@@ -37,7 +36,7 @@ struct Relation {
 
 impl OtpTree {
     // MIT: `profile_node_iterator` (util/profile/prof_tree.c:518-653)
-    // a final section or subsection stops the walk at that file's end.
+    // A final section or subsection stops the walk.
     fn node(&self, ty: &str) -> (Option<&TypeNode>, bool) {
         let node = self.types.get(ty);
         (node, self.section_final || node.is_some_and(|n| n.is_final))
@@ -122,7 +121,6 @@ pub struct OtpType {
 
 impl OtpType {
     // MIT: `token_type_default` (plugins/preauth/otp/otp_state.c:152-166)
-    // the realm stays in the username; no indicators; timeout 5 s; 3 retries.
     #[must_use]
     pub fn builtin(name: &str) -> Self {
         Self {
@@ -167,7 +165,7 @@ fn token_type_decode(profile: &OtpProfile<'_>, name: &str) -> Result<OtpType, Ot
         None => true,
         Some(v) => mit_boolean(v).ok_or_else(|| init_error(BAD_BOOLEAN))?,
     };
-    // `server` or `secret` in `[otp]` is EINVAL (MIT's read order). No RADIUS.
+    // `server` or `secret` in `[otp]`: EINVAL. No RADIUS.
     for relation in ["server", "secret"] {
         if profile.value(name, relation).is_some() {
             return Err(OtpInitError {
@@ -207,13 +205,12 @@ pub fn token_types_decode(profile: &OtpProfile<'_>) -> Result<Vec<OtpType>, OtpI
 }
 
 // MIT: `otp_state_new` (plugins/preauth/otp/otp_state.c:579-585)
-// token types: kdc.conf, then krb5.conf.
 pub fn kdc_otp_types(kdc: &KdcConf, krb5: &Krb5Conf) -> Result<Vec<OtpType>, OtpInitError> {
     token_types_decode(&OtpProfile::new(&[&kdc.otp, &krb5.otp]))
 }
 
 // MIT: `parse_std_line` (util/profile/prof_parse.c:92-124)
-// the name ends at `]`; a later `*` is final; only blanks may follow.
+// Name ends at `]`; `*` after it is final; blanks only.
 pub(crate) fn section_header(line: &str) -> Option<(&str, bool)> {
     let rest = line.strip_prefix('[')?;
     let (body, after) = rest.split_once(']')?;

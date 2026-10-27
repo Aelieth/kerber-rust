@@ -1,6 +1,6 @@
 // MIT: `loop_add_addresses` (lib/apputils/net-server.c:381-433)
 // MIT: `k5_parse_host_string` (lib/krb5/krb/parse_host_string.c:70-124)
-// `/path` is a UNIX listener, skipped: this port binds none.
+// `/path` (UNIX) is skipped: no port.
 // MIT: `loop_add_address` (lib/apputils/net-server.c:304-361)
 
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
@@ -8,17 +8,14 @@ use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
 use super::Error;
 
 // MIT: `KRB5_DEFAULT_PORT` (include/osconf.hin:95-95)
-// the KDC's port.
 pub const KDC_PORT: u16 = 88;
 // MIT: `DEFAULT_KDC_PORTLIST` (include/osconf.hin:99-99)
 pub const DEFAULT_KDC_PORTLIST: &str = "88";
 // MIT: `DEFAULT_KADM5_PORT` (include/osconf.hin:107-107)
-// kadmind's port.
 pub const KADMIND_PORT: u16 = 749;
 // MIT: `DEFAULT_KPASSWD_PORT` (include/osconf.hin)
 pub const KPASSWD_PORT: u16 = 464;
 // MIT: `ADDRESSES_DELIM` (include/net-server.h:36-36)
-// the list separators.
 const ADDRESSES_DELIM: &[char] = &[',', ';', ' '];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -124,7 +121,7 @@ pub enum BindType {
 
 impl BindType {
     // MIT: `bind_type_names` (lib/apputils/net-server.c:134-139)
-    // the name the daemon log gives the kind.
+    // Name in the daemon log.
     #[must_use]
     pub fn name(self) -> &'static str {
         match self {
@@ -185,7 +182,7 @@ impl<S: Clone> BindAddresses<S> {
     }
 
     // MIT: `FOREACH_ELT` (lib/apputils/net-server.c:178-179)
-    // the list is walked from the top.
+    // Walked from the top.
     // MIT: `DEL` (lib/apputils/net-server.c:197-198)
     // a removed entry takes the last one's place.
     pub fn add(
@@ -244,7 +241,7 @@ impl<S: Clone> BindAddresses<S> {
 }
 
 // MIT: `parse_admin_server_port` (lib/kadm5/alt_prof.c:395-417)
-// a written port is `atoi`, so a non-number is 0 and is kept.
+// `atoi`: a non-number is 0, and kept.
 #[must_use]
 pub fn admin_server_port(server: &str) -> Option<i32> {
     let port = if let Some(rest) = server.strip_prefix('[')

@@ -33,7 +33,7 @@ pub fn encode<T: Encode>(value: &T) -> Result<Vec<u8>, Error> {
     encode_named(value, std::any::type_name::<T>())
 }
 
-/// Nonzero remainder still decodes.
+/// Nonzero remainder decodes.
 // MIT: `k5_asn1_full_decode` (lib/krb5/asn.1/asn1_encode.c:1567-1585)
 pub fn decode<T: Decode>(bytes: &[u8]) -> Result<T, Error> {
     decode_named(bytes, std::any::type_name::<T>())

@@ -92,10 +92,9 @@ impl Default for KdcConf {
 }
 
 // MIT: `MAX_DGRAM_SIZE` (include/osconf.hin:113-113)
-// the largest UDP reply by default.
 pub const MAX_DGRAM_SIZE: i32 = 65_536;
 // MIT: `DEFAULT_TCP_LISTEN_BACKLOG` (include/osconf.hin:100-100)
-// MIT TCP backlog is 5; this KDC defaults to 128. Name: `kdc_tcp_listen_backlog`.
+// MIT backlog 5; ours 128: `kdc_tcp_listen_backlog`.
 pub const DEFAULT_TCP_LISTEN_BACKLOG: i32 = 128;
 
 pub(crate) fn sscanf_int(v: &str) -> Option<i32> {
@@ -131,7 +130,7 @@ impl KdcConf {
     }
 
     // MIT: `get_string_param` (lib/kadm5/alt_prof.c:310-336)
-    // a realm parameter is read from that realm's stanza, else the default.
+    // Realm stanza, else the default.
     pub fn parse_for_realm(text: &str, realm: &str) -> Result<Self, Error> {
         let text = join_subsection_braces(text)?;
         Ok(Self::parse_joined(&stanza_of(&text, Some(realm))))
@@ -246,7 +245,7 @@ impl KdcConf {
                 }
             }
             // MIT: `get_integer` (lib/krb5/krb/init_ctx.c:76-85)
-            // `[libdefaults]` is read at the section top; a subsection is another name.
+            // Top of `[libdefaults]` only; a subsection is another name.
             if section == "libdefaults" {
                 if line.ends_with('{') {
                     libdefaults_depth += 1;
@@ -266,14 +265,12 @@ impl KdcConf {
         // MIT: `initialize_realms` (kdc/main.c:622-660)
         // the `[kdcdefaults]` lists, else `88`.
         // MIT: `init_realm` (kdc/main.c:257-282)
-        // the realm stanza's lists win over those.
         if let Some(v) = realm_listen.udp().or(default_listen.udp()) {
             conf.kdc_listen.clone_from(v);
         }
         conf.kdc_listen_in_realm = realm_listen.udp().is_some();
         conf.kdc_tcp_listen = realm_listen.tcp().or(default_listen.tcp()).cloned();
         // MIT: `get_conf_section` (lib/kdb/kdb5.c:219-227)
-        // `database_module`, else the realm name, names the module section.
         let module = database_module.unwrap_or_else(|| conf.realm.clone());
         let flag = |name: &str| {
             dbmodules
@@ -330,7 +327,6 @@ fn parse_kdcdefaults(conf: &mut KdcConf, line: &str) {
         "host_based_services" => combine_ws(&mut conf.host_based_services, &v),
         "no_host_referral" => combine_ws(&mut conf.no_host_referral, &v),
         // MIT: `group_init_state` (groups.c:247-249)
-        // `profile_get_string`, so the first value.
         "spake_preauth_kdc_challenge" if conf.spake_preauth_kdc_challenge.is_none() => {
             conf.spake_preauth_kdc_challenge = Some(v);
         }
@@ -339,7 +335,7 @@ fn parse_kdcdefaults(conf: &mut KdcConf, line: &str) {
 }
 
 // MIT: `krb5_init_context_profile` (lib/krb5/krb/init_ctx.c:218-232)
-// `allow_weak_crypto`, `allow_des3`, `allow_rc4`: the first boolean.
+// These three: the first boolean wins.
 fn parse_kdc_libdefaults(conf: &mut KdcConf, seen: &mut Vec<String>, line: &str) {
     let Some((k, v)) = split_kv(line) else {
         return;
@@ -349,7 +345,6 @@ fn parse_kdc_libdefaults(conf: &mut KdcConf, seen: &mut Vec<String>, line: &str)
     }
     match k {
         // MIT: `profile_get_integer` (util/profile/prof_get.c:309-333)
-        // one that is no integer is the default.
         "clockskew" => conf.clockskew = Some(parse_profile_int(&v).map_or(300, i64::from)),
         "allow_weak_crypto" => conf.allow_weak_crypto = Some(truthy(&v)),
         "allow_rc4" => conf.allow_rc4 = Some(truthy(&v)),
@@ -564,7 +559,7 @@ pub const KDC_DIR: &str = match option_env!("KERBER_KDC_DIR") {
 };
 
 // MIT: `DEFAULT_KDC_PROFILE` (osconf.hin:81-81)
-// the KDC profile when `KRB5_KDC_PROFILE` is unset.
+// Used when `KRB5_KDC_PROFILE` is unset.
 #[must_use]
 pub fn default_kdc_profile() -> PathBuf {
     Path::new(KDC_DIR).join("kdc.conf")
@@ -585,14 +580,14 @@ pub fn default_acl_file() -> PathBuf {
 }
 
 // MIT: `KPROPD_ACL_FILE` (osconf.hin:132-132)
-// kpropd's ACL file when `-a` names none.
+// kpropd: when `-a` names none.
 #[must_use]
 pub fn default_kpropd_acl() -> PathBuf {
     Path::new(KDC_DIR).join("kpropd.acl")
 }
 
 // MIT: `KPROP_DEFAULT_FILE` (osconf.hin:127-127)
-// the dump kprop sends when `-f` names none.
+// kprop: when `-f` names none.
 #[must_use]
 pub fn default_kprop_file() -> PathBuf {
     Path::new(KDC_DIR).join("replica_datatrans")

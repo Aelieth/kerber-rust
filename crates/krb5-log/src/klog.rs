@@ -197,7 +197,6 @@ impl Logger {
         let mut dests = Vec::new();
         let mut facility_used = None;
         for spec in specs {
-            // Spec white space is ignored.
             let cp = spec.trim_matches(|c: char| c.is_ascii_whitespace());
             match open_spec(cp, err) {
                 Ok((dest, facility)) => {
@@ -208,13 +207,11 @@ impl Logger {
                 }
                 Err(Refused::Reported) => {}
                 Err(Refused::Syntax) => {
-                    // Bad spec: warn twice, then skip.
                     let _ = writeln!(err, "{whoami}: cannot parse <{cp}>");
                     let _ = writeln!(err, "{whoami}: warning - logging entry syntax error");
                 }
             }
         }
-        // No dest: syslog AUTH.
         if dests.is_empty() {
             dests.push(Dest::Syslog);
             facility_used = Some(LOG_AUTH);
@@ -234,7 +231,6 @@ impl Logger {
         }
     }
 
-    /// Every destination; debug only to syslog unless `debug`.
     fn write(&mut self, severity: Severity, msg: &str) {
         let now = chrono::Local::now();
         let (line, head) = line_parts(
@@ -296,7 +292,7 @@ impl Logger {
     }
 }
 
-/// A symlink or a non-file is refused.
+/// Symlinks and non-files are refused.
 fn open_log_file(path: &str, opts: &mut OpenOptions) -> io::Result<File> {
     let file = opts
         .custom_flags((OFlag::O_NOFOLLOW | OFlag::O_NONBLOCK).bits())
@@ -310,7 +306,6 @@ fn open_log_file(path: &str, opts: &mut OpenOptions) -> io::Result<File> {
     Ok(file)
 }
 
-/// One `write(2)` for the line and its end.
 fn write_line(w: &mut impl Write, line: &str, end: &str) -> io::Result<()> {
     let mut buf = Vec::with_capacity(line.len() + end.len());
     buf.extend_from_slice(line.as_bytes());
@@ -345,7 +340,7 @@ fn open_spec(cp: &str, err: &mut dyn Write) -> Result<(Dest, Option<u8>), Refuse
         };
     }
     if let Some(rest) = strip_prefix_ci(cp, "SYSLOG") {
-        // `SYSLOG` ignores severity; a bad facility is AUTH.
+        // `SYSLOG` ignores severity; bad facility: AUTH.
         let fac = rest
             .strip_prefix(':')
             .and_then(|r| r.split_once(':'))

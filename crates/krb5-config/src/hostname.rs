@@ -5,7 +5,6 @@ use super::{CanonHost, Krb5Conf};
 const RESOLV_CONF: &str = "/etc/resolv.conf";
 
 // MIT: `krb5_sname_to_principal` (lib/krb5/os/sn2princ.c:347-352)
-// no hostname is the local one, `gethostname`'s.
 #[must_use]
 pub fn this_host() -> String {
     nix::unistd::gethostname()
@@ -24,7 +23,7 @@ pub fn local_host_name(conf: &Krb5Conf) -> String {
 }
 
 // MIT: `expand_hostname` (lib/krb5/os/sn2princ.c:121-144)
-// no DNS: qualify one component, lowercase it, drop a trailing dot.
+// No DNS: qualify a short name; lowercase, drop dot.
 // MIT: `qualify_shortname` (lib/krb5/os/sn2princ.c)
 #[must_use]
 pub fn expand_hostname_no_dns(
@@ -92,7 +91,7 @@ pub fn sname_to_principal(
 }
 
 // MIT: `k5_canonprinc` (lib/krb5/os/sn2princ.c:279-285)
-// not a two-part host-based name with a hostname: its only candidate.
+// Two-part host name only: one candidate.
 #[derive(Debug)]
 pub struct CanonPrinc<'a> {
     conf: &'a Krb5Conf,
@@ -150,7 +149,6 @@ impl<'a> CanonPrinc<'a> {
     }
 
     // MIT: `canonicalize_princ` (lib/krb5/os/sn2princ.c:195-221)
-    // trailer off, expand a host-based name only, trailer back.
     fn expand(&self) -> (String, String) {
         let host = match self.princ.1.name_string.as_slice() {
             [_, host] => String::from_utf8_lossy(host.as_bytes()).into_owned(),
@@ -196,9 +194,8 @@ impl<'a> CanonPrinc<'a> {
 
 // MIT: `krb5_get_fallback_host_realm` (lib/krb5/os/hostrealm.c)
 // MIT: `clean_hostname` (lib/krb5/os/hostrealm.c:301-310)
-// the name is lowercased and loses a trailing dot.
 // MIT: `domain_fallback_realm` (lib/krb5/os/hostrealm_domain.c:57-102)
-// address: no answer. KDC suffixes, then the upper-cased parent, realm or not. No dot: none.
+// Address: no answer. KDC suffixes, upper-cased parent, realm or not; no dot: none.
 #[must_use]
 pub fn fallback_host_realm(conf: &Krb5Conf, host: &str) -> Option<String> {
     fallback_host_realm_traced(conf, host, &mut |_| {})
@@ -244,7 +241,7 @@ pub fn fallback_host_realm_traced(
 }
 
 // MIT: `parse_int` (util/profile/prof_get.c:288-305)
-// empty, overflow, outside `int`, or trailing junk is `PROF_BAD_INTEGER`.
+// Empty, overflow, trailing junk: PROF_BAD_INTEGER.
 fn parse_int(value: &str) -> Option<i32> {
     let t = value.trim_start_matches(|c: char| c.is_ascii_whitespace() || c == '\x0b');
     let digits = t.strip_prefix(['+', '-']).unwrap_or(t);
@@ -255,7 +252,6 @@ fn parse_int(value: &str) -> Option<i32> {
 }
 
 // MIT: `split_trailer` (lib/krb5/os/sn2princ.c:170-181)
-// only one colon plus one or more characters starts a trailer.
 fn split_trailer(host: &str) -> (&str, &str) {
     match host.split_once(':') {
         Some((name, rest)) if !rest.is_empty() && !rest.contains(':') => {

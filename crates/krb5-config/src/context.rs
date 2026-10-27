@@ -10,7 +10,7 @@ pub struct ClientContext {
     // MIT: `krb5_us_timeofday` (lib/krb5/os/ustime.c:67-78)
     kdc_offset_valid: AtomicBool,
     kdc_offset: AtomicI64,
-    // `KRB5CCNAME`, read at the first default-cache lookup.
+    // KRB5CCNAME: read at the first lookup.
     ccname: OnceLock<Option<String>>,
 }
 
