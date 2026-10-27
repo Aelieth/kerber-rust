@@ -62,14 +62,11 @@ pub struct AsRequest<'a> {
     pub password: &'a [u8],
     pub kdc: &'a KdcAddr,
     pub profile: &'a Krb5Conf,
-    /// Never another mechanism.
     pub want_spake: bool,
-    /// SPAKE, then encrypted challenge, then encrypted timestamp.
     pub fast_armor: Option<&'a FastArmor>,
     /// Empty PA-150 first; PA-16 on the retry.
     pub pkinit: Option<Pkinit<'a>>,
     pub canonicalize: bool,
-    /// None is krbtgt/REALM.
     pub sname: Option<&'a PrincipalName>,
     pub etypes: Option<&'a [i32]>,
     pub ticket: AsTicketOpts,
@@ -78,7 +75,6 @@ pub struct AsRequest<'a> {
 #[derive(Clone, Debug)]
 pub struct AsTicketOpts {
     // MIT: `krb5_init_creds_init` (get_in_tkt.c:936-947)
-    /// None is 24 hours.
     pub lifetime: Option<u64>,
     pub rlife: Option<u64>,
     pub forwardable: bool,
@@ -92,7 +88,6 @@ pub struct AsTicketOpts {
     pub allowed_preauth_type: Option<i32>,
     pub pa_config_in: Option<Vec<u8>>,
     // MIT: `restart_init_creds_loop` (lib/krb5/krb/get_in_tkt.c:836-838)
-    /// None is the first start.
     pub restart: Option<AsRestart>,
 }
 
@@ -285,7 +280,6 @@ pub fn as_exchange_with_unreadable_keytab_defer_fast(
 pub type PasswordPrompt<'p> = dyn FnMut() -> Result<Zeroizing<Vec<u8>>, Error> + 'p;
 
 // MIT: `KRB5_PROMPT_TYPE_PASSWORD` (include/krb5/krb5.hin:7884-7884)
-/// The numbers are MIT's prompt types.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PromptType {
     Password = 1,
@@ -304,7 +298,6 @@ pub struct PreauthPrompt<'a> {
 }
 
 pub trait AsPrompt {
-    /// An interrupted read is KRB5_LIBOS_PWDINTR, and no later mechanism runs.
     fn password(&mut self) -> Result<Zeroizing<Vec<u8>>, Error>;
 
     fn preauth(&mut self, prompt: &PreauthPrompt<'_>) -> Result<Zeroizing<Vec<u8>>, Error> {
@@ -474,14 +467,12 @@ fn as_exchange_inner(
     // MIT: `k5_upgrade_to_fast_p` (lib/krb5/krb/fast.c:677-688)
     // PA-FX-FAST with no armor key yet restarts first.
     upgrade_to_fast(&msg, defer_fast, &clock)?;
-    // No listed mechanism is PREAUTH_FAILED.
     if let KdcMsg::Error(e) = &msg
         && e.error_code == err::PREAUTH_REQUIRED
         && !hint_offers_real_mechanism(req, e)
     {
         return Err(preauth_failed());
     }
-    // The module reads the password when it wants the key.
     match msg {
         KdcMsg::AsRep(rep) => finish_bare_reply(
             req, keys, unreadable, prompt, rep, nonce, &etypes, &bound, &wire, false,
@@ -768,7 +759,6 @@ fn continue_from_hint(
     // No permitted group means no SPAKE module.
     let groups = client_groups(req.profile);
     // MIT: `k5_preauth_note_failed` (lib/krb5/krb/preauth2.c:208-221)
-    // A real type that failed is not tried again.
     let mut failed: Vec<i32> = Vec::new();
     if !crate::clpreauth::loaded(req.profile, "spake") {
         failed.push(pa::SPAKE);
@@ -917,7 +907,6 @@ fn continue_preauth(
         trace::preauth_enc_ts_key_gak((&client_key).into());
     }
     let mut padata = error_cookie(preauth_err);
-    // A des3 key MIT refuses is the module's failure.
     match pa_enc_timestamp_at(&client_key, clock.now(true), false) {
         Ok(p) => padata.push(p),
         Err(e @ (Error::DesBadParity | Error::DesWeakKey)) => {
@@ -1392,7 +1381,6 @@ fn upgrade_to_fast(msg: &KdcMsg, defer_fast: bool, clock: &Clock) -> Result<(), 
 }
 
 // MIT: `encts_disabled` (lib/krb5/krb/get_in_tkt.c:757-772)
-/// The client realm's value, default false.
 fn encrypted_timestamp_disabled(profile: &Krb5Conf, realm: &str) -> bool {
     profile.encrypted_timestamp_disabled(realm)
 }
@@ -1409,7 +1397,6 @@ fn find_pa(method: &[PaData], ty: i32) -> Option<&PaData> {
 }
 
 // MIT: `copy_cookie` (preauth2.c:857-884)
-/// The PA-FX-COOKIE, copied as it arrived.
 fn error_cookie(e: &KrbError) -> Vec<PaData> {
     method_from_error(e)
         .ok()
@@ -1509,7 +1496,6 @@ pub fn warn_deprecated_enctype(out: &AsOutcome) {
 }
 
 // MIT: `krb5int_fast_verify_nego` (fast.c:648-664)
-/// No request checksum is refused.
 #[expect(clippy::too_many_arguments, reason = "client AS, not a params struct")]
 fn finish_as_rep(
     profile: &Krb5Conf,
@@ -1707,7 +1693,7 @@ pub fn verify_as_reply_server(
     Ok(())
 }
 
-/// A time of 0 is unspecified; MIT's KDCREP_MODIFIED is ReplyMismatch.
+/// Time 0 unspecified; MIT's KDCREP_MODIFIED is ReplyMismatch.
 pub fn verify_as_reply_req_times(
     enc: &EncKdcRepPart,
     till: &KerberosTime,
@@ -1758,7 +1744,7 @@ pub fn verify_as_reply_req_times(
     Ok(())
 }
 
-/// With kdc_timesync 0, an expired ticket is ReplyMismatch, stricter than MIT.
+/// kdc_timesync 0: expired ticket is ReplyMismatch, stricter than MIT.
 pub fn check_as_rep_times(
     enc_part: &EncKdcRepPart,
     now: i64,
@@ -1873,7 +1859,6 @@ fn build_as_req(
 
 // MIT: `krb5_get_default_in_tkt_ktypes` (lib/krb5/krb/init_ctx.c:514-528)
 // MIT: `krb5int_parse_enctype_list` (lib/krb5/krb/init_ctx.c:447-502)
-/// DEFAULT and the family words expand.
 // MIT: `krb5int_c_weak_enctype` (lib/crypto/krb/enctype_util.c:58-64)
 /// ETYPE_WEAK is dropped. rc4-hmac is not weak.
 #[must_use]
@@ -1914,7 +1899,6 @@ fn request_times(req: &AsRequest<'_>, clock: &Clock, nonce: u32) -> AsReqTimes {
 }
 
 // MIT: `krb5_init_creds_step` (lib/krb5/krb/get_in_tkt.c:1910-1913)
-/// Before the first step, the nonce and times are still zero.
 fn restart_point(req: &AsRequest<'_>) -> AsRestart {
     req.ticket.restart.clone().unwrap_or_else(|| AsRestart {
         nonce: 0,
@@ -2043,7 +2027,6 @@ fn select_s2k(
 }
 
 // MIT: `get_salt` (lib/krb5/krb/preauth2.c:743-786)
-/// AFS3-SALT strips at @.
 pub(super) fn select_s2k_after(
     error: &KrbError,
     cname: &PrincipalName,
@@ -2414,7 +2397,6 @@ fn trace_keytab_gak(
         return;
     }
     // MIT: `krb5_ktfile_get_entry` (lib/krb5/keytab/kt_file.c:379-391)
-    // No keytab entry is KRB5_KT_NOTFOUND.
     let (code, msg) = if keys.iter().any(|k| k.etype() == etype) {
         (0, None)
     } else {

@@ -65,7 +65,7 @@ pub(super) fn continue_fast(
     match send_as(req, &wire)? {
         KdcMsg::AsRep(rep) => {
             // MIT: `decrypt_as_reply` (lib/krb5/krb/get_in_tkt.c:96-123)
-            // no module answered, so the reply key is got now, from the password.
+            // No module answered: reply key from the password.
             let mut pw = PasswordCell::new(
                 prompt,
                 req.password,
@@ -95,7 +95,7 @@ pub(super) fn continue_fast(
             }
             clock.note(&inner, true);
             // MIT: `get_as_key` (lib/krb5/krb/preauth2.c:438-457)
-            // The password is read when a mechanism first needs the key; OTP never needs it.
+            // Read on first need; OTP never needs it.
             let mut pw = PasswordCell::new(
                 prompt,
                 req.password,
@@ -123,7 +123,6 @@ pub(super) fn continue_fast(
                     &super::conf_preferred_preauth_types_for(req.profile, req.realm),
                 );
                 // MIT: `pa_type_allowed` (lib/krb5/krb/preauth2.c:627-631)
-                // a type the input cache does not allow is not tried.
                 method.retain(|p| req.ticket.preauth_allowed(p.padata_type));
                 if fast_mechanism(req.profile, &method, &skip, pkinit).is_err()
                     && !saved_method.is_empty()
@@ -312,7 +311,6 @@ fn fast_key_mechanism(
     }
     if mech == pa::ENCRYPTED_CHALLENGE {
         let (now, usec) = clock.now(false);
-        // A des3 key MIT refuses fails the challenge with that key's code.
         match client_challenge(akey, &client_key, (&now, usec)) {
             Ok(p) => inner_pa.push(p),
             Err(e @ (Error::DesBadParity | Error::DesWeakKey)) => {
@@ -327,7 +325,6 @@ fn fast_key_mechanism(
         if gak_found(keys, &client_key, etype) {
             trace::preauth_enc_ts_key_gak((&client_key).into());
         }
-        // A des3 key MIT refuses fails the timestamp with that key's code.
         match pa_enc_timestamp_at(&client_key, clock.now(true), true) {
             Ok(p) => inner_pa.push(p),
             Err(e @ (Error::DesBadParity | Error::DesWeakKey)) => {
@@ -403,7 +400,6 @@ fn call_responder(pw: &mut PasswordCell<'_, '_>, items: &mut ResponderItems) -> 
 }
 
 // MIT: `krb5_get_as_key_password` (lib/krb5/krb/gic_pwd.c:30-38)
-/// the question is asked only while no password is held.
 pub(super) fn ask_gak_question(pw: &mut PasswordCell<'_, '_>) -> Result<(), Error> {
     let mut items = ResponderItems::default();
     if pw.asks_question() {
@@ -415,9 +411,8 @@ pub(super) fn ask_gak_question(pw: &mut PasswordCell<'_, '_>) -> Result<(), Erro
 // MIT: `fill_response_items` (lib/krb5/krb/preauth2.c:937-965)
 // MIT: `ec_prep_questions` (lib/krb5/krb/preauth_ec.c:36-45)
 // MIT: `encts_prep_questions` (lib/krb5/krb/preauth_encts.c:33-47)
-/// encrypted timestamp asks it too, unless the realm disables it.
+/// Encrypted timestamp: asks for the password unless realm-disabled.
 // MIT: `spake_prep_questions` (plugins/preauth/spake/spake_client.c:119-141)
-/// SPAKE asks it for a challenge it can answer, and for nothing else.
 fn fill_response_items(
     profile: &Krb5Conf,
     items: &mut ResponderItems,
@@ -457,7 +452,7 @@ fn fill_response_items(
 // MIT: `otp_client_process` (lib/krb5/krb/preauth_otp.c:1118-1127)
 /// `set_as_key(armor key)`, then `disable_fallback`.
 // MIT: `init_creds_step_request` (lib/krb5/krb/get_in_tkt.c:1334-1336)
-/// with fallback disabled a failed request is the error returned.
+/// Fallback disabled: a failed request's error is returned.
 #[expect(
     clippy::too_many_arguments,
     reason = "the FAST retry's existing locals"
@@ -738,7 +733,7 @@ fn finish_fast_pkinit(
 }
 
 // MIT: `krb5int_fast_process_response` (fast.c:548-556)
-/// Once the finished checksum holds, the reply client is the finished client.
+/// Once the finished checksum holds, the reply takes its client.
 // MIT: `krb5int_fast_reply_key` (lib/krb5/krb/fast.c:570-592)
 #[expect(clippy::too_many_arguments, reason = "client AS, not a params struct")]
 fn finish_fast_as(
@@ -819,9 +814,9 @@ fn finish_fast_as(
         Error::ReplyMismatch("FAST response missing finish message in KDC reply".into())
     })?;
     verify_fast_finished(akey, &rep.0.ticket, finished)?;
-    // The outer cname, crealm and padata are unauthenticated and are not read again.
+    // Outer cname, crealm, padata: unauthenticated, not read again.
     // MIT: `verify_as_reply` (get_in_tkt.c:236-241)
-    // compares the replaced client.
+    // Set before verify_as_reply's client check.
     rep.0.crealm = finished.crealm.clone();
     rep.0.cname = finished.cname.clone();
     rep.0.padata = Some(fast.padata.clone());
@@ -1013,11 +1008,10 @@ pub(crate) struct FastErrorMaterial {
     pub(crate) err: KrbError,
     /// FX-COOKIE comes from the decrypted FAST padata only.
     pub(crate) cookie: Option<PaData>,
-    /// retry is false for an outer error; the client stops.
+    /// False for an outer error: client stops.
     pub(crate) retry: bool,
 }
 
-/// A missing FX-ERROR inside FAST is PREAUTH_FAILED.
 pub(crate) fn fast_error_material(
     akey: &ProtocolKey,
     err: &KrbError,
@@ -1037,7 +1031,6 @@ pub(crate) fn fast_error_material(
         return outer_fatal();
     };
     // MIT: `decrypt_fast_reply` (lib/krb5/krb/fast.c:359-415)
-    // traced once the e-data is a padata sequence, before PA-FX-FAST is looked for.
     trace::fast_decode();
     let Some(fx) = find_pa(&method, pa::FX_FAST) else {
         return outer_fatal();
