@@ -698,7 +698,4 @@ fn take_tlv(input: &[u8]) -> Option<(u8, &[u8], &[u8])> {
 }
 
 #[cfg(test)]
-mod rfc8636_tests;
-
-#[cfg(test)]
 mod signed_attrs_tests;

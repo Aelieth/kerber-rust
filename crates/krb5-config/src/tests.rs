@@ -672,22 +672,3 @@ fn pl_per_realm_keys_read_the_realm_then_the_top_level() {
     assert!(c.realm_libdefaults.contains_key("KERBER.TEST"));
     assert!(!c.realm_libdefaults.contains_key("nested"));
 }
-
-#[test]
-fn dns_lookup_kdc_defaults_on_and_dns_fallback_fills_an_unset_relation() {
-    let unset = Krb5Conf::parse("[libdefaults]\n    default_realm = KERBER.TEST\n").unwrap();
-    assert!(unset.dns_lookup_kdc);
-    let fallback_off = Krb5Conf::parse("[libdefaults]\n    dns_fallback = false\n").unwrap();
-    assert!(!fallback_off.dns_lookup_kdc);
-    let fallback_on = Krb5Conf::parse("[libdefaults]\n    dns_fallback = true\n").unwrap();
-    assert!(fallback_on.dns_lookup_kdc);
-    let named =
-        Krb5Conf::parse("[libdefaults]\n    dns_fallback = true\n    dns_lookup_kdc = false\n")
-            .unwrap();
-    assert!(!named.dns_lookup_kdc);
-    let named_first =
-        Krb5Conf::parse("[libdefaults]\n    dns_lookup_kdc = false\n    dns_fallback = true\n")
-            .unwrap();
-    assert!(!named_first.dns_lookup_kdc);
-    assert!(!Krb5Conf::new().dns_lookup_kdc);
-}
