@@ -1,4 +1,4 @@
-//! The date and interval phrases `kadmin` reads: MIT `get_date_rel` (`kadmin/cli/getdate.y`), a port of its grammar, word tables and conversion, and the `parse_date` / `parse_interval` wrappers of `kadmin.c`.
+//! MIT `get_date_rel` (`kadmin/cli/getdate.y`) and `kadmin.c`'s wrappers.
 
 use chrono::{Datelike as _, Offset as _, TimeZone as _, Timelike as _};
 
@@ -9,10 +9,9 @@ const SECSPERDAY: i64 = 24 * 60 * 60;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DateError {
     // MIT: `parse_date` (kadmin.c:158-166)
-    /// `get_date_rel` failed.
     Invalid(String),
     // MIT: `parse_interval` (kadmin.c:190-194)
-    /// an absolute date before now is refused.
+    /// A date before now is refused.
     InPast(String),
 }
 
@@ -39,13 +38,12 @@ pub fn low32(t: i64) -> u32 {
     u32::try_from(t.rem_euclid(1 << 32)).unwrap_or(0)
 }
 
-/// `kadmin`'s absolute date: `get_date_rel(s, now)`, 0 for `never`.
+/// 0 is `never`.
 pub fn parse_date(s: &str, now: i64) -> Result<i64, DateError> {
     get_date_rel(s, now).ok_or_else(|| DateError::Invalid(s.to_owned()))
 }
 
-/// `kadmin`'s interval: a `krb5_string_to_deltat` duration, else a date less now.
-/// the deltat first; else `get_date_rel`, an absolute 0 (`never`) being an interval of 0 and a date in the past an error.
+/// An absolute 0 (`never`) is an interval of 0; a past date is an error.
 pub fn parse_interval(s: &str, now: i64) -> Result<i64, DateError> {
     if let Ok(delta) = krb5_types::deltat::parse(s) {
         return Ok(i64::from(delta));
@@ -244,7 +242,7 @@ fn find(table: &[(&str, Tok)], word: &str) -> Option<Tok> {
 }
 
 // MIT: `LookupWord` (getdate.y:681-774)
-/// a word (letters and dots, lowercased) to its token.
+/// A word (letters and dots, lowercased) to its token.
 fn lookup_word(word: &str) -> Tok {
     let mut buff = word.to_ascii_lowercase();
     if buff == "am" || buff == "a.m." {
@@ -298,7 +296,6 @@ fn lookup_word(word: &str) -> Tok {
 }
 
 // MIT: `yylex` (getdate.y:778-828)
-/// the tokens of the whole phrase.
 fn lex(s: &str) -> Vec<Tok> {
     let b = s.as_bytes();
     let mut i = 0;
@@ -620,7 +617,6 @@ fn localtime(t: i64) -> Option<Tm> {
 }
 
 // MIT: `ToSeconds` (getdate.y:534-555)
-/// the time of day in seconds, `None` out of range.
 fn to_seconds(h: i64, m: i64, s: i64, mer: Meridian) -> Option<i64> {
     if !(0..=59).contains(&m) || !(0..=59).contains(&s) {
         return None;
@@ -644,7 +640,7 @@ struct Moment {
 }
 
 // MIT: `Convert` (getdate.y:562-606)
-/// its leap-year rule included; `timezone` is the global `yyTimezone` (minutes west).
+/// `timezone` is the global `yyTimezone`, minutes west.
 fn convert(at: &Moment, mer: Meridian, dst: DstMode, timezone: i64) -> Option<i64> {
     let mut year = at.year.wrapping_abs();
     if year < 1900 {
@@ -692,7 +688,6 @@ fn convert(at: &Moment, mer: Meridian, dst: DstMode, timezone: i64) -> Option<i6
 }
 
 // MIT: `DSTcorrect` (getdate.y:610-630)
-/// the distance corrected for a summer-time change.
 fn dst_correct(start: i64, future: i64) -> Option<i64> {
     let start_day = (localtime(start)?.hour + 1) % 24;
     let future_day = (localtime(future)?.hour + 1) % 24;
@@ -700,7 +695,6 @@ fn dst_correct(start: i64, future: i64) -> Option<i64> {
 }
 
 // MIT: `RelativeDate` (getdate.y:634-648)
-/// the distance to the named weekday.
 fn relative_date(start: i64, ordinal: i64, number: i64) -> Option<i64> {
     let tm = localtime(start)?;
     let mut now = start;
@@ -711,7 +705,6 @@ fn relative_date(start: i64, ordinal: i64, number: i64) -> Option<i64> {
 }
 
 // MIT: `RelativeMonth` (getdate.y:652-677)
-/// `timezone` is the global `yyTimezone`.
 fn relative_month(start: i64, rel_month: i64, timezone: i64) -> Option<i64> {
     if rel_month == 0 {
         return Some(0);

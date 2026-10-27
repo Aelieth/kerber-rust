@@ -1,6 +1,4 @@
-//! MIT `kpasswd`: change a principal's password through its realm's kpasswd service.
-//! else the login name. The current password is asked for when the KDC's reply needs the key, then the new one twice, one line each from a pipe. The server is the realm's `kpasswd_server`, else its `admin_server` on port 464; TCP first, then UDP.
-//! A `test-hooks` build (the gates') takes the passwords from `KRB5_PASSWORD` and `KRB5_NEW_PASSWORD` when set, and with `KRB5_KPASSWD_TARGET=name@REALM` sets that principal's password instead (`krb5_set_password`, protocol `0xff80`). A release `kpasswd` reads none of them and changes the client's own password, as MIT's does.
+//! MIT `kpasswd`: change a principal's password through its realm's service.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -41,7 +39,7 @@ struct Client {
     display: String,
 }
 
-/// MIT `kpasswd`'s `main`: the exit code, 2 when the server refused the new password.
+/// MIT `kpasswd`'s `main`: the exit code, 2 when the server refused.
 fn run<R: BufRead, W: Write>(
     prog: &str,
     pname: Option<&str>,
@@ -56,7 +54,6 @@ fn run<R: BufRead, W: Write>(
     };
     let conf = &ctx.profile;
     // MIT: `krb5_init_context_profile` (lib/krb5/krb/init_ctx.c:209-217)
-    // `KRB5_TRACE` opens once the profile has loaded.
     krb5_protocol::trace::init();
     let (client, armor_cc) = match client(prog, pname, &ctx) {
         Ok(client) => client,
@@ -73,7 +70,6 @@ fn run<R: BufRead, W: Write>(
         }
     };
     // MIT: `k5_locate_server` (locate_kdc.c:871-877)
-    // a realm with no KDC is `KRB5_REALM_UNKNOWN`.
     let list = match conf.kdcs_for_traced(&client.realm, &mut krb5_protocol::trace::dns_srv) {
         Ok(list) if !list.is_empty() => list,
         Err(krb5_config::Error::InvalidArgument) => {
@@ -89,20 +85,18 @@ fn run<R: BufRead, W: Write>(
     krb5_config::hand_kdcs(&client.realm, list);
     let given = krb5_config::env_password().map(Zeroizing::new);
     // MIT: `k5_infer_principal_type` (lib/krb5/krb/bld_princ.c:34-42)
-    // "kadmin/changepw" is not krbtgt or WELLKNOWN, so `krb5_parse_name` makes it NT-PRINCIPAL.
     let changepw = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["kadmin", "changepw"]);
     let kdc = KdcAddr {
         host: kdc.host,
         port: kdc.port,
     };
-    // `krb5_get_init_creds_password` for `kadmin/changepw`, traced with its client and that service.
     krb5_protocol::trace::init_creds(krb5_protocol::trace::Princ::new(
         &client.name,
         client.realm.as_bytes(),
     ));
     krb5_protocol::trace::init_creds_service("kadmin/changepw");
     // MIT: `krb5_init_creds_init` (lib/krb5/krb/get_in_tkt.c:998-1005)
-    // `kpasswd` sets no address list, so `noaddresses` decides: absent or true sends none, and false sends `krb5_os_localaddr`'s list.
+    // `kpasswd` sets no address list, so `noaddresses` decides.
     let addresses = match krb5_protocol::init_creds_addresses(conf.noaddresses_for(&client.realm)) {
         Ok(list) => list,
         Err(e) => {
@@ -141,7 +135,6 @@ fn run<R: BufRead, W: Write>(
             ..AsTicketOpts::default()
         },
     };
-    // `krb5_get_init_creds_password` is given no password, so the KDC is asked first and the prompter runs only when a reply needs the key.
     let mut unread: Option<krb5_cli::PromptError> = None;
     let asked = format!("Password for {}", client.display);
     let out = krb5_client::as_with_fast_ccache(
@@ -186,7 +179,6 @@ fn run<R: BufRead, W: Write>(
             krb5_protocol::warn_deprecated_enctype(&out);
             out
         }
-        // a wrong password is "Password incorrect", any other failure its own text.
         Err(
             Error::ReplyIntegrity
             | Error::KrbError {
@@ -200,13 +192,11 @@ fn run<R: BufRead, W: Write>(
         Err(e) => {
             let text = match (unread, &e) {
                 // MIT: `process_pa_data` (lib/krb5/krb/preauth2.c:716-723)
-                // a read that failed answering the KDC's preauthentication hint is `KRB5_PREAUTH_FAILED`.
                 // MIT: `default_com_err_proc` (util/et/com_err.c:83-85)
-                // kpasswd's `com_err` prints `error_message` of that code.
                 (Some(_), Error::PreauthFailed(_)) | (_, Error::PreauthNoMech) => {
                     "Generic preauthentication failure".to_owned()
                 }
-                // A read that failed and was not the end of the exchange (a later mechanism read the password and the KDC refused it) leaves the KDC's own error to print.
+                // A failure that did not end the exchange leaves the KDC's own error to print.
                 (Some(why), Error::File(_)) => why.to_string(),
                 (_, e) => initial_ticket_text(e),
             };
@@ -216,7 +206,6 @@ fn run<R: BufRead, W: Write>(
     };
     let new = match krb5_config::env_new_password() {
         Some(pw) => Zeroizing::new(pw),
-        // `Enter new password`, then `Enter it again`, which must match.
         None => match prompter.password("Enter new password", Some("Enter it again")) {
             Ok(pw) => pw,
             Err(e) => {
@@ -238,7 +227,7 @@ fn run<R: BufRead, W: Write>(
         return 1;
     }
     // MIT: `change_set_password` (changepw.c:256-265)
-    // the next server only when one does not answer.
+    // The next server only when one does not answer.
     match send(
         &servers,
         &as_out,
@@ -248,12 +237,10 @@ fn run<R: BufRead, W: Write>(
         conf,
     ) {
         Ok(None) => {
-            // "Password changed." and exit 0.
             println!("Password changed.");
             0
         }
         Ok(Some(line)) => {
-            // a refusal is printed on stdout, exit 2.
             println!("{line}");
             2
         }
@@ -262,7 +249,6 @@ fn run<R: BufRead, W: Write>(
             1
         }
         Err(e) => {
-            // a failed exchange is "<error> changing password".
             let text = krb5_client::errmsg::Krb5Error::from_protocol(&e, &client.realm);
             eprintln!("{prog}: {text} changing password");
             1
@@ -273,7 +259,6 @@ fn run<R: BufRead, W: Write>(
 fn initial_ticket_text(e: &Error) -> String {
     let mit = match e {
         // MIT: `KRB5_KDC_UNREACH` (krb5_err.et:211-211)
-        // no KDC answered.
         Error::Io { .. } => "Cannot contact any KDC for requested realm",
         Error::KrbError { code, .. } => match *code {
             // MIT: `KRB5KDC_ERR_NAME_EXP` (krb5_err.et:42-42)
@@ -291,7 +276,6 @@ fn initial_ticket_text(e: &Error) -> String {
     mit.to_owned()
 }
 
-/// The principal whose password changes, with the message MIT prints when there is none.
 fn client(
     prog: &str,
     pname: Option<&str>,
@@ -326,7 +310,6 @@ fn client(
         return Ok((client, armor));
     }
     // MIT: `get_name_from_passwd_file` (kpasswd.c:19-37)
-    // the real uid's user name, as a principal.
     let user = nix::unistd::User::from_uid(nix::unistd::Uid::current())
         .ok()
         .flatten()
@@ -347,7 +330,6 @@ fn parse_client(name: &str, conf: &Krb5Conf) -> Result<Client, String> {
 }
 
 // MIT: `krb5_parse_name_flags` (krb/parse.c:198-211)
-/// a name with no realm takes the default realm.
 fn with_default_realm(name: &str, conf: &Krb5Conf) -> Result<String, String> {
     let parsed = krb5_types::parse_name_ex(name, "", false).map_err(|e| e.to_string())?;
     if parsed.has_realm {
@@ -361,7 +343,6 @@ fn with_default_realm(name: &str, conf: &Krb5Conf) -> Result<String, String> {
 }
 
 // MIT: `kcm_resolve` (cc_kcm.c:750-759)
-/// the connection first, then for `KCM:` the primary name; either failure fails the resolve.
 fn open_default_ccache(ctx: &ClientContext) -> Result<CcSpec, String> {
     let spec = krb5_config::resolve_ccspec(ctx, None).map_err(|e| e.to_string())?;
     let kcm_text = |e: io::Error| strerror(&e);
@@ -384,7 +365,8 @@ fn strerror(e: &io::Error) -> String {
 }
 
 // MIT: `interpret_errno` (cc_file.c:1346-1389)
-/// a refused path is `KRB5_FCC_PERM`, a bad argument or descriptor `KRB5_FCC_INTERNAL`, any other errno `KRB5_CC_IO`.
+/// A refused path is `KRB5_FCC_PERM`, a bad descriptor `KRB5_FCC_INTERNAL`,
+/// else `KRB5_CC_IO`.
 fn cache_text(spec: &CcSpec, e: &io::Error) -> String {
     use nix::errno::Errno;
     if matches!(spec, CcSpec::Kcm(_)) {
@@ -406,7 +388,7 @@ fn cache_text(spec: &CcSpec, e: &io::Error) -> String {
 }
 
 // MIT: `read_header` (cc_file.c:396-401)
-/// too short is `KRB5_CC_FORMAT`, a version other than 1–4 `KRB5_CCACHE_BADVNO`.
+/// Too short is `KRB5_CC_FORMAT`; a version outside 1-4 `KRB5_CCACHE_BADVNO`.
 fn parse_cache_file(b: &[u8]) -> io::Result<FileCcache> {
     let bad = |text: &str| io::Error::new(io::ErrorKind::InvalidData, text);
     let Some(v) = b.get(..2) else {
@@ -448,8 +430,6 @@ fn ccache_principal(
     }
 }
 
-/// The gates' set-password target, `KRB5_KPASSWD_TARGET=name@REALM`, in a `test-hooks` build.
-/// `krb5_change_password` changes the client's own password, so a release build reads no target.
 #[cfg_attr(
     not(feature = "test-hooks"),
     expect(
@@ -473,7 +453,7 @@ fn set_password_target() -> Result<Option<(PrincipalName, String)>, String> {
     }
 }
 
-/// One kpasswd exchange: `Ok(None)` when the password was changed, `Ok(Some(line))` when the server refused it (`line` is what MIT's `kpasswd` prints).
+/// `Ok(None)` when changed, `Ok(Some(line))` when refused.
 fn send(
     servers: &[Endpoint],
     as_out: &AsOutcome,

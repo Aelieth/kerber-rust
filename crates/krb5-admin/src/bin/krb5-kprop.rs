@@ -1,8 +1,6 @@
-//! MIT `kprop`: send a replica KDC the dump file `kdb5_util dump` wrote.
-//! ```text
-//! kprop [-r realm] [-f file] [-d] [-P port] [-s keytab] replica_host
-//! ```
-//! kprop never opens the KDC database and reads no KDC profile, as MIT's: it gets a ticket for `host/<replica_host>` in one AS exchange with a KDC krb5.conf names, as `host/<this host>` with that principal's key from the keytab, then sends the dump. Both names are MIT's without DNS: a hostname without a dot gains `qualify_shortname`, else the resolver's first search domain, and is lowercased. On the replica's acknowledgement it writes
+//! MIT `kprop`: send a replica KDC a `kdb5_util dump` file.
+//! No database or KDC profile is read, as MIT's; names get no DNS: one without a
+//! dot gains `qualify_shortname` or the search domain, and is lowercased.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -32,7 +30,6 @@ fn main() {
         .map(|a| a.to_string_lossy().into_owned())
         .collect();
     let progname = argv.first().cloned().unwrap_or_else(|| "kprop".to_owned());
-    // the library context first, its profile krb5.conf alone; a profile it refuses ends kprop.
     let conf = krb5_config::init_profile().unwrap_or_else(|e| {
         eprintln!("{progname}: {} while initializing krb5", e.init_text());
         exit(1);

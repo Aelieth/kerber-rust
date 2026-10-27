@@ -1,6 +1,5 @@
-//! IPROP_GET_UPDATES client (ONC RPC program 100423, RPCSEC_GSS): the iprop gate's test tool.
-//! no such program and none of its environment; `make install` never installed it.
-//! set for the realm it must be an iprop dump (`ipropx` / `iprop`), the replica keeps its own lockout attributes and its update log takes the dump's serial and time (MIT's `load -i`); without it, a version 7 dump. `KRB5_MASTER_PASSWORD` opens it instead when set, and a missing stash is then written. A host argument then pulls serial-delta.
+//! IPROP_GET_UPDATES client (ONC RPC 100423, RPCSEC_GSS).
+//! A gate tool; `make install` never installed it.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -83,7 +82,8 @@ fn main() {
             eprintln!("krb5-iprop-pull: read dump: {e}");
             std::process::exit(1);
         });
-        // an iprop replica loads with `-i`, any other plainly; each refuses the other's header.
+        // An iprop replica loads with `-i` and any other plainly; each refuses the
+        // other's header.
         let header_last = iprop_dump_last(text.as_bytes());
         let iprop_load = match (iprop.enabled, header_last) {
             (true, Some(last)) => Some((&iprop, last)),
@@ -124,7 +124,6 @@ fn main() {
     });
     store.persist_paths = Some((db.clone(), stash.clone()));
     // MIT: `do_iprop` (kprop/kpropd.c:764-768)
-    // the serial and time asked from are the log's last.
     let mut mylast = krb5_kdc::UlogLast::default();
     if !full_resync {
         if !iprop.enabled {
@@ -261,7 +260,6 @@ fn main() {
     );
 }
 
-/// The dump opened with `KRB5_MASTER_PASSWORD` when that is set, else with the replica's stash.
 fn load_dump(text: &str, stash: &std::path::Path) -> Result<krb5_kdc::PrincipalStore, String> {
     let hooked = std::env::var("KRB5_MASTER_PASSWORD")
         .ok()
