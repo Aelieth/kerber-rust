@@ -251,7 +251,7 @@ fn mod_princ_data(tl: &[TlData]) -> Option<(u32, PrincipalName, String)> {
 // MIT: `ulog_conv_2logentry` (lib/kdb/kdb_convert.c:364-387)
 // MIT: `ulog_conv_2logentry` (lib/kdb/kdb_convert.c:389-402)
 #[must_use]
-/// Expirations past 2038 are still sent; MIT skips each negative one.
+/// Expirations past 2038 are still sent; MIT skips negative ones.
 pub fn conv_2logentry(p: &Principal, attrs: u32) -> Vec<KdbeVal> {
     let (max_life, max_rlife) = mit_lifetimes(p);
     let mut out = Vec::new();

@@ -1,4 +1,4 @@
-//! MIT `kdb5_util`: create, stash, dump, load and destroy the KDC database.
+//! MIT `kdb5_util`: create, stash, dump, load, destroy the database.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -223,7 +223,7 @@ fn persist_text(e: &PersistError) -> String {
 }
 
 // MIT: `krb5_def_store_mkey_list` (lib/kdb/kdb_default.c:143-147)
-/// Keytab written to `<keyfile>_tmp`: a missing directory names that file.
+/// Keytab goes to `<keyfile>_tmp`: a missing directory names that file.
 fn stash_write_text(path: &Path, e: &PersistError) -> String {
     match e {
         PersistError::Io(io) if io.kind() == io::ErrorKind::NotFound => {
@@ -248,7 +248,7 @@ fn c_atoi(s: &str) -> u32 {
     if neg { n.wrapping_neg() } else { n }
 }
 
-/// Last `-P` kept; the table sees an empty value: no other copy remains.
+/// Last `-P` kept; the table sees an empty value: no copy remains.
 fn take_password(args: &[String]) -> (Option<Zeroizing<String>>, Vec<String>) {
     let mut password = None;
     let mut line = Vec::with_capacity(args.len());
@@ -471,7 +471,7 @@ fn create(util: &mut Util, args: &[String]) -> u8 {
         }
     };
     // MIT: `ctx_create_db` (plugins/kdb/db2/kdb_db2.c:710-716)
-    // A temporary database's leftover files are destroyed before it is created.
+    // Temporary database: leftover files removed before create.
     if util.db_args.temporary {
         let _ = destroy_file(&file);
         for suffix in [".kadm5", ".kadm5.lock"] {
@@ -975,7 +975,7 @@ fn write_dump_file(util: &mut Util, path: &Path, text: &str) -> Result<(), u8> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
-        // `O_NOFOLLOW`, so a planted symlink is not emptied; MIT's `O_TRUNC` would.
+        // `O_NOFOLLOW`: a planted symlink is not emptied; MIT's `O_TRUNC` would.
         opts.mode(0o600).custom_flags(nix::libc::O_NOFOLLOW);
     }
     let ok = match krb5_protocol::create_labeled(&ok_path, || opts.open(&ok_path)) {
@@ -1166,7 +1166,7 @@ fn load(util: &mut Util, args: &[String]) -> u8 {
             store.set_ulog(log, IpropRole::Primary);
         }
         // MIT: `process_k5beta7_princ` (kadmin/dbutil/dump.c:691-694)
-        // A loaded record's lockout is written; the others keep theirs.
+        // Loaded records write their lockout; others keep theirs.
         let order: Vec<&str> = dump.princs.iter().map(|p| p.name.as_str()).collect();
         if let Err(e) = update_store(&mut store, &loaded, &order) {
             util.com_err(&e.to_string(), "while creating policy");
@@ -1174,7 +1174,7 @@ fn load(util: &mut Util, args: &[String]) -> u8 {
         }
         let first = dump.princs.first().map_or("", |p| p.name.as_str());
         // MIT: `krb5_db_put_principal` (lib/kdb/kdb5.c:987-999)
-        // An unconvertible record fails the load before the database is written.
+        // An unconvertible record fails the load before any write.
         let prepared = match store.prepare_log() {
             Ok(p) => p,
             Err(e) => {
@@ -1295,7 +1295,7 @@ fn load_policies_only(
 }
 
 // MIT: `load_db` (kadmin/dbutil/dump.c:1529-1532)
-/// A full load's puts are not logged; the log restarts around the promotion.
+/// A full load's puts are unlogged; the log restarts at promotion.
 fn load_log(util: &Util, last: Option<UlogLast>) -> Option<krb5_kdc::LoadLog<'_>> {
     util.ulog
         .as_ref()
@@ -1348,7 +1348,7 @@ fn legacy_stash(util: &Util, update: &DbUpdate) -> Result<Option<Zeroizing<Vec<u
     }
 }
 
-/// `principal.kadm5.lock` stays removed until the update's lock is released.
+/// `principal.kadm5.lock` stays removed until the update's lock drops.
 fn lock_permanently(util: &Util, update: &mut DbUpdate) -> bool {
     match update.lock_permanently() {
         Ok(()) => true,
@@ -1596,7 +1596,7 @@ fn link_refused(path: &Path) -> io::Error {
     io::Error::new(e.kind(), format!("{}: {}", path.display(), strerror(&e)))
 }
 
-/// `O_NOFOLLOW`: a symlink is not zeroed; MIT zeroes the link's target.
+/// `O_NOFOLLOW`: a symlink is not zeroed; MIT zeroes its target.
 // MIT: `destroy_file` (plugins/kdb/db2/kdb_db2.c:619-682)
 fn destroy_file(path: &Path) -> io::Result<()> {
     use std::os::unix::fs::OpenOptionsExt as _;
@@ -1646,7 +1646,7 @@ mod hooks {
 
     use super::{Util, err_line, out_line, usage};
 
-    /// `KRB5_MASTER_PASSWORD` stands in for `-P` only in a test-hooks build.
+    /// `KRB5_MASTER_PASSWORD` stands in for `-P` in test-hooks builds only.
     pub(super) fn master_password() -> Option<Zeroizing<String>> {
         std::env::var("KRB5_MASTER_PASSWORD")
             .ok()

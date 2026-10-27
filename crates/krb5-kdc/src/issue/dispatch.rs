@@ -561,7 +561,7 @@ impl KdcDispatch {
     // MIT: `finish_dispatch_cache` (kdc/dispatch.c:77-83)
     fn finish_dispatch_cache(&mut self, request: &[u8], is_tcp: bool, done: Done) -> Reply {
         match &done {
-            // An empty reply is a discard: it is not cached, and the mark stays.
+            // An empty reply is a discard: not cached; the mark stays.
             Done::Failed { discard: true, .. } => {}
             Done::Reply(bytes) => self.lookaside.finish(request, Some(bytes)),
             Done::Failed { .. } => self.lookaside.finish(request, None),

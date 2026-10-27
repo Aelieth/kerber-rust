@@ -110,7 +110,7 @@ impl HeldFileLock {
 }
 
 // MIT: `lock_ulog` (lib/kdb/kdb_log.c:288-296)
-/// `flocked` matches at lock and unlock; threads share one lock: callers count holds.
+/// `flocked` matches at lock and unlock; threads share a lock: callers count holds.
 pub(crate) fn set_file_lock(
     file: &File,
     how: FileLock,

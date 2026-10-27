@@ -169,7 +169,7 @@ enum Io {
         sent: usize,
     },
     Rpc(RpcConn),
-    // Held during OTP verify: not polled, not LRU-killed, resumed on the verdict.
+    // Held during OTP verify: not polled, not LRU-killed, resumed on verdict.
     Parked,
 }
 
@@ -392,7 +392,7 @@ impl<S: Stream> Streams<S> {
     // MIT: `kill_lru_stream_connection` (lib/apputils/net-server.c:1198-1223)
     fn kill_lru(&mut self, newest: u64, log: &mut dyn Log) {
         log.syslog(Severity::Info, "too many connections");
-        // Evict unauthenticated RPC before authenticated, else oldest, as MIT.
+        // Evict unauthenticated RPC first, then oldest, as MIT.
         let mut victim: Option<usize> = None;
         let mut victim_unauth = false;
         for (i, c) in self.conns.iter().enumerate().rev() {
@@ -490,7 +490,7 @@ impl<S: Stream> Streams<S> {
     }
 
     // MIT: `process_stream_connection_read` (lib/apputils/net-server.c:1375-1453)
-    /// Deviation: a failed getsockname closes the stream; MIT uses that freed event.
+    /// Deviation: failed getsockname closes the stream; MIT uses the freed event.
     pub(crate) fn readable(
         &mut self,
         id: u64,
@@ -632,7 +632,7 @@ impl<S: Stream> Streams<S> {
         let RpcPhase::Read(rd) = &mut rpc.phase else {
             return Step::Wait;
         };
-        // Record read across polls, non-blocking: a slow or stalled peer never holds the thread.
+        // Record read across polls, non-blocking: a stalled peer holds no thread.
         loop {
             if rd.mark_off < 4 {
                 match conn.stream.read(&mut rd.mark[rd.mark_off..]) {
@@ -878,7 +878,7 @@ impl Streams<TcpStream> {
                 return;
             }
         }
-        // No O_NONBLOCK from accept; set it so rpc_step never blocks (fail closed, as admit).
+        // Accept gives no O_NONBLOCK: set it so rpc_step never blocks; fail closed.
         if stream.set_nonblocking(true).is_err() {
             return;
         }
@@ -1229,7 +1229,7 @@ pub fn run(
     let already_stopped = match wake {
         Wake::Shutdown(sd) => sd.stop_requested(),
         Wake::Flag { stop, .. } => stop.load(Ordering::Relaxed),
-        // Signals keeps its pipe-byte wake so a stop during start-up still logs `do_break`.
+        // Signals keeps its pipe wake: a stop during start-up still logs `do_break`.
         #[cfg(feature = "daemon")]
         Wake::Signals(_) => false,
     };

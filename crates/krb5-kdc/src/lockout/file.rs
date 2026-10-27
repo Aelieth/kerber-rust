@@ -477,7 +477,7 @@ pub(crate) fn store_records(store: &PrincipalStore) -> Vec<(String, Lockout)> {
 
 // MIT: `klmdb_create` (plugins/kdb/lmdb/kdb_lmdb.c:575-661)
 // MIT: `klmdb_put_principal` (plugins/kdb/lmdb/kdb_lmdb.c:781-809)
-/// Merge keeps an existing record, as an iprop load keeps the replica's own.
+/// Merge keeps an existing record, as an iprop load keeps the replica's.
 pub(crate) fn write_loaded(
     db: &Path,
     records: &[(String, Lockout)],

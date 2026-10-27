@@ -445,7 +445,7 @@ impl PrincipalStore {
     // MIT: `krb5_db_create_policy` (lib/kdb/kdb5.c:2440-2457)
     // MIT: `krb5_db_put_policy` (lib/kdb/kdb5.c:2473-2490)
     // MIT: `krb5_db_delete_policy` (lib/kdb/kdb5.c:2507-2524)
-    /// Policies are not carried, so a change starts the log over.
+    /// Policies are not carried, so a change restarts the log.
     pub(super) fn note_ulog_reset(&self) {
         self.push_note(LogNote::Reset);
     }

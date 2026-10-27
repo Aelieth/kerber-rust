@@ -25,7 +25,7 @@ pub struct NamedPolicy {
     pub max_fail: u32,
     /// 0 never resets the count.
     pub pw_failcnt_interval: u32,
-    /// 0 is permanently locked until an administrator unlocks it.
+    /// 0: locked until an administrator unlocks it.
     pub pw_lockout_duration: u32,
     pub pw_min_life: u32,
     /// 0 sets no password expiration.

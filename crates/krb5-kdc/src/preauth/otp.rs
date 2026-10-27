@@ -426,7 +426,7 @@ fn otp_verify(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, OtpFail> 
                 },
             };
             let deadline = request.deadline;
-            // Don't block the loop: submit, park, serve others; a loop-less caller blocks.
+            // Don't block the loop: submit, park, serve others; loop-less callers block.
             if otp_park_enabled()
                 && let Some(p) = pool
             {

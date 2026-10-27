@@ -99,7 +99,7 @@ fn parse_options(progname: &str, args: &[String]) -> Options {
             continue;
         }
         match o.flag {
-            // -x temporary appends a tilde. Any other unknown -x is refused.
+            // -x temporary appends a tilde; other unknown -x is refused.
             'x' => cur.db_args.push(arg),
             'r' => match &out.realm {
                 None => {
@@ -129,7 +129,7 @@ fn parse_options(progname: &str, args: &[String]) -> Options {
                     klog::com_err(None, &format!("invalid enctype {arg}"));
                 }
             }
-            // -R, -4 and -X are ignored. -k is only checked. A positive -w is ignored.
+            // -k is only checked. A positive -w is ignored.
             'R' | '4' | 'X' => {}
             'P' => out.pid_file = Some(PathBuf::from(arg)),
             'p' => cur.listen = Some(arg),
@@ -155,7 +155,7 @@ fn main() {
     let progname = progname(argv.first());
     // MIT: `main` (kdc/main.c:917-921)
     let profile_read = krb5_config::ReadOnce::start();
-    // The profile is read once; a refusal ends the process.
+    // The profile is read once; a refusal exits.
     if let Err(e) = krb5_config::init_kdc_profile() {
         let argv0 = argv.first().map_or("krb5kdc", String::as_str);
         eprintln!("{argv0}: {} while initializing krb5", e.init_text());
@@ -180,7 +180,6 @@ fn main() {
             .with_env_filter(krb5_kdc::json_log_filter("krb5_kdc=info,krb5_admin=info"))
             .try_init();
     }
-    // -T must be 0.
     if opts.time_offset != 0 {
         eprintln!("{progname}: -T (a clock offset for testing) is not supported");
         std::process::exit(1);
@@ -328,7 +327,7 @@ fn main() {
         &format!("set up {} sockets", udp.len() + tcp.len()),
     );
     // MIT: `main` (kdc/main.c:996-1008)
-    // -n stays in the foreground. Otherwise bind, then detach, then the pid file.
+    // -n stays foreground; else bind, detach, then write the pid file.
     if !foreground && let Err(e) = detach() {
         klog::com_err(Some(&os_error_text(&e)), "while detaching from tty");
         std::process::exit(1);
@@ -401,7 +400,6 @@ fn main() {
     }
     // MIT: `finish_dispatch` (kdc/dispatch.c:54-55)
     let max_dgram = kdc_conf.as_ref().map_or(krb5_kdc::MAX_DGRAM_REPLY, |c| {
-        // The UDP reply cap is the value's unsigned bits.
         usize::try_from(c.kdc_max_dgram_reply_size.cast_unsigned()).unwrap_or(usize::MAX)
     });
     let limits = ListenLimits {

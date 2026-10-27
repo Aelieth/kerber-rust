@@ -1,4 +1,4 @@
-//! The ISSUE tuple records the decision. It is not the reply.
+//! The ISSUE tuple records the decision, not the reply.
 
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -99,7 +99,7 @@ pub fn rep_etypes2str(rep: i32, tkt: Option<i32>, ses: Option<i32>) -> String {
 }
 
 // MIT: `limit_string` (kdc/kdc_util.c:1120-1135)
-/// A name of 128 bytes or more is cut so the rest of the line still fits.
+/// A name of 128 bytes or more is cut so the line still fits.
 fn limit_string(name: &str) -> String {
     if name.len() < 128 {
         return name.to_owned();

@@ -100,7 +100,7 @@ pub fn sign_reply_pac(
 }
 
 // MIT: `krb5_kdc_sign_ticket` (pac_sign.c:397-409)
-/// Service ticket checksum covers a dummy PAC: a failure signs nothing.
+/// Service checksum covers a dummy PAC: a failure signs nothing.
 fn sign_reply_pac_inner(
     cname: &PrincipalName,
     authtime: u32,
@@ -250,7 +250,7 @@ fn set_sig(pac: &mut krb5_types::pac::Pac, kind: u32, cksumtype: i32, mac: &[u8]
     }
 }
 
-/// Ticket and full checksums: service tickets only, never a TGT or kadmin/changepw.
+/// Ticket and full checksums: service tickets only, not TGT or kadmin/changepw.
 #[must_use]
 pub fn should_have_ticket_signature(sname: &PrincipalName) -> bool {
     let changepw = sname.name_string.len() == 2

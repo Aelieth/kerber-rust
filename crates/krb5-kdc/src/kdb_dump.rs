@@ -316,7 +316,7 @@ impl DumpPrincipal {
     }
 
     // MIT: `process_k5beta7_princ` (dump.c:702-723)
-    /// A policy binds only from a `KRB5_TL_KADM_DATA` that decodes and names one.
+    /// A policy binds only from a decodable `KRB5_TL_KADM_DATA` naming one.
     pub(crate) fn into_principal(
         self,
         mkey: &ProtocolKey,
@@ -928,7 +928,7 @@ fn iprop_header(last: UlogLast, text: &str) -> String {
 // MIT: `process_tl_data` (dump.c:566-594)
 // MIT: `process_k5beta7_princ` (dump.c:729-762)
 // MIT: `process_k5beta7_princ` (dump.c:766-770)
-/// A name whose length is not the header count is not a principal.
+/// A name whose length is not the header count: not a principal.
 fn parse_princ_line(rest: &str, lineno: usize) -> Result<DumpPrincipal, DumpError> {
     let mut raw: Vec<&str> = rest.split('\t').collect();
     if let Some(last) = raw.last_mut() {
@@ -1186,7 +1186,7 @@ pub(crate) fn dump_attributes(p: &Principal) -> u32 {
 }
 
 // MIT: `k5beta7_common` (dump.c:327-331)
-/// A tagged-data count that does not match the list is not written.
+/// A tagged-data count that mismatches the list is not written.
 // MIT: `k5beta7_common` (kadmin/dbutil/dump.c:338-339)
 /// A `max_life` of 0 is no limit of the principal's own.
 fn write_princ_record(

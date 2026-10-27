@@ -800,7 +800,7 @@ fn tgs_issue_ticket(
         flags.bit(flag_bit::ANONYMOUS),
     );
     // MIT: `gather_tgs_req_info` (do_tgs_req.c:692-695)
-    // Local S4U2Self: PAC from that user; other requests carry the ticket's.
+    // Local S4U2Self: that user's PAC; other requests carry the ticket's.
     let initial = s4u2self && s4u_user_local;
     let ad_data =
         include_pac && crate::ad::pac_has_ad_data(store.policy(), subject_pac.as_deref(), initial);
@@ -995,7 +995,7 @@ fn tgs_issue_ticket(
 }
 
 // MIT: `get_2ndtkt_enctype` (do_tgs_req.c:310-328)
-/// Second-ticket enctype is the session enctype only if the request lists it.
+/// Second-ticket enctype is the session enctype only if listed.
 fn get_2ndtkt_enctype(
     body: &KdcReqBody,
     st: &SecondTicket,
@@ -1094,7 +1094,7 @@ fn no_referral_option(body: &KdcReqBody) -> bool {
 }
 
 // MIT: `is_referral_req` (do_tgs_req.c:438-477)
-/// No canonicalize, user-to-user, or no-referral service: not a referral.
+/// No canonicalize, user-to-user, or no-referral service: no referral.
 fn is_referral_req(store: &dyn PrincipalRead, body: &KdcReqBody, sname: &PrincipalName) -> bool {
     if !body.kdc_options.bit(flag_bit::CANONICALIZE)
         || body.kdc_options.bit(flag_bit::ENC_TKT_IN_SKEY)
@@ -1284,7 +1284,7 @@ pub(super) fn tgs_header_client(store: &dyn PrincipalRead, req: &TgsReq) -> Opti
 
 // MIT: `db_get_svc_princ` (do_tgs_req.c:525-538)
 // MIT: `search_sprinc` (do_tgs_req.c:573-578)
-/// Code 29 is kept; every other lookup fault is 7, both as LOOKING_UP_SERVER.
+/// Code 29 is kept; other lookup faults are 7, both LOOKING_UP_SERVER.
 fn lookup_svc_princ(
     store: &dyn PrincipalRead,
     name: &PrincipalName,

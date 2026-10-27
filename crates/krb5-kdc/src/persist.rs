@@ -823,7 +823,7 @@ impl FullLoad {
     // MIT: `krb5_db2_promote_db` (plugins/kdb/db2/kdb_db2.c:1497-1513)
     // MIT: `ctx_promote` (plugins/kdb/db2/kdb_db2.c:1434-1448)
     // MIT: `load_db` (kadmin/dbutil/dump.c:1551-1559)
-    /// The log starts over before promotion, so a kill leaves no stale log.
+    /// The log restarts before promotion: a kill leaves no stale log.
     // MIT: `load_db` (kadmin/dbutil/dump.c:1570-1586)
     // MIT: `krb5_db2_promote_db` (plugins/kdb/db2/kdb_db2.c:1497-1513)
     // MIT: `ctx_promote` (plugins/kdb/db2/kdb_db2.c:1434-1448)

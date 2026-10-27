@@ -188,7 +188,7 @@ impl Default for ListenLimits {
 
 // MIT: `DEFAULT_TCP_LISTEN_BACKLOG` (include/osconf.hin:100-100)
 pub const DEFAULT_TCP_LISTEN_BACKLOG: i32 = 5;
-/// The TCP backlog is 128; MIT's is 5.
+/// TCP backlog 128; MIT's is 5.
 const KDC_TCP_LISTEN_BACKLOG: i32 = 128;
 // MIT: `svctcp_create` (lib/rpc/svc_tcp.c:178-178)
 const RPC_LISTEN_BACKLOG: i32 = 2;

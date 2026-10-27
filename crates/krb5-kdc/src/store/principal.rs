@@ -1393,7 +1393,7 @@ impl PrincipalStore {
         self.lockout_of(p).set_on(p);
     }
 
-    /// The lockout record is written in place while the database lock is held.
+    /// The lockout record is written in place under the database lock.
     // MIT: `klmdb_update_lockout` (plugins/kdb/lmdb/kdb_lmdb.c:1054-1121)
     pub fn update_lockout(&self, p: &Principal, stamp: u32, update: LockoutUpdate) {
         self.lockout

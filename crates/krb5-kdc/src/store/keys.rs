@@ -104,7 +104,7 @@ fn is_xrealm_tgt(name: &PrincipalName, realm: &str) -> bool {
 // MIT: `krb5_c_enctype_compare` (lib/crypto/krb/enctype_util.c:73-86)
 // MIT: `krb5int_enctypes_list` (lib/crypto/krb/etypes.c:38-145)
 fn enctype_class(etype: i32) -> Option<u8> {
-    // des3-cbc-raw and des3-cbc-sha1 match, and so do the two arcfour enctypes.
+    // des3-cbc-raw and des3-cbc-sha1 match; so do the two arcfour enctypes.
     match etype {
         6 | 16 => Some(1),
         23 | 24 => Some(2),
@@ -256,7 +256,7 @@ impl PrincipalStore {
         self.chrand_keepold_n(name, 0)
     }
 
-    /// 0 drops old keys; 1 keeps every older kvno; above 1 keeps that many, new included.
+    /// 0 drops old keys; 1 keeps every older kvno; N keeps N, new included.
     pub fn chrand_keepold_n(
         &mut self,
         name: &PrincipalName,

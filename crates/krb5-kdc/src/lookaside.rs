@@ -112,7 +112,6 @@ impl Lookaside {
         );
     }
 
-    /// Size eviction logs once.
     fn note_full(&mut self) {
         if self.full_logged {
             return;

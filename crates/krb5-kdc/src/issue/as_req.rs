@@ -139,7 +139,7 @@ fn issue_as_body(
     let kdc_time = crate::store::unix_now_u32();
     let mut client = None;
     let out = issue_as_steps(store, req, raw, body, fast, kdc_time, &mut client);
-    // Parked: no outcome yet; skip audit, the resume pass counts the attempt once.
+    // Parked: no outcome yet; skip audit, since resume counts the attempt once.
     if crate::plugins::otp_park_pending() {
         return out;
     }
@@ -688,7 +688,7 @@ fn finish_process_as_req(
     let usage = KeyUsage::new(ku::AS_REP_ENC_PART)?;
     let cipher =
         crate::ad::crypto_at(encrypt(&reply_key, usage, &enc_der), status::UNKNOWN_REASON)?;
-    // The enc-part kvno stays unset; MIT fills it only after encoding.
+    // Enc-part kvno is unset here; MIT fills it after encoding.
     let kvno = None;
     let padata = if outer_padata.is_empty() {
         None
@@ -961,7 +961,7 @@ fn preauth_required(
 }
 
 // MIT: `finish_preauth` (do_as_req.c:443-447)
-/// A failed or expired preauth carries the hint list so the client can retry.
+/// A failed or expired preauth carries the hint list so the client retries.
 fn attach_preauth_hint(
     store: &dyn PrincipalRead,
     client: &Principal,

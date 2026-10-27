@@ -64,7 +64,6 @@ pub(super) fn as_reply(
             // MIT: `finish_process_as_req` (do_as_req.c:371-372)
             // MIT: `filter_preauth_error` (kdc_preauth.c:1125-1125)
             // MIT: `finish_dispatch_cache` (dispatch.c:78-78)
-            // DISCARD returns empty bytes, not a KRB-ERROR.
             if code == err::DISCARD {
                 return Ok((Vec::new(), detail.filter(|s| !s.is_empty())));
             }
@@ -342,7 +341,7 @@ pub(super) fn mint_ticket(p: MintTicket<'_>) -> Result<Ticket, Error> {
         sname: sname.clone(),
         enc_part: EncryptedData {
             etype: service_etype.to_iana(),
-            // A kvno of 0 is omitted; a user-to-user ticket uses that.
+            // kvno 0 is omitted; a user-to-user ticket uses that.
             kvno: (kvno != 0).then_some(kvno),
             cipher: cipher.into(),
         },

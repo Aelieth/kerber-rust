@@ -80,7 +80,7 @@ impl Restrictions {
     // MIT: `create_principal3_2_svc` (server_stubs.c:519-519)
     // MIT: `modify_principal_2_svc` (server_stubs.c:630-630)
     // MIT: `impose_restrictions` (kadmin/server/auth.c:205-265)
-    /// A value under the cap stays, 0 included, and the mask bit is set.
+    /// A value under the cap stays, 0 included; the mask bit is set.
     pub fn impose(&self, ent: &mut AdminEnt, now: u32) {
         if self.attrs || self.require_attrs != 0 || self.forbid_attrs != !0 {
             ent.attributes |= self.require_attrs;
