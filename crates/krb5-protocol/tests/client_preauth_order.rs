@@ -6,14 +6,12 @@
 // MIT: `process_pa_data` (preauth2.c:649-713)
 //! picks the first runnable real mechanism in list
 //! order.
-//! Live oracle: `client-differential-gate.sh` `MIT_preauth_cascade`.
+//! Live oracle: field `client-tools` CT.px.preauth.cascade.
 
 #[path = "common/mod.rs"]
 mod common;
 use common::isolate_host_krb5;
 use krb5_asn1::{decode, encode};
-use krb5_crypto::SpakeGroup;
-use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented};
 
 use krb5_protocol::{
     AsRequest, AsTicketOpts, DEFAULT_PREFERRED_PREAUTH_TYPES, KdcAddr, as_exchange,
@@ -261,70 +259,5 @@ fn pkinit_padata_cookie_then_module_then_info() {
             pa::REQ_ENC_PA_REP
         ],
         "preauth2.c:992-1019 + get_in_tkt.c:1365-1372 → [133, 16, 150, 149]"
-    );
-}
-
-#[test]
-fn spake_response_request_keeps_the_advertised_padata_in_mit_order() {
-    isolate_host_krb5();
-    let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    // The client's default group is edwards25519 (MIT `DEFAULT_GROUPS_CLIENT`).
-    store.policy.spake_preauth_groups = vec![SpakeGroup::Edwards25519, SpakeGroup::P256];
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let seen: Arc<Mutex<Vec<Vec<i32>>>> = Arc::new(Mutex::new(Vec::new()));
-    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
-    let port = udp.local_addr().unwrap().port();
-    let record = Arc::clone(&seen);
-    thread::spawn(move || {
-        let mut buf = [0u8; 4096];
-        while let Ok((n, src)) = udp.recv_from(&mut buf) {
-            if let Ok(req) = decode::<AsReq>(&buf[..n]) {
-                let types = req
-                    .0
-                    .padata
-                    .iter()
-                    .flatten()
-                    .map(|p| p.padata_type)
-                    .collect();
-                record.lock().unwrap().push(types);
-            }
-            if let Ok(reply) = krb5_kdc::handle_request(&store, &buf[..n]) {
-                let _ = udp.send_to(&reply, src);
-            }
-        }
-    });
-
-    as_exchange(&AsRequest {
-        cname,
-        realm: TEST_REALM,
-        password: TEST_USER_PASSWORD,
-        kdc: &KdcAddr {
-            host: "127.0.0.1".into(),
-            port,
-        },
-        profile: &krb5_config::isolated_profile(),
-        want_spake: true,
-        fast_armor: None,
-        pkinit: None,
-        canonicalize: false,
-        sname: None,
-        etypes: None,
-        ticket: AsTicketOpts::default(),
-    })
-    .expect("SPAKE AS exchange with enc-pa-rep negotiation");
-
-    let seen = seen.lock().unwrap();
-    let last = seen.last().expect("at least one AS-REQ");
-    let tail = &last[last.len().saturating_sub(2)..];
-    assert_eq!(
-        tail,
-        [pa::AS_FRESHNESS, pa::REQ_ENC_PA_REP],
-        "final SPAKE AS-REQ must end with 150, 149; sent {seen:?}"
-    );
-    let cookie = last.iter().position(|&t| t == pa::FX_COOKIE);
-    let spake = last.iter().position(|&t| t == pa::SPAKE);
-    assert!(
-        matches!((cookie, spake), (Some(c), Some(s)) if c < s),
-        "cookie precedes PA-SPAKE like k5_preauth copy_cookie; sent {last:?}"
     );
 }

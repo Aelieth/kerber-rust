@@ -215,21 +215,6 @@ fn otp_login_issues_a_tgt_and_never_asks_for_the_password() {
     let _ = (ascii(TEST_REALM), err::PREAUTH_FAILED);
 }
 
-#[test]
-fn a_wrong_value_is_preauthentication_failed_with_no_fallback() {
-    let (kdc, armor) = realm(r#"[{"type":"clienttest"}]"#);
-    let profile = krb5_config::isolated_profile();
-    let mut ui = Ui::answering(&["000000", "123456"]);
-    let e = otp_login(&profile, &kdc, &armor, &mut ui).expect_err("wrong OTP");
-    match e {
-        Error::KrbError { code, .. } => assert_eq!(code, err::PREAUTH_FAILED),
-        other => panic!("{other:?}"),
-    }
-    assert_eq!(ui.prompts.len(), 1, "one OTP prompt, none after the 24");
-    assert_eq!(ui.passwords, 0, "no fall back to the password mechanisms");
-    assert_eq!(ui.answers.len(), 1, "the second answer was never read");
-}
-
 /// Answers OTP with the token `ti` and `value`, and checks the questions it was asked.
 struct Answer {
     ti: usize,

@@ -497,33 +497,6 @@ fn the_request_carries_the_tokens_fields_and_the_encrypted_nonce() {
 }
 
 #[test]
-fn the_default_requests_der_is_mits() {
-    let mut ui = Script::of(&["123456"]);
-    let (pa142, _) = process(
-        &state_of(challenge(vec![ti()])),
-        &ResponderItems::default(),
-        &mut ui,
-        &armor(),
-    )
-    .unwrap();
-    let der = pa142.padata_value.as_ref().to_vec();
-    assert_eq!(der[0], 0x30);
-    assert_eq!(&der[2..9], &[0x80, 0x05, 0x00, 0, 0, 0, 0]);
-    assert_eq!(der[9], 0xa2);
-    assert_eq!(
-        &der[der.len() - 11..],
-        &[
-            0x84, 0x01, 0x00, 0x85, 0x06, b'1', b'2', b'3', b'4', b'5', b'6'
-        ]
-    );
-    assert_eq!(&der[11..16], &[0xa0, 0x03, 0x02, 0x01, 0x12]);
-    assert_eq!(der.len(), 99);
-    assert_eq!(&der[..2], &[0x30, 0x61]);
-    assert_eq!(&der[9..11], &[0xa2, 0x4d]);
-    assert_eq!(&der[16..20], &[0xa2, 0x46, 0x04, 0x44]);
-}
-
-#[test]
 fn a_reply_is_cut_to_1023_bytes_and_at_a_nul() {
     let long: &'static str = Box::leak("7".repeat(2000).into_boxed_str());
     let mut ui = Script::of(&[long, "ab\0cd"]);

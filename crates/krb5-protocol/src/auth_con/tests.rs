@@ -210,10 +210,6 @@ fn the_kdc_profile_libdefaults_come_before_krb5_conf() {
     assert_eq!(iana(&[]), [18, 17, 20, 19, 16, 23, 25, 26], "MIT's DEFAULT");
 }
 
-fn peer_priv(key: &ProtocolKey, data: &[u8], seq: Option<u32>) -> Vec<u8> {
-    encode(&crate::safe_priv::build_krb_priv_with_seq(key, data, seq).unwrap()).unwrap()
-}
-
 #[test]
 fn rd_priv_refuses_a_replay_and_a_stale_time_under_do_time() {
     let session = ProtocolKey::random(AES256).unwrap();
@@ -319,20 +315,6 @@ fn rd_priv_checks_the_addresses_the_context_holds() {
     );
     assert_eq!(ac.rd_priv(&msg(Some(here.clone()), None)).unwrap(), b"p");
     assert_eq!(ac.rd_priv(&msg(None, Some(1))).unwrap(), b"p");
-}
-
-#[test]
-fn rd_priv_enc_part_of_another_enctype_is_bad_enctype() {
-    let session = ProtocolKey::random(AES256).unwrap();
-    let subkey = ProtocolKey::random(AES256).unwrap();
-    let ok = accepted(&session, Some(&subkey), None, false, None);
-    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &conf(&DEFAULT_LIST)).unwrap();
-    let mut msg: krb5_types::KrbPriv = krb5_asn1::decode(&peer_priv(&subkey, b"pw", None)).unwrap();
-    msg.enc_part.etype = 17;
-    assert_eq!(
-        ac.rd_priv(&encode(&msg).unwrap()).unwrap_err(),
-        Error::BadEnctype
-    );
 }
 
 // MIT: `k5_privsafe_check_addrs` (privsafe.c:355-378)

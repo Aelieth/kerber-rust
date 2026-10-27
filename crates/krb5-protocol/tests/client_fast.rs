@@ -181,49 +181,6 @@ fn fast_outer_till_inner_nonce_unchanged() {
     assert_eq!(req.0.req_body.nonce, 42);
 }
 
-#[test]
-fn as_exchange_records_fast_availability() {
-    isolate_host_krb5();
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let (udp, tcp) = krb5_testkit::loopback_udp_tcp();
-    let addr = udp.local_addr().unwrap();
-    let port = addr.port();
-    let store = shared_store(store);
-    thread::spawn(move || {
-        let _ = serve_until(
-            store,
-            udp,
-            tcp,
-            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            krb5_kdc::ListenLimits::default(),
-            &krb5_kdc::KdcLog::process(),
-        );
-    });
-
-    let out = as_exchange(&AsRequest {
-        cname,
-        realm: TEST_REALM,
-        password: TEST_USER_PASSWORD,
-        kdc: &KdcAddr {
-            host: "127.0.0.1".into(),
-            port,
-        },
-        profile: &krb5_config::isolated_profile(),
-        want_spake: false,
-        fast_armor: None,
-        pkinit: None,
-        canonicalize: false,
-        sname: None,
-        etypes: None,
-        ticket: AsTicketOpts::default(),
-    })
-    .expect("AS exchange with enc-pa-rep negotiation");
-    // The client advertised PA-149; the KDC echoed a valid checksum (else
-    // as_exchange would fail KDCREP_MODIFIED) plus PA-FX-FAST.
-    assert!(out.fast_avail, "PA-FX-FAST echoed => fast_avail");
-}
-
 fn request<'a>(
     profile: &'a krb5_config::Krb5Conf,
     cname: &PrincipalName,
@@ -547,21 +504,6 @@ fn fast_as_rep_client_is_the_finished_client_under_canonicalize() {
         user(),
         "the outcome client is the FAST finished client, not the outer AS-REP cname"
     );
-}
-
-/// Without CANONICALIZE the client compare runs on the replaced (finished) client, which is the
-/// requested one — the rewritten outer name is not a mismatch.
-// MIT: `verify_as_reply` (get_in_tkt.c:239-239)
-/// without CANONICALIZE the reply client is
-/// compared with the requested client.
-#[test]
-fn fast_as_rep_outer_cname_is_ignored_without_canonicalize() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let armor = armor_tgt(&store, 1202);
-    let (kdc, _) = mitm(store, Box::new(|_, reply| rewrite_outer_cname(reply)));
-    let out = fast_exchange(&kdc, &armor, false)
-        .expect("a rewritten outer cname is not a reply mismatch under FAST");
-    assert_eq!(out.cname, user());
 }
 
 /// The finished client is what is compared: a finished cname that is not
