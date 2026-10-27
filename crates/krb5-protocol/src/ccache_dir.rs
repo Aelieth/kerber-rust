@@ -1,5 +1,3 @@
-//! DIR collection (`cc_dir.c`): `DIR:dirname` and `DIR::filepath`.
-
 use std::fs::{self, DirBuilder, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -26,7 +24,6 @@ pub fn dir_display_name(residual: &str) -> io::Result<String> {
     Ok(format!("DIR::{}", path.display()))
 }
 
-/// Only a DIR::filepath residual changes the primary.
 pub fn dir_switch(residual: &str) -> io::Result<()> {
     let path = residual.strip_prefix(':').ok_or_else(|| {
         io::Error::new(io::ErrorKind::InvalidInput, "kswitch needs DIR::subsidiary")
@@ -46,10 +43,8 @@ pub fn dir_primary(dir: &Path) -> Option<PathBuf> {
     }
 }
 
-/// An existing name is skipped.
 // MIT: `dcc_gen_new` (cc_dir.c:387-429)
 /// On Unix the mode is 0600.
-/// The collection directory is created if it is missing.
 pub fn dir_gen_new(dir: &Path) -> io::Result<PathBuf> {
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     verify_dir(dir)?;

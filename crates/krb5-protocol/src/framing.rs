@@ -1,10 +1,8 @@
-//! Length-prefixed messages, each call written with one write.
-
 use std::io::{self, Write};
 
 // MIT: `k5_write_messages` (lib/krb5/os/write_msg.c:39-70)
 /// A lone length lets Nagle hold the message.
-/// A message of 4 GiB or more is InvalidInput.
+/// A message of 4 GiB or more is `InvalidInput`.
 pub fn write_messages(w: &mut impl Write, messages: &[&[u8]]) -> io::Result<()> {
     let mut out = Vec::with_capacity(messages.iter().map(|m| 4 + m.len()).sum());
     for m in messages {

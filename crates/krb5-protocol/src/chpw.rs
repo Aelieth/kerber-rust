@@ -1,5 +1,4 @@
-//! RFC 3244 kpasswd client.
-//! The password copies and the authenticator DER are wiped once encrypted.
+//! Password copies and the authenticator DER are wiped once encrypted.
 
 use std::io::{self, Read};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs, UdpSocket};
@@ -29,9 +28,7 @@ pub const KPASSWD_AUTHERROR: u16 = 3;
 pub const KPASSWD_SOFTERROR: u16 = 4;
 pub const KPASSWD_ACCESSDENIED: u16 = 5;
 pub const KPASSWD_BAD_VERSION: u16 = 6;
-/// Last valid kpasswd result code.
 pub const KPASSWD_INITIAL_FLAG_NEEDED: u16 = 7;
-/// RFC 3244 set-password version.
 pub const KPASSWD_SETPW_VERSION: u16 = 0xff80;
 pub const KPASSWD_PORT: u16 = 464;
 
@@ -156,7 +153,6 @@ pub fn format_chpw_failure(code: u16, result_data: &[u8]) -> String {
     }
 }
 
-/// Version 1, the caller's own password.
 pub fn change_password(
     servers: &[Endpoint],
     as_out: &AsOutcome,
@@ -181,7 +177,7 @@ pub fn change_password_result(
     change_or_set(servers, as_out, new_pw, None, timeout, profile)
 }
 
-/// Version 0xff80, another principal's password.
+/// Version `0xff80`, another principal's password.
 pub fn set_password(
     servers: &[Endpoint],
     as_out: &AsOutcome,
@@ -276,9 +272,7 @@ fn unreachable_kdc() -> Error {
 type SendRequest<'a> = dyn FnMut(&mut Build<'_>) -> Result<Vec<u8>, Error> + 'a;
 
 // MIT: `change_set_password` (lib/krb5/os/changepw.c:230-240)
-/// The subkey and its AP-REQ are made once, before any connection.
 // MIT: `krb5_c_make_random_key` (lib/crypto/krb/make_random_key.c:31-76)
-/// A des3 subkey has odd parity.
 fn change_or_set_via(
     send: &mut SendRequest<'_>,
     as_out: &AsOutcome,
@@ -308,7 +302,7 @@ fn change_or_set_via(
         (Zeroizing::new(new_pw.to_vec()), 1)
     };
     // MIT: `kpasswd_sendto_msg_callback` (lib/krb5/os/changepw.c:108-195)
-    // The KRB-PRIV sender is this connection's local address, and it names no receiver.
+    // The KRB-PRIV sender is this connection's local address; no receiver.
     let mut build =
         |sender: &HostAddress| kpasswd_request(&sub, &ap_der, &priv_plain, version, sender);
     let rep = send(&mut build)?;
@@ -331,7 +325,7 @@ fn change_or_set_via(
 
 // MIT: `krb5_auth_con_init` (lib/krb5/krb/auth_con.c:39-41)
 // MIT: `krb5_mk_req_extended` (lib/krb5/krb/mk_req_ext.c:137-143)
-/// No sequence number: DO_SEQUENCE is set only after this authenticator is made.
+/// No sequence number: `DO_SEQUENCE` comes after this authenticator.
 // MIT: `authenticator_7` (lib/krb5/asn.1/asn1_k_encode.c:693-693)
 fn kpasswd_ap_req(
     ticket: &Ticket,
@@ -361,7 +355,7 @@ fn kpasswd_ap_req(
     let cipher = KeyUsage::new(ku::AP_REQ_AUTHENTICATOR)
         .map_err(Error::from)
         .and_then(|usage| Ok(encrypt(session, usage, &der)?));
-    // It holds the subkey, so it is wiped before it drops.
+    // The DER holds the subkey, so it is wiped before it drops.
     wipe_vec(der);
     let cipher = cipher?;
     trace::mk_req(
@@ -396,7 +390,6 @@ fn get_clear_result(
 ) -> Result<Vec<u8>, Error> {
     let rep_part = verify_ap_rep(ap_rep, session, authenticator)?;
     // MIT: `krb5_rd_rep` (lib/krb5/krb/rd_rep.c:130-130)
-    // the AP-REP's sequence number is the one the reply must carry.
     let mut remote = RemoteSeq::new(rep_part.seq_number.unwrap_or(0));
     let part = read_krb_priv(subkey, priv_rep)?;
     if !remote.check(part.seq_number.unwrap_or(0)) {
@@ -409,7 +402,7 @@ fn get_clear_result(
 }
 
 // MIT: `krb5_get_init_creds_password` (gic_pwd.c:211-222)
-/// KEY_EXP with a new password, and not a keytab.
+/// `KEY_EXP` with a new password, not a keytab.
 #[must_use]
 pub fn key_exp_should_changepw(err: &Error, has_new_password: bool, keytab: bool) -> bool {
     has_new_password
@@ -507,7 +500,7 @@ pub(crate) fn kpasswd_sender_address(
 }
 
 // MIT: `krb5int_mk_chpw_req` (lib/krb5/krb/chpw.c:13-67)
-/// DO_SEQUENCE only, so there is no timestamp, and sequence 0 is left out.
+/// `DO_SEQUENCE` only: no timestamp, and sequence 0 is omitted.
 // MIT: `priv_enc_part_3` (lib/krb5/asn.1/asn1_k_encode.c:866-866)
 fn kpasswd_request(
     sub: &ProtocolKey,
@@ -569,7 +562,6 @@ fn send_kpasswd(
 }
 
 // MIT: `service_fds` (sendto_kdc.c:1421-1424)
-/// Once connected, only `request_timeout` bounds the read.
 fn kpasswd_tcp(
     addrs: &[SocketAddr],
     build: &mut Build<'_>,
@@ -631,7 +623,6 @@ fn kpasswd_tcp(
 }
 
 // MIT: `service_tcp_read` (sendto_kdc.c:1151-1200)
-/// A length of 0 or over 1 MiB ends the connection.
 // MIT: `service_tcp_write` (lib/krb5/os/sendto_kdc.c:1115-1146)
 fn tcp_round_trip(
     stream: &mut TcpStream,
@@ -666,7 +657,6 @@ fn tcp_round_trip(
     Ok(out)
 }
 // MIT: `maybe_send` (sendto_kdc.c:1021-1035)
-/// A failed send keeps the server for the next pass.
 fn kpasswd_udp(
     addrs: &[SocketAddr],
     build: &mut Build<'_>,
@@ -1025,7 +1015,6 @@ mod sender_tests {
     }
 
     // MIT: `create_krbpriv` (lib/krb5/krb/mk_priv.c:60-61)
-    /// the sender is the auth context's local address and the receiver its remote one, unset for kpasswd.
     #[test]
     fn the_krb_priv_of_a_request_names_the_sender_and_no_receiver() {
         let sub = ProtocolKey::random(EncryptionType::Aes256CtsHmacSha196).unwrap();
@@ -1135,7 +1124,6 @@ mod ap_req_tests {
         let subkey = sent.subkey.expect("a subkey");
         assert_eq!(subkey.keytype, sub.etype().to_iana());
         assert_eq!(subkey.keyvalue.as_ref(), sub.as_bytes());
-        // On the wire: version, realm, client, microseconds, time and the subkey, and no [7].
         assert_eq!(
             field_tags(&plain),
             [0xa0, 0xa1, 0xa2, 0xa4, 0xa5, 0xa6],

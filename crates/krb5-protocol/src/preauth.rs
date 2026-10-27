@@ -1,5 +1,4 @@
-//! Client padata for FAST, SPAKE, PKINIT, and S4U.
-//! A builder that fails returns the error and does not emit an empty padata list.
+//! A failed builder returns the error, never an empty padata list.
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
@@ -96,7 +95,6 @@ pub fn attach_fast(
     )
 }
 
-/// Hide-client-names makes the KDC return the anonymous principal as the outer client.
 pub fn attach_fast_with_options(
     req: &mut AsReq,
     armor: &ApReq,
@@ -113,7 +111,7 @@ pub fn attach_fast_with_options(
 
 // MIT: `krb5int_fast_prep_req_body` (fast.c:157-161)
 // MIT: `krb5int_fast_prep_req` (fast.c:310-313)
-/// The checksum is over the outer body, not over its padata.
+/// The checksum covers the outer body, not its padata.
 pub(crate) fn attach_fast_over(
     req: &mut AsReq,
     outer: krb5_types::KdcReqBody,
@@ -155,7 +153,6 @@ pub fn fx_fast_padata(
     )
 }
 
-/// The checksum is over the caller's bytes.
 /// A TGS request passes its PA-TGS-REQ as those bytes.
 // MIT: `k5_make_tgs_req` (send_tgs.c:279-279)
 pub fn fx_fast_padata_over(
@@ -202,7 +199,6 @@ pub fn fx_fast_padata_over(
 }
 
 // MIT: `krb5int_fast_process_response` (fast.c:543-551)
-/// A mismatch is "Ticket modified in KDC reply".
 pub fn verify_fast_finished(
     armor_key: &ProtocolKey,
     ticket: &Ticket,
@@ -221,7 +217,7 @@ pub fn verify_fast_finished(
 }
 
 // MIT: `krb5int_fast_verify_nego` (fast.c:648-664)
-/// With the enc-pa-rep flag set, a missing or bad checksum is refused.
+/// With the enc-pa-rep flag, a missing or bad checksum is refused.
 pub fn verify_req_enc_pa_rep(
     enc: &EncKdcRepPart,
     key: &ProtocolKey,
@@ -264,7 +260,6 @@ pub fn unwrap_fast_rep(
 }
 
 // MIT: `decrypt_fast_reply` (fast.c:397-402)
-/// A nonce mismatch is refused.
 pub fn unwrap_fast_rep_checked(
     armor_key: &ProtocolKey,
     padata: &Option<Vec<PaData>>,
@@ -289,7 +284,6 @@ pub fn apply_strengthen(
 }
 
 // MIT: `send_support` (spake_client.c:155-167)
-/// the client's permitted groups, in configuration order.
 #[must_use]
 pub fn pa_spake_support(groups: &[SpakeGroup]) -> PaData {
     let msg = krb5_types::spake::PaSpake::Support(krb5_types::spake::SpakeSupport {
@@ -301,9 +295,8 @@ pub fn pa_spake_support(groups: &[SpakeGroup]) -> PaData {
     }
 }
 
-/// The transcript is the support, the challenge and the client element.
 // MIT: `process_challenge` (spake_client.c:210-282)
-/// SF-NONE is encrypted under K'\[1\].
+/// `SF-NONE` is encrypted under `K'[1]`.
 pub fn pa_spake_response(
     ikey: &ProtocolKey,
     group: SpakeGroup,
@@ -318,7 +311,6 @@ pub fn pa_spake_response(
     crate::trace::spake_keygen(&pub_x);
     let result = spake_result(group, &wbytes, &secret, challenge_pubkey, false)?;
     // MIT: `group_result` (plugins/preauth/spake/groups.c:374-412)
-    // The result is traced as a hash only.
     crate::trace::spake_result(&result);
     let thash = spake_thash_update(group, &[], support_der, challenge_der);
     let thash = spake_thash_update(group, &thash, &pub_x, &[]);
@@ -351,7 +343,6 @@ pub fn pa_spake_response(
 }
 
 #[cfg(any(test, feature = "test-ca"))]
-/// PA-PK-AS-REQ: AuthPack inside CMS SignedData (`signedAuthPack`).
 pub fn pa_pk_as_req(
     client_public: &[u8],
     ca: &krb5_types::pkinit::PkinitCa,
@@ -365,7 +356,6 @@ pub fn pa_pk_as_req(
 }
 
 #[cfg(any(test, feature = "test-ca"))]
-/// PA-PK-AS-REQ whose `clientPublicValue` is an already-encoded SPKI (ECDH P-256 or MODP DH).
 pub fn pa_pk_as_req_spki(
     spki: &[u8],
     ca: &krb5_types::pkinit::PkinitCa,
@@ -375,7 +365,6 @@ pub fn pa_pk_as_req_spki(
 }
 
 #[cfg(any(test, feature = "test-ca"))]
-/// PA-PK-AS-REQ signed as `cn` (SAN / EKU follow that identity).
 pub fn pa_pk_as_req_cn(
     client_public: &[u8],
     ca: &krb5_types::pkinit::PkinitCa,
@@ -424,7 +413,6 @@ fn pa_pk_as_req_spki_cn(
 }
 
 #[cfg(any(test, feature = "test-ca"))]
-/// PA-PK-AS-REQ advertising RFC 8636 SHA-256 `supportedKDFs`.
 pub fn pa_pk_as_req_agile(
     client_public: &[u8],
     ca: &krb5_types::pkinit::PkinitCa,
@@ -478,7 +466,6 @@ pub fn pa_pk_as_req_signed(
     )
 }
 
-/// The time is the caller's: the AS exchange's clock.
 pub(crate) fn pa_pk_as_req_signed_at(
     spki: &[u8],
     cert_der: &[u8],
@@ -516,7 +503,6 @@ pub(crate) fn pa_pk_as_req_signed_at(
     })
 }
 
-/// Unsigned AuthPack, anonymous PKINIT.
 pub fn pa_pk_as_req_unsigned(
     client_public: &[u8],
     nonce: u32,
@@ -532,7 +518,6 @@ pub fn pa_pk_as_req_unsigned(
     )
 }
 
-/// The time is the caller's: the AS exchange's clock.
 pub(crate) fn pa_pk_as_req_unsigned_at(
     spki: &[u8],
     nonce: u32,
@@ -584,7 +569,7 @@ impl<'a> KdcTrust<'a> {
     }
 }
 
-/// The CMS, EKU, SAN and DH key are checked before any ECDH.
+/// The KDC's CMS, EKU, SAN and DH key are checked before any ECDH.
 fn verify_kdc_pkinit_cms(cms: &[u8], trust: KdcTrust<'_>, realm: &str) -> Result<Vec<u8>, Error> {
     let pack = krb5_types::pkinit::cms_signeddata_verify(
         cms,
@@ -604,7 +589,6 @@ fn verify_kdc_pkinit_cms(cms: &[u8], trust: KdcTrust<'_>, realm: &str) -> Result
     Ok(pack.e_content)
 }
 
-// The SAN must name krbtgt/<realm>@<realm>, or a configured KDC hostname.
 fn verify_kdc_cert(cert: &[u8], trust: KdcTrust<'_>, realm: &str) -> Result<(), Error> {
     let refuse = |code: i32| {
         let code = trace::kdc_code(code);
@@ -650,7 +634,6 @@ fn verify_kdc_cert(cert: &[u8], trust: KdcTrust<'_>, realm: &str) -> Result<(), 
         return Err(refuse(err::KDC_NAME_MISMATCH));
     };
     trace::pkinit_client_san_match_dnsname(host);
-    // The EKU is id-pkinit-KPKdc unless pkinit_eku_checking relaxes it.
     if !trust.require_eku {
         trace::pkinit_client_eku_skip();
         trace::pkinit_client_eku_accept();
@@ -753,7 +736,6 @@ pub fn pkinit_reply_key_agile(
 }
 
 // MIT: `make_pa_for_user_checksum` (lib/krb5/krb/s4u_creds.c:130-133)
-/// The checksum is HMAC-MD5, type -138, whatever the key's enctype.
 pub fn pa_for_user(
     session: &ProtocolKey,
     user: PrincipalName,
@@ -784,7 +766,6 @@ pub fn pa_for_user(
     })
 }
 
-/// The request checksum is key usage 26 over the encoded user-id.
 pub fn pa_s4u_x509_user(
     key: &ProtocolKey,
     user: PrincipalName,
@@ -826,7 +807,7 @@ fn s4u_not_newer(etype: EncryptionType) -> bool {
 }
 
 // MIT: `verify_s4u2self_reply` (s4u_creds.c:273-397)
-/// Absent from both reply lists, it is accepted. An enc-only 130, or a mismatch, is refused.
+/// Absent from both lists it is accepted; an enc-only 130, or a mismatch, is refused.
 /// An unkeyed checksum on a modern etype is refused.
 pub fn verify_s4u2self_reply(
     subkey: &ProtocolKey,
@@ -898,7 +879,6 @@ pub fn verify_s4u2self_reply(
     Ok(())
 }
 
-/// `rbcd` sets MS-KILE bit 3.
 pub fn pa_pac_options(rbcd: bool) -> Result<PaData, Error> {
     let body = if rbcd {
         krb5_types::s4u::PaPacOptions::rbcd()

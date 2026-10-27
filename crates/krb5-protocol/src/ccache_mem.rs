@@ -1,5 +1,3 @@
-//! Process-global MEMORY ccache (`cc_memory.c`).
-
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
@@ -18,13 +16,11 @@ pub fn memory_store(name: impl Into<String>, cc: FileCcache) {
     table().insert(name.into(), cc);
 }
 
-/// A clone of the named cache.
 #[must_use]
 pub fn memory_retrieve(name: &str) -> Option<FileCcache> {
     table().get(name).cloned()
 }
 
-/// True when the name was present.
 #[must_use]
 pub fn memory_destroy(name: &str) -> bool {
     table().remove(name).is_some()
