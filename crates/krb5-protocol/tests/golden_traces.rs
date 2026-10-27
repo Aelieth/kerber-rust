@@ -3,7 +3,7 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_protocol::as_req;
-use krb5_types::{AsRep, AsReq, PrincipalName, TgsRep, TgsReq};
+use krb5_types::{AsRep, AsReq, KrbError, PrincipalName, TgsRep, TgsReq};
 
 fn traces_dir() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/traces")
@@ -119,4 +119,24 @@ fn mit_tgs_rep_round_trips_through_encoder() {
     assert_eq!(utf8_realm(&rep.0.crealm), "KERBER.TEST");
     assert_eq!(utf8_realm(&rep.0.ticket.realm), "KERBER.TEST");
     assert!(rep.0.ticket.enc_part.etype != 0);
+}
+
+#[test]
+fn mit_krb_error_round_trips_through_encoder() {
+    // Self-emitted PREAUTH_REQUIRED (not a MIT-KDC PDU). Semantic fields only;
+    // stime/nonce in a live issue_as will not byte-match this capture.
+    let raw = load("mit-krb-error-preauth.der");
+    assert_eq!(raw.first().copied(), Some(0x7e));
+    let e: KrbError = decode(&raw).unwrap();
+    let again = encode(&e).unwrap();
+    assert_eq!(decode::<KrbError>(&again).unwrap(), e);
+    assert_eq!(
+        again,
+        raw,
+        "self-emitted KRB-ERROR re-encode: {}",
+        first_diff(&again, &raw)
+    );
+    assert_eq!(e.pvno, 5);
+    assert_eq!(e.msg_type, 30);
+    assert_eq!(e.error_code, krb5_types::err::PREAUTH_REQUIRED);
 }

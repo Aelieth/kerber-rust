@@ -1,6 +1,9 @@
 //! The encrypted challenge module against MIT 1.22.2's own keys: the client and KDC challenge keys below are what MIT's `krb5_c_fx_cf2_simple` gives for these armor and AS keys with `preauth_ec.c`'s peppers, read live from MIT's library.
 
-use super::{client_challenge, pa_enc_ts, verify_kdc_challenge};
+use super::{
+    ASN1_BAD_ID, KRB5_BAD_ENCTYPE, KRB5_BAD_MSIZE, client_challenge, pa_enc_ts, reply_code,
+    verify_kdc_challenge,
+};
 use crate::trace::kdc_code;
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt};
@@ -123,4 +126,134 @@ fn the_kdc_challenge_opens_under_mits_kdc_challenge_key_only() {
             );
         }
     }
+}
+
+#[test]
+fn a_malformed_kdc_challenge_is_traced_with_mits_codes() {
+    let (armor, as_key) = sha2_pair();
+    assert_eq!(
+        verify_kdc_challenge(&armor, &as_key, &[0x04, 0x01, 0x00]),
+        ASN1_BAD_ID
+    );
+    let mut enc: EncryptedData = decode(&kdc_challenge(
+        MIT_KDC_SHA2,
+        EncryptionType::Aes256CtsHmacSha384192,
+        ku::ENC_CHALLENGE_KDC,
+    ))
+    .unwrap();
+    enc.etype = EncryptionType::Aes256CtsHmacSha196.to_iana();
+    let relabelled = encode(&enc).unwrap();
+    assert_eq!(
+        verify_kdc_challenge(&armor, &as_key, &relabelled),
+        KRB5_BAD_ENCTYPE
+    );
+    enc.etype = EncryptionType::Aes256CtsHmacSha384192.to_iana();
+    enc.cipher = vec![0u8; 8].into();
+    let short = encode(&enc).unwrap();
+    assert_eq!(
+        verify_kdc_challenge(&armor, &as_key, &short),
+        KRB5_BAD_MSIZE
+    );
+}
+
+// MIT: `krb5_c_decrypt` (lib/crypto/krb/decrypt.c:88-101)
+/// the keyblock's key goes through `krb5_k_decrypt`.
+#[test]
+fn the_kdc_challenge_enctype_is_checked_as_krb5_k_decrypt_checks_it() {
+    let (armor, as_key) = sha2_pair();
+    let mut enc: EncryptedData = decode(&kdc_challenge(
+        MIT_KDC_SHA2,
+        EncryptionType::Aes256CtsHmacSha384192,
+        ku::ENC_CHALLENGE_KDC,
+    ))
+    .unwrap();
+    enc.etype = 0x01ff;
+    assert_eq!(
+        verify_kdc_challenge(&armor, &as_key, &encode(&enc).unwrap()),
+        0
+    );
+    enc.etype = 0;
+    assert_eq!(
+        verify_kdc_challenge(&armor, &as_key, &encode(&enc).unwrap()),
+        KRB5_BAD_ENCTYPE
+    );
+}
+
+#[test]
+fn only_a_reply_that_carries_a_kdc_challenge_is_processed() {
+    let (armor, as_key) = sha2_pair();
+    let good = PaData {
+        padata_type: pa::ENCRYPTED_CHALLENGE,
+        padata_value: kdc_challenge(
+            MIT_KDC_SHA2,
+            EncryptionType::Aes256CtsHmacSha384192,
+            ku::ENC_CHALLENGE_KDC,
+        )
+        .into(),
+    };
+    let info = PaData {
+        padata_type: pa::ETYPE_INFO2,
+        padata_value: Vec::new().into(),
+    };
+    assert_eq!(reply_code(&[good, info.clone()], &armor, &as_key), Some(0));
+    assert_eq!(reply_code(&[info], &armor, &as_key), None);
+}
+
+#[test]
+fn pausec_is_encoded_only_when_it_is_not_zero() {
+    let (t, usec) = when();
+    let with = encode(&pa_enc_ts(&t, usec)).unwrap();
+    let zero = encode(&pa_enc_ts(&t, Microseconds::ZERO)).unwrap();
+    assert_eq!(
+        decode::<PaEncTsEnc>(&with).unwrap().pausec,
+        Some(usec),
+        "MIT encodes a set pausec"
+    );
+    assert_eq!(
+        decode::<PaEncTsEnc>(&zero).unwrap().pausec,
+        None,
+        "MIT's opt_int32 omits a zero pausec"
+    );
+    assert_eq!(
+        with.len() - zero.len(),
+        7,
+        "[1] INTEGER 244167 is seven octets"
+    );
+}
+
+#[test]
+fn under_armor_encrypted_timestamp_runs_only_when_the_kdc_offers_it_first() {
+    let profile = krb5_config::isolated_profile();
+    let list = |types: &[i32]| -> Vec<PaData> {
+        types
+            .iter()
+            .map(|&padata_type| PaData {
+                padata_type,
+                padata_value: Vec::new().into(),
+            })
+            .collect()
+    };
+    assert_eq!(
+        super::super::fast::fast_mechanism(&profile, &list(&[136, 19, 138, 133, 137]), &[], false)
+            .unwrap(),
+        pa::ENCRYPTED_CHALLENGE
+    );
+    assert_eq!(
+        super::super::fast::fast_mechanism(
+            &profile,
+            &list(&[136, 19, 151, 138, 133, 137]),
+            &[],
+            false
+        )
+        .unwrap(),
+        pa::SPAKE
+    );
+    assert_eq!(
+        super::super::fast::fast_mechanism(&profile, &list(&[2, 138]), &[], false).unwrap(),
+        pa::ENC_TIMESTAMP
+    );
+    assert!(
+        super::super::fast::fast_mechanism(&profile, &list(&[136, 19, 133, 137]), &[], false)
+            .is_err()
+    );
 }

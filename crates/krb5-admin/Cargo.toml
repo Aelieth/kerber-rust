@@ -90,6 +90,10 @@ name = "cli_stdin"
 required-features = ["test-hooks"]
 
 [[test]]
+name = "kadm5_alias"
+required-features = ["test-hooks"]
+
+[[test]]
 name = "kadm5_create"
 required-features = ["test-hooks"]
 

@@ -619,6 +619,16 @@ mod tests {
     }
 
     #[test]
+    fn safe_second_unwrap_fails() {
+        let key = session();
+        let a = build_krb_safe_ex(&key, b"one", Some(1), true).unwrap();
+        let raw = encode(&a).unwrap();
+        let cache = ReplayCache::new();
+        assert_eq!(unwrap_krb_safe(&key, &raw, &cache).unwrap(), b"one");
+        assert!(unwrap_krb_safe(&key, &raw, &cache).is_err());
+    }
+
+    #[test]
     fn priv_second_unwrap_fails() {
         let key = session();
         let msg = build_krb_priv_with_seq(&key, b"secret", Some(1)).unwrap();
@@ -626,6 +636,28 @@ mod tests {
         let cache = ReplayCache::new();
         assert_eq!(unwrap_krb_priv(&key, &raw, &cache).unwrap(), b"secret");
         assert!(unwrap_krb_priv(&key, &raw, &cache).is_err());
+    }
+
+    #[test]
+    fn cred_window_and_second_unwrap_fails() {
+        let key = session();
+        let msg = build_krb_cred(&key, Vec::new(), Vec::new()).unwrap();
+        let raw = encode(&msg).unwrap();
+        let cache = ReplayCache::new();
+        let (_, part) = unwrap_krb_cred(&key, &raw, &cache).unwrap();
+        assert!(part.timestamp.is_some());
+        assert!(unwrap_krb_cred(&key, &raw, &cache).is_err());
+    }
+
+    #[test]
+    fn safe_unkeyed_cksumtype_is_inapp() {
+        let key = session();
+        let mut msg = build_krb_safe_ex(&key, b"body", Some(1), true).unwrap();
+        msg.cksum.cksumtype = 7;
+        match verify_krb_safe_checksum(&key, &encode(&msg).unwrap(), None, None) {
+            Err(Error::KrbError { code, .. }) => assert_eq!(code, err::INAPP_CKSUM),
+            other => panic!("unkeyed SAFE must be 50, got {other:?}"),
+        }
     }
 
     #[test]
