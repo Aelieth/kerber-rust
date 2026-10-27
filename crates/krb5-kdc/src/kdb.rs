@@ -81,7 +81,7 @@ impl KdcEnv {
     }
 }
 
-/// A locked database is Error::Protocol SVC_UNAVAILABLE (MIT KRB5_KDB_CANTLOCK_DB).
+/// Locked database: Error::Protocol SVC_UNAVAILABLE (MIT KRB5_KDB_CANTLOCK_DB).
 pub trait PrincipalRead: Send + Sync {
     fn realm(&self) -> &str;
     fn policy(&self) -> &Policy;

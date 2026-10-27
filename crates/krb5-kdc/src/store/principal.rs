@@ -98,7 +98,7 @@ impl KadmData {
     }
 }
 
-/// Times are Unix seconds, 0 never; a 0 max_life sets no limit, a 0 renewable life no renewal.
+/// Unix seconds, 0 never; max_life 0: no limit; renewable life 0: no renewal.
 #[derive(Clone)]
 pub struct Principal {
     pub name: PrincipalName,
@@ -330,7 +330,7 @@ impl PrincipalBuilder {
 }
 
 // MIT: `kadm5_create_principal_3` (svr_principal.c:376-420)
-/// A field applies only when its mask bit is set; otherwise the realm default.
+/// A field applies only with its mask bit set; else the realm default.
 // MIT: `impose_restrictions` (auth.c:205-265)
 // MIT: `auth_restrict` (auth.c:267-272)
 #[derive(Copy, Clone)]

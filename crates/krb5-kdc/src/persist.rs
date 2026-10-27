@@ -41,7 +41,7 @@ pub enum PersistError {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Unopenable {
-    /// Another format is refused at open; an empty file is refused under the lock.
+    /// Other formats refused at open; an empty file refused under the lock.
     NotDatabase,
     /// An MIT db2 file is refused at open and left in place.
     MitDb2,

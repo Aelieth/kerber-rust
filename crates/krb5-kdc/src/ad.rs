@@ -100,7 +100,7 @@ pub fn sign_reply_pac(
 }
 
 // MIT: `krb5_kdc_sign_ticket` (pac_sign.c:397-409)
-/// A service ticket's checksum covers a dummy PAC, so a failure signs nothing.
+/// Service ticket checksum covers a dummy PAC: a failure signs nothing.
 fn sign_reply_pac_inner(
     cname: &PrincipalName,
     authtime: u32,
@@ -250,7 +250,7 @@ fn set_sig(pac: &mut krb5_types::pac::Pac, kind: u32, cksumtype: i32, mac: &[u8]
     }
 }
 
-/// Ticket and full checksums belong to service tickets, never a TGT or kadmin/changepw.
+/// Ticket and full checksums: service tickets only, never a TGT or kadmin/changepw.
 #[must_use]
 pub fn should_have_ticket_signature(sname: &PrincipalName) -> bool {
     let changepw = sname.name_string.len() == 2
@@ -515,7 +515,7 @@ pub fn ticket_checksum_der(part: &EncTicketPart) -> Result<Vec<u8>, Error> {
 }
 
 // MIT: `get_verified_pac` (kdc_util.c:589-630)
-/// A TGS header checks the server checksum; a service header also tries the previous kvnos.
+/// TGS header: server checksum; service header also tries previous kvnos.
 pub(crate) fn get_verified_pac(
     policy: &crate::store::Policy,
     part: &EncTicketPart,
@@ -674,7 +674,7 @@ pub(crate) fn pac_client_info_eq(
     got_time == authtime && got_name == want
 }
 
-/// A cross-realm PAC may not assert this realm's SIDs; a local base identity is refused.
+/// Cross-realm PAC may not assert this realm's SIDs; local base identity refused.
 pub(crate) fn filter_cross_realm_logon(
     logon: &[u8],
     local_domain: &krb5_types::pac::RpcSid,
@@ -780,7 +780,7 @@ fn verify_for_user_checksum(
 }
 
 // MIT: `kdc_process_s4u_x509_user` (kdc_util.c:1428-1438)
-/// A bad checksum, a wrong nonce, or an unkeyed checksum is not an S4U2Self user.
+/// Bad checksum, wrong nonce or unkeyed checksum: not an S4U2Self user.
 fn process_s4u_x509_user(
     raw: &[u8],
     tgt_session: &ProtocolKey,
@@ -1254,7 +1254,7 @@ fn add_filtered_authdata(dst: &mut AuthorizationData, src: &[AuthorizationDataVa
     dst.extend(src.iter().filter(|e| !is_kdc_issued_authdatum(e)).cloned());
 }
 
-/// A des3 key MIT refuses is sent as code 60; any other failure is left as it was.
+/// A des3 key MIT refuses: code 60; other failures unchanged.
 // MIT: `errcode_to_protocol` (kdc/kdc_util.c:691-697)
 pub(crate) fn key_refused_at(e: Error, st: &'static str) -> Error {
     if e.des_key_code().is_some() {

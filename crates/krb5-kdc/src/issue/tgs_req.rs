@@ -484,7 +484,7 @@ fn check_tgs_req<'a>(
             ),
         }
     };
-    // Skip does not set the transited flag; renew and validate keep the header's.
+    // Skip: no transited flag; renew, validate keep the header's.
     let inherited_t = (renew || validate) && enc_tkt.flags.bit(flag_bit::TRANSITED_POLICY_CHECKED);
     let set_transited_flag = !skip_transited && transit_checked;
     if !(inherited_t || set_transited_flag) && store.policy().reject_bad_transit {
@@ -800,7 +800,7 @@ fn tgs_issue_ticket(
         flags.bit(flag_bit::ANONYMOUS),
     );
     // MIT: `gather_tgs_req_info` (do_tgs_req.c:692-695)
-    // A local S4U2Self builds the PAC from that user; other requests carry the ticket's.
+    // Local S4U2Self: PAC from that user; other requests carry the ticket's.
     let initial = s4u2self && s4u_user_local;
     let ad_data =
         include_pac && crate::ad::pac_has_ad_data(store.policy(), subject_pac.as_deref(), initial);
@@ -995,7 +995,7 @@ fn tgs_issue_ticket(
 }
 
 // MIT: `get_2ndtkt_enctype` (do_tgs_req.c:310-328)
-/// A second-ticket enctype is the session enctype only when the request lists it.
+/// Second-ticket enctype is the session enctype only if the request lists it.
 fn get_2ndtkt_enctype(
     body: &KdcReqBody,
     st: &SecondTicket,
@@ -1094,7 +1094,7 @@ fn no_referral_option(body: &KdcReqBody) -> bool {
 }
 
 // MIT: `is_referral_req` (do_tgs_req.c:438-477)
-/// No canonicalize, or user-to-user, or a no-referral service: not a referral.
+/// No canonicalize, user-to-user, or no-referral service: not a referral.
 fn is_referral_req(store: &dyn PrincipalRead, body: &KdcReqBody, sname: &PrincipalName) -> bool {
     if !body.kdc_options.bit(flag_bit::CANONICALIZE)
         || body.kdc_options.bit(flag_bit::ENC_TKT_IN_SKEY)
@@ -1232,7 +1232,7 @@ fn carried_logon(
 }
 
 // MIT: `tgs_issue_ticket` (do_tgs_req.c:1012-1027)
-/// Renew and validate keep the header addresses; forward and proxy take the request's.
+/// Renew, validate: header addresses; forward, proxy: the request's.
 fn tgs_ticket_caddr(
     body: &KdcReqBody,
     renew: bool,

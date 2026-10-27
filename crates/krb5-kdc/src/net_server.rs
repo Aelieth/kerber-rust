@@ -169,7 +169,7 @@ enum Io {
         sent: usize,
     },
     Rpc(RpcConn),
-    // Held while an OTP verify runs: not polled, not LRU-killed, resumed once the verdict lands.
+    // Held during OTP verify: not polled, not LRU-killed, resumed on the verdict.
     Parked,
 }
 
@@ -392,7 +392,7 @@ impl<S: Stream> Streams<S> {
     // MIT: `kill_lru_stream_connection` (lib/apputils/net-server.c:1198-1223)
     fn kill_lru(&mut self, newest: u64, log: &mut dyn Log) {
         log.syslog(Severity::Info, "too many connections");
-        // Evict an unauthenticated RPC connection before an authenticated one, else the oldest, as MIT.
+        // Evict unauthenticated RPC before authenticated, else oldest, as MIT.
         let mut victim: Option<usize> = None;
         let mut victim_unauth = false;
         for (i, c) in self.conns.iter().enumerate().rev() {
@@ -632,7 +632,7 @@ impl<S: Stream> Streams<S> {
         let RpcPhase::Read(rd) = &mut rpc.phase else {
             return Step::Wait;
         };
-        // Assemble the record non-blocking across polls, so a slow or stalled peer never holds the thread.
+        // Record read across polls, non-blocking: a slow or stalled peer never holds the thread.
         loop {
             if rd.mark_off < 4 {
                 match conn.stream.read(&mut rd.mark[rd.mark_off..]) {
@@ -793,7 +793,7 @@ impl<S: Stream> Streams<S> {
 }
 
 impl Streams<TcpStream> {
-    /// Deviation: a failed non-blocking set is closed, so it cannot stall the loop.
+    /// Deviation: failed non-blocking set: closed, so it can't stall the loop.
     pub(crate) fn accept(
         &mut self,
         listener: &TcpListener,
@@ -829,7 +829,7 @@ impl Streams<TcpStream> {
         self.add(stream, fd, remote, now, log);
     }
 
-    /// Deviation: an unreadable local address closes the connection; MIT leaves it open.
+    /// Deviation: unreadable local address closes the connection; MIT leaves it open.
     pub(crate) fn accept_rpc(
         &mut self,
         listener: &TcpListener,
@@ -878,7 +878,7 @@ impl Streams<TcpStream> {
                 return;
             }
         }
-        // An accepted socket does not inherit O_NONBLOCK; set it so rpc_step never blocks (fail closed, as admit).
+        // No O_NONBLOCK from accept; set it so rpc_step never blocks (fail closed, as admit).
         if stream.set_nonblocking(true).is_err() {
             return;
         }
@@ -1141,7 +1141,7 @@ enum Ready {
     Stream { id: u64, writing: bool },
 }
 
-/// Deviation: a failed accept waits 20 ms, so EMFILE does not spin the loop.
+/// Deviation: failed accept waits 20 ms, so EMFILE doesn't spin the loop.
 struct Paused(Vec<Option<Instant>>);
 
 impl Paused {

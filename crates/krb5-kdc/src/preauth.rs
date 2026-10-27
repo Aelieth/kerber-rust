@@ -264,7 +264,7 @@ fn armor_key_from_ap(store: &dyn PrincipalRead, ap_raw: &[u8]) -> Result<Protoco
     )
     .map_err(|_| proto_fast(err::GENERIC, "FAST armor enctype not permitted"))?;
     // MIT: `armor_ap_request` (fast_util.c:51-68)
-    // A local non-TGT is SERVER_NOMATCH only after the armor ticket is accepted.
+    // Local non-TGT: SERVER_NOMATCH only after the armor ticket is accepted.
     if !ap.ticket.sname.is_krbtgt_for(store.realm()) {
         return Err(proto_fast(err::SERVER_NOMATCH, "FAST armor TGT"));
     }

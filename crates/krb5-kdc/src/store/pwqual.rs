@@ -141,7 +141,7 @@ pub fn register_pwqual(module: Arc<dyn Pwqual>) {
         .push(module);
 }
 
-/// Replaces the built-ins and registered modules on this thread; an empty list checks nothing.
+/// Replaces built-ins and registered modules on this thread; empty list checks nothing.
 pub fn set_thread_pwqual(modules: Vec<Arc<dyn Pwqual>>) {
     THREAD.with(|slot| *slot.borrow_mut() = Some(modules));
 }

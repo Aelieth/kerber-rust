@@ -139,7 +139,7 @@ fn issue_as_body(
     let kdc_time = crate::store::unix_now_u32();
     let mut client = None;
     let out = issue_as_steps(store, req, raw, body, fast, kdc_time, &mut client);
-    // Parked: not an outcome yet; skip the audit, the resume pass counts the one attempt once.
+    // Parked: no outcome yet; skip audit, the resume pass counts the attempt once.
     if crate::plugins::otp_park_pending() {
         return out;
     }
@@ -223,7 +223,7 @@ fn lookup_client(
     // MIT: `have_client_keys` (kdc_preauth.c:442-442)
     // MIT: `process_as_req` (do_as_req.c:736-745)
     // MIT: `finish_process_as_req` (do_as_req.c:259-265)
-    // A missing client key waits until after preauth; a module may replace it.
+    // Missing client key waits for preauth; a module may replace it.
     let ckey = select_client_key(store.policy(), &client, &body.etype).cloned();
     Ok(AsLookup {
         client,

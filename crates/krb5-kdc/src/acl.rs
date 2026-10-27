@@ -135,7 +135,7 @@ pub fn default_principal_flags(spec: &str) -> u32 {
 
 // MIT: `kadm5_get_config_params` (alt_prof.c:603-627)
 #[must_use]
-/// A word that does not convert stops the loop and leaves the value unset.
+/// An unconvertible word stops the loop, leaving the value unset.
 pub fn principal_flags_spec(spec: &str) -> (u32, bool) {
     let c_space = |c: char| matches!(c, ' ' | '\t' | '\n' | '\x0b' | '\x0c' | '\r');
     let mut flags = 0u32;

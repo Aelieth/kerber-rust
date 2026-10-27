@@ -200,7 +200,7 @@ pub fn kdc_error_message(code: i32) -> String {
 }
 
 // MIT: `gather_tgs_req_info` (kdc/do_tgs_req.c:727-754)
-/// An early TGS failure logs authtime 0; the subject ticket is not open yet.
+/// Early TGS failure logs authtime 0: subject ticket not open yet.
 fn tgs_failed_before_authtime(status: &str) -> bool {
     matches!(
         status,
@@ -1163,7 +1163,7 @@ fn tgs_header_authtime(store: &dyn PrincipalRead, req: &TgsReq) -> u32 {
 }
 
 // MIT: `kdc_get_server_key` (kdc/kdc_util.c:377-379)
-/// The header ticket opens under its own server key, a cross-realm krbtgt included.
+/// Header ticket opens under its own server key, cross-realm krbtgt included.
 fn header_enc_part(store: &dyn PrincipalRead, req: &TgsReq) -> Option<EncTicketPart> {
     let pa = req
         .0

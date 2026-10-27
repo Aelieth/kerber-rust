@@ -256,7 +256,7 @@ impl PrincipalStore {
         self.chrand_keepold_n(name, 0)
     }
 
-    /// 0 drops old keys, 1 keeps every older kvno, and above 1 keeps that many including the new.
+    /// 0 drops old keys; 1 keeps every older kvno; above 1 keeps that many, new included.
     pub fn chrand_keepold_n(
         &mut self,
         name: &PrincipalName,

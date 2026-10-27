@@ -572,7 +572,7 @@ impl KdcDispatch {
     // MIT: `finish_dispatch` (kdc/dispatch.c:54-66)
     fn finish_dispatch(&self, is_tcp: bool, done: Done) -> Reply {
         match done {
-            // An oversized UDP reply, a resend included, is this realm's response-too-big.
+            // Oversized UDP reply, resend included: this realm's response-too-big.
             Done::Reply(bytes) if !is_tcp && bytes.len() > self.max_dgram_reply_size => {
                 Reply::Send(plain_store(&self.store, |s| {
                     super::kdc_error_bytes(s, err::RESPONSE_TOO_BIG)

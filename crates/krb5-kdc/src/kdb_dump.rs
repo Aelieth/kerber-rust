@@ -24,7 +24,7 @@ pub const KDB_DUMP_VERSION: u32 = 7;
 pub(crate) const KDB_DUMP_VERSION_R18: u32 = 6;
 
 // MIT: `extract_db_args_from_tl_data` (kdb5.c:893-945)
-/// Every `KRB5_TL_DB_ARGS` entry is removed and passed on as a database argument.
+/// Each `KRB5_TL_DB_ARGS` entry: removed, passed on as a database argument.
 pub const TL_DB_ARGS: i32 = 0x7fff;
 pub const TL_LAST_PWD_CHANGE: i32 = 1;
 pub const TL_LAST_ADMIN_UNLOCK: i32 = 0x0700;

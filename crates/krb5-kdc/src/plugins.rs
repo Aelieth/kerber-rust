@@ -593,7 +593,7 @@ impl OtpVerifyRequest {
     }
 }
 
-/// Runs on a worker under a deadline; a hang or panic fails closed; `Error` text is logged.
+/// Worker under a deadline; hang or panic fails closed; `Error` text logged.
 pub trait OtpVerifier: Send + Sync {
     fn name(&self) -> &'static str;
     fn verify(&self, req: &OtpVerifyRequest) -> OtpVerdict;
@@ -720,7 +720,7 @@ fn run_otp_worker(rx: &Mutex<Receiver<OtpJob>>, wake: Option<&OwnedFd>) {
         let Ok((req, verifier, reply)) = job else {
             return;
         };
-        // Past its deadline: the caller gave up, so skip verify (don't burn a TOTP step).
+        // Past deadline: caller gave up; skip verify (don't burn a TOTP step).
         if Instant::now() >= req.deadline {
             continue;
         }

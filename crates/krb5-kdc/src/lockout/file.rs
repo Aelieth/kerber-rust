@@ -380,7 +380,7 @@ impl SideFile {
         Ok(())
     }
 
-    /// A whole-file write is renamed over the old one, so a short write leaves it.
+    /// Whole-file write renamed over the old: a short write leaves it.
     fn rewrite(&mut self, records: &[(String, Lockout)]) -> io::Result<()> {
         krb5_protocol::write_secret_file(&self.path, &render(records))
             .map_err(|e| named(&self.path, &e))?;
@@ -477,7 +477,7 @@ pub(crate) fn store_records(store: &PrincipalStore) -> Vec<(String, Lockout)> {
 
 // MIT: `klmdb_create` (plugins/kdb/lmdb/kdb_lmdb.c:575-661)
 // MIT: `klmdb_put_principal` (plugins/kdb/lmdb/kdb_lmdb.c:781-809)
-/// With merge, a record already there is kept, as an iprop load keeps the replica's own.
+/// Merge keeps an existing record, as an iprop load keeps the replica's own.
 pub(crate) fn write_loaded(
     db: &Path,
     records: &[(String, Lockout)],

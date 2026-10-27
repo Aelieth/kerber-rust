@@ -223,7 +223,7 @@ fn persist_text(e: &PersistError) -> String {
 }
 
 // MIT: `krb5_def_store_mkey_list` (lib/kdb/kdb_default.c:143-147)
-/// The keytab is written to `<keyfile>_tmp`, so a missing directory names that file.
+/// Keytab written to `<keyfile>_tmp`: a missing directory names that file.
 fn stash_write_text(path: &Path, e: &PersistError) -> String {
     match e {
         PersistError::Io(io) if io.kind() == io::ErrorKind::NotFound => {
@@ -248,7 +248,7 @@ fn c_atoi(s: &str) -> u32 {
     if neg { n.wrapping_neg() } else { n }
 }
 
-/// The last `-P` is kept; the table sees an empty value, so no other copy remains.
+/// Last `-P` kept; the table sees an empty value: no other copy remains.
 fn take_password(args: &[String]) -> (Option<Zeroizing<String>>, Vec<String>) {
     let mut password = None;
     let mut line = Vec::with_capacity(args.len());
@@ -1174,7 +1174,7 @@ fn load(util: &mut Util, args: &[String]) -> u8 {
         }
         let first = dump.princs.first().map_or("", |p| p.name.as_str());
         // MIT: `krb5_db_put_principal` (lib/kdb/kdb5.c:987-999)
-        // A record that cannot be converted fails the load before the database is written.
+        // An unconvertible record fails the load before the database is written.
         let prepared = match store.prepare_log() {
             Ok(p) => p,
             Err(e) => {
@@ -1318,7 +1318,7 @@ fn open_update(util: &Util) -> Option<DbUpdate> {
     }
 }
 
-/// The temporary database is made after the key is read, so the prompt holds no lock.
+/// Temporary database made after the key is read: the prompt holds no lock.
 // MIT: `load_db` (kadmin/dbutil/dump.c:1492-1508)
 fn create_temporary(util: &Util) -> Option<FullLoad> {
     match FullLoad::create(&util.db_args.file) {

@@ -364,7 +364,7 @@ fn otp_verify(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, OtpFail> 
     let peer = request_peer();
     let mut resume = take_otp_resume();
     for (i, tok) in tokens.iter().enumerate() {
-        // Already rejected on an earlier pass; skip without a second submit or audit event.
+        // Rejected on an earlier pass: skip, no second submit or audit event.
         if resume.as_ref().is_some_and(|r| i < r.token_index) {
             continue;
         }
@@ -397,7 +397,7 @@ fn otp_verify(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, OtpFail> 
         };
         let timeout = Duration::from_millis(timeout_ms);
         let now = Instant::now();
-        // `started` dates from the submit so a resumed token reports its real verify time.
+        // `started` dates from submit: a resumed token reports its real verify time.
         let started;
         let outcome = if let Some(r) = resume.take_if(|r| i == r.token_index) {
             // Bind the verdict to its token: a reload between park and resume could reorder tokens.
@@ -426,7 +426,7 @@ fn otp_verify(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, OtpFail> 
                 },
             };
             let deadline = request.deadline;
-            // Don't block the loop: submit and park so others are served; a loop-less caller blocks.
+            // Don't block the loop: submit, park, serve others; a loop-less caller blocks.
             if otp_park_enabled()
                 && let Some(p) = pool
             {
