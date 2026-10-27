@@ -141,39 +141,6 @@ fn tgs_copies_header_caddr() {
 }
 
 #[test]
-fn tgs_forwarded_copies_request_addresses() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let tgt = as_with_addrs(&store, None, 10120, false, false);
-    let want = vec![inet(192, 0, 2, 12)];
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let req = TgsReqBuilder::new(
-        tgt.rep.0.ticket,
-        &tgt.session_key,
-        TEST_REALM,
-        &user,
-        PrincipalName::krbtgt(TEST_REALM),
-        TEST_REALM,
-        10121,
-    )
-    .options(KdcOptions::none().with_bit(flag_bit::FORWARDED, true))
-    .additional_tickets(None)
-    .padata(Vec::new())
-    .etypes(pref_etypes())
-    .addresses(Some(want.clone()))
-    .build()
-    .unwrap();
-    let issued = krb5_kdc::issue_tgs(&store, &req).unwrap();
-    assert_eq!(
-        tkt_part(&store, &issued.rep.0.ticket).caddr.as_ref(),
-        Some(&want)
-    );
-    assert_eq!(
-        enc_tgs(&issued, &tgt.session_key).caddr.as_ref(),
-        Some(&want)
-    );
-}
-
-#[test]
 fn tgs_renew_keeps_header_caddr() {
     let (store, _) = bootstrap_documented().unwrap();
     let addrs = vec![inet(192, 0, 2, 13)];

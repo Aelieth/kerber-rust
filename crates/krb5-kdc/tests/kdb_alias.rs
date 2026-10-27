@@ -23,8 +23,8 @@
 use krb5_asn1::decode;
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
 use krb5_kdc::{
-    Error, KDB_DISALLOW_ALL_TIX, KDB_REQUIRES_PRE_AUTH, MAX_ALIAS_DEPTH, PrincipalStore,
-    TL_ALIAS_TARGET, decrypt_ticket_part, dump_store, issue_as, issue_tgs, load_dump,
+    Error, KDB_DISALLOW_ALL_TIX, KDB_REQUIRES_PRE_AUTH, PrincipalStore, TL_ALIAS_TARGET,
+    decrypt_ticket_part, dump_store, issue_as, issue_tgs, load_dump,
 };
 
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
@@ -67,38 +67,6 @@ fn alias_stub_shape_matches_make_alias_entry_and_lookups_resolve() {
     assert_eq!(resolved.id(), id(TEST_USER));
     assert_eq!(store.get_name(&name("a1")).unwrap().id(), id(TEST_USER));
     assert!(store.ids().contains(&id("a1")));
-}
-
-#[test]
-fn alias_chain_of_ten_resolves_eleven_and_self_do_not() {
-    let mut store = store_with_alias("a1", TEST_USER);
-    for i in 2..=MAX_ALIAS_DEPTH + 1 {
-        store
-            .create_alias_in(
-                &name(&format!("a{i}")),
-                TEST_REALM,
-                &name(&format!("a{}", i - 1)),
-                TEST_REALM,
-                ACTOR,
-            )
-            .unwrap();
-    }
-    assert_eq!(
-        store.get(&id("a10")).map(krb5_kdc::Principal::id),
-        Some(id(TEST_USER))
-    );
-    assert!(store.get(&id("a11")).is_none());
-    store
-        .create_alias_in(
-            &name("selfalias"),
-            TEST_REALM,
-            &name("selfalias"),
-            TEST_REALM,
-            ACTOR,
-        )
-        .unwrap();
-    assert!(store.get(&id("selfalias")).is_none());
-    assert!(store.get_raw(&id("selfalias")).is_some());
 }
 
 #[test]

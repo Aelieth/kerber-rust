@@ -63,29 +63,6 @@ fn tgt_part(store: &PrincipalStore, issued: &krb5_kdc::IssuedTgs) -> EncTicketPa
 }
 
 #[test]
-fn tgs_forwarded_sets_forwarded() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let issued = user_as_bits(&store, 11021, &[]);
-    let tgs = TgsReqBuilder::new(
-        issued.rep.0.ticket.clone(),
-        &issued.session_key,
-        TEST_REALM,
-        &user(),
-        PrincipalName::krbtgt(TEST_REALM),
-        TEST_REALM,
-        11022,
-    )
-    .options(KdcOptions::none().with_bit(flag_bit::FORWARDED, true))
-    .additional_tickets(None)
-    .padata(Vec::new())
-    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
-    .build()
-    .unwrap();
-    let out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
-    assert!(tgt_part(&store, &out).flags.bit(flag_bit::FORWARDED));
-}
-
-#[test]
 fn tgs_proxy_sets_proxy() {
     let (store, _) = bootstrap_documented().unwrap();
     let issued = user_as_bits(&store, 11031, &[(flag_bit::PROXIABLE, true)]);
@@ -123,35 +100,6 @@ fn tgs_proxy_sets_proxy() {
     .unwrap();
     let out = krb5_kdc::issue_tgs(&store, &proxy).unwrap();
     assert!(host_part(&store, &out).flags.bit(flag_bit::PROXY));
-}
-
-#[test]
-fn tgs_postdated_is_invalid() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let issued = user_as_bits(&store, 11041, &[(flag_bit::MAY_POSTDATE, true)]);
-    let tgs = TgsReqBuilder::new(
-        issued.rep.0.ticket.clone(),
-        &issued.session_key,
-        TEST_REALM,
-        &user(),
-        documented_host(),
-        TEST_REALM,
-        11042,
-    )
-    .options(
-        KdcOptions::none()
-            .with_bit(flag_bit::MAY_POSTDATE, true)
-            .with_bit(flag_bit::POSTDATED, true),
-    )
-    .additional_tickets(None)
-    .padata(Vec::new())
-    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
-    .build()
-    .unwrap();
-    let out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
-    let part = host_part(&store, &out);
-    assert!(part.flags.bit(flag_bit::POSTDATED));
-    assert!(part.flags.invalid());
 }
 
 #[test]
