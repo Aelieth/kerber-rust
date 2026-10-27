@@ -199,7 +199,9 @@ harness/field/run.sh --profile kill-loop --ref plan-12   # SW-3's kill loop (lab
   - Every run leaves `/tmp/claude-<uid>` and `/tmp/grok-file-lock-<uid>` out
     of that check and counts both on the `post.host.tmp` line. Those trees are
     CLI scratch for this user, written whether or not that CLI is driving the
-    run. Any other new path still fails the guard.
+    run. The browser's top-level Chromium names (`.org.chromium.Chromium.*`,
+    `org.chromium.Chromium.*`, `scoped_dir*`) are left out too, and counted
+    and listed on that line. Any other new path still fails the guard.
 - **Limits:** a scenario has `FIELD_SCENARIO_TIMEOUT` seconds (default 1800),
   and each of its commands `FIELD_CMD_TIMEOUT` (default 900), cut to what is
   left of the scenario's time. A command over its limit is stopped and fails
