@@ -1,5 +1,3 @@
-//! The kadm5 procedure switch (`kadmin/server/server_stubs.c`): one arm per procedure, the store path (`reload_if_stale` before every read and mutation), the `KADM5_AUTH_*` code each procedure denies with, and the `Error` -> `kadm_err.et` mapping behind `generic_ret`.
-
 use krb5_kdc::{KDB_LOCKDOWN_KEYS, SharedDump as SharedStore};
 use krb5_types::PrincipalName;
 
@@ -100,9 +98,9 @@ fn read_store(
     Ok(g)
 }
 
-/// runs, and the database is written once and its age moved; a change `f` refuses or fails leaves the database and the store as they were. The error is the reply.
+/// Refused or failed: database unchanged.
 // MIT: `kdb_put_entry` (lib/kadm5/srv/server_kdb.c:364-405)
-/// each kadm5 change ends in one put, which locks the database exclusively.
+/// One put per change, under the lock.
 fn commit<T>(
     g: &mut krb5_kdc::PrincipalStore,
     proc: u32,
@@ -134,7 +132,6 @@ fn commit_policy(
     }
 }
 
-/// The kadm5 code of a database the store could not lock, read or write: KRB5_KDB_CANTLOCK_DB for a lock that may not be taken (a read-only lock file, a missing policy lock file), else the system's errno, as MIT's library returns it.
 pub(super) fn store_code(proc: u32, e: &krb5_kdc::Error) -> u32 {
     let errno = |n: nix::errno::Errno| u32::try_from(n as i32).unwrap_or(KADM5_FAILURE);
     match e {
@@ -173,7 +170,6 @@ fn changepw_not_self(changepw: bool, actor: &str, name: &PrincipalName, realm: &
     changepw && !is_self(actor, name, realm)
 }
 
-/// Self-service against the canonical target id (`name@REALM`) of a fetched record.
 fn is_self_id(actor: &str, cid: &str) -> bool {
     parse_actor(cid).is_some_and(|(n, r)| is_self(actor, &n, &r))
 }
@@ -207,7 +203,7 @@ pub(super) fn dispatch_kadm5(
 }
 
 // MIT: `modify_principal_2_svc` (server_stubs.c:630-644)
-/// an ACL denial or a lockdown clear is AUTH_MODIFY before the entry is written.
+/// Denial: AUTH_MODIFY, before the write.
 pub(super) fn dispatch_kadm5_ticket(
     store: &SharedStore,
     authcfg: &Kadm5AuthConfig,
@@ -287,7 +283,6 @@ pub(super) fn dispatch_kadm5_ticket(
                 return Ok(generic_ret(API_V2, KADM5_AUTH_DELETE));
             }
             // MIT: `delete_principal_2_svc` (kadmin/server/server_stubs.c:586-595)
-            // a missing principal fails the lockdown lookup before the delete locks the database.
             if g.get_in_realm(&name, &req).is_none() {
                 return Ok(generic_ret(API_V2, KADM5_UNK_PRINC));
             }
@@ -302,8 +297,7 @@ pub(super) fn dispatch_kadm5_ticket(
                 Err(rep) => return Ok(rep),
             };
             // MIT: `stub_setup` (server_stubs.c:296-301)
-            // with rec_out it fetches the entry, so an unknown principal fails before the ACL check.
-            // The record's canonical name is the authorization target, not the requested name.
+            // Auth target: the canonical name.
             // MIT: `modify_principal_2_svc` (kadmin/server/server_stubs.c)
             let Some(cid) = g.get_in_realm(&name, &req).map(krb5_kdc::Principal::id) else {
                 return Ok(generic_ret(API_V2, KADM5_UNK_PRINC));
@@ -408,8 +402,7 @@ pub(super) fn dispatch_kadm5_ticket(
             if g.get_in_realm(&c.name, &req).is_some() {
                 return Ok(generic_ret(API_V2, KADM5_DUP));
             }
-            // NULL password: random key (`krb5_dbe_crk`), no quality check.
-            // keyless entry (ledger deviation).
+            // NULL password: random key, no quality check.
             let changed = commit(&mut g, proc, API_V2, |s| {
                 s.create_principal_3_in(
                     &c.name,
@@ -434,9 +427,9 @@ pub(super) fn dispatch_kadm5_ticket(
             let old_req = req_realm(&old_realm, &realm);
             let new_req = req_realm(&new_realm, &realm);
             // MIT: `rename_principal_2_svc` (server_stubs.c:700-712)
-            // ACL (AUTH_INSUFFICIENT) then lockdown (AUTH_DELETE).
+            // ACL (AUTH_INSUFFICIENT), then lockdown.
             // MIT: `acl_renprinc` (auth_acl.c:638-648)
-            // delete on src and add on dest without restrictions.
+            // ACL: delete on src, add on dest, no restrictions.
             if changepw || !stack.renprinc(actor, &acl_id(&old, &old_req), &acl_id(&new, &new_req))
             {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_INSUFFICIENT));
@@ -451,7 +444,6 @@ pub(super) fn dispatch_kadm5_ticket(
                 return Ok(generic_ret(API_V2, KADM5_AUTH_DELETE));
             }
             // MIT: `kadm5_rename_principal` (lib/kadm5/srv/svr_principal.c:715-719)
-            // an existing target is KADM5_DUP, as a missing source fails the stub's lockdown lookup, before the rename locks the database.
             if g.get_in_realm(&old, &old_req).is_none() {
                 return Ok(generic_ret(API_V2, KADM5_UNK_PRINC));
             }
@@ -479,7 +471,6 @@ pub(super) fn dispatch_kadm5_ticket(
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
-            // The fetched record's canonical name is the authorization target.
             // MIT: `chpass_principal_2_svc` (kadmin/server/server_stubs.c)
             let (cid, lockdown) = match g.get_in_realm(&name, &req) {
                 None => return Ok(generic_ret(API_V2, KADM5_UNK_PRINC)),
@@ -489,7 +480,6 @@ pub(super) fn dispatch_kadm5_ticket(
                 return Ok(generic_ret(API_V2, KADM5_AUTH_CHANGEPW));
             }
             let self_change = is_self_id(actor, &cid);
-            // The self rule is the stack's (SelfModule); only the changepw service is gated here.
             if (changepw && !self_change) || !stack.cpw(actor, &cid) {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_CHANGEPW));
             }
@@ -542,7 +532,6 @@ pub(super) fn dispatch_kadm5_ticket(
             }
             apply_policy_floors(&mut pol, mask);
             // MIT: `osa_adb_create_policy` (plugins/kdb/db2/adb_policy.c:59-72)
-            // under the exclusive lock, a policy there already is OSA_ADB_DUP.
             Ok(commit_policy(&mut g, proc, api, |s| {
                 if s.policies().contains_key(&pol.name) {
                     return Ok(Err(OSA_ADB_DUP));
@@ -560,12 +549,10 @@ pub(super) fn dispatch_kadm5_ticket(
                 Err(rep) => return Ok(rep),
             };
             // MIT: `kadm5_delete_policy` (lib/kadm5/srv/svr_policy.c:197-199)
-            // a missing policy is KADM5_UNK_POLICY before the delete locks the database.
             if !g.policies().contains_key(&name) {
                 return Ok(generic_ret(api, KADM5_UNK_POLICY));
             }
             // MIT: `osa_adb_destroy_policy` (plugins/kdb/db2/adb_policy.c:132-145)
-            // under the exclusive lock, a policy gone since is OSA_ADB_NOENT.
             Ok(commit_policy(&mut g, proc, api, |s| {
                 match s.delete_policy(&name) {
                     Ok(()) => Ok(Ok(())),
@@ -602,7 +589,6 @@ pub(super) fn dispatch_kadm5_ticket(
                 return Ok(generic_ret(api, code));
             }
             // MIT: `osa_adb_put_policy` (plugins/kdb/db2/adb_policy.c:263-276)
-            // under the exclusive lock, a policy gone since the look is OSA_ADB_NOENT; one there takes the record merged at the look.
             Ok(commit_policy(&mut g, proc, api, |s| {
                 if !s.policies().contains_key(&merged.name) {
                     return Ok(Err(OSA_ADB_NOENT));
@@ -616,7 +602,7 @@ pub(super) fn dispatch_kadm5_ticket(
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
-            // The caller's own policy is read in the caller's realm, not the store's.
+            // Own policy: caller's realm.
             // MIT: `get_policy_2_svc` (kadmin/server/server_stubs.c)
             let own_pol = parse_actor(actor)
                 .and_then(|(n, r)| g.get_in_realm(&n, &r).and_then(|p| p.pw_policy.clone()));
@@ -656,7 +642,6 @@ pub(super) fn dispatch_kadm5_ticket(
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
-            // The fetched record's canonical name is the authorization target.
             // MIT: `chrand_principal_2_svc` (kadmin/server/server_stubs.c)
             let Some(cid) = g.get_in_realm(&name, &req).map(krb5_kdc::Principal::id) else {
                 return Ok(generic_ret(API_V2, KADM5_UNK_PRINC));
@@ -806,7 +791,7 @@ pub(super) fn dispatch_kadm5_ticket(
             let alias_req = req_realm(&alias_realm, &realm);
             let target_req = req_realm(&target_realm, &realm);
             // MIT: `create_alias_2_svc` (server_stubs.c:1727-1758)
-            // CHANGEPW deny, acl_addalias, no lockdown check.
+            // No lockdown check, as MIT.
             if changepw
                 || !stack.addalias(
                     actor,
@@ -829,7 +814,6 @@ pub(super) fn dispatch_kadm5_ticket(
     }
 }
 
-/// The `KADM5_AUTH_*` code a stub denies with (`server_stubs.c`, the `ret->code = KADM5_AUTH_…` of each `*_2_svc`): ADD for the creates (`:480,521,1268`), DELETE for the deletes (`:582,1311`), MODIFY for modify/purgekeys/set_string/modify_policy (`:633,1515,1594,1352`), INSUFFICIENT for rename and create_alias (`:702,1743`), GET for the gets
 pub(super) fn auth_code_for(proc: u32) -> u32 {
     match proc {
         CREATE_PRINCIPAL | CREATE_PRINCIPAL3 | CREATE_POLICY => KADM5_AUTH_ADD,
@@ -846,7 +830,7 @@ pub(super) fn auth_code_for(proc: u32) -> u32 {
     }
 }
 
-/// kadm5 return code for a store error surfacing from the `proc` stub. A store-level `AclDenied` takes the stub's own `KADM5_AUTH_*`; no in-tree store path returns it today, because each arm checks the ACL inline.
+/// AclDenied: the stub's KADM5_AUTH_*.
 pub(super) fn kadm5_code(proc: u32, e: &Error) -> u32 {
     let s = match e {
         Error::AclDenied | Error::KpropUnauthorized(_) => return auth_code_for(proc),
