@@ -1,12 +1,4 @@
-//! MIT-wire kpropd (TCP 754) wrapping dump version 7: a replica's full propagation, and with `iprop_enable` its incremental propagation.
-//! ```text
-//! kpropd [-r realm] [-s keytab] [-d] [-D] [-S] [-t] [-P port] [-a acl_file] [-A admin_server] [host:port]
-//! ```
-//!   for another principal is refused; with `ignore_acceptor_hostname` any `host` entry of the   realm serves. A keytab that cannot be read, or has no such entry, answers "Service key not   available", and one that is no keytab "Unsupported key table format version number"; a   default name of no known type answers "Unknown Key table type", and a `-s` one ends the   connection, as MIT's. A name of its own that is not ASCII stops kpropd at its start.
-//!   each connection, as MIT's is; one that cannot be opened refuses every peer.
-//!   syslog. `-D` and `-S` change nothing: kpropd never detaches and is always standalone.
-//! the realm, kpropd maps the replica's update log at the start, and a dump must be an iprop one, whose serial and time the log then keeps (MIT's `load -i`); without it, an iprop dump is refused as a plain `load` refuses it.
-//! test realm, before the default realm, and `KRB5_MASTER_PASSWORD` opens the dump instead of the stash when set.
+//! `-D` and `-S` are accepted and do nothing.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -50,7 +42,6 @@ fn main() {
         .first()
         .map_or("krb5-kpropd", |a| a.rsplit('/').next().unwrap_or(a))
         .to_owned();
-    // the KDC context before the options; a profile it refuses ends kpropd, named as invoked.
     let profile_read = krb5_config::ReadOnce::start();
     if let Err(e) = krb5_config::init_kdc_profile() {
         let argv0 = argv.first().map_or("kpropd", String::as_str);
@@ -115,7 +106,7 @@ fn main() {
         eprintln!("{progname}: {e} Unable to map log!");
         std::process::exit(1);
     }
-    // Before the iprop gate, so it applies with iprop off too.
+    // Applies with iprop off too.
     let resync_timeout =
         std::time::Duration::from_secs(u64::try_from(iprop.resync_timeout).unwrap_or(0));
     let iprop = iprop.enabled.then_some(iprop);
@@ -141,7 +132,6 @@ fn main() {
         })
     });
     let stop = Arc::new(AtomicBool::new(false));
-    // SIGTERM/SIGINT stop the accept loop.
     for sig in [signal_hook::consts::SIGTERM, signal_hook::consts::SIGINT] {
         let _ = signal_hook::flag::register(sig, Arc::clone(&stop));
     }
@@ -182,7 +172,6 @@ fn main() {
                             &KpropdConfig {
                                 host_keys: &[],
                                 keytab: Some(&keys),
-                                // recvauth takes kpropd's own principal as the server, so a ticket for another one is refused.
                                 expected_server: Some(&server),
                                 expected_realm: Some(realm.as_str()),
                                 master_password: master.as_deref().map(String::as_bytes),
@@ -200,7 +189,6 @@ fn main() {
                         }
                     }
                     // MIT: `do_standalone` (kprop/kpropd.c:466-472)
-                    // when a connection is done the iprop poll is woken; without iprop, `-t` ends kpropd.
                     if let Some(w) = &poll {
                         w.poke();
                     }
@@ -270,7 +258,6 @@ fn parse_options(progname: &str, args: &[String]) -> Options {
 }
 
 // MIT: `get_wildcard_addr` (kprop/kpropd.c:362-377)
-/// the service is `-P`'s, a services name or a number.
 fn listen_addr(progname: &str, operand: Option<&str>, port: Option<&str>) -> SocketAddr {
     if let Some(op) = operand {
         match op.to_socket_addrs().map(|mut a| a.next()) {
@@ -303,7 +290,6 @@ fn wildcard_addr(v4: bool, v6: bool, port: u16) -> Option<SocketAddr> {
     }
 }
 
-/// them: `127.0.0.1` and `::1` do not count, and when the addresses cannot be listed both are taken as present.
 fn configured_families() -> (bool, bool) {
     let Ok(addrs) = nix::ifaddrs::getifaddrs() else {
         return (true, true);
@@ -436,7 +422,8 @@ fn kpropd_paths(realm: Option<&str>) -> Result<krb5_config::KdcPaths, krb5_confi
     krb5_config::KdcPaths::resolve(realm)
 }
 
-/// read: every peer is refused. Only the trailing `\n` is stripped (`fgets`, `buf[end] == '\n'`); a `\r`, leading whitespace or a `#` stay in the line and simply never match a principal.
+/// Only a trailing newline is stripped; CR, leading space, and `#` stay.
+/// A missing file refuses every peer.
 fn kpropd_acl(path: &Path) -> Option<Vec<String>> {
     let text = String::from_utf8_lossy(&std::fs::read(path).ok()?).into_owned();
     Some(text.split('\n').map(str::to_owned).collect())

@@ -1,4 +1,5 @@
-//! kpropd's iprop mode on a replica (MIT `kprop/kpropd.c`'s `do_iprop`): it polls the primary's kadmind for the updates after its own update log and applies them, asks for a full resync when the log cannot bridge the gap (the dump then comes to kpropd's listener), and backs off while the primary is busy or cannot be reached.
+//! Updates after the local log; full resync if the log cannot bridge.
+//! Backs off while the primary is busy or unreachable.
 
 use std::net::{TcpStream, ToSocketAddrs as _};
 use std::path::Path;
@@ -19,36 +20,24 @@ use crate::kadm5::{
 };
 
 // MIT: `KIPROP_SVC_NAME` (include/iprop_hdr.h:29-29)
-/// the service of a replica's and a primary's iprop principals.
 const KIPROP_SVC_NAME: &str = "kiprop";
 
 // MIT: `MAX_BACKOFF` (include/iprop_hdr.h:30-30)
-/// the longest wait, in seconds, between tries of a busy or unreachable primary.
 const MAX_BACKOFF: u32 = 300;
 
 const UPDATE_BUSY: u32 = 3;
 
 #[derive(Debug)]
 pub struct KpropdIprop<'a> {
-    /// The name kpropd was run as, which leads its `com_err` lines.
     pub progname: &'a str,
-    /// The realm.
     pub realm: &'a str,
-    /// `-s`: the keytab with `kiprop/<this host>`'s keys; `None` is the default keytab.
     pub keytab: Option<&'a str>,
-    /// `-A`, else the realm's `admin_server`, its port taken off: the primary.
     pub admin_server: Option<&'a str>,
-    /// The realm's iprop parameters: the port, the poll interval, the resync timeout, the log.
     pub params: &'a IpropParams,
-    /// The replica's database.
     pub db: &'a Path,
-    /// The replica's stash.
     pub stash: &'a Path,
-    /// `-t`: return after the first answer that is not "full resync needed".
     pub runonce: bool,
-    /// `-d`: the debug lines on standard error, and `com_err` there instead of syslog.
     pub debug: bool,
-    /// kpropd's context: the KDC context's profile and the environment's names, read when kpropd started.
     pub ctx: &'a ClientContext,
 }
 
@@ -59,14 +48,12 @@ pub struct IpropWake {
 }
 
 impl IpropWake {
-    /// End the wait under way now.
     pub fn poke(&self) {
         *self.poked.lock().unwrap_or_else(PoisonError::into_inner) = true;
         self.cv.notify_all();
     }
 
     // MIT: `usr1_handler` (kprop/kpropd.c:222-225)
-    /// SIGUSR1 does nothing but interrupt the `sleep`.
     fn sleep(&self, secs: u32) {
         let end = Instant::now() + Duration::from_secs(u64::from(secs));
         let mut poked = self.poked.lock().unwrap_or_else(PoisonError::into_inner);
@@ -92,7 +79,6 @@ struct Log<'a> {
 
 impl Log<'_> {
     // MIT: `kpropd_com_err_proc` (kprop/kpropd.c:1030-1040)
-    /// `whoami: `, the code's text and a space, then the message, at `LOG_ERR`; with `-d` the default `com_err` on standard error.
     fn com_err(&self, code: Option<&str>, msg: &str) {
         let line = match code {
             Some(text) => format!("{}: {text} {msg}", self.progname),
@@ -125,6 +111,7 @@ pub fn kpropd_do_iprop(cfg: &KpropdIprop<'_>, wake: &IpropWake) -> i32 {
         done()
     };
     log.debug("Incremental propagation enabled");
+    // A poll time of 0 waits 10s.
     let pollin = match cfg.params.poll_time.cast_unsigned() {
         0 => 10,
         t => t,
@@ -322,7 +309,6 @@ pub fn kpropd_do_iprop(cfg: &KpropdIprop<'_>, wake: &IpropWake) -> i32 {
 }
 
 // MIT: `backoff_from_primary` (kprop/kpropd.c:1008-1019)
-/// the doubling, capped at `MAX_BACKOFF`.
 fn backoff_from_primary(cnt: &mut u32) -> u32 {
     let btime = 2u32.checked_shl(*cnt).unwrap_or(u32::MAX);
     if btime > MAX_BACKOFF {
@@ -353,9 +339,7 @@ impl InitFailure {
 }
 
 // MIT: `kadm5_get_kiprop_host_srv_name` (kprop/kpropd.c:1617-1630)
-/// the service is `kiprop/` and the admin server.
 // MIT: `get_init_creds` (lib/kadm5/clnt/client_init.c:366-434)
-/// a decrypt failure is `KADM5_BAD_PASSWORD`, an unknown service `KADM5_SECURE_PRINC_MISSING`.
 fn kiprop_init(cfg: &KpropdIprop<'_>, client: &PrincipalName) -> Result<IpropClient, InitFailure> {
     let admin = cfg
         .admin_server
@@ -365,6 +349,8 @@ fn kiprop_init(cfg: &KpropdIprop<'_>, client: &PrincipalName) -> Result<IpropCli
         init_creds_keytab(cfg.ctx, cfg.realm, client, &service, cfg.keytab, true).map_err(|e| {
             let text = e.com_err.and_then(|(code, _)| code).unwrap_or_default();
             let is = |n: i64| text == error_message(ERROR_TABLE_BASE_KRB5 + n);
+            // Decrypt failure 31 is `KADM5_BAD_PASSWORD`.
+            // Unknown service 7 is `KADM5_SECURE_PRINC_MISSING`.
             if is(31) {
                 InitFailure::kadm5(KADM5_BAD_PASSWORD)
             } else if is(7) {
@@ -386,7 +372,6 @@ fn kiprop_init(cfg: &KpropdIprop<'_>, client: &PrincipalName) -> Result<IpropCli
 }
 
 // MIT: `connect_to_server` (lib/kadm5/clnt/client_init.c:521-561)
-/// a name that does not resolve is `KADM5_CANT_RESOLVE`, no address that connects `KADM5_RPC_ERROR`.
 fn connect_to_server(host: &str, port: i32) -> Result<TcpStream, u32> {
     let port = u16::try_from(port).map_err(|_| KADM5_CANT_RESOLVE)?;
     let addrs = (host, port)
@@ -398,7 +383,6 @@ fn connect_to_server(host: &str, port: i32) -> Result<TcpStream, u32> {
         .ok_or(KADM5_RPC_ERROR)
 }
 
-/// and keep each in the update log; the failure's text when they do not apply.
 fn ulog_replay(
     cfg: &KpropdIprop<'_>,
     store: &mut Option<PrincipalStore>,
