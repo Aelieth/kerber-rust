@@ -1,6 +1,5 @@
-//! KRB-SAFE, KRB-PRIV, and KRB-CRED.
-//! Accepted only after the checksum or decryption, a 300 s window, and a new replay tag.
-//! Unlike MIT, a sequence is not checked against the remote one.
+//! Accepted only after checksum or decryption, 300 s window, new replay tag.
+//! Unlike MIT: sequence not checked against the remote one.
 
 use zeroize::{Zeroize, Zeroizing};
 
@@ -36,7 +35,6 @@ pub fn build_krb_safe_ex(
 }
 
 // MIT: `create_krbsafe` (lib/krb5/krb/mk_safe.c:62-63)
-/// The sender is the local address, and no receiver is set.
 pub fn build_krb_safe_from(
     session: &ProtocolKey,
     user_data: &[u8],
@@ -45,7 +43,6 @@ pub fn build_krb_safe_from(
     s_address: &HostAddress,
 ) -> Result<KrbSafe, Error> {
     // MIT: `k5_privsafe_gen_rdata` (lib/krb5/krb/privsafe.c:53-55)
-    // the timestamp and its microseconds come from one `krb5_us_timeofday` reading.
     let (timestamp, usec) = if include_time {
         let (now, usec) = crate::us_timeofday();
         (Some(now), Some(usec))
@@ -62,8 +59,8 @@ pub fn build_krb_safe_from(
     };
     let body_der = encode(&body)?;
     let usage = KeyUsage::new(ku::KRB_SAFE_CKSUM)?;
-    // The checksum covers the whole KRB-SAFE with a zero checksum spliced in.
-    // A body-only checksum is the RFC 1510 fallback.
+    // Checksum covers the whole KRB-SAFE, zero checksum spliced in.
+    // Body-only checksum: the RFC 1510 fallback.
     let dummy = encode_safe_with_body(
         KrbSafe::PVNO,
         KrbSafe::MSG_TYPE,
@@ -111,13 +108,10 @@ pub fn unwrap_krb_safe_ex(
 
 #[derive(Clone, Copy)]
 enum FreshPolicy {
-    /// SAFE and application PRIV: a timestamp and a non-zero sequence.
     SeqAndTime,
-    /// CRED: a timestamp required, the sequence optional.
     TimeOnly,
-    /// Kpasswd allows sequence 0 and no timestamp; the cache is the replay check.
+    /// Kpasswd: sequence 0, no timestamp; cache is the replay check.
     HashOnly,
-    /// Kprop with DO_SEQUENCE only: the sequence is required, the timestamp is not.
     SeqOnly,
 }
 
@@ -148,7 +142,7 @@ pub fn verify_krb_safe_checksum_in(
     let (msg, body_der) = decode_safe_with_body(raw)?;
     let ctype = msg.cksum.cksumtype;
     // MIT: `read_krbsafe` (lib/krb5/krb/rd_safe.c:66-69)
-    // An unknown checksum type is KRB5_PROG_SUMTYPE_NOSUPP, not the KDC error.
+    // Unknown checksum type: KRB5_PROG_SUMTYPE_NOSUPP, not the KDC error.
     if !cksumtype_is_known(ctype) {
         return Err(Error::ProgSumtypeNosupp);
     }
@@ -181,8 +175,8 @@ pub fn verify_krb_safe_checksum_in(
 }
 
 // MIT: `k5_privsafe_check_addrs` (privsafe.c:312-382)
-/// The sender must match a set remote address.
-/// A receiver must match local, or a host address if local is unset.
+/// Sender must match a set remote address.
+/// Receiver must match local, or host address if local unset.
 pub fn check_privsafe_addrs(
     msg_s: &HostAddress,
     msg_r: Option<&HostAddress>,
@@ -319,7 +313,7 @@ fn fresh_policy(require_seq: bool, require_time: bool) -> FreshPolicy {
 }
 
 // MIT: `k5_memrcache_store` (memrcache.c:136-139)
-/// A stored tag is a replay. SeqAndTime rejects a sequence of zero.
+/// Stored tag is a replay; SeqAndTime rejects sequence 0.
 fn accept_fresh(
     replay: &ReplayCache,
     kind: &str,
@@ -367,8 +361,7 @@ pub fn build_krb_priv_with_seq(
 }
 
 // MIT: `create_krbpriv` (lib/krb5/krb/mk_priv.c:60-61)
-/// Names the sender and carries no timestamp.
-/// The receiver stays unset, as kpasswd leaves it.
+/// Receiver unset, as kpasswd leaves it.
 pub fn build_krb_priv_from(
     session: &ProtocolKey,
     user_data: &[u8],
@@ -460,14 +453,13 @@ fn krb_priv_part(
     })
 }
 
-/// Wipes the bytes only when this string holds their only reference.
+/// Wipes only when this string is the sole owner.
 pub(crate) fn wipe_octets(octets: OctetString) {
     if let Ok(buf) = bytes::Bytes::from(octets).try_into_mut() {
         wipe_vec(Vec::<u8>::from(buf));
     }
 }
 
-/// Zeroes the whole allocation, not only the live length.
 pub(crate) fn wipe_vec(mut buf: Vec<u8>) {
     buf.resize(buf.capacity(), 0);
     buf.as_mut_slice().zeroize();
@@ -494,9 +486,6 @@ pub fn unwrap_krb_priv(
 }
 
 // MIT: `read_krbpriv` (lib/krb5/krb/rd_priv.c:43-97)
-/// The caller checks the sequence number.
-/// A message that is not a KRB-PRIV is MSG_TYPE.
-/// The decrypted part is wiped before it is freed.
 pub fn read_krb_priv(key: &ProtocolKey, raw: &[u8]) -> Result<EncKrbPrivPart, Error> {
     if raw.first().is_none_or(|b| b & !0x20 != 0x55) {
         return Err(Error::KrbError {
@@ -559,7 +548,6 @@ pub fn build_krb_cred(
     ticket_info: Vec<KrbCredInfo>,
 ) -> Result<KrbCred, Error> {
     // MIT: `krb5_mk_ncred` (lib/krb5/krb/mk_cred.c:177-178)
-    // a missing timestamp is filled from one `krb5_us_timeofday` reading.
     let (now, usec) = crate::us_timeofday();
     let part = EncKrbCredPart {
         ticket_info,

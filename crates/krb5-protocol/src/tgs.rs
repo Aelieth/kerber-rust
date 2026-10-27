@@ -1,6 +1,5 @@
-//! TGS-REQ / TGS-REP using an existing TGT.
 // MIT: `krb5int_decode_tgs_rep` (decode_kdc.c:64-67)
-//! a TGS-REP without PA-FX-FAST is accepted the same way, its `KRB5_ERR_FAST_REQUIRED` ignored.
+//! TGS-REP without PA-FX-FAST accepted as MIT does; `KRB5_ERR_FAST_REQUIRED` ignored.
 
 use std::time::Instant;
 
@@ -34,7 +33,6 @@ pub struct TgsOutcome {
     pub enc_part: EncKdcRepPart,
     pub session_key: ProtocolKey,
     pub crealm: krb5_types::Realm,
-    /// An S4U2Proxy caller checks it against the evidence ticket's client.
     pub cname: PrincipalName,
 }
 
@@ -42,16 +40,13 @@ pub struct TgsOutcome {
 // MIT: `make_request_for_service` (get_creds.c:358-363)
 #[derive(Clone, Default)]
 pub struct TgsCredsOptions {
-    /// `KRB5_GC_CANONICALIZE` (`kvno -C`): `canonicalize` on the non-referral retry too.
     pub canonicalize: bool,
     pub forwardable: bool,
     pub enctype: Option<i32>,
     pub second_ticket: Option<Ticket>,
-    /// Gate-only: the flag is set only on the service-realm krbtgt hop.
     #[cfg(feature = "test-hooks")]
     pub no_transit_check: bool,
     // MIT: `begin` (lib/krb5/krb/get_creds.c:1074-1083)
-    /// a server in the referral realm is asked for in the start realm, as a referral request.
     pub referral_realm: bool,
     // MIT: `get_cached_tgt` (lib/krb5/krb/get_creds.c:759-793)
     pub cached_creds: Vec<CcacheCred>,
@@ -103,7 +98,7 @@ pub fn tgs_exchange_once(
     tgs_once(profile, kdc, tgt, TgsRequest::new(sname, realm, opts))
 }
 
-#[allow(clippy::needless_pass_by_value)] // `tgt` is cloned into the path-TGT vec
+#[allow(clippy::needless_pass_by_value)]
 pub fn tgs_exchange_path(
     profile: &Krb5Conf,
     kdc: &KdcAddr,
@@ -154,7 +149,6 @@ pub fn tgs_forward(
 }
 
 // MIT: `get_new_creds` (val_renew.c:47-74)
-/// the cached credential is presented to ask for its server again, with its common flags.
 pub fn tgs_renew(profile: &Krb5Conf, kdc: &KdcAddr, tgt: &AsOutcome) -> Result<TgsOutcome, Error> {
     let realm = String::from_utf8_lossy(tgt.ticket.realm.as_bytes()).into_owned();
     let sname = tgt.ticket.sname.clone();
@@ -168,7 +162,6 @@ pub fn tgs_renew(profile: &Krb5Conf, kdc: &KdcAddr, tgt: &AsOutcome) -> Result<T
 }
 
 // MIT: `KDC_TKT_COMMON_MASK` (krb5.hin:1659-1659)
-/// `0x54800000` = FORWARDABLE | PROXIABLE | MAY_POSTDATE | RENEWABLE.
 fn tkt_common_from_flags(flags: &krb5_types::TicketFlags) -> KdcOptions {
     let mut opts = KdcOptions::none();
     for bit in [
@@ -190,9 +183,9 @@ pub fn tgs_renew_options(flags: &krb5_types::TicketFlags) -> KdcOptions {
 }
 
 // MIT: `krb5_get_self_cred_from_kdc` (s4u_creds.c:517-567)
-/// 130 is filled after the TGS subkey exists (ku 26).
+/// 130 filled after the TGS subkey exists (ku 26).
 // MIT: `make_tgs_outer_padata` (fast.c:227-250)
-/// FAST outer padata duplicates both.
+/// S4U padata repeated in FAST outer padata: KDC may not read FAST.
 pub fn tgs_s4u(
     profile: &Krb5Conf,
     kdc: &KdcAddr,
@@ -231,7 +224,6 @@ pub fn tgs_u2u(
 }
 
 // MIT: `make_request` (get_creds.c:286-292)
-/// Options add the TGT's forwardable, proxiable, postdate, and renewable flags.
 fn tgs_request_options(tgt: &AsOutcome, extra: KdcOptions) -> KdcOptions {
     let common = tkt_common_from_flags(&tgt.enc_part.flags);
     let mut opts = extra;
@@ -345,9 +337,8 @@ fn service_extra(creds_opts: &TgsCredsOptions, tgt: &AsOutcome, realm: &str) -> 
 }
 
 // MIT: `try_fallback` (lib/krb5/krb/get_creds.c:534-542)
-/// The server realm is the fallback, and its TGT is obtained first.
+/// Server realm is the fallback; its TGT comes first.
 // MIT: `step_non_referral` (lib/krb5/krb/get_creds.c:483-487)
-/// a non-referral request's error is the result; its reply completes.
 fn tgs_fallback_realm(
     profile: &Krb5Conf,
     kdc: &KdcAddr,
@@ -434,7 +425,6 @@ fn get_dest_tgt(
         let hop = PrincipalName::try_new(PrincipalName::NT_SRV_INST, ["krbtgt", next.as_str()])
             .map_err(|e| Error::ReplyMismatch(e.to_string()))?;
         // MIT: `make_request_for_tgt` (get_creds.c:341-343)
-        // a TGT request has no extra options.
         let opts = tgs_request_options(&cur_tgt, KdcOptions::none());
         trace::tkt_creds_tgt_req(
             trace::Princ::new(&hop, served.as_bytes()),
@@ -497,7 +487,6 @@ fn get_dest_tgt(
                 }
                 cur_tgt = tgs_as_tgt(&cur_tgt, out);
                 // MIT: `step_get_tgt` (lib/krb5/krb/get_creds.c:938-976)
-                // a TGT for the target realm ends the walk; another advances it.
                 let got = tgt_served_realm(&cur_tgt);
                 if got == dest {
                     trace::tkt_creds_target_tgt(trace::Princ::new(
@@ -679,7 +668,7 @@ fn check_reply_server(
 }
 
 // MIT: `krb5int_fast_process_response` (fast.c:548-551)
-/// When armed, the finished client replaces crealm and cname before the compare.
+/// FAST padata present: finished crealm and cname replace the reply's before the compare.
 fn tgs_fast_reply_key(
     armor_key: &ProtocolKey,
     sub: &ProtocolKey,
@@ -687,7 +676,6 @@ fn tgs_fast_reply_key(
     nonce: u32,
 ) -> Result<(ProtocolKey, Vec<PaData>), Error> {
     // MIT: `decrypt_fast_reply` (lib/krb5/krb/fast.c:359-415)
-    // every TGS reply is traced as decoded, as a TGS request always has its armor key.
     trace::fast_decode();
     let has_fast = inner
         .padata
@@ -910,7 +898,6 @@ fn tgs_once(
 }
 
 // MIT: `krb5int_process_tgs_reply` (lib/krb5/krb/gc_via_tkt.c:195-216)
-/// A generic KDC error keeps its e-text; an unknown server is named in the text.
 fn tgs_kerr(e: &Error, ext: bool) -> Option<(i64, Option<String>)> {
     Some(match e {
         Error::KrbError { code, text } => {
@@ -928,7 +915,6 @@ fn tgs_kerr(e: &Error, ext: bool) -> Option<(i64, Option<String>)> {
         Error::Io { .. } => (trace::KRB5_KDC_UNREACH, None),
         Error::Crypto(_) => (trace::kdc_code(krb5_types::err::BAD_INTEGRITY), None),
         // MIT: `KRB5DES_BAD_KEYPAR` (krb5_err.et:251-251)
-        // the code a des3 key with bad parity gives the request.
         Error::DesBadParity => (trace::ERROR_TABLE_BASE_KRB5 + 186, None),
         Error::DesWeakKey => (trace::ERROR_TABLE_BASE_KRB5 + 187, None),
         Error::UnexpectedPdu => (trace::kdc_code(krb5_types::err::MSG_TYPE), None),
@@ -937,7 +923,6 @@ fn tgs_kerr(e: &Error, ext: bool) -> Option<(i64, Option<String>)> {
 }
 
 // MIT: `k5_make_tgs_req` (send_tgs.c:155-160)
-/// `till` is the TGT's end time, and no `rtime` is asked for.
 fn tgs_round_trip(
     profile: &Krb5Conf,
     kdc: &KdcAddr,
@@ -1101,7 +1086,6 @@ fn tgs_round_trip(
         inner.enc_part.cipher.as_ref(),
     )?;
     // MIT: `krb5_kdc_rep_decrypt_proc` (kdc_rep_dc.c:69-69)
-    // decodes the TGS-REP enc-part with `decode_krb5_enc_kdc_rep_part` (APPLICATION 26 then 25 then untagged).
     let mut enc_part =
         krb5_asn1::decode_enc_kdc_rep_part(&plain).map_err(|e| Error::Asn1(e.to_string()))?;
     if enc_part.nonce != nonce {
@@ -1139,7 +1123,7 @@ fn tgs_round_trip(
         &enc_part.sname,
         &enc_part.srealm,
     )?;
-    // VALIDATE. The wire `till` is still the old TGT endtime; a renewed ticket may outlive it.
+    // RENEW, VALIDATE skip times check: wire till old; renewal may outlive it.
     if !kdc_options.bit(flag_bit::RENEW) && !kdc_options.bit(flag_bit::VALIDATE) {
         tgs_reply_req_times(&enc_part, &till, None, None, &kdc_options)?;
     }
@@ -1155,7 +1139,7 @@ fn tgs_round_trip(
     let session_etype = EncryptionType::known(enc_part.key.keytype)?;
     let session_key = ProtocolKey::from_bytes(session_etype, enc_part.key.keyvalue.as_ref())?;
     // MIT: `kdcrep2creds` (lib/krb5/krb/gc_via_tkt.c:36-94)
-    // a reply that passed its checks is traced with its client, its server and its session key as a hash.
+    // Traced after checks: client, server, session key, as hashes.
     trace::tgs_reply(
         trace::Princ::new(&inner.cname, inner.crealm.as_bytes()),
         trace::Princ::new(&enc_part.sname, enc_part.srealm.as_bytes()),
@@ -1229,7 +1213,7 @@ fn princ_eq(
 }
 
 #[expect(clippy::too_many_arguments, reason = "name and realm stay separate")]
-/// A reply client equal to the requested server means the KDC ignored PA-FOR-USER.
+/// Reply client equal to requested server: KDC ignored PA-FOR-USER.
 pub fn tgs_reply_client_ok(
     tgt_cname: &PrincipalName,
     tgt_crealm: &krb5_types::Realm,
@@ -1261,7 +1245,6 @@ pub fn tgs_reply_client_ok(
 }
 
 // MIT: `check_reply_server` (gc_via_tkt.c:108-110)
-/// ticket server equals enc-part server (name and realm; name-type ignored).
 pub fn tgs_reply_server_consistent(
     ticket_sname: &PrincipalName,
     ticket_realm: &krb5_types::Realm,
@@ -1276,7 +1259,6 @@ pub fn tgs_reply_server_consistent(
     Ok(())
 }
 
-/// A time of 0 is unspecified and is not checked.
 pub fn tgs_reply_req_times(
     enc: &EncKdcRepPart,
     till: &KerberosTime,
@@ -1327,7 +1309,6 @@ pub fn tgs_reply_req_times(
 }
 
 // MIT: `tgt_is_local_realm` (gc_via_tkt.c:139-147)
-/// true when the TGT is `krbtgt/CREALM@CREALM` for the client's realm.
 fn tgt_is_local_realm(tgt: &AsOutcome) -> bool {
     let crealm = String::from_utf8_lossy(tgt.crealm.as_bytes());
     tgt.ticket.sname.is_krbtgt_for(crealm.as_ref())
@@ -1336,7 +1317,7 @@ fn tgt_is_local_realm(tgt: &AsOutcome) -> bool {
 
 #[must_use]
 // MIT: `krb5int_process_tgs_reply` (gc_via_tkt.c:247-252)
-/// ok-as-delegate is dropped when a foreign TGT lacks it.
+/// ok-as-delegate dropped when a foreign TGT lacks it.
 pub fn tgs_strip_ok_as_delegate(
     tgt_local_realm: bool,
     tgt_ok_as_delegate: bool,
@@ -1433,7 +1414,6 @@ fn service_non_referral_request(
     )
 }
 
-/// A referral adds canonicalize; the retry sends the caller's options alone.
 fn tgs_service_once(
     profile: &Krb5Conf,
     kdc: &KdcAddr,
@@ -1481,10 +1461,8 @@ fn tgs_service_once(
 }
 
 // MIT: `krb5_fwd_tgt_creds` (fwd_tgt.c:147-153)
-/// `flags2options | KDC_OPT_FORWARDED`.
 #[must_use]
 // MIT: `krb5_fwd_tgt_creds` (fwd_tgt.c:152-153)
-/// `forwardable == false` clears `FORWARDABLE`.
 pub fn tgs_forward_options(flags: &krb5_types::TicketFlags, forwardable: bool) -> KdcOptions {
     let mut opts = tkt_common_from_flags(flags).with_bit(flag_bit::FORWARDED, true);
     if !forwardable {

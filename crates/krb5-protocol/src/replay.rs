@@ -14,7 +14,6 @@ pub struct ReplayKey {
 }
 
 impl ReplayKey {
-    /// Past 24 bytes, only the first 24 are kept.
     #[must_use]
     pub fn tag(bytes: &[u8]) -> Self {
         let n = bytes.len().min(TAG_MAX);
@@ -27,7 +26,7 @@ impl ReplayKey {
     }
 
     // MIT: `k5_rc_tag_from_ciphertext` (lib/krb5/rcache/rc_base.c:147)
-    /// A short ciphertext is None, not MIT's EINVAL.
+    /// Short ciphertext: None, not MIT's EINVAL.
     #[must_use]
     pub fn from_ciphertext(etype: EncryptionType, cipher: &[u8]) -> Option<Self> {
         let len = checksum_output_size(etype.checksum_type())?;
@@ -36,7 +35,7 @@ impl ReplayKey {
     }
 
     // MIT: `k5_rcfile2_store` (lib/krb5/rcache/rc_file2.c:201)
-    /// The file cache keeps 12 bytes, zero-padded when shorter.
+    /// File cache keeps 12 bytes, zero-padded.
     #[must_use]
     pub fn file2(self) -> Self {
         let mut tag = [0; TAG_MAX];
@@ -48,7 +47,7 @@ impl ReplayKey {
     }
 }
 
-/// Clone shares the cache and does not fork it.
+/// Clone shares the cache, not a fork.
 #[derive(Clone, Debug)]
 pub struct ReplayCache {
     inner: Arc<Mutex<Inner>>,
@@ -88,7 +87,7 @@ impl ReplayCache {
         }
     }
 
-    /// True is a replay. Unlike MIT's, a full cache refuses every new tag.
+    /// True is a replay. Unlike MIT, full cache refuses every new tag.
     // MIT: `k5_memrcache_store` (lib/krb5/rcache/memrcache.c:125)
     /// A poisoned lock is a replay.
     #[must_use]
@@ -116,7 +115,6 @@ impl ReplayCache {
             _ => g.buckets.push_back((expiry, vec![key])),
         }
         if g.seen.len() == 1_024 {
-            // Reserved once, so churn past half full does not grow it again.
             g.seen.reserve(28_672 - 1_024);
             g.buckets.reserve(512);
         }

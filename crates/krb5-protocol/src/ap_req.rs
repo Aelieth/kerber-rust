@@ -1,5 +1,3 @@
-//! AP-REQ construction (RFC 4120 §5.5.1) and service-side verification.
-
 use std::collections::BTreeMap;
 use std::time::Instant;
 
@@ -25,17 +23,15 @@ pub struct ApVerifyParams<'a> {
     pub key_kvnos: Option<&'a [u32]>,
     pub key_principals: Option<&'a [(PrincipalName, Realm)]>,
     pub kvno: Option<u32>,
-    /// A name that is not host-based tries only its own keytab entry.
+    /// Non-host-based name: its own keytab entry only.
     pub expected_server: Option<&'a PrincipalName>,
     pub expected_realm: Option<&'a str>,
-    /// A keytab that cannot be walked is looked up, not iterated.
     pub get_entry: Option<KeytabGetEntry<'a>>,
-    /// A negative skew fails every time check.
+    /// Negative skew fails every time check.
     pub skew: i64,
-    /// A host-based name matches that service on any host.
     pub ignore_acceptor_hostname: bool,
     pub capaths: &'a BTreeMap<String, BTreeMap<String, Vec<String>>>,
-    /// The ticket's caddr must hold it; None skips the check, as MIT's unset remote address.
+    /// Ticket's caddr must hold it; None skips it (MIT: unset remote).
     pub remote_addr: Option<&'a HostAddress>,
     pub now: Option<KerberosTime>,
 }
@@ -74,7 +70,7 @@ pub type KeytabGetEntry<'a> =
     &'a dyn Fn(&PrincipalName, &str, u32, i32) -> Result<ProtocolKey, KeytabLookup>;
 
 // MIT: `krb5_address_search` (lib/krb5/krb/addr_srch.c:48-65)
-/// No list, or one NetBIOS address, holds any address.
+/// No list, or one NetBIOS address: any address matches.
 #[must_use]
 pub fn address_search(addr: &HostAddress, list: Option<&HostAddresses>) -> bool {
     list.is_none_or(|l| address_in_list(addr, l))
@@ -439,7 +435,7 @@ fn decrypt_for_server(
 ) -> Result<EncTicketPart, Error> {
     let lookup = params.get_entry.is_some();
     let explicit = !is_matching(params.expected_server, params.expected_realm, ignore_host);
-    // keys with no principal match only when the ticket server is the named one.
+    // No-principal keys match only if the ticket's server is named.
     if !lookup
         && !sname_match(
             params.expected_server,
@@ -491,7 +487,6 @@ fn decrypt_for_server(
         .or(params.kvno.filter(|&v| v != 0));
     let tkt_etype = ap.ticket.enc_part.etype;
     // MIT: `krb5_ktfile_get_entry` (kt_file.c:355-384)
-    // Another kvno for that principal is KVNONOTFOUND when nothing matched.
     let mut found_wrong_kvno = false;
     let mut tried_any = false;
     let mut not_found = false;
@@ -563,7 +558,7 @@ fn decrypt_for_server(
             });
         }
         // MIT: `integrity_error` (rd_req_dec.c:162-181)
-        // a key that does not decrypt the ticket is BAD_INTEGRITY when the named server is the ticket's, else NOT_US.
+        // Non-decrypting: BAD_INTEGRITY if the ticket's server is named, else NOT_US.
         if tried_any && !same_princ && matches!(last_err, Error::Crypto(_)) {
             return Err(Error::KrbError {
                 code: err::NOT_US,
@@ -586,7 +581,6 @@ fn decrypt_for_server(
 }
 
 // MIT: `is_matching` (rd_req_dec.c:279-286)
-/// A host-based name with no host walks the keytab.
 fn is_matching(server: Option<&PrincipalName>, realm: Option<&str>, ignore_host: bool) -> bool {
     let Some(server) = server else {
         return true;
@@ -609,7 +603,7 @@ fn decrypt_by_keytab_walk(
     let tkt_realm = String::from_utf8_lossy(ap.ticket.realm.as_bytes()).into_owned();
     let mut walk = KeytabWalk::default();
     for (i, key) in params.keys.iter().enumerate() {
-        // A slot with no principal is taken as the ticket server's: the caller holds that service's keys.
+        // No-principal slot: the ticket server's; the caller holds its keys.
         let (ename, erealm) = params
             .key_principals
             .and_then(|p| p.get(i))
@@ -737,7 +731,7 @@ fn iteration_error(
 }
 
 // MIT: `rd_req_decoded_opt` (rd_req_dec.c:634-638)
-/// The invalid flag is tested only after the ticket times.
+/// Invalid flag tested only after the ticket times.
 fn verify_inner(
     raw: &[u8],
     params: &ApVerifyParams<'_>,
@@ -767,10 +761,9 @@ fn verify_inner(
     let tkt_etype = ap.ticket.enc_part.etype;
     let now = params.now.clone().unwrap_or_else(KerberosTime::now);
     // MIT: `krb5_init_context_profile` (lib/krb5/krb/init_ctx.c:250-252)
-    // the skew is the profile's integer as written, a negative one too.
     let skew = params.skew;
     // MIT: `krb5int_validate_times` (valid_times.c:36-57)
-    // No starttime is gated by authtime, not left unchecked.
+    // No starttime: gated by authtime, not unchecked.
     let start = ticket_part
         .starttime
         .as_ref()
@@ -822,7 +815,6 @@ fn verify_inner(
         });
     }
     // MIT: `krb5_check_clockskew` (lib/krb5/os/timeofday.c:55-67)
-    // `ts_within` the skew, which a negative skew never is.
     let skew_delta = now.delta_seconds(&authenticator.ctime).unsigned_abs();
     if !u64::try_from(skew).is_ok_and(|limit| skew_delta <= limit) {
         return Err(Error::KrbError {
@@ -859,7 +851,7 @@ fn verify_inner(
 }
 
 // MIT: `krb5_check_transited_list` (chk_trans.c:309-355)
-/// Anonymous crealm skips the transited check.
+/// Anonymous crealm skips transited check.
 fn check_ap_req_transited(
     part: &EncTicketPart,
     srealm: &str,
@@ -896,7 +888,6 @@ fn check_ap_req_transited(
 }
 
 // MIT: `krb5_walk_realm_tree` (walk_rtree.c:96-120)
-/// `[capaths]` if present, else the hierarchical realm tree.
 fn walk_realm_tree(
     capaths: &BTreeMap<String, BTreeMap<String, Vec<String>>>,
     client: &str,
