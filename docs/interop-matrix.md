@@ -88,8 +88,8 @@ MIT 1.22.2 parse site (Heimdal spellings; `sendto_kdc.c` `MAX_PASS 3`).
 Rust stores the strings and does not change pacing. `udp_preference_limit`
 (MIT default 1465), `rdns`, `kdc_timesync`, `permitted_enctypes` /
 `default_tkt_enctypes` / `default_tgs_enctypes`, `forwardable`,
-`ticket_lifetime`, `renew_lifetime`, `dns_lookup_kdc` /
-`dns_lookup_realm` are parsed at MIT's sites.
+`ticket_lifetime`, `renew_lifetime`, `kdc_default_options`,
+`dns_lookup_kdc` / `dns_lookup_realm` are parsed at MIT's sites.
 
 **Renewable default, admin-overridable:** ticket renew time is the min of
 the request (`-r`, else RENEWABLE-OK till), the **krbtgt** entry, the

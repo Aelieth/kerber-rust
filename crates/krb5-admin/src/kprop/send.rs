@@ -183,6 +183,7 @@ fn init_creds_ticket_opts(conf: &Krb5Conf, realm: &str) -> Result<AsTicketOpts, 
         pac_request: None,
         allowed_preauth_type: None,
         pa_config_in: None,
+        restart: None,
     })
 }
 

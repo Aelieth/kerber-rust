@@ -604,13 +604,7 @@ impl TicketFlags {
     /// Construct flags from a MIT-packed 32-bit integer (MSB is RFC bit 0).
     #[must_use]
     pub fn from_u32(v: u32) -> Self {
-        let mut bits = KerberosFlags::repeat(false, 32);
-        for i in 0..32 {
-            if v & (1u32 << (31 - i)) != 0 {
-                bits.set(i, true);
-            }
-        }
-        Self(bits)
+        Self(flags_from_u32(v))
     }
 
     #[must_use]
@@ -717,6 +711,11 @@ impl KdcOptions {
         self
     }
 
+    #[must_use]
+    pub fn from_u32(v: u32) -> Self {
+        Self(flags_from_u32(v))
+    }
+
     /// Packed MIT integer (MSB is RFC bit 0).
     #[must_use]
     pub fn to_u32(&self) -> u32 {
@@ -763,6 +762,14 @@ impl TicketFlags {
     pub fn to_u32(&self) -> u32 {
         flags_to_u32(&self.0)
     }
+}
+
+fn flags_from_u32(v: u32) -> KerberosFlags {
+    let mut bits = KerberosFlags::repeat(false, 32);
+    for i in 0..32 {
+        bits.set(i, v & (1u32 << (31 - i)) != 0);
+    }
+    bits
 }
 
 fn flags_to_u32(bits: &KerberosFlags) -> u32 {

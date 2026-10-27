@@ -8,12 +8,13 @@ use std::path::Path;
 use krb5_asn1::decode;
 use krb5_config::{CcSpec, ClientContext, Krb5Conf};
 use krb5_protocol::{
-    AsOutcome, AsPrompt, AsRequest, AsTicketOpts, FastArmor, KdcAddr, KeytabFailure, Pkinit,
-    PkinitClient, PkinitFailure, PreauthPrompt, TgsOutcome, as_exchange, as_exchange_defer_fast,
-    as_exchange_interactive, as_exchange_with_keys, as_exchange_with_keys_defer_fast,
-    as_exchange_with_unreadable_keytab, as_exchange_with_unreadable_keytab_defer_fast,
-    dir_cache_path, kcm_destroy, kcm_load, kcm_store, kcm_store_keep_default, memory_destroy,
-    memory_retrieve, memory_store, parse_principal_ex, read_keytab_file, tgs_exchange_path,
+    AsOutcome, AsPrompt, AsRequest, AsRestart, AsTicketOpts, FastArmor, KdcAddr, KeytabFailure,
+    Pkinit, PkinitClient, PkinitFailure, PreauthPrompt, TgsOutcome, as_exchange,
+    as_exchange_defer_fast, as_exchange_interactive, as_exchange_with_keys,
+    as_exchange_with_keys_defer_fast, as_exchange_with_unreadable_keytab,
+    as_exchange_with_unreadable_keytab_defer_fast, dir_cache_path, kcm_destroy, kcm_load,
+    kcm_store, kcm_store_keep_default, memory_destroy, memory_retrieve, memory_store,
+    parse_principal_ex, read_keytab_file, tgs_exchange_path,
 };
 use krb5_types::Ticket;
 use krb5_types::pkinit::{CertMatchError, IdentityError};
@@ -1011,16 +1012,17 @@ fn load_armor_for_upgrade(
     armor: &mut Option<FastArmor>,
     cc: Option<&ArmorCcache>,
     realm: &str,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    restart: Box<AsRestart>,
+) -> Result<AsRestart, Box<dyn std::error::Error + Send + Sync>> {
     let Some(cc) = cc else {
-        return Err(ProtocolError::FastUpgrade.into());
+        return Err(ProtocolError::FastUpgrade(restart).into());
     };
     trace::fast_armor(ctx, cc, realm);
     let loaded = load_fast_armor(ctx, &cc.spec, realm).map_err(
         |e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(armor_build_error(e.as_ref())) },
     )?;
     *armor = Some(loaded);
-    Ok(())
+    Ok(*restart)
 }
 
 pub fn as_with_fast_ccache(
@@ -1028,15 +1030,19 @@ pub fn as_with_fast_ccache(
     cc: Option<&ArmorCcache>,
     realm: &str,
     service: bool,
-    mut exchange: impl FnMut(Option<&FastArmor>, bool) -> Result<AsOutcome, ProtocolError>,
+    mut exchange: impl FnMut(
+        Option<&FastArmor>,
+        bool,
+        Option<AsRestart>,
+    ) -> Result<AsOutcome, ProtocolError>,
 ) -> Result<Result<AsOutcome, ProtocolError>, Box<dyn std::error::Error + Send + Sync>> {
     let mut armor = initial_armor(ctx, cc, realm, service)?;
-    let first = exchange(armor.as_ref(), cc.is_some() && armor.is_none());
-    if !matches!(first, Err(ProtocolError::FastUpgrade)) {
-        return Ok(first);
-    }
-    load_armor_for_upgrade(ctx, &mut armor, cc, realm)?;
-    Ok(exchange(armor.as_ref(), false))
+    let restart = match exchange(armor.as_ref(), cc.is_some() && armor.is_none(), None) {
+        Err(ProtocolError::FastUpgrade(restart)) => restart,
+        first => return Ok(first),
+    };
+    let restart = load_armor_for_upgrade(ctx, &mut armor, cc, realm, restart)?;
+    Ok(exchange(armor.as_ref(), false, Some(restart)))
 }
 
 // MIT: `restart_init_creds_loop` (lib/krb5/krb/get_in_tkt.c:800-801)
@@ -1054,11 +1060,13 @@ fn exchange_shape(
         let req = shape.request(armor.as_ref(), b"");
         dispatch_as(password, keytab, &req, defer)?
     };
-    if !matches!(first, Err(ProtocolError::FastUpgrade)) {
-        return Ok(first);
-    }
-    load_armor_for_upgrade(ctx, armor, cc, shape.realm)?;
-    let req = shape.request(armor.as_ref(), b"");
+    let restart = match first {
+        Err(ProtocolError::FastUpgrade(restart)) => restart,
+        first => return Ok(first),
+    };
+    let restart = load_armor_for_upgrade(ctx, armor, cc, shape.realm, restart)?;
+    let mut req = shape.request(armor.as_ref(), b"");
+    req.ticket.restart = Some(restart);
     dispatch_as(password, keytab, &req, false)
 }
 
@@ -1078,11 +1086,13 @@ fn exchange_shape_direct(
             as_exchange(&req)
         }
     };
-    if !matches!(first, Err(ProtocolError::FastUpgrade)) {
-        return Ok(first);
-    }
-    load_armor_for_upgrade(ctx, armor, cc, shape.realm)?;
-    let req = shape.request(armor.as_ref(), password);
+    let restart = match first {
+        Err(ProtocolError::FastUpgrade(restart)) => restart,
+        first => return Ok(first),
+    };
+    let restart = load_armor_for_upgrade(ctx, armor, cc, shape.realm, restart)?;
+    let mut req = shape.request(armor.as_ref(), password);
+    req.ticket.restart = Some(restart);
     Ok(as_exchange(&req))
 }
 
@@ -1189,6 +1199,7 @@ fn follow_referrals<'c>(
     password: &mut LazyPassword<'_>,
 ) -> Result<(Result<AsOutcome, ProtocolError>, Leg<'c>), Box<dyn std::error::Error + Send + Sync>> {
     let realm0 = leg.realm.clone();
+    let mut restart = None;
     for _ in 0..MAX_IN_TKT_LOOPS {
         password.client = cname.unparse_with_realm(&leg.realm);
         let out = {
@@ -1201,6 +1212,7 @@ fn follow_referrals<'c>(
             ticket.allowed_preauth_type =
                 allowed_preauth_type(params.in_ccache, &server, &leg.realm);
             ticket.pa_config_in = pa_config_in(params.in_ccache, &server, &leg.realm);
+            ticket.restart = restart.take();
             let shape = AsShape {
                 cname: cname.clone(),
                 realm: &leg.realm,
@@ -1236,7 +1248,14 @@ fn follow_referrals<'c>(
         };
         // MIT's text names the rewritten client.
         let realm = match out {
-            Err(ProtocolError::ClientReferral { realm, .. }) => realm,
+            Err(ProtocolError::ClientReferral {
+                realm,
+                restart: next,
+                ..
+            }) => {
+                restart = Some(*next);
+                realm
+            }
             Err(
                 ref e @ (ProtocolError::KrbError {
                     code: krb5_types::err::C_PRINCIPAL_UNKNOWN,
@@ -1415,6 +1434,7 @@ fn kinit_inner(
                 pac_request,
                 allowed_preauth_type: None,
                 pa_config_in: None,
+                restart: None,
             };
             // MIT: `krb5_get_init_creds_password` (lib/krb5/krb/gic_pwd.c:213-263)
             // each AS starts again in the client's own realm.

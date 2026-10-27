@@ -211,6 +211,7 @@ pub struct Krb5Conf {
     pub udp_preference_limit: Option<u32>,
     pub rdns: bool,
     pub kdc_timesync: bool,
+    pub kdc_default_options: i32,
     // MIT: `nofail` (vfy_increds.c:38-51)
     // `verify_ap_req_nofail` defaults to false.
     pub verify_ap_req_nofail: bool,
@@ -282,6 +283,7 @@ impl Default for Krb5Conf {
             udp_preference_limit: None,
             rdns: true,
             kdc_timesync: true,
+            kdc_default_options: 0x10,
             verify_ap_req_nofail: false,
             permitted_enctypes: None,
             default_tkt_enctypes: Vec::new(),

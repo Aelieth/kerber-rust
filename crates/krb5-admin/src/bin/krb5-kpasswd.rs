@@ -149,11 +149,12 @@ fn run<R: BufRead, W: Write>(
         armor_cc.as_ref(),
         &client.realm,
         true,
-        |fast_armor, defer| {
-            let req = AsRequest {
+        |fast_armor, defer, restart| {
+            let mut req = AsRequest {
                 fast_armor,
                 ..req.clone()
             };
+            req.ticket.restart = restart;
             let mut prompt = || {
                 prompter.hidden(&asked).map_err(|e| {
                     unread = Some(e);

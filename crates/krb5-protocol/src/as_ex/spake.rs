@@ -358,7 +358,7 @@ pub(super) fn continue_spake(
         if again.is_some() {
             ask_responder(req, pw, None, &allowed_padata(req, &method))?;
         }
-        let bound = request_times(req, clock);
+        let bound = request_times(req, clock, nonce);
         let mut req2 = build_as_req_from(req, nonce, &bound, None, etypes)?;
         let body_der = encode(&req2.0.req_body)?;
         let round = match find_pa(&method, pa::SPAKE) {
@@ -480,7 +480,7 @@ pub(super) fn continue_spake(
                 current = e;
             }
             KdcMsg::Error(e) => {
-                return Err(kdc_error(req, &e));
+                return Err(kdc_error(req, clock, &e));
             }
             KdcMsg::TgsRep => return Err(Error::UnexpectedPdu),
         }

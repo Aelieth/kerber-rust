@@ -399,6 +399,7 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
         pac_request: opts.request_pac,
         allowed_preauth_type: None,
         pa_config_in: None,
+        restart: None,
     };
     // MIT: `krb5_init_creds_init` (lib/krb5/krb/get_in_tkt.c:998-1005)
     // with neither, `noaddresses` absent or true sends none, and false sends that list.

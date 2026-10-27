@@ -104,18 +104,27 @@ pub fn attach_fast_with_options(
     inner_padata: Vec<PaData>,
     fast_options: &krb5_types::fast::FastOptions,
 ) -> Result<(), Error> {
-    // MIT: `restart_init_creds_loop` (get_in_tkt.c:836-838)
-    // The inner body is cloned before its times are cleared.
-    // MIT: `krb5int_fast_prep_req_body` (fast.c:157-161)
-    // The checksum is over the outer body after that clear, not over its padata.
-    // MIT: `init_creds_step_request` (get_in_tkt.c:1278-1280)
-    // MIT: `krb5int_fast_prep_req` (fast.c:310-313)
+    let mut outer = req.0.req_body.clone();
+    outer.till = KerberosTime::from_unix_seconds(0);
+    outer.from = None;
+    outer.rtime = None;
+    attach_fast_over(req, outer, armor, armor_key, inner_padata, fast_options)
+}
+
+// MIT: `krb5int_fast_prep_req_body` (fast.c:157-161)
+// MIT: `krb5int_fast_prep_req` (fast.c:310-313)
+/// The checksum is over the outer body, not over its padata.
+pub(crate) fn attach_fast_over(
+    req: &mut AsReq,
+    outer: krb5_types::KdcReqBody,
+    armor: &ApReq,
+    armor_key: &ProtocolKey,
+    inner_padata: Vec<PaData>,
+    fast_options: &krb5_types::fast::FastOptions,
+) -> Result<(), Error> {
     let mut inner = inner_padata;
     inner.extend(req.0.padata.take().unwrap_or_default());
-    let inner_body = req.0.req_body.clone();
-    req.0.req_body.till = KerberosTime::from_unix_seconds(0);
-    req.0.req_body.from = None;
-    req.0.req_body.rtime = None;
+    let inner_body = std::mem::replace(&mut req.0.req_body, outer);
     let outer_der = encode(&req.0.req_body)?;
     req.0.padata = Some(vec![fx_fast_padata_over(
         Some(armor),

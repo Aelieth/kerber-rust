@@ -821,6 +821,10 @@ fn parse_libdefaults(
                 conf.kdc_timesync = n != 0;
             }
         }
+        // MIT: `krb5_init_context_profile` (lib/krb5/krb/init_ctx.c:265-267)
+        "kdc_default_options" if exact && take_first(seen, "kdc_default_options") => {
+            conf.kdc_default_options = parse_profile_int(&v).unwrap_or(0x10);
+        }
         "verify_ap_req_nofail"
             if realm_key(top, realm, k, "verify_ap_req_nofail")
                 && take_first(seen, &seen_key(realm, "verify_ap_req_nofail")) =>

@@ -13,13 +13,13 @@ use super::{
     allowed_padata, build_as_req_from, encrypted_timestamp_disabled, fallback_s2k, find_pa,
     finish_as_rep, first_etype, gak_found, kdc_error, learned_s2k, long_term_as_key,
     method_from_error, pa_enc_timestamp_at, pick_info2, pick_key, req_sname, request_times,
-    salt_cname, select_s2k, send_as, sort_krb5_padata_sequence, trace_keytab_gak,
+    restart_point, salt_cname, select_s2k, send_as, sort_krb5_padata_sequence, trace_keytab_gak,
     trace_preauth_input, trace_reply_padata,
 };
 use crate::error::Error;
 use crate::keytab::KeytabFailure;
 use crate::preauth::{
-    apply_strengthen, armor_key, attach_fast, pkinit_reply_key_agile, unwrap_fast_rep_checked,
+    apply_strengthen, armor_key, attach_fast_over, pkinit_reply_key_agile, unwrap_fast_rep_checked,
     verify_fast_finished,
 };
 use crate::trace;
@@ -27,7 +27,9 @@ use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};
 use krb5_types::k5json::{self, Value};
 use krb5_types::pkinit::{KxGroup, KxKey};
-use krb5_types::{AsRep, EtypeInfo2, KrbError, MethodData, PaData, PrincipalName, err, pa};
+use krb5_types::{
+    ApReq, AsRep, AsReq, EtypeInfo2, KrbError, MethodData, PaData, PrincipalName, err, pa,
+};
 
 pub struct FastArmor {
     pub ticket: krb5_types::Ticket,
@@ -57,7 +59,7 @@ pub(super) fn continue_fast(
     let (sub, akey, ap) = armor_ap_request(armor, Some(req.profile))?;
     let mut probe = build_as_req_from(req, nonce, bound, None, etypes)?;
     trace::init_creds_preauth_none();
-    attach_fast(&mut probe, &ap, &akey, Vec::new())?;
+    attach_outer(req, etypes, &mut probe, &ap, &akey, Vec::new())?;
     trace::fast_encode();
     let wire = encode(&probe)?;
     match send_as(req, &wire)? {
@@ -89,7 +91,7 @@ pub(super) fn continue_fast(
                 retry,
             } = fast_error_material(&akey, &e, nonce)?;
             if !retry || inner.error_code != err::PREAUTH_REQUIRED {
-                return Err(kdc_error(req, &inner));
+                return Err(kdc_error(req, clock, &inner));
             }
             clock.note(&inner, true);
             // MIT: `get_as_key` (lib/krb5/krb/preauth2.c:438-457)
@@ -146,7 +148,7 @@ pub(super) fn continue_fast(
                         Ok(mech) => mech,
                         Err(e) => {
                             return match (last_fail, first_failure) {
-                                (Some(err), _) => Err(kdc_error(req, &err)),
+                                (Some(err), _) => Err(kdc_error(req, clock, &err)),
                                 (None, Some(first)) => Err(Error::PreauthFailed(Box::new(first))),
                                 (None, None) => Err(e),
                             };
@@ -339,9 +341,9 @@ fn fast_key_mechanism(
     }
     trace::preauth_output(&inner_pa);
     let ap = fast_armor_ap(armor, sub, Some(req.profile))?;
-    let bound = &request_times(req, clock);
+    let bound = &request_times(req, clock, nonce);
     let mut req2 = build_as_req_from(req, nonce, bound, None, etypes)?;
-    attach_fast(&mut req2, &ap, akey, inner_pa)?;
+    attach_outer(req, etypes, &mut req2, &ap, akey, inner_pa)?;
     trace::fast_encode();
     let wire = encode(&req2)?;
     match send_as(req, &wire)? {
@@ -361,7 +363,11 @@ fn fast_key_mechanism(
             &wire,
             bound,
         ),
-        KdcMsg::Error(e) => Err(kdc_error(req, &fast_error_material(akey, &e, nonce)?.err)),
+        KdcMsg::Error(e) => Err(kdc_error(
+            req,
+            clock,
+            &fast_error_material(akey, &e, nonce)?.err,
+        )),
         KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
     }
     .map(Ok)
@@ -478,9 +484,9 @@ fn finish_fast_otp(
     trace::preauth_process(OTP_MODULE, pa::OTP_CHALLENGE, true, 0, None);
     trace::preauth_output(&inner_pa);
     let ap = fast_armor_ap(armor, sub, Some(req.profile))?;
-    let bound = &request_times(req, clock);
+    let bound = &request_times(req, clock, nonce);
     let mut req2 = build_as_req_from(req, nonce, bound, None, etypes)?;
-    attach_fast(&mut req2, &ap, akey, inner_pa)?;
+    attach_outer(req, etypes, &mut req2, &ap, akey, inner_pa)?;
     trace::fast_encode();
     let wire = encode(&req2)?;
     match send_as(req, &wire)? {
@@ -499,7 +505,11 @@ fn finish_fast_otp(
             out.pa_config = otp::config_string(config);
             Ok(out)
         }
-        KdcMsg::Error(e) => Err(kdc_error(req, &fast_error_material(akey, &e, nonce)?.err)),
+        KdcMsg::Error(e) => Err(kdc_error(
+            req,
+            clock,
+            &fast_error_material(akey, &e, nonce)?.err,
+        )),
         KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
     }
 }
@@ -545,7 +555,7 @@ fn finish_fast_spake(
         if again.is_some() {
             ask_responder(req, pw, None, &allowed_padata(req, &listed))?;
         }
-        let bound = request_times(req, clock);
+        let bound = request_times(req, clock, nonce);
         let mut req2 = build_as_req_from(req, nonce, &bound, None, etypes)?;
         let body_der = encode(&req2.0.req_body)?;
         let (module_pa, as_key) = match spake.round(req, keys, etypes, &current, &body_der, pw)? {
@@ -565,7 +575,7 @@ fn finish_fast_spake(
         inner_pa.push(module_pa);
         trace::preauth_output(&inner_pa);
         let ap = fast_armor_ap(armor, sub, Some(req.profile))?;
-        attach_fast(&mut req2, &ap, akey, inner_pa)?;
+        attach_outer(req, etypes, &mut req2, &ap, akey, inner_pa)?;
         trace::fast_encode();
         let wire = encode(&req2)?;
         sent = true;
@@ -601,7 +611,7 @@ fn finish_fast_spake(
                 if !mat.retry
                     || (code != err::PREAUTH_REQUIRED && code != err::MORE_PREAUTH_DATA_REQUIRED)
                 {
-                    return Err(kdc_error(req, &mat.err));
+                    return Err(kdc_error(req, clock, &mat.err));
                 }
                 clock.note(&mat.err, true);
                 cookie = mat.cookie;
@@ -657,7 +667,7 @@ fn finish_fast_pkinit(
     let mut tryagain: Option<super::Retry> = None;
     for _ in 1..super::MAX_IN_TKT_LOOPS {
         let group = KxGroup::for_bits(dh_size).unwrap_or(KxGroup::Modp2048);
-        let bound = &request_times(req, clock);
+        let bound = &request_times(req, clock, nonce);
         let mut req2 = build_as_req_from(req, nonce, bound, None, etypes)?;
         let mut inner_pa: Vec<PaData> = match &tryagain {
             None => cookie.into_iter().cloned().collect(),
@@ -684,7 +694,7 @@ fn finish_fast_pkinit(
             trace::preauth_output(&inner_pa);
         }
         let ap = fast_armor_ap(armor, sub, Some(req.profile))?;
-        attach_fast(&mut req2, &ap, akey, inner_pa)?;
+        attach_outer(req, etypes, &mut req2, &ap, akey, inner_pa)?;
         trace::fast_encode();
         let wire = encode(&req2)?;
         match send_as(req, &wire)? {
@@ -716,7 +726,7 @@ fn finish_fast_pkinit(
                         tryagain = Some(retry);
                         nonce = super::random_nonce()?;
                     }
-                    None => return Err(kdc_error(req, &mat.err)),
+                    None => return Err(kdc_error(req, clock, &mat.err)),
                 }
             }
             KdcMsg::TgsRep => return Err(Error::UnexpectedPdu),
@@ -936,6 +946,27 @@ fn fast_base_key(
         trace::init_creds_as_key_gak((&key).into());
     }
     Ok(key)
+}
+
+// MIT: `restart_init_creds_loop` (lib/krb5/krb/get_in_tkt.c:836-838)
+fn attach_outer(
+    req: &AsRequest<'_>,
+    etypes: &[i32],
+    as_req: &mut AsReq,
+    ap: &ApReq,
+    akey: &ProtocolKey,
+    inner_pa: Vec<PaData>,
+) -> Result<(), Error> {
+    let start = restart_point(req);
+    let outer = build_as_req_from(req, start.nonce, &start.times, None, etypes)?;
+    attach_fast_over(
+        as_req,
+        outer.0.req_body,
+        ap,
+        akey,
+        inner_pa,
+        &krb5_types::fast::fast_options_none(),
+    )
 }
 
 fn armor_ap_request(

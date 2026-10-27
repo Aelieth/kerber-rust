@@ -10,17 +10,18 @@
 # kdc-req-proxy.py on client2 (shapes only: options, padata types, etypes, time classes), and the rust leg
 # compares ours with MIT's request by request; CR sends kinit to made-up realms whose KDC, lib/kdc-rewrite-proxy.py,
 # answers with a client referral to $REALM. Then the caches and keytabs cross: MIT's klist and kvno on ours,
-# ours on MIT's, MIT's cache entries kept through our rewrite. Then the request shapes of FAST under -T, SPAKE,
-# the preauth cascade, the enctypes nothing configures, kvno -U -P and no ticket_lifetime; kpasswd refused by a
-# policy; MIT's krb5_cc_remove_cred on a cache ours wrote. Scratch principals and the scratch policy only, removed at
-# the end.
+# ours on MIT's, MIT's cache entries kept through our rewrite. Then the request shapes of FAST under -T (armored at
+# once, and after an upgrade from an armor cache without fast_avail), SPAKE, the preauth cascade, the enctypes
+# nothing configures, kvno -U -P and no ticket_lifetime; kpasswd refused by a policy; MIT's krb5_cc_remove_cred on a
+# cache ours wrote. Scratch principals and the scratch policy only, removed at the end.
 # MIT 1.22.2: clients/kinit/kinit.c (k5_kinit :747-793), clients/klist/klist.c (show_credential, list_ccaches
 # :376-410, the keytab listing :300-345), clients/kvno/kvno.c (:165, :376-381), clients/kdestroy/kdestroy.c
 # (:207-219), kadmin/ktutil/ktutil.c (:217-269); lib/krb5/os/prompter.c (the prompt on stdout, the reply from
 # stdin with no tty); lib/krb5/krb/gic_pwd.c (:240-253, the expired-password change); lib/krb5/ccache/cc_file.c
 # (:117-123, the "(filename: ...)" messages); lib/krb5/krb/str_conv.c (:224-245: klist's dates follow the
 # locale, so the rows run with LC_ALL=C; ours print the C locale's); lib/krb5/krb/get_in_tkt.c (:718-722,
-# :936-947); clients/kpasswd/kpasswd.c; lib/krb5/ccache/cc_file.c (fcc_remove_cred).
+# :936-947, restart_init_creds_loop :780-848); lib/krb5/krb/fast.c (:172-224); clients/kpasswd/kpasswd.c;
+# lib/krb5/ccache/cc_file.c (fcc_remove_cred).
 # vms: kdc client2
 # legs: mit rust
 set -uo pipefail
@@ -229,7 +230,7 @@ if [ -n "$OURS" ]; then
     check CT.px.plain.life.same '^till: within [0-9]+ s of MIT.s$' run client2 "a=\$(jq -s '[.[] | select(.kind == \"req\")][0].till_unix' \$HOME/ct/px/plain.mit.jsonl); b=\$(jq -s '[.[] | select(.kind == \"req\")][0].till_unix' \$HOME/ct/px/plain.ours.jsonl); d=\$((b - a)); [ \"\$d\" -ge 0 ] && [ \"\$d\" -le 300 ] && echo \"till: within \$d s of MIT's\""
 fi
 
-section "CT.shape2: FAST under -T, SPAKE preferred, the preauth cascade, the enctypes nothing configures, kvno -U -P, no ticket_lifetime with and without -r 12h (get_in_tkt.c, fast.c, s4u_creds.c, init_ctx.c)"
+section "CT.shape2: FAST under -T and its upgrade, SPAKE preferred, the preauth cascade, the enctypes nothing configures, kvno -U -P, no ticket_lifetime with and without -r 12h (get_in_tkt.c, fast.c, s4u_creds.c, init_ctx.c)"
 # Each conf is px.conf with one change, and a row shows the change took.
 check CT.conf.spake '^preferred_preauth_types = 151$' run client2 "sed '0,/^\\[libdefaults\\]/s//[libdefaults]\\n    preferred_preauth_types = 151/' ~/ct/px.conf > ~/ct/spake.conf && grep -E '^[[:space:]]*preferred_preauth_types' ~/ct/spake.conf | sed 's/^[[:space:]]*//'"
 check CT.conf.etypes '^enctype lines left: 0$' run client2 "grep -v -E '^[[:space:]]*(permitted_enctypes|default_tkt_enctypes|default_tgs_enctypes)[[:space:]]*=' ~/ct/px.conf > ~/ct/noetype.conf && [ -s ~/ct/noetype.conf ] && echo \"enctype lines left: \$(grep -c -E 'enctypes[[:space:]]*=' ~/ct/noetype.conf)\""
@@ -238,6 +239,12 @@ for k in mit $OURS; do
     check "CT.armor.$k" "^Default principal: $S@$R\$" run client2 "$(E "$k") \$B/kinit -k -t \$HOME/ct/svc.keytab -c FILE:\$HOME/ct/$k.armor.cc $SVC@$REALM && \$B/kinit -k -t \$HOME/ct/svc.keytab -c FILE:\$HOME/ct/$k.s4up.cc $SVC@$REALM && \$B/klist -c FILE:\$HOME/ct/$k.armor.cc"
 done
 shape fast "$ALICE" "\$B/kinit -T FILE:\$HOME/ct/_K_.armor.cc -c FILE:\$HOME/ct/_K_.fast.cc ctuser@$REALM"
+check client2.cc-remove '^cc-remove self-test ok$' hostin "lib/cc-remove.py" "$LABQ ssh client2 -- 'cat > ~/ct/cc-remove.py && python3 ~/ct/cc-remove.py --self-test \$HOME/ct/ccrm-self.cc | tail -n 1'" < "$FIELD_LIB/cc-remove.py"
+# Without fast_avail the first request goes bare, and the KDC's PA-FX-FAST restarts it armored.
+for k in mit $OURS; do
+    check "CT.armorx.$k" '^fast_avail: 1 then 0$' run client2 "cp \$HOME/ct/$k.armor.cc \$HOME/ct/$k.armorx.cc && b=\$(LC_ALL=C /usr/bin/klist -C -c FILE:\$HOME/ct/$k.armorx.cc | grep -c '^config: fast_avail') && python3 \$HOME/ct/cc-remove.py FILE:\$HOME/ct/$k.armorx.cc 'krb5_ccache_conf_data/fast_avail/krbtgt\\/$REALM\\@$REALM@X-CACHECONF:' > /dev/null && echo \"fast_avail: \$b then \$(LC_ALL=C /usr/bin/klist -C -c FILE:\$HOME/ct/$k.armorx.cc | grep -c '^config: fast_avail')\""
+done
+shape fast_upgrade "$ALICE" "\$B/kinit -T FILE:\$HOME/ct/_K_.armorx.cc -c FILE:\$HOME/ct/_K_.fu.cc ctuser@$REALM"
 shape spake "$ALICE" "KRB5_CONFIG=\$HOME/ct/spake.conf \$B/kinit -c FILE:\$HOME/ct/_K_.spake.cc ctpre@$REALM"
 # MIT's DB2 back end holds no delegation target, so its KDC refuses the proxy step: the request is graded, not the answer.
 shape kvno_s4u_proxy - "\$B/kvno -c FILE:\$HOME/ct/_K_.s4up.cc -U ctuser -P $SVC@$REALM; true"
@@ -250,9 +257,16 @@ for k in mit $OURS; do
 done
 # J <flow> <k> <jq on the AS-REQs (10) or TGS-REQs (12), as one array>: one line from that capture.
 J() { run client2 "jq -rs '[.[] | select(.kind == \"req\" and .msg_type == $3)] | $4' \$HOME/ct/px/$1.$2.jsonl"; }
+OUTER='"outer: \(map(select(.padata == [136]) | "till \(.till), rtime \(.rtime), renewable_ok \(any(.kdc_options[]; . == "renewable_ok"))") | unique | join("; "))"'
 for k in mit $OURS; do
     J fast "$k" 10 '"till: \(.[0].till // "none")"'
     checklast "CT.px.fast.till.$k" '^till: zero$'
+    J fast "$k" 10 "$OUTER"
+    checklast "CT.px.fast.outer.$k" '^outer: till zero, rtime absent, renewable_ok true$'
+    J fast_upgrade "$k" 10 '"padata: \(map(.padata) | tojson)"'
+    checklast "CT.px.fast_upgrade.padata.$k" '^padata: \[\[150,149\],\[136\],\[136\]\]$'
+    J fast_upgrade "$k" 10 "$OUTER"
+    checklast "CT.px.fast_upgrade.outer.$k" '^outer: till present, rtime present, renewable_ok false$'
     J spake "$k" 10 '"first: \(.[0].padata | tojson)"'
     checklast "CT.px.spake.first.$k" '^first: \[150,149\]$'
     J preauth "$k" 10 '"cascade: \(map(.padata) | tojson)"'
@@ -280,7 +294,6 @@ done
 
 if [ -n "$OURS" ]; then
     section "CT.ccrm: MIT's krb5_cc_remove_cred (lib/cc-remove.py, client2's libkrb5) on a cache ours wrote: the service ticket goes, the TGT and the config entries stay, in both klists (cc_file.c fcc_remove_cred)"
-    check client2.cc-remove '^cc-remove self-test ok$' hostin "lib/cc-remove.py" "$LABQ ssh client2 -- 'cat > ~/ct/cc-remove.py && python3 ~/ct/cc-remove.py --self-test \$HOME/ct/ccrm-self.cc | tail -n 1'" < "$FIELD_LIB/cc-remove.py"
     check CT.ccrm.make "^$W@$R: kvno = [0-9]+\$" runin client2 "ctuser's password ($ALICE)" "$(E ours) \$B/kinit -c FILE:\$HOME/ct/rm.cc ctuser@$REALM > /dev/null && \$B/kvno -c FILE:\$HOME/ct/rm.cc $WEB@$REALM && LC_ALL=C /usr/bin/klist -C -c FILE:\$HOME/ct/rm.cc | grep -E '^config: ' > \$HOME/ct/rm.config.before" < <(once "$ALICE")
     check CT.ccrm.remove "^removed: $W@$R\$" run client2 "python3 \$HOME/ct/cc-remove.py FILE:\$HOME/ct/rm.cc $WEB@$REALM"
     for k in mit ours; do

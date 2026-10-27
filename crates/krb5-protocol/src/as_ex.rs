@@ -91,6 +91,9 @@ pub struct AsTicketOpts {
     pub pac_request: Option<bool>,
     pub allowed_preauth_type: Option<i32>,
     pub pa_config_in: Option<Vec<u8>>,
+    // MIT: `restart_init_creds_loop` (lib/krb5/krb/get_in_tkt.c:836-838)
+    /// None is the first start.
+    pub restart: Option<AsRestart>,
 }
 
 #[derive(Clone, Debug)]
@@ -99,6 +102,13 @@ struct AsReqTimes {
     rtime: Option<KerberosTime>,
     from: Option<KerberosTime>,
     opts: KdcOptions,
+}
+
+/// FAST's outer body: the request as the last restart found it.
+#[derive(Clone, Debug)]
+pub struct AsRestart {
+    nonce: u32,
+    times: AsReqTimes,
 }
 
 #[expect(
@@ -118,6 +128,7 @@ impl Default for AsTicketOpts {
             pac_request: None,
             allowed_preauth_type: None,
             pa_config_in: None,
+            restart: None,
         }
     }
 }
@@ -362,8 +373,8 @@ fn as_exchange_inner(
         _ => conf_etypes(req.profile, false),
     };
     let nonce = random_nonce()?;
-    let clock = Clock::new(req.profile);
-    let bound = request_times(req, &clock);
+    let clock = Clock::new(req.profile, restart_point(req));
+    let bound = request_times(req, &clock, nonce);
 
     if req.fast_armor.is_some() {
         return continue_fast(
@@ -462,7 +473,7 @@ fn as_exchange_inner(
     }
     // MIT: `k5_upgrade_to_fast_p` (lib/krb5/krb/fast.c:677-688)
     // PA-FX-FAST with no armor key yet restarts first.
-    upgrade_to_fast(&msg, defer_fast)?;
+    upgrade_to_fast(&msg, defer_fast, &clock)?;
     // No listed mechanism is PREAUTH_FAILED.
     if let KdcMsg::Error(e) = &msg
         && e.error_code == err::PREAUTH_REQUIRED
@@ -500,7 +511,7 @@ fn as_exchange_inner(
             .with_unreadable_keytab(unreadable);
             continue_from_hint(req, keys, nonce, &etypes, &e, &clock, &mut pw)
         }
-        KdcMsg::Error(e) => Err(kdc_error(req, &e)),
+        KdcMsg::Error(e) => Err(kdc_error(req, &clock, &e)),
         KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
     }
 }
@@ -838,7 +849,7 @@ fn continue_from_hint(
                 }
                 None => {
                     return Err(match (refused, first_failure) {
-                        (Some(e), _) => kdc_error(req, &e),
+                        (Some(e), _) => kdc_error(req, clock, &e),
                         (None, Some(first)) => Error::PreauthFailed(Box::new(first)),
                         (None, None) => preauth_failed(),
                     });
@@ -916,7 +927,7 @@ fn continue_preauth(
     }
     trace::preauth_process(ENCTS_MODULE, pa::ENC_TIMESTAMP, true, 0, None);
     trace::preauth_output(&padata);
-    let bound = request_times(req, clock);
+    let bound = request_times(req, clock, nonce);
     let second = build_as_req_from(req, nonce, &bound, Some(padata), etypes)?;
     let wire = encode(&second)?;
     let mut finish =
@@ -954,7 +965,7 @@ fn continue_preauth(
         KdcMsg::AsRep(rep) => finish(rep, &wire, etypes, client_key, &bound),
         KdcMsg::Error(e) => {
             encts_tryagain(&e);
-            Err(kdc_error(req, &e))
+            Err(kdc_error(req, clock, &e))
         }
         KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
     }
@@ -988,14 +999,14 @@ fn continue_embedder(
     let mut padata = error_cookie(preauth_err);
     padata.extend(produced);
     trace::preauth_output(&padata);
-    let bound = request_times(req, clock);
+    let bound = request_times(req, clock, nonce);
     let second = build_as_req_from(req, nonce, &bound, Some(padata), etypes)?;
     let wire = encode(&second)?;
     match send_as(req, &wire)? {
         KdcMsg::AsRep(rep) => {
             finish_as_rep_keys(req, rep, nonce, keys, etypes, &bound, Some(&wire), pw)
         }
-        KdcMsg::Error(e) => Err(kdc_error(req, &e)),
+        KdcMsg::Error(e) => Err(kdc_error(req, clock, &e)),
         KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
     }
 }
@@ -1133,7 +1144,7 @@ fn continue_pkinit(
     let first_wire = encode(&first)?;
     trace::init_creds_preauth_none();
     let msg = send_as(req, &first_wire)?;
-    upgrade_to_fast(&msg, defer_fast)?;
+    upgrade_to_fast(&msg, defer_fast, clock)?;
     let (token, cookie, learned) = match msg {
         KdcMsg::Error(e)
             if e.error_code == err::PREAUTH_REQUIRED || e.error_code == err::PREAUTH_FAILED =>
@@ -1163,7 +1174,7 @@ fn continue_pkinit(
             let cookie = find_pa(&method, pa::FX_COOKIE).cloned();
             (token, cookie, learned)
         }
-        KdcMsg::Error(e) => return Err(kdc_error(req, &e)),
+        KdcMsg::Error(e) => return Err(kdc_error(req, clock, &e)),
         KdcMsg::AsRep(rep) => {
             return Ok(PkinitEnd::Reply {
                 rep: Box::new(rep),
@@ -1187,8 +1198,8 @@ fn continue_pkinit(
     for _ in 1..MAX_IN_TKT_LOOPS {
         let group = KxGroup::for_bits(dh_size).unwrap_or(KxGroup::Modp2048);
         // MIT: `init_creds_step_request` (lib/krb5/krb/get_in_tkt.c:1273-1281)
-        let bound = request_times(req, clock);
         let nonce = random_nonce()?;
+        let bound = request_times(req, clock, nonce);
         let extra = match &tryagain {
             None => cookie.iter().cloned().collect(),
             Some(_) => Vec::new(),
@@ -1276,7 +1287,7 @@ fn continue_pkinit(
                 });
             }
             KdcMsg::Error(e) => {
-                tryagain = Some(pkinit_refused(req, &e, &mut dh_size)?);
+                tryagain = Some(pkinit_refused(req, clock, &e, &mut dh_size)?);
             }
             KdcMsg::TgsRep => return Err(Error::UnexpectedPdu),
         }
@@ -1329,7 +1340,12 @@ pub(crate) struct Retry(Option<PaData>);
 // Sending the PK-AS-REQ disables fallback.
 // MIT: `init_creds_step_request` (get_in_tkt.c:1315-1336)
 // PREAUTH_FAILED, or a refusal tryagain does not answer, ends it.
-fn pkinit_refused(req: &AsRequest<'_>, e: &KrbError, dh_size: &mut u32) -> Result<Retry, Error> {
+fn pkinit_refused(
+    req: &AsRequest<'_>,
+    clock: &Clock,
+    e: &KrbError,
+    dh_size: &mut u32,
+) -> Result<Retry, Error> {
     let handled = matches!(
         e.error_code,
         err::PREAUTH_REQUIRED | err::MORE_PREAUTH_DATA_REQUIRED | err::PREAUTH_FAILED
@@ -1340,7 +1356,7 @@ fn pkinit_refused(req: &AsRequest<'_>, e: &KrbError, dh_size: &mut u32) -> Resul
     {
         return Ok(retry);
     }
-    Err(kdc_error(req, e))
+    Err(kdc_error(req, clock, e))
 }
 
 fn pkinit_tryagain(e: &KrbError, dh_size: &mut u32) -> Option<Retry> {
@@ -1362,7 +1378,7 @@ fn pkinit_tryagain(e: &KrbError, dh_size: &mut u32) -> Option<Retry> {
     ))
 }
 
-fn upgrade_to_fast(msg: &KdcMsg, defer_fast: bool) -> Result<(), Error> {
+fn upgrade_to_fast(msg: &KdcMsg, defer_fast: bool, clock: &Clock) -> Result<(), Error> {
     let KdcMsg::Error(e) = msg else {
         return Ok(());
     };
@@ -1370,7 +1386,7 @@ fn upgrade_to_fast(msg: &KdcMsg, defer_fast: bool) -> Result<(), Error> {
         && method_from_error(e).is_ok_and(|m| m.iter().any(|p| p.padata_type == pa::FX_FAST))
     {
         trace::fast_padata_upgrade();
-        return Err(Error::FastUpgrade);
+        return Err(Error::FastUpgrade(Box::new(clock.restart())));
     }
     Ok(())
 }
@@ -1403,13 +1419,14 @@ fn error_cookie(e: &KrbError) -> Vec<PaData> {
 }
 
 // MIT: `init_creds_step_reply` (lib/krb5/krb/get_in_tkt.c:1688-1766)
-fn kdc_error(req: &AsRequest<'_>, e: &KrbError) -> Error {
+fn kdc_error(req: &AsRequest<'_>, clock: &Clock, e: &KrbError) -> Error {
     let canon = req.canonicalize || req.cname.name_type == PrincipalName::NT_ENTERPRISE;
     if canon && let Some(realm) = referral_realm(e, req.realm) {
         trace::init_creds_referral(realm.as_bytes());
         return Error::ClientReferral {
             code: e.error_code,
             realm,
+            restart: Box::new(clock.restart()),
         };
     }
     match e.error_code {
@@ -1880,7 +1897,7 @@ pub fn conf_etypes(conf: &Krb5Conf, tgs: bool) -> Vec<i32> {
 }
 
 // MIT: `set_request_times` (lib/krb5/krb/get_in_tkt.c:707-710)
-fn request_times(req: &AsRequest<'_>, clock: &Clock) -> AsReqTimes {
+fn request_times(req: &AsRequest<'_>, clock: &Clock, nonce: u32) -> AsReqTimes {
     let (now, _) = clock.now(true);
     // MIT: `kdc_get_ticket_renewtime` (kdc/kdc_util.c:1735-1737)
     let now = if clock.follows_kdc() {
@@ -1888,7 +1905,52 @@ fn request_times(req: &AsRequest<'_>, clock: &Clock) -> AsReqTimes {
     } else {
         crate::auth_con::request_lifetime_now(now)
     };
-    ticket_body(req, &now)
+    let times = ticket_body(req, &now);
+    clock.note_request(AsRestart {
+        nonce,
+        times: times.clone(),
+    });
+    times
+}
+
+// MIT: `krb5_init_creds_step` (lib/krb5/krb/get_in_tkt.c:1910-1913)
+/// Before the first step, the nonce and times are still zero.
+fn restart_point(req: &AsRequest<'_>) -> AsRestart {
+    req.ticket.restart.clone().unwrap_or_else(|| AsRestart {
+        nonce: 0,
+        times: AsReqTimes {
+            till: KerberosTime::from_unix_seconds(0),
+            rtime: None,
+            from: None,
+            opts: initial_options(req),
+        },
+    })
+}
+
+// MIT: `krb5_init_creds_init` (lib/krb5/krb/get_in_tkt.c:897-963)
+fn initial_options(req: &AsRequest<'_>) -> KdcOptions {
+    let mut opts = KdcOptions::from_u32(req.profile.kdc_default_options.cast_unsigned());
+    if req.ticket.forwardable {
+        opts = opts.with_bit(flag_bit::FORWARDABLE, true);
+    }
+    if req.ticket.proxiable {
+        opts = opts.with_bit(flag_bit::PROXIABLE, true);
+    }
+    if req.canonicalize {
+        opts = opts.with_bit(flag_bit::CANONICALIZE, true);
+    }
+    if req.ticket.starttime.unwrap_or(0) > 0 {
+        opts = opts
+            .with_bit(flag_bit::MAY_POSTDATE, true)
+            .with_bit(flag_bit::POSTDATED, true);
+    }
+    if req.ticket.rlife.is_some_and(|r| r > 0) {
+        opts = opts.with_bit(flag_bit::RENEWABLE, true);
+    }
+    if req.ticket.anonymous || krb5_types::pkinit::is_anonymous_principal(&req.cname) {
+        opts = opts.with_bit(flag_bit::ANONYMOUS, true);
+    }
+    opts
 }
 
 fn ticket_body(req: &AsRequest<'_>, now: &KerberosTime) -> AsReqTimes {
@@ -1903,39 +1965,18 @@ fn ticket_body(req: &AsRequest<'_>, now: &KerberosTime) -> AsReqTimes {
     let till = base
         .add_seconds(i64::try_from(life).unwrap_or(i64::MAX))
         .unwrap_or_else(|_| base.clone());
-    let mut opts = if req.ticket.forwardable {
-        KdcOptions::forwardable()
-    } else {
-        KdcOptions::none()
-    };
-    if req.ticket.proxiable {
-        opts = opts.with_bit(flag_bit::PROXIABLE, true);
-    }
-    if start > 0 {
-        opts = opts
-            .with_bit(flag_bit::MAY_POSTDATE, true)
-            .with_bit(flag_bit::POSTDATED, true);
-    }
+    let mut opts = initial_options(req);
     let mut rtime = match req.ticket.rlife {
         Some(r) if r > 0 => {
-            opts = opts.with_bit(flag_bit::RENEWABLE, true);
+            opts = opts.with_bit(flag_bit::RENEWABLE_OK, false);
             base.add_seconds(i64::try_from(r).unwrap_or(i64::MAX)).ok()
         }
-        _ => {
-            opts = opts.with_bit(flag_bit::RENEWABLE_OK, true);
-            None
-        }
+        _ => None,
     };
     if let Some(rt) = rtime.as_mut()
         && till.unix_seconds() > rt.unix_seconds()
     {
         *rt = till.clone();
-    }
-    if req.canonicalize {
-        opts = opts.with_bit(flag_bit::CANONICALIZE, true);
-    }
-    if req.ticket.anonymous || krb5_types::pkinit::is_anonymous_principal(&req.cname) {
-        opts = opts.with_bit(flag_bit::ANONYMOUS, true);
     }
     AsReqTimes {
         till,
@@ -2141,8 +2182,8 @@ pub fn as_identify_realm(req: &AsRequest<'_>) -> Result<IdentifyReply, Error> {
         _ => conf_etypes(req.profile, false),
     };
     let nonce = random_nonce()?;
-    let clock = Clock::new(req.profile);
-    let bound = request_times(req, &clock);
+    let clock = Clock::new(req.profile, restart_point(req));
+    let bound = request_times(req, &clock, nonce);
     let first = build_as_req_from(req, nonce, &bound, None, &etypes)?;
     let wire = encode(&first)?;
     trace::init_creds_preauth_none();
@@ -2159,7 +2200,7 @@ pub fn as_identify_realm(req: &AsRequest<'_>) -> Result<IdentifyReply, Error> {
                 trace::init_creds_referral(realm.as_bytes());
                 Ok(IdentifyReply::Referral(realm))
             }
-            None => Err(kdc_error(req, &e)),
+            None => Err(kdc_error(req, &clock, &e)),
         },
     }
 }

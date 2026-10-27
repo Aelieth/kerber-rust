@@ -1,9 +1,10 @@
 //! The AS exchange's clock: the local time, or the KDC's as a preauth error gave it.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 use krb5_types::{KerberosTime, KrbError, Microseconds};
 
+use super::AsRestart;
 use crate::auth_con::us_timeofday;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -17,20 +18,28 @@ struct Offset {
 pub(super) struct Clock {
     offset: Cell<Option<Offset>>,
     sync: bool,
+    request: RefCell<AsRestart>,
 }
 
 impl Clock {
     // MIT: `krb5_init_context_profile` (lib/krb5/krb/init_ctx.c:268-270)
     /// On unless set to 0.
-    pub(super) fn new(profile: &krb5_config::Krb5Conf) -> Self {
-        Self::with_sync(profile.kdc_timesync)
-    }
-
-    pub(super) fn with_sync(sync: bool) -> Self {
+    pub(super) fn new(profile: &krb5_config::Krb5Conf, start: AsRestart) -> Self {
         Self {
             offset: Cell::new(None),
-            sync,
+            sync: profile.kdc_timesync,
+            request: RefCell::new(start),
         }
+    }
+
+    // MIT: `init_creds_step_request` (lib/krb5/krb/get_in_tkt.c:1273-1281)
+    /// A restart takes the request as the last step left it.
+    pub(super) fn note_request(&self, step: AsRestart) {
+        self.request.replace(step);
+    }
+
+    pub(super) fn restart(&self) -> AsRestart {
+        self.request.borrow().clone()
     }
 
     // MIT: `note_req_timestamp` (lib/krb5/krb/get_in_tkt.c:1433-1438)
