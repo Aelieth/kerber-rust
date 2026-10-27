@@ -1891,7 +1891,6 @@ fn run() -> Result<(), String> {
         err::PREAUTH_REQUIRED,
     )?;
 
-    // no cookie yet.
     // MIT: `maybe_add_etype_info2` (kdc/kdc_preauth.c:1136-1171)
     expect_error(
         &cfg,
@@ -5069,7 +5068,6 @@ fn run() -> Result<(), String> {
         r#"{{"event":"diffsend","case":"tgs-rbcd-pac-options","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","pac_options":true}}"#
     );
 
-    // client → 24.
     let kp = p256_generate().map_err(|e| e.to_string())?;
     let mut unsigned_named =
         as_req(user.clone(), realm, 0x1000_0090, None).map_err(|e| e.to_string())?;
@@ -5846,7 +5844,6 @@ fn ra_cases(
         tgs_req(tgt, sess, realm, user, host.clone(), realm, nonce).map_err(|e| e.to_string())
     };
 
-    // A TGS-REQ whose nonce is INT32_MIN.
     let sess = random_session(EncryptionType::Aes256CtsHmacSha196)?;
     let req = encode(&tgs_for(0x8000_0000, &sess)?).map_err(|e| e.to_string())?;
     let (tr, tm) = send_both(cfg, "tgs-req-nonce-int32-min", &req)?;
@@ -5960,7 +5957,6 @@ fn ra_cases(
         err::PREAUTH_FAILED,
     )?;
 
-    // A TGS-REQ whose authenticator's cusec is past 999999.
     let req = with_authenticator(0x1000_0208, &sess, &|root| {
         let mut authenticator: krb5_types::Authenticator =
             decode(&root.bytes()).map_err(|e| e.to_string())?;

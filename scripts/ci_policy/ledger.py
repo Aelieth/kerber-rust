@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import os
 import pathlib
 import re
@@ -398,6 +399,9 @@ _PROOF_CASE = re.compile(r"`([a-z][a-z0-9]*(?:-[a-z0-9]+)+)`")
 _PROOF_GATE = re.compile(r"\b([\w-]+-gate\.sh)\b")
 _PROOF_FIELD = re.compile(r"\bfield `([a-z][a-z0-9-]*)`")
 _HISTORIC_PROOF = re.compile(r"\bsince removed\b")
+_FIELD_NAME = re.compile(r"(?<![\w./$-])([A-Za-z][\w-]*(?:\.(?:[\w-]+|\$\{?\w+\}?|\$\([^)]*\)))+)")
+_FIELD_ID = re.compile(r"(?<![\w./-])([A-Za-z][\w-]*(?:\.(?:[\w-]+|\*))+)")
+_FIELD_VAR = re.compile(r"\$(?:\{\w+\}|\([^)]*\)|\w+)")
 _FN_NAMES: set[str] | None = None
 _CASE_TEXT: str | None = None
 
@@ -446,6 +450,47 @@ def _proof_exists(proof: str) -> bool:
     if any((scenarios / f"{s}.sh").is_file() for s in _PROOF_FIELD.findall(proof)):
         return True
     return any(f'"{c}"' in _case_text() or f"'{c}'" in _case_text() for c in _PROOF_CASE.findall(proof))
+
+
+@functools.cache
+def _field_names(scenario: str) -> frozenset[str]:
+    """Every dotted name in a field scenario, each `$` expansion a `*`."""
+    path = ROOT / "harness/field/scenarios" / f"{scenario}.sh"
+    text = path.read_text(encoding="utf-8") if path.is_file() else ""
+    return frozenset(_FIELD_VAR.sub("*", n) for n in _FIELD_NAME.findall(text))
+
+
+def _globs_meet(a: str, b: str) -> bool:
+    """Some string matches both globs, `*` matching any run."""
+
+    @functools.cache
+    def meet(i: int, j: int) -> bool:
+        if i == len(a) or j == len(b):
+            return a[i:].strip("*") == "" and b[j:].strip("*") == ""
+        if a[i] == "*":
+            return meet(i + 1, j) or meet(i, j + 1)
+        if b[j] == "*":
+            return meet(i, j + 1) or meet(i + 1, j)
+        return a[i] == b[j] and meet(i + 1, j + 1)
+
+    return meet(0, 0)
+
+
+def _field_cites_bad(proof: str) -> list[str]:
+    """Missing field scenarios, and check ids after one that its scenario does not name."""
+    bad = []
+    for m in _PROOF_FIELD.finditer(proof):
+        names = _field_names(m.group(1))
+        if not names:
+            bad.append(f"field `{m.group(1)}`")
+            continue
+        heads = {n.split(".")[0] for n in names}
+        for cid in _FIELD_ID.findall(re.split(r";", proof[m.end() :], maxsplit=1)[0]):
+            if cid.split(".")[0] in heads and not any(_globs_meet(cid + "*", n) for n in names):
+                bad.append(cid)
+    return bad
+
+
 _CRATE_ALIASES = {
     "kdc": "krb5-kdc",
     "admin": "krb5-admin",
@@ -807,6 +852,8 @@ def check_ledger_anchors(text: str | None = None, name: str = "docs/mit-parity-l
                     f"(lines {starts}); add :N inside the intended item"
                 )
             bodies.append(spans[0][2])
+        if bad := _field_cites_bad(cols[6]):
+            _die(f"{where} field proof names no recorded check: {', '.join(bad)}")
         if _is_exact_verdict(cols[5]):
             if not saw_symbol:
                 _die(f"{where} exact row has no rust-site anchor")

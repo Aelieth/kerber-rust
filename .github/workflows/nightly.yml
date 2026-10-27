@@ -92,9 +92,6 @@ jobs:
         run: |
           ./scripts/lib/boot-shell.sh
           ./scripts/lib/boot-stock-mit.sh
-      - name: "ccache-gate"
-        if: ${{ matrix.group == 'harness' && (success() || failure()) }}
-        run: ./scripts/ccache-gate.sh
       - name: "bidirectional-gate"
         if: ${{ matrix.group == 'harness' && (success() || failure()) }}
         run: ./scripts/bidirectional-gate.sh
@@ -190,14 +187,6 @@ jobs:
       - name: "rc4-session-gate"
         if: ${{ matrix.group == 'mit-extra' && (success() || failure()) }}
         run: ./scripts/rc4-session-gate.sh
-      - name: "client-differential-flows-gate"
-        if: ${{ matrix.group == 'mit-extra-2' && (success() || failure()) }}
-        env:
-          KERBER_CLIENT_DIFF_KEEP: "1"
-        run: ./scripts/client-differential-flows-gate.sh
-      - name: "client-differential-cli-gate"
-        if: ${{ matrix.group == 'mit-extra-2' && (success() || failure()) }}
-        run: ./scripts/client-differential-cli-gate.sh
       - name: "knobs-gate"
         if: ${{ matrix.group == 'mit-extra-2' && (success() || failure()) }}
         run: ./scripts/knobs-gate.sh

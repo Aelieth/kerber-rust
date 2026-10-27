@@ -6,8 +6,8 @@
 # MIT's (krb5-workstation), the oracle: each row grades MIT 1.22.2's own text and exit code. In the rust leg
 # every row runs twice, MIT's programs and then ours (kdc's build of krb5-<name>, piped to client2's
 # ~/ct/bin/<name> and run by path, so MIT's stay the ones on PATH); ours are graded on the same text, and
-# <row>.same diffs the two outputs. Each request kinit and kvno send also goes through scripts/lib/
-# kdc-req-proxy.py on client2 (shapes only: options, padata types, etypes, time classes), and the rust leg
+# <row>.same diffs the two outputs. Each request kinit and kvno send also goes through
+# lib/kdc-req-proxy.py on client2 (shapes only: options, padata types, etypes, time classes), and the rust leg
 # compares ours with MIT's request by request; CR sends kinit to made-up realms whose KDC, lib/kdc-rewrite-proxy.py,
 # answers with a client referral to $REALM. Then the caches and keytabs cross: MIT's klist and kvno on ours,
 # ours on MIT's, MIT's cache entries kept through our rewrite. Then the request shapes of FAST under -T (armored at
@@ -44,7 +44,6 @@ D=client2.${REALM,,}
 SVC=ctsvc/$D WEB=ctweb/$D S=ctsvc/${D//./\\.} W=ctweb/${D//./\\.}
 PRINCS="ctuser ctpre ctbad ctchg ctpw ctkv $SVC $WEB"
 TOOLS="kinit klist kvno kdestroy ktutil kswitch kpasswd"
-PROXY=$HERE/../../../scripts/lib/kdc-req-proxy.py
 T='[0-9]{2}/[0-9]{2}/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}'
 cleanup() {
     timeout -k 5 60 "$LAB" ssh kdc -- "for p in $PRINCS; do sudo kadmin.local -q \"delprinc -force \$p\" > /dev/null 2>&1; done; sudo kadmin.local -q 'delpol -force ctpol' > /dev/null 2>&1; true" < /dev/null > /dev/null 2>&1
@@ -158,7 +157,7 @@ if [ "$LEG" = rust ]; then
 fi
 check client2.kt-records rc runin client2 "lib/kt-records.py" "cat > ~/ct/kt-records.py" < "$FIELD_LIB/kt-records.py"
 check client2.ptydrive rc runin client2 "lib/ptydrive.py" "cat > ~/ct/ptydrive.py" < "$FIELD_LIB/ptydrive.py"
-check px.copy '^self-test ok$' hostin "scripts/lib/kdc-req-proxy.py" "$LABQ ssh client2 -- 'cat > ~/ct/kdc-req-proxy.py && python3 ~/ct/kdc-req-proxy.py --self-test | tail -n 1'" < "$PROXY"
+check px.copy '^self-test ok$' hostin "lib/kdc-req-proxy.py" "$LABQ ssh client2 -- 'cat > ~/ct/kdc-req-proxy.py && python3 ~/ct/kdc-req-proxy.py --self-test | tail -n 1'" < "$FIELD_LIB/kdc-req-proxy.py"
 check px.conf '^ +kdc = 127\.0\.0\.1:1891$' run client2 "sed -E 's/^([[:space:]]*kdc[[:space:]]*=[[:space:]]*).*/\\1127.0.0.1:1891/' /etc/krb5.conf > ~/ct/px.conf && grep -E '^[[:space:]]*kdc[[:space:]]*=' ~/ct/px.conf"
 check px.up '^proxy: listening on 127\.0\.0\.1:1891$' run client2 "setsid python3 -u ~/ct/kdc-req-proxy.py 1891 kdc.${REALM,,} 88 ~/ct/px/live.jsonl > /dev/null 2> ~/ct/px/proxy.err < /dev/null & echo \$! > ~/ct/px/pid; sleep 1; ss -Hltn 'sport = :1891' | grep -q . && echo 'proxy: listening on 127.0.0.1:1891'"
 

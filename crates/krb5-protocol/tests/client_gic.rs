@@ -1,5 +1,5 @@
 //! `kinit -k` takes the highest kvno and sorts etypes like MIT `gic_keytab.c`.
-//! Live oracle: `client-differential-gate.sh` two-kvno `kinit -k`.
+//! Live oracle: field `client-tools` CT.kt.multi (two kvnos in one keytab, `kinit -k`).
 
 use krb5_crypto::{EncryptionType, ProtocolKey};
 use krb5_protocol::{

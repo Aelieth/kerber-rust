@@ -510,7 +510,7 @@ shell_container() {
             pkill -f -- '-proxy.py' >/dev/null 2>&1 || true
             kdb5_util destroy -f >/dev/null 2>&1 || true
             find /tmp -mindepth 1 -maxdepth 1 \
-                ! -name 'krb5-*' ! -name 'ccache-probe' ! -name 'build' \
+                ! -name 'krb5-*' ! -name 'build' \
                 -exec rm -rf {} +
             mkdir -p /tmp/build
             rm -f /var/krb5kdc/principal* /var/kerberos/krb5kdc/principal* \

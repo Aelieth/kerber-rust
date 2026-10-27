@@ -2,7 +2,6 @@
 // MIT: `verify_as_reply` (get_in_tkt.c:227-239)
 //! the enc-part server must equal the ticket
 //! server, and the requested server unless a canonicalizing request asked for a TGS and got one.
-//! Live oracle: `client-differential-gate.sh`.
 
 #![allow(
     clippy::disallowed_methods,

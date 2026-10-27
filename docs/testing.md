@@ -120,10 +120,10 @@ The toolchain, lld, and `rust-cache` steps are one composite,
 
 | Group | Gates |
 | --- | --- |
-| `harness` | `ccache`, `bidirectional`, `gss`, `pkinit`, `kadmin-rust`, `kadmin-rust-acl`, `kadmin-mit`, `kadmin-both`, `history-mit` |
-| `harness-2` | `kpasswd-rust`, `kpasswd-mit`, `kdb-dump`, `kprop`, `kprop-reverse`, `cross-kdc`, `iprop`, `expire`, `kdcpolicy`, `flags`, `renew`, `postdate`, `getprivs`, `policy`, `prop-acl` |
-| `mit-extra` | `cross-realm`, `capaths-compress`, `spake`, `rust-kinit-spake`, `mit-fast-kdc`, `rust-kinit-fast`, `rust-kinit-pkinit`, `rust-kinit-enterprise`, `kadmin-local`, `rust-kpasswd-mit`, `sha2`, `rc4-session` |
-| `mit-extra-2` | `client-differential-flows`, `client-differential-cli`, `knobs`, `config-include`, `s4u-mit`, `capaths-transit`, `otp`, `rust-kinit-otp` |
+| `harness` | `bidirectional`, `gss`, `pkinit`, `kadmin-rust`, `kadmin-rust-acl`, `kadmin-mit`, `kadmin-both`, `history-mit` |
+| `harness-2` | `kpasswd-rust`, `kpasswd-mit`, `kdb-dump`, `kprop`, `kprop-reverse`, `cross-kdc`, `iprop`, `kdcpolicy`, `getprivs`, `prop-acl` |
+| `mit-extra` | `cross-realm`, `capaths-compress`, `spake`, `rust-kinit-spake`, `mit-fast-kdc`, `rust-kinit-fast`, `rust-kinit-pkinit`, `rust-kinit-enterprise`, `kadmin-local`, `rust-kpasswd-mit`, `rc4-session` |
+| `mit-extra-2` | `knobs`, `config-include`, `s4u-mit`, `capaths-transit`, `otp`, `rust-kinit-otp` |
 
 | Job | Runs |
 | --- | --- |
@@ -230,7 +230,7 @@ branch.
 | `kvno -I` / `-U` for a service other than the cache's own | `krb5-kvno` (`krb5-client/test-hooks`): sends that S4U2Self for the KDC to refuse | refuses it first, `client and server principal names must match`, as MIT's `kvno` |
 | `kinit`'s `--spake`, `--fast`, `--armor-ccache`, `--pkinit`, `--pkinit-anchors`, and `[kdc-host] principal [ccache [service]]` | `krb5-kinit` (`krb5-client/test-hooks`), which also prints `ok tgt=…` and log lines for the gates | refuses them as MIT's `kinit` does; `-T` and `-X X509_user_identity=` / `X509_anchors=` are MIT's options and stay |
 | `kinit -S service` as the gates use it: a TGS-REQ for the service after the TGT, both stored | `krb5-kinit` (`krb5-client/test-hooks`) | MIT's `-S`: the AS-REQ asks for that service, in the client's realm, and the cache holds that ticket |
-| `KRB5_KPASSWD_TARGET=name@REALM` (`client-differential-cli-gate.sh`) | `krb5-kpasswd` (`krb5-admin/test-hooks`): sets that principal's password (`krb5_set_password`, `0xff80`) | changes the client's own password, as MIT's `kpasswd` |
+| `KRB5_KPASSWD_TARGET=name@REALM` | `krb5-kpasswd` (`krb5-admin/test-hooks`): sets that principal's password (`krb5_set_password`, `0xff80`) | changes the client's own password, as MIT's `kpasswd` |
 
 The KCM socket is `[libdefaults] kcm_socket` in every build; no build reads `KCM_SOCKET`.
 

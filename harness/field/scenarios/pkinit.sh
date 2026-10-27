@@ -296,7 +296,7 @@ for k in mit ${OURS:+ours}; do
 done
 
 section "PK.px alice's certificate kinit and kinit -n through client2's request proxy: the AS-REQ that carries PK-AS-REQ (16) is the cookie, 16, freshness and REQ-ENC-PA-REP, and ours asks as MIT's does (preauth2.c, pkinit_clnt.c)"
-check pkpx.copy '^self-test ok$' hostin "scripts/lib/kdc-req-proxy.py" "$LABQ ssh client2 -- 'mkdir -p ~/pk/px && cat > ~/pk/kdc-req-proxy.py && python3 ~/pk/kdc-req-proxy.py --self-test | tail -n 1'" < "$HERE/../../../scripts/lib/kdc-req-proxy.py"
+check pkpx.copy '^self-test ok$' hostin "lib/kdc-req-proxy.py" "$LABQ ssh client2 -- 'mkdir -p ~/pk/px && cat > ~/pk/kdc-req-proxy.py && python3 ~/pk/kdc-req-proxy.py --self-test | tail -n 1'" < "$FIELD_LIB/kdc-req-proxy.py"
 check pkpx.conf '^ +kdc = 127\.0\.0\.1:1891$' run client2 "sed -E 's/^([[:space:]]*kdc[[:space:]]*=[[:space:]]*).*/\\1127.0.0.1:1891/' /etc/krb5.conf > ~/pk/px.conf && grep -m1 -E '^[[:space:]]*kdc[[:space:]]*=' ~/pk/px.conf"
 check pkpx.up '^proxy: listening on 127\.0\.0\.1:1891$' run client2 "setsid python3 -u ~/pk/kdc-req-proxy.py 1891 kdc.${REALM,,} 88 ~/pk/px/live.jsonl > /dev/null 2> ~/pk/px/proxy.err < /dev/null & echo \$! > ~/pk/px/pid; sleep 1; ss -Hltn 'sport = :1891' | grep -q . && echo 'proxy: listening on 127.0.0.1:1891'"
 for f in pkinit anon; do

@@ -3,7 +3,7 @@
 # with KERBER.TEST) against the leg's KDC as upgrade.sh left it on kdc; the RA hand legs of FULL-r2 as a field cell:
 #   RA0: the DC's clock and state, the trust principals made the admin way, Test A (AD to us) and Test B (us to AD);
 #   kinit -E of kbruser's UPN at the DC: MIT's, then in the rust leg ours, each first AS-REQ through
-#   scripts/lib/kdc-req-proxy.py on client2 and compared request by request;
+#   lib/kdc-req-proxy.py on client2 and compared request by request;
 #   kinit -T with kbruser's AD cache as the armor for user@KERBER.TEST: MIT's, then in the rust leg ours;
 #   SB.ad-user-in (RA1): kbruser@AD.KERBER.TEST logs into client2's sshd with gssapi-with-mic;
 #   SB.ad-user-out (RA2): KERBER.TEST users at the DC's SMB and LDAP: bob refused, user and alice (#1) served;
@@ -98,7 +98,7 @@ if [ "$LEG" = rust ]; then
     check ent.ours.copy "^client2: ~/ra/kinit ${h:-none}\$" host "$LABQ ssh kdc -- 'cat ~/$b' | $LABQ ssh client2 -- 'cat > ~/ra/kinit && chmod 0755 ~/ra/kinit && echo \"client2: ~/ra/kinit \$(sha256sum < ~/ra/kinit | cut -c1-64)\"'"
     [ -n "$h" ] && grep -q "^client2: ~/ra/kinit $h\$" "$LAST_OUT" && EK="\$HOME/ra/kinit"
 fi
-check ent.px.copy '^self-test ok$' hostin "scripts/lib/kdc-req-proxy.py" "$LABQ ssh client2 -- 'cat > ~/ra/kdc-req-proxy.py && python3 ~/ra/kdc-req-proxy.py --self-test | tail -n 1'" < "$HERE/../../../scripts/lib/kdc-req-proxy.py"
+check ent.px.copy '^self-test ok$' hostin "lib/kdc-req-proxy.py" "$LABQ ssh client2 -- 'cat > ~/ra/kdc-req-proxy.py && python3 ~/ra/kdc-req-proxy.py --self-test | tail -n 1'" < "$FIELD_LIB/kdc-req-proxy.py"
 # The UPN is asked in the AD realm, as a fleet user's kinit -E is (the RA conf's own default is our realm).
 check ent.px.conf '^ +kdc = 127\.0\.0\.1:1891$' run client2 "sed -e 's/^\\( *kdc = \\)10\\.10\\.38\\.38\$/\\1127.0.0.1:1891/' -e 's/^\\([[:space:]]*default_realm[[:space:]]*=[[:space:]]*\\).*/\\1AD.KERBER.TEST/' ~/ra/krb5.conf > ~/ra/px.conf && grep -E '^ +kdc = 127|default_realm' ~/ra/px.conf"
 checklast ent.px.realm '^[[:space:]]*default_realm[[:space:]]*=[[:space:]]*AD\.KERBER\.TEST$'

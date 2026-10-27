@@ -780,7 +780,6 @@ _CITE_FILE = re.compile(
 _CITE_CONT = re.compile(r"(?<![\w.)\]])(:[0-9]+(?:-[0-9]+)?(?:,[0-9]+(?:-[0-9]+)?)*)(?![\w:])")
 _CITE_SECTION = re.compile(r"`(==== .+? ====)`")
 _CITE_FUNCTION = re.compile(r"`([A-Za-z_][\w]*)\(\)`")
-_BARE_MIT_NAMES = frozenset({"t_vfy_increds.c"})
 
 
 def scripts_by_name(root: pathlib.Path) -> dict[str, pathlib.Path]:
@@ -812,7 +811,7 @@ def line_script_cites(
                 name = m.group(1)
                 if name.startswith("scripts/"):
                     current = root / name
-                elif "/" not in name and name in by_name and name not in _BARE_MIT_NAMES:
+                elif "/" not in name and name in by_name:
                     current = by_name[name]
                 else:
                     current = None

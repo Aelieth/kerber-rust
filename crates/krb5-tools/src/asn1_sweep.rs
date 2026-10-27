@@ -23,7 +23,6 @@ use krb5_types::{
 
 include!("der_breaks.rs");
 
-/// One case: id, element, break, MIT's decoder, and the DER.
 #[derive(Clone, Debug)]
 struct Case {
     id: String,

@@ -143,6 +143,7 @@ any other `###` heading.
 - **ci.** Also kept: crypto's known answers and parity proofs, tools' decode-sweep, testkit's helpers, and the proofs config, client and gss rows still name.
 - **ci.** The des3 PKINIT reply-key test stays as that row's only proof. `gate-common` and three smoke gates match by grep's status.
 - **ci.** An exact row with no status may cite a removed test when the proof says since removed.
+- **ci.** A parity row may name a field scenario's checks as its proof; the scenario must exist and record each check the row names.
 - **parity.** Five client-library rows and three more keep a historic MIT proof. S4U2Proxy padata and `kinit -v` use the live client gate.
 - **parity.** The capaths gate proves the closer hop. Its first TGS at A asks for `krbtgt/C.TEST`. Validate and `kinit -R` are live gates.
 - **ci.** `missing_docs` is allowed. A MIT cite may be one `docs/parity/` pointer. The ranged anchor stays.
@@ -154,6 +155,7 @@ any other `###` heading.
 - **protocol.** `build_krb_safe` and `build_krb_priv` are gone; a caller passes the sequence to the longer builder.
 - **ci.** The budget workflow is gone. The six per-push walls live in `ci-budget.toml`.
 - **ci.** The ktutil nightly gate is gone; field client-tools' keytab rows check each thing it checked, MIT first.
+- **ci.** The ccache and two client-differential nightly gates and their two probes are gone; field client-tools and pkinit cover them.
 
 ### Fixed
 - **client.** `kinit -E` sends the UPN as one enterprise component, as MIT does, so the real AD finds the user; `-E` alone no longer asks to canonicalize.
