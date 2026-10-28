@@ -245,6 +245,35 @@ echo "$RUST_ETLINE" | grep -q 'Etype (skey, tkt): DEPRECATED:arcfour-hmac,' ||
 docker exec "$NAME" cat /tmp/mit-kinit-rustkdc.trace 2>/dev/null | tee "$OUT/mit-kinit-rustkdc.trace" | grep -E 'usage|arcfour|enctype' | head -40 || true
 docker cp "$NAME":/tmp/mit-kdc.log "$OUT/mit-kdc.log" 2>/dev/null || true
 
+echo "==== M) session_enctypes is a membership list: aes128 although the client's key is aes256 ===="
+# kdc_util.c:1040-1077: the session etype is the first requested etype the server's
+# session_enctypes lists, not the client's key etype.
+m_setstr() {
+    kadmin_q_ok mit_kadmin_local "$NAME" -- -q "setstr krbtgt/KERBER.TEST session_enctypes $1"
+    kadmin_q_ok rust_kadmin_local \
+        -e KRB5_KDC_DB=/tmp/rust.db \
+        -e KRB5_KDC_STASH=/tmp/rust.stash \
+        -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
+        -e KRB5_CONFIG=/etc/krb5.conf \
+        "$NAME" -- -q "setstr krbtgt/KERBER.TEST session_enctypes $1"
+}
+m_setstr aes128-cts-hmac-sha1-96
+docker exec "$NAME" sh -c 'et="    default_tkt_enctypes = aes256-cts-hmac-sha1-96 aes128-cts-hmac-sha1-96"
+sed "s/^\[libdefaults\]\$/[libdefaults]\n$et/" /etc/krb5.conf >/tmp/krb5-m-mit.conf
+sed "s/^\[libdefaults\]\$/[libdefaults]\n$et/" /tmp/krb5-8888.conf >/tmp/krb5-m-rust.conf'
+m_skey_tkt() {
+    docker exec -e KRB5_CONFIG="$1" "$NAME" sh -c "printf '%s\n' userpassword | kinit -c $2 user@KERBER.TEST" >/dev/null 2>&1 ||
+        die "M) kinit user against $1 failed"
+    tkt_etype_of "$(docker exec -e KRB5_CONFIG="$1" "$NAME" klist -e -c "$2" 2>&1)"
+}
+M_MIT="$(m_skey_tkt /tmp/krb5-m-mit.conf /tmp/m-mit.cc)"
+M_RUST="$(m_skey_tkt /tmp/krb5-m-rust.conf /tmp/m-rust.cc)"
+echo "M) skey, tkt: mit=$M_MIT"
+echo "M) skey, tkt: rust=$M_RUST"
+case "$M_MIT" in aes128-cts-hmac-sha1-96,*) ;; *) die "M) MIT's session key is not aes128: $M_MIT" ;; esac
+[ "$M_RUST" = "$M_MIT" ] || die "M) Rust's session and ticket etypes differ from MIT's"
+m_setstr rc4-hmac
+
 echo "==== D) allow_rc4 under [kdcdefaults] alone is ignored: both KDCs refuse the rc4-only client ===="
 # MIT reads allow_rc4 / allow_weak_crypto from [libdefaults] only (init_ctx.c
 # get_boolean); the copy this gate put under kdc.conf [kdcdefaults] must not
