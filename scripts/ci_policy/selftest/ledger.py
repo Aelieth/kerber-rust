@@ -223,7 +223,7 @@ def _self_test_ledger() -> None:
         _row("krb5-kdc/status.rs NEEDED_PREAUTH", "`NEEDED_PREAUTH`")
     )
     check_ledger_anchors(
-        _row("krb5-kdc/preauth.rs armor_key_from_ap", "`NOT_US` / `TKT_NYV`")
+        _row("krb5-kdc/preauth.rs armor_rd_req", "`NOT_US` / `TKT_NYV`")
     )
     _must_die(check_ledger_anchors, _row("missing.rs no_such_fn", "`PROCESS_TGS`"))
     fake_mit = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))

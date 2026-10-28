@@ -552,7 +552,11 @@ fn fast_as_forged_armor_realm_is_not_us() {
     let mut req = as_req(cname, TEST_REALM, 211, None).unwrap();
     attach_fast(&mut req, &armor_ap, &akey, inner).expect("FAST wrap");
     let err = krb5_kdc::issue_as(&store, &req).expect_err("forged armor realm");
-    assert_find_fast(err, err::NOT_US, "FAST armor TGT");
+    assert_find_fast(
+        err,
+        err::NOT_US,
+        "The ticket isn't for us while handling ap-request armor",
+    );
 }
 
 #[test]
@@ -646,7 +650,7 @@ fn unknown_critical_fast_option_is_refused() {
 }
 
 #[test]
-fn explicit_as_armor_invalid_tgt_is_tkt_nyv() {
+fn explicit_as_armor_invalid_tgt_is_generic() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let key = user_key();
@@ -689,7 +693,7 @@ fn explicit_as_armor_invalid_tgt_is_tkt_nyv() {
     )
     .expect("FAST wrap");
     let err = krb5_kdc::issue_as(&store, &fast_req).expect_err("INVALID armor");
-    assert_eq!(issue_code(err), err::TKT_NYV);
+    assert_eq!(issue_code(err), err::GENERIC);
 }
 
 #[test]
@@ -732,7 +736,11 @@ fn fast_as_armor_for_host_ticket_is_server_nomatch() {
     )
     .expect("FAST wrap");
     let err = krb5_kdc::issue_as(&store, &fast_req).expect_err("host armor");
-    assert_find_fast(err, err::SERVER_NOMATCH, "FAST armor TGT");
+    assert_find_fast(
+        err,
+        err::SERVER_NOMATCH,
+        "ap-request armor for something other than the local TGS",
+    );
 }
 
 #[test]
@@ -743,7 +751,7 @@ fn explicit_as_armor_expired_tgt_is_tkt_expired() {
     let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 851);
     let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
     let mut part = decrypt_ticket_part(&krbtgt.key, &issued.rep.0.ticket).expect("TGT");
-    part.endtime = KerberosTime::now().add_seconds(-120).unwrap();
+    part.endtime = KerberosTime::now().add_seconds(-600).unwrap();
     let plain = encode(&part).expect("enc-tkt");
     let usage = KeyUsage::new(ku::TICKET).unwrap();
     let cipher = encrypt(&krbtgt.key, usage, &plain).expect("ticket");
@@ -812,7 +820,11 @@ fn explicit_as_armor_future_starttime_is_tkt_nyv() {
     )
     .expect("FAST wrap");
     let err = krb5_kdc::issue_as(&store, &fast_req).expect_err("future starttime armor");
-    assert_find_fast(err, err::TKT_NYV, "FAST armor NYV");
+    assert_find_fast(
+        err,
+        err::TKT_NYV,
+        "Ticket not yet valid while handling ap-request armor",
+    );
 }
 
 #[test]
@@ -848,7 +860,7 @@ fn fast_as_corrupt_enc_fast_req_is_bad_integrity_find_fast() {
         a.enc_fast_req.cipher = c.into();
     });
     let err = krb5_kdc::issue_as(&store, &req).expect_err("corrupt enc_fast_req");
-    assert_find_fast(err, err::BAD_INTEGRITY, "integrity check failed");
+    assert_find_fast(err, err::BAD_INTEGRITY, "Decrypt integrity check failed");
     let bytes = krb5_kdc::handle_request(&store, &encode(&req).expect("der")).expect("reply");
     assert_krb_error(&bytes, err::BAD_INTEGRITY, "FIND_FAST");
 }
@@ -909,7 +921,11 @@ fn fast_as_arcfour_hmac_type_over_aes_key_wrong_bytes_is_modified() {
         a.req_checksum.checksum = vec![0xff; 16].into();
     });
     let err = krb5_kdc::issue_as(&store, &req).expect_err("-138 over aes");
-    assert_find_fast(err, err::MODIFIED, "modified checksum");
+    assert_find_fast(
+        err,
+        err::MODIFIED,
+        "FAST req_checksum invalid; request modified",
+    );
 }
 
 #[test]
@@ -921,7 +937,11 @@ fn fast_as_same_provider_type_wrong_bytes_is_modified() {
         a.req_checksum.checksum = vec![0xff; 16].into();
     });
     let err = krb5_kdc::issue_as(&store, &req).expect_err("type 19 over aes128-sha1");
-    assert_find_fast(err, err::MODIFIED, "modified checksum");
+    assert_find_fast(
+        err,
+        err::MODIFIED,
+        "FAST req_checksum invalid; request modified",
+    );
 }
 
 #[test]
@@ -971,7 +991,11 @@ fn fast_as_bad_req_checksum_is_modified() {
         a.req_checksum.checksum = ck.into();
     });
     let err = krb5_kdc::issue_as(&store, &req).expect_err("bad FAST checksum");
-    assert_find_fast(err, err::MODIFIED, "modified checksum");
+    assert_find_fast(
+        err,
+        err::MODIFIED,
+        "FAST req_checksum invalid; request modified",
+    );
 }
 
 #[test]
@@ -980,7 +1004,7 @@ fn fast_as_crc32_checksum_is_generic() {
     let (mut req, _) = fast_as_prepared(&store, 894);
     map_fx_fast_as(&mut req, |a| a.req_checksum.cksumtype = 1);
     let err = krb5_kdc::issue_as(&store, &req).expect_err("CRC32 FAST checksum");
-    assert_find_fast(err, err::GENERIC, "unknown checksum type");
+    assert_find_fast(err, err::GENERIC, "Bad encryption type");
 }
 
 #[test]
@@ -994,7 +1018,11 @@ fn fast_as_short_mac_is_generic() {
         a.req_checksum.checksum = ck.into();
     });
     let err = krb5_kdc::issue_as(&store, &req).expect_err("short MAC on type 7");
-    assert_find_fast(err, err::GENERIC, "checksum length");
+    assert_find_fast(
+        err,
+        err::GENERIC,
+        "Message size is incompatible with encryption type",
+    );
 }
 
 #[test]
@@ -1020,7 +1048,11 @@ fn fast_as_unkeyed_type_with_bad_bytes_is_modified() {
         a.req_checksum.checksum = vec![0xff; 16].into();
     });
     let err = krb5_kdc::issue_as(&store, &req).expect_err("unkeyed + bad bytes");
-    assert_find_fast(err, err::MODIFIED, "modified checksum");
+    assert_find_fast(
+        err,
+        err::MODIFIED,
+        "FAST req_checksum invalid; request modified",
+    );
 }
 
 #[test]
@@ -1029,7 +1061,7 @@ fn fast_as_unknown_cksumtype_matches_mit() {
     let (mut req, _) = fast_as_prepared(&store, 912);
     map_fx_fast_as(&mut req, |a| a.req_checksum.cksumtype = 99);
     let err = krb5_kdc::issue_as(&store, &req).expect_err("unknown cksumtype");
-    assert_find_fast(err, err::GENERIC, "unknown checksum type");
+    assert_find_fast(err, err::GENERIC, "Bad encryption type");
 }
 
 #[test]
@@ -1061,7 +1093,11 @@ fn fast_as_checksum_ignores_pa_tgs_req() {
         },
     );
     let err = krb5_kdc::issue_as(&store, &req).expect_err("body-only FAST checksum");
-    assert_find_fast(err, err::MODIFIED, "modified checksum");
+    assert_find_fast(
+        err,
+        err::MODIFIED,
+        "FAST req_checksum invalid; request modified",
+    );
 }
 
 #[test]
@@ -1310,22 +1346,6 @@ fn fast_as_with_armor_ticket(
     krb5_kdc::issue_as(store, &req)
 }
 
-fn assert_find_fast_z6_armor_enctype(err: krb5_kdc::Error, code: i32) {
-    match err {
-        krb5_kdc::Error::Protocol {
-            code: got,
-            text,
-            detail,
-            ..
-        } => {
-            assert_eq!(got, code, "wire code, detail={detail:?}");
-            assert_eq!(text.as_deref(), Some("FIND_FAST"));
-            assert_eq!(detail.as_deref(), Some("FAST armor TGT"));
-        }
-        other => panic!("expected {code} FIND_FAST, got {other:?}"),
-    }
-}
-
 #[test]
 fn armor_tgt_under_a_non_permitted_etype_is_generic_find_fast() {
     let mut store = store_permitting_aes256();
@@ -1346,7 +1366,11 @@ fn armor_tgt_under_a_non_permitted_etype_is_generic_find_fast() {
     assert_eq!(forged.enc_part.etype, AES128.to_iana());
     let err = fast_as_with_armor_ticket(&store, forged, &tgt.session_key, 0x2600_0062)
         .expect_err("non-permitted armor etype");
-    assert_find_fast_z6_armor_enctype(err, err::GENERIC);
+    assert_find_fast(
+        err,
+        err::GENERIC,
+        "No matching key in entry having a permitted enctype while handling ap-request armor",
+    );
 }
 
 #[test]
@@ -1370,7 +1394,12 @@ fn armor_tgt_labelled_n_sealed_under_n_plus_1_is_bad_integrity() {
     mislabelled.enc_part.kvno = Some(top - 1);
     let err = fast_as_with_armor_ticket(&store, mislabelled, &tgt.session_key, 0x2600_0066)
         .expect_err("mislabelled kvno");
-    assert_find_fast_z6_armor_enctype(err, err::BAD_INTEGRITY);
+    assert_find_fast(
+        err,
+        err::BAD_INTEGRITY,
+        "Cannot decrypt ticket for krbtgt/KERBER.TEST@KERBER.TEST using keytab key for \
+         krbtgt/KERBER.TEST@KERBER.TEST while handling ap-request armor",
+    );
 }
 
 /// MIT `armor_ap_request` → `krb5_rd_req`'s `negotiate_etype` on the KDC's context (settled live
@@ -1384,7 +1413,11 @@ fn armor_whose_session_enctype_the_kdc_does_not_permit_is_find_fast() {
     let (req, _) = fast_as_prepared_etype(&store, 0x2600_0070, AES128);
     store.policy.permitted_enctypes = Some(vec![AES256]);
     let err = krb5_kdc::issue_as(&store, &req).expect_err("armor enctypes");
-    assert_find_fast(err, err::GENERIC, "FAST armor enctype not permitted");
+    assert_find_fast(
+        err,
+        err::GENERIC,
+        "Encryption type aes128-cts-hmac-sha1-96 not permitted while handling ap-request armor",
+    );
 }
 
 // MIT: `ec_verify` (kdc/kdc_preauth_ec.c:124-124)

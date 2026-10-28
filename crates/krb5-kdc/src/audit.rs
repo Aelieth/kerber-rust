@@ -808,15 +808,23 @@ fn as_failure(
     seed_as_req(store, req, sender);
     let body = &req.0.req_body;
     let realm = realm_str(&body.realm);
-    let client = opt_unparse(body.cname.as_ref(), &realm, "<unknown client>");
-    let server = opt_unparse(body.sname.as_ref(), &realm, "<unknown server>");
-    let req_etypes = ktypes2str(&body.etype);
-    let from = format_from(sender);
     let status = if e_text.is_empty() {
         "UNKNOWN_REASON"
     } else {
         e_text
     };
+    // MIT: `process_as_req` (kdc/do_as_req.c:531-536)
+    // FIND_FAST fails before the request's names are unparsed.
+    let (client, server) = if status == status::FIND_FAST {
+        ("<unknown client>".to_owned(), "<unknown server>".to_owned())
+    } else {
+        (
+            opt_unparse(body.cname.as_ref(), &realm, "<unknown client>"),
+            opt_unparse(body.sname.as_ref(), &realm, "<unknown server>"),
+        )
+    };
+    let req_etypes = ktypes2str(&body.etype);
+    let from = format_from(sender);
     emit_issue(
         "AS_REQ",
         &req_etypes,

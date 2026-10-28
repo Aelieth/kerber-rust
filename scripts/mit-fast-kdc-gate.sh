@@ -169,7 +169,7 @@ echo "$FORGED" | grep -q "The ticket isn't for us"
 MM_NEW="$(docker exec "$NAME" sh -c "tail -n +$((MM_BEFORE + 1)) /tmp/kdc.log")"
 echo "$MM_NEW"
 echo "$MM_NEW" | grep -F 'FIND_FAST' | grep -E '"code":35[,}]'
-echo "$MM_NEW" | grep -q '"detail":"FAST armor TGT"'
+echo "$MM_NEW" | grep -qF '"detail":"The ticket isn'"'"'t for us while handling ap-request armor"'
 
 echo "==== Rust KDC: FAST-error outer e_data shape via kdc-padata-proxy ===="
 docker cp "$ROOT/scripts/lib/kdc-padata-proxy.py" "$NAME":/tmp/kdc-padata-proxy.py

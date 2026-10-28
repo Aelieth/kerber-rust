@@ -8,7 +8,7 @@ use krb5_types::{
     PaEncTsEnc, PrincipalName, TransitedEncoding, err, flag_bit, ku, pa,
 };
 
-use super::fast_util::{check_fast_options, fast_hides_client, wrap_as_fast};
+use super::fast_util::{fast_hides_client, wrap_as_fast};
 use super::kdc_util::{
     attr, enctype_requires_etype_info_2, get_ticket_flags, include_pac_for_reply,
     kdc_get_ticket_endtime, kdc_get_ticket_renewtime, kdc_req_body_der, ks, select_session_keytype,
@@ -176,7 +176,6 @@ fn audit_entry(client: &Principal, body: &KdcReqBody, req_cname: &PrincipalName)
 // MIT: `lookup_client` (do_as_req.c:134-151)
 // MIT: `validate_as_request` (kdc_util.c:716-716)
 // MIT: `select_client_key` (do_as_req.c:103-103)
-// MIT: `kdc_find_fast` (fast_util.c:226-226)
 // MIT: `process_as_req` (do_as_req.c:641-641)
 fn lookup_client(
     store: &dyn PrincipalRead,
@@ -186,9 +185,6 @@ fn lookup_client(
     kdc_time: u32,
     audited: &mut Option<Principal>,
 ) -> Result<AsLookup, Error> {
-    if let Some(f) = fast {
-        check_fast_options(&f.fast_options)?;
-    }
     if utf8_realm(&body.realm)? != store.realm() {
         return Err(proto(err::C_PRINCIPAL_UNKNOWN, status::CLIENT_NOT_FOUND));
     }

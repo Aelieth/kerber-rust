@@ -721,7 +721,7 @@ fn fast_tgs_corrupt_enc_fast_req_is_bad_integrity_find_fast() {
         a.enc_fast_req.cipher = c.into();
     });
     let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("corrupt TGS enc_fast_req");
-    assert_find_fast(err, err::BAD_INTEGRITY, "integrity check failed");
+    assert_find_fast(err, err::BAD_INTEGRITY, "Decrypt integrity check failed");
 }
 
 #[test]
@@ -734,7 +734,11 @@ fn fast_tgs_bad_req_checksum_is_modified() {
         a.req_checksum.checksum = ck.into();
     });
     let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("bad FAST checksum");
-    assert_find_fast(err, err::MODIFIED, "modified checksum");
+    assert_find_fast(
+        err,
+        err::MODIFIED,
+        "FAST req_checksum invalid; request modified",
+    );
 }
 
 #[test]
@@ -770,5 +774,9 @@ fn fast_tgs_unkeyed_type_with_bad_bytes_is_modified() {
         a.req_checksum.checksum = vec![0xff; 16].into();
     });
     let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("unkeyed + bad bytes");
-    assert_find_fast(err, err::MODIFIED, "modified checksum");
+    assert_find_fast(
+        err,
+        err::MODIFIED,
+        "FAST req_checksum invalid; request modified",
+    );
 }

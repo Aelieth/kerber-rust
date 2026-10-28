@@ -5384,8 +5384,9 @@ fn run() -> Result<(), String> {
 
     let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "testhost.kerber.test"]);
     ra_cases(&cfg, realm, &user, &host)?;
+    fa_cases(&cfg, realm, &user, &host)?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":151}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":178}}"#);
     Ok(())
 }
 
@@ -6067,6 +6068,414 @@ fn ra_cases(
         err::GENERIC,
     )?;
     Ok(())
+}
+
+fn fa_edit(
+    req: &mut krb5_types::AsReq,
+    edit: impl FnOnce(&mut krb5_types::fast::KrbFastArmoredReq),
+) -> Result<(), String> {
+    let fx = req
+        .0
+        .padata
+        .as_mut()
+        .and_then(|p| p.iter_mut().find(|x| x.padata_type == pa::FX_FAST))
+        .ok_or("no PA-FX-FAST")?;
+    let krb5_types::fast::PaFxFast::ArmoredData(mut armored) =
+        decode(fx.padata_value.as_ref()).map_err(|e| e.to_string())?;
+    edit(&mut armored);
+    fx.padata_value = encode(&krb5_types::fast::PaFxFast::ArmoredData(armored))
+        .map_err(|e| e.to_string())?
+        .into();
+    Ok(())
+}
+
+// MIT: `armor_ap_request` (kdc/fast_util.c:35-90)
+// MIT: `rd_req_decoded_opt` (lib/krb5/krb/rd_req_dec.c:472-787)
+// MIT: `kdc_find_fast` (kdc/fast_util.c:126-247)
+fn fa_cases(
+    cfg: &Cfg,
+    realm: &str,
+    user: &PrincipalName,
+    host: &PrincipalName,
+) -> Result<(), String> {
+    let tkt_kt = cfg.krbtgt.as_ref().ok_or("KERBER_KRBTGT_KEYTAB required")?;
+    let (tkt_key, tkt_kvno) = keytab_for(tkt_kt, 20)?;
+    let svc = cfg.host.as_ref().ok_or("KERBER_HOST_KEYTAB required")?;
+    let (hkey, hkvno) = keytab_for(svc, 20)?;
+    let crealm = krb5_types::try_ascii(realm).map_err(|e| e.to_string())?;
+    let krbtgt = PrincipalName::krbtgt(realm);
+    let pauser = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["pauser"]);
+    let now = KerberosTime::now();
+    let at = |secs: i64| now.add_seconds(secs).unwrap_or_else(|_| now.clone());
+    let sess = random_session(EncryptionType::Aes256CtsHmacSha196)?;
+    let sub = random_session(EncryptionType::Aes256CtsHmacSha196)?;
+    let wrong = random_session(EncryptionType::Aes256CtsHmacSha196)?;
+    let akey = armor_key(&sess, Some(&sub)).map_err(|e| e.to_string())?;
+    let part = EncTicketPart {
+        flags: TicketFlags::initial_preauth(),
+        key: EncryptionKey {
+            keytype: sess.etype().to_iana(),
+            keyvalue: sess.as_bytes().to_vec().into(),
+        },
+        crealm: crealm.clone(),
+        cname: user.clone(),
+        transited: TransitedEncoding {
+            tr_type: 1,
+            contents: Vec::<u8>::new().into(),
+        },
+        authtime: now.clone(),
+        starttime: Some(now.clone()),
+        endtime: at(36_000),
+        renew_till: None,
+        caddr: None,
+        authorization_data: None,
+    };
+    let tgt = |p: &EncTicketPart| seal_ticket(tkt_key, tkt_kvno, realm, &krbtgt, p);
+    let ap = |t: Ticket, cname: &PrincipalName| {
+        build_fast_armor(t, &sess, &crealm, cname, Some(&sub)).map_err(|e| e.to_string())
+    };
+    let expect_fa = |cfg: &Cfg,
+                     case: &str,
+                     nonce: u32,
+                     client: &PrincipalName,
+                     armor: &ApReq,
+                     edit: Option<&dyn Fn(&mut krb5_types::fast::KrbFastArmoredReq)>,
+                     code: i32|
+     -> Result<(), String> {
+        let mut req = as_req(client.clone(), realm, nonce, None).map_err(|e| e.to_string())?;
+        attach_fast(&mut req, armor, &akey, Vec::new()).map_err(|e| e.to_string())?;
+        if let Some(edit) = edit {
+            fa_edit(&mut req, edit)?;
+        }
+        expect_error(cfg, case, &encode(&req).map_err(|e| e.to_string())?, code)
+    };
+    let good = ap(tgt(&part)?, user)?;
+
+    expect_fa(
+        cfg,
+        "fa-armor-badmatch",
+        0x1000_0301,
+        user,
+        &ap(tgt(&part)?, &pauser)?,
+        None,
+        err::BADMATCH,
+    )?;
+    let mut invalid = part.clone();
+    invalid.flags = invalid.flags.with_bit(flag_bit::INVALID, true);
+    expect_fa(
+        cfg,
+        "fa-armor-invalid",
+        0x1000_0302,
+        user,
+        &ap(tgt(&invalid)?, user)?,
+        None,
+        err::GENERIC,
+    )?;
+    // Expired inside the skew: the armor holds; pauser gets 25.
+    let mut stale = part.clone();
+    stale.authtime = at(-7200);
+    stale.starttime = Some(at(-7200));
+    stale.endtime = at(-60);
+    expect_fa(
+        cfg,
+        "fa-armor-expired-in-skew",
+        0x1000_0303,
+        &pauser,
+        &ap(tgt(&stale)?, user)?,
+        None,
+        err::PREAUTH_REQUIRED,
+    )?;
+    let mut odd = part.clone();
+    odd.key.keytype = 99;
+    expect_fa(
+        cfg,
+        "fa-armor-session-etype",
+        0x1000_0304,
+        user,
+        &ap(tgt(&odd)?, user)?,
+        None,
+        err::GENERIC,
+    )?;
+    expect_fa(
+        cfg,
+        "fa-armor-not-ap-req",
+        0x1000_0305,
+        user,
+        &good,
+        Some(&|w| {
+            if let Some(a) = w.armor.as_mut() {
+                a.armor_value = vec![0x30, 0x00].into();
+            }
+        }),
+        err::MSG_TYPE,
+    )?;
+    let mut short_key = part.clone();
+    short_key.key.keyvalue = vec![0x5a; 16].into();
+    expect_fa(
+        cfg,
+        "fa-armor-session-key-size",
+        0x1000_0316,
+        user,
+        &ap(tgt(&short_key)?, user)?,
+        None,
+        err::GENERIC,
+    )?;
+    let mut short_sub = good.clone();
+    let sub_usage = KeyUsage::new(ku::AP_REQ_AUTHENTICATOR).map_err(|e| e.to_string())?;
+    let sub_plain = decrypt(&sess, sub_usage, short_sub.authenticator.cipher.as_ref())
+        .map_err(|e| e.to_string())?;
+    let mut sub_auth: krb5_types::Authenticator = decode(&sub_plain).map_err(|e| e.to_string())?;
+    if let Some(k) = sub_auth.subkey.as_mut() {
+        k.keyvalue = vec![0x5a; 16].into();
+    }
+    short_sub.authenticator.cipher = encrypt(
+        &sess,
+        sub_usage,
+        &encode(&sub_auth).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?
+    .into();
+    expect_fa(
+        cfg,
+        "fa-armor-subkey-size",
+        0x1000_0317,
+        user,
+        &short_sub,
+        None,
+        err::GENERIC,
+    )?;
+    let mut v4 = good.clone();
+    v4.pvno = 4;
+    expect_fa(
+        cfg,
+        "fa-armor-pvno",
+        0x1000_0306,
+        user,
+        &v4,
+        None,
+        err::BAD_PVNO,
+    )?;
+    let nosvr = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "nosvr.kerber.test"]);
+    expect_fa(
+        cfg,
+        "fa-armor-disallow-svr",
+        0x1000_0307,
+        user,
+        &ap(seal_ticket(tkt_key, tkt_kvno, realm, &nosvr, &part)?, user)?,
+        None,
+        err::NOT_US,
+    )?;
+    let mut short = tgt(&part)?;
+    short.enc_part.cipher = vec![0u8; 5].into();
+    expect_fa(
+        cfg,
+        "fa-armor-ticket-short",
+        0x1000_0308,
+        user,
+        &ap(short, user)?,
+        None,
+        err::GENERIC,
+    )?;
+    let usage = KeyUsage::new(ku::TICKET).map_err(|e| e.to_string())?;
+    let mut junk = tgt(&part)?;
+    junk.enc_part.cipher = encrypt(tkt_key, usage, b"not a ticket")
+        .map_err(|e| e.to_string())?
+        .into();
+    expect_fa(
+        cfg,
+        "fa-armor-ticket-junk",
+        0x1000_0309,
+        user,
+        &ap(junk, user)?,
+        None,
+        err::GENERIC,
+    )?;
+    let mut via = part.clone();
+    via.transited.contents = b"OTHER.TEST".to_vec().into();
+    expect_fa(
+        cfg,
+        "fa-armor-transited",
+        0x1000_030a,
+        user,
+        &ap(tgt(&via)?, user)?,
+        None,
+        err::GENERIC,
+    )?;
+    // A foreign client realm: this hop is off its realm tree.
+    let other_realm = krb5_types::try_ascii("OTHER.TEST").map_err(|e| e.to_string())?;
+    let mut far = via.clone();
+    far.crealm = other_realm.clone();
+    far.transited.contents = b"SOMEWHERE.ELSE".to_vec().into();
+    let far_ap = build_fast_armor(tgt(&far)?, &sess, &other_realm, user, Some(&sub))
+        .map_err(|e| e.to_string())?;
+    expect_fa(
+        cfg,
+        "fa-armor-transited-cross",
+        0x1000_031a,
+        user,
+        &far_ap,
+        None,
+        err::ILL_CR_TKT,
+    )?;
+    // A NUL-led list is not checked; pauser gets 25.
+    let mut nul = part.clone();
+    nul.transited.contents = b"\0OTHER.TEST".to_vec().into();
+    expect_fa(
+        cfg,
+        "fa-armor-transited-nul",
+        0x1000_0321,
+        &pauser,
+        &ap(tgt(&nul)?, user)?,
+        None,
+        err::PREAUTH_REQUIRED,
+    )?;
+    let mut kv = tgt(&part)?;
+    kv.enc_part.kvno = Some(99);
+    expect_fa(
+        cfg,
+        "fa-armor-kvno",
+        0x1000_030b,
+        user,
+        &ap(kv, user)?,
+        None,
+        err::BADKEYVER,
+    )?;
+    let other = random_session(EncryptionType::Aes256CtsHmacSha384192)?;
+    expect_fa(
+        cfg,
+        "fa-armor-ticket-key",
+        0x1000_030c,
+        user,
+        &ap(seal_ticket(&other, tkt_kvno, realm, &krbtgt, &part)?, user)?,
+        None,
+        err::BAD_INTEGRITY,
+    )?;
+    let mut early = part.clone();
+    early.starttime = Some(at(3600));
+    expect_fa(
+        cfg,
+        "fa-armor-nyv",
+        0x1000_030d,
+        user,
+        &ap(tgt(&early)?, user)?,
+        None,
+        err::TKT_NYV,
+    )?;
+    let mut old = stale.clone();
+    old.endtime = at(-3600);
+    expect_fa(
+        cfg,
+        "fa-armor-expired",
+        0x1000_030e,
+        user,
+        &ap(tgt(&old)?, user)?,
+        None,
+        err::TKT_EXPIRED,
+    )?;
+    let mut skewed = good.clone();
+    let auth_usage = KeyUsage::new(ku::AP_REQ_AUTHENTICATOR).map_err(|e| e.to_string())?;
+    let plain = decrypt(&sess, auth_usage, skewed.authenticator.cipher.as_ref())
+        .map_err(|e| e.to_string())?;
+    let mut authenticator: krb5_types::Authenticator = decode(&plain).map_err(|e| e.to_string())?;
+    authenticator.ctime = at(-3600);
+    let auth_der = encode(&authenticator).map_err(|e| e.to_string())?;
+    skewed.authenticator.cipher = encrypt(&sess, auth_usage, &auth_der)
+        .map_err(|e| e.to_string())?
+        .into();
+    expect_fa(
+        cfg,
+        "fa-armor-skew",
+        0x1000_030f,
+        user,
+        &skewed,
+        None,
+        err::SKEW,
+    )?;
+    let bad_auth = build_fast_armor(tgt(&part)?, &wrong, &crealm, user, Some(&sub))
+        .map_err(|e| e.to_string())?;
+    expect_fa(
+        cfg,
+        "fa-armor-authenticator-key",
+        0x1000_0310,
+        user,
+        &bad_auth,
+        None,
+        err::BAD_INTEGRITY,
+    )?;
+    expect_fa(
+        cfg,
+        "fa-armor-host-ticket",
+        0x1000_0311,
+        user,
+        &ap(seal_ticket(hkey, hkvno, realm, host, &part)?, user)?,
+        None,
+        err::SERVER_NOMATCH,
+    )?;
+
+    let mut req = as_req(user.clone(), realm, 0x1000_0312, None).map_err(|e| e.to_string())?;
+    attach_fast(&mut req, &good, &wrong, Vec::new()).map_err(|e| e.to_string())?;
+    expect_error(
+        cfg,
+        "fa-fast-req-key",
+        &encode(&req).map_err(|e| e.to_string())?,
+        err::BAD_INTEGRITY,
+    )?;
+    expect_fa(
+        cfg,
+        "fa-fast-req-short",
+        0x1000_0313,
+        user,
+        &good,
+        Some(&|w| w.enc_fast_req.cipher = vec![0u8; 5].into()),
+        err::GENERIC,
+    )?;
+    expect_fa(
+        cfg,
+        "fa-fast-cksum-type",
+        0x1000_0314,
+        user,
+        &good,
+        Some(&|w| w.req_checksum.cksumtype = 99),
+        err::GENERIC,
+    )?;
+    expect_fa(
+        cfg,
+        "fa-fast-cksum-size",
+        0x1000_0318,
+        user,
+        &good,
+        Some(&|w| w.req_checksum.checksum = vec![0u8; 4].into()),
+        err::GENERIC,
+    )?;
+    // Bare, without PA-FX-FAST's CHOICE tag.
+    let mut req = as_req(user.clone(), realm, 0x1000_0319, None).map_err(|e| e.to_string())?;
+    attach_fast(&mut req, &good, &akey, Vec::new()).map_err(|e| e.to_string())?;
+    let fx = req
+        .0
+        .padata
+        .as_mut()
+        .and_then(|p| p.iter_mut().find(|x| x.padata_type == pa::FX_FAST))
+        .ok_or("no PA-FX-FAST")?;
+    let krb5_types::fast::PaFxFast::ArmoredData(armored) =
+        decode(fx.padata_value.as_ref()).map_err(|e| e.to_string())?;
+    fx.padata_value = encode(&armored).map_err(|e| e.to_string())?.into();
+    expect_error(
+        cfg,
+        "fa-fast-bare-armored-req",
+        &encode(&req).map_err(|e| e.to_string())?,
+        err::GENERIC,
+    )?;
+    let mut opts = krb5_types::fast::fast_options_none();
+    opts.set(2, true);
+    let mut req = as_req(user.clone(), realm, 0x1000_0315, None).map_err(|e| e.to_string())?;
+    attach_fast_with_options(&mut req, &good, &akey, Vec::new(), &opts)
+        .map_err(|e| e.to_string())?;
+    expect_error(
+        cfg,
+        "fa-fast-critical-option",
+        &encode(&req).map_err(|e| e.to_string())?,
+        err::UNKNOWN_CRITICAL_FAST_OPTION,
+    )
 }
 
 fn main() {

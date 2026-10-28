@@ -105,15 +105,24 @@ is `proposed`. The listed live `diffsend` cases are `garbage-pdu`,
 `tgs-forwarded-on-non-f-tgt`, `tgs-proxy-on-non-p-tgt`, `s4u2self-cert-only`,
 `tgs-service-expired-require-auth`,
 `tgs-fast-explicit-armor`, `tgs-fast-armor-no-tgs-subkey`,
-`tgs-fast-armor-no-subkey`, `pkinit-cms-too-small`, `pkinit-cms-header-too-long`, `pkinit-cms-too-long`, `pkinit-cms-wrong-tag`, `pkinit-cms-field-missing`, `pkinit-cms-wrong-oid`, `pkinit-authpack-not-octet-string`, `pkinit-cms-no-signer-cert`, `pkinit-sig-not-der`, `pkinit-sig-r-zero`, `pkinit-cms-signeddata-trailing`, `pkinit-cms-algid-wrong-tag`.
+`tgs-fast-armor-no-subkey`, `pkinit-cms-too-small`, `pkinit-cms-header-too-long`, `pkinit-cms-too-long`, `pkinit-cms-wrong-tag`, `pkinit-cms-field-missing`, `pkinit-cms-wrong-oid`, `pkinit-authpack-not-octet-string`, `pkinit-cms-no-signer-cert`, `pkinit-sig-not-der`, `pkinit-sig-r-zero`, `pkinit-cms-signeddata-trailing`, `pkinit-cms-algid-wrong-tag`,
+`fa-armor-badmatch`, `fa-armor-invalid`, `fa-armor-expired-in-skew`,
+`fa-armor-session-etype`, `fa-armor-session-key-size`,
+`fa-armor-subkey-size`, `fa-armor-not-ap-req`, `fa-armor-pvno`,
+`fa-armor-disallow-svr`, `fa-armor-ticket-short`, `fa-armor-ticket-junk`,
+`fa-armor-transited`, `fa-armor-transited-cross`, `fa-armor-transited-nul`, `fa-armor-kvno`, `fa-armor-ticket-key`, `fa-armor-nyv`,
+`fa-armor-expired`, `fa-armor-skew`, `fa-armor-authenticator-key`,
+`fa-armor-host-ticket`, `fa-fast-req-key`, `fa-fast-req-short`,
+`fa-fast-cksum-type`, `fa-fast-cksum-size`, `fa-fast-bare-armored-req`,
+`fa-fast-critical-option`.
 
 Wire `e_text` is the MIT **status word**. MIT log messages are not
 wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
 Counts:
-**586** = A1 131 + A2 94 + A3 118 + A4 67 + A5 35 + B1 141.
-exact 455 · stricter-documented 23 · deviation 38 ·
+**590** = A1 131 + A2 94 + A3 122 + A4 67 + A5 35 + B1 141.
+exact 457 · stricter-documented 23 · deviation 40 ·
 absent 3 · deferred 67.
 
 When the ledger was split into these files, the one-file A4 (153 rows,

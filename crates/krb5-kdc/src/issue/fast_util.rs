@@ -13,25 +13,6 @@ use crate::status;
 
 const FAST_HIDE_CLIENT_NAMES_BIT: usize = 1;
 
-/// Bit 1 is kept; other critical bits are refused.
-pub(super) fn check_fast_options(opts: &krb5_types::fast::FastOptions) -> Result<(), Error> {
-    // MIT: `kdc_find_fast` (fast_util.c:226-226)
-    // MIT: `UNSUPPORTED_CRITICAL_FAST_OPTIONS` (include/k5-int.h:802-802)
-    let n = opts.len().min(16);
-    for i in 0..n {
-        if i == FAST_HIDE_CLIENT_NAMES_BIT {
-            continue;
-        }
-        if opts[i] {
-            return Err(crate::preauth::proto_fast(
-                err::UNKNOWN_CRITICAL_FAST_OPTION,
-                "FAST option",
-            ));
-        }
-    }
-    Ok(())
-}
-
 // MIT: `kdc_fast_hide_client` (fast_util.c:444-444)
 pub(super) fn fast_hides_client(opts: &krb5_types::fast::FastOptions) -> bool {
     opts.len() > FAST_HIDE_CLIENT_NAMES_BIT && opts[FAST_HIDE_CLIENT_NAMES_BIT]

@@ -305,12 +305,34 @@ done
 if grep -E 'AS_REQ.*verify failure' "$OUT/rust-kdc.log" "$OUT/mit-kdc.log"; then
     die "an AS_REQ line carries a module's verify failure text"
 fi
+# MIT `kdc_find_fast` and `armor_ap_request` (`kdc/fast_util.c:35-247`): every FIND_FAST line,
+# AS and TGS, names and words as MIT's, one for one and in order.
+find_fast_lines() {
+    grep -v '^{' "$1" |
+        sed -n -E 's/^.*: ((AS|TGS)_REQ) \(.*\) 127\.0\.0\.1: (FIND_FAST: .*)$/\1 \3/p'
+}
+FF_MIT="$(find_fast_lines "$OUT/mit-kdc.log")"
+FF_RUST="$(find_fast_lines "$OUT/rust-kdc.log")"
+[ "$FF_RUST" = "$FF_MIT" ] || {
+    diff <(echo "$FF_MIT") <(echo "$FF_RUST") >&2 || true
+    die "the Rust KDC's FIND_FAST lines are not MIT's"
+}
+FF_AS='AS_REQ FIND_FAST: <unknown client> for <unknown server>'
+for want in \
+    "$FF_AS, Ticket/authenticator don't match while handling ap-request armor" \
+    "$FF_AS, Ticket has invalid flag set while handling ap-request armor" \
+    "$FF_AS, The ticket isn't for us while handling ap-request armor" \
+    "$FF_AS, Cannot find ticket for requested realm while handling ap-request armor" \
+    "$FF_AS, Illegal cross-realm ticket while handling ap-request armor" \
+    "$FF_AS, An unsupported critical FAST option was requested"; do
+    grep -qxF "$want" <<<"$FF_MIT" || die "no FIND_FAST line: $want"
+done
 # W1-Z Z3.3: the ratchet is checked against the distinct cases diffsend
 # actually emitted, not the literal its summary line claims (a stale
 # "cases":N in diffsend.rs would otherwise pass). History: A'-3 R32 102 ·
 # A'-4 item 16 105 · item 17 106 · item 18 107 · W1-B F4 109 · W1-Z Z1.3 110 · Z6.2 111 ·
-# as-locked-out 112 · RA 123 · a1-tgs 128 · replay 129 · nopost 130 · s4u-client 132 · fast-cksum 133 · explicit-armor 134 · armor-no-tgs-subkey 135 · armor-no-subkey 136 · reserved-option 137 · service-expired 138 · service-locked 139 · B17 cms 149 · B17b structure 151.
-DIFFSEND_RATCHET=151
+# as-locked-out 112 · RA 123 · a1-tgs 128 · replay 129 · nopost 130 · s4u-client 132 · fast-cksum 133 · explicit-armor 134 · armor-no-tgs-subkey 135 · armor-no-subkey 136 · reserved-option 137 · service-expired 138 · service-locked 139 · B17 cms 149 · B17b structure 151 · FAST armor 178.
+DIFFSEND_RATCHET=178
 CASES_SEEN="$(grep -o '"case":"[^"]*","outcome":"ok"' <<<"$DIFF" | sort -u | wc -l | tr -d ' ')"
 [ "$CASES_SEEN" = "$DIFFSEND_RATCHET" ] || die "diffsend emitted $CASES_SEEN distinct ok cases; the ratchet is $DIFFSEND_RATCHET"
 grep -q "\"outcome\":\"ok\",\"cases\":$DIFFSEND_RATCHET}" <<<"$DIFF" || die "diffsend summary line does not claim $DIFFSEND_RATCHET cases"
@@ -333,6 +355,61 @@ grep -q '"case":"as-enc-timestamp-pausec-out-of-range","outcome":"ok","rust_tag"
 grep -q '"case":"tgs-authenticator-etype-mismatch","outcome":"ok","error_code":60,"e_text":"PROCESS_TGS"' <<<"$DIFF" || die "tgs-authenticator-etype-mismatch not code 60 e_text PROCESS_TGS on both legs"
 grep -q '"case":"as-fast-armored-data-etype-mismatch","outcome":"ok","error_code":60,"e_text":"FIND_FAST"' <<<"$DIFF" || die "as-fast-armored-data-etype-mismatch not code 60 e_text FIND_FAST on both legs"
 grep -q '"case":"fast-armor-no-subkey","outcome":"ok","error_code":12,"e_text":"FIND_FAST","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "fast-armor-no-subkey not code 12 e_text FIND_FAST on both legs"
+# The armor AP-REQ through MIT's krb5_rd_req checks, and kdc_find_fast's own refusals.
+grep -q '"case":"fa-armor-badmatch","outcome":"ok","error_code":36,"e_text":"FIND_FAST"' \
+    <<<"$DIFF" || die "fa-armor-badmatch not code 36 e_text FIND_FAST on both legs"
+grep -q '"case":"fa-armor-invalid","outcome":"ok","error_code":60,"e_text":"FIND_FAST"' \
+    <<<"$DIFF" || die "fa-armor-invalid not code 60 e_text FIND_FAST on both legs"
+grep '"case":"fa-armor-expired-in-skew","outcome":"ok","error_code":25,' <<<"$DIFF" |
+    grep -q '"e_text":"NEEDED_PREAUTH"' || die "fa-armor-expired-in-skew not 25 on both legs"
+grep -q '"case":"fa-armor-session-etype","outcome":"ok","error_code":60,"e_text":"FIND_FAST"' \
+    <<<"$DIFF" || die "fa-armor-session-etype not code 60 e_text FIND_FAST on both legs"
+grep -q '"case":"fa-armor-session-key-size","outcome":"ok","error_code":60,"e_text":"FIND_FAST"' \
+    <<<"$DIFF" || die "fa-armor-session-key-size not code 60 e_text FIND_FAST on both legs"
+grep -q '"case":"fa-armor-subkey-size","outcome":"ok","error_code":60,"e_text":"FIND_FAST"' \
+    <<<"$DIFF" || die "fa-armor-subkey-size not code 60 e_text FIND_FAST on both legs"
+grep -q '"case":"fa-armor-not-ap-req","outcome":"ok","error_code":40,"e_text":"FIND_FAST"' \
+    <<<"$DIFF" || die "fa-armor-not-ap-req not code 40 e_text FIND_FAST on both legs"
+grep -q '"case":"fa-armor-pvno","outcome":"ok","error_code":3,"e_text":"FIND_FAST"' \
+    <<<"$DIFF" || die "fa-armor-pvno not code 3 e_text FIND_FAST on both legs"
+grep -q '"case":"fa-armor-disallow-svr","outcome":"ok","error_code":35,"e_text":"FIND_FAST"' \
+    <<<"$DIFF" || die "fa-armor-disallow-svr not code 35 e_text FIND_FAST on both legs"
+grep -q '"case":"fa-armor-ticket-short","outcome":"ok","error_code":60,"e_text":"FIND_FAST"' \
+    <<<"$DIFF" || die "fa-armor-ticket-short not code 60 e_text FIND_FAST on both legs"
+grep -q '"case":"fa-armor-ticket-junk","outcome":"ok","error_code":60,"e_text":"FIND_FAST"' \
+    <<<"$DIFF" || die "fa-armor-ticket-junk not code 60 e_text FIND_FAST on both legs"
+grep -q '"case":"fa-armor-transited","outcome":"ok","error_code":60,"e_text":"FIND_FAST"' \
+    <<<"$DIFF" || die "fa-armor-transited not code 60 e_text FIND_FAST on both legs"
+grep -q '"case":"fa-armor-transited-cross","outcome":"ok","error_code":43,"e_text":"FIND_FAST"' \
+    <<<"$DIFF" || die "fa-armor-transited-cross not code 43 e_text FIND_FAST on both legs"
+grep '"case":"fa-armor-transited-nul","outcome":"ok","error_code":25,' <<<"$DIFF" |
+    grep -q '"e_text":"NEEDED_PREAUTH"' || die "fa-armor-transited-nul not 25 on both legs"
+grep -q '"case":"fa-armor-kvno","outcome":"ok","error_code":44,"e_text":"FIND_FAST"' \
+    <<<"$DIFF" || die "fa-armor-kvno not code 44 e_text FIND_FAST on both legs"
+grep -q '"case":"fa-armor-ticket-key","outcome":"ok","error_code":31,"e_text":"FIND_FAST"' \
+    <<<"$DIFF" || die "fa-armor-ticket-key not code 31 e_text FIND_FAST on both legs"
+grep -q '"case":"fa-armor-nyv","outcome":"ok","error_code":33,"e_text":"FIND_FAST"' \
+    <<<"$DIFF" || die "fa-armor-nyv not code 33 e_text FIND_FAST on both legs"
+grep -q '"case":"fa-armor-expired","outcome":"ok","error_code":32,"e_text":"FIND_FAST"' \
+    <<<"$DIFF" || die "fa-armor-expired not code 32 e_text FIND_FAST on both legs"
+grep -q '"case":"fa-armor-skew","outcome":"ok","error_code":37,"e_text":"FIND_FAST"' \
+    <<<"$DIFF" || die "fa-armor-skew not code 37 e_text FIND_FAST on both legs"
+grep -q '"case":"fa-armor-authenticator-key","outcome":"ok","error_code":31,"e_text":"FIND_FAST"' \
+    <<<"$DIFF" || die "fa-armor-authenticator-key not code 31 e_text FIND_FAST on both legs"
+grep -q '"case":"fa-armor-host-ticket","outcome":"ok","error_code":26,"e_text":"FIND_FAST"' \
+    <<<"$DIFF" || die "fa-armor-host-ticket not code 26 e_text FIND_FAST on both legs"
+grep -q '"case":"fa-fast-req-key","outcome":"ok","error_code":31,"e_text":"FIND_FAST"' \
+    <<<"$DIFF" || die "fa-fast-req-key not code 31 e_text FIND_FAST on both legs"
+grep -q '"case":"fa-fast-req-short","outcome":"ok","error_code":60,"e_text":"FIND_FAST"' \
+    <<<"$DIFF" || die "fa-fast-req-short not code 60 e_text FIND_FAST on both legs"
+grep -q '"case":"fa-fast-cksum-type","outcome":"ok","error_code":60,"e_text":"FIND_FAST"' \
+    <<<"$DIFF" || die "fa-fast-cksum-type not code 60 e_text FIND_FAST on both legs"
+grep -q '"case":"fa-fast-cksum-size","outcome":"ok","error_code":60,"e_text":"FIND_FAST"' \
+    <<<"$DIFF" || die "fa-fast-cksum-size not code 60 e_text FIND_FAST on both legs"
+grep -q '"case":"fa-fast-bare-armored-req","outcome":"ok","error_code":60,"e_text":"FIND_FAST"' \
+    <<<"$DIFF" || die "fa-fast-bare-armored-req not code 60 e_text FIND_FAST on both legs"
+grep -q '"case":"fa-fast-critical-option","outcome":"ok","error_code":93,"e_text":"FIND_FAST"' \
+    <<<"$DIFF" || die "fa-fast-critical-option not code 93 e_text FIND_FAST on both legs"
 grep -q '"case":"armor-ap-req-as-pa-tgs-req","outcome":"ok","error_code":12,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "armor-ap-req-as-pa-tgs-req not code 12 e_text PROCESS_TGS on both legs"
 grep -q '"case":"tgs-ad-fx-armor-authenticator","outcome":"ok","error_code":12,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-ad-fx-armor-authenticator not code 12 e_text PROCESS_TGS on both legs"
 grep -q '"case":"as-bad-msg-type","outcome":"ok","error_code":60,"e_text":"VALIDATE_MESSAGE_TYPE","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "as-bad-msg-type not code 60 e_text VALIDATE_MESSAGE_TYPE on both legs"

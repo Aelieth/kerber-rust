@@ -9,7 +9,7 @@ use krb5_types::{
 };
 
 use super::as_req::{ANONYMOUS_REALM, anonymous_principal_name};
-use super::fast_util::{check_fast_options, fast_hides_client, wrap_as_fast};
+use super::fast_util::{fast_hides_client, wrap_as_fast};
 use super::kdc_util::{
     HeaderTgt, attr, check_anon, decrypt_presented_tgt, find_server_key, get_ticket_flags,
     include_pac_for_reply, kdc_get_ticket_endtime, kdc_get_ticket_renewtime, kdc_req_body_der, ks,
@@ -189,9 +189,6 @@ fn gather_tgs_req_info<'a>(
     tgs_fast: Option<&'a FastOk>,
     header: HeaderTgt,
 ) -> Result<TgsGather<'a>, Error> {
-    if let Some(f) = tgs_fast {
-        check_fast_options(&f.fast_options)?;
-    }
     if body.kdc_options.unsupported_bits() != 0 {
         return Err(proto(err::BADOPTION, status::UNKNOWN_REASON));
     }

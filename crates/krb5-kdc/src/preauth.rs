@@ -19,11 +19,13 @@ mod spake;
 pub(crate) use otp::{otp_edata, process_otp, serve_start_diagnostics};
 pub(crate) use spake::{SpakeStep, process_spake, spake_edata};
 
+use crate::asn1_text::{APPLICATION, ASN1_BAD_ID, CONTEXT, UNIVERSAL, get_tag};
 use crate::der::take_der;
 use crate::error::Error;
 use crate::kdb::PrincipalRead;
 use crate::status;
-use crate::store::{KtkdbError, Principal, ktkdb_get_entry};
+use crate::store::{KeyLookup, KtkdbError, Principal, ktkdb_get_entry};
+use otp::{E_BAD_ENCTYPE, E_BAD_MSIZE, E_INTEGRITY};
 
 /// After armor, inner_body and inner_padata are the request; MIT frees the outer.
 pub(crate) struct FastOk {
@@ -73,7 +75,7 @@ fn kdc_find_fast(
     };
     let armored = match decode::<krb5_types::fast::PaFxFast>(raw) {
         Ok(krb5_types::fast::PaFxFast::ArmoredData(w)) => w,
-        _ => decode::<krb5_types::fast::KrbFastArmoredReq>(raw)?,
+        Err(e) => return Err(fold(asn1_refusal(raw, CONTEXT, 0, &e))),
     };
     let mut armor_key = None;
     if let Some(armor) = armored.armor.as_ref() {
@@ -84,7 +86,7 @@ fn kdc_find_fast(
                     "Ap-request armor not permitted with TGS",
                 ));
             }
-            armor_key = Some(armor_key_from_ap(store, armor.armor_value.as_ref())?);
+            armor_key = Some(armor_ap_request(store, armor.armor_value.as_ref())?);
         } else {
             return Err(proto_fast(
                 err::PREAUTH_FAILED,
@@ -96,10 +98,9 @@ fn kdc_find_fast(
         Some(k) => k,
         None => match (tgs_subkey, tgs_session) {
             (Some(sub), Some(session)) => {
-                let st = EncryptionType::from_iana(sub.keytype)
-                    .or_else(|_| EncryptionType::known(sub.keytype))?;
-                let subk = ProtocolKey::from_bytes(st, sub.keyvalue.as_ref())?;
-                krb_fx_cf2(&subk, session, b"subkeyarmor", b"ticketarmor")?
+                let subk = protocol_key(sub).map_err(fold)?;
+                krb_fx_cf2(&subk, session, b"subkeyarmor", b"ticketarmor")
+                    .map_err(|e| fold(crypto_refusal(&e)))?
             }
             _ => {
                 return Err(proto_fast(
@@ -115,9 +116,19 @@ fn kdc_find_fast(
         enc_usage,
         armored.enc_fast_req.etype,
         armored.enc_fast_req.cipher.as_ref(),
-    )?;
-    let inner: krb5_types::fast::KrbFastReq = decode(&plain)?;
+    )
+    .map_err(|e| fold(crypto_refusal(&e)))?;
+    let inner: krb5_types::fast::KrbFastReq =
+        decode(&plain).map_err(|e| fold(asn1_refusal(&plain, UNIVERSAL, 16, &e)))?;
     verify_fast_req_checksum(&armor_key, checksummed_data, &armored.req_checksum)?;
+    // MIT: `UNSUPPORTED_CRITICAL_FAST_OPTIONS` (include/k5-int.h:802-802)
+    let opts = &inner.fast_options;
+    if (0..opts.len().min(16)).any(|i| i != 1 && opts[i]) {
+        return Err(proto_fast(
+            err::UNKNOWN_CRITICAL_FAST_OPTION,
+            "An unsupported critical FAST option was requested",
+        ));
+    }
     let nonce = inner.req_body.nonce;
     let inner_body = fast_req_body_der(&plain).map_or_else(|| encode(&inner.req_body), Ok)?;
     Ok(Some(FastOk {
@@ -160,18 +171,18 @@ fn verify_fast_req_checksum(
         ck.checksum.as_ref(),
     ) {
         Ok(()) => {}
-        Err(krb5_crypto::Error::UnsupportedChecksum(t)) => {
-            let detail = if cksumtype_is_keyed(t) {
-                "Bad encryption type"
-            } else {
-                "unknown checksum type"
-            };
-            return Err(proto_fast(err::GENERIC, detail));
+        Err(krb5_crypto::Error::UnsupportedChecksum(_)) => {
+            return Err(proto_fast(err::GENERIC, E_BAD_ENCTYPE));
         }
         Err(krb5_crypto::Error::BadChecksumSize) => {
-            return Err(proto_fast(err::GENERIC, "checksum length"));
+            return Err(proto_fast(err::GENERIC, E_BAD_MSIZE));
         }
-        Err(_) => return Err(proto_fast(err::MODIFIED, "modified checksum")),
+        Err(_) => {
+            return Err(proto_fast(
+                err::MODIFIED,
+                "FAST req_checksum invalid; request modified",
+            ));
+        }
     }
     // Type 0 verifies as the key's checksum, then fails here as unkeyed.
     if !cksumtype_is_keyed(ck.cksumtype) {
@@ -180,101 +191,213 @@ fn verify_fast_req_checksum(
     Ok(())
 }
 
-// MIT: `krb5_ktkdb_get_entry` (lib/kdb/keytab.c:117-185)
-/// Only a missing kvno is BADKEYVER; any other key refusal is 60.
-fn armor_ticket_key(
-    store: &dyn PrincipalRead,
-    p: &Principal,
-    ticket: &krb5_types::Ticket,
-) -> Result<ProtocolKey, Error> {
-    let policy = store.policy();
-    match ktkdb_get_entry(
-        Some(p),
-        &p.name,
-        store.realm(),
-        ticket.enc_part.kvno.unwrap_or(0),
-        ticket.enc_part.etype,
-        |e| policy.etype_permitted(e),
-    ) {
-        Ok(k) => Ok(k.key.clone()),
-        Err(KtkdbError::KvnoNotFound) => Err(proto_fast(err::BADKEYVER, "FAST armor TGT")),
-        Err(_) => Err(proto_fast(err::GENERIC, "FAST armor TGT")),
+// MIT: `krb5_k_decrypt` (lib/crypto/krb/decrypt.c:30-85)
+fn crypto_refusal(e: &krb5_crypto::Error) -> (i32, String) {
+    match e {
+        krb5_crypto::Error::Integrity => (err::BAD_INTEGRITY, E_INTEGRITY.to_owned()),
+        krb5_crypto::Error::CiphertextTooShort => (err::GENERIC, E_BAD_MSIZE.to_owned()),
+        krb5_crypto::Error::BadEnctype(_) | krb5_crypto::Error::UnsupportedEtype(_) => {
+            (err::GENERIC, E_BAD_ENCTYPE.to_owned())
+        }
+        krb5_crypto::Error::InvalidKeyLength => {
+            (err::GENERIC, "Cryptosystem internal error".to_owned())
+        }
+        other => (err::GENERIC, other.to_string()),
     }
 }
 
-// MIT: `krb5_ktkdb_get_entry` (kdb/keytab.c:157-163)
-fn armor_key_from_ap(store: &dyn PrincipalRead, ap_raw: &[u8]) -> Result<ProtocolKey, Error> {
-    let ap: krb5_types::ApReq = decode(ap_raw)?;
-    let tkt_usage = KeyUsage::new(ku::TICKET)?;
-    let cipher = ap.ticket.enc_part.cipher.as_ref();
-    let ticket_realm = std::str::from_utf8(ap.ticket.realm.as_bytes())
-        .map_err(|_| proto_fast(err::NOT_US, "FAST armor TGT"))?;
-    if ticket_realm != store.realm() {
-        return Err(proto_fast(err::NOT_US, "FAST armor TGT"));
-    }
-    let Some(p) = store.fetch_name(&ap.ticket.sname)? else {
-        return Err(proto_fast(err::NOT_US, "FAST armor TGT"));
+fn fold((code, text): (i32, String)) -> Error {
+    proto_fast(code, text)
+}
+
+// MIT: `k5_asn1_full_decode` (lib/krb5/asn.1/asn1_encode.c:1576-1584)
+fn asn1_refusal(der: &[u8], class: u8, tagnum: u32, e: &krb5_asn1::Error) -> (i32, String) {
+    let text = match get_tag(der) {
+        Err(text) => text.to_owned(),
+        Ok(t) if t.class != class || !t.constructed || t.tagnum != tagnum => ASN1_BAD_ID.to_owned(),
+        Ok(_) => e.to_string(),
     };
-    // MIT: `krb5_ktkdb_get_entry` (kdb/keytab.c:157-163)
-    // MIT: `keytab_fetch_error` (rd_req_dec.c:137-147)
-    let key = armor_ticket_key(store, &p, &ap.ticket)?;
-    let enc_tkt = match decrypt_enc_data(&key, tkt_usage, ap.ticket.enc_part.etype, cipher) {
-        Ok(plain) => decode::<krb5_types::EncTicketPart>(&plain)
-            .map_err(|_| proto_fast(err::BAD_INTEGRITY, "FAST armor TGT"))?,
-        // MIT: `errcode_to_protocol` (kdc_util.c:691-697)
-        // A des3 armor key MIT refuses is 60, with the library message.
-        Err(e @ (krb5_crypto::Error::DesBadParity | krb5_crypto::Error::DesWeakKey)) => {
-            return Err(proto_fast(err::GENERIC, e.to_string()));
+    (err::GENERIC, text)
+}
+
+fn protocol_key(k: &EncryptionKey) -> Result<ProtocolKey, (i32, String)> {
+    let etype = EncryptionType::from_iana(k.keytype)
+        .or_else(|_| EncryptionType::known(k.keytype))
+        .map_err(|e| crypto_refusal(&e))?;
+    ProtocolKey::from_bytes(etype, k.keyvalue.as_ref()).map_err(|e| crypto_refusal(&e))
+}
+
+// MIT: `armor_ap_request` (kdc/fast_util.c:35-90)
+fn armor_ap_request(store: &dyn PrincipalRead, ap_raw: &[u8]) -> Result<ProtocolKey, Error> {
+    let (sname, session, subkey) = armor_rd_req(store, ap_raw).map_err(|(code, text)| {
+        proto_fast(code, format!("{text} while handling ap-request armor"))
+    })?;
+    if !sname.is_krbtgt_for(store.realm()) {
+        return Err(proto_fast(
+            err::SERVER_NOMATCH,
+            "ap-request armor for something other than the local TGS",
+        ));
+    }
+    let Some(sub) = subkey else {
+        return Err(proto_fast(err::POLICY, "ap-request armor without subkey"));
+    };
+    let subk = protocol_key(&sub).map_err(fold)?;
+    krb_fx_cf2(&subk, &session, b"subkeyarmor", b"ticketarmor")
+        .map_err(|e| fold(crypto_refusal(&e)))
+}
+
+// MIT: `rd_req_decoded_opt` (lib/krb5/krb/rd_req_dec.c:472-787)
+// MIT: `krb5_rd_req` (lib/krb5/krb/rd_req.c:45-109)
+fn armor_rd_req(
+    store: &dyn PrincipalRead,
+    ap_raw: &[u8],
+) -> Result<(PrincipalName, ProtocolKey, Option<EncryptionKey>), (i32, String)> {
+    let generic = |text: String| (err::GENERIC, text);
+    if ap_raw.first().is_none_or(|b| b & !0x20 != 0x4e) {
+        return Err((err::MSG_TYPE, "Invalid message type".to_owned()));
+    }
+    let ap: krb5_types::ApReq = decode(ap_raw).map_err(|e| {
+        if e.to_string().contains("KRB5KDC_ERR_BAD_PVNO") {
+            (
+                err::BAD_PVNO,
+                "Requested protocol version not supported".to_owned(),
+            )
+        } else {
+            asn1_refusal(ap_raw, APPLICATION, 14, &e)
         }
-        Err(_) => return Err(proto_fast(err::BAD_INTEGRITY, "FAST armor TGT")),
+    })?;
+    let ticket = &ap.ticket;
+    let not_us = || (err::NOT_US, "The ticket isn't for us".to_owned());
+    // A foreign-realm ticket is refused before any lookup (stricter than MIT).
+    let realm = std::str::from_utf8(ticket.realm.as_bytes())
+        .ok()
+        .filter(|r| *r == store.realm())
+        .ok_or_else(not_us)?;
+    let tsname = ticket.sname.unparse_with_realm(realm);
+    let p = store
+        .fetch_name(&ticket.sname)
+        .map_err(|e| generic(e.to_string()))?;
+    let kvno = ticket.enc_part.kvno.unwrap_or(0);
+    let policy = store.policy();
+    // MIT: `keytab_fetch_error` (lib/krb5/krb/rd_req_dec.c:117-157)
+    let key = match ktkdb_get_entry(
+        p.as_ref(),
+        &ticket.sname,
+        realm,
+        kvno,
+        ticket.enc_part.etype,
+        |e| policy.etype_permitted(e),
+    ) {
+        Ok(k) => k.key.clone(),
+        Err(KtkdbError::NotFound) => return Err(not_us()),
+        Err(KtkdbError::KvnoNotFound) => {
+            return Err((
+                err::BADKEYVER,
+                format!("Cannot find key for {tsname} kvno {kvno} in keytab"),
+            ));
+        }
+        Err(KtkdbError::NoPermittedKey) => {
+            return Err(generic(KeyLookup::NoPermittedKey.message().to_owned()));
+        }
+        Err(KtkdbError::BadEnctype) => return Err(generic(E_BAD_ENCTYPE.to_owned())),
     };
-    if enc_tkt.flags.invalid() {
-        return Err(proto_fast(err::TKT_NYV, "FAST armor INVALID"));
-    }
-    let now = i64::from(krb5_types::KerberosTime::now().unix_seconds());
-    let skew = store.policy().skew;
-    let start = enc_tkt.starttime.as_ref().unwrap_or(&enc_tkt.authtime);
-    if i64::from(start.unix_seconds()) > now + skew {
-        return Err(proto_fast(err::TKT_NYV, "FAST armor NYV"));
-    }
-    if i64::from(enc_tkt.endtime.unix_seconds()) < now {
-        return Err(proto_fast(err::TKT_EXPIRED, "FAST armor expired"));
-    }
-    let etype = EncryptionType::from_iana(enc_tkt.key.keytype)
-        .or_else(|_| EncryptionType::known(enc_tkt.key.keytype))?;
-    let session = ProtocolKey::from_bytes(etype, enc_tkt.key.keyvalue.as_ref())?;
-    let auth_usage = KeyUsage::new(ku::AP_REQ_AUTHENTICATOR)?;
+    let tkt_usage = KeyUsage::new(ku::TICKET).map_err(|e| crypto_refusal(&e))?;
+    // MIT: `integrity_error` (lib/krb5/krb/rd_req_dec.c:161-181)
+    let plain = decrypt_enc_data(
+        &key,
+        tkt_usage,
+        ticket.enc_part.etype,
+        ticket.enc_part.cipher.as_ref(),
+    )
+    .map_err(|e| match e {
+        krb5_crypto::Error::Integrity => (
+            err::BAD_INTEGRITY,
+            format!("Cannot decrypt ticket for {tsname} using keytab key for {tsname}"),
+        ),
+        e => crypto_refusal(&e),
+    })?;
+    let enc_tkt: krb5_types::EncTicketPart =
+        decode(&plain).map_err(|e| asn1_refusal(&plain, APPLICATION, 3, &e))?;
+    let session = protocol_key(&enc_tkt.key)?;
+    let auth_usage = KeyUsage::new(ku::AP_REQ_AUTHENTICATOR).map_err(|e| crypto_refusal(&e))?;
     let auth_plain = decrypt_enc_data(
         &session,
         auth_usage,
         ap.authenticator.etype,
         ap.authenticator.cipher.as_ref(),
-    )?;
-    let authenticator: krb5_types::Authenticator = decode(&auth_plain)?;
-    let then = i64::from(authenticator.ctime.unix_seconds());
-    if (now - then).abs() > store.policy().skew {
-        return Err(proto_fast(err::SKEW, "FAST armor authenticator"));
+    )
+    .map_err(|e| crypto_refusal(&e))?;
+    let authenticator: krb5_types::Authenticator =
+        decode(&auth_plain).map_err(|e| asn1_refusal(&auth_plain, APPLICATION, 2, &e))?;
+    if authenticator.crealm.as_bytes() != enc_tkt.crealm.as_bytes()
+        || !authenticator.cname.components_eq(&enc_tkt.cname)
+    {
+        return Err((err::BADMATCH, "Ticket/authenticator don't match".to_owned()));
     }
-    // MIT: `rd_req_decoded_opt` (rd_req_dec.c:652-723)
-    // An armor enctype the KDC does not permit is 60 FIND_FAST.
+    check_transited(store, &enc_tkt, realm)?;
+    // MIT: `krb5int_validate_times` (lib/krb5/krb/valid_times.c:36-57)
+    let now = i64::from(KerberosTime::now().unix_seconds());
+    let skew = policy.skew;
+    let start = enc_tkt.starttime.as_ref().unwrap_or(&enc_tkt.authtime);
+    if i64::from(start.unix_seconds()) > now + skew {
+        return Err((err::TKT_NYV, "Ticket not yet valid".to_owned()));
+    }
+    if now > i64::from(enc_tkt.endtime.unix_seconds()) + skew {
+        return Err((err::TKT_EXPIRED, "Ticket expired".to_owned()));
+    }
+    if (now - i64::from(authenticator.ctime.unix_seconds())).abs() > skew {
+        return Err((err::SKEW, "Clock skew too great".to_owned()));
+    }
+    // MIT: `errcode_to_protocol` (kdc/kdc_util.c:691-698)
+    // TKT_INVALID sits past 128 in krb5_err.et, so the wire code is 60.
+    if enc_tkt.flags.invalid() {
+        return Err(generic("Ticket has invalid flag set".to_owned()));
+    }
+    // MIT: `negotiate_etype` (lib/krb5/krb/rd_req_dec.c:854-904)
     krb5_protocol::negotiate_ap_req_etypes(
         &authenticator,
         enc_tkt.key.keytype,
-        &store.policy().permitted_list(),
+        &policy.permitted_list(),
     )
-    .map_err(|_| proto_fast(err::GENERIC, "FAST armor enctype not permitted"))?;
-    // MIT: `armor_ap_request` (fast_util.c:51-68)
-    // Local non-TGT: SERVER_NOMATCH only after the armor ticket is accepted.
-    if !ap.ticket.sname.is_krbtgt_for(store.realm()) {
-        return Err(proto_fast(err::SERVER_NOMATCH, "FAST armor TGT"));
+    .map_err(|e| generic(e.to_string()))?;
+    Ok((ticket.sname.clone(), session, authenticator.subkey))
+}
+
+// MIT: `rd_req_decoded_opt` (lib/krb5/krb/rd_req_dec.c:606-610)
+// MIT: `krb5_check_transited_list` (lib/krb5/krb/chk_trans.c:309-356)
+// MIT: `krb5_walk_realm_tree` (lib/krb5/krb/walk_rtree.c:96-121)
+fn check_transited(
+    store: &dyn PrincipalRead,
+    enc_tkt: &krb5_types::EncTicketPart,
+    srealm: &str,
+) -> Result<(), (i32, String)> {
+    let raw = enc_tkt.transited.contents.as_ref();
+    // MIT's caller skips a list whose first octet is NUL.
+    if enc_tkt.flags.bit(flag_bit::TRANSITED_POLICY_CHECKED) || raw.first().is_none_or(|b| *b == 0)
+    {
+        return Ok(());
     }
-    let Some(sub) = authenticator.subkey else {
-        return Err(proto_fast(err::POLICY, "ap-request armor without subkey"));
+    let transited = krb5_types::TransitedEncoding {
+        tr_type: enc_tkt.transited.tr_type,
+        contents: raw.strip_suffix(&[0]).unwrap_or(raw).to_vec().into(),
     };
-    let st =
-        EncryptionType::from_iana(sub.keytype).or_else(|_| EncryptionType::known(sub.keytype))?;
-    let subk = ProtocolKey::from_bytes(st, sub.keyvalue.as_ref())?;
-    krb_fx_cf2(&subk, &session, b"subkeyarmor", b"ticketarmor").map_err(Error::from)
+    let crealm = String::from_utf8_lossy(enc_tkt.crealm.as_bytes());
+    if crealm == "WELLKNOWN:ANONYMOUS" {
+        return Ok(());
+    }
+    if crealm == srealm {
+        return Err((
+            err::GENERIC,
+            "Cannot find ticket for requested realm".to_owned(),
+        ));
+    }
+    let ill = || (err::ILL_CR_TKT, "Illegal cross-realm ticket".to_owned());
+    let hops = transited.realms_for(&crealm, srealm).map_err(|_| ill())?;
+    if store.policy().transit_allowed(&crealm, srealm, &hops) {
+        Ok(())
+    } else {
+        Err(ill())
+    }
 }
 
 const COOKIE_LIFETIME: i32 = 600;
