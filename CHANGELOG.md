@@ -206,6 +206,7 @@ any other `###` heading.
 - **client.** A FAST request's outer body is the request as the last restart left it, as MIT's, and `kdc_default_options` seeds the AS options.
 - **admin.** kadmind's iprop service logs MIT's `Unauthorized request` line for a refused GET_UPDATES or full resync, and a `Request` line for each answered; it wrote neither.
 - **kdc.** A refused server key logs the KDB error's text, as MIT's: `No matching key in entry having a permitted enctype` for a key the KDC does not permit.
+- **kdc.** A KDC started by full path names itself by its basename in an init failure, as MIT's.
 
 ## [1.1.0] - 2026-10-14
 

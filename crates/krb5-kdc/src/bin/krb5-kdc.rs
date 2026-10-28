@@ -157,8 +157,7 @@ fn main() {
     let profile_read = krb5_config::ReadOnce::start();
     // The profile is read once; a refusal exits.
     if let Err(e) = krb5_config::init_kdc_profile() {
-        let argv0 = argv.first().map_or("krb5kdc", String::as_str);
-        eprintln!("{argv0}: {} while initializing krb5", e.init_text());
+        eprintln!("{progname}: {} while initializing krb5", e.init_text());
         std::process::exit(1);
     }
     let specs = krb5_config::LogSpecs::load("kdc");
@@ -231,8 +230,7 @@ fn main() {
         store = init_realm(&progname, &realm, &paths, &opts.args);
     }
     let profile = krb5_config::ProfileSet::from_env_files(&paths).unwrap_or_else(|e| {
-        let argv0 = argv.first().map_or("krb5kdc", String::as_str);
-        eprintln!("{argv0}: {} while initializing krb5", e.init_text());
+        eprintln!("{progname}: {} while initializing krb5", e.init_text());
         std::process::exit(1);
     });
     drop(profile_read);
