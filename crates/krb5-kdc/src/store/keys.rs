@@ -33,6 +33,18 @@ pub enum KeyLookup {
     NoPermittedKey,
 }
 
+impl KeyLookup {
+    // MIT: `KRB5_KDB_NO_PERMITTED_KEY` (lib/krb5/error_tables/kdb5_err.et:72-72)
+    // MIT: `KRB5_KDB_NO_MATCHING_KEY` (lib/krb5/error_tables/kdb5_err.et:73-73)
+    #[must_use]
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::NoPermittedKey => "No matching key in entry having a permitted enctype",
+            Self::NoMatchingKey => "No matching key in entry",
+        }
+    }
+}
+
 // MIT: `krb5_ktkdb_get_entry` (lib/kdb/keytab.c:117-185)
 // MIT: `keytab_fetch_error` (lib/krb5/krb/rd_req_dec.c:118-148)
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

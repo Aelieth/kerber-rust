@@ -204,6 +204,7 @@ any other `###` heading.
 - **admin.** kpasswd arms its request with the default ccache when that holds a principal, tracing its full name, as MIT's; kinit traces `-T` as given.
 - **client.** A FAST request's outer body is the request as the last restart left it, as MIT's, and `kdc_default_options` seeds the AS options.
 - **admin.** kadmind's iprop service logs MIT's `Unauthorized request` line for a refused GET_UPDATES or full resync, and a `Request` line for each answered; it wrote neither.
+- **kdc.** A refused server key logs the KDB error's text, as MIT's: `No matching key in entry having a permitted enctype` for a key the KDC does not permit.
 
 ## [1.1.0] - 2026-10-14
 

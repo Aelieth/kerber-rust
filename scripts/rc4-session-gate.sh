@@ -396,7 +396,7 @@ wait_gone_in "$NAME" 88 || die "MIT krb5kdc still bound :88 after kill (E)"
 docker exec -d \
     -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
     -e KRB5_CONFIG=/tmp/krb5-e-kdc.conf \
-    "$NAME" sh -c 'krb5kdc >/tmp/mit-kdc-e.log 2>&1'
+    "$NAME" sh -c 'krb5kdc -n >/tmp/mit-kdc-e.log 2>&1'
 require_port_in "$NAME" 88 "MIT krb5kdc listen (E)"
 docker exec "$NAME" sh -c '
 for comm in /proc/[0-9]*/comm; do
@@ -443,6 +443,45 @@ echo "permitted=aes256 z14only: rust=$E_ONLY_RUST"
 echo "$E_ONLY_MIT" | grep -F 'kvno: KDC returned error string: FINDING_SERVER_KEY while getting credentials for z14only@KERBER.TEST' >/dev/null ||
     die "E) MIT did not refuse z14only with FINDING_SERVER_KEY: $E_ONLY_MIT"
 [ "$E_ONLY_RUST" = "$E_ONLY_MIT" ] || die "E) Rust z14only refusal differs from MIT"
+
+# do_as_req.c:225-229: the AS site takes the server key the same way (kinit -S).
+e_as() {
+    local conf=$1 svc=$2 cc=$3 out rc
+    set +e
+    out="$(docker exec -e KRB5_CONFIG="$conf" "$NAME" \
+        sh -c "printf '%s\n' userpassword | kinit -S $svc -c $cc user@KERBER.TEST" 2>&1)"
+    rc=$?
+    set -e
+    if [ "$rc" = 0 ]; then
+        tkt_etype_for "$svc" "$(docker exec -e KRB5_CONFIG="$conf" "$NAME" klist -e -c "$cc" 2>&1)"
+    else
+        printf '%s\n' "$out" | grep -F 'kinit:' | head -1
+    fi
+}
+E_AS_MIX_MIT="$(e_as /etc/krb5.conf z14mixed /tmp/e-as-mix-mit.cc)"
+E_AS_MIX_RUST="$(e_as /tmp/krb5-8888.conf z14mixed /tmp/e-as-mix-rust.cc)"
+echo "AS permitted=aes256 z14mixed tkt: mit=$E_AS_MIX_MIT rust=$E_AS_MIX_RUST"
+[ "$E_AS_MIX_MIT" = "aes256-cts-hmac-sha1-96" ] ||
+    die "E) MIT's AS did not skip the non-permitted first key: $E_AS_MIX_MIT"
+[ "$E_AS_MIX_RUST" = "$E_AS_MIX_MIT" ] || die "E) Rust's AS z14mixed tkt etype differs from MIT's"
+E_AS_ONLY_MIT="$(e_as /etc/krb5.conf z14only /tmp/e-as-only-mit.cc)"
+E_AS_ONLY_RUST="$(e_as /tmp/krb5-8888.conf z14only /tmp/e-as-only-rust.cc)"
+echo "AS permitted=aes256 z14only: mit=$E_AS_ONLY_MIT"
+echo "AS permitted=aes256 z14only: rust=$E_AS_ONLY_RUST"
+grep -qF 'Generic error (see e-text)' <<<"$E_AS_ONLY_MIT" || die "E) MIT's AS did not refuse z14only with 60"
+[ "$E_AS_ONLY_RUST" = "$E_AS_ONLY_MIT" ] || die "E) Rust's AS z14only refusal differs from MIT's"
+# kinit shows no e-text for an AS refusal. Each KDC logs the status it sent and the KDB error's text.
+fsk_tail() {
+    docker exec "$NAME" sh -c "grep -E '$1 .*FINDING_SERVER_KEY: .*z14only@KERBER.TEST' $2 | tail -1" |
+        sed 's/.*z14only@KERBER.TEST, //'
+}
+for req in AS_REQ TGS_REQ; do
+    mit_tail="$(fsk_tail "$req" /tmp/mit-kdc-e.log)"
+    rust_tail="$(fsk_tail "$req" /tmp/rust-kdc-e.log)"
+    echo "E) $req FINDING_SERVER_KEY z14only: mit='$mit_tail' rust='$rust_tail'"
+    [ -n "$mit_tail" ] || die "E) MIT's KDC logged no $req FINDING_SERVER_KEY line for z14only"
+    [ "$rust_tail" = "$mit_tail" ] || die "E) the Rust KDC's $req FINDING_SERVER_KEY line ends unlike MIT's"
+done
 echo "==== F) a stale keytab is Password incorrect (24): enc-ts keys are searched at the top kvno only ===="
 # Z1.4, the other `krb5_dbe_*search_enctype` caller: enc_ts_verify
 # (kdc_preauth_encts.c:74-92) walks the client's keys of the timestamp's etype

@@ -25,7 +25,7 @@ use crate::plugins::{
 };
 use crate::preauth::{
     FastOk, decode_edata_padata, fast_finished, find_pa, make_cookie, mint_freshness_token_now,
-    pa_cookie_last, proto, unwrap_fast, wrap_fast_rep,
+    pa_cookie_last, proto, proto_d, unwrap_fast, wrap_fast_rep,
 };
 use crate::status;
 use crate::store::{
@@ -509,7 +509,7 @@ fn finish_process_as_req(
     let skey = store
         .policy()
         .first_current_key(&server)
-        .map_err(|_| proto(err::GENERIC, status::FINDING_SERVER_KEY))?;
+        .map_err(|e| proto_d(err::GENERIC, status::FINDING_SERVER_KEY, e.message()))?;
     // MIT: `finish_process_as_req` (do_as_req.c:259-265)
     let Some(as_rep_key) = as_rep_key else {
         return Err(proto(err::ETYPE_NOSUPP, status::CANT_FIND_CLIENT_KEY));

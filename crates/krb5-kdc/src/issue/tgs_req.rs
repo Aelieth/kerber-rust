@@ -29,7 +29,9 @@ use crate::ad::{
 use crate::error::Error;
 use crate::kdb::{PrincipalRead, lookup_principal_id};
 use crate::plugins::enforce_kdcpolicy_tgs;
-use crate::preauth::{FastOk, fast_finished, find_pa, proto, unwrap_fast_tgs, wrap_fast_rep};
+use crate::preauth::{
+    FastOk, fast_finished, find_pa, proto, proto_d, unwrap_fast_tgs, wrap_fast_rep,
+};
 use crate::status;
 use crate::store::{
     KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_SVR, KDB_NO_AUTH_DATA_REQUIRED, Principal, random_key,
@@ -436,7 +438,7 @@ fn check_tgs_req<'a>(
         let skey = store
             .policy()
             .first_current_key(&server)
-            .map_err(|_| proto(err::GENERIC, status::FINDING_SERVER_KEY))?;
+            .map_err(|e| proto_d(err::GENERIC, status::FINDING_SERVER_KEY, e.message()))?;
         (skey.key.clone(), skey.kvno, skey.etype)
     };
     let mut transited = enc_tkt.transited.clone();
