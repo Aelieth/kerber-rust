@@ -513,7 +513,8 @@ pub(super) fn refuse_spake_skip(want_spake: bool) -> Result<(), Error> {
 }
 
 pub(super) fn refuse_spake_combo(req: &AsRequest<'_>) -> Result<(), Error> {
-    if req.want_spake && (req.fast_armor.is_some() || req.pkinit.is_some()) {
+    let pkinit = matches!(req.pkinit, Some(super::Pkinit::Client(_)));
+    if req.want_spake && (req.fast_armor.is_some() || pkinit) {
         Err(Error::ReplyMismatch("SPAKE exclusive".into()))
     } else {
         Ok(())
