@@ -155,8 +155,8 @@ log "pkinit.client.gate" "ok" ',"mode":"rust-kinit","pa_type":16,"principal":"us
 echo "==== MIT kinit, then Rust kinit, with RSA user certificates (PKCS#1 keys of two and three primes) vs MIT KDC ===="
 docker exec -i "$NAME" sh -s -- /tmp/pkinit-rsa KERBER.TEST user < "$ROOT/scripts/lib/pkinit-rsa-certs.sh"
 docker exec -i "$NAME" sh -s -- /tmp/pkinit-rsa3 KERBER.TEST user 2048 3 < "$ROOT/scripts/lib/pkinit-rsa-certs.sh"
-docker exec "$NAME" sed -i '/pkinit_anchors = FILE:\/tmp\/pkinit\/ca.pem/a\    pkinit_anchors = FILE:/tmp/pkinit-rsa/ca.pem' /etc/krb5kdc/kdc.conf
-docker exec "$NAME" sed -i '/pkinit_anchors = FILE:\/tmp\/pkinit-rsa\/ca.pem/a\    pkinit_anchors = FILE:/tmp/pkinit-rsa3/ca.pem' /etc/krb5kdc/kdc.conf
+docker exec "$NAME" sed -i '/pkinit_anchors = FILE:\/tmp\/pkinit\/ca.pem/a\        pkinit_anchors = FILE:/tmp/pkinit-rsa/ca.pem' /etc/krb5.conf
+docker exec "$NAME" sed -i '/pkinit_anchors = FILE:\/tmp\/pkinit-rsa\/ca.pem/a\        pkinit_anchors = FILE:/tmp/pkinit-rsa3/ca.pem' /etc/krb5.conf
 docker exec "$NAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
 wait_pid_gone "$NAME" krb5kdc || true
 docker exec -d \
@@ -167,7 +167,7 @@ docker exec -d \
 retry_until --log "$NAME" /tmp/mit-kdc.log -- 100 "MIT krb5kdc listening with the RSA anchor" \
     docker exec "$NAME" python3 -c "import socket;socket.create_connection(('127.0.0.1',88),0.3)"
 for id in rsa rsa3; do
-    RSAID="-X X509_user_identity=FILE:/tmp/pkinit-$id/client.pem,/tmp/pkinit-$id/client.key -X X509_anchors=FILE:/tmp/pkinit/ca.pem"
+    RSAID="-X X509_user_identity=FILE:/tmp/pkinit-$id/client.pem,/tmp/pkinit-$id/client.key -X X509_anchors=FILE:/tmp/pkinit/ca.pem -X X509_anchors=FILE:/tmp/pkinit-$id/ca.pem"
     for who in mit rust; do
         kinit=kinit
         [ "$who" = rust ] && kinit=/tmp/krb5-kinit
