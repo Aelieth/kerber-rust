@@ -482,13 +482,10 @@ for req in AS_REQ TGS_REQ; do
     [ -n "$mit_tail" ] || die "E) MIT's KDC logged no $req FINDING_SERVER_KEY line for z14only"
     [ "$rust_tail" = "$mit_tail" ] || die "E) the Rust KDC's $req FINDING_SERVER_KEY line ends unlike MIT's"
 done
-echo "==== F) a stale keytab is Password incorrect (24): enc-ts keys are searched at the top kvno only ===="
-# Z1.4, the other `krb5_dbe_*search_enctype` caller: enc_ts_verify
-# (kdc_preauth_encts.c:74-92) walks the client's keys of the timestamp's etype
-# at the highest kvno only (kvno 0 in kdb_default.c:65-67). `ktadd` writes the
-# kvno-2 keys, `cpw -randkey -keepold` moves the entry to kvno 3 while keeping
-# kvno 2 in the DB; MIT still refuses the kvno-2 timestamp with 24, which
-# `kinit -kt` reports as "Password incorrect" (the wrong-password text).
+echo "==== F) a stale keytab: Password incorrect (31) without preauth, Preauthentication failed (24) with it ===="
+# `ktadd` writes the kvno-2 keys; `cpw -randkey -keepold` moves the entry to kvno 3 and keeps kvno 2.
+# Without preauth the AS-REP is under kvno 3, which the stale keytab can't decrypt (31). With it,
+# enc_ts_verify (kdc_preauth_encts.c:74-92) checks the timestamp at the top kvno only: 24.
 # Control first: the fresh keytab kinits on both legs.
 kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -randkey z14kt'
 kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'ktadd -k /tmp/z14kt-mit.kt z14kt'
@@ -532,6 +529,50 @@ echo "stale keytab (kvno 2 kept, kvno 3 current): rust=$F_RUST"
 [ "$F_MIT" = "kinit: Password incorrect while getting initial credentials" ] ||
     die "F) MIT did not refuse the stale keytab with Password incorrect (24): $F_MIT"
 [ "$F_RUST" = "$F_MIT" ] || die "F) Rust stale-keytab kinit differs from MIT"
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'modprinc +requires_preauth z14kt'
+kadmin_q_ok rust_kadmin_local \
+    -e KRB5_KDC_DB=/tmp/rust.db \
+    -e KRB5_KDC_STASH=/tmp/rust.stash \
+    -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
+    -e KRB5_CONFIG=/etc/krb5.conf \
+    "$NAME" -- -q 'modprinc +requires_preauth z14kt'
+# A SPAKE failure is 24 too: the client is pinned to encrypted timestamp, and its trace shows it.
+docker exec "$NAME" sh -c 'pin="[plugins]
+    clpreauth = {
+        enable_only = encrypted_timestamp
+    }"
+{ cat /etc/krb5.conf; printf "%s\n" "$pin"; } >/tmp/krb5-f-mit.conf
+{ cat /tmp/krb5-8888.conf; printf "%s\n" "$pin"; } >/tmp/krb5-f-rust.conf'
+f_kinit_traced() {
+    local conf=$1 kt=$2 cc=$3 trace=$4
+    docker exec -e KRB5_CONFIG="$conf" -e KRB5_TRACE="$trace" "$NAME" \
+        kinit -k -t "$kt" -c "$cc" z14kt@KERBER.TEST 2>&1 && echo "kinit ok"
+}
+F_PA_MIT="$(f_kinit_traced /tmp/krb5-f-mit.conf /tmp/z14kt-mit.kt /tmp/f-pa-mit.cc /tmp/f-pa-mit.trace || true)"
+F_PA_RUST="$(f_kinit_traced /tmp/krb5-f-rust.conf /tmp/z14kt-rust.kt /tmp/f-pa-rust.cc /tmp/f-pa-rust.trace || true)"
+for leg in mit rust; do
+    trace="$(docker exec "$NAME" cat "/tmp/f-pa-$leg.trace" 2>/dev/null || true)"
+    grep -F 'Preauth module encrypted_timestamp (2) (real) returned: 0/Success' <<<"$trace" ||
+        die "F) $leg: kinit sent no encrypted timestamp"
+    if grep -q 'Preauth module spake' <<<"$trace"; then die "F) $leg: kinit used SPAKE"; fi
+done
+echo "stale keytab, +requires_preauth: mit=$F_PA_MIT"
+echo "stale keytab, +requires_preauth: rust=$F_PA_RUST"
+[ "$F_PA_MIT" = "kinit: Preauthentication failed while getting initial credentials" ] ||
+    die "F) MIT did not refuse the stale keytab's timestamp with 24: $F_PA_MIT"
+[ "$F_PA_RUST" = "$F_PA_MIT" ] || die "F) Rust's refusal of the stale timestamp differs from MIT's"
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'ktadd -norandkey -k /tmp/z14kt3-mit.kt z14kt'
+kadmin_q_ok rust_kadmin_local \
+    -e KRB5_KDC_DB=/tmp/rust.db \
+    -e KRB5_KDC_STASH=/tmp/rust.stash \
+    -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
+    -e KRB5_CONFIG=/etc/krb5.conf \
+    "$NAME" -- -q 'ktadd -norandkey -k /tmp/z14kt3-rust.kt z14kt'
+F_PA_CTL_MIT="$(f_kinit /tmp/krb5-f-mit.conf /tmp/z14kt3-mit.kt /tmp/f-pa-ctl-mit.cc || true)"
+F_PA_CTL_RUST="$(f_kinit /tmp/krb5-f-rust.conf /tmp/z14kt3-rust.kt /tmp/f-pa-ctl-rust.cc || true)"
+echo "current keytab, +requires_preauth: mit=$F_PA_CTL_MIT rust=$F_PA_CTL_RUST"
+[ "$F_PA_CTL_MIT" = "kinit ok" ] || die "F control: MIT kinit -kt with the kvno-3 keytab failed: $F_PA_CTL_MIT"
+[ "$F_PA_CTL_RUST" = "kinit ok" ] || die "F control: Rust kinit -kt with the kvno-3 keytab failed: $F_PA_CTL_RUST"
 docker cp "$NAME":/tmp/mit-kdc-e.log "$OUT/mit-kdc-e.log" 2>/dev/null || true
 docker cp "$NAME":/tmp/rust-kdc-e.log "$OUT/rust-kdc-e.log" 2>/dev/null || true
 
