@@ -674,10 +674,15 @@ mod hooks {
             eprintln!("krb5-kdc: PKINIT CA: pkinit CA generate failed");
             std::process::exit(1);
         };
-        store.set_pkinit(Some(krb5_kdc::PkinitKdc::new(
-            identity,
-            vec![ca.ca_cert.clone()],
-        )));
+        let mut kdc = krb5_kdc::PkinitKdc::new(identity, vec![ca.ca_cert.clone()]);
+        if let Ok(v) = std::env::var("KRB5_TEST_PKINIT_DH_MIN_BITS") {
+            let bits = krb5_types::pkinit::parse_dh_min_bits(Some(&v)).unwrap_or_else(|e| {
+                eprintln!("krb5-kdc: KRB5_TEST_PKINIT_DH_MIN_BITS: {e}");
+                std::process::exit(1);
+            });
+            kdc = kdc.with_dh_min_bits(bits);
+        }
+        store.set_pkinit(Some(kdc));
         ca
     }
 

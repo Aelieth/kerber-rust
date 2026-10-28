@@ -74,6 +74,13 @@ impl PkinitKdc {
         }
     }
 
+    #[cfg(feature = "test-hooks")]
+    #[must_use]
+    pub fn with_dh_min_bits(mut self, bits: u32) -> Self {
+        self.dh_min_bits = bits;
+        self
+    }
+
     // MIT: `cms_signeddata_create` (plugins/preauth/pkinit/pkinit_crypto_openssl.c:1758-1782)
     pub(crate) fn own_chain(&self) -> Result<Vec<Vec<u8>>, String> {
         let pool: Vec<&[u8]> = self.pool.iter().map(Vec::as_slice).collect();
