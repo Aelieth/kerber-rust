@@ -203,6 +203,8 @@ DIFFSEND_CASES = frozenset(
         "fa-fast-cksum-type-zero",
         "fa-fast-cksum-md5-body",
         "fa-armor-type-unknown",
+        "fa-fast-hide-client-rep",
+        "fa-fast-error-inner",
     }
 )
 _LEDGER_GATE = re.compile(r"(?:scripts/)?([A-Za-z0-9._-]+-gate(?:\.sh)?)")

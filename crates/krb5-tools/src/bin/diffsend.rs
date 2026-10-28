@@ -5423,7 +5423,7 @@ fn run() -> Result<(), String> {
     ra_cases(&cfg, realm, &user, &host)?;
     fa_cases(&cfg, realm, &user, &host)?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":190}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":192}}"#);
     Ok(())
 }
 
@@ -6639,6 +6639,99 @@ fn fa_cases(
         &encode(&req).map_err(|e| e.to_string())?,
         err::UNKNOWN_CRITICAL_FAST_OPTION,
     )?;
+    let mut hide = krb5_types::fast::fast_options_none();
+    hide.set(1, true);
+    let ukey = client_key(18, &cfg.user_pw, user, realm)?;
+    let mut req = as_req(user.clone(), realm, 0x1000_0326, None).map_err(|e| e.to_string())?;
+    let ts = pa_enc_timestamp(&ukey).map_err(|e| e.to_string())?;
+    attach_fast_with_options(&mut req, &good, &akey, vec![ts], &hide).map_err(|e| e.to_string())?;
+    let (rust, mit) = send_both(
+        cfg,
+        "fa-fast-hide-client-rep",
+        &encode(&req).map_err(|e| e.to_string())?,
+    )?;
+    let mut outer = Vec::new();
+    for (leg, b) in [("rust", &rust), ("mit", &mit)] {
+        let rep: AsRep = decode(b).map_err(|e| format!("fa-fast-hide-client-rep {leg}: {e}"))?;
+        let fin = krb5_protocol::unwrap_fast_rep(&akey, &rep.0.padata)
+            .map_err(|e| format!("fa-fast-hide-client-rep {leg} unwrap: {e}"))?
+            .finished
+            .ok_or_else(|| format!("fa-fast-hide-client-rep {leg}: no finished"))?;
+        let real = format!(
+            "{}@{}",
+            fin.cname.components_joined(),
+            String::from_utf8_lossy(fin.crealm.as_bytes())
+        );
+        if real != "user@KERBER.TEST" {
+            return Err(format!(
+                "fa-fast-hide-client-rep {leg}: finished names {real}"
+            ));
+        }
+        outer.push(format!(
+            "{}@{}",
+            rep.0.cname.components_joined(),
+            String::from_utf8_lossy(rep.0.crealm.as_bytes())
+        ));
+    }
+    if outer[0] != outer[1] || outer[1] != "WELLKNOWN/ANONYMOUS@WELLKNOWN:ANONYMOUS" {
+        return Err(format!(
+            "fa-fast-hide-client-rep: outer client rust={} mit={}",
+            outer[0], outer[1]
+        ));
+    }
+    println!(
+        concat!(
+            r#"{{"event":"diffsend","case":"fa-fast-hide-client-rep","outcome":"ok","#,
+            r#""rust_tag":"0x6b","mit_tag":"0x6b","outer_client":"{}","#,
+            r#""finished":"user@KERBER.TEST"}}"#
+        ),
+        outer[1]
+    );
+
+    let mut req = as_req(pauser.clone(), realm, 0x1000_0327, None).map_err(|e| e.to_string())?;
+    attach_fast(&mut req, &good, &akey, Vec::new()).map_err(|e| e.to_string())?;
+    let (rust, mit) = send_both(
+        cfg,
+        "fa-fast-error-inner",
+        &encode(&req).map_err(|e| e.to_string())?,
+    )?;
+    let mut inner = Vec::new();
+    for (leg, b) in [("rust", &rust), ("mit", &mit)] {
+        let e: KrbError = decode(b).map_err(|e| format!("fa-fast-error-inner {leg}: {e}"))?;
+        let md: krb5_types::MethodData = decode(e.e_data.as_ref().ok_or("no e_data")?.as_ref())
+            .map_err(|e| format!("fa-fast-error-inner {leg} e_data: {e}"))?;
+        let fast = krb5_protocol::unwrap_fast_rep(&akey, &Some(md))
+            .map_err(|e| format!("fa-fast-error-inner {leg} unwrap: {e}"))?;
+        let types: Vec<i32> = fast.padata.iter().map(|p| p.padata_type).collect();
+        let last = fast.padata.last().ok_or("no inner padata")?;
+        let fx: KrbError = decode(last.padata_value.as_ref())
+            .map_err(|e| format!("fa-fast-error-inner {leg} FX-ERROR: {e}"))?;
+        if last.padata_type != pa::FX_ERROR
+            || !types.contains(&pa::FX_COOKIE)
+            || fx.e_data.is_some()
+            || fast.strengthen_key.is_some()
+        {
+            return Err(format!(
+                "fa-fast-error-inner {leg}: types {types:?}, FX-ERROR e_data {}, strengthen {}",
+                fx.e_data.is_some(),
+                fast.strengthen_key.is_some()
+            ));
+        }
+        inner.push(types);
+    }
+    if inner[0] != inner[1] {
+        return Err(format!(
+            "fa-fast-error-inner: inner types rust={:?} mit={:?}",
+            inner[0], inner[1]
+        ));
+    }
+    println!(
+        concat!(
+            r#"{{"event":"diffsend","case":"fa-fast-error-inner","outcome":"ok","#,
+            r#""rust_tag":"0x7e","mit_tag":"0x7e","inner_types":"{:?}"}}"#
+        ),
+        inner[1]
+    );
     let mut opts = krb5_types::fast::fast_options_none();
     opts.set(2, true);
     let mut req = as_req(user.clone(), realm, 0x1000_0315, None).map_err(|e| e.to_string())?;
