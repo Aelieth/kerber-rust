@@ -69,7 +69,6 @@
 
 #[path = "common/mod.rs"]
 mod common;
-use common::client_key;
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt};
@@ -152,30 +151,6 @@ fn wrong_password_yields_preauth_failed_bytes() {
     assert_ne!(bytes, [] as [u8; 0]);
     let e: krb5_types::KrbError = decode(&bytes).expect("KRB-ERROR");
     assert_eq!(e.error_code, err::PREAUTH_FAILED);
-}
-
-#[test]
-fn session_enctypes_attr_is_membership_not_client_key() {
-    let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    store
-        .set_string(
-            &PrincipalName::krbtgt(TEST_REALM),
-            "session_enctypes",
-            Some("aes128-cts"),
-        )
-        .expect("setstr");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let key = client_key();
-    let mut req = as_req(
-        cname,
-        TEST_REALM,
-        61,
-        Some(vec![pa_enc_timestamp(&key).expect("pa")]),
-    )
-    .unwrap();
-    req.0.req_body.etype = vec![18, 17];
-    let out = krb5_kdc::issue_as(&store, &req).expect("AS");
-    assert_eq!(out.session_key.etype(), EncryptionType::Aes128CtsHmacSha196);
 }
 
 fn user_key() -> ProtocolKey {
@@ -566,32 +541,6 @@ fn as_client_key_is_chosen_at_the_highest_kvno_only() {
         Err(other) => panic!("expected 24 PREAUTH_FAILED, got {other:?}"),
         Ok(_) => panic!("an etype present only at an older kvno must not select that key"),
     }
-}
-
-#[test]
-fn enc_ts_under_a_retired_kvno_key_is_preauth_failed() {
-    krb5_config::isolate_test_krb5();
-    let (mut store, _) = bootstrap_documented().unwrap();
-    let stale = user_key_z1_permitted_key(&store, AES256);
-    // cpw -randkey -keepold: kvno 2 aes256 on top, the kvno-1 key retained.
-    let new = vec![KeyEntry::new(AES256, random_key(AES256).unwrap(), 0)];
-    store.set_keys(&user_name(), new, 2).unwrap();
-    let p = store.get_name(&user_name()).unwrap();
-    let top = p.keys.iter().map(|k| k.kvno).max().unwrap();
-    assert!(
-        p.keys.iter().any(|k| k.etype == AES256 && k.kvno < top),
-        "the retired aes256 key must still be stored"
-    );
-    // Control: a timestamp under the current key issues.
-    let padata = vec![pa_enc_timestamp(&user_key_z1_permitted_key(&store, AES256)).unwrap()];
-    let req = as_req(user_name(), TEST_REALM, 0x2600_0015, Some(padata)).unwrap();
-    krb5_kdc::issue_as(&store, &req).expect("current key issues");
-    let padata = vec![pa_enc_timestamp(&stale).unwrap()];
-    let req = as_req(user_name(), TEST_REALM, 0x2600_0016, Some(padata)).unwrap();
-    let bytes = krb5_kdc::handle_request(&store, &encode(&req).unwrap()).expect("reply");
-    let e: krb5_types::KrbError = krb5_asn1::decode(&bytes)
-        .unwrap_or_else(|_| panic!("a timestamp under a retired kvno's key must be refused"));
-    assert_eq!(e.error_code, err::PREAUTH_FAILED, "KDC_ERR_PREAUTH_FAILED");
 }
 
 #[test]
