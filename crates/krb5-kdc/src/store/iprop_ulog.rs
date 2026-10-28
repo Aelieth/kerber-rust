@@ -359,14 +359,14 @@ impl PrincipalStore {
     // MIT: `iprop_get_updates_1_svc` (kadmin/server/ipropd_svc.c:203-205)
     #[must_use]
     pub fn ulog_get_entries(&self, last: UlogLast) -> UlogUpdates {
-        let error = UlogUpdates {
+        self.ulog_entries(last).unwrap_or(UlogUpdates {
             status: IPROP_ERROR,
             ..UlogUpdates::default()
-        };
-        match self.ulog() {
-            Some(u) => u.get_entries(last).unwrap_or(error),
-            None => error,
-        }
+        })
+    }
+
+    pub fn ulog_entries(&self, last: UlogLast) -> Result<UlogUpdates, UlogError> {
+        self.ulog().ok_or(UlogError::Error)?.get_entries(last)
     }
 
     // MIT: `ulog_replay` (lib/kdb/kdb_log.c:423-454)

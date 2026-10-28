@@ -300,15 +300,77 @@ pub(super) fn kadm5_service_name(ctx: &GssContext) -> String {
 
 pub(super) fn kadm5_log_op(proc: u32, args: &[u8], who: &Caller<'_>, reply: &[u8]) {
     for line in kadm5_log_lines(proc, args, who, reply) {
-        let unauthorized = line.starts_with("Unauthorized");
-        crate::kadmind::admin_syslog_open(Severity::Notice, &line);
-        tracing::info!(
-            event = krb5_log::events::ADMIN,
-            component = "krb5-admin",
-            outcome = if unauthorized { "unauthorized" } else { "done" },
-            "{line}"
-        );
+        emit(&line);
     }
+}
+
+fn emit(line: &str) {
+    let unauthorized = line.starts_with("Unauthorized");
+    crate::kadmind::admin_syslog_open(Severity::Notice, line);
+    tracing::info!(
+        event = krb5_log::events::ADMIN,
+        component = "krb5-admin",
+        outcome = if unauthorized { "unauthorized" } else { "done" },
+        "{line}"
+    );
+}
+
+fn iprop_tail(who: &Caller<'_>) -> String {
+    format!(
+        "client={}, service={}, addr={}",
+        who.client, who.service, who.addr
+    )
+}
+
+// MIT: `replystr` (kadmin/server/ipropd_svc.c:96-114)
+fn iprop_reply_str(status: u32) -> &'static str {
+    match status {
+        krb5_kdc::IPROP_OK => "UPDATE_OK",
+        krb5_kdc::IPROP_ERROR => "UPDATE_ERROR",
+        krb5_kdc::IPROP_FULL_RESYNC => "UPDATE_FULL_RESYNC_NEEDED",
+        3 => "UPDATE_BUSY",
+        krb5_kdc::IPROP_NIL => "UPDATE_NIL",
+        krb5_kdc::IPROP_PERM_DENIED => "UPDATE_PERM_DENIED",
+        _ => "<UNKNOWN_CODE>",
+    }
+}
+
+// MIT: `iprop_get_updates_1_svc` (kadmin/server/ipropd_svc.c:191-200)
+// MIT: `ipropx_resync` (kadmin/server/ipropd_svc.c:311-320)
+pub(super) fn iprop_log_unauth(whoami: &str, who: &Caller<'_>) {
+    emit(&format!(
+        "Unauthorized request: {whoami}, {}",
+        iprop_tail(who)
+    ));
+}
+
+// MIT: `iprop_get_updates_1_svc` (kadmin/server/ipropd_svc.c:202-230)
+pub(super) fn iprop_log_updates(
+    who: &Caller<'_>,
+    incoming: u32,
+    got: &krb5_kdc::UlogUpdates,
+    err: Option<&str>,
+) {
+    let out = if got.status == krb5_kdc::IPROP_OK {
+        got.last.sno.to_string()
+    } else {
+        "N/A".to_owned()
+    };
+    emit(&format!(
+        "Request: iprop_get_updates_1, {}; Incoming SerialNo={incoming}; \
+         Outgoing SerialNo={out}, {}, {}",
+        iprop_reply_str(got.status),
+        err.unwrap_or("success"),
+        iprop_tail(who)
+    ));
+}
+
+// MIT: `ipropx_resync` (kadmin/server/ipropd_svc.c:420-428)
+pub(super) fn iprop_log_resync(who: &Caller<'_>, task: i32) {
+    emit(&format!(
+        "Request: iprop_full_resync_1, spawned resync process {task}, {}",
+        iprop_tail(who)
+    ));
 }
 
 // MIT: `log_miscerr` (kadmin/server/ovsec_kadmd.c:291-295)

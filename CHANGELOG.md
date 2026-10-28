@@ -203,6 +203,7 @@ any other `###` heading.
 - **pkinit.** Key-exchange groups are MODP 1024 to 4096 and P-256 to P-521, by `pkinit_dh_min_bits`. A 65 is retried in the KDC's group.
 - **admin.** kpasswd arms its request with the default ccache when that holds a principal, tracing its full name, as MIT's; kinit traces `-T` as given.
 - **client.** A FAST request's outer body is the request as the last restart left it, as MIT's, and `kdc_default_options` seeds the AS options.
+- **admin.** kadmind's iprop service logs MIT's `Unauthorized request` line for a refused GET_UPDATES or full resync, and a `Request` line for each answered; it wrote neither.
 
 ## [1.1.0] - 2026-10-14
 

@@ -22,7 +22,7 @@ krb5-kdc = { path = "../krb5-kdc", default-features = false }
 krb5-log.workspace = true
 krb5-protocol.workspace = true
 krb5-types.workspace = true
-nix = { workspace = true, features = ["fs"] }
+nix = { workspace = true, features = ["fs", "process"] }
 signal-hook.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

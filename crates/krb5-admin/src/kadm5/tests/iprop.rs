@@ -10,11 +10,17 @@ fn dispatch_iprop(
     proc: u32,
     args: &[u8],
 ) -> Vec<u8> {
+    let who = crate::kadm5::log::Caller {
+        client: actor,
+        service: "",
+        addr: "",
+        flavor: 6,
+    };
     crate::kadm5::iprop::dispatch_iprop(
         store,
         &crate::kadm5::Kadm5AuthConfig::from_acl(acl.clone()),
         None,
-        actor,
+        &who,
         proc,
         args,
     )

@@ -313,10 +313,17 @@ fn rpcsec_dispatch(
         rpc_log_bad_proc(iprop, addr, proc);
         return rpc_reply_accepted_verf(xid, Some(mic), PROC_UNAVAIL);
     }
+    let service = kadm5_service_name(&gd.ctx);
+    let who = Caller {
+        client: &actor,
+        service: &service,
+        addr,
+        flavor: FLAVOR_GSS,
+    };
     let result = Zeroizing::new(
         match kadm5_or_iprop(
             ctx,
-            &actor,
+            &who,
             proc,
             kadm_args,
             gd.ctx.ticket_is_initial(),
@@ -334,13 +341,6 @@ fn rpcsec_dispatch(
         },
     );
     if !iprop {
-        let service = kadm5_service_name(&gd.ctx);
-        let who = Caller {
-            client: &actor,
-            service: &service,
-            addr,
-            flavor: FLAVOR_GSS,
-        };
         kadm5_log_op(proc, kadm_args, &who, &result);
     }
     match gd.svc {
@@ -718,11 +718,18 @@ pub(super) fn agss_dispatch(
     let Some(actor) = gctx.client.clone() else {
         return rpc_reply_weakauth(xid);
     };
+    let service = kadm5_service_name(gctx);
+    let who = Caller {
+        client: &actor,
+        service: &service,
+        addr,
+        flavor: FLAVOR_AUTH_GSSAPI,
+    };
     // Result can carry keys.
     let result = Zeroizing::new(
         match kadm5_or_iprop(
             ctx,
-            &actor,
+            &who,
             proc,
             kadm_args,
             gctx.ticket_is_initial(),
@@ -739,13 +746,6 @@ pub(super) fn agss_dispatch(
             Err(_) => return rpc_reply_agss_status(xid, reply_verf, SYSTEM_ERR),
         },
     );
-    let service = kadm5_service_name(gctx);
-    let who = Caller {
-        client: &actor,
-        service: &service,
-        addr,
-        flavor: FLAVOR_AUTH_GSSAPI,
-    };
     kadm5_log_op(proc, kadm_args, &who, &result);
     agss_result(gctx, seq, xid, reply_verf, &result).unwrap_or_else(|| {
         crate::kadmind::admin_syslog(

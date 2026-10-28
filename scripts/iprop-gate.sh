@@ -148,6 +148,13 @@ if echo "$DENY" | grep -q 'fullresync_status=0'; then
     echo "Rust full-resync deny granted: $DENY" >&2
     exit 1
 fi
+# ipropd_svc.c:311-320: a refused full resync is a LOG_UNAUTH line.
+# MIT's, in its cell below, is the oracle.
+unauth_line() { sed -n 's/^.*(Notice): \(Unauthorized request: iprop_[a-z_]*_1, client=[^,]*, service=[^,]*\), addr=.*$/\1/p' | head -1; }
+RUST_FR_UNAUTH="$(docker exec "$NAME" cat /tmp/kadmind.log | unauth_line)"
+echo "rust: $RUST_FR_UNAUTH"
+[ "$RUST_FR_UNAUTH" = 'Unauthorized request: iprop_full_resync_1, client=user@KERBER.TEST, service=kiprop/testhost.kerber.test@KERBER.TEST' ] ||
+    die "the Rust kadmind's full-resync deny is not MIT's LOG_UNAUTH line"
 
 docker exec "$NAME" sh -c 'kdb5_util destroy -f >/dev/null 2>&1 || true'
 docker exec "$NAME" kdb5_util create -s -P masterpassword
@@ -181,20 +188,22 @@ KPROPD_DENY="$(docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf -e KRB5_KTNAME=/t
     "$NAME" sh -c 'timeout 25 kpropd -S -d -A testhost.kerber.test -a /tmp/kpropd.acl -P 754 -s /tmp/iprop.keytab -f /tmp/from_kprop.dump -p "$(command -v kdb5_util)" 2>&1' || true)"
 echo "$KPROPD_DENY"
 echo "$KPROPD_DENY" | grep -F 'get_updates permission denied'
-retry_until --log "$NAME" /tmp/kadmind-nop.log -- 200 'ACL denied in /tmp/kadmind-nop.log' \
-    docker exec "$NAME" grep -qF '"op":"propagate","error":"ACL denied"' /tmp/kadmind-nop.log
-docker exec "$NAME" grep -F '"op":"propagate","error":"ACL denied"' /tmp/kadmind-nop.log
+retry_until --log "$NAME" /tmp/kadmind-nop.log -- 200 'LOG_UNAUTH in /tmp/kadmind-nop.log' \
+    docker exec "$NAME" grep -qF '(Notice): Unauthorized request: iprop_get_updates_1, client=kiprop/testhost.kerber.test@KERBER.TEST, service=' /tmp/kadmind-nop.log
+docker exec "$NAME" grep -F 'Unauthorized request: iprop_get_updates_1' /tmp/kadmind-nop.log
 docker exec "$NAME" sh -c 'cat >/tmp/kadm5.acl <<EOF
 admin@KERBER.TEST *
 kiprop/*@KERBER.TEST p
 EOF'
 kill_comm krb5-kadmind
+# The rpc.flavor event below is debug; a test-hooks build reads RUST_LOG.
 docker exec -d \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
     -e KRB5_MASTER_PASSWORD=masterpassword \
     -e KRB5_ACL_FILE=/tmp/kadm5.acl \
     -e KRB5_KDC_PROFILE=/tmp/rust-iprop-kdc.conf \
+    -e RUST_LOG=krb5_kdc=info,krb5_admin=debug \
     "$NAME" sh -c '/tmp/krb5-kadmind 0.0.0.0:749 >/tmp/kadmind.log 2>&1'
 ok=0
 for _ in $(seq 1 40); do
@@ -377,6 +386,11 @@ if [ "$FR" -gt 1 ]; then
     exit 1
 fi
 echo "$DELTA_LOG" | grep -qi 'Got incremental updates'
+# ipropd_svc.c:202-230: each GET_UPDATES is a Request line; MIT's kadmind writes the same in leg B.
+REQ_RE='\(Notice\): Request: iprop_get_updates_1, UPDATE_OK; Incoming SerialNo=[0-9]+; Outgoing SerialNo=[0-9]+, success, client=kiprop/testhost.kerber.test@KERBER.TEST, service=kiprop/testhost.kerber.test@KERBER.TEST, addr='
+docker exec "$NAME" grep -E "$REQ_RE" /tmp/kadmind.log | tail -1
+docker exec "$NAME" grep -qE "$REQ_RE" /tmp/kadmind.log ||
+    die "the Rust kadmind wrote no MIT Request line for GET_UPDATES"
 if [ "$ok" != 1 ]; then
     kadmin_q_try mit_kadmin_local "$NAME" -- -q 'getprinc extra' 2>&1
     kadmin_q_try mit_kadmin_local "$NAME" -- -q 'getprinc user' 2>&1
@@ -510,6 +524,8 @@ docker exec "$NAME" sh -c 'cat >/tmp/kdc.conf <<EOF
         iprop_master_ulogsize = 1000
         iprop_slave_poll = 10
     }
+[logging]
+    admin_server = FILE:/tmp/mit-admin.log
 EOF'
 docker exec "$NAME" sh -c 'kdb5_util destroy -f >/dev/null 2>&1 || true'
 docker exec -e KRB5_KDC_PROFILE=/tmp/kdc.conf "$NAME" kdb5_util create -s -P masterpassword
@@ -576,6 +592,11 @@ if echo "$MIT_DENY" | grep -q 'fullresync_status=0'; then
     echo "MIT full-resync deny granted: $MIT_DENY" >&2
     exit 1
 fi
+MIT_FR_UNAUTH="$(docker exec "$NAME" cat /tmp/mit-admin.log | unauth_line)"
+echo "mit:  $MIT_FR_UNAUTH"
+echo "rust: $RUST_FR_UNAUTH"
+[ -n "$MIT_FR_UNAUTH" ] && [ "$MIT_FR_UNAUTH" = "$RUST_FR_UNAUTH" ] ||
+    die "MIT's full-resync LOG_UNAUTH line is not the Rust kadmind's"
 
 echo "==== mutate MIT master: extra2 + setstr ===="
 # extra2's flags, lifetimes and expirations are set before the setstr, whose MIT update
@@ -602,6 +623,9 @@ PULL="$(docker exec \
 echo "$PULL"
 echo "==== mit-kadmind.log ===="
 docker exec "$NAME" cat /tmp/mit-kadmind.log 2>/dev/null || true
+docker exec "$NAME" grep -E "$REQ_RE" /tmp/mit-admin.log | tail -1
+docker exec "$NAME" grep -qE "$REQ_RE" /tmp/mit-admin.log ||
+    die "MIT's kadmind wrote no Request line for GET_UPDATES"
 echo "$PULL" | grep -q 'iprop pull ok'
 SNO2="$(echo "$PULL" | sed -n 's/.*iprop pull ok last_sno=\([0-9]*\).*/\1/p' | tail -1)"
 SEC2="$(echo "$PULL" | sed -n 's/.*last_time=\([0-9]*\) \([0-9]*\).*/\1/p' | tail -1)"

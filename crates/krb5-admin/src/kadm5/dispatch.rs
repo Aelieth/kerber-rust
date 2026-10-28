@@ -21,6 +21,7 @@ use super::codes::{
 };
 use super::glob::{glob_pattern_ok, policies_matching, principals_matching};
 use super::iprop::dispatch_iprop;
+use super::log::Caller;
 use super::policy::{
     apply_policy_floors, encode_policy, encode_pols, merge_policy, parse_gpols, parse_policy_arg,
     parse_policy_name, policy_floor_err, policy_mask_err, policy_name_err,
@@ -39,7 +40,7 @@ use crate::Error;
 
 pub(super) fn kadm5_or_iprop(
     ctx: RpcCtx<'_>,
-    actor: &str,
+    who: &Caller<'_>,
     proc: u32,
     args: &[u8],
     initial: bool,
@@ -66,12 +67,12 @@ pub(super) fn kadm5_or_iprop(
             store,
             authcfg,
             iprop_resync,
-            actor,
+            who,
             proc,
             args,
         ));
     }
-    dispatch_kadm5_ticket(store, authcfg, actor, proc, args, initial, changepw)
+    dispatch_kadm5_ticket(store, authcfg, who.client, proc, args, initial, changepw)
 }
 
 fn write_store(
