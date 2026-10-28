@@ -718,6 +718,10 @@ REN_U3="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" -- -p scoped@KERBER.TEST -w scoped-secret -q 'renprinc -force user2 user3' 2>&1 || true)"
 echo "$REN_U3"
 echo "$REN_U3" | grep -qiE 'renamed to "user3@KERBER.TEST"|Principal "user2@KERBER.TEST" renamed'
+DEL_U3="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p scoped@KERBER.TEST -w scoped-secret -q 'delprinc -force user3' 2>&1 || true)"
+echo "$DEL_U3"
+echo "$DEL_U3" | grep -F 'Principal "user3@KERBER.TEST" deleted.'
 ADD_U9="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" -- -p restricted@KERBER.TEST -w restricted-secret -q 'addprinc -pw x -policy short8 user9' 2>&1 || true)"
 echo "$ADD_U9"
