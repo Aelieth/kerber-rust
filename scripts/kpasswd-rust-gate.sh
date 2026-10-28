@@ -126,7 +126,7 @@ for run in 1 2; do
     fi
     echo "$KVNO" | grep -F 'KDC policy rejects request while getting credentials for kadmin/admin@KERBER.TEST'
 done
-docker exec "$NAME" grep -F 'TGT BASED NOT ALLOWED' /tmp/kdc.log
+docker exec "$NAME" grep -F 'TGT BASED NOT ALLOWED' /tmp/kdc.log | grep -E '"code":12[,}]'
 
 echo "==== MIT kpasswd once ===="
 set +e

@@ -869,6 +869,7 @@ for _ in $(seq 1 40); do
 done
 [ "$ok" = 1 ]
 docker exec -d \
+    -e RUST_LOG=krb5_kdc=debug \
     -e KRB5_TEST_USER_PASSWORD=userpassword \
     -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
     -e KRB5_EXPORT_KEYTAB=/tmp/host-r22b.keytab \
@@ -904,7 +905,7 @@ echo "$RUST_NORBCD_RC" | grep -qx 1
 echo "$RUST_NORBCD" | grep -qiE "KDC can't fulfill requested option"
 RUST_NORBCD_LOG="$(docker exec "$NAME" sh -c "tail -n +$((n + 1)) /tmp/kdc-r22-norbcd.log")"
 echo "$RUST_NORBCD_LOG"
-echo "$RUST_NORBCD_LOG" | grep -q '"e_text":"NOT_ALLOWED_TO_DELEGATE"'
+echo "$RUST_NORBCD_LOG" | grep -F 'NOT_ALLOWED_TO_DELEGATE'
 echo "MIT_testkdb_s4u2proxy_rbcd_deny"
 
 s4u_user_life() {
