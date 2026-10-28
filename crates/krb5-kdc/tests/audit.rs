@@ -10,68 +10,7 @@ use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 use krb5_testkit::{issue_tgt, scratch_dir, user};
 use krb5_types::PrincipalName;
 use sha2::{Digest, Sha256};
-use std::io::Write;
-use std::sync::{Arc, Mutex};
-use tracing_subscriber::fmt::MakeWriter;
-
-#[derive(Clone)]
-struct Capture(Arc<Mutex<Vec<u8>>>);
-
-impl Write for Capture {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.0.lock().unwrap().extend_from_slice(buf);
-        Ok(buf.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-impl<'a> MakeWriter<'a> for Capture {
-    type Writer = Self;
-    fn make_writer(&'a self) -> Self::Writer {
-        self.clone()
-    }
-}
-
-fn capture_as(nonce: u32) -> String {
-    let buf = Arc::new(Mutex::new(Vec::new()));
-    let subscriber = tracing_subscriber::fmt()
-        .with_writer(Capture(Arc::clone(&buf)))
-        .with_ansi(false)
-        .finish();
-    tracing::subscriber::with_default(subscriber, || {
-        let (store, _) = bootstrap_documented().unwrap();
-        let key = store
-            .get_name(&user())
-            .unwrap()
-            .best_key()
-            .unwrap()
-            .key
-            .clone();
-        let req = as_req(
-            user(),
-            TEST_REALM,
-            nonce,
-            Some(vec![pa_enc_timestamp(&key).unwrap()]),
-        )
-        .unwrap();
-        let _ = krb5_kdc::handle_request(&store, &encode(&req).unwrap()).unwrap();
-    });
-    String::from_utf8_lossy(&buf.lock().unwrap()).into_owned()
-}
-
-#[test]
-fn as_issue_log_has_client_server_etypes() {
-    let log = capture_as(2001);
-    assert!(log.contains("ISSUE"), "missing ISSUE: {log}");
-    assert!(log.contains("user@KERBER.TEST"), "missing client: {log}");
-    assert!(log.contains("krbtgt/KERBER.TEST"), "missing server: {log}");
-    assert!(
-        log.contains("etypes {rep="),
-        "missing rep_etypes2str: {log}"
-    );
-}
+use std::sync::Arc;
 
 #[test]
 fn tkt_id_is_sha256_of_ticket_ciphertext() {

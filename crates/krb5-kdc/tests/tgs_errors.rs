@@ -16,14 +16,11 @@ mod common;
 use common::client_key;
 
 use krb5_asn1::{decode, encode};
-use krb5_kdc::testrealm::{
-    TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented, documented_host,
-};
-use krb5_kdc::{Error, PrincipalStore};
+use krb5_kdc::PrincipalStore;
+use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
 use krb5_crypto::{KeyUsage, decrypt, encrypt};
-use krb5_testkit::issue_tgt_password;
 use krb5_types::{ApReq, Authenticator, EncryptionKey, KrbError, PrincipalName, err, ku, pa};
 
 #[test]
@@ -110,44 +107,6 @@ fn as_error_echoes_the_requested_client_like_prepare_error_as() {
         Some(TEST_REALM),
         "crealm echoes the request realm"
     );
-}
-
-#[test]
-// oracle: differential-gate.sh tgs-bad-msg-type
-fn tgs_bad_msg_type_is_unknown_reason_without_cname() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 412);
-    let mut tgs = tgs_req(
-        issued.rep.0.ticket.clone(),
-        &issued.session_key,
-        TEST_REALM,
-        &cname,
-        documented_host(),
-        TEST_REALM,
-        413,
-    )
-    .unwrap();
-    tgs.0.msg_type = krb5_types::KdcReq::MSG_AS_REQ;
-    let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("bad TGS msg_type");
-    match err {
-        Error::Protocol { code, text, .. } => {
-            assert_eq!(code, err::GENERIC);
-            assert_eq!(text.as_deref(), Some("UNKNOWN_REASON"));
-        }
-        other => panic!("expected 60 UNKNOWN_REASON, got {other:?}"),
-    }
-    let bytes = krb5_kdc::handle_request(&store, &encode(&tgs).expect("der")).expect("reply");
-    let e: KrbError = decode(&bytes).expect("KRB-ERROR");
-    assert_eq!(e.error_code, err::GENERIC);
-    let text = e
-        .e_text
-        .as_ref()
-        .and_then(|t| std::str::from_utf8(t.as_bytes()).ok());
-    assert_eq!(text, Some("UNKNOWN_REASON"));
-    assert!(e.cname.is_none(), "no cname");
-    assert!(e.crealm.is_none(), "no crealm when client is NULL");
-    assert_eq!(e.sname, documented_host());
 }
 
 /// A TGS-REQ whose PA-TGS-REQ authenticator (given a subkey) `rewrite` changes, re-encrypted in

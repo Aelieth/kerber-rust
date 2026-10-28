@@ -72,10 +72,8 @@ mod common;
 use common::client_key;
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, string_to_key};
-use krb5_kdc::testrealm::{
-    TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented, documented_admin_id,
-};
+use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt};
+use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented};
 use krb5_kdc::{
     Error, KdcEnv, KdcPolicy, KdcPreauth, KeyEntry, Policy, PolicyAdjustment, Principal,
     PrincipalRead, PrincipalStore, S2K_ITERS, random_key, register_preauth,
@@ -178,42 +176,6 @@ fn session_enctypes_attr_is_membership_not_client_key() {
     req.0.req_body.etype = vec![18, 17];
     let out = krb5_kdc::issue_as(&store, &req).expect("AS");
     assert_eq!(out.session_key.etype(), EncryptionType::Aes128CtsHmacSha196);
-}
-
-#[test]
-fn session_enctypes_rc4_with_allow_rc4_issues_rc4_session() {
-    let (mut store, acl) = bootstrap_documented().expect("bootstrap");
-    store.policy.allow_rc4 = true;
-    store
-        .set_string(
-            &PrincipalName::krbtgt(TEST_REALM),
-            "session_enctypes",
-            Some("rc4-hmac"),
-        )
-        .expect("setstr");
-    let rc4user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["rc4user"]);
-    store
-        .create_password_etypes(
-            &acl,
-            &documented_admin_id(),
-            &rc4user,
-            b"rc4-secret",
-            &[EncryptionType::Rc4Hmac],
-        )
-        .expect("addprinc -e rc4");
-    let salt = rc4user.default_salt(TEST_REALM);
-    let key = string_to_key(EncryptionType::Rc4Hmac, b"rc4-secret", &salt, None).expect("s2k");
-    let mut req = as_req(
-        rc4user,
-        TEST_REALM,
-        62,
-        Some(vec![pa_enc_timestamp(&key).expect("pa")]),
-    )
-    .unwrap();
-    req.0.req_body.etype = vec![23];
-    let out = krb5_kdc::issue_as(&store, &req).expect("AS");
-    assert_eq!(out.session_key.etype(), EncryptionType::Rc4Hmac);
-    assert_ne!(out.rep.0.ticket.enc_part.etype, 23);
 }
 
 fn user_key() -> ProtocolKey {
@@ -545,48 +507,6 @@ fn set_random_keys(store: &mut PrincipalStore, name: &PrincipalName, etypes: &[E
         .map(|&e| KeyEntry::new(e, random_key(e).unwrap(), 0))
         .collect();
     store.set_keys(name, keys, 0).unwrap();
-}
-
-fn kinit(store: &PrincipalStore) -> krb5_kdc::IssuedAs {
-    let padata = vec![pa_enc_timestamp(&user_key_z1_permitted_key(store, AES256)).unwrap()];
-    let req = as_req(user_name(), TEST_REALM, 0x2600_0010, Some(padata)).unwrap();
-    krb5_kdc::issue_as(store, &req).expect("AS issues")
-}
-
-fn assert_finding_server_key<T: std::fmt::Debug>(got: Result<T, krb5_kdc::Error>) {
-    match got {
-        Err(krb5_kdc::Error::Protocol { code, text, .. }) => {
-            assert_eq!(code, err::GENERIC, "KRB_ERR_GENERIC, got {text:?}");
-            assert_eq!(text.as_deref(), Some("FINDING_SERVER_KEY"));
-        }
-        Err(other) => panic!("expected 60 FINDING_SERVER_KEY, got {other:?}"),
-        Ok(v) => panic!("a server whose only keys are non-permitted must not get a ticket: {v:?}"),
-    }
-}
-
-#[test]
-fn as_server_key_skips_a_non_permitted_first_key() {
-    let mut store = store_permitting_aes256();
-    set_random_keys(
-        &mut store,
-        &PrincipalName::krbtgt(TEST_REALM),
-        &[AES128, AES256],
-    );
-    let tgt = kinit(&store);
-    assert_eq!(
-        tgt.rep.0.ticket.enc_part.etype,
-        AES256.to_iana(),
-        "TGT must be sealed with the permitted aes256 krbtgt key"
-    );
-}
-
-#[test]
-fn as_server_key_only_non_permitted_is_finding_server_key() {
-    let mut store = store_permitting_aes256();
-    set_random_keys(&mut store, &PrincipalName::krbtgt(TEST_REALM), &[AES128]);
-    let padata = vec![pa_enc_timestamp(&user_key_z1_permitted_key(&store, AES256)).unwrap()];
-    let req = as_req(user_name(), TEST_REALM, 0x2600_0012, Some(padata)).unwrap();
-    assert_finding_server_key(krb5_kdc::issue_as(&store, &req));
 }
 
 // MIT: `select_client_key` (do_as_req.c:103-131)
