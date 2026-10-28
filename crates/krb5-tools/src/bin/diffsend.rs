@@ -436,7 +436,7 @@ fn expect_drop(cfg: &Cfg, case: &str, req: &[u8]) -> Result<(), String> {
 
 fn expect_tgs_rep(cfg: &Cfg, case: &str, req: &[u8]) -> Result<(), String> {
     let (rust, mit) = send_both(cfg, case, req)?;
-    let names = |leg: &str, raw: &[u8]| -> Result<[String; 4], String> {
+    let names = |leg: &str, raw: &[u8]| -> Result<[String; 6], String> {
         if raw.first() != Some(&0x6d) {
             return Err(format!(
                 "{case}: {leg} tag {:02x} want 0x6d",
@@ -449,12 +449,14 @@ fn expect_tgs_rep(cfg: &Cfg, case: &str, req: &[u8]) -> Result<(), String> {
             rep.cname.components_joined(),
             String::from_utf8_lossy(rep.ticket.realm.as_bytes()).into_owned(),
             rep.ticket.sname.components_joined(),
+            rep.cname.name_type.to_string(),
+            rep.ticket.sname.name_type.to_string(),
         ])
     };
     let (r, m) = (names("rust", &rust)?, names("mit", &mit)?);
     if r != m {
         return Err(format!(
-            "{case}: crealm, cname, ticket realm, sname rust={r:?} mit={m:?}"
+            "{case}: crealm, cname, ticket realm, sname, name types rust={r:?} mit={m:?}"
         ));
     }
     println!(
