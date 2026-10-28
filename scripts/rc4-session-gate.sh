@@ -173,6 +173,12 @@ MIT_KLIST="$(docker exec -e KRB5_CONFIG=/tmp/krb5-8888.conf "$NAME" klist -e -c 
 echo "$MIT_KLIST"
 echo "$MIT_KLIST" | grep -q 'arcfour-hmac' || die "MIT klist against rust: no arcfour skey"
 echo "tkt_etype_mit_vs_rust=$(tkt_etype_of "$MIT_KLIST")"
+# kdc_util.c:1040-1077: an rc4 session key, but the ticket stays under the krbtgt's own key.
+tkt_only() { sed 's/.*,[[:space:]]*//; s/[[:space:]]*$//' <<<"$1"; }
+TKT_MIT="$(tkt_only "$(tkt_etype_of "$MIT_SELF_KLIST")")"
+TKT_RUST="$(tkt_only "$(tkt_etype_of "$MIT_KLIST")")"
+case "$TKT_RUST" in *arcfour* | '') die "the Rust KDC's TGT enc-part is rc4 or missing: '$TKT_RUST'" ;; esac
+[ "$TKT_RUST" = "$TKT_MIT" ] || die "the Rust KDC's TGT enc-part is $TKT_RUST, MIT's is $TKT_MIT"
 set +e
 MIT_KVNO="$(docker exec \
     -e KRB5_CONFIG=/tmp/krb5-8888.conf \
@@ -207,6 +213,8 @@ RUST_KLIST="$(docker exec -e KRB5_CONFIG=/etc/krb5.conf "$NAME" /tmp/krb5-klist 
 echo "$RUST_KLIST"
 echo "$RUST_KLIST" | grep -q 'arcfour-hmac' || die "Rust klist against MIT: no arcfour skey"
 echo "tkt_etype_rust_vs_mit=$(tkt_etype_of "$RUST_KLIST")"
+[ "$(tkt_only "$(tkt_etype_of "$RUST_KLIST")")" = "$TKT_MIT" ] ||
+    die "Rust klist shows MIT's TGT enc-part unlike MIT's klist"
 set +e
 RUST_KVNO="$(docker exec \
     -e KRB5_CONFIG=/etc/krb5.conf \
