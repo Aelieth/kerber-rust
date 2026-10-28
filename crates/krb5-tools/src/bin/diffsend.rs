@@ -5386,7 +5386,7 @@ fn run() -> Result<(), String> {
     ra_cases(&cfg, realm, &user, &host)?;
     fa_cases(&cfg, realm, &user, &host)?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":178}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":188}}"#);
     Ok(())
 }
 
@@ -6464,6 +6464,130 @@ fn fa_cases(
         "fa-fast-bare-armored-req",
         &encode(&req).map_err(|e| e.to_string())?,
         err::GENERIC,
+    )?;
+    expect_fa(
+        cfg,
+        "fa-fast-cksum-crc32",
+        0x1000_031b,
+        user,
+        &good,
+        Some(&|w| w.req_checksum.cksumtype = 1),
+        err::GENERIC,
+    )?;
+    expect_fa(
+        cfg,
+        "fa-fast-cksum-md5-bytes",
+        0x1000_031c,
+        user,
+        &good,
+        Some(&|w| {
+            w.req_checksum.cksumtype = 7;
+            w.req_checksum.checksum = vec![0xff; 16].into();
+        }),
+        err::MODIFIED,
+    )?;
+    expect_fa(
+        cfg,
+        "fa-fast-cksum-md5-short",
+        0x1000_031d,
+        user,
+        &good,
+        Some(&|w| {
+            w.req_checksum.cksumtype = 7;
+            w.req_checksum.checksum = vec![0xff; 12].into();
+        }),
+        err::GENERIC,
+    )?;
+    expect_fa(
+        cfg,
+        "fa-fast-cksum-hmac-md5",
+        0x1000_031e,
+        user,
+        &good,
+        Some(&|w| {
+            w.req_checksum.cksumtype = -138;
+            w.req_checksum.checksum = vec![0xff; 16].into();
+        }),
+        err::MODIFIED,
+    )?;
+    let sess128 = random_session(EncryptionType::Aes128CtsHmacSha196)?;
+    let sub128 = random_session(EncryptionType::Aes128CtsHmacSha196)?;
+    let mut part128 = part.clone();
+    part128.key = EncryptionKey {
+        keytype: sess128.etype().to_iana(),
+        keyvalue: sess128.as_bytes().to_vec().into(),
+    };
+    let ap128 = build_fast_armor(tgt(&part128)?, &sess128, &crealm, user, Some(&sub128))
+        .map_err(|e| e.to_string())?;
+    let akey128 = armor_key(&sess128, Some(&sub128)).map_err(|e| e.to_string())?;
+    let mut req = as_req(user.clone(), realm, 0x1000_031f, None).map_err(|e| e.to_string())?;
+    attach_fast(&mut req, &ap128, &akey128, Vec::new()).map_err(|e| e.to_string())?;
+    fa_edit(&mut req, |w| {
+        w.req_checksum.cksumtype = 19;
+        w.req_checksum.checksum = vec![0xff; 16].into();
+    })?;
+    expect_error(
+        cfg,
+        "fa-fast-cksum-same-provider",
+        &encode(&req).map_err(|e| e.to_string())?,
+        err::MODIFIED,
+    )?;
+    expect_fa(
+        cfg,
+        "fa-fast-cksum-cross-enc",
+        0x1000_0322,
+        user,
+        &good,
+        Some(&|w| w.req_checksum.cksumtype = 15),
+        err::GENERIC,
+    )?;
+    expect_fa(
+        cfg,
+        "fa-fast-cksum-type-zero",
+        0x1000_0323,
+        user,
+        &good,
+        Some(&|w| w.req_checksum.cksumtype = 0),
+        err::POLICY,
+    )?;
+    let mut req = as_req(user.clone(), realm, 0x1000_0324, None).map_err(|e| e.to_string())?;
+    attach_fast(&mut req, &good, &akey, Vec::new()).map_err(|e| e.to_string())?;
+    let md5 =
+        krb5_crypto::unkeyed_checksum(7, &encode(&req.0.req_body).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+    fa_edit(&mut req, |w| {
+        w.req_checksum.cksumtype = 7;
+        w.req_checksum.checksum = md5.into();
+    })?;
+    expect_error(
+        cfg,
+        "fa-fast-cksum-md5-body",
+        &encode(&req).map_err(|e| e.to_string())?,
+        err::POLICY,
+    )?;
+    let mut req = as_req(user.clone(), realm, 0x1000_0325, None).map_err(|e| e.to_string())?;
+    attach_fast(&mut req, &good, &akey, Vec::new()).map_err(|e| e.to_string())?;
+    fa_edit(&mut req, |w| {
+        if let Some(a) = w.armor.as_mut() {
+            a.armor_type = 99;
+        }
+    })?;
+    expect_error_no_edata(
+        cfg,
+        "fa-armor-type-unknown",
+        &encode(&req).map_err(|e| e.to_string())?,
+        err::PREAUTH_FAILED,
+    )?;
+    let mut bit0 = krb5_types::fast::fast_options_none();
+    bit0.set(0, true);
+    let mut req = as_req(user.clone(), realm, 0x1000_0320, None).map_err(|e| e.to_string())?;
+    attach_fast_with_options(&mut req, &good, &akey, Vec::new(), &bit0)
+        .map_err(|e| e.to_string())?;
+    expect_error(
+        cfg,
+        "fa-fast-option-bit0",
+        &encode(&req).map_err(|e| e.to_string())?,
+        err::UNKNOWN_CRITICAL_FAST_OPTION,
     )?;
     let mut opts = krb5_types::fast::fast_options_none();
     opts.set(2, true);

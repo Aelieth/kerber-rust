@@ -114,7 +114,11 @@ is `proposed`. The listed live `diffsend` cases are `garbage-pdu`,
 `fa-armor-expired`, `fa-armor-skew`, `fa-armor-authenticator-key`,
 `fa-armor-host-ticket`, `fa-fast-req-key`, `fa-fast-req-short`,
 `fa-fast-cksum-type`, `fa-fast-cksum-size`, `fa-fast-bare-armored-req`,
-`fa-fast-critical-option`.
+`fa-fast-critical-option`,
+`fa-fast-cksum-crc32`, `fa-fast-cksum-md5-bytes`, `fa-fast-cksum-md5-short`,
+`fa-fast-cksum-hmac-md5`, `fa-fast-cksum-same-provider`,
+`fa-fast-option-bit0`, `fa-fast-cksum-cross-enc`, `fa-fast-cksum-type-zero`,
+`fa-fast-cksum-md5-body`, `fa-armor-type-unknown`.
 
 Wire `e_text` is the MIT **status word**. MIT log messages are not
 wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`

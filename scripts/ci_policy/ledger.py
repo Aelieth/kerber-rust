@@ -191,6 +191,16 @@ DIFFSEND_CASES = frozenset(
         "fa-fast-cksum-size",
         "fa-fast-bare-armored-req",
         "fa-fast-critical-option",
+        "fa-fast-cksum-crc32",
+        "fa-fast-cksum-md5-bytes",
+        "fa-fast-cksum-md5-short",
+        "fa-fast-cksum-hmac-md5",
+        "fa-fast-cksum-same-provider",
+        "fa-fast-option-bit0",
+        "fa-fast-cksum-cross-enc",
+        "fa-fast-cksum-type-zero",
+        "fa-fast-cksum-md5-body",
+        "fa-armor-type-unknown",
     }
 )
 _LEDGER_GATE = re.compile(r"(?:scripts/)?([A-Za-z0-9._-]+-gate(?:\.sh)?)")
