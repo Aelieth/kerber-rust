@@ -46,7 +46,7 @@ HINT='fastresp types=136,19,141,151,138,133,137 pa141=30318024{nonce:36}a2093007
 start_kdc() {
     docker exec "$NAME" sh -c ': >"$1/kdc.log"' sh "$OTP_DIR"
     docker exec -d -e KRB5_CONFIG="$OTP_DIR/krb5.conf" -e KRB5_KDC_PROFILE="$OTP_DIR/kdc.conf" \
-        -e KERBER_EXAMPLE_TOTP_SEEDS="$OTP_DIR/seeds" \
+        -e KERBER_EXAMPLE_TOTP_SEEDS="$OTP_DIR/seeds" -e KERBER_EXAMPLE_TOTP_ONLY=1 \
         "$NAME" sh -c 'exec /tmp/krb5-otp-kdc -n >"$1/kdc.out" 2>&1' sh "$OTP_DIR"
     require_log "$NAME" "$OTP_DIR/kdc.log" 'commencing operation' "krb5-otp-kdc"
 }
@@ -57,7 +57,7 @@ totp() {
 }
 
 echo "==== Rust realm OTP.TEST: [otp] totp with indicator otpind, users with the totp verifier, a require_auth service ===="
-printf 'otpmit %s\notprust %s\n' "$SEED" "$SEED" | docker exec -i "$NAME" sh -c 'cat >"$1/seeds"' sh "$OTP_DIR"
+printf 'otpmit@OTP.TEST %s\notprust@OTP.TEST %s\n' "$SEED" "$SEED" | docker exec -i "$NAME" sh -c 'cat >"$1/seeds"' sh "$OTP_DIR"
 otp_write_confs "[otp]
     totp = {
         indicator = otpind
