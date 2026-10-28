@@ -261,6 +261,11 @@ if echo "$MIT_Z1B_WRONG$RUST_Z1B_WRONG" | grep -q 'Enter new password'; then
     echo "a kinit prompted for a new password before the changepw AS" >&2
     exit 1
 fi
+# The tools' own lines; a test-hooks build adds JSON trace lines, which may carry the raw text.
+if printf '%s\n' "$MIT_Z1B_WRONG" "$RUST_Z1B_WRONG" | grep -v '^{"timestamp"' | grep -q 'integrity check failed'; then
+    echo "a kinit printed the raw integrity-check text, not Password incorrect" >&2
+    exit 1
+fi
 mit_kadmin_local "$NAME_MIT" -- -q 'getprinc z1brust' | grep -qE '^Key: vno 1, ' || { echo "Rust wrong-password run changed the key" >&2; exit 1; }
 echo "---- right password: changepw AS, then the prompts, the change and a TGT ----"
 MIT_Z1B_OK="$(docker exec "$NAME_MIT" sh -c 'printf "exp-old\nexp-new\nexp-new\n" | kinit -c /tmp/cc_z1b_mit_ok z1bmit@KERBER.TEST' 2>&1)" \
