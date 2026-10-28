@@ -139,7 +139,7 @@ echo "$KLIST2E" | grep -F 'aes256-cts-hmac-sha384-192'
 echo "==== Rust kinit --fast -S host (TGS strengthen-key) ===="
 docker exec "$NAME" sh -c 'cat /dev/null > /tmp/mit-kdc.trace' || true
 set +e
-OUT3="$(docker exec -e KRB5_PASSWORD=userpassword "$NAME" \
+OUT3="$(docker exec -e RUST_LOG=krb5_protocol=debug -e KRB5_PASSWORD=userpassword "$NAME" \
     /tmp/krb5-kinit --fast --armor-ccache /tmp/krb5cc_armor \
     -c /tmp/krb5cc_fast_tgs -S host/testhost.kerber.test user@KERBER.TEST 2>&1)"
 rc3=$?
@@ -428,7 +428,8 @@ if ! docker exec -e KRB5_CONFIG=/tmp/rust-krb5.conf -e KRB5_PASSWORD=userpasswor
     exit 1
 fi
 set +e
-RUST_TGS="$(docker exec -e KRB5_CONFIG=/tmp/rust-krb5.conf -e KRB5_PASSWORD=userpassword "$NAME" \
+RUST_TGS="$(docker exec -e RUST_LOG=krb5_protocol=debug \
+    -e KRB5_CONFIG=/tmp/rust-krb5.conf -e KRB5_PASSWORD=userpassword "$NAME" \
     /tmp/krb5-kinit --fast --armor-ccache /tmp/rust-armor.cc \
     -c /tmp/rust-fast-tgs.cc -S host/testhost.kerber.test user@KERBER.TEST 2>&1)"
 rtrc=$?

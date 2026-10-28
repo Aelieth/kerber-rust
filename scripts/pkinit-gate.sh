@@ -38,6 +38,7 @@ docker exec "$NAME" sh -c 'cat > /tmp/rust-kdc.conf <<EOF
     json = STDOUT
 EOF'
 docker exec -d \
+    -e RUST_LOG=krb5_kdc=debug,krb5_crypto=debug,krb5_protocol=debug \
     -e KRB5_TEST_USER_PASSWORD=userpassword \
     -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
     -e KRB5_KDC_DB=/tmp/rust.db \

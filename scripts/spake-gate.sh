@@ -25,6 +25,7 @@ shell_container
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
 docker exec "$NAME" chmod +x /tmp/krb5-kdc
 docker exec -d \
+    -e RUST_LOG=krb5_kdc=debug \
     -e KRB5_TEST_USER_PASSWORD=userpassword \
     -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
     "$NAME" sh -c '/tmp/krb5-kdc --test-realm 127.0.0.1:88 >/tmp/kdc.log 2>&1 || /tmp/krb5-kdc --test-realm 127.0.0.1:8888 >/tmp/kdc.log 2>&1'
@@ -118,6 +119,7 @@ docker exec "$NAME" sh -c "cat >/tmp/spake-ed25519-kdc.conf <<'EOF'
 EOF
 : >/tmp/kdc.log"
 docker exec -d \
+    -e RUST_LOG=krb5_kdc=debug \
     -e KRB5_TEST_USER_PASSWORD=userpassword \
     -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
     -e KRB5_KDC_PROFILE=/tmp/spake-ed25519-kdc.conf \

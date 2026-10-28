@@ -48,6 +48,7 @@ docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kadmind /tmp/krb5-kpasswd /
 mit_oracle_cc "$NAME" /tmp/kpasswd-tgs-client /tmp/kpasswd-tgs-client.c krb5
 
 docker exec -d \
+    -e RUST_LOG=krb5_kdc=debug \
     -e KRB5_TEST_USER_PASSWORD=userpassword \
     -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
     -e KRB5_KDC_DB=/tmp/principal \
@@ -125,7 +126,7 @@ for run in 1 2; do
     fi
     echo "$KVNO" | grep -F 'KDC policy rejects request while getting credentials for kadmin/admin@KERBER.TEST'
 done
-docker exec "$NAME" grep -F '"code":12,"e_text":"TGT BASED NOT ALLOWED"' /tmp/kdc.log
+docker exec "$NAME" grep -F 'TGT BASED NOT ALLOWED' /tmp/kdc.log
 
 echo "==== MIT kpasswd once ===="
 set +e

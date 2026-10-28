@@ -617,9 +617,14 @@ mod gate {
     use krb5_protocol::KdcAddr;
 
     pub(super) fn init_logging() {
+        let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+            tracing_subscriber::EnvFilter::new(
+                "krb5_crypto=info,krb5_asn1=info,krb5_protocol=info,krb5_client=info",
+            )
+        });
         let _ = tracing_subscriber::fmt()
             .json()
-            .with_env_filter("krb5_crypto=info,krb5_asn1=info,krb5_protocol=info,krb5_client=info")
+            .with_env_filter(filter)
             .try_init();
     }
 

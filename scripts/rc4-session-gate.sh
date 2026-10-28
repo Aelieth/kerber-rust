@@ -119,6 +119,7 @@ docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-pac-extract" "$NAME":/tmp/krb5
 docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kadmin-local /tmp/krb5-kinit /tmp/krb5-kvno /tmp/krb5-klist /tmp/krb5-forge-tgt /tmp/krb5-pac-extract
 
 docker exec -d \
+    -e RUST_LOG=krb5_kdc=debug,krb5_crypto=debug \
     -e KRB5_TEST_USER_PASSWORD=userpassword \
     -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
     -e KRB5_KDC_DB=/tmp/rust.db \
