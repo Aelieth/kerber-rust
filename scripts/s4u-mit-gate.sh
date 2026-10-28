@@ -1275,8 +1275,11 @@ docker exec -e KRB5_CONFIG=/tmp/test-krb5-xrealm.conf \
 docker exec -e KRB5_CONFIG=/tmp/test-krb5-xrealm.conf -e KRB5CCNAME=FILE:/tmp/krb5cc_mit_xrealm \
     "$NAME" kvno -C -u -U user -P host/rbcd.other.test@KERBER.TEST
 MIT_XR="$(docker exec "$NAME" /tmp/krb5-pac-extract --keytab /tmp/test-xrealm-rbcd.kt \
-    --ccache /tmp/krb5cc_mit_xrealm --last --print-types --print-delegation)"
+    --ccache /tmp/krb5cc_mit_xrealm --last --print-types --print-delegation --print-client-info)"
 echo "$MIT_XR"
+MIT_XR_CLIENT="$(grep -E '^(ticket_client|client_info_name)=' <<<"$MIT_XR")"
+grep -qx 'ticket_client=user@KERBER.TEST' <<<"$MIT_XR_CLIENT" ||
+    die "MIT xrealm RBCD: the ticket's client is not user@KERBER.TEST"
 echo "$MIT_XR" | grep -qE 'pac_types=.*\b11\b'
 echo "$MIT_XR" | grep -q 'proxy_target=host/rbcd.other.test'
 echo "$MIT_XR" | grep -q 'transited_services=host/testhost.kerber.test@KERBER.TEST'
@@ -1411,8 +1414,10 @@ docker exec -e KRB5_CONFIG=/tmp/rust-krb5-xrealm.conf \
 docker exec -e KRB5_CONFIG=/tmp/rust-krb5-xrealm.conf -e KRB5CCNAME=FILE:/tmp/krb5cc_rust_xrealm \
     "$NAME" kvno -C -u -U user -P host/rbcd.other.test@KERBER.TEST
 RUST_XR="$(docker exec "$NAME" /tmp/krb5-pac-extract --keytab /tmp/rust-xrealm-rbcd.kt \
-    --ccache /tmp/krb5cc_rust_xrealm --last --print-types --print-delegation)"
+    --ccache /tmp/krb5cc_rust_xrealm --last --print-types --print-delegation --print-client-info)"
 echo "$RUST_XR"
+[ "$(grep -E '^(ticket_client|client_info_name)=' <<<"$RUST_XR")" = "$MIT_XR_CLIENT" ] ||
+    die "Rust xrealm RBCD: ticket client or PAC client info differs from MIT's"
 echo "$RUST_XR" | grep -qE 'pac_types=.*\b11\b'
 echo "$RUST_XR" | grep -q 'proxy_target=host/rbcd.other.test'
 echo "$RUST_XR" | grep -q 'transited_services=host/testhost.kerber.test@KERBER.TEST'

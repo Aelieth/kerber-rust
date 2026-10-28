@@ -36,6 +36,7 @@ fn main() -> ExitCode {
     let mut print_ad_types = false;
     let mut print_tgt = false;
     let mut print_delegation = false;
+    let mut print_client_info = false;
     let mut last_host = false;
     let mut verify_privsvr = None;
     let mut i = 0usize;
@@ -101,6 +102,10 @@ fn main() -> ExitCode {
                 print_delegation = true;
                 i += 1;
             }
+            "--print-client-info" => {
+                print_client_info = true;
+                i += 1;
+            }
             "--last" => {
                 last_host = true;
                 i += 1;
@@ -115,7 +120,8 @@ fn main() -> ExitCode {
                      [--enc-tkt-out <der>] [--krbtgt-keytab <kt>] [--keys-out <txt>] \
                      [--print-rid] [--print-transited] [--print-types] [--print-layout] \
                      [--print-ad-types] [--tgt] [--server <name[@realm]>] \
-                     [--print-delegation] [--last] [--verify-privsvr <enctype>]"
+                     [--print-delegation] [--print-client-info] [--last] \
+                     [--verify-privsvr <enctype>]"
                 );
                 return ExitCode::from(2);
             }
@@ -133,6 +139,7 @@ fn main() -> ExitCode {
         && !print_layout
         && !print_ad_types
         && !print_delegation
+        && !print_client_info
         && verify_privsvr.is_none()
     {
         eprintln!("usage: krb5-pac-extract --keytab <kt> --ccache <cc> --out <pac>");
@@ -229,6 +236,7 @@ fn main() -> ExitCode {
                 && !print_types
                 && !print_layout
                 && !print_delegation
+                && !print_client_info
                 && verify_privsvr.is_none()
             {
                 return ExitCode::SUCCESS;
@@ -254,6 +262,7 @@ fn main() -> ExitCode {
                 && !print_types
                 && !print_layout
                 && !print_delegation
+                && !print_client_info
                 && verify_privsvr.is_none()
             {
                 return ExitCode::SUCCESS;
@@ -265,13 +274,14 @@ fn main() -> ExitCode {
                 && !print_types
                 && !print_layout
                 && !print_delegation
+                && !print_client_info
                 && verify_privsvr.is_none()
             {
                 return ExitCode::SUCCESS;
             }
             continue;
         };
-        if print_types || print_layout || print_delegation {
+        if print_types || print_layout || print_delegation || print_client_info {
             match krb5_types::pac::Pac::parse(&pac) {
                 Ok(parsed) => {
                     if print_types {
@@ -294,6 +304,23 @@ fn main() -> ExitCode {
                         println!("pac_layout={layout}");
                         println!("pac_len={}", pac.len());
                         println!("ticket_len={}", cred.ticket.len());
+                    }
+                    if print_client_info {
+                        let Some((_, name)) = parsed
+                            .unique_buffer(krb5_types::pac::PAC_CLIENT_INFO)
+                            .ok()
+                            .flatten()
+                            .and_then(krb5_types::pac::parse_client_info)
+                        else {
+                            eprintln!("krb5-pac-extract: no PAC_CLIENT_INFO");
+                            return ExitCode::from(1);
+                        };
+                        println!(
+                            "ticket_client={}@{}",
+                            part.cname.components_joined(),
+                            String::from_utf8_lossy(part.crealm.as_bytes())
+                        );
+                        println!("client_info_name={name}");
                     }
                     if print_delegation {
                         let Some(buf) = parsed
