@@ -46,6 +46,7 @@ any other `###` heading.
 - **kdc.** A bounded worker pool runs each OTP verifier under `[otp] timeout`. A hang, panic, late answer or full queue is 24, counted, so one cannot stall the KDC.
 - **admin.** kadmind assembles each RPC record without blocking and closes one stalled past 35 s; at the cap an unauthenticated connection is dropped first.
 - **kdc.** FAST armor gets MIT's `krb5_rd_req` checks in order: a client other than the ticket's, or an unchecked transit, is refused; codes and most log lines are MIT's.
+- **kdc.** A transited hop naming the server's own realm is refused, and a TGS ticket's unchecked transited list is checked first, as MIT's `krb5_rd_req` does.
 
 ### Added
 

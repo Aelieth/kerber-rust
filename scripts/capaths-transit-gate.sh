@@ -351,6 +351,46 @@ forge_rust_lineage() {
         --key-hex "${XR_KEY}"
 }
 
+# A hop naming C.TEST itself: MIT's check_realm_in_list takes only A.TEST and B.TEST. With
+# TRANSITED-POLICY-CHECKED kept, the KDC's check refuses (BAD_TRANSIT); cleared, rd_req's does.
+forge_transit() {
+    local in_cc="$1"
+    local out_cc="$2"
+    shift 2
+    docker exec "$NAME" /tmp/krb5-forge-tgt \
+        --ccache "$in_cc" --out "$out_cc" --claim-realm B.TEST \
+        --tgt krbtgt/C.TEST --transited C.TEST "$@"
+}
+
+expect_transit_refused() {
+    local label="$1"
+    local cc="$2"
+    local klog="$3"
+    local status="$4"
+    local text="$5"
+    local n
+    n="$(docker exec "$NAME" sh -c "wc -l < ${klog}" | tr -d '[:space:]')"
+    set +e
+    local out rc
+    out="$(docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" \
+        /tmp/krb5-kvno --body-realm C.TEST -c "$cc" 127.0.0.1:90 host/svc.c.test@C.TEST 2>&1)"
+    rc=$?
+    set -e
+    echo "$out"
+    if [ "$rc" -eq 0 ] || ! grep -qF "$text" <<<"$out"; then
+        echo "$label: a transited C.TEST must be refused with: $text" >&2
+        docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog}" >&2 || true
+        exit 1
+    fi
+    if ! docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog} | grep -q ${status}"; then
+        echo "$label: new lines of ${klog} missing ${status}" >&2
+        docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog}" >&2 || true
+        exit 1
+    fi
+    echo "$label new ${klog} lines (from $((n + 1))):"
+    docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog}" || true
+}
+
 expect_get_local_tgt() {
     local label="$1"
     local cc="$2"
@@ -597,6 +637,17 @@ echo "==== MIT C lineage local user on foreign TGT is INVALID LINEAGE ===="
 seed_c_tgt /tmp/krb5cc_mit_lineage
 forge_mit_lineage /tmp/krb5cc_mit_lineage /tmp/krb5cc_mit_lineage_out
 expect_lineage "MIT lineage" /tmp/krb5cc_mit_lineage_out /tmp/mit-c.log
+
+echo "==== MIT C refuses a transited list naming C.TEST ===="
+seed_c_tgt /tmp/krb5cc_mit_transit
+forge_transit /tmp/krb5cc_mit_transit /tmp/krb5cc_mit_transit_kdc \
+    --password "${XR_PW}" --principal 'krbtgt/C.TEST@B.TEST'
+expect_transit_refused "MIT transit kdc" /tmp/krb5cc_mit_transit_kdc /tmp/mit-c.log \
+    BAD_TRANSIT 'KDC policy rejects request'
+forge_transit /tmp/krb5cc_mit_transit /tmp/krb5cc_mit_transit_rdreq --clear-transit-checked \
+    --password "${XR_PW}" --principal 'krbtgt/C.TEST@B.TEST'
+expect_transit_refused "MIT transit rd_req" /tmp/krb5cc_mit_transit_rdreq /tmp/mit-c.log \
+    PROCESS_TGS 'Illegal cross-realm ticket'
 
 echo "==== MIT C S4U2Self foreign user named like local server is BADMATCH ===="
 seed_c_tgt /tmp/krb5cc_mit_s4u
@@ -881,6 +932,16 @@ echo "==== Rust C lineage local user on foreign TGT is INVALID LINEAGE ===="
 seed_c_tgt /tmp/krb5cc_rust_lineage
 forge_rust_lineage /tmp/krb5cc_rust_lineage /tmp/krb5cc_rust_lineage_out
 expect_lineage "Rust lineage" /tmp/krb5cc_rust_lineage_out /tmp/kdc-c-allow.log
+
+echo "==== Rust C refuses a transited list naming C.TEST ===="
+seed_c_tgt /tmp/krb5cc_rust_transit
+forge_transit /tmp/krb5cc_rust_transit /tmp/krb5cc_rust_transit_kdc --key-hex "${XR_KEY}"
+expect_transit_refused "Rust transit kdc" /tmp/krb5cc_rust_transit_kdc /tmp/kdc-c-allow.log \
+    BAD_TRANSIT 'KDC policy rejects request'
+forge_transit /tmp/krb5cc_rust_transit /tmp/krb5cc_rust_transit_rdreq --clear-transit-checked \
+    --key-hex "${XR_KEY}"
+expect_transit_refused "Rust transit rd_req" /tmp/krb5cc_rust_transit_rdreq /tmp/kdc-c-allow.log \
+    PROCESS_TGS 'Illegal cross-realm ticket'
 
 echo "==== Rust C S4U2Self foreign user named like local server is BADMATCH ===="
 seed_c_tgt /tmp/krb5cc_rust_s4u

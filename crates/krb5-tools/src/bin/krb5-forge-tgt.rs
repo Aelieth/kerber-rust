@@ -8,7 +8,9 @@ use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, string_to_key};
 use krb5_kdc::s2k_params;
 use krb5_protocol::{FileCcache, Keytab, parse_principal};
-use krb5_types::{EncTicketPart, KerberosTime, OctetString, Ticket, TransitedEncoding, ku};
+use krb5_types::{
+    EncTicketPart, KerberosTime, OctetString, Ticket, TransitedEncoding, flag_bit, ku,
+};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -29,6 +31,8 @@ fn main() -> ExitCode {
     let mut drop_starttime = false;
     let mut set_kvno: Option<u32> = None;
     let mut decrypt_keytab: Option<String> = None;
+    let mut transited: Option<String> = None;
+    let mut clear_checked = false;
     let mut i = 0usize;
     while i < args.len() {
         match args[i].as_str() {
@@ -100,12 +104,21 @@ fn main() -> ExitCode {
                 decrypt_keytab = args.get(i + 1).cloned();
                 i += 2;
             }
+            "--transited" => {
+                transited = args.get(i + 1).cloned();
+                i += 2;
+            }
+            "--clear-transit-checked" => {
+                clear_checked = true;
+                i += 1;
+            }
             _ => {
                 eprintln!(
                     "usage: krb5-forge-tgt --ccache <in> --out <out> --tgt <krbtgt/REALM> \
                      (--claim-realm <realm> [--keep-cipher | --key-hex <hex> | --password <pw> --principal <name@REALM> | --decrypt-keytab <kt>] \
                      [--reseal-key-hex <hex> | --reseal-password <pw> --reseal-principal <name@REALM>] \
                      [--authtime <+secs|epoch>] [--drop-starttime] [--set-kvno <n>] \
+                     [--transited <list>] [--clear-transit-checked] \
                      | --alias-as <krbtgt/REALM@REALM>)"
                 );
                 return ExitCode::from(2);
@@ -297,6 +310,14 @@ fn main() -> ExitCode {
             continue;
         };
         part.transited = TransitedEncoding::empty();
+        if let Some(list) = &transited {
+            part.transited.contents = OctetString::from(list.as_bytes().to_vec());
+        }
+        if clear_checked {
+            part.flags = part
+                .flags
+                .with_bit(flag_bit::TRANSITED_POLICY_CHECKED, false);
+        }
         part.authorization_data = None;
         if let Some(ref r) = claim_crealm_ks {
             part.crealm = r.clone();

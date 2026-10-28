@@ -10,7 +10,7 @@ use krb5_types::pac::RpcSid;
 use super::PrincipalStore;
 use super::keys::{KeyEntry, KeyLookup, default_supported_enctypes};
 use super::principal::{Principal, default_mod_actor, refresh_kadm_tl, stamp_admin_tl};
-use super::transit::permitted_transited;
+use super::transit::walk_realm_instances;
 use crate::error::Error;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -193,6 +193,10 @@ impl Policy {
         self.otp.as_deref()
     }
 
+    // MIT: `check_realm_in_list` (lib/krb5/krb/chk_trans.c:293-306)
+    // MIT: `rtree_capath_tree` (lib/krb5/krb/walk_rtree.c:234-291)
+    // MIT: `rtree_hier_tree` (lib/krb5/krb/walk_rtree.c:344-388)
+    /// A hop must be the realm of a walked TGS name: the client's or an intermediate's.
     #[must_use]
     pub(crate) fn transit_allowed(&self, crealm: &str, srealm: &str, hops: &[String]) -> bool {
         if crealm == "WELLKNOWN:ANONYMOUS" {
@@ -201,9 +205,9 @@ impl Policy {
         if hops.is_empty() {
             return true;
         }
-        let permitted = permitted_transited(&self.capaths, crealm, srealm);
-        hops.iter()
-            .all(|h| h == crealm || h == srealm || permitted.iter().any(|p| p == h))
+        let path = walk_realm_instances(&self.capaths, crealm, srealm);
+        let tgs_realms = &path[..path.len().saturating_sub(1)];
+        hops.iter().all(|h| tgs_realms.contains(h))
     }
 
     #[must_use]

@@ -332,8 +332,8 @@ done
 # actually emitted, not the literal its summary line claims (a stale
 # "cases":N in diffsend.rs would otherwise pass). History: A'-3 R32 102 ·
 # A'-4 item 16 105 · item 17 106 · item 18 107 · W1-B F4 109 · W1-Z Z1.3 110 · Z6.2 111 ·
-# as-locked-out 112 · RA 123 · a1-tgs 128 · replay 129 · nopost 130 · s4u-client 132 · fast-cksum 133 · explicit-armor 134 · armor-no-tgs-subkey 135 · armor-no-subkey 136 · reserved-option 137 · service-expired 138 · service-locked 139 · B17 cms 149 · B17b structure 151 · FAST armor 178 · FAST checksums 188.
-DIFFSEND_RATCHET=188
+# as-locked-out 112 · RA 123 · a1-tgs 128 · replay 129 · nopost 130 · s4u-client 132 · fast-cksum 133 · explicit-armor 134 · armor-no-tgs-subkey 135 · armor-no-subkey 136 · reserved-option 137 · service-expired 138 · service-locked 139 · B17 cms 149 · B17b structure 151 · FAST armor 178 · FAST checksums 188 · transit hop 189 · local transit 190.
+DIFFSEND_RATCHET=190
 CASES_SEEN="$(grep -o '"case":"[^"]*","outcome":"ok"' <<<"$DIFF" | sort -u | wc -l | tr -d ' ')"
 [ "$CASES_SEEN" = "$DIFFSEND_RATCHET" ] || die "diffsend emitted $CASES_SEEN distinct ok cases; the ratchet is $DIFFSEND_RATCHET"
 grep -q "\"outcome\":\"ok\",\"cases\":$DIFFSEND_RATCHET}" <<<"$DIFF" || die "diffsend summary line does not claim $DIFFSEND_RATCHET cases"
@@ -385,6 +385,10 @@ grep -q '"case":"fa-armor-transited-cross","outcome":"ok","error_code":43,"e_tex
     <<<"$DIFF" || die "fa-armor-transited-cross not code 43 e_text FIND_FAST on both legs"
 grep '"case":"fa-armor-transited-nul","outcome":"ok","error_code":25,' <<<"$DIFF" |
     grep -q '"e_text":"NEEDED_PREAUTH"' || die "fa-armor-transited-nul not 25 on both legs"
+grep -q '"case":"fa-armor-transited-srv","outcome":"ok","error_code":43,"e_text":"FIND_FAST"' \
+    <<<"$DIFF" || die "fa-armor-transited-srv not code 43 e_text FIND_FAST on both legs"
+grep -q '"case":"tgs-transited-local","outcome":"ok","error_code":60,"e_text":"PROCESS_TGS"' \
+    <<<"$DIFF" || die "tgs-transited-local not code 60 e_text PROCESS_TGS on both legs"
 grep -q '"case":"fa-armor-kvno","outcome":"ok","error_code":44,"e_text":"FIND_FAST"' \
     <<<"$DIFF" || die "fa-armor-kvno not code 44 e_text FIND_FAST on both legs"
 grep -q '"case":"fa-armor-ticket-key","outcome":"ok","error_code":31,"e_text":"FIND_FAST"' \

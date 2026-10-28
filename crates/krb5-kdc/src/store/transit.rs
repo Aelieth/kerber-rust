@@ -3,29 +3,14 @@
 use std::collections::BTreeMap;
 
 use krb5_crypto::ProtocolKey;
+use krb5_types::PrincipalName;
 use krb5_types::transited::hierarchical_walk_realms;
-use krb5_types::{MAX_TRANSIT_RAW, PrincipalName};
 
 use super::PrincipalStore;
 use super::keys::{KeyEntry, next_kvno};
 use super::principal::{AdminEnt, CreateKeys};
 use crate::acl::{Acl, AdminOp};
 use crate::error::Error;
-
-/// Any dot capath lists no intermediate.
-pub(super) fn permitted_transited(
-    capaths: &BTreeMap<String, BTreeMap<String, Vec<String>>>,
-    crealm: &str,
-    srealm: &str,
-) -> Vec<String> {
-    if let Some(vals) = capaths.get(crealm).and_then(|m| m.get(srealm)) {
-        if vals.iter().any(|v| v == ".") {
-            return Vec::new();
-        }
-        return vals.clone();
-    }
-    hierarchical_intermediates(crealm, srealm)
-}
 
 pub(crate) fn walk_realm_instances(
     capaths: &BTreeMap<String, BTreeMap<String, Vec<String>>>,
@@ -48,31 +33,6 @@ pub(crate) fn walk_realm_instances(
         return out;
     }
     hierarchical_walk_realms(client, server)
-}
-
-/// An overlong realm name is not walked.
-pub(super) fn hierarchical_intermediates(client: &str, server: &str) -> Vec<String> {
-    if client.len() >= MAX_TRANSIT_RAW || server.len() >= MAX_TRANSIT_RAW {
-        return Vec::new();
-    }
-    let c: Vec<&str> = client.split('.').collect();
-    let s: Vec<&str> = server.split('.').collect();
-    let mut common = 0usize;
-    while common < c.len() && common < s.len() && c[c.len() - 1 - common] == s[s.len() - 1 - common]
-    {
-        common += 1;
-    }
-    if common == 0 {
-        return Vec::new();
-    }
-    let mut out = Vec::new();
-    for k in 1..=c.len() - common {
-        out.push(c[k..].join("."));
-    }
-    for k in (0..s.len() - common).rev() {
-        out.push(s[k..].join("."));
-    }
-    out
 }
 
 impl PrincipalStore {

@@ -73,6 +73,9 @@ pub(super) fn process_tgs_header(
     {
         return Err(proto(err::BADADDR, status::PROCESS_TGS));
     }
+    // MIT: `rd_req_decoded_opt` (lib/krb5/krb/rd_req_dec.c:606-610)
+    crate::preauth::check_transited(store, &enc_tkt, &header_realm)
+        .map_err(|(code, text)| proto_d(code, status::PROCESS_TGS, text))?;
     // MIT: `rd_req_decoded_opt` (rd_req_dec.c:627-627)
     check_header_times_rd_req(store, &enc_tkt)?;
     // MIT: `rd_req_decoded_opt` (rd_req_dec.c:652-723)

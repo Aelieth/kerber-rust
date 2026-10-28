@@ -488,6 +488,10 @@ fn transited_non_add_overlong_forwarded() {
     let mut part = decrypt_ticket_part(&tgt_key, &ticket).expect("tgt");
     part.transited.tr_type = 1;
     part.transited.contents = OctetString::from(vec![b'A'; 512]);
+    // Checked, so rd_req's own transit check leaves it to the KDC's.
+    part.flags = part
+        .flags
+        .with_bit(flag_bit::TRANSITED_POLICY_CHECKED, true);
     part.authorization_data = None;
     reseal_mut(&mut ticket, &part, &tgt_key);
     let out = chase_tgs(

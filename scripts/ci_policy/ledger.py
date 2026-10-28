@@ -178,6 +178,8 @@ DIFFSEND_CASES = frozenset(
         "fa-armor-transited",
         "fa-armor-transited-cross",
         "fa-armor-transited-nul",
+        "fa-armor-transited-srv",
+        "tgs-transited-local",
         "fa-armor-kvno",
         "fa-armor-ticket-key",
         "fa-armor-nyv",

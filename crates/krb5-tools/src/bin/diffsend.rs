@@ -1592,6 +1592,43 @@ fn run() -> Result<(), String> {
         true,
     )?;
 
+    let local = EncTicketPart {
+        flags: TicketFlags::initial_preauth(),
+        key: EncryptionKey {
+            keytype: sess.etype().to_iana(),
+            keyvalue: sess.as_bytes().to_vec().into(),
+        },
+        crealm: krb5_types::try_ascii(realm).map_err(|e| e.to_string())?,
+        cname: user.clone(),
+        transited: TransitedEncoding {
+            tr_type: 1,
+            contents: b"OTHER.TEST".to_vec().into(),
+        },
+        authtime: now.clone(),
+        starttime: Some(now.clone()),
+        endtime: now.add_hours(10).unwrap_or_else(|_| now.clone()),
+        renew_till: None,
+        caddr: None,
+        authorization_data: None,
+    };
+    let transited_tgs = tgs_req(
+        seal_ticket(tkt_key, tkt_kvno, realm, &krbtgt_sname, &local)?,
+        &sess,
+        realm,
+        &user,
+        host.clone(),
+        realm,
+        0x1000_0329,
+    )
+    .map_err(|e| e.to_string())?;
+    expect_error_client(
+        &cfg,
+        "tgs-transited-local",
+        &encode(&transited_tgs).map_err(|e| e.to_string())?,
+        err::GENERIC,
+        true,
+    )?;
+
     // FAST armor AP-REQ with no subkey. MIT always sends one; this forge is the oracle.
     // MIT: `armor_ap_request` (kdc/fast_util.c:35-90)
     let armor_tkt = mint_tgt(
@@ -5386,7 +5423,7 @@ fn run() -> Result<(), String> {
     ra_cases(&cfg, realm, &user, &host)?;
     fa_cases(&cfg, realm, &user, &host)?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":188}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":190}}"#);
     Ok(())
 }
 
@@ -6328,6 +6365,19 @@ fn fa_cases(
         &ap(tgt(&nul)?, user)?,
         None,
         err::PREAUTH_REQUIRED,
+    )?;
+    let mut srv = far.clone();
+    srv.transited.contents = b"KERBER.TEST".to_vec().into();
+    let srv_ap = build_fast_armor(tgt(&srv)?, &sess, &other_realm, user, Some(&sub))
+        .map_err(|e| e.to_string())?;
+    expect_fa(
+        cfg,
+        "fa-armor-transited-srv",
+        0x1000_0328,
+        &pauser,
+        &srv_ap,
+        None,
+        err::ILL_CR_TKT,
     )?;
     let mut kv = tgt(&part)?;
     kv.enc_part.kvno = Some(99);

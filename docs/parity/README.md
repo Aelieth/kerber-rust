@@ -110,7 +110,7 @@ is `proposed`. The listed live `diffsend` cases are `garbage-pdu`,
 `fa-armor-session-etype`, `fa-armor-session-key-size`,
 `fa-armor-subkey-size`, `fa-armor-not-ap-req`, `fa-armor-pvno`,
 `fa-armor-disallow-svr`, `fa-armor-ticket-short`, `fa-armor-ticket-junk`,
-`fa-armor-transited`, `fa-armor-transited-cross`, `fa-armor-transited-nul`, `fa-armor-kvno`, `fa-armor-ticket-key`, `fa-armor-nyv`,
+`fa-armor-transited`, `fa-armor-transited-cross`, `fa-armor-transited-nul`, `fa-armor-transited-srv`, `tgs-transited-local`, `fa-armor-kvno`, `fa-armor-ticket-key`, `fa-armor-nyv`,
 `fa-armor-expired`, `fa-armor-skew`, `fa-armor-authenticator-key`,
 `fa-armor-host-ticket`, `fa-fast-req-key`, `fa-fast-req-short`,
 `fa-fast-cksum-type`, `fa-fast-cksum-size`, `fa-fast-bare-armored-req`,
@@ -125,8 +125,8 @@ wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
 Counts:
-**590** = A1 131 + A2 94 + A3 122 + A4 67 + A5 35 + B1 141.
-exact 457 · stricter-documented 23 · deviation 40 ·
+**591** = A1 132 + A2 94 + A3 122 + A4 67 + A5 35 + B1 141.
+exact 458 · stricter-documented 23 · deviation 40 ·
 absent 3 · deferred 67.
 
 When the ledger was split into these files, the one-file A4 (153 rows,

@@ -366,7 +366,7 @@ fn armor_rd_req(
 // MIT: `rd_req_decoded_opt` (lib/krb5/krb/rd_req_dec.c:606-610)
 // MIT: `krb5_check_transited_list` (lib/krb5/krb/chk_trans.c:309-356)
 // MIT: `krb5_walk_realm_tree` (lib/krb5/krb/walk_rtree.c:96-121)
-fn check_transited(
+pub(crate) fn check_transited(
     store: &dyn PrincipalRead,
     enc_tkt: &krb5_types::EncTicketPart,
     srealm: &str,
