@@ -103,7 +103,7 @@ impl<'a> XdrR<'a> {
             let _salttype = self.u32()?;
             let e = EncryptionType::known(et)
                 .map_err(|_| Error::Inner("Invalid key/salt tuples".into()))?;
-            // `known`, not `from_iana`.
+            // `known` as MIT kadmind; `from_iana` stays stricter.
             if e.is_mit_weak() {
                 return Err(Error::Inner("Invalid key/salt tuples".into()));
             }
