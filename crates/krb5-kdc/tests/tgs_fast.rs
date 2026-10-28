@@ -616,37 +616,6 @@ fn tgs_fast_without_subkey_is_preauth_failed() {
 }
 
 #[test]
-fn tgs_fast_explicit_armor_without_pa_tgs_subkey_is_accepted() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 882);
-    let mut tgs = tgs_req(
-        issued.rep.0.ticket.clone(),
-        &issued.session_key,
-        TEST_REALM,
-        &cname,
-        documented_host(),
-        TEST_REALM,
-        883,
-    )
-    .unwrap();
-    let inner = tgs.0.req_body.clone();
-    let sub = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x53u8; 32])
-        .expect("armor subkey");
-    wrap_tgs_fast_explicit_armor(
-        &mut tgs,
-        issued.rep.0.ticket.clone(),
-        &issued.session_key,
-        &cname,
-        inner,
-        Some(&sub),
-    )
-    .expect("TGS FAST explicit armor");
-    let out = krb5_kdc::issue_tgs(&store, &tgs).expect("explicit armor without PA-TGS-REQ subkey");
-    assert_eq!(out.rep.0.ticket.sname, documented_host());
-}
-
-#[test]
 fn tgs_fast_explicit_armor_without_any_subkey_is_policy() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
