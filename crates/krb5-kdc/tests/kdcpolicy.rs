@@ -136,7 +136,7 @@ fn unset_supported_enctypes_keys_mits_default_pair() {
             .unwrap();
     let mut store = krb5_kdc::PrincipalStore::new("SE.TEST");
     store.apply_kdc_conf(&kdc).unwrap();
-    assert_eq!(store.policy.password_etypes().len(), 2);
+    assert_eq!(store.policy.password_keysalts().len(), 2);
     let creator = "kadmin/admin@SE.TEST";
     let pw = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user1"]);
     store
@@ -153,7 +153,7 @@ fn unset_supported_enctypes_keys_mits_default_pair() {
         .insert_new_randkey(
             &explicit,
             "SE.TEST",
-            &[krb5_crypto::EncryptionType::Aes256CtsHmacSha384192],
+            &[krb5_crypto::EncryptionType::Aes256CtsHmacSha384192.into()],
             creator,
         )
         .unwrap();

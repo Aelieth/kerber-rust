@@ -34,7 +34,13 @@ fn realm_with_des3_user() -> (krb5_kdc::PrincipalStore, PrincipalName, ProtocolK
     }
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["des3user"]);
     store
-        .create_password_etypes(&acl, &documented_admin_id(), &user, b"des3-secret", &[DES3])
+        .create_password_etypes(
+            &acl,
+            &documented_admin_id(),
+            &user,
+            b"des3-secret",
+            &[DES3.into()],
+        )
         .expect("addprinc -e des3");
     let key =
         string_to_key(DES3, b"des3-secret", user.default_salt(TEST_REALM), None).expect("s2k");

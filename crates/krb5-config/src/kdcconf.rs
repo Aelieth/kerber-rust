@@ -513,7 +513,6 @@ fn note_unsupported(conf: &mut KdcConf, k: &str) {
 }
 
 impl KdcConf {
-    // MIT: `krb5_string_to_keysalts` (lib/kadm5/str_conv.c)
     #[must_use]
     pub fn unsupported_lines(&self) -> Vec<String> {
         let mut lines: Vec<String> = self
@@ -521,18 +520,6 @@ impl KdcConf {
             .iter()
             .map(|k| format!("kdc.conf: {k} is not supported and is ignored"))
             .collect();
-        let mut salts: Vec<&str> = Vec::new();
-        for tuple in &self.supported_enctypes {
-            if let Some((_, salt)) = tuple.split_once(':')
-                && salt != "normal"
-                && !salts.contains(&salt)
-            {
-                salts.push(salt);
-                lines.push(format!(
-                    "kdc.conf: supported_enctypes salt type {salt} is not supported; keys get the normal salt"
-                ));
-            }
-        }
         let lists = [
             ("kdc_listen", Some(&self.kdc_listen)),
             ("kdc_tcp_listen", self.kdc_tcp_listen.as_ref()),
@@ -559,7 +546,6 @@ pub const KDC_DIR: &str = match option_env!("KERBER_KDC_DIR") {
 };
 
 // MIT: `DEFAULT_KDC_PROFILE` (osconf.hin:81-81)
-// Used when `KRB5_KDC_PROFILE` is unset.
 #[must_use]
 pub fn default_kdc_profile() -> PathBuf {
     Path::new(KDC_DIR).join("kdc.conf")

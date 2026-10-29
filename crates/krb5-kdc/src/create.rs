@@ -94,8 +94,10 @@ pub fn realm_rows(
     ];
 
     let mut tgt_keys = Vec::new();
-    for etype in store.policy.password_etypes() {
-        tgt_keys.push(KeyEntry::new(etype, random_key(etype)?, 1));
+    for ks in store.policy.password_keysalts() {
+        if !tgt_keys.iter().any(|k: &KeyEntry| k.etype == ks.etype) {
+            tgt_keys.push(KeyEntry::new(ks.etype, random_key(ks.etype)?, 1));
+        }
     }
     let mut tgt = new_entry(store, PrincipalName::krbtgt(realm), tgt_keys, flags);
     tgt.mkvno = mkvno;
@@ -337,11 +339,12 @@ fn create_bootstrap_admin(
         ..AdminEnt::default()
     };
     let actor = format!("bootstrap@{realm}");
+    let keysalts: Vec<krb5_crypto::KeySalt> = admin.etypes.iter().map(|e| (*e).into()).collect();
     store.create_principal_3_in(
         &admin.name,
         realm,
         crate::CreateKeys::Random,
-        &admin.etypes,
+        &keysalts,
         &ent,
         &actor,
     )

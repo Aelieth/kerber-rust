@@ -2,7 +2,6 @@
 
 use std::fmt::Write as _;
 
-use krb5_crypto::EncryptionType;
 use krb5_kdc::{AdminEnt, AdminFields, Error, PrincipalStore, PrincipalWrite as _};
 use krb5_types::PrincipalName;
 use zeroize::Zeroizing;
@@ -39,7 +38,7 @@ struct PrincArgs {
     randkey: bool,
     nokey: bool,
     unlock: bool,
-    keysalts: Vec<EncryptionType>,
+    keysalts: Vec<krb5_crypto::KeySalt>,
     db_args: Vec<String>,
     name: Option<(PrincipalName, String)>,
 }

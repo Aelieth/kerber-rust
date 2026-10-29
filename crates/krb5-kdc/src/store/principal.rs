@@ -1,10 +1,10 @@
 //! Realm principal records and the kadm5 create, modify, rename, and delete path.
 
-use krb5_crypto::EncryptionType;
+use krb5_crypto::{EncryptionType, KeySalt};
 use krb5_types::PrincipalName;
 
 use super::flags::{KDB_DISALLOW_ALL_TIX, KDB_REQUIRES_PRE_AUTH, KDB_V1_BASE_LENGTH};
-use super::keys::{KeyEntry, KeyLookup, random_key};
+use super::keys::{KeyEntry, KeyLookup, random_keys};
 use super::password::{apply_keysalt_policy, c_password, keys_from_password};
 use super::{PrincipalStore, kadm5_mask, unix_now_u32};
 use crate::acl::{Acl, AdminOp, Restrictions};
@@ -601,7 +601,7 @@ impl PrincipalStore {
         actor: &str,
         name: &PrincipalName,
         password: &[u8],
-        etypes: &[EncryptionType],
+        etypes: &[KeySalt],
     ) -> Result<(), Error> {
         let realm = self.realm.clone();
         self.create_password_etypes_in(acl, actor, name, &realm, password, etypes)
@@ -614,7 +614,7 @@ impl PrincipalStore {
         name: &PrincipalName,
         princ_realm: &str,
         password: &[u8],
-        etypes: &[EncryptionType],
+        etypes: &[KeySalt],
     ) -> Result<(), Error> {
         let id = crate::kdb::lookup_principal_id(name, princ_realm);
         acl.check(actor, AdminOp::Create, Some(&id))?;
@@ -630,7 +630,7 @@ impl PrincipalStore {
         name: &PrincipalName,
         princ_realm: &str,
         password: &[u8],
-        etypes: &[EncryptionType],
+        etypes: &[KeySalt],
         actor: &str,
     ) -> Result<(), Error> {
         self.create_principal_3_in(
@@ -649,7 +649,7 @@ impl PrincipalStore {
         &mut self,
         name: &PrincipalName,
         princ_realm: &str,
-        etypes: &[EncryptionType],
+        etypes: &[KeySalt],
         actor: &str,
     ) -> Result<(), Error> {
         self.create_principal_3_in(
@@ -681,7 +681,7 @@ impl PrincipalStore {
         name: &PrincipalName,
         princ_realm: &str,
         keys: CreateKeys<'_>,
-        etypes: &[EncryptionType],
+        etypes: &[KeySalt],
         ent: &AdminEnt,
         actor: &str,
     ) -> Result<(), Error> {
@@ -714,16 +714,15 @@ impl PrincipalStore {
             )?;
         }
         let now = unix_now_u32();
-        let use_etypes = if let Some(given) = explicit {
-            given.iter().map(|k| k.etype).collect()
+        let use_etypes: Vec<KeySalt> = if let Some(given) = explicit {
+            given.iter().map(|k| KeySalt::from(k.etype)).collect()
         } else {
             apply_keysalt_policy(
                 polent.as_ref().and_then(|p| p.allowed_keysalts.as_deref()),
                 etypes,
-                &self.policy.password_etypes(),
+                &self.policy.password_keysalts(),
             )?
         };
-        let salt = name.default_salt(princ_realm);
         let asked = if ent.mask & kadm5_mask::KVNO != 0 {
             if ent.kvno > 65535 {
                 return Err(Error::InvalidArgument("invalid kvno".into()));
@@ -742,19 +741,16 @@ impl PrincipalStore {
             }
             keys
         } else if let Some(pw) = password {
-            keys_from_password(&use_etypes, pw, &salt, kvno)?
+            keys_from_password(&use_etypes, pw, name, princ_realm, kvno)?
         } else {
-            let mut keys = Vec::new();
-            for etype in &use_etypes {
-                keys.push(KeyEntry::new(*etype, random_key(*etype)?, kvno));
-            }
-            keys
+            random_keys(&use_etypes, kvno)?
         };
         let attributes = if ent.mask & kadm5_mask::ATTRIBUTES != 0 {
             ent.attributes
         } else {
             self.default_create_attributes(password.is_some())
         };
+        let salt = crate::kdb_dump::salt_of_keys(&keys, name, princ_realm);
         let mut p = Principal::from_keys(
             name.clone(),
             princ_realm.to_owned(),
@@ -796,6 +792,7 @@ impl PrincipalStore {
             refresh_kadm_tl(&mut p);
         }
         stamp_admin_tl(&mut p, true, actor);
+        let hook_etypes: Vec<EncryptionType> = use_etypes.iter().map(|ks| ks.etype).collect();
         super::kadm5_hook::hook_create(
             self,
             super::kadm5_hook::HookStage::Precommit,
@@ -803,7 +800,7 @@ impl PrincipalStore {
             princ_realm,
             ent.mask,
             password,
-            &use_etypes,
+            &hook_etypes,
         )?;
         self.put_principal(p)?;
         self.save_if_configured()?;
@@ -812,7 +809,7 @@ impl PrincipalStore {
             realm: princ_realm.to_owned(),
             mask: ent.mask,
             password: password.map(|p| zeroize::Zeroizing::new(p.to_vec())),
-            etypes: use_etypes,
+            etypes: hook_etypes,
         });
         Ok(())
     }
@@ -831,7 +828,7 @@ impl PrincipalStore {
         acl: &Acl,
         actor: &str,
         name: &PrincipalName,
-        etypes: &[EncryptionType],
+        etypes: &[KeySalt],
     ) -> Result<(), Error> {
         self.inside_change()?;
         let id = crate::kdb::lookup_principal_id(name, &self.realm);
@@ -861,7 +858,7 @@ impl PrincipalStore {
         actor: &str,
         name: &PrincipalName,
         password: Option<&[u8]>,
-        etypes: &[EncryptionType],
+        etypes: &[KeySalt],
         policy: Option<&str>,
     ) -> Result<(), Error> {
         let realm = self.realm.clone();

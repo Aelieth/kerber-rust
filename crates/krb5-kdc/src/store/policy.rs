@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use krb5_crypto::{EncryptionType, SpakeGroup, spake_parse_groups};
+use krb5_crypto::{EncryptionType, KeySalt, SpakeGroup, spake_parse_groups};
 use krb5_types::PrincipalName;
 use krb5_types::pac::RpcSid;
 
@@ -64,7 +64,7 @@ pub struct Policy {
     pub allow_rc4: bool,
     pub allow_des3: bool,
     pub permitted_enctypes: Option<Vec<EncryptionType>>,
-    pub supported_enctypes: Vec<EncryptionType>,
+    pub supported_enctypes: Vec<KeySalt>,
     pub requires_preauth: bool,
     // MIT: `kadm5_get_config_params` (alt_prof.c:596-632)
     pub default_principal_flags: Option<u32>,
@@ -228,9 +228,9 @@ impl Policy {
 
     // MIT: `kadm5_get_config_params` (lib/kadm5/alt_prof.c:650-654)
     #[must_use]
-    pub fn password_etypes(&self) -> Vec<EncryptionType> {
+    pub fn password_keysalts(&self) -> Vec<KeySalt> {
         if self.supported_enctypes.is_empty() {
-            default_supported_enctypes().to_vec()
+            default_supported_enctypes().map(KeySalt::from).to_vec()
         } else {
             self.supported_enctypes.clone()
         }
@@ -257,7 +257,7 @@ impl PrincipalStore {
         }
         if !conf.supported_enctypes.is_empty() {
             self.policy.supported_enctypes =
-                krb5_crypto::parse_keysalt_list(&conf.supported_enctypes.join(" "));
+                krb5_crypto::parse_keysalts(&conf.supported_enctypes.join(" "));
         }
         if let Some(skew) = conf.clockskew {
             self.policy.skew = skew;

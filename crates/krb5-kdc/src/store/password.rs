@@ -1,6 +1,6 @@
 //! Password checks and a password change.
 
-use krb5_crypto::{EncryptionType, ProtocolKey, parse_keysalt_list, string_to_key};
+use krb5_crypto::{EncryptionType, KeySalt, ProtocolKey, parse_keysalts, string_to_key};
 use krb5_log::klog::{self, Severity};
 use krb5_types::PrincipalName;
 use subtle::ConstantTimeEq;
@@ -108,48 +108,77 @@ fn syslog_note(severity: Severity, text: &str) {
 // MIT: `apply_keysalt_policy` (svr_principal.c:128-231)
 pub fn apply_keysalt_policy(
     allowed_keysalts: Option<&str>,
-    requested: &[EncryptionType],
-    supported: &[EncryptionType],
-) -> Result<Vec<EncryptionType>, Error> {
-    let allowed = allowed_keysalts
+    requested: &[KeySalt],
+    supported: &[KeySalt],
+) -> Result<Vec<KeySalt>, Error> {
+    let Some(ak) = allowed_keysalts
         .filter(|s| !s.is_empty())
-        .map(parse_keysalt_list);
-    match allowed {
-        None => {
-            if requested.is_empty() {
-                Ok(supported.to_vec())
-            } else {
-                Ok(requested.to_vec())
-            }
-        }
-        Some(ak) => {
-            for e in requested {
-                if !ak.contains(e) {
-                    return Err(Error::BadKeysalts);
-                }
-            }
-            if requested.is_empty() {
-                Ok(ak)
-            } else {
-                Ok(ak.into_iter().filter(|e| requested.contains(e)).collect())
-            }
-        }
+        .map(parse_keysalts)
+    else {
+        return Ok(if requested.is_empty() {
+            supported.to_vec()
+        } else {
+            requested.to_vec()
+        });
+    };
+    if requested.iter().any(|ks| !ak.contains(ks)) {
+        return Err(Error::BadKeysalts);
     }
+    if requested.is_empty() {
+        return Ok(ak);
+    }
+    Ok(ak.into_iter().filter(|ks| requested.contains(ks)).collect())
 }
 
+// MIT: `add_key_pwd` (lib/kdb/kdb_cpw.c:255-312)
 pub(super) fn keys_from_password(
-    etypes: &[EncryptionType],
+    keysalts: &[KeySalt],
     password: &[u8],
-    salt: &[u8],
+    name: &PrincipalName,
+    realm: &str,
     kvno: u32,
 ) -> Result<Vec<KeyEntry>, Error> {
-    let mut keys = Vec::new();
-    for etype in etypes {
-        let params = s2k_params(*etype);
-        let key = string_to_key(*etype, password, salt, Some(&params))?;
-        keys.push(KeyEntry::new(*etype, key, kvno));
+    let mut keys: Vec<KeyEntry> = Vec::new();
+    for ks in keysalts {
+        if keys.iter().any(|k| k.etype == ks.etype) {
+            continue;
+        }
+        let salt = match ks.salt {
+            0 => name.default_salt(realm),
+            2 => {
+                let mut salt = Vec::new();
+                for part in &name.name_string {
+                    salt.extend_from_slice(part.as_bytes());
+                }
+                salt
+            }
+            3 => realm.as_bytes().to_vec(),
+            4 => random_salt()?,
+            _ => return Err(Error::InvalidArgument("Unsupported salt type".into())),
+        };
+        let params = s2k_params(ks.etype);
+        let mut key = KeyEntry::new(
+            ks.etype,
+            string_to_key(ks.etype, password, &salt, Some(&params))?,
+            kvno,
+        );
+        if ks.salt > 0 {
+            key.salt_type = Some(ks.salt);
+            key.kdb_salt = Some(salt);
+        }
+        keys.push(key);
     }
     Ok(keys)
+}
+
+// MIT: `make_random_salt` (lib/kdb/kdb_cpw.c:211-238)
+fn random_salt() -> Result<Vec<u8>, Error> {
+    let mut rnd = [0u8; 8];
+    getrandom::getrandom(&mut rnd).map_err(|e| Error::Crypto(e.to_string()))?;
+    Ok(rnd
+        .iter()
+        .flat_map(|b| [0x40 | (b >> 4), 0x40 | (b & 0x0f)])
+        .collect())
 }
 
 #[must_use]
@@ -233,7 +262,7 @@ impl PrincipalStore {
         password: &[u8],
         keepold: u32,
         actor: &str,
-        etypes: &[EncryptionType],
+        etypes: &[KeySalt],
     ) -> Result<(), Error> {
         self.inside_change()?;
         if princ_realm == self.realm && name.components_joined() == "kadmin/history" {
@@ -253,8 +282,9 @@ impl PrincipalStore {
             .and_then(|n| self.policies.get(n));
         let nhist = pol.map(|pol| pol.history);
         let allowed = pol.and_then(|p| p.allowed_keysalts.clone());
-        let use_etypes =
-            apply_keysalt_policy(allowed.as_deref(), etypes, &self.policy.password_etypes())?;
+        let use_ks =
+            apply_keysalt_policy(allowed.as_deref(), etypes, &self.policy.password_keysalts())?;
+        let use_etypes: Vec<EncryptionType> = use_ks.iter().map(|ks| ks.etype).collect();
         // A refused password still leaves kadmin/history.
         let hist = match nhist {
             Some(_) => Some(self.ensure_history_principal(actor)?),
@@ -264,10 +294,9 @@ impl PrincipalStore {
         let Some(existing) = self.map.get(&id) else {
             return Err(Error::NotFound);
         };
-        // MIT: `add_key_pwd` (lib/kdb/kdb_cpw.c:301-305)
-        let salt = existing.name.default_salt(&existing.realm);
         let kvno = next_kvno(&existing.keys);
-        let new_keys = keys_from_password(&use_etypes, password, &salt, kvno)?;
+        let new_keys =
+            keys_from_password(&use_ks, password, &existing.name, &existing.realm, kvno)?;
         super::kadm5_hook::hook_chpass(
             self,
             super::kadm5_hook::HookStage::Precommit,
@@ -279,7 +308,7 @@ impl PrincipalStore {
         )?;
         self.replace_password_keys(&id, new_keys, nhist.zip(hist), keepold, actor)?;
         if let Some(p) = self.map.get_mut(&id) {
-            p.salt = salt;
+            p.salt = crate::kdb_dump::salt_of_keys(&p.keys, &p.name, &p.realm);
         }
         self.apply_pw_max_life_in(name, princ_realm)?;
         let snap = self.map.get(&id).cloned();

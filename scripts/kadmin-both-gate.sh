@@ -806,6 +806,53 @@ rencpw_leg() {
 rencpw_leg "$NAME_MIT" /etc/krb5.conf mit
 rencpw_leg "$NAME" /tmp/kadmin-krb5.conf rust
 
+echo "==== ks_tuple salt types on MIT's kadmind and KDC, then ours (kdb_cpw.c:255-312, svr_principal.c:90-101) ===="
+kssalt_leg() {
+    local ctn=$1 conf=$2 leg=$3 out keys
+    mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p admin/admin -w adminpassword \
+        -q 'addprinc -e aes256-cts-hmac-sha1-96:norealm,aes128-cts-hmac-sha1-96:onlyrealm -pw ks-pass-1 ksmix' \
+        2>&1 | grep -F 'Principal "ksmix@KERBER.TEST" created.'
+    keys="$(mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p admin/admin -w adminpassword \
+        -q 'getprinc ksmix' 2>&1 | grep '^Key:')"
+    echo "$leg create: $keys"
+    echo "$keys" > "$SCRATCH/kssalt-create-$leg.txt"
+    out="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" sh -c 'printf "ks-pass-1\n" | kinit ksmix@KERBER.TEST && klist' 2>&1 || true)"
+    echo "$out" | grep -F 'Default principal: ksmix@KERBER.TEST'
+    mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p admin/admin -w adminpassword \
+        -q 'cpw -e aes256-cts-hmac-sha1-96:special -pw ks-pass-2 ksmix' \
+        2>&1 | grep -F 'Password for "ksmix@KERBER.TEST" changed.'
+    keys="$(mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p admin/admin -w adminpassword \
+        -q 'getprinc ksmix' 2>&1 | grep '^Key:')"
+    echo "$leg cpw: $keys"
+    echo "$keys" > "$SCRATCH/kssalt-cpw-$leg.txt"
+    out="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" sh -c 'printf "ks-pass-2\n" | kinit ksmix@KERBER.TEST && klist' 2>&1 || true)"
+    echo "$out" | grep -F 'Default principal: ksmix@KERBER.TEST'
+    kadmin_q_ok mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p admin/admin -w adminpassword \
+        -q 'addpol -allowedkeysalts aes256-cts-hmac-sha1-96:normal kspolnorm' >/dev/null
+    out="$(mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p admin/admin -w adminpassword \
+        -q 'addprinc -policy kspolnorm -e aes256-cts-hmac-sha1-96:norealm -pw ks-pass-3 ksbad' 2>&1 || true)"
+    echo "$leg policy: $out"
+    echo "$out" | grep -F 'Invalid key/salt tuples'
+    mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p admin/admin -w adminpassword \
+        -q 'addprinc -randkey -policy kspolnorm kspolset' 2>&1 | grep -F 'Principal "kspolset@KERBER.TEST" created.'
+    out="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" /tmp/kadm5-changepw-rpc --service kadmin/admin \
+        admin/admin adminpassword KERBER.TEST setkey-cases kspolset 2>&1 || true)"
+    echo "$leg setkey3 under the policy: $out"
+    echo "$out" | grep -E '^setkey3_norealm=' > "$SCRATCH/kssalt-setkey-$leg.txt"
+}
+kssalt_leg "$NAME_MIT" /etc/krb5.conf mit
+kssalt_leg "$NAME" /tmp/kadmin-krb5.conf rust
+printf 'Key: vno 1, aes256-cts-hmac-sha1-96:norealm\nKey: vno 1, aes128-cts-hmac-sha1-96:onlyrealm\n' \
+    | diff - "$SCRATCH/kssalt-create-mit.txt"
+grep -Fx 'Key: vno 2, aes256-cts-hmac-sha1-96:special' "$SCRATCH/kssalt-cpw-mit.txt"
+grep -Fx 'setkey3_norealm=43787578' "$SCRATCH/kssalt-setkey-mit.txt"
+for f in create cpw setkey; do
+    diff "$SCRATCH/kssalt-$f-mit.txt" "$SCRATCH/kssalt-$f-rust.txt" || {
+        echo "ks_tuple salt types: $f differs between MIT's kadmind and ours" >&2
+        exit 1
+    }
+done
+
 echo "==== Z8.3 bootstrap actors: kadmin/changepw kdb5_util@ (kadm5_create.c:100) ===="
 # kadmin/changepw is never successfully modified in this gate (the
 # lockdown_keys cell is a privilege denial), so both legs still show

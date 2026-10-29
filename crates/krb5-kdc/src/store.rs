@@ -656,7 +656,9 @@ impl PrincipalStore {
         // No profile keeps a 7-day renewable life, so the test realm matches stock.
         store.policy.max_renewable_life = 7 * 24 * 3600;
         store.policy.spake_preauth_groups = vec![krb5_crypto::SpakeGroup::P256];
-        store.policy.supported_enctypes = crate::testrealm::TEST_SUPPORTED_ENCTYPES.to_vec();
+        store.policy.supported_enctypes = crate::testrealm::TEST_SUPPORTED_ENCTYPES
+            .map(krb5_crypto::KeySalt::from)
+            .to_vec();
         if let Some(c) = kdc {
             store.apply_kdc_conf(c)?;
         }

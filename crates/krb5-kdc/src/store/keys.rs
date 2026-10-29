@@ -1,6 +1,6 @@
 //! Long-term keys, lookup, and a keytab export.
 
-use krb5_crypto::{EncryptionType, ProtocolKey};
+use krb5_crypto::{EncryptionType, KeySalt, ProtocolKey};
 use krb5_protocol::{Keytab, KeytabEntry};
 use krb5_types::PrincipalName;
 
@@ -170,6 +170,17 @@ pub fn random_key(etype: EncryptionType) -> Result<ProtocolKey, Error> {
 }
 
 // MIT: `KRB5_DEFAULT_SUPPORTED_ENCTYPES` (include/osconf.hin:109-111)
+// MIT: `add_key_rnd` (lib/kdb/kdb_cpw.c:161-182)
+pub(super) fn random_keys(keysalts: &[KeySalt], kvno: u32) -> Result<Vec<KeyEntry>, Error> {
+    let mut keys: Vec<KeyEntry> = Vec::new();
+    for ks in keysalts {
+        if !keys.iter().any(|k| k.etype == ks.etype) {
+            keys.push(KeyEntry::new(ks.etype, random_key(ks.etype)?, kvno));
+        }
+    }
+    Ok(keys)
+}
+
 pub(super) fn default_supported_enctypes() -> [EncryptionType; 2] {
     [
         EncryptionType::Aes256CtsHmacSha196,
@@ -284,7 +295,7 @@ impl PrincipalStore {
         &mut self,
         name: &PrincipalName,
         princ_realm: &str,
-        etypes: &[EncryptionType],
+        etypes: &[KeySalt],
         keepold: u32,
         actor: &str,
     ) -> Result<Vec<KeyEntry>, Error> {
@@ -303,15 +314,13 @@ impl PrincipalStore {
             .as_ref()
             .and_then(|n| self.policies.get(n))
             .and_then(|p| p.allowed_keysalts.clone());
-        let mut use_etypes =
-            apply_keysalt_policy(allowed.as_deref(), etypes, &self.policy.password_etypes())?;
+        let mut use_ks =
+            apply_keysalt_policy(allowed.as_deref(), etypes, &self.policy.password_keysalts())?;
         if history {
-            use_etypes.truncate(1);
+            use_ks.truncate(1);
         }
-        let mut new_keys = Vec::new();
-        for etype in &use_etypes {
-            new_keys.push(KeyEntry::new(*etype, random_key(*etype)?, kvno));
-        }
+        let new_keys = random_keys(&use_ks, kvno)?;
+        let use_etypes: Vec<EncryptionType> = new_keys.iter().map(|k| k.etype).collect();
         super::kadm5_hook::hook_chpass(
             self,
             super::kadm5_hook::HookStage::Precommit,
@@ -360,7 +369,7 @@ impl PrincipalStore {
     pub fn chrand_etypes_keepold(
         &mut self,
         name: &PrincipalName,
-        etypes: &[EncryptionType],
+        etypes: &[KeySalt],
         keepold: u32,
         actor: &str,
     ) -> Result<Vec<KeyEntry>, Error> {
@@ -439,10 +448,16 @@ impl PrincipalStore {
             want
         };
         let allowed = p.pw_policy.as_ref().and_then(|n| self.policies.get(n));
-        let etypes: Vec<EncryptionType> = keys.iter().map(|k| k.etype).collect();
+        let requested: Vec<KeySalt> = keys
+            .iter()
+            .map(|k| KeySalt {
+                etype: k.etype,
+                salt: k.salt_type.filter(|t| *t > 0).unwrap_or(0),
+            })
+            .collect();
         apply_keysalt_policy(
             allowed.and_then(|pol| pol.allowed_keysalts.as_deref()),
-            &etypes,
+            &requested,
             &[],
         )?;
         let salt = |k: &KeyEntry| k.salt_type.filter(|t| *t > 0).unwrap_or(0);

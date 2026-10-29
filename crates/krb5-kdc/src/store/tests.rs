@@ -460,7 +460,7 @@ fn randkey_principals_hold_des3_keys_of_odd_parity() {
         ["host", "des3randkey.kerber.test"],
     );
     store
-        .create_host_etypes(&acl, &admin, &name, &[DES3, A256])
+        .create_host_etypes(&acl, &admin, &name, &[DES3.into(), A256.into()])
         .unwrap();
     let created: Vec<KeyEntry> = store.get_name(&name).unwrap().keys.clone();
     assert_eq!(created.len(), 2);
@@ -473,7 +473,7 @@ fn randkey_principals_hold_des3_keys_of_odd_parity() {
         .expect("a des3 key");
     assert!(odd_parity(des3.key.as_bytes()), "addprinc -randkey");
     let rekeyed = store
-        .chrand_etypes_keepold_in(&name, TEST_REALM_STR, &[DES3], 0, &admin)
+        .chrand_etypes_keepold_in(&name, TEST_REALM_STR, &[DES3.into()], 0, &admin)
         .unwrap();
     let des3 = rekeyed
         .iter()

@@ -4,7 +4,6 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use krb5_config::ClientContext;
-use krb5_crypto::EncryptionType;
 use krb5_kdc::Error;
 use krb5_protocol::{Keytab, KeytabEntry};
 use krb5_types::PrincipalName;
@@ -221,7 +220,7 @@ fn expand(s: &mut Session<'_>, pattern: &str) -> Result<Vec<String>, String> {
 struct AddOpts {
     quiet: bool,
     norandkey: bool,
-    keysalts: Vec<EncryptionType>,
+    keysalts: Vec<krb5_crypto::KeySalt>,
 }
 
 // MIT: `add_principal` (kadmin/cli/keytab.c:299-358)

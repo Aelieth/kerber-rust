@@ -663,7 +663,7 @@ fn realm_with_des3_user() -> (PrincipalStore, PrincipalName, ProtocolKey) {
             &krb5_kdc::testrealm::documented_admin_id(),
             &user,
             b"des3-secret",
-            &[EncryptionType::Des3CbcSha1],
+            &[EncryptionType::Des3CbcSha1.into()],
         )
         .expect("addprinc -e des3");
     let key = krb5_crypto::string_to_key(

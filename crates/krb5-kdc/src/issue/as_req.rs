@@ -361,8 +361,7 @@ fn finish_preauth(
                 && find_pa(work_padata.as_deref(), pa::FX_COOKIE).is_none()
                 && !method.iter().any(|p| p.padata_type == pa::ETYPE_INFO2)
             {
-                let salt =
-                    KerberosString::try_from(String::from_utf8_lossy(&client.salt).as_ref()).ok();
+                let salt = key_salt_string(&client, ckey);
                 let info2: EtypeInfo2 = vec![EtypeInfo2Entry {
                     etype: ckey.etype.to_iana(),
                     salt,
@@ -649,8 +648,8 @@ fn finish_process_as_req(
     // MIT: `add_freshness_token` (kdc_preauth.c:826-829)
     // MIT: `return_padata` (kdc_preauth.c:1487-1495)
     // A replaced reply key is not described.
-    if !reply_key_replaced && ckey.is_some() {
-        outer_padata.extend(as_rep_key_info(&client, as_rep_key.etype(), &body.etype));
+    if let (false, Some(key)) = (reply_key_replaced, ckey.as_ref()) {
+        outer_padata.extend(as_rep_key_info(&client, key, &body.etype));
     }
     if let Some(f) = fast {
         // MIT: `kdc_fast_response_handle_padata` (fast_util.c:292-296)
@@ -732,10 +731,10 @@ fn get_key_exp(client: &crate::store::Principal) -> Option<KerberosTime> {
 }
 
 // MIT: `add_etype_info` (kdc_preauth.c:769-799)
-fn etype_info_padata(client: &Principal, etype: EncryptionType, requested: &[i32]) -> Vec<PaData> {
+fn etype_info_padata(client: &Principal, key: &KeyEntry, requested: &[i32]) -> Vec<PaData> {
     let mut out = Vec::new();
-    let salt = KerberosString::try_from(String::from_utf8_lossy(&client.salt).as_ref()).ok();
-    let etype = etype.to_iana();
+    let salt = key_salt_string(client, key);
+    let etype = key.etype.to_iana();
     if !requested.iter().copied().any(enctype_requires_etype_info_2) {
         let info: EtypeInfo = vec![EtypeInfoEntry {
             etype,
@@ -764,15 +763,21 @@ fn etype_info_padata(client: &Principal, etype: EncryptionType, requested: &[i32
 
 // MIT: `add_etype_info` (kdc_preauth.c:769-800)
 // MIT: `add_pw_salt` (kdc_preauth.c:802-824)
-fn as_rep_key_info(client: &Principal, etype: EncryptionType, requested: &[i32]) -> Vec<PaData> {
-    let mut out = etype_info_padata(client, etype, requested);
+fn as_rep_key_info(client: &Principal, key: &KeyEntry, requested: &[i32]) -> Vec<PaData> {
+    let mut out = etype_info_padata(client, key, requested);
     if !requested.iter().copied().any(enctype_requires_etype_info_2) {
         out.push(PaData {
             padata_type: pa::PW_SALT,
-            padata_value: client.salt.clone().into(),
+            padata_value: crate::kdb_dump::key_salt(key, &client.name, &client.realm).into(),
         });
     }
     out
+}
+
+// MIT: `krb5_dbe_compute_salt` (lib/kdb/kdb5.c:2345-2388)
+fn key_salt_string(client: &Principal, key: &KeyEntry) -> Option<KerberosString> {
+    let salt = crate::kdb_dump::key_salt(key, &client.name, &client.realm);
+    KerberosString::try_from(String::from_utf8_lossy(&salt).as_ref()).ok()
 }
 
 // MIT: `select_client_key` (do_as_req.c:104-130)
@@ -913,7 +918,7 @@ fn preauth_hint_edata(
     let mut method: MethodData = hint.padata;
     // MIT: `add_etype_info` (kdc_preauth.c:776-778)
     if let Some(ckey) = ckey {
-        let info = etype_info_padata(client, ckey.etype, requested);
+        let info = etype_info_padata(client, ckey, requested);
         let at = usize::from(method.first().is_some_and(|p| p.padata_type == pa::FX_FAST));
         for (i, p) in info.into_iter().enumerate() {
             method.insert(at + i, p);

@@ -348,20 +348,48 @@ pub fn parse_enctype_list(profstr: &str, allow_weak: bool) -> Option<Vec<Encrypt
     if list.is_empty() { None } else { Some(list) }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KeySalt {
+    pub etype: EncryptionType,
+    pub salt: i32,
+}
+
+impl From<EncryptionType> for KeySalt {
+    fn from(etype: EncryptionType) -> Self {
+        Self { etype, salt: 0 }
+    }
+}
+
+// MIT: `krb5_string_to_salttype` (lib/krb5/krb/str_conv.c:72-86)
+#[must_use]
+pub fn salttype_from_name(name: &str) -> Option<i32> {
+    match name.to_ascii_lowercase().as_str() {
+        "normal" => Some(0),
+        "norealm" => Some(2),
+        "onlyrealm" => Some(3),
+        "special" => Some(4),
+        _ => None,
+    }
+}
+
 // MIT: `krb5_string_to_keysalts` (lib/kadm5/str_conv.c:314-366)
 #[must_use]
-pub fn parse_keysalt_list(s: &str) -> Vec<EncryptionType> {
+pub fn parse_keysalts(s: &str) -> Vec<KeySalt> {
     let mut out = Vec::new();
     for tok in s.split(|c: char| c.is_ascii_whitespace() || c == ',') {
         let tok = tok.trim();
         if tok.is_empty() {
             continue;
         }
-        let et = tok.split_once(':').map_or(tok, |(e, _)| e);
-        if let Ok(e) = EncryptionType::from_mit_name(et)
-            && !out.contains(&e)
-        {
-            out.push(e);
+        let (et, salt) = match tok.split_once(':') {
+            Some((e, st)) => (e, salttype_from_name(st)),
+            None => (tok, Some(0)),
+        };
+        if let (Ok(etype), Some(salt)) = (EncryptionType::from_mit_name(et), salt) {
+            let ks = KeySalt { etype, salt };
+            if !out.contains(&ks) {
+                out.push(ks);
+            }
         }
     }
     out

@@ -76,7 +76,7 @@ struct Open {
     stash: PathBuf,
     conf: Option<krb5_config::KdcConf>,
     krb5: Option<krb5_config::Krb5Conf>,
-    keysalts: Vec<krb5_crypto::EncryptionType>,
+    keysalts: Vec<krb5_crypto::KeySalt>,
     /// `-m`: the typed master key; the stash is never opened.
     typed: Option<krb5_crypto::ProtocolKey>,
 }
@@ -245,7 +245,7 @@ struct Opts {
     keytab_name: Option<String>,
     query: Option<String>,
     mkey_from_kbd: bool,
-    keysalts: Vec<krb5_crypto::EncryptionType>,
+    keysalts: Vec<krb5_crypto::KeySalt>,
 }
 
 fn getopt_prog(argv0: &str) -> &str {
@@ -617,21 +617,18 @@ fn db2_arg(arg: &str) -> Db2Arg<'_> {
 
 // MIT: `krb5_string_to_keysalts` (kadm5/str_conv.c:319-366)
 // MIT: `krb5_string_to_salttype` (krb/str_conv.c:72-86)
-pub(crate) fn string_to_keysalts(s: &str, seps: &[char]) -> Vec<krb5_crypto::EncryptionType> {
-    const SALTS: [&str; 4] = ["normal", "norealm", "onlyrealm", "special"];
+pub(crate) fn string_to_keysalts(s: &str, seps: &[char]) -> Vec<krb5_crypto::KeySalt> {
     let mut out = Vec::new();
     for tuple in s.split(|c| seps.contains(&c)).filter(|t| !t.is_empty()) {
         let (etype, salt) = match tuple.split_once(':') {
-            Some((e, s)) => (e, Some(s)),
-            None => (tuple, None),
+            Some((e, s)) => (e, krb5_crypto::salttype_from_name(s)),
+            None => (tuple, Some(0)),
         };
-        if salt.is_some_and(|s| !SALTS.iter().any(|name| name.eq_ignore_ascii_case(s))) {
-            continue;
-        }
-        if let Ok(e) = krb5_crypto::EncryptionType::from_mit_name(etype)
-            && !out.contains(&e)
-        {
-            out.push(e);
+        if let (Ok(etype), Some(salt)) = (krb5_crypto::EncryptionType::from_mit_name(etype), salt) {
+            let ks = krb5_crypto::KeySalt { etype, salt };
+            if !out.contains(&ks) {
+                out.push(ks);
+            }
         }
     }
     out

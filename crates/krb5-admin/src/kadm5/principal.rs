@@ -117,7 +117,7 @@ pub(super) struct CreateFields {
     pub(super) tl_data: Vec<TlData>,
     pub(super) n_key_data: u32,
     /// v3 `ks_tuple`; empty for v2.
-    pub(super) ks: Vec<EncryptionType>,
+    pub(super) ks: Vec<krb5_crypto::KeySalt>,
 }
 
 /// Wire order: ver, principal, mask, ks, pass.
@@ -166,7 +166,7 @@ pub(super) struct ChpassArgs {
     pub(super) prealm: String,
     pub(super) pass: zeroize::Zeroizing<Vec<u8>>,
     pub(super) keepold: bool,
-    pub(super) ks: Vec<EncryptionType>,
+    pub(super) ks: Vec<krb5_crypto::KeySalt>,
 }
 
 pub(super) fn parse_chpass(args: &[u8], v3: bool) -> Result<ChpassArgs, Error> {
@@ -247,7 +247,6 @@ pub(super) struct SetkeyArgs {
 
 // MIT: `xdr_kadm5_key_data` (kadm_rpc_xdr.c:1166-1174)
 // MIT: `krb5_dbe_def_encrypt_key_data` (lib/kdb/encrypt_key.c:95-105)
-/// V4 key: kvno, keyblock, salt.
 pub(super) fn parse_setkey(args: &[u8], proc: u32) -> Result<SetkeyArgs, Error> {
     let mut r = XdrR::new(args);
     let api = r.u32()?;
@@ -339,7 +338,7 @@ pub(super) fn parse_extract(args: &[u8]) -> Result<(u32, PrincipalName, String, 
 pub(super) fn parse_chrand(
     args: &[u8],
     v3: bool,
-) -> Result<(PrincipalName, String, bool, Vec<EncryptionType>), Error> {
+) -> Result<(PrincipalName, String, bool, Vec<krb5_crypto::KeySalt>), Error> {
     let mut r = XdrR::new(args);
     let _ = r.u32()?;
     let (princ, prealm) = r.principal_realm()?;

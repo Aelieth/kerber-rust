@@ -11,7 +11,6 @@ mod kadmind;
 mod kprop;
 mod listen;
 
-use krb5_crypto::EncryptionType;
 use krb5_kdc::{Acl, AdminOp, PrincipalStore};
 use krb5_protocol::Keytab;
 use krb5_types::PrincipalName;
@@ -263,7 +262,7 @@ impl<'a> AdminSession<'a> {
         &mut self,
         name: &PrincipalName,
         password: &[u8],
-        etypes: &[EncryptionType],
+        etypes: &[krb5_crypto::KeySalt],
     ) -> Result<(), Error> {
         self.reload()?;
         self.change(|s, acl, actor| s.create_password_etypes(acl, actor, name, password, etypes))
@@ -277,7 +276,7 @@ impl<'a> AdminSession<'a> {
     pub fn create_randkey_etypes(
         &mut self,
         name: &PrincipalName,
-        etypes: &[EncryptionType],
+        etypes: &[krb5_crypto::KeySalt],
     ) -> Result<(), Error> {
         self.reload()?;
         self.change(|s, acl, actor| s.create_host_etypes(acl, actor, name, etypes))
@@ -288,7 +287,7 @@ impl<'a> AdminSession<'a> {
         &mut self,
         name: &PrincipalName,
         password: Option<&[u8]>,
-        etypes: &[EncryptionType],
+        etypes: &[krb5_crypto::KeySalt],
         policy: Option<&str>,
     ) -> Result<(), Error> {
         self.reload()?;
@@ -303,7 +302,7 @@ impl<'a> AdminSession<'a> {
     pub fn chrand_etypes_keepold(
         &mut self,
         name: &PrincipalName,
-        etypes: &[EncryptionType],
+        etypes: &[krb5_crypto::KeySalt],
         keepold: bool,
     ) -> Result<(), Error> {
         self.reload()?;
@@ -391,7 +390,7 @@ impl<'a> AdminSession<'a> {
         &mut self,
         name: &PrincipalName,
         password: &[u8],
-        etypes: &[EncryptionType],
+        etypes: &[krb5_crypto::KeySalt],
     ) -> Result<(), Error> {
         self.reload()?;
         let store_realm = self.store.realm();

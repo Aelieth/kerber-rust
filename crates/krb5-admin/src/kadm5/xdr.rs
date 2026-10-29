@@ -1,4 +1,4 @@
-use krb5_crypto::EncryptionType;
+use krb5_crypto::{EncryptionType, KeySalt};
 use krb5_types::PrincipalName;
 
 use crate::Error;
@@ -95,19 +95,19 @@ impl<'a> XdrR<'a> {
         Ok(out)
     }
 
-    pub(super) fn key_salt_tuples(&mut self) -> Result<Vec<EncryptionType>, Error> {
+    pub(super) fn key_salt_tuples(&mut self) -> Result<Vec<KeySalt>, Error> {
         let n = self.u32()?;
         let mut out = Vec::new();
         for _ in 0..n {
             let et = i32::try_from(self.u32()?).unwrap_or(i32::MAX);
-            let _salttype = self.u32()?;
+            let salt = self.u32()?.cast_signed();
             let e = EncryptionType::known(et)
                 .map_err(|_| Error::Inner("Invalid key/salt tuples".into()))?;
             // `known` as MIT kadmind; `from_iana` stays stricter.
             if e.is_mit_weak() {
                 return Err(Error::Inner("Invalid key/salt tuples".into()));
             }
-            out.push(e);
+            out.push(KeySalt { etype: e, salt });
         }
         Ok(out)
     }

@@ -37,7 +37,7 @@ fn insert_anonymous(store: &mut PrincipalStore) {
             &wellknown_anonymous(),
             TEST_REALM,
             b"anon",
-            &[EncryptionType::Aes256CtsHmacSha196],
+            &[EncryptionType::Aes256CtsHmacSha196.into()],
             "kadmin/admin@KERBER.TEST",
         )
         .expect("WELLKNOWN/ANONYMOUS");
