@@ -30,7 +30,7 @@ pub struct ApVerifyParams<'a> {
     pub expected_server: Option<&'a PrincipalName>,
     pub expected_realm: Option<&'a str>,
     pub get_entry: Option<KeytabGetEntry<'a>>,
-    /// Negative skew fails every time check.
+    /// A negative skew fails the authenticator's time check.
     pub skew: i64,
     pub ignore_acceptor_hostname: bool,
     pub capaths: &'a BTreeMap<String, BTreeMap<String, Vec<String>>>,

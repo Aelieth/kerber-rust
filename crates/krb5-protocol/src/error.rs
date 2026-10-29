@@ -41,6 +41,7 @@ pub enum Error {
     #[error("reply validation: {0}")]
     ReplyMismatch(String),
     // MIT: `verify_as_reply` (get_in_tkt.c:264-269)
+    // MIT: `krb5int_process_tgs_reply` (gc_via_tkt.c:302-306)
     #[error("Clock skew too great in KDC reply")]
     KdcReplySkew,
     #[error("referral TGT cannot be used as the requested service ticket")]
@@ -72,7 +73,7 @@ pub enum Error {
     // MIT: `KRB5_PROG_SUMTYPE_NOSUPP` (krb5_err.et:207-207)
     #[error("Program lacks support for checksum type")]
     ProgSumtypeNosupp,
-    /// The text names the unpermitted enctype, hence `{{0}}`.
+    /// The text is the message, which names the unpermitted enctype.
     // MIT: `negotiate_etype` (lib/krb5/krb/rd_req_dec.c:878-886)
     #[error("{0}")]
     NopermEtype(String),

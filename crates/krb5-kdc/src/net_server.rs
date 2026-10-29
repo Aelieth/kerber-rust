@@ -392,7 +392,7 @@ impl<S: Stream> Streams<S> {
     // MIT: `kill_lru_stream_connection` (lib/apputils/net-server.c:1198-1223)
     fn kill_lru(&mut self, newest: u64, log: &mut dyn Log) {
         log.syslog(Severity::Info, "too many connections");
-        // Evict unauthenticated RPC first, then oldest, as MIT.
+        // Deviation: unauthenticated RPC first, then oldest (docs/mit-deviations.md).
         let mut victim: Option<usize> = None;
         let mut victim_unauth = false;
         for (i, c) in self.conns.iter().enumerate().rev() {

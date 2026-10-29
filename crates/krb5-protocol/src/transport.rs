@@ -120,7 +120,7 @@ pub fn exchange(profile: &Krb5Conf, addr: &KdcAddr, request: &[u8]) -> Result<Ve
 
 // MIT: `k5_sendto_kdc` (lib/krb5/os/sendto_kdc.c:446-560)
 // MIT: `k5_sendto` (lib/krb5/os/sendto_kdc.c:1537-1600)
-/// Several KDCs: UDP/TCP 1 s each, then 2 s, then UDP widening.
+/// Several KDCs: UDP/TCP 1 s each, then 2 s, then UDP at 4 s and 8 s.
 pub(crate) fn sendto_kdc(
     profile: &Krb5Conf,
     addr: &KdcAddr,

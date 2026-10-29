@@ -275,8 +275,8 @@ impl std::fmt::Debug for Arg<'_> {
 }
 
 // MIT: `trace_format` (lib/krb5/os/trace.c:173-366)
-/// An unknown word prints nothing and takes no argument; a 199-byte word
-/// ends the message.
+/// An unknown word prints nothing and takes no argument; a word over 199
+/// bytes, or a brace with no close, ends the message.
 #[must_use]
 pub fn trace_format(fmt: &str, args: &[Arg<'_>]) -> String {
     let mut buf = String::new();

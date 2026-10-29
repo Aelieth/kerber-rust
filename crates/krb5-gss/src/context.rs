@@ -108,7 +108,7 @@ pub(super) fn random_subkey(session: &ProtocolKey) -> Result<ProtocolKey, Error>
 const FIELD_TOOLONG: &str = "Field is too long for this implementation";
 
 // MIT: `kg_setup_keys` (lib/gssapi/krb5/util_crypt.c:99-125)
-// DES3 and RC4 keys use the pre-CFX tokens, every other enctype CFX (`proto` 1).
+// DES3, RC4 and RC4-EXP keys use the pre-CFX tokens, every other enctype CFX (`proto` 1).
 const fn pre_cfx(etype: i32) -> bool {
     matches!(etype, 16 | 23 | 24)
 }
