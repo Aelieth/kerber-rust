@@ -248,6 +248,12 @@ fn run<R: BufRead, W: Write>(
             eprintln!("{prog}: Cannot contact any KDC for requested realm changing password");
             1
         }
+        // MIT: `get_clear_result` (lib/krb5/krb/chpw.c:106-192)
+        // A reply that fails its length, AP-REP or result checks.
+        Err(Error::ReplyMismatch(m)) if m.starts_with("kpasswd ") && m != "kpasswd AP-REP" => {
+            eprintln!("{prog}: Message stream modified changing password");
+            1
+        }
         Err(e) => {
             let text = krb5_client::errmsg::Krb5Error::from_protocol(&e, &client.realm);
             eprintln!("{prog}: {text} changing password");

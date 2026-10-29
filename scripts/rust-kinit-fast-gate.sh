@@ -308,6 +308,35 @@ for what in kinit kpasswd; do
     done
 done
 
+echo "==== kvno: a TGS reply with a modified ticket fails and retries once; kpasswd bad reply (MIT first) ===="
+docker cp "$ROOT/harness/field/lib/kdc-rewrite-proxy.py" "$NAME":/tmp/kdc-rewrite-proxy.py
+docker exec -d "$NAME" timeout 120 python3 /tmp/kdc-rewrite-proxy.py 1898 127.0.0.1 88 /tmp/mod-proxy.log tgs-rep-ticket
+docker exec -d "$NAME" timeout 120 python3 /tmp/trickle-kdc.py 1897 badlen
+docker exec "$NAME" sh -c 'sed "s/kdc = 127.0.0.1\$/kdc = 127.0.0.1:1898/" /etc/krb5.conf > /tmp/mod-kdc.conf
+sed "s/^\[libdefaults\]\$/[libdefaults]\n    udp_preference_limit = 1/; s/^\(        admin_server = 127.0.0.1\)\$/\1\n        kpasswd_server = 127.0.0.1:1897/" /etc/krb5.conf > /tmp/mod-kpw.conf'
+sleep 1
+for who in mit rust; do
+    docker exec "$NAME" sh -c 'rm -f /tmp/mod.cc; : > /tmp/mod-proxy.log; printf "userpassword\n" | kinit -c /tmp/mod.cc user@KERBER.TEST'
+    if [ "$who" = mit ]; then bin=kvno; else bin=/tmp/krb5-kvno; fi
+    set +e
+    KV="$(docker exec -e KRB5_CONFIG=/tmp/mod-kdc.conf -e KRB5CCNAME=FILE:/tmp/mod.cc "$NAME" $bin host/testhost.kerber.test@KERBER.TEST 2>&1)"
+    reqs="$(docker exec "$NAME" grep -c msg_type=12 /tmp/mod-proxy.log)"
+    case "$who" in
+    mit) PW="$(docker exec -e KRB5_CONFIG=/tmp/mod-kpw.conf "$NAME" sh -c 'printf "userpassword\nmod-pw\nmod-pw\n" | kpasswd user@KERBER.TEST' 2>&1)" ;;
+    *) PW="$(docker exec -e KRB5_CONFIG=/tmp/mod-kpw.conf -e KRB5_PASSWORD=userpassword -e KRB5_NEW_PASSWORD=mod-pw "$NAME" /tmp/krb5-kpasswd user@KERBER.TEST 2>&1)" ;;
+    esac
+    set -e
+    KV="${KV#*: }"
+    PW="$(tr -d '\r' <<<"$PW" | grep -v '^$' | tail -n 1)"
+    PW="${PW##*: }"
+    echo "$who: kvno '$KV' ($reqs TGS requests); kpasswd '$PW'"
+    if [ "$who" = mit ]; then want_kv="$KV"; want_reqs="$reqs"; want_pw="$PW"; fi
+    if [ "${KV#Ticket modified in KDC reply}" = "$KV" ] || [ "$KV" != "$want_kv" ] || [ "$reqs" != "$want_reqs" ] || [ "$PW" != "$want_pw" ]; then
+        log "fast.client.gate" "error" ",\"error\":\"$who modified-reply cell differs from MIT\""
+        exit 1
+    fi
+done
+
 echo "==== require_auth encrypted_challenge: FAST issued, password 12 both legs ===="
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdb" "$NAME":/tmp/krb5-kdb

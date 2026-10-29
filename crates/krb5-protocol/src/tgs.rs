@@ -445,7 +445,7 @@ fn get_dest_tgt(
                         return Err(Error::ReplyMismatch("off-path reply was not a TGT".into()));
                     };
                     if visited.iter().any(|r| r == &got) {
-                        return Err(kdc_unreach());
+                        return Err(Error::Referral);
                     }
                     visited.push(got.clone());
                     cur_tgt = tgs_as_tgt(&cur_tgt, out);
@@ -605,14 +605,6 @@ fn tgt_is_off_path(path: &[String], cur: &str, start: &str, realm: &str) -> bool
     !rest.iter().any(|r| r == realm) && realm != start
 }
 
-fn kdc_unreach() -> Error {
-    Error::Io {
-        message: "Cannot contact any KDC for requested realm".into(),
-        kind: std::io::ErrorKind::Other,
-        retryable: false,
-    }
-}
-
 fn closer_hop<'a>(path: &'a [String], cur: &str, next: &str) -> Option<&'a str> {
     let ni = path.iter().position(|r| r == next)?;
     if ni == 0 {
@@ -735,7 +727,7 @@ fn chase_step(
                 ));
             }
             if seen.iter().any(|r| r == &foreign) {
-                return Err(Error::ReplyMismatch("referral loop".into()));
+                return Err(Error::Referral);
             }
             seen.push(foreign.clone());
             Ok(TgsHop::Referral(foreign))
@@ -913,7 +905,7 @@ fn tgs_kerr(e: &Error, ext: bool) -> Option<(i64, Option<String>)> {
             (trace::kdc_code(*code), msg)
         }
         Error::Io { .. } if !ext => return None,
-        Error::Io { .. } => (trace::KRB5_KDC_UNREACH, None),
+        Error::Io { .. } | Error::Referral => (trace::KRB5_KDC_UNREACH, None),
         Error::Crypto(_) => (trace::kdc_code(krb5_types::err::BAD_INTEGRITY), None),
         // MIT: `KRB5DES_BAD_KEYPAR` (krb5_err.et:251-251)
         Error::DesBadParity => (trace::ERROR_TABLE_BASE_KRB5 + 186, None),
@@ -1453,7 +1445,9 @@ fn tgs_service_once(
         service_request(sname, served, referral, creds_opts),
     ) {
         Ok(out) => Ok(ServiceStep::Reply(Box::new(out))),
-        Err(e @ Error::KrbError { .. }) => match tgs_try_fallback(
+        // MIT: `step_referrals` (lib/krb5/krb/get_creds.c:566-570)
+        // Any failure but an unreachable KDC.
+        Err(e) if !matches!(e, Error::Io { .. }) => match tgs_try_fallback(
             referral_count,
             !request_realm.is_empty() && !creds_opts.referral_realm,
             sname.name_string.len(),

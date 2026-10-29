@@ -10,6 +10,9 @@ modes:
   as-rep-cname <name>   every AS-REP (0x6b): the outer cname [4] becomes the
                         one-component NT-PRINCIPAL <name> — the FAST finished
                         client must win (fast.c:548-558)
+  tgs-rep-ticket        every TGS-REP (0x6d): the last byte of the ticket's
+                        realm is raised by one, so the FAST finished ticket
+                        checksum fails (fast.c:539-546)
   strip-fx-fast         every KRB-ERROR (0x7e): PA-FX-FAST (136) is removed
                         from the e_data padata sequence (an emptied sequence
                         stays as `30 00`) — the outer error must be fatal
@@ -129,6 +132,31 @@ def rewrite_as_rep_cname(pdu: bytes, name: str) -> tuple[bytes, bool]:
     return (_rebuild(0x6B, out), True) if hit else (pdu, False)
 
 
+def tamper_tgs_rep_ticket(pdu: bytes) -> tuple[bytes, bool]:
+    """Raise the last byte of a TGS-REP ticket's realm; anything else passes through."""
+    if not pdu or pdu[0] != 0x6D:
+        return pdu, False
+    _, seq, _ = _tlv(pdu, 0)
+    _, body, _ = _tlv(seq, 0)
+    out = []
+    hit = False
+    for tag, val in _fields(body):
+        if tag != 0xA5:
+            out.append((tag, val))
+            continue
+        _, tkt, _ = _tlv(val, 0)
+        _, tbody, _ = _tlv(tkt, 0)
+        tfields = []
+        for ttag, tval in _fields(tbody):
+            if ttag == 0xA1:
+                gtag, realm, _ = _tlv(tval, 0)
+                tval = _enc(gtag, realm[:-1] + bytes([realm[-1] + 1]))
+                hit = True
+            tfields.append((ttag, tval))
+        out.append((0xA5, _enc(0x61, _enc(0x30, b"".join(_enc(t, v) for t, v in tfields)))))
+    return (_rebuild(0x6D, out), True) if hit else (pdu, False)
+
+
 def _padata_type(pa: bytes) -> int | None:
     i = 0
     while i < len(pa):
@@ -244,7 +272,7 @@ def _refer_map(arg: str) -> dict[str, tuple[str, int]]:
 
 class Rewriter:
     def __init__(self, mode: str, arg: str | None) -> None:
-        if mode not in ("none", "as-rep-cname", "strip-fx-fast", "refer"):
+        if mode not in ("none", "as-rep-cname", "strip-fx-fast", "refer", "tgs-rep-ticket"):
             raise SystemExit(f"unknown mode {mode}")
         if mode in ("as-rep-cname", "refer") and not arg:
             raise SystemExit(f"{mode} needs an argument")
@@ -270,6 +298,8 @@ class Rewriter:
                 return rewrite_as_rep_cname(reply, self.arg or "")
             if self.mode == "strip-fx-fast":
                 return strip_fx_fast(reply)
+            if self.mode == "tgs-rep-ticket":
+                return tamper_tgs_rep_ticket(reply)
         except (ValueError, IndexError):
             return reply, False
         return reply, False

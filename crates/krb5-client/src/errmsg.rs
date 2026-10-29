@@ -133,6 +133,7 @@ impl Krb5Error {
     // \<text\>".
     #[must_use]
     pub fn from_tgs(e: &krb5_protocol::Error, realm: &str) -> Self {
+        use krb5_protocol::Error as E;
         if let krb5_protocol::Error::KrbError {
             code: krb5_types::err::S_PRINCIPAL_UNKNOWN,
             text: Some(t),
@@ -150,7 +151,22 @@ impl Krb5Error {
         {
             return Self::new(Code::Kdc(*code), format!("KDC returned error string: {t}"));
         }
-        Self::from_protocol(e, realm)
+        match e {
+            // MIT: `krb5int_fast_process_response` (lib/krb5/krb/fast.c:534-546)
+            // These two replies set their own text.
+            E::ReplyMismatch(m)
+                if m == "Ticket modified in KDC reply"
+                    || m.starts_with("FAST response missing finish message") =>
+            {
+                Self::new(Code::KdcrepModified, m.clone())
+            }
+            // MIT: `krb5int_process_tgs_reply` (lib/krb5/krb/gc_via_tkt.c:225-306)
+            E::NonceMismatch => Self::of(Code::KdcrepModified),
+            E::ReplyMismatch(m) if m != "host realm unknown" => Self::of(Code::KdcrepModified),
+            // MIT: `step_referrals` (lib/krb5/krb/get_creds.c:561-583)
+            E::Referral => Self::of(Code::KdcUnreach),
+            _ => Self::from_protocol(e, realm),
+        }
     }
 
     #[must_use]
