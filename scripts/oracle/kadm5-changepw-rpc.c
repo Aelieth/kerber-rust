@@ -3,7 +3,7 @@
  * usage: kadm5-changepw-rpc [--service princ] <client> <password> <realm> <op> [arg]
  * op: listprincs | getprinc <name> | randkey-keepold <n> | setkey-keepold <n>
  *     | setkey4-kvno <target> <kvno> | setkey-cases <target>
- *     | addpol-minlife-unmasked-max <policy>
+ *     | addpol-minlife-unmasked-max <policy> | tl-deleg <target> <name>
  *     | modify-raw <target> <maxlife|policyclr>
  */
 #include <kadm5/admin.h>
@@ -164,6 +164,39 @@ int main(int argc, char **argv) {
             printf("setkey3_norealm=%ld\n",
                    (long)kadm5_setkey_principal_3(handle, p, 0, 1, &ks, kb, 1));
         }
+        krb5_free_principal(ctx, p);
+    } else if (strcmp(op, "tl-deleg") == 0 && argc - argi >= 6) {
+        /* tl_data 1024 (KRB5_TL_CONSTRAINED_DELEGATION_ACL) through modify, then get. */
+        krb5_principal p;
+        kadm5_principal_ent_rec rec;
+        krb5_tl_data tl, *t;
+        const char *name = argv[argi + 5];
+        memset(&rec, 0, sizeof(rec));
+        memset(&tl, 0, sizeof(tl));
+        ret = krb5_parse_name(ctx, argv[argi + 4], &p);
+        if (ret) {
+            printf("parse_code=%ld\n", (long)ret);
+            kadm5_destroy(handle);
+            krb5_free_context(ctx);
+            return 1;
+        }
+        tl.tl_data_type = 1024;
+        tl.tl_data_length = (krb5_ui_2)(strlen(name) + 1);
+        tl.tl_data_contents = (krb5_octet *)name;
+        rec.principal = p;
+        rec.n_tl_data = 1;
+        rec.tl_data = &tl;
+        ret = kadm5_modify_principal(handle, &rec, KADM5_TL_DATA);
+        printf("modify_code=%ld\n", (long)ret);
+        memset(&rec, 0, sizeof(rec));
+        ret = kadm5_get_principal(handle, p, &rec, KADM5_PRINCIPAL_NORMAL_MASK | KADM5_TL_DATA);
+        printf("get_code=%ld\n", (long)ret);
+        for (t = ret ? NULL : rec.tl_data; t != NULL; t = t->tl_data_next) {
+            if (t->tl_data_type == 1024)
+                printf("tl=1024:%.*s\n", (int)t->tl_data_length, (char *)t->tl_data_contents);
+        }
+        if (ret == 0)
+            kadm5_free_principal_ent(handle, &rec);
         krb5_free_principal(ctx, p);
     } else if (strcmp(op, "addpol-minlife-unmasked-max") == 0 && argc - argi >= 5) {
         /* pw_max_life is on the wire but not in the mask; MIT ignores it. */

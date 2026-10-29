@@ -170,6 +170,13 @@ pub(crate) struct PrincipalFields {
 }
 
 impl Principal {
+    #[must_use]
+    pub fn tl_with_s4u(&self) -> Vec<TlData> {
+        let mut tl = self.tl_data.clone();
+        crate::kdb_dump::merge_s4u_tl(&mut tl, self);
+        tl
+    }
+
     // MIT: `missing_required_preauth` (kdc_preauth.c:729-750)
     #[must_use]
     pub fn requires_preauth(&self) -> bool {
@@ -990,6 +997,7 @@ impl PrincipalStore {
             }
             p.tl_data.push(tl.clone());
         }
+        crate::kdb_dump::absorb_s4u_tl(&mut p);
         strip_db_args(&mut p.tl_data)?;
         stamp_admin_tl(&mut p, false, actor);
         self.inside_change()?;

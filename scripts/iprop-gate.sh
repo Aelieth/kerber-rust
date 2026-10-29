@@ -525,6 +525,28 @@ if [ "$ok" != 1 ]; then
     exit 1
 fi
 
+echo "==== a kadm5 tl_data 1024 on the Rust master reaches MIT kpropd in AT_TL_DATA ===="
+# kdb_convert.c ulog_conv_2logentry sends every tl_data; here the delegation ACL is one of them.
+docker cp "$ROOT/scripts/oracle/kadm5-changepw-rpc.c" "$NAME":/tmp/kadm5-changepw-rpc.c
+mit_oracle_cc "$NAME" /tmp/kadm5-changepw-rpc /tmp/kadm5-changepw-rpc.c kadm-client
+DELEG="$(docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf "$NAME" /tmp/kadm5-changepw-rpc \
+    --service kadmin/admin admin@KERBER.TEST adminpassword KERBER.TEST \
+    tl-deleg extra host/target.kerber.test@KERBER.TEST 2>&1 || true)"
+echo "$DELEG"
+echo "$DELEG" | grep -Fx 'tl=1024:host/target.kerber.test@KERBER.TEST'
+DELEG_HEX="$(printf 'host/target.kerber.test@KERBER.TEST\0' | od -An -tx1 | tr -d ' \n')"
+ok=0
+for _ in $(seq 1 40); do
+    docker exec "$NAME" kdb5_util dump /tmp/deleg.dump >/dev/null 2>&1 || true
+    if docker exec "$NAME" grep -F $'\textra@KERBER.TEST\t' /tmp/deleg.dump 2>/dev/null |
+        grep -qF $'\t1024\t36\t'"$DELEG_HEX"; then
+        ok=1
+        break
+    fi
+    sleep 1
+done
+[ "$ok" = 1 ] || die "the MIT replica has no tl_data 1024 for extra after the Rust master's update"
+
 echo "==== a policy change restarts the log: MIT kpropd asks for a full resync, and the dump carries the policy ===="
 # kdb5.c krb5_db_create_policy: a logging primary reinitializes its update log
 # after a policy change (one dummy entry at serial 1), so the replica, past it,

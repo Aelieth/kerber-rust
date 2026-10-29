@@ -498,10 +498,11 @@ fn encode_principal_ent(w: &mut XdrW, p: &krb5_kdc::Principal, mask: u32) {
     w.u32(p.fail_auth_count);
     let n_key = u32::try_from(p.keys.len()).unwrap_or(0);
     // MIT: `kadm5_get_principal` (lib/kadm5/srv/svr_principal.c:848-866)
+    let all_tl = p.tl_with_s4u();
     let tl: Vec<_> = if mask & KADM5_TL_DATA == 0 {
         Vec::new()
     } else {
-        p.tl_data
+        all_tl
             .iter()
             .rev()
             .filter(|t| {

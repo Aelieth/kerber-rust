@@ -753,6 +753,39 @@ diff "$SCRATCH/setkey-policy-mit.txt" "$SCRATCH/setkey-policy-rust.txt" || {
     exit 1
 }
 
+echo "==== kadm5 tl_data 1024 (the delegation ACL) on MIT's kadmind, then ours: get and the dump keep it ===="
+TLDELEG_HEX="$(printf 'host/target.kerber.test@KERBER.TEST\0' | od -An -tx1 | tr -d ' \n')"
+tldeleg_leg() {
+    local ctn=$1 conf=$2 leg=$3 out line
+    mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p admin/admin -w adminpassword \
+        -q 'addprinc -randkey tldeleg' 2>&1 | grep -F 'Principal "tldeleg@KERBER.TEST" created.'
+    out="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" /tmp/kadm5-changepw-rpc --service kadmin/admin \
+        admin/admin adminpassword KERBER.TEST tl-deleg tldeleg host/target.kerber.test@KERBER.TEST 2>&1 || true)"
+    echo "$leg tl-deleg: $out"
+    echo "$out" | grep -E '^(modify_code|get_code|tl)=' > "$SCRATCH/tldeleg-$leg.txt"
+    if [ "$leg" = mit ]; then
+        docker exec "$ctn" kdb5_util dump /tmp/tldeleg.dump
+    else
+        docker exec -e KRB5_KDC_DB=/tmp/principal -e KRB5_KDC_STASH=/tmp/stash \
+            -e KRB5_MASTER_PASSWORD=masterpassword \
+            "$ctn" /tmp/krb5-kdb dump /tmp/tldeleg.dump
+    fi
+    line="$(docker exec "$ctn" grep -F $'\ttldeleg@KERBER.TEST\t' /tmp/tldeleg.dump || true)"
+    echo "$leg tldeleg dump: $line"
+    case "$line" in
+        *$'\t1024\t36\t'"$TLDELEG_HEX"$'\t'*) echo "$leg dump keeps tl_data 1024" ;;
+        *) echo "$leg dump lost the kadm5 tl_data 1024" >&2; exit 1 ;;
+    esac
+}
+tldeleg_leg "$NAME_MIT" /etc/krb5.conf mit
+tldeleg_leg "$NAME" /tmp/kadmin-krb5.conf rust
+printf 'modify_code=0\nget_code=0\ntl=1024:host/target.kerber.test@KERBER.TEST\n' \
+    | diff - "$SCRATCH/tldeleg-mit.txt"
+diff "$SCRATCH/tldeleg-mit.txt" "$SCRATCH/tldeleg-rust.txt" || {
+    echo "tl_data 1024: modify or get differs between MIT's kadmind and ours" >&2
+    exit 1
+}
+
 echo "==== Z8.3 bootstrap actors: kadmin/changepw kdb5_util@ (kadm5_create.c:100) ===="
 # kadmin/changepw is never successfully modified in this gate (the
 # lockdown_keys cell is a privilege denial), so both legs still show

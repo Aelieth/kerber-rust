@@ -1523,7 +1523,7 @@ fn policy_from_tl(tl: &[TlData]) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn nul_tl_names(tl: &[TlData], ty: i32) -> Vec<String> {
+pub(crate) fn nul_tl_names(tl: &[TlData], ty: i32) -> Vec<String> {
     tl.iter()
         .filter(|t| t.ty == ty)
         .filter_map(|t| {
@@ -1538,16 +1538,20 @@ fn nul_tl_names(tl: &[TlData], ty: i32) -> Vec<String> {
 
 pub(crate) fn absorb_identity_tl(p: &mut Principal) -> Option<u32> {
     let hwm = rid_hwm_of(&p.tl_data);
+    absorb_s4u_tl(p);
+    p.tl_data.retain(|t| t.ty != TL_KERBER_RID_HWM);
+    hwm
+}
+
+pub(crate) fn absorb_s4u_tl(p: &mut Principal) {
     if p.tl_data.iter().any(|t| t.ty == TL_CONSTRAINED_DELEGATION) {
         p.s4u_allowed_to = nul_tl_names(&p.tl_data, TL_CONSTRAINED_DELEGATION);
     }
     if p.tl_data.iter().any(|t| t.ty == TL_KERBER_S4U_FROM) {
         p.s4u_allowed_from = nul_tl_names(&p.tl_data, TL_KERBER_S4U_FROM);
     }
-    p.tl_data.retain(|t| {
-        t.ty != TL_CONSTRAINED_DELEGATION && t.ty != TL_KERBER_S4U_FROM && t.ty != TL_KERBER_RID_HWM
-    });
-    hwm
+    p.tl_data
+        .retain(|t| t.ty != TL_CONSTRAINED_DELEGATION && t.ty != TL_KERBER_S4U_FROM);
 }
 
 fn rid_hwm_of(tl: &[TlData]) -> Option<u32> {
@@ -1569,7 +1573,7 @@ fn merge_rid_hwm(tl: &mut Vec<TlData>, next: u32, is_km: bool) {
     }
 }
 
-fn merge_s4u_tl(tl: &mut Vec<TlData>, p: &Principal) {
+pub(crate) fn merge_s4u_tl(tl: &mut Vec<TlData>, p: &Principal) {
     tl.retain(|t| t.ty != TL_CONSTRAINED_DELEGATION && t.ty != TL_KERBER_S4U_FROM);
     for name in &p.s4u_allowed_to {
         tl.push(nul_tl(TL_CONSTRAINED_DELEGATION, name));
@@ -1579,7 +1583,7 @@ fn merge_s4u_tl(tl: &mut Vec<TlData>, p: &Principal) {
     }
 }
 
-fn nul_tl(ty: i32, name: &str) -> TlData {
+pub(crate) fn nul_tl(ty: i32, name: &str) -> TlData {
     let mut contents = name.as_bytes().to_vec();
     contents.push(0);
     TlData { ty, contents }
