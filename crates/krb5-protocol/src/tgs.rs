@@ -516,7 +516,7 @@ fn get_dest_tgt(
 
 // MIT: `get_cached_tgt` (lib/krb5/krb/get_creds.c:759-793)
 // MIT: `krb5_cc_retrieve_cred_seq` (lib/krb5/ccache/cc_retr.c:195-250)
-fn cached_tgt<'a>(
+pub fn cached_tgt<'a>(
     creds: &'a [CcacheCred],
     client: &PrincipalName,
     client_realm: &[u8],

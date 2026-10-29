@@ -168,6 +168,7 @@ any other `###` heading.
 
 ### Fixed
 - **admin.** setkey checks policy keysalts, duplicate enctypes and setkey3 tuples, as MIT.
+- **client.** A no-preauth kinit takes its salt from the reply; kvno skips an expired TGT.
 - **client.** A TGS reply outside `clockskew` of the request's time is refused, as MIT.
 - **client.** `kinit -s` with `kdc_timesync = 0` accepts the postdated reply, as MIT.
 - **kdc.** PKINIT picks a chain issuer by name and key id, then checks one signature.

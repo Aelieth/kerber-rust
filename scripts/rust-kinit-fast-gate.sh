@@ -253,6 +253,29 @@ for salt in norealm onlyrealm special; do
     done
 done
 
+echo "==== kvno: an expired krbtgt/SREALM in the cache is skipped, the walk starts at the local TGT (MIT first) ===="
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -randkey krbtgt/OTHER.TEST@KERBER.TEST'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'modprinc -maxlife "5 seconds" krbtgt/OTHER.TEST@KERBER.TEST'
+docker exec "$NAME" sh -c 'sed "s/^\[realms\]\$/[realms]\n    OTHER.TEST = {\n        kdc = 127.0.0.1\n    }/" /etc/krb5.conf > /tmp/other-krb5.conf'
+docker exec "$NAME" rm -f /tmp/xt.cc
+docker exec "$NAME" sh -c 'printf "userpassword\n" | kinit -c /tmp/xt.cc user@KERBER.TEST' >/dev/null
+docker exec -e KRB5_CONFIG=/tmp/other-krb5.conf -e KRB5CCNAME=FILE:/tmp/xt.cc "$NAME" kvno krbtgt/OTHER.TEST@KERBER.TEST >/dev/null
+sleep 6
+for who in mit rust; do
+    docker exec "$NAME" cp /tmp/xt.cc "/tmp/xt-$who.cc"
+    if [ "$who" = mit ]; then bin=kvno; else bin=/tmp/krb5-kvno; fi
+    set +e
+    TR="$(docker exec -e KRB5_CONFIG=/tmp/other-krb5.conf -e KRB5_TRACE=/dev/stdout -e "KRB5CCNAME=FILE:/tmp/xt-$who.cc" \
+        "$NAME" "$bin" host/h.other.test@OTHER.TEST 2>&1)"
+    set -e
+    echo "$who: $(grep -c 'Starting with TGT for client realm' <<<"$TR") local-TGT start, $(grep -c 'Found cached TGT for service realm' <<<"$TR") cached-TGT use"
+    if ! grep -q 'Starting with TGT for client realm' <<<"$TR" || grep -q 'Found cached TGT for service realm' <<<"$TR"; then
+        echo "$TR"
+        log "fast.client.gate" "error" ",\"error\":\"$who kvno used an expired krbtgt/OTHER.TEST\""
+        exit 1
+    fi
+done
+
 echo "==== require_auth encrypted_challenge: FAST issued, password 12 both legs ===="
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdb" "$NAME":/tmp/krb5-kdb

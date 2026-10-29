@@ -181,11 +181,7 @@ pub fn retrieved<'c>(
 }
 
 fn cached_tgt<'c>(cache: &'c OpenCache, realm: &str) -> Option<&'c CcacheCred> {
-    cache
-        .cc
-        .list()
-        .into_iter()
-        .find(|c| c.server.1.is_krbtgt_for(realm))
+    cache.cached_tgt(realm).ok().flatten()
 }
 
 // MIT: `begin_get_tgt` (lib/krb5/krb/get_creds.c:979-1031)

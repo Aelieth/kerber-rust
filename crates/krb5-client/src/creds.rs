@@ -194,6 +194,22 @@ impl<'c> OpenCache<'c> {
         }
     }
 
+    // MIT: `get_cached_tgt` (lib/krb5/krb/get_creds.c:759-793)
+    // An unexpired `krbtgt/SREALM` of a supported enctype, as the TGS walk finds it.
+    pub(crate) fn cached_tgt(
+        &self,
+        srealm: &str,
+    ) -> Result<Option<&CcacheCred>, krb5_protocol::Error> {
+        krb5_protocol::cached_tgt(
+            &self.cc.creds,
+            &self.cc.primary.1,
+            self.cc.primary.0.as_bytes(),
+            srealm,
+            krb5_types::unix_now(),
+            &krb5_protocol::conf_etypes(&self.ctx.profile, true),
+        )
+    }
+
     fn tgt_for(&self, srealm: &str) -> Result<(CcacheCred, String), Krb5Error> {
         let creds = self.cc.list();
         let crealm = realm_str(&self.cc.primary.0);
@@ -203,12 +219,10 @@ impl<'c> OpenCache<'c> {
             .find(|c| c.server.1.is_krbtgt_for(&crealm))
             .or_else(|| creds.iter().copied().find(|c| c.server.1.is_krbtgt()))
             .ok_or_else(|| self.not_found())?;
-        let cred = creds
-            .iter()
-            .copied()
-            .find(|c| c.server.1.is_krbtgt_for(srealm))
-            .unwrap_or(local)
-            .clone();
+        let service = self
+            .cached_tgt(srealm)
+            .map_err(|e| Krb5Error::from_tgs(&e, srealm))?;
+        let cred = service.unwrap_or(local).clone();
         let hop = krb5_protocol::referral_hop_realm(&cred.server.1).unwrap_or(crealm);
         Ok((cred, hop))
     }
