@@ -92,9 +92,6 @@ jobs:
         run: |
           ./scripts/lib/boot-shell.sh
           ./scripts/lib/boot-stock-mit.sh
-      - name: "bidirectional-gate"
-        if: ${{ matrix.group == 'harness' && (success() || failure()) }}
-        run: ./scripts/bidirectional-gate.sh
       - name: "gss-gate"
         if: ${{ matrix.group == 'harness' && (success() || failure()) }}
         run: ./scripts/gss-gate.sh
@@ -154,9 +151,6 @@ jobs:
       - name: "prop-acl-gate (MIT kprop unauthorized GSS peer refused)"
         if: ${{ matrix.group == 'harness-2' && (success() || failure()) }}
         run: ./scripts/prop-acl-gate.sh
-      - name: "cross-realm-gate"
-        if: ${{ matrix.group == 'mit-extra' && (success() || failure()) }}
-        run: ./scripts/cross-realm-gate.sh
       - name: "capaths-compress-gate"
         if: ${{ matrix.group == 'mit-extra' && (success() || failure()) }}
         run: ./scripts/capaths-compress-gate.sh

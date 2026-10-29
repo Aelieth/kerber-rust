@@ -148,8 +148,7 @@ must use a `~/adlab`-style isolated `KRB5_CONFIG` / `KRB5CCNAME` / `KRB5_KTNAME`
 ## Relationship to the captured Windows DC
 
 - **Same realm/accounts by name** → `ad-windows-gate.sh` and
-  `ad-s4u-gate.sh` now run against live Samba nightly in `peers.yml`. `ad-mit-trust-gate.sh`
-  aliases `samba-realtrust-gate.sh`. Samba vs Windows: domain SID is
+  `ad-s4u-gate.sh` now run against live Samba nightly in `peers.yml`. Samba vs Windows: domain SID is
   provisioned at image build (not the Windows `891046300…` golden);
   `host/svc.ad.kerber.test` is an SPN on `kbrsvc` (not a computer
   account); ticket kvno is 2 (Windows lab was 3); etype remains

@@ -120,9 +120,9 @@ The toolchain, lld, and `rust-cache` steps are one composite,
 
 | Group | Gates |
 | --- | --- |
-| `harness` | `bidirectional`, `gss`, `pkinit`, `kadmin-rust`, `kadmin-rust-acl`, `kadmin-mit`, `kadmin-both`, `history-mit` |
+| `harness` | `gss`, `pkinit`, `kadmin-rust`, `kadmin-rust-acl`, `kadmin-mit`, `kadmin-both`, `history-mit` |
 | `harness-2` | `kpasswd-rust`, `kpasswd-mit`, `kdb-dump`, `kprop`, `kprop-reverse`, `cross-kdc`, `iprop`, `kdcpolicy`, `getprivs`, `prop-acl` |
-| `mit-extra` | `cross-realm`, `capaths-compress`, `spake`, `rust-kinit-spake`, `mit-fast-kdc`, `rust-kinit-fast`, `rust-kinit-pkinit`, `rust-kinit-enterprise`, `kadmin-local`, `rust-kpasswd-mit`, `rc4-session` |
+| `mit-extra` | `capaths-compress`, `spake`, `rust-kinit-spake`, `mit-fast-kdc`, `rust-kinit-fast`, `rust-kinit-pkinit`, `rust-kinit-enterprise`, `kadmin-local`, `rust-kpasswd-mit`, `rc4-session` |
 | `mit-extra-2` | `knobs`, `config-include`, `s4u-mit`, `capaths-transit`, `otp`, `rust-kinit-otp` |
 
 | Job | Runs |
@@ -172,8 +172,7 @@ KRB5_CONFIG="$PWD/harness/client-krb5.conf" kinit user@KERBER.TEST
 Golden traces under `tests/traces/mit-*.der` are decoded and
 field-diffed in `crates/krb5-protocol/tests/golden_traces.rs` (unit CI).
 Reply goldens are MIT-KDC bytes from `client-gate.sh`. Do not commit
-`/working`. `bidirectional-gate.sh` is a Rust-client↔Rust-KDC check,
-not a live MIT oracle.
+`/working`.
 
 ## Rust KDC test realm
 

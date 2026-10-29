@@ -101,8 +101,7 @@ The six per-push jobs are in [docs/testing.md](docs/testing.md).
 Job walls live in `ci-budget.toml`.
 
 Live MIT oracles (when Docker is available): `make harness` then
-`make gate GATE=client-gate`, `make gate GATE=kdc-gate`,
-`make gate GATE=bidirectional-gate`. `make stop-harness` tears the
+`make gate GATE=client-gate`, `make gate GATE=kdc-gate`. `make stop-harness` tears the
 container down.
 
 Gate scripts write host files only under `KERBER_SCRATCH` (their default
