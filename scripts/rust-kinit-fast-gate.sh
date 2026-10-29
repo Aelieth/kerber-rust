@@ -357,6 +357,36 @@ for who in mit rust; do
     fi
 done
 
+echo "==== an AS-REP in an enctype the request didn't list, or whose ETYPE-INFO2 names none: MIT kinit, then ours (get_in_tkt.c:1412-1422, preauth2.c:818-833) ===="
+docker cp "$ROOT/scripts/lib/reply-etype-kdc.py" "$NAME":/tmp/reply-etype-kdc.py
+for spec in 1893:17: 1894:18:17 1895:18:99; do
+    IFS=: read -r port enc info <<<"$spec"
+    docker exec -d "$NAME" sh -c "python3 /tmp/reply-etype-kdc.py $port $enc $info > /tmp/re-$port.log 2>&1"
+    require_log "$NAME" "/tmp/re-$port.log" listening "reply-etype-kdc on $port"
+    docker exec "$NAME" sh -c "printf '[libdefaults]\n default_realm = KERBER.TEST\n default_tkt_enctypes = aes256-cts-hmac-sha1-96\n permitted_enctypes = aes256-cts-hmac-sha1-96\n[realms]\n KERBER.TEST = {\n  kdc = 127.0.0.1:$port\n }\n' > /tmp/re-$port.conf"
+    for who in mit rust; do
+        set +e
+        if [ "$who" = mit ]; then
+            RE="$(docker exec -e KRB5_CONFIG="/tmp/re-$port.conf" "$NAME" sh -c "printf 'userpassword\n' | kinit -c /tmp/re.cc user@KERBER.TEST" 2>&1)"
+        else
+            RE="$(docker exec -e KRB5_CONFIG="/tmp/re-$port.conf" -e KRB5_PASSWORD=userpassword "$NAME" \
+                /tmp/krb5-kinit -c /tmp/re.cc user@KERBER.TEST 2>&1)"
+        fi
+        re_rc=$?
+        set -e
+        RE="$(tr -d '\r' <<<"$RE" | grep -v '^Password for' | tail -n 1)"
+        RE="${RE#*: }"
+        echo "$who enc $enc info ${info:-none}: rc=$re_rc $RE"
+        if [ "$who" = mit ]; then
+            want_re="$re_rc $RE"
+            case "$info" in 99) w='Program lacks support for encryption type' ;; *) w='No supported encryption types (config file error?)' ;; esac
+            case "$RE" in "$w"*) ;; *) die "MIT's kinit for enc $enc info ${info:-none}: $RE" ;; esac
+        elif [ "$re_rc $RE" != "$want_re" ]; then
+            die "ours for enc $enc info ${info:-none}: rc=$re_rc $RE; MIT: $want_re"
+        fi
+    done
+done
+
 echo "==== require_auth encrypted_challenge: FAST issued, password 12 both legs ===="
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdb" "$NAME":/tmp/krb5-kdb

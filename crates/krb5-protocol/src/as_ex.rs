@@ -454,7 +454,7 @@ fn as_exchange_inner(
     let first = build_as_req_from(req, nonce, &bound, None, &etypes)?;
     let wire = encode(&first)?;
     trace::init_creds_preauth_none();
-    let msg = send_as(req, &wire)?;
+    let msg = send_as(req, &wire, &etypes)?;
     let spake_more =
         |e: &KrbError| req.want_spake && e.error_code == err::MORE_PREAUTH_DATA_REQUIRED;
     // The offset is noted before the password is read.
@@ -525,7 +525,7 @@ fn finish_bare_reply(
 ) -> Result<AsOutcome, Error> {
     refuse_spake_skip(req.want_spake)?;
     if !traced {
-        trace_reply_padata(rep.0.padata.as_deref(), etypes, None);
+        reply_padata(rep.0.padata.as_deref(), etypes, None)?;
     }
     let mut pw = PasswordCell::new(
         prompt,
@@ -927,7 +927,7 @@ fn continue_preauth(
     let wire = encode(&second)?;
     let mut finish =
         |rep: AsRep, wire: &[u8], etypes: &[i32], client_key: ProtocolKey, bound: &AsReqTimes| {
-            trace_reply_padata(rep.0.padata.as_deref(), etypes, None);
+            reply_padata(rep.0.padata.as_deref(), etypes, None)?;
             trace::init_creds_as_key_preauth((&client_key).into());
             let (fsalt, fparams) = fallback_s2k(
                 rep.0.padata.as_deref(),
@@ -956,7 +956,7 @@ fn continue_preauth(
                 Some(&mut fallback),
             )
         };
-    match send_as(req, &wire)? {
+    match send_as(req, &wire, etypes)? {
         KdcMsg::AsRep(rep) => finish(rep, &wire, etypes, client_key, &bound),
         KdcMsg::Error(e) => {
             encts_tryagain(&e);
@@ -997,7 +997,7 @@ fn continue_embedder(
     let bound = request_times(req, clock, nonce);
     let second = build_as_req_from(req, nonce, &bound, Some(padata), etypes)?;
     let wire = encode(&second)?;
-    match send_as(req, &wire)? {
+    match send_as(req, &wire, etypes)? {
         KdcMsg::AsRep(rep) => {
             finish_as_rep_keys(req, rep, nonce, keys, etypes, &bound, Some(&wire), pw)
         }
@@ -1138,7 +1138,7 @@ fn continue_pkinit(
     let first = build_as_req_from(req, nonce, bound, None, etypes)?;
     let first_wire = encode(&first)?;
     trace::init_creds_preauth_none();
-    let msg = send_as(req, &first_wire)?;
+    let msg = send_as(req, &first_wire, etypes)?;
     upgrade_to_fast(&msg, defer_fast, clock)?;
     let (token, cookie, learned) = match msg {
         KdcMsg::Error(e)
@@ -1239,11 +1239,12 @@ fn continue_pkinit(
             pa_type = pa::PK_AS_REQ,
             freshness = token.is_some(),
         );
-        match send_as(req, &wire)? {
+        match send_as(req, &wire, etypes)? {
             KdcMsg::AsRep(rep) => {
                 let etype = EncryptionType::known(rep.0.enc_part.etype)?;
                 let padata = rep.0.padata.as_deref().unwrap_or_default();
                 trace_preauth_input(padata, etypes);
+                check_etype_info(padata, etypes)?;
                 let reply_key = match pkinit_reply_key_agile(
                     &kp,
                     &rep.0.padata,
@@ -2197,7 +2198,7 @@ pub fn as_identify_realm(req: &AsRequest<'_>) -> Result<IdentifyReply, Error> {
     let first = build_as_req_from(req, nonce, &bound, None, &etypes)?;
     let wire = encode(&first)?;
     trace::init_creds_preauth_none();
-    match send_as(req, &wire)? {
+    match send_as(req, &wire, &etypes)? {
         KdcMsg::AsRep(_) => Ok(IdentifyReply::Here),
         KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
         KdcMsg::Error(e)
@@ -2224,7 +2225,7 @@ fn random_nonce() -> Result<u32, Error> {
 
 // MIT: `k5_init_creds_get` (lib/krb5/krb/get_in_tkt.c:546-588)
 // MIT: `init_creds_validate_reply` (lib/krb5/krb/get_in_tkt.c:1081-1115)
-fn send_as(req: &AsRequest<'_>, wire: &[u8]) -> Result<KdcMsg, Error> {
+fn send_as(req: &AsRequest<'_>, wire: &[u8], etypes: &[i32]) -> Result<KdcMsg, Error> {
     let msg = classify(&sendto_kdc(
         req.profile,
         req.kdc,
@@ -2234,6 +2235,12 @@ fn send_as(req: &AsRequest<'_>, wire: &[u8]) -> Result<KdcMsg, Error> {
     )?)?;
     if let KdcMsg::Error(e) = &msg {
         trace::init_creds_error_reply(trace::kdc_code(e.error_code));
+    }
+    // MIT: `check_reply_enctype` (lib/krb5/krb/get_in_tkt.c:1412-1422)
+    if let KdcMsg::AsRep(rep) = &msg
+        && !etypes.contains(&rep.0.enc_part.etype)
+    {
+        return Err(Error::ConfigEtypeNosupp);
     }
     Ok(msg)
 }
@@ -2322,17 +2329,33 @@ fn trace_etype_info(padata: &[PaData], etypes: &[i32]) {
     }
 }
 
-fn trace_reply_padata(padata: Option<&[PaData]>, etypes: &[i32], module: Option<(&str, i32, i64)>) {
+fn reply_padata(
+    padata: Option<&[PaData]>,
+    etypes: &[i32],
+    module: Option<(&str, i32, i64)>,
+) -> Result<(), Error> {
     let Some(padata) = padata else {
-        return;
+        return Ok(());
     };
     trace_preauth_input(padata, etypes);
+    check_etype_info(padata, etypes)?;
     if let Some((name, patype, code)) = module
         && padata.iter().any(|p| p.padata_type == patype)
     {
         trace::preauth_process(name, patype, true, code, None);
     }
     trace::preauth_output(&[]);
+    Ok(())
+}
+
+// MIT: `k5_get_etype_info` (lib/krb5/krb/preauth2.c:818-833)
+fn check_etype_info(padata: &[PaData], etypes: &[i32]) -> Result<(), Error> {
+    match etype_entries(padata) {
+        Some(list) if !list.iter().any(|e| etypes.contains(&e.0)) => {
+            Err(no_requested_etype(list.iter().map(|e| e.0)))
+        }
+        _ => Ok(()),
+    }
 }
 
 fn trace_gak_salt(

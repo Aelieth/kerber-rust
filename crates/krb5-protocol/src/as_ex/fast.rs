@@ -12,9 +12,9 @@ use super::{
     AsOutcome, AsPrompt, AsReqTimes, AsRequest, ENCTS_MODULE, KdcMsg, Pkinit, PkinitClient,
     allowed_padata, build_as_req_from, encrypted_timestamp_disabled, fallback_s2k, find_pa,
     finish_as_rep, first_etype, gak_found, kdc_error, learned_s2k, long_term_as_key,
-    method_from_error, pa_enc_timestamp_at, pick_info2, pick_key, req_sname, request_times,
-    restart_point, salt_cname, select_s2k, send_as, sort_krb5_padata_sequence, trace_keytab_gak,
-    trace_preauth_input, trace_reply_padata,
+    method_from_error, pa_enc_timestamp_at, pick_info2, pick_key, reply_padata, req_sname,
+    request_times, restart_point, salt_cname, select_s2k, send_as, sort_krb5_padata_sequence,
+    trace_keytab_gak, trace_preauth_input,
 };
 use crate::error::Error;
 use crate::keytab::KeytabFailure;
@@ -62,7 +62,7 @@ pub(super) fn continue_fast(
     attach_outer(req, etypes, &mut probe, &ap, &akey, Vec::new())?;
     trace::fast_encode();
     let wire = encode(&probe)?;
-    match send_as(req, &wire)? {
+    match send_as(req, &wire, etypes)? {
         KdcMsg::AsRep(rep) => {
             // MIT: `decrypt_as_reply` (lib/krb5/krb/get_in_tkt.c:96-123)
             // No module answered: reply key from the password.
@@ -343,7 +343,7 @@ fn fast_key_mechanism(
     attach_outer(req, etypes, &mut req2, &ap, akey, inner_pa)?;
     trace::fast_encode();
     let wire = encode(&req2)?;
-    match send_as(req, &wire)? {
+    match send_as(req, &wire, etypes)? {
         KdcMsg::AsRep(rep) => finish_fast_as(
             req,
             keys,
@@ -484,7 +484,7 @@ fn finish_fast_otp(
     attach_outer(req, etypes, &mut req2, &ap, akey, inner_pa)?;
     trace::fast_encode();
     let wire = encode(&req2)?;
-    match send_as(req, &wire)? {
+    match send_as(req, &wire, etypes)? {
         KdcMsg::AsRep(rep) => {
             let mut out = finish_fast_as(
                 req,
@@ -574,7 +574,7 @@ fn finish_fast_spake(
         trace::fast_encode();
         let wire = encode(&req2)?;
         sent = true;
-        match send_as(req, &wire)? {
+        match send_as(req, &wire, etypes)? {
             KdcMsg::AsRep(rep) => {
                 let learned = spake.learned();
                 let client_key = match as_key {
@@ -692,7 +692,7 @@ fn finish_fast_pkinit(
         attach_outer(req, etypes, &mut req2, &ap, akey, inner_pa)?;
         trace::fast_encode();
         let wire = encode(&req2)?;
-        match send_as(req, &wire)? {
+        match send_as(req, &wire, etypes)? {
             KdcMsg::AsRep(rep) => {
                 let learned = learned_s2k(current, &salt_cname(&req.cname), req.realm, etypes);
                 return finish_fast_as(
@@ -758,7 +758,7 @@ fn finish_fast_as(
     if matches!(reply_key, ReplyKey::Pkinit(..)) {
         trace_preauth_input(&fast.padata, etypes);
     } else {
-        trace_reply_padata(Some(&fast.padata), etypes, module);
+        reply_padata(Some(&fast.padata), etypes, module)?;
     }
     let pa_type = match &reply_key {
         ReplyKey::Preauth(_, mech, _, _) => Some(*mech),

@@ -49,6 +49,7 @@ any other `###` heading.
 - **kdc.** A transited hop naming the server's own realm is refused, and a TGS ticket's unchecked transited list is checked first, as MIT's `krb5_rd_req`.
 - **protocol.** The AP-REQ acceptor refuses a transited hop naming the server's own realm and runs `rd_req_decoded_opt`'s checks in MIT's order, with MIT's codes and texts.
 - **gss.** The acceptor sets CHANNEL_BOUND only on matching bindings, not from the initiator's flags.
+- **client.** An AS-REP in an unrequested enctype is refused, as MIT.
 
 ### Added
 

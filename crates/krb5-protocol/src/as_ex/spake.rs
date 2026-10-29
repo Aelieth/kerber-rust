@@ -13,9 +13,9 @@ use super::password::{CANTREADPWD, ModuleFail, PasswordCell};
 use super::{
     AsOutcome, AsRequest, KdcMsg, S2kMaterial, allowed_padata, build_as_req_from,
     conf_preferred_preauth_types_for, error_has_salt, fallback_s2k, find_pa, finish_as_rep,
-    kdc_error, method_from_error, pick_key, req_sname, request_times, retried, salt_cname,
-    select_s2k, select_s2k_after, send_as, sort_krb5_padata_sequence, trace_keytab_gak,
-    trace_preauth_input, trace_reply_padata,
+    kdc_error, method_from_error, pick_key, reply_padata, req_sname, request_times, retried,
+    salt_cname, select_s2k, select_s2k_after, send_as, sort_krb5_padata_sequence, trace_keytab_gak,
+    trace_preauth_input,
 };
 use crate::error::Error;
 use crate::preauth::{pa_spake_response, pa_spake_support};
@@ -396,9 +396,9 @@ pub(super) fn continue_spake(
         padata.extend(req2.0.padata.take().unwrap_or_default());
         req2.0.padata = Some(padata);
         let wire = encode(&req2)?;
-        match send_as(req, &wire)? {
+        match send_as(req, &wire, etypes)? {
             KdcMsg::AsRep(rep) => {
-                trace_reply_padata(rep.0.padata.as_deref(), etypes, None);
+                reply_padata(rep.0.padata.as_deref(), etypes, None)?;
                 let from_preauth = k0.is_some();
                 let key = match k0 {
                     Some(k) => {
