@@ -1537,7 +1537,7 @@ fn finish_as_rep(
         string_to_key(etype, password, &salt, None)?
     };
     // MIT: `decrypt_as_reply` (lib/krb5/krb/get_in_tkt.c:61-89)
-    let plain = match as_rep_plain(&key, &inner.enc_part) {
+    let plain = Zeroizing::new(match as_rep_plain(&key, &inner.enc_part) {
         Ok(plain) => plain,
         Err(e) if had_preauth => {
             let Some(fallback) = fallback.as_mut() else {
@@ -1548,7 +1548,7 @@ fn finish_as_rep(
             as_rep_plain(&key, &inner.enc_part)?
         }
         Err(e) => return Err(e),
-    };
+    });
     let enc_part = decode_enc_as(&plain)?;
     trace::init_creds_decrypted_reply((&enc_part.key).into());
     if enc_part.nonce != nonce {
@@ -1661,7 +1661,12 @@ fn verify_anonymous(
         })?;
     let enc: EncryptedData = decode(raw.padata_value.as_ref())?;
     let usage = KeyUsage::new(ku::PA_PKINIT_KX)?;
-    let plain = decrypt_enc_data(as_key, usage, enc.etype, enc.cipher.as_ref())?;
+    let plain = Zeroizing::new(decrypt_enc_data(
+        as_key,
+        usage,
+        enc.etype,
+        enc.cipher.as_ref(),
+    )?);
     let kdc_key: EncryptionKey = decode(&plain)?;
     let contrib = ProtocolKey::from_bytes(
         EncryptionType::known(kdc_key.keytype)?,

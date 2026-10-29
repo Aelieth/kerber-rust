@@ -1078,7 +1078,7 @@ pub fn save_store_legacy_kdb3(
         write_secret_file(stash_path, m.as_bytes())?;
         m
     };
-    let plain = serialize_plain(store);
+    let plain = zeroize::Zeroizing::new(serialize_plain(store));
     let usage = KeyUsage::new(2).map_err(|e| PersistError::Crypto(e.to_string()))?;
     let cipher =
         encrypt(&master, usage, &plain).map_err(|e| PersistError::Crypto(e.to_string()))?;
@@ -1133,7 +1133,9 @@ fn load_kdb_blob(
         .map_err(|e| PersistError::Crypto(e.to_string()))?;
     let usage = KeyUsage::new(2).map_err(|e| PersistError::Crypto(e.to_string()))?;
     let body = blob.get(4..).unwrap_or_default();
-    let plain = decrypt(&master, usage, body).map_err(|e| PersistError::Crypto(e.to_string()))?;
+    let plain = zeroize::Zeroizing::new(
+        decrypt(&master, usage, body).map_err(|e| PersistError::Crypto(e.to_string()))?,
+    );
     parse_plain(&plain, version == KdbVersion::V2, version == KdbVersion::V3)
 }
 
@@ -1291,7 +1293,7 @@ fn parse_plain(plain: &[u8], v2: bool, v3: bool) -> Result<PrincipalStore, Persi
         for _ in 0..nk {
             let et = take_i32(plain, &mut i)?;
             let kvno = take_u32(plain, &mut i)?;
-            let kb = take_bytes(plain, &mut i)?;
+            let kb = zeroize::Zeroizing::new(take_bytes(plain, &mut i)?);
             let etype =
                 EncryptionType::known(et).map_err(|e| PersistError::Crypto(e.to_string()))?;
             let key = ProtocolKey::from_bytes(etype, &kb)

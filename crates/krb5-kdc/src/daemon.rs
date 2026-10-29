@@ -1,6 +1,5 @@
 //! Daemon setup shared by the KDC and kadmind.
 
-use std::fs::File;
 #[cfg(feature = "daemon")]
 use std::io::{self, Write as _};
 use std::os::fd::OwnedFd;
@@ -50,7 +49,7 @@ pub fn open_database(
 ) -> Result<PrincipalStore, OpenFailure> {
     let db = prepare_database(paths, db_args)?;
     refuse_other_mkey(mkey_name)?;
-    if let Err(e) = File::open(&paths.key_stash_file) {
+    if let Err(e) = krb5_protocol::read_stash_file(&paths.key_stash_file) {
         return Err(OpenFailure::MasterKey(format!(
             "Can not fetch master key (error: {}).",
             os_error_text(&e)

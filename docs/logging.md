@@ -21,9 +21,9 @@ apply in the foreground only, since a detached daemon has neither;
 `FILE:` applies in both. MIT does not read the relation, so a kdc.conf
 shared with MIT may carry it (settled live beside MIT 1.22.2's
 `krb5kdc` and `kadmind`). Each program filters the stream with its own
-filter: `krb5_kdc=info,krb5_admin=info` for `krb5kdc`, `kadmind` and
+filter: `warn,krb5_kdc=info,krb5_admin=info` for `krb5kdc`, `kadmind` and
 `kpropd`. Library events from crypto, ASN.1 and protocol, and the KDC's
-own bookkeeping, are `debug`. One `info` record remains per AS or TGS
+own bookkeeping, are `debug`; their warnings and errors show. One `info` record remains per AS or TGS
 request and per kadm5 or kpasswd operation, in each output. The daemon
 log and a klog sink get the MIT-format line. The KDC's JSON stream and
 an embed subscriber get one `kdc.issue`, with `duration_us` on a success
@@ -154,8 +154,8 @@ writer) logs `event=protocol.secret_file` at **warn** with
 group not kept`), and `error`; the save completes. With SELinux
 permissive, a new file whose SELinux context cannot be set logs the same
 event with `detail` `SELinux context not set` and is created without it
-(enforcing, the save fails). The daemons' filters include
-`krb5_protocol=warn`, so the line shows.
+(enforcing, the save fails). The daemons' filters keep every crate but
+`krb5_kdc` and `krb5_admin` at `warn`, so the line shows.
 
 A KDC that cannot record a client's lockout attributes in
 `principal.lockout` (the file is missing and the database is not open

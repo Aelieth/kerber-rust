@@ -145,7 +145,9 @@ fn main() {
         let _ = tracing_subscriber::fmt()
             .json()
             .with_writer(json.make_writer())
-            .with_env_filter(krb5_kdc::json_log_filter("krb5_kdc=info,krb5_admin=info"))
+            .with_env_filter(krb5_kdc::json_log_filter(
+                "warn,krb5_kdc=info,krb5_admin=info",
+            ))
             .try_init();
     }
     let (store, paths) = open_realm(&progname, &args, test_realm, nofork);

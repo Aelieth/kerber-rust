@@ -1074,12 +1074,12 @@ fn tgs_round_trip(
     let (reply_key, fast_padata) = tgs_fast_reply_key(&armor_key, &sub, &mut inner, nonce)?;
     let enc_usage = ku::TGS_REP_ENC_PART_SUBKEY;
     let usage = KeyUsage::new(enc_usage)?;
-    let plain = decrypt_enc_data(
+    let plain = zeroize::Zeroizing::new(decrypt_enc_data(
         &reply_key,
         usage,
         inner.enc_part.etype,
         inner.enc_part.cipher.as_ref(),
-    )?;
+    )?);
     // MIT: `krb5_kdc_rep_decrypt_proc` (kdc_rep_dc.c:69-69)
     let mut enc_part =
         krb5_asn1::decode_enc_kdc_rep_part(&plain).map_err(|e| Error::Asn1(e.to_string()))?;
