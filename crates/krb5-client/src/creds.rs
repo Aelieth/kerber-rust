@@ -34,6 +34,15 @@ pub fn default_realm(ctx: &ClientContext) -> Option<String> {
     ctx.profile.default_realm.clone()
 }
 
+pub fn realm_of(realm: &str) -> Result<Realm, Krb5Error> {
+    krb5_types::try_ascii(realm).map_err(|_| Krb5Error::of(Code::ParseMalformed))
+}
+
+pub fn tgs_of(realm: &str) -> Result<PrincipalName, Krb5Error> {
+    PrincipalName::try_new(PrincipalName::NT_SRV_INST, ["krbtgt", realm])
+        .map_err(|_| Krb5Error::of(Code::ParseMalformed))
+}
+
 pub fn parse_name(ctx: &ClientContext, name: &str, enterprise: bool) -> Result<Princ, Krb5Error> {
     let p = krb5_types::parse_name_ex(name, "", enterprise)
         .map_err(|_| Krb5Error::of(Code::ParseMalformed))?;
@@ -44,7 +53,7 @@ pub fn parse_name(ctx: &ClientContext, name: &str, enterprise: bool) -> Result<P
     };
     let (n, _) = krb5_types::principal_from_unparsed_ex(name, &realm, enterprise)
         .map_err(|_| Krb5Error::of(Code::ParseMalformed))?;
-    Ok((krb5_protocol::realm(&realm), n))
+    Ok((realm_of(&realm)?, n))
 }
 
 // MIT: `construct_matching_creds` (get_creds.c:52-108)

@@ -14,7 +14,7 @@ use krb5_client::cli::{
     read_password_line, read_prompt_line,
 };
 use krb5_client::creds::{
-    Princ, default_realm, get_valrenewed_creds, kdc_for_realm, parse_name, unparse,
+    Princ, default_realm, get_valrenewed_creds, kdc_for_realm, parse_name, realm_of, unparse,
 };
 use krb5_client::errmsg::{Code, Krb5Error};
 use krb5_client::{
@@ -128,7 +128,10 @@ fn k5_begin(prog: &str, opts: &KinitArgs) -> Option<K5> {
             Some(r) => {
                 let anon =
                     PrincipalName::new(PrincipalName::NT_WELLKNOWN, ["WELLKNOWN", "ANONYMOUS"]);
-                me = Some((krb5_protocol::realm(&r), anon));
+                match realm_of(&r) {
+                    Ok(realm) => me = Some((realm, anon)),
+                    Err(e) => return fail(&e, "while getting initial credentials"),
+                }
             }
             None => {
                 return fail(
@@ -143,7 +146,10 @@ fn k5_begin(prog: &str, opts: &KinitArgs) -> Option<K5> {
             Err((e, doing)) => return fail(&e, doing),
         }
     } else if opts.keytab {
-        me = Some(default_host_principal(&ctx));
+        match default_host_principal(&ctx) {
+            Ok(p) => me = Some(p),
+            Err(e) => return fail(&e, "when creating default server principal name"),
+        }
     } else if let Some(c) = &out {
         me = c.principal(&ctx).ok();
     } else if defcache_princ.is_some() {
@@ -275,7 +281,7 @@ fn client_keytab_principal(ctx: &ClientContext) -> Result<Princ, (Krb5Error, &'s
         })
 }
 
-fn default_host_principal(ctx: &ClientContext) -> Princ {
+fn default_host_principal(ctx: &ClientContext) -> Result<Princ, Krb5Error> {
     let host = nix::unistd::gethostname()
         .map(|h| h.to_string_lossy().to_ascii_lowercase())
         .unwrap_or_default();
@@ -285,10 +291,9 @@ fn default_host_principal(ctx: &ClientContext) -> Princ {
         .map(str::to_owned)
         .or_else(|| default_realm(ctx))
         .unwrap_or_default();
-    (
-        krb5_protocol::realm(&realm),
-        PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", host.as_str()]),
-    )
+    let host = PrincipalName::try_new(PrincipalName::NT_SRV_HST, ["host", host.as_str()])
+        .map_err(|_| Krb5Error::of(Code::ParseMalformed))?;
+    Ok((realm_of(&realm)?, host))
 }
 
 // MIT: `get_name_from_os` (kinit.c:47-54)

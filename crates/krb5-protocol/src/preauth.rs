@@ -607,7 +607,9 @@ fn verify_kdc_cert(cert: &[u8], trust: KdcTrust<'_>, realm: &str) -> Result<(), 
     let tgs = PrincipalName::krbtgt(realm);
     let mut named = false;
     for (san_realm, name_type, parts) in &sans.principals {
-        let san = PrincipalName::new(*name_type, parts.iter().map(String::as_str));
+        let Ok(san) = PrincipalName::try_new(*name_type, parts.iter().map(String::as_str)) else {
+            continue;
+        };
         trace::pkinit_client_san_kdccert_princ(trace::Princ::new(&san, san_realm.as_bytes()));
         named |= san_realm == realm && san.name_string == tgs.name_string;
     }

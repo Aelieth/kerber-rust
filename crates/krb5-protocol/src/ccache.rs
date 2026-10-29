@@ -259,6 +259,7 @@ pub fn parse_principal_ex(spec: &str, enterprise: bool) -> Result<(PrincipalName
     if !enterprise && p.realm.is_empty() {
         return Err("empty principal component".into());
     }
+    krb5_types::try_ascii(&p.realm).map_err(|e| e.to_string())?;
     let ntype = if enterprise {
         PrincipalName::NT_ENTERPRISE
     } else {

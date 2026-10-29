@@ -815,20 +815,16 @@ fn authorize_cert(
         let named =
             |p: &PrincipalName, r: &str| match_client(store, client, req_client, realm, p, r);
         let by_san = sans.principals.iter().any(|(r, name_type, parts)| {
-            named(
-                &PrincipalName::new(*name_type, parts.iter().map(String::as_str)),
-                r,
-            )
+            PrincipalName::try_new(*name_type, parts.iter().map(String::as_str))
+                .is_ok_and(|p| named(&p, r))
         });
         // MIT: `verify_client_san` (plugins/preauth/pkinit/pkinit_srv.c:240-258)
         let by_upn = || {
             sans.upns.iter().any(|upn| {
                 krb5_types::parse_name_ex(upn, realm, true).is_ok_and(|p| {
                     let parts = p.components.iter().map(String::as_str);
-                    named(
-                        &PrincipalName::new(PrincipalName::NT_ENTERPRISE, parts),
-                        &p.realm,
-                    )
+                    PrincipalName::try_new(PrincipalName::NT_ENTERPRISE, parts)
+                        .is_ok_and(|n| named(&n, &p.realm))
                 })
             })
         };

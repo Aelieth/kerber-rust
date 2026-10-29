@@ -214,6 +214,7 @@ any other `###` heading.
 - **kdc.** A KDC started by full path names itself by its basename in an init failure, as MIT's.
 - **gss.** A refused mutual AP-REQ gets MIT's KRB-ERROR token, in SPNEGO too; initiators read it.
 - **admin.** kadmind's full resync dumps from disk for the replica's version, with kprop's files.
+- **client/kdc.** A non-ASCII realm or PKINIT SAN is refused or unmatched, not a panic.
 
 ## [1.1.0] - 2026-10-14
 

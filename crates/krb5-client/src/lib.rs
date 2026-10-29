@@ -512,7 +512,7 @@ fn client_princ(
     if realm_s.is_empty() {
         realm_s = conf_default_realm(ctx).ok_or("Cannot find KDC for requested realm")?;
     }
-    Ok((krb5_protocol::realm(&realm_s), cname))
+    Ok((creds::realm_of(&realm_s)?, cname))
 }
 
 pub type ReadPassword<'p> = dyn FnMut(&str) -> Result<Zeroizing<Vec<u8>>, Krb5Error> + 'p;
@@ -698,10 +698,7 @@ fn load_fast_armor(
 ) -> Result<FastArmor, Box<dyn std::error::Error + Send + Sync>> {
     let mut cache = creds::OpenCache::open(ctx, spec.clone())?;
     let me = cache.cc.primary.clone();
-    let tgs = (
-        krb5_protocol::realm(realm),
-        krb5_types::PrincipalName::krbtgt(realm),
-    );
+    let tgs = (creds::realm_of(realm)?, creds::tgs_of(realm)?);
     let cred = creds::get_credentials(&mut cache, &me, &tgs, &creds::GetCredsOptions::default())?;
     let ticket: Ticket = decode(&cred.ticket)?;
     Ok(FastArmor {
@@ -886,7 +883,10 @@ fn armor_build_error(err: &(dyn std::error::Error + Send + Sync + 'static)) -> K
 }
 
 fn cache_has_fast_avail(cc: &FileCcache, realm: &str) -> bool {
-    let tgs = krb5_types::PrincipalName::krbtgt(realm).unparse_with_realm(realm);
+    let Ok(tgs) = creds::tgs_of(realm) else {
+        return false;
+    };
+    let tgs = tgs.unparse_with_realm(realm);
     cc.creds.iter().any(|c| {
         c.is_config()
             && c.server.1.name_string.len() == 3
@@ -1203,10 +1203,10 @@ fn follow_referrals<'c>(
         password.client = cname.unparse_with_realm(&leg.realm);
         let out = {
             // MIT: `restart_init_creds_loop` (lib/krb5/krb/get_in_tkt.c:823-844)
-            let server = ask
-                .sname
-                .cloned()
-                .unwrap_or_else(|| krb5_types::PrincipalName::krbtgt(&leg.realm));
+            let server = match ask.sname.cloned() {
+                Some(s) => s,
+                None => creds::tgs_of(&leg.realm)?,
+            };
             let mut ticket = ask.ticket.clone();
             ticket.allowed_preauth_type =
                 allowed_preauth_type(params.in_ccache, &server, &leg.realm);

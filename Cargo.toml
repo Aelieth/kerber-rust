@@ -116,6 +116,7 @@ unimplemented = "deny"
 no_effect_underscore_binding = "allow"
 # clippy.toml names the infallible constructors. Stays allow: static callers
 # still use them. consts is the allow module for a later raise.
+# Not yet enforced: clippy.toml's disallowed list is advice until 1.3 raises this.
 disallowed_methods = "allow"
 # Pedantic noise that is not useful in this tree: RFC vocabulary in
 # rustdoc, MIT functions ported whole, MIT flag structs mirrored 1:1, and
