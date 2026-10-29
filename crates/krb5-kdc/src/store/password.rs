@@ -264,7 +264,8 @@ impl PrincipalStore {
         let Some(existing) = self.map.get(&id) else {
             return Err(Error::NotFound);
         };
-        let salt = existing.salt.clone();
+        // MIT: `add_key_pwd` (lib/kdb/kdb_cpw.c:301-305)
+        let salt = existing.name.default_salt(&existing.realm);
         let kvno = next_kvno(&existing.keys);
         let new_keys = keys_from_password(&use_etypes, password, &salt, kvno)?;
         super::kadm5_hook::hook_chpass(
@@ -277,6 +278,9 @@ impl PrincipalStore {
             &use_etypes,
         )?;
         self.replace_password_keys(&id, new_keys, nhist.zip(hist), keepold, actor)?;
+        if let Some(p) = self.map.get_mut(&id) {
+            p.salt = salt;
+        }
         self.apply_pw_max_life_in(name, princ_realm)?;
         let snap = self.map.get(&id).cloned();
         if let Some(p) = &snap {

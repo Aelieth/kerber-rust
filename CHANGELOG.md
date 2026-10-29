@@ -167,6 +167,7 @@ any other `###` heading.
 - **ci.** The ccache and two client-differential nightly gates and their two probes are gone; field client-tools and pkinit cover them.
 
 ### Fixed
+- **kdc.** kadm5 and iprop keep delegation tl_data; cpw after renprinc uses the new name.
 - **admin.** setkey checks policy keysalts, duplicate enctypes and setkey3 tuples, as MIT.
 - **client.** `request_timeout` bounds a TCP reply that trickles in.
 - **client.** A no-preauth kinit takes its salt from the reply; kvno skips an expired TGT.

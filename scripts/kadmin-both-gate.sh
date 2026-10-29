@@ -786,6 +786,26 @@ diff "$SCRATCH/tldeleg-mit.txt" "$SCRATCH/tldeleg-rust.txt" || {
     exit 1
 }
 
+echo "==== renprinc, cpw, then kinit with the new password: MIT's kadmind and KDC, then ours (kdb_cpw.c:301-305) ===="
+rencpw_leg() {
+    local ctn=$1 conf=$2 leg=$3 out
+    mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p admin/admin -w adminpassword \
+        -q 'addprinc -pw rc-old-1 rcfrom' 2>&1 | grep -F 'Principal "rcfrom@KERBER.TEST" created.'
+    kadmin_q_ok mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p admin/admin -w adminpassword \
+        -q 'renprinc -force rcfrom rcto' >/dev/null
+    mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p admin/admin -w adminpassword \
+        -q 'cpw -pw rc-new-2 rcto' 2>&1 | grep -F 'Password for "rcto@KERBER.TEST" changed.'
+    out="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" sh -c \
+        'printf "rc-new-2\n" | kinit rcto@KERBER.TEST && klist' 2>&1 || true)"
+    echo "$leg: $out"
+    echo "$out" | grep -F 'Default principal: rcto@KERBER.TEST' || {
+        echo "$leg: kinit with the password set after renprinc failed" >&2
+        exit 1
+    }
+}
+rencpw_leg "$NAME_MIT" /etc/krb5.conf mit
+rencpw_leg "$NAME" /tmp/kadmin-krb5.conf rust
+
 echo "==== Z8.3 bootstrap actors: kadmin/changepw kdb5_util@ (kadm5_create.c:100) ===="
 # kadmin/changepw is never successfully modified in this gate (the
 # lockdown_keys cell is a privilege denial), so both legs still show
