@@ -1114,5 +1114,24 @@ if echo "$MIT_DIRDENY" | grep -q 'Principal "acldir@KERBER.TEST" created.'; then
     exit 1
 fi
 
+# kadmin-both-gate attaches to this container. The directory ACL would
+# refuse its next request, so kadmind goes back to the stock profile.
+echo "==== restore MIT kadmind on the stock profile ===="
+kill_mit_kadmind
+docker exec -d "$NAME_MIT" sh -c 'kadmind -nofork >/tmp/kadmind-restore.log 2>&1'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME_MIT" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',749),0.3)" 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME_MIT" cat /tmp/kadmind-restore.log >&2 || true
+    echo "MIT kadmind did not listen on the stock profile" >&2
+    exit 1
+fi
+
 log "kadmin.gate" "ok" ',"leg":"mit"'
 exit 0
