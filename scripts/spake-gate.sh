@@ -130,7 +130,7 @@ require_listen "$NAME" /tmp/kdc.log "rust KDC (edwards25519)"
 ED_PROXY=1891
 docker cp "$ROOT/scripts/lib/kdc-padata-proxy.py" "$NAME":/tmp/kdc-padata-proxy.py
 wait_bound_free_in "$NAME" "$ED_PROXY" udp || die "stale proxy still bound :$ED_PROXY"
-docker exec -d "$NAME" python3 /tmp/kdc-padata-proxy.py "$ED_PROXY" 127.0.0.1 "$PORT" /tmp/spake-ed25519-wire.txt
+docker exec -d -e KDC_PROXY_COOKIE=1 "$NAME" python3 /tmp/kdc-padata-proxy.py "$ED_PROXY" 127.0.0.1 "$PORT" /tmp/spake-ed25519-wire.txt
 wait_udp_in "$NAME" "$ED_PROXY" || die "proxy $ED_PROXY did not listen"
 docker exec "$NAME" sh -c "cat >/tmp/spake-default-krb5.conf <<EOF
 [libdefaults]
@@ -155,6 +155,9 @@ WIRE="$(docker exec "$NAME" cat /tmp/spake-ed25519-wire.txt)"
 echo "$WIRE"
 echo "$WIRE" | grep -F 'rep#1 error_code=25 e_data_encoding=method e_data_types=[136, 19, 151, 2, 133]' \
     || die "PREAUTH_REQUIRED e-data is not MIT's {136, 19, 151, 2, 133}"
+# MIT `fast_util.c:708`: `MIT1`, the krbtgt kvno (be32), the encrypted cookie. MIT 1.22.2's optimistic
+# challenge cookie is 138 bytes under an aes256-sha1 krbtgt key (150 under sha384's longer HMAC).
+echo "$WIRE" | grep -F 'rep#1 fx_cookie prefix=MIT1 kvno=1 len=138' || die "the PREAUTH_REQUIRED cookie is not MIT's"
 echo "$WIRE" | grep -F 'req#2 msg_type=10 padata=[133, 151, 150, 149]' || die "the response request is not {133, 151, 150, 149}"
 echo "$WIRE" | grep -E 'rep#2 tag=0x6b' | grep -F 'padata=[19]' || die "the AS-REP after SPAKE is not MIT's {19}"
 docker exec "$NAME" klist -C -c /tmp/krb5cc_ed25519 | grep -F 'config: pa_type(krbtgt/KERBER.TEST@KERBER.TEST) = 151' \

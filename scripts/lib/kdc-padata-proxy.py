@@ -8,9 +8,12 @@ order (an absent padata field prints `padata=[]`). A KRB-ERROR reply is
 `rep#<n> error_code=… e_data_encoding=… e_data_types=…`; any other reply is
 `rep#<n> tag=0x.. len=…`; a 5 s KDC timeout is `rep#<n> timeout`. A KDC-REP is
 followed by `rep#<n> ticket sname=<a/b> realm=<R> der=<hex>`, its ticket.
+With KDC_PROXY_COOKIE set, an error that carries a PA-FX-COOKIE adds
+`rep#<n> fx_cookie prefix=… kvno=… len=…`.
 """
 from __future__ import annotations
 
+import os
 import socket
 import sys
 
@@ -141,8 +144,8 @@ def kdc_rep_ticket(pdu: bytes) -> tuple[str, str, bytes]:
     raise ValueError("no ticket")
 
 
-def parse_error_edata(pdu: bytes) -> tuple[int | None, str, list[int]]:
-    """(error_code, encoding, e_data types) of a KRB-ERROR (0x7e)."""
+def _error_padata(pdu: bytes) -> tuple[int | None, str, list[tuple[int, bytes]]]:
+    """(error_code, encoding, [(type, value)…]) of a KRB-ERROR (0x7e)."""
     if not pdu or pdu[0] != 0x7E:
         return None, "none", []
     _, seq, _ = _tlv(pdu, 0)
@@ -166,13 +169,14 @@ def parse_error_edata(pdu: bytes) -> tuple[int | None, str, list[int]]:
     if not edata or edata[0] != 0x30:
         return code, "none", []
     _, body, _ = _tlv(edata, 0)
-    types: list[int] = []
+    entries: list[tuple[int, bytes]] = []
     enc = "unknown"
     j = 0
     while j < len(body):
         _, pa, j = _tlv(body, j)
         k = 0
         t = None
+        value = b""
         while k < len(pa):
             ptag, pval, k = _tlv(pa, k)
             inner = pval
@@ -187,8 +191,28 @@ def parse_error_edata(pdu: bytes) -> tuple[int | None, str, list[int]]:
             elif n == 1 and enc != "typed":
                 enc = "method"
                 t = _int(inner)
-        types.append(t if t is not None else -1)
-    return code, enc, types
+            elif n in (1, 2):
+                value = inner
+        entries.append((t if t is not None else -1, value))
+    return code, enc, entries
+
+
+def parse_error_edata(pdu: bytes) -> tuple[int | None, str, list[int]]:
+    """(error_code, encoding, e_data types) of a KRB-ERROR (0x7e)."""
+    code, enc, entries = _error_padata(pdu)
+    return code, enc, [t for t, _ in entries]
+
+
+def error_cookie(pdu: bytes) -> bytes | None:
+    """The PA-FX-COOKIE (133) value of a KRB-ERROR's e_data, if it has one."""
+    return next((v for t, v in _error_padata(pdu)[2] if t == 133), None)
+
+
+def cookie_line(n: int, cookie: bytes) -> str:
+    """`rep#<n> fx_cookie prefix=… kvno=… len=…`: MIT's `MIT1` + be32 kvno + ciphertext."""
+    prefix = cookie[:4].decode("ascii", "replace")
+    kvno = int.from_bytes(cookie[4:8], "big") if len(cookie) >= 8 else -1
+    return f"rep#{n} fx_cookie prefix={prefix} kvno={kvno} len={len(cookie)}\n"
 
 
 def main() -> int:
@@ -232,6 +256,9 @@ def main() -> int:
         if reply[:1] == b"\x7e":
             code, enc, etypes = parse_error_edata(reply)
             rline = f"rep#{n} error_code={code} e_data_encoding={enc} e_data_types={etypes}\n"
+            cookie = error_cookie(reply) if os.environ.get("KDC_PROXY_COOKIE") else None
+            if cookie is not None:
+                rline += cookie_line(n, cookie)
         elif reply[:1] in (b"\x6b", b"\x6d"):
             _, types = parse_kdc_rep(reply)
             tag = reply[0]

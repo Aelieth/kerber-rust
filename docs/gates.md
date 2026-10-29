@@ -82,7 +82,7 @@ Rows: [OTP](gates-otp.md).
 | `scripts/samba-pac-l2-gate.sh` | Samba | `peers:peers` | nightly | a realm with an AD identity (`domain_sid`); vendored Samba `kcrypto` 6/7/16/19 (L2): recompute; a type-6 MAC byte flip, and a pre-PAC EncTicketPart byte flip (type 16's signed bytes), → `L2_MISMATCH` |
 | `scripts/samba-pac-verify-gate.sh` | Samba | `peers:peers` | nightly | a realm with an AD identity (`domain_sid`); Samba decode of a Rust PAC (L1): all nine buffers of `pac_l1.py`'s `NEED` (`L1_OK`); a dummy requester SID fails |
 | `scripts/samba-realtrust-gate.sh` | Samba | `peers:peers` | nightly | `samba-tool domain trust create` + reverse PAC: reverse LOGON_INFO SID/RID = live Samba-A `kbruser` `objectSid` |
-| `scripts/spake-gate.sh` | MIT | `nightly:moving` | nightly | MIT `kinit` `pa_type` 151 / group 2 vs Rust KDC: TRACE `Preauth module spake (151) (real) returned: 0/Success` + group 2; `klist` `user@KERBER.TEST`; then MIT `kinit` with its default group vs Rust KDC with Fedora's SPAKE settings: challenge group 1 in the 25, e-data `[136, 19, 151, 2, 133]`, `[133, 151, 150, 149]`, AS-REP `[19]` |
+| `scripts/spake-gate.sh` | MIT | `nightly:moving` | nightly | MIT `kinit` `pa_type` 151 / group 2 vs Rust KDC: TRACE `Preauth module spake (151) (real) returned: 0/Success` + group 2; `klist` `user@KERBER.TEST`; then MIT `kinit` with its default group vs Rust KDC with Fedora's SPAKE settings: challenge group 1 in the 25, e-data `[136, 19, 151, 2, 133]` with the cookie `MIT1`, kvno 1, 138 bytes, `[133, 151, 150, 149]`, AS-REP `[19]` |
 
 ## Notes by gate
 
@@ -478,5 +478,5 @@ not check (a unit test, or "not asserted").
   has `preauth (spake) verify failure: More preauthentication data is required`. A second leg
   gives the Rust KDC Fedora's settings and runs MIT `kinit` with its default
   group: the `kdc-padata-proxy.py` wire must be MIT's (25 with
-  `[136, 19, 151, 2, 133]`, then `[133, 151, 150, 149]`, then an AS-REP with
+  `[136, 19, 151, 2, 133]` and its PA-FX-COOKIE `MIT1`, kvno 1, 138 bytes (`KDC_PROXY_COOKIE=1`), then `[133, 151, 150, 149]`, then an AS-REP with
   `[19]`), with a group-1 challenge and `pa_type` 151.
