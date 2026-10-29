@@ -7,8 +7,8 @@ use super::principal::{KadmData, Principal, TlData};
 use crate::error::Error;
 use crate::kdb_dump::{
     TL_CONSTRAINED_DELEGATION, TL_DB_ARGS, TL_KADM_DATA, TL_LAST_PWD_CHANGE, TL_MKVNO,
-    TL_MOD_PRINC, TL_STRING_ATTRS, attrs_from_tl, dump_attributes, merge_kadm_tl, mkvno_from_tl,
-    nul_tl, nul_tl_names, salt_of_keys, tl_mod_princ,
+    TL_MOD_PRINC, TL_STRING_ATTRS, attrs_from_tl, dump_attributes, is_s4u_name_tl, merge_kadm_tl,
+    mkvno_from_tl, nul_name, nul_tl, nul_tl_names, salt_of_keys, tl_mod_princ,
 };
 use crate::osa::{OsaKeyData, OsaPrincEnt};
 
@@ -111,11 +111,7 @@ pub(crate) fn mit_tl(p: &Principal) -> Vec<TlData> {
     let mut tl: Vec<TlData> = p
         .tl_data
         .iter()
-        .filter(|t| {
-            t.ty != TL_DB_ARGS
-                && t.ty != TL_CONSTRAINED_DELEGATION
-                && !(0x4B00..=0x4BFF).contains(&t.ty)
-        })
+        .filter(|t| t.ty != TL_DB_ARGS && !is_s4u_name_tl(t) && !(0x4B00..=0x4BFF).contains(&t.ty))
         .cloned()
         .collect();
     for name in &p.s4u_allowed_to {
@@ -383,7 +379,11 @@ pub fn conv_2dbentry(
             KdbeVal::KeyData(keys) => ent.keys.clone_from(keys),
             KdbeVal::TlData(tl) => {
                 ent.s4u_allowed_to = nul_tl_names(tl, TL_CONSTRAINED_DELEGATION);
-                for t in tl.iter().filter(|t| t.ty != TL_CONSTRAINED_DELEGATION) {
+                ent.tl_data.retain(|t| t.ty != TL_CONSTRAINED_DELEGATION);
+                for t in tl
+                    .iter()
+                    .filter(|t| !(t.ty == TL_CONSTRAINED_DELEGATION && nul_name(t).is_some()))
+                {
                     update_tl_data(&mut ent.tl_data, t.clone());
                 }
             }

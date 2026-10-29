@@ -4,7 +4,7 @@
  * op: listprincs | getprinc <name> | randkey-keepold <n> | setkey-keepold <n>
  *     | setkey4-kvno <target> <kvno> | setkey-cases <target>
  *     | addpol-minlife-unmasked-max <policy> | tl-deleg <target> <name>
- *     | modify-raw <target> <maxlife|policyclr>
+ *     | modify-raw <target> <maxlife|policyclr> | tl-raw <target> <hex>
  */
 #include <kadm5/admin.h>
 #include <com_err.h>
@@ -194,6 +194,50 @@ int main(int argc, char **argv) {
         for (t = ret ? NULL : rec.tl_data; t != NULL; t = t->tl_data_next) {
             if (t->tl_data_type == 1024)
                 printf("tl=1024:%.*s\n", (int)t->tl_data_length, (char *)t->tl_data_contents);
+        }
+        if (ret == 0)
+            kadm5_free_principal_ent(handle, &rec);
+        krb5_free_principal(ctx, p);
+    } else if (strcmp(op, "tl-raw") == 0 && argc - argi >= 6) {
+        /* tl_data 1024 with the given bytes as they are, through modify, then get. */
+        krb5_principal p;
+        kadm5_principal_ent_rec rec;
+        krb5_tl_data tl, *t;
+        unsigned char buf[256];
+        const char *hex = argv[argi + 5];
+        size_t i, n = strlen(hex) / 2;
+        memset(&rec, 0, sizeof(rec));
+        memset(&tl, 0, sizeof(tl));
+        for (i = 0; i < n && i < sizeof(buf); i++) {
+            unsigned int b;
+            sscanf(hex + 2 * i, "%2x", &b);
+            buf[i] = (unsigned char)b;
+        }
+        ret = krb5_parse_name(ctx, argv[argi + 4], &p);
+        if (ret) {
+            printf("parse_code=%ld\n", (long)ret);
+            kadm5_destroy(handle);
+            krb5_free_context(ctx);
+            return 1;
+        }
+        tl.tl_data_type = 1024;
+        tl.tl_data_length = (krb5_ui_2)i;
+        tl.tl_data_contents = buf;
+        rec.principal = p;
+        rec.n_tl_data = 1;
+        rec.tl_data = &tl;
+        ret = kadm5_modify_principal(handle, &rec, KADM5_TL_DATA);
+        printf("modify_code=%ld\n", (long)ret);
+        memset(&rec, 0, sizeof(rec));
+        ret = kadm5_get_principal(handle, p, &rec, KADM5_PRINCIPAL_NORMAL_MASK | KADM5_TL_DATA);
+        printf("get_code=%ld\n", (long)ret);
+        for (t = ret ? NULL : rec.tl_data; t != NULL; t = t->tl_data_next) {
+            if (t->tl_data_type == 1024) {
+                printf("tlraw=");
+                for (i = 0; i < t->tl_data_length; i++)
+                    printf("%02x", t->tl_data_contents[i]);
+                printf("\n");
+            }
         }
         if (ret == 0)
             kadm5_free_principal_ent(handle, &rec);

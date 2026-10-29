@@ -376,11 +376,7 @@ impl DumpPrincipal {
         let tl_data = self
             .tl_data
             .into_iter()
-            .filter(|t| {
-                t.ty != TL_CONSTRAINED_DELEGATION
-                    && t.ty != TL_KERBER_S4U_FROM
-                    && t.ty != TL_KERBER_RID_HWM
-            })
+            .filter(|t| !is_s4u_name_tl(t) && t.ty != TL_KERBER_RID_HWM)
             .collect();
         Ok((
             Principal {
@@ -1519,17 +1515,24 @@ fn policy_from_tl(tl: &[TlData]) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+pub(crate) fn nul_name(t: &TlData) -> Option<String> {
+    let raw = t.contents.strip_suffix(&[0])?;
+    if raw.contains(&0) || raw.is_empty() {
+        return None;
+    }
+    std::str::from_utf8(raw).ok().map(str::to_owned)
+}
+
 pub(crate) fn nul_tl_names(tl: &[TlData], ty: i32) -> Vec<String> {
     tl.iter()
         .filter(|t| t.ty == ty)
-        .filter_map(|t| {
-            let raw = t.contents.strip_suffix(&[0])?;
-            if raw.contains(&0) || raw.is_empty() {
-                return None;
-            }
-            std::str::from_utf8(raw).ok().map(str::to_owned)
-        })
+        .filter_map(nul_name)
         .collect()
+}
+
+/// Any other record of these types stays in `tl_data` as its bytes, as MIT's db2 keeps it.
+pub(crate) fn is_s4u_name_tl(t: &TlData) -> bool {
+    (t.ty == TL_CONSTRAINED_DELEGATION || t.ty == TL_KERBER_S4U_FROM) && nul_name(t).is_some()
 }
 
 pub(crate) fn absorb_identity_tl(p: &mut Principal) -> Option<u32> {
@@ -1540,14 +1543,19 @@ pub(crate) fn absorb_identity_tl(p: &mut Principal) -> Option<u32> {
 }
 
 pub(crate) fn absorb_s4u_tl(p: &mut Principal) {
-    if p.tl_data.iter().any(|t| t.ty == TL_CONSTRAINED_DELEGATION) {
+    if p.tl_data
+        .iter()
+        .any(|t| is_s4u_name_tl(t) && t.ty == TL_CONSTRAINED_DELEGATION)
+    {
         p.s4u_allowed_to = nul_tl_names(&p.tl_data, TL_CONSTRAINED_DELEGATION);
     }
-    if p.tl_data.iter().any(|t| t.ty == TL_KERBER_S4U_FROM) {
+    if p.tl_data
+        .iter()
+        .any(|t| is_s4u_name_tl(t) && t.ty == TL_KERBER_S4U_FROM)
+    {
         p.s4u_allowed_from = nul_tl_names(&p.tl_data, TL_KERBER_S4U_FROM);
     }
-    p.tl_data
-        .retain(|t| t.ty != TL_CONSTRAINED_DELEGATION && t.ty != TL_KERBER_S4U_FROM);
+    p.tl_data.retain(|t| !is_s4u_name_tl(t));
 }
 
 fn rid_hwm_of(tl: &[TlData]) -> Option<u32> {
@@ -1570,7 +1578,7 @@ fn merge_rid_hwm(tl: &mut Vec<TlData>, next: u32, is_km: bool) {
 }
 
 pub(crate) fn merge_s4u_tl(tl: &mut Vec<TlData>, p: &Principal) {
-    tl.retain(|t| t.ty != TL_CONSTRAINED_DELEGATION && t.ty != TL_KERBER_S4U_FROM);
+    tl.retain(|t| !is_s4u_name_tl(t));
     for name in &p.s4u_allowed_to {
         tl.push(nul_tl(TL_CONSTRAINED_DELEGATION, name));
     }

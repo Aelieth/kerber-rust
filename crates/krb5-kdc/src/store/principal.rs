@@ -985,6 +985,12 @@ impl PrincipalStore {
             if tl.ty != TL_DB_ARGS {
                 p.tl_data.retain(|t| t.ty != tl.ty);
             }
+            // One record of a type, as MIT's db2: the new one replaces the list.
+            match tl.ty {
+                crate::kdb_dump::TL_CONSTRAINED_DELEGATION => p.s4u_allowed_to.clear(),
+                crate::kdb_dump::TL_KERBER_S4U_FROM => p.s4u_allowed_from.clear(),
+                _ => {}
+            }
             p.tl_data.push(tl.clone());
         }
         crate::kdb_dump::absorb_s4u_tl(&mut p);

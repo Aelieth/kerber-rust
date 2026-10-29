@@ -786,6 +786,43 @@ diff "$SCRATCH/tldeleg-mit.txt" "$SCRATCH/tldeleg-rust.txt" || {
     exit 1
 }
 
+echo "==== kadm5 tl_data 1024 that is not one NUL-terminated name, MIT's kadmind then ours: get and the dump keep its bytes ===="
+tlraw_leg() {
+    local ctn=$1 conf=$2 leg=$3 n hex line out
+    for n in 1 2; do
+        # 1: a name with no closing NUL; 2: two names in one record
+        if [ "$n" = 1 ]; then hex="$(printf 'host/nonul.kerber.test@KERBER.TEST' | od -An -tx1 | tr -d ' \n')"
+        else hex="$(printf 'a@KERBER.TEST\0b@KERBER.TEST\0' | od -An -tx1 | tr -d ' \n')"; fi
+        mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p admin/admin -w adminpassword \
+            -q "addprinc -randkey tlraw$n" 2>&1 | grep -F "Principal \"tlraw$n@KERBER.TEST\" created."
+        out="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" /tmp/kadm5-changepw-rpc --service kadmin/admin \
+            admin/admin adminpassword KERBER.TEST tl-raw "tlraw$n" "$hex" 2>&1 || true)"
+        echo "$leg tl-raw $n: $out"
+        echo "$out" | grep -E '^(modify_code|get_code|tlraw)=' > "$SCRATCH/tlraw$n-$leg.txt"
+        printf 'modify_code=0\nget_code=0\ntlraw=%s\n' "$hex" | diff - "$SCRATCH/tlraw$n-$leg.txt"
+        if [ "$leg" = mit ]; then
+            docker exec "$ctn" kdb5_util dump /tmp/tlraw.dump
+        else
+            docker exec -e KRB5_KDC_DB=/tmp/principal -e KRB5_KDC_STASH=/tmp/stash \
+                -e KRB5_MASTER_PASSWORD=masterpassword \
+                "$ctn" /tmp/krb5-kdb dump /tmp/tlraw.dump
+        fi
+        line="$(docker exec "$ctn" grep -F $'\ttlraw'"$n"$'@KERBER.TEST\t' /tmp/tlraw.dump || true)"
+        case "$line" in
+            *$'\t1024\t'"$(( ${#hex} / 2 ))"$'\t'"$hex"$'\t'*) echo "$leg dump keeps the tl_data 1024 bytes of case $n" ;;
+            *) echo "$leg dump lost or changed the tl_data 1024 bytes of case $n: $line" >&2; exit 1 ;;
+        esac
+    done
+}
+tlraw_leg "$NAME_MIT" /etc/krb5.conf mit
+tlraw_leg "$NAME" /tmp/kadmin-krb5.conf rust
+for n in 1 2; do
+    diff "$SCRATCH/tlraw$n-mit.txt" "$SCRATCH/tlraw$n-rust.txt" || {
+        echo "tl_data 1024 bytes (case $n): modify or get differs between MIT's kadmind and ours" >&2
+        exit 1
+    }
+done
+
 echo "==== renprinc, cpw, then kinit with the new password: MIT's kadmind and KDC, then ours (kdb_cpw.c:301-305) ===="
 rencpw_leg() {
     local ctn=$1 conf=$2 leg=$3 out
