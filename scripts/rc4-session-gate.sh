@@ -556,7 +556,7 @@ F_RUST="$(f_kinit /tmp/krb5-8888.conf /tmp/z14kt-rust.kt /tmp/f-rust.cc || true)
 echo "stale keytab (kvno 2 kept, kvno 3 current): mit=$F_MIT"
 echo "stale keytab (kvno 2 kept, kvno 3 current): rust=$F_RUST"
 [ "$F_MIT" = "kinit: Password incorrect while getting initial credentials" ] ||
-    die "F) MIT did not refuse the stale keytab with Password incorrect (24): $F_MIT"
+    die "F) MIT did not refuse the stale keytab with Password incorrect (31): $F_MIT"
 [ "$F_RUST" = "$F_MIT" ] || die "F) Rust stale-keytab kinit differs from MIT"
 kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'modprinc +requires_preauth z14kt'
 kadmin_q_ok rust_kadmin_local \
