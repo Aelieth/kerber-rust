@@ -97,6 +97,7 @@ impl PrincipalStore {
             && name
                 .components_joined()
                 .eq_ignore_ascii_case("Administrator")
+            && self.rid_owner(RID_ADMINISTRATOR).is_none()
         {
             return RID_ADMINISTRATOR;
         }

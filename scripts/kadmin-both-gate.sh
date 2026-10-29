@@ -890,6 +890,16 @@ for f in create cpw setkey; do
     }
 done
 
+echo "==== addprinc Administrator, then administrator: MIT's kadmind, then ours, create both ===="
+admin_case() {
+    for p in Administrator administrator; do
+        mit_kadmin -e KRB5_CONFIG="$2" "$1" -- -p admin/admin -w adminpassword \
+            -q "addprinc -randkey $p" 2>&1 | grep -F "Principal \"$p@KERBER.TEST\" created."
+    done
+}
+admin_case "$NAME_MIT" /etc/krb5.conf
+admin_case "$NAME" /tmp/kadmin-krb5.conf
+
 echo "==== Z8.3 bootstrap actors: kadmin/changepw kdb5_util@ (kadm5_create.c:100) ===="
 # kadmin/changepw is never successfully modified in this gate (the
 # lockdown_keys cell is a privilege denial), so both legs still show
