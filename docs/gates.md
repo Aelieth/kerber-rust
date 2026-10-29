@@ -184,8 +184,8 @@ not check (a unit test, or "not asserted").
   is `PWCHANGE_SERVICE`.
 - `ticket-flags.sh` `TF.flags.revoke`, `TF.flags.fwd.bits`,
   `TF.flags.deleg.bits`, `TF.flags.svr.kvno`, `TF.flags.tgt.kvno`,
-  `TF.flags.hw.kinit` — MIT `modprinc` DISALLOW_*/OK_AS_DELEGATE/
-  REQUIRES_HW_AUTH then `kinit`/`kvno`/`klist -f`.
+  `TF.flags.hw.kinit`, `TF.flags.hw.none` — MIT `modprinc` DISALLOW_*/OK_AS_DELEGATE/
+  REQUIRES_HW_AUTH then `kinit`/`kvno`/`klist -f`; the hw principal gets no ticket.
 - `scripts/getprivs-gate.sh` — MIT `kadmin getprivs` prints `INQUIRE` (or
   `GET`), `ADD` and `MODIFY` for the admin and for an actor whose ACL is `i`
   alone. MIT's `kadm5_get_privs` returns `~0` (`server_misc.c:147-158`); the
@@ -386,7 +386,7 @@ not check (a unit test, or "not asserted").
   verdict and the `Rejected connection from unauthorized principal` count
   agree (`kpropd.c:1298-1348`).
 - `ticket-flags.sh` `TF.renew.delta`, `TF.renew.until`, `TF.renew.moved`,
-  `TF.renew.strip.bits`, `TF.flags.prox.allow`, `TF.renew.zero.delta`,
+  `TF.renew.strip.bits`, `TF.renew.strip.until`, `TF.flags.prox.allow`, `TF.renew.zero.delta`,
   `TF.renew.day.delta`, `TF.renew.none.log`, `TF.z71.delta` — four-term
   renew; `kinit -R` keeps renew-until and moves the end; `-allow_renewable`
   strips `R`; `kinit -p` shows `P`; maxrenewlife 0 and 1 day; a renewable

@@ -11,10 +11,10 @@
 #   kdc_preauth.c return_pw_change / NEEDED_HW_PREAUTH 747-749.
 #   lib/kadm5/srv/server_misc.c check_against_policy 81-100 (length, classes).
 #   lib/kadm5/chpass_util.c KADM5_PASS_TOOSOON 213-228. History and lockout are kadm5 policy on kinit.
-#   The policy dump and load of the history TL is not in this scenario.
-#   TF.sha2: MIT kinit/kvno with only etype 20. The session key and the ticket key
-#   of krbtgt and of the host are both aes256-cts-hmac-sha384-192. Both legs are the two
-#   KDCs. Our kinit is TF-2.
+#   TF.hist.dump and TF.hist.mitload: MIT's kdb5_util loads this leg's history dump.
+#   TF.sha2: MIT kinit/kvno with only etype 20. The session key of krbtgt and of the host
+#   is aes256-cts-hmac-sha384-192, and so is the host's ticket key. The krbtgt ticket key
+#   is its long-term sha1 key (see below).
 #   kvno uses the ccache (kvno.c krb5_get_credentials). The flag rows kinit into a
 #   fresh ccache so the host ticket from the delegate row is not reused.
 #   krbtgt requires preauth (install.sh default_principal_flags). A TGT without
@@ -203,11 +203,13 @@ kadm TF.flags.tgt.clear "^Principal \"$H@$R\" modified\\.\$" "modprinc +allow_tg
 section "TF.flags REQUIRES_HW_AUTH asks for more preauth and issues nothing (kdc_preauth.c)"
 check TF.flags.hw.set 'REQUIRES_HW_AUTH' run kdc "sudo kadmin.local -q 'modprinc +requires_hwauth -requires_preauth tfuser' 2>&1; sudo kadmin.local -q 'getprinc tfuser' 2>&1"
 check TF.flags.hw.kinit 'Additional pre-authentication required' runin client2 "alice's password ($ALICE)" "KRB5_TRACE=/dev/stderr kinit -c FILE:\$HOME/tf/hw.cc tfuser@$REALM > \$HOME/tf/k.out 2>&1; echo kinit_rc:\$?; cat \$HOME/tf/k.out; klist -s -c FILE:\$HOME/tf/hw.cc; echo klist_s:\$?; true" < <(once "$ALICE")
+checklast TF.flags.hw.none '^klist_s:1$'
 kadm TF.flags.hw.clear "^Principal \"tfuser@$R\" modified\\.\$" 'modprinc -requires_hwauth tfuser'
 kadm TF.flags.hw.preauth "^Principal \"tfuser@$R\" modified\\.\$" 'modprinc +requires_preauth tfuser'
 
 section "TF.renew four-term renewable life, then kinit -R keeps renew-until (tgs_policy.c)"
-check TF.renew.life 'Maximum renewable life: [^0]' run kdc "sudo kadmin.local -q 'getprinc krbtgt/$REALM' 2>&1 | grep -F 'Maximum renewable life:'; sudo kadmin.local -q 'getprinc tfuser' 2>&1 | grep -F 'Maximum renewable life:'"
+check TF.renew.life.tgt 'Maximum renewable life: [^0]' run kdc "sudo kadmin.local -q 'getprinc krbtgt/$REALM' 2>&1 | grep -F 'Maximum renewable life:'"
+check TF.renew.life.user 'Maximum renewable life: [^0]' run kdc "sudo kadmin.local -q 'getprinc tfuser' 2>&1 | grep -F 'Maximum renewable life:'"
 kadm TF.renew.user "^Principal \"tfuser@$R\" modified\\.\$" 'modprinc -maxrenewlife "7 days" tfuser'
 kin TF.renew.kinit 'Flags:.*R' u tfuser "alice's password ($ALICE)" -r 7d -l 10h < <(once "$ALICE")
 klist_times "$LAST_OUT" > "$STATE/renew1.txt"
@@ -236,6 +238,7 @@ section "TF.renew DISALLOW_RENEWABLE strips R; a second kinit -R is BADOPTION"
 kadm TF.renew.strip.set "^Principal \"tfuser@$R\" modified\\.\$" 'modprinc -allow_renewable tfuser'
 check TF.renew.strip rc run client2 "kinit -R -c FILE:\$HOME/tf/u.cc && klist -f -c FILE:\$HOME/tf/u.cc"
 checklast TF.renew.strip.bits 'Flags: [^R]*$'
+check TF.renew.strip.until '^renew_until:none$' run client2 "if klist -f -c FILE:\$HOME/tf/u.cc | grep -q 'renew until'; then echo renew_until:kept; else echo renew_until:none; fi"
 check TF.renew.strip.again "KDC can't fulfill requested option" run client2 "kinit -R -c FILE:\$HOME/tf/u.cc 2>&1; true"
 kadm TF.renew.strip.clear "^Principal \"tfuser@$R\" modified\\.\$" 'modprinc +allow_renewable tfuser'
 
@@ -438,7 +441,7 @@ sudo -n env KRB5_KDC_PROFILE="$side/kdc.conf" KRB5_CONFIG="$side/krb5.conf" "${e
     "$kdb" -r "$realm" load "$dump"
 echo "load rc=$?"
 # Current password is Hist-pw0. Hist-pw2 is the one old key still in the window.
-# Hist-pw1 fell out when Hist-pw0 was set.
+# Hist-pw1 fell out when Hist-pw0 was set. After Hist-pw1 is set, Hist-pw0 is the old one.
 for reused in Hist-pw0 Hist-pw2; do
     out=$(sudo -n env KRB5_KDC_PROFILE="$side/kdc.conf" KRB5_CONFIG="$side/krb5.conf" "${envline[@]}" \
         "$kadm" -d "$side/principal" -q "cpw -pw $reused tfhist" 2>&1 || true)
@@ -451,6 +454,11 @@ out=$(sudo -n env KRB5_KDC_PROFILE="$side/kdc.conf" KRB5_CONFIG="$side/krb5.conf
 printf '%s\n' "$out"
 printf '%s\n' "$out" | grep -F "Password for \"tfhist@$realm\" changed." >/dev/null \
     || { echo "fresh password refused"; exit 1; }
+out=$(sudo -n env KRB5_KDC_PROFILE="$side/kdc.conf" KRB5_CONFIG="$side/krb5.conf" "${envline[@]}" \
+    "$kadm" -d "$side/principal" -q 'cpw -pw Hist-pw0 tfhist' 2>&1 || true)
+printf '%s\n' "$out"
+printf '%s\n' "$out" | grep -F "Cannot reuse password while changing password for \"tfhist@$realm\"." >/dev/null \
+    || { echo "ring not continued: Hist-pw0"; exit 1; }
 echo mitload: ok
 sudo -n rm -rf "$HOME/tf-mit" /var/tmp/tf-hist.dump </dev/null
 EOF
