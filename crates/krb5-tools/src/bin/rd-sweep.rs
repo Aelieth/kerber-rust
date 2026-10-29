@@ -291,7 +291,10 @@ struct OrderCase {
     cname: &'static str,
     resend: bool,
     tkt_aes128: bool,
+    tkt_kvno: u32,
+    tkt_etype: i32,
     named: bool,
+    matching: bool,
 }
 
 const HOUR: i64 = 3600;
@@ -310,7 +313,10 @@ const PRISTINE: OrderCase = OrderCase {
     cname: "user",
     resend: false,
     tkt_aes128: false,
+    tkt_kvno: 1,
+    tkt_etype: 0,
     named: false,
+    matching: false,
 };
 
 fn order_cases() -> Result<Vec<RdCase>, String> {
@@ -421,6 +427,40 @@ fn order_cases() -> Result<Vec<RdCase>, String> {
             ..PRISTINE
         },
         OrderCase {
+            id: "keytab/kvno-miss-named",
+            tkt_kvno: 2,
+            named: true,
+            ..PRISTINE
+        },
+        OrderCase {
+            id: "keytab/kvno-miss",
+            tkt_kvno: 2,
+            ..PRISTINE
+        },
+        OrderCase {
+            id: "keytab/not-found-named",
+            tkt_etype: 16,
+            named: true,
+            ..PRISTINE
+        },
+        OrderCase {
+            id: "keytab/not-found",
+            tkt_etype: 16,
+            ..PRISTINE
+        },
+        OrderCase {
+            id: "keytab/kvno-miss-matching",
+            tkt_kvno: 2,
+            matching: true,
+            ..PRISTINE
+        },
+        OrderCase {
+            id: "keytab/not-found-matching",
+            tkt_etype: 16,
+            matching: true,
+            ..PRISTINE
+        },
+        OrderCase {
             id: "etype/ticket-noperm",
             tkt_aes128: true,
             ..PRISTINE
@@ -516,7 +556,7 @@ fn order_cases() -> Result<Vec<RdCase>, String> {
             p.starttime = start;
             p.endtime = end;
         })?;
-        if c.tkt_aes128 || !matches!(c.seal, Seal::Session) {
+        if c.tkt_aes128 || c.tkt_kvno != 1 || c.tkt_etype != 0 || !matches!(c.seal, Seal::Session) {
             let mut req: ApReq = decode(&ap).map_err(|e| e.to_string())?;
             if c.tkt_aes128 {
                 let tkt_usage = usage(ku::TICKET)?;
@@ -534,6 +574,10 @@ fn order_cases() -> Result<Vec<RdCase>, String> {
                     .map_err(|e| e.to_string())?
                     .into();
             }
+            req.ticket.enc_part.kvno = Some(c.tkt_kvno);
+            if c.tkt_etype != 0 {
+                req.ticket.enc_part.etype = c.tkt_etype;
+            }
             match c.seal {
                 Seal::OtherKey => {
                     req.authenticator.cipher =
@@ -547,7 +591,13 @@ fn order_cases() -> Result<Vec<RdCase>, String> {
             }
             ap = der!(&req)?;
         }
-        let kind = if c.named { "req-named" } else { "req" };
+        let kind = if c.named {
+            "req-named"
+        } else if c.matching {
+            "req-matching"
+        } else {
+            "req"
+        };
         if c.resend {
             out.push((c.id.to_string(), kind, ap.clone(), None));
             out.push((format!("{}-again", c.id), kind, ap, None));
@@ -558,15 +608,17 @@ fn order_cases() -> Result<Vec<RdCase>, String> {
     Ok(out)
 }
 
-// Oracle MEMORY keytab: the service's keys at kvno 1, walked (NULL server) unless named.
+// Oracle FILE keytab: the service's keys at kvno 1, walked (NULL server) unless named.
 fn oracle_verify(
     ap: &[u8],
     replay: &ReplayCache,
     keys: &[ProtocolKey],
-    named: bool,
+    kind: &str,
     permitted: &[EncryptionType],
 ) -> Result<krb5_protocol::ApVerifyOk, Error> {
     let name = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "oracle.kerber.test"]);
+    let matching = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", ""]);
+    let pinned = kind.starts_with("req-");
     let principals: Vec<_> = keys
         .iter()
         .map(|_| (name.clone(), ascii("KERBER.TEST")))
@@ -575,9 +627,13 @@ fn oracle_verify(
     let params = ApVerifyParams {
         keys,
         key_kvnos: Some(&kvnos),
-        key_principals: (!named).then_some(principals.as_slice()),
-        expected_server: named.then_some(&name),
-        expected_realm: named.then_some("KERBER.TEST"),
+        key_principals: (!pinned).then_some(principals.as_slice()),
+        expected_server: pinned.then_some(if kind == "req-matching" {
+            &matching
+        } else {
+            &name
+        }),
+        expected_realm: pinned.then_some("KERBER.TEST"),
         permitted,
         ..ApVerifyParams::single_key(&keys[0])
     };
@@ -600,7 +656,7 @@ fn rust_answer(kind: &str, ap: &[u8], msg: Option<&[u8]>) -> String {
         return "other:key".into();
     };
     let preferred = EncryptionType::preferred();
-    let ok = match oracle_verify(ap, &ReplayCache::new(), &[service], false, &preferred) {
+    let ok = match oracle_verify(ap, &ReplayCache::new(), &[service], "req", &preferred) {
         Ok(ok) => ok,
         Err(e) => return class(&e),
     };
@@ -1482,7 +1538,7 @@ fn run(args: &[String]) -> Result<bool, String> {
             ];
             let permitted = [EncryptionType::Aes256CtsHmacSha196];
             judge(cases, mit, |kind, ap, _| {
-                match oracle_verify(ap, &replay, &keys, kind == "req-named", &permitted) {
+                match oracle_verify(ap, &replay, &keys, kind, &permitted) {
                     Ok(_) => "0".into(),
                     Err(Error::KrbError { code, text }) => {
                         format!("krb5:{code}\t{}", text.unwrap_or_default())

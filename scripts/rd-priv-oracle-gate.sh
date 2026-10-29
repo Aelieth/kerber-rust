@@ -78,6 +78,9 @@ for want in "order/pristine${TAB}0" "transit/server-realm${TAB}krb5:43${TAB}Ille
     "decrypt/authenticator-key${TAB}krb5:31${TAB}Decrypt integrity check failed" \
     "order/authenticator-key-expired${TAB}krb5:31${TAB}Decrypt integrity check failed" \
     "decrypt/session-key-size-etype${TAB}krb5:188${TAB}Bad encryption type" \
+    "keytab/kvno-miss-named${TAB}krb5:44${TAB}Cannot find key for host/oracle.kerber.test@KERBER.TEST kvno 2 in keytab" \
+    "keytab/not-found-matching${TAB}krb5:44${TAB}Request ticket server host/oracle.kerber.test@KERBER.TEST kvno 1 found in keytab but not with enctype des3-cbc-sha1" \
+    "keytab/not-found-named${TAB}krb5:45${TAB}No key table entry found for host/oracle.kerber.test@KERBER.TEST" \
     "etype/ticket-noperm-named${TAB}krb5:236${TAB}Encryption type not permitted" \
     "order/ticket-noperm-replay-again${TAB}krb5:236${TAB}Encryption type not permitted" \
     "order/expired-replay-again${TAB}krb5:34${TAB}Request is a replay" \

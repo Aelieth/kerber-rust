@@ -498,7 +498,6 @@ fn decrypt_for_server(
     // MIT: `krb5_ktfile_get_entry` (kt_file.c:355-384)
     let mut found_wrong_kvno = false;
     let mut tried_any = false;
-    let mut not_found = false;
     if let Some(get_entry) = params.get_entry {
         match get_entry(
             &name,
@@ -513,7 +512,7 @@ fn decrypt_for_server(
                     Err(e) => last_err = e,
                 }
             }
-            Err(KeytabLookup::NotFound) => not_found = true,
+            Err(KeytabLookup::NotFound) => {}
             Err(KeytabLookup::KvnoNotFound) => found_wrong_kvno = true,
             Err(KeytabLookup::Other(e)) => return Err(e),
         }
@@ -542,15 +541,10 @@ fn decrypt_for_server(
     }
     let Some(ticket_part) = ticket_part else {
         let same_princ = principal_compare(&name, &realm, &ap.ticket.sname, &tkt_realm);
-        if found_wrong_kvno && !tried_any && (lookup || params.expected_server.is_some()) {
-            let sname = ap
-                .ticket
-                .sname
-                .name_string
-                .iter()
-                .map(|c| String::from_utf8_lossy(c.as_bytes()).into_owned())
-                .collect::<Vec<_>>()
-                .join("/");
+        let named = lookup || params.expected_server.is_some();
+        // MIT: `keytab_fetch_error` (rd_req_dec.c:137-155)
+        if found_wrong_kvno && !tried_any && named {
+            let sname = name.unparse_with_realm(&realm);
             let want = want_kvno.unwrap_or(0);
             return Err(if same_princ {
                 Error::KrbError {
@@ -561,9 +555,30 @@ fn decrypt_for_server(
                 Error::KrbError {
                     code: err::NOT_US,
                     text: Some(format!(
-                        "Server principal does not match request ticket server {sname}"
+                        "Cannot find key for {sname} kvno {want} in keytab (request ticket server {})",
+                        ap.ticket.sname.unparse_with_realm(&tkt_realm)
                     )),
                 }
+            });
+        }
+        // MIT: `keytab_fetch_error` (rd_req_dec.c:131-135)
+        // keeps the keytab's text: FILE names the entry, KDB has none.
+        if !found_wrong_kvno && !tried_any && named {
+            let (code, generic) = if explicit {
+                (err::NOKEY, "Service key not available")
+            } else {
+                (err::NOT_US, "The ticket isn't for us")
+            };
+            return Err(Error::KrbError {
+                code,
+                text: Some(if lookup {
+                    generic.into()
+                } else {
+                    format!(
+                        "No key table entry found for {}",
+                        name.unparse_with_realm(&realm)
+                    )
+                }),
             });
         }
         // MIT: `integrity_error` (rd_req_dec.c:162-181)
@@ -582,12 +597,6 @@ fn decrypt_for_server(
                     ap.ticket.sname.unparse_with_realm(&tkt_realm),
                     name.unparse_with_realm(&realm)
                 )),
-            });
-        }
-        if not_found && !explicit {
-            return Err(Error::KrbError {
-                code: err::NOT_US,
-                text: Some("Wrong principal in request".into()),
             });
         }
         return Err(last_err);

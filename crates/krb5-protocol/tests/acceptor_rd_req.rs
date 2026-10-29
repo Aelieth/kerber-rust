@@ -530,17 +530,34 @@ fn rd_req_with_a_named_server_takes_the_keytab_principal_for_the_tickets() {
 /// not; any other code passes through.
 #[test]
 fn rd_req_with_a_named_server_maps_the_keytab_codes_as_keytab_fetch_error() {
-    let (raw, _, _) = host_ap_req();
+    let (raw, _, kvno) = host_ap_req();
     let host = documented_host();
     let elsewhere =
         PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "elsewhere.kerber.test"]);
+    let (h, e) = (
+        host.unparse_with_realm(TEST_REALM),
+        elsewhere.unparse_with_realm(TEST_REALM),
+    );
     let no_entry = |_: &PrincipalName, _: &str, _: u32, _: i32| Err(KeytabLookup::NotFound);
-    assert_eq!(named_code(&raw, &named(&host, &no_entry)).0, err::NOKEY);
-    let no_kvno = |_: &PrincipalName, _: &str, _: u32, _: i32| Err(KeytabLookup::KvnoNotFound);
-    assert_eq!(named_code(&raw, &named(&host, &no_kvno)).0, err::BADKEYVER);
+    // a KDB keytab sets no text, so the code's own
     assert_eq!(
-        named_code(&raw, &named(&elsewhere, &no_kvno)).0,
-        err::NOT_US
+        named_code(&raw, &named(&host, &no_entry)),
+        (err::NOKEY, "Service key not available".into())
+    );
+    let no_kvno = |_: &PrincipalName, _: &str, _: u32, _: i32| Err(KeytabLookup::KvnoNotFound);
+    assert_eq!(
+        named_code(&raw, &named(&host, &no_kvno)),
+        (
+            err::BADKEYVER,
+            format!("Cannot find key for {h} kvno {kvno} in keytab")
+        )
+    );
+    assert_eq!(
+        named_code(&raw, &named(&elsewhere, &no_kvno)),
+        (
+            err::NOT_US,
+            format!("Cannot find key for {e} kvno {kvno} in keytab (request ticket server {h})")
+        )
     );
     let other = |_: &PrincipalName, _: &str, _: u32, _: i32| {
         Err(KeytabLookup::Other(krb5_protocol::Error::KdbNoPermittedKey))
@@ -624,11 +641,15 @@ fn rd_req_with_no_server_looks_up_the_server_the_ticket_names() {
 fn rd_req_with_no_server_maps_the_keytab_codes_for_the_tickets_server() {
     let (raw, _, _) = host_ap_req();
     let no_entry = |_: &PrincipalName, _: &str, _: u32, _: i32| Err(KeytabLookup::NotFound);
-    assert_eq!(named_code(&raw, &unnamed(&no_entry)).0, err::NOT_US);
+    assert_eq!(
+        named_code(&raw, &unnamed(&no_entry)),
+        (err::NOT_US, "The ticket isn't for us".into())
+    );
     let no_kvno = |_: &PrincipalName, _: &str, _: u32, _: i32| Err(KeytabLookup::KvnoNotFound);
     let (code, text) = named_code(&raw, &unnamed(&no_kvno));
     assert_eq!(code, err::BADKEYVER);
-    assert!(text.starts_with("Cannot find key for "), "{text}");
+    assert!(text.starts_with("Cannot find key for host/"), "{text}");
+    assert!(text.contains("@KERBER.TEST kvno "), "{text}");
     let other = |_: &PrincipalName, _: &str, _: u32, _: i32| {
         Err(KeytabLookup::Other(krb5_protocol::Error::KdbNoPermittedKey))
     };
