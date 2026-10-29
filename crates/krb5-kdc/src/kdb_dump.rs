@@ -849,15 +849,16 @@ pub fn parse_iprop_header(line: &str) -> Result<(bool, UlogLast), IpropHeaderErr
     ))
 }
 
+const FGETS_BUFSIZ: u64 = 8192;
+
 // MIT: `current_dump_sno_in_ulog` (kadmin/dbutil/dump.c:1111-1134)
 #[must_use]
 pub fn dump_current_in_ulog(dump_file: &Path, ulog: &crate::ulog::Ulog) -> bool {
     let Ok(file) = fs::File::open(dump_file) else {
         return false;
     };
-    // One BUFSIZ block at most, as `fgets` reads it.
     let mut line = Vec::new();
-    if std::io::BufReader::new(file.take(8192))
+    if std::io::BufReader::new(file.take(FGETS_BUFSIZ))
         .read_until(b'\n', &mut line)
         .is_err()
     {
@@ -906,7 +907,6 @@ pub fn conditional_iprop_dump(
     }
 }
 
-/// None when the dump on disk is already in the log; else the whole dump, header first.
 fn iprop_dump_text(
     store: &PrincipalStore,
     dump_file: &Path,
@@ -934,8 +934,7 @@ fn write_iprop_dump(dump_file: &Path, text: &str) -> Result<(), DumpError> {
 }
 
 // MIT: `dump_db` (kadmin/dbutil/dump.c:1318-1340)
-/// Header and records: one fresh, locked view. The file is written after both locks are
-/// released, so a queued write does not stop the store's readers for the file's length.
+/// Header and records: one fresh, locked view.
 pub fn conditional_iprop_dump_fresh(
     store: &crate::SharedDump,
     dump_file: &Path,
@@ -1562,7 +1561,6 @@ pub(crate) fn nul_tl_names(tl: &[TlData], ty: i32) -> Vec<String> {
         .collect()
 }
 
-/// Any other record of these types stays in `tl_data` as its bytes, as MIT's db2 keeps it.
 pub(crate) fn is_s4u_name_tl(t: &TlData) -> bool {
     (t.ty == TL_CONSTRAINED_DELEGATION || t.ty == TL_KERBER_S4U_FROM) && nul_name(t).is_some()
 }
