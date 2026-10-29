@@ -106,7 +106,7 @@ fn main() {
             }
         };
         let accepted = if krb5_gss::is_spnego(&tok) {
-            match krb5_gss::spnego_accept_kt(
+            match krb5_gss::spnego_accept_kt_err(
                 &tok,
                 &service_keys,
                 Some(&service_kvnos),
@@ -124,7 +124,7 @@ fn main() {
             }
         } else {
             let inner = krb5_gss::spnego_inner(&tok).map_or_else(|_| tok.clone(), Vec::from);
-            GssContext::accept_sec_context_kt(
+            GssContext::accept_sec_context_kt_err(
                 &inner,
                 &service_keys,
                 Some(&service_kvnos),
@@ -137,7 +137,12 @@ fn main() {
         };
         let (mut ctx, mut ap_rep) = match accepted {
             Ok(v) => v,
-            Err(e) => {
+            Err((e, token)) => {
+                if let Some(t) = token
+                    && let Err(w) = write_token(&mut stream, &t)
+                {
+                    eprintln!("write error token: {w}");
+                }
                 eprintln!("accept_sec_context: {e}");
                 continue;
             }

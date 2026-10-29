@@ -794,11 +794,12 @@ fn ticket_ap_req(
     spec: &TicketSpec,
     authenticator: &[u8],
     now: &KerberosTime,
+    ap_options: ApOptions,
 ) -> Result<Vec<u8>, String> {
     let ap = ApReq {
         pvno: ApReq::PVNO,
         msg_type: ApReq::MSG_TYPE,
-        ap_options: ApOptions::none(),
+        ap_options,
         ticket: forged_ticket(spec, now)?,
         authenticator: EncryptedData {
             etype: 18,
@@ -828,6 +829,7 @@ fn kp_ap_req(env: &KpEnv, authenticator: &[u8], now: &KerberosTime) -> Result<Ve
         },
         authenticator,
         now,
+        ApOptions::none(),
     )
 }
 
@@ -1124,6 +1126,7 @@ fn ka_cases(client: &str, services: &[KaService]) -> Result<Vec<(String, Vec<u8>
                 },
                 &authenticator,
                 &now,
+                ApOptions::none(),
             )
         };
         for (k, (_, kvno, _)) in svc.keys.iter().enumerate() {
@@ -1161,7 +1164,7 @@ fn ka_cases(client: &str, services: &[KaService]) -> Result<Vec<(String, Vec<u8>
             };
             out.push((
                 format!("{name}/etype={}", etype.to_iana()),
-                ticket_ap_req(&spec, &authenticator, &now)?,
+                ticket_ap_req(&spec, &authenticator, &now, ApOptions::none())?,
             ));
         }
         let names = svc
@@ -1411,8 +1414,7 @@ fn init_call(
     Ok(parsed.unwrap_or_else(|| "OTHER short reply".to_string()))
 }
 
-/// kvno; MIT's and our kadmind take the first key alone and refuse the rest.
-fn gss_transit(keytab: &str, service: &str) -> Result<(), String> {
+fn service_spec(keytab: &str, service: &str, crealm: Option<&str>) -> Result<TicketSpec, String> {
     let bytes = std::fs::read(keytab).map_err(|e| format!("{keytab}: {e}"))?;
     let kt = Keytab::parse(&bytes).map_err(|e| format!("{keytab}: {e}"))?;
     let services = ka_services(&kt);
@@ -1421,18 +1423,22 @@ fn gss_transit(keytab: &str, service: &str) -> Result<(), String> {
         .find(|s| s.name.unparse() == service)
         .ok_or_else(|| format!("no keytab entry for {service}"))?;
     let (etype, kvno, ref skey) = *svc.keys.first().ok_or("no key")?;
-    let crealm = "OTHER.TEST";
-    let spec = TicketSpec {
-        realm: crealm.to_owned(),
+    Ok(TicketSpec {
+        realm: crealm.unwrap_or(&svc.realm).to_owned(),
         client: "user".to_owned(),
         srealm: svc.realm.clone(),
         sname: svc.name.clone(),
         kvno: Some(kvno),
         etype,
         svc: skey.clone(),
-    };
+    })
+}
+
+fn gss_transit(keytab: &str, service: &str) -> Result<(), String> {
+    let crealm = "OTHER.TEST";
+    let spec = service_spec(keytab, service, Some(crealm))?;
     let ticket = forged_ticket_with(&spec, &KerberosTime::now(), |p| {
-        p.transited.contents = OctetString::from(svc.realm.as_bytes().to_vec());
+        p.transited.contents = OctetString::from(spec.srealm.as_bytes().to_vec());
     })?;
     let who = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
     let (_ctx, token) = krb5_gss::GssContext::init_sec_context(
@@ -1451,6 +1457,79 @@ fn gss_transit(keytab: &str, service: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn gss_errtok(keytab: &str, service: &str) -> Result<(), String> {
+    let spec = service_spec(keytab, service, None)?;
+    let now = KerberosTime::now();
+    let gss = |flags: u32, tail: &[u8]| {
+        let v = [&[16, 0, 0, 0][..], &[0; 16], &flags.to_le_bytes(), tail].concat();
+        Checksum {
+            cksumtype: krb5_gss::GSS_CHECKSUM_TYPE,
+            checksum: v.into(),
+        }
+    };
+    let ad_ap_options = || AuthorizationDataValue {
+        ad_type: 143,
+        ad_data: OctetString::from(vec![0; 4]),
+    };
+    let nested = AuthorizationDataValue {
+        ad_type: krb5_types::pa::AD_IF_RELEVANT,
+        ad_data: der!(&vec![ad_ap_options()])?.into(),
+    };
+    let dup = Some(vec![ad_ap_options(), nested]);
+    let (mutual, deleg, dce, cb) = (
+        krb5_gss::GSS_C_MUTUAL,
+        krb5_gss::GSS_C_DELEG,
+        krb5_gss::GSS_C_DCE,
+        krb5_gss::GSS_C_CHANNEL_BOUND,
+    );
+    let (bad_id, finished) = ([2, 0, 0, 0], [0, 0, 0, 2, 0, 0, 0, 0]);
+    let samba = Checksum {
+        cksumtype: 16,
+        checksum: OctetString::from(vec![0xff; 12]),
+    };
+    let cases = [
+        ("deleg-id", true, false, gss(mutual | deleg, &bad_id), None),
+        ("deleg-id-nomutual", true, false, gss(deleg, &bad_id), None),
+        ("finished", true, false, gss(mutual, &finished), None),
+        ("cbt-dup", true, false, gss(mutual, &[]), dup),
+        ("raw-nodce", false, false, gss(mutual, &[]), None),
+        ("framed-dce", true, false, gss(mutual | dce, &[]), None),
+        ("samba-bad", true, true, samba, None),
+        ("cb-flag", true, false, gss(mutual | cb, &[]), None),
+    ];
+    for (usec, (name, framed, mutual_required, cksum, authorization_data)) in (1..).zip(cases) {
+        let authenticator = Authenticator {
+            authenticator_vno: Authenticator::VNO,
+            crealm: ascii(&spec.realm),
+            cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, [spec.client.as_str()]),
+            cksum: Some(cksum),
+            cusec: Microseconds(usec),
+            ctime: now.clone(),
+            subkey: None,
+            seq_number: None,
+            authorization_data,
+        };
+        let options = if mutual_required {
+            ApOptions::mutual_required()
+        } else {
+            ApOptions::none()
+        };
+        let ap = ticket_ap_req(&spec, &der!(&authenticator)?, &now, options)?;
+        let token = if framed { gss_framed(&ap) } else { ap };
+        println!("{name} {}", hex(&token));
+    }
+    Ok(())
+}
+
+fn gss_framed(ap: &[u8]) -> Vec<u8> {
+    let body = [&[0x06, 0x09][..], krb5_gss::KRB5_OID, &[0x01, 0x00], ap].concat();
+    let mut out = vec![0x60];
+    der_len(&mut out, body.len());
+    out.extend(body);
+    out
+}
+
+/// MIT's and our kadmind take the first key alone and refuse the rest.
 fn kadmind_init(addr: &str, keytab: &str, client: &str, opts: &[String]) -> Result<(), String> {
     let (mut service, mut entry, mut agss) = ("kadmin/admin".to_owned(), 0usize, false);
     for o in opts {
@@ -1566,6 +1645,10 @@ fn run(args: &[String]) -> Result<bool, String> {
             gss_transit(keytab, service)?;
             Ok(true)
         }
+        [cmd, keytab, service] if cmd == "gss-errtok" => {
+            gss_errtok(keytab, service)?;
+            Ok(true)
+        }
         [cmd, addr, keytab, client, opts @ ..] if cmd == "kadmind-init" => {
             kadmind_init(addr, keytab, client, opts)?;
             Ok(true)
@@ -1576,7 +1659,8 @@ fn run(args: &[String]) -> Result<bool, String> {
                   [setpw] [raddr=IP] [entry=N] | judge-explicit <frames> <mit> <dump> <password> | \
                   kadmind <keytab> <client> | judge-kdb <cases> <mit> <dump> <password> | \
                   kadmind-init <host:port> <keytab> <client> [service=P] [entry=N] \
-                  [flavor=rpcsec|agss] | gss-transit <keytab> <service>"
+                  [flavor=rpcsec|agss] | gss-transit <keytab> <service> | \
+                  gss-errtok <keytab> <service>"
                 .into(),
         ),
     }

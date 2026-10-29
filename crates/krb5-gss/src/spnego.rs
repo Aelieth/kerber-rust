@@ -73,6 +73,7 @@ fn find_mech_token(neg: &[u8]) -> Result<&[u8], Error> {
 }
 
 const SPNEGO_ACCEPT_COMPLETED: u8 = 0;
+const SPNEGO_REJECT: u8 = 2;
 
 fn der_oid(oid: &[u8]) -> Vec<u8> {
     der_tlv(0x06, oid)
@@ -203,9 +204,16 @@ fn mech_list_has_krb5(list: &[u8]) -> Result<bool, Error> {
     Ok(found)
 }
 
-fn encode_neg_resp(state: u8, mech: &[u8], response: Option<&[u8]>, mic: Option<&[u8]>) -> Vec<u8> {
+fn encode_neg_resp(
+    state: u8,
+    mech: Option<&[u8]>,
+    response: Option<&[u8]>,
+    mic: Option<&[u8]>,
+) -> Vec<u8> {
     let mut seq = der_tlv(0xa0, &der_enumerated(state));
-    seq.extend_from_slice(&der_tlv(0xa1, &der_oid(mech)));
+    if let Some(m) = mech {
+        seq.extend_from_slice(&der_tlv(0xa1, &der_oid(m)));
+    }
     if let Some(r) = response {
         seq.extend_from_slice(&der_tlv(0xa2, &der_octet(r)));
     }
@@ -259,12 +267,47 @@ pub fn spnego_accept_kt(
     rcache: &ReplayCache,
     conf: &AcceptorConfig,
 ) -> Result<(GssContext, Vec<u8>), Error> {
-    let init = parse_neg_init(token)?;
-    if !mech_list_has_krb5(&init.mech_list_der)? {
-        return Err(Error::Truncated);
+    spnego_accept_kt_err(
+        token,
+        service_keys,
+        service_kvnos,
+        channel_bindings,
+        expected_server,
+        expected_realm,
+        rcache,
+        conf,
+    )
+    .map_err(|(e, _)| e)
+}
+
+// MIT: `acc_ctx_call_acc` (lib/gssapi/spnego/spnego_mech.c:1537-1540)
+// MIT: `handle_mic` (lib/gssapi/spnego/spnego_mech.c:548-562)
+#[expect(
+    clippy::too_many_arguments,
+    reason = "gss_accept_sec_context's inputs and the acceptor's profile"
+)]
+pub fn spnego_accept_kt_err(
+    token: &[u8],
+    service_keys: &[ProtocolKey],
+    service_kvnos: Option<&[u32]>,
+    channel_bindings: Option<&ChannelBindings>,
+    expected_server: Option<&PrincipalName>,
+    expected_realm: Option<&str>,
+    rcache: &ReplayCache,
+    conf: &AcceptorConfig,
+) -> Result<(GssContext, Vec<u8>), crate::Refusal> {
+    let init = parse_neg_init(token).map_err(|e| (e, None))?;
+    if !mech_list_has_krb5(&init.mech_list_der).map_err(|e| (e, None))? {
+        return Err((Error::Truncated, None));
     }
+    let reject = |e: Error, mech_tok: Option<&[u8]>| {
+        (
+            e,
+            Some(encode_neg_resp(SPNEGO_REJECT, None, mech_tok, None)),
+        )
+    };
     let mech = mech_token_as_gss(&init.mech_token);
-    let (mut ctx, ap_rep) = GssContext::accept_sec_context_kt(
+    let (mut ctx, ap_rep) = GssContext::accept_sec_context_kt_err(
         &mech,
         service_keys,
         service_kvnos,
@@ -273,15 +316,17 @@ pub fn spnego_accept_kt(
         expected_realm,
         rcache,
         conf,
-    )?;
+    )
+    .map_err(|(e, tok)| reject(e, tok.as_deref()))?;
     if let Some(mic) = &init.mic {
-        ctx.verify_mic(&init.mech_list_der, mic)?;
+        ctx.verify_mic(&init.mech_list_der, mic)
+            .map_err(|e| reject(e, ap_rep.as_deref()))?;
     }
-    let mic = ctx.get_mic(&init.mech_list_der)?;
+    let mic = ctx.get_mic(&init.mech_list_der).map_err(|e| (e, None))?;
     ctx.spnego_mech_list = Some(init.mech_list_der);
     let resp = encode_neg_resp(
         SPNEGO_ACCEPT_COMPLETED,
-        KRB5_OID,
+        Some(KRB5_OID),
         ap_rep.as_deref(),
         Some(&mic),
     );

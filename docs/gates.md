@@ -50,7 +50,7 @@ Rows: [OTP](gates-otp.md).
 | scripts/cross-realm-gate.sh | MIT | `nightly:moving` | nightly | MIT `kinit` + `kvno host/svc.other.test@OTHER.TEST`: `klist` has `krbtgt/OTHER.TEST` and the host ticket |
 | `scripts/differential-gate.sh` | MIT | `ci:mit-smoke` | fail-red | same AS/TGS bytes to Rust and MIT on one dump (diffsend encodes each case once): stable-rep / error-code compare; diffsend rc 0 and all 123 cases `"outcome":"ok"` (`DIFFSEND_RATCHET=123`; any mismatch is red); a `"whitelist"` key is red |
 | `scripts/getprivs-gate.sh` | MIT | `nightly:moving` | nightly | MIT `kadmin getprivs` vs Rust kadmind ACL: the admin (`*`) and an actor whose ACL is `i` alone both print `INQUIRE` (or `GET`), `ADD` and `MODIFY`; the `i` actor's `cpw -randkey` is refused as AUTH_CHANGEPW (`change-password`), not AUTH_GET |
-| scripts/gss-gate.sh | MIT | `nightly:moving` | nightly | MIT `libgssapi_krb5` initiator vs `krb5-gss-accept`: unwrap of `hello-from-mit-gss`; `GSS_C_DELEG_FLAG` both directions names `user@KERBER.TEST`; MIT SPNEGO handshake (`gss-accept spnego mic ok`, `gss-accept spnego peer mic ok`); MIT `gss_wrap_iov` unwraps on the Rust acceptor (with `SIGN_ONLY` through Rust `unwrap_iov`); Rust `wrap_iov` / MIT `gss_unwrap_iov`; MIT DCE `wrap_iov` → Rust and → MIT unwrap; inquire lifetime > 0; replayed AP-REQ is 34 on both (MIT KRB-ERROR 34 `Request is a replay`; Rust `accept_sec_context: KRB-ERROR 34: Request is a replay`); a ticket from `OTHER.TEST` listing `KERBER.TEST`, the server's realm, as transited is refused on both, MIT first (`Illegal cross-realm ticket`); direction/filler/EC mutations rejected on both acceptors |
+| scripts/gss-gate.sh | MIT | `nightly:moving` | nightly | MIT `libgssapi_krb5` initiator vs `krb5-gss-accept`: unwrap of `hello-from-mit-gss`; `GSS_C_DELEG_FLAG` both directions names `user@KERBER.TEST`; MIT SPNEGO handshake (`gss-accept spnego mic ok`, `gss-accept spnego peer mic ok`); MIT `gss_wrap_iov` unwraps on the Rust acceptor (with `SIGN_ONLY` through Rust `unwrap_iov`); Rust `wrap_iov` / MIT `gss_unwrap_iov`; MIT DCE `wrap_iov` → Rust and → MIT unwrap; inquire lifetime > 0; replayed AP-REQ is 34 on both (MIT KRB-ERROR 34 `Request is a replay`; Rust `accept_sec_context: KRB-ERROR 34: Request is a replay`); a ticket from `OTHER.TEST` listing `KERBER.TEST`, the server's realm, as transited is refused on both, MIT first (`Illegal cross-realm ticket`); a replayed AP-REQ's error token, with and without mutual, bare and in SPNEGO, is MIT's on both (`gss-reply.py`), eight crafted AP-REQs (`rd-sweep gss-errtok`) get MIT's reply on both, and the one claiming CHANNEL_BOUND without bindings MIT's context flags, and the Rust initiator reads MIT's error token as MIT's initiator does; direction/filler/EC mutations rejected on both acceptors |
 | scripts/history-mit-gate.sh | MIT | `nightly:moving` | nightly | MIT `kadmin.local` history-window on a MIT KDB: history=1 allows A→B→A; history=2 rejects B after A→B→C |
 | `scripts/iprop-gate.sh` | MIT | `nightly:moving` | nightly | MIT `kpropd -A` GET_UPDATES + `krb5-iprop-pull` vs MIT kadmind: MIT `kinit extra` after master restart + serial-delta (no extra FULL_RESYNC); MIT `kinit extra2` on Rust replica whose dump holds the `setstr` value and whose `extra2` keeps the flags, lifetimes and expirations the setstr update did not carry; extra2 PAC RID ≠ 1000 (the replica's `domain_sid` makes the RID AD data) |
 | scripts/kadmin-both-gate.sh | MIT | `nightly:moving` | nightly | both kadminds side by side: `listprincs`/`listpols` glob lists and `getprinc` records (keys, lifetimes) equal between the Rust kadmind and MIT kadmind |
@@ -215,7 +215,15 @@ not check (a unit test, or "not asserted").
   (`Request is a replay`) on both the Rust acceptor and MIT
   `gss-mit-server`. A ticket from `OTHER.TEST` that lists `KERBER.TEST`,
   the server's own realm, as transited (`rd-sweep gss-transit`) is refused
-  by MIT's acceptor, then by ours (`Illegal cross-realm ticket`). No cell replays a
+  by MIT's acceptor, then by ours (`Illegal cross-realm ticket`). A replayed
+  AP-REQ gets MIT's KRB-ERROR token (0x0300) from both acceptors when it asked for
+  mutual, none when it did not, and a SPNEGO reject carrying it; the Rust initiator
+  reads MIT's error token as MIT's initiator does. Eight crafted AP-REQs
+  (`rd-sweep gss-errtok`) get the same reply from both acceptors: six refused
+  after the checksum's flags (a bad delegation id with and without the mutual
+  flag, FINISHED, a second AD-AP-OPTIONS, a raw AP-REQ without DCE and a framed
+  one with it), a bad non-0x8003 checksum, and a checksum claiming
+  CHANNEL_BOUND without bindings, whose context reports MIT's flags. No cell replays a
   token across an acceptor restart: MIT `dfl` file persistence across process restart is
   deferred (the ledger's `srv_rcache.c; rc_file2.c` row). MIT `gss_wrap_iov`
   (HEADER|DATA|PADDING|TRAILER, and with `SIGN_ONLY`) must unwrap on the

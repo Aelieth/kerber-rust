@@ -1,13 +1,15 @@
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt_enc_data};
+use krb5_protocol::trace::{ERROR_TABLE_BASE_KRB5, error_message};
 use krb5_protocol::{
     AUTH_CONTEXT_DO_SEQUENCE, AUTH_CONTEXT_USE_SUBKEY, AcceptorAuthContext, AcceptorConfig,
     ApAuthenticator, KeytabGetEntry, ReplayCache, build_ap_req_from_authenticator,
     generate_ap_authenticator, generate_seq_number,
 };
 use krb5_types::{
-    ApOptions, ApRep, AuthorizationData, AuthorizationDataValue, Checksum, EncApRepPart,
-    EncryptionKey, HostAddress, KerberosTime, PrincipalName, Realm, Ticket, ku, pa,
+    ApOptions, ApRep, ApReq, Authenticator, AuthorizationData, AuthorizationDataValue, Checksum,
+    EncApRepPart, EncryptionKey, HostAddress, KerberosTime, KrbError, PrincipalName, Realm, Ticket,
+    err, ku, pa,
 };
 
 use super::deleg::{DelegCred, extract_delegated, krb_cred_for_deleg};
@@ -17,11 +19,15 @@ use super::oid::{
     GSS_CHECKSUM_TYPE, gss_unwrap_app, gss_wrap_app,
 };
 use super::seqstate::{SeqState, SeqStatus};
-use super::{Error, GssContext};
+use super::{Error, GssContext, Refusal};
+
+type CodedError = (Error, i32);
 
 pub(super) const TOK_AP_REQ: [u8; 2] = [0x01, 0x00];
 
 pub(super) const TOK_AP_REP: [u8; 2] = [0x02, 0x00];
+
+pub(super) const TOK_ERROR: [u8; 2] = [0x03, 0x00];
 
 pub(super) const FLAG_ACCEPTOR_SUBKEY: u8 = 0x04;
 
@@ -39,8 +45,7 @@ const INITIATOR_FLAGS: u32 = GSS_C_INTEG
     | GSS_C_SEQUENCE
     | GSS_C_DCE
     | GSS_C_IDENTIFY
-    | GSS_C_EXTENDED_ERROR
-    | GSS_C_CHANNEL_BOUND;
+    | GSS_C_EXTENDED_ERROR;
 
 pub(super) const KRB5_GSS_FOR_CREDS: u16 = 1;
 
@@ -127,36 +132,40 @@ pub(super) fn authenticator_checksum(
     v
 }
 
-// MIT: `kg_process_extension` (accept_sec_context.c:381-383)
+// MIT: `process_checksum` (accept_sec_context.c:464-626)
 // GSS_EXTS_FINISHED is IAKERB-only; a plain krb5 acceptor fails it.
 fn process_checksum(
-    cksum: Option<&Checksum>,
+    authenticator: &Authenticator,
     ap_mutual: bool,
     acceptor_cb: Option<&ChannelBindings>,
     ticket_session: &ProtocolKey,
     subkey: Option<&ProtocolKey>,
     replay: &ReplayCache,
-    authdata: Option<&AuthorizationData>,
-) -> Result<(u32, Option<String>), Error> {
-    let mut flags_out = 0u32;
+    flags_out: &mut u32,
+) -> Result<Option<String>, CodedError> {
+    let fail = |e: Error| (e, err::GENERIC);
+    let gss_failure = || fail(Error::Inner("gss failure".into()));
     let mut delegated = None;
     let mut cb_match = false;
-    match cksum {
+    match &authenticator.cksum {
         None => {}
         Some(ck) if ck.cksumtype != GSS_CHECKSUM_TYPE => {
-            flags_out = GSS_C_REPLAY | GSS_C_SEQUENCE;
+            *flags_out = GSS_C_REPLAY | GSS_C_SEQUENCE;
             if ap_mutual {
-                flags_out |= GSS_C_MUTUAL;
+                *flags_out |= GSS_C_MUTUAL;
             }
         }
         Some(ck) => {
             let raw = ck.checksum.as_ref();
             if raw.len() < 24 {
-                return Err(Error::ChannelBindings);
+                return Err(fail(Error::ChannelBindings));
             }
-            let cb_len = u32::from_le_bytes(raw[0..4].try_into().map_err(|_| Error::Truncated)?);
-            if cb_len != 16 {
-                return Err(Error::Inner("gss failure".into()));
+            let le32 = |b: &[u8]| b.try_into().map(u32::from_le_bytes);
+            let le16 = |b: &[u8]| b.try_into().map(u16::from_le_bytes);
+            let be32 = |b: &[u8]| b.try_into().map(u32::from_be_bytes);
+            let truncated = |_| fail(Error::Truncated);
+            if le32(&raw[0..4]).map_err(truncated)? != 16 {
+                return Err(gss_failure());
             }
             let token_cb = &raw[4..20];
             if let Some(local) = acceptor_cb {
@@ -164,93 +173,82 @@ fn process_checksum(
                 let token_cb_present = token_cb.iter().any(|&b| b != 0);
                 cb_match = token_cb == expect.as_slice();
                 if token_cb_present && !cb_match {
-                    return Err(Error::ChannelBindings);
+                    return Err(fail(Error::ChannelBindings));
                 }
             }
-            let token_flags =
-                u32::from_le_bytes(raw[20..24].try_into().map_err(|_| Error::Truncated)?);
-            flags_out = token_flags & INITIATOR_FLAGS;
+            let token_flags = le32(&raw[20..24]).map_err(truncated)?;
+            *flags_out = token_flags & INITIATOR_FLAGS;
             if cb_match {
-                flags_out |= GSS_C_CHANNEL_BOUND;
+                *flags_out |= GSS_C_CHANNEL_BOUND;
             }
             let mut rest = &raw[24..];
             if rest.len() >= 4 && token_flags & GSS_C_DELEG != 0 {
-                let option_id =
-                    u16::from_le_bytes(rest[..2].try_into().map_err(|_| Error::Truncated)?);
-                let option_len = usize::from(u16::from_le_bytes(
-                    rest[2..4].try_into().map_err(|_| Error::Truncated)?,
-                ));
+                let option_id = le16(&rest[..2]).map_err(truncated)?;
+                let option_len = usize::from(le16(&rest[2..4]).map_err(truncated)?);
                 rest = &rest[4..];
-                if rest.len() < option_len {
-                    return Err(Error::Inner("gss failure".into()));
+                if rest.len() < option_len || option_id != KRB5_GSS_FOR_CREDS {
+                    return Err(gss_failure());
                 }
-                if option_id != KRB5_GSS_FOR_CREDS {
-                    return Err(Error::Inner("gss failure".into()));
-                }
-                delegated = extract_delegated(raw, token_flags, subkey, ticket_session, replay)?;
+                delegated = extract_delegated(raw, token_flags, subkey, ticket_session, replay)
+                    .map_err(fail)?;
                 if delegated.is_some() {
-                    flags_out |= GSS_C_DELEG;
+                    *flags_out |= GSS_C_DELEG;
                 }
                 rest = &rest[option_len..];
             }
             while !rest.is_empty() {
                 if rest.len() < 8 {
-                    return Err(Error::Inner("gss failure".into()));
+                    return Err(gss_failure());
                 }
-                let ext_type =
-                    u32::from_be_bytes(rest[0..4].try_into().map_err(|_| Error::Truncated)?);
-                if ext_type == GSS_EXTS_FINISHED {
-                    return Err(Error::Inner("gss failure".into()));
-                }
-                let option_len = usize::try_from(u32::from_be_bytes(
-                    rest[4..8].try_into().map_err(|_| Error::Truncated)?,
-                ))
-                .map_err(|_| Error::Truncated)?;
+                let ext_type = be32(&rest[0..4]).map_err(truncated)?;
+                let option_len = usize::try_from(be32(&rest[4..8]).map_err(truncated)?)
+                    .map_err(|_| fail(Error::Truncated))?;
                 rest = &rest[8..];
                 if rest.len() < option_len {
-                    return Err(Error::Inner("gss failure".into()));
+                    return Err(gss_failure());
+                }
+                if ext_type == GSS_EXTS_FINISHED {
+                    return Err((Error::Inner("gss failure".into()), err::MSG_TYPE));
                 }
                 rest = &rest[option_len..];
             }
         }
     }
-    let client_cbt = authenticator_cbt(authdata)?;
+    let client_cbt = authenticator_cbt(authenticator.authorization_data.as_ref())?;
     if client_cbt && acceptor_cb.is_some() && !cb_match {
-        return Err(Error::ChannelBindings);
+        return Err(fail(Error::ChannelBindings));
     }
-    Ok((flags_out, delegated))
+    Ok(delegated)
 }
 
-fn authenticator_cbt(authdata: Option<&AuthorizationData>) -> Result<bool, Error> {
+// MIT: `check_cbt` (accept_sec_context.c:424-449)
+fn authenticator_cbt(authdata: Option<&AuthorizationData>) -> Result<bool, CodedError> {
     const AD_AP_OPTIONS: i32 = 143;
     const KERB_AP_OPTIONS_CBT: u32 = 0x4000;
-    fn find(els: &[AuthorizationDataValue]) -> Result<Option<[u8; 4]>, Error> {
-        let mut hit = None;
+    // MIT: `find_authdata_1` (lib/krb5/krb/authdata_dec.c:114-157)
+    fn find(els: &[AuthorizationDataValue], out: &mut Vec<Vec<u8>>) -> Result<(), Error> {
         for el in els {
             if el.ad_type == pa::AD_IF_RELEVANT {
                 let inner: AuthorizationData = decode(el.ad_data.as_ref())?;
-                if let Some(d) = find(&inner)? {
-                    return Ok(Some(d));
-                }
+                find(&inner, out)?;
             } else if el.ad_type == AD_AP_OPTIONS {
-                if hit.is_some() {
-                    return Err(Error::Inner("gss failure".into()));
-                }
-                if el.ad_data.len() != 4 {
-                    return Err(Error::Inner("gss failure".into()));
-                }
-                let mut b = [0u8; 4];
-                b.copy_from_slice(el.ad_data.as_ref());
-                hit = Some(b);
+                out.push(el.ad_data.as_ref().to_vec());
             }
         }
-        Ok(hit)
+        Ok(())
     }
-    let Some(data) = find(authdata.map_or(&[][..], |a| a.as_slice()))? else {
-        return Ok(false);
-    };
-    let v = u32::from_le_bytes(data);
-    Ok(v & KERB_AP_OPTIONS_CBT != 0)
+    let mut found = Vec::new();
+    find(authdata.map_or(&[][..], |a| a.as_slice()), &mut found).map_err(|e| (e, err::GENERIC))?;
+    let msg_type = || (Error::Inner("gss failure".into()), err::MSG_TYPE);
+    match found.as_slice() {
+        [] => Ok(false),
+        [one] => <[u8; 4]>::try_from(one.as_slice())
+            .map(|b| u32::from_le_bytes(b) & KERB_AP_OPTIONS_CBT != 0)
+            .map_err(|_| msg_type()),
+        // MIT: `grow_find_authdata` (lib/krb5/krb/authdata_dec.c:94-98)
+        many if many.len() > 256 => Err((Error::Inner("gss failure".into()), err::GENERIC)),
+        _ => Err(msg_type()),
+    }
 }
 
 fn ap_req_token(token: &[u8]) -> Result<Vec<u8>, Error> {
@@ -261,6 +259,37 @@ fn ap_req_token(token: &[u8]) -> Result<Vec<u8>, Error> {
     inner.extend_from_slice(&TOK_AP_REQ);
     inner.extend_from_slice(token);
     Ok(inner)
+}
+
+fn protocol_code(e: &krb5_protocol::Error) -> i32 {
+    match e {
+        krb5_protocol::Error::KrbError { code, .. } => *code,
+        _ => err::GENERIC,
+    }
+}
+
+fn error_token(ap: &ApReq, code: i32) -> Result<Vec<u8>, Error> {
+    let (stime, susec) = krb5_protocol::us_timeofday();
+    let e = KrbError {
+        pvno: KrbError::PVNO,
+        msg_type: KrbError::MSG_TYPE,
+        ctime: None,
+        cusec: None,
+        stime,
+        susec,
+        error_code: if (0..=127).contains(&code) {
+            code
+        } else {
+            err::GENERIC
+        },
+        crealm: None,
+        cname: None,
+        realm: ap.ticket.realm.clone(),
+        sname: ap.ticket.sname.clone(),
+        e_text: None,
+        e_data: None,
+    };
+    Ok(gss_wrap_app(TOK_ERROR, &encode(&e)?))
 }
 
 fn md5_16(data: &[u8]) -> [u8; 16] {
@@ -316,10 +345,8 @@ impl GssContext {
         // MIT: `kg_new_connection` (lib/gssapi/krb5/init_sec_context.c:486)
         let cbt = req_flags & GSS_C_CHANNEL_BOUND != 0;
         // MIT: `kg_new_connection` (lib/gssapi/krb5/init_sec_context.c:544-550)
-        let mut flags = req_flags & (INITIATOR_FLAGS & !GSS_C_DCE & !GSS_C_CHANNEL_BOUND)
-            | GSS_C_TRANS
-            | GSS_C_CONF
-            | GSS_C_INTEG;
+        let mut flags =
+            req_flags & (INITIATOR_FLAGS & !GSS_C_DCE) | GSS_C_TRANS | GSS_C_CONF | GSS_C_INTEG;
         let opts = if flags & GSS_C_MUTUAL != 0 {
             ApOptions::mutual_required()
         } else {
@@ -444,8 +471,35 @@ impl GssContext {
         rcache: &ReplayCache,
         conf: &AcceptorConfig,
     ) -> Result<(Self, Option<Vec<u8>>), Error> {
+        Self::accept_sec_context_kt_err(
+            token,
+            service_keys,
+            service_kvnos,
+            channel_bindings,
+            expected_server,
+            expected_realm,
+            rcache,
+            conf,
+        )
+        .map_err(|(e, _)| e)
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "gss_accept_sec_context's inputs and the acceptor's profile"
+    )]
+    pub fn accept_sec_context_kt_err(
+        token: &[u8],
+        service_keys: &[ProtocolKey],
+        service_kvnos: Option<&[u32]>,
+        channel_bindings: Option<&ChannelBindings>,
+        expected_server: Option<&PrincipalName>,
+        expected_realm: Option<&str>,
+        rcache: &ReplayCache,
+        conf: &AcceptorConfig,
+    ) -> Result<(Self, Option<Vec<u8>>), Refusal> {
         if service_keys.is_empty() {
-            return Err(Error::Truncated);
+            return Err((Error::Truncated, None));
         }
         Self::accept_inner(
             token,
@@ -487,8 +541,10 @@ impl GssContext {
             rcache,
             conf,
         )
+        .map_err(|(e, _)| e)
     }
 
+    // MIT: `kg_accept_krb5` (lib/gssapi/krb5/accept_sec_context.c:1191-1232)
     fn accept_inner(
         token: &[u8],
         keys: AcceptKeys<'_>,
@@ -497,12 +553,49 @@ impl GssContext {
         expected_realm: Option<&str>,
         rcache: &ReplayCache,
         conf: &AcceptorConfig,
-    ) -> Result<(Self, Option<Vec<u8>>), Error> {
-        let dce_style = token.first() != Some(&0x60);
-        let inner = ap_req_token(token)?;
+    ) -> Result<(Self, Option<Vec<u8>>), Refusal> {
+        let inner = ap_req_token(token).map_err(|e| (e, None))?;
         if inner.len() < 2 || inner[..2] != TOK_AP_REQ {
-            return Err(Error::Truncated);
+            return Err((Error::Truncated, None));
         }
+        let ap: Option<ApReq> = decode(&inner[2..]).ok();
+        let mut gss_flags = 0;
+        let dce_style = token.first() != Some(&0x60);
+        Self::accept_ap_req(
+            &inner[2..],
+            dce_style,
+            keys,
+            channel_bindings,
+            expected_server,
+            expected_realm,
+            rcache,
+            conf,
+            &mut gss_flags,
+        )
+        .map_err(|(e, code)| {
+            let token = ap
+                .filter(|a| a.ap_options.wants_mutual() || gss_flags & GSS_C_MUTUAL != 0)
+                .and_then(|a| error_token(&a, code).ok());
+            (e, token)
+        })
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "gss_accept_sec_context's inputs and the acceptor's profile"
+    )]
+    fn accept_ap_req(
+        ap_req: &[u8],
+        dce_style: bool,
+        keys: AcceptKeys<'_>,
+        channel_bindings: Option<&ChannelBindings>,
+        expected_server: Option<&PrincipalName>,
+        expected_realm: Option<&str>,
+        rcache: &ReplayCache,
+        conf: &AcceptorConfig,
+        token_flags: &mut u32,
+    ) -> Result<(Self, Option<Vec<u8>>), CodedError> {
+        let generic = |e: Error| (e, err::GENERIC);
         let replay = ReplayCache::new();
         let sender = channel_bindings
             .filter(|cb| cb.initiator_addrtype == crate::oid::GSS_C_AF_INET)
@@ -517,7 +610,7 @@ impl GssContext {
             key_kvnos: keys.kvnos,
             key_principals: None,
             kvno: None,
-            permitted: conf.permitted()?,
+            permitted: conf.permitted().map_err(|e| generic(e.into()))?,
             get_entry: keys.get_entry,
             // MIT rd_req_decoded_opt; see docs/parity/b1-client.md
             skew: i64::from(conf.clockskew),
@@ -526,43 +619,48 @@ impl GssContext {
             remote_addr: sender.as_ref(),
             now: None,
         };
-        let ok = match krb5_protocol::verify_ap_req_ex(&inner[2..], &params, rcache, Some(b"")) {
+        let ok = match krb5_protocol::verify_ap_req_ex(ap_req, &params, rcache, Some(b"")) {
             Ok(v) => v,
             Err(krb5_protocol::Error::Crypto(s)) if s.contains("integrity") => {
-                return Err(Error::Integrity);
+                return Err((Error::Integrity, err::GENERIC));
             }
-            Err(e) => return Err(e.into()),
+            Err(e) => {
+                let code = protocol_code(&e);
+                return Err((e.into(), code));
+            }
         };
-        let mut ac = AcceptorAuthContext::from_ap_req(&ok, conf)?;
+        let mut ac = AcceptorAuthContext::from_ap_req(&ok, conf).map_err(|e| {
+            let code = protocol_code(&e);
+            (e.into(), code)
+        })?;
         ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE);
         let crealm = String::from_utf8_lossy(ok.ticket_part.crealm.as_bytes()).into_owned();
         let client = ok.authenticator.cname.unparse_with_realm(&crealm);
         let srealm = String::from_utf8_lossy(ok.srealm.as_bytes()).into_owned();
-        let ticket_session = ProtocolKey::from_bytes(
-            EncryptionType::from_iana(ok.ticket_part.key.keytype)
-                .or_else(|_| EncryptionType::known(ok.ticket_part.key.keytype))?,
-            ok.ticket_part.key.keyvalue.as_ref(),
-        )?;
-        let subkey = if let Some(sk) = &ok.authenticator.subkey {
-            Some(ProtocolKey::from_bytes(
-                EncryptionType::from_iana(sk.keytype)
-                    .or_else(|_| EncryptionType::known(sk.keytype))?,
-                sk.keyvalue.as_ref(),
-            )?)
-        } else {
-            None
+        let key_of = |k: &EncryptionKey| {
+            EncryptionType::from_iana(k.keytype)
+                .or_else(|_| EncryptionType::known(k.keytype))
+                .and_then(|et| ProtocolKey::from_bytes(et, k.keyvalue.as_ref()))
+                .map_err(|e| generic(e.into()))
         };
-        let (mut gss_flags, delegated) = process_checksum(
-            ok.authenticator.cksum.as_ref(),
+        let ticket_session = key_of(&ok.ticket_part.key)?;
+        let subkey = ok.authenticator.subkey.as_ref().map(key_of).transpose()?;
+        let delegated = process_checksum(
+            &ok.authenticator,
             ok.mutual_required,
             channel_bindings,
             &ticket_session,
             subkey.as_ref(),
             &replay,
-            ok.authenticator.authorization_data.as_ref(),
+            token_flags,
         )?;
+        // MIT: `kg_accept_krb5` (accept_sec_context.c:855-859)
+        if dce_style != (*token_flags & GSS_C_DCE != 0) {
+            return Err(generic(Error::Inner("gss defective token".into())));
+        }
+        let mut gss_flags = *token_flags;
         if dce_style {
-            gss_flags |= GSS_C_MUTUAL | GSS_C_DCE;
+            gss_flags |= GSS_C_MUTUAL;
         }
         gss_flags |= GSS_C_PROT_READY;
         let want_mutual = gss_flags & GSS_C_MUTUAL != 0;
@@ -582,12 +680,12 @@ impl GssContext {
             if generate_subkey {
                 ac.set_flags(ac.flags() | AUTH_CONTEXT_USE_SUBKEY);
             }
-            let ap_rep = ac.mk_rep()?;
+            let ap_rep = ac.mk_rep().map_err(|e| generic(e.into()))?;
             send_seq = u64::from(ac.local_seq());
             if generate_subkey {
                 acceptor_subkey = ac.send_subkey().cloned();
             }
-            let der = encode(&ap_rep)?;
+            let der = encode(&ap_rep).map_err(|e| generic(e.into()))?;
             ap_rep_tok = Some(if dce_style {
                 der
             } else {
@@ -651,6 +749,17 @@ impl GssContext {
         ticket_session: &ProtocolKey,
     ) -> Result<(), Error> {
         let inner = gss_unwrap_app(token)?;
+        // MIT: `mutual_auth` (lib/gssapi/krb5/init_sec_context.c:768-777)
+        if inner.get(..2) == Some(&TOK_ERROR[..]) {
+            let e: KrbError = decode(&inner[2..])?;
+            return Err(krb5_protocol::Error::KrbError {
+                code: e.error_code,
+                text: Some(error_message(
+                    ERROR_TABLE_BASE_KRB5 + i64::from(e.error_code),
+                )),
+            }
+            .into());
+        }
         if inner.len() < 2 || inner[..2] != TOK_AP_REP {
             return Err(Error::Truncated);
         }

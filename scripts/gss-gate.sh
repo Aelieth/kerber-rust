@@ -390,6 +390,117 @@ send_transit_tok 4456
 require_log "$NAME" /tmp/gss-accept-transit.log 'accept_sec_context: KRB-ERROR 43: Illegal cross-realm ticket' "the Rust transit refusal"
 docker exec "$NAME" cat /tmp/gss-accept-transit.log
 
+echo "==== error tokens: a replayed AP-REQ with and without mutual, SPNEGO, MIT then Rust ===="
+# accept_sec_context.c:1191-1232: a refused AP-REQ that asked for mutual gets a KRB-ERROR token (0x0300).
+docker cp "$ROOT/scripts/lib/gss-reply.py" "$NAME":/tmp/gss-reply.py
+errtok_reset() {
+    docker exec "$NAME" sh -c 'kill $(pidof gss-mit-server) $(pidof krb5-gss-accept) 2>/dev/null || true'
+    wait_pid_gone "$NAME" gss-mit-server || true
+    wait_pid_gone "$NAME" krb5-gss-accept || true
+}
+mit_acceptor() {
+    errtok_reset
+    docker exec -d -e KRB5_KTNAME=/etc/krb5kdc/testhost.keytab "$NAME" \
+        sh -c "/tmp/gss-mit-server /etc/krb5kdc/testhost.keytab 127.0.0.1 $1 >/tmp/gss-mit-errtok-$1.log 2>&1"
+    require_log "$NAME" "/tmp/gss-mit-errtok-$1.log" listening "gss-mit-server listening on $1"
+}
+rust_acceptor() {
+    errtok_reset
+    docker exec -d "$NAME" sh -c "/tmp/krb5-gss-accept --keytab /etc/krb5kdc/testhost.keytab --listen 127.0.0.1:$1 >/tmp/gss-accept-errtok-$1.log 2>&1"
+    require_log "$NAME" "/tmp/gss-accept-errtok-$1.log" listening "gss-accept listening on $1"
+}
+mit_errtok() {
+    local port=$1 mode=$2 dump=$3
+    mit_acceptor "$port"
+    docker exec -e KRB5CCNAME=/tmp/krb5cc_harness -e GSS_DUMP_TOKEN="$dump" "$NAME" \
+        /tmp/gss-mit-client testhost.kerber.test host "$MSG" 127.0.0.1 "$port" ${mode:+"$mode"} >/dev/null
+    docker exec "$NAME" python3 /tmp/gss-reply.py "$port" "$dump"
+}
+rust_errtok() {
+    local port=$1 dump=$2
+    rust_acceptor "$port"
+    docker exec "$NAME" python3 /tmp/gss-reply.py "$port" "$dump" >/dev/null
+    docker exec "$NAME" python3 /tmp/gss-reply.py "$port" "$dump"
+}
+for mode in mutual nomutual spnego spnego-nomutual; do
+    m=$mode
+    [ "$mode" = mutual ] && m=""
+    MIT_TOK="$(mit_errtok 4460 "$m" "/tmp/gss-errtok-$mode")"
+    RUST_TOK="$(rust_errtok 4461 "/tmp/gss-errtok-$mode")"
+    echo "error token $mode: mit $MIT_TOK"
+    echo "error token $mode: rust $RUST_TOK"
+    case $mode in
+        mutual) want='reply=krb5 tokid=0300 code=34 realm=KERBER.TEST sname=host/testhost.kerber.test' ;;
+        nomutual) want='reply=none' ;;
+        spnego) want='reply=spnego negstate=2 mech=no response=(reply=krb5 tokid=0300 code=34 realm=KERBER.TEST sname=host/testhost.kerber.test' ;;
+        spnego-nomutual) want='reply=spnego negstate=2 mech=no response=(reply=none)' ;;
+    esac
+    case $MIT_TOK in "$want"*) ;; *) die "MIT's $mode error token is not '$want': $MIT_TOK" ;; esac
+    [ "$RUST_TOK" = "$MIT_TOK" ] || die "the Rust $mode error token differs from MIT's"
+done
+
+echo "==== error tokens from the checksum on: crafted AP-REQs, MIT then Rust ===="
+# accept_sec_context.c:551, 855-858: refusals after the flags send the token on their mutual flag;
+# samba-bad (a non-0x8003 checksum) asks in the AP options; cb-flag claims CHANNEL_BOUND, which
+# INITIATOR_FLAGS (:414-417) drops.
+CRAFTED="$(docker exec "$NAME" /tmp/rd-sweep gss-errtok /etc/krb5kdc/testhost.keytab host/testhost.kerber.test)"
+KRB5_ERR='reply=krb5 tokid=0300'
+SERVER='realm=KERBER.TEST sname=host/testhost.kerber.test'
+differ=""
+while read -r name hex; do
+    docker exec "$NAME" python3 -c 'import sys; open(sys.argv[1], "wb").write(bytes.fromhex(sys.argv[2]))' \
+        "/tmp/gss-errtok-$name" "$hex"
+    mit_acceptor 4464
+    MIT_TOK="$(docker exec "$NAME" python3 /tmp/gss-reply.py 4464 "/tmp/gss-errtok-$name")"
+    if [ "$name" = cb-flag ]; then
+        require_log "$NAME" /tmp/gss-mit-errtok-4464.log 'inquire flags=' "MIT's flags for cb-flag"
+        MIT_FLAGS="$(docker exec "$NAME" sed -n 's/.*inquire flags=\([0-9]*\) .*/\1/p' /tmp/gss-mit-errtok-4464.log)"
+    fi
+    rust_acceptor 4465
+    RUST_TOK="$(docker exec "$NAME" python3 /tmp/gss-reply.py 4465 "/tmp/gss-errtok-$name")"
+    if [ "$name" = cb-flag ]; then
+        require_log "$NAME" /tmp/gss-accept-errtok-4465.log 'inquire flags=' "our flags for cb-flag"
+        RUST_FLAGS="$(docker exec "$NAME" sed -n 's/.*inquire flags=\([0-9]*\) .*/\1/p' /tmp/gss-accept-errtok-4465.log)"
+        echo "cb-flag inquire flags: mit $MIT_FLAGS rust $RUST_FLAGS"
+        [ $((MIT_FLAGS & 0x800)) = 0 ] || die "MIT's acceptor reports CHANNEL_BOUND for cb-flag: $MIT_FLAGS"
+        [ "$RUST_FLAGS" = "$MIT_FLAGS" ] || differ="$differ cb-flag-flags"
+    fi
+    echo "error token $name: mit $MIT_TOK"
+    echo "error token $name: rust $RUST_TOK"
+    case $name in
+        deleg-id | raw-nodce | framed-dce | samba-bad) want="$KRB5_ERR code=60 $SERVER" ;;
+        finished | cbt-dup) want="$KRB5_ERR code=40 $SERVER" ;;
+        deleg-id-nomutual) want='reply=none' ;;
+        cb-flag) want='reply=krb5 tokid=0200' ;;
+        *) die "no expected error token for $name" ;;
+    esac
+    case $MIT_TOK in "$want"*) ;; *) die "MIT's $name error token is not '$want': $MIT_TOK" ;; esac
+    [ "$RUST_TOK" = "$MIT_TOK" ] || differ="$differ $name"
+done <<<"$CRAFTED"
+[ "$(wc -l <<<"$CRAFTED")" -eq 8 ] || die "rd-sweep gss-errtok made $(wc -l <<<"$CRAFTED") AP-REQs, not 8"
+[ -z "$differ" ] || die "the Rust error tokens differ from MIT's:$differ"
+
+echo "==== an error token read by the initiator: CB mismatch, MIT then Rust initiator, MIT acceptor ===="
+# init_sec_context.c:768-777: a 0x0300 reply is GSS_S_FAILURE, minor = its code plus the krb5 base.
+errtok_reset
+docker exec -d -e KRB5_KTNAME=/etc/krb5kdc/testhost.keytab -e GSS_CHANNEL_BINDINGS=tls-b "$NAME" \
+    sh -c '/tmp/gss-mit-server /etc/krb5kdc/testhost.keytab 127.0.0.1 4462 >/tmp/gss-mit-errinit.log 2>&1'
+require_log "$NAME" /tmp/gss-mit-errinit.log listening "gss-mit-server listening on 4462"
+MIT_INIT="$(docker exec -e KRB5CCNAME=/tmp/krb5cc_harness -e GSS_CHANNEL_BINDINGS=tls-a "$NAME" \
+    /tmp/gss-mit-client testhost.kerber.test host "$MSG" 127.0.0.1 4462 2>&1 || true)"
+echo "$MIT_INIT"
+MIT_MECH="$(sed -n 's/^  mech: //p' <<<"$MIT_INIT")"
+[ "$MIT_MECH" = "Generic error (see e-text)" ] || die "MIT's initiator reads the error token otherwise: $MIT_MECH"
+errtok_reset
+docker exec -d -e KRB5_KTNAME=/etc/krb5kdc/testhost.keytab -e GSS_CHANNEL_BINDINGS=tls-b "$NAME" \
+    sh -c '/tmp/gss-mit-server /etc/krb5kdc/testhost.keytab 127.0.0.1 4463 >/tmp/gss-mit-errinit2.log 2>&1'
+require_log "$NAME" /tmp/gss-mit-errinit2.log listening "gss-mit-server listening on 4463"
+RUST_INIT="$(docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
+    /tmp/krb5-gss-init --ccache /tmp/krb5cc_harness --host testhost.kerber.test \
+    --ip 127.0.0.1 --port 4463 --channel-bindings tls-a 2>&1 || true)"
+echo "$RUST_INIT"
+grep -qx "process_ap_rep: KRB-ERROR 60: $MIT_MECH" <<<"$RUST_INIT" || die "the Rust initiator reads MIT's error token otherwise"
+
 docker cp "$ROOT/scripts/oracle/gss-mit-client.c" "$NAME":/tmp/gss-mit-client.c
 mit_oracle_cc "$NAME" /tmp/gss-mit-client /tmp/gss-mit-client.c gssapi
 docker cp "$ROOT/scripts/oracle/gss-mit-server.c" "$NAME":/tmp/gss-mit-server.c
@@ -784,4 +895,4 @@ echo "$MIT_FBITS" | grep -q f || {
     exit 1
 }
 
-log "gss.gate" "ok" ",\"acceptor\":\"krb5-gss\",\"initiator\":\"mit-libgssapi\",\"deleg\":\"both\",\"spnego\":\"ok\",\"iov\":\"ok\",\"replay\":\"ok\",\"transit\":\"ok\",\"dce\":\"ok\",\"process_checksum\":\"ok\",\"forwarded\":\"both\""
+log "gss.gate" "ok" ",\"acceptor\":\"krb5-gss\",\"initiator\":\"mit-libgssapi\",\"deleg\":\"both\",\"spnego\":\"ok\",\"iov\":\"ok\",\"replay\":\"ok\",\"transit\":\"ok\",\"error_tokens\":\"ok\",\"dce\":\"ok\",\"process_checksum\":\"ok\",\"forwarded\":\"both\""

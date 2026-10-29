@@ -48,6 +48,7 @@ any other `###` heading.
 - **kdc.** FAST armor gets MIT's `krb5_rd_req` checks in order: a client other than the ticket's, or an unchecked transit, is refused; codes and most log lines are MIT's.
 - **kdc.** A transited hop naming the server's own realm is refused, and a TGS ticket's unchecked transited list is checked first, as MIT's `krb5_rd_req`.
 - **protocol.** The AP-REQ acceptor refuses a transited hop naming the server's own realm and runs `rd_req_decoded_opt`'s checks in MIT's order, with MIT's codes and texts.
+- **gss.** The acceptor sets CHANNEL_BOUND only on matching bindings, not from the initiator's flags.
 
 ### Added
 
@@ -210,6 +211,7 @@ any other `###` heading.
 - **admin.** kadmind's iprop logs MIT's `Unauthorized request` line for a refused GET_UPDATES or full resync, and a `Request` line per answer.
 - **kdc.** A refused server key logs the KDB error's text, as MIT's: `No matching key in entry having a permitted enctype` for a key the KDC does not permit.
 - **kdc.** A KDC started by full path names itself by its basename in an init failure, as MIT's.
+- **gss.** A refused mutual AP-REQ gets MIT's KRB-ERROR token, in SPNEGO too; initiators read it.
 
 ## [1.1.0] - 2026-10-14
 

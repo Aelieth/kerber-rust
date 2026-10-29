@@ -20,6 +20,9 @@ mod tests;
 use krb5_crypto::ProtocolKey;
 use thiserror::Error;
 
+/// A refusal, with the token `gss_accept_sec_context` sends back for it.
+pub type Refusal = (Error, Option<Vec<u8>>);
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("{0}")]
@@ -87,5 +90,7 @@ pub use oid::{
     GSS_C_IDENTIFY, GSS_C_INTEG, GSS_C_MUTUAL, GSS_C_PROT_READY, GSS_C_REPLAY, GSS_C_SEQUENCE,
     GSS_C_TRANS, GSS_CHECKSUM_TYPE, KRB5_OID, SPNEGO_OID,
 };
-pub use spnego::{is_spnego, spnego_accept, spnego_accept_kt, spnego_init, spnego_inner};
+pub use spnego::{
+    is_spnego, spnego_accept, spnego_accept_kt, spnego_accept_kt_err, spnego_init, spnego_inner,
+};
 pub use wrap::mit_shaped_wrap;
