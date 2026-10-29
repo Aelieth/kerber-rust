@@ -66,7 +66,7 @@ fn posix_class_match(name: &[u8], c: u8) -> bool {
     }
 }
 
-/// Not MIT `@.*`.
+/// Append `@*` when no realm; MIT's regexp form is `@.*`.
 pub(crate) fn glob_expand(glob: &str, append_realm: bool) -> String {
     if append_realm && !glob.contains('@') {
         format!("{glob}@*")

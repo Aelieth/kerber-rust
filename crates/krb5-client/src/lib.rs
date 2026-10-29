@@ -455,7 +455,7 @@ pub fn store_error(e: &(dyn std::error::Error + Send + Sync + 'static)) -> Krb5E
 
 // MIT: `change_set_password` (changepw.c:258-266)
 // MIT: `k5_sendto` (sendto_kdc.c:1602-1604)
-// That code has no message of its own, so it prints its table text, not "Cannot contact any KDC".
+// KRB5_KDC_UNREACH sets no realm message here: its table text applies.
 fn chpw_error(e: ProtocolError, realm: &str) -> Box<dyn std::error::Error + Send + Sync> {
     match &e {
         ProtocolError::Io { .. } => Box::new(Krb5Error::of(Code::KdcUnreach)),

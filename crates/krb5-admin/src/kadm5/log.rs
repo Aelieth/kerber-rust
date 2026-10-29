@@ -180,7 +180,7 @@ fn trunc_name(s: &str) -> String {
     escape_log(&format!("{}...", &s[..end]))
 }
 
-// MIT: `prime_arg` (stub_setup)
+// MIT: `stub_setup` (kadmin/server/server_stubs.c:289-292)
 pub(super) fn kadm5_prime_arg(proc: u32, args: &[u8], client: &str) -> String {
     let mut r = XdrR::new(args);
     if r.u32().is_err() {

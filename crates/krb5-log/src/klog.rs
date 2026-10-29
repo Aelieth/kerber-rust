@@ -292,7 +292,7 @@ impl Logger {
     }
 }
 
-/// Symlinks and non-files are refused.
+/// Symlinks and non-files are refused; a planted link is not written through.
 fn open_log_file(path: &str, opts: &mut OpenOptions) -> io::Result<File> {
     let file = opts
         .custom_flags((OFlag::O_NOFOLLOW | OFlag::O_NONBLOCK).bits())
@@ -306,6 +306,7 @@ fn open_log_file(path: &str, opts: &mut OpenOptions) -> io::Result<File> {
     Ok(file)
 }
 
+/// One `write(2)` per line, so daemons do not interleave.
 fn write_line(w: &mut impl Write, line: &str, end: &str) -> io::Result<()> {
     let mut buf = Vec::with_capacity(line.len() + end.len());
     buf.extend_from_slice(line.as_bytes());

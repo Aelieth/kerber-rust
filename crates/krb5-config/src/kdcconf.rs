@@ -94,7 +94,7 @@ impl Default for KdcConf {
 // MIT: `MAX_DGRAM_SIZE` (include/osconf.hin:113-113)
 pub const MAX_DGRAM_SIZE: i32 = 65_536;
 // MIT: `DEFAULT_TCP_LISTEN_BACKLOG` (include/osconf.hin:100-100)
-// MIT backlog 5; ours 128: `kdc_tcp_listen_backlog`.
+// MIT backlog 5; ours 128 (docs/mit-deviations.md): `kdc_tcp_listen_backlog`.
 pub const DEFAULT_TCP_LISTEN_BACKLOG: i32 = 128;
 
 pub(crate) fn sscanf_int(v: &str) -> Option<i32> {

@@ -4,7 +4,7 @@ use krb5_config::PluginRelations;
 use krb5_kdc::{Acl, AdminOp, Restrictions};
 use krb5_types::{principal_compare, principal_from_unparsed};
 
-/// Allow=0, Abstain=`KRB5_PLUGIN_NO_HANDLE`, else Deny.
+/// Allow=0, Abstain=`KRB5_PLUGIN_NO_HANDLE`, else Deny; Deny stops the stack.
 // MIT: `kadm5_auth_addprinc_fn` (include/krb5/kadm5_auth_plugin.h)
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Decision {

@@ -152,7 +152,6 @@ impl Decoder<'_> {
     }
 
     // MIT: `parse_string` (util/support/json.c:789-851)
-    // The string ends at the first NUL, as a C string does.
     fn parse_string(&mut self) -> Result<Vec<u8>, ()> {
         if self.cur() != b'"' {
             return Err(());

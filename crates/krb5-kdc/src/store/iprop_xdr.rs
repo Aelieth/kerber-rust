@@ -159,7 +159,7 @@ fn encode_princ(w: &mut XdrOut, name: &PrincipalName, realm: &str) {
     w.opaque(realm.as_bytes());
     w.count(name.name_string.len());
     for c in &name.name_string {
-        // MIT: `KV5M_DATA` (krb5_data.magic)
+        // MIT: `KV5M_DATA` (lib/krb5/error_tables/kv5m_err.et:33-33)
         w.u32((-1_760_647_422i32).cast_unsigned());
         w.opaque(c.as_bytes());
     }
