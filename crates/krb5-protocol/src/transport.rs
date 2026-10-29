@@ -942,9 +942,15 @@ mod kdc_list {
         use std::net::TcpListener;
         use std::sync::atomic::{AtomicUsize, Ordering};
 
-        let tcp = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = tcp.local_addr().unwrap().port();
-        let udp = UdpSocket::bind(("127.0.0.1", port)).unwrap();
+        // The port may be taken in UDP only: take UDP's, then try TCP on it.
+        let (tcp, udp) = (0..50)
+            .find_map(|_| {
+                let udp = UdpSocket::bind("127.0.0.1:0").ok()?;
+                let port = udp.local_addr().ok()?.port();
+                Some((TcpListener::bind(("127.0.0.1", port)).ok()?, udp))
+            })
+            .expect("a loopback port free in both TCP and UDP");
+        let port = udp.local_addr().unwrap().port();
         let accepts = Arc::new(AtomicUsize::new(0));
         let accepts2 = Arc::clone(&accepts);
         thread::spawn(move || {
