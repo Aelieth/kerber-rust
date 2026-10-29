@@ -587,6 +587,7 @@ pub const fn enctype_shortest_name(e: i32) -> Option<&'static str> {
 pub const ERROR_TABLE_BASE_KRB5: i64 = -1_765_328_384;
 pub const KRB5_CC_NOTFOUND: i64 = ERROR_TABLE_BASE_KRB5 + 141;
 pub const KRB5_KDCREP_MODIFIED: i64 = ERROR_TABLE_BASE_KRB5 + 147;
+pub const KRB5_KDCREP_SKEW: i64 = ERROR_TABLE_BASE_KRB5 + 148;
 pub const KRB5_KDC_UNREACH: i64 = ERROR_TABLE_BASE_KRB5 + 156;
 pub const KRB5_KT_NOTFOUND: i64 = ERROR_TABLE_BASE_KRB5 + 181;
 pub const KRB5_FCC_NOFILE: i64 = ERROR_TABLE_BASE_KRB5 + 195;

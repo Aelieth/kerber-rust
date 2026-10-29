@@ -6,7 +6,7 @@ cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
 . "$ROOT/scripts/lib/kadmin-q.sh"
-need_bins krb5-kinit krb5-kdc krb5-kdb
+need_bins krb5-kinit krb5-kvno krb5-kdc krb5-kdb
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-kinit-fast-gate"
@@ -205,6 +205,30 @@ for who in mit rust; do
         exit 1
     fi
     docker exec "$NAME" klist -c "/tmp/ps-$who.cc" | grep -q 'krbtgt/KERBER.TEST@KERBER.TEST'
+done
+
+echo "==== kvno: a TGS reply outside clockskew of the cache's offset (MIT first) ===="
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kvno" "$NAME":/tmp/krb5-kvno
+docker exec "$NAME" chmod +x /tmp/krb5-kvno
+docker exec "$NAME" sh -c 'sed "s/^\[libdefaults\]\$/[libdefaults]\n    clockskew = 60/" /etc/krb5.conf > /tmp/cs60-krb5.conf'
+for off in 120 -120 0; do
+    for who in mit rust; do
+        docker exec "$NAME" rm -f /tmp/kv.cc
+        docker exec "$NAME" sh -c 'printf "userpassword\n" | kinit -c /tmp/kv.cc user@KERBER.TEST' >/dev/null
+        docker exec "$NAME" python3 /tmp/ccache-offset.py set /tmp/kv.cc "$off"
+        if [ "$who" = mit ]; then bin=kvno; else bin=/tmp/krb5-kvno; fi
+        set +e
+        KV="$(docker exec -e KRB5_CONFIG=/tmp/cs60-krb5.conf -e KRB5CCNAME=FILE:/tmp/kv.cc "$NAME" \
+            "$bin" host/testhost.kerber.test@KERBER.TEST 2>&1)"
+        krc=$?
+        set -e
+        echo "$who kvno offset $off rc=$krc: $KV"
+        if [ "$off" = 0 ]; then want=0; else want=1; fi
+        if [ "$krc" -ne "$want" ] || { [ "$want" = 1 ] && ! grep -q 'Clock skew too great in KDC reply' <<<"$KV"; }; then
+            log "fast.client.gate" "error" ",\"error\":\"$who kvno at offset $off gave rc $krc\""
+            exit 1
+        fi
+    done
 done
 
 echo "==== require_auth encrypted_challenge: FAST issued, password 12 both legs ===="

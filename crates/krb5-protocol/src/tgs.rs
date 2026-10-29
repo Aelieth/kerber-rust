@@ -918,6 +918,7 @@ fn tgs_kerr(e: &Error, ext: bool) -> Option<(i64, Option<String>)> {
         // MIT: `KRB5DES_BAD_KEYPAR` (krb5_err.et:251-251)
         Error::DesBadParity => (trace::ERROR_TABLE_BASE_KRB5 + 186, None),
         Error::DesWeakKey => (trace::ERROR_TABLE_BASE_KRB5 + 187, None),
+        Error::KdcReplySkew => (trace::KRB5_KDCREP_SKEW, None),
         Error::UnexpectedPdu => (trace::kdc_code(krb5_types::err::MSG_TYPE), None),
         _ => (trace::KRB5_KDCREP_MODIFIED, None),
     })
@@ -965,6 +966,7 @@ fn tgs_round_trip(
     let mic = checksum(&tgt.session_key, cksum_usage, &body_der)?;
     // MIT: `tgs_construct_ap_req` (lib/krb5/krb/send_tgs.c:82-82)
     let (now, usec) = crate::ap_req::stamped(tgt.time_offset);
+    let sent = now.clone();
     let sub = ProtocolKey::random(tgt.session_key.etype())?;
     trace::send_tgs_subkey((&sub).into());
     trace::send_tgs_etypes(&body.etype);
@@ -1127,6 +1129,14 @@ fn tgs_round_trip(
     // RENEW, VALIDATE skip times check: wire till old; renewal may outlive it.
     if !kdc_options.bit(flag_bit::RENEW) && !kdc_options.bit(flag_bit::VALIDATE) {
         tgs_reply_req_times(&enc_part, &till, None, None, &kdc_options)?;
+    }
+    // MIT: `krb5int_process_tgs_reply` (lib/krb5/krb/gc_via_tkt.c:302-306)
+    // No starttime is ever requested, so the reply's must be within skew.
+    let start = enc_part.starttime.as_ref().unwrap_or(&enc_part.authtime);
+    if (i64::from(start.unix_seconds()) - i64::from(sent.unix_seconds())).abs()
+        > i64::from(profile.clockskew)
+    {
+        return Err(Error::KdcReplySkew);
     }
     check_reply_server(
         &requested,
