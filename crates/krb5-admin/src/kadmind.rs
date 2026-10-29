@@ -189,6 +189,10 @@ pub(crate) fn admin_syslog_open(severity: Severity, msg: &str) {
     }
 }
 
+pub(crate) fn thread_admin_log() -> Option<Arc<dyn AdminLog>> {
+    THREAD_ADMIN_LOG.with(|slot| slot.borrow().clone())
+}
+
 pub(crate) fn set_thread_admin_log(log: Option<Arc<dyn AdminLog>>) {
     THREAD_ADMIN_LOG.with(|slot| *slot.borrow_mut() = log);
 }

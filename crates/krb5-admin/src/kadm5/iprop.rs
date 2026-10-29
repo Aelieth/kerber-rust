@@ -10,7 +10,7 @@ use krb5_config::ClientContext;
 use krb5_crypto::ProtocolKey;
 use krb5_gss::GssContext;
 use krb5_kdc::{IpropUpdate, SharedDump as SharedStore, TlData, UlogLast, UlogTime, UlogUpdates};
-use krb5_log::klog::{Severity, os_error_text, syslog};
+use krb5_log::klog::{Severity, os_error_text};
 use krb5_types::{PrincipalName, Ticket};
 use nix::errno::Errno;
 use zeroize::Zeroizing;
@@ -27,9 +27,10 @@ use super::log::{Caller, iprop_log_resync, iprop_log_unauth, iprop_log_updates};
 use super::rpc::{read_record, rpc_call_bytes, write_record};
 use super::xdr::{XdrR, XdrW};
 use crate::Error;
+use crate::kadmind::admin_syslog;
 use crate::kprop::{
-    KPROP_SERVICE, KpropDump, kprop_get_tickets, kprop_open_connection, kprop_sendauth,
-    kprop_update_last_prop_file, kprop_xmit_database,
+    KPROP_SERVICE, KPROPD_IO_TIMEOUT, KpropDump, kprop_get_tickets, kprop_open_connection,
+    kprop_sendauth, kprop_update_last_prop_file, kprop_xmit_database,
 };
 
 // MIT: `krb5_iprop_prog_1` (kadmin/server/ipropd_svc.c:583-588)
@@ -110,19 +111,21 @@ fn full_resync(
         return encode_fullresync_status(UlogLast::default(), krb5_kdc::IPROP_OK);
     };
     let Some(host) = getclhoststr(who.client) else {
-        syslog(Severity::Err, "iprop_full_resync_1: getclhoststr failed");
+        admin_syslog(Severity::Err, "iprop_full_resync_1: getclhoststr failed");
         return encode_fullresync_status(UlogLast::default(), krb5_kdc::IPROP_ERROR);
     };
     let store = store.clone();
     let resync = Arc::clone(resync);
     let host = host.to_owned();
     let (tx, rx) = std::sync::mpsc::channel();
+    let log = crate::kadmind::thread_admin_log();
     let spawned = std::thread::Builder::new().spawn(move || {
+        crate::kadmind::set_thread_admin_log(log);
         let _ = tx.send(nix::unistd::gettid().as_raw());
         run_resync(&store, &resync, &host, vers);
     });
     if let Err(e) = spawned {
-        syslog(
+        admin_syslog(
             Severity::Err,
             &format!("iprop_full_resync_1: fork failed: {}", os_error_text(&e)),
         );
@@ -143,7 +146,7 @@ fn getclhoststr(princ: &str) -> Option<&str> {
 // MIT: `ipropx_resync` (kadmin/server/ipropd_svc.c:355-420)
 fn run_resync(store: &SharedStore, resync: &IpropResync, host: &str, vers: u32) {
     if let Err(e) = resync_dump_and_send(store, resync, host, vers) {
-        syslog(Severity::Err, &format!("iprop_full_resync to {host}: {e}"));
+        admin_syslog(Severity::Err, &format!("iprop_full_resync to {host}: {e}"));
     }
 }
 
@@ -162,12 +165,16 @@ fn resync_dump_and_send(
     let mut dump = KpropDump::open(&file).map_err(|e| e.to_string())?;
     let port = resync.kprop_port.as_deref().unwrap_or(KPROP_SERVICE);
     let (mut stream, sender) = kprop_open_connection(host, port).map_err(|e| e.to_string())?;
+    stream
+        .set_read_timeout(Some(KPROPD_IO_TIMEOUT))
+        .and_then(|()| stream.set_write_timeout(Some(KPROPD_IO_TIMEOUT)))
+        .map_err(|e| e.to_string())?;
     let mut auth = kprop_sendauth(&mut stream, &creds, sender).map_err(|e| e.to_string())?;
     let size = dump.size();
     kprop_xmit_database(&mut stream, &mut auth, dump.file(), size, false)
         .map_err(|e| e.to_string())?;
     if let Err(e) = kprop_update_last_prop_file(host, &file) {
-        syslog(Severity::Err, &format!("iprop_full_resync to {host}: {e}"));
+        admin_syslog(Severity::Err, &format!("iprop_full_resync to {host}: {e}"));
     }
     dump.close().map_err(|e| e.to_string())
 }
