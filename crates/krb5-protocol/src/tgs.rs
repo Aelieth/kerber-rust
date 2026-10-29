@@ -138,7 +138,8 @@ pub fn tgs_forward(
     tgt: &AsOutcome,
 ) -> Result<TgsOutcome, Error> {
     let realm = String::from_utf8_lossy(tgt.crealm.as_bytes()).into_owned();
-    let sname = PrincipalName::krbtgt(&realm);
+    let sname = PrincipalName::try_new(PrincipalName::NT_SRV_INST, ["krbtgt", realm.as_str()])
+        .map_err(|e| Error::ReplyMismatch(e.to_string()))?;
     let opts = tgs_forward_options(&tgt.enc_part.flags, true);
     tgs_once(
         profile,
