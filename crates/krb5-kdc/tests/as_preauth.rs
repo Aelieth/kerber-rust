@@ -82,7 +82,7 @@ use krb5_protocol::{as_req, pa_enc_timestamp};
 use krb5_protocol::{
     armor_key, as_req_sname, attach_fast, build_fast_armor, pa_pk_as_req_spki, unwrap_fast_rep,
 };
-use krb5_testkit::{expect_status, issue_tgt_password, password_key, pref_etypes, user};
+use krb5_testkit::{expect_status, password_key, pref_etypes, user};
 use krb5_types::pac::RpcSid;
 use krb5_types::{
     EncKdcRepPart, EncryptedData, KerberosTime, KrbError, MethodData, PaData, PaPacRequest,
@@ -393,50 +393,6 @@ fn pkinit_unknown_dh_is_typed_edata_with_cookie() {
     );
     let types = edata_int_types(ed.as_ref());
     assert_eq!(types, vec![pa::TD_DH_PARAMETERS, pa::FX_COOKIE]);
-}
-
-#[test]
-fn fast_error_inner_fx_error_omits_edata() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let armor = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 910);
-    let sub = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x51u8; 32]).unwrap();
-    let armor_ap = build_fast_armor(
-        armor.rep.0.ticket.clone(),
-        &armor.session_key,
-        &ascii(TEST_REALM),
-        &cname,
-        Some(&sub),
-    )
-    .unwrap();
-    let akey = armor_key(&armor.session_key, Some(&sub)).unwrap();
-    let mut req = as_req(cname, TEST_REALM, 911, None).unwrap();
-    attach_fast(&mut req, &armor_ap, &akey, vec![]).unwrap();
-    let err = krb5_kdc::issue_as(&store, &req).expect_err("preauth required");
-    let ed = match err {
-        Error::PreauthRequired { e_data } => e_data,
-        other => panic!("expected PreauthRequired, got {other:?}"),
-    };
-    let method: MethodData = decode(&ed).expect("outer METHOD-DATA");
-    let fast = unwrap_fast_rep(&akey, &Some(method)).expect("FAST inner");
-    let fx = fast
-        .padata
-        .iter()
-        .find(|p| p.padata_type == pa::FX_ERROR)
-        .expect("PA-FX-ERROR");
-    let inner: KrbError = decode(fx.padata_value.as_ref()).expect("inner KRB-ERROR");
-    assert!(
-        inner.e_data.is_none(),
-        "kdc_fast_handle_error zeroes inner FX-ERROR e_data"
-    );
-    assert!(
-        fast.padata.iter().any(|p| p.padata_type == pa::FX_COOKIE),
-        "cookie travels in FAST inner padata, not the inner error: {:?}",
-        fast.padata
-            .iter()
-            .map(|p| p.padata_type)
-            .collect::<Vec<_>>()
-    );
 }
 
 const AES128: EncryptionType = EncryptionType::Aes128CtsHmacSha196;

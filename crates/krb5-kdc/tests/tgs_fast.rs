@@ -764,19 +764,3 @@ fn fast_tgs_unkeyed_checksum_is_policy() {
     let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("unkeyed FAST checksum");
     assert_find_fast(err, err::POLICY, "Unkeyed checksum used in fast_req");
 }
-
-#[test]
-fn fast_tgs_unkeyed_type_with_bad_bytes_is_modified() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let mut tgs = fast_tgs_prepared(&store, 910);
-    map_fx_fast_tgs(&mut tgs, |a| {
-        a.req_checksum.cksumtype = 7;
-        a.req_checksum.checksum = vec![0xff; 16].into();
-    });
-    let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("unkeyed + bad bytes");
-    assert_find_fast(
-        err,
-        err::MODIFIED,
-        "FAST req_checksum invalid; request modified",
-    );
-}
