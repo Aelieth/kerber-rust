@@ -184,6 +184,29 @@ for who in mit rust; do
     esac
 done
 
+echo "==== kdc_timesync = 0, kinit -s 1h: no skew check on a postdated reply (MIT first) ===="
+docker exec "$NAME" sh -c 'sed "s/^\[libdefaults\]\$/[libdefaults]\n    kdc_timesync = 0/" /etc/krb5.conf > /tmp/ts0-krb5.conf'
+docker exec "$NAME" grep -q 'kdc_timesync = 0' /tmp/ts0-krb5.conf
+for who in mit rust; do
+    docker exec "$NAME" rm -f "/tmp/ps-$who.cc"
+    set +e
+    if [ "$who" = mit ]; then
+        PS="$(docker exec -e KRB5_CONFIG=/tmp/ts0-krb5.conf "$NAME" \
+            sh -c "printf 'userpassword\n' | kinit -s 1h -c /tmp/ps-mit.cc user@KERBER.TEST" 2>&1)"
+    else
+        PS="$(docker exec -e KRB5_CONFIG=/tmp/ts0-krb5.conf -e KRB5_PASSWORD=userpassword "$NAME" \
+            /tmp/krb5-kinit -s 1h -c /tmp/ps-rust.cc user@KERBER.TEST 2>&1)"
+    fi
+    prc=$?
+    set -e
+    echo "$who kinit -s 1h rc=$prc: $PS"
+    if [ "$prc" -ne 0 ]; then
+        log "fast.client.gate" "error" ",\"error\":\"$who kinit -s 1h refused under kdc_timesync = 0\",\"rc\":$prc"
+        exit 1
+    fi
+    docker exec "$NAME" klist -c "/tmp/ps-$who.cc" | grep -q 'krbtgt/KERBER.TEST@KERBER.TEST'
+done
+
 echo "==== require_auth encrypted_challenge: FAST issued, password 12 both legs ===="
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdb" "$NAME":/tmp/krb5-kdb

@@ -164,7 +164,8 @@ fn kdc_timesync_accepts_authtime_outside_skew() {
     part.authtime = kerberos_time_from_utc_z("20000101000000Z").expect("old");
     part.starttime = Some(part.authtime.clone());
     part.endtime = now_t.add_hours(10).unwrap_or(now_t);
-    check_as_rep_times(&part, now, 300, true).expect("MIT default kdc_timesync skips starttime");
+    check_as_rep_times(&part, now, 300, true, None)
+        .expect("MIT default kdc_timesync skips starttime");
 }
 
 #[test]
@@ -175,7 +176,7 @@ fn kdc_timesync_off_is_kdcrep_skew() {
     part.authtime = kerberos_time_from_utc_z("20000101000000Z").expect("old");
     part.starttime = Some(part.authtime.clone());
     part.endtime = now_t.add_hours(10).unwrap_or(now_t);
-    let err = check_as_rep_times(&part, now, 300, false).expect_err("timesync=0");
+    let err = check_as_rep_times(&part, now, 300, false, None).expect_err("timesync=0");
     assert!(
         err.to_string()
             .contains("Clock skew too great in KDC reply"),

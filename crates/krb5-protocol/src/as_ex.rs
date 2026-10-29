@@ -1586,7 +1586,13 @@ fn finish_as_rep(
     }
     let now = i64::from(KerberosTime::now().unix_seconds());
     let skew = i64::from(profile.clockskew);
-    check_as_rep_times(&enc_part, now, skew, profile.kdc_timesync)?;
+    check_as_rep_times(
+        &enc_part,
+        now,
+        skew,
+        profile.kdc_timesync,
+        bound.from.as_ref(),
+    )?;
     verify_as_reply_req_times(
         &enc_part,
         &bound.till,
@@ -1745,17 +1751,20 @@ pub fn verify_as_reply_req_times(
 }
 
 /// kdc_timesync 0: expired ticket is ReplyMismatch, stricter than MIT.
+// MIT: `verify_as_reply` (lib/krb5/krb/get_in_tkt.c:266-269)
 pub fn check_as_rep_times(
     enc_part: &EncKdcRepPart,
     now: i64,
     skew: i64,
     timesync: bool,
+    from: Option<&KerberosTime>,
 ) -> Result<(), Error> {
     if timesync {
         return Ok(());
     }
     let start = enc_part.starttime.as_ref().unwrap_or(&enc_part.authtime);
-    if (i64::from(start.unix_seconds()) - now).abs() > skew {
+    let postdated = from.is_some_and(|f| f.unix_seconds() != 0);
+    if !postdated && (i64::from(start.unix_seconds()) - now).abs() > skew {
         return Err(Error::KdcReplySkew);
     }
     let end = i64::from(enc_part.endtime.unix_seconds());
