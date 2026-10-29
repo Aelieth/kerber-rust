@@ -947,6 +947,7 @@ fn rsa_pkcs1_check(
 const OID_DATA: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x07, 0x01];
 const OID_SIGNED_DATA: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x07, 0x02];
 const OID_SKID: &[u8] = &[0x55, 0x1d, 0x0e];
+const OID_AKID: &[u8] = &[0x55, 0x1d, 0x23];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CmsFault {
@@ -1379,6 +1380,147 @@ pub fn verify_chain(
     build_chain(leaf, anchors, intermediates).map_err(|(e, _)| e)
 }
 
+// OpenSSL `find_issuer`: name is already filtered. AKID and key type, no signature.
+// The first cert still in its window, else the one with the latest notAfter.
+fn choose_issuer<'a>(
+    current: &[u8],
+    cands: &[&'a [u8]],
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<&'a [u8]> {
+    let mut best: Option<(&'a [u8], chrono::DateTime<chrono::Utc>)> = None;
+    for c in cands {
+        if !sig_key_ok(current, c) || !akid_ok(current, c) {
+            continue;
+        }
+        let Some((nb, na)) = cert_time_window(c) else {
+            continue;
+        };
+        if now >= nb && now <= na {
+            return Some(*c);
+        }
+        match best {
+            Some((_, end)) if na <= end => {}
+            _ => best = Some((*c, na)),
+        }
+    }
+    best.map(|(c, _)| c)
+}
+
+fn sig_key_ok(subject: &[u8], issuer: &[u8]) -> bool {
+    let Some((_, alg, _)) = cert_signed_parts(subject) else {
+        return true;
+    };
+    let Some(spki) = cert_spki(issuer) else {
+        return false;
+    };
+    let Some((_, body, _)) = take_tlv(spki) else {
+        return false;
+    };
+    let Some((_, alg_id, _)) = take_tlv(body) else {
+        return false;
+    };
+    let Some((_, key_oid, _)) = take_tlv(alg_id) else {
+        return false;
+    };
+    if matches!(
+        alg,
+        OID_RSA | OID_RSA_SHA256 | OID_RSA_SHA384 | OID_RSA_SHA512
+    ) {
+        return key_oid == OID_RSA;
+    }
+    if matches!(alg, OID_ECDSA_SHA256 | OID_ECDSA_SHA384 | OID_ECDSA_SHA512) {
+        return key_oid == OID_EC_KEY;
+    }
+    true
+}
+
+fn akid_ok(subject: &[u8], issuer: &[u8]) -> bool {
+    let Some(exts) = walk_tbs(subject).and_then(|w| w.extensions) else {
+        return true;
+    };
+    let mut raw = None;
+    each_ext(exts, |oid, oct| {
+        if oid != OID_AKID {
+            return false;
+        }
+        raw = Some(oct.to_vec());
+        true
+    });
+    let Some(raw) = raw else {
+        return true;
+    };
+    let Some((0x30, mut body, _)) = take_tlv(&raw) else {
+        return false;
+    };
+    let mut keyid = None;
+    let mut names = None;
+    let mut serial = None;
+    while !body.is_empty() {
+        let Some((tag, val, rest)) = take_tlv(body) else {
+            return false;
+        };
+        body = rest;
+        match tag {
+            0x80 => keyid = Some(val),
+            0xa1 => names = Some(val),
+            0x82 => serial = Some(val),
+            _ => {}
+        }
+    }
+    // OpenSSL rejects a key id only when the issuer has a different SKID.
+    if let Some(id) = keyid
+        && let Some(skid) = cert_key_id(issuer)
+        && skid.as_slice() != id
+    {
+        return false;
+    }
+    if let Some(want) = serial {
+        let Some((_, got)) = cert_issuer_serial(issuer) else {
+            return false;
+        };
+        if !int_eq(want, &got) {
+            return false;
+        }
+    }
+    if let Some(gns) = names
+        && let Some(want) = first_dirname(gns)
+    {
+        let Some((issuer_name, _)) = cert_issuer_serial(issuer) else {
+            return false;
+        };
+        if want != issuer_name.as_slice() {
+            return false;
+        }
+    }
+    true
+}
+
+fn mag(s: &[u8]) -> &[u8] {
+    let i = s.iter().position(|b| *b != 0).unwrap_or(s.len());
+    &s[i..]
+}
+
+fn int_eq(a: &[u8], b: &[u8]) -> bool {
+    mag(a) == mag(b)
+}
+
+fn first_dirname(gns: &[u8]) -> Option<&[u8]> {
+    let mut cur = gns;
+    while let Some((tag, val, rest)) = take_tlv(cur) {
+        if tag == 0xa4 {
+            return Some(val);
+        }
+        cur = rest;
+    }
+    None
+}
+
+fn self_signed(cert: &[u8]) -> bool {
+    let issuer = cert_name_der(cert, true);
+    let subject = cert_name_der(cert, false);
+    issuer.is_some() && issuer == subject && akid_ok(cert, cert) && sig_key_ok(cert, cert)
+}
+
 fn build_chain(
     leaf: &[u8],
     anchors: &[Vec<u8>],
@@ -1386,37 +1528,41 @@ fn build_chain(
 ) -> Result<CertChain, (ChainError, CertChain)> {
     let fail = |depth, reason| ChainError { depth, reason };
     let subject = |c: &[u8]| cert_name_der(c, false);
+    let now = chrono::Utc::now();
     let mut chain = vec![leaf.to_vec()];
     loop {
         let depth = chain.len() - 1;
         let current = &chain[depth];
         let issuer = cert_name_der(current, true);
-        let signs = |c: &&[u8]| cert_signed_by(current, c);
         let named = |c: &&[u8]| issuer.is_some() && subject(c) == issuer;
         let trusted: Vec<&[u8]> = anchors.iter().map(Vec::as_slice).filter(named).collect();
-        if let Some(a) = trusted
-            .iter()
-            .copied()
-            .find(signs)
-            .or(trusted.first().copied())
-        {
+        if let Some(a) = choose_issuer(current, &trusted, now) {
             if a != current.as_slice() {
                 chain.push(a.to_vec());
             }
             break;
+        }
+        // X509_self_signed: name, AKID against its own SKID, and key type.
+        if self_signed(current) {
+            return Err((
+                fail(
+                    depth,
+                    if depth == 0 {
+                        "self-signed certificate"
+                    } else {
+                        "self-signed certificate in certificate chain"
+                    },
+                ),
+                chain.clone(),
+            ));
         }
         let untrusted: Vec<&[u8]> = intermediates
             .iter()
             .copied()
             .filter(|c| named(c) && !chain.iter().any(|x| x == c))
             .collect();
-        let Some(next) = untrusted
-            .iter()
-            .copied()
-            .find(signs)
-            .or(untrusted.first().copied())
-        else {
-            let self_signed = issuer.is_some() && issuer == subject(current);
+        let Some(next) = choose_issuer(current, &untrusted, now) else {
+            let self_signed = self_signed(current);
             return Err((
                 fail(
                     depth,
@@ -1456,7 +1602,6 @@ fn build_chain(
             path_len += 1;
         }
     }
-    let now = chrono::Utc::now();
     for depth in (0..=top).rev() {
         let cert = &chain[depth];
         if depth < top {

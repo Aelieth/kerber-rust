@@ -471,5 +471,49 @@ docker exec "$NAME" grep -q 'freshness token received' /tmp/mit-kdc-anon.log || 
     log "pkinit.client.gate" "error" ',"error":"MIT KDC log missing freshness token received"'
     exit 1
 }
+echo "==== many same-named certs, MIT first ===="
+docker cp "$ROOT/scripts/lib/pkinit-manycert.py" "$NAME":/tmp/pkinit-manycert.py
+docker exec -d \
+    -e KRB5_TEST_USER_PASSWORD=userpassword \
+    -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
+    -e KRB5_KDC_DB=/tmp/rust-mc.db \
+    -e KRB5_KDC_STASH=/tmp/rust-mc.stash \
+    "$NAME" sh -c '/tmp/krb5-kdc-export --test-realm --export-pkinit /tmp/pkinit-mc 127.0.0.1:8888 >/tmp/rust-mc.log 2>&1'
+okr=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" grep -q '^listening ' /tmp/rust-mc.log 2>/dev/null; then
+        okr=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$okr" != 1 ]; then
+    docker exec "$NAME" cat /tmp/rust-mc.log >&2 || true
+    log "pkinit.client.gate" "error" ',"error":"rust KDC did not listen for the many-cert cell"'
+    exit 1
+fi
+MIT_MC="$(docker exec "$NAME" python3 /tmp/pkinit-manycert.py 40 88)"
+RUST_MC="$(docker exec "$NAME" python3 /tmp/pkinit-manycert.py 40 8888)"
+echo "$MIT_MC"
+echo "$RUST_MC"
+want='(depth 0): self-signed certificate'
+MIT_LINE="$(docker exec "$NAME" grep -a 'Failed to verify received certificate' /tmp/mit-kdc-anon.log | tail -1)"
+RUST_LINE="$(docker exec "$NAME" grep -a 'Failed to verify received certificate' /tmp/rust-mc.log | tail -1)"
+echo "$MIT_LINE"
+echo "$RUST_LINE"
+case "$MIT_LINE" in
+    *"$want"*) ;;
+    *) log "pkinit.client.gate" "error" ',"error":"MIT many-cert error mismatch"'; exit 1 ;;
+esac
+case "$RUST_LINE" in
+    *"$want"*) ;;
+    *) log "pkinit.client.gate" "error" ',"error":"rust many-cert error mismatch"'; exit 1 ;;
+esac
+rust_s="$(printf '%s\n' "$RUST_MC" | sed -n 's/seconds=\([0-9.]*\).*/\1/p')"
+python3 -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 3 else 1)' "$rust_s" || {
+    log "pkinit.client.gate" "error" ",\"error\":\"rust many-cert too slow\",\"seconds\":$rust_s"
+    exit 1
+}
+
 log "pkinit.client.gate" "ok" ',"mode":"rust-kinit-anon","principal":"WELLKNOWN/ANONYMOUS","restrict_anon":12,"require_freshness":true'
 exit 0
