@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::fs;
-use std::io::Write as _;
+use std::io::{BufRead as _, Read as _, Write as _};
 use std::path::{Path, PathBuf};
 
 use krb5_crypto::{EncryptionType, ProtocolKey, kdb_decrypt_key, kdb_encrypt_key};
@@ -852,11 +852,18 @@ pub fn parse_iprop_header(line: &str) -> Result<(bool, UlogLast), IpropHeaderErr
 // MIT: `current_dump_sno_in_ulog` (kadmin/dbutil/dump.c:1111-1134)
 #[must_use]
 pub fn dump_current_in_ulog(dump_file: &Path, ulog: &crate::ulog::Ulog) -> bool {
-    let Ok(text) = fs::read(dump_file) else {
+    let Ok(file) = fs::File::open(dump_file) else {
         return false;
     };
-    let line = text.split(|&b| b == b'\n').next().unwrap_or_default();
-    let Ok((_, last)) = parse_iprop_header(&String::from_utf8_lossy(line)) else {
+    // One BUFSIZ block at most, as `fgets` reads it.
+    let mut line = Vec::new();
+    if std::io::BufReader::new(file.take(8192))
+        .read_until(b'\n', &mut line)
+        .is_err()
+    {
+        return false;
+    }
+    let Ok((_, last)) = parse_iprop_header(&String::from_utf8_lossy(&line)) else {
         return false;
     };
     matches!(ulog.sno_status_of(last), IPROP_OK | IPROP_NIL)
@@ -893,45 +900,70 @@ pub fn conditional_iprop_dump(
     dump_file: &Path,
     vers: u32,
 ) -> Result<(), DumpError> {
+    match iprop_dump_text(store, dump_file, vers)? {
+        Some(text) => write_iprop_dump(dump_file, &text),
+        None => Ok(()),
+    }
+}
+
+/// None when the dump on disk is already in the log; else the whole dump, header first.
+fn iprop_dump_text(
+    store: &PrincipalStore,
+    dump_file: &Path,
+    vers: u32,
+) -> Result<Option<String>, DumpError> {
     if let Some(ulog) = store.ulog()
         && dump_current_in_ulog(dump_file, ulog)
     {
-        return Ok(());
+        return Ok(None);
     }
     let mkey = store
         .journal_key()
         .ok_or_else(|| DumpError::Crypto("no master key for the iprop dump".to_owned()))?;
     let last = store.ulog_last().unwrap_or_default();
     let text = write_dump_nra(store, &mkey, true)?;
-    let text = if vers == 0 {
+    Ok(Some(if vers == 0 {
         iprop_v0(last, &text)
     } else {
         iprop_header(last, &text)
-    };
+    }))
+}
+
+fn write_iprop_dump(dump_file: &Path, text: &str) -> Result<(), DumpError> {
     write_dump_with_ok(dump_file, text.as_bytes()).map_err(|(_, e)| DumpError::Io(e))
 }
 
 // MIT: `dump_db` (kadmin/dbutil/dump.c:1318-1340)
-/// Header and records: one fresh, locked view.
+/// Header and records: one fresh, locked view. The file is written after both locks are
+/// released, so a queued write does not stop the store's readers for the file's length.
 pub fn conditional_iprop_dump_fresh(
     store: &crate::SharedDump,
     dump_file: &Path,
     vers: u32,
 ) -> Result<(), DumpError> {
     for _ in 0..3 {
-        {
+        let text = {
             let g = store
                 .read()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             match g.read_hold()? {
-                None => return conditional_iprop_dump(&g, dump_file, vers),
+                None => Some(iprop_dump_text(&g, dump_file, vers)),
                 Some((held, false)) => {
-                    let done = conditional_iprop_dump(&g, dump_file, vers);
+                    let text = iprop_dump_text(&g, dump_file, vers);
                     drop(held);
-                    return done;
+                    Some(text)
                 }
-                Some((held, true)) => drop(held),
+                Some((held, true)) => {
+                    drop(held);
+                    None
+                }
             }
+        };
+        if let Some(text) = text {
+            return match text? {
+                Some(text) => write_iprop_dump(dump_file, &text),
+                None => Ok(()),
+            };
         }
         store
             .write()
