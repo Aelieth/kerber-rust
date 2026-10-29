@@ -4,7 +4,7 @@ Library crates emit [`tracing`](https://docs.rs/tracing) events. They
 never install a subscriber. The programs do, where `[logging] json`
 asks for the stream (below), and tests install their own.
 `krb5-embed-realm` always installs a stock fmt subscriber at info
-(`krb5_kdc=info,krb5_admin=info`), on standard error.
+(`krb5_kdc=info,krb5_admin=info`), on standard output.
 
 ## Where the stream goes
 
@@ -55,7 +55,7 @@ both the gate's own reads neither stock file.
 | `event` | yes | Stable name. From Rust: a `krb5_log::events` constant (`crypto.encrypt`, `asn1.decode`, `kdc.issue`, `admin`, …; every constant there is emitted somewhere). From the harness containers: `harness.start`, `harness.kdc.ready`, `harness.kinit`, `heimdal.start`, `samba.start` (see below) |
 | `correlation_id` | yes | 32 hex chars; one ID per *exchange* (crypto/ASN.1 inherit the parent via `enter_correlation`; they do not mint a new ID per op). The harness containers echo the `CORRELATION_ID` they were started with (`none` when unset) |
 | `component` | yes | Rust: `krb5-crypto`, `krb5-asn1`, `krb5-protocol`, `krb5-kdc`, `krb5-admin`, or `krb5-client`. Harness: `harness` (the MIT KDC container), `heimdal-harness`, `samba-harness` |
-| `outcome` | yes | `ok`, `error`, or `krb-error` |
+| `outcome` | yes | `ok`, `error`, or `krb-error`; the KDC's dispatch adds `retransmit` and `discard`, and the `admin` event `done` and `unauthorized` |
 | `duration_us` | crypto/asn1 | Wall time of the operation |
 | `etype` | crypto | IANA encryption-type number |
 | `key_usage` | crypto | RFC 3961 usage, when applicable |
@@ -113,7 +113,7 @@ scripts/kadmin-mit-gate.sh waits for
 `"outcome":"error"`). Renaming an event renames those greps.
 
 A request that reaches `handle_request` and gets a reply logs one
-`event=kdc.issue` line at `info`, including `duration_us`:
+`event=kdc.issue` line at `debug`, including `duration_us`:
 `outcome=ok` for an AS-REP or TGS-REP, and for a **KRB-ERROR** PDU
 `outcome=krb-error` plus `code` (RFC 4120 error-code) and `e_text`
 (MIT `log_tgs_req` status word, e.g. `BAD_TRANSIT`, `FIND_FAST`).
@@ -126,10 +126,10 @@ that cannot be encoded) logs `outcome=error` at **error** instead. An
 empty reply (MIT DISCARD) logs nothing from `handle_request`.
 
 When the request decodes as an AS-REQ or TGS-REQ, a second `kdc.issue`
-line carries MIT's tuple. On success it is the ISSUE tuple: `kind`,
+line, at `info`, carries MIT's tuple. On success it is the ISSUE tuple: `kind`,
 `req_etypes`, `from`, `status=ISSUE`, `authtime`, `etypes`
-(`rep_etypes2str`), `client`, and `server`; TGS S4U adds a third line
-with `s4u` + `s4u_client`. After a KRB-ERROR it is the fail tuple, with
+(`rep_etypes2str`), `client`, and `server`; TGS S4U adds `s4u` and
+`s4u_client` to the same line. After a KRB-ERROR it is the fail tuple, with
 the status word and `outcome=krb-error`. Unexpected transit-path errors
 are `tracing` **error** (`kdc_log.c:201-206` `LOG_ERR`).
 
@@ -158,19 +158,19 @@ event with `detail` `SELinux context not set` and is created without it
 `krb5_protocol=warn`, so the line shows.
 
 A KDC that cannot record a client's lockout attributes in
-`principal.lockout` (the file is missing, as in a realm an earlier
-release made, is no lockout file, or cannot be opened read-write or
+`principal.lockout` (the file is missing and the database is not open
+read-write to it, is no lockout file, or cannot be opened read-write or
 written) logs `event=kdc.issue` at **warn**, once for each of the two
 causes (no file it may open; one it may not write), with
-`correlation_id`, `component`, `outcome=error` and the reason as
-`detail`, writes the same text to its daemon log, and keeps the
-attributes in memory until it can write the file; from then on the
-file's are the only ones. A KDC that opened the file read-only keeps
-them in memory until it is restarted, even once the file is writable.
+`correlation_id`, `component`, `outcome=error` and the reason, ending
+`lockout counting is off`, as `detail`, and writes the same text to its
+daemon log. Lockout counting stays off until the file can be written. A
+KDC that can open the database read-write makes a missing file itself.
 
 A realm MIT's `kdb5_util` made has no `principal.lockout`. The KS oracle
-realm is one of these, so the first counted login logs that warning until
-the file is created beside the database, as an upgrade does.
+realm is one of these, so the first counted login logs that warning
+until the file is created beside the database, as an upgrade does, or
+the KDC runs where it may make the file.
 
 The `KdcAudit` registry (`kdc_audit.c`) writes `event=kdc.audit`
 when `[plugins] audit` `enable_only` names `json`, with MIT

@@ -12,6 +12,8 @@ use krb5_protocol::{
 };
 use krb5_types::PrincipalName;
 
+// MIT: `krb5_db2_get_principal` (plugins/kdb/db2/kdb_db2.c:769-773)
+/// The keytab lookup takes the shared lock and fails if it cannot.
 fn kdb_keytab_entry(
     store: &SharedStore,
     name: &PrincipalName,

@@ -264,7 +264,8 @@ pub struct Krb5Conf {
     pub otp: OtpTree,
 }
 
-// MIT: `krb5_init_context_profile` (lib/krb5/krb/init_ctx.c:235-252)
+// MIT: `_krb5_use_dns_kdc` (lib/krb5/os/locate_kdc.c:88-91)
+// Unread: dns_lookup_kdc is false; `apply_dns_lookup_default` sets MIT's default (on) once read.
 impl Default for Krb5Conf {
     fn default() -> Self {
         Self {

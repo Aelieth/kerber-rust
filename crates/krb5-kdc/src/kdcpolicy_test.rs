@@ -1,8 +1,7 @@
-//! MIT `plugins/kdcpolicy/test` (`t_kdcpolicy.py`), for the release KDC.
+//! MIT `plugins/kdcpolicy/test` (`t_kdcpolicy.py`), built only in test and `test-hooks` builds.
 //!
-//! The release binary cannot name `testrealm`: that string is banned in a
-//! ship build. This module is the same checks, registered only when
-//! `[plugins] kdcpolicy` `enable_only` lists `test`.
+//! A release binary has no `test` module: it cannot name `testrealm`, a string banned in a ship
+//! build. Registered only when `[plugins] kdcpolicy` `enable_only` lists `test`.
 
 use krb5_types::{EncTicketPart, KdcReqBody, PrincipalName};
 

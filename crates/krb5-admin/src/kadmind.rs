@@ -400,8 +400,7 @@ impl Dispatch for Kadmind {
         kpasswd_toolong_error(&self.realm()).map_err(|e| e.to_string())
     }
 
-    // MIT: `krb5_db2_get_principal` (plugins/kdb/db2/kdb_db2.c:769-773)
-    /// The keytab lookup takes the shared lock and fails if it cannot.
+    /// A session for one RPC connection; none when it cannot be made.
     fn rpc_session(
         &mut self,
         remote: SocketAddr,

@@ -35,7 +35,7 @@ policy modules by name. Each loaded module may deny the request or cap the
 ticket lifetime and renew lifetime. The first error stops the walk. With no
 module selected the KDC allows the request and leaves the times. `set_policy`
 installs one module and skips the stanza. `module` is not read. The name
-`test` is registered only when `enable_only` lists it (MIT's kdcpolicy test:
+`test` exists only in test and `test-hooks` builds, and is registered only when `enable_only` lists it (MIT's kdcpolicy test:
 a first component `fail` is denied, `ONE_HOUR` and `SEVEN_HOURS` cap the
 ticket, and any other indicator is denied). The check also receives the socket the KDC accepted,
 through `check_as_from` and `check_tgs_from`. That address is not

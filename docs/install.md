@@ -703,10 +703,10 @@ release made, five things changed:
   texts (`kadmin.local: No such file or directory while initializing kadmin.local interface`).
   Make them once, owned as the database is and labelled, while the daemons are stopped.
 - The KDC records lockout counts and last logins in `<database_name>.lockout`, which
-  `kdb5_util create` and `load` make; the KDC may not create files in its directory. Without it
-  the KDC keeps them in memory, loses them on a restart and says so once in its log. Make it
-  once, empty, owned as the database is and labelled, as the lock files below: the KDC fills it,
-  and nothing else changes.
+  `kdb5_util create` and `load` make; the KDC makes it when it can open the database read-write,
+  and Fedora's policy does not let it create files in its directory. Without the file lockout
+  counting is off, and the KDC says so once in its log. Make it once, empty, owned as the
+  database is and labelled, as the lock files below: the KDC fills it, and nothing else changes.
 - The update log is MIT's: kept only with `iprop_enable` (which, as MIT's, needs `iprop_port`),
   one entry appended per change. Without iprop an earlier release's `principal.ulog` is no
   longer read or written and may be removed; with iprop the first program that maps it starts

@@ -465,10 +465,11 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
             eprintln!("PA Option {attr} = {value}");
         }
     }
-    // MIT: `kinit_prompter` (clients/kinit/kinit.c:622-636)
-    // The prompter serves any mechanism, so a PKINIT that cannot run goes on to the password.
+    // Only a password login reads a password; a keytab or anonymous one does not.
     let pw_auth = !(opts.keytab || opts.anonymous);
     let given = if pw_auth { env_password() } else { None };
+    // MIT: `kinit_prompter` (clients/kinit/kinit.c:622-636)
+    // A password prompt, or a password given, makes a failure "Password incorrect".
     let prompted = std::cell::Cell::new(given.is_some());
     let mut read_password = |client: &str| {
         prompted.set(true);
