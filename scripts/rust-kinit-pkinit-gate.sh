@@ -515,5 +515,110 @@ python3 -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 3 else 1)' "$rust_s" 
     exit 1
 }
 
+echo "==== no-SKID CA, client AKID key id, MIT first ===="
+docker cp "$ROOT/scripts/lib/pkinit-noskid.sh" "$NAME":/tmp/pkinit-noskid.sh
+docker exec "$NAME" sh /tmp/pkinit-noskid.sh
+docker exec "$NAME" kadmin.local -q 'modprinc +requires_preauth user'
+docker exec "$NAME" sh -c 'sed -i "s|FILE:/tmp/pkinit/ca.pem|FILE:/tmp/noskid/ca.pem|g; s|FILE:/tmp/pkinit/kdc.pem|FILE:/tmp/noskid/kdc-id.pem|" /etc/krb5kdc/kdc.conf /etc/krb5.conf'
+docker exec "$NAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
+wait_pid_gone "$NAME" krb5kdc || true
+docker exec -d \
+    -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
+    -e KRB5_CONFIG=/etc/krb5.conf \
+    "$NAME" sh -c 'krb5kdc -n >/tmp/mit-noskid.log 2>&1'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',88),0.3)" 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" cat /tmp/mit-noskid.log >&2 || true
+    log "pkinit.client.gate" "error" ',"error":"MIT krb5kdc did not listen for the no-SKID cell"'
+    exit 1
+fi
+set +e
+MIT_NS="$(docker exec "$NAME" kinit -X X509_user_identity=FILE:/tmp/noskid/client.pem user@KERBER.TEST </dev/null 2>&1)"
+MIT_NS_RC=$?
+set -e
+echo "$MIT_NS"
+if [ "$MIT_NS_RC" -ne 0 ]; then
+    docker exec "$NAME" cat /tmp/mit-noskid.log >&2 || true
+    log "pkinit.client.gate" "error" ',"error":"MIT kinit refused the no-SKID CA"'
+    exit 1
+fi
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdb" "$NAME":/tmp/krb5-kdb
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kadmin-local" "$NAME":/tmp/krb5-kadmin-local
+docker exec "$NAME" chmod +x /tmp/krb5-kdb /tmp/krb5-kadmin-local
+docker exec "$NAME" sh -c 'set -eu
+mkdir -p /tmp/noskid/rust
+cat > /tmp/noskid/rust/kdc.conf << EOF
+[kdcdefaults]
+    pkinit_identity = FILE:/tmp/noskid/kdc-id.pem
+    pkinit_anchors = FILE:/tmp/noskid/ca.pem
+    pkinit_dh_min_bits = 2048
+    pkinit_eku_checking = none
+[realms]
+    KERBER.TEST = {
+        database_name = /tmp/noskid/rust/principal
+        key_stash_file = /tmp/noskid/rust/stash
+        master_key_type = aes256-cts-hmac-sha1-96
+        supported_enctypes = aes256-cts-hmac-sha1-96:normal
+        kdc_listen = 127.0.0.1:8890
+        kdc_tcp_listen = 127.0.0.1:8890
+    }
+[logging]
+    kdc = FILE:/tmp/noskid/rust/kdc.log
+EOF
+cat > /tmp/noskid/rust/krb5.conf << EOF
+[libdefaults]
+    default_realm = KERBER.TEST
+    pkinit_anchors = FILE:/tmp/noskid/ca.pem
+    pkinit_kdc_hostname = kerber.test
+    pkinit_eku_checking = none
+    pkinit_dh_min_bits = 2048
+[realms]
+    KERBER.TEST = {
+        kdc = 127.0.0.1:8890
+    }
+EOF
+export KRB5_CONFIG=/tmp/noskid/rust/krb5.conf KRB5_KDC_PROFILE=/tmp/noskid/rust/kdc.conf
+/tmp/krb5-kdb -r KERBER.TEST create -s -P masterpassword
+/tmp/krb5-kadmin-local -r KERBER.TEST -q "addprinc -pw userpassword +requires_preauth user"
+'
+docker exec -d \
+    -e KRB5_CONFIG=/tmp/noskid/rust/krb5.conf \
+    -e KRB5_KDC_PROFILE=/tmp/noskid/rust/kdc.conf \
+    "$NAME" sh -c '/tmp/krb5-kdc-export -n >/tmp/noskid/rust/stderr.log 2>&1'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" grep -q '^listening ' /tmp/noskid/rust/stderr.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" cat /tmp/noskid/rust/stderr.log >&2 || true
+    docker exec "$NAME" cat /tmp/noskid/rust/kdc.log >&2 || true
+    log "pkinit.client.gate" "error" ',"error":"rust KDC did not listen for the no-SKID cell"'
+    exit 1
+fi
+set +e
+RUST_NS="$(docker exec -e KRB5_CONFIG=/tmp/noskid/rust/krb5.conf -e KRB5_PASSWORD= "$NAME" \
+    /tmp/krb5-kinit --pkinit FILE:/tmp/noskid/client.pem --pkinit-anchors FILE:/tmp/noskid/ca.pem \
+    -c /tmp/krb5cc_noskid user@KERBER.TEST 2>&1)"
+RUST_NS_RC=$?
+set -e
+echo "$RUST_NS"
+if [ "$RUST_NS_RC" -ne 0 ]; then
+    docker exec "$NAME" cat /tmp/noskid/rust/kdc.log >&2 || true
+    docker exec "$NAME" cat /tmp/noskid/rust/stderr.log >&2 || true
+    log "pkinit.client.gate" "error" ',"error":"rust kinit refused the no-SKID CA"'
+    exit 1
+fi
+
 log "pkinit.client.gate" "ok" ',"mode":"rust-kinit-anon","principal":"WELLKNOWN/ANONYMOUS","restrict_anon":12,"require_freshness":true'
 exit 0
