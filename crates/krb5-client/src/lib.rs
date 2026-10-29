@@ -1513,7 +1513,9 @@ fn kinit_inner(
         krb5_protocol::warn_deprecated_enctype(&as_out);
     }
     if ctx.profile.kdc_timesync {
-        ctx.note_kdc_offset(as_out.time_offset);
+        // MIT: `verify_as_reply` (lib/krb5/krb/get_in_tkt.c:260-262)
+        // the reply's offset replaces one read from the armor cache.
+        ctx.set_kdc_offset(as_out.time_offset);
     }
     let mut creds = vec![tgt_cred(
         &as_out.crealm,

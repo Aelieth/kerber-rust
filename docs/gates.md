@@ -407,6 +407,8 @@ not check (a unit test, or "not asserted").
   against MIT; the AS-REQ carries PA-FX-FAST and MIT `klist` names
   `user@KERBER.TEST`. The gate asserts `Decrypted AP-REQ` (the armor
   AP-REQ), from TRACE only; the no-preauth FAST AP-REQ is `aes256-sha2`.
+  `kinit -T` over an armor cache with a stale header offset (120) writes
+  the AS reply's offset (0), MIT first (`scripts/lib/ccache-offset.py`).
 - `scripts/rust-kinit-pkinit-gate.sh` — Rust `kinit --pkinit FILE:` against
   MIT KDC (`pkinit.so` + KDC cert + `id-pkinit-san`); it **fails** if the
   plugin is missing. MIT `klist` names `user@KERBER.TEST`. A follow-up

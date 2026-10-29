@@ -161,6 +161,29 @@ echo "$OUT3" | grep -q '"fast_strengthen":true' || {
     exit 1
 }
 
+echo "==== kinit -T: the AS reply's time offset replaces the armor cache's stale one (MIT first) ===="
+docker cp "$ROOT/scripts/lib/ccache-offset.py" "$NAME":/tmp/ccache-offset.py
+for who in mit rust; do
+    docker exec "$NAME" rm -f /tmp/so-armor.cc "/tmp/so-$who.cc"
+    docker exec "$NAME" sh -c 'printf "userpassword\n" | kinit -c /tmp/so-armor.cc user@KERBER.TEST' >/dev/null
+    docker exec "$NAME" python3 /tmp/ccache-offset.py set /tmp/so-armor.cc 120
+    if [ "$who" = mit ]; then
+        docker exec "$NAME" sh -c 'printf "userpassword\n" | kinit -T /tmp/so-armor.cc -c /tmp/so-mit.cc user@KERBER.TEST' >/dev/null
+    else
+        docker exec -e KRB5_PASSWORD=userpassword "$NAME" \
+            /tmp/krb5-kinit -T /tmp/so-armor.cc -c /tmp/so-rust.cc user@KERBER.TEST >/dev/null
+    fi
+    off="$(docker exec "$NAME" python3 /tmp/ccache-offset.py show "/tmp/so-$who.cc")"
+    echo "$who -T header offset: $off (armor cache said 120)"
+    case "$off" in
+    0 | 1 | -1) ;;
+    *)
+        log "fast.client.gate" "error" ",\"error\":\"$who kinit -T kept the armor cache's offset $off\""
+        exit 1
+        ;;
+    esac
+done
+
 echo "==== require_auth encrypted_challenge: FAST issued, password 12 both legs ===="
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdb" "$NAME":/tmp/krb5-kdb

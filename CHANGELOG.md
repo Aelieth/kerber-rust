@@ -67,6 +67,7 @@ any other `###` heading.
 ### Changed
 
 - **ccache.** A `DIR:` name makes its missing directory (0700) and `primary` file when resolved, as MIT.
+- **client.** The AS reply's KDC time offset replaces the armor cache's, as MIT.
 - **form.** tools, config, types, crypto, client, log, cli, asn1 and brainpool: comments are within 3% of the code characters. A safety, wire or MIT-quirk fact keeps its line.
 - **form.** protocol: comments are within 3% of the code characters. A safety, wire or MIT-quirk fact keeps its line.
 - **form.** admin: comments are within 3% of the code characters. A safety, wire or MIT-quirk fact keeps its line.
