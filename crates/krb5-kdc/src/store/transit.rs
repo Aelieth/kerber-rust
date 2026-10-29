@@ -6,7 +6,8 @@ use krb5_crypto::ProtocolKey;
 use krb5_types::PrincipalName;
 
 use super::PrincipalStore;
-use super::keys::{KeyEntry, next_kvno};
+use super::flags::KDB_LOCKDOWN_KEYS;
+use super::keys::KeyEntry;
 use super::principal::{AdminEnt, CreateKeys};
 use crate::acl::{Acl, AdminOp};
 use crate::error::Error;
@@ -114,6 +115,7 @@ impl PrincipalStore {
     }
 
     // MIT: `create_principal_2_svc` (server_stubs.c:477-485)
+    // MIT: `setkey_principal4_2_svc` (server_stubs.c:1069-1084)
     /// An ACL denial creates nothing.
     fn put_incoming_trust_key(
         &mut self,
@@ -127,27 +129,21 @@ impl PrincipalStore {
         self.inside_change()?;
         let name = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", self.realm.as_str()]);
         let id = crate::kdb::lookup_principal_id(&name, foreign_realm);
-        acl.check(actor, AdminOp::Create, Some(&id))?;
-        if self.map.contains_key(&id) {
-            let n = if let Some(k) = kvno {
-                asked_kvno(Some(k))?
-            } else {
-                let keys = self
-                    .map
-                    .get(&id)
-                    .map(|p| p.keys.clone())
-                    .unwrap_or_default();
-                next_kvno(&keys)
-            };
-            let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
-            if replace {
-                p.keys.clear();
+        if let Some(p) = self.map.get(&id) {
+            acl.check(actor, AdminOp::SetKey, Some(&id))?;
+            if p.attributes & KDB_LOCKDOWN_KEYS != 0 {
+                return Err(Error::AclDenied);
             }
-            p.keys.push(KeyEntry::new(key.etype(), key, n));
-            let snap = p.clone();
-            self.note_ulog(id, false, Some(snap));
-            return self.save_if_configured();
+            let entry = KeyEntry::new(key.etype(), key, kvno.unwrap_or(0));
+            return self.set_keys_in(
+                &name,
+                foreign_realm,
+                vec![entry],
+                u32::from(!replace),
+                actor,
+            );
         }
+        acl.check(actor, AdminOp::Create, Some(&id))?;
         let kvno = asked_kvno(kvno)?;
         let ent = kvno_ent(kvno);
         let entry = KeyEntry::new(key.etype(), key, kvno);

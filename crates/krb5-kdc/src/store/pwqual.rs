@@ -141,7 +141,7 @@ pub fn register_pwqual(module: Arc<dyn Pwqual>) {
         .push(module);
 }
 
-/// Replaces built-ins and registered modules on this thread; empty list checks nothing.
+/// Takes the place of registered modules on this thread, after the built-ins.
 pub fn set_thread_pwqual(modules: Vec<Arc<dyn Pwqual>>) {
     THREAD.with(|slot| *slot.borrow_mut() = Some(modules));
 }
@@ -151,16 +151,16 @@ pub fn clear_thread_pwqual() {
 }
 
 fn candidates() -> Vec<Arc<dyn Pwqual>> {
-    if let Some(modules) = THREAD.with(|slot| slot.borrow().clone()) {
-        return modules;
-    }
     let mut modules = builtins();
-    modules.extend(
-        EXTRA
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone(),
-    );
+    match THREAD.with(|slot| slot.borrow().clone()) {
+        Some(thread) => modules.extend(thread),
+        None => modules.extend(
+            EXTRA
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone(),
+        ),
+    }
     modules
 }
 

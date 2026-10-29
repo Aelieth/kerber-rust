@@ -55,7 +55,8 @@ checks the acceptor names, and takes the kpasswd key when the service set asks
 for it. `Listeners::bind` binds the sockets, and `Kadmind::serve` runs the loop
 on the caller's thread until a `Shutdown`. The binary's log is `KlogAdmin`; an
 embedder passes `TracingAdmin` or its own `AdminLog`. Password-quality modules
-and kadm5 hooks on `KadmindConfig` apply to that kadmind alone; empty lists keep
+and kadm5 hooks on `KadmindConfig` apply to that kadmind alone, the modules after
+the built-ins, as MIT loads its modules beside them; empty lists keep
 `register_pwqual` and `register_kadm5_hook`. Remote MIT `kadmin` on 749 is that
 loop on a thread beside the KDC's, or `krb5-kadmind` run beside the embedder.
 

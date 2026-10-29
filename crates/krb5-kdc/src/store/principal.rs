@@ -563,7 +563,12 @@ impl PrincipalStore {
         }
     }
 
-    pub fn record_s4u_to(&mut self, name: &PrincipalName, to: &str) -> Result<(), Error> {
+    pub fn record_s4u_to(
+        &mut self,
+        name: &PrincipalName,
+        to: &str,
+        actor: &str,
+    ) -> Result<(), Error> {
         self.inside_change()?;
         let id = crate::kdb::lookup_principal_id(name, &self.realm);
         let snap = {
@@ -572,6 +577,7 @@ impl PrincipalStore {
                 return Ok(());
             }
             p.s4u_allowed_to.push(to.to_owned());
+            stamp_admin_tl(p, false, actor);
             p.clone()
         };
         self.note_ulog(id, false, Some(snap));

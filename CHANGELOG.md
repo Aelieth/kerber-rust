@@ -167,6 +167,7 @@ any other `###` heading.
 - **ci.** The ccache and two client-differential nightly gates and their two probes are gone; field client-tools and pkinit cover them.
 
 ### Fixed
+- **embed.** pwqual joins the built-ins; trust keys need setkey; lockout has the DB owner.
 - **kdc.** ks_tuples keep their salt types, as MIT.
 - **kdc.** kadm5 and iprop keep delegation tl_data; cpw after renprinc uses the new name.
 - **admin.** setkey checks policy keysalts, duplicate enctypes and setkey3 tuples, as MIT.

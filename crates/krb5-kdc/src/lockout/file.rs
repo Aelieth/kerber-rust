@@ -415,11 +415,6 @@ impl SideFile {
     }
 }
 
-fn make(db: &Path, records: &[(String, Lockout)]) -> io::Result<()> {
-    let path = lockout_path(db);
-    krb5_protocol::write_fresh_secret_file(&path, &render(records)).map_err(|e| named(&path, &e))
-}
-
 fn make_beside(db: &Path, records: &[(String, Lockout)]) -> io::Result<()> {
     let path = lockout_path(db);
     krb5_protocol::write_secret_file_like(&path, db, &render(records)).map_err(|e| named(&path, &e))
@@ -434,7 +429,7 @@ pub(crate) fn ensure_lockout_file(db: &Path) {
     if path.symlink_metadata().is_ok() || !db_writable(db) {
         return;
     }
-    let _ = make(db, &[]);
+    let _ = make_beside(db, &[]);
 }
 
 fn open_for_writing(db: &Path) -> io::Result<Option<SideFile>> {
@@ -484,7 +479,7 @@ pub(crate) fn write_loaded(
     merge: bool,
 ) -> io::Result<()> {
     let Some(mut side) = open_for_writing(db)? else {
-        return make(db, records);
+        return make_beside(db, records);
     };
     let content: Vec<(String, Lockout)> = if merge && !side.ix.foreign {
         records
@@ -735,7 +730,7 @@ impl LockoutState {
                 None => {
                     if db_writable(db)
                         && lockout_path(db).symlink_metadata().is_err()
-                        && make(db, &[]).is_ok()
+                        && make_beside(db, &[]).is_ok()
                         && let Some(side) = inner.side(db)
                         && side.writable
                         && record(side, &id, p, stamp, update).is_ok()

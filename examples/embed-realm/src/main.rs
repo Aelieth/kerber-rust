@@ -318,7 +318,8 @@ fn allow_delegate(
     if name_realm != realm {
         cannot_start(progname, "service is in another realm");
     }
-    let recorded = store.change(|s| s.record_s4u_to(&name, &allow.target));
+    let actor = format!("admin/admin@{realm}");
+    let recorded = store.change(|s| s.record_s4u_to(&name, &allow.target, &actor));
     match recorded {
         Ok(Ok(())) => {
             eprintln!(

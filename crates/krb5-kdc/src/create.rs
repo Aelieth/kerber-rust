@@ -583,6 +583,7 @@ fn commit_store(store: &PrincipalStore, db: &Path, master: &ProtocolKey) -> Resu
         clear_temp(&tmp);
         return Err(db_err(&err));
     }
+    let _ = std::fs::rename(crate::lockout_path(&tmp), crate::lockout_path(db));
     clear_temp_locks(&tmp);
     Ok(())
 }
@@ -600,6 +601,7 @@ fn clear_temp(tmp: &Path) {
 }
 
 fn clear_temp_locks(tmp: &Path) {
+    let _ = std::fs::remove_file(crate::lockout_path(tmp));
     let _ = std::fs::remove_file(crate::dblock::suffixed(tmp, crate::dblock::SUFFIX_LOCK));
     let _ = std::fs::remove_file(crate::dblock::suffixed(
         tmp,
