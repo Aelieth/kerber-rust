@@ -383,7 +383,6 @@ impl Kadm5AuthConfig {
         &self.stack
     }
 
-    /// Version-1 admin session.
     #[must_use]
     pub fn acl(&self) -> &Acl {
         &self.acl

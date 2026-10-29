@@ -400,7 +400,6 @@ impl Dispatch for Kadmind {
         kpasswd_toolong_error(&self.realm()).map_err(|e| e.to_string())
     }
 
-    /// A session for one RPC connection; none when it cannot be made.
     fn rpc_session(
         &mut self,
         remote: SocketAddr,

@@ -145,7 +145,7 @@ pub(super) fn kadm5_error_text(code: u32) -> String {
     }
 }
 
-/// Unlike MIT, a name cannot forge a line.
+/// Unlike MIT, a name cannot forge a line (docs/mit-deviations.md).
 fn escape_log(s: &str) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     if !s.chars().any(char::is_control) {
@@ -269,6 +269,8 @@ pub(super) fn kadm5_log_lines(
     if proc == RENAME_PRINCIPAL {
         let (src, dst) = rename_targets(args).unwrap_or_default();
         let (src, dst) = (trunc_name(&src), trunc_name(&dst));
+        // MIT: `rename_principal_2_svc` (kadmin/server/server_stubs.c:700-723)
+        // A denial, the source's lockdown and a missing source all log Unauthorized.
         let refused = denied || code == KADM5_AUTH_DELETE;
         let mut lines = Vec::new();
         if refused {

@@ -95,7 +95,6 @@ fn read_store(
 
 /// Refused or failed: database unchanged.
 // MIT: `kdb_put_entry` (lib/kadm5/srv/server_kdb.c:364-405)
-/// One put per change, under the lock.
 fn commit<T>(
     g: &mut krb5_kdc::PrincipalStore,
     proc: u32,

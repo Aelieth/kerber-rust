@@ -142,7 +142,7 @@ fn kpasswd_chpwfail_error(realm: &str, result: u16, text: &str) -> Result<Vec<u8
 
 fn kpasswd_krb_error(realm: &str, e_data: Vec<u8>) -> Result<Vec<u8>, Error> {
     // MIT: `process_chpw_request` (schpw.c:273-345)
-    // `alloc_data` zeroes `ret`, so the wrap lands on 60, not 0.
+    // `krb5_timeofday` leaves `ret` 0, so the subtraction wraps past KRB_ERR_MAX: 60.
     let der = changepw_krb_error(realm, err::GENERIC, Some(e_data))?;
     Ok(frame_kpasswd_rep(&[], &der))
 }
@@ -491,7 +491,6 @@ pub(crate) fn handle_kpasswd_from(
         let mut g = store
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // The change locks the database before its write.
         // `current_caller` is `kadmind@REALM`, not the client.
         let stamp = format!("kadmind@{store_realm}");
         // MIT: `ctx_lock` (plugins/kdb/db2/kdb_db2.c:438-447)
@@ -549,7 +548,6 @@ pub(crate) fn handle_kpasswd_from(
             ),
         }
     };
-    // Both password copies are zapped, made or refused.
     wipe_secret(newpass);
     let log_outcome = if code == 0 { "ok" } else { "error" };
     let log_line = kpasswd_log_line(

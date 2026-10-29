@@ -62,7 +62,7 @@ pub fn handle_kpasswd_from(
     listen::handle_kpasswd_from(store, authcfg, conf, replay, raw, from, local)
 }
 
-/// `None` gives `actor` full privileges, as MIT's local.
+/// `None` gives `actor` full privileges, as MIT's `kadmin.local`.
 #[cfg(feature = "test-hooks")]
 pub fn load_acl_file(actor: &str, path: Option<&std::path::Path>) -> Result<Acl, String> {
     match path {

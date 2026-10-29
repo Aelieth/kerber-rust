@@ -277,7 +277,6 @@ fn seq_window_ok(gd: &mut RpcsecGss, seq: u32) -> bool {
 // MIT: `check_rpcsec_auth` (kadm_rpc_svc.c:324-331)
 /// Acceptor: two components, `kadmin`, in the server realm.
 // MIT: `kadm_1` (kadm_rpc_svc.c:251-255)
-/// Procedures past 27: PROC_UNAVAIL.
 #[expect(clippy::too_many_arguments, reason = "over seven inputs after RpcCtx")]
 fn rpcsec_dispatch(
     ctx: RpcCtx<'_>,
@@ -725,7 +724,6 @@ pub(super) fn agss_dispatch(
         addr,
         flavor: FLAVOR_AUTH_GSSAPI,
     };
-    // Result can carry keys.
     let result = Zeroizing::new(
         match kadm5_or_iprop(
             ctx,
