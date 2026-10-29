@@ -1044,5 +1044,75 @@ docker exec "$NAME_MIT" grep unlocku /tmp/unlock-mit.dump | grep -F $'\t1792\t' 
     docker exec "$NAME_MIT" grep unlocku /tmp/unlock-mit.dump >&2 || true
     exit 1
 }
+echo "==== ACL Latin-1 comment loads and admin/admin can addprinc ===="
+# The stock profile names no acl_file here, so kadmind would open its compiled
+# default. The profile under test points acl_file at the file we wrote.
+# fgets keeps the 0xE9 byte inside the comment, so the */admin line is the rule.
+mit_acl_profile() {
+    docker exec "$NAME_MIT" python3 -c '
+import pathlib, sys
+dest, acl = sys.argv[1], sys.argv[2]
+src = pathlib.Path("/etc/krb5kdc/kdc.conf").read_text().splitlines(True)
+out, done = [], False
+for ln in src:
+    if not done and ln.strip() == "}":
+        out.append("        acl_file = " + acl + "\n")
+        done = True
+    out.append(ln)
+if not done:
+    raise SystemExit("realm close not found")
+pathlib.Path(dest).write_text("".join(out))
+' "$1" "$2"
+}
+kill_mit_kadmind
+docker exec "$NAME_MIT" python3 -c 'open("/tmp/acl-bytes","wb").write(b"# caf\xe9\n*/admin@KERBER.TEST *\n")'
+mit_acl_profile /tmp/kadm-bytes.conf /tmp/acl-bytes
+docker exec -d -e KRB5_KDC_PROFILE=/tmp/kadm-bytes.conf "$NAME_MIT" \
+    sh -c 'kadmind -nofork >/tmp/kadmind-bytes.log 2>&1'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME_MIT" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',749),0.3)" 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME_MIT" cat /tmp/kadmind-bytes.log >&2 || true
+    echo "MIT kadmind did not listen on a Latin-1 comment ACL" >&2
+    exit 1
+fi
+MIT_BYTESADD="$(mit_kadmin "$NAME_MIT" -- -p admin/admin -w adminpassword -q 'addprinc -pw x aclbytes' 2>&1 || true)"
+echo "$MIT_BYTESADD"
+echo "$MIT_BYTESADD" | grep -F 'Principal "aclbytes@KERBER.TEST" created.'
+
+echo "==== ACL path that is a directory loads with no lines ===="
+# A directory opens and contributes no line, so every request is refused.
+kill_mit_kadmind
+docker exec "$NAME_MIT" sh -c 'rm -rf /tmp/acl-dir && mkdir /tmp/acl-dir'
+mit_acl_profile /tmp/kadm-dir.conf /tmp/acl-dir
+docker exec -d -e KRB5_KDC_PROFILE=/tmp/kadm-dir.conf "$NAME_MIT" \
+    sh -c 'kadmind -nofork >/tmp/kadmind-acldir.log 2>&1'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME_MIT" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',749),0.3)" 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME_MIT" cat /tmp/kadmind-acldir.log >&2 || true
+    echo "MIT kadmind did not listen on a directory ACL" >&2
+    exit 1
+fi
+MIT_DIRDENY="$(mit_kadmin "$NAME_MIT" -- -p admin/admin -w adminpassword -q 'addprinc -pw x acldir' 2>&1 || true)"
+echo "$MIT_DIRDENY"
+echo "$MIT_DIRDENY" | grep -F $'Operation requires ``add\'\' privilege'
+if echo "$MIT_DIRDENY" | grep -q 'Principal "acldir@KERBER.TEST" created.'; then
+    echo "MIT directory ACL allowed addprinc: $MIT_DIRDENY" >&2
+    exit 1
+fi
+
 log "kadmin.gate" "ok" ',"leg":"mit"'
 exit 0

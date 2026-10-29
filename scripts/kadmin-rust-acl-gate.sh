@@ -629,5 +629,36 @@ if echo "$ESCDENY" | grep -q 'user@KERBER.TEST'; then
     echo "foo\\/admin matched */admin: $ESCDENY" >&2
     exit 1
 fi
+
+echo "==== ACL Latin-1 comment loads and admin/admin can addprinc ===="
+# fgets keeps the 0xE9 byte inside the comment, so the */admin line is the rule.
+ADM="$(rust_kadmin_local -e KRB5_KDC_DB=/tmp/principal -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" -- -q 'addprinc -pw adminpassword admin/admin' 2>&1 || true)"
+echo "$ADM"
+printf '%s\n' "$ADM" | grep -F 'Principal "admin/admin@KERBER.TEST" created.'
+kill_rust_kadmind
+docker exec "$NAME" python3 -c 'open("/tmp/kadm5.acl","wb").write(b"# caf\xe9\n*/admin@KERBER.TEST *\n")'
+rust_kadmind_up kadmind-bytes.log
+BYTESADD="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin/admin@KERBER.TEST -w adminpassword -q 'addprinc -pw x aclbytes' 2>&1 || true)"
+echo "$BYTESADD"
+echo "$BYTESADD" | grep -F 'Principal "aclbytes@KERBER.TEST" created.'
+
+echo "==== ACL path that is a directory loads with no lines ===="
+# A directory opens and contributes no line, so every request is refused.
+kill_rust_kadmind
+docker exec "$NAME" sh -c 'rm -rf /tmp/kadm5.acl && mkdir /tmp/kadm5.acl'
+rust_kadmind_up kadmind-acldir.log
+DIRDENY="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin/admin@KERBER.TEST -w adminpassword -q 'addprinc -pw x acldir' 2>&1 || true)"
+echo "$DIRDENY"
+echo "$DIRDENY" | grep -F $'Operation requires ``add\'\' privilege'
+if echo "$DIRDENY" | grep -q 'Principal "acldir@KERBER.TEST" created.'; then
+    echo "directory ACL allowed addprinc: $DIRDENY" >&2
+    exit 1
+fi
+# The kept container's later cells redirect onto this path.
+docker exec "$NAME" rm -rf /tmp/kadm5.acl
+
 log "kadmin.gate" "ok" ',"leg":"rust-acl"'
 exit 0
