@@ -106,9 +106,7 @@ pub struct Principal {
     pub keys: Vec<KeyEntry>,
     pub key_history: Vec<KeyEntry>,
     pub salt: Vec<u8>,
-    pub(crate) requires_preauth: bool,
     pub max_life: u64,
-    pub(crate) locked: bool,
     pub pw_expire: u32,
     pub attributes: u32,
     pub max_renewable_life: u64,
@@ -136,9 +134,7 @@ impl std::fmt::Debug for Principal {
             .field("keys", &self.keys.len())
             .field("key_history", &self.key_history.len())
             .field("salt", &self.salt.len())
-            .field("requires_preauth", &self.requires_preauth)
             .field("max_life", &self.max_life)
-            .field("locked", &self.locked)
             .field("pw_expire", &self.pw_expire)
             .field("attributes", &self.attributes)
             .field("max_renewable_life", &self.max_renewable_life)
@@ -188,18 +184,12 @@ impl Principal {
         self.attributes & KDB_DISALLOW_ALL_TIX != 0
     }
 
-    pub(crate) fn reconcile_flags(&mut self) {
-        self.requires_preauth = self.requires_preauth();
-        self.locked = self.locked();
-    }
-
     pub(crate) fn set_locked(&mut self, on: bool) {
         if on {
             self.attributes |= KDB_DISALLOW_ALL_TIX;
         } else {
             self.attributes &= !KDB_DISALLOW_ALL_TIX;
         }
-        self.locked = on;
     }
 
     pub(crate) fn from_keys(
@@ -228,9 +218,7 @@ impl Principal {
             keys,
             key_history: Vec::new(),
             salt,
-            requires_preauth,
             max_life,
-            locked,
             pw_expire,
             attributes,
             max_renewable_life: 0,
@@ -331,7 +319,6 @@ impl PrincipalBuilder {
             },
         );
         p.attributes = self.attributes;
-        p.reconcile_flags();
         p
     }
 }
@@ -1206,8 +1193,6 @@ impl PrincipalStore {
             let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
             if let Some(a) = attributes {
                 p.attributes = a;
-                p.requires_preauth = a & KDB_REQUIRES_PRE_AUTH != 0;
-                p.locked = a & KDB_DISALLOW_ALL_TIX != 0;
             }
             if let Some(m) = max_life {
                 p.max_life = m;
@@ -1277,8 +1262,6 @@ impl PrincipalStore {
         let p = self.map.get_mut(id).ok_or(Error::NotFound)?;
         if ent.mask & kadm5_mask::ATTRIBUTES != 0 {
             p.attributes = ent.attributes;
-            p.requires_preauth = p.attributes & KDB_REQUIRES_PRE_AUTH != 0;
-            p.locked = p.attributes & KDB_DISALLOW_ALL_TIX != 0;
         }
         if ent.mask & kadm5_mask::MAX_LIFE != 0 {
             p.max_life = u64::from(ent.max_life);
@@ -1449,7 +1432,6 @@ impl PrincipalStore {
 
     pub(crate) fn put_principal(&mut self, mut p: Principal) -> Result<(), Error> {
         strip_db_args(&mut p.tl_data)?;
-        p.reconcile_flags();
         self.settle_rid(&mut p);
         if p.name.components_joined() != "K/M"
             && self.rid_owner(p.rid).is_some_and(|owner| owner != p.id())

@@ -213,7 +213,6 @@ mod tests {
             .unwrap();
         let mut p = store.get_name(&user).unwrap().clone();
         p.attributes = attrs;
-        p.requires_preauth = attrs & KDB_REQUIRES_PRE_AUTH != 0;
         state.set_on(&mut p);
         store.debug_insert(p.clone());
         (store, p)

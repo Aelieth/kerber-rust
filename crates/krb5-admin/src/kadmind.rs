@@ -1,4 +1,4 @@
-//! One loop: kpasswd, kadm5, iprop; one cap of 45 connections.
+//! One loop: kpasswd, kadm5, iprop; one connection cap.
 
 use std::fmt;
 use std::io;
@@ -327,14 +327,12 @@ impl Kadmind {
 
     pub fn serve(&mut self, listeners: &Listeners, stop: &Shutdown) -> io::Result<ServeSummary> {
         self.programs = listeners.programs;
-        let (max_conns, max_req) = (self.limits.max_connections, self.limits.max_request);
         let sockets = Sockets {
             udp: &listeners.udp,
             tcp: &listeners.tcp,
             rpc: &listeners.rpc,
         };
-        run_logged(self, &sockets, max_conns, max_req, &Wake::Shutdown(stop))
-            .map(|open_fds| ServeSummary { open_fds })
+        run_logged(self, &sockets, &Wake::Shutdown(stop)).map(|open_fds| ServeSummary { open_fds })
     }
 
     #[must_use]
@@ -582,22 +580,15 @@ pub fn serve_kadmind(
     sockets: &Sockets<'_>,
     signals: &Signals,
 ) -> io::Result<Vec<RawFd>> {
-    run_logged(
-        kadmind,
-        sockets,
-        MAX_STREAM_DATA_CONNECTIONS,
-        MAX_REQUEST,
-        &Wake::Signals(signals),
-    )
+    run_logged(kadmind, sockets, &Wake::Signals(signals))
 }
 
 fn run_logged(
     kadmind: &mut Kadmind,
     sockets: &Sockets<'_>,
-    max_conns: usize,
-    max_req: usize,
     wake: &Wake<'_>,
 ) -> io::Result<Vec<RawFd>> {
+    let (max_conns, max_req) = (kadmind.limits.max_connections, kadmind.limits.max_request);
     let set_pw = !kadmind.pwqual.is_empty();
     let set_hooks = !kadmind.hooks.is_empty();
     if set_pw {

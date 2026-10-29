@@ -729,7 +729,6 @@ impl PrincipalStore {
     }
 
     pub(crate) fn debug_insert(&mut self, mut p: Principal) {
-        p.reconcile_flags();
         self.settle_rid(&mut p);
         self.map.insert_unlogged(p.id(), p);
     }

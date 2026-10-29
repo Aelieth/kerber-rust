@@ -2,7 +2,6 @@
 
 use krb5_types::PrincipalName;
 
-use super::flags::{KDB_DISALLOW_ALL_TIX, KDB_REQUIRES_PRE_AUTH};
 use super::keys::KeyEntry;
 use super::principal::{KadmData, Principal, TlData};
 use crate::error::Error;
@@ -323,9 +322,7 @@ fn empty_entry(name: &str) -> Result<Principal, Error> {
         realm,
         keys: Vec::new(),
         key_history: Vec::new(),
-        requires_preauth: false,
         max_life: 0,
-        locked: false,
         pw_expire: 0,
         attributes: 0,
         max_renewable_life: 0,
@@ -351,7 +348,6 @@ fn empty_entry(name: &str) -> Result<Principal, Error> {
 // MIT: `ulog_conv_2dbentry` (lib/kdb/kdb_convert.c:651-703)
 // MIT: `ulog_conv_2dbentry` (lib/kdb/kdb_convert.c:705-715)
 // MIT: `ulog_conv_2dbentry` (lib/kdb/kdb_convert.c:748-756)
-/// A replica ignores all three lockout attributes.
 pub fn conv_2dbentry(
     existing: Option<&Principal>,
     name: &str,
@@ -422,8 +418,6 @@ pub fn conv_2dbentry(
         vals.iter()
             .any(|v| matches!(v, KdbeVal::TlData(tl) if tl.iter().any(|t| t.ty == ty)))
     };
-    ent.requires_preauth = ent.attributes & KDB_REQUIRES_PRE_AUTH != 0;
-    ent.locked = ent.attributes & KDB_DISALLOW_ALL_TIX != 0;
     let rekeyed = vals.iter().any(|v| matches!(v, KdbeVal::KeyData(_)));
     if rekeyed || renamed || existing.is_none() {
         ent.salt = salt_of_keys(&ent.keys, &ent.name, &ent.realm);

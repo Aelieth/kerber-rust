@@ -87,7 +87,6 @@ fn process_logged(
                     store,
                     raw,
                     sender,
-                    &bytes,
                     code,
                     &e_text,
                     detail.as_deref(),

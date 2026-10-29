@@ -16,8 +16,8 @@ use crate::error::Error as KdcError;
 use crate::mkey::{MASTER_NAME, default_master_etype, master_key_from_password};
 use crate::osa::OsaPrincEnt;
 use crate::store::{
-    IPROP_NIL, IPROP_OK, KDB_DISALLOW_ALL_TIX, KDB_LOCKDOWN_KEYS, KDB_REQUIRES_PRE_AUTH, KadmData,
-    KeyEntry, NamedPolicy, Principal, PrincipalStore, TlData,
+    IPROP_NIL, IPROP_OK, KDB_DISALLOW_ALL_TIX, KDB_LOCKDOWN_KEYS, KadmData, KeyEntry, NamedPolicy,
+    Principal, PrincipalStore, TlData,
 };
 use crate::ulog::UlogLast;
 
@@ -361,8 +361,6 @@ impl DumpPrincipal {
         }
         let salt = salt_of_keys(&keys, &name, &realm);
         let mkvno = mkvno_from_tl(&self.tl_data);
-        let requires_preauth = self.attributes & KDB_REQUIRES_PRE_AUTH != 0;
-        let locked = self.attributes & KDB_DISALLOW_ALL_TIX != 0;
         let (sid, rid) = parse_sid_tl(&self.tl_data)?;
         let osa = OsaPrincEnt::from_tl(&self.tl_data)
             .map_err(|e| DumpError::Format(format!("{}: {e}", self.name)))?;
@@ -391,9 +389,7 @@ impl DumpPrincipal {
                 keys,
                 key_history,
                 salt,
-                requires_preauth,
                 max_life: u64::from(self.max_life),
-                locked,
                 pw_expire: self.pw_expiration,
                 attributes: self.attributes,
                 max_renewable_life: u64::from(self.max_renewable_life),

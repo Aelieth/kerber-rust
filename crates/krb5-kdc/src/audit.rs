@@ -713,15 +713,10 @@ pub fn log_success(
     }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "request log, not a params struct"
-)]
 pub fn log_failure(
     store: &dyn PrincipalRead,
     raw: &[u8],
     sender: Option<&HostAddress>,
-    _bytes: &[u8],
     code: i32,
     e_text: &str,
     detail: Option<&str>,

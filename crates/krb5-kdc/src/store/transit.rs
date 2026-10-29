@@ -62,9 +62,6 @@ impl PrincipalStore {
         let (out_name, out_id, in_name, in_id) = self.trust_ids(foreign_realm);
         let make_in = !self.map.contains_key(&in_id);
         self.allow_trust(acl, actor, &out_id, &in_id, make_in)?;
-        if self.get(&out_id).is_some() {
-            return Err(Error::AlreadyExists);
-        }
         let kvno = asked_kvno(kvno)?;
         let ent = kvno_ent(kvno);
         let entry = KeyEntry::new(key.etype(), key, kvno);

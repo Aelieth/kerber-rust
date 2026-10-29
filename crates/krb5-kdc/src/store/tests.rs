@@ -279,7 +279,6 @@ fn as_cant_find_client_key_is_etype_nosupp() {
     let mut p = store.get_name(&user).unwrap().clone();
     p.keys
         .retain(|k| k.etype == EncryptionType::Aes256CtsHmacSha384192);
-    p.requires_preauth = false;
     p.attributes &= !KDB_REQUIRES_PRE_AUTH;
     store.debug_insert(p);
     let req = as_req_sname_etype(&user, 18).unwrap();

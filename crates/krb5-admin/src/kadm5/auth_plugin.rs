@@ -344,7 +344,6 @@ impl AuthStack {
 }
 
 pub struct Kadm5AuthConfig {
-    acl: Arc<Acl>,
     stack: AuthStack,
 }
 
@@ -368,7 +367,6 @@ impl Kadm5AuthConfig {
             }
         }
         Self {
-            acl,
             stack: AuthStack { modules },
         }
     }
@@ -381,10 +379,5 @@ impl Kadm5AuthConfig {
     #[must_use]
     pub fn stack(&self) -> &AuthStack {
         &self.stack
-    }
-
-    #[must_use]
-    pub fn acl(&self) -> &Acl {
-        &self.acl
     }
 }

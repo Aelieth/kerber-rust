@@ -365,7 +365,6 @@ impl PrincipalRead for MemoryStore {
             l.set_on(p);
         }
     }
-    /// Lockout sits beside the principal.
     fn update_lockout(&self, p: &Principal, stamp: u32, update: LockoutUpdate) {
         let mut g = self
             .lockout
@@ -391,7 +390,6 @@ impl PrincipalRead for MemoryStore {
 impl PrincipalWrite for MemoryStore {
     fn put_principal(&mut self, mut p: Principal) -> Result<(), Error> {
         strip_db_args(&mut p.tl_data)?;
-        p.reconcile_flags();
         self.map.insert(p.id(), p);
         Ok(())
     }
