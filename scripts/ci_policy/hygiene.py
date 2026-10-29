@@ -464,6 +464,45 @@ def check_python_compiles(files: dict[str, str] | None = None) -> None:
         _die(f"{len(bad)} Python file(s) do not compile: " + "; ".join(bad[:8]))
 
 
+# A bare `working/` (a rule line, the gitignore check) names no path.
+_WORK_DIRS = frozenset({"working", "scratch", "tmp", "temp"})
+_WORK_PATH = re.compile(r"(?<![\w/.-])(?:working|mailbox|trees|backups)/[\w.{-]")
+_NOTE_ID = re.compile(r"\b(?:D|PL|IC|IX|IS|T|R|O)[0-9]{4}\b")
+
+
+def check_release_clean(root: pathlib.Path | None = None) -> None:
+    """What git would commit has no work dir, and outside vendor/ and the selftest fixtures no
+    *.orig or *.rej, no work-area path and no mailbox note id."""
+    root = ROOT if root is None else root
+    listed = subprocess.run(
+        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        cwd=root, capture_output=True, text=True, check=False,
+    )
+    if listed.returncode != 0:
+        _die(f"git ls-files: {(listed.stderr or listed.stdout).strip()[-200:]}")
+    bad = []
+    for rel in sorted(set(filter(None, listed.stdout.split("\0")))):
+        parts = rel.split("/")
+        if _WORK_DIRS.intersection(parts[:-1]):
+            bad.append(f"{rel}: in a work dir")
+        if parts[0] == "vendor" or rel.startswith("scripts/ci_policy/selftest/"):
+            continue
+        if rel.endswith((".orig", ".rej")):
+            bad.append(f"{rel}: a merge leftover")
+        try:
+            text = (root / rel).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        bad += [
+            f"{rel}:{n}: {line.strip()[:100]}"
+            for n, line in enumerate(text.splitlines(), 1)
+            if _WORK_PATH.search(line) or _NOTE_ID.search(line)
+        ]
+    if bad:
+        _die(f"{len(bad)} release-clean finding(s): " + "; ".join(bad[:8]))
+    print("release-clean: no work dir, merge leftover, work-area path or note id")
+
+
 # rscount.py's rule. The four names are the out-of-line test files that rule misses.
 # check_form_ratios prints and does not fail.
 _RATIO_OUTLINE = frozenset({"armor_flow.rs", "a2_r17_reply.rs", "mit_pac_golden.rs", "diff_compare.rs"})

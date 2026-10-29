@@ -2,4 +2,4 @@
 # name (the INFO observations of checks.tsv). The comparison of the two legs grades a listed check KNOWN; anything else
 # that differs is a finding. Each line names the hand record that shows the difference and what would remove it.
 # check	known difference (rust leg vs MIT)	record	removed by
-obs.spnego.fragments	our TGS-REP to the DC carries the PAC (UDP 1699 B against MIT's 956), so it leaves kdc's LAN NIC in 8 IP fragments (rust) against MIT's 4	working/f-functional/logs/f-FULL-r2/hand/ra/PARITY.txt (KNOWN ra.3.lan-fragments)	nothing: the PAC in every ticket is the decided shape (Q2)
+obs.spnego.fragments	our TGS-REP to the DC carries the PAC (UDP 1699 B against MIT's 956), so it leaves kdc's LAN NIC in 8 IP fragments (rust) against MIT's 4	the full field run's hand parity record (KNOWN ra.3.lan-fragments)	nothing: the PAC in every ticket is the decided shape (Q2)

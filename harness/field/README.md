@@ -74,8 +74,7 @@ starts, so nothing listens on the LAN unfiltered.
   - To open the NIC for a moment: `sudo nft delete table inet kerber_lab_lan`.
     `sudo systemctl restart kerber-lab-lan-filter` closes it again.
   - A firewall added to kdc later must leave this table in place.
-- **Verified from the DC:** `working/logs/f-F0/lan-filter.txt` holds the
-  WinRM `Test-NetConnection` record (2026-10-01).
+- **Verified from the DC** with WinRM `Test-NetConnection` (2026-10-01).
 
 - **Host to kdc:** by design, macvtap does not carry traffic between the host
   and its own guest. Reach kdc from the host at `192.168.177.10`.
@@ -111,7 +110,7 @@ harness/field/lab.sh snapshot kdc mit-oracle   # offline snapshot (shut down, sn
 harness/field/lab.sh reset all          # revert to 'base' and boot; mitd3 stays on 'mit-d3'; kdc2 is not selected
 harness/field/lab.sh reset all base     # name base to take mitd3 to 'base' too
 harness/field/lab.sh reset kdc mit-oracle
-harness/field/lab.sh collect kdc working/logs/f-r1 /var/log/krb5kdc.log /etc/krb5.conf
+harness/field/lab.sh collect kdc ~/kerber-lab/runs/hand-r1 /var/log/krb5kdc.log /etc/krb5.conf
 harness/field/lab.sh down               # shut the VMs down (the network stays up)
 harness/field/lab.sh rebuild kdc --yes  # one VM from scratch (after a template change). kdc2 is refused
 harness/field/lab.sh destroy --yes      # remove the VMs, volumes, pool and network
@@ -738,12 +737,11 @@ upstream's release tarball, `krb5-1.22.2.tar.gz` with the sha256 pinned in
 sysconfdir and localstatedir under `/opt/mit-1.22.2` as well, so that it reads
 nothing of `/etc/krb5*`. The VM takes the tarball over ssh stdin (it never
 reaches web.mit.edu); its only network use is the Fedora repos of cloud-init.
-The build, the private realm `D3.TEST` and the snapshot `mit-d3` that carries
-them are recorded in `working/logs/f-B22/mitd3-provision/`. `lab.sh up mitd3`
-builds only this VM, and adds its DHCP lease and DNS record to a network
-defined before it joined the table (`net-update`, no restart). `check` asks
-every VM for `mitd3.kerber.test` as well as the other field names. `reset`
-with no snapshot name leaves this VM on `mit-d3`.
+The snapshot `mit-d3` carries the build and the private realm `D3.TEST`.
+`lab.sh up mitd3` builds only this VM, and adds its DHCP lease and DNS record
+to a network defined before it joined the table (`net-update`, no restart).
+`check` asks every VM for `mitd3.kerber.test` as well as the other field names.
+`reset` with no snapshot name leaves this VM on `mit-d3`.
 
 ## Where things live
 

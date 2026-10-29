@@ -1096,7 +1096,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
   reply sized and wiped. Settled live.
 - **client.** `kinit`, `klist`, `kvno`, `kdestroy` and `kswitch` are ports of MIT 1.22.2's: its
   option tables and usage, com_err texts and exit codes, `klist -k`, and no log lines. Settled
-  beside MIT's tools in a container realm (`working/logs/f-P6/`); units.
+  beside MIT's tools in a container realm; units.
 - **client.** Caches are picked as MIT's in `DIR:` and `KCM:` collections: `kinit` for another
   principal makes a new cache and switches to it; `klist -l` / `-A`, `kdestroy -A` and
   `kswitch -p` walk the collection. Settled beside MIT's tools and sssd-kcm; units.
@@ -1583,7 +1583,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
   clause on the existing `exact` row). Counts 448 = A1 128 + A2 91 +
   A3 78 + A4 146 + B1 5; exact 354 · stricter-documented 15 · deviation
   29 · absent 2 · deferred 48. W1 is closed: its plans, summaries,
-  audits and ledger draft are archived under `working/w1-sweep/`
+  audits and ledger draft are archived outside the tree
   (goal.txt `-<mmdd>-<time>` names, README + closeout); the in-tree
   cross-references (`stages.md`, ledger header, `kadm5.rs`,
   `ci-policy.py`) point at the archive.
@@ -3906,7 +3906,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
   driver's literal. `red-at-sha.sh` removes its `red-target-<sha>` cargo
   tree on EXIT (`KERBER_KEEP_RED_TARGET=1` keeps it) and stamps
   `red-at-parent=1`; `ci-policy.py --checkpoint` fails on any cargo build
-  tree left under `working/logs/`. `ci.yml` `mit-extra` drops the
+  tree left in the gitignored evidence dir. `ci.yml` `mit-extra` drops the
   `run-harness`/`stop-harness` pair that booted and stopped the stock
   container before its first gate. Every rule has a `_self_test` fixture.
 - **test.** `scripts/client-differential-gate.sh` drives MIT and Rust
@@ -4166,8 +4166,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
   the whole `harness/` tree from HEAD into the historical worktree,
   echoes `command=`, stamps `base_sha=` and `tree_sha=` (`git
   write-tree` after the overlay), and prints `gate_rc=`. W0f greens
-  recaptured under `working/logs/audit-polish-0902/w1h/` with the
-  tested-tree SHA; `i3`/`i4-unit-green` are real runs; `ci-I*.json`
+  recaptured with the tested-tree SHA; `i3`/`i4-unit-green` are real runs; `ci-I*.json`
   are raw Actions API bodies; assembled `w0d/e1|e2-live-red-*.log`
   deleted.
 - **tool.** `scripts/red-at-sha.sh` copies `scripts/lib/*.sh` and
@@ -4186,8 +4185,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
   that `extra` `addprinc` succeeded. `scripts/red-at-sha.sh` rebuilds
   a historical SHA in a `KERBER_SCRATCH` worktree and writes a
   provenance header (base SHA, worktree, `Compiling`/`Finished`,
-  binary SHA-256s). Retroactive e1/e2 reds at `6e2d0e4` are
-  `working/logs/audit-polish-0902/w0f/red-at-sha-e{1,2}.log`
+  binary SHA-256s). Retroactive e1/e2 reds at `6e2d0e4` were kept
   (verbatim `red-at-sha.sh` stdout; W0f I7).
 - **ci.** `scripts/ci-policy.py` flags echo-only `then`/`elif`/`else`
   arms independently (mixed `exit`+`echo` chains fail), joins `||` /
