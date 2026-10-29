@@ -1285,6 +1285,40 @@ echo "$MIT_XR" | grep -q 'proxy_target=host/rbcd.other.test'
 echo "$MIT_XR" | grep -q 'transited_services=host/testhost.kerber.test@KERBER.TEST'
 echo "MIT_testkdb_xrealm_rbcd"
 
+echo "==== MIT test-KDB two-realm RBCD: realm A's krbtgt/OTHER.TEST tickets, from the wire ===="
+# kvno keeps no copy of these, the S4U2Proxy referral among them, so a proxy in front of A keeps them;
+# realm B's answer is the RBCD cell's.
+xr_referrals() {
+    local conf=$1 host_kt=$2 xtgt_kt=$3 cc=$4 hex n=0
+    docker exec "$NAME" sh -c ': >/tmp/xr-proxy.txt'
+    docker exec "$NAME" sh -c "sed 's/kdc = 127.0.0.1:8892/kdc = 127.0.0.1:1894/' $conf |
+        sed '/forwardable = true/a\\    udp_preference_limit = 10000' >$conf.px"
+    docker exec -e KRB5_CONFIG="$conf.px" "$NAME" kinit -f -k -t "$host_kt" -c "$cc" \
+        host/testhost.kerber.test@KERBER.TEST >&2
+    docker exec -e KRB5_CONFIG="$conf.px" -e KRB5CCNAME="FILE:$cc" \
+        "$NAME" kvno -C -u -U user -P host/rbcd.other.test@KERBER.TEST >&2 || true
+    while read -r hex; do
+        n=$((n + 1))
+        docker exec "$NAME" python3 -c \
+            'import sys; open(sys.argv[1], "wb").write(bytes.fromhex(sys.argv[2]))' "/tmp/xr-ref-$n.der" "$hex"
+        docker exec "$NAME" /tmp/krb5-pac-extract --keytab "$xtgt_kt" --ticket "/tmp/xr-ref-$n.der" \
+            --print-client-info | grep -E '^(ticket_client|client_info_name)=' | paste -sd ' '
+    done < <(docker exec "$NAME" sed -n \
+        's/^rep#[0-9]* ticket sname=krbtgt\/OTHER.TEST realm=KERBER.TEST der=//p' /tmp/xr-proxy.txt)
+}
+kadmin_q_ok mit_kadmin_local -e KRB5_CONFIG=/tmp/test-krb5-xrealm.conf -e KRB5_KDC_PROFILE=/tmp/test-kdc-a.conf \
+    "$NAME" -- -r KERBER.TEST -q \
+    'ktadd -norandkey -k /tmp/test-xrealm-xtgt.kt krbtgt/OTHER.TEST@KERBER.TEST'
+wait_bound_free_in "$NAME" 1894 udp || die "proxy :1894 already bound"
+docker exec -d "$NAME" python3 /tmp/kdc-padata-proxy.py 1894 127.0.0.1 8892 /tmp/xr-proxy.txt
+wait_udp_in "$NAME" 1894 || die "proxy :1894 did not listen"
+MIT_REF="$(xr_referrals /tmp/test-krb5-xrealm.conf /tmp/test-xrealm-host.kt /tmp/test-xrealm-xtgt.kt \
+    /tmp/krb5cc_mit_xrealm_px)"
+echo "$MIT_REF"
+grep -qx 'ticket_client=host/testhost.kerber.test@KERBER.TEST client_info_name=user@KERBER.TEST' \
+    <<<"$MIT_REF" || die "MIT xrealm RBCD: no referral TGT for host/testhost with user's PAC client"
+echo "MIT_testkdb_xrealm_referral"
+
 echo "==== MIT test-KDB two-realm RBCD wrong realm ===="
 docker exec "$NAME" sh -c 'kill -9 "$(cat /tmp/mit-xrealm-b.pid)" 2>/dev/null || true'
 ok=0
@@ -1408,6 +1442,16 @@ if [ "$ok" != 1 ]; then
     log "s4u.mit.gate" "error" ',"error":"Rust xrealm KDCs did not listen"'
     exit 1
 fi
+echo "==== Rust two-realm RBCD: realm A's krbtgt/OTHER.TEST tickets, from the wire ===="
+printf 'addent -key -p krbtgt/OTHER.TEST@KERBER.TEST -k 1 -e aes256-cts-hmac-sha1-96\n%s\nwkt %s\nquit\n' \
+    "$XR_KEY" /tmp/rust-xrealm-xtgt.kt | docker exec -i "$NAME" ktutil >/dev/null
+RUST_REF="$(xr_referrals /tmp/rust-krb5-xrealm.conf /tmp/rust-xrealm-host.kt /tmp/rust-xrealm-xtgt.kt \
+    /tmp/krb5cc_rust_xrealm_px)"
+echo "$RUST_REF"
+[ "$RUST_REF" = "$MIT_REF" ] || die "Rust xrealm RBCD: realm A's krbtgt/OTHER.TEST tickets differ from MIT's"
+echo "RUST_testkdb_xrealm_referral"
+
+echo "==== Rust two-realm RBCD (continued) ===="
 docker exec -e KRB5_CONFIG=/tmp/rust-krb5-xrealm.conf \
     "$NAME" kinit -f -k -t /tmp/rust-xrealm-host.kt -c /tmp/krb5cc_rust_xrealm \
     host/testhost.kerber.test@KERBER.TEST

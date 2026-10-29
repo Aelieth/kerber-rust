@@ -39,6 +39,7 @@ fn main() -> ExitCode {
     let mut print_client_info = false;
     let mut last_host = false;
     let mut verify_privsvr = None;
+    let mut ticket_file = None;
     let mut i = 0usize;
     while i < args.len() {
         match args[i].as_str() {
@@ -114,6 +115,10 @@ fn main() -> ExitCode {
                 verify_privsvr = args.get(i + 1).cloned();
                 i += 2;
             }
+            "--ticket" => {
+                ticket_file = args.get(i + 1).cloned();
+                i += 2;
+            }
             _ => {
                 eprintln!(
                     "usage: krb5-pac-extract --keytab <kt> --ccache <cc> [--out <pac>] \
@@ -121,15 +126,15 @@ fn main() -> ExitCode {
                      [--print-rid] [--print-transited] [--print-types] [--print-layout] \
                      [--print-ad-types] [--tgt] [--server <name[@realm]>] \
                      [--print-delegation] [--print-client-info] [--last] \
-                     [--verify-privsvr <enctype>]"
+                     [--verify-privsvr <enctype>] [--ticket <der>]"
                 );
                 return ExitCode::from(2);
             }
         }
     }
-    let (Some(kt_path), Some(cc_path)) = (keytab, ccache) else {
+    let (Some(kt_path), true) = (keytab, ccache.is_some() || ticket_file.is_some()) else {
         eprintln!(
-            "usage: krb5-pac-extract --keytab <kt> --ccache <cc> [--out <pac>] [--print-transited]"
+            "usage: krb5-pac-extract --keytab <kt> {{--ccache <cc> | --ticket <der>}} [--out <pac>]"
         );
         return ExitCode::from(2);
     };
@@ -152,7 +157,10 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let cc = match FileCcache::parse(&fs::read(&cc_path).unwrap_or_default()) {
+    let cc = match ccache
+        .map(|p| FileCcache::parse(&fs::read(p).unwrap_or_default()))
+        .transpose()
+    {
         Ok(c) => c,
         Err(e) => {
             eprintln!("krb5-pac-extract: ccache: {e}");
@@ -162,7 +170,11 @@ fn main() -> ExitCode {
     let kdc_key = krbtgt_kt.as_ref().and_then(|p| {
         Keytab::parse(&fs::read(p).unwrap_or_default())
             .ok()
-            .and_then(|kt| local_tgt_key(&kt, &cc).or_else(|| preferred_key(&kt)))
+            .and_then(|kt| {
+                cc.as_ref()
+                    .and_then(|cc| local_tgt_key(&kt, cc))
+                    .or_else(|| preferred_key(&kt))
+            })
     });
     let usage = match KeyUsage::new(ku::TICKET) {
         Ok(u) => u,
@@ -171,52 +183,66 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let host_creds: Vec<_> = cc
-        .creds
-        .iter()
-        .filter(|cred| !cred.is_config() && cred.server.1.components_joined().starts_with("host/"))
-        .collect();
-    let tgt_creds: Vec<_> = cc
-        .creds
-        .iter()
-        .filter(|cred| {
-            !cred.is_config() && cred.server.1.components_joined().starts_with("krbtgt/")
-        })
-        .collect();
-    let named = server_sel.as_deref().and_then(|want| {
-        cc.creds.iter().find(|cred| {
-            let name = cred.server.1.components_joined();
-            let realm = std::str::from_utf8(cred.server.0.as_bytes()).unwrap_or("");
-            !cred.is_config() && (name == want || format!("{name}@{realm}") == want)
-        })
-    });
-    if let (Some(want), None) = (server_sel.as_deref(), named) {
-        eprintln!("krb5-pac-extract: no {want} ticket in ccache");
-        return ExitCode::from(1);
-    }
-    let Some(cred) = named.or_else(|| {
-        if print_tgt {
-            tgt_creds.first().copied()
-        } else if last_host {
-            host_creds.last().copied()
-        } else {
-            host_creds.first().copied()
+    let (sname, ticket_der) = if let Some(path) = &ticket_file {
+        let Ok(der) = fs::read(path) else {
+            eprintln!("krb5-pac-extract: cannot read {path}");
+            return ExitCode::from(1);
+        };
+        (None, der)
+    } else {
+        let Some(cc) = &cc else {
+            return ExitCode::from(2);
+        };
+        let host_creds: Vec<_> = cc
+            .creds
+            .iter()
+            .filter(|cred| {
+                !cred.is_config() && cred.server.1.components_joined().starts_with("host/")
+            })
+            .collect();
+        let tgt_creds: Vec<_> = cc
+            .creds
+            .iter()
+            .filter(|cred| {
+                !cred.is_config() && cred.server.1.components_joined().starts_with("krbtgt/")
+            })
+            .collect();
+        let named = server_sel.as_deref().and_then(|want| {
+            cc.creds.iter().find(|cred| {
+                let name = cred.server.1.components_joined();
+                let realm = std::str::from_utf8(cred.server.0.as_bytes()).unwrap_or("");
+                !cred.is_config() && (name == want || format!("{name}@{realm}") == want)
+            })
+        });
+        if let (Some(want), None) = (server_sel.as_deref(), named) {
+            eprintln!("krb5-pac-extract: no {want} ticket in ccache");
+            return ExitCode::from(1);
         }
-    }) else {
-        eprintln!(
-            "krb5-pac-extract: no {} ticket in ccache",
-            if print_tgt { "krbtgt/" } else { "host/" }
-        );
-        return ExitCode::from(1);
+        let Some(cred) = named.or_else(|| {
+            if print_tgt {
+                tgt_creds.first().copied()
+            } else if last_host {
+                host_creds.last().copied()
+            } else {
+                host_creds.first().copied()
+            }
+        }) else {
+            eprintln!(
+                "krb5-pac-extract: no {} ticket in ccache",
+                if print_tgt { "krbtgt/" } else { "host/" }
+            );
+            return ExitCode::from(1);
+        };
+        (Some(cred.server.1.components_joined()), cred.ticket.clone())
     };
-    let sname = cred.server.1.components_joined();
-    let ticket: Ticket = match decode(&cred.ticket) {
+    let ticket: Ticket = match decode(&ticket_der) {
         Ok(t) => t,
         Err(e) => {
             eprintln!("krb5-pac-extract: ticket DER: {e}");
             return ExitCode::from(1);
         }
     };
+    let sname = sname.unwrap_or_else(|| ticket.sname.components_joined());
     for ent in &kt.entries {
         let Ok(plain) = decrypt(&ent.key, usage, ticket.enc_part.cipher.as_ref()) else {
             continue;
@@ -303,7 +329,7 @@ fn main() -> ExitCode {
                             .join(",");
                         println!("pac_layout={layout}");
                         println!("pac_len={}", pac.len());
-                        println!("ticket_len={}", cred.ticket.len());
+                        println!("ticket_len={}", ticket_der.len());
                     }
                     if print_client_info {
                         let Some((_, name)) = parsed

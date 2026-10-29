@@ -6,7 +6,8 @@ usage: kdc-padata-proxy.py <listen-port> <kdc-host> <kdc-port> [out-file]
 Each request line is `req#<n> msg_type=<10|12> padata=[<type>, ...]` in wire
 order (an absent padata field prints `padata=[]`). A KRB-ERROR reply is
 `rep#<n> error_code=… e_data_encoding=… e_data_types=…`; any other reply is
-`rep#<n> tag=0x.. len=…`; a 5 s KDC timeout is `rep#<n> timeout`.
+`rep#<n> tag=0x.. len=…`; a 5 s KDC timeout is `rep#<n> timeout`. A KDC-REP is
+followed by `rep#<n> ticket sname=<a/b> realm=<R> der=<hex>`, its ticket.
 """
 from __future__ import annotations
 
@@ -108,6 +109,38 @@ def parse_kdc_rep(pdu: bytes) -> tuple[int | None, list[int]]:
     return msg_type, types
 
 
+def kdc_rep_ticket(pdu: bytes) -> tuple[str, str, bytes]:
+    """(sname, realm, Ticket DER) of an AS-REP or TGS-REP."""
+    _, seq, _ = _tlv(pdu, 0)
+    _, body, _ = _tlv(seq, 0)
+    i = 0
+    while i < len(body):
+        tag, val, i = _tlv(body, i)
+        if tag == 0xA5:
+            _, _, end = _tlv(val, 0)
+            der = val[:end]
+            _, tseq, _ = _tlv(der, 0)
+            _, tbody, _ = _tlv(tseq, 0)
+            f = {}
+            j = 0
+            while j < len(tbody):
+                ftag, fval, j = _tlv(tbody, j)
+                f[ftag] = fval
+            realm = _tlv(f[0xA1], 0)[1].decode()
+            _, name, _ = _tlv(f[0xA2], 0)
+            k, parts = 0, []
+            while k < len(name):
+                ntag, nval, k = _tlv(name, k)
+                if ntag == 0xA1:
+                    _, comps, _ = _tlv(nval, 0)
+                    m = 0
+                    while m < len(comps):
+                        _, c, m = _tlv(comps, m)
+                        parts.append(c.decode())
+            return "/".join(parts), realm, der
+    raise ValueError("no ticket")
+
+
 def parse_error_edata(pdu: bytes) -> tuple[int | None, str, list[int]]:
     """(error_code, encoding, e_data types) of a KRB-ERROR (0x7e)."""
     if not pdu or pdu[0] != 0x7E:
@@ -203,6 +236,11 @@ def main() -> int:
             _, types = parse_kdc_rep(reply)
             tag = reply[0]
             rline = f"rep#{n} tag=0x{tag:02x} padata={types} len={len(reply)}\n"
+            try:
+                sname, realm, der = kdc_rep_ticket(reply)
+                rline += f"rep#{n} ticket sname={sname} realm={realm} der={der.hex()}\n"
+            except (ValueError, IndexError, KeyError, UnicodeDecodeError):
+                rline += f"rep#{n} ticket unparsed\n"
         else:
             tag = reply[0] if reply else 0
             rline = f"rep#{n} tag=0x{tag:02x} len={len(reply)}\n"
