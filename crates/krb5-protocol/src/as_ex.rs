@@ -570,8 +570,14 @@ fn finish_as_rep_keys(
         ask_gak_question(pw)?;
         trace_gak(req, rep.0.padata.as_deref(), etypes, false);
         let password = pw.get().map_err(ModuleFail::unwrapped)?;
-        let salt = salt_cname(cname).default_salt(realm);
-        let key = string_to_key(etype, &password, &salt, None)?;
+        let (salt, params) = fallback_s2k(
+            rep.0.padata.as_deref(),
+            etypes,
+            None,
+            &rep.0.cname,
+            &rep.0.crealm,
+        );
+        let key = string_to_key(etype, &password, &salt, params.as_deref())?;
         trace::init_creds_as_key_gak((&key).into());
         return finish_as_rep(
             req.profile,
@@ -2235,10 +2241,13 @@ fn trace_preauth_input(padata: &[PaData], etypes: &[i32]) {
     }
 }
 
-fn trace_etype_info(padata: &[PaData], etypes: &[i32]) {
-    type Entry = (i32, Option<Vec<u8>>, Vec<u8>);
-    let entries: Option<Vec<Entry>> = if let Some(p) = find_pa(padata, pa::ETYPE_INFO2) {
-        decode::<EtypeInfo2>(p.padata_value.as_ref())
+type EtypeEntry = (i32, Option<Vec<u8>>, Vec<u8>);
+type ReplyS2k = (Option<Vec<u8>>, Option<Vec<u8>>);
+
+// MIT: `k5_get_etype_info` (lib/krb5/krb/preauth2.c:798-809)
+fn etype_entries(padata: &[PaData]) -> Option<Vec<EtypeEntry>> {
+    if let Some(p) = find_pa(padata, pa::ETYPE_INFO2) {
+        return decode::<EtypeInfo2>(p.padata_value.as_ref())
             .ok()
             .map(|info| {
                 info.iter()
@@ -2253,36 +2262,27 @@ fn trace_etype_info(padata: &[PaData], etypes: &[i32]) {
                         )
                     })
                     .collect()
-            })
-    } else if let Some(p) = find_pa(padata, pa::ETYPE_INFO) {
-        decode::<EtypeInfo>(p.padata_value.as_ref())
-            .ok()
-            .map(|info| {
-                info.iter()
-                    .map(|e| {
-                        (
-                            e.etype,
-                            e.salt.as_ref().map(|s| s.as_ref().to_vec()),
-                            Vec::new(),
-                        )
-                    })
-                    .collect()
-            })
-    } else {
-        None
-    };
-    if let Some(list) = entries {
-        if let Some((etype, salt, params)) = etypes
-            .iter()
-            .find_map(|want| list.iter().find(|e| e.0 == *want))
-        {
-            trace::preauth_etype_info(*etype, salt.as_deref().unwrap_or_default(), params);
-        }
-        return;
+            });
     }
-    let Some(p) = find_pa(padata, pa::PW_SALT).or_else(|| find_pa(padata, pa::AFS3_SALT)) else {
-        return;
-    };
+    let p = find_pa(padata, pa::ETYPE_INFO)?;
+    decode::<EtypeInfo>(p.padata_value.as_ref())
+        .ok()
+        .map(|info| {
+            info.iter()
+                .map(|e| {
+                    (
+                        e.etype,
+                        e.salt.as_ref().map(|s| s.as_ref().to_vec()),
+                        Vec::new(),
+                    )
+                })
+                .collect()
+        })
+}
+
+// MIT: `get_salt` (lib/krb5/krb/preauth2.c:743-786)
+fn pw_salt(padata: &[PaData]) -> Option<(i32, Vec<u8>)> {
+    let p = find_pa(padata, pa::PW_SALT).or_else(|| find_pa(padata, pa::AFS3_SALT))?;
     let mut salt = p.padata_value.as_ref().to_vec();
     if p.padata_type == pa::AFS3_SALT {
         if let Some(at) = salt.iter().position(|&b| b == b'@') {
@@ -2292,7 +2292,22 @@ fn trace_etype_info(padata: &[PaData], etypes: &[i32]) {
             salt.pop();
         }
     }
-    trace::preauth_salt(&salt, p.padata_type);
+    Some((p.padata_type, salt))
+}
+
+fn trace_etype_info(padata: &[PaData], etypes: &[i32]) {
+    if let Some(list) = etype_entries(padata) {
+        if let Some((etype, salt, params)) = etypes
+            .iter()
+            .find_map(|want| list.iter().find(|e| e.0 == *want))
+        {
+            trace::preauth_etype_info(*etype, salt.as_deref().unwrap_or_default(), params);
+        }
+        return;
+    }
+    if let Some((kind, salt)) = pw_salt(padata) {
+        trace::preauth_salt(&salt, kind);
+    }
 }
 
 fn trace_reply_padata(padata: Option<&[PaData]>, etypes: &[i32], module: Option<(&str, i32, i64)>) {
@@ -2342,14 +2357,15 @@ pub(super) fn fallback_s2k(
     reply_cname: &PrincipalName,
     reply_realm: &krb5_types::Realm,
 ) -> LearnedSalt {
-    if let Some(salt) = reply_salt(padata, etypes) {
-        return (salt, reply_s2kparams(padata, etypes));
+    let default_salt = || {
+        let text = String::from_utf8_lossy(reply_realm.as_bytes());
+        salt_cname(reply_cname).default_salt(&text)
+    };
+    match reply_s2k(padata, etypes) {
+        Some((Some(salt), params)) => (salt, params),
+        Some((None, params)) => (default_salt(), params),
+        None => learned.unwrap_or_else(|| (default_salt(), None)),
     }
-    if let Some(learned) = learned {
-        return learned;
-    }
-    let text = String::from_utf8_lossy(reply_realm.as_bytes());
-    (salt_cname(reply_cname).default_salt(&text), None)
 }
 
 fn trace_gak(req: &AsRequest<'_>, padata: Option<&[PaData]>, etypes: &[i32], keytab: bool) {
@@ -2362,22 +2378,24 @@ fn trace_gak(req: &AsRequest<'_>, padata: Option<&[PaData]>, etypes: &[i32], key
     trace::init_creds_gak(salt.unwrap_or(&default_salt), &[]);
 }
 
-fn reply_salt(padata: Option<&[PaData]>, etypes: &[i32]) -> Option<Vec<u8>> {
-    let p = find_pa(padata?, pa::ETYPE_INFO2)?;
-    let info = decode::<EtypeInfo2>(p.padata_value.as_ref()).ok()?;
-    let entry = etypes
+/// The reply's salt and s2kparams: `Some((None, _))` is an entry with no salt, the default one.
+// MIT: `k5_get_etype_info` (lib/krb5/krb/preauth2.c:788-846)
+fn reply_s2k(padata: Option<&[PaData]>, etypes: &[i32]) -> Option<ReplyS2k> {
+    let padata = padata?;
+    let Some(list) = etype_entries(padata) else {
+        return pw_salt(padata).map(|(kind, salt)| {
+            let params = (kind == pa::AFS3_SALT).then(|| vec![1]);
+            (Some(salt), params)
+        });
+    };
+    let (_, salt, params) = etypes
         .iter()
-        .find_map(|want| info.iter().find(|e| e.etype == *want))?;
-    entry.salt.as_ref().map(|s| s.as_bytes().to_vec())
+        .find_map(|want| list.iter().find(|e| e.0 == *want))?;
+    Some((salt.clone(), Some(params.clone()).filter(|p| !p.is_empty())))
 }
 
-fn reply_s2kparams(padata: Option<&[PaData]>, etypes: &[i32]) -> Option<Vec<u8>> {
-    let p = find_pa(padata?, pa::ETYPE_INFO2)?;
-    let info = decode::<EtypeInfo2>(p.padata_value.as_ref()).ok()?;
-    let entry = etypes
-        .iter()
-        .find_map(|want| info.iter().find(|e| e.etype == *want))?;
-    entry.s2kparams.as_ref().map(|p| p.as_ref().to_vec())
+fn reply_salt(padata: Option<&[PaData]>, etypes: &[i32]) -> Option<Vec<u8>> {
+    reply_s2k(padata, etypes)?.0
 }
 
 // MIT: `krb5_kt_get_entry` (lib/krb5/keytab/ktfns.c:57-80)

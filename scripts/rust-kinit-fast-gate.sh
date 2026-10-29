@@ -231,6 +231,28 @@ for off in 120 -120 0; do
     done
 done
 
+echo "==== no preauth: the reply's salt (norealm, onlyrealm, special) takes the password key (MIT first) ===="
+for salt in norealm onlyrealm special; do
+    kadmin_q_ok mit_kadmin_local "$NAME" -- -q "addprinc -pw userpassword -e aes256-cts-hmac-sha1-96:$salt -requires_preauth s_$salt"
+    for who in mit rust; do
+        docker exec "$NAME" rm -f /tmp/sl.cc
+        set +e
+        if [ "$who" = mit ]; then
+            SL="$(docker exec "$NAME" sh -c "printf 'userpassword\n' | kinit -c /tmp/sl.cc s_$salt@KERBER.TEST" 2>&1)"
+        else
+            SL="$(docker exec -e KRB5_PASSWORD=userpassword "$NAME" \
+                /tmp/krb5-kinit -c /tmp/sl.cc "s_$salt@KERBER.TEST" 2>&1)"
+        fi
+        src=$?
+        set -e
+        echo "$who kinit $salt key rc=$src: $SL"
+        if [ "$src" -ne 0 ]; then
+            log "fast.client.gate" "error" ",\"error\":\"$who kinit refused a $salt key without preauth\",\"rc\":$src"
+            exit 1
+        fi
+    done
+done
+
 echo "==== require_auth encrypted_challenge: FAST issued, password 12 both legs ===="
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdb" "$NAME":/tmp/krb5-kdb
