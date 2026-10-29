@@ -1,6 +1,6 @@
 use krb5_asn1::encode;
 use krb5_crypto::{KeyUsage, ProtocolKey, encrypt};
-use krb5_protocol::{ReplayCache, unwrap_krb_cred};
+use krb5_protocol::unwrap_krb_cred;
 use krb5_types::{
     EncKrbCredPart, EncryptedData, EncryptionKey, KerberosTime, KrbCred, KrbCredInfo,
     PrincipalName, Realm, Ticket, TicketFlags, ku,
@@ -71,13 +71,12 @@ pub(super) fn krb_cred_for_deleg(
     Ok(encode(&cred)?)
 }
 
-// MIT krb5_rd_cred; see docs/parity/b1-client.md
+// MIT: `rd_and_store_for_creds` (accept_sec_context.c:162-279)
 pub(super) fn extract_delegated(
     cksum: &[u8],
     flags: u32,
     subkey: Option<&ProtocolKey>,
     ticket_session: &ProtocolKey,
-    replay: &ReplayCache,
 ) -> Result<Option<String>, Error> {
     if flags & GSS_C_DELEG == 0 {
         return Ok(None);
@@ -94,10 +93,10 @@ pub(super) fn extract_delegated(
     let raw = &cksum[28..28 + dlgth];
     let mut part = None;
     if let Some(sk) = subkey {
-        part = unwrap_krb_cred(sk, raw, replay).ok();
+        part = unwrap_krb_cred(sk, raw).ok();
     }
     if part.is_none() {
-        part = unwrap_krb_cred(ticket_session, raw, replay).ok();
+        part = unwrap_krb_cred(ticket_session, raw).ok();
     }
     let part = part.ok_or_else(|| Error::Inner("gss failure".into()))?;
     let info = part.1.ticket_info.first().ok_or(Error::Truncated)?;

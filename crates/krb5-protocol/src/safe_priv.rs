@@ -1,4 +1,4 @@
-//! Accepted only after checksum or decryption, 300 s window, new replay tag.
+//! SAFE, PRIV: after integrity, 300 s window, new replay tag.
 //! Unlike MIT: sequence not checked against the remote one.
 
 use zeroize::{Zeroize, Zeroizing};
@@ -575,7 +575,6 @@ pub fn build_krb_cred(
 pub fn unwrap_krb_cred(
     session: &ProtocolKey,
     raw: &[u8],
-    replay: &ReplayCache,
 ) -> Result<(KrbCred, EncKrbCredPart), Error> {
     let msg: KrbCred = decode(raw)?;
     let usage = KeyUsage::new(ku::KRB_CRED_ENC_PART)?;
@@ -586,14 +585,6 @@ pub fn unwrap_krb_cred(
         msg.enc_part.cipher.as_ref(),
     )?;
     let part: EncKrbCredPart = decode(&plain)?;
-    accept_fresh(
-        replay,
-        "CRED",
-        part.timestamp.as_ref(),
-        None,
-        FreshPolicy::TimeOnly,
-        enc_tag(&msg.enc_part)?,
-    )?;
     Ok((msg, part))
 }
 
@@ -624,17 +615,6 @@ mod tests {
         let cache = ReplayCache::new();
         assert_eq!(unwrap_krb_priv(&key, &raw, &cache).unwrap(), b"secret");
         assert!(unwrap_krb_priv(&key, &raw, &cache).is_err());
-    }
-
-    #[test]
-    fn cred_window_and_second_unwrap_fails() {
-        let key = session();
-        let msg = build_krb_cred(&key, Vec::new(), Vec::new()).unwrap();
-        let raw = encode(&msg).unwrap();
-        let cache = ReplayCache::new();
-        let (_, part) = unwrap_krb_cred(&key, &raw, &cache).unwrap();
-        assert!(part.timestamp.is_some());
-        assert!(unwrap_krb_cred(&key, &raw, &cache).is_err());
     }
 
     #[test]

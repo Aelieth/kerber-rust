@@ -17,9 +17,9 @@ use krb5_protocol::{
 };
 use krb5_types::{
     ApOptions, ApReq, Authenticator, AuthorizationDataValue, ChangePasswdData, Checksum,
-    EncKrbPrivPart, EncTicketPart, EncryptedData, EncryptionKey, HostAddress, KerberosTime,
-    KrbError, KrbPriv, Microseconds, OctetString, PrincipalName, Ticket, TicketFlags,
-    TransitedEncoding, ascii, flag_bit, ku,
+    EncKrbCredPart, EncKrbPrivPart, EncTicketPart, EncryptedData, EncryptionKey, HostAddress,
+    KerberosTime, KrbCred, KrbCredInfo, KrbError, KrbPriv, Microseconds, OctetString,
+    PrincipalName, Ticket, TicketFlags, TransitedEncoding, ascii, flag_bit, ku,
 };
 
 const SERVICE: &str = "host/oracle.kerber.test@KERBER.TEST";
@@ -1483,6 +1483,7 @@ fn gss_errtok(keytab: &str, service: &str) -> Result<(), String> {
         krb5_gss::GSS_C_CHANNEL_BOUND,
     );
     let (bad_id, finished) = ([2, 0, 0, 0], [0, 0, 0, 2, 0, 0, 0, 0]);
+    let stale = stale_deleg(&spec, &now)?;
     let samba = Checksum {
         cksumtype: 16,
         checksum: OctetString::from(vec![0xff; 12]),
@@ -1496,6 +1497,7 @@ fn gss_errtok(keytab: &str, service: &str) -> Result<(), String> {
         ("framed-dce", true, false, gss(mutual | dce, &[]), None),
         ("samba-bad", true, true, samba, None),
         ("cb-flag", true, false, gss(mutual | cb, &[]), None),
+        ("deleg-old", true, false, gss(mutual | deleg, &stale), None),
     ];
     for (usec, (name, framed, mutual_required, cksum, authorization_data)) in (1..).zip(cases) {
         let authenticator = Authenticator {
@@ -1519,6 +1521,59 @@ fn gss_errtok(keytab: &str, service: &str) -> Result<(), String> {
         println!("{name} {}", hex(&token));
     }
     Ok(())
+}
+
+fn stale_deleg(spec: &TicketSpec, now: &KerberosTime) -> Result<Vec<u8>, String> {
+    let at = |s: i64| now.add_seconds(s).map_err(|e| e.to_string());
+    let realm = ascii(&spec.realm);
+    let part = EncKrbCredPart {
+        ticket_info: vec![KrbCredInfo {
+            key: EncryptionKey {
+                keytype: 18,
+                keyvalue: OctetString::from(SUBKEY.to_vec()),
+            },
+            prealm: Some(realm.clone()),
+            pname: Some(PrincipalName::new(
+                PrincipalName::NT_PRINCIPAL,
+                [spec.client.as_str()],
+            )),
+            flags: None,
+            authtime: None,
+            starttime: None,
+            endtime: Some(at(3600)?),
+            renew_till: None,
+            srealm: Some(realm),
+            sname: Some(PrincipalName::new(
+                PrincipalName::NT_SRV_INST,
+                ["krbtgt", spec.realm.as_str()],
+            )),
+            caddr: None,
+        }],
+        nonce: None,
+        timestamp: Some(at(-86_400)?),
+        usec: None,
+        s_address: None,
+        r_address: None,
+    };
+    let cred = KrbCred {
+        pvno: KrbCred::PVNO,
+        msg_type: KrbCred::MSG_TYPE,
+        tickets: vec![forged_ticket(spec, now)?],
+        enc_part: EncryptedData {
+            etype: 18,
+            kvno: None,
+            cipher: encrypt(
+                &key(&SESSION_KEY)?,
+                usage(ku::KRB_CRED_ENC_PART)?,
+                &der!(&part)?,
+            )
+            .map_err(|e| e.to_string())?
+            .into(),
+        },
+    };
+    let der = der!(&cred)?;
+    let len = u16::try_from(der.len()).map_err(|e| e.to_string())?;
+    Ok([&1u16.to_le_bytes()[..], &len.to_le_bytes(), &der].concat())
 }
 
 fn gss_framed(ap: &[u8]) -> Vec<u8> {

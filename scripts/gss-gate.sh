@@ -442,7 +442,8 @@ done
 echo "==== error tokens from the checksum on: crafted AP-REQs, MIT then Rust ===="
 # accept_sec_context.c:551, 855-858: refusals after the flags send the token on their mutual flag;
 # samba-bad (a non-0x8003 checksum) asks in the AP options; cb-flag claims CHANNEL_BOUND, which
-# INITIATOR_FLAGS (:414-417) drops.
+# INITIATOR_FLAGS (:414-417) drops; deleg-old's KRB-CRED is a day old, and rd_and_store_for_creds
+# (:172-175) clears the flags that would check its time.
 CRAFTED="$(docker exec "$NAME" /tmp/rd-sweep gss-errtok /etc/krb5kdc/testhost.keytab host/testhost.kerber.test)"
 KRB5_ERR='reply=krb5 tokid=0300'
 SERVER='realm=KERBER.TEST sname=host/testhost.kerber.test'
@@ -452,32 +453,35 @@ while read -r name hex; do
         "/tmp/gss-errtok-$name" "$hex"
     mit_acceptor 4464
     MIT_TOK="$(docker exec "$NAME" python3 /tmp/gss-reply.py 4464 "/tmp/gss-errtok-$name")"
-    if [ "$name" = cb-flag ]; then
-        require_log "$NAME" /tmp/gss-mit-errtok-4464.log 'inquire flags=' "MIT's flags for cb-flag"
+    case $name in cb-flag | deleg-old)
+        require_log "$NAME" /tmp/gss-mit-errtok-4464.log 'inquire flags=' "MIT's flags for $name"
         MIT_FLAGS="$(docker exec "$NAME" sed -n 's/.*inquire flags=\([0-9]*\) .*/\1/p' /tmp/gss-mit-errtok-4464.log)"
-    fi
+    esac
     rust_acceptor 4465
     RUST_TOK="$(docker exec "$NAME" python3 /tmp/gss-reply.py 4465 "/tmp/gss-errtok-$name")"
-    if [ "$name" = cb-flag ]; then
-        require_log "$NAME" /tmp/gss-accept-errtok-4465.log 'inquire flags=' "our flags for cb-flag"
-        RUST_FLAGS="$(docker exec "$NAME" sed -n 's/.*inquire flags=\([0-9]*\) .*/\1/p' /tmp/gss-accept-errtok-4465.log)"
-        echo "cb-flag inquire flags: mit $MIT_FLAGS rust $RUST_FLAGS"
-        [ $((MIT_FLAGS & 0x800)) = 0 ] || die "MIT's acceptor reports CHANNEL_BOUND for cb-flag: $MIT_FLAGS"
-        [ "$RUST_FLAGS" = "$MIT_FLAGS" ] || differ="$differ cb-flag-flags"
-    fi
     echo "error token $name: mit $MIT_TOK"
     echo "error token $name: rust $RUST_TOK"
+    case $name in cb-flag | deleg-old)
+        require_log "$NAME" /tmp/gss-accept-errtok-4465.log 'inquire flags=' "our flags for $name"
+        RUST_FLAGS="$(docker exec "$NAME" sed -n 's/.*inquire flags=\([0-9]*\) .*/\1/p' /tmp/gss-accept-errtok-4465.log)"
+        echo "$name inquire flags: mit $MIT_FLAGS rust $RUST_FLAGS"
+        [ "$RUST_FLAGS" = "$MIT_FLAGS" ] || differ="$differ $name-flags"
+    esac
+    [ "$name" != cb-flag ] || [ $((MIT_FLAGS & 0x800)) = 0 ] ||
+        die "MIT's acceptor reports CHANNEL_BOUND for cb-flag: $MIT_FLAGS"
+    [ "$name" != deleg-old ] || [ $((MIT_FLAGS & 0x1)) = 1 ] ||
+        die "MIT's acceptor did not take the day-old KRB-CRED: $MIT_FLAGS"
     case $name in
         deleg-id | raw-nodce | framed-dce | samba-bad) want="$KRB5_ERR code=60 $SERVER" ;;
         finished | cbt-dup) want="$KRB5_ERR code=40 $SERVER" ;;
         deleg-id-nomutual) want='reply=none' ;;
-        cb-flag) want='reply=krb5 tokid=0200' ;;
+        cb-flag | deleg-old) want='reply=krb5 tokid=0200' ;;
         *) die "no expected error token for $name" ;;
     esac
     case $MIT_TOK in "$want"*) ;; *) die "MIT's $name error token is not '$want': $MIT_TOK" ;; esac
     [ "$RUST_TOK" = "$MIT_TOK" ] || differ="$differ $name"
 done <<<"$CRAFTED"
-[ "$(wc -l <<<"$CRAFTED")" -eq 8 ] || die "rd-sweep gss-errtok made $(wc -l <<<"$CRAFTED") AP-REQs, not 8"
+[ "$(wc -l <<<"$CRAFTED")" -eq 9 ] || die "rd-sweep gss-errtok made $(wc -l <<<"$CRAFTED") AP-REQs, not 9"
 [ -z "$differ" ] || die "the Rust error tokens differ from MIT's:$differ"
 
 echo "==== an error token read by the initiator: CB mismatch, MIT then Rust initiator, MIT acceptor ===="

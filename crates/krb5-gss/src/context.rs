@@ -140,7 +140,6 @@ fn process_checksum(
     acceptor_cb: Option<&ChannelBindings>,
     ticket_session: &ProtocolKey,
     subkey: Option<&ProtocolKey>,
-    replay: &ReplayCache,
     flags_out: &mut u32,
 ) -> Result<Option<String>, CodedError> {
     let fail = |e: Error| (e, err::GENERIC);
@@ -189,8 +188,8 @@ fn process_checksum(
                 if rest.len() < option_len || option_id != KRB5_GSS_FOR_CREDS {
                     return Err(gss_failure());
                 }
-                delegated = extract_delegated(raw, token_flags, subkey, ticket_session, replay)
-                    .map_err(fail)?;
+                delegated =
+                    extract_delegated(raw, token_flags, subkey, ticket_session).map_err(fail)?;
                 if delegated.is_some() {
                     *flags_out |= GSS_C_DELEG;
                 }
@@ -596,7 +595,6 @@ impl GssContext {
         token_flags: &mut u32,
     ) -> Result<(Self, Option<Vec<u8>>), CodedError> {
         let generic = |e: Error| (e, err::GENERIC);
-        let replay = ReplayCache::new();
         let sender = channel_bindings
             .filter(|cb| cb.initiator_addrtype == crate::oid::GSS_C_AF_INET)
             .map(|cb| HostAddress {
@@ -651,7 +649,6 @@ impl GssContext {
             channel_bindings,
             &ticket_session,
             subkey.as_ref(),
-            &replay,
             token_flags,
         )?;
         // MIT: `kg_accept_krb5` (accept_sec_context.c:855-859)
