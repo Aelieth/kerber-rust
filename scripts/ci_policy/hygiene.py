@@ -504,7 +504,6 @@ def check_release_clean(root: pathlib.Path | None = None) -> None:
 
 
 # rscount.py's rule. The four names are the out-of-line test files that rule misses.
-# check_form_ratios prints and does not fail.
 _RATIO_OUTLINE = frozenset({"armor_flow.rs", "a2_r17_reply.rs", "mit_pac_golden.rs", "diff_compare.rs"})
 _RATIO_TEST_ATTR = re.compile(r"^\s*#\[cfg\((test|all\(test.*|any\(test.*)\)\]")
 
@@ -797,18 +796,19 @@ def check_mit_cites(root: pathlib.Path | None = None) -> None:
 
 
 def check_form_ratios(root: pathlib.Path | None = None) -> None:
-    """Print product comment characters over product code characters. This does not fail the share."""
+    """Print comment characters over code characters, and fail a crate above 3.000%."""
     base = ROOT if root is None else root
     tot, per, _bad = _char_totals(base)
 
     def share(num: int, den: int) -> str:
-        return f"{num / den:.1%}" if den else "0.0%"
+        return f"{num / den:.3%}" if den else "0.000%"
 
     print(
         f"form: product code chars {tot['code']}, comment chars {tot['comment']}, "
         f"comment share {share(tot['comment'], tot['code'])}, "
         f"cite chars exempt {tot['exempt']}"
     )
+    over = []
     for name in sorted(k for k in per if (base / "crates" / k).is_dir()):
         row = per[name]
         print(
@@ -816,3 +816,7 @@ def check_form_ratios(root: pathlib.Path | None = None) -> None:
             f"comment share {share(row['comment'], row['code'])}, "
             f"cite chars exempt {row['exempt']}"
         )
+        if row["comment"] * 100 > row["code"] * 3:
+            over.append(f"{name} {share(row['comment'], row['code'])}")
+    if over:
+        _die("comment share above 3.000%: " + ", ".join(over))
