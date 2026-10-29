@@ -63,14 +63,7 @@ pub(super) fn kadm5_or_iprop(
         ) {
             return Err(Error::ProcUnavail);
         }
-        return Ok(dispatch_iprop(
-            store,
-            authcfg,
-            iprop_resync,
-            who,
-            proc,
-            args,
-        ));
+        return dispatch_iprop(store, authcfg, iprop_resync, who, proc, args);
     }
     dispatch_kadm5_ticket(store, authcfg, who.client, proc, args, initial, changepw)
 }

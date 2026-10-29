@@ -3,7 +3,8 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::fs;
-use std::path::Path;
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
 
 use krb5_crypto::{EncryptionType, ProtocolKey, kdb_decrypt_key, kdb_encrypt_key};
 use krb5_protocol::write_fresh_secret_file;
@@ -894,7 +895,12 @@ pub fn dump_store_iprop_with_key(
 }
 
 // MIT: `ipropx_resync` (kadmin/server/ipropd_svc.c:343-344)
-pub fn conditional_iprop_dump(store: &PrincipalStore, dump_file: &Path) -> Result<(), DumpError> {
+// MIT: `dump_db` (kadmin/dbutil/dump.c:1173-1188)
+pub fn conditional_iprop_dump(
+    store: &PrincipalStore,
+    dump_file: &Path,
+    vers: u32,
+) -> Result<(), DumpError> {
     if let Some(ulog) = store.ulog()
         && dump_current_in_ulog(dump_file, ulog)
     {
@@ -904,9 +910,93 @@ pub fn conditional_iprop_dump(store: &PrincipalStore, dump_file: &Path) -> Resul
         .journal_key()
         .ok_or_else(|| DumpError::Crypto("no master key for the iprop dump".to_owned()))?;
     let last = store.ulog_last().unwrap_or_default();
-    let text = dump_store_iprop_with_key(store, &mkey, last)?;
-    write_fresh_secret_file(dump_file, text.as_bytes())?;
+    let text = write_dump_nra(store, &mkey, true)?;
+    let text = if vers == 0 {
+        iprop_v0(last, &text)
+    } else {
+        iprop_header(last, &text)
+    };
+    write_dump_with_ok(dump_file, text.as_bytes()).map_err(|(_, e)| DumpError::Io(e))
+}
+
+// MIT: `dump_db` (kadmin/dbutil/dump.c:1318-1340)
+/// Header and records: one fresh, locked view.
+pub fn conditional_iprop_dump_fresh(
+    store: &crate::SharedDump,
+    dump_file: &Path,
+    vers: u32,
+) -> Result<(), DumpError> {
+    for _ in 0..3 {
+        {
+            let g = store
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            match g.read_hold()? {
+                None => return conditional_iprop_dump(&g, dump_file, vers),
+                Some((held, false)) => {
+                    let done = conditional_iprop_dump(&g, dump_file, vers);
+                    drop(held);
+                    return done;
+                }
+                Some((held, true)) => drop(held),
+            }
+        }
+        store
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .reload_if_stale()?;
+    }
+    Err(DumpError::Format(
+        "the database kept changing during the iprop dump".to_owned(),
+    ))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DumpOkStage {
+    Create,
+    Lock,
+    Write,
+}
+
+// MIT: `prep_ok_file` (kadmin/dbutil/dump.c:171-208)
+// MIT: `create_ofile` (kadmin/dbutil/dump.c:133-155)
+// MIT: `finish_ofile` (kadmin/dbutil/dump.c:159-167)
+// MIT: `update_ok_file` (kadmin/dbutil/dump.c:214-219)
+pub fn write_dump_with_ok(path: &Path, text: &[u8]) -> Result<(), (DumpOkStage, std::io::Error)> {
+    let mut ok_name = path.as_os_str().to_os_string();
+    ok_name.push(".dump_ok");
+    let ok_path = PathBuf::from(ok_name);
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        // `O_NOFOLLOW`: unlike MIT, a planted symlink is not emptied.
+        opts.mode(0o600).custom_flags(nix::libc::O_NOFOLLOW);
+    }
+    let ok = krb5_protocol::create_labeled(&ok_path, || opts.open(&ok_path))
+        .map_err(|e| (DumpOkStage::Create, e))?;
+    let marked = crate::lock_file_exclusive(&ok).map_err(|e| (DumpOkStage::Lock, e))?;
+    write_fresh_secret_file(path, text).map_err(|e| (DumpOkStage::Write, e))?;
+    let _ = (&ok).write_all(&[0]);
+    drop(marked);
     Ok(())
+}
+
+// MIT: `iprop_version` (kadmin/dbutil/dump.c:1046-1055)
+fn iprop_v0(last: UlogLast, text: &str) -> String {
+    let mut out = format!(
+        "iprop {} {} {}\n",
+        last.sno, last.time.seconds, last.time.useconds
+    );
+    for line in text.lines().skip(1) {
+        match line.strip_prefix("policy\t") {
+            Some(rest) => out.push_str(&DumpFile::policy_record(rest, 5)),
+            None => out.push_str(line),
+        }
+        out.push('\n');
+    }
+    out
 }
 
 // MIT: `dump_db` (kadmin/dbutil/dump.c:1318-1329)

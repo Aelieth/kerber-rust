@@ -31,6 +31,7 @@ fn main() {
     let mut dump: Option<PathBuf> = None;
     let mut target: Option<String> = None;
     let mut full_resync = false;
+    let mut legacy = false;
     let mut skip_mic = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -55,6 +56,7 @@ fn main() {
                 });
             }
             "--full-resync" => full_resync = true,
+            "--full-resync-v0" => (full_resync, legacy) = (true, true),
             "--skip-mic" => skip_mic = true,
             "--load-dump" => {
                 dump = Some(PathBuf::from(
@@ -211,7 +213,12 @@ fn main() {
         std::process::exit(1);
     });
     if full_resync {
-        let status = client.full_resync().unwrap_or_else(|f| {
+        let status = if legacy {
+            client.full_resync_v0()
+        } else {
+            client.full_resync()
+        };
+        let status = status.unwrap_or_else(|f| {
             eprintln!("krb5-iprop-pull: {}", f.sperror("full-resync"));
             std::process::exit(1);
         });

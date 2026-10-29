@@ -28,9 +28,11 @@ use super::rpc::{read_record, rpc_call_bytes, write_record};
 use super::xdr::{XdrR, XdrW};
 use crate::Error;
 use crate::kprop::{
-    KPROP_SERVICE, kprop_get_tickets, kprop_open_connection, kprop_send_dump, kprop_sendauth,
+    KPROP_SERVICE, KpropDump, kprop_get_tickets, kprop_open_connection, kprop_sendauth,
+    kprop_update_last_prop_file, kprop_xmit_database,
 };
 
+// MIT: `krb5_iprop_prog_1` (kadmin/server/ipropd_svc.c:583-588)
 // MIT: `iprop_get_updates_1_svc` (kadmin/server/ipropd_svc.c:191-200)
 // MIT: `ipropx_resync` (kadmin/server/ipropd_svc.c:400-424)
 pub(super) fn dispatch_iprop(
@@ -40,27 +42,33 @@ pub(super) fn dispatch_iprop(
     who: &Caller<'_>,
     proc: u32,
     args: &[u8],
-) -> Vec<u8> {
+) -> Result<Vec<u8>, Error> {
+    let mut r = XdrR::new(args);
+    let (last, vers) = match proc {
+        IPROP_GET_UPDATES => {
+            let sno = r.u32()?;
+            let seconds = r.u32()?;
+            let useconds = r.u32()?;
+            let time = UlogTime { seconds, useconds };
+            (UlogLast { sno, time }, 0)
+        }
+        IPROP_FULL_RESYNC_EXT => (UlogLast::default(), r.u32()?),
+        _ => (UlogLast::default(), 0),
+    };
     if proc != IPROP_NULL && !authcfg.stack().iprop(who.client) {
-        return if proc == IPROP_FULL_RESYNC || proc == IPROP_FULL_RESYNC_EXT {
-            iprop_log_unauth("iprop_full_resync_1", who);
-            encode_fullresync_status(UlogLast::default(), krb5_kdc::IPROP_PERM_DENIED)
-        } else {
-            iprop_log_unauth("iprop_get_updates_1", who);
-            encode_incr_status(krb5_kdc::IPROP_PERM_DENIED)
-        };
+        return Ok(
+            if proc == IPROP_FULL_RESYNC || proc == IPROP_FULL_RESYNC_EXT {
+                iprop_log_unauth("iprop_full_resync_1", who);
+                encode_fullresync_status(UlogLast::default(), krb5_kdc::IPROP_PERM_DENIED)
+            } else {
+                iprop_log_unauth("iprop_get_updates_1", who);
+                encode_incr_status(krb5_kdc::IPROP_PERM_DENIED)
+            },
+        );
     }
-    match proc {
+    Ok(match proc {
         IPROP_NULL => Vec::new(),
         IPROP_GET_UPDATES => {
-            let mut r = XdrR::new(args);
-            let last = UlogLast {
-                sno: r.u32().unwrap_or(0),
-                time: UlogTime {
-                    seconds: r.u32().unwrap_or(0),
-                    useconds: r.u32().unwrap_or(0),
-                },
-            };
             let entries = store
                 .read()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -78,9 +86,9 @@ pub(super) fn dispatch_iprop(
             iprop_log_updates(who, last.sno, &got, err.as_deref());
             encode_incr_result(&got)
         }
-        IPROP_FULL_RESYNC | IPROP_FULL_RESYNC_EXT => full_resync(store, resync, who),
+        IPROP_FULL_RESYNC | IPROP_FULL_RESYNC_EXT => full_resync(store, resync, who, vers),
         _ => encode_incr_status(krb5_kdc::IPROP_FULL_RESYNC),
-    }
+    })
 }
 
 #[doc(hidden)]
@@ -96,6 +104,7 @@ fn full_resync(
     store: &SharedStore,
     resync: Option<&Arc<IpropResync>>,
     who: &Caller<'_>,
+    vers: u32,
 ) -> Vec<u8> {
     let Some(resync) = resync else {
         return encode_fullresync_status(UlogLast::default(), krb5_kdc::IPROP_OK);
@@ -108,10 +117,17 @@ fn full_resync(
     let resync = Arc::clone(resync);
     let host = host.to_owned();
     let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
+    let spawned = std::thread::Builder::new().spawn(move || {
         let _ = tx.send(nix::unistd::gettid().as_raw());
-        run_resync(&store, &resync, &host);
+        run_resync(&store, &resync, &host, vers);
     });
+    if let Err(e) = spawned {
+        syslog(
+            Severity::Err,
+            &format!("iprop_full_resync_1: fork failed: {}", os_error_text(&e)),
+        );
+        return encode_fullresync_status(UlogLast::default(), krb5_kdc::IPROP_ERROR);
+    }
     // MIT logs its child's pid; ours is a thread.
     iprop_log_resync(who, rx.recv().unwrap_or_default());
     encode_fullresync_status(UlogLast::default(), krb5_kdc::IPROP_OK)
@@ -125,30 +141,45 @@ fn getclhoststr(princ: &str) -> Option<&str> {
 }
 
 // MIT: `ipropx_resync` (kadmin/server/ipropd_svc.c:355-420)
-fn run_resync(store: &SharedStore, resync: &IpropResync, host: &str) {
-    if let Err(e) = resync_dump_and_send(store, resync, host) {
+fn run_resync(store: &SharedStore, resync: &IpropResync, host: &str, vers: u32) {
+    if let Err(e) = resync_dump_and_send(store, resync, host, vers) {
         syslog(Severity::Err, &format!("iprop_full_resync to {host}: {e}"));
     }
 }
 
+// MIT: `main` (kprop/kprop.c:93-120)
 fn resync_dump_and_send(
     store: &SharedStore,
     resync: &IpropResync,
     host: &str,
+    vers: u32,
 ) -> Result<(), String> {
-    {
-        let g = store
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        krb5_kdc::conditional_iprop_dump(&g, &resync.dump_file).map_err(|e| e.to_string())?;
-    }
-    let dump = std::fs::read(&resync.dump_file).map_err(|e| e.to_string())?;
+    krb5_kdc::conditional_iprop_dump_fresh(store, &resync.dump_file, vers)
+        .map_err(|e| e.to_string())?;
+    let file = resync.dump_file.to_string_lossy();
     let ctx = ClientContext::new(resync.profile.clone());
     let creds = kprop_get_tickets(&ctx, &resync.realm, host, None).map_err(|e| e.to_string())?;
+    let mut dump = KpropDump::open(&file).map_err(|e| e.to_string())?;
     let port = resync.kprop_port.as_deref().unwrap_or(KPROP_SERVICE);
     let (mut stream, sender) = kprop_open_connection(host, port).map_err(|e| e.to_string())?;
     let mut auth = kprop_sendauth(&mut stream, &creds, sender).map_err(|e| e.to_string())?;
-    kprop_send_dump(&mut stream, &mut auth, &dump).map_err(|e| e.to_string())
+    let size = dump.size();
+    kprop_xmit_database(&mut stream, &mut auth, dump.file(), size, false)
+        .map_err(|e| e.to_string())?;
+    if let Err(e) = kprop_update_last_prop_file(host, &file) {
+        syslog(Severity::Err, &format!("iprop_full_resync to {host}: {e}"));
+    }
+    dump.close().map_err(|e| e.to_string())
+}
+
+// MIT: `xdr_kdb_fullresync_result_t` (lib/kdb/iprop_xdr.c:334-343)
+fn fullresync_status(body: &[u8]) -> Result<u32, RpcFailure> {
+    let mut r = XdrR::new(body);
+    let mut word = || r.u32().map_err(|_| RpcFailure::CantDecodeRes);
+    for _ in 0..3 {
+        word()?;
+    }
+    word()
 }
 
 // MIT: `xdr_kdb_last_t` (lib/kdb/iprop_xdr.c:309-318)
@@ -441,12 +472,13 @@ impl IpropClient {
             Err(RpcFailure::ProcUnavail) => self.call(IPROP_FULL_RESYNC, &[])?,
             other => other?,
         };
-        let mut r = XdrR::new(&body);
-        let mut word = || r.u32().map_err(|_| RpcFailure::CantDecodeRes);
-        for _ in 0..3 {
-            word()?;
-        }
-        word()
+        fullresync_status(&body)
+    }
+
+    #[cfg(feature = "test-hooks")]
+    pub fn full_resync_v0(&mut self) -> Result<u32, RpcFailure> {
+        let body = self.call(IPROP_FULL_RESYNC, &[])?;
+        fullresync_status(&body)
     }
 
     /// MIC of the sequence; results must unseal.

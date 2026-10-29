@@ -17,11 +17,11 @@ use krb5_cli::{MitArgs, MitOpt, Placement, Prompter, getopt};
 use krb5_config::{IpropParams, KdcPaths};
 use krb5_crypto::{EncryptionType, ProtocolKey};
 use krb5_kdc::{
-    CreateError, DbUpdate, DbWrite, DumpError, DumpFile, DumpPrincipal, FullLoad, IpropHeaderError,
-    IpropRole, KDB_DUMP_VERSION, LoadError, Lockout, LoggedWrite, PersistError, PrincipalStore,
-    Ulog, UlogLast, add_admin_principals, create_realm_db, create_store, dump_current_in_ulog,
-    load_dump_with_key, master_key_from_password, parse_dump, save_store_with_master, stash_keys,
-    string_to_enctype, update_store, write_stash,
+    CreateError, DbUpdate, DbWrite, DumpError, DumpFile, DumpOkStage, DumpPrincipal, FullLoad,
+    IpropHeaderError, IpropRole, KDB_DUMP_VERSION, LoadError, Lockout, LoggedWrite, PersistError,
+    PrincipalStore, Ulog, UlogLast, add_admin_principals, create_realm_db, create_store,
+    dump_current_in_ulog, load_dump_with_key, master_key_from_password, parse_dump,
+    save_store_with_master, stash_keys, string_to_enctype, update_store, write_stash,
 };
 use zeroize::{Zeroize as _, Zeroizing};
 
@@ -962,49 +962,31 @@ fn iprop_header_last(util: &Util, line: &str) -> Option<UlogLast> {
     }
 }
 
-// MIT: `prep_ok_file` (kadmin/dbutil/dump.c:171-208)
-// MIT: `create_ofile` (kadmin/dbutil/dump.c:133-155)
-// MIT: `finish_ofile` (kadmin/dbutil/dump.c:159-167)
-// MIT: `update_ok_file` (kadmin/dbutil/dump.c:214-219)
 fn write_dump_file(util: &mut Util, path: &Path, text: &str) -> Result<(), u8> {
-    let mut ok_name = path.as_os_str().to_os_string();
-    ok_name.push(".dump_ok");
-    let ok_path = PathBuf::from(ok_name);
-    let mut opts = fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        // `O_NOFOLLOW`: a planted symlink is not emptied; MIT's `O_TRUNC` would.
-        opts.mode(0o600).custom_flags(nix::libc::O_NOFOLLOW);
-    }
-    let ok = match krb5_protocol::create_labeled(&ok_path, || opts.open(&ok_path)) {
-        Ok(f) => f,
-        Err(e) => {
+    let Err((stage, e)) = krb5_kdc::write_dump_with_ok(path, text.as_bytes()) else {
+        return Ok(());
+    };
+    let ok_path = format!("{}.dump_ok", path.display());
+    match stage {
+        DumpOkStage::Create => {
             util.com_err(
                 &strerror(&e),
-                &format!("while creating 'ok' file, '{}'", ok_path.display()),
+                &format!("while creating 'ok' file, '{ok_path}'"),
             );
-            return Err(util.failed());
+            Err(util.failed())
         }
-    };
-    let marked = match krb5_kdc::lock_file_exclusive(&ok) {
-        Ok(guard) => guard,
-        Err(e) => {
+        DumpOkStage::Lock => {
             util.com_err(
                 &strerror(&e),
-                &format!("while locking 'ok' file, '{}'", ok_path.display()),
+                &format!("while locking 'ok' file, '{ok_path}'"),
             );
-            return Err(util.failed());
+            Err(util.failed())
         }
-    };
-    if let Err(e) = krb5_protocol::write_fresh_secret_file(path, text.as_bytes()) {
-        util.com_err(&strerror(&e), "while allocating temporary filename dump");
-        return Err(1);
+        DumpOkStage::Write => {
+            util.com_err(&strerror(&e), "while allocating temporary filename dump");
+            Err(1)
+        }
     }
-    let _ = (&ok).write_all(&[0]);
-    drop(marked);
-    Ok(())
 }
 
 // MIT: `name_matches` (kadmin/dbutil/dump.c:221-257)

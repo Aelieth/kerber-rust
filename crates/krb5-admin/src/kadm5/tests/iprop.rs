@@ -24,6 +24,7 @@ fn dispatch_iprop(
         proc,
         args,
     )
+    .expect("iprop arguments decode")
 }
 
 #[cfg(feature = "test-hooks")]

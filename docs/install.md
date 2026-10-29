@@ -715,7 +715,8 @@ release made, five things changed:
   `iprop_port`, and on its kadm5 port too, as MIT's does; with `iprop_port` equal to kadmind's
   port, iprop is not served at all, as MIT's is not. kadmind
   dumps and sends on a full resync itself, as MIT's does: a policy change (which restarts the
-  log) or a replica the log has run past is served without those commands run by hand.
+  log) or a replica the log has run past is served without those commands run by hand. Its kprop
+  authenticates as `host/<this host>` from the default keytab (`KRB5_KTNAME`), as MIT's does.
 
 Stop the daemons and install, and move the realm into the KDC directory only if it was kept
 elsewhere (leave `OLD` empty when it is already in `/var/kerberos/krb5kdc`):

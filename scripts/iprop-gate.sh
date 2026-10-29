@@ -77,6 +77,127 @@ docker exec "$NAME" sh -c '{ sed -n "1,/^    KERBER.TEST = {/p" /etc/krb5kdc/kdc
 docker exec "$NAME" cat /tmp/rust-iprop-kdc.conf
 docker exec "$NAME" grep -q '^        iprop_enable = true$' /tmp/rust-iprop-kdc.conf
 
+# A full resync as MIT's ipropx_resync makes it (ipropd_svc.c:257-447): a legacy request gets the
+# -i0 dump; after an outside write, a replica's gets an -i1 dump from disk with its .dump_ok, then
+# kprop with its .last_prop. An outside policy change restarts the log, and the synced replica's next
+# resync must carry it. MIT's kadmind first, then ours; -k 754, as this image has no krb5_prop
+# service.
+outside_mit() { kadmin_q_ok mit_kadmin_local -e KRB5_KDC_PROFILE=/tmp/m0/kdc.conf "$NAME" -- -q "$1"; }
+outside_rust() {
+    kadmin_q_ok rust_kadmin_local -e KRB5_KDC_DB=/tmp/r0/principal -e KRB5_KDC_STASH=/tmp/r0/stash \
+        -e KRB5_KDC_PROFILE=/tmp/r0/kdc.conf "$NAME" -- -q "$1"
+}
+wait_for() {
+    local n=$1
+    shift
+    for _ in $(seq 1 "$n"); do
+        "$@" && return 0
+        sleep 0.1
+    done
+    return 1
+}
+has_head() { docker exec "$NAME" sh -c "head -1 '$1' 2>/dev/null | grep -Eq '$2'"; }
+replica_has() {
+    docker exec -e KRB5_KDC_PROFILE=/tmp/replica/kdc.conf "$NAME" kadmin.local -q listprincs 2>/dev/null |
+        grep -qx "$1@KERBER.TEST"
+}
+replica_has_policy() {
+    docker exec -e KRB5_KDC_PROFILE=/tmp/replica/kdc.conf "$NAME" kadmin.local -q "getpol $1" 2>/dev/null |
+        grep -qx "Policy: $1"
+}
+replica_kpropd() {
+    local port=$1 stash=$2 keytab=$3
+    docker exec "$NAME" sh -c "rm -rf /tmp/replica && mkdir /tmp/replica &&
+printf 'host/testhost.kerber.test@KERBER.TEST\n' >/tmp/replica/kpropd.acl &&
+printf '[realms]\n    KERBER.TEST = {\n        database_name = /tmp/replica/principal\n        key_stash_file = $stash\n        iprop_enable = true\n        iprop_port = $port\n        iprop_slave_poll = 2\n    }\n' >/tmp/replica/kdc.conf &&
+sed 's/iprop_port = 749/iprop_port = $port/' /tmp/iprop-krb5.conf >/tmp/replica/krb5.conf"
+    docker exec -d -e KRB5_KDC_PROFILE=/tmp/replica/kdc.conf -e KRB5_CONFIG=/tmp/replica/krb5.conf "$NAME" \
+        sh -c "kpropd -S -d -A testhost.kerber.test -a /tmp/replica/kpropd.acl -P 754 -s $keytab \
+-f /tmp/replica/from-kprop.dump -p \"\$(command -v kdb5_util)\" >/tmp/replica/kpropd.log 2>&1"
+}
+resync_cells() {
+    local leg=$1 port=$2 keytab=$3 dump=$4 stash=$5 outside=$6 primary_log=$7 differ='' v0 x1
+    docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf -e KRB5_MASTER_PASSWORD=masterpassword \
+        -e KRB5_KDC_DB=/tmp/v0-pull -e KRB5_KDC_STASH=/tmp/v0-pull.stash -e KRB5_KPROP_KEYTAB="$keytab" \
+        -e KRB5_KDC=127.0.0.1 -e KRB5_IPROP_HOST=testhost.kerber.test \
+        "$NAME" /tmp/krb5-iprop-pull --full-resync-v0 "testhost.kerber.test:$port" || true
+    wait_for 100 has_head "$dump" '^iprop [0-9]+ [0-9]+ [0-9]+$' || differ="$differ v0-header"
+    v0="$(docker exec "$NAME" head -1 "$dump" 2>/dev/null || true)"
+    docker exec "$NAME" sh -c "rm -f '$dump' '$dump.dump_ok' '$dump'.*.last_prop"
+    "$outside" 'addprinc -randkey outsider'
+    replica_kpropd "$port" "$stash" "$keytab"
+    wait_for 300 replica_has outsider || differ="$differ replica-outsider"
+    replica_has user || differ="$differ replica-user"
+    has_head "$dump" '^ipropx 1 [0-9]+ [0-9]+ [0-9]+$' || differ="$differ x1-header"
+    x1="$(docker exec "$NAME" head -1 "$dump" 2>/dev/null || true)"
+    docker exec "$NAME" test -f "$dump.dump_ok" || differ="$differ dump_ok"
+    docker exec "$NAME" test -f "$dump.testhost.kerber.test.last_prop" || differ="$differ last_prop"
+    "$outside" 'addpol -history 2 outpol'
+    wait_for 300 replica_has_policy outpol || differ="$differ replica-policy"
+    docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf "$NAME" \
+        /tmp/krb5-kprop -f "$dump" -P 754 -s "$keytab" testhost.kerber.test 2>&1 |
+        grep -qx 'Database propagation to testhost.kerber.test: SUCCEEDED' || differ="$differ kprop-f"
+    kill_comm kpropd
+    echo "$leg full resync: -i0 '$v0', -i1 '$x1', differences:${differ:- none}"
+    if [ -n "$differ" ]; then
+        docker exec "$NAME" cat /tmp/replica/kpropd.log "$primary_log" >&2 || true
+        die "the $leg kadmind's full resync is not MIT's:$differ"
+    fi
+}
+
+echo "==== 0: MIT kadmind master: full resyncs, dumped from disk and kpropped ===="
+# krb5-iprop-pull takes its realm from a store; the legacy probe's is a fresh one.
+docker exec -e KRB5_KDC_DB=/tmp/v0-pull -e KRB5_KDC_STASH=/tmp/v0-pull.stash "$NAME" \
+    /tmp/krb5-kdb -r KERBER.TEST -P masterpassword create -s >/dev/null
+docker exec "$NAME" sh -c 'rm -rf /tmp/m0 && mkdir /tmp/m0 &&
+printf "admin@KERBER.TEST *\nkiprop/testhost.kerber.test@KERBER.TEST p\n" >/tmp/m0/kadm5.acl &&
+printf "[realms]\n    KERBER.TEST = {\n        database_name = /tmp/m0/principal\n        acl_file = /tmp/m0/kadm5.acl\n        key_stash_file = /tmp/m0/stash\n        kadmind_port = 749\n        kdc_ports = 88\n        iprop_enable = true\n        iprop_port = 2121\n        iprop_listen = 0.0.0.0:2121\n        iprop_master_ulogsize = 1000\n    }\n" >/tmp/m0/kdc.conf'
+docker exec -e KRB5_KDC_PROFILE=/tmp/m0/kdc.conf "$NAME" kdb5_util create -s -P masterpassword >/dev/null
+for q in 'addprinc -pw userpassword user' 'addprinc -randkey kiprop/testhost.kerber.test' \
+    'addprinc -randkey host/testhost.kerber.test' \
+    'ktadd -k /tmp/m0/iprop.keytab kiprop/testhost.kerber.test host/testhost.kerber.test'; do
+    kadmin_q_ok mit_kadmin_local -e KRB5_KDC_PROFILE=/tmp/m0/kdc.conf "$NAME" -- -q "$q"
+done
+docker exec -d -e KRB5_KDC_PROFILE=/tmp/m0/kdc.conf -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
+    -e KRB5_KTNAME=/tmp/m0/iprop.keytab \
+    "$NAME" sh -c 'krb5kdc; kadmind -nofork -F /tmp/m0/resync.dump -k 754 >/tmp/m0/kadmind.log 2>&1'
+wait_port_in "$NAME" 88 || die "MIT krb5kdc did not listen"
+wait_port_in "$NAME" 749 || die "MIT kadmind did not listen"
+wait_port_in "$NAME" 2121 || die "MIT kadmind's iprop did not listen"
+resync_cells MIT 2121 /tmp/m0/iprop.keytab /tmp/m0/resync.dump /tmp/m0/stash outside_mit \
+    /tmp/m0/kadmind.log
+kill_comm kadmind
+kill_comm krb5kdc
+
+echo "==== 0R: Rust kadmind master: the same full resyncs ===="
+docker exec "$NAME" sh -c 'rm -rf /tmp/r0 && mkdir /tmp/r0 && { sed -n "1,/^    KERBER.TEST = {/p" /etc/krb5kdc/kdc.conf; printf "        iprop_enable = true\n        iprop_port = 749\n        iprop_logfile = /tmp/r0/principal.ulog\n"; sed "1,/^    KERBER.TEST = {/d" /etc/krb5kdc/kdc.conf; } >/tmp/r0/kdc.conf'
+docker exec -d \
+    -e KRB5_TEST_USER_PASSWORD=userpassword \
+    -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
+    -e KRB5_KDC_DB=/tmp/r0/principal \
+    -e KRB5_KDC_STASH=/tmp/r0/stash \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    "$NAME" sh -c '/tmp/krb5-kdc --test-realm 0.0.0.0:88 >/tmp/r0/kdc.log 2>&1'
+require_log "$NAME" /tmp/r0/kdc.log '^listening ' "the Rust KDC for 0R"
+docker exec -d \
+    -e KRB5_KDC_DB=/tmp/r0/principal \
+    -e KRB5_KDC_STASH=/tmp/r0/stash \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    -e KRB5_ACL_FILE=/tmp/kadm5.acl \
+    -e KRB5_KDC_PROFILE=/tmp/r0/kdc.conf \
+    -e KRB5_KTNAME=/tmp/r0/iprop.keytab \
+    "$NAME" sh -c '/tmp/krb5-kadmind -F /tmp/r0/resync.dump -k 754 0.0.0.0:749 >/tmp/r0/kadmind.log 2>&1'
+require_log "$NAME" /tmp/r0/kadmind.log '^listening ' "the Rust kadmind for 0R"
+kadmin_q_try mit_kadmin -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'addprinc -randkey kiprop/testhost.kerber.test'
+kadmin_q_ok mit_kadmin -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q \
+    'ktadd -k /tmp/r0/iprop.keytab kiprop/testhost.kerber.test host/testhost.kerber.test'
+resync_cells Rust 749 /tmp/r0/iprop.keytab /tmp/r0/resync.dump /tmp/r0/stash outside_rust \
+    /tmp/r0/kadmind.log
+kill_comm krb5-kadmind
+kill_comm krb5-kdc
+
 echo "==== A: Rust master → MIT kpropd -A serial-delta ===="
 docker exec -d \
     -e KRB5_TEST_USER_PASSWORD=userpassword \
@@ -407,8 +528,8 @@ fi
 echo "==== a policy change restarts the log: MIT kpropd asks for a full resync, and the dump carries the policy ===="
 # kdb5.c krb5_db_create_policy: a logging primary reinitializes its update log
 # after a policy change (one dummy entry at serial 1), so the replica, past it,
-# needs the full dump. This kadmind sends none itself (ipropx_resync's kprop
-# child), so it is pushed with krb5-kdb dump -i1 and krb5-kprop -f, as an operator would.
+# needs the full dump. Here it is pushed with krb5-kdb dump -i1 and krb5-kprop -f, as an operator
+# would; legs 0 and 0R prove kadmind's own resync.
 FR_BEFORE="$(docker exec "$NAME" grep -c 'Full resync needed' /tmp/kpropd-iprop.log || true)"
 kadmin_q_ok mit_kadmin -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
     "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'addpol -history 2 ihp2'
@@ -766,5 +887,5 @@ GONE="$(docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
 echo "$GONE"
 echo "$GONE" | grep -qiE 'Client not found|not found in Kerberos database|UNKNOWN_PRINC'
 
-log "iprop.gate" "ok" ",\"op\":\"kpropd-A-delta-kinit-extra+mit-kadmind-pull-kinit-extra2+delprinc\",\"extra2_pac_rid\":$RID"
+log "iprop.gate" "ok" ",\"op\":\"full-resync-mit+rust+kpropd-A-delta-kinit-extra+mit-kadmind-pull-kinit-extra2+delprinc\",\"extra2_pac_rid\":$RID"
 exit 0
