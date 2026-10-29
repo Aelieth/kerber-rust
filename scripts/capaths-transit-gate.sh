@@ -15,6 +15,9 @@ CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
 export CORRELATION_ID
 XR_KEY="00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
 XR_PW="xrpassword"
+# Incoming key after set_interrealm_decrypt_key (kvno 2), distinct from XR_KEY.
+ACCEPT_KEY="ff00112233445566778899aabbccddeeff00112233445566778899aabbccddee"
+KVNO_PW="kvnopassword"
 
 if ! command -v docker >/dev/null 2>&1; then
     log "capaths.gate" "error" ',"error":"docker not available"'
@@ -198,6 +201,7 @@ kad /tmp/kdc-A.conf A.TEST "addprinc -e aes256-cts-hmac-sha1-96:normal -pw ${XR_
 kad /tmp/kdc-B.conf B.TEST "addprinc -e aes256-cts-hmac-sha1-96:normal -pw ${XR_PW} krbtgt/B.TEST@A.TEST"
 kad /tmp/kdc-B.conf B.TEST "addprinc -e aes256-cts-hmac-sha1-96:normal -pw ${XR_PW} krbtgt/C.TEST@B.TEST"
 kad /tmp/kdc-C.conf C.TEST "addprinc -e aes256-cts-hmac-sha1-96:normal -pw ${XR_PW} krbtgt/C.TEST@B.TEST"
+kad /tmp/kdc-C.conf C.TEST "addprinc -e aes256-cts-hmac-sha1-96:normal -pw ${XR_PW} krbtgt/C.TEST@D.TEST"
 kad /tmp/kdc-C.conf C.TEST "addprinc -randkey user"
 kad /tmp/kdc-C.conf C.TEST "addprinc -randkey host/svc.c.test"
 kad /tmp/kdc-C.conf C.TEST "addprinc -randkey host/x.c.test"
@@ -351,6 +355,29 @@ forge_rust_lineage() {
         --key-hex "${XR_KEY}"
 }
 
+# D.TEST is not the path parent. The header still decrypts under krbtgt/C.TEST@D.TEST,
+# and a local client is INVALID LINEAGE because the header realm is not C.TEST.
+forge_mit_drealm() {
+    local in_cc="$1"
+    local out_cc="$2"
+    docker exec "$NAME" /tmp/krb5-forge-tgt \
+        --ccache "$in_cc" --out "$out_cc" --claim-realm D.TEST \
+        --claim-crealm C.TEST \
+        --tgt krbtgt/C.TEST \
+        --password "${XR_PW}" --principal 'krbtgt/C.TEST@B.TEST' \
+        --reseal-password "${XR_PW}" --reseal-principal 'krbtgt/C.TEST@D.TEST'
+}
+
+forge_rust_drealm() {
+    local in_cc="$1"
+    local out_cc="$2"
+    docker exec "$NAME" /tmp/krb5-forge-tgt \
+        --ccache "$in_cc" --out "$out_cc" --claim-realm D.TEST \
+        --claim-crealm C.TEST \
+        --tgt krbtgt/C.TEST \
+        --key-hex "${XR_KEY}"
+}
+
 # A hop naming C.TEST itself: MIT's check_realm_in_list takes only A.TEST and B.TEST. With
 # TRANSITED-POLICY-CHECKED kept, the KDC's check refuses (BAD_TRANSIT); cleared, rd_req's does.
 forge_transit() {
@@ -449,6 +476,40 @@ expect_lineage() {
     fi
     if ! docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog} | grep -q 'INVALID LINEAGE'"; then
         echo "$label: new lines of ${klog} missing INVALID LINEAGE" >&2
+        docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog}" >&2 || true
+        exit 1
+    fi
+    echo "$label new ${klog} lines (from $((n + 1))):"
+    docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog}" || true
+}
+
+# A foreign header labeled with a kvno the incoming key does not have fails
+# in decrypt (PROCESS_TGS), before the lineage check.
+expect_process_tgs_not_lineage() {
+    local label="$1"
+    local cc="$2"
+    local klog="$3"
+    local n
+    n="$(docker exec "$NAME" sh -c "wc -l < ${klog}" | tr -d '[:space:]')"
+    set +e
+    local out rc
+    out="$(docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" \
+        /tmp/krb5-kvno --body-realm C.TEST -c "$cc" 127.0.0.1:90 host/svc.c.test@C.TEST 2>&1)"
+    rc=$?
+    set -e
+    echo "$out"
+    if [ "$rc" -eq 0 ]; then
+        echo "$label: must not issue" >&2
+        docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog}" >&2 || true
+        exit 1
+    fi
+    if ! docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog} | grep -q PROCESS_TGS"; then
+        echo "$label: new lines of ${klog} missing PROCESS_TGS" >&2
+        docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog}" >&2 || true
+        exit 1
+    fi
+    if docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog} | grep -q 'INVALID LINEAGE'"; then
+        echo "$label: decrypted, reached INVALID LINEAGE" >&2
         docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog}" >&2 || true
         exit 1
     fi
@@ -637,6 +698,11 @@ echo "==== MIT C lineage local user on foreign TGT is INVALID LINEAGE ===="
 seed_c_tgt /tmp/krb5cc_mit_lineage
 forge_mit_lineage /tmp/krb5cc_mit_lineage /tmp/krb5cc_mit_lineage_out
 expect_lineage "MIT lineage" /tmp/krb5cc_mit_lineage_out /tmp/mit-c.log
+
+echo "==== MIT C header realm D.TEST is INVALID LINEAGE ===="
+seed_c_tgt /tmp/krb5cc_mit_drealm
+forge_mit_drealm /tmp/krb5cc_mit_drealm /tmp/krb5cc_mit_drealm_out
+expect_lineage "MIT D.TEST header" /tmp/krb5cc_mit_drealm_out /tmp/mit-c.log
 
 echo "==== MIT C refuses a transited list naming C.TEST ===="
 seed_c_tgt /tmp/krb5cc_mit_transit
@@ -860,7 +926,7 @@ start_c() {
         -e KRB5_TEST_USER_PASSWORD=userpassword \
         -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
         -e KRB5_TEST_REALM=C.TEST \
-        -e KRB5_TEST_FOREIGN_REALM=B.TEST \
+        -e KRB5_TEST_FOREIGN_REALM=B.TEST,D.TEST \
         -e KRB5_TEST_INTERREALM_KEY="$XR_KEY" \
         -e KRB5_TEST_HOST=svc.c.test \
         -e KRB5_TEST_EXTRA_HOST=x.c.test \
@@ -932,6 +998,11 @@ echo "==== Rust C lineage local user on foreign TGT is INVALID LINEAGE ===="
 seed_c_tgt /tmp/krb5cc_rust_lineage
 forge_rust_lineage /tmp/krb5cc_rust_lineage /tmp/krb5cc_rust_lineage_out
 expect_lineage "Rust lineage" /tmp/krb5cc_rust_lineage_out /tmp/kdc-c-allow.log
+
+echo "==== Rust C header realm D.TEST is INVALID LINEAGE ===="
+seed_c_tgt /tmp/krb5cc_rust_drealm
+forge_rust_drealm /tmp/krb5cc_rust_drealm /tmp/krb5cc_rust_drealm_out
+expect_lineage "Rust D.TEST header" /tmp/krb5cc_rust_drealm_out /tmp/kdc-c-allow.log
 
 echo "==== Rust C refuses a transited list naming C.TEST ===="
 seed_c_tgt /tmp/krb5cc_rust_transit
@@ -1483,6 +1554,73 @@ wait_listen "$NAME" /tmp/kdc-c-ref.log || {
 }
 expect_host_referral RUST /tmp/krb5cc_rust_href
 expect_alternate_tgs RUST /tmp/krb5cc_rust_alt
+
+# The incoming krbtgt's current key is kvno 2. A foreign header labeled 2
+# decrypts, then a local client is INVALID LINEAGE. Labeled 1 does not decrypt.
+echo "==== MIT C foreign header at incoming kvno 2 is INVALID LINEAGE ===="
+docker exec "$NAME" sh -c 'kill -9 "$(cat /tmp/kdc-c.pid)" 2>/dev/null || true'
+wait_gone_in "$NAME" 90
+start_mit C.TEST /tmp/kdc-C.conf /tmp/mit-c-kvno.log /tmp/mit-c.pid
+wait_port_in "$NAME" 90 || {
+    docker exec "$NAME" cat /tmp/mit-c-kvno.log 2>/dev/null || true
+    log "capaths.gate" "error" ',"error":"MIT C for incoming kvno did not listen"'
+    exit 1
+}
+kadmin_q_ok mit_kadmin_local \
+    -e KRB5_CONFIG=/tmp/client-capaths.conf \
+    -e KRB5_KDC_PROFILE=/tmp/kdc-C.conf \
+    "$NAME" -- -r C.TEST -q "cpw -pw ${KVNO_PW} krbtgt/C.TEST@B.TEST"
+kvno_princ="$(docker exec \
+    -e KRB5_CONFIG=/tmp/client-capaths.conf \
+    -e KRB5_KDC_PROFILE=/tmp/kdc-C.conf \
+    "$NAME" kadmin.local -r C.TEST -q 'getprinc krbtgt/C.TEST@B.TEST' 2>&1)" || true
+echo "$kvno_princ"
+echo "$kvno_princ" | grep -q 'vno 2'
+docker exec "$NAME" /tmp/krb5-forge-tgt \
+    --ccache /tmp/krb5cc_mit_lineage --out /tmp/krb5cc_mit_kvno2 \
+    --claim-realm B.TEST --claim-crealm C.TEST --tgt krbtgt/C.TEST \
+    --password "${XR_PW}" --principal 'krbtgt/C.TEST@B.TEST' \
+    --reseal-password "${KVNO_PW}" --reseal-principal 'krbtgt/C.TEST@B.TEST' \
+    --set-kvno 2
+expect_lineage "MIT incoming kvno 2" /tmp/krb5cc_mit_kvno2 /tmp/mit-c.log
+docker exec "$NAME" /tmp/krb5-forge-tgt \
+    --ccache /tmp/krb5cc_mit_lineage --out /tmp/krb5cc_mit_kvno1 \
+    --claim-realm B.TEST --claim-crealm C.TEST --tgt krbtgt/C.TEST \
+    --password "${XR_PW}" --principal 'krbtgt/C.TEST@B.TEST' \
+    --reseal-password "${KVNO_PW}" --reseal-principal 'krbtgt/C.TEST@B.TEST' \
+    --set-kvno 1
+expect_process_tgs_not_lineage "MIT incoming kvno 1" /tmp/krb5cc_mit_kvno1 /tmp/mit-c.log
+docker exec "$NAME" sh -c 'kill -9 "$(cat /tmp/mit-c.pid)" 2>/dev/null || true'
+wait_gone_in "$NAME" 90
+
+echo "==== Rust C foreign header at incoming kvno 2 is INVALID LINEAGE ===="
+docker exec \
+    -e KRB5_CONFIG=/tmp/kdc-c-allow.conf \
+    -e KRB5_TEST_USER_PASSWORD=userpassword \
+    -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
+    -e KRB5_TEST_REALM=C.TEST \
+    -e KRB5_TEST_FOREIGN_REALM=B.TEST \
+    -e KRB5_TEST_INTERREALM_KEY="$XR_KEY" \
+    -e KRB5_TEST_INTERREALM_KEY_ACCEPT="$ACCEPT_KEY" \
+    -e KRB5_TEST_HOST=svc.c.test \
+    "$NAME" sh -c '/tmp/krb5-kdc --test-realm 127.0.0.1:90 >/tmp/kdc-c-kvno.log 2>&1 & echo $! >/tmp/kdc-c.pid'
+wait_listen "$NAME" /tmp/kdc-c-kvno.log || {
+    docker exec "$NAME" cat /tmp/kdc-c-kvno.log 2>/dev/null || true
+    log "capaths.gate" "error" ',"error":"Rust C for incoming kvno did not listen"'
+    exit 1
+}
+docker exec "$NAME" /tmp/krb5-forge-tgt \
+    --ccache /tmp/krb5cc_rust_lineage --out /tmp/krb5cc_rust_kvno2 \
+    --claim-realm B.TEST --claim-crealm C.TEST --tgt krbtgt/C.TEST \
+    --key-hex "${XR_KEY}" --reseal-key-hex "${ACCEPT_KEY}" \
+    --set-kvno 2
+expect_lineage "Rust incoming kvno 2" /tmp/krb5cc_rust_kvno2 /tmp/kdc-c-kvno.log
+docker exec "$NAME" /tmp/krb5-forge-tgt \
+    --ccache /tmp/krb5cc_rust_lineage --out /tmp/krb5cc_rust_kvno1 \
+    --claim-realm B.TEST --claim-crealm C.TEST --tgt krbtgt/C.TEST \
+    --key-hex "${XR_KEY}" --reseal-key-hex "${ACCEPT_KEY}" \
+    --set-kvno 1
+expect_process_tgs_not_lineage "Rust incoming kvno 1" /tmp/krb5cc_rust_kvno1 /tmp/kdc-c-kvno.log
 
 log "capaths.gate" "ok" \
     ",\"path\":\"A.TEST>B.TEST>C.TEST\",\"permitted\":true,\"rejected\":true,\"transited_tr_type\":${MIT_TR_TYPE},\"transited_contents\":\"${MIT_TR_CONTENTS}\",\"transited_policy_checked\":true,\"reject_bad_transit_false\":true,\"disable_transited_check\":true"
