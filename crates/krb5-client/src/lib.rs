@@ -1546,6 +1546,7 @@ fn kinit_inner(
     if let Some(svc) = params.service {
         let (sname, svc_realm) =
             krb5_types::principal_from_unparsed(svc, &realm_s).map_err(|e| e.to_string())?;
+        let mut path = Vec::new();
         match tgs_exchange_path(
             &ctx.profile,
             &resolved,
@@ -1553,8 +1554,9 @@ fn kinit_inner(
             sname,
             &svc_realm,
             &krb5_protocol::TgsCredsOptions::default(),
+            &mut |t| path.push(t.clone()),
         ) {
-            Ok((tgs, path)) => {
+            Ok(tgs) => {
                 for p in path {
                     creds.push(tgt_cred(
                         &p.crealm,

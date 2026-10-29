@@ -74,7 +74,15 @@ pub fn tgs_exchange(
     sname: PrincipalName,
     realm: &str,
 ) -> Result<TgsOutcome, Error> {
-    Ok(tgs_exchange_path(profile, kdc, tgt, sname, realm, &TgsCredsOptions::default())?.0)
+    tgs_exchange_path(
+        profile,
+        kdc,
+        tgt,
+        sname,
+        realm,
+        &TgsCredsOptions::default(),
+        &mut |_| {},
+    )
 }
 
 /// Gate-only: MIT clients never send a foreign body.realm.
@@ -106,11 +114,12 @@ pub fn tgs_exchange_path(
     sname: PrincipalName,
     realm: &str,
     opts: &TgsCredsOptions,
-) -> Result<(TgsOutcome, Vec<AsOutcome>), Error> {
+    store_tgt: &mut dyn FnMut(&AsOutcome),
+) -> Result<TgsOutcome, Error> {
     let correlation_id = krb5_log::new_correlation_id();
     let _g = krb5_log::enter_correlation(correlation_id.clone());
     let started = Instant::now();
-    let result = tgs_inner(profile, kdc, tgt, &sname, realm, opts);
+    let result = tgs_inner(profile, kdc, tgt, &sname, realm, opts, store_tgt);
     let duration_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
     match &result {
         Ok(_) => tracing::debug!(
@@ -250,15 +259,13 @@ fn tgs_inner(
     sname: &PrincipalName,
     realm: &str,
     creds_opts: &TgsCredsOptions,
-) -> Result<(TgsOutcome, Vec<AsOutcome>), Error> {
+    store: &mut dyn FnMut(&AsOutcome),
+) -> Result<TgsOutcome, Error> {
     let start = tgt_served_realm(tgt);
     let mut cur_kdc = kdc.clone();
     let mut cur_tgt = tgt.clone();
-    let mut path = Vec::new();
     if tgt_served_realm(&cur_tgt) != realm {
-        let (dest, hops) = get_dest_tgt(profile, kdc, &cur_tgt, realm, creds_opts)?;
-        cur_tgt = dest;
-        path = hops;
+        cur_tgt = get_dest_tgt(profile, kdc, &cur_tgt, realm, creds_opts, store)?;
         cur_kdc = kdc_for_realm(profile, &tgt_served_realm(&cur_tgt), kdc)?;
     }
     let mut seen = vec![start.clone()];
@@ -281,7 +288,7 @@ fn tgs_inner(
             ServiceStep::Reply(out) => *out,
             ServiceStep::Fallback(fallback) => {
                 return tgs_fallback_realm(
-                    profile, &cur_kdc, &cur_tgt, sname, &fallback, creds_opts, path,
+                    profile, &cur_kdc, &cur_tgt, sname, &fallback, creds_opts, store,
                 );
             }
         };
@@ -300,7 +307,7 @@ fn tgs_inner(
                 &out.enc_part.sname,
                 out.enc_part.srealm.as_bytes(),
             ));
-            return Ok((out, path));
+            return Ok(out);
         }
         match chase_step(&start, &mut seen, sname, &served, &out)? {
             TgsHop::Done => {
@@ -309,7 +316,7 @@ fn tgs_inner(
                     &out.enc_part.sname,
                     out.enc_part.srealm.as_bytes(),
                 ));
-                return Ok((out, path));
+                return Ok(out);
             }
             TgsHop::Referral(foreign) => {
                 // MIT: `step_referrals` (lib/krb5/krb/get_creds.c:561-634)
@@ -338,7 +345,6 @@ fn service_extra(creds_opts: &TgsCredsOptions, tgt: &AsOutcome, realm: &str) -> 
 }
 
 // MIT: `try_fallback` (lib/krb5/krb/get_creds.c:534-542)
-/// Server realm is the fallback; its TGT comes first.
 // MIT: `step_non_referral` (lib/krb5/krb/get_creds.c:483-487)
 fn tgs_fallback_realm(
     profile: &Krb5Conf,
@@ -347,11 +353,10 @@ fn tgs_fallback_realm(
     sname: &PrincipalName,
     realm: &str,
     creds_opts: &TgsCredsOptions,
-    mut path: Vec<AsOutcome>,
-) -> Result<(TgsOutcome, Vec<AsOutcome>), Error> {
+    store: &mut dyn FnMut(&AsOutcome),
+) -> Result<TgsOutcome, Error> {
     trace::tkt_creds_fallback(realm.as_bytes());
-    let (dest, hops) = get_dest_tgt(profile, kdc, tgt, realm, creds_opts)?;
-    path.extend(hops);
+    let dest = get_dest_tgt(profile, kdc, tgt, realm, creds_opts, store)?;
     let served = tgt_served_realm(&dest);
     let dest_kdc = kdc_for_realm(profile, &served, kdc)?;
     let extra = service_extra(creds_opts, &dest, realm);
@@ -367,7 +372,7 @@ fn tgs_fallback_realm(
         &out.enc_part.sname,
         out.enc_part.srealm.as_bytes(),
     ));
-    Ok((out, path))
+    Ok(out)
 }
 
 fn tgt_served_realm(tgt: &AsOutcome) -> String {
@@ -381,11 +386,11 @@ fn get_dest_tgt(
     tgt: &AsOutcome,
     dest: &str,
     creds_opts: &TgsCredsOptions,
-) -> Result<(AsOutcome, Vec<AsOutcome>), Error> {
+    store: &mut dyn FnMut(&AsOutcome),
+) -> Result<AsOutcome, Error> {
     let start = tgt_served_realm(tgt);
     let path = krb5_config::client_realm_path(&profile.capaths, &start, dest);
     let mut seen = vec![start.clone()];
-    let mut cached = Vec::new();
     let mut cur_kdc = kdc.clone();
     let mut cur_tgt = tgt.clone();
     let mut next = dest.to_owned();
@@ -396,7 +401,7 @@ fn get_dest_tgt(
     for _ in 0..REFERRAL_MAX_HOPS {
         let served = tgt_served_realm(&cur_tgt);
         if served == dest {
-            return Ok((cur_tgt, cached));
+            return Ok(cur_tgt);
         }
         if !offpath {
             // MIT: `get_tgt_request` (lib/krb5/krb/get_creds.c:890-914)
@@ -416,7 +421,7 @@ fn get_dest_tgt(
                 cur_tgt = tgt_from_cached(&cur_tgt, cred)?;
                 let got = tgt_served_realm(&cur_tgt);
                 if got == dest {
-                    return Ok((cur_tgt, cached));
+                    return Ok(cur_tgt);
                 }
                 cur_kdc = kdc_for_realm(profile, &got, kdc)?;
                 dest.clone_into(&mut next);
@@ -454,7 +459,7 @@ fn get_dest_tgt(
                             &cur_tgt.ticket.sname,
                             cur_tgt.ticket.realm.as_bytes(),
                         ));
-                        return Ok((cur_tgt, cached));
+                        return Ok(cur_tgt);
                     }
                     if offpath_count >= REFERRAL_MAX_HOPS {
                         return Err(Error::ReplyMismatch("off-path chase gave up".into()));
@@ -483,10 +488,12 @@ fn get_dest_tgt(
                 if let Some(realm) = referral_hop_realm(&out.ticket.sname) {
                     visited.push(realm);
                 }
-                if asked_for_hop(&hop, &out) {
-                    cached.push(tgs_as_tgt(&cur_tgt, out.clone()));
-                }
+                let asked = asked_for_hop(&hop, &out);
                 cur_tgt = tgs_as_tgt(&cur_tgt, out);
+                // MIT: `step_get_tgt` (lib/krb5/krb/get_creds.c:952-954)
+                if asked {
+                    store(&cur_tgt);
+                }
                 // MIT: `step_get_tgt` (lib/krb5/krb/get_creds.c:938-976)
                 let got = tgt_served_realm(&cur_tgt);
                 if got == dest {

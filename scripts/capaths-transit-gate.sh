@@ -679,6 +679,30 @@ if echo "$RUSTKL" | grep -q 'krbtgt/B.TEST@A.TEST'; then
     exit 1
 fi
 
+echo "==== a walk whose service request fails keeps the TGTs it asked for: MIT kvno, then ours (get_creds.c:952-954) ===="
+for who in mit rust; do
+    cc="/tmp/krb5cc_miss_$who"
+    kinit_a "$cc"
+    kvno_bin=kvno
+    [ "$who" = rust ] && kvno_bin=/tmp/krb5-kvno
+    set +e
+    MISS="$(docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" "$kvno_bin" -c "$cc" host/missing.c.test@C.TEST 2>&1)"
+    miss_rc=$?
+    set -e
+    MISS="$(tail -n 1 <<<"$MISS")"
+    MISS="${MISS#*: }"
+    KL="$(docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" klist -c "$cc" | awk '/krbtgt\//{print $NF}' | sort | tr '\n' ' ')"
+    echo "$who kvno rc=$miss_rc: $MISS"
+    echo "$who cache: $KL"
+    if [ "$who" = mit ]; then
+        [ "$miss_rc" -ne 0 ] || die "MIT kvno found host/missing.c.test"
+        grep -q 'krbtgt/C.TEST@B.TEST' <<<"$KL" || die "MIT did not keep krbtgt/C.TEST@B.TEST: $KL"
+        want_miss="$miss_rc $MISS" want_kl="$KL"
+    elif [ "$miss_rc $MISS" != "$want_miss" ] || [ "$KL" != "$want_kl" ]; then
+        die "ours after a failed walk: '$miss_rc $MISS' and [$KL], MIT: '$want_miss' and [$want_kl]"
+    fi
+done
+
 echo "==== MIT C rejects forged ticket.realm on B-sealed TGT ===="
 seed_c_tgt /tmp/krb5cc_mit_forge
 forge_mit_tgt /tmp/krb5cc_mit_forge /tmp/krb5cc_mit_forge_a A.TEST

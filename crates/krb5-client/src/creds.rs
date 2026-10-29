@@ -341,8 +341,6 @@ impl GetCredsOptions {
 // MIT: `check_cache` (get_creds.c:1042-1065)
 // MIT: `complete` (get_creds.c:468-471)
 // The store's failure is ignored; so is a cross-realm TGT's.
-// MIT: `step_get_tgt` (get_creds.c:952-954)
-// A cross-realm TGT asked for on the path is stored, its failure ignored.
 // MIT: `krb5_tkt_creds_step` (lib/krb5/krb/get_creds.c:1292-1305)
 // A request the KDC answers with an unknown server is made again for the next candidate; with none
 // left that error stands.
@@ -387,7 +385,7 @@ pub fn get_credentials(
         return Err(cache.not_found());
     }
     let start_realm = cache.start_realm(me);
-    let (out, path) = loop {
+    let out = loop {
         match request_service(cache, &candidate, &start_realm, opts) {
             Err(e) if e.code == Code::Kdc(krb5_types::err::S_PRINCIPAL_UNKNOWN) => match candidates
                 .next_candidate()
@@ -406,11 +404,6 @@ pub fn get_credentials(
         cred.second_ticket = t;
     }
     if !opts.no_store {
-        for p in path {
-            let hop_cred = tgt_cred(&p.crealm, &p.cname, &p.ticket, &p.session_key, &p.enc_part)
-                .map_err(|e| Krb5Error::new(Code::Other, e.to_string()))?;
-            let _ = cache.store(hop_cred);
-        }
         let _ = cache.store(cred.clone());
     }
     Ok(cred)
@@ -420,11 +413,11 @@ pub fn get_credentials(
 // A server in the referral realm takes the start realm, and the request starts with the TGT for the
 // server's realm.
 fn request_service(
-    cache: &OpenCache,
+    cache: &mut OpenCache,
     server: &Princ,
     start_realm: &str,
     opts: &GetCredsOptions,
-) -> Result<(TgsOutcome, Vec<AsOutcome>), Krb5Error> {
+) -> Result<TgsOutcome, Krb5Error> {
     let mut srealm = realm_str(&server.0);
     let mut tgs = opts.tgs.clone();
     if srealm.is_empty() {
@@ -455,13 +448,21 @@ fn request_service(
         .collect();
     let kdc = opts.kdc(&cache.ctx.profile, &hop)?;
     let tgt = outcome_from_presented(cache, &presented)?;
+    let ctx = cache.ctx;
+    // MIT: `step_get_tgt` (get_creds.c:952-954)
+    let mut store = |t: &AsOutcome| {
+        if let Ok(c) = tgt_cred(&t.crealm, &t.cname, &t.ticket, &t.session_key, &t.enc_part) {
+            let _ = cache.store(c);
+        }
+    };
     tgs_exchange_path(
-        &cache.ctx.profile,
+        &ctx.profile,
         &kdc,
         &tgt,
         server.1.clone(),
         &srealm,
         &tgs,
+        &mut store,
     )
     .map_err(|e| Krb5Error::from_tgs(&e, &hop))
 }
