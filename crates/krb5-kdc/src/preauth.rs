@@ -6,6 +6,7 @@ use krb5_crypto::{
     derive_prfplus, encrypt, krb_fx_cf2, octetstring2key, pkinit_kdf_agile, verify_checksum_type,
 };
 use krb5_log::klog::{self, Severity};
+use krb5_protocol::trace::{ERROR_TABLE_BASE_KRB5, error_message};
 use krb5_types::pkinit::{EkuCheck, KxGroup, KxKey, group_desc};
 use krb5_types::{
     AsReq, EncryptedData, EncryptionKey, KdcReqBody, KerberosTime, MethodData, Microseconds,
@@ -25,7 +26,7 @@ use crate::error::Error;
 use crate::kdb::PrincipalRead;
 use crate::status;
 use crate::store::{KeyLookup, KtkdbError, Principal, ktkdb_get_entry};
-use otp::{E_BAD_ENCTYPE, E_BAD_MSIZE, E_INTEGRITY};
+use otp::{E_BAD_ENCTYPE, E_BAD_MSIZE};
 
 /// After armor, inner_body and inner_padata are the request; MIT frees the outer.
 pub(crate) struct FastOk {
@@ -191,19 +192,15 @@ fn verify_fast_req_checksum(
     Ok(())
 }
 
-// MIT: `krb5_k_decrypt` (lib/crypto/krb/decrypt.c:30-85)
 fn crypto_refusal(e: &krb5_crypto::Error) -> (i32, String) {
-    match e {
-        krb5_crypto::Error::Integrity => (err::BAD_INTEGRITY, E_INTEGRITY.to_owned()),
-        krb5_crypto::Error::CiphertextTooShort => (err::GENERIC, E_BAD_MSIZE.to_owned()),
-        krb5_crypto::Error::BadEnctype(_) | krb5_crypto::Error::UnsupportedEtype(_) => {
-            (err::GENERIC, E_BAD_ENCTYPE.to_owned())
-        }
-        krb5_crypto::Error::InvalidKeyLength => {
-            (err::GENERIC, "Cryptosystem internal error".to_owned())
-        }
-        other => (err::GENERIC, other.to_string()),
-    }
+    krb5_protocol::decrypt_code(e).map_or_else(|| (err::GENERIC, e.to_string()), mit_refusal)
+}
+
+fn mit_refusal(code: i32) -> (i32, String) {
+    (
+        crate::error::errcode_to_protocol(code),
+        error_message(ERROR_TABLE_BASE_KRB5 + i64::from(code)),
+    )
 }
 
 fn fold((code, text): (i32, String)) -> Error {
@@ -363,41 +360,13 @@ fn armor_rd_req(
     Ok((ticket.sname.clone(), session, authenticator.subkey))
 }
 
-// MIT: `rd_req_decoded_opt` (lib/krb5/krb/rd_req_dec.c:606-610)
-// MIT: `krb5_check_transited_list` (lib/krb5/krb/chk_trans.c:309-356)
-// MIT: `krb5_walk_realm_tree` (lib/krb5/krb/walk_rtree.c:96-121)
 pub(crate) fn check_transited(
     store: &dyn PrincipalRead,
     enc_tkt: &krb5_types::EncTicketPart,
     srealm: &str,
 ) -> Result<(), (i32, String)> {
-    let raw = enc_tkt.transited.contents.as_ref();
-    // MIT's caller skips a list whose first octet is NUL.
-    if enc_tkt.flags.bit(flag_bit::TRANSITED_POLICY_CHECKED) || raw.first().is_none_or(|b| *b == 0)
-    {
-        return Ok(());
-    }
-    let transited = krb5_types::TransitedEncoding {
-        tr_type: enc_tkt.transited.tr_type,
-        contents: raw.strip_suffix(&[0]).unwrap_or(raw).to_vec().into(),
-    };
-    let crealm = String::from_utf8_lossy(enc_tkt.crealm.as_bytes());
-    if crealm == "WELLKNOWN:ANONYMOUS" {
-        return Ok(());
-    }
-    if crealm == srealm {
-        return Err((
-            err::GENERIC,
-            "Cannot find ticket for requested realm".to_owned(),
-        ));
-    }
-    let ill = || (err::ILL_CR_TKT, "Illegal cross-realm ticket".to_owned());
-    let hops = transited.realms_for(&crealm, srealm).map_err(|_| ill())?;
-    if store.policy().transit_allowed(&crealm, srealm, &hops) {
-        Ok(())
-    } else {
-        Err(ill())
-    }
+    krb5_types::transited::check_transited(enc_tkt, srealm, &store.policy().capaths)
+        .map_err(mit_refusal)
 }
 
 const COOKIE_LIFETIME: i32 = 600;

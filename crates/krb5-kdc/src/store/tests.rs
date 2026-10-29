@@ -115,14 +115,16 @@ fn compressed_transited_cannot_hide_hop() {
         .or_default()
         .insert("C.EX.COM".into(), vec!["EX.COM".into()]);
     assert!(
-        !p.transit_allowed("A.EX.COM", "C.EX.COM", &hops),
+        !krb5_types::transited::transit_allowed(&p.capaths, "A.EX.COM", "C.EX.COM", &hops),
         "B.EX.COM is not on the capaths list"
     );
     p.capaths
         .entry("A.EX.COM".into())
         .or_default()
         .insert("C.EX.COM".into(), vec!["EX.COM".into(), "B.EX.COM".into()]);
-    assert!(p.transit_allowed("A.EX.COM", "C.EX.COM", &hops));
+    assert!(krb5_types::transited::transit_allowed(
+        &p.capaths, "A.EX.COM", "C.EX.COM", &hops
+    ));
 }
 
 fn dict_conf(dict_file: &std::path::Path) -> krb5_config::KdcConf {

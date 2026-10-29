@@ -162,10 +162,8 @@ pub fn negotiate_ap_req_etypes(
 }
 
 impl AcceptorAuthContext {
-    /// Ticket's own enctype must be permitted too.
     pub fn from_ap_req(ok: &ApVerifyOk, conf: &AcceptorConfig) -> Result<Self, Error> {
         let permitted = conf.permitted()?;
-        check_ticket_etype(ok.ticket_etype, permitted)?;
         let key = protocol_key(&ok.ticket_part.key)?;
         let authenticator = ok.authenticator.clone();
         let negotiated_etype =

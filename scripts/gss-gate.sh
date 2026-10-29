@@ -8,7 +8,7 @@ cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
 . "$ROOT/scripts/lib/kadmin-q.sh"
-need_bins krb5-gss-accept krb5-gss-init
+need_bins krb5-gss-accept krb5-gss-init rd-sweep
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-gss-gate"
@@ -84,7 +84,7 @@ echo "$REPLAY_LOG"
     log "gss.gate" "error" ',"error":"replayed AP-REQ did not log 34/replay"'
     exit 1
 }
-echo "$REPLAY_LOG" | grep -q 'accept_sec_context: KRB-ERROR 34: authenticator replay'
+echo "$REPLAY_LOG" | grep -q 'accept_sec_context: KRB-ERROR 34: Request is a replay'
 CLIENTN="$(echo "$REPLAY_LOG" | grep -c 'gss-accept client=' || true)"
 if [ "$CLIENTN" -ne 1 ]; then
     echo "expected one gss-accept client= line, got $CLIENTN" >&2
@@ -355,6 +355,40 @@ echo "$MIT2"
     log "gss.gate" "error" ',"error":"MIT replay did not log accept_sec_context Request is a replay"'
     exit 1
 }
+
+echo "==== transited server realm vs MIT acceptor, then the Rust acceptor ===="
+# rd_req_dec.c:606-610: a ticket from OTHER.TEST listing KERBER.TEST, the server's own realm, as transited.
+docker exec "$NAME" sh -c 'kill $(pidof gss-mit-server) 2>/dev/null || true'
+docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
+wait_pid_gone "$NAME" gss-mit-server || true
+wait_pid_gone "$NAME" krb5-gss-accept || true
+docker cp "${CARGO_TARGET_DIR:-target}/debug/rd-sweep" "$NAME":/tmp/rd-sweep
+TRANSIT_TOK="$(docker exec "$NAME" /tmp/rd-sweep gss-transit /etc/krb5kdc/testhost.keytab host/testhost.kerber.test)"
+send_transit_tok() {
+    docker exec "$NAME" python3 -c '
+import socket, struct, sys
+tok = bytes.fromhex(sys.argv[2])
+s = socket.create_connection(("127.0.0.1", int(sys.argv[1])), 5)
+s.settimeout(5)
+s.sendall(struct.pack(">I", len(tok)) + tok)
+try:
+    s.recv(4096)
+except OSError:
+    pass
+s.close()
+' "$1" "$TRANSIT_TOK"
+}
+docker exec -d -e KRB5_KTNAME=/etc/krb5kdc/testhost.keytab "$NAME" \
+    sh -c 'stdbuf -oL -eL /tmp/gss-mit-server /etc/krb5kdc/testhost.keytab 127.0.0.1 4455 >/tmp/gss-mit-transit.log 2>&1'
+require_log "$NAME" /tmp/gss-mit-transit.log listening "gss-mit-server listening for the transit cell"
+send_transit_tok 4455
+require_log "$NAME" /tmp/gss-mit-transit.log 'mech: Illegal cross-realm ticket' "MIT's transit refusal"
+docker exec "$NAME" cat /tmp/gss-mit-transit.log
+docker exec -d "$NAME" sh -c '/tmp/krb5-gss-accept --keytab /etc/krb5kdc/testhost.keytab --listen 127.0.0.1:4456 >/tmp/gss-accept-transit.log 2>&1'
+require_log "$NAME" /tmp/gss-accept-transit.log listening "gss-accept listening for the transit cell"
+send_transit_tok 4456
+require_log "$NAME" /tmp/gss-accept-transit.log 'accept_sec_context: KRB-ERROR 43: Illegal cross-realm ticket' "the Rust transit refusal"
+docker exec "$NAME" cat /tmp/gss-accept-transit.log
 
 docker cp "$ROOT/scripts/oracle/gss-mit-client.c" "$NAME":/tmp/gss-mit-client.c
 mit_oracle_cc "$NAME" /tmp/gss-mit-client /tmp/gss-mit-client.c gssapi
@@ -750,4 +784,4 @@ echo "$MIT_FBITS" | grep -q f || {
     exit 1
 }
 
-log "gss.gate" "ok" ",\"acceptor\":\"krb5-gss\",\"initiator\":\"mit-libgssapi\",\"deleg\":\"both\",\"spnego\":\"ok\",\"iov\":\"ok\",\"replay\":\"ok\",\"dce\":\"ok\",\"process_checksum\":\"ok\",\"forwarded\":\"both\""
+log "gss.gate" "ok" ",\"acceptor\":\"krb5-gss\",\"initiator\":\"mit-libgssapi\",\"deleg\":\"both\",\"spnego\":\"ok\",\"iov\":\"ok\",\"replay\":\"ok\",\"transit\":\"ok\",\"dce\":\"ok\",\"process_checksum\":\"ok\",\"forwarded\":\"both\""

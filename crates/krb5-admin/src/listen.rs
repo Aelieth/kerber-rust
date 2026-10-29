@@ -213,6 +213,7 @@ pub fn changepw_accept(
         key_kvnos: None,
         key_principals: None,
         kvno: None,
+        permitted,
         expected_server: Some(&server),
         expected_realm: Some(realm),
         get_entry: Some(&get_entry),

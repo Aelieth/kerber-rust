@@ -74,6 +74,10 @@ pub mod err {
     // MIT: `errcode_to_protocol` (kdc_util.c:691-697)
     // Offsets over 128 clamp to `GENERIC`
     pub const TKT_INVALID: i32 = 145;
+    pub const CRYPTO_INTERNAL: i32 = 178;
+    pub const NO_TKT_IN_RLM: i32 = 185;
+    pub const BAD_ENCTYPE: i32 = 188;
+    pub const BAD_MSIZE: i32 = 190;
     /// com_err base ×256 with the 2³² wrap). Library-local: not an RFC 4120
     // MIT: `filter_preauth_error` (kdc/kdc_preauth.c:1090-1134)
     // MIT: `finish_process_as_req` (kdc/do_as_req.c:193-423)

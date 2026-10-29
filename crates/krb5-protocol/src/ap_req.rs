@@ -3,18 +3,20 @@ use std::time::Instant;
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt_enc_data, encrypt,
+    ENCTYPE_UNKNOWN, EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt_enc_data, encrypt,
     verify_checksum_type,
 };
-use krb5_types::transited::hierarchical_walk_realms;
+use krb5_types::transited;
 use krb5_types::{
     ApOptions, ApReq, Authenticator, AuthorizationDataValue, EncTicketPart, EncryptedData,
-    HostAddress, HostAddresses, KerberosTime, PrincipalName, Realm, Ticket, err, flag_bit, ku, pa,
+    HostAddress, HostAddresses, KerberosTime, PrincipalName, Realm, Ticket, err, ku, pa,
     principal_compare,
 };
 
+use crate::auth_con::check_ticket_etype;
 use crate::error::Error;
 use crate::replay::{ReplayCache, ReplayKey};
+use crate::trace::{ERROR_TABLE_BASE_KRB5, error_message};
 
 pub const DEFAULT_SKEW: i64 = 300;
 
@@ -23,6 +25,7 @@ pub struct ApVerifyParams<'a> {
     pub key_kvnos: Option<&'a [u32]>,
     pub key_principals: Option<&'a [(PrincipalName, Realm)]>,
     pub kvno: Option<u32>,
+    pub permitted: &'a [EncryptionType],
     /// Non-host-based name: its own keytab entry only.
     pub expected_server: Option<&'a PrincipalName>,
     pub expected_realm: Option<&'a str>,
@@ -37,6 +40,7 @@ pub struct ApVerifyParams<'a> {
 }
 
 static NO_CAPATHS: BTreeMap<String, BTreeMap<String, Vec<String>>> = BTreeMap::new();
+static DEFAULT_PERMITTED: [EncryptionType; 4] = EncryptionType::preferred();
 
 impl<'a> ApVerifyParams<'a> {
     #[must_use]
@@ -46,6 +50,7 @@ impl<'a> ApVerifyParams<'a> {
             key_kvnos: None,
             key_principals: None,
             kvno: None,
+            permitted: &DEFAULT_PERMITTED,
             expected_server: None,
             expected_realm: None,
             get_entry: None,
@@ -412,17 +417,21 @@ fn server_looked_up(
 }
 
 // MIT: `try_one_entry` (rd_req_dec.c:290-320)
+// MIT: `krb5_decrypt_tkt_part` (lib/krb5/krb/decrypt_tk.c:46-50)
 fn decrypt_ticket_part(
     ap: &ApReq,
     key: &ProtocolKey,
     tkt_usage: KeyUsage,
+    permitted: &[EncryptionType],
 ) -> Result<EncTicketPart, Error> {
+    check_ticket_etype(ap.ticket.enc_part.etype, permitted)?;
     let plain = decrypt_enc_data(
         key,
         tkt_usage,
         ap.ticket.enc_part.etype,
         ap.ticket.enc_part.cipher.as_ref(),
-    )?;
+    )
+    .map_err(|e| decrypt_code(&e).map_or_else(|| e.into(), refused))?;
     Ok(decode::<EncTicketPart>(&plain)?)
 }
 
@@ -499,7 +508,7 @@ fn decrypt_for_server(
         ) {
             Ok(key) => {
                 tried_any = true;
-                match decrypt_ticket_part(ap, &key, tkt_usage) {
+                match decrypt_ticket_part(ap, &key, tkt_usage, params.permitted) {
                     Ok(p) => ticket_part = Some(p),
                     Err(e) => last_err = e,
                 }
@@ -522,7 +531,7 @@ fn decrypt_for_server(
                 continue;
             }
             tried_any = true;
-            match decrypt_ticket_part(ap, key, tkt_usage) {
+            match decrypt_ticket_part(ap, key, tkt_usage, params.permitted) {
                 Ok(p) => {
                     ticket_part = Some(p);
                     break;
@@ -559,9 +568,15 @@ fn decrypt_for_server(
         }
         // MIT: `integrity_error` (rd_req_dec.c:162-181)
         // Non-decrypting: BAD_INTEGRITY if the ticket's server is named, else NOT_US.
-        if tried_any && !same_princ && matches!(last_err, Error::Crypto(_)) {
+        if tried_any
+            && matches!(last_err, Error::KrbError { code, .. } if code == err::BAD_INTEGRITY)
+        {
             return Err(Error::KrbError {
-                code: err::NOT_US,
+                code: if same_princ {
+                    err::BAD_INTEGRITY
+                } else {
+                    err::NOT_US
+                },
                 text: Some(format!(
                     "Cannot decrypt ticket for {} using keytab key for {}",
                     ap.ticket.sname.unparse_with_realm(&tkt_realm),
@@ -638,6 +653,7 @@ fn decrypt_by_keytab_walk(
             }
         }
         if similar_enctype
+            && check_ticket_etype(tkt_etype, params.permitted).is_ok()
             && let Ok(plain) = decrypt_enc_data(
                 key,
                 tkt_usage,
@@ -675,9 +691,8 @@ fn iteration_error(
         .expected_server
         .map(|s| s.unparse_with_realm(params.expected_realm.unwrap_or_default()));
     let etype = ap.ticket.enc_part.etype;
-    let encname = EncryptionType::from_iana(etype)
-        .or_else(|_| EncryptionType::known(etype))
-        .map_or_else(|_| etype.to_string(), |e| e.to_mit_name().to_string());
+    let encname =
+        crate::trace::enctype_shortest_name(etype).map_or_else(|| etype.to_string(), str::to_owned);
     let (code, text) = if !walk.found_server_match {
         (
             err::NOKEY,
@@ -730,8 +745,7 @@ fn iteration_error(
     }
 }
 
-// MIT: `rd_req_decoded_opt` (rd_req_dec.c:634-638)
-/// Invalid flag tested only after the ticket times.
+// MIT: `rd_req_decoded_opt` (rd_req_dec.c:472-787)
 fn verify_inner(
     raw: &[u8],
     params: &ApVerifyParams<'_>,
@@ -759,6 +773,39 @@ fn verify_inner(
         (ap.ticket.sname.clone(), ap.ticket.realm.clone())
     };
     let tkt_etype = ap.ticket.enc_part.etype;
+    let auth_usage = KeyUsage::new(ku::AP_REQ_AUTHENTICATOR)?;
+    let (session, auth_plain) = session_key(&ticket_part.key, &ap.authenticator)
+        .and_then(|session| {
+            let plain = decrypt_enc_data(
+                &session,
+                auth_usage,
+                ap.authenticator.etype,
+                ap.authenticator.cipher.as_ref(),
+            )?;
+            Ok((session, plain))
+        })
+        .map_err(|e| decrypt_code(&e).map_or_else(|| e.into(), refused))?;
+    let authenticator: Authenticator = decode(&auth_plain)?;
+    if !authenticator.cname.components_eq(&ticket_part.cname)
+        || authenticator.crealm != ticket_part.crealm
+    {
+        return Err(refused(err::BADMATCH));
+    }
+    if let Some(remote) = params.remote_addr
+        && !address_search(remote, ticket_part.caddr.as_ref())
+    {
+        return Err(refused(err::BADADDR));
+    }
+    let srealm_text = String::from_utf8_lossy(srealm.as_bytes());
+    transited::check_transited(&ticket_part, &srealm_text, params.capaths).map_err(refused)?;
+    let key = EncryptionType::known(ap.authenticator.etype)
+        .ok()
+        .and_then(|et| ReplayKey::from_ciphertext(et, ap.authenticator.cipher.as_ref()))
+        .ok_or_else(|| Error::Crypto("ciphertext shorter than its checksum".into()))?
+        .file2();
+    if replay.check_and_store(key, params.skew) {
+        return Err(refused(err::REPEAT));
+    }
     let now = params.now.clone().unwrap_or_else(KerberosTime::now);
     // MIT: `krb5_init_context_profile` (lib/krb5/krb/init_ctx.c:250-252)
     let skew = params.skew;
@@ -769,58 +816,18 @@ fn verify_inner(
         .as_ref()
         .unwrap_or(&ticket_part.authtime);
     if now.delta_seconds(start) < skew.saturating_neg() {
-        return Err(Error::KrbError {
-            code: err::TKT_NYV,
-            text: Some("ticket not yet valid".into()),
-        });
+        return Err(refused(err::TKT_NYV));
     }
     if ticket_part.endtime.delta_seconds(&now) < skew.saturating_neg() {
-        return Err(Error::KrbError {
-            code: err::TKT_EXPIRED,
-            text: Some("ticket expired".into()),
-        });
-    }
-    if ticket_part.flags.invalid() {
-        return Err(Error::KrbError {
-            code: err::TKT_INVALID,
-            text: Some("Ticket has invalid flag set".into()),
-        });
-    }
-    if let Some(remote) = params.remote_addr
-        && !address_search(remote, ticket_part.caddr.as_ref())
-    {
-        return Err(Error::KrbError {
-            code: err::BADADDR,
-            text: Some("Incorrect net address".into()),
-        });
-    }
-    let srealm_text = String::from_utf8_lossy(srealm.as_bytes()).into_owned();
-    check_ap_req_transited(&ticket_part, &srealm_text, params.capaths)?;
-    let session_etype = EncryptionType::known(ticket_part.key.keytype)?;
-    let session = ProtocolKey::from_bytes(session_etype, ticket_part.key.keyvalue.as_ref())?;
-    let auth_usage = KeyUsage::new(ku::AP_REQ_AUTHENTICATOR)?;
-    let auth_plain = decrypt_enc_data(
-        &session,
-        auth_usage,
-        ap.authenticator.etype,
-        ap.authenticator.cipher.as_ref(),
-    )?;
-    let authenticator: Authenticator = decode(&auth_plain)?;
-    if !authenticator.cname.components_eq(&ticket_part.cname)
-        || authenticator.crealm != ticket_part.crealm
-    {
-        return Err(Error::KrbError {
-            code: err::BADMATCH,
-            text: Some("authenticator/ticket client mismatch".into()),
-        });
+        return Err(refused(err::TKT_EXPIRED));
     }
     // MIT: `krb5_check_clockskew` (lib/krb5/os/timeofday.c:55-67)
     let skew_delta = now.delta_seconds(&authenticator.ctime).unsigned_abs();
     if !u64::try_from(skew).is_ok_and(|limit| skew_delta <= limit) {
-        return Err(Error::KrbError {
-            code: err::SKEW,
-            text: Some("authenticator clock skew".into()),
-        });
+        return Err(refused(err::SKEW));
+    }
+    if ticket_part.flags.invalid() {
+        return Err(refused(err::TKT_INVALID));
     }
     if let Some(ck) = &authenticator.cksum
         && let Some(data) = app_cksum
@@ -828,17 +835,6 @@ fn verify_inner(
     {
         let usage = KeyUsage::new(ku::AP_REQ_AUTH_CKSUM)?;
         verify_checksum_type(&session, usage, data, ck.cksumtype, ck.checksum.as_ref())?;
-    }
-    let key = EncryptionType::known(ap.authenticator.etype)
-        .ok()
-        .and_then(|et| ReplayKey::from_ciphertext(et, ap.authenticator.cipher.as_ref()))
-        .ok_or_else(|| Error::Crypto("ciphertext shorter than its checksum".into()))?
-        .file2();
-    if replay.check_and_store(key, params.skew) {
-        return Err(Error::KrbError {
-            code: err::REPEAT,
-            text: Some("authenticator replay".into()),
-        });
     }
     Ok(ApVerifyOk {
         ticket_part,
@@ -850,65 +846,40 @@ fn verify_inner(
     })
 }
 
-// MIT: `krb5_check_transited_list` (chk_trans.c:309-355)
-/// Anonymous crealm skips transited check.
-fn check_ap_req_transited(
-    part: &EncTicketPart,
-    srealm: &str,
-    capaths: &BTreeMap<String, BTreeMap<String, Vec<String>>>,
-) -> Result<(), Error> {
-    if part.flags.bit(flag_bit::TRANSITED_POLICY_CHECKED) {
-        return Ok(());
-    }
-    let raw = part.transited.contents.as_ref();
-    if raw.is_empty() || raw[0] == 0 {
-        return Ok(());
-    }
-    let crealm = String::from_utf8_lossy(part.crealm.as_bytes());
-    if crealm == "WELLKNOWN:ANONYMOUS" {
-        return Ok(());
-    }
-    let hops = part
-        .transited
-        .realms_for(&crealm, srealm)
-        .map_err(|_| Error::KrbError {
-            code: err::ILL_CR_TKT,
-            text: Some("ill-formed transited list".into()),
-        })?;
-    let allowed = walk_realm_tree(capaths, &crealm, srealm);
-    for h in hops {
-        if !allowed.iter().any(|a| a == &h) {
-            return Err(Error::KrbError {
-                code: err::ILL_CR_TKT,
-                text: Some("transited realm not in hierarchy".into()),
-            });
+// MIT: `krb5_k_decrypt` (lib/crypto/krb/decrypt.c:30-85)
+#[must_use]
+pub fn decrypt_code(e: &krb5_crypto::Error) -> Option<i32> {
+    match e {
+        krb5_crypto::Error::Integrity => Some(err::BAD_INTEGRITY),
+        krb5_crypto::Error::CiphertextTooShort => Some(err::BAD_MSIZE),
+        krb5_crypto::Error::BadEnctype(_) | krb5_crypto::Error::UnsupportedEtype(_) => {
+            Some(err::BAD_ENCTYPE)
         }
+        krb5_crypto::Error::InvalidKeyLength => Some(err::CRYPTO_INTERNAL),
+        _ => None,
     }
-    Ok(())
 }
 
-// MIT: `krb5_walk_realm_tree` (walk_rtree.c:96-120)
-fn walk_realm_tree(
-    capaths: &BTreeMap<String, BTreeMap<String, Vec<String>>>,
-    client: &str,
-    server: &str,
-) -> Vec<String> {
-    if client == server {
-        return Vec::new();
+// MIT: `krb5_k_decrypt` (lib/crypto/krb/decrypt.c:41-55)
+fn session_key(
+    key: &krb5_types::EncryptionKey,
+    data: &EncryptedData,
+) -> Result<ProtocolKey, krb5_crypto::Error> {
+    let etype = EncryptionType::known(key.keytype)?;
+    if data.etype != ENCTYPE_UNKNOWN && data.etype != key.keytype {
+        return Err(krb5_crypto::Error::BadEnctype(data.etype));
     }
-    if let Some(vals) = capaths.get(client).and_then(|m| m.get(server)) {
-        let mut out = vec![client.to_owned()];
-        if !(vals.len() == 1 && vals[0] == ".") {
-            for v in vals {
-                if v != "." {
-                    out.push(v.clone());
-                }
-            }
-        }
-        out.push(server.to_owned());
-        return out;
+    if data.cipher.as_ref().len() < etype.min_ciphertext_len() {
+        return Err(krb5_crypto::Error::CiphertextTooShort);
     }
-    hierarchical_walk_realms(client, server)
+    ProtocolKey::from_bytes(etype, key.keyvalue.as_ref())
+}
+
+fn refused(code: i32) -> Error {
+    Error::KrbError {
+        code,
+        text: Some(error_message(ERROR_TABLE_BASE_KRB5 + i64::from(code))),
+    }
 }
 
 // MIT: `krb5_sname_match` (sname_match.c:30-57)

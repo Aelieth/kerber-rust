@@ -517,6 +517,7 @@ impl GssContext {
             key_kvnos: keys.kvnos,
             key_principals: None,
             kvno: None,
+            permitted: conf.permitted()?,
             get_entry: keys.get_entry,
             // MIT rd_req_decoded_opt; see docs/parity/b1-client.md
             skew: i64::from(conf.clockskew),

@@ -143,6 +143,7 @@ fn get_vfy_cred(
         key_kvnos: Some(kvnos.as_slice()),
         key_principals: None,
         kvno: None,
+        permitted: conf.permitted()?,
         expected_server: Some(name),
         expected_realm: Some(realm_s.as_str()),
         get_entry: None,

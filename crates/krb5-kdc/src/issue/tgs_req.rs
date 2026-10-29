@@ -465,9 +465,12 @@ fn check_tgs_req<'a>(
     } else {
         match transited.realms_for(tkt_client_realm, req_realm.as_str()) {
             Ok(h) => {
-                let allowed = store
-                    .policy()
-                    .transit_allowed(tkt_client_realm, &req_realm, &h);
+                let allowed = krb5_types::transited::transit_allowed(
+                    &store.policy().capaths,
+                    tkt_client_realm,
+                    &req_realm,
+                    &h,
+                );
                 if !allowed {
                     crate::audit::log_bad_transit(&cprinc, &sprinc, &transited);
                 }
@@ -1160,7 +1163,7 @@ fn find_alternate_tgs(
         .get(1)
         .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
         .unwrap_or_default();
-    let hops = crate::store::walk_realm_instances(&store.policy().capaths, store.realm(), &far);
+    let hops = krb5_types::transited::walk_realm_tree(&store.policy().capaths, store.realm(), &far);
     for inst in hops.iter().skip(1).rev() {
         let Ok(hop) = PrincipalName::try_new(PrincipalName::NT_SRV_INST, ["krbtgt", inst.as_str()])
         else {

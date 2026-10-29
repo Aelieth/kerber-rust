@@ -69,12 +69,14 @@ pub fn kdb_rd_req(
     ap_req: &[u8],
     rcache: &ReplayCache,
 ) -> Result<ApVerifyOk, krb5_protocol::Error> {
-    let get_entry = kdb_get_entry(store, conf.permitted()?);
+    let permitted = conf.permitted()?;
+    let get_entry = kdb_get_entry(store, permitted);
     let params = ApVerifyParams {
         keys: &[],
         key_kvnos: None,
         key_principals: None,
         kvno: None,
+        permitted,
         expected_server: acceptor,
         expected_realm: Some(realm),
         get_entry: Some(&get_entry),

@@ -128,7 +128,7 @@ const E_PREAUTH_FAILED: &str = "Preauthentication failed";
 // MIT: `on_response` (plugins/preauth/otp/main.c:167-168)
 const KRB5_PREAUTH_FAILED: i32 = -1_765_328_174;
 const E_GENERIC: &str = "Generic preauthentication failure";
-pub(crate) const E_INTEGRITY: &str = "Decrypt integrity check failed";
+const E_INTEGRITY: &str = "Decrypt integrity check failed";
 const E_SKEW: &str = "Clock skew too great";
 pub(crate) const E_EINVAL: &str = "Invalid argument";
 const E_ASN1: &str = "ASN.1 identifier doesn't match expected value";

@@ -24,6 +24,13 @@ use std::collections::BTreeMap;
 
 /// No `[capaths]`, for the parameters that outlive the function that makes them.
 static NO_CAPATHS: BTreeMap<String, BTreeMap<String, Vec<String>>> = BTreeMap::new();
+static PERMITTED: [EncryptionType; 5] = [
+    EncryptionType::Aes256CtsHmacSha196,
+    EncryptionType::Aes128CtsHmacSha196,
+    EncryptionType::Aes256CtsHmacSha384192,
+    EncryptionType::Aes128CtsHmacSha256128,
+    EncryptionType::Des3CbcSha1,
+];
 
 fn host_ap_req() -> (Vec<u8>, ProtocolKey, u32) {
     krb5_config::isolate_test_krb5();
@@ -72,6 +79,7 @@ fn walk(keys: &[ProtocolKey], kvnos: &[u32]) -> ApVerifyParams<'static> {
         key_kvnos: Some(Box::leak(kvnos.to_vec().into_boxed_slice())),
         key_principals: None,
         kvno: None,
+        permitted: &PERMITTED,
         expected_server: None,
         expected_realm: None,
         get_entry: None,
@@ -188,6 +196,7 @@ fn rd_req_authenticator_skew_is_skew() {
         key_kvnos: None,
         key_principals: None,
         kvno: None,
+        permitted: &PERMITTED,
         expected_server: None,
         expected_realm: None,
         get_entry: None,
@@ -224,6 +233,7 @@ fn verify(
         key_kvnos: None,
         key_principals: None,
         kvno: None,
+        permitted: &PERMITTED,
         expected_server: None,
         expected_realm: None,
         get_entry: None,
@@ -237,7 +247,7 @@ fn verify(
 }
 
 #[test]
-fn rd_req_transited_unchecked_evil_hop_is_ill_cr_tkt() {
+fn rd_req_transited_unchecked_one_realm_is_no_tkt_in_rlm() {
     let (raw, key, _) = host_ap_req();
     let raw2 = rewrite_ticket(&raw, &key, |part| {
         part.flags = part
@@ -247,8 +257,8 @@ fn rd_req_transited_unchecked_evil_hop_is_ill_cr_tkt() {
         part.transited = TransitedEncoding::from_realms(&["EVIL.COM"]);
     });
     match verify(&raw2, &key) {
-        Err(krb5_protocol::Error::KrbError { code, .. }) => assert_eq!(code, err::ILL_CR_TKT),
-        other => panic!("expected ILL_CR_TKT, got {other:?}"),
+        Err(krb5_protocol::Error::KrbError { code, .. }) => assert_eq!(code, err::NO_TKT_IN_RLM),
+        other => panic!("expected NO_TKT_IN_RLM, got {other:?}"),
     }
 }
 
@@ -307,6 +317,7 @@ fn accept(raw: &[u8], key: &ProtocolKey) -> Result<(), krb5_protocol::Error> {
         key_kvnos: None,
         key_principals: None,
         kvno: None,
+        permitted: &PERMITTED,
         expected_server: None,
         expected_realm: None,
         get_entry: None,
@@ -380,6 +391,7 @@ fn pinned_name_wrong_kvno_is_badkeyver() {
         key_kvnos: Some(&kvnos),
         key_principals: None,
         kvno: None,
+        permitted: &PERMITTED,
         expected_server: Some(&server),
         expected_realm: Some(TEST_REALM),
         get_entry: None,
@@ -450,6 +462,7 @@ fn named<'a>(
         key_kvnos: None,
         key_principals: None,
         kvno: None,
+        permitted: &PERMITTED,
         expected_server: Some(server),
         expected_realm: Some(TEST_REALM),
         get_entry: Some(get_entry),
@@ -546,10 +559,9 @@ fn rd_req_with_a_named_server_and_a_wrong_key_is_bad_integrity_or_not_us() {
     let wrong = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[3u8; 32]).unwrap();
     let lookup = |_: &PrincipalName, _: &str, _: u32, _: i32| Ok(wrong.clone());
     let host = documented_host();
-    assert!(matches!(
-        verify_ap_req_ex(&raw, &named(&host, &lookup), &ReplayCache::new(), None),
-        Err(krb5_protocol::Error::Crypto(_))
-    ));
+    let (code, text) = named_code(&raw, &named(&host, &lookup));
+    assert_eq!(code, err::BAD_INTEGRITY);
+    assert!(text.starts_with("Cannot decrypt ticket for "), "{text}");
     let elsewhere =
         PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "elsewhere.kerber.test"]);
     let (code, text) = named_code(&raw, &named(&elsewhere, &lookup));
@@ -626,10 +638,7 @@ fn rd_req_with_no_server_maps_the_keytab_codes_for_the_tickets_server() {
     ));
     let wrong = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[3u8; 32]).unwrap();
     let lookup = |_: &PrincipalName, _: &str, _: u32, _: i32| Ok(wrong.clone());
-    assert!(matches!(
-        verify_ap_req_ex(&raw, &unnamed(&lookup), &ReplayCache::new(), None),
-        Err(krb5_protocol::Error::Crypto(_))
-    ));
+    assert_eq!(named_code(&raw, &unnamed(&lookup)).0, err::BAD_INTEGRITY);
 }
 
 /// A host-based server with no host over a keytab that cannot be walked matches the ticket's server by
@@ -745,6 +754,7 @@ fn rd_req_with_a_server_named_and_its_key_of_bad_parity_is_refused_with_the_keys
         key_kvnos: Some(Box::leak(vec![kvno].into_boxed_slice())),
         key_principals: None,
         kvno: None,
+        permitted: &PERMITTED,
         expected_server: Some(Box::leak(Box::new(server.clone()))),
         expected_realm: Some(TEST_REALM),
         get_entry: None,

@@ -8,6 +8,8 @@
  * auth context, its addresses 10.0.0.1 (local) and 127.0.0.1 (remote). Written: `id<TAB>answer`,
  * `0` when MIT accepts, `asn1` for an ASN.1 decode error, `krb5:<n>` for code n of the krb5
  * table, else `other:<code>`. Run with KRB5RCACHETYPE=none. No Rust code runs.
+ * `rd-priv-oracle text` adds MIT's message to a refusal (`id<TAB>krb5:<n><TAB>message`); a
+ * `req-named` case names the keytab's principal as the server, where `req` names none.
  *
  * Built with -DKPASSWD_KDB (and the kadm-server and kdb libraries) it also has a `kpasswd` mode,
  * `rd-priv-oracle kpasswd`, which does what kadmind's kpasswd acceptor does (schpw.c
@@ -57,6 +59,21 @@ static void answer(const char *id, krb5_error_code ret)
     char text[64];
     code_text(ret, text, sizeof(text));
     printf("%s\t%s\n", id, text);
+}
+
+static void say(krb5_context ctx, const char *id, krb5_error_code ret, int with_text)
+{
+    char text[64];
+    const char *msg;
+
+    if (!with_text || ret == 0) {
+        answer(id, ret);
+        return;
+    }
+    code_text(ret, text, sizeof(text));
+    msg = krb5_get_error_message(ctx, ret);
+    printf("%s\t%s\t%s\n", id, text, msg);
+    krb5_free_error_message(ctx, msg);
 }
 
 static unsigned char *unhex(const char *s, unsigned int *n)
@@ -248,6 +265,7 @@ int main(int argc, char **argv)
     krb5_keytab_entry ent;
     unsigned char local4[4] = {10, 0, 0, 1}, remote4[4] = {127, 0, 0, 1};
     krb5_address local, remote;
+    int with_text = argc > 1 && strcmp(argv[1], "text") == 0;
 
     if (argc > 1 && strcmp(argv[1], "kpasswd") == 0) {
 #ifdef KPASSWD_KDB
@@ -315,9 +333,11 @@ int main(int argc, char **argv)
         ap.data = (char *)unhex(aphex, &ap.length);
         if (ap.data == NULL || krb5_auth_con_init(ctx, &ac) != 0)
             return 2;
-        ret = krb5_rd_req(ctx, &ac, &ap, NULL, kt, NULL, NULL);
-        if (ret != 0 || strcmp(kind, "req") == 0) {
-            answer(id, ret);
+        krb5_clear_error_message(ctx);
+        ret = krb5_rd_req(ctx, &ac, &ap, strcmp(kind, "req-named") == 0 ? ent.principal : NULL,
+                          kt, NULL, NULL);
+        if (ret != 0 || strncmp(kind, "req", 3) == 0) {
+            say(ctx, id, ret, with_text);
         } else {
             memset(&msg, 0, sizeof(msg));
             msg.data = (char *)unhex(msghex, &msg.length);
@@ -329,7 +349,7 @@ int main(int argc, char **argv)
                 ret = krb5_rd_priv(ctx, ac, &msg, &out, NULL);
             else
                 ret = krb5_rd_safe(ctx, ac, &msg, &out, NULL);
-            answer(id, ret);
+            say(ctx, id, ret, with_text);
             krb5_free_data_contents(ctx, &out);
             free(msg.data);
         }

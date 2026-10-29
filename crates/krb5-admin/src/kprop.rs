@@ -8,6 +8,7 @@ use krb5_kdc::{
     LoadLog, PrincipalStore, Ulog, UlogLast, dump_store, dump_store_with_key, load_dump,
     load_dump_with_stash, save_store_fresh,
 };
+use krb5_protocol::trace::{ERROR_TABLE_BASE_KRB5, error_message};
 use krb5_protocol::{
     AUTH_CONTEXT_DO_SEQUENCE, AcceptorAuthContext, AcceptorConfig, ApVerifyParams, KeytabEntry,
     RemoteSeq, ReplayCache, build_ap_req_mutual_seq, build_krb_safe_from, local_host_address,
@@ -319,6 +320,7 @@ fn recvauth_with<S: Read + Write + PeerAddr>(
         key_kvnos: None,
         key_principals: None,
         kvno: None,
+        permitted: conf.permitted().unwrap_or_default(),
         expected_server: verify_server,
         expected_realm: verify_realm,
         get_entry: None,
@@ -418,7 +420,6 @@ fn kpropd_acl_string_to_enctype(s: &str) -> Option<i32> {
 }
 
 // MIT: `krb5int_is_app_tag` (k5-int.h:1334-1336)
-/// AP-REQ is application tag 14.
 fn is_ap_req(raw: &[u8]) -> bool {
     raw.first().is_some_and(|b| b & !0x20 == 0x4e)
 }
@@ -461,30 +462,7 @@ fn asn1_com_err(s: &str) -> String {
 }
 
 fn recvauth_protocol_text(code: i32) -> String {
-    match code {
-        err::BAD_INTEGRITY => "Decrypt integrity check failed".into(),
-        err::NOKEY => "Service key not available".into(),
-        err::TKT_EXPIRED => "Ticket expired".into(),
-        err::TKT_NYV => "Ticket not yet valid".into(),
-        err::REPEAT => "Request is a replay".into(),
-        err::NOT_US => "The ticket isn't for us".into(),
-        err::BADMATCH => "Ticket/authenticator don't match".into(),
-        err::BADADDR => "Incorrect net address".into(),
-        err::SKEW => "Clock skew too great".into(),
-        err::BADVERSION => "Protocol version mismatch".into(),
-        err::MSG_TYPE => "Invalid message type".into(),
-        err::MODIFIED => "Message stream modified".into(),
-        err::BADORDER => "Message out of order".into(),
-        err::ILL_CR_TKT => "Illegal cross-realm ticket".into(),
-        err::BADKEYVER => "Key version is not available".into(),
-        err::MUT_FAIL => "Mutual authentication failed".into(),
-        err::BADDIRECTION => "Incorrect message direction".into(),
-        err::METHOD => "Alternative authentication method required".into(),
-        err::BADSEQ => "Incorrect sequence number in message".into(),
-        err::INAPP_CKSUM => "Inappropriate type of checksum in message".into(),
-        err::GENERIC => "Generic error (see e-text)".into(),
-        _ => format!("KRB5 error code {code}"),
-    }
+    error_message(ERROR_TABLE_BASE_KRB5 + i64::from(code))
 }
 
 /// Endtime is 400s ago, past the 300s skew.

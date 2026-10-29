@@ -158,22 +158,6 @@ fn a_session_key_the_acceptor_does_not_permit_is_noperm_etype() {
     assert!(matches!(err, Error::NopermEtype(_)));
 }
 
-/// the ticket's own enctype is refused before `negotiate_etype` sees the session key's, with the error table's text alone.
-#[test]
-fn a_ticket_enctype_the_acceptor_does_not_permit_is_noperm_etype_first() {
-    let aes128 = EncryptionType::Aes128CtsHmacSha196;
-    let session = ProtocolKey::random(AES256).unwrap();
-    let ok = accepted(&session, None, None, true, None);
-    let err = AcceptorAuthContext::from_ap_req(&ok, &conf(&[aes128])).unwrap_err();
-    assert!(matches!(err, Error::NopermEtype(_)));
-    assert_eq!(err.to_string(), "Encryption type not permitted");
-    let permitted_session = ProtocolKey::random(aes128).unwrap();
-    let ok = accepted(&permitted_session, None, None, true, None);
-    let err = AcceptorAuthContext::from_ap_req(&ok, &conf(&[aes128])).unwrap_err();
-    assert_eq!(err.to_string(), "Encryption type not permitted");
-    assert!(AcceptorAuthContext::from_ap_req(&ok, &conf(&[AES256, aes128])).is_ok());
-}
-
 #[test]
 fn a_permitted_session_key_with_a_subkey_outside_the_list_is_noperm_etype() {
     let session = ProtocolKey::random(AES256).unwrap();

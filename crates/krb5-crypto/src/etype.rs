@@ -146,6 +146,16 @@ impl EncryptionType {
         }
     }
 
+    // MIT: `krb5_k_decrypt` (lib/crypto/krb/decrypt.c:48-52)
+    #[must_use]
+    pub const fn min_ciphertext_len(self) -> usize {
+        match self {
+            Self::Rc4Hmac => 24,
+            Self::Des3CbcSha1 => 28,
+            _ => 16 + self.hmac_output_len(),
+        }
+    }
+
     // MIT: `default_enctype_list` (lib/krb5/krb/init_ctx.c:59-66)
     #[must_use]
     pub const fn preferred() -> [Self; 4] {

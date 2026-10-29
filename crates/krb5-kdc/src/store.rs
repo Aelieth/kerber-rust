@@ -788,4 +788,3 @@ pub use principal::{
 pub(crate) use principal::{db_args_put_error, refresh_kadm_tl};
 pub use pwqual::{Pwqual, clear_thread_pwqual, register_pwqual, set_thread_pwqual};
 pub use rid::{RID_FIRST_USER, RID_KRBTGT};
-pub(crate) use transit::walk_realm_instances;

@@ -49,8 +49,8 @@ pub use ap_rep::{build_ap_rep, verify_ap_rep};
 pub use ap_req::{
     ApAuthenticator, ApVerifyOk, ApVerifyParams, DEFAULT_SKEW, KeytabGetEntry, KeytabLookup,
     address_search, build_ap_req, build_ap_req_from_authenticator, build_ap_req_mutual_seq,
-    build_ap_req_opts, build_ap_req_with_cksum, generate_ap_authenticator, sname_match,
-    verify_ap_req, verify_ap_req_ex,
+    build_ap_req_opts, build_ap_req_with_cksum, decrypt_code, generate_ap_authenticator,
+    sname_match, verify_ap_req, verify_ap_req_ex,
 };
 pub use as_ex::{
     AsOutcome, AsPrompt, AsRequest, AsRestart, AsTicketOpts, DEFAULT_PREFERRED_PREAUTH_TYPES,

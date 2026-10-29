@@ -142,7 +142,7 @@ fn accept_same_token_twice_is_repeat() {
         &AcceptorConfig::default(),
     ) {
         Err(err) => {
-            assert_eq!(err.to_string(), "KRB-ERROR 34: authenticator replay");
+            assert_eq!(err.to_string(), "KRB-ERROR 34: Request is a replay");
         }
         Ok(_) => panic!("replayed AP-REQ must be 34"),
     }

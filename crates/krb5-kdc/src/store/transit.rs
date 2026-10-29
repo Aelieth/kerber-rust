@@ -4,36 +4,12 @@ use std::collections::BTreeMap;
 
 use krb5_crypto::ProtocolKey;
 use krb5_types::PrincipalName;
-use krb5_types::transited::hierarchical_walk_realms;
 
 use super::PrincipalStore;
 use super::keys::{KeyEntry, next_kvno};
 use super::principal::{AdminEnt, CreateKeys};
 use crate::acl::{Acl, AdminOp};
 use crate::error::Error;
-
-pub(crate) fn walk_realm_instances(
-    capaths: &BTreeMap<String, BTreeMap<String, Vec<String>>>,
-    client: &str,
-    server: &str,
-) -> Vec<String> {
-    if client == server {
-        return Vec::new();
-    }
-    if let Some(vals) = capaths.get(client).and_then(|m| m.get(server)) {
-        let mut out = vec![client.to_owned()];
-        if !(vals.len() == 1 && vals[0] == ".") {
-            for v in vals {
-                if v != "." {
-                    out.push(v.clone());
-                }
-            }
-        }
-        out.push(server.to_owned());
-        return out;
-    }
-    hierarchical_walk_realms(client, server)
-}
 
 impl PrincipalStore {
     pub fn set_capaths(&mut self, capaths: BTreeMap<String, BTreeMap<String, Vec<String>>>) {

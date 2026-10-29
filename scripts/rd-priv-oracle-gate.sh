@@ -59,9 +59,39 @@ if ! "$SWEEP" judge "$OUT/cases.tsv" "$OUT/mit.tsv" >"$OUT/judge.txt"; then
 fi
 MIT_OK="$(grep -c "$(printf '\t')0$" "$OUT/mit.tsv" || true)"
 
+# MIT's order and texts (rd_req_dec.c rd_req_decoded_opt): `rd-sweep order` writes faults alone and in pairs, some
+# sent twice (`-again`), so MIT reads them with a replay cache and the Rust acceptor with one of its own. Only
+# aes256 is permitted, and the keytab also holds an aes128 key.
+TAB="$(printf '\t')"
+"$SWEEP" order >"$OUT/order.tsv"
+docker cp "$OUT/order.tsv" "$NAME":/tmp/rd-order.tsv
+docker exec "$NAME" sh -c 'printf "[libdefaults]\n    permitted_enctypes = aes256-cts-hmac-sha1-96\n" >/tmp/rd-order.conf'
+docker exec -e KRB5RCACHENAME=file2:/tmp/rd-order.rcache2 -e KRB5_CONFIG=/tmp/rd-order.conf "$NAME" \
+    sh -c 'rm -f /tmp/rd-order.rcache2; /tmp/rd-priv-oracle text </tmp/rd-order.tsv >/tmp/rd-order-mit.tsv'
+docker cp "$NAME":/tmp/rd-order-mit.tsv "$OUT/order-mit.tsv"
+ORDER="$(grep -vc '^#' "$OUT/order.tsv")"
+[ "$(wc -l <"$OUT/order-mit.tsv" | tr -d ' ')" = "$ORDER" ] || die "MIT answered $(wc -l <"$OUT/order-mit.tsv") of $ORDER order cases"
+for want in "order/pristine${TAB}0" "transit/server-realm${TAB}krb5:43${TAB}Illegal cross-realm ticket" \
+    "transit/one-realm${TAB}krb5:185${TAB}Cannot find ticket for requested realm" \
+    "order/expired-badmatch${TAB}krb5:36${TAB}Ticket/authenticator don't match" \
+    "order/invalid-skew${TAB}krb5:37${TAB}Clock skew too great" \
+    "decrypt/authenticator-key${TAB}krb5:31${TAB}Decrypt integrity check failed" \
+    "order/authenticator-key-expired${TAB}krb5:31${TAB}Decrypt integrity check failed" \
+    "decrypt/session-key-size-etype${TAB}krb5:188${TAB}Bad encryption type" \
+    "etype/ticket-noperm-named${TAB}krb5:236${TAB}Encryption type not permitted" \
+    "order/ticket-noperm-replay-again${TAB}krb5:236${TAB}Encryption type not permitted" \
+    "order/expired-replay-again${TAB}krb5:34${TAB}Request is a replay" \
+    "order/transit-replay-again${TAB}krb5:43${TAB}Illegal cross-realm ticket"; do
+    grep -qx "$want" "$OUT/order-mit.tsv" || die "MIT answers otherwise than $want"
+done
+if ! "$SWEEP" judge-order "$OUT/order.tsv" "$OUT/order-mit.tsv" >"$OUT/order-judge.txt"; then
+    grep -m 20 '^PART' "$OUT/order-judge.txt" || true
+    log "rd.priv.oracle" "error" ",\"error\":\"order: $(tail -1 "$OUT/order-judge.txt")\""
+    exit 1
+fi
+
 # kadmind's kpasswd acceptor. The realm is built here, so the oracle's KDB: keytab and the Rust
 # acceptor's store are one database (`kdb5_util dump`, read by `rd-sweep judge-explicit`).
-TAB="$(printf '\t')"
 docker cp "$SWEEP" "$NAME":/tmp/rd-sweep
 mit_oracle_cc "$NAME" /tmp/rd-priv-oracle-kdb /tmp/rd-priv-oracle.c kadm-server -O1 -DKPASSWD_KDB
 docker exec "$NAME" kdb5_util create -s -P masterpassword >/dev/null
@@ -153,5 +183,5 @@ if ! docker exec "$NAME" sh -c '/tmp/rd-sweep judge-kdb /tmp/ka-cases.tsv /tmp/k
 fi
 docker cp "$NAME":/tmp/ka-judge.txt "$OUT/ka-judge.txt"
 KA_OK="$(awk -F"$TAB" '$2 == "0"' "$OUT/ka-mit.tsv" | wc -l | tr -d ' ')"
-log "rd.priv.oracle" "ok" ",\"cases\":$CASES,\"mit_accepts\":$MIT_OK,\"rust_parts\":0,\"kpasswd_cases\":$KP_CASES,\"kpasswd_mit_accepts\":$KP_OK,\"kpasswd_rust_parts\":0,\"kadmind_cases\":$KA_CASES,\"kadmind_mit_accepts\":$KA_OK,\"kadmind_rust_parts\":0"
+log "rd.priv.oracle" "ok" ",\"cases\":$CASES,\"mit_accepts\":$MIT_OK,\"rust_parts\":0,\"order_cases\":$ORDER,\"order_rust_parts\":0,\"kpasswd_cases\":$KP_CASES,\"kpasswd_mit_accepts\":$KP_OK,\"kpasswd_rust_parts\":0,\"kadmind_cases\":$KA_CASES,\"kadmind_mit_accepts\":$KA_OK,\"kadmind_rust_parts\":0"
 exit 0

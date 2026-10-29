@@ -47,6 +47,7 @@ any other `###` heading.
 - **admin.** kadmind assembles each RPC record without blocking and closes one stalled past 35 s; at the cap, unauthenticated connections drop first.
 - **kdc.** FAST armor gets MIT's `krb5_rd_req` checks in order: a client other than the ticket's, or an unchecked transit, is refused; codes and most log lines are MIT's.
 - **kdc.** A transited hop naming the server's own realm is refused, and a TGS ticket's unchecked transited list is checked first, as MIT's `krb5_rd_req`.
+- **protocol.** The AP-REQ acceptor refuses a transited hop naming the server's own realm and runs `rd_req_decoded_opt`'s checks in MIT's order, with MIT's codes and texts.
 
 ### Added
 
