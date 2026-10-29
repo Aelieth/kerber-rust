@@ -86,13 +86,13 @@ impl<'a> XdrR<'a> {
         krb5_types::principal_from_unparsed(&s, "").map_err(|e| Error::Inner(e.to_string()))
     }
 
-    pub(super) fn skip_array_i32_pairs(&mut self) -> Result<(), Error> {
+    pub(super) fn i32_pairs(&mut self) -> Result<Vec<(i32, i32)>, Error> {
         let n = self.u32()?;
+        let mut out = Vec::new();
         for _ in 0..n {
-            self.u32()?;
-            self.u32()?;
+            out.push((self.u32()?.cast_signed(), self.u32()?.cast_signed()));
         }
-        Ok(())
+        Ok(out)
     }
 
     pub(super) fn key_salt_tuples(&mut self) -> Result<Vec<EncryptionType>, Error> {

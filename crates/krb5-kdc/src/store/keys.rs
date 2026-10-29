@@ -407,6 +407,7 @@ impl PrincipalStore {
         self.set_keys_in(name, &realm, keys, keepold, &actor)
     }
 
+    // MIT: `kadm5_setkey_principal_4` (lib/kadm5/srv/svr_principal.c:1581-1750)
     pub fn set_keys_in(
         &mut self,
         name: &PrincipalName,
@@ -417,28 +418,46 @@ impl PrincipalStore {
     ) -> Result<(), Error> {
         self.inside_change()?;
         if keys.is_empty() {
-            return Err(Error::Crypto("setkey empty".into()));
+            return Err(Error::InvalidArgument("Invalid argument".into()));
+        }
+        if princ_realm == self.realm && name.components_joined() == "kadmin/history" {
+            return Err(Error::InvalidArgument(
+                "Cannot change protected principal".into(),
+            ));
+        }
+        let want = keys[0].kvno;
+        if keys.iter().any(|k| k.kvno != want) {
+            return Err(Error::Crypto("setkey kvno".into()));
         }
         let id = self.canonical_id(name, princ_realm)?;
-        {
-            let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
-            let want = keys[0].kvno;
-            if keys.iter().any(|k| k.kvno != want) {
-                return Err(Error::Crypto("setkey kvno".into()));
-            }
-            if princ_realm == self.realm && name.components_joined() == "kadmin/history" {
+        let p = self.map.get(&id).ok_or(Error::NotFound)?;
+        let kvno = if want == 0 {
+            next_kvno(&p.keys)
+        } else if want > 65535 || keepold > 0 && p.keys.iter().any(|k| k.kvno == want) {
+            return Err(Error::Crypto("setkey kvno".into()));
+        } else {
+            want
+        };
+        let allowed = p.pw_policy.as_ref().and_then(|n| self.policies.get(n));
+        let etypes: Vec<EncryptionType> = keys.iter().map(|k| k.etype).collect();
+        apply_keysalt_policy(
+            allowed.and_then(|pol| pol.allowed_keysalts.as_deref()),
+            &etypes,
+            &[],
+        )?;
+        let salt = |k: &KeyEntry| k.salt_type.filter(|t| *t > 0).unwrap_or(0);
+        for (i, a) in keys.iter().enumerate() {
+            if keys[i + 1..]
+                .iter()
+                .any(|b| a.etype == b.etype && salt(a) == salt(b))
+            {
                 return Err(Error::InvalidArgument(
-                    "Cannot change protected principal".into(),
+                    "Multiple values for single or folded enctype".into(),
                 ));
             }
-            let kvno = if want == 0 {
-                next_kvno(&p.keys)
-            } else {
-                if keepold > 0 && p.keys.iter().any(|k| k.kvno == want) {
-                    return Err(Error::Crypto("setkey kvno".into()));
-                }
-                want
-            };
+        }
+        {
+            let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
             for k in &mut keys {
                 k.kvno = kvno;
             }

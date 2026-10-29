@@ -236,12 +236,19 @@ pub(super) fn parse_purgekeys(args: &[u8]) -> Result<(u32, PrincipalName, String
     Ok((api, princ, prealm, keep))
 }
 
+pub(super) struct SetkeyArgs {
+    pub(super) api: u32,
+    pub(super) princ: PrincipalName,
+    pub(super) prealm: String,
+    pub(super) keys: Vec<KeyEntry>,
+    pub(super) keepold: bool,
+    pub(super) ks: Vec<(i32, i32)>,
+}
+
 // MIT: `xdr_kadm5_key_data` (kadm_rpc_xdr.c:1166-1174)
+// MIT: `krb5_dbe_def_encrypt_key_data` (lib/kdb/encrypt_key.c:95-105)
 /// V4 key: kvno, keyblock, salt.
-pub(super) fn parse_setkey(
-    args: &[u8],
-    proc: u32,
-) -> Result<(u32, PrincipalName, String, Vec<krb5_kdc::KeyEntry>, bool), Error> {
+pub(super) fn parse_setkey(args: &[u8], proc: u32) -> Result<SetkeyArgs, Error> {
     let mut r = XdrR::new(args);
     let api = r.u32()?;
     let (princ, prealm) = r.principal_realm()?;
@@ -250,9 +257,11 @@ pub(super) fn parse_setkey(
     } else {
         r.u32()? != 0
     };
-    if proc == SETKEY_PRINCIPAL3 {
-        r.skip_array_i32_pairs()?;
-    }
+    let ks = if proc == SETKEY_PRINCIPAL3 {
+        r.i32_pairs()?
+    } else {
+        Vec::new()
+    };
     let n = r.u32()?;
     let mut keys = Vec::new();
     for _ in 0..n {
@@ -270,16 +279,21 @@ pub(super) fn parse_setkey(
         if proc == SETKEY_PRINCIPAL4 {
             let st = i32::from_be_bytes(r.u32()?.to_be_bytes());
             let salt = r.opaque()?;
-            if st != 0 {
+            if st > 0 {
                 ke.salt_type = Some(st);
-            }
-            if !salt.is_empty() {
                 ke.kdb_salt = Some(salt);
             }
         }
         keys.push(ke);
     }
-    Ok((api, princ, prealm, keys, keepold))
+    Ok(SetkeyArgs {
+        api,
+        princ,
+        prealm,
+        keys,
+        keepold,
+        ks,
+    })
 }
 
 pub(super) fn parse_gstrings(args: &[u8]) -> Result<(u32, PrincipalName, String), Error> {

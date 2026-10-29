@@ -354,7 +354,8 @@ fn decode_keydata_raw(r: &mut XdrIn<'_>) -> Result<Vec<OsaKeyData>, XdrError> {
     let mut keys = Vec::with_capacity(n);
     for _ in 0..n {
         let ver = u16::try_from(r.u32()?).unwrap_or(u16::MAX);
-        let kvno = u16::try_from(r.u32()?).unwrap_or(u16::MAX);
+        let kvno =
+            u16::try_from(r.u32()?).map_err(|_| XdrError::Invalid("iprop key data kvno".into()))?;
         let n_enc = r.count(4)?;
         let mut all_types = Vec::with_capacity(n_enc);
         for _ in 0..n_enc {
@@ -423,6 +424,9 @@ fn decode_keydata(
         }
         if ver > 2 {
             return Err(XdrError::Invalid(format!("iprop key data version {ver}")));
+        }
+        if kvno > u32::from(u16::MAX) {
+            return Err(XdrError::Invalid(format!("iprop key data kvno {kvno}")));
         }
         let Some(et) = enctypes.first().copied() else {
             continue;

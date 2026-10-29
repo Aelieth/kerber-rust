@@ -167,6 +167,7 @@ any other `###` heading.
 - **ci.** The ccache and two client-differential nightly gates and their two probes are gone; field client-tools and pkinit cover them.
 
 ### Fixed
+- **admin.** setkey checks policy keysalts, duplicate enctypes and setkey3 tuples, as MIT.
 - **kdc.** PKINIT picks a chain issuer by name and key id, then checks one signature.
 - **client.** `kinit -E` sends the UPN as one enterprise component, as MIT; `-E` alone no longer asks to canonicalize.
 - **client.** With `-C` or an enterprise name, kinit follows a KDC's client referral to another realm, as MIT, for up to 16 requests.

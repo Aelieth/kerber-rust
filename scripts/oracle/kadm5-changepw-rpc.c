@@ -2,6 +2,7 @@
  * Out-of-process only; compiled in the MIT 1.22.2 image.
  * usage: kadm5-changepw-rpc [--service princ] <client> <password> <realm> <op> [arg]
  * op: listprincs | getprinc <name> | randkey-keepold <n> | setkey-keepold <n>
+ *     | setkey4-kvno <target> <kvno> | setkey-cases <target>
  *     | addpol-minlife-unmasked-max <policy>
  *     | modify-raw <target> <maxlife|policyclr>
  */
@@ -116,6 +117,52 @@ int main(int argc, char **argv) {
             printf("%s[%d]=%ld\n", op, i, (long)ret);
             if (ret)
                 break;
+        }
+        krb5_free_principal(ctx, p);
+    } else if ((strcmp(op, "setkey-cases") == 0 && argc - argi >= 5) ||
+               (strcmp(op, "setkey4-kvno") == 0 && argc - argi >= 6)) {
+        /* kadm5_setkey_principal_3/_4 (svr_principal.c:1519-1750) on a target. */
+        krb5_principal p;
+        kadm5_key_data kd[2];
+        krb5_keyblock kb[2];
+        krb5_key_salt_tuple ks;
+        unsigned char raw[32];
+        int i;
+        ret = krb5_parse_name(ctx, argv[argi + 4], &p);
+        if (ret) {
+            printf("parse_code=%ld\n", (long)ret);
+            kadm5_destroy(handle);
+            krb5_free_context(ctx);
+            return 1;
+        }
+        memset(raw, 7, sizeof(raw));
+        memset(kd, 0, sizeof(kd));
+        for (i = 0; i < 2; i++) {
+            kd[i].key.magic = KV5M_KEYBLOCK;
+            kd[i].key.enctype = ENCTYPE_AES256_CTS_HMAC_SHA1_96;
+            kd[i].key.length = sizeof(raw);
+            kd[i].key.contents = raw;
+            kb[i] = kd[i].key;
+        }
+        if (strcmp(op, "setkey4-kvno") == 0) {
+            kd[0].kvno = (krb5_kvno)strtoul(argv[argi + 5], NULL, 10);
+            ret = kadm5_setkey_principal_4(handle, p, 0, kd, 1);
+            printf("setkey4_kvno=%ld\n", (long)ret);
+        } else {
+            printf("dup=%ld\n", (long)kadm5_setkey_principal_4(handle, p, 0, kd, 2));
+            kb[1].enctype = ENCTYPE_AES128_CTS_HMAC_SHA1_96;
+            kb[1].length = 16;
+            ks.ks_enctype = ENCTYPE_AES256_CTS_HMAC_SHA1_96;
+            ks.ks_salttype = KRB5_KDB_SALTTYPE_NORMAL;
+            printf("setkey3_count=%ld\n",
+                   (long)kadm5_setkey_principal_3(handle, p, 0, 1, &ks, kb, 2));
+            ks.ks_enctype = ENCTYPE_AES128_CTS_HMAC_SHA1_96;
+            printf("setkey3_etype=%ld\n",
+                   (long)kadm5_setkey_principal_3(handle, p, 0, 1, &ks, kb, 1));
+            ks.ks_enctype = ENCTYPE_AES256_CTS_HMAC_SHA1_96;
+            ks.ks_salttype = KRB5_KDB_SALTTYPE_NOREALM;
+            printf("setkey3_norealm=%ld\n",
+                   (long)kadm5_setkey_principal_3(handle, p, 0, 1, &ks, kb, 1));
         }
         krb5_free_principal(ctx, p);
     } else if (strcmp(op, "addpol-minlife-unmasked-max") == 0 && argc - argi >= 5) {

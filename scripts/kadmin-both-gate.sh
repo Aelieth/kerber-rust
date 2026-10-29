@@ -691,6 +691,68 @@ diff "$SCRATCH/z72ks-rust.txt" "$SCRATCH/z72ks-mit.txt" || {
     exit 1
 }
 
+echo "==== setkey3/4 on MIT's kadmind, then ours (svr_principal.c:1519-1750) ===="
+setkey_leg() {
+    local ctn=$1 conf=$2 leg=$3 out keys
+    local rpc=(docker exec -e KRB5_CONFIG="$conf" "$ctn" /tmp/kadm5-changepw-rpc --service kadmin/admin
+        admin/admin adminpassword KERBER.TEST)
+    mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p admin/admin -w adminpassword \
+        -q 'addprinc -randkey skport' 2>&1 | grep -F 'Principal "skport@KERBER.TEST" created.'
+    out="$("${rpc[@]}" setkey4-kvno skport 70000 2>&1 || true)"
+    echo "$leg kvno 70000: $out"
+    echo "$out" | grep -o 'setkey4_kvno=[0-9]*' > "$SCRATCH/setkey-kvno-$leg.txt"
+    if [ "$leg" = mit ]; then
+        keys="$(mit_kadmin_local "$ctn" -- -q 'getprinc skport' | grep '^Key:')"
+    else
+        keys="$(rust_kadmin_local -e KRB5_KDC_DB=/tmp/principal -e KRB5_KDC_STASH=/tmp/stash \
+            "$ctn" -- -q 'getprinc skport' 2>&1 | grep -e '^Key:' -e 'kvno' || true)"
+    fi
+    echo "$leg keys: $keys"
+    echo "$keys" > "$SCRATCH/setkey-keys-$leg.txt"
+    out="$("${rpc[@]}" setkey-cases skport 2>&1 || true)"
+    echo "$leg cases: $out"
+    echo "$out" | grep -E '^(dup|setkey3_count|setkey3_etype|setkey3_norealm)=' > "$SCRATCH/setkey-cases-$leg.txt"
+    if [ "$leg" = mit ]; then
+        keys="$(mit_kadmin_local "$ctn" -- -q 'getprinc skport' | grep '^Key:')"
+    else
+        keys="$(rust_kadmin_local -e KRB5_KDC_DB=/tmp/principal -e KRB5_KDC_STASH=/tmp/stash \
+            "$ctn" -- -q 'getprinc skport' 2>&1 | grep -e '^Key:' -e 'kvno' || true)"
+    fi
+    echo "$leg keys after setkey3: $keys"
+    echo "$keys" | grep -Ex 'Key: vno [0-9]+, aes256-cts-hmac-sha1-96:norealm'
+    kadmin_q_ok mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p admin/admin -w adminpassword \
+        -q 'addpol -allowedkeysalts aes128-cts-hmac-sha1-96:normal skpol' >/dev/null
+    mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p admin/admin -w adminpassword \
+        -q 'addprinc -randkey -policy skpol -e aes128-cts-hmac-sha1-96:normal skpolp' 2>&1 \
+        | grep -F 'Principal "skpolp@KERBER.TEST" created.'
+    out="$("${rpc[@]}" setkey4-kvno skpolp 0 2>&1 || true)"
+    echo "$leg policy keysalts: $out"
+    echo "$out" | grep -o 'setkey4_kvno=[0-9]*' > "$SCRATCH/setkey-policy-$leg.txt"
+}
+setkey_leg "$NAME_MIT" /etc/krb5.conf mit
+setkey_leg "$NAME" /tmp/kadmin-krb5.conf rust
+grep -Fx 'setkey4_kvno=0' "$SCRATCH/setkey-kvno-mit.txt"
+grep -Fx 'Key: vno 4464, aes256-cts-hmac-sha1-96' "$SCRATCH/setkey-keys-mit.txt"
+grep -Fx 'setkey4_kvno=43787579' "$SCRATCH/setkey-kvno-rust.txt" || {
+    echo "setkey: ours did not refuse kvno 70000 as KADM5_SETKEY_BAD_KVNO (the deviation row)" >&2
+    exit 1
+}
+grep -Ex 'Key: vno 1, .*' "$SCRATCH/setkey-keys-rust.txt" >/dev/null || {
+    echo "setkey: the refused kvno changed our keys or the database: $(cat "$SCRATCH/setkey-keys-rust.txt")" >&2
+    exit 1
+}
+printf 'dup=43787571\nsetkey3_count=43787573\nsetkey3_etype=43787573\nsetkey3_norealm=0\n' \
+    | diff - "$SCRATCH/setkey-cases-mit.txt"
+diff "$SCRATCH/setkey-cases-mit.txt" "$SCRATCH/setkey-cases-rust.txt" || {
+    echo "setkey: duplicate enctypes or setkey3 tuples differ between MIT's kadmind and ours" >&2
+    exit 1
+}
+grep -Fx 'setkey4_kvno=43787578' "$SCRATCH/setkey-policy-mit.txt"
+diff "$SCRATCH/setkey-policy-mit.txt" "$SCRATCH/setkey-policy-rust.txt" || {
+    echo "setkey: a policy's allowed_keysalts differs between MIT's kadmind and ours" >&2
+    exit 1
+}
+
 echo "==== Z8.3 bootstrap actors: kadmin/changepw kdb5_util@ (kadm5_create.c:100) ===="
 # kadmin/changepw is never successfully modified in this gate (the
 # lockdown_keys cell is a privilege denial), so both legs still show

@@ -14,10 +14,11 @@ use super::codes::{
     KADM5_MAX_RLIFE, KADM5_PASS_Q_CLASS, KADM5_PASS_Q_DICT, KADM5_PASS_Q_TOOSHORT,
     KADM5_PASS_REUSE, KADM5_PASS_TOOSOON, KADM5_POLICY, KADM5_POLICY_ALLOWED_KEYSALTS,
     KADM5_POLICY_CLR, KADM5_PRINC_EXPIRE_TIME, KADM5_PROTECT_PRINCIPAL, KADM5_PW_EXPIRATION,
-    KADM5_PW_MAX_LIFE, KADM5_PW_MIN_LIFE, KADM5_SETKEY_BAD_KVNO, KADM5_TL_DATA, KADM5_UNK_POLICY,
-    KADM5_UNK_PRINC, KRB5_KDB_ALIAS_UNSUPPORTED, KRB5_KDB_BAD_SALTTYPE, KRB5_KDB_CANTLOCK_DB,
-    MODIFY_POLICY, MODIFY_PRINCIPAL, OSA_ADB_DUP, OSA_ADB_NOENT, PURGEKEYS, RENAME_PRINCIPAL,
-    SET_STRING, SETKEY_PRINCIPAL, SETKEY_PRINCIPAL3, SETKEY_PRINCIPAL4,
+    KADM5_PW_MAX_LIFE, KADM5_PW_MIN_LIFE, KADM5_SETKEY_BAD_KVNO, KADM5_SETKEY_DUP_ENCTYPES,
+    KADM5_SETKEY3_ETYPE_MISMATCH, KADM5_TL_DATA, KADM5_UNK_POLICY, KADM5_UNK_PRINC,
+    KRB5_KDB_ALIAS_UNSUPPORTED, KRB5_KDB_BAD_SALTTYPE, KRB5_KDB_CANTLOCK_DB, MODIFY_POLICY,
+    MODIFY_PRINCIPAL, OSA_ADB_DUP, OSA_ADB_NOENT, PURGEKEYS, RENAME_PRINCIPAL, SET_STRING,
+    SETKEY_PRINCIPAL, SETKEY_PRINCIPAL3, SETKEY_PRINCIPAL4,
 };
 use super::glob::{glob_pattern_ok, policies_matching, principals_matching};
 use super::iprop::dispatch_iprop;
@@ -28,7 +29,7 @@ use super::policy::{
     validate_allowed_keysalts,
 };
 use super::principal::{
-    ChpassArgs, clamp_self_keepold, create_princ_mask_err, db_args_code, encode_chrand,
+    ChpassArgs, SetkeyArgs, clamp_self_keepold, create_princ_mask_err, db_args_code, encode_chrand,
     encode_extract_keys, encode_gprinc, encode_gprincs, encode_gstrings,
     impose_request_restrictions, modify_princ_mask_err, parse_alias, parse_chpass, parse_chrand,
     parse_create, parse_extract, parse_get, parse_gprincs, parse_gstrings, parse_ks, parse_modify,
@@ -717,7 +718,14 @@ pub(super) fn dispatch_kadm5_ticket(
             }
         }
         SETKEY_PRINCIPAL | SETKEY_PRINCIPAL3 | SETKEY_PRINCIPAL4 => {
-            let (api, name, prealm, keys, keepold) = parse_setkey(args, proc)?;
+            let SetkeyArgs {
+                api,
+                princ: name,
+                prealm,
+                mut keys,
+                keepold,
+                ks,
+            } = parse_setkey(args, proc)?;
             let req = req_realm(&prealm, &realm);
             let mut g = match write_store(store, proc, API_V2) {
                 Ok(g) => g,
@@ -734,6 +742,9 @@ pub(super) fn dispatch_kadm5_ticket(
             }
             if changepw || !stack.setkey(actor, &cid) {
                 return Ok(generic_ret(api, KADM5_AUTH_SETKEY));
+            }
+            if !setkey3_tuples(&mut keys, &ks) {
+                return Ok(generic_ret(api, KADM5_SETKEY3_ETYPE_MISMATCH));
             }
             let n = clamp_self_keepold(is_self(actor, &name, &req), keepold);
             let changed = commit(&mut g, proc, api, |s| {
@@ -825,6 +836,23 @@ pub(super) fn auth_code_for(proc: u32) -> u32 {
 }
 
 /// AclDenied: the stub's KADM5_AUTH_*.
+// MIT: `kadm5_setkey_principal_3` (lib/kadm5/srv/svr_principal.c:1519-1556)
+fn setkey3_tuples(keys: &mut [krb5_kdc::KeyEntry], ks: &[(i32, i32)]) -> bool {
+    if ks.is_empty() {
+        return true;
+    }
+    if ks.len() != keys.len() || keys.iter().zip(ks).any(|(k, t)| k.etype.to_iana() != t.0) {
+        return false;
+    }
+    for (k, &(_, salt_type)) in keys.iter_mut().zip(ks) {
+        if salt_type > 0 {
+            k.salt_type = Some(salt_type);
+            k.kdb_salt = Some(Vec::new());
+        }
+    }
+    true
+}
+
 pub(super) fn kadm5_code(proc: u32, e: &Error) -> u32 {
     let s = match e {
         Error::AclDenied | Error::KpropUnauthorized(_) => return auth_code_for(proc),
@@ -846,6 +874,8 @@ pub(super) fn kadm5_code(proc: u32, e: &Error) -> u32 {
         KADM5_PASS_REUSE
     } else if s.contains("setkey kvno") {
         KADM5_SETKEY_BAD_KVNO
+    } else if s == "Multiple values for single or folded enctype" {
+        KADM5_SETKEY_DUP_ENCTYPES
     } else if s == "Invalid key/salt tuples" {
         KADM5_BAD_KEYSALTS
     } else if s == "Cannot change protected principal" {
