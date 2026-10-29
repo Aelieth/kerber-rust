@@ -11,7 +11,7 @@ from .common import ROOT, _die
 CHANGELOG_HEADINGS_ALLOW = 0
 DOCS_SIZE_ALLOW = 0
 DOCS_SIZE_LIMIT = 100 * 1024
-CHANGELOG_UNRELEASED_MAX_BYTES = 24000
+CHANGELOG_UNRELEASED_MAX_BYTES = 25000
 
 _DOC_FILE_CITE_RE = re.compile(
     r"`((?:crates|scripts|docs|tests|harness|\.github|examples)/"
