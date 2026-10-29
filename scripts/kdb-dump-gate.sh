@@ -521,7 +521,7 @@ printf '        key_stash_file = %s/stash\n' "$D" >>kdc.conf
 printf '        master_key_type = aes256-cts-hmac-sha1-96\n    }\n' >>kdc.conf
 export KRB5_CONFIG="$D/krb5.conf" KRB5_KDC_PROFILE="$D/kdc.conf"
 "$T" -P kl-master create -s >/dev/null 2>&1 || { echo "create failed"; exit 1; }
-key() { klist -k -K stash 2>/dev/null | sed -n 's/.*(0x\([0-9a-f]*\)).*/\1/p'; }
+key() { klist -k -K stash 2>/dev/null | sed -n 's/^ *\([0-9]*\) .*(0x\([0-9a-f]*\)).*/\1 \2/p'; }
 step() {
     echo "$1 rc=$2"
     sed "s/^/$1 out: /" o
