@@ -1,4 +1,4 @@
-use std::io::Read;
+use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream, ToSocketAddrs, UdpSocket};
 use std::time::{Duration, Instant};
 
@@ -43,6 +43,52 @@ fn request_timeout_error() -> Error {
         "Cannot contact any KDC for requested realm",
     ))
 }
+/// A stream that arms its socket timeout from `end` before every read and write.
+// MIT: `service_fds` (lib/krb5/os/sendto_kdc.c:1421-1437)
+pub(crate) struct DeadlineIo<'a> {
+    stream: &'a mut TcpStream,
+    end: Option<Instant>,
+}
+
+impl<'a> DeadlineIo<'a> {
+    pub(crate) fn new(stream: &'a mut TcpStream, end: Option<Instant>) -> Self {
+        Self { stream, end }
+    }
+
+    fn arm(&self, write: bool) -> io::Result<()> {
+        let Some(end) = self.end else {
+            return Ok(());
+        };
+        let left = end.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+        if write {
+            self.stream.set_write_timeout(Some(left))
+        } else {
+            self.stream.set_read_timeout(Some(left))
+        }
+    }
+}
+
+impl Read for DeadlineIo<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.arm(false)?;
+        self.stream.read(buf)
+    }
+}
+
+impl Write for DeadlineIo<'_> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.arm(true)?;
+        self.stream.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.stream.flush()
+    }
+}
+
 const UDP_MAX: usize = 64 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -298,7 +344,7 @@ impl<'a> Passes<'a> {
             self.last = request_timeout_error();
             return None;
         };
-        match tcp_exchange(dest, self.request, connect, io_timeout) {
+        match tcp_exchange(dest, self.request, connect, io_timeout, self.deadline) {
             Ok(bytes) => {
                 crate::capture_pdu("client-rep", &bytes);
                 Some(bytes)
@@ -727,7 +773,7 @@ fn exchange_udp(
 // MIT: `service_tcp_write` (lib/krb5/os/sendto_kdc.c:1115-1146)
 // MIT: `service_tcp_read` (lib/krb5/os/sendto_kdc.c:1149-1200)
 fn exchange_tcp(sa: SocketAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
-    tcp_exchange(sa, request, TIMEOUT, TIMEOUT)
+    tcp_exchange(sa, request, TIMEOUT, TIMEOUT, None)
 }
 
 fn exchange_tcp_capped(
@@ -737,7 +783,7 @@ fn exchange_tcp_capped(
 ) -> Result<Vec<u8>, Error> {
     let connect = cap_budget(TIMEOUT, deadline).ok_or_else(request_timeout_error)?;
     let io_timeout = cap_budget(TIMEOUT, deadline).ok_or_else(request_timeout_error)?;
-    tcp_exchange(sa, request, connect, io_timeout)
+    tcp_exchange(sa, request, connect, io_timeout, deadline)
 }
 
 fn tcp_exchange(
@@ -745,13 +791,14 @@ fn tcp_exchange(
     request: &[u8],
     connect: Duration,
     io_timeout: Duration,
+    deadline: Option<Instant>,
 ) -> Result<Vec<u8>, Error> {
     let ra = RemoteAddr {
         transport: Transport::Tcp,
         addr: sa,
     };
     trace::sendto_kdc_tcp_connect(&ra);
-    let result = tcp_round_trip(sa, &ra, request, connect, io_timeout);
+    let result = tcp_round_trip(sa, &ra, request, connect, io_timeout, deadline);
     if let Ok(reply) = &result {
         trace::sendto_kdc_response(reply.len(), &ra);
     }
@@ -765,6 +812,7 @@ fn tcp_round_trip(
     request: &[u8],
     connect: Duration,
     io_timeout: Duration,
+    deadline: Option<Instant>,
 ) -> Result<Vec<u8>, Error> {
     let mut stream = TcpStream::connect_timeout(&sa, connect).map_err(|e| {
         if !is_timeout(&e) {
@@ -775,12 +823,8 @@ fn tcp_round_trip(
     stream
         .set_nodelay(true)
         .map_err(|e| Error::transport_msg(e.to_string()))?;
-    stream
-        .set_read_timeout(Some(io_timeout))
-        .map_err(|e| Error::transport_msg(e.to_string()))?;
-    stream
-        .set_write_timeout(Some(io_timeout))
-        .map_err(|e| Error::transport_msg(e.to_string()))?;
+    let end = Instant::now() + io_timeout;
+    let mut stream = DeadlineIo::new(&mut stream, Some(deadline.map_or(end, |d| end.min(d))));
     // MIT: `service_tcp_write` (lib/krb5/os/sendto_kdc.c:1124-1125)
     trace::sendto_kdc_tcp_send(ra);
     crate::framing::write_messages(&mut stream, &[request]).map_err(|e| {

@@ -6,7 +6,7 @@ cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
 . "$ROOT/scripts/lib/kadmin-q.sh"
-need_bins krb5-kinit krb5-kvno krb5-kdc krb5-kdb
+need_bins krb5-kinit krb5-kvno krb5-kpasswd krb5-kdc krb5-kdb
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-kinit-fast-gate"
@@ -274,6 +274,38 @@ for who in mit rust; do
         log "fast.client.gate" "error" ",\"error\":\"$who kvno used an expired krbtgt/OTHER.TEST\""
         exit 1
     fi
+done
+
+echo "==== request_timeout = 3: a TCP reply sent one byte a second fails at 3 s (MIT first) ===="
+docker cp "$ROOT/scripts/lib/trickle-kdc.py" "$NAME":/tmp/trickle-kdc.py
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kpasswd" "$NAME":/tmp/krb5-kpasswd
+docker exec "$NAME" chmod +x /tmp/krb5-kpasswd
+docker exec -d "$NAME" timeout 120 python3 /tmp/trickle-kdc.py 1899
+docker exec "$NAME" sh -c 'sed "s/^\[libdefaults\]\$/[libdefaults]\n    udp_preference_limit = 1\n    request_timeout = 3/" /etc/krb5.conf > /tmp/rt-base.conf
+sed "s/kdc = 127.0.0.1\$/kdc = 127.0.0.1:1899/" /tmp/rt-base.conf > /tmp/rt-kdc.conf
+sed "s/^\(        admin_server = 127.0.0.1\)\$/\1\n        kpasswd_server = 127.0.0.1:1899/" /tmp/rt-base.conf > /tmp/rt-kpw.conf'
+for what in kinit kpasswd; do
+    for who in mit rust; do
+        conf=/tmp/rt-kdc.conf
+        [ "$what" = kpasswd ] && conf=/tmp/rt-kpw.conf
+        docker exec "$NAME" rm -f /tmp/rt.cc
+        start=$SECONDS
+        set +e
+        case "$what.$who" in
+        kinit.mit) RT="$(docker exec -e KRB5_CONFIG=$conf "$NAME" sh -c 'printf "userpassword\n" | kinit -c /tmp/rt.cc user@KERBER.TEST' 2>&1)" ;;
+        kinit.rust) RT="$(docker exec -e KRB5_CONFIG=$conf -e KRB5_PASSWORD=userpassword "$NAME" /tmp/krb5-kinit -c /tmp/rt.cc user@KERBER.TEST 2>&1)" ;;
+        kpasswd.mit) RT="$(docker exec -e KRB5_CONFIG=$conf "$NAME" sh -c 'printf "userpassword\ntrickle-pw\ntrickle-pw\n" | kpasswd user@KERBER.TEST' 2>&1)" ;;
+        *) RT="$(docker exec -e KRB5_CONFIG=$conf -e KRB5_PASSWORD=userpassword -e KRB5_NEW_PASSWORD=trickle-pw "$NAME" /tmp/krb5-kpasswd user@KERBER.TEST 2>&1)" ;;
+        esac
+        rtrc=$?
+        set -e
+        took=$((SECONDS - start))
+        echo "$who $what rc=$rtrc after ${took}s: $(tail -n 1 <<<"$RT")"
+        if [ "$rtrc" -ne 1 ] || [ "$took" -gt 6 ] || ! grep -q 'Cannot contact any KDC' <<<"$RT"; then
+            log "fast.client.gate" "error" ",\"error\":\"$who $what did not stop at request_timeout\",\"rc\":$rtrc,\"secs\":$took"
+            exit 1
+        fi
+    done
 done
 
 echo "==== require_auth encrypted_challenge: FAST issued, password 12 both legs ===="

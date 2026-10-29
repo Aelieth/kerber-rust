@@ -19,7 +19,7 @@ use crate::auth_con::RemoteSeq;
 use crate::error::Error;
 use crate::safe_priv::{build_krb_priv_from, read_krb_priv, wipe_octets, wipe_vec};
 use crate::trace::{self, RemoteAddr, Transport};
-use crate::transport::{errno, is_timeout, read_errno};
+use crate::transport::{DeadlineIo, errno, is_timeout, read_errno};
 
 pub const KPASSWD_SUCCESS: u16 = 0;
 pub const KPASSWD_MALFORMED: u16 = 1;
@@ -605,12 +605,11 @@ fn kpasswd_tcp(
             trace::sendto_kdc_tcp_disconnect(&ra);
             continue;
         };
-        let read_limit = deadline.map(|end| end.saturating_duration_since(Instant::now()));
-        if read_limit.as_ref().is_some_and(Duration::is_zero) {
+        if deadline.is_some_and(|end| Instant::now() >= end) {
             trace::sendto_kdc_tcp_disconnect(&ra);
             break;
         }
-        let reply = tcp_round_trip(&mut stream, &body, &ra, read_limit);
+        let reply = tcp_round_trip(&mut stream, &body, &ra, deadline);
         if let Ok(reply) = &reply {
             trace::sendto_kdc_response(reply.len(), &ra);
         }
@@ -628,14 +627,11 @@ fn tcp_round_trip(
     stream: &mut TcpStream,
     body: &[u8],
     ra: &RemoteAddr,
-    limit: Option<Duration>,
+    deadline: Option<Instant>,
 ) -> io::Result<Vec<u8>> {
-    if let Some(limit) = limit {
-        stream.set_read_timeout(Some(limit))?;
-        stream.set_write_timeout(Some(limit))?;
-    }
+    let mut stream = DeadlineIo::new(stream, deadline);
     trace::sendto_kdc_tcp_send(ra);
-    crate::framing::write_messages(stream, &[body]).inspect_err(|e| {
+    crate::framing::write_messages(&mut stream, &[body]).inspect_err(|e| {
         trace::sendto_kdc_tcp_error_send(ra, errno(e));
     })?;
     let mut hdr = [0u8; 4];
