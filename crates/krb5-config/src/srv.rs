@@ -201,18 +201,22 @@ fn parse_resolv(text: &str, localdomain: Option<&str>, res_options: Option<&str>
     resolv
 }
 
+// glibc `res_setoptions` clamps `timeout:` to 30 and `attempts:` to 5.
+const RES_MAXRETRANS: u64 = 30;
+const RES_MAXRETRY: u32 = 5;
+
 fn apply_options(resolv: &mut Resolv, text: &str) {
     for tok in text.split_whitespace() {
         if let Some(v) = tok.strip_prefix("timeout:")
             && let Ok(n) = v.parse::<u64>()
             && n > 0
         {
-            resolv.timeout = Duration::from_secs(n);
+            resolv.timeout = Duration::from_secs(n.min(RES_MAXRETRANS));
         } else if let Some(v) = tok.strip_prefix("attempts:")
             && let Ok(n) = v.parse::<u32>()
             && n > 0
         {
-            resolv.attempts = n;
+            resolv.attempts = n.min(RES_MAXRETRY);
         } else if let Some(v) = tok.strip_prefix("ndots:")
             && let Ok(n) = v.parse::<usize>()
         {

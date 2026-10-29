@@ -1485,7 +1485,9 @@ fn krb_err(e: &KrbError) -> Error {
 }
 
 // MIT: `warn_deprecated` (lib/krb5/krb/get_in_tkt.c:1584-1607)
-pub fn warn_deprecated_enctype(out: &AsOutcome) {
+/// The banner MIT hands the prompter for a deprecated reply or session key.
+#[must_use]
+pub fn deprecated_enctype_warning(out: &AsOutcome) -> Option<String> {
     let reply = out.client_key.etype();
     let session = out.session_key.etype();
     let etype = if reply.is_deprecated() {
@@ -1493,12 +1495,18 @@ pub fn warn_deprecated_enctype(out: &AsOutcome) {
     } else if session.is_deprecated() {
         session
     } else {
-        return;
+        return None;
     };
-    println!(
+    Some(format!(
         "Warning: encryption type {} used for authentication is deprecated and will be disabled",
         etype.to_mit_name()
-    );
+    ))
+}
+
+pub fn warn_deprecated_enctype(out: &AsOutcome) {
+    if let Some(banner) = deprecated_enctype_warning(out) {
+        println!("{banner}");
+    }
 }
 
 // MIT: `krb5int_fast_verify_nego` (fast.c:648-664)

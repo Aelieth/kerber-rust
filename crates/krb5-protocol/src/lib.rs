@@ -60,9 +60,9 @@ pub use as_ex::{
     as_exchange_prompted, as_exchange_prompted_defer_fast, as_exchange_with_keys,
     as_exchange_with_keys_defer_fast, as_exchange_with_unreadable_keytab,
     as_exchange_with_unreadable_keytab_defer_fast, as_identify_realm, as_init_creds_options,
-    check_as_rep_times, conf_etypes, insert_module_padata_before_info_pa, set_service_restart,
-    sort_krb5_padata_sequence, verify_as_reply_req_times, verify_as_reply_server,
-    warn_deprecated_enctype,
+    check_as_rep_times, conf_etypes, deprecated_enctype_warning,
+    insert_module_padata_before_info_pa, set_service_restart, sort_krb5_padata_sequence,
+    verify_as_reply_req_times, verify_as_reply_server, warn_deprecated_enctype,
 };
 #[cfg(feature = "test-hooks")]
 pub use auth_con::set_test_seq_random;

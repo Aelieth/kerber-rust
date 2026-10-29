@@ -282,6 +282,8 @@ impl std::fmt::Debug for KeyExpNotice<'_> {
 pub struct KinitResult {
     pub as_out: AsOutcome,
     pub tgs_out: Option<TgsOutcome>,
+    /// Shown after the cache is stored, as MIT's prompter does.
+    pub deprecated_warning: Option<String>,
 }
 
 pub fn kinit(
@@ -419,12 +421,27 @@ pub fn kinit_with_princ(
     };
     let built = kinit_inner(ctx, kdc, me, &mut lazy, params);
     let result = match built {
-        Ok((r, cc)) => write_out_ccache(ctx, spec, cc).map(|()| r),
+        Ok((r, cc)) => store_then_warn(ctx, spec, cc, r),
         Err(e) => Err(e),
     };
     // The kinit password buffer and the two new-password replies are wiped.
     password.zeroize();
     result
+}
+
+// MIT: `init_creds_step_reply` (lib/krb5/krb/get_in_tkt.c:1842-1856)
+// The warning follows the store and shows even when the store fails.
+fn store_then_warn(
+    ctx: &ClientContext,
+    spec: &CcSpec,
+    cc: FileCcache,
+    r: KinitResult,
+) -> Result<KinitResult, Box<dyn std::error::Error + Send + Sync>> {
+    let stored = write_out_ccache(ctx, spec, cc);
+    if let Some(banner) = &r.deprecated_warning {
+        println!("{banner}");
+    }
+    stored.map(|()| r)
 }
 
 fn write_out_ccache(
@@ -497,7 +514,7 @@ pub fn kinit_prompted_princ(
         client: String::new(),
     };
     match kinit_inner(ctx, kdc, me, &mut lazy, params) {
-        Ok((r, cc)) => write_out_ccache(ctx, spec, cc).map(|()| r),
+        Ok((r, cc)) => store_then_warn(ctx, spec, cc, r),
         Err(e) => Err(e),
     }
 }
@@ -1509,9 +1526,9 @@ fn kinit_inner(
         Err(e) => return Err(e.into()),
     };
     let (realm_s, resolved) = (leg.realm, leg.kdc);
-    if params.prompter.is_some() || params.preauth_prompter.is_some() {
-        krb5_protocol::warn_deprecated_enctype(&as_out);
-    }
+    let deprecated_warning = (params.prompter.is_some() || params.preauth_prompter.is_some())
+        .then(|| krb5_protocol::deprecated_enctype_warning(&as_out))
+        .flatten();
     if ctx.profile.kdc_timesync {
         // MIT: `verify_as_reply` (lib/krb5/krb/get_in_tkt.c:260-262)
         // the reply's offset replaces one read from the armor cache.
@@ -1583,7 +1600,14 @@ fn kinit_inner(
         );
         return Err(e.into());
     }
-    Ok((KinitResult { as_out, tgs_out }, cache))
+    Ok((
+        KinitResult {
+            as_out,
+            tgs_out,
+            deprecated_warning,
+        },
+        cache,
+    ))
 }
 
 fn record_preauth_config(

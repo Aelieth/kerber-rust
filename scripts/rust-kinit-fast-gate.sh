@@ -337,6 +337,26 @@ for who in mit rust; do
     fi
 done
 
+echo "==== a realm relation named KDC is not kdc: no KDC found (MIT first) ===="
+docker exec "$NAME" sh -c 'sed "s/^\([[:space:]]*\)kdc = /\1KDC = /" /etc/krb5.conf > /tmp/upper-kdc.conf; grep -c "KDC = " /tmp/upper-kdc.conf'
+for who in mit rust; do
+    set +e
+    if [ "$who" = mit ]; then
+        UK="$(docker exec -e KRB5_CONFIG=/tmp/upper-kdc.conf "$NAME" sh -c 'printf "userpassword\n" | kinit -c /tmp/up.cc user@KERBER.TEST' 2>&1)"
+    else
+        UK="$(docker exec -e KRB5_CONFIG=/tmp/upper-kdc.conf -e KRB5_PASSWORD=userpassword "$NAME" /tmp/krb5-kinit -c /tmp/up.cc user@KERBER.TEST 2>&1)"
+    fi
+    set -e
+    UK="$(tr -d '\r' <<<"$UK" | grep -v '^Password for' | tail -n 1)"
+    UK="${UK#*: }"
+    echo "$who: '$UK'"
+    if [ "$who" = mit ]; then want_uk="$UK"; fi
+    if [ "${UK#Cannot find KDC for realm}" = "$UK" ] || [ "$UK" != "$want_uk" ]; then
+        log "fast.client.gate" "error" ",\"error\":\"$who found a KDC from a relation named KDC\""
+        exit 1
+    fi
+done
+
 echo "==== require_auth encrypted_challenge: FAST issued, password 12 both legs ===="
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdb" "$NAME":/tmp/krb5-kdb

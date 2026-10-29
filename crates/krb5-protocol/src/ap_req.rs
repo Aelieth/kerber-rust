@@ -162,16 +162,20 @@ pub struct ApAuthenticator<'a> {
 // MIT: `generate_authenticator` (lib/krb5/krb/mk_req_ext.c:301-327)
 // MIT: `krb5_us_timeofday` (lib/krb5/os/ustime.c:66-78)
 pub fn generate_ap_authenticator(auth: ApAuthenticator<'_>) -> Result<Authenticator, Error> {
-    if auth
-        .profile
-        .is_some_and(|p| p.client_aware_channel_bindings_invalid)
-    {
-        return Err(Error::BadBoolean);
-    }
-    let aware = auth.cbt
-        || auth
+    // MIT: `generate_authenticator` (lib/krb5/krb/mk_req_ext.c:301-309)
+    // The profile is read only when the channel-binding flag is unset.
+    let aware = if auth.cbt {
+        true
+    } else {
+        if auth
             .profile
-            .is_some_and(|p| p.client_aware_channel_bindings);
+            .is_some_and(|p| p.client_aware_channel_bindings_invalid)
+        {
+            return Err(Error::BadBoolean);
+        }
+        auth.profile
+            .is_some_and(|p| p.client_aware_channel_bindings)
+    };
     // MIT: `authenticator_7` (lib/krb5/asn.1/asn1_k_encode.c:693-693)
     let sequence = auth.sequence.filter(|n| *n != 0);
     let (now, usec) = stamped(auth.time_offset);
