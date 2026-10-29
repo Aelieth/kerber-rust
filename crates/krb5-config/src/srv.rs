@@ -201,7 +201,6 @@ fn parse_resolv(text: &str, localdomain: Option<&str>, res_options: Option<&str>
     resolv
 }
 
-// glibc `res_setoptions` clamps `timeout:` to 30 and `attempts:` to 5.
 const RES_MAXRETRANS: u64 = 30;
 const RES_MAXRETRY: u32 = 5;
 

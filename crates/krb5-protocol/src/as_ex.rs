@@ -1485,7 +1485,6 @@ fn krb_err(e: &KrbError) -> Error {
 }
 
 // MIT: `warn_deprecated` (lib/krb5/krb/get_in_tkt.c:1584-1607)
-/// The banner MIT hands the prompter for a deprecated reply or session key.
 #[must_use]
 pub fn deprecated_enctype_warning(out: &AsOutcome) -> Option<String> {
     let reply = out.client_key.etype();

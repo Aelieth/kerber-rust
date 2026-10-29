@@ -163,7 +163,6 @@ pub struct ApAuthenticator<'a> {
 // MIT: `krb5_us_timeofday` (lib/krb5/os/ustime.c:66-78)
 pub fn generate_ap_authenticator(auth: ApAuthenticator<'_>) -> Result<Authenticator, Error> {
     // MIT: `generate_authenticator` (lib/krb5/krb/mk_req_ext.c:301-309)
-    // The profile is read only when the channel-binding flag is unset.
     let aware = if auth.cbt {
         true
     } else {

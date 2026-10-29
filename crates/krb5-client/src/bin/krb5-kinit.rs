@@ -465,7 +465,6 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
             eprintln!("PA Option {attr} = {value}");
         }
     }
-    // Only a password login reads a password; a keytab or anonymous one does not.
     let pw_auth = !(opts.keytab || opts.anonymous);
     let given = if pw_auth { env_password() } else { None };
     // MIT: `kinit_prompter` (clients/kinit/kinit.c:622-636)

@@ -1012,7 +1012,6 @@ fn parse_realm_line(conf: &mut Krb5Conf, realm: &str, line: &str) {
             .push((k.to_owned(), v.clone()));
     }
     // MIT: `profile_find_node` (util/profile/prof_tree.c:305-321)
-    // A relation name is matched exactly.
     match k {
         "kdc" => match located_host(&v, crate::listen::KDC_PORT) {
             Ok(ep) => conf.kdcs.entry(realm.to_owned()).or_default().push(ep),
