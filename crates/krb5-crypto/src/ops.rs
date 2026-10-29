@@ -159,10 +159,14 @@ pub fn kdb_decrypt_key(mkey: &ProtocolKey, ciphertext: &[u8]) -> Result<Zeroizin
         return Err(Error::CiphertextTooShort);
     }
     let key_len = usize::from(u16::from_le_bytes([ciphertext[0], ciphertext[1]]));
-    let plain = Zeroizing::new(decrypt(mkey, KeyUsage::from_rfc(0), &ciphertext[2..])?);
-    if plain.len() != key_len {
+    let mut plain = Zeroizing::new(decrypt(mkey, KeyUsage::from_rfc(0), &ciphertext[2..])?);
+    // MIT: `krb5_dbe_def_decrypt_key_data` (lib/kdb/decrypt_key.c:80-106)
+    // the stored length is an int16 and the plaintext may be longer (padding), never shorter.
+    if key_len > 0x7fff || plain.len() < key_len {
         return Err(Error::InvalidKeyLength);
     }
+    plain[key_len..].zeroize();
+    plain.truncate(key_len);
     Ok(plain)
 }
 
@@ -721,6 +725,34 @@ fn emit(
 mod tests {
     use super::*;
     use md5::{Digest, Md5};
+
+    // MIT: `krb5_dbe_def_decrypt_key_data` (lib/kdb/decrypt_key.c:80-106)
+    // a padded plaintext is cut to the stored length; a short one, or a negative int16, is refused.
+    // No supported master and key enctype pair pads, so no live MIT cell reaches this.
+    #[test]
+    fn kdb_key_plaintext_may_be_padded_but_not_short() {
+        let mkey =
+            ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x31u8; 32]).unwrap();
+        let wrap = |stored: u16, plain: &[u8]| {
+            let mut out = stored.to_le_bytes().to_vec();
+            out.extend(encrypt(&mkey, KeyUsage::from_rfc(0), plain).unwrap());
+            out
+        };
+        let raw = [0x5au8; 32];
+        let padded = [&raw[..], &[0u8; 7]].concat();
+        for blob in [wrap(32, &raw), wrap(32, &padded)] {
+            assert_eq!(kdb_decrypt_key(&mkey, &blob).unwrap().as_slice(), &raw);
+        }
+        assert_eq!(
+            kdb_decrypt_key(&mkey, &wrap(33, &raw)),
+            Err(Error::InvalidKeyLength)
+        );
+        assert_eq!(
+            kdb_decrypt_key(&mkey, &wrap(0x8000, &vec![0u8; 0x8000])),
+            Err(Error::InvalidKeyLength)
+        );
+        assert_eq!(kdb_decrypt_key(&mkey, &[1]), Err(Error::CiphertextTooShort));
+    }
 
     // MIT: `krb5_c_decrypt` (lib/crypto/krb/decrypt.c:87-101)
     #[test]
