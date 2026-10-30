@@ -276,6 +276,7 @@ harness/field/run.sh --profile kill-loop --ref plan-12   # SW-3's kill loop (lab
 | --- | --- | --- | --- | --- | --- |
 | `upgrade` | nightly, weekly | mit, rust | kdc: `f4-mit-f44` / `rust-field-p12-f44` (reset; the rust leg leaves it on the ref's install); client2: `rust-ssh-f44` (rust leg, reset) | f-UP1 | under 1 / about 3.5 min (the build about 2) |
 | `kadmind-start` | nightly, weekly | mit, rust | kdc as `upgrade` left it (the running kadmind holds 464/749, which cell A1c needs) | f-AL1-start | under 1 / under 1 min |
+| `secrets-gcore` | weekly, after `kadmind-start` (kdc as `upgrade` left it, before any scenario restarts kadmind or changes the realm's keys); on demand with `--only upgrade,secrets-gcore` | mit, rust | kdc as `upgrade` left it (gdb installed when missing; `sruser` deleted at the end); client2: `mit-kit-fc44` / `rust-ssh-f44` (reset) | none: SR-1's first record | about 1 / 1 min |
 | `services` | nightly, weekly | mit, rust | services: `f4-mit-f44` / `services-rust-f44` (reset); kdc as `upgrade` left it | f-S2-services; f-S2-rust | about 2 / 2 min |
 | `nfs-client` | nightly, weekly | mit, rust | client2: `mit-kit-fc44` / `rust-ssh-f44`, services: `f4-mit-f44` / `services-rust-f44` (both reset); kdc as `upgrade` left it | f-R4-mit + f-R5-mit; f-R4 + f-R5 (client2's legs) | about 1.5 / 1.5 min |
 | `sssd-login` | nightly, weekly | mit, rust | client1: `mit-sudo-fc44` / `rust-nfs-sso-f44`, services: `f4-mit-f44` / `services-rust-f44` (both reset); kdc as `upgrade` left it | f-R2-mit; f-R2 (headless) | about 2 / 2 min |
