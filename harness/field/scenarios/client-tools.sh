@@ -172,7 +172,7 @@ for k in mit $OURS; do
     checklast "CT.klist.head.$k" '^Valid starting     Expires            Service principal$'
     checklast "CT.klist.tgt.$k" "^$T  $T  krbtgt/$R@$R\$"
     keep CT.klist "$k"
-    check "CT.klist-s.$k" rc run client2 "$(E "$k") \$B/klist -s -c $C"
+    check "CT.klist-s.$k" 'line:rc=0' run client2 "$(E "$k") \$B/klist -s -c $C; echo rc=\$?"
     keep CT.klist-s "$k"
     check "CT.kvno.$k" "^$S@$R: kvno = 2\$" run client2 "$(E "$k") \$B/kvno -c $C $SVC@$REALM"
     keep CT.kvno "$k"

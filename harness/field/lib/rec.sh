@@ -206,9 +206,10 @@ kdcsince() {
 }
 
 # capstart <vm> <name> <bpf filter>: tcpdump on every interface of <vm>, as a transient unit writing the VM's
-# /var/tmp/field-<name>.pcap (the filter should keep IP fragments: a port filter alone drops them).
+# /var/tmp/field-<name>.pcap (the filter should keep IP fragments: a port filter alone drops them). --immediate-mode:
+# without it, a stop in the same second loses what is still in the kernel's TPACKET_V3 block.
 capstart() {
-    run "$1" "sudo systemd-run --unit=field-pcap-$2 --collect tcpdump -i any -s0 -U -w /var/tmp/field-$2.pcap $(printf '%q' "$3"); sleep 2; systemctl is-active field-pcap-$2"
+    run "$1" "sudo systemd-run --unit=field-pcap-$2 --collect tcpdump -i any -s0 -U --immediate-mode -w /var/tmp/field-$2.pcap $(printf '%q' "$3"); sleep 2; systemctl is-active field-pcap-$2"
 }
 # capstop <vm> <name>: stop it; the raw capture comes to $STATE and is deleted on the VM; the record keeps
 # pcap/<name>.pcap without AS exchanges (+ .txt, pcap-keep.sh); the raw copy is deleted (check pcap.<name>).

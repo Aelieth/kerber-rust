@@ -120,7 +120,7 @@ PREAUTH=0
 DBMATCH=0
 CHPW=0
 cleanup() {
-    timeout -k 5 60 "$LAB" ssh kdc -- "[ -e $KC.pk ] && sudo mv $KC.pk $KC && sudo systemctl restart krb5kdc; [ $ANON = 1 ] && sudo kadmin.local -q 'delprinc -force WELLKNOWN/ANONYMOUS'; [ $PREAUTH = 1 ] && sudo kadmin.local -q 'modprinc -requires_preauth alice'; [ $DBMATCH = 1 ] && sudo kadmin.local -q 'delstr alice pkinit_cert_match'; [ $CHPW = 1 ] && sudo kadmin.local -q 'delprinc -force pkexp'; sudo rm -rf $BIG $EC $KDCC; rm -rf ~/pkb17; true" < /dev/null > /dev/null 2>&1
+    timeout -k 5 60 "$LAB" ssh kdc -- "[ -e $KC.pk ] && sudo mv $KC.pk $KC && sudo systemctl reset-failed krb5kdc && sudo systemctl restart krb5kdc; [ $ANON = 1 ] && sudo kadmin.local -q 'delprinc -force WELLKNOWN/ANONYMOUS'; [ $PREAUTH = 1 ] && sudo kadmin.local -q 'modprinc -requires_preauth alice'; [ $DBMATCH = 1 ] && sudo kadmin.local -q 'delstr alice pkinit_cert_match'; [ $CHPW = 1 ] && sudo kadmin.local -q 'delprinc -force pkexp'; sudo rm -rf $BIG $EC $KDCC; rm -rf ~/pkb17; true" < /dev/null > /dev/null 2>&1
     # shellcheck disable=SC2016 # the pid file is client2's
     timeout -k 5 60 "$LAB" ssh client2 -- '[ -f ~/pk/px/pid ] && kill "$(cat ~/pk/px/pid)"; rm -rf ~/pk; true' < /dev/null > /dev/null 2>&1
 }
@@ -132,7 +132,7 @@ trap 'exit 129' HUP
 # marked before the restart, so the startup lines are the ones after the mark.
 pkkdc() {
     kdcmark "$1"
-    check "$1" '^krb5kdc: active, 88 listening$' run kdc "sudo cp -p $KC.pk $KC && printf '%b' '$2' | sudo tee -a $KC > /dev/null && sudo systemctl restart krb5kdc && for i in \$(seq 1 40); do ss -Hlun 'sport = :88' | grep -q . && break; sleep 0.25; done; sudo tail -n 8 $KC; echo \"krb5kdc: \$(systemctl is-active krb5kdc), 88 \$(ss -Hlun 'sport = :88' | grep -q . && echo listening)\""
+    check "$1" '^krb5kdc: active, 88 listening$' run kdc "sudo cp -p $KC.pk $KC && printf '%b' '$2' | sudo tee -a $KC > /dev/null && sudo systemctl reset-failed krb5kdc && sudo systemctl restart krb5kdc && for i in \$(seq 1 40); do ss -Hlun 'sport = :88' | grep -q . && break; sleep 0.25; done; sudo tail -n 8 $KC; echo \"krb5kdc: \$(systemctl is-active krb5kdc), 88 \$(ss -Hlun 'sport = :88' | grep -q . && echo listening)\""
 }
 # certkinit <check> <kinit> <ERE> [<identity>]: alice's kinit from client2 with a certificate of hers (alice, or the name
 # given) and client2's anchors, stdin empty (no password to fall back on), then the ticket cache listed.
@@ -678,7 +678,7 @@ for v in othersan dns dns_serverauth dns_noku; do
 done
 
 section "kdc.conf restored"
-check kdc.conf.restored '^restored, krb5kdc active$' run kdc "sudo mv $KC.pk $KC && sudo systemctl restart krb5kdc && systemctl is-active krb5kdc > /dev/null && ! sudo grep -qE '^[[:space:]]*pkinit_identity' $KC && echo 'restored, krb5kdc active'"
+check kdc.conf.restored '^restored, krb5kdc active$' run kdc "sudo mv $KC.pk $KC && sudo systemctl reset-failed krb5kdc && sudo systemctl restart krb5kdc && systemctl is-active krb5kdc > /dev/null && ! sudo grep -qE '^[[:space:]]*pkinit_identity' $KC && echo 'restored, krb5kdc active'"
 if [ "$PREAUTH" = 1 ]; then
     check restore.alice.preauth "^Principal \"alice@$R\" modified\\.\$" run kdc "sudo kadmin.local -q 'modprinc -requires_preauth alice' 2>&1"
     PREAUTH=0

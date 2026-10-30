@@ -4,8 +4,9 @@
 # port 754 for the run (on 749, MIT's net-server keeps kadmind's own program and drops iprop's, and Fedora's
 # kadmind_t may bind kprop_port_t but no unreserved port); kdc2 is the replica: MIT's kpropd and krb5kdc on f4-mit-f44
 # (leg mit), this port's on rust-replica-f44 with the ref's build streamed from kdc, where upgrade left it (leg rust:
-# upgrade runs first, and this scenario last, as it leaves kdc on the MIT baseline; without that build on kdc the leg
-# stops before kdc is reset, so a lone --only replica has nothing to stream). FIELD_REPLICA_BAKED=1 keeps
+# upgrade runs first; the leg reads the 4 programs from that build tree, not the install, so it runs after rollback
+# too; it runs last but install, as it leaves kdc on the MIT baseline; without that build on kdc the leg stops
+# before kdc is reset, so a lone --only replica has nothing to stream). FIELD_REPLICA_BAKED=1 keeps
 # rust-replica-f44's own programs instead (the parent leg, without upgrade). Each kpropd is started from the ssh session
 # with -d in a session of its own (setsid -f), so the ssh command returns; its lines go to /var/tmp/rep/kpropd.log on
 # kdc2. The stash and the keytabs go from kdc to kdc2 through an ssh pipe, which the host relays without a copy, never
@@ -14,8 +15,9 @@
 #          refused, as MIT's iprop replica loads only an iprop dump (load -i), and on the rust leg kpropd's lines for
 #          it are the MIT leg's (as REP.3 finds it; the pid and the socket's fd masked); kdc2's krb5kdc then issues
 #          alice's TGT to client2, whose krb5.conf names kdc2 alone;
-#   REP.4: kpropd.acl without the primary: MIT's kprop line "Broken pipe while sending database", and kpropd's
-#          "Rejected connection from unauthorized principal";
+#   REP.4: kpropd.acl without the primary: one of MIT's two kprop lines, by timing ("Broken pipe while sending
+#          database block starting at 0" or "Software caused connection abort while reading response from server"),
+#          and kpropd's "Rejected connection from unauthorized principal";
 #   REP.2: addprinc, cpw, modprinc -maxlife, a second addprinc, delprinc and renprinc on kdc reach kdc2 within two
 #          polls (10 s each): the renamed principal's getprinc lines equal kdc's, the deleted one is gone, and MIT's
 #          kproplog -h gives one last serial on both;
@@ -100,7 +102,6 @@ section "replica --leg $LEG: MIT primary on kdc ($MIT_SNAPSHOT_KDC), replica on 
 BAKED=${FIELD_REPLICA_BAKED:-0}
 if [ "$LEG" = rust ] && [ "$BAKED" = 0 ]; then
     note "the ref's build is on kdc as upgrade left it; it is streamed to kdc2 before kdc is reset"
-    kdcis
     check build.kdc '^4 programs built$' run kdc "cd ~/$CO/target/release && ls $BINS | wc -l | sed 's/\$/ programs built/'"
     check build.sums '^[0-9a-f]{64}  krb5-' run kdc "cd ~/$CO/target/release && sha256sum $BINS"
     cp "$LAST_OUT" "$STATE/build.sums"
@@ -196,7 +197,8 @@ check REP.1.kinit "^Default principal: alice@$R\$" runin client2 "alice's passwo
 section "REP.4 kpropd.acl without the primary: the kprop is refused, as MIT's"
 run kdc2 "sudo cp -p /var/kerberos/krb5kdc/kpropd.acl $W/kpropd.acl.good && echo 'host/nobody.kerber.test@$REALM' | sudo tee /var/kerberos/krb5kdc/kpropd.acl"
 run kdc "sudo kprop -r $REALM -f $W/dump -s $W/kprop.keytab kdc2.kerber.test 2>&1; echo \"kprop rc=\$?\""
-checklast REP.4.kprop '^kprop: Broken pipe while sending database'
+# MIT's kprop reports either, by whether its write or its read meets the closed socket first.
+checklast REP.4.kprop '^kprop: (Broken pipe while sending database block starting at 0|Software caused connection abort while reading response from server)$'
 checklast REP.4.kprop.rc '^kprop rc=1$'
 kpropdlog REP.4.rejected "Rejected connection from unauthorized principal host/kdc\\.kerber\\.test@$R"
 run kdc2 "sudo cp -p $W/kpropd.acl.good /var/kerberos/krb5kdc/kpropd.acl && sudo cat /var/kerberos/krb5kdc/kpropd.acl"
