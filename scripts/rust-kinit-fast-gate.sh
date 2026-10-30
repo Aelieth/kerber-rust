@@ -425,6 +425,14 @@ for spec in 1881:1 1882:4095 1883:16777216; do
     re_case "$port" 'Pre-authentication failed: Invalid key generation parameters from KDC' "s2kparams $iter" s2k "$iter"
 done
 
+echo "==== each AS request carries a new nonce: MIT kinit, then ours, to a KDC that answers PREAUTH_REQUIRED, then PREAUTH_FAILED (get_in_tkt.c:1273-1276) ===="
+re_case 1884 'Password incorrect' nonce nonce
+mapfile -t seen < <(docker exec "$NAME" grep '^nonce' /tmp/re-1884.log | awk '{print $2}')
+echo "nonces, MIT's then ours: ${seen[*]}"
+[ "${#seen[@]}" = 4 ] || die "the nonce KDC saw ${#seen[@]} requests, not two from each kinit"
+[ "${seen[0]}" != "${seen[1]}" ] || die "MIT's kinit sent nonce ${seen[0]} twice"
+[ "${seen[2]}" != "${seen[3]}" ] || die "ours sent nonce ${seen[2]} twice"
+
 echo "==== require_auth encrypted_challenge: FAST issued, password 12 both legs ===="
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdb" "$NAME":/tmp/krb5-kdb

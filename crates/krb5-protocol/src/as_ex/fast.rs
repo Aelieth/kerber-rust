@@ -12,8 +12,8 @@ use super::{
     AsOutcome, AsPrompt, AsReqTimes, AsRequest, ENCTS_MODULE, KdcMsg, Pkinit, PkinitClient,
     allowed_padata, build_as_req_from, encrypted_timestamp_disabled, fallback_s2k, find_pa,
     finish_as_rep, first_etype, gak_found, kdc_error, learned_s2k, long_term_as_key,
-    method_from_error, pa_enc_timestamp_at, pick_info2, pick_key, reply_padata, req_sname,
-    request_times, restart_point, salt_cname, select_s2k, send_as, sort_krb5_padata_sequence,
+    method_from_error, next_try, pa_enc_timestamp_at, pick_info2, pick_key, reply_padata,
+    req_sname, restart_point, salt_cname, select_s2k, send_as, sort_krb5_padata_sequence,
     trace_keytab_gak, trace_preauth_input,
 };
 use crate::error::Error;
@@ -163,7 +163,6 @@ pub(super) fn continue_fast(
                                     req,
                                     keys,
                                     &mut pw,
-                                    nonce,
                                     etypes,
                                     clock,
                                     armor,
@@ -183,7 +182,6 @@ pub(super) fn continue_fast(
                                 Ok((pa142, config)) => {
                                     return finish_fast_otp(
                                         req,
-                                        nonce,
                                         etypes,
                                         clock,
                                         armor,
@@ -212,7 +210,6 @@ pub(super) fn continue_fast(
                             match finish_fast_spake(
                                 req,
                                 keys,
-                                nonce,
                                 etypes,
                                 clock,
                                 armor,
@@ -236,7 +233,6 @@ pub(super) fn continue_fast(
                         _ => match fast_key_mechanism(
                             req,
                             keys,
-                            nonce,
                             etypes,
                             clock,
                             armor,
@@ -274,7 +270,6 @@ pub(super) fn continue_fast(
 fn fast_key_mechanism(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
-    nonce: u32,
     etypes: &[i32],
     clock: &Clock,
     armor: &FastArmor,
@@ -347,8 +342,8 @@ fn fast_key_mechanism(
     }
     trace::preauth_output(&inner_pa);
     let ap = fast_armor_ap(armor, sub, Some(req.profile))?;
-    let bound = &request_times(req, clock, nonce);
-    let mut req2 = build_as_req_from(req, nonce, bound, None, etypes)?;
+    let (nonce, bound) = next_try(req, clock)?;
+    let mut req2 = build_as_req_from(req, nonce, &bound, None, etypes)?;
     attach_outer(req, etypes, &mut req2, &ap, akey, inner_pa)?;
     trace::fast_encode();
     let wire = encode(&req2)?;
@@ -367,7 +362,7 @@ fn fast_key_mechanism(
             ),
             rep,
             &wire,
-            bound,
+            &bound,
         ),
         KdcMsg::Error(e) => Err(kdc_error(
             req,
@@ -468,7 +463,6 @@ fn fill_response_items(
 )]
 fn finish_fast_otp(
     req: &AsRequest<'_>,
-    nonce: u32,
     etypes: &[i32],
     clock: &Clock,
     armor: &FastArmor,
@@ -488,8 +482,8 @@ fn finish_fast_otp(
     trace::preauth_process(OTP_MODULE, pa::OTP_CHALLENGE, true, 0, None);
     trace::preauth_output(&inner_pa);
     let ap = fast_armor_ap(armor, sub, Some(req.profile))?;
-    let bound = &request_times(req, clock, nonce);
-    let mut req2 = build_as_req_from(req, nonce, bound, None, etypes)?;
+    let (nonce, bound) = next_try(req, clock)?;
+    let mut req2 = build_as_req_from(req, nonce, &bound, None, etypes)?;
     attach_outer(req, etypes, &mut req2, &ap, akey, inner_pa)?;
     trace::fast_encode();
     let wire = encode(&req2)?;
@@ -504,7 +498,7 @@ fn finish_fast_otp(
                 ReplyKey::Preauth(akey.clone(), pa::OTP_CHALLENGE, learned, pw),
                 rep,
                 &wire,
-                bound,
+                &bound,
             )?;
             out.pa_config = otp::config_string(config);
             Ok(out)
@@ -539,7 +533,6 @@ enum SpakeFast {
 fn finish_fast_spake(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
-    nonce: u32,
     etypes: &[i32],
     clock: &Clock,
     armor: &FastArmor,
@@ -559,7 +552,7 @@ fn finish_fast_spake(
         if again.is_some() {
             ask_responder(req, pw, None, &allowed_padata(req, &listed))?;
         }
-        let bound = request_times(req, clock, nonce);
+        let (nonce, bound) = next_try(req, clock)?;
         let mut req2 = build_as_req_from(req, nonce, &bound, None, etypes)?;
         let body_der = encode(&req2.0.req_body)?;
         let (module_pa, as_key) = match spake.round(req, keys, etypes, &current, &body_der, pw)? {
@@ -652,7 +645,6 @@ fn finish_fast_pkinit(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
     pw: &mut PasswordCell<'_, '_>,
-    nonce: u32,
     etypes: &[i32],
     clock: &Clock,
     armor: &FastArmor,
@@ -667,12 +659,11 @@ fn finish_fast_pkinit(
     let token = find_pa(&method, pa::AS_FRESHNESS)
         .map(|p| p.padata_value.as_ref())
         .filter(|v| !v.is_empty());
-    let mut nonce = nonce;
     let mut tryagain: Option<super::Retry> = None;
     for _ in 1..super::MAX_IN_TKT_LOOPS {
         let group = KxGroup::for_bits(dh_size).unwrap_or(KxGroup::Modp2048);
-        let bound = &request_times(req, clock, nonce);
-        let mut req2 = build_as_req_from(req, nonce, bound, None, etypes)?;
+        let (nonce, bound) = next_try(req, clock)?;
+        let mut req2 = build_as_req_from(req, nonce, &bound, None, etypes)?;
         let mut inner_pa: Vec<PaData> = match &tryagain {
             None => cookie.into_iter().cloned().collect(),
             Some(_) => Vec::new(),
@@ -713,7 +704,7 @@ fn finish_fast_pkinit(
                     ReplyKey::Pkinit(&kp, pk, learned, pw),
                     rep,
                     &wire,
-                    bound,
+                    &bound,
                 );
             }
             KdcMsg::Error(e) => {
@@ -726,10 +717,7 @@ fn finish_fast_pkinit(
                     .then(|| super::pkinit_tryagain(&mat.err, &mut dh_size))
                     .flatten()
                 {
-                    Some(retry) => {
-                        tryagain = Some(retry);
-                        nonce = super::random_nonce()?;
-                    }
+                    Some(retry) => tryagain = Some(retry),
                     None => return Err(kdc_error(req, clock, &mat.err)),
                 }
             }

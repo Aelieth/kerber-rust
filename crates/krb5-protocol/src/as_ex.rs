@@ -365,9 +365,8 @@ fn as_exchange_inner(
         Some(e) if !e.is_empty() => e.to_vec(),
         _ => conf_etypes(req.profile, false),
     };
-    let nonce = random_nonce()?;
     let clock = Clock::new(req.profile, restart_point(req));
-    let bound = request_times(req, &clock, nonce);
+    let (nonce, bound) = next_try(req, &clock)?;
 
     if req.fast_armor.is_some() {
         return continue_fast(
@@ -446,7 +445,7 @@ fn as_exchange_inner(
             !keys.is_empty() || unreadable.is_some(),
         )
         .with_unreadable_keytab(unreadable);
-        return continue_from_hint(req, keys, nonce, &etypes, &hint, &clock, &mut pw);
+        return continue_from_hint(req, keys, &etypes, &hint, &clock, &mut pw);
     }
     if req.ticket.anonymous {
         return Err(preauth_failed());
@@ -457,7 +456,7 @@ fn as_exchange_inner(
     let msg = send_as(req, &wire, &etypes)?;
     let spake_more =
         |e: &KrbError| req.want_spake && e.error_code == err::MORE_PREAUTH_DATA_REQUIRED;
-    // The offset is noted before the password is read.
+    // Noted before the password is read.
     if let KdcMsg::Error(e) = &msg
         && retried(e)
         && e.error_code == err::PREAUTH_REQUIRED
@@ -491,7 +490,7 @@ fn as_exchange_inner(
                 !keys.is_empty() || unreadable.is_some(),
             )
             .with_unreadable_keytab(unreadable);
-            spake_forced(req, keys, nonce, &etypes, &e, &clock, &mut pw)
+            spake_forced(req, keys, &etypes, &e, &clock, &mut pw)
         }
         KdcMsg::Error(e) if e.error_code == err::PREAUTH_REQUIRED => {
             let mut pw = PasswordCell::new(
@@ -500,7 +499,7 @@ fn as_exchange_inner(
                 !keys.is_empty() || unreadable.is_some(),
             )
             .with_unreadable_keytab(unreadable);
-            continue_from_hint(req, keys, nonce, &etypes, &e, &clock, &mut pw)
+            continue_from_hint(req, keys, &etypes, &e, &clock, &mut pw)
         }
         KdcMsg::Error(e) => Err(kdc_error(req, &clock, &e)),
         KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
@@ -738,7 +737,6 @@ pub fn sort_krb5_padata_sequence(padata: &[PaData], preferred: &[i32]) -> Vec<Pa
 fn continue_from_hint(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
-    nonce: u32,
     etypes: &[i32],
     err: &KrbError,
     clock: &Clock,
@@ -758,7 +756,7 @@ fn continue_from_hint(
                 etypes,
             );
         }
-        return spake_forced(req, keys, nonce, etypes, err, clock, pw);
+        return spake_forced(req, keys, etypes, err, clock, pw);
     }
     let preferred = conf_preferred_preauth_types_for(req.profile, req.realm);
     // MIT: `spake_init` (spake_client.c:62-73)
@@ -796,7 +794,7 @@ fn continue_from_hint(
                     first_failure.get_or_insert(fail.error);
                 }
                 Some(Unarmored::Spake) => {
-                    match continue_spake(req, keys, nonce, etypes, &hint, &groups, clock, pw)? {
+                    match continue_spake(req, keys, etypes, &hint, &groups, clock, pw)? {
                         SpakeEnd::Done(out) => return Ok(*out),
                         SpakeEnd::Fallback {
                             hint: next_err,
@@ -819,7 +817,7 @@ fn continue_from_hint(
                     }
                 }
                 Some(Unarmored::Encts) => {
-                    match continue_preauth(req, keys, nonce, etypes, &hint, clock, pw)? {
+                    match continue_preauth(req, keys, etypes, &hint, clock, pw)? {
                         Ok(out) => return Ok(out),
                         Err(f) => {
                             f.trace(ENCTS_MODULE, pa::ENC_TIMESTAMP);
@@ -835,7 +833,6 @@ fn continue_from_hint(
                     return continue_embedder(
                         req,
                         keys,
-                        nonce,
                         etypes,
                         &hint,
                         clock,
@@ -886,7 +883,6 @@ fn unarmored_mech<'a>(req: &AsRequest<'a>, pa_type: i32, failed: &[i32]) -> Opti
 fn continue_preauth(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
-    nonce: u32,
     etypes: &[i32],
     preauth_err: &KrbError,
     clock: &Clock,
@@ -928,7 +924,7 @@ fn continue_preauth(
     }
     trace::preauth_process(ENCTS_MODULE, pa::ENC_TIMESTAMP, true, 0, None);
     trace::preauth_output(&padata);
-    let bound = request_times(req, clock, nonce);
+    let (nonce, bound) = next_try(req, clock)?;
     let second = build_as_req_from(req, nonce, &bound, Some(padata), etypes)?;
     let wire = encode(&second)?;
     let mut finish =
@@ -980,7 +976,6 @@ fn continue_preauth(
 fn continue_embedder(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
-    nonce: u32,
     etypes: &[i32],
     preauth_err: &KrbError,
     clock: &Clock,
@@ -1000,7 +995,7 @@ fn continue_embedder(
     let mut padata = error_cookie(preauth_err);
     padata.extend(produced);
     trace::preauth_output(&padata);
-    let bound = request_times(req, clock, nonce);
+    let (nonce, bound) = next_try(req, clock)?;
     let second = build_as_req_from(req, nonce, &bound, Some(padata), etypes)?;
     let wire = encode(&second)?;
     match send_as(req, &wire, etypes)? {
@@ -1199,9 +1194,7 @@ fn continue_pkinit(
     let mut tryagain: Option<Retry> = None;
     for _ in 1..MAX_IN_TKT_LOOPS {
         let group = KxGroup::for_bits(dh_size).unwrap_or(KxGroup::Modp2048);
-        // MIT: `init_creds_step_request` (lib/krb5/krb/get_in_tkt.c:1273-1281)
-        let nonce = random_nonce()?;
-        let bound = request_times(req, clock, nonce);
+        let (nonce, bound) = next_try(req, clock)?;
         let extra = match &tryagain {
             None => cookie.iter().cloned().collect(),
             Some(_) => Vec::new(),
@@ -1916,6 +1909,12 @@ pub fn conf_etypes(conf: &Krb5Conf, tgs: bool) -> Vec<i32> {
         .unwrap_or(preferred)
 }
 
+// MIT: `init_creds_step_request` (lib/krb5/krb/get_in_tkt.c:1273-1281)
+fn next_try(req: &AsRequest<'_>, clock: &Clock) -> Result<(u32, AsReqTimes), Error> {
+    let nonce = random_nonce()?;
+    Ok((nonce, request_times(req, clock, nonce)))
+}
+
 // MIT: `set_request_times` (lib/krb5/krb/get_in_tkt.c:707-710)
 fn request_times(req: &AsRequest<'_>, clock: &Clock, nonce: u32) -> AsReqTimes {
     let (now, _) = clock.now(true);
@@ -2199,9 +2198,8 @@ pub fn as_identify_realm(req: &AsRequest<'_>) -> Result<IdentifyReply, Error> {
         Some(e) if !e.is_empty() => e.to_vec(),
         _ => conf_etypes(req.profile, false),
     };
-    let nonce = random_nonce()?;
     let clock = Clock::new(req.profile, restart_point(req));
-    let bound = request_times(req, &clock, nonce);
+    let (nonce, bound) = next_try(req, &clock)?;
     let first = build_as_req_from(req, nonce, &bound, None, &etypes)?;
     let wire = encode(&first)?;
     trace::init_creds_preauth_none();

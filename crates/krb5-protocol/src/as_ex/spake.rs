@@ -13,8 +13,8 @@ use super::password::{CANTREADPWD, ModuleFail, PasswordCell};
 use super::{
     AsOutcome, AsRequest, KdcMsg, S2kMaterial, allowed_padata, build_as_req_from,
     conf_preferred_preauth_types_for, error_has_salt, fallback_s2k, find_pa, finish_as_rep,
-    kdc_error, method_from_error, pick_key, reply_padata, req_sname, request_times, retried,
-    salt_cname, select_s2k, select_s2k_after, send_as, sort_krb5_padata_sequence, trace_keytab_gak,
+    kdc_error, method_from_error, next_try, pick_key, reply_padata, req_sname, retried, salt_cname,
+    select_s2k, select_s2k_after, send_as, sort_krb5_padata_sequence, trace_keytab_gak,
     trace_preauth_input,
 };
 use crate::error::Error;
@@ -320,14 +320,9 @@ pub(super) fn trace_round(
     }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the AS round's state, no value type"
-)]
 pub(super) fn continue_spake(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
-    nonce: u32,
     etypes: &[i32],
     err: &KrbError,
     groups: &[SpakeGroup],
@@ -353,7 +348,7 @@ pub(super) fn continue_spake(
         if again.is_some() {
             ask_responder(req, pw, None, &allowed_padata(req, &method))?;
         }
-        let bound = request_times(req, clock, nonce);
+        let (nonce, bound) = next_try(req, clock)?;
         let mut req2 = build_as_req_from(req, nonce, &bound, None, etypes)?;
         let body_der = encode(&req2.0.req_body)?;
         let round = match find_pa(&method, pa::SPAKE) {
@@ -484,7 +479,6 @@ pub(super) fn continue_spake(
 pub(super) fn spake_forced(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
-    nonce: u32,
     etypes: &[i32],
     err: &KrbError,
     clock: &Clock,
@@ -494,7 +488,7 @@ pub(super) fn spake_forced(
     if groups.is_empty() {
         return Err(Error::ReplyMismatch("SPAKE required".into()));
     }
-    match continue_spake(req, keys, nonce, etypes, err, &groups, clock, pw)? {
+    match continue_spake(req, keys, etypes, err, &groups, clock, pw)? {
         SpakeEnd::Done(out) => Ok(*out),
         SpakeEnd::Fallback { fail: Some(f), .. } if f.code == CANTREADPWD => {
             Err(Error::PreauthFailed(Box::new(f.error)))
