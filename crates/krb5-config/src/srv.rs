@@ -543,16 +543,12 @@ fn parse_srv(msg: &[u8]) -> Vec<(String, u16, u16, u16)> {
 // MIT: `doit` (kprop/kpropd.c:516-520)
 #[must_use]
 pub fn name_of_addr(ip: IpAddr) -> String {
-    let plain = match ip {
-        IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(ip, IpAddr::V4),
-        IpAddr::V4(_) => ip,
-    };
     hosts_name(
         &std::fs::read_to_string("/etc/hosts").unwrap_or_default(),
-        plain,
+        ip,
     )
     .or_else(|| {
-        let msg = query(&reverse_name(plain), DNS_PTR, &load_resolv()).ok()?;
+        let msg = query(&reverse_name(ip), DNS_PTR, &load_resolv()).ok()?;
         let (i, _) = answers(&msg, DNS_PTR).into_iter().next()?;
         decode_name(&msg, i)
     })
@@ -560,10 +556,14 @@ pub fn name_of_addr(ip: IpAddr) -> String {
 }
 
 fn hosts_name(hosts: &str, ip: IpAddr) -> Option<String> {
+    let v4_mapped = |a: IpAddr| match a {
+        IpAddr::V4(v4) => IpAddr::V6(v4.to_ipv6_mapped()),
+        IpAddr::V6(_) => a,
+    };
     hosts.lines().find_map(|line| {
         let mut fields = line.split('#').next()?.split_whitespace();
         let addr: IpAddr = fields.next()?.parse().ok()?;
-        (addr == ip).then(|| fields.next().map(str::to_owned))?
+        (addr == ip || v4_mapped(addr) == ip).then(|| fields.next().map(str::to_owned))?
     })
 }
 
