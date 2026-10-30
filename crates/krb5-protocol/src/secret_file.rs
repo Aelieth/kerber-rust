@@ -177,8 +177,10 @@ fn create_temp_at(tmp: &Path) -> io::Result<fs::File> {
 
 fn create_temp(path: &Path, replace: Replace, labeled: bool) -> io::Result<(fs::File, PathBuf)> {
     #[cfg(target_os = "linux")]
-    if labeled && let Some(se) = crate::selabel::SeLinux::system() {
-        return se.create_temp(path, matches!(replace, Replace::Keep), || new_temp(path));
+    if labeled {
+        return krb5_log::selabel::create_temp(path, matches!(replace, Replace::Keep), || {
+            new_temp(path)
+        });
     }
     #[cfg(not(target_os = "linux"))]
     let _ = (replace, labeled);

@@ -105,8 +105,6 @@ subtle.workspace = true
 zeroize.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
-regex-automata.workspace = true
-rustix.workspace = true
 
 [dev-dependencies]
 krb5-kdc.workspace = true

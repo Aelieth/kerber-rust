@@ -38,7 +38,6 @@ mod replay;
 mod safe_priv;
 mod secret_file;
 #[cfg(target_os = "linux")]
-mod selabel;
 mod tgs;
 pub mod trace;
 mod transport;
@@ -111,6 +110,8 @@ pub use keytab::{
     Keytab, KeytabEntry, KeytabFailure, KeytabSlot, add_to_keytab_file, keytab_init_creds_keys,
     read_keytab_file, sort_etypes_keytab_first,
 };
+#[cfg(target_os = "linux")]
+pub use krb5_log::selabel::create_labeled;
 pub use localaddr::{host_addresses_from, init_creds_addresses, os_localaddr};
 pub use lock_file::{FileLock, lock_file, lock_file_how};
 pub use preauth::{
@@ -134,8 +135,6 @@ pub use secret_file::{
     check_secret_file_writable, destroy_secret_file, read_secret_file, read_stash_file,
     write_fresh_secret_file, write_secret_file, write_secret_file_like,
 };
-#[cfg(target_os = "linux")]
-pub use selabel::create_labeled;
 #[cfg(feature = "test-hooks")]
 pub use tgs::tgs_exchange_once;
 pub use tgs::{

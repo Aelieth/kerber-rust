@@ -42,6 +42,17 @@ pub fn create_labeled<T>(path: &Path, create: impl FnOnce() -> io::Result<T>) ->
     }
 }
 
+pub fn create_temp(
+    path: &Path,
+    keep: bool,
+    create: impl FnOnce() -> io::Result<(File, PathBuf)>,
+) -> io::Result<(File, PathBuf)> {
+    match SeLinux::system() {
+        Some(se) => se.create_temp(path, keep, create),
+        None => create(),
+    }
+}
+
 fn with_user(context: &str, user: &str) -> String {
     match context.split_once(':') {
         Some((_, rest)) => format!("{user}:{rest}"),
@@ -83,7 +94,7 @@ impl SeLinux {
         create()
     }
 
-    pub(crate) fn create_temp(
+    fn create_temp(
         &self,
         path: &Path,
         replace: bool,
@@ -112,8 +123,8 @@ impl SeLinux {
             )),
             Err(e) => {
                 tracing::warn!(
-                    event = krb5_log::events::PROTOCOL_SECRET_FILE,
-                    correlation_id = krb5_log::current_correlation_id(),
+                    event = crate::events::PROTOCOL_SECRET_FILE,
+                    correlation_id = crate::current_correlation_id(),
                     component = "krb5-protocol",
                     outcome = "ok",
                     path = %path.display(),

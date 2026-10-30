@@ -1255,13 +1255,15 @@ fn doit(
         log.com_err(Some(e), &format!("{what} '{}'", temp.display()));
         Error::Reported
     };
-    let opened = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .mode(0o600)
-        .custom_flags(nix::libc::O_NOFOLLOW)
-        .open(&temp);
+    let opened = krb5_protocol::create_labeled(&temp, || {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .mode(0o600)
+            .custom_flags(nix::libc::O_NOFOLLOW)
+            .open(&temp)
+    });
     // MIT locks the -1 a failed open returns; refusing a link is ours.
     let mut file = match opened {
         Ok(file) => file,

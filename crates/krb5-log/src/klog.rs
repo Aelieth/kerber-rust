@@ -294,9 +294,8 @@ impl Logger {
 
 /// Symlinks and non-files are refused; a planted link is not written through.
 fn open_log_file(path: &str, opts: &mut OpenOptions) -> io::Result<File> {
-    let file = opts
-        .custom_flags((OFlag::O_NOFOLLOW | OFlag::O_NONBLOCK).bits())
-        .open(path)?;
+    let opts = opts.custom_flags((OFlag::O_NOFOLLOW | OFlag::O_NONBLOCK).bits());
+    let file = crate::selabel::create_labeled(std::path::Path::new(path), || opts.open(path))?;
     if !file.metadata()?.file_type().is_file() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,

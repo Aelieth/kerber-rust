@@ -7,6 +7,7 @@ use std::fmt::Write as _;
 
 #[cfg(unix)]
 pub mod klog;
+pub mod selabel;
 
 pub mod events {
     pub const CRYPTO_STRING_TO_KEY: &str = "crypto.string_to_key";
