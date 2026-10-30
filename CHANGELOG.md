@@ -19,214 +19,312 @@ any other `###` heading.
 ### Security
 
 - **kdc.** Decrypted long-term keys are wiped on drop; debug output shows lengths, not key bytes.
-- **protocol.** A master-key stash must be a regular file of at most 64 KiB; a symlink is refused.
+- **protocol.** A master-key stash must be regular file up to 64 KiB; symlink is refused.
 - **admin.** A kadm5 password buffer is wiped when its RPC copy is dropped.
-- **crypto.** crypto-bigint 0.7.6 fixes RUSTSEC-2026-0387, timing variability in the constant-time ops PKINIT (DH, RSA, ECDSA) and SPAKE use.
-- **kdc.** The KDC drops an AS-REQ, or answers a TGS-REQ with a generic error, if it cannot make the audit id, as MIT.
-- **kdc.** A PKINIT signedAuthPack with an extra or mistyped SignedData or SignerInfo element is refused at decode, as MIT's CMS template.
-- **pkinit.** P-384 needs `--cfg p384_backend="fiat"`, the constant-time field our cargo config sets; without it a build refuses the curve.
-- **kdc.** A bad PKINIT signedAuthPack gives OpenSSL's CMS reason, as MIT logs it. A signer with no signed attributes is taken, as MIT's `CMS_verify`.
-- **crypto.** AES, DES, Camellia, RC4, HMAC and the hashes wipe key and hash state on drop (`zeroize`), as MIT's `aes_key_cleanup`.
-- **gss.** A DER length past its token's end is refused, as MIT's `get_tag`; an eight-octet one overflowed and panicked SPNEGO and the acceptor.
-- **crypto.** Encrypt keeps the confounder and plaintext, the RC4 copy included, in a buffer wiped on drop.
-- **admin.** kpasswd refuses a `LOCKDOWN_KEYS` principal's keys (5; MIT's 464 allows it), answers no kpasswd reply or error, and names no path.
-- **kdc/protocol.** A new password is keyed up to its first NUL, as MIT's C string; the kpasswd client wipes its encoded authenticator.
-- **config.** kdc.conf is read for the served realm alone, and `reject_bad_transit`, `disable_pac` and `restrict_anonymous_to_tgt` as MIT reads them.
-- **config/kdc.** `[libdefaults] clockskew`, kdc.conf's first, is the KDC's skew (it was always 300), read as MIT's integer.
-- **admin.** kadm5 and kpasswd authorize on the principal an alias resolves to, not the alias, and read a caller's own policy in its realm, as MIT's.
-- **admin.** kpasswd checks an AP-REQ's time against the profile's `clockskew`, kdc.conf's first, not a fixed 300 s; a negative one is kept, as MIT's.
-- **admin/gss.** kadmind and kpropd read the profile once, kdc.conf first: no request opens krb5.conf or kdc.conf, and kpropd's skew is the profile's.
-- **gss/protocol.** GSS's receive window is MIT's 64-number bitmap; the replay cache keeps MIT's clock-skew tag; a full cache refuses a new tag, not a live one.
-- **admin.** The iprop client checks the primary's INIT reply MIC whatever its verifier, as MIT's `authgss_refresh`; an empty or non-GSS verifier skipped it.
-- **kdc.** PKINIT trusts kdc.conf's `pkinit_anchors` and signs with `pkinit_identity`, not a CA it made, now test-only.
-- **kdc.** PKINIT checks a client's `pkinit_cert_match` rule as MIT's dbmatch (`<KU>`, `<EKU>`, `<SAN>`, `<ISSUER>`, `<SUBJECT>`, `&&`, `||`); a miss is 66.
-- **pkinit.** MODP Diffie-Hellman exponentiates in constant time, with crypto-bigint; it used num-bigint's variable-time `modpow`.
-- **admin.** kpropd and kprop bound their input: a handler cap, read, write, transfer and connect timeouts, and caps on the dump buffer and record counts.
-- **admin/kdc.** A CSPRNG failure fails a kadm5 request closed, a logged policy name or glob escapes control characters, and a CMS ContentInfo type is checked.
-- **kdc.** A bounded worker pool runs each OTP verifier under `[otp] timeout`. A hang, panic, late answer or full queue is 24, counted, so none stalls the KDC.
-- **admin.** kadmind assembles each RPC record without blocking and closes one stalled past 35 s; at the cap, unauthenticated connections drop first.
-- **kdc.** FAST armor gets MIT's `krb5_rd_req` checks in order: a client other than the ticket's, or an unchecked transit, is refused; codes and most log lines are MIT's.
-- **kdc.** An armor ticket with malformed authdata is refused, as MIT's `krb5_rd_req`.
-- **kdc.** A transited hop naming the server's own realm is refused, and a TGS ticket's unchecked transited list is checked first, as MIT's `krb5_rd_req`.
-- **protocol.** The AP-REQ acceptor refuses a transited hop naming the server's own realm and runs `rd_req_decoded_opt`'s checks in MIT's order, with MIT's codes and texts.
-- **gss.** The acceptor sets CHANNEL_BOUND only on matching bindings, not from the initiator's flags.
-- **client.** An AS-REP in an unrequested enctype is refused, as MIT.
-- **crypto.** KDC-sent PBKDF2 counts under the default are refused, as MIT.
+- **crypto.** crypto-bigint 0.7.6 fixes RUSTSEC-2026-0387, uneven timing in PKINIT DH/RSA/ECDSA and SPAKE.
+- **kdc.** Unable to make audit id, KDC drops AS-REQ and gives TGS-REQ generic error, as MIT.
+- **kdc.** Extra or mistyped SignedData/SignerInfo fields fail PKINIT signedAuthPack, as MIT's CMS template.
+- **pkinit.** P-384 needs `--cfg p384_backend="fiat"` (constant-time; our cargo config sets it) or is refused.
+- **kdc.** Bad PKINIT signedAuthPack gives OpenSSL's CMS reason, as MIT logs it.
+- **kdc.** PKINIT signer with no signed attributes is taken, as MIT's `CMS_verify`.
+- **crypto.** AES/DES/Camellia/RC4/HMAC/hashes `zeroize` key/hash state on drop, as MIT's `aes_key_cleanup`.
+- **gss.** DER length past its token's end is refused, as MIT's `get_tag`.
+- **gss.** An eight-octet DER length no longer overflows and panics SPNEGO and acceptor.
+- **crypto.** Encrypt keeps confounder and plaintext, RC4 copy included, in buffer wiped on drop.
+- **admin.** kpasswd refuses `LOCKDOWN_KEYS` principal's keys (5; MIT's 464 allows it).
+- **admin.** kpasswd answers no kpasswd reply or error, and names no path.
+- **kdc/protocol.** New password is keyed up to its first NUL, as MIT's C string.
+- **kdc/protocol.** kpasswd client wipes its encoded authenticator.
+- **config.** kdc.conf is read for served realm alone.
+- **config.** `reject_bad_transit`, `disable_pac`, `restrict_anonymous_to_tgt` are read as MIT does.
+- **config/kdc.** KDC skew is `[libdefaults] clockskew`, kdc.conf's first, as MIT's integer; not a fixed 300.
+- **admin.** kadm5 and kpasswd authorize the principal an alias resolves to, not the alias, as MIT.
+- **admin.** kadm5 and kpasswd read caller's own policy in its realm, as MIT.
+- **admin.** kpasswd checks AP-REQ time against profile's `clockskew`, kdc.conf's first, not 300 s.
+- **admin.** kpasswd keeps a negative `clockskew`, as MIT.
+- **admin/gss.** kadmind and kpropd read profile once, kdc.conf first.
+- **admin/gss.** No kadmind or kpropd request opens krb5.conf or kdc.conf; kpropd's skew is profile's.
+- **gss/protocol.** GSS's receive window is MIT's 64-number bitmap.
+- **gss/protocol.** Replay cache keeps MIT's clock-skew tag; full, it refuses new tag, not live one.
+- **admin.** iprop client checks INIT reply MIC whatever verifier, as MIT's `authgss_refresh`.
+- **admin.** Empty or non-GSS verifier no longer skips iprop INIT reply MIC check.
+- **kdc.** PKINIT trusts kdc.conf's `pkinit_anchors`, signs with `pkinit_identity`; its own CA is test-only.
+- **kdc.** PKINIT checks client's `pkinit_cert_match` rule as MIT's dbmatch; miss is 66.
+- **kdc.** `pkinit_cert_match` takes `<KU>`, `<EKU>`, `<SAN>`, `<ISSUER>`, `<SUBJECT>`, `&&`, `||`.
+- **pkinit.** MODP Diffie-Hellman is constant-time on crypto-bigint, not num-bigint's variable-time `modpow`.
+- **admin.** kpropd and kprop bound input: handler cap; read, write, transfer, connect timeouts.
+- **admin.** kpropd and kprop cap dump buffer and record counts.
+- **admin/kdc.** CSPRNG failure fails kadm5 request closed.
+- **admin/kdc.** Logged policy names and globs escape control characters; CMS ContentInfo type is checked.
+- **kdc.** Bounded worker pool runs each OTP verifier under `[otp] timeout`.
+- **kdc.** OTP hang, panic, late answer or full queue is a counted 24, so none stalls the KDC.
+- **admin.** kadmind assembles each RPC record without blocking and closes one stalled past 35 s.
+- **admin.** At kadmind's connection cap, unauthenticated connections drop first.
+- **kdc.** FAST armor gets MIT's `krb5_rd_req` checks in order; codes and most log lines are MIT's.
+- **kdc.** FAST armor with client other than ticket's, or unchecked transit, is refused.
+- **kdc.** Armor ticket with malformed authdata is refused, as MIT's `krb5_rd_req`.
+- **kdc.** Transited hop naming server's own realm is refused, as MIT's `krb5_rd_req`.
+- **kdc.** TGS ticket's unchecked transited list is checked first, as MIT's `krb5_rd_req`.
+- **protocol.** AP-REQ acceptor refuses transited hop naming server's own realm.
+- **protocol.** AP-REQ acceptor runs `rd_req_decoded_opt`'s checks in MIT's order, codes, texts.
+- **gss.** Acceptor sets CHANNEL_BOUND only on matching bindings, not from initiator's flags.
+- **client.** AS-REP in unrequested enctype is refused, as MIT.
+- **crypto.** KDC-sent PBKDF2 counts under default are refused, as MIT.
 
 ### Added
 
-- **kdc/admin.** An embedder builds without the daemon runtime (`--no-default-features`: no serve, signals, tracing-subscriber) or the test fixtures (behind `test-hooks`).
-- **admin.** An embedder runs kadmind as a library: `Kadmind::new(store, config)` sets up the password modules, `serve` runs the loop, and `Shutdown` stops it at once.
-- **admin.** An embedder adds kadm5_auth modules via `KadmindConfig`; they join `acl` and `self`, a `Deny` overriding the ACL, selected by `[plugins] kadm5_auth`.
-- **pkinit.** Brainpool P256, P384 and P512 (r1 and t1) sign and verify. P320 is refused: crypto-bigint 0.7 has no 320-bit encoding; a 32-bit build refuses P512.
-- **kpropd.** With `iprop_enable` a replica polls its primary as `kiprop/<host>`, applies updates, asks for a full resync and backs off, as MIT's `do_iprop`; `-A`, `-P`, `-t`.
-- **config/kdc.** PKINIT reads `pkinit_identity`, `pkinit_anchors`, `pkinit_pool` and `pkinit_eku_checking` as MIT's; a failure leaves it off with MIT's line.
-- **kdc.** PKINIT verifies RSA client certificates, chains and signatures (PKCS#1 v1.5, SHA-256/384/512).
-- **pkinit.** The KDC and kinit sign PKINIT with an RSA key as MIT (PKCS#1 v1.5, SHA-256): up to 16384 bits and five primes, constant-time and blinded.
-- **client.** kinit takes `DIR:` and `ENV:` PKINIT identities and `FILE:cert,key`, tries `pkinit_identities` in order, and picks a certificate by `pkinit_cert_match` as MIT.
-- **kdc.** The `OtpVerifier` request is frozen: owned, `#[non_exhaustive]`, with peer, deadline and a zeroizing value; `register_otp_verifier` errors on a duplicate name.
-- **examples.** `krb5-otp-kdc` gains a sealed-seed TOTP verifier with monotonic persisted replay state, a `password‖code` mode, and a `require_mfa` `KdcPolicy`.
+- **kdc/admin.** An embedder's `--no-default-features` build omits serve, signals, tracing-subscriber.
+- **kdc/admin.** Test fixtures are behind `test-hooks`, so an embedder builds without them.
+- **admin.** kadmind runs as library; `Kadmind::new(store, config)` sets up password modules.
+- **admin.** kadmind's `serve` runs loop, and `Shutdown` stops it at once.
+- **admin.** Embedders add kadm5_auth modules via `KadmindConfig`, picked by `[plugins] kadm5_auth`.
+- **admin.** Added kadm5_auth modules join `acl` and `self`; `Deny` overrides the ACL.
+- **pkinit.** Brainpool P256, P384, P512 (r1, t1) sign and verify; 32-bit build refuses P512.
+- **pkinit.** Brainpool P320 is refused: crypto-bigint 0.7 has no 320-bit encoding.
+- **kpropd.** `iprop_enable` makes replica poll its primary as `kiprop/<host>`, as MIT's `do_iprop`.
+- **kpropd.** Replicas apply updates, ask for full resync, back off; `-A`, `-P`, `-t` are taken.
+- **config/kdc.** `pkinit_identity`, `pkinit_anchors`, `pkinit_pool`, `pkinit_eku_checking` read as MIT's.
+- **config/kdc.** PKINIT config failure leaves PKINIT off, with MIT's line.
+- **kdc.** PKINIT verifies RSA client certs, chains, signatures (PKCS#1 v1.5, SHA-256/384/512).
+- **pkinit.** KDC and kinit sign PKINIT with RSA key as MIT (PKCS#1 v1.5, SHA-256).
+- **pkinit.** PKINIT RSA keys reach 16384 bits and five primes; signing is constant-time, blinded.
+- **client.** kinit takes `DIR:` and `ENV:` PKINIT identities and `FILE:cert,key`, as MIT.
+- **client.** kinit tries `pkinit_identities` in order, picks cert by `pkinit_cert_match`, as MIT.
+- **kdc.** `OtpVerifier`'s request is frozen: owned, `#[non_exhaustive]`, peer, deadline, zeroizing value.
+- **kdc.** `register_otp_verifier` errors on duplicate name.
+- **examples.** `krb5-otp-kdc` gains sealed-seed TOTP verifier, replay state monotonic and persisted.
+- **examples.** `krb5-otp-kdc` gains `password‖code` mode and `require_mfa` `KdcPolicy`.
 
 ### Changed
 
-- **ccache.** A `DIR:` name makes its missing directory (0700) and `primary` file when resolved, as MIT.
-- **client.** The AS reply's KDC time offset replaces the armor cache's, as MIT.
-- **form.** tools, config, types, crypto, client, log, cli, asn1 and brainpool: comments are within 3% of the code characters. A safety, wire or MIT-quirk fact keeps its line.
-- **form.** protocol: comments are within 3% of the code characters. A safety, wire or MIT-quirk fact keeps its line.
-- **form.** admin: comments are within 3% of the code characters. A safety, wire or MIT-quirk fact keeps its line.
-- **form.** kdc, gss and testkit: comments are within 3% of the code characters. A safety, wire or MIT-quirk fact keeps its line.
-- **examples.** krb5-embed-realm serves the KDC and kadmind from one store, one loop each; one Shutdown stops both.
-- **kdc.** A write at 5,000 principals is 0.80–0.86 times MIT and flat as the realm grows. Each write flushes once, does not rename; a crash leaves it unread.
-- **kdc.** A store keeps its own kdcpreauth, kdcpolicy, audit, authdata and OTP modules. The same module again is a no-op; a different module of that name is added.
-- **kdc.** `unregister` drops one named module. A new store copies the process default. A global register after open is logged at error and applies only to later stores.
+- **ccache.** Resolving a `DIR:` name makes its missing directory (0700) and `primary` file, as MIT.
+- **client.** AS reply's KDC time offset replaces armor cache's, as MIT.
+- **form.** tools, config, types, crypto, client, log, cli, asn1, brainpool: comments ≤3% of code chars.
+- **form.** In those nine crates, safety, wire or MIT-quirk fact keeps its line.
+- **form.** protocol: comments ≤3% of code chars; safety, wire or MIT-quirk fact keeps its line.
+- **form.** admin: comments ≤3% of code chars; safety, wire or MIT-quirk fact keeps its line.
+- **form.** kdc, gss, testkit: comments ≤3% of code chars.
+- **form.** In those three crates, safety, wire or MIT-quirk fact keeps its line.
+- **examples.** krb5-embed-realm serves KDC and kadmind from one store, a loop each; one Shutdown stops both.
+- **kdc.** A write at 5,000 principals is 0.80–0.86 times MIT and flat as realm grows.
+- **kdc.** Each write flushes once and does not rename; crash leaves it unread.
+- **kdc.** A store keeps its own kdcpreauth, kdcpolicy, audit, authdata, OTP modules.
+- **kdc.** Same module again is no-op; different module of that name is added.
+- **kdc.** `unregister` drops one named module; new store copies process default.
+- **kdc.** Global register after open is logged at error and applies only to later stores.
 
-- **examples.** krb5-embed-realm installs a tracing subscriber at info.
+- **examples.** krb5-embed-realm installs tracing subscriber at info.
 
-- **kdc.** One info record per request: `kdc.issue` or `admin` for the stream, the MIT line for the log. Json loads only when `enable_only` names it.
-- **kdc.** Library events log at debug. A serve loop takes a log sink, and klog lines with no destination go to tracing.
-- **examples.** krb5-embed-realm applies the profile before trusts and delegation, records `--allow-to-delegate`, and makes both trusts from `--create-trust` and a key file.
-- **kdc.** A trust principal takes the realm's lifetimes and flags, and both directions share one key at one kvno.
-- **kdc.** A dump keeps the next RID above every RID it held, a repeated RID is refused, and a reload keeps the database SID unless kdc.conf sets one.
-- **kdc.** S4U allow-lists are stored in the dump, and a missing lockout file is created when the database is writable.
-- **admin.** A remote rename that hits an unsupported salt type returns that error.
-- **config.** Krb5Conf::default is MIT's unset profile: clock skew 300, reverse DNS, and KDC time sync.
-- **kdc.** Rename stores each current key's salt, a kvno wraps from 65535 to 1, and getprinc sends tl types above 255 except the vendor SID and history records.
-- **kdc.** Deleting K/M is refused, as is a password change, a keepold random key, or setkey of kadmin/history.
-- **kdc.** A norealm salt is the principal name alone, and an onlyrealm salt is the realm.
+- **kdc.** One info record per request: `kdc.issue` or `admin` for stream, MIT's line for log.
+- **kdc.** Json loads only when `enable_only` names it.
+- **kdc.** Library events log at debug; serve loops take log sink; undirected klog lines go to tracing.
+- **examples.** krb5-embed-realm applies profile before trusts and delegation.
+- **examples.** krb5-embed-realm records `--allow-to-delegate`.
+- **examples.** krb5-embed-realm makes both trusts from `--create-trust` and key file.
+- **kdc.** Trust principal takes realm lifetimes and flags; both directions share one key and kvno.
+- **kdc.** Dump keeps next RID above every RID it held; repeated RID is refused.
+- **kdc.** Reload keeps database SID unless kdc.conf sets one.
+- **kdc.** The dump stores S4U allow-lists; writable database creates missing lockout file.
+- **admin.** Remote rename hitting unsupported salt type returns that error.
+- **config.** Krb5Conf::default is MIT's unset profile: clock skew 300, reverse DNS, KDC time sync.
+- **kdc.** Rename stores each current key's salt; kvno wraps from 65535 to 1.
+- **kdc.** getprinc sends tl types above 255 except vendor SID and history records.
+- **kdc.** Deleting K/M is refused, as are password change, keepold random key or kadmin/history setkey.
+- **kdc.** A norealm salt is principal name alone, and onlyrealm salt is realm.
 - **admin.** An embedder supplies kadmind's log and its own password-quality and hook modules.
-- **kdc.** A pending OTP verify no longer blocks the KDC loop: other clients are served while it runs; it resumes with the verdict, as in MIT.
-- **client.** kinit and kpasswd warn when a deprecated enctype was used to authenticate.
-- **protocol.** A preauth key that does not decrypt the AS reply is dropped; the long-term key is tried.
-- **protocol.** A TGT off the client path is chased to the server realm; a repeat ends it. A cached TGT for the next realm is used; the walk advances.
-- **protocol.** A TGS reply for another server needs a canonicalize request or two TGTs; a non-TGT referral or this-realm TGT retries without referrals.
-- **protocol.** An unknown SPAKE group is traced once at an AS exchange's start if SPAKE is loaded, and a canonicalized reply whose server differs is traced.
-- **admin.** On a full resync kadmind dumps the database and kprops it to the replica itself, as MIT's, not by hand.
-- **gss.** A mutual initiator sends the RFC 4537 enctype list and omits a zero sequence number. A non-boolean `client_aware_channel_bindings` fails the AP-REQ.
-- **client.** Kinit traces initial credentials before DNS SRV, and each query, answer and miss, including kpasswd, kprop, referrals and other locates.
-- **client.** A credential cache keeps the KDC clock offset, and later authenticators use it.
-- **gss.** An initiator's AP-REQ sequence number is random, and without mutual authentication the receive sequence starts there.
-- **client.** `request_timeout` bounds a KDC exchange and each kpasswd pass. Unset, a kpasswd TCP read stays open. After error 52 the TCP resend gets its own.
-- **client/admin.** A malformed `kdc` host is an invalid argument for kinit, kvno, kpasswd, and kprop.
-- **client.** `dns_lookup_kdc` defaults on, and an unset value follows `dns_fallback`.
-- **client.** Kpasswd tries every server on TCP before UDP. A bad host is invalid. A KRB-ERROR is decoded; an expired-password change uses the server list and port.
-- **client.** A kpasswd AP-REQ follows the KDC clock when `kdc_timesync` is on.
-- **protocol.** A preauth failure with no saved module error is its own error, reported as preauthentication failed.
-- **kdc.** Embedded realm create writes the stash, the lock files, then the database; a re-run keeps that master.
-- **kdc.** `bootstrap_realm_into` fills a caller-owned store without rotating keys, and `create_database` writes the stash first.
-- **kdc.** The bootstrap admin requires pre-auth, and its keytab is returned for the caller to write.
-- **kdc.** `requires_preauth` and `locked` became methods, the fields are no longer public, and `PrincipalBuilder` builds a principal.
-- **kdc.** K/M and krbtgt are built by `realm_rows`, and kadmin attributes live in `add_admin_principals` only.
-- **kdc.** Creating `kadmin/changepw` no longer sets `PWCHANGE_SERVICE`; only realm creation does, as MIT's `kadm5_create`.
-- **protocol.** `AsTicketOpts::default()` is not forwardable, as MIT's library default; `[libdefaults] forwardable = true` still sets it.
-- **protocol.** An unsupported etype is no longer retried as aes256; the KDC error is returned, as MIT.
-- **protocol.** The AP-REQ acceptor's keytab-miss errors carry MIT's texts.
-- **crypto.** RustCrypto moves to the 0.14 generation (`aes` 0.9, `sha2` 0.11, `p256` 0.14 and the rest) and curve25519-dalek to 5.0; every enctype and SPAKE vector holds.
-- **examples.** Comments are the preauth-plugin pointer and the two invariants the code does not state.
-- **kdc.** A database change skips the whole-realm reread when no other writer moved it, merging only the KDC's lockout records; a failed change is undone in memory.
-- **config.** The KDC, kadmind and kadmin.local read their profile once and apply it in one order, kdc.conf over krb5.conf; kadmind let krb5.conf win.
-- **config.** kdc.conf follows `include` and `includedir` and matches names as written, as MIT; the daemons log each unsupported relation MIT reads.
-- **protocol/gss.** `AcceptorConfig` holds an acceptor's profile values; the GSS accept calls, kpasswd and kpropd take it, and `use_kdc_context` is gone.
-- **kdc.** One store can serve the KDC and kadmind: a `SharedDump` is a `SharedStore` (`Arc<RwLock<dyn Store>>`); `PrincipalStore::try_new` returns a CSPRNG failure.
-- **kdc.** A principal change is appended and flushed; readers take only those changes, a torn one is cut, and replaced records are compacted away.
-- **client.** A client program reads its profile once at start: `init_context` returns a `ClientContext`, which the AS, TGS, KCM, ccache and keytab calls take.
-- **kdc.** A PKINIT client chain is built through `pkinit_pool` as OpenSSL builds it, and a key purpose `pkinit_eku_checking` refuses is error 77, as MIT's.
-- **gss.** An exported context is version 2, which carries the receive window and the acceptor's skew; a version-1 token, as 1.1 exported, is refused.
-- **examples.** `examples/otp-kdc` is folded into `examples/embed-realm`; the `krb5-otp-kdc` binary name is unchanged.
+- **kdc.** Pending OTP verify no longer blocks KDC loop; it resumes with verdict, as MIT.
+- **client.** kinit and kpasswd warn when deprecated enctype was used to authenticate.
+- **protocol.** Preauth key failing to decrypt AS reply is dropped; long-term key is tried.
+- **protocol.** TGT off client path is chased to server realm; repeat ends it.
+- **protocol.** Cached TGT for next realm is used, and walk advances.
+- **protocol.** TGS reply for another server needs canonicalize request or two TGTs.
+- **protocol.** A non-TGT referral or this-realm TGT retries without referrals.
+- **protocol.** Unknown SPAKE group is traced once at AS exchange's start if SPAKE is loaded.
+- **protocol.** Canonicalized reply whose server differs is traced.
+- **admin.** On full resync kadmind dumps and kprops to replica itself, as MIT's, not by hand.
+- **gss.** Mutual initiator sends RFC 4537 enctype list and omits zero sequence number.
+- **gss.** A non-boolean `client_aware_channel_bindings` fails AP-REQ.
+- **client.** Kinit traces initial credentials before DNS SRV.
+- **client.** Kinit traces each query, answer, miss: kpasswd, kprop, referrals, other locates.
+- **client.** Credential cache keeps KDC clock offset, and later authenticators use it.
+- **gss.** Initiator's AP-REQ seq number is random; without mutual auth receive seq starts there.
+- **client.** `request_timeout` bounds KDC exchange and each kpasswd pass.
+- **client.** With `request_timeout` unset, kpasswd TCP read stays open.
+- **client.** After error 52 TCP resend gets its own `request_timeout`.
+- **client/admin.** Malformed `kdc` host is invalid argument to kinit, kvno, kpasswd, kprop.
+- **client.** `dns_lookup_kdc` defaults on, and unset value follows `dns_fallback`.
+- **client.** Kpasswd tries every server on TCP before UDP; bad host is invalid.
+- **client.** Kpasswd decodes KRB-ERROR; expired-password change uses server list and port.
+- **client.** kpasswd AP-REQ follows KDC clock when `kdc_timesync` is on.
+- **protocol.** Preauth failure without saved module error is its own: preauthentication failed.
+- **kdc.** Embedded realm create writes stash, lock files, then database; re-run keeps that master.
+- **kdc.** `bootstrap_realm_into` fills caller-owned store without rotating keys.
+- **kdc.** `create_database` writes stash first.
+- **kdc.** Bootstrap admin requires pre-auth; its keytab is returned for caller to write.
+- **kdc.** `requires_preauth`, `locked` are methods, not public fields; `PrincipalBuilder` builds one.
+- **kdc.** `realm_rows` builds K/M and krbtgt; kadmin attributes live only in `add_admin_principals`.
+- **kdc.** Only realm creation sets `PWCHANGE_SERVICE` on `kadmin/changepw`, as MIT's `kadm5_create`.
+- **protocol.** `AsTicketOpts::default()` is not forwardable, as MIT's library default.
+- **protocol.** `[libdefaults] forwardable = true` still sets it.
+- **protocol.** Unsupported etype is not retried as aes256; KDC's error is returned, as MIT.
+- **protocol.** AP-REQ acceptor's keytab-miss errors carry MIT's texts.
+- **crypto.** RustCrypto moves to the 0.14 generation (`aes` 0.9, `sha2` 0.11, `p256` 0.14, the rest).
+- **crypto.** curve25519-dalek moves to 5.0; every enctype and SPAKE vector holds.
+- **examples.** Comments are the preauth-plugin pointer and two invariants code doesn't state.
+- **kdc.** If no other writer moved it, change skips whole-realm reread; only KDC lockouts merge.
+- **kdc.** Failed database change is undone in memory.
+- **config.** KDC, kadmind, kadmin.local read their profile once, kdc.conf over krb5.conf.
+- **config.** kadmind no longer lets krb5.conf win.
+- **config.** kdc.conf follows `include` and `includedir` and matches names as written, as MIT.
+- **config.** Daemons log each unsupported relation MIT reads.
+- **protocol/gss.** `AcceptorConfig` holds acceptor profile values; GSS accept, kpasswd, kpropd take it.
+- **protocol/gss.** `use_kdc_context` is gone.
+- **kdc.** KDC and kadmind can share store: `SharedDump` is `SharedStore` (`Arc<RwLock<dyn Store>>`).
+- **kdc.** `PrincipalStore::try_new` returns CSPRNG failure.
+- **kdc.** Principal change is appended and flushed; readers take only those changes.
+- **kdc.** Torn change is cut; replaced records are compacted away.
+- **client.** Client reads its profile once at start: `init_context` returns `ClientContext`.
+- **client.** AS, TGS, KCM, ccache, keytab calls take that `ClientContext`.
+- **kdc.** PKINIT client chain is built via `pkinit_pool` as OpenSSL does.
+- **kdc.** A key purpose `pkinit_eku_checking` refuses is error 77, as MIT.
+- **gss.** Exported context is version 2, with receive window and acceptor's skew.
+- **gss.** A version-1 token, as 1.1 exported, is refused.
+- **examples.** `examples/otp-kdc` folds into `examples/embed-realm`; binary is still `krb5-otp-kdc`.
 
 ### Tests and CI
 
-- **field.** Weekly ticket-flags after kdb-writes covers expiry, flags, renew, postdate, policy and aes-sha2. Those gates are retired.
-- **field.** Weekly client-tools: our kinit, klist, kvno, kdestroy, ktutil and kswitch beside MIT's on client2, with request shapes and crossed caches and keytabs.
-- **field.** client-tools adds FAST, SPAKE, S4U2Proxy, lifetime, enctype, kpasswd and ccache-removal rows; pkinit compares PKINIT and anonymous requests.
-- **field.** client-tools grades each request flow's exit status, crosses one DIR collection between both program sets, and asks with `canonicalize = true`.
-- **field.** `ad-trust` (`run.sh ad-trust`, recorded DC) does an AD ssh login, KERBER.TEST users at SMB and LDAP, the DC's SPNEGO Apache, then undoes them.
-- **kdc.** The listener test separates a TCP socket from a UDP socket on one port.
-- **gss.** The nightly gate checks both acceptors' host-ticket lifetimes agree within 60 s.
-- **fuzz.** `otp_req_decode` decodes arbitrary PA-OTP-REQUEST bytes the KDC reads.
-- **ci.** No-features nextest and the fuzz-crate check are their own jobs. `test` is 360 s, `doc` 90 s. No test was removed.
-- **ci.** `form:` counts comments against code. A `// MIT:` cite is one exempt line of at most 100 columns, or it fails.
-- **ci.** A rangeless `// MIT:` cite must name a defined symbol. The anchor check leaves the cite to that gate.
-- **ci.** The differential gate compares both KDCs on ten bad PKINIT signedAuthPacks, a trailing element, and a mistyped SignedData OID.
-- **ci.** cargo-audit 0.22.2 runs `--deny warnings` and files no issues. Comment and test ratios are printed and do not fail.
-- **ci.** `[Unreleased]` is capped at 24,000 bytes. Released sections are frozen. Docs are capped at 100 KiB, which `docs/testing.md` names.
-- **ci.** Per-push, nightly and peers run on `ubuntu-26.04`. upload-artifact is 7.0.2. The fuzz check is `--locked`.
-- **ci.** A `nightly` label runs `oracles`, `moving`, `fuzz`, and `anchors`. `schedule` and `workflow_dispatch` stay.
-- **ci.** Unit tests outside the keep list are gone. Kept: log's two symlink-open tests, cli's wiped-buffer line, asn1's four DER-strict tests.
-- **ci.** Also kept: crypto's known answers and parity proofs, tools' decode-sweep, testkit's helpers, and the proofs config, client and gss rows still name.
-- **ci.** The des3 PKINIT reply-key test stays as that row's only proof. `gate-common` and three smoke gates match by grep's status.
-- **ci.** An exact row with no status may cite a removed test when the proof says since removed.
-- **ci.** A parity row may name a field scenario's checks as its proof; the scenario must exist and record each check the row names.
-- **parity.** Five client-library rows and three more keep a historic MIT proof. S4U2Proxy padata and `kinit -v` use the live client gate.
-- **parity.** The capaths gate proves the closer hop. Its first TGS at A asks for `krbtgt/C.TEST`. Validate and `kinit -R` are live gates.
-- **ci.** `missing_docs` is allowed. A MIT cite may be one `docs/parity/` pointer. The ranged anchor stays.
+- **field.** Weekly ticket-flags after kdb-writes: expiry, flags, renew, postdate, policy, aes-sha2.
+- **field.** The gates ticket-flags covers are retired.
+- **field.** Weekly client-tools: our kinit, klist, kvno, kdestroy, ktutil, kswitch beside MIT's on client2.
+- **field.** client-tools covers request shapes and crossed caches and keytabs.
+- **field.** client-tools adds FAST, SPAKE, S4U2Proxy, lifetime, enctype, kpasswd, ccache-removal rows.
+- **field.** pkinit scenario compares PKINIT and anonymous requests.
+- **field.** client-tools grades each request flow's exit status, asking with `canonicalize = true`.
+- **field.** client-tools crosses one DIR collection between program sets.
+- **field.** `ad-trust` (`run.sh ad-trust`, recorded DC): AD ssh login; KERBER.TEST users at SMB, LDAP.
+- **field.** `ad-trust` then tries DC's SPNEGO Apache, and undoes them all.
+- **kdc.** Listener test separates TCP socket from UDP socket on one port.
+- **gss.** Nightly gate checks acceptors' host-ticket lifetimes agree within 60 s.
+- **fuzz.** `otp_req_decode` decodes arbitrary PA-OTP-REQUEST bytes KDC reads.
+- **ci.** No-features nextest and fuzz-crate check each get a job. `test` 360 s, `doc` 90 s. No test removed.
+- **ci.** `form:` counts comments against code; `// MIT:` cite is one exempt line ≤100 columns, or fails.
+- **ci.** Rangeless `// MIT:` cite must name defined symbol; anchor check leaves it to that gate.
+- **ci.** Differential gate compares KDCs on ten bad PKINIT signedAuthPacks.
+- **ci.** Differential gate sends trailing element and mistyped SignedData OID.
+- **ci.** cargo-audit 0.22.2 runs `--deny warnings` and files no issues.
+- **ci.** Crate's comment share above 3.000% fails ci-policy, as does test share (lines) above its cap.
+- **ci.** `[Unreleased]` is capped at 25,000 bytes; released sections are frozen.
+- **ci.** Docs are capped at 100 KiB, which `docs/testing.md` names.
+- **ci.** Per-push, nightly, peers run on `ubuntu-26.04`. upload-artifact 7.0.2. Fuzz check is `--locked`.
+- **ci.** `nightly` label runs `oracles`, `moving`, `fuzz`, `anchors`; `schedule`, `workflow_dispatch` stay.
+- **ci.** Unit tests outside keep list are gone.
+- **ci.** Kept: log's two symlink-open tests, cli's wiped-buffer line, asn1's four DER-strict tests.
+- **ci.** Kept: crypto's known answers, parity proofs, tools' decode-sweep, testkit's helpers.
+- **ci.** Kept: the proofs config, client, gss rows still name.
+- **ci.** des3 PKINIT reply-key test stays as that row's only proof.
+- **ci.** `gate-common` and three smoke gates match by grep's status.
+- **ci.** Exact row with no status may cite removed test when proof says since removed.
+- **ci.** Parity row may name field scenario's checks as proof; scenario must exist and record them.
+- **parity.** Five client-library rows and three more keep historic MIT proof.
+- **parity.** S4U2Proxy padata and `kinit -v` use live client gate.
+- **parity.** capaths gate proves closer hop: its first TGS at A asks for `krbtgt/C.TEST`.
+- **parity.** Validate and `kinit -R` are live gates.
+- **ci.** `missing_docs` is allowed; MIT cite may be one `docs/parity/` pointer; ranged anchor stays.
 
 ### Removed
 
-- **admin.** The standalone kpasswd listeners, `serve_kadmind_until`, and the length-prefixed kprop send and receive are gone.
-- **admin.** The kadmind-equivalent framing, an op byte plus an AP-REQ, is gone.
-- **protocol.** `build_krb_safe` and `build_krb_priv` are gone; a caller passes the sequence to the longer builder.
-- **ci.** The budget workflow is gone. The six per-push walls live in `ci-budget.toml`.
-- **ci.** The ktutil nightly gate is gone; field client-tools' keytab rows check each thing it checked, MIT first.
-- **ci.** The ccache and two client-differential nightly gates and their two probes are gone; field client-tools and pkinit cover them.
+- **admin.** Standalone kpasswd listeners, `serve_kadmind_until`, length-prefixed kprop send/receive: gone.
+- **admin.** kadmind-equivalent framing, op byte plus AP-REQ, is gone.
+- **protocol.** `build_krb_safe`, `build_krb_priv` are gone; callers pass the sequence to the longer builder.
+- **ci.** Budget workflow is gone. Six per-push walls live in `ci-budget.toml`.
+- **ci.** ktutil nightly gate is gone; field client-tools' keytab rows check all it did, MIT first.
+- **ci.** ccache, two client-differential nightly gates, two probes gone; client-tools and pkinit cover them.
 
 ### Fixed
-- **embed.** pwqual joins the built-ins; trust keys need setkey; lockout has the DB owner.
+- **embed.** pwqual joins built-ins; trust keys need setkey; lockout has DB owner.
 - **kdc.** ks_tuples keep their salt types, as MIT.
-- **kdc.** kadm5 and iprop keep delegation tl_data; cpw after renprinc uses the new name.
-- **admin.** setkey checks policy keysalts, duplicate enctypes and setkey3 tuples, as MIT.
-- **client.** `request_timeout` bounds a TCP reply that trickles in.
-- **client.** A no-preauth kinit takes its salt from the reply; kvno skips an expired TGT.
-- **client.** A TGS reply outside `clockskew` of the request's time is refused, as MIT.
-- **client.** `kinit -s` with `kdc_timesync = 0` accepts the postdated reply, as MIT.
-- **kdc.** PKINIT picks a chain issuer by name and key id, then checks one signature.
-- **client.** `kinit -E` sends the UPN as one enterprise component, as MIT; `-E` alone no longer asks to canonicalize.
-- **client.** With `-C` or an enterprise name, kinit follows a KDC's client referral to another realm, as MIT, for up to 16 requests.
-- **client.** `kinit -T` arms with a TGT for the request's realm, from the armor cache or fetched through it and stored there, as MIT.
-- **client.** A PKINIT retry after the KDC offers a larger DH group checks the reply against the retried request, as MIT's does.
-- **kdc.** The lockout side file is read per principal and written only for changed fields, not read or rewritten whole per operation.
-- **kdc/client.** RFC 8636's partyVInfo is the AS-REQ's server as sent, as MIT's, not `krbtgt`; MIT's kpasswd could not decrypt our `kadmin/changepw` reply.
+- **kdc.** kadm5 and iprop keep delegation tl_data; cpw after renprinc uses new name.
+- **admin.** setkey checks policy keysalts, duplicate enctypes, setkey3 tuples, as MIT.
+- **client.** `request_timeout` bounds TCP reply trickling in.
+- **client.** A no-preauth kinit takes its salt from reply; kvno skips expired TGT.
+- **client.** TGS reply outside `clockskew` of request's time is refused, as MIT.
+- **client.** `kinit -s` with `kdc_timesync = 0` accepts postdated reply, as MIT.
+- **kdc.** PKINIT picks chain issuer by name and key id, then checks one signature.
+- **client.** `kinit -E` sends UPN as one enterprise component, as MIT.
+- **client.** `-E` alone no longer asks to canonicalize.
+- **client.** `-C` or enterprise name makes kinit follow KDC client referrals (16 requests max), as MIT.
+- **client.** `kinit -T` arms with TGT for request's realm, as MIT.
+- **client.** `kinit -T`'s armor TGT comes from armor cache, or is fetched through it and stored.
+- **client.** PKINIT retry in KDC's larger DH group checks reply against retry, as MIT.
+- **kdc.** Lockout side file is read per principal and written per changed field, not whole per op.
+- **kdc/client.** RFC 8636's partyVInfo is AS-REQ's server as sent, as MIT's, not `krbtgt`.
+- **kdc/client.** MIT's kpasswd could not decrypt our `kadmin/changepw` reply; now it can.
 
-- **client.** kinit's expired-password requests (`kadmin/changepw` and the final one) each make fresh FAST armor, as MIT, not reusing the first.
-- **kdc.** A whole write destroys the `.principal.tmp-*` files a killed write left, under the exclusive lock, as MIT's next load does.
-- **client.** An AS failure prints MIT's table text for skew, a mismatched reply, and error 60. A generic error's e-text stays on the TGS path.
-- **client.** A UDP socket uses the KDC address's family, and a link-local scope prints as the interface name.
-- **kdc.** A TGS name that is not GeneralString is S_PRINCIPAL_UNKNOWN, not a panic.
-- **kdc.** A preauth module's text is kept only with its own code. Garbage PA-ENC-TIMESTAMP is error 24, and PKINIT without a CA is ignored.
-- **crypto.** A des3 usage key uses the 3DES DK, a delegated session key keeps a weak enctype, and kadmin names are NT-PRINCIPAL.
-- **kdc.** No stash: `krb5kdc -m` and `kadmind -m` read the master key once from the keyboard. Foreground `-m` reads it twice; `kadmind -m` also reads it with a stash.
-- **kdc.** A master key that does not decrypt logs MIT's failure while fetching the master keys list.
-- **protocol.** A negative `clockskew` fails every ticket and authenticator time check, as MIT's; `verify_init_creds` takes the profile's skew, not 300 s.
-- **kdc.** kdc.conf's `[libdefaults]` `permitted_enctypes` and `allow_*` are the first values, as MIT's KDC context reads them; an empty list permits nothing.
-- **gss/types.** One DER length codec: a GSS token of 64 KiB or more is framed right, and a delegated KRB-CRED too long for the checksum fails as MIT's.
-- **admin.** kadmind sets up its listeners as MIT's: iprop on its own port (not kadmind's), `-proponly`, and `admin_server`'s port before `-port`.
-- **gss/admin.** The GSS initiator takes its caller's flags, as MIT; the iprop client asks for MUTUAL|REPLAY.
-- **kdc.** A database the KDC cannot read again answers the request under the store's read lock, not its write lock, so other requests no longer wait on it.
-- **kdb.** `kdb5_util dump`'s name filter is glibc's ERE, as MIT's `regcomp(REG_EXTENDED)`, matched against the whole name, with `regerror`'s text for a bad name.
-- **kdc.** A store write commits in its own change or is refused before it touches the store; a status, kvno, TL-data or policy write stamps `Last modified`.
-- **kdc/admin.** kadm5 postcommit hooks run after the write, database unlocked, as MIT; create's also runs on a failed write. kadm5 reads take the store's read guard.
+- **client.** Each expired-password kinit request (`kadmin/changepw`, last) gets new FAST armor, as MIT.
+- **kdc.** Whole write removes stale `.principal.tmp-*` files under its exclusive lock, as MIT's next load.
+- **client.** AS failure prints MIT's table text for skew, mismatched reply, error 60.
+- **client.** Generic error's e-text stays on TGS path.
+- **client.** UDP socket takes KDC address's family; link-local scope prints as its interface name.
+- **kdc.** TGS name not GeneralString is S_PRINCIPAL_UNKNOWN, not a panic.
+- **kdc.** Preauth module's text is kept only with its own code.
+- **kdc.** Garbage PA-ENC-TIMESTAMP is error 24; PKINIT without CA is ignored.
+- **crypto.** des3 usage key uses 3DES DK; delegated session key keeps weak enctype.
+- **crypto.** kadmin names are NT-PRINCIPAL.
+- **kdc.** No stash: `krb5kdc -m` and `kadmind -m` read master key once from keyboard.
+- **kdc.** Foreground `-m` reads master key twice; `kadmind -m` reads it with stash too.
+- **kdc.** Master key that fails to decrypt logs MIT's failure while fetching master keys list.
+- **protocol.** Negative `clockskew` fails every ticket and authenticator time check, as MIT.
+- **protocol.** `verify_init_creds` takes profile's skew, not 300 s.
+- **kdc.** `[libdefaults]` `permitted_enctypes`, `allow_*` use kdc.conf's first values, as MIT's KDC context.
+- **kdc.** Empty `permitted_enctypes` list permits nothing.
+- **gss/types.** One DER length codec: GSS token of 64 KiB or more is framed right.
+- **gss/types.** Delegated KRB-CRED too long for checksum fails as MIT.
+- **admin.** kadmind sets up its listeners as MIT's: iprop on its own port, not kadmind's.
+- **admin.** kadmind takes `-proponly`, and `admin_server`'s port before `-port`.
+- **gss/admin.** GSS initiator takes caller's flags, as MIT; iprop client asks MUTUAL|REPLAY.
+- **kdc.** KDC unable to reread its database answers under read lock, not write; none waits.
+- **kdb.** `kdb5_util dump`'s name filter is glibc ERE on whole name, as MIT's `regcomp(REG_EXTENDED)`.
+- **kdb.** Bad filter reports `regerror`'s text.
+- **kdc.** Store write commits in its own change or is refused before it touches store.
+- **kdc.** Status, kvno, TL-data or policy write stamps `Last modified`.
+- **kdc/admin.** kadm5 postcommit hooks run after write, unlocked, as MIT; create's runs on failure too.
+- **kdc/admin.** kadm5 reads take store's read guard.
 - **kdc.** PKINIT: another client's SAN is 75 (`Client name mismatch`; `pkinit_allow_upn` is read).
-- **kdc.** An unknown PKINIT CA is 70 with TD-TRUSTED-CERTIFIERS; another chain failure is 71 with TD-INVALID-CERTIFICATES.
-- **kdc.** PKINIT logs MIT's freshness lines and checks the AuthPack in MIT's order. No DH is `Unsupported PKINIT RSA request`.
-- **kdc.** A PKINIT CMS that fails decode or verify uses MIT's text (`Failed to decode CMS message: <reason>`, `wrong oid`) or 80.
-- **kdc.** A PKINIT DH value key derivation refuses is 60 under `KDC_RETURN_PADATA`, as MIT's; it was 65.
-- **client.** kinit falls through to the password when a PKINIT identity, choice or anchor does not load, and refuses a second `X509_user_identity`.
-- **client.** A PKINIT refusal with e-data (24, 70-72) tries the next mechanism; 75 or 77 with no e-data ends it.
-- **client.** `kinit -T` runs PKINIT inside the armor. A reply that does not verify falls to the password.
-- **client.** An RSA PKINIT reply is checked against every anchor and `pkinit_pool`. A failure falls to the password.
-- **client.** The KDC certificate check is the krbtgt SAN, else a `pkinit_kdc_hostname` dNSName, then EKU and key usage; else 76 or 77.
-- **client.** Under FAST, a bad PKINIT reply falls to the password, and a PA-FX-FAST error upgrades the request to FAST, traced.
-- **pkinit.** kinit's and the KDC's `KRB5_TRACE` print each certificate-match rule, regexp test and match, and an identity of two with no rule.
-- **pkinit.** kpasswd, kprop and an expired-password kinit take PKINIT from the profile. A bare-request reply is no error, with an identity.
-- **pkinit.** The KDC and kinit sign P-224, P-384, P-521 and secp256k1 with SHA-256, and verify ECDSA on them.
-- **pkinit.** Key-exchange groups are MODP 1024 to 4096 and P-256 to P-521, by `pkinit_dh_min_bits`. A 65 is retried in the KDC's group.
-- **admin.** kpasswd arms its request with the default ccache when it holds a principal, tracing its full name, as MIT's; kinit traces `-T` as given.
-- **client.** A FAST request's outer body is the request as the last restart left it, as MIT's, and `kdc_default_options` seeds the AS options.
-- **admin.** kadmind's iprop logs MIT's `Unauthorized request` line for a refused GET_UPDATES or full resync, and a `Request` line per answer.
-- **kdc.** A refused server key logs the KDB error's text, as MIT's: `No matching key in entry having a permitted enctype` for a key the KDC does not permit.
-- **kdc.** A KDC started by full path names itself by its basename in an init failure, as MIT's.
-- **gss.** A refused mutual AP-REQ gets MIT's KRB-ERROR token, in SPNEGO too; initiators read it.
-- **admin.** kadmind's full resync dumps from disk for the replica's version, with kprop's files.
+- **kdc.** Unknown PKINIT CA is 70 (TD-TRUSTED-CERTIFIERS); other chain failure 71 (TD-INVALID-CERTIFICATES).
+- **kdc.** PKINIT logs MIT's freshness lines and checks AuthPack in MIT's order.
+- **kdc.** PKINIT request with no DH is `Unsupported PKINIT RSA request`.
+- **kdc.** PKINIT CMS failing decode or verify uses MIT's text, or 80.
+- **kdc.** PKINIT CMS texts include `Failed to decode CMS message: <reason>` and `wrong oid`.
+- **kdc.** A PKINIT DH value key derivation refuses is 60 under `KDC_RETURN_PADATA`, as MIT's (was 65).
+- **client.** kinit falls to password when PKINIT identity, choice or anchor fails to load.
+- **client.** kinit refuses second `X509_user_identity`.
+- **client.** PKINIT refusal with e-data (24, 70-72) tries next mechanism; 75 or 77 with none ends it.
+- **client.** `kinit -T` runs PKINIT in armor; reply failing to verify falls to password.
+- **client.** RSA PKINIT reply checked against all anchors and `pkinit_pool`; failure falls to password.
+- **client.** KDC cert check: krbtgt SAN, else `pkinit_kdc_hostname` dNSName, then EKU/key usage; else 76/77.
+- **client.** Under FAST bad PKINIT reply falls to password; PA-FX-FAST errors upgrade to FAST, traced.
+- **pkinit.** kinit's and KDC's `KRB5_TRACE` show each certificate-match rule, regexp test, match.
+- **pkinit.** `KRB5_TRACE` prints identity of two with no rule.
+- **pkinit.** kpasswd, kprop, expired-password kinit take PKINIT from profile.
+- **pkinit.** With an identity, bare-request reply is no error.
+- **pkinit.** KDC and kinit sign P-224, P-384, P-521, secp256k1 with SHA-256 and verify ECDSA on them.
+- **pkinit.** Key-exchange groups: MODP 1024 to 4096, P-256 to P-521, by `pkinit_dh_min_bits`.
+- **pkinit.** A 65 is retried in KDC's group.
+- **admin.** kpasswd arms with default ccache if it holds principal, tracing its full name, as MIT.
+- **admin.** kinit traces `-T` as given.
+- **client.** FAST request's outer body is request as last restart left it, as MIT.
+- **client.** `kdc_default_options` seeds AS options.
+- **admin.** kadmind's iprop logs MIT's `Unauthorized request` for refused GET_UPDATES or full resync.
+- **admin.** kadmind's iprop logs `Request` line per answer.
+- **kdc.** Refused server key logs KDB error's text, as MIT.
+- **kdc.** A key the KDC does not permit logs `No matching key in entry having a permitted enctype`.
+- **kdc.** A KDC started by full path names itself by its basename in init failure, as MIT.
+- **gss.** Refused mutual AP-REQ gets MIT's KRB-ERROR token, in SPNEGO too; initiators read it.
+- **admin.** kadmind's full resync dumps from disk for replica's version, with kprop's files.
 - **client/kdc.** A non-ASCII realm or PKINIT SAN is refused or unmatched, not a panic.
+- **admin.** `ktutil` gives aes-sha2 and Camellia keys MIT's PBKDF2 rounds (v1.1.0: 4096).
+- **client.** The AS nonce is drawn fresh for each request, as MIT.
+- **install.** The installer creates both daemon logs at 0640 and restores their labels.
 
 ## [1.1.0] - 2026-10-14
 
