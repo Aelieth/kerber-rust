@@ -31,6 +31,8 @@ pub use etype::{
     parse_keysalts, salttype_from_name,
 };
 pub use key::ProtocolKey;
+#[cfg(feature = "test-hooks")]
+pub use ops::allow_weak_pbkdf2_iterations;
 pub use ops::{
     CipherState, ENCTYPE_UNKNOWN, check_enc_data_etype, checksum, checksum_output_size, decrypt,
     decrypt_cts, decrypt_enc_data, decrypt_enc_data_with_state, decrypt_with_state, encrypt,

@@ -14,7 +14,8 @@ pub enum Error {
     BadChecksumSize,
     InappChecksum,
     Rng,
-    IterationLimit,
+    // MIT: `KRB5_ERR_BAD_S2K_PARAMS` (lib/krb5/error_tables/krb5_err.et:337-337)
+    BadS2kParams,
     // MIT: `krb5_k_decrypt` (lib/crypto/krb/decrypt.c:30-85)
     // MIT: `KRB5_BAD_ENCTYPE` (lib/krb5/error_tables/krb5_err.et:254-254)
     BadEnctype(i32),
@@ -46,7 +47,7 @@ impl fmt::Display for Error {
             Self::BadChecksumSize => write!(f, "checksum length does not match output size"),
             Self::InappChecksum => write!(f, "inappropriate checksum type"),
             Self::Rng => write!(f, "failed to generate random confounder"),
-            Self::IterationLimit => write!(f, "PBKDF2 iteration count exceeds local limit"),
+            Self::BadS2kParams => write!(f, "Invalid key generation parameters from KDC"),
             Self::BadEnctype(_) => write!(f, "Bad encryption type"),
             Self::DesBadParity => write!(f, "DES key has bad parity"),
             Self::DesWeakKey => write!(f, "DES key is a weak key"),

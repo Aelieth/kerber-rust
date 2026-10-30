@@ -18,6 +18,8 @@ pub(super) const KRB5_PREAUTH_FAILED: i64 = ERROR_TABLE_BASE_KRB5 + 210;
 pub(super) const DES_BAD_KEYPAR: i64 = ERROR_TABLE_BASE_KRB5 + 186;
 // MIT: `KRB5DES_WEAK_KEY` (krb5_err.et:252-252)
 pub(super) const DES_WEAK_KEY: i64 = ERROR_TABLE_BASE_KRB5 + 187;
+// MIT: `KRB5_ERR_BAD_S2K_PARAMS` (krb5_err.et:337-337)
+pub(super) const BAD_S2K_PARAMS: i64 = ERROR_TABLE_BASE_KRB5 + 244;
 pub(super) const EIO: i64 = 5;
 
 #[derive(Debug)]
@@ -38,10 +40,11 @@ impl ModuleFail {
         }
     }
 
-    /// A des3 key MIT refuses: the walk goes on to the next mechanism.
-    pub(super) fn des_key(e: Error) -> Self {
+    /// A key MIT refuses: the walk goes on to the next mechanism.
+    pub(super) fn key_refused(e: Error) -> Self {
         let code = match e {
             Error::DesWeakKey => DES_WEAK_KEY,
+            Error::BadS2kParams => BAD_S2K_PARAMS,
             _ => DES_BAD_KEYPAR,
         };
         Self {

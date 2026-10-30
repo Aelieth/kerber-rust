@@ -57,6 +57,9 @@ pub enum Error {
     // MIT: `KRB5_PROG_ETYPE_NOSUPP` (krb5_err.et:204-204)
     #[error("Program lacks support for encryption type")]
     ProgEtypeNosupp,
+    // MIT: `KRB5_ERR_BAD_S2K_PARAMS` (krb5_err.et:337-337)
+    #[error("Invalid key generation parameters from KDC")]
+    BadS2kParams,
     // MIT: `KRB5_BAD_ENCTYPE` (krb5_err.et:254-254)
     #[error("Bad encryption type")]
     BadEnctype,
@@ -141,6 +144,7 @@ impl Clone for Error {
             Self::CcNotKtype => Self::CcNotKtype,
             Self::ConfigEtypeNosupp => Self::ConfigEtypeNosupp,
             Self::ProgEtypeNosupp => Self::ProgEtypeNosupp,
+            Self::BadS2kParams => Self::BadS2kParams,
             Self::BadEnctype => Self::BadEnctype,
             Self::DesBadParity => Self::DesBadParity,
             Self::DesWeakKey => Self::DesWeakKey,
@@ -240,6 +244,7 @@ impl From<krb5_crypto::Error> for Error {
             krb5_crypto::Error::BadEnctype(_) => Self::BadEnctype,
             krb5_crypto::Error::DesBadParity => Self::DesBadParity,
             krb5_crypto::Error::DesWeakKey => Self::DesWeakKey,
+            krb5_crypto::Error::BadS2kParams => Self::BadS2kParams,
             e => Self::Crypto(e.to_string()),
         }
     }

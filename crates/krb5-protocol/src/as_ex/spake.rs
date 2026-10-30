@@ -135,7 +135,12 @@ fn process_challenge(
     let ikey = match pick_key(keys, Some(etype)) {
         Some(key) => key,
         None => match pw.get() {
-            Ok(password) => string_to_key(etype, &password, &salt, params.as_deref())?,
+            Ok(password) => match string_to_key(etype, &password, &salt, params.as_deref()) {
+                Err(krb5_crypto::Error::BadS2kParams) => {
+                    return Ok(Round::Failed(ModuleFail::key_refused(Error::BadS2kParams)));
+                }
+                key => key?,
+            },
             Err(f) => return Ok(Round::Failed(f)),
         },
     };

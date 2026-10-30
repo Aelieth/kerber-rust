@@ -6,7 +6,6 @@ use std::process::ExitCode;
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, string_to_key};
-use krb5_kdc::s2k_params;
 use krb5_protocol::{FileCcache, Keytab, parse_principal};
 use krb5_types::{
     EncTicketPart, KerberosTime, OctetString, Ticket, TransitedEncoding, flag_bit, ku,
@@ -273,7 +272,6 @@ fn main() -> ExitCode {
             Err(_) => continue,
         };
         // Ticket etype is first_current_key (profile order).
-        // `--key-hex` uses that etype, not always 18.
         let key = if let Some(ref keys) = keytab_keys {
             // Match the ticket's own etype, and its kvno when it carries one
             // (else the highest kvno for that etype).
@@ -492,8 +490,7 @@ fn key_from_password(password: &str, principal: &str) -> Result<ProtocolKey, Str
     let (name, realm) = parse_principal(principal)?;
     let salt = name.default_salt(&realm);
     let etype = EncryptionType::Aes256CtsHmacSha196;
-    let params = s2k_params(etype);
-    string_to_key(etype, password.as_bytes(), &salt, Some(&params)).map_err(|e| e.to_string())
+    string_to_key(etype, password.as_bytes(), &salt, None).map_err(|e| e.to_string())
 }
 
 fn parse_hex_key(hex: &str) -> Result<ProtocolKey, String> {

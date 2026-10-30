@@ -580,7 +580,7 @@ fn addent(
             }
             "-password" => use_pass += 1,
             "-key" => use_key += 1,
-            // Not MIT: `-s` and `-f` are refused; 1.22.2 takes a salt.
+            // Not MIT: no `-s` salt or `-f` fetch.
             opt @ ("-f" | "-s") => return Err(format!("{cmd}: {opt} is not supported")),
             _ => {}
         }
@@ -643,8 +643,7 @@ fn addent(
                 .map_err(|e| fail(&e))?,
         };
         let salt = name.default_salt(&realm);
-        string_to_key(etype, pw.as_slice(), salt, Some(&4096u32.to_be_bytes()))
-            .map_err(|e| fail(&e))?
+        string_to_key(etype, pw.as_slice(), salt, None).map_err(|e| fail(&e))?
     };
     let kvno = kvno.cast_unsigned();
     let timestamp = std::time::SystemTime::now()

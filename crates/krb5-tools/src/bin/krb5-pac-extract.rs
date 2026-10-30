@@ -8,7 +8,7 @@ use krb5_asn1::decode;
 use krb5_crypto::{
     EncryptionType, KeyUsage, ProtocolKey, decrypt, derive_prfplus_enctype, string_to_key,
 };
-use krb5_kdc::{pac_from_ticket_part, s2k_params, ticket_checksum_der, verify_pac_signatures};
+use krb5_kdc::{pac_from_ticket_part, ticket_checksum_der, verify_pac_signatures};
 use krb5_protocol::{FileCcache, Keytab};
 use krb5_types::{AuthorizationData, AuthorizationDataValue, EncTicketPart, Ticket, ku, pa};
 
@@ -559,7 +559,6 @@ fn s2k_hex(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     }
     let etype = EncryptionType::Aes256CtsHmacSha196;
-    let params = s2k_params(etype);
     let pw = if args[0] == "--s2k-hex" {
         match hex_decode(&args[1]) {
             Ok(b) => b,
@@ -571,7 +570,7 @@ fn s2k_hex(args: &[String]) -> ExitCode {
     } else {
         args[1].as_bytes().to_vec()
     };
-    match string_to_key(etype, &pw, args[2].as_bytes(), Some(&params)) {
+    match string_to_key(etype, &pw, args[2].as_bytes(), None) {
         Ok(key) => {
             for b in key.as_bytes() {
                 print!("{b:02x}");

@@ -146,7 +146,7 @@ pub use store::{
     KtkdbError, MAX_ALIAS_DEPTH, NamedPolicy, PWQUAL_DICT, PWQUAL_EMPTY, PWQUAL_PRINC, Policy,
     Principal, PrincipalBuilder, PrincipalStore, Pwqual, RID_FIRST_USER, RID_KRBTGT, S2K_ITERS,
     SpakeKdc, TlData, apply_keysalt_policy, clear_thread_kadm5_hook, clear_thread_pwqual,
-    kadm5_mask, ktkdb_get_entry, random_key, register_kadm5_hook, register_pwqual, s2k_params,
+    kadm5_mask, ktkdb_get_entry, random_key, register_kadm5_hook, register_pwqual,
     set_thread_kadm5_hook, set_thread_pwqual, strip_db_args,
 };
 #[cfg(any(test, feature = "test-hooks"))]

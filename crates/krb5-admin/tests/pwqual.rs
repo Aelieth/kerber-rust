@@ -157,8 +157,7 @@ fn kadm5_create_null_password_is_a_random_key_not_the_empty_password() {
         .expect("created");
     assert!(!p.keys.is_empty());
     for k in &p.keys {
-        let params = krb5_kdc::s2k_params(k.etype);
-        let empty = krb5_crypto::string_to_key(k.etype, b"", &p.salt, Some(&params)).unwrap();
+        let empty = krb5_crypto::string_to_key(k.etype, b"", &p.salt, None).unwrap();
         assert_ne!(
             empty.as_bytes(),
             k.key.as_bytes(),

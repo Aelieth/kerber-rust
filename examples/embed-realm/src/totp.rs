@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use hmac::{Hmac, KeyInit, Mac};
 use krb5_crypto::string_to_key;
-use krb5_kdc::{OtpVerdict, OtpVerifier, OtpVerifyRequest, key_salt, s2k_params};
+use krb5_kdc::{OtpVerdict, OtpVerifier, OtpVerifyRequest, key_salt};
 use sha1::Sha1;
 use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;
@@ -152,8 +152,7 @@ impl TotpVerifier {
             .filter(|k| k.kvno == max_kvno)
             .any(|k| {
                 let salt = key_salt(k, &req.principal.name, &req.principal.realm);
-                let params = s2k_params(k.etype);
-                string_to_key(k.etype, password, &salt, Some(&params))
+                string_to_key(k.etype, password, &salt, None)
                     .is_ok_and(|nk| bool::from(nk.as_bytes().ct_eq(k.key.as_bytes())))
             })
     }

@@ -16,12 +16,11 @@ fn part(der_hex: &str) -> EncTicketPart {
 }
 
 fn key(password: &str, salt: &str) -> ProtocolKey {
-    let et = EncryptionType::Aes256CtsHmacSha196;
     string_to_key(
-        et,
+        EncryptionType::Aes256CtsHmacSha196,
         password.as_bytes(),
         salt.as_bytes(),
-        Some(&crate::store::s2k_params(et)),
+        None,
     )
     .unwrap()
 }

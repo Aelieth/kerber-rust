@@ -24,9 +24,11 @@ fn iter_params(n: u32) -> [u8; 4] {
     n.to_be_bytes()
 }
 
+#[cfg(feature = "test-hooks")]
 #[test]
 fn rfc3962_string_to_key() {
     install_json_tracing();
+    krb5_crypto::allow_weak_pbkdf2_iterations(true);
     let salt = b"ATHENA.MIT.EDUraeburn";
     let password = b"password";
 
@@ -307,8 +309,10 @@ fn rfc3961_des3_string_to_key_output() {
     );
 }
 
+#[cfg(feature = "test-hooks")]
 #[test]
 fn rfc6803_camellia_cts_cmac() {
+    krb5_crypto::allow_weak_pbkdf2_iterations(true);
     let salt = b"ATHENA.MIT.EDUraeburn";
     let k128 = string_to_key(
         EncryptionType::Camellia128CtsCmac,

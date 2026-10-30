@@ -50,6 +50,7 @@ any other `###` heading.
 - **protocol.** The AP-REQ acceptor refuses a transited hop naming the server's own realm and runs `rd_req_decoded_opt`'s checks in MIT's order, with MIT's codes and texts.
 - **gss.** The acceptor sets CHANNEL_BOUND only on matching bindings, not from the initiator's flags.
 - **client.** An AS-REP in an unrequested enctype is refused, as MIT.
+- **crypto.** KDC-sent PBKDF2 counts under the default are refused, as MIT.
 
 ### Added
 

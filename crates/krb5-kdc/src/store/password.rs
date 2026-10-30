@@ -156,10 +156,9 @@ pub(super) fn keys_from_password(
             4 => random_salt()?,
             _ => return Err(Error::InvalidArgument("Unsupported salt type".into())),
         };
-        let params = s2k_params(ks.etype);
         let mut key = KeyEntry::new(
             ks.etype,
-            string_to_key(ks.etype, password, &salt, Some(&params))?,
+            string_to_key(ks.etype, password, &salt, None)?,
             kvno,
         );
         if ks.salt > 0 {
@@ -179,12 +178,6 @@ fn random_salt() -> Result<Vec<u8>, Error> {
         .iter()
         .flat_map(|b| [0x40 | (b >> 4), 0x40 | (b & 0x0f)])
         .collect())
-}
-
-#[must_use]
-/// SHA-2 and Camellia use 32768; MIT rejects less.
-pub fn s2k_params(etype: EncryptionType) -> Vec<u8> {
-    etype.default_iterations().to_be_bytes().to_vec()
 }
 
 impl PrincipalStore {
@@ -486,8 +479,7 @@ impl PrincipalStore {
         let keep: Vec<u32> = kvnos.into_iter().rev().take(extra).collect();
         hist.retain(|k| keep.contains(&k.kvno));
         for k in p.keys.iter().chain(hist) {
-            let params = s2k_params(k.etype);
-            if let Ok(nk) = string_to_key(k.etype, password, &p.salt, Some(&params))
+            if let Ok(nk) = string_to_key(k.etype, password, &p.salt, None)
                 && bool::from(nk.as_bytes().ct_eq(k.key.as_bytes()))
             {
                 return Err(Error::PasswordPolicy("history".into()));

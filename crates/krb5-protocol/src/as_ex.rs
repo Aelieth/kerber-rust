@@ -905,7 +905,12 @@ fn continue_preauth(
     let client_key = match pick_key(keys, Some(etype)) {
         Some(key) => key,
         None => match pw.get() {
-            Ok(password) => string_to_key(etype, &password, &salt, params.as_deref())?,
+            Ok(password) => match string_to_key(etype, &password, &salt, params.as_deref()) {
+                Err(krb5_crypto::Error::BadS2kParams) => {
+                    return Ok(Err(ModuleFail::key_refused(Error::BadS2kParams)));
+                }
+                key => key?,
+            },
             Err(f) => return Ok(Err(f)),
         },
     };
@@ -916,7 +921,7 @@ fn continue_preauth(
     match pa_enc_timestamp_at(&client_key, clock.now(true), false) {
         Ok(p) => padata.push(p),
         Err(e @ (Error::DesBadParity | Error::DesWeakKey)) => {
-            return Ok(Err(ModuleFail::des_key(e)));
+            return Ok(Err(ModuleFail::key_refused(e)));
         }
         Err(e) => return Err(e),
     }

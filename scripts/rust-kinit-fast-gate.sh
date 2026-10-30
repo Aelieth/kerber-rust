@@ -357,34 +357,71 @@ for who in mit rust; do
     fi
 done
 
-echo "==== an AS-REP in an enctype the request didn't list, or whose ETYPE-INFO2 names none: MIT kinit, then ours (get_in_tkt.c:1412-1422, preauth2.c:818-833) ===="
-docker cp "$ROOT/scripts/lib/reply-etype-kdc.py" "$NAME":/tmp/reply-etype-kdc.py
-for spec in 1893:17: 1894:18:17 1895:18:99; do
-    IFS=: read -r port enc info <<<"$spec"
-    docker exec -d "$NAME" sh -c "python3 /tmp/reply-etype-kdc.py $port $enc $info > /tmp/re-$port.log 2>&1"
+# reply-etype-kdc.py on PORT with the rest as its arguments; MIT's kinit must say WANT, then ours the same.
+re_case() {
+    local port=$1 want=$2 label=$3 who out rc mit_out=
+    shift 3
+    docker exec -d "$NAME" sh -c "python3 /tmp/reply-etype-kdc.py $port $* > /tmp/re-$port.log 2>&1"
     require_log "$NAME" "/tmp/re-$port.log" listening "reply-etype-kdc on $port"
     docker exec "$NAME" sh -c "printf '[libdefaults]\n default_realm = KERBER.TEST\n default_tkt_enctypes = aes256-cts-hmac-sha1-96\n permitted_enctypes = aes256-cts-hmac-sha1-96\n[realms]\n KERBER.TEST = {\n  kdc = 127.0.0.1:$port\n }\n' > /tmp/re-$port.conf"
     for who in mit rust; do
         set +e
         if [ "$who" = mit ]; then
-            RE="$(docker exec -e KRB5_CONFIG="/tmp/re-$port.conf" "$NAME" sh -c "printf 'userpassword\n' | kinit -c /tmp/re.cc user@KERBER.TEST" 2>&1)"
+            out="$(docker exec -e KRB5_CONFIG="/tmp/re-$port.conf" "$NAME" sh -c "printf 'userpassword\n' | kinit -c /tmp/re.cc user@KERBER.TEST" 2>&1)"
         else
-            RE="$(docker exec -e KRB5_CONFIG="/tmp/re-$port.conf" -e KRB5_PASSWORD=userpassword "$NAME" \
+            out="$(docker exec -e KRB5_CONFIG="/tmp/re-$port.conf" -e KRB5_PASSWORD=userpassword "$NAME" \
                 /tmp/krb5-kinit -c /tmp/re.cc user@KERBER.TEST 2>&1)"
         fi
-        re_rc=$?
+        rc=$?
         set -e
-        RE="$(tr -d '\r' <<<"$RE" | grep -v '^Password for' | tail -n 1)"
-        RE="${RE#*: }"
-        echo "$who enc $enc info ${info:-none}: rc=$re_rc $RE"
+        out="$(tr -d '\r' <<<"$out" | grep -v '^Password for' | tail -n 1)"
+        out="${out#*: }"
+        echo "$who $label: rc=$rc $out"
         if [ "$who" = mit ]; then
-            want_re="$re_rc $RE"
-            case "$info" in 99) w='Program lacks support for encryption type' ;; *) w='No supported encryption types (config file error?)' ;; esac
-            case "$RE" in "$w"*) ;; *) die "MIT's kinit for enc $enc info ${info:-none}: $RE" ;; esac
-        elif [ "$re_rc $RE" != "$want_re" ]; then
-            die "ours for enc $enc info ${info:-none}: rc=$re_rc $RE; MIT: $want_re"
+            mit_out="$rc $out"
+            case "$out" in "$want"*) ;; *) die "MIT's kinit for $label: $out" ;; esac
+        elif [ "$rc $out" != "$mit_out" ]; then
+            die "ours for $label: rc=$rc $out; MIT: $mit_out"
         fi
     done
+}
+
+echo "==== an AS-REP in an enctype the request didn't list, or whose ETYPE-INFO2 names none: MIT kinit, then ours (get_in_tkt.c:1412-1422, preauth2.c:818-833) ===="
+docker cp "$ROOT/scripts/lib/reply-etype-kdc.py" "$NAME":/tmp/reply-etype-kdc.py
+for spec in 1893:17: 1894:18:17 1895:18:99; do
+    IFS=: read -r port enc info <<<"$spec"
+    case "$info" in 99) w='Program lacks support for encryption type' ;; *) w='No supported encryption types (config file error?)' ;; esac
+    re_case "$port" "$w" "enc $enc info ${info:-none}" "$enc" ${info:+"$info"}
+done
+
+echo "==== ktutil addent -password sends no s2kparams, so each enctype's default count: MIT ktutil, then ours, each keytab read by MIT's klist -K (ktutil_funcs.c:100-110) ===="
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-ktutil" "$NAME":/tmp/krb5-ktutil
+for e in aes256-cts-hmac-sha384-192 camellia256-cts-cmac arcfour-hmac; do
+    for who in mit rust; do
+        bin=ktutil
+        if [ "$who" = rust ]; then
+            bin=/tmp/krb5-ktutil
+        fi
+        set +e
+        docker exec "$NAME" rm -f "/tmp/kt-$who"
+        printf 'addent -password -p user@KERBER.TEST -k 1 -e %s\nuserpassword\nwkt /tmp/kt-%s\nquit\n' "$e" "$who" |
+            docker exec -i "$NAME" "$bin" > /dev/null 2>&1
+        key="$(docker exec "$NAME" klist -k -K -e "/tmp/kt-$who" 2>&1 | tail -n 1)"
+        set -e
+        echo "$who $e: $key"
+        if [ "$who" = mit ]; then
+            mit_key=$key
+            case "$key" in *"$e)"*"(0x"*) ;; *) die "MIT's ktutil for $e: $key" ;; esac
+        elif [ "$key" != "$mit_key" ]; then
+            die "ours for $e: $key; MIT: $mit_key"
+        fi
+    done
+done
+
+echo "==== a PREAUTH_REQUIRED whose ETYPE-INFO2 iteration count is under aes256's 4096, or at MIT's cap: MIT kinit, then ours (s2k_pbkdf2.c:122-141) ===="
+for spec in 1881:1 1882:4095 1883:16777216; do
+    IFS=: read -r port iter <<<"$spec"
+    re_case "$port" 'Pre-authentication failed: Invalid key generation parameters from KDC' "s2kparams $iter" s2k "$iter"
 done
 
 echo "==== require_auth encrypted_challenge: FAST issued, password 12 both legs ===="

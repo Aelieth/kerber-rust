@@ -12,23 +12,44 @@ use crate::etype::{EncryptionType, KeyUsage};
 use crate::key::ProtocolKey;
 use crate::wipe::Wiped;
 
-const MAX_ITERATIONS: u32 = 5_000_000;
+const MAX_ITERATIONS: u32 = 0x100_0000;
 
+// MIT: `pbkdf2_string_to_key` (lib/crypto/krb/s2k_pbkdf2.c:122-141)
 fn parse_iterations(etype: EncryptionType, params: Option<&[u8]>) -> Result<u32, Error> {
-    match params {
-        None | Some([]) => Ok(etype.default_iterations()),
-        Some(p) if p.len() == 4 => {
-            let n = u32::from_be_bytes(p.try_into().map_err(|_| Error::InvalidParams)?);
-            if n == 0 {
-                return Err(Error::InvalidParams);
+    let n = match params {
+        None | Some([]) => etype.default_iterations(),
+        Some(p) => {
+            let n = u32::from_be_bytes(p.try_into().map_err(|_| Error::BadS2kParams)?);
+            if n == 0 || (n < etype.default_iterations() && !weak_iterations()) {
+                return Err(Error::BadS2kParams);
             }
-            if n > MAX_ITERATIONS {
-                return Err(Error::IterationLimit);
-            }
-            Ok(n)
+            n
         }
-        Some(_) => Err(Error::InvalidParams),
+    };
+    if n >= MAX_ITERATIONS {
+        return Err(Error::BadS2kParams);
     }
+    Ok(n)
+}
+
+#[cfg(feature = "test-hooks")]
+thread_local! {
+    static WEAK_ITERATIONS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(feature = "test-hooks")]
+pub fn allow_weak_pbkdf2_iterations(allow: bool) {
+    WEAK_ITERATIONS.with(|w| w.set(allow));
+}
+
+#[cfg(feature = "test-hooks")]
+fn weak_iterations() -> bool {
+    WEAK_ITERATIONS.with(std::cell::Cell::get)
+}
+
+#[cfg(not(feature = "test-hooks"))]
+const fn weak_iterations() -> bool {
+    false
 }
 
 // MIT: `krb5int_dk_string_to_key` (lib/crypto/krb/s2k_pbkdf2.c:33-101)
@@ -59,6 +80,16 @@ fn string_to_key_inner(
     salt: &[u8],
     params: Option<&[u8]>,
 ) -> Result<ProtocolKey, Error> {
+    // MIT: `krb5int_arcfour_string_to_key` (lib/crypto/krb/s2k_rc4.c:17-18)
+    if etype == EncryptionType::Rc4Hmac {
+        if params.is_some_and(|p| !p.is_empty()) {
+            return Err(Error::BadS2kParams);
+        }
+        return crate::weak::rc4_string_to_key(password);
+    }
+    if etype == EncryptionType::Des3CbcSha1 {
+        return crate::weak::des3_string_to_key(password, salt);
+    }
     let iter = parse_iterations(etype, params)?;
     let key_len = etype.key_len();
     let mut tkey = Wiped(vec![0u8; key_len]);
@@ -97,10 +128,6 @@ fn string_to_key_inner(
             derive::bits_u32(key_len),
         )?);
         ProtocolKey::from_bytes(etype, &base)
-    } else if etype == EncryptionType::Rc4Hmac {
-        crate::weak::rc4_string_to_key(password)
-    } else if etype == EncryptionType::Des3CbcSha1 {
-        crate::weak::des3_string_to_key(password, salt)
     } else if etype.is_camellia() {
         let mut saltp = Vec::new();
         saltp.extend_from_slice(

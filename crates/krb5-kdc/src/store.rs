@@ -778,9 +778,7 @@ pub use kdb_convert::{
 };
 pub(crate) use kdb_convert::{encode_string_attrs, update_tl_data};
 pub use keys::{KeyEntry, KeyLookup, KtkdbError, ktkdb_get_entry, random_key};
-pub use password::{
-    PWQUAL_DICT, PWQUAL_EMPTY, PWQUAL_PRINC, S2K_ITERS, apply_keysalt_policy, s2k_params,
-};
+pub use password::{PWQUAL_DICT, PWQUAL_EMPTY, PWQUAL_PRINC, S2K_ITERS, apply_keysalt_policy};
 pub use policy::{NamedPolicy, Policy, SpakeKdc};
 pub(crate) use principal::PrincipalFields;
 pub use principal::{

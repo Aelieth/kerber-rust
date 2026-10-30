@@ -298,7 +298,14 @@ fn fast_key_mechanism(
     let client_key = match pick_key(keys, Some(etype)) {
         Some(key) => key,
         None => match pw.get() {
-            Ok(password) => string_to_key(etype, &password, &salt, params.as_deref())?,
+            Ok(password) => match string_to_key(etype, &password, &salt, params.as_deref()) {
+                Err(krb5_crypto::Error::BadS2kParams) => {
+                    let f = ModuleFail::key_refused(Error::BadS2kParams);
+                    f.trace(name, mech);
+                    return Ok(Err(f));
+                }
+                key => key?,
+            },
             Err(f) => {
                 f.trace(name, mech);
                 return Ok(Err(f));
@@ -314,7 +321,7 @@ fn fast_key_mechanism(
         match client_challenge(akey, &client_key, (&now, usec)) {
             Ok(p) => inner_pa.push(p),
             Err(e @ (Error::DesBadParity | Error::DesWeakKey)) => {
-                let f = ModuleFail::des_key(e);
+                let f = ModuleFail::key_refused(e);
                 f.trace(name, mech);
                 return Ok(Err(f));
             }
@@ -328,7 +335,7 @@ fn fast_key_mechanism(
         match pa_enc_timestamp_at(&client_key, clock.now(true), true) {
             Ok(p) => inner_pa.push(p),
             Err(e @ (Error::DesBadParity | Error::DesWeakKey)) => {
-                let f = ModuleFail::des_key(e);
+                let f = ModuleFail::key_refused(e);
                 f.trace(name, mech);
                 return Ok(Err(f));
             }
