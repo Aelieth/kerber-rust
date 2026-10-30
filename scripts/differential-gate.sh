@@ -325,15 +325,18 @@ for want in \
     "$FF_AS, Cannot find ticket for requested realm while handling ap-request armor" \
     "$FF_AS, Illegal cross-realm ticket while handling ap-request armor" \
     "$FF_AS, Unkeyed checksum used in fast_req" \
-    "$FF_AS, An unsupported critical FAST option was requested"; do
+    "$FF_AS, An unsupported critical FAST option was requested" \
+    "$FF_AS, Invalid argument while handling ap-request armor" \
+    "$FF_AS, Numerical result out of range while handling ap-request armor" \
+    "$FF_AS, More than 256 authdata matched a query while handling ap-request armor"; do
     grep -qxF "$want" <<<"$FF_MIT" || die "no FIND_FAST line: $want"
 done
 # W1-Z Z3.3: the ratchet is checked against the distinct cases diffsend
 # actually emitted, not the literal its summary line claims (a stale
 # "cases":N in diffsend.rs would otherwise pass). History: A'-3 R32 102 ·
 # A'-4 item 16 105 · item 17 106 · item 18 107 · W1-B F4 109 · W1-Z Z1.3 110 · Z6.2 111 ·
-# as-locked-out 112 · RA 123 · a1-tgs 128 · replay 129 · nopost 130 · s4u-client 132 · fast-cksum 133 · explicit-armor 134 · armor-no-tgs-subkey 135 · armor-no-subkey 136 · reserved-option 137 · service-expired 138 · service-locked 139 · B17 cms 149 · B17b structure 151 · FAST armor 178 · FAST checksums 188 · transit hop 189 · local transit 190 · FAST replies 192 · FAST flips 196.
-DIFFSEND_RATCHET=196
+# as-locked-out 112 · RA 123 · a1-tgs 128 · replay 129 · nopost 130 · s4u-client 132 · fast-cksum 133 · explicit-armor 134 · armor-no-tgs-subkey 135 · armor-no-subkey 136 · reserved-option 137 · service-expired 138 · service-locked 139 · B17 cms 149 · B17b structure 151 · FAST armor 178 · FAST checksums 188 · transit hop 189 · local transit 190 · FAST replies 192 · FAST flips 196 · armor authdata 209.
+DIFFSEND_RATCHET=209
 CASES_SEEN="$(grep -o '"case":"[^"]*","outcome":"ok"' <<<"$DIFF" | sort -u | wc -l | tr -d ' ')"
 [ "$CASES_SEEN" = "$DIFFSEND_RATCHET" ] || die "diffsend emitted $CASES_SEEN distinct ok cases; the ratchet is $DIFFSEND_RATCHET"
 grep -q "\"outcome\":\"ok\",\"cases\":$DIFFSEND_RATCHET}" <<<"$DIFF" || die "diffsend summary line does not claim $DIFFSEND_RATCHET cases"
@@ -439,6 +442,30 @@ grep -q '"case":"fa-fast-cksum-md5-body","outcome":"ok","error_code":12,"e_text"
     <<<"$DIFF" || die "fa-fast-cksum-md5-body not code 12 e_text FIND_FAST on both legs"
 grep -q '"case":"fa-armor-type-unknown","outcome":"ok","error_code":24,"e_text":"FIND_FAST"' \
     <<<"$DIFF" || die "fa-armor-type-unknown not code 24 e_text FIND_FAST on both legs"
+grep -q '"case":"fa-armor-ad-if-relevant-junk","outcome":"ok","error_code":60,"e_text":"FIND_FAST"' \
+    <<<"$DIFF" || die "fa-armor-ad-if-relevant-junk not code 60 e_text FIND_FAST on both legs"
+grep -q '"case":"fa-armor-ad-kdc-issued-junk","outcome":"ok","error_code":60,"e_text":"FIND_FAST"' \
+    <<<"$DIFF" || die "fa-armor-ad-kdc-issued-junk not code 60 e_text FIND_FAST on both legs"
+grep -q '"case":"fa-armor-ad-kdc-issued-bad-mac","outcome":"ok","error_code":25,"e_text":"NEEDED_PREAUTH"' \
+    <<<"$DIFF" || die "fa-armor-ad-kdc-issued-bad-mac not code 25 e_text NEEDED_PREAUTH on both legs"
+grep -q '"case":"fa-armor-cammac-junk","outcome":"ok","error_code":60,"e_text":"FIND_FAST"' \
+    <<<"$DIFF" || die "fa-armor-cammac-junk not code 60 e_text FIND_FAST on both legs"
+grep -q '"case":"fa-armor-cammac-no-svc","outcome":"ok","error_code":60,"e_text":"FIND_FAST"' \
+    <<<"$DIFF" || die "fa-armor-cammac-no-svc not code 60 e_text FIND_FAST on both legs"
+grep -q '"case":"fa-armor-cammac-bad-mac","outcome":"ok","error_code":25,"e_text":"NEEDED_PREAUTH"' \
+    <<<"$DIFF" || die "fa-armor-cammac-bad-mac not code 25 e_text NEEDED_PREAUTH on both legs"
+grep -q '"case":"fa-armor-cammac-svc-type","outcome":"ok","error_code":60,"e_text":"FIND_FAST"' \
+    <<<"$DIFF" || die "fa-armor-cammac-svc-type not code 60 e_text FIND_FAST on both legs"
+grep -q '"case":"fa-armor-pac-range","outcome":"ok","error_code":60,"e_text":"FIND_FAST"' \
+    <<<"$DIFF" || die "fa-armor-pac-range not code 60 e_text FIND_FAST on both legs"
+grep -q '"case":"fa-armor-pac-version","outcome":"ok","error_code":60,"e_text":"FIND_FAST"' \
+    <<<"$DIFF" || die "fa-armor-pac-version not code 60 e_text FIND_FAST on both legs"
+grep -q '"case":"fa-armor-authind-junk","outcome":"ok","error_code":60,"e_text":"FIND_FAST"' \
+    <<<"$DIFF" || die "fa-armor-authind-junk not code 60 e_text FIND_FAST on both legs"
+grep -q '"case":"fa-armor-ad-too-many","outcome":"ok","error_code":60,"e_text":"FIND_FAST"' \
+    <<<"$DIFF" || die "fa-armor-ad-too-many not code 60 e_text FIND_FAST on both legs"
+grep -q '"case":"fa-armor-authind-ok","outcome":"ok","error_code":25,"e_text":"NEEDED_PREAUTH"' \
+    <<<"$DIFF" || die "fa-armor-authind-ok not code 25 e_text NEEDED_PREAUTH on both legs"
 pat='"outer_client":"WELLKNOWN/ANONYMOUS@WELLKNOWN:ANONYMOUS"'
 grep '"case":"fa-fast-hide-client-rep","outcome":"ok"' <<<"$DIFF" | grep -qF "$pat" ||
     die "fa-fast-hide-client-rep: the AS-REP's outer client not anonymous on both legs"
@@ -522,6 +549,7 @@ grep -q '"case":"s4u2self-client-locked-out","outcome":"ok","error_code":18,"e_t
 grep -q '"case":"tgs-fast-unkeyed-bad-checksum","outcome":"ok","error_code":41,"e_text":"FIND_FAST","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-fast-unkeyed-bad-checksum not code 41 e_text FIND_FAST on both legs"
 grep -q '"case":"tgs-fast-req-flip","outcome":"ok","error_code":31,"e_text":"FIND_FAST","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-fast-req-flip not code 31 e_text FIND_FAST on both legs"
 grep -q '"case":"tgs-fast-cksum-flip","outcome":"ok","error_code":41,"e_text":"FIND_FAST","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-fast-cksum-flip not code 41 e_text FIND_FAST on both legs"
+grep -q '"case":"tgs-ad-fx-armor-then-junk","outcome":"ok","error_code":60,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-ad-fx-armor-then-junk not code 60 e_text PROCESS_TGS on both legs"
 grep -q '"case":"tgs-fast-explicit-armor","outcome":"ok","error_code":24,"e_text":"FIND_FAST","e_data":"absent","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-fast-explicit-armor not code 24 e_text FIND_FAST with e_data absent on both legs"
 grep -q '"case":"tgs-fast-armor-no-tgs-subkey","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d"' <<<"$DIFF" || die "tgs-fast-armor-no-tgs-subkey not a TGS-REP on both legs"
 grep -q '"case":"tgs-fast-armor-no-subkey","outcome":"ok","error_code":12,"e_text":"FIND_FAST","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-fast-armor-no-subkey not code 12 e_text FIND_FAST on both legs"

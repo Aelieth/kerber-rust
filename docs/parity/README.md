@@ -102,7 +102,7 @@ is `proposed`. The listed live `diffsend` cases are `garbage-pdu`,
 `tgs-disallow-tgt-based`, `tgs-authenticator-replay`,
 `tgs-server-disallow-postdated`, `s4u2self-client-expired`,
 `s4u2self-client-locked-out`, `tgs-fast-unkeyed-bad-checksum`,
-`tgs-fast-req-flip`, `tgs-fast-cksum-flip`,
+`tgs-fast-req-flip`, `tgs-fast-cksum-flip`, `tgs-ad-fx-armor-then-junk`,
 `tgs-forwarded-on-non-f-tgt`, `tgs-proxy-on-non-p-tgt`, `s4u2self-cert-only`,
 `tgs-service-expired-require-auth`,
 `tgs-fast-explicit-armor`, `tgs-fast-armor-no-tgs-subkey`,
@@ -120,6 +120,10 @@ is `proposed`. The listed live `diffsend` cases are `garbage-pdu`,
 `fa-fast-cksum-hmac-md5`, `fa-fast-cksum-same-provider`,
 `fa-fast-option-bit0`, `fa-fast-cksum-cross-enc`, `fa-fast-cksum-type-zero`,
 `fa-fast-cksum-md5-body`, `fa-armor-type-unknown`, `fa-fast-hide-client-rep`,
+`fa-armor-ad-if-relevant-junk`, `fa-armor-ad-kdc-issued-junk`, `fa-armor-ad-kdc-issued-bad-mac`,
+`fa-armor-cammac-junk`, `fa-armor-cammac-no-svc`, `fa-armor-cammac-bad-mac`,
+`fa-armor-cammac-svc-type`, `fa-armor-pac-range`, `fa-armor-pac-version`,
+`fa-armor-authind-junk`, `fa-armor-ad-too-many`, `fa-armor-authind-ok`,
 `fa-fast-error-inner`.
 
 Wire `e_text` is the MIT **status word**. MIT log messages are not
@@ -128,7 +132,7 @@ wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 
 Counts:
 **606** = A1 132 + A2 94 + A3 122 + A4 69 + A5 35 + B1 154.
-exact 473 · stricter-documented 24 · deviation 40 ·
+exact 474 · stricter-documented 24 · deviation 39 ·
 absent 3 · deferred 66.
 
 When the ledger was split into these files, the one-file A4 (153 rows,

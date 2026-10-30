@@ -49,7 +49,7 @@ pub(crate) const UNIVERSAL: u8 = 0x00;
 pub(crate) const APPLICATION: u8 = 0x40;
 pub(crate) const CONTEXT: u8 = 0x80;
 // MIT: `ASN1_SEQUENCE` (lib/krb5/asn.1/krbasn1.h:36-36)
-const SEQUENCE: u32 = 16;
+pub(crate) const SEQUENCE: u32 = 16;
 // MIT: `ASN1_TAGNUM_MAX` (lib/krb5/asn.1/krbasn1.h:22-22)
 const TAGNUM_MAX: u32 = 0x7fff_fffe;
 

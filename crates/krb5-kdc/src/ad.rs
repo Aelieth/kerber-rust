@@ -16,10 +16,11 @@ use krb5_types::{
     EncryptionKey, PaData, PrincipalName, Ticket, err, ku, pa,
 };
 
+use crate::asn1_text::{SEQUENCE, UNIVERSAL};
 use crate::error::Error;
 use crate::kdb::PrincipalRead;
 use crate::plugins::authdata_modules;
-use crate::preauth::{find_pa, proto, proto_d};
+use crate::preauth::{asn1_refusal, find_pa, proto, proto_d};
 use crate::status;
 use crate::store::Principal;
 
@@ -1429,27 +1430,54 @@ pub(crate) fn check_indicators(server: &Principal, indicators: &[String]) -> Res
     })
 }
 
-fn collect_authdata(
-    in_ad: &[AuthorizationDataValue],
+// MIT: `krb5_find_authdata` (lib/krb5/krb/authdata_dec.c:159-181)
+pub(crate) fn find_authdata(
+    ticket_ad: Option<&[AuthorizationDataValue]>,
+    ap_req_ad: Option<&[AuthorizationDataValue]>,
     ad_type: i32,
-) -> Result<Vec<AuthorizationDataValue>, Error> {
+) -> Result<Vec<AuthorizationDataValue>, (i32, String)> {
     let mut out = Vec::new();
-    collect_authdata_into(in_ad, ad_type, &mut out)?;
+    for (ad, from_ap_req) in [(ticket_ad, false), (ap_req_ad, true)] {
+        if let Some(ad) = ad {
+            find_authdata_1(ad, ad_type, from_ap_req, &mut out)?;
+        }
+    }
     Ok(out)
 }
 
-fn collect_authdata_into(
+// MIT: `find_authdata_1` (lib/krb5/krb/authdata_dec.c:114-157)
+fn find_authdata_1(
     in_ad: &[AuthorizationDataValue],
     ad_type: i32,
+    from_ap_req: bool,
     out: &mut Vec<AuthorizationDataValue>,
-) -> Result<(), Error> {
+) -> Result<(), (i32, String)> {
     for ad in in_ad {
         if ad.ad_type == pa::AD_IF_RELEVANT {
-            let inner: AuthorizationData = decode(ad.ad_data.as_ref())?;
-            collect_authdata_into(&inner, ad_type, out)?;
+            let raw = ad.ad_data.as_ref();
+            let inner: AuthorizationData =
+                decode(raw).map_err(|e| asn1_refusal(raw, UNIVERSAL, SEQUENCE, &e))?;
+            find_authdata_1(&inner, ad_type, from_ap_req, out)?;
+            continue;
+        }
+        if from_ap_req
+            && matches!(
+                ad.ad_type,
+                pa::AD_SIGNTICKET
+                    | pa::AD_KDC_ISSUED
+                    | pa::AD_WIN2K_PAC
+                    | pa::AD_CAMMAC
+                    | pa::AD_AUTH_INDICATOR
+            )
+        {
             continue;
         }
         if ad.ad_type == ad_type {
+            // MIT: `grow_find_authdata` (lib/krb5/krb/authdata_dec.c:94-98)
+            if out.len() == 256 {
+                let text = "More than 256 authdata matched a query";
+                return Err((err::GENERIC, text.to_owned()));
+            }
             out.push(ad.clone());
         }
     }
@@ -1567,7 +1595,8 @@ fn authind_extract(
     authdata: &[AuthorizationDataValue],
     indicators: &mut Vec<String>,
 ) -> Result<(), Error> {
-    let found = collect_authdata(authdata, pa::AD_AUTH_INDICATOR)?;
+    let found = find_authdata(Some(authdata), None, pa::AD_AUTH_INDICATOR)
+        .map_err(|(code, text)| proto_d(code, status::GET_AUTH_INDICATORS, text))?;
     for el in found {
         let Ok(strings) = decode::<Vec<String>>(el.ad_data.as_ref()) else {
             continue;
@@ -1586,10 +1615,8 @@ pub(crate) fn get_auth_indicators(
     let Some(ad) = enc_tkt.authorization_data.as_deref() else {
         return Ok(Vec::new());
     };
-    let cammacs = collect_authdata(ad, pa::AD_CAMMAC).map_err(|e| match e {
-        Error::Asn1(_) => proto(err::GENERIC, status::GET_AUTH_INDICATORS),
-        other => with_status(other, status::GET_AUTH_INDICATORS),
-    })?;
+    let cammacs = find_authdata(Some(ad), None, pa::AD_CAMMAC)
+        .map_err(|(code, text)| proto_d(code, status::GET_AUTH_INDICATORS, text))?;
     let mut indicators = Vec::new();
     for el in cammacs {
         let cammac: Cammac = decode(el.ad_data.as_ref())

@@ -1704,6 +1704,47 @@ fn run() -> Result<(), String> {
         err::POLICY,
         true,
     )?;
+    let fx_junk_tgt = mint_tgt_ad(
+        tkt_key,
+        tkt_kvno,
+        &user,
+        realm,
+        &krbtgt_sname,
+        &sess,
+        (
+            now.clone(),
+            now.add_hours(10).unwrap_or_else(|_| now.clone()),
+        ),
+        TicketFlags::initial_preauth(),
+        Some(vec![
+            AuthorizationDataValue {
+                ad_type: pa::AD_FX_ARMOR,
+                ad_data: Vec::<u8>::new().into(),
+            },
+            AuthorizationDataValue {
+                ad_type: pa::AD_IF_RELEVANT,
+                ad_data: vec![0x04, 0x00].into(),
+            },
+        ]),
+    )?;
+    expect_error(
+        &cfg,
+        "tgs-ad-fx-armor-then-junk",
+        &encode(
+            &tgs_req(
+                fx_junk_tgt,
+                &sess,
+                realm,
+                &user,
+                host.clone(),
+                realm,
+                0x1000_00b2,
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::GENERIC,
+    )?;
 
     let auth_tgt = mint_tgt(
         tkt_key,
@@ -1757,8 +1798,6 @@ fn run() -> Result<(), String> {
         true,
     )?;
 
-    // kvno 0: bad MSG_TYPE -> KRB5_BADMSGTYPE; unserved realm -> WRONG_REALM;
-    // MUTUAL_REQUIRED -> POLICY; else MUST_USE_USER2USER.
     // MIT: `gather_tgs_req_info` (kdc/do_tgs_req.c:583-807)
     let mut bad_as = as_req(user.clone(), realm, 0x1000_0023, None).map_err(|e| e.to_string())?;
     bad_as.0.msg_type = krb5_types::KdcReq::MSG_TGS_REQ;
@@ -5424,7 +5463,7 @@ fn run() -> Result<(), String> {
     ra_cases(&cfg, realm, &user, &host)?;
     fa_cases(&cfg, realm, &user, &host)?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":196}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":209}}"#);
     Ok(())
 }
 
@@ -6746,6 +6785,179 @@ fn fa_cases(
         ),
         inner[1]
     );
+    let adv = |ad_type: i32, data: Vec<u8>| AuthorizationDataValue {
+        ad_type,
+        ad_data: data.into(),
+    };
+    let fa_ad = |nonce: u32,
+                 client: &PrincipalName,
+                 ad: Vec<AuthorizationDataValue>|
+     -> Result<Vec<u8>, String> {
+        let mut p = part.clone();
+        p.authorization_data = Some(ad);
+        let mut req = as_req(client.clone(), realm, nonce, None).map_err(|e| e.to_string())?;
+        attach_fast(&mut req, &ap(tgt(&p)?, user)?, &akey, Vec::new())
+            .map_err(|e| e.to_string())?;
+        encode(&req).map_err(|e| e.to_string())
+    };
+    let wrap = |inner: Vec<AuthorizationDataValue>| -> Result<AuthorizationDataValue, String> {
+        Ok(adv(
+            pa::AD_IF_RELEVANT,
+            encode(&inner).map_err(|e| e.to_string())?,
+        ))
+    };
+    let cammac_usage = KeyUsage::new(ku::CAMMAC).map_err(|e| e.to_string())?;
+    let svc_mac = |elements: &AuthorizationData| -> Result<Checksum, String> {
+        let der = encode(elements).map_err(|e| e.to_string())?;
+        Ok(Checksum {
+            cksumtype: tkt_key.etype().checksum_type(),
+            checksum: checksum(tkt_key, cammac_usage, &der)
+                .map_err(|e| e.to_string())?
+                .into(),
+        })
+    };
+    let cammac = |elements: AuthorizationData,
+                  mac: Option<Checksum>|
+     -> Result<AuthorizationDataValue, String> {
+        let c = krb5_types::cammac::Cammac {
+            elements,
+            kdc_verifier: None,
+            svc_verifier: mac.map(|mac| krb5_types::cammac::VerifierMac {
+                identifier: None,
+                kvno: None,
+                enctype: None,
+                mac,
+            }),
+            other_verifiers: None,
+        };
+        Ok(adv(pa::AD_CAMMAC, encode(&c).map_err(|e| e.to_string())?))
+    };
+    let junk = || vec![0x04u8, 0x00];
+    let other = vec![adv(1000, b"x".to_vec())];
+    expect_error(
+        cfg,
+        "fa-armor-ad-if-relevant-junk",
+        &fa_ad(0x1000_032c, user, vec![adv(pa::AD_IF_RELEVANT, junk())])?,
+        err::GENERIC,
+    )?;
+    expect_error(
+        cfg,
+        "fa-armor-ad-kdc-issued-junk",
+        &fa_ad(0x1000_032d, user, vec![adv(pa::AD_KDC_ISSUED, junk())])?,
+        err::GENERIC,
+    )?;
+    let issued = AdKdcIssued {
+        ad_checksum: svc_mac(&other)?,
+        i_realm: None,
+        i_sname: None,
+        elements: other.clone(),
+    };
+    expect_error(
+        cfg,
+        "fa-armor-ad-kdc-issued-bad-mac",
+        &fa_ad(
+            0x1000_032e,
+            &pauser,
+            vec![wrap(vec![adv(
+                pa::AD_KDC_ISSUED,
+                encode(&issued).map_err(|e| e.to_string())?,
+            )])?],
+        )?,
+        err::PREAUTH_REQUIRED,
+    )?;
+    expect_error(
+        cfg,
+        "fa-armor-cammac-junk",
+        &fa_ad(0x1000_032f, user, vec![adv(pa::AD_CAMMAC, junk())])?,
+        err::GENERIC,
+    )?;
+    expect_error(
+        cfg,
+        "fa-armor-cammac-no-svc",
+        &fa_ad(0x1000_0330, user, vec![cammac(other.clone(), None)?])?,
+        err::GENERIC,
+    )?;
+    let mut bad = svc_mac(&other)?;
+    flip_first(&mut bad.checksum);
+    expect_error(
+        cfg,
+        "fa-armor-cammac-bad-mac",
+        &fa_ad(
+            0x1000_0331,
+            &pauser,
+            vec![wrap(vec![cammac(other.clone(), Some(bad))?])?],
+        )?,
+        err::PREAUTH_REQUIRED,
+    )?;
+    let mut unknown = svc_mac(&other)?;
+    unknown.cksumtype = 99;
+    expect_error(
+        cfg,
+        "fa-armor-cammac-svc-type",
+        &fa_ad(
+            0x1000_0332,
+            user,
+            vec![cammac(other.clone(), Some(unknown))?],
+        )?,
+        err::GENERIC,
+    )?;
+    expect_error(
+        cfg,
+        "fa-armor-pac-range",
+        &fa_ad(
+            0x1000_0333,
+            user,
+            vec![wrap(vec![adv(pa::AD_WIN2K_PAC, vec![0; 8])])?],
+        )?,
+        err::GENERIC,
+    )?;
+    expect_error(
+        cfg,
+        "fa-armor-pac-version",
+        &fa_ad(
+            0x1000_0334,
+            user,
+            vec![wrap(vec![adv(
+                pa::AD_WIN2K_PAC,
+                vec![1, 0, 0, 0, 1, 0, 0, 0],
+            )])?],
+        )?,
+        err::GENERIC,
+    )?;
+    let ind = vec![adv(pa::AD_AUTH_INDICATOR, junk())];
+    expect_error(
+        cfg,
+        "fa-armor-authind-junk",
+        &fa_ad(
+            0x1000_0335,
+            user,
+            vec![wrap(vec![cammac(ind.clone(), Some(svc_mac(&ind)?))?])?],
+        )?,
+        err::GENERIC,
+    )?;
+    expect_error(
+        cfg,
+        "fa-armor-ad-too-many",
+        &fa_ad(0x1000_0336, user, vec![adv(pa::AD_KDC_ISSUED, junk()); 257])?,
+        err::GENERIC,
+    )?;
+    let good_ind = vec![adv(
+        pa::AD_AUTH_INDICATOR,
+        encode(&vec!["otp".to_owned()]).map_err(|e| e.to_string())?,
+    )];
+    expect_error(
+        cfg,
+        "fa-armor-authind-ok",
+        &fa_ad(
+            0x1000_0337,
+            &pauser,
+            vec![wrap(vec![cammac(
+                good_ind.clone(),
+                Some(svc_mac(&good_ind)?),
+            )?])?],
+        )?,
+        err::PREAUTH_REQUIRED,
+    )?;
     let mut opts = krb5_types::fast::fast_options_none();
     opts.set(2, true);
     let mut req = as_req(user.clone(), realm, 0x1000_0315, None).map_err(|e| e.to_string())?;

@@ -6,12 +6,12 @@ use krb5_crypto::{
     decrypt_enc_data, parse_enctype_list, verify_checksum_type,
 };
 use krb5_types::{
-    AuthorizationData, AuthorizationDataValue, Checksum, EncTicketPart, EncryptionKey, HostAddress,
-    HostAddresses, KdcReqBody, KerberosTime, OctetString, PaData, PrincipalName, TicketFlags, err,
-    flag_bit, ku, pa,
+    Checksum, EncTicketPart, EncryptionKey, HostAddress, HostAddresses, KdcReqBody, KerberosTime,
+    OctetString, PaData, PrincipalName, TicketFlags, err, flag_bit, ku, pa,
 };
 
 use super::as_req::is_anonymous_principal;
+use crate::ad::find_authdata;
 use crate::der::take_der;
 use crate::error::Error;
 use crate::kdb::{PrincipalRead, lookup_principal_id};
@@ -87,20 +87,18 @@ pub(super) fn process_tgs_header(
     .map_err(|_| proto(err::GENERIC, status::PROCESS_TGS))?;
     // MIT: `kdc_process_tgs_req` (kdc_util.c:217-229)
     // Armor-only is refused after acceptance, before the checksum.
-    match fx_armor_present(
+    let fx = find_authdata(
         enc_tkt.authorization_data.as_deref(),
         authenticator.authorization_data.as_deref(),
-    ) {
-        Ok(true) => {
-            return Err(proto_d(
-                err::POLICY,
-                status::PROCESS_TGS,
-                "ticket valid only as FAST armor",
-            ));
-        }
-        Ok(false) => {}
-        Err(Error::Asn1(_)) => return Err(proto(err::GENERIC, status::PROCESS_TGS)),
-        Err(e) => return Err(e),
+        pa::AD_FX_ARMOR,
+    )
+    .map_err(|(code, text)| proto_d(code, status::PROCESS_TGS, text))?;
+    if !fx.is_empty() {
+        return Err(proto_d(
+            err::POLICY,
+            status::PROCESS_TGS,
+            "ticket valid only as FAST armor",
+        ));
     }
     // Unknown checksum 15, no checksum 50, an integrity fault 31.
     if let Some(ck) = &authenticator.cksum {
@@ -137,57 +135,6 @@ pub(super) fn process_tgs_header(
         header_realm,
         header_server,
     })
-}
-
-// MIT: `krb5_find_authdata` (authdata_dec.c:159-181)
-// MIT: `find_authdata_1` (authdata_dec.c:115-157)
-fn fx_armor_present(
-    ticket_ad: Option<&[AuthorizationDataValue]>,
-    authenticator_ad: Option<&[AuthorizationDataValue]>,
-) -> Result<bool, Error> {
-    if let Some(ad) = ticket_ad
-        && find_authdata(ad, pa::AD_FX_ARMOR, false)?
-    {
-        return Ok(true);
-    }
-    if let Some(ad) = authenticator_ad
-        && find_authdata(ad, pa::AD_FX_ARMOR, true)?
-    {
-        return Ok(true);
-    }
-    Ok(false)
-}
-
-fn find_authdata(
-    in_ad: &[AuthorizationDataValue],
-    ad_type: i32,
-    from_ap_req: bool,
-) -> Result<bool, Error> {
-    for ad in in_ad {
-        if ad.ad_type == pa::AD_IF_RELEVANT {
-            let inner: AuthorizationData = decode(ad.ad_data.as_ref())?;
-            if find_authdata(&inner, ad_type, from_ap_req)? {
-                return Ok(true);
-            }
-            continue;
-        }
-        if from_ap_req
-            && matches!(
-                ad.ad_type,
-                pa::AD_SIGNTICKET
-                    | pa::AD_KDC_ISSUED
-                    | pa::AD_WIN2K_PAC
-                    | pa::AD_CAMMAC
-                    | pa::AD_AUTH_INDICATOR
-            )
-        {
-            continue;
-        }
-        if ad.ad_type == ad_type {
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }
 
 pub(super) fn omit_start_if_auth(

@@ -119,9 +119,10 @@ impl Pac {
         }
     }
 
+    // MIT: `krb5_pac_parse` (lib/krb5/krb/pac.c:263-337)
     pub fn parse(bytes: &[u8]) -> Result<Self, PacError> {
         if bytes.len() < 8 {
-            return Err(PacError::Truncated);
+            return Err(PacError::Malformed);
         }
         let c_buffers =
             u32::from_le_bytes(bytes[0..4].try_into().map_err(|_| PacError::Truncated)?);
@@ -131,7 +132,7 @@ impl Pac {
         }
         let count = usize::try_from(c_buffers).map_err(|_| PacError::Malformed)?;
         if !(1..=MAX_BUFFERS).contains(&count) {
-            return Err(PacError::Malformed);
+            return Err(PacError::Truncated);
         }
         let header_len = 8 + 16 * count;
         if bytes.len() < header_len {
@@ -158,12 +159,11 @@ impl Pac {
             ))
             .map_err(|_| PacError::Truncated)?;
             off += 16;
-            if offset % PAC_ALIGNMENT != 0
-                || offset < header_len
-                || offset > bytes.len()
-                || size > bytes.len() - offset
-            {
+            if offset % PAC_ALIGNMENT != 0 {
                 return Err(PacError::Malformed);
+            }
+            if offset < header_len || offset > bytes.len() || size > bytes.len() - offset {
+                return Err(PacError::Truncated);
             }
             buffers.push(PacBuffer {
                 kind,

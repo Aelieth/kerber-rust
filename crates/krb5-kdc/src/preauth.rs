@@ -20,13 +20,14 @@ mod spake;
 pub(crate) use otp::{otp_edata, process_otp, serve_start_diagnostics};
 pub(crate) use spake::{SpakeStep, process_spake, spake_edata};
 
-use crate::asn1_text::{APPLICATION, ASN1_BAD_ID, CONTEXT, UNIVERSAL, get_tag};
+use crate::ad::find_authdata;
+use crate::asn1_text::{APPLICATION, ASN1_BAD_ID, CONTEXT, SEQUENCE, UNIVERSAL, get_tag};
 use crate::der::take_der;
 use crate::error::Error;
 use crate::kdb::PrincipalRead;
 use crate::status;
 use crate::store::{KeyLookup, KtkdbError, Principal, ktkdb_get_entry};
-use otp::{E_BAD_ENCTYPE, E_BAD_MSIZE};
+use otp::{E_BAD_ENCTYPE, E_BAD_MSIZE, E_EINVAL};
 
 /// After armor, inner_body and inner_padata are the request; MIT frees the outer.
 pub(crate) struct FastOk {
@@ -208,7 +209,12 @@ fn fold((code, text): (i32, String)) -> Error {
 }
 
 // MIT: `k5_asn1_full_decode` (lib/krb5/asn.1/asn1_encode.c:1576-1584)
-fn asn1_refusal(der: &[u8], class: u8, tagnum: u32, e: &krb5_asn1::Error) -> (i32, String) {
+pub(crate) fn asn1_refusal(
+    der: &[u8],
+    class: u8,
+    tagnum: u32,
+    e: &krb5_asn1::Error,
+) -> (i32, String) {
     let text = match get_tag(der) {
         Err(text) => text.to_owned(),
         Ok(t) if t.class != class || !t.constructed || t.tagnum != tagnum => ASN1_BAD_ID.to_owned(),
@@ -350,6 +356,7 @@ fn armor_rd_req(
     if enc_tkt.flags.invalid() {
         return Err(generic("Ticket has invalid flag set".to_owned()));
     }
+    armor_authdata_verify(&enc_tkt, &key)?;
     // MIT: `negotiate_etype` (lib/krb5/krb/rd_req_dec.c:854-904)
     krb5_protocol::negotiate_ap_req_etypes(
         &authenticator,
@@ -358,6 +365,60 @@ fn armor_rd_req(
     )
     .map_err(|e| generic(e.to_string()))?;
     Ok((ticket.sname.clone(), session, authenticator.subkey))
+}
+
+const E_ERANGE: &str = "Numerical result out of range";
+
+// MIT: `krb5int_authdata_verify` (lib/krb5/krb/authdata.c:610-725)
+fn armor_authdata_verify(
+    enc_tkt: &krb5_types::EncTicketPart,
+    key: &ProtocolKey,
+) -> Result<(), (i32, String)> {
+    let ad = enc_tkt.authorization_data.as_deref();
+    let seq = |raw: &[u8], e: krb5_asn1::Error| asn1_refusal(raw, UNIVERSAL, SEQUENCE, &e);
+    // MIT: `k5_get_kdc_issued_authdata` (lib/krb5/krb/authdata.c:501-540)
+    if let Some(first) = find_authdata(ad, None, pa::AD_KDC_ISSUED)?.first() {
+        let raw = first.ad_data.as_ref();
+        decode::<krb5_types::cammac::AdKdcIssued>(raw).map_err(|e| seq(raw, e))?;
+    }
+    let usage = KeyUsage::new(ku::CAMMAC).map_err(|e| crypto_refusal(&e))?;
+    let mut verified = Vec::new();
+    // MIT: `extract_cammacs` (lib/krb5/krb/authdata.c:544-584)
+    for el in find_authdata(ad, None, pa::AD_CAMMAC)? {
+        let raw = el.ad_data.as_ref();
+        let cammac: krb5_types::cammac::Cammac = decode(raw).map_err(|e| seq(raw, e))?;
+        let Some(ver) = &cammac.svc_verifier else {
+            return Err((err::GENERIC, E_EINVAL.to_owned()));
+        };
+        let der = encode(&cammac.elements).map_err(|e| (err::GENERIC, e.to_string()))?;
+        let mac = ver.mac.checksum.as_ref();
+        match verify_checksum_type(key, usage, &der, ver.mac.cksumtype, mac) {
+            Ok(()) => verified.extend(cammac.elements),
+            Err(krb5_crypto::Error::UnsupportedChecksum(_)) => {
+                return Err((err::GENERIC, E_BAD_ENCTYPE.to_owned()));
+            }
+            Err(krb5_crypto::Error::BadChecksumSize) => {
+                return Err((err::GENERIC, E_BAD_MSIZE.to_owned()));
+            }
+            Err(_) => {}
+        }
+    }
+    // MIT: `mspac_import_authdata` (lib/krb5/krb/pac.c:774-796)
+    if let Some(pac) = find_authdata(ad, None, pa::AD_WIN2K_PAC)?.first() {
+        krb5_types::pac::Pac::parse(pac.ad_data.as_ref()).map_err(|e| {
+            let einval = e == krb5_types::pac::PacError::Malformed;
+            (
+                err::GENERIC,
+                if einval { E_EINVAL } else { E_ERANGE }.to_owned(),
+            )
+        })?;
+    }
+    // MIT: `authind_import_authdata` (lib/krb5/krb/ai_authdata.c:73-98)
+    for el in find_authdata(Some(&verified), None, pa::AD_AUTH_INDICATOR)? {
+        let raw = el.ad_data.as_ref();
+        decode::<Vec<String>>(raw).map_err(|e| seq(raw, e))?;
+    }
+    Ok(())
 }
 
 pub(crate) fn check_transited(
