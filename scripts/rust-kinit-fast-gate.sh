@@ -347,7 +347,8 @@ for who in mit rust; do
         UK="$(docker exec -e KRB5_CONFIG=/tmp/upper-kdc.conf -e KRB5_PASSWORD=userpassword "$NAME" /tmp/krb5-kinit -c /tmp/up.cc user@KERBER.TEST 2>&1)"
     fi
     set -e
-    UK="$(tr -d '\r' <<<"$UK" | grep -v '^Password for' | tail -n 1)"
+    # Ours logs JSON on stdout, and docker exec can deliver it after the stderr message.
+    UK="$(tr -d '\r' <<<"$UK" | grep -v -e '^Password for' -e '^{' | tail -n 1)"
     UK="${UK#*: }"
     echo "$who: '$UK'"
     if [ "$who" = mit ]; then want_uk="$UK"; fi
@@ -374,7 +375,7 @@ re_case() {
         fi
         rc=$?
         set -e
-        out="$(tr -d '\r' <<<"$out" | grep -v '^Password for' | tail -n 1)"
+        out="$(tr -d '\r' <<<"$out" | grep -v -e '^Password for' -e '^{' | tail -n 1)"
         out="${out#*: }"
         echo "$who $label: rc=$rc $out"
         if [ "$who" = mit ]; then

@@ -64,7 +64,7 @@ pub(crate) fn build_fast_armor_profile(
         ticket_etype: session.etype().to_iana(),
         profile,
     })?;
-    let der = encode(&authenticator)?;
+    let der = zeroize::Zeroizing::new(encode(&authenticator)?);
     let usage = KeyUsage::new(ku::AP_REQ_AUTHENTICATOR)?;
     let cipher = encrypt(session, usage, &der)?;
     Ok(ApReq {
@@ -250,12 +250,12 @@ pub fn unwrap_fast_rep(
         _ => decode::<krb5_types::fast::KrbFastArmoredRep>(raw.padata_value.as_ref())?,
     };
     let usage = KeyUsage::new(ku::FAST_REP)?;
-    let plain = decrypt_enc_data(
+    let plain = zeroize::Zeroizing::new(decrypt_enc_data(
         armor_key,
         usage,
         armored.enc_fast_rep.etype,
         armored.enc_fast_rep.cipher.as_ref(),
-    )?;
+    )?);
     decode(&plain).map_err(Error::from)
 }
 
@@ -284,15 +284,14 @@ pub fn apply_strengthen(
 }
 
 // MIT: `send_support` (spake_client.c:155-167)
-#[must_use]
-pub fn pa_spake_support(groups: &[SpakeGroup]) -> PaData {
+pub fn pa_spake_support(groups: &[SpakeGroup]) -> Result<PaData, Error> {
     let msg = krb5_types::spake::PaSpake::Support(krb5_types::spake::SpakeSupport {
         groups: groups.iter().map(|g| g.number()).collect(),
     });
-    PaData {
+    Ok(PaData {
         padata_type: pa::SPAKE,
-        padata_value: encode(&msg).unwrap_or_default().into(),
-    }
+        padata_value: encode(&msg)?.into(),
+    })
 }
 
 // MIT: `process_challenge` (spake_client.c:210-282)

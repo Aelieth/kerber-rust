@@ -370,14 +370,14 @@ fn make_request(
         return Err(fail(ENOTSUP, "Operation not supported"));
     }
     let f = flags_u32(&ti.flags);
-    let mut otp_value = value.to_vec();
+    let mut otp_value = Zeroizing::new(value.to_vec());
     let mut pin_field = None;
     if f & OTP_FLAG_COLLECT_PIN != 0 {
         if f & OTP_FLAG_SEPARATE_PIN != 0 {
             let p = pin.ok_or_else(|| fail(EINVAL, "Invalid argument"))?;
             pin_field = nonempty(p);
         } else if let Some(p) = pin {
-            otp_value = [p, value].concat();
+            otp_value = Zeroizing::new([p, value].concat());
         }
     }
     Ok(PaOtpRequest {
@@ -463,7 +463,7 @@ fn wipe(v: &mut Value) {
 }
 
 // MIT: `codec_decode_answer` (lib/krb5/krb/preauth_otp.c:374-422)
-/// Unset or uninitialised answer: none, as MIT.
+/// Unset or uninitialised answer: none.
 fn decode_answer(answer: Option<&str>, n_tokens: usize) -> Option<Chosen> {
     let mut v = k5json::decode(answer?.as_bytes()).ok()?;
     let chosen = read_answer(&v, n_tokens);

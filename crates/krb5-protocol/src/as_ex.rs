@@ -709,7 +709,7 @@ fn pick_key(keys: &[ProtocolKey], etype: Option<EncryptionType>) -> Option<Proto
 }
 
 // MIT: `sort_krb5_padata_sequence` (get_in_tkt.c:400-471)
-/// PKINIT, SPAKE, encrypted challenge, encrypted timestamp.
+/// PKINIT's four pa-types: MIT tries PKINIT first.
 pub const DEFAULT_PREFERRED_PREAUTH_TYPES: &[i32] = &[17, 16, 15, 14];
 
 #[must_use]

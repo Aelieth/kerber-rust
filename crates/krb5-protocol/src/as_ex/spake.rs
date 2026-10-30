@@ -86,11 +86,11 @@ fn generic_failure() -> ModuleFail {
 }
 
 // MIT: `send_support` (spake_client.c:149-178)
-fn send_support(st: &mut SpakeState) -> PaData {
-    let support = pa_spake_support(&st.groups);
+fn send_support(st: &mut SpakeState) -> Result<PaData, Error> {
+    let support = pa_spake_support(&st.groups)?;
     st.support = Some(support.padata_value.as_ref().to_vec());
     trace::spake_send_support();
-    support
+    Ok(support)
 }
 
 #[expect(
@@ -117,7 +117,7 @@ fn process_challenge(
         if st.support.is_some() {
             return Ok(Round::Failed(generic_failure()));
         }
-        return Ok(Round::Send(send_support(st), None));
+        return Ok(Round::Send(send_support(st)?, None));
     };
     trace::spake_receive_challenge(ch.group, ch.pubkey.as_ref());
     if !spake_contains_sf_none(ch) {
@@ -179,7 +179,7 @@ fn spake_round(
         if st.support.is_some() {
             return Ok(Round::Failed(generic_failure()));
         }
-        return Ok(Round::Send(send_support(st), None));
+        return Ok(Round::Send(send_support(st)?, None));
     }
     let Ok(msg) = decode::<PaSpake>(pa_in) else {
         return Ok(Round::Failed(generic_failure()));
