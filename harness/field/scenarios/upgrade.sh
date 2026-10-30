@@ -38,12 +38,16 @@ listencheck() {
         run kdc "sudo ss -H -lntup $SS; printf 'sockets: %s\n' \"\$(sudo ss -H -lntu $SS | awk '{ print \$1, \$5 }' | LC_ALL=C sort | paste -sd' ' -)\"; printf 'backlog: %s\n' \"\$(sudo ss -H -lntu $SS | awk '\$1 == \"tcp\" { n = split(\$5, a, \":\"); print a[n] \"=\" \$4 }' | LC_ALL=C sort -u | paste -sd' ' -)\""
     checklast listen.backlog "line:backlog: 464=5 749=2 88=$b88"
 }
+# LOGS: both daemon logs' labels; MIT's types are asserted first, the rust leg's install must match.
+LOGS="printf 'logs: %s %s\n' \"\$(sudo stat -c %C /var/log/krb5kdc.log)\" \"\$(sudo stat -c %C /var/log/kadmind.log)\""
+LOGS_OK='^logs: [a-z_]+:object_r:krb5kdc_log_t:s0 [a-z_]+:object_r:kadmind_log_t:s0$'
 if [ "$LEG" = mit ]; then
     section "upgrade --leg mit: kdc reset to $MIT_SNAPSHOT_KDC, the stock MIT realm $REALM (the oracle); the ref under test is not installed"
     resetvm kdc
     kdcis
     check mit.active '^active active$' run kdc "systemctl is-active krb5kdc kadmin | paste -sd' ' -"
     listencheck
+    check mit.logs.label "$LOGS_OK" run kdc "$LOGS"
     observe obs.mit.packages 'krb5-server-[^ ]+' run kdc "rpm -q krb5-server krb5-libs krb5-workstation | paste -sd' ' -; uname -r"
     MIN=$(( ($(date +%s) - T0) / 60 + 2 ))
     host "COLLECT_MINUTES=$MIN $LABQ collect kdc $(printf '%q' "$REC_DIR/collect") /etc/krb5.conf /var/kerberos/krb5kdc/kdc.conf /var/kerberos/krb5kdc/kadm5.acl"
@@ -159,6 +163,7 @@ check install.programs '^programs: [1-9][0-9]* in the manifest, each identical t
 check install.manifest '^manifest: [1-9][0-9]* files as installed$' \
     run kdc "sudo sha256sum -c /usr/share/kerber-rust/install-manifest && echo \"manifest: \$(wc -l < /usr/share/kerber-rust/install-manifest) files as installed\""
 listencheck
+check install.logs.label "$LOGS_OK" run kdc "$LOGS"
 kdcsince up 'setting up network|V6ONLY|set up [0-9]+ sockets|commencing operation|starting|Loaded|\((Error|error|err|warning)\)'
 checklast log.kdc.sockets 'krb5kdc\[[0-9]+\]\(info\): set up 4 sockets$'
 checklast log.kdc.commencing 'krb5kdc\[[0-9]+\]\(info\): commencing operation$'

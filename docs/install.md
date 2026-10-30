@@ -17,6 +17,7 @@ The realm's names are set once, at the start of [A realm](#a-realm).
 | `/usr/share/kerber-rust/install-manifest` | 0644 | The files above and the `make install-clients` tools, each with its SHA-256: what `make uninstall` may remove |
 | `/etc/sysconfig/krb5kdc`, `kadmin`, `kprop` | 0644 | `KRB5KDC_ARGS=`, `KADMIND_ARGS=`, `KPROPD_ARGS=` (config) |
 | `/etc/logrotate.d/krb5kdc`, `kadmind` | 0644 | `/var/log/krb5kdc.log` and `/var/log/kadmind.log`: rotated monthly, twelve kept, then `systemctl reload` (config) |
+| `/var/log/krb5kdc.log`, `kadmind.log` | 0640 | Made empty only when missing, and labelled (`krb5kdc_log_t`, `kadmind_log_t`) either way; not in the manifest, so `make uninstall` leaves them |
 | `/var/kerberos/krb5kdc/` | 0755 | The KDC directory, made only when it is missing |
 | `/var/kerberos/krb5kdc/kdc.conf`, `kadm5.acl` | 0600 | Fedora's shipped files, for the realm `EXAMPLE.COM` (config) |
 
@@ -35,10 +36,10 @@ non-forking `kpropd` (see [Replica KDCs](#replica-kdcs)). The rules are the pack
   and never installs the test tools (`krb5-tools`, the `krb5-gss` programs, `krb5-iprop-pull`),
   which only a build with the test-hooks features builds.
 - On the live system it then does what the package's scriptlets do: `systemd-tmpfiles --create`,
-  `restorecon` on each file it wrote when SELinux is enabled, and `systemctl daemon-reload`. It
-  does not restart a running daemon; it says when one still runs the old programs. With
-  `DESTDIR` set to a staging tree it does none of these and checks no package; a `DESTDIR` that
-  resolves to `/` is the live system.
+  `restorecon` on each file it wrote and on both logs when SELinux is enabled, and
+  `systemctl daemon-reload`. It does not restart a running daemon; it says when one still runs
+  the old programs. With `DESTDIR` set to a staging tree it does none of these and checks no
+  package; a `DESTDIR` that resolves to `/` is the live system.
 
 `make install-clients` installs the client tools `kinit`, `klist`, `kdestroy`, `kswitch`,
 `kvno`, `kpasswd` and `ktutil` into `BINDIR`, for hosts without MIT's `krb5-workstation`. It is

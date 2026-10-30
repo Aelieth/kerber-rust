@@ -10,7 +10,7 @@
 # would: a file a package owns is neither replaced nor removed, a config file that exists is
 # kept, nothing in the KDC directory but the two templates is ever written, and afterwards the
 # tmpfiles entry is created, SELinux labels are restored and systemd reloads its units.
-# Every file install writes but the config goes in the manifest (MANIFEST) with its SHA-256;
+# Every file install writes but the config and the two logs goes in the manifest (MANIFEST) with its SHA-256;
 # uninstall removes only the manifest's files that are still as install wrote them.
 set -eu
 
@@ -118,6 +118,18 @@ render() {
     say "installed $3"
 }
 
+# PATH: a daemon log, made empty at 0640 (the mode MIT's daemons make it with) when missing, and
+# labelled when it exists or not, so an upgrade repairs a wrong label. Never in the manifest.
+logfile() {
+    if [ -e "$DESTDIR$1" ] || [ -L "$DESTDIR$1" ]; then
+        say "kept $1 (it exists)"
+    else
+        install -D -m 0640 /dev/null "$DESTDIR$1"
+        say "installed $1"
+    fi
+    label "$1"
+}
+
 # MODE SOURCE DEST [render]: a config file, installed only when nothing is at DEST (the RPM's
 # noreplace), so an admin's file survives every reinstall. Config is never in the manifest.
 config() {
@@ -200,6 +212,8 @@ $units$TMPFILE"
     for l in krb5kdc kadmind; do
         config 0644 "$DIST/logrotate.d/$l" "$LOGROTATEDIR/$l"
     done
+    logfile /var/log/krb5kdc.log
+    logfile /var/log/kadmind.log
     if [ ! -d "$DESTDIR$KDCDIR" ]; then
         mkdir -p "$DESTDIR$(dirname "$KDCDIR")"
         install -d -m 0755 "$DESTDIR$KDCDIR"
@@ -271,7 +285,7 @@ do_uninstall() {
     if systemd_running; then
         systemctl daemon-reload || say "systemctl daemon-reload failed"
     fi
-    say "left in place: $KDCDIR (the database, stash, kdc.conf and kadm5.acl), $SYSCONFIGDIR/{krb5kdc,kadmin,kprop} and $LOGROTATEDIR/{krb5kdc,kadmind}"
+    say "left in place: $KDCDIR (the database, stash, kdc.conf and kadm5.acl), $SYSCONFIGDIR/{krb5kdc,kadmin,kprop} $LOGROTATEDIR/{krb5kdc,kadmind} and /var/log/{krb5kdc,kadmind}.log"
 }
 
 case $action in
