@@ -4,7 +4,7 @@
 #   attach <name> <pid>         strace -f on <pid>, its threads and its children: their clones, execs, opens,
 #                               accepts and receives in $D/<name>.trace; prints "<name> <pid> traced by <tracer pid>"
 #   detach <name>               strace stopped; prints each clone ("clone: <parent> -> <child>"), each pid that
-#                               executed a program ("exec: <pid>": MIT kpropd's kdb5_util load, which is not the daemon)
+#                               executed a program ("exec: <pid>": kpropd's kdb5_util load, which is not the daemon)
 #                               and each krb5.conf or kdc.conf open by the daemon itself, then
 #                               "<name> live: N accept/recv lines" and "<name> profile opens: N"
 #   kpropd-start <leg> <realm>  a second kpropd on port 7754 with its own kdc.conf, database, keytab and ACL; a dump
@@ -50,7 +50,7 @@ detach)
     ' "$D/$name.trace"
     ;;
 kpropd-start)
-    leg=$1 realm=$2
+    realm=$2
     fqdn=$(hostname -f)
     princ="host/$fqdn@$realm"
     mkdir -p "$D/replica"
@@ -63,12 +63,7 @@ kpropd-start)
     printf '[realms]\n    %s = {\n        database_name = %s/replica/principal\n        key_stash_file = %s\n    }\n' \
         "$realm" "$D" "${stash:-/var/kerberos/krb5kdc/.k5.$realm}" > "$D/kdc.conf"
     kdb5_util dump "$D/dump"
-    # MIT's kpropd writes what it receives to -f's file (else the KDC directory's) for kdb5_util load;
-    # this port's loads it itself.
-    set -- -D -P 7754 -r "$realm" -s "$D/kt" -a "$D/kpropd.acl"
-    if [ "$leg" = mit ]; then
-        set -- "$@" -f "$D/from_primary"
-    fi
+    set -- -D -P 7754 -r "$realm" -s "$D/kt" -a "$D/kpropd.acl" -f "$D/from_primary"
     KRB5_KDC_PROFILE=$D/kdc.conf nohup /usr/sbin/kpropd "$@" > "$D/kpropd.out" 2>&1 < /dev/null &
     echo $! > "$D/kpropd.pid"
     for _ in $(seq 1 40); do

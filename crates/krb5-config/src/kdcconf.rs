@@ -579,6 +579,12 @@ pub fn default_kprop_file() -> PathBuf {
     Path::new(KDC_DIR).join("replica_datatrans")
 }
 
+// MIT: `KPROPD_DEFAULT_FILE` (osconf.hin:128-128)
+#[must_use]
+pub fn default_kpropd_file() -> PathBuf {
+    Path::new(KDC_DIR).join("from_master")
+}
+
 // MIT: `krb5_def_store_mkey_list` (lib/kdb/kdb_default.c)
 #[must_use]
 pub fn default_stash_file(realm: &str) -> PathBuf {

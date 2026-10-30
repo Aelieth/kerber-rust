@@ -857,7 +857,7 @@ pub(super) fn kadm5_code(proc: u32, e: &Error) -> u32 {
         Error::AclDenied | Error::KpropUnauthorized(_) => return auth_code_for(proc),
         Error::NotFound => return KADM5_UNK_PRINC,
         Error::PassTooSoon { .. } => return KADM5_PASS_TOOSOON,
-        Error::GarbageArgs | Error::ProcUnavail => return KADM5_FAILURE,
+        Error::GarbageArgs | Error::ProcUnavail | Error::Reported => return KADM5_FAILURE,
         Error::PasswordPolicy(s) | Error::Inner(s) => s.as_str(),
     };
     if s.starts_with("Unsupported argument") || s == "Invalid argument" {

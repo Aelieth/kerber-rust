@@ -529,8 +529,10 @@ would remove it.
   before kdc is reset (without them the leg stops there), and MIT's `kproplog`
   reads kdc2's update log. Graded on both legs: the first sync, the full resync
   kpropd asks for at its start, then `kprop -f` of a plain `kdb5_util dump`
-  refused, as MIT's iprop replica loads only an iprop dump, and a kinit through
-  kdc2 alone (REP.1); a `kpropd.acl` without the primary refused as MIT's
+  refused, as MIT's iprop replica loads only an iprop dump, with kpropd's lines
+  for it the MIT leg's on the rust leg (the pid and the socket's fd masked; this
+  run's MIT leg, as `runs/mit-latest` keeps only `checks.tsv`), and a kinit
+  through kdc2 alone (REP.1); a `kpropd.acl` without the primary refused as MIT's
   (REP.4); six changes arriving within two polls, with equal `getprinc` lines and
   one `kproplog -h` serial (REP.2); each KDC keeping its own lockout count (REP.6)
   and kdc2 keeping it through a `setstr` (REP.7); `get_updates permission denied`

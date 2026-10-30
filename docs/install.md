@@ -490,7 +490,9 @@ sudo kprop -f /var/kerberos/krb5kdc/replica_datatrans replica.example.com
 
 `kprop` sends the dump as `host/primary.example.com` (its ticket from a KDC, the key in `-s`, else
 the default keytab) to the replica's port 754 and writes `<file>.replica.example.com.last_prop`;
-`kpropd` accepts the connection only from a principal its `kpropd.acl` names, and loads it.
+`kpropd` accepts the connection only from a principal its `kpropd.acl` names, writes the dump to
+`from_master` and loads it with `kdb5_util load` (`-i` as an iprop replica), as MIT's does. It runs
+the `kdb5_util` beside it, and `-p` names another; MIT's default is fixed at build.
 
 For **incremental propagation**, set `iprop_enable = true` and `iprop_port` in each KDC's `kdc.conf`
 realm stanza and `iprop_replica_poll` on the replica, create `kiprop/replica.example.com` with the
@@ -512,11 +514,12 @@ MIT's is not); `kpropd` polls it as `kiprop/replica.example.com` every `iprop_re
 
 `kpropd` takes MIT's `-r`, `-s` (else the default keytab), `-a` (else `kpropd.acl` in the KDC
 directory), `-P` (else 754, on every address), `-A` (the primary, else `admin_server`), `-t`, `-d`,
-`-D` and `-S` (`-D` and `-S` are no-ops: it never detaches and is always standalone); not MIT's
-`-f`, `-F`, `-p`, `-x` or `--pid-file`. It accepts a ticket for its own `host/<this host>` only, the
-name formed **without DNS** (a short name gains `qualify_shortname`, else the resolver's first
-search domain, lowercased): MIT's DNS canonicalization is not ported, so the keytab entry and
-`kprop`'s target must be that name.
+`-D` and `-S` (`-D` and `-S` are no-ops: it never detaches and is always standalone), `-f` (else
+`from_master` in the KDC directory), `-F` (`kdb5_util load -d`) and `-p` (else the `kdb5_util`
+beside `kpropd`); not MIT's `-x` or `--pid-file`. It accepts a ticket for its own
+`host/<this host>` only, the name formed **without DNS** (a short name gains `qualify_shortname`,
+else the resolver's first search domain, lowercased): MIT's DNS canonicalization is not ported,
+so the keytab entry and `kprop`'s target must be that name.
 
 ## Upgrading an MIT realm
 
@@ -801,6 +804,7 @@ update log and lock files, the stash, `kdc.conf` and `kadm5.acl`.
 - One realm per KDC process. A second `-r` stops `krb5kdc` with `Only one realm per KDC process is supported`.
 - `krb5kdc -T` other than `0` stops with `-T (a clock offset for testing) is not supported`.
 - `krb5kdc -w N` is accepted and does nothing: one loop on the main thread serves every request.
+- `kpropd -x` (a database argument for `kdb5_util load`) and `--pid-file`.
 - `kadmind -proponly` with `iprop_enable` unset stops with `-proponly can only be used when iprop_enable is true`.
 
 ## Make variables

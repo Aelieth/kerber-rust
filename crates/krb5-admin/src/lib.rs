@@ -35,13 +35,12 @@ pub use kadmind::{
 };
 pub use kprop::{
     IpropPoll, IpropWake, KPROP_SERVICE, KPROPD_IO_TIMEOUT, KpropAuth, KpropCreds, KpropDump,
-    KpropError, KpropdConfig, KpropdIprop, KpropdKeys, KpropdKeytabError, KpropdLookup,
+    KpropError, KpropdConfig, KpropdIprop, KpropdKeys, KpropdKeytabError, KpropdLoad, KpropdLookup,
     RemoteError, iprop_dump_last, iprop_poll_once, is_iprop_dump, kprop_dump_bytes,
-    kprop_expired_ap_req, kprop_get_tickets, kprop_load_bytes, kprop_load_with_stash,
-    kprop_open_connection, kprop_send_dump, kprop_send_store, kprop_sendauth, kprop_service_port,
-    kprop_update_last_prop_file, kprop_xmit_database, kpropd_do_iprop, kpropd_handle_conn,
-    kpropd_keytab_keys, kpropd_recv_dump, kpropd_recvauth, kpropd_send_ack, kpropd_server_name,
-    kpropd_server_name_for, load_replica,
+    kprop_expired_ap_req, kprop_get_tickets, kprop_open_connection, kprop_send_dump,
+    kprop_send_store, kprop_sendauth, kprop_service_port, kprop_update_last_prop_file,
+    kprop_xmit_database, kpropd_do_iprop, kpropd_handle_conn, kpropd_keytab_keys, kpropd_recv_dump,
+    kpropd_recvauth, kpropd_send_ack, kpropd_server_name, kpropd_server_name_for, load_replica,
 };
 pub use krb5_kdc::Shutdown;
 pub use listen::{
@@ -192,6 +191,9 @@ pub enum Error {
     ProcUnavail,
     #[error("{0}")]
     Inner(String),
+    /// Already logged as MIT's kpropd logs it.
+    #[error("")]
+    Reported,
 }
 
 impl From<krb5_kdc::Error> for Error {

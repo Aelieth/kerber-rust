@@ -56,7 +56,7 @@ pub struct RemoteError {
 }
 
 impl RemoteError {
-    fn from_krb_error(e: &KrbError) -> Self {
+    pub(super) fn from_krb_error(e: &KrbError) -> Self {
         let text = e.e_text.as_ref().map(|t| {
             let bytes = t.as_bytes();
             let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
@@ -125,7 +125,7 @@ impl fmt::Display for KpropError {
 
 impl std::error::Error for KpropError {}
 
-fn os_text(e: &io::Error) -> String {
+pub(super) fn os_text(e: &io::Error) -> String {
     // sendauth's missing answer byte is `ECONNABORTED`.
     if e.kind() == io::ErrorKind::UnexpectedEof {
         return krb5_log::klog::os_error_text(&io::Error::from(nix::errno::Errno::ECONNABORTED));

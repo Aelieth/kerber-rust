@@ -1,23 +1,26 @@
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
+use std::os::fd::AsRawFd as _;
+use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::Path;
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt};
 use krb5_kdc::{
-    LoadLog, PrincipalStore, Ulog, UlogLast, dump_store, dump_store_with_key, load_dump,
-    load_dump_with_stash, save_store_fresh,
+    LoadLog, PrincipalStore, Ulog, UlogLast, dump_store, dump_store_with_key, save_store_fresh,
 };
-use krb5_protocol::trace::{ERROR_TABLE_BASE_KRB5, error_message};
+use krb5_log::klog::{self, Severity};
+use krb5_protocol::trace::{ERROR_TABLE_BASE_KRB5, error_message, kdc_code};
 use krb5_protocol::{
-    AUTH_CONTEXT_DO_SEQUENCE, AcceptorAuthContext, AcceptorConfig, ApVerifyParams, KeytabEntry,
-    RemoteSeq, ReplayCache, build_ap_req_mutual_seq, build_krb_safe_from, local_host_address,
-    us_timeofday, verify_ap_req_ex,
+    AUTH_CONTEXT_DO_SEQUENCE, AcceptorAuthContext, AcceptorConfig, ApVerifyParams, FileLock,
+    KeytabEntry, RemoteSeq, ReplayCache, build_ap_req_mutual_seq, build_krb_safe_from,
+    local_host_address, us_timeofday, verify_ap_req_ex,
 };
 use krb5_types::{
     ApReq, EncTicketPart, EncryptedData, EncryptionKey, HostAddress, KerberosTime, KrbError,
     NameError, PrincipalName, Ticket, TicketFlags, TransitedEncoding, err, ku,
 };
+use nix::sys::socket::{setsockopt, sockopt};
 
 use crate::Error;
 
@@ -42,45 +45,10 @@ pub fn kprop_dump_bytes(store: &PrincipalStore, master_password: &[u8]) -> Resul
         .map_err(|e| Error::Inner(e.to_string()))
 }
 
-pub fn kprop_load_bytes(bytes: &[u8], master_password: &[u8]) -> Result<PrincipalStore, Error> {
-    load_dump(kprop_body_text(bytes)?, master_password).map_err(|e| Error::Inner(e.to_string()))
-}
-
-// MIT: `load_database` (kprop/kpropd.c:1541-1609)
-pub fn kprop_load_with_stash(bytes: &[u8], stash: &Path) -> Result<PrincipalStore, Error> {
-    kprop_load_stash_bytes(bytes, &read_stash_file(stash)?)
-}
-
-fn read_stash_file(stash: &Path) -> Result<zeroize::Zeroizing<Vec<u8>>, Error> {
-    krb5_protocol::read_stash_file(stash)
-        .map_err(|e| Error::Inner(format!("stash {}: {e}", stash.display())))
-}
-
-fn kprop_load_stash_bytes(bytes: &[u8], stash: &[u8]) -> Result<PrincipalStore, Error> {
-    let text = kprop_body_text(bytes)?;
-    load_dump_with_stash(text, stash).map_err(|e| Error::Inner(e.to_string()))
-}
-
 // MIT: `load_db` (kadmin/dbutil/dump.c:1497-1501)
 #[must_use]
 pub fn is_iprop_dump(dump: &[u8]) -> bool {
     dump.starts_with(b"ipropx ") || dump.starts_with(b"iprop ")
-}
-
-fn kprop_body_text(bytes: &[u8]) -> Result<&str, Error> {
-    if bytes.starts_with(b"KDB1") || bytes.starts_with(b"KDB2") || bytes.starts_with(b"KDB3") {
-        return Err(Error::Inner(
-            "kprop body is a private KDB blob, not a MIT dump".into(),
-        ));
-    }
-    let text = std::str::from_utf8(bytes).map_err(|e| Error::Inner(e.to_string()))?;
-    if !text.starts_with("kdb5_util load_dump version ")
-        && !text.starts_with("ipropx ")
-        && !text.starts_with("iprop ")
-    {
-        return Err(Error::Inner("kprop body missing dump header".into()));
-    }
-    Ok(text)
 }
 
 // MIT: `krb5_write_message` (lib/krb5/os/write_msg.c:73-76)
@@ -248,6 +216,15 @@ impl KpropAuth {
     }
 }
 
+fn com_err_text(e: &krb5_protocol::Error) -> String {
+    match e {
+        krb5_protocol::Error::KrbError { code, .. } => error_message(kdc_code(*code)),
+        krb5_protocol::Error::Crypto(_) => error_message(kdc_code(err::BAD_INTEGRITY)),
+        krb5_protocol::Error::Asn1(m) => asn1_com_err(m),
+        other => other.to_string(),
+    }
+}
+
 // MIT: `doit` (kpropd.c:528-546)
 pub fn kpropd_recvauth(
     stream: &mut TcpStream,
@@ -262,15 +239,12 @@ pub fn kpropd_recvauth(
         keys: host_keys,
         keytab: None,
     };
-    recvauth_with(
-        stream,
-        &keys,
-        expected_server,
-        expected_realm,
-        acl_lines,
-        replay,
-        conf,
-    )
+    let (auth, client, etype) =
+        recvauth_with(stream, &keys, expected_server, expected_realm, replay, conf)?;
+    if !kpropd_authorized_principal(acl_lines, &client, etype) {
+        return Err(Error::KpropUnauthorized(client));
+    }
+    Ok(auth)
 }
 
 struct RecvauthKeys<'a> {
@@ -283,10 +257,9 @@ fn recvauth_with<S: Read + Write + PeerAddr>(
     keys: &RecvauthKeys<'_>,
     expected_server: Option<&PrincipalName>,
     expected_realm: Option<&str>,
-    acl_lines: Option<&[String]>,
     replay: &ReplayCache,
     conf: &AcceptorConfig,
-) -> Result<KpropAuth, Error> {
+) -> Result<(KpropAuth, String, i32), Error> {
     let ver = read_message(stream).map_err(|e| Error::Inner(e.to_string()))?;
     if ver.as_slice() != SENDAUTH_VERSION {
         let _ = stream.write_all(&[1u8]);
@@ -359,11 +332,7 @@ fn recvauth_with<S: Read + Write + PeerAddr>(
     let local_seq = ac.local_seq();
     let crealm = String::from_utf8_lossy(ok.authenticator.crealm.as_bytes());
     let client = ok.authenticator.cname.unparse_with_realm(&crealm);
-    // The AP-REP is already out; refusal closes.
-    if !kpropd_authorized_principal(acl_lines, &client, ok.ticket_etype) {
-        return Err(Error::KpropUnauthorized(client));
-    }
-    Ok(KpropAuth {
+    let auth = KpropAuth {
         session,
         local_seq,
         remote: RemoteSeq::new(ac.remote_seq()),
@@ -376,7 +345,8 @@ fn recvauth_with<S: Read + Write + PeerAddr>(
             crealm: ok.authenticator.crealm.clone(),
         }),
         sender: None,
-    })
+    };
+    Ok((auth, client, ok.ticket_etype))
 }
 
 // MIT: `authorized_principal` (kpropd.c:1298-1348)
@@ -828,8 +798,14 @@ struct DeadlineStream<'a> {
     deadline: Option<std::time::Instant>,
 }
 
+const TIMED_OUT: &str = "Full propagation timed out";
+
 fn timed_out() -> io::Error {
-    io::Error::new(io::ErrorKind::TimedOut, "Full propagation timed out")
+    io::Error::new(io::ErrorKind::TimedOut, TIMED_OUT)
+}
+
+fn expired(e: &io::Error) -> bool {
+    e.kind() == io::ErrorKind::TimedOut && e.to_string() == TIMED_OUT
 }
 
 impl DeadlineStream<'_> {
@@ -903,78 +879,147 @@ impl PeerAddr for DeadlineStream<'_> {
     }
 }
 
-/// KRB-SAFE size, then KRB-PRIV on the next sequences; a failure gets a KRB-ERROR naming the read.
 pub fn kpropd_recv_dump<S: Read + Write>(
     stream: &mut S,
     auth: &mut KpropAuth,
 ) -> Result<Vec<u8>, Error> {
-    let size_raw = read_message(stream).map_err(|e| Error::Inner(e.to_string()))?;
-    if size_raw.first() == Some(&0x7e) {
-        return Err(Error::Inner("kprop sent a KRB-ERROR".into()));
+    let log = poll::Log {
+        progname: "kpropd",
+        debug: false,
+    };
+    let mut dump = Vec::new();
+    recv_database(stream, &mut dump, auth, &log)?;
+    Ok(dump)
+}
+
+// MIT: `recv_database` (kprop/kpropd.c:1356-1473)
+fn recv_database<S: Read + Write, W: Write>(
+    stream: &mut S,
+    out: &mut W,
+    auth: &mut KpropAuth,
+    log: &poll::Log<'_>,
+) -> Result<u64, Error> {
+    let generic = krb5_protocol::Error::KrbError {
+        code: err::GENERIC,
+        text: None,
+    };
+    let size_raw = match read_message(stream) {
+        Ok(raw) => raw,
+        Err(e) if expired(&e) => return Err(Error::Inner(e.to_string())),
+        Err(e) => {
+            let t = send::os_text(&e);
+            auth.send_error(
+                stream,
+                &generic,
+                &format!("{t} while reading database size"),
+            );
+            log.com_err(Some(&t), "while reading size of database from client");
+            return Err(Error::Reported);
+        }
+    };
+    if is_app_tag(&size_raw, 30) {
+        return Err(recv_error(&size_raw, log));
     }
     let size_plain = match auth.acceptor().and_then(|ac| ac.rd_safe(&size_raw)) {
         Ok(p) => p,
         Err(e) => {
             auth.send_error(stream, &e, "while decoding database size");
-            return Err(Error::Inner(format!("{e} while decoding database size")));
+            log.com_err(
+                Some(&com_err_text(&e)),
+                "while decoding database size from client",
+            );
+            return Err(Error::Reported);
         }
     };
-    let want = match decode_database_size(&size_plain) {
-        Ok(n) => n,
-        Err(e) => {
-            let generic = krb5_protocol::Error::KrbError {
-                code: err::GENERIC,
-                text: None,
-            };
-            auth.send_error(stream, &generic, "malformed database size message");
-            return Err(e);
-        }
+    let Ok(want) = decode_database_size(&size_plain) else {
+        auth.send_error(stream, &generic, "malformed database size message");
+        let t = error_message(kdc_code(err::GENERIC));
+        log.com_err(Some(&t), "malformed database size message from client");
+        return Err(Error::Reported);
     };
     if want > MAX_DUMP_SIZE {
-        let generic = krb5_protocol::Error::KrbError {
-            code: err::GENERIC,
-            text: None,
-        };
         auth.send_error(stream, &generic, "database size exceeds the limit");
-        return Err(Error::Inner(format!(
-            "database size {want} exceeds the {MAX_DUMP_SIZE}-byte limit"
-        )));
+        let text = format!("database size {want} exceeds the {MAX_DUMP_SIZE}-byte limit");
+        log.com_err(None, &text);
+        return Err(Error::Reported);
     }
     auth.acceptor()
         .map_err(|e| Error::Inner(e.to_string()))?
         .init_ivector();
-    let mut dump = Vec::new();
-    while (dump.len() as u64) < want {
-        let chunk_raw = read_message(stream).map_err(|e| Error::Inner(e.to_string()))?;
-        if chunk_raw.first() == Some(&0x7e) {
-            return Err(Error::Inner("kprop sent a KRB-ERROR".into()));
+    log.debug("Full propagation transfer started.");
+    let mut received = 0u64;
+    while received < want {
+        let chunk_raw = match read_message(stream) {
+            Ok(raw) => raw,
+            Err(e) if expired(&e) => return Err(Error::Inner(e.to_string())),
+            Err(e) => {
+                let t = send::os_text(&e);
+                let what = format!("while reading database block starting at offset {received}");
+                log.com_err(Some(&t), &what);
+                auth.send_error(stream, &generic, &format!("{t} {what}"));
+                return Err(Error::Reported);
+            }
+        };
+        if is_app_tag(&chunk_raw, 30) {
+            return Err(recv_error(&chunk_raw, log));
         }
         let chunk = match auth.acceptor().and_then(|ac| ac.rd_priv(&chunk_raw)) {
             Ok(c) => c,
             Err(e) => {
-                let text = format!(
-                    "while decoding database block starting at offset {}",
-                    dump.len()
-                );
-                auth.send_error(stream, &e, &text);
-                return Err(Error::Inner(format!("{e} {text}")));
+                let what = format!("while decoding database block starting at offset {received}");
+                log.com_err(Some(&com_err_text(&e)), &what);
+                auth.send_error(stream, &e, &what);
+                return Err(Error::Reported);
             }
         };
-        dump.extend_from_slice(&chunk);
-    }
-    if dump.len() as u64 != want {
-        let generic = krb5_protocol::Error::KrbError {
-            code: err::GENERIC,
-            text: None,
+        let failed = match out.write(&chunk) {
+            Err(e) => Some(format!(
+                "{} while writing database block starting at offset {received}",
+                klog::os_error_text(&e)
+            )),
+            Ok(n) if n != chunk.len() => Some(format!(
+                "incomplete write while writing database block starting at \noffset {received} \
+                 ({n} written, {} expected)",
+                chunk.len()
+            )),
+            Ok(_) => None,
         };
-        let text = format!(
-            "Received {} bytes, expected {want} bytes for database file",
-            dump.len()
-        );
-        auth.send_error(stream, &generic, &text);
-        return Err(Error::Inner(text));
+        if let Some(text) = failed {
+            auth.send_error(stream, &generic, &text);
+        }
+        received += chunk.len() as u64;
     }
-    Ok(dump)
+    if received > want {
+        let text = format!("Received {received} bytes, expected {want} bytes for database file");
+        auth.send_error(stream, &generic, &text);
+    }
+    log.debug("Full propagation transfer finished.");
+    Ok(want)
+}
+
+// MIT: `recv_error` (kprop/kpropd.c:1513-1538)
+fn recv_error(raw: &[u8], log: &poll::Log<'_>) -> Error {
+    match decode::<KrbError>(raw) {
+        Err(e) => log.com_err(
+            Some(&asn1_com_err(&e.to_string())),
+            "while decoding error packet from client",
+        ),
+        Ok(pdu) => {
+            let remote = send::RemoteError::from_krb_error(&pdu);
+            if remote.code == err::GENERIC {
+                if let Some(t) = &remote.text {
+                    eprintln!("Generic remote error: {t}");
+                }
+            } else if remote.code != 0 {
+                let t = error_message(kdc_code(remote.code));
+                log.com_err(Some(&t), "signaled from server");
+                if let Some(t) = &remote.text {
+                    eprintln!("Error text from client: {t}");
+                }
+            }
+        }
+    }
+    Error::Reported
 }
 
 pub fn kpropd_send_ack<S: Write>(
@@ -985,7 +1030,7 @@ pub fn kpropd_send_ack<S: Write>(
     let seq = auth.next_local_seq();
     let body = encode_database_size(size);
     let der = build_mit_safe(&auth.session, &body, seq, &auth.local_addr)?;
-    write_message(stream, &der).map_err(|e| Error::Inner(e.to_string()))?;
+    write_message(stream, &der).map_err(|e| Error::Inner(klog::os_error_text(&e)))?;
     Ok(())
 }
 
@@ -1063,8 +1108,6 @@ pub fn kpropd_keytab_keys(
     })
 }
 
-// MIT: `realm` (kpropd.c:131-131)
-// MIT: `kerb_database` (kpropd.c:136-136)
 // MIT: `acl_file_name` (kpropd.c:137-137)
 #[derive(Clone, Copy)]
 pub struct KpropdConfig<'a> {
@@ -1072,14 +1115,26 @@ pub struct KpropdConfig<'a> {
     pub keytab: Option<&'a KpropdKeys>,
     pub expected_server: Option<&'a PrincipalName>,
     pub expected_realm: Option<&'a str>,
-    pub master_password: Option<&'a [u8]>,
-    pub db: &'a Path,
-    pub stash: &'a Path,
     pub allowed_clients: Option<&'a [String]>,
     pub iprop: Option<&'a krb5_config::IpropParams>,
     /// Whole-transfer deadline (`iprop_resync_timeout`). mit-deviations.
     pub resync_timeout: std::time::Duration,
     pub conf: &'a AcceptorConfig,
+    pub load: KpropdLoad<'a>,
+}
+
+// MIT: `file` (kpropd.c:133-133)
+// MIT: `kdb5_util` (kpropd.c:135-135)
+// MIT: `realm` (kpropd.c:131-131)
+// MIT: `kerb_database` (kpropd.c:136-136)
+#[derive(Clone, Copy)]
+pub struct KpropdLoad<'a> {
+    pub progname: &'a str,
+    pub debug: bool,
+    pub file: &'a Path,
+    pub kdb5_util: &'a Path,
+    pub realm: Option<&'a str>,
+    pub database: Option<&'a Path>,
 }
 
 #[must_use]
@@ -1110,26 +1165,63 @@ pub fn load_replica(
     save_store_fresh(store, db, stash, true, Some(log)).map_err(|e| Error::Inner(e.to_string()))
 }
 
-pub fn kpropd_handle_conn(
+pub fn kpropd_handle_conn(stream: &mut TcpStream, cfg: &KpropdConfig<'_>, replay: &ReplayCache) {
+    let log = poll::Log {
+        progname: cfg.load.progname,
+        debug: cfg.load.debug,
+    };
+    match doit(stream, cfg, replay, &log) {
+        Ok(()) | Err(Error::Reported) => {}
+        // MIT: `alarm_handler` (kprop/kpropd.c:213-219)
+        Err(Error::Inner(t)) if t == TIMED_OUT => eprintln!("{t}"),
+        Err(e) => log.com_err(None, &e.to_string()),
+    }
+}
+
+// MIT: `doit` (kprop/kpropd.c:480-601)
+fn doit(
     stream: &mut TcpStream,
     cfg: &KpropdConfig<'_>,
     replay: &ReplayCache,
-) -> Result<PrincipalStore, Error> {
+    log: &poll::Log<'_>,
+) -> Result<(), Error> {
     let KpropdConfig {
         host_keys,
         keytab,
         expected_server,
         expected_realm,
-        master_password,
-        db,
-        stash,
         allowed_clients,
         iprop,
         resync_timeout,
         conf,
+        load,
     } = *cfg;
-    // MIT: `doit` (kprop/kpropd.c:493-494)
     let deadline = (!resync_timeout.is_zero()).then(|| std::time::Instant::now() + resync_timeout);
+    let peer = match stream.peer_addr() {
+        Ok(peer) => peer,
+        Err(e) => {
+            eprintln!(
+                "{}: getpeername: {}",
+                load.progname,
+                klog::os_error_text(&e)
+            );
+            return Err(Error::Reported);
+        }
+    };
+    if let Err(e) = setsockopt(&*stream, sockopt::KeepAlive, &true) {
+        log.com_err(Some(e.desc()), "while attempting setsockopt (SO_KEEPALIVE)");
+    }
+    let host = krb5_config::name_of_addr(peer.ip());
+    klog::syslog(Severity::Info, &format!("Connection from {host}"));
+    log.debug(&format!("Connection from {host}"));
+    // MIT: `kerberos_authenticate` (kprop/kpropd.c:1185-1295)
+    if let Some(server) = expected_server.filter(|_| load.debug) {
+        let server = server.unparse_with_realm(expected_realm.unwrap_or_default());
+        eprintln!(
+            "krb5_recvauth({}, kprop5_01, {server}, ...)",
+            stream.as_raw_fd()
+        );
+    }
     let mut ds = DeadlineStream {
         inner: stream,
         deadline,
@@ -1138,40 +1230,149 @@ pub fn kpropd_handle_conn(
         keys: host_keys,
         keytab,
     };
-    let mut auth = recvauth_with(
+    let (mut auth, client, etype) = recvauth_with(
         &mut ds,
         &keys,
         expected_server,
         expected_realm,
-        allowed_clients,
         replay,
         conf,
     )?;
-    let stash_bytes = match master_password {
-        Some(_) => None,
-        None => Some(read_stash_file(stash)?),
+    if load.debug {
+        let name = EncryptionType::known(etype).map_or("", EncryptionType::to_mit_name);
+        eprintln!("authenticated client: {client} (etype == {name})");
+    }
+    if !kpropd_authorized_principal(allowed_clients, &client, etype) {
+        let text = format!("Rejected connection from unauthorized principal {client}");
+        log.debug(&text);
+        klog::syslog(Severity::Warning, &text);
+        return Err(Error::Reported);
+    }
+    let mut temp = load.file.as_os_str().to_owned();
+    temp.push(".temp");
+    let temp = std::path::PathBuf::from(temp);
+    let lock_err = |e: &str, what: &str| {
+        log.com_err(Some(e), &format!("{what} '{}'", temp.display()));
+        Error::Reported
     };
-    let dump = kpropd_recv_dump(&mut ds, &mut auth)?;
-    let iprop_last = match (iprop, iprop_dump_last(&dump)) {
-        (Some(params), Some(last)) => Some((params, last)),
-        (None, None) if !is_iprop_dump(&dump) => None,
-        _ => return Err(Error::Inner("dump header bad".into())),
+    let opened = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .mode(0o600)
+        .custom_flags(nix::libc::O_NOFOLLOW)
+        .open(&temp);
+    // MIT locks the -1 a failed open returns; refusing a link is ours.
+    let mut file = match opened {
+        Ok(file) => file,
+        Err(e) if e.raw_os_error() == Some(nix::libc::ELOOP) => {
+            return Err(lock_err(&klog::os_error_text(&e), "while trying to lock"));
+        }
+        Err(_) => {
+            return Err(lock_err(
+                nix::errno::Errno::EBADF.desc(),
+                "while trying to lock",
+            ));
+        }
     };
-    let store = match (master_password, &stash_bytes) {
-        (Some(pw), _) => kprop_load_bytes(&dump, pw)?,
-        (None, Some(stash_bytes)) => kprop_load_stash_bytes(&dump, stash_bytes)?,
-        (None, None) => return Err(Error::Inner("no master key".into())),
+    let mut flocked = None;
+    krb5_protocol::lock_file_how(&file, FileLock::Exclusive, &mut flocked, false)
+        .map_err(|e| lock_err(e.desc(), "while trying to lock"))?;
+    if let Err(e) = file.set_len(0) {
+        let text = format!("while opening database file, '{}'", temp.display());
+        log.com_err(Some(&klog::os_error_text(&e)), &text);
+        return Err(Error::Reported);
+    }
+    let size = recv_database(&mut ds, &mut file, &mut auth, log)?;
+    if let Err(e) = std::fs::rename(&temp, load.file) {
+        let text = format!(
+            "while renaming {} to {}",
+            temp.display(),
+            load.file.display()
+        );
+        log.com_err(Some(&klog::os_error_text(&e)), &text);
+        return Err(Error::Reported);
+    }
+    krb5_protocol::lock_file(&file, FileLock::Shared, &mut flocked)
+        .map_err(|e| lock_err(e.desc(), "while downgrading lock on"))?;
+    load_database(&load, iprop.is_some(), deadline, log)?;
+    krb5_protocol::lock_file(&file, FileLock::Unlock, &mut flocked)
+        .map_err(|e| lock_err(e.desc(), "while unlocking"))?;
+    drop(file);
+    let acked = kpropd_send_ack(&mut ds, &mut auth, size);
+    if let Err(Error::Inner(t)) = &acked
+        && t != TIMED_OUT
+    {
+        log.com_err(Some(t), "while sending # of received bytes");
+        return Err(Error::Reported);
+    }
+    acked
+}
+
+// MIT: `load_database` (kprop/kpropd.c:1541-1609)
+fn load_database(
+    load: &KpropdLoad<'_>,
+    iprop: bool,
+    deadline: Option<std::time::Instant>,
+    log: &poll::Log<'_>,
+) -> Result<(), Error> {
+    log.debug("calling kdb5_util to load database");
+    let util = load.kdb5_util.display().to_string();
+    let mut cmd = std::process::Command::new(load.kdb5_util);
+    if let Some(realm) = load.realm {
+        cmd.args(["-r", realm]);
+    }
+    cmd.arg("load");
+    if let Some(db) = load.database {
+        cmd.arg("-d").arg(db);
+    }
+    if iprop {
+        cmd.arg("-i");
+    }
+    cmd.arg(load.file);
+    let mut child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(e) => {
+            log.com_err(
+                Some(&klog::os_error_text(&e)),
+                &format!("while trying to exec {util}"),
+            );
+            log.com_err(None, &format!("{util} returned a bad exit status (1)"));
+            return Err(Error::Reported);
+        }
     };
-    load_replica(&store, db, stash, iprop_last)?;
-    kpropd_send_ack(&mut ds, &mut auth, dump.len() as u64)?;
-    tracing::debug!(
-        event = krb5_log::events::ADMIN,
-        component = "krb5-admin",
-        outcome = "ok",
-        detail = "kpropd dump v7",
-        nbytes = dump.len(),
-    );
-    Ok(store)
+    log.debug(&format!("Load PID is {}", child.id()));
+    // MIT's `doit` alarm also bounds the load; on expiry kdb5_util runs on.
+    let waited = match deadline {
+        None => child.wait(),
+        Some(d) => loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break Ok(status),
+                Ok(None) if std::time::Instant::now() < d => {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Ok(None) => {
+                    std::thread::spawn(move || child.wait());
+                    return Err(Error::Inner(timed_out().to_string()));
+                }
+                Err(e) => break Err(e),
+            }
+        },
+    };
+    match waited {
+        Err(e) => {
+            log.com_err(
+                Some(&klog::os_error_text(&e)),
+                &format!("while waiting for {util}"),
+            );
+        }
+        Ok(status) => match status.code() {
+            Some(0) => return Ok(()),
+            None => log.com_err(None, &format!("{util} load terminated")),
+            Some(code) => log.com_err(None, &format!("{util} returned a bad exit status ({code})")),
+        },
+    }
+    Err(Error::Reported)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1664,7 +1865,6 @@ mod tests {
                 &keys,
                 Some(&server),
                 Some(TEST_REALM),
-                None,
                 &ReplayCache::new(),
                 &conf,
             )
@@ -2073,7 +2273,8 @@ mod tests {
             write_message(&mut client, &encode(&block).unwrap()).unwrap();
         }
         let e: KrbError = decode(&read_message(&mut client).unwrap()).expect("KRB-ERROR");
-        assert!(join.join().expect("thread").is_err());
+        // MIT goes on past a dump longer than its size.
+        assert_eq!(join.join().expect("thread").is_err(), short_by == 0);
         assert_eq!(e.cname, Some(admin), "send_error names the client");
         e
     }
@@ -2100,7 +2301,7 @@ mod tests {
     }
 
     #[test]
-    fn kpropd_refuses_a_dump_longer_than_its_size() {
+    fn kpropd_reports_a_dump_longer_than_its_size() {
         let e = kpropd_answer_to(4242, 4243, 5);
         assert_eq!(e.error_code, err::GENERIC);
         assert_eq!(

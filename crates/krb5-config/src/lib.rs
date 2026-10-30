@@ -408,7 +408,7 @@ pub use hostname::{
 pub use iprop_params::{DEF_ULOGENTRIES, IpropParams, KadmindListen, MISSING_CONF_PARAMS};
 pub use kdcconf::{
     KDC_DIR, KdcPaths, default_acl_file, default_kdb_file, default_kdc_profile, default_kprop_file,
-    default_kpropd_acl, default_stash_file, env_kdc_config, kdc_conf_path,
+    default_kpropd_acl, default_kpropd_file, default_stash_file, env_kdc_config, kdc_conf_path,
 };
 pub use logging::LogSpecs;
 pub use otp_profile::{
@@ -424,5 +424,5 @@ pub use profile::{
     load_krb5_conf, load_krb5_conf_paths, parse_deltat, split_krb5_config_paths,
 };
 pub use profile_set::ProfileSet;
-pub use srv::{DnsSrv, lookup_srv_kdc};
+pub use srv::{DnsSrv, lookup_srv_kdc, name_of_addr};
 pub use testenv::{isolate_test_krb5, isolated_profile, set_test_kdc_profile, set_test_krb5_paths};

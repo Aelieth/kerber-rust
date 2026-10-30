@@ -796,7 +796,7 @@ def check_mit_cites(root: pathlib.Path | None = None) -> None:
 
 
 # The test share in lines, as printed, may not rise; the commit that cuts tests lowers it.
-_TEST_SHARE_CAP = 30.945
+_TEST_SHARE_CAP = 30.841
 
 
 def check_form_ratios(root: pathlib.Path | None = None) -> None:

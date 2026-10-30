@@ -138,10 +138,6 @@ name = "kpasswd_addresses"
 required-features = ["test-hooks"]
 
 [[test]]
-name = "kprop"
-required-features = ["test-hooks"]
-
-[[test]]
 name = "kprop_file"
 required-features = ["test-hooks"]
 

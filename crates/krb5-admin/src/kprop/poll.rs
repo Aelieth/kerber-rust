@@ -72,14 +72,14 @@ impl IpropWake {
     }
 }
 
-struct Log<'a> {
-    progname: &'a str,
-    debug: bool,
+pub(super) struct Log<'a> {
+    pub(super) progname: &'a str,
+    pub(super) debug: bool,
 }
 
 impl Log<'_> {
     // MIT: `kpropd_com_err_proc` (kprop/kpropd.c:1030-1040)
-    fn com_err(&self, code: Option<&str>, msg: &str) {
+    pub(super) fn com_err(&self, code: Option<&str>, msg: &str) {
         let line = match code {
             Some(text) => format!("{}: {text} {msg}", self.progname),
             None => format!("{}: {msg}", self.progname),
@@ -91,7 +91,7 @@ impl Log<'_> {
         }
     }
 
-    fn debug(&self, msg: &str) {
+    pub(super) fn debug(&self, msg: &str) {
         if self.debug {
             eprintln!("{msg}");
         }

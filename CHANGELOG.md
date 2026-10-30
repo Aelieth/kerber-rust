@@ -52,8 +52,7 @@ any other `###` heading.
 - **kdc.** PKINIT checks client's `pkinit_cert_match` rule as MIT's dbmatch; miss is 66.
 - **kdc.** `pkinit_cert_match` takes `<KU>`, `<EKU>`, `<SAN>`, `<ISSUER>`, `<SUBJECT>`, `&&`, `||`.
 - **pkinit.** MODP Diffie-Hellman is constant-time on crypto-bigint, not num-bigint's variable-time `modpow`.
-- **admin.** kpropd and kprop bound input: handler cap; read, write, transfer, connect timeouts.
-- **admin.** kpropd and kprop cap dump buffer and record counts.
+- **admin.** kpropd, kprop bound input: handler, dump-size, record caps; I/O, transfer, connect timeouts.
 - **admin/kdc.** CSPRNG failure fails kadm5 request closed.
 - **admin/kdc.** Logged policy names and globs escape control characters; CMS ContentInfo type is checked.
 - **kdc.** Bounded worker pool runs each OTP verifier under `[otp] timeout`.
@@ -81,7 +80,7 @@ any other `###` heading.
 - **admin.** Added kadm5_auth modules join `acl` and `self`; `Deny` overrides the ACL.
 - **pkinit.** Brainpool P256, P384, P512 (r1, t1) sign and verify; 32-bit build refuses P512.
 - **pkinit.** Brainpool P320 is refused: crypto-bigint 0.7 has no 320-bit encoding.
-- **kpropd.** `iprop_enable` makes replica poll its primary as `kiprop/<host>`, as MIT's `do_iprop`.
+- **kpropd.** `iprop_enable` makes replica poll primary as `kiprop/<host>`, as MIT's `do_iprop`.
 - **kpropd.** Replicas apply updates, ask for full resync, back off; `-A`, `-P`, `-t` are taken.
 - **config/kdc.** `pkinit_identity`, `pkinit_anchors`, `pkinit_pool`, `pkinit_eku_checking` read as MIT's.
 - **config/kdc.** PKINIT config failure leaves PKINIT off, with MIT's line.
@@ -94,7 +93,7 @@ any other `###` heading.
 - **kdc.** `register_otp_verifier` errors on duplicate name.
 - **examples.** `krb5-otp-kdc` gains sealed-seed TOTP verifier, replay state monotonic and persisted.
 - **examples.** `krb5-otp-kdc` gains `password‖code` mode and `require_mfa` `KdcPolicy`.
-- **install.** `make install` ships replica `kprop.service` (Type=simple) and `/etc/sysconfig/kprop`.
+- **install.** `make install` ships `kprop.service` (Type=simple) and `/etc/sysconfig/kprop`.
 
 ### Changed
 
@@ -142,7 +141,8 @@ any other `###` heading.
 - **protocol.** A non-TGT referral or this-realm TGT retries without referrals.
 - **protocol.** Unknown SPAKE group is traced once at AS exchange's start if SPAKE is loaded.
 - **protocol.** Canonicalized reply whose server differs is traced.
-- **admin.** On full resync kadmind dumps and kprops to replica itself, as MIT's, not by hand.
+- **admin.** On full resync kadmind dumps and kprops to replica itself, as MIT's.
+- **kpropd.** Full dumps go to `from_master` for `kdb5_util load`, as MIT's.
 - **gss.** Mutual initiator sends RFC 4537 enctype list and omits zero sequence number.
 - **gss.** A non-boolean `client_aware_channel_bindings` fails AP-REQ.
 - **client.** Kinit traces initial credentials before DNS SRV.

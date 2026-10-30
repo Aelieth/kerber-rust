@@ -174,6 +174,38 @@ fn dump_refuses_a_symlink_planted_as_its_mark() {
     assert!(!dump.exists());
 }
 
+/// MIT's full load opens `principal.ok` `O_CREAT | O_TRUNC`, emptying a symlink's target; this
+/// load, as kpropd runs it on a replica with no database yet, refuses the link and loads nothing.
+#[test]
+fn load_refuses_a_symlink_planted_as_the_lock_file() {
+    let realm = Realm::new("kdb5-util-link-load");
+    realm.create();
+    let dump = realm.dir.join("realm.dump");
+    let out = realm.run(&["dump", dump.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(0), "{}", err(&out));
+    for entry in std::fs::read_dir(&realm.dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("principal")
+        {
+            std::fs::remove_file(&path).unwrap();
+        }
+    }
+    let (victim, bytes, mtime) = plant_link(&realm.ok());
+    let out = realm.run(&["load", dump.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(1), "{}", err(&out));
+    assert!(
+        err(&out).contains("principal.ok: Too many levels of symbolic links"),
+        "{}",
+        err(&out)
+    );
+    assert_untouched(&realm.ok(), &victim, &bytes, mtime);
+    assert!(!realm.db.exists(), "nothing loaded");
+}
+
 /// MIT's destroy zeroes the database file through a symlink (here to a copy of the realm's
 /// database, which opens); this destroy refuses the link and changes nothing.
 #[test]

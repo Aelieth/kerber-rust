@@ -13,13 +13,13 @@ use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, ToSocketAddrs};
 use std::os::fd::AsRawFd as _;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::Duration;
 
 use krb5_admin::{
-    IpropWake, KPROP_PORT, KPROPD_IO_TIMEOUT, KpropdConfig, KpropdIprop, KpropdKeys,
+    IpropWake, KPROP_PORT, KPROPD_IO_TIMEOUT, KpropdConfig, KpropdIprop, KpropdKeys, KpropdLoad,
     kprop_service_port, kpropd_do_iprop, kpropd_handle_conn, kpropd_keytab_keys,
     kpropd_server_name,
 };
@@ -33,8 +33,8 @@ use krb5_config::ProfileSet;
 use krb5_protocol::{AcceptorConfig, ReplayCache};
 use krb5_types::PrincipalName;
 
-/// MIT forks uncapped. mit-deviations.
 const MAX_HANDLERS: usize = 64;
+static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
 fn main() {
     let argv: Vec<String> = std::env::args().collect();
@@ -68,14 +68,12 @@ fn main() {
         admin_server,
         runonce,
         debug,
+        file,
+        database,
+        kdb5_util,
     } = parse_options(&progname, argv.get(1..).unwrap_or_default());
+    let argv0 = argv.first().cloned().unwrap_or_else(|| "kpropd".to_owned());
     klog::init("kpropd", &["SYSLOG:INFO:DAEMON".to_owned()], false);
-    #[cfg(feature = "test-hooks")]
-    let master = std::env::var("KRB5_MASTER_PASSWORD")
-        .ok()
-        .map(zeroize::Zeroizing::new);
-    #[cfg(not(feature = "test-hooks"))]
-    let master: Option<zeroize::Zeroizing<String>> = None;
     let paths = kpropd_paths(realm_opt.as_deref()).unwrap_or_else(|e| {
         if matches!(e, krb5_config::Error::NoDefaultRealm) {
             eprintln!("krb5-kpropd: {e} Unable to get default realm");
@@ -118,7 +116,7 @@ fn main() {
     println!("listening {}", listener.local_addr().unwrap_or(addr));
     let wake = iprop.clone().map(|params| {
         start_iprop(Poll {
-            argv0: argv.first().cloned().unwrap_or_else(|| "kpropd".to_owned()),
+            argv0: argv0.clone(),
             realm: realm.clone(),
             keytab: keytab.clone(),
             admin_server: admin_server
@@ -139,6 +137,10 @@ fn main() {
     }
     let live = Arc::new(AtomicUsize::new(0));
     let replay = ReplayCache::new();
+    // MIT: `do_standalone` (kprop/kpropd.c:380-477)
+    if debug {
+        eprintln!("waiting for a kprop connection");
+    }
     loop {
         if stop.load(Ordering::Relaxed) {
             break;
@@ -155,9 +157,9 @@ fn main() {
                 let keytab = keytab.clone();
                 let server = server.clone();
                 let realm = realm.clone();
-                let master = master.clone();
-                let db = db.clone();
-                let stash = stash.clone();
+                let (argv0, realm_opt) = (argv0.clone(), realm_opt.clone());
+                let (file, database) = (file.clone(), database.clone());
+                let kdb5_util = kdb5_util.clone();
                 let allowed = kpropd_acl(&acl_file);
                 let replay = replay.clone();
                 let iprop = iprop.clone();
@@ -166,31 +168,41 @@ fn main() {
                 let conf = Arc::clone(&conf);
                 let kdc_context = Arc::clone(&kdc_context);
                 let mut conn = move || {
+                    // MIT: `do_standalone` (kprop/kpropd.c:436-450)
+                    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
                     if let Some(keys) =
                         host_keys(&progname, keytab.as_deref(), &server, &kdc_context)
                     {
-                        match kpropd_handle_conn(
+                        kpropd_handle_conn(
                             &mut stream,
                             &KpropdConfig {
                                 host_keys: &[],
                                 keytab: Some(&keys),
                                 expected_server: Some(&server),
                                 expected_realm: Some(realm.as_str()),
-                                master_password: master.as_deref().map(String::as_bytes),
-                                db: &db,
-                                stash: &stash,
                                 allowed_clients: allowed.as_deref(),
                                 iprop: iprop.as_ref(),
                                 resync_timeout,
                                 conf: &conf,
+                                load: KpropdLoad {
+                                    progname: &argv0,
+                                    debug,
+                                    file: &file,
+                                    kdb5_util: &kdb5_util,
+                                    realm: realm_opt.as_deref(),
+                                    database: database.as_deref(),
+                                },
                             },
                             &replay,
-                        ) {
-                            Ok(_) => println!("kprop ok"),
-                            Err(e) => eprintln!("krb5-kpropd: {e}"),
+                        );
+                    }
+                    // MIT: `do_standalone` (kprop/kpropd.c:461-473)
+                    if debug {
+                        eprintln!("Database load process for full propagation completed.");
+                        if !(runonce && alone) {
+                            eprintln!("waiting for a kprop connection");
                         }
                     }
-                    // MIT: `do_standalone` (kprop/kpropd.c:466-472)
                     if let Some(w) = &poll {
                         w.poke();
                     }
@@ -227,10 +239,13 @@ struct Options {
     admin_server: Option<String>,
     runonce: bool,
     debug: bool,
+    file: PathBuf,
+    database: Option<PathBuf>,
+    kdb5_util: PathBuf,
 }
 
 fn parse_options(progname: &str, args: &[String]) -> Options {
-    let (opts, operands) = match krb5_cli::getopt(args, "A:P:r:s:a:DdSt", &[]) {
+    let (opts, operands) = match krb5_cli::getopt(args, "A:P:r:s:a:DdStf:F:p:", &[]) {
         Ok(parsed) => parsed,
         Err(e) => {
             eprintln!("{progname}: {e}");
@@ -256,7 +271,18 @@ fn parse_options(progname: &str, args: &[String]) -> Options {
         admin_server: last('A'),
         runonce: has('t'),
         debug: has('d'),
+        file: last('f').map_or_else(krb5_config::default_kpropd_file, PathBuf::from),
+        database: last('F').map(PathBuf::from),
+        kdb5_util: last('p').map_or_else(default_kdb5_util, PathBuf::from),
     }
+}
+
+// MIT: `KPROPD_DEFAULT_KDB5_UTIL` (include/osconf.hin:129-129)
+// Not compiled in: make build does not know PREFIX.
+fn default_kdb5_util() -> PathBuf {
+    std::env::current_exe()
+        .unwrap_or_else(|_| "/".into())
+        .with_file_name("kdb5_util")
 }
 
 // MIT: `get_wildcard_addr` (kprop/kpropd.c:362-377)
@@ -344,7 +370,10 @@ fn standalone_listener(progname: &str, addr: SocketAddr) -> TcpListener {
 
 fn usage(progname: &str) -> ! {
     eprintln!(
-        "\nUsage: {progname} [-r realm] [-s keytab] [-d] [-D] [-S]\n\t[-P port] [-a acl_file] [-A admin_server] [host:port]"
+        "\nUsage: {progname} [-r realm] [-s keytab] [-d] [-D] [-S]\n\
+         \t[-f replica_file] [-F kerberos_db_file ]\n\
+         \t[-p kdb5_util_pathname] [-P port]\n\
+         \t[-a acl_file] [-A admin_server] [host:port]"
     );
     std::process::exit(1);
 }

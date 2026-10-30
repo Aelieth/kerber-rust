@@ -11,8 +11,9 @@
 # kdc2. The stash and the keytabs go from kdc to kdc2 through an ssh pipe, which the host relays without a copy, never
 # into a file on the host or the record. Cells, graded on both legs unless noted:
 #   REP.1: kdc2's kpropd asks for a full resync and kdc's kadmind sends the dump; kprop -f of a plain kdb5_util dump is
-#          refused, as MIT's iprop replica loads only an iprop dump (load -i); kdc2's krb5kdc then issues alice's TGT
-#          to client2, whose krb5.conf names kdc2 alone;
+#          refused, as MIT's iprop replica loads only an iprop dump (load -i), and on the rust leg kpropd's lines for
+#          it are the MIT leg's (as REP.3 finds it; the pid and the socket's fd masked); kdc2's krb5kdc then issues
+#          alice's TGT to client2, whose krb5.conf names kdc2 alone;
 #   REP.4: kpropd.acl without the primary: MIT's kprop line "Broken pipe while sending database", and kpropd's
 #          "Rejected connection from unauthorized principal";
 #   REP.2: addprinc, cpw, modprinc -maxlife, a second addprinc, delprinc and renprinc on kdc reach kdc2 within two
@@ -163,6 +164,12 @@ if [ "$LEG" = rust ] && [ "$BAKED" = 0 ]; then
 fi
 
 section "REP.1 the first sync: a full resync at kpropd's start, a plain dump refused, kdc2's KDC serving the realm alone"
+REFDIR=''
+if [ "$LEG" = rust ]; then
+    if [ -f "$FIELD_RUN/replica/mit/result" ]; then REFDIR=$FIELD_RUN/replica/mit
+    elif [ -f "$LAB_HOME/runs/mit-latest/replica/mit/checks.tsv" ]; then REFDIR=$LAB_HOME/runs/mit-latest/replica/mit; fi
+    note "REP.1 and REP.3 are compared with ${REFDIR:-no MIT leg: neither this run nor runs/mit-latest has one}"
+fi
 kpropdlog REP.1.resync 'Full resync request granted'
 replicated REP.1.loaded alice "^Principal: alice@$R\$"
 check REP.1.dump rc run kdc "sudo kdb5_util dump $W/dump"
@@ -170,7 +177,16 @@ run kdc2 "echo '==== plain dump' >> $W/kpropd.log"
 run kdc "sudo kprop -r $REALM -f $W/dump -s $W/kprop.keytab kdc2.kerber.test 2>&1; echo \"kprop rc=\$?\""
 checklast REP.1.plain '^kprop: .* while reading response from server$'
 checklast REP.1.plain.rc '^kprop rc=1$'
-observe obs.REP.1.plain.kpropd "$OWN" run kdc2 "sleep 2; sed -n '/^==== plain dump\$/,\$p' $W/kpropd.log | grep -v '^====' | tail -n 6"
+# kpropd's lines from the marker to its listener's next wait; the poll's lines, which may fall inside, are dropped.
+POLL='^(Calling iprop_get_updates_1 |Got incremental updates |Incremental updates: |KDC is synchronized with primary\.$|Waiting for [0-9]+ seconds )'
+run kdc2 "for i in \$(seq 1 30); do sed '1,/^==== plain dump\$/d' $W/kpropd.log | grep -qx 'waiting for a kprop connection' && break; sleep 1; done; sed '1,/^==== plain dump\$/d' $W/kpropd.log | sed '/^waiting for a kprop connection\$/q' | grep -vE '$POLL'"
+grep -E "$OWN" "$LAST_OUT" | sed -E 's/^(Load PID is )[0-9]+$/\1<pid>/; s/^(krb5_recvauth\()[0-9]+, /\1<fd>, /' > "$REC_DIR/rep1-kpropd.txt"
+if [ "$LEG" = mit ]; then
+    checklast REP.1.plain.kpropd '^/.*: /.*kdb5_util returned a bad exit status \(1\)$'
+else
+    sides REP.1.plain.kpropd "MIT rep1-kpropd.txt" "${REFDIR:+$REFDIR/rep1-kpropd.txt}" "rust rep1-kpropd.txt" "$REC_DIR/rep1-kpropd.txt" \
+        && check REP.1.plain.kpropd "^[1-9][0-9]* lines, the MIT leg's\$" host "diff $(printf '%q' "$REFDIR/rep1-kpropd.txt") $(printf '%q' "$REC_DIR/rep1-kpropd.txt") && echo \"\$(wc -l < $(printf '%q' "$REC_DIR/rep1-kpropd.txt")) lines, the MIT leg's\""
+fi
 # kpropd runs unconfined from the ssh session, so the database its kdb5_util loads gets kdc.conf's directory label.
 check REP.1.krb5kdc '^krb5kdc: active, 88 listening$' run kdc2 "sudo restorecon -R /var/kerberos/krb5kdc; sudo systemctl start krb5kdc; for i in \$(seq 1 40); do ss -Hlun 'sport = :88' | grep -q . && break; sleep 0.25; done; echo \"krb5kdc: \$(systemctl is-active krb5kdc), 88 \$(ss -Hlun 'sport = :88' | grep -q . && echo listening)\""
 observe obs.REP.1.krb5kdc "$OWN" run kdc2 "systemctl is-active -q krb5kdc && echo 'krb5kdc: active' || { sudo journalctl -u krb5kdc -n 8 --no-pager -o cat; echo \"\$(sudo ausearch -m avc -ts boot 2>/dev/null | grep -c denied) AVC denials since boot\"; }"
@@ -204,12 +220,7 @@ run kdc2 "echo '==== REP.3' >> $W/kpropd.log"
 kadm 'addpol -maxlife "3 hours" reppol'
 kadm 'modprinc -policy reppol repc'
 run kdc2 "for i in \$(seq 1 40); do sudo kadmin.local -q 'getprinc repc' 2>&1 | grep -qx 'Policy: reppol' && break; sleep 1; done; sed -n '/^==== REP.3\$/,\$p' $W/kpropd.log | tail -n 12"
-REF=''
-if [ "$LEG" = rust ]; then
-    if [ -f "$FIELD_RUN/replica/mit/result" ]; then REF=$FIELD_RUN/replica/mit/checks.tsv
-    elif [ -f "$LAB_HOME/runs/mit-latest/replica/mit/checks.tsv" ]; then REF=$LAB_HOME/runs/mit-latest/replica/mit/checks.tsv; fi
-    note "REP.3 is compared with ${REF:-no MIT leg: neither this run nor runs/mit-latest has one}"
-fi
+REF=${REFDIR:+$REFDIR/checks.tsv}
 # rep3 <fact> <command>: one line, in the same words on both legs; on the rust leg it must be the MIT leg's.
 rep3() {
     local mit=''

@@ -8,7 +8,7 @@ cd "$ROOT"
 . "$ROOT/scripts/lib/gate-common.sh"
 . "$ROOT/scripts/lib/kadmin-q.sh"
 . "$ROOT/scripts/lib/proc-common.sh"
-need_bins krb5-kdc krb5-kpropd kprop-expired-apreq
+need_bins krb5-kdc krb5-kpropd krb5-kdb kprop-expired-apreq
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-kprop-gate"
@@ -227,8 +227,9 @@ fi
 
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kpropd" "$NAME":/tmp/krb5-kpropd
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdb" "$NAME":/tmp/krb5-kdb
 docker cp "${CARGO_TARGET_DIR:-target}/debug/kprop-expired-apreq" "$NAME":/tmp/kprop-expired-apreq
-docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kpropd /tmp/kprop-expired-apreq
+docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kpropd /tmp/krb5-kdb /tmp/kprop-expired-apreq
 
 docker exec "$NAME" sh -c 'cat >/tmp/kprop-krb5.conf <<EOF
 [libdefaults]
@@ -285,7 +286,7 @@ docker exec -d \
     -e KRB5_KDC_DB=/tmp/replica \
     -e KRB5_KDC_STASH=/tmp/replica.stash \
     -e KRB5_TEST_REALM=KERBER.TEST \
-    "$NAME" sh -c '/tmp/krb5-kpropd -s /tmp/host.keytab -a /tmp/kpropd.acl 0.0.0.0:754 >/tmp/kpropd.log 2>&1'
+    "$NAME" sh -c '/tmp/krb5-kpropd -s /tmp/host.keytab -a /tmp/kpropd.acl -p /tmp/krb5-kdb -f /tmp/replica.from_master 0.0.0.0:754 >/tmp/kpropd.log 2>&1'
 ok=0
 for _ in $(seq 1 40); do
     if docker exec "$NAME" grep -q '^listening ' /tmp/kpropd.log 2>/dev/null; then
