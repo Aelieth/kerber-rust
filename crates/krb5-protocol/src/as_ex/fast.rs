@@ -122,6 +122,8 @@ pub(super) fn continue_fast(
                     &method_from_error(&current).unwrap_or_default(),
                     &super::conf_preferred_preauth_types_for(req.profile, req.realm),
                 );
+                // MIT: `k5_preauth` (lib/krb5/krb/preauth2.c:987-990)
+                super::check_etype_info(&method, etypes)?;
                 // MIT: `pa_type_allowed` (lib/krb5/krb/preauth2.c:627-631)
                 method.retain(|p| req.ticket.preauth_allowed(p.padata_type));
                 if fast_mechanism(req.profile, &method, &skip, pkinit).is_err()

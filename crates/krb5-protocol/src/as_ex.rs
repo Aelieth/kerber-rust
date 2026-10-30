@@ -778,6 +778,7 @@ fn continue_from_hint(
         let sorted = sort_krb5_padata_sequence(&method, &preferred);
         trace::init_creds_preauth();
         trace_preauth_input(&sorted, etypes);
+        check_etype_info(&sorted, etypes)?;
         let allowed = allowed_padata(req, &sorted);
         pkinit_prepare(req, &allowed, &mut prepared);
         ask_responder(req, pw, None, &allowed)?;
@@ -1167,6 +1168,7 @@ fn continue_pkinit(
                     etypes,
                 );
             }
+            check_etype_info(&method, etypes)?;
             let token = find_pa(&method, pa::AS_FRESHNESS)
                 .map(|p| p.padata_value.as_ref())
                 .filter(|v| !v.is_empty())
