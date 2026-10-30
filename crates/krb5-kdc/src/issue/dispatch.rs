@@ -13,8 +13,8 @@ use krb5_types::{AsReq, HostAddress, TgsReq, err};
 
 use super::reply::{as_reply, krb_error_log_fields, tgs_reply};
 use crate::asn1_text::{
-    APPLICATION, ASN1_BAD_FORMAT, ASN1_BAD_ID, ASN1_BAD_LENGTH, ASN1_INDEF, ASN1_MISSING_FIELD,
-    ASN1_OVERFLOW, ASN1_PARSE_ERROR, CONTEXT, Tlv, UNIVERSAL, get_tag,
+    APPLICATION, ASN1_BAD_ID, ASN1_BAD_LENGTH, ASN1_MISSING_FIELD, ASN1_OVERFLOW, CONTEXT, Tlv,
+    UNIVERSAL, body_failure_text, get_tag,
 };
 #[cfg(test)]
 use crate::audit::{
@@ -432,53 +432,6 @@ fn framing_at(mut p: &[u8], depth: u32) -> Result<(), &'static str> {
     Ok(())
 }
 
-// MIT: `k5_asn1_decode_generaltime` (lib/krb5/asn.1/asn1_encode.c:242-260)
-fn body_failure_text(e: &str) -> &'static str {
-    if let Some(n) = e
-        .split("KerberosTime is not YYYYMMDDhhmmssZ (")
-        .nth(1)
-        .and_then(|rest| rest.split(" octets)").next())
-        .and_then(|n| n.parse::<usize>().ok())
-    {
-        return if n == 15 {
-            ASN1_BAD_FORMAT
-        } else {
-            ASN1_BAD_LENGTH
-        };
-    }
-    if let Some(time) = e
-        .split("Invalid date string: ")
-        .nth(1)
-        .and_then(|t| t.split(" (Codec").next())
-    {
-        return if time.len() == 15 {
-            ASN1_BAD_FORMAT
-        } else {
-            ASN1_BAD_LENGTH
-        };
-    }
-    if e.contains("Expected Tag { class: Context")
-        || e.contains("Missing field")
-        || e.contains("Need more data")
-        || e.contains("Unexpected EOF")
-    {
-        return ASN1_MISSING_FIELD;
-    }
-    if e.contains("Expected Tag {") {
-        return ASN1_BAD_ID;
-    }
-    if e.contains(" bytes, actual length was ") {
-        return ASN1_BAD_LENGTH;
-    }
-    if e.contains("larger than expected") {
-        return ASN1_OVERFLOW;
-    }
-    if e.contains("Indefinite length") {
-        return ASN1_INDEF;
-    }
-    ASN1_PARSE_ERROR
-}
-
 // MIT: `dispatch` (kdc/dispatch.c:123-131)
 const RESENDING: &str = "DISPATCH: repeated (retransmitted?) request from [unknown address type], resending previous response";
 const DROPPING: &str = "DISPATCH: repeated (retransmitted?) request from [unknown address type] during request processing, dropping repeated request";
@@ -723,7 +676,7 @@ mod tests {
     use krb5_types::{KrbError, PrincipalName};
 
     use super::*;
-    use crate::asn1_text::ASN1_OVERRUN;
+    use crate::asn1_text::{ASN1_INDEF, ASN1_OVERRUN};
     use crate::listen::shared_store;
 
     use crate::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented, documented_host};

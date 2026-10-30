@@ -215,12 +215,23 @@ pub(crate) fn asn1_refusal(
     tagnum: u32,
     e: &krb5_asn1::Error,
 ) -> (i32, String) {
-    let text = match get_tag(der) {
-        Err(text) => text.to_owned(),
-        Ok(t) if t.class != class || !t.constructed || t.tagnum != tagnum => ASN1_BAD_ID.to_owned(),
-        Ok(_) => e.to_string(),
-    };
+    let text = asn1_outer_text(der, class, tagnum).map_or_else(|| e.to_string(), str::to_owned);
     (err::GENERIC, text)
+}
+
+pub(crate) fn asn1_outer_text(der: &[u8], class: u8, tagnum: u32) -> Option<&'static str> {
+    match get_tag(der) {
+        Err(text) => Some(text),
+        Ok(t) if t.class != class || !t.constructed || t.tagnum != tagnum => Some(ASN1_BAD_ID),
+        Ok(_) => None,
+    }
+}
+
+pub(crate) fn bad_pvno(e: &krb5_asn1::Error) -> Option<(i32, String)> {
+    let text = "Requested protocol version not supported";
+    e.to_string()
+        .contains("KRB5KDC_ERR_BAD_PVNO")
+        .then(|| (err::BAD_PVNO, text.to_owned()))
 }
 
 fn protocol_key(k: &EncryptionKey) -> Result<ProtocolKey, (i32, String)> {
@@ -259,16 +270,8 @@ fn armor_rd_req(
     if ap_raw.first().is_none_or(|b| b & !0x20 != 0x4e) {
         return Err((err::MSG_TYPE, "Invalid message type".to_owned()));
     }
-    let ap: krb5_types::ApReq = decode(ap_raw).map_err(|e| {
-        if e.to_string().contains("KRB5KDC_ERR_BAD_PVNO") {
-            (
-                err::BAD_PVNO,
-                "Requested protocol version not supported".to_owned(),
-            )
-        } else {
-            asn1_refusal(ap_raw, APPLICATION, 14, &e)
-        }
-    })?;
+    let ap: krb5_types::ApReq = decode(ap_raw)
+        .map_err(|e| bad_pvno(&e).unwrap_or_else(|| asn1_refusal(ap_raw, APPLICATION, 14, &e)))?;
     let ticket = &ap.ticket;
     let not_us = || (err::NOT_US, "The ticket isn't for us".to_owned());
     // A foreign-realm ticket is refused before any lookup (stricter than MIT).

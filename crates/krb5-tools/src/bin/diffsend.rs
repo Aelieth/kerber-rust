@@ -5463,7 +5463,7 @@ fn run() -> Result<(), String> {
     ra_cases(&cfg, realm, &user, &host)?;
     fa_cases(&cfg, realm, &user, &host)?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":209}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":212}}"#);
     Ok(())
 }
 
@@ -5995,6 +5995,54 @@ fn ra_cases(
         "tgs-authenticator-malformed-subkey",
         &req,
         err::GENERIC,
+    )?;
+    let pa_tgs_edit = |nonce: u32, f: &dyn Fn(&mut ApReq) -> Result<(), String>| {
+        let mut req = tgs_for(nonce, &sess)?;
+        let pa_tgs = req
+            .0
+            .padata
+            .as_mut()
+            .and_then(|p| p.iter_mut().find(|x| x.padata_type == pa::TGS_REQ))
+            .ok_or("no PA-TGS-REQ")?;
+        let mut ap: ApReq = decode(pa_tgs.padata_value.as_ref()).map_err(|e| e.to_string())?;
+        f(&mut ap)?;
+        pa_tgs.padata_value = encode(&ap).map_err(|e| e.to_string())?.into();
+        encode(&req).map_err(|e| e.to_string())
+    };
+    let mut req = tgs_for(0x1000_020c, &sess)?;
+    if let Some(p) = req
+        .0
+        .padata
+        .as_mut()
+        .and_then(|p| p.iter_mut().find(|x| x.padata_type == pa::TGS_REQ))
+    {
+        p.padata_value = vec![0x04, 0x00].into();
+    }
+    expect_error(
+        cfg,
+        "tgs-ap-req-junk",
+        &encode(&req).map_err(|e| e.to_string())?,
+        err::GENERIC,
+    )?;
+    let ticket_usage = KeyUsage::new(ku::TICKET).map_err(|e| e.to_string())?;
+    let junk = encrypt(tkt_key, ticket_usage, &[0x04, 0x00]).map_err(|e| e.to_string())?;
+    expect_error(
+        cfg,
+        "tgs-ticket-junk",
+        &pa_tgs_edit(0x1000_020d, &|ap| {
+            ap.ticket.enc_part.cipher = junk.clone().into();
+            Ok(())
+        })?,
+        err::GENERIC,
+    )?;
+    expect_error(
+        cfg,
+        "tgs-ap-req-pvno",
+        &pa_tgs_edit(0x1000_020e, &|ap| {
+            ap.pvno = 4;
+            Ok(())
+        })?,
+        err::BAD_PVNO,
     )?;
 
     // It ends with a field no version of Authenticator has, [9].

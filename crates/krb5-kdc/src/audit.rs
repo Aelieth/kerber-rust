@@ -1175,6 +1175,10 @@ fn header_enc_part(store: &dyn PrincipalRead, req: &TgsReq) -> Option<EncTicketP
         .iter()
         .find(|p| p.padata_type == pa::TGS_REQ)?;
     let ap: krb5_types::ApReq = decode(pa.padata_value.as_ref()).ok()?;
+    // MIT: `kdc_process_tgs_req` (kdc/kdc_util.c:179-184)
+    if ap.ap_options.use_session_key() || ap.ap_options.wants_mutual() {
+        return None;
+    }
     let etype = EncryptionType::known(ap.ticket.enc_part.etype).ok()?;
     crate::issue::decrypt_presented_tgt(store, &ap, etype)
         .ok()

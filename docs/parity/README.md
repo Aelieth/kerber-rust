@@ -94,6 +94,7 @@ is `proposed`. The listed live `diffsend` cases are `garbage-pdu`,
 `tgs-fast-hide-client`, `pkinit-stale-freshness`, `tgs-referral-no-dot`,
 `tgs-alternate-tgs-hierarchical`, `tgs-renew-postdated-from`, `as-req-malformed-addresses`,
 `as-req-trailing-body-field`, `tgs-req-nonce-int32-min`, `tgs-authenticator-malformed-subkey`,
+`tgs-ap-req-junk`, `tgs-ticket-junk`, `tgs-ap-req-pvno`,
 `tgs-authenticator-trailing-field`, `tgs-authenticator-crealm-octets`, `as-spake-unknown-choice`,
 `tgs-authenticator-cusec-out-of-range`, `as-enc-timestamp-pausec-out-of-range`,
 `tgs-authenticator-etype-mismatch`, `as-fast-armored-data-etype-mismatch`,
@@ -131,8 +132,8 @@ wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
 Counts:
-**606** = A1 132 + A2 94 + A3 122 + A4 69 + A5 35 + B1 154.
-exact 474 · stricter-documented 24 · deviation 39 ·
+**607** = A1 133 + A2 94 + A3 122 + A4 69 + A5 35 + B1 154.
+exact 475 · stricter-documented 24 · deviation 39 ·
 absent 3 · deferred 66.
 
 When the ledger was split into these files, the one-file A4 (153 rows,

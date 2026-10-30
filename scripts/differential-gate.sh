@@ -331,12 +331,31 @@ for want in \
     "$FF_AS, More than 256 authdata matched a query while handling ap-request armor"; do
     grep -qxF "$want" <<<"$FF_MIT" || die "no FIND_FAST line: $want"
 done
+# MIT `gather_tgs_req_info` (`kdc/do_tgs_req.c:612-624`): every PROCESS_TGS line, names and
+# words as MIT's, one for one and in order; no client until the header ticket is decrypted.
+process_tgs_lines() {
+    grep -v '^{' "$1" |
+        sed -n -E 's/^.*: (TGS_REQ) \(.*\) 127\.0\.0\.1: (PROCESS_TGS: .*)$/\1 \2/p'
+}
+PT_MIT="$(process_tgs_lines "$OUT/mit-kdc.log")"
+PT_RUST="$(process_tgs_lines "$OUT/rust-kdc.log")"
+[ "$PT_RUST" = "$PT_MIT" ] || {
+    diff <(echo "$PT_MIT") <(echo "$PT_RUST") >&2 || true
+    die "the Rust KDC's PROCESS_TGS lines are not MIT's"
+}
+PT='TGS_REQ PROCESS_TGS: authtime 0,  <unknown client> for host/testhost.kerber.test@KERBER.TEST'
+for want in \
+    "$PT, KDC policy rejects request" \
+    "$PT, ASN.1 identifier doesn't match expected value" \
+    "$PT, Requested protocol version not supported"; do
+    grep -qxF "$want" <<<"$PT_MIT" || die "no PROCESS_TGS line: $want"
+done
 # W1-Z Z3.3: the ratchet is checked against the distinct cases diffsend
 # actually emitted, not the literal its summary line claims (a stale
 # "cases":N in diffsend.rs would otherwise pass). History: A'-3 R32 102 ·
 # A'-4 item 16 105 · item 17 106 · item 18 107 · W1-B F4 109 · W1-Z Z1.3 110 · Z6.2 111 ·
-# as-locked-out 112 · RA 123 · a1-tgs 128 · replay 129 · nopost 130 · s4u-client 132 · fast-cksum 133 · explicit-armor 134 · armor-no-tgs-subkey 135 · armor-no-subkey 136 · reserved-option 137 · service-expired 138 · service-locked 139 · B17 cms 149 · B17b structure 151 · FAST armor 178 · FAST checksums 188 · transit hop 189 · local transit 190 · FAST replies 192 · FAST flips 196 · armor authdata 209.
-DIFFSEND_RATCHET=209
+# as-locked-out 112 · RA 123 · a1-tgs 128 · replay 129 · nopost 130 · s4u-client 132 · fast-cksum 133 · explicit-armor 134 · armor-no-tgs-subkey 135 · armor-no-subkey 136 · reserved-option 137 · service-expired 138 · service-locked 139 · B17 cms 149 · B17b structure 151 · FAST armor 178 · FAST checksums 188 · transit hop 189 · local transit 190 · FAST replies 192 · FAST flips 196 · armor authdata 209 · TGS decode 212.
+DIFFSEND_RATCHET=212
 CASES_SEEN="$(grep -o '"case":"[^"]*","outcome":"ok"' <<<"$DIFF" | sort -u | wc -l | tr -d ' ')"
 [ "$CASES_SEEN" = "$DIFFSEND_RATCHET" ] || die "diffsend emitted $CASES_SEEN distinct ok cases; the ratchet is $DIFFSEND_RATCHET"
 grep -q "\"outcome\":\"ok\",\"cases\":$DIFFSEND_RATCHET}" <<<"$DIFF" || die "diffsend summary line does not claim $DIFFSEND_RATCHET cases"
@@ -351,6 +370,9 @@ grep -q '"case":"as-req-malformed-addresses","outcome":"ok","rust_tag":"drop","m
 grep -q '"case":"as-req-trailing-body-field","outcome":"ok","rust_tag":"0x6b","mit_tag":"0x6b"' <<<"$DIFF" || die "as-req-trailing-body-field not an AS-REP on both legs"
 grep -q '"case":"tgs-req-nonce-int32-min","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","nonce":"80000000"' <<<"$DIFF" || die "tgs-req-nonce-int32-min reply nonce not INT32_MIN on both legs"
 grep -q '"case":"tgs-authenticator-malformed-subkey","outcome":"ok","error_code":60,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-authenticator-malformed-subkey not code 60 e_text PROCESS_TGS on both legs"
+grep -q '"case":"tgs-ap-req-junk","outcome":"ok","error_code":60,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-ap-req-junk not code 60 e_text PROCESS_TGS on both legs"
+grep -q '"case":"tgs-ticket-junk","outcome":"ok","error_code":60,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-ticket-junk not code 60 e_text PROCESS_TGS on both legs"
+grep -q '"case":"tgs-ap-req-pvno","outcome":"ok","error_code":3,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-ap-req-pvno not code 3 e_text PROCESS_TGS on both legs"
 grep -q '"case":"tgs-authenticator-trailing-field","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d"' <<<"$DIFF" || die "tgs-authenticator-trailing-field not a TGS-REP on both legs"
 grep -q '"case":"tgs-authenticator-crealm-octets","outcome":"ok","error_code":36,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-authenticator-crealm-octets not code 36 e_text PROCESS_TGS on both legs"
 grep -q '"case":"as-spake-unknown-choice","outcome":"ok","error_code":24,"e_text":"PREAUTH_FAILED"' <<<"$DIFF" || die "as-spake-unknown-choice not code 24 e_text PREAUTH_FAILED on both legs"

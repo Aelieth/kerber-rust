@@ -158,3 +158,50 @@ pub(crate) fn pa_spake_failure_text(der: &[u8]) -> &'static str {
     }
     ASN1_MISSING_FIELD
 }
+
+// MIT: `k5_asn1_decode_generaltime` (lib/krb5/asn.1/asn1_encode.c:242-260)
+pub(crate) fn body_failure_text(e: &str) -> &'static str {
+    if let Some(n) = e
+        .split("KerberosTime is not YYYYMMDDhhmmssZ (")
+        .nth(1)
+        .and_then(|rest| rest.split(" octets)").next())
+        .and_then(|n| n.parse::<usize>().ok())
+    {
+        return if n == 15 {
+            ASN1_BAD_FORMAT
+        } else {
+            ASN1_BAD_LENGTH
+        };
+    }
+    if let Some(time) = e
+        .split("Invalid date string: ")
+        .nth(1)
+        .and_then(|t| t.split(" (Codec").next())
+    {
+        return if time.len() == 15 {
+            ASN1_BAD_FORMAT
+        } else {
+            ASN1_BAD_LENGTH
+        };
+    }
+    if e.contains("Expected Tag { class: Context")
+        || e.contains("Missing field")
+        || e.contains("Need more data")
+        || e.contains("Unexpected EOF")
+    {
+        return ASN1_MISSING_FIELD;
+    }
+    if e.contains("Expected Tag {") {
+        return ASN1_BAD_ID;
+    }
+    if e.contains(" bytes, actual length was ") {
+        return ASN1_BAD_LENGTH;
+    }
+    if e.contains("larger than expected") {
+        return ASN1_OVERFLOW;
+    }
+    if e.contains("Indefinite length") {
+        return ASN1_INDEF;
+    }
+    ASN1_PARSE_ERROR
+}

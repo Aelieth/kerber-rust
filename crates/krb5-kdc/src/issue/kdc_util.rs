@@ -12,10 +12,11 @@ use krb5_types::{
 
 use super::as_req::is_anonymous_principal;
 use crate::ad::find_authdata;
+use crate::asn1_text::{APPLICATION, body_failure_text};
 use crate::der::take_der;
 use crate::error::Error;
 use crate::kdb::{PrincipalRead, lookup_principal_id};
-use crate::preauth::{proto, proto_d};
+use crate::preauth::{asn1_outer_text, bad_pvno, proto, proto_d};
 use crate::status;
 use crate::store::{
     KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_FORWARDABLE, KDB_DISALLOW_POSTDATED, KDB_DISALLOW_PROXIABLE,
@@ -33,6 +34,16 @@ pub(super) struct HeaderTgt {
     pub(super) header_server: Principal,
 }
 
+fn process_tgs_refusal((code, text): (i32, String)) -> Error {
+    proto_d(code, status::PROCESS_TGS, text)
+}
+
+fn tgs_decode_refusal(der: &[u8], tagnum: u32, e: &krb5_asn1::Error) -> Error {
+    let text = asn1_outer_text(der, APPLICATION, tagnum)
+        .unwrap_or_else(|| body_failure_text(&e.to_string()));
+    proto_d(err::GENERIC, status::PROCESS_TGS, text)
+}
+
 // MIT: `kdc_process_tgs_req` (kdc_util.c:217-229)
 // MIT: `kdc_process_tgs_req` (kdc_util.c:189-191)
 /// No replay cache, so a replayed authenticator is accepted again.
@@ -42,7 +53,10 @@ pub(super) fn process_tgs_header(
     body_der: &[u8],
     sender: Option<&HostAddress>,
 ) -> Result<HeaderTgt, Error> {
-    let ap: krb5_types::ApReq = decode(ap_raw)?;
+    let ap: krb5_types::ApReq = decode(ap_raw).map_err(|e| match bad_pvno(&e) {
+        Some(refusal) => process_tgs_refusal(refusal),
+        None => tgs_decode_refusal(ap_raw, 14, &e),
+    })?;
     if ap.ap_options.use_session_key() || ap.ap_options.wants_mutual() {
         return Err(proto(err::POLICY, status::PROCESS_TGS));
     }
@@ -60,7 +74,8 @@ pub(super) fn process_tgs_header(
         ap.authenticator.etype,
         ap.authenticator.cipher.as_ref(),
     )?;
-    let authenticator: krb5_types::Authenticator = decode(&auth_plain)?;
+    let authenticator: krb5_types::Authenticator =
+        decode(&auth_plain).map_err(|e| tgs_decode_refusal(&auth_plain, 2, &e))?;
     // MIT: `rd_req_decoded_opt` (lib/krb5/krb/rd_req_dec.c:631-631)
     let auth_realm = utf8_realm(&authenticator.crealm)?;
     let tkt_realm = utf8_realm(&enc_tkt.crealm)?;
@@ -74,8 +89,7 @@ pub(super) fn process_tgs_header(
         return Err(proto(err::BADADDR, status::PROCESS_TGS));
     }
     // MIT: `rd_req_decoded_opt` (lib/krb5/krb/rd_req_dec.c:606-610)
-    crate::preauth::check_transited(store, &enc_tkt, &header_realm)
-        .map_err(|(code, text)| proto_d(code, status::PROCESS_TGS, text))?;
+    crate::preauth::check_transited(store, &enc_tkt, &header_realm).map_err(process_tgs_refusal)?;
     // MIT: `rd_req_decoded_opt` (rd_req_dec.c:627-627)
     check_header_times_rd_req(store, &enc_tkt)?;
     // MIT: `rd_req_decoded_opt` (rd_req_dec.c:652-723)
@@ -92,7 +106,7 @@ pub(super) fn process_tgs_header(
         authenticator.authorization_data.as_deref(),
         pa::AD_FX_ARMOR,
     )
-    .map_err(|(code, text)| proto_d(code, status::PROCESS_TGS, text))?;
+    .map_err(process_tgs_refusal)?;
     if !fx.is_empty() {
         return Err(proto_d(
             err::POLICY,
@@ -214,7 +228,7 @@ pub(crate) fn decrypt_presented_tgt(
                     match decrypt_enc_data(&key, usage, ap.ticket.enc_part.etype, cipher) {
                         Ok(plain) => match decode::<EncTicketPart>(&plain) {
                             Ok(part) => return Ok((part, key, plain, p.clone())),
-                            Err(_) => proto(err::BAD_INTEGRITY, status::PROCESS_TGS),
+                            Err(e) => tgs_decode_refusal(&plain, 3, &e),
                         },
                         // MIT: `errcode_to_protocol` (kdc_util.c:691-697)
                         // A des3 key MIT refuses is 60, with the library message.
