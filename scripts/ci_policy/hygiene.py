@@ -795,8 +795,15 @@ def check_mit_cites(root: pathlib.Path | None = None) -> None:
         )
 
 
+# The test share in lines, as printed, may not rise; the commit that cuts tests lowers it.
+_TEST_SHARE_CAP = 31.037
+
+
 def check_form_ratios(root: pathlib.Path | None = None) -> None:
-    """Print comment characters over code characters, and fail a crate above 3.000%."""
+    """Print comment characters over code characters, and fail a crate above 3.000%.
+
+    Print test lines over code and comment lines, and fail it above `_TEST_SHARE_CAP`.
+    """
     base = ROOT if root is None else root
     tot, per, _bad = _char_totals(base)
 
@@ -818,5 +825,14 @@ def check_form_ratios(root: pathlib.Path | None = None) -> None:
         )
         if row["comment"] * 100 > row["code"] * 3:
             over.append(f"{name} {share(row['comment'], row['code'])}")
+    lines, _ = _ratio_totals(base)
+    test = lines["test_code"] + lines["test_comment"]
+    test_share = share(test, lines["code"] + lines["comment"])
+    print(
+        f"form: test share (lines) {test_share}, test lines {test} of "
+        f"{lines['code'] + lines['comment']}, cap {_TEST_SHARE_CAP:.3f}%"
+    )
     if over:
         _die("comment share above 3.000%: " + ", ".join(over))
+    if float(test_share[:-1]) > _TEST_SHARE_CAP:
+        _die(f"test share (lines) above {_TEST_SHARE_CAP:.3f}%: {test_share}")
