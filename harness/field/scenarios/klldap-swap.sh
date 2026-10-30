@@ -141,13 +141,16 @@ image() {
     vrun "image-$1" rc "cd $(q "$SRC") && export BUILDX_BUILDER=default && $DK build --progress=plain --file $(q "${2:-Dockerfile}") --build-arg VERSION=$VER-test --build-arg CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS='-C target-cpu=native' --build-arg CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS='-C target-cpu=native' ${3:-} --tag $N:$1 . 2>&1"
     check "image.$1.app" '  /app/kerberos_manager$' run "$VM" "docker run --rm --network none --entrypoint sha256sum $N:$1 /app/lldap /app/kerberos_manager"
 }
+# Alma's mirrorlist can return gzip for repomd.xml, which microdnf will not parse. Use the repo file's own baseurl.
+ALMA_SED='sed -i -e s/^mirrorlist=/#mirrorlist=/ -e s/^#\ baseurl=/baseurl=/ /etc/yum.repos.d/almalinux-baseos.repo /etc/yum.repos.d/almalinux-appstream.repo /etc/yum.repos.d/almalinux-extras.repo'
+ALMA_PIN="$ALMA_SED && "
 # ffienv <env> [swap]: the lane's "host" image $N:ffi-<env>[-swap] (F3-MIT's harness/ffi-<env>/Dockerfile) on the VM.
 ffienv() {
     local s=${2:+-$2} f
     f=$VT/ffi-$1$s.Dockerfile
     case $1$s in
         f43) run "$VM" "printf 'FROM registry.fedoraproject.org/fedora:43\nRUN dnf install -y --setopt=install_weak_deps=False krb5-server krb5-workstation krb5-devel krb5-libs clang pkgconf-pkg-config gcc make python3 rustup procps-ng iproute && dnf clean all\n' > $(q "$f")" ;;
-        alma10) run "$VM" "printf 'FROM quay.io/almalinuxorg/10-minimal\nRUN microdnf install -y --assumeyes krb5-server krb5-workstation krb5-devel krb5-libs clang llvm gcc make pkgconf python3 procps-ng shadow-utils openssl-devel tar gzip findutils which && microdnf clean all\n' > $(q "$f")" ;;
+        alma10) run "$VM" "printf 'FROM quay.io/almalinuxorg/10-minimal\nRUN ${ALMA_PIN}microdnf install -y --assumeyes krb5-server krb5-workstation krb5-devel krb5-libs clang llvm gcc make pkgconf python3 procps-ng shadow-utils openssl-devel tar gzip findutils which && microdnf clean all\n' > $(q "$f")" ;;
         f43-swap) run "$VM" "printf 'FROM %s\nRUN rpm -e krb5-server && ! rpm -q krb5-server\nCOPY --from=kerber-rust usr/sbin/ /usr/bin/\nRUN chmod 0555 /usr/bin\n' $N:ffi-f43 > $(q "$f")" ;;
         alma10-swap) run "$VM" "printf 'FROM %s\nRUN rpm -e krb5-server && ! rpm -q krb5-server\nCOPY --from=kerber-rust / /\nRUN chmod 0555 /usr/sbin /usr/lib\n' $N:ffi-alma10 > $(q "$f")" ;;
     esac
@@ -246,13 +249,22 @@ section "2. the KLLDAP source: git archive of the pin to the VM (the checkout is
 check src.archive '^files: [0-9]+, as the commit lists$' host "set -o pipefail; b=\$(git -C $(q "$REPO") --no-optional-locks ls-tree -r $(q "$PIN") | wc -l); (umask 022 && git -C $(q "$REPO") --no-optional-locks archive $(q "$PIN")) | $LABQ ssh $VM -- \"rm -rf $(q "$SRC") && mkdir -p $(q "$SRC") && tar -x -C $(q "$SRC") && a=\\\$(find $(q "$SRC") ! -type d | wc -l); if [ \\\"\\\$a\\\" = \$b ]; then echo \\\"files: \\\$a, as the commit lists\\\"; else echo \\\"files: \\\$a, the commit lists \$b\\\"; exit 1; fi\""
 run "$VM" "sed -n 's/^version = \"\(.*\)\"/\1/p' $(q "$SRC/Cargo.toml") 2>/dev/null | head -n 1"
 VER=$(grep -m1 . "$LAST_OUT" 2>/dev/null)
+check src.alma-pin '^pinned the Dockerfile microdnf$' run "$VM" "python3 -c 'import pathlib,sys
+p=pathlib.Path(sys.argv[1]); sed=sys.argv[2]
+lines=p.read_text().splitlines(True); out=[]; done=False
+for line in lines:
+    if not done and line.startswith(\"RUN microdnf \"):
+        out.append(\"RUN \"+sed+\"\\n\"); done=True
+    out.append(line)
+if not done: sys.exit(\"no RUN microdnf line\")
+p.write_text(\"\".join(out)); print(\"pinned the Dockerfile microdnf\")' $(q "$SRC/Dockerfile") $(q "$ALMA_SED")"
 
 if [ "$LEG" = rust ]; then
     section "3. the ref built in an AlmaLinux 10 container on the VM (KLLDAP's base) as docs/install.md says, then make install DESTDIR"
     KR=$VT/$CO STAGE=$VT/stage BH=$VT/home
     check kr.tree '^files: [1-9][0-9]*$' host "set -o pipefail; (umask 022 && cat $(q "$FIELD_TREE_TAR")) | $LABQ ssh $VM -- \"rm -rf $(q "$KR") && tar -x -C $(q "$VT") && echo \\\"files: \\\$(find $(q "$KR") -type f | wc -l)\\\"\""
     tar -xOf "$FIELD_TREE_TAR" "$CO/docs/install.md" > "$STATE/install.md"
-    run "$VM" "printf 'FROM quay.io/almalinuxorg/10-minimal\nRUN microdnf install -y --assumeyes gcc make lld binutils && microdnf clean all\n' > $(q "$VT/buildenv.Dockerfile")"
+    run "$VM" "printf 'FROM quay.io/almalinuxorg/10-minimal\nRUN ${ALMA_PIN}microdnf install -y --assumeyes gcc make lld binutils && microdnf clean all\n' > $(q "$VT/buildenv.Dockerfile")"
     vrun buildenv rc "export BUILDX_BUILDER=default && $DK build --progress=plain --tag $N:buildenv - < $(q "$VT/buildenv.Dockerfile") 2>&1"
     BRUN="$DK run --rm --name $N-build --user \$(id -u):\$(id -g) --cpus $CPUS -e HOME=$(q "$BH") -v $(q "$VT"):$(q "$VT") -w $(q "$KR") $N:buildenv nice -n 10"
     note "the doc's Prerequisites on AlmaLinux: gcc make lld from microdnf (the build env image); rustup from its installer with the doc's flags, as AlmaLinux has no rustup package"
