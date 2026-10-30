@@ -3889,45 +3889,52 @@ fn run() -> Result<(), String> {
         err::CLIENT_REVOKED,
     )?;
 
-    let mut fast_bad = tgs_req(
-        mint_tgt(
-            tkt_key,
-            tkt_kvno,
-            &user,
-            realm,
-            &krbtgt_sname,
+    let tgs_fast = |nonce: u32,
+                    edit: &dyn Fn(&mut krb5_types::fast::KrbFastArmoredReq)|
+     -> Result<Vec<u8>, String> {
+        let mut req = tgs_req(
+            mint_tgt(
+                tkt_key,
+                tkt_kvno,
+                &user,
+                realm,
+                &krbtgt_sname,
+                &sess,
+                window10.clone(),
+                TicketFlags::initial_preauth(),
+            )?,
             &sess,
-            window10.clone(),
-            TicketFlags::initial_preauth(),
-        )?,
-        &sess,
-        realm,
-        &user,
-        host.clone(),
-        realm,
-        0x1000_00a9,
-    )
-    .map_err(|e| e.to_string())?;
-    let fast_inner = fast_bad.0.req_body.clone();
-    wrap_tgs_fast_hide(&mut fast_bad, &sess, fast_inner)?;
-    let fx = fast_bad
-        .0
-        .padata
-        .as_mut()
-        .and_then(|p| p.iter_mut().find(|x| x.padata_type == pa::FX_FAST))
-        .ok_or_else(|| "no PA-FX-FAST".to_string())?;
-    let krb5_types::fast::PaFxFast::ArmoredData(mut armored) =
-        decode::<krb5_types::fast::PaFxFast>(fx.padata_value.as_ref())
-            .map_err(|e| e.to_string())?;
-    armored.req_checksum.cksumtype = 7;
-    armored.req_checksum.checksum = vec![0xff; 16].into();
-    fx.padata_value = encode(&krb5_types::fast::PaFxFast::ArmoredData(armored))
-        .map_err(|e| e.to_string())?
-        .into();
+            realm,
+            &user,
+            host.clone(),
+            realm,
+            nonce,
+        )
+        .map_err(|e| e.to_string())?;
+        let inner = req.0.req_body.clone();
+        wrap_tgs_fast_hide(&mut req, &sess, inner)?;
+        fa_edit(&mut req.0, edit)?;
+        encode(&req).map_err(|e| e.to_string())
+    };
     expect_error(
         &cfg,
         "tgs-fast-unkeyed-bad-checksum",
-        &encode(&fast_bad).map_err(|e| e.to_string())?,
+        &tgs_fast(0x1000_00a9, &|w| {
+            w.req_checksum.cksumtype = 7;
+            w.req_checksum.checksum = vec![0xff; 16].into();
+        })?,
+        err::MODIFIED,
+    )?;
+    expect_error(
+        &cfg,
+        "tgs-fast-req-flip",
+        &tgs_fast(0x1000_00b0, &|w| flip_first(&mut w.enc_fast_req.cipher))?,
+        err::BAD_INTEGRITY,
+    )?;
+    expect_error(
+        &cfg,
+        "tgs-fast-cksum-flip",
+        &tgs_fast(0x1000_00b1, &|w| flip_first(&mut w.req_checksum.checksum))?,
         err::MODIFIED,
     )?;
 
@@ -3959,21 +3966,12 @@ fn run() -> Result<(), String> {
         .and_then(|p| p.iter().find(|x| x.padata_type == pa::TGS_REQ))
         .map(|p| p.padata_value.clone())
         .ok_or_else(|| "no PA-TGS-REQ".to_string())?;
-    let fx = explicit
-        .0
-        .padata
-        .as_mut()
-        .and_then(|p| p.iter_mut().find(|x| x.padata_type == pa::FX_FAST))
-        .ok_or_else(|| "no PA-FX-FAST".to_string())?;
-    let krb5_types::fast::PaFxFast::ArmoredData(mut armored) =
-        decode(fx.padata_value.as_ref()).map_err(|e| e.to_string())?;
-    armored.armor = Some(krb5_types::fast::KrbFastArmor {
-        armor_type: krb5_types::fast::ARMOR_AP_REQUEST,
-        armor_value: pa_tgs,
-    });
-    fx.padata_value = encode(&krb5_types::fast::PaFxFast::ArmoredData(armored))
-        .map_err(|e| e.to_string())?
-        .into();
+    fa_edit(&mut explicit.0, |w| {
+        w.armor = Some(krb5_types::fast::KrbFastArmor {
+            armor_type: krb5_types::fast::ARMOR_AP_REQUEST,
+            armor_value: pa_tgs,
+        });
+    })?;
     expect_error_no_edata(
         &cfg,
         "tgs-fast-explicit-armor",
@@ -5426,7 +5424,7 @@ fn run() -> Result<(), String> {
     ra_cases(&cfg, realm, &user, &host)?;
     fa_cases(&cfg, realm, &user, &host)?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":192}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":196}}"#);
     Ok(())
 }
 
@@ -6064,7 +6062,6 @@ fn ra_cases(
         err::GENERIC,
     )?;
 
-    // enc-fast-req says aes128 for an aes256 armor key.
     // MIT: `kdc_find_fast` (kdc/fast_util.c:120-247)
     let armor_sess = random_session(EncryptionType::Aes256CtsHmacSha196)?;
     let armor_sub = random_session(EncryptionType::Aes256CtsHmacSha196)?;
@@ -6089,18 +6086,9 @@ fn ra_cases(
     let akey = armor_key(&armor_sess, Some(&armor_sub)).map_err(|e| e.to_string())?;
     let mut fast_req = as_req(user.clone(), realm, 0x1000_020b, None).map_err(|e| e.to_string())?;
     attach_fast(&mut fast_req, &armor_ap, &akey, Vec::new()).map_err(|e| e.to_string())?;
-    let fx = fast_req
-        .0
-        .padata
-        .as_mut()
-        .and_then(|p| p.iter_mut().find(|x| x.padata_type == pa::FX_FAST))
-        .ok_or("no PA-FX-FAST")?;
-    let krb5_types::fast::PaFxFast::ArmoredData(mut armored) =
-        decode(fx.padata_value.as_ref()).map_err(|e| e.to_string())?;
-    armored.enc_fast_req.etype = 17;
-    fx.padata_value = encode(&krb5_types::fast::PaFxFast::ArmoredData(armored))
-        .map_err(|e| e.to_string())?
-        .into();
+    fa_edit(&mut fast_req.0, |w| {
+        w.enc_fast_req.etype = EncryptionType::Aes128CtsHmacSha196.to_iana();
+    })?;
     expect_error(
         cfg,
         "as-fast-armored-data-etype-mismatch",
@@ -6111,11 +6099,10 @@ fn ra_cases(
 }
 
 fn fa_edit(
-    req: &mut krb5_types::AsReq,
+    req: &mut krb5_types::KdcReq,
     edit: impl FnOnce(&mut krb5_types::fast::KrbFastArmoredReq),
 ) -> Result<(), String> {
     let fx = req
-        .0
         .padata
         .as_mut()
         .and_then(|p| p.iter_mut().find(|x| x.padata_type == pa::FX_FAST))
@@ -6127,6 +6114,12 @@ fn fa_edit(
         .map_err(|e| e.to_string())?
         .into();
     Ok(())
+}
+
+fn flip_first(b: &mut krb5_types::OctetString) {
+    let mut v = b.to_vec();
+    v[0] ^= 0xff;
+    *b = v.into();
 }
 
 // MIT: `armor_ap_request` (kdc/fast_util.c:35-90)
@@ -6185,7 +6178,7 @@ fn fa_cases(
         let mut req = as_req(client.clone(), realm, nonce, None).map_err(|e| e.to_string())?;
         attach_fast(&mut req, armor, &akey, Vec::new()).map_err(|e| e.to_string())?;
         if let Some(edit) = edit {
-            fa_edit(&mut req, edit)?;
+            fa_edit(&mut req.0, edit)?;
         }
         expect_error(cfg, case, &encode(&req).map_err(|e| e.to_string())?, code)
     };
@@ -6475,6 +6468,15 @@ fn fa_cases(
     )?;
     expect_fa(
         cfg,
+        "fa-fast-req-flip",
+        0x1000_032a,
+        user,
+        &good,
+        Some(&|w| flip_first(&mut w.enc_fast_req.cipher)),
+        err::BAD_INTEGRITY,
+    )?;
+    expect_fa(
+        cfg,
         "fa-fast-req-short",
         0x1000_0313,
         user,
@@ -6499,6 +6501,15 @@ fn fa_cases(
         &good,
         Some(&|w| w.req_checksum.checksum = vec![0u8; 4].into()),
         err::GENERIC,
+    )?;
+    expect_fa(
+        cfg,
+        "fa-fast-cksum-flip",
+        0x1000_032b,
+        user,
+        &good,
+        Some(&|w| flip_first(&mut w.req_checksum.checksum)),
+        err::MODIFIED,
     )?;
     // Bare, without PA-FX-FAST's CHOICE tag.
     let mut req = as_req(user.clone(), realm, 0x1000_0319, None).map_err(|e| e.to_string())?;
@@ -6575,7 +6586,7 @@ fn fa_cases(
     let akey128 = armor_key(&sess128, Some(&sub128)).map_err(|e| e.to_string())?;
     let mut req = as_req(user.clone(), realm, 0x1000_031f, None).map_err(|e| e.to_string())?;
     attach_fast(&mut req, &ap128, &akey128, Vec::new()).map_err(|e| e.to_string())?;
-    fa_edit(&mut req, |w| {
+    fa_edit(&mut req.0, |w| {
         w.req_checksum.cksumtype = 19;
         w.req_checksum.checksum = vec![0xff; 16].into();
     })?;
@@ -6608,7 +6619,7 @@ fn fa_cases(
     let md5 =
         krb5_crypto::unkeyed_checksum(7, &encode(&req.0.req_body).map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?;
-    fa_edit(&mut req, |w| {
+    fa_edit(&mut req.0, |w| {
         w.req_checksum.cksumtype = 7;
         w.req_checksum.checksum = md5.into();
     })?;
@@ -6620,7 +6631,7 @@ fn fa_cases(
     )?;
     let mut req = as_req(user.clone(), realm, 0x1000_0325, None).map_err(|e| e.to_string())?;
     attach_fast(&mut req, &good, &akey, Vec::new()).map_err(|e| e.to_string())?;
-    fa_edit(&mut req, |w| {
+    fa_edit(&mut req.0, |w| {
         if let Some(a) = w.armor.as_mut() {
             a.armor_type = 99;
         }

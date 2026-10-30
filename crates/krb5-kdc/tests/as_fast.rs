@@ -530,21 +530,6 @@ fn fast_as_armor_without_subkey_is_policy() {
 }
 
 #[test]
-fn fast_as_corrupt_enc_fast_req_is_bad_integrity_find_fast() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let (mut req, _) = fast_as_prepared(&store, 916);
-    map_fx_fast_as(&mut req, |a| {
-        let mut c = a.enc_fast_req.cipher.to_vec();
-        c[0] ^= 0xff;
-        a.enc_fast_req.cipher = c.into();
-    });
-    let err = krb5_kdc::issue_as(&store, &req).expect_err("corrupt enc_fast_req");
-    assert_find_fast(err, err::BAD_INTEGRITY, "Decrypt integrity check failed");
-    let bytes = krb5_kdc::handle_request(&store, &encode(&req).expect("der")).expect("reply");
-    assert_krb_error(&bytes, err::BAD_INTEGRITY, "FIND_FAST");
-}
-
-#[test]
 fn fast_as_corrupt_enc_and_bad_checksum_is_bad_integrity() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let (mut req, _) = fast_as_prepared(&store, 950);
@@ -589,23 +574,6 @@ fn fast_as_malformed_krbfastreq_is_generic_find_fast() {
         }
         other => panic!("expected 60 FIND_FAST ASN.1, got {other:?}"),
     }
-}
-
-#[test]
-fn fast_as_bad_req_checksum_is_modified() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let (mut req, _) = fast_as_prepared(&store, 890);
-    map_fx_fast_as(&mut req, |a| {
-        let mut ck = a.req_checksum.checksum.to_vec();
-        ck[0] ^= 0xff;
-        a.req_checksum.checksum = ck.into();
-    });
-    let err = krb5_kdc::issue_as(&store, &req).expect_err("bad FAST checksum");
-    assert_find_fast(
-        err,
-        err::MODIFIED,
-        "FAST req_checksum invalid; request modified",
-    );
 }
 
 #[test]

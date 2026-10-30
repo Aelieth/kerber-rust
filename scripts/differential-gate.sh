@@ -332,8 +332,8 @@ done
 # actually emitted, not the literal its summary line claims (a stale
 # "cases":N in diffsend.rs would otherwise pass). History: A'-3 R32 102 ·
 # A'-4 item 16 105 · item 17 106 · item 18 107 · W1-B F4 109 · W1-Z Z1.3 110 · Z6.2 111 ·
-# as-locked-out 112 · RA 123 · a1-tgs 128 · replay 129 · nopost 130 · s4u-client 132 · fast-cksum 133 · explicit-armor 134 · armor-no-tgs-subkey 135 · armor-no-subkey 136 · reserved-option 137 · service-expired 138 · service-locked 139 · B17 cms 149 · B17b structure 151 · FAST armor 178 · FAST checksums 188 · transit hop 189 · local transit 190 · FAST replies 192.
-DIFFSEND_RATCHET=192
+# as-locked-out 112 · RA 123 · a1-tgs 128 · replay 129 · nopost 130 · s4u-client 132 · fast-cksum 133 · explicit-armor 134 · armor-no-tgs-subkey 135 · armor-no-subkey 136 · reserved-option 137 · service-expired 138 · service-locked 139 · B17 cms 149 · B17b structure 151 · FAST armor 178 · FAST checksums 188 · transit hop 189 · local transit 190 · FAST replies 192 · FAST flips 196.
+DIFFSEND_RATCHET=196
 CASES_SEEN="$(grep -o '"case":"[^"]*","outcome":"ok"' <<<"$DIFF" | sort -u | wc -l | tr -d ' ')"
 [ "$CASES_SEEN" = "$DIFFSEND_RATCHET" ] || die "diffsend emitted $CASES_SEEN distinct ok cases; the ratchet is $DIFFSEND_RATCHET"
 grep -q "\"outcome\":\"ok\",\"cases\":$DIFFSEND_RATCHET}" <<<"$DIFF" || die "diffsend summary line does not claim $DIFFSEND_RATCHET cases"
@@ -405,12 +405,16 @@ grep -q '"case":"fa-armor-host-ticket","outcome":"ok","error_code":26,"e_text":"
     <<<"$DIFF" || die "fa-armor-host-ticket not code 26 e_text FIND_FAST on both legs"
 grep -q '"case":"fa-fast-req-key","outcome":"ok","error_code":31,"e_text":"FIND_FAST"' \
     <<<"$DIFF" || die "fa-fast-req-key not code 31 e_text FIND_FAST on both legs"
+grep -q '"case":"fa-fast-req-flip","outcome":"ok","error_code":31,"e_text":"FIND_FAST"' \
+    <<<"$DIFF" || die "fa-fast-req-flip not code 31 e_text FIND_FAST on both legs"
 grep -q '"case":"fa-fast-req-short","outcome":"ok","error_code":60,"e_text":"FIND_FAST"' \
     <<<"$DIFF" || die "fa-fast-req-short not code 60 e_text FIND_FAST on both legs"
 grep -q '"case":"fa-fast-cksum-type","outcome":"ok","error_code":60,"e_text":"FIND_FAST"' \
     <<<"$DIFF" || die "fa-fast-cksum-type not code 60 e_text FIND_FAST on both legs"
 grep -q '"case":"fa-fast-cksum-size","outcome":"ok","error_code":60,"e_text":"FIND_FAST"' \
     <<<"$DIFF" || die "fa-fast-cksum-size not code 60 e_text FIND_FAST on both legs"
+grep -q '"case":"fa-fast-cksum-flip","outcome":"ok","error_code":41,"e_text":"FIND_FAST"' \
+    <<<"$DIFF" || die "fa-fast-cksum-flip not code 41 e_text FIND_FAST on both legs"
 grep -q '"case":"fa-fast-bare-armored-req","outcome":"ok","error_code":60,"e_text":"FIND_FAST"' \
     <<<"$DIFF" || die "fa-fast-bare-armored-req not code 60 e_text FIND_FAST on both legs"
 grep -q '"case":"fa-fast-critical-option","outcome":"ok","error_code":93,"e_text":"FIND_FAST"' \
@@ -516,6 +520,8 @@ grep -q '"case":"tgs-server-disallow-postdated","outcome":"ok","error_code":10,"
 grep -q '"case":"s4u2self-client-expired","outcome":"ok","error_code":1,"e_text":"CLIENT EXPIRED","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "s4u2self-client-expired not code 1 e_text CLIENT EXPIRED on both legs"
 grep -q '"case":"s4u2self-client-locked-out","outcome":"ok","error_code":18,"e_text":"CLIENT LOCKED OUT","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "s4u2self-client-locked-out not code 18 e_text CLIENT LOCKED OUT on both legs"
 grep -q '"case":"tgs-fast-unkeyed-bad-checksum","outcome":"ok","error_code":41,"e_text":"FIND_FAST","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-fast-unkeyed-bad-checksum not code 41 e_text FIND_FAST on both legs"
+grep -q '"case":"tgs-fast-req-flip","outcome":"ok","error_code":31,"e_text":"FIND_FAST","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-fast-req-flip not code 31 e_text FIND_FAST on both legs"
+grep -q '"case":"tgs-fast-cksum-flip","outcome":"ok","error_code":41,"e_text":"FIND_FAST","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-fast-cksum-flip not code 41 e_text FIND_FAST on both legs"
 grep -q '"case":"tgs-fast-explicit-armor","outcome":"ok","error_code":24,"e_text":"FIND_FAST","e_data":"absent","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-fast-explicit-armor not code 24 e_text FIND_FAST with e_data absent on both legs"
 grep -q '"case":"tgs-fast-armor-no-tgs-subkey","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d"' <<<"$DIFF" || die "tgs-fast-armor-no-tgs-subkey not a TGS-REP on both legs"
 grep -q '"case":"tgs-fast-armor-no-subkey","outcome":"ok","error_code":12,"e_text":"FIND_FAST","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-fast-armor-no-subkey not code 12 e_text FIND_FAST on both legs"

@@ -712,36 +712,6 @@ fn tgs_header_authenticator_ad_fx_armor_is_policy() {
 }
 
 #[test]
-fn fast_tgs_corrupt_enc_fast_req_is_bad_integrity_find_fast() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let mut tgs = fast_tgs_prepared(&store, 920);
-    map_fx_fast_tgs(&mut tgs, |a| {
-        let mut c = a.enc_fast_req.cipher.to_vec();
-        c[0] ^= 0xff;
-        a.enc_fast_req.cipher = c.into();
-    });
-    let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("corrupt TGS enc_fast_req");
-    assert_find_fast(err, err::BAD_INTEGRITY, "Decrypt integrity check failed");
-}
-
-#[test]
-fn fast_tgs_bad_req_checksum_is_modified() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let mut tgs = fast_tgs_prepared(&store, 892);
-    map_fx_fast_tgs(&mut tgs, |a| {
-        let mut ck = a.req_checksum.checksum.to_vec();
-        ck[0] ^= 0xff;
-        a.req_checksum.checksum = ck.into();
-    });
-    let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("bad FAST checksum");
-    assert_find_fast(
-        err,
-        err::MODIFIED,
-        "FAST req_checksum invalid; request modified",
-    );
-}
-
-#[test]
 fn fast_tgs_unkeyed_checksum_is_policy() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let mut tgs = fast_tgs_prepared(&store, 896);
