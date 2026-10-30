@@ -2,9 +2,9 @@
 # harness/field/scenarios/secrets-gcore.sh --leg mit|rust: SR-1's "secrets in memory" cell. On kdc, as
 # upgrade.sh left it (MIT's kadmind on the mit leg, kerber-rust's on the rust leg), admin changes a test
 # principal's password twice -- once over the kpasswd protocol (464) and once with a remote `kadmin cpw`
-# (749), each to a fresh random password -- then kadmind is core-dumped and the core is scanned on the VM
-# for each password's raw occurrences, with the realm name as a positive control. The core is deleted on
-# the VM and never copied off; only counts are recorded.
+# (749), each to a fresh random password -- then kadmind is core-dumped (gcore; gdb is installed on kdc
+# when it is missing) and the core is scanned on the VM for each password's raw occurrences, with the realm
+# name as a positive control. The core is deleted on the VM and never copied off; only counts are recorded.
 # MIT runs first (the oracle): it records its counts (it does not zero these). Ours passes when it leaves
 # no more copies of each password than MIT did (the rust leg reads the mit leg's counts from the sibling
 # record). The passwords are drawn here per run and reach the VMs only on stdin, never on a command line
@@ -61,6 +61,7 @@ check kpasswd.change '^result: 0 \(Success\)$' runin client2 "sruser's new passw
 check kadmin.cpw "^Password for \"sruser@$R\" changed\\.\$" runin client2 "admin's password, then sruser's new password (pw2) twice" "kadmin -p admin/admin@$REALM -r $REALM -q 'cpw sruser' 2>&1" < <(once "$ADMIN"; cat "$STATE/pw2"; cat "$STATE/pw2")
 
 section "core-dump kadmind and scan the core on the VM (counts only; the core is deleted on the VM)"
+check gcore.tool '^gdb-[0-9]' run kdc "rpm -q gdb > /dev/null 2>&1 || sudo dnf -y -q install gdb > /dev/null 2>&1; rpm -q gdb"
 check gcore.taken '^core: [0-9]+ bytes$' run kdc "p=\$(pgrep -x kadmind | head -1); sudo gcore -o /tmp/sr1core \"\$p\" > /dev/null 2>&1; f=\$(ls /tmp/sr1core.* 2>/dev/null | head -1); [ -s \"\$f\" ] && echo \"core: \$(stat -c %s \"\$f\") bytes\""
 corecount "$STATE/pw1"; KPW=$(cat "$LAST_OUT" 2>/dev/null); KPW=${KPW//[^0-9]/}
 corecount "$STATE/pw2"; KCPW=$(cat "$LAST_OUT" 2>/dev/null); KCPW=${KCPW//[^0-9]/}
