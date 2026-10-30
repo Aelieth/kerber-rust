@@ -71,6 +71,7 @@ MX='s#/ct/(mit|ours)([.-])#/ct/<k>\2#g'
 # same <step> [mask]: ours printed what MIT's printed (masked by M, or the mask given); graded <step>.same.
 same() {
     local m=${2:-$M}
+    sides "$1.same" "MIT $1" "$STATE/$1.mit" "ours $1" "$STATE/$1.ours" || return
     check "$1.same" '^same: ' host "diff <(sed -E $(printf '%q' "$m") $(printf '%q' "$STATE/$1.mit")) <(sed -E $(printf '%q' "$m") $(printf '%q' "$STATE/$1.ours")) && echo 'same: ours printed what MIT'\\''s printed'"
 }
 # rcof <step> <rc>: each program set's kept <step> output ends in rc=<rc>, graded <step>.rc.<k>.
@@ -306,7 +307,7 @@ if [ -n "$OURS" ]; then
     for k in mit ours; do
         check "CT.ccrm.$k" "^principal ctuser@$R; tickets: krbtgt/$R@$R, no $W@$R\$" run client2 "$(E "$k") l=\$(\$B/klist -c FILE:\$HOME/ct/rm.cc) && echo \"principal \$(echo \"\$l\" | sed -n 's/^Default principal: //p'); tickets: \$(echo \"\$l\" | grep -o 'krbtgt/$REALM@$REALM' | head -n 1), \$(echo \"\$l\" | grep -q '$WEB@$REALM' && echo has || echo no) $WEB@$REALM\""
     done
-    check CT.ccrm.config '^config entries kept: [0-9]+$' run client2 "LC_ALL=C /usr/bin/klist -C -c FILE:\$HOME/ct/rm.cc | grep -E '^config: ' | diff -q - \$HOME/ct/rm.config.before > /dev/null && echo \"config entries kept: \$(wc -l < \$HOME/ct/rm.config.before)\""
+    check CT.ccrm.config '^config entries kept: [1-9][0-9]*$' run client2 "f=\$HOME/ct/rm.config.before; if [ ! -s \"\$f\" ]; then echo 'empty: config before'; exit 1; fi; LC_ALL=C /usr/bin/klist -C -c FILE:\$HOME/ct/rm.cc | grep -E '^config: ' | diff -q - \"\$f\" > /dev/null && echo \"config entries kept: \$(wc -l < \"\$f\")\""
 fi
 
 section "CR: client referrals (get_in_tkt.c:1450-1458, :1745-1758, :1268-1270): lib/kdc-rewrite-proxy.py answers an AS-REQ for a made-up realm with WRONG_REALM (68) or C_PRINCIPAL_UNKNOWN (6) naming $REALM; kinit -C restarts there and asks for the password of the rewritten client, without -C the error stands, and LOOPA <-> LOOPB stops after 16 requests"

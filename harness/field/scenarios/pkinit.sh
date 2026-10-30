@@ -447,7 +447,9 @@ if grep -q 'alice-noeku present' "$LAST_OUT"; then
     if [ -n "${OURS:-}" ]; then
         rule=$(printf '%q ' "$STATE/PK.dir.rule.mit.lines" "$STATE/PK.dir.rule.ours.lines")
         norule=$(printf '%q ' "$STATE/PK.dir.norule.mit.lines" "$STATE/PK.dir.norule.ours.lines")
-        check PK.dir.lines '^matching lines: as MIT.s$' host "diff $rule && diff $norule && echo \"matching lines: as MIT's\""
+        sides PK.dir.lines "MIT rule" "$STATE/PK.dir.rule.mit.lines" "ours rule" "$STATE/PK.dir.rule.ours.lines" \
+            "MIT norule" "$STATE/PK.dir.norule.mit.lines" "ours norule" "$STATE/PK.dir.norule.ours.lines" \
+            && check PK.dir.lines '^matching lines: as MIT.s$' host "diff $rule && diff $norule && echo \"matching lines: as MIT's\""
     fi
 else
     note "client2 holds no alice-noeku certificate: the PK.eku and PK.dir cells are not run"

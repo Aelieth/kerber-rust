@@ -9,7 +9,7 @@
 # rust leg first builds the ref in an AlmaLinux 10 container on the VM (docs/install.md "Build", then make
 # install DESTDIR), checks the staged programs (strings, glibc floor), applies F3's one Dockerfile hunk and
 # migrates the fixture's KDC by docs/install.md "In a container". It compares with the MIT leg: this run's,
-# else runs/mit-latest; with neither, each comparison is NOT-RUN, which fails.
+# else runs/mit-latest; with neither, or with an empty file on either side, each comparison fails.
 # Nothing builds or runs in alien's docker: the inputs are pushed to the VM over the lab key, every docker
 # command runs through `run klldap`, and a postflight asserts alien's `docker ps -a` and image digests are
 # unchanged. The VM keeps the run's scratch under /var/tmp/kf-<id>-<leg> (removed at the end) and a persistent
@@ -136,10 +136,21 @@ elif cmd == "sockets":  # stdin "<proto> <hex addr:port> <state>" from /proc/net
 EOF
 PY_VM="python3 -B $VT/klldap-swap.py"            # the helper on the VM (keyseed, hunk, sockets)
 
+# A cold KLLDAP image build ran past 900 s; this step allows 3600 s.
+# run.sh reads the next line as this scenario's wall clock.
+# field-limit scenario=5400
+IMAGE_CMD_LIMIT=3600
 # image <tag> [Dockerfile] [build options]: KLLDAP's `make test` recipe (its Makefile, test:) under this leg's tag, on the VM.
+# app.sha256 is sha256sum of that image. The build log has no such line.
 image() {
+    local saved=$FIELD_CMD_TIMEOUT
+    FIELD_CMD_TIMEOUT=$IMAGE_CMD_LIMIT
     vrun "image-$1" rc "cd $(q "$SRC") && export BUILDX_BUILDER=default && $DK build --progress=plain --file $(q "${2:-Dockerfile}") --build-arg VERSION=$VER-test --build-arg CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS='-C target-cpu=native' --build-arg CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS='-C target-cpu=native' ${3:-} --tag $N:$1 . 2>&1"
+    FIELD_CMD_TIMEOUT=$saved
     check "image.$1.app" '  /app/kerberos_manager$' run "$VM" "docker run --rm --network none --entrypoint sha256sum $N:$1 /app/lldap /app/kerberos_manager"
+    if [ "$1" = "$LEG" ]; then
+        grep '  /app/' "$LAST_OUT" > "$REC_DIR/app.sha256" || true
+    fi
 }
 # Alma's mirrorlist can return gzip for repomd.xml, which microdnf will not parse. Use the repo file's own baseurl.
 ALMA_SED='sed -i -e s/^mirrorlist=/#mirrorlist=/ -e s/^#\ baseurl=/baseurl=/ /etc/yum.repos.d/almalinux-baseos.repo /etc/yum.repos.d/almalinux-appstream.repo /etc/yum.repos.d/almalinux-extras.repo'
@@ -211,11 +222,15 @@ for l in sys.stdin: print(\"%.3f %s\" % (time.time(), l), end=\"\", flush=True)'
     check "gate.$1.left" '^left: 0 containers, 0 volumes, 0 networks$' run "$VM" "[ -n '$RID' ] || { echo 'no gate run id in its log'; exit 1; }; docker version --format '{{.Server.Version}}' > /dev/null && printf 'left: %s containers, %s volumes, %s networks\n' \"\$(docker ps -aq --filter name=$RID | wc -l)\" \"\$(docker volume ls -q --filter name=$RID | wc -l)\" \"\$(docker network ls -q --filter name=$RID | wc -l)\""
 }
 # cmpref <name> <file>: this leg's <file> against the reference MIT leg's (docker bridge addresses masked). On alien.
+# A missing or empty side fails and names that leg: diff would call two empty files identical.
 cmpref() {
-    if [ -z "$REF_DIR" ] || [ ! -f "$REF_DIR/$2" ]; then
-        _checkrow "cmp.$1" FAIL "as the MIT leg's $2" - "NOT-RUN: no MIT leg's $2 to compare with (this run's or runs/mit-latest)"
-        return
+    local mitf='' mitlab="MIT $2"
+    if [ -z "$REF_DIR" ]; then
+        mitlab="MIT $2 (no MIT leg)"
+    else
+        mitf=$REF_DIR/$2
     fi
+    sides "cmp.$1" "$mitlab" "$mitf" "rust $2" "$REC_DIR/$2" || return
     check "cmp.$1" rc host "diff <(sed -E '$NORM' $(q "$REF_DIR/$2")) <(sed -E '$NORM' $(q "$REC_DIR/$2")) && echo 'identical to $REF_DIR/$2'"
 }
 
@@ -290,7 +305,6 @@ if [ "$LEG" = rust ]; then
     image old
     check image.rust.hunk '^\+COPY --from=kerber-rust / /$' run "$VM" "$PY_VM hunk $(q "$SRC/Dockerfile") $(q "$VT/swap.Dockerfile")"
     image rust "$VT/swap.Dockerfile" "--build-context kerber-rust=$(q "$STAGE")"
-    grep '  /app/' "$REC_DIR/logs/image-rust.log" > "$REC_DIR/app.sha256" 2>/dev/null || true
     check image.rust.packages '^package krb5-server is not installed$' run "$VM" "docker run --rm --network none --entrypoint sh $N:rust -c 'rpm -q glibc krb5-libs krb5-workstation libkadm5 && ! rpm -q krb5-server && klist -V'"
     observelast obs.image.krb5 'krb5-server-[^ ]+|package krb5-server is not installed'
     G=$(sed -n 's/^glibc-\([0-9.]*\)-.*/\1/p' "$LAST_OUT" | head -n 1)
@@ -301,7 +315,6 @@ if [ "$LEG" = rust ]; then
 else
     section "3. KLLDAP's image as it is, MIT krb5-server inside"
     image mit
-    grep '  /app/' "$REC_DIR/logs/image-mit.log" > "$REC_DIR/app.sha256" 2>/dev/null || true
     observe obs.image.krb5 'krb5-server-[^ ]+|package krb5-server is not installed' run "$VM" "docker run --rm --network none --entrypoint sh $N:mit -c 'rpm -q glibc krb5-server krb5-libs krb5-workstation libkadm5; klist -V'"
 fi
 
@@ -381,7 +394,9 @@ if [ "$LEG" = rust ]; then
     done < "$STATE/migrate-4.results"
     check migrate.removed '^gone: mit-realm\.dump, mit-realm\.dump\.dump_ok, mit-db2$' run "$VM" "cd $(q "$KDC") && for f in mit-realm.dump mit-realm.dump.dump_ok mit-db2; do if [ -e \"\$f\" ] || [ -L \"\$f\" ]; then echo \"still there: \$f\"; exit 1; fi; done; echo 'gone: mit-realm.dump, mit-realm.dump.dump_ok, mit-db2'"
     check migrate.kept '^principals: [1-9][0-9]*, as after the load$' run "$VM" "a=\$(docker run --rm --network none --entrypoint /usr/sbin/kadmin.local -v $(q "$KDC"):/var/kerberos/krb5kdc $N:rust -r $(q "$REALM") -q listprincs | grep -E '^[^ ]+@[^ ]+\$' | sort) && [ -n \"\$a\" ] && echo \"principals: \$(printf '%s\n' \"\$a\" | wc -l), as after the load\" && printf '%s\n' \"\$a\""
-    check migrate.kept.same rc host "diff <(sort $(q "$STATE/principals.migrated")) <(grep -E '^[^ ]+@[^ ]+\$' $(q "$LAST_OUT") | sort) && echo 'same principals as after the load'"
+    grep -E '^[^ ]+@[^ ]+$' "$LAST_OUT" | sort > "$STATE/principals.kept"
+    sides migrate.kept.same migrated "$STATE/principals.migrated" kept "$STATE/principals.kept" \
+        && check migrate.kept.same rc host "diff $(q "$STATE/principals.migrated") $(q "$STATE/principals.kept") && echo 'same principals as after the load'"
 
     section "11. against the MIT leg: this run's, else runs/mit-latest (neither: each comparison NOT-RUN, a FAIL)"
     REF_DIR=''

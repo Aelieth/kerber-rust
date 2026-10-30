@@ -121,7 +121,8 @@ postflight() {
     local -a prune names browser_excl
     section "postflight"
     krb5_sums > "$RUN/guards/krb5.conf.end"
-    check post.krb5.conf rc host "diff $(printf '%q' "$RUN/guards/krb5.conf.start") $(printf '%q' "$RUN/guards/krb5.conf.end") && echo unchanged: && cat $(printf '%q' "$RUN/guards/krb5.conf.end")"
+    sides post.krb5.conf start "$RUN/guards/krb5.conf.start" end "$RUN/guards/krb5.conf.end" \
+        && check post.krb5.conf rc host "diff $(printf '%q' "$RUN/guards/krb5.conf.start") $(printf '%q' "$RUN/guards/krb5.conf.end") && echo unchanged: && cat $(printf '%q' "$RUN/guards/krb5.conf.end")"
     # Both trees are CLI scratch for this user, written whether or not that CLI is driving the run;
     # the browser's Chromium makes the top-level names (scoped_dir* is its ScopedTempDir).
     grok_excl="/tmp/grok-file-lock-$(id -u)"
@@ -288,12 +289,17 @@ for leg in "${LEGS[@]}"; do
             say "== $sc --leg $leg: NOT-RUN ($reason)"
             continue
         fi
+        # A scenario names its own wall clock (`# field-limit scenario=N`) when one command
+        # is longer than the default deadline. The number in the scenario file is the one used.
+        this_limit=$SCEN_LIMIT
+        declared=$(sed -n 's/^# field-limit scenario=\([0-9][0-9]*\)$/\1/p' "$HERE/scenarios/$sc.sh")
+        if [ -n "$declared" ]; then this_limit=$declared; fi
         say "== $sc --leg $leg"
         t=$(date +%s)
         rc=0
         REC_DIR=$dir TMPDIR=$RUN/tmp/$sc-$leg FIELD_RUN=$RUN FIELD_TREE_TAR=$RUN/tmp/tree.tar FIELD_SHA=$SHA \
-            FIELD_REF=$REF FIELD_DEADLINE=$(( t + SCEN_LIMIT )) \
-            timeout -k 60 $(( SCEN_LIMIT + 120 )) bash "$HERE/scenarios/$sc.sh" --leg "$leg" \
+            FIELD_REF=$REF FIELD_DEADLINE=$(( t + this_limit )) \
+            timeout -k 60 $(( this_limit + 120 )) bash "$HERE/scenarios/$sc.sh" --leg "$leg" \
             > >(tee -i -a "$RUN/run.log" 9>&-) 2>&1 &
         SCEN=$!
         while :; do

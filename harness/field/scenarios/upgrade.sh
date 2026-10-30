@@ -180,8 +180,10 @@ check realm.after.listprincs "^alice@$R\$" run kdc "sudo kadmin.local -q listpri
 cp "$LAST_OUT" "$STATE/listprincs.after"
 check realm.after.alice "^Principal: alice@$R\$" run kdc "sudo kadmin.local -q 'getprinc alice'"
 cp "$LAST_OUT" "$STATE/alice.after"
-check realm.listprincs.same rc host "cd $(printf '%q' "$STATE") && diff listprincs.before listprincs.after && echo identical"
-check realm.alice.same rc host "cd $(printf '%q' "$STATE") && diff alice.before alice.after && echo identical"
+sides realm.listprincs.same before "$STATE/listprincs.before" after "$STATE/listprincs.after" \
+    && check realm.listprincs.same rc host "cd $(printf '%q' "$STATE") && diff listprincs.before listprincs.after && echo identical"
+sides realm.alice.same before "$STATE/alice.before" after "$STATE/alice.after" \
+    && check realm.alice.same rc host "cd $(printf '%q' "$STATE") && diff alice.before alice.after && echo identical"
 check strings.control rc runin kdc "lib/strings-check.sh" "sh -s -- --control" < "$FIELD_LIB/strings-check.sh"
 check strings.manifest '^programs in /usr/share/kerber-rust/install-manifest: [1-9][0-9]*, all [1-9][0-9]* checked$' \
     runin kdc "lib/strings-check.sh" "sh -s -- --manifest /usr/share/kerber-rust/install-manifest" < "$FIELD_LIB/strings-check.sh"

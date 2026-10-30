@@ -615,9 +615,10 @@ pin (`--no-optional-locks`), never a copy of the checkout's working tree.
   (removed at the end) and a rustup/cargo cache under `/var/tmp/kf-cache` (kept
   across runs), so only the first run downloads the toolchains and crates.
   With a cold cache, or after `quay.io/almalinuxorg/10-minimal` moves (KLLDAP's
-  Dockerfile does not pin it), KLLDAP's image build compiles everything again:
-  F3-MIT's took 9 min with its first stage cached, so set `FIELD_CMD_TIMEOUT`
-  and `FIELD_SCENARIO_TIMEOUT` higher for that run.
+  Dockerfile does not pin it), KLLDAP's image build compiles everything again.
+  F3-MIT's took 9 min with its first stage cached. A cold build was still
+  compiling at the 900s default, so `klldap-swap.sh` allows that step 3600s
+  and the scenario 5400s (`IMAGE_CMD_LIMIT`, `# field-limit`).
 - **Secrets:** each leg makes its own (the fixture's admin password, the fresh
   `key_seed`, the boot's LLDAP secrets) on the host, never printed, and pushes
   them to a `…-secrets` directory beside the VM scratch, 0700, outside the tree

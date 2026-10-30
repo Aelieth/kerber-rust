@@ -19,6 +19,7 @@
 #   limited <command...>                                   any other command, under the same time limit
 #   once <secret>... / twice <secret> / chpw <old> <new>   secrets, newline-terminated, for stdin
 #   check <name> <expect> <helper> [args...]               run one recorded command and grade it
+#   sides <check> <label> <file> ...                       FAIL when a side is missing or empty
 #   checklast <name> <expect>                              grade the last recorded command again
 #   observe <name> <ERE> <helper> [args...] / observelast <name> <ERE> [nth]   an INFO line (recorded, not graded)
 #   kdcmark <name> / kdcsince <name> [ERE]                 windows of kdc's two daemon logs (check mark.<name>)
@@ -159,6 +160,26 @@ checklast() {
     _checkrow "$name" "$result" "$expect" "$LAST_RC" "$observed"
 }
 check() { local name=$1 expect=$2; shift 2; "$@"; checklast "$name" "$expect"; }
+# sides <check> <label> <file> ...: FAIL <check>, naming each side, when a file is missing or empty.
+# diff reports two empty files as identical, so a comparison calls this before it reads them.
+sides() {
+    local name=$1 bad='' label file
+    shift
+    while [ $# -ge 2 ]; do
+        label=$1
+        file=$2
+        shift 2
+        if [ ! -f "$file" ]; then
+            bad="${bad:+$bad; }$label missing"
+        elif [ ! -s "$file" ]; then
+            bad="${bad:+$bad; }$label empty"
+        fi
+    done
+    if [ -n "$bad" ]; then
+        _checkrow "$name" FAIL "each side non-empty" 1 "NOT-RUN: $bad"
+        return 1
+    fi
+}
 observelast() {
     local seen
     seen=$(grep -oE -- "$2" "$LAST_OUT" | sed -n "${3:-1}p")

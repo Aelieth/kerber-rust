@@ -88,6 +88,7 @@ fi
 section "RB.mit: MIT's KDC serves the realm, its getprinc lines as before, and MIT's kinit gets alice a TGT"
 check RB.mit.kdc '^kdc: MIT krb5-server-[0-9].*, binaries as packaged, active active$' run kdc "sudo rpm -V krb5-server | grep -E ' /usr/sbin/'; ! sudo rpm -V krb5-server | grep -qE '^..5.* /usr/sbin/(krb5kdc|kadmind|kdb5_util|kadmin\\.local)\$' && echo \"kdc: MIT \$(rpm -q krb5-server), binaries as packaged, \$(systemctl is-active krb5kdc kadmin | paste -sd' ' -)\""
 fields after
-check RB.mit.fields '^fields equal$' host "diff $(printf '%q' "$STATE/before") $(printf '%q' "$STATE/after") && echo 'fields equal'"
+sides RB.mit.fields before "$STATE/before" after "$STATE/after" \
+    && check RB.mit.fields '^fields equal$' host "diff $(printf '%q' "$STATE/before") $(printf '%q' "$STATE/after") && echo 'fields equal'"
 check RB.mit.kinit "^Default principal: alice@$R\$" runin client2 "alice's password ($ALICE)" "mkdir -p ~/rb && kinit -c FILE:\$HOME/rb/a.cc alice > /dev/null 2>&1; echo \"kinit rc=\$?\"; klist -c FILE:\$HOME/rb/a.cc 2>&1 | grep -E '^Default principal'" < <(once "$ALICE")
 finish

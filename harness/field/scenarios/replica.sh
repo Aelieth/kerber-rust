@@ -193,7 +193,8 @@ replicated REP.2.renamed repc "^Principal: repc@$R\$"
 replicated REP.2.deleted repb 'Principal does not exist'
 fields kdc repc repc.kdc
 fields kdc2 repc repc.kdc2
-check REP.2.equal '^repc: [0-9]+ lines, equal$' host "diff $(printf '%q' "$STATE/repc.kdc") $(printf '%q' "$STATE/repc.kdc2") && echo \"repc: \$(wc -l < $(printf '%q' "$STATE/repc.kdc")) lines, equal\""
+sides REP.2.equal kdc "$STATE/repc.kdc" kdc2 "$STATE/repc.kdc2" \
+    && check REP.2.equal '^repc: [1-9][0-9]* lines, equal$' host "diff $(printf '%q' "$STATE/repc.kdc") $(printf '%q' "$STATE/repc.kdc2") && echo \"repc: \$(wc -l < $(printf '%q' "$STATE/repc.kdc")) lines, equal\""
 serial kdc "sudo kproplog"
 serial kdc2 "$KPL"
 check REP.2.serial '^serials equal: Last serial # : [1-9][0-9]*$' host "diff $(printf '%q' "$STATE/serial.kdc") $(printf '%q' "$STATE/serial.kdc2") > /dev/null && echo \"serials equal: \$(cat $(printf '%q' "$STATE/serial.kdc2"))\""
