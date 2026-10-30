@@ -165,7 +165,7 @@ fi
 
 section "SB.ad-user-in (RA1): kbruser@AD.KERBER.TEST logs into client2's sshd (gssapi-with-mic) as the local kbruser"
 check in.sshd '^gssapiauthentication yes$' run client2 'printf "%s\n" "GSSAPIAuthentication yes" "GSSAPICleanupCredentials yes" "GSSAPIStrictAcceptorCheck no" | sudo install -m 0600 /dev/stdin /etc/ssh/sshd_config.d/49-kerber-ad-gssapi.conf && sudo sshd -t && sudo systemctl reload sshd && sudo sshd -T | grep -E "^gssapi(authentication|strictacceptorcheck)"'
-# The local account joins whichever local groups sshd's AllowGroups names (rust-ssh's kit allows "admins" only).
+# client2's sshd AllowGroups decides which local groups the account joins.
 check in.k5login '^kbruser@AD\.KERBER\.TEST$' run client2 "id kbruser > /dev/null 2>&1 || sudo useradd -m kbruser; for g in \$(sudo sshd -T | sed -n 's/^allowgroups //p'); do getent group \"\$g\" > /dev/null && sudo usermod -aG \"\$g\" kbruser; done; id kbruser; echo kbruser@AD.KERBER.TEST | sudo install -m 0644 -o kbruser -g kbruser /dev/stdin /home/kbruser/.k5login && sudo cat /home/kbruser/.k5login"
 S1=$(date +%s)
 kdcmark in

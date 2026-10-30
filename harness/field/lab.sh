@@ -34,10 +34,10 @@
 #   rebuild <vm> --yes      remove one VM with its disks and snapshots, then
 #                           build it again from the templates (as up does).
 #                           kdc2 is refused before any domain or volume is removed.
-#   reset <vm|all> [snap]   revert to snapshot 'base' (or snap) and boot.
-#                           With no snap named, mitd3 reverts to 'mit-d3' and
-#                           kdc2 reverts to 'f44-base'. `reset all` does not
-#                           select kdc2.
+#   reset <vm|all> [snap]   revert and boot. With no snap named, kdc, services,
+#                           client1, client2, klldap and kdc2 use 'f44-base',
+#                           mitd3 uses 'mit-d3', and deb13, ub26 and rocky10
+#                           use 'base'. `reset all` does not select kdc2.
 #   snapshot <vm> <name>    offline snapshot: shut down, snapshot, start again
 #   ssh <vm> [--] [cmd...]  ssh to the VM as 'lab' with the lab key
 #   ip <vm> [lan]           print the VM's lab address, or kdc's LAN address
@@ -722,10 +722,14 @@ cmd_reset() {
     for vm in "${vms[@]}"; do
         d=$(dom "$vm")
         use=$snap
-        # No name was given: mitd3 stays on the snapshot that has the MIT build.
-        # kdc2's cloud OS is f44-base. It has no snapshot named base.
-        if [ "$vm" = mitd3 ] && [ -z "$named" ]; then use=mit-d3; fi
-        if [ "$vm" = kdc2 ] && [ -z "$named" ]; then use=f44-base; fi
+        # No name: mitd3 keeps the MIT build. The Fedora 44 VMs' pristine disk is f44-base.
+        # deb13, ub26 and rocky10 keep base. up and rebuild still mark a finished build as base.
+        if [ -z "$named" ]; then
+            case $vm in
+                mitd3) use=mit-d3 ;;
+                kdc|services|client1|client2|klldap|kdc2) use=f44-base ;;
+            esac
+        fi
         dom_exists "$vm" || die "$vm does not exist (lab.sh up)"
         if ! is_state "$vm" "shut off"; then vsh destroy "$d" >/dev/null 2>&1 || true; fi
         vsh snapshot-revert "$d" --snapshotname "$use" >/dev/null

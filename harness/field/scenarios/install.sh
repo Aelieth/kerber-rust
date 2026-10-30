@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# harness/field/scenarios/install.sh --leg rust: kdc reset to its pristine 'base' snapshot, then a fresh
+# harness/field/scenarios/install.sh --leg rust: kdc reset to pristine 'f44-base', then a fresh
 # kerber-rust install from docs/install.md's program-install blocks (Prerequisites, Build, Replacing
 # krb5-server, taken from the archive by heading through lib/docblocks.py, so a doc change is what runs), and
 # the KERBER.TEST realm and population ported from the hand record f-L2-rust: kdb5_util create, the bootstrap
@@ -140,15 +140,15 @@ realm_and_population() {
 }
 
 if [ "$LEG" = mit ]; then
-    section "install --leg mit: a fresh Fedora krb5-server realm $R on kdc's base snapshot (the oracle), with L2's population"
-    check reset.kdc rc host "$LABQ reset kdc base"
+    section "install --leg mit: a fresh Fedora krb5-server realm $R on kdc's f44-base snapshot (the oracle), with L2's population"
+    check reset.kdc rc host "$LABQ reset kdc f44-base"
     check reset.client2 rc host "$LABQ reset client2 $MIT_SNAPSHOT_CLIENT2"
     waitsync kdc; waitsync client2
     check mit.install '^krb5-server-' run kdc "sudo dnf install -y krb5-server krb5-workstation > /dev/null 2>&1; rpm -q krb5-server"
     realm_and_population mit
 else
-    section "install --leg rust: a fresh kerber-rust install from docs/install.md on kdc's base snapshot, with L2's population"
-    check reset.kdc rc host "$LABQ reset kdc base"
+    section "install --leg rust: a fresh kerber-rust install from docs/install.md on kdc's f44-base snapshot, with L2's population"
+    check reset.kdc rc host "$LABQ reset kdc f44-base"
     check reset.client2 rc host "$LABQ reset client2 $RUST_SNAPSHOT_CLIENT2"
     waitsync kdc; waitsync client2
     WSTART=$(limited "$LAB" ssh kdc -- 'date "+%m/%d/%Y %H:%M:%S"' < /dev/null)
