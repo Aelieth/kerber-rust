@@ -232,7 +232,11 @@ impl UlogBatch<'_> {
 
     /// Unstable before the write; MIT logs after the put and a crash skips it.
     pub fn stage(&mut self) -> Result<(), UlogError> {
-        self.ulog.sync_header(&self.hdr)
+        self.ulog.write_header(&self.hdr)
+    }
+
+    pub fn sync(&self) -> Result<(), UlogError> {
+        Ok(self.ulog.backing.sync()?)
     }
 
     pub fn finish(mut self) -> Result<(), UlogError> {
@@ -537,8 +541,13 @@ impl Ulog {
     // MIT: `sync_header` (lib/kdb/kdb_log.c:93-104)
     /// A failed sync is an error; MIT aborts.
     fn sync_header(&self, hdr: &UlogHeader) -> Result<(), UlogError> {
-        self.backing.write_at(&hdr.encode(), 0)?;
+        self.write_header(hdr)?;
         self.backing.sync()?;
+        Ok(())
+    }
+
+    fn write_header(&self, hdr: &UlogHeader) -> Result<(), UlogError> {
+        self.backing.write_at(&hdr.encode(), 0)?;
         Ok(())
     }
 

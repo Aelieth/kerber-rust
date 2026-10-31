@@ -274,8 +274,20 @@ fn log_error(e: &UlogError) -> Error {
     }
 }
 
-pub(super) fn finish_staged(batch: Option<UlogBatch<'_>>) -> Result<(), Error> {
-    batch.map_or(Ok(()), |b| b.finish().map_err(|e| log_error(&e)))
+pub(super) struct Staged<'l> {
+    batch: UlogBatch<'l>,
+    synced: Result<(), UlogError>,
+}
+
+pub(super) fn finish_staged(staged: Option<Staged<'_>>) -> Result<(), Error> {
+    let Some(Staged { batch, synced }) = staged else {
+        return Ok(());
+    };
+    match synced {
+        Ok(()) => batch.finish(),
+        Err(e) => batch.abandon().and(Err(e)),
+    }
+    .map_err(|e| log_error(&e))
 }
 
 impl PrincipalStore {
@@ -551,7 +563,7 @@ impl PrincipalStore {
         log: Option<&'l LogContext>,
         prepared: PreparedLog,
         write: impl FnOnce() -> Result<(), E>,
-    ) -> Result<Option<UlogBatch<'l>>, LoggedWrite<E>> {
+    ) -> Result<Option<Staged<'l>>, LoggedWrite<E>> {
         let ready = prepared.0;
         let batch = match log {
             Some(c) if !ready.is_empty() => {
@@ -567,14 +579,24 @@ impl PrincipalStore {
             }
             _ => None,
         };
-        if let Err(e) = write() {
+        let mut synced = Ok(());
+        let written = match &batch {
+            Some(b) => std::thread::scope(|s| {
+                let sync = s.spawn(|| b.sync());
+                let written = write();
+                synced = sync.join().unwrap_or(Err(UlogError::Error));
+                written
+            }),
+            None => write(),
+        };
+        if let Err(e) = written {
             if let Some(b) = batch {
                 let _ = b.abandon();
             }
             self.write_failed(&ready);
             return Err(LoggedWrite::Write(e));
         }
-        Ok(batch)
+        Ok(batch.map(|batch| Staged { batch, synced }))
     }
 
     pub fn log_pending(&self) -> Result<(), Error> {
