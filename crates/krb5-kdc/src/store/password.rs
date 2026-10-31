@@ -4,6 +4,7 @@ use krb5_crypto::{EncryptionType, KeySalt, ProtocolKey, parse_keysalts, string_t
 use krb5_log::klog::{self, Severity};
 use krb5_types::PrincipalName;
 use subtle::ConstantTimeEq;
+use zeroize::Zeroizing;
 
 use super::flags::KDB_REQUIRES_PWCHANGE;
 use super::history::record_history;
@@ -180,6 +181,110 @@ fn random_salt() -> Result<Vec<u8>, Error> {
         .collect())
 }
 
+struct ChpassInputs {
+    name: PrincipalName,
+    realm: String,
+    id: String,
+    policy: Option<NamedPolicy>,
+    keysalts: Vec<KeySalt>,
+}
+
+pub struct PasswordPlan {
+    inputs: ChpassInputs,
+    record: Principal,
+    kvno: u32,
+    password: Zeroizing<Vec<u8>>,
+}
+
+pub struct PreparedPassword {
+    plan: PasswordPlan,
+    keys: Vec<KeyEntry>,
+}
+
+impl PasswordPlan {
+    // MIT: `kadm5_chpass_principal_3` (lib/kadm5/srv/svr_principal.c:1290-1290)
+    pub fn derive(self) -> Result<PreparedPassword, Error> {
+        let keys = keys_from_password(
+            &self.inputs.keysalts,
+            &self.password,
+            &self.record.name,
+            &self.record.realm,
+            self.kvno,
+        )?;
+        Ok(PreparedPassword { plan: self, keys })
+    }
+}
+
+/// A new field fails to build here until it is compared.
+fn same_record(a: &Principal, b: &Principal) -> bool {
+    let Principal {
+        name,
+        realm,
+        keys,
+        key_history,
+        salt,
+        max_life,
+        pw_expire,
+        attributes,
+        max_renewable_life,
+        expiration,
+        last_success,
+        last_failed,
+        fail_auth_count,
+        mkvno,
+        db_entry_len,
+        tl_data,
+        e_data,
+        rid,
+        s4u_allowed_from,
+        s4u_allowed_to,
+        pw_policy,
+        kadm,
+        string_attrs,
+    } = a;
+    same_keys(keys, &b.keys)
+        && same_keys(key_history, &b.key_history)
+        && *name == b.name
+        && *realm == b.realm
+        && *salt == b.salt
+        && *max_life == b.max_life
+        && *pw_expire == b.pw_expire
+        && *attributes == b.attributes
+        && *max_renewable_life == b.max_renewable_life
+        && *expiration == b.expiration
+        && *last_success == b.last_success
+        && *last_failed == b.last_failed
+        && *fail_auth_count == b.fail_auth_count
+        && *mkvno == b.mkvno
+        && *db_entry_len == b.db_entry_len
+        && *tl_data == b.tl_data
+        && *e_data == b.e_data
+        && *rid == b.rid
+        && *s4u_allowed_from == b.s4u_allowed_from
+        && *s4u_allowed_to == b.s4u_allowed_to
+        && *pw_policy == b.pw_policy
+        && *kadm == b.kadm
+        && *string_attrs == b.string_attrs
+}
+
+fn same_keys(a: &[KeyEntry], b: &[KeyEntry]) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b).all(|(x, y)| {
+            let KeyEntry {
+                etype,
+                key,
+                kvno,
+                salt_type,
+                kdb_salt,
+            } = x;
+            *etype == y.etype
+                && *kvno == y.kvno
+                && *salt_type == y.salt_type
+                && *kdb_salt == y.kdb_salt
+                && bool::from(key.as_bytes().ct_eq(y.key.as_bytes()))
+        })
+}
+
 impl PrincipalStore {
     pub fn set_password(&mut self, name: &PrincipalName, password: &[u8]) -> Result<(), Error> {
         self.set_password_keepold(name, password, false)
@@ -258,52 +363,176 @@ impl PrincipalStore {
         etypes: &[KeySalt],
     ) -> Result<(), Error> {
         self.inside_change()?;
+        let inputs = self.chpass_inputs(name, princ_realm, etypes)?;
+        // A refused password still leaves kadmin/history.
+        if inputs.policy.is_some() {
+            self.ensure_history_principal(actor)?;
+        }
+        // MIT: `add_key_pwd` (lib/kdb/kdb_cpw.c:315-315)
+        let prepared = self.chpass_plan(inputs, c_password(password))?.derive()?;
+        self.commit_password(prepared, keepold, actor)
+    }
+
+    /// `None`: only the in-lock path makes `kadmin/history`.
+    pub fn plan_password(
+        &self,
+        name: &PrincipalName,
+        princ_realm: &str,
+        password: &[u8],
+        etypes: &[KeySalt],
+    ) -> Result<Option<PasswordPlan>, Error> {
+        let inputs = self.chpass_inputs(name, princ_realm, etypes)?;
+        if inputs.policy.is_some() && self.history_key().is_none() {
+            return Ok(None);
+        }
+        self.chpass_plan(inputs, c_password(password)).map(Some)
+    }
+
+    // MIT: `kadm5_chpass_principal_3` (lib/kadm5/srv/svr_principal.c:1349-1355)
+    pub fn apply_password(
+        &mut self,
+        prepared: PreparedPassword,
+        keepold: u32,
+        actor: &str,
+    ) -> Result<bool, Error> {
+        self.inside_change()?;
+        let PasswordPlan { inputs, record, .. } = &prepared.plan;
+        let same = self
+            .canonical_id(&inputs.name, &inputs.realm)
+            .ok()
+            .as_deref()
+            == Some(inputs.id.as_str())
+            && self
+                .map
+                .get(&inputs.id)
+                .is_some_and(|p| same_record(p, record))
+            && self.bound_policy(&inputs.id) == inputs.policy.as_ref()
+            && (inputs.policy.is_none() || self.history_key().is_some());
+        if !same {
+            return Ok(false);
+        }
+        self.commit_password(prepared, keepold, actor)?;
+        Ok(true)
+    }
+
+    pub fn change_password_staged(
+        &mut self,
+        name: &PrincipalName,
+        princ_realm: &str,
+        password: &[u8],
+        keepold: u32,
+        actor: &str,
+        etypes: &[KeySalt],
+    ) -> Result<Result<(), Error>, Error> {
+        let plan = match self.reload_if_stale() {
+            Ok(()) => match self.plan_password(name, princ_realm, password, etypes) {
+                Ok(plan) => plan,
+                Err(e) => return Ok(Err(e)),
+            },
+            Err(_) => None,
+        };
+        if let Some(plan) = plan {
+            let prepared = match plan.derive() {
+                Ok(p) => p,
+                Err(e) => return Ok(Err(e)),
+            };
+            match self.change(|s| s.apply_password(prepared, keepold, actor))? {
+                Ok(true) => return Ok(Ok(())),
+                Ok(false) => {}
+                Err(e) => return Ok(Err(e)),
+            }
+        }
+        self.change(|s| {
+            s.set_password_etypes_keepold_n_in(name, princ_realm, password, keepold, actor, etypes)
+        })
+    }
+
+    fn bound_policy(&self, id: &str) -> Option<&NamedPolicy> {
+        self.map
+            .get(id)?
+            .pw_policy
+            .as_ref()
+            .and_then(|n| self.policies.get(n))
+    }
+
+    // MIT: `kadm5_chpass_principal_3` (lib/kadm5/srv/svr_principal.c:1247-1265)
+    fn chpass_inputs(
+        &self,
+        name: &PrincipalName,
+        princ_realm: &str,
+        etypes: &[KeySalt],
+    ) -> Result<ChpassInputs, Error> {
         if princ_realm == self.realm && name.components_joined() == "kadmin/history" {
             return Err(Error::InvalidArgument(
                 "Cannot change protected principal".into(),
             ));
         }
-        // MIT: `add_key_pwd` (lib/kdb/kdb_cpw.c:315-315)
-        let password = c_password(password);
         let id = self.canonical_id(name, princ_realm)?;
-        let pol = self
-            .map
-            .get(&id)
-            .ok_or(Error::NotFound)?
-            .pw_policy
-            .as_ref()
-            .and_then(|n| self.policies.get(n));
-        let nhist = pol.map(|pol| pol.history);
-        let allowed = pol.and_then(|p| p.allowed_keysalts.clone());
-        let use_ks =
-            apply_keysalt_policy(allowed.as_deref(), etypes, &self.policy.password_keysalts())?;
-        let use_etypes: Vec<EncryptionType> = use_ks.iter().map(|ks| ks.etype).collect();
-        // A refused password still leaves kadmin/history.
-        let hist = match nhist {
-            Some(_) => Some(self.ensure_history_principal(actor)?),
+        self.map.get(&id).ok_or(Error::NotFound)?;
+        let policy = self.bound_policy(&id).cloned();
+        let keysalts = apply_keysalt_policy(
+            policy.as_ref().and_then(|p| p.allowed_keysalts.as_deref()),
+            etypes,
+            &self.policy.password_keysalts(),
+        )?;
+        Ok(ChpassInputs {
+            name: name.clone(),
+            realm: princ_realm.to_owned(),
+            id,
+            policy,
+            keysalts,
+        })
+    }
+
+    // MIT: `kadm5_chpass_principal_3` (lib/kadm5/srv/svr_principal.c:1282-1290)
+    fn chpass_plan(&self, inputs: ChpassInputs, password: &[u8]) -> Result<PasswordPlan, Error> {
+        self.check_password_quality_in(&inputs.name, &inputs.realm, password, &mut syslog_note)?;
+        let record = self.map.get(&inputs.id).ok_or(Error::NotFound)?.clone();
+        Ok(PasswordPlan {
+            kvno: next_kvno(&record.keys),
+            inputs,
+            record,
+            password: Zeroizing::new(password.to_vec()),
+        })
+    }
+
+    // MIT: `kadm5_chpass_principal_3` (lib/kadm5/srv/svr_principal.c:1327-1358)
+    fn commit_password(
+        &mut self,
+        prepared: PreparedPassword,
+        keepold: u32,
+        actor: &str,
+    ) -> Result<(), Error> {
+        let PreparedPassword { plan, keys } = prepared;
+        let PasswordPlan {
+            inputs, password, ..
+        } = plan;
+        let ChpassInputs {
+            name,
+            realm,
+            id,
+            policy,
+            keysalts,
+        } = inputs;
+        let history = match &policy {
+            Some(pol) => Some((pol.history, self.ensure_history_principal(actor)?)),
             None => None,
         };
-        self.check_password_quality_in(name, princ_realm, password, &mut syslog_note)?;
-        let Some(existing) = self.map.get(&id) else {
-            return Err(Error::NotFound);
-        };
-        let kvno = next_kvno(&existing.keys);
-        let new_keys =
-            keys_from_password(&use_ks, password, &existing.name, &existing.realm, kvno)?;
+        let etypes: Vec<EncryptionType> = keysalts.iter().map(|ks| ks.etype).collect();
         super::kadm5_hook::hook_chpass(
             self,
             super::kadm5_hook::HookStage::Precommit,
-            name,
-            princ_realm,
+            &name,
+            &realm,
             keepold,
-            Some(password),
-            &use_etypes,
+            Some(password.as_slice()),
+            &etypes,
         )?;
-        self.replace_password_keys(&id, new_keys, nhist.zip(hist), keepold, actor)?;
+        self.replace_password_keys(&id, keys, history, keepold, actor)?;
         if let Some(p) = self.map.get_mut(&id) {
             p.salt = crate::kdb_dump::salt_of_keys(&p.keys, &p.name, &p.realm);
         }
-        self.apply_pw_max_life_in(name, princ_realm)?;
+        self.apply_pw_max_life_in(&name, &realm)?;
         let snap = self.map.get(&id).cloned();
         if let Some(p) = &snap {
             self.zero_fail_count_in_file(p, unix_now_u32());
@@ -311,11 +540,11 @@ impl PrincipalStore {
         self.note_ulog(id, false, snap);
         self.save_if_configured()?;
         self.postcommit(super::kadm5_hook::Post::Chpass {
-            princ: name.clone(),
-            realm: princ_realm.to_owned(),
+            princ: name,
+            realm,
             keepold,
-            password: Some(zeroize::Zeroizing::new(password.to_vec())),
-            etypes: use_etypes,
+            password: Some(password),
+            etypes,
         });
         Ok(())
     }

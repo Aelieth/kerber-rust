@@ -389,12 +389,56 @@ pub(super) fn dispatch_kadm5_ticket(
             if c.ent.mask & KADM5_TL_DATA != 0 && db_args_code(&c.tl_data).is_some() {
                 return Ok(generic_ret(API_V2, EINVAL));
             }
+            let refused =
+                |e: krb5_kdc::Error| generic_ret(API_V2, kadm5_code(proc, &Error::from(e)));
+            let planned = match c.pass.as_deref() {
+                Some(pass) => {
+                    let (g, read) = krb5_kdc::read_fresh(store);
+                    match read {
+                        Err(_) => None,
+                        Ok(()) if g.get_in_realm(&c.name, &req).is_some() => {
+                            return Ok(generic_ret(API_V2, KADM5_DUP));
+                        }
+                        Ok(()) => {
+                            match g.plan_create_password(&c.name, &req, pass, &c.ks, &c.ent) {
+                                Ok(plan) => Some(plan),
+                                Err(e) => return Ok(refused(e)),
+                            }
+                        }
+                    }
+                }
+                None => None,
+            };
+            let prepared = match planned.map(krb5_kdc::CreatePlan::derive) {
+                None => None,
+                Some(Ok(p)) => Some(p),
+                Some(Err(e)) => return Ok(refused(e)),
+            };
             let mut g = match write_store(store, proc, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
             if g.get_in_realm(&c.name, &req).is_some() {
                 return Ok(generic_ret(API_V2, KADM5_DUP));
+            }
+            if let Some(p) = prepared {
+                let created = commit(&mut g, proc, API_V2, |s| {
+                    if !s.create_prepared(p, actor)? {
+                        return Ok(false);
+                    }
+                    if c.ent.mask & KADM5_TL_DATA != 0 {
+                        s.merge_tl_data_in(&c.name, &req, &c.tl_data, actor)?;
+                    }
+                    Ok(true)
+                });
+                match created {
+                    Ok(true) => return Ok(generic_ret(API_V2, 0)),
+                    Ok(false) => {}
+                    Err(rep) => return Ok(rep),
+                }
+                if g.get_in_realm(&c.name, &req).is_some() {
+                    return Ok(generic_ret(API_V2, KADM5_DUP));
+                }
             }
             // NULL password: random key, no quality check.
             let changed = commit(&mut g, proc, API_V2, |s| {
@@ -461,29 +505,64 @@ pub(super) fn dispatch_kadm5_ticket(
                 Err(rep) => return rep,
             };
             let req = req_realm(&prealm, &realm);
+            // MIT: `chpass_principal_2_svc` (kadmin/server/server_stubs.c)
+            let checks = |g: &krb5_kdc::PrincipalStore| -> Result<u32, Vec<u8>> {
+                let (cid, lockdown) = match g.get_in_realm(&name, &req) {
+                    None => return Err(generic_ret(API_V2, KADM5_UNK_PRINC)),
+                    Some(p) => (p.id(), p.attributes & KDB_LOCKDOWN_KEYS != 0),
+                };
+                if lockdown {
+                    return Err(generic_ret(API_V2, KADM5_AUTH_CHANGEPW));
+                }
+                let self_change = is_self_id(actor, &cid);
+                if (changepw && !self_change) || !stack.cpw(actor, &cid) {
+                    return Err(generic_ret(API_V2, KADM5_AUTH_CHANGEPW));
+                }
+                if self_change && !initial {
+                    return Err(generic_ret(API_V2, KADM5_AUTH_INITIAL));
+                }
+                if self_change && let Err(e) = g.check_min_life_in(&name, &req) {
+                    return Err(generic_ret(API_V2, kadm5_code(proc, &Error::from(e))));
+                }
+                Ok(clamp_self_keepold(self_change, keepold))
+            };
+            let refused =
+                |e: krb5_kdc::Error| generic_ret(API_V2, kadm5_code(proc, &Error::from(e)));
+            let planned = {
+                let (g, read) = krb5_kdc::read_fresh(store);
+                if read.is_ok() {
+                    let n = match checks(&g) {
+                        Ok(n) => n,
+                        Err(rep) => return Ok(rep),
+                    };
+                    match g.plan_password(&name, &req, &pass, &ks) {
+                        Ok(plan) => plan.map(|plan| (n, plan)),
+                        Err(e) => return Ok(refused(e)),
+                    }
+                } else {
+                    None
+                }
+            };
+            let prepared = match planned.map(|(n, plan)| plan.derive().map(|p| (n, p))) {
+                None => None,
+                Some(Ok(v)) => Some(v),
+                Some(Err(e)) => return Ok(refused(e)),
+            };
             let mut g = match write_store(store, proc, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
-            // MIT: `chpass_principal_2_svc` (kadmin/server/server_stubs.c)
-            let (cid, lockdown) = match g.get_in_realm(&name, &req) {
-                None => return Ok(generic_ret(API_V2, KADM5_UNK_PRINC)),
-                Some(p) => (p.id(), p.attributes & KDB_LOCKDOWN_KEYS != 0),
+            if let Some((n, p)) = prepared {
+                match commit(&mut g, proc, API_V2, |s| s.apply_password(p, n, actor)) {
+                    Ok(true) => return Ok(generic_ret(API_V2, 0)),
+                    Ok(false) => {}
+                    Err(rep) => return Ok(rep),
+                }
+            }
+            let n = match checks(&g) {
+                Ok(n) => n,
+                Err(rep) => return Ok(rep),
             };
-            if lockdown {
-                return Ok(generic_ret(API_V2, KADM5_AUTH_CHANGEPW));
-            }
-            let self_change = is_self_id(actor, &cid);
-            if (changepw && !self_change) || !stack.cpw(actor, &cid) {
-                return Ok(generic_ret(API_V2, KADM5_AUTH_CHANGEPW));
-            }
-            if self_change && !initial {
-                return Ok(generic_ret(API_V2, KADM5_AUTH_INITIAL));
-            }
-            if self_change && let Err(e) = g.check_min_life_in(&name, &req) {
-                return Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e))));
-            }
-            let n = clamp_self_keepold(self_change, keepold);
             let changed = commit(&mut g, proc, API_V2, |s| {
                 s.set_password_etypes_keepold_n_in(&name, &req, &pass, n, actor, &ks)
             });

@@ -6,7 +6,7 @@ use krb5_kdc::{AdminEnt, AdminFields, Error, PrincipalStore, PrincipalWrite as _
 use krb5_types::PrincipalName;
 use zeroize::Zeroizing;
 
-use super::{Session, string_to_keysalts, texts};
+use super::{Handle, Session, string_to_keysalts, texts};
 use crate::getdate;
 
 mod mask {
@@ -223,16 +223,19 @@ pub(crate) fn addprinc(s: &mut Session<'_>, argv: &[String]) {
         }
     };
     a.mask |= mask::PRINCIPAL;
-    let done = s.h.mutate(|st, caller| {
-        create(
-            st,
-            caller,
-            &a,
-            &name,
-            &realm,
-            pass.as_ref().map(|p| p.as_slice()),
-        )
-    });
+    let done = match pass.as_deref() {
+        Some(pw) if a.db_args.is_empty() => create_staged(&mut s.h, &a, &name, &realm, pw),
+        _ => s.h.mutate(|st, caller| {
+            create(
+                st,
+                caller,
+                &a,
+                &name,
+                &realm,
+                pass.as_ref().map(|p| p.as_slice()),
+            )
+        }),
+    };
     if let Err(e) = done {
         s.io.com_err(
             "add_principal",
@@ -263,16 +266,7 @@ fn create(
         }
         return Err(db2_put_refused(arg));
     }
-    let ent = AdminEnt {
-        mask: a.mask,
-        attributes: a.attributes,
-        max_life: a.max_life,
-        max_renewable_life: a.max_rlife,
-        princ_expire_time: a.princ_expire_time,
-        pw_expiration: a.pw_expiration,
-        kvno: a.kvno,
-        policy: a.policy.clone(),
-    };
+    let ent = admin_ent(a);
     let keys = match pass {
         Some(p) => krb5_kdc::CreateKeys::Password(p),
         None => krb5_kdc::CreateKeys::Random,
@@ -282,6 +276,40 @@ fn create(
         st.purgekeys_in(name, realm, i32::MAX, caller)?;
     }
     Ok(())
+}
+
+/// The keys are derived before the database's lock is taken, as MIT's create.
+fn create_staged(
+    h: &mut Handle,
+    a: &PrincArgs,
+    name: &PrincipalName,
+    realm: &str,
+    pw: &[u8],
+) -> Result<(), Error> {
+    if h.refresh().is_ok() {
+        let ent = admin_ent(a);
+        let prepared = h
+            .store
+            .plan_create_password(name, realm, pw, &a.keysalts, &ent)?
+            .derive()?;
+        if h.mutate(|st, caller| st.create_prepared(prepared, caller))? {
+            return Ok(());
+        }
+    }
+    h.mutate(|st, caller| create(st, caller, a, name, realm, Some(pw)))
+}
+
+fn admin_ent(a: &PrincArgs) -> AdminEnt {
+    AdminEnt {
+        mask: a.mask,
+        attributes: a.attributes,
+        max_life: a.max_life,
+        max_renewable_life: a.max_rlife,
+        princ_expire_time: a.princ_expire_time,
+        pw_expiration: a.pw_expiration,
+        kvno: a.kvno,
+        policy: a.policy.clone(),
+    }
 }
 
 // MIT: `krb5_db2_put_principal` (kdb_db2.c:812-822)
@@ -652,9 +680,11 @@ pub(crate) fn cpw(s: &mut Session<'_>, argv: &[String]) {
             }
         },
     };
-    let done = s.h.mutate(|st, caller| {
-        st.set_password_etypes_keepold_n_in(&name, &realm, &pw, keep, caller, &keysalts)
-    });
+    let caller = s.h.caller.clone();
+    let done =
+        s.h.store
+            .change_password_staged(&name, &realm, &pw, keep, &caller, &keysalts)
+            .and_then(|r| r);
     if let Err(e) = done {
         s.io.com_err(
             "change_password",

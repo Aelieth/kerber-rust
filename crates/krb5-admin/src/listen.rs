@@ -488,14 +488,9 @@ pub(crate) fn handle_kpasswd_from(
             "Principal does not exist".to_owned(),
         )
     } else {
-        let mut g = store
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // `current_caller` is `kadmind@REALM`, not the client.
         let stamp = format!("kadmind@{store_realm}");
-        // MIT: `ctx_lock` (plugins/kdb/db2/kdb_db2.c:438-447)
-        let changed = (|| -> Result<(), krb5_kdc::Error> {
-            g.reload_if_stale()?;
+        let checks = |g: &krb5_kdc::PrincipalStore| -> Result<(), krb5_kdc::Error> {
             // Stricter than MIT: lockdown keys are refused, as chpass does.
             // MIT: `chpass_principal_2_svc` (kadmin/server/server_stubs.c:855-861)
             // PROTECT_KEYS is answered as AUTH_CHANGEPW.
@@ -507,6 +502,31 @@ pub(crate) fn handle_kpasswd_from(
             if self_change {
                 g.check_min_life_in(&targ, &targ_realm)?;
             }
+            Ok(())
+        };
+        let planned = {
+            let (g, read) = krb5_kdc::read_fresh(store);
+            match read {
+                Err(_) => Ok(None),
+                Ok(()) => {
+                    checks(&g).and_then(|()| g.plan_password(&targ, &targ_realm, &newpass, &[]))
+                }
+            }
+        };
+        let prepared =
+            planned.and_then(|plan| plan.map(krb5_kdc::PasswordPlan::derive).transpose());
+        let mut g = store
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // MIT: `ctx_lock` (plugins/kdb/db2/kdb_db2.c:438-447)
+        let changed = (|| -> Result<(), krb5_kdc::Error> {
+            g.reload_if_stale()?;
+            if let Some(p) = prepared?
+                && g.change(|s| s.apply_password(p, 0, &stamp))??
+            {
+                return Ok(());
+            }
+            checks(&g)?;
             g.change(|s| s.set_password_keepold_n_in(&targ, &targ_realm, &newpass, 0, &stamp))?
         })();
         match changed {

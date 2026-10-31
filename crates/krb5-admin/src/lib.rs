@@ -410,10 +410,10 @@ impl<'a> AdminSession<'a> {
                 .map_err(Error::from)?;
         }
         let realm = self.store.realm().to_owned();
-        self.change(|s, _, actor| {
-            s.set_password_etypes_keepold_n_in(name, &realm, password, 0, actor, etypes)
-        })
-        .map_err(Error::from)
+        self.store
+            .change_password_staged(name, &realm, password, 0, &self.actor, etypes)
+            .and_then(|r| r)
+            .map_err(Error::from)
     }
 
     #[must_use]

@@ -6,6 +6,7 @@ use krb5_types::PrincipalName;
 use super::flags::{KDB_DISALLOW_ALL_TIX, KDB_REQUIRES_PRE_AUTH, KDB_V1_BASE_LENGTH};
 use super::keys::{KeyEntry, KeyLookup, random_keys};
 use super::password::{apply_keysalt_policy, c_password, keys_from_password};
+use super::policy::NamedPolicy;
 use super::{PrincipalStore, kadm5_mask, unix_now_u32};
 use crate::acl::{Acl, AdminOp, Restrictions};
 use crate::error::Error;
@@ -332,6 +333,37 @@ pub enum CreateKeys<'a> {
     Password(&'a [u8]),
     Random,
     Explicit(&'a [KeyEntry]),
+}
+
+struct CreateInputs {
+    name: PrincipalName,
+    realm: String,
+    id: String,
+    policy_name: Option<String>,
+    policy: Option<NamedPolicy>,
+    keysalts: Vec<KeySalt>,
+    kvno: u32,
+    now: u32,
+}
+
+pub struct CreatePlan {
+    inputs: CreateInputs,
+    ent: AdminEnt,
+    password: zeroize::Zeroizing<Vec<u8>>,
+}
+
+pub struct PreparedCreate {
+    plan: CreatePlan,
+    keys: Vec<KeyEntry>,
+}
+
+impl CreatePlan {
+    // MIT: `kadm5_create_principal_3` (lib/kadm5/srv/svr_principal.c:460-462)
+    pub fn derive(self) -> Result<PreparedCreate, Error> {
+        let i = &self.inputs;
+        let keys = keys_from_password(&i.keysalts, &self.password, &i.name, &i.realm, i.kvno)?;
+        Ok(PreparedCreate { plan: self, keys })
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -684,6 +716,77 @@ impl PrincipalStore {
             CreateKeys::Random => (None, None),
             CreateKeys::Explicit(k) => (None, Some(k)),
         };
+        let inputs = self.create_inputs(name, princ_realm, password, explicit, etypes, ent)?;
+        let keys = if let Some(given) = explicit {
+            let mut keys = given.to_vec();
+            if ent.mask & kadm5_mask::KVNO != 0 {
+                for key in &mut keys {
+                    key.kvno = inputs.kvno;
+                }
+            }
+            keys
+        } else if let Some(pw) = password {
+            keys_from_password(&inputs.keysalts, pw, name, princ_realm, inputs.kvno)?
+        } else {
+            random_keys(&inputs.keysalts, inputs.kvno)?
+        };
+        self.create_finish(inputs, keys, password, ent, actor)
+    }
+
+    pub fn plan_create_password(
+        &self,
+        name: &PrincipalName,
+        princ_realm: &str,
+        password: &[u8],
+        etypes: &[KeySalt],
+        ent: &AdminEnt,
+    ) -> Result<CreatePlan, Error> {
+        let password = c_password(password);
+        let inputs = self.create_inputs(name, princ_realm, Some(password), None, etypes, ent)?;
+        Ok(CreatePlan {
+            inputs,
+            ent: ent.clone(),
+            password: zeroize::Zeroizing::new(password.to_vec()),
+        })
+    }
+
+    // MIT: `kadm5_create_principal_3` (lib/kadm5/srv/svr_principal.c:504-504)
+    pub fn create_prepared(
+        &mut self,
+        prepared: PreparedCreate,
+        actor: &str,
+    ) -> Result<bool, Error> {
+        self.inside_change()?;
+        let CreateInputs {
+            id,
+            policy_name,
+            policy,
+            ..
+        } = &prepared.plan.inputs;
+        if self.get(id).is_some()
+            || policy_name.as_deref().and_then(|n| self.policies.get(n)) != policy.as_ref()
+        {
+            return Ok(false);
+        }
+        let PreparedCreate { plan, keys } = prepared;
+        let CreatePlan {
+            inputs,
+            ent,
+            password,
+        } = plan;
+        self.create_finish(inputs, keys, Some(&password), &ent, actor)?;
+        Ok(true)
+    }
+
+    fn create_inputs(
+        &self,
+        name: &PrincipalName,
+        princ_realm: &str,
+        password: Option<&[u8]>,
+        explicit: Option<&[KeyEntry]>,
+        etypes: &[KeySalt],
+        ent: &AdminEnt,
+    ) -> Result<CreateInputs, Error> {
         let id = crate::kdb::lookup_principal_id(name, princ_realm);
         if self.get(&id).is_some() {
             return Err(Error::AlreadyExists);
@@ -691,7 +794,7 @@ impl PrincipalStore {
         let policy_name = (ent.mask & kadm5_mask::POLICY != 0)
             .then(|| ent.policy.clone())
             .flatten();
-        let polent = policy_name
+        let policy = policy_name
             .as_deref()
             .and_then(|n| self.policies.get(n))
             .cloned();
@@ -707,46 +810,61 @@ impl PrincipalStore {
             )?;
         }
         let now = unix_now_u32();
-        let use_etypes: Vec<KeySalt> = if let Some(given) = explicit {
+        let keysalts: Vec<KeySalt> = if let Some(given) = explicit {
             given.iter().map(|k| KeySalt::from(k.etype)).collect()
         } else {
             apply_keysalt_policy(
-                polent.as_ref().and_then(|p| p.allowed_keysalts.as_deref()),
+                policy.as_ref().and_then(|p| p.allowed_keysalts.as_deref()),
                 etypes,
                 &self.policy.password_keysalts(),
             )?
         };
-        let asked = if ent.mask & kadm5_mask::KVNO != 0 {
+        let kvno = if ent.mask & kadm5_mask::KVNO != 0 {
             if ent.kvno > 65535 {
                 return Err(Error::InvalidArgument("invalid kvno".into()));
             }
-            Some(ent.kvno)
+            ent.kvno
         } else {
-            None
+            1
         };
-        let kvno = asked.unwrap_or(1);
-        let keys = if let Some(given) = explicit {
-            let mut keys = given.to_vec();
-            if let Some(kvno) = asked {
-                for key in &mut keys {
-                    key.kvno = kvno;
-                }
-            }
-            keys
-        } else if let Some(pw) = password {
-            keys_from_password(&use_etypes, pw, name, princ_realm, kvno)?
-        } else {
-            random_keys(&use_etypes, kvno)?
-        };
+        Ok(CreateInputs {
+            name: name.clone(),
+            realm: princ_realm.to_owned(),
+            id,
+            policy_name,
+            policy,
+            keysalts,
+            kvno,
+            now,
+        })
+    }
+
+    fn create_finish(
+        &mut self,
+        inputs: CreateInputs,
+        keys: Vec<KeyEntry>,
+        password: Option<&[u8]>,
+        ent: &AdminEnt,
+        actor: &str,
+    ) -> Result<(), Error> {
+        let CreateInputs {
+            name,
+            realm,
+            policy_name,
+            policy,
+            keysalts,
+            now,
+            ..
+        } = inputs;
         let attributes = if ent.mask & kadm5_mask::ATTRIBUTES != 0 {
             ent.attributes
         } else {
             self.default_create_attributes(password.is_some())
         };
-        let salt = crate::kdb_dump::salt_of_keys(&keys, name, princ_realm);
+        let salt = crate::kdb_dump::salt_of_keys(&keys, &name, &realm);
         let mut p = Principal::from_keys(
             name.clone(),
-            princ_realm.to_owned(),
+            realm.clone(),
             keys,
             salt,
             PrincipalFields {
@@ -775,7 +893,7 @@ impl PrincipalStore {
         p.pw_expire = if ent.mask & kadm5_mask::PW_EXPIRATION != 0 {
             ent.pw_expiration
         } else {
-            match &polent {
+            match &policy {
                 Some(pol) if pol.pw_max_life != 0 => now.saturating_add(pol.pw_max_life),
                 _ => 0,
             }
@@ -785,12 +903,12 @@ impl PrincipalStore {
             refresh_kadm_tl(&mut p);
         }
         stamp_admin_tl(&mut p, true, actor);
-        let hook_etypes: Vec<EncryptionType> = use_etypes.iter().map(|ks| ks.etype).collect();
+        let hook_etypes: Vec<EncryptionType> = keysalts.iter().map(|ks| ks.etype).collect();
         super::kadm5_hook::hook_create(
             self,
             super::kadm5_hook::HookStage::Precommit,
-            name,
-            princ_realm,
+            &name,
+            &realm,
             ent.mask,
             password,
             &hook_etypes,
@@ -798,8 +916,8 @@ impl PrincipalStore {
         self.put_principal(p)?;
         self.save_if_configured()?;
         self.postcommit(super::kadm5_hook::Post::Create {
-            princ: name.clone(),
-            realm: princ_realm.to_owned(),
+            princ: name,
+            realm,
             mask: ent.mask,
             password: password.map(|p| zeroize::Zeroizing::new(p.to_vec())),
             etypes: hook_etypes,
