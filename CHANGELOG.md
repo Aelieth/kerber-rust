@@ -320,7 +320,7 @@ any other `###` heading.
 - **kdc.** A key the KDC does not permit logs `No matching key in entry having a permitted enctype`.
 - **kdc.** A KDC started by full path names itself by its basename in init failure, as MIT.
 - **gss.** Refused mutual AP-REQ gets MIT's KRB-ERROR token, in SPNEGO too; initiators read it.
-- **admin.** kadmind's full resync dumps its in-memory store for replica's version, with kprop's files.
+- **admin.** Full resync dumps kadmind's store for replica's version; dump_ok synced, stale re-dumps.
 - **client/kdc.** A non-ASCII realm or PKINIT SAN is refused or unmatched, not a panic.
 - **admin.** `ktutil` gives aes-sha2 and Camellia keys MIT's PBKDF2 rounds (v1.1.0: 4096).
 - **client.** The AS nonce is drawn fresh for each request, as MIT.

@@ -857,6 +857,14 @@ pub fn dump_current_in_ulog(dump_file: &Path, ulog: &crate::ulog::Ulog) -> bool 
     let Ok(file) = fs::File::open(dump_file) else {
         return false;
     };
+    let marked = file
+        .metadata()
+        .ok()
+        .zip(fs::metadata(dump_ok_path(dump_file)).ok())
+        .is_some_and(|(dump, ok)| dump_ok_covers(&dump, &ok));
+    if !marked {
+        return false;
+    }
     let mut line = Vec::new();
     if std::io::BufReader::new(file.take(FGETS_BUFSIZ))
         .read_until(b'\n', &mut line)
@@ -986,9 +994,7 @@ pub enum DumpOkStage {
 // MIT: `finish_ofile` (kadmin/dbutil/dump.c:159-167)
 // MIT: `update_ok_file` (kadmin/dbutil/dump.c:214-219)
 pub fn write_dump_with_ok(path: &Path, text: &[u8]) -> Result<(), (DumpOkStage, std::io::Error)> {
-    let mut ok_name = path.as_os_str().to_os_string();
-    ok_name.push(".dump_ok");
-    let ok_path = PathBuf::from(ok_name);
+    let ok_path = dump_ok_path(path);
     let mut opts = fs::OpenOptions::new();
     opts.write(true).create(true).truncate(true);
     #[cfg(unix)]
@@ -1002,8 +1008,23 @@ pub fn write_dump_with_ok(path: &Path, text: &[u8]) -> Result<(), (DumpOkStage, 
     let marked = crate::lock_file_exclusive(&ok).map_err(|e| (DumpOkStage::Lock, e))?;
     write_fresh_secret_file(path, text).map_err(|e| (DumpOkStage::Write, e))?;
     let _ = (&ok).write_all(&[0]);
+    let _ = ok.sync_all();
     drop(marked);
     Ok(())
+}
+
+#[must_use]
+pub fn dump_ok_path(path: &Path) -> PathBuf {
+    let mut ok = path.as_os_str().to_os_string();
+    ok.push(".dump_ok");
+    PathBuf::from(ok)
+}
+
+// MIT: `open_database` (kprop/kprop.c:378-382)
+#[must_use]
+pub fn dump_ok_covers(dump: &fs::Metadata, ok: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    dump.mtime() <= ok.mtime()
 }
 
 // MIT: `iprop_version` (kadmin/dbutil/dump.c:1046-1055)

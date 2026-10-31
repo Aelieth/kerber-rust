@@ -966,7 +966,8 @@ fn write_dump_file(util: &mut Util, path: &Path, text: &str) -> Result<(), u8> {
     let Err((stage, e)) = krb5_kdc::write_dump_with_ok(path, text.as_bytes()) else {
         return Ok(());
     };
-    let ok_path = format!("{}.dump_ok", path.display());
+    let ok_path = krb5_kdc::dump_ok_path(path);
+    let ok_path = ok_path.display();
     match stage {
         DumpOkStage::Create => {
             util.com_err(

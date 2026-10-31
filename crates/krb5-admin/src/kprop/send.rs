@@ -366,7 +366,7 @@ impl KpropDump {
         let ok_fn = format!("{data_fn}.dump_ok");
         let ok_meta = std::fs::metadata(&ok_fn)
             .map_err(|e| KpropError::os(&e, format!("while trying to stat {ok_fn}")))?;
-        if meta.mtime() > ok_meta.mtime() {
+        if !krb5_kdc::dump_ok_covers(&meta, &ok_meta) {
             return Err(KpropError::new(
                 None,
                 format!("'{data_fn}' more recent than '{ok_fn}'."),
