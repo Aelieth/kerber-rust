@@ -108,7 +108,7 @@ any other `###` heading.
 - **examples.** krb5-embed-realm serves KDC and kadmind from one store; one Shutdown stops both.
 - **kdc.** A write at 5,000 principals is 0.80–0.86× MIT, flat as realm grows.
 - **kdc.** A principal change appends, flushes once, no rename; crash leaves it unread.
-- **kdc.** iprop write syncs log and DB at once; header after DB unlock.
+- **kdc.** iprop write syncs only DB in its lock, then log, header, as MIT.
 - **admin.** Password keys derive outside the DB lock, as MIT.
 - **kdc.** A store keeps its own kdcpreauth, kdcpolicy, audit, authdata, OTP modules.
 - **kdc.** Non-OTP: same module again is no-op; another of that name is added.

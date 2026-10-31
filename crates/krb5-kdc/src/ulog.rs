@@ -230,16 +230,13 @@ impl UlogBatch<'_> {
         self.ulog.set_state(&mut self.hdr, KDB_UNSTABLE)
     }
 
-    /// Unstable before the write; MIT logs after the put and a crash skips it.
+    /// Unstable before the DB write; MIT logs after its put.
     pub fn stage(&mut self) -> Result<(), UlogError> {
         self.ulog.write_header(&self.hdr)
     }
 
-    pub fn sync(&self) -> Result<(), UlogError> {
-        Ok(self.ulog.backing.sync()?)
-    }
-
     pub fn finish(mut self) -> Result<(), UlogError> {
+        self.ulog.backing.sync()?;
         self.hdr.state = KDB_STABLE;
         self.ulog.sync_header(&self.hdr)
     }
