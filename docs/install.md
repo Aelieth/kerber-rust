@@ -655,8 +655,8 @@ docker run --rm --network none --entrypoint /usr/sbin/kadmin.local -v "$VOLUME:/
 - Give the one-off containers the volume options the container uses (`:Z` under SELinux with
   podman, for one). podman takes the same commands.
 - To go back, run the same steps the other way, as in [Going back to MIT](#going-back-to-mit):
-  dump with the new image, move `principal`, `principal.ulog` and `principal.lockout` aside,
-  load with the old one, and give the directory back to `OWNER`.
+  dump with the new image, move `principal` and `principal.lockout` aside (and `principal.ulog`
+  too, if iprop was enabled), load with the old one, and give the directory back to `OWNER`.
 
 Once the realm has served from the new image, remove the dump and MIT's database from the
 volume, as on a host:
@@ -676,7 +676,8 @@ sudo kdb5_util dump /var/kerberos/krb5kdc/kerber-realm.dump
 sudo make uninstall PREFIX=/usr
 sudo dnf install -y krb5-server
 sudo mkdir /var/kerberos/krb5kdc/kerber-db
-sudo mv /var/kerberos/krb5kdc/principal /var/kerberos/krb5kdc/principal.ulog /var/kerberos/krb5kdc/principal.lockout /var/kerberos/krb5kdc/kerber-db/
+sudo mv /var/kerberos/krb5kdc/principal /var/kerberos/krb5kdc/principal.lockout /var/kerberos/krb5kdc/kerber-db/
+if sudo test -e /var/kerberos/krb5kdc/principal.ulog; then sudo mv /var/kerberos/krb5kdc/principal.ulog /var/kerberos/krb5kdc/kerber-db/; fi
 sudo kdb5_util load /var/kerberos/krb5kdc/kerber-realm.dump
 sudo restorecon -Rv /var/kerberos/krb5kdc
 sudo systemctl enable --now krb5kdc kadmin
