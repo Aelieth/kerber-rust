@@ -346,6 +346,18 @@ impl SideFile {
         Ok(self.locate(id)?.map(|(_, l)| l))
     }
 
+    fn row_unlocked(&self, id: &str) -> Option<Lockout> {
+        let meta = std::fs::symlink_metadata(&self.path).ok()?;
+        if self.ix.foreign || !self.ix.whole || (meta.dev(), meta.ino()) != self.id {
+            return None;
+        }
+        if meta.len() != self.ix.len {
+            return None;
+        }
+        let &(at, _) = self.ix.records.get(id)?;
+        self.record_at(at, id).ok().flatten()
+    }
+
     fn put(&mut self, id: &str, l: Lockout) -> io::Result<()> {
         if let Some((at, have)) = self.locate(id)? {
             if have != l {
@@ -671,7 +683,14 @@ impl LockoutState {
         let id = p.id();
         let mut stored = None;
         let mut writable = false;
-        if let (Some(db), Some(lock)) = (db, lock)
+        let peeked = db.zip(lock).and_then(|(db, _)| {
+            let side = inner.side.as_ref().filter(|s| s.path == lockout_path(db))?;
+            Some((side.row_unlocked(&id)?, side.writable))
+        });
+        if let Some((l, w)) = peeked {
+            stored = Some(l);
+            writable = w;
+        } else if let (Some(db), Some(lock)) = (db, lock)
             && let Ok(_held) = lock.hold(DbLockMode::Shared)
             && let Some(side) = inner.side(db)
         {

@@ -23,11 +23,11 @@ any other `###` heading.
 - **admin.** A kadm5 password buffer is wiped when its RPC copy is dropped.
 - **crypto.** crypto-bigint 0.7.9 fixes RUSTSEC-2026-0387, uneven timing in PKINIT DH/RSA/ECDSA and SPAKE.
 - **kdc.** Unable to make audit id, KDC drops AS-REQ and gives TGS-REQ generic error, as MIT.
-- **kdc.** Extra or mistyped SignedData/SignerInfo fields fail PKINIT signedAuthPack, as MIT's CMS template.
+- **kdc.** Extra or mistyped SignedData/SignerInfo fields fail PKINIT signedAuthPack, as MIT.
 - **pkinit.** P-384 needs `--cfg p384_backend="fiat"` (constant-time; our cargo config sets it) or is refused.
 - **kdc.** Bad PKINIT signedAuthPack gives OpenSSL's CMS reason, as MIT logs it.
 - **kdc.** PKINIT signer with no signed attributes is taken, as MIT's `CMS_verify`.
-- **crypto.** AES/DES/Camellia/RC4/HMAC/hashes `zeroize` key/hash state on drop, as MIT's `aes_key_cleanup`.
+- **crypto.** AES/DES/Camellia/RC4/HMAC/hashes `zeroize` key/hash state on drop, as MIT.
 - **gss.** DER length past its token's end is refused, as MIT's `get_tag`.
 - **gss.** An eight-octet DER length no longer overflows and panics SPNEGO and acceptor.
 - **crypto.** Encrypt keeps confounder and plaintext, RC4 copy included, in buffer wiped on drop.
@@ -51,7 +51,7 @@ any other `###` heading.
 - **kdc.** PKINIT trusts kdc.conf's `pkinit_anchors`, signs with `pkinit_identity`; its own CA is test-only.
 - **kdc.** PKINIT checks client's `pkinit_cert_match` rule as MIT's dbmatch; miss is 66.
 - **kdc.** `pkinit_cert_match` takes `<KU>`, `<EKU>`, `<SAN>`, `<ISSUER>`, `<SUBJECT>`, `&&`, `||`.
-- **pkinit.** MODP Diffie-Hellman is constant-time on crypto-bigint, not num-bigint's variable-time `modpow`.
+- **pkinit.** MODP Diffie-Hellman is constant-time on crypto-bigint, not num-bigint's `modpow`.
 - **admin.** kpropd, kprop bound input: handler, dump-size, record caps; I/O, transfer, connect timeouts.
 - **admin/kdc.** CSPRNG failure fails kadm5 request closed.
 - **admin/kdc.** Logged policy names and globs escape control characters; CMS ContentInfo type is checked.
@@ -105,7 +105,7 @@ any other `###` heading.
 - **form.** admin: comments ≤3% of code chars; safety, wire or MIT-quirk fact keeps its line.
 - **form.** kdc, gss, testkit: comments ≤3% of code chars.
 - **form.** In those three crates, safety, wire or MIT-quirk fact keeps its line.
-- **examples.** krb5-embed-realm serves KDC and kadmind from one store, a loop each; one Shutdown stops both.
+- **examples.** krb5-embed-realm serves KDC and kadmind from one store; one Shutdown stops both.
 - **kdc.** A write at 5,000 principals is 0.80–0.86 times MIT and flat as realm grows.
 - **kdc.** A principal change appends and flushes once, no rename; crash leaves it unread.
 - **kdc.** A store keeps its own kdcpreauth, kdcpolicy, audit, authdata, OTP modules.
@@ -182,7 +182,7 @@ any other `###` heading.
 - **protocol/gss.** `use_kdc_context` is gone.
 - **kdc.** KDC and kadmind can share store: `SharedDump` is `SharedStore` (`Arc<RwLock<dyn Store>>`).
 - **kdc.** `PrincipalStore::try_new` returns CSPRNG failure.
-- **kdc.** A 1.1 program fails on an appended change; stop both daemons to upgrade.
+- **kdc.** 1.1 programs fail on appended changes; stop both daemons to upgrade.
 - **kdc.** Torn change is cut; replaced records are compacted away.
 - **client.** Client reads its profile once at start: `init_context` returns `ClientContext`.
 - **client.** AS, TGS, KCM, ccache, keytab calls take that `ClientContext`.
@@ -239,6 +239,7 @@ any other `###` heading.
 - **ci.** ccache, two client-differential nightly gates, two probes gone; client-tools and pkinit cover them.
 
 ### Fixed
+- **kdc.** Lockout rows read unlocked if the file is unchanged and CRCs check.
 - **embed.** pwqual joins built-ins; trust keys need setkey; lockout has DB owner.
 - **kdc.** ks_tuples keep their salt types, as MIT.
 - **kdc.** kadm5 and iprop keep delegation tl_data; cpw after renprinc uses new name.
@@ -273,7 +274,7 @@ any other `###` heading.
 - **kdc.** Master key that fails to decrypt logs MIT's failure while fetching master keys list.
 - **protocol.** Negative `clockskew` fails every ticket and authenticator time check, as MIT.
 - **protocol.** `verify_init_creds` takes profile's skew, not 300 s.
-- **kdc.** `[libdefaults]` `permitted_enctypes`, `allow_*` use kdc.conf's first values, as MIT's KDC context.
+- **kdc.** `[libdefaults]` `permitted_enctypes`, `allow_*` use kdc.conf's first values, as MIT's KDC.
 - **kdc.** Empty `permitted_enctypes` list permits nothing.
 - **gss/types.** One DER length codec: GSS token of 64 KiB or more is framed right.
 - **gss/types.** Delegated KRB-CRED too long for checksum fails as MIT.
