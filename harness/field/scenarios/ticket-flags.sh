@@ -216,7 +216,7 @@ klist_times "$LAST_OUT" > "$STATE/renew1.txt"
 START1=$(sed -n '1p' "$STATE/renew1.txt")
 END1=$(sed -n '2p' "$STATE/renew1.txt")
 REN1=$(sed -n '3p' "$STATE/renew1.txt")
-if S_UNIX=$(date -d "$START1" +%s) && R_UNIX=$(date -d "$REN1" +%s); then
+if S_UNIX=$(TZ=UTC date -d "$START1" +%s) && R_UNIX=$(TZ=UTC date -d "$REN1" +%s); then
     printf 'renew_delta: %s\n' "$((R_UNIX - S_UNIX))" > "$STATE/renewdelta.txt"
 else
     printf 'renew_delta: missing\n' > "$STATE/renewdelta.txt"
@@ -249,7 +249,7 @@ kin TF.renew.zero.kinit 'Flags:.*R' z tfuser "alice's password ($ALICE)" -r 7d <
 klist_times "$LAST_OUT" > "$STATE/zero.txt"
 ZSTART=$(sed -n '1p' "$STATE/zero.txt")
 ZREN=$(sed -n '3p' "$STATE/zero.txt")
-if ZS=$(date -d "$ZSTART" +%s) && ZR=$(date -d "$ZREN" +%s); then
+if ZS=$(TZ=UTC date -d "$ZSTART" +%s) && ZR=$(TZ=UTC date -d "$ZREN" +%s); then
     printf 'zero_delta: %s\n' "$((ZR - ZS))" > "$STATE/zerodelta.txt"
 else
     printf 'zero_delta: missing\n' > "$STATE/zerodelta.txt"
@@ -265,7 +265,7 @@ kin TF.renew.day.kinit 'Flags:.*R' d tfuser "alice's password ($ALICE)" -r 7d < 
 klist_times "$LAST_OUT" > "$STATE/oneday.txt"
 DSTART=$(sed -n '1p' "$STATE/oneday.txt")
 DREN=$(sed -n '3p' "$STATE/oneday.txt")
-if DS=$(date -d "$DSTART" +%s) && DR=$(date -d "$DREN" +%s); then
+if DS=$(TZ=UTC date -d "$DSTART" +%s) && DR=$(TZ=UTC date -d "$DREN" +%s); then
     DELTA=$((DR - DS))
     if [ "$DELTA" -ge 85200 ] && [ "$DELTA" -le 87600 ]; then printf 'one_day: yes\n'; else printf 'one_day: no %s\n' "$DELTA"; fi
 else
@@ -302,7 +302,7 @@ kin TF.z71.kinit 'Flags:.*R' z71 tfuser "alice's password ($ALICE)" -l 1h -r 8d 
 klist_times "$LAST_OUT" > "$STATE/z71.txt"
 QSTART=$(sed -n '1p' "$STATE/z71.txt")
 QREN=$(sed -n '3p' "$STATE/z71.txt")
-if QS=$(date -d "$QSTART" +%s) && QR=$(date -d "$QREN" +%s); then
+if QS=$(TZ=UTC date -d "$QSTART" +%s) && QR=$(TZ=UTC date -d "$QREN" +%s); then
     printf 'z71_delta: %s\n' "$((QR - QS))" > "$STATE/z71delta.txt"
 else
     printf 'z71_delta: missing\n' > "$STATE/z71delta.txt"
@@ -326,7 +326,7 @@ kin TF.post.life 'Flags:.*i' pl tfuser "alice's password ($ALICE)" -s "$STARTL" 
 klist_times "$LAST_OUT" > "$STATE/postlife.txt"
 PSTART=$(sed -n '1p' "$STATE/postlife.txt")
 PEND=$(sed -n '2p' "$STATE/postlife.txt")
-if PS=$(date -d "$PSTART" +%s) && PE=$(date -d "$PEND" +%s); then
+if PS=$(TZ=UTC date -d "$PSTART" +%s) && PE=$(TZ=UTC date -d "$PEND" +%s); then
     printf 'life: %s\n' "$((PE - PS))" > "$STATE/postlife-delta.txt"
 else
     printf 'life: missing\n' > "$STATE/postlife-delta.txt"

@@ -915,7 +915,7 @@ s4u_user_life() {
     start="$(printf '%s\n' "$line" | awk '{print $1, $2}')"
     end="$(printf '%s\n' "$line" | awk '{print $3, $4}')"
     [ -n "$start" ] && [ -n "$end" ] || return 1
-    echo $(($(date -d "$end" +%s) - $(date -d "$start" +%s)))
+    echo $(($(TZ=UTC date -d "$end" +%s) - $(TZ=UTC date -d "$start" +%s)))
 }
 
 s4u_tgt_life() {
@@ -925,7 +925,7 @@ s4u_tgt_life() {
     start="$(printf '%s\n' "$line" | awk '{print $1, $2}')"
     end="$(printf '%s\n' "$line" | awk '{print $3, $4}')"
     [ -n "$start" ] && [ -n "$end" ] || return 1
-    echo $(($(date -d "$end" +%s) - $(date -d "$start" +%s)))
+    echo $(($(TZ=UTC date -d "$end" +%s) - $(TZ=UTC date -d "$start" +%s)))
 }
 
 s4u_tgt_flags() {

@@ -414,7 +414,7 @@ echo "$RLIFE0_MIT"
 R0_START="$(echo "$RLIFE0_MIT" | awk '/krbtgt\//{print $1, $2; exit}')"
 R0_REN="$(echo "$RLIFE0_MIT" | awk -F'renew until ' '/renew until/{print $2}' | awk -F, '{print $1}')"
 echo "mit_rlife0_start=$R0_START mit_rlife0_renew=$R0_REN"
-R0_DELTA=$(($(date -d "$R0_REN" +%s) - $(date -d "$R0_START" +%s)))
+R0_DELTA=$(($(TZ=UTC date -d "$R0_REN" +%s) - $(TZ=UTC date -d "$R0_START" +%s)))
 echo "mit_rlife0_delta_secs=$R0_DELTA"
 test "$R0_DELTA" -ge 0
 test "$R0_DELTA" -le 120
@@ -484,7 +484,7 @@ echo "$RLIFE0_RUST"
 RR_START="$(echo "$RLIFE0_RUST" | awk '/krbtgt\//{print $1, $2; exit}')"
 RR_REN="$(echo "$RLIFE0_RUST" | awk -F'renew until ' '/renew until/{print $2}' | awk -F, '{print $1}')"
 echo "rust_rlife0_start=$RR_START rust_rlife0_renew=$RR_REN"
-RR_DELTA=$(($(date -d "$RR_REN" +%s) - $(date -d "$RR_START" +%s)))
+RR_DELTA=$(($(TZ=UTC date -d "$RR_REN" +%s) - $(TZ=UTC date -d "$RR_START" +%s)))
 echo "rust_rlife0_delta_secs=$RR_DELTA"
 test "$RR_DELTA" -ge 0
 test "$RR_DELTA" -le 120
