@@ -688,8 +688,13 @@ In the checkout: fetch the new release (`git pull`, or `git checkout <tag>` for 
 and run `make build` as in [Build](#build). `make install` replaces the programs and units an
 earlier install wrote and keeps every config file; give it the `PREFIX` you installed with
 (`/usr` when kerber-rust replaced krb5-server, `/usr/local` beside it). For a realm an earlier
-release made, five things changed:
+release made, six things changed:
 
+- Each principal change is now appended to the database, and a 1.1 `krb5kdc`, `kadmind`,
+  `kadmin.local` or `kdb5_util` cannot read a database that holds one: a 1.1 `krb5kdc` left
+  running fails every principal once this release's programs change the realm. Stop both
+  daemons before `make install` and start both after it, as below, and run no 1.1 program
+  against the realm again.
 - Release builds find the database, the stash and the ACL only where `kdc.conf` names them
   (`database_name`, `key_stash_file` and `acl_file` in the realm's stanza), else in
   `/var/kerberos/krb5kdc`; `KRB5_KDC_DB` and `KRB5_KDC_STASH` no longer count. Move a realm kept

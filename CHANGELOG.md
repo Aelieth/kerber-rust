@@ -182,7 +182,7 @@ any other `###` heading.
 - **protocol/gss.** `use_kdc_context` is gone.
 - **kdc.** KDC and kadmind can share store: `SharedDump` is `SharedStore` (`Arc<RwLock<dyn Store>>`).
 - **kdc.** `PrincipalStore::try_new` returns CSPRNG failure.
-- **kdc.** Principal change is appended and flushed; readers take only those changes.
+- **kdc.** A 1.1 program fails on an appended change; stop both daemons to upgrade.
 - **kdc.** Torn change is cut; replaced records are compacted away.
 - **client.** Client reads its profile once at start: `init_context` returns `ClientContext`.
 - **client.** AS, TGS, KCM, ccache, keytab calls take that `ClientContext`.
