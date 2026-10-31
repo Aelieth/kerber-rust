@@ -1,113 +1,76 @@
-//! AD-WIN2K-PAC parse, verify, and sign (MS-PAC).
-//!
-//! `PAC_LOGON_INFO` is MS-RPCE Type-Serialization v1 / NDR32
-//! `KERB_VALIDATION_INFO`. Pointer referents are deferred in
-//! field-encounter order (not dumped after the whole struct as a bag).
-//!
-//! The NDR32 reader/writer for `KERB_VALIDATION_INFO` lives in `ndr`.
-
 use std::fmt::Write as _;
+
+use zeroize::Zeroize;
 
 mod ndr;
 
 use ndr::{NdrR, NdrW};
 
-/// PAC buffer type: logon info (`KERB_VALIDATION_INFO`).
 pub const PAC_LOGON_INFO: u32 = 1;
 
-/// PAC buffer type: credentials.
 pub const PAC_CREDENTIAL_INFO: u32 = 2;
 
-/// PAC buffer type: server checksum.
 pub const PAC_SERVER_CHECKSUM: u32 = 6;
 
-/// PAC buffer type: KDC / privilege-server checksum.
 pub const PAC_PRIVSVR_CHECKSUM: u32 = 7;
 
-/// PAC buffer type: client name and ticket info.
 pub const PAC_CLIENT_INFO: u32 = 10;
 
-/// PAC buffer type: constrained delegation info.
 pub const PAC_DELEGATION_INFO: u32 = 11;
 
-/// PAC buffer type: UPN/DNS info (MS-PAC `ulType` 12, not 16).
 pub const PAC_UPN_DNS_INFO: u32 = 12;
 
-/// PAC buffer type: client claims.
 pub const PAC_CLIENT_CLAIMS: u32 = 13;
 
-/// PAC buffer type: device info.
 pub const PAC_DEVICE_INFO: u32 = 14;
 
-/// PAC buffer type: device claims.
 pub const PAC_DEVICE_CLAIMS: u32 = 15;
 
-/// PAC buffer type: ticket checksum (CVE-2020-17049). **Not** UPN/DNS.
 pub const PAC_TICKET_CHECKSUM: u32 = 16;
 
-/// PAC buffer type: PAC attributes.
 pub const PAC_ATTRIBUTES_INFO: u32 = 17;
 
-/// PAC buffer type: requester SID.
 pub const PAC_REQUESTER_SID: u32 = 18;
 
-/// PAC buffer type: extended KDC / full PAC checksum (CVE-2022-37967).
 pub const PAC_FULL_CHECKSUM: u32 = 19;
 
-/// MIT `pac.c` `MAX_BUFFERS`.
 pub const MAX_BUFFERS: usize = 4096;
 
-/// MIT `PAC_ALIGNMENT`: every buffer starts on an 8-byte boundary.
 pub const PAC_ALIGNMENT: usize = 8;
 
-/// Signature type HMAC-MD5 (RC4). RFC 4757 cksumtype -138.
 pub const CKSUM_HMAC_MD5: i32 = -138;
 
-/// Signature type HMAC-SHA1-96-AES128.
 pub const CKSUM_HMAC_SHA1_96_AES128: i32 = 15;
 
-/// Signature type HMAC-SHA1-96-AES256.
 pub const CKSUM_HMAC_SHA1_96_AES256: i32 = 16;
 
-/// SE_GROUP_MANDATORY | SE_GROUP_ENABLED_BY_DEFAULT | SE_GROUP_ENABLED.
 pub const SE_GROUP_DEFAULT: u32 = 7;
 
-/// `USER_NORMAL_ACCOUNT`.
 pub const USER_NORMAL_ACCOUNT: u32 = 0x10;
 
-/// PAC attributes: `PAC_WAS_REQUESTED`.
 pub const PAC_ATTRIBUTE_WAS_REQUESTED: u32 = 0x0000_0001;
 
-/// PAC attributes: `PAC_WAS_GIVEN_IMPLICITLY` (MS-PAC).
 pub const PAC_ATTRIBUTE_WAS_GIVEN_IMPLICITLY: u32 = 0x0000_0002;
 
-/// UPN/DNS: SAM name + SID extension present.
 pub const PAC_UPN_DNS_HAS_SAM_AND_SID: u32 = 0x0000_0002;
 
-/// `LOGON_EXTRA_SIDS`.
 pub const LOGON_EXTRA_SIDS: u32 = 0x20;
 
-/// NDR unique-pointer IDs start here and increment by 4 (Windows).
 const NDR_PTR_BASE: u32 = 0x0002_0000;
 
 /// FILETIME "never" (AD logoff / kickoff / must-change).
 const NT_TIME_NEVER: u64 = 0x7fff_ffff_ffff_ffff;
 
-/// NT time of Unix epoch.
 const NT_UNIX_EPOCH: u64 = 116_444_736_000_000_000;
 
-/// One PAC info buffer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PacBuffer {
-    /// Buffer type (`PAC_*`).
     pub kind: u32,
-    /// Buffer payload (not including the header).
     pub data: Vec<u8>,
     offset: usize,
 }
 
 impl PacBuffer {
-    /// Buffer with no received-byte offset (builder / signer).
     #[must_use]
     pub fn new(kind: u32, data: Vec<u8>) -> Self {
         Self {
@@ -118,26 +81,18 @@ impl PacBuffer {
     }
 }
 
-/// Parsed PAC.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Pac {
-    /// Version (usually 0).
     pub version: u32,
-    /// Buffers in file order.
     pub buffers: Vec<PacBuffer>,
     raw: Vec<u8>,
 }
 
-/// PAC parse / verify failure.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PacError {
-    /// Truncated or internally inconsistent PAC.
     Truncated,
-    /// Checksum mismatch.
     Integrity,
-    /// Required buffer missing.
     MissingBuffer,
-    /// Header, buffer table or buffer placement that MIT `krb5_pac_parse` refuses.
     Malformed,
 }
 
@@ -155,7 +110,6 @@ impl std::fmt::Display for PacError {
 impl std::error::Error for PacError {}
 
 impl Pac {
-    /// PAC assembled for signing (no received-byte copy).
     #[must_use]
     pub fn built(version: u32, buffers: Vec<PacBuffer>) -> Self {
         Self {
@@ -165,17 +119,10 @@ impl Pac {
         }
     }
 
-    /// Parse a PACTYPE blob.
-    ///
-    /// # Errors
-    ///
-    /// [`PacError::Truncated`] when the blob is shorter than its 8-byte header or its buffer
-    /// table; [`PacError::Malformed`] when the version is not 0, the buffer count is 0 or above
-    /// [`MAX_BUFFERS`], or a buffer is misaligned, starts inside the header, or runs past the
-    /// blob.
+    // MIT: `krb5_pac_parse` (lib/krb5/krb/pac.c:263-337)
     pub fn parse(bytes: &[u8]) -> Result<Self, PacError> {
         if bytes.len() < 8 {
-            return Err(PacError::Truncated);
+            return Err(PacError::Malformed);
         }
         let c_buffers =
             u32::from_le_bytes(bytes[0..4].try_into().map_err(|_| PacError::Truncated)?);
@@ -185,7 +132,7 @@ impl Pac {
         }
         let count = usize::try_from(c_buffers).map_err(|_| PacError::Malformed)?;
         if !(1..=MAX_BUFFERS).contains(&count) {
-            return Err(PacError::Malformed);
+            return Err(PacError::Truncated);
         }
         let header_len = 8 + 16 * count;
         if bytes.len() < header_len {
@@ -212,12 +159,11 @@ impl Pac {
             ))
             .map_err(|_| PacError::Truncated)?;
             off += 16;
-            if offset % PAC_ALIGNMENT != 0
-                || offset < header_len
-                || offset > bytes.len()
-                || size > bytes.len() - offset
-            {
+            if offset % PAC_ALIGNMENT != 0 {
                 return Err(PacError::Malformed);
+            }
+            if offset < header_len || offset > bytes.len() || size > bytes.len() - offset {
+                return Err(PacError::Truncated);
             }
             buffers.push(PacBuffer {
                 kind,
@@ -232,7 +178,6 @@ impl Pac {
         })
     }
 
-    /// Serialize as PACTYPE (little-endian).
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
         let n = u32::try_from(self.buffers.len()).unwrap_or(u32::MAX);
@@ -258,7 +203,6 @@ impl Pac {
         out
     }
 
-    /// First buffer of `kind`.
     #[must_use]
     pub fn buffer(&self, kind: u32) -> Option<&[u8]> {
         self.buffers
@@ -267,11 +211,6 @@ impl Pac {
             .map(|b| b.data.as_slice())
     }
 
-    /// MIT `k5_pac_locate_buffer`: the buffer of `kind`, refused when it occurs twice.
-    ///
-    /// # Errors
-    ///
-    /// [`PacError::Malformed`] for a duplicate type.
     pub fn unique_buffer(&self, kind: u32) -> Result<Option<&[u8]>, PacError> {
         let mut hits = self.buffers.iter().filter(|b| b.kind == kind);
         let first = hits.next();
@@ -281,15 +220,11 @@ impl Pac {
         Ok(first.map(|b| b.data.as_slice()))
     }
 
-    /// Zero server (6) and KDC (7) signature payloads. Ticket (16) and full
-    /// (19) checksums stay populated — that is the AD server-checksum region.
     #[must_use]
     pub fn bytes_for_checksum(&self) -> Vec<u8> {
         self.bytes_zeroing(&[PAC_SERVER_CHECKSUM, PAC_PRIVSVR_CHECKSUM])
     }
 
-    /// Zero server, KDC, and full-PAC (19) signatures. Ticket checksum (16)
-    /// stays filled. MS-PAC extended-KDC hash region.
     #[must_use]
     pub fn bytes_for_full_checksum(&self) -> Vec<u8> {
         self.bytes_zeroing(&[PAC_SERVER_CHECKSUM, PAC_PRIVSVR_CHECKSUM, PAC_FULL_CHECKSUM])
@@ -305,15 +240,6 @@ impl Pac {
         clone.to_bytes()
     }
 
-    /// Copy of the received PAC with signature payloads of `kinds` zeroed in
-    /// place (MIT `zero_signature`). Falls back to a re-encode when this PAC
-    /// was built rather than parsed.
-    ///
-    /// # Errors
-    ///
-    /// [`PacError::MissingBuffer`] when a type in `kinds` is absent; for a parsed PAC,
-    /// [`PacError::Malformed`] when such a type occurs twice and [`PacError::Truncated`] when its
-    /// buffer is under the 4-byte signature type or no longer fits the received bytes.
     pub fn received_zeroed(&self, kinds: &[u32]) -> Result<Vec<u8>, PacError> {
         if self.raw.is_empty() {
             for kind in kinds {
@@ -351,45 +277,24 @@ impl Pac {
         Ok(())
     }
 
-    /// Server checksum buffer payload, if present.
-    ///
-    /// # Errors
-    ///
-    /// [`PacError::Malformed`] when the type occurs twice.
     pub fn server_checksum(&self) -> Result<Option<&[u8]>, PacError> {
         self.unique_buffer(PAC_SERVER_CHECKSUM)
     }
 
-    /// KDC checksum buffer payload, if present.
-    ///
-    /// # Errors
-    ///
-    /// [`PacError::Malformed`] when the type occurs twice.
     pub fn kdc_checksum(&self) -> Result<Option<&[u8]>, PacError> {
         self.unique_buffer(PAC_PRIVSVR_CHECKSUM)
     }
 
-    /// Ticket checksum (type 16) payload, if present.
-    ///
-    /// # Errors
-    ///
-    /// [`PacError::Malformed`] when the type occurs twice.
     pub fn ticket_checksum(&self) -> Result<Option<&[u8]>, PacError> {
         self.unique_buffer(PAC_TICKET_CHECKSUM)
     }
 
-    /// Full PAC checksum (type 19) payload, if present.
-    ///
-    /// # Errors
-    ///
-    /// [`PacError::Malformed`] when the type occurs twice.
     pub fn full_checksum(&self) -> Result<Option<&[u8]>, PacError> {
         self.unique_buffer(PAC_FULL_CHECKSUM)
     }
 }
 
 fn zero_signature_payload(data: &mut [u8]) {
-    // SignatureType (4) + Signature (remainder). Zero the signature bytes.
     if data.len() > 4 {
         for b in &mut data[4..] {
             *b = 0;
@@ -397,7 +302,6 @@ fn zero_signature_payload(data: &mut [u8]) {
     }
 }
 
-/// Build a signature buffer: little-endian type + MAC bytes.
 #[must_use]
 pub fn signature_buffer(cksumtype: i32, mac: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(4 + mac.len());
@@ -406,7 +310,6 @@ pub fn signature_buffer(cksumtype: i32, mac: &[u8]) -> Vec<u8> {
     v
 }
 
-/// Client-info PAC buffer: little-endian NT time + UTF-16LE name.
 #[must_use]
 pub fn client_info_buffer(authtime_unix: u32, name: &str) -> Vec<u8> {
     let nt = unix_to_nt(authtime_unix);
@@ -419,7 +322,6 @@ pub fn client_info_buffer(authtime_unix: u32, name: &str) -> Vec<u8> {
     v
 }
 
-/// Parse PAC client-info: NT time + UTF-16LE name (`k5_pac_validate_client`).
 #[must_use]
 pub fn parse_client_info(buf: &[u8]) -> Option<(u32, String)> {
     if buf.len() < 10 {
@@ -447,16 +349,12 @@ fn unix_to_nt(unix: u32) -> u64 {
         .saturating_add(NT_UNIX_EPOCH)
 }
 
-/// MS-PAC 2.9 `S4U_DELEGATION_INFO`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct S4uDelegationInfo {
-    /// Proxy target without realm (`KRB5_PRINCIPAL_UNPARSE_NO_REALM`).
     pub proxy_target: String,
-    /// Transited services with realm, oldest first.
     pub transited_services: Vec<String>,
 }
 
-/// Encode `S4U_DELEGATION_INFO` (`kdc/ndr.c` `ndr_enc_delegation_info`).
 #[must_use]
 pub fn delegation_info_buffer(info: &S4uDelegationInfo) -> Vec<u8> {
     let pt = enc_wchar(&info.proxy_target);
@@ -499,14 +397,6 @@ pub fn delegation_info_buffer(info: &S4uDelegationInfo) -> Vec<u8> {
     b
 }
 
-/// Decode `S4U_DELEGATION_INFO` (`kdc/ndr.c` `ndr_dec_delegation_info`).
-///
-/// # Errors
-///
-/// [`PacError::Truncated`] when the data is under 16 bytes or a field or string runs past it;
-/// [`PacError::Malformed`] when the header is not NDR Type-Serialization v1 (`01 10 08 00`), the
-/// object length does not match, the transited-service count exceeds the data, or a string is
-/// not valid UTF-16.
 pub fn parse_delegation_info(data: &[u8]) -> Result<S4uDelegationInfo, PacError> {
     if data.len() < 16 {
         return Err(PacError::Truncated);
@@ -616,21 +506,15 @@ fn skip_u16(data: &[u8], i: &mut usize) -> Result<(), PacError> {
     Ok(())
 }
 
-/// NDR32 `RPC_UNICODE_STRING` (embedded, Buffer deferred).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RpcUnicode {
-    /// `Length` in bytes (not including a terminator).
     pub length: u16,
-    /// `MaximumLength` in bytes (often `Length + 2`).
     pub maximum_length: u16,
-    /// Whether `Buffer` is a non-null referent. AD empty strings are non-null.
     pub pointed: bool,
-    /// UTF-16 decoded text.
     pub value: String,
 }
 
 impl RpcUnicode {
-    /// Non-null string; empty uses Length=Max=0 still pointed (AD style).
     #[must_use]
     pub fn pointed(s: &str) -> Self {
         let n = u16::try_from(s.encode_utf16().count().saturating_mul(2)).unwrap_or(u16::MAX);
@@ -652,14 +536,10 @@ impl RpcUnicode {
     }
 }
 
-/// NDR32 `RPC_SID`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RpcSid {
-    /// Revision (1).
     pub revision: u8,
-    /// 6-byte identifier authority (NT Authority is `{0,0,0,0,0,5}`).
     pub identifier_authority: [u8; 6],
-    /// Sub-authorities (RID path).
     pub sub_authority: Vec<u32>,
 }
 
@@ -674,7 +554,6 @@ impl RpcSid {
         }
     }
 
-    /// Parse SDDL `S-R-I-…`.
     #[must_use]
     pub fn from_sddl(s: &str) -> Option<Self> {
         let rest = s
@@ -700,7 +579,6 @@ impl RpcSid {
         })
     }
 
-    /// Domain SID with `rid` appended (client / PAC_REQUESTOR).
     #[must_use]
     pub fn with_rid(&self, rid: u32) -> Self {
         let mut s = self.clone();
@@ -708,10 +586,6 @@ impl RpcSid {
         s
     }
 
-    /// True when `self` is `domain` itself or an account/group under it
-    /// (`domain`'s sub-authorities are a prefix of `self`'s, same authority).
-    /// Well-known SIDs under another identifier authority (e.g. `S-1-18-1`)
-    /// are never "in" an NT-authority domain.
     #[must_use]
     pub fn is_in_domain(&self, domain: &RpcSid) -> bool {
         self.identifier_authority == domain.identifier_authority
@@ -719,7 +593,6 @@ impl RpcSid {
             && self.sub_authority[..domain.sub_authority.len()] == domain.sub_authority[..]
     }
 
-    /// MS-DTYP packet SID (revision, count, authority, sub-authorities).
     #[must_use]
     pub fn to_ms_dtyp(&self) -> Vec<u8> {
         let mut v = Vec::with_capacity(8 + self.sub_authority.len() * 4);
@@ -732,7 +605,6 @@ impl RpcSid {
         v
     }
 
-    /// Parse [`Self::to_ms_dtyp`].
     #[must_use]
     pub fn from_ms_dtyp(b: &[u8]) -> Option<Self> {
         if b.len() < 8 {
@@ -763,7 +635,6 @@ impl RpcSid {
         })
     }
 
-    /// NT Authority domain SID `S-1-5-21-a-b-c`.
     #[must_use]
     pub fn nt_domain(a: u32, b: u32, c: u32) -> Self {
         Self {
@@ -773,7 +644,6 @@ impl RpcSid {
         }
     }
 
-    /// SDDL-ish `S-1-…` form for assertions.
     #[must_use]
     pub fn to_sddl(&self) -> String {
         let ia = u64::from_be_bytes([
@@ -794,90 +664,51 @@ impl RpcSid {
     }
 }
 
-/// `GROUP_MEMBERSHIP`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GroupMembership {
-    /// Relative ID.
     pub relative_id: u32,
-    /// `SE_GROUP_*` bits.
     pub attributes: u32,
 }
 
-/// `KERB_SID_AND_ATTRIBUTES`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExtraSid {
-    /// SID.
     pub sid: RpcSid,
-    /// Attributes.
     pub attributes: u32,
 }
 
-/// MS-PAC `KERB_VALIDATION_INFO` (NDR32). `Debug` never shows the session key.
 #[derive(Clone, PartialEq, Eq)]
 pub struct KerbValidationInfo {
-    /// LogonTime FILETIME.
     pub logon_time: u64,
-    /// LogoffTime FILETIME.
     pub logoff_time: u64,
-    /// KickOffTime FILETIME.
     pub kickoff_time: u64,
-    /// PasswordLastSet FILETIME.
     pub password_last_set: u64,
-    /// PasswordCanChange FILETIME.
     pub password_can_change: u64,
-    /// PasswordMustChange FILETIME.
     pub password_must_change: u64,
-    /// SamAccountName.
     pub effective_name: RpcUnicode,
-    /// Display name.
     pub full_name: RpcUnicode,
-    /// Logon script.
     pub logon_script: RpcUnicode,
-    /// Profile path.
     pub profile_path: RpcUnicode,
-    /// Home directory.
     pub home_directory: RpcUnicode,
-    /// Home drive.
     pub home_directory_drive: RpcUnicode,
-    /// Logon count.
     pub logon_count: u16,
-    /// Bad password count.
     pub bad_password_count: u16,
-    /// User RID.
     pub user_id: u32,
-    /// Primary group RID.
     pub primary_group_id: u32,
-    /// Group memberships (`GroupCount` / `GroupIds`).
     pub groups: Vec<GroupMembership>,
-    /// UserFlags.
     pub user_flags: u32,
-    /// Session key (often zeros in the PAC).
     pub session_key: [u8; 16],
-    /// Logon server (DC NetBIOS).
     pub logon_server: RpcUnicode,
-    /// NetBIOS domain.
     pub logon_domain_name: RpcUnicode,
-    /// Domain SID.
     pub logon_domain_id: RpcSid,
-    /// `Reserved1[2]`.
     pub reserved1: [u32; 2],
-    /// UserAccountControl.
     pub user_account_control: u32,
-    /// SubAuthStatus.
     pub sub_auth_status: u32,
-    /// LastSuccessfulILogon.
     pub last_successful_ilogon: u64,
-    /// LastFailedILogon.
     pub last_failed_ilogon: u64,
-    /// FailedILogonCount.
     pub failed_ilogon_count: u32,
-    /// Reserved3.
     pub reserved3: u32,
-    /// Extra SIDs.
     pub extra_sids: Vec<ExtraSid>,
-    /// Resource group domain SID.
     pub resource_group_domain_sid: Option<RpcSid>,
-    /// Resource group memberships.
     pub resource_groups: Vec<GroupMembership>,
 }
 
@@ -920,27 +751,26 @@ impl std::fmt::Debug for KerbValidationInfo {
     }
 }
 
-/// Client identity for PAC issuance (domain SID + RID from the store).
+impl Drop for KerbValidationInfo {
+    fn drop(&mut self) {
+        self.session_key.zeroize();
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PacIdentity {
-    /// SAM account name (`user`, not `user@REALM`).
     pub sam: String,
-    /// Kerberos realm / DNS domain.
     pub realm: String,
-    /// Per-realm domain SID (`S-1-5-21-…`, not dummy `S-1-5-21-1-2-3`).
     pub domain_sid: RpcSid,
-    /// Relative ID of this principal.
     pub rid: u32,
 }
 
 impl PacIdentity {
-    /// Client SID = domain SID + RID.
     #[must_use]
     pub fn client_sid(&self) -> RpcSid {
         self.domain_sid.with_rid(self.rid)
     }
 
-    /// `sam@realm` UPN.
     #[must_use]
     pub fn upn(&self) -> String {
         format!("{}@{}", self.sam, self.realm)
@@ -948,7 +778,6 @@ impl PacIdentity {
 }
 
 impl KerbValidationInfo {
-    /// PAC logon info for a KDC-issued ticket using store identity.
     #[must_use]
     pub fn for_client(client: &str, realm: &str, domain_sid: &RpcSid, rid: u32) -> Self {
         Self {
@@ -997,20 +826,17 @@ impl KerbValidationInfo {
         }
     }
 
-    /// Type-serialization v1 + NDR32 of this struct.
     #[must_use]
     pub fn to_ndr(&self) -> Vec<u8> {
         encode_kerb_validation_info(self)
     }
 }
 
-/// NDR32 `KERB_VALIDATION_INFO` for `client` / `realm` (KDC issuance).
 #[must_use]
 pub fn logon_info_buffer(client: &str, realm: &str, domain_sid: &RpcSid, rid: u32) -> Vec<u8> {
     KerbValidationInfo::for_client(client, realm, domain_sid, rid).to_ndr()
 }
 
-/// PAC buffer 17: `PAC_WAS_REQUESTED`.
 #[must_use]
 pub fn attributes_info_buffer() -> Vec<u8> {
     let mut v = Vec::with_capacity(8);
@@ -1019,13 +845,11 @@ pub fn attributes_info_buffer() -> Vec<u8> {
     v
 }
 
-/// PAC buffer 18: requester SID (MS-DTYP packet).
 #[must_use]
 pub fn requester_sid_buffer(sid: &RpcSid) -> Vec<u8> {
     sid.to_ms_dtyp()
 }
 
-/// PAC buffer 12: UPN + DNS + SAM + SID (`PAC_UPN_DNS_FLAG_HAS_SAM_NAME_AND_SID`).
 #[must_use]
 pub fn upn_dns_buffer(identity: &PacIdentity) -> Vec<u8> {
     let upn = utf16_bytes(&identity.upn());
@@ -1067,25 +891,14 @@ fn put_u16(b: &mut [u8], off: usize, v: u16) {
     b[off..off + 2].copy_from_slice(&v.to_le_bytes());
 }
 
-/// Parsed PAC buffer 12.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UpnDnsInfo {
-    /// `user@REALM`.
     pub upn: String,
-    /// DNS domain (lowercase realm).
     pub dns_domain: String,
-    /// SAM name when the SID extension is present.
     pub sam: Option<String>,
-    /// Object SID when the SID extension is present.
     pub sid: Option<RpcSid>,
 }
 
-/// Parse [`upn_dns_buffer`].
-///
-/// # Errors
-///
-/// [`PacError::Truncated`] when the buffer is under 12 bytes, a UPN, DNS, or SAM string runs past
-/// it, has an odd length, or is not valid UTF-16, or the SID runs past it or does not parse.
 pub fn parse_upn_dns(data: &[u8]) -> Result<UpnDnsInfo, PacError> {
     if data.len() < 12 {
         return Err(PacError::Truncated);
@@ -1136,27 +949,16 @@ fn utf16_str(data: &[u8], off: usize, len: usize) -> Result<String, PacError> {
     String::from_utf16(&u16s).map_err(|_| PacError::Truncated)
 }
 
-/// Parse [`logon_info_buffer`] (NDR) or the legacy UTF-8 placeholder.
-///
-/// # Errors
-///
-/// [`PacError::Truncated`] when the buffer is neither an NDR `KERB_VALIDATION_INFO` nor a legacy
-/// pair of length-prefixed UTF-8 client and realm strings that fit in it.
 pub fn parse_logon_info(data: &[u8]) -> Result<(String, String), PacError> {
     if let Ok(v) = parse_kerb_validation_info(data) {
-        return Ok((v.effective_name.value, v.logon_domain_name.value));
+        return Ok((
+            v.effective_name.value.clone(),
+            v.logon_domain_name.value.clone(),
+        ));
     }
     parse_legacy_utf8_logon(data)
 }
 
-/// Decode Type-Serialization v1 + NDR32 `KERB_VALIDATION_INFO`.
-///
-/// # Errors
-///
-/// [`PacError::Truncated`] for every refusal: a header that is not Type-Serialization v1, a null
-/// top-level or domain-SID pointer, data that runs short, a string, group, or SID count over its
-/// cap or not matching its header, invalid UTF-16, a null extra-SID pointer, or an empty
-/// effective name.
 pub fn parse_kerb_validation_info(data: &[u8]) -> Result<KerbValidationInfo, PacError> {
     let mut r = NdrR { b: data, i: 0 };
     if r.u8()? != 1 || r.u8()? != 0x10 {
@@ -1281,10 +1083,6 @@ pub fn parse_kerb_validation_info(data: &[u8]) -> Result<KerbValidationInfo, Pac
     })
 }
 
-/// NDR-encode a `KERB_VALIDATION_INFO`, the LOGON_INFO buffer. MIT carries that buffer as opaque
-/// bytes and has no encoder for it.
-/// The six FILETIME fields are written before the string bodies, so a reader that stops at the
-/// header does not see the names as times.
 fn encode_kerb_validation_info(info: &KerbValidationInfo) -> Vec<u8> {
     let mut w = NdrW::default();
     w.u8(1);
@@ -1377,9 +1175,6 @@ fn parse_legacy_utf8_logon(data: &[u8]) -> Result<(String, String), PacError> {
     Ok((client.to_owned(), realm.to_owned()))
 }
 
-/// Replace AD-WIN2K-PAC `ad-data` with a single zero byte (MS-PAC ticket checksum).
-///
-/// Walks `AD-IF-RELEVANT` wrappers. Other elements are copied.
 #[must_use]
 pub fn authorization_with_zeroed_pac(
     ad: &[crate::AuthorizationDataValue],
@@ -1409,10 +1204,6 @@ pub fn authorization_with_zeroed_pac(
         .collect()
 }
 
-/// EncTicketPart DER with PAC `ad-data` replaced by a single zero byte.
-///
-/// Preserves the issuer's TLV encodings (MS-PAC type 16). A rasn
-/// re-encode of a Samba/Heimdal ticket will not match.
 #[must_use]
 pub fn zero_pac_ad_data(enc_tkt: &[u8], pac: &[u8]) -> Option<Vec<u8>> {
     if pac.is_empty() {
@@ -1469,7 +1260,7 @@ fn read_tlv(data: &[u8], off: usize) -> Option<(u8, bool, &[u8], usize)> {
         return None;
     }
     let constructed = tag & 0x20 != 0;
-    let (len, len_bytes) = read_der_len(data, off + 1)?;
+    let (len, len_bytes) = crate::der::read_len(data.get(off + 1..)?)?;
     let hdr = 1 + len_bytes;
     let start = off + hdr;
     let end = start.checked_add(len)?;
@@ -1479,41 +1270,10 @@ fn read_tlv(data: &[u8], off: usize) -> Option<(u8, bool, &[u8], usize)> {
     Some((tag, constructed, &data[start..end], hdr + len))
 }
 
-fn read_der_len(data: &[u8], off: usize) -> Option<(usize, usize)> {
-    let b = *data.get(off)?;
-    if b < 0x80 {
-        return Some((b as usize, 1));
-    }
-    let nbytes = (b & 0x7f) as usize;
-    if nbytes == 0 || nbytes > 4 || off + 1 + nbytes > data.len() {
-        return None;
-    }
-    let mut n = 0usize;
-    for i in 0..nbytes {
-        n = (n << 8) | usize::from(data[off + 1 + i]);
-    }
-    Some((n, 1 + nbytes))
-}
-
 fn encode_tlv(tag: u8, content: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(2 + content.len());
-    out.push(tag);
-    out.extend(encode_der_len(content.len()));
-    out.extend_from_slice(content);
+    let mut out = Vec::with_capacity(1 + crate::der::len_len(content.len()) + content.len());
+    crate::der::push_tlv(&mut out, tag, content);
     out
-}
-
-fn encode_der_len(n: usize) -> Vec<u8> {
-    fn b(v: usize) -> u8 {
-        u8::try_from(v & 0xff).unwrap_or(0)
-    }
-    match n {
-        0..=127 => vec![b(n)],
-        128..=255 => vec![0x81, b(n)],
-        256..=65535 => vec![0x82, b(n >> 8), b(n)],
-        65536..=16_777_215 => vec![0x83, b(n >> 16), b(n >> 8), b(n)],
-        _ => vec![0x84, b(n >> 24), b(n >> 16), b(n >> 8), b(n)],
-    }
 }
 
 #[cfg(test)]

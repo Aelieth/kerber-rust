@@ -99,6 +99,8 @@ grep -q 'user@KERBER.TEST' <<<"$KLIST2"
 grep -q 'host/testhost.kerber.test' <<<"$KLIST2"
 
 echo "==== rust KDC ISSUE tuple after kinit + kvno ===="
+# kdc_log.c log_as_req: one line holds the status, the etypes, the client and the server.
+AS_ISSUE_RE='AS_REQ .*: ISSUE: authtime [0-9]+, etypes \{rep=[^}]*\}, user@KERBER\.TEST for krbtgt/KERBER\.TEST@KERBER\.TEST'
 require_log "$NAME" /tmp/kdc.log 'ISSUE' "ISSUE in /tmp/kdc.log"
 require_log "$NAME" /tmp/kdc.log 'krbtgt/KERBER.TEST' "krbtgt/KERBER.TEST in /tmp/kdc.log"
 require_log "$NAME" /tmp/kdc.log 'host/testhost.kerber.test' "host/testhost.kerber.test in /tmp/kdc.log"
@@ -108,6 +110,7 @@ grep -q 'ISSUE' <<<"$RUSTLOG" # RUST_issue_as
 grep -q 'user@KERBER.TEST' <<<"$RUSTLOG"
 grep -q 'krbtgt/KERBER.TEST' <<<"$RUSTLOG"
 grep -F 'etypes {rep=' <<<"$RUSTLOG"
+grep -E "$AS_ISSUE_RE" <<<"$RUSTLOG" # RUST_issue_as_line
 grep -q 'host/testhost.kerber.test' <<<"$RUSTLOG" # RUST_issue_tgs
 grep -F 'tkt=' <<<"$RUSTLOG"
 grep -F 'ses=' <<<"$RUSTLOG"
@@ -243,6 +246,7 @@ grep -q 'ISSUE' <<<"$MITLOG" # MIT_issue_as
 grep -q 'user@KERBER.TEST' <<<"$MITLOG"
 grep -q 'krbtgt/KERBER.TEST' <<<"$MITLOG"
 grep -F 'etypes {rep=' <<<"$MITLOG"
+grep -E "$AS_ISSUE_RE" <<<"$MITLOG" # MIT_issue_as_line
 grep -q 'host/testhost.kerber.test' <<<"$MITLOG" # MIT_issue_tgs
 grep -F 'tkt=' <<<"$MITLOG"
 grep -F 'ses=' <<<"$MITLOG"

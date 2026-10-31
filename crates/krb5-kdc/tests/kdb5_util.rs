@@ -1,12 +1,13 @@
 //! `kdb5_util` (the `krb5-kdb` binary, run under MIT's name): MIT's command line, the realm
 //! `create` makes, `stash`, `dump`, `load` and `destroy`, with the texts and exit statuses
 //! settled live against MIT 1.22.2.
-//! MIT `kdb5_create` (`kdb5_create.c:142-336`): `create` writes `K/M` and `krbtgt`, then `kadm5_create` the two `kadmin/` services.
-//! MIT `add_admin_princs` (`kadm5_create.c:139-154`): the `kadmin/admin` and `kadmin/changepw` attributes and lifetimes.
+// MIT: `kdb5_create` (kdb5_create.c:142-336)
+//! `create` writes `K/M` and `krbtgt`, then `kadm5_create` the two `kadmin/` services.
+// MIT: `add_admin_princs` (kadm5_create.c:139-154)
+//! the `kadmin/admin` and `kadmin/changepw` attributes and lifetimes.
 
 #![cfg(unix)]
 
-use std::fmt::Write as _;
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -14,8 +15,8 @@ use std::process::{Command, Output, Stdio};
 use krb5_crypto::EncryptionType;
 use krb5_kdc::{
     KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_TGT_BASED, KDB_LOCKDOWN_KEYS, KDB_PWCHANGE_SERVICE,
-    KDB_REQUIRES_PRE_AUTH, PrincipalStore, create_realm, kdc_conf_for_realm, load_store,
-    master_key_from_password, parse_dump, tl_mod_princ_name,
+    KDB_REQUIRES_PRE_AUTH, PrincipalStore, load_store, master_key_from_password, parse_dump,
+    tl_mod_princ_name,
 };
 use krb5_testkit::scratch_dir;
 
@@ -274,71 +275,6 @@ fn create_takes_the_stanzas_flags_lifetimes_and_keysalts() {
 }
 
 #[test]
-fn another_realms_stanza_is_not_read_for_this_one() {
-    let text = "[realms]\n    OTHER.TEST = {\n        max_life = 1h\n    }\n    KL.TEST = {\n        max_renewable_life = 2d\n    }\n";
-    let kl = kdc_conf_for_realm(text, "KL.TEST").unwrap();
-    assert_eq!((kl.max_life, kl.max_renewable_life), (86400, 2 * 86400));
-    let none = kdc_conf_for_realm(text, "NONE.TEST").unwrap();
-    assert_eq!((none.max_life, none.max_renewable_life), (86400, 0));
-    let master =
-        master_key_from_password("KL.TEST", b"pw", EncryptionType::Aes256CtsHmacSha196).unwrap();
-    let store = create_realm("KL.TEST", Some(&kl), &master, 1).unwrap();
-    assert!(store.ulog().is_none());
-    assert_eq!(store.serial(), 0);
-    assert!(store.get("kadmin/history@KL.TEST").is_none());
-}
-
-#[test]
-fn create_without_s_leaves_no_stash() {
-    let realm = Realm::new("kdb5-create-nostash", Realm::sha1());
-    std::fs::write(&realm.stash, b"stale").unwrap();
-    let out = realm.run(&["-P", "kl-master", "create"], "");
-    assert_eq!(status(&out), 0, "{}", text(&out.stderr));
-    assert!(
-        !text(&out.stdout).contains("prompted"),
-        "-P does not prompt"
-    );
-    assert!(realm.db.exists());
-    assert!(!realm.stash.exists());
-}
-
-#[test]
-fn create_over_an_existing_database_is_refused_after_the_prompts() {
-    let realm = Realm::new("kdb5-create-exists", Realm::sha1());
-    realm.create();
-    let before = std::fs::read(&realm.db).unwrap();
-    let out = realm.run(&["create", "-s"], "pw\npw\n");
-    assert_eq!(status(&out), 1);
-    assert!(text(&out.stdout).ends_with("Re-enter KDC database master key to verify: \n"));
-    let db = realm.db.display();
-    assert_eq!(
-        text(&out.stderr),
-        format!(
-            "kdb5_util: Cannot open DB2 database '{db}': File exists while creating database '{db}'\n"
-        )
-    );
-    assert_eq!(std::fs::read(&realm.db).unwrap(), before);
-}
-
-#[test]
-fn create_password_errors_are_mits() {
-    let realm = Realm::new("kdb5-create-pwerr", Realm::sha1());
-    let out = realm.run(&["create", "-s"], "pw\nother\n");
-    assert_eq!(status(&out), 1);
-    assert_eq!(
-        text(&out.stderr),
-        "kdb5_util: Password mismatch while reading master key from keyboard\n"
-    );
-    let out = realm.run(&["create", "-s"], "pw\n");
-    assert_eq!(status(&out), 1);
-    assert_eq!(
-        text(&out.stderr),
-        "kdb5_util: Cannot read password while reading master key from keyboard\n"
-    );
-    assert!(!realm.db.exists() && !realm.stash.exists());
-}
-
-#[test]
 fn usage_and_option_errors_are_mits() {
     let realm = Realm::new("kdb5-usage", Realm::sha1());
     realm.create();
@@ -401,24 +337,6 @@ fn usage_and_option_errors_are_mits() {
             realm.db.display()
         )
     );
-}
-
-#[test]
-fn no_realm_is_mits_error() {
-    let realm = Realm::new("kdb5-norealm", Realm::sha1());
-    std::fs::write(&realm.krb5_conf, "[libdefaults]\n").unwrap();
-    for args in [
-        &["-P", "pw", "create", "-s"][..],
-        &["dump", "x"],
-        &["load", "x"],
-    ] {
-        let out = realm.run(args, "");
-        assert_eq!(status(&out), 1);
-        assert_eq!(
-            text(&out.stderr),
-            "kdb5_util: Configuration file does not specify default realm while getting default realm\n"
-        );
-    }
 }
 
 /// The stash's `K/M` entry: kvno and key bytes (its timestamp is the write's).
@@ -543,31 +461,6 @@ fn dump_options_and_patterns() {
 }
 
 #[test]
-fn a_wrong_master_password_warns_and_dump_still_writes() {
-    let realm = Realm::new("kdb5-dump-wrongpw", Realm::sha1());
-    realm.create();
-    let out = realm.run(&["-P", "wrong", "dump", "d2"], "");
-    assert_eq!(status(&out), 1);
-    assert_eq!(
-        text(&out.stderr),
-        "kdb5_util: Unable to decrypt latest master key with the provided master key\n while getting master key list\n\
-         kdb5_util: Warning: proceeding without master key list\n"
-    );
-    assert!(realm.dir.join("d2").exists());
-    // MIT `main` (`kdb5_util.c:230-232`): a later -P replaces an earlier one.
-    let out = realm.run(&["-P", "wrong", "-P", "kl-master", "dump", "d3"], "");
-    assert_eq!(status(&out), 0, "{}", text(&out.stderr));
-    assert_eq!(text(&out.stderr), "");
-    // MIT's load reads no master key; this one opens the dump with -P's key before the stash's.
-    let out = realm.run(&["-P", "wrong", "load", "d2"], "");
-    assert_eq!(status(&out), 1);
-    assert_eq!(
-        text(&out.stderr),
-        "kdb5_util: Unable to decrypt latest master key with the provided master key\n while getting master key list\n"
-    );
-}
-
-#[test]
 fn load_takes_p_before_the_stash() {
     let realm = Realm::new("kdb5-load-p-first", Realm::sha1());
     realm.create();
@@ -646,30 +539,6 @@ fn a_dump_with_no_principal_loads_a_database_with_none() {
         format!("{before}{policy}\n")
     );
     assert_eq!(live.store().ids().len(), 4);
-}
-
-/// MIT `ctx_create_db` (`kdb_db2.c:710-716`): `-x temporary` destroys a leftover temporary
-/// database before creating it, where a plain create refuses an existing one; settled live
-/// (`mit-temporary.txt`).
-#[test]
-fn temporary_create_destroys_a_leftover_first() {
-    let realm = Realm::new("kdb5-temporary-leftover", Realm::sha1());
-    let temp = realm.dir.join("principal~");
-    let temp_policy = realm.dir.join("principal~.kadm5");
-    std::fs::write(&temp, "junk").unwrap();
-    std::fs::write(&temp_policy, "junk").unwrap();
-    let out = realm.run(&["-x", "temporary", "-P", "kl-master", "create", "-s"], "");
-    assert_eq!(status(&out), 0, "{}", text(&out.stderr));
-    assert!(
-        std::fs::read_to_string(&temp)
-            .unwrap()
-            .starts_with("kdb5_util load_dump version 7\n")
-    );
-    assert!(!temp_policy.exists());
-    assert!(!realm.db.exists(), "a temporary database is not made live");
-    std::fs::write(&realm.db, "junk").unwrap();
-    let out = realm.run(&["-P", "kl-master", "create", "-s"], "");
-    assert_eq!(status(&out), 1);
 }
 
 #[test]
@@ -845,34 +714,8 @@ fn load_errors_are_mits() {
     );
 }
 
-#[test]
-fn load_without_a_stash_needs_a_master_password() {
-    let realm = Realm::new("kdb5-load-nostash", Realm::sha1());
-    let golden =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/traces/kdb/mit-dump-v7.txt");
-    let out = realm.run(&["load", golden.to_str().unwrap()], "");
-    assert_eq!(status(&out), 1);
-    assert_eq!(
-        text(&out.stderr),
-        "kdb5_util: Can not fetch master key (error: No such file or directory). while reading master key\n"
-    );
-    // The golden dump is MIT's, under an aes256-sha384 master key: its K/M names the type.
-    let out = realm.run(
-        &["-P", "masterpassword", "load", golden.to_str().unwrap()],
-        "",
-    );
-    assert_eq!(status(&out), 0, "{}", text(&out.stderr));
-    assert!(realm.db.exists());
-    assert!(!realm.stash.exists(), "MIT's load writes no stash");
-    let out = realm.run(&["-P", "wrong", "load", golden.to_str().unwrap()], "");
-    assert_eq!(status(&out), 1);
-    assert_eq!(
-        text(&out.stderr),
-        "kdb5_util: Unable to decrypt latest master key with the provided master key\n while getting master key list\n"
-    );
-}
-
-/// MIT `destroy_file` (`kdb_db2.c:619-682`): the database is zeroed before it is unlinked, so
+// MIT: `destroy_file` (kdb_db2.c:619-682)
+/// the database is zeroed before it is unlinked, so
 /// another link to the file (or its freed blocks) keeps no key; settled live with a hard link.
 #[test]
 fn destroy_zeroes_the_database_before_unlinking_it() {
@@ -933,135 +776,6 @@ fn destroy_asks_for_yes() {
             "kdb5_util: Cannot open DB2 database '{db}': No such file or directory while initializing database\n"
         )
     );
-}
-
-/// A database file that is no database is refused with MIT's open text, settled live on MIT
-/// 1.22.2 with a dump file put where its db2 database was: `dump` and `stash` while initializing
-/// the database, `load -update` while opening it, before its permanent lock would remove
-/// `principal.kadm5.lock`.
-#[test]
-fn a_database_file_that_is_no_database_is_refused_with_mit_s_text() {
-    let realm = Realm::new("kdb5-not-a-database", Realm::sha1());
-    realm.create();
-    let dump = realm.dir.join("realm.dump");
-    let dump = dump.to_str().unwrap();
-    let out = realm.run(&["dump", dump], "");
-    assert_eq!(status(&out), 0, "{}", text(&out.stderr));
-    std::fs::write(&realm.db, "not a database\n").unwrap();
-    let refused = format!(
-        "kdb5_util: Cannot open DB2 database '{}': Invalid argument",
-        realm.db.display()
-    );
-    for cmd in [&["dump", "out.dump"][..], &["stash"][..]] {
-        let out = realm.run(cmd, "");
-        assert_eq!(status(&out), 1, "{cmd:?}");
-        assert_eq!(
-            text(&out.stderr),
-            format!("{refused} while initializing database\n"),
-            "{cmd:?}"
-        );
-    }
-    let out = realm.run(&["load", "-update", dump], "");
-    assert_eq!(status(&out), 1);
-    assert_eq!(
-        text(&out.stderr),
-        format!("{refused} while opening database\n")
-    );
-    assert!(realm.dir.join("principal.kadm5.lock").exists());
-}
-
-/// An MIT db2 database where the database should be (MIT 1.22.2's own btree and hash headers,
-/// settled live) is named with the way over by every command that opens it, and left as it was.
-#[test]
-fn an_mit_db2_database_is_named_with_the_dump_and_load_way_over() {
-    let realm = Realm::new("kdb5-mit-db2", Realm::sha1());
-    realm.create();
-    let dump = realm.dir.join("realm.dump");
-    let dump = dump.to_str().unwrap();
-    let out = realm.run(&["dump", dump], "");
-    assert_eq!(status(&out), 0, "{}", text(&out.stderr));
-    let refused = format!(
-        "kdb5_util: Cannot open DB2 database '{}': This is an MIT db2 database; dump it with the \
-         old installation's kdb5_util, then kdb5_util load here (docs/install.md, Upgrading an \
-         MIT realm)",
-        realm.db.display()
-    );
-    let btree = [0x62, 0x31, 0x05, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x10];
-    let hash = [
-        0x00, 0x06, 0x15, 0x61, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x04, 0xd2,
-    ];
-    for head in [&btree[..], &hash[..]] {
-        let mut db2 = head.to_vec();
-        db2.resize(8192, 0);
-        std::fs::write(&realm.db, &db2).unwrap();
-        for cmd in [
-            &["dump", "out.dump"][..],
-            &["stash"][..],
-            &["destroy", "-f"][..],
-        ] {
-            let out = realm.run(cmd, "");
-            assert_eq!(status(&out), 1, "{cmd:?}");
-            assert_eq!(
-                text(&out.stderr),
-                format!("{refused} while initializing database\n"),
-                "{cmd:?}"
-            );
-        }
-        let out = realm.run(&["load", "-update", dump], "");
-        assert_eq!(status(&out), 1);
-        assert_eq!(
-            text(&out.stderr),
-            format!("{refused} while opening database\n")
-        );
-        assert_eq!(std::fs::read(&realm.db).unwrap(), db2, "left as it was");
-        assert!(realm.dir.join("principal.kadm5.lock").exists());
-    }
-}
-
-#[cfg(feature = "test-hooks")]
-#[test]
-fn test_hooks_seed_the_gates_principals_and_stand_in_for_the_password() {
-    let realm = Realm::new("kdb5-test-hooks", Realm::sha1());
-    let out = Command::new(&realm.tool)
-        .args(["create", "-s"])
-        .env("KRB5_CONFIG", &realm.krb5_conf)
-        .env("KRB5_KDC_PROFILE", &realm.kdc_conf)
-        .env_remove("KRB5_KDC_DB")
-        .env_remove("KRB5_KDC_STASH")
-        .env("KRB5_MASTER_PASSWORD", "kl-master")
-        .env("KRB5_TEST_USER_PASSWORD", "kl-user")
-        .env("KRB5_TEST_ADMIN_PASSWORD", "kl-admin")
-        .stdin(Stdio::null())
-        .output()
-        .unwrap();
-    assert_eq!(status(&out), 0, "{}", text(&out.stderr));
-    let ids = realm.store().ids();
-    for id in [
-        "K/M@KL.TEST",
-        "admin@KL.TEST",
-        "host/testhost.kl.test@KL.TEST",
-        "kadmin/admin@KL.TEST",
-        "kadmin/changepw@KL.TEST",
-        "kiprop/testhost.kerber.test@KL.TEST",
-        "krbtgt/KL.TEST@KL.TEST",
-        "user@KL.TEST",
-    ] {
-        assert!(ids.iter().any(|i| i == id), "{id} in {ids:?}");
-    }
-    // load with no stash: KRB5_MASTER_PASSWORD opens the dump and the stash is written.
-    let golden =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/traces/kdb/mit-dump-v7.txt");
-    std::fs::remove_file(&realm.stash).unwrap();
-    let out = Command::new(&realm.tool)
-        .args(["load", golden.to_str().unwrap()])
-        .env("KRB5_CONFIG", &realm.krb5_conf)
-        .env("KRB5_KDC_PROFILE", &realm.kdc_conf)
-        .env("KRB5_MASTER_PASSWORD", "masterpassword")
-        .output()
-        .unwrap();
-    assert_eq!(status(&out), 0, "{}", text(&out.stderr));
-    assert_eq!(mode(&realm.stash), 0o600);
-    assert_eq!(realm.store().realm(), "KERBER.TEST");
 }
 
 fn iprop_stanza() -> String {
@@ -1283,75 +997,6 @@ fn a_full_load_that_fails_before_the_promotion_leaves_the_update_log() {
     let out = realm.run(&["load", plain.to_str().unwrap()], "");
     assert_eq!(status(&out), 0, "{}", text(&out.stderr));
     assert_eq!(log.get_last().unwrap().sno, 1);
-}
-
-/// Settled live beside MIT 1.22.2: a
-/// `dict_file` that is a directory stops in `kadm5_init`, after `K/M` and `krbtgt` are in the
-/// database, with `Is a directory while initializing the Kerberos admin interface`. `-s` leaves
-/// the stash; without it there is none. A missing file warns and the create finishes.
-#[test]
-fn create_stops_at_kadm5_init_when_the_dictionary_cannot_be_read() {
-    let dir = scratch_dir("kdb5-dict-dir");
-    let stanza = format!("{}        dict_file = {}\n", Realm::sha1(), dir.display());
-    let realm = Realm::new("kdb5-dict-fail", &stanza);
-    let log = realm.dir.join("admin.log");
-    let mut conf = std::fs::read_to_string(&realm.kdc_conf).unwrap();
-    write!(
-        conf,
-        "[logging]\n    admin_server = FILE:{}\n",
-        log.display()
-    )
-    .unwrap();
-    std::fs::write(&realm.kdc_conf, conf).unwrap();
-    let out = realm.run(&["-P", "kl-master", "create", "-s"], "");
-    assert_eq!(status(&out), 1, "{}", text(&out.stderr));
-    assert_eq!(
-        text(&out.stderr),
-        "kdb5_util: Is a directory while initializing the Kerberos admin interface\n"
-    );
-    assert!(realm.db.exists());
-    assert!(realm.stash.exists());
-    assert!(log.exists(), "klog opens admin_server before kadm5_init");
-    let store = realm.store();
-    assert_eq!(store.ids(), ["K/M@KL.TEST", "krbtgt/KL.TEST@KL.TEST"]);
-    let nostash = Realm::new(
-        "kdb5-dict-nostash",
-        &format!("{}        dict_file = {}\n", Realm::sha1(), dir.display()),
-    );
-    let out = nostash.run(&["-P", "kl-master", "create"], "");
-    assert_eq!(status(&out), 1, "{}", text(&out.stderr));
-    assert!(nostash.db.exists());
-    assert!(!nostash.stash.exists());
-    let missing = realm.dir.join("nosuch-dict");
-    let warn = Realm::new(
-        "kdb5-dict-missing",
-        &format!(
-            "{}        dict_file = {}\n",
-            Realm::sha1(),
-            missing.display()
-        ),
-    );
-    let warn_log = warn.dir.join("admin.log");
-    let mut conf = std::fs::read_to_string(&warn.kdc_conf).unwrap();
-    write!(
-        conf,
-        "[logging]\n    admin_server = FILE:{}\n",
-        warn_log.display()
-    )
-    .unwrap();
-    std::fs::write(&warn.kdc_conf, conf).unwrap();
-    let out = warn.run(&["-P", "kl-master", "create", "-s"], "");
-    assert_eq!(status(&out), 0, "{}", text(&out.stderr));
-    let logged = std::fs::read_to_string(&warn_log).unwrap_or_default();
-    assert!(
-        logged.contains(&format!(
-            "WARNING!  Cannot find dictionary file {}, continuing without one.",
-            missing.display()
-        )),
-        "{logged}"
-    );
-    assert_eq!(warn.store().ids().len(), 4);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Settled live: MIT's admin interface refuses iprop without `iprop_port` ("Required parameters

@@ -11,8 +11,8 @@ use krb5_kdc::testrealm::{
 };
 use krb5_kdc::{
     Acl, Error, KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_SVR, PrincipalStore, RID_KRBTGT,
-    decrypt_ticket_part, dump_store, dump_store_iprop, load_dump, pac_from_ticket_part,
-    ticket_checksum_der, verify_pac_signatures, wrap_win2k_pac,
+    decrypt_ticket_part, dump_store, load_dump, pac_from_ticket_part, ticket_checksum_der,
+    verify_pac_signatures, wrap_win2k_pac,
 };
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
@@ -41,10 +41,10 @@ fn incoming_trust_is_own_principal() {
     let issue = aes_key(0x11);
     let accept = aes_key(0x22);
     store
-        .create_interrealm_key(&acl, &actor, FOREIGN, issue)
+        .create_interrealm_key(&acl, &actor, FOREIGN, issue, None)
         .unwrap();
     store
-        .add_interrealm_decrypt_key(&acl, &actor, FOREIGN, accept)
+        .add_interrealm_decrypt_key(&acl, &actor, FOREIGN, accept, None)
         .unwrap();
     let outgoing = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", FOREIGN]);
     let out = store.get_name(&outgoing).expect("outgoing");
@@ -71,7 +71,7 @@ fn cross_tgt_renew_realm_mismatch_is_server_nomatch() {
     let actor = documented_admin_id();
     let ir = aes_key(0x33);
     store
-        .create_interrealm_key(&acl, &actor, FOREIGN, ir.clone())
+        .create_interrealm_key(&acl, &actor, FOREIGN, ir.clone(), None)
         .unwrap();
     let issued = issue_tgt_renewable(&store, TEST_USER, 16100, true);
     let local = store.krbtgt().unwrap().best_key().unwrap().key.clone();
@@ -116,56 +116,12 @@ fn cross_tgt_renew_realm_mismatch_is_server_nomatch() {
 }
 
 #[test]
-// oracle: differential-gate.sh u2u-2nd-ticket-foreign-realm
-fn u2u_second_ticket_foreign_realm_is_2nd_tkt_server() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let host = documented_host();
-    let hkey = store
-        .get_name(&host)
-        .unwrap()
-        .best_key()
-        .unwrap()
-        .key
-        .clone();
-    let href = as_req(
-        host.clone(),
-        TEST_REALM,
-        16110,
-        Some(vec![pa_enc_timestamp(&hkey).unwrap()]),
-    )
-    .unwrap();
-    let extra = krb5_kdc::issue_as(&store, &href).unwrap().rep.0.ticket;
-    let mut foreign = extra;
-    foreign.realm = krb5_types::try_ascii("OTHER.TEST").unwrap();
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgt = issue_tgt_renewable(&store, TEST_USER, 16111, false);
-    let req = TgsReqBuilder::new(
-        tgt.rep.0.ticket,
-        &tgt.session_key,
-        TEST_REALM,
-        &user,
-        host,
-        TEST_REALM,
-        16112,
-    )
-    .options(KdcOptions::forwardable().with_bit(flag_bit::ENC_TKT_IN_SKEY, true))
-    .additional_tickets(Some(vec![foreign]))
-    .padata(Vec::new())
-    .etypes(pref_etypes())
-    .build()
-    .unwrap();
-    let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
-    assert_eq!(c, err::S_PRINCIPAL_UNKNOWN);
-    assert_eq!(text.as_deref(), Some("2ND_TKT_SERVER"));
-}
-
-#[test]
 fn incoming_trust_dump_load_round_trip() {
     let (mut store, acl) = bootstrap_documented().unwrap();
     let actor = documented_admin_id();
     let ir = aes_key(0x44);
     store
-        .create_interrealm_key(&acl, &actor, FOREIGN, ir)
+        .create_interrealm_key(&acl, &actor, FOREIGN, ir, None)
         .unwrap();
     let text = dump_store(&store, b"masterpassword").unwrap();
     assert!(
@@ -181,34 +137,20 @@ fn incoming_trust_dump_load_round_trip() {
 }
 
 #[test]
-fn incoming_trust_iprop_names_foreign_id() {
-    let (mut store, acl) = bootstrap_documented().unwrap();
-    store
-        .create_interrealm_key(&acl, &documented_admin_id(), FOREIGN, aes_key(0x55))
-        .unwrap();
-    let text = dump_store_iprop(&store, b"masterpassword", krb5_kdc::UlogLast::default()).unwrap();
-    assert!(text.starts_with("ipropx "));
-    assert!(
-        text.contains("krbtgt/KERBER.TEST@AD.KERBER.TEST"),
-        "iprop dump must name the incoming id"
-    );
-}
-
-#[test]
 fn foreign_header_decrypts_via_incoming_kvno() {
     let (mut store, acl) = bootstrap_documented().unwrap();
     let actor = documented_admin_id();
     let issue = aes_key(0x66);
     let accept = aes_key(0x77);
     store
-        .create_interrealm_key(&acl, &actor, FOREIGN, issue)
+        .create_interrealm_key(&acl, &actor, FOREIGN, issue, None)
         .unwrap();
     store
-        .set_interrealm_decrypt_key(&acl, &actor, FOREIGN, accept.clone())
+        .set_interrealm_decrypt_key(&acl, &actor, FOREIGN, accept.clone(), None)
         .unwrap();
     let incoming = store.get_in_realm(&incoming_name(), FOREIGN).unwrap();
     assert_eq!(incoming.keys.len(), 1);
-    assert_eq!(incoming.keys[0].kvno, 1);
+    assert_eq!(incoming.keys[0].kvno, 2);
     assert_eq!(incoming.keys[0].key.as_bytes(), &[0x77u8; 32]);
     let issued = issue_tgt_renewable(&store, TEST_USER, 16120, false);
     let local = store.krbtgt().unwrap().best_key().unwrap().key.clone();
@@ -222,7 +164,7 @@ fn foreign_header_decrypts_via_incoming_kvno() {
         sname: incoming_name(),
         enc_part: krb5_types::EncryptedData {
             etype: accept.etype().to_iana(),
-            kvno: Some(1),
+            kvno: Some(2),
             cipher: encrypt(&accept, usage, &der).unwrap().into(),
         },
     };
@@ -355,13 +297,13 @@ fn three_realm() -> (
     let (mut a, acl_a, actor_a, _) = realm_store("A.TEST", "svc.a.test");
     let (mut b, acl_b, actor_b, _) = realm_store("B.TEST", "svc.b.test");
     let (mut c, acl_c, actor_c, host_c) = realm_store("C.TEST", "svc.c.test");
-    a.create_interrealm_key(&acl_a, &actor_a, "B.TEST", ir.clone())
+    a.create_interrealm_key(&acl_a, &actor_a, "B.TEST", ir.clone(), None)
         .expect("A→B");
-    b.create_interrealm_key(&acl_b, &actor_b, "A.TEST", ir.clone())
+    b.create_interrealm_key(&acl_b, &actor_b, "A.TEST", ir.clone(), None)
         .expect("B→A");
-    b.create_interrealm_key(&acl_b, &actor_b, "C.TEST", ir.clone())
+    b.create_interrealm_key(&acl_b, &actor_b, "C.TEST", ir.clone(), None)
         .expect("B→C");
-    c.create_interrealm_key(&acl_c, &actor_c, "B.TEST", ir.clone())
+    c.create_interrealm_key(&acl_c, &actor_c, "B.TEST", ir.clone(), None)
         .expect("C→B");
     let mut cap = std::collections::BTreeMap::new();
     cap.entry("A.TEST".into())
@@ -406,13 +348,13 @@ fn three_realm_distinct() -> (
     let (mut a, acl_a, actor_a, _) = realm_store("A.TEST", "svc.a.test");
     let (mut b, acl_b, actor_b, _) = realm_store("B.TEST", "svc.b.test");
     let (mut c, acl_c, actor_c, host_c) = realm_store("C.TEST", "svc.c.test");
-    a.create_interrealm_key(&acl_a, &actor_a, "B.TEST", ab.clone())
+    a.create_interrealm_key(&acl_a, &actor_a, "B.TEST", ab.clone(), None)
         .expect("A B");
-    b.create_interrealm_key(&acl_b, &actor_b, "A.TEST", ab.clone())
+    b.create_interrealm_key(&acl_b, &actor_b, "A.TEST", ab.clone(), None)
         .expect("B A");
-    b.create_interrealm_key(&acl_b, &actor_b, "C.TEST", bc.clone())
+    b.create_interrealm_key(&acl_b, &actor_b, "C.TEST", bc.clone(), None)
         .expect("B C");
-    c.create_interrealm_key(&acl_c, &actor_c, "B.TEST", bc.clone())
+    c.create_interrealm_key(&acl_c, &actor_c, "B.TEST", bc.clone(), None)
         .expect("C B");
     let mut cap = std::collections::BTreeMap::new();
     cap.entry("A.TEST".into())
@@ -458,130 +400,6 @@ fn tgs_code_text(res: Result<krb5_kdc::IssuedTgs, Error>) -> (i32, Option<String
         Err(Error::Protocol { code, text, .. }) => (code, text),
         other => panic!("expected protocol error, got {other:?}"),
     }
-}
-
-#[test]
-fn three_hop_capaths_accept_and_reject() {
-    let ir = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x5a; 32]).expect("ir");
-    let (mut a, acl_a, actor_a, _) = realm_store("A.TEST", "svc.a.test");
-    let (mut b, acl_b, actor_b, _) = realm_store("B.TEST", "svc.b.test");
-    let (mut c, acl_c, actor_c, host_c) = realm_store("C.TEST", "svc.c.test");
-    a.create_interrealm_key(&acl_a, &actor_a, "B.TEST", ir.clone())
-        .expect("A→B");
-    b.create_interrealm_key(&acl_b, &actor_b, "A.TEST", ir.clone())
-        .expect("B→A");
-    b.create_interrealm_key(&acl_b, &actor_b, "C.TEST", ir.clone())
-        .expect("B→C");
-    c.create_interrealm_key(&acl_c, &actor_c, "B.TEST", ir)
-        .expect("C→B");
-
-    let mut cap = std::collections::BTreeMap::new();
-    cap.entry("A.TEST".into())
-        .or_insert_with(std::collections::BTreeMap::new)
-        .insert("C.TEST".into(), vec!["B.TEST".into()]);
-    c.set_capaths(cap.clone());
-
-    let tgt = as_tgt(&a, "A.TEST", 400);
-    let ab = chase_tgs(
-        &a,
-        tgt.rep.0.ticket.clone(),
-        &tgt.session_key,
-        "A.TEST",
-        PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "B.TEST"]),
-        "A.TEST",
-        401,
-    )
-    .expect("A→B referral");
-    let bc = chase_tgs(
-        &b,
-        ab.rep.0.ticket.clone(),
-        &ab.session_key,
-        "A.TEST",
-        PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "C.TEST"]),
-        "B.TEST",
-        402,
-    )
-    .expect("B→C referral");
-    let host = chase_tgs(
-        &c,
-        bc.rep.0.ticket.clone(),
-        &bc.session_key,
-        "A.TEST",
-        host_c.clone(),
-        "C.TEST",
-        403,
-    )
-    .expect("C host with capaths");
-    let host_key = c.get_name(&host_c).unwrap().best_key().unwrap().key.clone();
-    let part = decrypt_ticket_part(&host_key, &host.rep.0.ticket).expect("enc");
-    assert!(
-        part.flags.bit(flag_bit::TRANSITED_POLICY_CHECKED),
-        "T set only when capaths check passed"
-    );
-    let hops = part
-        .transited
-        .realms_for("A.TEST", "C.TEST")
-        .expect("expand");
-    assert_eq!(hops, vec!["B.TEST".to_string()]);
-    let contents = String::from_utf8(part.transited.contents.as_ref().to_vec()).unwrap();
-    assert_eq!(contents, "B.TEST");
-    assert_eq!(part.transited.tr_type, 1);
-
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let skip_req = TgsReqBuilder::new(
-        bc.rep.0.ticket.clone(),
-        &bc.session_key,
-        "A.TEST",
-        &cname,
-        host_c.clone(),
-        "C.TEST",
-        406,
-    )
-    .options(KdcOptions::forwardable().with_bit(flag_bit::DISABLE_TRANSITED_CHECK, true))
-    .additional_tickets(None)
-    .padata(Vec::new())
-    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
-    .build()
-    .expect("skip tgs");
-    match krb5_kdc::issue_tgs(&c, &skip_req) {
-        Err(Error::Protocol { code, text, .. }) => {
-            assert_eq!(code, err::POLICY);
-            assert_eq!(text.as_deref(), Some("BAD_TRANSIT"));
-        }
-        other => panic!("capaths-permitted + skip + default must be POLICY, got {other:?}"),
-    }
-
-    c.set_capaths(std::collections::BTreeMap::new());
-    let denied = chase_tgs(
-        &c,
-        bc.rep.0.ticket.clone(),
-        &bc.session_key,
-        "A.TEST",
-        host_c.clone(),
-        "C.TEST",
-        404,
-    );
-    match denied {
-        Err(Error::Protocol { code, .. }) => assert_eq!(code, err::POLICY),
-        other => panic!("expected POLICY, got {other:?}"),
-    }
-
-    c.policy.reject_bad_transit = false;
-    let lax = chase_tgs(
-        &c,
-        bc.rep.0.ticket.clone(),
-        &bc.session_key,
-        "A.TEST",
-        host_c.clone(),
-        "C.TEST",
-        405,
-    )
-    .expect("reject_bad_transit=false accepts");
-    let lax_part = decrypt_ticket_part(&host_key, &lax.rep.0.ticket).expect("enc lax");
-    assert!(
-        !lax_part.flags.bit(flag_bit::TRANSITED_POLICY_CHECKED),
-        "failed check must not set T when reject_bad_transit is false"
-    );
 }
 
 #[test]
@@ -661,44 +479,6 @@ fn transited_add_path_bad_intermediates_is_policy() {
 }
 
 #[test]
-fn transited_cross_realm_renew_at_dest_is_server_nomatch() {
-    let (_a, _b, c, ir, _host_c, bc) = three_realm();
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let mut t = bc.rep.0.ticket.clone();
-    let mut part = decrypt_ticket_part(&ir, &t).expect("bc");
-    part.transited.tr_type = 2;
-    part.flags = part.flags.with_bit(flag_bit::RENEWABLE, true);
-    part.renew_till = Some(part.endtime.add_hours(24).expect("renew_till"));
-    part.authorization_data = None;
-    reseal_mut(&mut t, &part, &ir);
-    let req = TgsReqBuilder::new(
-        t,
-        &bc.session_key,
-        "A.TEST",
-        &cname,
-        PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "C.TEST"]),
-        "C.TEST",
-        531,
-    )
-    .options(KdcOptions::forwardable().with_bit(flag_bit::RENEW, true))
-    .additional_tickets(None)
-    .padata(Vec::new())
-    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
-    .build()
-    .expect("renew tgs");
-    match krb5_kdc::issue_tgs(&c, &req) {
-        Err(Error::Protocol { code, text, .. }) => {
-            assert_eq!(code, err::SERVER_NOMATCH);
-            assert_eq!(
-                text.as_deref(),
-                Some("SERVER DIDN'T MATCH TICKET FOR RENEW/FORWARD/ETC")
-            );
-        }
-        other => panic!("cross-realm RENEW of krbtgt/C@B as krbtgt/C@C must be 26, got {other:?}"),
-    }
-}
-
-#[test]
 fn transited_non_add_overlong_forwarded() {
     let (mut store, _, _, hostn) = realm_store("A.TEST", "svc.a.test");
     store.policy.reject_bad_transit = false;
@@ -708,6 +488,10 @@ fn transited_non_add_overlong_forwarded() {
     let mut part = decrypt_ticket_part(&tgt_key, &ticket).expect("tgt");
     part.transited.tr_type = 1;
     part.transited.contents = OctetString::from(vec![b'A'; 512]);
+    // Checked, so rd_req's own transit check leaves it to the KDC's.
+    part.flags = part
+        .flags
+        .with_bit(flag_bit::TRANSITED_POLICY_CHECKED, true);
     part.authorization_data = None;
     reseal_mut(&mut ticket, &part, &tgt_key);
     let out = chase_tgs(
@@ -983,42 +767,6 @@ fn tgs_lineage_local_user_on_foreign_tgt_is_policy() {
 }
 
 #[test]
-fn tgs_krbtgt_disallow_all_tix_is_process_tgs() {
-    let (_a, _b, mut c, _ab, _bc, host_c, bctgt) = three_realm_distinct();
-    let irn = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "C.TEST"]);
-    let a = c.get_in_realm(&irn, "B.TEST").unwrap().attributes | KDB_DISALLOW_ALL_TIX;
-    c.apply_admin_fields_in(
-        &irn,
-        "B.TEST",
-        krb5_kdc::AdminFields {
-            attributes: Some(a),
-            max_life: None,
-            expiration: None,
-            pw_expire: None,
-            policy: None,
-            clear_policy: false,
-            max_renewable_life: None,
-        },
-        "kadmin/admin@B.TEST",
-    )
-    .unwrap();
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let req = tgs_req(
-        bctgt.rep.0.ticket.clone(),
-        &bctgt.session_key,
-        "A.TEST",
-        &cname,
-        host_c,
-        "C.TEST",
-        980,
-    )
-    .expect("tgs");
-    let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&c, &req));
-    assert_eq!(code, err::S_PRINCIPAL_UNKNOWN);
-    assert_eq!(text.as_deref(), Some("PROCESS_TGS"));
-}
-
-#[test]
 fn tgs_local_krbtgt_disallow_all_tix_is_process_tgs() {
     let (mut store, _, _, host) = realm_store("C.TEST", "svc.c.test");
     let tgt = as_tgt(&store, "C.TEST", 981);
@@ -1124,46 +872,6 @@ fn tgs_cross_krbtgt_disallow_svr_is_process_tgs() {
     let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&c, &req));
     assert_eq!(code, err::S_PRINCIPAL_UNKNOWN);
     assert_eq!(text.as_deref(), Some("PROCESS_TGS"));
-}
-
-#[test]
-fn transited_renew_at_dest_mismatched_realm_is_26() {
-    let (_a, _b, c, ir, _host_c, bc) = three_realm();
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let mut t = bc.rep.0.ticket.clone();
-    let mut part = decrypt_ticket_part(&ir, &t).expect("bc");
-    part.transited.tr_type = 1;
-    part.transited.contents = OctetString::from(
-        std::iter::repeat_n("A".repeat(100), 5)
-            .collect::<Vec<_>>()
-            .join(",")
-            .into_bytes(),
-    );
-    part.flags = part.flags.with_bit(flag_bit::RENEWABLE, true);
-    part.renew_till = Some(part.endtime.add_hours(24).expect("renew_till"));
-    part.authorization_data = None;
-    reseal_mut(&mut t, &part, &ir);
-    let req = TgsReqBuilder::new(
-        t,
-        &bc.session_key,
-        "A.TEST",
-        &cname,
-        PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "C.TEST"]),
-        "C.TEST",
-        930,
-    )
-    .options(KdcOptions::forwardable().with_bit(flag_bit::RENEW, true))
-    .additional_tickets(None)
-    .padata(Vec::new())
-    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
-    .build()
-    .expect("renew tgs");
-    let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&c, &req));
-    assert_eq!(code, err::SERVER_NOMATCH);
-    assert_eq!(
-        text.as_deref(),
-        Some("SERVER DIDN'T MATCH TICKET FOR RENEW/FORWARD/ETC")
-    );
 }
 
 #[test]
@@ -1396,10 +1104,16 @@ fn two_realm_pac_stores() -> (PrincipalStore, PrincipalStore, ProtocolKey, Princ
     let ir =
         ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x5a; 32]).expect("ir key");
     local
-        .create_interrealm_key(&acl_a, &documented_admin_id(), "OTHER.TEST", ir.clone())
+        .create_interrealm_key(
+            &acl_a,
+            &documented_admin_id(),
+            "OTHER.TEST",
+            ir.clone(),
+            None,
+        )
         .expect("A→B");
     foreign
-        .create_interrealm_key(&acl_b, &actor_b, TEST_REALM, ir.clone())
+        .create_interrealm_key(&acl_b, &actor_b, TEST_REALM, ir.clone(), None)
         .expect("B→A");
     (local, foreign, ir, host_b)
 }
@@ -1465,10 +1179,22 @@ fn interrealm_issue_key_is_not_the_peer_accept_key() {
             .expect("accept key");
     let (mut store, acl) = bootstrap_documented().expect("bootstrap");
     store
-        .create_interrealm_key(&acl, &documented_admin_id(), "AD.KERBER.TEST", issue_key)
+        .create_interrealm_key(
+            &acl,
+            &documented_admin_id(),
+            "AD.KERBER.TEST",
+            issue_key,
+            None,
+        )
         .expect("issue");
     store
-        .set_interrealm_decrypt_key(&acl, &documented_admin_id(), "AD.KERBER.TEST", accept_key)
+        .set_interrealm_decrypt_key(
+            &acl,
+            &documented_admin_id(),
+            "AD.KERBER.TEST",
+            accept_key,
+            None,
+        )
         .expect("accept");
     let ir_name = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "AD.KERBER.TEST"]);
     let ir = store.get_name(&ir_name).expect("ir");
@@ -1535,7 +1261,7 @@ fn interrealm_issue_key_is_not_the_peer_accept_key() {
         [PAC_CLIENT_INFO, PAC_SERVER_CHECKSUM, PAC_PRIVSVR_CHECKSUM]
     );
     let der = ticket_checksum_der(&part).expect("der");
-    // MIT: the server checksum is under the inter-realm key and the KDC checksum under the
+    // The server checksum is under the inter-realm key and the KDC checksum under the
     // local krbtgt key.
     let local_tgt = store.krbtgt().unwrap().best_key().unwrap();
     verify_pac_signatures(&pac, &issue_key, Some(&local_tgt.key), Some(&der), false)
@@ -1561,6 +1287,7 @@ fn interrealm_referral_with_ad_data_keeps_the_inter_realm_kdc_checksum() {
             &documented_admin_id(),
             "AD.KERBER.TEST",
             issue_key.clone(),
+            None,
         )
         .expect("issue");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);

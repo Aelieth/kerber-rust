@@ -1,6 +1,4 @@
-//! TGS-REQ (`do_tgs_req.c`): `gather_tgs_req_info`, `check_tgs_req`
-//! (flags/times/kdcpolicy tail `:900-945`), `tgs_issue_ticket`,
-//! referral / alternate TGS, and the second-ticket helpers.
+//! A TGS request: the header ticket, the server, and the reply.
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt_enc_data, encrypt, krb_fx_cf2};
@@ -11,7 +9,7 @@ use krb5_types::{
 };
 
 use super::as_req::{ANONYMOUS_REALM, anonymous_principal_name};
-use super::fast_util::{check_fast_options, fast_hides_client, wrap_as_fast};
+use super::fast_util::{fast_hides_client, wrap_as_fast};
 use super::kdc_util::{
     HeaderTgt, attr, check_anon, decrypt_presented_tgt, find_server_key, get_ticket_flags,
     include_pac_for_reply, kdc_get_ticket_endtime, kdc_get_ticket_renewtime, kdc_req_body_der, ks,
@@ -31,32 +29,20 @@ use crate::ad::{
 use crate::error::Error;
 use crate::kdb::{PrincipalRead, lookup_principal_id};
 use crate::plugins::enforce_kdcpolicy_tgs;
-use crate::preauth::{FastOk, fast_finished, find_pa, proto, unwrap_fast_tgs, wrap_fast_rep};
+use crate::preauth::{
+    FastOk, fast_finished, find_pa, proto, proto_d, unwrap_fast_tgs, wrap_fast_rep,
+};
 use crate::status;
 use crate::store::{
     KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_SVR, KDB_NO_AUTH_DATA_REQUIRED, Principal, random_key,
 };
 
-/// Issued TGS-REP plus the service session key.
 #[derive(Debug)]
 pub struct IssuedTgs {
-    /// Wire TGS-REP.
     pub rep: TgsRep,
-    /// Service session key.
     pub session_key: ProtocolKey,
 }
 
-/// Issue a TGS-REP for `req` using the TGT in PA-TGS-REQ.
-///
-/// # Errors
-///
-/// [`Error::Protocol`] with the KRB-ERROR code and MIT status word for every refusal (a bad,
-/// expired or replayed header ticket, an unknown server, a failed PAC, S4U, user-to-user or
-/// policy check) and, under FAST, for any other failure after the unwrap. [`Error::Asn1`] when a
-/// request or reply structure does not decode or encode, [`Error::Crypto`] when a presented key or
-/// enctype is unusable, the authenticator does not decrypt, or a key derivation, checksum or
-/// encryption fails, [`Error::Rng`] when the CSPRNG fails to produce a new key; a store backend or
-/// `KdcPolicy` hook may return its own [`Error`].
 pub fn issue_tgs(store: &dyn PrincipalRead, req: &TgsReq) -> Result<IssuedTgs, Error> {
     issue_tgs_from(store, req, None, None)
 }
@@ -75,7 +61,6 @@ pub(super) fn issue_tgs_from(
         encoded_body = encode(outer)?;
         &encoded_body
     };
-    // MIT kdc_process_tgs_req (PROCESS_TGS) before kdc_find_fast.
     if req.0.msg_type != krb5_types::KdcReq::MSG_TGS_REQ {
         return Err(proto(err::GENERIC, status::UNKNOWN_REASON));
     }
@@ -98,9 +83,7 @@ pub(super) fn issue_tgs_from(
         .map_err(|e| wrap_as_fast(store, tgs_fast.as_ref(), e, body))
 }
 
-/// MIT `gather_tgs_req_info` carried state. Data only.
-/// MIT `gather_tgs_req_info` (`do_tgs_req.c:592-592`): fills `struct tgs_req_info` with the
-/// header ticket, its PAC, and the server entry, then the S4U and second-ticket state.
+// MIT: `gather_tgs_req_info` (do_tgs_req.c:592-592)
 struct TgsGather<'a> {
     tgs_padata: Option<&'a [PaData]>,
     ap: krb5_types::ApReq,
@@ -116,9 +99,7 @@ struct TgsGather<'a> {
     server: Principal,
 }
 
-/// MIT `check_tgs_req` carried state. Data only.
-/// MIT `check_tgs_req` (`do_tgs_req.c:857-857`): checks the request against the protocol
-/// constraints and local policy, then sets the ticket flags and times.
+// MIT: `check_tgs_req` (do_tgs_req.c:857-857)
 struct TgsChecked<'a> {
     tgs_padata: Option<&'a [PaData]>,
     ap: krb5_types::ApReq,
@@ -152,9 +133,7 @@ struct TgsChecked<'a> {
     transited: TransitedEncoding,
 }
 
-/// MIT `compute_ticket_times` carried state. Data only.
-/// MIT `compute_ticket_times` (`do_tgs_req.c:812-812`): the issued ticket's times, and the
-/// renewable flag when it will be renewable.
+// MIT: `compute_ticket_times` (do_tgs_req.c:812-812)
 struct TgsTimes<'a> {
     tgs_padata: Option<&'a [PaData]>,
     ap: krb5_types::ApReq,
@@ -167,7 +146,6 @@ struct TgsTimes<'a> {
     server: Principal,
     auth_indicators: Vec<String>,
     s4u2self: bool,
-    /// The S4U2Self user has an entry in this realm (MIT's `client` for `issue_pac`).
     s4u_user_local: bool,
     stkt: Option<SecondTicket>,
     s4u2proxy: bool,
@@ -204,9 +182,6 @@ fn issue_tgs_body(
     tgs_issue_ticket(store, req, raw, body, tgs_fast, t)
 }
 
-/// MIT `gather_tgs_req_info` through `search_sprinc`.
-/// MIT `gather_tgs_req_info` (`do_tgs_req.c:592-673`): the header ticket, FAST, local TGT, and
-/// header PAC, then `search_sprinc` for the server entry.
 fn gather_tgs_req_info<'a>(
     store: &dyn PrincipalRead,
     req: &'a TgsReq,
@@ -214,9 +189,6 @@ fn gather_tgs_req_info<'a>(
     tgs_fast: Option<&'a FastOk>,
     header: HeaderTgt,
 ) -> Result<TgsGather<'a>, Error> {
-    if let Some(f) = tgs_fast {
-        check_fast_options(&f.fast_options)?;
-    }
     if body.kdc_options.unsupported_bits() != 0 {
         return Err(proto(err::BADOPTION, status::UNKNOWN_REASON));
     }
@@ -243,9 +215,8 @@ fn gather_tgs_req_info<'a>(
         .sname
         .clone()
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::NULL_SERVER))?;
-    // MIT get_local_tgt requires krbtgt/<body.realm>@<body.realm> in the KDB
-    // before search_sprinc. A single-realm KDC answers 60 GET_LOCAL_TGT.
     let req_realm = utf8_realm(&body.realm)?.to_owned();
+    // A foreign request realm is 60, before the server lookup.
     if req_realm != store.realm() {
         return Err(proto(err::GENERIC, status::GET_LOCAL_TGT));
     }
@@ -273,11 +244,6 @@ fn gather_tgs_req_info<'a>(
     })
 }
 
-/// MIT `check_tgs_req` plus gather's tail; Rust runs the constraints skeleton first.
-/// MIT `check_tgs_req` (`do_tgs_req.c:857-857`): the protocol constraints and local policy,
-/// then the ticket flags and times.
-/// MIT `gather_tgs_req_info` (`do_tgs_req.c:692-804`): gather's tail: S4U2Self,
-/// `decrypt_2ndtkt`, `RBCD_PAC_PRINC`, auth indicators, transited.
 fn check_tgs_req<'a>(
     store: &dyn PrincipalRead,
     req: &TgsReq,
@@ -363,7 +329,7 @@ fn check_tgs_req<'a>(
     let is_crossrealm = tgs_header_is_crossrealm(header_realm.as_str(), &server.realm);
     let local_tgt = store.fetch_krbtgt()?;
     let stkt = decrypt_2ndtkt(store, req, local_tgt.as_ref())?;
-    // MIT `check_tgs_constraints` (`tgs_policy.c:704-710`): check_tgs_lineage before U2U.
+    // MIT: `check_tgs_constraints` (tgs_policy.c:704-710)
     if utf8_realm(&enc_tkt.crealm)? == store.realm() && is_crossrealm && !s4u2self {
         return Err(proto(err::POLICY, status::INVALID_LINEAGE));
     }
@@ -371,11 +337,9 @@ fn check_tgs_req<'a>(
         check_tgs_u2u(store, stkt.as_ref(), &server)?;
     }
     if body.kdc_options.bit(flag_bit::CNAME_IN_ADDL_TKT) {
-        // MIT `kau_make_tkt_id(stkt)` with a missing additional ticket is EINVAL → 60
-        // `UNKNOWN_REASON` before `check_tgs_s4u2proxy`.
-        // MIT `kau_make_tkt_id` (`kdc_audit.c:154-155`): a NULL ticket is EINVAL.
-        // MIT `gather_tgs_req_info` (`do_tgs_req.c:731-733`): that error returns before
-        // `check_tgs_s4u2proxy`.
+        // MIT: `kau_make_tkt_id` (kdc_audit.c:154-155)
+        // MIT: `gather_tgs_req_info` (do_tgs_req.c:731-733)
+        // A missing second ticket is 60, before the proxy check.
         let Some(st) = stkt.as_ref() else {
             return Err(proto(err::GENERIC, status::UNKNOWN_REASON));
         };
@@ -386,8 +350,6 @@ fn check_tgs_req<'a>(
                 .ok_or_else(|| proto(err::BADOPTION, status::RBCD_PAC_PRINC))?;
             let (cname, crealm) = rbcd_pac_client(pac)?;
             s4u_subject = Some((cname.clone(), crealm.clone()));
-            // MIT `gather_tgs_req_info` (`do_tgs_req.c:756-759`): S4U rewrite only on the
-            // final hop.
             if !is_referral {
                 ticket_cname = cname;
                 ticket_crealm = crealm;
@@ -418,16 +380,16 @@ fn check_tgs_req<'a>(
         crate::ad::check_normal_tgs_pac(&enc_tkt, header_pac.as_deref(), &server, is_crossrealm)?;
         evidence_logon = carried_logon(store, &ap, header_pac.as_deref())?;
     } else if s4u_local.is_none() {
-        // An S4U2Self user this realm does not hold: the header PAC is carried, not minted.
         evidence_logon = carried_logon(store, &ap, header_pac.as_deref())?;
     }
-    // MIT `check_tgs_req` (`do_tgs_req.c:872-882`): check_tgs_policy after constraints.
+    // MIT: `check_tgs_req` (do_tgs_req.c:872-882)
     check_tgs_policy_flags(&server, body, ap.ticket.sname.is_krbtgt(), &enc_tkt)?;
     let local_tgt_key = local_tgt
         .as_ref()
         .and_then(|t| store.policy().first_current_key(t).ok())
         .ok_or_else(|| proto(err::GENERIC, status::GET_LOCAL_TGT))?;
     let mut auth_indicators = Vec::new();
+    // MIT: `check_tgs_req` (do_tgs_req.c:897-902)
     if !s4u2self {
         let subject = stkt.as_ref().map_or(&enc_tkt, |s| &s.part);
         let tgt = local_tgt
@@ -441,6 +403,7 @@ fn check_tgs_req<'a>(
             .as_ref()
             .ok_or_else(|| proto(err::GENERIC, status::UNKNOWN_REASON))?;
         check_s4u2proxy_policy(
+            store,
             tgs_padata,
             &sname,
             &enc_tkt.cname,
@@ -472,7 +435,7 @@ fn check_tgs_req<'a>(
         let skey = store
             .policy()
             .first_current_key(&server)
-            .map_err(|_| proto(err::GENERIC, status::FINDING_SERVER_KEY))?;
+            .map_err(|e| proto_d(err::GENERIC, status::FINDING_SERVER_KEY, e.message()))?;
         (skey.key.clone(), skey.kvno, skey.etype)
     };
     let mut transited = enc_tkt.transited.clone();
@@ -483,8 +446,6 @@ fn check_tgs_req<'a>(
     } else {
         header_crealm
     };
-    // MIT `gather_tgs_req_info` (`do_tgs_req.c:787-788`): keep header transited when
-    // header-server realm equals tkt_client realm.
     if is_crossrealm && prev_hop != tkt_client_realm {
         if transited.tr_type != 1 {
             return Err(proto(err::TRTYPE_NOSUPP, status::VALIDATE_TRANSIT_TYPE));
@@ -493,8 +454,7 @@ fn check_tgs_req<'a>(
             .append_realm(prev_hop, tkt_client_realm, req_realm.as_str())
             .map_err(|_| proto(err::ILL_CR_TKT, status::ADD_TO_TRANSITED_LIST))?;
     }
-    // MIT `check_tgs_req` (`kdc/do_tgs_req.c:924-939`): the path is checked unless the client
-    // disabled the check, and a refused path is logged with the header client and the server.
+    // MIT: `check_tgs_req` (kdc/do_tgs_req.c:924-939)
     let cprinc = enc_tkt.cname.unparse_with_realm(header_crealm);
     let sprinc = sname.unparse_with_realm(req_realm.as_str());
     let transit_checked = if skip_transited {
@@ -505,9 +465,12 @@ fn check_tgs_req<'a>(
     } else {
         match transited.realms_for(tkt_client_realm, req_realm.as_str()) {
             Ok(h) => {
-                let allowed = store
-                    .policy()
-                    .transit_allowed(tkt_client_realm, &req_realm, &h);
+                let allowed = krb5_types::transited::transit_allowed(
+                    &store.policy().capaths,
+                    tkt_client_realm,
+                    &req_realm,
+                    &h,
+                );
                 if !allowed {
                     crate::audit::log_bad_transit(&cprinc, &sprinc, &transited);
                 }
@@ -523,8 +486,7 @@ fn check_tgs_req<'a>(
             ),
         }
     };
-    // MIT do_tgs_req: skip leaves T unset; default reject_bad_transit
-    // then POLICY. RENEW/VALIDATE keep the header T (get_ticket_flags).
+    // Skip: no transited flag; renew, validate keep the header's.
     let inherited_t = (renew || validate) && enc_tkt.flags.bit(flag_bit::TRANSITED_POLICY_CHECKED);
     let set_transited_flag = !skip_transited && transit_checked;
     if !(inherited_t || set_transited_flag) && store.policy().reject_bad_transit {
@@ -565,15 +527,11 @@ fn check_tgs_req<'a>(
     tgs_flags_times_policy(store, body, c)
 }
 
-/// Flags, times, and kdcpolicy: MIT `get_ticket_flags`, `compute_ticket_times`,
-/// `check_kdcpolicy_tgs`, `gen_session_key`, and the S4U client fetch.
-/// MIT `check_tgs_req` (`do_tgs_req.c:905-905`): the ticket flags come from `get_ticket_flags`.
-/// MIT `compute_ticket_times` (`do_tgs_req.c:812-812`): the issued ticket's times, called from
-/// `:907`.
-/// MIT `check_tgs_req` (`do_tgs_req.c:919-919`): `check_kdcpolicy_tgs` may change the times.
-/// MIT `tgs_issue_ticket` (`do_tgs_req.c:980-980`): the session key from `gen_session_key`.
-/// MIT `gather_tgs_req_info` (`do_tgs_req.c:775-775`): outside S4U2Self, the subject client is
-/// fetched, errors ignored, unless the server has NO_AUTH_DATA_REQUIRED.
+// MIT: `check_tgs_req` (do_tgs_req.c:905-905)
+// MIT: `compute_ticket_times` (do_tgs_req.c:812-812)
+// MIT: `check_tgs_req` (do_tgs_req.c:919-919)
+// MIT: `tgs_issue_ticket` (do_tgs_req.c:980-980)
+// MIT: `gather_tgs_req_info` (do_tgs_req.c:775-775)
 fn tgs_flags_times_policy<'a>(
     store: &dyn PrincipalRead,
     body: &KdcReqBody,
@@ -786,9 +744,6 @@ fn tgs_flags_times_policy<'a>(
     })
 }
 
-/// MIT `tgs_issue_ticket`; session-key generation lives in `tgs_flags_times_policy`.
-/// MIT `tgs_issue_ticket` (`do_tgs_req.c:956-956`): builds the response issuing the ticket, with
-/// the flags and times already computed.
 fn tgs_issue_ticket(
     store: &dyn PrincipalRead,
     req: &TgsReq,
@@ -846,15 +801,13 @@ fn tgs_issue_ticket(
         subject_pac.is_some(),
         flags.bit(flag_bit::ANONYMOUS),
     );
-    // An S4U2Self for a user of this realm mints the user's PAC; any other request carries its
-    // subject ticket's.
-    // MIT `gather_tgs_req_info` (`do_tgs_req.c:692-695`): the S4U2Self user is looked up only in its own realm, and that entry is `issue_pac`'s client.
+    // MIT: `gather_tgs_req_info` (do_tgs_req.c:692-695)
+    // Local S4U2Self: that user's PAC; other requests carry the ticket's.
     let initial = s4u2self && s4u_user_local;
     let ad_data =
         include_pac && crate::ad::pac_has_ad_data(store.policy(), subject_pac.as_deref(), initial);
-    // MIT `handle_pac` (`kdc_authdata.c:559-564`): the KDC checksum key is the local TGT key, a referral TGT's too.
-    // An AD-shaped referral TGT's is the inter-realm key the foreign KDC holds (Windows TDO
-    // inbound), which an AD or Samba trust verifies.
+    // MIT: `handle_pac` (kdc_authdata.c:559-564)
+    // An AD-shaped referral krbtgt is checksummed under its own key.
     let pac_kdc = crate::ad::pac_privsvr_key(
         &server,
         if ad_data && server.name.is_krbtgt() && !server.name.is_krbtgt_for(store.realm()) {
@@ -863,7 +816,7 @@ fn tgs_issue_ticket(
             &krbtgt_key.key
         },
     )?;
-    // MIT `update_delegation_info` (`kdc_authdata.c:410-422`): the proxy target is `req->server`, not the referral TGT, and the transited service is the evidence ticket's server.
+    // MIT: `update_delegation_info` (kdc_authdata.c:410-422)
     let delegation_hop = if s4u2proxy && !is_crossrealm {
         stkt.as_ref()
             .map(|st| st.server.name.unparse_with_realm(&st.server.realm))
@@ -877,8 +830,6 @@ fn tgs_issue_ticket(
     } else {
         tgt_session.clone()
     };
-    // MIT `handle_pac` (`kdc_authdata.c:534-544`): S4U referral PAC client info is the subject
-    // with realm; the final hop omits the realm.
     let s4u_client_info = if s4u2self || s4u2proxy {
         Some(if is_referral {
             match &s4u_subject {
@@ -892,6 +843,7 @@ fn tgs_issue_ticket(
         None
     };
     let extra_ad = handle_authdata(
+        store.policy(),
         true,
         flags.bit(flag_bit::ANONYMOUS),
         body.enc_authorization_data.as_ref(),
@@ -1044,8 +996,8 @@ fn tgs_issue_ticket(
     })
 }
 
-/// MIT `get_2ndtkt_enctype` (`do_tgs_req.c:310-328`): the second ticket's session enctype must
-/// be valid, and is the session enctype only when the request lists it.
+// MIT: `get_2ndtkt_enctype` (do_tgs_req.c:310-328)
+/// Second-ticket enctype is the session enctype only if listed.
 fn get_2ndtkt_enctype(
     body: &KdcReqBody,
     st: &SecondTicket,
@@ -1061,8 +1013,7 @@ fn get_2ndtkt_enctype(
     }
 }
 
-/// MIT `decrypt_2ndtkt` (`do_tgs_req.c:257-307`): a second ticket, when the options call for
-/// one, is decrypted with its server's key and its PAC verified.
+// MIT: `decrypt_2ndtkt` (do_tgs_req.c:257-307)
 fn decrypt_2ndtkt(
     store: &dyn PrincipalRead,
     req: &TgsReq,
@@ -1122,14 +1073,12 @@ fn u2u_from_stkt(st: &SecondTicket) -> Result<(ProtocolKey, u32, EncryptionType)
     Ok((key, 0, etype))
 }
 
-/// MIT `gather_tgs_req_info` (`do_tgs_req.c:686-686`): header ticket server realm ≠ canonical
-/// server realm.
 #[must_use]
 pub fn tgs_header_is_crossrealm(header_server_realm: &str, sprinc_realm: &str) -> bool {
     header_server_realm != sprinc_realm
 }
 
-/// MIT `in_list` (`do_tgs_req.c:417-431`): space/comma-separated tokens.
+// MIT: `in_list` (do_tgs_req.c:417-431)
 fn in_list(list: &str, item: &str) -> bool {
     if list.is_empty() {
         return false;
@@ -1146,9 +1095,8 @@ fn no_referral_option(body: &KdcReqBody) -> bool {
         || body.kdc_options.bit(flag_bit::ENC_TKT_IN_SKEY)
 }
 
-/// MIT `is_referral_req` (`do_tgs_req.c:438-477`): a referral needs CANONICALIZE, no
-/// ENC-TKT-IN-SKEY, and a two-component host-based name whose service type is not in the
-/// no-referral list.
+// MIT: `is_referral_req` (do_tgs_req.c:438-477)
+/// No canonicalize, user-to-user, or no-referral service: no referral.
 fn is_referral_req(store: &dyn PrincipalRead, body: &KdcReqBody, sname: &PrincipalName) -> bool {
     if !body.kdc_options.bit(flag_bit::CANONICALIZE)
         || body.kdc_options.bit(flag_bit::ENC_TKT_IN_SKEY)
@@ -1175,8 +1123,7 @@ fn is_referral_req(store: &dyn PrincipalRead, body: &KdcReqBody, sname: &Princip
     !in_list(no_ref, &stype) && !in_list(no_ref, "*")
 }
 
-/// MIT `find_referral_tgs` (`do_tgs_req.c:483-523`): `krbtgt/REALM` for the realm of an FQDN
-/// host, unless that realm is empty or the service realm.
+// MIT: `find_referral_tgs` (do_tgs_req.c:483-523)
 fn find_referral_tgs(
     store: &dyn PrincipalRead,
     body: &KdcReqBody,
@@ -1206,8 +1153,7 @@ fn find_referral_tgs(
     ))
 }
 
-/// MIT `find_alternate_tgs` (`do_tgs_req.c:370-414`): the realm-tree hop nearest the target
-/// realm that the KDB holds a `krbtgt` for, else `UNKNOWN_SERVER`.
+// MIT: `find_alternate_tgs` (do_tgs_req.c:370-414)
 fn find_alternate_tgs(
     store: &dyn PrincipalRead,
     princ: &PrincipalName,
@@ -1217,9 +1163,12 @@ fn find_alternate_tgs(
         .get(1)
         .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
         .unwrap_or_default();
-    let hops = crate::store::walk_realm_instances(&store.policy().capaths, store.realm(), &far);
+    let hops = krb5_types::transited::walk_realm_tree(&store.policy().capaths, store.realm(), &far);
     for inst in hops.iter().skip(1).rev() {
-        let hop = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", inst.as_str()]);
+        let Ok(hop) = PrincipalName::try_new(PrincipalName::NT_SRV_INST, ["krbtgt", inst.as_str()])
+        else {
+            return Err(proto(err::S_PRINCIPAL_UNKNOWN, status::UNKNOWN_SERVER));
+        };
         if let Some(p) = lookup_svc_princ(store, &hop)? {
             return Ok(p);
         }
@@ -1227,8 +1176,8 @@ fn find_alternate_tgs(
     Err(proto(err::S_PRINCIPAL_UNKNOWN, status::UNKNOWN_SERVER))
 }
 
-/// MIT `search_sprinc` (`do_tgs_req.c:541-581`): the requested server, else a referral TGS,
-/// else an alternate TGS; no referral for u2u or ticket modification requests.
+// MIT: `search_sprinc` (do_tgs_req.c:541-581)
+/// Forward, proxy, renew, validate, and user-to-user are not referred.
 fn search_sprinc(
     store: &dyn PrincipalRead,
     requested: &PrincipalName,
@@ -1253,7 +1202,6 @@ fn search_sprinc(
     find_alternate_tgs(store, &lookup)
 }
 
-/// MIT `gather_tgs_req_info` (`do_tgs_req.c:680-682`): cross TGS **and** resolved ≠ requested.
 fn tgs_issuing_referral(
     requested: &PrincipalName,
     req_realm: &str,
@@ -1263,8 +1211,7 @@ fn tgs_issuing_referral(
         && !krb5_types::principal_compare(&resolved.name, &resolved.realm, requested, req_realm)
 }
 
-/// The subject PAC's LOGON_INFO that an AD-shaped PAC carries: as it is from a ticket this realm
-/// issued, SID-filtered (`ad.rs` `filter_cross_realm_logon`) from a ticket another realm issued.
+/// A foreign ticket's logon info is SID-filtered.
 fn carried_logon(
     store: &dyn PrincipalRead,
     ap: &krb5_types::ApReq,
@@ -1286,9 +1233,8 @@ fn carried_logon(
     crate::ad::filter_cross_realm_logon(&logon, store.domain_sid()).map(Some)
 }
 
-/// MIT `tgs_issue_ticket` (`do_tgs_req.c:1012-1027`): renew and validate keep the header
-/// ticket's addresses, forward and proxy take the requested addresses, and anything else keeps
-/// the header ticket's.
+// MIT: `tgs_issue_ticket` (do_tgs_req.c:1012-1027)
+/// Renew, validate: header addresses; forward, proxy: the request's.
 fn tgs_ticket_caddr(
     body: &KdcReqBody,
     renew: bool,
@@ -1324,14 +1270,10 @@ pub(super) fn extract_pa_tgs(padata: Option<&[PaData]>) -> Option<&OctetString> 
     })
 }
 
-/// Header-ticket client for a TGS KRB-ERROR (`prepare_error_tgs`
-/// `errpkt.client`): the presented ticket's client when it decrypts, else
-/// `None` (MIT's `NULL`).
 pub(super) fn tgs_header_client(store: &dyn PrincipalRead, req: &TgsReq) -> Option<PrincipalName> {
     let pa_tgs = extract_pa_tgs(req.0.padata.as_deref())?;
     let ap: krb5_types::ApReq = decode(pa_tgs.as_ref()).ok()?;
-    // MIT kdc_process_tgs_req refuses USE_SESSION_KEY / MUTUAL_REQUIRED
-    // before rd_req, so the error has no decrypted client.
+    // A session-key or mutual header names no client on the error.
     if ap.ap_options.use_session_key() || ap.ap_options.wants_mutual() {
         return None;
     }
@@ -1342,11 +1284,9 @@ pub(super) fn tgs_header_client(store: &dyn PrincipalRead, req: &TgsReq) -> Opti
     Some(enc_tkt.cname)
 }
 
-/// MIT `db_get_svc_princ` (`do_tgs_req.c:525-538`): `CANTLOCK_DB` is 29
-/// `SVC_UNAVAILABLE`, and **any** backend error (including CANTLOCK) sets
-/// `LOOKING_UP_SERVER`.
-/// MIT `search_sprinc` (`do_tgs_req.c:573-578`): every lookup error but 29 is sent as 7
-/// `S_PRINCIPAL_UNKNOWN`, so any other backend fault here is 7 with `LOOKING_UP_SERVER`.
+// MIT: `db_get_svc_princ` (do_tgs_req.c:525-538)
+// MIT: `search_sprinc` (do_tgs_req.c:573-578)
+/// Code 29 is kept; other lookup faults are 7, both LOOKING_UP_SERVER.
 fn lookup_svc_princ(
     store: &dyn PrincipalRead,
     name: &PrincipalName,

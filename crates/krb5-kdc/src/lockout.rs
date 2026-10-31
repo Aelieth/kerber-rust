@@ -1,12 +1,4 @@
-//! The KDC's account lockout as MIT's db2 module runs it: the policy check before
-//! preauthentication, and the audit of every AS outcome that counts, which records a client's
-//! last successful and last failed authentication and its failed-attempt count.
-//!
-//! The audit decides from the client entry as the request looked it up; the store applies the
-//! decision to the attributes as they are when it writes ([`PrincipalRead::update_lockout`]), so
-//! two outcomes recorded at once both count. The audit never changes the entry's attributes: a
-//! locked-out client is refused by the check, not disabled. Where the attributes live is
-//! `file`'s: the database's `principal.lockout`.
+//! Account lockout.
 
 mod file;
 
@@ -19,25 +11,20 @@ use crate::status;
 use crate::store::{KDB_REQUIRES_PRE_AUTH, Principal};
 
 pub(crate) use file::{
-    LockoutState, check_writable, ensure, reconcile, store_records, write_loaded,
+    LockoutState, check_writable, crc32, ensure, ensure_lockout_file, reconcile, reconcile_ids,
+    store_records, write_loaded,
 };
 pub use file::{SUFFIX_LOCKOUT, lockout_path, lockout_records, merge_lockout_file};
 
-/// A principal's three lockout attributes, which MIT does not replicate: the last successful
-/// and the last failed authentication, and the failed attempts since the count was reset.
-/// MIT `klmdb_encode_princ_lockout` (`plugins/kdb/lmdb/marshal.c:91-98`): a lockout record holds these three fields.
+// MIT: `klmdb_encode_princ_lockout` (plugins/kdb/lmdb/marshal.c:91-98)
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Lockout {
-    /// `last_success`, Unix seconds (0 = never).
     pub last_success: u32,
-    /// `last_failed`, Unix seconds (0 = never).
     pub last_failed: u32,
-    /// `fail_auth_count`.
     pub fail_auth_count: u32,
 }
 
 impl Lockout {
-    /// The attributes `p` carries.
     #[must_use]
     pub fn of(p: &Principal) -> Self {
         Self {
@@ -47,7 +34,6 @@ impl Lockout {
         }
     }
 
-    /// Give `p` these attributes.
     pub fn set_on(self, p: &mut Principal) {
         p.last_success = self.last_success;
         p.last_failed = self.last_failed;
@@ -55,26 +41,20 @@ impl Lockout {
     }
 }
 
-/// What one counted AS outcome changes in a principal's [`Lockout`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LockoutUpdate {
-    /// The failed-attempt count goes back to 0 first.
     pub zero_fail_count: bool,
-    /// `last_success` becomes the request's time.
     pub set_last_success: bool,
-    /// `last_failed` becomes the request's time and the count goes up by one.
     pub set_last_failure: bool,
 }
 
 impl LockoutUpdate {
-    /// Whether the update changes nothing, so nothing is written.
     #[must_use]
     pub fn is_empty(self) -> bool {
         !(self.zero_fail_count || self.set_last_success || self.set_last_failure)
     }
 
-    /// `base` with the update applied at `stamp`.
-    /// MIT `klmdb_update_lockout` (`plugins/kdb/lmdb/kdb_lmdb.c:1054-1121`): the update starts from the attributes stored when it writes, then zeroes, stamps and counts.
+    // MIT: `klmdb_update_lockout` (plugins/kdb/lmdb/kdb_lmdb.c:1054-1121)
     #[must_use]
     pub fn apply(self, base: Lockout, stamp: u32) -> Lockout {
         let mut out = base;
@@ -92,30 +72,27 @@ impl LockoutUpdate {
     }
 }
 
-/// MIT `ts_after` (`include/k5-int.h:2350-2354`): times compare as unsigned 32-bit values.
+// MIT: `ts_after` (include/k5-int.h:2350-2354)
 fn ts_after(a: u32, b: u32) -> bool {
     a > b
 }
 
-/// MIT `ts_incr` (`include/k5-int.h:2343-2347`): a time plus a duration wraps as an unsigned 32-bit value.
+// MIT: `ts_incr` (include/k5-int.h:2343-2347)
 fn ts_incr(ts: u32, delta: u32) -> u32 {
     ts.wrapping_add(delta)
 }
 
-/// The time of the principal's last administrative unlock, 0 when it has none.
-/// MIT `krb5_dbe_lookup_last_admin_unlock` (`lib/kdb/kdb5.c:1530-1552`): a `KRB5_TL_LAST_ADMIN_UNLOCK` that is not four bytes, or none, is time 0.
+// MIT: `krb5_dbe_lookup_last_admin_unlock` (lib/kdb/kdb5.c:1530-1552)
 pub(crate) fn last_admin_unlock(p: &Principal) -> u32 {
-    // KRB5_TL_LAST_ADMIN_UNLOCK (0x0700) holds the time as four little-endian bytes.
     p.tl_data
         .iter()
+        // KRB5_TL_LAST_ADMIN_UNLOCK, four LE bytes.
         .find(|t| t.ty == TL_LAST_ADMIN_UNLOCK)
         .and_then(|t| <[u8; 4]>::try_from(t.contents.as_slice()).ok())
         .map_or(0, u32::from_le_bytes)
 }
 
-/// The principal's lockout policy: its maximum failures, failure count interval and lockout
-/// duration, all 0 when it has no policy or its policy does not exist.
-/// MIT `lookup_lockout_policy` (`plugins/kdb/db2/lockout.c:40-89`): the policy named in the entry's kadm5 data, zeros without one.
+// MIT: `lookup_lockout_policy` (plugins/kdb/db2/lockout.c:40-89)
 fn lookup_lockout_policy<S: PrincipalRead + ?Sized>(store: &S, p: &Principal) -> (u32, u32, u32) {
     store.named_policy_for(p).map_or((0, 0, 0), |pol| {
         (
@@ -126,8 +103,7 @@ fn lookup_lockout_policy<S: PrincipalRead + ?Sized>(store: &S, p: &Principal) ->
     })
 }
 
-/// Whether `p` is locked out at `stamp`.
-/// MIT `locked_check_p` (`plugins/kdb/db2/lockout.c:92-113`): an unlock since the last failure unlocks; else locked at max_fail failures, for good or until the duration passes.
+// MIT: `locked_check_p` (plugins/kdb/db2/lockout.c:92-113)
 fn locked_check_p(stamp: u32, max_fail: u32, lockout_duration: u32, p: &Principal) -> bool {
     if !ts_after(p.last_failed, last_admin_unlock(p)) {
         return false;
@@ -141,14 +117,8 @@ fn locked_check_p(stamp: u32, max_fail: u32, lockout_duration: u32, p: &Principa
     ts_after(ts_incr(p.last_failed, lockout_duration), stamp)
 }
 
-/// The KDB module's AS policy check: `CLIENT_REVOKED` with MIT's `LOCKED_OUT` status for a
-/// client locked out at `stamp`, the request's time.
-/// MIT `krb5_db2_lockout_check_policy` (`plugins/kdb/db2/lockout.c:115-139`): nothing with `disable_lockout`, else `CLIENT_REVOKED` when `locked_check_p` holds.
-/// MIT `krb5_db2_check_policy_as` (`plugins/kdb/db2/kdb_db2.c:1539-1550`): that refusal's status is `LOCKED_OUT`.
-///
-/// # Errors
-///
-/// [`Error::Protocol`] `CLIENT_REVOKED` / `LOCKED_OUT` when the client is locked out.
+// MIT: `krb5_db2_lockout_check_policy` (plugins/kdb/db2/lockout.c:115-139)
+// MIT: `krb5_db2_check_policy_as` (plugins/kdb/db2/kdb_db2.c:1539-1550)
 pub(crate) fn lockout_check_policy<S: PrincipalRead + ?Sized>(
     store: &S,
     p: &Principal,
@@ -167,8 +137,6 @@ pub(crate) fn lockout_check_policy<S: PrincipalRead + ?Sized>(
     Ok(())
 }
 
-/// The code an AS exchange ended with, as the audit sees it: 0 for a reply, else the KRB-ERROR
-/// code; a failure that is no KRB-ERROR is `KRB_ERR_GENERIC`, which never counts.
 pub(crate) fn as_outcome<T>(out: &Result<T, Error>) -> i32 {
     match out {
         Ok(_) => 0,
@@ -178,17 +146,11 @@ pub(crate) fn as_outcome<T>(out: &Result<T, Error>) -> i32 {
     }
 }
 
-/// Record one AS outcome of `p`, the client entry as the request looked it up, ended with
-/// `status` at `stamp`, the request's time: a reply to a client that requires preauthentication
-/// stamps its last success and zeroes its count; a failed preauthentication or integrity check
-/// stamps its last failure and counts it, the count first zeroed after an administrative unlock
-/// since the last failure or once the policy's failure count interval has passed; any other
-/// outcome, and any outcome for a client already locked out, changes nothing. The KDB's
-/// `disable_last_success` and `disable_lockout` suppress the writes they name.
-/// MIT `log_as_req` (`kdc/kdc_log.c:57-97`): every logged AS outcome goes to the KDB's audit with the request's time and error code.
-/// MIT `krb5_db2_audit_as_req` (`plugins/kdb/db2/kdb_db2.c:1553-1560`): the audit is `krb5_db2_lockout_audit`.
-/// MIT `krb5_db2_lockout_audit` (`plugins/kdb/db2/lockout.c:141-222`): only 0, `PREAUTH_FAILED` and `BAD_INTEGRITY` count, a locked entry is not written, and one put records what changed.
+// MIT: `log_as_req` (kdc/kdc_log.c:57-97)
+// MIT: `krb5_db2_audit_as_req` (plugins/kdb/db2/kdb_db2.c:1553-1560)
+// MIT: `krb5_db2_lockout_audit` (plugins/kdb/db2/lockout.c:141-222)
 pub fn lockout_audit<S: PrincipalRead + ?Sized>(store: &S, p: &Principal, stamp: u32, status: i32) {
+    // Only 0, PREAUTH_FAILED, and BAD_INTEGRITY count.
     if !matches!(status, 0 | err::PREAUTH_FAILED | err::BAD_INTEGRITY) {
         return;
     }
@@ -245,13 +207,12 @@ mod tests {
     fn realm(pol: NamedPolicy, attrs: u32, state: Lockout) -> (crate::PrincipalStore, Principal) {
         let (mut store, _) = bootstrap_documented().unwrap();
         let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-        store.put_policy(pol);
+        store.put_policy(pol).unwrap();
         store
             .set_principal_policy(&user, Some("lock".into()))
             .unwrap();
         let mut p = store.get_name(&user).unwrap().clone();
         p.attributes = attrs;
-        p.requires_preauth = attrs & KDB_REQUIRES_PRE_AUTH != 0;
         state.set_on(&mut p);
         store.debug_insert(p.clone());
         (store, p)

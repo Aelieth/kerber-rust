@@ -31,7 +31,8 @@ from the OS CSPRNG (`getrandom`).
 
 **`krb5-types`** holds RFC 4120 owned values with rasn derives. Tagging
 is EXPLICIT, matching the RFC. This crate is the protocol vocabulary;
-it does not catch codec errors.
+it does not catch codec errors. It uses `krb5-brainpool` for brainpoolP512
+(r1 and t1) PKINIT keys; a 32-bit build does not compile that field.
 
 **`krb5-asn1`** is the DER boundary: `encode` / `decode` return
 `Result`, never panic, and emit log events for success and failure.
@@ -49,11 +50,16 @@ keytab v2 (the password comes from env or stdin, never argv).
 
 **`krb5-kdc`** issues AS/TGS from an in-memory store. The at-rest file
 is MIT dump version 7 (stash still holds the master key; SID/RID in
-`TL_KERBER_SID`). Legacy KDB3 ciphertext still loads for one release.
+`TL_KERBER_SID`), with each principal change appended and flushed until its replaced records outnumber its
+principals (256 at least) and the next write rewrites it. Readers take a change whole or not at all, so a change
+a crash cut short is not read. Legacy KDB3 ciphertext still loads for one release.
 `krb5-kdb` is MIT's `kdb5_util` (create, stash, dump, load, destroy). `key_data` uses KDB usage 0
 with a cleartext `int16_LE` length prefix; protocol `KeyUsage::new(0)`
-stays rejected. The serving store is `Arc<RwLock<PrincipalStore>>` so
-kadmind/kpasswd mutations reach `save_store`. The `krb5-kdc` daemon
+stays rejected. The KDC serves a `SharedStore` (`Arc<RwLock<dyn Store>>`); kadmind and kpasswd
+hold a `SharedDump` (`Arc<RwLock<PrincipalStore>>`), which is one too, so one process can serve
+both from one store and one lock, and their mutations reach `save_store`. Each write is one
+`PrincipalStore::change` (the exclusive database lock, one write, then the kadm5 postcommit
+hooks); kadm5 reads take the read guard (`read_fresh`). The `krb5-kdc` daemon
 takes MIT `krb5kdc`'s options, listens where kdc.conf says (every local
 address by default), detaches unless `-n`, and writes MIT's text log
 where `[logging]` says ([logging.md](logging.md)). It always serves a
@@ -81,7 +87,7 @@ TGT PAC with the ticket key and carries its client info (and, with AD
 data, its LOGON_INFO); a TGT without a PAC gets a ticket without one.
 
 **`krb5-gss`** provides RFC 4121 wrap/MIC (MIT `libgssapi_krb5` is
-out-of-process; `scripts/gss-gate.sh`). The acceptor binds
+out-of-process; scripts/gss-gate.sh). The acceptor binds
 `expected_server` / `expected_realm` from the keytab. First wrap/MIC
 seq is checked against the AP-REQ authenticator seq; wrap/MIC use a
 windowed replay cache. Production `wrap` emits RRC=0 (MIT 1.22.2);
@@ -92,26 +98,22 @@ environment-dependent.
 AP-REQ framing (library tests) and `krb5-kadmind` ONC RPC program 2112
 / AUTH_GSSAPI flavor 300001 on TCP 749, RFC 3244 kpasswd on UDP/TCP
 464 (`kadmin/changepw`, MIT `kpasswd` gated by
-`scripts/kpasswd-gate.sh`), `krb5-kpropd` on 754 wrapping MIT dump
+`scripts/kpasswd-rust-gate.sh`), `krb5-kpropd` on 754 wrapping MIT dump
 version 7 (`sendauth` `kprop5_01`, KRB-SAFE size, KRB-PRIV chunks).
 MIT `kprop` then MIT `kinit` is gated by `scripts/kprop-gate.sh`.
 `krb5-kdb dump`, then Rust `krb5-kprop -f` of that file → MIT `kpropd`, then
 MIT `kinit` is `scripts/kprop-reverse-gate.sh`: kprop, as MIT's, opens no database.
-A multi-host MIT client against a Rust primary and replica is
-`scripts/prod-realm-gate.sh`. Wire stress, chaos and soak over that realm
-are `scripts/stress-gate.sh`, `scripts/chaos-gate.sh`, and
-`scripts/soak-gate.sh`.
 MIT 1.22.2 `kadmin` add/get/list/mod/chrand/del is gated by
-`scripts/kadmin-gate.sh`. Named policies and lockout:
-`scripts/policy-gate.sh`. Iprop serial/ulog and `kpropd -A`:
+`scripts/kadmin-rust-gate.sh` and `scripts/kadmin-mit-gate.sh`. Named policies and lockout:
+`ticket-flags.sh`. Iprop serial/ulog and `kpropd -A`:
 `scripts/iprop-gate.sh`. Extension points: [`plugins.md`](plugins.md)
-(traits, not dlopen). A kadmind mutation survives KDC process
-relaunch (`scripts/restart-gate.sh`). The database is locked between
+(traits, not dlopen). The database is locked between
 processes as MIT's db2 module locks it (`dblock.rs`): `principal.ok` and
 `principal.kadm5.lock` beside it, whole-file OFD locks, shared for every read
 (the KDC only while it sees whether the database changed and reads it again,
-or reads a client's lockout record) and exclusive for every change from a
-fresh read of the dump to its one write and the age bump
+or reads a client's lockout record) and exclusive for every change from the
+database as it now is (read again when another writer moved its age or file,
+else its lockout records merged) to its one write and the age bump
 (`PrincipalStore::change`), so a concurrent local `addprinc` survives a remote
 `cpw` and no writer saves over another. The KDC takes it exclusively only to
 update a client's record in `principal.lockout` in place (`lockout/file.rs`), which
@@ -127,9 +129,10 @@ the tool stops as MIT's does), else MIT's defaults under `KDC_DIR`
 (`/var/kerberos/krb5kdc`, set at build time by `KERBER_KDC_DIR`); only a
 `test-hooks` build puts the gates' `KRB5_KDC_CONF` / `KRB5_KDC_DB` /
 `KRB5_KDC_STASH` / `KRB5_ACL_FILE` / `KRB5_MASTER_ETYPE` on top. The KDC also
-takes ticket policy, `db_library` and listen ports from that file. `kinit` and
-TGS referral chase call `discover_kdc` (`KRB5_CONFIG` then `/etc/krb5.conf`);
-argv remains the fallback.
+takes ticket policy, `db_library` and listen ports from that file. A client
+program reads its profile once, at start (`KRB5_CONFIG`, else
+`/etc/krb5.conf`, into a `ClientContext`), and `kinit` and the TGS referral
+chase take a realm's KDCs from it; argv remains the fallback.
 
 **`krb5-cli`** is MIT's command-line shapes and password prompts for the
 tools: glibc `getopt` (with the leading `+` that stops at the first operand),
@@ -162,7 +165,7 @@ dev-dependency only).
   its error type.
 - Logs carry explicit fields (see [Observability](#observability)) rather
   than `#[instrument]` spans.
-- The comment and rustdoc rules (R1 to R4) are in
+- The comment rules (R1 to R3) are in
   [CONTRIBUTING.md § Code comments](../CONTRIBUTING.md#code-comments);
   `check_mit_anchor_form`, `check_mit_anchor_truth` and
   `check_no_process_history` in `scripts/ci-policy.py` keep R1 and R3 true

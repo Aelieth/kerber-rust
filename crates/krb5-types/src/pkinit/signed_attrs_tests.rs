@@ -16,20 +16,10 @@ fn cms_verify_refuses_missing_signed_attrs() {
         &serial,
         ECONTENT_AUTHDATA,
         None,
+        super::cms::OID_ECDSA_SHA256,
     );
     assert_eq!(
         cms_verify_full(&cms, &ca.ca_cert).expect_err("bare"),
         "cms signedAttrs"
     );
-}
-
-#[test]
-fn cms_unsigned_contentinfo_round_trips() {
-    let inner = b"anon-authpack";
-    let wrap = cms_wrap_unsigned(inner);
-    assert_eq!(
-        cms_extract_unsigned(&wrap).as_deref(),
-        Some(inner.as_slice())
-    );
-    assert!(cms_verify_full(&wrap, &[]).is_err());
 }

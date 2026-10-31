@@ -1,12 +1,8 @@
-//! Concurrent AS+TGS load driver against a live KDC.
-//!
-//! Usage: loadgen \<kdc-host\> \<user@REALM\> \[service\]
-//!
-//! Password is `KRB5_PASSWORD`. Concurrency is `KERBER_LOAD_WORKERS` (default 8)
-//! times `KERBER_LOAD_ITERS` (default 8), or loop until `KERBER_LOAD_SECONDS`.
-//! The first failed exchanges are named on stderr, so a gate's log says why.
-
 #![forbid(unsafe_code)]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "a program reads its profile and environment when it starts"
+)]
 
 use std::env;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -16,7 +12,6 @@ use std::time::{Duration, Instant};
 use krb5_client::kinit;
 use krb5_protocol::KdcAddr;
 
-/// The failed exchanges named on stderr; the rest are only counted.
 const SHOWN_ERRORS: u64 = 5;
 
 fn parse_u32(name: &str, default: u32) -> u32 {
@@ -65,6 +60,10 @@ fn main() {
     let start = Instant::now();
     let deadline = seconds.map(|s| start + Duration::from_secs(s));
 
+    let ctx = krb5_client::init_context().unwrap_or_else(|e| {
+        eprintln!("loadgen: {e} while initializing krb5");
+        std::process::exit(1);
+    });
     thread::scope(|scope| {
         for w in 0..workers {
             let addr = addr.clone();
@@ -73,6 +72,7 @@ fn main() {
             let service = service.clone();
             let ok = &ok;
             let err = &err;
+            let ctx = &ctx;
             scope.spawn(move || {
                 let mut i = 0u32;
                 loop {
@@ -91,7 +91,7 @@ fn main() {
                         i
                     ));
                     let mut pw = password.clone().into_bytes();
-                    match kinit(&addr, &principal, &mut pw, &cc, service.as_deref()) {
+                    match kinit(ctx, &addr, &principal, &mut pw, &cc, service.as_deref()) {
                         Ok(_) => {
                             ok.fetch_add(1, Ordering::Relaxed);
                         }

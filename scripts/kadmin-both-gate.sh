@@ -691,6 +691,215 @@ diff "$SCRATCH/z72ks-rust.txt" "$SCRATCH/z72ks-mit.txt" || {
     exit 1
 }
 
+echo "==== setkey3/4 on MIT's kadmind, then ours (svr_principal.c:1519-1750) ===="
+setkey_leg() {
+    local ctn=$1 conf=$2 leg=$3 out keys
+    local rpc=(docker exec -e KRB5_CONFIG="$conf" "$ctn" /tmp/kadm5-changepw-rpc --service kadmin/admin
+        admin/admin adminpassword KERBER.TEST)
+    mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p admin/admin -w adminpassword \
+        -q 'addprinc -randkey skport' 2>&1 | grep -F 'Principal "skport@KERBER.TEST" created.'
+    out="$("${rpc[@]}" setkey4-kvno skport 70000 2>&1 || true)"
+    echo "$leg kvno 70000: $out"
+    echo "$out" | grep -o 'setkey4_kvno=[0-9]*' > "$SCRATCH/setkey-kvno-$leg.txt"
+    if [ "$leg" = mit ]; then
+        keys="$(mit_kadmin_local "$ctn" -- -q 'getprinc skport' | grep '^Key:')"
+    else
+        keys="$(rust_kadmin_local -e KRB5_KDC_DB=/tmp/principal -e KRB5_KDC_STASH=/tmp/stash \
+            "$ctn" -- -q 'getprinc skport' 2>&1 | grep -e '^Key:' -e 'kvno' || true)"
+    fi
+    echo "$leg keys: $keys"
+    echo "$keys" > "$SCRATCH/setkey-keys-$leg.txt"
+    out="$("${rpc[@]}" setkey-cases skport 2>&1 || true)"
+    echo "$leg cases: $out"
+    echo "$out" | grep -E '^(dup|setkey3_count|setkey3_etype|setkey3_norealm)=' > "$SCRATCH/setkey-cases-$leg.txt"
+    if [ "$leg" = mit ]; then
+        keys="$(mit_kadmin_local "$ctn" -- -q 'getprinc skport' | grep '^Key:')"
+    else
+        keys="$(rust_kadmin_local -e KRB5_KDC_DB=/tmp/principal -e KRB5_KDC_STASH=/tmp/stash \
+            "$ctn" -- -q 'getprinc skport' 2>&1 | grep -e '^Key:' -e 'kvno' || true)"
+    fi
+    echo "$leg keys after setkey3: $keys"
+    echo "$keys" | grep -Ex 'Key: vno [0-9]+, aes256-cts-hmac-sha1-96:norealm'
+    kadmin_q_ok mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p admin/admin -w adminpassword \
+        -q 'addpol -allowedkeysalts aes128-cts-hmac-sha1-96:normal skpol' >/dev/null
+    mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p admin/admin -w adminpassword \
+        -q 'addprinc -randkey -policy skpol -e aes128-cts-hmac-sha1-96:normal skpolp' 2>&1 \
+        | grep -F 'Principal "skpolp@KERBER.TEST" created.'
+    out="$("${rpc[@]}" setkey4-kvno skpolp 0 2>&1 || true)"
+    echo "$leg policy keysalts: $out"
+    echo "$out" | grep -o 'setkey4_kvno=[0-9]*' > "$SCRATCH/setkey-policy-$leg.txt"
+}
+setkey_leg "$NAME_MIT" /etc/krb5.conf mit
+setkey_leg "$NAME" /tmp/kadmin-krb5.conf rust
+grep -Fx 'setkey4_kvno=0' "$SCRATCH/setkey-kvno-mit.txt"
+grep -Fx 'Key: vno 4464, aes256-cts-hmac-sha1-96' "$SCRATCH/setkey-keys-mit.txt"
+grep -Fx 'setkey4_kvno=43787579' "$SCRATCH/setkey-kvno-rust.txt" || {
+    echo "setkey: ours did not refuse kvno 70000 as KADM5_SETKEY_BAD_KVNO (the deviation row)" >&2
+    exit 1
+}
+grep -Ex 'Key: vno 1, .*' "$SCRATCH/setkey-keys-rust.txt" >/dev/null || {
+    echo "setkey: the refused kvno changed our keys or the database: $(cat "$SCRATCH/setkey-keys-rust.txt")" >&2
+    exit 1
+}
+printf 'dup=43787571\nsetkey3_count=43787573\nsetkey3_etype=43787573\nsetkey3_norealm=0\n' \
+    | diff - "$SCRATCH/setkey-cases-mit.txt"
+diff "$SCRATCH/setkey-cases-mit.txt" "$SCRATCH/setkey-cases-rust.txt" || {
+    echo "setkey: duplicate enctypes or setkey3 tuples differ between MIT's kadmind and ours" >&2
+    exit 1
+}
+grep -Fx 'setkey4_kvno=43787578' "$SCRATCH/setkey-policy-mit.txt"
+diff "$SCRATCH/setkey-policy-mit.txt" "$SCRATCH/setkey-policy-rust.txt" || {
+    echo "setkey: a policy's allowed_keysalts differs between MIT's kadmind and ours" >&2
+    exit 1
+}
+
+echo "==== kadm5 tl_data 1024 (the delegation ACL) on MIT's kadmind, then ours: get and the dump keep it ===="
+TLDELEG_HEX="$(printf 'host/target.kerber.test@KERBER.TEST\0' | od -An -tx1 | tr -d ' \n')"
+tldeleg_leg() {
+    local ctn=$1 conf=$2 leg=$3 out line
+    mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p admin/admin -w adminpassword \
+        -q 'addprinc -randkey tldeleg' 2>&1 | grep -F 'Principal "tldeleg@KERBER.TEST" created.'
+    out="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" /tmp/kadm5-changepw-rpc --service kadmin/admin \
+        admin/admin adminpassword KERBER.TEST tl-deleg tldeleg host/target.kerber.test@KERBER.TEST 2>&1 || true)"
+    echo "$leg tl-deleg: $out"
+    echo "$out" | grep -E '^(modify_code|get_code|tl)=' > "$SCRATCH/tldeleg-$leg.txt"
+    if [ "$leg" = mit ]; then
+        docker exec "$ctn" kdb5_util dump /tmp/tldeleg.dump
+    else
+        docker exec -e KRB5_KDC_DB=/tmp/principal -e KRB5_KDC_STASH=/tmp/stash \
+            -e KRB5_MASTER_PASSWORD=masterpassword \
+            "$ctn" /tmp/krb5-kdb dump /tmp/tldeleg.dump
+    fi
+    line="$(docker exec "$ctn" grep -F $'\ttldeleg@KERBER.TEST\t' /tmp/tldeleg.dump || true)"
+    echo "$leg tldeleg dump: $line"
+    case "$line" in
+        *$'\t1024\t36\t'"$TLDELEG_HEX"$'\t'*) echo "$leg dump keeps tl_data 1024" ;;
+        *) echo "$leg dump lost the kadm5 tl_data 1024" >&2; exit 1 ;;
+    esac
+}
+tldeleg_leg "$NAME_MIT" /etc/krb5.conf mit
+tldeleg_leg "$NAME" /tmp/kadmin-krb5.conf rust
+printf 'modify_code=0\nget_code=0\ntl=1024:host/target.kerber.test@KERBER.TEST\n' \
+    | diff - "$SCRATCH/tldeleg-mit.txt"
+diff "$SCRATCH/tldeleg-mit.txt" "$SCRATCH/tldeleg-rust.txt" || {
+    echo "tl_data 1024: modify or get differs between MIT's kadmind and ours" >&2
+    exit 1
+}
+
+echo "==== kadm5 tl_data 1024 that is not one NUL-terminated name, MIT's kadmind then ours: get and the dump keep its bytes ===="
+tlraw_leg() {
+    local ctn=$1 conf=$2 leg=$3 n hex line out
+    for n in 1 2; do
+        # 1: a name with no closing NUL; 2: two names in one record
+        if [ "$n" = 1 ]; then hex="$(printf 'host/nonul.kerber.test@KERBER.TEST' | od -An -tx1 | tr -d ' \n')"
+        else hex="$(printf 'a@KERBER.TEST\0b@KERBER.TEST\0' | od -An -tx1 | tr -d ' \n')"; fi
+        mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p admin/admin -w adminpassword \
+            -q "addprinc -randkey tlraw$n" 2>&1 | grep -F "Principal \"tlraw$n@KERBER.TEST\" created."
+        out="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" /tmp/kadm5-changepw-rpc --service kadmin/admin \
+            admin/admin adminpassword KERBER.TEST tl-raw "tlraw$n" "$hex" 2>&1 || true)"
+        echo "$leg tl-raw $n: $out"
+        echo "$out" | grep -E '^(modify_code|get_code|tlraw)=' > "$SCRATCH/tlraw$n-$leg.txt"
+        printf 'modify_code=0\nget_code=0\ntlraw=%s\n' "$hex" | diff - "$SCRATCH/tlraw$n-$leg.txt"
+        if [ "$leg" = mit ]; then
+            docker exec "$ctn" kdb5_util dump /tmp/tlraw.dump
+        else
+            docker exec -e KRB5_KDC_DB=/tmp/principal -e KRB5_KDC_STASH=/tmp/stash \
+                -e KRB5_MASTER_PASSWORD=masterpassword \
+                "$ctn" /tmp/krb5-kdb dump /tmp/tlraw.dump
+        fi
+        line="$(docker exec "$ctn" grep -F $'\ttlraw'"$n"$'@KERBER.TEST\t' /tmp/tlraw.dump || true)"
+        case "$line" in
+            *$'\t1024\t'"$(( ${#hex} / 2 ))"$'\t'"$hex"$'\t'*) echo "$leg dump keeps the tl_data 1024 bytes of case $n" ;;
+            *) echo "$leg dump lost or changed the tl_data 1024 bytes of case $n: $line" >&2; exit 1 ;;
+        esac
+    done
+}
+tlraw_leg "$NAME_MIT" /etc/krb5.conf mit
+tlraw_leg "$NAME" /tmp/kadmin-krb5.conf rust
+for n in 1 2; do
+    diff "$SCRATCH/tlraw$n-mit.txt" "$SCRATCH/tlraw$n-rust.txt" || {
+        echo "tl_data 1024 bytes (case $n): modify or get differs between MIT's kadmind and ours" >&2
+        exit 1
+    }
+done
+
+echo "==== renprinc, cpw, then kinit with the new password: MIT's kadmind and KDC, then ours (kdb_cpw.c:301-305) ===="
+rencpw_leg() {
+    local ctn=$1 conf=$2 leg=$3 out
+    mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p admin/admin -w adminpassword \
+        -q 'addprinc -pw rc-old-1 rcfrom' 2>&1 | grep -F 'Principal "rcfrom@KERBER.TEST" created.'
+    kadmin_q_ok mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p admin/admin -w adminpassword \
+        -q 'renprinc -force rcfrom rcto' >/dev/null
+    mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p admin/admin -w adminpassword \
+        -q 'cpw -pw rc-new-2 rcto' 2>&1 | grep -F 'Password for "rcto@KERBER.TEST" changed.'
+    out="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" sh -c \
+        'printf "rc-new-2\n" | kinit rcto@KERBER.TEST && klist' 2>&1 || true)"
+    echo "$leg: $out"
+    echo "$out" | grep -F 'Default principal: rcto@KERBER.TEST' || {
+        echo "$leg: kinit with the password set after renprinc failed" >&2
+        exit 1
+    }
+}
+rencpw_leg "$NAME_MIT" /etc/krb5.conf mit
+rencpw_leg "$NAME" /tmp/kadmin-krb5.conf rust
+
+echo "==== ks_tuple salt types on MIT's kadmind and KDC, then ours (kdb_cpw.c:255-312, svr_principal.c:90-101) ===="
+kssalt_leg() {
+    local ctn=$1 conf=$2 leg=$3 out keys
+    mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p admin/admin -w adminpassword \
+        -q 'addprinc -e aes256-cts-hmac-sha1-96:norealm,aes128-cts-hmac-sha1-96:onlyrealm -pw ks-pass-1 ksmix' \
+        2>&1 | grep -F 'Principal "ksmix@KERBER.TEST" created.'
+    keys="$(mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p admin/admin -w adminpassword \
+        -q 'getprinc ksmix' 2>&1 | grep '^Key:')"
+    echo "$leg create: $keys"
+    echo "$keys" > "$SCRATCH/kssalt-create-$leg.txt"
+    out="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" sh -c 'printf "ks-pass-1\n" | kinit ksmix@KERBER.TEST && klist' 2>&1 || true)"
+    echo "$out" | grep -F 'Default principal: ksmix@KERBER.TEST'
+    mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p admin/admin -w adminpassword \
+        -q 'cpw -e aes256-cts-hmac-sha1-96:special -pw ks-pass-2 ksmix' \
+        2>&1 | grep -F 'Password for "ksmix@KERBER.TEST" changed.'
+    keys="$(mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p admin/admin -w adminpassword \
+        -q 'getprinc ksmix' 2>&1 | grep '^Key:')"
+    echo "$leg cpw: $keys"
+    echo "$keys" > "$SCRATCH/kssalt-cpw-$leg.txt"
+    out="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" sh -c 'printf "ks-pass-2\n" | kinit ksmix@KERBER.TEST && klist' 2>&1 || true)"
+    echo "$out" | grep -F 'Default principal: ksmix@KERBER.TEST'
+    kadmin_q_ok mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p admin/admin -w adminpassword \
+        -q 'addpol -allowedkeysalts aes256-cts-hmac-sha1-96:normal kspolnorm' >/dev/null
+    out="$(mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p admin/admin -w adminpassword \
+        -q 'addprinc -policy kspolnorm -e aes256-cts-hmac-sha1-96:norealm -pw ks-pass-3 ksbad' 2>&1 || true)"
+    echo "$leg policy: $out"
+    echo "$out" | grep -F 'Invalid key/salt tuples'
+    mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p admin/admin -w adminpassword \
+        -q 'addprinc -randkey -policy kspolnorm kspolset' 2>&1 | grep -F 'Principal "kspolset@KERBER.TEST" created.'
+    out="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" /tmp/kadm5-changepw-rpc --service kadmin/admin \
+        admin/admin adminpassword KERBER.TEST setkey-cases kspolset 2>&1 || true)"
+    echo "$leg setkey3 under the policy: $out"
+    echo "$out" | grep -E '^setkey3_norealm=' > "$SCRATCH/kssalt-setkey-$leg.txt"
+}
+kssalt_leg "$NAME_MIT" /etc/krb5.conf mit
+kssalt_leg "$NAME" /tmp/kadmin-krb5.conf rust
+printf 'Key: vno 1, aes256-cts-hmac-sha1-96:norealm\nKey: vno 1, aes128-cts-hmac-sha1-96:onlyrealm\n' \
+    | diff - "$SCRATCH/kssalt-create-mit.txt"
+grep -Fx 'Key: vno 2, aes256-cts-hmac-sha1-96:special' "$SCRATCH/kssalt-cpw-mit.txt"
+grep -Fx 'setkey3_norealm=43787578' "$SCRATCH/kssalt-setkey-mit.txt"
+for f in create cpw setkey; do
+    diff "$SCRATCH/kssalt-$f-mit.txt" "$SCRATCH/kssalt-$f-rust.txt" || {
+        echo "ks_tuple salt types: $f differs between MIT's kadmind and ours" >&2
+        exit 1
+    }
+done
+
+echo "==== addprinc Administrator, then administrator: MIT's kadmind, then ours, create both ===="
+admin_case() {
+    for p in Administrator administrator; do
+        mit_kadmin -e KRB5_CONFIG="$2" "$1" -- -p admin/admin -w adminpassword \
+            -q "addprinc -randkey $p" 2>&1 | grep -F "Principal \"$p@KERBER.TEST\" created."
+    done
+}
+admin_case "$NAME_MIT" /etc/krb5.conf
+admin_case "$NAME" /tmp/kadmin-krb5.conf
+
 echo "==== Z8.3 bootstrap actors: kadmin/changepw kdb5_util@ (kadm5_create.c:100) ===="
 # kadmin/changepw is never successfully modified in this gate (the
 # lockdown_keys cell is a privilege denial), so both legs still show

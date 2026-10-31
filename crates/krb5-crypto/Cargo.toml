@@ -8,6 +8,10 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+[features]
+# MIT's k5_allow_weak_pbkdf2iter for the RFC vectors' low counts; off by default, never in a release build.
+test-hooks = []
+
 [dependencies]
 aes.workspace = true
 camellia.workspace = true
@@ -17,7 +21,6 @@ des.workspace = true
 getrandom.workspace = true
 hmac.workspace = true
 krb5-log.workspace = true
-num-bigint.workspace = true
 md-5.workspace = true
 md4.workspace = true
 p256.workspace = true

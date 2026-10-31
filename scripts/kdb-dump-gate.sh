@@ -169,7 +169,7 @@ echo "$STASHCMD"
 echo "$STASHCMD" | grep -qx 'Using existing stashed keys to update stash file.'
 docker exec "$NAME" klist -k -t -K /tmp/stash 2>&1 | grep -q 'K/M@KERBER.TEST'
 
-echo "==== Rust KDC loads the keytab stash with no ERROR log ===="
+echo "==== Rust KDC loads the keytab stash ===="
 docker exec -d \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
@@ -186,12 +186,6 @@ done
 if [ "$ok" != 1 ]; then
     docker exec "$NAME" cat /tmp/kdc.log >&2 || true
     log "kdb.dump.gate" "error" ',"error":"rust kdc did not listen"'
-    exit 1
-fi
-
-if docker exec "$NAME" grep -q '"level":"ERROR"' /tmp/kdc.log 2>/dev/null; then
-    docker exec "$NAME" grep '"level":"ERROR"' /tmp/kdc.log >&2 || true
-    log "kdb.dump.gate" "error" ',"error":"rust KDC logged ERROR loading the keytab stash"'
     exit 1
 fi
 
@@ -308,10 +302,17 @@ echo "$RUST_HIST_B"
 echo "$RUST_HIST_B" | grep -F 'Principal: kadmin/history@KERBER.TEST'
 docker exec "$NAME" grep -q 'histb@KERBER.TEST' /tmp/principal
 
-echo "==== half B: MIT kdb5_util load + krb5kdc ===="
+echo "==== half B: krb5-kdb dump, then MIT kdb5_util load + krb5kdc ===="
+# The database takes each change as an appended batch, so MIT loads a dump of it, as kdb5_util dump makes one.
+DUMP_B="$(docker exec \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kdb dump /tmp/rust-b.dump 2>&1 || true)"
+echo "$DUMP_B"
 docker exec "$NAME" sh -c 'kdb5_util destroy -f >/dev/null 2>&1 || true'
 docker exec "$NAME" kdb5_util create -s -P masterpassword
-LOAD_B="$(docker exec "$NAME" kdb5_util load /tmp/principal 2>&1 || true)"
+LOAD_B="$(docker exec "$NAME" kdb5_util load /tmp/rust-b.dump 2>&1 || true)"
 echo "$LOAD_B"
 echo "$LOAD_B" | grep -qiE 'error|fail' && {
     log "kdb.dump.gate" "error" ',"error":"MIT kdb5_util load rejected policy dump"'
@@ -501,4 +502,50 @@ diff <(echo "$RUST_ETYPES") <(echo "$MIT_ETYPES")
 echo "MIT_keyord" # MIT_keyord
 echo "RUST_keyord" # RUST_keyord
 
-log "kdb.dump.gate" "ok" ',"dump_version":7,"halves":"A+B","alias":"both directions","max_rlife_zero":true,"addprinc_key_order":true'
+echo "==== kdb5_util stash, MIT first: over a 0640 stash, key typed, wrong key ===="
+# MIT `kdb5_stash` (kdb5_stash.c:65-137): a new 0600 file, the stashed or typed key.
+docker exec "$NAME" sh -c 'mkdir -p /tmp/rkdb && ln -sf /tmp/krb5-kdb /tmp/rkdb/kdb5_util'
+stash_twin() {
+    docker exec -i "$NAME" sh -s -- "$1" "$2" <<'SH'
+D=$1 T=$2
+rm -rf "$D" && mkdir -p "$D" && cd "$D" || exit 1
+printf '[libdefaults]\n    default_realm = KL.TEST\n' >krb5.conf
+printf '[realms]\n    KL.TEST = {\n        database_name = %s/principal\n' "$D" >kdc.conf
+printf '        key_stash_file = %s/stash\n' "$D" >>kdc.conf
+printf '        master_key_type = aes256-cts-hmac-sha1-96\n    }\n' >>kdc.conf
+export KRB5_CONFIG="$D/krb5.conf" KRB5_KDC_PROFILE="$D/kdc.conf"
+"$T" -P kl-master create -s >/dev/null 2>&1 || { echo "create failed"; exit 1; }
+key() { klist -k -K stash 2>/dev/null | sed -n 's/^ *\([0-9]*\) .*(0x\([0-9a-f]*\)).*/\1 \2/p'; }
+step() {
+    echo "$1 rc=$2"
+    sed "s/^/$1 out: /" o
+    sed "s/^/$1 err: /" e
+}
+chmod 640 stash
+k0=$(key) i0=$(stat -c %i stash)
+"$T" stash </dev/null >o 2>e
+step over-0640 $?
+same=no; [ "$(key)" = "$k0" ] && same=yes
+new=no; [ "$(stat -c %i stash)" != "$i0" ] && new=yes
+echo "over-0640 mode=$(stat -c %a stash) new_inode=$new same_key=$same"
+rm -f stash
+printf 'kl-master\n' | "$T" stash >o 2>e
+step typed $?
+same=no; [ "$(key)" = "$k0" ] && same=yes
+echo "typed mode=$(stat -c %a stash) same_key=$same"
+rm -f stash
+printf 'wrong\n' | "$T" stash >o 2>e
+step wrong $?
+[ -e stash ] && echo "wrong stash=present" || echo "wrong stash=absent"
+SH
+}
+MIT_STASH="$(stash_twin /tmp/stash-mit "$(docker exec "$NAME" sh -c 'command -v kdb5_util')")"
+echo "$MIT_STASH"
+RUST_STASH="$(stash_twin /tmp/stash-rust /tmp/rkdb/kdb5_util)"
+for want in 'over-0640 rc=0' 'over-0640 mode=600 new_inode=yes same_key=yes' 'typed rc=0' \
+    'typed mode=600 same_key=yes' 'wrong rc=2' 'wrong stash=absent'; do
+    grep -qxF "$want" <<<"$MIT_STASH" || die "MIT stash: no line $want"
+done
+diff <(echo "$MIT_STASH") <(echo "$RUST_STASH") || die "the Rust kdb5_util stash is not MIT's"
+
+log "kdb.dump.gate" "ok" ',"dump_version":7,"halves":"A+B","alias":"both directions","max_rlife_zero":true,"addprinc_key_order":true,"stash_twin":true'

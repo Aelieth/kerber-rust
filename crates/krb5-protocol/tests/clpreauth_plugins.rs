@@ -1,9 +1,11 @@
 //! `[plugins] clpreauth` selects the client's preauth modules by MIT's names.
 //!
-//! MIT `k5_init_preauth_context` (`lib/krb5/krb/preauth2.c:132-150`): built-ins register, then
+// MIT: `k5_init_preauth_context` (lib/krb5/krb/preauth2.c:132-150)
+//! built-ins register, then
 //! `k5_plugin_load_all` applies `disable` and `enable_only`. A module that is not loaded does not
 //! answer its pa-type.
-//! MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:648-728`): a hint whose real types have no
+// MIT: `process_pa_data` (lib/krb5/krb/preauth2.c:648-728)
+//! a hint whose real types have no
 //! loaded module is `KRB5_PREAUTH_FAILED` ("Generic preauthentication failure"), and the prompter
 //! is not asked.
 
@@ -21,18 +23,11 @@ use krb5_types::{
     AsReq, KerberosTime, KrbError, MethodData, Microseconds, PaData, PrincipalName, ascii, err, pa,
 };
 
-fn pin(extra: &str) {
-    krb5_config::isolate_test_krb5();
-    let dir = krb5_testkit::scratch_dir("pg3-clpreauth");
-    let path = dir.join("krb5.conf");
-    std::fs::write(
-        &path,
-        format!(
-            "[libdefaults]\n    default_realm = KERBER.TEST\n    dns_lookup_kdc = false\n    dns_lookup_realm = false\n    udp_preference_limit = 60000\n{extra}"
-        ),
-    )
-    .unwrap();
-    krb5_config::set_test_krb5_paths(Some(vec![path]));
+fn pin(extra: &str) -> krb5_config::Krb5Conf {
+    krb5_config::Krb5Conf::parse(&format!(
+        "[libdefaults]\n    default_realm = KERBER.TEST\n    dns_lookup_kdc = false\n    dns_lookup_realm = false\n    udp_preference_limit = 60000\n{extra}"
+    ))
+    .unwrap()
 }
 
 fn pa_of(padata_type: i32) -> PaData {
@@ -81,7 +76,7 @@ fn encode_preauth_failed() -> Vec<u8> {
 }
 
 /// Send `hint` as PREAUTH_REQUIRED, then PREAUTH_FAILED. Returns each AS-REQ's pa-types.
-fn shots(hint: MethodData) -> (Vec<Vec<i32>>, String) {
+fn shots(profile: &krb5_config::Krb5Conf, hint: MethodData) -> (Vec<Vec<i32>>, String) {
     let seen: Arc<Mutex<Vec<Vec<i32>>>> = Arc::new(Mutex::new(Vec::new()));
     let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
     udp.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
@@ -123,6 +118,7 @@ fn shots(hint: MethodData) -> (Vec<Vec<i32>>, String) {
             host: "127.0.0.1".into(),
             port,
         },
+        profile,
         want_spake: false,
         fast_armor: None,
         pkinit: None,
@@ -140,10 +136,10 @@ fn shots(hint: MethodData) -> (Vec<Vec<i32>>, String) {
 
 #[test]
 fn disable_encrypted_timestamp_sends_no_pa_enc_timestamp() {
-    pin(
+    let profile = pin(
         "    spake_preauth_groups = nosuch\n[plugins]\n    clpreauth = {\n        disable = encrypted_timestamp\n        disable = nosuch\n    }\n",
     );
-    let (seen, msg) = shots(vec![pa_of(pa::ENC_TIMESTAMP)]);
+    let (seen, msg) = shots(&profile, vec![pa_of(pa::ENC_TIMESTAMP)]);
     assert!(
         seen.iter().all(|types| !types.contains(&pa::ENC_TIMESTAMP)),
         "a disabled encrypted_timestamp is not answered: {seen:?}"
@@ -161,8 +157,9 @@ fn disable_encrypted_timestamp_sends_no_pa_enc_timestamp() {
 
 #[test]
 fn enable_only_encrypted_timestamp_skips_spake() {
-    pin("[plugins]\n    clpreauth = {\n        enable_only = encrypted_timestamp\n    }\n");
-    let (seen, _) = shots(vec![pa_of(pa::SPAKE), pa_of(pa::ENC_TIMESTAMP)]);
+    let profile =
+        pin("[plugins]\n    clpreauth = {\n        enable_only = encrypted_timestamp\n    }\n");
+    let (seen, _) = shots(&profile, vec![pa_of(pa::SPAKE), pa_of(pa::ENC_TIMESTAMP)]);
     assert!(seen.len() >= 2, "the client answers the hint: {seen:?}");
     assert!(
         seen[1].contains(&pa::ENC_TIMESTAMP),
@@ -176,10 +173,10 @@ fn enable_only_encrypted_timestamp_skips_spake() {
 
 #[test]
 fn enable_only_of_an_absent_name_answers_nothing() {
-    pin(
+    let profile = pin(
         "    spake_preauth_groups = nosuch\n[plugins]\n    clpreauth = {\n        enable_only = nosuch\n    }\n",
     );
-    let (seen, msg) = shots(vec![pa_of(pa::ENC_TIMESTAMP), pa_of(pa::SPAKE)]);
+    let (seen, msg) = shots(&profile, vec![pa_of(pa::ENC_TIMESTAMP), pa_of(pa::SPAKE)]);
     assert_eq!(
         seen.len(),
         1,
@@ -193,10 +190,10 @@ fn enable_only_of_an_absent_name_answers_nothing() {
 
 #[test]
 fn disable_of_an_absent_name_still_answers_encrypted_timestamp() {
-    pin(
+    let profile = pin(
         "    spake_preauth_groups = nosuch\n[plugins]\n    clpreauth = {\n        disable = nosuch\n        disable = sam2\n    }\n",
     );
-    let (seen, _) = shots(vec![pa_of(pa::ENC_TIMESTAMP)]);
+    let (seen, _) = shots(&profile, vec![pa_of(pa::ENC_TIMESTAMP)]);
     assert!(seen.len() >= 2, "an absent name drops nothing: {seen:?}");
     assert!(
         seen[1].contains(&pa::ENC_TIMESTAMP),
@@ -206,8 +203,9 @@ fn disable_of_an_absent_name_still_answers_encrypted_timestamp() {
 
 #[test]
 fn disable_encrypted_timestamp_still_answers_spake() {
-    pin("[plugins]\n    clpreauth = {\n        disable = encrypted_timestamp\n    }\n");
-    let (seen, _) = shots(vec![pa_of(pa::ENC_TIMESTAMP), pa_of(pa::SPAKE)]);
+    let profile =
+        pin("[plugins]\n    clpreauth = {\n        disable = encrypted_timestamp\n    }\n");
+    let (seen, _) = shots(&profile, vec![pa_of(pa::ENC_TIMESTAMP), pa_of(pa::SPAKE)]);
     assert!(seen.len() >= 2, "SPAKE still runs: {seen:?}");
     assert!(
         seen[1].contains(&pa::SPAKE),
@@ -249,7 +247,7 @@ impl ClPreauth for Widget {
 type PaShot = Vec<(i32, Vec<u8>)>;
 
 /// Each AS-REQ's `(pa-type, value)` list.
-fn shot_bodies(hint: MethodData) -> Vec<PaShot> {
+fn shot_bodies(profile: &krb5_config::Krb5Conf, hint: MethodData) -> Vec<PaShot> {
     let seen: Arc<Mutex<Vec<PaShot>>> = Arc::new(Mutex::new(Vec::new()));
     let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
     udp.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
@@ -291,6 +289,7 @@ fn shot_bodies(hint: MethodData) -> Vec<PaShot> {
             host: "127.0.0.1".into(),
             port,
         },
+        profile,
         want_spake: false,
         fast_armor: None,
         pkinit: None,
@@ -306,8 +305,8 @@ fn shot_bodies(hint: MethodData) -> Vec<PaShot> {
 fn enable_only_widget_sends_the_modules_padata() {
     let _guard = Guard;
     set_thread_clpreauth(vec![Arc::new(Widget)]);
-    pin("[plugins]\n    clpreauth = {\n        enable_only = widget\n    }\n");
-    let seen = shot_bodies(vec![pa_of(WIDGET)]);
+    let profile = pin("[plugins]\n    clpreauth = {\n        enable_only = widget\n    }\n");
+    let seen = shot_bodies(&profile, vec![pa_of(WIDGET)]);
     assert!(seen.len() >= 2, "the selected module answers: {seen:?}");
     assert!(
         seen[1]
@@ -327,8 +326,8 @@ fn enable_only_widget_sends_the_modules_padata() {
 fn a_disabled_widget_is_not_answered() {
     let _guard = Guard;
     set_thread_clpreauth(vec![Arc::new(Widget)]);
-    pin("[plugins]\n    clpreauth = {\n        disable = widget\n    }\n");
-    let (seen, msg) = shots(vec![pa_of(WIDGET)]);
+    let profile = pin("[plugins]\n    clpreauth = {\n        disable = widget\n    }\n");
+    let (seen, msg) = shots(&profile, vec![pa_of(WIDGET)]);
     assert_eq!(seen.len(), 1, "a dropped module does not answer: {seen:?}");
     assert!(
         seen.iter().all(|types| !types.contains(&WIDGET)),
@@ -340,12 +339,13 @@ fn a_disabled_widget_is_not_answered() {
     );
 }
 
-/// MIT `otp_client_process` (`lib/krb5/krb/preauth_otp.c:1084-1087`): without a FAST armor key the
+// MIT: `otp_client_process` (lib/krb5/krb/preauth_otp.c:1084-1087)
+/// without a FAST armor key the
 /// module has nothing to answer with, so a PA-OTP-CHALLENGE alone leaves the hint unanswered.
 #[test]
 fn an_unarmored_otp_hint_is_not_answered() {
-    pin("    spake_preauth_groups = nosuch\n");
-    let (seen, msg) = shots(vec![pa_of(pa::OTP_CHALLENGE)]);
+    let profile = pin("    spake_preauth_groups = nosuch\n");
+    let (seen, msg) = shots(&profile, vec![pa_of(pa::OTP_CHALLENGE)]);
     assert_eq!(seen.len(), 1, "no second AS-REQ: {seen:?}");
     assert!(msg.contains("Generic preauthentication failure"), "{msg}");
 }

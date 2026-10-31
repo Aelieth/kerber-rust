@@ -1,8 +1,4 @@
-//! Shared KDC helpers (`kdc_util.c`, `addr_srch.c`, `rd_req_dec.c`,
-//! `valid_times.c`, `authdata_dec.c`, `kdc_authdata.c`):
-//! `kdc_process_tgs_req`, header ticket decrypt,
-//! `validate_as_request`, session etype, `include_pac_p`, and the
-//! small encoding helpers.
+//! Header-ticket checks and AS request policy.
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
@@ -10,16 +6,17 @@ use krb5_crypto::{
     decrypt_enc_data, parse_enctype_list, verify_checksum_type,
 };
 use krb5_types::{
-    AuthorizationData, AuthorizationDataValue, Checksum, EncTicketPart, EncryptionKey, HostAddress,
-    HostAddresses, KdcReqBody, KerberosTime, OctetString, PaData, PrincipalName, TicketFlags, err,
-    flag_bit, ku, pa,
+    Checksum, EncTicketPart, EncryptionKey, HostAddress, HostAddresses, KdcReqBody, KerberosTime,
+    OctetString, PaData, PrincipalName, TicketFlags, err, flag_bit, ku, pa,
 };
 
 use super::as_req::is_anonymous_principal;
+use crate::ad::find_authdata;
+use crate::asn1_text::{APPLICATION, body_failure_text};
 use crate::der::take_der;
 use crate::error::Error;
 use crate::kdb::{PrincipalRead, lookup_principal_id};
-use crate::preauth::{proto, proto_d};
+use crate::preauth::{asn1_outer_text, bad_pvno, proto, proto_d};
 use crate::status;
 use crate::store::{
     KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_FORWARDABLE, KDB_DISALLOW_POSTDATED, KDB_DISALLOW_PROXIABLE,
@@ -37,17 +34,29 @@ pub(super) struct HeaderTgt {
     pub(super) header_server: Principal,
 }
 
-/// MIT `kdc_process_tgs_req` (`kdc_util.c:217-229`): a ticket that is valid only as FAST armor
-/// is refused after the request is authenticated. An address or time failure is reported before
-/// that armor check, and an unknown or non-collision-proof checksum is not accepted.
-/// MIT `kdc_process_tgs_req` (`kdc_util.c:189-191`): the AP-REQ is read without a replay cache, so a replayed request is processed again.
+fn process_tgs_refusal((code, text): (i32, String)) -> Error {
+    proto_d(code, status::PROCESS_TGS, text)
+}
+
+fn tgs_decode_refusal(der: &[u8], tagnum: u32, e: &krb5_asn1::Error) -> Error {
+    let text = asn1_outer_text(der, APPLICATION, tagnum)
+        .unwrap_or_else(|| body_failure_text(&e.to_string()));
+    proto_d(err::GENERIC, status::PROCESS_TGS, text)
+}
+
+// MIT: `kdc_process_tgs_req` (kdc_util.c:217-229)
+// MIT: `kdc_process_tgs_req` (kdc_util.c:189-191)
+/// No replay cache, so a replayed authenticator is accepted again.
 pub(super) fn process_tgs_header(
     store: &dyn PrincipalRead,
     ap_raw: &[u8],
     body_der: &[u8],
     sender: Option<&HostAddress>,
 ) -> Result<HeaderTgt, Error> {
-    let ap: krb5_types::ApReq = decode(ap_raw)?;
+    let ap: krb5_types::ApReq = decode(ap_raw).map_err(|e| match bad_pvno(&e) {
+        Some(refusal) => process_tgs_refusal(refusal),
+        None => tgs_decode_refusal(ap_raw, 14, &e),
+    })?;
     if ap.ap_options.use_session_key() || ap.ap_options.wants_mutual() {
         return Err(proto(err::POLICY, status::PROCESS_TGS));
     }
@@ -65,48 +74,49 @@ pub(super) fn process_tgs_header(
         ap.authenticator.etype,
         ap.authenticator.cipher.as_ref(),
     )?;
-    let authenticator: krb5_types::Authenticator = decode(&auth_plain)?;
-    // MIT `rd_req_decoded_opt` (`lib/krb5/krb/rd_req_dec.c:631-631`): only the authenticator's ctime is checked, against the clock skew; its cusec is taken as it is, past 999999 too.
+    let authenticator: krb5_types::Authenticator =
+        decode(&auth_plain).map_err(|e| tgs_decode_refusal(&auth_plain, 2, &e))?;
+    // MIT: `rd_req_decoded_opt` (lib/krb5/krb/rd_req_dec.c:631-631)
     let auth_realm = utf8_realm(&authenticator.crealm)?;
     let tkt_realm = utf8_realm(&enc_tkt.crealm)?;
     if !krb5_types::principal_compare(&authenticator.cname, auth_realm, &enc_tkt.cname, tkt_realm) {
         return Err(proto(err::BADMATCH, status::PROCESS_TGS));
     }
-    // MIT `rd_req_decoded_opt` (`rd_req_dec.c:536-540`): after client compare, before FX-ARMOR.
+    // MIT: `rd_req_decoded_opt` (rd_req_dec.c:536-540)
     if let Some(remote) = sender
         && !address_search(remote, enc_tkt.caddr.as_ref())
     {
         return Err(proto(err::BADADDR, status::PROCESS_TGS));
     }
-    // MIT `rd_req_decoded_opt` (`rd_req_dec.c:627-627`): times after BADMATCH/BADADDR.
+    // MIT: `rd_req_decoded_opt` (lib/krb5/krb/rd_req_dec.c:606-610)
+    crate::preauth::check_transited(store, &enc_tkt, &header_realm).map_err(process_tgs_refusal)?;
+    // MIT: `rd_req_decoded_opt` (rd_req_dec.c:627-627)
     check_header_times_rd_req(store, &enc_tkt)?;
-    // MIT `rd_req_decoded_opt` (`rd_req_dec.c:652-723`): then the authenticator's RFC 4537 list, its subkey's and the session key's enctypes are negotiated against the KDC's `permitted_enctypes`; one it leaves out is `KRB5_NOPERM_ETYPE`, 60 `PROCESS_TGS`.
+    // MIT: `rd_req_decoded_opt` (rd_req_dec.c:652-723)
     krb5_protocol::negotiate_ap_req_etypes(
         &authenticator,
         enc_tkt.key.keytype,
         &store.policy().permitted_list(),
     )
     .map_err(|_| proto(err::GENERIC, status::PROCESS_TGS))?;
-    // MIT `kdc_process_tgs_req` (`kdc_util.c:217-229`): FX-ARMOR after rd_req, before the
-    // authenticator checksum.
-    match fx_armor_present(
+    // MIT: `kdc_process_tgs_req` (kdc_util.c:217-229)
+    // Armor-only is refused after acceptance, before the checksum.
+    let fx = find_authdata(
         enc_tkt.authorization_data.as_deref(),
         authenticator.authorization_data.as_deref(),
-    ) {
-        Ok(true) => {
-            return Err(proto_d(
-                err::POLICY,
-                status::PROCESS_TGS,
-                "ticket valid only as FAST armor",
-            ));
-        }
-        Ok(false) => {}
-        Err(Error::Asn1(_)) => return Err(proto(err::GENERIC, status::PROCESS_TGS)),
-        Err(e) => return Err(e),
+        pa::AD_FX_ARMOR,
+    )
+    .map_err(process_tgs_refusal)?;
+    if !fx.is_empty() {
+        return Err(proto_d(
+            err::POLICY,
+            status::PROCESS_TGS,
+            "ticket valid only as FAST armor",
+        ));
     }
+    // Unknown checksum 15, no checksum 50, an integrity fault 31.
     if let Some(ck) = &authenticator.cksum {
-        // MIT `comp_cksum` (`kdc_util.c:112-140`): unknown 15, not coll-proof 50,
-        // verify fail 31. 1.22.2 sets CKSUM_NOT_COLL_PROOF on no row.
+        // MIT: `comp_cksum` (kdc_util.c:112-140)
         if !cksumtype_is_known(ck.cksumtype) {
             return Err(proto(err::SUMTYPE_NOSUPP, status::PROCESS_TGS));
         }
@@ -139,59 +149,6 @@ pub(super) fn process_tgs_header(
         header_realm,
         header_server,
     })
-}
-
-/// MIT `krb5_find_authdata` (`authdata_dec.c:159-181`): searches the ticket AD, then the
-/// authenticator AD; authenticator AD skips KDC-issued container types.
-/// MIT `find_authdata_1` (`authdata_dec.c:115-157`): recurse into IF-RELEVANT only; with
-/// `from_ap_req` (authenticator AD) the KDC-issued container types are skipped.
-fn fx_armor_present(
-    ticket_ad: Option<&[AuthorizationDataValue]>,
-    authenticator_ad: Option<&[AuthorizationDataValue]>,
-) -> Result<bool, Error> {
-    if let Some(ad) = ticket_ad
-        && find_authdata(ad, pa::AD_FX_ARMOR, false)?
-    {
-        return Ok(true);
-    }
-    if let Some(ad) = authenticator_ad
-        && find_authdata(ad, pa::AD_FX_ARMOR, true)?
-    {
-        return Ok(true);
-    }
-    Ok(false)
-}
-
-fn find_authdata(
-    in_ad: &[AuthorizationDataValue],
-    ad_type: i32,
-    from_ap_req: bool,
-) -> Result<bool, Error> {
-    for ad in in_ad {
-        if ad.ad_type == pa::AD_IF_RELEVANT {
-            let inner: AuthorizationData = decode(ad.ad_data.as_ref())?;
-            if find_authdata(&inner, ad_type, from_ap_req)? {
-                return Ok(true);
-            }
-            continue;
-        }
-        if from_ap_req
-            && matches!(
-                ad.ad_type,
-                pa::AD_SIGNTICKET
-                    | pa::AD_KDC_ISSUED
-                    | pa::AD_WIN2K_PAC
-                    | pa::AD_CAMMAC
-                    | pa::AD_AUTH_INDICATOR
-            )
-        {
-            continue;
-        }
-        if ad.ad_type == ad_type {
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }
 
 pub(super) fn omit_start_if_auth(
@@ -240,15 +197,12 @@ pub(super) fn kdc_get_ticket_endtime(
         .map_err(|_| proto(err::NEVER_VALID, status::UNKNOWN_REASON))
 }
 
-/// MIT `kdc_get_server_key` (`kdc_util.c:377-379`): the server key is the ticket's own server,
-/// with no fallback principal. A local TGS searches every enctype at the ticket kvno, and a
-/// missing server is not that ticket's key.
+// MIT: `kdc_get_server_key` (kdc_util.c:377-379)
 pub(crate) fn decrypt_presented_tgt(
     store: &dyn PrincipalRead,
     ap: &krb5_types::ApReq,
     tkt_etype: EncryptionType,
 ) -> Result<(EncTicketPart, ProtocolKey, Vec<u8>, Principal), Error> {
-    // MIT `kdc_get_server_key` (`kdc_util.c:377-379`): ticket->server, no fallback.
     let ticket_realm = utf8_realm(&ap.ticket.realm)?;
     let princ = store.fetch(&lookup_principal_id(&ap.ticket.sname, ticket_realm))?;
     let Some(p) = princ else {
@@ -257,8 +211,6 @@ pub(crate) fn decrypt_presented_tgt(
     if attr(&p, KDB_DISALLOW_ALL_TIX) || attr(&p, KDB_DISALLOW_SVR) {
         return Err(proto(err::S_PRINCIPAL_UNKNOWN, status::PROCESS_TGS));
     }
-    // MIT kdc_rd_ap_req: search_enctype = -1 only for a local TGS
-    // (instance == ticket.server.realm), not every krbtgt/KDC-realm.
     let local_tgs = ap.ticket.sname.is_local_tgs_principal(ticket_realm);
     let search_enctype = if local_tgs { None } else { Some(tkt_etype) };
     let ticket_kvno = ap.ticket.enc_part.kvno.unwrap_or(0);
@@ -270,14 +222,16 @@ pub(crate) fn decrypt_presented_tgt(
         let last = match find_server_key(store.policy(), &p, search_enctype, kvno) {
             Ok((key, found)) => {
                 kvno = found;
-                // MIT `krb5_decrypt_tkt_part` (`lib/krb5/krb/decrypt_tk.c:46-50`): a ticket in an enctype the KDC does not permit is `KRB5_NOPERM_ETYPE`, 60 here, before the key is tried on it.
+                // MIT: `krb5_decrypt_tkt_part` (lib/krb5/krb/decrypt_tk.c:46-50)
+                // A non-permitted ticket etype is 60, before decrypt.
                 if store.policy().etype_permitted(tkt_etype) {
                     match decrypt_enc_data(&key, usage, ap.ticket.enc_part.etype, cipher) {
                         Ok(plain) => match decode::<EncTicketPart>(&plain) {
                             Ok(part) => return Ok((part, key, plain, p.clone())),
-                            Err(_) => proto(err::BAD_INTEGRITY, status::PROCESS_TGS),
+                            Err(e) => tgs_decode_refusal(&plain, 3, &e),
                         },
-                        // MIT `errcode_to_protocol` (`kdc_util.c:691-697`): the krbtgt key is a des3 key MIT refuses, a library code, so 60 and its message.
+                        // MIT: `errcode_to_protocol` (kdc_util.c:691-697)
+                        // A des3 key MIT refuses is 60, with the library message.
                         Err(
                             e @ (krb5_crypto::Error::DesBadParity | krb5_crypto::Error::DesWeakKey),
                         ) => proto_d(err::GENERIC, status::PROCESS_TGS, e.to_string()),
@@ -297,19 +251,13 @@ pub(crate) fn decrypt_presented_tgt(
     }
 }
 
-/// MIT `find_server_key` (`kdc_util.c:417-457`): `krb5_dbe_find_enctype(server,
-/// enctype, -1, kvno ? kvno : -1)` (`:426-427`), so kvno 0 means any kvno and
-/// keys outside `permitted_enctypes` are never chosen; a requested etype that
-/// is not similar to the key's is `KRB5_KDB_NO_PERMITTED_KEY` (`:441-449`).
-/// Either KDB code → 60 `PROCESS_TGS`.
+// MIT: `find_server_key` (kdc_util.c:417-457)
 pub(super) fn find_server_key(
     policy: &crate::store::Policy,
     p: &Principal,
     search_enctype: Option<EncryptionType>,
     kvno: u32,
 ) -> Result<(ProtocolKey, u32), Error> {
-    // kvno -1 (any): MIT walks `key_data` in descending-kvno order and takes
-    // the first permitted match, so the highest kvno holding one wins.
     let key = if kvno == 0 {
         let mut kvnos: Vec<u32> = p.keys.iter().map(|k| k.kvno).collect();
         kvnos.sort_unstable_by(|a, b| b.cmp(a));
@@ -331,12 +279,8 @@ pub(super) fn find_server_key(
     Ok((k.key.clone(), k.kvno))
 }
 
-/// MIT `krb5int_validate_times` inside `kdc_process_tgs_req` (PROCESS_TGS), through
-/// `kdc_rd_ap_req` → `krb5_rd_req_decoded_anyflag`.
-/// MIT `rd_req_decoded_opt` (`rd_req_dec.c:627-627`): the header ticket times go to
-/// `krb5int_validate_times`.
-/// MIT `krb5int_validate_times` (`valid_times.c:44-51`): a header ticket with no `starttime` is
-/// judged by its `authtime`.
+// MIT: `rd_req_decoded_opt` (rd_req_dec.c:627-627)
+// MIT: `krb5int_validate_times` (valid_times.c:44-51)
 fn check_header_times_rd_req(store: &dyn PrincipalRead, tkt: &EncTicketPart) -> Result<(), Error> {
     let now = KerberosTime::now();
     let skew = store.policy().skew;
@@ -382,7 +326,7 @@ fn include_pac_p(padata: Option<&[PaData]>) -> bool {
     decode::<krb5_types::PaPacRequest>(raw).map_or(true, |p| p.include_pac)
 }
 
-/// MIT `krb5_address_search` (`addr_srch.c:55-59`): NULL matches; a lone NetBIOS list is empty.
+// MIT: `krb5_address_search` (addr_srch.c:55-59)
 fn address_search(addr: &HostAddress, list: Option<&HostAddresses>) -> bool {
     let Some(list) = list else {
         return true;
@@ -393,8 +337,7 @@ fn address_search(addr: &HostAddress, list: Option<&HostAddresses>) -> bool {
     list.iter().any(|a| a == addr)
 }
 
-/// MIT `kdc_handle_protected_negotiation` (`kdc_util.c:1768-1806`): a REQ-ENC-PA-REP
-/// checksum of the AS-REQ under the reply key, then an empty PA-FX-FAST.
+// MIT: `kdc_handle_protected_negotiation` (kdc_util.c:1768-1806)
 pub(super) fn enc_pa_rep_padata(
     reply_key: &ProtocolKey,
     req_pkt: &[u8],
@@ -424,8 +367,7 @@ pub(super) fn encryption_key(key: &ProtocolKey) -> EncryptionKey {
     }
 }
 
-/// MIT `enctype_requires_etype_info_2` (`kdc_util.c:1663-1674`): every valid enctype except
-/// des3-cbc-sha1/raw and rc4-hmac/exp.
+// MIT: `enctype_requires_etype_info_2` (kdc_util.c:1663-1674)
 pub(super) fn enctype_requires_etype_info_2(etype: i32) -> bool {
     matches!(
         EncryptionType::known(etype),
@@ -433,10 +375,7 @@ pub(super) fn enctype_requires_etype_info_2(etype: i32) -> bool {
     )
 }
 
-/// MIT `dbentry_supports_enctype` (`kdc_util.c:1040-1077`): the
-/// `session_enctypes` attribute when set, else aes256 or a *permitted*
-/// long-term key of that etype at the highest kvno
-/// (`krb5_dbe_find_enctype(server, enctype, -1, 0)`, `:1076`).
+// MIT: `dbentry_supports_enctype` (kdc_util.c:1040-1077)
 fn dbentry_supports_enctype(
     policy: &crate::store::Policy,
     server: &Principal,
@@ -484,8 +423,6 @@ pub(super) fn ks(s: &str) -> Result<krb5_types::KerberosString, Error> {
     krb5_types::try_ascii(s).map_err(|_| proto(err::GENERIC, status::UNKNOWN_REASON))
 }
 
-/// Wire KDC-REQ-BODY (EXPLICIT [4] contents) from an AS-REQ/TGS-REQ PDU.
-/// FAST and TGS authenticator checksums must cover MIT's original DER.
 pub(super) fn kdc_req_body_der(raw: &[u8]) -> Option<&[u8]> {
     let (tag, app, _) = take_der(raw)?;
     if tag != 0x6a && tag != 0x6c {
@@ -504,8 +441,7 @@ pub(super) fn kdc_req_body_der(raw: &[u8]) -> Option<&[u8]> {
     None
 }
 
-/// MIT `s4u2self_forwardable` (`kdc_util.c:1625-1644`): FORWARDABLE is cleared when the server
-/// lacks ok-to-auth-as-delegate but has S4U2Proxy delegation targets.
+// MIT: `s4u2self_forwardable` (kdc_util.c:1625-1644)
 pub(super) fn s4u2self_forwardable(
     server: &crate::store::Principal,
     flags: TicketFlags,
@@ -516,8 +452,7 @@ pub(super) fn s4u2self_forwardable(
     flags.with_bit(flag_bit::FORWARDABLE, false)
 }
 
-/// MIT `check_anon` (`kdc_util.c:702-713`): restrict_anon + anonymous client
-/// + non-local TGS → 12 `ANONYMOUS NOT ALLOWED`.
+// MIT: `check_anon` (kdc_util.c:702-713)
 pub(super) fn check_anon(
     store: &dyn PrincipalRead,
     client: &PrincipalName,
@@ -532,7 +467,6 @@ pub(super) fn check_anon(
     Ok(())
 }
 
-/// MIT `validate_as_request`: 0 = never; principal expiry before password expiry.
 pub(super) fn check_db_times(client: Option<&Principal>, server: &Principal) -> Result<(), Error> {
     let now = crate::store::unix_now_u32();
     let pwchange_svc = server.attributes & KDB_PWCHANGE_SERVICE != 0;
@@ -547,8 +481,7 @@ pub(super) fn check_db_times(client: Option<&Principal>, server: &Principal) -> 
     if server.expiration != 0 && now > server.expiration {
         return Err(proto(err::SERVICE_EXP, status::SERVICE_EXPIRED));
     }
-    // MIT `validate_as_request` (`kdc_util.c:762-766`): checks REQUIRES_PWCHANGE after SERVICE
-    // EXPIRED, with its own status; a lapsed pw_expire above is CLIENT KEY EXPIRED.
+    // MIT: `validate_as_request` (kdc_util.c:762-766)
     if let Some(c) = client
         && attr(c, KDB_REQUIRES_PWCHANGE)
         && !pwchange_svc
@@ -562,12 +495,9 @@ pub(super) fn attr(p: &Principal, bit: u32) -> bool {
     p.attributes & bit != 0
 }
 
-/// MIT `validate_as_request` (`kdc_util.c:716-800`): the AS policy checks in MIT's order, run
-/// after the client/server lookups and before preauth, so a preauth-required client that trips
-/// a check gets that status, not NEEDED_PREAUTH. The `krb5_db_check_policy_as` failcount lockout
-/// is the last check.
-/// MIT `process_as_req` (`do_as_req.c:630-630`): `validate_as_request` precedes `check_padata`
-/// at `:758`.
+// MIT: `validate_as_request` (kdc_util.c:716-800)
+// MIT: `process_as_req` (do_as_req.c:630-630)
+/// A 0 time is never; principal expiry is checked first.
 pub(super) fn validate_as_request(
     store: &dyn PrincipalRead,
     client: &Principal,
@@ -575,11 +505,8 @@ pub(super) fn validate_as_request(
     body: &krb5_types::KdcReqBody,
     now: u32,
 ) -> Result<(), Error> {
-    // MIT `validate_as_request` (`kdc_util.c:727-727`): tests only AS_INVALID_OPTIONS here, the
-    // TGS-only options FORWARDED/PROXY/RENEW/VALIDATE/ENC-TKT-IN-SKEY/CNAME-IN-ADDL-TKT.
-    // It does not reject other unknown or reserved KDCOption bits; those pass
-    // and take effect elsewhere or not at all (e.g. REQUEST_ANONYMOUS proceeds
-    // to the reply-phase anonymous-principal check in issue_as_body).
+    // MIT: `validate_as_request` (kdc_util.c:727-727)
+    // Only TGS-only options are rejected; other reserved bits pass.
     if body.kdc_options.as_invalid_bits() != 0 {
         return Err(proto(err::BADOPTION, status::INVALID_AS_OPTIONS));
     }
@@ -610,20 +537,17 @@ pub(super) fn validate_as_request(
     if attr(server, KDB_DISALLOW_SVR) {
         return Err(proto(err::MUST_USE_USER2USER, status::SERVICE_NOT_ALLOWED));
     }
-    // MIT `validate_as_request` (`kdc_util.c:795-798`): check_anon uses request->server, not
-    // the S4U empty_server.
+    // MIT: `validate_as_request` (kdc_util.c:795-798)
     let req_server = body
         .sname
         .clone()
         .unwrap_or_else(|| PrincipalName::krbtgt(store.realm()));
     check_anon(store, &client.name, &req_server)?;
-    // MIT `validate_as_request` (`kdc/kdc_util.c:800-803`): the KDB module's policy check is last, at the request's time.
+    // MIT: `validate_as_request` (kdc/kdc_util.c:800-803)
     crate::lockout::lockout_check_policy(store, client, now)
 }
 
-/// MIT `get_ticket_flags` (`kdc_util.c:849-850`): a header ticket that is not forwardable does
-/// not yield a forwardable ticket. A validate or renew request copies the header flags and
-/// clears the invalid bit, and a postdated request sets invalid.
+// MIT: `get_ticket_flags` (kdc_util.c:849-850)
 pub(super) fn get_ticket_flags(
     req: &krb5_types::KdcOptions,
     client: Option<&Principal>,
@@ -635,8 +559,8 @@ pub(super) fn get_ticket_flags(
     {
         return h.clone().with_bit(flag_bit::INVALID, false);
     }
-    // MIT `OPTS2FLAGS` (`kdc_util.h:500-500`): copies the KDC options that request their
-    // ticket flags; COPY_TKT_FLAGS (:529) copies the header flags a TGS ticket inherits.
+    // MIT: `OPTS2FLAGS` (kdc_util.h:500-500)
+    // MIT: `COPY_TKT_FLAGS` (kdc_util.h:529-529)
     let mut flags = TicketFlags::none()
         .with_bit(flag_bit::FORWARDABLE, req.bit(flag_bit::FORWARDABLE))
         .with_bit(flag_bit::FORWARDED, req.bit(flag_bit::FORWARDED))
@@ -689,11 +613,9 @@ pub(super) fn get_ticket_flags(
     flags
 }
 
-/// MIT `kdc_get_ticket_renewtime` (`kdc_util.c:1749-1752`): renewable-ok does not issue a
-/// renewable ticket unless the truncated renew time is past the ticket end. A client, server,
-/// or header ticket that disallows renewable yields no renew-till, and a zero maximum is a cap
-/// of zero.
+// MIT: `kdc_get_ticket_renewtime` (kdc_util.c:1749-1752)
 #[expect(clippy::too_many_arguments, reason = "MIT passes args positionally")]
+/// Renewable-ok only when till is past the end.
 pub(super) fn kdc_get_ticket_renewtime(
     store: &dyn PrincipalRead,
     body: &KdcReqBody,

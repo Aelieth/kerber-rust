@@ -1,5 +1,4 @@
 //! `vfy_increds.c` `krb5_verify_init_creds`.
-//! Live oracle: `client-differential-gate.sh` vs MIT `t_vfy_increds`.
 
 #[path = "common/mod.rs"]
 mod common;
@@ -53,8 +52,9 @@ fn vfy_increds_opt_overrides_conf() {
 fn vfy_increds_missing_keytab_succeeds_unless_nofail() {
     let cred = dummy_cred();
     let kdc = dummy_kdc();
-    verify_init_creds(&cred, None, None, &kdc, false).unwrap();
-    assert!(verify_init_creds(&cred, None, None, &kdc, true).is_err());
+    let profile = krb5_config::isolated_profile();
+    verify_init_creds(&profile, &cred, None, None, &kdc, false).unwrap();
+    assert!(verify_init_creds(&profile, &cred, None, None, &kdc, true).is_err());
 }
 
 #[test]
@@ -66,8 +66,9 @@ fn vfy_increds_nfs_only_is_no_host_keys() {
     assert!(keytab_has_server(&kt, &realm(TEST_REALM), &host));
     let cred = dummy_cred();
     let kdc = dummy_kdc();
-    verify_init_creds(&cred, None, Some(&kt), &kdc, false).unwrap();
-    assert!(verify_init_creds(&cred, None, Some(&kt), &kdc, true).is_err());
+    let profile = krb5_config::isolated_profile();
+    verify_init_creds(&profile, &cred, None, Some(&kt), &kdc, false).unwrap();
+    assert!(verify_init_creds(&profile, &cred, None, Some(&kt), &kdc, true).is_err());
 }
 
 #[test]
@@ -77,7 +78,9 @@ fn vfy_increds_unknown_server_succeeds_unless_nofail() {
     let kt = Keytab::single(realm(TEST_REALM), host, 1, client_key());
     let cred = dummy_cred();
     let kdc = dummy_kdc();
+    let profile = krb5_config::isolated_profile();
     verify_init_creds(
+        &profile,
         &cred,
         Some((&realm(TEST_REALM), &other)),
         Some(&kt),
@@ -87,6 +90,7 @@ fn vfy_increds_unknown_server_succeeds_unless_nofail() {
     .unwrap();
     assert!(
         verify_init_creds(
+            &profile,
             &cred,
             Some((&realm(TEST_REALM), &other)),
             Some(&kt),
@@ -154,6 +158,7 @@ fn vfy_increds_matching_service_ticket_verifies() {
         .unwrap();
     let kdc = dummy_kdc();
     verify_init_creds(
+        &krb5_config::isolated_profile(),
         &cred,
         Some((&ascii(TEST_REALM), &host)),
         Some(&kt),
@@ -225,6 +230,7 @@ fn vfy_increds_wrong_keytab_is_err() {
     let kdc = dummy_kdc();
     assert!(
         verify_init_creds(
+            &krb5_config::isolated_profile(),
             &cred,
             Some((&ascii(TEST_REALM), &host)),
             Some(&bad),

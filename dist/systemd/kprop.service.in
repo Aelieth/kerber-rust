@@ -1,0 +1,16 @@
+# kerber-rust: Fedora krb5-server's kprop.service, with make install's paths and Type=simple -- krb5-kpropd
+# never detaches (MIT's kpropd forks), so systemd supervises it directly. Everything else is Fedora's. The
+# unit starts only where a kpropd.acl marks the host a replica. See docs/mit-deviations.md.
+[Unit]
+Description=Kerberos 5 Propagation
+Wants=network-online.target
+After=syslog.target network.target network-online.target
+AssertPathExists=@KDCDIR@/kpropd.acl
+
+[Service]
+Type=simple
+EnvironmentFile=-@SYSCONFIGDIR@/kprop
+ExecStart=@SBINDIR@/kpropd $KPROPD_ARGS
+
+[Install]
+WantedBy=multi-user.target

@@ -1,20 +1,11 @@
-//! The wipe an [`EncryptionKey`](crate::EncryptionKey) runs on its octets when it drops, and
-//! [`Wiped`] on a temporary buffer of key material.
-//!
-//! rasn's `OctetString` is a newtype over a reference-counted `bytes::Bytes`, so a key can wipe
-//! its buffer only while it holds the last handle on it. A test build keeps each wiped allocation
-//! instead of freeing it, so a test can see that the buffer the key held is the one zeroed, whole.
-
 use std::ops::{Deref, DerefMut};
 
 use rasn::types::OctetString;
 use zeroize::Zeroize;
 
 /// Zeroizes every byte of `octets`' allocation in place, then frees it, when `octets` is the last
-/// handle on it. rasn's `From<OctetString> for Bytes` clones the handle and drops `octets` before
-/// `try_into_mut` looks, so the clone is the last handle exactly when `octets` was. A buffer
-/// another handle still shares is released untouched (the last handle wipes it if it is a key),
-/// and a static buffer is never written.
+/// A key wipes its buffer only while it holds the last handle; a shared buffer is released
+/// untouched.
 pub(crate) fn wipe_octets(octets: OctetString) {
     let Ok(last) = bytes::Bytes::from(octets).try_into_mut() else {
         return;
@@ -34,10 +25,8 @@ pub(crate) fn wipe_vec(buf: &mut Vec<u8>) {
     let _ = tests::WIPED.try_with(|w| w.borrow_mut().push(owned));
 }
 
-/// A temporary buffer of key material that [`wipe_vec`] zeroes, whole, when it drops, so every
-/// return wipes it, the `?` ones included. `DerefMut` hands out the `&mut Vec<u8>`, so a push
-/// past its capacity, a `.clone()` or a `.to_vec()` leaves a copy nothing wipes; every site
-/// sizes its buffer up front.
+/// `DerefMut` hands out the `&mut Vec<u8>`, so a push past its capacity, a `.clone()` or a
+/// `.to_vec()` leaves a copy nothing wipes. Every site sizes its buffer up front.
 pub(crate) struct Wiped(pub(crate) Vec<u8>);
 
 impl Drop for Wiped {
@@ -69,7 +58,6 @@ mod tests {
     use crate::EncryptionKey;
 
     thread_local! {
-        /// The allocations `wipe_vec` zeroed on this thread, kept alive.
         pub(super) static WIPED: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
     }
 
@@ -160,7 +148,6 @@ mod tests {
         assert_eq!(OCTETS, [0x5a; 16]);
     }
 
-    /// The base64 text between `kind`'s PEM markers, as `parse_pem` takes it.
     fn pem_body<'a>(pem: &'a str, kind: &str) -> &'a str {
         let begin = format!("-----BEGIN {kind}-----");
         let rest = &pem[pem.find(&begin).unwrap() + begin.len()..];
@@ -185,8 +172,6 @@ mod tests {
         take_wiped();
         let (_cert, scalar) = crate::pkinit::parse_identity_pem(&pem).unwrap();
         assert_ne!(scalar, [0; 32]);
-        // Each block's base64 text, wiped once decoded; then the key's DER, wiped once the
-        // scalar is read out of it.
         assert_eq!(
             take_wiped(),
             [

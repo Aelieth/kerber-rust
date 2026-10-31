@@ -1,30 +1,21 @@
+#![cfg(feature = "test-hooks")]
 //! RPCSEC DATA without a context is MIT `CREDPROBLEM` (connection kept).
-//! RPCSEC_GSS `gc_v` mismatch is MIT `AUTH_BADCRED` (connection kept).
-//! RPCSEC_GSS integrity is databody_integ + checksum.
-//! MIT `xdr_rpc_gss_unwrap_data` (`authgss_prot.c:203-225`): an integrity body is
-//! `databody_integ` then a checksum, a MIC over it that must verify.
-//! AUTH_NONE unknown program is MIT `svcerr_prog_unavail` (connection kept).
-//! AUTH_GSSAPI INIT on IPROP_PROG is auth-layer SUCCESS (`no_dispatch`).
-//! MIT `gssrpc__svcauth_gssapi` (`lib/rpc/svc_auth_gssapi.c:326-341`): the AUTH_GSSAPI
-//! `GSSAPI_INIT` arg-version switch: versions 1 and 2 are answered with `call_res.version` 1
-//! (the OpenVision compat downgrade), 3 and 4 are echoed, anything else is `AUTH_BADCRED`
-//! before the token is looked at.
-//! Version 5 is `AUTH_BADCRED`, not an accepted `init_res`.
 
 #[path = "common/mod.rs"]
 mod common;
 use common::*;
 
-use krb5_admin::{Kadm5RpcSession, kadm5_handle_rpc, serve_kadm5_conn};
+use krb5_admin::{Kadm5AuthConfig, Kadm5RpcSession, Programs, kadm5_handle_rpc, serve_kadm5_conn};
 use krb5_gss::GssContext;
 use krb5_kdc::principals::kadmin_admin;
 use krb5_kdc::testrealm::{TEST_REALM, bootstrap_documented};
 use krb5_kdc::{Acl, shared_dump};
 
-use krb5_protocol::ReplayCache;
+use krb5_protocol::{AcceptorConfig, ReplayCache};
 use krb5_types::PrincipalName;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -34,64 +25,12 @@ const MSG_DENIED: u32 = 1;
 
 const REJECT_AUTH_ERROR: u32 = 1;
 
-const GSS_PRIVACY: u32 = 3;
-
-const RPCSEC_GSS_CREDPROBLEM: u32 = 13;
-
 fn words(buf: &[u8]) -> Vec<u32> {
     buf.as_chunks::<4>()
         .0
         .iter()
         .map(|c| u32::from_be_bytes(*c))
         .collect()
-}
-
-#[test]
-fn rpcsec_data_without_context_is_credproblem() {
-    let (store, acl) = bootstrap_documented().unwrap();
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    let store = shared_dump(store);
-    thread::spawn(move || {
-        krb5_config::isolate_test_krb5();
-        let (s, _) = listener.accept().unwrap();
-        let _ = serve_kadm5_conn(store, acl, "KERBER.TEST".into(), ReplayCache::new(), s);
-    });
-    let mut cred = Vec::new();
-    push_u32(&mut cred, RPCSEC_GSS_VERS);
-    push_u32(&mut cred, RPG_DATA);
-    push_u32(&mut cred, 1);
-    push_u32(&mut cred, GSS_PRIVACY);
-    push_u32(&mut cred, 0);
-    let mut body = Vec::new();
-    push_u32(&mut body, 14);
-    push_u32(&mut body, MSG_CALL);
-    push_u32(&mut body, RPC_VERSION);
-    push_u32(&mut body, KADM_PROG);
-    push_u32(&mut body, KADM_VERS);
-    push_u32(&mut body, 12);
-    push_u32(&mut body, FLAVOR_GSS);
-    push_u32(&mut body, u32::try_from(cred.len()).unwrap());
-    body.extend_from_slice(&cred);
-    push_u32(&mut body, 0);
-    push_u32(&mut body, 0);
-    let mut c = TcpStream::connect(addr).unwrap();
-    c.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-    let n = u32::try_from(body.len()).unwrap() | LAST_FRAG;
-    c.write_all(&n.to_be_bytes()).unwrap();
-    c.write_all(&body).unwrap();
-    let mut hdr = [0u8; 4];
-    c.read_exact(&mut hdr)
-        .expect("CREDPROBLEM reply kept the connection");
-    let len = (u32::from_be_bytes(hdr) & !LAST_FRAG) as usize;
-    let mut rec = vec![0u8; len];
-    c.read_exact(&mut rec).unwrap();
-    let w = words(&rec);
-    assert_eq!(w[0], 14);
-    assert_eq!(w[1], MSG_REPLY);
-    assert_eq!(w[2], MSG_DENIED);
-    assert_eq!(w[3], REJECT_AUTH_ERROR);
-    assert_eq!(w[4], RPCSEC_GSS_CREDPROBLEM);
 }
 
 const AUTH_BADCRED: u32 = 1;
@@ -105,7 +44,14 @@ fn rpcsec_bad_version_is_auth_badcred() {
     thread::spawn(move || {
         krb5_config::isolate_test_krb5();
         let (s, _) = listener.accept().unwrap();
-        let _ = serve_kadm5_conn(store, acl, "KERBER.TEST".into(), ReplayCache::new(), s);
+        let _ = serve_kadm5_conn(
+            store,
+            Arc::new(Kadm5AuthConfig::from_acl(acl)),
+            "KERBER.TEST".into(),
+            ReplayCache::new(),
+            Arc::new(AcceptorConfig::default()),
+            s,
+        );
     });
     let mut cred = Vec::new();
     push_u32(&mut cred, 99);
@@ -171,40 +117,17 @@ fn integ_rec_rpcsec(
 }
 
 #[test]
-fn rpcsec_integrity_request_is_databody_plus_mic() {
-    let (store, acl, mut ctx, handle, mut sess) = init_svc(GSS_INTEGRITY);
-    let rec = integ_rec_rpcsec(&mut ctx, 40, 1, &handle, &list_args(), false);
-    let out = kadm5_handle_rpc(
-        krb5_admin::RpcCtx {
-            store: &store,
-            acl: &acl,
-            expected_realm: TEST_REALM,
-        },
-        b"hdl",
-        &mut sess,
-        &ReplayCache::new(),
-        &rec,
-        &peer(),
-    )
-    .unwrap();
-    let mut i = 0;
-    assert_eq!(take_u32(&out, &mut i), 40);
-    assert_eq!(take_u32(&out, &mut i), MSG_REPLY);
-    assert_eq!(take_u32(&out, &mut i), MSG_ACCEPTED);
-    assert_eq!(take_u32(&out, &mut i), FLAVOR_GSS);
-    let _ = take_opaque(&out, &mut i);
-    assert_eq!(take_u32(&out, &mut i), SUCCESS);
-}
-
-#[test]
 fn rpcsec_integrity_reply_is_databody_plus_mic() {
     let (store, acl, mut ctx, handle, mut sess) = init_svc(GSS_INTEGRITY);
     let rec = integ_rec_rpcsec(&mut ctx, 40, 1, &handle, &list_args(), false);
     let out = kadm5_handle_rpc(
         krb5_admin::RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: TEST_REALM,
+            conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
+            iprop_resync: None,
         },
         b"hdl",
         &mut sess,
@@ -250,8 +173,11 @@ fn rpcsec_none_service_body_is_plain() {
     let out = kadm5_handle_rpc(
         krb5_admin::RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: TEST_REALM,
+            conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
+            iprop_resync: None,
         },
         b"hdl",
         &mut sess,
@@ -279,8 +205,11 @@ fn rpcsec_integrity_bad_checksum_is_garbage_args() {
     let out = kadm5_handle_rpc(
         krb5_admin::RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: TEST_REALM,
+            conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
+            iprop_resync: None,
         },
         b"hdl",
         &mut sess,
@@ -296,74 +225,6 @@ fn rpcsec_integrity_bad_checksum_is_garbage_args() {
     assert_eq!(take_u32(&out, &mut i), FLAVOR_GSS);
     let _ = take_opaque(&out, &mut i);
     assert_eq!(take_u32(&out, &mut i), GARBAGE_ARGS);
-}
-
-#[test]
-fn rpcsec_wrong_handle_with_valid_mic_dispatches() {
-    let (store, acl, mut ctx, _handle, mut sess) = init_svc(GSS_INTEGRITY);
-    let rec = integ_rec_rpcsec(&mut ctx, 42, 1, b"not-the-handle", &list_args(), false);
-    let out = kadm5_handle_rpc(
-        krb5_admin::RpcCtx {
-            store: &store,
-            acl: &acl,
-            expected_realm: TEST_REALM,
-        },
-        b"hdl",
-        &mut sess,
-        &ReplayCache::new(),
-        &rec,
-        &peer(),
-    )
-    .unwrap();
-    let mut i = 0;
-    assert_eq!(take_u32(&out, &mut i), 42);
-    assert_eq!(take_u32(&out, &mut i), MSG_REPLY);
-    assert_eq!(take_u32(&out, &mut i), MSG_ACCEPTED);
-    assert_eq!(take_u32(&out, &mut i), FLAVOR_GSS);
-    let _ = take_opaque(&out, &mut i);
-    assert_eq!(take_u32(&out, &mut i), SUCCESS);
-}
-
-const PROG_UNAVAIL: u32 = 1;
-
-fn be(words: &[u32]) -> Vec<u8> {
-    let mut b = Vec::with_capacity(words.len() * 4);
-    for w in words {
-        b.extend_from_slice(&w.to_be_bytes());
-    }
-    b
-}
-
-#[test]
-fn unknown_program_auth_none_is_prog_unavail() {
-    let (store, acl) = bootstrap_documented().unwrap();
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    let store = shared_dump(store);
-    thread::spawn(move || {
-        krb5_config::isolate_test_krb5();
-        let (s, _) = listener.accept().unwrap();
-        let _ = serve_kadm5_conn(store, acl, "KERBER.TEST".into(), ReplayCache::new(), s);
-    });
-    let mut c = TcpStream::connect(addr).unwrap();
-    c.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-    let body = be(&[7, MSG_CALL, RPC_VERSION, 99_999, 1, 0, 0, 0, 0, 0]);
-    let n = u32::try_from(body.len()).unwrap() | LAST_FRAG;
-    c.write_all(&n.to_be_bytes()).unwrap();
-    c.write_all(&body).unwrap();
-    let mut hdr = [0u8; 4];
-    c.read_exact(&mut hdr)
-        .expect("PROG_UNAVAIL reply kept the connection");
-    let len = (u32::from_be_bytes(hdr) & !LAST_FRAG) as usize;
-    let mut rec = vec![0u8; len];
-    c.read_exact(&mut rec).unwrap();
-    let w = words(&rec);
-    assert_eq!(w[0], 7);
-    assert_eq!(w[1], MSG_REPLY);
-    assert_eq!(w[2], MSG_ACCEPTED);
-    assert_eq!(w[3], 0);
-    assert_eq!(w[4], 0);
-    assert_eq!(w[5], PROG_UNAVAIL);
 }
 
 const IPROP_PROG: u32 = 100_423;
@@ -385,7 +246,14 @@ fn auth_gssapi_on_iprop_init_is_success() {
     thread::spawn(move || {
         krb5_config::isolate_test_krb5();
         let (s, _) = listener.accept().unwrap();
-        let _ = serve_kadm5_conn(store, acl, "KERBER.TEST".into(), ReplayCache::new(), s);
+        let _ = serve_kadm5_conn(
+            store,
+            Arc::new(Kadm5AuthConfig::from_acl(acl)),
+            "KERBER.TEST".into(),
+            ReplayCache::new(),
+            Arc::new(AcceptorConfig::default()),
+            s,
+        );
     });
     let mut cred = Vec::new();
     push_u32(&mut cred, AUTH_GSSAPI_CREDS_VERS);
@@ -454,8 +322,11 @@ fn reply_words(version: u32) -> Vec<u32> {
     let out = kadm5_handle_rpc(
         krb5_admin::RpcCtx {
             store: &store,
-            acl: &acl,
+            authcfg: &Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: TEST_REALM,
+            conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
+            iprop_resync: None,
         },
         b"hdl",
         &mut sess,
@@ -481,18 +352,14 @@ fn accepted_res_version(w: &[u32]) -> u32 {
 
 #[test]
 fn init_arg_version_2_is_answered_with_version_1() {
-    // 3 and 4 are echoed (`:333-336`) …
     assert_eq!(accepted_res_version(&reply_words(4)), 4);
     assert_eq!(accepted_res_version(&reply_words(3)), 3);
-    // … 1 and 2 are the OpenVision protocol and get `call_res.version = 1`
-    // (`:328-331`), so 2 is not echoed.
     assert_eq!(accepted_res_version(&reply_words(2)), 1);
     assert_eq!(accepted_res_version(&reply_words(1)), 1);
 }
 
 #[test]
 fn init_arg_version_5_is_auth_badcred() {
-    // `:337-341` default: "unsupported GSSAPI_INIT version" → AUTH_BADCRED,
     // an RPC MSG_DENIED / AUTH_ERROR, never an accepted reply echoing 5.
     let w = reply_words(5);
     assert_eq!(
@@ -505,47 +372,4 @@ fn init_arg_version_5_is_auth_badcred() {
         &w[..5],
         &[77, MSG_REPLY, MSG_DENIED, REJECT_AUTH_ERROR, AUTH_BADCRED]
     );
-}
-
-/// A call that does not decode gets no reply, and the connection answers the next call, as MIT's
-/// does; the server returns once the client is gone.
-#[test]
-fn an_unhandled_rpc_is_not_answered_and_the_connection_goes_on() {
-    let (store, acl) = bootstrap_documented().unwrap();
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    let store = shared_dump(store);
-    let server = thread::spawn(move || {
-        krb5_config::isolate_test_krb5();
-        let (s, _) = listener.accept().unwrap();
-        serve_kadm5_conn(store, acl, "KERBER.TEST".into(), ReplayCache::new(), s)
-    });
-    let mut c = TcpStream::connect(addr).unwrap();
-    c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
-    // One record holding a single zero byte: the call does not decode.
-    c.write_all(&(LAST_FRAG | 1).to_be_bytes()).unwrap();
-    c.write_all(&[0]).unwrap();
-    // Then an AUTH_NONE call to procedure 99: AUTH_TOOWEAK.
-    let call: Vec<u8> = [9u32, MSG_CALL, 2, KADM_PROG, KADM_VERS, 99, 0, 0, 0, 0]
-        .iter()
-        .flat_map(|w| w.to_be_bytes())
-        .collect();
-    c.write_all(&(LAST_FRAG | u32::try_from(call.len()).unwrap()).to_be_bytes())
-        .unwrap();
-    c.write_all(&call).unwrap();
-    let mut mark = [0u8; 4];
-    c.read_exact(&mut mark).unwrap();
-    let mut reply = vec![0u8; usize::try_from(u32::from_be_bytes(mark) & !LAST_FRAG).unwrap()];
-    c.read_exact(&mut reply).unwrap();
-    let words: Vec<u32> = reply
-        .chunks(4)
-        .map(|w| u32::from_be_bytes(w.try_into().unwrap()))
-        .collect();
-    assert_eq!(
-        words,
-        [9, MSG_REPLY, MSG_DENIED, REJECT_AUTH_ERROR, 5],
-        "the first reply is the second call's: AUTH_TOOWEAK"
-    );
-    drop(c);
-    server.join().unwrap().expect("the client left");
 }

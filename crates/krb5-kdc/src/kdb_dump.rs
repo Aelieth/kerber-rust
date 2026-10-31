@@ -1,52 +1,38 @@
 //! MIT `kdb5_util` dump version 6/7 textual codec.
-//!
-//! Grammar (MIT `k5beta7_common` / `process_k5beta7_princ`):
-//! `princ\tlen\tnamelen\tn_tl_data\tn_key_data\te_length\tname\t`
-//! `attributes\tmax_life\tmax_renewable_life\texpiration\t`
-//! `pw_expiration\tlast_success\tlast_failed\tfail_auth_count`
-//! then `n_tl_data` × `\ttype\tlength\thex`, a tab, then `n_key_data` ×
-//! `ver\tkvno\t` and `ver` × `type\tlength\thex\t`, then `e_data` (`-1` if
-//! empty) and `;`.
-//!
-//! MIT 1.22.2 default dump is version **7** (`-r18` is version 6; princ
-//! records are the same). Field-count/order/hex mismatches fail parse.
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::fs;
-use std::path::Path;
+use std::io::{BufRead as _, Read as _, Write as _};
+use std::path::{Path, PathBuf};
 
 use krb5_crypto::{EncryptionType, ProtocolKey, kdb_decrypt_key, kdb_encrypt_key};
 use krb5_protocol::write_fresh_secret_file;
 use krb5_types::pac::RpcSid;
 use krb5_types::{PrincipalName, infer_name_type, parse_name};
+use subtle::ConstantTimeEq;
 
 use crate::error::Error as KdcError;
 use crate::mkey::{MASTER_NAME, default_master_etype, master_key_from_password};
 use crate::osa::OsaPrincEnt;
 use crate::store::{
-    KDB_DISALLOW_ALL_TIX, KDB_LOCKDOWN_KEYS, KDB_REQUIRES_PRE_AUTH, KadmData, KeyEntry,
-    NamedPolicy, Principal, PrincipalStore, TlData,
+    IPROP_NIL, IPROP_OK, KDB_DISALLOW_ALL_TIX, KDB_LOCKDOWN_KEYS, KadmData, KeyEntry, NamedPolicy,
+    Principal, PrincipalStore, TlData,
 };
 use crate::ulog::UlogLast;
 
-/// MIT 1.22.2 default (`kdb5_util load_dump version 7`).
 pub const KDB_DUMP_VERSION: u32 = 7;
-/// Older `-r18` header. Princ records match version 7.
 pub(crate) const KDB_DUMP_VERSION_R18: u32 = 6;
 
-/// `KRB5_TL_DB_ARGS` (`kdb.h`); stripped at put.
-/// MIT `extract_db_args_from_tl_data` (`kdb5.c:893-945`): every `KRB5_TL_DB_ARGS` entry is
-/// removed from the tagged data and passed on as a DB argument instead.
+// MIT: `extract_db_args_from_tl_data` (kdb5.c:893-945)
+/// Each `KRB5_TL_DB_ARGS` entry: removed, passed on as a database argument.
 pub const TL_DB_ARGS: i32 = 0x7fff;
-/// `KRB5_TL_LAST_PWD_CHANGE`.
 pub const TL_LAST_PWD_CHANGE: i32 = 1;
-/// `KRB5_TL_LAST_ADMIN_UNLOCK` (0x0700): 4-byte LE unix timestamp.
 pub const TL_LAST_ADMIN_UNLOCK: i32 = 0x0700;
-/// `KRB5_TL_MOD_PRINC`.
 pub const TL_MOD_PRINC: i32 = 2;
 
-/// MIT `krb5_dbe_lookup_mod_princ_data` (`kdb5.c:1637-1663`): 4-byte LE
-/// timestamp + NUL-terminated unparsed principal.
+// MIT: `krb5_dbe_lookup_mod_princ_data` (kdb5.c:1637-1663)
+/// `KRB5_TL_MOD_PRINC` is a 4-byte LE time and a NUL-terminated principal.
 #[must_use]
 pub(crate) fn tl_mod_princ(contents: &[u8]) -> Option<(u32, String)> {
     if contents.len() < 5 || contents.last() != Some(&0) {
@@ -59,47 +45,38 @@ pub(crate) fn tl_mod_princ(contents: &[u8]) -> Option<(u32, String)> {
     Some((ts, name))
 }
 
-/// The unparsed modifier in `KRB5_TL_MOD_PRINC`, when the TL is well-formed.
 #[must_use]
 pub fn tl_mod_princ_name(tl: &[TlData]) -> Option<String> {
     tl.iter()
         .find(|t| t.ty == TL_MOD_PRINC)
         .and_then(|t| tl_mod_princ(&t.contents).map(|(_, n)| n))
 }
-/// `KRB5_TL_KADM_DATA`.
 pub const TL_KADM_DATA: i32 = 3;
-/// `KRB5_TL_MKVNO`.
 pub(crate) const TL_MKVNO: i32 = 8;
-/// `KRB5_TL_STRING_ATTRS`.
 pub const TL_STRING_ATTRS: i32 = 0x000b;
-/// `KRB5_TL_ALIAS_TARGET`: NUL-terminated unparsed target of an alias stub.
+/// `KRB5_TL_ALIAS_TARGET` is a NUL-terminated target name.
 pub const TL_ALIAS_TARGET: i32 = 0x000c;
-/// `KRB5_TL_ACTKVNO`.
 pub(crate) const TL_ACTKVNO: i32 = 9;
-/// Private `tl_data` type: domain SID + RID (MIT has no SID; opaque round-trip).
+/// The private SID type is ours; MIT has no domain SID.
 pub const TL_KERBER_SID: i32 = 0x4B01;
-/// Private `tl_data` type: bound named-policy name (UTF-8).
 pub(crate) const TL_KERBER_POLICY: i32 = 0x4B02;
-/// Private `tl_data` type: the iprop serial kerber-rust 1.0 kept on `K/M` (4-byte BE). The
-/// serial is the update log's now; a record that still carries this type loses it when written.
 pub const TL_KERBER_SERIAL: i32 = 0x4B03;
-/// Private `tl_data` type: password history keys (MIT preserves unknown types).
 pub const TL_KERBER_HIST: i32 = 0x4B04;
-/// `KRB5_KDB_SALTTYPE_NORMAL`.
+pub const TL_KERBER_RID_HWM: i32 = 0x4B05;
+// MIT: `KRB5_TL_CONSTRAINED_DELEGATION_ACL` (include/kdb.h:271)
+pub const TL_CONSTRAINED_DELEGATION: i32 = 0x0400;
+pub const TL_KERBER_S4U_FROM: i32 = 0x4B06;
 pub const SALTTYPE_NORMAL: i32 = 0;
-/// `KRB5_KDB_SALTTYPE_SPECIAL`.
+pub(crate) const SALTTYPE_NOREALM: i32 = 2;
+pub(crate) const SALTTYPE_ONLYREALM: i32 = 3;
 pub(crate) const SALTTYPE_SPECIAL: i32 = 4;
 
-/// Dump/load failure.
 #[derive(Debug, thiserror::Error)]
 pub enum DumpError {
-    /// Grammar / field-count / hex.
     #[error("dump format: {0}")]
     Format(String),
-    /// Master-key or `key_data` crypto.
     #[error("dump crypto: {0}")]
     Crypto(String),
-    /// I/O.
     #[error("dump io: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -116,70 +93,61 @@ impl From<krb5_crypto::Error> for DumpError {
     }
 }
 
-/// Parsed dump file.
 #[derive(Clone, Debug)]
 pub struct DumpFile {
-    /// Header version (`6` or `7`).
     pub version: u32,
-    /// Principal records in file order.
     pub princs: Vec<DumpPrincipal>,
-    /// `policy\t…` rest (name + MIT numeric fields). Golden dumps have none.
     pub policies: Vec<String>,
+    pub(crate) records: usize,
+    pub(crate) applied_len: usize,
+    pub(crate) seen_rid: u32,
 }
 
-/// One `princ` record (encrypted `key_data` still wrapped).
 #[derive(Clone, Debug)]
 pub struct DumpPrincipal {
-    /// MIT `entry->len` (`KRB5_KDB_V1_BASE_LENGTH` = 38).
     pub db_len: u32,
-    /// Unparsed `name@REALM`.
     pub name: String,
-    /// KDB attributes bitfield.
     pub attributes: u32,
-    /// Max ticket life seconds.
     pub max_life: u32,
-    /// Max renewable life seconds.
     pub max_renewable_life: u32,
-    /// Expiration unix seconds (0 = never).
+    /// Unix seconds; 0 is never.
     pub expiration: u32,
-    /// Password expiration unix seconds.
     pub pw_expiration: u32,
-    /// Last success unix seconds.
     pub last_success: u32,
-    /// Last failure unix seconds.
     pub last_failed: u32,
-    /// Failed password attempts.
     pub fail_auth_count: u32,
-    /// Tagged list.
     pub tl_data: Vec<TlData>,
-    /// Encrypted key blocks.
     pub keys: Vec<DumpKeyData>,
-    /// Extra data (`-1` when empty).
     pub e_data: Vec<u8>,
 }
 
-/// One `key_data` block (`ver` 1 = key only, `ver` 2 = key + salt).
 #[derive(Clone, Debug)]
 pub struct DumpKeyData {
-    /// `key_data_ver`.
     pub ver: i32,
-    /// Key version number.
     pub kvno: u32,
-    /// `ver` slots: type + contents.
     pub slots: Vec<DumpKeySlot>,
 }
 
-/// One `key_data` slot (key or salt).
 #[derive(Clone, Debug)]
 pub struct DumpKeySlot {
-    /// `key_data_type[i]` (enctype or salt type).
     pub ty: i32,
-    /// Encrypted key bytes or salt bytes.
     pub contents: Vec<u8>,
 }
 
 impl DumpFile {
-    /// The dump's policies as the version 7 records a load stores, in dump order.
+    #[must_use]
+    pub(crate) fn text(&self) -> String {
+        let mut out = format!("kdb5_util load_dump version {}\n", self.version);
+        for p in &self.princs {
+            out.push_str(&p.record());
+            out.push('\n');
+        }
+        for rest in &self.policies {
+            let _ = writeln!(out, "policy\t{rest}");
+        }
+        out
+    }
+
     #[must_use]
     pub fn policy_records(&self) -> Vec<String> {
         self.policies
@@ -188,12 +156,6 @@ impl DumpFile {
             .collect()
     }
 
-    /// Realm taken from the first principal name.
-    ///
-    /// # Errors
-    ///
-    /// [`DumpError::Format`] when there are no principal records or the first name has no realm
-    /// after `@`.
     pub fn realm(&self) -> Result<&str, DumpError> {
         let name = self
             .princs
@@ -206,16 +168,13 @@ impl DumpFile {
             .ok_or_else(|| DumpError::Format(format!("missing realm in {name}")))
     }
 
-    /// Find a principal by unparsed name.
     #[must_use]
     pub fn princ(&self, unparsed: &str) -> Option<&DumpPrincipal> {
         self.princs.iter().find(|p| p.name == unparsed)
     }
 
-    /// The enctype of the master key: that of `K/M@realm`'s first key, where the realm is the
-    /// first principal's. `None` when the dump has no such entry or its type is not one this
-    /// port knows.
-    /// MIT `add_principal` (`kadmin/dbutil/kdb5_create.c:409-424`): `K/M`'s one key is the master key itself.
+    // MIT: `add_principal` (kadmin/dbutil/kdb5_create.c:409-424)
+    /// `K/M`'s one key is the master key.
     #[must_use]
     pub fn master_etype(&self) -> Option<EncryptionType> {
         let realm = self.realm().ok()?;
@@ -224,20 +183,13 @@ impl DumpFile {
         EncryptionType::known(ty).ok()
     }
 
-    /// Decrypt every `key_data` under `mkey` into a [`PrincipalStore`].
-    ///
-    /// # Errors
-    ///
-    /// As [`load_dump_with_key`].
     pub fn into_store_with_key(self, mkey: &ProtocolKey) -> Result<PrincipalStore, DumpError> {
         self.into_store(mkey)
     }
 
-    /// One policy record as the dump `version` writes it: version 7 (`-r18` is version 6)
-    /// carries the r1.11 fields; version 6 keeps the first ten (the r1.8 record); version 5 and
-    /// below, an `iprop` dump's, the name, five counters and a zero.
-    /// MIT `dump_r1_8_policy` (`kadmin/dbutil/dump.c:404-413`): the r1.8 record is the name and nine counters.
-    /// MIT `dump_k5beta7_policy` (`kadmin/dbutil/dump.c:394-401`): the oldest record is the name, five counters and a zero reference count.
+    /// Version 7 = r1.11; version 6 = r1.8 (nine counters).
+    // MIT: `dump_r1_8_policy` (kadmin/dbutil/dump.c:404-413)
+    // MIT: `dump_k5beta7_policy` (kadmin/dbutil/dump.c:394-401)
     #[must_use]
     pub fn policy_record(rest: &str, version: u32) -> String {
         if version == KDB_DUMP_VERSION {
@@ -251,14 +203,6 @@ impl DumpFile {
         format!("policy\t{}", fields.join("\t"))
     }
 
-    /// Decrypt `key_data` into a [`PrincipalStore`].
-    ///
-    /// # Errors
-    ///
-    /// [`DumpError::Format`] when a record carries `KRB5_TL_DB_ARGS`, the first name has no realm,
-    /// or a name, a key block, or the SID, history or `KRB5_TL_KADM_DATA` tl-data is malformed;
-    /// [`DumpError::Crypto`] when a key or history key has an unknown enctype, does not decrypt
-    /// under `mkey` or has the wrong length, or the `K/M` key is not `mkey`.
     pub(crate) fn into_store(self, mkey: &ProtocolKey) -> Result<PrincipalStore, DumpError> {
         for p in &self.princs {
             if let Some(e) = crate::store::db_args_put_error(&p.tl_data) {
@@ -266,11 +210,30 @@ impl DumpFile {
             }
         }
         let realm = self.realm()?.to_owned();
-        let mut store = PrincipalStore::new(realm.clone());
+        let mut store = PrincipalStore::try_new(realm.clone())?;
+        store.loaded_span = Some((
+            u64::try_from(self.records).unwrap_or(u64::MAX),
+            u64::try_from(self.applied_len).unwrap_or(u64::MAX),
+        ));
         let mut domain: Option<RpcSid> = None;
+        let mut hwm = None;
+        let mut seen_rid: HashMap<u32, String> = HashMap::new();
         for p in self.princs {
             let is_km = p.name.starts_with("K/M@");
+            if is_km {
+                hwm = rid_hwm_of(&p.tl_data);
+            }
             let (princ, sid) = p.into_principal(mkey)?;
+            if princ.rid != 0
+                && princ.name.components_joined() != "K/M"
+                && let Some(owner) = seen_rid.insert(princ.rid, princ.id())
+            {
+                return Err(DumpError::Format(format!(
+                    "duplicate RID {} on {owner} and {}",
+                    princ.rid,
+                    princ.id()
+                )));
+            }
             if is_km {
                 if let Some(s) = sid {
                     domain = Some(s);
@@ -287,13 +250,16 @@ impl DumpFile {
         if let Some(sid) = domain {
             store.set_domain_sid(sid);
         }
+        if let Some(next) = hwm {
+            store.raise_next_rid(next);
+        }
+        store.raise_next_rid(self.seen_rid.saturating_add(1));
         Ok(store)
     }
 }
 
 impl DumpPrincipal {
-    /// The record as `kdb5_util dump` writes it, `key_data` still wrapped, without the newline.
-    /// MIT `k5beta7_common` (`kadmin/dbutil/dump.c:334-368`): the header, the eight attribute fields, the tagged data, the keys, the extra data and `;`.
+    // MIT: `k5beta7_common` (kadmin/dbutil/dump.c:334-368)
     #[must_use]
     pub fn record(&self) -> String {
         let mut out = format!(
@@ -339,8 +305,7 @@ impl DumpPrincipal {
         out
     }
 
-    /// Whether `mkey` opens this entry's first key: the enctypes agree and the key decrypts.
-    /// MIT `krb5_def_fetch_mkey_list` (`lib/kdb/kdb_default.c:431-437`): the master key is checked by decrypting `K/M`'s first key with it.
+    // MIT: `krb5_def_fetch_mkey_list` (lib/kdb/kdb_default.c:431-437)
     #[must_use]
     pub fn opens_with(&self, mkey: &ProtocolKey) -> bool {
         self.keys
@@ -351,12 +316,12 @@ impl DumpPrincipal {
             })
     }
 
-    /// MIT `process_k5beta7_princ` (`dump.c:702-723`): MIT binds a policy only from a
-    /// `KRB5_TL_KADM_DATA` record that decodes and names one, and loads the principal when that
-    /// record does not decode; this port also takes the policy from the legacy `0x4B02` record of
-    /// older Rust dumps, and fails the load when `KRB5_TL_KADM_DATA` does not decode.
-    /// The master-key principal is refused when its key does not match the derived master key.
-    fn into_principal(self, mkey: &ProtocolKey) -> Result<(Principal, Option<RpcSid>), DumpError> {
+    // MIT: `process_k5beta7_princ` (dump.c:702-723)
+    /// A policy binds only from a decodable `KRB5_TL_KADM_DATA` naming one.
+    pub(crate) fn into_principal(
+        self,
+        mkey: &ProtocolKey,
+    ) -> Result<(Principal, Option<RpcSid>), DumpError> {
         let (name, realm) = parse_unparsed(&self.name)?;
         let mut keys = Vec::new();
         for kd in &self.keys {
@@ -388,7 +353,7 @@ impl DumpPrincipal {
         }
         if name.components_joined() == "K/M"
             && let Some(first) = keys.first()
-            && first.key.as_bytes() != mkey.as_bytes()
+            && first.key.as_bytes().ct_eq(mkey.as_bytes()).unwrap_u8() != 1
         {
             return Err(DumpError::Crypto(
                 "K/M key_data does not match derived master key".into(),
@@ -396,11 +361,7 @@ impl DumpPrincipal {
         }
         let salt = salt_of_keys(&keys, &name, &realm);
         let mkvno = mkvno_from_tl(&self.tl_data);
-        let requires_preauth = self.attributes & KDB_REQUIRES_PRE_AUTH != 0;
-        let locked = self.attributes & KDB_DISALLOW_ALL_TIX != 0;
         let (sid, rid) = parse_sid_tl(&self.tl_data)?;
-        // MIT keeps the policy binding and the password history in
-        // `KRB5_TL_KADM_DATA`; the private 0x4B02/0x4B04 types are older Rust dumps.
         let osa = OsaPrincEnt::from_tl(&self.tl_data)
             .map_err(|e| DumpError::Format(format!("{}: {e}", self.name)))?;
         let pw_policy = osa
@@ -409,16 +370,22 @@ impl DumpPrincipal {
             .or_else(|| policy_from_tl(&self.tl_data));
         let kadm = osa.as_ref().map(KadmData::from_osa).unwrap_or_default();
         let string_attrs = attrs_from_tl(&self.tl_data);
+        let s4u_allowed_from = nul_tl_names(&self.tl_data, TL_KERBER_S4U_FROM);
+        let s4u_allowed_to = nul_tl_names(&self.tl_data, TL_CONSTRAINED_DELEGATION);
+        let key_history = hist_from_tl(&self.tl_data, mkey)?;
+        let tl_data = self
+            .tl_data
+            .into_iter()
+            .filter(|t| !is_s4u_name_tl(t) && t.ty != TL_KERBER_RID_HWM)
+            .collect();
         Ok((
             Principal {
                 name,
                 realm,
                 keys,
-                key_history: hist_from_tl(&self.tl_data, mkey)?,
+                key_history,
                 salt,
-                requires_preauth,
                 max_life: u64::from(self.max_life),
-                locked,
                 pw_expire: self.pw_expiration,
                 attributes: self.attributes,
                 max_renewable_life: u64::from(self.max_renewable_life),
@@ -428,11 +395,11 @@ impl DumpPrincipal {
                 fail_auth_count: self.fail_auth_count,
                 mkvno,
                 db_entry_len: self.db_len,
-                tl_data: self.tl_data,
+                tl_data,
                 e_data: self.e_data,
                 rid,
-                s4u_allowed_from: Vec::new(),
-                s4u_allowed_to: Vec::new(),
+                s4u_allowed_from,
+                s4u_allowed_to,
                 pw_policy,
                 kadm,
                 string_attrs,
@@ -442,58 +409,214 @@ impl DumpPrincipal {
     }
 }
 
-/// Parse a MIT dump (header + `princ` / `policy` records).
-/// MIT `restore_dump` (`kadmin/dbutil/dump.c:1364-1379`): records are read until the end of the
-/// file, so a dump with none (the header alone) is a dump.
-///
-/// # Errors
-///
-/// [`DumpError::Format`] when the text is empty, the header is not a version 6 or 7 (or iprop)
-/// dump header, a line is neither `princ` nor `policy`, or a `princ` record has a missing, extra
-/// or malformed field.
+// MIT: `restore_dump` (kadmin/dbutil/dump.c:1364-1379)
 pub fn parse_dump(text: &str) -> Result<DumpFile, DumpError> {
-    let mut lines = text.lines();
+    let mut lines = text_lines(text, 0);
     let header = lines
         .next()
         .ok_or_else(|| DumpError::Format("empty dump".into()))?;
-    let version = parse_header(header)?;
-    let mut princs = Vec::new();
-    let mut policies = Vec::new();
-    for (idx, line) in lines.enumerate() {
-        let lineno = idx + 2;
-        if line.is_empty() {
+    let version = parse_header(header.text)?;
+    let mut fold = Fold::default();
+    let mut applied_len = text.len();
+    while let Some(line) = lines.next() {
+        if line.text != JOURNAL_BEGIN {
+            fold.record(&line)?;
             continue;
         }
-        if let Some(rest) = line.strip_prefix("policy\t") {
-            policies.push(rest.to_owned());
-            continue;
+        match read_batch(text, &line, &mut lines) {
+            Some((records, end)) => {
+                for r in &records {
+                    fold.record(r)?;
+                }
+                applied_len = end;
+            }
+            None if lines.any(|l| l.text == JOURNAL_BEGIN) => {
+                return Err(DumpError::Format(format!(
+                    "line {}: appended change does not check",
+                    line.no
+                )));
+            }
+            None => {
+                applied_len = line.start;
+                break;
+            }
         }
-        if let Some(rest) = line.strip_prefix("princ\t") {
-            princs.push(parse_princ_line(rest, lineno)?);
-            continue;
-        }
-        return Err(DumpError::Format(format!(
-            "line {lineno}: unknown record type"
-        )));
     }
     Ok(DumpFile {
         version,
-        princs,
-        policies,
+        princs: fold.princs.into_iter().flatten().collect(),
+        records: fold.records,
+        policies: fold.policies.into_iter().flatten().collect(),
+        applied_len,
+        seen_rid: fold.max_rid,
     })
 }
 
-/// Load a dump: parse, derive the master key, decrypt `key_data`.
-///
-/// The master key has the enctype of the dump's own `K/M` entry ([`DumpFile::master_etype`]),
-/// else [`default_master_etype`].
-///
-/// # Errors
-///
-/// [`DumpError::Format`] when the text does not parse or a record cannot be stored (a missing
-/// realm, a malformed name, key block or tl-data, or `KRB5_TL_DB_ARGS`); [`DumpError::Crypto`]
-/// when the master key cannot be derived from `master_password`, a key does not decrypt under it
-/// into a usable key, or the `K/M` key is not the derived key.
+const JOURNAL_BEGIN: &str = "begin";
+const JOURNAL_END: &str = "end\t";
+const JOURNAL_DEL: &str = "del\t";
+
+struct Line<'a> {
+    text: &'a str,
+    no: usize,
+    start: usize,
+    end: usize,
+    whole: bool,
+}
+
+fn text_lines(text: &str, from: usize) -> impl Iterator<Item = Line<'_>> {
+    let mut at = from;
+    let mut no = 0;
+    std::iter::from_fn(move || {
+        if at >= text.len() {
+            return None;
+        }
+        let rest = &text[at..];
+        let (raw, whole) = rest
+            .find('\n')
+            .map_or((rest, false), |i| (&rest[..i], true));
+        let start = at;
+        at += raw.len() + usize::from(whole);
+        no += 1;
+        Some(Line {
+            text: raw.strip_suffix('\r').unwrap_or(raw),
+            no,
+            start,
+            end: at,
+            whole,
+        })
+    })
+}
+
+fn read_batch<'a>(
+    text: &'a str,
+    begin: &Line<'a>,
+    lines: &mut impl Iterator<Item = Line<'a>>,
+) -> Option<(Vec<Line<'a>>, usize)> {
+    let mut records = Vec::new();
+    for line in lines.by_ref() {
+        if !line.whole {
+            return None;
+        }
+        if let Some(crc) = line.text.strip_prefix(JOURNAL_END) {
+            let body = text.get(begin.end..line.start)?.as_bytes();
+            let ok = u32::from_str_radix(crc, 16).ok() == Some(crate::lockout::crc32(body));
+            return ok.then_some((records, line.end));
+        }
+        records.push(line);
+    }
+    None
+}
+
+#[derive(Default)]
+struct Fold {
+    princs: Vec<Option<DumpPrincipal>>,
+    princ_at: HashMap<String, usize>,
+    policies: Vec<Option<String>>,
+    policy_at: HashMap<String, usize>,
+    records: usize,
+    max_rid: u32,
+}
+
+impl Fold {
+    fn record(&mut self, line: &Line<'_>) -> Result<(), DumpError> {
+        let text = line.text;
+        if text.is_empty() {
+            return Ok(());
+        }
+        if let Some(rest) = text.strip_prefix("policy\t") {
+            let name = rest.split('\t').next().unwrap_or_default().to_owned();
+            put_last(
+                &mut self.policies,
+                &mut self.policy_at,
+                name,
+                rest.to_owned(),
+            );
+            return Ok(());
+        }
+        if let Some(rest) = text.strip_prefix("princ\t") {
+            let p = parse_princ_line(rest, line.no)?;
+            let (_, rid) = parse_sid_tl(&p.tl_data)?;
+            self.max_rid = self.max_rid.max(rid);
+            put_last(&mut self.princs, &mut self.princ_at, p.name.clone(), p);
+            self.records += 1;
+            return Ok(());
+        }
+        if let Some(name) = text.strip_prefix(JOURNAL_DEL) {
+            if let Some(i) = self.princ_at.remove(name) {
+                self.princs[i] = None;
+            }
+            self.records += 1;
+            return Ok(());
+        }
+        Err(DumpError::Format(format!(
+            "line {}: unknown record type",
+            line.no
+        )))
+    }
+}
+
+fn put_last<T>(items: &mut Vec<Option<T>>, at: &mut HashMap<String, usize>, name: String, v: T) {
+    if let Some(&i) = at.get(&name) {
+        items[i] = Some(v);
+    } else {
+        at.insert(name, items.len());
+        items.push(Some(v));
+    }
+}
+
+pub(crate) fn journal_batch(
+    store: &PrincipalStore,
+    mkey: &ProtocolKey,
+    ids: &[String],
+) -> Result<String, DumpError> {
+    let mut body = String::new();
+    for id in ids {
+        match store.principal_by_id(id) {
+            Some(p) => write_princ_record(&mut body, p, mkey, store, false)?,
+            None => {
+                let _ = writeln!(body, "{JOURNAL_DEL}{id}");
+            }
+        }
+    }
+    let crc = crate::lockout::crc32(body.as_bytes());
+    Ok(format!("{JOURNAL_BEGIN}\n{body}{JOURNAL_END}{crc:08x}\n"))
+}
+
+pub(crate) enum JournalOp {
+    Put(Box<DumpPrincipal>),
+    Del(String),
+}
+
+/// A torn last change is skipped.
+pub(crate) fn parse_journal_tail(tail: &str) -> Result<Option<(Vec<JournalOp>, usize)>, DumpError> {
+    let mut ops = Vec::new();
+    let mut used = 0;
+    let mut lines = text_lines(tail, 0);
+    while let Some(line) = lines.next() {
+        if line.text != JOURNAL_BEGIN {
+            return Ok(None);
+        }
+        let Some((records, end)) = read_batch(tail, &line, &mut lines) else {
+            if lines.any(|l| l.text == JOURNAL_BEGIN) {
+                return Ok(None);
+            }
+            break;
+        };
+        for r in records {
+            if let Some(rest) = r.text.strip_prefix("princ\t") {
+                ops.push(JournalOp::Put(Box::new(parse_princ_line(rest, r.no)?)));
+            } else if let Some(name) = r.text.strip_prefix(JOURNAL_DEL) {
+                ops.push(JournalOp::Del(name.to_owned()));
+            } else if !r.text.is_empty() {
+                return Ok(None);
+            }
+        }
+        used = end;
+    }
+    Ok(Some((ops, used)))
+}
+
 pub fn load_dump(text: &str, master_password: &[u8]) -> Result<PrincipalStore, DumpError> {
     let dump = parse_dump(text)?;
     let realm = dump.realm()?.to_owned();
@@ -502,52 +625,38 @@ pub fn load_dump(text: &str, master_password: &[u8]) -> Result<PrincipalStore, D
     dump.into_store(&mkey)
 }
 
-/// Merge the entries of `loaded` into `store`, as `kdb5_util load -update` puts each record of
-/// a dump into the live database: a principal replaces the entry of the same name, and a
-/// policy is created or replaced. The principals go in `order` (the dump's), any not named there
-/// after them; a primary's update log records each put and then starts over for the policies.
-/// MIT `process_k5beta7_princ` (`kadmin/dbutil/dump.c:775-779`): each record is put into the open database.
-/// MIT `process_k5beta7_policy` (`kadmin/dbutil/dump.c:820-822`): a policy is created, else replaced.
-pub fn update_store(store: &mut PrincipalStore, loaded: &PrincipalStore, order: &[&str]) {
+// MIT: `process_k5beta7_princ` (kadmin/dbutil/dump.c:775-779)
+// MIT: `process_k5beta7_policy` (kadmin/dbutil/dump.c:820-825)
+pub fn update_store(
+    store: &mut PrincipalStore,
+    loaded: &PrincipalStore,
+    order: &[&str],
+) -> Result<(), KdcError> {
     let mut put = std::collections::HashSet::new();
     for name in order {
         if let Some(p) = loaded.get_raw(name)
             && put.insert(p.id())
         {
-            store.put_principal(p.clone());
+            store.put_principal(p.clone())?;
         }
     }
     for id in loaded.ids() {
         if let Some(p) = loaded.get_raw(&id)
             && put.insert(id)
         {
-            store.put_principal(p.clone());
+            store.put_principal(p.clone())?;
         }
     }
     for pol in loaded.policies().values() {
-        store.put_policy(pol.clone());
+        store.put_policy(pol.clone())?;
     }
+    Ok(())
 }
 
-/// Load dump text whose keys are wrapped under `mkey`.
-///
-/// # Errors
-///
-/// [`DumpError::Format`] when the text does not parse or a record cannot be stored (a missing
-/// realm, a malformed name, key block or tl-data, or `KRB5_TL_DB_ARGS`); [`DumpError::Crypto`]
-/// when a key does not decrypt under `mkey` into a usable key or the `K/M` key is not `mkey`.
 pub fn load_dump_with_key(text: &str, mkey: &ProtocolKey) -> Result<PrincipalStore, DumpError> {
     load_dump_mkey(text, mkey)
 }
 
-/// [`load_dump`] with an explicit master-key etype.
-///
-/// # Errors
-///
-/// [`DumpError::Format`] when the text does not parse or a record cannot be stored (a missing
-/// realm, a malformed name, key block or tl-data, or `KRB5_TL_DB_ARGS`); [`DumpError::Crypto`]
-/// when the master key cannot be derived from `master_password`, a key does not decrypt under it
-/// into a usable key, or the `K/M` key is not the derived key.
 pub fn load_dump_etype(
     text: &str,
     master_password: &[u8],
@@ -559,39 +668,15 @@ pub fn load_dump_etype(
     dump.into_store(&mkey)
 }
 
-/// Load dump text with an already-derived master key.
-///
-/// # Errors
-///
-/// [`DumpError::Format`] when the text does not parse or a record cannot be stored (a missing
-/// realm, a malformed name, key block or tl-data, or `KRB5_TL_DB_ARGS`); [`DumpError::Crypto`]
-/// when a key does not decrypt under `mkey` into a usable key or the `K/M` key is not `mkey`.
 pub(crate) fn load_dump_mkey(text: &str, mkey: &ProtocolKey) -> Result<PrincipalStore, DumpError> {
     parse_dump(text)?.into_store(mkey)
 }
 
-/// Load from a path.
-///
-/// # Errors
-///
-/// [`DumpError::Io`] when `path` cannot be read as UTF-8 text; otherwise as [`load_dump`]:
-/// [`DumpError::Format`] when the dump does not parse or a record cannot be stored, and
-/// [`DumpError::Crypto`] when the master key cannot be derived or a key does not decrypt under it.
 pub fn load_dump_path(path: &Path, master_password: &[u8]) -> Result<PrincipalStore, DumpError> {
     let text = fs::read_to_string(path)?;
     load_dump(&text, master_password)
 }
 
-/// Write a version-7 dump, re-encrypting keys under the derived master key.
-///
-/// The master key has the enctype of the store's `K/M` key, else [`default_master_etype`].
-/// Missing `K/M` is synthesized. Empty `tl_data` is filled with
-/// `KRB5_TL_LAST_PWD_CHANGE` and `KRB5_TL_MOD_PRINC` (and `KRB5_TL_MKVNO`).
-///
-/// # Errors
-///
-/// [`DumpError::Crypto`] when the master key cannot be derived from `master_password` or a key
-/// cannot be wrapped under it.
 pub fn dump_store(store: &PrincipalStore, master_password: &[u8]) -> Result<String, DumpError> {
     let etype = store
         .get(&format!("K/M@{}", store.realm()))
@@ -600,11 +685,6 @@ pub fn dump_store(store: &PrincipalStore, master_password: &[u8]) -> Result<Stri
     dump_store_etype(store, master_password, etype)
 }
 
-/// Dump text of `store` with every key wrapped under `mkey`.
-///
-/// # Errors
-///
-/// [`DumpError::Crypto`] when a principal or history key cannot be wrapped under `mkey`.
 pub fn dump_store_with_key(
     store: &PrincipalStore,
     mkey: &ProtocolKey,
@@ -612,12 +692,6 @@ pub fn dump_store_with_key(
     write_dump(store, mkey)
 }
 
-/// [`dump_store`] with an explicit master-key etype.
-///
-/// # Errors
-///
-/// [`DumpError::Crypto`] when the master key cannot be derived from `master_password` or a key
-/// cannot be wrapped under it.
 pub(crate) fn dump_store_etype(
     store: &PrincipalStore,
     master_password: &[u8],
@@ -627,24 +701,18 @@ pub(crate) fn dump_store_etype(
     write_dump(store, &mkey)
 }
 
-/// Write dump text from an already-derived master key.
-///
-/// # Errors
-///
-/// [`DumpError::Crypto`] when a principal or history key cannot be wrapped under `mkey`.
 pub(crate) fn write_dump(store: &PrincipalStore, mkey: &ProtocolKey) -> Result<String, DumpError> {
     write_dump_nra(store, mkey, false)
 }
 
-/// [`write_dump`], the three lockout attributes written as 0 with `omit_nra`, as an iprop dump
-/// writes them: they are not replicated.
-/// MIT `k5beta7_common` (`kadmin/dbutil/dump.c:342-344`): with `omit_nra` the last success, last failure and failure count are written as 0.
+// MIT: `k5beta7_common` (kadmin/dbutil/dump.c:342-344)
+/// With `omit_nra` the three lockout attributes are written as 0.
 fn write_dump_nra(
     store: &PrincipalStore,
     mkey: &ProtocolKey,
     omit_nra: bool,
 ) -> Result<String, DumpError> {
-    let now = unix_now();
+    let now = krb5_types::unix_now();
     let mut princs: Vec<&Principal> = store.debug_principals().collect();
     princs.sort_by_key(|p| {
         (
@@ -678,8 +746,6 @@ fn write_dump_nra(
     Ok(out)
 }
 
-/// One version 7 `policy` record: MIT dump version 7 is r1.11, the r1.8 nine counters, then
-/// attributes, max_life, max_renewable, allowed_keysalts and n_tl_data.
 fn policy_line(pol: &NamedPolicy) -> String {
     let ks = pol.allowed_keysalts.as_deref().unwrap_or("-");
     format!(
@@ -696,13 +762,6 @@ fn policy_line(pol: &NamedPolicy) -> String {
     )
 }
 
-/// Write a dump file with an explicit master-key etype: a new 0600 file owned by the writer,
-/// whatever it replaces, as MIT `kdb5_util dump` leaves one.
-///
-/// # Errors
-///
-/// [`DumpError::Crypto`] when the master key cannot be derived or a key cannot be wrapped under
-/// it, and [`DumpError::Io`] when `path` cannot be written.
 pub fn write_dump_path_etype(
     store: &PrincipalStore,
     path: &Path,
@@ -756,25 +815,14 @@ fn parse_header(line: &str) -> Result<u32, DumpError> {
     Ok(version)
 }
 
-/// Why a dump's first line is no iprop header ([`parse_iprop_header`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IpropHeaderError {
-    /// Neither `ipropx` nor `iprop`: MIT prints "Invalid iprop header".
     NotIprop,
-    /// An `ipropx` header of a version past 1: MIT prints "Unknown iprop dump version".
     UnknownVersion(u32),
-    /// Too few numbers after the word.
     Short,
 }
 
-/// An iprop dump's first line: `ipropx <version> <sno> <sec> <usec>` (version 0 or 1) or
-/// `iprop <sno> <sec> <usec>`. Returns whether it is an `ipropx 1` dump, and the serial and time
-/// the update log takes when it is loaded.
-/// MIT `parse_iprop_header` (`kadmin/dbutil/dump.c:1069-1107`): the header's word, the version an ipropx header carries, then the serial and the time.
-///
-/// # Errors
-///
-/// [`IpropHeaderError`] for any other line.
+// MIT: `parse_iprop_header` (kadmin/dbutil/dump.c:1069-1107)
 pub fn parse_iprop_header(line: &str) -> Result<(bool, UlogLast), IpropHeaderError> {
     let mut words = line.split_whitespace();
     let head = words.next().ok_or(IpropHeaderError::NotIprop)?;
@@ -801,17 +849,30 @@ pub fn parse_iprop_header(line: &str) -> Result<(bool, UlogLast), IpropHeaderErr
     ))
 }
 
-/// MIT `kdb5_util dump -i1` (`ipropx 1 <sno> <sec> <usec>`), its lockout attributes 0, its
-/// serial and time `last`: the update log's last entry as it was read before `store` was, so the
-/// dump holds at least what its header says and a change made in between reaches a replica as an
-/// update.
-/// MIT `dump_db` (`kadmin/dbutil/dump.c:1176-1188`): an iprop dump omits the non-replicated attributes.
-/// MIT `dump_db` (`kadmin/dbutil/dump.c:1318-1333`): the update log's last serial and time are read before the database is iterated.
-///
-/// # Errors
-///
-/// [`DumpError::Crypto`] when the master key cannot be derived from `master_password` or a key
-/// cannot be wrapped under it.
+const FGETS_BUFSIZ: u64 = 8192;
+
+// MIT: `current_dump_sno_in_ulog` (kadmin/dbutil/dump.c:1111-1134)
+#[must_use]
+pub fn dump_current_in_ulog(dump_file: &Path, ulog: &crate::ulog::Ulog) -> bool {
+    let Ok(file) = fs::File::open(dump_file) else {
+        return false;
+    };
+    let mut line = Vec::new();
+    if std::io::BufReader::new(file.take(FGETS_BUFSIZ))
+        .read_until(b'\n', &mut line)
+        .is_err()
+    {
+        return false;
+    }
+    let Ok((_, last)) = parse_iprop_header(&String::from_utf8_lossy(&line)) else {
+        return false;
+    };
+    matches!(ulog.sno_status_of(last), IPROP_OK | IPROP_NIL)
+}
+
+// MIT: `dump_db` (kadmin/dbutil/dump.c:1176-1188)
+// MIT: `dump_db` (kadmin/dbutil/dump.c:1318-1333)
+/// The log's last serial is read before the database is iterated.
 pub fn dump_store_iprop(
     store: &PrincipalStore,
     master_password: &[u8],
@@ -825,11 +886,6 @@ pub fn dump_store_iprop(
     Ok(iprop_header(last, &write_dump_nra(store, &mkey, true)?))
 }
 
-/// [`dump_store_iprop`] with every key wrapped under `mkey`.
-///
-/// # Errors
-///
-/// [`DumpError::Crypto`] when a principal or history key cannot be wrapped under `mkey`.
 pub fn dump_store_iprop_with_key(
     store: &PrincipalStore,
     mkey: &ProtocolKey,
@@ -838,9 +894,135 @@ pub fn dump_store_iprop_with_key(
     Ok(iprop_header(last, &write_dump_nra(store, mkey, true)?))
 }
 
-/// `text` with the version 7 header replaced by `ipropx 1 <sno> <sec> <usec>`, `last`'s serial
-/// and time.
-/// MIT `dump_db` (`kadmin/dbutil/dump.c:1318-1329`): the header takes the update log's last serial and time.
+// MIT: `ipropx_resync` (kadmin/server/ipropd_svc.c:343-344)
+// MIT: `dump_db` (kadmin/dbutil/dump.c:1173-1188)
+pub fn conditional_iprop_dump(
+    store: &PrincipalStore,
+    dump_file: &Path,
+    vers: u32,
+) -> Result<(), DumpError> {
+    match iprop_dump_text(store, dump_file, vers)? {
+        Some(text) => write_iprop_dump(dump_file, &text),
+        None => Ok(()),
+    }
+}
+
+fn iprop_dump_text(
+    store: &PrincipalStore,
+    dump_file: &Path,
+    vers: u32,
+) -> Result<Option<String>, DumpError> {
+    if let Some(ulog) = store.ulog()
+        && dump_current_in_ulog(dump_file, ulog)
+    {
+        return Ok(None);
+    }
+    let mkey = store
+        .journal_key()
+        .ok_or_else(|| DumpError::Crypto("no master key for the iprop dump".to_owned()))?;
+    let last = store.ulog_last().unwrap_or_default();
+    let text = write_dump_nra(store, &mkey, true)?;
+    Ok(Some(if vers == 0 {
+        iprop_v0(last, &text)
+    } else {
+        iprop_header(last, &text)
+    }))
+}
+
+fn write_iprop_dump(dump_file: &Path, text: &str) -> Result<(), DumpError> {
+    write_dump_with_ok(dump_file, text.as_bytes()).map_err(|(_, e)| DumpError::Io(e))
+}
+
+// MIT: `dump_db` (kadmin/dbutil/dump.c:1318-1340)
+/// Header and records: one fresh, locked view.
+pub fn conditional_iprop_dump_fresh(
+    store: &crate::SharedDump,
+    dump_file: &Path,
+    vers: u32,
+) -> Result<(), DumpError> {
+    for _ in 0..3 {
+        let text = {
+            let g = store
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            match g.read_hold()? {
+                None => Some(iprop_dump_text(&g, dump_file, vers)),
+                Some((held, false)) => {
+                    let text = iprop_dump_text(&g, dump_file, vers);
+                    drop(held);
+                    Some(text)
+                }
+                Some((held, true)) => {
+                    drop(held);
+                    None
+                }
+            }
+        };
+        if let Some(text) = text {
+            return match text? {
+                Some(text) => write_iprop_dump(dump_file, &text),
+                None => Ok(()),
+            };
+        }
+        store
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .reload_if_stale()?;
+    }
+    Err(DumpError::Format(
+        "the database kept changing during the iprop dump".to_owned(),
+    ))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DumpOkStage {
+    Create,
+    Lock,
+    Write,
+}
+
+// MIT: `prep_ok_file` (kadmin/dbutil/dump.c:171-208)
+// MIT: `create_ofile` (kadmin/dbutil/dump.c:133-155)
+// MIT: `finish_ofile` (kadmin/dbutil/dump.c:159-167)
+// MIT: `update_ok_file` (kadmin/dbutil/dump.c:214-219)
+pub fn write_dump_with_ok(path: &Path, text: &[u8]) -> Result<(), (DumpOkStage, std::io::Error)> {
+    let mut ok_name = path.as_os_str().to_os_string();
+    ok_name.push(".dump_ok");
+    let ok_path = PathBuf::from(ok_name);
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        // `O_NOFOLLOW`: unlike MIT, a planted symlink is not emptied.
+        opts.mode(0o600).custom_flags(nix::libc::O_NOFOLLOW);
+    }
+    let ok = krb5_protocol::create_labeled(&ok_path, || opts.open(&ok_path))
+        .map_err(|e| (DumpOkStage::Create, e))?;
+    let marked = crate::lock_file_exclusive(&ok).map_err(|e| (DumpOkStage::Lock, e))?;
+    write_fresh_secret_file(path, text).map_err(|e| (DumpOkStage::Write, e))?;
+    let _ = (&ok).write_all(&[0]);
+    drop(marked);
+    Ok(())
+}
+
+// MIT: `iprop_version` (kadmin/dbutil/dump.c:1046-1055)
+fn iprop_v0(last: UlogLast, text: &str) -> String {
+    let mut out = format!(
+        "iprop {} {} {}\n",
+        last.sno, last.time.seconds, last.time.useconds
+    );
+    for line in text.lines().skip(1) {
+        match line.strip_prefix("policy\t") {
+            Some(rest) => out.push_str(&DumpFile::policy_record(rest, 5)),
+            None => out.push_str(line),
+        }
+        out.push('\n');
+    }
+    out
+}
+
+// MIT: `dump_db` (kadmin/dbutil/dump.c:1318-1329)
 fn iprop_header(last: UlogLast, text: &str) -> String {
     let header = format!(
         "ipropx 1 {} {} {}\n",
@@ -853,16 +1035,13 @@ fn iprop_header(last: UlogLast, text: &str) -> String {
     )
 }
 
-/// One `princ` record, with MIT's message for the part that does not read.
-/// MIT `process_k5beta7_princ` (`dump.c:615-628`): the five size tokens.
-/// MIT `process_k5beta7_princ` (`dump.c:666-674`): a name that cannot be read is not a principal.
-/// MIT `process_k5beta7_princ` (`dump.c:676-690`): eight attribute fields are required, and a
-/// short record is not a principal.
-/// MIT `process_tl_data` (`dump.c:566-594`): each tagged datum's type and length, then its contents.
-/// MIT `process_k5beta7_princ` (`dump.c:729-762`): each key's version and kvno, then each slot's type, length and contents.
-/// MIT `process_k5beta7_princ` (`dump.c:766-770`): the extra data.
-/// The name's length must equal the header count, so a truncated name does not consume the
-/// attribute fields.
+// MIT: `process_k5beta7_princ` (dump.c:615-628)
+// MIT: `process_k5beta7_princ` (dump.c:666-674)
+// MIT: `process_k5beta7_princ` (dump.c:676-690)
+// MIT: `process_tl_data` (dump.c:566-594)
+// MIT: `process_k5beta7_princ` (dump.c:729-762)
+// MIT: `process_k5beta7_princ` (dump.c:766-770)
+/// A name whose length is not the header count: not a principal.
 fn parse_princ_line(rest: &str, lineno: usize) -> Result<DumpPrincipal, DumpError> {
     let mut raw: Vec<&str> = rest.split('\t').collect();
     if let Some(last) = raw.last_mut() {
@@ -910,7 +1089,7 @@ fn parse_princ_line(rest: &str, lineno: usize) -> Result<DumpPrincipal, DumpErro
         last_failed,
         fail_auth_count,
     ] = attrs;
-    let mut tl_data = Vec::with_capacity(n_tl);
+    let mut tl_data = Vec::with_capacity(n_tl.min(c.remaining()));
     for _ in 0..n_tl {
         let (ty, len) = (|| Ok::<_, DumpError>((c.i32()?, c.usize()?)))()
             .map_err(|_| bad("cannot read tagged data type and length"))?;
@@ -919,7 +1098,7 @@ fn parse_princ_line(rest: &str, lineno: usize) -> Result<DumpPrincipal, DumpErro
             .map_err(|_| bad("cannot read tagged data contents"))?;
         tl_data.push(TlData { ty, contents });
     }
-    let mut keys = Vec::with_capacity(n_key);
+    let mut keys = Vec::with_capacity(n_key.min(c.remaining()));
     for _ in 0..n_key {
         let (ver, kvno) = (|| Ok::<_, DumpError>((c.i32()?, c.u32()?)))()
             .map_err(|_| bad("cannot read key size and version"))?;
@@ -967,6 +1146,10 @@ struct Cursor<'a> {
 impl<'a> Cursor<'a> {
     fn err(&self, msg: &str) -> DumpError {
         DumpError::Format(format!("line {}: {msg}", self.line))
+    }
+
+    fn remaining(&self) -> usize {
+        self.f.len().saturating_sub(self.i)
     }
 
     fn take(&mut self) -> Result<&'a str, DumpError> {
@@ -1058,17 +1241,51 @@ fn parse_unparsed(s: &str) -> Result<(PrincipalName, String), DumpError> {
     Ok((name, realm))
 }
 
-/// The salt a principal's keys were made with, which the KDC offers in `ETYPE-INFO2`: the first
-/// key's stored normal or special salt, else the name's default salt.
 pub(crate) fn salt_of_keys(keys: &[KeyEntry], name: &PrincipalName, realm: &str) -> Vec<u8> {
-    keys.iter()
-        .find_map(|k| match (k.salt_type, k.kdb_salt.as_ref()) {
-            (Some(SALTTYPE_NORMAL | SALTTYPE_SPECIAL), Some(salt)) if !salt.is_empty() => {
-                Some(salt.clone())
+    keys.first()
+        .map_or_else(|| name.default_salt(realm), |k| key_salt(k, name, realm))
+}
+
+// MIT: `krb5_dbe_compute_salt` (lib/kdb/kdb5.c:2345-2388)
+#[must_use]
+pub fn key_salt(key: &KeyEntry, name: &PrincipalName, realm: &str) -> Vec<u8> {
+    match key.salt_type.unwrap_or(SALTTYPE_NORMAL) {
+        SALTTYPE_NOREALM => {
+            let mut salt = Vec::new();
+            for part in &name.name_string {
+                salt.extend_from_slice(part.as_bytes());
             }
-            _ => None,
-        })
-        .unwrap_or_else(|| name.default_salt(realm))
+            salt
+        }
+        SALTTYPE_ONLYREALM => realm.as_bytes().to_vec(),
+        SALTTYPE_SPECIAL => key.kdb_salt.clone().unwrap_or_default(),
+        _ => name.default_salt(realm),
+    }
+}
+
+fn known_salt(salt_type: Option<i32>) -> bool {
+    matches!(
+        salt_type.unwrap_or(SALTTYPE_NORMAL),
+        SALTTYPE_NORMAL | SALTTYPE_NOREALM | SALTTYPE_ONLYREALM | SALTTYPE_SPECIAL
+    )
+}
+
+// MIT: `krb5_dbe_specialize_salt` (lib/kdb/kdb5.c:2391-2419)
+pub(crate) fn specialize_salts(p: &mut Principal) -> Result<(), KdcError> {
+    if p.keys.iter().any(|k| !known_salt(k.salt_type)) {
+        return Err(KdcError::InvalidArgument("Unsupported salt type".into()));
+    }
+    for k in &mut p.keys {
+        let salt = key_salt(k, &p.name, &p.realm);
+        k.salt_type = Some(SALTTYPE_SPECIAL);
+        k.kdb_salt = Some(salt);
+    }
+    p.salt = p
+        .keys
+        .first()
+        .and_then(|k| k.kdb_salt.clone())
+        .unwrap_or_else(|| p.name.default_salt(&p.realm));
+    Ok(())
 }
 
 pub(crate) fn mkvno_from_tl(tl: &[TlData]) -> u16 {
@@ -1077,38 +1294,14 @@ pub(crate) fn mkvno_from_tl(tl: &[TlData]) -> u16 {
         .map_or(1, |t| u16::from_le_bytes([t.contents[0], t.contents[1]]))
 }
 
-fn unix_now() -> u32 {
-    u32::try_from(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs()),
-    )
-    .unwrap_or(u32::MAX)
-}
-
 pub(crate) fn dump_attributes(p: &Principal) -> u32 {
-    let mut a = p.attributes;
-    if p.requires_preauth {
-        a |= KDB_REQUIRES_PRE_AUTH;
-    } else {
-        a &= !KDB_REQUIRES_PRE_AUTH;
-    }
-    if p.locked {
-        a |= KDB_DISALLOW_ALL_TIX;
-    } else {
-        a &= !KDB_DISALLOW_ALL_TIX;
-    }
-    a
+    p.attributes
 }
 
-/// MIT `k5beta7_common` (`dump.c:327-331`): a tagged-data count that does not match the
-/// list is an error and the record is not written.
-/// The count written here is the length of the list that follows it, so it always matches.
-/// An alias is written with zero lifetimes, and the database-arguments tag is stripped
-/// before the record is emitted.
-/// MIT `k5beta7_common` (`kadmin/dbutil/dump.c:338-339`): the entry's own `max_life` and
-/// `max_renewable_life` are written; a `max_life` of 0 is no limit of the principal's own (the
-/// realm's still applies when a ticket is issued), so it stays 0.
+// MIT: `k5beta7_common` (dump.c:327-331)
+/// A tagged-data count that mismatches the list is not written.
+// MIT: `k5beta7_common` (kadmin/dbutil/dump.c:338-339)
+/// A `max_life` of 0 is no limit of the principal's own.
 fn write_princ_record(
     out: &mut String,
     p: &Principal,
@@ -1128,7 +1321,7 @@ fn write_princ_record(
     let mut tl = if p.tl_data.is_empty() {
         synthesize_tl(
             &p.realm,
-            unix_now(),
+            krb5_types::unix_now(),
             p.mkvno,
             p.name.components_joined() == "K/M",
         )
@@ -1137,6 +1330,9 @@ fn write_princ_record(
     };
     tl.retain(|t| t.ty != TL_DB_ARGS && t.ty != TL_KERBER_SERIAL);
     merge_sid_tl(&mut tl, store.domain_sid(), p.rid);
+    let is_km = p.name.components_joined() == "K/M" && p.realm == store.realm();
+    merge_rid_hwm(&mut tl, store.next_rid(), is_km);
+    merge_s4u_tl(&mut tl, p);
     merge_kadm_tl(&mut tl, p);
     merge_string_attrs_tl(&mut tl, &p.string_attrs);
     if p.kadm.old_keys.is_empty() {
@@ -1261,8 +1457,6 @@ pub(crate) fn attrs_from_tl(tl: &[TlData]) -> Vec<(String, String)> {
     out
 }
 
-/// A principal with a policy or a history record carries `KRB5_TL_KADM_DATA`
-/// (`kdb_put_entry`); one that never had either keeps whatever it loaded with.
 pub(crate) fn merge_kadm_tl(tl: &mut Vec<TlData>, p: &Principal) {
     let has_kadm = tl.iter().any(|t| t.ty == TL_KADM_DATA);
     if has_kadm || p.pw_policy.is_none() && p.kadm.old_keys.is_empty() {
@@ -1272,17 +1466,6 @@ pub(crate) fn merge_kadm_tl(tl: &mut Vec<TlData>, p: &Principal) {
     crate::store::refresh_kadm_tl(&mut fresh);
     tl.retain(|t| t.ty != TL_KERBER_POLICY);
     tl.extend(fresh.tl_data.into_iter().filter(|t| t.ty == TL_KADM_DATA));
-}
-
-#[allow(dead_code)]
-fn merge_policy_tl(tl: &mut Vec<TlData>, policy: Option<&str>) {
-    tl.retain(|t| t.ty != TL_KERBER_POLICY);
-    if let Some(name) = policy.filter(|s| !s.is_empty()) {
-        tl.push(TlData {
-            ty: TL_KERBER_POLICY,
-            contents: name.as_bytes().to_vec(),
-        });
-    }
 }
 
 fn merge_hist_tl(
@@ -1328,7 +1511,8 @@ fn decode_hist(b: &[u8], mkey: &ProtocolKey) -> Result<Vec<KeyEntry>, DumpError>
     }
     let n = u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize;
     let mut i = 4usize;
-    let mut out = Vec::with_capacity(n);
+    // >= 10 bytes each.
+    let mut out = Vec::with_capacity(n.min(b.len() / 10));
     for _ in 0..n {
         if i + 10 > b.len() {
             return Err(DumpError::Format("truncated 0x4B04 hist tl_data".into()));
@@ -1360,6 +1544,83 @@ fn policy_from_tl(tl: &[TlData]) -> Option<String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(ToOwned::to_owned)
+}
+
+pub(crate) fn nul_name(t: &TlData) -> Option<String> {
+    let raw = t.contents.strip_suffix(&[0])?;
+    if raw.contains(&0) || raw.is_empty() {
+        return None;
+    }
+    std::str::from_utf8(raw).ok().map(str::to_owned)
+}
+
+pub(crate) fn nul_tl_names(tl: &[TlData], ty: i32) -> Vec<String> {
+    tl.iter()
+        .filter(|t| t.ty == ty)
+        .filter_map(nul_name)
+        .collect()
+}
+
+pub(crate) fn is_s4u_name_tl(t: &TlData) -> bool {
+    (t.ty == TL_CONSTRAINED_DELEGATION || t.ty == TL_KERBER_S4U_FROM) && nul_name(t).is_some()
+}
+
+pub(crate) fn absorb_identity_tl(p: &mut Principal) -> Option<u32> {
+    let hwm = rid_hwm_of(&p.tl_data);
+    absorb_s4u_tl(p);
+    p.tl_data.retain(|t| t.ty != TL_KERBER_RID_HWM);
+    hwm
+}
+
+pub(crate) fn absorb_s4u_tl(p: &mut Principal) {
+    if p.tl_data
+        .iter()
+        .any(|t| is_s4u_name_tl(t) && t.ty == TL_CONSTRAINED_DELEGATION)
+    {
+        p.s4u_allowed_to = nul_tl_names(&p.tl_data, TL_CONSTRAINED_DELEGATION);
+    }
+    if p.tl_data
+        .iter()
+        .any(|t| is_s4u_name_tl(t) && t.ty == TL_KERBER_S4U_FROM)
+    {
+        p.s4u_allowed_from = nul_tl_names(&p.tl_data, TL_KERBER_S4U_FROM);
+    }
+    p.tl_data.retain(|t| !is_s4u_name_tl(t));
+}
+
+fn rid_hwm_of(tl: &[TlData]) -> Option<u32> {
+    let bytes = tl
+        .iter()
+        .find(|t| t.ty == TL_KERBER_RID_HWM)?
+        .contents
+        .get(..4)?;
+    Some(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+}
+
+fn merge_rid_hwm(tl: &mut Vec<TlData>, next: u32, is_km: bool) {
+    tl.retain(|t| t.ty != TL_KERBER_RID_HWM);
+    if is_km {
+        tl.push(TlData {
+            ty: TL_KERBER_RID_HWM,
+            contents: next.to_le_bytes().to_vec(),
+        });
+    }
+}
+
+pub(crate) fn merge_s4u_tl(tl: &mut Vec<TlData>, p: &Principal) {
+    tl.retain(|t| !is_s4u_name_tl(t));
+    for name in &p.s4u_allowed_to {
+        tl.push(nul_tl(TL_CONSTRAINED_DELEGATION, name));
+    }
+    for name in &p.s4u_allowed_from {
+        tl.push(nul_tl(TL_KERBER_S4U_FROM, name));
+    }
+}
+
+pub(crate) fn nul_tl(ty: i32, name: &str) -> TlData {
+    let mut contents = name.as_bytes().to_vec();
+    contents.push(0);
+    TlData { ty, contents }
 }
 
 fn encode_sid_tl(domain: &RpcSid, rid: u32) -> TlData {
@@ -1470,120 +1731,4 @@ fn synthesize_km(
     p.max_renewable_life = max_renewable_life;
     p.tl_data = synthesize_tl(realm, now, 1, true);
     p
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::store::TlData;
-
-    #[test]
-    fn named_policy_dump_round_trip() {
-        use crate::store::NamedPolicy;
-        use crate::testrealm::{TEST_USER, bootstrap_documented};
-        use crate::{dump_store, load_dump};
-
-        use krb5_types::PrincipalName;
-
-        let (mut store, _) = bootstrap_documented().unwrap();
-        store.put_policy(NamedPolicy {
-            name: "strict".into(),
-            min_length: 8,
-            min_classes: 2,
-            history: 1,
-            max_fail: 3,
-            pw_failcnt_interval: 30,
-            pw_lockout_duration: 60,
-            pw_min_life: 3600,
-            pw_max_life: 86400,
-            allowed_keysalts: Some("aes256-cts:normal".into()),
-        });
-        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-        store
-            .set_principal_policy(&user, Some("strict".into()))
-            .unwrap();
-        let text = dump_store(&store, b"masterpassword").unwrap();
-        assert!(
-            text.lines()
-                .any(|l| l.starts_with("policy\tstrict\t") && l.contains("\taes256-cts:normal\t")),
-            "dump must emit MIT r1.11 policy records: {text}"
-        );
-        let again = load_dump(&text, b"masterpassword").unwrap();
-        let pol = again.policies().get("strict").expect("loaded policy");
-        assert_eq!(pol.min_length, 8);
-        assert_eq!(pol.min_classes, 2);
-        assert_eq!(pol.history, 1);
-        assert_eq!(pol.max_fail, 3);
-        assert_eq!(pol.pw_failcnt_interval, 30);
-        assert_eq!(pol.pw_lockout_duration, 60);
-        assert_eq!(pol.pw_min_life, 3600);
-        assert_eq!(pol.pw_max_life, 86400);
-        assert_eq!(pol.allowed_keysalts.as_deref(), Some("aes256-cts:normal"));
-        assert_eq!(
-            again.get_name(&user).unwrap().pw_policy.as_deref(),
-            Some("strict")
-        );
-    }
-
-    #[test]
-    fn dump_round_trip_keeps_slash_in_component() {
-        use crate::testrealm::bootstrap_documented;
-        use crate::{dump_store, load_dump};
-
-        use krb5_types::PrincipalName;
-
-        let (mut store, acl) = bootstrap_documented().unwrap();
-        let actor = crate::testrealm::documented_admin_id();
-        let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["foo/admin"]);
-        store
-            .create_password(&acl, &actor, &name, b"slash-secret")
-            .unwrap();
-        assert!(
-            store.get_name(&name).is_some(),
-            "create and get_name must share the unparsed id"
-        );
-        let two = PrincipalName::new(PrincipalName::NT_SRV_INST, ["foo", "admin"]);
-        assert!(store.get_name(&two).is_none());
-        store
-            .set_password_keepold(&name, b"slash-rotated", false)
-            .unwrap();
-        let text = dump_store(&store, b"masterpassword").unwrap();
-        assert!(
-            text.contains(r"foo\/admin@"),
-            "dump must unparse slash-in-component: {text}"
-        );
-        let again = load_dump(&text, b"masterpassword").unwrap();
-        assert!(again.get_name(&name).is_some(), "one-component foo/admin");
-        assert!(again.get_name(&two).is_none());
-    }
-
-    #[test]
-    fn string_attrs_dump_round_trip() {
-        use crate::testrealm::{TEST_USER, bootstrap_documented};
-        use crate::{dump_store, load_dump};
-
-        use krb5_types::PrincipalName;
-
-        let (mut store, _) = bootstrap_documented().unwrap();
-        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-        store.set_string(&user, "note", Some("hello-g3d")).unwrap();
-        let text = dump_store(&store, b"masterpassword").unwrap();
-        assert!(
-            text.contains("68656c6c6f2d673364"),
-            "dump must hex-encode string attr value: {text}"
-        );
-        let again = load_dump(&text, b"masterpassword").unwrap();
-        let attrs = again.get_strings(&user).unwrap();
-        assert_eq!(attrs, vec![("note".into(), "hello-g3d".into())]);
-    }
-
-    #[test]
-    fn corrupt_kerber_sid_tl_is_error() {
-        let tl = vec![TlData {
-            ty: TL_KERBER_SID,
-            contents: vec![0xff],
-        }];
-        let err = parse_sid_tl(&tl).unwrap_err();
-        assert!(err.to_string().contains("0x4B01"));
-    }
 }

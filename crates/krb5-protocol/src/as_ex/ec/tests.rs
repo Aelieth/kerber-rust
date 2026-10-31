@@ -1,6 +1,4 @@
-//! The encrypted challenge module against MIT 1.22.2's own keys: the client and KDC challenge keys
-//! below are what MIT's `krb5_c_fx_cf2_simple` gives for these armor and AS keys with
-//! `preauth_ec.c`'s peppers, read live from MIT's library.
+//! The encrypted challenge module against MIT 1.22.2's own keys: the client and KDC challenge keys below are what MIT's `krb5_c_fx_cf2_simple` gives for these armor and AS keys with `preauth_ec.c`'s peppers, read live from MIT's library.
 
 use super::{
     ASN1_BAD_ID, KRB5_BAD_ENCTYPE, KRB5_BAD_MSIZE, client_challenge, pa_enc_ts, reply_code,
@@ -11,14 +9,9 @@ use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt};
 use krb5_types::{EncryptedData, KerberosTime, Microseconds, PaData, PaEncTsEnc, err, ku, pa};
 
-/// MIT 1.22.2, live: armor aes256-sha2 00..1F, AS key aes256-sha2 20..3F, client challenge key.
 const MIT_CLIENT_SHA2: &str = "4897C9E5DDF5B289B11ED315E1F08C816E2D2FCFFA4065DB886AFEEA47D10BDD";
-/// The same keys' KDC challenge key.
 const MIT_KDC_SHA2: &str = "EE90E6C8202684D975BC2408F0A3F930278F5F5D87D2162DC814317844612BE2";
-/// MIT 1.22.2, live: armor aes256-cts 00..1F, AS key aes128-cts 40..4F, client challenge key
-/// (the armor key's enctype).
 const MIT_CLIENT_AES: &str = "81D3AA6A417BB4EB2B4CE1DAD806DA65F350A7A1C104DF4ED7301579C6E33AEA";
-/// The same keys' KDC challenge key.
 const MIT_KDC_AES: &str = "E672A3FC2439F61C4FCB08F6B4E32CEA366BF05F1A56C2A1A244EE9AF497EE1D";
 
 fn unhex(s: &str) -> Vec<u8> {
@@ -55,7 +48,6 @@ fn when() -> (KerberosTime, Microseconds) {
     )
 }
 
-/// The client's PA-ENCRYPTED-CHALLENGE, decrypted with MIT's client challenge key under usage 54.
 fn open_client(pa: &PaData, mit_key: &str, etype: EncryptionType) -> PaEncTsEnc {
     assert_eq!(pa.padata_type, pa::ENCRYPTED_CHALLENGE);
     let enc: EncryptedData = decode(pa.padata_value.as_ref()).unwrap();
@@ -70,7 +62,6 @@ fn open_client(pa: &PaData, mit_key: &str, etype: EncryptionType) -> PaEncTsEnc 
     decode(&decrypt(&key, usage, enc.cipher.as_ref()).unwrap()).unwrap()
 }
 
-/// A KDC challenge as MIT's `ec_return` makes it, under `key_hex` and `usage`.
 fn kdc_challenge(key_hex: &str, etype: EncryptionType, usage: u32) -> Vec<u8> {
     let key = ProtocolKey::from_bytes(etype, &unhex(key_hex)).unwrap();
     let (t, usec) = when();
@@ -126,7 +117,6 @@ fn the_kdc_challenge_opens_under_mits_kdc_challenge_key_only() {
         let (armor, as_key) = pair;
         let good = kdc_challenge(kdc, etype, ku::ENC_CHALLENGE_KDC);
         assert_eq!(verify_kdc_challenge(&armor, &as_key, &good), 0);
-        // The client's own key, or the KDC's key under the client's usage, does not open it.
         let swapped = kdc_challenge(client, etype, ku::ENC_CHALLENGE_KDC);
         let usage54 = kdc_challenge(kdc, etype, ku::ENC_CHALLENGE_CLIENT);
         for bad in [swapped, usage54] {
@@ -166,8 +156,8 @@ fn a_malformed_kdc_challenge_is_traced_with_mits_codes() {
     );
 }
 
-/// MIT `krb5_c_decrypt` (`lib/crypto/krb/decrypt.c:88-101`): the keyblock's key goes through `krb5_k_decrypt`.
-/// MIT `krb5_k_decrypt` (`lib/crypto/krb/decrypt.c:45-46`): ENCTYPE_UNKNOWN (511) passes the check; 0 is another enctype.
+// MIT: `krb5_c_decrypt` (lib/crypto/krb/decrypt.c:88-101)
+/// The keyblock's key goes through `krb5_k_decrypt`.
 #[test]
 fn the_kdc_challenge_enctype_is_checked_as_krb5_k_decrypt_checks_it() {
     let (armor, as_key) = sha2_pair();
@@ -233,15 +223,7 @@ fn pausec_is_encoded_only_when_it_is_not_zero() {
 
 #[test]
 fn under_armor_encrypted_timestamp_runs_only_when_the_kdc_offers_it_first() {
-    krb5_config::isolate_test_krb5();
-    let dir = krb5_testkit::scratch_dir("pg3-fast-mech-order");
-    let path = dir.join("krb5.conf");
-    std::fs::write(
-        &path,
-        "[libdefaults]\n    default_realm = KERBER.TEST\n    dns_lookup_kdc = false\n    dns_lookup_realm = false\n",
-    )
-    .unwrap();
-    krb5_config::set_test_krb5_paths(Some(vec![path]));
+    let profile = krb5_config::isolated_profile();
     let list = |types: &[i32]| -> Vec<PaData> {
         types
             .iter()
@@ -251,20 +233,27 @@ fn under_armor_encrypted_timestamp_runs_only_when_the_kdc_offers_it_first() {
             })
             .collect()
     };
-    // MIT's KDC under FAST when it does not offer SPAKE (live, kinit -T): 136, 19, 138, 133, 137.
     assert_eq!(
-        super::super::fast::fast_mechanism(&list(&[136, 19, 138, 133, 137]), &[]).unwrap(),
+        super::super::fast::fast_mechanism(&profile, &list(&[136, 19, 138, 133, 137]), &[], false)
+            .unwrap(),
         pa::ENCRYPTED_CHALLENGE
     );
-    // Live lab, disable = encrypted_timestamp and kinit -T: the hint lists SPAKE before
-    // encrypted challenge, and MIT's kinit answers SPAKE.
     assert_eq!(
-        super::super::fast::fast_mechanism(&list(&[136, 19, 151, 138, 133, 137]), &[]).unwrap(),
+        super::super::fast::fast_mechanism(
+            &profile,
+            &list(&[136, 19, 151, 138, 133, 137]),
+            &[],
+            false
+        )
+        .unwrap(),
         pa::SPAKE
     );
     assert_eq!(
-        super::super::fast::fast_mechanism(&list(&[2, 138]), &[]).unwrap(),
+        super::super::fast::fast_mechanism(&profile, &list(&[2, 138]), &[], false).unwrap(),
         pa::ENC_TIMESTAMP
     );
-    assert!(super::super::fast::fast_mechanism(&list(&[136, 19, 133, 137]), &[]).is_err());
+    assert!(
+        super::super::fast::fast_mechanism(&profile, &list(&[136, 19, 133, 137]), &[], false)
+            .is_err()
+    );
 }

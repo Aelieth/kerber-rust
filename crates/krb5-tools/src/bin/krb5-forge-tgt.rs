@@ -1,13 +1,3 @@
-//! Gate-only: reseal a FILE-ccache TGT with empty transited and a forged ticket.realm.
-//!
-//! Usage:
-//!   krb5-forge-tgt --ccache IN --out OUT --claim-realm REALM --tgt krbtgt/C.TEST --key-hex HEX
-//!   krb5-forge-tgt --ccache IN --out OUT --claim-realm REALM --tgt krbtgt/C.TEST --password PW --principal NAME
-//!   optional --reseal-key-hex / --reseal-password + --reseal-principal to encrypt with a different key
-//!   optional `--decrypt-keytab <kt>` auto-selects the key matching the ticket's own etype+kvno
-//!   optional --authtime \<+secs|epoch\> / --drop-starttime rewrite the ticket times (acceptor NYV tests)
-//!   optional `--set-kvno <n>` relabels the ticket's cleartext kvno (acceptor key-pinning tests)
-
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -16,9 +6,10 @@ use std::process::ExitCode;
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, string_to_key};
-use krb5_kdc::s2k_params;
 use krb5_protocol::{FileCcache, Keytab, parse_principal};
-use krb5_types::{EncTicketPart, KerberosTime, OctetString, Ticket, TransitedEncoding, ku};
+use krb5_types::{
+    EncTicketPart, KerberosTime, OctetString, Ticket, TransitedEncoding, flag_bit, ku,
+};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -39,6 +30,8 @@ fn main() -> ExitCode {
     let mut drop_starttime = false;
     let mut set_kvno: Option<u32> = None;
     let mut decrypt_keytab: Option<String> = None;
+    let mut transited: Option<String> = None;
+    let mut clear_checked = false;
     let mut i = 0usize;
     while i < args.len() {
         match args[i].as_str() {
@@ -110,12 +103,21 @@ fn main() -> ExitCode {
                 decrypt_keytab = args.get(i + 1).cloned();
                 i += 2;
             }
+            "--transited" => {
+                transited = args.get(i + 1).cloned();
+                i += 2;
+            }
+            "--clear-transit-checked" => {
+                clear_checked = true;
+                i += 1;
+            }
             _ => {
                 eprintln!(
                     "usage: krb5-forge-tgt --ccache <in> --out <out> --tgt <krbtgt/REALM> \
                      (--claim-realm <realm> [--keep-cipher | --key-hex <hex> | --password <pw> --principal <name@REALM> | --decrypt-keytab <kt>] \
                      [--reseal-key-hex <hex> | --reseal-password <pw> --reseal-principal <name@REALM>] \
                      [--authtime <+secs|epoch>] [--drop-starttime] [--set-kvno <n>] \
+                     [--transited <list>] [--clear-transit-checked] \
                      | --alias-as <krbtgt/REALM@REALM>)"
                 );
                 return ExitCode::from(2);
@@ -136,9 +138,7 @@ fn main() -> ExitCode {
     if keep_cipher {
         return claim_realm_keep_cipher(&cc_path, &out_path, &tgt_sname, &claim_realm);
     }
-    // `--decrypt-keytab` picks the key matching the ticket's own etype+kvno, so
-    // callers do not have to know which enctype/kvno the KDC sealed a service
-    // ticket under (a keytab can hold several).
+    // `--decrypt-keytab` uses the ticket's etype and kvno, so the caller names no enctype.
     let keytab_keys: Option<Vec<(i32, u32, ProtocolKey)>> = match decrypt_keytab {
         None => None,
         Some(ref path) => match Keytab::parse(&fs::read(path).unwrap_or_default()) {
@@ -271,8 +271,7 @@ fn main() -> ExitCode {
             Ok(t) => t,
             Err(_) => continue,
         };
-        // Ticket enc etype is first_current_key (profile order). --key-hex
-        // bytes from dump-keytab must be wrapped as that etype, not always 18.
+        // Ticket etype is first_current_key (profile order).
         let key = if let Some(ref keys) = keytab_keys {
             // Match the ticket's own etype, and its kvno when it carries one
             // (else the highest kvno for that etype).
@@ -309,6 +308,14 @@ fn main() -> ExitCode {
             continue;
         };
         part.transited = TransitedEncoding::empty();
+        if let Some(list) = &transited {
+            part.transited.contents = OctetString::from(list.as_bytes().to_vec());
+        }
+        if clear_checked {
+            part.flags = part
+                .flags
+                .with_bit(flag_bit::TRANSITED_POLICY_CHECKED, false);
+        }
         part.authorization_data = None;
         if let Some(ref r) = claim_crealm_ks {
             part.crealm = r.clone();
@@ -483,8 +490,7 @@ fn key_from_password(password: &str, principal: &str) -> Result<ProtocolKey, Str
     let (name, realm) = parse_principal(principal)?;
     let salt = name.default_salt(&realm);
     let etype = EncryptionType::Aes256CtsHmacSha196;
-    let params = s2k_params(etype);
-    string_to_key(etype, password.as_bytes(), &salt, Some(&params)).map_err(|e| e.to_string())
+    string_to_key(etype, password.as_bytes(), &salt, None).map_err(|e| e.to_string())
 }
 
 fn parse_hex_key(hex: &str) -> Result<ProtocolKey, String> {

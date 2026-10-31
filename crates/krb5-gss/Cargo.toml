@@ -37,7 +37,19 @@ krb5-testkit.workspace = true
 [features]
 # The gates' hook (the delegated credential's copy in `GSS_DELEG_CCACHE`) and the two test
 # programs; off by default. krb5-admin's test-hooks turns it on.
-test-hooks = ["dep:tracing-subscriber"]
+test-hooks = ["dep:tracing-subscriber", "krb5-kdc/test-hooks", "krb5-testkit/test-hooks"]
 
 [lints]
 workspace = true
+
+[[test]]
+name = "accept_checksum"
+required-features = ["test-hooks"]
+
+[[test]]
+name = "context_flow"
+required-features = ["test-hooks"]
+
+[[test]]
+name = "unwrap_v3"
+required-features = ["test-hooks"]

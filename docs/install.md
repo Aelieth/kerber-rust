@@ -12,17 +12,18 @@ The realm's names are set once, at the start of [A realm](#a-realm).
 | Path (with `PREFIX=/usr`) | Mode | What |
 | --- | --- | --- |
 | `/usr/sbin/krb5kdc`, `kadmind`, `kadmin.local`, `kdb5_util`, `kprop`, `kpropd` | 0755 | The KDC-side programs under MIT's names, as real files, so a daemon's `/proc/<pid>/comm` is `krb5kdc` or `kadmind` |
-| `/usr/lib/systemd/system/krb5kdc.service`, `kadmin.service` | 0644 | Fedora's units, with `ExecStart` naming the installed programs |
+| `/usr/lib/systemd/system/krb5kdc.service`, `kadmin.service`, `kprop.service` | 0644 | Fedora's units with `ExecStart` naming the installed programs; `kprop.service` (the replica propagator) is `Type=simple`, its one change, since `kpropd` does not detach ([Replica KDCs](#replica-kdcs)) |
 | `/usr/lib/tmpfiles.d/krb5-krb5kdc.conf` | 0644 | `/run/krb5kdc`, made at boot |
 | `/usr/share/kerber-rust/install-manifest` | 0644 | The files above and the `make install-clients` tools, each with its SHA-256: what `make uninstall` may remove |
-| `/etc/sysconfig/krb5kdc`, `kadmin` | 0644 | `KRB5KDC_ARGS=`, `KADMIND_ARGS=` (config) |
+| `/etc/sysconfig/krb5kdc`, `kadmin`, `kprop` | 0644 | `KRB5KDC_ARGS=`, `KADMIND_ARGS=`, `KPROPD_ARGS=` (config) |
 | `/etc/logrotate.d/krb5kdc`, `kadmind` | 0644 | `/var/log/krb5kdc.log` and `/var/log/kadmind.log`: rotated monthly, twelve kept, then `systemctl reload` (config) |
+| `/var/log/krb5kdc.log`, `kadmind.log` | 0640 | Made empty only when missing, and labelled (`krb5kdc_log_t`, `kadmind_log_t`) either way; not in the manifest, so `make uninstall` leaves them |
 | `/var/kerberos/krb5kdc/` | 0755 | The KDC directory, made only when it is missing |
 | `/var/kerberos/krb5kdc/kdc.conf`, `kadm5.acl` | 0600 | Fedora's shipped files, for the realm `EXAMPLE.COM` (config) |
 
 The files come from `dist/` in the source tree; the units and `kdc.conf` are Fedora's with the
-paths filled in. Fedora's third unit, `kprop.service`, is not installed (see
-[Not supported](#not-supported)). The rules are the package's:
+paths filled in. Fedora's third unit, `kprop.service`, is installed too, as `Type=simple` for its
+non-forking `kpropd` (see [Replica KDCs](#replica-kdcs)). The rules are the package's:
 
 - A config file is installed only when nothing is at its path, as dnf's `noreplace` does. An
   edited file survives every reinstall, and `make uninstall` never removes one.
@@ -35,10 +36,10 @@ paths filled in. Fedora's third unit, `kprop.service`, is not installed (see
   and never installs the test tools (`krb5-tools`, the `krb5-gss` programs, `krb5-iprop-pull`),
   which only a build with the test-hooks features builds.
 - On the live system it then does what the package's scriptlets do: `systemd-tmpfiles --create`,
-  `restorecon` on each file it wrote when SELinux is enabled, and `systemctl daemon-reload`. It
-  does not restart a running daemon; it says when one still runs the old programs. With
-  `DESTDIR` set to a staging tree it does none of these and checks no package; a `DESTDIR` that
-  resolves to `/` is the live system.
+  `restorecon` on each file it wrote and on both logs when SELinux is enabled, and
+  `systemctl daemon-reload`. It does not restart a running daemon; it says when one still runs
+  the old programs. With `DESTDIR` set to a staging tree it does none of these and checks no
+  package; a `DESTDIR` that resolves to `/` is the live system.
 
 `make install-clients` installs the client tools `kinit`, `klist`, `kdestroy`, `kswitch`,
 `kvno`, `kpasswd` and `ktutil` into `BINDIR`, for hosts without MIT's `krb5-workstation`. It is
@@ -52,14 +53,10 @@ checks run on them as on MIT's. They are **not yet a drop-in** for MIT's in thes
   mapping; MIT's asks for S4U2Self by the user's certificate.
 - `klist` prints dates as the C locale does, where MIT's follow the locale, and an error not yet
   compared with MIT's tools may read differently from MIT's text.
-- `[libdefaults] request_timeout` is only checked (a malformed one stops a program, as MIT's
-  context does); its value is ignored.
 - `ktutil` `rkt` takes a filesystem path, where MIT's takes a keytab name; `addent` rejects `-s`
   and `-f`, and refuses a `-key` whose length is not the enctype's; a `!` line is passed over.
 - `kinit -k` with no principal asks for `host/<host name>` in the default realm, where MIT's asks
   for the host's canonical name.
-- `kinit` sends an expired password's change to the KDC's host on port 464, where MIT's sends it
-  to `kpasswd_server`, else `admin_server`; `kpasswd` ignores a port given in `kpasswd_server`.
 - With no enctypes in `krb5.conf` the default list is the four AES types; MIT's also has DES3, RC4
   and Camellia, so the two agree only where `krb5.conf` or Fedora's crypto-policies sets the list.
 - Of `kinit -X`'s attributes only `X509_user_identity` and `X509_anchors` act (one anchors file);
@@ -100,10 +97,14 @@ them. Run it as yourself.
 `sudo make install` installs that build and never compiles (sudo would not find your toolchain),
 and no install goal compiles as root: it stops if the build is missing or the sources are newer.
 Build on the distribution you install on: the programs link against its C library.
+`.cargo/config.toml` also sets `--cfg p384_backend="fiat"`, the constant-time field of the
+`p384` crate. A `RUSTFLAGS` of your own replaces the file's flags, so carry that one too:
+without it the build has no P-384 (keys, certificates and the key-exchange group are refused),
+and `krb5kdc` logs so at start.
 
 ## Install
 
-Replace krb5-server (the usual case), or install beside it.
+In the checkout built as in [Build](#build), replace krb5-server (the usual case), or install beside it.
 
 ### Replacing krb5-server
 
@@ -226,12 +227,17 @@ REQUESTER_SID). A presented PAC that carries LOGON_INFO, such as an AD user's ov
 that shape in any realm.
 
 The KDC's TCP listeners default to a `listen` backlog of 128. MIT's default is 5; set
-`kdc_tcp_listen_backlog = 5` under `[kdcdefaults]` for that behaviour. The KDC accepts no
-connection while it rereads the database after a write, so in a burst of 50 a kinit can wait
-about 1.2 seconds for its connection to be retried: with backlog 5, 24, 178 and 428 of 500
-did at 10, 1,000 and 5,000 principals. At backlog 5, idle bursts wait too, as on
-MIT's KDC: 19, 46 and 67 of 500 at 10, 1,000 and 5,000 principals. With 128, none
-waited a second, on MIT's KDC or on kerber-rust.
+`kdc_tcp_listen_backlog = 5` under `[kdcdefaults]` for that behaviour. After a write the
+accept stall is 0.271, 0.265 and 0.319 ms. At backlog 5,
+idle bursts wait, as on MIT's KDC: 19, 46 and 67 of 500 at 10, 1,000 and 5,000 principals.
+With 128, none waited a second, on MIT's KDC or on kerber-rust.
+
+The KDC and kadmind read `kdc.conf` and `krb5.conf` once, when they start, so an edit takes a
+restart (SIGHUP reopens the logs only). As MIT's, `kdc.conf`'s `[libdefaults]` values come
+before `krb5.conf`'s, its `include` and `includedir` lines are followed, and section and relation
+names match only as written. `clockskew` there is both the KDC's and kpasswd's allowance for a
+client's clock (300 seconds by default). A relation MIT reads that kerber-rust does not, such as
+`master_key_name`, is named in the log when the daemon starts.
 
 `[plugins] kdcpreauth` `disable` and `enable_only` select the KDC's preauth
 modules by MIT's names (`encrypted_timestamp`, `encrypted_challenge`, `spake`,
@@ -250,8 +256,9 @@ That address is the peer the KDC accepted, not the addresses the client put
 in the request.
 
 `[plugins] audit` `disable` and `enable_only` select named audit modules
-the same way. The built-in module is `json`. Every loaded module records
-the request. `disable = json` leaves no plugin record. The same relations
+the same way. `json` loads only when `enable_only` names it. Every loaded
+module records the request. With nothing named there is no plugin record.
+The same relations
 in krb5.conf apply after this file. `module` is not read.
 
 `[plugins] pwqual` `disable` and `enable_only` select the password-quality
@@ -297,7 +304,9 @@ its update log `principal.ulog` (MIT's), MIT's lock files `principal.ok` and `pr
 tools and daemons lock the database through them, as MIT's do), `principal.lockout` (0600: each
 principal's failed password attempts and last successful and failed authentication, which the
 KDC records there in place, as MIT's KDC records them in its database), the stash, `kdc.conf`
-and `kadm5.acl`. Fedora builds MIT's tools with a patch that sets each new file's SELinux label from
+and `kadm5.acl`. A principal change is appended to the database file and flushed before the
+change returns. The file is rewritten whole once the replaced records outnumber the principals,
+256 at least. A change a crash cuts short is not read. Fedora builds MIT's tools with a patch that sets each new file's SELinux label from
 the policy, and kerber-rust's tools do the same (MIT's `krb5kdc_principal_t` for the database);
 a save keeps the label of the file it replaces. `restorecon` changes nothing the tools made: it
 is there for the directory, for files made by hand, and for a realm an earlier release saved
@@ -370,7 +379,7 @@ the module loaded and fails that one mechanism; the others still run.
 
 ### OTP preauth
 
-A user can present a one-time code in place of a password: MIT `kinit -T <armor ccache>` asks for it. MIT's KDC asks a RADIUS server whether the code is good. kerber-rust does not: an embedder registers an `OtpVerifier` ([plugins.md](plugins.md), [the KLLDAP embed](embed/klldap.md)), and `krb5kdc` itself has none, so it refuses every code. Give `otp` to a principal only on a KDC that has a verifier: `kinit` offers the code whenever the KDC does, and does not fall back to the password.
+A user can present a one-time code in place of a password: MIT `kinit -T <armor ccache>` asks for it. MIT's KDC asks a RADIUS server whether the code is good. kerber-rust does not: an embedder registers an `OtpVerifier` ([plugins.md](plugins.md), [the KLLDAP embed](embed/klldap.md)), and `krb5kdc` itself has none, so it refuses every code. Give `otp` to a principal only on a KDC that has a verifier: `kinit` offers the code whenever the KDC does, and does not fall back to the password. The exchange verifies the code, not a password: MIT's RADIUS server, like an `OtpVerifier`, is handed the token value alone, so a principal that also keeps a key is not asked for it here. An embedder that wants both checks a `password‖code` value itself, as `examples/embed-realm` does.
 
 The principal needs `+requires_preauth` (Fedora's `default_principal_flags = +preauth` gives new ones the flag) and an `otp` string attribute, a JSON array of tokens that names a verifier and holds no secret. MIT `kadmin` strips quotes from a word, so the JSON's quotes are doubled inside one double-quoted word:
 
@@ -411,6 +420,107 @@ sudo kadmin.local -q "setstr host/files.$DOMAIN require_auth mfa"
 
 A ticket-granting ticket from a password login then cannot get a ticket for that service (`KDC policy rejects request`), nor can one if the OTP module is left out. On `krbtgt` the rule applies to every login, and the host-keytab login that fetches the armor ticket has no indicator either, so set it there only when the armor comes another way. A principal made keyless (`addprinc -nokey`) has no password to fall back on, and its verifier has to check any password itself. For some users only, an embedder's `KdcPolicy` checks the indicators in `check_as`.
 
+### PKINIT
+
+A user can log in with a certificate instead of a password: MIT `kinit -X
+X509_user_identity=FILE:alice.pem,alice.key alice`. The KDC uses your PKI, configured in kdc.conf as
+MIT's (`doc/admin/pkinit.rst`):
+
+```ini
+[kdcdefaults]
+    pkinit_identity = FILE:/var/kerberos/krb5kdc/kdc.pem,/var/kerberos/krb5kdc/kdc.key
+    pkinit_anchors = FILE:/var/kerberos/krb5kdc/cacert.pem
+```
+
+- **Keys.** The KDC's key, and a user's for kinit, is an EC key on P-224, P-256, P-384, P-521,
+  secp256k1 or brainpool P256, P384 or P512 (r1 or t1; P512 needs a 64-bit build), or an RSA key,
+  as MIT's guide makes it with `openssl genrsa`; RSA signs up to 16384 bits and five primes, as
+  OpenSSL does. Another key, such as one on brainpool P320, leaves PKINIT off. Client certificates
+  and their CAs may be RSA or EC on those curves, signed with SHA-256, SHA-384 or SHA-512.
+- Not supported in a client's certificate, its CAs or its signature, though MIT takes them through
+  OpenSSL: RSASSA-PSS. Such a chain is refused with 71 (`certificate signature failure`), such a
+  signature with 80. SHA-1 signatures are refused too, as Fedora's
+  DEFAULT crypto policy makes OpenSSL refuse them for MIT.
+- `pkinit_identity` is `FILE:cert[,key]`, `DIR:` (one `NAME.crt` with its `NAME.key`) or `ENV:`;
+  `pkinit_anchors` and `pkinit_pool` (the intermediate CAs) are `FILE:` or `DIR:`. A relation under
+  `[realms] REALM` wins over `[kdcdefaults]`.
+- The KDC certificate has the `id-pkinit-KPKdc` extended key usage and the PKINIT SAN
+  `krbtgt/REALM@REALM`, and chains to `pkinit_anchors`. A client certificate's PKINIT SAN names the
+  user, and it has the `id-pkinit-KPClientAuth` extended key usage and the digitalSignature key
+  usage: `pkinit_eku_checking = scLogin` also takes Microsoft's smart-card logon usage, and `none`
+  checks neither.
+- `pkinit_require_freshness`, `pkinit_indicator` and `pkinit_allow_upn` work as MIT's.
+  `pkinit_revoke`, `pkinit_require_crl_checking` and `pkinit_kdc_ocsp` are refused.
+- A principal's `pkinit_cert_match` string attribute (`kadmin setstr`) is a rule its certificate must
+  match, as MIT's, else the login is refused (66). A regular expression with a back-reference
+  (`\1` to `\9`) is refused (24).
+- If the identity or the anchors do not load, the KDC starts without PKINIT and logs MIT's line, for
+  example `preauth pkinit failed to initialize: PKINIT initialization failed: No pkinit_identity
+  supplied for realm EXAMPLE.COM`.
+
+A client needs the CA as `pkinit_anchors` in the realm's `krb5.conf` stanza. kerber-rust's kinit
+takes `FILE:`, `DIR:` and `ENV:` identities (`X509_user_identity`, else `pkinit_identities` in
+order) and picks the certificate by `pkinit_cert_match`, as MIT's does; its keys are P-256 EC or
+RSA, and only the first anchor is used. Anonymous PKINIT
+(`kinit -n`) uses the same KDC identity.
+
+### Replica KDCs
+
+A replica runs `krb5kdc` from a read-only copy of the realm that the primary pushes to it with
+`kprop` (a full dump) and, with `iprop_enable`, keeps current incrementally. kerber-rust installs
+`kprop.service` for this: Fedora's own unit, but `Type=simple`, since `kpropd` never detaches where
+MIT's forks. It starts only where its `AssertPathExists` on the KDC directory's `kpropd.acl` marks
+the host a replica.
+
+On the **replica**, with the realm's `krb5.conf` and `kdc.conf` in place and the KDC directory made
+(as under [The database](#the-database)) but no database yet:
+
+```sh
+sudo kadmin -p admin/admin -q "ktadd host/replica.example.com"   # this host's key, default keytab
+printf 'host/primary.example.com@EXAMPLE.COM\n' | sudo tee /var/kerberos/krb5kdc/kpropd.acl
+sudo systemctl enable --now kprop                                # listens on TCP 754
+```
+
+On the **primary**, the first (full) sync; then start `krb5kdc` on the replica:
+
+```sh
+sudo kdb5_util dump /var/kerberos/krb5kdc/replica_datatrans
+sudo kprop -f /var/kerberos/krb5kdc/replica_datatrans replica.example.com
+```
+
+`kprop` sends the dump as `host/primary.example.com` (its ticket from a KDC, the key in `-s`, else
+the default keytab) to the replica's port 754 and writes `<file>.replica.example.com.last_prop`;
+`kpropd` accepts the connection only from a principal its `kpropd.acl` names, writes the dump to
+`from_master` and loads it with `kdb5_util load` (`-i` as an iprop replica), as MIT's does. It runs
+the `kdb5_util` beside it, and `-p` names another; MIT's default is fixed at build.
+
+For **incremental propagation**, set `iprop_enable = true` and `iprop_port` in each KDC's `kdc.conf`
+realm stanza and `iprop_replica_poll` on the replica, create `kiprop/replica.example.com` with the
+`p` ACL on the primary, and add its key to the replica's keytab:
+
+```sh
+sudo kadmin.local -q "addprinc -randkey kiprop/replica.example.com"                 # on the primary
+printf 'kiprop/replica.example.com@EXAMPLE.COM  p\n' | sudo tee -a /var/kerberos/krb5kdc/kadm5.acl
+sudo kadmin -p admin/admin -q "ktadd kiprop/replica.example.com"                    # on the replica
+```
+
+`kadmind` serves iprop on `iprop_port` (with it equal to the kadm5 port, iprop is not served, as
+MIT's is not); `kpropd` polls it as `kiprop/replica.example.com` every `iprop_replica_poll`, and
+`kadmind` sends a full dump itself once the log has run past the replica, so there is no
+`kdb5_util dump`/`kprop` by hand after the first sync (the update log is covered under
+[Upgrading kerber-rust](#upgrading-kerber-rust)). Under SELinux a confined `kadmind` binds
+`iprop_port = 754` (`kprop_port_t`); for any other port, label it first with
+`sudo semanage port -a -t kprop_port_t -p tcp <port>`.
+
+`kpropd` takes MIT's `-r`, `-s` (else the default keytab), `-a` (else `kpropd.acl` in the KDC
+directory), `-P` (else 754, on every address), `-A` (the primary, else `admin_server`), `-t`, `-d`,
+`-D` and `-S` (`-D` and `-S` are no-ops: it never detaches and is always standalone), `-f` (else
+`from_master` in the KDC directory), `-F` (`kdb5_util load -d`) and `-p` (else the `kdb5_util`
+beside `kpropd`); not MIT's `-x` or `--pid-file`. It accepts a ticket for its own
+`host/<this host>` only, the name formed **without DNS** (a short name gains `qualify_shortname`,
+else the resolver's first search domain, lowercased): MIT's DNS canonicalization is not ported,
+so the keytab entry and `kprop`'s target must be that name.
+
 ## Upgrading an MIT realm
 
 kerber-rust does not read MIT's db2 database. A realm moves over the way MIT moves one between
@@ -440,7 +550,7 @@ rest. Put the saved ones back before installing:
 
 ```sh
 for f in /var/kerberos/krb5kdc/kdc.conf /var/kerberos/krb5kdc/kadm5.acl /etc/sysconfig/krb5kdc \
-         /etc/sysconfig/kadmin /etc/logrotate.d/krb5kdc /etc/logrotate.d/kadmind; do
+         /etc/sysconfig/kadmin /etc/sysconfig/kprop /etc/logrotate.d/krb5kdc /etc/logrotate.d/kadmind; do
     if [ -e $f.rpmsave ]; then sudo mv $f.rpmsave $f; fi
 done
 sudo make install PREFIX=/usr
@@ -545,8 +655,8 @@ docker run --rm --network none --entrypoint /usr/sbin/kadmin.local -v "$VOLUME:/
 - Give the one-off containers the volume options the container uses (`:Z` under SELinux with
   podman, for one). podman takes the same commands.
 - To go back, run the same steps the other way, as in [Going back to MIT](#going-back-to-mit):
-  dump with the new image, move `principal`, `principal.ulog` and `principal.lockout` aside,
-  load with the old one, and give the directory back to `OWNER`.
+  dump with the new image, move `principal` and `principal.lockout` aside (and `principal.ulog`
+  too, if iprop was enabled), load with the old one, and give the directory back to `OWNER`.
 
 Once the realm has served from the new image, remove the dump and MIT's database from the
 volume, as on a host:
@@ -566,7 +676,8 @@ sudo kdb5_util dump /var/kerberos/krb5kdc/kerber-realm.dump
 sudo make uninstall PREFIX=/usr
 sudo dnf install -y krb5-server
 sudo mkdir /var/kerberos/krb5kdc/kerber-db
-sudo mv /var/kerberos/krb5kdc/principal /var/kerberos/krb5kdc/principal.ulog /var/kerberos/krb5kdc/principal.lockout /var/kerberos/krb5kdc/kerber-db/
+sudo mv /var/kerberos/krb5kdc/principal /var/kerberos/krb5kdc/principal.lockout /var/kerberos/krb5kdc/kerber-db/
+if sudo test -e /var/kerberos/krb5kdc/principal.ulog; then sudo mv /var/kerberos/krb5kdc/principal.ulog /var/kerberos/krb5kdc/kerber-db/; fi
 sudo kdb5_util load /var/kerberos/krb5kdc/kerber-realm.dump
 sudo restorecon -Rv /var/kerberos/krb5kdc
 sudo systemctl enable --now krb5kdc kadmin
@@ -578,8 +689,13 @@ In the checkout: fetch the new release (`git pull`, or `git checkout <tag>` for 
 and run `make build` as in [Build](#build). `make install` replaces the programs and units an
 earlier install wrote and keeps every config file; give it the `PREFIX` you installed with
 (`/usr` when kerber-rust replaced krb5-server, `/usr/local` beside it). For a realm an earlier
-release made, five things changed:
+release made, six things changed:
 
+- Each principal change is now appended to the database, and a 1.1 `krb5kdc`, `kadmind`,
+  `kadmin.local` or `kdb5_util` cannot read a database that holds one: a 1.1 `krb5kdc` left
+  running fails every principal once this release's programs change the realm. Stop both
+  daemons before `make install` and start both after it, as below, and run no 1.1 program
+  against the realm again.
 - Release builds find the database, the stash and the ACL only where `kdc.conf` names them
   (`database_name`, `key_stash_file` and `acl_file` in the realm's stanza), else in
   `/var/kerberos/krb5kdc`; `KRB5_KDC_DB` and `KRB5_KDC_STASH` no longer count. Move a realm kept
@@ -597,18 +713,20 @@ release made, five things changed:
   texts (`kadmin.local: No such file or directory while initializing kadmin.local interface`).
   Make them once, owned as the database is and labelled, while the daemons are stopped.
 - The KDC records lockout counts and last logins in `<database_name>.lockout`, which
-  `kdb5_util create` and `load` make; the KDC may not create files in its directory. Without it
-  the KDC keeps them in memory, loses them on a restart and says so once in its log. Make it
-  once, empty, owned as the database is and labelled, as the lock files below: the KDC fills it,
-  and nothing else changes.
+  `kdb5_util create` and `load` make; the KDC makes it when it can open the database read-write,
+  and Fedora's policy does not let it create files in its directory. Without the file lockout
+  counting is off, and the KDC says so once in its log. Make it once, empty, owned as the
+  database is and labelled, as the lock files below: the KDC fills it, and nothing else changes.
 - The update log is MIT's: kept only with `iprop_enable` (which, as MIT's, needs `iprop_port`),
   one entry appended per change. Without iprop an earlier release's `principal.ulog` is no
   longer read or written and may be removed; with iprop the first program that maps it starts
   it over, so each replica takes one full dump (`kdb5_util dump -i1 FILE`, then
-  `kprop -f FILE REPLICA`, what MIT's kadmind runs). kadmind serves iprop on its own port and
-  nothing listens on `iprop_port`, so an MIT replica's `iprop_port` names kadmind's port. kadmind
-  grants a full resync but sends no dump: each one (after a policy change, or a replica the log
-  has run past) needs those two commands run by hand.
+  `kprop -f FILE REPLICA`, what MIT's kadmind runs). kadmind serves iprop on `iprop_listen` /
+  `iprop_port`, and on its kadm5 port too, as MIT's does; with `iprop_port` equal to kadmind's
+  port, iprop is not served at all, as MIT's is not. kadmind
+  dumps and sends on a full resync itself, as MIT's does: a policy change (which restarts the
+  log) or a replica the log has run past is served without those commands run by hand. Its kprop
+  authenticates as `host/<this host>` from the default keytab (`KRB5_KTNAME`), as MIT's does.
 
 Stop the daemons and install, and move the realm into the KDC directory only if it was kept
 elsewhere (leave `OLD` empty when it is already in `/var/kerberos/krb5kdc`):
@@ -677,29 +795,23 @@ update log and lock files, the stash, `kdc.conf` and `kadm5.acl`.
 
 - MIT's database files (db2, LMDB) and the LDAP backend. The database is MIT's dump format, so an
   MIT realm moves over with dump and load.
-- Replica KDCs: Fedora's `kprop.service` and MIT's `kpropd` daemon. `kprop` and `kpropd` are
-  installed; `kpropd` opens the dump with the stash. `kpropd` takes MIT's `-r`, `-s` (else the
-  default keytab) and `-a` (else `kpropd.acl` in the KDC directory) and an address (without one
-  it listens on port 754 of every address, as MIT's does), not MIT's other options (`-f`, `-P`,
-  `--pid-file`, `-D`), and it does not detach. As MIT's, it accepts a ticket for its own
-  `host/<this host>` only, its name as MIT makes it without DNS: a hostname without a dot gains
-  `qualify_shortname`, else the resolver's first search domain, and is lowercased. MIT's DNS
-  canonicalization (`dns_canonicalize_hostname = true`, its default, and the second step of
-  `fallback`) is not ported, so the replica's keytab entry and `kprop`'s target must be that name.
-  `kprop` is MIT's (`kprop [-r realm] [-f file] [-d] [-P port] [-s keytab] replica_host`): it
-  never opens the database but sends the file `kdb5_util dump` wrote (`-f`, else
-  `replica_datatrans` in the KDC directory) as `host/<this host>`, its ticket from a KDC with the
-  key in `-s` (else the default keytab), to `-P`'s port (else `krb5_prop` in `/etc/services`),
-  then writes `FILE.REPLICA.last_prop`. The replica's `kpropd.acl` names that principal. So
-  `make install` installs no `kprop.service`.
+- MIT's DNS canonicalization for a replica's name (`dns_canonicalize_hostname = true`, its default,
+  and the second step of `fallback`): a replica's `host/` name is formed without DNS ([Replica
+  KDCs](#replica-kdcs)).
 - SPAKE groups P-384 and P-521 (MIT's OpenSSL groups). `edwards25519`, the group Fedora's
   `krb5.conf` names and its `kdc.conf` challenges with, and P-256 work as MIT's.
-- RADIUS-backed OTP preauthentication (OTP works through an embedder's verifier: [OTP preauth](#otp-preauth)), PKINIT configured in `kdc.conf`, master key rollover
+- RADIUS-backed OTP preauthentication (OTP works through an embedder's verifier: [OTP preauth](#otp-preauth)), PKINIT
+  with RSA keys, `PKCS11:` or `PKCS12:` identities, or revocation lists ([PKINIT](#pkinit)), master key rollover
   (`kdb5_util add_mkey` and the other `*_mkey` commands), `kproplog`, `sclient` / `sserver`, and
   plugin modules (plugins are Rust traits: [plugins.md](plugins.md)).
 - `KEYRING:` credential caches in the tools `make install-clients` installs. `KCM:` (Fedora's
   default), `DIR:` and `FILE:` work, with their collections; the tools' other gaps are listed
   above.
+- One realm per KDC process. A second `-r` stops `krb5kdc` with `Only one realm per KDC process is supported`.
+- `krb5kdc -T` other than `0` stops with `-T (a clock offset for testing) is not supported`.
+- `krb5kdc -w N` is accepted and does nothing: one loop on the main thread serves every request.
+- `kpropd -x` (a database argument for `kdb5_util load`) and `--pid-file`.
+- `kadmind -proponly` with `iprop_enable` unset stops with `-proponly can only be used when iprop_enable is true`.
 
 ## Make variables
 

@@ -18,10 +18,7 @@ client (`kinit`), GSS-API, and the admin/propagation daemons (`kadmind`,
 `kpasswd`, `kprop`/`kpropd`, iprop). Every feature is proven against a
 **real** external implementation — never a Rust-only round-trip.
 
-**The one rule:** a feature is *done* only when a content-asserting gate
-drives a real external implementation (MIT primary; then Samba / Heimdal).
-A Rust-vs-Rust round-trip is never proof, and production structured logs
-plus packet captures outrank unit tests.
+**The one rule:** a feature is *done* only when it works in production against MIT 1.22.2 on the lab VMs, MIT first, and against the real AD where it reaches it; a Rust-vs-Rust round-trip is never proof.
 
 ## Status
 
@@ -30,9 +27,12 @@ plus packet captures outrank unit tests.
 | **v1.0.0** | Tagged interop milestone: the MIT 1.22.2 / Heimdal / Active Directory core, proven by content-asserting external gates in CI. `publish = false` (not on crates.io). |
 | **v1.1.0** | **General-purpose MIT completeness**: the KDC behaves like MIT across the board and the client tools stand alone. It installs and runs like MIT's `krb5-server` on Fedora ([docs/install.md](docs/install.md): MIT-named commands, systemd units, the upgrade from an MIT realm), and real consumers use it in the field beside the same scenario on MIT 1.22.2: SSSD login, renewal and `passwd`, sshd GSSAPI, NFS 4.2 `krb5i` / `krb5p`, Keycloak SPNEGO, an Active Directory trust, and KLLDAP with `krb5-server` swapped out ([interop matrix](docs/interop-matrix.md#field-consumers); repeatable through [harness/field](harness/field/README.md)). The nine 1.1 phases and the MIT 1.22.2 parity sweep have landed ([docs/stages.md](docs/stages.md)); the swept MIT functions are graded one row per check in the [parity ledger](docs/parity/README.md). `publish = false` (not on crates.io). |
 
-Every push runs 59 gates in `ci.yml`: 56 fail-red and 3 soft (`continue-on-error`).
-Nine more run only nightly (the eight Samba / AD / Heimdal peers and the KCM opcode
-pin); soak also runs longer nightly. [docs/gates.md](docs/gates.md) has one row per gate.
+Every push runs the six jobs in `ci.yml`: `test`, `doc`, `shellcheck`,
+`msrv`, `audit`, and `mit-smoke`. `mit-smoke` runs `client-gate`,
+`kdc-gate`, and `differential-gate`. Nightly runs `moving`, `oracles`,
+`fuzz`, and `anchors`; `peers.yml` runs the Samba AD gates. The jobs
+are in [docs/testing.md](docs/testing.md); [docs/gates.md](docs/gates.md)
+has one row per gate.
 
 ## Architecture
 
@@ -44,6 +44,7 @@ Focused crates under `crates/`:
 | `krb5-cli` | MIT-style command lines (getopt, `kdb5_util` / `kadmind` option tables) and password prompts |
 | `krb5-crypto` | RFC 3961/3962/8009 etypes 17–20 (plus legacy behind `allow_weak_crypto`) |
 | `krb5-types` | RFC 4120 owned protocol values |
+| `krb5-brainpool` | brainpoolP512, r1 and t1, on a fiat field |
 | `krb5-asn1` | DER encode/decode of those values |
 | `krb5-config` | `krb5.conf` / `kdc.conf`, env, DNS SRV |
 | `krb5-protocol` | AS/TGS/AP/SAFE/PRIV/CRED, keytab, FILE ccache |
@@ -65,12 +66,13 @@ names each gate's job and lane (the `kadmin-gate` / `kpasswd-gate` wrappers stan
 
 | External oracle | Proves | Gates (examples) |
 | --- | --- | --- |
-| **MIT Kerberos 1.22.2** *(primary)* | AS/TGS · GSS wrap/unwrap (RFC 4121; wrap sends RRC=0, as MIT) · S4U2Self / S4U2Proxy / RBCD · PKINIT · SPAKE (`pa_type` 151, groups 1 and 2) · RFC 8009 SHA-2 · cross-realm · kadmin (add/get/list/mod/chrand/rename/del) · kpasswd (464) · kprop **both directions** · iprop · dump/load (v7) · byte-for-byte differential · stress / chaos / soak | `client-gate`, `kdc-gate`, `gss-gate`, `s4u-mit-gate`, `pkinit-gate`, `rust-kinit-pkinit-gate`, `rust-kinit-enterprise-gate`, `spake-gate`, `sha2-gate`, `cross-realm-gate`, `kadmin-gate`, `kpasswd-gate`, `kprop-gate`, `kprop-reverse-gate`, `iprop-gate`, `kdb-dump-gate`, `differential-gate`, `store-gate`, `policy-gate`, `stress`/`chaos`/`soak-gate` |
+| **MIT Kerberos 1.22.2** *(primary)* | AS/TGS · GSS wrap/unwrap (RFC 4121; wrap sends RRC=0, as MIT) · S4U2Self / S4U2Proxy / RBCD · PKINIT · SPAKE (`pa_type` 151, groups 1 and 2) · RFC 8009 SHA-2 · cross-realm · kadmin (add/get/list/mod/chrand/rename/del) · kpasswd (464) · kprop **both directions** · iprop · dump/load (v7) · byte-for-byte differential · stress / chaos / soak | `client-gate`, `kdc-gate`, `gss-gate`, `s4u-mit-gate`, `pkinit-gate`, `rust-kinit-pkinit-gate`, `rust-kinit-enterprise-gate`, `spake-gate`, `ticket-flags`, `kadmin-gate`, `kpasswd-gate`, `kprop-gate`, `kprop-reverse-gate`, `iprop-gate`, `kdb-dump-gate`, `differential-gate`, `store-gate`, `stress`/`chaos`/`soak-gate` |
 | **Samba 4 AD DC** *(live)* | AD PAC (NDR golden) · live `AD.KERBER.TEST`↔`KERBER.TEST` trust via real `samba-tool domain trust create` | `samba-pac-verify-gate`, `samba-pac-l2-gate`, `samba-crossrealm-gate`, `samba-realtrust-gate` |
 | **Heimdal 7.8** *(live)* | Both directions (Heimdal client ↔ Rust KDC; Rust client ↔ Heimdal KDC), with AES256-SHA1 configured | `heimdal-gate` |
 
-The KDC's live at-rest file is MIT dump **version 7** (the stash holds the
-master key); `krb5-kadmind` speaks ONC RPC program 2112 with AUTH_GSSAPI
+The KDC's live at-rest file is MIT dump **version 7** text plus an append
+journal compacted on rewrite, which MIT reads through `krb5-kdb dump` (the
+stash holds the master key); `krb5-kadmind` speaks ONC RPC program 2112 with AUTH_GSSAPI
 flavor 300001. `krb5-config` is consumed end to end: the KDC applies
 `kdc.conf` ticket policy, and `kinit` / TGS referral chasing read
 `KRB5_CONFIG` then `/etc/krb5.conf`. An omitted `max_renewable_life`
@@ -79,7 +81,6 @@ leaves the realm cap at 7 d and new principals at 0, as in MIT
 
 **Honest caveats, stated plainly:**
 
-- `bidirectional-gate` is **Rust↔Rust**, not an external oracle.
 - Windows **SSPI** has no gate. Over the AD trust it accepted a user of
   the realm (SMB, LDAP) and reached Apache as a SPNEGO client, both in the
   KVM field lab ([harness/field/README.md](harness/field/README.md));
@@ -140,7 +141,7 @@ config `kdc-gate.sh` runs.
 [parity ledger](docs/parity/README.md) →
 [logging](docs/logging.md) → [interop](docs/interop-matrix.md) →
 [plugins](docs/plugins.md) → [RFC mapping](docs/rfc-mapping.md) →
-[gate-unit index](docs/gate-unit-index.md) → the labs
+the labs
 ([AD](docs/labs/ad-lab.md), [Samba](docs/labs/samba-lab.md),
 [KCM / NFS verdict](docs/labs/kcm-nfs-verdict.md)) → the
 [KLLDAP embed](docs/embed/klldap.md) →
@@ -153,7 +154,7 @@ option. See [NOTICE](NOTICE) and [docs/export-control.md](docs/export-control.md
 (cryptographic software; honest ECCN 5D002 / TSU §740.13(e) note).
 
 Supply chain, all in the CI `audit` job: `cargo audit`, `cargo deny`,
-per-crate `cargo geiger` (`scripts/geiger.sh`, 0-unsafe product), and
+per-crate `cargo geiger` (scripts/geiger.sh, 0-unsafe product), and
 `cargo vet --locked`. MSRV is **1.95** (`package.rust-version`, asserted by
 `ci-policy.py` against the `msrv` jobs), `rust-toolchain.toml` pins stable **1.99.0**
 with rustfmt and clippy, edition **2024**, matching KLLDAP (checkout 0.7.4, upstream 0.7.6); `rasn` is unpinned (`0.28`, lock 0.28.14)

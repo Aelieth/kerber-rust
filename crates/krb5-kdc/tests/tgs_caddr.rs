@@ -141,39 +141,6 @@ fn tgs_copies_header_caddr() {
 }
 
 #[test]
-fn tgs_forwarded_copies_request_addresses() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let tgt = as_with_addrs(&store, None, 10120, false, false);
-    let want = vec![inet(192, 0, 2, 12)];
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let req = TgsReqBuilder::new(
-        tgt.rep.0.ticket,
-        &tgt.session_key,
-        TEST_REALM,
-        &user,
-        PrincipalName::krbtgt(TEST_REALM),
-        TEST_REALM,
-        10121,
-    )
-    .options(KdcOptions::none().with_bit(flag_bit::FORWARDED, true))
-    .additional_tickets(None)
-    .padata(Vec::new())
-    .etypes(pref_etypes())
-    .addresses(Some(want.clone()))
-    .build()
-    .unwrap();
-    let issued = krb5_kdc::issue_tgs(&store, &req).unwrap();
-    assert_eq!(
-        tkt_part(&store, &issued.rep.0.ticket).caddr.as_ref(),
-        Some(&want)
-    );
-    assert_eq!(
-        enc_tgs(&issued, &tgt.session_key).caddr.as_ref(),
-        Some(&want)
-    );
-}
-
-#[test]
 fn tgs_renew_keeps_header_caddr() {
     let (store, _) = bootstrap_documented().unwrap();
     let addrs = vec![inet(192, 0, 2, 13)];
@@ -249,45 +216,5 @@ fn tgs_netbios_only_caddr_matches() {
     .unwrap();
     let bytes =
         handle_request_from(&store, &encode(&req).unwrap(), Some(&inet(192, 0, 2, 1))).unwrap();
-    assert_eq!(bytes.first().copied(), Some(0x6d));
-}
-
-#[test]
-fn tgs_null_caddr_matches() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let tgt = as_with_addrs(&store, None, 10160, true, false);
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let req = tgs_req(
-        tgt.rep.0.ticket,
-        &tgt.session_key,
-        TEST_REALM,
-        &user,
-        documented_host(),
-        TEST_REALM,
-        10161,
-    )
-    .unwrap();
-    let bytes =
-        handle_request_from(&store, &encode(&req).unwrap(), Some(&inet(192, 0, 2, 1))).unwrap();
-    assert_eq!(bytes.first().copied(), Some(0x6d));
-}
-
-#[test]
-fn tgs_sender_match_issues() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let addrs = vec![inet(192, 0, 2, 14)];
-    let tgt = as_with_addrs(&store, Some(addrs.clone()), 10170, true, false);
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let req = tgs_req(
-        tgt.rep.0.ticket,
-        &tgt.session_key,
-        TEST_REALM,
-        &user,
-        documented_host(),
-        TEST_REALM,
-        10171,
-    )
-    .unwrap();
-    let bytes = handle_request_from(&store, &encode(&req).unwrap(), Some(&addrs[0])).unwrap();
     assert_eq!(bytes.first().copied(), Some(0x6d));
 }

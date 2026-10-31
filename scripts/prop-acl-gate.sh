@@ -8,7 +8,7 @@ cd "$ROOT"
 . "$ROOT/scripts/lib/gate-common.sh"
 . "$ROOT/scripts/lib/kadmin-q.sh"
 . "$ROOT/scripts/lib/proc-common.sh"
-need_bins krb5-kdc krb5-kpropd krb5-kadmind
+need_bins krb5-kdc krb5-kpropd krb5-kdb krb5-kadmind
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-prop-acl-gate"
@@ -30,8 +30,9 @@ fi
 
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kpropd" "$NAME":/tmp/krb5-kpropd
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdb" "$NAME":/tmp/krb5-kdb
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kadmind" "$NAME":/tmp/krb5-kadmind
-docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kpropd /tmp/krb5-kadmind
+docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kpropd /tmp/krb5-kdb /tmp/krb5-kadmind
 
 docker exec "$NAME" sh -c 'cat >/tmp/prop-krb5.conf <<EOF
 [libdefaults]
@@ -86,7 +87,7 @@ docker exec -d \
     -e KRB5_KDC_DB=/tmp/replica \
     -e KRB5_KDC_STASH=/tmp/replica.stash \
     -e KRB5_TEST_REALM=KERBER.TEST \
-    "$NAME" sh -c '/tmp/krb5-kpropd -s /tmp/host.keytab 0.0.0.0:754 >/tmp/kpropd.log 2>&1'
+    "$NAME" sh -c '/tmp/krb5-kpropd -d -p /tmp/krb5-kdb -f /tmp/replica.from_master -s /tmp/host.keytab 0.0.0.0:754 >/tmp/kpropd.log 2>&1'
 ok=0
 for _ in $(seq 1 40); do
     if docker exec "$NAME" grep -q '^listening ' /tmp/kpropd.log 2>/dev/null; then
@@ -126,7 +127,7 @@ docker exec -d \
     -e KRB5_KDC_DB=/tmp/replica \
     -e KRB5_KDC_STASH=/tmp/replica.stash \
     -e KRB5_TEST_REALM=KERBER.TEST \
-    "$NAME" sh -c '/tmp/krb5-kpropd -s /tmp/host.keytab -a /tmp/kpropd.acl.empty 0.0.0.0:754 >/tmp/kpropd.log 2>&1'
+    "$NAME" sh -c '/tmp/krb5-kpropd -d -p /tmp/krb5-kdb -f /tmp/replica.from_master -s /tmp/host.keytab -a /tmp/kpropd.acl.empty 0.0.0.0:754 >/tmp/kpropd.log 2>&1'
 ok=0
 for _ in $(seq 1 40); do
     if docker exec "$NAME" grep -q '^listening ' /tmp/kpropd.log 2>/dev/null; then
@@ -165,7 +166,7 @@ docker exec -d \
     -e KRB5_KDC_DB=/tmp/replica \
     -e KRB5_KDC_STASH=/tmp/replica.stash \
     -e KRB5_TEST_REALM=KERBER.TEST \
-    "$NAME" sh -c '/tmp/krb5-kpropd -s /tmp/host.keytab -a /tmp/kpropd.acl 0.0.0.0:754 >/tmp/kpropd.log 2>&1'
+    "$NAME" sh -c '/tmp/krb5-kpropd -d -p /tmp/krb5-kdb -f /tmp/replica.from_master -s /tmp/host.keytab -a /tmp/kpropd.acl 0.0.0.0:754 >/tmp/kpropd.log 2>&1'
 ok=0
 for _ in $(seq 1 40); do
     if docker exec "$NAME" grep -q '^listening ' /tmp/kpropd.log 2>/dev/null; then
@@ -195,7 +196,7 @@ docker exec -d \
     -e KRB5_KDC_DB=/tmp/replica \
     -e KRB5_KDC_STASH=/tmp/replica.stash \
     -e KRB5_TEST_REALM=KERBER.TEST \
-    "$NAME" sh -c '/tmp/krb5-kpropd -s /tmp/host.keytab 0.0.0.0:754 >/tmp/kpropd.log 2>&1'
+    "$NAME" sh -c '/tmp/krb5-kpropd -d -p /tmp/krb5-kdb -f /tmp/replica.from_master -s /tmp/host.keytab 0.0.0.0:754 >/tmp/kpropd.log 2>&1'
 ok=0
 for _ in $(seq 1 40); do
     if docker exec "$NAME" grep -q '^listening ' /tmp/kpropd.log 2>/dev/null; then
@@ -247,7 +248,7 @@ docker exec -d \
     -e KRB5_KDC_DB=/tmp/replica \
     -e KRB5_KDC_STASH=/tmp/replica.stash \
     -e KRB5_TEST_REALM=KERBER.TEST \
-    "$NAME" sh -c '/tmp/krb5-kpropd -s /tmp/host.keytab -a /tmp/kpropd.acl.case 0.0.0.0:754 >/tmp/kpropd.log 2>&1'
+    "$NAME" sh -c '/tmp/krb5-kpropd -d -p /tmp/krb5-kdb -f /tmp/replica.from_master -s /tmp/host.keytab -a /tmp/kpropd.acl.case 0.0.0.0:754 >/tmp/kpropd.log 2>&1'
 ok=0
 for _ in $(seq 1 40); do
     if docker exec "$NAME" grep -q '^listening ' /tmp/kpropd.log 2>/dev/null; then
@@ -334,14 +335,15 @@ echo "==== a ticket for host/localhost, whose key the keytab holds, is refused b
 # kpropd.c:1258: recvauth takes kpropd's own principal, host/${HN}, as the server, so a ticket for
 # another principal of the keytab is KRB5KRB_AP_ERR_NOT_US; nothing is received.
 # The replica the MIT kinit leg below serves is set aside, so a written one would show.
-docker exec "$NAME" sh -c 'rm -f /tmp/mit-rep.dump; mv /tmp/replica /tmp/replica.kept'
+docker exec "$NAME" sh -c 'rm -f /tmp/mit-rep.dump /tmp/replica.from_master; mv /tmp/replica /tmp/replica.kept'
 for port in 1754 754; do
     other="$( (docker exec -e KRB5_CONFIG=/tmp/prop-krb5.conf "$NAME" kprop -f /tmp/dump -s /tmp/host.keytab -P "$port" -d localhost 2>&1 || true) | tr -d '\r')"
     echo "kprop to localhost:$port: $other"
     echo "$other" | grep -qF "The ticket isn't for us signalled from server" \
         || die "kpropd on $port did not refuse a ticket for host/localhost as MIT's"
 done
-if docker exec "$NAME" test -f /tmp/mit-rep.dump || docker exec "$NAME" test -f /tmp/replica; then
+if docker exec "$NAME" test -f /tmp/mit-rep.dump || docker exec "$NAME" test -f /tmp/replica.from_master \
+    || docker exec "$NAME" test -f /tmp/replica; then
     die "a refused ticket wrote a dump"
 fi
 docker exec "$NAME" mv /tmp/replica.kept /tmp/replica
@@ -384,12 +386,8 @@ docker exec "$SHORT" sh -c 'hostname; grep -E "^(search|domain)" /etc/resolv.con
 short_kpropds() {
     local prof=$1 mport=$2 rport=$3
     docker exec -d -e KRB5_KDC_PROFILE="$prof" "$SHORT" sh -c "kpropd -S -d -s /tmp/kdc2.keytab -a /tmp/kpropd.acl -P $mport -f /tmp/mit-rep-$mport.dump -p /bin/true >/tmp/kpropd-mit-$mport.log 2>&1"
-    docker exec -d -e KRB5_KDC_PROFILE="$prof" \
-        -e KRB5_MASTER_PASSWORD=masterpassword \
-        -e KRB5_KDC_DB="/tmp/replica-$rport" \
-        -e KRB5_KDC_STASH="/tmp/replica-$rport.stash" \
-        -e KRB5_TEST_REALM=KERBER.TEST \
-        "$SHORT" sh -c "/tmp/krb5-kpropd -s /tmp/kdc2.keytab -a /tmp/kpropd.acl 0.0.0.0:$rport >/tmp/kpropd-$rport.log 2>&1"
+    docker exec -d -e KRB5_KDC_PROFILE="$prof" "$SHORT" sh -c \
+        "/tmp/krb5-kpropd -s /tmp/kdc2.keytab -a /tmp/kpropd.acl -f /tmp/rust-rep-$rport.dump -p /bin/true 0.0.0.0:$rport >/tmp/kpropd-$rport.log 2>&1"
     require_log "$SHORT" "/tmp/kpropd-mit-$mport.log" 'ready|waiting for a kprop' "MIT kpropd on $mport"
     require_log "$SHORT" "/tmp/kpropd-$rport.log" '^listening ' "Rust kpropd on $rport"
 }
@@ -404,7 +402,7 @@ for port in 1754 754; do
     echo "$out" | grep -q 'SUCCEEDED' || die "kpropd on $port did not answer as host/kdc2.kerber.test"
 done
 docker exec "$SHORT" test -f /tmp/mit-rep-1754.dump
-docker exec "$SHORT" test -f /tmp/replica-754
+docker exec "$SHORT" test -f /tmp/rust-rep-754.dump
 docker exec "$SHORT" grep -aF 'krb5_recvauth(4, kprop5_01, host/kdc2.kerber.test@KERBER.TEST' /tmp/kpropd-mit-1754.log
 for port in 1755 755; do
     out="$(short_kprop "$port")"
@@ -412,7 +410,7 @@ for port in 1755 755; do
     echo "$out" | grep -qF 'Service key not available signalled from server' \
         || die "kpropd on $port did not refuse as host/kdc2"
 done
-if docker exec "$SHORT" test -f /tmp/mit-rep-1755.dump || docker exec "$SHORT" test -f /tmp/replica-755; then
+if docker exec "$SHORT" test -f /tmp/mit-rep-1755.dump || docker exec "$SHORT" test -f /tmp/rust-rep-755.dump; then
     die "a kpropd that is host/kdc2 took a ticket for host/kdc2.kerber.test"
 fi
 docker exec "$SHORT" grep -aF 'krb5_recvauth(4, kprop5_01, host/kdc2@KERBER.TEST' /tmp/kpropd-mit-1755.log

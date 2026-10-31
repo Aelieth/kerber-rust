@@ -119,6 +119,7 @@ docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-pac-extract" "$NAME":/tmp/krb5
 docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kadmin-local /tmp/krb5-kinit /tmp/krb5-kvno /tmp/krb5-klist /tmp/krb5-forge-tgt /tmp/krb5-pac-extract
 
 docker exec -d \
+    -e RUST_LOG=krb5_kdc=debug,krb5_crypto=debug \
     -e KRB5_TEST_USER_PASSWORD=userpassword \
     -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
     -e KRB5_KDC_DB=/tmp/rust.db \
@@ -172,6 +173,12 @@ MIT_KLIST="$(docker exec -e KRB5_CONFIG=/tmp/krb5-8888.conf "$NAME" klist -e -c 
 echo "$MIT_KLIST"
 echo "$MIT_KLIST" | grep -q 'arcfour-hmac' || die "MIT klist against rust: no arcfour skey"
 echo "tkt_etype_mit_vs_rust=$(tkt_etype_of "$MIT_KLIST")"
+# kdc_util.c:1040-1077: an rc4 session key, but the ticket stays under the krbtgt's own key.
+tkt_only() { sed 's/.*,[[:space:]]*//; s/[[:space:]]*$//' <<<"$1"; }
+TKT_MIT="$(tkt_only "$(tkt_etype_of "$MIT_SELF_KLIST")")"
+TKT_RUST="$(tkt_only "$(tkt_etype_of "$MIT_KLIST")")"
+case "$TKT_RUST" in *arcfour* | '') die "the Rust KDC's TGT enc-part is rc4 or missing: '$TKT_RUST'" ;; esac
+[ "$TKT_RUST" = "$TKT_MIT" ] || die "the Rust KDC's TGT enc-part is $TKT_RUST, MIT's is $TKT_MIT"
 set +e
 MIT_KVNO="$(docker exec \
     -e KRB5_CONFIG=/tmp/krb5-8888.conf \
@@ -206,6 +213,8 @@ RUST_KLIST="$(docker exec -e KRB5_CONFIG=/etc/krb5.conf "$NAME" /tmp/krb5-klist 
 echo "$RUST_KLIST"
 echo "$RUST_KLIST" | grep -q 'arcfour-hmac' || die "Rust klist against MIT: no arcfour skey"
 echo "tkt_etype_rust_vs_mit=$(tkt_etype_of "$RUST_KLIST")"
+[ "$(tkt_only "$(tkt_etype_of "$RUST_KLIST")")" = "$TKT_MIT" ] ||
+    die "Rust klist shows MIT's TGT enc-part unlike MIT's klist"
 set +e
 RUST_KVNO="$(docker exec \
     -e KRB5_CONFIG=/etc/krb5.conf \
@@ -236,6 +245,35 @@ echo "$RUST_ETLINE" | grep -q 'Etype (skey, tkt): DEPRECATED:arcfour-hmac,' ||
 docker exec "$NAME" cat /tmp/mit-kinit-rustkdc.trace 2>/dev/null | tee "$OUT/mit-kinit-rustkdc.trace" | grep -E 'usage|arcfour|enctype' | head -40 || true
 docker cp "$NAME":/tmp/mit-kdc.log "$OUT/mit-kdc.log" 2>/dev/null || true
 
+echo "==== M) session_enctypes is a membership list: aes128 although the client's key is aes256 ===="
+# kdc_util.c:1040-1077: the session etype is the first requested etype the server's
+# session_enctypes lists, not the client's key etype.
+m_setstr() {
+    kadmin_q_ok mit_kadmin_local "$NAME" -- -q "setstr krbtgt/KERBER.TEST session_enctypes $1"
+    kadmin_q_ok rust_kadmin_local \
+        -e KRB5_KDC_DB=/tmp/rust.db \
+        -e KRB5_KDC_STASH=/tmp/rust.stash \
+        -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
+        -e KRB5_CONFIG=/etc/krb5.conf \
+        "$NAME" -- -q "setstr krbtgt/KERBER.TEST session_enctypes $1"
+}
+m_setstr aes128-cts-hmac-sha1-96
+docker exec "$NAME" sh -c 'et="    default_tkt_enctypes = aes256-cts-hmac-sha1-96 aes128-cts-hmac-sha1-96"
+sed "s/^\[libdefaults\]\$/[libdefaults]\n$et/" /etc/krb5.conf >/tmp/krb5-m-mit.conf
+sed "s/^\[libdefaults\]\$/[libdefaults]\n$et/" /tmp/krb5-8888.conf >/tmp/krb5-m-rust.conf'
+m_skey_tkt() {
+    docker exec -e KRB5_CONFIG="$1" "$NAME" sh -c "printf '%s\n' userpassword | kinit -c $2 user@KERBER.TEST" >/dev/null 2>&1 ||
+        die "M) kinit user against $1 failed"
+    tkt_etype_of "$(docker exec -e KRB5_CONFIG="$1" "$NAME" klist -e -c "$2" 2>&1)"
+}
+M_MIT="$(m_skey_tkt /tmp/krb5-m-mit.conf /tmp/m-mit.cc)"
+M_RUST="$(m_skey_tkt /tmp/krb5-m-rust.conf /tmp/m-rust.cc)"
+echo "M) skey, tkt: mit=$M_MIT"
+echo "M) skey, tkt: rust=$M_RUST"
+case "$M_MIT" in aes128-cts-hmac-sha1-96,*) ;; *) die "M) MIT's session key is not aes128: $M_MIT" ;; esac
+[ "$M_RUST" = "$M_MIT" ] || die "M) Rust's session and ticket etypes differ from MIT's"
+m_setstr rc4-hmac
+
 echo "==== D) allow_rc4 under [kdcdefaults] alone is ignored: both KDCs refuse the rc4-only client ===="
 # MIT reads allow_rc4 / allow_weak_crypto from [libdefaults] only (init_ctx.c
 # get_boolean); the copy this gate put under kdc.conf [kdcdefaults] must not
@@ -262,7 +300,7 @@ docker exec -d \
     "$NAME" sh -c 'krb5kdc >/tmp/mit-kdc-d.log 2>&1'
 require_port_in "$NAME" 88 "MIT krb5kdc listen (D)"
 # The Rust KDC's UDP loop leaves the shutdown flag unread until its read
-# timeout, so a plain kill can keep :8888 bound; kill -9 like policy-gate, and
+# timeout, so a plain kill can keep :8888 bound; kill -9, and
 # relaunch on the persisted DB without --test-realm like restart-gate.
 docker exec "$NAME" sh -c '
 for comm in /proc/[0-9]*/comm; do
@@ -387,7 +425,7 @@ wait_gone_in "$NAME" 88 || die "MIT krb5kdc still bound :88 after kill (E)"
 docker exec -d \
     -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
     -e KRB5_CONFIG=/tmp/krb5-e-kdc.conf \
-    "$NAME" sh -c 'krb5kdc >/tmp/mit-kdc-e.log 2>&1'
+    "$NAME" sh -c 'krb5kdc -n >/tmp/mit-kdc-e.log 2>&1'
 require_port_in "$NAME" 88 "MIT krb5kdc listen (E)"
 docker exec "$NAME" sh -c '
 for comm in /proc/[0-9]*/comm; do
@@ -434,13 +472,49 @@ echo "permitted=aes256 z14only: rust=$E_ONLY_RUST"
 echo "$E_ONLY_MIT" | grep -F 'kvno: KDC returned error string: FINDING_SERVER_KEY while getting credentials for z14only@KERBER.TEST' >/dev/null ||
     die "E) MIT did not refuse z14only with FINDING_SERVER_KEY: $E_ONLY_MIT"
 [ "$E_ONLY_RUST" = "$E_ONLY_MIT" ] || die "E) Rust z14only refusal differs from MIT"
-echo "==== F) a stale keytab is Password incorrect (24): enc-ts keys are searched at the top kvno only ===="
-# Z1.4, the other `krb5_dbe_*search_enctype` caller: enc_ts_verify
-# (kdc_preauth_encts.c:74-92) walks the client's keys of the timestamp's etype
-# at the highest kvno only (kvno 0 in kdb_default.c:65-67). `ktadd` writes the
-# kvno-2 keys, `cpw -randkey -keepold` moves the entry to kvno 3 while keeping
-# kvno 2 in the DB; MIT still refuses the kvno-2 timestamp with 24, which
-# `kinit -kt` reports as "Password incorrect" (the wrong-password text).
+
+# do_as_req.c:225-229: the AS site takes the server key the same way (kinit -S).
+e_as() {
+    local conf=$1 svc=$2 cc=$3 out rc
+    set +e
+    out="$(docker exec -e KRB5_CONFIG="$conf" "$NAME" \
+        sh -c "printf '%s\n' userpassword | kinit -S $svc -c $cc user@KERBER.TEST" 2>&1)"
+    rc=$?
+    set -e
+    if [ "$rc" = 0 ]; then
+        tkt_etype_for "$svc" "$(docker exec -e KRB5_CONFIG="$conf" "$NAME" klist -e -c "$cc" 2>&1)"
+    else
+        printf '%s\n' "$out" | grep -F 'kinit:' | head -1
+    fi
+}
+E_AS_MIX_MIT="$(e_as /etc/krb5.conf z14mixed /tmp/e-as-mix-mit.cc)"
+E_AS_MIX_RUST="$(e_as /tmp/krb5-8888.conf z14mixed /tmp/e-as-mix-rust.cc)"
+echo "AS permitted=aes256 z14mixed tkt: mit=$E_AS_MIX_MIT rust=$E_AS_MIX_RUST"
+[ "$E_AS_MIX_MIT" = "aes256-cts-hmac-sha1-96" ] ||
+    die "E) MIT's AS did not skip the non-permitted first key: $E_AS_MIX_MIT"
+[ "$E_AS_MIX_RUST" = "$E_AS_MIX_MIT" ] || die "E) Rust's AS z14mixed tkt etype differs from MIT's"
+E_AS_ONLY_MIT="$(e_as /etc/krb5.conf z14only /tmp/e-as-only-mit.cc)"
+E_AS_ONLY_RUST="$(e_as /tmp/krb5-8888.conf z14only /tmp/e-as-only-rust.cc)"
+echo "AS permitted=aes256 z14only: mit=$E_AS_ONLY_MIT"
+echo "AS permitted=aes256 z14only: rust=$E_AS_ONLY_RUST"
+grep -qF 'Generic error (see e-text)' <<<"$E_AS_ONLY_MIT" || die "E) MIT's AS did not refuse z14only with 60"
+[ "$E_AS_ONLY_RUST" = "$E_AS_ONLY_MIT" ] || die "E) Rust's AS z14only refusal differs from MIT's"
+# kinit shows no e-text for an AS refusal. Each KDC logs the status it sent and the KDB error's text.
+fsk_tail() {
+    docker exec "$NAME" sh -c "grep -E '$1 .*FINDING_SERVER_KEY: .*z14only@KERBER.TEST' $2 | tail -1" |
+        sed 's/.*z14only@KERBER.TEST, //'
+}
+for req in AS_REQ TGS_REQ; do
+    mit_tail="$(fsk_tail "$req" /tmp/mit-kdc-e.log)"
+    rust_tail="$(fsk_tail "$req" /tmp/rust-kdc-e.log)"
+    echo "E) $req FINDING_SERVER_KEY z14only: mit='$mit_tail' rust='$rust_tail'"
+    [ -n "$mit_tail" ] || die "E) MIT's KDC logged no $req FINDING_SERVER_KEY line for z14only"
+    [ "$rust_tail" = "$mit_tail" ] || die "E) the Rust KDC's $req FINDING_SERVER_KEY line ends unlike MIT's"
+done
+echo "==== F) a stale keytab: Password incorrect (31) without preauth, Preauthentication failed (24) with it ===="
+# `ktadd` writes the kvno-2 keys; `cpw -randkey -keepold` moves the entry to kvno 3 and keeps kvno 2.
+# Without preauth the AS-REP is under kvno 3, which the stale keytab can't decrypt (31). With it,
+# enc_ts_verify (kdc_preauth_encts.c:74-92) checks the timestamp at the top kvno only: 24.
 # Control first: the fresh keytab kinits on both legs.
 kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -randkey z14kt'
 kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'ktadd -k /tmp/z14kt-mit.kt z14kt'
@@ -482,8 +556,52 @@ F_RUST="$(f_kinit /tmp/krb5-8888.conf /tmp/z14kt-rust.kt /tmp/f-rust.cc || true)
 echo "stale keytab (kvno 2 kept, kvno 3 current): mit=$F_MIT"
 echo "stale keytab (kvno 2 kept, kvno 3 current): rust=$F_RUST"
 [ "$F_MIT" = "kinit: Password incorrect while getting initial credentials" ] ||
-    die "F) MIT did not refuse the stale keytab with Password incorrect (24): $F_MIT"
+    die "F) MIT did not refuse the stale keytab with Password incorrect (31): $F_MIT"
 [ "$F_RUST" = "$F_MIT" ] || die "F) Rust stale-keytab kinit differs from MIT"
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'modprinc +requires_preauth z14kt'
+kadmin_q_ok rust_kadmin_local \
+    -e KRB5_KDC_DB=/tmp/rust.db \
+    -e KRB5_KDC_STASH=/tmp/rust.stash \
+    -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
+    -e KRB5_CONFIG=/etc/krb5.conf \
+    "$NAME" -- -q 'modprinc +requires_preauth z14kt'
+# A SPAKE failure is 24 too: the client is pinned to encrypted timestamp, and its trace shows it.
+docker exec "$NAME" sh -c 'pin="[plugins]
+    clpreauth = {
+        enable_only = encrypted_timestamp
+    }"
+{ cat /etc/krb5.conf; printf "%s\n" "$pin"; } >/tmp/krb5-f-mit.conf
+{ cat /tmp/krb5-8888.conf; printf "%s\n" "$pin"; } >/tmp/krb5-f-rust.conf'
+f_kinit_traced() {
+    local conf=$1 kt=$2 cc=$3 trace=$4
+    docker exec -e KRB5_CONFIG="$conf" -e KRB5_TRACE="$trace" "$NAME" \
+        kinit -k -t "$kt" -c "$cc" z14kt@KERBER.TEST 2>&1 && echo "kinit ok"
+}
+F_PA_MIT="$(f_kinit_traced /tmp/krb5-f-mit.conf /tmp/z14kt-mit.kt /tmp/f-pa-mit.cc /tmp/f-pa-mit.trace || true)"
+F_PA_RUST="$(f_kinit_traced /tmp/krb5-f-rust.conf /tmp/z14kt-rust.kt /tmp/f-pa-rust.cc /tmp/f-pa-rust.trace || true)"
+for leg in mit rust; do
+    trace="$(docker exec "$NAME" cat "/tmp/f-pa-$leg.trace" 2>/dev/null || true)"
+    grep -F 'Preauth module encrypted_timestamp (2) (real) returned: 0/Success' <<<"$trace" ||
+        die "F) $leg: kinit sent no encrypted timestamp"
+    if grep -q 'Preauth module spake' <<<"$trace"; then die "F) $leg: kinit used SPAKE"; fi
+done
+echo "stale keytab, +requires_preauth: mit=$F_PA_MIT"
+echo "stale keytab, +requires_preauth: rust=$F_PA_RUST"
+[ "$F_PA_MIT" = "kinit: Preauthentication failed while getting initial credentials" ] ||
+    die "F) MIT did not refuse the stale keytab's timestamp with 24: $F_PA_MIT"
+[ "$F_PA_RUST" = "$F_PA_MIT" ] || die "F) Rust's refusal of the stale timestamp differs from MIT's"
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'ktadd -norandkey -k /tmp/z14kt3-mit.kt z14kt'
+kadmin_q_ok rust_kadmin_local \
+    -e KRB5_KDC_DB=/tmp/rust.db \
+    -e KRB5_KDC_STASH=/tmp/rust.stash \
+    -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
+    -e KRB5_CONFIG=/etc/krb5.conf \
+    "$NAME" -- -q 'ktadd -norandkey -k /tmp/z14kt3-rust.kt z14kt'
+F_PA_CTL_MIT="$(f_kinit /tmp/krb5-f-mit.conf /tmp/z14kt3-mit.kt /tmp/f-pa-ctl-mit.cc || true)"
+F_PA_CTL_RUST="$(f_kinit /tmp/krb5-f-rust.conf /tmp/z14kt3-rust.kt /tmp/f-pa-ctl-rust.cc || true)"
+echo "current keytab, +requires_preauth: mit=$F_PA_CTL_MIT rust=$F_PA_CTL_RUST"
+[ "$F_PA_CTL_MIT" = "kinit ok" ] || die "F control: MIT kinit -kt with the kvno-3 keytab failed: $F_PA_CTL_MIT"
+[ "$F_PA_CTL_RUST" = "kinit ok" ] || die "F control: Rust kinit -kt with the kvno-3 keytab failed: $F_PA_CTL_RUST"
 docker cp "$NAME":/tmp/mit-kdc-e.log "$OUT/mit-kdc-e.log" 2>/dev/null || true
 docker cp "$NAME":/tmp/rust-kdc-e.log "$OUT/rust-kdc-e.log" 2>/dev/null || true
 

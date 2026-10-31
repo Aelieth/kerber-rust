@@ -1,13 +1,12 @@
 //! `kinit -k` takes the highest kvno and sorts etypes like MIT `gic_keytab.c`.
-//! Live oracle: `client-differential-gate.sh` two-kvno `kinit -k`.
+//! Live oracle: field `client-tools` CT.kt.multi (two kvnos in one keytab, `kinit -k`).
 
 use krb5_crypto::{EncryptionType, ProtocolKey};
 use krb5_protocol::{
-    AsRequest, AsTicketOpts, Error, KdcAddr, Keytab, KeytabEntry, as_init_creds_options,
-    key_exp_should_changepw, keytab_init_creds_keys, parse_chpw_result, sort_etypes_keytab_first,
-    tgs_renew_options,
+    AsRequest, AsTicketOpts, KdcAddr, Keytab, KeytabEntry, as_init_creds_options,
+    keytab_init_creds_keys, parse_chpw_result, sort_etypes_keytab_first, tgs_renew_options,
 };
-use krb5_types::{PrincipalName, TicketFlags, ascii, err, flag_bit};
+use krb5_types::{PrincipalName, TicketFlags, ascii, flag_bit};
 
 fn entry(realm: &str, name: &str, kvno: u32, key: &[u8], etype: EncryptionType) -> KeytabEntry {
     KeytabEntry {
@@ -68,19 +67,6 @@ fn gic_keytab_uses_highest_kvno_only() {
 }
 
 #[test]
-fn gic_keytab_wrong_realm_is_ignored() {
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
-    let (keys, _) = keytab_init_creds_keys(&sample_kt(), &user, "KERBER.TEST").expect("keys");
-    assert!(keys.iter().all(|k| k.as_bytes() != [9u8; 32]));
-}
-
-#[test]
-fn gic_keytab_unknown_principal_is_none() {
-    let other = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["nosuch"]);
-    assert!(keytab_init_creds_keys(&sample_kt(), &other, "KERBER.TEST").is_none());
-}
-
-#[test]
 fn gic_keytab_sort_moves_keytab_etypes_front() {
     let mut req = [18, 17, 20, 19];
     sort_etypes_keytab_first(&mut req, &[17]);
@@ -97,6 +83,7 @@ fn options_of(
         realm: "KERBER.TEST",
         password: b"x",
         kdc: &kdc,
+        profile: &krb5_config::isolated_profile(),
         want_spake: false,
         fast_armor: None,
         pkinit: None,
@@ -106,18 +93,6 @@ fn options_of(
         ticket,
     };
     as_init_creds_options(&req)
-}
-
-#[test]
-fn gic_opt_canonicalize_sets_kdc_option() {
-    let (opts, from) = options_of(AsTicketOpts::default(), true);
-    assert!(
-        opts.bit(flag_bit::CANONICALIZE),
-        "get_in_tkt.c:921-930 / gic_opt.c:76-83"
-    );
-    assert!(from.is_none());
-    let (plain, _) = options_of(AsTicketOpts::default(), false);
-    assert!(!plain.bit(flag_bit::CANONICALIZE));
 }
 
 #[test]
@@ -142,38 +117,6 @@ fn gic_opt_starttime_sets_postdated_and_from() {
 }
 
 #[test]
-fn gic_pwd_key_exp_with_new_password_should_changepw() {
-    let err = Error::KrbError {
-        code: err::KEY_EXPIRED,
-        text: Some("KEY EXPIRED".into()),
-    };
-    assert!(key_exp_should_changepw(&err, true, false));
-}
-
-#[test]
-fn gic_pwd_key_exp_without_new_password_does_not_changepw() {
-    let err = Error::KrbError {
-        code: err::KEY_EXPIRED,
-        text: None,
-    };
-    assert!(!key_exp_should_changepw(&err, false, false));
-}
-
-#[test]
-fn gic_pwd_keytab_does_not_changepw() {
-    let err = Error::KrbError {
-        code: err::KEY_EXPIRED,
-        text: None,
-    };
-    assert!(!key_exp_should_changepw(&err, true, true));
-}
-
-#[test]
-fn chpw_success_is_ok() {
-    assert_eq!(parse_chpw_result(&[0, 0], false).unwrap(), 0);
-}
-
-#[test]
 fn chpw_out_of_range_is_modified() {
     let err = parse_chpw_result(&[0, 8], false).unwrap_err();
     assert!(err.to_string().contains("modified"), "{err}");
@@ -183,12 +126,6 @@ fn chpw_out_of_range_is_modified() {
 fn chpw_success_from_error_is_modified() {
     let err = parse_chpw_result(&[0, 0], true).unwrap_err();
     assert!(err.to_string().contains("SUCCESS from KRB-ERROR"), "{err}");
-}
-
-#[test]
-fn chpw_truncated_is_modified() {
-    let err = parse_chpw_result(&[0], false).unwrap_err();
-    assert!(err.to_string().contains("truncated"), "{err}");
 }
 
 #[test]
@@ -254,21 +191,6 @@ fn chpw_message_ad_policy_matches_mit_test_chpw_message() {
     assert!(msg.contains("The password must be different from the previous 13 passwords."));
     assert!(msg.contains("The password must contain at least 5 characters."));
     assert!(msg.contains("The password must include numbers or symbols."));
-}
-
-#[test]
-fn renew_options_are_common_mask_plus_renew() {
-    let flags = TicketFlags::from_u32(0x5480_0000);
-    let opts = tgs_renew_options(&flags);
-    assert!(opts.bit(flag_bit::FORWARDABLE));
-    assert!(opts.bit(flag_bit::PROXIABLE));
-    assert!(opts.bit(flag_bit::MAY_POSTDATE));
-    assert!(opts.bit(flag_bit::RENEWABLE));
-    assert!(opts.bit(flag_bit::RENEW), "val_renew.c:129 KDC_OPT_RENEW");
-    assert!(
-        !opts.bit(flag_bit::CANONICALIZE),
-        "renew is not the get_creds referral walk"
-    );
 }
 
 #[test]

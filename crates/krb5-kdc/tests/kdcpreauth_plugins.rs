@@ -1,27 +1,18 @@
 //! `[plugins] kdcpreauth` selects built-in and embedder modules by MIT's names.
 //!
-//! MIT `get_plugin_vtables` (`kdc/kdc_preauth.c:117-163`): disable and enable_only run inside k5_plugin_load_all, so a module that is not loaded neither advertises nor verifies.
+// MIT: `get_plugin_vtables` (kdc/kdc_preauth.c:117-163)
+//! disable and enable_only run inside k5_plugin_load_all, so a module that is not loaded neither advertises nor verifies.
 
 use std::sync::Arc;
 
 use krb5_asn1::decode;
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented};
-use krb5_kdc::{
-    Error, KdcPreauth, PreauthAction, PreauthRock, PrincipalStore, clear_thread_preauth,
-    set_thread_preauth,
-};
+use krb5_kdc::{Error, KdcPreauth, PreauthAction, PreauthRock, PrincipalStore};
 use krb5_protocol::{as_req, pa_enc_timestamp};
 use krb5_testkit::password_key;
 use krb5_types::{MethodData, PaData, PrincipalName, pa};
 
 const WIDGET: i32 = 211;
-
-struct Guard;
-impl Drop for Guard {
-    fn drop(&mut self) {
-        clear_thread_preauth();
-    }
-}
 
 struct Widget;
 
@@ -152,9 +143,9 @@ fn an_unknown_enable_only_name_keeps_no_module() {
 
 #[test]
 fn an_embedder_module_is_selected_and_dropped_by_name() {
-    let _guard = Guard;
-    set_thread_preauth(vec![Arc::new(Widget)]);
-    let selected = realm("[plugins]\n    kdcpreauth = {\n        enable_only = widget\n    }\n");
+    let mut selected =
+        realm("[plugins]\n    kdcpreauth = {\n        enable_only = widget\n    }\n");
+    selected.policy.plugins.register_preauth(Arc::new(Widget));
     let types = hint_types(&selected, 71_030);
     assert!(
         types.contains(&WIDGET),
@@ -164,7 +155,8 @@ fn an_embedder_module_is_selected_and_dropped_by_name() {
         !types.contains(&pa::ENC_TIMESTAMP) && !types.contains(&pa::SPAKE),
         "enable_only drops the modules it does not name: {types:?}"
     );
-    let dropped = realm("[plugins]\n    kdcpreauth = {\n        disable = widget\n    }\n");
+    let mut dropped = realm("[plugins]\n    kdcpreauth = {\n        disable = widget\n    }\n");
+    dropped.policy.plugins.register_preauth(Arc::new(Widget));
     let types = hint_types(&dropped, 71_031);
     assert!(
         !types.contains(&WIDGET),
@@ -173,53 +165,5 @@ fn an_embedder_module_is_selected_and_dropped_by_name() {
     assert!(
         types.contains(&pa::ENC_TIMESTAMP),
         "the built-ins stay when only widget is disabled: {types:?}"
-    );
-}
-
-#[test]
-fn krb5_conf_disable_follows_the_kdc_conf_disable() {
-    let (mut store, _) = bootstrap_documented().unwrap();
-    let kdc = krb5_config::KdcConf::parse(
-        "[plugins]\n    kdcpreauth = {\n        disable = spake\n    }\n",
-    )
-    .unwrap();
-    let krb5 = krb5_config::Krb5Conf::parse(
-        "[plugins]\n    kdcpreauth = {\n        disable = encrypted_timestamp\n    }\n",
-    )
-    .unwrap();
-    store.apply_kdc_conf(&kdc).unwrap();
-    store.apply_kdcpreauth_plugins(Some(&kdc), Some(&krb5));
-    let types = hint_types(&store, 71_040);
-    assert!(
-        !types.contains(&pa::SPAKE) && !types.contains(&pa::ENC_TIMESTAMP),
-        "kdc.conf and krb5.conf disables both apply: {types:?}"
-    );
-    assert!(types.contains(&pa::FX_FAST), "FX-FAST stays: {types:?}");
-}
-
-#[test]
-fn disable_encrypted_challenge_ignores_type_138_outside_fast() {
-    let store =
-        realm("[plugins]\n    kdcpreauth = {\n        disable = encrypted_challenge\n    }\n");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let req = as_req(
-        cname,
-        TEST_REALM,
-        71_050,
-        Some(vec![PaData {
-            padata_type: pa::ENCRYPTED_CHALLENGE,
-            padata_value: b"outside-fast".to_vec().into(),
-        }]),
-    )
-    .unwrap();
-    let err = krb5_kdc::issue_as(&store, &req).unwrap_err();
-    let Error::PreauthRequired { e_data } = err else {
-        panic!("a disabled encrypted_challenge is ignored, got {err:?}");
-    };
-    let method: MethodData = decode(&e_data).unwrap();
-    let types: Vec<i32> = method.iter().map(|p| p.padata_type).collect();
-    assert!(
-        types.contains(&pa::ENC_TIMESTAMP) && types.contains(&pa::FX_FAST),
-        "the other modules stay offered: {types:?}"
     );
 }

@@ -1,5 +1,3 @@
-//! AP-REP / EncAPRepPart (RFC 4120 §5.5.2) mutual authentication.
-
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{KeyUsage, ProtocolKey, decrypt_enc_data, encrypt};
 use krb5_types::{
@@ -9,12 +7,6 @@ use krb5_types::{
 use crate::error::Error;
 use crate::trace;
 
-/// Build an AP-REP echoing `ctime`/`cusec` from the AP-REQ authenticator.
-///
-/// # Errors
-///
-/// [`Error::Asn1`] when the EncAPRepPart does not encode, and [`Error::Crypto`] when encrypting
-/// it under `session` fails.
 pub fn build_ap_rep(
     session: &ProtocolKey,
     authenticator: &Authenticator,
@@ -41,13 +33,6 @@ pub fn build_ap_rep(
     })
 }
 
-/// Decrypt and check an AP-REP against the AP-REQ authenticator.
-///
-/// # Errors
-///
-/// [`Error::Asn1`] when `raw` or its decrypted part does not decode, [`Error::Crypto`] when the
-/// enc-part does not decrypt under `session`, and [`Error::ReplyMismatch`] when `ctime`/`cusec`
-/// differ from the authenticator's.
 pub fn verify_ap_rep(
     raw: &[u8],
     session: &ProtocolKey,
@@ -66,8 +51,8 @@ pub fn verify_ap_rep(
         return Err(Error::ReplyMismatch("AP-REP ctime/cusec mismatch".into()));
     }
     let _ = Microseconds::validate(part.cusec);
-    // MIT `krb5_rd_rep` (`lib/krb5/krb/rd_rep.c:69-145`): a reply that matched is traced with its
-    // time, its subkey as a hash and its sequence number, a C `int`.
+    // MIT: `krb5_rd_rep` (lib/krb5/krb/rd_rep.c:69-145)
+    // A matched reply traces its time, a subkey hash, and the sequence as a C int.
     trace::rd_rep(
         i64::from(part.ctime.unix_seconds()),
         i32::try_from(part.cusec.get()).unwrap_or_default(),

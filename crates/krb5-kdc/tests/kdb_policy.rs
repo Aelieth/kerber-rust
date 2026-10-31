@@ -47,7 +47,7 @@ fn empty_password_is_rejected_without_a_policy() {
 #[test]
 fn principal_component_and_realm_match_are_rejected_only_with_a_policy() {
     let (mut store, _acl) = bootstrap_documented().unwrap();
-    store.put_policy(NamedPolicy::new("pq"));
+    store.put_policy(NamedPolicy::new("pq")).unwrap();
     let pqu = name("pqu");
     assert_eq!(
         rejected(store.check_new_password(&pqu, Some("pq"), b"PQU")),
@@ -99,7 +99,7 @@ fn dict_file_words_are_rejected_case_insensitively_only_with_a_policy() {
     };
     let (mut store, _acl) = bootstrap_documented().unwrap();
     store.init_pwqual(Some(&conf)).unwrap();
-    store.put_policy(NamedPolicy::new("pq"));
+    store.put_policy(NamedPolicy::new("pq")).unwrap();
     let u = name("dictu");
     assert_eq!(
         rejected(store.check_new_password(&u, Some("pq"), b"correcthorse")),
@@ -120,7 +120,7 @@ fn dict_file_words_are_rejected_case_insensitively_only_with_a_policy() {
     // A policy floor comes first (check_against_policy before the modules).
     let mut floor = NamedPolicy::new("long");
     floor.min_length = 20;
-    store.put_policy(floor);
+    store.put_policy(floor).unwrap();
     assert_eq!(
         rejected(store.check_new_password(&u, Some("long"), b"correcthorse")),
         "min_length 20"
@@ -129,7 +129,7 @@ fn dict_file_words_are_rejected_case_insensitively_only_with_a_policy() {
     conf.dict_file = Some(dir.join("missing.txt"));
     let mut store2: PrincipalStore = bootstrap_documented().unwrap().0;
     store2.init_pwqual(Some(&conf)).unwrap();
-    store2.put_policy(NamedPolicy::new("pq"));
+    store2.put_policy(NamedPolicy::new("pq")).unwrap();
     store2
         .check_new_password(&u, Some("pq"), b"correcthorse")
         .unwrap();

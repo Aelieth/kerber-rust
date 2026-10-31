@@ -1,11 +1,14 @@
 //! `kvno -U` emits PA-S4U-X509-USER 130 and PA-FOR-USER 129 on the FAST TGS outer list and
 //! `verify_s4u2self_reply` fails closed.
-//! MIT `krb5_get_self_cred_from_kdc` (`s4u_creds.c:517-567`): the request carries 130 and,
+// MIT: `krb5_get_self_cred_from_kdc` (s4u_creds.c:517-567)
+//! the request carries 130 and,
 //! for a named user, 129.
-//! MIT `make_tgs_outer_padata` (`fast.c:227-250`): the FAST TGS outer list duplicates them.
-//! MIT `verify_s4u2self_reply` (`s4u_creds.c:273-397`): fails closed — a reply 130 with a bad
+// MIT: `make_tgs_outer_padata` (fast.c:227-250)
+//! the FAST TGS outer list duplicates them.
+// MIT: `verify_s4u2self_reply` (s4u_creds.c:273-397)
+//! fails closed — a reply 130 with a bad
 //! nonce, checksum or user is `KRB5_KDCREP_MODIFIED`.
-//! Live oracle: `client-differential-gate.sh` `MIT_kvno_U_tgs_padata`.
+//! Live oracle: field `client-tools` CT.px.kvno_s4u.same.
 //! The live MIT `kvno -U` cell is the production oracle.
 
 #[path = "common/mod.rs"]
@@ -14,8 +17,7 @@ use common::isolate_host_krb5;
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, ProtocolKey, unkeyed_checksum};
 use krb5_protocol::{
-    AsOutcome, KdcAddr, pa_for_user, pa_s4u_x509_user, tgs_s4u, tgs_s4u2proxy,
-    verify_s4u2self_reply,
+    AsOutcome, KdcAddr, pa_for_user, pa_s4u_x509_user, tgs_s4u, verify_s4u2self_reply,
 };
 use krb5_types::{
     EncKdcRepPart, EncryptedData, EncryptionKey, KerberosTime, KrbError, Microseconds, OctetString,
@@ -69,6 +71,7 @@ fn fake_tgt() -> AsOutcome {
         used_fast: false,
         pa_type: None,
         pa_config: None,
+        time_offset: 0,
     }
 }
 
@@ -110,6 +113,7 @@ fn s4u_tgs_outer_padata_is_1_136_130_129() {
         }
     });
     let _ = tgs_s4u(
+        &krb5_config::isolated_profile(),
         &KdcAddr {
             host: "127.0.0.1".into(),
             port,
@@ -156,17 +160,6 @@ fn s4u_verify_enc_only_is_modified() {
         matches!(err, krb5_protocol::Error::ReplyMismatch(_)),
         "enc-only 130 is KDCREP_MODIFIED, got {err}"
     );
-}
-
-#[test]
-fn s4u_verify_valid_is_ok() {
-    let key = session();
-    let pa = pa_s4u_x509_user(&key, user(), "KERBER.TEST", 42).unwrap();
-    let req = decode_pa130(&pa);
-    // Request uses ku 26; reply with USE_REPLY_KEY_USAGE uses ku 27.
-    let reply = reply_130(&key, &req);
-    verify_s4u2self_reply(&key, &req, Some(std::slice::from_ref(&reply)), None)
-        .expect("matching reply 130");
 }
 
 #[test]
@@ -222,10 +215,6 @@ fn decode_pa130(pa: &PaData) -> krb5_types::s4u::PaS4uX509User {
     decode(pa.padata_value.as_ref()).expect("PA-S4U-X509-USER")
 }
 
-fn reply_130(key: &ProtocolKey, req: &krb5_types::s4u::PaS4uX509User) -> PaData {
-    reply_from_userid(key, req)
-}
-
 fn reply_from_userid(key: &ProtocolKey, req: &krb5_types::s4u::PaS4uX509User) -> PaData {
     use krb5_crypto::{KeyUsage, checksum};
     use krb5_types::ku;
@@ -252,50 +241,8 @@ fn reply_from_userid(key: &ProtocolKey, req: &krb5_types::s4u::PaS4uX509User) ->
     }
 }
 
-#[test]
-fn s4u2proxy_outer_padata_is_1_136_167() {
-    isolate_host_krb5();
-    let shots = Arc::new(Mutex::new(Vec::new()));
-    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
-    let port = udp.local_addr().unwrap().port();
-    let shots2 = shots.clone();
-    thread::spawn(move || {
-        let mut buf = [0u8; 8192];
-        if let Ok((n, src)) = udp.recv_from(&mut buf) {
-            *shots2.lock().unwrap() = buf[..n].to_vec();
-            let _ = udp.send_to(&encode_generic(), src);
-        }
-    });
-    let tgt = fake_tgt();
-    let evidence = tgt.ticket.clone();
-    let _ = tgs_s4u2proxy(
-        &KdcAddr {
-            host: "127.0.0.1".into(),
-            port,
-        },
-        &tgt,
-        PrincipalName::try_new(PrincipalName::NT_SRV_HST, ["host", "other.kerber.test"]).unwrap(),
-        "KERBER.TEST",
-        evidence,
-    );
-    let raw = shots.lock().unwrap().clone();
-    assert!(!raw.is_empty(), "tgs_s4u2proxy must send a TGS-REQ");
-    let req: TgsReq = decode(&raw).expect("TGS-REQ");
-    let types: Vec<i32> = req
-        .0
-        .padata
-        .unwrap_or_default()
-        .iter()
-        .map(|p| p.padata_type)
-        .collect();
-    assert_eq!(
-        types,
-        vec![pa::TGS_REQ, pa::FX_FAST, pa::PAC_OPTIONS],
-        "S4U2Proxy FAST outer TGS padata is [1, 136, 167], got {types:?}"
-    );
-}
-
-/// MIT `make_pa_for_user_checksum` (`lib/krb5/krb/s4u_creds.c:130-133`): HMAC-MD5 under the TGT session key whatever its type, key usage 17.
+// MIT: `make_pa_for_user_checksum` (lib/krb5/krb/s4u_creds.c:130-133)
+/// HMAC-MD5 under the TGT session key whatever its type, key usage 17.
 /// The checksums below are MIT 1.22.2's own for these keys and `user@KERBER.TEST`, read live
 /// from its `krb5_c_make_checksum`.
 #[test]

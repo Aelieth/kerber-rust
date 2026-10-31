@@ -29,6 +29,7 @@ docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-forge-tgt" "$NAME":/tmp/krb5-forge-tgt
 docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-forge-tgt
 docker exec -d \
+    -e RUST_LOG=krb5_kdc=debug,krb5_asn1=debug \
     -e KRB5_TEST_USER_PASSWORD=userpassword \
     -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
     "$NAME" sh -c '/tmp/krb5-kdc --test-realm 127.0.0.1:88 >/tmp/kdc.log 2>&1'
@@ -147,7 +148,7 @@ echo "$TRACEF"
 echo "$TRACEF" | grep -F 'Encoding request body and padata into FAST request'
 TGSNEW="$(docker exec "$NAME" sh -c "tail -n +$((TGS_BEFORE + 1)) /tmp/kdc.log")"
 echo "$TGSNEW"
-echo "$TGSNEW" | grep -q '"code":7,"e_text":"PROCESS_TGS"'
+echo "$TGSNEW" | grep -F 'PROCESS_TGS' | grep -E '"code":7[,}]'
 
 echo "==== Rust KDC: forged-realm FAST armor is NOT_US ===="
 docker exec "$NAME" /tmp/krb5-forge-tgt \
@@ -167,8 +168,8 @@ fi
 echo "$FORGED" | grep -q "The ticket isn't for us"
 MM_NEW="$(docker exec "$NAME" sh -c "tail -n +$((MM_BEFORE + 1)) /tmp/kdc.log")"
 echo "$MM_NEW"
-echo "$MM_NEW" | grep -q '"code":35,"e_text":"FIND_FAST"'
-echo "$MM_NEW" | grep -q '"detail":"FAST armor TGT"'
+echo "$MM_NEW" | grep -F 'FIND_FAST' | grep -E '"code":35[,}]'
+echo "$MM_NEW" | grep -qF '"detail":"The ticket isn'"'"'t for us while handling ap-request armor"'
 
 echo "==== Rust KDC: FAST-error outer e_data shape via kdc-padata-proxy ===="
 docker cp "$ROOT/scripts/lib/kdc-padata-proxy.py" "$NAME":/tmp/kdc-padata-proxy.py
@@ -540,9 +541,9 @@ fi
 
 # W1-Z Z1.2: client FAST reply processing, MIT kinit -T and Rust krb5-kinit
 # --fast side by side against the MIT KDC behind a rewriting MITM
-# (scripts/lib/kdc-rewrite-proxy.py). `user` is +requires_preauth on this leg
+# (harness/field/lib/kdc-rewrite-proxy.py). `user` is +requires_preauth on this leg
 # (above), /tmp/krb5cc_armor is its MIT armor TGT.
-docker cp "$ROOT/scripts/lib/kdc-rewrite-proxy.py" "$MITNAME":/tmp/kdc-rewrite-proxy.py
+docker cp "$ROOT/harness/field/lib/kdc-rewrite-proxy.py" "$MITNAME":/tmp/kdc-rewrite-proxy.py
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kinit" "$MITNAME":/tmp/krb5-kinit
 docker exec "$MITNAME" chmod +x /tmp/krb5-kinit
 docker exec "$MITNAME" python3 /tmp/kdc-rewrite-proxy.py --self-test

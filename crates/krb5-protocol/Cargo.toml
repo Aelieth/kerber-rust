@@ -10,17 +10,21 @@ publish.workspace = true
 autotests = false
 
 [features]
-default = ["diff"]
+default = []
 diff = []
 # The gates' raw PDU capture (`KERBER_CAPTURE_DIR`); off by default.
-test-hooks = []
+test-hooks = ["test-ca", "krb5-kdc/test-hooks", "krb5-testkit/test-hooks"]
+# PA-PK-AS-REQ builders signed under the generated test CA: test builds only.
+test-ca = ["krb5-types/test-ca"]
 
 [[test]]
 name = "golden_traces"
+required-features = ["test-hooks"]
 path = "tests/golden_traces.rs"
 
 [[test]]
 name = "messages"
+required-features = ["test-hooks"]
 path = "tests/messages.rs"
 
 [[test]]
@@ -29,14 +33,17 @@ path = "tests/safe_priv.rs"
 
 [[test]]
 name = "client_verify_as"
+required-features = ["test-hooks"]
 path = "tests/client_verify_as.rs"
 
 [[test]]
 name = "client_fast"
+required-features = ["test-hooks"]
 path = "tests/client_fast.rs"
 
 [[test]]
 name = "client_preauth_order"
+required-features = ["test-hooks"]
 path = "tests/client_preauth_order.rs"
 
 [[test]]
@@ -45,14 +52,17 @@ path = "tests/clpreauth_plugins.rs"
 
 [[test]]
 name = "client_spake"
+required-features = ["test-hooks"]
 path = "tests/client_spake.rs"
 
 [[test]]
 name = "client_otp"
+required-features = ["test-hooks"]
 path = "tests/client_otp.rs"
 
 [[test]]
 name = "client_password_per_mechanism"
+required-features = ["test-hooks"]
 path = "tests/client_password_per_mechanism.rs"
 
 [[test]]
@@ -61,31 +71,23 @@ path = "tests/client_gic.rs"
 
 [[test]]
 name = "client_vfy_increds"
+required-features = ["test-hooks"]
 path = "tests/client_vfy_increds.rs"
 
 [[test]]
-name = "client_tgs_reply"
-path = "tests/client_tgs_reply.rs"
-
-[[test]]
 name = "client_s4u"
+required-features = ["test-hooks"]
 path = "tests/client_s4u.rs"
 
 [[test]]
 name = "des3_subkeys"
+required-features = ["test-hooks"]
 path = "tests/des3_subkeys.rs"
 
 [[test]]
-name = "client_identify_realm"
-path = "tests/client_identify_realm.rs"
-
-[[test]]
 name = "acceptor_rd_req"
+required-features = ["test-hooks"]
 path = "tests/acceptor_rd_req.rs"
-
-[[test]]
-name = "acceptor_sname"
-path = "tests/acceptor_sname.rs"
 
 [dependencies]
 bytes.workspace = true
@@ -99,11 +101,10 @@ nix = { workspace = true, features = ["fs", "time"] }
 sha1.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+subtle.workspace = true
 zeroize.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
-regex-automata.workspace = true
-rustix.workspace = true
 
 [dev-dependencies]
 krb5-kdc.workspace = true

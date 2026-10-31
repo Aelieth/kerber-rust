@@ -6,7 +6,7 @@ cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
 . "$ROOT/scripts/lib/kadmin-q.sh"
-need_bins krb5-kinit krb5-kdc krb5-kdb
+need_bins krb5-kinit krb5-kvno krb5-kpasswd krb5-kdc krb5-kdb
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-kinit-fast-gate"
@@ -139,7 +139,7 @@ echo "$KLIST2E" | grep -F 'aes256-cts-hmac-sha384-192'
 echo "==== Rust kinit --fast -S host (TGS strengthen-key) ===="
 docker exec "$NAME" sh -c 'cat /dev/null > /tmp/mit-kdc.trace' || true
 set +e
-OUT3="$(docker exec -e KRB5_PASSWORD=userpassword "$NAME" \
+OUT3="$(docker exec -e RUST_LOG=krb5_protocol=debug -e KRB5_PASSWORD=userpassword "$NAME" \
     /tmp/krb5-kinit --fast --armor-ccache /tmp/krb5cc_armor \
     -c /tmp/krb5cc_fast_tgs -S host/testhost.kerber.test user@KERBER.TEST 2>&1)"
 rc3=$?
@@ -160,6 +160,278 @@ echo "$OUT3" | grep -q '"fast_strengthen":true' || {
     log "fast.client.gate" "error" ',"error":"FAST TGS rust client log missing fast_strengthen"'
     exit 1
 }
+
+echo "==== kinit -T: the AS reply's time offset replaces the armor cache's stale one (MIT first) ===="
+docker cp "$ROOT/scripts/lib/ccache-offset.py" "$NAME":/tmp/ccache-offset.py
+for who in mit rust; do
+    docker exec "$NAME" rm -f /tmp/so-armor.cc "/tmp/so-$who.cc"
+    docker exec "$NAME" sh -c 'printf "userpassword\n" | kinit -c /tmp/so-armor.cc user@KERBER.TEST' >/dev/null
+    docker exec "$NAME" python3 /tmp/ccache-offset.py set /tmp/so-armor.cc 120
+    if [ "$who" = mit ]; then
+        docker exec "$NAME" sh -c 'printf "userpassword\n" | kinit -T /tmp/so-armor.cc -c /tmp/so-mit.cc user@KERBER.TEST' >/dev/null
+    else
+        docker exec -e KRB5_PASSWORD=userpassword "$NAME" \
+            /tmp/krb5-kinit -T /tmp/so-armor.cc -c /tmp/so-rust.cc user@KERBER.TEST >/dev/null
+    fi
+    off="$(docker exec "$NAME" python3 /tmp/ccache-offset.py show "/tmp/so-$who.cc")"
+    echo "$who -T header offset: $off (armor cache said 120)"
+    case "$off" in
+    0 | 1 | -1) ;;
+    *)
+        log "fast.client.gate" "error" ",\"error\":\"$who kinit -T kept the armor cache's offset $off\""
+        exit 1
+        ;;
+    esac
+done
+
+echo "==== kdc_timesync = 0, kinit -s 1h: no skew check on a postdated reply (MIT first) ===="
+docker exec "$NAME" sh -c 'sed "s/^\[libdefaults\]\$/[libdefaults]\n    kdc_timesync = 0/" /etc/krb5.conf > /tmp/ts0-krb5.conf'
+docker exec "$NAME" grep -q 'kdc_timesync = 0' /tmp/ts0-krb5.conf
+for who in mit rust; do
+    docker exec "$NAME" rm -f "/tmp/ps-$who.cc"
+    set +e
+    if [ "$who" = mit ]; then
+        PS="$(docker exec -e KRB5_CONFIG=/tmp/ts0-krb5.conf "$NAME" \
+            sh -c "printf 'userpassword\n' | kinit -s 1h -c /tmp/ps-mit.cc user@KERBER.TEST" 2>&1)"
+    else
+        PS="$(docker exec -e KRB5_CONFIG=/tmp/ts0-krb5.conf -e KRB5_PASSWORD=userpassword "$NAME" \
+            /tmp/krb5-kinit -s 1h -c /tmp/ps-rust.cc user@KERBER.TEST 2>&1)"
+    fi
+    prc=$?
+    set -e
+    echo "$who kinit -s 1h rc=$prc: $PS"
+    if [ "$prc" -ne 0 ]; then
+        log "fast.client.gate" "error" ",\"error\":\"$who kinit -s 1h refused under kdc_timesync = 0\",\"rc\":$prc"
+        exit 1
+    fi
+    docker exec "$NAME" klist -c "/tmp/ps-$who.cc" | grep -q 'krbtgt/KERBER.TEST@KERBER.TEST'
+done
+
+echo "==== kvno: a TGS reply outside clockskew of the cache's offset (MIT first) ===="
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kvno" "$NAME":/tmp/krb5-kvno
+docker exec "$NAME" chmod +x /tmp/krb5-kvno
+docker exec "$NAME" sh -c 'sed "s/^\[libdefaults\]\$/[libdefaults]\n    clockskew = 60/" /etc/krb5.conf > /tmp/cs60-krb5.conf'
+for off in 120 -120 0; do
+    for who in mit rust; do
+        docker exec "$NAME" rm -f /tmp/kv.cc
+        docker exec "$NAME" sh -c 'printf "userpassword\n" | kinit -c /tmp/kv.cc user@KERBER.TEST' >/dev/null
+        docker exec "$NAME" python3 /tmp/ccache-offset.py set /tmp/kv.cc "$off"
+        if [ "$who" = mit ]; then bin=kvno; else bin=/tmp/krb5-kvno; fi
+        set +e
+        KV="$(docker exec -e KRB5_CONFIG=/tmp/cs60-krb5.conf -e KRB5CCNAME=FILE:/tmp/kv.cc "$NAME" \
+            "$bin" host/testhost.kerber.test@KERBER.TEST 2>&1)"
+        krc=$?
+        set -e
+        echo "$who kvno offset $off rc=$krc: $KV"
+        if [ "$off" = 0 ]; then want=0; else want=1; fi
+        if [ "$krc" -ne "$want" ] || { [ "$want" = 1 ] && ! grep -q 'Clock skew too great in KDC reply' <<<"$KV"; }; then
+            log "fast.client.gate" "error" ",\"error\":\"$who kvno at offset $off gave rc $krc\""
+            exit 1
+        fi
+    done
+done
+
+echo "==== no preauth: the reply's salt (norealm, onlyrealm, special) takes the password key (MIT first) ===="
+for salt in norealm onlyrealm special; do
+    kadmin_q_ok mit_kadmin_local "$NAME" -- -q "addprinc -pw userpassword -e aes256-cts-hmac-sha1-96:$salt -requires_preauth s_$salt"
+    for who in mit rust; do
+        docker exec "$NAME" rm -f /tmp/sl.cc
+        set +e
+        if [ "$who" = mit ]; then
+            SL="$(docker exec "$NAME" sh -c "printf 'userpassword\n' | kinit -c /tmp/sl.cc s_$salt@KERBER.TEST" 2>&1)"
+        else
+            SL="$(docker exec -e KRB5_PASSWORD=userpassword "$NAME" \
+                /tmp/krb5-kinit -c /tmp/sl.cc "s_$salt@KERBER.TEST" 2>&1)"
+        fi
+        src=$?
+        set -e
+        echo "$who kinit $salt key rc=$src: $SL"
+        if [ "$src" -ne 0 ]; then
+            log "fast.client.gate" "error" ",\"error\":\"$who kinit refused a $salt key without preauth\",\"rc\":$src"
+            exit 1
+        fi
+    done
+done
+
+echo "==== kvno: an expired krbtgt/SREALM in the cache is skipped, the walk starts at the local TGT (MIT first) ===="
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -randkey krbtgt/OTHER.TEST@KERBER.TEST'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'modprinc -maxlife "5 seconds" krbtgt/OTHER.TEST@KERBER.TEST'
+docker exec "$NAME" sh -c 'sed "s/^\[realms\]\$/[realms]\n    OTHER.TEST = {\n        kdc = 127.0.0.1\n    }/" /etc/krb5.conf > /tmp/other-krb5.conf'
+docker exec "$NAME" rm -f /tmp/xt.cc
+docker exec "$NAME" sh -c 'printf "userpassword\n" | kinit -c /tmp/xt.cc user@KERBER.TEST' >/dev/null
+docker exec -e KRB5_CONFIG=/tmp/other-krb5.conf -e KRB5CCNAME=FILE:/tmp/xt.cc "$NAME" kvno krbtgt/OTHER.TEST@KERBER.TEST >/dev/null
+sleep 6
+for who in mit rust; do
+    docker exec "$NAME" cp /tmp/xt.cc "/tmp/xt-$who.cc"
+    if [ "$who" = mit ]; then bin=kvno; else bin=/tmp/krb5-kvno; fi
+    set +e
+    TR="$(docker exec -e KRB5_CONFIG=/tmp/other-krb5.conf -e KRB5_TRACE=/dev/stdout -e "KRB5CCNAME=FILE:/tmp/xt-$who.cc" \
+        "$NAME" "$bin" host/h.other.test@OTHER.TEST 2>&1)"
+    set -e
+    echo "$who: $(grep -c 'Starting with TGT for client realm' <<<"$TR") local-TGT start, $(grep -c 'Found cached TGT for service realm' <<<"$TR") cached-TGT use"
+    if ! grep -q 'Starting with TGT for client realm' <<<"$TR" || grep -q 'Found cached TGT for service realm' <<<"$TR"; then
+        echo "$TR"
+        log "fast.client.gate" "error" ",\"error\":\"$who kvno used an expired krbtgt/OTHER.TEST\""
+        exit 1
+    fi
+done
+
+echo "==== request_timeout = 3: a TCP reply sent one byte a second fails at 3 s (MIT first) ===="
+docker cp "$ROOT/scripts/lib/trickle-kdc.py" "$NAME":/tmp/trickle-kdc.py
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kpasswd" "$NAME":/tmp/krb5-kpasswd
+docker exec "$NAME" chmod +x /tmp/krb5-kpasswd
+docker exec -d "$NAME" timeout 120 python3 /tmp/trickle-kdc.py 1899
+docker exec "$NAME" sh -c 'sed "s/^\[libdefaults\]\$/[libdefaults]\n    udp_preference_limit = 1\n    request_timeout = 3/" /etc/krb5.conf > /tmp/rt-base.conf
+sed "s/kdc = 127.0.0.1\$/kdc = 127.0.0.1:1899/" /tmp/rt-base.conf > /tmp/rt-kdc.conf
+sed "s/^\(        admin_server = 127.0.0.1\)\$/\1\n        kpasswd_server = 127.0.0.1:1899/" /tmp/rt-base.conf > /tmp/rt-kpw.conf'
+for what in kinit kpasswd; do
+    for who in mit rust; do
+        conf=/tmp/rt-kdc.conf
+        [ "$what" = kpasswd ] && conf=/tmp/rt-kpw.conf
+        docker exec "$NAME" rm -f /tmp/rt.cc
+        start=$SECONDS
+        set +e
+        case "$what.$who" in
+        kinit.mit) RT="$(docker exec -e KRB5_CONFIG=$conf "$NAME" sh -c 'printf "userpassword\n" | kinit -c /tmp/rt.cc user@KERBER.TEST' 2>&1)" ;;
+        kinit.rust) RT="$(docker exec -e KRB5_CONFIG=$conf -e KRB5_PASSWORD=userpassword "$NAME" /tmp/krb5-kinit -c /tmp/rt.cc user@KERBER.TEST 2>&1)" ;;
+        kpasswd.mit) RT="$(docker exec -e KRB5_CONFIG=$conf "$NAME" sh -c 'printf "userpassword\ntrickle-pw\ntrickle-pw\n" | kpasswd user@KERBER.TEST' 2>&1)" ;;
+        *) RT="$(docker exec -e KRB5_CONFIG=$conf -e KRB5_PASSWORD=userpassword -e KRB5_NEW_PASSWORD=trickle-pw "$NAME" /tmp/krb5-kpasswd user@KERBER.TEST 2>&1)" ;;
+        esac
+        rtrc=$?
+        set -e
+        took=$((SECONDS - start))
+        echo "$who $what rc=$rtrc after ${took}s: $(tail -n 1 <<<"$RT")"
+        if [ "$rtrc" -ne 1 ] || [ "$took" -gt 6 ] || ! grep -q 'Cannot contact any KDC' <<<"$RT"; then
+            log "fast.client.gate" "error" ",\"error\":\"$who $what did not stop at request_timeout\",\"rc\":$rtrc,\"secs\":$took"
+            exit 1
+        fi
+    done
+done
+
+echo "==== kvno: a TGS reply with a modified ticket fails and retries once; kpasswd bad reply (MIT first) ===="
+docker cp "$ROOT/harness/field/lib/kdc-rewrite-proxy.py" "$NAME":/tmp/kdc-rewrite-proxy.py
+docker exec -d "$NAME" timeout 120 python3 /tmp/kdc-rewrite-proxy.py 1898 127.0.0.1 88 /tmp/mod-proxy.log tgs-rep-ticket
+docker exec -d "$NAME" timeout 120 python3 /tmp/trickle-kdc.py 1897 badlen
+docker exec "$NAME" sh -c 'sed "s/kdc = 127.0.0.1\$/kdc = 127.0.0.1:1898/" /etc/krb5.conf > /tmp/mod-kdc.conf
+sed "s/^\[libdefaults\]\$/[libdefaults]\n    udp_preference_limit = 1/; s/^\(        admin_server = 127.0.0.1\)\$/\1\n        kpasswd_server = 127.0.0.1:1897/" /etc/krb5.conf > /tmp/mod-kpw.conf'
+sleep 1
+for who in mit rust; do
+    docker exec "$NAME" sh -c 'rm -f /tmp/mod.cc; : > /tmp/mod-proxy.log; printf "userpassword\n" | kinit -c /tmp/mod.cc user@KERBER.TEST'
+    if [ "$who" = mit ]; then bin=kvno; else bin=/tmp/krb5-kvno; fi
+    set +e
+    KV="$(docker exec -e KRB5_CONFIG=/tmp/mod-kdc.conf -e KRB5CCNAME=FILE:/tmp/mod.cc "$NAME" $bin host/testhost.kerber.test@KERBER.TEST 2>&1)"
+    reqs="$(docker exec "$NAME" grep -c msg_type=12 /tmp/mod-proxy.log)"
+    case "$who" in
+    mit) PW="$(docker exec -e KRB5_CONFIG=/tmp/mod-kpw.conf "$NAME" sh -c 'printf "userpassword\nmod-pw\nmod-pw\n" | kpasswd user@KERBER.TEST' 2>&1)" ;;
+    *) PW="$(docker exec -e KRB5_CONFIG=/tmp/mod-kpw.conf -e KRB5_PASSWORD=userpassword -e KRB5_NEW_PASSWORD=mod-pw "$NAME" /tmp/krb5-kpasswd user@KERBER.TEST 2>&1)" ;;
+    esac
+    set -e
+    KV="${KV#*: }"
+    PW="$(tr -d '\r' <<<"$PW" | grep -v '^$' | tail -n 1)"
+    PW="${PW##*: }"
+    echo "$who: kvno '$KV' ($reqs TGS requests); kpasswd '$PW'"
+    if [ "$who" = mit ]; then want_kv="$KV"; want_reqs="$reqs"; want_pw="$PW"; fi
+    if [ "${KV#Ticket modified in KDC reply}" = "$KV" ] || [ "$KV" != "$want_kv" ] || [ "$reqs" != "$want_reqs" ] || [ "$PW" != "$want_pw" ]; then
+        log "fast.client.gate" "error" ",\"error\":\"$who modified-reply cell differs from MIT\""
+        exit 1
+    fi
+done
+
+echo "==== a realm relation named KDC is not kdc: no KDC found (MIT first) ===="
+docker exec "$NAME" sh -c 'sed "s/^\([[:space:]]*\)kdc = /\1KDC = /" /etc/krb5.conf > /tmp/upper-kdc.conf; grep -c "KDC = " /tmp/upper-kdc.conf'
+for who in mit rust; do
+    set +e
+    if [ "$who" = mit ]; then
+        UK="$(docker exec -e KRB5_CONFIG=/tmp/upper-kdc.conf "$NAME" sh -c 'printf "userpassword\n" | kinit -c /tmp/up.cc user@KERBER.TEST' 2>&1)"
+    else
+        UK="$(docker exec -e KRB5_CONFIG=/tmp/upper-kdc.conf -e KRB5_PASSWORD=userpassword "$NAME" /tmp/krb5-kinit -c /tmp/up.cc user@KERBER.TEST 2>&1)"
+    fi
+    set -e
+    # Ours logs JSON on stdout, and docker exec can deliver it after the stderr message.
+    UK="$(tr -d '\r' <<<"$UK" | grep -v -e '^Password for' -e '^{' | tail -n 1)"
+    UK="${UK#*: }"
+    echo "$who: '$UK'"
+    if [ "$who" = mit ]; then want_uk="$UK"; fi
+    if [ "${UK#Cannot find KDC for realm}" = "$UK" ] || [ "$UK" != "$want_uk" ]; then
+        log "fast.client.gate" "error" ",\"error\":\"$who found a KDC from a relation named KDC\""
+        exit 1
+    fi
+done
+
+# reply-etype-kdc.py on PORT with the rest as its arguments; MIT's kinit must say WANT, then ours the same.
+re_case() {
+    local port=$1 want=$2 label=$3 who out rc mit_out=
+    shift 3
+    docker exec -d "$NAME" sh -c "python3 /tmp/reply-etype-kdc.py $port $* > /tmp/re-$port.log 2>&1"
+    require_log "$NAME" "/tmp/re-$port.log" listening "reply-etype-kdc on $port"
+    docker exec "$NAME" sh -c "printf '[libdefaults]\n default_realm = KERBER.TEST\n default_tkt_enctypes = aes256-cts-hmac-sha1-96\n permitted_enctypes = aes256-cts-hmac-sha1-96\n[realms]\n KERBER.TEST = {\n  kdc = 127.0.0.1:$port\n }\n' > /tmp/re-$port.conf"
+    for who in mit rust; do
+        set +e
+        if [ "$who" = mit ]; then
+            out="$(docker exec -e KRB5_CONFIG="/tmp/re-$port.conf" "$NAME" sh -c "printf 'userpassword\n' | kinit -c /tmp/re.cc user@KERBER.TEST" 2>&1)"
+        else
+            out="$(docker exec -e KRB5_CONFIG="/tmp/re-$port.conf" -e KRB5_PASSWORD=userpassword "$NAME" \
+                /tmp/krb5-kinit -c /tmp/re.cc user@KERBER.TEST 2>&1)"
+        fi
+        rc=$?
+        set -e
+        out="$(tr -d '\r' <<<"$out" | grep -v -e '^Password for' -e '^{' | tail -n 1)"
+        out="${out#*: }"
+        echo "$who $label: rc=$rc $out"
+        if [ "$who" = mit ]; then
+            mit_out="$rc $out"
+            case "$out" in "$want"*) ;; *) die "MIT's kinit for $label: $out" ;; esac
+        elif [ "$rc $out" != "$mit_out" ]; then
+            die "ours for $label: rc=$rc $out; MIT: $mit_out"
+        fi
+    done
+}
+
+echo "==== an AS-REP in an enctype the request didn't list, or whose ETYPE-INFO2 names none: MIT kinit, then ours (get_in_tkt.c:1412-1422, preauth2.c:818-833) ===="
+docker cp "$ROOT/scripts/lib/reply-etype-kdc.py" "$NAME":/tmp/reply-etype-kdc.py
+for spec in 1893:17: 1894:18:17 1895:18:99; do
+    IFS=: read -r port enc info <<<"$spec"
+    case "$info" in 99) w='Program lacks support for encryption type' ;; *) w='No supported encryption types (config file error?)' ;; esac
+    re_case "$port" "$w" "enc $enc info ${info:-none}" "$enc" ${info:+"$info"}
+done
+
+echo "==== ktutil addent -password sends no s2kparams, so each enctype's default count: MIT ktutil, then ours, each keytab read by MIT's klist -K (ktutil_funcs.c:100-110) ===="
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-ktutil" "$NAME":/tmp/krb5-ktutil
+for e in aes256-cts-hmac-sha384-192 camellia256-cts-cmac arcfour-hmac; do
+    for who in mit rust; do
+        bin=ktutil
+        if [ "$who" = rust ]; then
+            bin=/tmp/krb5-ktutil
+        fi
+        set +e
+        docker exec "$NAME" rm -f "/tmp/kt-$who"
+        printf 'addent -password -p user@KERBER.TEST -k 1 -e %s\nuserpassword\nwkt /tmp/kt-%s\nquit\n' "$e" "$who" |
+            docker exec -i "$NAME" "$bin" > /dev/null 2>&1
+        key="$(docker exec "$NAME" klist -k -K -e "/tmp/kt-$who" 2>&1 | tail -n 1)"
+        set -e
+        echo "$who $e: $key"
+        if [ "$who" = mit ]; then
+            mit_key=$key
+            case "$key" in *"$e)"*"(0x"*) ;; *) die "MIT's ktutil for $e: $key" ;; esac
+        elif [ "$key" != "$mit_key" ]; then
+            die "ours for $e: $key; MIT: $mit_key"
+        fi
+    done
+done
+
+echo "==== a PREAUTH_REQUIRED whose ETYPE-INFO2 iteration count is under aes256's 4096, or at MIT's cap: MIT kinit, then ours (s2k_pbkdf2.c:122-141) ===="
+for spec in 1881:1 1882:4095 1883:16777216; do
+    IFS=: read -r port iter <<<"$spec"
+    re_case "$port" 'Pre-authentication failed: Invalid key generation parameters from KDC' "s2kparams $iter" s2k "$iter"
+done
+
+echo "==== each AS request carries a new nonce: MIT kinit, then ours, to a KDC that answers PREAUTH_REQUIRED, then PREAUTH_FAILED (get_in_tkt.c:1273-1276) ===="
+re_case 1884 'Password incorrect' nonce nonce
+mapfile -t seen < <(docker exec "$NAME" grep '^nonce' /tmp/re-1884.log | awk '{print $2}')
+echo "nonces, MIT's then ours: ${seen[*]}"
+[ "${#seen[@]}" = 4 ] || die "the nonce KDC saw ${#seen[@]} requests, not two from each kinit"
+[ "${seen[0]}" != "${seen[1]}" ] || die "MIT's kinit sent nonce ${seen[0]} twice"
+[ "${seen[2]}" != "${seen[3]}" ] || die "ours sent nonce ${seen[2]} twice"
 
 echo "==== require_auth encrypted_challenge: FAST issued, password 12 both legs ===="
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
@@ -389,64 +661,5 @@ fast_inner_trace() {
 fast_inner_trace mit
 fast_inner_trace rust
 
-echo "==== Rust kinit --fast -S against rust KDC ===="
-kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'delstr host/testhost.kerber.test require_auth'
-docker exec "$NAME" kdb5_util dump /tmp/plain-host.dump
-docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true'
-wait_pid_gone "$NAME" krb5-kdc || true
-docker exec "$NAME" sh -c ': >/tmp/rust-kdc.log'
-LOAD_PLAIN="$(docker exec \
-    -e KRB5_MASTER_PASSWORD=masterpassword \
-    -e KRB5_KDC_DB=/tmp/rust.db \
-    -e KRB5_KDC_STASH=/tmp/rust.stash \
-    "$NAME" /tmp/krb5-kdb load /tmp/plain-host.dump)"
-echo "$LOAD_PLAIN"
-docker exec -d \
-    -e KRB5_KDC_DB=/tmp/rust.db \
-    -e KRB5_KDC_STASH=/tmp/rust.stash \
-    -e KRB5_MASTER_PASSWORD=masterpassword \
-    -e KRB5_KDC_PROFILE=/tmp/rust-kdc.conf \
-    "$NAME" sh -c '/tmp/krb5-kdc 127.0.0.1:8888 >/tmp/rust-kdc.log 2>&1'
-ok=0
-for _ in $(seq 1 80); do
-    if docker exec "$NAME" grep -q '^listening ' /tmp/rust-kdc.log 2>/dev/null; then
-        ok=1
-        break
-    fi
-    sleep 0.25
-done
-if [ "$ok" != 1 ]; then
-    docker exec "$NAME" cat /tmp/rust-kdc.log >&2 || true
-    log "fast.client.gate" "error" ',"error":"rust kdc did not listen for FAST TGS"'
-    exit 1
-fi
-docker exec "$NAME" rm -f /tmp/rust-armor.cc /tmp/rust-fast-tgs.cc
-if ! docker exec -e KRB5_CONFIG=/tmp/rust-krb5.conf -e KRB5_PASSWORD=userpassword "$NAME" \
-    /tmp/krb5-kinit -c /tmp/rust-armor.cc user@KERBER.TEST; then
-    docker exec "$NAME" cat /tmp/rust-kdc.log >&2 || true
-    log "fast.client.gate" "error" ',"error":"rust kinit armor against rust KDC failed"'
-    exit 1
-fi
-set +e
-RUST_TGS="$(docker exec -e KRB5_CONFIG=/tmp/rust-krb5.conf -e KRB5_PASSWORD=userpassword "$NAME" \
-    /tmp/krb5-kinit --fast --armor-ccache /tmp/rust-armor.cc \
-    -c /tmp/rust-fast-tgs.cc -S host/testhost.kerber.test user@KERBER.TEST 2>&1)"
-rtrc=$?
-set -e
-echo "$RUST_TGS"
-if [ "$rtrc" -ne 0 ]; then
-    docker exec "$NAME" cat /tmp/rust-kdc.log >&2 || true
-    log "fast.client.gate" "error" ',"error":"rust kinit --fast -S against rust KDC failed","rc":'"$rtrc"
-    exit 1
-fi
-assert_no_error_log "$RUST_TGS" fast.client.gate
-echo "$RUST_TGS" | grep -q '"fast_strengthen":true' || {
-    log "fast.client.gate" "error" ',"error":"rust KDC FAST TGS missing fast_strengthen"'
-    exit 1
-}
-KLISTR="$(docker exec "$NAME" klist -c /tmp/rust-fast-tgs.cc 2>/dev/null || true)"
-echo "$KLISTR"
-echo "$KLISTR" | grep -q 'host/testhost.kerber.test'
-
-log "fast.client.gate" "ok" ',"mode":"rust-kinit","pa_type":136,"principal":"user@KERBER.TEST","nopreauth":true,"etype":20,"tgs_strengthen":true,"mit_tgs_strengthen":true,"ec_require_auth":"issued+12","rust_kdc_fast_tgs":true,"fast_inner_method":true'
+log "fast.client.gate" "ok" ',"mode":"rust-kinit","pa_type":136,"principal":"user@KERBER.TEST","nopreauth":true,"etype":20,"tgs_strengthen":true,"mit_tgs_strengthen":true,"ec_require_auth":"issued+12","fast_inner_method":true'
 exit 0

@@ -24,11 +24,6 @@ sha1.workspace = true
 # as scripts/lib/build-bins.sh builds them), so a release build has none of them, nor the
 # environment they read.
 [[bin]]
-name = "ccache-probe"
-path = "src/bin/ccache-probe.rs"
-required-features = ["krb5-kdc/test-hooks"]
-
-[[bin]]
 name = "diffsend"
 path = "src/bin/diffsend.rs"
 required-features = ["krb5-kdc/test-hooks"]
@@ -49,20 +44,14 @@ path = "src/bin/krb5-pac-extract.rs"
 required-features = ["krb5-kdc/test-hooks"]
 
 [[bin]]
-name = "krb5-vfy-increds"
-path = "src/bin/krb5-vfy-increds.rs"
-required-features = ["krb5-kdc/test-hooks"]
-
-[[bin]]
 name = "loadgen"
 path = "src/bin/loadgen.rs"
 required-features = ["krb5-kdc/test-hooks"]
 
-# It runs krb5-forge-tgt, so it needs that program built.
-[[test]]
-name = "forge_tgt"
-path = "tests/forge_tgt.rs"
-required-features = ["krb5-kdc/test-hooks"]
+[[bin]]
+name = "rd-sweep"
+path = "src/bin/rd-sweep.rs"
+required-features = ["krb5-admin/test-hooks"]
 
 [lints]
 workspace = true

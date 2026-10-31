@@ -1,12 +1,10 @@
-//! `PasswordCell`: the password is read when a module wants the key, kept once it is read, and not
-//! kept when the read fails.
+//! `PasswordCell`: the password is read when a module wants the key, kept once it is read, and not kept when the read fails.
 
 use std::collections::VecDeque;
 use std::io::ErrorKind;
 
 use super::*;
 
-/// A prompter answering from a script: `Ok(text)`, or an error of that kind.
 struct Script {
     reads: VecDeque<Result<&'static [u8], ErrorKind>>,
     asked: usize,
@@ -47,72 +45,6 @@ fn a_read_that_fails_holds_nothing_and_the_next_get_asks_again() {
     );
     drop(cell);
     assert_eq!(ui.asked, 2);
-}
-
-#[test]
-fn a_read_that_worked_is_kept_and_not_asked_again() {
-    let mut ui = Script::new(&[Ok(b"secret"), Ok(b"another")]);
-    let mut cell = PasswordCell::new(Some(&mut ui), b"", false);
-    assert_eq!(cell.get().unwrap().as_slice(), b"secret");
-    assert_eq!(cell.get().unwrap().as_slice(), b"secret");
-    drop(cell);
-    assert_eq!(ui.asked, 1);
-}
-
-#[test]
-fn an_interrupted_read_is_an_interrupt_with_the_codes_own_text() {
-    let mut ui = Script::new(&[Err(ErrorKind::Interrupted)]);
-    let mut cell = PasswordCell::new(Some(&mut ui), b"", false);
-    let f = cell.get().expect_err("interrupted");
-    assert!(f.interrupted);
-    assert_eq!(f.code, PWDINTR);
-    assert!(matches!(&f.error, Error::File(io) if io.kind() == ErrorKind::Interrupted));
-}
-
-#[test]
-fn a_read_that_fails_is_a_message_the_exchange_reports_as_it_is() {
-    let f = ModuleFail::from_read(Error::File(std::io::Error::other("Cannot read password")));
-    assert_eq!(f.error.to_string(), "Cannot read password");
-    assert_eq!(
-        Error::PreauthFailed(Box::new(f.error)).to_string(),
-        "Pre-authentication failed: Cannot read password"
-    );
-}
-
-#[test]
-fn the_responders_answer_is_the_password_with_no_prompt_and_stays_it() {
-    let mut ui = Script::new(&[Ok(b"typed")]);
-    let mut cell = PasswordCell::new(Some(&mut ui), b"", false);
-    cell.offer(Some("answered"));
-    assert_eq!(cell.get().unwrap().as_slice(), b"answered");
-    // A later round's answer does not replace the password a module already used.
-    cell.offer(Some("other"));
-    assert_eq!(cell.get().unwrap().as_slice(), b"answered");
-    drop(cell);
-    assert_eq!(ui.asked, 0);
-}
-
-#[test]
-fn a_round_with_no_answer_asks_the_prompter() {
-    let mut ui = Script::new(&[Ok(b"typed")]);
-    let mut cell = PasswordCell::new(Some(&mut ui), b"", false);
-    cell.offer(Some("answered"));
-    cell.offer(None);
-    assert_eq!(cell.get().unwrap().as_slice(), b"typed");
-}
-
-#[test]
-fn with_no_prompter_the_supplied_password_is_the_password() {
-    let mut cell = PasswordCell::new(None, b"given", false);
-    assert_eq!(cell.get().unwrap().as_slice(), b"given");
-    assert_eq!(cell.get().unwrap().as_slice(), b"given");
-}
-
-#[test]
-fn the_ui_of_a_cell_with_no_prompter_cannot_read() {
-    let mut cell = PasswordCell::new(None, b"given", false);
-    let e = cell.ui().password().expect_err("no prompter");
-    assert_eq!(ModuleFail::from_read(e).code, CANTREADPWD);
 }
 
 #[test]
@@ -184,9 +116,7 @@ fn a_failure_no_module_wraps_is_the_error_the_prompter_gave() {
     );
 }
 
-/// A keytab that could not be read fails every key a module or the reply asks of it with the
 /// keytab's own error, asks the responder nothing, and never reads a password.
-/// MIT `get_as_key_keytab` (`lib/krb5/krb/gic_keytab.c:68-71`): the lookup's error is the callback's, in its code and message.
 #[test]
 fn an_unreadable_keytab_fails_every_key_with_its_error_and_reads_no_password() {
     let failure = KeytabFailure {

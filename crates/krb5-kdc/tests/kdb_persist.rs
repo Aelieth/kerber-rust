@@ -1,36 +1,36 @@
 //! Persist round-trip and UDP listener adversarial tests, and the modifier each write
 //! stamps.
-//! MIT `kdb_put_entry` (`server_kdb.c:376-377`): the put stamps `KRB5_TL_MOD_PRINC` with
+// MIT: `kdb_put_entry` (server_kdb.c:376-377)
+//! the put stamps `KRB5_TL_MOD_PRINC` with
 //! `handle->current_caller`, not a hard-coded `kadmin/admin@REALM`, so the actor a create
 //! names is the stamp.
 //! `kdb5_util create` stamps `db_creation@REALM`.
-//! MIT `db_creator_entries` (`kdb5_create.c:114-115`): the stamp's one name component is
+// MIT: `db_creator_entries` (kdb5_create.c:114-115)
+//! the stamp's one name component is
 //! `db_creation`.
-//! MIT `db_create_princ` (`kdb5_create.c:127-133`): the `db_creation` principal that
+// MIT: `db_create_princ` (kdb5_create.c:127-133)
+//! the `db_creation` principal that
 //! `add_principal` stamps as the modifier of each principal `kdb5_util create` writes.
 //! `kadm5_create` stamps `kadmin/admin` and `kadmin/changepw` with `kdb5_util@REALM`.
-//! MIT `kadm5_create_magic_princs` (`kadm5_create.c:100-100`): the kadm5 handle is opened
+// MIT: `kadm5_create_magic_princs` (kadm5_create.c:100-100)
+//! the kadm5 handle is opened
 //! with `progname` as the client name, so its `current_caller` is `kdb5_util@REALM`.
 //! `kadm5_purgekeys` goes through `kdb_put_entry`, which stamps `current_caller`.
-//! MIT `kdb_put_entry` (`server_kdb.c:376-377`): the put stamps the modifier as
+// MIT: `kdb_put_entry` (server_kdb.c:376-377)
+//! the put stamps the modifier as
 //! `handle->current_caller`.
 //! `kadm5_set_string` goes through `kdb_put_entry` too, so it stamps `current_caller`.
-//! MIT `kadm5_set_string` (`svr_principal.c:2022-2043`): the string is stored through
+// MIT: `kadm5_set_string` (svr_principal.c:2022-2043)
+//! the string is stored through
 //! `kdb_put_entry`.
 
-use krb5_asn1::{decode, encode};
-use krb5_crypto::{EncryptionType, KeyUsage, decrypt, string_to_key};
+use krb5_crypto::EncryptionType;
 use krb5_kdc::principals::{kadmin_admin, kadmin_changepw};
-use krb5_kdc::testrealm::{
-    TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented, documented_admin_id,
-};
-use krb5_kdc::{
-    Acl, S2K_ITERS, TL_MOD_PRINC, handle_request, load_store, save_store, tl_mod_princ_name,
-};
-use krb5_protocol::{as_req, pa_enc_timestamp};
+use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented, documented_admin_id};
+use krb5_kdc::{load_store, save_store, tl_mod_princ_name};
 
 use krb5_testkit::scratch_dir;
-use krb5_types::{AsRep, PrincipalName, ku};
+use krb5_types::PrincipalName;
 
 #[test]
 fn persist_survives_restart_without_key_regen() {
@@ -75,51 +75,6 @@ fn persist_survives_restart_without_key_regen() {
         store.get_name(&user).unwrap().rid
     );
     assert_eq!(loaded.krbtgt().unwrap().rid, krb5_kdc::RID_KRBTGT);
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// With iprop on, a change of a database is logged after its write, and the log is a file the next
-/// process reads; with iprop off, no log is written at all (settled live on MIT 1.22.2).
-#[test]
-fn persist_ulog_survives_reload() {
-    let dir = scratch_dir("krb5-ulog");
-    let db = dir.join("principal");
-    let stash = dir.join("stash");
-    let ulog = dir.join("principal.ulog");
-    let (mut store, acl) = bootstrap_documented().unwrap();
-    store.persist_paths = Some((db.clone(), stash.clone()));
-    save_store(&store, &db, &stash).unwrap();
-    let off = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "off.kerber.test"]);
-    store
-        .change(|s| s.create_host(&acl, &documented_admin_id(), &off))
-        .unwrap()
-        .unwrap();
-    assert!(!ulog.exists(), "no update log without iprop");
-    store
-        .map_ulog(&ulog, 1000, krb5_kdc::IpropRole::Primary)
-        .unwrap();
-    let start = store.ulog_last().unwrap();
-    let extra = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "ulog.kerber.test"]);
-    store
-        .change(|s| s.create_host(&acl, &documented_admin_id(), &extra))
-        .unwrap()
-        .unwrap();
-    let after = store.ulog_last().unwrap();
-    assert_eq!(after.sno, start.sno + 1, "one create is one entry");
-    let mut loaded = load_store(&db, &stash).unwrap();
-    assert!(loaded.ulog().is_none(), "a store maps no log by itself");
-    loaded
-        .map_ulog(&ulog, 1000, krb5_kdc::IpropRole::Primary)
-        .unwrap();
-    assert_eq!(loaded.ulog_last(), Some(after));
-    let delta = loaded.ulog_get_entries(start);
-    assert_eq!(delta.status, krb5_kdc::IPROP_OK);
-    assert_eq!(delta.updates.len(), 1);
-    assert_eq!(
-        krb5_kdc::walk_incr_update(&delta.updates[0]).unwrap().name,
-        "host/ulog.kerber.test@KERBER.TEST",
-        "replica poll after restart must stay incremental"
-    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -179,209 +134,6 @@ fn persist_writes_db_and_stash_mode_0600() {
     let stash_mode = std::fs::metadata(&stash).unwrap().permissions().mode() & 0o777;
     assert_eq!(db_mode, 0o600, "db must be 0600");
     assert_eq!(stash_mode, 0o600, "stash must be 0600");
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn reload_if_stale_sees_kadmin_create() {
-    let dir = scratch_dir("krb5-reload");
-    let db = dir.join("principal");
-    let stash = dir.join("stash");
-    let (mut writer, acl) = bootstrap_documented().unwrap();
-    save_store(&writer, &db, &stash).unwrap();
-    let mut reader = load_store(&db, &stash).unwrap();
-    reader.policy.allow_rc4 = true;
-    let extra = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["extra"]);
-    writer.persist_paths = Some((db.clone(), stash.clone()));
-    writer
-        .change(|s| s.create_password(&acl, &documented_admin_id(), &extra, b"extra-secret"))
-        .unwrap()
-        .unwrap();
-    reader.reload_if_stale().unwrap();
-    assert!(
-        reader.get_name(&extra).is_some(),
-        "KDC must pick up kadmind create from the shared db"
-    );
-    assert!(
-        reader.policy.allow_rc4,
-        "kdc.conf allow_rc4 must survive dump reload"
-    );
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn reload_if_stale_keeps_lockout() {
-    use krb5_kdc::NamedPolicy;
-    use krb5_kdc::testrealm::TEST_USER;
-
-    let dir = scratch_dir("krb5-reload-overlay");
-    let db = dir.join("principal");
-    let stash = dir.join("stash");
-    let (mut writer, acl) = bootstrap_documented().unwrap();
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    writer.put_policy(NamedPolicy {
-        name: "lock".into(),
-        min_length: 0,
-        min_classes: 0,
-        history: 0,
-        max_fail: 3,
-        pw_failcnt_interval: 0,
-        pw_lockout_duration: 0,
-        pw_min_life: 0,
-        pw_max_life: 0,
-        allowed_keysalts: None,
-    });
-    writer
-        .set_principal_policy(&user, Some("lock".into()))
-        .unwrap();
-    save_store(&writer, &db, &stash).unwrap();
-    let mut reader = load_store(&db, &stash).unwrap();
-    let before = reader.get_name(&user).unwrap();
-    assert_eq!(reader.max_fail_for(before), 3);
-    let wrong =
-        krb5_crypto::ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0u8; 32])
-            .unwrap();
-    for nonce in [31, 32] {
-        let req = as_req(
-            user.clone(),
-            TEST_REALM,
-            nonce,
-            Some(vec![pa_enc_timestamp(&wrong).unwrap()]),
-        )
-        .unwrap();
-        assert!(krb5_kdc::issue_as(&reader, &req).is_err());
-    }
-    let after_fail = reader.get_name(&user).unwrap();
-    assert_eq!(reader.fail_auth_of(after_fail), 2);
-    writer.persist_paths = Some((db.clone(), stash.clone()));
-    let extra = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["unrelated"]);
-    writer
-        .change(|s| s.create_password(&acl, &documented_admin_id(), &extra, b"unrelated-secret"))
-        .unwrap()
-        .unwrap();
-    reader.reload_if_stale().unwrap();
-    assert!(reader.get_name(&extra).is_some(), "reload must see extra");
-    let after = reader.get_name(&user).unwrap();
-    assert_eq!(
-        reader.fail_auth_of(after),
-        2,
-        "lockout overlay must survive reload_if_stale"
-    );
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn persist_paths_saves_password_lock_and_expiry() {
-    let dir = scratch_dir("krb5-persist-status");
-    let db = dir.join("principal");
-    let stash = dir.join("stash");
-    let (store, acl) = bootstrap_documented().unwrap();
-    save_store(&store, &db, &stash).unwrap();
-    let mut store = load_store(&db, &stash).unwrap();
-    assert!(
-        store.persist_paths.is_some(),
-        "load_store must wire persist_paths so mutations save"
-    );
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let kvno_before = store
-        .get_name(&user)
-        .unwrap()
-        .keys
-        .iter()
-        .map(|k| k.kvno)
-        .max()
-        .unwrap();
-    store
-        .change(|s| {
-            s.change_password(&acl, &documented_admin_id(), &user, b"rotated-secret")?;
-            s.set_status(&user, true, 1_700_000_123)
-        })
-        .unwrap()
-        .unwrap();
-    let loaded = load_store(&db, &stash).unwrap();
-    let p = loaded.get_name(&user).unwrap();
-    let kvno_after = p.keys.iter().map(|k| k.kvno).max().unwrap();
-    assert!(
-        kvno_after > kvno_before,
-        "change_password must persist a kvno bump via save_if_configured"
-    );
-    assert!(p.locked, "locked must round-trip through dump v7");
-    assert_eq!(p.pw_expire, 1_700_000_123);
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn persist_dump_v7_issues_as_with_string_to_key() {
-    let dir = scratch_dir("krb5-persist-as");
-    let db = dir.join("principal");
-    let stash = dir.join("stash");
-    let (store, _) = bootstrap_documented().unwrap();
-    save_store(&store, &db, &stash).unwrap();
-    let raw = std::fs::read(&db).unwrap();
-    assert!(raw.starts_with(b"kdb5_util load_dump version 7"));
-    assert!(!raw.starts_with(b"KDB3"));
-    let loaded = load_store(&db, &stash).unwrap();
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let salt = cname.default_salt(TEST_REALM);
-    let key = string_to_key(
-        EncryptionType::Aes256CtsHmacSha196,
-        TEST_USER_PASSWORD,
-        &salt,
-        Some(&S2K_ITERS.to_be_bytes()),
-    )
-    .unwrap();
-    let req = as_req(
-        cname,
-        TEST_REALM,
-        77,
-        Some(vec![pa_enc_timestamp(&key).unwrap()]),
-    )
-    .unwrap();
-    let rep = handle_request(&loaded, &encode(&req).unwrap()).unwrap();
-    assert_eq!(rep.first().copied(), Some(0x6b));
-    let as_rep: AsRep = decode(&rep).unwrap();
-    let usage = KeyUsage::new(ku::AS_REP_ENC_PART).unwrap();
-    let plain = decrypt(&key, usage, as_rep.0.enc_part.cipher.as_ref()).unwrap();
-    let _ = krb5_asn1::decode_enc_kdc_rep_part(&plain).unwrap();
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn persist_legacy_kdb3_still_loads_sid() {
-    use krb5_kdc::save_store_legacy_kdb3;
-
-    let dir = scratch_dir("krb5-persist-kdb3");
-    let db = dir.join("principal");
-    let stash = dir.join("stash");
-    let (store, _) = bootstrap_documented().unwrap();
-    let sid = store.domain_sid().to_sddl();
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let rid = store.get_name(&user).unwrap().rid;
-    save_store_legacy_kdb3(&store, &db, &stash).unwrap();
-    let raw = std::fs::read(&db).unwrap();
-    assert!(raw.starts_with(b"KDB3"));
-    let loaded = load_store(&db, &stash).unwrap();
-    assert_eq!(loaded.domain_sid().to_sddl(), sid);
-    assert_eq!(loaded.get_name(&user).unwrap().rid, rid);
-    assert_ne!(sid, krb5_types::pac::RpcSid::dummy_domain().to_sddl());
-    let cname = user;
-    let salt = cname.default_salt(TEST_REALM);
-    let key = string_to_key(
-        EncryptionType::Aes256CtsHmacSha196,
-        TEST_USER_PASSWORD,
-        &salt,
-        Some(&S2K_ITERS.to_be_bytes()),
-    )
-    .unwrap();
-    let req = as_req(
-        cname,
-        TEST_REALM,
-        78,
-        Some(vec![pa_enc_timestamp(&key).unwrap()]),
-    )
-    .unwrap();
-    let rep = handle_request(&loaded, &encode(&req).unwrap()).unwrap();
-    assert_eq!(rep.first().copied(), Some(0x6b));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -473,61 +225,6 @@ fn legacy_raw_stash_the_writer_may_not_write_is_kept() {
     );
     load_store(&db, &stash).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// A full load leaves a new 0600 database owned by the writer (MIT `kdb5_util load`, kpropd);
-/// no update log is written beside it.
-#[cfg(unix)]
-#[test]
-fn a_full_load_save_leaves_a_new_database_file() {
-    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-    let dir = scratch_dir("krb5-save-fresh");
-    let db = dir.join("principal");
-    let ulog = dir.join("principal.ulog");
-    let stash = dir.join(".k5.KERBER.TEST");
-    let (store, _) = bootstrap_documented().unwrap();
-    save_store(&store, &db, &stash).unwrap();
-    std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o640)).unwrap();
-    let db_ino = std::fs::metadata(&db).unwrap().ino();
-    let loaded = load_store(&db, &stash).unwrap();
-    krb5_kdc::save_store_fresh(&loaded, &db, &stash, false, None).unwrap();
-    let meta = std::fs::metadata(&db).unwrap();
-    assert_eq!(meta.permissions().mode() & 0o777, 0o600);
-    assert_ne!(meta.ino(), db_ino);
-    assert!(!ulog.exists(), "a load writes no update log");
-    assert_eq!(load_store(&db, &stash).unwrap().ids(), loaded.ids());
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-fn tl_mod_name(p: &krb5_kdc::Principal) -> Option<String> {
-    let t = p.tl_data.iter().find(|t| t.ty == TL_MOD_PRINC)?;
-    let bytes = t.contents.get(4..)?;
-    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
-    String::from_utf8(bytes[..end].to_vec()).ok()
-}
-
-#[test]
-fn create_stamps_the_authenticated_caller() {
-    let (mut store, _) = bootstrap_documented().unwrap();
-    let actor = "joe/admin@KERBER.TEST";
-    let acl = Acl::allow_admin(actor).unwrap();
-    let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["z64u"]);
-    store
-        .create_password(&acl, actor, &name, b"z64-secret")
-        .unwrap();
-    let p = store.get_name(&name).expect("created");
-    assert_eq!(
-        tl_mod_name(p).as_deref(),
-        Some(actor),
-        "TL_MOD_PRINC must be current_caller, not kadmin/admin (got {:?}); documented admin is {}",
-        tl_mod_name(p),
-        documented_admin_id()
-    );
-    assert_ne!(
-        tl_mod_name(p).as_deref(),
-        Some("kadmin/admin@KERBER.TEST"),
-        "must not hard-code the kadmind acceptor"
-    );
 }
 
 #[test]

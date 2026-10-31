@@ -1,15 +1,13 @@
 //! FAST, SPAKE, and PKINIT processing on the KDC.
-//!
-//! A successful FAST unwrap returns the armor key and the inner body
-//! together. The outer wire body is not the client request once armor
-//! has been accepted. SPAKE and PKINIT run on that inner request.
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
     EncryptionType, KeyUsage, ProtocolKey, checksum, cksumtype_is_keyed, decrypt, decrypt_enc_data,
-    derive_prfplus, dh_generate, dh_group_for_prime, dh_shared, encrypt, krb_fx_cf2,
-    octetstring2key, p256_generate, p256_shared, pkinit_kdf_agile, verify_checksum_type,
+    derive_prfplus, encrypt, krb_fx_cf2, octetstring2key, pkinit_kdf_agile, verify_checksum_type,
 };
+use krb5_log::klog::{self, Severity};
+use krb5_protocol::trace::{ERROR_TABLE_BASE_KRB5, error_message};
+use krb5_types::pkinit::{EkuCheck, KxGroup, KxKey, group_desc};
 use krb5_types::{
     AsReq, EncryptedData, EncryptionKey, KdcReqBody, KerberosTime, MethodData, Microseconds,
     PaData, PrincipalName, TypedData, TypedDataList, err, flag_bit, ku, pa,
@@ -19,15 +17,19 @@ use zeroize::Zeroizing;
 mod otp;
 mod spake;
 
-pub(crate) use otp::{otp_edata, process_otp};
+pub(crate) use otp::{otp_edata, process_otp, serve_start_diagnostics};
 pub(crate) use spake::{SpakeStep, process_spake, spake_edata};
 
+use crate::ad::find_authdata;
+use crate::asn1_text::{APPLICATION, ASN1_BAD_ID, CONTEXT, SEQUENCE, UNIVERSAL, get_tag};
 use crate::der::take_der;
 use crate::error::Error;
 use crate::kdb::PrincipalRead;
 use crate::status;
-use crate::store::{KtkdbError, Principal, ktkdb_get_entry};
+use crate::store::{KeyLookup, KtkdbError, Principal, ktkdb_get_entry};
+use otp::{E_BAD_ENCTYPE, E_BAD_MSIZE, E_EINVAL};
 
+/// After armor, inner_body and inner_padata are the request; MIT frees the outer.
 pub(crate) struct FastOk {
     pub(crate) armor_key: ProtocolKey,
     pub(crate) inner_padata: Vec<PaData>,
@@ -36,7 +38,6 @@ pub(crate) struct FastOk {
     pub(crate) fast_options: krb5_types::fast::FastOptions,
 }
 
-/// Unwrap PA-FX-FAST from an AS-REQ. `body_der` is the wire KDC-REQ-BODY.
 pub(crate) fn unwrap_fast(
     store: &dyn PrincipalRead,
     req: &AsReq,
@@ -45,7 +46,6 @@ pub(crate) fn unwrap_fast(
     unwrap_fast_as(store, req.0.padata.as_deref(), body_der)
 }
 
-/// Unwrap PA-FX-FAST from AS padata. Checksum is the outer KDC-REQ-BODY only.
 pub(crate) fn unwrap_fast_as(
     store: &dyn PrincipalRead,
     padata: Option<&[PaData]>,
@@ -54,8 +54,6 @@ pub(crate) fn unwrap_fast_as(
     kdc_find_fast(store, padata, body_der, None, None).map_err(map_fast_unwrap)
 }
 
-/// MIT `kdc_find_fast` for TGS: armor from the PA-TGS-REQ subkey, or
-/// `armor_ap_request` when explicit AP-REQ armor is present without that subkey.
 pub(crate) fn unwrap_fast_tgs(
     store: &dyn PrincipalRead,
     padata: Option<&[PaData]>,
@@ -66,9 +64,7 @@ pub(crate) fn unwrap_fast_tgs(
     kdc_find_fast(store, padata, pa_tgs_raw, subkey, Some(session)).map_err(map_fast_unwrap)
 }
 
-/// MIT `kdc_find_fast` (`fast_util.c:126-247`): the inner request takes the outer
-/// `msg_type`. Inner `msg_type` is the outer APPLICATION tag in Rust (AS vs TGS
-/// dispatch already happened).
+// MIT: `kdc_find_fast` (fast_util.c:126-247)
 fn kdc_find_fast(
     store: &dyn PrincipalRead,
     padata: Option<&[PaData]>,
@@ -81,7 +77,7 @@ fn kdc_find_fast(
     };
     let armored = match decode::<krb5_types::fast::PaFxFast>(raw) {
         Ok(krb5_types::fast::PaFxFast::ArmoredData(w)) => w,
-        _ => decode::<krb5_types::fast::KrbFastArmoredReq>(raw)?,
+        Err(e) => return Err(fold(asn1_refusal(raw, CONTEXT, 0, &e))),
     };
     let mut armor_key = None;
     if let Some(armor) = armored.armor.as_ref() {
@@ -92,7 +88,7 @@ fn kdc_find_fast(
                     "Ap-request armor not permitted with TGS",
                 ));
             }
-            armor_key = Some(armor_key_from_ap(store, armor.armor_value.as_ref())?);
+            armor_key = Some(armor_ap_request(store, armor.armor_value.as_ref())?);
         } else {
             return Err(proto_fast(
                 err::PREAUTH_FAILED,
@@ -104,10 +100,9 @@ fn kdc_find_fast(
         Some(k) => k,
         None => match (tgs_subkey, tgs_session) {
             (Some(sub), Some(session)) => {
-                let st = EncryptionType::from_iana(sub.keytype)
-                    .or_else(|_| EncryptionType::known(sub.keytype))?;
-                let subk = ProtocolKey::from_bytes(st, sub.keyvalue.as_ref())?;
-                krb_fx_cf2(&subk, session, b"subkeyarmor", b"ticketarmor")?
+                let subk = protocol_key(sub).map_err(fold)?;
+                krb_fx_cf2(&subk, session, b"subkeyarmor", b"ticketarmor")
+                    .map_err(|e| fold(crypto_refusal(&e)))?
             }
             _ => {
                 return Err(proto_fast(
@@ -123,9 +118,19 @@ fn kdc_find_fast(
         enc_usage,
         armored.enc_fast_req.etype,
         armored.enc_fast_req.cipher.as_ref(),
-    )?;
-    let inner: krb5_types::fast::KrbFastReq = decode(&plain)?;
+    )
+    .map_err(|e| fold(crypto_refusal(&e)))?;
+    let inner: krb5_types::fast::KrbFastReq =
+        decode(&plain).map_err(|e| fold(asn1_refusal(&plain, UNIVERSAL, 16, &e)))?;
     verify_fast_req_checksum(&armor_key, checksummed_data, &armored.req_checksum)?;
+    // MIT: `UNSUPPORTED_CRITICAL_FAST_OPTIONS` (include/k5-int.h:802-802)
+    let opts = &inner.fast_options;
+    if (0..opts.len().min(16)).any(|i| i != 1 && opts[i]) {
+        return Err(proto_fast(
+            err::UNKNOWN_CRITICAL_FAST_OPTION,
+            "An unsupported critical FAST option was requested",
+        ));
+    }
     let nonce = inner.req_body.nonce;
     let inner_body = fast_req_body_der(&plain).map_or_else(|| encode(&inner.req_body), Ok)?;
     Ok(Some(FastOk {
@@ -158,10 +163,7 @@ fn verify_fast_req_checksum(
     ck_data: &[u8],
     ck: &krb5_types::Checksum,
 ) -> Result<(), Error> {
-    // MIT `kdc_find_fast` (`fast_util.c:207-224`): krb5_c_verify_checksum then
-    // krb5_c_is_keyed_cksum.
-    // Type 0 is not in the keyed/unkeyed tables; verify_checksum_type substitutes
-    // the key's mandatory type, then is_keyed(0) is false → 12.
+    // MIT: `kdc_find_fast` (fast_util.c:207-224)
     let ck_usage = KeyUsage::new(ku::FAST_REQ_CHKSUM)?;
     match verify_checksum_type(
         armor_key,
@@ -171,137 +173,272 @@ fn verify_fast_req_checksum(
         ck.checksum.as_ref(),
     ) {
         Ok(()) => {}
-        Err(krb5_crypto::Error::UnsupportedChecksum(t)) => {
-            let detail = if cksumtype_is_keyed(t) {
-                "Bad encryption type"
-            } else {
-                "unknown checksum type"
-            };
-            return Err(proto_fast(err::GENERIC, detail));
+        Err(krb5_crypto::Error::UnsupportedChecksum(_)) => {
+            return Err(proto_fast(err::GENERIC, E_BAD_ENCTYPE));
         }
         Err(krb5_crypto::Error::BadChecksumSize) => {
-            return Err(proto_fast(err::GENERIC, "checksum length"));
+            return Err(proto_fast(err::GENERIC, E_BAD_MSIZE));
         }
-        Err(_) => return Err(proto_fast(err::MODIFIED, "modified checksum")),
+        Err(_) => {
+            return Err(proto_fast(
+                err::MODIFIED,
+                "FAST req_checksum invalid; request modified",
+            ));
+        }
     }
+    // Type 0 verifies as the key's checksum, then fails here as unkeyed.
     if !cksumtype_is_keyed(ck.cksumtype) {
         return Err(proto_fast(err::POLICY, "Unkeyed checksum used in fast_req"));
     }
     Ok(())
 }
 
-/// The armor TGT's key, as the KDB keytab gives it.
-/// MIT `krb5_ktkdb_get_entry` (`lib/kdb/keytab.c:117-185`): [`ktkdb_get_entry`] picks the key. A kvno the principal lacks is `KRB5_KT_KVNONOTFOUND`, which `keytab_fetch_error` makes BADKEYVER; any other refusal, `KRB5_KDB_NO_PERMITTED_KEY` included, is a generic failure.
-fn armor_ticket_key(
-    store: &dyn PrincipalRead,
-    p: &Principal,
-    ticket: &krb5_types::Ticket,
-) -> Result<ProtocolKey, Error> {
-    let policy = store.policy();
-    match ktkdb_get_entry(
-        Some(p),
-        &p.name,
-        store.realm(),
-        ticket.enc_part.kvno.unwrap_or(0),
-        ticket.enc_part.etype,
-        |e| policy.etype_permitted(e),
-    ) {
-        Ok(k) => Ok(k.key.clone()),
-        Err(KtkdbError::KvnoNotFound) => Err(proto_fast(err::BADKEYVER, "FAST armor TGT")),
-        Err(_) => Err(proto_fast(err::GENERIC, "FAST armor TGT")),
+fn crypto_refusal(e: &krb5_crypto::Error) -> (i32, String) {
+    krb5_protocol::decrypt_code(e).map_or_else(|| (err::GENERIC, e.to_string()), mit_refusal)
+}
+
+fn mit_refusal(code: i32) -> (i32, String) {
+    (
+        crate::error::errcode_to_protocol(code),
+        error_message(ERROR_TABLE_BASE_KRB5 + i64::from(code)),
+    )
+}
+
+fn fold((code, text): (i32, String)) -> Error {
+    proto_fast(code, text)
+}
+
+// MIT: `k5_asn1_full_decode` (lib/krb5/asn.1/asn1_encode.c:1576-1584)
+pub(crate) fn asn1_refusal(
+    der: &[u8],
+    class: u8,
+    tagnum: u32,
+    e: &krb5_asn1::Error,
+) -> (i32, String) {
+    let text = asn1_outer_text(der, class, tagnum).map_or_else(|| e.to_string(), str::to_owned);
+    (err::GENERIC, text)
+}
+
+pub(crate) fn asn1_outer_text(der: &[u8], class: u8, tagnum: u32) -> Option<&'static str> {
+    match get_tag(der) {
+        Err(text) => Some(text),
+        Ok(t) if t.class != class || !t.constructed || t.tagnum != tagnum => Some(ASN1_BAD_ID),
+        Ok(_) => None,
     }
 }
 
-/// MIT `krb5_ktkdb_get_entry` (`kdb/keytab.c:157-163`): the key search is pinned to the
-/// ticket kvno, and a non-permitted enctype is not a candidate.
-/// An unknown server or a foreign-realm armor ticket is not-us, and a local ticket that is
-/// not a TGT is not armor.
-fn armor_key_from_ap(store: &dyn PrincipalRead, ap_raw: &[u8]) -> Result<ProtocolKey, Error> {
-    let ap: krb5_types::ApReq = decode(ap_raw)?;
-    let tkt_usage = KeyUsage::new(ku::TICKET)?;
-    let cipher = ap.ticket.enc_part.cipher.as_ref();
-    let ticket_realm = std::str::from_utf8(ap.ticket.realm.as_bytes())
-        .map_err(|_| proto_fast(err::NOT_US, "FAST armor TGT"))?;
-    // MIT rd_req: unknown server (foreign realm or missing row) is NOT_US;
-    // a local non-krbtgt armor ticket is SERVER_NOMATCH.
-    if ticket_realm != store.realm() {
-        return Err(proto_fast(err::NOT_US, "FAST armor TGT"));
+pub(crate) fn bad_pvno(e: &krb5_asn1::Error) -> Option<(i32, String)> {
+    let text = "Requested protocol version not supported";
+    e.to_string()
+        .contains("KRB5KDC_ERR_BAD_PVNO")
+        .then(|| (err::BAD_PVNO, text.to_owned()))
+}
+
+fn protocol_key(k: &EncryptionKey) -> Result<ProtocolKey, (i32, String)> {
+    let etype = EncryptionType::from_iana(k.keytype)
+        .or_else(|_| EncryptionType::known(k.keytype))
+        .map_err(|e| crypto_refusal(&e))?;
+    ProtocolKey::from_bytes(etype, k.keyvalue.as_ref()).map_err(|e| crypto_refusal(&e))
+}
+
+// MIT: `armor_ap_request` (kdc/fast_util.c:35-90)
+fn armor_ap_request(store: &dyn PrincipalRead, ap_raw: &[u8]) -> Result<ProtocolKey, Error> {
+    let (sname, session, subkey) = armor_rd_req(store, ap_raw).map_err(|(code, text)| {
+        proto_fast(code, format!("{text} while handling ap-request armor"))
+    })?;
+    if !sname.is_krbtgt_for(store.realm()) {
+        return Err(proto_fast(
+            err::SERVER_NOMATCH,
+            "ap-request armor for something other than the local TGS",
+        ));
     }
-    let Some(p) = store.fetch_name(&ap.ticket.sname)? else {
-        return Err(proto_fast(err::NOT_US, "FAST armor TGT"));
+    let Some(sub) = subkey else {
+        return Err(proto_fast(err::POLICY, "ap-request armor without subkey"));
     };
-    // MIT `krb5_rd_req` → KDB keytab `krb5_ktkdb_get_entry`.
-    // MIT `krb5_ktkdb_get_entry` (`kdb/keytab.c:157-163`): the lookup
-    // `krb5_dbe_find_enctype(entry, xrealm ? etype : -1, -1, kvno)` pins the
-    // ticket kvno and skips non-permitted enctypes. A local TGS then fails
-    // `krb5_c_enctype_compare` (`:171-178`) as `KRB5_KDB_NO_PERMITTED_KEY`
-    // (wire 60 via `errcode_to_protocol`). `NO_MATCHING_KEY` becomes
-    // `KRB5_KT_KVNONOTFOUND`.
-    // MIT `keytab_fetch_error` (`rd_req_dec.c:137-147`): `KRB5_KT_KVNONOTFOUND` →
-    // `BADKEYVER` 44 when the principal is the ticket server.
-    let key = armor_ticket_key(store, &p, &ap.ticket)?;
-    let enc_tkt = match decrypt_enc_data(&key, tkt_usage, ap.ticket.enc_part.etype, cipher) {
-        Ok(plain) => decode::<krb5_types::EncTicketPart>(&plain)
-            .map_err(|_| proto_fast(err::BAD_INTEGRITY, "FAST armor TGT"))?,
-        // MIT `errcode_to_protocol` (`kdc_util.c:691-697`): the armor TGT's server key is a des3 key MIT refuses, a library code, so 60 and its message.
-        Err(e @ (krb5_crypto::Error::DesBadParity | krb5_crypto::Error::DesWeakKey)) => {
-            return Err(proto_fast(err::GENERIC, e.to_string()));
+    let subk = protocol_key(&sub).map_err(fold)?;
+    krb_fx_cf2(&subk, &session, b"subkeyarmor", b"ticketarmor")
+        .map_err(|e| fold(crypto_refusal(&e)))
+}
+
+// MIT: `rd_req_decoded_opt` (lib/krb5/krb/rd_req_dec.c:472-787)
+// MIT: `krb5_rd_req` (lib/krb5/krb/rd_req.c:45-109)
+fn armor_rd_req(
+    store: &dyn PrincipalRead,
+    ap_raw: &[u8],
+) -> Result<(PrincipalName, ProtocolKey, Option<EncryptionKey>), (i32, String)> {
+    let generic = |text: String| (err::GENERIC, text);
+    if ap_raw.first().is_none_or(|b| b & !0x20 != 0x4e) {
+        return Err((err::MSG_TYPE, "Invalid message type".to_owned()));
+    }
+    let ap: krb5_types::ApReq = decode(ap_raw)
+        .map_err(|e| bad_pvno(&e).unwrap_or_else(|| asn1_refusal(ap_raw, APPLICATION, 14, &e)))?;
+    let ticket = &ap.ticket;
+    let not_us = || (err::NOT_US, "The ticket isn't for us".to_owned());
+    // A foreign-realm ticket is refused before any lookup (stricter than MIT).
+    let realm = std::str::from_utf8(ticket.realm.as_bytes())
+        .ok()
+        .filter(|r| *r == store.realm())
+        .ok_or_else(not_us)?;
+    let tsname = ticket.sname.unparse_with_realm(realm);
+    let p = store
+        .fetch_name(&ticket.sname)
+        .map_err(|e| generic(e.to_string()))?;
+    let kvno = ticket.enc_part.kvno.unwrap_or(0);
+    let policy = store.policy();
+    // MIT: `keytab_fetch_error` (lib/krb5/krb/rd_req_dec.c:117-157)
+    let key = match ktkdb_get_entry(
+        p.as_ref(),
+        &ticket.sname,
+        realm,
+        kvno,
+        ticket.enc_part.etype,
+        |e| policy.etype_permitted(e),
+    ) {
+        Ok(k) => k.key.clone(),
+        Err(KtkdbError::NotFound) => return Err(not_us()),
+        Err(KtkdbError::KvnoNotFound) => {
+            return Err((
+                err::BADKEYVER,
+                format!("Cannot find key for {tsname} kvno {kvno} in keytab"),
+            ));
         }
-        Err(_) => return Err(proto_fast(err::BAD_INTEGRITY, "FAST armor TGT")),
+        Err(KtkdbError::NoPermittedKey) => {
+            return Err(generic(KeyLookup::NoPermittedKey.message().to_owned()));
+        }
+        Err(KtkdbError::BadEnctype) => return Err(generic(E_BAD_ENCTYPE.to_owned())),
     };
-    if enc_tkt.flags.invalid() {
-        return Err(proto_fast(err::TKT_NYV, "FAST armor INVALID"));
-    }
-    let now = i64::from(krb5_types::KerberosTime::now().unix_seconds());
-    let skew = store.policy().skew;
-    let start = enc_tkt.starttime.as_ref().unwrap_or(&enc_tkt.authtime);
-    if i64::from(start.unix_seconds()) > now + skew {
-        return Err(proto_fast(err::TKT_NYV, "FAST armor NYV"));
-    }
-    if i64::from(enc_tkt.endtime.unix_seconds()) < now {
-        return Err(proto_fast(err::TKT_EXPIRED, "FAST armor expired"));
-    }
-    let etype = EncryptionType::from_iana(enc_tkt.key.keytype)
-        .or_else(|_| EncryptionType::known(enc_tkt.key.keytype))?;
-    let session = ProtocolKey::from_bytes(etype, enc_tkt.key.keyvalue.as_ref())?;
-    let auth_usage = KeyUsage::new(ku::AP_REQ_AUTHENTICATOR)?;
+    let tkt_usage = KeyUsage::new(ku::TICKET).map_err(|e| crypto_refusal(&e))?;
+    // MIT: `integrity_error` (lib/krb5/krb/rd_req_dec.c:161-181)
+    let plain = decrypt_enc_data(
+        &key,
+        tkt_usage,
+        ticket.enc_part.etype,
+        ticket.enc_part.cipher.as_ref(),
+    )
+    .map_err(|e| match e {
+        krb5_crypto::Error::Integrity => (
+            err::BAD_INTEGRITY,
+            format!("Cannot decrypt ticket for {tsname} using keytab key for {tsname}"),
+        ),
+        e => crypto_refusal(&e),
+    })?;
+    let enc_tkt: krb5_types::EncTicketPart =
+        decode(&plain).map_err(|e| asn1_refusal(&plain, APPLICATION, 3, &e))?;
+    let session = protocol_key(&enc_tkt.key)?;
+    let auth_usage = KeyUsage::new(ku::AP_REQ_AUTHENTICATOR).map_err(|e| crypto_refusal(&e))?;
     let auth_plain = decrypt_enc_data(
         &session,
         auth_usage,
         ap.authenticator.etype,
         ap.authenticator.cipher.as_ref(),
-    )?;
-    let authenticator: krb5_types::Authenticator = decode(&auth_plain)?;
-    let then = i64::from(authenticator.ctime.unix_seconds());
-    if (now - then).abs() > store.policy().skew {
-        return Err(proto_fast(err::SKEW, "FAST armor authenticator"));
+    )
+    .map_err(|e| crypto_refusal(&e))?;
+    let authenticator: krb5_types::Authenticator =
+        decode(&auth_plain).map_err(|e| asn1_refusal(&auth_plain, APPLICATION, 2, &e))?;
+    if authenticator.crealm.as_bytes() != enc_tkt.crealm.as_bytes()
+        || !authenticator.cname.components_eq(&enc_tkt.cname)
+    {
+        return Err((err::BADMATCH, "Ticket/authenticator don't match".to_owned()));
     }
-    // MIT `rd_req_decoded_opt` (`rd_req_dec.c:652-723`): the `krb5_rd_req` of `armor_ap_request` negotiates the armor authenticator's subkey and the armor TGT's session key against the KDC's `permitted_enctypes`, and one it leaves out is `KRB5_NOPERM_ETYPE`, 60 `FIND_FAST`.
+    check_transited(store, &enc_tkt, realm)?;
+    // MIT: `krb5int_validate_times` (lib/krb5/krb/valid_times.c:36-57)
+    let now = i64::from(KerberosTime::now().unix_seconds());
+    let skew = policy.skew;
+    let start = enc_tkt.starttime.as_ref().unwrap_or(&enc_tkt.authtime);
+    if i64::from(start.unix_seconds()) > now + skew {
+        return Err((err::TKT_NYV, "Ticket not yet valid".to_owned()));
+    }
+    if now > i64::from(enc_tkt.endtime.unix_seconds()) + skew {
+        return Err((err::TKT_EXPIRED, "Ticket expired".to_owned()));
+    }
+    if (now - i64::from(authenticator.ctime.unix_seconds())).abs() > skew {
+        return Err((err::SKEW, "Clock skew too great".to_owned()));
+    }
+    // MIT: `errcode_to_protocol` (kdc/kdc_util.c:691-698)
+    // TKT_INVALID sits past 128 in krb5_err.et, so the wire code is 60.
+    if enc_tkt.flags.invalid() {
+        return Err(generic("Ticket has invalid flag set".to_owned()));
+    }
+    armor_authdata_verify(&enc_tkt, &key)?;
+    // MIT: `negotiate_etype` (lib/krb5/krb/rd_req_dec.c:854-904)
     krb5_protocol::negotiate_ap_req_etypes(
         &authenticator,
         enc_tkt.key.keytype,
-        &store.policy().permitted_list(),
+        &policy.permitted_list(),
     )
-    .map_err(|_| proto_fast(err::GENERIC, "FAST armor enctype not permitted"))?;
-    // MIT `armor_ap_request` (`fast_util.c:51-68`): 26 only once `krb5_rd_req` has accepted it.
-    if !ap.ticket.sname.is_krbtgt_for(store.realm()) {
-        return Err(proto_fast(err::SERVER_NOMATCH, "FAST armor TGT"));
+    .map_err(|e| generic(e.to_string()))?;
+    Ok((ticket.sname.clone(), session, authenticator.subkey))
+}
+
+const E_ERANGE: &str = "Numerical result out of range";
+
+// MIT: `krb5int_authdata_verify` (lib/krb5/krb/authdata.c:610-725)
+fn armor_authdata_verify(
+    enc_tkt: &krb5_types::EncTicketPart,
+    key: &ProtocolKey,
+) -> Result<(), (i32, String)> {
+    let ad = enc_tkt.authorization_data.as_deref();
+    let seq = |raw: &[u8], e: krb5_asn1::Error| asn1_refusal(raw, UNIVERSAL, SEQUENCE, &e);
+    // MIT: `k5_get_kdc_issued_authdata` (lib/krb5/krb/authdata.c:501-540)
+    if let Some(first) = find_authdata(ad, None, pa::AD_KDC_ISSUED)?.first() {
+        let raw = first.ad_data.as_ref();
+        decode::<krb5_types::cammac::AdKdcIssued>(raw).map_err(|e| seq(raw, e))?;
     }
-    let Some(sub) = authenticator.subkey else {
-        return Err(proto_fast(err::POLICY, "ap-request armor without subkey"));
-    };
-    let st =
-        EncryptionType::from_iana(sub.keytype).or_else(|_| EncryptionType::known(sub.keytype))?;
-    let subk = ProtocolKey::from_bytes(st, sub.keyvalue.as_ref())?;
-    krb_fx_cf2(&subk, &session, b"subkeyarmor", b"ticketarmor").map_err(Error::from)
+    let usage = KeyUsage::new(ku::CAMMAC).map_err(|e| crypto_refusal(&e))?;
+    let mut verified = Vec::new();
+    // MIT: `extract_cammacs` (lib/krb5/krb/authdata.c:544-584)
+    for el in find_authdata(ad, None, pa::AD_CAMMAC)? {
+        let raw = el.ad_data.as_ref();
+        let cammac: krb5_types::cammac::Cammac = decode(raw).map_err(|e| seq(raw, e))?;
+        let Some(ver) = &cammac.svc_verifier else {
+            return Err((err::GENERIC, E_EINVAL.to_owned()));
+        };
+        let der = encode(&cammac.elements).map_err(|e| (err::GENERIC, e.to_string()))?;
+        let mac = ver.mac.checksum.as_ref();
+        match verify_checksum_type(key, usage, &der, ver.mac.cksumtype, mac) {
+            Ok(()) => verified.extend(cammac.elements),
+            Err(krb5_crypto::Error::UnsupportedChecksum(_)) => {
+                return Err((err::GENERIC, E_BAD_ENCTYPE.to_owned()));
+            }
+            Err(krb5_crypto::Error::BadChecksumSize) => {
+                return Err((err::GENERIC, E_BAD_MSIZE.to_owned()));
+            }
+            Err(_) => {}
+        }
+    }
+    // MIT: `mspac_import_authdata` (lib/krb5/krb/pac.c:774-796)
+    if let Some(pac) = find_authdata(ad, None, pa::AD_WIN2K_PAC)?.first() {
+        krb5_types::pac::Pac::parse(pac.ad_data.as_ref()).map_err(|e| {
+            let einval = e == krb5_types::pac::PacError::Malformed;
+            (
+                err::GENERIC,
+                if einval { E_EINVAL } else { E_ERANGE }.to_owned(),
+            )
+        })?;
+    }
+    // MIT: `authind_import_authdata` (lib/krb5/krb/ai_authdata.c:73-98)
+    for el in find_authdata(Some(&verified), None, pa::AD_AUTH_INDICATOR)? {
+        let raw = el.ad_data.as_ref();
+        decode::<Vec<String>>(raw).map_err(|e| seq(raw, e))?;
+    }
+    Ok(())
+}
+
+pub(crate) fn check_transited(
+    store: &dyn PrincipalRead,
+    enc_tkt: &krb5_types::EncTicketPart,
+    srealm: &str,
+) -> Result<(), (i32, String)> {
+    krb5_types::transited::check_transited(enc_tkt, srealm, &store.policy().capaths)
+        .map_err(mit_refusal)
 }
 
 const COOKIE_LIFETIME: i32 = 600;
 const COOKIE_MAGIC: &[u8] = b"MIT1";
-/// MIT `FRESHNESS_LIFETIME` (`kdc_preauth.c:91-91`): a freshness token is valid for ten minutes.
+// MIT: `FRESHNESS_LIFETIME` (kdc_preauth.c:91-91)
+/// A freshness token is valid for ten minutes.
 pub(crate) const FRESHNESS_LIFETIME: i64 = 600;
 
-/// RFC 8070 token: `ts(BE32) ‖ krbtgt kvno(BE32) ‖ checksum(ku 514, ts)`.
 pub(crate) fn mint_freshness_token(
     key: &ProtocolKey,
     kvno: u32,
@@ -320,7 +457,6 @@ pub(crate) fn mint_freshness_token_now(store: &dyn PrincipalRead) -> Result<Vec<
     let tgt = store
         .fetch_krbtgt()?
         .ok_or_else(|| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
-    // `rock->local_tgt_key`: `get_local_tgt` → `get_first_current_key`.
     let key = store
         .policy()
         .first_current_key(&tgt)
@@ -345,8 +481,7 @@ pub(crate) fn check_freshness_token(
     let Some(tgt) = store.fetch_krbtgt().ok().flatten() else {
         return Err(proto(err::PREAUTH_EXPIRED, status::PREAUTH_FAILED));
     };
-    // MIT `check_freshness_token` (`kdc_preauth.c:545-545`): the token key is
-    // `krb5_dbe_find_enctype(local_tgt, -1, -1, token_kvno)`.
+    // MIT: `check_freshness_token` (kdc_preauth.c:545-545)
     let Ok(key) = store.policy().find_enctype(&tgt, None, kvno) else {
         return Err(proto(err::PREAUTH_EXPIRED, status::PREAUTH_FAILED));
     };
@@ -370,7 +505,7 @@ fn derive_cookie_key(
     derive_prfplus(tgt_key, &seed).map_err(Error::from)
 }
 
-/// MIT `kdc_fast_make_cookie` (`fast_util.c:655-721`): empty contents → a trivial `MIT` cookie.
+// MIT: `kdc_fast_make_cookie` (fast_util.c:655-721)
 pub(crate) fn make_cookie(
     store: &dyn PrincipalRead,
     client: &PrincipalName,
@@ -386,7 +521,7 @@ pub(crate) fn make_cookie_at(
     contents: &[PaData],
     time: i32,
 ) -> Result<Vec<u8>, Error> {
-    // MIT kdc_fast_make_cookie: empty contents or no TGT key → 3-byte MIT (`:673-676`).
+    // Empty contents, or no krbtgt key, is the three-byte MIT cookie.
     if contents.is_empty() {
         return Ok(b"MIT".to_vec());
     }
@@ -397,7 +532,8 @@ pub(crate) fn make_cookie_at(
         return Ok(b"MIT".to_vec());
     };
     let key = derive_cookie_key(&krbtgt.key, client, store.realm())?;
-    // MIT `kdc_fast_make_cookie` (`fast_util.c:714-717`): the encoded plaintext, which may hold SPAKE's private scalar, is zapped.
+    // MIT: `kdc_fast_make_cookie` (fast_util.c:714-717)
+    // The cookie plaintext may hold SPAKE's scalar, so it is wiped.
     let der = Zeroizing::new(encode(&krb5_types::fast::SecureCookie {
         time,
         data: contents.to_vec(),
@@ -411,8 +547,8 @@ pub(crate) fn make_cookie_at(
     Ok(out)
 }
 
-/// MIT `kdc_fast_read_cookie` (`fast_util.c:545-611`): errors leave the
-/// state empty and return 0 (never 24).
+// MIT: `kdc_fast_read_cookie` (fast_util.c:545-611)
+/// A cookie that does not read is empty, never a 24.
 pub(crate) fn open_cookie(
     store: &dyn PrincipalRead,
     client: &PrincipalName,
@@ -425,8 +561,7 @@ pub(crate) fn open_cookie(
     let Ok(Some(krbtgt_p)) = store.fetch_krbtgt() else {
         return Vec::new();
     };
-    // MIT `get_cookie_key` (`fast_util.c:506-516`): the current kvno uses the already-chosen
-    // first permitted key; an older kvno is `krb5_dbe_find_enctype(tgt, -1, -1, kvno)`.
+    // MIT: `get_cookie_key` (fast_util.c:506-516)
     let Ok(ke) = store.policy().find_enctype(&krbtgt_p, None, kvno) else {
         return Vec::new();
     };
@@ -439,7 +574,7 @@ pub(crate) fn open_cookie(
     let Ok(plain) = decrypt(&key, usage, &blob[8..]) else {
         return Vec::new();
     };
-    // MIT `kdc_fast_read_cookie` (`fast_util.c:604-610`): the decrypted plaintext is zapped.
+    // MIT: `kdc_fast_read_cookie` (fast_util.c:604-610)
     let plain = Zeroizing::new(plain);
     let Ok(cookie) = decode::<krb5_types::fast::SecureCookie>(&plain) else {
         return Vec::new();
@@ -451,7 +586,6 @@ pub(crate) fn open_cookie(
     cookie.data
 }
 
-/// Wrap KrbFastResponse into PA-FX-FAST padata.
 pub(crate) fn wrap_fast_rep(
     armor_key: &ProtocolKey,
     padata: Vec<PaData>,
@@ -485,109 +619,97 @@ pub(crate) fn wrap_fast_rep(
     })
 }
 
-/// PKINIT: ECDH reply key from PA-PK-AS-REQ.
-///
-/// A client-caused verify failure (CMS, cert, eContentType, checksum, ctime,
-/// AuthPack, DH group, SPKI) is logged at `info` with `outcome = "denied"` in the JSON log; the KDC's own
-/// faults stay `error`.
-/// MIT `finish_verify_padata` (`kdc_preauth.c:1224-1228`): a module verify failure is
-/// `LOG_INFO "preauth (%s) verify failure: %s"`, which `run_as_preauth` writes for each failure
-/// this returns; the message is the one the error carries, or the code's table text.
-///
-/// # Errors
-///
-/// [`Error::Protocol`] with `PREAUTH_EXPIRED` when the AuthPack's freshness token is short,
-/// expired, or does not verify under a local krbtgt key; `SKEW` when the AuthPack ctime is outside
-/// the clock skew; `DH_KEY_PARAMETERS_NOT_ACCEPTED` when a signed request has no DH public value,
-/// or its group or value is not accepted; `PREAUTH_FAILED` for every other check that fails (the
-/// request encoding, a KDC with no PKINIT CA, the CMS signature, the client certificate, the
-/// eContentType, the paChecksum, a required freshness token, the ctime, an unsigned
-/// request from a client that is not anonymous, the reply signature). [`Error::Crypto`] when the
-/// key agreement or the reply-key derivation fails, and [`Error::Asn1`] when the reply does not
-/// encode. A request without PA-PK-AS-REQ is `Ok(None)`.
+// MIT: `finish_verify_padata` (kdc_preauth.c:1224-1228)
 pub(crate) fn process_pkinit(
     store: &dyn PrincipalRead,
+    client: &Principal,
     padata: Option<&[PaData]>,
     etype: EncryptionType,
     as_req_der: &[u8],
     body_der: &[u8],
     cname: &PrincipalName,
-    realm: &str,
 ) -> Result<Option<(ProtocolKey, PaData, bool)>, Error> {
+    let realm = store.realm();
     let Some(raw) = find_pa(padata, pa::PK_AS_REQ) else {
         return Ok(None);
     };
     let cms = match decode::<krb5_types::pkinit::PaPkAsReq>(raw) {
         Ok(req) => req.signed_auth_pack.as_ref().to_vec(),
-        // MIT `pkinit_server_verify_padata` (`pkinit_srv.c:479-483`): a PA-PK-AS-REQ that does not decode is its ASN.1 error.
-        Err(_) => {
-            krb5_types::pkinit::parse_pa_pk_as_req_cms(raw).ok_or_else(|| Error::PreauthModule {
-                message: crate::asn1_text::decode_failure_text(raw, false).to_owned(),
-            })?
-        }
+        // MIT: `pkinit_server_verify_padata` (pkinit_srv.c:479-483)
+        Err(_) => return Err(crate::asn1_text::preauth_decode_failure(raw, false)),
     };
-    let ca = store
-        .pkinit_ca()
+    let kdc = store
+        .pkinit()
         .ok_or_else(|| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
-    let req_cname = decode::<AsReq>(as_req_der)
-        .ok()
-        .and_then(|r| r.0.req_body.cname)
+    let req_body = decode::<AsReq>(as_req_der).ok().map(|r| r.0.req_body);
+    let req_cname = req_body
+        .as_ref()
+        .and_then(|b| b.cname.clone())
         .unwrap_or_else(|| cname.clone());
-    let (inner, is_signed) = match krb5_types::pkinit::cms_verify_full(&cms, &ca.ca_cert) {
-        Ok(verified) => {
-            if verified.e_content_type.as_slice() != krb5_types::pkinit::ECONTENT_AUTHDATA {
-                tracing::info!(
-                    event = krb5_log::events::KDC_PKINIT,
-                    component = "krb5-kdc",
-                    outcome = "denied",
-                    error = "pkinit eContentType"
-                );
-                return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
-            }
-            if let Err(e) =
-                krb5_types::pkinit::require_client_pkinit_cert(&verified.cert, cname, realm)
-            {
-                tracing::info!(
-                    event = krb5_log::events::KDC_PKINIT,
-                    component = "krb5-kdc",
-                    outcome = "denied",
-                    error = e
-                );
-                return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
-            }
-            (verified.e_content, true)
+    let pack = krb5_types::pkinit::cms_signeddata_verify(
+        &cms,
+        &kdc.anchors,
+        &kdc.pool,
+        krb5_types::pkinit::CmsSigner::Client,
+    )
+    .map_err(|fault| cms_fault(store, kdc, cname, fault))?;
+    let is_signed = pack.signer.is_some();
+    if let Some(cert) = &pack.signer {
+        authorize_cert(store, kdc, cert, client, &req_cname, realm)?;
+    } else {
+        // MIT: `pkinit_server_verify_padata` (pkinit_srv.c:508-516)
+        // MIT: `process_as_req` (do_as_req.c:718-734)
+        // An unsigned AuthPack must already be anonymous.
+        let rewritten = decode::<KdcReqBody>(body_der)
+            .is_ok_and(|b| b.kdc_options.bit(flag_bit::ANONYMOUS))
+            && krb5_types::pkinit::is_anonymous_principal(cname);
+        if !rewritten {
+            return Err(proto_d(
+                err::PREAUTH_FAILED,
+                status::PREAUTH_FAILED,
+                "Pkinit request not signed, but client not anonymous.",
+            ));
         }
-        Err(e) => {
-            let Some(inner) = krb5_types::pkinit::cms_extract_unsigned(&cms) else {
-                tracing::info!(
-                    event = krb5_log::events::KDC_PKINIT,
-                    component = "krb5-kdc",
-                    outcome = "denied",
-                    error = e,
-                    cms_len = cms.len()
-                );
-                return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
-            };
-            // MIT `pkinit_server_verify_padata` (`pkinit_srv.c:508-516`): an unsigned request
-            // must name the anonymous principal WITH realm, after the rewrite below.
-            // MIT `process_as_req` (`do_as_req.c:718-734`): the rewrite makes
-            // `request->client` WELLKNOWN/ANONYMOUS@WELLKNOWN:ANONYMOUS.
-            // Rewrite runs only for REQUEST_ANONYMOUS + an anonymous name.
-            let rewritten = decode::<KdcReqBody>(body_der)
-                .is_ok_and(|b| b.kdc_options.bit(flag_bit::ANONYMOUS))
-                && krb5_types::pkinit::is_anonymous_principal(cname);
-            if !rewritten {
-                return Err(proto_d(
-                    err::PREAUTH_FAILED,
-                    status::PREAUTH_FAILED,
-                    "Pkinit request not signed, but client not anonymous.",
-                ));
-            }
-            (inner, false)
+    }
+    let inner = pack.e_content;
+    let (ctime, _) = krb5_types::pkinit::parse_authpack_freshness(&inner).ok_or_else(|| {
+        tracing::debug!(
+            event = krb5_log::events::KDC_PKINIT,
+            component = "krb5-kdc",
+            outcome = "denied",
+            error = "pkinit ctime"
+        );
+        proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED)
+    })?;
+    // MIT: `pkinit_server_verify_padata` (plugins/preauth/pkinit/pkinit_srv.c:528-532)
+    let now = i64::from(KerberosTime::now().unix_seconds());
+    if (now - i64::from(ctime)).abs() > store.policy().skew {
+        return Err(proto(err::SKEW, status::PREAUTH_FAILED));
+    }
+    let (nonce, spki) = krb5_types::pkinit::parse_authpack_maybe_dh(&inner).ok_or_else(|| {
+        tracing::debug!(
+            event = krb5_log::events::KDC_PKINIT,
+            component = "krb5-kdc",
+            outcome = "denied",
+            error = "AuthPack",
+            inner_len = inner.len(),
+            inner_tag = inner.first().copied().unwrap_or(0)
+        );
+        proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED)
+    })?;
+    let peer = match spki.as_deref() {
+        Some(spki) => Some(server_check_dh(store, cname, spki, kdc.dh_min_bits)?),
+        None if !is_signed => {
+            return Err(proto_d(
+                err::PREAUTH_FAILED,
+                status::PREAUTH_FAILED,
+                "Anonymous pkinit without DH public value not supported.",
+            ));
         }
+        None => None,
     };
     if let Err(e) = krb5_types::pkinit::authpack_pa_checksum_ok(&inner, body_der) {
-        tracing::info!(
+        tracing::debug!(
             event = krb5_log::events::KDC_PKINIT,
             component = "krb5-kdc",
             outcome = "denied",
@@ -600,114 +722,40 @@ pub(crate) fn process_pkinit(
         check_freshness_token(store, &tok, KerberosTime::now().unix_seconds())?;
         valid_freshness = true;
     }
-    if is_signed && store.policy().pkinit_require_freshness && !valid_freshness {
-        tracing::info!(
-            event = krb5_log::events::KDC_PKINIT,
-            component = "krb5-kdc",
-            outcome = "error",
-            detail = "no freshness token, rejecting auth"
-        );
-        return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
-    }
     if is_signed {
-        if valid_freshness {
-            tracing::info!(
-                event = krb5_log::events::KDC_PKINIT,
-                component = "krb5-kdc",
-                outcome = "ok",
-                detail = "freshness token received"
-            );
-        } else {
-            tracing::info!(
-                event = krb5_log::events::KDC_PKINIT,
-                component = "krb5-kdc",
-                outcome = "ok",
-                detail = "no freshness token received"
-            );
-        }
+        check_log_freshness(store, &req_cname, realm, valid_freshness)?;
     }
-    let (ctime, _) = krb5_types::pkinit::parse_authpack_freshness(&inner).ok_or_else(|| {
-        tracing::info!(
-            event = krb5_log::events::KDC_PKINIT,
-            component = "krb5-kdc",
-            outcome = "denied",
-            error = "pkinit ctime"
-        );
-        proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED)
-    })?;
-    // MIT `pkinit_server_verify_padata` (`plugins/preauth/pkinit/pkinit_srv.c:528-532`): the ctime need only lie inside the clock skew, so a replayed AuthPack verifies again.
-    let now = i64::from(KerberosTime::now().unix_seconds());
-    if (now - i64::from(ctime)).abs() > store.policy().skew {
-        return Err(proto(err::SKEW, status::PREAUTH_FAILED));
-    }
-    let (nonce, spki) = krb5_types::pkinit::parse_authpack_maybe_dh(&inner).ok_or_else(|| {
-        tracing::info!(
-            event = krb5_log::events::KDC_PKINIT,
-            component = "krb5-kdc",
-            outcome = "denied",
-            error = "AuthPack",
-            inner_len = inner.len(),
-            inner_tag = inner.first().copied().unwrap_or(0)
-        );
-        proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED)
-    })?;
-    let Some(spki) = spki else {
-        return Err(if is_signed {
-            dh_params_not_accepted(store, cname)
-        } else {
-            proto_d(
-                err::PREAUTH_FAILED,
-                status::PREAUTH_FAILED,
-                "Anonymous pkinit without DH public value not supported.",
-            )
+    // MIT: `pkinit_server_return_padata` (plugins/preauth/pkinit/pkinit_srv.c:804-809)
+    let Some(peer) = peer else {
+        return Err(Error::PreauthModule {
+            code: err::PREAUTH_FAILED,
+            message: "Unsupported PKINIT RSA request".to_owned(),
         });
     };
     let agile = krb5_types::pkinit::authpack_wants_sha256_kdf(&inner);
-    let (z, info) = if let Some(peer) = krb5_types::pkinit::decode_ec_spki(&spki) {
-        let kp = p256_generate()?;
-        let shared = Zeroizing::new(p256_shared(&kp.secret, &peer)?);
-        let info = krb5_types::pkinit::encode_kdc_dh_key_info(&kp.public, nonce);
-        (Zeroizing::new(shared.to_vec()), info)
-    } else if let Some((p, y)) = krb5_types::pkinit::parse_dh_spki(&spki) {
-        let group = dh_group_for_prime(&p).ok_or_else(|| {
-            tracing::info!(
-                event = krb5_log::events::KDC_PKINIT,
-                component = "krb5-kdc",
-                outcome = "denied",
-                error = "unknown DH prime",
-                p_len = p.len()
-            );
-            dh_params_not_accepted(store, cname)
-        })?;
-        tracing::info!(
-            event = krb5_log::events::KDC_PKINIT,
-            component = "krb5-kdc",
-            outcome = "ok",
-            group = group.name,
-            bits = group.bits
-        );
-        let kp = dh_generate(group)?;
-        let shared = Zeroizing::new(
-            dh_shared(group, &kp.secret, &y)
-                .map_err(|_| proto(err::DH_KEY_PARAMETERS_NOT_ACCEPTED, status::PREAUTH_FAILED))?,
-        );
-        let z = Zeroizing::new(pad_z(&shared, p.len()));
-        let info = krb5_types::pkinit::encode_kdc_dh_key_info(&kp.public_der, nonce);
-        (z, info)
-    } else {
-        tracing::info!(
-            event = krb5_log::events::KDC_PKINIT,
-            component = "krb5-kdc",
-            outcome = "denied",
-            error = "SPKI",
-            spki_len = spki.len(),
-            spki_tag = spki.first().copied().unwrap_or(0)
-        );
-        return Err(dh_params_not_accepted(store, cname));
-    };
-    let wrapped_pub = ca
-        .sign_cms_typed(&info, "krbtgt", krb5_types::pkinit::ECONTENT_DHKEY, realm)
-        .ok_or_else(|| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
+    let (group, client_public) = peer;
+    let kp =
+        KxKey::generate(group).ok_or_else(|| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
+    let z = kp.shared(&client_public).ok_or_else(|| {
+        proto_d(
+            err::GENERIC,
+            status::KDC_RETURN_PADATA,
+            "Cannot allocate memory",
+        )
+    })?;
+    let info = krb5_types::pkinit::encode_kdc_dh_key_info(kp.public(), nonce);
+    let certs = kdc.own_chain().map_err(|message| Error::PreauthModule {
+        code: err::PREAUTH_FAILED,
+        message,
+    })?;
+    let wrapped_pub = krb5_types::pkinit::cms_sign_chain(
+        &info,
+        &kdc.identity.cert,
+        &certs,
+        kdc.identity.key(),
+        krb5_types::pkinit::ECONTENT_DHKEY,
+    )
+    .map_err(|_| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
     let rep = krb5_types::pkinit::PaPkAsRep::DhInfo(krb5_types::pkinit::DhRepInfo {
         dh_signed_data: wrapped_pub.into(),
         server_dh_nonce: None,
@@ -721,18 +769,17 @@ pub(crate) fn process_pkinit(
         .ok_or_else(|| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
     }
     let reply_key = if agile {
-        tracing::info!(
+        tracing::debug!(
             event = krb5_log::events::KDC_PKINIT,
             component = "krb5-kdc",
             outcome = "ok",
             detail = "rfc8636 sha256 kdf",
         );
         let party_u = krb5_types::pkinit::encode_party_u(&req_cname, realm);
-        let party_v = krb5_types::pkinit::encode_krb5_principal_name(
-            realm,
-            PrincipalName::NT_SRV_INST,
-            &["krbtgt", realm],
-        );
+        let party_v = req_body
+            .as_ref()
+            .and_then(krb5_types::pkinit::encode_party_v)
+            .ok_or_else(|| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
         let supp =
             krb5_types::pkinit::encode_pkinit_supp_pub_info(etype.to_iana(), as_req_der, &pa_bytes);
         let other = krb5_types::pkinit::encode_rfc8636_other_info(
@@ -752,13 +799,233 @@ pub(crate) fn process_pkinit(
     Ok(Some((reply_key, pa, is_signed)))
 }
 
-fn pad_z(shared: &[u8], modulus_len: usize) -> Vec<u8> {
-    if shared.len() >= modulus_len {
-        return shared.to_vec();
+// MIT: `cms_signeddata_verify` (plugins/preauth/pkinit/pkinit_crypto_openssl.c:2163-2209)
+// MIT: `pkinit_create_edata` (plugins/preauth/pkinit/pkinit_srv.c:101-138)
+fn cms_fault(
+    store: &dyn PrincipalRead,
+    kdc: &crate::pkinit::PkinitKdc,
+    cname: &PrincipalName,
+    fault: krb5_types::pkinit::CmsFault,
+) -> Error {
+    use krb5_types::pkinit::CmsFault;
+    tracing::debug!(
+        event = krb5_log::events::KDC_PKINIT,
+        component = "krb5-kdc",
+        outcome = "denied",
+        error = ?fault
+    );
+    let (code, message) = (fault.code(), fault.message());
+    match fault {
+        CmsFault::NoSigner | CmsFault::ContentType => {
+            proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED)
+        }
+        CmsFault::Chain(_, cert) => {
+            let (td, certs): (i32, Vec<&[u8]>) = if code == err::CANT_VERIFY_CERTIFICATE {
+                (
+                    pa::TD_TRUSTED_CERTIFIERS,
+                    kdc.anchors.iter().map(Vec::as_slice).collect(),
+                )
+            } else {
+                (
+                    pa::TD_INVALID_CERTIFICATES,
+                    std::iter::once(cert.as_slice())
+                        .filter(|c| !c.is_empty())
+                        .collect(),
+                )
+            };
+            let e_data = (!certs.is_empty()).then(|| {
+                let method = vec![PaData {
+                    padata_type: td,
+                    padata_value: krb5_types::pkinit::encode_td_certifiers(&certs).into(),
+                }];
+                encode_typed(&with_fx_cookie(store, Some(cname), method))
+            });
+            Error::Protocol {
+                code,
+                text: Some(status::PREAUTH_FAILED.to_owned()),
+                e_data,
+                detail: Some(message),
+            }
+        }
+        _ => Error::PreauthModule { code, message },
     }
-    let mut z = vec![0u8; modulus_len];
-    z[modulus_len - shared.len()..].copy_from_slice(shared);
-    z
+}
+
+// MIT: `authorize_cert` (plugins/preauth/pkinit/pkinit_srv.c:319-388)
+// MIT: `pkinit_san_authorize` (plugins/preauth/pkinit/pkinit_srv.c:1143-1168)
+// MIT: `pkinit_eku_authorize` (plugins/preauth/pkinit/pkinit_srv.c:1171-1192)
+// MIT: `dbmatch_authorize` (plugins/preauth/pkinit/pkinit_srv.c:1230-1258)
+fn authorize_cert(
+    store: &dyn PrincipalRead,
+    kdc: &crate::pkinit::PkinitKdc,
+    cert: &[u8],
+    client: &Principal,
+    req_client: &PrincipalName,
+    realm: &str,
+) -> Result<(), Error> {
+    let denied = |code, error: &'static str| {
+        tracing::debug!(
+            event = krb5_log::events::KDC_PKINIT,
+            component = "krb5-kdc",
+            outcome = "denied",
+            error = error
+        );
+        proto(code, status::PREAUTH_FAILED)
+    };
+    let sans = krb5_types::pkinit::cert_sans(cert, kdc.allow_upn)
+        .ok_or_else(|| denied(err::CLIENT_NAME_MISMATCH, "pkinit client san"))?;
+    let mut accepted = false;
+    if !sans.principals.is_empty() || !sans.upns.is_empty() {
+        let named =
+            |p: &PrincipalName, r: &str| match_client(store, client, req_client, realm, p, r);
+        let by_san = sans.principals.iter().any(|(r, name_type, parts)| {
+            PrincipalName::try_new(*name_type, parts.iter().map(String::as_str))
+                .is_ok_and(|p| named(&p, r))
+        });
+        // MIT: `verify_client_san` (plugins/preauth/pkinit/pkinit_srv.c:240-258)
+        let by_upn = || {
+            sans.upns.iter().any(|upn| {
+                krb5_types::parse_name_ex(upn, realm, true).is_ok_and(|p| {
+                    let parts = p.components.iter().map(String::as_str);
+                    PrincipalName::try_new(PrincipalName::NT_ENTERPRISE, parts)
+                        .is_ok_and(|n| named(&n, &p.realm))
+                })
+            })
+        };
+        if !(by_san || by_upn()) {
+            return Err(denied(err::CLIENT_NAME_MISMATCH, "pkinit client san"));
+        }
+        accepted = true;
+    }
+    if kdc.require_eku {
+        match krb5_types::pkinit::cert_eku(cert, false, kdc.accept_secondary_eku) {
+            EkuCheck::Accepted => krb5_protocol::trace::pkinit_eku(),
+            found => {
+                if found == EkuCheck::NoDigitalSignature {
+                    krb5_protocol::trace::pkinit_eku_no_ku();
+                }
+                return Err(denied(err::INCONSISTENT_KEY_PURPOSE, "pkinit client eku"));
+            }
+        }
+    }
+    if let Some((_, rule)) = client
+        .string_attrs
+        .iter()
+        .find(|(k, _)| k == "pkinit_cert_match")
+    {
+        match krb5_types::pkinit::cert_match(rule, cert, &mut krb5_protocol::trace::pkinit_match) {
+            Ok(true) => accepted = true,
+            Ok(false) => return Err(denied(err::CERTIFICATE_MISMATCH, "pkinit_cert_match")),
+            Err(e) => {
+                tracing::debug!(
+                    event = krb5_log::events::KDC_PKINIT,
+                    component = "krb5-kdc",
+                    outcome = "denied",
+                    error = %e
+                );
+                return Err(Error::PreauthModule {
+                    code: err::PREAUTH_FAILED,
+                    message: e.to_string(),
+                });
+            }
+        }
+    }
+    if accepted {
+        Ok(())
+    } else {
+        Err(denied(err::CLIENT_NAME_MISMATCH, "pkinit client san"))
+    }
+}
+
+// MIT: `match_client` (kdc/kdc_preauth.c:477-497)
+fn match_client(
+    store: &dyn PrincipalRead,
+    client: &Principal,
+    req_client: &PrincipalName,
+    req_realm: &str,
+    name: &PrincipalName,
+    realm: &str,
+) -> bool {
+    let parts = |n: &PrincipalName| -> Vec<Vec<u8>> {
+        n.name_string
+            .iter()
+            .map(|c| c.as_bytes().to_vec())
+            .collect()
+    };
+    let read = |n: &PrincipalName, r: &str| -> (Vec<u8>, Vec<Vec<u8>>) {
+        if n.name_type == PrincipalName::NT_ENTERPRISE
+            && let Ok(p) = krb5_types::parse_name_ex(&n.unparse_no_realm(), r, false)
+        {
+            let comps = p.components.into_iter().map(String::into_bytes).collect();
+            return (p.realm.into_bytes(), comps);
+        }
+        (r.as_bytes().to_vec(), parts(n))
+    };
+    let own = (client.realm.as_bytes().to_vec(), parts(&client.name));
+    if read(name, realm) == read(req_client, req_realm)
+        || (realm.as_bytes().to_vec(), parts(name)) == own
+    {
+        return true;
+    }
+    let id = crate::kdb::lookup_principal_id(name, realm);
+    store
+        .fetch(&id)
+        .ok()
+        .flatten()
+        .is_some_and(|entry| (entry.realm.as_bytes().to_vec(), parts(&entry.name)) == own)
+}
+
+fn server_check_dh(
+    store: &dyn PrincipalRead,
+    cname: &PrincipalName,
+    spki: &[u8],
+    min_bits: u32,
+) -> Result<(KxGroup, Vec<u8>), Error> {
+    let Some((group, public)) = krb5_types::pkinit::decode_spki(spki) else {
+        return Err(dh_params_not_accepted(store, cname, min_bits));
+    };
+    match group {
+        Some(g) if g.bits() >= min_bits => {
+            krb5_protocol::trace::pkinit_dh_received_group(g.desc());
+            Ok((g, public))
+        }
+        g => {
+            let desc = g.map_or("(unknown)", KxGroup::desc);
+            krb5_protocol::trace::pkinit_dh_rejecting_group(desc, group_desc(min_bits));
+            tracing::debug!(
+                event = krb5_log::events::KDC_PKINIT,
+                component = "krb5-kdc",
+                outcome = "denied",
+                group = desc,
+                min_bits
+            );
+            Err(dh_params_not_accepted(store, cname, min_bits))
+        }
+    }
+}
+
+// MIT: `check_log_freshness` (plugins/preauth/pkinit/pkinit_srv.c:392-412)
+fn check_log_freshness(
+    store: &dyn PrincipalRead,
+    req_client: &PrincipalName,
+    realm: &str,
+    valid: bool,
+) -> Result<(), Error> {
+    let name = req_client.unparse_with_realm(realm);
+    if store.policy().pkinit_require_freshness && !valid {
+        klog::syslog(
+            Severity::Info,
+            &format!("PKINIT: no freshness token, rejecting auth from {name}"),
+        );
+        return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
+    }
+    let what = if valid {
+        "freshness token received"
+    } else {
+        "no freshness token received"
+    };
+    klog::syslog(Severity::Info, &format!("PKINIT: {what} from {name}"));
+    Ok(())
 }
 
 pub(crate) fn find_pa(padata: Option<&[PaData]>, ty: i32) -> Option<&[u8]> {
@@ -798,9 +1065,9 @@ pub(crate) fn proto_fast(code: i32, detail: impl Into<String>) -> Error {
     }
 }
 
-// MIT `process_as_req` (`do_as_req.c:531-535`): any kdc_find_fast failure is status
-// FIND_FAST.
-// MIT `errcode_to_protocol` (`kdc_util.c:691-698`): decrypt → 31, ASN.1 → 60.
+// MIT: `process_as_req` (do_as_req.c:531-535)
+// MIT: `errcode_to_protocol` (kdc_util.c:691-698)
+/// A FAST decrypt failure is 31; an ASN.1 failure is 60.
 fn map_fast_unwrap(err: Error) -> Error {
     match err {
         Error::Crypto(d) => proto_fast(err::BAD_INTEGRITY, d),
@@ -810,10 +1077,14 @@ fn map_fast_unwrap(err: Error) -> Error {
     }
 }
 
-fn dh_params_not_accepted(store: &dyn PrincipalRead, client: &PrincipalName) -> Error {
+fn dh_params_not_accepted(
+    store: &dyn PrincipalRead,
+    client: &PrincipalName,
+    min_bits: u32,
+) -> Error {
     let mut method: MethodData = vec![PaData {
         padata_type: pa::TD_DH_PARAMETERS,
-        padata_value: krb5_types::pkinit::encode_td_dh_p256().into(),
+        padata_value: krb5_types::pkinit::encode_td_dh_parameters(min_bits).into(),
     }];
     method = with_fx_cookie(store, Some(client), method);
     proto_e(
@@ -878,10 +1149,7 @@ pub(crate) fn with_fx_cookie(
     method
 }
 
-/// MIT `prepare_error_as` (`do_as_req.c:785-814`): append PA-FX-COOKIE to every
-/// e_data-bearing AS error, then encode TYPED-DATA when the bytes already use
-/// tags [0]/[1] (PA_TYPED_E_DATA modules). FAST-wrapped outer e_data is left
-/// alone (`kdc_fast_handle_error` already replaced it).
+// MIT: `prepare_error_as` (do_as_req.c:785-814)
 pub(crate) fn prepare_as_edata(
     store: &dyn PrincipalRead,
     client: Option<&PrincipalName>,
@@ -923,7 +1191,6 @@ pub(crate) fn proto_e(code: i32, status: &'static str, e_data: Vec<u8>) -> Error
     }
 }
 
-/// FAST finished checksum of the ticket DER.
 pub(crate) fn fast_finished(
     armor_key: &ProtocolKey,
     ticket: &krb5_types::Ticket,

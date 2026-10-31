@@ -1,15 +1,11 @@
-//! SPNEGO (`spnego/spnego_mech.c`): NegTokenInit / NegTokenResp,
-//! mech-list MIC, and the krb5 optimistic token.
-
 use krb5_crypto::ProtocolKey;
-use krb5_protocol::ReplayCache;
+use krb5_protocol::{AcceptorConfig, ReplayCache};
 use krb5_types::PrincipalName;
 
 use super::context::{ChannelBindings, TOK_AP_REQ};
 use super::oid::{KRB5_OID, SPNEGO_OID, der_len_decode, der_tlv, gss_wrap_app};
 use super::{Error, GssContext};
 
-/// SPNEGO `NegTokenInit` wrapping a Kerberos inner token (long-form DER length).
 #[must_use]
 pub fn spnego_init(krb_token: &[u8]) -> Vec<u8> {
     let oid_krb = der_tlv(0x06, KRB5_OID);
@@ -24,12 +20,6 @@ pub fn spnego_init(krb_token: &[u8]) -> Vec<u8> {
     der_tlv(0x60, &app)
 }
 
-/// Extract the inner Kerberos GSS token from a SPNEGO or raw krb5 blob.
-///
-/// # Errors
-///
-/// [`Error::Truncated`] when `token` is not a well-formed GSS APPLICATION 0 token (tag, length,
-/// mechanism OID), or wraps a SPNEGO NegTokenInit whose mechToken is missing or runs short.
 pub fn spnego_inner(token: &[u8]) -> Result<&[u8], Error> {
     if token.len() < 2 || token[0] != 0x60 {
         return Err(Error::Truncated);
@@ -83,6 +73,7 @@ fn find_mech_token(neg: &[u8]) -> Result<&[u8], Error> {
 }
 
 const SPNEGO_ACCEPT_COMPLETED: u8 = 0;
+const SPNEGO_REJECT: u8 = 2;
 
 fn der_oid(oid: &[u8]) -> Vec<u8> {
     der_tlv(0x06, oid)
@@ -122,7 +113,6 @@ fn gss_oid_body(token: &[u8]) -> Result<(&[u8], &[u8]), Error> {
     Ok((oid, rest))
 }
 
-/// Whether `token` is a GSS-wrapped SPNEGO NegotiationToken.
 #[must_use]
 pub fn is_spnego(token: &[u8]) -> bool {
     matches!(gss_oid_body(token), Ok((oid, _)) if oid == SPNEGO_OID)
@@ -134,9 +124,7 @@ pub(super) struct NegInit {
     mic: Option<Vec<u8>>,
 }
 
-/// MIT `get_negTokenInit` (`spnego_mech.c:3427-3430`): a token whose header is not SPNEGO is
-/// defective and is not a negotiation.
-/// A length that runs past the token is not a mechanism list or a mechanism token.
+// MIT: `get_negTokenInit` (spnego_mech.c:3427-3430)
 pub(super) fn parse_neg_init(token: &[u8]) -> Result<NegInit, Error> {
     let (oid, rest) = gss_oid_body(token)?;
     if oid != SPNEGO_OID {
@@ -216,9 +204,16 @@ fn mech_list_has_krb5(list: &[u8]) -> Result<bool, Error> {
     Ok(found)
 }
 
-fn encode_neg_resp(state: u8, mech: &[u8], response: Option<&[u8]>, mic: Option<&[u8]>) -> Vec<u8> {
+fn encode_neg_resp(
+    state: u8,
+    mech: Option<&[u8]>,
+    response: Option<&[u8]>,
+    mic: Option<&[u8]>,
+) -> Vec<u8> {
     let mut seq = der_tlv(0xa0, &der_enumerated(state));
-    seq.extend_from_slice(&der_tlv(0xa1, &der_oid(mech)));
+    if let Some(m) = mech {
+        seq.extend_from_slice(&der_tlv(0xa1, &der_oid(m)));
+    }
     if let Some(r) = response {
         seq.extend_from_slice(&der_tlv(0xa2, &der_octet(r)));
     }
@@ -236,22 +231,7 @@ fn mech_token_as_gss(mech_token: &[u8]) -> Vec<u8> {
     }
 }
 
-/// SPNEGO acceptor: `NegTokenInit` → krb5 accept → `NegTokenResp` with MIC.
-///
-/// A `mechListMIC` on the init token is verified here. A follow-up
-/// `NegTokenResp` MIC from the initiator (RFC 4178 second-leg) is **not**
-/// consumed by this call; the acceptor must pass that token to
-/// [`GssContext::verify_spnego_mic`] after the context is established.
-///
-/// # Errors
-///
-/// [`Error::Truncated`] when `service_keys` is empty, the token is not a well-formed SPNEGO
-/// NegTokenInit offering Kerberos, or the framing of its mechToken or `mechListMIC`, or its
-/// delegated KRB-CRED, is malformed; [`Error::Integrity`] when the AP-REQ or `mechListMIC` fails
-/// its integrity check; [`Error::ChannelBindings`] on a binding mismatch; [`Error::Sequence`]
-/// when the `mechListMIC` sequence is refused; [`Error::Inner`] for any other AP-REQ or
-/// `mechListMIC` refusal (see [`GssContext::accept_sec_context_kt`]) and when the reply MIC
-/// cannot be computed.
+/// A follow-up `NegTokenResp` `mechListMIC` from the initiator (RFC 4178 second leg) is not verified here; the caller verifies it with [`GssContext::verify_spnego_mic`].
 pub fn spnego_accept(
     token: &[u8],
     service_keys: &[ProtocolKey],
@@ -259,6 +239,7 @@ pub fn spnego_accept(
     expected_server: Option<&PrincipalName>,
     expected_realm: Option<&str>,
     rcache: &ReplayCache,
+    conf: &AcceptorConfig,
 ) -> Result<(GssContext, Vec<u8>), Error> {
     spnego_accept_kt(
         token,
@@ -268,21 +249,14 @@ pub fn spnego_accept(
         expected_server,
         expected_realm,
         rcache,
+        conf,
     )
 }
 
-/// [`spnego_accept`] with a per-key kvno slice; see
-/// [`GssContext::accept_sec_context_kt`] for the kvno-pinning semantics.
-///
-/// # Errors
-///
-/// [`Error::Truncated`] when `service_keys` is empty, the token is not a well-formed SPNEGO
-/// NegTokenInit offering Kerberos, or the framing of its mechToken or `mechListMIC`, or its
-/// delegated KRB-CRED, is malformed; [`Error::Integrity`] when the AP-REQ or `mechListMIC` fails
-/// its integrity check; [`Error::ChannelBindings`] on a binding mismatch; [`Error::Sequence`]
-/// when the `mechListMIC` sequence is refused; [`Error::Inner`] for any other AP-REQ or
-/// `mechListMIC` refusal (see [`GssContext::accept_sec_context_kt`]) and when the reply MIC
-/// cannot be computed.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "gss_accept_sec_context's inputs and the acceptor's profile"
+)]
 pub fn spnego_accept_kt(
     token: &[u8],
     service_keys: &[ProtocolKey],
@@ -291,13 +265,49 @@ pub fn spnego_accept_kt(
     expected_server: Option<&PrincipalName>,
     expected_realm: Option<&str>,
     rcache: &ReplayCache,
+    conf: &AcceptorConfig,
 ) -> Result<(GssContext, Vec<u8>), Error> {
-    let init = parse_neg_init(token)?;
-    if !mech_list_has_krb5(&init.mech_list_der)? {
-        return Err(Error::Truncated);
+    spnego_accept_kt_err(
+        token,
+        service_keys,
+        service_kvnos,
+        channel_bindings,
+        expected_server,
+        expected_realm,
+        rcache,
+        conf,
+    )
+    .map_err(|(e, _)| e)
+}
+
+// MIT: `acc_ctx_call_acc` (lib/gssapi/spnego/spnego_mech.c:1537-1540)
+// MIT: `handle_mic` (lib/gssapi/spnego/spnego_mech.c:548-562)
+#[expect(
+    clippy::too_many_arguments,
+    reason = "gss_accept_sec_context's inputs and the acceptor's profile"
+)]
+pub fn spnego_accept_kt_err(
+    token: &[u8],
+    service_keys: &[ProtocolKey],
+    service_kvnos: Option<&[u32]>,
+    channel_bindings: Option<&ChannelBindings>,
+    expected_server: Option<&PrincipalName>,
+    expected_realm: Option<&str>,
+    rcache: &ReplayCache,
+    conf: &AcceptorConfig,
+) -> Result<(GssContext, Vec<u8>), crate::Refusal> {
+    let init = parse_neg_init(token).map_err(|e| (e, None))?;
+    if !mech_list_has_krb5(&init.mech_list_der).map_err(|e| (e, None))? {
+        return Err((Error::Truncated, None));
     }
+    let reject = |e: Error, mech_tok: Option<&[u8]>| {
+        (
+            e,
+            Some(encode_neg_resp(SPNEGO_REJECT, None, mech_tok, None)),
+        )
+    };
     let mech = mech_token_as_gss(&init.mech_token);
-    let (mut ctx, ap_rep) = GssContext::accept_sec_context_kt(
+    let (mut ctx, ap_rep) = GssContext::accept_sec_context_kt_err(
         &mech,
         service_keys,
         service_kvnos,
@@ -305,15 +315,18 @@ pub fn spnego_accept_kt(
         expected_server,
         expected_realm,
         rcache,
-    )?;
+        conf,
+    )
+    .map_err(|(e, tok)| reject(e, tok.as_deref()))?;
     if let Some(mic) = &init.mic {
-        ctx.verify_mic(&init.mech_list_der, mic)?;
+        ctx.verify_mic(&init.mech_list_der, mic)
+            .map_err(|e| reject(e, ap_rep.as_deref()))?;
     }
-    let mic = ctx.get_mic(&init.mech_list_der)?;
+    let mic = ctx.get_mic(&init.mech_list_der).map_err(|e| (e, None))?;
     ctx.spnego_mech_list = Some(init.mech_list_der);
     let resp = encode_neg_resp(
         SPNEGO_ACCEPT_COMPLETED,
-        KRB5_OID,
+        Some(KRB5_OID),
         ap_rep.as_deref(),
         Some(&mic),
     );
@@ -350,14 +363,6 @@ fn parse_neg_resp_mic(token: &[u8]) -> Result<Vec<u8>, Error> {
 }
 
 impl GssContext {
-    /// Verify a follow-up SPNEGO `NegTokenResp` mechListMIC.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Truncated`] when the context holds no SPNEGO mechanism list, or the token is not
-    /// a NegTokenResp with a well-formed `mechListMIC`; [`Error::Integrity`] when the MIC comes
-    /// from this side or does not verify; [`Error::Sequence`] when its sequence number is a
-    /// replay or outside the receive window.
     pub fn verify_spnego_mic(&mut self, token: &[u8]) -> Result<(), Error> {
         let list = self.spnego_mech_list.clone().ok_or(Error::Truncated)?;
         let mic = parse_neg_resp_mic(token)?;

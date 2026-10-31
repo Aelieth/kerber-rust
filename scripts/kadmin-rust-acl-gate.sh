@@ -113,6 +113,108 @@ if docker exec "$NAME" grep -q '^listening ' /tmp/kadmind-crlf.log 2>/dev/null; 
     exit 1
 fi
 
+kill_rust_kadmind() {
+    docker exec "$NAME" sh -c '
+for comm in /proc/[0-9]*/comm; do
+    [ -f "$comm" ] || continue
+    read -r name < "$comm" || continue
+    if [ "$name" = "krb5-kadmind" ]; then
+        pid=${comm#/proc/}
+        pid=${pid%/comm}
+        kill "$pid" 2>/dev/null || true
+    fi
+done
+'
+    wait_gone_in "$NAME" 749 || true
+}
+
+rust_kadmind_up() {
+    local log=$1
+    docker exec -d \
+        -e KRB5_KDC_DB=/tmp/principal \
+        -e KRB5_KDC_STASH=/tmp/stash \
+        -e KRB5_ACL_FILE=/tmp/kadm5.acl \
+        "$NAME" sh -c "/tmp/krb5-kadmind 127.0.0.1:749 >/tmp/${log} 2>&1"
+    local ok=0
+    for _ in $(seq 1 40); do
+        if docker exec "$NAME" grep -q '^listening ' "/tmp/${log}" 2>/dev/null; then
+            ok=1
+            break
+        fi
+        sleep 0.25
+    done
+    if [ "$ok" != 1 ]; then
+        docker exec "$NAME" cat "/tmp/${log}" >&2 || true
+        die "kadmind did not listen (${log})"
+    fi
+}
+
+echo "==== ACL NUL ends the line and admin can addprinc ===="
+kill_rust_kadmind
+docker exec "$NAME" python3 -c 'open("/tmp/kadm5.acl","wb").write(b"admin@KERBER.TEST a\0 junk\n")'
+rust_kadmind_up kadmind-nul.log
+NULADD="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw x nulacl' 2>&1 || true)"
+echo "$NULADD"
+echo "$NULADD" | grep -F 'Principal "nulacl@KERBER.TEST" created.'
+
+echo "==== ACL NUL glues the next line and refuses ===="
+kill_rust_kadmind
+docker exec "$NAME" python3 -c 'open("/tmp/kadm5.acl","wb").write(b"admin@KERBER.TEST a\0 junk\nb@KERBER.TEST i\n")'
+docker exec -d \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    -e KRB5_ACL_FILE=/tmp/kadm5.acl \
+    "$NAME" sh -c '/tmp/krb5-kadmind 127.0.0.1:749 >/tmp/kadmind-nulglue.log 2>&1'
+wait_log "$NAME" /tmp/kadmind-nulglue.log "Unrecognized ACL" || true
+NULGLUE="$(docker exec "$NAME" cat /tmp/kadmind-nulglue.log 2>/dev/null || true)"
+echo "$NULGLUE"
+echo "$NULGLUE" | grep -F "Unrecognized ACL operation 'b' in admin@KERBER.TEST ab@KERBER.TEST i"
+echo "$NULGLUE" | grep -F "syntax error at line 1 <admin@KERB...>"
+echo "$NULGLUE" | grep -F "while initializing ACL file, aborting"
+if docker exec "$NAME" grep -q '^listening ' /tmp/kadmind-nulglue.log 2>/dev/null; then
+    echo "kadmind started on NUL-glued ACL" >&2
+    exit 1
+fi
+
+echo "==== ACL trailing backslash refuses ===="
+kill_rust_kadmind
+docker exec "$NAME" python3 -c 'open("/tmp/kadm5.acl","wb").write(b"admin@KERBER.TEST a\\")'
+docker exec -d \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    -e KRB5_ACL_FILE=/tmp/kadm5.acl \
+    "$NAME" sh -c '/tmp/krb5-kadmind 127.0.0.1:749 >/tmp/kadmind-trail.log 2>&1'
+wait_log "$NAME" /tmp/kadmind-trail.log "Unrecognized ACL" || true
+TRAIL="$(docker exec "$NAME" cat /tmp/kadmind-trail.log 2>/dev/null || true)"
+echo "$TRAIL"
+echo "$TRAIL" | grep -F "Unrecognized ACL operation '\\' in admin@KERBER.TEST a\\"
+echo "$TRAIL" | grep -F "syntax error at line 1 <admin@KERB...>"
+echo "$TRAIL" | grep -F "while initializing ACL file, aborting"
+if docker exec "$NAME" grep -q '^listening ' /tmp/kadmind-trail.log 2>/dev/null; then
+    echo "kadmind started on a trailing backslash ACL" >&2
+    exit 1
+fi
+
+echo "==== ACL 200-byte client line loads ===="
+kill_rust_kadmind
+docker exec "$NAME" python3 -c 'open("/tmp/kadm5.acl","wb").write(b"p"*200+b"@KERBER.TEST i\nadmin@KERBER.TEST a\n")'
+rust_kadmind_up kadmind-long.log
+LONGADD="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw x longacl' 2>&1 || true)"
+echo "$LONGADD"
+echo "$LONGADD" | grep -F 'Principal "longacl@KERBER.TEST" created.'
+
+echo "==== ACL CRLF a line loads and admin can addprinc ===="
+kill_rust_kadmind
+docker exec "$NAME" python3 -c 'open("/tmp/kadm5.acl","wb").write(b"admin@KERBER.TEST a\r\n")'
+rust_kadmind_up kadmind-crlfa.log
+CRLFADD="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw x crlfacl' 2>&1 || true)"
+echo "$CRLFADD"
+echo "$CRLFADD" | grep -F 'Principal "crlfacl@KERBER.TEST" created.'
+kill_rust_kadmind
+
 echo "==== default ACL path missing refuses start ===="
 docker exec "$NAME" sh -c '
 for comm in /proc/[0-9]*/comm; do
@@ -527,5 +629,36 @@ if echo "$ESCDENY" | grep -q 'user@KERBER.TEST'; then
     echo "foo\\/admin matched */admin: $ESCDENY" >&2
     exit 1
 fi
+
+echo "==== ACL Latin-1 comment loads and admin/admin can addprinc ===="
+# fgets keeps the 0xE9 byte inside the comment, so the */admin line is the rule.
+ADM="$(rust_kadmin_local -e KRB5_KDC_DB=/tmp/principal -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" -- -q 'addprinc -pw adminpassword admin/admin' 2>&1 || true)"
+echo "$ADM"
+printf '%s\n' "$ADM" | grep -F 'Principal "admin/admin@KERBER.TEST" created.'
+kill_rust_kadmind
+docker exec "$NAME" python3 -c 'open("/tmp/kadm5.acl","wb").write(b"# caf\xe9\n*/admin@KERBER.TEST *\n")'
+rust_kadmind_up kadmind-bytes.log
+BYTESADD="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin/admin@KERBER.TEST -w adminpassword -q 'addprinc -pw x aclbytes' 2>&1 || true)"
+echo "$BYTESADD"
+echo "$BYTESADD" | grep -F 'Principal "aclbytes@KERBER.TEST" created.'
+
+echo "==== ACL path that is a directory loads with no lines ===="
+# A directory opens and contributes no line, so every request is refused.
+kill_rust_kadmind
+docker exec "$NAME" sh -c 'rm -rf /tmp/kadm5.acl && mkdir /tmp/kadm5.acl'
+rust_kadmind_up kadmind-acldir.log
+DIRDENY="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin/admin@KERBER.TEST -w adminpassword -q 'addprinc -pw x acldir' 2>&1 || true)"
+echo "$DIRDENY"
+echo "$DIRDENY" | grep -F $'Operation requires ``add\'\' privilege'
+if echo "$DIRDENY" | grep -q 'Principal "acldir@KERBER.TEST" created.'; then
+    echo "directory ACL allowed addprinc: $DIRDENY" >&2
+    exit 1
+fi
+# The kept container's later cells redirect onto this path.
+docker exec "$NAME" rm -rf /tmp/kadm5.acl
+
 log "kadmin.gate" "ok" ',"leg":"rust-acl"'
 exit 0

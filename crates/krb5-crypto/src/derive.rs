@@ -1,9 +1,4 @@
-//! RFC 3961 DK and RFC 8009 KDF-HMAC-SHA2.
-//!
-//! Checksum comparison is constant-time. A length mismatch is
-//! `Error::Integrity`, the same result as a wrong MAC.
-
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha1::Sha1;
 use sha2::{Sha256, Sha384};
 use subtle::ConstantTimeEq;
@@ -15,13 +10,10 @@ use crate::etype::EncryptionType;
 use crate::nfold::nfold;
 use crate::wipe::wipe;
 
-/// Output length in bits for RFC 8009 KDF-HMAC-SHA2 (`L`).
 pub(crate) fn bits_u32(nbytes: usize) -> u32 {
     u32::try_from(nbytes.saturating_mul(8)).unwrap_or(u32::MAX)
 }
 
-/// RFC 3961 DR: encrypt the n-folded constant in a loop until `out_len` bytes
-/// are produced. AES random-to-key is the identity, so DK = DR for these etypes.
 pub(crate) fn dk_rfc3961(key: &[u8], constant: &[u8]) -> Result<Vec<u8>, Error> {
     let k = key.len();
     let folded = if constant.len() == BLOCK {
@@ -40,7 +32,6 @@ pub(crate) fn dk_rfc3961(key: &[u8], constant: &[u8]) -> Result<Vec<u8>, Error> 
     Ok(out)
 }
 
-/// RFC 8009 KDF-HMAC-SHA2. `k_bits` is L in SP 800-108 (output length in bits).
 pub(crate) fn kdf_hmac_sha2(
     etype: EncryptionType,
     key: &[u8],
@@ -117,14 +108,9 @@ pub(crate) fn mac_verify(got: &[u8], expected: &[u8]) -> Result<(), Error> {
     Ok(())
 }
 
-/// Three keys derived for one usage: Kc, Ke, Ki. Each key's own allocation is wiped, whole, on
-/// drop.
 pub struct DerivedKeys {
-    /// Checksum key.
     pub kc: Vec<u8>,
-    /// Encryption key.
     pub ke: Vec<u8>,
-    /// Integrity key.
     pub ki: Vec<u8>,
 }
 
@@ -138,12 +124,6 @@ impl Drop for DerivedKeys {
     }
 }
 
-/// Derive Kc, Ke, and Ki for `usage` from a protocol key (MIT t_derive KATs).
-///
-/// # Errors
-///
-/// [`Error::InvalidKeyLength`] when `key` is des3-cbc-sha1, whose 24-octet key the AES-based
-/// RFC 3961 derivation refuses.
 pub fn derive_keys(
     key: &crate::key::ProtocolKey,
     usage: crate::etype::KeyUsage,
@@ -183,6 +163,12 @@ pub(crate) fn derive_usage_keys(
         let kc = crate::weak::dk_camellia(base, &usage.derivation_constant(0x99))?;
         let ke = crate::weak::dk_camellia(base, &usage.derivation_constant(0xAA))?;
         let ki = crate::weak::dk_camellia(base, &usage.derivation_constant(0x55))?;
+        Ok(UsageKeys { kc, ke, ki })
+    } else if etype == EncryptionType::Des3CbcSha1 {
+        // MIT: `krb5int_derive_key` (lib/crypto/krb/derive.c:134-174)
+        let kc = crate::weak::dk_des3(base, &usage.derivation_constant(0x99))?;
+        let ke = crate::weak::dk_des3(base, &usage.derivation_constant(0xAA))?;
+        let ki = crate::weak::dk_des3(base, &usage.derivation_constant(0x55))?;
         Ok(UsageKeys { kc, ke, ki })
     } else {
         let kc = dk_rfc3961(base, &usage.derivation_constant(0x99))?;

@@ -348,6 +348,9 @@ echo "$MIT_REN_SVC" | grep -F 'Insufficient authorization for operation'
 MIT_REN_U3="$(mit_kadmin "$NAME_MIT" -- -p scoped -w scoped-secret -q 'renprinc -force user2 user3' 2>&1 || true)"
 echo "$MIT_REN_U3"
 echo "$MIT_REN_U3" | grep -F 'Principal "user2@KERBER.TEST" renamed to "user3@KERBER.TEST".'
+MIT_DEL_U3="$(mit_kadmin "$NAME_MIT" -- -p scoped -w scoped-secret -q 'delprinc -force user3' 2>&1 || true)"
+echo "$MIT_DEL_U3"
+echo "$MIT_DEL_U3" | grep -F 'Principal "user3@KERBER.TEST" deleted.'
 MIT_U9="$(mit_kadmin "$NAME_MIT" -- -p restricted -w restricted-secret -q 'addprinc -pw x -policy short8 user9' 2>&1 || true)"
 echo "$MIT_U9"
 echo "$MIT_U9" | grep -F 'Principal "user9@KERBER.TEST" created.'
@@ -466,6 +469,115 @@ if docker exec "$NAME_MIT" python3 -c "import socket;s=socket.create_connection(
     echo "MIT kadmind started on CRLF continuation ACL" >&2
     exit 1
 fi
+
+kill_mit_kadmind() {
+    docker exec "$NAME_MIT" sh -c '
+for comm in /proc/[0-9]*/comm; do
+    [ -f "$comm" ] || continue
+    read -r name < "$comm" || continue
+    if [ "$name" = "kadmind" ]; then
+        pid=${comm#/proc/}
+        pid=${pid%/comm}
+        kill "$pid" 2>/dev/null || true
+    fi
+done
+'
+    wait_gone_in "$NAME_MIT" 749 || die "MIT kadmind still bound :749 after kill"
+}
+
+echo "==== MIT ACL NUL ends the line and admin can addprinc ===="
+kill_mit_kadmind
+MIT_MAKEADMIN="$(mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw adminpassword admin' 2>&1 || true)"
+echo "$MIT_MAKEADMIN"
+echo "$MIT_MAKEADMIN" | grep -F 'Principal "admin@KERBER.TEST" created.'
+docker exec "$NAME_MIT" python3 -c 'open("/var/kerberos/krb5kdc/kadm5.acl","wb").write(b"admin@KERBER.TEST a\0 junk\n")'
+docker exec -d "$NAME_MIT" sh -c 'kadmind -nofork >/tmp/kadmind-nul.log 2>&1'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME_MIT" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',749),0.3)" 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME_MIT" cat /tmp/kadmind-nul.log >&2 || true
+    die "MIT kadmind did not listen on NUL ACL"
+fi
+MIT_NULADD="$(mit_kadmin "$NAME_MIT" -- -p admin -w adminpassword -q 'addprinc -pw x nulacl' 2>&1 || true)"
+echo "$MIT_NULADD"
+echo "$MIT_NULADD" | grep -F 'Principal "nulacl@KERBER.TEST" created.'
+
+echo "==== MIT ACL NUL glues the next line and refuses ===="
+kill_mit_kadmind
+docker exec "$NAME_MIT" python3 -c 'open("/var/kerberos/krb5kdc/kadm5.acl","wb").write(b"admin@KERBER.TEST a\0 junk\nb@KERBER.TEST i\n")'
+set +e
+docker exec "$NAME_MIT" sh -c 'timeout 3 kadmind -nofork >/tmp/kadmind-nulglue.log 2>&1'
+set -e
+MIT_NULGLUE="$(docker exec "$NAME_MIT" cat /tmp/kadmind-nulglue.log 2>/dev/null || true)"
+echo "$MIT_NULGLUE"
+echo "$MIT_NULGLUE" | grep -F "Unrecognized ACL operation 'b' in admin@KERBER.TEST ab@KERBER.TEST i"
+echo "$MIT_NULGLUE" | grep -F "syntax error at line 1 <admin@KERB...>"
+echo "$MIT_NULGLUE" | grep -F "while initializing ACL file, aborting"
+if docker exec "$NAME_MIT" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',749),0.3)" 2>/dev/null; then
+    echo "MIT kadmind started on NUL-glued ACL" >&2
+    exit 1
+fi
+
+echo "==== MIT ACL trailing backslash refuses ===="
+docker exec "$NAME_MIT" python3 -c 'open("/var/kerberos/krb5kdc/kadm5.acl","wb").write(b"admin@KERBER.TEST a\\")'
+set +e
+docker exec "$NAME_MIT" sh -c 'timeout 3 kadmind -nofork >/tmp/kadmind-trail.log 2>&1'
+set -e
+MIT_TRAIL="$(docker exec "$NAME_MIT" cat /tmp/kadmind-trail.log 2>/dev/null || true)"
+echo "$MIT_TRAIL"
+echo "$MIT_TRAIL" | grep -F "Unrecognized ACL operation '\\' in admin@KERBER.TEST a\\"
+echo "$MIT_TRAIL" | grep -F "syntax error at line 1 <admin@KERB...>"
+echo "$MIT_TRAIL" | grep -F "while initializing ACL file, aborting"
+if docker exec "$NAME_MIT" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',749),0.3)" 2>/dev/null; then
+    echo "MIT kadmind started on a trailing backslash ACL" >&2
+    exit 1
+fi
+
+echo "==== MIT ACL 200-byte client line loads ===="
+docker exec "$NAME_MIT" python3 -c 'open("/var/kerberos/krb5kdc/kadm5.acl","wb").write(b"p"*200+b"@KERBER.TEST i\nadmin@KERBER.TEST a\n")'
+docker exec -d "$NAME_MIT" sh -c 'kadmind -nofork >/tmp/kadmind-long.log 2>&1'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME_MIT" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',749),0.3)" 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME_MIT" cat /tmp/kadmind-long.log >&2 || true
+    die "MIT kadmind did not listen on a 200-byte client line"
+fi
+MIT_LONGADD="$(mit_kadmin "$NAME_MIT" -- -p admin -w adminpassword -q 'addprinc -pw x longacl' 2>&1 || true)"
+echo "$MIT_LONGADD"
+echo "$MIT_LONGADD" | grep -F 'Principal "longacl@KERBER.TEST" created.'
+
+echo "==== MIT ACL CRLF a line loads and admin can addprinc ===="
+kill_mit_kadmind
+docker exec "$NAME_MIT" python3 -c 'open("/var/kerberos/krb5kdc/kadm5.acl","wb").write(b"admin@KERBER.TEST a\r\n")'
+docker exec -d "$NAME_MIT" sh -c 'kadmind -nofork >/tmp/kadmind-crlfa.log 2>&1'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME_MIT" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',749),0.3)" 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME_MIT" cat /tmp/kadmind-crlfa.log >&2 || true
+    die "MIT kadmind did not listen on a CRLF a line"
+fi
+MIT_CRLFADD="$(mit_kadmin "$NAME_MIT" -- -p admin -w adminpassword -q 'addprinc -pw x crlfacl' 2>&1 || true)"
+echo "$MIT_CRLFADD"
+echo "$MIT_CRLFADD" | grep -F 'Principal "crlfacl@KERBER.TEST" created.'
+kill_mit_kadmind
 
 echo "==== MIT default ACL path missing refuses start ===="
 docker exec "$NAME_MIT" sh -c '
@@ -932,5 +1044,94 @@ docker exec "$NAME_MIT" grep unlocku /tmp/unlock-mit.dump | grep -F $'\t1792\t' 
     docker exec "$NAME_MIT" grep unlocku /tmp/unlock-mit.dump >&2 || true
     exit 1
 }
+echo "==== ACL Latin-1 comment loads and admin/admin can addprinc ===="
+# The stock profile names no acl_file here, so kadmind would open its compiled
+# default. The profile under test points acl_file at the file we wrote.
+# fgets keeps the 0xE9 byte inside the comment, so the */admin line is the rule.
+mit_acl_profile() {
+    docker exec "$NAME_MIT" python3 -c '
+import pathlib, sys
+dest, acl = sys.argv[1], sys.argv[2]
+src = pathlib.Path("/etc/krb5kdc/kdc.conf").read_text().splitlines(True)
+out, done = [], False
+for ln in src:
+    if not done and ln.strip() == "}":
+        out.append("        acl_file = " + acl + "\n")
+        done = True
+    out.append(ln)
+if not done:
+    raise SystemExit("realm close not found")
+pathlib.Path(dest).write_text("".join(out))
+' "$1" "$2"
+}
+kill_mit_kadmind
+docker exec "$NAME_MIT" python3 -c 'open("/tmp/acl-bytes","wb").write(b"# caf\xe9\n*/admin@KERBER.TEST *\n")'
+mit_acl_profile /tmp/kadm-bytes.conf /tmp/acl-bytes
+docker exec -d -e KRB5_KDC_PROFILE=/tmp/kadm-bytes.conf "$NAME_MIT" \
+    sh -c 'kadmind -nofork >/tmp/kadmind-bytes.log 2>&1'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME_MIT" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',749),0.3)" 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME_MIT" cat /tmp/kadmind-bytes.log >&2 || true
+    echo "MIT kadmind did not listen on a Latin-1 comment ACL" >&2
+    exit 1
+fi
+MIT_BYTESADD="$(mit_kadmin "$NAME_MIT" -- -p admin/admin -w adminpassword -q 'addprinc -pw x aclbytes' 2>&1 || true)"
+echo "$MIT_BYTESADD"
+echo "$MIT_BYTESADD" | grep -F 'Principal "aclbytes@KERBER.TEST" created.'
+
+echo "==== ACL path that is a directory loads with no lines ===="
+# A directory opens and contributes no line, so every request is refused.
+kill_mit_kadmind
+docker exec "$NAME_MIT" sh -c 'rm -rf /tmp/acl-dir && mkdir /tmp/acl-dir'
+mit_acl_profile /tmp/kadm-dir.conf /tmp/acl-dir
+docker exec -d -e KRB5_KDC_PROFILE=/tmp/kadm-dir.conf "$NAME_MIT" \
+    sh -c 'kadmind -nofork >/tmp/kadmind-acldir.log 2>&1'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME_MIT" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',749),0.3)" 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME_MIT" cat /tmp/kadmind-acldir.log >&2 || true
+    echo "MIT kadmind did not listen on a directory ACL" >&2
+    exit 1
+fi
+MIT_DIRDENY="$(mit_kadmin "$NAME_MIT" -- -p admin/admin -w adminpassword -q 'addprinc -pw x acldir' 2>&1 || true)"
+echo "$MIT_DIRDENY"
+echo "$MIT_DIRDENY" | grep -F $'Operation requires ``add\'\' privilege'
+if echo "$MIT_DIRDENY" | grep -q 'Principal "acldir@KERBER.TEST" created.'; then
+    echo "MIT directory ACL allowed addprinc: $MIT_DIRDENY" >&2
+    exit 1
+fi
+
+# kadmin-both-gate attaches to this container. The directory ACL would
+# refuse its next request, so kadmind goes back to the stock profile.
+echo "==== restore MIT kadmind on the stock profile ===="
+kill_mit_kadmind
+docker exec -d "$NAME_MIT" sh -c 'kadmind -nofork >/tmp/kadmind-restore.log 2>&1'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME_MIT" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',749),0.3)" 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME_MIT" cat /tmp/kadmind-restore.log >&2 || true
+    echo "MIT kadmind did not listen on the stock profile" >&2
+    exit 1
+fi
+
 log "kadmin.gate" "ok" ',"leg":"mit"'
 exit 0

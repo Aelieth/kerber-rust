@@ -1,28 +1,13 @@
-//! Credential-cache names (`os/ccdefname.c` `get_from_os` /
-//! `krb5_cc_default_name` / `k5_expand_path_tokens`;
-//! `ccache/ccbase.c` `krb5_cc_resolve`; `ccache/ccdefault.c`
-//! `krb5_cc_default`; `ccache/cc_file.c` `fcc_resolve`;
-//! `ccache/cc_memory.c` `krb5_mcc_resolve`; `ccache/cc_dir.c`
-//! `dcc_resolve`; `ccache/cc_kcm.c` `kcm_resolve`): `TYPE:residual`
-//! and `%{uid}` expansion.
-
 use std::path::PathBuf;
 
 use super::CcSpec;
 use super::Error;
-use super::profile::load_krb5_conf;
+use super::{ClientContext, Krb5Conf};
 
-/// MIT `KRB5_CC_UNKNOWN_TYPE`.
 pub const KRB5_CC_UNKNOWN_TYPE: &str = "Unknown credential cache type";
 
 const BUILTIN_CCACHE: &str = "FILE:/tmp/krb5cc_%{uid}";
 
-/// Expand MIT `default_ccache_name` tokens (`%{uid}` / `%{USERID}` / `%{euid}`).
-///
-/// # Errors
-///
-/// [`Error::Ccache`] when a `%{` has no closing `}` or names a token other than `uid`,
-/// `USERID`, `euid`, `null`, `TEMP`, or `username` (MIT fails closed).
 pub fn expand_ccache_params(s: &str) -> Result<String, Error> {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
@@ -90,43 +75,21 @@ fn unix_username() -> String {
     }
 }
 
-/// `-c` flag, else `KRB5CCNAME`, else conf `default_ccache_name`, else builtin.
-///
-/// # Errors
-///
-/// [`Error::Ccache`]: [`KRB5_CC_UNKNOWN_TYPE`] when the chosen name's type prefix is not
-/// `FILE`, `MEMORY`, `DIR`, or `KCM`, or (for the conf default only) an unknown or
-/// unterminated `%{token}`.
-pub fn resolve_ccspec(flag: Option<&str>) -> Result<CcSpec, Error> {
-    if let Some(s) = flag {
-        return parse_ccspec(s);
+pub fn resolve_ccspec(ctx: &ClientContext, flag: Option<&str>) -> Result<CcSpec, Error> {
+    match flag.or(ctx.ccname()) {
+        Some(s) => parse_ccspec(s),
+        None => default_ccspec(&ctx.profile),
     }
-    if let Some(v) = std::env::var_os("KRB5CCNAME") {
-        return parse_ccspec(&v.to_string_lossy());
-    }
-    default_ccspec()
 }
 
-/// Conf `default_ccache_name` after token expansion, else builtin FILE.
-///
-/// # Errors
-///
-/// [`Error::Ccache`] when `default_ccache_name` has an unknown or unterminated `%{token}`, or
-/// carrying [`KRB5_CC_UNKNOWN_TYPE`] when its type prefix is not `FILE`, `MEMORY`, `DIR`, or
-/// `KCM`.
-pub fn default_ccspec() -> Result<CcSpec, Error> {
-    let raw = load_krb5_conf()
-        .and_then(|c| c.default_ccache_name)
+pub fn default_ccspec(profile: &Krb5Conf) -> Result<CcSpec, Error> {
+    let raw = profile
+        .default_ccache_name
+        .clone()
         .unwrap_or_else(|| BUILTIN_CCACHE.to_owned());
     parse_ccspec(&expand_ccache_params(&raw)?)
 }
 
-/// Split `TYPE:residual`. A residual with no type prefix is FILE.
-///
-/// # Errors
-///
-/// [`Error::Ccache`] carrying [`KRB5_CC_UNKNOWN_TYPE`] when the type prefix is not `FILE`,
-/// `MEMORY`, `DIR`, or `KCM` (an unbuilt type such as `KEYRING` included).
 pub fn parse_ccspec(spec: &str) -> Result<CcSpec, Error> {
     match split_cc_type(spec) {
         None => Ok(CcSpec::File(PathBuf::from(spec))),
@@ -138,12 +101,6 @@ pub fn parse_ccspec(spec: &str) -> Result<CcSpec, Error> {
     }
 }
 
-/// FILE residual, or a bare path.
-///
-/// # Errors
-///
-/// [`Error::Ccache`] carrying [`KRB5_CC_UNKNOWN_TYPE`] when `spec` is not a FILE name (any
-/// other type prefix, `MEMORY`, `DIR`, and `KCM` included).
 pub fn parse_ccname(spec: &str) -> Result<PathBuf, Error> {
     match parse_ccspec(spec)? {
         CcSpec::File(p) => Ok(p),
@@ -162,7 +119,6 @@ fn split_cc_type(spec: &str) -> Option<(&str, &str)> {
     Some((ty, rest))
 }
 
-/// Builtin `FILE:/tmp/krb5cc_%{uid}` residual (no conf).
 #[must_use]
 pub fn default_ccache_name() -> PathBuf {
     PathBuf::from(format!("/tmp/krb5cc_{}", unix_uid()))

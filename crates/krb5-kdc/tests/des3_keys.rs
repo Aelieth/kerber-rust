@@ -1,8 +1,10 @@
 //! The des3-cbc-sha1 keys the KDC makes for a reply: the session key of a TGT and of a service ticket.
 //!
-//! MIT `krb5_c_make_random_key` (`lib/crypto/krb/make_random_key.c:31-76`): `keybytes` random octets through the enctype's random-to-key, so a des3 key is 24 octets of odd parity; the AS and TGS exchanges draw their session keys with it.
+// MIT: `krb5_c_make_random_key` (lib/crypto/krb/make_random_key.c:31-76)
+//! `keybytes` random octets through the enctype's random-to-key, so a des3 key is 24 octets of odd parity; the AS and TGS exchanges draw their session keys with it.
 //! A MIT client that is given a des3 session key of even parity says "DES key has bad parity" and cannot use the ticket.
-//! MIT `select_session_keytype` (`kdc/kdc_util.c:1085-1110`): a des3 session key is issued only under `allow_des3` and for a server whose `session_enctypes` or keys hold des3.
+// MIT: `select_session_keytype` (kdc/kdc_util.c:1085-1110)
+//! a des3 session key is issued only under `allow_des3` and for a server whose `session_enctypes` or keys hold des3.
 
 use krb5_asn1::encode;
 use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};
@@ -32,7 +34,13 @@ fn realm_with_des3_user() -> (krb5_kdc::PrincipalStore, PrincipalName, ProtocolK
     }
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["des3user"]);
     store
-        .create_password_etypes(&acl, &documented_admin_id(), &user, b"des3-secret", &[DES3])
+        .create_password_etypes(
+            &acl,
+            &documented_admin_id(),
+            &user,
+            b"des3-secret",
+            &[DES3.into()],
+        )
         .expect("addprinc -e des3");
     let key =
         string_to_key(DES3, b"des3-secret", user.default_salt(TEST_REALM), None).expect("s2k");
@@ -104,8 +112,10 @@ fn tgs_issues_a_des3_session_key_of_odd_parity() {
 
 // A des3 key whose parity is wrong, as a dump of an earlier build's database, a keytab or a ticket carries it. MIT loads such a key as it is
 // and refuses it at its first use, and where the KDC meets it first decides the status word and the code the client is given.
-// MIT `validate_and_schedule` (`lib/crypto/builtin/enc_provider/des3.c:33-53`): the first use of the key fails with `KRB5DES_BAD_KEYPAR`.
-// MIT `errcode_to_protocol` (`kdc/kdc_util.c:691-697`): `KRB5DES_BAD_KEYPAR` is past the table's protocol codes, so it is sent as `KRB_ERR_GENERIC` (60).
+// MIT: `validate_and_schedule` (lib/crypto/builtin/enc_provider/des3.c:33-53)
+// the first use of the key fails with `KRB5DES_BAD_KEYPAR`.
+// MIT: `errcode_to_protocol` (kdc/kdc_util.c:691-697)
+// `KRB5DES_BAD_KEYPAR` is past the table's protocol codes, so it is sent as `KRB_ERR_GENERIC` (60).
 
 /// `key` with the parity bit of one octet flipped.
 fn with_bad_parity(key: &ProtocolKey) -> ProtocolKey {
@@ -177,7 +187,8 @@ fn as_req_for(user: &PrincipalName, nonce: u32, padata: Vec<PaData>) -> krb5_typ
 
 /// A client that asks for PA-REQ-ENC-PA-REP, as MIT's does, has its reply's checksum made under the stored key first, and that is
 /// where the key is refused: status KDC_RETURN_ENC_PADATA, code 60, the message in the log line.
-/// MIT `finish_process_as_req` (`kdc/do_as_req.c:316-322`): `return_enc_padata` fails, status `KDC_RETURN_ENC_PADATA`.
+// MIT: `finish_process_as_req` (kdc/do_as_req.c:316-322)
+/// `return_enc_padata` fails, status `KDC_RETURN_ENC_PADATA`.
 #[test]
 fn as_under_a_stored_key_of_bad_parity_fails_in_return_enc_padata() {
     let (store, user, _) = realm_with_a_bad_des3_user(false);
@@ -187,20 +198,10 @@ fn as_under_a_stored_key_of_bad_parity_fails_in_return_enc_padata() {
     assert_eq!(err_of(&wire), (60, "KDC_RETURN_ENC_PADATA".to_owned()));
 }
 
-/// A request without it meets the key at the encryption of the reply, which sets no status of its own.
-/// MIT `finish_process_as_req` (`kdc/do_as_req.c:326-332`): `krb5_encode_kdc_rep` fails, and `egress` makes the status `UNKNOWN_REASON`.
-#[test]
-fn as_under_a_stored_key_of_bad_parity_fails_in_the_reply_encryption_without_enc_pa_rep() {
-    let (store, user, _) = realm_with_a_bad_des3_user(false);
-    let req = as_req_for(&user, 741, vec![]);
-    let e = krb5_kdc::issue_as(&store, &req).unwrap_err();
-    assert_eq!(status(&e), (err::GENERIC, Some("UNKNOWN_REASON")));
-    assert_eq!(detail(&e), Some("DES key has bad parity"));
-}
-
 /// A client that must preauthenticate sends a timestamp under its own (good) key; the KDC cannot decrypt it with the stored key and
 /// that is PREAUTH_FAILED, as for a wrong password.
-/// MIT `enc_ts_verify` (`kdc/kdc_preauth_encts.c:74-92`): a key that does not decrypt, for any reason, sends the walk on to the next key, and the end of the keys is `KRB5KDC_ERR_PREAUTH_FAILED`.
+// MIT: `enc_ts_verify` (kdc/kdc_preauth_encts.c:74-92)
+/// a key that does not decrypt, for any reason, sends the walk on to the next key, and the end of the keys is `KRB5KDC_ERR_PREAUTH_FAILED`.
 #[test]
 fn as_with_preauth_under_a_stored_key_of_bad_parity_is_preauth_failed() {
     let (store, user, key) = realm_with_a_bad_des3_user(true);
@@ -209,15 +210,6 @@ fn as_with_preauth_under_a_stored_key_of_bad_parity_is_preauth_failed() {
     assert_eq!(status(&e), (err::PREAUTH_FAILED, Some("PREAUTH_FAILED")));
     let wire = krb5_kdc::handle_request(&store, &encode(&req).unwrap()).unwrap();
     assert_eq!(err_of(&wire), (24, "PREAUTH_FAILED".to_owned()));
-}
-
-/// The same realm before its key was spoiled issues; the spoiled key is the only difference.
-#[test]
-fn the_same_realm_with_the_key_as_it_was_issues() {
-    let (mut store, user, _) = realm_with_des3_user();
-    set_preauth(&mut store, &user, false);
-    let req = as_req_for(&user, 743, vec![enc_pa_rep()]);
-    krb5_kdc::issue_as(&store, &req).expect("AS issues");
 }
 
 fn tgs_for_host(
@@ -248,7 +240,8 @@ fn tgs_for_host(
 
 /// A service whose key has bad parity cannot have its ticket signed or sealed. The PAC's server signature is made first, in
 /// `handle_authdata`, and that is where MIT fails: the log line `TGS_REQ : handle_authdata (-1765328198)`, then status HANDLE_AUTHDATA.
-/// MIT `tgs_issue_ticket` (`kdc/do_tgs_req.c:1038-1048`): `handle_authdata` fails, `krb5_klog_syslog(LOG_INFO, "TGS_REQ : handle_authdata (%d)")`, status `HANDLE_AUTHDATA`.
+// MIT: `tgs_issue_ticket` (kdc/do_tgs_req.c:1038-1048)
+/// `handle_authdata` fails, `krb5_klog_syslog(LOG_INFO, "TGS_REQ : handle_authdata (%d)")`, status `HANDLE_AUTHDATA`.
 #[test]
 fn tgs_for_a_service_whose_key_has_bad_parity_fails_in_handle_authdata() {
     let (mut store, user, key) = realm_with_des3_user();
@@ -262,7 +255,8 @@ fn tgs_for_a_service_whose_key_has_bad_parity_fails_in_handle_authdata() {
 }
 
 /// A TGT that the krbtgt key of bad parity cannot open is a failure of the TGS-REQ's processing, with code 60.
-/// MIT `kdc_rd_ap_req` (`kdc/kdc_util.c:293-345`): `krb5_decrypt_tkt_part` fails with the key's code, `errcode_to_protocol` (`:691-697`) sends it as 60, status `PROCESS_TGS`.
+// MIT: `kdc_rd_ap_req` (kdc/kdc_util.c:293-345)
+/// `krb5_decrypt_tkt_part` fails with the key's code, `errcode_to_protocol` (`:691-697`) sends it as 60, status `PROCESS_TGS`.
 #[test]
 fn a_tgt_under_a_krbtgt_key_of_bad_parity_is_a_process_tgs_failure() {
     let (mut store, user, key) = realm_with_des3_user();

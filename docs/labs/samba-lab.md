@@ -109,7 +109,7 @@ FL match; operational details are kept outside the repository.)*
 
 `scripts/samba-ad-gate.sh` — the **only `exit 0`** is a live Samba `kinit` +
 `kvno` + `klist` content match; missing docker/image/KDC is `exit 2` +
-`samba-ad-gate-unavailable.log` (as `heimdal-gate` does). It reads:
+`samba-ad-gate-unavailable.log`. It reads:
 
 ```bash
 SAMBA_AD_IMAGE=samba-ad-dc:latest \
@@ -148,8 +148,7 @@ must use a `~/adlab`-style isolated `KRB5_CONFIG` / `KRB5CCNAME` / `KRB5_KTNAME`
 ## Relationship to the captured Windows DC
 
 - **Same realm/accounts by name** → `ad-windows-gate.sh` and
-  `ad-s4u-gate.sh` now run against live Samba nightly in `peers.yml`. `ad-mit-trust-gate.sh`
-  aliases `samba-realtrust-gate.sh`. Samba vs Windows: domain SID is
+  `ad-s4u-gate.sh` now run against live Samba nightly in `peers.yml`. Samba vs Windows: domain SID is
   provisioned at image build (not the Windows `891046300…` golden);
   `host/svc.ad.kerber.test` is an SPN on `kbrsvc` (not a computer
   account); ticket kvno is 2 (Windows lab was 3); etype remains

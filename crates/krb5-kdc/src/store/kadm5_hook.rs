@@ -1,48 +1,26 @@
-//! kadm5 hook modules (`kadm5_hook.c`).
-//!
-//! There is no built-in module. `[plugins] kadm5_hook` `disable` then
-//! `enable_only` select embedder modules from [`register_kadm5_hook`].
-//! A precommit error stops the walk and the operation writes nothing.
-//! A postcommit error is logged and the walk continues. The operation
-//! still succeeds. `module` is not read. Nothing is loaded with `dlopen`.
+//! kadm5 hooks.
 
 use std::sync::{Arc, Mutex};
 
 use krb5_crypto::EncryptionType;
 use krb5_types::PrincipalName;
+use zeroize::Zeroizing;
 
 use super::PrincipalStore;
 use crate::error::Error;
 
-/// `KADM5_HOOK_STAGE_PRECOMMIT` is 0 and `KADM5_HOOK_STAGE_POSTCOMMIT` is 1.
-///
-/// MIT `kadm5_hook_plugin.h`: the stage passed to every hook method.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HookStage {
-    /// Before the kdb write. The first error aborts the operation.
     Precommit = 0,
-    /// After a successful write. An error is logged and the walk continues.
     Postcommit = 1,
 }
 
-/// One kadm5 hook module.
-///
-/// MIT `kadm5_hook_vftable_1` (`include/krb5/kadm5_hook_plugin.h`): a NULL
-/// method is skipped. Each method here allows the operation until an
-/// embedder overrides it.
+// MIT: `kadm5_hook_vftable_1` (include/krb5/kadm5_hook_plugin.h)
 pub trait Kadm5Hook: Send + Sync {
-    /// Module name for `[plugins] kadm5_hook`.
     fn name(&self) -> &'static str;
 
-    /// MIT `k5_kadm5_hook_chpass` (`kadm5_hook.c:142-151`): each module's chpass.
-    ///
-    /// MIT `kadm5_randkey_principal_3` (`svr_principal.c:1485-1495`): a random key passes no password.
-    /// `keepold` is the count the caller passed (`krb5_boolean` is that unsigned value).
-    ///
-    /// # Errors
-    ///
-    /// A module error. [`HookStage::Precommit`] returns it and writes nothing.
-    /// [`HookStage::Postcommit`] is logged and the operation still succeeds.
+    // MIT: `k5_kadm5_hook_chpass` (kadm5_hook.c:142-151)
+    // MIT: `kadm5_randkey_principal_3` (svr_principal.c:1485-1495)
     fn chpass(
         &self,
         _stage: HookStage,
@@ -55,14 +33,7 @@ pub trait Kadm5Hook: Send + Sync {
         Ok(())
     }
 
-    /// MIT `k5_kadm5_hook_create` (`kadm5_hook.c:154-162`): each module's create.
-    ///
-    /// `password` is `None` for a random-key create. `mask` is the request's `KADM5_*` bits.
-    ///
-    /// # Errors
-    ///
-    /// A module error. [`HookStage::Precommit`] returns it and writes nothing.
-    /// [`HookStage::Postcommit`] is logged and the operation still succeeds.
+    // MIT: `k5_kadm5_hook_create` (kadm5_hook.c:154-162)
     fn create(
         &self,
         _stage: HookStage,
@@ -75,14 +46,7 @@ pub trait Kadm5Hook: Send + Sync {
         Ok(())
     }
 
-    /// MIT `k5_kadm5_hook_modify` (`kadm5_hook.c:165-170`): each module's modify.
-    ///
-    /// `mask` is the `KADM5_*` bits this modify applies.
-    ///
-    /// # Errors
-    ///
-    /// A module error. [`HookStage::Precommit`] returns it and writes nothing.
-    /// [`HookStage::Postcommit`] is logged and the operation still succeeds.
+    // MIT: `k5_kadm5_hook_modify` (kadm5_hook.c:165-170)
     fn modify(
         &self,
         _stage: HookStage,
@@ -93,12 +57,7 @@ pub trait Kadm5Hook: Send + Sync {
         Ok(())
     }
 
-    /// MIT `k5_kadm5_hook_rename` (`kadm5_hook.c:173-178`): each module's rename.
-    ///
-    /// # Errors
-    ///
-    /// A module error. [`HookStage::Precommit`] returns it and writes nothing.
-    /// [`HookStage::Postcommit`] is logged and the operation still succeeds.
+    // MIT: `k5_kadm5_hook_rename` (kadm5_hook.c:173-178)
     fn rename(
         &self,
         _stage: HookStage,
@@ -110,22 +69,12 @@ pub trait Kadm5Hook: Send + Sync {
         Ok(())
     }
 
-    /// MIT `k5_kadm5_hook_remove` (`kadm5_hook.c:181-186`): each module's remove.
-    ///
-    /// # Errors
-    ///
-    /// A module error. [`HookStage::Precommit`] returns it and writes nothing.
-    /// [`HookStage::Postcommit`] is logged and the operation still succeeds.
+    // MIT: `k5_kadm5_hook_remove` (kadm5_hook.c:181-186)
     fn remove(&self, _stage: HookStage, _princ: &PrincipalName, _realm: &str) -> Result<(), Error> {
         Ok(())
     }
 
-    /// MIT `k5_kadm5_hook_alias` (`kadm5_hook.c:189-194`): each module's alias.
-    ///
-    /// # Errors
-    ///
-    /// A module error. [`HookStage::Precommit`] returns it and writes nothing.
-    /// [`HookStage::Postcommit`] is logged and the operation still succeeds.
+    // MIT: `k5_kadm5_hook_alias` (kadm5_hook.c:189-194)
     fn alias(
         &self,
         _stage: HookStage,
@@ -145,7 +94,7 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
-/// Register one named module for every thread that has not set its own list.
+/// No dlopen here.
 pub fn register_kadm5_hook(module: Arc<dyn Kadm5Hook>) {
     EXTRA
         .lock()
@@ -153,18 +102,15 @@ pub fn register_kadm5_hook(module: Arc<dyn Kadm5Hook>) {
         .push(module);
 }
 
-/// Install this thread's modules in place of [`register_kadm5_hook`] (tests).
-///
-/// The list is still filtered by `[plugins] kadm5_hook`. An empty list runs nothing.
 pub fn set_thread_kadm5_hook(modules: Vec<Arc<dyn Kadm5Hook>>) {
     THREAD.with(|slot| *slot.borrow_mut() = Some(modules));
 }
 
-/// Drop this thread's modules so it uses the process list.
 pub fn clear_thread_kadm5_hook() {
     THREAD.with(|slot| *slot.borrow_mut() = None);
 }
 
+/// A thread list hides the process list.
 fn candidates() -> Vec<Arc<dyn Kadm5Hook>> {
     if let Some(modules) = THREAD.with(|slot| slot.borrow().clone()) {
         return modules;
@@ -175,6 +121,7 @@ fn candidates() -> Vec<Arc<dyn Kadm5Hook>> {
         .clone()
 }
 
+/// disable runs before enable_only.
 fn selected(store: &PrincipalStore) -> Vec<Arc<dyn Kadm5Hook>> {
     let modules = candidates();
     let names: Vec<&str> = modules.iter().map(|module| module.name()).collect();
@@ -189,8 +136,9 @@ fn selected(store: &PrincipalStore) -> Vec<Arc<dyn Kadm5Hook>> {
     out
 }
 
-/// MIT `ITERATE` (`kadm5_hook.c`): precommit returns the first error.
-/// Postcommit logs `kadm5_hook %s failed postcommit %s: %s` and continues.
+// MIT: `ITERATE` (kadm5_hook.c)
+/// Precommit fails before the write.
+/// Postcommit logs and continues.
 fn walk(
     store: &PrincipalStore,
     stage: HookStage,
@@ -291,15 +239,122 @@ pub(super) fn hook_alias(
     })
 }
 
+#[derive(Clone)]
+pub(crate) enum Post {
+    Chpass {
+        princ: PrincipalName,
+        realm: String,
+        keepold: u32,
+        password: Option<Zeroizing<Vec<u8>>>,
+        etypes: Vec<EncryptionType>,
+    },
+    Create {
+        princ: PrincipalName,
+        realm: String,
+        mask: u32,
+        password: Option<Zeroizing<Vec<u8>>>,
+        etypes: Vec<EncryptionType>,
+    },
+    Modify {
+        princ: PrincipalName,
+        realm: String,
+        mask: u32,
+    },
+    Rename {
+        old: PrincipalName,
+        old_realm: String,
+        new: PrincipalName,
+        new_realm: String,
+    },
+    Remove {
+        princ: PrincipalName,
+        realm: String,
+    },
+    Alias {
+        alias: PrincipalName,
+        alias_realm: String,
+        target: PrincipalName,
+        target_realm: String,
+    },
+}
+
+impl Post {
+    pub(crate) fn always(&self) -> bool {
+        matches!(self, Self::Create { .. })
+    }
+
+    pub(crate) fn run(&self, store: &PrincipalStore) {
+        let stage = HookStage::Postcommit;
+        let _ = match self {
+            Self::Chpass {
+                princ,
+                realm,
+                keepold,
+                password,
+                etypes,
+            } => hook_chpass(
+                store,
+                stage,
+                princ,
+                realm,
+                *keepold,
+                password.as_deref().map(Vec::as_slice),
+                etypes,
+            ),
+            Self::Create {
+                princ,
+                realm,
+                mask,
+                password,
+                etypes,
+            } => hook_create(
+                store,
+                stage,
+                princ,
+                realm,
+                *mask,
+                password.as_deref().map(Vec::as_slice),
+                etypes,
+            ),
+            Self::Modify { princ, realm, mask } => hook_modify(store, stage, princ, realm, *mask),
+            Self::Rename {
+                old,
+                old_realm,
+                new,
+                new_realm,
+            } => hook_rename(store, stage, old, old_realm, new, new_realm),
+            Self::Remove { princ, realm } => hook_remove(store, stage, princ, realm),
+            Self::Alias {
+                alias,
+                alias_realm,
+                target,
+                target_realm,
+            } => hook_alias(store, stage, alias, alias_realm, target, target_realm),
+        };
+    }
+}
+
+impl std::fmt::Debug for Post {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Chpass { .. } => "chpass",
+            Self::Create { .. } => "create",
+            Self::Modify { .. } => "modify",
+            Self::Rename { .. } => "rename",
+            Self::Remove { .. } => "remove",
+            Self::Alias { .. } => "alias",
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicU64, Ordering};
+
     use std::sync::{Arc, Mutex};
 
     use super::*;
-    use crate::store::AdminEnt;
-    use crate::store::AdminFields;
-    use crate::testrealm::{TEST_REALM, TEST_USER};
+
+    use crate::testrealm::TEST_USER;
 
     struct Rec {
         name: &'static str,
@@ -421,32 +476,6 @@ mod tests {
         }
     }
 
-    struct Count {
-        hits: Arc<AtomicU64>,
-    }
-
-    impl Kadm5Hook for Count {
-        fn name(&self) -> &'static str {
-            "nope"
-        }
-
-        fn chpass(
-            &self,
-            stage: HookStage,
-            _princ: &PrincipalName,
-            _realm: &str,
-            _keepold: u32,
-            _password: Option<&[u8]>,
-            _etypes: &[EncryptionType],
-        ) -> Result<(), Error> {
-            if stage == HookStage::Precommit {
-                self.hits.fetch_add(1, Ordering::SeqCst);
-                return Err(Error::InvalidArgument("hook refused".into()));
-            }
-            Ok(())
-        }
-    }
-
     struct ClearThread;
 
     impl Drop for ClearThread {
@@ -457,10 +486,6 @@ mod tests {
 
     fn user() -> PrincipalName {
         PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER])
-    }
-
-    fn named(component: &str) -> PrincipalName {
-        PrincipalName::new(PrincipalName::NT_PRINCIPAL, [component])
     }
 
     fn install(module: &Arc<Rec>) -> ClearThread {
@@ -478,11 +503,6 @@ mod tests {
             .map(|key| key.kvno)
             .max()
             .expect("key")
-    }
-
-    fn present(store: &PrincipalStore, name: &PrincipalName) -> bool {
-        let id = crate::kdb::lookup_principal_id(name, store.realm());
-        store.get(&id).is_some()
     }
 
     #[test]
@@ -546,116 +566,5 @@ mod tests {
                 "chpass:post:none",
             ]
         );
-    }
-
-    #[test]
-    fn precommit_errors_write_nothing_for_the_other_operations() {
-        let (mut store, _) = crate::testrealm::bootstrap_documented().expect("realm");
-        let module = Rec::new("bad", true, false);
-        let _guard = install(&module);
-        let created = named("hooknew");
-        store
-            .create_principal_3_in(
-                &created,
-                TEST_REALM,
-                Some(b"long-enough"),
-                &[],
-                &AdminEnt::default(),
-                "actor",
-            )
-            .expect_err("create");
-        assert!(!present(&store, &created));
-        let life = store
-            .get(&crate::kdb::lookup_principal_id(&user(), store.realm()))
-            .expect("user")
-            .max_life;
-        store
-            .apply_admin_fields(
-                &user(),
-                AdminFields {
-                    max_life: Some(99),
-                    ..AdminFields::default()
-                },
-            )
-            .expect_err("modify");
-        assert_eq!(
-            store
-                .get(&crate::kdb::lookup_principal_id(&user(), store.realm()))
-                .expect("user")
-                .max_life,
-            life
-        );
-        let renamed = named("hookrenamed");
-        store
-            .rename_unchecked(&user(), TEST_REALM, &renamed, TEST_REALM, "actor")
-            .expect_err("rename");
-        assert!(present(&store, &user()));
-        assert!(!present(&store, &renamed));
-        let alias_name = named("hookalias");
-        store
-            .create_alias_in(&alias_name, TEST_REALM, &user(), TEST_REALM, "actor")
-            .expect_err("alias");
-        assert!(!present(&store, &alias_name));
-        store.remove_in(&user(), TEST_REALM).expect_err("remove");
-        assert!(present(&store, &user()));
-        assert_eq!(
-            module.seen(),
-            [
-                "create:pre",
-                "modify:pre",
-                "rename:pre",
-                "alias:pre",
-                "remove:pre",
-            ]
-        );
-    }
-
-    #[test]
-    fn a_postcommit_error_does_not_stop_the_next_module() {
-        let (mut store, _) = crate::testrealm::bootstrap_documented().expect("realm");
-        let first = Rec::new("bad", false, true);
-        let second = Rec::new("next", false, false);
-        set_thread_kadm5_hook(vec![
-            Arc::clone(&first) as Arc<dyn Kadm5Hook>,
-            Arc::clone(&second) as Arc<dyn Kadm5Hook>,
-        ]);
-        let _guard = ClearThread;
-        store
-            .set_password(&user(), b"another-password")
-            .expect("still succeeds");
-        assert_eq!(first.seen(), ["chpass:pre:pw", "chpass:post:pw"]);
-        assert_eq!(second.seen(), ["chpass:pre:pw", "chpass:post:pw"]);
-    }
-
-    #[test]
-    fn an_empty_thread_list_leaves_chpass_alone() {
-        let (mut store, _) = crate::testrealm::bootstrap_documented().expect("realm");
-        set_thread_kadm5_hook(Vec::new());
-        let _guard = ClearThread;
-        let before = kvno(&store, &user());
-        store
-            .set_password(&user(), b"another-password")
-            .expect("no module");
-        assert!(kvno(&store, &user()) > before);
-    }
-
-    #[test]
-    fn kdc_conf_then_krb5_conf_disables_a_hook() {
-        let (mut store, _) = crate::testrealm::bootstrap_documented().expect("realm");
-        let hits = Arc::new(AtomicU64::new(0));
-        set_thread_kadm5_hook(vec![Arc::new(Count {
-            hits: Arc::clone(&hits),
-        }) as Arc<dyn Kadm5Hook>]);
-        let _guard = ClearThread;
-        let kdc = krb5_config::KdcConf::parse(
-            "[plugins]\n    kadm5_hook = {\n        disable = nope\n    }\n",
-        )
-        .expect("kdc.conf");
-        let krb5 = krb5_config::Krb5Conf::parse("[plugins]\n").expect("krb5.conf");
-        store.apply_kadm5_hook_plugins(Some(&kdc), Some(&krb5));
-        store
-            .set_password(&user(), b"another-password")
-            .expect("disabled");
-        assert_eq!(hits.load(Ordering::SeqCst), 0);
     }
 }

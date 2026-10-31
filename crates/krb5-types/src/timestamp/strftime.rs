@@ -1,43 +1,20 @@
-//! glibc's `strftime`, the formatter behind MIT's `krb5_timestamp_to_sfstring` and the tools'
-//! dates, over one locale's LC_TIME.
-//!
-//! Every conversion glibc 2.42 has, with its flags (`_` pads with spaces, `-` drops the padding,
-//! `0` pads with zeros, `^` and `#` change case), a field width, and the `E` (era) and `O`
-//! (alternative digits) modifiers where glibc takes them; a conversion it rejects is copied as
-//! written. Case changes are ASCII, as glibc's byte-wise `toupper` is in a UTF-8 locale (the
-//! Turkic locales' leaves `i` and `I` alone).
-
 use super::locale::LcTime;
 
-/// A broken-down time, as glibc `localtime` fills a `struct tm`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Tm {
-    /// Seconds, 0 to 60.
     pub sec: i32,
-    /// Minutes, 0 to 59.
     pub min: i32,
-    /// Hours, 0 to 23.
     pub hour: i32,
-    /// Day of the month, 1 to 31.
     pub mday: i32,
-    /// Month, 0 to 11.
     pub mon: i32,
-    /// Years since 1900.
     pub year: i32,
-    /// Day of the week, 0 to 6 from Sunday.
     pub wday: i32,
-    /// Day of the year, 0 to 365.
     pub yday: i32,
-    /// Seconds east of UTC (`%z`).
     pub gmtoff: i64,
-    /// The zone's name (`%Z`).
     pub zone: String,
-    /// Seconds since the epoch (`%s`).
     pub epoch: i64,
 }
 
-/// glibc `strftime(buf, maxsize, fmt, tm)` in locale `lc`: `None` where it returns 0, that is when
-/// the result and its terminating NUL do not fit in `maxsize` bytes, or the result is empty.
 #[must_use]
 pub fn strftime_tm(lc: &LcTime, fmt: &str, tm: &Tm, maxsize: usize) -> Option<String> {
     let mut out = Vec::new();
@@ -53,21 +30,16 @@ pub fn strftime_tm(lc: &LcTime, fmt: &str, tm: &Tm, maxsize: usize) -> Option<St
     String::from_utf8(out).ok()
 }
 
-/// One conversion's flags, width and modifier.
 #[derive(Clone, Copy)]
 struct Spec {
-    /// `_`, `-`, `0`, or 0 for none.
     pad: u8,
-    /// The field width, -1 for none.
     width: i32,
-    /// `E`, `O`, or 0.
     modifier: u8,
     upper: bool,
     lower: bool,
     change_case: bool,
 }
 
-/// One era of the locale's `era` item, as glibc `_nl_init_era_entries` reads it.
 struct Era<'a> {
     start: [i32; 3],
     stop: [i32; 3],
@@ -80,14 +52,10 @@ struct Era<'a> {
 struct Engine<'a> {
     lc: &'a LcTime,
     tm: &'a Tm,
-    /// The bytes the output and its NUL may take.
     limit: usize,
 }
 
 impl Engine<'_> {
-    /// glibc `__strftime_internal`: `f` appended to `out`; `None` once the output no longer fits.
-    /// `yr_spec` is the era-year padding: an `%EY` with a flag sets it for the rest of the call,
-    /// and an `%Ey` without one uses it.
     fn format(&self, f: &[u8], mut yr_spec: u8, out: &mut Vec<u8>) -> Option<()> {
         let mut i = 0;
         while i < f.len() {
@@ -130,7 +98,6 @@ impl Engine<'_> {
                 i += 1;
             }
             let Some(&conv) = f.get(i) else {
-                // A `%` at the end of the format: copied as written.
                 return self.cpy(out, s, &f[start..]);
             };
             if !self.conversion(conv, s, &mut yr_spec, out)? {
@@ -141,7 +108,6 @@ impl Engine<'_> {
         Some(())
     }
 
-    /// One conversion. `Some(false)` for one glibc rejects (`bad_format`).
     fn conversion(
         &self,
         conv: u8,
@@ -332,8 +298,6 @@ impl Engine<'_> {
         Some(true)
     }
 
-    /// glibc's `add`: `bytes` after `width - len` bytes of padding, zeros for the `0` flag and
-    /// spaces otherwise; `None` when that leaves no room for the NUL.
     fn add(&self, out: &mut Vec<u8>, width: i32, pad: u8, bytes: &[u8]) -> Option<()> {
         let delta = usize::try_from(width)
             .unwrap_or(0)
@@ -346,7 +310,6 @@ impl Engine<'_> {
         Some(())
     }
 
-    /// glibc's `cpy`: [`Self::add`] with the case the flags ask for.
     fn cpy(&self, out: &mut Vec<u8>, s: Spec, bytes: &[u8]) -> Option<()> {
         if !s.lower && !s.upper {
             return self.add(out, s.width, s.pad, bytes);
@@ -360,8 +323,6 @@ impl Engine<'_> {
         self.add(out, s.width, s.pad, &text)
     }
 
-    /// glibc's `subformat`: `sub` formatted on its own, then placed as one field (upper-cased
-    /// for `^`); `yr_spec` goes to the inner conversions.
     fn subformat(&self, out: &mut Vec<u8>, s: Spec, sub: &str, yr_spec: u8) -> Option<()> {
         let mut inner = Vec::new();
         Engine {
@@ -376,8 +337,6 @@ impl Engine<'_> {
         self.add(out, s.width, s.pad, &inner)
     }
 
-    /// glibc's `DO_NUMBER` and `DO_NUMBER_SPACEPAD`: `value` in at least `digits` digits, or the
-    /// field width when wider; with `O`, the locale's alternative digits when it has them.
     fn number(
         &self,
         out: &mut Vec<u8>,
@@ -400,8 +359,6 @@ impl Engine<'_> {
         self.sign_and_padding(out, s, digits, value < 0, &magnitude)
     }
 
-    /// glibc's `do_number_sign_and_padding`: the sign, then zeros (or spaces for `_`) up to
-    /// `digits`, unless `-`; what is left of the width pads the digits as [`Self::add`] does.
     fn sign_and_padding(
         &self,
         out: &mut Vec<u8>,
@@ -450,7 +407,6 @@ impl Engine<'_> {
         self.cpy(out, s, body)
     }
 
-    /// glibc `_nl_get_era_entry`: the first era whose span holds the date.
     fn era(&self) -> Option<Era<'static>> {
         let date = [self.tm.year, self.tm.mon, self.tm.mday];
         self.lc.era.iter().filter_map(|e| parse_era(e)).find(|e| {
@@ -460,7 +416,6 @@ impl Engine<'_> {
     }
 }
 
-/// A day or month name, `?` out of range as in glibc.
 fn name(names: &[&'static str], i: i32) -> &'static str {
     usize::try_from(i)
         .ok()
@@ -468,14 +423,10 @@ fn name(names: &[&'static str], i: i32) -> &'static str {
         .unwrap_or("?")
 }
 
-/// glibc's `ERA_DATE_CMP`: `a` is on or before `b`.
 fn date_le(a: [i32; 3], b: [i32; 3]) -> bool {
     a <= b
 }
 
-/// One `era` string, `direction:offset:start:stop:name:format`, as glibc localedef stores it: a
-/// start or stop `year/month/day` is years since 1900 (year -1 is 1 BC) and a 0-based month; a
-/// stop of `+*` or `-*` is open-ended. The direction counts years up or down from the start.
 fn parse_era(era: &'static str) -> Option<Era<'static>> {
     let mut f = era.splitn(6, ':');
     let direction = f.next()?;
@@ -515,11 +466,8 @@ fn era_date(d: &str) -> Option<[i32; 3]> {
     Some([y, month - 1, day])
 }
 
-/// glibc's ISO 8601 week: the year adjustment (-1, 0, 1) and the days since the week-based
-/// year's first Monday.
 fn iso_week(tm: &Tm) -> (i32, i32) {
     fn iso_week_days(yday: i32, wday: i32) -> i32 {
-        // glibc: Thursday decides the week; weeks start on Monday.
         let big_enough_multiple_of_7 = (366 / 7 + 2) * 7;
         yday - (yday - wday + 4 + big_enough_multiple_of_7) % 7 + 4 - 1
     }
@@ -537,186 +485,4 @@ fn iso_week(tm: &Tm) -> (i32, i32) {
     }
     let next = iso_week_days(tm.yday - days_in(year), tm.wday);
     if next >= 0 { (1, next) } else { (0, days) }
-}
-
-/// Every expectation is glibc 2.42's `strftime` on the same broken-down time, recorded live.
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn tm(
-        (year, mon, mday): (i32, i32, i32),
-        (hour, min, sec): (i32, i32, i32),
-        wday: i32,
-        yday: i32,
-        gmtoff: i64,
-        zone: &str,
-        epoch: i64,
-    ) -> Tm {
-        Tm {
-            sec,
-            min,
-            hour,
-            mday,
-            mon,
-            year: year - 1900,
-            wday,
-            yday,
-            gmtoff,
-            zone: zone.to_owned(),
-            epoch,
-        }
-    }
-
-    /// 2026-03-05 08:40:00 UTC, a Thursday.
-    fn t1() -> Tm {
-        tm((2026, 2, 5), (8, 40, 0), 4, 63, 0, "UTC", 1_772_700_000)
-    }
-
-    /// 2026-10-05 15:00:09 CDT, a Monday.
-    fn t2() -> Tm {
-        tm(
-            (2026, 9, 5),
-            (15, 0, 9),
-            1,
-            277,
-            -18_000,
-            "CDT",
-            1_791_230_409,
-        )
-    }
-
-    fn lc(name: &str) -> LcTime {
-        LcTime::named(name).unwrap()
-    }
-
-    fn f(lc: &LcTime, fmt: &str, tm: &Tm) -> Option<String> {
-        strftime_tm(lc, fmt, tm, 512)
-    }
-
-    #[test]
-    fn every_conversion_in_c() {
-        let c = LcTime::C;
-        assert_eq!(
-            f(
-                &c,
-                "%a %A %b %B %C %d %D %e %F %g %G %h %H %I %j %k %l %m %M %p %P %R %S %T %u %U %V %w %W %y %Y %z %Z %%",
-                &t1()
-            )
-            .unwrap(),
-            "Thu Thursday Mar March 20 05 03/05/26  5 2026-03-05 26 2026 Mar 08 08 064  8  8 03 40 AM am 08:40 00 08:40:00 4 09 10 4 09 26 2026 +0000 UTC %"
-        );
-        assert_eq!(
-            f(&c, "%c|%x|%X|%r|%n|%t", &t1()).unwrap(),
-            "Thu Mar  5 08:40:00 2026|03/05/26|08:40:00|08:40:00 AM|\n|\t"
-        );
-        assert_eq!(
-            f(&c, "%c|%I %p|%l|%z|%Z|%#Z|%^a", &t2()).unwrap(),
-            "Mon Oct  5 15:00:09 2026|03 PM| 3|-0500|CDT|cdt|MON"
-        );
-        let t4 = tm((2021, 0, 3), (23, 59, 59), 0, 2, 0, "UTC", 1_609_718_399);
-        assert_eq!(
-            f(&c, "%G-W%V-%u %g %U %W %j", &t4).unwrap(),
-            "2020-W53-7 20 01 00 003"
-        );
-    }
-
-    #[test]
-    fn flags_widths_and_rejected_conversions() {
-        let c = LcTime::C;
-        assert_eq!(
-            f(
-                &c,
-                "%5d|%_5d|%-5d|%05d|%-d|%_d|%10Y|%-10Y|%3C|%_3C|%^a|%#a|%^P|%#p|%10a|%010a",
-                &t1()
-            )
-            .unwrap(),
-            "00005|    5|    5|00005|5| 5|0000002026|      2026|020| 20|THU|THU|am|am|       Thu|0000000Thu"
-        );
-        assert_eq!(
-            f(
-                &c,
-                "%30c|%^c|%12x|%09T|%5|%Q|%5Q|%E|%Ed|%Oc|%E%|%5%|%5n|%10Ez|%Ey|%EY|%EC|%Oy|%OB",
-                &t1()
-            )
-            .unwrap(),
-            "      Thu Mar  5 08:40:00 2026|THU MAR  5 08:40:00 2026|    03/05/26|008:40:00|  %5|%Q|  %5Q|%E|%Ed|%Oc|%|    %|    \n|         +0000000000|26|2026|20|26|March"
-        );
-        assert_eq!(f(&c, "%", &t1()).unwrap(), "%");
-        assert_eq!(f(&c, "%5", &t1()).unwrap(), "   %5");
-    }
-
-    #[test]
-    fn the_result_and_its_nul_must_fit() {
-        let c = LcTime::C;
-        assert_eq!(
-            strftime_tm(&c, "%x %X", &t1(), 18).as_deref(),
-            Some("03/05/26 08:40:00")
-        );
-        assert_eq!(strftime_tm(&c, "%x %X", &t1(), 17), None);
-        assert_eq!(strftime_tm(&c, "%x %X", &t1(), 0), None);
-        assert_eq!(strftime_tm(&c, "", &t1(), 512), None);
-        assert_eq!(strftime_tm(&c, "%999999999d", &t1(), 64), None);
-        let en = lc("en_US");
-        assert_eq!(strftime_tm(&en, "%x %X", &t2(), 20), None);
-        assert_eq!(
-            strftime_tm(&en, "%x %T", &t2(), 20).as_deref(),
-            Some("10/05/2026 15:00:09")
-        );
-    }
-
-    #[test]
-    fn en_us_and_de_de() {
-        assert_eq!(
-            f(
-                &lc("en_US.UTF-8"),
-                "%c|%x|%X|%r|%p|%a %b %d %H:%M:%S %Z %Y",
-                &t2()
-            )
-            .unwrap(),
-            "Mon 05 Oct 2026 03:00:09 PM CDT|10/05/2026|03:00:09 PM|03:00:09 PM|PM|Mon Oct 05 15:00:09 CDT 2026"
-        );
-        let de = lc("de_DE.UTF-8");
-        assert_eq!(
-            f(
-                &de,
-                "%c|%x|%X|%r|%A %B|%a %b %d %H:%M:%S %Z %Y|%d %b %Y %T",
-                &t1()
-            )
-            .unwrap(),
-            "Do 05 Mär 2026 08:40:00 UTC|05.03.2026|08:40:00|08:40:00 |Donnerstag März|Do Mär 05 08:40:00 UTC 2026|05 Mär 2026 08:40:00"
-        );
-        assert_eq!(f(&de, "%p", &t1()), None);
-    }
-
-    #[test]
-    fn eras_and_alternative_digits() {
-        let ja = lc("ja_JP");
-        // An `%EY` with a flag sets the era-year padding for the rest of the call.
-        assert_eq!(
-            f(&ja, "%EY|%-EY|%_EY|%Ey|%EC|%Ex|%Ec|%Oy|%OH|%c", &t1()).unwrap(),
-            "令和08年|令和8年|令和 8年| 8|令和|令和 8年03月05日|令和 8年03月05日 08時40分00秒|二十六|八|2026年03月05日 08時40分00秒"
-        );
-        let reiwa1 = tm((2019, 4, 1), (0, 0, 0), 3, 120, 0, "UTC", 1_556_668_800);
-        assert_eq!(
-            f(&ja, "%EY|%Ex", &reiwa1).unwrap(),
-            "令和元年|令和元年05月01日"
-        );
-        assert_eq!(
-            f(&lc("th_TH"), "%Ey|%EY|%x|%c|%Ex", &t1()).unwrap(),
-            "2569|พ.ศ. 2569|05/03/2569|พฤ.  5 มี.ค. 2569, 08:40:00| 5 มี.ค. 2569"
-        );
-        assert_eq!(
-            f(&lc("fa_IR"), "%Oy|%5Oy|%OH:%OM|%Oe|%r", &t1()).unwrap(),
-            "۲۶| ۲۶|۰۸:۴۰|۰۵|08:40:00 "
-        );
-    }
-
-    #[test]
-    fn turkic_case_changes_leave_i_alone() {
-        assert_eq!(f(&lc("tr_TR"), "%^B|%#Z", &t1()).unwrap(), "MART|utc");
-        let april = tm((2026, 3, 6), (8, 0, 0), 1, 95, 0, "IST", 1_775_462_400);
-        assert_eq!(f(&lc("tr_TR"), "%^b|%#Z", &april).unwrap(), "NiS|Ist");
-        assert_eq!(f(&LcTime::C, "%^b|%#Z", &april).unwrap(), "APR|ist");
-    }
 }

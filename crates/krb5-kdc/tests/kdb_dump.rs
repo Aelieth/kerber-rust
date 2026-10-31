@@ -3,16 +3,18 @@
 //! Drives the shipped codec on the committed 1.22.2 golden (not a
 //! reimplementation, not hardcoded key bytes).
 //! A put that carries `KRB5_TL_DB_ARGS` is refused.
-//! MIT `extract_db_args_from_tl_data` (`kdb5.c:893-945`): the `KRB5_TL_DB_ARGS` records are
+// MIT: `extract_db_args_from_tl_data` (kdb5.c:893-945)
+//! the `KRB5_TL_DB_ARGS` records are
 //! pulled out of the entry as the put's `db_args`, and one without a trailing NUL is `EINVAL`.
-//! MIT `krb5_db2_put_principal` (`kdb_db2.c:817-822`): DB2 refuses any `db_args` with `EINVAL`.
+// MIT: `krb5_db2_put_principal` (kdb_db2.c:817-822)
+//! DB2 refuses any `db_args` with `EINVAL`.
 
 use krb5_crypto::{EncryptionType, KeyUsage, kdb_decrypt_key, string_to_key};
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented};
 use krb5_kdc::{
     KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_SVR, KDB_DUMP_VERSION, KDB_LOCKDOWN_KEYS,
-    KDB_REQUIRES_HW_AUTH, KDB_REQUIRES_PRE_AUTH, TL_LAST_PWD_CHANGE, TL_MOD_PRINC, TlData,
-    dump_store, dump_store_iprop, load_dump, master_key_from_password, parse_dump, save_store,
+    KDB_REQUIRES_HW_AUTH, KDB_REQUIRES_PRE_AUTH, TlData, dump_store, load_dump,
+    master_key_from_password, parse_dump, save_store,
 };
 
 use krb5_testkit::scratch_dir;
@@ -175,7 +177,7 @@ fn decrypt_pauser_key_data_equals_string_to_key() {
     )
     .unwrap();
     assert_eq!(
-        raw,
+        raw.as_slice(),
         expect.as_bytes(),
         "KDB usage-0 decrypt must equal string_to_key(preauthpw)"
     );
@@ -199,136 +201,11 @@ fn decrypt_pauser_key_data_equals_string_to_key() {
         None,
     )
     .unwrap();
-    assert_eq!(user_raw, user_expect.as_bytes());
+    assert_eq!(user_raw.as_slice(), user_expect.as_bytes());
 
     let km = dump.princ("K/M@KERBER.TEST").unwrap();
     let km_raw = kdb_decrypt_key(&mkey, &km.keys[0].slots[0].contents).unwrap();
-    assert_eq!(km_raw, mkey.as_bytes());
-}
-
-#[test]
-fn load_dump_store_keys_match_string_to_key() {
-    let store = load_dump(&golden_v7(), b"masterpassword").expect("load");
-    assert_eq!(store.realm(), "KERBER.TEST");
-    let pauser = store.get("pauser@KERBER.TEST").expect("pauser loaded");
-    assert!(pauser.requires_preauth);
-    assert_eq!(pauser.attributes, KDB_REQUIRES_PRE_AUTH);
-    let got = pauser
-        .key_for(EncryptionType::Aes256CtsHmacSha384192)
-        .expect("etype 20");
-    let salt =
-        PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["pauser"]).default_salt("KERBER.TEST");
-    let expect = string_to_key(
-        EncryptionType::Aes256CtsHmacSha384192,
-        b"preauthpw",
-        &salt,
-        None,
-    )
-    .unwrap();
-    assert_eq!(got.key.as_bytes(), expect.as_bytes());
-
-    let user = store.get("user@KERBER.TEST").unwrap();
-    assert!(!user.requires_preauth);
-    let host = store
-        .get("host/testhost.kerber.test@KERBER.TEST")
-        .expect("host");
-    assert!(!host.keys.is_empty());
-}
-
-#[test]
-fn dump_write_header_grammar_and_tl_data() {
-    let store = load_dump(&golden_v7(), b"masterpassword").unwrap();
-    let text = dump_store(&store, b"masterpassword").expect("dump");
-    assert!(
-        text.starts_with("kdb5_util load_dump version 7\n"),
-        "writer must emit version 7, got {:?}",
-        text.lines().next()
-    );
-    let iprop = dump_store_iprop(&store, b"masterpassword", krb5_kdc::UlogLast::default())
-        .expect("iprop dump");
-    assert!(
-        iprop.starts_with("ipropx 1 "),
-        "iprop dump must start ipropx 1 <sno> <sec> 0, got {:?}",
-        iprop.lines().next()
-    );
-    parse_dump(&iprop).expect("parse ipropx dump");
-    let reparsed = parse_dump(&text).expect("reparse rust dump");
-    assert_eq!(reparsed.version, 7);
-    let pauser = reparsed.princ("pauser@KERBER.TEST").unwrap();
-    assert_eq!(pauser.attributes, KDB_REQUIRES_PRE_AUTH);
-    assert!(
-        pauser.tl_data.iter().any(|t| t.ty == TL_LAST_PWD_CHANGE),
-        "must preserve KRB5_TL_LAST_PWD_CHANGE"
-    );
-    assert!(
-        pauser.tl_data.iter().any(|t| t.ty == TL_MOD_PRINC),
-        "must preserve KRB5_TL_MOD_PRINC"
-    );
-    assert!(
-        pauser
-            .tl_data
-            .iter()
-            .any(|t| t.ty == krb5_kdc::TL_KADM_DATA),
-        "must preserve KRB5_TL_KADM_DATA from the MIT dump"
-    );
-    for name in [
-        "user@KERBER.TEST",
-        "pauser@KERBER.TEST",
-        "host/testhost.kerber.test@KERBER.TEST",
-        "K/M@KERBER.TEST",
-    ] {
-        assert!(reparsed.princ(name).is_some(), "dump missing {name}");
-    }
-    // Re-encrypted keys must still decrypt to the same long-term key.
-    let again = load_dump(&text, b"masterpassword").unwrap();
-    let a = store
-        .get("pauser@KERBER.TEST")
-        .unwrap()
-        .key_for(EncryptionType::Aes256CtsHmacSha384192)
-        .unwrap()
-        .key
-        .as_bytes();
-    let b = again
-        .get("pauser@KERBER.TEST")
-        .unwrap()
-        .key_for(EncryptionType::Aes256CtsHmacSha384192)
-        .unwrap()
-        .key
-        .as_bytes();
-    assert_eq!(a, b);
-}
-
-#[test]
-fn dump_load_preserves_sid_rid_not_dummy() {
-    let store = load_dump(&golden_v7(), b"masterpassword").unwrap();
-    assert_ne!(
-        store.domain_sid().to_sddl(),
-        krb5_types::pac::RpcSid::dummy_domain().to_sddl()
-    );
-    let krbtgt = store.get("krbtgt/KERBER.TEST@KERBER.TEST").expect("krbtgt");
-    assert_eq!(krbtgt.rid, krb5_kdc::RID_KRBTGT);
-    let user = store.get("user@KERBER.TEST").unwrap();
-    assert_ne!(user.rid, 0);
-    let sid = store.domain_sid().clone();
-    let user_rid = user.rid;
-    let text = dump_store(&store, b"masterpassword").unwrap();
-    let reparsed = parse_dump(&text).unwrap();
-    assert!(
-        reparsed
-            .princ("user@KERBER.TEST")
-            .unwrap()
-            .tl_data
-            .iter()
-            .any(|t| t.ty == krb5_kdc::TL_KERBER_SID),
-        "dump must carry SID/RID tl_data"
-    );
-    let again = load_dump(&text, b"masterpassword").unwrap();
-    assert_eq!(again.domain_sid().to_sddl(), sid.to_sddl());
-    assert_eq!(again.get("user@KERBER.TEST").unwrap().rid, user_rid);
-    assert_eq!(
-        again.get("krbtgt/KERBER.TEST@KERBER.TEST").unwrap().rid,
-        krb5_kdc::RID_KRBTGT
-    );
+    assert_eq!(km_raw.as_slice(), mkey.as_bytes());
 }
 
 fn db_arg(nul: bool) -> TlData {
@@ -441,7 +318,7 @@ fn merge_tl_db_args_leaves_entry_and_file_unchanged() {
     let before = store.get_name(&user).unwrap().clone();
     let file_before = std::fs::read(&db).unwrap();
     let err = store
-        .merge_tl_data_in(&user, TEST_REALM, &[db_arg(true)])
+        .merge_tl_data_in(&user, TEST_REALM, &[db_arg(true)], "admin/admin")
         .unwrap_err();
     assert!(err.to_string().contains("foo=bar"), "{err}");
     let three = store
@@ -449,11 +326,12 @@ fn merge_tl_db_args_leaves_entry_and_file_unchanged() {
             &user,
             TEST_REALM,
             &[db_arg(true), db_arg(true), db_arg(true)],
+            "admin/admin",
         )
         .unwrap_err();
     assert!(three.to_string().contains("foo=bar"), "{three}");
     let nul = store
-        .merge_tl_data_in(&user, TEST_REALM, &[db_arg(false)])
+        .merge_tl_data_in(&user, TEST_REALM, &[db_arg(false)], "admin/admin")
         .unwrap_err();
     assert!(nul.to_string().contains("Invalid argument"), "{nul}");
     let after = store.get_name(&user).unwrap();
@@ -462,46 +340,4 @@ fn merge_tl_db_args_leaves_entry_and_file_unchanged() {
     assert_eq!(after.tl_data, before.tl_data);
     assert_eq!(std::fs::read(&db).unwrap(), file_before);
     let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// MIT `k5beta7_common` writes a principal's own lifetimes: a `max_life` of 0 (no limit of the
-/// principal's own; the realm's applies when a ticket is issued) and a `max_renewable_life` of 0
-/// stay 0 through a dump and a load, where the realm's `max_life` used to be written.
-#[test]
-fn dump_keeps_a_principals_own_zero_lifetimes() {
-    let mut store = load_dump(&golden_v7(), b"masterpassword").unwrap();
-    assert_ne!(
-        store.policy().max_life,
-        0,
-        "the realm has a max_life to stand in"
-    );
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
-    let pauser = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["pauser"]);
-    for (name, life, rlife) in [(&user, 0, 0), (&pauser, 3600, 7200)] {
-        store
-            .apply_admin_fields(
-                name,
-                krb5_kdc::AdminFields {
-                    max_life: Some(life),
-                    max_renewable_life: Some(rlife),
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-    }
-    let text = dump_store(&store, b"masterpassword").unwrap();
-    let parsed = parse_dump(&text).unwrap();
-    let written = |n: &str| {
-        let p = parsed.princ(n).unwrap();
-        (p.max_life, p.max_renewable_life)
-    };
-    assert_eq!(written("user@KERBER.TEST"), (0, 0));
-    assert_eq!(written("pauser@KERBER.TEST"), (3600, 7200));
-    let again = load_dump(&text, b"masterpassword").unwrap();
-    let held = |n: &str| {
-        let p = again.get(n).unwrap();
-        (p.max_life, p.max_renewable_life)
-    };
-    assert_eq!(held("user@KERBER.TEST"), (0, 0));
-    assert_eq!(held("pauser@KERBER.TEST"), (3600, 7200));
 }

@@ -1,13 +1,3 @@
-//! Pins the live `ct_eq` sites.
-//!
-//! A one-bit MAC flip fails decrypt and checksum verify: behaviour, not timing.
-//! That those compares are constant-time is a check of the source text only,
-//! and no test measures timing: one test pins `mac_verify`'s `ct_eq`, another
-//! the two lines of `verify_checksum_type`'s keyed compare, and each is red when
-//! its text is removed. The zeroize-on-drop types are proved by unit tests
-//! that see the wiped buffer: `wipe.rs` in `krb5-crypto` and `krb5-types`,
-//! `as_ex/pkinit_client_drop_tests.rs` in `krb5-protocol`.
-
 use krb5_crypto::{
     EncryptionType, Error, KeyUsage, ProtocolKey, checksum, decrypt, encrypt_with_confounder,
     verify_checksum_type,

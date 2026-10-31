@@ -1,29 +1,43 @@
 #!/usr/bin/env bash
 # harness/field/lab.sh: the kerber-rust KVM field lab (section F0).
 #
-# Builds, runs and resets six VMs on libvirt qemu:///system: kdc, services,
-# client1 (Fedora Kinoite 43), client2, klldap (the Docker host for KLLDAP)
-# and mitd3 (upstream MIT krb5 built from the release tarball: the des3
-# oracle, which Fedora's MIT cannot be). They sit on the NAT network
-# kerber-lab (192.168.177.0/24, DNS domain kerber.test). kdc also has a LAN
-# NIC (macvtap) so the AD test DC can reach it. See harness/field/README.md.
+# Builds, runs and resets the field VMs on libvirt qemu:///system: kdc,
+# services, client1 (Fedora Kinoite 43), client2, klldap (the Docker host
+# for KLLDAP), mitd3 (upstream MIT krb5 built from the release tarball:
+# the des3 oracle, which Fedora's MIT cannot be) and deb13 (Debian 13,
+# krb5 1.21.3). ub26 (Ubuntu 26.04) is the CI mirror. rocky10 (Rocky Linux
+# 10) is for a closeout and the final only. kdc2 (Fedora 44, .12) is the
+# replica, defined by hand. `up` and `up all` do not start ub26, rocky10,
+# or kdc2; name them. They sit on the NAT network kerber-lab
+# (192.168.177.0/24, DNS domain kerber.test). kdc also has a LAN NIC
+# (macvtap) so the AD test DC can reach it. See harness/field/README.md.
 #
 # Runs on the host, or in a distrobox where virsh is not on PATH. In that
 # case every host command (virsh, virt-install, xorriso, ip) goes through
-# distrobox-host-exec. Images, the SSH key, the console password and
-# rendered seeds live in $KERBER_LAB_HOME (default ~/kerber-lab, mode 0700).
-# They never enter git.
+# distrobox-host-exec, with the working directory set to this script's
+# directory (a path the host can see). Images, the SSH key, the console
+# password and rendered seeds live in $KERBER_LAB_HOME (default
+# ~/kerber-lab, mode 0700). They never enter git.
+# up, down, destroy, rebuild, reset and snapshot take
+# $KERBER_LAB_HOME/state/lab.lock (flock -w 60). status, ssh, ip, check
+# and collect do not.
 #
 # Commands:
 #   up [vm...]              define and start the network, the pool and the VMs.
 #                           A missing VM is built, provisioned and given snapshot
-#                           'base'. Idempotent.
-#   down [vm...]            shut VMs down (the network stays up)
+#                           'base'. Idempotent. kdc2 is started only when named,
+#                           and a missing kdc2 domain is an error (not built).
+#   down [vm...]            shut VMs down (the network stays up). With no name,
+#                           every VM in the table is shut off, including kdc2.
 #   destroy --yes           remove the lab VMs, their volumes, the pool and the
 #                           network (only kerber-lab objects; images stay)
 #   rebuild <vm> --yes      remove one VM with its disks and snapshots, then
-#                           build it again from the templates (as up does)
-#   reset <vm|all> [snap]   revert to snapshot 'base' (or snap) and boot
+#                           build it again from the templates (as up does).
+#                           kdc2 is refused before any domain or volume is removed.
+#   reset <vm|all> [snap]   revert and boot. With no snap named, kdc, services,
+#                           client1, client2, klldap and kdc2 use 'f44-base',
+#                           mitd3 uses 'mit-d3', and deb13, ub26 and rocky10
+#                           use 'base'. `reset all` does not select kdc2.
 #   snapshot <vm> <name>    offline snapshot: shut down, snapshot, start again
 #   ssh <vm> [--] [cmd...]  ssh to the VM as 'lab' with the lab key
 #   ip <vm> [lan]           print the VM's lab address, or kdc's LAN address
@@ -41,6 +55,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LAB_HOME="${KERBER_LAB_HOME:-$HOME/kerber-lab}"
+LAB_LOCK=$LAB_HOME/state/lab.lock
 URI=qemu:///system
 NET=kerber-lab
 POOL=kerber-lab
@@ -63,18 +78,30 @@ FEDORA_KEY=/etc/pki/rpm-gpg/RPM-GPG-KEY-fedora-43-primary
 FEDORA_KEY_FPR=C6E7F081CF80E13146676E88829B606631645531
 BASE_VOL=fedora-43-cloud-base-1.6.qcow2
 ISO_VOL=fedora-kinoite-43-1.6.iso
+# Ubuntu 26.04 cloud image, pinned to the release SHA256SUMS fetched
+# 2026-10-16. A replaced image fails closed until this pin moves.
+UBUNTU_URL=https://cloud-images.ubuntu.com/releases/26.04/release
+UBUNTU_IMG=ubuntu-26.04-server-cloudimg-amd64.img
+UBUNTU_SHA256=8800651811af9a85465ad1d552add729947bb16488dddb4a9b5305a3d97332b2
+UBUNTU_VOL=ubuntu-26.04-cloud.img
 
-# The VM table. The MACs must match network-kerber-lab.xml.
-ALL_VMS=(kdc services client1 client2 klldap mitd3)
-declare -A KIND=([kdc]=cloud [services]=cloud [client1]=kinoite [client2]=cloud [klldap]=cloud [mitd3]=cloud)
-declare -A CPUS=([kdc]=2 [services]=4 [client1]=4 [client2]=2 [klldap]=2 [mitd3]=4)
-declare -A MEM=([kdc]=2048 [services]=6144 [client1]=6144 [client2]=3072 [klldap]=3072 [mitd3]=4096)
-declare -A DISK=([kdc]=20 [services]=40 [client1]=40 [client2]=20 [klldap]=30 [mitd3]=20)
+# The VM table. The MACs must match network-kerber-lab.xml, except kdc2:
+# its DHCP host is already on the live network, and this script does not
+# edit that XML and does not net-update a dns-host for it.
+ALL_VMS=(kdc services client1 client2 klldap mitd3 ub26 deb13 rocky10 kdc2)
+declare -A KIND=([kdc]=cloud [services]=cloud [client1]=kinoite [client2]=cloud [klldap]=cloud [mitd3]=cloud [ub26]=ubuntu [deb13]=debian [rocky10]=rocky [kdc2]=replica)
+declare -A CPUS=([kdc]=2 [services]=4 [client1]=4 [client2]=2 [klldap]=2 [mitd3]=4 [ub26]=4 [deb13]=2 [rocky10]=2 [kdc2]=2)
+declare -A MEM=([kdc]=2048 [services]=6144 [client1]=6144 [client2]=3072 [klldap]=3072 [mitd3]=4096 [ub26]=8192 [deb13]=3072 [rocky10]=3072 [kdc2]=2048)
+declare -A DISK=([kdc]=20 [services]=40 [client1]=40 [client2]=20 [klldap]=30 [mitd3]=20 [ub26]=60 [deb13]=30 [rocky10]=20 [kdc2]=20)
 declare -A IP=([kdc]=192.168.177.10 [services]=192.168.177.11 [client1]=192.168.177.21
-               [client2]=192.168.177.22 [klldap]=192.168.177.30 [mitd3]=192.168.177.31)
+               [client2]=192.168.177.22 [klldap]=192.168.177.30 [mitd3]=192.168.177.31
+               [ub26]=192.168.177.32 [deb13]=192.168.177.33 [rocky10]=192.168.177.34
+               [kdc2]=192.168.177.12)
 declare -A MAC=([kdc]=52:54:00:4b:52:0a [services]=52:54:00:4b:52:0b
                 [client1]=52:54:00:4b:52:15 [client2]=52:54:00:4b:52:16
-                [klldap]=52:54:00:4b:52:1e [mitd3]=52:54:00:4b:52:1f)
+                [klldap]=52:54:00:4b:52:1e [mitd3]=52:54:00:4b:52:1f
+                [ub26]=52:54:00:4b:52:20 [deb13]=52:54:00:4b:52:21 [rocky10]=52:54:00:4b:52:22
+                [kdc2]=52:54:00:4b:52:0c)
 KDC_LAN_MAC=52:54:00:4b:4c:0a
 
 say()  { printf '[lab] %s\n' "$*"; }
@@ -85,7 +112,7 @@ die()  { printf '[lab] ERROR: %s\n' "$*" >&2; exit 1; }
 if command -v virsh >/dev/null 2>&1; then
     hx() { "$@"; }
 elif command -v distrobox-host-exec >/dev/null 2>&1; then
-    hx() { distrobox-host-exec "$@"; }
+    hx() { (cd "$HERE" && distrobox-host-exec "$@"); }
 else
     die "virsh is not on PATH and distrobox-host-exec is missing"
 fi
@@ -98,19 +125,49 @@ xo() {
 
 dom() { printf 'kerber-%s' "$1"; }
 known_vm() { [ -n "${KIND[$1]:-}" ] || die "unknown VM '$1' (one of: ${ALL_VMS[*]})"; }
-dom_exists() { vsh dominfo "$(dom "$1")" >/dev/null 2>&1; }
-dom_state() { vsh domstate "$(dom "$1")" 2>/dev/null || echo absent; }
+# Exists, or return 1 when the domain is missing. Any other failure exits.
+dom_exists() {
+    local out rc=0
+    out=$(vsh dominfo "$(dom "$1")" 2>&1) || rc=$?
+    if [ "$rc" -eq 0 ]; then return 0; fi
+    case $out in
+        *"Domain not found"*|*"failed to get domain '"*) return 1 ;;
+    esac
+    [ -n "$out" ] && printf '%s\n' "$out" >&2
+    exit "$rc"
+}
+# Lookup failure is absent. This virsh prints "failed to get domain" for that
+# and does not add "Domain not found". Any other failure keeps its status.
+dom_state() {
+    local out rc=0
+    out=$(vsh domstate "$(dom "$1")" 2>&1) || rc=$?
+    if [ "$rc" -eq 0 ]; then
+        printf '%s\n' "$out"
+        return 0
+    fi
+    case $out in
+        *"Domain not found"*|*"failed to get domain '"*) printf 'absent\n' ;;
+        *) [ -n "$out" ] && printf '%s\n' "$out" >&2
+           return "$rc" ;;
+    esac
+}
 vol_exists() { vsh vol-info --pool "$POOL" "$1" >/dev/null 2>&1; }
 has_snapshot() { vsh snapshot-info "$(dom "$1")" --snapshotname "$2" >/dev/null 2>&1; }
 # in_install <vm>: the domain still boots the installer kernel (client1 before its first boot).
 in_install() { [ "$(vsh dumpxml --inactive "$(dom "$1")" | awk '/<kernel>/ { n++ } END { print n + 0 }')" -gt 0 ]; }
 
-# select_vms <args...>: SEL = the named VMs, or every VM when none (or 'all') is named.
+# select_vms <args...>: SEL = the named VMs, or the field VMs when none (or 'all')
+# is named. ub26, rocky10, and kdc2 are not in that set; name them.
 SEL=()
 select_vms() {
     SEL=()
     if [ $# -eq 0 ] || [ "$1" = all ]; then
-        SEL=("${ALL_VMS[@]}")
+        local vm
+        for vm in "${ALL_VMS[@]}"; do
+            # ub26, rocky10, and kdc2 stay shut off unless a command names them.
+            case ${KIND[$vm]} in ubuntu|rocky|replica) continue ;; esac
+            SEL+=("$vm")
+        done
         return 0
     fi
     local vm
@@ -130,7 +187,13 @@ wait_until() {
         t=$((t + 5))
     done
 }
-is_state() { [ "$(dom_state "$1")" = "$2" ]; }
+is_state() {
+    local st rc=0
+    st=$(dom_state "$1") || rc=$?
+    # A lookup miss is a state. A virsh failure is not "not that state".
+    [ "$rc" -eq 0 ] || exit "$rc"
+    [ "$st" = "$2" ]
+}
 
 # ---------------------------------------------------------------- ssh
 
@@ -186,14 +249,19 @@ ensure_net() {
 }
 
 # ensure_net_hosts: the network has a DHCP lease and a DNS record for every VM
-# of the table. A network defined before a VM joined the table lacks its two
-# entries (net-define runs only when the network is missing); they are added
-# live and to the stored definition with net-update, which restarts nothing
-# and touches no other VM. A VM whose MAC and name are present is left alone.
+# of the table except a replica. A network defined before a VM joined the
+# table lacks its two entries (net-define runs only when the network is
+# missing); they are added live and to the stored definition with net-update,
+# which restarts nothing and touches no other VM. A VM whose MAC and name
+# are present is left alone. kdc2 is skipped: its DHCP host is already live,
+# and this script does not add a dns-host for it.
 ensure_net_hosts() {
     local vm xml
     xml=$(vsh net-dumpxml "$NET")
     for vm in "${ALL_VMS[@]}"; do
+        # kdc2's DHCP host is already on the live network. Do not add a
+        # dns-host for it, and do not edit network-kerber-lab.xml.
+        [ "${KIND[$vm]}" = replica ] && continue
         case $xml in
             *"mac='${MAC[$vm]}'"*) ;;
             *) say "network $NET: adding the DHCP lease of $vm (${MAC[$vm]} -> ${IP[$vm]})"
@@ -263,6 +331,26 @@ ensure_base_vol() {
     fetch_verified "$MIRROR/Cloud/x86_64/images" "$CLOUD_IMG" "$CLOUD_SUMS"
     say "uploading $CLOUD_IMG to pool volume $BASE_VOL"
     upload_vol "$LAB_HOME/images/$CLOUD_IMG" "$BASE_VOL" qcow2
+}
+
+ensure_ubuntu_vol() {
+    vol_exists "$UBUNTU_VOL" && return 0
+    local dir=$LAB_HOME/images sums listed have
+    mkdir -p "$dir"
+    sums=$dir/ubuntu-26.04-SHA256SUMS
+    curl -fsSL --retry 5 -o "$sums" "$UBUNTU_URL/SHA256SUMS"
+    listed=$(awk -v f="$UBUNTU_IMG" '$2 == f || $2 == ("*" f) { print $1; exit }' "$sums")
+    [ "$listed" = "$UBUNTU_SHA256" ] || die "Ubuntu SHA256SUMS lists ${listed:-nothing}, pin is $UBUNTU_SHA256"
+    if [ ! -f "$dir/$UBUNTU_IMG" ]; then
+        say "downloading $UBUNTU_IMG"
+        curl -fSL --retry 5 -C - -o "$dir/$UBUNTU_IMG.part" "$UBUNTU_URL/$UBUNTU_IMG"
+        mv "$dir/$UBUNTU_IMG.part" "$dir/$UBUNTU_IMG"
+    fi
+    have=$(sha256sum "$dir/$UBUNTU_IMG" | cut -d' ' -f1)
+    [ "$have" = "$UBUNTU_SHA256" ] || die "$UBUNTU_IMG: sha256 $have does not match the pin"
+    say "verified $UBUNTU_IMG (sha256 $UBUNTU_SHA256)"
+    say "uploading $UBUNTU_IMG to pool volume $UBUNTU_VOL"
+    upload_vol "$dir/$UBUNTU_IMG" "$UBUNTU_VOL" qcow2
 }
 
 ensure_iso_vol() {
@@ -341,6 +429,39 @@ create_cloud() {
         --disk "vol=$POOL/$d.qcow2,bus=virtio,discard=unmap" \
         --disk "vol=$POOL/$d-seed.iso,device=cdrom" \
         "${nets[@]}" \
+        --graphics none --console pty,target_type=serial --rng /dev/urandom \
+        --import --noautoconsole >/dev/null
+}
+
+create_ubuntu() {
+    local vm=$1 d s
+    d=$(dom "$vm")
+    s="$LAB_HOME/seeds/$vm"
+    ensure_ubuntu_vol
+    (umask 077; mkdir -p "$s")
+    render "$HERE/cloud-init/$vm.user-data" "$s/user-data" "$vm"
+    render "$HERE/cloud-init/network-config.single" "$s/network-config" "$vm"
+    printf 'instance-id: kerber-%s-%s\nlocal-hostname: %s.%s\n' \
+        "$vm" "$(date -u +%Y%m%dT%H%M%SZ)" "$vm" "$DNS_DOMAIN" > "$s/meta-data"
+    rm -f "$s/seed.iso"
+    xo -as mkisofs -output "$s/seed.iso" -volid cidata -joliet -rock \
+        "$s/user-data" "$s/meta-data" "$s/network-config"
+    upload_vol "$s/seed.iso" "$d-seed.iso" raw
+    if vol_exists "$d.qcow2"; then vsh vol-delete --pool "$POOL" "$d.qcow2" >/dev/null; fi
+    vsh vol-create-as "$POOL" "$d.qcow2" "${DISK[$vm]}G" --format qcow2 \
+        --backing-vol "$UBUNTU_VOL" --backing-vol-format qcow2 >/dev/null
+    forget_host_key "$vm"
+    say "creating $d (${CPUS[$vm]} vCPU, ${MEM[$vm]} MiB, ${DISK[$vm]} GiB, Ubuntu 26.04 Cloud)"
+    # This host's osinfo-db has no ubuntu26.04 id (newest Ubuntu entry is 25.10).
+    # generic also omits the virtio guest-agent channel that fedora43 adds.
+    hx virt-install --connect "$URI" --name "$d" --osinfo detect=on,require=off \
+        --metadata "description=kerber-rust field lab: $vm.$DNS_DOMAIN (harness/field)" \
+        --vcpus "${CPUS[$vm]}" --memory "${MEM[$vm]}" --cpu host-passthrough \
+        --disk "vol=$POOL/$d.qcow2,bus=virtio,discard=unmap" \
+        --disk "vol=$POOL/$d-seed.iso,device=cdrom" \
+        --network "network=$NET,mac=${MAC[$vm]},model=virtio" \
+        --controller type=virtio-serial,index=0 \
+        --channel unix,target_type=virtio,name=org.qemu.guest_agent.0 \
         --graphics none --console pty,target_type=serial --rng /dev/urandom \
         --import --noautoconsole >/dev/null
 }
@@ -446,7 +567,7 @@ finish_kinoite() {
 snapshot_offline() {
     local vm=$1 name=$2 d was
     d=$(dom "$vm")
-    was=$(dom_state "$vm")
+    was=$(dom_state "$vm") || exit $?
     if vsh snapshot-info "$d" --snapshotname "$name" >/dev/null 2>&1; then
         die "$vm already has snapshot '$name' (virsh -c $URI snapshot-delete $d $name)"
     fi
@@ -479,8 +600,13 @@ cmd_up() {
     ensure_pool
     for vm in "${vms[@]}"; do
         if ! dom_exists "$vm"; then
-            if [ "${KIND[$vm]}" = kinoite ]; then create_kinoite; else create_cloud "$vm"; fi
-        elif has_snapshot "$vm" base; then
+            case ${KIND[$vm]} in
+                kinoite) create_kinoite ;;
+                ubuntu) create_ubuntu "$vm" ;;
+                debian|rocky|replica) die "$vm is not built by this script; define that domain by hand" ;;
+                *) create_cloud "$vm" ;;
+            esac
+        elif has_snapshot "$vm" base || [ "${KIND[$vm]}" = replica ]; then
             if ! is_state "$vm" running; then
                 say "starting $(dom "$vm")"
                 vsh start "$(dom "$vm")" >/dev/null
@@ -489,7 +615,10 @@ cmd_up() {
         else
             say "$vm exists without snapshot 'base': finishing its build"
         fi
-        if [ "${KIND[$vm]}" = kinoite ]; then new_kinoite+=("$vm"); else new_cloud+=("$vm"); fi
+        if [ "${KIND[$vm]}" = kinoite ]; then new_kinoite+=("$vm")
+        elif [ "${KIND[$vm]}" = debian ] || [ "${KIND[$vm]}" = rocky ]; then
+            die "$vm exists without snapshot 'base'; this script does not build it"
+        else new_cloud+=("$vm"); fi
     done
     # The cloud VMs provision while the Kinoite install runs; finish them first.
     for vm in "${new_cloud[@]}"; do
@@ -507,8 +636,12 @@ cmd_up() {
 }
 
 cmd_down() {
-    local vms vm
-    select_vms "$@"
+    local vms vm state
+    if [ $# -eq 0 ]; then
+        SEL=("${ALL_VMS[@]}")
+    else
+        select_vms "$@"
+    fi
     vms=("${SEL[@]}")
     for vm in "${vms[@]}"; do
         dom_exists "$vm" || continue
@@ -517,7 +650,8 @@ cmd_down() {
     for vm in "${vms[@]}"; do
         dom_exists "$vm" || continue
         shutdown_vm "$vm"
-        say "$vm: $(dom_state "$vm")"
+        state=$(dom_state "$vm") || exit $?
+        say "$vm: $state"
     done
 }
 
@@ -557,6 +691,10 @@ cmd_rebuild() {
         die "usage: lab.sh rebuild <vm> --yes (removes the VM, its disks and snapshots, then builds it again)"
     fi
     known_vm "$1"
+    # Die before undefine or vol-delete. create_cloud is the Fedora 43 path.
+    if [ "${KIND[$1]}" = replica ]; then
+        die "$1 is not rebuilt by this script (its domain, disks and snapshots stay)"
+    fi
     local vm=$1 d vol
     d=$(dom "$vm")
     if dom_exists "$vm"; then
@@ -578,16 +716,25 @@ cmd_rebuild() {
 
 cmd_reset() {
     [ $# -ge 1 ] || die "usage: lab.sh reset <vm|all> [snapshot]"
-    local snap=${2:-base} vms vm d
+    local named=${2-} snap=${2:-base} use vms vm d
     select_vms "$1"
     vms=("${SEL[@]}")
     for vm in "${vms[@]}"; do
         d=$(dom "$vm")
+        use=$snap
+        # No name: mitd3 keeps the MIT build. The Fedora 44 VMs' pristine disk is f44-base.
+        # deb13, ub26 and rocky10 keep base. up and rebuild still mark a finished build as base.
+        if [ -z "$named" ]; then
+            case $vm in
+                mitd3) use=mit-d3 ;;
+                kdc|services|client1|client2|klldap|kdc2) use=f44-base ;;
+            esac
+        fi
         dom_exists "$vm" || die "$vm does not exist (lab.sh up)"
         if ! is_state "$vm" "shut off"; then vsh destroy "$d" >/dev/null 2>&1 || true; fi
-        vsh snapshot-revert "$d" --snapshotname "$snap" >/dev/null
+        vsh snapshot-revert "$d" --snapshotname "$use" >/dev/null
         vsh start "$d" >/dev/null
-        say "$vm: reverted to '$snap', booting"
+        say "$vm: reverted to '$use', booting"
     done
     for vm in "${vms[@]}"; do
         wait_ssh "$vm" 600 || die "$vm: no ssh after reset"
@@ -597,10 +744,12 @@ cmd_reset() {
 
 cmd_snapshot() {
     [ $# -eq 2 ] || die "usage: lab.sh snapshot <vm> <name>"
+    local state
     known_vm "$1"
     dom_exists "$1" || die "$1 does not exist (lab.sh up)"
     snapshot_offline "$1" "$2"
-    if [ "$(dom_state "$1")" = running ]; then wait_ssh "$1" 600 || true; fi
+    state=$(dom_state "$1") || exit $?
+    if [ "$state" = running ]; then wait_ssh "$1" 600 || true; fi
 }
 
 cmd_ssh() {
@@ -641,14 +790,15 @@ cmd_ip() {
 }
 
 cmd_status() {
-    local vm d snaps
+    local vm d snaps state
     printf 'network %s: %s\n' "$NET" "$(vsh net-info "$NET" 2>/dev/null | awk '/^Active:/ { print ($2 == "yes" ? "active" : "inactive") }' || true)"
     printf 'pool    %s: %s\n' "$POOL" "$(vsh pool-info "$POOL" 2>/dev/null | awk '/^State:/ { print $2 }' || true)"
     printf '%-9s %-16s %-16s %-10s %s\n' VM ADDRESS DOMAIN STATE SNAPSHOTS
     for vm in "${ALL_VMS[@]}"; do
         d=$(dom "$vm")
         snaps=$(vsh snapshot-list "$d" --name 2>/dev/null | sed '/^$/d' | paste -sd, - || true)
-        printf '%-9s %-16s %-16s %-10s %s\n' "$vm" "${IP[$vm]}" "$d" "$(dom_state "$vm")" "${snaps:--}"
+        state=$(dom_state "$vm") || exit $?
+        printf '%-9s %-16s %-16s %-10s %s\n' "$vm" "${IP[$vm]}" "$d" "$state" "${snaps:--}"
     done
     if is_state kdc running; then
         printf 'kdc LAN address (macvtap, DHCP from the LAN): %s\n' "$(kdc_lan_ip || true)"
@@ -665,7 +815,7 @@ check_vm() {
     pass "ssh lab@${IP[$vm]} with the lab key"
     out=$(lssh "$vm" 'hostname -f; cat /etc/os-release | grep -E "^(VARIANT_ID|VERSION_ID)="' 2>/dev/null | paste -sd' ' -)
     pass "hostname/os: $out"
-    for other in kdc services client1 client2 klldap; do
+    for other in kdc services client1 client2 klldap mitd3; do
         if [ "$vm" = "$other" ]; then
             # The VM's own name is answered locally (nss-myhostname / resolved) with
             # its own addresses, in getaddrinfo order: any local address is right.
@@ -753,9 +903,24 @@ cmd_collect() {
 
 usage() { sed -n '2,/^set -euo/{ /^set -euo/d; s/^# \{0,1\}//; p; }' "${BASH_SOURCE[0]}"; }
 
+# The same file run.sh locks for a field run. That run keeps the lock on fd 9
+# and then calls lab.sh reset; locking a new descriptor would wait on the parent.
+hold_lab_lock() {
+    mkdir -p "${LAB_LOCK%/*}"
+    if [ -e /proc/self/fd/9 ] && [ "$(readlink -f /proc/self/fd/9)" = "$(readlink -f "$LAB_LOCK")" ]; then
+        flock -w 60 9 || die "the lab is held ($LAB_LOCK): waited 60s"
+        return 0
+    fi
+    exec 9>>"$LAB_LOCK"
+    flock -w 60 9 || die "the lab is held ($LAB_LOCK): waited 60s"
+}
+
 main() {
     local cmd=${1:-}
     [ $# -gt 0 ] && shift
+    case $cmd in
+        up|down|destroy|rebuild|reset|snapshot) hold_lab_lock ;;
+    esac
     case $cmd in
         up) cmd_up "$@" ;;
         down) cmd_down "$@" ;;

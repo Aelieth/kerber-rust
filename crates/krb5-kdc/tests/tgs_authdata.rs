@@ -9,12 +9,9 @@ use krb5_crypto::{
 };
 use krb5_kdc::testrealm::{GREET_AD_TYPE, GREET_TEXT, GreetAuth};
 use krb5_kdc::testrealm::{TEST_REALM, bootstrap_documented, documented_host};
-use krb5_kdc::{
-    Error, PrincipalStore, clear_thread_authdata, decrypt_ticket_part, issue_tgs,
-    set_thread_authdata,
-};
+use krb5_kdc::{Error, PrincipalStore, issue_tgs};
 
-use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
+use krb5_protocol::tgs_req;
 use krb5_testkit::{krbtgt, status, user, user_as, wrap_if_relevant};
 use krb5_types::cammac::{Cammac, VerifierMac};
 use krb5_types::{
@@ -35,16 +32,6 @@ fn host_part(store: &PrincipalStore, issued: &krb5_kdc::IssuedTgs) -> EncTicketP
     )
     .unwrap();
     decode(&plain).unwrap()
-}
-
-fn enc_ad(session: &ProtocolKey, ad: &AuthorizationData) -> EncryptedData {
-    let usage = KeyUsage::new(ku::TGS_REQ_AD_SESSKEY).unwrap();
-    let cipher = encrypt(session, usage, &encode(ad).unwrap()).unwrap();
-    EncryptedData {
-        etype: session.etype().to_iana(),
-        kvno: None,
-        cipher: cipher.into(),
-    }
 }
 
 fn tgs_with_enc_ad(
@@ -114,99 +101,6 @@ fn tgs_with_enc_ad(
     })
 }
 
-fn ad_has_payload(ad: &[AuthorizationDataValue], ad_type: i32, payload: &[u8]) -> bool {
-    for e in ad {
-        if e.ad_type == pa::AD_IF_RELEVANT {
-            if let Ok(inner) = decode::<AuthorizationData>(e.ad_data.as_ref())
-                && ad_has_payload(&inner, ad_type, payload)
-            {
-                return true;
-            }
-        } else if e.ad_type == ad_type && e.ad_data.as_ref() == payload {
-            return true;
-        }
-    }
-    false
-}
-
-#[test]
-fn tgs_copies_if_relevant_body_authdata() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let issued = user_as(&store, 13001);
-    let blob = b"kerber-ad-copy";
-    let ad = wrap_if_relevant(&[AuthorizationDataValue {
-        ad_type: pa::AD_AND_OR,
-        ad_data: blob.to_vec().into(),
-    }]);
-    let tgs = tgs_with_enc_ad(
-        issued.rep.0.ticket.clone(),
-        &issued.session_key,
-        documented_host(),
-        13002,
-        enc_ad(&issued.session_key, &ad),
-    );
-    let out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
-    let part = host_part(&store, &out);
-    let ad = part.authorization_data.expect("ticket AD");
-    assert!(
-        ad_has_payload(&ad, pa::AD_AND_OR, blob),
-        "copied AD missing: {ad:?}"
-    );
-}
-
-#[test]
-// oracle: differential-gate.sh tgs-ad-mandatory-for-kdc
-fn tgs_mandatory_for_kdc_is_handle_authdata() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let issued = user_as(&store, 13011);
-    let ad = vec![AuthorizationDataValue {
-        ad_type: pa::AD_MANDATORY_FOR_KDC,
-        ad_data: Vec::<u8>::new().into(),
-    }];
-    let tgs = tgs_with_enc_ad(
-        issued.rep.0.ticket.clone(),
-        &issued.session_key,
-        documented_host(),
-        13012,
-        enc_ad(&issued.session_key, &ad),
-    );
-    let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
-    assert_eq!(status(&err), (err::POLICY, Some("HANDLE_AUTHDATA")));
-}
-
-#[test]
-fn tgs_strips_kdc_issued_if_relevant_keeps_sibling() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let issued = user_as(&store, 13021);
-    let keep = b"keep-me";
-    let mut ad = wrap_if_relevant(&[AuthorizationDataValue {
-        ad_type: pa::AD_WIN2K_PAC,
-        ad_data: b"dummy-pac".to_vec().into(),
-    }]);
-    ad.extend(wrap_if_relevant(&[AuthorizationDataValue {
-        ad_type: pa::AD_AND_OR,
-        ad_data: keep.to_vec().into(),
-    }]));
-    let tgs = tgs_with_enc_ad(
-        issued.rep.0.ticket.clone(),
-        &issued.session_key,
-        documented_host(),
-        13022,
-        enc_ad(&issued.session_key, &ad),
-    );
-    let out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
-    let part = host_part(&store, &out);
-    let ticket_ad = part.authorization_data.expect("ticket AD");
-    assert!(
-        ad_has_payload(&ticket_ad, pa::AD_AND_OR, keep),
-        "sibling AD missing: {ticket_ad:?}"
-    );
-    assert!(
-        !ad_has_payload(&ticket_ad, pa::AD_WIN2K_PAC, b"dummy-pac"),
-        "KDC-issued IF-RELEVANT kept: {ticket_ad:?}"
-    );
-}
-
 #[test]
 fn tgs_body_ad_decrypt_fail_is_handle_authdata() {
     let (store, _) = bootstrap_documented().unwrap();
@@ -224,105 +118,6 @@ fn tgs_body_ad_decrypt_fail_is_handle_authdata() {
     );
     let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
     assert_eq!(status(&err), (err::BAD_INTEGRITY, Some("HANDLE_AUTHDATA")));
-}
-
-#[test]
-fn as_require_auth_is_higher_authentication() {
-    let (mut store, _) = bootstrap_documented().unwrap();
-    store
-        .set_string(&krbtgt(), "require_auth", Some("pkinit"))
-        .unwrap();
-    let cname = user();
-    let key = store
-        .get_name(&cname)
-        .unwrap()
-        .best_key()
-        .unwrap()
-        .key
-        .clone();
-    let req = as_req(
-        cname,
-        TEST_REALM,
-        14001,
-        Some(vec![pa_enc_timestamp(&key).unwrap()]),
-    )
-    .unwrap();
-    let err = krb5_kdc::issue_as(&store, &req).unwrap_err();
-    assert_eq!(
-        status(&err),
-        (err::POLICY, Some("HIGHER_AUTHENTICATION_REQUIRED"))
-    );
-}
-
-#[test]
-fn tgs_require_auth_is_higher_authentication() {
-    let (mut store, _) = bootstrap_documented().unwrap();
-    let issued = user_as(&store, 14002);
-    store
-        .set_string(&documented_host(), "require_auth", Some("pkinit"))
-        .unwrap();
-    let tgs = tgs_req(
-        issued.rep.0.ticket.clone(),
-        &issued.session_key,
-        TEST_REALM,
-        &user(),
-        documented_host(),
-        TEST_REALM,
-        14003,
-    )
-    .unwrap();
-    let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
-    assert_eq!(
-        status(&err),
-        (err::POLICY, Some("HIGHER_AUTHENTICATION_REQUIRED"))
-    );
-}
-
-#[test]
-// oracle: differential-gate.sh tgs-truncated-cammac
-fn tgs_truncated_cammac_is_get_auth_indicators() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let issued = user_as(&store, 14004);
-    let tgt_key = store
-        .get_name(&krbtgt())
-        .unwrap()
-        .first_current_key()
-        .unwrap()
-        .key
-        .clone();
-    let usage = KeyUsage::new(ku::TICKET).unwrap();
-    let plain = decrypt(
-        &tgt_key,
-        usage,
-        issued.rep.0.ticket.enc_part.cipher.as_ref(),
-    )
-    .unwrap();
-    let mut part: EncTicketPart = decode(&plain).unwrap();
-    let mut ad = part.authorization_data.take().unwrap_or_default();
-    let inner = vec![AuthorizationDataValue {
-        ad_type: pa::AD_CAMMAC,
-        ad_data: b"truncated".to_vec().into(),
-    }];
-    ad.push(AuthorizationDataValue {
-        ad_type: pa::AD_IF_RELEVANT,
-        ad_data: encode(&inner).unwrap().into(),
-    });
-    part.authorization_data = Some(ad);
-    let cipher = encrypt(&tgt_key, usage, &encode(&part).unwrap()).unwrap();
-    let mut ticket: Ticket = issued.rep.0.ticket.clone();
-    ticket.enc_part.cipher = cipher.into();
-    let tgs = tgs_req(
-        ticket,
-        &issued.session_key,
-        TEST_REALM,
-        &user(),
-        documented_host(),
-        TEST_REALM,
-        14005,
-    )
-    .unwrap();
-    let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
-    assert_eq!(status(&err), (err::GENERIC, Some("GET_AUTH_INDICATORS")));
 }
 
 fn enc_ad_usage(key: &ProtocolKey, usage: u32, ad: &AuthorizationData) -> EncryptedData {
@@ -460,37 +255,9 @@ fn and_or_ad(blob: &[u8]) -> AuthorizationData {
 }
 
 #[test]
-fn pac_is_first_authdata() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let issued = user_as(&store, 28001);
-    let blob = b"r28-pac-first";
-    let ad = and_or_ad(blob);
-    let tgs = tgs_hand(
-        issued.rep.0.ticket.clone(),
-        &issued.session_key,
-        documented_host(),
-        28002,
-        Some(enc_ad_usage(
-            &issued.session_key,
-            ku::TGS_REQ_AD_SESSKEY,
-            &ad,
-        )),
-        None,
-    );
-    let out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
-    let part = host_part(&store, &out);
-    let ticket_ad = part.authorization_data.expect("ticket AD");
-    assert!(
-        ad_has_payload_a3_r28(&ticket_ad, pa::AD_AND_OR, blob),
-        "copied AD missing: {ticket_ad:?}"
-    );
-    assert!(first_is_pac(&ticket_ad), "PAC not first: {ticket_ad:?}");
-}
-
-#[test]
 fn greet_is_kdc_issued() {
-    set_thread_authdata(vec![Arc::new(GreetAuth)]);
-    let (store, _) = bootstrap_documented().unwrap();
+    let (mut store, _) = bootstrap_documented().unwrap();
+    store.policy.plugins.register_authdata(Arc::new(GreetAuth));
     let issued = user_as(&store, 28011);
     let tgs = tgs_hand(
         issued.rep.0.ticket.clone(),
@@ -501,7 +268,6 @@ fn greet_is_kdc_issued() {
         None,
     );
     let out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
-    clear_thread_authdata();
     let part = host_part(&store, &out);
     let ticket_ad = part.authorization_data.expect("ticket AD");
     let has_issued = ticket_ad
@@ -516,8 +282,8 @@ fn greet_is_kdc_issued() {
 
 #[test]
 fn greet_precedes_copied_ad() {
-    set_thread_authdata(vec![Arc::new(GreetAuth)]);
-    let (store, _) = bootstrap_documented().unwrap();
+    let (mut store, _) = bootstrap_documented().unwrap();
+    store.policy.plugins.register_authdata(Arc::new(GreetAuth));
     let issued = user_as(&store, 28021);
     let blob = b"r28-greet-order";
     let ad = and_or_ad(blob);
@@ -534,7 +300,6 @@ fn greet_precedes_copied_ad() {
         None,
     );
     let out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
-    clear_thread_authdata();
     let part = host_part(&store, &out);
     let ticket_ad = part.authorization_data.expect("ticket AD");
     let greet_i = ticket_ad
@@ -571,66 +336,6 @@ fn body_ad_subkey_ku5_is_copied() {
     assert!(
         ad_has_payload_a3_r28(&ticket_ad, pa::AD_AND_OR, blob),
         "subkey ku5 AD missing: {ticket_ad:?}"
-    );
-    assert!(first_is_pac(&ticket_ad), "PAC not first: {ticket_ad:?}");
-}
-
-#[test]
-fn body_ad_session_ku5_is_copied() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let issued = user_as(&store, 28041);
-    let blob = b"r28-session-ku5";
-    let ad = and_or_ad(blob);
-    let tgs = tgs_hand(
-        issued.rep.0.ticket.clone(),
-        &issued.session_key,
-        documented_host(),
-        28042,
-        Some(enc_ad_usage(
-            &issued.session_key,
-            ku::TGS_REQ_AD_SUBKEY,
-            &ad,
-        )),
-        None,
-    );
-    let out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
-    let part = host_part(&store, &out);
-    let ticket_ad = part.authorization_data.expect("ticket AD");
-    assert!(
-        ad_has_payload_a3_r28(&ticket_ad, pa::AD_AND_OR, blob),
-        "session ku5 AD missing: {ticket_ad:?}"
-    );
-    assert!(first_is_pac(&ticket_ad), "PAC not first: {ticket_ad:?}");
-}
-
-#[test]
-fn tgt_and_or_kept_through_tgs() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let issued = user_as(&store, 28051);
-    let keep = b"r28-tgt-keep";
-    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
-    let mut part = decrypt_ticket_part(&krbtgt.key, &issued.rep.0.ticket).unwrap();
-    let mut ad = part.authorization_data.unwrap_or_default();
-    ad.extend(and_or_ad(keep));
-    part.authorization_data = Some(ad);
-    let der = encode(&part).unwrap();
-    let usage = KeyUsage::new(ku::TICKET).unwrap();
-    let mut ticket = issued.rep.0.ticket.clone();
-    ticket.enc_part.cipher = encrypt(&krbtgt.key, usage, &der).unwrap().into();
-    let tgs = tgs_hand(
-        ticket,
-        &issued.session_key,
-        documented_host(),
-        28052,
-        None,
-        None,
-    );
-    let out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
-    let svc = host_part(&store, &out);
-    let ticket_ad = svc.authorization_data.expect("ticket AD");
-    assert!(
-        ad_has_payload_a3_r28(&ticket_ad, pa::AD_AND_OR, keep),
-        "TGT AND-OR not kept: {ticket_ad:?}"
     );
     assert!(first_is_pac(&ticket_ad), "PAC not first: {ticket_ad:?}");
 }

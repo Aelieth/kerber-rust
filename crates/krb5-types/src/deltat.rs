@@ -1,5 +1,3 @@
-//! `krb5_string_to_deltat` (`x-deltat.y`).
-
 const MAX: i32 = i32::MAX;
 const MIN: i32 = i32::MIN;
 const DAY: i32 = 24 * 3600;
@@ -11,17 +9,9 @@ const MIN_HOUR: i32 = MIN / HOUR;
 const MAX_MIN: i32 = MAX / 60;
 const MIN_MIN: i32 = MIN / 60;
 
-/// Rejected by `krb5_string_to_deltat` (`KRB5_DELTAT_BADFORMAT`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DeltatError;
 
-/// Parse a MIT deltat to `krb5_deltat` seconds.
-///
-/// # Errors
-///
-/// [`DeltatError`] when `s` does not start with a number, a `:`-separated field is not one or two
-/// digits, a value or the total overflows int32, or the text after the duration starts with a
-/// digit, `-`, `:`, `d`, `h`, `m`, `s`, or a blank (`3dd`, `3d4m5h`, `3 4`).
 pub fn parse(s: &str) -> Result<i32, DeltatError> {
     let b = s.as_bytes();
     let mut i = 0;
@@ -165,9 +155,7 @@ fn opt_hms(b: &[u8], i: &mut usize) -> Result<i32, DeltatError> {
     }
 }
 
-/// MIT `krb5_string_to_deltat` (`deltat.c:1580-1581`): a string the parser rejects is a bad format,
-/// not a zero duration.
-/// A day count outside the allowed range is not a duration.
+// MIT: `krb5_string_to_deltat` (lib/krb5/krb/deltat.c:1574-1584)
 fn deltat(b: &[u8], i: &mut usize) -> Result<i32, DeltatError> {
     let n = num(b, i)?;
     if eat(b, i, b'd') {

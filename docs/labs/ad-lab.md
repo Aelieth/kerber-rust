@@ -66,8 +66,8 @@ kvno host/svc.ad.kerber.test
 
 Never `realm join`, `adcli join`, or edit `/etc/krb5.conf` /
 `/etc/sssd/sssd.conf`. Never write tickets to the default KCM/KEYRING
-cache. Rust `discover_kdc` appends `/etc/krb5.conf` after `KRB5_CONFIG`;
-omit the env var and you will hit the home realm.
+cache. The Rust tools read `KRB5_CONFIG`, else `/etc/krb5.conf`, when they
+start; omit the env var and you will hit the home realm.
 
 `kbrsvc` is trusted-to-authenticate-for-delegation with
 `msDS-AllowedToDelegateTo` = `host/svc.ad.kerber.test`. Gate:
@@ -81,15 +81,9 @@ The DC has a bidirectional MIT realm trust `KERBER.TEST` (`netdom
 (rootless distrobox cannot bind host `:88`; TESTLABBY stays on
 `aurora.testlabby.local`).
 
-The retired Windows-DC one-shot `scripts/ad-mit-trust-gate.sh` ran this trust
-twice, both directions, aes256:
-
-- `kbruser@AD.KERBER.TEST` → `host/testhost.kerber.test@KERBER.TEST`
-- `user@KERBER.TEST` → `host/svc.ad.kerber.test@AD.KERBER.TEST`
-
-The script now only runs `scripts/samba-realtrust-gate.sh` (two Samba DCs and
-a real `samba-tool domain trust create`, nightly in `peers.yml`) and does not
-claim a Windows DC.
+`scripts/samba-realtrust-gate.sh` runs the trust both directions (two Samba
+DCs and a real `samba-tool domain trust create`, nightly in `peers.yml`); no
+gate claims a Windows DC.
 
 Windows TDO inbound/outbound AES keys differ by salt. The Rust KDC
 issues `krbtgt/AD.KERBER.TEST` with the inbound key and decrypts

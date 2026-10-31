@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import functools
 import os
 import pathlib
 import re
 import sys
 
-from .common import ROOT, SCRIPTS, _die, _hygiene_inventory
+from .common import ROOT, SCRIPTS, _die
+from .hygiene import cfg_test_files_in_pkg
 
 DIFFSEND_CASES = frozenset(
     {
@@ -32,6 +34,8 @@ DIFFSEND_CASES = frozenset(
         "as-bad-msg-type",
         "as-bad-pvno",
         "tgs-bad-msg-type",
+        "as-service-expired",
+        "as-service-locked",
         "as-service-not-allowed",
         "tgs-ap-options",
         "tgs-header-kvno-zero",
@@ -92,6 +96,7 @@ DIFFSEND_CASES = frozenset(
         "as-optimistic-encts-wrong-etype",
         "as-retransmit",
         "as-request-anonymous",
+        "as-reserved-option-bit",
         "tgs-pac-server-cksum-wrong-enctype",
         "u2u-2nd-ticket-pac-wrong-enctype",
         "u2u-success-offered",
@@ -127,6 +132,9 @@ DIFFSEND_CASES = frozenset(
         "as-req-trailing-body-field",
         "tgs-req-nonce-int32-min",
         "tgs-authenticator-malformed-subkey",
+        "tgs-ap-req-junk",
+        "tgs-ticket-junk",
+        "tgs-ap-req-pvno",
         "tgs-authenticator-trailing-field",
         "tgs-authenticator-crealm-octets",
         "as-spake-unknown-choice",
@@ -134,6 +142,89 @@ DIFFSEND_CASES = frozenset(
         "as-enc-timestamp-pausec-out-of-range",
         "tgs-authenticator-etype-mismatch",
         "as-fast-armored-data-etype-mismatch",
+        "tgs-missing-pa-tgs-req",
+        "tgs-authenticator-cname-mismatch",
+        "tgs-authenticator-crealm-mismatch",
+        "tgs-server-locked-out",
+        "tgs-disallow-tgt-based",
+        "tgs-authenticator-replay",
+        "tgs-server-disallow-postdated",
+        "s4u2self-client-expired",
+        "s4u2self-client-locked-out",
+        "tgs-fast-unkeyed-bad-checksum",
+        "tgs-fast-req-flip",
+        "tgs-fast-cksum-flip",
+        "tgs-ad-fx-armor-then-junk",
+        "tgs-fast-explicit-armor",
+        "tgs-fast-armor-no-tgs-subkey",
+        "tgs-fast-armor-no-subkey",
+        "pkinit-cms-too-small",
+        "pkinit-cms-header-too-long",
+        "pkinit-cms-too-long",
+        "pkinit-cms-wrong-tag",
+        "pkinit-cms-field-missing",
+        "pkinit-cms-wrong-oid",
+        "pkinit-authpack-not-octet-string",
+        "pkinit-cms-no-signer-cert",
+        "pkinit-sig-not-der",
+        "pkinit-sig-r-zero",
+        "pkinit-cms-signeddata-trailing",
+        "pkinit-cms-algid-wrong-tag",
+        "fa-armor-badmatch",
+        "fa-armor-invalid",
+        "fa-armor-expired-in-skew",
+        "fa-armor-session-etype",
+        "fa-armor-session-key-size",
+        "fa-armor-subkey-size",
+        "fa-armor-not-ap-req",
+        "fa-armor-pvno",
+        "fa-armor-disallow-svr",
+        "fa-armor-ticket-short",
+        "fa-armor-ticket-junk",
+        "fa-armor-transited",
+        "fa-armor-transited-cross",
+        "fa-armor-transited-nul",
+        "fa-armor-transited-srv",
+        "tgs-transited-local",
+        "fa-armor-kvno",
+        "fa-armor-ticket-key",
+        "fa-armor-nyv",
+        "fa-armor-expired",
+        "fa-armor-skew",
+        "fa-armor-authenticator-key",
+        "fa-armor-host-ticket",
+        "fa-fast-req-key",
+        "fa-fast-req-flip",
+        "fa-fast-req-short",
+        "fa-fast-cksum-type",
+        "fa-fast-cksum-size",
+        "fa-fast-cksum-flip",
+        "fa-fast-bare-armored-req",
+        "fa-fast-critical-option",
+        "fa-fast-cksum-crc32",
+        "fa-fast-cksum-md5-bytes",
+        "fa-fast-cksum-md5-short",
+        "fa-fast-cksum-hmac-md5",
+        "fa-fast-cksum-same-provider",
+        "fa-fast-option-bit0",
+        "fa-fast-cksum-cross-enc",
+        "fa-fast-cksum-type-zero",
+        "fa-fast-cksum-md5-body",
+        "fa-armor-type-unknown",
+        "fa-armor-ad-if-relevant-junk",
+        "fa-armor-ad-kdc-issued-junk",
+        "fa-armor-ad-kdc-issued-bad-mac",
+        "fa-armor-cammac-junk",
+        "fa-armor-cammac-no-svc",
+        "fa-armor-cammac-bad-mac",
+        "fa-armor-cammac-svc-type",
+        "fa-armor-pac-range",
+        "fa-armor-pac-version",
+        "fa-armor-authind-junk",
+        "fa-armor-ad-too-many",
+        "fa-armor-authind-ok",
+        "fa-fast-hide-client-rep",
+        "fa-fast-error-inner",
     }
 )
 _LEDGER_GATE = re.compile(r"(?:scripts/)?([A-Za-z0-9._-]+-gate(?:\.sh)?)")
@@ -225,7 +316,7 @@ def check_ledger_layout(root: pathlib.Path | None = None) -> None:
 
 
 def check_ledger_proof_column(text: str | None = None, name: str = "docs/mit-parity-ledger.md") -> None:
-    """Proof cells may name existing diffsend cases / *-gate.sh or `proposed`."""
+    """Proof cells may name a live diffsend case, a live or retired *-gate.sh, or `proposed`."""
     if text is None:
         for src_name, src_text, _key in ledger_sources():
             check_ledger_proof_column(src_text, src_name)
@@ -255,11 +346,9 @@ def check_ledger_proof_column(text: str | None = None, name: str = "docs/mit-par
                 gate = m.group(1)
                 if not gate.endswith(".sh"):
                     gate = gate + ".sh"
-                if gate not in existing and not proposed:
-                    _die(
-                        f"{name}:{i} proof names {gate} "
-                        "which is not in scripts/ (use proposed)"
-                    )
+                if gate not in existing:
+                    # Retired gate names stay in the ledger. RF-1d re-points the sole-proof rows.
+                    continue
 
 
 _LEDGER_CASES_HDR = re.compile(
@@ -369,6 +458,11 @@ _MIT_NA = re.compile(r"^\s*(?:n/a|absent|—|-|RFC\s*\d)", re.I)
 _PROOF_UNIT = re.compile(r"`([a-z][a-z0-9]*(?:_[a-z0-9]+)+)`")
 _PROOF_CASE = re.compile(r"`([a-z][a-z0-9]*(?:-[a-z0-9]+)+)`")
 _PROOF_GATE = re.compile(r"\b([\w-]+-gate\.sh)\b")
+_PROOF_FIELD = re.compile(r"\bfield `([a-z][a-z0-9-]*)`")
+_HISTORIC_PROOF = re.compile(r"\bsince removed\b")
+_FIELD_NAME = re.compile(r"(?<![\w./$-])([A-Za-z][\w-]*(?:\.(?:[\w-]+|\$\{?\w+\}?|\$\([^)]*\)))+)")
+_FIELD_ID = re.compile(r"(?<![\w./-])([A-Za-z][\w-]*(?:\.(?:[\w-]+|\*))+)")
+_FIELD_VAR = re.compile(r"\$(?:\{\w+\}|\([^)]*\)|\w+)")
 _FN_NAMES: set[str] | None = None
 _CASE_TEXT: str | None = None
 
@@ -401,11 +495,63 @@ def _case_text() -> str:
 
 
 def _proof_exists(proof: str) -> bool:
-    if any(n in _fn_names() for n in _PROOF_UNIT.findall(proof)):
+    """A live fn, a gate script or field scenario on disk, a diffsend case, or a named removed fn.
+
+    The removed-fn form is the words `since removed` plus at least one backticked
+    unit. The phrase alone verifies nothing.
+    """
+    units = _PROOF_UNIT.findall(proof)
+    if any(n in _fn_names() for n in units):
+        return True
+    if units and _HISTORIC_PROOF.search(proof):
         return True
     if any((ROOT / "scripts" / g).is_file() for g in _PROOF_GATE.findall(proof)):
         return True
+    scenarios = ROOT / "harness/field/scenarios"
+    if any((scenarios / f"{s}.sh").is_file() for s in _PROOF_FIELD.findall(proof)):
+        return True
     return any(f'"{c}"' in _case_text() or f"'{c}'" in _case_text() for c in _PROOF_CASE.findall(proof))
+
+
+@functools.cache
+def _field_names(scenario: str) -> frozenset[str]:
+    """Every dotted name in a field scenario, each `$` expansion a `*`."""
+    path = ROOT / "harness/field/scenarios" / f"{scenario}.sh"
+    text = path.read_text(encoding="utf-8") if path.is_file() else ""
+    return frozenset(_FIELD_VAR.sub("*", n) for n in _FIELD_NAME.findall(text))
+
+
+def _globs_meet(a: str, b: str) -> bool:
+    """Some string matches both globs, `*` matching any run."""
+
+    @functools.cache
+    def meet(i: int, j: int) -> bool:
+        if i == len(a) or j == len(b):
+            return a[i:].strip("*") == "" and b[j:].strip("*") == ""
+        if a[i] == "*":
+            return meet(i + 1, j) or meet(i, j + 1)
+        if b[j] == "*":
+            return meet(i, j + 1) or meet(i + 1, j)
+        return a[i] == b[j] and meet(i + 1, j + 1)
+
+    return meet(0, 0)
+
+
+def _field_cites_bad(proof: str) -> list[str]:
+    """Missing field scenarios, and check ids after one that its scenario does not name."""
+    bad = []
+    for m in _PROOF_FIELD.finditer(proof):
+        names = _field_names(m.group(1))
+        if not names:
+            bad.append(f"field `{m.group(1)}`")
+            continue
+        heads = {n.split(".")[0] for n in names}
+        for cid in _FIELD_ID.findall(re.split(r";", proof[m.end() :], maxsplit=1)[0]):
+            if cid.split(".")[0] in heads and not any(_globs_meet(cid + "*", n) for n in names):
+                bad.append(cid)
+    return bad
+
+
 _CRATE_ALIASES = {
     "kdc": "krb5-kdc",
     "admin": "krb5-admin",
@@ -475,6 +621,66 @@ def recount_ledger_verdicts(text: str) -> dict[str, int]:
     return counts
 
 
+def _ledger_tally_numbers(
+    sources: list[tuple[str, str, str | None]],
+) -> tuple[dict[str, int], dict[str, int]]:
+    """The verdict totals and the per-section row counts `check_ledger_tally` compares."""
+    got = {k: 0 for k in _VERDICT_KEYS}
+    for _name, body, _k in sources:
+        for k, v in recount_ledger_verdicts(body).items():
+            got[k] += v
+    if all(key is None for _name, _body, key in sources):
+        sec = recount_ledger_sections(sources[0][1])
+    else:
+        sec = {k: 0 for k in _LEDGER_KEYS}
+        for _name, body, key in sources:
+            if key is not None:
+                sec[key] += len(_ledger_rows(body))
+    return got, sec
+
+
+def rewrite_tally_header(head: str, verdicts: dict[str, int], sections: dict[str, int]) -> str:
+    """The Counts block with `verdicts` and `sections` substituted into the header's own shape."""
+    if not _HEADER_TOTAL.search(head) or not _HEADER_EXACT.search(head) or not _HEADER_ABSENT.search(head):
+        _die("missing verdict header tally")
+    n = sum(verdicts.values())
+    full = _HEADER_TOTAL.search(head).group(5) is not None
+    if full:
+        total = (
+            f"**{n}** = A1 {sections['A1']} + A2 {sections['A2']} + A3 {sections['A3']}"
+            f" + A4 {sections['A4']} + A5 {sections['A5']} + B1 {sections['B1']}"
+        )
+    else:
+        total = f"**{n}** = A1 {sections['A1']} + A2 {sections['A2']} + A3 {sections['A3']}"
+    exact = (
+        f"exact {verdicts['exact']} · stricter-documented {verdicts['stricter-documented']}"
+        f" · deviation {verdicts['deviation']}"
+    )
+    absent = f"absent {verdicts['absent']} · deferred {verdicts['deferred']}"
+    head, n1 = _HEADER_TOTAL.subn(total, head, count=1)
+    head, n2 = _HEADER_EXACT.subn(exact, head, count=1)
+    head, n3 = _HEADER_ABSENT.subn(absent, head, count=1)
+    if n1 != 1 or n2 != 1 or n3 != 1:
+        _die("missing verdict header tally")
+    return head
+
+
+def fix_ledger_tally(root: pathlib.Path | None = None) -> str:
+    """Rewrite the Counts block from the recount `check_ledger_tally` uses. Return those lines."""
+    sources = ledger_sources(root)
+    hname, head, _key = sources[0]
+    got, sec = _ledger_tally_numbers(sources)
+    new = rewrite_tally_header(head, got, sec)
+    path = (root if root is not None else ROOT) / hname
+    if new != head:
+        path.write_text(new, encoding="utf-8")
+    return "\n".join(
+        line
+        for line in new.splitlines()
+        if line.startswith("**") or line.startswith("exact ") or line.startswith("absent ")
+    )
+
+
 def check_ledger_tally(text: str | None = None, root: pathlib.Path | None = None) -> None:
     """Header verdict counts must equal a recount of the table cells, in total and per section.
 
@@ -483,10 +689,7 @@ def check_ledger_tally(text: str | None = None, root: pathlib.Path | None = None
     """
     sources = [("docs/mit-parity-ledger.md", text, None)] if text is not None else ledger_sources(root)
     hname, head, _key = sources[0]
-    got = {k: 0 for k in _VERDICT_KEYS}
-    for _name, body, _k in sources:
-        for k, v in recount_ledger_verdicts(body).items():
-            got[k] += v
+    got, sec = _ledger_tally_numbers(sources)
     exact = _HEADER_EXACT.search(head)
     absent = _HEADER_ABSENT.search(head)
     if not exact or not absent:
@@ -518,13 +721,6 @@ def check_ledger_tally(text: str | None = None, root: pathlib.Path | None = None
             f"{hname} total {header_n} "
             f"= A1 {a1} + A2 {a2} + A3 {a3} + A4 {a4} + A5 {a5} + B1 {b1} != recount {n}"
         )
-    if all(key is None for _name, _body, key in sources):
-        sec = recount_ledger_sections(head)
-    else:
-        sec = {k: 0 for k in _LEDGER_KEYS}
-        for _name, body, key in sources:
-            if key is not None:
-                sec[key] += len(_ledger_rows(body))
     want_sec = {"A1": a1, "A2": a2, "A3": a3, "A4": a4, "A5": a5, "B1": b1}
     if sec != want_sec:
         _die(
@@ -561,13 +757,12 @@ def _src_index(
     crates = ROOT / "crates" if crates is None else crates
     if not crates.is_dir():
         return by_crate, by_base
-    inv = _hygiene_inventory()
     for crate_dir in sorted(crates.iterdir()):
         src = crate_dir / "src"
         if not crate_dir.is_dir() or not src.is_dir():
             continue
         crate = crate_dir.name
-        src_test = {crate_dir / rel for rel in inv.cfg_test_files_in_pkg(crate_dir)}
+        src_test = {crate_dir / rel for rel in cfg_test_files_in_pkg(crate_dir)}
         for p in src.rglob("*.rs"):
             if p in src_test:
                 continue
@@ -676,8 +871,10 @@ def check_ledger_anchors(text: str | None = None, name: str = "docs/mit-parity-l
     The MIT column must cite a MIT file (or say n/a / absent). An `exact` row's
     e_text status words (backticked, or bare `WORD_WORD` identifiers) must occur
     in the anchored item body; a row with no such word must name a proof unit,
-    diffsend case or gate that exists. A symbol defined more than once in a file
-    needs `:N` inside the intended definition.
+    diffsend case, or gate. A retired gate name still counts; RF-1d re-points
+    the sole-proof rows. A proof that names a unit and says `since removed`
+    counts after that unit is deleted. A symbol defined more than once in a
+    file needs `:N` inside the intended definition.
     """
     checking_file = text is None
     sources = ledger_sources() if text is None else [(name, text, None)]
@@ -716,6 +913,8 @@ def check_ledger_anchors(text: str | None = None, name: str = "docs/mit-parity-l
                     f"(lines {starts}); add :N inside the intended item"
                 )
             bodies.append(spans[0][2])
+        if bad := _field_cites_bad(cols[6]):
+            _die(f"{where} field proof names no recorded check: {', '.join(bad)}")
         if _is_exact_verdict(cols[5]):
             if not saw_symbol:
                 _die(f"{where} exact row has no rust-site anchor")
@@ -727,7 +926,8 @@ def check_ledger_anchors(text: str | None = None, name: str = "docs/mit-parity-l
                 if q not in joined and ident not in joined:
                     _die(f"{where} `{q}` not in rust-site item body")
             n_quote += checked
-            if checked == 0 and not _proof_exists(cols[6]):
+            # A named gate may be retired. RF-1d re-points the sole-proof rows.
+            if checked == 0 and not _proof_exists(cols[6]) and not _PROOF_GATE.search(cols[6]):
                 _die(f"{where} exact row verifies nothing: no e_text status word, no existing proof unit or cell")
     if checking_file and n_quote == 0:
         _die("the ledger executed no quote checks")

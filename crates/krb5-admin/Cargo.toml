@@ -13,27 +13,31 @@ bytes.workspace = true
 chrono.workspace = true
 krb5-asn1.workspace = true
 krb5-cli.workspace = true
+krb5-client.workspace = true
 krb5-config.workspace = true
 getrandom.workspace = true
 krb5-crypto.workspace = true
 krb5-gss.workspace = true
-krb5-kdc.workspace = true
+krb5-kdc = { path = "../krb5-kdc", default-features = false }
 krb5-log.workspace = true
 krb5-protocol.workspace = true
 krb5-types.workspace = true
-nix = { workspace = true, features = ["fs"] }
+nix = { workspace = true, features = ["fs", "process"] }
+signal-hook.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-tracing-subscriber.workspace = true
+tracing-subscriber = { workspace = true, optional = true }
 zeroize.workspace = true
 
 [[bin]]
 name = "krb5-kadmind"
 path = "src/bin/krb5-kadmind.rs"
+required-features = ["daemon"]
 
 [[bin]]
 name = "krb5-kpropd"
 path = "src/bin/krb5-kpropd.rs"
+required-features = ["daemon"]
 
 [[bin]]
 name = "krb5-kprop"
@@ -62,8 +66,93 @@ krb5-testkit.workspace = true
 nix = { workspace = true, features = ["signal"] }
 
 [features]
+default = ["daemon"]
+# The kadmind/kpropd serve loops, signal handlers and the tracing-subscriber dep; off for an
+# embedder with --no-default-features.
+daemon = ["dep:tracing-subscriber", "krb5-kdc/daemon"]
+
 # krb5-kdc's and krb5-gss's test-hooks, plus this crate's own gate and test hooks; off by default.
-test-hooks = ["krb5-kdc/test-hooks", "krb5-gss/test-hooks"]
+test-hooks = ["krb5-kdc/test-hooks", "krb5-gss/test-hooks", "krb5-testkit/test-hooks"]
 
 [lints]
 workspace = true
+
+[[test]]
+name = "acceptor_realm"
+required-features = ["test-hooks"]
+
+[[test]]
+name = "acl_dispatch"
+required-features = ["test-hooks"]
+
+[[test]]
+name = "cli_stdin"
+required-features = ["test-hooks"]
+
+[[test]]
+name = "kadm5_alias"
+required-features = ["test-hooks"]
+
+[[test]]
+name = "kadm5_create"
+required-features = ["test-hooks"]
+
+[[test]]
+name = "kadm5_glob"
+required-features = ["test-hooks"]
+
+[[test]]
+name = "kadm5_modify"
+required-features = ["test-hooks"]
+
+[[test]]
+name = "kadm5_policy"
+required-features = ["test-hooks"]
+
+[[test]]
+name = "kadmind_acceptor"
+required-features = ["test-hooks"]
+
+[[test]]
+name = "kadmind_daemon"
+required-features = ["test-hooks"]
+
+[[test]]
+name = "kadmind_loop"
+required-features = ["test-hooks"]
+
+[[test]]
+name = "kdb_lock_processes"
+required-features = ["test-hooks"]
+
+[[test]]
+name = "keysalt"
+required-features = ["test-hooks"]
+
+[[test]]
+name = "kpasswd"
+required-features = ["test-hooks"]
+
+[[test]]
+name = "kpasswd_addresses"
+required-features = ["test-hooks"]
+
+[[test]]
+name = "kprop_file"
+required-features = ["test-hooks"]
+
+[[test]]
+name = "kpropd_acl"
+required-features = ["test-hooks"]
+
+[[test]]
+name = "ktadd"
+required-features = ["test-hooks"]
+
+[[test]]
+name = "pwqual"
+required-features = ["test-hooks"]
+
+[[test]]
+name = "rpcsec"
+required-features = ["test-hooks"]

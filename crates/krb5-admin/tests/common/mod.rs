@@ -1,17 +1,14 @@
-//! In-process kadm5 RPCSEC_GSS client: one `RPG_INIT`, then `RPG_DATA` calls
-//! with `databody_integ` + checksum.
-//! MIT `xdr_rpc_gss_unwrap_data` (`authgss_prot.c:203-225`): an integrity body is
-//! `databody_integ` then a checksum, a MIC over it that must verify.
+//! In-process kadm5 RPCSEC_GSS client: one `RPG_INIT`, then `RPG_DATA` calls with `databody_integ` + checksum.
 
 #![allow(dead_code)]
 
-use krb5_admin::{Kadm5RpcSession, RpcPeer, encode_kpasswd_req, kadm5_handle_rpc};
+use krb5_admin::{Kadm5RpcSession, Programs, RpcPeer, encode_kpasswd_req, kadm5_handle_rpc};
 use krb5_crypto::{EncryptionType, ProtocolKey};
 use krb5_gss::GssContext;
 use krb5_kdc::testrealm::TEST_REALM;
 use krb5_kdc::{Acl, PrincipalStore, SharedDump, issue_as};
 
-use krb5_protocol::{ReplayCache, as_req_sname, pa_enc_timestamp};
+use krb5_protocol::{AcceptorConfig, ReplayCache, as_req_sname, pa_enc_timestamp};
 use krb5_types::{PrincipalName, ascii};
 
 pub const MSG_CALL: u32 = 0;
@@ -150,9 +147,11 @@ pub fn init_client(
         &as_out.session_key,
         &ascii(TEST_REALM),
         client,
-        true,
+        krb5_gss::GSS_C_MUTUAL | krb5_gss::GSS_C_REPLAY | krb5_gss::GSS_C_SEQUENCE,
         None,
         None,
+        None,
+        0,
     )
     .unwrap();
     let cred = cred(RPG_INIT, 0, svc, &[]);
@@ -163,8 +162,11 @@ pub fn init_client(
     let out = kadm5_handle_rpc(
         krb5_admin::RpcCtx {
             store,
-            acl,
+            authcfg: &krb5_admin::Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: TEST_REALM,
+            conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
+            iprop_resync: None,
         },
         b"hdl",
         &mut sess,
@@ -186,7 +188,6 @@ pub fn init_client(
     let win = take_u32(&out, &mut i);
     let tok = take_opaque(&out, &mut i);
     ctx.process_ap_rep(tok, &as_out.session_key).unwrap();
-    ctx.allow_rpcsec_init_window();
     ctx.verify_mic(&win.to_be_bytes(), verf).unwrap();
     Client {
         ctx,
@@ -244,8 +245,11 @@ pub fn data_call(
     let out = kadm5_handle_rpc(
         krb5_admin::RpcCtx {
             store,
-            acl,
+            authcfg: &krb5_admin::Kadm5AuthConfig::from_acl(acl.clone()),
             expected_realm: TEST_REALM,
+            conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
+            iprop_resync: None,
         },
         b"hdl",
         &mut c.sess,

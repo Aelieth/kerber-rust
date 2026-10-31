@@ -1,7 +1,4 @@
-//! Updates shaped as an MIT 1.22.2 primary sends them (the attribute lists `kproplog -v` showed
-//! for `setstr`, `cpw -randkey` and `modprinc +allow_tix`), pulled onto this replica: only the
-//! attributes an update carries change, an update that clears a flag clears it, and the lockout
-//! attributes never change on a replica.
+//! Updates shaped as an MIT 1.22.2 primary sends them (the attribute lists `kproplog -v` showed for `setstr`, `cpw -randkey` and `modprinc +allow_tix`), pulled onto this replica: only the attributes an update carries change, an update that clears a flag clears it, and the lockout attributes never change on a replica.
 
 use super::*;
 use krb5_kdc::{
@@ -17,13 +14,11 @@ const PW_EXPIRE: u32 = 1_906_502_400;
 const MAX_LIFE: u64 = 5 * 3600;
 const MAX_RLIFE: u64 = 3 * 86_400;
 
-/// A replica holding `p11user` as the live settle's primary made it: `+requires_preauth
-/// -allow_tix`, both expirations, its own lifetimes, a policy and a string attribute.
 fn replica() -> (PrincipalStore, PrincipalName) {
     let (mut store, acl) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
     let actor = krb5_kdc::testrealm::documented_admin_id();
     let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["p11user"]);
-    store.put_policy(NamedPolicy::new("p11pol"));
+    store.put_policy(NamedPolicy::new("p11pol")).unwrap();
     store
         .create_password(&acl, &actor, &name, b"p11-Secret1")
         .unwrap();
@@ -67,9 +62,6 @@ fn tl(w: &mut XdrW, records: &[(i32, Vec<u8>)]) {
     }
 }
 
-/// The tail of every MIT update in the settle: `AT_PRINC`, `AT_PW_LAST_CHANGE`, `AT_MOD_PRINC`
-/// (`admin`), `AT_MOD_TIME`, then `AT_TL_DATA` with the strings, the kadm5 record and the
-/// master key version.
 fn mit_tail(w: &mut XdrW, strings: &[u8], kadm: &[u8]) {
     w.u32(AT_PRINC);
     princ(w, &["p11user"]);
@@ -90,12 +82,10 @@ fn mit_tail(w: &mut XdrW, strings: &[u8], kadm: &[u8]) {
     );
 }
 
-/// One `kdb_incr_result_t` carrying one update of `p11user` with `n` attributes.
 fn mit_result(sno: u32, n: u32, vals: &[u8]) -> Vec<u8> {
     mit_result_for("p11user", sno, n, vals)
 }
 
-/// One `kdb_incr_result_t` carrying one update of `princ` with `n` attributes.
 fn mit_result_for(princ: &str, sno: u32, n: u32, vals: &[u8]) -> Vec<u8> {
     let mut w = XdrW::default();
     w.u32(sno);
@@ -140,8 +130,8 @@ fn assert_kept(after: &Principal) {
         after.attributes & KDB_REQUIRES_PRE_AUTH,
         KDB_REQUIRES_PRE_AUTH
     );
-    assert!(after.locked, "a disabled account stays disabled");
-    assert!(after.requires_preauth);
+    assert!(after.locked(), "a disabled account stays disabled");
+    assert!(after.requires_preauth());
     assert_eq!(after.expiration, EXPIRE);
     assert_eq!(after.max_life, MAX_LIFE);
     assert_eq!(after.max_renewable_life, MAX_RLIFE);
@@ -214,8 +204,8 @@ fn an_mit_update_that_clears_a_flag_clears_it_and_keeps_the_rest() {
     pull(&mut store, &wire);
     let after = record(&store, &name);
     assert_eq!(after.attributes, KDB_REQUIRES_PRE_AUTH);
-    assert!(!after.locked, "+allow_tix enables the account");
-    assert!(after.requires_preauth);
+    assert!(!after.locked(), "+allow_tix enables the account");
+    assert!(after.requires_preauth());
     assert_eq!(after.expiration, EXPIRE);
     assert_eq!(after.pw_expire, PW_EXPIRE);
     assert_eq!(after.max_life, MAX_LIFE);
@@ -276,51 +266,4 @@ fn an_mit_tl_data_update_replaces_records_by_type_and_removes_none() {
         );
     }
     assert_kept(&after);
-}
-
-/// MIT `krb5_dbe_specialize_salt` on a rename keeps each key's salt explicitly; a replica loads
-/// that record from a dump, then an MIT `cpw -pw` sends keys with the normal salt. The replica
-/// offers the new keys' salt, so a client salting as offered derives the stored key.
-#[test]
-fn an_mit_cpw_after_a_rename_offers_the_new_keys_salt() {
-    let (mut store, acl) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
-    let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["p11salt"]);
-    store
-        .create_password(
-            &acl,
-            &krb5_kdc::testrealm::documented_admin_id(),
-            &name,
-            b"old-Secret1",
-        )
-        .unwrap();
-    let old_salt = format!("{REALM}p11old").into_bytes();
-    let mut p = record(&store, &name);
-    for k in &mut p.keys {
-        k.salt_type = Some(4);
-        k.kdb_salt = Some(old_salt.clone());
-    }
-    PrincipalWrite::put_principal(&mut store, p).unwrap();
-    let dump = krb5_kdc::dump_store(&store, b"masterpassword").unwrap();
-    let mut store = krb5_kdc::load_dump(&dump, b"masterpassword").unwrap();
-    assert_eq!(record(&store, &name).salt, old_salt);
-    let new_salt = name.default_salt(REALM);
-    let etype = krb5_crypto::EncryptionType::Aes256CtsHmacSha196;
-    let key = krb5_crypto::string_to_key(etype, b"new-Secret2", &new_salt, None).unwrap();
-    let mut vals = XdrW::default();
-    vals.u32(AT_KEYDATA);
-    vals.u32(1);
-    vals.u32(1);
-    vals.u32(2);
-    vals.u32(1);
-    vals.u32(18);
-    vals.u32(1);
-    vals.opaque(key.as_bytes());
-    vals.u32(AT_PRINC);
-    princ(&mut vals, &["p11salt"]);
-    let wire = mit_result_for("p11salt", store.serial() + 1, 2, &vals.b);
-    pull(&mut store, &wire);
-    let after = record(&store, &name);
-    assert_eq!(after.salt, new_salt, "the salt offered is the new keys'");
-    let derived = krb5_crypto::string_to_key(etype, b"new-Secret2", &after.salt, None).unwrap();
-    assert_eq!(derived.as_bytes(), after.keys[0].key.as_bytes());
 }

@@ -1,18 +1,12 @@
-//! A profile the context init refuses stops each tool before anything else, with that tool's MIT
-//! line.
+//! A profile the context init refuses stops each tool before anything else, with that tool's MIT line.
 
 use std::process::{Command, Stdio};
 
 use krb5_testkit::scratch_dir;
 
-/// Live MIT 1.22.2: a relation with no value whose next line is no `{` refuses the profile, and
-/// each tool stops with its own line for the failed init and exit 1.
-/// MIT `os_init_paths` (`init_os_ctx.c:403-408`): a missing `{` is `KRB5_CONFIG_BADFORMAT`.
-/// MIT `main` (`ovsec_kadmd.c:437-442`): kadmind prints `while initializing context, aborting`
-/// MIT `kadmin_startup` (`kadmin.c:309-313`): kadmin.local prints `while initializing krb5 library`
-/// MIT `main` (`kprop.c:101-105`): kprop prints `while initializing krb5`
-/// MIT `parse_args` (`kpropd.c:1056-1062`): kpropd prints `while initializing krb5`
-/// MIT `main` (`ktutil.c:49-53`): ktutil prints `while initializing krb5`
+/// Live MIT 1.22.2: a relation with no value whose next line is no `{` refuses the profile, and each tool stops with its own line for the failed init and exit 1.
+// MIT: `os_init_paths` (init_os_ctx.c:403-408)
+/// a missing `{` is `KRB5_CONFIG_BADFORMAT`.
 #[test]
 fn a_refused_profile_stops_the_tool_with_its_mit_line() {
     let dir = scratch_dir("profile-refused");

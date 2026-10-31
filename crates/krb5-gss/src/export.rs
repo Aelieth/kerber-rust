@@ -1,14 +1,11 @@
-//! Exported context tokens (`export_sec_context.c`,
-//! `import_sec_context.c`, `ser_sctx.c`): a Rust-private encoding,
-//! not MIT's `ser_sctx` wire.
-
 use krb5_crypto::{EncryptionType, ProtocolKey};
 
+use super::seqstate::SeqState;
 use super::{Error, GssContext};
 
 const EXPORT_MAGIC: &[u8; 4] = b"K5G1";
 
-const EXPORT_VERSION: u8 = 1;
+const EXPORT_VERSION: u8 = 2;
 
 fn write_key(out: &mut Vec<u8>, key: &ProtocolKey) -> Result<(), Error> {
     out.extend_from_slice(&key.etype().to_iana().to_be_bytes());
@@ -54,30 +51,20 @@ fn read_opt_str(token: &[u8], i: &mut usize) -> Result<Option<String>, Error> {
 }
 
 impl GssContext {
-    /// Serialize context state (private Rust↔Rust format, not MIT `kg_ctx_externalize`).
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Truncated`] when the receive window holds more than `u16::MAX` sequence numbers,
-    /// or the client name, delegated name, or SPNEGO mechanism list exceeds `u16::MAX` bytes.
     pub fn export_sec_context(&self) -> Result<Vec<u8>, Error> {
         let mut o = Vec::new();
         o.extend_from_slice(EXPORT_MAGIC);
         o.push(EXPORT_VERSION);
         o.push(u8::from(self.initiator));
-        o.push(u8::from(self.rpcsec_init_window));
         o.extend_from_slice(&self.gss_flags.to_le_bytes());
         o.extend_from_slice(&self.lifetime_end.to_le_bytes());
+        o.extend_from_slice(&self.acceptor_skew.to_le_bytes());
         o.extend_from_slice(&self.send_seq.to_be_bytes());
-        o.extend_from_slice(&self.recv_seq.to_be_bytes());
-        o.push(u8::from(self.recv_seen));
-        let mut win: Vec<u64> = self.recv_window.iter().copied().collect();
-        win.sort_unstable();
-        let nwin = u16::try_from(win.len()).map_err(|_| Error::Truncated)?;
-        o.extend_from_slice(&nwin.to_be_bytes());
-        for s in win {
-            o.extend_from_slice(&s.to_be_bytes());
-        }
+        let r = &self.recv;
+        o.push(u8::from(r.do_replay) | u8::from(r.do_sequence) << 1 | u8::from(r.wide) << 2);
+        o.extend_from_slice(&r.base.to_be_bytes());
+        o.extend_from_slice(&r.next.to_be_bytes());
+        o.extend_from_slice(&r.recvmap.to_be_bytes());
         write_key(&mut o, &self.session)?;
         match &self.acceptor_subkey {
             Some(k) => {
@@ -95,13 +82,6 @@ impl GssContext {
         Ok(o)
     }
 
-    /// Inverse of [`Self::export_sec_context`].
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Truncated`] when the token lacks the `K5G1` magic or version 1, runs short, lists
-    /// more than 64 window entries, holds a non-UTF-8 name, or has trailing bytes;
-    /// [`Error::Inner`] when a key's etype is unknown or its length does not match the etype.
     pub fn import_sec_context(token: &[u8]) -> Result<Self, Error> {
         let mut i = 0usize;
         if token.get(i..i + 4) != Some(EXPORT_MAGIC.as_slice()) {
@@ -115,22 +95,23 @@ impl GssContext {
         }
         let initiator = *token.get(i).ok_or(Error::Truncated)? != 0;
         i += 1;
-        let rpcsec_init_window = *token.get(i).ok_or(Error::Truncated)? != 0;
-        i += 1;
         let gss_flags = u32::from_le_bytes(take_arr(token, &mut i)?);
         let lifetime_end = u32::from_le_bytes(take_arr(token, &mut i)?);
+        let acceptor_skew = i32::from_le_bytes(take_arr(token, &mut i)?);
         let send_seq = u64::from_be_bytes(take_arr(token, &mut i)?);
-        let recv_seq = u64::from_be_bytes(take_arr(token, &mut i)?);
-        let recv_seen = *token.get(i).ok_or(Error::Truncated)? != 0;
+        let checks = *token.get(i).ok_or(Error::Truncated)?;
         i += 1;
-        let nwin = usize::from(u16::from_be_bytes(take_arr(token, &mut i)?));
-        if nwin > 64 {
+        if checks > 7 {
             return Err(Error::Truncated);
         }
-        let mut recv_window = std::collections::HashSet::new();
-        for _ in 0..nwin {
-            recv_window.insert(u64::from_be_bytes(take_arr(token, &mut i)?));
-        }
+        let recv = SeqState {
+            do_replay: checks & 1 != 0,
+            do_sequence: checks & 2 != 0,
+            wide: checks & 4 != 0,
+            base: u64::from_be_bytes(take_arr(token, &mut i)?),
+            next: u64::from_be_bytes(take_arr(token, &mut i)?),
+            recvmap: u64::from_be_bytes(take_arr(token, &mut i)?),
+        };
         let session = read_key(token, &mut i)?;
         let has_sub = *token.get(i).ok_or(Error::Truncated)?;
         i += 1;
@@ -151,11 +132,8 @@ impl GssContext {
             session,
             acceptor_subkey,
             send_seq,
-            recv_seq,
-            recv_seen,
-            recv_window,
+            recv,
             initiator,
-            rpcsec_init_window,
             client,
             delegated,
             spnego_mech_list: if sp.is_empty() {
@@ -164,6 +142,7 @@ impl GssContext {
                 Some(sp.to_vec())
             },
             lifetime_end,
+            acceptor_skew,
             gss_flags,
             ticket_initial: false,
             acceptor: None,

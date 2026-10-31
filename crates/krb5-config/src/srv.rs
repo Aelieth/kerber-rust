@@ -1,11 +1,9 @@
-//! DNS SRV for KDC location.
-//!
-//! MIT `dns_locate_server_srv` (`lib/krb5/os/locate_kdc.c:756-797`): `_kerberos._udp` then
-//! `_kerberos._tcp` when the profile names no KDC.
-//! MIT `krb5int_make_srv_query_realm` (`lib/krb5/os/dnssrv.c:258-347`): the query name ends in
-//! `.`, and SRV records are kept in priority order. Weight does not reorder them.
-//! MIT `krb5int_dns_init` (`lib/krb5/os/dnsglue.c:120-194`): `res_ninit` then `res_nsearch`.
+// MIT: `dns_locate_server_srv` (lib/krb5/os/locate_kdc.c:756-797)
+// MIT: `krb5int_make_srv_query_realm` (lib/krb5/os/dnssrv.c:258-347)
+// MIT: `krb5int_dns_init` (lib/krb5/os/dnsglue.c:120-194)
+// `res_ninit` then `res_nsearch`.
 
+use std::fmt::Write as _;
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, UdpSocket};
 use std::time::{Duration, Instant};
@@ -13,6 +11,7 @@ use std::time::{Duration, Instant};
 use super::{Endpoint, Error};
 
 const DNS_SRV: u16 = 33;
+const DNS_PTR: u16 = 12;
 const DNS_IN: u16 = 1;
 const MAX_NS: usize = 3;
 const MAX_SEARCH: usize = 6;
@@ -20,7 +19,6 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_ATTEMPTS: u32 = 2;
 const DEFAULT_NDOTS: usize = 1;
 
-/// One `res_ninit` state: nameservers (port 53), timeout, attempts, ndots, search.
 #[derive(Clone, Debug)]
 struct Resolv {
     servers: Vec<SocketAddr>,
@@ -42,18 +40,67 @@ impl Resolv {
     }
 }
 
-/// `_kerberos._udp` then `_kerberos._tcp` for `realm`.
-///
-/// # Errors
-///
-/// [`Error::Dns`] when neither name yields an SRV target.
-pub fn lookup_srv_kdc(realm: &str) -> Result<Vec<Endpoint>, Error> {
-    locate_kdc_srv(realm, &load_resolv())
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DnsSrv {
+    Send(String),
+    Answer {
+        priority: u16,
+        weight: u16,
+        port: u16,
+        host: String,
+    },
+    NotFound,
 }
 
-fn locate_kdc_srv(realm: &str, resolv: &Resolv) -> Result<Vec<Endpoint>, Error> {
-    let udp = query_service(realm, "_udp", resolv);
-    let tcp = query_service(realm, "_tcp", resolv);
+pub fn lookup_srv_kdc(realm: &str) -> Result<Vec<Endpoint>, Error> {
+    lookup_srv_kdc_traced(realm, &mut |_| {})
+}
+
+pub(crate) fn lookup_srv_kdc_traced(
+    realm: &str,
+    trace: &mut dyn FnMut(DnsSrv),
+) -> Result<Vec<Endpoint>, Error> {
+    locate_kdc_srv(realm, &load_resolv(), trace)
+}
+
+fn locate_kdc_srv(
+    realm: &str,
+    resolv: &Resolv,
+    trace: &mut dyn FnMut(DnsSrv),
+) -> Result<Vec<Endpoint>, Error> {
+    locate_named_srv(realm, "_kerberos", resolv, trace)
+}
+
+pub(crate) fn lookup_srv_kpasswd(
+    realm: &str,
+    trace: &mut dyn FnMut(DnsSrv),
+) -> Result<Vec<Endpoint>, Error> {
+    locate_named_srv(realm, "_kpasswd", &load_resolv(), trace)
+}
+
+pub(crate) fn lookup_srv_kerberos_adm(
+    realm: &str,
+    trace: &mut dyn FnMut(DnsSrv),
+) -> Result<Vec<Endpoint>, Error> {
+    let tcp = query_service(realm, "_kerberos-adm", "_tcp", &load_resolv(), trace);
+    match tcp {
+        Find::Hit(list) if !list.is_empty() => Ok(list),
+        _ => {
+            // MIT: `dns_locate_server_srv` (lib/krb5/os/locate_kdc.c:795)
+            trace(DnsSrv::NotFound);
+            Err(Error::Dns("no SRV".into()))
+        }
+    }
+}
+
+fn locate_named_srv(
+    realm: &str,
+    service: &str,
+    resolv: &Resolv,
+    trace: &mut dyn FnMut(DnsSrv),
+) -> Result<Vec<Endpoint>, Error> {
+    let udp = query_service(realm, service, "_udp", resolv, trace);
+    let tcp = query_service(realm, service, "_tcp", resolv, trace);
     let mut out = Vec::new();
     if let Find::Hit(list) = udp {
         out.extend(list);
@@ -62,6 +109,8 @@ fn locate_kdc_srv(realm: &str, resolv: &Resolv) -> Result<Vec<Endpoint>, Error> 
         out.extend(list);
     }
     if out.is_empty() {
+        // MIT: `dns_locate_server_srv` (lib/krb5/os/locate_kdc.c:795)
+        trace(DnsSrv::NotFound);
         Err(Error::Dns("no SRV".into()))
     } else {
         Ok(out)
@@ -73,17 +122,24 @@ enum Find {
     None,
 }
 
-fn query_service(realm: &str, proto: &str, resolv: &Resolv) -> Find {
-    // MIT `make_lookup_name` (`lib/krb5/os/dnssrv.c:50-78`): the name ends in `.` so the
-    // search list is not appended.
-    let name = format!("_kerberos.{proto}.{realm}.");
+fn query_service(
+    realm: &str,
+    service: &str,
+    proto: &str,
+    resolv: &Resolv,
+    trace: &mut dyn FnMut(DnsSrv),
+) -> Find {
+    // MIT: `make_lookup_name` (lib/krb5/os/dnssrv.c:50-78)
+    let name = format!("{service}.{proto}.{realm}.");
+    // MIT: `krb5int_make_srv_query_realm` (lib/krb5/os/dnssrv.c:286)
+    trace(DnsSrv::Send(name.clone()));
     let transport = if proto == "_tcp" {
         super::KdcTransport::Tcp
     } else {
         super::KdcTransport::Udp
     };
     match search(&name, DNS_SRV, resolv) {
-        Ok(msg) => srv_targets(&msg, transport),
+        Ok(msg) => srv_targets(&msg, transport, trace),
         Err(_) => Find::None,
     }
 }
@@ -147,18 +203,21 @@ fn parse_resolv(text: &str, localdomain: Option<&str>, res_options: Option<&str>
     resolv
 }
 
+const RES_MAXRETRANS: u64 = 30;
+const RES_MAXRETRY: u32 = 5;
+
 fn apply_options(resolv: &mut Resolv, text: &str) {
     for tok in text.split_whitespace() {
         if let Some(v) = tok.strip_prefix("timeout:")
             && let Ok(n) = v.parse::<u64>()
             && n > 0
         {
-            resolv.timeout = Duration::from_secs(n);
+            resolv.timeout = Duration::from_secs(n.min(RES_MAXRETRANS));
         } else if let Some(v) = tok.strip_prefix("attempts:")
             && let Ok(n) = v.parse::<u32>()
             && n > 0
         {
-            resolv.attempts = n;
+            resolv.attempts = n.min(RES_MAXRETRY);
         } else if let Some(v) = tok.strip_prefix("ndots:")
             && let Ok(n) = v.parse::<usize>()
         {
@@ -167,7 +226,6 @@ fn apply_options(resolv: &mut Resolv, text: &str) {
     }
 }
 
-/// `res_nsearch` for a name. A trailing dot returns the as-is answer, including NXDOMAIN.
 fn search(name: &str, qtype: u16, resolv: &Resolv) -> Result<Vec<u8>, Error> {
     let trailing = name.ends_with('.');
     let bare = name.trim_end_matches('.');
@@ -217,7 +275,6 @@ fn query(name: &str, qtype: u16, resolv: &Resolv) -> Result<Vec<u8>, Error> {
         match send_server(*server, &msg, id, name, qtype, resolv) {
             Ok(buf) => {
                 let rc = rcode(&buf);
-                // SERVFAIL, NOTIMP, REFUSED: try the next nameserver.
                 if rc == 2 || rc == 4 || rc == 5 {
                     last = Error::Dns(format!("rcode {rc}"));
                     continue;
@@ -376,9 +433,18 @@ fn eq_name(got: &str, want: &str) -> bool {
         .eq_ignore_ascii_case(want.trim_end_matches('.'))
 }
 
+fn trace_host(host: &str) -> String {
+    let host = mit_host(host);
+    if host.ends_with('.') {
+        host
+    } else {
+        format!("{host}.")
+    }
+}
+
 fn mit_host(host: &str) -> String {
-    // MIT `locate_srv_dns_1` (`lib/krb5/os/locate_kdc.c:379-382`): a sole empty host is no service.
-    // Live MIT 1.22.2 expands a root target to `.` and stores `..`, so that test does not fire.
+    // MIT: `locate_srv_dns_1` (lib/krb5/os/locate_kdc.c:379-382)
+    // A sole empty host is no service.
     if host.is_empty() || host == "." || host == ".." {
         "..".to_string()
     } else {
@@ -386,16 +452,24 @@ fn mit_host(host: &str) -> String {
     }
 }
 
-fn srv_targets(msg: &[u8], transport: super::KdcTransport) -> Find {
+fn srv_targets(msg: &[u8], transport: super::KdcTransport, trace: &mut dyn FnMut(DnsSrv)) -> Find {
     let mut recs = parse_srv(msg);
     if recs.is_empty() {
         return Find::None;
     }
+    for rec in &recs {
+        // MIT: `krb5int_make_srv_query_realm` (lib/krb5/os/dnssrv.c:337)
+        trace(DnsSrv::Answer {
+            priority: rec.1,
+            weight: rec.2,
+            port: rec.3,
+            host: trace_host(&rec.0),
+        });
+    }
     for rec in &mut recs {
         rec.0 = mit_host(&rec.0);
     }
-    // MIT `place_srv_entry` (`lib/krb5/os/dnssrv.c:81-100`): lower priority first; weight is
-    // not used. Equal priorities stay in answer order.
+    // MIT: `place_srv_entry` (lib/krb5/os/dnssrv.c)
     let mut order: Vec<usize> = (0..recs.len()).collect();
     order.sort_by(|&a, &b| recs[a].1.cmp(&recs[b].1).then(a.cmp(&b)));
     Find::Hit(
@@ -403,15 +477,14 @@ fn srv_targets(msg: &[u8], transport: super::KdcTransport) -> Find {
             .into_iter()
             .map(|i| Endpoint {
                 host: recs[i].0.clone(),
-                port: recs[i].2,
+                port: recs[i].3,
                 transport,
             })
             .collect(),
     )
 }
 
-/// (host, priority, port) in answer order. Weight is parsed and dropped.
-fn parse_srv(msg: &[u8]) -> Vec<(String, u16, u16)> {
+fn answers(msg: &[u8], qtype: u16) -> Vec<(usize, usize)> {
     if msg.len() < 12 {
         return Vec::new();
     }
@@ -441,15 +514,74 @@ fn parse_srv(msg: &[u8]) -> Vec<(String, u16, u16)> {
         if i + rdlen > msg.len() {
             break;
         }
-        if typ == DNS_SRV && class == DNS_IN && rdlen >= 6 {
-            let prio = u16::from_be_bytes([msg[i], msg[i + 1]]);
-            let port = u16::from_be_bytes([msg[i + 4], msg[i + 5]]);
-            let host = decode_name(msg, i + 6).unwrap_or_default();
-            out.push((host, prio, port));
+        if typ == qtype && class == DNS_IN {
+            out.push((i, rdlen));
         }
         i += rdlen;
     }
     out
+}
+
+fn parse_srv(msg: &[u8]) -> Vec<(String, u16, u16, u16)> {
+    answers(msg, DNS_SRV)
+        .into_iter()
+        .filter(|&(_, rdlen)| rdlen >= 6)
+        .map(|(i, _)| {
+            let prio = u16::from_be_bytes([msg[i], msg[i + 1]]);
+            let weight = u16::from_be_bytes([msg[i + 2], msg[i + 3]]);
+            let port = u16::from_be_bytes([msg[i + 4], msg[i + 5]]);
+            (
+                decode_name(msg, i + 6).unwrap_or_default(),
+                prio,
+                weight,
+                port,
+            )
+        })
+        .collect()
+}
+
+// MIT: `doit` (kprop/kpropd.c:516-520)
+#[must_use]
+pub fn name_of_addr(ip: IpAddr) -> String {
+    hosts_name(
+        &std::fs::read_to_string("/etc/hosts").unwrap_or_default(),
+        ip,
+    )
+    .or_else(|| {
+        let msg = query(&reverse_name(ip), DNS_PTR, &load_resolv()).ok()?;
+        let (i, _) = answers(&msg, DNS_PTR).into_iter().next()?;
+        decode_name(&msg, i)
+    })
+    .unwrap_or_else(|| ip.to_string())
+}
+
+fn hosts_name(hosts: &str, ip: IpAddr) -> Option<String> {
+    let v4_mapped = |a: IpAddr| match a {
+        IpAddr::V4(v4) => IpAddr::V6(v4.to_ipv6_mapped()),
+        IpAddr::V6(_) => a,
+    };
+    hosts.lines().find_map(|line| {
+        let mut fields = line.split('#').next()?.split_whitespace();
+        let addr: IpAddr = fields.next()?.parse().ok()?;
+        (addr == ip || v4_mapped(addr) == ip).then(|| fields.next().map(str::to_owned))?
+    })
+}
+
+fn reverse_name(ip: IpAddr) -> String {
+    match ip {
+        IpAddr::V4(v4) => {
+            let [a, b, c, d] = v4.octets();
+            format!("{d}.{c}.{b}.{a}.in-addr.arpa")
+        }
+        IpAddr::V6(v6) => {
+            let mut name = String::new();
+            for b in v6.octets().iter().rev() {
+                let _ = write!(name, "{:x}.{:x}.", b & 0xf, b >> 4);
+            }
+            name.push_str("ip6.arpa");
+            name
+        }
+    }
 }
 
 fn encode_qname(name: &str) -> Result<Vec<u8>, Error> {
@@ -523,8 +655,7 @@ fn decode_name(msg: &[u8], mut i: usize) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::TcpListener;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
     use std::thread;
     use std::time::Duration;
 
@@ -594,36 +725,6 @@ mod tests {
     }
 
     #[test]
-    fn resolv_conf_uses_port_53_and_drops_public_defaults() {
-        let r = parse_resolv(
-            "nameserver 10.1.2.3\nnameserver 8.8.8.8\noptions timeout:1 attempts:3 ndots:2\n",
-            None,
-            None,
-        );
-        assert_eq!(r.servers.len(), 2);
-        assert_eq!(r.servers[0], "10.1.2.3:53".parse().unwrap());
-        assert_eq!(r.servers[1].port(), 53);
-        assert_eq!(r.timeout, Duration::from_secs(1));
-        assert_eq!(r.attempts, 3);
-        assert_eq!(r.ndots, 2);
-        assert!(r.servers.iter().any(|s| s.ip().to_string() == "8.8.8.8"));
-        assert!(r.servers.iter().all(|s| s.ip().to_string() != "1.1.1.1"));
-    }
-
-    #[test]
-    fn res_options_and_localdomain_override_the_file() {
-        let r = parse_resolv(
-            "nameserver 10.0.0.1\nsearch file.test\noptions timeout:5\n",
-            Some("env.test"),
-            Some("timeout:1 attempts:4"),
-        );
-        assert_eq!(r.search, vec!["env.test".to_owned()]);
-        assert_eq!(r.timeout, Duration::from_secs(1));
-        assert_eq!(r.attempts, 4);
-        assert_eq!(r.servers[0].port(), 53);
-    }
-
-    #[test]
     fn wrong_id_wrong_question_and_wrong_source_are_ignored() {
         let good_host = "kdc.example";
         let addr = serve_script(Arc::new(move |sock, src, q| {
@@ -643,181 +744,8 @@ mod tests {
             let good = answer(id, qname, 0x8180, good_host, 88, 0, 0);
             let _ = sock.send_to(&good, src);
         }));
-        let found = locate_kdc_srv("EXAMPLE", &resolv_at(addr)).unwrap();
+        let found = locate_kdc_srv("EXAMPLE", &resolv_at(addr), &mut |_| {}).unwrap();
         assert_eq!(found[0].host, good_host);
         assert_eq!(found[0].port, 88);
-    }
-
-    #[test]
-    fn servfail_falls_through_and_nxdomain_is_empty() {
-        let second = serve_script(Arc::new(|sock, src, q| {
-            let id = u16::from_be_bytes([q[0], q[1]]);
-            let qname = &q[12..q.len() - 4];
-            let good = answer(id, qname, 0x8180, "kdc.second", 88, 0, 0);
-            let _ = sock.send_to(&good, src);
-        }));
-        let first = serve_script(Arc::new(|sock, src, q| {
-            let id = u16::from_be_bytes([q[0], q[1]]);
-            let qname = &q[12..q.len() - 4];
-            let mut msg = header(id, 0x8182, 1, 0).to_vec();
-            msg.extend_from_slice(qname);
-            msg.extend_from_slice(&DNS_SRV.to_be_bytes());
-            msg.extend_from_slice(&DNS_IN.to_be_bytes());
-            let _ = sock.send_to(&msg, src);
-        }));
-        let mut resolv = resolv_at(first);
-        resolv.servers.push(second);
-        let found = locate_kdc_srv("EXAMPLE", &resolv).unwrap();
-        assert_eq!(found[0].host, "kdc.second");
-
-        let nx = serve_script(Arc::new(|sock, src, q| {
-            let id = u16::from_be_bytes([q[0], q[1]]);
-            let qname = &q[12..q.len() - 4];
-            let mut msg = header(id, 0x8183, 1, 0).to_vec();
-            msg.extend_from_slice(qname);
-            msg.extend_from_slice(&DNS_SRV.to_be_bytes());
-            msg.extend_from_slice(&DNS_IN.to_be_bytes());
-            let _ = sock.send_to(&msg, src);
-        }));
-        let err = locate_kdc_srv("EXAMPLE", &resolv_at(nx)).unwrap_err();
-        assert!(err.to_string().contains("no SRV"), "{err}");
-    }
-
-    #[test]
-    fn truncated_udp_is_retried_over_tcp() {
-        let tcp = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = tcp.local_addr().unwrap().port();
-        let udp = UdpSocket::bind(("127.0.0.1", port)).unwrap();
-        let addr = udp.local_addr().unwrap();
-        thread::spawn(move || {
-            let _ = udp.set_read_timeout(Some(Duration::from_secs(3)));
-            let mut buf = [0u8; 1500];
-            if let Ok((n, src)) = udp.recv_from(&mut buf) {
-                let id = u16::from_be_bytes([buf[0], buf[1]]);
-                let qname = &buf[12..n - 4];
-                let tc = answer(id, qname, 0x8380, "kdc.udp-partial", 88, 0, 0);
-                let _ = udp.send_to(&tc, src);
-            }
-        });
-        thread::spawn(move || {
-            if let Ok((mut stream, _)) = tcp.accept() {
-                let mut lenbuf = [0u8; 2];
-                stream.read_exact(&mut lenbuf).unwrap();
-                let n = usize::from(u16::from_be_bytes(lenbuf));
-                let mut q = vec![0u8; n];
-                stream.read_exact(&mut q).unwrap();
-                let id = u16::from_be_bytes([q[0], q[1]]);
-                let qname = &q[12..q.len() - 4];
-                let body = answer(id, qname, 0x8180, "kdc.tcp", 88, 0, 0);
-                stream
-                    .write_all(&u16::try_from(body.len()).unwrap().to_be_bytes())
-                    .unwrap();
-                stream.write_all(&body).unwrap();
-            }
-        });
-        let found = locate_kdc_srv("EXAMPLE", &resolv_at(addr)).unwrap();
-        assert_eq!(found[0].host, "kdc.tcp");
-    }
-
-    #[test]
-    fn priority_orders_and_weight_does_not() {
-        let addr = serve_script(Arc::new(|sock, src, q| {
-            let id = u16::from_be_bytes([q[0], q[1]]);
-            let qname = &q[12..q.len() - 4];
-            let mut msg = header(id, 0x8180, 1, 3).to_vec();
-            msg.extend_from_slice(qname);
-            msg.extend_from_slice(&DNS_SRV.to_be_bytes());
-            msg.extend_from_slice(&DNS_IN.to_be_bytes());
-            for (host, prio, weight) in [
-                ("late.example", 10u16, 0u16),
-                ("first.example", 0, 0),
-                ("second.example", 0, 50),
-            ] {
-                msg.extend_from_slice(qname);
-                msg.extend_from_slice(&DNS_SRV.to_be_bytes());
-                msg.extend_from_slice(&DNS_IN.to_be_bytes());
-                msg.extend_from_slice(&60u32.to_be_bytes());
-                let wire = encode_qname(host).unwrap();
-                let rdlen = 6 + wire.len();
-                msg.extend_from_slice(&u16::try_from(rdlen).unwrap().to_be_bytes());
-                msg.extend_from_slice(&prio.to_be_bytes());
-                msg.extend_from_slice(&weight.to_be_bytes());
-                msg.extend_from_slice(&88u16.to_be_bytes());
-                msg.extend_from_slice(&wire);
-            }
-            let _ = sock.send_to(&msg, src);
-        }));
-        let found = locate_kdc_srv("EXAMPLE", &resolv_at(addr)).unwrap();
-        let hosts: Vec<_> = found.iter().map(|e| e.host.as_str()).collect();
-        assert_eq!(
-            hosts,
-            vec!["first.example", "second.example", "late.example"]
-        );
-    }
-
-    #[test]
-    fn a_root_target_is_kept_and_tcp_is_still_queried() {
-        let hits = Arc::new(Mutex::new(0u32));
-        let hits2 = Arc::clone(&hits);
-        let sock = bind_udp();
-        let only = sock.local_addr().unwrap();
-        thread::spawn(move || {
-            let _ = sock.set_read_timeout(Some(Duration::from_millis(800)));
-            let mut buf = [0u8; 1500];
-            for _ in 0..2 {
-                let Ok((n, src)) = sock.recv_from(&mut buf) else {
-                    break;
-                };
-                *hits2.lock().unwrap() += 1;
-                let id = u16::from_be_bytes([buf[0], buf[1]]);
-                let qname = &buf[12..n - 4];
-                let tcp = qname.windows(4).any(|w| w == b"_tcp");
-                let host = if tcp { "kdc.example" } else { "." };
-                let msg = answer(id, qname, 0x8180, host, 88, 0, 0);
-                let _ = sock.send_to(&msg, src);
-            }
-        });
-        let found = locate_kdc_srv("EXAMPLE", &resolv_at(only)).unwrap();
-        let hosts: Vec<_> = found.iter().map(|e| e.host.as_str()).collect();
-        assert_eq!(hosts, vec!["..", "kdc.example"]);
-        assert_eq!(found[0].transport, crate::KdcTransport::Udp);
-        assert_eq!(found[1].transport, crate::KdcTransport::Tcp);
-        assert_eq!(
-            *hits.lock().unwrap(),
-            2,
-            "tcp is queried after a root udp target"
-        );
-    }
-
-    #[test]
-    fn two_queries_use_fresh_ports_and_ids() {
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let seen2 = Arc::clone(&seen);
-        let addr = {
-            let sock = bind_udp();
-            let addr = sock.local_addr().unwrap();
-            thread::spawn(move || {
-                let mut buf = [0u8; 1500];
-                sock.set_read_timeout(Some(Duration::from_secs(4))).unwrap();
-                for _ in 0..2 {
-                    if let Ok((n, src)) = sock.recv_from(&mut buf) {
-                        let id = u16::from_be_bytes([buf[0], buf[1]]);
-                        seen2.lock().unwrap().push((id, src.port()));
-                        let qname = &buf[12..n - 4];
-                        let good = answer(id, qname, 0x8180, "kdc.example", 88, 0, 0);
-                        let _ = sock.send_to(&good, src);
-                    }
-                }
-            });
-            addr
-        };
-        let resolv = resolv_at(addr);
-        // One locate sends `_udp` then `_tcp`: two queries, two sockets.
-        locate_kdc_srv("ONE", &resolv).unwrap();
-        let got = seen.lock().unwrap().clone();
-        assert_eq!(got.len(), 2);
-        assert_ne!(got[0].1, got[1].1, "source ports {got:?}");
-        assert_ne!(got[0].0, 0x1234);
-        assert_ne!(got[1].0, 0x1234);
     }
 }

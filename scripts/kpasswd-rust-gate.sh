@@ -8,7 +8,7 @@ cd "$ROOT"
 . "$ROOT/scripts/lib/gate-common.sh"
 . "$ROOT/scripts/lib/kadmin-q.sh"
 . "$ROOT/scripts/lib/kpasswd-common.sh"
-need_bins krb5-kdc krb5-kadmind krb5-kpasswd krb5-kadmin-local krb5-kinit
+need_bins krb5-kdc krb5-kadmind krb5-kadmin-local krb5-kinit
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-kpasswd-gate"
@@ -41,13 +41,13 @@ shell_container
 
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kadmind" "$NAME":/tmp/krb5-kadmind
-docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kpasswd" "$NAME":/tmp/krb5-kpasswd
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kadmin-local" "$NAME":/tmp/krb5-kadmin-local
 docker cp "$ROOT/scripts/oracle/kpasswd-tgs-client.c" "$NAME":/tmp/kpasswd-tgs-client.c
-docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kadmind /tmp/krb5-kpasswd /tmp/krb5-kadmin-local
+docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kadmind /tmp/krb5-kadmin-local
 mit_oracle_cc "$NAME" /tmp/kpasswd-tgs-client /tmp/kpasswd-tgs-client.c krb5
 
 docker exec -d \
+    -e RUST_LOG=krb5_kdc=debug \
     -e KRB5_TEST_USER_PASSWORD=userpassword \
     -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
     -e KRB5_KDC_DB=/tmp/principal \
@@ -125,7 +125,7 @@ for run in 1 2; do
     fi
     echo "$KVNO" | grep -F 'KDC policy rejects request while getting credentials for kadmin/admin@KERBER.TEST'
 done
-docker exec "$NAME" grep -F '"code":12,"e_text":"TGT BASED NOT ALLOWED"' /tmp/kdc.log
+docker exec "$NAME" grep -F 'TGT BASED NOT ALLOWED' /tmp/kdc.log | grep -E '"code":12[,}]'
 
 echo "==== MIT kpasswd once ===="
 set +e
@@ -169,24 +169,6 @@ KLIST2="$(docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf "$NAME" klist)"
 echo "$KLIST2"
 echo "$KLIST2" | grep -q 'user@KERBER.TEST'
 
-echo "==== Rust kpasswd vs Rust kadmind ===="
-docker exec -e KRB5_PASSWORD=kpasswd-two -e KRB5_NEW_PASSWORD=rust-kpw \
-    "$NAME" /tmp/krb5-kpasswd user@KERBER.TEST
-docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
-    "$NAME" sh -c 'printf "rust-kpw\n" | kinit user@KERBER.TEST'
-KLIST3="$(docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf "$NAME" klist)"
-echo "$KLIST3"
-echo "$KLIST3" | grep -q 'user@KERBER.TEST'
-set +e
-docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
-    "$NAME" sh -c 'printf "kpasswd-two\n" | kinit user@KERBER.TEST'
-old2=$?
-set -e
-if [ "$old2" -eq 0 ]; then
-    log "kpasswd.gate" "error" ',"error":"rust kpasswd old password still works"'
-    exit 1
-fi
-
 KADMIN_Q_CONF=/tmp/kpasswd-krb5.conf
 
 echo "==== getprinc kadmin/changepw and kadmin/admin ===="
@@ -212,7 +194,7 @@ echo "$KTN" | grep -F 'extract-keys'
 echo "==== TGS kpasswd self-change is INITIAL_FLAG_NEEDED (Rust) ===="
 kadmin_q_ok kadmin_q 'modprinc +allow_tgs_req kadmin/changepw'
 docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
-    "$NAME" sh -c 'printf "rust-kpw\n" | kinit user@KERBER.TEST'
+    "$NAME" sh -c 'printf "kpasswd-two\n" | kinit user@KERBER.TEST'
 nlog="$(docker exec "$NAME" sh -c 'wc -l < /tmp/kadmind.log' | tr -d '[:space:]')"
 set +e
 D2R="$(docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
@@ -232,7 +214,7 @@ if docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
 fi
 echo "==== TGS kpasswd NT-UNKNOWN targname still INITIAL (Rust) ===="
 docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
-    "$NAME" sh -c 'printf "rust-kpw\n" | kinit user@KERBER.TEST'
+    "$NAME" sh -c 'printf "kpasswd-two\n" | kinit user@KERBER.TEST'
 nlog="$(docker exec "$NAME" sh -c 'wc -l < /tmp/kadmind.log' | tr -d '[:space:]')"
 set +e
 D2NT="$(docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf -e KPASSWD_TARGNAME_TYPE=0 \
@@ -248,7 +230,7 @@ docker exec "$NAME" sh -c "tail -n +$((nlog + 1)) /tmp/kadmind.log" | grep -F 's
 if docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
     "$NAME" sh -c 'printf "e1-should-fail\n" | kinit user@KERBER.TEST'; then
     echo "NT-UNKNOWN targname kpasswd changed the password" >&2
-    kadmin_q_ok kadmin_q 'cpw -pw rust-kpw user'
+    kadmin_q_ok kadmin_q 'cpw -pw kpasswd-two user'
     exit 1
 fi
 echo "==== TGS kpasswd other principal is ACCESSDENIED (Rust) ===="
@@ -256,7 +238,7 @@ EXTRA_ADD="$(kadmin_q 'addprinc -pw extra-secret extra')"
 echo "$EXTRA_ADD"
 echo "$EXTRA_ADD" | grep -F 'Principal "extra@KERBER.TEST" created'
 docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
-    "$NAME" sh -c 'printf "rust-kpw\n" | kinit user@KERBER.TEST'
+    "$NAME" sh -c 'printf "kpasswd-two\n" | kinit user@KERBER.TEST'
 set +e
 D2O="$(docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf -e KPASSWD_TARGET=extra@KERBER.TEST \
     "$NAME" /tmp/kpasswd-tgs-client FILE:/tmp/krb5cc_kpasswd KERBER.TEST other-should-fail)"
@@ -274,7 +256,7 @@ kadmin_q_ok kadmin_q 'addpol -minlife 1h minlife'
 kadmin_q_ok kadmin_q 'modprinc -policy minlife user'
 set +e
 KPMIN="$(docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf "$NAME" \
-    sh -c 'printf "rust-kpw\nrust-kpw2\nrust-kpw2\n" | kpasswd user@KERBER.TEST' 2>&1)"
+    sh -c 'printf "kpasswd-two\nkpasswd-three\nkpasswd-three\n" | kpasswd user@KERBER.TEST' 2>&1)"
 kpmin_rc=$?
 set -e
 echo "$KPMIN"
@@ -286,11 +268,11 @@ if [ "$kpmin_rc" -eq 0 ]; then
 fi
 echo "==== kpasswd min_life is result_code=4 (Rust) ===="
 docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf -e KRB5CCNAME=FILE:/tmp/krb5cc_kpw4 \
-    "$NAME" sh -c 'printf "rust-kpw\n" | kinit user@KERBER.TEST'
+    "$NAME" sh -c 'printf "kpasswd-two\n" | kinit user@KERBER.TEST'
 set +e
 KPMIN4="$(docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
-    -e KRB5CCNAME=FILE:/tmp/krb5cc_kpw4 -e KPASSWD_AS_PASSWORD=rust-kpw \
-    "$NAME" /tmp/kpasswd-tgs-client FILE:/tmp/krb5cc_kpw4 KERBER.TEST rust-kpw2)"
+    -e KRB5CCNAME=FILE:/tmp/krb5cc_kpw4 -e KPASSWD_AS_PASSWORD=kpasswd-two \
+    "$NAME" /tmp/kpasswd-tgs-client FILE:/tmp/krb5cc_kpw4 KERBER.TEST kpasswd-three)"
 kpmin4_rc=$?
 set -e
 echo "$KPMIN4"
@@ -304,7 +286,7 @@ kadmin_q_ok kadmin_q 'modprinc -policy short8 user'
 nlog="$(docker exec "$NAME" sh -c 'wc -l < /tmp/kadmind.log' | tr -d '[:space:]')"
 set +e
 POL="$(docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf "$NAME" \
-    sh -c 'printf "rust-kpw\nabc\nabc\n" | kpasswd user@KERBER.TEST' 2>&1)"
+    sh -c 'printf "kpasswd-two\nabc\nabc\n" | kpasswd user@KERBER.TEST' 2>&1)"
 pol_rc=$?
 set -e
 echo "$POL"
@@ -318,10 +300,10 @@ echo "$POL" | grep -qi 'Password change rejected'
 echo "$POL" | grep -F 'New password is too short.'
 echo "==== kpasswd policy is result_code=4 (Rust) ===="
 docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf -e KRB5CCNAME=FILE:/tmp/krb5cc_kpw4 \
-    "$NAME" sh -c 'printf "rust-kpw\n" | kinit user@KERBER.TEST'
+    "$NAME" sh -c 'printf "kpasswd-two\n" | kinit user@KERBER.TEST'
 set +e
 POL4="$(docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
-    -e KRB5CCNAME=FILE:/tmp/krb5cc_kpw4 -e KPASSWD_AS_PASSWORD=rust-kpw \
+    -e KRB5CCNAME=FILE:/tmp/krb5cc_kpw4 -e KPASSWD_AS_PASSWORD=kpasswd-two \
     "$NAME" /tmp/kpasswd-tgs-client FILE:/tmp/krb5cc_kpw4 KERBER.TEST abc)"
 pol4_rc=$?
 set -e

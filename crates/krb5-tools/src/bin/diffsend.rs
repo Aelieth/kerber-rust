@@ -1,54 +1,8 @@
-//! Dual-send driver: encode each AS/TGS case once, `exchange_on_tcp` to both KDCs.
-//!
-//! Usage: diffsend \<rust-host:port\> \<mit-host:port\> \[out-dir\]
-//!
-//! Env: `KRB5_PASSWORD`, `KERBER_PAUSER_PASSWORD`, `KERBER_DIFF_REALM`,
-//! `KERBER_KRBTGT_KEYTAB`, `KERBER_HOST_KEYTAB`.
-//!
-//! The 123 cases, in send order (`DIFFSEND_CASES` in `scripts/ci-policy.py` pins the same
-//! set):
-//! `garbage-pdu`, `unknown-cname`, `etype-nosupp`, `as-session-enctype`, `wrong-realm`,
-//! `pauser-no-preauth`, `as-needpreauth-hints-unpermitted`, `skewed-timestamp`, `as-needchange`,
-//! `as-invalid-opts`, `as-validate-before-preauth`, `as-locked-out`,
-//! `as-optimistic-encts-wrong-etype`,
-//! `unknown-sname`, `as-success`, `as-retransmit`, `as-request-anonymous`, `tgs-success`,
-//! `tgs-not-a-tgt`, `tgt-expired`, `tgt-nyv`, `tgt-nyv-no-starttime`, `fast-armor-no-subkey`,
-//! `armor-ap-req-as-pa-tgs-req`, `tgs-ad-fx-armor-authenticator`, `as-bad-msg-type`,
-//! `as-bad-pvno`, `tgs-bad-msg-type`, `as-service-not-allowed`, `tgs-ap-options`,
-//! `tgs-header-kvno-zero`, `as-hw-preauth`, `as-spake-round1`, `u2u-2nd-ticket-unknown-server`,
-//! `u2u-2nd-ticket-bad-etype`, `u2u-2nd-ticket-corrupt`, `tgs-pac-client-mismatch`,
-//! `tgs-pac-corrupt-before-sname`, `tgs-pac-request-false`, `tgs-from-pacless-tgt`,
-//! `tgs-renew-service-ticket`, `tgs-proxy-krbtgt`, `tgs-canonicalize-renew`,
-//! `tgs-expired-vs-unknown-sname`, `s4u2self-no-pac`, `s4u2self-pac-client-mismatch`,
-//! `pa-s4u-x509-user-bad-checksum`, `pa-s4u-x509-user-nonce`, `pa-for-user-only`,
-//! `pa-s4u-x509-user-empty`, `pa-for-user-undecodable`, `pa-s4u-x509-user`,
-//! `s4u2proxy-no-2nd-tkt`, `s4u2proxy-not-forwardable`, `s4u2proxy-u2u-combo`,
-//! `s4u2proxy-tgs-target`, `s4u2proxy-no-header-pac`, `s4u2proxy-header-pac`,
-//! `s4u2proxy-no-stkt-pac`, `s4u2proxy-evidence-mismatch`, `s4u2proxy-local-stkt-pac`,
-//! `u2u-no-2nd-tkt`, `u2u-2nd-ticket-not-tgs`, `u2u-2nd-ticket-mismatch`,
-//! `u2u-2nd-ticket-bad-pac`, `u2u-bad-etype`, `u2u-success`, `tgs-addr-mismatch`,
-//! `tgs-forwarded-addresses`, `u2u-2nd-ticket-foreign-realm`, `s4u2self-renew-options`,
-//! `pa-s4u-x509-user-truncated`, `s4u2self-krbtgt-other`, `tgs-locked-pac-mismatch`,
-//! `u2u-dup-skey-tgt-based`, `tgs-expired-addr-mismatch`, `tgs-expired-badmatch`,
-//! `u2u-2nd-ticket-kvno-miss`, `u2u-2nd-ticket-disallow-svr`, `s4u2self-cert-only`,
-//! `tgs-pac-server-cksum-wrong-enctype`, `u2u-2nd-ticket-pac-wrong-enctype`,
-//! `u2u-success-offered`, `tgs-forwarded-tgt-addresses`, `tgs-forwarded-on-non-f-tgt`,
-//! `tgs-proxy-on-non-p-tgt`, `tgs-postdate-on-non-postdatable`, `tgs-postdated-is-invalid`,
-//! `tgs-validate-invalid-non-renewable`, `tgs-no-preauth-flag`, `tgs-hw-preauth-flag`,
-//! `tgs-nyv-inside-skew`, `tgs-body-authdata`, `tgs-ad-mandatory-for-kdc`,
-//! `tgs-body-authdata-kdc-issued-stripped`, `tgs-body-authdata-subkey`,
-//! `tgs-body-authdata-session-ku5`, `tgs-tgt-and-or-kept`, `tgs-truncated-cammac`,
-//! `ec-outside-fast`, `tgs-till-in-past`, `tgs-service-expired-require-auth`,
-//! `tgs-postdated-from`, `tgs-renew-header-end-before-start`, `tgs-rbcd-pac-options`,
-//! `as-anonymous-unsigned-authpack-named-client`, `as-fast-hide-error-client`,
-//! `tgs-fast-hide-client`, `pkinit-stale-freshness`, `tgs-referral-no-dot`,
-//! `tgs-alternate-tgs-hierarchical`, `tgs-renew-postdated-from`, `as-req-malformed-addresses`,
-//! `as-req-trailing-body-field`, `tgs-req-nonce-int32-min`, `tgs-authenticator-malformed-subkey`,
-//! `tgs-authenticator-trailing-field`, `tgs-authenticator-crealm-octets`, `as-spake-unknown-choice`,
-//! `tgs-authenticator-cusec-out-of-range`, `as-enc-timestamp-pausec-out-of-range`,
-//! `tgs-authenticator-etype-mismatch`, `as-fast-armored-data-etype-mismatch`.
-
 #![forbid(unsafe_code)]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "a program reads its profile and environment when it starts"
+)]
 
 use std::env;
 use std::fmt::Write as _;
@@ -68,7 +22,7 @@ use krb5_protocol::{
     attach_fast_with_options, build_fast_armor, compare_krb_error, compare_stable_rep,
     decode_enc_kdc_rep, exchange_on_tcp, pa_enc_timestamp, pa_enc_timestamp_at, pa_for_user,
     pa_pac_options, pa_pk_as_req_signed, pa_pk_as_req_unsigned, pa_s4u_x509_user, pa_spake_support,
-    tgs_req, tgs_req_ex,
+    stable_krb_error, tgs_req, tgs_req_ex,
 };
 use krb5_types::cammac::AdKdcIssued;
 use krb5_types::pac::{PAC_SERVER_CHECKSUM, Pac, PacIdentity, RpcSid};
@@ -80,7 +34,6 @@ use krb5_types::{
 };
 use sha1::{Digest, Sha1};
 
-/// The decode sweeps' DER editing (`der_breaks.rs`).
 #[allow(dead_code)]
 mod der {
     include!("../der_breaks.rs");
@@ -95,6 +48,7 @@ struct Cfg {
     pauser_pw: Vec<u8>,
     krbtgt: Option<Keytab>,
     host: Option<Keytab>,
+    b17lab: bool,
 }
 
 fn parse_addr(s: &str) -> KdcAddr {
@@ -139,6 +93,61 @@ fn send_both(cfg: &Cfg, case: &str, req: &[u8]) -> Result<(Vec<u8>, Vec<u8>), St
 
 fn expect_error(cfg: &Cfg, case: &str, req: &[u8], code: i32) -> Result<(), String> {
     expect_error_client(cfg, case, req, code, true)
+}
+
+fn expect_error_no_edata(cfg: &Cfg, case: &str, req: &[u8], code: i32) -> Result<(), String> {
+    let (rust, mit) = send_both(cfg, case, req)?;
+    if rust.first() != Some(&0x7e) {
+        return Err(format!(
+            "{case}: rust tag {:02x} want 0x7e",
+            rust.first().unwrap_or(&0)
+        ));
+    }
+    if mit.first() != Some(&0x7e) {
+        return Err(format!(
+            "{case}: mit tag {:02x} want 0x7e",
+            mit.first().unwrap_or(&0)
+        ));
+    }
+    let re: KrbError = decode(&rust).map_err(|e| format!("{case} rust decode: {e}"))?;
+    let me: KrbError = decode(&mit).map_err(|e| format!("{case} mit decode: {e}"))?;
+    if re.error_code != code {
+        return Err(format!(
+            "{case}: rust error_code {} want {code}",
+            re.error_code
+        ));
+    }
+    if stable_krb_error(&re) != stable_krb_error(&me) {
+        return Err(format!("{case}: krb-error stable mismatch"));
+    }
+    if re.e_data.is_some() || me.e_data.is_some() {
+        return Err(format!("{case}: e_data present"));
+    }
+    let cn = |e: &KrbError| e.cname.as_ref().map(PrincipalName::components_joined);
+    let cr = |e: &KrbError| {
+        e.crealm
+            .as_ref()
+            .map(|r| String::from_utf8_lossy(r.as_bytes()).into_owned())
+    };
+    if cn(&re) != cn(&me) || cr(&re) != cr(&me) {
+        return Err(format!(
+            "{case}: client rust=({:?},{:?}) mit=({:?},{:?})",
+            cr(&re),
+            cn(&re),
+            cr(&me),
+            cn(&me)
+        ));
+    }
+    let rust_text = re
+        .e_text
+        .as_ref()
+        .and_then(|t| std::str::from_utf8(t.as_bytes()).ok())
+        .unwrap_or("");
+    println!(
+        r#"{{"event":"diffsend","case":"{case}","outcome":"ok","error_code":{},"e_text":"{rust_text}","e_data":"absent","rust_tag":"0x7e","mit_tag":"0x7e"}}"#,
+        re.error_code
+    );
+    Ok(())
 }
 
 fn expect_hidden_client_error(cfg: &Cfg, case: &str, req: &[u8], code: i32) -> Result<(), String> {
@@ -250,9 +259,8 @@ fn expect_hidden_tgs_rep(cfg: &Cfg, case: &str, req: &[u8]) -> Result<(), String
     Ok(())
 }
 
-// AS errors echo the requested client (prepare_error_as); a TGS error uses the
-// decrypted header ticket's client. tgs-not-a-tgt decrypts a service header
-// and compares cname (check_client=true).
+// AS errors echo the client. A TGS error uses the header client.
+// tgs-not-a-tgt compares cname (check_client).
 fn expect_error_client(
     cfg: &Cfg,
     case: &str,
@@ -428,16 +436,27 @@ fn expect_drop(cfg: &Cfg, case: &str, req: &[u8]) -> Result<(), String> {
 
 fn expect_tgs_rep(cfg: &Cfg, case: &str, req: &[u8]) -> Result<(), String> {
     let (rust, mit) = send_both(cfg, case, req)?;
-    if rust.first() != Some(&0x6d) {
+    let names = |leg: &str, raw: &[u8]| -> Result<[String; 6], String> {
+        if raw.first() != Some(&0x6d) {
+            return Err(format!(
+                "{case}: {leg} tag {:02x} want 0x6d",
+                raw.first().unwrap_or(&0)
+            ));
+        }
+        let TgsRep(rep) = decode(raw).map_err(|e| format!("{case} {leg}: {e}"))?;
+        Ok([
+            String::from_utf8_lossy(rep.crealm.as_bytes()).into_owned(),
+            rep.cname.components_joined(),
+            String::from_utf8_lossy(rep.ticket.realm.as_bytes()).into_owned(),
+            rep.ticket.sname.components_joined(),
+            rep.cname.name_type.to_string(),
+            rep.ticket.sname.name_type.to_string(),
+        ])
+    };
+    let (r, m) = (names("rust", &rust)?, names("mit", &mit)?);
+    if r != m {
         return Err(format!(
-            "{case}: rust tag {:02x} want 0x6d",
-            rust.first().unwrap_or(&0)
-        ));
-    }
-    if mit.first() != Some(&0x6d) {
-        return Err(format!(
-            "{case}: mit tag {:02x} want 0x6d",
-            mit.first().unwrap_or(&0)
+            "{case}: crealm, cname, ticket realm, sname, name types rust={r:?} mit={m:?}"
         ));
     }
     println!(
@@ -633,11 +652,7 @@ fn decrypt_tgs_enc(
     Ok((rep, enc, tkt, enc_tag))
 }
 
-/// U2U TGS-REP: reply enc-part is the header session; the issued ticket is
-/// the second-ticket session.
-/// MIT `tgs_issue_ticket` (`do_tgs_req.c:997-1000`): with ENC_TKT_IN_SKEY the ticket is
-/// encrypted in the second ticket's session key.
-/// MIT `tgs_issue_ticket` (`do_tgs_req.c:1056-1057`): a U2U ticket's enc-part kvno is 0.
+// MIT: `tgs_issue_ticket` (kdc/do_tgs_req.c:953-1139)
 fn decrypt_u2u(
     raw: &[u8],
     header_session: &ProtocolKey,
@@ -674,9 +689,8 @@ fn decrypt_u2u(
     Ok((enc, rep.ticket, tkt))
 }
 
-// MIT `dispatch` (`dispatch.c:114-140`): the kdc/replay.c lookaside answers the identical
-// request resent from the cache, so the second reply is byte-for-byte the first on both
-// legs. Without the cache a fresh AS-REP carries a new random session key.
+// A cached AS-REQ is resent, so the second reply matches. No cache: a new session key.
+// MIT: `dispatch` (kdc/dispatch.c:89-175)
 fn expect_retransmit(cfg: &Cfg, case: &str, req: &[u8]) -> Result<(), String> {
     let (r1, m1) = send_both(cfg, case, req)?;
     let r2 = exchange_on_tcp(&cfg.rust, req).map_err(|e| format!("{case} rust#2: {e}"))?;
@@ -809,8 +823,6 @@ fn mint_tgt_caddr(
     seal_ticket(krbtgt, kvno, realm, sname, &part)
 }
 
-/// `mint_tgt` with explicit `authtime` / optional `starttime` / `endtime`
-/// (the KDC-side `krb5int_validate_times` starttime-absent oracle).
 #[expect(clippy::too_many_arguments, reason = "diffsend ticket forge helper")]
 fn mint_tgt_times(
     krbtgt: &ProtocolKey,
@@ -1019,7 +1031,6 @@ fn mint_signed_header_ex(
     seal_ticket(key, kvno, realm, sname, &part)
 }
 
-/// Service ticket: server checksum under `server`, privsvr under `kdc`.
 #[expect(clippy::too_many_arguments, reason = "diffsend ticket forge helper")]
 fn mint_signed_stkt(
     server: &ProtocolKey,
@@ -1169,6 +1180,8 @@ fn load_cfg() -> Result<Cfg, String> {
         .next()
         .ok_or_else(|| "missing mit-host:port".to_string())?;
     let out = PathBuf::from(args.next().unwrap_or_else(|| "/tmp/diff-corpus".into()));
+    // A 4th positional `b17lab` runs only the lab-only provider-signature-failure cases.
+    let b17lab = args.next().as_deref() == Some("b17lab");
     let realm = env::var("KERBER_DIFF_REALM").unwrap_or_else(|_| "KERBER.TEST".into());
     let user_pw = env::var("KRB5_PASSWORD")
         .unwrap_or_else(|_| "userpassword".into())
@@ -1194,6 +1207,7 @@ fn load_cfg() -> Result<Cfg, String> {
         pauser_pw,
         krbtgt,
         host,
+        b17lab,
     })
 }
 
@@ -1201,6 +1215,9 @@ fn run() -> Result<(), String> {
     let cfg = load_cfg()?;
     let realm = cfg.realm.as_str();
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
+    if cfg.b17lab {
+        return b17_lab_cases(&cfg, realm, &user);
+    }
     let pauser = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["pauser"]);
     let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "testhost.kerber.test"]);
     let etypes: Vec<i32> = EncryptionType::preferred()
@@ -1257,10 +1274,8 @@ fn run() -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     expect_error(&cfg, "pauser-no-preauth", &req, err::PREAUTH_REQUIRED)?;
 
-    // hintu is keyed only aes128; the request lists only aes256.
-    // MIT `have_client_keys` (`kdc_preauth.c:442-442`): with no client key of a requested
-    // enctype it is false → 25 with no PA 2, no ETYPE-INFO2 (`add_etype_info` skips a NULL
-    // client key), and no PA 151 (`spake_edata` omits when client_keyblock is NULL).
+    // hintu aes128-only vs aes256: no keys, so 25, no PA 2, ETYPE-INFO2 or PA 151.
+    // MIT: `have_client_keys` (kdc/kdc_preauth.c:434-447)
     let hintu = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["hintu"]);
     let req = encode(
         &as_req_sname(
@@ -1292,21 +1307,17 @@ fn run() -> Result<(), String> {
     .map_err(|e| e.to_string())?;
     expect_error(&cfg, "skewed-timestamp", &req, err::SKEW)?;
 
-    // pwchgu has REQUIRES_PWCHANGE and no preauth; a bare AS-REQ is
-    // validate_as_request "REQUIRED PWCHANGE" / KEY_EXP (23) on both legs, with
-    // its own status distinct from a lapsed pw_expire's "CLIENT KEY EXPIRED".
+    // pwchgu REQUIRES_PWCHANGE, no preauth: KEY_EXP (23) "REQUIRED PWCHANGE",
+    // not "CLIENT KEY EXPIRED".
     let pwchgu = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["pwchgu"]);
     let req = encode(&as_req(pwchgu, realm, 0x1000_000f, None).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
     expect_error(&cfg, "as-needchange", &req, err::KEY_EXPIRED)?;
 
-    // MIT `AS_INVALID_OPTIONS`: a TGS-only option (RENEW) in an AS-REQ is
-    // INVALID AS OPTIONS / BADOPTION (13) on both legs.
-    // MIT `NON_TGT_OPTION` (`kdc_util.h:456-457`): RENEW is one of the TGS-only options.
-    // MIT `NO_REFERRAL_OPTION` (`kdc_util.h:460-460`): every `NON_TGT_OPTION` plus
-    // ENC_TKT_IN_SKEY.
-    // MIT `AS_INVALID_OPTIONS` (`kdc_util.h:463-463`): every `NO_REFERRAL_OPTION` plus
-    // CNAME_IN_ADDL_TKT.
+    // RENEW is BADOPTION 13. Also ENC_TKT_IN_SKEY and CNAME_IN_ADDL_TKT.
+    // MIT: `AS_INVALID_OPTIONS` (kdc/kdc_util.h:463-463)
+    // MIT: `NON_TGT_OPTION` (kdc/kdc_util.h:456-457)
+    // MIT: `NO_REFERRAL_OPTION` (kdc/kdc_util.h:460-460)
     let mut inv = as_req(user.clone(), realm, 0x1000_0010, None).map_err(|e| e.to_string())?;
     inv.0.req_body.kdc_options = inv
         .0
@@ -1316,27 +1327,21 @@ fn run() -> Result<(), String> {
     let req = encode(&inv).map_err(|e| e.to_string())?;
     expect_error(&cfg, "as-invalid-opts", &req, err::BADOPTION)?;
 
-    // pwprau requires preauth AND needs a password change.
-    // MIT `process_as_req` (`do_as_req.c:630-630`): validate_as_request runs before
-    // check_padata (:758), so a bare AS-REQ is "REQUIRED PWCHANGE" / KEY_EXP (23), not
-    // "NEEDED_PREAUTH" (25), on both legs.
+    // pwprau needs preauth and a password change: KEY_EXP (23),
+    // not "NEEDED_PREAUTH" (25). check_padata.
     let pwprau = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["pwprau"]);
     let req = encode(&as_req(pwprau, realm, 0x1000_0011, None).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
     expect_error(&cfg, "as-validate-before-preauth", &req, err::KEY_EXPIRED)?;
 
-    // lockedu is past its policy's maxfailure 1 with no lockout expiry.
-    // MIT `krb5_db2_check_policy_as` (`plugins/kdb/db2/kdb_db2.c:1539-1550`): the failcount
-    // lockout is CLIENT_REVOKED (18) with the DB module's status "LOCKED_OUT", the last
-    // check of validate_as_request, before preauth.
+    // lockedu past maxfailure 1, no expiry: CLIENT_REVOKED (18) "LOCKED_OUT" before preauth.
     let lockedu = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["lockedu"]);
     let req = encode(&as_req(lockedu, realm, 0x1000_0097, None).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
     expect_error(&cfg, "as-locked-out", &req, err::CLIENT_REVOKED)?;
 
-    // PA-ENC-TIMESTAMP declaring des3 (etype 16), which pauser has no key for:
-    // enc_ts_verify krb5_dbe_search_enctype misses -> KRB5_KDB_NO_MATCHING_KEY
-    // -> KDC_ERR_PREAUTH_FAILED (24) on both legs.
+    // PA-ENC-TIMESTAMP etype 16, absent for pauser:
+    // KRB5_KDB_NO_MATCHING_KEY, PREAUTH_FAILED (24).
     let ed = EncryptedData {
         etype: 16,
         kvno: None,
@@ -1386,8 +1391,7 @@ fn run() -> Result<(), String> {
     .map_err(|e| e.to_string())?;
     let _ = expect_as_ok(&cfg, "as-success", &as_req_ok, &user)?;
 
-    // A distinct preauth AS-REQ (fresh nonce) sent twice: the lookaside resends
-    // the first reply, so the retransmit is identical on both legs.
+    // A fresh-nonce preauth AS-REQ sent twice: the lookaside resends the first reply.
     let pa_rt = pa_enc_timestamp(&ukey).map_err(|e| e.to_string())?;
     let as_req_rt = encode(
         &as_req(user.clone(), realm, 0x1000_0012, Some(vec![pa_rt])).map_err(|e| e.to_string())?,
@@ -1395,13 +1399,9 @@ fn run() -> Result<(), String> {
     .map_err(|e| e.to_string())?;
     expect_retransmit(&cfg, "as-retransmit", &as_req_rt)?;
 
-    // MIT `process_as_req` (`do_as_req.c:717-724`): REQUEST_ANONYMOUS with a named
-    // (non-anonymous) client is KRB5KDC_ERR_BADOPTION "VALIDATE_ANONYMOUS_PRINCIPAL",
-    // reached only after preauth.
-    // MIT `validate_as_request` (`kdc_util.c:727-727`): tests AS_INVALID_OPTIONS only and
-    // lets the bit through, unlike the TGS-only options in as-invalid-opts.
-    // Both legs send code 13 with the same wire status; refusing the bit early as
-    // "INVALID AS OPTIONS" would send an e_text MIT does not.
+    // Non-anonymous VALIDATE is BADOPTION "VALIDATE_ANONYMOUS_PRINCIPAL" after preauth.
+    // Early "INVALID AS OPTIONS" is an e_text MIT does not send.
+    // MIT: `validate_as_request` (kdc/kdc_util.c:715-804)
     let pa_anon = pa_enc_timestamp(&ukey).map_err(|e| e.to_string())?;
     let mut anon =
         as_req(user.clone(), realm, 0x1000_0013, Some(vec![pa_anon])).map_err(|e| e.to_string())?;
@@ -1412,6 +1412,14 @@ fn run() -> Result<(), String> {
         .with_bit(krb5_types::flag_bit::ANONYMOUS, true);
     let req = encode(&anon).map_err(|e| e.to_string())?;
     expect_error(&cfg, "as-request-anonymous", &req, err::BADOPTION)?;
+
+    // Bit 17 is outside AS_INVALID_OPTIONS, so a bare pauser AS-REQ stays code 25.
+    // MIT: `validate_as_request` (kdc/kdc_util.c:715-804)
+    let mut reserved =
+        as_req(pauser.clone(), realm, 0x1000_00ad, None).map_err(|e| e.to_string())?;
+    reserved.0.req_body.kdc_options = reserved.0.req_body.kdc_options.with_bit(17, true);
+    let req = encode(&reserved).map_err(|e| e.to_string())?;
+    expect_error(&cfg, "as-reserved-option-bit", &req, err::PREAUTH_REQUIRED)?;
 
     let tkt_kt = cfg
         .krbtgt
@@ -1551,11 +1559,9 @@ fn run() -> Result<(), String> {
         true,
     )?;
 
-    // MIT `krb5int_validate_times` (`valid_times.c:44-51`): judges a header ticket with no
-    // starttime by its authtime.
-    // MIT `rd_req_decoded_opt` (`rd_req_dec.c:627-627`): runs that check on the path
-    // kdc_rd_ap_req → krb5_rd_req_decoded_anyflag. A forged TGT with a future authtime and
-    // starttime absent is 33 PROCESS_TGS on both KDCs.
+    // Forged TGT, future authtime, no starttime: PROCESS_TGS (33).
+    // MIT: `krb5int_validate_times` (lib/krb5/krb/valid_times.c:35-57)
+    // MIT: `rd_req_decoded_opt` (lib/krb5/krb/rd_req_dec.c:472-787)
     let nyv_no_start = mint_tgt_times(
         tkt_key,
         tkt_kvno,
@@ -1586,9 +1592,45 @@ fn run() -> Result<(), String> {
         true,
     )?;
 
-    // An AS FAST armor AP-REQ without an authenticator subkey.
-    // MIT `armor_ap_request` (`fast_util.c:70-77`): no subkey → 12 FIND_FAST. MIT clients
-    // always send a subkey, so this forge is the both-legs oracle.
+    let local = EncTicketPart {
+        flags: TicketFlags::initial_preauth(),
+        key: EncryptionKey {
+            keytype: sess.etype().to_iana(),
+            keyvalue: sess.as_bytes().to_vec().into(),
+        },
+        crealm: krb5_types::try_ascii(realm).map_err(|e| e.to_string())?,
+        cname: user.clone(),
+        transited: TransitedEncoding {
+            tr_type: 1,
+            contents: b"OTHER.TEST".to_vec().into(),
+        },
+        authtime: now.clone(),
+        starttime: Some(now.clone()),
+        endtime: now.add_hours(10).unwrap_or_else(|_| now.clone()),
+        renew_till: None,
+        caddr: None,
+        authorization_data: None,
+    };
+    let transited_tgs = tgs_req(
+        seal_ticket(tkt_key, tkt_kvno, realm, &krbtgt_sname, &local)?,
+        &sess,
+        realm,
+        &user,
+        host.clone(),
+        realm,
+        0x1000_0329,
+    )
+    .map_err(|e| e.to_string())?;
+    expect_error_client(
+        &cfg,
+        "tgs-transited-local",
+        &encode(&transited_tgs).map_err(|e| e.to_string())?,
+        err::GENERIC,
+        true,
+    )?;
+
+    // FAST armor AP-REQ with no subkey. MIT always sends one; this forge is the oracle.
+    // MIT: `armor_ap_request` (kdc/fast_util.c:35-90)
     let armor_tkt = mint_tgt(
         tkt_key,
         tkt_kvno,
@@ -1620,9 +1662,8 @@ fn run() -> Result<(), String> {
         err::POLICY,
     )?;
 
-    // A header ticket or authenticator carrying AD-FX-ARMOR 71.
-    // MIT `kdc_process_tgs_req` (`kdc_util.c:217-229`): "ticket valid only as FAST armor" →
-    // 12 PROCESS_TGS. Nothing in 1.22.2 emits 71.
+    // AD-FX-ARMOR 71 is PROCESS_TGS (12); 1.22.2 never emits it.
+    // MIT: `kdc_process_tgs_req` (kdc/kdc_util.c:142-280)
     let inner_ad = encode(&vec![AuthorizationDataValue {
         ad_type: pa::AD_FX_ARMOR,
         ad_data: Vec::<u8>::new().into(),
@@ -1662,6 +1703,47 @@ fn run() -> Result<(), String> {
         &encode(&fx_tgs).map_err(|e| e.to_string())?,
         err::POLICY,
         true,
+    )?;
+    let fx_junk_tgt = mint_tgt_ad(
+        tkt_key,
+        tkt_kvno,
+        &user,
+        realm,
+        &krbtgt_sname,
+        &sess,
+        (
+            now.clone(),
+            now.add_hours(10).unwrap_or_else(|_| now.clone()),
+        ),
+        TicketFlags::initial_preauth(),
+        Some(vec![
+            AuthorizationDataValue {
+                ad_type: pa::AD_FX_ARMOR,
+                ad_data: Vec::<u8>::new().into(),
+            },
+            AuthorizationDataValue {
+                ad_type: pa::AD_IF_RELEVANT,
+                ad_data: vec![0x04, 0x00].into(),
+            },
+        ]),
+    )?;
+    expect_error(
+        &cfg,
+        "tgs-ad-fx-armor-then-junk",
+        &encode(
+            &tgs_req(
+                fx_junk_tgt,
+                &sess,
+                realm,
+                &user,
+                host.clone(),
+                realm,
+                0x1000_00b2,
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::GENERIC,
     )?;
 
     let auth_tgt = mint_tgt(
@@ -1716,17 +1798,7 @@ fn run() -> Result<(), String> {
         true,
     )?;
 
-    // AS/TGS entry validation (and kdc_rd_ap_req kvno 0).
-    // MIT `process_as_req` (`do_as_req.c:513-517`): an AS request of another msg-type is
-    // KRB5_BADMSGTYPE.
-    // MIT `dispatch` (`dispatch.c:145-158`): a packet that is neither TGS-REQ nor AS-REQ is
-    // MSG_TYPE, and a server realm the KDC does not serve is WRONG_REALM.
-    // MIT `gather_tgs_req_info` (`do_tgs_req.c:609-610`): a TGS request of another msg-type
-    // is KRB5_BADMSGTYPE.
-    // MIT `kdc_process_tgs_req` (`kdc_util.c:179-184`): a TGS AP-REQ with USE_SESSION_KEY or
-    // MUTUAL_REQUIRED is POLICY.
-    // MIT `validate_as_request` (`kdc_util.c:790-793`): a DISALLOW_SVR server is
-    // MUST_USE_USER2USER.
+    // MIT: `gather_tgs_req_info` (kdc/do_tgs_req.c:583-807)
     let mut bad_as = as_req(user.clone(), realm, 0x1000_0023, None).map_err(|e| e.to_string())?;
     bad_as.0.msg_type = krb5_types::KdcReq::MSG_TGS_REQ;
     expect_error(
@@ -1792,6 +1864,48 @@ fn run() -> Result<(), String> {
         )
         .map_err(|e| e.to_string())?,
         err::MUST_USE_USER2USER,
+    )?;
+
+    // An expired server is SERVICE EXPIRED on a bare AS-REQ, before preauth.
+    // MIT: `validate_as_request` (kdc/kdc_util.c:715-804)
+    let expired_server = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["expiredsvc"]);
+    expect_error(
+        &cfg,
+        "as-service-expired",
+        &encode(
+            &as_req_sname(
+                user.clone(),
+                realm,
+                0x1000_00ae,
+                None,
+                expired_server,
+                etypes.clone(),
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::SERVICE_EXP,
+    )?;
+
+    // DISALLOW_ALL_TIX is SERVICE LOCKED OUT on a bare AS-REQ, before preauth.
+    // MIT: `validate_as_request` (kdc/kdc_util.c:715-804)
+    let locked_server = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["lockedsvc"]);
+    expect_error(
+        &cfg,
+        "as-service-locked",
+        &encode(
+            &as_req_sname(
+                user.clone(),
+                realm,
+                0x1000_00af,
+                None,
+                locked_server,
+                etypes.clone(),
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::S_PRINCIPAL_UNKNOWN,
     )?;
 
     let mut opt_tgs = tgs_req(
@@ -1864,8 +1978,7 @@ fn run() -> Result<(), String> {
         err::PREAUTH_REQUIRED,
     )?;
 
-    // MIT `maybe_add_etype_info2` (`kdc_preauth.c:1141-1170`): SPAKE support → 91 + ETYPE-INFO2
-    // (no cookie yet).
+    // MIT: `maybe_add_etype_info2` (kdc/kdc_preauth.c:1136-1171)
     expect_error(
         &cfg,
         "as-spake-round1",
@@ -1874,7 +1987,10 @@ fn run() -> Result<(), String> {
                 user.clone(),
                 realm,
                 0x1000_002a,
-                Some(vec![pa_spake_support(&[krb5_crypto::SpakeGroup::P256])]),
+                Some(vec![
+                    pa_spake_support(&[krb5_crypto::SpakeGroup::P256])
+                        .map_err(|e| e.to_string())?,
+                ]),
             )
             .map_err(|e| e.to_string())?,
         )
@@ -1926,6 +2042,7 @@ fn run() -> Result<(), String> {
             enc_authorization_data: None,
             till: None,
             subkey: None,
+            time_offset: 0,
         })
         .map_err(|e| e.to_string())
     };
@@ -2074,6 +2191,7 @@ fn run() -> Result<(), String> {
                 enc_authorization_data: None,
                 till: None,
                 subkey: None,
+                time_offset: 0,
             })
             .map_err(|e| e.to_string())?,
         )
@@ -2159,6 +2277,7 @@ fn run() -> Result<(), String> {
                 enc_authorization_data: None,
                 till: None,
                 subkey: None,
+                time_offset: 0,
             })
             .map_err(|e| e.to_string())?,
         )
@@ -2199,6 +2318,7 @@ fn run() -> Result<(), String> {
                 enc_authorization_data: None,
                 till: None,
                 subkey: None,
+                time_offset: 0,
             })
             .map_err(|e| e.to_string())?,
         )
@@ -2253,6 +2373,7 @@ fn run() -> Result<(), String> {
                 enc_authorization_data: None,
                 till: None,
                 subkey: None,
+                time_offset: 0,
             })
             .map_err(|e| e.to_string())?,
         )
@@ -2327,6 +2448,7 @@ fn run() -> Result<(), String> {
                 enc_authorization_data: None,
                 till: None,
                 subkey: None,
+                time_offset: 0,
             })
             .map_err(|e| e.to_string())?,
         )
@@ -2489,6 +2611,7 @@ fn run() -> Result<(), String> {
                 enc_authorization_data: None,
                 till: None,
                 subkey: None,
+                time_offset: 0,
             })
             .map_err(|e| e.to_string())?,
         )
@@ -2689,6 +2812,7 @@ fn run() -> Result<(), String> {
                     enc_authorization_data: None,
                     till: None,
                     subkey: None,
+                    time_offset: 0,
                 })
                 .map_err(|e| e.to_string())?,
             )
@@ -2798,9 +2922,8 @@ fn run() -> Result<(), String> {
         )?,
         err::ETYPE_NOSUPP,
     )?;
-    // Client offers AES128 only; stkt session is a distinct AES256 key.
-    // Ticket key = stkt session (`:997-1000`); reply session =
-    // select_session_keytype (`:352-355`) because 18 was not offered.
+    // AES128 offered, AES256 stkt session: ticket key is the session;
+    // reply key is select_session_keytype.
     let stkt_sess = random_session(EncryptionType::Aes256CtsHmacSha196)?;
     let u2u_ok_etypes = vec![EncryptionType::Aes128CtsHmacSha196.to_iana()];
     let u2u_ok = encode(
@@ -2839,6 +2962,7 @@ fn run() -> Result<(), String> {
             enc_authorization_data: None,
             till: None,
             subkey: None,
+            time_offset: 0,
         })
         .map_err(|e| e.to_string())?,
     )
@@ -2941,6 +3065,7 @@ fn run() -> Result<(), String> {
             enc_authorization_data: None,
             till: None,
             subkey: None,
+            time_offset: 0,
         })
         .map_err(|e| e.to_string())?,
     )
@@ -3016,6 +3141,7 @@ fn run() -> Result<(), String> {
                 enc_authorization_data: None,
                 till: None,
                 subkey: None,
+                time_offset: 0,
             })
             .map_err(|e| e.to_string())?,
         )
@@ -3059,6 +3185,7 @@ fn run() -> Result<(), String> {
                 enc_authorization_data: None,
                 till: None,
                 subkey: None,
+                time_offset: 0,
             })
             .map_err(|e| e.to_string())?,
         )
@@ -3343,6 +3470,7 @@ fn run() -> Result<(), String> {
             enc_authorization_data: None,
             till: None,
             subkey: None,
+            time_offset: 0,
         })
         .map_err(|e| e.to_string())?,
     )
@@ -3404,6 +3532,7 @@ fn run() -> Result<(), String> {
             enc_authorization_data: None,
             till: None,
             subkey: None,
+            time_offset: 0,
         })
         .map_err(|e| e.to_string())?,
     )
@@ -3465,6 +3594,7 @@ fn run() -> Result<(), String> {
                 enc_authorization_data: None,
                 till: None,
                 subkey: None,
+                time_offset: 0,
             })
             .map_err(|e| e.to_string())?,
         )
@@ -3503,12 +3633,198 @@ fn run() -> Result<(), String> {
                 enc_authorization_data: None,
                 till: None,
                 subkey: None,
+                time_offset: 0,
             })
             .map_err(|e| e.to_string())?,
         )
         .map_err(|e| e.to_string())?,
         err::BADOPTION,
     )?;
+
+    let mut bare = tgs_req(
+        mint_tgt(
+            tkt_key,
+            tkt_kvno,
+            &user,
+            realm,
+            &krbtgt_sname,
+            &sess,
+            window10.clone(),
+            TicketFlags::initial_preauth(),
+        )?,
+        &sess,
+        realm,
+        &user,
+        host.clone(),
+        realm,
+        0x1000_00a0,
+    )
+    .map_err(|e| e.to_string())?;
+    bare.0.padata = None;
+    expect_error(
+        &cfg,
+        "tgs-missing-pa-tgs-req",
+        &encode(&bare).map_err(|e| e.to_string())?,
+        err::PADATA_TYPE_NOSUPP,
+    )?;
+
+    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["admin"]);
+    expect_error(
+        &cfg,
+        "tgs-authenticator-cname-mismatch",
+        &encode(
+            &tgs_req(
+                mint_tgt(
+                    tkt_key,
+                    tkt_kvno,
+                    &user,
+                    realm,
+                    &krbtgt_sname,
+                    &sess,
+                    window10.clone(),
+                    TicketFlags::initial_preauth(),
+                )?,
+                &sess,
+                realm,
+                &admin,
+                host.clone(),
+                realm,
+                0x1000_00a1,
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::BADMATCH,
+    )?;
+
+    expect_error(
+        &cfg,
+        "tgs-authenticator-crealm-mismatch",
+        &encode(
+            &tgs_req(
+                mint_tgt(
+                    tkt_key,
+                    tkt_kvno,
+                    &user,
+                    realm,
+                    &krbtgt_sname,
+                    &sess,
+                    window10.clone(),
+                    TicketFlags::initial_preauth(),
+                )?,
+                &sess,
+                "OTHER.TEST",
+                &user,
+                host.clone(),
+                realm,
+                0x1000_00a2,
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::BADMATCH,
+    )?;
+
+    expect_error(
+        &cfg,
+        "tgs-server-locked-out",
+        &encode(
+            &tgs_req(
+                mint_tgt(
+                    tkt_key,
+                    tkt_kvno,
+                    &user,
+                    realm,
+                    &krbtgt_sname,
+                    &sess,
+                    window10.clone(),
+                    TicketFlags::initial_preauth(),
+                )?,
+                &sess,
+                realm,
+                &user,
+                PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "locked.kerber.test"]),
+                realm,
+                0x1000_00a3,
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::S_PRINCIPAL_UNKNOWN,
+    )?;
+
+    expect_error(
+        &cfg,
+        "tgs-disallow-tgt-based",
+        &encode(
+            &tgs_req(
+                mint_tgt(
+                    tkt_key,
+                    tkt_kvno,
+                    &user,
+                    realm,
+                    &krbtgt_sname,
+                    &sess,
+                    window10.clone(),
+                    TicketFlags::initial_preauth(),
+                )?,
+                &sess,
+                realm,
+                &user,
+                PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "dupskey.kerber.test"]),
+                realm,
+                0x1000_00a4,
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::POLICY,
+    )?;
+
+    let first = tgs_req(
+        mint_tgt(
+            tkt_key,
+            tkt_kvno,
+            &user,
+            realm,
+            &krbtgt_sname,
+            &sess,
+            window10.clone(),
+            TicketFlags::initial_preauth(),
+        )?,
+        &sess,
+        realm,
+        &user,
+        host.clone(),
+        realm,
+        0x1000_00a5,
+    )
+    .map_err(|e| e.to_string())?;
+    let mut second = first.clone();
+    second.0.padata.get_or_insert_with(Vec::new).push(PaData {
+        padata_type: pa::ENC_UNIX_TIME,
+        padata_value: Vec::<u8>::new().into(),
+    });
+    let replay = encode(&first).map_err(|e| e.to_string())?;
+    let again = encode(&second).map_err(|e| e.to_string())?;
+    let svc_kt = cfg
+        .host
+        .as_ref()
+        .ok_or_else(|| "KERBER_HOST_KEYTAB required".to_string())?;
+    let (r1, m1) = send_both(&cfg, "tgs-authenticator-replay", &replay)?;
+    let (r2, m2) = send_both(&cfg, "tgs-authenticator-replay", &again)?;
+    let (_, r1e, _, _) = decrypt_tgs(&r1, &sess, svc_kt)?;
+    let (_, r2e, _, _) = decrypt_tgs(&r2, &sess, svc_kt)?;
+    let (_, m1e, _, _) = decrypt_tgs(&m1, &sess, svc_kt)?;
+    let (_, m2e, _, _) = decrypt_tgs(&m2, &sess, svc_kt)?;
+    if r1e.key.keyvalue.as_ref() == r2e.key.keyvalue.as_ref()
+        || m1e.key.keyvalue.as_ref() == m2e.key.keyvalue.as_ref()
+    {
+        return Err("tgs-authenticator-replay: second ticket reused the session key".to_string());
+    }
+    println!(
+        r#"{{"event":"diffsend","case":"tgs-authenticator-replay","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","replay_session_differs":true}}"#
+    );
 
     expect_error(
         &cfg,
@@ -3540,11 +3856,319 @@ fn run() -> Result<(), String> {
                 enc_authorization_data: None,
                 till: None,
                 subkey: None,
+                time_offset: 0,
             })
             .map_err(|e| e.to_string())?,
         )
         .map_err(|e| e.to_string())?,
         err::BADOPTION,
+    )?;
+
+    expect_error(
+        &cfg,
+        "tgs-server-disallow-postdated",
+        &encode(
+            &tgs_req_ex(TgsReqParams {
+                ticket: mint_tgt(
+                    tkt_key,
+                    tkt_kvno,
+                    &user,
+                    realm,
+                    &krbtgt_sname,
+                    &sess,
+                    window10.clone(),
+                    TicketFlags::initial_preauth().with_bit(flag_bit::MAY_POSTDATE, true),
+                )?,
+                session: &sess,
+                crealm: realm,
+                cname: &user,
+                sname: PrincipalName::new(
+                    PrincipalName::NT_SRV_HST,
+                    ["host", "nopost.kerber.test"],
+                ),
+                realm,
+                nonce: 0x1000_00a6,
+                kdc_options: KdcOptions::none().with_bit(flag_bit::MAY_POSTDATE, true),
+                additional_tickets: None,
+                extra_padata: Vec::new(),
+                etypes: etypes.clone(),
+                addresses: None,
+                from: None,
+                enc_authorization_data: None,
+                till: None,
+                subkey: None,
+                time_offset: 0,
+            })
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::CANNOT_POSTDATE,
+    )?;
+
+    let expuser = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["expuser"]);
+    let lockuser = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["lockuser"]);
+    expect_error(
+        &cfg,
+        "s4u2self-client-expired",
+        &s4u_req(
+            host_hdr(&host, false)?,
+            vec![pa_for_user(&sess, expuser, realm).map_err(|e| e.to_string())?],
+            0x1000_00a7,
+        )?,
+        err::NAME_EXP,
+    )?;
+    expect_error(
+        &cfg,
+        "s4u2self-client-locked-out",
+        &s4u_req(
+            host_hdr(&host, false)?,
+            vec![pa_for_user(&sess, lockuser, realm).map_err(|e| e.to_string())?],
+            0x1000_00a8,
+        )?,
+        err::CLIENT_REVOKED,
+    )?;
+
+    let tgs_fast = |nonce: u32,
+                    edit: &dyn Fn(&mut krb5_types::fast::KrbFastArmoredReq)|
+     -> Result<Vec<u8>, String> {
+        let mut req = tgs_req(
+            mint_tgt(
+                tkt_key,
+                tkt_kvno,
+                &user,
+                realm,
+                &krbtgt_sname,
+                &sess,
+                window10.clone(),
+                TicketFlags::initial_preauth(),
+            )?,
+            &sess,
+            realm,
+            &user,
+            host.clone(),
+            realm,
+            nonce,
+        )
+        .map_err(|e| e.to_string())?;
+        let inner = req.0.req_body.clone();
+        wrap_tgs_fast_hide(&mut req, &sess, inner)?;
+        fa_edit(&mut req.0, edit)?;
+        encode(&req).map_err(|e| e.to_string())
+    };
+    expect_error(
+        &cfg,
+        "tgs-fast-unkeyed-bad-checksum",
+        &tgs_fast(0x1000_00a9, &|w| {
+            w.req_checksum.cksumtype = 7;
+            w.req_checksum.checksum = vec![0xff; 16].into();
+        })?,
+        err::MODIFIED,
+    )?;
+    expect_error(
+        &cfg,
+        "tgs-fast-req-flip",
+        &tgs_fast(0x1000_00b0, &|w| flip_first(&mut w.enc_fast_req.cipher))?,
+        err::BAD_INTEGRITY,
+    )?;
+    expect_error(
+        &cfg,
+        "tgs-fast-cksum-flip",
+        &tgs_fast(0x1000_00b1, &|w| flip_first(&mut w.req_checksum.checksum))?,
+        err::MODIFIED,
+    )?;
+
+    let mut explicit = tgs_req(
+        mint_tgt(
+            tkt_key,
+            tkt_kvno,
+            &user,
+            realm,
+            &krbtgt_sname,
+            &sess,
+            window10.clone(),
+            TicketFlags::initial_preauth(),
+        )?,
+        &sess,
+        realm,
+        &user,
+        host.clone(),
+        realm,
+        0x1000_00aa,
+    )
+    .map_err(|e| e.to_string())?;
+    let explicit_inner = explicit.0.req_body.clone();
+    wrap_tgs_fast_hide(&mut explicit, &sess, explicit_inner)?;
+    let pa_tgs = explicit
+        .0
+        .padata
+        .as_ref()
+        .and_then(|p| p.iter().find(|x| x.padata_type == pa::TGS_REQ))
+        .map(|p| p.padata_value.clone())
+        .ok_or_else(|| "no PA-TGS-REQ".to_string())?;
+    fa_edit(&mut explicit.0, |w| {
+        w.armor = Some(krb5_types::fast::KrbFastArmor {
+            armor_type: krb5_types::fast::ARMOR_AP_REQUEST,
+            armor_value: pa_tgs,
+        });
+    })?;
+    expect_error_no_edata(
+        &cfg,
+        "tgs-fast-explicit-armor",
+        &encode(&explicit).map_err(|e| e.to_string())?,
+        err::PREAUTH_FAILED,
+    )?;
+
+    let armor_tkt = mint_tgt(
+        tkt_key,
+        tkt_kvno,
+        &user,
+        realm,
+        &krbtgt_sname,
+        &sess,
+        window10.clone(),
+        TicketFlags::initial_preauth(),
+    )?;
+    let mut accepted = tgs_req(
+        armor_tkt.clone(),
+        &sess,
+        realm,
+        &user,
+        host.clone(),
+        realm,
+        0x1000_00ab,
+    )
+    .map_err(|e| e.to_string())?;
+    let accepted_inner = accepted.0.req_body.clone();
+    let pa_tgs_bytes = accepted
+        .0
+        .padata
+        .as_ref()
+        .and_then(|p| p.iter().find(|x| x.padata_type == pa::TGS_REQ))
+        .map(|p| p.padata_value.as_ref().to_vec())
+        .ok_or_else(|| "no PA-TGS-REQ".to_string())?;
+    let armor_sub =
+        ProtocolKey::from_bytes(sess.etype(), &[0x53u8; 32]).map_err(|e| e.to_string())?;
+    let armor_ap = build_fast_armor(
+        armor_tkt,
+        &sess,
+        &krb5_types::try_ascii(realm).map_err(|e| e.to_string())?,
+        &user,
+        Some(&armor_sub),
+    )
+    .map_err(|e| e.to_string())?;
+    let akey = armor_key(&sess, Some(&armor_sub)).map_err(|e| e.to_string())?;
+    let ck_usage = KeyUsage::new(ku::FAST_REQ_CHKSUM).map_err(|e| e.to_string())?;
+    let mic = checksum(&akey, ck_usage, &pa_tgs_bytes).map_err(|e| e.to_string())?;
+    let inner = krb5_types::fast::KrbFastReq {
+        fast_options: krb5_types::fast::fast_options_none(),
+        padata: Vec::new(),
+        req_body: accepted_inner,
+    };
+    let inner_der = encode(&inner).map_err(|e| e.to_string())?;
+    let enc_usage = KeyUsage::new(ku::FAST_ENC).map_err(|e| e.to_string())?;
+    let cipher = encrypt(&akey, enc_usage, &inner_der).map_err(|e| e.to_string())?;
+    let armor_der = encode(&armor_ap).map_err(|e| e.to_string())?;
+    let armored = krb5_types::fast::KrbFastArmoredReq {
+        armor: Some(krb5_types::fast::KrbFastArmor {
+            armor_type: krb5_types::fast::ARMOR_AP_REQUEST,
+            armor_value: armor_der.into(),
+        }),
+        req_checksum: Checksum {
+            cksumtype: akey.etype().checksum_type(),
+            checksum: mic.into(),
+        },
+        enc_fast_req: EncryptedData {
+            etype: akey.etype().to_iana(),
+            kvno: None,
+            cipher: cipher.into(),
+        },
+    };
+    accepted.0.padata.get_or_insert_with(Vec::new).push(PaData {
+        padata_type: pa::FX_FAST,
+        padata_value: encode(&krb5_types::fast::PaFxFast::ArmoredData(armored))
+            .map_err(|e| e.to_string())?
+            .into(),
+    });
+    expect_tgs_rep(
+        &cfg,
+        "tgs-fast-armor-no-tgs-subkey",
+        &encode(&accepted).map_err(|e| e.to_string())?,
+    )?;
+
+    let bare_tkt = mint_tgt(
+        tkt_key,
+        tkt_kvno,
+        &user,
+        realm,
+        &krbtgt_sname,
+        &sess,
+        window10.clone(),
+        TicketFlags::initial_preauth(),
+    )?;
+    let mut bare = tgs_req(
+        bare_tkt.clone(),
+        &sess,
+        realm,
+        &user,
+        host.clone(),
+        realm,
+        0x1000_00ac,
+    )
+    .map_err(|e| e.to_string())?;
+    let bare_inner = bare.0.req_body.clone();
+    let bare_pa = bare
+        .0
+        .padata
+        .as_ref()
+        .and_then(|p| p.iter().find(|x| x.padata_type == pa::TGS_REQ))
+        .map(|p| p.padata_value.as_ref().to_vec())
+        .ok_or_else(|| "no PA-TGS-REQ".to_string())?;
+    let bare_ap = build_fast_armor(
+        bare_tkt,
+        &sess,
+        &krb5_types::try_ascii(realm).map_err(|e| e.to_string())?,
+        &user,
+        None,
+    )
+    .map_err(|e| e.to_string())?;
+    let bare_key = armor_key(&sess, None).map_err(|e| e.to_string())?;
+    let bare_ck = KeyUsage::new(ku::FAST_REQ_CHKSUM).map_err(|e| e.to_string())?;
+    let bare_mic = checksum(&bare_key, bare_ck, &bare_pa).map_err(|e| e.to_string())?;
+    let bare_fast = krb5_types::fast::KrbFastReq {
+        fast_options: krb5_types::fast::fast_options_none(),
+        padata: Vec::new(),
+        req_body: bare_inner,
+    };
+    let bare_der = encode(&bare_fast).map_err(|e| e.to_string())?;
+    let bare_enc = KeyUsage::new(ku::FAST_ENC).map_err(|e| e.to_string())?;
+    let bare_cipher = encrypt(&bare_key, bare_enc, &bare_der).map_err(|e| e.to_string())?;
+    let bare_armor = encode(&bare_ap).map_err(|e| e.to_string())?;
+    let bare_armored = krb5_types::fast::KrbFastArmoredReq {
+        armor: Some(krb5_types::fast::KrbFastArmor {
+            armor_type: krb5_types::fast::ARMOR_AP_REQUEST,
+            armor_value: bare_armor.into(),
+        }),
+        req_checksum: Checksum {
+            cksumtype: bare_key.etype().checksum_type(),
+            checksum: bare_mic.into(),
+        },
+        enc_fast_req: EncryptedData {
+            etype: bare_key.etype().to_iana(),
+            kvno: None,
+            cipher: bare_cipher.into(),
+        },
+    };
+    bare.0.padata.get_or_insert_with(Vec::new).push(PaData {
+        padata_type: pa::FX_FAST,
+        padata_value: encode(&krb5_types::fast::PaFxFast::ArmoredData(bare_armored))
+            .map_err(|e| e.to_string())?
+            .into(),
+    });
+    expect_error(
+        &cfg,
+        "tgs-fast-armor-no-subkey",
+        &encode(&bare).map_err(|e| e.to_string())?,
+        err::POLICY,
     )?;
 
     let from = now.add_seconds(60).unwrap_or_else(|_| now.clone());
@@ -3578,6 +4202,7 @@ fn run() -> Result<(), String> {
             enc_authorization_data: None,
             till: None,
             subkey: None,
+            time_offset: 0,
         })
         .map_err(|e| e.to_string())?,
     )
@@ -3638,6 +4263,7 @@ fn run() -> Result<(), String> {
                 enc_authorization_data: None,
                 till: None,
                 subkey: None,
+                time_offset: 0,
             })
             .map_err(|e| e.to_string())?,
         )
@@ -3676,6 +4302,7 @@ fn run() -> Result<(), String> {
                 enc_authorization_data: None,
                 till: None,
                 subkey: None,
+                time_offset: 0,
             })
             .map_err(|e| e.to_string())?,
         )
@@ -3714,6 +4341,7 @@ fn run() -> Result<(), String> {
                 enc_authorization_data: None,
                 till: None,
                 subkey: None,
+                time_offset: 0,
             })
             .map_err(|e| e.to_string())?,
         )
@@ -3759,6 +4387,7 @@ fn run() -> Result<(), String> {
                 enc_authorization_data: None,
                 till: None,
                 subkey: None,
+                time_offset: 0,
             })
             .map_err(|e| e.to_string())?,
         )
@@ -3807,6 +4436,7 @@ fn run() -> Result<(), String> {
             enc_authorization_data: Some(copy_enc),
             till: None,
             subkey: None,
+            time_offset: 0,
         })
         .map_err(|e| e.to_string())?,
     )
@@ -3896,6 +4526,7 @@ fn run() -> Result<(), String> {
                 enc_authorization_data: Some(mand_enc),
                 till: None,
                 subkey: None,
+                time_offset: 0,
             })
             .map_err(|e| e.to_string())?,
         )
@@ -3961,6 +4592,7 @@ fn run() -> Result<(), String> {
             enc_authorization_data: Some(strip_enc),
             till: None,
             subkey: None,
+            time_offset: 0,
         })
         .map_err(|e| e.to_string())?,
     )
@@ -4031,6 +4663,7 @@ fn run() -> Result<(), String> {
             enc_authorization_data: Some(sub_enc),
             till: None,
             subkey: Some(&sub),
+            time_offset: 0,
         })
         .map_err(|e| e.to_string())?,
     )
@@ -4089,6 +4722,7 @@ fn run() -> Result<(), String> {
             enc_authorization_data: Some(ku5_enc),
             till: None,
             subkey: None,
+            time_offset: 0,
         })
         .map_err(|e| e.to_string())?,
     )
@@ -4168,6 +4802,7 @@ fn run() -> Result<(), String> {
             enc_authorization_data: None,
             till: None,
             subkey: None,
+            time_offset: 0,
         })
         .map_err(|e| e.to_string())?,
     )
@@ -4230,6 +4865,7 @@ fn run() -> Result<(), String> {
                 enc_authorization_data: None,
                 till: None,
                 subkey: None,
+                time_offset: 0,
             })
             .map_err(|e| e.to_string())?,
         )
@@ -4284,6 +4920,7 @@ fn run() -> Result<(), String> {
             enc_authorization_data: None,
             till: Some(past.clone()),
             subkey: None,
+            time_offset: 0,
         })
         .map_err(|e| e.to_string())?,
     )
@@ -4341,6 +4978,7 @@ fn run() -> Result<(), String> {
                 enc_authorization_data: None,
                 till: None,
                 subkey: None,
+                time_offset: 0,
             })
             .map_err(|e| e.to_string())?,
         )
@@ -4376,6 +5014,7 @@ fn run() -> Result<(), String> {
         enc_authorization_data: None,
         till: None,
         subkey: None,
+        time_offset: 0,
     })
     .map_err(|e| e.to_string())?;
     let from_past = encode(&from_past).map_err(|e| e.to_string())?;
@@ -4435,6 +5074,7 @@ fn run() -> Result<(), String> {
             enc_authorization_data: None,
             till: None,
             subkey: None,
+            time_offset: 0,
         })
         .map_err(|e| e.to_string())?,
     )
@@ -4485,6 +5125,7 @@ fn run() -> Result<(), String> {
             enc_authorization_data: None,
             till: None,
             subkey: None,
+            time_offset: 0,
         })
         .map_err(|e| e.to_string())?,
     )
@@ -4515,8 +5156,6 @@ fn run() -> Result<(), String> {
         r#"{{"event":"diffsend","case":"tgs-rbcd-pac-options","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","pac_options":true}}"#
     );
 
-    // MIT `pkinit_server_verify_padata` (`pkinit_srv.c:508-516`): unsigned AuthPack + named
-    // client → 24.
     let kp = p256_generate().map_err(|e| e.to_string())?;
     let mut unsigned_named =
         as_req(user.clone(), realm, 0x1000_0090, None).map_err(|e| e.to_string())?;
@@ -4534,7 +5173,7 @@ fn run() -> Result<(), String> {
         err::PREAUTH_FAILED,
     )?;
 
-    // MIT `prepare_error_as` (`do_as_req.c:831-832`): FAST hide-client on the outer KRB-ERROR.
+    // MIT: `prepare_error_as` (kdc/do_as_req.c:769-849)
     let hide_sess = random_session(EncryptionType::Aes256CtsHmacSha196)?;
     let hide_tkt = mint_tgt(
         tkt_key,
@@ -4573,7 +5212,6 @@ fn run() -> Result<(), String> {
         err::PREAUTH_REQUIRED,
     )?;
 
-    // MIT `tgs_issue_ticket` (`do_tgs_req.c:1111-1112`): FAST hide-client on the outer TGS-REP.
     let hide_tgs_tgt = mint_tgt(
         tkt_key,
         tkt_kvno,
@@ -4612,6 +5250,7 @@ fn run() -> Result<(), String> {
         fs::read_to_string(&pem_path).map_err(|e| format!("pkinit user pem {pem_path}: {e}"))?;
     let (cert, leaf) =
         krb5_types::pkinit::parse_identity_pem(&pem).ok_or_else(|| format!("parse {pem_path}"))?;
+    let leaf = krb5_types::pkinit::IdentityKey::p256(leaf);
     let stale_kp = p256_generate().map_err(|e| e.to_string())?;
     let mut stale_req =
         as_req(user.clone(), realm, 0x1000_0093, None).map_err(|e| e.to_string())?;
@@ -4644,6 +5283,8 @@ fn run() -> Result<(), String> {
         &encode(&stale_req).map_err(|e| e.to_string())?,
         err::PREAUTH_FAILED,
     )?;
+
+    b17_cms_cases(&cfg, realm, &user)?;
 
     let nodot = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "nodot"]);
     let nodot_tgt = mint_tgt(
@@ -4683,6 +5324,7 @@ fn run() -> Result<(), String> {
                 enc_authorization_data: None,
                 till: None,
                 subkey: None,
+                time_offset: 0,
             })
             .map_err(|e| e.to_string())?,
         )
@@ -4789,6 +5431,7 @@ fn run() -> Result<(), String> {
         enc_authorization_data: None,
         till: None,
         subkey: None,
+        time_offset: 0,
     })
     .map_err(|e| e.to_string())?;
     let renew_from = encode(&renew_from).map_err(|e| e.to_string())?;
@@ -4818,12 +5461,12 @@ fn run() -> Result<(), String> {
 
     let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "testhost.kerber.test"]);
     ra_cases(&cfg, realm, &user, &host)?;
+    fa_cases(&cfg, realm, &user, &host)?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":123}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":212}}"#);
     Ok(())
 }
 
-/// Both KDCs answer `req` with a PDU tagged `tag` (`0x6b` AS-REP).
 fn expect_both_tag(cfg: &Cfg, case: &str, req: &[u8], tag: u8) -> Result<(), String> {
     let (rust, mit) = send_both(cfg, case, req)?;
     for (leg, raw) in [("rust", &rust), ("mit", &mit)] {
@@ -4840,7 +5483,6 @@ fn expect_both_tag(cfg: &Cfg, case: &str, req: &[u8], tag: u8) -> Result<(), Str
     Ok(())
 }
 
-/// The nonce INTEGER's content octets in a TGS-REP's enc-part, decrypted in `session`.
 fn tgs_rep_nonce(raw: &[u8], session: &ProtocolKey) -> Result<Vec<u8>, String> {
     let rep: TgsRep = decode(raw).map_err(|e| e.to_string())?;
     let usage = KeyUsage::new(ku::TGS_REP_ENC_PART).map_err(|e| e.to_string())?;
@@ -4862,14 +5504,365 @@ fn tgs_rep_nonce(raw: &[u8], session: &ProtocolKey) -> Result<Vec<u8>, String> {
     }
 }
 
-/// The one element of `der`, parsed.
+/// B17: refused signedAuthPacks whose reason matches on OpenSSL 3.0 and 3.5.
+/// The rest are lab cells.
+fn b17_cms_cases(cfg: &Cfg, realm: &str, user: &PrincipalName) -> Result<(), String> {
+    let base_cms = |nonce: u32| -> Result<Vec<u8>, String> {
+        let pem_path =
+            env::var("KERBER_PKINIT_USER").unwrap_or_else(|_| "/tmp/pkinit/user.pem".into());
+        let pem = fs::read_to_string(&pem_path)
+            .map_err(|e| format!("pkinit user pem {pem_path}: {e}"))?;
+        let (cert, leaf) = krb5_types::pkinit::parse_identity_pem(&pem)
+            .ok_or_else(|| format!("parse {pem_path}"))?;
+        let leaf = krb5_types::pkinit::IdentityKey::p256(leaf);
+        let kp = p256_generate().map_err(|e| e.to_string())?;
+        let req = as_req(user.clone(), realm, nonce, None).map_err(|e| e.to_string())?;
+        let body = encode(&req.0.req_body).map_err(|e| e.to_string())?;
+        let mut h = Sha1::new();
+        h.update(&body);
+        let pa = pa_pk_as_req_signed(&kp.public, &cert, &leaf, nonce, &h.finalize(), None)
+            .map_err(|e| e.to_string())?;
+        let req = decode::<krb5_types::pkinit::PaPkAsReq>(&pa.padata_value)
+            .map_err(|e| format!("decode PaPkAsReq: {e}"))?;
+        Ok(req.signed_auth_pack.as_ref().to_vec())
+    };
+    let as_with = |nonce: u32, cms: Vec<u8>| -> Result<Vec<u8>, String> {
+        let mut req = as_req(user.clone(), realm, nonce, None).map_err(|e| e.to_string())?;
+        let pa_req = krb5_types::pkinit::PaPkAsReq {
+            signed_auth_pack: cms.into(),
+            trusted_certifiers: None,
+            kdc_pk_id: None,
+        };
+        req.0.padata = Some(vec![PaData {
+            padata_type: pa::PK_AS_REQ,
+            padata_value: encode(&pa_req).map_err(|e| e.to_string())?.into(),
+        }]);
+        encode(&req).map_err(|e| e.to_string())
+    };
+    let edit_sd = |cms: &[u8], f: &dyn Fn(&mut Vec<der::Der>)| -> Result<Vec<u8>, String> {
+        let root = ra_root(cms)?;
+        let der::Der::Cons(_, ci) = &root else {
+            return Err("CMS not a SEQUENCE".into());
+        };
+        let der::Der::Cons(_, ex) = ci.get(1).ok_or("no content [0]")? else {
+            return Err("content [0] not constructed".into());
+        };
+        let der::Der::Cons(sd_tag, sd) = ex.first().ok_or("no SignedData")? else {
+            return Err("SignedData not a SEQUENCE".into());
+        };
+        let mut kids = sd.clone();
+        f(&mut kids);
+        let new_sd = der::Der::Cons(*sd_tag, kids);
+        Ok(der::edit(&root, &[1, 0], Some(&new_sd)).bytes())
+    };
+    let set_sig = |cms: &[u8], sig: Vec<u8>| -> Result<Vec<u8>, String> {
+        edit_sd(cms, &move |kids: &mut Vec<der::Der>| {
+            if let Some(der::Der::Cons(_, infos)) = kids.iter_mut().rev().find(|k| k.tag() == 0x31)
+                && let Some(der::Der::Cons(_, si)) = infos.first_mut()
+                && let Some(s) = si.iter_mut().find(|k| k.tag() == 0x04)
+            {
+                *s = der::Der::Prim(0x04, sig.clone());
+            }
+        })
+    };
+
+    expect_error(
+        cfg,
+        "pkinit-cms-too-small",
+        &as_with(0x1000_0220, vec![])?,
+        err::PREAUTH_FAILED,
+    )?;
+    expect_error(
+        cfg,
+        "pkinit-cms-header-too-long",
+        &as_with(0x1000_0221, vec![0x30])?,
+        err::PREAUTH_FAILED,
+    )?;
+    expect_error(
+        cfg,
+        "pkinit-cms-too-long",
+        &as_with(0x1000_0222, vec![0x30, 0x05, 0x06])?,
+        err::PREAUTH_FAILED,
+    )?;
+    expect_error(
+        cfg,
+        "pkinit-cms-wrong-tag",
+        &as_with(0x1000_0223, vec![0x30, 0x03, 0x02, 0x01, 0x00])?,
+        err::PREAUTH_FAILED,
+    )?;
+    expect_error(
+        cfg,
+        "pkinit-cms-field-missing",
+        &as_with(0x1000_0224, vec![0x30, 0x00])?,
+        err::PREAUTH_FAILED,
+    )?;
+
+    let sd_trailing = edit_sd(&base_cms(0x1000_022a)?, &|kids: &mut Vec<der::Der>| {
+        kids.push(der::Der::Prim(0x05, Vec::new()));
+    })?;
+    expect_error(
+        cfg,
+        "pkinit-cms-signeddata-trailing",
+        &as_with(0x1000_022a, sd_trailing)?,
+        err::PREAUTH_FAILED,
+    )?;
+    let algid_tag = edit_sd(&base_cms(0x1000_022b)?, &|kids: &mut Vec<der::Der>| {
+        if let Some(der::Der::Cons(_, algs)) = kids.iter_mut().find(|k| k.tag() == 0x31)
+            && let Some(der::Der::Cons(_, alg)) = algs.first_mut()
+            && let Some(der::Der::Prim(tag, _)) = alg.first_mut()
+        {
+            *tag = 0x05;
+        }
+    })?;
+    expect_error(
+        cfg,
+        "pkinit-cms-algid-wrong-tag",
+        &as_with(0x1000_022b, algid_tag)?,
+        err::PREAUTH_FAILED,
+    )?;
+
+    // oerr() cases first; krb5_set_error_message refusals last, so none leaves a stale reason.
+    let not_der = set_sig(
+        &base_cms(0x1000_0228)?,
+        vec![0x31, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x02],
+    )?;
+    expect_error(
+        cfg,
+        "pkinit-sig-not-der",
+        &as_with(0x1000_0228, not_der)?,
+        err::DIGEST_IN_SIGNED_DATA_NOT_ACCEPTED,
+    )?;
+    let r_zero = set_sig(
+        &base_cms(0x1000_0229)?,
+        vec![0x30, 0x06, 0x02, 0x01, 0x00, 0x02, 0x01, 0x05],
+    )?;
+    expect_error(
+        cfg,
+        "pkinit-sig-r-zero",
+        &as_with(0x1000_0229, r_zero)?,
+        err::DIGEST_IN_SIGNED_DATA_NOT_ACCEPTED,
+    )?;
+
+    let wrong_oid = vec![
+        0x30, 0x0f, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x07, 0x01, 0xa0, 0x02,
+        0x04, 0x00,
+    ];
+    expect_error(
+        cfg,
+        "pkinit-cms-wrong-oid",
+        &as_with(0x1000_0225, wrong_oid)?,
+        err::PREAUTH_FAILED,
+    )?;
+
+    let not_octets = vec![
+        0x30, 0x0d, 0x06, 0x07, 0x2b, 0x06, 0x01, 0x05, 0x02, 0x03, 0x01, 0xa0, 0x02, 0x05, 0x00,
+    ];
+    expect_error(
+        cfg,
+        "pkinit-authpack-not-octet-string",
+        &as_with(0x1000_0226, not_octets)?,
+        err::PREAUTH_FAILED,
+    )?;
+
+    let no_cert = edit_sd(&base_cms(0x1000_0227)?, &|kids: &mut Vec<der::Der>| {
+        kids.retain(|k| k.tag() != 0xa0);
+    })?;
+    expect_error(
+        cfg,
+        "pkinit-cms-no-signer-cert",
+        &as_with(0x1000_0227, no_cert)?,
+        err::PREAUTH_FAILED,
+    )?;
+
+    Ok(())
+}
+
+/// Seven ECDSA faults. OpenSSL 3.5 says `provider signature failure`,
+/// 3.0 `verification failure`; CI gates code 80.
+fn b17_lab_cases(cfg: &Cfg, realm: &str, user: &PrincipalName) -> Result<(), String> {
+    let labuser = match env::var("KERBER_DIFF_B17_PRINC") {
+        Ok(p) => PrincipalName::new(PrincipalName::NT_PRINCIPAL, [p.as_str()]),
+        Err(_) => user.clone(),
+    };
+    let user = &labuser;
+    let base_cms = |nonce: u32| -> Result<Vec<u8>, String> {
+        let pem_path =
+            env::var("KERBER_PKINIT_USER").unwrap_or_else(|_| "/tmp/pkinit/user.pem".into());
+        let pem = fs::read_to_string(&pem_path)
+            .map_err(|e| format!("pkinit user pem {pem_path}: {e}"))?;
+        let (cert, leaf) = krb5_types::pkinit::parse_identity_pem(&pem)
+            .ok_or_else(|| format!("parse {pem_path}"))?;
+        let leaf = krb5_types::pkinit::IdentityKey::p256(leaf);
+        let kp = p256_generate().map_err(|e| e.to_string())?;
+        let req = as_req(user.clone(), realm, nonce, None).map_err(|e| e.to_string())?;
+        let body = encode(&req.0.req_body).map_err(|e| e.to_string())?;
+        let mut h = Sha1::new();
+        h.update(&body);
+        let pa = pa_pk_as_req_signed(&kp.public, &cert, &leaf, nonce, &h.finalize(), None)
+            .map_err(|e| e.to_string())?;
+        let req = decode::<krb5_types::pkinit::PaPkAsReq>(&pa.padata_value)
+            .map_err(|e| format!("decode PaPkAsReq: {e}"))?;
+        Ok(req.signed_auth_pack.as_ref().to_vec())
+    };
+    let as_with = |nonce: u32, cms: Vec<u8>| -> Result<Vec<u8>, String> {
+        let mut req = as_req(user.clone(), realm, nonce, None).map_err(|e| e.to_string())?;
+        let pa_req = krb5_types::pkinit::PaPkAsReq {
+            signed_auth_pack: cms.into(),
+            trusted_certifiers: None,
+            kdc_pk_id: None,
+        };
+        req.0.padata = Some(vec![PaData {
+            padata_type: pa::PK_AS_REQ,
+            padata_value: encode(&pa_req).map_err(|e| e.to_string())?.into(),
+        }]);
+        encode(&req).map_err(|e| e.to_string())
+    };
+    let edit_sd = |cms: &[u8], f: &dyn Fn(&mut Vec<der::Der>)| -> Result<Vec<u8>, String> {
+        let root = ra_root(cms)?;
+        let new_sd = {
+            let sd = der::at(&root, &[1, 0]).ok_or("no SignedData")?;
+            let der::Der::Cons(sd_tag, sd) = sd else {
+                return Err("SignedData not a SEQUENCE".into());
+            };
+            let mut kids = sd.clone();
+            f(&mut kids);
+            der::Der::Cons(*sd_tag, kids)
+        };
+        Ok(der::edit(&root, &[1, 0], Some(&new_sd)).bytes())
+    };
+    let get_sig = |cms: &[u8]| -> Result<Vec<u8>, String> {
+        let root = ra_root(cms)?;
+        let der::Der::Cons(_, sd) = der::at(&root, &[1, 0]).ok_or("no SignedData")? else {
+            return Err("SignedData not a SEQUENCE".into());
+        };
+        let Some(der::Der::Cons(_, infos)) = sd.iter().rev().find(|k| k.tag() == 0x31) else {
+            return Err("no signerInfos".into());
+        };
+        let Some(der::Der::Cons(_, si)) = infos.first() else {
+            return Err("no signerInfo".into());
+        };
+        match si.iter().find(|k| k.tag() == 0x04) {
+            Some(der::Der::Prim(_, sig)) => Ok(sig.clone()),
+            _ => Err("no signature".into()),
+        }
+    };
+    let set_sig = |cms: &[u8], sig: Vec<u8>| -> Result<Vec<u8>, String> {
+        edit_sd(cms, &move |kids: &mut Vec<der::Der>| {
+            if let Some(der::Der::Cons(_, infos)) = kids.iter_mut().rev().find(|k| k.tag() == 0x31)
+                && let Some(der::Der::Cons(_, si)) = infos.first_mut()
+                && let Some(s) = si.iter_mut().find(|k| k.tag() == 0x04)
+            {
+                *s = der::Der::Prim(0x04, sig.clone());
+            }
+        })
+    };
+    let drop_attrs = |cms: &[u8]| -> Result<Vec<u8>, String> {
+        edit_sd(cms, &|kids: &mut Vec<der::Der>| {
+            if let Some(der::Der::Cons(_, infos)) = kids.iter_mut().rev().find(|k| k.tag() == 0x31)
+                && let Some(der::Der::Cons(_, si)) = infos.first_mut()
+            {
+                si.retain(|k| k.tag() != 0xa0);
+            }
+        })
+    };
+    let flip = |mut sig: Vec<u8>| {
+        if let Some(b) = sig.last_mut() {
+            *b ^= 0x01;
+        }
+        sig
+    };
+    let trail = |mut sig: Vec<u8>| {
+        sig.push(0x00);
+        sig
+    };
+    // A short ECDSA-Sig-Value (r = s = 1): valid DER, not the signature.
+    let truncated = || vec![0x30u8, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x01];
+
+    let mut reqs: Vec<(&str, Vec<u8>)> = Vec::new();
+    let n = 0x1000_0230;
+    reqs.push((
+        "pkinit-provider-attrs-empty",
+        as_with(n, set_sig(&base_cms(n)?, Vec::new())?)?,
+    ));
+    let n = 0x1000_0231;
+    let base = base_cms(n)?;
+    let flipped = flip(get_sig(&base)?);
+    reqs.push((
+        "pkinit-provider-attrs-bit-flip",
+        as_with(n, set_sig(&base, flipped)?)?,
+    ));
+    let n = 0x1000_0232;
+    reqs.push((
+        "pkinit-provider-attrs-truncated",
+        as_with(n, set_sig(&base_cms(n)?, truncated())?)?,
+    ));
+    let n = 0x1000_0233;
+    reqs.push((
+        "pkinit-provider-noattrs-empty",
+        as_with(n, set_sig(&drop_attrs(&base_cms(n)?)?, Vec::new())?)?,
+    ));
+    let n = 0x1000_0234;
+    let base = drop_attrs(&base_cms(n)?)?;
+    let trailing = trail(get_sig(&base)?);
+    reqs.push((
+        "pkinit-provider-noattrs-non-der",
+        as_with(n, set_sig(&base, trailing)?)?,
+    ));
+    let n = 0x1000_0235;
+    let base = drop_attrs(&base_cms(n)?)?;
+    let flipped = flip(get_sig(&base)?);
+    reqs.push((
+        "pkinit-provider-noattrs-bit-flip",
+        as_with(n, set_sig(&base, flipped)?)?,
+    ));
+    let n = 0x1000_0236;
+    reqs.push((
+        "pkinit-provider-noattrs-truncated",
+        as_with(n, set_sig(&drop_attrs(&base_cms(n)?)?, truncated())?)?,
+    ));
+
+    let mut ok = 0;
+    for (case, req) in &reqs {
+        b17_lab_send(cfg, case, req)?;
+        ok += 1;
+    }
+    println!("b17lab cases={} ok={ok}", reqs.len());
+    Ok(())
+}
+
+fn b17_lab_send(cfg: &Cfg, case: &str, req: &[u8]) -> Result<(), String> {
+    write_der(&cfg.out, &format!("{case}.req.der"), req);
+    let raw = exchange_on_tcp(&cfg.rust, req).map_err(|e| format!("{case}: send: {e}"))?;
+    if raw.first() != Some(&0x7e) {
+        return Err(format!(
+            "{case}: tag {:02x} want 0x7e",
+            raw.first().unwrap_or(&0)
+        ));
+    }
+    let ke: KrbError = decode(&raw).map_err(|e| format!("{case} decode: {e}"))?;
+    if ke.error_code != err::DIGEST_IN_SIGNED_DATA_NOT_ACCEPTED {
+        return Err(format!("{case}: error_code {} want 80", ke.error_code));
+    }
+    write_der(&cfg.out, &format!("{case}.rep.der"), &raw);
+    let etext = ke
+        .e_text
+        .as_ref()
+        .and_then(|t| std::str::from_utf8(t.as_bytes()).ok())
+        .unwrap_or("");
+    println!(
+        r#"{{"event":"diffsend","case":"{case}","outcome":"ok","error_code":{},"e_text":"{etext}","req_sha1":"{}"}}"#,
+        ke.error_code,
+        sha1_hex(req)
+    );
+    Ok(())
+}
+
 fn ra_root(der: &[u8]) -> Result<der::Der, String> {
     der::der_parse(der)
         .and_then(|mut v| (v.len() == 1).then(|| v.remove(0)))
         .ok_or_else(|| "not one DER element".to_string())
 }
 
-/// The path (child indices) from a KDC-REQ's outermost element to its KDC-REQ-BODY SEQUENCE.
 fn ra_body_path(root: &der::Der) -> Result<Vec<usize>, String> {
     let der::Der::Cons(_, kids) = root else {
         return Err("KDC-REQ not constructed".into());
@@ -4885,7 +5878,6 @@ fn ra_body_path(root: &der::Der) -> Result<Vec<usize>, String> {
 }
 
 /// The RA cases: a KDC-REQ, or a PA-TGS-REQ authenticator, with a field MIT's decoder refuses,
-/// or one it reads where rasn did not.
 fn ra_cases(
     cfg: &Cfg,
     realm: &str,
@@ -4906,7 +5898,6 @@ fn ra_cases(
             place.starts_with(&der::path_name(&root, &body)) && place.ends_with(":a9/tag")
         })
         .ok_or("no addresses field to break")?;
-    // MIT `dispatch` (`dispatch.c:145-153`): a request that does not decode is dropped.
     expect_drop(cfg, "as-req-malformed-addresses", &broken.1.bytes())?;
 
     // An AS-REQ whose KDC-REQ-BODY ends with a field no version of KDC-REQ-BODY has, [12].
@@ -4918,7 +5909,7 @@ fn ra_cases(
     };
     fields.push(der::Der::Cons(0xac, vec![der::Der::Prim(0x02, vec![0])]));
     let req = der::edit(&root, &body, Some(&der::Der::Cons(tag, fields))).bytes();
-    // MIT `decode_sequence` (`asn1_encode.c:1401-1455`): every SEQUENCE is extensible.
+    // MIT: `decode_sequence` (lib/krb5/asn.1/asn1_encode.c:1399-1455)
     expect_both_tag(cfg, "as-req-trailing-body-field", &req, 0x6b)?;
 
     let tkt_kt = cfg.krbtgt.as_ref().ok_or("KERBER_KRBTGT_KEYTAB required")?;
@@ -4942,8 +5933,6 @@ fn ra_cases(
         tgs_req(tgt, sess, realm, user, host.clone(), realm, nonce).map_err(|e| e.to_string())
     };
 
-    // A TGS-REQ whose nonce is INT32_MIN.
-    // MIT `req_body_7` (`lib/krb5/asn.1/asn1_k_encode.c:455-455`): the nonce is an int32.
     let sess = random_session(EncryptionType::Aes256CtsHmacSha196)?;
     let req = encode(&tgs_for(0x8000_0000, &sess)?).map_err(|e| e.to_string())?;
     let (tr, tm) = send_both(cfg, "tgs-req-nonce-int32-min", &req)?;
@@ -5000,12 +5989,60 @@ fn ra_cases(
             .map(|(_, d)| d)
             .ok_or_else(|| "no subkey to break".to_string())
     })?;
-    // MIT `errcode_to_protocol` (`kdc_util.c:692-698`): rd_req's ASN.1 decode error goes out as 60.
+    // MIT: `errcode_to_protocol` (kdc/kdc_util.c:690-698)
     expect_error(
         cfg,
         "tgs-authenticator-malformed-subkey",
         &req,
         err::GENERIC,
+    )?;
+    let pa_tgs_edit = |nonce: u32, f: &dyn Fn(&mut ApReq) -> Result<(), String>| {
+        let mut req = tgs_for(nonce, &sess)?;
+        let pa_tgs = req
+            .0
+            .padata
+            .as_mut()
+            .and_then(|p| p.iter_mut().find(|x| x.padata_type == pa::TGS_REQ))
+            .ok_or("no PA-TGS-REQ")?;
+        let mut ap: ApReq = decode(pa_tgs.padata_value.as_ref()).map_err(|e| e.to_string())?;
+        f(&mut ap)?;
+        pa_tgs.padata_value = encode(&ap).map_err(|e| e.to_string())?.into();
+        encode(&req).map_err(|e| e.to_string())
+    };
+    let mut req = tgs_for(0x1000_020c, &sess)?;
+    if let Some(p) = req
+        .0
+        .padata
+        .as_mut()
+        .and_then(|p| p.iter_mut().find(|x| x.padata_type == pa::TGS_REQ))
+    {
+        p.padata_value = vec![0x04, 0x00].into();
+    }
+    expect_error(
+        cfg,
+        "tgs-ap-req-junk",
+        &encode(&req).map_err(|e| e.to_string())?,
+        err::GENERIC,
+    )?;
+    let ticket_usage = KeyUsage::new(ku::TICKET).map_err(|e| e.to_string())?;
+    let junk = encrypt(tkt_key, ticket_usage, &[0x04, 0x00]).map_err(|e| e.to_string())?;
+    expect_error(
+        cfg,
+        "tgs-ticket-junk",
+        &pa_tgs_edit(0x1000_020d, &|ap| {
+            ap.ticket.enc_part.cipher = junk.clone().into();
+            Ok(())
+        })?,
+        err::GENERIC,
+    )?;
+    expect_error(
+        cfg,
+        "tgs-ap-req-pvno",
+        &pa_tgs_edit(0x1000_020e, &|ap| {
+            ap.pvno = 4;
+            Ok(())
+        })?,
+        err::BAD_PVNO,
     )?;
 
     // It ends with a field no version of Authenticator has, [9].
@@ -5039,12 +6076,11 @@ fn ra_cases(
         );
         Ok(der::edit(&root, &path, Some(&realm)))
     })?;
-    // MIT `rd_req_decoded_opt` (`rd_req_dec.c:530-532`): another client is BADMATCH (36).
     expect_error(cfg, "tgs-authenticator-crealm-octets", &req, err::BADMATCH)?;
 
-    // An AS-REQ whose PA-SPAKE holds an element no PA-SPAKE alternative takes, [4].
-    // MIT `decode_cntype` (`lib/krb5/asn.1/asn1_encode.c:1277-1293`): the element is an unknown choice.
-    // MIT `spake_verify` (`plugins/preauth/spake/spake_kdc.c:532-535`): an unknown choice is PREAUTH_FAILED.
+    // PA-SPAKE holds an element no alternative takes, [4].
+    // MIT: `decode_cntype` (lib/krb5/asn.1/asn1_encode.c:1245-1300)
+    // MIT: `spake_verify` (plugins/preauth/spake/spake_kdc.c:501-539)
     let spake = PaData {
         padata_type: pa::SPAKE,
         padata_value: vec![0xa4, 0x02, 0x30, 0x00].into(),
@@ -5058,8 +6094,6 @@ fn ra_cases(
         err::PREAUTH_FAILED,
     )?;
 
-    // A TGS-REQ whose authenticator's cusec is past 999999.
-    // MIT `rd_req_decoded_opt` (`lib/krb5/krb/rd_req_dec.c:631-631`): only the authenticator's ctime is checked, against the clock skew; its cusec is taken as it is.
     let req = with_authenticator(0x1000_0208, &sess, &|root| {
         let mut authenticator: krb5_types::Authenticator =
             decode(&root.bytes()).map_err(|e| e.to_string())?;
@@ -5068,8 +6102,8 @@ fn ra_cases(
     })?;
     expect_tgs_rep(cfg, "tgs-authenticator-cusec-out-of-range", &req)?;
 
-    // An AS-REQ whose PA-ENC-TIMESTAMP carries a pausec past 999999.
-    // MIT `enc_ts_verify` (`kdc/kdc_preauth_encts.c:97-97`): only the timestamp is checked, against the clock skew; its pausec is taken as it is.
+    // PA-ENC-TIMESTAMP pausec past 999999.
+    // MIT: `enc_ts_verify` (kdc/kdc_preauth_encts.c:46-119)
     let ukey = client_key(18, &cfg.user_pw, user, realm)?;
     let ts = krb5_types::PaEncTsEnc {
         patimestamp: KerberosTime::now(),
@@ -5097,8 +6131,8 @@ fn ra_cases(
         user,
     )?;
 
-    // A TGS-REQ whose authenticator's EncryptedData says aes128 for an aes256 session key.
-    // MIT `krb5_k_decrypt` (`lib/crypto/krb/decrypt.c:45-46`): another enctype than the key's is KRB5_BAD_ENCTYPE, which `errcode_to_protocol` sends as 60.
+    // Authenticator EncryptedData says aes128 for an aes256 session key.
+    // MIT: `krb5_k_decrypt` (lib/crypto/krb/decrypt.c:30-85)
     let mut tgs = tgs_for(0x1000_020a, &sess)?;
     let padata = tgs.0.padata.as_mut().ok_or("no padata")?;
     let pa_tgs = padata
@@ -5115,8 +6149,7 @@ fn ra_cases(
         err::GENERIC,
     )?;
 
-    // An armored AS-REQ whose enc-fast-req says aes128 for an aes256 armor key.
-    // MIT `kdc_find_fast` (`kdc/fast_util.c:191-194`): the armored data decrypts through `krb5_k_decrypt`, so KRB5_BAD_ENCTYPE, 60 FIND_FAST.
+    // MIT: `kdc_find_fast` (kdc/fast_util.c:120-247)
     let armor_sess = random_session(EncryptionType::Aes256CtsHmacSha196)?;
     let armor_sub = random_session(EncryptionType::Aes256CtsHmacSha196)?;
     let armor_tkt = mint_tgt(
@@ -5140,18 +6173,9 @@ fn ra_cases(
     let akey = armor_key(&armor_sess, Some(&armor_sub)).map_err(|e| e.to_string())?;
     let mut fast_req = as_req(user.clone(), realm, 0x1000_020b, None).map_err(|e| e.to_string())?;
     attach_fast(&mut fast_req, &armor_ap, &akey, Vec::new()).map_err(|e| e.to_string())?;
-    let fx = fast_req
-        .0
-        .padata
-        .as_mut()
-        .and_then(|p| p.iter_mut().find(|x| x.padata_type == pa::FX_FAST))
-        .ok_or("no PA-FX-FAST")?;
-    let krb5_types::fast::PaFxFast::ArmoredData(mut armored) =
-        decode(fx.padata_value.as_ref()).map_err(|e| e.to_string())?;
-    armored.enc_fast_req.etype = 17;
-    fx.padata_value = encode(&krb5_types::fast::PaFxFast::ArmoredData(armored))
-        .map_err(|e| e.to_string())?
-        .into();
+    fa_edit(&mut fast_req.0, |w| {
+        w.enc_fast_req.etype = EncryptionType::Aes128CtsHmacSha196.to_iana();
+    })?;
     expect_error(
         cfg,
         "as-fast-armored-data-etype-mismatch",
@@ -5159,6 +6183,840 @@ fn ra_cases(
         err::GENERIC,
     )?;
     Ok(())
+}
+
+fn fa_edit(
+    req: &mut krb5_types::KdcReq,
+    edit: impl FnOnce(&mut krb5_types::fast::KrbFastArmoredReq),
+) -> Result<(), String> {
+    let fx = req
+        .padata
+        .as_mut()
+        .and_then(|p| p.iter_mut().find(|x| x.padata_type == pa::FX_FAST))
+        .ok_or("no PA-FX-FAST")?;
+    let krb5_types::fast::PaFxFast::ArmoredData(mut armored) =
+        decode(fx.padata_value.as_ref()).map_err(|e| e.to_string())?;
+    edit(&mut armored);
+    fx.padata_value = encode(&krb5_types::fast::PaFxFast::ArmoredData(armored))
+        .map_err(|e| e.to_string())?
+        .into();
+    Ok(())
+}
+
+fn flip_first(b: &mut krb5_types::OctetString) {
+    let mut v = b.to_vec();
+    v[0] ^= 0xff;
+    *b = v.into();
+}
+
+// MIT: `armor_ap_request` (kdc/fast_util.c:35-90)
+// MIT: `rd_req_decoded_opt` (lib/krb5/krb/rd_req_dec.c:472-787)
+// MIT: `kdc_find_fast` (kdc/fast_util.c:126-247)
+fn fa_cases(
+    cfg: &Cfg,
+    realm: &str,
+    user: &PrincipalName,
+    host: &PrincipalName,
+) -> Result<(), String> {
+    let tkt_kt = cfg.krbtgt.as_ref().ok_or("KERBER_KRBTGT_KEYTAB required")?;
+    let (tkt_key, tkt_kvno) = keytab_for(tkt_kt, 20)?;
+    let svc = cfg.host.as_ref().ok_or("KERBER_HOST_KEYTAB required")?;
+    let (hkey, hkvno) = keytab_for(svc, 20)?;
+    let crealm = krb5_types::try_ascii(realm).map_err(|e| e.to_string())?;
+    let krbtgt = PrincipalName::krbtgt(realm);
+    let pauser = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["pauser"]);
+    let now = KerberosTime::now();
+    let at = |secs: i64| now.add_seconds(secs).unwrap_or_else(|_| now.clone());
+    let sess = random_session(EncryptionType::Aes256CtsHmacSha196)?;
+    let sub = random_session(EncryptionType::Aes256CtsHmacSha196)?;
+    let wrong = random_session(EncryptionType::Aes256CtsHmacSha196)?;
+    let akey = armor_key(&sess, Some(&sub)).map_err(|e| e.to_string())?;
+    let part = EncTicketPart {
+        flags: TicketFlags::initial_preauth(),
+        key: EncryptionKey {
+            keytype: sess.etype().to_iana(),
+            keyvalue: sess.as_bytes().to_vec().into(),
+        },
+        crealm: crealm.clone(),
+        cname: user.clone(),
+        transited: TransitedEncoding {
+            tr_type: 1,
+            contents: Vec::<u8>::new().into(),
+        },
+        authtime: now.clone(),
+        starttime: Some(now.clone()),
+        endtime: at(36_000),
+        renew_till: None,
+        caddr: None,
+        authorization_data: None,
+    };
+    let tgt = |p: &EncTicketPart| seal_ticket(tkt_key, tkt_kvno, realm, &krbtgt, p);
+    let ap = |t: Ticket, cname: &PrincipalName| {
+        build_fast_armor(t, &sess, &crealm, cname, Some(&sub)).map_err(|e| e.to_string())
+    };
+    let expect_fa = |cfg: &Cfg,
+                     case: &str,
+                     nonce: u32,
+                     client: &PrincipalName,
+                     armor: &ApReq,
+                     edit: Option<&dyn Fn(&mut krb5_types::fast::KrbFastArmoredReq)>,
+                     code: i32|
+     -> Result<(), String> {
+        let mut req = as_req(client.clone(), realm, nonce, None).map_err(|e| e.to_string())?;
+        attach_fast(&mut req, armor, &akey, Vec::new()).map_err(|e| e.to_string())?;
+        if let Some(edit) = edit {
+            fa_edit(&mut req.0, edit)?;
+        }
+        expect_error(cfg, case, &encode(&req).map_err(|e| e.to_string())?, code)
+    };
+    let good = ap(tgt(&part)?, user)?;
+
+    expect_fa(
+        cfg,
+        "fa-armor-badmatch",
+        0x1000_0301,
+        user,
+        &ap(tgt(&part)?, &pauser)?,
+        None,
+        err::BADMATCH,
+    )?;
+    let mut invalid = part.clone();
+    invalid.flags = invalid.flags.with_bit(flag_bit::INVALID, true);
+    expect_fa(
+        cfg,
+        "fa-armor-invalid",
+        0x1000_0302,
+        user,
+        &ap(tgt(&invalid)?, user)?,
+        None,
+        err::GENERIC,
+    )?;
+    // Expired inside the skew: the armor holds; pauser gets 25.
+    let mut stale = part.clone();
+    stale.authtime = at(-7200);
+    stale.starttime = Some(at(-7200));
+    stale.endtime = at(-60);
+    expect_fa(
+        cfg,
+        "fa-armor-expired-in-skew",
+        0x1000_0303,
+        &pauser,
+        &ap(tgt(&stale)?, user)?,
+        None,
+        err::PREAUTH_REQUIRED,
+    )?;
+    let mut odd = part.clone();
+    odd.key.keytype = 99;
+    expect_fa(
+        cfg,
+        "fa-armor-session-etype",
+        0x1000_0304,
+        user,
+        &ap(tgt(&odd)?, user)?,
+        None,
+        err::GENERIC,
+    )?;
+    expect_fa(
+        cfg,
+        "fa-armor-not-ap-req",
+        0x1000_0305,
+        user,
+        &good,
+        Some(&|w| {
+            if let Some(a) = w.armor.as_mut() {
+                a.armor_value = vec![0x30, 0x00].into();
+            }
+        }),
+        err::MSG_TYPE,
+    )?;
+    let mut short_key = part.clone();
+    short_key.key.keyvalue = vec![0x5a; 16].into();
+    expect_fa(
+        cfg,
+        "fa-armor-session-key-size",
+        0x1000_0316,
+        user,
+        &ap(tgt(&short_key)?, user)?,
+        None,
+        err::GENERIC,
+    )?;
+    let mut short_sub = good.clone();
+    let sub_usage = KeyUsage::new(ku::AP_REQ_AUTHENTICATOR).map_err(|e| e.to_string())?;
+    let sub_plain = decrypt(&sess, sub_usage, short_sub.authenticator.cipher.as_ref())
+        .map_err(|e| e.to_string())?;
+    let mut sub_auth: krb5_types::Authenticator = decode(&sub_plain).map_err(|e| e.to_string())?;
+    if let Some(k) = sub_auth.subkey.as_mut() {
+        k.keyvalue = vec![0x5a; 16].into();
+    }
+    short_sub.authenticator.cipher = encrypt(
+        &sess,
+        sub_usage,
+        &encode(&sub_auth).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?
+    .into();
+    expect_fa(
+        cfg,
+        "fa-armor-subkey-size",
+        0x1000_0317,
+        user,
+        &short_sub,
+        None,
+        err::GENERIC,
+    )?;
+    let mut v4 = good.clone();
+    v4.pvno = 4;
+    expect_fa(
+        cfg,
+        "fa-armor-pvno",
+        0x1000_0306,
+        user,
+        &v4,
+        None,
+        err::BAD_PVNO,
+    )?;
+    let nosvr = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "nosvr.kerber.test"]);
+    expect_fa(
+        cfg,
+        "fa-armor-disallow-svr",
+        0x1000_0307,
+        user,
+        &ap(seal_ticket(tkt_key, tkt_kvno, realm, &nosvr, &part)?, user)?,
+        None,
+        err::NOT_US,
+    )?;
+    let mut short = tgt(&part)?;
+    short.enc_part.cipher = vec![0u8; 5].into();
+    expect_fa(
+        cfg,
+        "fa-armor-ticket-short",
+        0x1000_0308,
+        user,
+        &ap(short, user)?,
+        None,
+        err::GENERIC,
+    )?;
+    let usage = KeyUsage::new(ku::TICKET).map_err(|e| e.to_string())?;
+    let mut junk = tgt(&part)?;
+    junk.enc_part.cipher = encrypt(tkt_key, usage, b"not a ticket")
+        .map_err(|e| e.to_string())?
+        .into();
+    expect_fa(
+        cfg,
+        "fa-armor-ticket-junk",
+        0x1000_0309,
+        user,
+        &ap(junk, user)?,
+        None,
+        err::GENERIC,
+    )?;
+    let mut via = part.clone();
+    via.transited.contents = b"OTHER.TEST".to_vec().into();
+    expect_fa(
+        cfg,
+        "fa-armor-transited",
+        0x1000_030a,
+        user,
+        &ap(tgt(&via)?, user)?,
+        None,
+        err::GENERIC,
+    )?;
+    // A foreign client realm: this hop is off its realm tree.
+    let other_realm = krb5_types::try_ascii("OTHER.TEST").map_err(|e| e.to_string())?;
+    let mut far = via.clone();
+    far.crealm = other_realm.clone();
+    far.transited.contents = b"SOMEWHERE.ELSE".to_vec().into();
+    let far_ap = build_fast_armor(tgt(&far)?, &sess, &other_realm, user, Some(&sub))
+        .map_err(|e| e.to_string())?;
+    expect_fa(
+        cfg,
+        "fa-armor-transited-cross",
+        0x1000_031a,
+        user,
+        &far_ap,
+        None,
+        err::ILL_CR_TKT,
+    )?;
+    // A NUL-led list is not checked; pauser gets 25.
+    let mut nul = part.clone();
+    nul.transited.contents = b"\0OTHER.TEST".to_vec().into();
+    expect_fa(
+        cfg,
+        "fa-armor-transited-nul",
+        0x1000_0321,
+        &pauser,
+        &ap(tgt(&nul)?, user)?,
+        None,
+        err::PREAUTH_REQUIRED,
+    )?;
+    let mut srv = far.clone();
+    srv.transited.contents = b"KERBER.TEST".to_vec().into();
+    let srv_ap = build_fast_armor(tgt(&srv)?, &sess, &other_realm, user, Some(&sub))
+        .map_err(|e| e.to_string())?;
+    expect_fa(
+        cfg,
+        "fa-armor-transited-srv",
+        0x1000_0328,
+        &pauser,
+        &srv_ap,
+        None,
+        err::ILL_CR_TKT,
+    )?;
+    let mut kv = tgt(&part)?;
+    kv.enc_part.kvno = Some(99);
+    expect_fa(
+        cfg,
+        "fa-armor-kvno",
+        0x1000_030b,
+        user,
+        &ap(kv, user)?,
+        None,
+        err::BADKEYVER,
+    )?;
+    let other = random_session(EncryptionType::Aes256CtsHmacSha384192)?;
+    expect_fa(
+        cfg,
+        "fa-armor-ticket-key",
+        0x1000_030c,
+        user,
+        &ap(seal_ticket(&other, tkt_kvno, realm, &krbtgt, &part)?, user)?,
+        None,
+        err::BAD_INTEGRITY,
+    )?;
+    let mut early = part.clone();
+    early.starttime = Some(at(3600));
+    expect_fa(
+        cfg,
+        "fa-armor-nyv",
+        0x1000_030d,
+        user,
+        &ap(tgt(&early)?, user)?,
+        None,
+        err::TKT_NYV,
+    )?;
+    let mut old = stale.clone();
+    old.endtime = at(-3600);
+    expect_fa(
+        cfg,
+        "fa-armor-expired",
+        0x1000_030e,
+        user,
+        &ap(tgt(&old)?, user)?,
+        None,
+        err::TKT_EXPIRED,
+    )?;
+    let mut skewed = good.clone();
+    let auth_usage = KeyUsage::new(ku::AP_REQ_AUTHENTICATOR).map_err(|e| e.to_string())?;
+    let plain = decrypt(&sess, auth_usage, skewed.authenticator.cipher.as_ref())
+        .map_err(|e| e.to_string())?;
+    let mut authenticator: krb5_types::Authenticator = decode(&plain).map_err(|e| e.to_string())?;
+    authenticator.ctime = at(-3600);
+    let auth_der = encode(&authenticator).map_err(|e| e.to_string())?;
+    skewed.authenticator.cipher = encrypt(&sess, auth_usage, &auth_der)
+        .map_err(|e| e.to_string())?
+        .into();
+    expect_fa(
+        cfg,
+        "fa-armor-skew",
+        0x1000_030f,
+        user,
+        &skewed,
+        None,
+        err::SKEW,
+    )?;
+    let bad_auth = build_fast_armor(tgt(&part)?, &wrong, &crealm, user, Some(&sub))
+        .map_err(|e| e.to_string())?;
+    expect_fa(
+        cfg,
+        "fa-armor-authenticator-key",
+        0x1000_0310,
+        user,
+        &bad_auth,
+        None,
+        err::BAD_INTEGRITY,
+    )?;
+    expect_fa(
+        cfg,
+        "fa-armor-host-ticket",
+        0x1000_0311,
+        user,
+        &ap(seal_ticket(hkey, hkvno, realm, host, &part)?, user)?,
+        None,
+        err::SERVER_NOMATCH,
+    )?;
+
+    let mut req = as_req(user.clone(), realm, 0x1000_0312, None).map_err(|e| e.to_string())?;
+    attach_fast(&mut req, &good, &wrong, Vec::new()).map_err(|e| e.to_string())?;
+    expect_error(
+        cfg,
+        "fa-fast-req-key",
+        &encode(&req).map_err(|e| e.to_string())?,
+        err::BAD_INTEGRITY,
+    )?;
+    expect_fa(
+        cfg,
+        "fa-fast-req-flip",
+        0x1000_032a,
+        user,
+        &good,
+        Some(&|w| flip_first(&mut w.enc_fast_req.cipher)),
+        err::BAD_INTEGRITY,
+    )?;
+    expect_fa(
+        cfg,
+        "fa-fast-req-short",
+        0x1000_0313,
+        user,
+        &good,
+        Some(&|w| w.enc_fast_req.cipher = vec![0u8; 5].into()),
+        err::GENERIC,
+    )?;
+    expect_fa(
+        cfg,
+        "fa-fast-cksum-type",
+        0x1000_0314,
+        user,
+        &good,
+        Some(&|w| w.req_checksum.cksumtype = 99),
+        err::GENERIC,
+    )?;
+    expect_fa(
+        cfg,
+        "fa-fast-cksum-size",
+        0x1000_0318,
+        user,
+        &good,
+        Some(&|w| w.req_checksum.checksum = vec![0u8; 4].into()),
+        err::GENERIC,
+    )?;
+    expect_fa(
+        cfg,
+        "fa-fast-cksum-flip",
+        0x1000_032b,
+        user,
+        &good,
+        Some(&|w| flip_first(&mut w.req_checksum.checksum)),
+        err::MODIFIED,
+    )?;
+    // Bare, without PA-FX-FAST's CHOICE tag.
+    let mut req = as_req(user.clone(), realm, 0x1000_0319, None).map_err(|e| e.to_string())?;
+    attach_fast(&mut req, &good, &akey, Vec::new()).map_err(|e| e.to_string())?;
+    let fx = req
+        .0
+        .padata
+        .as_mut()
+        .and_then(|p| p.iter_mut().find(|x| x.padata_type == pa::FX_FAST))
+        .ok_or("no PA-FX-FAST")?;
+    let krb5_types::fast::PaFxFast::ArmoredData(armored) =
+        decode(fx.padata_value.as_ref()).map_err(|e| e.to_string())?;
+    fx.padata_value = encode(&armored).map_err(|e| e.to_string())?.into();
+    expect_error(
+        cfg,
+        "fa-fast-bare-armored-req",
+        &encode(&req).map_err(|e| e.to_string())?,
+        err::GENERIC,
+    )?;
+    expect_fa(
+        cfg,
+        "fa-fast-cksum-crc32",
+        0x1000_031b,
+        user,
+        &good,
+        Some(&|w| w.req_checksum.cksumtype = 1),
+        err::GENERIC,
+    )?;
+    expect_fa(
+        cfg,
+        "fa-fast-cksum-md5-bytes",
+        0x1000_031c,
+        user,
+        &good,
+        Some(&|w| {
+            w.req_checksum.cksumtype = 7;
+            w.req_checksum.checksum = vec![0xff; 16].into();
+        }),
+        err::MODIFIED,
+    )?;
+    expect_fa(
+        cfg,
+        "fa-fast-cksum-md5-short",
+        0x1000_031d,
+        user,
+        &good,
+        Some(&|w| {
+            w.req_checksum.cksumtype = 7;
+            w.req_checksum.checksum = vec![0xff; 12].into();
+        }),
+        err::GENERIC,
+    )?;
+    expect_fa(
+        cfg,
+        "fa-fast-cksum-hmac-md5",
+        0x1000_031e,
+        user,
+        &good,
+        Some(&|w| {
+            w.req_checksum.cksumtype = -138;
+            w.req_checksum.checksum = vec![0xff; 16].into();
+        }),
+        err::MODIFIED,
+    )?;
+    let sess128 = random_session(EncryptionType::Aes128CtsHmacSha196)?;
+    let sub128 = random_session(EncryptionType::Aes128CtsHmacSha196)?;
+    let mut part128 = part.clone();
+    part128.key = EncryptionKey {
+        keytype: sess128.etype().to_iana(),
+        keyvalue: sess128.as_bytes().to_vec().into(),
+    };
+    let ap128 = build_fast_armor(tgt(&part128)?, &sess128, &crealm, user, Some(&sub128))
+        .map_err(|e| e.to_string())?;
+    let akey128 = armor_key(&sess128, Some(&sub128)).map_err(|e| e.to_string())?;
+    let mut req = as_req(user.clone(), realm, 0x1000_031f, None).map_err(|e| e.to_string())?;
+    attach_fast(&mut req, &ap128, &akey128, Vec::new()).map_err(|e| e.to_string())?;
+    fa_edit(&mut req.0, |w| {
+        w.req_checksum.cksumtype = 19;
+        w.req_checksum.checksum = vec![0xff; 16].into();
+    })?;
+    expect_error(
+        cfg,
+        "fa-fast-cksum-same-provider",
+        &encode(&req).map_err(|e| e.to_string())?,
+        err::MODIFIED,
+    )?;
+    expect_fa(
+        cfg,
+        "fa-fast-cksum-cross-enc",
+        0x1000_0322,
+        user,
+        &good,
+        Some(&|w| w.req_checksum.cksumtype = 15),
+        err::GENERIC,
+    )?;
+    expect_fa(
+        cfg,
+        "fa-fast-cksum-type-zero",
+        0x1000_0323,
+        user,
+        &good,
+        Some(&|w| w.req_checksum.cksumtype = 0),
+        err::POLICY,
+    )?;
+    let mut req = as_req(user.clone(), realm, 0x1000_0324, None).map_err(|e| e.to_string())?;
+    attach_fast(&mut req, &good, &akey, Vec::new()).map_err(|e| e.to_string())?;
+    let md5 =
+        krb5_crypto::unkeyed_checksum(7, &encode(&req.0.req_body).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+    fa_edit(&mut req.0, |w| {
+        w.req_checksum.cksumtype = 7;
+        w.req_checksum.checksum = md5.into();
+    })?;
+    expect_error(
+        cfg,
+        "fa-fast-cksum-md5-body",
+        &encode(&req).map_err(|e| e.to_string())?,
+        err::POLICY,
+    )?;
+    let mut req = as_req(user.clone(), realm, 0x1000_0325, None).map_err(|e| e.to_string())?;
+    attach_fast(&mut req, &good, &akey, Vec::new()).map_err(|e| e.to_string())?;
+    fa_edit(&mut req.0, |w| {
+        if let Some(a) = w.armor.as_mut() {
+            a.armor_type = 99;
+        }
+    })?;
+    expect_error_no_edata(
+        cfg,
+        "fa-armor-type-unknown",
+        &encode(&req).map_err(|e| e.to_string())?,
+        err::PREAUTH_FAILED,
+    )?;
+    let mut bit0 = krb5_types::fast::fast_options_none();
+    bit0.set(0, true);
+    let mut req = as_req(user.clone(), realm, 0x1000_0320, None).map_err(|e| e.to_string())?;
+    attach_fast_with_options(&mut req, &good, &akey, Vec::new(), &bit0)
+        .map_err(|e| e.to_string())?;
+    expect_error(
+        cfg,
+        "fa-fast-option-bit0",
+        &encode(&req).map_err(|e| e.to_string())?,
+        err::UNKNOWN_CRITICAL_FAST_OPTION,
+    )?;
+    let mut hide = krb5_types::fast::fast_options_none();
+    hide.set(1, true);
+    let ukey = client_key(18, &cfg.user_pw, user, realm)?;
+    let mut req = as_req(user.clone(), realm, 0x1000_0326, None).map_err(|e| e.to_string())?;
+    let ts = pa_enc_timestamp(&ukey).map_err(|e| e.to_string())?;
+    attach_fast_with_options(&mut req, &good, &akey, vec![ts], &hide).map_err(|e| e.to_string())?;
+    let (rust, mit) = send_both(
+        cfg,
+        "fa-fast-hide-client-rep",
+        &encode(&req).map_err(|e| e.to_string())?,
+    )?;
+    let mut outer = Vec::new();
+    for (leg, b) in [("rust", &rust), ("mit", &mit)] {
+        let rep: AsRep = decode(b).map_err(|e| format!("fa-fast-hide-client-rep {leg}: {e}"))?;
+        let fin = krb5_protocol::unwrap_fast_rep(&akey, &rep.0.padata)
+            .map_err(|e| format!("fa-fast-hide-client-rep {leg} unwrap: {e}"))?
+            .finished
+            .ok_or_else(|| format!("fa-fast-hide-client-rep {leg}: no finished"))?;
+        let real = format!(
+            "{}@{}",
+            fin.cname.components_joined(),
+            String::from_utf8_lossy(fin.crealm.as_bytes())
+        );
+        if real != "user@KERBER.TEST" {
+            return Err(format!(
+                "fa-fast-hide-client-rep {leg}: finished names {real}"
+            ));
+        }
+        outer.push(format!(
+            "{}@{}",
+            rep.0.cname.components_joined(),
+            String::from_utf8_lossy(rep.0.crealm.as_bytes())
+        ));
+    }
+    if outer[0] != outer[1] || outer[1] != "WELLKNOWN/ANONYMOUS@WELLKNOWN:ANONYMOUS" {
+        return Err(format!(
+            "fa-fast-hide-client-rep: outer client rust={} mit={}",
+            outer[0], outer[1]
+        ));
+    }
+    println!(
+        concat!(
+            r#"{{"event":"diffsend","case":"fa-fast-hide-client-rep","outcome":"ok","#,
+            r#""rust_tag":"0x6b","mit_tag":"0x6b","outer_client":"{}","#,
+            r#""finished":"user@KERBER.TEST"}}"#
+        ),
+        outer[1]
+    );
+
+    let mut req = as_req(pauser.clone(), realm, 0x1000_0327, None).map_err(|e| e.to_string())?;
+    attach_fast(&mut req, &good, &akey, Vec::new()).map_err(|e| e.to_string())?;
+    let (rust, mit) = send_both(
+        cfg,
+        "fa-fast-error-inner",
+        &encode(&req).map_err(|e| e.to_string())?,
+    )?;
+    let mut inner = Vec::new();
+    for (leg, b) in [("rust", &rust), ("mit", &mit)] {
+        let e: KrbError = decode(b).map_err(|e| format!("fa-fast-error-inner {leg}: {e}"))?;
+        let md: krb5_types::MethodData = decode(e.e_data.as_ref().ok_or("no e_data")?.as_ref())
+            .map_err(|e| format!("fa-fast-error-inner {leg} e_data: {e}"))?;
+        let fast = krb5_protocol::unwrap_fast_rep(&akey, &Some(md))
+            .map_err(|e| format!("fa-fast-error-inner {leg} unwrap: {e}"))?;
+        let types: Vec<i32> = fast.padata.iter().map(|p| p.padata_type).collect();
+        let last = fast.padata.last().ok_or("no inner padata")?;
+        let fx: KrbError = decode(last.padata_value.as_ref())
+            .map_err(|e| format!("fa-fast-error-inner {leg} FX-ERROR: {e}"))?;
+        if last.padata_type != pa::FX_ERROR
+            || !types.contains(&pa::FX_COOKIE)
+            || fx.e_data.is_some()
+            || fast.strengthen_key.is_some()
+        {
+            return Err(format!(
+                "fa-fast-error-inner {leg}: types {types:?}, FX-ERROR e_data {}, strengthen {}",
+                fx.e_data.is_some(),
+                fast.strengthen_key.is_some()
+            ));
+        }
+        inner.push(types);
+    }
+    if inner[0] != inner[1] {
+        return Err(format!(
+            "fa-fast-error-inner: inner types rust={:?} mit={:?}",
+            inner[0], inner[1]
+        ));
+    }
+    println!(
+        concat!(
+            r#"{{"event":"diffsend","case":"fa-fast-error-inner","outcome":"ok","#,
+            r#""rust_tag":"0x7e","mit_tag":"0x7e","inner_types":"{:?}"}}"#
+        ),
+        inner[1]
+    );
+    let adv = |ad_type: i32, data: Vec<u8>| AuthorizationDataValue {
+        ad_type,
+        ad_data: data.into(),
+    };
+    let fa_ad = |nonce: u32,
+                 client: &PrincipalName,
+                 ad: Vec<AuthorizationDataValue>|
+     -> Result<Vec<u8>, String> {
+        let mut p = part.clone();
+        p.authorization_data = Some(ad);
+        let mut req = as_req(client.clone(), realm, nonce, None).map_err(|e| e.to_string())?;
+        attach_fast(&mut req, &ap(tgt(&p)?, user)?, &akey, Vec::new())
+            .map_err(|e| e.to_string())?;
+        encode(&req).map_err(|e| e.to_string())
+    };
+    let wrap = |inner: Vec<AuthorizationDataValue>| -> Result<AuthorizationDataValue, String> {
+        Ok(adv(
+            pa::AD_IF_RELEVANT,
+            encode(&inner).map_err(|e| e.to_string())?,
+        ))
+    };
+    let cammac_usage = KeyUsage::new(ku::CAMMAC).map_err(|e| e.to_string())?;
+    let svc_mac = |elements: &AuthorizationData| -> Result<Checksum, String> {
+        let der = encode(elements).map_err(|e| e.to_string())?;
+        Ok(Checksum {
+            cksumtype: tkt_key.etype().checksum_type(),
+            checksum: checksum(tkt_key, cammac_usage, &der)
+                .map_err(|e| e.to_string())?
+                .into(),
+        })
+    };
+    let cammac = |elements: AuthorizationData,
+                  mac: Option<Checksum>|
+     -> Result<AuthorizationDataValue, String> {
+        let c = krb5_types::cammac::Cammac {
+            elements,
+            kdc_verifier: None,
+            svc_verifier: mac.map(|mac| krb5_types::cammac::VerifierMac {
+                identifier: None,
+                kvno: None,
+                enctype: None,
+                mac,
+            }),
+            other_verifiers: None,
+        };
+        Ok(adv(pa::AD_CAMMAC, encode(&c).map_err(|e| e.to_string())?))
+    };
+    let junk = || vec![0x04u8, 0x00];
+    let other = vec![adv(1000, b"x".to_vec())];
+    expect_error(
+        cfg,
+        "fa-armor-ad-if-relevant-junk",
+        &fa_ad(0x1000_032c, user, vec![adv(pa::AD_IF_RELEVANT, junk())])?,
+        err::GENERIC,
+    )?;
+    expect_error(
+        cfg,
+        "fa-armor-ad-kdc-issued-junk",
+        &fa_ad(0x1000_032d, user, vec![adv(pa::AD_KDC_ISSUED, junk())])?,
+        err::GENERIC,
+    )?;
+    let issued = AdKdcIssued {
+        ad_checksum: svc_mac(&other)?,
+        i_realm: None,
+        i_sname: None,
+        elements: other.clone(),
+    };
+    expect_error(
+        cfg,
+        "fa-armor-ad-kdc-issued-bad-mac",
+        &fa_ad(
+            0x1000_032e,
+            &pauser,
+            vec![wrap(vec![adv(
+                pa::AD_KDC_ISSUED,
+                encode(&issued).map_err(|e| e.to_string())?,
+            )])?],
+        )?,
+        err::PREAUTH_REQUIRED,
+    )?;
+    expect_error(
+        cfg,
+        "fa-armor-cammac-junk",
+        &fa_ad(0x1000_032f, user, vec![adv(pa::AD_CAMMAC, junk())])?,
+        err::GENERIC,
+    )?;
+    expect_error(
+        cfg,
+        "fa-armor-cammac-no-svc",
+        &fa_ad(0x1000_0330, user, vec![cammac(other.clone(), None)?])?,
+        err::GENERIC,
+    )?;
+    let mut bad = svc_mac(&other)?;
+    flip_first(&mut bad.checksum);
+    expect_error(
+        cfg,
+        "fa-armor-cammac-bad-mac",
+        &fa_ad(
+            0x1000_0331,
+            &pauser,
+            vec![wrap(vec![cammac(other.clone(), Some(bad))?])?],
+        )?,
+        err::PREAUTH_REQUIRED,
+    )?;
+    let mut unknown = svc_mac(&other)?;
+    unknown.cksumtype = 99;
+    expect_error(
+        cfg,
+        "fa-armor-cammac-svc-type",
+        &fa_ad(
+            0x1000_0332,
+            user,
+            vec![cammac(other.clone(), Some(unknown))?],
+        )?,
+        err::GENERIC,
+    )?;
+    expect_error(
+        cfg,
+        "fa-armor-pac-range",
+        &fa_ad(
+            0x1000_0333,
+            user,
+            vec![wrap(vec![adv(pa::AD_WIN2K_PAC, vec![0; 8])])?],
+        )?,
+        err::GENERIC,
+    )?;
+    expect_error(
+        cfg,
+        "fa-armor-pac-version",
+        &fa_ad(
+            0x1000_0334,
+            user,
+            vec![wrap(vec![adv(
+                pa::AD_WIN2K_PAC,
+                vec![1, 0, 0, 0, 1, 0, 0, 0],
+            )])?],
+        )?,
+        err::GENERIC,
+    )?;
+    let ind = vec![adv(pa::AD_AUTH_INDICATOR, junk())];
+    expect_error(
+        cfg,
+        "fa-armor-authind-junk",
+        &fa_ad(
+            0x1000_0335,
+            user,
+            vec![wrap(vec![cammac(ind.clone(), Some(svc_mac(&ind)?))?])?],
+        )?,
+        err::GENERIC,
+    )?;
+    expect_error(
+        cfg,
+        "fa-armor-ad-too-many",
+        &fa_ad(0x1000_0336, user, vec![adv(pa::AD_KDC_ISSUED, junk()); 257])?,
+        err::GENERIC,
+    )?;
+    let good_ind = vec![adv(
+        pa::AD_AUTH_INDICATOR,
+        encode(&vec!["otp".to_owned()]).map_err(|e| e.to_string())?,
+    )];
+    expect_error(
+        cfg,
+        "fa-armor-authind-ok",
+        &fa_ad(
+            0x1000_0337,
+            &pauser,
+            vec![wrap(vec![cammac(
+                good_ind.clone(),
+                Some(svc_mac(&good_ind)?),
+            )?])?],
+        )?,
+        err::PREAUTH_REQUIRED,
+    )?;
+    let mut opts = krb5_types::fast::fast_options_none();
+    opts.set(2, true);
+    let mut req = as_req(user.clone(), realm, 0x1000_0315, None).map_err(|e| e.to_string())?;
+    attach_fast_with_options(&mut req, &good, &akey, Vec::new(), &opts)
+        .map_err(|e| e.to_string())?;
+    expect_error(
+        cfg,
+        "fa-fast-critical-option",
+        &encode(&req).map_err(|e| e.to_string())?,
+        err::UNKNOWN_CRITICAL_FAST_OPTION,
+    )
 }
 
 fn main() {

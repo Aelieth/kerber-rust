@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # harness/field/run.sh: one field run on the lab (harness/field/README.md, "Field runs" and "Scenarios").
 #
-#   run.sh --profile nightly|weekly [--ref <git ref>] [--only <scenario,...>] [--leg mit|rust|both]
+#   run.sh --profile nightly|weekly|kill-loop --ref <git ref> [--only <scenario,...>] [--leg mit|rust|both]
+#   run.sh ad-trust --ref <git ref> [--leg mit|rust|both]   (upgrade, then the real AD DC: scenarios/ad-trust.sh)
 #
 # The tree under test is `git archive <ref>` of the repository run.sh lives in (read-only, GIT_OPTIONAL_LOCKS=0;
 # FIELD_REPO in field.env names another), never a working tree. Each selected scenario's leg drives the real
@@ -12,7 +13,9 @@
 # directory); every snapshot baseline.env names exists; `lab.sh check --lab-only` of the VMs the selected
 # scenarios use (ssh, DNS, time sync: no internet, LAN or AD DC probe); the sha256 of /etc/krb5.conf, and from
 # a distrobox of the host's own. Postflight, also after a stop or an interruption: those sums unchanged, nothing
-# new in the host's /tmp owned by the user, the secret scan of the whole run with its planted control first.
+# new in the host's /tmp owned by the user (/tmp/claude-<uid>, /tmp/grok-file-lock-<uid> and the desktop's
+# top-level Chromium and GIMP scratch names left out, counted), the secret scan of the whole run with its planted
+# control first.
 # Any failure fails the run. A scenario that did not run is NOT-RUN, never green. Exit 0 only when every
 # selected scenario passed and every guard held.
 # Limits: a scenario has FIELD_SCENARIO_TIMEOUT seconds (default 1800; its commands are cut to what is left,
@@ -29,17 +32,20 @@ LOCK=$LAB_HOME/state/lab.lock
 KEEP=30
 # The scenarios of each profile, in order; upgrade is first: it puts the leg's KDC on kdc (MIT's baseline, or the ref
 # under test), and the other scenarios use the kdc it left.
-declare -A PROFILES=([nightly]="upgrade services nfs-client sssd-login klldap-swap" [weekly]="upgrade services nfs-client sssd-login klldap-swap")
+declare -A PROFILES=([nightly]="upgrade kadmind-start services nfs-client sssd-login klldap-swap" [weekly]="upgrade kadmind-start secrets-gcore services nfs-client sssd-login klldap-swap kdc-profile kdb-writes ticket-flags client-tools pkinit kpasswd rollback replica install"
+    [ad-trust]="upgrade ad-trust" [kill-loop]="upgrade kill-loop")
 
 die() { printf 'run.sh: %s\n' "$*" >&2; exit 1; }
-usage() { sed -n '4p' "${BASH_SOURCE[0]}" | sed 's/^# *//'; }
-PROFILE='' REF=f-functional ONLY='' LEG=rust
+usage() { sed -n '4,5p' "${BASH_SOURCE[0]}" | sed 's/^# *//'; }
+PROFILE='' REF='' ONLY='' LEG=rust
+# The AD DC scenario changes the DC (and undoes it), so it runs only in this one form.
+if [ "${1:-}" = ad-trust ]; then PROFILE=ad-trust; shift; fi
 while [ $# -gt 0 ]; do
     case $1 in
         --profile | --ref | --only | --leg) [ $# -ge 2 ] || die "$1 needs a value" ;;
     esac
     case $1 in
-        --profile) PROFILE=$2; shift 2 ;;
+        --profile) [ "$2" != ad-trust ] || die "the AD DC scenario runs as: run.sh ad-trust [--ref R] [--leg L]"; PROFILE=$2; shift 2 ;;
         --ref) REF=$2; shift 2 ;;
         --only) ONLY=$2; shift 2 ;;
         --leg) LEG=$2; shift 2 ;;
@@ -48,6 +54,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 [ -n "${PROFILES[$PROFILE]+x}" ] || { usage >&2; die "--profile must be one of: ${!PROFILES[*]}"; }
+[ -n "$REF" ] || { usage >&2; die "--ref is required (no default branch)"; }
 case $LEG in
     mit | rust) LEGS=("$LEG") ;;
     both) LEGS=(mit rust) ;;
@@ -111,18 +118,29 @@ declare -a ROWS=()
 
 # postflight: the guards that hold whatever happened before them.
 postflight() {
-    local mark=$RUN/tmp/.start excl='' left=''
+    local mark=$RUN/tmp/.start left='' grok_excl claude_excl desktop_left b
+    local -a prune names desktop_excl
     section "postflight"
     krb5_sums > "$RUN/guards/krb5.conf.end"
-    check post.krb5.conf rc host "diff $(printf '%q' "$RUN/guards/krb5.conf.start") $(printf '%q' "$RUN/guards/krb5.conf.end") && echo unchanged: && cat $(printf '%q' "$RUN/guards/krb5.conf.end")"
-    if [ "${CLAUDECODE:-}" = 1 ]; then
-        excl="/tmp/claude-$(id -u)"
-        note "driven from a Claude Code session (CLAUDECODE=1): the session writes its own $excl on every tool call, so that one tree is left out of the /tmp guard (and counted)"
-        left="; left out: $(find "$excl" -xdev -newer "$mark" 2>/dev/null | wc -l) entries under $excl"
-        find /tmp -xdev -path "$excl" -prune -o -user "$(id -un)" -newer "$mark" -print > "$RUN/guards/host-tmp.txt" 2>/dev/null || true
-    else
-        find /tmp -xdev -user "$(id -un)" -newer "$mark" -print > "$RUN/guards/host-tmp.txt" 2>/dev/null || true
-    fi
+    sides post.krb5.conf start "$RUN/guards/krb5.conf.start" end "$RUN/guards/krb5.conf.end" \
+        && check post.krb5.conf rc host "diff $(printf '%q' "$RUN/guards/krb5.conf.start") $(printf '%q' "$RUN/guards/krb5.conf.end") && echo unchanged: && cat $(printf '%q' "$RUN/guards/krb5.conf.end")"
+    # Both trees are CLI scratch for this user, written whether or not that CLI is driving the run;
+    # the desktop's Chromium and GIMP make the top-level names (scoped_dir* is Chromium's ScopedTempDir).
+    grok_excl="/tmp/grok-file-lock-$(id -u)"
+    claude_excl="/tmp/claude-$(id -u)"
+    desktop_excl=('.org.chromium.Chromium.*' 'org.chromium.Chromium.*' 'scoped_dir*' 'gimp-*')
+    prune=(-path "$grok_excl" -prune -o -path "$claude_excl" -prune -o)
+    names=()
+    for b in "${desktop_excl[@]}"; do
+        prune+=(-path "/tmp/$b" -prune -o)
+        names+=(-o -name "$b")
+    done
+    note "left out of the /tmp guard (and counted): $grok_excl $claude_excl /tmp/{${desktop_excl[*]}}"
+    left="; left out: $(find "$grok_excl" -xdev -newer "$mark" 2>/dev/null | wc -l) entries under $grok_excl"
+    left+="; left out: $(find "$claude_excl" -xdev -newer "$mark" 2>/dev/null | wc -l) entries under $claude_excl"
+    desktop_left=$(find /tmp -maxdepth 1 -xdev -user "$(id -un)" -newer "$mark" \( "${names[@]:1}" \) -printf '%f\n' 2>/dev/null | sort | paste -sd' ' -)
+    left+="; left out: $(wc -w <<< "$desktop_left") desktop scratch names${desktop_left:+: $desktop_left}"
+    find /tmp -xdev "${prune[@]}" -user "$(id -un)" -newer "$mark" -print > "$RUN/guards/host-tmp.txt" 2>/dev/null || true
     printf 'new in /tmp: %s%s\n' "$(grep -c . "$RUN/guards/host-tmp.txt" || true)" "$left" >> "$RUN/guards/host-tmp.txt"
     check post.host.tmp '^new in /tmp: 0(;|$)' host "cat $(printf '%q' "$RUN/guards/host-tmp.txt")"
     check post.secret.scan rc host "python3 -B $(printf '%q' "$FIELD_LIB/scan-secrets.py") $(printf '%q' "$RUN")"
@@ -162,7 +180,7 @@ wrapup() {
         if [ "$i" -lt $(( ${#ids[@]} - KEEP )) ] && [ "${results[$i]}" = PASS ]; then drop+=("${ids[$i]}"); fi
     done
     for id in "${drop[@]}"; do
-        [[ $id =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}-(nightly|weekly)$ ]] || continue
+        [[ $id =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}-(nightly|weekly|ad-trust|kill-loop)$ ]] || continue
         rm -rf -- "${RUNS:?}/$id"
         awk -F'\t' -v id="$id" '$1 != id' "$RUNS/index.tsv" > "$RUNS/index.tsv.new" && mv "$RUNS/index.tsv.new" "$RUNS/index.tsv"
     done
@@ -272,12 +290,17 @@ for leg in "${LEGS[@]}"; do
             say "== $sc --leg $leg: NOT-RUN ($reason)"
             continue
         fi
+        # A scenario names its own wall clock (`# field-limit scenario=N`) when one command
+        # is longer than the default deadline. The number in the scenario file is the one used.
+        this_limit=$SCEN_LIMIT
+        declared=$(sed -n 's/^# field-limit scenario=\([0-9][0-9]*\)$/\1/p' "$HERE/scenarios/$sc.sh")
+        if [ -n "$declared" ]; then this_limit=$declared; fi
         say "== $sc --leg $leg"
         t=$(date +%s)
         rc=0
         REC_DIR=$dir TMPDIR=$RUN/tmp/$sc-$leg FIELD_RUN=$RUN FIELD_TREE_TAR=$RUN/tmp/tree.tar FIELD_SHA=$SHA \
-            FIELD_REF=$REF FIELD_DEADLINE=$(( t + SCEN_LIMIT )) \
-            timeout -k 60 $(( SCEN_LIMIT + 120 )) bash "$HERE/scenarios/$sc.sh" --leg "$leg" 9>&- \
+            FIELD_REF=$REF FIELD_DEADLINE=$(( t + this_limit )) \
+            timeout -k 60 $(( this_limit + 120 )) bash "$HERE/scenarios/$sc.sh" --leg "$leg" \
             > >(tee -i -a "$RUN/run.log" 9>&-) 2>&1 &
         SCEN=$!
         while :; do
@@ -287,9 +310,8 @@ for leg in "${LEGS[@]}"; do
         done
         SCEN=''
         res=$(cut -d' ' -f1 "$dir/result" 2>/dev/null || true)
-        npass=$(awk -F'\t' '$2 == "PASS"' "$dir/checks.tsv" 2>/dev/null | wc -l)
-        nfail=$(awk -F'\t' '$2 == "FAIL"' "$dir/checks.tsv" 2>/dev/null | wc -l)
-        ninfo=$(awk -F'\t' '$2 == "INFO"' "$dir/checks.tsv" 2>/dev/null | wc -l)
+        npass=0 nfail=0 ninfo=0
+        if [ -f "$dir/checks.tsv" ]; then read -r npass nfail ninfo < <(_lastcounts "$dir/checks.tsv"); fi
         if [ "$rc" = 0 ] && [ "$res" = PASS ] && [ "$nfail" = 0 ] && [ "$npass" -gt 0 ]; then
             res=PASS
         else
@@ -300,8 +322,26 @@ for leg in "${LEGS[@]}"; do
         ROWS+=("$(printf '%-12s %-5s %-8s %s pass / %s fail / %s info, %s min, exit %s%s: %s/%s/record.txt' \
             "$sc" "$leg" "$res" "$npass" "$nfail" "$ninfo" "$(( ($(date +%s) - t) / 60 ))" "$rc" \
             "$([ "$rc" = 124 ] && echo ' (over its time limit)')" "$sc" "$leg")")
+        if [ "$leg" = mit ] && [ "$res" = PASS ]; then
+            mkdir -p "$RUNS/mit-latest/$sc"
+            cp "$dir/checks.tsv" "$RUNS/mit-latest/$sc/checks.tsv"
+        fi
         say "== $sc --leg $leg: $res"
     done
+done
+
+# ---------------------------------------------------------------- grade rust against the MIT leg (this run, else mit-latest)
+for sc in "${SEL[@]}"; do
+    mit=$RUN/$sc/mit/checks.tsv
+    rust=$RUN/$sc/rust/checks.tsv
+    if [ ! -f "$mit" ] && [ -f "$RUNS/mit-latest/$sc/checks.tsv" ]; then
+        mit=$RUNS/mit-latest/$sc/checks.tsv
+    fi
+    if [ -f "$rust" ] && [ -f "$mit" ] && [ -f "$HERE/scenarios/$sc.expect" ]; then
+        python3 -I "$HERE/lib/compare.py" \
+            --expect "$HERE/scenarios/$sc.expect" --mit "$mit" --rust "$rust" \
+            --out "$RUN/$sc/grades.tsv" || ALL_PASS=0
+    fi
 done
 
 # ---------------------------------------------------------------- postflight, summary, index, retention
