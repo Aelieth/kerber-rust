@@ -23,7 +23,7 @@ any other `###` heading.
 - **admin.** A kadm5 password buffer is wiped when its RPC copy is dropped.
 - **crypto.** crypto-bigint 0.7.9 fixes RUSTSEC-2026-0387, uneven timing in PKINIT DH/RSA/ECDSA and SPAKE.
 - **kdc.** Unable to make audit id, KDC drops AS-REQ and gives TGS-REQ generic error, as MIT.
-- **kdc.** Extra or mistyped SignedData/SignerInfo fields fail PKINIT signedAuthPack, as MIT.
+- **kdc.** Extra or mistyped SignedData/SignerInfo fields fail signedAuthPack, as MIT.
 - **pkinit.** P-384 needs `--cfg p384_backend="fiat"` (constant-time; our cargo config sets it) or is refused.
 - **kdc.** Bad PKINIT signedAuthPack gives OpenSSL's CMS reason, as MIT logs it.
 - **kdc.** PKINIT signer with no signed attributes is taken, as MIT's `CMS_verify`.
@@ -46,7 +46,7 @@ any other `###` heading.
 - **admin/gss.** No kadmind or kpropd request opens krb5.conf or kdc.conf; kpropd's skew is profile's.
 - **gss/protocol.** GSS's receive window is MIT's 64-number bitmap.
 - **gss/protocol.** Replay cache keeps MIT's clock-skew tag; full, it refuses new tag, not live one.
-- **admin.** iprop client checks INIT reply MIC whatever verifier, as MIT's `authgss_refresh`.
+- **admin.** iprop client checks INIT reply MIC whatever verifier, as MIT.
 - **admin.** Empty or non-GSS verifier no longer skips iprop INIT reply MIC check.
 - **kdc.** PKINIT trusts kdc.conf's `pkinit_anchors`, signs with `pkinit_identity`; its own CA is test-only.
 - **kdc.** PKINIT checks client's `pkinit_cert_match` rule as MIT's dbmatch; miss is 66.
@@ -80,7 +80,7 @@ any other `###` heading.
 - **admin.** Added kadm5_auth modules join `acl` and `self`; `Deny` overrides the ACL.
 - **pkinit.** Brainpool P256, P384, P512 (r1, t1) sign and verify; 32-bit build refuses P512.
 - **pkinit.** Brainpool P320 is refused: crypto-bigint 0.7 has no 320-bit encoding.
-- **kpropd.** `iprop_enable` makes replica poll primary as `kiprop/<host>`, as MIT's `do_iprop`.
+- **kpropd.** `iprop_enable` makes replica poll primary as `kiprop/<host>`, as MIT.
 - **kpropd.** Replicas apply updates, ask for full resync, back off; `-A`, `-P`, `-t` are taken.
 - **config/kdc.** `pkinit_identity`, `pkinit_anchors`, `pkinit_pool`, `pkinit_eku_checking` read as MIT's.
 - **config/kdc.** PKINIT config failure leaves PKINIT off, with MIT's line.
@@ -106,12 +106,13 @@ any other `###` heading.
 - **form.** kdc, gss, testkit: comments ≤3% of code chars.
 - **form.** In those three crates, safety, wire or MIT-quirk fact keeps its line.
 - **examples.** krb5-embed-realm serves KDC and kadmind from one store; one Shutdown stops both.
-- **kdc.** A write at 5,000 principals is 0.80–0.86 times MIT and flat as realm grows.
-- **kdc.** A principal change appends and flushes once, no rename; crash leaves it unread.
+- **kdc.** A write at 5,000 principals is 0.80–0.86× MIT, flat as realm grows.
+- **kdc.** A principal change appends, flushes once, no rename; crash leaves it unread.
+- **kdc.** iprop writes flush thrice, as MIT's; the last after DB unlock.
 - **kdc.** A store keeps its own kdcpreauth, kdcpolicy, audit, authdata, OTP modules.
-- **kdc.** Non-OTP: same module again is no-op; different module of that name is added.
+- **kdc.** Non-OTP: same module again is no-op; another of that name is added.
 - **kdc.** `unregister` drops one named module; new store copies process default.
-- **kdc.** Global register after open is logged at error and applies only to later stores.
+- **kdc.** Global register after open is logged at error, applies only to later stores.
 
 - **examples.** krb5-embed-realm installs tracing subscriber at info.
 
@@ -233,13 +234,13 @@ any other `###` heading.
 
 - **admin.** Standalone kpasswd listeners, `serve_kadmind_until`, length-prefixed kprop send/receive: gone.
 - **admin.** kadmind-equivalent framing, op byte plus AP-REQ, is gone.
-- **protocol.** `build_krb_safe`, `build_krb_priv` are gone; callers pass the sequence to the longer builder.
+- **protocol.** `build_krb_safe`, `build_krb_priv` are gone; callers pass sequences to the longer builder.
 - **ci.** Budget workflow is gone; `ci-budget.toml` holds eight job walls and `run_wall`.
 - **ci.** ktutil nightly gate is gone; field client-tools' keytab rows check all it did, MIT first.
 - **ci.** ccache, two client-differential nightly gates, two probes gone; client-tools and pkinit cover them.
 
 ### Fixed
-- **kdc.** A KDC request locks once; lockout reads skip the lock while rows check.
+- **kdc.** A KDC request locks once; lockout reads skip it while rows check.
 - **embed.** pwqual joins built-ins; trust keys need setkey; lockout has DB owner.
 - **kdc.** ks_tuples keep their salt types, as MIT.
 - **kdc.** kadm5 and iprop keep delegation tl_data; cpw after renprinc uses new name.

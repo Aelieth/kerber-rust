@@ -274,6 +274,10 @@ fn log_error(e: &UlogError) -> Error {
     }
 }
 
+pub(super) fn finish_staged(batch: Option<UlogBatch<'_>>) -> Result<(), Error> {
+    batch.map_or(Ok(()), |b| b.finish().map_err(|e| log_error(&e)))
+}
+
 impl PrincipalStore {
     #[must_use]
     pub fn iprop_master_key(&self) -> Option<krb5_crypto::ProtocolKey> {
@@ -517,19 +521,19 @@ impl PrincipalStore {
 
     // MIT: `krb5_db_put_principal` (lib/kdb/kdb5.c:1006-1007)
     // MIT: `krb5_db_delete_principal` (lib/kdb/kdb5.c:1037-1049)
-    fn append_notes(mut batch: UlogBatch<'_>, ready: Vec<Ready>) -> Result<(), UlogError> {
+    fn stage_notes(batch: &mut UlogBatch<'_>, ready: &[Ready]) -> Result<(), UlogError> {
         for r in ready {
             match r {
                 Ready::Put {
                     name,
                     deleted,
                     kdbe,
-                } => batch.add_update(&name, deleted, &kdbe).map(drop)?,
+                } => batch.add_update(name, *deleted, kdbe).map(drop)?,
                 Ready::Reset => batch.init_header()?,
-                Ready::Replay(raw) => batch.replay_update(&raw)?,
+                Ready::Replay(raw) => batch.replay_update(raw)?,
             }
         }
-        batch.finish()
+        batch.stage()
     }
 
     pub fn write_logged<E>(
@@ -537,14 +541,30 @@ impl PrincipalStore {
         prepared: PreparedLog,
         write: impl FnOnce() -> Result<(), E>,
     ) -> Result<(), LoggedWrite<E>> {
-        let ready = prepared.0;
         let ctx = self.log.clone();
-        let batch = match ctx.as_deref() {
-            Some(c) if !ready.is_empty() => Some(
-                c.ulog
+        let batch = self.write_staged(ctx.as_deref(), prepared, write)?;
+        finish_staged(batch).map_err(LoggedWrite::After)
+    }
+
+    pub(super) fn write_staged<'l, E>(
+        &self,
+        log: Option<&'l LogContext>,
+        prepared: PreparedLog,
+        write: impl FnOnce() -> Result<(), E>,
+    ) -> Result<Option<UlogBatch<'l>>, LoggedWrite<E>> {
+        let ready = prepared.0;
+        let batch = match log {
+            Some(c) if !ready.is_empty() => {
+                let mut b = c
+                    .ulog
                     .begin()
-                    .map_err(|e| LoggedWrite::Before(log_error(&e)))?,
-            ),
+                    .map_err(|e| LoggedWrite::Before(log_error(&e)))?;
+                if let Err(e) = Self::stage_notes(&mut b, &ready) {
+                    let _ = b.abandon();
+                    return Err(LoggedWrite::Before(log_error(&e)));
+                }
+                Some(b)
+            }
             _ => None,
         };
         if let Err(e) = write() {
@@ -554,10 +574,7 @@ impl PrincipalStore {
             self.write_failed(&ready);
             return Err(LoggedWrite::Write(e));
         }
-        match batch {
-            Some(b) => Self::append_notes(b, ready).map_err(|e| LoggedWrite::After(log_error(&e))),
-            None => Ok(()),
-        }
+        Ok(batch)
     }
 
     pub fn log_pending(&self) -> Result<(), Error> {

@@ -200,8 +200,7 @@ impl UlogBatch<'_> {
     ) -> Result<UlogLast, UlogError> {
         self.appended = true;
         if self.hdr.last_sno == u32::MAX {
-            self.hdr = self.ulog.reset()?;
-            self.hdr.state = KDB_UNSTABLE;
+            self.restart()?;
         }
         let last = UlogLast {
             sno: self.hdr.last_sno.wrapping_add(1),
@@ -216,31 +215,36 @@ impl UlogBatch<'_> {
         let layout = walk_incr_update(update).map_err(|_| UlogError::Conv)?;
         self.appended = true;
         if self.hdr.num != 0 && layout.sno != self.hdr.last_sno.wrapping_add(1) {
-            self.hdr = self.ulog.reset()?;
-            self.hdr.state = KDB_UNSTABLE;
+            self.restart()?;
         }
         self.ulog.put_entry(&mut self.hdr, update)
     }
 
     pub fn init_header(&mut self) -> Result<(), UlogError> {
         self.appended = true;
+        self.restart()
+    }
+
+    fn restart(&mut self) -> Result<(), UlogError> {
         self.hdr = self.ulog.reset()?;
-        self.hdr.state = KDB_UNSTABLE;
-        Ok(())
+        self.ulog.set_state(&mut self.hdr, KDB_UNSTABLE)
+    }
+
+    /// Unstable before the write; MIT logs after the put and a crash skips it.
+    pub fn stage(&mut self) -> Result<(), UlogError> {
+        self.ulog.sync_header(&self.hdr)
     }
 
     pub fn finish(mut self) -> Result<(), UlogError> {
-        self.ulog.backing.sync()?;
         self.hdr.state = KDB_STABLE;
         self.ulog.sync_header(&self.hdr)
     }
 
     pub fn abandon(mut self) -> Result<(), UlogError> {
         if self.appended {
-            return Ok(());
+            return self.ulog.reset().map(drop);
         }
-        self.hdr.state = KDB_STABLE;
-        self.ulog.sync_header(&self.hdr)
+        self.ulog.set_state(&mut self.hdr, KDB_STABLE)
     }
 }
 
@@ -639,13 +643,17 @@ impl Ulog {
 
     // MIT: `store_update` (lib/kdb/kdb_log.c:310-372)
     fn store_update(&self, hdr: &mut UlogHeader, update: &[u8]) -> Result<(), UlogError> {
-        hdr.state = KDB_UNSTABLE;
-        self.backing
-            .write_at(&KDB_UNSTABLE.to_ne_bytes(), STATE_AT)?;
+        self.set_state(hdr, KDB_UNSTABLE)?;
         self.put_entry(hdr, update)?;
         self.backing.sync()?;
         hdr.state = KDB_STABLE;
         self.sync_header(hdr)
+    }
+
+    fn set_state(&self, hdr: &mut UlogHeader, state: u16) -> Result<(), UlogError> {
+        hdr.state = state;
+        self.backing.write_at(&state.to_ne_bytes(), STATE_AT)?;
+        Ok(())
     }
 
     fn put_entry(&self, hdr: &mut UlogHeader, update: &[u8]) -> Result<(), UlogError> {
@@ -718,15 +726,13 @@ impl Ulog {
     }
 
     // MIT: `krb5_db_put_principal` (lib/kdb/kdb5.c:1002-1007)
-    /// Unstable before the write; MIT logs after the put and a crash skips it.
     pub fn begin(&self) -> Result<UlogBatch<'_>, UlogError> {
         let held = self.lock(true)?;
         let mut hdr = self.header()?;
         if hdr.state != KDB_STABLE {
             hdr = self.reset()?;
         }
-        hdr.state = KDB_UNSTABLE;
-        self.sync_header(&hdr)?;
+        self.set_state(&mut hdr, KDB_UNSTABLE)?;
         Ok(UlogBatch {
             ulog: self,
             hdr,

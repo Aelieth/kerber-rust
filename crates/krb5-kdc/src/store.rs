@@ -567,6 +567,8 @@ impl PrincipalStore {
             let inside = HeldSaves::new(self);
             f(&mut *inside.0)
         };
+        let log = self.log.clone();
+        let mut staged = None;
         let out = match done {
             Ok(v) if self.changed.0.load(Ordering::Relaxed) => {
                 let append = self.append_plan(&before);
@@ -575,7 +577,7 @@ impl PrincipalStore {
                     .prepare_log()
                     .map_err(LoggedWrite::Before)
                     .and_then(|p| {
-                        self.write_logged(p, || match &append {
+                        self.write_staged(log.as_deref(), p, || match &append {
                             Some((ids, _, _)) if ids.is_empty() => Ok(()),
                             Some((ids, master, at)) => {
                                 appended =
@@ -587,7 +589,8 @@ impl PrincipalStore {
                         })
                     });
                 match written {
-                    Ok(()) | Err(LoggedWrite::After(_)) => {
+                    Ok(batch) => {
+                        staged = batch;
                         self.map.end_change();
                         self.db_stamp = match (&append, &self.db_stamp) {
                             (Some((ids, _, at)), Some(s)) => DbStamp::holding(
@@ -605,7 +608,7 @@ impl PrincipalStore {
                             detail = "saved store",
                             db = %db.display(),
                         );
-                        written.map(|()| Ok(v)).map_err(LoggedWrite::into_error)
+                        Ok(Ok(v))
                     }
                     Err(e) => {
                         self.read_back(&lock);
@@ -625,6 +628,8 @@ impl PrincipalStore {
             }
         };
         drop(held);
+        // MIT: `krb5_db_put_principal` (lib/kdb/kdb5.c:1002-1007)
+        iprop_ulog::finish_staged(staged)?;
         out
     }
 
