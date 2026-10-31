@@ -69,6 +69,7 @@ pub struct PrincipalStore {
     pub(crate) db_stamp: Option<DbStamp>,
     pub(crate) loaded_span: Option<(u64, u64)>,
     pub(crate) dblock: Option<Arc<DbLock>>,
+    ahead: AheadSlot,
     changed: ChangeMark,
     wrote_through: ChangeMark,
     /// Never the dummy domain SID `S-1-5-21-1-2-3`.
@@ -116,6 +117,36 @@ impl std::ops::Deref for PendingNotes {
     type Target = Mutex<Vec<LogNote>>;
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+struct ReadAhead {
+    base: DbStamp,
+    taken: Vec<Result<Principal, String>>,
+    stamp: Option<DbStamp>,
+}
+
+#[derive(Default)]
+struct AheadSlot(Mutex<Option<ReadAhead>>);
+
+impl AheadSlot {
+    fn take(&mut self) -> Option<ReadAhead> {
+        self.0
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+    }
+}
+
+impl Clone for AheadSlot {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl std::fmt::Debug for AheadSlot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("AheadSlot")
     }
 }
 
@@ -206,6 +237,7 @@ impl PrincipalStore {
             db_stamp: None,
             loaded_span: None,
             dblock: None,
+            ahead: AheadSlot::default(),
             changed: ChangeMark::default(),
             wrote_through: ChangeMark::default(),
             domain_sid: generate_domain_sid()?,
@@ -234,6 +266,12 @@ impl PrincipalStore {
 
     // MIT: `ctx_lock` (plugins/kdb/db2/kdb_db2.c:439-455)
     pub fn reload_if_stale(&mut self) -> Result<(), Error> {
+        if let Some(a) = self.ahead.take()
+            && self.db_stamp.as_ref() == Some(&a.base)
+        {
+            self.apply_appended(a);
+            return Ok(());
+        }
         let Some(db) = self.db_path().map(std::path::Path::to_path_buf) else {
             return Ok(());
         };
@@ -256,21 +294,27 @@ impl PrincipalStore {
         }
     }
 
-    /// `K/M` and `kadmin/history` are not password changes.
     fn take_appended(&mut self, lock: &Arc<DbLock>, db: &std::path::Path) -> bool {
+        let Some(a) = self.prepare_appended(lock, db) else {
+            return false;
+        };
+        self.apply_appended(a);
+        true
+    }
+
+    /// `K/M` and `kadmin/history` are not password changes.
+    fn prepare_appended(&self, lock: &Arc<DbLock>, db: &std::path::Path) -> Option<ReadAhead> {
         use crate::kdb_dump::JournalOp;
-        let (Some(stamp), Some(mkey)) = (self.db_stamp.clone(), self.journal_key()) else {
-            return false;
+        let (Some(base), Some(mkey)) = (self.db_stamp.clone(), self.journal_key()) else {
+            return None;
         };
-        let Ok(bytes) = crate::persist::read_appended(db, stamp.applied) else {
-            return false;
-        };
+        let bytes = crate::persist::read_appended(db, base.applied).ok()?;
         let Ok(Ok(Some((ops, used)))) =
             std::str::from_utf8(&bytes).map(crate::kdb_dump::parse_journal_tail)
         else {
-            return false;
+            return None;
         };
-        let realm = self.realm.clone();
+        let realm = &self.realm;
         let count = ops.len();
         let mut taken = Vec::with_capacity(count);
         for op in ops {
@@ -279,18 +323,22 @@ impl PrincipalStore {
                     if dp.name == format!("K/M@{realm}")
                         || dp.name == format!("kadmin/history@{realm}")
                     {
-                        return false;
+                        return None;
                     }
-                    match dp.into_principal(&mkey) {
-                        Ok((p, _)) => taken.push(Ok(p)),
-                        Err(_) => return false,
-                    }
+                    taken.push(Ok(dp.into_principal(&mkey).ok()?.0));
                 }
                 JournalOp::Del(id) => taken.push(Err(id)),
             }
         }
-        let mut ids = Vec::with_capacity(taken.len());
-        for op in taken {
+        let applied = base.applied + u64::try_from(used).unwrap_or_default();
+        let records = base.records + u64::try_from(count).unwrap_or_default();
+        let stamp = DbStamp::holding(lock, db, records, applied);
+        Some(ReadAhead { base, taken, stamp })
+    }
+
+    fn apply_appended(&mut self, a: ReadAhead) {
+        let mut ids = Vec::with_capacity(a.taken.len());
+        for op in a.taken {
             match op {
                 Ok(p) => {
                     ids.push(p.id());
@@ -300,10 +348,7 @@ impl PrincipalStore {
             }
         }
         self.resolve_history_of(&ids);
-        let applied = stamp.applied + u64::try_from(used).unwrap_or_default();
-        let records = stamp.records + u64::try_from(count).unwrap_or_default();
-        self.db_stamp = DbStamp::holding(lock, db, records, applied);
-        true
+        self.db_stamp = a.stamp;
     }
 
     pub(crate) fn journal_key(&self) -> Option<krb5_crypto::ProtocolKey> {
@@ -392,6 +437,18 @@ impl PrincipalStore {
             .hold(DbLockMode::Shared)
             .map_err(|e| Error::from(PersistError::from(e)))?;
         let stale = !self.db_stamp.as_ref().is_some_and(|s| s.same(lock, db));
+        if stale {
+            let ahead = self
+                .db_stamp
+                .as_ref()
+                .filter(|s| matches!(s.freshness(lock, db), Freshness::Grown))
+                .and_then(|_| self.prepare_appended(lock, db));
+            *self
+                .ahead
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = ahead;
+        }
         Ok(Some((held, stale)))
     }
 
@@ -500,6 +557,7 @@ impl PrincipalStore {
         let held = lock
             .hold(DbLockMode::Exclusive)
             .map_err(|e| Error::from(PersistError::from(e)))?;
+        drop(self.ahead.take());
         self.refresh_for_change(&lock, &db)?;
         self.changed.0.store(false, Ordering::Relaxed);
         self.wrote_through.0.store(false, Ordering::Relaxed);

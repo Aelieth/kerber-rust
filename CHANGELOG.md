@@ -239,7 +239,7 @@ any other `###` heading.
 - **ci.** ccache, two client-differential nightly gates, two probes gone; client-tools and pkinit cover them.
 
 ### Fixed
-- **kdc.** Lockout rows read unlocked if the file is unchanged and CRCs check.
+- **kdc.** A KDC request locks once; lockout reads skip the lock while rows check.
 - **embed.** pwqual joins built-ins; trust keys need setkey; lockout has DB owner.
 - **kdc.** ks_tuples keep their salt types, as MIT.
 - **kdc.** kadm5 and iprop keep delegation tl_data; cpw after renprinc uses new name.
@@ -274,7 +274,7 @@ any other `###` heading.
 - **kdc.** Master key that fails to decrypt logs MIT's failure while fetching master keys list.
 - **protocol.** Negative `clockskew` fails every ticket and authenticator time check, as MIT.
 - **protocol.** `verify_init_creds` takes profile's skew, not 300 s.
-- **kdc.** `[libdefaults]` `permitted_enctypes`, `allow_*` use kdc.conf's first values, as MIT's KDC.
+- **kdc.** `[libdefaults]` `permitted_enctypes`, `allow_*` use kdc.conf's first values, as MIT.
 - **kdc.** Empty `permitted_enctypes` list permits nothing.
 - **gss/types.** One DER length codec: GSS token of 64 KiB or more is framed right.
 - **gss/types.** Delegated KRB-CRED too long for checksum fails as MIT.

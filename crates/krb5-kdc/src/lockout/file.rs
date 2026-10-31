@@ -351,7 +351,7 @@ impl SideFile {
         if self.ix.foreign || !self.ix.whole || (meta.dev(), meta.ino()) != self.id {
             return None;
         }
-        if meta.len() != self.ix.len {
+        if meta.len() < self.ix.len {
             return None;
         }
         let &(at, _) = self.ix.records.get(id)?;
