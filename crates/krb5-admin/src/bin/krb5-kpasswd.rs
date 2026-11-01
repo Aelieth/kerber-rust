@@ -167,10 +167,14 @@ fn run<R: BufRead, W: Write>(
             }
         },
     );
+    // MIT: `main` (kpasswd.c:129-141)
     let out = match out {
         Ok(out) => out,
         Err(e) => {
-            eprintln!("{prog}: {e} getting initial ticket");
+            let text = e
+                .downcast_ref::<krb5_client::errmsg::Krb5Error>()
+                .map_or_else(|| e.to_string(), krb5_client::errmsg::Krb5Error::table_text);
+            eprintln!("{prog}: {text} getting initial ticket");
             return 1;
         }
     };
@@ -191,14 +195,9 @@ fn run<R: BufRead, W: Write>(
         }
         Err(e) => {
             let text = match (unread, &e) {
-                // MIT: `process_pa_data` (lib/krb5/krb/preauth2.c:716-723)
-                // MIT: `default_com_err_proc` (util/et/com_err.c:83-85)
-                (Some(_), Error::PreauthFailed(_)) | (_, Error::PreauthNoMech) => {
-                    "Generic preauthentication failure".to_owned()
-                }
-                // A failure that did not end the exchange leaves the KDC's own error to print.
+                // The prompt's failure ended the exchange.
                 (Some(why), Error::File(_)) => why.to_string(),
-                (_, e) => initial_ticket_text(e),
+                (_, e) => krb5_client::errmsg::Krb5Error::from_as(e, "", "").table_text(),
             };
             eprintln!("{prog}: {text} getting initial ticket");
             return 1;
@@ -260,26 +259,6 @@ fn run<R: BufRead, W: Write>(
             1
         }
     }
-}
-
-fn initial_ticket_text(e: &Error) -> String {
-    let mit = match e {
-        // MIT: `KRB5_KDC_UNREACH` (krb5_err.et:211-211)
-        Error::Io { .. } => "Cannot contact any KDC for requested realm",
-        Error::KrbError { code, .. } => match *code {
-            // MIT: `KRB5KDC_ERR_NAME_EXP` (krb5_err.et:42-42)
-            krb5_types::err::NAME_EXP => "Client's entry in database has expired",
-            // MIT: `KRB5KDC_ERR_C_PRINCIPAL_UNKNOWN` (krb5_err.et:47-47)
-            krb5_types::err::C_PRINCIPAL_UNKNOWN => "Client not found in Kerberos database",
-            // MIT: `KRB5KDC_ERR_CLIENT_REVOKED` (krb5_err.et:59-59)
-            krb5_types::err::CLIENT_REVOKED => "Client's credentials have been revoked",
-            // MIT: `KRB5KDC_ERR_PREAUTH_FAILED` (krb5_err.et:65-65)
-            krb5_types::err::PREAUTH_FAILED => "Preauthentication failed",
-            _ => return e.to_string(),
-        },
-        _ => return e.to_string(),
-    };
-    mit.to_owned()
 }
 
 fn client(

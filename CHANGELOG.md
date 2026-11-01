@@ -37,8 +37,8 @@ any other `###` heading.
 - **kdc/protocol.** kpasswd client wipes its encoded authenticator.
 - **config.** kdc.conf is read for served realm alone.
 - **config.** `reject_bad_transit`, `disable_pac`, `restrict_anonymous_to_tgt` are read as MIT does.
-- **config/kdc.** KDC skew is `[libdefaults] clockskew`, kdc.conf's first, as MIT's integer; not a fixed 300.
-- **admin.** kadm5 and kpasswd authorize the principal an alias resolves to, not the alias, as MIT.
+- **config/kdc.** KDC skew is `[libdefaults] clockskew`, kdc.conf's first, as MIT's integer; not fixed 300.
+- **admin.** kadm5 and kpasswd authorize an alias's target, not the alias, as MIT.
 - **admin.** kadm5 and kpasswd read caller's own policy in its realm, as MIT.
 - **admin.** kpasswd checks AP-REQ time against profile's `clockskew`, kdc.conf's first, not 300 s.
 - **admin.** kpasswd keeps a negative `clockskew`, as MIT.
@@ -56,7 +56,7 @@ any other `###` heading.
 - **admin/kdc.** CSPRNG failure fails kadm5 request closed.
 - **admin/kdc.** Logged policy names and globs escape control chars; CMS ContentInfo type is checked.
 - **kdc.** Bounded worker pool runs each OTP verifier under `[otp] timeout`.
-- **kdc.** OTP hang, panic, late answer or full queue is a counted 24, so none stalls the KDC.
+- **kdc.** OTP hang, panic, late answer or full queue is a counted 24; none stalls the KDC.
 - **admin.** kadmind assembles each RPC record without blocking, closes one stalled past 35 s.
 - **admin.** At kadmind's connection cap, unauthenticated connections drop first.
 - **kdc.** FAST armor gets MIT's `krb5_rd_req` checks in order; codes and most log lines are MIT's.
@@ -73,7 +73,7 @@ any other `###` heading.
 ### Added
 
 - **kdc/admin.** An embedder's `--no-default-features` build omits serve, signals, tracing-subscriber.
-- **kdc/admin.** Test fixtures are behind `test-hooks`, so an embedder builds without them.
+- **kdc/admin.** Test fixtures are behind `test-hooks`; embedders build without them.
 - **admin.** kadmind runs as library; `Kadmind::new(store, config)` sets up password modules.
 - **admin.** kadmind's `serve` runs loop; `Shutdown` stops it at once.
 - **admin.** Embedders add kadm5_auth modules via `KadmindConfig`, picked by `[plugins] kadm5_auth`.
@@ -171,7 +171,7 @@ any other `###` heading.
 - **protocol.** `[libdefaults] forwardable = true` still sets it.
 - **protocol.** Unsupported etype is not retried as aes256; KDC's error is returned, as MIT.
 - **protocol.** AP-REQ acceptor's keytab-miss errors carry MIT's texts.
-- **crypto.** RustCrypto moves to the 0.14 generation (`aes` 0.9, `sha2` 0.11, `p256` 0.14, the rest).
+- **crypto.** RustCrypto to 0.14 generation (`aes` 0.9, `sha2` 0.11, `p256` 0.14, the rest).
 - **crypto.** curve25519-dalek moves to 5.0; every enctype and SPAKE vector holds.
 - **kdc.** If no other writer moved it, change skips whole-realm reread.
 - **kdc.** Failed database change is undone in memory.
@@ -198,7 +198,7 @@ any other `###` heading.
 
 - **field.** Weekly ticket-flags after kdb-writes: expiry, flags, renew, postdate, policy, aes-sha2.
 - **field.** The gates ticket-flags covers are retired.
-- **field.** Weekly client-tools: our kinit, klist, kvno, kdestroy, ktutil, kswitch beside MIT's on client2.
+- **field.** Weekly client-tools: our kinit, klist, kvno, kdestroy, ktutil, kswitch beside MIT's.
 - **field.** client-tools covers request shapes, crossed caches and keytabs.
 - **field.** client-tools adds FAST, SPAKE, S4U2Proxy, lifetime, enctype, kpasswd, ccache-removal rows.
 - **field.** pkinit scenario compares PKINIT and anonymous requests.
@@ -235,9 +235,9 @@ any other `###` heading.
 
 - **admin.** Standalone kpasswd listeners, `serve_kadmind_until`, length-prefixed kprop send/receive: gone.
 - **admin.** kadmind-equivalent framing, op byte plus AP-REQ, is gone.
-- **protocol.** `build_krb_safe`, `build_krb_priv` are gone; callers pass sequences to the longer builder.
-- **ci.** Budget workflow is gone; `ci-budget.toml` holds eight job walls and `run_wall`.
-- **ci.** ktutil nightly gate is gone; field client-tools' keytab rows check all it did, MIT first.
+- **protocol.** `build_krb_safe`, `build_krb_priv` gone; callers pass sequences to longer builder.
+- **ci.** Budget workflow gone; `ci-budget.toml` holds eight job walls and `run_wall`.
+- **ci.** ktutil nightly gate gone; field client-tools' keytab rows check all it did, MIT first.
 - **ci.** ccache, two client-differential nightly gates, two probes gone; client-tools, pkinit cover them.
 
 ### Fixed
@@ -262,7 +262,7 @@ any other `###` heading.
 - **kdc/client.** MIT's kpasswd could not decrypt our `kadmin/changepw` reply; now it can.
 
 - **client.** Each expired-password kinit request (`kadmin/changepw`, last) gets new FAST armor, as MIT.
-- **kdc.** Whole write removes stale `.principal.tmp-*` files under its exclusive lock, as MIT's next load.
+- **kdc.** Whole write removes stale `.principal.tmp-*` under its exclusive lock, as MIT's next load.
 - **client.** AS failure prints MIT's table text for skew, mismatched reply, error 60.
 - **client.** Generic error's e-text stays on TGS path.
 - **client.** UDP socket takes KDC address's family; link-local scope prints as its interface name.
@@ -311,13 +311,14 @@ any other `###` heading.
 - **pkinit.** Key-exchange groups: MODP 1024 to 4096, P-256 to P-521, by `pkinit_dh_min_bits`.
 - **pkinit.** A 65 is retried in KDC's group.
 - **admin.** kpasswd arms with default ccache if it holds principal, tracing its full name, as MIT.
+- **client.** kpasswd prints MIT's table text for every initial-ticket failure.
 - **admin.** kinit traces `-T` as given.
 - **client.** FAST request's outer body is request as last restart left it, as MIT.
 - **client.** `kdc_default_options` seeds AS options.
 - **admin.** kadmind's iprop logs MIT's `Unauthorized request` for refused GET_UPDATES or full resync.
 - **admin.** kadmind's iprop logs `Request` line per answer.
 - **kdc.** Refused server key logs KDB error's text, as MIT.
-- **kdc.** A key the KDC does not permit logs `No matching key in entry having a permitted enctype`.
+- **kdc.** An unpermitted key logs `No matching key in entry having a permitted enctype`.
 - **kdc.** A KDC started by full path names itself by its basename in init failure, as MIT.
 - **gss.** Refused mutual AP-REQ gets MIT's KRB-ERROR token, in SPNEGO too; initiators read it.
 - **admin.** Full resync dumps kadmind's store for replica's version; dump_ok synced, stale re-dumps.
