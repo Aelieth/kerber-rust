@@ -332,6 +332,7 @@ any other `###` heading.
 - **kdc.** TGS header ticket decrypting to junk is 60, AP-REQ pvno 4 is 3, as MIT.
 - **client.** Credential times are checked before use, as MIT.
 - **client.** Cached credentials rank by MIT's TGS enctype list.
+- **admin.** RPCSEC_GSS handle is MIT's `xxxx`.
 
 ## [1.1.0] - 2026-10-14
 

@@ -413,7 +413,7 @@ impl Dispatch for Kadmind {
             RpcPeer::new(Some(remote), Some(local)),
             self.report.clone(),
             self.iprop_resync.clone(),
-        )?))
+        )))
     }
 }
 

@@ -1,4 +1,4 @@
-//! Record buffers can carry passwords and keys.
+//! Record buffers can hold passwords and keys.
 
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream};
@@ -48,7 +48,7 @@ impl Programs {
     };
 }
 
-/// Undecoded call: no reply; connection goes on.
+/// Undecoded call: no reply, connection kept.
 #[cfg(feature = "test-hooks")]
 pub fn serve_kadm5_conn(
     store: SharedStore,
@@ -59,7 +59,7 @@ pub fn serve_kadm5_conn(
     mut stream: TcpStream,
 ) -> io::Result<()> {
     let peer = RpcPeer::new(stream.peer_addr().ok(), stream.local_addr().ok());
-    let Some(mut conn) = Kadm5Conn::new(
+    let mut conn = Kadm5Conn::new(
         store,
         authcfg,
         expected_realm,
@@ -69,11 +69,7 @@ pub fn serve_kadm5_conn(
         peer,
         None,
         None,
-    ) else {
-        return Err(io::Error::other(
-            "CSPRNG failure generating the kadm5 RPC handle",
-        ));
-    };
+    );
     loop {
         let rec = match read_record(&mut stream) {
             Ok(r) => r,
@@ -137,7 +133,6 @@ pub(crate) struct Kadm5Conn {
     rcache: ReplayCache,
     conf: Arc<AcceptorConfig>,
     programs: Programs,
-    handle: Vec<u8>,
     sess: Kadm5RpcSession,
     peer: RpcPeer,
     report: Option<UnhandledRpc>,
@@ -156,20 +151,19 @@ impl Kadm5Conn {
         peer: RpcPeer,
         report: Option<UnhandledRpc>,
         iprop_resync: Option<Arc<IpropResync>>,
-    ) -> Option<Self> {
-        Some(Self {
+    ) -> Self {
+        Self {
             store,
             authcfg,
             realm,
             rcache,
             conf,
             programs,
-            handle: random_handle()?,
             sess: Kadm5RpcSession::default(),
             peer,
             report,
             iprop_resync,
-        })
+        }
     }
 
     fn handle(&mut self, rec: &[u8]) -> Result<Vec<u8>, Error> {
@@ -182,7 +176,7 @@ impl Kadm5Conn {
             iprop_resync: self.iprop_resync.as_ref(),
         };
         let Kadm5RpcSession { gss, agss } = &mut self.sess;
-        handle_rpc(ctx, &self.handle, gss, agss, &self.rcache, rec, &self.peer)
+        handle_rpc(ctx, RPCSEC_HANDLE, gss, agss, &self.rcache, rec, &self.peer)
     }
 }
 
@@ -212,11 +206,8 @@ impl RpcSession for Kadm5Conn {
     }
 }
 
-fn random_handle() -> Option<Vec<u8>> {
-    let mut h = [0u8; 8];
-    getrandom::getrandom(&mut h).ok()?;
-    Some(h.to_vec())
-}
+// MIT: `svcauth_gss_accept_sec_context` (lib/rpc/svc_auth_gss.c:222-223)
+const RPCSEC_HANDLE: &[u8] = b"xxxx";
 
 /// At most 1 MiB.
 pub(super) fn read_record(stream: &mut TcpStream) -> io::Result<Zeroizing<Vec<u8>>> {
@@ -225,7 +216,7 @@ pub(super) fn read_record(stream: &mut TcpStream) -> io::Result<Zeroizing<Vec<u8
 
 // MIT: `flush_out` (lib/rpc/xdr_rec.c:475-489)
 // MIT: `fix_buf_size` (lib/rpc/xdr_rec.c:566-571)
-/// One fragment, one write: no delayed-ACK stall. MIT fragments past 4000 B.
+/// One fragment, one write: no delayed-ACK stall. MIT splits past 4000 B.
 pub(super) fn write_record(stream: &mut impl Write, body: &[u8]) -> io::Result<()> {
     let n = u32::try_from(body.len()).unwrap_or(0) | LAST_FRAG;
     let mut rec = Zeroizing::new(Vec::with_capacity(4 + body.len()));
