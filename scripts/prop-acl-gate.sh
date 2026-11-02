@@ -90,7 +90,7 @@ docker exec -d \
     "$NAME" sh -c '/tmp/krb5-kpropd -d -p /tmp/krb5-kdb -f /tmp/replica.from_master -s /tmp/host.keytab 0.0.0.0:754 >/tmp/kpropd.log 2>&1'
 ok=0
 for _ in $(seq 1 40); do
-    if docker exec "$NAME" grep -q '^listening ' /tmp/kpropd.log 2>/dev/null; then
+    if docker exec "$NAME" grep -q '^ready$' /tmp/kpropd.log 2>/dev/null; then
         ok=1
         break
     fi
@@ -130,7 +130,7 @@ docker exec -d \
     "$NAME" sh -c '/tmp/krb5-kpropd -d -p /tmp/krb5-kdb -f /tmp/replica.from_master -s /tmp/host.keytab -a /tmp/kpropd.acl.empty 0.0.0.0:754 >/tmp/kpropd.log 2>&1'
 ok=0
 for _ in $(seq 1 40); do
-    if docker exec "$NAME" grep -q '^listening ' /tmp/kpropd.log 2>/dev/null; then
+    if docker exec "$NAME" grep -q '^ready$' /tmp/kpropd.log 2>/dev/null; then
         ok=1
         break
     fi
@@ -169,7 +169,7 @@ docker exec -d \
     "$NAME" sh -c '/tmp/krb5-kpropd -d -p /tmp/krb5-kdb -f /tmp/replica.from_master -s /tmp/host.keytab -a /tmp/kpropd.acl 0.0.0.0:754 >/tmp/kpropd.log 2>&1'
 ok=0
 for _ in $(seq 1 40); do
-    if docker exec "$NAME" grep -q '^listening ' /tmp/kpropd.log 2>/dev/null; then
+    if docker exec "$NAME" grep -q '^ready$' /tmp/kpropd.log 2>/dev/null; then
         ok=1
         break
     fi
@@ -199,7 +199,7 @@ docker exec -d \
     "$NAME" sh -c '/tmp/krb5-kpropd -d -p /tmp/krb5-kdb -f /tmp/replica.from_master -s /tmp/host.keytab 0.0.0.0:754 >/tmp/kpropd.log 2>&1'
 ok=0
 for _ in $(seq 1 40); do
-    if docker exec "$NAME" grep -q '^listening ' /tmp/kpropd.log 2>/dev/null; then
+    if docker exec "$NAME" grep -q '^ready$' /tmp/kpropd.log 2>/dev/null; then
         ok=1
         break
     fi
@@ -251,7 +251,7 @@ docker exec -d \
     "$NAME" sh -c '/tmp/krb5-kpropd -d -p /tmp/krb5-kdb -f /tmp/replica.from_master -s /tmp/host.keytab -a /tmp/kpropd.acl.case 0.0.0.0:754 >/tmp/kpropd.log 2>&1'
 ok=0
 for _ in $(seq 1 40); do
-    if docker exec "$NAME" grep -q '^listening ' /tmp/kpropd.log 2>/dev/null; then
+    if docker exec "$NAME" grep -q '^ready$' /tmp/kpropd.log 2>/dev/null; then
         ok=1
         break
     fi
@@ -389,7 +389,7 @@ short_kpropds() {
     docker exec -d -e KRB5_KDC_PROFILE="$prof" "$SHORT" sh -c \
         "/tmp/krb5-kpropd -s /tmp/kdc2.keytab -a /tmp/kpropd.acl -f /tmp/rust-rep-$rport.dump -p /bin/true 0.0.0.0:$rport >/tmp/kpropd-$rport.log 2>&1"
     require_log "$SHORT" "/tmp/kpropd-mit-$mport.log" 'ready|waiting for a kprop' "MIT kpropd on $mport"
-    require_log "$SHORT" "/tmp/kpropd-$rport.log" '^listening ' "Rust kpropd on $rport"
+    require_log "$SHORT" "/tmp/kpropd-$rport.log" '^ready$' "Rust kpropd on $rport"
 }
 short_kprop() {
     (docker exec -e KRB5_CONFIG=/tmp/kprop-krb5.conf "$SHORT" kprop -f /tmp/dump -s /tmp/kdc2.keytab -P "$1" -d kdc2.kerber.test 2>&1 || true) | tr -d '\r'

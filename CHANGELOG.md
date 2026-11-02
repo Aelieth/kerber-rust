@@ -82,6 +82,7 @@ any other `###` heading.
 - **pkinit.** Brainpool P320 is refused: crypto-bigint 0.7 has no 320-bit encoding.
 - **kpropd.** `iprop_enable` makes replica poll primary as `kiprop/<host>`, as MIT.
 - **kpropd.** Replicas apply updates, ask for full resync, back off; `-A`, `-P`, `-t` are taken.
+- **kpropd.** Takes MIT's `--pid-file`.
 - **config/kdc.** `pkinit_identity`, `pkinit_anchors`, `pkinit_pool`, `pkinit_eku_checking` read as MIT.
 - **config/kdc.** PKINIT config failure leaves PKINIT off, with MIT's line.
 - **kdc.** PKINIT verifies RSA client certs, chains, signatures (PKCS#1 v1.5, SHA-256/384/512).
@@ -194,6 +195,7 @@ any other `###` heading.
 - **gss.** Exported context is version 2, with receive window, acceptor's skew.
 - **gss.** A version-1 token, as 1.1 exported, is refused.
 - **examples.** `examples/otp-kdc` folds into `examples/embed-realm`; binary stays `krb5-otp-kdc`.
+- **admin.** kpropd prints MIT's `ready`.
 
 ### Tests and CI
 

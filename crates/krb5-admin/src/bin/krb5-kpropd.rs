@@ -8,7 +8,7 @@
     reason = "a program reads its profile and environment when it starts"
 )]
 
-use std::io::{self, Read as _};
+use std::io::{self, Read as _, Write as _};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, ToSocketAddrs};
 use std::os::fd::AsRawFd as _;
 use std::os::unix::net::UnixStream;
@@ -71,6 +71,7 @@ fn main() {
         file,
         database,
         kdb5_util,
+        pid_file,
     } = parse_options(&progname, argv.get(1..).unwrap_or_default());
     let argv0 = argv.first().cloned().unwrap_or_else(|| "kpropd".to_owned());
     klog::init("kpropd", &["SYSLOG:INFO:DAEMON".to_owned()], false);
@@ -113,7 +114,19 @@ fn main() {
     let addr = listen_addr(&progname, address.as_deref(), port.as_deref());
     let listener = standalone_listener(&progname, addr);
     listener.set_nonblocking(true).ok();
-    println!("listening {}", listener.local_addr().unwrap_or(addr));
+    // MIT: `main` (kprop/kpropd.c:274-289)
+    println!("ready");
+    let _ = io::stdout().flush();
+    if let Some(path) = &pid_file
+        && let Err(e) = krb5_kdc::write_pid_file(path)
+    {
+        let error = os_error_text(&e);
+        klog::syslog(
+            Severity::Err,
+            &format!("Could not write pid file {}: {error}", path.display()),
+        );
+        std::process::exit(1);
+    }
     let wake = iprop.clone().map(|params| {
         start_iprop(Poll {
             argv0: argv0.clone(),
@@ -272,10 +285,18 @@ struct Options {
     file: PathBuf,
     database: Option<PathBuf>,
     kdb5_util: PathBuf,
+    pid_file: Option<PathBuf>,
 }
 
+// MIT: `parse_args` (kprop/kpropd.c:1048-1051)
+const PID_FILE: krb5_cli::LongOpt = krb5_cli::LongOpt {
+    name: "pid-file",
+    takes_arg: true,
+    short: None,
+};
+
 fn parse_options(progname: &str, args: &[String]) -> Options {
-    let (opts, operands) = match krb5_cli::getopt(args, "A:P:r:s:a:DdStf:F:p:", &[]) {
+    let (opts, operands) = match krb5_cli::getopt(args, "A:P:r:s:a:DdStf:F:p:", &[PID_FILE]) {
         Ok(parsed) => parsed,
         Err(e) => {
             eprintln!("{progname}: {e}");
@@ -304,6 +325,11 @@ fn parse_options(progname: &str, args: &[String]) -> Options {
         file: last('f').map_or_else(krb5_config::default_kpropd_file, PathBuf::from),
         database: last('F').map(PathBuf::from),
         kdb5_util: last('p').map_or_else(default_kdb5_util, PathBuf::from),
+        pid_file: opts
+            .iter()
+            .rev()
+            .find(|o| o.long == Some(PID_FILE.name))
+            .and_then(|o| o.arg.as_ref().map(PathBuf::from)),
     }
 }
 
@@ -403,7 +429,7 @@ fn usage(progname: &str) -> ! {
         "\nUsage: {progname} [-r realm] [-s keytab] [-d] [-D] [-S]\n\
          \t[-f replica_file] [-F kerberos_db_file ]\n\
          \t[-p kdb5_util_pathname] [-P port]\n\
-         \t[-a acl_file] [-A admin_server] [host:port]"
+         \t[-a acl_file] [-A admin_server] [--pid-file=pid_file] [host:port]"
     );
     std::process::exit(1);
 }

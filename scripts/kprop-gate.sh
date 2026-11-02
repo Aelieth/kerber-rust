@@ -289,7 +289,7 @@ docker exec -d \
     "$NAME" sh -c '/tmp/krb5-kpropd -s /tmp/host.keytab -a /tmp/kpropd.acl -p /tmp/krb5-kdb -f /tmp/replica.from_master 0.0.0.0:754 >/tmp/kpropd.log 2>&1'
 ok=0
 for _ in $(seq 1 40); do
-    if docker exec "$NAME" grep -q '^listening ' /tmp/kpropd.log 2>/dev/null; then
+    if docker exec "$NAME" grep -q '^ready$' /tmp/kpropd.log 2>/dev/null; then
         ok=1
         break
     fi

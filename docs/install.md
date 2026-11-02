@@ -515,8 +515,8 @@ MIT's is not); `kpropd` polls it as `kiprop/replica.example.com` every `iprop_re
 `kpropd` takes MIT's `-r`, `-s` (else the default keytab), `-a` (else `kpropd.acl` in the KDC
 directory), `-P` (else 754, on every address), `-A` (the primary, else `admin_server`), `-t`, `-d`,
 `-D` and `-S` (`-D` and `-S` are no-ops: it never detaches and is always standalone), `-f` (else
-`from_master` in the KDC directory), `-F` (`kdb5_util load -d`) and `-p` (else the `kdb5_util`
-beside `kpropd`); not MIT's `-x` or `--pid-file`. It accepts a ticket for its own
+`from_master` in the KDC directory), `-F` (`kdb5_util load -d`), `-p` (else the `kdb5_util`
+beside `kpropd`) and `--pid-file`; not MIT's `-x`. It accepts a ticket for its own
 `host/<this host>` only, the name formed **without DNS** (a short name gains `qualify_shortname`,
 else the resolver's first search domain, lowercased): MIT's DNS canonicalization is not ported,
 so the keytab entry and `kprop`'s target must be that name.
@@ -810,7 +810,7 @@ update log and lock files, the stash, `kdc.conf` and `kadm5.acl`.
 - One realm per KDC process. A second `-r` stops `krb5kdc` with `Only one realm per KDC process is supported`.
 - `krb5kdc -T` other than `0` stops with `-T (a clock offset for testing) is not supported`.
 - `krb5kdc -w N` is accepted and does nothing: one loop on the main thread serves every request.
-- `kpropd -x` (a database argument for `kdb5_util load`) and `--pid-file`.
+- `kpropd -x` (a database argument for `kdb5_util load`).
 - `kadmind -proponly` with `iprop_enable` unset stops with `-proponly can only be used when iprop_enable is true`.
 
 ## Make variables
