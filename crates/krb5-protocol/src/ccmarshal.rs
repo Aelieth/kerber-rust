@@ -3,7 +3,7 @@
 use std::io;
 
 use krb5_crypto::{EncryptionType, ProtocolKey};
-use krb5_types::{PrincipalName, Realm, kerberos_string_from_bytes};
+use krb5_types::{KerberosTime, PrincipalName, Realm, kerberos_string_from_bytes};
 use subtle::ConstantTimeEq;
 use zeroize::Zeroize;
 
@@ -89,6 +89,16 @@ impl CcacheCred {
 
     pub fn session_key(&self) -> Result<ProtocolKey, io::Error> {
         self.key.protocol_key()
+    }
+
+    #[must_use]
+    pub fn times(&self) -> crate::TicketTimes {
+        let at = KerberosTime::from_unix_seconds;
+        crate::TicketTimes {
+            authtime: at(self.authtime),
+            starttime: (self.starttime != 0).then(|| at(self.starttime)),
+            endtime: at(self.endtime),
+        }
     }
 
     /// MIT's tombstone: `endtime = 0`, `authtime = -1`, realm `X-RMED-CONF:`.

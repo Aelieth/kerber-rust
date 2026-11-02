@@ -207,6 +207,7 @@ fn main() {
         &tgs.session_key,
         &krb5_types::ascii(&realm),
         &ent.name,
+        &(&tgs.enc_part).into(),
     )
     .unwrap_or_else(|e| {
         eprintln!("krb5-iprop-pull: {e}");

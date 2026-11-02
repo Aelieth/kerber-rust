@@ -9,7 +9,9 @@ use krb5_types::{
 use krb5_config::Krb5Conf;
 
 use crate::acceptor_conf::AcceptorConfig;
-use crate::ap_req::{ApVerifyParams, build_ap_req_in, verify_ap_req_ex};
+use crate::ap_req::{
+    ApVerifyParams, build_ap_req_in, refused, stamped, validate_times, verify_ap_req_ex,
+};
 use crate::as_ex::AsOutcome;
 use crate::ccmarshal::CcacheCred;
 use crate::error::Error;
@@ -113,19 +115,28 @@ fn get_vfy_cred(
 ) -> Result<(), Error> {
     let session = creds.session_key()?;
     let ticket: Ticket = decode(&creds.ticket)?;
-    let (ticket, session, crealm, cname) = if princ_eq(&creds.server, realm, name) {
+    let now = stamped(0).0;
+    let (ticket, session, crealm, cname, times) = if princ_eq(&creds.server, realm, name) {
         (
             ticket,
             session,
             creds.client.0.clone(),
             creds.client.1.clone(),
+            creds.times(),
         )
     } else {
+        // MIT: `get_cached_local_tgt` (lib/krb5/krb/get_creds.c:833-837)
+        if now.unix_seconds() > creds.endtime {
+            return Err(refused(krb5_types::err::TKT_EXPIRED));
+        }
         let tgt = cred_as_outcome(creds, &session, ticket);
         let realm_s = String::from_utf8_lossy(realm.as_bytes()).into_owned();
         let tgs = tgs_exchange(profile, kdc, &tgt, name.clone(), &realm_s)?;
-        (tgs.ticket, tgs.session_key, tgt.crealm, tgt.cname)
+        let times = (&tgs.enc_part).into();
+        (tgs.ticket, tgs.session_key, tgt.crealm, tgt.cname, times)
     };
+    // MIT: `krb5_mk_req_extended` (lib/krb5/krb/mk_req_ext.c:115-117)
+    validate_times(&times, &now, i64::from(profile.clockskew))?;
     let ap = build_ap_req_in(ticket, &session, &crealm, &cname, Some(profile))?;
     let raw = encode(&ap)?;
     let matched: Vec<_> = keytab

@@ -3,7 +3,7 @@ use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt_enc_data};
 use krb5_protocol::trace::{ERROR_TABLE_BASE_KRB5, error_message};
 use krb5_protocol::{
     AUTH_CONTEXT_DO_SEQUENCE, AUTH_CONTEXT_USE_SUBKEY, AcceptorAuthContext, AcceptorConfig,
-    ApAuthenticator, KeytabGetEntry, ReplayCache, build_ap_req_from_authenticator,
+    ApAuthenticator, KeytabGetEntry, ReplayCache, TicketTimes, build_ap_req_from_authenticator,
     generate_ap_authenticator, generate_seq_number,
 };
 use krb5_types::{
@@ -339,6 +339,7 @@ impl GssContext {
         deleg: Option<&DelegCred>,
         profile: Option<&krb5_config::Krb5Conf>,
         time_offset: i64,
+        times: &TicketTimes,
     ) -> Result<(Self, Vec<u8>), Error> {
         // MIT kg_new_connection; see docs/parity/b1-gss.md
         // MIT: `kg_new_connection` (lib/gssapi/krb5/init_sec_context.c:486)
@@ -346,6 +347,18 @@ impl GssContext {
         // MIT: `kg_new_connection` (lib/gssapi/krb5/init_sec_context.c:544-550)
         let mut flags =
             req_flags & (INITIATOR_FLAGS & !GSS_C_DCE) | GSS_C_TRANS | GSS_C_CONF | GSS_C_INTEG;
+        // MIT: `kg_new_connection` (lib/gssapi/krb5/init_sec_context.c:557)
+        let now = krb5_protocol::stamped(time_offset).0;
+        // MIT: `get_credentials` (lib/gssapi/krb5/init_sec_context.c:206-216)
+        if now.delta_seconds(&times.endtime) > 0 {
+            let code = krb5_types::err::TKT_EXPIRED;
+            let text = error_message(ERROR_TABLE_BASE_KRB5 + i64::from(code));
+            return Err(krb5_protocol::Error::KrbError {
+                code,
+                text: Some(text),
+            }
+            .into());
+        }
         let opts = if flags & GSS_C_MUTUAL != 0 {
             ApOptions::mutual_required()
         } else {
@@ -372,6 +385,9 @@ impl GssContext {
             keytype: sub.etype().to_iana(),
             keyvalue: sub.as_bytes().to_vec().into(),
         };
+        // MIT: `krb5_mk_req_extended` (lib/krb5/krb/mk_req_ext.c:115-117)
+        let skew = profile.map_or(krb5_protocol::DEFAULT_SKEW, |p| i64::from(p.clockskew));
+        krb5_protocol::validate_times(times, &now, skew)?;
         // MIT: `krb5_mk_req_extended` (lib/krb5/krb/mk_req_ext.c:136-143)
         // MIT: `krb5_mk_req_extended` (lib/krb5/krb/mk_req_ext.c:187-194)
         let seq = generate_seq_number()?;

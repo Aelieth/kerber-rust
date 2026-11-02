@@ -225,6 +225,11 @@ fn admin_initiator(store: &SharedDump) -> (GssContext, Vec<u8>, ProtocolKey) {
         None,
         None,
         0,
+        &krb5_protocol::TicketTimes {
+            authtime: krb5_types::KerberosTime::now(),
+            starttime: None,
+            endtime: krb5_types::KerberosTime::now().add_hours(1).unwrap(),
+        },
     )
     .unwrap();
     (ctx, token, out.session_key)

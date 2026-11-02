@@ -9,7 +9,7 @@ use krb5_kdc::{PrincipalStore, issue_as, issue_tgs};
 use krb5_protocol::{
     AcceptorConfig, ReplayCache, as_req, local_host_address, pa_enc_timestamp, tgs_req,
 };
-use krb5_types::Ticket;
+use krb5_types::{KerberosTime, Ticket};
 use std::net::{TcpListener, TcpStream};
 use std::thread::{self, JoinHandle};
 
@@ -82,6 +82,12 @@ fn creds(ticket: Ticket, session: ProtocolKey) -> KpropCreds {
         client: documented_host(),
         crealm: krb5_types::ascii(TEST_REALM),
         time_offset: 0,
+        times: krb5_protocol::TicketTimes {
+            endtime: KerberosTime::now().add_hours(24).unwrap(),
+            authtime: KerberosTime::now(),
+            starttime: None,
+        },
+        clockskew: 300,
         client_aware: false,
         client_aware_invalid: false,
     }

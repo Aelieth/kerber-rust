@@ -329,6 +329,7 @@ any other `###` heading.
 - **config.** resolv.conf, `RES_OPTIONS` timeout and attempts cap at 30 and 5, as glibc.
 - **kdc.** KDB key decrypt takes MIT's padded plaintext, cut to stored length.
 - **kdc.** TGS header ticket decrypting to junk is 60, AP-REQ pvno 4 is 3, as MIT.
+- **client.** Credential times are checked before use, as MIT.
 
 ## [1.1.0] - 2026-10-14
 

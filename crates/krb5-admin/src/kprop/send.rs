@@ -12,7 +12,7 @@ use krb5_crypto::{CipherState, ProtocolKey};
 use krb5_kdc::HeldFileLock;
 use krb5_protocol::trace::{self, ERROR_TABLE_BASE_KRB5, error_message, kdc_code};
 use krb5_protocol::{
-    ApAuthenticator, AsRequest, AsTicketOpts, KdcAddr, Keytab, RemoteSeq,
+    ApAuthenticator, AsRequest, AsTicketOpts, KdcAddr, Keytab, RemoteSeq, TicketTimes,
     build_ap_req_from_authenticator, build_krb_priv_chained_from, generate_ap_authenticator,
     generate_seq_number, local_host_address, us_timeofday, verify_ap_rep, verify_krb_safe_checksum,
 };
@@ -139,18 +139,12 @@ pub struct KpropCreds {
     pub session: ProtocolKey,
     pub client: PrincipalName,
     pub crealm: Realm,
-    /// AS authtime minus the request time when `kdc_timesync` is on, else 0.
+    /// AS authtime minus the request time under `kdc_timesync`, else 0.
     pub time_offset: i64,
+    pub times: TicketTimes,
+    pub clockskew: i64,
     pub client_aware: bool,
     pub client_aware_invalid: bool,
-}
-
-// MIT: `krb5_us_timeofday` (lib/krb5/os/ustime.c:66-82)
-fn timeofday_with_offset(offset: i64) -> (KerberosTime, Microseconds) {
-    let (now, usec) = us_timeofday();
-    let secs = i64::from(now.unix_seconds()).saturating_add(offset);
-    let secs = u32::try_from(secs.max(0)).unwrap_or(u32::MAX);
-    (KerberosTime::from_unix_seconds(secs), usec)
 }
 
 fn init_creds_ticket_opts(conf: &Krb5Conf, realm: &str) -> Result<AsTicketOpts, KpropError> {
@@ -314,6 +308,8 @@ pub(crate) fn init_creds_keytab(
         client: out.cname,
         crealm: out.crealm,
         time_offset,
+        times: (&out.enc_part).into(),
+        clockskew: i64::from(conf.clockskew),
         client_aware: conf.client_aware_channel_bindings,
         client_aware_invalid: conf.client_aware_channel_bindings_invalid,
     })
@@ -549,7 +545,7 @@ pub(crate) fn is_app_tag(raw: &[u8], tag: u8) -> bool {
 // MIT: `krb5_sendauth` (lib/krb5/krb/sendauth.c:36-206)
 // MIT: `krb5_mk_req_extended` (lib/krb5/krb/mk_req_ext.c:136-143)
 // MIT: `krb5_rd_rep` (lib/krb5/krb/rd_rep.c:68-135)
-/// Versions, one answer byte, the AP-REQ, empty or the refusal's KRB-ERROR, then the AP-REP.
+/// Versions, an answer byte, the AP-REQ, empty or a KRB-ERROR, the AP-REP.
 pub fn kprop_sendauth(
     stream: &mut TcpStream,
     creds: &KpropCreds,
@@ -566,6 +562,10 @@ pub fn kprop_sendauth(
         2 => return Err(KpropError::code(SENDAUTH_BADAPPLVERS, AUTHENTICATING)),
         _ => return Err(KpropError::code(SENDAUTH_BADRESPONSE, AUTHENTICATING)),
     }
+    // MIT: `krb5_mk_req_extended` (lib/krb5/krb/mk_req_ext.c:115-117)
+    let now = krb5_protocol::stamped(creds.time_offset).0;
+    krb5_protocol::validate_times(&creds.times, &now, creds.clockskew)
+        .map_err(|e| KpropError::new(Some(super::com_err_text(&e)), AUTHENTICATING))?;
     let seq =
         generate_seq_number().map_err(|e| KpropError::new(Some(e.to_string()), AUTHENTICATING))?;
     trace::mk_req(
@@ -666,7 +666,7 @@ fn send_error(stream: &mut TcpStream, auth: &KpropAuth, text: &str, code: i64) {
         .ok()
         .filter(|c| (0..=127).contains(c))
         .unwrap_or(err::GENERIC);
-    let (ctime, cusec) = timeofday_with_offset(names.time_offset);
+    let (ctime, cusec) = krb5_protocol::stamped(names.time_offset);
     let pdu = KrbError {
         pvno: KrbError::PVNO,
         msg_type: KrbError::MSG_TYPE,

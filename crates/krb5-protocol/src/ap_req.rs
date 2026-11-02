@@ -20,6 +20,36 @@ use crate::trace::{ERROR_TABLE_BASE_KRB5, error_message};
 
 pub const DEFAULT_SKEW: i64 = 300;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TicketTimes {
+    pub authtime: KerberosTime,
+    pub starttime: Option<KerberosTime>,
+    pub endtime: KerberosTime,
+}
+
+impl From<&krb5_types::EncKdcRepPart> for TicketTimes {
+    fn from(e: &krb5_types::EncKdcRepPart) -> Self {
+        Self {
+            authtime: e.authtime.clone(),
+            starttime: e.starttime.clone(),
+            endtime: e.endtime.clone(),
+        }
+    }
+}
+
+// MIT: `krb5int_validate_times` (lib/krb5/krb/valid_times.c:36-57)
+// No starttime: gated by authtime, not unchecked.
+pub fn validate_times(times: &TicketTimes, now: &KerberosTime, skew: i64) -> Result<(), Error> {
+    let start = times.starttime.as_ref().unwrap_or(&times.authtime);
+    if now.delta_seconds(start) < skew.saturating_neg() {
+        return Err(refused(err::TKT_NYV));
+    }
+    if times.endtime.delta_seconds(now) < skew.saturating_neg() {
+        return Err(refused(err::TKT_EXPIRED));
+    }
+    Ok(())
+}
+
 pub struct ApVerifyParams<'a> {
     pub keys: &'a [ProtocolKey],
     pub key_kvnos: Option<&'a [u32]>,
@@ -191,7 +221,9 @@ pub fn generate_ap_authenticator(auth: ApAuthenticator<'_>) -> Result<Authentica
     })
 }
 
-pub(crate) fn stamped(offset: i64) -> (KerberosTime, krb5_types::Microseconds) {
+// MIT: `krb5_us_timeofday` (lib/krb5/os/ustime.c:66-82)
+#[must_use]
+pub fn stamped(offset: i64) -> (KerberosTime, krb5_types::Microseconds) {
     let (now, usec) = crate::auth_con::us_timeofday();
     if offset == 0 {
         return (now, usec);
@@ -821,18 +853,12 @@ fn verify_inner(
     let now = params.now.clone().unwrap_or_else(KerberosTime::now);
     // MIT: `krb5_init_context_profile` (lib/krb5/krb/init_ctx.c:250-252)
     let skew = params.skew;
-    // MIT: `krb5int_validate_times` (valid_times.c:36-57)
-    // No starttime: gated by authtime, not unchecked.
-    let start = ticket_part
-        .starttime
-        .as_ref()
-        .unwrap_or(&ticket_part.authtime);
-    if now.delta_seconds(start) < skew.saturating_neg() {
-        return Err(refused(err::TKT_NYV));
-    }
-    if ticket_part.endtime.delta_seconds(&now) < skew.saturating_neg() {
-        return Err(refused(err::TKT_EXPIRED));
-    }
+    let times = TicketTimes {
+        authtime: ticket_part.authtime.clone(),
+        starttime: ticket_part.starttime.clone(),
+        endtime: ticket_part.endtime.clone(),
+    };
+    validate_times(&times, &now, skew)?;
     // MIT: `krb5_check_clockskew` (lib/krb5/os/timeofday.c:55-67)
     let skew_delta = now.delta_seconds(&authenticator.ctime).unsigned_abs();
     if !u64::try_from(skew).is_ok_and(|limit| skew_delta <= limit) {
@@ -887,7 +913,7 @@ fn session_key(
     ProtocolKey::from_bytes(etype, key.keyvalue.as_ref())
 }
 
-fn refused(code: i32) -> Error {
+pub(crate) fn refused(code: i32) -> Error {
     Error::KrbError {
         code,
         text: Some(error_message(ERROR_TABLE_BASE_KRB5 + i64::from(code))),

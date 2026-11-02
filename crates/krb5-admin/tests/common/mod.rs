@@ -152,6 +152,11 @@ pub fn init_client(
         None,
         None,
         0,
+        &krb5_protocol::TicketTimes {
+            authtime: krb5_types::KerberosTime::now(),
+            starttime: None,
+            endtime: krb5_types::KerberosTime::now().add_hours(1).unwrap(),
+        },
     )
     .unwrap();
     let cred = cred(RPG_INIT, 0, svc, &[]);

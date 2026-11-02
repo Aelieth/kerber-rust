@@ -205,9 +205,17 @@ impl<'c> OpenCache<'c> {
             &self.cc.primary.1,
             self.cc.primary.0.as_bytes(),
             srealm,
-            krb5_types::unix_now(),
+            self.now(),
             &krb5_protocol::conf_etypes(&self.ctx.profile, true),
         )
+    }
+
+    // MIT: `krb5_timeofday` (lib/krb5/os/timeofday.c:45-50)
+    #[must_use]
+    pub fn now(&self) -> u32 {
+        krb5_protocol::stamped(self.ctx.kdc_offset().unwrap_or(0))
+            .0
+            .unix_seconds()
     }
 
     fn tgt_for(&self, srealm: &str) -> Result<(CcacheCred, String), Krb5Error> {
@@ -222,7 +230,18 @@ impl<'c> OpenCache<'c> {
         let service = self
             .cached_tgt(srealm)
             .map_err(|e| Krb5Error::from_tgs(&e, srealm))?;
-        let cred = service.unwrap_or(local).clone();
+        let cred = match service {
+            Some(c) => c.clone(),
+            // MIT: `get_cached_local_tgt` (lib/krb5/krb/get_creds.c:833-837)
+            None if self.now() > local.endtime => {
+                let code = krb5_types::err::TKT_EXPIRED;
+                return Err(Krb5Error::new(
+                    Code::Kdc(code),
+                    crate::errmsg::kdc_error_text(code),
+                ));
+            }
+            None => local.clone(),
+        };
         let hop = krb5_protocol::referral_hop_realm(&cred.server.1).unwrap_or(crealm);
         Ok((cred, hop))
     }
@@ -357,7 +376,7 @@ pub fn get_credentials(
         .map(krb5_asn1::encode)
         .transpose()
         .map_err(|e| Krb5Error::new(Code::Other, e.to_string()))?;
-    let now = unix_now();
+    let now = cache.now();
     let m = MatchCreds {
         client: Some(me),
         server,
@@ -480,7 +499,7 @@ pub fn get_credentials_for_user(
         enctype: opts.tgs.enctype,
         is_skey: false,
         second_ticket: None,
-        now: unix_now(),
+        now: cache.now(),
     };
     crate::trace::tkt_creds_begin(cache, for_user, self_sname);
     if let Some(c) = crate::trace::retrieved(cache, for_user, self_sname, cache.retrieve(&m)) {
@@ -498,7 +517,7 @@ pub fn get_credentials_for_user(
             enctype: opts.tgs.enctype,
             is_skey: false,
             second_ticket: None,
-            now: unix_now(),
+            now: cache.now(),
         };
         if let Some(c) =
             crate::trace::retrieved(cache, &user, self_sname, cache.retrieve(&identified))
@@ -531,7 +550,7 @@ pub fn get_credentials_for_user(
             enctype: opts.tgs.enctype,
             is_skey: false,
             second_ticket: None,
-            now: unix_now(),
+            now: cache.now(),
         };
         if let Some(c) =
             crate::trace::retrieved(cache, &client, self_sname, cache.retrieve(&replied))
@@ -636,7 +655,7 @@ pub fn get_credentials_for_proxy(
         enctype: opts.tgs.enctype,
         is_skey: false,
         second_ticket: Some(&evidence.ticket),
-        now: unix_now(),
+        now: cache.now(),
     };
     if krb5_protocol::trace::enabled() {
         crate::trace::proxy_lookup(
@@ -729,7 +748,7 @@ pub fn get_u2u_ticket(ctx: &ClientContext, spec: CcSpec) -> Result<Ticket, Krb5E
         enctype: None,
         is_skey: false,
         second_ticket: None,
-        now: unix_now(),
+        now: cache.now(),
     };
     let cred = cache.retrieve(&m).ok_or_else(|| cache.not_found())?;
     decode(&cred.ticket).map_err(|e| Krb5Error::new(Code::Other, e.to_string()))

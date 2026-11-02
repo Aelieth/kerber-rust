@@ -367,6 +367,7 @@ fn kiprop_init(cfg: &KpropdIprop<'_>, client: &PrincipalName) -> Result<IpropCli
         &creds.session,
         &creds.crealm,
         &creds.client,
+        &creds.times,
     )
     .map_err(|_| InitFailure::kadm5(KADM5_GSS_ERROR))
 }

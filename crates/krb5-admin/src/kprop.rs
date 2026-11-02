@@ -6,9 +6,7 @@ use std::path::Path;
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt};
-use krb5_kdc::{
-    LoadLog, PrincipalStore, Ulog, UlogLast, dump_store, dump_store_with_key, save_store_fresh,
-};
+use krb5_kdc::{LoadLog, PrincipalStore, Ulog, UlogLast, dump_store, save_store_fresh};
 use krb5_log::klog::{self, Severity};
 use krb5_protocol::trace::{ERROR_TABLE_BASE_KRB5, error_message, kdc_code};
 use krb5_protocol::{
@@ -1415,33 +1413,6 @@ pub fn kprop_send_dump(
     kprop_xmit_database(stream, auth, &mut &dump[..], dump.len() as u64, false)
 }
 
-pub fn kprop_send_store(
-    stream: &mut TcpStream,
-    store: &PrincipalStore,
-    master: &ProtocolKey,
-    ticket: Ticket,
-    session: &ProtocolKey,
-    crealm: &krb5_types::Realm,
-    cname: &PrincipalName,
-) -> Result<(), Error> {
-    let dump = dump_store_with_key(store, master)
-        .map(String::into_bytes)
-        .map_err(|e| Error::Inner(e.to_string()))?;
-    let creds = KpropCreds {
-        ticket,
-        session: session.clone(),
-        client: cname.clone(),
-        crealm: crealm.clone(),
-        time_offset: 0,
-        client_aware: false,
-        client_aware_invalid: false,
-    };
-    let local = stream.local_addr().ok().map(|a| a.ip());
-    let mut auth = kprop_sendauth(stream, &creds, local_host_address(local))
-        .map_err(|e| Error::Inner(e.to_string()))?;
-    kprop_send_dump(stream, &mut auth, &dump).map_err(|e| Error::Inner(e.to_string()))
-}
-
 #[cfg(all(test, feature = "test-hooks"))]
 #[allow(
     clippy::disallowed_methods,
@@ -1454,6 +1425,15 @@ mod tests {
     use krb5_protocol::build_krb_priv_chained;
 
     use krb5_types::PrincipalName;
+
+    fn day(offset: i64) -> krb5_protocol::TicketTimes {
+        let now = KerberosTime::now().add_seconds(offset).unwrap();
+        krb5_protocol::TicketTimes {
+            endtime: now.add_hours(24).unwrap(),
+            authtime: now,
+            starttime: None,
+        }
+    }
 
     fn kt_entry(name: &PrincipalName, kvno: u32, timestamp: u32, key: ProtocolKey) -> KeytabEntry {
         KeytabEntry {
@@ -2348,6 +2328,8 @@ mod tests {
             client: admin.clone(),
             crealm: krb5_types::ascii(TEST_REALM),
             time_offset: 0,
+            times: day(0),
+            clockskew: 300,
             client_aware: false,
             client_aware_invalid: false,
         };
@@ -2421,6 +2403,8 @@ mod tests {
             client: admin,
             crealm: krb5_types::ascii(TEST_REALM),
             time_offset: 0,
+            times: day(0),
+            clockskew: 300,
             client_aware: false,
             client_aware_invalid: false,
         };
@@ -2467,6 +2451,8 @@ mod tests {
             client: admin,
             crealm: krb5_types::ascii(TEST_REALM),
             time_offset,
+            times: day(time_offset),
+            clockskew: 300,
             client_aware: false,
             client_aware_invalid: false,
         };

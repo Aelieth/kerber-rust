@@ -394,7 +394,7 @@ fn get_dest_tgt(
     let mut cur_kdc = kdc.clone();
     let mut cur_tgt = tgt.clone();
     let mut next = dest.to_owned();
-    let now = krb5_types::unix_now();
+    let now = crate::ap_req::stamped(tgt.time_offset).0.unix_seconds();
     let mut offpath = false;
     let mut offpath_count = 0usize;
     let mut visited: Vec<String> = Vec::new();

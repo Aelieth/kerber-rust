@@ -414,6 +414,7 @@ impl IpropClient {
         session: &ProtocolKey,
         crealm: &krb5_types::Realm,
         cname: &PrincipalName,
+        times: &krb5_protocol::TicketTimes,
     ) -> Result<Self, Error> {
         stream
             .set_read_timeout(Some(Self::TIMEOUT))
@@ -428,6 +429,7 @@ impl IpropClient {
             None,
             None,
             0,
+            times,
         )
         .map_err(|e| Error::Inner(e.to_string()))?;
         let mut xid = 1u32;

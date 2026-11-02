@@ -57,6 +57,14 @@ fn root(bytes: &[u8]) -> Result<Der, String> {
         .ok_or_else(|| "not one DER element".to_string())
 }
 
+fn forged_times(now: &KerberosTime) -> Result<krb5_protocol::TicketTimes, String> {
+    Ok(krb5_protocol::TicketTimes {
+        authtime: now.add_seconds(-60).map_err(|e| e.to_string())?,
+        starttime: None,
+        endtime: now.add_seconds(3600).map_err(|e| e.to_string())?,
+    })
+}
+
 fn ap_req(authenticator: &[u8], now: &KerberosTime) -> Result<Vec<u8>, String> {
     ap_req_with(authenticator, now, |_| {})
 }
@@ -67,6 +75,7 @@ fn ap_req_with(
     tkt: impl FnOnce(&mut EncTicketPart),
 ) -> Result<Vec<u8>, String> {
     let client = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
+    let times = forged_times(now)?;
     let mut part = EncTicketPart {
         flags: TicketFlags::from_u32(0x4000_0000),
         key: EncryptionKey {
@@ -76,9 +85,9 @@ fn ap_req_with(
         crealm: ascii("KERBER.TEST"),
         cname: client,
         transited: TransitedEncoding::empty(),
-        authtime: now.add_seconds(-60).map_err(|e| e.to_string())?,
-        starttime: None,
-        endtime: now.add_seconds(3600).map_err(|e| e.to_string())?,
+        authtime: times.authtime,
+        starttime: times.starttime,
+        endtime: times.endtime,
         renew_till: None,
         caddr: None,
         authorization_data: None,
@@ -759,6 +768,7 @@ fn forged_ticket_with(
     now: &KerberosTime,
     tkt: impl FnOnce(&mut EncTicketPart),
 ) -> Result<Ticket, String> {
+    let times = forged_times(now)?;
     let mut part = EncTicketPart {
         flags: TicketFlags::initial_preauth(),
         key: EncryptionKey {
@@ -768,9 +778,9 @@ fn forged_ticket_with(
         crealm: ascii(&spec.realm),
         cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, [spec.client.as_str()]),
         transited: TransitedEncoding::empty(),
-        authtime: now.add_seconds(-60).map_err(|e| e.to_string())?,
-        starttime: None,
-        endtime: now.add_seconds(3600).map_err(|e| e.to_string())?,
+        authtime: times.authtime,
+        starttime: times.starttime,
+        endtime: times.endtime,
         renew_till: None,
         caddr: None,
         authorization_data: None,
@@ -1437,7 +1447,8 @@ fn service_spec(keytab: &str, service: &str, crealm: Option<&str>) -> Result<Tic
 fn gss_transit(keytab: &str, service: &str) -> Result<(), String> {
     let crealm = "OTHER.TEST";
     let spec = service_spec(keytab, service, Some(crealm))?;
-    let ticket = forged_ticket_with(&spec, &KerberosTime::now(), |p| {
+    let now = KerberosTime::now();
+    let ticket = forged_ticket_with(&spec, &now, |p| {
         p.transited.contents = OctetString::from(spec.srealm.as_bytes().to_vec());
     })?;
     let who = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
@@ -1451,6 +1462,7 @@ fn gss_transit(keytab: &str, service: &str) -> Result<(), String> {
         None,
         None,
         0,
+        &forged_times(&now)?,
     )
     .map_err(|e| e.to_string())?;
     println!("{}", hex(&token));
@@ -1631,6 +1643,7 @@ fn kadmind_init(addr: &str, keytab: &str, client: &str, opts: &[String]) -> Resu
         None,
         None,
         0,
+        &forged_times(&now)?,
     )
     .map_err(|e| e.to_string())?;
     let mut stream = std::net::TcpStream::connect(addr).map_err(|e| format!("{addr}: {e}"))?;

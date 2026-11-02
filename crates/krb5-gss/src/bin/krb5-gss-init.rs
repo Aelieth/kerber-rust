@@ -221,6 +221,7 @@ fn main() {
         deleg_cred.as_ref(),
         Some(&profile),
         time_offset,
+        &svc.times(),
     )
     .unwrap_or_else(|e| {
         eprintln!("init_sec_context: {e}");

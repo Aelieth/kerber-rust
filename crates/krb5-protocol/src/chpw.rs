@@ -280,6 +280,10 @@ fn change_or_set_via(
     target: Option<(&Realm, &PrincipalName)>,
     profile: Option<&krb5_config::Krb5Conf>,
 ) -> Result<(u16, Vec<u8>), Error> {
+    // MIT: `krb5_mk_req_extended` (lib/krb5/krb/mk_req_ext.c:115-117)
+    let now = crate::ap_req::stamped(as_out.time_offset).0;
+    let skew = profile.map_or(crate::DEFAULT_SKEW, |p| i64::from(p.clockskew));
+    crate::validate_times(&(&as_out.enc_part).into(), &now, skew)?;
     let sub = ProtocolKey::random(as_out.session_key.etype())?;
     let (authenticator, ap_der) = kpasswd_ap_req(
         &as_out.ticket,

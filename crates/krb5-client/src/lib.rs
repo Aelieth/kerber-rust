@@ -717,6 +717,10 @@ fn load_fast_armor(
     let me = cache.cc.primary.clone();
     let tgs = (creds::realm_of(realm)?, creds::tgs_of(realm)?);
     let cred = creds::get_credentials(&mut cache, &me, &tgs, &creds::GetCredsOptions::default())?;
+    // MIT: `krb5_mk_req_extended` (lib/krb5/krb/mk_req_ext.c:115-117)
+    let now = krb5_types::KerberosTime::from_unix_seconds(cache.now());
+    krb5_protocol::validate_times(&cred.times(), &now, i64::from(ctx.profile.clockskew))
+        .map_err(|e| Krb5Error::from_protocol(&e, realm))?;
     let ticket: Ticket = decode(&cred.ticket)?;
     Ok(FastArmor {
         ticket,

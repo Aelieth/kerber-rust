@@ -205,9 +205,14 @@ pub fn tgt_for(cache: &OpenCache, srealm: &str) {
             return;
         }
     }
-    let local = cached_tgt(cache, &crealm);
+    // MIT: `get_cached_local_tgt` (lib/krb5/krb/get_creds.c:796-841)
+    let etypes = krb5_protocol::conf_etypes(&cache.ctx.profile, true);
+    let local =
+        krb5_protocol::cached_tgt(&cache.cc.creds, &me.1, me.0.as_bytes(), &crealm, 0, &etypes)
+            .ok()
+            .flatten();
     retrieve(cache, Some(&me), &local_tgt, local.is_some());
-    if let Some(c) = local {
+    if let Some(c) = local.filter(|c| cache.now() <= c.endtime) {
         trace::tkt_creds_local_tgt(princ(&c.client), princ(&c.server));
     }
 }
