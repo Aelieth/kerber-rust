@@ -24,7 +24,7 @@ any other `###` heading.
 - **crypto.** crypto-bigint 0.7.9 fixes RUSTSEC-2026-0387, uneven timing in PKINIT DH/RSA/ECDSA, SPAKE.
 - **kdc.** Unable to make audit id, KDC drops AS-REQ and gives TGS-REQ generic error, as MIT.
 - **kdc.** Extra or mistyped SignedData/SignerInfo fields fail signedAuthPack, as MIT.
-- **pkinit.** P-384 needs `--cfg p384_backend="fiat"` (constant-time; cargo config sets it), else refused.
+- **pkinit.** P-384 needs `--cfg p384_backend="fiat"` (constant-time; in cargo config), else refused.
 - **kdc.** Bad PKINIT signedAuthPack gives OpenSSL's CMS reason, as MIT logs it.
 - **kdc.** PKINIT signer with no signed attributes is taken, as MIT's `CMS_verify`.
 - **crypto.** AES/DES/Camellia/RC4/HMAC/hashes `zeroize` key/hash state on drop, as MIT.
@@ -48,7 +48,7 @@ any other `###` heading.
 - **gss/protocol.** Replay cache keeps MIT's clock-skew tag; full, it refuses new tag, not live one.
 - **admin.** iprop client checks INIT reply MIC whatever verifier, as MIT.
 - **admin.** Empty or non-GSS verifier no longer skips iprop INIT reply MIC check.
-- **kdc.** PKINIT trusts kdc.conf's `pkinit_anchors`, signs with `pkinit_identity`; own CA is test-only.
+- **kdc.** PKINIT trusts kdc.conf's `pkinit_anchors`, signs with `pkinit_identity`; own CA test-only.
 - **kdc.** PKINIT checks client's `pkinit_cert_match` rule as MIT's dbmatch; miss is 66.
 - **kdc.** `pkinit_cert_match` takes `<KU>`, `<EKU>`, `<SAN>`, `<ISSUER>`, `<SUBJECT>`, `&&`, `||`.
 - **pkinit.** MODP Diffie-Hellman is constant-time on crypto-bigint, not num-bigint's `modpow`.
@@ -131,7 +131,7 @@ any other `###` heading.
 - **config.** Krb5Conf::default is MIT's unset profile: clock skew 300, reverse DNS, KDC time sync.
 - **kdc.** Rename stores each current key's salt; kvno wraps from 65535 to 1.
 - **kdc.** getprinc sends tl types above 255 except vendor SID, history records.
-- **kdc.** Deleting K/M is refused, as are password change, keepold random key or kadmin/history setkey.
+- **kdc.** Refused: deleting K/M; kadmin/history password change, keepold random key, setkey.
 - **kdc.** A norealm salt is principal name alone; onlyrealm salt is realm.
 - **admin.** An embedder supplies kadmind's log, its password-quality and hook modules.
 - **kdc.** Pending OTP verify no longer blocks KDC loop; it resumes with verdict, as MIT.
@@ -170,6 +170,7 @@ any other `###` heading.
 - **protocol.** `AsTicketOpts::default()` is not forwardable, as MIT's library default.
 - **protocol.** `[libdefaults] forwardable = true` still sets it.
 - **protocol.** Unsupported etype is not retried as aes256; KDC's error is returned, as MIT.
+- **client.** Enctype list with no usable type fails, as MIT.
 - **protocol.** AP-REQ acceptor's keytab-miss errors carry MIT's texts.
 - **crypto.** RustCrypto to 0.14 generation (`aes` 0.9, `sha2` 0.11, `p256` 0.14, the rest).
 - **crypto.** curve25519-dalek moves to 5.0; every enctype, SPAKE vector holds.
@@ -200,7 +201,7 @@ any other `###` heading.
 - **field.** The gates ticket-flags covers are retired.
 - **field.** Weekly client-tools: our kinit, klist, kvno, kdestroy, ktutil, kswitch beside MIT's.
 - **field.** client-tools covers request shapes, crossed caches, keytabs.
-- **field.** client-tools adds FAST, SPAKE, S4U2Proxy, lifetime, enctype, kpasswd, ccache-removal rows.
+- **field.** client-tools: FAST, SPAKE, S4U2Proxy, lifetime, enctype, kpasswd, ccache-removal rows.
 - **field.** pkinit scenario compares PKINIT, anonymous requests.
 - **field.** client-tools grades each request flow's exit status, asking with `canonicalize = true`.
 - **field.** client-tools crosses one DIR collection between program sets.
@@ -209,15 +210,15 @@ any other `###` heading.
 - **gss.** Nightly gate checks acceptors' host-ticket lifetimes agree within 60 s.
 - **fuzz.** `otp_req_decode` decodes arbitrary PA-OTP-REQUEST bytes KDC reads.
 - **ci.** No-features nextest, fuzz-crate check each get a job; `test` 360 s, `doc` 118 s.
-- **ci.** `form:` counts comments against code; `// MIT:` cite is one exempt line ≤100 columns, or fails.
+- **ci.** `form:` counts comments against code; `// MIT:` cite: one exempt line ≤100 columns, or fails.
 - **ci.** Rangeless `// MIT:` cite must name defined symbol; anchor check leaves it to that gate.
 - **ci.** Differential gate compares KDCs on ten bad PKINIT signedAuthPacks.
 - **ci.** Differential gate sends trailing element, mistyped digestAlgorithms OID.
 - **ci.** cargo-audit 0.22.2 runs `--deny warnings`, files no issues.
-- **ci.** ci-policy fails a crate's comment share above 3.000%, and test share (lines) above its cap.
+- **ci.** ci-policy fails crate comment share above 3.000%, test share (lines) above its cap.
 - **ci.** `[Unreleased]` is capped at 25,000 bytes; released sections are frozen.
 - **ci.** Docs are capped at 100 KiB.
-- **ci.** Per-push, nightly, peers run `ubuntu-26.04`; upload-artifact 7.0.2; fuzz check is `--locked`.
+- **ci.** Per-push, nightly, peers run `ubuntu-26.04`; upload-artifact 7.0.2; fuzz check `--locked`.
 - **ci.** `nightly` label runs `oracles`, `moving`, `fuzz`, `anchors`; `schedule`, `workflow_dispatch` stay.
 - **ci.** Unit tests outside keep list are gone.
 - **ci.** Kept: log's two symlink-open tests, cli's wiped-buffer line, asn1's four DER-strict tests.
@@ -238,7 +239,7 @@ any other `###` heading.
 - **protocol.** `build_krb_safe`, `build_krb_priv` gone; callers pass sequences to longer builder.
 - **ci.** Budget workflow gone; `ci-budget.toml` holds eight job walls, `run_wall`.
 - **ci.** ktutil nightly gate gone; field client-tools' keytab rows check all it did, MIT first.
-- **ci.** ccache, two client-differential nightly gates, two probes gone; client-tools, pkinit cover them.
+- **ci.** ccache, two client-differential nightly gates, two probes gone; client-tools, pkinit cover.
 
 ### Fixed
 - **kdc.** A KDC request locks once; lockout reads skip it while rows check.
@@ -253,7 +254,7 @@ any other `###` heading.
 - **kdc.** PKINIT picks chain issuer by name, key id, then checks one signature.
 - **client.** `kinit -E` sends UPN as one enterprise component, as MIT.
 - **client.** `-E` alone no longer asks to canonicalize.
-- **client.** `-C` or enterprise name makes kinit follow KDC client referrals (16 requests max), as MIT.
+- **client.** `-C` or enterprise name: kinit follows KDC client referrals (16 requests max), as MIT.
 - **client.** `kinit -T` arms with TGT for request's realm, as MIT.
 - **client.** `kinit -T`'s armor TGT comes from armor cache, or is fetched through it and stored.
 - **client.** PKINIT retry in KDC's larger DH group checks reply against retry, as MIT.
@@ -284,14 +285,14 @@ any other `###` heading.
 - **admin.** kadmind takes `-proponly`, `admin_server`'s port before `-port`.
 - **gss/admin.** GSS initiator takes caller's flags, as MIT; iprop client asks MUTUAL|REPLAY.
 - **kdc.** KDC unable to reread its database answers under read lock, not write; none waits.
-- **kdb.** `kdb5_util dump` name filter is glibc ERE on whole name, as MIT's `regcomp(REG_EXTENDED)`.
+- **kdb.** `kdb5_util dump` name filter: glibc ERE, whole name, as MIT's `regcomp(REG_EXTENDED)`.
 - **kdb.** Bad filter reports `regerror`'s text.
 - **kdc.** Store write commits in its own change or is refused before it touches store.
 - **kdc.** Status, kvno, TL-data or policy write stamps `Last modified`.
 - **kdc/admin.** kadm5 postcommit hooks run after write, unlocked, as MIT; create's also on failure.
 - **kdc/admin.** kadm5 reads take store's read guard.
 - **kdc.** PKINIT: another client's SAN is 75 (`Client name mismatch`; `pkinit_allow_upn` is read).
-- **kdc.** PKINIT: unknown CA 70 (TD-TRUSTED-CERTIFIERS), other chain failure 71 (TD-INVALID-CERTIFICATES).
+- **kdc.** PKINIT: unknown CA 70 (TD-TRUSTED-CERTIFIERS), other chain error 71 (TD-INVALID-CERTIFICATES).
 - **kdc.** PKINIT logs MIT's freshness lines, checks AuthPack in MIT's order.
 - **kdc.** PKINIT request with no DH is `Unsupported PKINIT RSA request`.
 - **kdc.** PKINIT CMS failing decode or verify uses MIT's text, or 80.
@@ -315,13 +316,13 @@ any other `###` heading.
 - **admin.** kinit traces `-T` as given.
 - **client.** FAST request's outer body is request as last restart left it, as MIT.
 - **client.** `kdc_default_options` seeds AS options.
-- **admin.** kadmind's iprop logs MIT's `Unauthorized request` for refused GET_UPDATES or full resync.
+- **admin.** kadmind iprop logs MIT's `Unauthorized request` for refused GET_UPDATES or full resync.
 - **admin.** kadmind's iprop logs `Request` line per answer.
 - **kdc.** Refused server key logs KDB error's text, as MIT.
 - **kdc.** An unpermitted key logs `No matching key in entry having a permitted enctype`.
 - **kdc.** A KDC started by full path names itself by its basename in init failure, as MIT.
 - **gss.** Refused mutual AP-REQ gets MIT's KRB-ERROR token, in SPNEGO too; initiators read it.
-- **admin.** Full resync dumps kadmind's store for replica's version; dump_ok synced, stale re-dumps.
+- **admin.** Full resync dumps kadmind store for replica version; dump_ok synced, stale re-dumps.
 - **client/kdc.** A non-ASCII realm or PKINIT SAN is refused or unmatched, not a panic.
 - **admin.** `ktutil` gives aes-sha2, Camellia keys MIT's PBKDF2 rounds (v1.1.0: 4096).
 - **client.** The AS nonce is drawn fresh for each request, as MIT.

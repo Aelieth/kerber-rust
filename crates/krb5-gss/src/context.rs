@@ -393,7 +393,7 @@ impl GssContext {
         let seq = generate_seq_number()?;
         let desired = if flags & GSS_C_MUTUAL != 0 {
             match profile {
-                Some(conf) => krb5_protocol::conf_etypes(conf, true),
+                Some(conf) => krb5_protocol::conf_etypes(conf, true)?,
                 None => krb5_crypto::EncryptionType::preferred()
                     .iter()
                     .map(|etype| etype.to_iana())

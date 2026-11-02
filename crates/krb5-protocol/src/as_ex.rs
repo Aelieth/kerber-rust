@@ -363,7 +363,7 @@ fn as_exchange_inner(
     trace_unknown_groups(req.profile);
     let etypes: Vec<i32> = match req.etypes {
         Some(e) if !e.is_empty() => e.to_vec(),
-        _ => conf_etypes(req.profile, false),
+        _ => conf_etypes(req.profile, false)?,
     };
     let clock = Clock::new(req.profile, restart_point(req));
     let (nonce, bound) = next_try(req, &clock)?;
@@ -1889,28 +1889,25 @@ fn build_as_req(
 // MIT: `krb5int_parse_enctype_list` (lib/krb5/krb/init_ctx.c:447-502)
 // MIT: `krb5int_c_weak_enctype` (lib/crypto/krb/enctype_util.c:58-64)
 /// ETYPE_WEAK is dropped. rc4-hmac is not weak.
-#[must_use]
-pub fn conf_etypes(conf: &Krb5Conf, tgs: bool) -> Vec<i32> {
-    let preferred = || {
-        EncryptionType::preferred()
+pub fn conf_etypes(conf: &Krb5Conf, tgs: bool) -> Result<Vec<i32>, Error> {
+    match configured_etypes(conf, tgs) {
+        Some(names) => parsed_etypes(&names.join(" "), conf),
+        None => Ok(EncryptionType::preferred()
             .map(EncryptionType::to_iana)
-            .to_vec()
-    };
-    let Some(names) = configured_etypes(conf, tgs) else {
-        return preferred();
-    };
-    parse_enctype_list(&names.join(" "), conf.allow_weak_crypto).map_or_else(preferred, |list| {
-        list.into_iter().map(EncryptionType::to_iana).collect()
-    })
+            .to_vec()),
+    }
 }
 
 // MIT: `krb5_get_tgs_ktypes` (lib/krb5/krb/init_ctx.c:541-571)
-#[must_use]
-pub fn tgs_ktypes(conf: &Krb5Conf) -> Vec<i32> {
+pub fn tgs_ktypes(conf: &Krb5Conf) -> Result<Vec<i32>, Error> {
     let names = configured_etypes(conf, true).map_or_else(|| "DEFAULT".to_owned(), |n| n.join(" "));
-    parse_enctype_list(&names, conf.allow_weak_crypto)
+    parsed_etypes(&names, conf)
+}
+
+fn parsed_etypes(names: &str, conf: &Krb5Conf) -> Result<Vec<i32>, Error> {
+    parse_enctype_list(names, conf.allow_weak_crypto)
         .map(|list| list.into_iter().map(EncryptionType::to_iana).collect())
-        .unwrap_or_default()
+        .ok_or(Error::ConfigEtypeNosupp)
 }
 
 fn configured_etypes(conf: &Krb5Conf, tgs: bool) -> Option<&Vec<String>> {
@@ -2210,7 +2207,7 @@ pub fn as_identify_realm(req: &AsRequest<'_>) -> Result<IdentifyReply, Error> {
     let _ = krb5_types::try_ascii(req.realm).map_err(|e| Error::ReplyMismatch(e.to_string()))?;
     let etypes: Vec<i32> = match req.etypes {
         Some(e) if !e.is_empty() => e.to_vec(),
-        _ => conf_etypes(req.profile, false),
+        _ => conf_etypes(req.profile, false)?,
     };
     let clock = Clock::new(req.profile, restart_point(req));
     let (nonce, bound) = next_try(req, &clock)?;

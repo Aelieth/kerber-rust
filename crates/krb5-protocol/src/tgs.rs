@@ -405,14 +405,18 @@ fn get_dest_tgt(
         }
         if !offpath {
             // MIT: `get_tgt_request` (lib/krb5/krb/get_creds.c:890-914)
-            let cred = cached_tgt(
-                &creds_opts.cached_creds,
-                &cur_tgt.cname,
-                cur_tgt.crealm.as_bytes(),
-                &next,
-                now,
-                &crate::as_ex::tgs_ktypes(profile),
-            )?;
+            // MIT: `get_cached_tgt` (lib/krb5/krb/get_creds.c:792-792)
+            let cred = match crate::as_ex::tgs_ktypes(profile) {
+                Ok(ktypes) => cached_tgt(
+                    &creds_opts.cached_creds,
+                    &cur_tgt.cname,
+                    cur_tgt.crealm.as_bytes(),
+                    &next,
+                    now,
+                    &ktypes,
+                )?,
+                Err(_) => None,
+            };
             if let Some(cred) = cred {
                 trace::tkt_creds_cached_intermediate_tgt(
                     trace::Princ::new(&cred.client.1, cred.client.0.as_bytes()),
@@ -942,7 +946,10 @@ fn tgs_round_trip(
     } = req;
     let nonce = random_nonce31()?;
     let till = KerberosTime(tgt.enc_part.endtime.0);
-    let etypes = enctype.map_or_else(|| crate::as_ex::conf_etypes(profile, true), |e| vec![e]);
+    let etypes = match enctype {
+        Some(e) => vec![e],
+        None => crate::as_ex::conf_etypes(profile, true)?,
+    };
 
     let requested = sname.clone();
     let s4u2proxy = kdc_options.bit(flag_bit::CNAME_IN_ADDL_TKT);

@@ -121,22 +121,24 @@ impl<'c> OpenCache<'c> {
     }
 
     // MIT: `cache_get` (get_creds.c:114-133)
-    #[must_use]
-    pub fn retrieve(&self, m: &MatchCreds<'_>) -> Option<&CcacheCred> {
-        self.lookup(m).ok()
-    }
-
+    // MIT: `k5_cc_retrieve_cred_default` (lib/krb5/ccache/cc_retr.c:253-276)
     pub fn lookup(&self, m: &MatchCreds<'_>) -> Result<&CcacheCred, i64> {
-        let ktypes = krb5_protocol::tgs_ktypes(&self.ctx.profile);
+        let ktypes = krb5_protocol::tgs_ktypes(&self.ctx.profile)
+            .map_err(|_| krb5_protocol::trace::KRB5_CONFIG_ETYPE_NOSUPP)?;
         ranked(self.cc.creds.iter().filter(|c| m.matches(c)), &ktypes)
     }
 
     #[must_use]
     pub fn miss(&self, code: i64) -> Krb5Error {
-        if code == krb5_protocol::trace::KRB5_CC_NOT_KTYPE {
-            return Krb5Error::from_tgs(&krb5_protocol::Error::CcNotKtype, "");
+        match code {
+            krb5_protocol::trace::KRB5_CC_NOT_KTYPE => {
+                Krb5Error::from_tgs(&krb5_protocol::Error::CcNotKtype, "")
+            }
+            krb5_protocol::trace::KRB5_CONFIG_ETYPE_NOSUPP => {
+                Krb5Error::from_tgs(&krb5_protocol::Error::ConfigEtypeNosupp, "")
+            }
+            _ => self.not_found(),
         }
-        self.not_found()
     }
 
     // MIT: `krb5_cc_retrieve_cred` (lib/krb5/ccache/ccfns.c:97-111)
@@ -166,7 +168,7 @@ impl<'c> OpenCache<'c> {
 
     // MIT: `krb5_tkt_creds_init` (lib/krb5/krb/get_creds.c:1143-1151)
     // The start realm is the cache's `start_realm` configuration, else the client's realm.
-    fn start_realm(&self, client: &Princ) -> String {
+    pub(crate) fn start_realm(&self, client: &Princ) -> String {
         self.cc.get_config(None, "start_realm").map_or_else(
             || realm_str(&client.0),
             |r| String::from_utf8_lossy(r).into_owned(),
@@ -220,7 +222,7 @@ impl<'c> OpenCache<'c> {
             self.cc.primary.0.as_bytes(),
             srealm,
             self.now(),
-            &krb5_protocol::tgs_ktypes(&self.ctx.profile),
+            &krb5_protocol::tgs_ktypes(&self.ctx.profile)?,
         )
     }
 
@@ -232,33 +234,58 @@ impl<'c> OpenCache<'c> {
             .unix_seconds()
     }
 
+    // MIT: `begin_get_tgt` (lib/krb5/krb/get_creds.c:986-1014)
     fn tgt_for(&self, srealm: &str) -> Result<(CcacheCred, String), Krb5Error> {
-        let creds = self.cc.list();
-        let crealm = realm_str(&self.cc.primary.0);
-        let local = creds
-            .iter()
-            .copied()
-            .find(|c| c.server.1.is_krbtgt_for(&crealm))
-            .or_else(|| creds.iter().copied().find(|c| c.server.1.is_krbtgt()))
-            .ok_or_else(|| self.not_found())?;
-        let service = self
-            .cached_tgt(srealm)
-            .map_err(|e| Krb5Error::from_tgs(&e, srealm))?;
-        let cred = match service {
-            Some(c) => c.clone(),
+        let start = self.start_realm(&self.cc.primary);
+        let service = if srealm == start {
+            None
+        } else {
+            // MIT: `get_cached_tgt` (lib/krb5/krb/get_creds.c:792-792)
+            match self.cached_tgt(srealm) {
+                Err(e @ krb5_protocol::Error::CcNotKtype) => {
+                    return Err(Krb5Error::from_tgs(&e, srealm));
+                }
+                found => found.ok().flatten(),
+            }
+        };
+        let cred = if let Some(c) = service {
+            c
+        } else {
+            let local = self.local_tgt(&start).map_err(|miss| self.miss(miss))?;
             // MIT: `get_cached_local_tgt` (lib/krb5/krb/get_creds.c:833-837)
-            None if self.now() > local.endtime => {
+            if self.now() > local.endtime {
                 let code = krb5_types::err::TKT_EXPIRED;
                 return Err(Krb5Error::new(
                     Code::Kdc(code),
                     crate::errmsg::kdc_error_text(code),
                 ));
             }
-            None => local.clone(),
+            local
         };
-        let hop = krb5_protocol::referral_hop_realm(&cred.server.1).unwrap_or(crealm);
-        Ok((cred, hop))
+        let hop = krb5_protocol::referral_hop_realm(&cred.server.1).unwrap_or(start);
+        Ok((cred.clone(), hop))
     }
+
+    // MIT: `get_cached_local_tgt` (lib/krb5/krb/get_creds.c:796-831)
+    pub(crate) fn local_tgt(&self, start: &str) -> Result<&CcacheCred, i64> {
+        let (Ok(realm), Ok(name)) = (realm_of(start), tgs_of(start)) else {
+            return Err(krb5_protocol::trace::KRB5_CC_NOTFOUND);
+        };
+        self.lookup(&MatchCreds {
+            client: Some(&self.cc.primary),
+            server: &(realm, name),
+            enctype: None,
+            is_skey: false,
+            second_ticket: None,
+            now: 0,
+        })
+    }
+}
+
+// MIT: `check_cache` (lib/krb5/krb/get_creds.c:1057-1059)
+fn miss_goes_on(code: i64) -> bool {
+    code == krb5_protocol::trace::KRB5_CC_NOTFOUND
+        || code == krb5_protocol::trace::KRB5_CC_NOT_KTYPE
 }
 
 // MIT: `krb5_cc_retrieve_cred_seq` (lib/krb5/ccache/cc_retr.c:195-250)
@@ -427,23 +454,24 @@ pub fn get_credentials(
             Krb5Error::new(Code::Kdc(code), crate::errmsg::kdc_error_text(code))
         })?;
     // MIT: `construct_matching_creds` (get_creds.c:74-87)
-    let listed = m
-        .enctype
-        .is_none_or(|e| krb5_protocol::tgs_ktypes(&ctx.profile).contains(&e));
-    let found = if listed {
-        crate::trace::retrieved(cache, me, server, cache.lookup(&m)).or_else(|miss| {
+    let listed = match m.enctype {
+        Some(e) => krb5_protocol::tgs_ktypes(&ctx.profile).map(|k| k.contains(&e)),
+        None => Ok(true),
+    };
+    let found = match listed {
+        Ok(true) => crate::trace::retrieved(cache, me, server, cache.lookup(&m)).or_else(|miss| {
             if miss == krb5_protocol::trace::KRB5_CC_NOTFOUND {
                 cache.retrieve_referral(&m)
             } else {
                 Err(miss)
             }
-        })
-    } else {
-        Err(krb5_protocol::trace::KRB5_CC_NOT_KTYPE)
+        }),
+        Ok(false) => Err(krb5_protocol::trace::KRB5_CC_NOT_KTYPE),
+        Err(_) => Err(krb5_protocol::trace::KRB5_CONFIG_ETYPE_NOSUPP),
     };
     match found {
         Ok(c) => return Ok(c.clone()),
-        Err(miss) if opts.cached_only => return Err(cache.miss(miss)),
+        Err(miss) if opts.cached_only || !miss_goes_on(miss) => return Err(cache.miss(miss)),
         Err(_) => {}
     }
     let start_realm = cache.start_realm(me);
@@ -549,7 +577,7 @@ pub fn get_credentials_for_user(
         Ok(c) => return Ok(c.clone()),
         Err(miss) => miss,
     };
-    if opts.cached_only {
+    if opts.cached_only || !miss_goes_on(miss) {
         return Err(cache.miss(miss));
     }
     let user = s4u_identify_user(&cache.ctx.profile, for_user, self_sname, opts)?;
@@ -563,9 +591,10 @@ pub fn get_credentials_for_user(
             second_ticket: None,
             now: cache.now(),
         };
-        if let Ok(c) = crate::trace::retrieved(cache, &user, self_sname, cache.lookup(&identified))
-        {
-            return Ok(c.clone());
+        match crate::trace::retrieved(cache, &user, self_sname, cache.lookup(&identified)) {
+            Ok(c) => return Ok(c.clone()),
+            Err(miss) if !miss_goes_on(miss) => return Err(cache.miss(miss)),
+            Err(_) => {}
         }
     }
     let srealm = realm_str(&self_sname.0);
@@ -595,8 +624,10 @@ pub fn get_credentials_for_user(
             second_ticket: None,
             now: cache.now(),
         };
-        if let Ok(c) = crate::trace::retrieved(cache, &client, self_sname, cache.lookup(&replied)) {
-            return Ok(c.clone());
+        match crate::trace::retrieved(cache, &client, self_sname, cache.lookup(&replied)) {
+            Ok(c) => return Ok(c.clone()),
+            Err(miss) if !miss_goes_on(miss) => return Err(cache.miss(miss)),
+            Err(_) => {}
         }
     }
     if !opts.no_store {
@@ -634,9 +665,10 @@ fn identify_realm(
     realm: &str,
     opts: &GetCredsOptions,
 ) -> Result<Princ, Krb5Error> {
-    let etypes = krb5_protocol::conf_etypes(profile, false);
     let mut realm = realm.to_owned();
     crate::trace::init_creds(client, &realm, None);
+    let etypes = krb5_protocol::conf_etypes(profile, false)
+        .map_err(|e| Krb5Error::from_protocol(&e, &realm))?;
     for _ in 0..16 {
         let kdc = opts.kdc(profile, &realm)?;
         let req = AsRequest {
@@ -698,39 +730,43 @@ pub fn get_credentials_for_proxy(
         second_ticket: Some(&evidence.ticket),
         now: cache.now(),
     };
+    let found = cache.lookup(&m);
     if krb5_protocol::trace::enabled() {
         crate::trace::proxy_lookup(
             cache,
             server,
-            cache.lookup(&m).err().unwrap_or(0),
+            found.err().unwrap_or(0),
             &realm_str(&server.0),
         );
     }
-    let cred = if let Some(c) = cache.retrieve(&m) {
-        c.clone()
-    } else {
-        let srealm = realm_str(&server.0);
-        let (presented, hop) = cache.tgt_for(&srealm)?;
-        let kdc = opts.kdc(&cache.ctx.profile, &hop)?;
-        let tgt = outcome_from_presented(cache, &presented)?;
-        let ticket: Ticket =
-            decode(&evidence.ticket).map_err(|e| Krb5Error::new(Code::Other, e.to_string()))?;
-        let out = tgs_s4u2proxy(
-            &cache.ctx.profile,
-            &kdc,
-            &tgt,
-            server.1.clone(),
-            &hop,
-            ticket,
-        )
-        .map_err(|e| Krb5Error::from_tgs(&e, &hop))?;
-        let mut cred = cred_from_tgs(&(out.crealm.clone(), out.cname.clone()), &out)?;
-        cred.server = server.clone();
-        cred.second_ticket.clone_from(&evidence.ticket);
-        if !opts.no_store {
-            let _ = cache.store(cred.clone());
+    // MIT: `k5_get_proxy_cred_from_kdc` (lib/krb5/krb/s4u_creds.c:1159-1162)
+    let cred = match found {
+        Ok(c) => c.clone(),
+        Err(miss) if opts.cached_only || !miss_goes_on(miss) => return Err(cache.miss(miss)),
+        Err(_) => {
+            let srealm = realm_str(&server.0);
+            let (presented, hop) = cache.tgt_for(&srealm)?;
+            let kdc = opts.kdc(&cache.ctx.profile, &hop)?;
+            let tgt = outcome_from_presented(cache, &presented)?;
+            let ticket: Ticket =
+                decode(&evidence.ticket).map_err(|e| Krb5Error::new(Code::Other, e.to_string()))?;
+            let out = tgs_s4u2proxy(
+                &cache.ctx.profile,
+                &kdc,
+                &tgt,
+                server.1.clone(),
+                &hop,
+                ticket,
+            )
+            .map_err(|e| Krb5Error::from_tgs(&e, &hop))?;
+            let mut cred = cred_from_tgs(&(out.crealm.clone(), out.cname.clone()), &out)?;
+            cred.server = server.clone();
+            cred.second_ticket.clone_from(&evidence.ticket);
+            if !opts.no_store {
+                let _ = cache.store(cred.clone());
+            }
+            cred
         }
-        cred
     };
     if !princ_eq(&cred.client, client) {
         return Err(Krb5Error::of(Code::KdcrepModified));
@@ -764,7 +800,10 @@ pub fn get_valrenewed_creds(
             && princ_eq(&c.client, client)
             && princ_eq(&c.server, &server)
     });
-    let old = ranked(matching, &krb5_protocol::tgs_ktypes(&ctx.profile));
+    let old = krb5_protocol::tgs_ktypes(&ctx.profile).map_or(
+        Err(krb5_protocol::trace::KRB5_CONFIG_ETYPE_NOSUPP),
+        |ktypes| ranked(matching, &ktypes),
+    );
     let old =
         crate::trace::retrieved(&cache, client, &server, old).map_err(|miss| cache.miss(miss))?;
     let realm = realm_str(&old.server.0);

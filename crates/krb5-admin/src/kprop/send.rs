@@ -223,6 +223,9 @@ pub(crate) fn init_creds_keytab(
         ticket.forwardable = false;
         ticket.proxiable = false;
     }
+    // MIT: `krb5_init_creds_init` (lib/krb5/krb/get_in_tkt.c:974-981)
+    let mut etypes = krb5_protocol::conf_etypes(conf, false)
+        .map_err(|e| KpropError::new(Some(e.to_string()), GETTING_CREDS))?;
     trace::init_creds_service(service);
     // MIT: `build_in_tkt_name` (lib/krb5/krb/get_in_tkt.c:484-495)
     let in_tkt_service = krb5_types::principal_from_unparsed(service, realm)
@@ -269,7 +272,6 @@ pub(crate) fn init_creds_keytab(
         port: first.port,
     };
     krb5_config::hand_kdcs(realm, found);
-    let mut etypes = krb5_protocol::conf_etypes(conf, false);
     krb5_protocol::sort_etypes_keytab_first(&mut etypes, &kt_etypes);
     let pkinit = krb5_client::profile_pkinit(conf, realm)
         .map_err(|e| KpropError::new(Some(e.to_string()), GETTING_CREDS))?;

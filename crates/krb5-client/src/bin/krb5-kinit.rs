@@ -521,7 +521,13 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
         preauth_prompter: (!opts.keytab).then_some(krb5_client::PreauthPrompter(&preauth_prompt)),
     };
     // MIT: `krb5_init_creds_init` (lib/krb5/krb/get_in_tkt.c:864)
-    krb5_client::trace::init_creds(&k5.me.1, &realm, in_tkt_service(opts));
+    krb5_client::trace::init_creds(&k5.me.1, &realm, None);
+    // MIT: `krb5_init_creds_init` (lib/krb5/krb/get_in_tkt.c:974-981)
+    krb5_protocol::conf_etypes(&k5.ctx.profile, false)
+        .map_err(|e| Failure::Error(Krb5Error::from_as(&e, &k5.name, &realm)))?;
+    if let Some(s) = in_tkt_service(opts) {
+        krb5_protocol::trace::init_creds_service(s);
+    }
     krb5_client::trace::skip_next_init_creds();
     let addr = kdc(&k5.ctx, opts, &realm).map_err(Failure::Error)?;
     let spec = &k5.out_spec;

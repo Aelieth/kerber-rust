@@ -1339,6 +1339,8 @@ fn kinit_inner(
     let cname = me.1.clone();
     let realm_s = String::from_utf8_lossy(me.0.as_bytes()).into_owned();
     trace::init_creds(&cname, &realm_s, params.in_tkt_service);
+    // MIT: `krb5_init_creds_init` (lib/krb5/krb/get_in_tkt.c:974-981)
+    let mut etypes = krb5_protocol::conf_etypes(&ctx.profile, false)?;
     let resolved = resolve_kdc(&ctx.profile, &realm_s, kdc)?;
     let armor = initial_armor(
         ctx,
@@ -1347,7 +1349,6 @@ fn kinit_inner(
         params.in_tkt_service.is_some(),
     )?;
     let pkinit = client_pkinit(ctx, params, &realm_s)?;
-    let mut etypes = krb5_protocol::conf_etypes(&ctx.profile, false);
     let mut ticket = params.ticket.clone();
     ticket.anonymous |= params.anonymous;
     let mut keytab_failure: Option<KeytabFailure> = None;

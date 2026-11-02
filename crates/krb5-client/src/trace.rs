@@ -173,37 +173,42 @@ fn tgt_code(found: &Result<Option<&CcacheCred>, krb5_protocol::Error>) -> i64 {
     match found {
         Ok(Some(_)) => 0,
         Err(krb5_protocol::Error::CcNotKtype) => trace::KRB5_CC_NOT_KTYPE,
+        Err(krb5_protocol::Error::ConfigEtypeNosupp) => trace::KRB5_CONFIG_ETYPE_NOSUPP,
         _ => trace::KRB5_CC_NOTFOUND,
     }
 }
 
-// MIT: `begin_get_tgt` (lib/krb5/krb/get_creds.c:979-1031)
+// MIT: `begin_get_tgt` (lib/krb5/krb/get_creds.c:986-1014)
 pub fn tgt_for(cache: &OpenCache, srealm: &str) {
     if !trace::enabled() {
         return;
     }
     let me = cache.principal();
-    let crealm = String::from_utf8_lossy(me.0.as_bytes()).into_owned();
+    let start = cache.start_realm(&me);
     let Some(service_tgt) = static_tgt(srealm) else {
         return;
     };
-    let Some(local_tgt) = static_tgt(&crealm) else {
+    let Some(local_tgt) = static_tgt(&start) else {
         return;
     };
-    if srealm != crealm {
+    if srealm != start {
         let service = cache.cached_tgt(srealm);
         retrieve(cache, Some(&me), &service_tgt, tgt_code(&service));
-        if let Ok(Some(c)) = service {
-            trace::tkt_creds_cached_service_tgt(princ(&c.client), princ(&c.server));
-            return;
+        match service {
+            Ok(Some(c)) => {
+                trace::tkt_creds_cached_service_tgt(princ(&c.client), princ(&c.server));
+                return;
+            }
+            Err(krb5_protocol::Error::CcNotKtype) => return,
+            _ => {}
         }
     }
     // MIT: `get_cached_local_tgt` (lib/krb5/krb/get_creds.c:796-841)
-    let etypes = krb5_protocol::tgs_ktypes(&cache.ctx.profile);
-    let local =
-        krb5_protocol::cached_tgt(&cache.cc.creds, &me.1, me.0.as_bytes(), &crealm, 0, &etypes);
-    retrieve(cache, Some(&me), &local_tgt, tgt_code(&local));
-    if let Some(c) = local.ok().flatten().filter(|c| cache.now() <= c.endtime) {
+    let local = cache.local_tgt(&start);
+    retrieve(cache, Some(&me), &local_tgt, local.err().unwrap_or(0));
+    if let Ok(c) = local
+        && cache.now() <= c.endtime
+    {
         trace::tkt_creds_local_tgt(princ(&c.client), princ(&c.server));
     }
 }
