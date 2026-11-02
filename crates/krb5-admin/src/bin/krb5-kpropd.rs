@@ -14,9 +14,9 @@ use std::os::fd::AsRawFd as _;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use krb5_admin::{
     IpropWake, KPROP_PORT, KPROPD_IO_TIMEOUT, KpropdConfig, KpropdIprop, KpropdKeys, KpropdLoad,
@@ -148,6 +148,7 @@ fn main() {
         let accepted = listener.accept();
         match accepted {
             Ok((mut stream, _)) => {
+                let since = Instant::now();
                 let _ = stream.set_read_timeout(Some(KPROPD_IO_TIMEOUT));
                 let _ = stream.set_write_timeout(Some(KPROPD_IO_TIMEOUT));
                 if live.load(Ordering::Relaxed) >= MAX_HANDLERS {
@@ -169,9 +170,14 @@ fn main() {
                 let kdc_context = Arc::clone(&kdc_context);
                 let mut conn = move || {
                     // MIT: `do_standalone` (kprop/kpropd.c:436-450)
-                    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
-                    if let Some(keys) =
-                        host_keys(&progname, keytab.as_deref(), &server, &kdc_context)
+                    let turn = turn_within(since, resync_timeout);
+                    if turn.is_none() {
+                        // MIT: `alarm_handler` (kprop/kpropd.c:212-218)
+                        eprintln!("Full propagation timed out");
+                    }
+                    if let Some((_, left)) = &turn
+                        && let Some(keys) =
+                            host_keys(&progname, keytab.as_deref(), &server, &kdc_context)
                     {
                         kpropd_handle_conn(
                             &mut stream,
@@ -182,7 +188,7 @@ fn main() {
                                 expected_realm: Some(realm.as_str()),
                                 allowed_clients: allowed.as_deref(),
                                 iprop: iprop.as_ref(),
-                                resync_timeout,
+                                resync_timeout: *left,
                                 conf: &conf,
                                 load: KpropdLoad {
                                     progname: &argv0,
@@ -226,6 +232,30 @@ fn main() {
                 break;
             }
         }
+    }
+}
+
+fn turn_within(since: Instant, limit: Duration) -> Option<(MutexGuard<'static, ()>, Duration)> {
+    if limit.is_zero() {
+        return Some((
+            ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner),
+            limit,
+        ));
+    }
+    loop {
+        let held = match ONE_AT_A_TIME.try_lock() {
+            Ok(g) => Some(g),
+            Err(TryLockError::Poisoned(p)) => Some(p.into_inner()),
+            Err(TryLockError::WouldBlock) => None,
+        };
+        let left = limit.saturating_sub(since.elapsed());
+        if left.is_zero() {
+            return None;
+        }
+        if let Some(g) = held {
+            return Some((g, left));
+        }
+        thread::sleep(Duration::from_millis(50));
     }
 }
 

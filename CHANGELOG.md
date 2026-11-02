@@ -52,7 +52,7 @@ any other `###` heading.
 - **kdc.** PKINIT checks client's `pkinit_cert_match` rule as MIT's dbmatch; miss is 66.
 - **kdc.** `pkinit_cert_match` takes `<KU>`, `<EKU>`, `<SAN>`, `<ISSUER>`, `<SUBJECT>`, `&&`, `||`.
 - **pkinit.** MODP Diffie-Hellman is constant-time on crypto-bigint, not num-bigint's `modpow`.
-- **admin.** kpropd, kprop bound input: handler, dump-size, record caps; I/O, transfer, connect timeouts.
+- **admin.** kpropd, kprop caps: handler, dump size, record; timeouts: I/O, transfer (from accept), connect.
 - **admin/kdc.** CSPRNG failure fails kadm5 request closed.
 - **admin/kdc.** Logged policy names, globs escape control chars; CMS ContentInfo type is checked.
 - **kdc.** Bounded worker pool runs each OTP verifier under `[otp] timeout`.
