@@ -121,20 +121,34 @@ impl<'c> OpenCache<'c> {
     }
 
     // MIT: `cache_get` (get_creds.c:114-133)
-    // The first credential matching `m`.
     #[must_use]
     pub fn retrieve(&self, m: &MatchCreds<'_>) -> Option<&CcacheCred> {
-        self.cc.creds.iter().find(|c| m.matches(c))
+        self.lookup(m).ok()
+    }
+
+    pub fn lookup(&self, m: &MatchCreds<'_>) -> Result<&CcacheCred, i64> {
+        let ktypes = krb5_protocol::tgs_ktypes(&self.ctx.profile);
+        ranked(self.cc.creds.iter().filter(|c| m.matches(c)), &ktypes)
+    }
+
+    #[must_use]
+    pub fn miss(&self, code: i64) -> Krb5Error {
+        if code == krb5_protocol::trace::KRB5_CC_NOT_KTYPE {
+            return Krb5Error::from_tgs(&krb5_protocol::Error::CcNotKtype, "");
+        }
+        self.not_found()
     }
 
     // MIT: `krb5_cc_retrieve_cred` (lib/krb5/ccache/ccfns.c:97-111)
     // A lookup that finds nothing for a server in the referral realm is made again with the
     // client's realm.
-    #[must_use]
-    pub fn retrieve_referral(&self, m: &MatchCreds<'_>) -> Option<&CcacheCred> {
-        let client = m.client?;
+    pub fn retrieve_referral(&self, m: &MatchCreds<'_>) -> Result<&CcacheCred, i64> {
+        let miss = krb5_protocol::trace::KRB5_CC_NOTFOUND;
+        let Some(client) = m.client else {
+            return Err(miss);
+        };
         if !m.server.0.as_bytes().is_empty() {
-            return None;
+            return Err(miss);
         }
         let server = (client.0.clone(), m.server.1.clone());
         let again = MatchCreds {
@@ -145,8 +159,8 @@ impl<'c> OpenCache<'c> {
             second_ticket: m.second_ticket,
             now: m.now,
         };
-        let found = self.retrieve(&again);
-        crate::trace::retrieve_ref(self, client, &server, found.is_some());
+        let found = self.lookup(&again);
+        crate::trace::retrieve_ref(self, client, &server, found.err().unwrap_or(0));
         found
     }
 
@@ -206,7 +220,7 @@ impl<'c> OpenCache<'c> {
             self.cc.primary.0.as_bytes(),
             srealm,
             self.now(),
-            &krb5_protocol::conf_etypes(&self.ctx.profile, true),
+            &krb5_protocol::tgs_ktypes(&self.ctx.profile),
         )
     }
 
@@ -245,6 +259,23 @@ impl<'c> OpenCache<'c> {
         let hop = krb5_protocol::referral_hop_realm(&cred.server.1).unwrap_or(crealm);
         Ok((cred, hop))
     }
+}
+
+// MIT: `krb5_cc_retrieve_cred_seq` (lib/krb5/ccache/cc_retr.c:195-250)
+fn ranked<'a>(
+    found: impl Iterator<Item = &'a CcacheCred>,
+    ktypes: &[i32],
+) -> Result<&'a CcacheCred, i64> {
+    let mut best: Option<(usize, &CcacheCred)> = None;
+    let mut miss = krb5_protocol::trace::KRB5_CC_NOTFOUND;
+    for c in found {
+        match ktypes.iter().position(|k| *k == i32::from(c.key.etype)) {
+            Some(rank) if best.is_none_or(|(b, _)| rank < b) => best = Some((rank, c)),
+            Some(_) => {}
+            None => miss = krb5_protocol::trace::KRB5_CC_NOT_KTYPE,
+        }
+    }
+    best.map(|(_, c)| c).ok_or(miss)
 }
 
 // MIT: `k5_locate_server` (locate_kdc.c:853-878)
@@ -395,13 +426,25 @@ pub fn get_credentials(
             let code = krb5_types::err::S_PRINCIPAL_UNKNOWN;
             Krb5Error::new(Code::Kdc(code), crate::errmsg::kdc_error_text(code))
         })?;
-    let found = crate::trace::retrieved(cache, me, server, cache.retrieve(&m))
-        .or_else(|| cache.retrieve_referral(&m));
-    if let Some(c) = found {
-        return Ok(c.clone());
-    }
-    if opts.cached_only {
-        return Err(cache.not_found());
+    // MIT: `construct_matching_creds` (get_creds.c:74-87)
+    let listed = m
+        .enctype
+        .is_none_or(|e| krb5_protocol::tgs_ktypes(&ctx.profile).contains(&e));
+    let found = if listed {
+        crate::trace::retrieved(cache, me, server, cache.lookup(&m)).or_else(|miss| {
+            if miss == krb5_protocol::trace::KRB5_CC_NOTFOUND {
+                cache.retrieve_referral(&m)
+            } else {
+                Err(miss)
+            }
+        })
+    } else {
+        Err(krb5_protocol::trace::KRB5_CC_NOT_KTYPE)
+    };
+    match found {
+        Ok(c) => return Ok(c.clone()),
+        Err(miss) if opts.cached_only => return Err(cache.miss(miss)),
+        Err(_) => {}
     }
     let start_realm = cache.start_realm(me);
     let out = loop {
@@ -502,11 +545,12 @@ pub fn get_credentials_for_user(
         now: cache.now(),
     };
     crate::trace::tkt_creds_begin(cache, for_user, self_sname);
-    if let Some(c) = crate::trace::retrieved(cache, for_user, self_sname, cache.retrieve(&m)) {
-        return Ok(c.clone());
-    }
+    let miss = match crate::trace::retrieved(cache, for_user, self_sname, cache.lookup(&m)) {
+        Ok(c) => return Ok(c.clone()),
+        Err(miss) => miss,
+    };
     if opts.cached_only {
-        return Err(cache.not_found());
+        return Err(cache.miss(miss));
     }
     let user = s4u_identify_user(&cache.ctx.profile, for_user, self_sname, opts)?;
     if for_user.1.name_type == PrincipalName::NT_ENTERPRISE {
@@ -519,8 +563,7 @@ pub fn get_credentials_for_user(
             second_ticket: None,
             now: cache.now(),
         };
-        if let Some(c) =
-            crate::trace::retrieved(cache, &user, self_sname, cache.retrieve(&identified))
+        if let Ok(c) = crate::trace::retrieved(cache, &user, self_sname, cache.lookup(&identified))
         {
             return Ok(c.clone());
         }
@@ -552,9 +595,7 @@ pub fn get_credentials_for_user(
             second_ticket: None,
             now: cache.now(),
         };
-        if let Some(c) =
-            crate::trace::retrieved(cache, &client, self_sname, cache.retrieve(&replied))
-        {
+        if let Ok(c) = crate::trace::retrieved(cache, &client, self_sname, cache.lookup(&replied)) {
             return Ok(c.clone());
         }
     }
@@ -661,7 +702,7 @@ pub fn get_credentials_for_proxy(
         crate::trace::proxy_lookup(
             cache,
             server,
-            cache.retrieve(&m).is_some(),
+            cache.lookup(&m).err().unwrap_or(0),
             &realm_str(&server.0),
         );
     }
@@ -717,14 +758,15 @@ pub fn get_valrenewed_creds(
         ),
     };
     let cache = OpenCache::open(ctx, spec.clone())?;
-    let old = cache.cc.creds.iter().find(|c| {
+    let matching = cache.cc.creds.iter().filter(|c| {
         !c.is_config()
             && !c.is_removed()
             && princ_eq(&c.client, client)
             && princ_eq(&c.server, &server)
     });
+    let old = ranked(matching, &krb5_protocol::tgs_ktypes(&ctx.profile));
     let old =
-        crate::trace::retrieved(&cache, client, &server, old).ok_or_else(|| cache.not_found())?;
+        crate::trace::retrieved(&cache, client, &server, old).map_err(|miss| cache.miss(miss))?;
     let realm = realm_str(&old.server.0);
     let kdc = kdc_for_realm(&ctx.profile, &realm)?;
     let tgt = outcome_from_presented(&cache, old)?;
@@ -750,7 +792,7 @@ pub fn get_u2u_ticket(ctx: &ClientContext, spec: CcSpec) -> Result<Ticket, Krb5E
         second_ticket: None,
         now: cache.now(),
     };
-    let cred = cache.retrieve(&m).ok_or_else(|| cache.not_found())?;
+    let cred = cache.lookup(&m).map_err(|miss| cache.miss(miss))?;
     decode(&cred.ticket).map_err(|e| Krb5Error::new(Code::Other, e.to_string()))
 }
 

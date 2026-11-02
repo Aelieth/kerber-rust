@@ -1891,22 +1891,36 @@ fn build_as_req(
 /// ETYPE_WEAK is dropped. rc4-hmac is not weak.
 #[must_use]
 pub fn conf_etypes(conf: &Krb5Conf, tgs: bool) -> Vec<i32> {
-    let preferred: Vec<i32> = EncryptionType::preferred()
-        .iter()
-        .map(|e| e.to_iana())
-        .collect();
-    let names = if tgs && !conf.default_tgs_enctypes.is_empty() {
-        &conf.default_tgs_enctypes
-    } else if !tgs && !conf.default_tkt_enctypes.is_empty() {
-        &conf.default_tkt_enctypes
-    } else if let Some(names) = conf.permitted_enctypes.as_ref().filter(|n| !n.is_empty()) {
-        names
-    } else {
-        return preferred;
+    let preferred = || {
+        EncryptionType::preferred()
+            .map(EncryptionType::to_iana)
+            .to_vec()
     };
-    parse_enctype_list(&names.join(" "), conf.allow_weak_crypto)
+    let Some(names) = configured_etypes(conf, tgs) else {
+        return preferred();
+    };
+    parse_enctype_list(&names.join(" "), conf.allow_weak_crypto).map_or_else(preferred, |list| {
+        list.into_iter().map(EncryptionType::to_iana).collect()
+    })
+}
+
+// MIT: `krb5_get_tgs_ktypes` (lib/krb5/krb/init_ctx.c:541-571)
+#[must_use]
+pub fn tgs_ktypes(conf: &Krb5Conf) -> Vec<i32> {
+    let names = configured_etypes(conf, true).map_or_else(|| "DEFAULT".to_owned(), |n| n.join(" "));
+    parse_enctype_list(&names, conf.allow_weak_crypto)
         .map(|list| list.into_iter().map(EncryptionType::to_iana).collect())
-        .unwrap_or(preferred)
+        .unwrap_or_default()
+}
+
+fn configured_etypes(conf: &Krb5Conf, tgs: bool) -> Option<&Vec<String>> {
+    if tgs && !conf.default_tgs_enctypes.is_empty() {
+        Some(&conf.default_tgs_enctypes)
+    } else if !tgs && !conf.default_tkt_enctypes.is_empty() {
+        Some(&conf.default_tkt_enctypes)
+    } else {
+        conf.permitted_enctypes.as_ref().filter(|n| !n.is_empty())
+    }
 }
 
 // MIT: `init_creds_step_request` (lib/krb5/krb/get_in_tkt.c:1273-1281)

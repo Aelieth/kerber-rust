@@ -411,7 +411,7 @@ fn get_dest_tgt(
                 cur_tgt.crealm.as_bytes(),
                 &next,
                 now,
-                &crate::as_ex::conf_etypes(profile, true),
+                &crate::as_ex::tgs_ktypes(profile),
             )?;
             if let Some(cred) = cred {
                 trace::tkt_creds_cached_intermediate_tgt(

@@ -330,6 +330,7 @@ any other `###` heading.
 - **kdc.** KDB key decrypt takes MIT's padded plaintext, cut to stored length.
 - **kdc.** TGS header ticket decrypting to junk is 60, AP-REQ pvno 4 is 3, as MIT.
 - **client.** Credential times are checked before use, as MIT.
+- **client.** Cached credentials rank by MIT's TGS enctype list.
 
 ## [1.1.0] - 2026-10-14
 

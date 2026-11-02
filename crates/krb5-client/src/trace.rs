@@ -131,36 +131,26 @@ pub fn tkt_creds_begin(cache: &OpenCache, me: &Princ, server: &Princ) {
     );
 }
 
-pub fn retrieve(cache: &OpenCache, client: Option<&Princ>, server: &Princ, found: bool) {
+pub fn retrieve(cache: &OpenCache, client: Option<&Princ>, server: &Princ, code: i64) {
     if !trace::enabled() {
         return;
     }
-    let msg = cache.not_found().message;
-    let (code, msg) = if found {
-        (0, None)
-    } else {
-        (trace::KRB5_CC_NOTFOUND, Some(msg.as_str()))
-    };
+    let msg = (code != 0).then(|| cache.miss(code).message);
     trace::cc_retrieve(
         &ccname(cache.ctx, &cache.spec),
         client.map(princ),
         princ(server),
         code,
-        msg,
+        msg.as_deref(),
     );
 }
 
-pub fn retrieve_ref(cache: &OpenCache, client: &Princ, server: &Princ, found: bool) {
+pub fn retrieve_ref(cache: &OpenCache, client: &Princ, server: &Princ, code: i64) {
     if !trace::enabled() {
         return;
     }
-    let msg = cache.not_found().message;
-    let (code, msg) = if found {
-        (0, None)
-    } else {
-        (trace::KRB5_CC_NOTFOUND, Some(msg.as_str()))
-    };
-    trace::cc_retrieve_ref(Some(princ(client)), princ(server), code, msg);
+    let msg = (code != 0).then(|| cache.miss(code).message);
+    trace::cc_retrieve_ref(Some(princ(client)), princ(server), code, msg.as_deref());
 }
 
 pub fn referral_realm(server: &Princ) {
@@ -169,19 +159,22 @@ pub fn referral_realm(server: &Princ) {
     }
 }
 
-#[must_use]
 pub fn retrieved<'c>(
     cache: &OpenCache,
     client: &Princ,
     server: &Princ,
-    found: Option<&'c CcacheCred>,
-) -> Option<&'c CcacheCred> {
-    retrieve(cache, Some(client), server, found.is_some());
+    found: Result<&'c CcacheCred, i64>,
+) -> Result<&'c CcacheCred, i64> {
+    retrieve(cache, Some(client), server, found.err().unwrap_or(0));
     found
 }
 
-fn cached_tgt<'c>(cache: &'c OpenCache, realm: &str) -> Option<&'c CcacheCred> {
-    cache.cached_tgt(realm).ok().flatten()
+fn tgt_code(found: &Result<Option<&CcacheCred>, krb5_protocol::Error>) -> i64 {
+    match found {
+        Ok(Some(_)) => 0,
+        Err(krb5_protocol::Error::CcNotKtype) => trace::KRB5_CC_NOT_KTYPE,
+        _ => trace::KRB5_CC_NOTFOUND,
+    }
 }
 
 // MIT: `begin_get_tgt` (lib/krb5/krb/get_creds.c:979-1031)
@@ -198,21 +191,19 @@ pub fn tgt_for(cache: &OpenCache, srealm: &str) {
         return;
     };
     if srealm != crealm {
-        let service = cached_tgt(cache, srealm);
-        retrieve(cache, Some(&me), &service_tgt, service.is_some());
-        if let Some(c) = service {
+        let service = cache.cached_tgt(srealm);
+        retrieve(cache, Some(&me), &service_tgt, tgt_code(&service));
+        if let Ok(Some(c)) = service {
             trace::tkt_creds_cached_service_tgt(princ(&c.client), princ(&c.server));
             return;
         }
     }
     // MIT: `get_cached_local_tgt` (lib/krb5/krb/get_creds.c:796-841)
-    let etypes = krb5_protocol::conf_etypes(&cache.ctx.profile, true);
+    let etypes = krb5_protocol::tgs_ktypes(&cache.ctx.profile);
     let local =
-        krb5_protocol::cached_tgt(&cache.cc.creds, &me.1, me.0.as_bytes(), &crealm, 0, &etypes)
-            .ok()
-            .flatten();
-    retrieve(cache, Some(&me), &local_tgt, local.is_some());
-    if let Some(c) = local.filter(|c| cache.now() <= c.endtime) {
+        krb5_protocol::cached_tgt(&cache.cc.creds, &me.1, me.0.as_bytes(), &crealm, 0, &etypes);
+    retrieve(cache, Some(&me), &local_tgt, tgt_code(&local));
+    if let Some(c) = local.ok().flatten().filter(|c| cache.now() <= c.endtime) {
         trace::tkt_creds_local_tgt(princ(&c.client), princ(&c.server));
     }
 }
@@ -227,12 +218,12 @@ pub fn tgt_creds(cache: &OpenCache, srealm: &str) {
         return;
     };
     tkt_creds_begin(cache, &me, &tgt);
-    retrieve(cache, Some(&me), &tgt, cached_tgt(cache, srealm).is_some());
+    retrieve(cache, Some(&me), &tgt, tgt_code(&cache.cached_tgt(srealm)));
 }
 
-pub fn proxy_lookup(cache: &OpenCache, server: &Princ, found: bool, srealm: &str) {
-    retrieve(cache, None, server, found);
-    if !found {
+pub fn proxy_lookup(cache: &OpenCache, server: &Princ, code: i64, srealm: &str) {
+    retrieve(cache, None, server, code);
+    if code != 0 {
         tgt_creds(cache, srealm);
     }
 }
