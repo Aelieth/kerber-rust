@@ -845,6 +845,7 @@ fn with_iprop_create_dump_load_and_destroy_keep_the_update_log() {
     // so a marked tail survives when the dump is not written again.
     let marked = format!("{dumped}kept\n");
     std::fs::write(&ipropx, &marked).unwrap();
+    std::fs::write(krb5_kdc::dump_ok_path(&ipropx), [0]).unwrap();
     let out = realm.run(&["dump", "-i1", "-c", ipropx.to_str().unwrap()], "");
     assert_eq!(status(&out), 0, "{}", text(&out.stderr));
     assert_eq!(std::fs::read_to_string(&ipropx).unwrap(), marked);
