@@ -7,10 +7,10 @@ print_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 print_fail() { echo -e "${RED}[FAIL]${NC} $1"; }
 # An empty argument is a real blank line, not five spaces (it was, in eight places).
 print_info() { [ -n "${1:-}" ] && echo -e "     $1" || echo; }
-SSO_AUTH_HOST="services.kerber.test"   # kit: auth.satomlin.com
-SSO_REALM="kerber.test"                # kit: satomlin.com
+SSO_AUTH_HOST="services.kerber.test"
+SSO_REALM="kerber.test"
 SSO_PROBE_CLIENT="nextcloud"           # kit: nextcloud (unchanged)
-SSO_PROBE_REDIRECT="https%3A%2F%2Fnextcloud.kerber.test%2Fapps%2Fuser_oidc%2Fcode"   # kit: https%3A%2F%2Fnextcloud.satomlin.com%2Fapps%2Fuser_oidc%2Fcode
+SSO_PROBE_REDIRECT="https%3A%2F%2Fnextcloud.kerber.test%2Fapps%2Fuser_oidc%2Fcode"
 check_spnego() {
   local url hdr code loc
   if ! klist -s 2>/dev/null; then
