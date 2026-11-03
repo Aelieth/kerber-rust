@@ -665,6 +665,9 @@ pub fn parse_kdestroy(args: &[String]) -> Result<KdestroyArgs, String> {
 
 #[must_use]
 pub fn check_ccache(cc: &FileCcache, now: u32) -> i32 {
+    if cc.walk_error.is_some() {
+        return 1;
+    }
     let realm = cc.primary.0.as_bytes();
     let mut found_tgt = false;
     let mut found_current_tgt = false;

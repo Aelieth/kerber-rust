@@ -12,7 +12,7 @@ use nix::fcntl::Flock;
 use zeroize::Zeroizing;
 
 use crate::ccmarshal::{
-    FCC_TAG_DELTATIME, Writer, cred_len, marshal_cred, marshal_princ, take_u16, unmarshal_cred,
+    FCC_TAG_DELTATIME, Writer, cred_len, marshal_cred, marshal_princ, unmarshal_cred,
     unmarshal_princ,
 };
 use crate::lock_file::{FileLock, lock_file};
@@ -27,6 +27,7 @@ pub struct FileCcache {
     pub header_tags: Vec<(u16, Vec<u8>)>,
     pub unparsed: Vec<(usize, Vec<u8>)>,
     pub kcm_offset: Option<i64>,
+    pub walk_error: Option<FccFailure>,
 }
 
 impl FileCcache {
@@ -38,6 +39,7 @@ impl FileCcache {
             header_tags: vec![(FCC_TAG_DELTATIME, vec![0u8; 8])],
             unparsed: Vec::new(),
             kcm_offset: None,
+            walk_error: None,
         }
     }
 
@@ -110,41 +112,29 @@ impl FileCcache {
         write_fresh_cache_file(path.as_ref(), &bytes)
     }
 
+    // MIT: `fcc_start_seq_get` (lib/krb5/ccache/cc_file.c:702-746)
+    // MIT: `fcc_next_cred` (lib/krb5/ccache/cc_file.c:761-811)
     /// A non-ASCII principal fails the parse: only ASCII is lossless.
     pub fn parse(bytes: &[u8]) -> Result<Self, io::Error> {
-        if bytes.len() < 4 || bytes[0] != 0x05 || bytes[1] != 0x04 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "not FILE ccache v4",
-            ));
-        }
-        let mut i = 2;
-        let hdr_len = usize::from(take_u16(bytes, &mut i)?);
-        let hdr_end = i.saturating_add(hdr_len);
-        if hdr_end > bytes.len() {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "ccache header truncated",
-            ));
-        }
+        let mut rest = bytes;
         let mut header_tags = Vec::new();
-        while i + 4 <= hdr_end {
-            let tag = take_u16(bytes, &mut i)?;
-            let flen = usize::from(take_u16(bytes, &mut i)?);
-            if i + flen > hdr_end {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "ccache header tag overruns",
-                ));
-            }
-            header_tags.push((tag, bytes[i..i + flen].to_vec()));
-            i += flen;
+        if read_header(&mut rest, Some(&mut header_tags))? != 4 {
+            return Err(FccFailure::BadVersion.into_io());
         }
-        i = hdr_end;
-        let primary = unmarshal_princ(bytes, &mut i)?;
+        let mut i = bytes.len() - rest.len();
+        let end = princ_end(bytes, i).map_err(FccFailure::into_io)?;
+        let primary = unmarshal_princ(&bytes[..end], &mut i)?;
         let mut creds = Vec::new();
+        let mut walk_error = None;
         while i < bytes.len() {
-            creds.push(unmarshal_cred(bytes, &mut i)?);
+            match cred_end(bytes, i) {
+                Ok(end) => creds.push(unmarshal_cred(&bytes[..end], &mut i)?),
+                Err(FccFailure::End) => break,
+                Err(e) => {
+                    walk_error = Some(e);
+                    break;
+                }
+            }
         }
         Ok(Self {
             primary,
@@ -152,6 +142,7 @@ impl FileCcache {
             header_tags,
             unparsed: Vec::new(),
             kcm_offset: None,
+            walk_error,
         })
     }
 
@@ -321,6 +312,7 @@ pub fn tgt_cred(
 pub enum FccFailure {
     Lock(Errno),
     Format,
+    End,
     BadVersion,
     ShortWrite,
 }
@@ -336,6 +328,7 @@ impl std::fmt::Display for FccFailure {
                 f.write_str(text)
             }
             Self::Format => f.write_str("Bad format in credentials cache"),
+            Self::End => f.write_str("End of credential cache reached"),
             Self::BadVersion => f.write_str("Unsupported credentials cache format version number"),
             Self::ShortWrite => f.write_str("Credentials cache I/O operation failed"),
         }
@@ -398,7 +391,10 @@ fn read16(file: &mut impl io::Read) -> io::Result<u16> {
 }
 
 // MIT: `read_header` (cc_file.c:383-440)
-fn read_header(file: &mut impl io::Read) -> io::Result<u16> {
+fn read_header(
+    file: &mut impl io::Read,
+    mut tags: Option<&mut Vec<(u16, Vec<u8>)>>,
+) -> io::Result<u16> {
     let format = || FccFailure::Format.into_io();
     let mut two = [0u8; 2];
     file.read_exact(&mut two).map_err(|_| format())?;
@@ -419,11 +415,60 @@ fn read_header(file: &mut impl io::Read) -> io::Result<u16> {
         if flen > fields_len - 4 || (tag == FCC_TAG_DELTATIME && flen != 8) {
             return Err(format());
         }
-        let mut skip = vec![0u8; usize::from(flen)];
-        file.read_exact(&mut skip).map_err(|_| format())?;
+        let mut field = vec![0u8; usize::from(flen)];
+        file.read_exact(&mut field).map_err(|_| format())?;
+        if let Some(tags) = tags.as_mut() {
+            tags.push((tag, field));
+        }
         fields_len -= 4 + flen;
     }
     Ok(version)
+}
+
+// MIT: `load_principal` (cc_file.c:219-242)
+fn princ_end(b: &[u8], i: usize) -> Result<usize, FccFailure> {
+    let mut i = field_end(b, i, 4)?;
+    for _ in 0..u32_at(b, &mut i)?.wrapping_add(1) {
+        i = data_end(b, i)?;
+    }
+    Ok(i)
+}
+
+// MIT: `load_cred` (cc_file.c:247-294)
+fn cred_end(b: &[u8], i: usize) -> Result<usize, FccFailure> {
+    let i = princ_end(b, princ_end(b, i)?)?;
+    let mut i = field_end(b, data_end(b, field_end(b, i, 2)?)?, 4 * 4 + 1 + 4)?;
+    for _ in 0..2 {
+        for _ in 0..u32_at(b, &mut i)? {
+            i = data_end(b, field_end(b, i, 2)?)?;
+        }
+    }
+    data_end(b, data_end(b, i)?)
+}
+
+// MIT: `load_data` (cc_file.c:202-214)
+fn data_end(b: &[u8], mut i: usize) -> Result<usize, FccFailure> {
+    let n = u32_at(b, &mut i)?;
+    let n = usize::try_from(n)
+        .ok()
+        .filter(|n| *n <= b.len())
+        .ok_or(FccFailure::Format)?;
+    field_end(b, i, n)
+}
+
+// MIT: `read_bytes` (cc_file.c:146-154)
+fn field_end(b: &[u8], i: usize, n: usize) -> Result<usize, FccFailure> {
+    i.checked_add(n)
+        .filter(|end| *end <= b.len())
+        .ok_or(FccFailure::End)
+}
+
+fn u32_at(b: &[u8], i: &mut usize) -> Result<u32, FccFailure> {
+    let end = field_end(b, *i, 4)?;
+    let mut v = [0u8; 4];
+    v.copy_from_slice(&b[*i..end]);
+    *i = end;
+    Ok(u32::from_be_bytes(v))
 }
 
 pub fn read_cache_file(path: &Path) -> io::Result<Zeroizing<Vec<u8>>> {
@@ -448,7 +493,7 @@ pub fn fcc_store(path: &Path, cred: &CcacheCred) -> io::Result<()> {
 }
 
 fn append_cred(file: &mut File, cred: &CcacheCred) -> io::Result<()> {
-    if read_header(file)? != 4 {
+    if read_header(file, None)? != 4 {
         return Err(FccFailure::BadVersion.into_io());
     }
     let mut w = Writer {

@@ -240,6 +240,11 @@ fn show_ccache(
             show_credential(out, args, cred, &defname);
         }
     }
+    if let Some(e) = cc.walk_error {
+        let e = krb5_client::cache_read_error(ctx, &cache.spec(), &std::io::Error::other(e));
+        eprintln!("{prog}: {e} while retrieving a ticket");
+        return 1;
+    }
     0
 }
 

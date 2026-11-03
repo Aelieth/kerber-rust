@@ -199,7 +199,7 @@ any other `###` heading.
 ### Tests and CI
 
 - **field.** Weekly ticket-flags after kdb-writes: expiry, flags, renew, postdate, policy, aes-sha2.
-- **field.** The gates ticket-flags covers are retired.
+- **field.** Gates ticket-flags covers are retired.
 - **field.** Weekly client-tools: our kinit, klist, kvno, kdestroy, ktutil, kswitch beside MIT's.
 - **field.** client-tools covers request shapes, crossed caches, keytabs.
 - **field.** client-tools: FAST, SPAKE, S4U2Proxy, lifetime, enctype, kpasswd, ccache-removal rows.
@@ -333,7 +333,7 @@ any other `###` heading.
 - **kdc.** TGS header ticket decrypting to junk is 60, AP-REQ pvno 4 is 3, as MIT.
 - **client.** Credential times are checked before use, as MIT.
 - **client.** Cached credentials rank by MIT's TGS enctype list.
-- **client.** Cache errors as MIT; kdestroy keeps a cache it can't unlink.
+- **client.** Cache errors and cut-off caches as MIT; kdestroy keeps a cache it can't unlink.
 - **admin.** RPCSEC_GSS handle is MIT's `xxxx`.
 
 ## [1.1.0] - 2026-10-14

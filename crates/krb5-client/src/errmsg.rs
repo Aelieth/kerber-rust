@@ -38,6 +38,7 @@ pub enum Code {
     KdcrepSkew,
     CcIo,
     CcFormat,
+    CcEnd,
     CcBadVno,
     KcmNoServer,
     Enoent,
@@ -231,6 +232,7 @@ impl Krb5Error {
         let code = match krb5_protocol::FccFailure::of(e) {
             Some(krb5_protocol::FccFailure::Lock(_)) => Code::Other,
             Some(krb5_protocol::FccFailure::Format) => Code::CcFormat,
+            Some(krb5_protocol::FccFailure::End) => Code::CcEnd,
             Some(krb5_protocol::FccFailure::BadVersion) => Code::CcBadVno,
             Some(krb5_protocol::FccFailure::ShortWrite) => Code::CcIo,
             None => interpret_errno(e),
@@ -332,6 +334,8 @@ fn code_text(code: Code) -> &'static str {
         Code::CcIo => "Credentials cache I/O operation failed",
         // MIT: `KRB5_CC_FORMAT` (lib/krb5/error_tables/krb5_err.et:267-267)
         Code::CcFormat => "Bad format in credentials cache",
+        // MIT: `KRB5_CC_END` (lib/krb5/error_tables/krb5_err.et:192-192)
+        Code::CcEnd => "End of credential cache reached",
         // MIT: `KRB5_CCACHE_BADVNO` (krb5_err.et:292-292)
         Code::CcBadVno => "Unsupported credentials cache format version number",
         // MIT: `KRB5_KCM_NO_SERVER` (lib/krb5/error_tables/k5e1_err.et:44-44)

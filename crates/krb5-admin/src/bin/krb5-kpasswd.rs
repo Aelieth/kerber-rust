@@ -372,28 +372,15 @@ fn cache_text(spec: &CcSpec, e: &io::Error) -> String {
     .to_owned()
 }
 
-// MIT: `read_header` (cc_file.c:396-401)
-/// Too short is `KRB5_CC_FORMAT`; a version outside 1-4 `KRB5_CCACHE_BADVNO`.
-fn parse_cache_file(b: &[u8]) -> io::Result<FileCcache> {
-    let bad = |text: &str| io::Error::new(io::ErrorKind::InvalidData, text);
-    let Some(v) = b.get(..2) else {
-        return Err(bad("Bad format in credentials cache"));
-    };
-    if !(1..=4).contains(&u16::from_be_bytes([v[0], v[1]]).wrapping_sub(0x0500)) {
-        return Err(bad("Unsupported credentials cache format version number"));
-    }
-    FileCcache::parse(b).map_err(|_| bad("Bad format in credentials cache"))
-}
-
 fn ccache_principal(
     spec: &CcSpec,
     profile: &Krb5Conf,
 ) -> io::Result<Option<(krb5_types::Realm, PrincipalName)>> {
     let loaded = match spec {
-        CcSpec::File(path) => std::fs::read(path).and_then(|b| parse_cache_file(&b)),
+        CcSpec::File(path) => std::fs::read(path).and_then(|b| FileCcache::parse(&b)),
         CcSpec::Dir(residual) => krb5_protocol::dir_cache_path(residual)
             .and_then(std::fs::read)
-            .and_then(|b| parse_cache_file(&b)),
+            .and_then(|b| FileCcache::parse(&b)),
         CcSpec::Kcm(residual) => krb5_protocol::kcm_load(profile, residual),
         CcSpec::Memory(_) => return Ok(None),
     };
