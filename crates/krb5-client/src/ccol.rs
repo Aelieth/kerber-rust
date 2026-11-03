@@ -74,14 +74,16 @@ impl Cache {
             krb5_protocol::trace::cc_destroy(&self.full_name());
         }
         crate::destroy_ccache(ctx, &self.spec()).map_err(|e| {
-            let missing = e
-                .downcast_ref::<std::io::Error>()
-                .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
-                || e.to_string() == "No credentials cache found";
-            if missing {
-                Krb5Error::of(Code::FccNofile)
-            } else {
-                Krb5Error::new(Code::Other, e.to_string())
+            let io = e.downcast_ref::<std::io::Error>();
+            match (self, io) {
+                // MIT: `fcc_destroy` (lib/krb5/ccache/cc_file.c:553-651)
+                (Self::File(_) | Self::Dir(_), Some(io)) => Krb5Error::from_cache_write(io),
+                _ if io.is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+                    || e.to_string() == "No credentials cache found" =>
+                {
+                    Krb5Error::of(Code::FccNofile)
+                }
+                _ => Krb5Error::new(Code::Other, e.to_string()),
             }
         })
     }
@@ -98,9 +100,10 @@ impl Cache {
     // MIT: `kcm_switch_to` (cc_kcm.c:1330-1340)
     // SET_DEFAULT_CACHE.
     pub fn switch_to(&self, ctx: &ClientContext) -> Result<(), Krb5Error> {
-        let other = |e: std::io::Error| Krb5Error::new(Code::Other, e.to_string());
         match self {
-            Self::Dir(p) => krb5_protocol::dir_switch(&format!(":{}", p.display())).map_err(other),
+            Self::Dir(p) => {
+                krb5_protocol::dir_switch(&format!(":{}", p.display())).map_err(|e| dir_error(&e))
+            }
             Self::Kcm(n) => {
                 krb5_protocol::kcm_switch(&ctx.profile, n).map_err(|e| Krb5Error::from_kcm(&e))
             }
@@ -112,12 +115,11 @@ impl Cache {
 // MIT: `dcc_resolve` (cc_dir.c:331-385)
 // MIT: `kcm_resolve` (cc_kcm.c:740-768)
 pub fn resolve(ctx: &ClientContext, spec: &CcSpec) -> Result<Cache, Krb5Error> {
-    let other = |e: std::io::Error| Krb5Error::new(Code::Other, e.to_string());
     let kcm = |e: std::io::Error| Krb5Error::from_kcm(&e);
     Ok(match spec {
         CcSpec::File(p) => Cache::File(p.clone()),
         CcSpec::Memory(n) => Cache::Memory(n.clone()),
-        CcSpec::Dir(r) => Cache::Dir(krb5_protocol::dir_cache_path(r).map_err(other)?),
+        CcSpec::Dir(r) => Cache::Dir(krb5_protocol::dir_cache_path(r).map_err(|e| dir_error(&e))?),
         CcSpec::Kcm(n) if n.is_empty() => {
             Cache::Kcm(krb5_protocol::kcm_primary_name(&ctx.profile).map_err(kcm)?)
         }
@@ -126,6 +128,12 @@ pub fn resolve(ctx: &ClientContext, spec: &CcSpec) -> Result<Cache, Krb5Error> {
             Cache::Kcm(n.clone())
         }
     })
+}
+
+// MIT: `read_primary_file` (cc_dir.c:146-176)
+// MIT: `write_primary_file` (cc_dir.c:180-215)
+fn dir_error(e: &std::io::Error) -> Krb5Error {
+    Krb5Error::from_dir_cache(e, |_| Krb5Error::of(Code::CcIo))
 }
 
 #[must_use]
@@ -141,7 +149,6 @@ pub fn store_spec(name: &CcSpec, cache: &Cache) -> CcSpec {
 // MIT: `dcc_ptcursor_next` (cc_dir.c:634-677)
 // MIT: `kcm_ptcursor_next` (cc_kcm.c:1210-1263)
 pub fn collection(ctx: &ClientContext, default: &CcSpec) -> Result<Vec<Cache>, Krb5Error> {
-    let other = |e: std::io::Error| Krb5Error::new(Code::Other, e.to_string());
     match default {
         CcSpec::File(p) => Ok(if p.exists() {
             vec![Cache::File(p.clone())]
@@ -151,20 +158,21 @@ pub fn collection(ctx: &ClientContext, default: &CcSpec) -> Result<Vec<Cache>, K
         CcSpec::Memory(_) => Ok(Vec::new()),
         CcSpec::Dir(r) => {
             if let Some(file) = r.strip_prefix(':') {
-                let p = PathBuf::from(file);
-                return Ok(if p.exists() {
-                    vec![Cache::Dir(p)]
+                // MIT: `dcc_ptcursor_next` (cc_dir.c:645-650)
+                return Ok(if Path::new(file).exists() {
+                    resolve(ctx, default).into_iter().collect()
                 } else {
                     Vec::new()
                 });
             }
             let dir = Path::new(r);
-            if !dir.is_dir() {
+            // MIT: `dcc_ptcursor_new` (cc_dir.c:602-606)
+            let Ok(subs) = krb5_protocol::dir_subsidiaries(dir) else {
                 return Ok(Vec::new());
-            }
+            };
             let primary = krb5_protocol::dir_primary(dir).filter(|p| p.exists());
             let mut out: Vec<Cache> = primary.iter().cloned().map(Cache::Dir).collect();
-            for p in krb5_protocol::dir_subsidiaries(dir).map_err(other)? {
+            for p in subs {
                 if primary.as_ref() != Some(&p) {
                     out.push(Cache::Dir(p));
                 }
@@ -219,7 +227,6 @@ pub fn cache_match(
 // MIT: `kcm_gen_new` (cc_kcm.c:795-822)
 // GEN_NEW names it.
 pub fn new_unique(ctx: &ClientContext, default: &CcSpec) -> Result<Cache, Krb5Error> {
-    let other = |e: std::io::Error| Krb5Error::new(Code::Other, e.to_string());
     krb5_protocol::trace::cc_new_unique(match default {
         CcSpec::File(_) => "FILE",
         CcSpec::Dir(_) => "DIR",
@@ -227,9 +234,10 @@ pub fn new_unique(ctx: &ClientContext, default: &CcSpec) -> Result<Cache, Krb5Er
         CcSpec::Memory(_) => "MEMORY",
     });
     match default {
+        // MIT: `krb5int_fcc_new_unique` (lib/krb5/ccache/cc_file.c:838-840)
         CcSpec::Dir(r) if !r.starts_with(':') => krb5_protocol::dir_gen_new(Path::new(r))
             .map(Cache::Dir)
-            .map_err(other),
+            .map_err(|e| Krb5Error::from_dir_cache(&e, Krb5Error::from_cache_write)),
         CcSpec::Kcm(_) => krb5_protocol::kcm_gen_new(&ctx.profile)
             .map(Cache::Kcm)
             .map_err(|e| Krb5Error::from_kcm(&e)),

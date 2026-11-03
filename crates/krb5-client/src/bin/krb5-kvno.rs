@@ -14,7 +14,7 @@ use krb5_client::creds::{
     string_to_enctype, unparse,
 };
 use krb5_client::errmsg::{Code, Krb5Error};
-use krb5_client::{CcacheCred, FileCcache, kt_resolve, store_ccache_keep_default};
+use krb5_client::{CcacheCred, FileCcache, kt_resolve, store_ccache_keep_default, store_error};
 use krb5_config::{ClientContext, resolve_ccspec};
 use krb5_types::{PrincipalName, Ticket};
 
@@ -133,10 +133,7 @@ fn do_v5_kvno(prog: &str, args: &KvnoArgs) -> i32 {
         && let (Some(spec), Some(cc)) = (out_spec, out)
         && let Err(e) = store_ccache_keep_default(&kctx, &spec, cc)
     {
-        return fail(
-            &Krb5Error::new(Code::Other, e.to_string()),
-            "while writing output ccache",
-        );
+        return fail(&store_error(e.as_ref()), "while writing output ccache");
     }
     i32::from(errors > 0)
 }

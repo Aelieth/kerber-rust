@@ -1,5 +1,5 @@
 use std::fs::{self, DirBuilder, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
@@ -15,7 +15,10 @@ pub fn dir_cache_path(residual: &str) -> io::Result<PathBuf> {
     }
     let dir = Path::new(residual);
     verify_dir(dir)?;
-    let name = read_primary(dir, true)?;
+    let Some(name) = read_primary(dir)? else {
+        write_primary(dir, DEFAULT_SUB)?;
+        return Ok(dir.join(DEFAULT_SUB));
+    };
     Ok(dir.join(name))
 }
 
@@ -29,7 +32,6 @@ pub fn dir_switch(residual: &str) -> io::Result<()> {
         io::Error::new(io::ErrorKind::InvalidInput, "kswitch needs DIR::subsidiary")
     })?;
     let (dir, name) = subsidiary(path)?;
-    verify_dir(dir)?;
     write_primary(dir, name)
 }
 
@@ -37,10 +39,7 @@ pub fn dir_switch(residual: &str) -> io::Result<()> {
 /// No readable primary file means no primary.
 #[must_use]
 pub fn dir_primary(dir: &Path) -> Option<PathBuf> {
-    match read_primary(dir, false) {
-        Ok(name) if dir.join("primary").is_file() => Some(dir.join(name)),
-        _ => None,
-    }
+    read_primary(dir).ok().flatten().map(|name| dir.join(name))
 }
 
 // MIT: `dcc_gen_new` (cc_dir.c:387-429)
@@ -73,11 +72,10 @@ pub fn dir_gen_new(dir: &Path) -> io::Result<PathBuf> {
 
 pub fn dir_subsidiaries(dir: &Path) -> io::Result<Vec<PathBuf>> {
     let mut v = Vec::new();
-    for e in fs::read_dir(dir)? {
-        let e = e?;
+    for e in fs::read_dir(dir)?.map_while(Result::ok) {
         let s = e.file_name();
         let name = s.to_string_lossy();
-        if name.starts_with("tkt") && e.file_type()?.is_file() {
+        if name.starts_with("tkt") && e.file_type().is_ok_and(|t| t.is_file()) {
             v.push(e.path());
         }
     }
@@ -134,36 +132,31 @@ fn make_dir(dir: &Path) -> io::Result<()> {
 }
 
 // MIT: `read_primary_file` (lib/krb5/ccache/cc_dir.c:146-176)
-fn read_primary(dir: &Path, init: bool) -> io::Result<String> {
+fn read_primary(dir: &Path) -> io::Result<Option<String>> {
     let p = dir.join("primary");
-    match fs::read_to_string(&p) {
-        Ok(s) if s.is_empty() => Err(io::Error::new(
+    let Ok(f) = fs::File::open(&p) else {
+        return Ok(None);
+    };
+    let mut buf = Vec::new();
+    f.take(63).read_to_end(&mut buf)?;
+    let line = buf
+        .split_inclusive(|b| *b == b'\n')
+        .next()
+        .unwrap_or_default();
+    if line.is_empty() {
+        return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "Credentials cache I/O operation failed",
+        ));
+    }
+    match line.strip_suffix(b"\n").map(std::str::from_utf8) {
+        Some(Ok(name)) if name.starts_with("tkt") && !name.contains(['/', '\\', '\0']) => {
+            Ok(Some(name.to_owned()))
+        }
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{} contains invalid filename", p.display()),
         )),
-        Ok(s) => {
-            let line = s.split_inclusive('\n').next().unwrap_or("");
-            match line.strip_suffix('\n') {
-                Some(name)
-                    if line.len() < 64
-                        && name.starts_with("tkt")
-                        && !name.contains(['/', '\\']) =>
-                {
-                    Ok(name.to_owned())
-                }
-                _ => Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("{} contains invalid filename", p.display()),
-                )),
-            }
-        }
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            if init {
-                write_primary(dir, DEFAULT_SUB)?;
-            }
-            Ok(DEFAULT_SUB.to_owned())
-        }
-        Err(e) => Err(e),
     }
 }
 

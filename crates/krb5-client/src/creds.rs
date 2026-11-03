@@ -128,17 +128,19 @@ impl<'c> OpenCache<'c> {
         ranked(self.cc.creds.iter().filter(|c| m.matches(c)), &ktypes)
     }
 
+    // MIT: `fcc_retrieve` (lib/krb5/ccache/cc_file.c:976-984)
     #[must_use]
     pub fn miss(&self, code: i64) -> Krb5Error {
-        match code {
+        let e = match code {
             krb5_protocol::trace::KRB5_CC_NOT_KTYPE => {
                 Krb5Error::from_tgs(&krb5_protocol::Error::CcNotKtype, "")
             }
             krb5_protocol::trace::KRB5_CONFIG_ETYPE_NOSUPP => {
                 Krb5Error::from_tgs(&krb5_protocol::Error::ConfigEtypeNosupp, "")
             }
-            _ => self.not_found(),
-        }
+            _ => Krb5Error::of(Code::CcNotfound),
+        };
+        self.with_filename(e)
     }
 
     // MIT: `krb5_cc_retrieve_cred` (lib/krb5/ccache/ccfns.c:97-111)
@@ -201,12 +203,14 @@ impl<'c> OpenCache<'c> {
 
     #[must_use]
     pub fn not_found(&self) -> Krb5Error {
+        self.with_filename(Krb5Error::of(Code::CcNotfound))
+    }
+
+    // MIT: `set_errmsg_filename` (lib/krb5/ccache/cc_file.c:117-124)
+    fn with_filename(&self, e: Krb5Error) -> Krb5Error {
         match crate::cache_file_path(&self.spec) {
-            Some(p) => Krb5Error::new(
-                Code::CcNotfound,
-                format!("Matching credential not found (filename: {})", p.display()),
-            ),
-            None => Krb5Error::of(Code::CcNotfound),
+            Some(p) => Krb5Error::new(e.code, format!("{} (filename: {})", e.message, p.display())),
+            None => e,
         }
     }
 
@@ -242,8 +246,8 @@ impl<'c> OpenCache<'c> {
         } else {
             // MIT: `get_cached_tgt` (lib/krb5/krb/get_creds.c:792-792)
             match self.cached_tgt(srealm) {
-                Err(e @ krb5_protocol::Error::CcNotKtype) => {
-                    return Err(Krb5Error::from_tgs(&e, srealm));
+                Err(krb5_protocol::Error::CcNotKtype) => {
+                    return Err(self.miss(krb5_protocol::trace::KRB5_CC_NOT_KTYPE));
                 }
                 found => found.ok().flatten(),
             }

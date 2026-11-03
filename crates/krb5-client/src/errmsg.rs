@@ -24,6 +24,7 @@ pub enum Code {
     FccPerm,
     CcNotfound,
     CcUnknownType,
+    CcBadName,
     KtUnknownType,
     WrongPrinc,
     TktInvalid,
@@ -250,6 +251,25 @@ impl Krb5Error {
             code => Self::of(code),
         }
     }
+
+    // MIT: `split_path` (lib/krb5/ccache/cc_dir.c:107-141)
+    // MIT: `read_primary_file` (lib/krb5/ccache/cc_dir.c:146-176)
+    // MIT: `verify_dir` (lib/krb5/ccache/cc_dir.c:221-240)
+    #[must_use]
+    pub fn from_dir_cache(e: &io::Error, os: impl FnOnce(&io::Error) -> Self) -> Self {
+        if e.raw_os_error().is_some() {
+            return os(e);
+        }
+        let text = e.to_string();
+        let code = match e.kind() {
+            io::ErrorKind::InvalidInput => Code::CcBadName,
+            io::ErrorKind::NotFound => Code::FccNofile,
+            io::ErrorKind::InvalidData if text == code_text(Code::CcIo) => Code::CcIo,
+            io::ErrorKind::InvalidData => Code::CcFormat,
+            _ => Code::Other,
+        };
+        Self::new(code, text)
+    }
 }
 
 // MIT: `interpret_errno` (cc_file.c:1346-1389)
@@ -285,6 +305,8 @@ fn code_text(code: Code) -> &'static str {
         Code::CcNotfound => "Matching credential not found",
         // MIT: `KRB5_CC_UNKNOWN_TYPE` (lib/krb5/error_tables/krb5_err.et:190-190)
         Code::CcUnknownType => "Unknown credential cache type",
+        // MIT: `KRB5_CC_BADNAME` (lib/krb5/error_tables/krb5_err.et:189-189)
+        Code::CcBadName => "Credential cache name malformed",
         // MIT: `KRB5_KT_UNKNOWN_TYPE` (krb5_err.et:244-244)
         Code::KtUnknownType => "Unknown Key table type",
         // MIT: `KRB5KRB_AP_WRONG_PRINC` (krb5_err.et:196-196)

@@ -254,6 +254,7 @@ fn shared_sticky(dir_mode: u32, dir_uid: u32, owner: u32) -> bool {
     dir_mode & 0o1000 != 0 && dir_mode & 0o022 != 0 && owner != dir_uid
 }
 
+// MIT: `fcc_destroy` (lib/krb5/ccache/cc_file.c:608-642)
 /// `O_NOFOLLOW|O_NONBLOCK`: a swapped symlink or FIFO is not followed.
 pub fn destroy_secret_file(path: &Path) -> io::Result<()> {
     let lmeta = fs::symlink_metadata(path)?;
@@ -265,7 +266,7 @@ pub fn destroy_secret_file(path: &Path) -> io::Result<()> {
         return Err(not_regular());
     }
     let mut opts = OpenOptions::new();
-    opts.write(true);
+    opts.read(true).write(true);
     #[cfg(unix)]
     {
         opts.custom_flags((nix::fcntl::OFlag::O_NOFOLLOW | nix::fcntl::OFlag::O_NONBLOCK).bits());
@@ -279,6 +280,7 @@ pub fn destroy_secret_file(path: &Path) -> io::Result<()> {
     if swapped || !meta.file_type().is_file() {
         return Err(not_regular());
     }
+    fs::remove_file(path)?;
     let chunk = [0u8; 4096];
     let mut left = meta.len();
     while left > 0 {
@@ -286,9 +288,7 @@ pub fn destroy_secret_file(path: &Path) -> io::Result<()> {
         f.write_all(&chunk[..n])?;
         left -= n as u64;
     }
-    f.sync_all()?;
-    drop(f);
-    fs::remove_file(path)
+    f.sync_all()
 }
 
 fn not_regular() -> io::Error {

@@ -102,8 +102,7 @@ any other `###` heading.
 - **client.** AS reply's KDC time offset replaces armor cache's, as MIT.
 - **form.** tools, config, types, crypto, client, log, cli, asn1, brainpool: comments ≤3% of code chars.
 - **form.** In those nine crates, safety, wire or MIT-quirk fact keeps its line.
-- **form.** protocol: comments ≤3% of code chars; safety, wire or MIT-quirk fact keeps its line.
-- **form.** admin: comments ≤3% of code chars; safety, wire or MIT-quirk fact keeps its line.
+- **form.** protocol, admin: comments ≤3% of code chars; safety, wire or MIT-quirk fact keeps its line.
 - **form.** kdc, gss, testkit: comments ≤3% of code chars.
 - **form.** In those three crates, safety, wire or MIT-quirk fact keeps its line.
 - **examples.** krb5-embed-realm serves KDC, kadmind from one store; one Shutdown stops both.
@@ -334,6 +333,7 @@ any other `###` heading.
 - **kdc.** TGS header ticket decrypting to junk is 60, AP-REQ pvno 4 is 3, as MIT.
 - **client.** Credential times are checked before use, as MIT.
 - **client.** Cached credentials rank by MIT's TGS enctype list.
+- **client.** Cache errors as MIT; kdestroy keeps a cache it can't unlink.
 - **admin.** RPCSEC_GSS handle is MIT's `xxxx`.
 
 ## [1.1.0] - 2026-10-14
