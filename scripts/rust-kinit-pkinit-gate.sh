@@ -22,6 +22,8 @@ fi
 need_image
 
 stock_mit_kdc
+# Before mit_conf_restore, whose kills miss this copy's name: a later gate binds 8888.
+register_cleanup "docker exec '$NAME' sh -c 'kill \$(pidof krb5-kdc-export)' >/dev/null 2>&1; wait_pid_gone '$NAME' krb5-kdc-export"
 mit_live_guard
 
 PLUGIN="$(docker exec "$NAME" sh -c 'find /usr -name pkinit.so 2>/dev/null | head -1' || true)"

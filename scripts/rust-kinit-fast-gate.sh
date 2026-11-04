@@ -21,6 +21,8 @@ fi
 need_image
 
 stock_mit_kdc
+# Before mit_conf_restore: it stops at a KDC still bound on 1893 or 1894, and its kills miss re_case's.
+register_cleanup "docker exec '$NAME' sh -c 'kill \$(cat /tmp/re-*.pid); rm -f /tmp/re-*.pid' >/dev/null 2>&1 || true"
 mit_live_guard
 
 docker exec "$NAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
@@ -362,7 +364,7 @@ done
 re_case() {
     local port=$1 want=$2 label=$3 who out rc mit_out=
     shift 3
-    docker exec -d "$NAME" sh -c "python3 /tmp/reply-etype-kdc.py $port $* > /tmp/re-$port.log 2>&1"
+    docker exec -d "$NAME" sh -c "echo \$\$ > /tmp/re-$port.pid; exec python3 /tmp/reply-etype-kdc.py $port $* > /tmp/re-$port.log 2>&1"
     require_log "$NAME" "/tmp/re-$port.log" listening "reply-etype-kdc on $port"
     docker exec "$NAME" sh -c "printf '[libdefaults]\n default_realm = KERBER.TEST\n default_tkt_enctypes = aes256-cts-hmac-sha1-96\n permitted_enctypes = aes256-cts-hmac-sha1-96\n[realms]\n KERBER.TEST = {\n  kdc = 127.0.0.1:$port\n }\n' > /tmp/re-$port.conf"
     for who in mit rust; do
