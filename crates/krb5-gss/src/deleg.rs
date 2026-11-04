@@ -1,9 +1,6 @@
-//! Delegation (`init_sec_context.c` KRB-CRED trailer): `DelegCred`
-//! and the 0x8003 checksum cred.
-
 use krb5_asn1::encode;
 use krb5_crypto::{KeyUsage, ProtocolKey, encrypt};
-use krb5_protocol::{ReplayCache, unwrap_krb_cred};
+use krb5_protocol::unwrap_krb_cred;
 use krb5_types::{
     EncKrbCredPart, EncryptedData, EncryptionKey, KerberosTime, KrbCred, KrbCredInfo,
     PrincipalName, Realm, Ticket, TicketFlags, ku,
@@ -12,32 +9,20 @@ use krb5_types::{
 use super::oid::GSS_C_DELEG;
 use super::{Error, GssContext};
 
-/// Forwarded TGT (or other ticket) to embed in a GSS delegation checksum.
 #[derive(Clone, Debug)]
 pub struct DelegCred {
-    /// Ticket to forward.
     pub ticket: Ticket,
-    /// Session key of `ticket` (goes in `KrbCredInfo.key`).
     pub session: ProtocolKey,
-    /// Client realm.
     pub crealm: Realm,
-    /// Client name.
     pub cname: PrincipalName,
-    /// Ticket flags copied into `KrbCredInfo`.
     pub flags: TicketFlags,
-    /// `KrbCredInfo` authtime.
     pub authtime: Option<KerberosTime>,
-    /// `KrbCredInfo` starttime.
     pub starttime: Option<KerberosTime>,
-    /// `KrbCredInfo` endtime.
     pub endtime: Option<KerberosTime>,
-    /// `KrbCredInfo` renew-till.
     pub renew_till: Option<KerberosTime>,
 }
 
-/// MIT `krb5_mk_1cred` (`mk_cred.c:221-224`): a failure to allocate the credential list emits no
-/// credential.
-/// The encrypted part names krbtgt in the client realm, not the acceptor's service.
+// MIT krb5_mk_1cred; see docs/parity/b1-client.md
 pub(super) fn krb_cred_for_deleg(
     ticket_session: &ProtocolKey,
     deleg: &DelegCred,
@@ -59,7 +44,8 @@ pub(super) fn krb_cred_for_deleg(
         sname: Some(PrincipalName::krbtgt(realm.as_ref())),
         caddr: None,
     };
-    // MIT `krb5_mk_ncred` (`lib/krb5/krb/mk_cred.c:177-178`): a missing timestamp is filled from one `krb5_us_timeofday` reading.
+    // MIT: `krb5_mk_ncred` (lib/krb5/krb/mk_cred.c:177-178)
+    // A missing timestamp is filled from one `krb5_us_timeofday` reading.
     let (now, usec) = krb5_protocol::us_timeofday();
     let part = EncKrbCredPart {
         ticket_info: vec![info],
@@ -85,16 +71,12 @@ pub(super) fn krb_cred_for_deleg(
     Ok(encode(&cred)?)
 }
 
-/// MIT `krb5_rd_cred` (`rd_cred.c:165-167`): a credential that does not decrypt is not a credential
-/// list.
-/// The delegation flag clear means there is no credential, and a trailer longer than the checksum
-/// is not one.
+// MIT: `rd_and_store_for_creds` (accept_sec_context.c:162-279)
 pub(super) fn extract_delegated(
     cksum: &[u8],
     flags: u32,
     subkey: Option<&ProtocolKey>,
     ticket_session: &ProtocolKey,
-    replay: &ReplayCache,
 ) -> Result<Option<String>, Error> {
     if flags & GSS_C_DELEG == 0 {
         return Ok(None);
@@ -111,10 +93,10 @@ pub(super) fn extract_delegated(
     let raw = &cksum[28..28 + dlgth];
     let mut part = None;
     if let Some(sk) = subkey {
-        part = unwrap_krb_cred(sk, raw, replay).ok();
+        part = unwrap_krb_cred(sk, raw).ok();
     }
     if part.is_none() {
-        part = unwrap_krb_cred(ticket_session, raw, replay).ok();
+        part = unwrap_krb_cred(ticket_session, raw).ok();
     }
     let part = part.ok_or_else(|| Error::Inner("gss failure".into()))?;
     let info = part.1.ticket_info.first().ok_or(Error::Truncated)?;
@@ -130,10 +112,8 @@ pub(super) fn extract_delegated(
     Ok(Some(name))
 }
 
-/// The gates' copy of a delegated credential, in a `test-hooks` build only: MIT's acceptor hands
-/// the credential to its caller and reads no environment for it, so a release acceptor (kadmind's
-/// RPCSEC_GSS) keeps only the name.
 #[cfg(feature = "test-hooks")]
+#[allow(clippy::disallowed_methods, reason = "a test-hooks build's override")]
 mod hooks {
     use krb5_asn1::encode;
     use krb5_crypto::{EncryptionType, ProtocolKey};
@@ -142,7 +122,6 @@ mod hooks {
 
     use super::Error;
 
-    /// Write the credential to the FILE ccache `GSS_DELEG_CCACHE` names, when it names one.
     pub(super) fn write_deleg_ccache(cred: &KrbCred, part: &EncKrbCredPart) -> Result<(), Error> {
         let Ok(path) = std::env::var("GSS_DELEG_CCACHE") else {
             return Ok(());
@@ -154,7 +133,11 @@ mod hooks {
         let ticket = cred.tickets.first().ok_or(Error::Truncated)?;
         let prealm = info.prealm.clone().ok_or(Error::Truncated)?;
         let pname = info.pname.clone().ok_or(Error::Truncated)?;
-        let etype = EncryptionType::from_iana(info.key.keytype).map_err(Error::from)?;
+        // MIT: `make_cred_list` (lib/krb5/krb/rd_cred.c:109-110)
+        // The stored session key is the credential's keyblock.
+        let etype = EncryptionType::from_iana(info.key.keytype)
+            .or_else(|_| EncryptionType::known(info.key.keytype))
+            .map_err(Error::from)?;
         let session =
             ProtocolKey::from_bytes(etype, info.key.keyvalue.as_ref()).map_err(Error::from)?;
         let srealm = info.srealm.clone().unwrap_or_else(|| prealm.clone());
@@ -193,7 +176,6 @@ mod hooks {
 }
 
 impl GssContext {
-    /// Delegated initiator name if `GSS_C_DELEG_FLAG` carried a KRB-CRED.
     #[must_use]
     pub fn delegated(&self) -> Option<&str> {
         self.delegated.as_deref()

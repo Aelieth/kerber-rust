@@ -38,6 +38,7 @@ docker exec "$NAME" sh -c 'cat > /tmp/rust-kdc.conf <<EOF
     json = STDOUT
 EOF'
 docker exec -d \
+    -e RUST_LOG=krb5_kdc=debug,krb5_crypto=debug,krb5_protocol=debug \
     -e KRB5_TEST_USER_PASSWORD=userpassword \
     -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
     -e KRB5_KDC_DB=/tmp/rust.db \
@@ -130,56 +131,73 @@ if [ "$rc" -eq 0 ]; then
     fi
     echo "$KDCLOG" | grep 'pkinit client san'
 
-    echo "==== rust_kdc unsupported group P-384 → 65 TYPED-DATA shape (MIT accepts P-384 — item 17) ===="
-    rust_kdc_pkinit_dh1024() {
-        local proxy=1888
+    echo "==== rust_kdc at pkinit_dh_min_bits 4096: MIT kinit's 2048-bit DH → 65 TYPED-DATA + cookie, then the KDC's group, as MIT's KDC at 4096 ===="
+    # The image's OpenSSL 3.0 will not make a 1024-bit DH key, so the floor is raised instead.
+    rust_kdc_pkinit_dh_floor() {
+        local proxy=1888 port=18889
         docker cp "$ROOT/scripts/lib/kdc-error-proxy.py" "$NAME":/tmp/kdc-error-proxy.py
-        docker cp "$ROOT/scripts/lib/openssl-seclevel0.cnf" "$NAME":/tmp/openssl-seclevel0.cnf
-        docker exec "$NAME" rm -f /tmp/pkinit-65.txt
+        docker exec "$NAME" rm -rf /tmp/pkinit-65.txt /tmp/pkinit-floor /tmp/dh-floor.trace
+        wait_bound_free_in "$NAME" "$port" udp || die "stale KDC still bound :$port"
+        docker exec -d \
+            -e KRB5_TEST_PKINIT_DH_MIN_BITS=4096 \
+            -e KRB5_TEST_USER_PASSWORD=userpassword \
+            -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
+            -e KRB5_KDC_DB=/tmp/rust-floor.db \
+            -e KRB5_KDC_STASH=/tmp/rust-floor.stash \
+            -e KRB5_KDC_PROFILE=/tmp/rust-kdc.conf \
+            "$NAME" sh -c "echo \$\$ >/tmp/kdc-floor.pid; exec /tmp/krb5-kdc --test-realm --export-pkinit /tmp/pkinit-floor 127.0.0.1:$port >/tmp/kdc-floor.log 2>&1"
+        wait_udp_in "$NAME" "$port" || {
+            docker exec "$NAME" cat /tmp/kdc-floor.log >&2 || true
+            die "the 4096-floor KDC did not listen on :$port"
+        }
+        retry_until --log "$NAME" /tmp/kdc-floor.log -- 100 "the 4096-floor KDC's PKINIT export" \
+            docker exec "$NAME" test -s /tmp/pkinit-floor/user.pem
         wait_bound_free_in "$NAME" "$proxy" udp || die "stale proxy still bound :$proxy"
-        docker exec -d "$NAME" python3 /tmp/kdc-error-proxy.py "$proxy" 127.0.0.1 "$PORT" /tmp/pkinit-65.txt
+        docker exec -d "$NAME" sh -c \
+            "echo \$\$ >/tmp/proxy-floor.pid; exec python3 /tmp/kdc-error-proxy.py $proxy 127.0.0.1 $port /tmp/pkinit-65.txt"
         wait_udp_in "$NAME" "$proxy" || die "proxy $proxy did not listen"
-        docker exec "$NAME" sh -c "cat > /tmp/krb5-dh1024.conf <<EOF
+        docker exec "$NAME" sh -c "cat > /tmp/krb5-dh-floor.conf <<EOF
 [libdefaults]
     default_realm = KERBER.TEST
     dns_lookup_kdc = false
     preferred_preauth_types = 16
     pkinit_eku_checking = none
     pkinit_kdc_hostname = kerber.test
-    pkinit_dh_min_bits = P-384
+    udp_preference_limit = 32700
 [realms]
     KERBER.TEST = {
         kdc = 127.0.0.1:${proxy}
-        pkinit_anchors = FILE:/tmp/pkinit/ca.pem
+        pkinit_anchors = FILE:/tmp/pkinit-floor/ca.pem
         pkinit_eku_checking = none
         pkinit_kdc_hostname = kerber.test
-        pkinit_dh_min_bits = P-384
     }
 EOF"
         set +e
         docker exec \
-            -e KRB5_CONFIG=/tmp/krb5-dh1024.conf \
-            -e OPENSSL_CONF=/tmp/openssl-seclevel0.cnf \
-            -e KRB5_TRACE=/dev/stderr \
-            "$NAME" timeout 20 kinit -X X509_user_identity=FILE:/tmp/pkinit/user.pem user@KERBER.TEST
+            -e KRB5_CONFIG=/tmp/krb5-dh-floor.conf \
+            -e KRB5_TRACE=/tmp/dh-floor.trace \
+            -e KRB5CCNAME=FILE:/tmp/krb5cc_dh_floor \
+            "$NAME" timeout 20 kinit -X X509_user_identity=FILE:/tmp/pkinit-floor/user.pem user@KERBER.TEST </dev/null
+        local rc=$?
         set -e
-        local out
+        local out trace
         out="$(docker exec "$NAME" cat /tmp/pkinit-65.txt 2>/dev/null || true)"
+        trace="$(docker exec "$NAME" cat /tmp/dh-floor.trace 2>/dev/null || true)"
         echo "$out"
-        echo "$out" | grep -F 'error_code=65' || {
-            echo "rust_kdc PKINIT DH-min P-384 did not return protocol 65: $out" >&2
-            exit 1
-        }
-        echo "$out" | grep -F 'e_data_encoding=typed' || {
-            echo "rust_kdc PKINIT 65 e_data is not TYPED-DATA: $out" >&2
-            exit 1
-        }
-        echo "$out" | grep -F '109' | grep -q '133' || {
-            echo "rust_kdc PKINIT 65 missing TD-DH-PARAMETERS 109 or FX-COOKIE 133: $out" >&2
-            exit 1
-        }
+        echo "$trace" | grep -E 'key exchange group' || true
+        echo "kinit rc=$rc"
+        docker exec "$NAME" sh -c 'kill $(cat /tmp/proxy-floor.pid) $(cat /tmp/kdc-floor.pid) 2>/dev/null || true'
+        grep -qF 'PKINIT using 2048-bit DH key exchange group' <<<"$trace" ||
+            die "MIT kinit did not open with 2048-bit DH"
+        echo "$out" | grep -F 'error_code=65' || die "rust_kdc at a 4096 floor did not return protocol 65: $out"
+        echo "$out" | grep -F 'e_data_encoding=typed' || die "rust_kdc PKINIT 65 e_data is not TYPED-DATA: $out"
+        echo "$out" | grep -F '109' | grep -q '133' ||
+            die "rust_kdc PKINIT 65 missing TD-DH-PARAMETERS 109 or FX-COOKIE 133: $out"
+        grep -qF 'PKINIT accepting KDC key exchange group preference P-384' <<<"$trace" ||
+            die "MIT kinit did not take P-384, the first group of the 65's TD-DH-PARAMETERS"
+        [ "$rc" -eq 0 ] || die "MIT kinit got no TGT in the KDC's group (rc $rc)"
     }
-    rust_kdc_pkinit_dh1024
+    rust_kdc_pkinit_dh_floor
 
     echo "==== require_auth pkinit: PKINIT kvno issued, password kvno 12 ===="
     SETSTR="$(docker exec \

@@ -33,17 +33,17 @@ docker run -d --name "$NAME" \
 # Wait for the in-container kinit (logged as harness.kinit).
 for _ in $(seq 1 90); do
     logs="$(docker logs "$NAME" 2>&1 || true)"
-    if echo "$logs" | grep -q '"event":"harness.kinit".*"outcome":"ok"'; then
+    if grep -q '"event":"harness.kinit".*"outcome":"ok"' <<<"$logs"; then
         echo "$logs"
         echo "{\"event\":\"harness.verified\",\"correlation_id\":\"${CORRELATION_ID}\",\"component\":\"harness\",\"outcome\":\"ok\",\"principal\":\"user@KERBER.TEST\"}"
         exit 0
     fi
-    if echo "$logs" | grep -q '"event":"harness.kinit".*"outcome":"error"'; then
+    if grep -q '"event":"harness.kinit".*"outcome":"error"' <<<"$logs"; then
         echo "$logs" >&2
         exit 1
     fi
     # Container died during startup.
-    if ! docker ps -q --filter "name=^${NAME}$" | grep -q .; then
+    if ! grep -q . <<<"$(docker ps -q --filter "name=^${NAME}$")"; then
         echo "$logs" >&2
         echo "harness container exited" >&2
         exit 1

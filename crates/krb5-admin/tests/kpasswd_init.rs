@@ -4,9 +4,6 @@ use std::process::{Command, Stdio};
 
 use krb5_testkit::scratch_dir;
 
-/// MIT `main` (`kpasswd.c:70-74`): `kpasswd: <error_message> initializing kerberos library`.
-/// Live MIT 1.22.2: that line and exit 1 for an include that does not open and for a relation
-/// with no value.
 #[test]
 fn a_profile_krb5_init_context_refuses_is_mit_s_line() {
     let dir = scratch_dir("kpasswd-init");

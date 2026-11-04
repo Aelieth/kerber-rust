@@ -1,14 +1,8 @@
-//! XDR primitives (`lib/rpc/xdr.c`): the big-endian reader `XdrR` and
-//! writer `XdrW` under every kadm5 argument and reply codec, including the
-//! `krb5_key_salt_tuple` array of `kadm_rpc_xdr.c`. A short read is
-//! `Error::GarbageArgs`; padding is consumed but never trusted.
-
-use krb5_crypto::EncryptionType;
+use krb5_crypto::{EncryptionType, KeySalt};
 use krb5_types::PrincipalName;
 
 use crate::Error;
 
-/// MIT `xdr_krb5_int16` truncates `tl_data_type` before the `< 256` guard.
 #[allow(clippy::cast_possible_truncation)]
 pub(super) fn xdr_tl_type(wire: u32) -> i32 {
     i32::from(wire as i16)
@@ -58,10 +52,8 @@ impl<'a> XdrR<'a> {
         Ok(v)
     }
 
-    /// MIT `xdr_string`: the count includes the trailing NUL, and the bytes are not
-    /// required to be UTF-8. A kadm5 password is this (`xdr_chpass3_arg` / `xdr_cprinc_arg`
-    /// `passwd`), so `caf\xe9` reaches `passwd_check`. Principal names stay on `nullstring`.
-    pub(super) fn cstring_bytes(&mut self) -> Result<Option<Vec<u8>>, Error> {
+    /// Not UTF-8 (passwords). Count includes the NUL.
+    pub(super) fn cstring_bytes(&mut self) -> Result<Option<zeroize::Zeroizing<Vec<u8>>>, Error> {
         let n = self.u32()? as usize;
         if n == 0 {
             return Ok(None);
@@ -72,7 +64,7 @@ impl<'a> XdrR<'a> {
         let pad = (4 - (n % 4)) % 4;
         self.i = self.i.saturating_add(pad).min(self.b.len());
         let end = raw.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
-        Ok(Some(raw[..end].to_vec()))
+        Ok(Some(zeroize::Zeroizing::new(raw[..end].to_vec())))
     }
 
     pub(super) fn nullstring(&mut self) -> Result<Option<String>, Error> {
@@ -94,32 +86,28 @@ impl<'a> XdrR<'a> {
         krb5_types::principal_from_unparsed(&s, "").map_err(|e| Error::Inner(e.to_string()))
     }
 
-    pub(super) fn skip_array_i32_pairs(&mut self) -> Result<(), Error> {
+    pub(super) fn i32_pairs(&mut self) -> Result<Vec<(i32, i32)>, Error> {
         let n = self.u32()?;
+        let mut out = Vec::new();
         for _ in 0..n {
-            self.u32()?;
-            self.u32()?;
+            out.push((self.u32()?.cast_signed(), self.u32()?.cast_signed()));
         }
-        Ok(())
+        Ok(out)
     }
 
-    /// `xdr_array` of `krb5_key_salt_tuple` (`kadm_rpc_xdr.c` `xdr_krb5_key_salt_tuple`).
-    pub(super) fn key_salt_tuples(&mut self) -> Result<Vec<EncryptionType>, Error> {
+    pub(super) fn key_salt_tuples(&mut self) -> Result<Vec<KeySalt>, Error> {
         let n = self.u32()?;
         let mut out = Vec::new();
         for _ in 0..n {
             let et = i32::try_from(self.u32()?).unwrap_or(i32::MAX);
-            let _salttype = self.u32()?;
+            let salt = self.u32()?.cast_signed();
             let e = EncryptionType::known(et)
                 .map_err(|_| Error::Inner("Invalid key/salt tuples".into()))?;
-            // MIT `etypes.c`: `allow_weak_crypto` filters `ETYPE_WEAK` only.
-            // None of the implemented types set that flag (`is_mit_weak`).
-            // Deprecated des3/rc4 and camellia are accepted on the v3
-            // `ks_tuple` like MIT kadmind (`from_iana` stays stricter).
+            // `known` as MIT kadmind; `from_iana` stays stricter.
             if e.is_mit_weak() {
                 return Err(Error::Inner("Invalid key/salt tuples".into()));
             }
-            out.push(e);
+            out.push(KeySalt { etype: e, salt });
         }
         Ok(out)
     }
@@ -130,14 +118,12 @@ pub(super) struct XdrW {
     pub(super) b: Vec<u8>,
 }
 
-/// The bytes `XdrW::opaque` writes for `n` bytes: the length, the bytes and their padding.
 pub(super) fn opaque_len(n: usize) -> usize {
     4 + n + (4 - n % 4) % 4
 }
 
 impl XdrW {
-    /// A writer whose buffer holds `n` bytes before it grows: a reply that carries keys is built
-    /// in one buffer, so no copy of them is left behind in a buffer it outgrew.
+    /// No second key copy on grow.
     pub(super) fn with_capacity(n: usize) -> Self {
         Self {
             b: Vec::with_capacity(n),
@@ -158,7 +144,6 @@ impl XdrW {
         self.cstring_bytes(s.map(str::as_bytes));
     }
 
-    /// An XDR string of raw octets plus the trailing NUL. `XdrR::cstring_bytes` reads it.
     pub(super) fn cstring_bytes(&mut self, s: Option<&[u8]>) {
         match s {
             None => self.u32(0),

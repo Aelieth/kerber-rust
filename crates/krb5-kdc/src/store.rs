@@ -1,9 +1,4 @@
-//! In-memory principal database and ACL-gated mutations.
-//!
-//! One module per MIT source family: `flags` (`KRB5_KDB_*`), `principal`,
-//! `policy`, `password` (quality, chpass, history compare), `keys`,
-//! `alias`, `transit`, `iprop_ulog`, `history`, `rid`. In-src tests live
-//! in `store/tests.rs`.
+//! The in-memory principal database and its ACL-gated changes.
 
 mod alias;
 mod flags;
@@ -27,26 +22,18 @@ mod tests;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use krb5_types::PrincipalName;
 use krb5_types::pac::RpcSid;
-use krb5_types::pkinit::PkinitCa;
 
 use crate::dblock::{DbLock, DbLockHold, DbLockMode};
 use crate::error::Error;
-use crate::persist::{DbStamp, PersistError};
+use crate::persist::{DbStamp, Freshness, PersistError};
 use iprop_ulog::{LogContext, LogNote, PrincipalMap};
+use kadm5_hook::Post;
+#[cfg(any(test, feature = "test-hooks"))]
 use principal::default_mod_actor;
 use rid::generate_domain_sid;
-
-fn unix_now() -> u32 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .ok()
-        .and_then(|d| u32::try_from(d.as_secs()).ok())
-        .unwrap_or(0)
-}
 
 #[cfg(test)]
 use std::cell::Cell;
@@ -57,70 +44,46 @@ thread_local! {
     static FAIL_NEXT_CHRAND_SAVE: Cell<bool> = const { Cell::new(false) };
 }
 
-/// kadm5 `KADM5_*` mask bits (`lib/kadm5/admin.h`) that a create or modify
-/// request carries alongside its `kadm5_principal_ent_rec`.
 pub mod kadm5_mask {
-    /// `KADM5_PRINCIPAL`.
     pub const PRINCIPAL: u32 = 0x0000_0001;
-    /// `KADM5_PRINC_EXPIRE_TIME`.
-    pub(crate) const PRINC_EXPIRE_TIME: u32 = 0x0000_0002;
-    /// `KADM5_PW_EXPIRATION`.
-    pub(crate) const PW_EXPIRATION: u32 = 0x0000_0004;
-    /// `KADM5_ATTRIBUTES`.
+    pub const PRINC_EXPIRE_TIME: u32 = 0x0000_0002;
+    pub const PW_EXPIRATION: u32 = 0x0000_0004;
     pub const ATTRIBUTES: u32 = 0x0000_0010;
-    /// `KADM5_MAX_LIFE`.
     pub const MAX_LIFE: u32 = 0x0000_0020;
-    /// `KADM5_KVNO`.
     pub const KVNO: u32 = 0x0000_0100;
-    /// `KADM5_POLICY`.
     pub const POLICY: u32 = 0x0000_0800;
-    /// `KADM5_POLICY_CLR`.
     pub const POLICY_CLR: u32 = 0x0000_1000;
-    /// `KADM5_MAX_RLIFE`.
-    pub(crate) const MAX_RLIFE: u32 = 0x0000_2000;
-    /// `KADM5_KEY_DATA`.
+    pub const MAX_RLIFE: u32 = 0x0000_2000;
     pub const KEY_DATA: u32 = 0x0002_0000;
 }
 
-/// Realm principal store (dump-v7 / HashMap backend).
 #[derive(Clone, Debug)]
 pub struct PrincipalStore {
     realm: String,
     map: PrincipalMap,
-    /// Ticket policy.
     pub policy: Policy,
     env: crate::kdb::KdcEnv,
-    /// The `dict` password-quality module's words, the admin side's only (kadmind, kadmin.local,
-    /// `kdb5_util create`), read once ([`Self::init_pwqual`]) and shared.
     pwqual_dict: Option<Arc<pwqual_dict::PwqualDict>>,
-    /// Optional `(db, stash)` paths; mutations write through when set.
     pub persist_paths: Option<(std::path::PathBuf, std::path::PathBuf)>,
-    /// `kadmin.local -m`: the database and the master key typed for it, which a save writes
-    /// under in place of the stash's; the stash is not read.
     pub(crate) persist_master: Option<(std::path::PathBuf, krb5_crypto::ProtocolKey)>,
-    /// The database's age and identity as this store last read it.
     pub(crate) db_stamp: Option<DbStamp>,
-    /// The database's lock files, opened once with the database.
+    pub(crate) loaded_span: Option<(u64, u64)>,
     pub(crate) dblock: Option<Arc<DbLock>>,
-    /// Whether a mutation asked for a save during the current [`Self::change`].
+    ahead: AheadSlot,
     changed: ChangeMark,
-    /// Per-realm NT domain SID (never the dummy `S-1-5-21-1-2-3`).
+    wrote_through: ChangeMark,
+    /// Never the dummy domain SID `S-1-5-21-1-2-3`.
     domain_sid: RpcSid,
-    /// Next RID to allocate (`RID_FIRST_USER` and up).
     next_rid: u32,
     policies: HashMap<String, NamedPolicy>,
     lockout: Arc<crate::lockout::LockoutState>,
-    /// The update log this process mapped and its role, process-local and kept across rereads;
-    /// `None` when iprop is off, so nothing is logged.
     log: Option<Arc<LogContext>>,
-    /// The changes made since the database was last written, for the update log.
-    pending: Arc<Mutex<Vec<LogNote>>>,
-    /// Set while [`Self::change`] runs `f`: a mutation's own save is only noted, and the change
-    /// writes the database once at its end.
+    pending: PendingNotes,
     saves_held: bool,
+    post: Option<Vec<Post>>,
+    otp_runtime: Option<Arc<crate::plugins::OtpRuntime>>,
 }
 
-/// Whether a mutation asked for a save; cloned with the store as a fresh flag of the same value.
 #[derive(Debug, Default)]
 struct ChangeMark(AtomicBool);
 
@@ -130,8 +93,63 @@ impl Clone for ChangeMark {
     }
 }
 
-/// [`PrincipalStore::change`]'s hold on the store's saves while `f` runs, let go however `f`
-/// ends; a panic leaves the store to be read again before its next use.
+#[derive(Debug)]
+struct PendingNotes(Arc<Mutex<Vec<LogNote>>>);
+
+impl PendingNotes {
+    fn new() -> Self {
+        Self(Arc::new(Mutex::new(Vec::new())))
+    }
+}
+
+impl Clone for PendingNotes {
+    fn clone(&self) -> Self {
+        let notes = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        Self(Arc::new(Mutex::new(notes)))
+    }
+}
+
+impl std::ops::Deref for PendingNotes {
+    type Target = Mutex<Vec<LogNote>>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+struct ReadAhead {
+    base: DbStamp,
+    taken: Vec<Result<Principal, String>>,
+    stamp: Option<DbStamp>,
+}
+
+#[derive(Default)]
+struct AheadSlot(Mutex<Option<ReadAhead>>);
+
+impl AheadSlot {
+    fn take(&mut self) -> Option<ReadAhead> {
+        self.0
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+    }
+}
+
+impl Clone for AheadSlot {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl std::fmt::Debug for AheadSlot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("AheadSlot")
+    }
+}
+
 struct HeldSaves<'a>(&'a mut PrincipalStore);
 
 impl<'a> HeldSaves<'a> {
@@ -150,23 +168,65 @@ impl Drop for HeldSaves<'_> {
     }
 }
 
+struct PostQueue<'a>(&'a mut PrincipalStore);
+
+impl<'a> PostQueue<'a> {
+    fn new(store: &'a mut PrincipalStore) -> Self {
+        store.post = Some(Vec::new());
+        Self(store)
+    }
+}
+
+impl Drop for PostQueue<'_> {
+    fn drop(&mut self) {
+        self.0.post = None;
+    }
+}
+
+struct Before {
+    policies: HashMap<String, NamedPolicy>,
+    next_rid: u32,
+    domain_sid: RpcSid,
+}
+
+impl Before {
+    fn of(store: &PrincipalStore) -> Self {
+        Self {
+            policies: store.policies.clone(),
+            next_rid: store.next_rid,
+            domain_sid: store.domain_sid.clone(),
+        }
+    }
+
+    fn restore(self, store: &mut PrincipalStore) -> bool {
+        if !store.map.undo_change() {
+            return false;
+        }
+        store.policies = self.policies;
+        store.next_rid = self.next_rid;
+        store.domain_sid = self.domain_sid;
+        store
+            .pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+        true
+    }
+}
+
 pub(crate) fn unix_now_u32() -> u32 {
-    u32::try_from(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs()),
-    )
-    .unwrap_or(u32::MAX)
+    krb5_types::unix_now()
 }
 
 impl PrincipalStore {
-    /// Empty store for `realm`.
-    /// The realm's domain SID comes from twelve CSPRNG bytes. When the CSPRNG fails, the
-    /// bytes are all zero, or the SID equals the dummy domain SID, the process exits instead
-    /// of storing a predictable domain SID.
     #[must_use]
+    #[allow(clippy::expect_used)]
     pub fn new(realm: impl Into<String>) -> Self {
-        Self {
+        Self::try_new(realm).expect("the CSPRNG gave no domain SID")
+    }
+
+    pub fn try_new(realm: impl Into<String>) -> Result<Self, Error> {
+        Ok(Self {
             realm: realm.into(),
             map: PrincipalMap::default(),
             policy: Policy::default(),
@@ -175,40 +235,43 @@ impl PrincipalStore {
             persist_paths: None,
             persist_master: None,
             db_stamp: None,
+            loaded_span: None,
             dblock: None,
+            ahead: AheadSlot::default(),
             changed: ChangeMark::default(),
-            domain_sid: generate_domain_sid().unwrap_or_else(|_| {
-                eprintln!("krb5-kdc: getrandom failed generating domain SID");
-                std::process::exit(1);
-            }),
+            wrote_through: ChangeMark::default(),
+            domain_sid: generate_domain_sid()?,
             next_rid: RID_FIRST_USER,
             policies: HashMap::new(),
             lockout: Arc::default(),
             log: None,
-            pending: Arc::new(Mutex::new(Vec::new())),
+            pending: PendingNotes::new(),
             saves_held: false,
-        }
+            post: None,
+            otp_runtime: None,
+        })
     }
 
-    /// Read the database again when another process changed it since this store read it.
-    ///
-    /// Kadmind and the KDC are separate processes sharing the database. Holding the database's
-    /// lock shared, its age and its file's identity are compared with what this store last read,
-    /// and the database is read again when they differ; the dump rows with the lockout attributes
-    /// of `principal.lockout` and the named policies come from disk, and the kdc.conf ticket
-    /// policy, the password dictionary, the lockout state this process keeps (its open
-    /// `principal.lockout` and any counts kept in memory), the update log it mapped and the
-    /// PKINIT CA stay process-local, carried over and never copied. The KDC's lockout writes move
-    /// neither the age nor the file, so a reader that needs them now merges them per entry
-    /// ([`Self::merge_lockout`]).
-    /// MIT `ctx_lock` (`plugins/kdb/db2/kdb_db2.c:439-455`): each read takes the shared lock and reopens the database under it.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Db`] when the database's lock files do not open or the lock may not be taken
-    /// (MIT's text), or the changed db or its stash cannot be read or parsed; [`Error::Crypto`]
-    /// when the stash key does not decrypt it.
+    pub(crate) fn otp_runtime(&self) -> Option<&crate::plugins::OtpRuntime> {
+        self.otp_runtime.as_deref()
+    }
+
+    pub(crate) fn install_otp_runtime(&mut self, rt: Arc<crate::plugins::OtpRuntime>) {
+        self.otp_runtime = Some(rt);
+    }
+
+    pub(crate) fn take_otp_runtime(&mut self) -> Option<Arc<crate::plugins::OtpRuntime>> {
+        self.otp_runtime.take()
+    }
+
+    // MIT: `ctx_lock` (plugins/kdb/db2/kdb_db2.c:439-455)
     pub fn reload_if_stale(&mut self) -> Result<(), Error> {
+        if let Some(a) = self.ahead.take()
+            && self.db_stamp.as_ref() == Some(&a.base)
+        {
+            self.apply_appended(a);
+            return Ok(());
+        }
         let Some(db) = self.db_path().map(std::path::Path::to_path_buf) else {
             return Ok(());
         };
@@ -216,29 +279,95 @@ impl PrincipalStore {
         let _held = lock
             .hold(DbLockMode::Shared)
             .map_err(|e| Error::from(PersistError::from(e)))?;
-        if self.db_stamp.is_some() && self.db_stamp == DbStamp::now(&lock, &db) {
-            return Ok(());
-        }
-        self.reread(&lock)
+        self.catch_up(&lock, &db).map(|_| ())
     }
 
-    /// Read the database again, whatever its stamp says, so a change whose save failed does not
-    /// stay in memory: the store is then what the file holds.
-    ///
-    /// # Errors
-    ///
-    /// As [`Self::reload_if_stale`].
+    fn catch_up(&mut self, lock: &Arc<DbLock>, db: &std::path::Path) -> Result<Freshness, Error> {
+        let fresh = self
+            .db_stamp
+            .as_ref()
+            .map_or(Freshness::Other, |s| s.freshness(lock, db));
+        match fresh {
+            Freshness::Same => Ok(fresh),
+            Freshness::Grown if self.take_appended(lock, db) => Ok(fresh),
+            _ => self.reread(lock).map(|()| Freshness::Other),
+        }
+    }
+
+    fn take_appended(&mut self, lock: &Arc<DbLock>, db: &std::path::Path) -> bool {
+        let Some(a) = self.prepare_appended(lock, db) else {
+            return false;
+        };
+        self.apply_appended(a);
+        true
+    }
+
+    /// `K/M` and `kadmin/history` are not password changes.
+    fn prepare_appended(&self, lock: &Arc<DbLock>, db: &std::path::Path) -> Option<ReadAhead> {
+        use crate::kdb_dump::JournalOp;
+        let (Some(base), Some(mkey)) = (self.db_stamp.clone(), self.journal_key()) else {
+            return None;
+        };
+        let bytes = crate::persist::read_appended(db, base.applied).ok()?;
+        let Ok(Ok(Some((ops, used)))) =
+            std::str::from_utf8(&bytes).map(crate::kdb_dump::parse_journal_tail)
+        else {
+            return None;
+        };
+        let realm = &self.realm;
+        let count = ops.len();
+        let mut taken = Vec::with_capacity(count);
+        for op in ops {
+            match op {
+                JournalOp::Put(dp) => {
+                    if dp.name == format!("K/M@{realm}")
+                        || dp.name == format!("kadmin/history@{realm}")
+                    {
+                        return None;
+                    }
+                    taken.push(Ok(dp.into_principal(&mkey).ok()?.0));
+                }
+                JournalOp::Del(id) => taken.push(Err(id)),
+            }
+        }
+        let applied = base.applied + u64::try_from(used).unwrap_or_default();
+        let records = base.records + u64::try_from(count).unwrap_or_default();
+        let stamp = DbStamp::holding(lock, db, records, applied);
+        Some(ReadAhead { base, taken, stamp })
+    }
+
+    fn apply_appended(&mut self, a: ReadAhead) {
+        let mut ids = Vec::with_capacity(a.taken.len());
+        for op in a.taken {
+            match op {
+                Ok(p) => {
+                    ids.push(p.id());
+                    self.debug_insert(p);
+                }
+                Err(id) => self.debug_remove(&id),
+            }
+        }
+        self.resolve_history_of(&ids);
+        self.db_stamp = a.stamp;
+    }
+
+    pub(crate) fn journal_key(&self) -> Option<krb5_crypto::ProtocolKey> {
+        if let Some((_, master)) = &self.persist_master {
+            return Some(master.clone());
+        }
+        self.get(&format!("K/M@{}", self.realm))
+            .and_then(|km| km.keys.first())
+            .map(|k| k.key.clone())
+    }
+
     pub fn reload(&mut self) -> Result<(), Error> {
         self.db_stamp = None;
         self.reload_if_stale()
     }
 
-    /// The store as the database holds it now, read while the caller holds `lock`, with the
-    /// process-local state kept. A database that does not read again is named in the error, and
-    /// the store stays as it was.
-    /// MIT `open_db` (`plugins/kdb/db2/kdb_db2.c:386-389`): a database that does not open again is named in the error.
+    // MIT: `open_db` (plugins/kdb/db2/kdb_db2.c:386-389)
     pub(crate) fn reread(&mut self, lock: &Arc<DbLock>) -> Result<(), Error> {
-        tracing::info!(
+        tracing::debug!(
             event = krb5_log::events::KDC_LISTEN,
             correlation_id = krb5_log::current_correlation_id(),
             component = "krb5-kdc",
@@ -264,16 +393,20 @@ impl PrincipalStore {
         })?;
         loaded.policy = std::mem::take(&mut self.policy);
         loaded.pwqual_dict = self.pwqual_dict.take();
-        loaded.domain_sid.clone_from(&self.domain_sid);
+        if loaded.policy.ad_identity {
+            loaded.domain_sid.clone_from(&self.domain_sid);
+        }
         loaded.lockout = Arc::clone(&self.lockout);
         loaded.env = std::mem::take(&mut self.env);
         loaded.log = self.log.take();
+        loaded.map.set_records_log(loaded.log.is_some());
         loaded.saves_held = self.saves_held;
+        loaded.post = self.post.take();
+        loaded.otp_runtime = self.otp_runtime.take();
         *self = loaded;
         Ok(())
     }
 
-    /// The database this store reads and writes: `kadmin.local -m`'s, else the stash-keyed one.
     pub(crate) fn db_path(&self) -> Option<&std::path::Path> {
         match (&self.persist_master, &self.persist_paths) {
             (Some((db, _)), _) | (None, Some((db, _))) => Some(db.as_path()),
@@ -281,13 +414,6 @@ impl PrincipalStore {
         }
     }
 
-    /// The database's lock files, opened once and kept; a store given its database's paths
-    /// without them opens them now.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Db`] when the store has no database, or `principal.ok` or `principal.kadm5.lock`
-    /// does not open (MIT's text).
     pub(crate) fn db_lock(&mut self) -> Result<Arc<DbLock>, Error> {
         if let Some(lock) = &self.dblock {
             return Ok(Arc::clone(lock));
@@ -303,12 +429,6 @@ impl PrincipalStore {
         Ok(lock)
     }
 
-    /// The database's shared lock for one request, and whether the database changed since this
-    /// store read it; `None` for a store with no database file.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Db`] when the lock may not be taken, MIT's `KRB5_KDB_CANTLOCK_DB`.
     pub fn read_hold(&self) -> Result<Option<(DbLockHold, bool)>, Error> {
         let (Some(db), Some(lock)) = (self.db_path(), &self.dblock) else {
             return Ok(None);
@@ -316,37 +436,37 @@ impl PrincipalStore {
         let held = lock
             .hold(DbLockMode::Shared)
             .map_err(|e| Error::from(PersistError::from(e)))?;
-        let stale = self.db_stamp.is_none() || self.db_stamp != DbStamp::now(lock, db);
+        let stale = !self.db_stamp.as_ref().is_some_and(|s| s.same(lock, db));
+        if stale {
+            let ahead = self
+                .db_stamp
+                .as_ref()
+                .filter(|s| matches!(s.freshness(lock, db), Freshness::Grown))
+                .and_then(|_| self.prepare_appended(lock, db));
+            *self
+                .ahead
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = ahead;
+        }
         Ok(Some((held, stale)))
     }
 
-    /// Ticket policy.
     #[must_use]
     pub fn policy(&self) -> &Policy {
         &self.policy
     }
 
-    /// Process-local KDC env (the PKINIT CA).
     #[must_use]
     pub fn env(&self) -> &crate::kdb::KdcEnv {
         &self.env
-    }
-
-    /// PKINIT CA if provisioned.
-    #[must_use]
-    pub fn pkinit_ca(&self) -> Option<&PkinitCa> {
-        self.env.pkinit_ca.as_ref()
     }
 
     pub(crate) fn save_configured(&self) -> Result<(), Error> {
         self.save_if_configured()
     }
 
-    /// A mutation's save: inside [`Self::change`] it is noted and made once when the change
-    /// ends; a store with a database refuses it anywhere else, since a write that did not read
-    /// the database again under the exclusive lock would undo another process's change. A store
-    /// with no database has made its change already, so its update log (when it has one) takes
-    /// it now.
+    /// A store with a database refuses a save outside `change`.
     fn save_if_configured(&self) -> Result<(), Error> {
         self.changed.0.store(true, Ordering::Relaxed);
         if self.db_path().is_none() {
@@ -355,14 +475,17 @@ impl PrincipalStore {
         self.inside_change()
     }
 
-    /// Save the store now, inside [`Self::change`], for a write a later failure in the same
-    /// change must not take back: what MIT commits with its own put, logged as that put is.
+    /// A put that must stick is written before the change can roll it back.
     fn save_through(&self) -> Result<(), Error> {
         self.inside_change()?;
+        self.wrote_through.0.store(true, Ordering::Relaxed);
         self.logged_write(|| self.write_database())
     }
 
-    /// Refuse a save outside [`Self::change`] for a store with a database.
+    pub(crate) fn flush_unlogged(&mut self) -> Result<(), Error> {
+        self.save_through()
+    }
+
     fn inside_change(&self) -> Result<(), Error> {
         match self.db_path() {
             Some(db) if !self.saves_held => Err(Error::Db {
@@ -376,8 +499,6 @@ impl PrincipalStore {
         }
     }
 
-    /// Write the store to its database: under the typed master key with `kadmin.local -m`, else
-    /// under the stash's.
     fn write_database(&self) -> Result<(), PersistError> {
         match (&self.persist_master, &self.persist_paths) {
             (Some((db, master)), _) => crate::persist::save_store_with_master(
@@ -391,24 +512,38 @@ impl PrincipalStore {
         }
     }
 
-    /// One change to the database, whole, under its exclusive lock: the lock is taken (waiting
-    /// for any other holder), the database is read again, `f` runs on the store, and when `f`
-    /// returns `Ok` after a mutation the database is written once and its age moves forward;
-    /// when `f` returns `Err`, the store is read back, so nothing of it stays in memory or on
-    /// disk. A store with no database runs `f` alone, and so does a change inside a change.
-    /// With an update log mapped as a primary's, each put and delete the change made is encoded
-    /// before the write and appended to the log after it, one entry each, in order.
-    /// MIT `krb5_db2_put_principal` (`plugins/kdb/db2/kdb_db2.c:828-854`): a put takes the exclusive lock, writes, moves the age and unlocks.
-    /// MIT `ctx_lock` (`plugins/kdb/db2/kdb_db2.c:439-455`): the exclusive lock reopens the database, so the put starts from what is on disk.
-    ///
-    /// # Errors
-    ///
-    /// The outer [`Error::Db`] when the lock may not be taken (MIT's `KRB5_KDB_CANTLOCK_DB` text,
-    /// or a missing lock file), the database cannot be read again, an update cannot be encoded
-    /// for the log, or the write fails (a writer that may not write the database is refused with
-    /// MIT's text, and the store is read back), or the log cannot be written after the database
-    /// was (the change stays, as MIT's put does); the inner result is `f`'s.
+    // MIT: `krb5_db2_put_principal` (plugins/kdb/db2/kdb_db2.c:828-854)
+    // MIT: `ctx_lock` (plugins/kdb/db2/kdb_db2.c:439-455)
+    /// The exclusive lock reopens the database, so the put starts from disk.
     pub fn change<T, E>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> Result<T, E>,
+    ) -> Result<Result<T, E>, Error> {
+        if self.post.is_some() {
+            return Ok(f(self));
+        }
+        let queue = PostQueue::new(self);
+        let out = queue.0.change_locked(f);
+        let calls = queue.0.post.take().unwrap_or_default();
+        drop(queue);
+        let committed = matches!(out, Ok(Ok(_)));
+        for call in calls {
+            if committed || call.always() {
+                call.run(self);
+            }
+        }
+        out
+    }
+
+    pub(crate) fn postcommit(&mut self, call: Post) {
+        if let Some(calls) = self.post.as_mut() {
+            calls.push(call);
+        } else {
+            call.run(self);
+        }
+    }
+
+    fn change_locked<T, E>(
         &mut self,
         f: impl FnOnce(&mut Self) -> Result<T, E>,
     ) -> Result<Result<T, E>, Error> {
@@ -422,104 +557,145 @@ impl PrincipalStore {
         let held = lock
             .hold(DbLockMode::Exclusive)
             .map_err(|e| Error::from(PersistError::from(e)))?;
-        self.reread(&lock)?;
+        drop(self.ahead.take());
+        self.refresh_for_change(&lock, &db)?;
         self.changed.0.store(false, Ordering::Relaxed);
+        self.wrote_through.0.store(false, Ordering::Relaxed);
+        let before = Before::of(self);
+        self.map.begin_change();
         let done = {
             let inside = HeldSaves::new(self);
             f(&mut *inside.0)
         };
+        let log = self.log.clone();
+        let mut staged = None;
         let out = match done {
             Ok(v) if self.changed.0.load(Ordering::Relaxed) => {
+                let append = self.append_plan(&before);
+                let mut appended = 0;
                 let written = self
                     .prepare_log()
                     .map_err(LoggedWrite::Before)
                     .and_then(|p| {
-                        self.write_logged(p, || self.write_database().map_err(Error::from))
+                        self.write_staged(log.as_deref(), p, || match &append {
+                            Some((ids, _, _)) if ids.is_empty() => Ok(()),
+                            Some((ids, master, at)) => {
+                                appended =
+                                    crate::persist::append_change(self, &db, master, *at, ids)?;
+                                lock.update_age();
+                                Ok(())
+                            }
+                            None => self.write_database().map_err(Error::from),
+                        })
                     });
                 match written {
-                    Ok(()) | Err(LoggedWrite::After(_)) => {
-                        self.db_stamp = DbStamp::now(&lock, &db);
-                        tracing::info!(
+                    Ok(batch) => {
+                        staged = batch;
+                        self.map.end_change();
+                        self.db_stamp = match (&append, &self.db_stamp) {
+                            (Some((ids, _, at)), Some(s)) => DbStamp::holding(
+                                &lock,
+                                &db,
+                                s.records + u64::try_from(ids.len()).unwrap_or_default(),
+                                at + appended,
+                            ),
+                            _ => DbStamp::now(&lock, &db, self.map.len_u64()),
+                        };
+                        tracing::debug!(
                             event = krb5_log::events::ADMIN,
                             component = "krb5-kdc",
                             outcome = "ok",
                             detail = "saved store",
                             db = %db.display(),
                         );
-                        written.map(|()| Ok(v)).map_err(LoggedWrite::into_error)
+                        Ok(Ok(v))
                     }
                     Err(e) => {
-                        let _ = self.reread(&lock);
+                        self.read_back(&lock);
                         Err(e.into_error())
                     }
                 }
             }
-            Ok(v) => Ok(Ok(v)),
+            Ok(v) => {
+                self.map.end_change();
+                Ok(Ok(v))
+            }
             Err(e) => {
-                let _ = self.reread(&lock);
+                if self.wrote_through.0.load(Ordering::Relaxed) || !before.restore(self) {
+                    self.read_back(&lock);
+                }
                 Ok(Err(e))
             }
         };
         drop(held);
+        // MIT: `krb5_db_put_principal` (lib/kdb/kdb5.c:1002-1007)
+        iprop_ulog::finish_staged(staged)?;
         out
     }
 
-    /// Hold the database's lock exclusively until [`Self::unlock_database`], across changes:
-    /// kadmin.local's `lock`. Every other process waits meanwhile.
-    /// MIT `kadm5_lock` (`lib/kadm5/srv/server_init.c:285-296`): `krb5_db_lock` in exclusive mode.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Db`] when the store has no database or the lock may not be taken (MIT's
-    /// `KRB5_KDB_CANTLOCK_DB` text).
+    fn append_plan(&self, before: &Before) -> Option<(Vec<String>, krb5_crypto::ProtocolKey, u64)> {
+        if self.wrote_through.0.load(Ordering::Relaxed)
+            || before.policies != self.policies
+            || before.domain_sid != self.domain_sid
+        {
+            return None;
+        }
+        let stamp = self.db_stamp.as_ref().filter(|s| s.dump)?;
+        let live = self.map.len_u64();
+        let dead = stamp.records.saturating_sub(live);
+        if dead > live && dead >= 256 {
+            return None;
+        }
+        Some((self.map.touched()?, self.journal_key()?, stamp.applied))
+    }
+
+    fn refresh_for_change(
+        &mut self,
+        lock: &Arc<DbLock>,
+        db: &std::path::Path,
+    ) -> Result<(), Error> {
+        let pending = !self
+            .pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_empty();
+        if pending {
+            return self.reread(lock);
+        }
+        self.catch_up(lock, db)?;
+        Ok(())
+    }
+
+    fn read_back(&mut self, lock: &Arc<DbLock>) {
+        self.db_stamp = None;
+        let _ = self.reread(lock);
+    }
+
+    // MIT: `kadm5_lock` (lib/kadm5/srv/server_init.c:285-296)
     pub fn lock_database(&mut self) -> Result<(), Error> {
         let lock = self.db_lock()?;
         lock.lock(DbLockMode::Exclusive)
             .map_err(|e| Error::from(PersistError::from(e)))
     }
 
-    /// Let go of the lock [`Self::lock_database`] took: kadmin.local's `unlock`.
-    /// MIT `kadm5_unlock` (`lib/kadm5/srv/server_init.c:298-309`): `krb5_db_unlock`.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Db`] when no lock is held or the unlock fails.
+    // MIT: `kadm5_unlock` (lib/kadm5/srv/server_init.c:298-309)
     pub fn unlock_database(&mut self) -> Result<(), Error> {
         let lock = self.db_lock()?;
         lock.unlock()
             .map_err(|e| Error::from(PersistError::from(e)))
     }
 
-    /// Provision a PKINIT test CA. Off by default so a KDC without an
-    /// operator-supplied trust anchor does not mint untrusted CMS.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Crypto`] when P-256 key generation fails.
-    pub fn enable_pkinit_ca(&mut self) -> Result<&PkinitCa, Error> {
-        if self.env.pkinit_ca.is_none() {
-            self.env.pkinit_ca = PkinitCa::generate();
-        }
-        self.env
-            .pkinit_ca
-            .as_ref()
-            .ok_or_else(|| Error::Crypto("pkinit CA generate failed".into()))
+    #[must_use]
+    pub fn pkinit(&self) -> Option<&crate::pkinit::PkinitKdc> {
+        self.env.pkinit.as_deref()
     }
 
-    /// Realm name.
     #[must_use]
     pub fn realm(&self) -> &str {
         &self.realm
     }
 
-    /// Seed krbtgt, a password user, and an admin. Host principals are added
-    /// through [`Self::create_host`].
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Rng`] when the CSPRNG fails generating the krbtgt key;
-    /// [`Error::PasswordPolicy`] when `user_password` or `admin_password` is empty;
-    /// [`Error::AlreadyExists`] when `user` and `admin` are the same name.
+    #[cfg(any(test, feature = "test-hooks"))]
     pub fn bootstrap(
         realm: &str,
         user: &str,
@@ -530,15 +706,7 @@ impl PrincipalStore {
         Self::bootstrap_with_kdc_conf(realm, user, user_password, admin, admin_password, None)
     }
 
-    /// [`Self::bootstrap`] after applying `kdc.conf` so `supported_enctypes`
-    /// orders keys like MIT `kdb5_util create` / `addprinc` without `-e`.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Crypto`] when `kdc` sets a `domain_sid` that is not valid SDDL;
-    /// [`Error::Rng`] when the CSPRNG fails generating the krbtgt key;
-    /// [`Error::PasswordPolicy`] when `user_password` or `admin_password` is empty;
-    /// [`Error::AlreadyExists`] when `user` and `admin` are the same name.
+    #[cfg(any(test, feature = "test-hooks"))]
     pub fn bootstrap_with_kdc_conf(
         realm: &str,
         user: &str,
@@ -547,25 +715,21 @@ impl PrincipalStore {
         admin_password: &[u8],
         kdc: Option<&krb5_config::KdcConf>,
     ) -> Result<Self, Error> {
-        let mut store = Self::new(realm);
-        // No profile: keep the harness create default (7 d) so `--test-realm`
-        // principals match stock `max_renewable_life = 7d`. A supplied
-        // kdc.conf with the key omitted then sets create = 0 and the realm
-        // cap = 7 d (`kdc/main.c` vs `alt_prof.c`).
+        let mut store = Self::try_new(realm)?;
+        // No profile keeps a 7-day renewable life, so the test realm matches stock.
         store.policy.max_renewable_life = 7 * 24 * 3600;
         store.policy.spake_preauth_groups = vec![krb5_crypto::SpakeGroup::P256];
-        // The test realm's keys: a profile's `supported_enctypes` replaces these.
-        store.policy.supported_enctypes = crate::testrealm::TEST_SUPPORTED_ENCTYPES.to_vec();
+        store.policy.supported_enctypes = crate::testrealm::TEST_SUPPORTED_ENCTYPES
+            .map(krb5_crypto::KeySalt::from)
+            .to_vec();
         if let Some(c) = kdc {
             store.apply_kdc_conf(c)?;
         }
-        // MIT `kdb5_util create` (`kdb5_create.c` `add_principal`): the TGS
-        // key is random and the entry carries no default flags.
         let tgt = PrincipalName::krbtgt(realm);
         store.create_principal_3_in(
             &tgt,
             realm,
-            None,
+            CreateKeys::Random,
             &[],
             &AdminEnt {
                 mask: kadm5_mask::ATTRIBUTES,
@@ -596,55 +760,26 @@ impl PrincipalStore {
         Ok(store)
     }
 
-    /// Lookup `name@realm`, following alias stubs like `krb5_db_get_principal`.
     #[must_use]
     pub fn get(&self, id: &str) -> Option<&Principal> {
         self.map.get(&self.resolve_id(id)?)
     }
 
-    /// The stored record itself, alias stubs included (`kdb5_util dump` view).
     #[must_use]
     pub fn get_raw(&self, id: &str) -> Option<&Principal> {
         self.map.get(id)
     }
 
-    /// Lookup by name components in this realm.
     #[must_use]
     pub fn get_name(&self, name: &PrincipalName) -> Option<&Principal> {
         self.get_in_realm(name, &self.realm)
     }
 
-    /// Lookup `name@princ_realm` (MIT `kdb_get_entry` uses the request realm).
     #[must_use]
     pub fn get_in_realm(&self, name: &PrincipalName, princ_realm: &str) -> Option<&Principal> {
         self.get(&crate::kdb::lookup_principal_id(name, princ_realm))
     }
 
-    /// PEM of the PKINIT test CA for MIT `pkinit_anchors = FILE:`.
-    #[must_use]
-    pub fn pkinit_anchor_pem(&self) -> Option<String> {
-        self.env.pkinit_ca.as_ref().map(PkinitCa::cert_pem)
-    }
-
-    /// User identity PEM (cert+key) for MIT `X509_user_identity=FILE:`.
-    #[must_use]
-    pub fn pkinit_user_pem(&self, cn: &str) -> Option<String> {
-        self.env
-            .pkinit_ca
-            .as_ref()
-            .and_then(|c| c.user_identity_pem(cn))
-    }
-
-    /// KDC identity PEM (cert+key) for MIT `pkinit_identity = FILE:`.
-    #[must_use]
-    pub fn pkinit_kdc_pem(&self) -> Option<String> {
-        self.env
-            .pkinit_ca
-            .as_ref()
-            .and_then(|c| c.kdc_identity_pem_for(&self.realm))
-    }
-
-    /// Principal ids (`name@REALM`), sorted.
     #[must_use]
     pub fn ids(&self) -> Vec<String> {
         let mut v: Vec<String> = self.map.keys().cloned().collect();
@@ -652,15 +787,29 @@ impl PrincipalStore {
         v
     }
 
-    /// Iterate principals (persistence).
     pub(crate) fn debug_principals(&self) -> impl Iterator<Item = &Principal> {
         self.map.values()
     }
 
-    /// Insert a fully-formed principal (persistence / dump load; no ulog).
     pub(crate) fn debug_insert(&mut self, mut p: Principal) {
         self.settle_rid(&mut p);
         self.map.insert_unlogged(p.id(), p);
+    }
+
+    pub(crate) fn principal_by_id(&self, id: &str) -> Option<&Principal> {
+        self.map.get(id)
+    }
+
+    pub(crate) fn reconcile_lockout_deletes(
+        &self,
+        db: &std::path::Path,
+        gone: &[String],
+    ) -> std::io::Result<()> {
+        self.lockout.reconcile_deletes(db, gone)
+    }
+
+    pub(crate) fn debug_remove(&mut self, id: &str) {
+        self.map.remove_unlogged(id);
     }
 }
 
@@ -693,12 +842,15 @@ pub use kdb_convert::{
 pub(crate) use kdb_convert::{encode_string_attrs, update_tl_data};
 pub use keys::{KeyEntry, KeyLookup, KtkdbError, ktkdb_get_entry, random_key};
 pub use password::{
-    PWQUAL_DICT, PWQUAL_EMPTY, PWQUAL_PRINC, S2K_ITERS, apply_keysalt_policy, s2k_params,
+    PWQUAL_DICT, PWQUAL_EMPTY, PWQUAL_PRINC, PasswordPlan, PreparedPassword, S2K_ITERS,
+    apply_keysalt_policy,
 };
 pub use policy::{NamedPolicy, Policy, SpakeKdc};
 pub(crate) use principal::PrincipalFields;
-pub use principal::{AdminEnt, AdminFields, KadmData, Principal, TlData, strip_db_args};
+pub use principal::{
+    AdminEnt, AdminFields, CreateKeys, CreatePlan, KadmData, PreparedCreate, Principal,
+    PrincipalBuilder, TlData, strip_db_args,
+};
 pub(crate) use principal::{db_args_put_error, refresh_kadm_tl};
 pub use pwqual::{Pwqual, clear_thread_pwqual, register_pwqual, set_thread_pwqual};
 pub use rid::{RID_FIRST_USER, RID_KRBTGT};
-pub(crate) use transit::walk_realm_instances;

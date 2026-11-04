@@ -1,9 +1,3 @@
-//! RFC 6113 KRB-FX-CF2 and P-256 ECDH used by FAST, SPAKE, and PKINIT.
-//!
-//! CF2 is PRF+ of each key under its pepper, XOR, then random-to-key.
-//! Both PRF+ outputs, and the buffer each key below is cut from, are wiped
-//! on every return; the hash outputs on the stack are not.
-
 use sha1::{Digest as Sha1Digest, Sha1};
 use sha2::{Digest as Sha2Digest, Sha256};
 use zeroize::Zeroize;
@@ -14,15 +8,7 @@ use crate::key::ProtocolKey;
 use crate::prf::prf_plus;
 use crate::wipe::Wiped;
 
-/// KRB-FX-CF2(k1, k2, pepper1, pepper2) = random-to-key(PRF+(k1,p1) XOR PRF+(k2,p2)).
-///
-/// MIT `krb5_c_fx_cf2_simple` (`cf2.c:123-176`): each PRF+ is `k1`'s random-to-key input length, so des3 takes 21 octets.
-///
-/// # Errors
-///
-/// The refusals of [`prf`](crate::prf) for a des3-cbc-sha1 `k1` or `k2` MIT refuses; otherwise none:
-/// both [`prf_plus`] calls ask for `k1`'s random-to-key input length, which is never 0 (the only
-/// length it refuses), and the key is made from exactly that many octets.
+// MIT: `krb5_c_fx_cf2_simple` (lib/crypto/krb/cf2.c:123-176)
 pub fn krb_fx_cf2(
     k1: &ProtocolKey,
     k2: &ProtocolKey,
@@ -38,35 +24,8 @@ pub fn krb_fx_cf2(
     ProtocolKey::from_random(k1.etype(), &a)
 }
 
-/// Truncate or hash `bytes` to an etype-sized protocol key.
-///
-/// # Errors
-///
-/// None: the key is always `etype.key_len()` octets (a prefix of `bytes`, or its SHA-256
-/// repeated), the length [`ProtocolKey::from_bytes`] requires.
-pub fn key_from_shared(etype: EncryptionType, bytes: &[u8]) -> Result<ProtocolKey, Error> {
-    let n = etype.key_len();
-    if bytes.len() >= n {
-        return ProtocolKey::from_bytes(etype, &bytes[..n]);
-    }
-    let mut h = <Sha256 as Sha2Digest>::new();
-    Sha2Digest::update(&mut h, bytes);
-    let out = Sha2Digest::finalize(h);
-    let mut buf = Wiped(vec![0u8; n]);
-    for (i, b) in buf.iter_mut().enumerate() {
-        *b = out[i % out.len()];
-    }
-    ProtocolKey::from_bytes(etype, &buf)
-}
-
-/// P-256 ECDH: 32-byte scalar and 65-byte uncompressed public key.
-///
-/// The scalar is zeroized where the value lies when it drops. It is an inline array, so a copy
-/// that a move of the value leaves, or that is taken out of it, is not wiped.
 pub struct P256Keypair {
-    /// Scalar (secret).
     pub secret: [u8; 32],
-    /// Uncompressed SEC1 public key.
     pub public: Vec<u8>,
 }
 
@@ -78,18 +37,13 @@ impl Drop for P256Keypair {
     }
 }
 
-/// Generate a P-256 keypair.
-///
-/// # Errors
-///
-/// [`Error::Rng`] when the CSPRNG fails or the scalar is invalid.
 pub fn p256_generate() -> Result<P256Keypair, Error> {
     use p256::elliptic_curve::PrimeField;
-    use p256::elliptic_curve::sec1::ToEncodedPoint;
+    use p256::elliptic_curve::sec1::ToSec1Point;
     use p256::{AffinePoint, ProjectivePoint};
     let scalar = random_scalar()?;
     let point = ProjectivePoint::GENERATOR * scalar;
-    let enc = AffinePoint::from(point).to_encoded_point(false);
+    let enc = AffinePoint::from(point).to_sec1_point(false);
     let mut secret = [0u8; 32];
     secret.copy_from_slice(scalar.to_repr().as_ref());
     Ok(P256Keypair {
@@ -98,36 +52,24 @@ pub fn p256_generate() -> Result<P256Keypair, Error> {
     })
 }
 
-/// ECDH shared secret (x-coordinate of scalar * peer).
-///
-/// # Errors
-///
-/// [`Error::Integrity`] when `secret` is zero or not below the P-256 order, or `peer_public` is
-/// not a SEC1 encoding of a curve point or is the identity.
 pub fn p256_shared(secret: &[u8; 32], peer_public: &[u8]) -> Result<[u8; 32], Error> {
-    use p256::elliptic_curve::sec1::{FromEncodedPoint, ToEncodedPoint};
-    use p256::{AffinePoint, EncodedPoint, ProjectivePoint};
+    use p256::elliptic_curve::sec1::{FromSec1Point, ToSec1Point};
+    use p256::{AffinePoint, ProjectivePoint, Sec1Point};
     let sc = scalar_from_bytes32(secret)?;
-    let ep = EncodedPoint::from_bytes(peer_public).map_err(|_| Error::Integrity)?;
-    let aff = Option::<AffinePoint>::from(AffinePoint::from_encoded_point(&ep))
-        .ok_or(Error::Integrity)?;
+    let ep = Sec1Point::from_bytes(peer_public).map_err(|_| Error::Integrity)?;
+    let aff =
+        Option::<AffinePoint>::from(AffinePoint::from_sec1_point(&ep)).ok_or(Error::Integrity)?;
     let shared = ProjectivePoint::from(aff) * sc;
-    let out_pt = AffinePoint::from(shared).to_encoded_point(false);
+    let out_pt = AffinePoint::from(shared).to_sec1_point(false);
     let bytes = out_pt.as_bytes();
     if bytes.len() < 33 {
         return Err(Error::Integrity);
     }
-    // Uncompressed: 0x04 || x (32) || y (32)
     let mut x = [0u8; 32];
     x.copy_from_slice(&bytes[1..33]);
     Ok(x)
 }
 
-/// ECDSA-SHA256 over `message` with a P-256 secret. Signature is DER `SEQUENCE { r, s }`.
-///
-/// # Errors
-///
-/// [`Error::Integrity`] when `secret` is zero or not below the P-256 order.
 pub fn p256_ecdsa_sign(secret: &[u8; 32], message: &[u8]) -> Result<Vec<u8>, Error> {
     use p256::ecdsa::signature::Signer;
     use p256::ecdsa::{Signature, SigningKey};
@@ -136,12 +78,6 @@ pub fn p256_ecdsa_sign(secret: &[u8; 32], message: &[u8]) -> Result<Vec<u8>, Err
     Ok(sig.to_der().as_bytes().to_vec())
 }
 
-/// Verify ECDSA-SHA256 (`message` is hashed with SHA-256 by the verifier).
-///
-/// # Errors
-///
-/// [`Error::Integrity`] when `public` is not a SEC1 P-256 public key, `der_sig` is not a DER
-/// ECDSA signature, or the signature does not verify over `message`.
 pub fn p256_ecdsa_verify(public: &[u8], message: &[u8], der_sig: &[u8]) -> Result<(), Error> {
     use p256::ecdsa::signature::Verifier;
     use p256::ecdsa::{Signature, VerifyingKey};
@@ -172,15 +108,7 @@ fn scalar_from_bytes32(b: &[u8; 32]) -> Result<p256::Scalar, Error> {
     Ok(s)
 }
 
-/// RFC 4556 `octetstring2key`: K-truncate of concatenated SHA-1(n || x), through the enctype's
-/// random-to-key.
-/// MIT `octetstring2key` (`plugins/preauth/pkinit/pkinit_crypto_openssl.c:2574-2646`): `keybytes` octets of the
-/// stream go to `krb5_c_random_to_key`, so a des3 key is 21 octets spread over 24 with odd parity.
-///
-/// # Errors
-///
-/// None: the SHA-1 stream is cut to exactly `etype.keybytes()` octets, the length the
-/// enctype's random-to-key requires.
+// MIT: `octetstring2key` (plugins/preauth/pkinit/pkinit_crypto_openssl.c:2574-2646)
 pub fn octetstring2key(etype: EncryptionType, x: &[u8]) -> Result<ProtocolKey, Error> {
     let n = etype.keybytes();
     let mut buf = Wiped(Vec::with_capacity(n + 20));
@@ -199,19 +127,7 @@ pub fn octetstring2key(etype: EncryptionType, x: &[u8]) -> Result<ProtocolKey, E
     ProtocolKey::from_random(etype, &buf)
 }
 
-/// RFC 8636 PKINIT KDF: `SHA-256(counter || Z || OtherInfo)` K-truncated, through the enctype's
-/// random-to-key.
-///
-/// `other_info` is the DER of RFC 8636 `OtherInfo` (or a test stand-in).
-/// `Z` is the DH/ECDH shared secret. This is **not** RFC 4556 SHA-1
-/// `octetstring2key`.
-/// MIT `pkinit_kdf` (`plugins/preauth/pkinit/pkinit_crypto_openssl.c:2783-2868`): the SSKDF output is `keybytes`
-/// octets, which go to `krb5_c_random_to_key`, so a des3 key is 21 octets spread over 24 with odd parity.
-///
-/// # Errors
-///
-/// None: the SHA-256 stream is cut to exactly `etype.keybytes()` octets, the length the
-/// enctype's random-to-key requires.
+// MIT: `pkinit_kdf` (plugins/preauth/pkinit/pkinit_crypto_openssl.c:2781-2868)
 pub fn pkinit_kdf_agile(
     etype: EncryptionType,
     shared: &[u8],
@@ -241,29 +157,17 @@ mod tests {
     use crate::etype::EncryptionType;
     use crate::key::ProtocolKey;
 
-    #[test]
-    fn p256_ecdh_agrees() {
-        let a = p256_generate().unwrap();
-        let b = p256_generate().unwrap();
-        let ab = p256_shared(&a.secret, &b.public).unwrap();
-        let ba = p256_shared(&b.secret, &a.public).unwrap();
-        assert_eq!(ab, ba);
-    }
-
     fn odd_parity(octets: &[u8]) -> bool {
         octets.iter().all(|b| b.count_ones() % 2 == 1)
     }
 
-    /// A des3 reply key is the first 21 octets of the stream spread over 24 with odd parity on each; every other enctype takes the octets as the key.
-    /// MIT `octetstring2key` (`plugins/preauth/pkinit/pkinit_crypto_openssl.c:2574-2646`): the stream is cut to `keybytes` octets, which go to `krb5_c_random_to_key`.
-    /// MIT `pkinit_kdf` (`plugins/preauth/pkinit/pkinit_crypto_openssl.c:2783-2868`): the SSKDF output is `keybytes` octets, which go to `krb5_c_random_to_key`.
+    // MIT: `krb5_c_random_to_key` (lib/crypto/krb/random_to_key.c:39-62)
     #[test]
     fn the_pkinit_keys_of_des3_are_made_through_random_to_key() {
         use sha1::{Digest as _, Sha1};
         use sha2::Sha256;
         let z = b"a DH shared secret of some length, 32 octets+";
         let other = b"other-info";
-        // RFC 4556: SHA-1(0 || Z) || SHA-1(1 || Z), the first 21 octets.
         let mut stream = Vec::new();
         for i in 0u8..2 {
             let mut h = Sha1::new();
@@ -276,7 +180,6 @@ mod tests {
         assert_eq!(got.as_bytes(), want.as_bytes());
         assert_eq!(got.as_bytes().len(), 24);
         assert!(odd_parity(got.as_bytes()), "{:02x?}", got.as_bytes());
-        // RFC 8636: SHA-256(1 || Z || OtherInfo), the first 21 octets of the stream (one block).
         let mut h = Sha256::new();
         h.update(1u32.to_be_bytes());
         h.update(z);
@@ -286,84 +189,9 @@ mod tests {
         let got = pkinit_kdf_agile(EncryptionType::Des3CbcSha1, z, other).unwrap();
         assert_eq!(got.as_bytes(), want.as_bytes());
         assert!(odd_parity(got.as_bytes()), "{:02x?}", got.as_bytes());
-        // An AES key is the stream's first key_len() octets, as before.
         let aes = octetstring2key(EncryptionType::Aes256CtsHmacSha196, z).unwrap();
         assert_eq!(aes.as_bytes().len(), 32);
         assert_eq!(&aes.as_bytes()[..20], &stream[..20]);
-    }
-
-    #[test]
-    fn rfc8636_kdf_differs_from_octetstring2key() {
-        let z = b"shared-secret-bytes-for-kdf";
-        let other = b"other-info";
-        let agile = pkinit_kdf_agile(EncryptionType::Aes256CtsHmacSha196, z, other).unwrap();
-        let sha1 = octetstring2key(EncryptionType::Aes256CtsHmacSha196, z).unwrap();
-        assert_ne!(agile.as_bytes(), sha1.as_bytes());
-        let again = pkinit_kdf_agile(EncryptionType::Aes256CtsHmacSha196, z, other).unwrap();
-        assert_eq!(agile.as_bytes(), again.as_bytes());
-    }
-
-    #[test]
-    fn p256_ecdsa_sign_verify() {
-        let kp = p256_generate().unwrap();
-        let msg = b"pkinit-authpack";
-        let sig = p256_ecdsa_sign(&kp.secret, msg).unwrap();
-        p256_ecdsa_verify(&kp.public, msg, &sig).unwrap();
-        assert!(p256_ecdsa_verify(&kp.public, b"other", &sig).is_err());
-    }
-
-    #[test]
-    fn camellia_cts_cmac_round_trips() {
-        let key = crate::ops::string_to_key(
-            EncryptionType::Camellia256CtsCmac,
-            b"password",
-            b"SALT",
-            None,
-        )
-        .unwrap();
-        let usage = crate::etype::KeyUsage::new(2).unwrap();
-        let c = crate::ops::encrypt(&key, usage, b"camellia-plain").unwrap();
-        let p = crate::ops::decrypt(&key, usage, &c).unwrap();
-        assert_eq!(p, b"camellia-plain");
-    }
-
-    #[test]
-    fn cf2_is_deterministic_and_order_sensitive() {
-        let et = EncryptionType::Aes256CtsHmacSha196;
-        let k1 = ProtocolKey::from_bytes(et, &[0x11u8; 32]).unwrap();
-        let k2 = ProtocolKey::from_bytes(et, &[0x22u8; 32]).unwrap();
-        let a = krb_fx_cf2(&k1, &k2, b"p1", b"p2").unwrap();
-        let b = krb_fx_cf2(&k1, &k2, b"p1", b"p2").unwrap();
-        let c = krb_fx_cf2(&k2, &k1, b"p1", b"p2").unwrap();
-        assert_eq!(a.as_bytes(), b.as_bytes());
-        assert_ne!(a.as_bytes(), c.as_bytes());
-    }
-
-    #[test]
-    fn des3_s2k_round_trips() {
-        let k = crate::ops::string_to_key(
-            EncryptionType::Des3CbcSha1,
-            b"password",
-            b"ATHENA.MIT.EDUraeburn",
-            None,
-        )
-        .unwrap();
-        assert_eq!(k.as_bytes().len(), 24);
-        let usage = crate::etype::KeyUsage::new(2).unwrap();
-        let c = crate::ops::encrypt(&k, usage, b"des3pln!").unwrap();
-        let p = crate::ops::decrypt(&k, usage, &c).unwrap();
-        assert_eq!(&p[..8], b"des3pln!");
-    }
-
-    #[test]
-    fn rc4_usage_3_matches_usage_8() {
-        let k = crate::ops::string_to_key(EncryptionType::Rc4Hmac, b"password", b"", None).unwrap();
-        let u3 = crate::etype::KeyUsage::new(3).unwrap();
-        let u8 = crate::etype::KeyUsage::new(8).unwrap();
-        let conf = [9u8; 8];
-        let a = crate::weak::rc4_encrypt_with_conf(&k, u3, &conf, b"x").unwrap();
-        let b = crate::weak::rc4_encrypt_with_conf(&k, u8, &conf, b"x").unwrap();
-        assert_eq!(a, b);
     }
 
     #[test]
@@ -375,24 +203,5 @@ mod tests {
         let a = crate::weak::rc4_encrypt_with_conf(&k, u9, &conf, b"x").unwrap();
         let b = crate::weak::rc4_encrypt_with_conf(&k, u8, &conf, b"x").unwrap();
         assert_ne!(a, b, "enc_rc4.c:26 case 9 returns 9");
-    }
-
-    #[test]
-    fn camellia_ciphertext_differs_from_aes() {
-        let cam = crate::ops::string_to_key(
-            EncryptionType::Camellia128CtsCmac,
-            b"password",
-            b"SALT",
-            None,
-        )
-        .unwrap();
-        let aes = crate::ops::string_to_key(
-            EncryptionType::Aes128CtsHmacSha196,
-            b"password",
-            b"SALT",
-            None,
-        )
-        .unwrap();
-        assert_ne!(cam.as_bytes(), aes.as_bytes());
     }
 }

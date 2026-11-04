@@ -2,8 +2,8 @@
 # nfs-probe.sh — runs INSIDE the throwaway privileged probe container on `services`
 # (S2's probe; scenarios/services.sh). stdin carries `ALICE_PW=<value>` (from
 # ~/kerber-lab/secrets, never on argv) and `TAG=<prefix of the test files>`, followed by
-# this script. The client side is configured exactly as the satomlin kit's
-# satomlin-ldap-setup-v5.sh configures a fleet client (§6 configure_rpc_gssd,
+# this script. The client side is configured exactly as the reference client kit's
+# LDAP setup script (v5) configures a fleet client (§6 configure_rpc_gssd,
 # prime_nfs_creds, the idmapd.conf block), with the kit's host/realm values swapped:
 # KDC kerber.test, NFS_SERVER services.kerber.test, REALM KERBER.TEST.
 #   machine credential: host/services.kerber.test (keytab bind-mounted at /etc/krb5.keytab)

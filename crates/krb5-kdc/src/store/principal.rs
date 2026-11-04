@@ -1,17 +1,13 @@
-//! Realm principal records (`kdb5.c` `krb5_db_entry`) and the kadm5
-//! create / modify / rename / delete / unlock path (`svr_principal.c`,
-//! `server_stubs.c`), including `KRB5_TL_*` stamps and the lockout attributes
-//! the KDC records (`db2/lockout.c`).
+//! Realm principal records and the kadm5 create, modify, rename, and delete path.
 
-use krb5_crypto::EncryptionType;
+use krb5_crypto::{EncryptionType, KeySalt};
 use krb5_types::PrincipalName;
 
-use super::flags::{
-    KDB_DISALLOW_ALL_TIX, KDB_PWCHANGE_SERVICE, KDB_REQUIRES_PRE_AUTH, KDB_V1_BASE_LENGTH,
-};
-use super::keys::{KeyEntry, KeyLookup, random_key};
-use super::password::{apply_keysalt_policy, keys_from_password};
-use super::{PrincipalStore, kadm5_mask, unix_now, unix_now_u32};
+use super::flags::{KDB_DISALLOW_ALL_TIX, KDB_REQUIRES_PRE_AUTH, KDB_V1_BASE_LENGTH};
+use super::keys::{KeyEntry, KeyLookup, random_keys};
+use super::password::{apply_keysalt_policy, c_password, keys_from_password};
+use super::policy::NamedPolicy;
+use super::{PrincipalStore, kadm5_mask, unix_now_u32};
 use crate::acl::{Acl, AdminOp, Restrictions};
 use crate::error::Error;
 use crate::kdb_dump::{
@@ -29,20 +25,24 @@ fn qualify_s4u_from(from: &str, local_realm: &str) -> String {
     }
 }
 
-/// MIT dump `tl_data` triplet (type, length implied by contents).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct TlData {
-    /// `tl_data_type` (`KRB5_TL_*`).
     pub ty: i32,
-    /// Raw contents (length is `contents.len()`).
     pub contents: Vec<u8>,
 }
 
-/// `extract_db_args_from_tl_data` + DB2 reject.
-/// MIT `extract_db_args_from_tl_data` (`kdb5.c:893-945`): a `KRB5_TL_DB_ARGS` without a
-/// trailing NUL is `EINVAL`; the rest become the put's `db_args`.
-/// MIT `krb5_db2_put_principal` (`kdb_db2.c:817-822`): DB2 refuses any `db_args` with `EINVAL`
-/// and the message `Unsupported argument "%s" for db2`.
+impl std::fmt::Debug for TlData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TlData")
+            .field("ty", &self.ty)
+            .field("contents", &self.contents.len())
+            .finish()
+    }
+}
+
+// MIT: `extract_db_args_from_tl_data` (kdb5.c:893-945)
+/// A `KRB5_TL_DB_ARGS` without a trailing NUL is `EINVAL`.
+// MIT: `krb5_db2_put_principal` (kdb_db2.c:817-822)
 #[must_use]
 pub(crate) fn db_args_put_error(tl: &[TlData]) -> Option<Error> {
     for t in tl {
@@ -60,11 +60,6 @@ pub(crate) fn db_args_put_error(tl: &[TlData]) -> Option<Error> {
     None
 }
 
-/// Remove every `KRB5_TL_DB_ARGS` after `db_args_put_error`.
-///
-/// # Errors
-///
-/// [`Error::InvalidArgument`] when any `0x7fff` is present or not NUL-terminated.
 pub fn strip_db_args(tl: &mut Vec<TlData>) -> Result<(), Error> {
     if let Some(e) = db_args_put_error(tl) {
         return Err(e);
@@ -73,19 +68,11 @@ pub fn strip_db_args(tl: &mut Vec<TlData>) -> Result<(), Error> {
     Ok(())
 }
 
-/// The kadm5 admin record MIT keeps in `KRB5_TL_KADM_DATA` (`osa_princ_ent_rec`)
-/// beside the bound policy: `aux_attributes`, the history ring position, the
-/// history key's kvno, and the old passwords' keys as stored (encrypted under
-/// that history key; [`Principal::key_history`] is their decrypted view).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KadmData {
-    /// `aux_attributes` (`KADM5_POLICY` follows [`Principal::pw_policy`]).
     pub aux_attributes: u32,
-    /// `old_key_next`.
     pub old_key_next: u32,
-    /// `admin_history_kvno`.
     pub admin_history_kvno: u32,
-    /// `old_keys`, one entry per old password, as MIT stores them.
     pub old_keys: Vec<Vec<OsaKeyData>>,
 }
 
@@ -101,7 +88,6 @@ impl Default for KadmData {
 }
 
 impl KadmData {
-    /// The record's fields from a decoded `KRB5_TL_KADM_DATA`.
     #[must_use]
     pub fn from_osa(osa: &OsaPrincEnt) -> Self {
         Self {
@@ -113,80 +99,100 @@ impl KadmData {
     }
 }
 
-/// One realm principal.
-#[derive(Clone, Debug)]
+/// Unix seconds, 0 never; max_life 0: no limit; renewable life 0: no renewal.
+#[derive(Clone)]
 pub struct Principal {
-    /// Name (no realm).
     pub name: PrincipalName,
-    /// Realm.
     pub realm: String,
-    /// Active key_data (current kvno, plus `keepold` kvnos).
     pub keys: Vec<KeyEntry>,
-    /// OSA password-history keys (dump `TL_KERBER_HIST`; not getprinc/EXTRACT).
     pub key_history: Vec<KeyEntry>,
-    /// Salt used for password-derived keys.
     pub salt: Vec<u8>,
-    /// Whether AS requires PA-ENC-TIMESTAMP.
-    pub requires_preauth: bool,
-    /// Max ticket life in seconds (0 = use realm policy).
     pub max_life: u64,
-    /// Locked out.
-    pub locked: bool,
-    /// Password expiry unix seconds (0 = none).
     pub pw_expire: u32,
-    /// MIT KDB attributes bitfield (passthrough for dump/load).
     pub attributes: u32,
-    /// Max renewable life in seconds (0 is a cap of 0).
     pub max_renewable_life: u64,
-    /// Principal expiration unix seconds (0 = never).
     pub expiration: u32,
-    /// Last successful authentication unix seconds.
     pub last_success: u32,
-    /// Last failed authentication unix seconds.
     pub last_failed: u32,
-    /// Failed password attempts.
     pub fail_auth_count: u32,
-    /// Master-key kvno that encrypts `key_data`.
     pub mkvno: u16,
-    /// Dump `len` field (`KRB5_KDB_V1_BASE_LENGTH` = 38).
     pub db_entry_len: u32,
-    /// Opaque MIT `tl_data` for lossless dump round-trip.
     pub tl_data: Vec<TlData>,
-    /// Opaque MIT extra data (`e_data`).
     pub e_data: Vec<u8>,
-    /// Relative ID in the realm domain SID (0 = unassigned).
     pub rid: u32,
-    /// Impersonators allowed to S4U2Proxy here (RBCD), `name@REALM`.
     pub s4u_allowed_from: Vec<String>,
-    /// Target names this principal may S4U2Proxy to (classic constrained
-    /// delegation / `msDS-AllowedToDelegateTo`).
     pub s4u_allowed_to: Vec<String>,
-    /// Bound named password policy (`policy\t` / kadm5).
     pub pw_policy: Option<String>,
-    /// MIT's `KRB5_TL_KADM_DATA` record (policy bit, history ring and keys).
     pub kadm: KadmData,
-    /// MIT string attributes (`setstr` / `KRB5_TL_STRING_ATTRS`).
     pub string_attrs: Vec<(String, String)>,
 }
 
-/// Attributes stored on a `krb5_db_entry`.
-///
-/// MIT `krb5_db_entry` (`include/kdb.h:191-213`): preauth, maximum
-/// ticket life, the disallow-all-tickets lock, and password expiration.
+impl std::fmt::Debug for Principal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Principal")
+            .field("name", &self.name)
+            .field("realm", &self.realm)
+            .field("keys", &self.keys.len())
+            .field("key_history", &self.key_history.len())
+            .field("salt", &self.salt.len())
+            .field("max_life", &self.max_life)
+            .field("pw_expire", &self.pw_expire)
+            .field("attributes", &self.attributes)
+            .field("max_renewable_life", &self.max_renewable_life)
+            .field("expiration", &self.expiration)
+            .field("last_success", &self.last_success)
+            .field("last_failed", &self.last_failed)
+            .field("fail_auth_count", &self.fail_auth_count)
+            .field("mkvno", &self.mkvno)
+            .field("db_entry_len", &self.db_entry_len)
+            .field("tl_data", &self.tl_data)
+            .field("e_data", &self.e_data.len())
+            .field("rid", &self.rid)
+            .field("s4u_allowed_from", &self.s4u_allowed_from)
+            .field("s4u_allowed_to", &self.s4u_allowed_to)
+            .field("pw_policy", &self.pw_policy)
+            .field("kadm", &self.kadm)
+            .field("string_attrs", &self.string_attrs)
+            .finish()
+    }
+}
+
+// MIT: `krb5_db_entry` (include/kdb.h:191-213)
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct PrincipalFields {
-    /// `KRB5_KDB_REQUIRES_PRE_AUTH`.
     pub(crate) requires_preauth: bool,
-    /// Maximum ticket life, seconds.
     pub(crate) max_life: u64,
-    /// `KRB5_KDB_DISALLOW_ALL_TIX`.
     pub(crate) locked: bool,
-    /// Password expiration, Unix time. Zero means none.
     pub(crate) pw_expire: u32,
 }
 
 impl Principal {
-    /// Construct a principal with dump metadata zeroed (bootstrap / KDB3 load).
+    #[must_use]
+    pub fn tl_with_s4u(&self) -> Vec<TlData> {
+        let mut tl = self.tl_data.clone();
+        crate::kdb_dump::merge_s4u_tl(&mut tl, self);
+        tl
+    }
+
+    // MIT: `missing_required_preauth` (kdc_preauth.c:729-750)
+    #[must_use]
+    pub fn requires_preauth(&self) -> bool {
+        self.attributes & KDB_REQUIRES_PRE_AUTH != 0
+    }
+
+    #[must_use]
+    pub fn locked(&self) -> bool {
+        self.attributes & KDB_DISALLOW_ALL_TIX != 0
+    }
+
+    pub(crate) fn set_locked(&mut self, on: bool) {
+        if on {
+            self.attributes |= KDB_DISALLOW_ALL_TIX;
+        } else {
+            self.attributes &= !KDB_DISALLOW_ALL_TIX;
+        }
+    }
+
     pub(crate) fn from_keys(
         name: PrincipalName,
         realm: String,
@@ -213,9 +219,7 @@ impl Principal {
             keys,
             key_history: Vec::new(),
             salt,
-            requires_preauth,
             max_life,
-            locked,
             pw_expire,
             attributes,
             max_renewable_life: 0,
@@ -237,46 +241,149 @@ impl Principal {
     }
 }
 
-/// The `kadm5_principal_ent_rec` fields `kadm5_create_principal_3` and
-/// `impose_restrictions` read, with the request `mask`.
-/// MIT `kadm5_create_principal_3` (`svr_principal.c:376-420`): a field is applied only when
-/// its [`kadm5_mask`] bit is set; otherwise the realm default (`handle->params.*`) is used.
-/// MIT `impose_restrictions` (`auth.c:205-265`): the ACL restrictions read and rewrite these
-/// fields and the request `mask`.
-/// MIT `auth_restrict` (`auth.c:267-272`): the restriction hook receives the record and the
-/// request `mask`.
-/// Values are as the client sent them (MIT `kadmin` zero-fills the record), which matters
-/// for restrictions that set a bit on a value the client never meant.
+pub struct PrincipalBuilder {
+    name: PrincipalName,
+    realm: String,
+    keys: Vec<KeyEntry>,
+    salt: Vec<u8>,
+    attributes: u32,
+    max_life: u64,
+    pw_expire: u32,
+}
+
+impl PrincipalBuilder {
+    #[must_use]
+    pub fn new(name: PrincipalName, realm: impl Into<String>) -> Self {
+        let realm = realm.into();
+        let salt = name.default_salt(&realm);
+        Self {
+            name,
+            realm,
+            keys: Vec::new(),
+            salt,
+            attributes: 0,
+            max_life: 0,
+            pw_expire: 0,
+        }
+    }
+
+    #[must_use]
+    pub fn keys(mut self, keys: Vec<KeyEntry>) -> Self {
+        self.keys = keys;
+        self
+    }
+
+    #[must_use]
+    pub fn attributes(mut self, attributes: u32) -> Self {
+        self.attributes = attributes;
+        self
+    }
+
+    #[must_use]
+    pub fn requires_preauth(mut self, on: bool) -> Self {
+        if on {
+            self.attributes |= KDB_REQUIRES_PRE_AUTH;
+        } else {
+            self.attributes &= !KDB_REQUIRES_PRE_AUTH;
+        }
+        self
+    }
+
+    #[must_use]
+    pub fn locked(mut self, on: bool) -> Self {
+        if on {
+            self.attributes |= KDB_DISALLOW_ALL_TIX;
+        } else {
+            self.attributes &= !KDB_DISALLOW_ALL_TIX;
+        }
+        self
+    }
+
+    #[must_use]
+    pub fn max_life(mut self, max_life: u64) -> Self {
+        self.max_life = max_life;
+        self
+    }
+
+    #[must_use]
+    pub fn build(self) -> Principal {
+        let mut p = Principal::from_keys(
+            self.name,
+            self.realm,
+            self.keys,
+            self.salt,
+            PrincipalFields {
+                requires_preauth: self.attributes & KDB_REQUIRES_PRE_AUTH != 0,
+                max_life: self.max_life,
+                locked: self.attributes & KDB_DISALLOW_ALL_TIX != 0,
+                pw_expire: self.pw_expire,
+            },
+        );
+        p.attributes = self.attributes;
+        p
+    }
+}
+
+// MIT: `kadm5_create_principal_3` (svr_principal.c:376-420)
+/// A field applies only with its mask bit set; else the realm default.
+// MIT: `impose_restrictions` (auth.c:205-265)
+// MIT: `auth_restrict` (auth.c:267-272)
+#[derive(Copy, Clone)]
+pub enum CreateKeys<'a> {
+    Password(&'a [u8]),
+    Random,
+    Explicit(&'a [KeyEntry]),
+}
+
+struct CreateInputs {
+    name: PrincipalName,
+    realm: String,
+    id: String,
+    policy_name: Option<String>,
+    policy: Option<NamedPolicy>,
+    keysalts: Vec<KeySalt>,
+    kvno: u32,
+    now: u32,
+}
+
+pub struct CreatePlan {
+    inputs: CreateInputs,
+    ent: AdminEnt,
+    password: zeroize::Zeroizing<Vec<u8>>,
+}
+
+pub struct PreparedCreate {
+    plan: CreatePlan,
+    keys: Vec<KeyEntry>,
+}
+
+impl CreatePlan {
+    // MIT: `kadm5_create_principal_3` (lib/kadm5/srv/svr_principal.c:460-462)
+    pub fn derive(self) -> Result<PreparedCreate, Error> {
+        let i = &self.inputs;
+        let keys = keys_from_password(&i.keysalts, &self.password, &i.name, &i.realm, i.kvno)?;
+        Ok(PreparedCreate { plan: self, keys })
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AdminEnt {
-    /// `KADM5_*` bits.
     pub mask: u32,
-    /// `attributes` (`KADM5_ATTRIBUTES`).
     pub attributes: u32,
-    /// `max_life` seconds (`KADM5_MAX_LIFE`).
     pub max_life: u32,
-    /// `max_renewable_life` seconds (`KADM5_MAX_RLIFE`).
     pub max_renewable_life: u32,
-    /// `princ_expire_time` (`KADM5_PRINC_EXPIRE_TIME`).
     pub princ_expire_time: u32,
-    /// `pw_expiration` (`KADM5_PW_EXPIRATION`).
     pub pw_expiration: u32,
-    /// `kvno` (`KADM5_KVNO`).
     pub kvno: u32,
-    /// `policy` (`KADM5_POLICY`; `KADM5_POLICY_CLR` clears).
     pub policy: Option<String>,
 }
 
 impl Principal {
-    /// `name@REALM` lookup key (`krb5_unparse_name`).
     #[must_use]
     pub fn id(&self) -> String {
         crate::kdb::lookup_principal_id(&self.name, &self.realm)
     }
 
-    /// Target of an alias stub (`krb5_dbe_read_alias`): the NUL-terminated
-    /// unparsed name in `KRB5_TL_ALIAS_TARGET`. An unterminated value is
-    /// MIT `KRB5_KDB_TRUNCATED_RECORD` and resolves to nothing.
     #[must_use]
     pub fn alias_target(&self) -> Option<String> {
         let tl = self.tl_data.iter().find(|t| t.ty == TL_ALIAS_TARGET)?;
@@ -287,7 +394,6 @@ impl Principal {
         String::from_utf8(target.to_vec()).ok()
     }
 
-    /// First key of `etype`, if present (highest kvno preferred).
     #[must_use]
     pub fn key_for(&self, etype: EncryptionType) -> Option<&KeyEntry> {
         self.keys
@@ -296,37 +402,18 @@ impl Principal {
             .max_by_key(|k| k.kvno)
     }
 
-    /// The first stored key of the highest kvno, *unfiltered*: MIT
-    /// `current_kvno(tgt)` / `tgt->key_data[0]`. KDC key selection goes
-    /// through [`crate::Policy::first_current_key`], which skips
-    /// non-permitted enctypes the way `krb5_dbe_find_enctype` does.
     #[must_use]
     pub fn first_current_key(&self) -> Option<&KeyEntry> {
         let kvno = self.keys.iter().map(|k| k.kvno).max()?;
         self.first_key_at_kvno(kvno)
     }
 
-    /// The first stored key of `kvno`, unfiltered (see [`Principal::find_enctype`]
-    /// for the permitted-enctype form the KDC uses).
     #[must_use]
     pub fn first_key_at_kvno(&self, kvno: u32) -> Option<&KeyEntry> {
         self.keys.iter().find(|k| k.kvno == kvno)
     }
 
-    /// MIT `krb5_dbe_def_search_enctype` (`kdb_default.c:47-94`): the search from index 0
-    /// with salttype -1, i.e. `krb5_dbe_find_enctype(ent, etype, -1, kvno)`:
-    /// `etype` `None` is -1 (any); `kvno` 0 is the highest kvno and no other;
-    /// an `etype` that is not permitted is `NoPermittedKey` before the list is
-    /// read (`:60-61`); keys of a non-permitted enctype are skipped (`:82-86`)
-    /// and, when they were the only matches, the answer is `NoPermittedKey`
-    /// rather than `NoMatchingKey` (`:92-94`). Stored order decides between
-    /// several permitted keys of the same kvno, as MIT's `key_data` order does.
-    ///
-    /// # Errors
-    ///
-    /// [`KeyLookup::NoMatchingKey`] when no key matches `etype`/`kvno` at all;
-    /// [`KeyLookup::NoPermittedKey`] when `etype` itself, or every matching
-    /// key, is outside `permitted`.
+    // MIT: `krb5_dbe_def_search_enctype` (kdb_default.c:47-94)
     pub fn find_enctype(
         &self,
         etype: Option<EncryptionType>,
@@ -360,7 +447,6 @@ impl Principal {
         })
     }
 
-    /// Preferred stored key (highest etype in [`EncryptionType::preferred`]).
     #[must_use]
     pub fn best_key(&self) -> Option<&KeyEntry> {
         EncryptionType::preferred()
@@ -370,9 +456,6 @@ impl Principal {
     }
 }
 
-/// Re-encode the principal's `KRB5_TL_KADM_DATA` from its policy binding and
-/// history record (MIT `kdb_put_entry`), retiring the private policy/history
-/// `tl_data` older Rust dumps carried.
 pub(crate) fn refresh_kadm_tl(p: &mut Principal) {
     let bound = p.pw_policy.as_deref().is_some_and(|s| !s.is_empty());
     p.kadm.aux_attributes = if bound {
@@ -395,20 +478,14 @@ pub(crate) fn refresh_kadm_tl(p: &mut Principal) {
     });
 }
 
-/// MIT `kdb5_util create`: principals written without a kadm5 handle are
-/// stamped `db_creation@REALM`.
-/// MIT `db_creator_entries` (`kdb5_create.c:114-115`): the stamp's one name component is
-/// `db_creation`.
-/// MIT `db_create_princ` (`kdb5_create.c:127-133`): the `db_creation` principal that
-/// `add_principal` stamps as the modifier of each principal `kdb5_util create` writes.
-/// Live kadm5 paths pass `current_caller`.
+/// A create without a kadm5 handle is stamped `db_creation@REALM`.
+// MIT: `db_creator_entries` (kdb5_create.c:114-115)
+// MIT: `db_create_princ` (kdb5_create.c:127-133)
 pub(super) fn default_mod_actor(realm: &str) -> String {
     format!("db_creation@{realm}")
 }
 
-/// `krb5_parse_name` of `client_name` then `krb5_unparse_name`.
-/// MIT `kadm5_init` (`server_init.c:239-241`): `current_caller` is `krb5_parse_name` of
-/// `client_name`, so a name without a realm takes the default realm.
+// MIT: `kadm5_init` (server_init.c:239-241)
 fn canonical_mod_actor(actor: &str, realm: &str) -> String {
     if actor.contains('@') {
         actor.to_owned()
@@ -417,11 +494,8 @@ fn canonical_mod_actor(actor: &str, realm: &str) -> String {
     }
 }
 
-/// Stamp a change of `p` by `actor` now: the password-change time when `pwd_change`, then the
-/// modifier record, each replacing its record where it is (a new one goes first), so a change
-/// that leaves their bytes as they were leaves the tagged data as it was.
-/// MIT `krb5_dbe_update_last_pwd_change` (`lib/kdb/kdb5.c:2055-2067`): the time is updated in the entry's tagged data.
-/// MIT `krb5_dbe_update_mod_princ_data` (`lib/kdb/kdb5.c:1596-1632`): the modification time and modifier are updated in the entry's tagged data.
+// MIT: `krb5_dbe_update_last_pwd_change` (lib/kdb/kdb5.c:2055-2067)
+// MIT: `krb5_dbe_update_mod_princ_data` (lib/kdb/kdb5.c:1596-1632)
 pub(super) fn stamp_admin_tl(p: &mut Principal, pwd_change: bool, actor: &str) {
     let now = unix_now_u32();
     if pwd_change {
@@ -445,41 +519,37 @@ pub(super) fn stamp_admin_tl(p: &mut Principal, pwd_change: bool, actor: &str) {
     );
 }
 
-/// kadm5 modify-principal fields.
-///
-/// MIT `kadm5_principal_ent_rec` (`lib/kadm5/admin.h:213-213`): the record these fields
-/// modify. The `Option` values are its mask bits:
-/// MIT `KADM5_ATTRIBUTES` (`admin.h:92-92`): the field-mask bit of `attributes`.
-/// MIT `KADM5_MAX_LIFE` (`admin.h:93-93`): the field-mask bit of `max_life`.
-/// MIT `KADM5_PRINC_EXPIRE_TIME` (`admin.h:89-89`): the field-mask bit of `princ_expire_time`.
-/// MIT `KADM5_PW_EXPIRATION` (`admin.h:90-90`): the field-mask bit of `pw_expiration`.
-/// MIT `KADM5_POLICY` (`admin.h:99-99`): the field-mask bit of `policy`.
-/// MIT `KADM5_POLICY_CLR` (`admin.h:100-100`): the mask bit that clears `policy`.
-/// MIT `KADM5_MAX_RLIFE` (`admin.h:102-102`): the field-mask bit of `max_renewable_life`.
+// MIT: `kadm5_principal_ent_rec` (lib/kadm5/admin.h:213-213)
+// MIT: `KADM5_ATTRIBUTES` (admin.h:92-92)
+// MIT: `KADM5_MAX_LIFE` (admin.h:93-93)
+// MIT: `KADM5_PRINC_EXPIRE_TIME` (admin.h:89-89)
+// MIT: `KADM5_PW_EXPIRATION` (admin.h:90-90)
+// MIT: `KADM5_POLICY` (admin.h:99-99)
+// MIT: `KADM5_POLICY_CLR` (admin.h:100-100)
+// MIT: `KADM5_MAX_RLIFE` (admin.h:102-102)
 #[derive(Clone, Default)]
 pub struct AdminFields {
-    /// Principal attributes.
     pub attributes: Option<u32>,
-    /// Maximum ticket life, seconds.
     pub max_life: Option<u64>,
-    /// Principal expiration, Unix time.
     pub expiration: Option<u32>,
-    /// Password expiration, Unix time.
     pub pw_expire: Option<u32>,
-    /// Policy name.
     pub policy: Option<String>,
-    /// Clear the policy when set.
     pub clear_policy: bool,
-    /// Maximum renewable life, seconds.
     pub max_renewable_life: Option<u64>,
 }
 
 impl PrincipalStore {
     pub(crate) fn remove_id_inner(&mut self, id: &str) -> Result<(), Error> {
+        self.inside_change()?;
         let (name, realm) = {
             let principal = self.map.get(id).ok_or(Error::NotFound)?;
             (principal.name.clone(), principal.realm.clone())
         };
+        if realm == self.realm && name.components_joined() == "K/M" {
+            return Err(Error::InvalidArgument(
+                "Cannot change protected principal".into(),
+            ));
+        }
         super::kadm5_hook::hook_remove(
             self,
             super::kadm5_hook::HookStage::Precommit,
@@ -489,15 +559,12 @@ impl PrincipalStore {
         self.map.remove(id).ok_or(Error::NotFound)?;
         self.note_ulog(id.to_owned(), true, None);
         self.save_if_configured()?;
-        super::kadm5_hook::hook_remove(
-            self,
-            super::kadm5_hook::HookStage::Postcommit,
-            &name,
-            &realm,
-        )
+        self.postcommit(super::kadm5_hook::Post::Remove { princ: name, realm });
+        Ok(())
     }
 
-    /// Permit `from` to S4U2Proxy to `name` (RBCD). A bare name is the local realm.
+    #[doc(hidden)]
+    /// Memory only; use `record_s4u_to` for a store.
     pub fn allow_s4u_from(&mut self, name: &PrincipalName, from: &str) {
         let id = crate::kdb::lookup_principal_id(name, &self.realm);
         let qualified = qualify_s4u_from(from, &self.realm);
@@ -506,7 +573,8 @@ impl PrincipalStore {
         }
     }
 
-    /// Permit `name` to S4U2Proxy to `to` (classic constrained delegation).
+    #[doc(hidden)]
+    /// Memory only; use `record_s4u_to` for a store.
     pub fn allow_s4u_to(&mut self, name: &PrincipalName, to: &str) {
         let id = crate::kdb::lookup_principal_id(name, &self.realm);
         if let Some(p) = self.map.get_mut(&id) {
@@ -514,7 +582,27 @@ impl PrincipalStore {
         }
     }
 
-    /// Drop classic S4U2Proxy targets (MIT db2 has none).
+    pub fn record_s4u_to(
+        &mut self,
+        name: &PrincipalName,
+        to: &str,
+        actor: &str,
+    ) -> Result<(), Error> {
+        self.inside_change()?;
+        let id = crate::kdb::lookup_principal_id(name, &self.realm);
+        let snap = {
+            let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
+            if p.s4u_allowed_to.iter().any(|have| have == to) {
+                return Ok(());
+            }
+            p.s4u_allowed_to.push(to.to_owned());
+            stamp_admin_tl(p, false, actor);
+            p.clone()
+        };
+        self.note_ulog(id, false, Some(snap));
+        self.save_if_configured()
+    }
+
     pub fn clear_s4u_to(&mut self, name: &PrincipalName) {
         let id = crate::kdb::lookup_principal_id(name, &self.realm);
         if let Some(p) = self.map.get_mut(&id) {
@@ -522,14 +610,6 @@ impl PrincipalStore {
         }
     }
 
-    /// ACL-gated create of a password principal.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::AclDenied`] when the ACL does not grant `actor` add on `name`;
-    /// [`Error::AlreadyExists`] when `name` already resolves to an entry;
-    /// [`Error::PasswordPolicy`] when the password is empty; [`Error::Db`] when saving the
-    /// store to `persist_paths` fails.
     pub fn create_password(
         &mut self,
         acl: &Acl,
@@ -540,34 +620,18 @@ impl PrincipalStore {
         self.create_password_etypes(acl, actor, name, password, &[])
     }
 
-    /// ACL-gated create with an explicit keysalt list (`addprinc -e`).
-    ///
-    /// # Errors
-    ///
-    /// [`Error::AclDenied`] when the ACL does not grant `actor` add on `name`;
-    /// [`Error::AlreadyExists`] when `name` already resolves to an entry;
-    /// [`Error::PasswordPolicy`] when the password is empty; [`Error::Db`] when saving the
-    /// store to `persist_paths` fails.
     pub fn create_password_etypes(
         &mut self,
         acl: &Acl,
         actor: &str,
         name: &PrincipalName,
         password: &[u8],
-        etypes: &[EncryptionType],
+        etypes: &[KeySalt],
     ) -> Result<(), Error> {
         let realm = self.realm.clone();
         self.create_password_etypes_in(acl, actor, name, &realm, password, etypes)
     }
 
-    /// [`Self::create_password_etypes`] storing `name@princ_realm`.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::AclDenied`] when the ACL does not grant `actor` add on `name`;
-    /// [`Error::AlreadyExists`] when `name` already resolves to an entry;
-    /// [`Error::PasswordPolicy`] when the password is empty; [`Error::Db`] when saving the
-    /// store to `persist_paths` fails.
     pub(crate) fn create_password_etypes_in(
         &mut self,
         acl: &Acl,
@@ -575,7 +639,7 @@ impl PrincipalStore {
         name: &PrincipalName,
         princ_realm: &str,
         password: &[u8],
-        etypes: &[EncryptionType],
+        etypes: &[KeySalt],
     ) -> Result<(), Error> {
         let id = crate::kdb::lookup_principal_id(name, princ_realm);
         acl.check(actor, AdminOp::Create, Some(&id))?;
@@ -586,62 +650,44 @@ impl PrincipalStore {
         Ok(())
     }
 
-    /// Insert without ACL (`kadm5_create_principal_3` after stub_auth) with
-    /// no entry fields in the mask: every field is the realm default.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::AlreadyExists`] when `name@princ_realm` already resolves to an entry;
-    /// [`Error::PasswordPolicy`] when `password` is empty; [`Error::Db`] when saving the
-    /// store to `persist_paths` fails.
     pub fn insert_new_password(
         &mut self,
         name: &PrincipalName,
         princ_realm: &str,
         password: &[u8],
-        etypes: &[EncryptionType],
+        etypes: &[KeySalt],
         actor: &str,
     ) -> Result<(), Error> {
         self.create_principal_3_in(
             name,
             princ_realm,
-            Some(password),
+            CreateKeys::Password(password),
             etypes,
             &AdminEnt::default(),
             actor,
         )
     }
 
-    /// kadm5 `create_principal` with a NULL password.
-    /// MIT `kadm5_create_principal_3` (`svr_principal.c:463-470`): a NULL password is
-    /// `krb5_dbe_crk`, random keys of `etypes` (empty = `supported_enctypes`) at kvno 1,
-    /// no `passwd_check`. This is `kadmin addprinc -randkey` since 1.8; the pre-1.8
-    /// client sends a dummy password and `DISALLOW_ALL_TIX` instead.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::AlreadyExists`] when `name@princ_realm` already resolves to an entry;
-    /// [`Error::Rng`] when the CSPRNG fails; [`Error::Db`] when saving the store to
-    /// `persist_paths` fails.
+    // MIT: `kadm5_create_principal_3` (svr_principal.c:463-470)
+    /// A NULL password is random keys and skips `passwd_check`.
     pub fn insert_new_randkey(
         &mut self,
         name: &PrincipalName,
         princ_realm: &str,
-        etypes: &[EncryptionType],
+        etypes: &[KeySalt],
         actor: &str,
     ) -> Result<(), Error> {
-        self.create_principal_3_in(name, princ_realm, None, etypes, &AdminEnt::default(), actor)
+        self.create_principal_3_in(
+            name,
+            princ_realm,
+            CreateKeys::Random,
+            etypes,
+            &AdminEnt::default(),
+            actor,
+        )
     }
 
-    /// MIT `handle->params.flags` for a create without `KADM5_ATTRIBUTES`:
-    /// `[realms] default_principal_flags` when set, parsed over 0 like MIT.
-    /// MIT `kadm5_get_config_params` (`alt_prof.c:596-632`): the stanza's flags are applied
-    /// over 0 into `params.flags`. Without the stanza MIT's `KRB5_KDB_DEF_FLAGS`
-    /// is 0; the Rust `requires_preauth` knob (predates the stanza, default
-    /// on) adds `REQUIRES_PRE_AUTH` to *password-keyed* creates only — its
-    /// scope is those creates, so random-key (service) creates are MIT's 0
-    /// and U2U to a fresh `-randkey` service keeps working
-    /// (`docs/mit-deviations.md`). A written stanza overrides the knob for both.
+    /// A create without `KADM5_ATTRIBUTES` takes `default_principal_flags`.
     #[must_use]
     pub fn default_create_attributes(&self, password_keyed: bool) -> u32 {
         self.policy.default_principal_flags.unwrap_or(
@@ -653,41 +699,94 @@ impl PrincipalStore {
         )
     }
 
-    /// MIT `kadm5_create_principal_3` (`svr_principal.c:290-511`): the create after the
-    /// stub's ACL / `impose_restrictions` step and mask validation: the
-    /// entry must not exist (`KADM5_DUP`); the named policy is loaded when it
-    /// exists (`get_policy`: an unknown name is *no* policy, not an error);
-    /// `passwd_check` runs on a non-NULL password with that policy before
-    /// anything is written; then every field is the request value when its
-    /// mask bit is set, else the realm default — `attributes` ←
-    /// `params.flags`, `max_life` ← `params.max_life`, `max_renewable_life`
-    /// ← `params.max_rlife`, `expiration` ← `params.expiration`
-    /// (`default_principal_expiration`, 0),
-    /// `pw_expiration` ← `now + pw_max_life` under a policy with one, else 0;
-    /// a password is keyed at `kvno` (default 1) and a NULL password is
-    /// `krb5_dbe_crk` with the kvno rewritten; `KADM5_POLICY` binds the name
-    /// (`adb.policy`) even when the policy does not exist.
-    /// MIT `kadm5_create_principal_3` (`svr_principal.c:444-447`): key/salt tuples are
-    /// `apply_keysalt_policy` — the request's `-e` list, else the bound policy's
-    /// `allowed_keysalts`, else `supported_enctypes`. TL-data stays with the callers.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::AlreadyExists`] when `name@princ_realm` already resolves to an entry;
-    /// [`Error::PasswordPolicy`] when `password` is empty or fails the `ent` policy's checks;
-    /// [`Error::BadKeysalts`] when `etypes` names an enctype outside that policy's
-    /// `allowed_keysalts`; [`Error::Rng`] when `password` is `None` and the CSPRNG fails;
-    /// [`Error::Db`] when saving the store to `persist_paths` fails;
-    /// the error from a `kadm5_hook` precommit module.
+    // MIT: `kadm5_create_principal_3` (svr_principal.c:290-511)
+    // MIT: `kadm5_create_principal_3` (svr_principal.c:444-447)
     pub fn create_principal_3_in(
         &mut self,
         name: &PrincipalName,
         princ_realm: &str,
-        password: Option<&[u8]>,
-        etypes: &[EncryptionType],
+        keys: CreateKeys<'_>,
+        etypes: &[KeySalt],
         ent: &AdminEnt,
         actor: &str,
     ) -> Result<(), Error> {
+        self.inside_change()?;
+        let (password, explicit) = match keys {
+            CreateKeys::Password(p) => (Some(c_password(p)), None),
+            CreateKeys::Random => (None, None),
+            CreateKeys::Explicit(k) => (None, Some(k)),
+        };
+        let inputs = self.create_inputs(name, princ_realm, password, explicit, etypes, ent)?;
+        let keys = if let Some(given) = explicit {
+            let mut keys = given.to_vec();
+            if ent.mask & kadm5_mask::KVNO != 0 {
+                for key in &mut keys {
+                    key.kvno = inputs.kvno;
+                }
+            }
+            keys
+        } else if let Some(pw) = password {
+            keys_from_password(&inputs.keysalts, pw, name, princ_realm, inputs.kvno)?
+        } else {
+            random_keys(&inputs.keysalts, inputs.kvno)?
+        };
+        self.create_finish(inputs, keys, password, ent, actor)
+    }
+
+    pub fn plan_create_password(
+        &self,
+        name: &PrincipalName,
+        princ_realm: &str,
+        password: &[u8],
+        etypes: &[KeySalt],
+        ent: &AdminEnt,
+    ) -> Result<CreatePlan, Error> {
+        let password = c_password(password);
+        let inputs = self.create_inputs(name, princ_realm, Some(password), None, etypes, ent)?;
+        Ok(CreatePlan {
+            inputs,
+            ent: ent.clone(),
+            password: zeroize::Zeroizing::new(password.to_vec()),
+        })
+    }
+
+    // MIT: `kadm5_create_principal_3` (lib/kadm5/srv/svr_principal.c:504-504)
+    pub fn create_prepared(
+        &mut self,
+        prepared: PreparedCreate,
+        actor: &str,
+    ) -> Result<bool, Error> {
+        self.inside_change()?;
+        let CreateInputs {
+            id,
+            policy_name,
+            policy,
+            ..
+        } = &prepared.plan.inputs;
+        if self.get(id).is_some()
+            || policy_name.as_deref().and_then(|n| self.policies.get(n)) != policy.as_ref()
+        {
+            return Ok(false);
+        }
+        let PreparedCreate { plan, keys } = prepared;
+        let CreatePlan {
+            inputs,
+            ent,
+            password,
+        } = plan;
+        self.create_finish(inputs, keys, Some(&password), &ent, actor)?;
+        Ok(true)
+    }
+
+    fn create_inputs(
+        &self,
+        name: &PrincipalName,
+        princ_realm: &str,
+        password: Option<&[u8]>,
+        explicit: Option<&[KeyEntry]>,
+        etypes: &[KeySalt],
+        ent: &AdminEnt,
+    ) -> Result<CreateInputs, Error> {
         let id = crate::kdb::lookup_principal_id(name, princ_realm);
         if self.get(&id).is_some() {
             return Err(Error::AlreadyExists);
@@ -695,7 +794,7 @@ impl PrincipalStore {
         let policy_name = (ent.mask & kadm5_mask::POLICY != 0)
             .then(|| ent.policy.clone())
             .flatten();
-        let polent = policy_name
+        let policy = policy_name
             .as_deref()
             .and_then(|n| self.policies.get(n))
             .cloned();
@@ -710,35 +809,62 @@ impl PrincipalStore {
                 },
             )?;
         }
-        let now = unix_now();
-        let use_etypes = apply_keysalt_policy(
-            polent.as_ref().and_then(|p| p.allowed_keysalts.as_deref()),
-            etypes,
-            &self.policy.password_etypes(),
-        )?;
-        let salt = name.default_salt(princ_realm);
+        let now = unix_now_u32();
+        let keysalts: Vec<KeySalt> = if let Some(given) = explicit {
+            given.iter().map(|k| KeySalt::from(k.etype)).collect()
+        } else {
+            apply_keysalt_policy(
+                policy.as_ref().and_then(|p| p.allowed_keysalts.as_deref()),
+                etypes,
+                &self.policy.password_keysalts(),
+            )?
+        };
         let kvno = if ent.mask & kadm5_mask::KVNO != 0 {
+            if ent.kvno > 65535 {
+                return Err(Error::InvalidArgument("invalid kvno".into()));
+            }
             ent.kvno
         } else {
             1
         };
-        let keys = if let Some(pw) = password {
-            keys_from_password(&use_etypes, pw, &salt, kvno)?
-        } else {
-            let mut keys = Vec::new();
-            for etype in &use_etypes {
-                keys.push(KeyEntry::new(*etype, random_key(*etype)?, kvno));
-            }
-            keys
-        };
+        Ok(CreateInputs {
+            name: name.clone(),
+            realm: princ_realm.to_owned(),
+            id,
+            policy_name,
+            policy,
+            keysalts,
+            kvno,
+            now,
+        })
+    }
+
+    fn create_finish(
+        &mut self,
+        inputs: CreateInputs,
+        keys: Vec<KeyEntry>,
+        password: Option<&[u8]>,
+        ent: &AdminEnt,
+        actor: &str,
+    ) -> Result<(), Error> {
+        let CreateInputs {
+            name,
+            realm,
+            policy_name,
+            policy,
+            keysalts,
+            now,
+            ..
+        } = inputs;
         let attributes = if ent.mask & kadm5_mask::ATTRIBUTES != 0 {
             ent.attributes
         } else {
             self.default_create_attributes(password.is_some())
         };
+        let salt = crate::kdb_dump::salt_of_keys(&keys, &name, &realm);
         let mut p = Principal::from_keys(
             name.clone(),
-            princ_realm.to_owned(),
+            realm.clone(),
             keys,
             salt,
             PrincipalFields {
@@ -767,7 +893,7 @@ impl PrincipalStore {
         p.pw_expire = if ent.mask & kadm5_mask::PW_EXPIRATION != 0 {
             ent.pw_expiration
         } else {
-            match &polent {
+            match &policy {
                 Some(pol) if pol.pw_max_life != 0 => now.saturating_add(pol.pw_max_life),
                 _ => 0,
             }
@@ -777,35 +903,28 @@ impl PrincipalStore {
             refresh_kadm_tl(&mut p);
         }
         stamp_admin_tl(&mut p, true, actor);
+        let hook_etypes: Vec<EncryptionType> = keysalts.iter().map(|ks| ks.etype).collect();
         super::kadm5_hook::hook_create(
             self,
             super::kadm5_hook::HookStage::Precommit,
-            name,
-            princ_realm,
+            &name,
+            &realm,
             ent.mask,
             password,
-            &use_etypes,
+            &hook_etypes,
         )?;
-        self.put_principal(p);
+        self.put_principal(p)?;
         self.save_if_configured()?;
-        super::kadm5_hook::hook_create(
-            self,
-            super::kadm5_hook::HookStage::Postcommit,
-            name,
-            princ_realm,
-            ent.mask,
-            password,
-            &use_etypes,
-        )
+        self.postcommit(super::kadm5_hook::Post::Create {
+            princ: name,
+            realm,
+            mask: ent.mask,
+            password: password.map(|p| zeroize::Zeroizing::new(p.to_vec())),
+            etypes: hook_etypes,
+        });
+        Ok(())
     }
 
-    /// ACL-gated create of a random-key host (or other) principal.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::AclDenied`] when the ACL does not grant `actor` add on `name`;
-    /// [`Error::AlreadyExists`] when `name` already resolves to an entry; [`Error::Rng`] when
-    /// the CSPRNG fails; [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn create_host(
         &mut self,
         acl: &Acl,
@@ -815,29 +934,28 @@ impl PrincipalStore {
         self.create_host_etypes(acl, actor, name, &[])
     }
 
-    /// `addprinc -randkey -e`. Does not seed `allowed_to_delegate`
-    /// (MIT `addprinc -randkey` has no targets).
-    ///
-    /// # Errors
-    ///
-    /// [`Error::AclDenied`] when the ACL does not grant `actor` add on `name`;
-    /// [`Error::AlreadyExists`] when `name` already resolves to an entry; [`Error::Rng`] when
-    /// the CSPRNG fails; [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn create_host_etypes(
         &mut self,
         acl: &Acl,
         actor: &str,
         name: &PrincipalName,
-        etypes: &[EncryptionType],
+        etypes: &[KeySalt],
     ) -> Result<(), Error> {
+        self.inside_change()?;
         let id = crate::kdb::lookup_principal_id(name, &self.realm);
         acl.check(actor, AdminOp::Create, Some(&id))?;
         if self.get(&id).is_some() {
             return Err(Error::AlreadyExists);
         }
         let realm = self.realm.clone();
-        self.create_principal_3_in(name, &realm, None, etypes, &AdminEnt::default(), actor)?;
-        self.mark_pwchange_service(name, &id)?;
+        self.create_principal_3_in(
+            name,
+            &realm,
+            CreateKeys::Random,
+            etypes,
+            &AdminEnt::default(),
+            actor,
+        )?;
         if let Some(rs) = acl.restrictions(actor, Some(&id)) {
             self.apply_acl_restrictions(&id, rs)?;
         }
@@ -845,41 +963,13 @@ impl PrincipalStore {
         Ok(())
     }
 
-    /// A created `kadmin/changepw` gets `PWCHANGE_SERVICE` by its name (`docs/mit-deviations.md`,
-    /// "Create-time name special-casing"), a change the update log records.
-    fn mark_pwchange_service(&mut self, name: &PrincipalName, id: &str) -> Result<(), Error> {
-        if name.components_joined() != "kadmin/changepw" {
-            return Ok(());
-        }
-        let Some(p) = self.map.get_mut(id) else {
-            return Ok(());
-        };
-        p.attributes |= KDB_PWCHANGE_SERVICE;
-        let snap = p.clone();
-        self.note_ulog(id.to_owned(), false, Some(snap));
-        self.save_if_configured()
-    }
-
-    /// ACL-gated create with an optional bound policy so
-    /// `apply_keysalt_policy` sees `allowed_keysalts`.
-    /// MIT `kadm5_create_principal_3` (`svr_principal.c:444-447`): `apply_keysalt_policy`
-    /// gets the entry's policy name, so its `allowed_keysalts` limit the keys.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::AclDenied`] when the ACL does not grant `actor` add on `name`;
-    /// [`Error::AlreadyExists`] when `name` already resolves to an entry;
-    /// [`Error::PasswordPolicy`] when `password` is empty or fails `policy`'s checks;
-    /// [`Error::BadKeysalts`] when `etypes` names an enctype outside `policy`'s
-    /// `allowed_keysalts`; [`Error::Rng`] when `password` is `None` and the CSPRNG fails;
-    /// [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn create_etypes_pol(
         &mut self,
         acl: &Acl,
         actor: &str,
         name: &PrincipalName,
         password: Option<&[u8]>,
-        etypes: &[EncryptionType],
+        etypes: &[KeySalt],
         policy: Option<&str>,
     ) -> Result<(), Error> {
         let realm = self.realm.clone();
@@ -890,74 +980,52 @@ impl PrincipalStore {
             ent.mask |= kadm5_mask::POLICY;
             ent.policy = Some(p.to_owned());
         }
-        self.create_principal_3_in(name, &realm, password, etypes, &ent, actor)?;
-        if password.is_none() {
-            self.mark_pwchange_service(name, &id)?;
-        }
+        let keys = match password {
+            Some(p) => CreateKeys::Password(p),
+            None => CreateKeys::Random,
+        };
+        self.create_principal_3_in(name, &realm, keys, etypes, &ent, actor)?;
         if let Some(rs) = acl.restrictions(actor, Some(&id)) {
             self.apply_acl_restrictions(&id, rs)?;
         }
         Ok(())
     }
 
-    /// Set lockout and password-expiry, then persist when `persist_paths` is set.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
-    /// store to `persist_paths` fails.
     pub fn set_status(
         &mut self,
         name: &PrincipalName,
         locked: bool,
         pw_expire: u32,
+        actor: &str,
     ) -> Result<(), Error> {
+        self.inside_change()?;
         let id = self.canonical_id(name, &self.realm)?;
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
-        p.locked = locked;
+        p.set_locked(locked);
         p.pw_expire = pw_expire;
-        if locked {
-            p.attributes |= KDB_DISALLOW_ALL_TIX;
-        } else {
-            p.attributes &= !KDB_DISALLOW_ALL_TIX;
-        }
+        stamp_admin_tl(p, false, actor);
         let snap = p.clone();
         self.note_ulog(id, false, Some(snap));
         self.save_if_configured()
     }
 
-    /// MIT `unlock_princ`: fail_auth_count = 0 and `KRB5_TL_LAST_ADMIN_UNLOCK`.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
-    /// store to `persist_paths` fails.
     pub fn admin_unlock(&mut self, name: &PrincipalName) -> Result<(), Error> {
         let realm = self.realm.clone();
         let actor = default_mod_actor(&realm);
         self.admin_unlock_in(name, &realm, &actor)
     }
 
-    /// [`Self::admin_unlock`] for `name@princ_realm`.
-    ///
-    /// `kdb_put_entry` stamps `KRB5_TL_MOD_PRINC` with `actor`.
-    /// MIT `kadm5_modify_principal` (`svr_principal.c:685-685`): the unlock is stored by
-    /// `kdb_put_entry`.
-    /// MIT `kdb_put_entry` (`server_kdb.c:376-377`): the put stamps `KRB5_TL_MOD_PRINC` with
-    /// `handle->current_caller`.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
-    /// store to `persist_paths` fails.
+    // MIT: `kadm5_modify_principal` (svr_principal.c:685-685)
+    // MIT: `kdb_put_entry` (server_kdb.c:376-377)
     pub fn admin_unlock_in(
         &mut self,
         name: &PrincipalName,
         princ_realm: &str,
         actor: &str,
     ) -> Result<(), Error> {
+        self.inside_change()?;
         let id = self.canonical_id(name, princ_realm)?;
-        let now = unix_now();
+        let now = unix_now_u32();
         {
             let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
             p.fail_auth_count = 0;
@@ -968,73 +1036,66 @@ impl PrincipalStore {
             });
             stamp_admin_tl(p, false, actor);
         }
-        self.clear_as_fail_count(name);
         let snap = self.map.get(&id).cloned();
+        if let Some(p) = &snap {
+            self.zero_fail_count_in_file(p, now);
+        }
         self.note_ulog(id, false, snap);
         self.save_if_configured()
     }
 
-    /// Zero `fail_auth_count` without rewriting TL data (`kadm5_modify_principal`).
-    ///
-    /// # Errors
-    ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
-    /// store to `persist_paths` fails.
     pub fn clear_fail_auth_count_in(
         &mut self,
         name: &PrincipalName,
         princ_realm: &str,
+        actor: &str,
     ) -> Result<(), Error> {
+        self.inside_change()?;
         let id = self.canonical_id(name, princ_realm)?;
         {
             let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
             p.fail_auth_count = 0;
+            stamp_admin_tl(p, false, actor);
         }
-        self.clear_as_fail_count(name);
         let snap = self.map.get(&id).cloned();
+        if let Some(p) = &snap {
+            self.zero_fail_count_in_file(p, unix_now_u32());
+        }
         self.note_ulog(id, false, snap);
         self.save_if_configured()
     }
 
-    /// Give every key of `name@princ_realm` the version number `kvno` (`kadm5_modify_principal`
-    /// `KADM5_KVNO`); the password history is not touched.
-    /// MIT `kadm5_modify_principal` (`lib/kadm5/srv/svr_principal.c:645-648`): with KADM5_KVNO
-    /// each key_data's kvno becomes the entry's.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
-    /// store to `persist_paths` fails.
+    /// A kvno change does not touch the password history.
     pub fn set_kvno_in(
         &mut self,
         name: &PrincipalName,
         princ_realm: &str,
         kvno: u32,
+        actor: &str,
     ) -> Result<(), Error> {
+        self.inside_change()?;
+        if kvno > 65535 {
+            return Err(Error::InvalidArgument("invalid kvno".into()));
+        }
         let id = self.canonical_id(name, princ_realm)?;
         {
             let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
             for k in &mut p.keys {
                 k.kvno = kvno;
             }
+            stamp_admin_tl(p, false, actor);
         }
         let snap = self.map.get(&id).cloned();
         self.note_ulog(id, false, snap);
         self.save_if_configured()
     }
 
-    /// Merge client-supplied `tl_data` (`kadm5_modify_principal` `KADM5_TL_DATA`).
-    ///
-    /// # Errors
-    ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::InvalidArgument`] when the
-    /// merged `tl_data` carries a `KRB5_TL_DB_ARGS` entry; [`Error::Db`] when saving the
-    /// store to `persist_paths` fails.
     pub fn merge_tl_data_in(
         &mut self,
         name: &PrincipalName,
         princ_realm: &str,
         tls: &[TlData],
+        actor: &str,
     ) -> Result<(), Error> {
         let id = self.canonical_id(name, princ_realm)?;
         let mut p = self.map.get(&id).ok_or(Error::NotFound)?.clone();
@@ -1042,32 +1103,26 @@ impl PrincipalStore {
             if tl.ty != TL_DB_ARGS {
                 p.tl_data.retain(|t| t.ty != tl.ty);
             }
+            match tl.ty {
+                crate::kdb_dump::TL_CONSTRAINED_DELEGATION => p.s4u_allowed_to.clear(),
+                crate::kdb_dump::TL_KERBER_S4U_FROM => p.s4u_allowed_from.clear(),
+                _ => {}
+            }
             p.tl_data.push(tl.clone());
         }
+        crate::kdb_dump::absorb_s4u_tl(&mut p);
         strip_db_args(&mut p.tl_data)?;
-        self.put_principal(p);
+        stamp_admin_tl(&mut p, false, actor);
+        self.inside_change()?;
+        self.put_principal(p)?;
         self.save_if_configured()
     }
 
-    /// ACL-gated delete.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::AclDenied`] when the ACL does not grant `actor` delete on `name`;
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
-    /// store to `persist_paths` fails.
     pub fn delete(&mut self, acl: &Acl, actor: &str, name: &PrincipalName) -> Result<(), Error> {
         let realm = self.realm.clone();
         self.delete_in(acl, actor, name, &realm)
     }
 
-    /// [`Self::delete`] of `name@princ_realm`.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::AclDenied`] when the ACL does not grant `actor` delete on `name`;
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
-    /// store to `persist_paths` fails.
     pub(crate) fn delete_in(
         &mut self,
         acl: &Acl,
@@ -1080,28 +1135,11 @@ impl PrincipalStore {
         self.remove_id_inner(&id)
     }
 
-    /// Drop `name@princ_realm` with no ACL (stub already authorised).
-    ///
-    /// # Errors
-    ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
-    /// store to `persist_paths` fails.
     pub fn remove_in(&mut self, name: &PrincipalName, princ_realm: &str) -> Result<(), Error> {
         self.remove_id_inner(&crate::kdb::lookup_principal_id(name, princ_realm))
     }
 
-    /// Rename a principal. Requires add and delete ACL privs (MIT).
-    ///
-    /// RID, keys, and attributes are kept. A non-zero RID is not
-    /// re-allocated. Default-salt password keys stay verbatim (MIT);
-    /// `kinit` after rename may need an explicit salt or `cpw`.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::AclDenied`] when the ACL does not grant `actor` delete on `old` and an
-    /// unrestricted add on `new`; [`Error::AlreadyExists`] when `new` already resolves to an
-    /// entry; [`Error::NotFound`] when `old` is missing; [`Error::AliasUnsupported`] when `old`
-    /// is an alias; [`Error::Db`] when saving the store to `persist_paths` fails.
+    /// A rename keeps the RID and does not reallocate it.
     pub fn rename(
         &mut self,
         acl: &Acl,
@@ -1113,14 +1151,6 @@ impl PrincipalStore {
         self.rename_in(acl, actor, old, &realm, new, &realm)
     }
 
-    /// [`Self::rename`] with request realms.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::AclDenied`] when the ACL does not grant `actor` delete on `old` and an
-    /// unrestricted add on `new`; [`Error::AlreadyExists`] when `new` already resolves to an
-    /// entry; [`Error::NotFound`] when `old` is missing; [`Error::AliasUnsupported`] when `old`
-    /// is an alias; [`Error::Db`] when saving the store to `persist_paths` fails.
     pub(crate) fn rename_in(
         &mut self,
         acl: &Acl,
@@ -1136,16 +1166,7 @@ impl PrincipalStore {
         self.rename_unchecked(old, old_realm, new, new_realm, actor)
     }
 
-    /// Rename after stub ACL.
-    /// MIT `rename_principal_2_svc` (`server_stubs.c:700-712`): the ACL and lockdown checks
-    /// that run before the rename.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::AlreadyExists`] when `new` already resolves to an entry; [`Error::NotFound`]
-    /// when `old` is missing; [`Error::AliasUnsupported`] when `old` is an alias;
-    /// [`Error::Db`] when saving the store to `persist_paths` fails;
-    /// the error from a `kadm5_hook` precommit module.
+    // MIT: `rename_principal_2_svc` (server_stubs.c:700-712)
     pub fn rename_unchecked(
         &mut self,
         old: &PrincipalName,
@@ -1154,6 +1175,7 @@ impl PrincipalStore {
         new_realm: &str,
         actor: &str,
     ) -> Result<(), Error> {
+        self.inside_change()?;
         let old_id = crate::kdb::lookup_principal_id(old, old_realm);
         let new_id = crate::kdb::lookup_principal_id(new, new_realm);
         if self.get(&new_id).is_some() {
@@ -1176,27 +1198,32 @@ impl PrincipalStore {
             new,
             new_realm,
         )?;
+        {
+            let p = self.map.get_mut(&old_id).ok_or(Error::NotFound)?;
+            crate::kdb_dump::specialize_salts(p)?;
+        }
         let mut p = self.map.remove(&old_id).ok_or(Error::NotFound)?;
         p.name = new.clone();
         new_realm.clone_into(&mut p.realm);
-        // MIT `krb5_db_def_rename_principal` (`lib/kdb/kdb_default.c:537-545`): the entry is put under the new name, then the old one deleted.
+        self.rename_lockout_in_file(&old_id, &p);
+        // MIT: `krb5_db_def_rename_principal` (lib/kdb/kdb_default.c:537-545)
         self.note_ulog(p.id(), false, Some(p.clone()));
         self.note_ulog(old_id, true, None);
-        // MIT `kadm5_rename_principal` (`lib/kadm5/srv/svr_principal.c:730-737`): then the entry is put again with its modification data.
+        // MIT: `kadm5_rename_principal` (lib/kadm5/srv/svr_principal.c:730-737)
         stamp_admin_tl(&mut p, false, actor);
         self.note_ulog(p.id(), false, Some(p.clone()));
         self.map.insert(p.id(), p);
         self.save_if_configured()?;
-        super::kadm5_hook::hook_rename(
-            self,
-            super::kadm5_hook::HookStage::Postcommit,
-            old,
-            old_realm,
-            new,
-            new_realm,
-        )
+        self.postcommit(super::kadm5_hook::Post::Rename {
+            old: old.clone(),
+            old_realm: old_realm.to_owned(),
+            new: new.clone(),
+            new_realm: new_realm.to_owned(),
+        });
+        Ok(())
     }
 
+    #[cfg(any(test, feature = "test-hooks"))]
     pub(super) fn insert_password(
         &mut self,
         name: &PrincipalName,
@@ -1206,12 +1233,6 @@ impl PrincipalStore {
         self.insert_new_password(name, &realm, password, &[], &default_mod_actor(&realm))
     }
 
-    /// Apply kadm5 `modprinc` fields (mask already interpreted by the caller).
-    ///
-    /// # Errors
-    ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
-    /// store to `persist_paths` fails.
     pub fn apply_admin_fields(
         &mut self,
         name: &PrincipalName,
@@ -1244,12 +1265,6 @@ impl PrincipalStore {
         )
     }
 
-    /// [`Self::apply_admin_fields`] for `name@princ_realm`.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
-    /// store to `persist_paths` fails; the error from a `kadm5_hook` precommit module.
     pub fn apply_admin_fields_in(
         &mut self,
         name: &PrincipalName,
@@ -1257,6 +1272,7 @@ impl PrincipalStore {
         fields: AdminFields,
         actor: &str,
     ) -> Result<(), Error> {
+        self.inside_change()?;
         let AdminFields {
             attributes,
             max_life,
@@ -1300,8 +1316,6 @@ impl PrincipalStore {
             let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
             if let Some(a) = attributes {
                 p.attributes = a;
-                p.requires_preauth = a & KDB_REQUIRES_PRE_AUTH != 0;
-                p.locked = a & KDB_DISALLOW_ALL_TIX != 0;
             }
             if let Some(m) = max_life {
                 p.max_life = m;
@@ -1331,21 +1345,14 @@ impl PrincipalStore {
         let snap = self.map.get(&id).cloned();
         self.note_ulog(id, false, snap);
         self.save_if_configured()?;
-        super::kadm5_hook::hook_modify(
-            self,
-            super::kadm5_hook::HookStage::Postcommit,
-            name,
-            princ_realm,
+        self.postcommit(super::kadm5_hook::Post::Modify {
+            princ: name.clone(),
+            realm: princ_realm.to_owned(),
             mask,
-        )
+        });
+        Ok(())
     }
 
-    /// Impose kadm5.acl restrictions after create/modify (`auth.c` `impose_restrictions`).
-    ///
-    /// # Errors
-    ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
-    /// store to `persist_paths` fails.
     pub fn impose_acl_restrictions(
         &mut self,
         name: &PrincipalName,
@@ -1355,36 +1362,29 @@ impl PrincipalStore {
         self.impose_acl_restrictions_in(name, &realm, rs)
     }
 
-    /// [`Self::impose_acl_restrictions`] for `name@princ_realm`.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
-    /// store to `persist_paths` fails.
     pub(crate) fn impose_acl_restrictions_in(
         &mut self,
         name: &PrincipalName,
         princ_realm: &str,
         rs: &Restrictions,
     ) -> Result<(), Error> {
+        self.inside_change()?;
         let id = self.canonical_id(name, princ_realm)?;
         self.apply_acl_restrictions(&id, rs)?;
         self.save_if_configured()
     }
 
-    /// `impose_restrictions` on a request that carries none of the
-    /// restricted fields (the local CLI verbs; MIT `kadmin.local` has no
-    /// ACL, so this is the RPC shape with an empty mask): every restriction
-    /// lands as its cap. The RPC paths call [`Restrictions::impose`] on the
-    /// parsed request instead.
-    fn apply_acl_restrictions(&mut self, id: &str, rs: &Restrictions) -> Result<(), Error> {
+    pub(crate) fn apply_acl_restrictions(
+        &mut self,
+        id: &str,
+        rs: &Restrictions,
+    ) -> Result<(), Error> {
+        self.inside_change()?;
         let mut ent = AdminEnt::default();
-        rs.impose(&mut ent, unix_now());
+        rs.impose(&mut ent, unix_now_u32());
         let p = self.map.get_mut(id).ok_or(Error::NotFound)?;
         if ent.mask & kadm5_mask::ATTRIBUTES != 0 {
             p.attributes = ent.attributes;
-            p.requires_preauth = p.attributes & KDB_REQUIRES_PRE_AUTH != 0;
-            p.locked = p.attributes & KDB_DISALLOW_ALL_TIX != 0;
         }
         if ent.mask & kadm5_mask::MAX_LIFE != 0 {
             p.max_life = u64::from(ent.max_life);
@@ -1410,20 +1410,10 @@ impl PrincipalStore {
         self.save_if_configured()
     }
 
-    /// MIT `kadm5_get_strings`.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::NotFound`] when the principal is missing.
     pub fn get_strings(&self, name: &PrincipalName) -> Result<Vec<(String, String)>, Error> {
         self.get_strings_in(name, &self.realm)
     }
 
-    /// [`Self::get_strings`] for `name@princ_realm`.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::NotFound`] when the principal is missing.
     pub fn get_strings_in(
         &self,
         name: &PrincipalName,
@@ -1435,12 +1425,6 @@ impl PrincipalStore {
         Ok(p.string_attrs.clone())
     }
 
-    /// MIT `kadm5_set_string`. `value == None` deletes `key`.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
-    /// store to `persist_paths` fails.
     pub fn set_string(
         &mut self,
         name: &PrincipalName,
@@ -1452,15 +1436,7 @@ impl PrincipalStore {
         self.set_string_in(name, &realm, key, value, &actor)
     }
 
-    /// [`Self::set_string`] for `name@princ_realm`.
-    ///
-    /// MIT `kadm5_set_string` (`svr_principal.c:2022-2043`): the string is stored through
-    /// `kdb_put_entry`, which stamps `current_caller`.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
-    /// store to `persist_paths` fails.
+    // MIT: `kadm5_set_string` (svr_principal.c:2022-2043)
     pub fn set_string_in(
         &mut self,
         name: &PrincipalName,
@@ -1469,13 +1445,15 @@ impl PrincipalStore {
         value: Option<&str>,
         actor: &str,
     ) -> Result<(), Error> {
+        self.inside_change()?;
         let id = self.canonical_id(name, princ_realm)?;
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
         p.string_attrs.retain(|(k, _)| k != key);
         if let Some(v) = value {
             p.string_attrs.push((key.to_owned(), v.to_owned()));
         }
-        // MIT `krb5_dbe_set_string` (`lib/kdb/kdb5.c:2236-2240`): the strings are one record, kept even when the last is deleted.
+        // MIT: `krb5_dbe_set_string` (lib/kdb/kdb5.c:2236-2240)
+        // The string-attribute record stays when the last string is deleted.
         super::update_tl_data(
             &mut p.tl_data,
             TlData {
@@ -1489,17 +1467,12 @@ impl PrincipalStore {
         self.save_if_configured()
     }
 
-    /// `p`'s lockout attributes as they are now: what this process records for it in memory,
-    /// else its record in the database's `principal.lockout` (read holding the database's lock
-    /// shared), else what the store read.
-    /// MIT `klmdb_get_principal` (`plugins/kdb/lmdb/kdb_lmdb.c:713-744`): an entry fetched takes its lockout record.
+    // MIT: `klmdb_get_principal` (plugins/kdb/lmdb/kdb_lmdb.c:713-744)
     #[must_use]
     pub fn lockout_of(&self, p: &Principal) -> Lockout {
         self.lockout.lookup(self.db_path(), self.dblock.as_ref(), p)
     }
 
-    /// `p`'s lockout attributes as this store holds them: those it recorded in memory, else
-    /// those it read with the database. A dump of the store writes these.
     #[must_use]
     pub(crate) fn lockout_kept(&self, p: &Principal) -> Lockout {
         self.lockout
@@ -1507,8 +1480,6 @@ impl PrincipalStore {
             .unwrap_or_else(|| Lockout::of(p))
     }
 
-    /// Give each principal its record from `records`, a read of `principal.lockout`, when it
-    /// has one; no change is logged.
     pub(crate) fn merge_lockout_records(
         &mut self,
         records: &std::collections::HashMap<String, Lockout>,
@@ -1520,52 +1491,54 @@ impl PrincipalStore {
         }
     }
 
-    /// `p`'s failed authentication count now ([`Self::lockout_of`]).
     #[must_use]
     pub fn fail_auth_of(&self, p: &Principal) -> u32 {
         self.lockout_of(p).fail_auth_count
     }
 
-    /// `p`'s last failed authentication now, Unix seconds ([`Self::lockout_of`]).
     #[must_use]
     pub fn last_failed_of(&self, p: &Principal) -> u32 {
         self.lockout_of(p).last_failed
     }
 
-    /// `p`'s last successful authentication now, Unix seconds ([`Self::lockout_of`]).
     #[must_use]
     pub fn last_success_of(&self, p: &Principal) -> u32 {
         self.lockout_of(p).last_success
     }
 
-    /// Give `p` its lockout attributes as they are now.
     pub fn merge_lockout(&self, p: &mut Principal) {
         self.lockout_of(p).set_on(p);
     }
 
-    /// Record one AS outcome's lockout update for `p` at `stamp`: in its record in the
-    /// database's `principal.lockout`, in place and holding the database's lock exclusively,
-    /// starting from the record as it is then; without a side file this process may write, in
-    /// memory. The database, its update log and `p`'s flags are never touched.
-    /// MIT `klmdb_update_lockout` (`plugins/kdb/lmdb/kdb_lmdb.c:1054-1121`): the lockout record alone is written, from its stored value.
+    /// The lockout record is written in place under the database lock.
+    // MIT: `klmdb_update_lockout` (plugins/kdb/lmdb/kdb_lmdb.c:1054-1121)
     pub fn update_lockout(&self, p: &Principal, stamp: u32, update: LockoutUpdate) {
         self.lockout
             .update(self.db_path(), self.dblock.as_ref(), p, stamp, update);
     }
 
-    /// Zero the failed authentication count this process keeps for `name`, when it keeps one.
-    pub(crate) fn clear_as_fail_count(&self, name: &PrincipalName) {
-        self.lockout.overlay_zero(&self.lockout_id(name));
+    pub(crate) fn zero_fail_count_in_file(&self, p: &Principal, stamp: u32) {
+        self.update_lockout(
+            p,
+            stamp,
+            LockoutUpdate {
+                zero_fail_count: true,
+                ..Default::default()
+            },
+        );
     }
 
+    pub(crate) fn rename_lockout_in_file(&self, old_id: &str, new: &Principal) {
+        self.lockout
+            .rename_row(self.db_path(), self.dblock.as_ref(), old_id, new);
+    }
+
+    #[cfg(feature = "test-hooks")]
     fn lockout_id(&self, name: &PrincipalName) -> String {
         let id = crate::kdb::lookup_principal_id(name, &self.realm);
         self.resolve_id(&id).unwrap_or(id)
     }
 
-    /// Audit one AS outcome of `name` now as the KDC does: a success (`ok`) or a failed
-    /// preauthentication ([`crate::lockout::lockout_audit`]). A test hook: the KDC audits from
-    /// its AS exchange.
     #[cfg(feature = "test-hooks")]
     pub fn record_as_outcome(&self, name: &PrincipalName, ok: bool) {
         let Some(mut p) = self.map.get(&self.lockout_id(name)).cloned() else {
@@ -1580,13 +1553,17 @@ impl PrincipalStore {
         crate::lockout::lockout_audit(self, &p, unix_now_u32(), status);
     }
 
-    pub(crate) fn put_principal(&mut self, mut p: Principal) {
-        if strip_db_args(&mut p.tl_data).is_err() {
-            return;
-        }
+    pub(crate) fn put_principal(&mut self, mut p: Principal) -> Result<(), Error> {
+        strip_db_args(&mut p.tl_data)?;
         self.settle_rid(&mut p);
+        if p.name.components_joined() != "K/M"
+            && self.rid_owner(p.rid).is_some_and(|owner| owner != p.id())
+        {
+            return Err(Error::InvalidArgument("duplicate RID".into()));
+        }
         let id = p.id();
         self.note_ulog(id.clone(), false, Some(p.clone()));
         self.map.insert(id, p);
+        Ok(())
     }
 }

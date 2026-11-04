@@ -3,6 +3,8 @@
 Library crates emit [`tracing`](https://docs.rs/tracing) events. They
 never install a subscriber. The programs do, where `[logging] json`
 asks for the stream (below), and tests install their own.
+`krb5-embed-realm` always installs a stock fmt subscriber at info
+(`krb5_kdc=info,krb5_admin=info`), on standard output.
 
 ## Where the stream goes
 
@@ -19,20 +21,29 @@ apply in the foreground only, since a detached daemon has neither;
 `FILE:` applies in both. MIT does not read the relation, so a kdc.conf
 shared with MIT may carry it (settled live beside MIT 1.22.2's
 `krb5kdc` and `kadmind`). Each program filters the stream with its own
-filter: `krb5_kdc=info,krb5_crypto=info,krb5_asn1=info,krb5_protocol=warn`
-for `krb5kdc`, and `krb5_admin=info,krb5_kdc=info,krb5_protocol=warn` for
-`kadmind` and `kpropd`. Only a `test-hooks` build (the gates')
-takes `RUST_LOG` instead; a release build reads no `RUST_LOG`, as MIT's
-programs read none. The daemons write the stream from the one loop
-that serves every client, so a destination that blocks, a pipe its
-reader stops draining (`STDOUT` into a pipe, or a `FILE:` that is a
-FIFO), holds every client until it takes the line.
+filter: `warn,krb5_kdc=info,krb5_admin=info` for `krb5kdc`, `kadmind` and
+`kpropd`. Library events from crypto, ASN.1 and protocol, and the KDC's
+own bookkeeping, are `debug`; their warnings and errors show. One `info` record remains per AS or TGS
+request and per kadm5 or kpasswd operation, in each output. The daemon
+log and a klog sink get the MIT-format line. The KDC's JSON stream and
+an embed subscriber get one `kdc.issue`, with `duration_us` on a success
+and on a Kerberos error. kadmind's JSON stream gets one `admin` record
+per kadm5 operation and per password change. A hard server error stays
+at `error`. `klog::set_sink` sends the MIT-format lines to the
+embedder. The per-request line and the per-operation admin line are
+not also sent to tracing. With no sink and no `klog::init`, the other
+klog lines are `tracing` events on target `krb5_klog`. A `KdcLog`
+passed to the serve loop is that KDC's sink. Only a `test-hooks`
+build (the gates') takes `RUST_LOG` instead; a release build reads
+no `RUST_LOG`, as MIT's programs read none. The daemons write the
+stream from the one loop that serves every client, so a destination
+that blocks, a pipe its reader stops draining (`STDOUT` into a pipe,
+or a `FILE:` that is a FIFO), holds every client until it takes the line.
 
 The gates read the stream from the daemons' standard output:
 `json_log_on` (`scripts/lib/gate-common.sh`) puts `json = STDOUT` in
 the stock kdc.conf and krb5.conf of each container they start before
-any copy of them is kept, and `harness/prod/env-up.sh` and
-`scripts/prod-gate.sh` do the same for their KDCs. A profile a gate
+any copy of them is kept. A profile a gate
 writes for our KDC alone, whose log it reads for a status word,
 carries the relation itself: a daemon whose kdc.conf and krb5.conf are
 both the gate's own reads neither stock file.
@@ -41,10 +52,10 @@ both the gate's own reads neither stock file.
 
 | Field | Required | Meaning |
 | --- | --- | --- |
-| `event` | yes | Stable name. From Rust: a `krb5_log::events` constant (`crypto.encrypt`, `asn1.decode`, `kdc.issue`, `admin`, …; every constant there is emitted somewhere). From the harness containers: `harness.start`, `harness.kdc.ready`, `harness.kinit`, `heimdal.start`, `samba.start` (see below) |
+| `event` | yes | Stable name. From Rust: a `krb5_log::events` constant (`crypto.encrypt`, `asn1.decode`, `kdc.issue`, `admin`, …; every constant there is emitted somewhere). From the harness containers: `harness.start`, `harness.kdc.ready`, `harness.kinit`, `samba.start` (see below) |
 | `correlation_id` | yes | 32 hex chars; one ID per *exchange* (crypto/ASN.1 inherit the parent via `enter_correlation`; they do not mint a new ID per op). The harness containers echo the `CORRELATION_ID` they were started with (`none` when unset) |
-| `component` | yes | Rust: `krb5-crypto`, `krb5-asn1`, `krb5-protocol`, `krb5-kdc`, `krb5-admin`, or `krb5-client`. Harness: `harness` (the MIT KDC container), `heimdal-harness`, `samba-harness` |
-| `outcome` | yes | `ok`, `error`, or `krb-error` |
+| `component` | yes | Rust: `krb5-crypto`, `krb5-asn1`, `krb5-protocol`, `krb5-kdc`, `krb5-admin`, or `krb5-client`. Harness: `harness` (the MIT KDC container), `samba-harness` |
+| `outcome` | yes | `ok`, `error`, or `krb-error`; the KDC's dispatch adds `retransmit` and `discard`, and the `admin` event `done` and `unauthorized` |
 | `duration_us` | crypto/asn1 | Wall time of the operation |
 | `etype` | crypto | IANA encryption-type number |
 | `key_usage` | crypto | RFC 3961 usage, when applicable |
@@ -81,7 +92,7 @@ and must leave `event` unchanged.
 
 ## Harness log lines
 
-The three container entrypoints under `harness/` are shell, not
+The two container entrypoints under `harness/` are shell, not
 `tracing`; each writes its lines with `printf` to stdout (`docker
 logs`), one JSON object per line with the same `event` /
 `correlation_id` / `component` / `outcome` core plus `realm`. Their
@@ -92,18 +103,16 @@ names are declared here and nowhere in Rust:
 | `harness` | `harness.start` | `kdc_port` | `harness/entrypoint.sh`, before the KDB is created |
 | `harness` | `harness.kdc.ready` | `kdc_port`; `error` on `outcome=error` | once `krb5kdc` listens on 88, or after the wait times out |
 | `harness` | `harness.kinit` | `principal` | after the in-container `kinit`; `outcome` `ok` or `error` |
-| `heimdal-harness` | `heimdal.start` | `kdc` (the KDC binary path) | `harness/heimdal/entrypoint.sh`, before `exec` of the KDC |
 | `samba-harness` | `samba.start` | — | `harness/samba/entrypoint.sh`, before `exec samba` (the domain is provisioned in the image) |
 
-Gate scripts depend on two of these by exact string:
+Gate scripts depend on one of these by exact string:
 `scripts/lib/gate-common.sh`, `scripts/run-harness.sh` and
-`scripts/kadmin-mit-gate.sh` wait for
-`"event":"harness.kinit"` with `"outcome":"ok"` (and fail on
-`"outcome":"error"`), and `scripts/heimdal-gate.sh` waits for
-`"event":"heimdal.start"`. Renaming an event renames those greps.
+scripts/kadmin-mit-gate.sh waits for
+`"event":"harness.kinit"` with `"outcome":"ok"` (and fails on
+`"outcome":"error"`). Renaming an event renames those greps.
 
 A request that reaches `handle_request` and gets a reply logs one
-`event=kdc.issue` line at `info`, including `duration_us`:
+`event=kdc.issue` line at `debug`, including `duration_us`:
 `outcome=ok` for an AS-REP or TGS-REP, and for a **KRB-ERROR** PDU
 `outcome=krb-error` plus `code` (RFC 4120 error-code) and `e_text`
 (MIT `log_tgs_req` status word, e.g. `BAD_TRANSIT`, `FIND_FAST`).
@@ -116,17 +125,17 @@ that cannot be encoded) logs `outcome=error` at **error** instead. An
 empty reply (MIT DISCARD) logs nothing from `handle_request`.
 
 When the request decodes as an AS-REQ or TGS-REQ, a second `kdc.issue`
-line carries MIT's tuple. On success it is the ISSUE tuple: `kind`,
+line, at `info`, carries MIT's tuple. On success it is the ISSUE tuple: `kind`,
 `req_etypes`, `from`, `status=ISSUE`, `authtime`, `etypes`
-(`rep_etypes2str`), `client`, and `server`; TGS S4U adds a third line
-with `s4u` + `s4u_client`. After a KRB-ERROR it is the fail tuple, with
+(`rep_etypes2str`), `client`, and `server`; TGS S4U adds `s4u` and
+`s4u_client` to the same line. After a KRB-ERROR it is the fail tuple, with
 the status word and `outcome=krb-error`. Unexpected transit-path errors
 are `tracing` **error** (`kdc_log.c:201-206` `LOG_ERR`).
 
 The KDC's dispatch logs its own `kdc.issue` lines: a reply resent
-from the lookaside cache at `info` with `outcome=retransmit`, and a
+from the lookaside cache at `debug` with `outcome=retransmit`, and a
 duplicate that arrives while the first copy is being processed at
-`info` with `outcome=discard`. A request that panics is answered with
+`debug` with `outcome=discard`. A request that panics is answered with
 nothing and logged `event=kdc.transport` at **error**.
 
 A kdcauthdata module that returns an error logs
@@ -144,27 +153,35 @@ writer) logs `event=protocol.secret_file` at **warn** with
 group not kept`), and `error`; the save completes. With SELinux
 permissive, a new file whose SELinux context cannot be set logs the same
 event with `detail` `SELinux context not set` and is created without it
-(enforcing, the save fails). The daemons' filters include
-`krb5_protocol=warn`, so the line shows.
+(enforcing, the save fails). The daemons' filters keep every crate but
+`krb5_kdc` and `krb5_admin` at `warn`, so the line shows.
 
 A KDC that cannot record a client's lockout attributes in
-`principal.lockout` (the file is missing, as in a realm an earlier
-release made, is no lockout file, or cannot be opened read-write or
+`principal.lockout` (the file is missing and the database is not open
+read-write to it, is no lockout file, or cannot be opened read-write or
 written) logs `event=kdc.issue` at **warn**, once for each of the two
 causes (no file it may open; one it may not write), with
-`correlation_id`, `component`, `outcome=error` and the reason as
-`detail`, writes the same text to its daemon log, and keeps the
-attributes in memory until it can write the file; from then on the
-file's are the only ones. A KDC that opened the file read-only keeps
-them in memory until it is restarted, even once the file is writable.
+`correlation_id`, `component`, `outcome=error` and the reason, ending
+`lockout counting is off`, as `detail`, and writes the same text to its
+daemon log. Lockout counting stays off until the file can be written. A
+KDC that can open the database read-write makes a missing file itself.
+
+A realm MIT's `kdb5_util` made has no `principal.lockout`. The KS oracle
+realm is one of these, so the first counted login logs that warning
+until the file is created beside the database, as an upgrade does, or
+the KDC runs where it may make the file.
 
 The `KdcAudit` registry (`kdc_audit.c`) writes `event=kdc.audit`
-with MIT `j_dict.h` field names (`event_name`, `event_success`,
+when `[plugins] audit` `enable_only` names `json`, with MIT
+`j_dict.h` field names (`event_name`, `event_success`,
 `stage`, `tkt_out_id`, `req_id`, `fromport`, `fromaddr`, …).
 `tkt_out_id` is SHA-256 of `ticket.enc_part.ciphertext` as 64
 uppercase hex digits. `req_id` is 31 alphanumeric characters
-(MIT `REQID_LEN` including NUL). `KRB5_KDC_AUDIT=test` appends
-the same JSON to `KRB5_KDC_AUDIT_LOG` (default `au.log`).
+(MIT `REQID_LEN` including NUL). In a `test-hooks` build only,
+`KRB5_KDC_AUDIT=test` appends the same JSON to `KRB5_KDC_AUDIT_LOG` (default `au.log`).
+Each store keeps its own audit modules. A new store copies the
+process default, and a module registered on one store is not on
+another.
 
 ## The daemon log (`[logging]`)
 
@@ -246,8 +263,8 @@ nothing, still create it, as MIT's do. `KRB5_TRACE=/dev/stderr` puts
 the lines on standard error; nothing else goes there or to standard
 output. A program the kernel marks secure (setuid, setgid or file
 capabilities) ignores the variable, as MIT's `secure_getenv` does.
-`krb5kdc` and `kadmind` do not read `KRB5_TRACE`, where MIT's do
-through `krb5_init_context`. `kprop` traces as MIT's does (its AS
+`kadmind` does not read `KRB5_TRACE`, and `krb5kdc` reads it only for PKINIT's
+lines, where MIT's read it through `krb5_init_context`. `kprop` traces as MIT's does (its AS
 exchange, the authenticator it sends and the AP-REP `kpropd` answers
 with), opening the file at start-up. `krb5-iprop-pull` traces its client
 half (the AS and TGS requests for the iprop service) and opens the file
@@ -261,8 +278,8 @@ encrypted challenge, SPAKE, FAST, and PKINIT's generic lines), the TGS requests 
 referrals and S4U, the cache and keytab lookups and stores, and the
 kpasswd exchange. Where our flow differs from MIT's, the lines show
 ours: under FAST, when the KDC offers SPAKE, MIT's `kinit` tries SPAKE
-before the encrypted challenge and ours sends the challenge. PKINIT's own lines
-(`pkinit_trace.h`) and the DNS lookups are not traced.
+before the encrypted challenge and ours sends the challenge. PKINIT's lines
+(`pkinit_trace.h`) are traced by `kinit` and the KDC.
 
 A key prints as its enctype and the first two bytes of its SHA-1
 (`aes256-sha2/4149`), as MIT prints it. No line carries key, password
@@ -277,11 +294,10 @@ check that the wire does not (`docs/mit-deviations.md`).
 ## Logs as metrics
 
 Every issue and crypto/ASN.1 event already carries `duration_us` and
-`outcome`. An aggregator (log shipper, `analyze-kdc-slo.py`, the
-stress/soak gates) derives counts, rates, and p99 from those fields.
-**In-process counters, a metrics crate, and Prometheus are deferred**
-past 1.0; they are not 1.0-blocking. Do not add them unless the
-project later opts in.
+`outcome`. An aggregator (log shipper, `analyze-kdc-slo.py`)
+derives counts, rates, and p99 from those fields.
+**In-process counters, a metrics crate and Prometheus are not provided.**
+Do not add them unless the project later opts in.
 
 ## Example (JSON subscriber)
 

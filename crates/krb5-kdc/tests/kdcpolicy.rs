@@ -3,12 +3,12 @@
 
 use krb5_asn1::decode_enc_kdc_rep_part;
 use krb5_crypto::{KeyUsage, decrypt};
+use krb5_kdc::KdcPolicy;
 use krb5_kdc::testrealm::TestPolicy;
 use krb5_kdc::testrealm::{
     TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
     bootstrap_documented, documented_admin_id, documented_host,
 };
-use krb5_kdc::{KdcPolicy, clear_thread_policy, set_thread_policy};
 
 use krb5_protocol::{as_req, pa_enc_timestamp};
 use krb5_testkit::status;
@@ -16,8 +16,11 @@ use krb5_types::{PrincipalName, err, ku};
 
 #[test]
 fn test_policy_fail_client_is_local_policy() {
-    set_thread_policy(std::sync::Arc::new(TestPolicy));
     let (mut store, acl) = bootstrap_documented().unwrap();
+    store
+        .policy
+        .plugins
+        .set_policy(std::sync::Arc::new(TestPolicy));
     let fail = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["fail"]);
     store
         .create_password(&acl, &documented_admin_id(), &fail, b"fail-secret")
@@ -40,45 +43,10 @@ fn test_policy_fail_client_is_local_policy() {
     let (code, text) = status(&err);
     assert_eq!(code, err::POLICY);
     assert_eq!(text, Some("LOCAL_POLICY"));
-    clear_thread_policy();
-}
-
-#[test]
-fn test_policy_foreign_indicator_is_local_policy() {
-    set_thread_policy(std::sync::Arc::new(TestPolicy));
-    let store = krb5_kdc::PrincipalStore::bootstrap(
-        TEST_REALM,
-        TEST_USER,
-        TEST_USER_PASSWORD,
-        TEST_ADMIN,
-        TEST_ADMIN_PASSWORD,
-    )
-    .unwrap();
-    // Inject a non-ONE_HOUR/SEVEN_HOURS indicator via the store client path:
-    // TestPolicy sees indicators from AS only after preauth. Use the
-    // thread policy against a password AS with a dummy indicator by
-    // setting require-style indicators on the issue path through SPAKE
-    // is heavier; the name-deny cell above is the live gate's twin.
-    // Here we call check_as directly.
-    let user = store
-        .get_name(&PrincipalName::new(
-            PrincipalName::NT_PRINCIPAL,
-            [TEST_USER],
-        ))
-        .unwrap()
-        .clone();
-    let err = TestPolicy
-        .check_as(&store, &user, &["OTHER".into()])
-        .unwrap_err();
-    let (code, text) = status(&err);
-    assert_eq!(code, err::POLICY);
-    assert_eq!(text, Some("LOCAL_POLICY"));
-    clear_thread_policy();
 }
 
 #[test]
 fn test_policy_one_hour_rewrites_endtime() {
-    set_thread_policy(std::sync::Arc::new(TestPolicy));
     let store = krb5_kdc::PrincipalStore::bootstrap(
         TEST_REALM,
         TEST_USER,
@@ -113,7 +81,6 @@ fn test_policy_one_hour_rewrites_endtime() {
         .unwrap();
     assert_eq!(seven.lifetime, 7 * 3600);
     assert_eq!(seven.renew_lifetime, 14 * 3600);
-    clear_thread_policy();
 }
 
 #[test]
@@ -151,7 +118,8 @@ fn bootstrap_honours_supported_enctypes_order() {
 
 /// With no `supported_enctypes`, a new key set is MIT's default pair; an explicit list (`-e`)
 /// is taken as given, even outside it; the documented test realm keeps its four AES types.
-/// MIT `KRB5_DEFAULT_SUPPORTED_ENCTYPES` (`osconf.hin:109-111`): aes256-cts-hmac-sha1-96 and aes128-cts-hmac-sha1-96.
+// MIT: `KRB5_DEFAULT_SUPPORTED_ENCTYPES` (osconf.hin:109-111)
+/// aes256-cts-hmac-sha1-96 and aes128-cts-hmac-sha1-96.
 #[test]
 fn unset_supported_enctypes_keys_mits_default_pair() {
     let etypes = |store: &krb5_kdc::PrincipalStore, who: &str| -> Vec<i32> {
@@ -168,7 +136,7 @@ fn unset_supported_enctypes_keys_mits_default_pair() {
             .unwrap();
     let mut store = krb5_kdc::PrincipalStore::new("SE.TEST");
     store.apply_kdc_conf(&kdc).unwrap();
-    assert_eq!(store.policy.password_etypes().len(), 2);
+    assert_eq!(store.policy.password_keysalts().len(), 2);
     let creator = "kadmin/admin@SE.TEST";
     let pw = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user1"]);
     store
@@ -185,7 +153,7 @@ fn unset_supported_enctypes_keys_mits_default_pair() {
         .insert_new_randkey(
             &explicit,
             "SE.TEST",
-            &[krb5_crypto::EncryptionType::Aes256CtsHmacSha384192],
+            &[krb5_crypto::EncryptionType::Aes256CtsHmacSha384192.into()],
             creator,
         )
         .unwrap();

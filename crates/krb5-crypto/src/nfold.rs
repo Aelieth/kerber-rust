@@ -1,17 +1,5 @@
-//! RFC 3961 n-fold. Ported from MIT krb5 `krb5int_nfold` (1.22.2).
-//!
-//! An empty input or a zero output length is `Error::InvalidParams`.
-//! The expansion is 1's-complement addition of 13-bit rotations.
+// MIT: `krb5int_nfold` (lib/crypto/krb/nfold.c:46-117)
 
-/// Expand `input` to exactly `out_len` octets using 1's-complement addition
-/// of 13-bit rotations, as specified in RFC 3961 section 5.1.
-///
-/// `input` must be non-empty. `out_len` must be non-zero.
-/// Expand `input` to exactly `out_len` octets.
-///
-/// # Errors
-///
-/// `Error::InvalidParams` when `input` is empty or `out_len` is 0.
 pub fn nfold(input: &[u8], out_len: usize) -> Result<Vec<u8>, crate::error::Error> {
     if input.is_empty() || out_len == 0 {
         return Err(crate::error::Error::InvalidParams);

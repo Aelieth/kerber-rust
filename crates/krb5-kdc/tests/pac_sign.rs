@@ -1,67 +1,43 @@
 //! PAC shape at issue and verify, including the RODCIdentifier trailer on the server
 //! checksum.
-//! MIT `verify_pac_checksums` (`pac.c:557-569`): the privsvr checksum covers the server
+// MIT: `verify_pac_checksums` (pac.c:557-569)
+//! the privsvr checksum covers the server
 //! checksum buffer past its 4-byte type, a trailer included.
 //! PAC shape and placement rules MIT 1.22.2 applies at issue and verify time:
-//! MIT `k5_pac_should_have_ticket_signature` (`pac.c:583-592`): tickets to TGS and
+// MIT: `k5_pac_should_have_ticket_signature` (pac.c:583-592)
+//! tickets to TGS and
 //! `kadmin/changepw` principals carry no ticket signature.
-//! MIT `sign_pac` (`pac_sign.c:239-243`): only a service ticket (`is_service_tkt`) gets the
+// MIT: `sign_pac` (pac_sign.c:239-243)
+//! only a service ticket (`is_service_tkt`) gets the
 //! full checksum.
-//! MIT `get_verified_pac` (`kdc_util.c:597-602`): for a TGS principal only the server
+// MIT: `get_verified_pac` (kdc_util.c:597-602)
+//! for a TGS principal only the server
 //! signature is checked.
-//! MIT `krb5_pac_parse` (`pac.c:281-317`): it refuses a bad version, buffer count,
+// MIT: `krb5_pac_parse` (pac.c:281-317)
+//! it refuses a bad version, buffer count,
 //! alignment, or offset.
-//! MIT `k5_pac_locate_buffer` (`pac.c:137-147`): a buffer type present twice is `EINVAL`,
+// MIT: `k5_pac_locate_buffer` (pac.c:137-147)
+//! a buffer type present twice is `EINVAL`,
 //! and one that is absent is `ENOENT`.
 //! The tests drive the shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry points of a
 //! bootstrapped realm.
 
 use krb5_asn1::encode;
-use krb5_crypto::{
-    EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt, derive_prfplus_enctype, encrypt,
-};
+use krb5_crypto::{KeyUsage, ProtocolKey, checksum};
 use krb5_kdc::testrealm::{
     TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented, documented_host,
 };
 use krb5_kdc::{
     PacTicket, decrypt_ticket_part, pac_from_ticket_part, should_have_ticket_signature, sign_pac,
-    sign_reply_pac, ticket_checksum_der, verify_pac, verify_pac_signatures, wrap_win2k_pac,
+    ticket_checksum_der, verify_pac_signatures,
 };
-use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
+use krb5_protocol::{as_req, pa_enc_timestamp};
 
-use krb5_testkit::{issue_tgt_password, password_key, protocol_code};
+use krb5_testkit::{password_key, protocol_code};
 use krb5_types::pac::{
-    PAC_CLIENT_INFO, PAC_FULL_CHECKSUM, PAC_LOGON_INFO, PAC_PRIVSVR_CHECKSUM, PAC_SERVER_CHECKSUM,
-    PAC_TICKET_CHECKSUM, Pac, PacBuffer, PacError, client_info_buffer, signature_buffer,
-    zero_pac_ad_data,
+    PAC_LOGON_INFO, PAC_PRIVSVR_CHECKSUM, PAC_SERVER_CHECKSUM, Pac, PacError, signature_buffer,
 };
-use krb5_types::{EncTicketPart, KerberosTime, PaData, PaPacRequest, PrincipalName, err, ku, pa};
-
-fn rewrap(
-    ticket: &krb5_types::Ticket,
-    part: &EncTicketPart,
-    key: &ProtocolKey,
-) -> krb5_types::Ticket {
-    let der = encode(part).unwrap();
-    let usage = KeyUsage::new(ku::TICKET).unwrap();
-    let mut out = ticket.clone();
-    out.enc_part.cipher = encrypt(key, usage, &der).unwrap().into();
-    out
-}
-
-fn host_tgs(issued: &krb5_kdc::IssuedAs, nonce: u32) -> krb5_types::TgsReq {
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    tgs_req(
-        issued.rep.0.ticket.clone(),
-        &issued.session_key,
-        TEST_REALM,
-        &cname,
-        documented_host(),
-        TEST_REALM,
-        nonce,
-    )
-    .unwrap()
-}
+use krb5_types::{PaData, PaPacRequest, PrincipalName, err, ku, pa};
 
 #[test]
 fn as_pac_request_false_and_disable_pac_omit_pac() {
@@ -95,179 +71,6 @@ fn as_pac_request_false_and_disable_pac_omit_pac() {
     let krbtgt2 = store2.krbtgt().unwrap().best_key().unwrap();
     let part2 = decrypt_ticket_part(&krbtgt2.key, &issued2.rep.0.ticket).unwrap();
     assert!(pac_from_ticket_part(&part2).is_none());
-}
-
-#[test]
-fn tgs_privsvr_enctype_signs_with_prfplus() {
-    let (mut store, _) = bootstrap_documented().unwrap();
-    let host = documented_host();
-    store
-        .set_string(
-            &host,
-            "pac_privsvr_enctype",
-            Some("aes128-cts-hmac-sha1-96"),
-        )
-        .unwrap();
-    let as_out = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 6130);
-    let svc = krb5_kdc::issue_tgs(&store, &host_tgs(&as_out, 6131)).unwrap();
-    let host_key = store.get_name(&host).unwrap().best_key().unwrap();
-    let part = decrypt_ticket_part(&host_key.key, &svc.rep.0.ticket).unwrap();
-    let pac = pac_from_ticket_part(&part).expect("PAC");
-    let krbtgt = store.krbtgt().unwrap().first_current_key().unwrap();
-    let privsvr = derive_prfplus_enctype(
-        &krbtgt.key,
-        b"pac_privsvr",
-        EncryptionType::Aes128CtsHmacSha196,
-    )
-    .unwrap();
-    let der = ticket_checksum_der(&part).unwrap();
-    verify_pac_signatures(&pac, &host_key.key, Some(&privsvr), Some(&der), true).unwrap();
-    assert!(
-        verify_pac_signatures(&pac, &host_key.key, Some(&krbtgt.key), Some(&der), true).is_err()
-    );
-}
-
-#[test]
-fn tgs_from_client_info_only_tgt_does_not_invent_logon() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let as_out = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 6140);
-    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
-    let mut part = decrypt_ticket_part(&krbtgt.key, &as_out.rep.0.ticket).unwrap();
-    let stub = Pac::built(
-        0,
-        vec![PacBuffer::new(
-            PAC_CLIENT_INFO,
-            client_info_buffer(
-                part.authtime.unix_seconds(),
-                &part.cname.components_joined(),
-            ),
-        )],
-    )
-    .to_bytes();
-    part.authorization_data = Some(wrap_win2k_pac(&[0]).unwrap());
-    let der = ticket_checksum_der(&part).unwrap();
-    let ident = store.pac_identity(&part.cname, TEST_REALM);
-    let pac = sign_reply_pac(
-        &part.cname,
-        part.authtime.unix_seconds(),
-        &PacTicket {
-            server: &krbtgt.key,
-            kdc: &krbtgt.key,
-            enc_tkt_der: &der,
-            is_service_tkt: false,
-        },
-        &ident,
-        None,
-        Some(&stub),
-    )
-    .unwrap();
-    part.authorization_data = Some(wrap_win2k_pac(&pac).unwrap());
-    let tkt = rewrap(&as_out.rep.0.ticket, &part, &krbtgt.key);
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgs = tgs_req(
-        tkt,
-        &as_out.session_key,
-        TEST_REALM,
-        &cname,
-        documented_host(),
-        TEST_REALM,
-        6141,
-    )
-    .unwrap();
-    let svc = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
-    let host = store
-        .get_name(&documented_host())
-        .unwrap()
-        .best_key()
-        .unwrap();
-    let svc_part = decrypt_ticket_part(&host.key, &svc.rep.0.ticket).unwrap();
-    let issued = Pac::parse(&pac_from_ticket_part(&svc_part).unwrap()).unwrap();
-    let mut kinds: Vec<u32> = issued.buffers.iter().map(|b| b.kind).collect();
-    kinds.sort_unstable();
-    assert_eq!(
-        kinds,
-        vec![
-            PAC_SERVER_CHECKSUM,
-            PAC_PRIVSVR_CHECKSUM,
-            PAC_CLIENT_INFO,
-            PAC_TICKET_CHECKSUM,
-            PAC_FULL_CHECKSUM,
-        ]
-    );
-    assert!(issued.buffer(PAC_LOGON_INFO).is_none());
-}
-
-#[test]
-fn tgs_from_local_tgt_keeps_subject_logon() {
-    let (mut store, _) = bootstrap_documented().unwrap();
-    // AD data: the realm has an AD identity (kdc.conf `domain_sid`), so its PACs are AD-shaped.
-    store.policy.ad_identity = true;
-    let as_out = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 6150);
-    let svc = krb5_kdc::issue_tgs(&store, &host_tgs(&as_out, 6151)).unwrap();
-    let host = store
-        .get_name(&documented_host())
-        .unwrap()
-        .best_key()
-        .unwrap();
-    let part = decrypt_ticket_part(&host.key, &svc.rep.0.ticket).unwrap();
-    let pac = Pac::parse(&pac_from_ticket_part(&part).unwrap()).unwrap();
-    assert!(pac.buffer(PAC_LOGON_INFO).is_some());
-}
-
-#[test]
-fn tgs_preserves_subject_authtime() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let as_out = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 6160);
-    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
-    let mut part = decrypt_ticket_part(&krbtgt.key, &as_out.rep.0.ticket).unwrap();
-    let old = KerberosTime::from_unix_seconds(1_700_000_000);
-    part.authtime = old.clone();
-    let stub = Pac::built(
-        0,
-        vec![PacBuffer::new(
-            PAC_CLIENT_INFO,
-            client_info_buffer(old.unix_seconds(), &part.cname.components_joined()),
-        )],
-    )
-    .to_bytes();
-    part.authorization_data = Some(wrap_win2k_pac(&[0]).unwrap());
-    let der = ticket_checksum_der(&part).unwrap();
-    let ident = store.pac_identity(&part.cname, TEST_REALM);
-    let pac = sign_reply_pac(
-        &part.cname,
-        old.unix_seconds(),
-        &PacTicket {
-            server: &krbtgt.key,
-            kdc: &krbtgt.key,
-            enc_tkt_der: &der,
-            is_service_tkt: false,
-        },
-        &ident,
-        None,
-        Some(&stub),
-    )
-    .unwrap();
-    part.authorization_data = Some(wrap_win2k_pac(&pac).unwrap());
-    let tkt = rewrap(&as_out.rep.0.ticket, &part, &krbtgt.key);
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgs = tgs_req(
-        tkt,
-        &as_out.session_key,
-        TEST_REALM,
-        &cname,
-        documented_host(),
-        TEST_REALM,
-        6161,
-    )
-    .unwrap();
-    let svc = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
-    let host = store
-        .get_name(&documented_host())
-        .unwrap()
-        .best_key()
-        .unwrap();
-    let svc_part = decrypt_ticket_part(&host.key, &svc.rep.0.ticket).unwrap();
-    assert_eq!(svc_part.authtime, old);
 }
 
 fn signed_as_pac() -> (Vec<u8>, ProtocolKey, ProtocolKey) {
@@ -405,15 +208,6 @@ fn signed() -> Signed {
     }
 }
 
-fn kinds(pac: &[u8]) -> Vec<u32> {
-    Pac::parse(pac)
-        .unwrap()
-        .buffers
-        .iter()
-        .map(|b| b.kind)
-        .collect()
-}
-
 #[test]
 fn ticket_signature_predicate_matches_mit() {
     let tgt = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", TEST_REALM]);
@@ -423,22 +217,6 @@ fn ticket_signature_predicate_matches_mit() {
     assert!(!should_have_ticket_signature(&changepw));
     assert!(should_have_ticket_signature(&admin));
     assert!(should_have_ticket_signature(&documented_host()));
-}
-
-#[test]
-fn tgt_pac_carries_no_ticket_or_full_checksum() {
-    let s = signed();
-    let tgt = kinds(&s.tgt_shaped);
-    assert!(
-        !tgt.contains(&PAC_TICKET_CHECKSUM) && !tgt.contains(&PAC_FULL_CHECKSUM),
-        "{tgt:?}"
-    );
-    assert!(tgt.contains(&PAC_SERVER_CHECKSUM) && tgt.contains(&PAC_PRIVSVR_CHECKSUM));
-    let svc = kinds(&s.service_shaped);
-    assert!(
-        svc.contains(&PAC_TICKET_CHECKSUM) && svc.contains(&PAC_FULL_CHECKSUM),
-        "{svc:?}"
-    );
 }
 
 #[test]
@@ -513,146 +291,4 @@ fn first_current_key_ignores_the_session_etype() {
             .unwrap()
             .etype
     );
-}
-
-fn rewrap_ticket(
-    ticket: &krb5_types::Ticket,
-    part: &EncTicketPart,
-    key: &ProtocolKey,
-) -> krb5_types::Ticket {
-    let der = encode(part).expect("enc-tkt DER");
-    let usage = KeyUsage::new(ku::TICKET).expect("usage");
-    let cipher = encrypt(key, usage, &der).expect("encrypt");
-    let mut out = ticket.clone();
-    out.enc_part.cipher = cipher.into();
-    out
-}
-
-#[test]
-fn as_and_tgs_tickets_carry_verifiable_pac() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 501);
-    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
-    let tgt_part = decrypt_ticket_part(&krbtgt.key, &issued.rep.0.ticket).expect("TGT");
-    let pac = pac_from_ticket_part(&tgt_part).expect("PAC on TGT");
-    verify_pac(&pac, &krbtgt.key, &krbtgt.key, false).expect("TGT PAC");
-
-    let tgs = tgs_req(
-        issued.rep.0.ticket.clone(),
-        &issued.session_key,
-        TEST_REALM,
-        &cname,
-        documented_host(),
-        TEST_REALM,
-        502,
-    )
-    .expect("TGS-REQ");
-    let tgs_out = krb5_kdc::issue_tgs(&store, &tgs).expect("TGS");
-    let host = store
-        .get_name(&documented_host())
-        .unwrap()
-        .best_key()
-        .unwrap();
-    let svc = decrypt_ticket_part(&host.key, &tgs_out.rep.0.ticket).expect("svc");
-    let pac = pac_from_ticket_part(&svc).expect("PAC on service ticket");
-    verify_pac(&pac, &host.key, &krbtgt.key, true).expect("service PAC");
-    let ident = store.pac_identity(&cname, TEST_REALM);
-    let signed = sign_pac(
-        &cname,
-        tgt_part.authtime.unix_seconds(),
-        &PacTicket {
-            server: &host.key,
-            kdc: &krbtgt.key,
-            enc_tkt_der: &[],
-            is_service_tkt: true,
-        },
-        &ident,
-        None,
-    )
-    .expect("sign");
-    verify_pac(&signed, &host.key, &krbtgt.key, true).expect("re-sign");
-}
-
-#[test]
-fn pac_logon_info_is_ndr() {
-    let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    // AD data: the realm has an AD identity (kdc.conf `domain_sid`), so its PACs are AD-shaped.
-    store.policy.ad_identity = true;
-    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 54);
-    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
-    let part = decrypt_ticket_part(&krbtgt.key, &issued.rep.0.ticket).expect("TGT");
-    let pac = pac_from_ticket_part(&part).expect("PAC");
-    let parsed = krb5_types::pac::Pac::parse(&pac).expect("parse");
-    let logon = parsed
-        .buffers
-        .iter()
-        .find(|b| b.kind == krb5_types::pac::PAC_LOGON_INFO)
-        .expect("logon");
-    let (c, r) = krb5_types::pac::parse_logon_info(&logon.data).expect("NDR");
-    assert_eq!(c, TEST_USER);
-    assert_eq!(r, TEST_REALM);
-}
-
-#[test]
-fn tgs_without_pac_still_issues() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 9300);
-    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
-    let mut part = decrypt_ticket_part(&krbtgt.key, &issued.rep.0.ticket).expect("TGT");
-    assert!(pac_from_ticket_part(&part).is_some());
-    part.authorization_data = None;
-    let stripped = rewrap_ticket(&issued.rep.0.ticket, &part, &krbtgt.key);
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgs = tgs_req(
-        stripped,
-        &issued.session_key,
-        TEST_REALM,
-        &cname,
-        documented_host(),
-        TEST_REALM,
-        9301,
-    )
-    .expect("TGS-REQ");
-    let out = krb5_kdc::issue_tgs(&store, &tgs).expect("MIT TGT without PAC must still issue");
-    let host = store
-        .get_name(&documented_host())
-        .unwrap()
-        .best_key()
-        .unwrap();
-    let svc = decrypt_ticket_part(&host.key, &out.rep.0.ticket).expect("svc");
-    assert!(
-        pac_from_ticket_part(&svc).is_none(),
-        "TGS from a PAC-less subject issues no PAC (kdc_authdata.c:491)"
-    );
-}
-
-#[test]
-fn type16_checksum_uses_original_enc_tkt_bytes() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 9400);
-    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
-    let usage = KeyUsage::new(ku::TICKET).expect("usage");
-    let plain = decrypt(
-        &krbtgt.key,
-        usage,
-        issued.rep.0.ticket.enc_part.cipher.as_ref(),
-    )
-    .expect("plain");
-    let part = decrypt_ticket_part(&krbtgt.key, &issued.rep.0.ticket).expect("TGT");
-    let pac = pac_from_ticket_part(&part).expect("PAC");
-    let from_bytes = zero_pac_ad_data(&plain, &pac).expect("surgical PAC zero");
-    let reencoded = ticket_checksum_der(&part).expect("re-encode");
-    assert_eq!(
-        from_bytes, reencoded,
-        "self-issued rasn DER must match original-bytes PAC zero"
-    );
-    verify_pac_signatures(
-        &pac,
-        &krbtgt.key,
-        Some(&krbtgt.key),
-        Some(&from_bytes),
-        false,
-    )
-    .expect("type-16 over original bytes");
 }

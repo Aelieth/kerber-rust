@@ -21,9 +21,9 @@ on the design there so you do not build a large PR that cannot land.
 A good PR has:
 
 - A title of the form `tag: Imperative sentence`, at most 72 characters.
-  The tag is the crate or area touched: `crypto`, `asn1`, `types`,
-  `config`, `log`, `protocol`, `client`, `kdc`, `gss`, `admin`, or
-  `test`, `docs`, `ci`, `tool`, `harness`, `examples`. A change that spans
+  The tag is the crate or area touched: a crate's short name (`kdc`,
+  `client`, `admin`, `protocol`, `gss`, `crypto`, `config`, …), or `field`,
+  `gates`, `scripts`, `harness`, `ci`, `docs`, `deps`, `examples`, `tools`. A change that spans
   two takes both (`admin/kdc:`). See [Commit Message
   Guidelines](https://gist.github.com/robertpainsi/b632364184e70900af4ab688decf6f53)
   for the imperative mood.
@@ -36,10 +36,7 @@ A good PR has:
   interop against the MIT 1.22.2 harness over re-implemented oracles.
   When automation is impractical, document thorough manual testing with
   logs (and traces where relevant).
-- For protocol behaviour, a content-asserting gate that drives a real
-  implementation (MIT 1.22.2 first, then Samba or Heimdal). A feature is
-  done only when such a gate proves it; a Rust-vs-Rust round-trip is never
-  proof.
+- For protocol behaviour, a feature is done only when it works in production against MIT 1.22.2 on the lab VMs, MIT first, and against the real AD where it reaches it; a Rust-vs-Rust round-trip is never proof.
 - For a change to behaviour MIT also has, its row in the parity ledger
   (`docs/parity/`: MIT cite, check, verdict, proof), added or updated in
   the same PR.
@@ -59,26 +56,17 @@ We use [GitHub Flow](https://docs.github.com/en/get-started/using-git/github-flo
 ## Code comments
 
 Comments explain non-obvious intent, invariants, security considerations,
-and protocol subtleties. Do not restate the obvious, and do not raise the
-comment density: a sentence the next two lines already say is deleted.
-Public APIs need rustdoc. Four rules give the form; the comment budget moves
-from process tags into invariants that are otherwise unstated.
+and protocol subtleties. Do not restate the obvious. A doc comment is one
+line, and only where the name cannot say it. Comments are at most 3% of
+the code, and doc comments count. The target for tests is 10% of the code; CI holds a ratchet,
+30.841% of lines today, that only falls.
 
-**R1.** A MIT anchor is one line, in one form:
-``MIT `<symbol>` (`<path>:<a>-<b>`): <what the port guarantees>``.
-The symbol names the MIT definition whose extent contains the cited
-range: a C function, a `struct` / `union` / `enum` or typedef, a table
-or global, a macro or macro-generated item, an error-table entry, or an
-ASN.1 type (its `NAME ::=` comment block). Never a Rust symbol, and
-never a callee or macro standing in for the function. One anchor per
-line, opening its own sentence. A single source line is written
-`<a>-<a>`. A path whose basename names more than one MIT file carries
-enough directories to name one. A mention without a range (``MIT `X` ``,
-or a MIT file named in prose) is not an anchor and is legal. The
-guarantee is what this port does; where the port deviates, the anchor
-line says so ("MIT does X; this port does Y") and the deviation has a
-parity-ledger row under `docs/parity/` (verdict `deviation` or
-`stricter-documented`) or a `docs/mit-deviations.md` row.
+**R1.** A MIT citation is one line, at most 100 columns:
+``// MIT: `symbol` (path:a-b)``. The range is optional; without one, the symbol is
+defined somewhere in that file. A pointer
+`// MIT <symbol>; see docs/parity/<file>.md` is legal when the file exists and names
+the symbol, and so is the older ranged anchor. A mention without a range is not a
+citation and is legal.
 
 **R2.** State the invariant, not the steps: an ordering, a fail-closed
 rule, a key-material rule, an attacker-relevant subtlety, or a deliberate
@@ -92,21 +80,16 @@ hash, a backticked hash, "fails at" a hash), no red-at-parent notes
 paths. A deferred parity gap gets a ledger row and at most a one-line
 pointer.
 
-**R4.** `# Errors` names variants or conditions. It does not use a family
-word ("crypto", "DER") and it does not open with "Returns". A function
-that cannot fail says "None:" and why. `# Panics` appears only where a
-panic exists.
-
-`check_mit_anchor_form`, `check_mit_anchor_truth` and
-`check_no_process_history` in `scripts/ci-policy.py` keep R1 and R3
-true. See [docs/testing.md](docs/testing.md).
+`check_mit_anchor_form` and `check_mit_anchor_truth` in
+`scripts/ci_policy/comments.py`, run by `scripts/ci-policy.py`, keep R1 true, and `check_no_process_history`
+keeps R3 true. See [docs/testing.md](docs/testing.md).
 
 ## Local checks
 
-The `test` job in CI is `make safety` (fmt, clippy, nextest,
-`ci-policy.py`) plus CI-only extras (nextest `--no-run`, junit, the
-gate ERR-trap self-test). `make doc` and `make shellcheck` are the
-sibling `doc` and `shellcheck` jobs. Do not run `cargo test --workspace`
+`make safety` (fmt, clippy, nextest, `ci-policy.py`) covers CI's `test`
+and `release` jobs; CI adds doctests, nextest `--no-run` and junit.
+`make doc` and `make shellcheck` are the sibling `doc` and
+`shellcheck` jobs. Do not run `cargo test --workspace`
 — CI forbids it on per-push; nextest is the runner. Linking needs `lld`
 (`ld.lld` on `$PATH`; see
 `.cargo/config.toml`). The gates need Docker.
@@ -115,29 +98,16 @@ sibling `doc` and `shellcheck` jobs. Do not run `cargo test --workspace`
 make safety
 ```
 
-Per-push CI is three tiers (`docs/testing.md`); job walls live in
-`ci-budget.toml`. `make budget` prints medians and `--check-budget`.
+The eight per-push jobs are in [docs/testing.md](docs/testing.md).
+Job walls live in `ci-budget.toml`.
 
 Live MIT oracles (when Docker is available): `make harness` then
-`make gate GATE=client-gate`, `make gate GATE=kdc-gate`,
-`make gate GATE=bidirectional-gate`. `make stop-harness` tears the
-container down. Comparison snapshot / full gate checkpoint:
-
-```bash
-make snapshot OUT=working/logs/<archive>/new QUALITY=1
-make checkpoint OUT=working/logs/<archive>/checkpoint
-```
+`make gate GATE=client-gate`, `make gate GATE=kdc-gate`. `make stop-harness` tears the
+container down.
 
 Gate scripts write host files only under `KERBER_SCRATCH` (their default
-is `/tmp/…`; point it at a directory you own). A live MIT settle runs
-through `scripts/lib/settle.sh <name> -- <command…>` so its output is
-stamped ([docs/testing.md](docs/testing.md)). `working/` is gitignored:
-plans and evidence live there, named `<kind>-<topic>-<MMDD-HHMM>.md`, and
-no tracked file cites them.
-
-Both run only where the host `default_realm` is the `TESTLABBY.LOCAL` lab
-stub, never on a machine whose `/etc/krb5.conf` names a real realm
-(`KERBER_ALLOW_HOST_REALM=1` overrides and is recorded in the stamp).
+is `$TMPDIR` or `/var/tmp`, under `kerber-<gate>`; point it at a directory you
+own).
 
 Never add C FFI. `unsafe` is forbidden unless a future exception is
 audited, minimized, and documented in the PR.

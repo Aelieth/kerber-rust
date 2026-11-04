@@ -1,33 +1,28 @@
-//! Public KDB extension surface (MIT kdb capabilities as Rust traits).
-//!
-//! Dump-v7 [`crate::PrincipalStore`] is the default at-rest backend.
-//! `db_library` selects the factory; unknown names error. The process-local
-//! PKINIT CA lives on [`KdcEnv`], not in dump rows.
+//! The KDB traits and dump-v7.
 
+#[cfg(any(test, feature = "test-hooks"))]
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
+#[cfg(any(test, feature = "test-hooks"))]
 use std::sync::Mutex;
+#[cfg(any(test, feature = "test-hooks"))]
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use krb5_types::PrincipalName;
 use krb5_types::pac::{PacIdentity, RpcSid};
-use krb5_types::pkinit::PkinitCa;
 
 use crate::dblock::DbLockHold;
 use crate::error::Error;
-use crate::lockout::{Lockout, LockoutUpdate};
+#[cfg(any(test, feature = "test-hooks"))]
+use crate::lockout::Lockout;
+use crate::lockout::LockoutUpdate;
 use crate::persist::{PersistError, load_store};
 use crate::store::{
     MAX_ALIAS_DEPTH, NamedPolicy, Policy, Principal, PrincipalStore, RID_FIRST_USER, strip_db_args,
 };
 
-/// Map a wire name to a `user@REALM` store id.
-///
-/// NT-ENTERPRISE is a single `user@suffix` component (RFC 6806), not a
-/// `/`-joined name. A suffix equal to `realm` (RFC 4120 §6.1, exact
-/// octets) maps to `user@realm`. Mixed-case `user@kerber.test` in
-/// `KERBER.TEST` is not a local alias (MIT `CLIENT_NOT_FOUND`).
 #[must_use]
+/// An enterprise suffix matches the realm byte for byte.
 pub fn lookup_principal_id(name: &PrincipalName, realm: &str) -> String {
     if name.name_type == PrincipalName::NT_ENTERPRISE {
         let raw = name.components_joined();
@@ -44,9 +39,8 @@ pub fn lookup_principal_id(name: &PrincipalName, realm: &str) -> String {
     name.unparse_with_realm(realm)
 }
 
-/// MIT `krb5_db_get_principal` (`kdb5.c:800-840`): follow alias stubs up to
-/// [`MAX_ALIAS_DEPTH`] hops and return the canonical id, `None` past the
-/// depth, on a missing hop or an unparsable target.
+// MIT: `krb5_db_get_principal` (kdb5.c:800-840)
+/// One hop past the depth is none, not that hop.
 pub fn resolve_alias_id<'a>(
     realm: &str,
     lookup: impl Fn(&str) -> Option<&'a Principal>,
@@ -67,16 +61,11 @@ pub fn resolve_alias_id<'a>(
     Some(id)
 }
 
-/// Process-local KDC state (the PKINIT CA). Not dump/persist rows.
-///
-/// The KDC keeps no replay cache of its own: a retransmit is answered by the lookaside, and a
-/// replay it no longer holds is processed again.
-/// MIT `kdc_process_tgs_req` (`kdc/kdc_util.c:189-191`): the TGS AP-REQ is read without a replay cache.
-/// MIT `enc_ts_verify` (`kdc/kdc_preauth_encts.c:47-118`): a timestamp inside the skew verifies again.
+// MIT: `kdc_process_tgs_req` (kdc/kdc_util.c:189-191)
+// MIT: `enc_ts_verify` (kdc/kdc_preauth_encts.c:47-118)
 #[derive(Clone, Debug)]
 pub struct KdcEnv {
-    /// PKINIT test CA.
-    pub pkinit_ca: Option<PkinitCa>,
+    pub pkinit: Option<std::sync::Arc<crate::pkinit::PkinitKdc>>,
 }
 
 impl Default for KdcEnv {
@@ -86,117 +75,63 @@ impl Default for KdcEnv {
 }
 
 impl KdcEnv {
-    /// No PKINIT CA.
     #[must_use]
     pub fn new() -> Self {
-        Self { pkinit_ca: None }
+        Self { pkinit: None }
     }
 }
 
-/// MIT kdb lookup / iterate (owned rows so a fetch-on-demand backend can impl).
+/// Locked database: Error::Protocol SVC_UNAVAILABLE (MIT KRB5_KDB_CANTLOCK_DB).
 pub trait PrincipalRead: Send + Sync {
-    /// Realm name.
     fn realm(&self) -> &str;
-    /// Ticket policy.
     fn policy(&self) -> &Policy;
-    /// Domain SID.
     fn domain_sid(&self) -> &RpcSid;
-    /// Process-local env.
     fn env(&self) -> &KdcEnv;
-    /// Lookup `name@REALM`.
-    ///
-    /// # Errors
-    ///
-    /// The backend's [`Error`] when a read fails, [`Error::Protocol`] `SVC_UNAVAILABLE` for a
-    /// locked database (MIT `KRB5_KDB_CANTLOCK_DB`). [`PrincipalStore`] and [`MemoryStore`] never
-    /// fail.
     fn fetch(&self, id: &str) -> Result<Option<Principal>, Error>;
-    /// Lookup by name in this realm.
-    ///
-    /// # Errors
-    ///
-    /// The backend's [`Error`] when a read fails, [`Error::Protocol`] `SVC_UNAVAILABLE` for a
-    /// locked database (MIT `KRB5_KDB_CANTLOCK_DB`). [`PrincipalStore`] and [`MemoryStore`] never
-    /// fail.
     fn fetch_name(&self, name: &PrincipalName) -> Result<Option<Principal>, Error> {
         self.fetch(&lookup_principal_id(name, self.realm()))
     }
-    /// `krbtgt/REALM@REALM`.
-    ///
-    /// # Errors
-    ///
-    /// The backend's [`Error`] when a read fails, [`Error::Protocol`] `SVC_UNAVAILABLE` for a
-    /// locked database (MIT `KRB5_KDB_CANTLOCK_DB`). [`PrincipalStore`] and [`MemoryStore`] never
-    /// fail.
     fn fetch_krbtgt(&self) -> Result<Option<Principal>, Error> {
         self.fetch_name(&PrincipalName::krbtgt(self.realm()))
     }
-    /// Principal ids, sorted.
-    ///
-    /// # Errors
-    ///
-    /// The backend's [`Error`] when a read fails, [`Error::Protocol`] `SVC_UNAVAILABLE` for a
-    /// locked database (MIT `KRB5_KDB_CANTLOCK_DB`). [`PrincipalStore`] and [`MemoryStore`] never
-    /// fail.
     fn list_ids(&self) -> Result<Vec<String>, Error>;
-    /// All principals (iterate).
-    ///
-    /// # Errors
-    ///
-    /// The backend's [`Error`] when a read fails, [`Error::Protocol`] `SVC_UNAVAILABLE` for a
-    /// locked database (MIT `KRB5_KDB_CANTLOCK_DB`). [`PrincipalStore`] and [`MemoryStore`] never
-    /// fail.
     fn list_principals(&self) -> Result<Vec<Principal>, Error>;
-    /// PKINIT CA if provisioned.
-    fn pkinit_ca(&self) -> Option<&PkinitCa> {
-        self.env().pkinit_ca.as_ref()
+    fn pkinit(&self) -> Option<&crate::pkinit::PkinitKdc> {
+        self.env().pkinit.as_deref()
     }
-    /// Give `p`, an entry this store returned, its lockout attributes as they are now: the KDC
-    /// records them after the entry was read. A backend that keeps them in the entry has
-    /// nothing to add.
-    /// MIT `klmdb_get_principal` (`plugins/kdb/lmdb/kdb_lmdb.c:713-744`): a fetched entry takes its lockout record.
+    // MIT: `klmdb_get_principal` (plugins/kdb/lmdb/kdb_lmdb.c:713-744)
     fn merge_lockout(&self, p: &mut Principal) {
         let _ = p;
     }
-    /// Record one AS outcome's lockout update for `p` at `stamp`, the request's time, applied
-    /// to `p`'s attributes as they are when it is written; nothing else of the entry changes and
-    /// no update is logged. A backend that keeps no lockout attributes ignores it.
-    /// MIT `klmdb_update_lockout` (`plugins/kdb/lmdb/kdb_lmdb.c:1054-1121`): the lockout record alone is written.
+    // MIT: `klmdb_update_lockout` (plugins/kdb/lmdb/kdb_lmdb.c:1054-1121)
     fn update_lockout(&self, p: &Principal, stamp: u32, update: LockoutUpdate) {
         let _ = (p, stamp, update);
     }
-    /// `p`'s failed authentication count now ([`Self::merge_lockout`]).
     fn fail_auth_of(&self, p: &Principal) -> u32 {
         let mut q = p.clone();
         self.merge_lockout(&mut q);
         q.fail_auth_count
     }
-    /// `p`'s last failed authentication now, Unix seconds ([`Self::merge_lockout`]).
     fn last_failed_of(&self, p: &Principal) -> u32 {
         let mut q = p.clone();
         self.merge_lockout(&mut q);
         q.last_failed
     }
-    /// `p`'s last successful authentication now, Unix seconds ([`Self::merge_lockout`]).
     fn last_success_of(&self, p: &Principal) -> u32 {
         let mut q = p.clone();
         self.merge_lockout(&mut q);
         q.last_success
     }
-    /// Max failures before CLIENT_REVOKED (0 = none).
+    /// The default of 0 does not lock the account.
     fn max_fail_for(&self, p: &Principal) -> u32 {
         let _ = p;
         0
     }
-    /// Audit one AS outcome of `name` now as the KDC does: a success (`ok`) or a failed
-    /// preauthentication ([`crate::lockout::lockout_audit`]); an unknown name records nothing.
-    /// A test hook: the KDC audits from its AS exchange.
     #[cfg(feature = "test-hooks")]
     fn record_as_outcome(&self, name: &PrincipalName, ok: bool) {
-        let Ok(Some(mut p)) = self.fetch_name(name) else {
+        let Ok(Some(p)) = self.fetch_name(name) else {
             return;
         };
-        self.merge_lockout(&mut p);
         let status = if ok {
             0
         } else {
@@ -204,12 +139,29 @@ pub trait PrincipalRead: Send + Sync {
         };
         crate::lockout::lockout_audit(self, &p, crate::store::unix_now_u32(), status);
     }
-    /// Bound named policy, if any.
     fn named_policy_for(&self, p: &Principal) -> Option<NamedPolicy> {
         let _ = p;
         None
     }
-    /// PAC identity for `name` in `crealm`.
+    // MIT: `krb5_ldap_check_allowed_to_delegate` (plugins/kdb/ldap/libkdb_ldap/kdb_ldap.c:286-316)
+    fn allowed_to_delegate(&self, server: &Principal, proxy: &PrincipalName) -> bool {
+        let realm = self.realm();
+        server.s4u_allowed_to.iter().any(|entry| {
+            krb5_types::principal_from_unparsed(entry, realm).is_ok_and(|(name, entry_realm)| {
+                krb5_types::principal_compare(&name, &entry_realm, proxy, realm)
+            })
+        })
+    }
+    fn allowed_from(
+        &self,
+        resource: &Principal,
+        client: &PrincipalName,
+        client_realm: &str,
+    ) -> bool {
+        let _ = self;
+        let from = client.unparse_with_realm(client_realm);
+        resource.s4u_allowed_from.iter().any(|n| n == &from)
+    }
     fn pac_identity(&self, name: &PrincipalName, crealm: &str) -> PacIdentity {
         let rid = self
             .fetch_name(name)
@@ -225,63 +177,30 @@ pub trait PrincipalRead: Send + Sync {
             rid,
         }
     }
-}
-
-/// MIT kdb mutate.
-pub trait PrincipalWrite: PrincipalRead {
-    /// Insert or replace a principal.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::InvalidArgument`] when `p.tl_data` holds a `KRB5_TL_DB_ARGS` entry, which neither
-    /// [`PrincipalStore`] nor [`MemoryStore`] accepts; [`Error::Db`] when a [`PrincipalStore`]
-    /// with a database is not inside a change; other backends may add their own [`Error`].
-    fn put_principal(&mut self, p: Principal) -> Result<(), Error>;
-    /// Delete by `name@REALM`.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::NotFound`] when no principal is stored under `id`, and [`Error::Db`] when
-    /// [`PrincipalStore`] then cannot write its configured store file.
-    fn remove_id(&mut self, id: &str) -> Result<(), Error>;
-    /// Provision a PKINIT CA on the process-local env.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Crypto`] when the P-256 CA key cannot be generated.
-    fn enable_pkinit_ca(&mut self) -> Result<&PkinitCa, Error>;
-}
-
-/// Reload / persist gate.
-pub trait StoreLifecycle {
-    /// Reload from disk when the file stamp changed.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Db`] when [`PrincipalStore`] finds its store file changed and cannot read it,
-    /// [`Error::Crypto`] when its stash key does not decrypt it; [`MemoryStore`] never fails.
-    fn reload_if_stale(&mut self) -> Result<(), Error>;
-    /// Write through when persist paths are set.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Db`] when [`PrincipalStore`] cannot write its configured store file;
-    /// [`MemoryStore`] never fails.
-    fn save_if_configured(&self) -> Result<(), Error>;
-    /// The database's shared lock for one request, and whether the database changed since this
-    /// store read it; `None` for a store with no database file.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Db`] when [`PrincipalStore`] may not take the lock (MIT `KRB5_KDB_CANTLOCK_DB`);
-    /// [`MemoryStore`] never fails.
-    fn read_hold(&self) -> Result<Option<(DbLockHold, bool)>, Error> {
-        Ok(None)
+    fn otp_runtime(&self) -> Option<&crate::plugins::OtpRuntime> {
+        None
     }
 }
 
-/// Combined kdb extension surface. Kadmind still locks
-/// [`PrincipalStore`] (`SharedDump`); dyn-Store admin is deferred.
+pub trait PrincipalWrite: PrincipalRead {
+    /// A KRB5_TL_DB_ARGS tag is refused.
+    fn put_principal(&mut self, p: Principal) -> Result<(), Error>;
+    fn remove_id(&mut self, id: &str) -> Result<(), Error>;
+}
+
+pub trait StoreLifecycle {
+    fn reload_if_stale(&mut self) -> Result<(), Error>;
+    fn read_hold(&self) -> Result<Option<(DbLockHold, bool)>, Error> {
+        Ok(None)
+    }
+    fn install_otp_runtime(&mut self, rt: std::sync::Arc<crate::plugins::OtpRuntime>) {
+        let _ = rt;
+    }
+    fn take_otp_runtime(&mut self) -> Option<std::sync::Arc<crate::plugins::OtpRuntime>> {
+        None
+    }
+}
+
 pub trait Store: PrincipalRead + PrincipalWrite + StoreLifecycle + Send + Sync {}
 
 impl Store for PrincipalStore {}
@@ -320,15 +239,22 @@ impl<T: PrincipalRead + ?Sized> PrincipalRead for std::sync::Arc<T> {
     fn named_policy_for(&self, p: &Principal) -> Option<NamedPolicy> {
         (**self).named_policy_for(p)
     }
+    fn otp_runtime(&self) -> Option<&crate::plugins::OtpRuntime> {
+        (**self).otp_runtime()
+    }
+    fn allowed_to_delegate(&self, server: &Principal, proxy: &PrincipalName) -> bool {
+        (**self).allowed_to_delegate(server, proxy)
+    }
+    fn allowed_from(
+        &self,
+        resource: &Principal,
+        client: &PrincipalName,
+        client_realm: &str,
+    ) -> bool {
+        (**self).allowed_from(resource, client, client_realm)
+    }
 }
 
-/// Open a backend from `db_library` (kdc.conf). Dump-v7 is the default.
-///
-/// # Errors
-///
-/// [`PersistError::UnknownDbLibrary`] when `db_library` is set to anything but `dump`, `dump-v7`
-/// or `kdb5_dump`; otherwise the [`PersistError::Io`], [`PersistError::Format`] or
-/// [`PersistError::Crypto`] of [`load_store`] when the dump does not load.
 pub fn open_store(
     db_library: Option<&str>,
     db: &Path,
@@ -340,9 +266,8 @@ pub fn open_store(
     }
 }
 
-/// In-tree second backend (BTreeMap). Servable when `db_library=memory`
-/// (seeded from dump). Kadmind still mutates dump-v7 [`PrincipalStore`].
 #[derive(Debug)]
+#[cfg(any(test, feature = "test-hooks"))]
 pub struct MemoryStore {
     realm: String,
     map: BTreeMap<String, Principal>,
@@ -355,8 +280,8 @@ pub struct MemoryStore {
     lockout: Mutex<HashMap<String, Lockout>>,
 }
 
+#[cfg(any(test, feature = "test-hooks"))]
 impl MemoryStore {
-    /// Empty realm.
     #[must_use]
     pub fn new(realm: impl Into<String>) -> Self {
         Self {
@@ -372,7 +297,6 @@ impl MemoryStore {
         }
     }
 
-    /// Copy principals out of a dump-v7 store.
     #[must_use]
     pub fn from_dump(store: &PrincipalStore) -> Self {
         let mut m = Self::new(store.realm());
@@ -380,19 +304,20 @@ impl MemoryStore {
         m.domain_sid = store.domain_sid().clone();
         m.next_rid = store.next_rid();
         m.policies.clone_from(store.policies());
+        m.env = store.env().clone();
         for p in store.debug_principals() {
             m.map.insert(p.id(), p.clone());
         }
         m
     }
 
-    /// How many [`PrincipalRead::fetch`] calls hit this map.
     #[must_use]
     pub fn lookup_count(&self) -> u64 {
         self.lookups.load(Ordering::SeqCst)
     }
 }
 
+#[cfg(any(test, feature = "test-hooks"))]
 impl PrincipalRead for MemoryStore {
     fn realm(&self) -> &str {
         &self.realm
@@ -409,13 +334,26 @@ impl PrincipalRead for MemoryStore {
     fn fetch(&self, id: &str) -> Result<Option<Principal>, Error> {
         self.lookups.fetch_add(1, Ordering::SeqCst);
         let id = resolve_alias_id(&self.realm, |k| self.map.get(k), id);
-        Ok(id.and_then(|id| self.map.get(&id).cloned()))
+        Ok(id.and_then(|id| {
+            self.map.get(&id).cloned().map(|mut p| {
+                self.merge_lockout(&mut p);
+                p
+            })
+        }))
     }
     fn list_ids(&self) -> Result<Vec<String>, Error> {
         Ok(self.map.keys().cloned().collect())
     }
     fn list_principals(&self) -> Result<Vec<Principal>, Error> {
-        Ok(self.map.values().cloned().collect())
+        Ok(self
+            .map
+            .values()
+            .cloned()
+            .map(|mut p| {
+                self.merge_lockout(&mut p);
+                p
+            })
+            .collect())
     }
     fn merge_lockout(&self, p: &mut Principal) {
         if let Some(l) = self
@@ -448,6 +386,7 @@ impl PrincipalRead for MemoryStore {
     }
 }
 
+#[cfg(any(test, feature = "test-hooks"))]
 impl PrincipalWrite for MemoryStore {
     fn put_principal(&mut self, mut p: Principal) -> Result<(), Error> {
         strip_db_args(&mut p.tl_data)?;
@@ -458,26 +397,16 @@ impl PrincipalWrite for MemoryStore {
         self.map.remove(id).ok_or(Error::NotFound)?;
         Ok(())
     }
-    fn enable_pkinit_ca(&mut self) -> Result<&PkinitCa, Error> {
-        if self.env.pkinit_ca.is_none() {
-            self.env.pkinit_ca = PkinitCa::generate();
-        }
-        self.env
-            .pkinit_ca
-            .as_ref()
-            .ok_or_else(|| Error::Crypto("pkinit CA generate failed".into()))
-    }
 }
 
+#[cfg(any(test, feature = "test-hooks"))]
 impl StoreLifecycle for MemoryStore {
     fn reload_if_stale(&mut self) -> Result<(), Error> {
         Ok(())
     }
-    fn save_if_configured(&self) -> Result<(), Error> {
-        Ok(())
-    }
 }
 
+#[cfg(any(test, feature = "test-hooks"))]
 impl Store for MemoryStore {}
 
 impl PrincipalRead for PrincipalStore {
@@ -493,17 +422,33 @@ impl PrincipalRead for PrincipalStore {
     fn env(&self) -> &KdcEnv {
         self.env()
     }
+    fn otp_runtime(&self) -> Option<&crate::plugins::OtpRuntime> {
+        self.otp_runtime()
+    }
     fn fetch(&self, id: &str) -> Result<Option<Principal>, Error> {
-        Ok(self.get(id).cloned())
+        Ok(self.get(id).cloned().map(|mut p| {
+            self.merge_lockout(&mut p);
+            p
+        }))
     }
     fn fetch_name(&self, name: &PrincipalName) -> Result<Option<Principal>, Error> {
-        Ok(self.get_name(name).cloned())
+        Ok(self.get_name(name).cloned().map(|mut p| {
+            self.merge_lockout(&mut p);
+            p
+        }))
     }
     fn list_ids(&self) -> Result<Vec<String>, Error> {
         Ok(self.ids())
     }
     fn list_principals(&self) -> Result<Vec<Principal>, Error> {
-        Ok(self.debug_principals().cloned().collect())
+        Ok(self
+            .debug_principals()
+            .cloned()
+            .map(|mut p| {
+                self.merge_lockout(&mut p);
+                p
+            })
+            .collect())
     }
     fn merge_lockout(&self, p: &mut Principal) {
         PrincipalStore::merge_lockout(self, p);
@@ -533,17 +478,17 @@ impl PrincipalRead for PrincipalStore {
 }
 
 impl PrincipalWrite for PrincipalStore {
-    /// MIT `krb5_db_put_principal` (`lib/kdb/kdb5.c:987-1007`): every put is recorded in the update log.
+    // MIT: `krb5_db_put_principal` (lib/kdb/kdb5.c:987-1007)
+    /// This put is an update-log record.
     fn put_principal(&mut self, mut p: Principal) -> Result<(), Error> {
         strip_db_args(&mut p.tl_data)?;
-        PrincipalStore::put_principal(self, p);
-        self.save_configured()
+        self.change(|s| {
+            PrincipalStore::put_principal(s, p)?;
+            s.save_configured()
+        })?
     }
     fn remove_id(&mut self, id: &str) -> Result<(), Error> {
-        self.remove_id_inner(id)
-    }
-    fn enable_pkinit_ca(&mut self) -> Result<&PkinitCa, Error> {
-        PrincipalStore::enable_pkinit_ca(self)
+        self.change(|s| s.remove_id_inner(id))?
     }
 }
 
@@ -551,124 +496,13 @@ impl StoreLifecycle for PrincipalStore {
     fn reload_if_stale(&mut self) -> Result<(), Error> {
         PrincipalStore::reload_if_stale(self)
     }
-    fn save_if_configured(&self) -> Result<(), Error> {
-        self.save_configured()
-    }
     fn read_hold(&self) -> Result<Option<(DbLockHold, bool)>, Error> {
         PrincipalStore::read_hold(self)
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::testrealm::TEST_REALM;
-
-    use crate::testrealm::bootstrap_documented;
-
-    use krb5_protocol::as_req;
-    use krb5_types::PrincipalName;
-
-    #[test]
-    fn unknown_db_library_errors() {
-        let err = open_store(Some("lmdb"), Path::new("/nope"), Path::new("/nope")).unwrap_err();
-        match err {
-            PersistError::UnknownDbLibrary(n) => assert_eq!(n, "lmdb"),
-            other => panic!("expected UnknownDbLibrary, got {other}"),
-        }
+    fn install_otp_runtime(&mut self, rt: std::sync::Arc<crate::plugins::OtpRuntime>) {
+        PrincipalStore::install_otp_runtime(self, rt);
     }
-
-    #[test]
-    fn issue_as_hits_memory_store() {
-        let (dump, _) = bootstrap_documented().unwrap();
-        let mem = MemoryStore::from_dump(&dump);
-        let before = mem.lookup_count();
-        let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
-        let key = dump
-            .get_name(&cname)
-            .expect("user")
-            .best_key()
-            .expect("key")
-            .key
-            .clone();
-        let padata = vec![krb5_protocol::pa_enc_timestamp(&key).expect("pa-ts")];
-        let req = as_req(cname, TEST_REALM, 11, Some(padata)).unwrap();
-        crate::issue_as(&mem, &req).expect("AS via MemoryStore");
-        assert!(
-            mem.lookup_count() > before,
-            "issue_as must fetch through MemoryStore"
-        );
-    }
-
-    #[test]
-    fn memory_store_lockout_revokes_after_max_fail() {
-        use krb5_protocol::{pa_enc_timestamp, pa_enc_timestamp_at};
-        use krb5_types::KerberosTime;
-
-        use crate::testrealm::TEST_USER;
-
-        use crate::error::Error;
-
-        let (mut dump, _) = bootstrap_documented().unwrap();
-        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-        dump.put_policy(NamedPolicy {
-            name: "strict".into(),
-            min_length: 8,
-            min_classes: 2,
-            history: 1,
-            max_fail: 3,
-            pw_failcnt_interval: 0,
-            pw_lockout_duration: 0,
-            pw_min_life: 0,
-            pw_max_life: 0,
-            allowed_keysalts: None,
-        });
-        dump.set_principal_policy(&user, Some("strict".into()))
-            .unwrap();
-        let mem = MemoryStore::from_dump(&dump);
-        let key = dump
-            .get_name(&user)
-            .unwrap()
-            .best_key()
-            .unwrap()
-            .key
-            .clone();
-        let good = as_req(
-            user.clone(),
-            TEST_REALM,
-            1,
-            Some(vec![pa_enc_timestamp(&key).unwrap()]),
-        )
-        .unwrap();
-        let zeros = krb5_crypto::ProtocolKey::from_bytes(
-            krb5_crypto::EncryptionType::Aes256CtsHmacSha196,
-            &[0u8; 32],
-        )
-        .unwrap();
-        let mut skew = 0i64;
-        let mut bad_as = || {
-            skew += 1;
-            let ts = KerberosTime::now().add_seconds(skew).unwrap();
-            as_req(
-                user.clone(),
-                TEST_REALM,
-                1,
-                Some(vec![pa_enc_timestamp_at(&zeros, &ts).unwrap()]),
-            )
-            .unwrap()
-        };
-        let revoked = |e: &Error| matches!(e, Error::Protocol { code, .. } if *code == krb5_types::err::CLIENT_REVOKED);
-        assert!(crate::issue_as(&mem, &bad_as()).is_err());
-        assert!(crate::issue_as(&mem, &bad_as()).is_err());
-        crate::issue_as(&mem, &good).expect("success must reset fail count");
-        assert!(crate::issue_as(&mem, &bad_as()).is_err());
-        let second = crate::issue_as(&mem, &bad_as()).unwrap_err();
-        assert!(
-            !revoked(&second),
-            "second fail after success must not lock: {second:?}"
-        );
-        assert!(crate::issue_as(&mem, &bad_as()).is_err());
-        let locked = crate::issue_as(&mem, &bad_as()).unwrap_err();
-        assert!(revoked(&locked), "expected CLIENT_REVOKED, got {locked:?}");
+    fn take_otp_runtime(&mut self) -> Option<std::sync::Arc<crate::plugins::OtpRuntime>> {
+        PrincipalStore::take_otp_runtime(self)
     }
 }

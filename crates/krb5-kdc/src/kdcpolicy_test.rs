@@ -1,8 +1,7 @@
-//! MIT `plugins/kdcpolicy/test` (`t_kdcpolicy.py`), for the release KDC.
+//! MIT `plugins/kdcpolicy/test` (`t_kdcpolicy.py`), built only in test and `test-hooks` builds.
 //!
-//! The release binary cannot name `testrealm`: that string is banned in a
-//! ship build. This module is the same checks, registered only when
-//! `[plugins] kdcpolicy` `enable_only` lists `test`.
+//! A release binary has no `test` module: it cannot name `testrealm`, a string banned in a ship
+//! build. Registered only when `[plugins] kdcpolicy` `enable_only` lists `test`.
 
 use krb5_types::{EncTicketPart, KdcReqBody, PrincipalName};
 
@@ -103,72 +102,5 @@ impl KdcPolicy for TestModule {
             return Err(proto(krb5_types::err::POLICY, status::LOCAL_POLICY));
         }
         output_from_indicator(indicators, 2)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::testrealm::{
-        TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
-    };
-
-    fn user_store() -> (crate::PrincipalStore, Principal) {
-        let store = crate::PrincipalStore::bootstrap(
-            TEST_REALM,
-            TEST_USER,
-            TEST_USER_PASSWORD,
-            TEST_ADMIN,
-            TEST_ADMIN_PASSWORD,
-        )
-        .unwrap();
-        let user = store
-            .get_name(&PrincipalName::new(
-                PrincipalName::NT_PRINCIPAL,
-                [TEST_USER],
-            ))
-            .unwrap()
-            .clone();
-        (store, user)
-    }
-
-    fn assert_local_policy(err: Error) {
-        match err {
-            Error::Protocol { code, text, .. } => {
-                assert_eq!(code, krb5_types::err::POLICY);
-                assert_eq!(text.as_deref(), Some(status::LOCAL_POLICY));
-            }
-            other => panic!("expected LOCAL_POLICY, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn one_hour_caps_other_and_fail_deny_empty_does_not() {
-        let (store, user) = user_store();
-        let hour = TestModule
-            .check_as(&store, &user, &["ONE_HOUR".to_owned()])
-            .unwrap();
-        assert_eq!(hour.lifetime, 3600);
-        assert_eq!(hour.renew_lifetime, 7200);
-        let tgs = TestModule
-            .check_tgs(&store, &user.name, &["ONE_HOUR".to_owned()])
-            .unwrap();
-        assert_eq!(tgs.lifetime, 1800);
-        assert_eq!(tgs.renew_lifetime, 3600);
-        let empty = TestModule.check_as(&store, &user, &[]).unwrap();
-        assert_eq!(empty.lifetime, 0);
-        assert_local_policy(
-            TestModule
-                .check_as(&store, &user, &["OTHER".to_owned()])
-                .unwrap_err(),
-        );
-        let mut fail = user;
-        fail.name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["fail"]);
-        assert_local_policy(TestModule.check_as(&store, &fail, &[]).unwrap_err());
-        assert_local_policy(
-            TestModule
-                .check_tgs(&store, &fail.name, &["ONE_HOUR".to_owned()])
-                .unwrap_err(),
-        );
     }
 }

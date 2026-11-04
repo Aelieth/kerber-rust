@@ -1,11 +1,3 @@
-//! The decode sweep's corpus and judge for `scripts/asn1-decode-oracle-gate.sh`.
-//!
-//! - `asn1-sweep corpus`: every case, `id<TAB>mit-decoder<TAB>hex`, for MIT's decoder oracle.
-//! - `asn1-sweep rust`: the Rust decoder's re-encoding of each case it decodes, in the same form.
-//! - `asn1-sweep golden <mit> <mit-of-rust> <out>`: from MIT's verdicts on both, the golden the
-//!   unit test reads; exit 1 when the Rust decoder parts from MIT on any case.
-//! - `asn1-sweep check <golden>`: exit 1 when the Rust decoder parts from a golden.
-
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 

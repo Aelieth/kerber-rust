@@ -6,7 +6,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
-need_bins krb5-kinit krb5-kvno krb5-klist
+need_bins krb5-kinit krb5-kvno krb5-klist krb5-kdc krb5-kdb
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
 NAME="kerber-rust-mit-kdc"
@@ -18,7 +18,11 @@ fi
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kinit" "$NAME":/tmp/krb5-kinit
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kvno" "$NAME":/tmp/krb5-kvno
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-klist" "$NAME":/tmp/krb5-klist
-docker exec "$NAME" chmod +x /tmp/krb5-kinit /tmp/krb5-kvno /tmp/krb5-klist
+docker exec "$NAME" mkdir -p /tmp/rk
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/rk/krb5kdc
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdb" "$NAME":/tmp/rk/kdb5_util
+docker exec "$NAME" chmod +x /tmp/krb5-kinit /tmp/krb5-kvno /tmp/krb5-klist \
+    /tmp/rk/krb5kdc /tmp/rk/kdb5_util
 
 docker exec -i "$NAME" bash -s <<'EOS'
 set -euo pipefail
@@ -230,6 +234,49 @@ test "$RUST_H" -ne 0
 # MIT's krb5_cc_default finds no default name (ccdefault.c:48-53): KRB5_FCC_INTERNAL.
 echo "$MIT_H_OUT" | lf_lines | grep -qxF 'kinit: Internal credentials cache error while getting default ccache'
 echo "$RUST_H_OUT" | grep -qxF 'krb5-kinit: Internal credentials cache error while getting default ccache'
+
+echo "==== (i) a relation with no value stops krb5kdc and kdb5_util ===="
+cat >"$BASE/miss/novalue.conf" <<EOF
+[libdefaults]
+    kcm_socket =
+    default_realm = X.TEST
+EOF
+MIT_KDC_BIN=$(command -v krb5kdc)
+MIT_DB_BIN=$(command -v kdb5_util)
+test "${MIT_KDC_BIN#/}" != "$MIT_KDC_BIN"
+test "${MIT_DB_BIN#/}" != "$MIT_DB_BIN"
+echo "mit krb5kdc=$MIT_KDC_BIN"
+echo "mit kdb5_util=$MIT_DB_BIN"
+set +e
+MIT_KDC_OUT=$(timeout 5 env KRB5_CONFIG="$BASE/miss/novalue.conf" \
+    KRB5_KDC_PROFILE="$BASE/miss/no-kdc.conf" "$MIT_KDC_BIN" -n 2>&1)
+MIT_KDC=$?
+MIT_DB_OUT=$(timeout 5 env KRB5_CONFIG="$BASE/miss/novalue.conf" \
+    KRB5_KDC_PROFILE="$BASE/miss/no-kdc.conf" "$MIT_DB_BIN" list_mkeys 2>&1)
+MIT_DB=$?
+RUST_KDC_OUT=$(timeout 5 env KRB5_CONFIG="$BASE/miss/novalue.conf" \
+    KRB5_KDC_PROFILE="$BASE/miss/no-kdc.conf" /tmp/rk/krb5kdc -n 2>&1)
+RUST_KDC=$?
+RUST_DB_OUT=$(timeout 5 env KRB5_CONFIG="$BASE/miss/novalue.conf" \
+    KRB5_KDC_PROFILE="$BASE/miss/no-kdc.conf" /tmp/rk/kdb5_util list_mkeys 2>&1)
+RUST_DB=$?
+set -e
+echo "$MIT_KDC_OUT"
+echo "$MIT_DB_OUT"
+echo "$RUST_KDC_OUT"
+echo "$RUST_DB_OUT"
+test "$MIT_KDC" -eq 1
+test "$MIT_DB" -eq 1
+test "$RUST_KDC" -eq 1
+test "$RUST_DB" -eq 1
+echo "$MIT_KDC_OUT" | lf_lines | grep -qxF \
+    'krb5kdc: Improper format of Kerberos configuration file while initializing krb5'
+echo "$RUST_KDC_OUT" | grep -qxF \
+    'krb5kdc: Improper format of Kerberos configuration file while initializing krb5'
+echo "$MIT_DB_OUT" | lf_lines | grep -qxF \
+    'kdb5_util: Improper format of Kerberos configuration file while initializing Kerberos code'
+echo "$RUST_DB_OUT" | grep -qxF \
+    'kdb5_util: Improper format of Kerberos configuration file while initializing Kerberos code'
 EOS
 
 log "config.include.gate" "ok" ',"dotted_conf":true,"first_wins":true,"malformed_no_hang":true'

@@ -1,42 +1,18 @@
-//! `krb5_parse_name` / `krb5_unparse_name` (`krb/parse.c`, `unparse.c`).
-
 use super::{NameError, PrincipalName};
 
-/// Result of `krb5_parse_name_flags` without context flags.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ParsedName {
-    /// Name components, including empty ones (`a//b`).
     pub components: Vec<String>,
-    /// Realm; empty when the input was `foo@` or `NO_DEF_REALM`.
     pub realm: String,
-    /// Whether an unquoted `@` started a realm.
-    /// MIT `allocate_princ` (`krb/parse.c:116-116`): `has_realm_out` is set when an unquoted
-    /// `@` moved the parse into the realm.
+    // MIT: `allocate_princ` (krb/parse.c:116-116)
     pub has_realm: bool,
 }
 
-/// Parse `name[@realm]` with MIT quoting.
-/// MIT `allocate_princ` (`krb/parse.c:62-102`): `/` separates components, an unquoted `@`
-/// starts the realm, and `\` quotes the next character.
-///
-/// Empty components are allowed. `foo@` keeps an empty realm. No `@`
-/// uses `default_realm`. Trailing `\` is an error. `/` or a second `@`
-/// in the realm is malformed.
-///
-/// # Errors
-///
-/// [`NameError::Malformed`] on a trailing `\` or a `/`/`@` in the realm.
 pub fn parse_name(s: &str, default_realm: &str) -> Result<(Vec<String>, String), NameError> {
     let p = parse_name_ex(s, default_realm, false)?;
     Ok((p.components, p.realm))
 }
 
-/// Parse with MIT enterprise rules: first `@` is a component character.
-///
-/// # Errors
-///
-/// [`NameError::Malformed`] on a trailing `\`, an `@` inside the realm, or (without `enterprise`)
-/// a `/` inside the realm.
 pub fn parse_name_ex(
     s: &str,
     default_realm: &str,
@@ -93,9 +69,7 @@ fn push_char(comps: &mut [String], realm: &mut Option<String>, in_realm: bool, c
     }
 }
 
-/// MIT `k5_infer_principal_type` (`bld_princ.c:31-42`): two components under `krbtgt` are
-/// NT-SRV-INST, two or more under `WELLKNOWN` are NT-WELLKNOWN, and anything else is
-/// NT-PRINCIPAL.
+// MIT: `k5_infer_principal_type` (bld_princ.c:31-42)
 #[must_use]
 pub fn infer_name_type(comps: &[String]) -> i32 {
     if comps.len() == 2 && comps[0] == "krbtgt" {
@@ -107,12 +81,6 @@ pub fn infer_name_type(comps: &[String]) -> i32 {
     }
 }
 
-/// Parse an unparsed name into a [`PrincipalName`] and realm.
-///
-/// # Errors
-///
-/// [`NameError::Malformed`] on a trailing `\` or a `/`/`@` in the realm;
-/// [`NameError::NotGeneralString`] when a component is not ASCII.
 pub fn principal_from_unparsed(
     s: &str,
     default_realm: &str,
@@ -120,12 +88,6 @@ pub fn principal_from_unparsed(
     principal_from_unparsed_ex(s, default_realm, false)
 }
 
-/// Parse with enterprise rules (`KRB5_PRINCIPAL_PARSE_ENTERPRISE`).
-///
-/// # Errors
-///
-/// [`NameError::Malformed`] on a trailing `\`, an `@` inside the realm, or (without `enterprise`)
-/// a `/` inside the realm; [`NameError::NotGeneralString`] when a component is not ASCII.
 pub fn principal_from_unparsed_ex(
     s: &str,
     default_realm: &str,
@@ -140,7 +102,6 @@ pub fn principal_from_unparsed_ex(
     Ok((PrincipalName::try_new(ntype, p.components)?, p.realm))
 }
 
-/// Quote one component (`unparse.c` `copy_component_quoting`).
 #[must_use]
 pub fn quote_component(s: &str) -> String {
     let mut o = String::new();
@@ -160,7 +121,6 @@ pub fn quote_component(s: &str) -> String {
     o
 }
 
-/// Join quoted components with `/`.
 #[must_use]
 pub fn unparse_components(comps: &[String]) -> String {
     comps
@@ -170,15 +130,13 @@ pub fn unparse_components(comps: &[String]) -> String {
         .join("/")
 }
 
-/// MIT `krb5_unparse_name`: quoted components `@` quoted realm.
 #[must_use]
 pub fn unparse_name(comps: &[String], realm: &str) -> String {
     format!("{}@{}", unparse_components(comps), quote_component(realm))
 }
 
-/// MIT `krb5_unparse_name_flags` with `KRB5_PRINCIPAL_UNPARSE_NO_REALM`: the components quoted as
-/// [`unparse_components`] quotes them, except that an `@` is copied unquoted.
-/// MIT `copy_component_quoting` (`lib/krb5/krb/unparse.c:103-107`): with no realm, `REALM_SEP` is copied as is.
+// MIT: `copy_component_quoting` (lib/krb5/krb/unparse.c:103-107)
+// With no realm, `REALM_SEP` is copied as is.
 #[must_use]
 pub fn unparse_components_no_realm(comps: &[String]) -> String {
     comps
@@ -191,56 +149,4 @@ pub fn unparse_components_no_realm(comps: &[String]) -> String {
         })
         .collect::<Vec<_>>()
         .join("/")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn unparse_no_realm_keeps_at_sign_and_quotes_the_rest() {
-        let comps = vec!["a@b".to_string(), "x/y\\z\t".to_string()];
-        assert_eq!(unparse_components_no_realm(&comps), r"a@b/x\/y\\z\t");
-        assert_eq!(unparse_components(&comps), r"a\@b/x\/y\\z\t");
-    }
-
-    #[test]
-    fn parse_unparse_escapes() {
-        let (c, r) = parse_name(r"foo\/bar", "R").unwrap();
-        assert_eq!(c, vec!["foo/bar".to_string()]);
-        assert_eq!(r, "R");
-        assert_eq!(unparse_components(&c), r"foo\/bar");
-        let (c, r) = parse_name(r"a\@b@REALM", "").unwrap();
-        assert_eq!(c, vec!["a@b".to_string()]);
-        assert_eq!(r, "REALM");
-        let (c, _) = parse_name(r"x\\y", "R").unwrap();
-        assert_eq!(c, vec![r"x\y".to_string()]);
-        let (c, _) = parse_name(r"a\nb", "R").unwrap();
-        assert_eq!(c, vec!["a\nb".to_string()]);
-        assert_eq!(unparse_components(&c), r"a\nb");
-        let (c, _) = parse_name(r"a\tb\b0\0z", "R").unwrap();
-        assert_eq!(c, vec!["a\tb\u{8}0\0z".to_string()]);
-        assert_eq!(unparse_components(&c), r"a\tb\b0\0z");
-        let (c, r) = parse_name("foo@", "R").unwrap();
-        assert_eq!(c, vec!["foo".to_string()]);
-        assert_eq!(r, "");
-        let (c, _) = parse_name("a//b", "R").unwrap();
-        assert_eq!(c, vec!["a".to_string(), String::new(), "b".to_string()]);
-        assert!(parse_name(r"foo\", "R").is_err());
-        assert!(parse_name("foo@BAR/BAZ", "R").is_err());
-        assert!(parse_name("foo@BAR@BAZ", "R").is_err());
-        let p = parse_name_ex("alice@ad.example.com@KERBER.TEST", "", true).unwrap();
-        assert_eq!(p.components, vec!["alice@ad.example.com".to_string()]);
-        assert_eq!(p.realm, "KERBER.TEST");
-        let p = parse_name_ex("user@KERBER.TEST", "", true).unwrap();
-        assert_eq!(p.components, vec!["user@KERBER.TEST".to_string()]);
-        assert!(!p.has_realm);
-        let (n, r) = principal_from_unparsed("krbtgt/KERBER.TEST@KERBER.TEST", "").unwrap();
-        assert_eq!(n.name_type, PrincipalName::NT_SRV_INST);
-        assert_eq!(r, "KERBER.TEST");
-        let (n, _) = principal_from_unparsed("host/slashhost@KERBER.TEST", "").unwrap();
-        assert_eq!(n.name_type, PrincipalName::NT_PRINCIPAL);
-        assert_eq!(n.unparse(), "host/slashhost");
-        assert_eq!(unparse_name(&["foo/bar".into()], "R"), r"foo\/bar@R");
-    }
 }

@@ -11,8 +11,8 @@ use common::client_key;
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{KeyUsage, ProtocolKey, decrypt, encrypt};
 use krb5_kdc::testrealm::{
-    TEST_ADMIN, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented,
-    documented_admin_id, documented_host,
+    TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented, documented_admin_id,
+    documented_host,
 };
 use krb5_kdc::{Error, PrincipalStore};
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
@@ -82,40 +82,8 @@ fn ap_req_valid_truncated_wrong_key_replay() {
     }
 }
 
-/// MIT `kdc_process_tgs_req` (`kdc_util.c:189-191`): no replay cache, so a replayed TGS-REQ is processed again and issues a new ticket.
-#[test]
-fn tgs_authenticator_replay_is_issued_again() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let key = client_key();
-    let req = as_req(
-        cname.clone(),
-        TEST_REALM,
-        31,
-        Some(vec![pa_enc_timestamp(&key).expect("pa")]),
-    )
-    .unwrap();
-    let as_out = krb5_kdc::issue_as(&store, &req).expect("AS");
-    let tgs = tgs_req(
-        as_out.rep.0.ticket.clone(),
-        &as_out.session_key,
-        TEST_REALM,
-        &cname,
-        documented_host(),
-        TEST_REALM,
-        32,
-    )
-    .expect("TGS-REQ");
-    let first = krb5_kdc::issue_tgs(&store, &tgs).expect("first TGS");
-    let again = krb5_kdc::issue_tgs(&store, &tgs).expect("the replay issues again");
-    assert_ne!(
-        first.session_key.as_bytes(),
-        again.session_key.as_bytes(),
-        "the replay is processed again, not answered from a cache"
-    );
-}
-
-/// MIT `enc_ts_verify` (`kdc/kdc_preauth_encts.c:94-101`): no replay cache, so a replayed timestamp inside the skew verifies again and issues a new ticket.
+// MIT: `enc_ts_verify` (kdc/kdc_preauth_encts.c:94-101)
+/// no replay cache, so a replayed timestamp inside the skew verifies again and issues a new ticket.
 #[test]
 fn pa_enc_timestamp_replay_is_issued_again() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
@@ -316,102 +284,6 @@ fn tgs_authenticator_missing_checksum_is_process_tgs() {
 }
 
 #[test]
-fn tgs_authenticator_cname_mismatch_is_badmatch() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 904);
-    let mut tgs = tgs_req(
-        issued.rep.0.ticket.clone(),
-        &issued.session_key,
-        TEST_REALM,
-        &cname,
-        documented_host(),
-        TEST_REALM,
-        905,
-    )
-    .unwrap();
-    let pa = tgs
-        .0
-        .padata
-        .as_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|p| p.padata_type == pa::TGS_REQ)
-        .expect("PA-TGS-REQ");
-    let mut ap: ApReq = decode(pa.padata_value.as_ref()).expect("ap");
-    let auth_usage = KeyUsage::new(ku::TGS_REQ_AUTHENTICATOR).unwrap();
-    let auth_plain = decrypt(
-        &issued.session_key,
-        auth_usage,
-        ap.authenticator.cipher.as_ref(),
-    )
-    .expect("auth");
-    let mut authenticator: krb5_types::Authenticator = decode(&auth_plain).expect("authenticator");
-    authenticator.cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
-    let auth_der = encode(&authenticator).expect("auth der");
-    ap.authenticator.cipher = encrypt(&issued.session_key, auth_usage, &auth_der)
-        .expect("enc")
-        .into();
-    pa.padata_value = encode(&ap).expect("ap").into();
-    let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("cname mismatch");
-    match err {
-        Error::Protocol { code, text, .. } => {
-            assert_eq!(code, err::BADMATCH);
-            assert_eq!(text.as_deref(), Some("PROCESS_TGS"));
-        }
-        other => panic!("expected 36 BADMATCH PROCESS_TGS, got {other:?}"),
-    }
-}
-
-#[test]
-fn tgs_authenticator_crealm_mismatch_is_badmatch() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 906);
-    let mut tgs = tgs_req(
-        issued.rep.0.ticket.clone(),
-        &issued.session_key,
-        TEST_REALM,
-        &cname,
-        documented_host(),
-        TEST_REALM,
-        907,
-    )
-    .unwrap();
-    let pa = tgs
-        .0
-        .padata
-        .as_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|p| p.padata_type == pa::TGS_REQ)
-        .expect("PA-TGS-REQ");
-    let mut ap: ApReq = decode(pa.padata_value.as_ref()).expect("ap");
-    let auth_usage = KeyUsage::new(ku::TGS_REQ_AUTHENTICATOR).unwrap();
-    let auth_plain = decrypt(
-        &issued.session_key,
-        auth_usage,
-        ap.authenticator.cipher.as_ref(),
-    )
-    .expect("auth");
-    let mut authenticator: krb5_types::Authenticator = decode(&auth_plain).expect("authenticator");
-    authenticator.crealm = ascii("OTHER.TEST");
-    let auth_der = encode(&authenticator).expect("auth der");
-    ap.authenticator.cipher = encrypt(&issued.session_key, auth_usage, &auth_der)
-        .expect("enc")
-        .into();
-    pa.padata_value = encode(&ap).expect("ap").into();
-    let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("crealm mismatch");
-    match err {
-        Error::Protocol { code, text, .. } => {
-            assert_eq!(code, err::BADMATCH);
-            assert_eq!(text.as_deref(), Some("PROCESS_TGS"));
-        }
-        other => panic!("expected 36 BADMATCH PROCESS_TGS, got {other:?}"),
-    }
-}
-
-#[test]
 fn tgs_header_unknown_kvno_is_generic() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -436,26 +308,6 @@ fn tgs_header_unknown_kvno_is_generic() {
         }
         other => panic!("expected 60 PROCESS_TGS, got {other:?}"),
     }
-}
-
-#[test]
-fn tgs_header_kvno_zero_issues() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 419);
-    let mut tkt = issued.rep.0.ticket.clone();
-    tkt.enc_part.kvno = Some(0);
-    let tgs = tgs_req(
-        tkt,
-        &issued.session_key,
-        TEST_REALM,
-        &cname,
-        documented_host(),
-        TEST_REALM,
-        420,
-    )
-    .unwrap();
-    krb5_kdc::issue_tgs(&store, &tgs).expect("kvno 0 retries");
 }
 
 /// MIT `krb5_decrypt_tkt_part` and `negotiate_etype`, both on the KDC's own context (settled

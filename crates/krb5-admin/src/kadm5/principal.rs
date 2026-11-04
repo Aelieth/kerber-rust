@@ -1,9 +1,3 @@
-//! Principal argument and reply codecs (`kadm_rpc_xdr.c` `xdr_cprinc_arg`,
-//! `xdr_mprinc_arg`, `xdr_gprinc_ret`, ...) and the `svr_principal.c`
-//! mask checks (`KADM5_BAD_MASK`, `KADM5_BAD_TL_TYPE`), with the ACL
-//! `auth_restrict` caps of `kadmin/server/auth.c` applied to a parsed
-//! modify request.
-
 use krb5_crypto::{EncryptionType, ProtocolKey};
 use krb5_kdc::{AdminEnt, KeyEntry, TL_DB_ARGS, TL_LAST_PWD_CHANGE, TL_MOD_PRINC, TlData};
 use krb5_types::PrincipalName;
@@ -12,41 +6,26 @@ use super::codes::{
     ALL_PRINC_MASK, API_V2, EINVAL, KADM5_AUX_ATTRIBUTES, KADM5_BAD_KEYSALTS, KADM5_BAD_MASK,
     KADM5_FAIL_AUTH_COUNT, KADM5_KEY_DATA, KADM5_LAST_FAILED, KADM5_LAST_PWD_CHANGE,
     KADM5_LAST_SUCCESS, KADM5_MKVNO, KADM5_MOD_NAME, KADM5_MOD_TIME, KADM5_POLICY,
-    KADM5_POLICY_CLR, KADM5_PRINCIPAL, SETKEY_PRINCIPAL, SETKEY_PRINCIPAL3, SETKEY_PRINCIPAL4,
+    KADM5_POLICY_CLR, KADM5_PRINCIPAL, KADM5_TL_DATA, SETKEY_PRINCIPAL, SETKEY_PRINCIPAL3,
+    SETKEY_PRINCIPAL4,
 };
 use super::dispatch::generic_ret;
 use super::iprop::tl_u32;
 use super::xdr::{XdrR, XdrW, opaque_len, xdr_tl_type};
 use crate::Error;
 
-/// `krb5_timeofday` for `impose_restrictions`' `-expire`/`-pwexpire` caps.
-pub(super) fn unix_now() -> u32 {
-    u32::try_from(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs()),
-    )
-    .unwrap_or(u32::MAX)
-}
-
-/// `auth_restrict` for a modify request: the actor's ACL restrictions, if
-/// any, imposed on the parsed `(mask, fields)`.
-/// MIT `auth_restrict` (`auth.c:267-272`): takes the request's entry and mask, which it may
-/// rewrite.
-/// MIT `impose_restrictions` (`auth.c:205-265`): the restrictions rewrite the request's
-/// fields and mask.
 pub(super) fn impose_request_restrictions(
-    acl: &krb5_kdc::Acl,
-    actor: &str,
-    tid: &str,
+    rss: &[krb5_kdc::Restrictions],
     mask: u32,
     mut fields: ModFields,
 ) -> (u32, ModFields) {
-    let Some(rs) = acl.restrictions(actor, Some(tid)) else {
+    if rss.is_empty() {
         return (mask, fields);
-    };
+    }
     let mut ent = fields.admin_ent(mask);
-    rs.impose(&mut ent, unix_now());
+    for rs in rss {
+        rs.impose(&mut ent, krb5_types::unix_now());
+    }
     let mask = fields.take_admin_ent(ent);
     (mask, fields)
 }
@@ -63,9 +42,6 @@ pub(super) fn clamp_self_keepold(self_change: bool, keepold: bool) -> u32 {
     }
 }
 
-/// MIT `kadm5_create_principal` mask checks.
-/// MIT `kadm5_create_principal_3` (`svr_principal.c:313-326`): each failed mask check is
-/// `KADM5_BAD_MASK`.
 pub(super) fn create_princ_mask_err(
     mask: u32,
     policy: Option<&str>,
@@ -100,9 +76,6 @@ pub(super) fn create_princ_mask_err(
     None
 }
 
-/// MIT `kadm5_modify_principal` mask checks.
-/// MIT `kadm5_modify_principal` (`svr_principal.c:569-580`): each failed mask check is
-/// `KADM5_BAD_MASK`.
 pub(super) fn modify_princ_mask_err(mask: u32, policy: Option<&str>) -> Option<u32> {
     if mask
         & (KADM5_PRINCIPAL
@@ -137,25 +110,17 @@ pub(super) fn db_args_code(tls: &[TlData]) -> Option<u32> {
 pub(super) struct CreateFields {
     pub(super) name: PrincipalName,
     pub(super) prealm: String,
-    /// `None` is the XDR NULL `passwd` of `kadmin addprinc -randkey` (1.8+).
-    /// MIT `kadm5_create_principal_3` (`svr_principal.c:463-470`): a NULL password creates
-    /// with a random key, and `:369` skips `passwd_check`. The string is octets
-    /// (`xdr_string`), not UTF-8, so a Latin-1 password is the bytes the client sent.
-    pub(super) pass: Option<Vec<u8>>,
-    /// The `kadm5_principal_ent_rec` fields `kadm5_create_principal_3`
-    /// applies under `mask`, as sent.
-    /// MIT `kadm5_create_principal_3` (`svr_principal.c:376-420`): a field under `mask` is
-    /// taken from the request, else from the server defaults.
+    /// None: NULL passwd, `-randkey`.
+    /// Password: octets, not UTF-8.
+    pub(super) pass: Option<zeroize::Zeroizing<Vec<u8>>>,
     pub(super) ent: AdminEnt,
     pub(super) tl_data: Vec<TlData>,
     pub(super) n_key_data: u32,
-    /// v3 `ks_tuple` (`xdr_cprinc3_arg`); empty on v2 and when the
-    /// client omitted `-e`.
-    pub(super) ks: Vec<EncryptionType>,
+    /// v3 `ks_tuple`; empty for v2.
+    pub(super) ks: Vec<krb5_crypto::KeySalt>,
 }
 
-/// `xdr_cprinc_arg` / `xdr_cprinc3_arg`: api_version, the whole
-/// `kadm5_principal_ent_rec`, mask, (v3: ks_tuple array), passwd.
+/// Wire order: ver, principal, mask, ks, pass.
 pub(super) fn parse_create(args: &[u8], v3: bool) -> Result<CreateFields, Error> {
     let mut r = XdrR::new(args);
     let _ = r.u32()?;
@@ -185,8 +150,7 @@ pub(super) fn parse_create(args: &[u8], v3: bool) -> Result<CreateFields, Error>
     })
 }
 
-/// Unknown v3 `ks_tuple` etypes are `KADM5_BAD_KEYSALTS` in the stub
-/// reply, not ONC RPC `SYSTEM_ERR` (`svr_principal.c` `apply_keysalt_policy`).
+/// Bad etype: KADM5_BAD_KEYSALTS, not SYSTEM_ERR.
 pub(super) fn parse_ks<T>(r: Result<T, Error>) -> Result<T, Result<Vec<u8>, Error>> {
     match r {
         Ok(v) => Ok(v),
@@ -200,9 +164,9 @@ pub(super) fn parse_ks<T>(r: Result<T, Error>) -> Result<T, Result<Vec<u8>, Erro
 pub(super) struct ChpassArgs {
     pub(super) name: PrincipalName,
     pub(super) prealm: String,
-    pub(super) pass: Vec<u8>,
+    pub(super) pass: zeroize::Zeroizing<Vec<u8>>,
     pub(super) keepold: bool,
-    pub(super) ks: Vec<EncryptionType>,
+    pub(super) ks: Vec<krb5_crypto::KeySalt>,
 }
 
 pub(super) fn parse_chpass(args: &[u8], v3: bool) -> Result<ChpassArgs, Error> {
@@ -215,9 +179,7 @@ pub(super) fn parse_chpass(args: &[u8], v3: bool) -> Result<ChpassArgs, Error> {
     } else {
         (false, Vec::new())
     };
-    // MIT `xdr_chpass3_arg` `passwd` is `xdr_string`: octets, not UTF-8. Rejecting a
-    // non-UTF-8 password here is RPC `SYSTEM_ERR` (`Communication failure`) before
-    // `passwd_check`.
+    // Non-UTF-8 password: RPC SYSTEM_ERR.
     let pass = r.cstring_bytes()?.unwrap_or_default();
     Ok(ChpassArgs {
         name,
@@ -258,7 +220,8 @@ pub(super) fn parse_rename(
     Ok((old, old_realm, new, new_realm))
 }
 
-/// MIT `xdr_calias_arg` (`kadm_rpc_xdr.c:1214-1226`): api version, alias, target.
+// MIT: `xdr_calias_arg` (kadm_rpc_xdr.c:1214-1226)
+/// Wire: api version, alias, target.
 pub(super) fn parse_alias(
     args: &[u8],
 ) -> Result<(PrincipalName, String, PrincipalName, String), Error> {
@@ -273,14 +236,18 @@ pub(super) fn parse_purgekeys(args: &[u8]) -> Result<(u32, PrincipalName, String
     Ok((api, princ, prealm, keep))
 }
 
-/// MIT `xdr_kadm5_key_data` (`kadm_rpc_xdr.c:1166-1174`): a version-4 key carries kvno,
-/// keyblock, and salt, with no key-data version word in front.
-/// Older setkey procedures omit that kvno and salt, so reading them on a version-3 body would
-/// steal the next key's etype.
-pub(super) fn parse_setkey(
-    args: &[u8],
-    proc: u32,
-) -> Result<(u32, PrincipalName, String, Vec<krb5_kdc::KeyEntry>, bool), Error> {
+pub(super) struct SetkeyArgs {
+    pub(super) api: u32,
+    pub(super) princ: PrincipalName,
+    pub(super) prealm: String,
+    pub(super) keys: Vec<KeyEntry>,
+    pub(super) keepold: bool,
+    pub(super) ks: Vec<(i32, i32)>,
+}
+
+// MIT: `xdr_kadm5_key_data` (kadm_rpc_xdr.c:1166-1174)
+// MIT: `krb5_dbe_def_encrypt_key_data` (lib/kdb/encrypt_key.c:95-105)
+pub(super) fn parse_setkey(args: &[u8], proc: u32) -> Result<SetkeyArgs, Error> {
     let mut r = XdrR::new(args);
     let api = r.u32()?;
     let (princ, prealm) = r.principal_realm()?;
@@ -289,14 +256,14 @@ pub(super) fn parse_setkey(
     } else {
         r.u32()? != 0
     };
-    if proc == SETKEY_PRINCIPAL3 {
-        r.skip_array_i32_pairs()?;
-    }
+    let ks = if proc == SETKEY_PRINCIPAL3 {
+        r.i32_pairs()?
+    } else {
+        Vec::new()
+    };
     let n = r.u32()?;
     let mut keys = Vec::new();
     for _ in 0..n {
-        // SETKEY4 is MIT xdr_kadm5_key_data (kvno, keyblock, salt), not
-        // xdr_krb5_key_data (no leading key_data_ver).
         let kvno = if proc == SETKEY_PRINCIPAL4 {
             r.u32()?
         } else {
@@ -304,23 +271,28 @@ pub(super) fn parse_setkey(
         };
         let et = i32::from_be_bytes(r.u32()?.to_be_bytes());
         let etype = EncryptionType::known(et).map_err(|e| Error::Inner(e.to_string()))?;
-        let bytes = r.opaque()?;
+        let bytes = zeroize::Zeroizing::new(r.opaque()?);
         let key =
             ProtocolKey::from_bytes(etype, &bytes).map_err(|e| Error::Inner(e.to_string()))?;
         let mut ke = KeyEntry::new(etype, key, kvno);
         if proc == SETKEY_PRINCIPAL4 {
             let st = i32::from_be_bytes(r.u32()?.to_be_bytes());
             let salt = r.opaque()?;
-            if st != 0 {
+            if st > 0 {
                 ke.salt_type = Some(st);
-            }
-            if !salt.is_empty() {
                 ke.kdb_salt = Some(salt);
             }
         }
         keys.push(ke);
     }
-    Ok((api, princ, prealm, keys, keepold))
+    Ok(SetkeyArgs {
+        api,
+        princ,
+        prealm,
+        keys,
+        keepold,
+        ks,
+    })
 }
 
 pub(super) fn parse_gstrings(args: &[u8]) -> Result<(u32, PrincipalName, String), Error> {
@@ -366,7 +338,7 @@ pub(super) fn parse_extract(args: &[u8]) -> Result<(u32, PrincipalName, String, 
 pub(super) fn parse_chrand(
     args: &[u8],
     v3: bool,
-) -> Result<(PrincipalName, String, bool, Vec<EncryptionType>), Error> {
+) -> Result<(PrincipalName, String, bool, Vec<krb5_crypto::KeySalt>), Error> {
     let mut r = XdrR::new(args);
     let _ = r.u32()?;
     let (princ, prealm) = r.principal_realm()?;
@@ -392,7 +364,6 @@ pub(super) struct ModFields {
 }
 
 impl ModFields {
-    /// The restriction-bearing subset as an [`AdminEnt`] under `mask`.
     fn admin_ent(&self, mask: u32) -> AdminEnt {
         AdminEnt {
             mask,
@@ -406,8 +377,6 @@ impl ModFields {
         }
     }
 
-    /// Write an imposed [`AdminEnt`] back (`impose_restrictions` modifies
-    /// `*ent` and `*mask` in place).
     fn take_admin_ent(&mut self, ent: AdminEnt) -> u32 {
         self.attributes = ent.attributes;
         self.max_life = ent.max_life;
@@ -419,10 +388,8 @@ impl ModFields {
     }
 }
 
-/// MIT `_xdr_kadm5_principal_ent_rec` (`kadm_rpc_xdr.c:410-416`): a null mod-principal
-/// pointer is not followed by a principal encoding.
-/// The attribute mask is the word after the key and typed-data lists, so skipping that
-/// optional principal is what keeps the mask aligned.
+// MIT: `_xdr_kadm5_principal_ent_rec` (kadm_rpc_xdr.c:410-416)
+/// Null mod-principal: no encoding.
 pub(super) fn parse_modify(args: &[u8]) -> Result<(PrincipalName, String, u32, ModFields), Error> {
     let mut r = XdrR::new(args);
     let _ = r.u32()?;
@@ -489,30 +456,25 @@ pub(super) fn parse_modify(args: &[u8]) -> Result<(PrincipalName, String, u32, M
     ))
 }
 
-pub(super) fn encode_gprinc(p: &krb5_kdc::Principal) -> Vec<u8> {
+pub(super) fn encode_gprinc(p: &krb5_kdc::Principal, mask: u32) -> Vec<u8> {
     let mut w = XdrW::default();
     w.u32(API_V2);
     w.u32(0);
-    encode_principal_ent(&mut w, p);
+    encode_principal_ent(&mut w, p, mask);
     w.b
 }
 
-/// MIT `kadm5_get_principal` (`svr_principal.c:809-822`): a mod-principal lookup failure
-/// fails the get, and the name is cleared when that mask bit is off.
-/// This encoder never sends the null pointer; a missing mod-princ record is written as
-/// kadmin/admin in the entry realm.
-fn encode_principal_ent(w: &mut XdrW, p: &krb5_kdc::Principal) {
+/// Never null: missing mod-princ is kadmin/admin.
+fn encode_principal_ent(w: &mut XdrW, p: &krb5_kdc::Principal, mask: u32) {
     let id = p.id();
     w.nullstring(Some(&id));
     w.u32(p.expiration);
     w.u32(tl_u32(&p.tl_data, TL_LAST_PWD_CHANGE).unwrap_or(0));
     w.u32(p.pw_expire);
     w.u32(u32::try_from(p.max_life).unwrap_or(0));
-    // MIT kadmin always unparses `mod_name`; a NULL pointer is
-    // KRB5_PARSE_MALFORMED ("while unparsing principal").
     let mod_name = krb5_kdc::tl_mod_princ_name(&p.tl_data)
         .unwrap_or_else(|| format!("kadmin/admin@{}", p.realm));
-    w.u32(0); // xdr_nulltype FALSE → encode principal
+    w.u32(0); // FALSE: principal follows.
     w.nullstring(Some(&mod_name));
     w.u32(tl_u32(&p.tl_data, TL_MOD_PRINC).unwrap_or(0));
     w.u32(p.attributes);
@@ -534,17 +496,30 @@ fn encode_principal_ent(w: &mut XdrW, p: &krb5_kdc::Principal) {
     w.u32(p.last_failed);
     w.u32(p.fail_auth_count);
     let n_key = u32::try_from(p.keys.len()).unwrap_or(0);
-    let n_tl = u32::try_from(p.tl_data.len()).unwrap_or(0);
+    // MIT: `kadm5_get_principal` (lib/kadm5/srv/svr_principal.c:848-866)
+    let all_tl = p.tl_with_s4u();
+    let tl: Vec<_> = if mask & KADM5_TL_DATA == 0 {
+        Vec::new()
+    } else {
+        all_tl
+            .iter()
+            .rev()
+            .filter(|t| {
+                t.ty > 255 && t.ty != krb5_kdc::TL_KERBER_SID && t.ty != krb5_kdc::TL_KERBER_HIST
+            })
+            .collect()
+    };
+    let n_tl = u32::try_from(tl.len()).unwrap_or(0);
     w.u32(n_key);
     w.u32(n_tl);
-    if p.tl_data.is_empty() {
+    if tl.is_empty() {
         w.u32(1);
     } else {
         w.u32(0);
-        for tl in &p.tl_data {
+        for t in &tl {
             w.u32(1);
-            w.u32(u32::try_from(tl.ty).unwrap_or(0));
-            w.opaque(&tl.contents);
+            w.u32(u32::try_from(t.ty).unwrap_or(0));
+            w.opaque(&t.contents);
         }
         w.u32(0);
     }
@@ -565,8 +540,6 @@ pub(super) fn encode_gprincs(ids: &[String]) -> Vec<u8> {
     w.u32(API_V2);
     w.u32(0);
     let n = u32::try_from(ids.len()).unwrap_or(0);
-    // MIT `xdr_gprincs_ret`: `xdr_int count` then `xdr_array` of
-    // `xdr_nullstring` (the array writes count again).
     w.u32(n);
     w.u32(n);
     for id in ids {
@@ -575,7 +548,7 @@ pub(super) fn encode_gprincs(ids: &[String]) -> Vec<u8> {
     w.b
 }
 
-/// The `chrand` reply: the new keys, in one buffer of its size, which the caller wipes.
+/// chrand reply: keys, in a wiped buffer.
 pub(super) fn encode_chrand(keys: &[krb5_kdc::KeyEntry]) -> Vec<u8> {
     let size = 12
         + keys
@@ -593,8 +566,7 @@ pub(super) fn encode_chrand(keys: &[krb5_kdc::KeyEntry]) -> Vec<u8> {
     w.b
 }
 
-/// The `get_principal_keys` reply: the keys of `kvno` (all when 0), in one buffer of its size,
-/// which the caller wipes.
+/// Keys (kvno 0: all), a wiped buffer.
 pub(super) fn encode_extract_keys(api: u32, p: &krb5_kdc::Principal, kvno: u32) -> Vec<u8> {
     let keys: Vec<&krb5_kdc::KeyEntry> = p
         .keys
@@ -621,17 +593,12 @@ pub(super) fn encode_extract_keys(api: u32, p: &krb5_kdc::Principal, kvno: u32) 
     w.b
 }
 
-/// After the leading principal, skip the rest of `kadm5_principal_ent_rec`.
-/// `xdr_kadm5_principal_ent_rec` after the principal: every scalar the
-/// server reads (`kadm_rpc_xdr.c:xdr_kadm5_principal_ent_rec_v1`), the TL
-/// list and the key_data-nocontents array (walked, not kept). Returns the
-/// fields and `n_key_data`.
 fn parse_principal_ent_rest(r: &mut XdrR<'_>) -> Result<(ModFields, u32), Error> {
     let expire = r.u32()?;
     let _last_pwd = r.u32()?;
     let pw_expire = r.u32()?;
     let max_life = r.u32()?;
-    let mod_null = r.u32()?; // xdr_bool: TRUE means NULL
+    let mod_null = r.u32()?; // xdr_bool: TRUE means NULL.
     if mod_null == 0 {
         let _ = r.principal()?;
     }
@@ -640,7 +607,7 @@ fn parse_principal_ent_rest(r: &mut XdrR<'_>) -> Result<(ModFields, u32), Error>
     let kvno = r.u32()?;
     r.u32()?; // mkvno
     let policy = r.nullstring()?;
-    r.u32()?; // aux_attributes (xdr_long)
+    r.u32()?; // aux_attributes.
     let max_rlife = r.u32()?;
     r.u32()?; // last_success
     r.u32()?; // last_failed
@@ -660,7 +627,6 @@ fn parse_principal_ent_rest(r: &mut XdrR<'_>) -> Result<(ModFields, u32), Error>
             tl_data.push(TlData { ty, contents });
         }
     }
-    // xdr_array of key_data_nocontents
     let n = r.u32()?;
     for _ in 0..n {
         let ver = r.u32()?;

@@ -4,6 +4,11 @@
 //! `svc.keytab` / ccache stay in operator-held `~/adlab/`; those paths
 //! skip cleanly.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "a test sets up its own profile and environment"
+)]
+
 use krb5_asn1::decode;
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
 use krb5_kdc::{
@@ -340,13 +345,4 @@ fn captured_ticket_checksum_structurally_present() {
         verify_pac_signatures(&pac_bytes, &key, None, Some(&der), true).is_ok(),
         "server checksum still holds when ticket-checksum DER is supplied without krbtgt"
     );
-}
-
-#[test]
-fn absent_keytab_is_not_a_hard_fail() {
-    // The golden NDR test above always runs. This assertion documents that
-    // checksum tests return rather than panic when fixtures are missing.
-    if fixture_dir().is_none() {
-        eprintln!("ad_pac: fixtures absent (ok)");
-    }
 }

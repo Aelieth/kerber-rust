@@ -19,12 +19,14 @@
 #   limited <command...>                                   any other command, under the same time limit
 #   once <secret>... / twice <secret> / chpw <old> <new>   secrets, newline-terminated, for stdin
 #   check <name> <expect> <helper> [args...]               run one recorded command and grade it
+#   sides <check> <label> <file> ...                       FAIL when a side is missing or empty
 #   checklast <name> <expect>                              grade the last recorded command again
 #   observe <name> <ERE> <helper> [args...] / observelast <name> <ERE> [nth]   an INFO line (recorded, not graded)
 #   kdcmark <name> / kdcsince <name> [ERE]                 windows of kdc's two daemon logs (check mark.<name>)
 #   capstart <vm> <name> <filter> / capstop <vm> <name>    a capture on a VM, kept without AS exchanges
 #   waitsync <vm>                                          chrony synchronised (check sync.<vm>)
-#   finish                                                 the result: PASS when no check failed and one passed
+#   finish                                                 the result: PASS when no check failed and one passed, each
+#                                                          check counted once, by its last row (a check run again)
 # <expect>: `rc` (exit status 0), `rc=N` or `rc=N|M`, `line:<text>` (a whole output line equal to text, and
 # status 0), or an ERE that must match an output line (and status 0). checks.tsv gets one line per check:
 #   name, PASS / FAIL / INFO, expect, rc, observed (the matching line, or what was seen), record.txt line.
@@ -158,6 +160,26 @@ checklast() {
     _checkrow "$name" "$result" "$expect" "$LAST_RC" "$observed"
 }
 check() { local name=$1 expect=$2; shift 2; "$@"; checklast "$name" "$expect"; }
+# sides <check> <label> <file> ...: FAIL <check>, naming each side, when a file is missing or empty.
+# diff reports two empty files as identical, so a comparison calls this before it reads them.
+sides() {
+    local name=$1 bad='' label file
+    shift
+    while [ $# -ge 2 ]; do
+        label=$1
+        file=$2
+        shift 2
+        if [ ! -f "$file" ]; then
+            bad="${bad:+$bad; }$label missing"
+        elif [ ! -s "$file" ]; then
+            bad="${bad:+$bad; }$label empty"
+        fi
+    done
+    if [ -n "$bad" ]; then
+        _checkrow "$name" FAIL "each side non-empty" 1 "NOT-RUN: $bad"
+        return 1
+    fi
+}
 observelast() {
     local seen
     seen=$(grep -oE -- "$2" "$LAST_OUT" | sed -n "${3:-1}p")
@@ -184,9 +206,10 @@ kdcsince() {
 }
 
 # capstart <vm> <name> <bpf filter>: tcpdump on every interface of <vm>, as a transient unit writing the VM's
-# /var/tmp/field-<name>.pcap (the filter should keep IP fragments: a port filter alone drops them).
+# /var/tmp/field-<name>.pcap (the filter should keep IP fragments: a port filter alone drops them). --immediate-mode:
+# without it, a stop in the same second loses what is still in the kernel's TPACKET_V3 block.
 capstart() {
-    run "$1" "sudo systemd-run --unit=field-pcap-$2 --collect tcpdump -i any -s0 -U -w /var/tmp/field-$2.pcap $(printf '%q' "$3"); sleep 2; systemctl is-active field-pcap-$2"
+    run "$1" "sudo systemd-run --unit=field-pcap-$2 --collect tcpdump -i any -s0 -U --immediate-mode -w /var/tmp/field-$2.pcap $(printf '%q' "$3"); sleep 2; systemctl is-active field-pcap-$2"
 }
 # capstop <vm> <name>: stop it; the raw capture comes to $STATE and is deleted on the VM; the record keeps
 # pcap/<name>.pcap without AS exchanges (+ .txt, pcap-keep.sh); the raw copy is deleted (check pcap.<name>).
@@ -205,12 +228,14 @@ waitsync() {
     check "sync.$1" '^synchronized: yes$' run "$1" "chronyc -n waitsync 30 0 0 2 > /dev/null 2>&1; printf 'synchronized: %s\n' \"\$(timedatectl show -p NTPSynchronized --value)\"; chronyc -n tracking | grep -E '^(Leap status|System time)'"
 }
 
+# _lastcounts <checks.tsv>: "PASS FAIL INFO", each check counted once, by its last row.
+_lastcounts() {
+    awk -F'\t' '!/^#/ { r[$1] = $2 } END { for (k in r) n[r[k]]++; print n["PASS"] + 0, n["FAIL"] + 0, n["INFO"] + 0 }' "$1"
+}
 # finish: the scenario's result into $REC_DIR/result; status 0 for PASS.
 finish() {
     local pass fail info result=FAIL
-    pass=$(awk -F'\t' '$2 == "PASS"' "$CHECKS" | wc -l)
-    fail=$(awk -F'\t' '$2 == "FAIL"' "$CHECKS" | wc -l)
-    info=$(awk -F'\t' '$2 == "INFO"' "$CHECKS" | wc -l)
+    read -r pass fail info < <(_lastcounts "$CHECKS")
     [ "$fail" -eq 0 ] && [ "$pass" -gt 0 ] && result=PASS
     printf '%s %s pass %s fail %s info\n' "$result" "$pass" "$fail" "$info" > "$REC_DIR/result"
     section "result: $result ($pass pass, $fail fail, $info info; checks.tsv)"

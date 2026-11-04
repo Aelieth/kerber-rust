@@ -2,8 +2,8 @@
 # spnego-probe.sh — runs INSIDE a throwaway probe container on `services` (podman's default
 # bridge, its own netns: a separate client host as far as Keycloak can tell). Field runner S2.
 # stdin carries a preamble from the host: ALICE_PW (the realm's password), LAB_CA_PEM (the lab CA,
-# public) and CHECK_SH (the satomlin kit's helper block + check_spnego, verbatim from
-# lib/satomlin-common.sh, preceded by the four SSO constants with the lab's values), then this.
+# public) and CHECK_SH (the reference client kit's helper block + check_spnego, verbatim from
+# its common library, preceded by the four SSO constants with the lab's values), then this.
 set -u
 step() { printf '\n--- %s\n' "$*"; }
 URL='https://services.kerber.test/realms/kerber.test/protocol/openid-connect/auth?client_id=nextcloud&response_type=code&scope=openid&redirect_uri=https%3A%2F%2Fnextcloud.kerber.test%2Fapps%2Fuser_oidc%2Fcode'

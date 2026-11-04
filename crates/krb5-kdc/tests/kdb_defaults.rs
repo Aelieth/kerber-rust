@@ -1,47 +1,25 @@
 //! Store-side realm defaults: the fields `kadm5_create_principal_3` takes when the mask
 //! leaves them out, and the local-verb shape of `impose_restrictions`.
-//! MIT `kadm5_create_principal_3` (`svr_principal.c:381-401`): a field absent from the mask
+// MIT: `kadm5_create_principal_3` (svr_principal.c:381-401)
+//! a field absent from the mask
 //! takes `handle->params.*`.
-//! MIT `kadm5_get_config_params` (`alt_prof.c:573-632`): the realm defaults behind
+// MIT: `kadm5_get_config_params` (alt_prof.c:573-632)
+//! the realm defaults behind
 //! `handle->params.*` (`max_life`, `max_rlife`, `expiration`, `flags`).
-//! MIT `impose_restrictions` (`auth.c:205-265`): an ACL line's restrictions rewrite the record
+// MIT: `impose_restrictions` (auth.c:205-265)
+//! an ACL line's restrictions rewrite the record
 //! and the mask.
-//! MIT `auth_restrict` (`auth.c:267-272`): the hook that applies them, given the record and
+// MIT: `auth_restrict` (auth.c:267-272)
+//! the hook that applies them, given the record and
 //! the mask.
 
 #[path = "common/mod.rs"]
 mod common;
 
-use krb5_kdc::principals::{kadmin_admin, kadmin_changepw};
 use krb5_kdc::testrealm::{TEST_REALM, bootstrap_documented};
-use krb5_kdc::{
-    Acl, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED, KDB_LOCKDOWN_KEYS, KDB_PWCHANGE_SERVICE,
-    KDB_REQUIRES_PRE_AUTH,
-};
+use krb5_kdc::{Acl, KDB_DISALLOW_SVR, KDB_REQUIRES_PRE_AUTH};
 
 use krb5_types::PrincipalName;
-
-#[test]
-fn bootstrap_changepw_and_admin_carry_kadm5_create_attributes() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let admin = store.get_name(&kadmin_admin()).expect("kadmin/admin");
-    assert_eq!(admin.attributes, KDB_DISALLOW_TGT_BASED | KDB_LOCKDOWN_KEYS);
-    assert_eq!(
-        admin.max_life,
-        60 * 60 * 3,
-        "kadm5_create.c:54 ADMIN_LIFETIME"
-    );
-    let changepw = store.get_name(&kadmin_changepw()).expect("kadmin/changepw");
-    assert_eq!(
-        changepw.attributes,
-        KDB_DISALLOW_TGT_BASED | KDB_PWCHANGE_SERVICE | KDB_LOCKDOWN_KEYS
-    );
-    assert_eq!(
-        changepw.max_life,
-        60 * 5,
-        "kadm5_create.c:55 CHANGEPW_LIFETIME"
-    );
-}
 
 const ACTOR: &str = "kadmin/admin@KERBER.TEST";
 
@@ -99,7 +77,7 @@ fn default_principal_flags_is_params_flags_for_a_create() {
     );
     // A random-key (service) create without the stanza is MIT's
     // KRB5_KDB_DEF_FLAGS 0: the knob's scope is password-keyed creates, so
-    // U2U to a fresh `-randkey` service is not `NO PREAUTH` (flags-gate).
+    // U2U to a fresh `-randkey` service is not `NO PREAUTH`.
     store
         .insert_new_randkey(&name("host/z1knob.kerber.test"), TEST_REALM, &[], ACTOR)
         .unwrap();

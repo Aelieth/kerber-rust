@@ -1,6 +1,3 @@
-//! Per-message wrap (`k5seal.c`, `k5sealv3.c`, `unwrap.c`,
-//! `util_crypt.c`): RFC 4121 CFX wrap/unwrap, RRC, and EC.
-
 use krb5_crypto::{
     EncryptionType, KeyUsage, ProtocolKey, checksum, checksum_output_size, decrypt, encrypt,
     verify_checksum_type,
@@ -76,7 +73,6 @@ fn apply_send_rrc(tok: &mut [u8], rrc: u16) -> Result<(), Error> {
         return Ok(());
     }
     let cipher = tok[16..].to_vec();
-    // Inverse of [`rotate_rrc`]: left-rotate by `rrc` so recv right-rotates back.
     let mut rotated = Vec::with_capacity(cipher.len());
     rotated.extend_from_slice(&cipher[n..]);
     rotated.extend_from_slice(&cipher[..n]);
@@ -151,14 +147,6 @@ pub(super) fn wrap_header(initiator: bool, sealed: bool, seq: u64) -> [u8; 16] {
     h
 }
 
-/// Build a MIT-shaped wrap token (16-byte RFC 4121 header + `encrypt(plain||header)`).
-///
-/// Used by tests to prove unwrap accepts the layout MIT `libgssapi_krb5` emits.
-///
-/// # Errors
-///
-/// [`Error::Inner`] when encryption under `session` fails (the OS random source cannot supply a
-/// confounder).
 pub fn mit_shaped_wrap(
     session: &ProtocolKey,
     initiator: bool,
@@ -187,7 +175,6 @@ pub(super) fn mit_shaped_wrap_flags(
 }
 
 impl GssContext {
-    /// MIT `unwrap_v3` (`unwrap.c:307-313`): a token flagged with the acceptor subkey is read under it when this context has one, any other under the initiator subkey.
     pub(super) fn recv_key(&self, flags: u8) -> &ProtocolKey {
         match &self.acceptor_subkey {
             Some(k) if flags & FLAG_ACCEPTOR_SUBKEY != 0 => k,
@@ -195,7 +182,6 @@ impl GssContext {
         }
     }
 
-    /// MIT `gss_krb5int_make_seal_token_v3` (`k5sealv3.c:94-100`): once there is an acceptor subkey, both sides send every token under it.
     pub(super) fn send_key(&self) -> (&ProtocolKey, u8) {
         if let Some(k) = &self.acceptor_subkey {
             (k, FLAG_ACCEPTOR_SUBKEY)
@@ -204,54 +190,21 @@ impl GssContext {
         }
     }
 
-    /// Per-message wrap (confidentiality). RFC 4121 §4.2.6 token.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Inner`] when encryption under the send key fails (the OS random source cannot
-    /// supply a confounder).
     pub fn wrap(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, Error> {
-        // MIT 1.22.2 libgssapi_krb5 wrap tokens use RRC=0 (observed in
-        // gss-gate). wrap_with_rrc(16) remains for SSPI in-place decrypt.
+        // MIT 1.22.2's libgssapi_krb5 wrap tokens use RRC = 0 (the observed interop fact).
         self.wrap_conf_inner(plaintext, 0, 0)
     }
 
-    /// Unwrap a wrap token. Sequence numbers are checked.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Truncated`] when the token is badly framed or under its 16-byte header, is not a
-    /// wrap token, has a bad filler, has an EC or length that does not fit its checksum, or
-    /// decrypts to a header that differs from its own; [`Error::Integrity`] when the token comes
-    /// from this side or its checksum or seal does not verify under the key its flags select;
-    /// [`Error::Inner`] when its sealed payload is too short to decrypt; [`Error::Sequence`] when
-    /// its sequence number is a replay or outside the receive window.
     pub fn unwrap(&mut self, token: &[u8]) -> Result<Vec<u8>, Error> {
         Ok(self.unwrap_v3(token)?.0)
     }
 
-    /// Like [`Self::unwrap`] but also returns whether the token was sealed (`conf_state`).
-    /// MIT `unwrap_v3` (`unwrap.c:363-364`): `conf_state` is the token's
-    /// `FLAG_WRAP_CONFIDENTIAL` (sealed) flag.
-    /// MIT `xdr_rpc_gss_unwrap_data` (`authgss_prot.c:238-240`): the RPCSEC_GSS privacy service
-    /// rejects an integrity-only body.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Truncated`] when the token is badly framed or under its 16-byte header, is not a
-    /// wrap token, has a bad filler, has an EC or length that does not fit its checksum, or
-    /// decrypts to a header that differs from its own; [`Error::Integrity`] when the token comes
-    /// from this side or its checksum or seal does not verify under the key its flags select;
-    /// [`Error::Inner`] when its sealed payload is too short to decrypt; [`Error::Sequence`] when
-    /// its sequence number is a replay or outside the receive window.
+    // MIT: `xdr_rpc_gss_unwrap_data` (authgss_prot.c:238-240)
+    // The RPCSEC_GSS privacy service rejects an integrity-only body.
     pub fn unwrap_conf(&mut self, token: &[u8]) -> Result<(Vec<u8>, bool), Error> {
         self.unwrap_v3(token)
     }
 
-    /// MIT `unwrap_v3` (`unwrap.c:295-304`): a bad token type, a bad filler, or the wrong
-    /// direction is rejected before the payload is decrypted.
-    /// The right-rotation is undone before the checksum or the seal is checked, so a rotated
-    /// trailer is not left in the plaintext.
     fn unwrap_v3(&mut self, token: &[u8]) -> Result<(Vec<u8>, bool), Error> {
         let owned = message_token(token)?;
         let inner = owned.as_slice();
@@ -306,22 +259,10 @@ impl GssContext {
         Ok((msg, conf))
     }
 
-    /// Wrap with an explicit RRC (tests pin rotate direction).
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Inner`] when encryption under the send key fails (the OS random source cannot
-    /// supply a confounder).
     pub fn wrap_with_rrc(&mut self, plaintext: &[u8], rrc: u16) -> Result<Vec<u8>, Error> {
         self.wrap_conf_inner(plaintext, 0, rrc)
     }
 
-    /// Wrap without confidentiality (`gss_seal` conf=0). AUTH_GSSAPI
-    /// `signed_isn` / sequence verifiers use this (MIT `auth_gssapi_seal_seq`).
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Inner`] when the keyed checksum under the send key cannot be computed.
     pub fn wrap_integ(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, Error> {
         let usage = seal_usage(self.initiator);
         let (key, extra) = self.send_key();

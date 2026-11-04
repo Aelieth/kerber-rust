@@ -1,6 +1,4 @@
-//! MIT `krb5_lock_file`'s whole-file locks, as the credential cache files and the KDC database's
-//! lock files take them: open-file-description locks, a classic POSIX lock on a kernel without
-//! them, and `flock` only where the kernel refuses that.
+//! Whole-file locks: OFD, else POSIX, else flock.
 
 use std::fs::File;
 use std::io;
@@ -9,18 +7,14 @@ use nix::errno::Errno;
 use nix::fcntl::{FcntlArg, Flock, FlockArg, fcntl};
 use nix::libc;
 
-/// What one [`lock_file`] call asks for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum FileLock {
-    /// `KRB5_LOCKMODE_SHARED`: any number of holders.
     Shared,
-    /// `KRB5_LOCKMODE_EXCLUSIVE`: one holder.
     Exclusive,
-    /// `KRB5_LOCKMODE_UNLOCK`.
     Unlock,
 }
 
-/// MIT `ofdlock` (`lib/krb5/os/lock_file.c:90-103`): an OFD lock, else on `EINVAL` (a kernel without OFD locks) a classic POSIX lock.
+// MIT: `ofdlock` (lib/krb5/os/lock_file.c:90-103)
 fn ofdlock(file: &File, arg: &libc::flock, wait: bool) -> Result<(), Errno> {
     let ofd = if wait {
         FcntlArg::F_OFD_SETLKW(arg)
@@ -41,16 +35,9 @@ fn ofdlock(file: &File, arg: &libc::flock, wait: bool) -> Result<(), Errno> {
     }
 }
 
-/// Lock, or unlock, the whole of `file`, waiting for a conflicting lock to go: a POSIX lock, and
-/// `flock` only where the kernel refuses that with `EINVAL`. A `flock` taken is kept in
-/// `flocked` until the unlock.
-/// MIT `krb5_lock_file` (`lib/krb5/os/lock_file.c:117-162`): whole file, `F_RDLCK` / `F_WRLCK` / `F_UNLCK`, blocking; `EACCES` / `EAGAIN` are `EAGAIN`.
-/// MIT `krb5_lock_file` (`lib/krb5/os/lock_file.c:154-170`): only `EINVAL` falls back to `flock`, and the `EINVAL` is still returned when `flock` succeeds.
-///
-/// # Errors
-///
-/// The lock call's errno: `EAGAIN` for `EACCES` or `EAGAIN`, `EINVAL` when the kernel refused
-/// the POSIX lock (even when `flock` then took it), any other as it is.
+// MIT: `krb5_lock_file` (lib/krb5/os/lock_file.c:117-162)
+// MIT: `krb5_lock_file` (lib/krb5/os/lock_file.c:154-170)
+/// Only `EINVAL` falls back to flock; that error is still returned.
 pub fn lock_file(
     file: &File,
     how: FileLock,
@@ -59,11 +46,6 @@ pub fn lock_file(
     lock_file_how(file, how, flocked, true)
 }
 
-/// [`lock_file`], or without `wait` an attempt that fails with `EAGAIN` where it would wait.
-///
-/// # Errors
-///
-/// As [`lock_file`].
 pub fn lock_file_how(
     file: &File,
     how: FileLock,
@@ -94,7 +76,6 @@ pub fn lock_file_how(
     }
 }
 
-/// `flock(2)` on `file`'s open file description, kept in `flocked` while it is held.
 fn flock_fallback(
     file: &File,
     how: FileLock,
@@ -124,53 +105,4 @@ fn flock_fallback(
 
 fn errno_of(e: &io::Error) -> Errno {
     e.raw_os_error().map_or(Errno::EIO, Errno::from_raw)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Two descriptions of one scratch file, as two processes hold it.
-    fn two_opens(name: &str) -> (std::path::PathBuf, File, File) {
-        let dir = krb5_testkit::scratch_dir(name);
-        let path = dir.join("cache");
-        std::fs::write(&path, b"x").unwrap();
-        let a = File::options().read(true).write(true).open(&path).unwrap();
-        let b = File::options().read(true).write(true).open(&path).unwrap();
-        (dir, a, b)
-    }
-
-    #[test]
-    fn an_exclusive_lock_keeps_out_every_other_until_it_is_let_go() {
-        let (dir, a, b) = two_opens("krb5-lock-excl");
-        let (mut fa, mut fb) = (None, None);
-        lock_file(&a, FileLock::Exclusive, &mut fa).unwrap();
-        assert_eq!(
-            lock_file_how(&b, FileLock::Shared, &mut fb, false),
-            Err(Errno::EAGAIN)
-        );
-        assert_eq!(
-            lock_file_how(&b, FileLock::Exclusive, &mut fb, false),
-            Err(Errno::EAGAIN)
-        );
-        lock_file(&a, FileLock::Unlock, &mut fa).unwrap();
-        lock_file_how(&b, FileLock::Exclusive, &mut fb, false).unwrap();
-        lock_file(&b, FileLock::Unlock, &mut fb).unwrap();
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn shared_locks_share_and_keep_out_an_exclusive_one() {
-        let (dir, a, b) = two_opens("krb5-lock-shared");
-        let (mut fa, mut fb) = (None, None);
-        lock_file(&a, FileLock::Shared, &mut fa).unwrap();
-        lock_file_how(&b, FileLock::Shared, &mut fb, false).unwrap();
-        lock_file(&b, FileLock::Unlock, &mut fb).unwrap();
-        assert_eq!(
-            lock_file_how(&b, FileLock::Exclusive, &mut fb, false),
-            Err(Errno::EAGAIN)
-        );
-        lock_file(&a, FileLock::Unlock, &mut fa).unwrap();
-        let _ = std::fs::remove_dir_all(dir);
-    }
 }

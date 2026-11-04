@@ -1,167 +1,273 @@
 # kerber-rust
 
-> **Pure-Rust, memory-safe Kerberos V5** — wire-compatible with
-> [MIT Kerberos](https://web.mit.edu/kerberos/) **1.22.2**, Heimdal, and
-> Active Directory. No C FFI anywhere in the tree.
+**A Kerberos server written in safe Rust that you can run in place of MIT's `krb5-server`.** Your MIT
+clients, keytabs and passwords keep working. It installs the same commands, services and files in the
+same places, and it is tested side by side with MIT Kerberos 1.22.2 on lab machines, with real clients
+and services.
 
 [![License: Apache-2.0 OR MIT](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](LICENSE-APACHE)
 [![Edition 2024](https://img.shields.io/badge/edition-2024-informational.svg)](Cargo.toml)
 [![MSRV 1.95](https://img.shields.io/badge/MSRV-1.95-informational.svg)](Cargo.toml)
 [![unsafe forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg)](Cargo.toml)
-[![interop MIT 1.22.2 · Heimdal · AD](https://img.shields.io/badge/interop-MIT%201.22.2%20%C2%B7%20Heimdal%20%C2%B7%20AD-brightgreen.svg)](docs/interop-matrix.md)
+[![interop MIT 1.22.2 · AD](https://img.shields.io/badge/interop-MIT%201.22.2%20%C2%B7%20AD-brightgreen.svg)](docs/interop-matrix.md)
 
-## Purpose
+**It is for you if** you run a Kerberos realm on Fedora and want the KDC in a memory-safe language
+without changing your clients, or you are building a product that needs a KDC as a library. **It is not
+for you if** you need a C library, an LDAP database backend, RADIUS one-time codes or several realms in
+one KDC process: see [Limitations](#limitations).
 
-A ground-up reimplementation of Kerberos V5 in safe Rust: the crypto
-(RFC 3961/3962/8009), the RFC 4120 wire protocol, a KDC (AS + TGS), a
-client (`kinit`), GSS-API, and the admin/propagation daemons (`kadmind`,
-`kpasswd`, `kprop`/`kpropd`, iprop). Every feature is proven against a
-**real** external implementation — never a Rust-only round-trip.
+This is version **1.2.0**. You build it from source; it is not on crates.io and there is no package.
 
-**The one rule:** a feature is *done* only when a content-asserting gate
-drives a real external implementation (MIT primary; then Samba / Heimdal).
-A Rust-vs-Rust round-trip is never proof, and production structured logs
-plus packet captures outrank unit tests.
+[Why it exists](#why-it-exists) · [What it can do](#what-it-can-do) · [Limitations](#limitations) ·
+[How it was tested](#how-it-was-tested) · [Download, install and use](#download-install-and-use) ·
+[Move an MIT realm over](#move-an-mit-realm-over) · [Configuration](#configuration) · [More](#more)
 
-## Status
+## Why it exists
 
-| | |
-|---|---|
-| **v1.0.0** | Tagged interop milestone: the MIT 1.22.2 / Heimdal / Active Directory core, proven by content-asserting external gates in CI. `publish = false` (not on crates.io). |
-| **v1.1.0** | **General-purpose MIT completeness**: the KDC behaves like MIT across the board and the client tools stand alone. It installs and runs like MIT's `krb5-server` on Fedora ([docs/install.md](docs/install.md): MIT-named commands, systemd units, the upgrade from an MIT realm), and real consumers use it in the field beside the same scenario on MIT 1.22.2: SSSD login, renewal and `passwd`, sshd GSSAPI, NFS 4.2 `krb5i` / `krb5p`, Keycloak SPNEGO, an Active Directory trust, and KLLDAP with `krb5-server` swapped out ([interop matrix](docs/interop-matrix.md#field-consumers); repeatable through [harness/field](harness/field/README.md)). The nine 1.1 phases and the MIT 1.22.2 parity sweep have landed ([docs/stages.md](docs/stages.md)); the swept MIT functions are graded one row per check in the [parity ledger](docs/parity/README.md). `publish = false` (not on crates.io). |
+A Kerberos KDC holds the keys to every account in a realm, and it reads packets from anyone on the
+network. MIT's KDC, the reference implementation, is written in C. kerber-rust does the same job in
+Rust, with `unsafe` code forbidden in its own crates and no Kerberos C library underneath, so memory
+bugs of the kind C allows cannot come from its own code.
 
-Every push runs 59 gates in `ci.yml`: 56 fail-red and 3 soft (`continue-on-error`).
-Nine more run only nightly (the eight Samba / AD / Heimdal peers and the KCM opcode
-pin); soak also runs longer nightly. [docs/gates.md](docs/gates.md) has one row per gate.
+Two things shaped it:
 
-## Architecture
+- **It has to be a real replacement.** A new KDC is no use if every client and script has to change,
+  so MIT 1.22.2 is the bar: the same commands, files and network behaviour, down to the log lines and
+  error texts wherever they have been compared.
+- **It has to fit inside other software.** The goal is to become the KDC inside
+  [KLLDAP](https://github.com/Aelieth/klldap), replacing a wrapper around system MIT Kerberos. So the
+  KDC and `kadmind` also run as Rust libraries ([docs/embed](docs/embed/README.md)). That embedding
+  is the next step: today KLLDAP runs with `krb5-server` swapped for these programs.
 
-Focused crates under `crates/`:
+## What it can do
 
-| Crate | Responsibility |
+| You want to | What you get |
 | --- | --- |
-| `krb5-log` | Structured log field names and correlation IDs |
-| `krb5-cli` | MIT-style command lines (getopt, `kdb5_util` / `kadmind` option tables) and password prompts |
-| `krb5-crypto` | RFC 3961/3962/8009 etypes 17–20 (plus legacy behind `allow_weak_crypto`) |
-| `krb5-types` | RFC 4120 owned protocol values |
-| `krb5-asn1` | DER encode/decode of those values |
-| `krb5-config` | `krb5.conf` / `kdc.conf`, env, DNS SRV |
-| `krb5-protocol` | AS/TGS/AP/SAFE/PRIV/CRED, keytab, FILE ccache |
-| `krb5-client` | `kinit` (AS + TGS), MIT FILE ccache v4, keytab v1/v2 |
-| `krb5-kdc` | AS/TGS issue, persist/stash, MIT dump/load, named policies, iprop, plugin traits |
-| `krb5-gss` | GSS wrap/unwrap/MIC, SPNEGO framing (library; no C FFI) |
-| `krb5-admin` | kadmind (AUTH_GSSAPI 300001), kpasswd 464, kprop/kpropd 754, iprop |
-| `krb5-tools` | Harness-only gate tools (`publish = false`). Not a product surface. |
-| `krb5-testkit` | Shared test helpers (`publish = false`, dev-dependency only) |
+| **Run a realm** | `krb5kdc` over UDP and TCP, with Fedora's systemd units, SELinux types and `/var/kerberos/krb5kdc` layout |
+| **Manage it** | `kadmind` for MIT's `kadmin`, plus `kadmin.local`, `kdb5_util`, password changes on port 464, policies and lockout |
+| **Log people in** | passwords (encrypted timestamp, encrypted challenge, SPAKE), FAST, certificates (PKINIT with RSA or elliptic-curve keys), and one-time codes through a verifier you supply |
+| **Keep replicas** | `kprop` and `kpropd`, full dumps in both directions with MIT, and incremental propagation (iprop) |
+| **Cross boundaries** | cross-realm tickets and referrals, a two-way trust with Active Directory, S4U2Self, S4U2Proxy and RBCD, and MIT's PAC, or AD's shape with `domain_sid` |
+| **Serve applications** | tickets for SSSD, NFS 4.2, Keycloak and OpenSSH, and a GSS-API library for Rust programs |
+| **Skip MIT's client tools** | its own `kinit`, `klist`, `kvno`, `kdestroy`, `kswitch`, `kpasswd` and `ktutil`, if you want them |
+| **Build it into a product** | the KDC and `kadmind` as libraries over one store, with plugin points as Rust traits |
 
-See [docs/architecture.md](docs/architecture.md) and
-[docs/rfc-mapping.md](docs/rfc-mapping.md).
+It keeps its database in MIT's dump format, so a realm can move to it and back.
 
-## What's proven
+## Limitations
 
-Every claim below is backed by a live gate with a Rust leg, per push or nightly; [docs/gates.md](docs/gates.md)
-names each gate's job and lane (the `kadmin-gate` / `kpasswd-gate` wrappers stand for the legs CI runs),
-[docs/interop-matrix.md](docs/interop-matrix.md) the oracles, and [docs/stages.md](docs/stages.md) the stage map.
+- **It is the server side, not a C library.** There is no C API. Programs linked against MIT's
+  `libkrb5` and `libgssapi`, such as sshd and SSSD, keep using those libraries.
+- **Not tested against Heimdal in 1.2.** Heimdal was tested in both directions through v1.1.0, and that
+  test was retired during 1.2.
+- **`KCM:` caches have one test,** on one setup: Fedora 44 with `sssd-kcm` 2.13.1, against MIT's KDC. It is
+  not in the field suite, and it says nothing about other distributions.
+- **Fedora, as far as the tests go,** but for one scenario that builds these programs in KLLDAP's
+  AlmaLinux 10 image. The install steps and the lab are Fedora.
+- **One realm per KDC process.**
+- **Not supported:** MIT's db2, LMDB and LDAP database backends; RADIUS-backed OTP; SPAKE groups P-384
+  and P-521; `PKCS11:` and `PKCS12:` PKINIT identities and revocation lists; master key rollover;
+  `kproplog`, `sclient` and `sserver`; loadable plugin modules. [The full list](docs/install.md#not-supported).
+- **Not planned:** SAM-2, IAKERB, kdcproxy (MS-KKDCP), FIPS mode, `KEYRING:` and MSLSA caches, `ksu` and
+  `.k5login`, `kpropd` under inetd, and `gss_wrap_size_limit`.
+- **Its own client tools are not yet a drop-in** for MIT's: [what differs](docs/install.md#what-make-install-installs).
+  Keep `krb5-workstation` if a script depends on one of those differences.
+- **Some behaviour differs from MIT on purpose.** Most of those differences refuse something MIT
+  accepts. [Not yet matched](docs/interop-matrix.md#not-yet-matched-in-12) lists what an operator
+  could see, and [the deviations file](docs/mit-deviations.md) has every deliberate one.
+- **Its dependencies are not all audited or free of `unsafe`.** RustCrypto, curve25519-dalek, getrandom
+  and nix contain `unsafe`, and `cargo vet` reports 16 crates fully audited and 134 exempted.
+- **Windows SSPI has no test of its own.** Over the AD trust, on an earlier 1.2 build, Windows accepted
+  this realm's users and acted as a SPNEGO client in the lab.
 
-| External oracle | Proves | Gates (examples) |
+## How it was tested
+
+The rule is simple: a feature counts as done only when it works against real MIT 1.22.2 on lab machines.
+A Rust program talking to itself never counts.
+
+**MIT goes first.** Each scenario in the field suite runs on lab virtual machines against a stock
+Fedora MIT 1.22.2 realm, then runs the same way against kerber-rust, and the two results are compared
+check by check. A *check* is one thing the harness looks at after a step, such as a command's exit code
+or output, a log line or a file's contents. It passes or fails, or it is only recorded (informational).
+
+The weekly suite, the burn-in, the `KCM:` and Samba tests, CI and the secret scan ran on commit `bac2ce01`.
+The rest ran on its parent `04be5862`, which builds the same program bytes: `bac2ce01` changed only two
+test-harness files.
+
+| Test | What it does | Result |
 | --- | --- | --- |
-| **MIT Kerberos 1.22.2** *(primary)* | AS/TGS · GSS wrap/unwrap (RFC 4121; wrap sends RRC=0, as MIT) · S4U2Self / S4U2Proxy / RBCD · PKINIT · SPAKE (`pa_type` 151, groups 1 and 2) · RFC 8009 SHA-2 · cross-realm · kadmin (add/get/list/mod/chrand/rename/del) · kpasswd (464) · kprop **both directions** · iprop · dump/load (v7) · byte-for-byte differential · stress / chaos / soak | `client-gate`, `kdc-gate`, `gss-gate`, `s4u-mit-gate`, `pkinit-gate`, `rust-kinit-pkinit-gate`, `rust-kinit-enterprise-gate`, `spake-gate`, `sha2-gate`, `cross-realm-gate`, `kadmin-gate`, `kpasswd-gate`, `kprop-gate`, `kprop-reverse-gate`, `iprop-gate`, `kdb-dump-gate`, `differential-gate`, `store-gate`, `policy-gate`, `stress`/`chaos`/`soak-gate` |
-| **Samba 4 AD DC** *(live)* | AD PAC (NDR golden) · live `AD.KERBER.TEST`↔`KERBER.TEST` trust via real `samba-tool domain trust create` | `samba-pac-verify-gate`, `samba-pac-l2-gate`, `samba-crossrealm-gate`, `samba-realtrust-gate` |
-| **Heimdal 7.8** *(live)* | Both directions (Heimdal client ↔ Rust KDC; Rust client ↔ Heimdal KDC), with AES256-SHA1 configured | `heimdal-gate` |
+| Weekly field suite | 16 scenarios, on MIT and on kerber-rust: real clients and services, install, upgrade, going back to MIT, replicas | 3,044 checks passed, 0 failed (172 informational) |
+| Burn-in | the nightly field profile, 6 scenarios on both, 7 times in a row with the code frozen | every run 563 passed, 0 failed (38 informational), and the results of every run matched |
+| The 1.1 regression set | the checks that proved the 1.1 release, run again | 8,198 passed, 0 failed |
+| OpenSSH by hand | sshd GSSAPI login from one client to another | 52 passed, 0 failed |
+| `KCM:` caches by hand | MIT's tools, then ours: `kinit`, `klist`, `kvno`, `kswitch`, `kinit -R`, `kdestroy`, each reading the other's caches | 20 of 22 steps identical; the other 2 differ only in the program's name, because ours ran as `krb5-klist` |
+| Samba AD by hand | 7 tests with live Samba 4 domain controllers. 4 use our KDC, in a debug build: Samba decodes its PAC, checks its checksums and rejects corrupted ones, takes its referrals both ways, and returns the right SID over a real `samba-tool` trust. The other 3 exercise only Samba's own tools, and our client tools are in none of them | 7 of 7 passed |
+| Crashes | 218 kills during writes, 50 of them during a database rewrite, each result loaded by MIT's `kdb5_util` | no damaged change; MIT loaded all 220 dumps |
+| Power loss | 20 forced power-offs during writes, with a replica | none of the 38 acknowledged writes was lost |
+| Write speed | beside MIT at 5,000 principals | 0.79 to 1.00 times MIT's median time per write |
+| CI | every push | 8 of 8 jobs |
+| Secret scan | the source, the test harness and 72,629 test record files | 0 findings (168 known-safe hits reviewed and allowlisted) |
 
-The KDC's live at-rest file is MIT dump **version 7** (the stash holds the
-master key); `krb5-kadmind` speaks ONC RPC program 2112 with AUTH_GSSAPI
-flavor 300001. `krb5-config` is consumed end to end: the KDC applies
-`kdc.conf` ticket policy, and `kinit` / TGS referral chasing read
-`KRB5_CONFIG` then `/etc/krb5.conf`. An omitted `max_renewable_life`
-leaves the realm cap at 7 d and new principals at 0, as in MIT
-(`kdc/main.c`, `alt_prof.c`); a written value sets both.
+Real software that ran against both MIT and kerber-rust, in those scenarios:
 
-**Honest caveats, stated plainly:**
+- **SSSD** on Fedora: login, renewal at a restart and `passwd`.
+- **NFS 4.2** to NFS-Ganesha with `sec=krb5i` and `krb5p`, through `rpc.gssd`.
+- **Keycloak** SPNEGO, from Java.
+- **KLLDAP** with `krb5-server` swapped for kerber-rust.
+- **MIT's own** `kinit`, `klist`, `kvno`, `kadmin`, `kpasswd` and `kprop`.
 
-- `bidirectional-gate` is **Rust↔Rust**, not an external oracle.
-- Windows **SSPI** has no gate. Over the AD trust it accepted a user of
-  the realm (SMB, LDAP) and reached Apache as a SPNEGO client, both in the
-  KVM field lab ([harness/field/README.md](harness/field/README.md));
-  `krb5-gss` has not been run against SSPI.
-- The Samba **L2** PAC-crypto oracle is a *vendored Python reference*, not
-  Samba's C library (L1/L3 are live Samba).
-- The product is `forbid(unsafe_code)`; some dependencies (RustCrypto,
-  curve25519-dalek, getrandom, nix) contain `unsafe`.
+Four things to know when you read those numbers:
 
-## Non-goals
+- **The burn-in ran back to back,** not a night apart. It shows seven clean runs in a row, not a week of
+  uptime.
+- **The tagged binaries are not the exact bytes those runs used.** The version number feeds into the
+  compiled symbol names, so setting it to 1.2.0 changed the bytes. The tagged source differs from the
+  tested source by the version, the docs and the test scripts. No program code changed.
+- **The real Active Directory trust was not part of the final run.** It last ran on an earlier 1.2 build
+  (83 checks on MIT and 97 on kerber-rust, 0 failed).
+- **Two scheduled CI workflows did not prove this code on their own.** `peers.yml` skipped its seven Samba
+  tests, because its job had no MIT image, and stayed green. They were run by hand instead, and the job's
+  fix is planned for 1.2.1. `nightly.yml` had one red job, because two test scripts left test KDCs running
+  and the tests after them failed. Those scripts are fixed in the tag.
 
-Stated up front so their absence is not read as a gap: SAM-2 preauth, OTP
-over RADIUS (OTP preauth asks an embedder `OtpVerifier`), IAKERB, `KEYRING:` ccaches (post-embed), kdcproxy /
-MS-KKDCP, FIPS mode, MSLSA ccaches, `ksu` / `.k5login`, `kpropd` under
-inetd, `gss_wrap_size_limit`, dlopen plugins (plugins are Rust traits),
-db2 / LMDB / LDAP KDB backends, and master-key rollover. The one `absent`
-row in the parity ledger is this list's `gss_wrap_size_limit` entry.
+The details are in the [interop matrix](docs/interop-matrix.md), the [parity
+ledger](docs/parity/README.md), which grades MIT's functions one row per check, and the [field
+harness](harness/field/README.md), which you can run yourself.
 
-## Quick start
+## Download, install and use
 
-kerber-rust installs the way Fedora's `krb5-server` does: MIT's command names, its systemd
-units and the `/var/kerberos/krb5kdc` layout. On Fedora, with the Rust toolchain from
-[docs/install.md](docs/install.md#prerequisites):
+These steps are for Fedora 44, as an ordinary user with `sudo`. They replace `krb5-server`, so if this host
+already runs an MIT realm, go to [Move an MIT realm over](#move-an-mit-realm-over) instead.
 
-```bash
-make build                                      # as yourself: the release build, no test hooks
-sudo dnf remove -y --no-autoremove krb5-server  # when it is installed; krb5-workstation stays
-sudo make install PREFIX=/usr                   # krb5kdc, kadmind, kadmin.local, kdb5_util, units
-sudo kdb5_util create -s                        # once the realm is named in krb5.conf and kdc.conf
+**1. Get the tools and the code, and build it:**
+
+```sh
+sudo dnf install -y git gcc make lld rustup krb5-workstation logrotate words
+rustup-init -y --default-toolchain none --profile minimal
+. "$HOME/.cargo/env"
+git clone --branch v1.2.0 https://github.com/Aelieth/kerber-rust.git
+cd kerber-rust
+rustup toolchain install
+make build
+```
+
+**2. Install it:**
+
+```sh
+sudo dnf remove -y --no-autoremove krb5-server
+sudo make install PREFIX=/usr
+```
+
+If `krb5-server` is not installed, `dnf` says so and nothing changes.
+
+**3. Make a realm.** Change the first two lines for yours. `kdb5_util create` asks you to choose a master
+password.
+
+```sh
+REALM=EXAMPLE.COM
+DOMAIN=example.com
+KDC_HOST=$(hostname -f)
+sudo tee /etc/krb5.conf.d/realm.conf >/dev/null <<EOF
+[libdefaults]
+    default_realm = $REALM
+
+[realms]
+    $REALM = {
+        kdc = $KDC_HOST
+        admin_server = $KDC_HOST
+    }
+
+[domain_realm]
+    .$DOMAIN = $REALM
+    $DOMAIN = $REALM
+EOF
+sudo sed -i "s/^EXAMPLE\.COM = {/$REALM = {/" /var/kerberos/krb5kdc/kdc.conf
+sudo sed -i "s/@EXAMPLE\.COM/@$REALM/" /var/kerberos/krb5kdc/kadm5.acl
+sudo sed -i '/default_principal_flags = +preauth/a\     max_renewable_life = 7d' /var/kerberos/krb5kdc/kdc.conf
+sudo kdb5_util create -s
+sudo restorecon -Rv /var/kerberos/krb5kdc
 sudo systemctl enable --now krb5kdc kadmin
 ```
 
-[docs/install.md](docs/install.md) is the whole procedure: the realm's files, SELinux, the
-firewall, the first administrator, keying clients, upgrading an MIT realm, and what is not
-supported yet.
+**4. Use it.** Add an administrator and a user, then log in with MIT's tools:
 
-To work on the code, `make safety` runs fmt, clippy, nextest (CI profile) and ci-policy; it
-needs `cargo-nextest`. The gates drive real MIT 1.22.2 in Docker (Compose optional):
-
-```bash
-./scripts/run-harness.sh  # MIT 1.22.2 KDC for KERBER.TEST on port 88 (Docker)
-./scripts/client-gate.sh  # Rust kinit + MIT klist of the ccache
-./scripts/stop-harness.sh
-./scripts/run-rust-kdc.sh # the Rust KDC for KERBER.TEST on 127.0.0.1:88 (else :8888)
-./scripts/kdc-gate.sh     # MIT 1.22.2 kinit + kvno vs the Rust krb5-kdc in the gate's MIT container
+```sh
+sudo kadmin.local -q "addprinc admin/admin"
+sudo kadmin.local -q "addprinc alice"
+kinit alice
+klist
 ```
 
-The realms, principals and ports are in [docs/testing.md](docs/testing.md).
-[examples/](examples/README.md) has two downstream-consumer crates and a working one-realm
-config `kdc-gate.sh` runs.
+You should see a `krbtgt` ticket for your realm. From here,
+[docs/install.md](docs/install.md) is the whole guide: the firewall, keying client hosts, certificates,
+one-time codes, replicas, installing beside `krb5-server`, containers and uninstalling.
 
-## Documentation
+## Move an MIT realm over
 
-[docs/README.md](docs/README.md) lists every document. Reading order:
-[architecture](docs/architecture.md) → [stages](docs/stages.md) →
-[testing](docs/testing.md) → [gates](docs/gates.md) →
-[security](docs/security.md) → [MIT deviations](docs/mit-deviations.md) →
-[parity ledger](docs/parity/README.md) →
-[logging](docs/logging.md) → [interop](docs/interop-matrix.md) →
-[plugins](docs/plugins.md) → [RFC mapping](docs/rfc-mapping.md) →
-[gate-unit index](docs/gate-unit-index.md) → the labs
-([AD](docs/labs/ad-lab.md), [Samba](docs/labs/samba-lab.md),
-[KCM / NFS verdict](docs/labs/kcm-nfs-verdict.md)) → the
-[KLLDAP embed](docs/embed/klldap.md) →
-[export control](docs/export-control.md).
+kerber-rust does not read MIT's db2 database, so a realm moves the way MIT moves one between its own
+database types: dump it with MIT's `kdb5_util`, load it with this one. Keys, policies and passwords carry
+over, so clients' keytabs and users' passwords keep working.
 
-## License & supply chain
+On the host that runs the realm, in a checkout built as in step 1 above, while MIT's tools are still
+installed:
 
-Dual-licensed **[Apache-2.0](LICENSE-APACHE) OR [MIT](LICENSE-MIT)**, at your
-option. See [NOTICE](NOTICE) and [docs/export-control.md](docs/export-control.md)
-(cryptographic software; honest ECCN 5D002 / TSU §740.13(e) note).
+```sh
+sudo systemctl stop krb5kdc kadmin
+sudo kdb5_util dump /var/kerberos/krb5kdc/mit-realm.dump
+sudo dnf remove -y --no-autoremove krb5-server
+for f in /var/kerberos/krb5kdc/kdc.conf /var/kerberos/krb5kdc/kadm5.acl /etc/sysconfig/krb5kdc \
+         /etc/sysconfig/kadmin /etc/sysconfig/kprop /etc/logrotate.d/krb5kdc /etc/logrotate.d/kadmind; do
+    if [ -e $f.rpmsave ]; then sudo mv $f.rpmsave $f; fi
+done
+sudo make install PREFIX=/usr
+sudo mkdir /var/kerberos/krb5kdc/mit-db2
+sudo mv /var/kerberos/krb5kdc/principal /var/kerberos/krb5kdc/principal.kadm5 /var/kerberos/krb5kdc/mit-db2/
+sudo kdb5_util load /var/kerberos/krb5kdc/mit-realm.dump
+sudo restorecon -Rv /var/kerberos/krb5kdc
+sudo kadmin.local -q listprincs
+sudo systemctl enable --now krb5kdc kadmin
+```
 
-Supply chain, all in the CI `audit` job: `cargo audit`, `cargo deny`,
-per-crate `cargo geiger` (`scripts/geiger.sh`, 0-unsafe product), and
-`cargo vet --locked`. MSRV is **1.95** (`package.rust-version`, asserted by
-`ci-policy.py` against the `msrv` jobs), `rust-toolchain.toml` pins stable **1.99.0**
-with rustfmt and clippy, edition **2024**, matching KLLDAP (checkout 0.7.4, upstream 0.7.6); `rasn` is unpinned (`0.28`, lock 0.28.14)
-with MIT golden DER as the byte-level net. See
-[docs/security.md](docs/security.md).
+[The full section](docs/install.md#upgrading-an-mit-realm) covers iprop, requiring preauthentication on
+loaded principals, and removing the old files. [Going back to MIT](docs/install.md#going-back-to-mit) runs
+the same steps the other way.
 
-## Contributing
+**Already on kerber-rust 1.1?** Stop both daemons before you install: a 1.1 program cannot read a database
+this release has changed. See [Upgrading kerber-rust](docs/install.md#upgrading-kerber-rust).
 
-Please read [CONTRIBUTING.md](CONTRIBUTING.md). Short version: small focused
-changes, `tag: Imperative sentence` titles, tests that fail without the
-change, and PRs that land by fast-forward or a merge commit, never squash.
+## Configuration
+
+The files are MIT's, in MIT's places. [examples/configs](examples/configs/README.md) is a working
+one-realm set.
+
+| File | Read by | Where |
+| --- | --- | --- |
+| `kdc.conf` | `krb5kdc`, `kadmind`, `kadmin.local`, `kdb5_util`, `kpropd` | `KRB5_KDC_PROFILE`, else `/var/kerberos/krb5kdc/kdc.conf` |
+| `krb5.conf` | the client tools and `kprop`; the KDC-side tools for `default_realm` | `KRB5_CONFIG`, else `/etc/krb5.conf` |
+| `kadm5.acl` | `kadmind` | the `acl_file` path in `kdc.conf` |
+| `kpropd.acl` | `kpropd` | `-a`, else `/var/kerberos/krb5kdc/kpropd.acl`; a missing file refuses every propagation |
+
+Four things are worth knowing:
+
+- **Restart after an edit.** Each daemon reads its config once, as it starts. SIGHUP only reopens the logs.
+- **Check the log for ignored settings.** The daemons log each setting MIT reads that this does not support.
+- **Renewable tickets need `max_renewable_life`.** As with MIT, a realm without it gives none, which is
+  why step 3 adds it.
+- **Some defaults differ on purpose.** The KDC's TCP listen backlog is 128 (`kdc_tcp_listen_backlog`),
+  where MIT's is 5, and the client tools ask for DES3, RC4 or Camellia only if the profile names them.
+  [The deviations file](docs/mit-deviations.md) has the rest.
+
+## More
+
+| To read about | Go to |
+| --- | --- |
+| Every document | [docs/README.md](docs/README.md) |
+| The code's structure | [docs/architecture.md](docs/architecture.md) |
+| Embedding it | [docs/embed](docs/embed/README.md), [docs/plugins.md](docs/plugins.md) |
+| Logs | [docs/logging.md](docs/logging.md) |
+| Timing, replay and secret handling | [docs/security.md](docs/security.md) |
+| The tests and how to run them | [docs/testing.md](docs/testing.md), [docs/gates.md](docs/gates.md) |
+| Contributing | [CONTRIBUTING.md](CONTRIBUTING.md) |
+
+**License:** [Apache-2.0](LICENSE-APACHE) OR [MIT](LICENSE-MIT), at your option. See [NOTICE](NOTICE) and
+[docs/export-control.md](docs/export-control.md), since this is cryptographic software.

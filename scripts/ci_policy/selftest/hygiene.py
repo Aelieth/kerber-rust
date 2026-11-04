@@ -8,124 +8,16 @@ import subprocess
 import tempfile
 
 from ..common import _scratch_root
+from ..golden import check_golden_dump_unique_keys
 from ..hygiene import (
-    _PY_MOVE_KINDS, _blank_rust, _cfg_test_ranges, check_autotests_registered, check_claim_remap_self_test,
-    check_hygiene_body_diff_self_test, check_hygiene_diff_self_test, check_hygiene_fn_diff_self_test,
-    check_isolate_test_krb5, check_no_test_temp_dir, check_policy_module_attrs, check_py_move_self_test,
-    check_python_compiles,
+    _blank_rust, _cfg_test_ranges, _char_totals, _mit_cite_bad, _mit_cite_ok,
+    check_autotests_registered, check_isolate_test_krb5, check_mit_cites,
+    check_no_test_temp_dir, check_python_compiles,
 )
-from ..ledger import DIFFSEND_CASES
 from .common import _must_die, _must_die_msg
 
 
 def _self_test_hygiene() -> None:
-    check_hygiene_diff_self_test(
-        "def load_duplicates_map():\n    return {'merged:'}\n"
-        "def load_renames_map():\n    return {}\n"
-        "def _self_test_duplicates():\n    pass\n"
-        "def _self_test():\n    pass\n"
-        "def main() -> int:\n    if argv[1] == '--self-test':\n        _self_test()\n"
-        "        print('hygiene-diff: self-test ok (57 cases)')\n"
-        "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n"
-        "    return _compare()\n"
-    )
-    _must_die(
-        check_hygiene_diff_self_test,
-        "def main() -> int:\n    if argv[1] == '--self-test':\n        _self_test()\n        return 0\n",
-    )
-    _must_die(
-        check_hygiene_diff_self_test,
-        "def _self_test():\n    pass\n"
-        "def main() -> int:\n    if argv[1] == '--self-test':\n        _self_test()\n"
-        "        return 0\n    _self_test()\n    return _compare()\n",
-    )
-    _must_die(
-        check_hygiene_diff_self_test,
-        'def load_duplicates_map():\n    return {"merged:"}\n'
-        "def load_renames_map():\n    return {}\n"
-        "def _self_test_duplicates():\n    pass\n"
-        "def _self_test():\n"
-        '    """merged: load_duplicates_map load_renames_map _self_test_duplicates"""\n'
-        "    return None\n"
-        "def main() -> int:\n    if argv[1] == '--self-test':\n        _self_test()\n"
-        "        print('hygiene-diff: self-test ok (57 cases)')\n"
-        "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n"
-        "    return _compare()\n",
-    )
-    check_hygiene_body_diff_self_test(
-        'def _self_test():\n    assert_eq!(1, 2) vs user_as helper "a  b" r"a\\n\\nb"\n'
-        "def main():\n    if argv[1] == '--self-test':\n        _self_test()\n"
-        "        print('hygiene-body-diff: self-test ok (41 cases)')\n"
-        "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n"
-    )
-    _must_die(check_hygiene_body_diff_self_test, "def main():\n    return 0\n")
-    _must_die(
-        check_hygiene_body_diff_self_test,
-        "def _self_test():\n    assert_eq! vs user_as helper\n"
-        "def main():\n    if argv[1] == '--self-test':\n        _self_test()\n"
-        "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n",
-    )
-    _must_die(
-        check_hygiene_body_diff_self_test,
-        "def _self_test():\n"
-        '    """assert_eq!(1, 2) vs user_as helper "a  b" r"a\\n\\nb" """\n'
-        "    return None\n"
-        "def main():\n    if argv[1] == '--self-test':\n        _self_test()\n"
-        "        print('hygiene-body-diff: self-test ok (32 cases)')\n"
-        "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n",
-    )
-    check_hygiene_fn_diff_self_test(
-        "def _self_test():\n    x + 2 phase_b pub(crate)\n"
-        "    # unused-accept fixture must be otherwise green\n"
-        "def main():\n    if argv[1] == '--self-test':\n        _self_test()\n"
-        "        print('hygiene-fn-diff: self-test ok (143 cases)')\n"
-        "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n"
-    )
-    _must_die(check_hygiene_fn_diff_self_test, "def main():\n    return 0\n")
-    _must_die(
-        check_hygiene_fn_diff_self_test,
-        "def _self_test():\n    x + 2 phase_b pub(crate)\n"
-        "def main():\n    if argv[1] == '--self-test':\n        _self_test()\n"
-        "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n",
-    )
-    _must_die(
-        check_hygiene_fn_diff_self_test,
-        "def _self_test():\n"
-        '    """x + 2 phase_b pub(crate)"""\n'
-        "    return None\n"
-        "def main():\n    if argv[1] == '--self-test':\n        _self_test()\n"
-        "        print('hygiene-fn-diff: self-test ok (64 cases)')\n"
-        "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n",
-    )
-    py_move_ok = (
-        "def _self_test():\n    cases = [" + "".join(f'("x", {{}}, s, a, "{k}"),' for k in _PY_MOVE_KINDS) + "]\n"
-        "def main(argv):\n    if argv == ['--self-test']:\n        _self_test()\n"
-        "        print('py-move-check: self-test ok (23 cases)')\n"
-        "        return 0\n    with contextlib.redirect_stdout(sys.stderr):\n        _self_test()\n"
-    )
-    check_py_move_self_test(py_move_ok)
-    _must_die_msg("self-test ok (N cases)", check_py_move_self_test, py_move_ok.replace("(23 cases)", "(22 cases)"))
-    _must_die_msg(
-        "must not be gutted",
-        check_py_move_self_test,
-        'def _self_test():\n    """' + "".join(f'"{k}"),' for k in _PY_MOVE_KINDS) + '"""\n    return None\n'
-        + py_move_ok[py_move_ok.index("def main(argv):"):],
-    )
-    _must_die_msg("before a compare run", check_py_move_self_test,
-                  py_move_ok.replace("with contextlib.redirect_stdout(sys.stderr):\n        _self_test()\n", "pass\n"))
-    _must_die_msg("the shim finding", check_py_move_self_test, py_move_ok.replace('"shim"),', '"other"),'))
-    remap_ok = (
-        "def _self_test():\n    n = 7\n    return n\n"
-        "def main(argv):\n    if argv == ['--self-test']:\n"
-        "        print(f'claim-remap: self-test ok ({_self_test()} cases)')\n        return 0\n"
-        "    _self_test()\n    return main_remap(argv)\n# self-test ok (7 cases)\n"
-    )
-    check_claim_remap_self_test(remap_ok)
-    _must_die_msg("self-test ok (N cases)", check_claim_remap_self_test, remap_ok.replace("(7 cases)", "(6 cases)"))
-    _must_die_msg("must not be gutted", check_claim_remap_self_test,
-                  remap_ok.replace("    n = 7\n    return n\n", "    return None\n"))
-    _must_die_msg("before a remap run", check_claim_remap_self_test,
-                  remap_ok.replace("    _self_test()\n    return main_remap", "    return main_remap"))
     with tempfile.TemporaryDirectory() as tmp:
         demo = pathlib.Path(tmp) / "crates" / "demo"
         (demo / "tests" / "common").mkdir(parents=True)
@@ -300,37 +192,6 @@ def _self_test_hygiene() -> None:
     _must_die(_isolate_src_cfg_test_temp_dir)
     check_isolate_test_krb5()
 
-    # The module-attribute consumers, each missing name and each shape red.
-    check_policy_module_attrs()
-    mod_root = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
-    try:
-        full = {
-            "ROOT": "import pathlib\nROOT = pathlib.Path('/nonexistent')\n",
-            "_dump_key_hexes": "def _dump_key_hexes(line):\n    return None\n",
-            "check_golden_dump_unique_keys": "def check_golden_dump_unique_keys():\n    pass\n",
-            "DIFFSEND_CASES": f"DIFFSEND_CASES = frozenset({sorted(DIFFSEND_CASES)!r})\n",
-            "ledger_sources": "def ledger_sources(root=None):\n    return [('docs/parity/README.md', '', None)]\n",
-            "recount_ledger_verdicts": "def recount_ledger_verdicts(text):\n    return {}\n",
-            "_split_ledger_row": "def _split_ledger_row(line):\n    return []\n",
-        }
-        fake = mod_root / "ci-policy.py"
-        fake.write_text("".join(full.values()), encoding="utf-8")
-        check_policy_module_attrs(fake)
-        for gone, consumer in (("_dump_key_hexes", "kdb-dump-gate.sh"), ("ledger_sources", "hygiene_inventory.py")):
-            fake.write_text("".join(v for k, v in full.items() if k != gone), encoding="utf-8")
-            _must_die_msg(f"lacks {gone}, which scripts/", check_policy_module_attrs, fake)
-            _must_die_msg(consumer, check_policy_module_attrs, fake)
-        fake.write_text("".join(full.values()).replace(full["DIFFSEND_CASES"], "DIFFSEND_CASES = frozenset({'x'})\n"),
-                        encoding="utf-8")
-        _must_die_msg("holds 1 DIFFSEND_CASES", check_policy_module_attrs, fake)
-        fake.write_text(
-            "".join(full.values()).replace("docs/parity/README.md", "docs/mit-parity-ledger.md"), encoding="utf-8"
-        )
-        _must_die_msg("not the docs/parity/ split", check_policy_module_attrs, fake)
-        fake.write_text("raise SystemExit('no import')\n", encoding="utf-8")
-        _must_die_msg("does not load as a module from cwd=/", check_policy_module_attrs, fake)
-    finally:
-        subprocess.run(["rm", "-rf", str(mod_root)], check=False)
     # Every crate's tests: temp_dir() in tests/, in test-module files and in cfg(test) items counts; product
     # code, comments and strings do not.
     td_root = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
@@ -353,6 +214,60 @@ def _self_test_hygiene() -> None:
         _must_die_msg("crates/demo/src/helpers.rs:1", check_no_test_temp_dir, td_root, allow=0)
     finally:
         subprocess.run(["rm", "-rf", str(td_root)], check=False)
+
+    def _princ_line(name: str, *keyhexes: str) -> str:
+        parts = [
+            "princ", "38", str(len(name)), "0", str(len(keyhexes)), "0", name,
+            "0", "0", "0", "0", "0", "0", "0", "0",
+        ]
+        for keyhex in keyhexes:
+            parts.extend(["1", "1", "17", str(len(keyhex) // 2), keyhex])
+        parts.append("-1")
+        return "\t".join(parts) + "\n"
+
+    dump_unique = (
+        "kdb5_util load_dump version 7\n"
+        + _princ_line("user@KERBER.TEST", "aa", "ab", "ac", "ad")
+        + _princ_line("nosvr@KERBER.TEST", "ba", "bb", "bc", "bd")
+        + _princ_line("hwuser@KERBER.TEST", "ca", "cb", "cc", "cd")
+        + _princ_line("pwprau@KERBER.TEST", "da", "db", "dc", "dd")
+    )
+    check_golden_dump_unique_keys(dump_unique)
+    dump_clone_user = (
+        "kdb5_util load_dump version 7\n"
+        + _princ_line("user@KERBER.TEST", "aa", "ab", "ac", "ad")
+        + _princ_line("nosvr@KERBER.TEST", "aa", "ab", "ac", "ad")
+        + _princ_line("hwuser@KERBER.TEST", "ca", "cb", "cc", "cd")
+        + _princ_line("pwprau@KERBER.TEST", "da", "db", "dc", "dd")
+    )
+    _must_die(check_golden_dump_unique_keys, dump_clone_user)
+    dump_missing = (
+        "kdb5_util load_dump version 7\n"
+        + _princ_line("user@KERBER.TEST", "aa")
+        + _princ_line("nosvr@KERBER.TEST", "ba")
+    )
+    _must_die(check_golden_dump_unique_keys, dump_missing)
     # Every scripts/**/*.py compiles.
     check_python_compiles({"a.py": "x = 1\n"})
     _must_die_msg("1 Python file(s) do not compile", check_python_compiles, {"a.py": "x = 1\n", "b.py": "def f(:\n"})
+    cite = "// MIT: `krb5_db_get_principal` (lib/kdb/kdb5.c:2010-2040)"
+    assert _mit_cite_ok(cite)
+    assert _mit_cite_ok("// MIT: `create_history_entry` + `add_to_history` (lib/kadm5/srv/svr_principal.c:1270-1330)")
+    assert _mit_cite_bad("// MIT: column-0 include is a directive")
+    assert _mit_cite_bad(cite + " and a why")
+    assert _mit_cite_bad("// MIT: `sym` (" + "x" * 90 + ".c)")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        src = root / "crates" / "demo" / "src"
+        src.mkdir(parents=True)
+        (src / "lib.rs").write_text(
+            "    let x = 1;\n" + cite + "\n/// why stays\n",
+            encoding="utf-8",
+        )
+        tot, _per, bad = _char_totals(root)
+        assert bad == [], bad
+        assert tot["code"] == len("let x = 1;")
+        assert tot["comment"] == len("/// why stays")
+        assert tot["exempt"] == len(cite)
+        (src / "lib.rs").write_text("// MIT: not a cite\n", encoding="utf-8")
+        _must_die(check_mit_cites, root)

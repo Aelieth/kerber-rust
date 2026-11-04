@@ -1,7 +1,4 @@
-//! CMS SignedData (`plugins/preauth/pkinit/pkinit_crypto_openssl.c`
-//! `cms_signeddata_create` / `cms_signeddata_verify`): wrap, verify,
-//! and the RFC 5652 certificate walk.
-
+use super::identity::IdentityKey;
 use super::{
     ECONTENT_AUTHDATA, OID_BC, OID_EKU, OID_KP_CLIENT_AUTH, OID_KP_KDC, OID_KU, OID_PKINIT_SAN,
     OID_SAN, oid_der, take_tlv, tlv,
@@ -14,62 +11,44 @@ const OID_CONTENT_TYPE: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09
 
 const OID_MESSAGE_DIGEST: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x04];
 
-/// CMS AlgorithmIdentifier (digest or signature).
-/// MIT `algorithm_identifier` (`lib/krb5/asn.1/asn1_k_encode.c:1331-1332`): the algorithm OID, then the parameters as their own DER.
+// MIT: `algorithm_identifier` (lib/krb5/asn.1/asn1_k_encode.c:1331-1332)
+// The algorithm OID, then the parameters as their own DER.
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct CmsAlgorithmIdentifier {
-    /// Object identifier.
     pub algorithm: ObjectIdentifier,
-    /// The parameters' whole DER element, whatever its type (a NULL included).
-    /// MIT `opt_der_data` (`lib/krb5/asn.1/asn1_k_encode.c:65-65`): an optional field kept as its raw DER.
+    // MIT: `opt_der_data` (lib/krb5/asn.1/asn1_k_encode.c:65-65)
+    // An optional field kept as its raw DER.
     pub parameters: Option<Any>,
 }
 
-/// CMS EncapsulatedContentInfo.
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct CmsEncapContentInfo {
-    /// eContentType (id-pkinit-authData or id-data).
     pub e_content_type: ObjectIdentifier,
-    /// eContent.
     #[rasn(tag(explicit(0)))]
     pub e_content: Option<OctetString>,
 }
 
-/// CMS SignerInfo (subjectKeyIdentifier form, no signedAttrs).
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct CmsSignerInfo {
-    /// version (3 when sid is subjectKeyIdentifier).
     pub version: i32,
-    /// `subjectKeyIdentifier [0] EXPLICIT` (local CMS profile).
     #[rasn(tag(explicit(0)))]
     pub sid: OctetString,
-    /// Digest algorithm.
     pub digest_algorithm: CmsAlgorithmIdentifier,
-    /// Signature algorithm.
     pub signature_algorithm: CmsAlgorithmIdentifier,
-    /// ECDSA-SHA256 signature of eContent (DER `SEQUENCE { r, s }`).
     pub signature: OctetString,
 }
 
-/// CMS SignedData.
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct CmsSignedData {
-    /// CMSVersion.
     pub version: i32,
-    /// DigestAlgorithmIdentifiers.
     pub digest_algorithms: SequenceOf<CmsAlgorithmIdentifier>,
-    /// Encapsulated content.
     pub encap_content_info: CmsEncapContentInfo,
-    /// SignerInfos.
     pub signer_infos: SequenceOf<CmsSignerInfo>,
 }
 
-/// CMS ContentInfo wrapping [`CmsSignedData`].
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct CmsContentInfo {
-    /// id-signedData.
     pub content_type: ObjectIdentifier,
-    /// `SignedData [0] EXPLICIT`.
     #[rasn(tag(explicit(0)))]
     pub content: CmsSignedData,
 }
@@ -85,6 +64,75 @@ pub(super) fn p256_sign(secret: &[u8; 32], message: &[u8]) -> Option<Vec<u8>> {
     let sk = SigningKey::from_bytes(secret.into()).ok()?;
     let sig: Signature = sk.sign(message);
     Some(sig.to_der().as_bytes().to_vec())
+}
+
+#[cfg(p384_backend = "fiat")]
+pub(super) fn p384_sign(secret: &[u8; 48], message: &[u8]) -> Option<Vec<u8>> {
+    use p384::ecdsa::signature::hazmat::PrehashSigner;
+    use p384::ecdsa::{Signature, SigningKey};
+    let sk = SigningKey::from_bytes(secret.into()).ok()?;
+    let sig: Signature = sk.sign_prehash(&sha256_bytes(message)).ok()?;
+    Some(sig.to_der().as_bytes().to_vec())
+}
+
+pub(super) fn p224_sign(secret: &[u8; 28], message: &[u8]) -> Option<Vec<u8>> {
+    use p224::ecdsa::signature::hazmat::PrehashSigner;
+    use p224::ecdsa::{Signature, SigningKey};
+    let sk = SigningKey::from_bytes(secret.into()).ok()?;
+    let sig: Signature = sk.sign_prehash(&sha256_bytes(message)).ok()?;
+    Some(sig.to_der().as_bytes().to_vec())
+}
+
+macro_rules! ecdsa_sign {
+    ($name:ident, $curve:ty, $len:literal) => {
+        pub(super) fn $name(secret: &[u8; $len], message: &[u8]) -> Option<Vec<u8>> {
+            use ecdsa::signature::hazmat::PrehashSigner;
+            let sk = ecdsa::SigningKey::<$curve>::from_bytes(secret.into()).ok()?;
+            let sig: ecdsa::Signature<$curve> = sk.sign_prehash(&sha256_bytes(message)).ok()?;
+            Some(sig.to_der().as_bytes().to_vec())
+        }
+    };
+}
+ecdsa_sign!(bp256r1_sign, bp256::r1::BrainpoolP256r1, 32);
+ecdsa_sign!(bp256t1_sign, bp256::t1::BrainpoolP256t1, 32);
+ecdsa_sign!(bp384r1_sign, bp384::r1::BrainpoolP384r1, 48);
+ecdsa_sign!(bp384t1_sign, bp384::t1::BrainpoolP384t1, 48);
+#[cfg(target_pointer_width = "64")]
+ecdsa_sign!(bp512r1_sign, krb5_brainpool::p512::r1::BrainpoolP512r1, 64);
+#[cfg(target_pointer_width = "64")]
+ecdsa_sign!(bp512t1_sign, krb5_brainpool::p512::t1::BrainpoolP512t1, 64);
+
+pub(super) fn k256_sign(secret: &[u8; 32], message: &[u8]) -> Option<Vec<u8>> {
+    use k256::ecdsa::signature::hazmat::PrehashSigner;
+    use k256::ecdsa::{Signature, SigningKey};
+    let sk = SigningKey::from_bytes(secret.into()).ok()?;
+    let sig: Signature = sk.sign_prehash(&sha256_bytes(message)).ok()?;
+    Some(sig.to_der().as_bytes().to_vec())
+}
+
+pub(super) fn p521_sign(secret: &[u8; 66], message: &[u8]) -> Option<Vec<u8>> {
+    let d = zeroize::Zeroizing::new(
+        p521::SecretKey::from_slice(secret)
+            .ok()?
+            .to_nonzero_scalar(),
+    );
+    let mut z = p521::FieldBytes::default();
+    z[34..].copy_from_slice(&sha256_bytes(message));
+    for _ in 0..8 {
+        let mut k = zeroize::Zeroizing::new(p521::FieldBytes::default());
+        getrandom::getrandom(&mut k).ok()?;
+        k[0] &= 0x01;
+        let Some(k) = p521::NonZeroScalar::from_repr(*k)
+            .into_option()
+            .map(zeroize::Zeroizing::new)
+        else {
+            continue;
+        };
+        if let Ok((sig, _)) = ecdsa::hazmat::sign_prehashed::<p521::NistP521>(&d, &k, &z) {
+            return Some(sig.to_der().as_bytes().to_vec());
+        }
+    }
+    None
 }
 
 fn p256_verify(public: &[u8], message: &[u8], der_sig: &[u8]) -> bool {
@@ -138,21 +186,19 @@ fn spki_uncompressed(cert: &[u8]) -> Option<Vec<u8>> {
 }
 
 fn decompress_p256(pt: &[u8]) -> Option<Vec<u8>> {
-    use p256::elliptic_curve::sec1::{FromEncodedPoint, ToEncodedPoint};
-    use p256::{AffinePoint, EncodedPoint};
-    let ep = EncodedPoint::from_bytes(pt).ok()?;
-    let aff = Option::<AffinePoint>::from(AffinePoint::from_encoded_point(&ep))?;
-    Some(aff.to_encoded_point(false).as_bytes().to_vec())
+    use p256::elliptic_curve::sec1::{FromSec1Point, ToSec1Point};
+    use p256::{AffinePoint, Sec1Point};
+    let ep = Sec1Point::from_bytes(pt).ok()?;
+    let aff = Option::<AffinePoint>::from(AffinePoint::from_sec1_point(&ep))?;
+    Some(aff.to_sec1_point(false).as_bytes().to_vec())
 }
 
-/// CMS SignedData with an explicit certificate and ECDSA signature.
-///
 /// Encoded by hand so the Certificate SET uses IMPLICIT `[0]` (RFC 5652).
-/// SignerInfo uses **issuerAndSerialNumber** (CMS version 1), matching MIT
-/// OpenSSL `PKCS7_SIGNER_INFO`. `signed_attrs` if present is the
-/// `[0] IMPLICIT SET` encoding; the signature is over the corresponding
-/// `SET` (tag 0x31).
 #[must_use]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a SignerInfo's fields, as MIT's cms_signeddata_create sets them"
+)]
 pub fn cms_wrap_signed(
     e_content: &[u8],
     cert_der: &[u8],
@@ -161,13 +207,14 @@ pub fn cms_wrap_signed(
     serial: &[u8],
     econtent_oid: &[u8],
     signed_attrs: Option<&[u8]>,
+    sig_alg: &[u8],
 ) -> Vec<u8> {
     let sha256 = oid_der(&[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01]);
-    let ecdsa = oid_der(&[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02]);
     let signed_data = oid_der(&[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x07, 0x02]);
     let ectype = oid_der(econtent_oid);
     let sha256_alg = tlv(0x30, &[sha256.clone(), tlv(0x05, &[])].concat());
-    let ecdsa_alg = tlv(0x30, &ecdsa);
+    // MIT: `cms_signeddata_create` (plugins/preauth/pkinit/pkinit_crypto_openssl.c:1713-1928)
+    let sig_alg = tlv(0x30, &[oid_der(sig_alg), tlv(0x05, &[])].concat());
     let digest_algs = tlv(0x31, &sha256_alg);
     let econt = tlv(0xa0, &tlv(0x04, e_content));
     let encap = tlv(0x30, &[ectype, econt].concat());
@@ -179,7 +226,7 @@ pub fn cms_wrap_signed(
     if let Some(sa) = signed_attrs {
         signer_body.push(sa.to_vec());
     }
-    signer_body.push(ecdsa_alg);
+    signer_body.push(sig_alg);
     signer_body.push(tlv(0x04, signature));
     let signer = tlv(0x30, &signer_body.concat());
     let signers = tlv(0x31, &signer);
@@ -190,37 +237,25 @@ pub fn cms_wrap_signed(
     tlv(0x30, &[signed_data, tlv(0xa0, &sd)].concat())
 }
 
-/// CMS SignedData of `e_content` using an existing leaf cert and P-256 key.
-///
-/// # Errors
-///
-/// `"cms issuer"` when the issuer and serial number cannot be read from `cert_der`;
-/// `"cms ecdsa"` when `secret` is not a valid P-256 private scalar.
 pub fn cms_sign_leaf(
     e_content: &[u8],
     cert_der: &[u8],
-    secret: &[u8; 32],
+    key: &IdentityKey,
     econtent_oid: &[u8],
 ) -> Result<Vec<u8>, &'static str> {
-    cms_sign_leaf_oids(e_content, cert_der, secret, econtent_oid, econtent_oid)
+    cms_sign_leaf_oids(e_content, cert_der, key, econtent_oid, econtent_oid)
 }
 
-/// CMS SignedData with independent encap and signed `content-type` OIDs.
-///
-/// # Errors
-///
-/// `"cms issuer"` when the issuer and serial number cannot be read from `cert_der`;
-/// `"cms ecdsa"` when `secret` is not a valid P-256 private scalar.
 pub fn cms_sign_leaf_oids(
     e_content: &[u8],
     cert_der: &[u8],
-    secret: &[u8; 32],
+    key: &IdentityKey,
     encap_oid: &[u8],
     signed_oid: &[u8],
 ) -> Result<Vec<u8>, &'static str> {
     let (issuer, serial) = cert_issuer_serial(cert_der).ok_or("cms issuer")?;
     let sattrs = signed_attrs_set(signed_oid, e_content);
-    let signature = p256_sign(secret, &sattrs).ok_or("cms ecdsa")?;
+    let (signature, sig_alg) = key.sign_sha256(&sattrs).ok_or("cms sign")?;
     let mut implicit = sattrs;
     if implicit.first() == Some(&0x31) {
         implicit[0] = 0xa0;
@@ -233,6 +268,7 @@ pub fn cms_sign_leaf_oids(
         &serial,
         encap_oid,
         Some(&implicit),
+        sig_alg,
     ))
 }
 
@@ -261,7 +297,6 @@ pub(super) fn cert_issuer_serial(cert: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
     Some((tlv(0x30, issuer), serial.to_vec()))
 }
 
-/// First PEM block of `kind` (`CERTIFICATE`, `EC PRIVATE KEY`, …).
 #[must_use]
 pub fn parse_pem(kind: &str, text: &str) -> Option<Vec<u8>> {
     let begin = format!("-----BEGIN {kind}-----");
@@ -272,8 +307,6 @@ pub fn parse_pem(kind: &str, text: &str) -> Option<Vec<u8>> {
     unbase64(rest.get(..stop)?.trim())
 }
 
-/// Certificate DER plus P-256 scalar from a MIT `FILE:` identity PEM. The key's base64 text and
-/// DER are wiped on every return.
 #[must_use]
 pub fn parse_identity_pem(text: &str) -> Option<(Vec<u8>, [u8; 32])> {
     let cert = parse_pem("CERTIFICATE", text)?;
@@ -315,7 +348,7 @@ fn parse_ec_scalar(der: &[u8]) -> Option<[u8; 32]> {
     None
 }
 
-fn unbase64(s: &str) -> Option<Vec<u8>> {
+pub(super) fn unbase64(s: &str) -> Option<Vec<u8>> {
     const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut bytes = Wiped(Vec::with_capacity(s.len()));
     bytes.extend(s.bytes().filter(|b| *b != b'=' && !b.is_ascii_whitespace()));
@@ -345,14 +378,12 @@ pub(super) fn signed_attrs_set(econtent_oid: &[u8], e_content: &[u8]) -> Vec<u8>
     tlv(0x31, &[ct, md].concat())
 }
 
-/// CMS ContentInfo wrapping AuthPack with no signers (anonymous PKINIT).
 #[must_use]
 pub fn cms_wrap_unsigned(e_content: &[u8]) -> Vec<u8> {
     let oid = oid_der(ECONTENT_AUTHDATA);
     tlv(0x30, &[oid, tlv(0xa0, &tlv(0x04, e_content))].concat())
 }
 
-/// AuthPack from an unsigned CMS ContentInfo or SignedData with no signers.
 #[must_use]
 pub fn cms_extract_unsigned(der: &[u8]) -> Option<Vec<u8>> {
     if let Some((tag, body, _)) = take_tlv(der)
@@ -376,10 +407,8 @@ pub fn cms_extract_unsigned(der: &[u8]) -> Option<Vec<u8>> {
     unsigned_signeddata_econtent(der)
 }
 
-/// MIT `cms_signeddata_verify` (`pkinit_crypto_openssl.c:2052-2063`): a SignedData with no
-/// SignerInfo is the anonymous case, and its content is read with no signature check.
-/// The encapsulated content is returned without checking a signer, so the bytes are not an
-/// authenticated pack.
+// MIT: `cms_signeddata_verify` (pkinit_crypto_openssl.c:2052-2063)
+// A SignedData with no SignerInfo is the anonymous case; its content has no signature check.
 fn unsigned_signeddata_econtent(der: &[u8]) -> Option<Vec<u8>> {
     let (tag, ci, _) = take_tlv(der)?;
     if tag != 0x30 {
@@ -425,10 +454,7 @@ fn unsigned_signeddata_econtent(der: &[u8]) -> Option<Vec<u8>> {
     Some(oct.to_vec())
 }
 
-/// Extract eContent from CMS SignedData, or return `der` unchanged.
-///
 /// This does **not** authenticate the content. PKINIT must call
-/// [`cms_verify`] against a provisioned trust anchor.
 #[must_use]
 pub fn cms_unwrap(der: &[u8]) -> Vec<u8> {
     if let Ok(ci) = rasn::der::decode::<CmsContentInfo>(der)
@@ -442,49 +468,24 @@ pub fn cms_unwrap(der: &[u8]) -> Vec<u8> {
     der.to_vec()
 }
 
-/// Verified CMS SignedData: eContent, signer certificate, eContentType OID body.
 #[derive(Clone, Debug)]
 pub struct CmsVerified {
-    /// Encapsulated content.
     pub e_content: Vec<u8>,
-    /// Embedded signer certificate (DER).
     pub cert: Vec<u8>,
-    /// `eContentType` OID body (no DER tag).
     pub e_content_type: Vec<u8>,
 }
 
-/// Verify CMS SignedData against `trust_anchor` (CA certificate DER).
-///
-/// The embedded leaf must be issued by the trust anchor; the SignerInfo
-/// ECDSA-SHA256 signature is then checked with the leaf public key.
-/// There is no unverified fallback. Role checks (KDC vs client EKU/SAN)
-/// are separate: [`require_kdc_pkinit_cert`] / [`require_client_pkinit_cert`].
-///
-/// # Errors
-///
-/// A field-named string (`"cms"`, `"encap"`, `"signer"`, …) when the SignedData is malformed;
-/// a `"cms …"` chain string (`"cms trust"`, `"cms chain"`, `"cms expired"`, …) when
-/// `trust_anchor` is not a usable CA or did not validly issue the leaf; `"cms spki"` for a leaf
-/// with no P-256 key; `"cms signedAttrs"` when signedAttrs are absent, `"cms ecdsa attrs"` when
-/// their signature fails, `"cms message-digest"` when their digest is not SHA-256 of the
-/// eContent, and `"cms content-type"` when their content type is absent or not the eContentType.
 pub fn cms_verify(der: &[u8], trust_anchor: &[u8]) -> Result<Vec<u8>, &'static str> {
     Ok(cms_verify_full(der, trust_anchor)?.e_content)
 }
 
-/// [`cms_verify`] plus the signer certificate and eContentType.
-///
-/// # Errors
-///
-/// A field-named string (`"cms"`, `"encap"`, `"signer"`, …) when the SignedData is malformed;
-/// a `"cms …"` chain string (`"cms trust"`, `"cms chain"`, `"cms expired"`, …) when
-/// `trust_anchor` is not a usable CA or did not validly issue the leaf; `"cms spki"` for a leaf
-/// with no P-256 key; `"cms signedAttrs"` when signedAttrs are absent, `"cms ecdsa attrs"` when
-/// their signature fails, `"cms message-digest"` when their digest is not SHA-256 of the
-/// eContent, and `"cms content-type"` when their content type is absent or not the eContentType.
 pub fn cms_verify_full(der: &[u8], trust_anchor: &[u8]) -> Result<CmsVerified, &'static str> {
     let p = cms_parts(der)?;
     cert_path_ok(&p.cert, trust_anchor)?;
+    signer_verified(p)
+}
+
+fn signer_verified(p: CmsParts) -> Result<CmsVerified, &'static str> {
     let public = spki_uncompressed(&p.cert).ok_or("cms spki")?;
     // RFC 5652 §5.3: signedAttrs MUST be present when eContentType ≠ id-data.
     let sa = p.signed_attrs.as_ref().ok_or("cms signedAttrs")?;
@@ -510,38 +511,11 @@ pub fn cms_verify_full(der: &[u8], trust_anchor: &[u8]) -> Result<CmsVerified, &
     })
 }
 
-/// RFC 4556 §3.2.4: signer is a KDC cert for `realm` (KPKdc + SAN krbtgt/REALM@REALM).
-///
-/// # Errors
-///
-/// `"pkinit kdc eku"` when `cert` lacks the id-pkinit-KPKdc extended key usage;
-/// `"pkinit kdc san"` when it has no PKINIT SAN or the SAN is not `krbtgt/<realm>@<realm>`.
-pub fn require_kdc_pkinit_cert(cert: &[u8], realm: &str) -> Result<(), &'static str> {
-    if !cert_has_eku(cert, OID_KP_KDC) {
-        return Err("pkinit kdc eku");
-    }
-    let (san_realm, parts) = cert_pkinit_san(cert).ok_or("pkinit kdc san")?;
-    if san_realm != realm || parts.len() != 2 || parts[0] != "krbtgt" || parts[1] != realm {
-        return Err("pkinit kdc san");
-    }
-    Ok(())
-}
-
-/// RFC 4556 §3.2.2: signer is a client cert bound to `cname` (KPClientAuth + SAN).
-///
-/// # Errors
-///
-/// `"pkinit client eku"` when `cert` lacks the id-pkinit-KPClientAuth extended key usage;
-/// `"pkinit client san"` when it has no PKINIT SAN, or the SAN realm is not `realm` or its name
-/// is not `cname` (an enterprise `cname` compares the part before its last `@`).
-pub fn require_client_pkinit_cert(
+pub fn require_client_pkinit_san(
     cert: &[u8],
     cname: &crate::PrincipalName,
     realm: &str,
 ) -> Result<(), &'static str> {
-    if !cert_has_eku(cert, OID_KP_CLIENT_AUTH) {
-        return Err("pkinit client eku");
-    }
     let (san_realm, parts) = cert_pkinit_san(cert).ok_or("pkinit client san")?;
     if san_realm != realm {
         return Err("pkinit client san");
@@ -670,18 +644,1179 @@ fn cert_path_ok(leaf: &[u8], ca: &[u8]) -> Result<(), &'static str> {
     Ok(())
 }
 
-struct TbsWalk<'a> {
-    issuer: &'a [u8],
-    validity: &'a [u8],
-    subject: &'a [u8],
-    extensions: Option<&'a [u8]>,
+const OID_RSA: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01];
+pub(super) const OID_RSA_SHA256: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0b];
+const OID_RSA_SHA384: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0c];
+const OID_RSA_SHA512: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0d];
+pub(super) const OID_ECDSA_SHA256: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02];
+const OID_ECDSA_SHA384: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x03];
+const OID_ECDSA_SHA512: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x04];
+const OID_SHA256: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01];
+const OID_SHA384: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02];
+const OID_SHA512: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Digest {
+    Sha256,
+    Sha384,
+    Sha512,
 }
 
-/// Locate the issuer, validity, subject and extensions of a DER certificate. MIT has no walker of
-/// its own: its PKINIT reads these fields through OpenSSL.
-/// A certificate that is not a sequence yields no issuer or validity, and an optional version is
-/// skipped rather than read as the serial.
-fn walk_tbs(cert: &[u8]) -> Option<TbsWalk<'_>> {
+impl Digest {
+    fn from_oid(oid: &[u8]) -> Option<Self> {
+        match oid {
+            OID_SHA256 => Some(Self::Sha256),
+            OID_SHA384 => Some(Self::Sha384),
+            OID_SHA512 => Some(Self::Sha512),
+            _ => None,
+        }
+    }
+
+    fn of(self, data: &[u8]) -> Vec<u8> {
+        use sha2::Digest as _;
+        match self {
+            Self::Sha256 => sha2::Sha256::digest(data).to_vec(),
+            Self::Sha384 => sha2::Sha384::digest(data).to_vec(),
+            Self::Sha512 => sha2::Sha512::digest(data).to_vec(),
+        }
+    }
+
+    fn digest_info_prefix(self) -> &'static [u8] {
+        match self {
+            Self::Sha256 => &[
+                0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02,
+                0x01, 0x05, 0x00, 0x04, 0x20,
+            ],
+            Self::Sha384 => &[
+                0x30, 0x41, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02,
+                0x02, 0x05, 0x00, 0x04, 0x30,
+            ],
+            Self::Sha512 => &[
+                0x30, 0x51, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02,
+                0x03, 0x05, 0x00, 0x04, 0x40,
+            ],
+        }
+    }
+}
+
+const OID_EC_KEY: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01];
+pub(super) const OID_P256_CURVE: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07];
+pub(super) const OID_P384_CURVE: &[u8] = &[0x2b, 0x81, 0x04, 0x00, 0x22];
+pub(super) const OID_P521_CURVE: &[u8] = &[0x2b, 0x81, 0x04, 0x00, 0x23];
+pub(super) const OID_P224_CURVE: &[u8] = &[0x2b, 0x81, 0x04, 0x00, 0x21];
+pub(super) const OID_K256_CURVE: &[u8] = &[0x2b, 0x81, 0x04, 0x00, 0x0a];
+pub(super) const OID_BP256R1_CURVE: &[u8] = &[0x2b, 0x24, 0x03, 0x03, 0x02, 0x08, 0x01, 0x01, 0x07];
+pub(super) const OID_BP256T1_CURVE: &[u8] = &[0x2b, 0x24, 0x03, 0x03, 0x02, 0x08, 0x01, 0x01, 0x08];
+pub(super) const OID_BP384R1_CURVE: &[u8] = &[0x2b, 0x24, 0x03, 0x03, 0x02, 0x08, 0x01, 0x01, 0x0b];
+pub(super) const OID_BP384T1_CURVE: &[u8] = &[0x2b, 0x24, 0x03, 0x03, 0x02, 0x08, 0x01, 0x01, 0x0c];
+pub(super) const OID_BP512R1_CURVE: &[u8] = &[0x2b, 0x24, 0x03, 0x03, 0x02, 0x08, 0x01, 0x01, 0x0d];
+pub(super) const OID_BP512T1_CURVE: &[u8] = &[0x2b, 0x24, 0x03, 0x03, 0x02, 0x08, 0x01, 0x01, 0x0e];
+
+fn cert_spki(cert: &[u8]) -> Option<&[u8]> {
+    let (_, body, _) = take_tlv(cert)?;
+    let (_, tbs, _) = take_tlv(body)?;
+    let mut cur = tbs;
+    if cur.first() == Some(&0xa0) {
+        cur = take_tlv(cur)?.2;
+    }
+    for _ in 0..5 {
+        cur = take_tlv(cur)?.2;
+    }
+    let (t, _, rest) = take_tlv(cur)?;
+    (t == 0x30).then(|| &cur[..cur.len() - rest.len()])
+}
+
+fn cert_signed_parts(cert: &[u8]) -> Option<(&[u8], &[u8], &[u8])> {
+    let (_, body, _) = take_tlv(cert)?;
+    let (_, _, after_tbs) = take_tlv(body)?;
+    let tbs = &body[..body.len() - after_tbs.len()];
+    let (_, alg, rest) = take_tlv(after_tbs)?;
+    let (_, oid, _) = take_tlv(alg)?;
+    let (t, bits, _) = take_tlv(rest)?;
+    if t != 0x03 {
+        return None;
+    }
+    Some((tbs, oid, bits.get(1..)?))
+}
+
+fn cert_signed_by(cert: &[u8], issuer: &[u8]) -> bool {
+    cert_signed_parts(cert)
+        .zip(cert_spki(issuer))
+        .is_some_and(|((tbs, alg, sig), spki)| signature_ok(spki, alg, None, tbs, sig))
+}
+
+fn signature_ok(spki: &[u8], alg: &[u8], digest: Option<Digest>, msg: &[u8], sig: &[u8]) -> bool {
+    signature_check(spki, alg, digest, msg, sig, true).is_ok()
+}
+
+const PROVIDER_FAILURE: &str = "provider signature failure";
+
+/// Ok, or OpenSSL 3's first `CMS_verify` reason. `attrs` picks its path: the signed attributes
+/// (`EVP_DigestVerify`) or the content (`EVP_PKEY_verify`), which name a bad ECDSA DER differently.
+fn signature_check(
+    spki: &[u8],
+    alg: &[u8],
+    digest: Option<Digest>,
+    msg: &[u8],
+    sig: &[u8],
+    attrs: bool,
+) -> Result<(), &'static str> {
+    let digest = match alg {
+        OID_ECDSA_SHA256 | OID_RSA_SHA256 => Some(Digest::Sha256),
+        OID_ECDSA_SHA384 | OID_RSA_SHA384 => Some(Digest::Sha384),
+        OID_ECDSA_SHA512 | OID_RSA_SHA512 => Some(Digest::Sha512),
+        OID_RSA | OID_EC_KEY => digest,
+        _ => None,
+    }
+    .ok_or(PROVIDER_FAILURE)?;
+    let (_, spki_body, _) = take_tlv(spki).ok_or(PROVIDER_FAILURE)?;
+    let (_, key_alg, rest) = take_tlv(spki_body).ok_or(PROVIDER_FAILURE)?;
+    let (_, key_oid, params) = take_tlv(key_alg).ok_or(PROVIDER_FAILURE)?;
+    let Some((0x03, bits, _)) = take_tlv(rest) else {
+        return Err(PROVIDER_FAILURE);
+    };
+    let key = bits.get(1..).ok_or(PROVIDER_FAILURE)?;
+    let hash = digest.of(msg);
+    match key_oid {
+        OID_RSA => rsa_pkcs1_check(key, digest, &hash, sig),
+        OID_EC_KEY => {
+            let (_, curve, _) = take_tlv(params).ok_or(PROVIDER_FAILURE)?;
+            ecdsa_check(curve, key, &hash, sig, attrs)
+        }
+        _ => Err(PROVIDER_FAILURE),
+    }
+}
+
+#[must_use]
+pub fn spki_signature_ok(spki: &[u8], alg: &[u8], msg: &[u8], sig: &[u8]) -> bool {
+    signature_ok(spki, alg, None, msg, sig)
+}
+
+fn ecdsa_check(
+    curve: &[u8],
+    key: &[u8],
+    hash: &[u8],
+    sig: &[u8],
+    attrs: bool,
+) -> Result<(), &'static str> {
+    if sig.is_empty() {
+        return Err(PROVIDER_FAILURE);
+    }
+    // Not exactly its own DER: "verification failure" with signed attributes,
+    // "provider signature failure" without (EVP_DigestVerify vs EVP_PKEY_verify).
+    let Some((r, s)) = ecdsa_der(sig) else {
+        return Err(if attrs {
+            "verification failure"
+        } else {
+            PROVIDER_FAILURE
+        });
+    };
+    match curve {
+        OID_P256_CURVE => ecdsa_on::<p256::NistP256>(key, hash, r, s),
+        #[cfg(p384_backend = "fiat")]
+        OID_P384_CURVE => ecdsa_on::<p384::NistP384>(key, hash, r, s),
+        OID_P521_CURVE => {
+            let mut prehash = vec![0u8; 33usize.saturating_sub(hash.len())];
+            prehash.extend_from_slice(hash);
+            ecdsa_on::<p521::NistP521>(key, &prehash, r, s)
+        }
+        OID_P224_CURVE => ecdsa_on::<p224::NistP224>(key, hash, r, s),
+        OID_K256_CURVE => ecdsa_on::<k256::Secp256k1>(key, hash, r, s),
+        OID_BP256R1_CURVE => ecdsa_on::<bp256::r1::BrainpoolP256r1>(key, hash, r, s),
+        OID_BP256T1_CURVE => ecdsa_on::<bp256::t1::BrainpoolP256t1>(key, hash, r, s),
+        OID_BP384R1_CURVE => ecdsa_on::<bp384::r1::BrainpoolP384r1>(key, hash, r, s),
+        OID_BP384T1_CURVE => ecdsa_on::<bp384::t1::BrainpoolP384t1>(key, hash, r, s),
+        #[cfg(target_pointer_width = "64")]
+        OID_BP512R1_CURVE => ecdsa_on::<krb5_brainpool::p512::r1::BrainpoolP512r1>(key, hash, r, s),
+        #[cfg(target_pointer_width = "64")]
+        OID_BP512T1_CURVE => ecdsa_on::<krb5_brainpool::p512::t1::BrainpoolP512t1>(key, hash, r, s),
+        _ => Err(PROVIDER_FAILURE),
+    }
+}
+
+/// r and s of an ECDSA-Sig-Value that is exactly its own DER.
+pub(super) fn ecdsa_der(sig: &[u8]) -> Option<(&[u8], &[u8])> {
+    let (0x30, body, []) = take_tlv(sig)? else {
+        return None;
+    };
+    let (0x02, r, rest) = take_tlv(body)? else {
+        return None;
+    };
+    let (0x02, s, []) = take_tlv(rest)? else {
+        return None;
+    };
+    let magnitude = |v: &[u8]| v.iter().take_while(|b| **b == 0).count();
+    let (r, s) = (&r[magnitude(r)..], &s[magnitude(s)..]);
+    let int = |m: &[u8]| {
+        let pad = m.first().is_none_or(|b| b & 0x80 != 0);
+        tlv(0x02, &[&[0][..usize::from(pad)], m].concat())
+    };
+    (tlv(0x30, &[int(r), int(s)].concat()) == sig).then_some((r, s))
+}
+
+fn ecdsa_on<C>(key: &[u8], hash: &[u8], r: &[u8], s: &[u8]) -> Result<(), &'static str>
+where
+    C: ecdsa::EcdsaCurve + ecdsa::elliptic_curve::CurveArithmetic,
+    ecdsa::elliptic_curve::AffinePoint<C>:
+        ecdsa::elliptic_curve::sec1::FromSec1Point<C> + ecdsa::elliptic_curve::sec1::ToSec1Point<C>,
+    ecdsa::elliptic_curve::FieldBytesSize<C>: ecdsa::elliptic_curve::sec1::ModulusSize,
+{
+    use ecdsa::signature::hazmat::PrehashVerifier;
+    let field = |v: &[u8]| {
+        let mut b = ecdsa::elliptic_curve::FieldBytes::<C>::default();
+        let at = b.len().checked_sub(v.len())?;
+        b[at..].copy_from_slice(v);
+        Some(b)
+    };
+    let sig = field(r)
+        .zip(field(s))
+        .and_then(|(r, s)| ecdsa::Signature::<C>::from_scalars(r, s).ok())
+        .ok_or("bad signature")?;
+    // secp256k1's verifier takes only low-s; normalize so OpenSSL's "take both" holds everywhere.
+    ecdsa::VerifyingKey::<C>::from_sec1_bytes(key)
+        .ok()
+        .filter(|vk| vk.verify_prehash(hash, &sig.normalize_s()).is_ok())
+        .map(|_| ())
+        .ok_or(PROVIDER_FAILURE)
+}
+
+/// Ok, or OpenSSL 3's first reason: length, key/value, PKCS#1 padding, then DigestInfo.
+fn rsa_pkcs1_check(
+    key: &[u8],
+    digest: Digest,
+    hash: &[u8],
+    sig: &[u8],
+) -> Result<(), &'static str> {
+    use num_bigint::BigUint;
+    let (_, body, _) = take_tlv(key).ok_or(PROVIDER_FAILURE)?;
+    let Some((0x02, n, rest)) = take_tlv(body) else {
+        return Err(PROVIDER_FAILURE);
+    };
+    let Some((0x02, e, _)) = take_tlv(rest) else {
+        return Err(PROVIDER_FAILURE);
+    };
+    let k = n.iter().skip_while(|b| **b == 0).count();
+    if sig.len() != k {
+        return Err("wrong signature length");
+    }
+    let (n, e, s) = (
+        BigUint::from_bytes_be(n),
+        BigUint::from_bytes_be(e),
+        BigUint::from_bytes_be(sig),
+    );
+    if n.bits() > 16384 {
+        return Err("modulus too large");
+    }
+    if n <= e || (n.bits() > 3072 && e.bits() > 64) {
+        return Err("bad e value");
+    }
+    if s >= n {
+        return Err("data too large for modulus");
+    }
+    let raw = s.modpow(&e, &n).to_bytes_be();
+    let mut em = vec![0u8; k.saturating_sub(raw.len())];
+    em.extend_from_slice(&raw);
+    if k < 11 {
+        return Err("padding check failed");
+    }
+    if em[0] != 0 {
+        return Err("invalid padding");
+    }
+    if em[1] != 1 {
+        return Err("block type is not 01");
+    }
+    let ff = em[2..].iter().take_while(|b| **b == 0xff).count();
+    match em.get(2 + ff) {
+        None => return Err("null before block missing"),
+        Some(0) => {}
+        Some(_) => return Err("bad fixed header decrypt"),
+    }
+    if ff < 8 {
+        return Err("bad pad byte count");
+    }
+    let info = &em[3 + ff..];
+    if info.is_empty() {
+        return Err("RSA lib");
+    }
+    if info != [digest.digest_info_prefix(), hash].concat() {
+        return Err("bad signature");
+    }
+    Ok(())
+}
+
+const OID_DATA: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x07, 0x01];
+const OID_SIGNED_DATA: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x07, 0x02];
+const OID_SKID: &[u8] = &[0x55, 0x1d, 0x0e];
+const OID_AKID: &[u8] = &[0x55, 0x1d, 0x23];
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CmsFault {
+    Decode(&'static str),
+    NotOctetString,
+    WrongOid,
+    NoSigner,
+    Chain(ChainError, Vec<u8>),
+    Signature(&'static str),
+    /// check it; RFC 5652 binds the two, and this verifier refuses the message.
+    ContentType,
+}
+
+impl CmsFault {
+    #[must_use]
+    pub fn code(&self) -> i32 {
+        match self {
+            Self::Signature(_) => crate::err::DIGEST_IN_SIGNED_DATA_NOT_ACCEPTED,
+            Self::Chain(e, _)
+                if matches!(
+                    e.reason,
+                    "unable to get local issuer certificate" | "unable to get issuer certificate"
+                ) =>
+            {
+                crate::err::CANT_VERIFY_CERTIFICATE
+            }
+            Self::Chain(..) => crate::err::INVALID_CERTIFICATE,
+            _ => crate::err::PREAUTH_FAILED,
+        }
+    }
+
+    #[must_use]
+    pub fn message(&self) -> String {
+        match self {
+            Self::Decode(reason) => format!("Failed to decode CMS message: {reason}"),
+            Self::NotOctetString => "Invalid pkinit packet: octet string expected".to_owned(),
+            Self::WrongOid => "wrong oid\n".to_owned(),
+            Self::NoSigner | Self::ContentType => "Preauthentication failed".to_owned(),
+            Self::Signature(reason) => format!("Failed to verify CMS message: {reason}"),
+            Self::Chain(e, _) => format!("Failed to verify received certificate {e}"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CmsSigner {
+    Client,
+    Server,
+}
+
+#[derive(Clone, Debug)]
+pub struct CmsAuthPack {
+    pub e_content: Vec<u8>,
+    pub signer: Option<Vec<u8>>,
+}
+
+pub fn cms_signeddata_verify(
+    der: &[u8],
+    anchors: &[Vec<u8>],
+    intermediates: &[Vec<u8>],
+    from: CmsSigner,
+) -> Result<CmsAuthPack, CmsFault> {
+    let content_type = match from {
+        CmsSigner::Client => ECONTENT_AUTHDATA,
+        CmsSigner::Server => super::ECONTENT_DHKEY,
+    };
+    if let Some(reason) = cms_decode_reason(der) {
+        return Err(CmsFault::Decode(reason));
+    }
+    let (_, ci, _) = take_tlv(der).ok_or(CmsFault::Decode("header too long"))?;
+    let (_, oid, rest) = take_tlv(ci).ok_or(CmsFault::Decode("field missing"))?;
+    let (_, content, _) = take_tlv(rest).ok_or(CmsFault::Decode("field missing"))?;
+    if from == CmsSigner::Client && oid == ECONTENT_AUTHDATA {
+        return match take_tlv(content) {
+            Some((0x04, octets, _)) => Ok(CmsAuthPack {
+                e_content: octets.to_vec(),
+                signer: None,
+            }),
+            _ => Err(CmsFault::NotOctetString),
+        };
+    }
+    if oid != OID_SIGNED_DATA {
+        return Err(CmsFault::WrongOid);
+    }
+    let sd = SignedDataFields::read(content).ok_or(CmsFault::NoSigner)?;
+    let Some(signer_info) = sd.signers.first() else {
+        if from == CmsSigner::Server {
+            return Err(CmsFault::NoSigner);
+        }
+        let e_content = sd.e_content.clone().ok_or(CmsFault::NoSigner)?;
+        if sd.e_content_type != ECONTENT_AUTHDATA {
+            return Err(CmsFault::WrongOid);
+        }
+        return Ok(CmsAuthPack {
+            e_content,
+            signer: None,
+        });
+    };
+    let signer = sd
+        .certs
+        .iter()
+        .chain(anchors)
+        .chain(intermediates)
+        .find(|c| signer_info.names(c))
+        .cloned()
+        .ok_or(CmsFault::NoSigner)?;
+    let pool: Vec<&[u8]> = intermediates
+        .iter()
+        .chain(&sd.certs)
+        .map(Vec::as_slice)
+        .collect();
+    build_chain(&signer, anchors, &pool).map_err(|(e, chain)| {
+        CmsFault::Chain(e, chain.get(e.depth).cloned().unwrap_or_default())
+    })?;
+    let e_content = sd.e_content.clone().unwrap_or_default();
+    let digest = Digest::from_oid(&signer_info.digest_alg);
+    // No signed attrs: CMS_verify signs the content; else the DER SET.
+    let signed = match &signer_info.signed_attrs {
+        Some(sa) => {
+            let mut set = sa.clone();
+            set[0] = 0x31;
+            set
+        }
+        None => e_content.clone(),
+    };
+    cert_spki(&signer)
+        .ok_or(PROVIDER_FAILURE)
+        .and_then(|spki| {
+            signature_check(
+                spki,
+                &signer_info.signature_alg,
+                digest,
+                &signed,
+                &signer_info.signature,
+                signer_info.signed_attrs.is_some(),
+            )
+        })
+        .map_err(CmsFault::Signature)?;
+    if let Some(sa) = signer_info.signed_attrs.as_deref() {
+        if !digest.is_some_and(|d| signed_attrs_digest_ok(sa, &d.of(&e_content))) {
+            return Err(CmsFault::Signature("verification failure"));
+        }
+        if signed_attrs_content_type(sa).as_deref() != Some(sd.e_content_type.as_slice()) {
+            return Err(CmsFault::ContentType);
+        }
+    }
+    if sd.e_content_type != content_type {
+        return Err(CmsFault::WrongOid);
+    }
+    Ok(CmsAuthPack {
+        e_content,
+        signer: Some(signer),
+    })
+}
+
+struct SignedDataFields {
+    e_content_type: Vec<u8>,
+    e_content: Option<Vec<u8>>,
+    certs: Vec<Vec<u8>>,
+    signers: Vec<SignerFields>,
+}
+
+struct SignerFields {
+    issuer_serial: Option<(Vec<u8>, Vec<u8>)>,
+    key_id: Option<Vec<u8>>,
+    digest_alg: Vec<u8>,
+    signed_attrs: Option<Vec<u8>>,
+    signature_alg: Vec<u8>,
+    signature: Vec<u8>,
+}
+
+impl SignerFields {
+    fn names(&self, cert: &[u8]) -> bool {
+        if let Some(want) = &self.issuer_serial {
+            return cert_issuer_serial(cert).as_ref() == Some(want);
+        }
+        self.key_id
+            .as_deref()
+            .is_some_and(|id| cert_key_id(cert).as_deref() == Some(id))
+    }
+}
+
+impl SignedDataFields {
+    fn read(content: &[u8]) -> Option<Self> {
+        let (_, sd, _) = take_tlv(content)?;
+        let (_, _, rest) = take_tlv(sd)?;
+        let (_, _, rest) = take_tlv(rest)?;
+        let (_, encap, mut rest) = take_tlv(rest)?;
+        let (_, e_content_type, after) = take_tlv(encap)?;
+        let e_content = take_tlv(after)
+            .and_then(|(_, expl, _)| take_tlv(expl))
+            .map(|(_, octets, _)| octets.to_vec());
+        let mut certs = Vec::new();
+        if rest.first() == Some(&0xa0) {
+            let (_, mut set, next) = take_tlv(rest)?;
+            rest = next;
+            while let Some((t, body, more)) = take_tlv(set) {
+                if t == 0x30 {
+                    certs.push(tlv(t, body));
+                }
+                set = more;
+            }
+        }
+        if rest.first() == Some(&0xa1) {
+            rest = take_tlv(rest)?.2;
+        }
+        let (_, mut set, _) = take_tlv(rest)?;
+        let mut signers = Vec::new();
+        while let Some((_, info, more)) = take_tlv(set) {
+            set = more;
+            let (_, _, after_version) = take_tlv(info)?;
+            let (sid_tag, sid, mut cur) = take_tlv(after_version)?;
+            let (issuer_serial, key_id) = if sid_tag == 0x30 {
+                let (it, issuer, after) = take_tlv(sid)?;
+                let (_, serial, _) = take_tlv(after)?;
+                (Some((tlv(it, issuer), serial.to_vec())), None)
+            } else {
+                (None, Some(sid.to_vec()))
+            };
+            let (_, digest_alg, next) = take_tlv(cur)?;
+            cur = next;
+            let signed_attrs = if cur.first() == Some(&0xa0) {
+                let (t, body, next) = take_tlv(cur)?;
+                cur = next;
+                Some(tlv(t, body))
+            } else {
+                None
+            };
+            let (_, signature_alg, next) = take_tlv(cur)?;
+            let (_, signature, _) = take_tlv(next)?;
+            signers.push(SignerFields {
+                issuer_serial,
+                key_id,
+                digest_alg: take_tlv(digest_alg)?.1.to_vec(),
+                signed_attrs,
+                signature_alg: take_tlv(signature_alg)?.1.to_vec(),
+                signature: signature.to_vec(),
+            });
+        }
+        Some(Self {
+            e_content_type: e_content_type.to_vec(),
+            e_content,
+            certs,
+            signers,
+        })
+    }
+}
+
+fn cert_key_id(cert: &[u8]) -> Option<Vec<u8>> {
+    let exts = walk_tbs(cert)?.extensions?;
+    let mut id = None;
+    each_ext(exts, |oid, val| {
+        if oid != OID_SKID {
+            return false;
+        }
+        id = take_tlv(val).map(|(_, keyid, _)| keyid.to_vec());
+        true
+    });
+    id
+}
+
+// MIT: `create_identifiers_from_stack` (plugins/preauth/pkinit/pkinit_crypto_openssl.c:5223-5316)
+#[must_use]
+pub fn encode_td_certifiers(certs: &[&[u8]]) -> Vec<u8> {
+    let ids: Vec<super::ExternalPrincipalIdentifier> = certs
+        .iter()
+        .map(|cert| {
+            let subject = cert_name_der(cert, false);
+            let issuer_serial = cert_issuer_serial(cert)
+                .map(|(issuer, serial)| tlv(0x30, &[issuer, tlv(0x02, &serial)].concat()));
+            super::ExternalPrincipalIdentifier {
+                subject_name: subject.map(Into::into),
+                issuer_and_serial_number: issuer_serial.map(Into::into),
+                subject_key_identifier: cert_key_id(cert).map(|id| tlv(0x04, &id).into()),
+            }
+        })
+        .collect();
+    rasn::der::encode(&ids).unwrap_or_default()
+}
+
+fn der_next(input: &[u8]) -> Result<(u8, &[u8], &[u8]), &'static str> {
+    let (&tag, after) = input.split_first().ok_or("header too long")?;
+    let (&first, after) = after.split_first().ok_or("header too long")?;
+    if tag & 0x1f == 0x1f || first == 0x80 {
+        return Err("header too long");
+    }
+    let (len, after) = if first < 0x80 {
+        (usize::from(first), after)
+    } else {
+        let n = usize::from(first & 0x7f);
+        if n > std::mem::size_of::<usize>() || after.len() < n {
+            return Err("header too long");
+        }
+        let len = after[..n]
+            .iter()
+            .fold(0usize, |l, b| (l << 8) | usize::from(*b));
+        (len, &after[n..])
+    };
+    if len > after.len() {
+        return Err("too long");
+    }
+    Ok((tag, &after[..len], &after[len..]))
+}
+
+fn der_field<'a>(cur: &mut &'a [u8], tag: u8) -> Result<&'a [u8], &'static str> {
+    if cur.is_empty() {
+        return Err("field missing");
+    }
+    let (t, body, rest) = der_next(cur)?;
+    if t != tag {
+        return Err("wrong tag");
+    }
+    *cur = rest;
+    Ok(body)
+}
+
+fn der_optional<'a>(cur: &mut &'a [u8], tag: u8) -> Result<Option<&'a [u8]>, &'static str> {
+    if cur.first() == Some(&tag) {
+        der_field(cur, tag).map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
+fn der_each(
+    mut items: &[u8],
+    each: impl Fn(u8, &[u8]) -> Result<(), &'static str>,
+) -> Result<(), &'static str> {
+    while !items.is_empty() {
+        let (t, body, rest) = der_next(items)?;
+        each(t, body)?;
+        items = rest;
+    }
+    Ok(())
+}
+
+/// OpenSSL's templates consume a container exactly; a trailing element is a length mismatch.
+fn der_end(cur: &[u8], reason: &'static str) -> Result<(), &'static str> {
+    if cur.is_empty() { Ok(()) } else { Err(reason) }
+}
+
+pub(super) fn cms_decode_reason(der: &[u8]) -> Option<&'static str> {
+    if der.is_empty() {
+        return Some("too small");
+    }
+    cms_template(der).err()
+}
+
+fn cms_template(der: &[u8]) -> Result<(), &'static str> {
+    let mut top = der;
+    {
+        let mut ci = der_field(&mut top, 0x30)?;
+        let oid = der_field(&mut ci, 0x06)?;
+        let mut content = der_field(&mut ci, 0xa0)?;
+        if oid == OID_DATA {
+            der_field(&mut content, 0x04)?;
+        } else if oid == OID_SIGNED_DATA {
+            let mut sd = der_field(&mut content, 0x30)?;
+            der_end(content, "explicit length mismatch")?;
+            der_field(&mut sd, 0x02)?;
+            der_each(der_field(&mut sd, 0x31)?, |t, body| {
+                (t == 0x30).then_some(()).ok_or("wrong tag")?;
+                let mut alg = body;
+                der_field(&mut alg, 0x06)?;
+                Ok(())
+            })?;
+            let mut encap = der_field(&mut sd, 0x30)?;
+            der_field(&mut encap, 0x06)?;
+            if let Some(mut expl) = der_optional(&mut encap, 0xa0)? {
+                der_field(&mut expl, 0x04)?;
+                der_end(expl, "explicit length mismatch")?;
+            }
+            der_end(encap, "sequence length mismatch")?;
+            if let Some(certs) = der_optional(&mut sd, 0xa0)? {
+                der_each(certs, |t, _| {
+                    matches!(t, 0x30 | 0xa0..=0xa3)
+                        .then_some(())
+                        .ok_or("wrong tag")
+                })?;
+            }
+            der_optional(&mut sd, 0xa1)?;
+            der_each(der_field(&mut sd, 0x31)?, |t, mut info| {
+                if t != 0x30 {
+                    return Err("wrong tag");
+                }
+                der_field(&mut info, 0x02)?;
+                if der_optional(&mut info, 0x80)?.is_none() {
+                    let mut sid = der_field(&mut info, 0x30)?;
+                    der_field(&mut sid, 0x30)?;
+                    der_field(&mut sid, 0x02)?;
+                    der_end(sid, "sequence length mismatch")?;
+                }
+                der_field(&mut der_field(&mut info, 0x30)?, 0x06)?;
+                der_optional(&mut info, 0xa0)?;
+                der_field(&mut der_field(&mut info, 0x30)?, 0x06)?;
+                der_field(&mut info, 0x04)?;
+                der_optional(&mut info, 0xa1)?;
+                // unsignedAttrs [1] is the last optional field (OpenSSL names it by tag).
+                der_end(info, "wrong tag")
+            })?;
+            der_end(sd, "sequence length mismatch")?;
+        } else {
+            der_next(content)?;
+        }
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChainError {
+    pub depth: usize,
+    pub reason: &'static str,
+}
+
+impl std::fmt::Display for ChainError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "(depth {}): {}", self.depth, self.reason)
+    }
+}
+
+type CertChain = Vec<Vec<u8>>;
+
+const MAX_CHAIN: usize = 100;
+
+pub fn verify_chain(
+    leaf: &[u8],
+    anchors: &[Vec<u8>],
+    intermediates: &[&[u8]],
+) -> Result<Vec<Vec<u8>>, ChainError> {
+    build_chain(leaf, anchors, intermediates).map_err(|(e, _)| e)
+}
+
+// OpenSSL `find_issuer`: name is already filtered. AKID and key type, no signature.
+// The first cert still in its window, else the one with the latest notAfter.
+fn choose_issuer<'a>(
+    current: &[u8],
+    cands: &[&'a [u8]],
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<&'a [u8]> {
+    let mut best: Option<(&'a [u8], chrono::DateTime<chrono::Utc>)> = None;
+    for c in cands {
+        if !sig_key_ok(current, c) || !akid_ok(current, c) {
+            continue;
+        }
+        let Some((nb, na)) = cert_time_window(c) else {
+            continue;
+        };
+        if now >= nb && now <= na {
+            return Some(*c);
+        }
+        match best {
+            Some((_, end)) if na <= end => {}
+            _ => best = Some((*c, na)),
+        }
+    }
+    best.map(|(c, _)| c)
+}
+
+fn sig_key_ok(subject: &[u8], issuer: &[u8]) -> bool {
+    let Some((_, alg, _)) = cert_signed_parts(subject) else {
+        return true;
+    };
+    let Some(spki) = cert_spki(issuer) else {
+        return false;
+    };
+    let Some((_, body, _)) = take_tlv(spki) else {
+        return false;
+    };
+    let Some((_, alg_id, _)) = take_tlv(body) else {
+        return false;
+    };
+    let Some((_, key_oid, _)) = take_tlv(alg_id) else {
+        return false;
+    };
+    if matches!(
+        alg,
+        OID_RSA | OID_RSA_SHA256 | OID_RSA_SHA384 | OID_RSA_SHA512
+    ) {
+        return key_oid == OID_RSA;
+    }
+    if matches!(alg, OID_ECDSA_SHA256 | OID_ECDSA_SHA384 | OID_ECDSA_SHA512) {
+        return key_oid == OID_EC_KEY;
+    }
+    true
+}
+
+fn akid_ok(subject: &[u8], issuer: &[u8]) -> bool {
+    let Some(exts) = walk_tbs(subject).and_then(|w| w.extensions) else {
+        return true;
+    };
+    let mut raw = None;
+    each_ext(exts, |oid, oct| {
+        if oid != OID_AKID {
+            return false;
+        }
+        raw = Some(oct.to_vec());
+        true
+    });
+    let Some(raw) = raw else {
+        return true;
+    };
+    let Some((0x30, mut body, _)) = take_tlv(&raw) else {
+        return false;
+    };
+    let mut keyid = None;
+    let mut names = None;
+    let mut serial = None;
+    while !body.is_empty() {
+        let Some((tag, val, rest)) = take_tlv(body) else {
+            return false;
+        };
+        body = rest;
+        match tag {
+            0x80 => keyid = Some(val),
+            0xa1 => names = Some(val),
+            0x82 => serial = Some(val),
+            _ => {}
+        }
+    }
+    // OpenSSL rejects a key id only when the issuer has a different SKID.
+    if let Some(id) = keyid
+        && let Some(skid) = cert_key_id(issuer)
+        && skid.as_slice() != id
+    {
+        return false;
+    }
+    if let Some(want) = serial {
+        let Some((_, got)) = cert_issuer_serial(issuer) else {
+            return false;
+        };
+        if !int_eq(want, &got) {
+            return false;
+        }
+    }
+    if let Some(gns) = names
+        && let Some(want) = first_dirname(gns)
+    {
+        let Some((issuer_name, _)) = cert_issuer_serial(issuer) else {
+            return false;
+        };
+        if want != issuer_name.as_slice() {
+            return false;
+        }
+    }
+    true
+}
+
+fn mag(s: &[u8]) -> &[u8] {
+    let i = s.iter().position(|b| *b != 0).unwrap_or(s.len());
+    &s[i..]
+}
+
+fn int_eq(a: &[u8], b: &[u8]) -> bool {
+    mag(a) == mag(b)
+}
+
+fn first_dirname(gns: &[u8]) -> Option<&[u8]> {
+    let mut cur = gns;
+    while let Some((tag, val, rest)) = take_tlv(cur) {
+        if tag == 0xa4 {
+            return Some(val);
+        }
+        cur = rest;
+    }
+    None
+}
+
+fn self_signed(cert: &[u8]) -> bool {
+    let issuer = cert_name_der(cert, true);
+    let subject = cert_name_der(cert, false);
+    issuer.is_some() && issuer == subject && akid_ok(cert, cert) && sig_key_ok(cert, cert)
+}
+
+fn build_chain(
+    leaf: &[u8],
+    anchors: &[Vec<u8>],
+    intermediates: &[&[u8]],
+) -> Result<CertChain, (ChainError, CertChain)> {
+    let fail = |depth, reason| ChainError { depth, reason };
+    let subject = |c: &[u8]| cert_name_der(c, false);
+    let now = chrono::Utc::now();
+    let mut chain = vec![leaf.to_vec()];
+    loop {
+        let depth = chain.len() - 1;
+        let current = &chain[depth];
+        let issuer = cert_name_der(current, true);
+        let named = |c: &&[u8]| issuer.is_some() && subject(c) == issuer;
+        let trusted: Vec<&[u8]> = anchors.iter().map(Vec::as_slice).filter(named).collect();
+        if let Some(a) = choose_issuer(current, &trusted, now) {
+            if a != current.as_slice() {
+                chain.push(a.to_vec());
+            }
+            break;
+        }
+        // X509_self_signed: name, AKID against its own SKID, and key type.
+        if self_signed(current) {
+            return Err((
+                fail(
+                    depth,
+                    if depth == 0 {
+                        "self-signed certificate"
+                    } else {
+                        "self-signed certificate in certificate chain"
+                    },
+                ),
+                chain.clone(),
+            ));
+        }
+        let untrusted: Vec<&[u8]> = intermediates
+            .iter()
+            .copied()
+            .filter(|c| named(c) && !chain.iter().any(|x| x == c))
+            .collect();
+        let Some(next) = choose_issuer(current, &untrusted, now) else {
+            let self_signed = self_signed(current);
+            return Err((
+                fail(
+                    depth,
+                    match (self_signed, depth) {
+                        (true, 0) => "self-signed certificate",
+                        (true, _) => "self-signed certificate in certificate chain",
+                        _ => "unable to get local issuer certificate",
+                    },
+                ),
+                chain.clone(),
+            ));
+        };
+        if chain.len() > MAX_CHAIN {
+            return Err((fail(depth, "certificate chain too long"), chain.clone()));
+        }
+        chain.push(next.to_vec());
+    }
+    let top = chain.len() - 1;
+    let mut path_len = 0u64;
+    for (depth, cert) in chain.iter().enumerate() {
+        if cert_unhandled_critical(cert) {
+            return Err((fail(depth, "unhandled critical extension"), chain.clone()));
+        }
+        if depth == 0 {
+            continue;
+        }
+        if !(cert_basic_constraints_ca(cert) || (depth == top && cert_v1(cert))) {
+            return Err((fail(depth, "invalid CA certificate"), chain.clone()));
+        }
+        if depth > 1 && cert_path_len(cert).is_some_and(|max| path_len > max) {
+            return Err((
+                fail(depth, "path length constraint exceeded"),
+                chain.clone(),
+            ));
+        }
+        if cert_name_der(cert, true) != cert_name_der(cert, false) {
+            path_len += 1;
+        }
+    }
+    for depth in (0..=top).rev() {
+        let cert = &chain[depth];
+        if depth < top {
+            let issuer = &chain[depth + 1];
+            if !cert_key_cert_sign_ok(issuer) {
+                return Err((
+                    fail(depth + 1, "key usage does not include certificate signing"),
+                    chain.clone(),
+                ));
+            }
+            if !cert_signed_by(cert, issuer) {
+                return Err((fail(depth, "certificate signature failure"), chain.clone()));
+            }
+        }
+        let (not_before, not_after) = cert_time_window(cert).ok_or_else(|| {
+            (
+                fail(depth, "format error in certificate's notBefore field"),
+                chain.clone(),
+            )
+        })?;
+        if now < not_before {
+            return Err((fail(depth, "certificate is not yet valid"), chain.clone()));
+        }
+        if now > not_after {
+            return Err((fail(depth, "certificate has expired"), chain.clone()));
+        }
+    }
+    Ok(chain)
+}
+
+fn cert_unhandled_critical(cert: &[u8]) -> bool {
+    let Some(mut cur) = walk_tbs(cert).and_then(|w| w.extensions) else {
+        return false;
+    };
+    while let Some((_, ext, rest)) = take_tlv(cur) {
+        if let Some((t, oid, after)) = take_tlv(ext)
+            && t == 0x06
+            && after.first() == Some(&0x01)
+            && take_tlv(after).is_some_and(|(_, flag, _)| flag.first().is_some_and(|b| *b != 0))
+            && ![OID_BC, OID_KU, OID_EKU, OID_SAN].contains(&oid)
+        {
+            return true;
+        }
+        cur = rest;
+    }
+    false
+}
+
+fn cert_path_len(cert: &[u8]) -> Option<u64> {
+    let exts = walk_tbs(cert)?.extensions?;
+    let mut max = None;
+    each_ext(exts, |oid, val| {
+        if oid != OID_BC {
+            return false;
+        }
+        let mut cur = take_tlv(val).map_or(&[][..], |(_, seq, _)| seq);
+        while let Some((t, v, rest)) = take_tlv(cur) {
+            if t == 0x02 && v.len() <= 8 {
+                max = Some(v.iter().fold(0u64, |n, b| (n << 8) | u64::from(*b)));
+            }
+            cur = rest;
+        }
+        true
+    });
+    max
+}
+
+fn cert_v1(cert: &[u8]) -> bool {
+    let Some((_, body, _)) = take_tlv(cert) else {
+        return false;
+    };
+    let Some((_, tbs, _)) = take_tlv(body) else {
+        return false;
+    };
+    tbs.first() != Some(&0xa0) && cert_name_der(cert, true) == cert_name_der(cert, false)
+}
+
+pub fn cms_sign_chain(
+    e_content: &[u8],
+    leaf: &[u8],
+    certs: &[Vec<u8>],
+    key: &IdentityKey,
+    econtent_oid: &[u8],
+) -> Result<Vec<u8>, &'static str> {
+    let (issuer, serial) = cert_issuer_serial(leaf).ok_or("cms issuer")?;
+    let sattrs = signed_attrs_set(econtent_oid, e_content);
+    let (signature, sig_alg) = key.sign_sha256(&sattrs).ok_or("cms sign")?;
+    let mut implicit = sattrs;
+    if implicit.first() == Some(&0x31) {
+        implicit[0] = 0xa0;
+    }
+    Ok(cms_wrap_signed(
+        e_content,
+        &certs.concat(),
+        &signature,
+        &issuer,
+        &serial,
+        econtent_oid,
+        Some(&implicit),
+        sig_alg,
+    ))
+}
+
+const OID_MS_SAN_UPN: &[u8] = &[0x2b, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x14, 0x02, 0x03];
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CertSans {
+    pub principals: Vec<(String, i32, Vec<String>)>,
+    pub upns: Vec<String>,
+    pub dns_names: Vec<String>,
+}
+
+// MIT: `crypto_retrieve_X509_sans` (plugins/preauth/pkinit/pkinit_crypto_openssl.c:2304-2465)
+#[must_use]
+pub fn cert_sans(cert: &[u8], upns: bool) -> Option<CertSans> {
+    let mut out = CertSans::default();
+    let Some(exts) = walk_tbs(cert).and_then(|w| w.extensions) else {
+        return Some(out);
+    };
+    let mut san = None;
+    each_ext(exts, |oid, val| {
+        if oid == OID_SAN {
+            san = Some(val.to_vec());
+            return true;
+        }
+        false
+    });
+    let Some(san) = san else {
+        return Some(out);
+    };
+    let (t, mut names, _) = take_tlv(&san)?;
+    if t != 0x30 {
+        return None;
+    }
+    while !names.is_empty() {
+        let (tag, name, rest) = take_tlv(names)?;
+        names = rest;
+        if tag == 0x82 {
+            if let Ok(dns) = std::str::from_utf8(name)
+                && !name.contains(&0)
+            {
+                out.dns_names.push(dns.to_owned());
+            }
+            continue;
+        }
+        let Some((0x06, oid, value)) = (tag == 0xa0).then(|| take_tlv(name)).flatten() else {
+            continue;
+        };
+        let Some((0xa0, value, _)) = take_tlv(value) else {
+            continue;
+        };
+        if oid == OID_PKINIT_SAN {
+            out.principals
+                .extend(parse_krb5_principal_name_typed(value));
+        } else if upns
+            && oid == OID_MS_SAN_UPN
+            && let Some((_, upn, _)) = take_tlv(value)
+            && !upn.contains(&0)
+            && let Ok(upn) = std::str::from_utf8(upn)
+        {
+            out.upns.push(upn.to_owned());
+        }
+    }
+    Some(out)
+}
+
+pub(super) const OID_MS_SC_LOGON: &[u8] =
+    &[0x2b, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x14, 0x02, 0x02];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EkuCheck {
+    Accepted,
+    NoDigitalSignature,
+    Rejected,
+}
+
+const OID_KP_SERVER_AUTH: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01];
+
+// MIT: `crypto_check_cert_eku` (plugins/preauth/pkinit/pkinit_crypto_openssl.c:2498-2572)
+#[must_use]
+pub fn cert_eku(cert: &[u8], kdc: bool, accept_secondary: bool) -> EkuCheck {
+    let (main, secondary) = if kdc {
+        (OID_KP_KDC, OID_KP_SERVER_AUTH)
+    } else {
+        (OID_KP_CLIENT_AUTH, OID_MS_SC_LOGON)
+    };
+    if !(cert_has_eku(cert, main) || (accept_secondary && cert_has_eku(cert, secondary))) {
+        return EkuCheck::Rejected;
+    }
+    let Some(exts) = walk_tbs(cert).and_then(|w| w.extensions) else {
+        return EkuCheck::Rejected;
+    };
+    let mut usage = None;
+    each_ext(exts, |oid, val| {
+        if oid != OID_KU {
+            return false;
+        }
+        usage = Some(bitstring_has(val, 0));
+        true
+    });
+    match usage {
+        Some(true) => EkuCheck::Accepted,
+        Some(false) => EkuCheck::NoDigitalSignature,
+        None => EkuCheck::Rejected,
+    }
+}
+
+pub(super) struct TbsWalk<'a> {
+    pub(super) issuer: &'a [u8],
+    validity: &'a [u8],
+    pub(super) subject: &'a [u8],
+    pub(super) extensions: Option<&'a [u8]>,
+}
+
+pub(super) fn walk_tbs(cert: &[u8]) -> Option<TbsWalk<'_>> {
     let (t, body, _) = take_tlv(cert)?;
     if t != 0x30 {
         return None;
@@ -729,7 +1864,7 @@ fn walk_tbs(cert: &[u8]) -> Option<TbsWalk<'_>> {
     })
 }
 
-fn each_ext(extensions: &[u8], mut visit: impl FnMut(&[u8], &[u8]) -> bool) {
+pub(super) fn each_ext(extensions: &[u8], mut visit: impl FnMut(&[u8], &[u8]) -> bool) {
     let mut cur = extensions;
     while let Some((_, ext, rest)) = take_tlv(cur) {
         if let Some((t, oid, after)) = take_tlv(ext)
@@ -774,7 +1909,7 @@ fn cert_key_cert_sign_ok(cert: &[u8]) -> bool {
     !saw_ku || ok
 }
 
-fn bitstring_has(der: &[u8], bit: usize) -> bool {
+pub(super) fn bitstring_has(der: &[u8], bit: usize) -> bool {
     let Some((t, body, _)) = take_tlv(der) else {
         return false;
     };
@@ -867,10 +2002,14 @@ fn cert_pkinit_san(cert: &[u8]) -> Option<(String, Vec<String>)> {
     out
 }
 
-/// MIT `pkinit_krb5_principal_name_data` (`asn1_k_encode.c:1360-1364`): KRB5PrincipalName is a
+// MIT: `pkinit_krb5_principal_name_data` (asn1_k_encode.c:1360-1364)
+// KRB5PrincipalName is a
 /// SEQUENCE of `realm [0]` and `principalName [1]`, not RFC 4120's PrincipalName.
-/// A realm that is not a string, or a name that is not the principal-name tag, is not a principal.
 fn parse_krb5_principal_name(der: &[u8]) -> Option<(String, Vec<String>)> {
+    parse_krb5_principal_name_typed(der).map(|(realm, _, parts)| (realm, parts))
+}
+
+fn parse_krb5_principal_name_typed(der: &[u8]) -> Option<(String, i32, Vec<String>)> {
     let seq = if der.first() == Some(&0x30) {
         take_tlv(der)?.1
     } else {
@@ -896,7 +2035,17 @@ fn parse_krb5_principal_name(der: &[u8]) -> Option<(String, Vec<String>)> {
     };
     let mut cur = pname_seq;
     let mut parts = Vec::new();
+    let mut name_type = 0;
     while let Some((t, inner, rest)) = take_tlv(cur) {
+        if t == 0xa0
+            && let Some((0x02, n, _)) = take_tlv(inner)
+            && (1..=4).contains(&n.len())
+        {
+            let fill = if n[0] & 0x80 == 0 { 0 } else { 0xff };
+            let mut be = [fill; 4];
+            be[4 - n.len()..].copy_from_slice(n);
+            name_type = i32::from_be_bytes(be);
+        }
         if t == 0xa1 {
             let names = if inner.first() == Some(&0x30) {
                 take_tlv(inner)?.1
@@ -919,7 +2068,7 @@ fn parse_krb5_principal_name(der: &[u8]) -> Option<(String, Vec<String>)> {
             break;
         }
     }
-    Some((realm, parts))
+    Some((realm, name_type, parts))
 }
 
 fn cert_basic_constraints_ca(cert: &[u8]) -> bool {
@@ -992,16 +2141,16 @@ struct CmsParts {
     e_content_type: Vec<u8>,
 }
 
-/// MIT `cms_signeddata_verify` (`pkinit_crypto_openssl.c:2022-2028`): MIT refuses a message whose
-/// ContentInfo type is not id-signedData ("wrong oid"); this port does not check that type and
-/// reads the `[0]` content as SignedData whatever the OID.
-/// Content that does not parse as SignedData is an error.
 fn cms_parts(der: &[u8]) -> Result<CmsParts, &'static str> {
     let (tag, ci, _) = take_tlv(der).ok_or("cms")?;
     if tag != 0x30 {
         return Err("cms");
     }
-    let (_, _oid, rest) = take_tlv(ci).ok_or("cms oid")?;
+    // Only id-signedData, as MIT.
+    let (tag, oid, rest) = take_tlv(ci).ok_or("cms oid")?;
+    if tag != 0x06 || oid != OID_SIGNED_DATA {
+        return Err("cms content-type");
+    }
     let (t, sd_wrap, _) = take_tlv(rest).ok_or("cms sd")?;
     if t != 0xa0 {
         return Err("cms sd tag");
@@ -1010,7 +2159,6 @@ fn cms_parts(der: &[u8]) -> Result<CmsParts, &'static str> {
     if t != 0x30 {
         return Err("cms sd seq");
     }
-    // version, digestAlgs, encap, [0] certs, signerInfos
     let mut cur = sd;
     let _ = take_tlv(cur).ok_or("ver")?;
     cur = take_tlv(cur).ok_or("ver")?.2;
@@ -1037,7 +2185,6 @@ fn cms_parts(der: &[u8]) -> Result<CmsParts, &'static str> {
     if t != 0xa0 {
         return Err("certs tag");
     }
-    // IMPLICIT SET OF Certificate: body is the Certificate SEQUENCE
     let cert = if cert_set.first() == Some(&0x30) {
         let (tt, body, _) = take_tlv(cert_set).ok_or("cert")?;
         tlv(tt, body)
@@ -1052,7 +2199,6 @@ fn cms_parts(der: &[u8]) -> Result<CmsParts, &'static str> {
     if t != 0x30 {
         return Err("signer seq");
     }
-    // version, sid, digestAlg, sigAlg, signature OCTET STRING
     let mut s = signer;
     s = take_tlv(s).ok_or("sver")?.2;
     s = take_tlv(s).ok_or("sid")?.2;
@@ -1078,6 +2224,7 @@ fn cms_parts(der: &[u8]) -> Result<CmsParts, &'static str> {
     })
 }
 
+#[cfg(any(test, feature = "test-ca"))]
 pub(super) fn pem(kind: &str, der: &[u8]) -> String {
     let b = base64(der);
     let mut out = format!("-----BEGIN {kind}-----\n");
@@ -1091,6 +2238,7 @@ pub(super) fn pem(kind: &str, der: &[u8]) -> String {
     out
 }
 
+#[cfg(any(test, feature = "test-ca"))]
 fn base64(data: &[u8]) -> String {
     const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::new();

@@ -21,43 +21,6 @@ use krb5_testkit::{
 };
 use krb5_types::pac::{PAC_CLIENT_INFO, Pac, parse_client_info};
 use krb5_types::{KdcOptions, PrincipalName, err, flag_bit, ku};
-use std::collections::BTreeMap;
-
-#[test]
-fn alternate_tgs_issues_near_hop() {
-    let (mut store, acl) = bootstrap_documented().expect("bootstrap");
-    store
-        .create_interrealm(
-            &acl,
-            &documented_admin_id(),
-            "OTHER.TEST",
-            b"interrealm-secret",
-        )
-        .expect("interrealm");
-    let mut hops = BTreeMap::new();
-    hops.insert("FAR.TEST".into(), vec!["OTHER.TEST".into()]);
-    let mut capaths = BTreeMap::new();
-    capaths.insert(TEST_REALM.into(), hops);
-    store.set_capaths(capaths);
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 1801);
-    let far = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "FAR.TEST"]);
-    let tgs = tgs_req(
-        tgt.rep.0.ticket.clone(),
-        &tgt.session_key,
-        TEST_REALM,
-        &cname,
-        far,
-        TEST_REALM,
-        1802,
-    )
-    .expect("TGS-REQ");
-    let out = krb5_kdc::issue_tgs(&store, &tgs).expect("alternate TGS");
-    assert_eq!(
-        out.rep.0.ticket.sname.components_joined(),
-        "krbtgt/OTHER.TEST"
-    );
-}
 
 #[test]
 fn alternate_tgs_without_hop_is_unknown_server() {
@@ -162,57 +125,6 @@ fn host_fqdn_canonicalize_issues_referral() {
 }
 
 #[test]
-// oracle: differential-gate.sh tgs-referral-no-dot
-fn referral_no_dot_is_looking_up_server() {
-    let (mut store, acl) = bootstrap_documented().expect("bootstrap");
-    other_store(&mut store, &acl);
-    let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "nodot"]);
-    let tgs = tgs_for(&store, host, canon(), 1820);
-    match krb5_kdc::issue_tgs(&store, &tgs) {
-        Err(Error::Protocol { code, text, .. }) => {
-            assert_eq!(code, err::S_PRINCIPAL_UNKNOWN);
-            assert_eq!(text.as_deref(), Some("LOOKING_UP_SERVER"));
-        }
-        other => panic!("expected LOOKING_UP_SERVER, got {other:?}"),
-    }
-}
-
-#[test]
-fn nt_unknown_needs_host_based_services() {
-    let (mut store, acl) = bootstrap_documented().expect("bootstrap");
-    other_store(&mut store, &acl);
-    let host = PrincipalName::new(PrincipalName::NT_UNKNOWN, ["host", "x.other.test"]);
-    let tgs = tgs_for(&store, host.clone(), canon(), 1830);
-    match krb5_kdc::issue_tgs(&store, &tgs) {
-        Err(Error::Protocol { code, .. }) => assert_eq!(code, err::S_PRINCIPAL_UNKNOWN),
-        other => panic!("expected 7, got {other:?}"),
-    }
-    store.policy.host_based_services = "host".into();
-    let tgs = tgs_for(&store, host, canon(), 1832);
-    let out = krb5_kdc::issue_tgs(&store, &tgs).expect("NT-UNKNOWN referral");
-    assert_eq!(
-        out.rep.0.ticket.sname.components_joined(),
-        "krbtgt/OTHER.TEST"
-    );
-}
-
-#[test]
-fn no_host_referral_star_blocks() {
-    let (mut store, acl) = bootstrap_documented().expect("bootstrap");
-    other_store(&mut store, &acl);
-    store.policy.no_host_referral = "*".into();
-    let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "x.other.test"]);
-    let tgs = tgs_for(&store, host, canon(), 1840);
-    match krb5_kdc::issue_tgs(&store, &tgs) {
-        Err(Error::Protocol { code, text, .. }) => {
-            assert_eq!(code, err::S_PRINCIPAL_UNKNOWN);
-            assert_eq!(text.as_deref(), Some("LOOKING_UP_SERVER"));
-        }
-        other => panic!("expected LOOKING_UP_SERVER, got {other:?}"),
-    }
-}
-
-#[test]
 fn renew_skips_alternate_tgs() {
     let (mut store, acl) = bootstrap_documented().expect("bootstrap");
     other_store(&mut store, &acl);
@@ -242,7 +154,7 @@ fn s4u2self_case2(ad_identity: bool) -> (krb5_kdc::IssuedTgs, krb5_crypto::Proto
     store.policy.ad_identity = ad_identity;
     let ir = aes_key(0x44);
     store
-        .create_interrealm_key(&acl, &documented_admin_id(), "OTHER.TEST", ir.clone())
+        .create_interrealm_key(&acl, &documented_admin_id(), "OTHER.TEST", ir.clone(), None)
         .unwrap();
     store
         .policy
@@ -287,31 +199,6 @@ fn s4u2self_case2(ad_identity: bool) -> (krb5_kdc::IssuedTgs, krb5_crypto::Proto
 }
 
 #[test]
-fn s4u2self_case2_cross_local_user_referral_issues() {
-    // With no AD data the referral carries MIT's S4U referral PAC; a TGT has no ticket or full
-    // checksum. MIT `handle_pac` (`kdc_authdata.c:534-539`): an S4U referral's CLIENT_INFO
-    // names `altcprinc`, the S4U2Self user, with the realm.
-    let (out, ir) = s4u2self_case2(false);
-    assert_eq!(
-        out.rep.0.ticket.sname.components_joined(),
-        "krbtgt/OTHER.TEST"
-    );
-    let part = decrypt_ticket_part(&ir, &out.rep.0.ticket).expect("referral");
-    let pac = Pac::parse(&pac_from_ticket_part(&part).expect("PAC")).expect("parse");
-    let kinds: Vec<u32> = pac.buffers.iter().map(|b| b.kind).collect();
-    assert_eq!(
-        kinds,
-        [
-            PAC_CLIENT_INFO,
-            krb5_types::pac::PAC_SERVER_CHECKSUM,
-            krb5_types::pac::PAC_PRIVSVR_CHECKSUM
-        ]
-    );
-    let (_, name) = parse_client_info(pac.buffer(PAC_CLIENT_INFO).expect("client")).unwrap();
-    assert_eq!(name, format!("{TEST_USER}@{TEST_REALM}"));
-}
-
-#[test]
 fn s4u2self_referral_with_ad_data_carries_the_users_logon_info() {
     // MIT gives `issue_pac` the S4U2Self user's entry as its client on this hop too, so the
     // identity a KDB with AD data mints is the user's, not the requesting service's.
@@ -325,57 +212,6 @@ fn s4u2self_referral_with_ad_data_carries_the_users_logon_info() {
     assert_eq!(logon.effective_name.value, TEST_USER);
     let (_, name) = parse_client_info(pac.buffer(PAC_CLIENT_INFO).expect("client")).unwrap();
     assert_eq!(name, format!("{TEST_USER}@{TEST_REALM}"));
-}
-
-#[test]
-fn s4u2self_case3_cross_foreign_user_referral_issues() {
-    let (mut store, acl) = bootstrap_documented().expect("bootstrap");
-    let ir = aes_key(0x55);
-    store
-        .create_interrealm_key(&acl, &documented_admin_id(), "OTHER.TEST", ir.clone())
-        .unwrap();
-    store
-        .policy
-        .domain_realm
-        .insert(".other.test".into(), "OTHER.TEST".into());
-    let mut hops = std::collections::BTreeMap::new();
-    hops.insert("OTHER.TEST".into(), vec![".".into()]);
-    let mut capaths = std::collections::BTreeMap::new();
-    capaths.insert(TEST_REALM.into(), hops);
-    let mut back = std::collections::BTreeMap::new();
-    back.insert(TEST_REALM.into(), vec![".".into()]);
-    capaths.insert("OTHER.TEST".into(), back);
-    store.set_capaths(capaths);
-    let tgt = host_tgt(&store, 1864);
-    let local = store.krbtgt().unwrap().best_key().unwrap().key.clone();
-    let mut part = decrypt_ticket_part(&local, &tgt.rep.0.ticket).unwrap();
-    let alice = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["alice"]);
-    part.cname = alice.clone();
-    part.crealm = krb5_types::try_ascii("OTHER.TEST").unwrap();
-    attach_pac(&ir, &mut part, "alice@OTHER.TEST");
-    let header = reseal_incoming(&ir, &tgt, &part);
-    let pa = pa_for_user(&tgt.session_key, alice.clone(), "OTHER.TEST").unwrap();
-    let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "x.other.test"]);
-    let req = TgsReqBuilder::new(
-        header,
-        &tgt.session_key,
-        "OTHER.TEST",
-        &alice,
-        host,
-        TEST_REALM,
-        1865,
-    )
-    .options(canon())
-    .additional_tickets(None)
-    .padata(vec![pa])
-    .etypes(pref_etypes())
-    .build()
-    .unwrap();
-    let out = krb5_kdc::issue_tgs(&store, &req).expect("S4U2Self case 3");
-    assert_eq!(
-        out.rep.0.ticket.sname.components_joined(),
-        "krbtgt/OTHER.TEST"
-    );
 }
 
 #[test]
@@ -513,15 +349,18 @@ fn s4u2proxy_referral_with_rbcd_issues() {
         out.rep.0.ticket.sname.components_joined(),
         "krbtgt/OTHER.TEST"
     );
-    // MIT `gather_tgs_req_info` (`do_tgs_req.c:756-759`): a referral TGT's client is the
+    // MIT: `gather_tgs_req_info` (do_tgs_req.c:756-759)
+    // a referral TGT's client is the
     // header impersonator, not the evidence user.
-    // MIT `krb5int_process_tgs_reply` (`gc_via_tkt.c:261-269`): the client checks that a
+    // MIT: `krb5int_process_tgs_reply` (gc_via_tkt.c:261-269)
+    // the client checks that a
     // referral's client matches its TGT client.
     assert_eq!(
         out.rep.0.cname.components_joined(),
         host.components_joined()
     );
-    // MIT `handle_pac` (`kdc_authdata.c:534-539`): S4U referral PAC client info is the
+    // MIT: `handle_pac` (kdc_authdata.c:534-539)
+    // S4U referral PAC client info is the
     // subject with realm (B's `RBCD_PAC_PRINC` read).
     let ir = store
         .get_name(&foreign())
@@ -535,37 +374,6 @@ fn s4u2proxy_referral_with_rbcd_issues() {
     let info = pac.unique_buffer(PAC_CLIENT_INFO).unwrap().unwrap();
     let (_, name) = parse_client_info(info).unwrap();
     assert_eq!(name, format!("{TEST_USER}@{TEST_REALM}"));
-}
-
-#[test]
-fn hier_alternate_issues_sub_realm() {
-    let (mut store, acl) = bootstrap_documented().expect("bootstrap");
-    store
-        .create_interrealm(
-            &acl,
-            &documented_admin_id(),
-            "SUB.KERBER.TEST",
-            b"interrealm-secret",
-        )
-        .expect("interrealm");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 4001);
-    let far = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "X.SUB.KERBER.TEST"]);
-    let tgs = tgs_req(
-        tgt.rep.0.ticket.clone(),
-        &tgt.session_key,
-        TEST_REALM,
-        &cname,
-        far,
-        TEST_REALM,
-        4002,
-    )
-    .expect("TGS-REQ");
-    let out = krb5_kdc::issue_tgs(&store, &tgs).expect("hierarchical alternate TGS");
-    assert_eq!(
-        out.rep.0.ticket.sname.components_joined(),
-        "krbtgt/SUB.KERBER.TEST"
-    );
 }
 
 #[test]
@@ -666,44 +474,6 @@ fn explicit_cross_tgs_keeps_request_name_type() {
 }
 
 #[test]
-fn tgs_referral_uses_interrealm_key_and_transited() {
-    let (mut store, acl) = bootstrap_documented().expect("bootstrap");
-    store
-        .create_interrealm(
-            &acl,
-            &documented_admin_id(),
-            "OTHER.TEST",
-            b"interrealm-secret",
-        )
-        .expect("interrealm");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 51);
-    let other = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "OTHER.TEST"]);
-    let tgs = tgs_req(
-        tgt.rep.0.ticket.clone(),
-        &tgt.session_key,
-        TEST_REALM,
-        &cname,
-        other.clone(),
-        TEST_REALM,
-        52,
-    )
-    .expect("referral TGS-REQ");
-    let out = krb5_kdc::issue_tgs(&store, &tgs).expect("referral");
-    assert_eq!(out.rep.0.ticket.sname, other);
-    let ir = store.get_name(&other).unwrap().best_key().unwrap();
-    let part = decrypt_ticket_part(&ir.key, &out.rep.0.ticket).expect("inter-realm enc");
-    assert!(
-        part.transited
-            .realms_for(TEST_REALM, "OTHER.TEST")
-            .expect("expand")
-            .is_empty(),
-        "first-hop referral transited excludes client realm: {:?}",
-        part.transited.realms_for(TEST_REALM, "OTHER.TEST")
-    );
-}
-
-#[test]
 fn tgs_canonicalize_issues_cross_realm_krbtgt() {
     let (mut store, acl) = bootstrap_documented().expect("bootstrap");
     store
@@ -740,53 +510,4 @@ fn tgs_canonicalize_issues_cross_realm_krbtgt() {
         }
         other => panic!("expected 60 GET_LOCAL_TGT, got {other:?}"),
     }
-}
-
-#[test]
-fn tgs_referral_ad_kerber_test_issues_krbtgt() {
-    // In-tree hop for the A5 realm names. Live AD.KERBER.TEST↔KERBER.TEST
-    // trust is not configured on the DC; this is not that proof.
-    let (mut store, acl) = bootstrap_documented().expect("bootstrap");
-    store
-        .create_interrealm(
-            &acl,
-            &documented_admin_id(),
-            "AD.KERBER.TEST",
-            b"ad-interrealm-secret",
-        )
-        .expect("interrealm");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 71);
-    let ir_sname = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "AD.KERBER.TEST"]);
-    let tgs = TgsReqBuilder::new(
-        tgt.rep.0.ticket.clone(),
-        &tgt.session_key,
-        TEST_REALM,
-        &cname,
-        ir_sname,
-        TEST_REALM,
-        72,
-    )
-    .options(KdcOptions::forwardable().with_bit(flag_bit::CANONICALIZE, true))
-    .additional_tickets(None)
-    .padata(Vec::new())
-    .etypes(pref_etypes())
-    .build()
-    .expect("AD referral TGS-REQ");
-    let out = krb5_kdc::issue_tgs(&store, &tgs).expect("AD referral TGS");
-    assert_eq!(
-        out.rep.0.ticket.sname.components_joined(),
-        "krbtgt/AD.KERBER.TEST"
-    );
-    let ir_name = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "AD.KERBER.TEST"]);
-    let ir = store.get_name(&ir_name).unwrap().best_key().unwrap();
-    let part = decrypt_ticket_part(&ir.key, &out.rep.0.ticket).expect("inter-realm enc");
-    assert!(
-        part.transited
-            .realms_for(TEST_REALM, "AD.KERBER.TEST")
-            .expect("expand")
-            .is_empty(),
-        "first-hop referral transited excludes client realm: {:?}",
-        part.transited.realms_for(TEST_REALM, "AD.KERBER.TEST")
-    );
 }

@@ -1,6 +1,4 @@
-//! GET_PRINCS glob filtering like MIT `svr_iters.c glob_to_regexp` + `regexec`:
-//! `*1` matches a1/a11/xa1 but not a10, as MIT 1.22.2 does in a live settle
-//! (`docs/testing.md` lists the settles unit tests pin).
+//! GET_PRINCS glob filtering like MIT `svr_iters.c glob_to_regexp` + `regexec`: `*1` matches a1/a11/xa1 but not a10, as MIT 1.22.2 does in a live settle (`docs/testing.md` lists the settles unit tests pin).
 
 #[path = "common/mod.rs"]
 mod common;

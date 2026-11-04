@@ -1,8 +1,4 @@
-//! MIT `log_tgs_req` / `log_as_req` status words (`do_as_req.c`,
-//! `do_tgs_req.c`, `tgs_policy.c`, `kdc_util.c`). These are the KRB-ERROR
-//! `e_text` values; `k5_setmsg` strings stay in `Error::Protocol.detail`.
-
-#![allow(dead_code)]
+//! e_text; detail is off the wire.
 
 pub(crate) const ADD_TO_TRANSITED_LIST: &str = "ADD_TO_TRANSITED_LIST";
 pub(crate) const ANONYMOUS_NOT_ALLOWED: &str = "ANONYMOUS NOT ALLOWED";
@@ -15,8 +11,7 @@ pub(crate) const CANT_FIND_CLIENT_KEY: &str = "CANT_FIND_CLIENT_KEY";
 pub(crate) const CLIENT_EXPIRED: &str = "CLIENT EXPIRED";
 pub(crate) const CLIENT_KEY_EXPIRED: &str = "CLIENT KEY EXPIRED";
 pub(crate) const CLIENT_LOCKED_OUT: &str = "CLIENT LOCKED OUT";
-/// MIT `krb5_db2_check_policy_as` (`plugins/kdb/db2/kdb_db2.c:1539-1550`): the failcount
-/// lockout's status, set by the DB module (lmdb and ldap set the same).
+// MIT: `krb5_db2_check_policy_as` (plugins/kdb/db2/kdb_db2.c:1539-1550)
 pub(crate) const LOCKED_OUT: &str = "LOCKED_OUT";
 pub(crate) const CLIENT_NOT_FOUND: &str = "CLIENT_NOT_FOUND";
 pub(crate) const EVIDENCE_TICKET_MISMATCH: &str = "EVIDENCE_TICKET_MISMATCH";
@@ -28,9 +23,10 @@ pub(crate) const GET_LOCAL_TGT: &str = "GET_LOCAL_TGT";
 pub(crate) const HIGHER_AUTHENTICATION_REQUIRED: &str = "HIGHER_AUTHENTICATION_REQUIRED";
 pub(crate) const HEADER_PAC: &str = "HEADER_PAC";
 pub(crate) const HANDLE_AUTHDATA: &str = "HANDLE_AUTHDATA";
-/// MIT `finish_process_as_req` (`kdc/do_as_req.c:316-322`): the status of a `return_enc_padata` failure.
-/// MIT `tgs_issue_ticket` (`kdc/do_tgs_req.c:1098-1105`): the same status for a TGS.
+// MIT: `finish_process_as_req` (kdc/do_as_req.c:316-322)
+// MIT: `tgs_issue_ticket` (kdc/do_tgs_req.c:1098-1105)
 pub(crate) const KDC_RETURN_ENC_PADATA: &str = "KDC_RETURN_ENC_PADATA";
+pub(crate) const KDC_RETURN_PADATA: &str = "KDC_RETURN_PADATA";
 pub(crate) const INVALID_AS_OPTIONS: &str = "INVALID AS OPTIONS";
 pub(crate) const INVALID_LINEAGE: &str = "INVALID LINEAGE";
 pub(crate) const INVALID_S4U2PROXY_OPTIONS: &str = "INVALID_S4U2PROXY_OPTIONS";
@@ -44,6 +40,7 @@ pub(crate) const DECODE_PA_FOR_USER: &str = "DECODE_PA_FOR_USER";
 pub(crate) const DECODE_PA_S4U_X509_USER: &str = "DECODE_PA_S4U_X509_USER";
 pub(crate) const LOOKING_UP_S4U2SELF_PRINCIPAL: &str = "LOOKING_UP_S4U2SELF_PRINCIPAL";
 pub(crate) const LOOKING_UP_CLIENT: &str = "LOOKING_UP_CLIENT";
+#[cfg(any(test, feature = "test-hooks"))]
 pub(crate) const LOCAL_POLICY: &str = "LOCAL_POLICY";
 pub(crate) const LOOKING_UP_SERVER: &str = "LOOKING_UP_SERVER";
 pub(crate) const NEEDED_HW_PREAUTH: &str = "NEEDED_HW_PREAUTH";
@@ -63,10 +60,6 @@ pub(crate) const NULL_SERVER: &str = "NULL_SERVER";
 pub(crate) const POSTDATE_NOT_ALLOWED: &str = "POSTDATE NOT ALLOWED";
 pub(crate) const PREAUTH_FAILED: &str = "PREAUTH_FAILED";
 pub(crate) const PROCESS_TGS: &str = "PROCESS_TGS";
-/// MIT `process_as_req` (`do_as_req.c:747-751`): the status of a `kdc_fast_read_cookie`
-/// failure. Rust's `open_cookie` ignores bad cookies like MIT's `return 0` path, so this
-/// word is never emitted.
-pub(crate) const READ_COOKIE: &str = "READ_COOKIE";
 pub(crate) const RENEW_SERVER_MISMATCH: &str = "SERVER DIDN'T MATCH TICKET FOR RENEW/FORWARD/ETC";
 pub(crate) const REQUIRED_PWCHANGE: &str = "REQUIRED PWCHANGE";
 pub(crate) const RBCD_PAC_PRINC: &str = "RBCD_PAC_PRINC";

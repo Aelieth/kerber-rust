@@ -900,5 +900,177 @@ if rust_local 'getprinc z72ksbad' 2>&1 | grep -q '^Principal: z72ksbad@'; then
     exit 1
 fi
 
+echo "==== realm value kadmin.local cannot convert ===="
+# The profile is the stock kdc.conf plus one realm line, so the database
+# path stays. A value kadm5 cannot convert is refused before the verb.
+MISS='kadmin.local: Required parameters in kdc.conf missing while initializing kadmin.local interface'
+kadm_realm_line() {
+    docker exec "$NAME" python3 -c '
+import pathlib, sys
+dest, line = sys.argv[1], sys.argv[2]
+src = pathlib.Path("/etc/krb5kdc/kdc.conf").read_text().splitlines(True)
+out, done = [], False
+for ln in src:
+    if not done and ln.strip() == "}":
+        out.append("        " + line + "\n")
+        done = True
+    out.append(ln)
+if not done:
+    raise SystemExit("realm close not found")
+pathlib.Path(dest).write_text("".join(out))
+' "$1" "$2"
+}
+kadm_q() {
+    local prof=$1 leg=$2 q=$3 out rc=0
+    if [ "$leg" = rust ]; then
+        out="$(rust_kadmin_local \
+            -e KRB5_KDC_DB=/tmp/principal \
+            -e KRB5_KDC_STASH=/tmp/stash \
+            -e KRB5_KDC_PROFILE="$prof" \
+            "$NAME" -- -q "$q" 2>&1)" || rc=$?
+    else
+        out="$(mit_kadmin_local -e KRB5_KDC_PROFILE="$prof" \
+            "$NAME" -- -q "$q" 2>&1)" || rc=$?
+    fi
+    KADM_OUT="$(printf '%s\n' "$out" | sed -z \
+        -e 's/Authenticating as principal [^\n]*with password\.\n//g' \
+        -e 's/[^\n]*No dictionary file specified[^\n]*\n//g')"
+    KADM_RC=$rc
+}
+kadm_bad=(
+    'default_principal_expiration = garbage'
+    'default_principal_expiration = 19000102030405'
+    'default_principal_flags = +preauth,+bogus'
+    'master_key_type = bogus-enctype'
+    'supported_enctypes = bogus:normal'
+    'supported_enctypes = aes256-cts:bogussalt'
+)
+kadm_good=(
+    'max_life = 10h'
+    'default_principal_expiration = 20991231235959'
+    'default_principal_flags = +preauth, -allow-tix'
+    'master_key_type = aes256-cts'
+    'supported_enctypes = aes256-cts:normal aes128-cts.special'
+)
+kadm_i=0
+for kadm_line in "${kadm_bad[@]}"; do
+    kadm_i=$((kadm_i + 1))
+    echo "bad $kadm_i: $kadm_line"
+    kadm_realm_line "/tmp/kadm-bad-$kadm_i.conf" "$kadm_line"
+    kadm_q "/tmp/kadm-bad-$kadm_i.conf" rust 'getprinc K/M'
+    kadm_rr=$KADM_RC
+    kadm_ro=$KADM_OUT
+    echo "$kadm_ro"
+    echo "rust rc=$kadm_rr"
+    kadm_q "/tmp/kadm-bad-$kadm_i.conf" mit 'getprinc K/M'
+    kadm_mr=$KADM_RC
+    kadm_mo=$KADM_OUT
+    echo "$kadm_mo"
+    echo "mit rc=$kadm_mr"
+    dl "bad-$kadm_i" "$kadm_ro" "$kadm_mo"
+    [ "$kadm_rr" = 1 ] && [ "$kadm_mr" = 1 ]
+    printf '%s\n' "$kadm_ro" | grep -Fx "$MISS"
+done
+kadm_i=0
+for kadm_line in "${kadm_good[@]}"; do
+    kadm_i=$((kadm_i + 1))
+    echo "good $kadm_i: $kadm_line"
+    kadm_realm_line "/tmp/kadm-good-$kadm_i.conf" "$kadm_line"
+    kadm_q "/tmp/kadm-good-$kadm_i.conf" rust 'getprinc K/M'
+    kadm_rr=$KADM_RC
+    kadm_ro=$KADM_OUT
+    echo "$kadm_ro"
+    echo "rust rc=$kadm_rr"
+    kadm_q "/tmp/kadm-good-$kadm_i.conf" mit 'getprinc K/M'
+    kadm_mr=$KADM_RC
+    kadm_mo=$KADM_OUT
+    echo "$kadm_mo"
+    echo "mit rc=$kadm_mr"
+    [ "$kadm_rr" = 0 ] && [ "$kadm_mr" = 0 ]
+    if printf '%s\n' "$kadm_ro$kadm_mo" | grep -F 'Required parameters in kdc.conf missing'; then
+        echo "valid realm line was refused: $kadm_line" >&2
+        exit 1
+    fi
+done
+
+echo "==== default_principal_flags cuts at the first comma ===="
+kadm_realm_line /tmp/kadm-flags-cut.conf 'default_principal_flags = +preauth +needchange,+allow-tix'
+kadm_q /tmp/kadm-flags-cut.conf rust 'getprinc K/M'
+kadm_rr=$KADM_RC
+kadm_ro=$KADM_OUT
+echo "$kadm_ro"
+echo "rust rc=$kadm_rr"
+kadm_q /tmp/kadm-flags-cut.conf mit 'getprinc K/M'
+kadm_mr=$KADM_RC
+kadm_mo=$KADM_OUT
+echo "$kadm_mo"
+echo "mit rc=$kadm_mr"
+dl flags-cut "$kadm_ro" "$kadm_mo"
+[ "$kadm_rr" = 1 ] && [ "$kadm_mr" = 1 ]
+printf '%s\n' "$kadm_ro" | grep -Fx "$MISS"
+kadm_realm_line /tmp/kadm-flags-ok.conf 'default_principal_flags = +preauth, -allow-tix'
+kadm_q /tmp/kadm-flags-ok.conf rust 'addprinc -randkey x'
+echo "$KADM_OUT"
+echo "rust rc=$KADM_RC"
+[ "$KADM_RC" = 0 ]
+printf '%s\n' "$KADM_OUT" | grep -F 'Principal "x@KERBER.TEST" created.'
+kadm_q /tmp/kadm-flags-ok.conf mit 'addprinc -randkey x'
+echo "$KADM_OUT"
+echo "mit rc=$KADM_RC"
+[ "$KADM_RC" = 0 ]
+printf '%s\n' "$KADM_OUT" | grep -F 'Principal "x@KERBER.TEST" created.'
+kadm_q /tmp/kadm-flags-ok.conf rust 'getprinc x'
+kadm_rattr="$(printf '%s\n' "$KADM_OUT" | grep '^Attributes:')"
+echo "rust $kadm_rattr"
+kadm_q /tmp/kadm-flags-ok.conf mit 'getprinc x'
+kadm_mattr="$(printf '%s\n' "$KADM_OUT" | grep '^Attributes:')"
+echo "mit $kadm_mattr"
+dl flags-attr "$kadm_rattr" "$kadm_mattr"
+printf '%s\n' "$kadm_rattr" | grep -F 'REQUIRES_PRE_AUTH'
+
+echo "==== omitted max_life is one day on kadmin.local ===="
+# An empty stanza names no database. MIT then opens its compiled default,
+# so that database is created first. The empty profile is what kadmin.local reads.
+docker exec "$NAME" python3 -c '
+import pathlib
+src = pathlib.Path("/etc/krb5kdc/kdc.conf").read_text().splitlines(True)
+out = [ln for ln in src if ln.split("=", 1)[0].strip() != "max_life"]
+pathlib.Path("/tmp/kadm-nolife.conf").write_text("".join(out))
+if any(ln.split("=", 1)[0].strip() == "max_life" for ln in out):
+    raise SystemExit("max_life remains")
+pathlib.Path("/tmp/kadm-defaultdb.conf").write_text(
+    "[realms]\n    KERBER.TEST = {\n"
+    "        database_name = /var/krb5kdc/principal\n"
+    "        key_stash_file = /var/krb5kdc/.k5.KERBER.TEST\n"
+    "    }\n"
+)
+pathlib.Path("/tmp/kadm-empty.conf").write_text("[realms]\n    KERBER.TEST = {\n    }\n")
+'
+docker exec "$NAME" mkdir -p /var/krb5kdc
+docker exec -e KRB5_KDC_PROFILE=/tmp/kadm-defaultdb.conf "$NAME" \
+    kdb5_util create -s -P masterpassword
+kadm_life() {
+    local prof=$1 princ=$2 life
+    kadm_q "$prof" rust "addprinc -randkey $princ"
+    echo "$KADM_OUT"
+    [ "$KADM_RC" = 0 ]
+    printf '%s\n' "$KADM_OUT" | grep -F "Principal \"$princ@KERBER.TEST\" created."
+    kadm_q "$prof" mit "addprinc -randkey $princ"
+    echo "$KADM_OUT"
+    [ "$KADM_RC" = 0 ]
+    printf '%s\n' "$KADM_OUT" | grep -F "Principal \"$princ@KERBER.TEST\" created."
+    kadm_q "$prof" rust "getprinc $princ"
+    life="$(printf '%s\n' "$KADM_OUT" | grep '^Maximum ticket life:')"
+    echo "rust $life"
+    kadm_ro=$life
+    kadm_q "$prof" mit "getprinc $princ"
+    life="$(printf '%s\n' "$KADM_OUT" | grep '^Maximum ticket life:')"
+    echo "mit $life"
+    dl "life-$princ" "$kadm_ro" "$life"
+    printf '%s\n' "$life" | grep -Fx 'Maximum ticket life: 1 day 00:00:00'
+}
+kadm_life /tmp/kadm-nolife.conf z66
+kadm_life /tmp/kadm-empty.conf z66empty
+
 log "kadmin.local.gate" "ok" ',"principal":"extra2@KERBER.TEST,host/slashhost@KERBER.TEST,randsvc,ktone,kttwo,raceprinc,lockee,gldlock,krbtgt","verb":"alias+policy-order+glob"'
 exit 0

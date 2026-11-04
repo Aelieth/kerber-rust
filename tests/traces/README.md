@@ -28,13 +28,14 @@ AD keytabs, FILE ccaches, and pcaps live in operator-held `~/adlab/`
 | --- | --- | --- |
 | `mit-as-req.der` | `0x6a` | MIT 1.22.2 client AS-REQ (`kdc-gate.sh` capture of MIT bytes) |
 | `mit-as-req-preauth.der` | `0x6a` | MIT AS-REQ with PA-ENC-TIMESTAMP |
-| `mit-krb-error-preauth.der` | `0x7e` | PREAUTH_REQUIRED (Rust KDC reply to MIT; KRB-ERROR we emit). CA-enabled METHOD-DATA order `[136, 19, 16, 147, 151, 2, 133]` is an **in-code pin** in `as_pkinit.rs`, not a companion `.der`. |
+| `mit-krb-error-preauth.der` | `0x7e` | PREAUTH_REQUIRED (Rust KDC reply to MIT; KRB-ERROR we emit). CA-enabled METHOD-DATA order `[136, 19, 16, 147, 151, 2, 133]` is pinned in `scripts/differential-gate.sh`, not a companion `.der`. |
 | `mit-as-rep.der` | `0x6b` | MIT 1.22.2 KDC AS-REP (`client-gate.sh` `client-rep-*.der`) |
 | `mit-tgs-req.der` | `0x6c` | MIT TGS-REQ (FAST) |
 | `mit-tgs-rep.der` | `0x6d` | MIT 1.22.2 KDC TGS-REP (`client-gate.sh` `client-rep-*.der`) |
 | `pac-kbruser.ndr` | NDR | Windows Server 2022 `PAC_LOGON_INFO` for `kbruser` (identity bytes only; extracted from the captured `host/svc` ticket) |
 | `kdb/mit-dump-v7.txt` | dump | MIT 1.22.2 `kdb5_util dump` (default **version 7**) of `KERBER.TEST` (`user`/`pauser`/`host/testhost.kerber.test`; `nosvr` with `DISALLOW_SVR` and `hwuser` with `REQUIRES_HW_AUTH` regenerated through MIT `kadmin.local addprinc` + `kdb5_util dump` so their key blobs are principal-derived, not clones of `user`/`pwprau`; master password `masterpassword`). Keys are master-key-encrypted; the test-realm password is already public. |
 | `kdb/mit-dump-v6.txt` | dump | Same realm via `kdb5_util dump -r18` (**version 6**). Princ grammar matches v7. |
+| `kdb/mit-dump-v7-history.txt` | dump | MIT 1.22.2 `kdb5_util dump` after a password history. |
 | `kdb/getprinc-pauser.txt` | text | `kadmin.local getprinc pauser` at dump time. `Attributes: REQUIRES_PRE_AUTH` is dump field **128**, not `0x8`. |
 | `ccache-mit-addr-u2u.bin` | FILE v4 | MIT 1.22.2 `kinit -a` TGT (addresses) plus a MIT `krb5_cc_store_cred` user-to-user cred (`is_skey`, authdata, `second_ticket`) from `scripts/ccache-mit-addr-u2u.c`: MIT 1.22.2's writer and Debian's 1.20.1, which a plain `-lkrb5` build in the image loads, append the same bytes to the same cache. Identity: `FileCcache::parse` → `to_bytes`. Test-realm keys; password already public. |
 
@@ -42,4 +43,4 @@ Reply goldens must be MIT-KDC bytes from the Rust client socket
 (`client-rep-*.der`), not Rust-KDC socket dumps (`kdc-rep-*.der`).
 `scripts/client-gate.sh` / `scripts/kdc-gate.sh` write captures to
 `$KERBER_SCRATCH/traces` unless `KERBER_TRACE_DST` overrides. `kdc-gate.sh`
-still copies MIT *request* PDUs as `mit-*-req.der` when refreshing goldens.
+copies the KDC's captures (`kdc-req-*.der`, MIT's requests) out, and `promote-trace.sh` names the golden.

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.util
 import os
 import pathlib
 import subprocess
@@ -18,17 +17,6 @@ SCRIPTS = ROOT / "scripts"
 def _die(msg: str) -> None:
     print(f"ci-policy: {msg}", file=sys.stderr)
     raise SystemExit(1)
-
-
-def _hygiene_inventory():
-    spec = importlib.util.spec_from_file_location(
-        "hygiene_inventory", SCRIPTS / "lib" / "hygiene_inventory.py"
-    )
-    if spec is None or spec.loader is None:
-        _die("cannot load scripts/lib/hygiene_inventory.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
 
 
 def _scratch_root() -> pathlib.Path:

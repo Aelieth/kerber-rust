@@ -65,6 +65,33 @@ set -e
 echo "$OUT"
 test "$rc" -ne 0
 echo "$OUT" | grep -Eqi 'CLIENT_NOT_FOUND|C_PRINCIPAL_UNKNOWN|not found'
+echo "==== a realm GeneralString cannot hold: MIT kinit, then ours ===="
+# MIT keeps a realm as bytes and finds no KDC for it; ours refuses it where the name is parsed
+# (KRB5_PARSE_MALFORMED; stricter, mit-deviations.md), with no panic.
+docker exec "$NAME" sh -c 'printf "[libdefaults]\n    default_realm = RÉALM\n    dns_lookup_kdc = false\n    dns_lookup_realm = false\n" >/tmp/realm-mb.conf'
+realm_cell() {
+    local how=$1 mit_want=$2 rust_want=$3 out rc
+    shift 3
+    set +e
+    out="$(docker exec -e KRB5_CONFIG=/tmp/realm-mb.conf "$NAME" sh -c "echo pw | kinit $*" 2>&1)"
+    rc=$?
+    set -e
+    echo "mit $how: rc=$rc $out"
+    [ "$rc" = 1 ] && [ "$out" = "$mit_want" ] || die "MIT kinit $how: rc=$rc $out"
+    set +e
+    out="$(docker exec -e KRB5_CONFIG=/tmp/realm-mb.conf -e KRB5_PASSWORD=pw "$NAME" /tmp/krb5-kinit "$@" 2>&1)"
+    rc=$?
+    set -e
+    echo "rust $how: rc=$rc $out"
+    [ "$rc" = 1 ] && [ "$out" = "$rust_want" ] || die "our kinit $how: rc=$rc $out"
+}
+MIT_NOKDC='kinit: Cannot find KDC for realm "RÉALM" while getting initial credentials'
+realm_cell 'user@RÉALM' "$MIT_NOKDC" \
+    'krb5-kinit: Malformed representation of principal when parsing name user@RÉALM' user@RÉALM
+realm_cell 'user, default_realm RÉALM' "$MIT_NOKDC" \
+    'krb5-kinit: Malformed representation of principal when parsing name user' user
+realm_cell '-n, default_realm RÉALM' "$MIT_NOKDC" \
+    'krb5-kinit: Malformed representation of principal while getting initial credentials' -n
 if [ "${KERBER_LIVE:-}" != 1 ]; then
     docker rm -f "$NAME" >/dev/null 2>&1 || true
 fi

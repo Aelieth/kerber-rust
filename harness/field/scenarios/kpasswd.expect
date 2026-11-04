@@ -1,0 +1,13 @@
+# harness/field/scenarios/kpasswd.expect: where kpasswd.sh's rust leg is known to differ from its MIT leg, by check
+# name (the INFO observations of checks.tsv). The comparison of the two legs grades a listed check KNOWN; anything else
+# that differs is a finding. Each line names the hand record that shows the difference and what would remove it.
+# check	known difference (rust leg vs MIT)	record	removed by
+obs.KH.4.echo	MIT answers its own error frame with another (schpw.c process_chpw_request :84-136, :273-350); ours drops a frame whose AP-REQ is empty, a KRB-ERROR or an AP-REP	none yet: this scenario's first MIT leg	nothing: stricter by decision (docs/mit-deviations.md, kpasswd reply or error row)
+obs.KH.4.log	ours logs "Invalid message type - while dispatching (udp)" for the dropped echo; MIT answers it, so it logs nothing	none yet: this scenario's first MIT leg	nothing: as obs.KH.4.echo
+obs.KH.3.result	MIT lets kadmin/changepw (LOCKDOWN_KEYS) set its own password over 464 (misc.c schpw_util_wrapper :14-57 has no lockdown test); ours answers 5	none yet: this scenario's first MIT leg	nothing: stricter by decision (docs/mit-deviations.md, LOCKDOWN_KEYS row)
+obs.KH.3.text	as obs.KH.3.result: MIT's text is empty (success), ours "Unauthorized request"	none yet: this scenario's first MIT leg	nothing: as obs.KH.3.result
+obs.KH.3.kvno	as obs.KH.3.result: MIT's kvno goes up by one, ours stays	none yet: this scenario's first MIT leg	nothing: as obs.KH.3.result
+obs.KH.1.result	MIT lets admin/admin (kadm5.acl '*') set krbtgt's password over 464; ours answers 5	none yet: this scenario's first MIT leg	nothing: stricter by decision (docs/mit-deviations.md, LOCKDOWN_KEYS row)
+obs.KH.1.text	as obs.KH.1.result: MIT's text is empty (success), ours "Unauthorized request"	none yet: this scenario's first MIT leg	nothing: as obs.KH.1.result
+obs.KH.1.kvno	as obs.KH.1.result: MIT's kvno goes up by one, ours stays	none yet: this scenario's first MIT leg	nothing: as obs.KH.1.result
+obs.KH.1.log	as obs.KH.1.result: MIT logs "success", ours "Operation requires ``change-password'' privilege"	none yet: this scenario's first MIT leg	nothing: as obs.KH.1.result

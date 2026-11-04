@@ -18,16 +18,14 @@ fn challenge(factor_types: &[i32]) -> SpakeChallenge {
 
 #[test]
 fn sf_none_present_is_answerable() {
-    // MIT contains_sf_none returns TRUE, so the client proceeds.
     assert!(spake_contains_sf_none(&challenge(&[SF_NONE])));
-    // ... even when other factor types sit alongside it.
     assert!(spake_contains_sf_none(&challenge(&[7, SF_NONE, 9])));
 }
 
 #[test]
 fn no_sf_none_is_refused() {
-    // MIT `process_challenge` (`spake_client.c:221-221`): returns KRB5KDC_ERR_PREAUTH_FAILED: a
-    // factor list without SF-NONE (or an empty one) offers nothing we can answer.
+    // MIT: `process_challenge` (spake_client.c:221-221)
+    // Returns KRB5KDC_ERR_PREAUTH_FAILED: no SF-NONE, or an empty list, offers nothing answerable.
     assert!(!spake_contains_sf_none(&challenge(&[])));
     assert!(!spake_contains_sf_none(&challenge(&[2, 7])));
 }

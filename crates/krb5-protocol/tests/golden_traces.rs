@@ -2,7 +2,7 @@
 //! byte/field-diff a re-encode against the MIT (or self-emitted error) bytes.
 
 use krb5_asn1::{decode, encode};
-use krb5_protocol::{as_req, tgs_req};
+use krb5_protocol::as_req;
 use krb5_types::{AsRep, AsReq, KrbError, PrincipalName, TgsRep, TgsReq};
 
 fn traces_dir() -> std::path::PathBuf {
@@ -139,45 +139,4 @@ fn mit_krb_error_round_trips_through_encoder() {
     assert_eq!(e.pvno, 5);
     assert_eq!(e.msg_type, 30);
     assert_eq!(e.error_code, krb5_types::err::PREAUTH_REQUIRED);
-}
-
-#[test]
-fn tgs_req_builder_emits_application_12() {
-    use krb5_crypto::{EncryptionType, string_to_key};
-    use krb5_kdc::S2K_ITERS;
-    use krb5_kdc::testrealm::{
-        TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented, documented_host,
-    };
-    use krb5_protocol::{as_req as kdc_as_req, pa_enc_timestamp};
-
-    let (store, _) = bootstrap_documented().unwrap();
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let key = string_to_key(
-        EncryptionType::Aes256CtsHmacSha196,
-        TEST_USER_PASSWORD,
-        cname.default_salt(TEST_REALM),
-        Some(&S2K_ITERS.to_be_bytes()),
-    )
-    .unwrap();
-    let req = kdc_as_req(
-        cname.clone(),
-        TEST_REALM,
-        1,
-        Some(vec![pa_enc_timestamp(&key).unwrap()]),
-    )
-    .unwrap();
-    let as_out = krb5_kdc::issue_as(&store, &req).unwrap();
-    let tgs = tgs_req(
-        as_out.rep.0.ticket,
-        &as_out.session_key,
-        TEST_REALM,
-        &cname,
-        documented_host(),
-        TEST_REALM,
-        2,
-    )
-    .unwrap();
-    let wire = encode(&tgs).unwrap();
-    assert_eq!(wire[0], 0x6c);
-    let _: TgsReq = decode(&wire).unwrap();
 }

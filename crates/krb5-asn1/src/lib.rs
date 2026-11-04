@@ -1,32 +1,3 @@
-//! DER encode/decode for RFC 4120 core types.
-//!
-//! Encoding and decoding go through [`rasn`]'s DER codec. Truncated or
-//! malformed encodings return [`Error`]; they never panic.
-//!
-//! # Examples
-//!
-//! A principal encodes and decodes as the same value:
-//!
-//! ```
-//! use krb5_asn1::{decode, encode, PrincipalName};
-//! let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
-//! let bytes = encode(&name)?;
-//! let back: PrincipalName = decode(&bytes)?;
-//! assert_eq!(back, name);
-//! Ok::<(), krb5_asn1::Error>(())
-//! ```
-//!
-//! A `KerberosTime` survives a DER round-trip:
-//!
-//! ```
-//! use krb5_asn1::{decode, encode, KerberosTime};
-//! let t = KerberosTime::from_unix_seconds(1_500_000_000);
-//! let bytes = encode(&t)?;
-//! let back: KerberosTime = decode(&bytes)?;
-//! assert_eq!(back.unix_seconds(), t.unix_seconds());
-//! Ok::<(), krb5_asn1::Error>(())
-//! ```
-
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
@@ -41,12 +12,9 @@ pub use krb5_types::{
     KdcRep, KdcReq, KerberosTime, KrbError, PrincipalName, Realm, TgsRep, TgsReq, Ticket,
 };
 
-/// Codec failure. Malformed and truncated input both surface here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
-    /// rasn refused to encode the value as DER.
     Encode(String),
-    /// rasn refused to decode the bytes as DER of the requested type.
     Decode(String),
 }
 
@@ -61,31 +29,18 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// DER-encode `value`.
-///
-/// # Errors
-///
-/// [`Error::Encode`] when the value cannot be represented in DER.
 pub fn encode<T: Encode>(value: &T) -> Result<Vec<u8>, Error> {
     encode_named(value, std::any::type_name::<T>())
 }
 
-/// DER-decode `bytes` as `T`.
-///
-/// # Errors
-///
-/// [`Error::Decode`] on truncated or malformed encodings. Does not panic.
+/// Nonzero remainder decodes.
+// MIT: `k5_asn1_full_decode` (lib/krb5/asn.1/asn1_encode.c:1567-1585)
 pub fn decode<T: Decode>(bytes: &[u8]) -> Result<T, Error> {
     decode_named(bytes, std::any::type_name::<T>())
 }
 
-/// MIT `decode_krb5_enc_kdc_rep_part`: APPLICATION 26, then 25, then untagged.
-///
-/// Failed tag probes are silent (`ASN1_BAD_ID` is not an ERROR log).
-///
-/// # Errors
-///
-/// [`Error::Decode`] when none of the three forms decode.
+/// 26, then 25, untagged. A miss is silent.
+// MIT: `decode_krb5_enc_kdc_rep_part` (lib/krb5/asn.1/asn1_k_encode.c:1135-1155)
 pub fn decode_enc_kdc_rep_part(bytes: &[u8]) -> Result<EncKdcRepPart, Error> {
     if let Ok(EncTgsRepPart(part)) = rasn::der::decode(bytes) {
         return Ok(part);
@@ -184,7 +139,7 @@ fn emit(
             error = %e,
         );
     } else {
-        tracing::info!(
+        tracing::debug!(
             event,
             correlation_id,
             component = "krb5-asn1",

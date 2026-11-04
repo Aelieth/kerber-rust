@@ -1,9 +1,12 @@
 //! Lockout stamp-0 and REQUIRES_PRE_AUTH fail-count clear.
-//! MIT `krb5_dbe_lookup_last_admin_unlock` (`kdb5.c:1539-1545`): a missing or malformed
+// MIT: `krb5_dbe_lookup_last_admin_unlock` (kdb5.c:1539-1545)
+//! a missing or malformed
 //! `KRB5_TL_LAST_ADMIN_UNLOCK` reads as stamp 0.
-//! MIT `krb5_dbe_lookup_tl_data` (`kdb5.c:1574-1576`): a missing TL record is zero bytes, not
+// MIT: `krb5_dbe_lookup_tl_data` (kdb5.c:1574-1576)
+//! a missing TL record is zero bytes, not
 //! an error.
-//! MIT `krb5_db2_lockout_audit` (`db2/lockout.c:181-190`): a success clears the fail count
+// MIT: `krb5_db2_lockout_audit` (db2/lockout.c:181-190)
+//! a success clears the fail count
 //! only when the principal requires preauth.
 
 use krb5_asn1::encode;
@@ -80,7 +83,7 @@ fn zero_last_failed(dump: &str, princ: &str) -> String {
 fn absent_unlock_tl_stamp_zero_does_not_lock_last_failed_zero() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    store.put_policy(lock_policy("lock", 1));
+    store.put_policy(lock_policy("lock", 1)).unwrap();
     store
         .set_principal_policy(&user, Some("lock".into()))
         .unwrap();
@@ -166,7 +169,7 @@ fn as_success_clears_failcount_only_with_requires_preauth() {
 fn last_failed_nonzero_without_unlock_tl_still_locks() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    store.put_policy(lock_policy("lock", 1));
+    store.put_policy(lock_policy("lock", 1)).unwrap();
     store
         .set_principal_policy(&user, Some("lock".into()))
         .unwrap();
@@ -192,7 +195,7 @@ fn last_failed_nonzero_without_unlock_tl_still_locks() {
 fn unpermitted_spake_support_counts_toward_lockout() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    store.put_policy(lock_policy("lock", 1));
+    store.put_policy(lock_policy("lock", 1)).unwrap();
     store
         .set_principal_policy(&user, Some("lock".into()))
         .unwrap();

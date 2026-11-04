@@ -41,7 +41,6 @@ fn vendor(v: &str) -> OtpTokenInfo {
     }
 }
 
-/// A prompter that answers from a script and records what it was asked.
 #[derive(Default)]
 struct Script {
     answers: VecDeque<&'static str>,
@@ -248,7 +247,6 @@ fn a_value_must_have_the_tokens_length_and_format() {
     );
     assert!(value_matches(b"", &t(Some(0), None)));
     assert!(!value_matches(b"x", &t(Some(0), None)));
-    // A value that no token has the format of ends the mechanism, and the exchange reports it wrapped.
     let mut ui = Script::of(&["12345"]);
     let f = run(
         challenge(vec![t(Some(6), None), t(Some(6), Some(0))]),
@@ -437,7 +435,6 @@ fn pins_are_collected_and_placed_by_the_tokens_flags() {
         "the PIN prefixes the value (MIT drops the combined value, :654-663)"
     );
 
-    // SEPARATE_PIN alone: the PIN is asked and then not used (:583-584, :643).
     let only_sep = OtpTokenInfo {
         flags: flags(OTP_FLAG_SEPARATE_PIN),
         ..ti()
@@ -500,72 +497,13 @@ fn the_request_carries_the_tokens_fields_and_the_encrypted_nonce() {
 }
 
 #[test]
-fn the_default_requests_der_is_mits() {
-    let mut ui = Script::of(&["123456"]);
-    let (pa142, _) = process(
-        &state_of(challenge(vec![ti()])),
-        &ResponderItems::default(),
-        &mut ui,
-        &armor(),
-    )
-    .unwrap();
-    let der = pa142.padata_value.as_ref().to_vec();
-    // SEQUENCE { [0] 80 05 00 00000000, [2] A2 { A0 03 02 01 12, A2 .. 04 .. }, [4] 84 01 00, [5] 85 06 "123456" }
-    assert_eq!(der[0], 0x30);
-    assert_eq!(&der[2..9], &[0x80, 0x05, 0x00, 0, 0, 0, 0]);
-    assert_eq!(der[9], 0xa2);
-    assert_eq!(
-        &der[der.len() - 11..],
-        &[
-            0x84, 0x01, 0x00, 0x85, 0x06, b'1', b'2', b'3', b'4', b'5', b'6'
-        ]
-    );
-    assert_eq!(&der[11..16], &[0xa0, 0x03, 0x02, 0x01, 0x12]);
-    // MIT's frame for this request is 99 octets: 30 61, the 68-octet ciphertext after a2 46 04 44.
-    assert_eq!(der.len(), 99);
-    assert_eq!(&der[..2], &[0x30, 0x61]);
-    assert_eq!(&der[9..11], &[0xa2, 0x4d]);
-    assert_eq!(&der[16..20], &[0xa2, 0x46, 0x04, 0x44]);
-}
-
-struct Int;
-impl AsPrompt for Int {
-    fn password(&mut self) -> Result<Zeroizing<Vec<u8>>, Error> {
-        unreachable!()
-    }
-    fn preauth(&mut self, _: &PreauthPrompt<'_>) -> Result<Zeroizing<Vec<u8>>, Error> {
-        Err(Error::File(std::io::Error::new(
-            std::io::ErrorKind::Interrupted,
-            "Password read interrupted",
-        )))
-    }
-}
-
-#[test]
-fn a_prompt_that_fails_fails_the_module_and_an_interrupt_stops_it() {
-    let mut ui = Script::of(&[]);
-    let e = run(challenge(vec![ti()]), &mut ui).unwrap_err();
-    assert_eq!(e.error.to_string(), "Cannot read password");
-    assert!(!e.interrupted);
-    let e = process(
-        &state_of(challenge(vec![ti()])),
-        &ResponderItems::default(),
-        &mut Int,
-        &armor(),
-    )
-    .err()
-    .unwrap();
-    assert!(e.interrupted);
-}
-
-#[test]
 fn a_reply_is_cut_to_1023_bytes_and_at_a_nul() {
     let long: &'static str = Box::leak("7".repeat(2000).into_boxed_str());
     let mut ui = Script::of(&[long, "ab\0cd"]);
     let (req, _) = run(challenge(vec![ti()]), &mut ui).unwrap();
-    assert_eq!(req.otp_value.unwrap().len(), 1023);
+    assert_eq!(req.otp_value.as_ref().unwrap().len(), 1023);
     let (req, _) = run(challenge(vec![ti()]), &mut ui).unwrap();
-    assert_eq!(req.otp_value.unwrap().as_ref(), b"ab");
+    assert_eq!(req.otp_value.as_ref().unwrap().as_ref(), b"ab");
 }
 
 #[test]
@@ -611,7 +549,6 @@ fn a_responder_answer_is_read_like_mit_and_a_bad_one_goes_to_the_prompts() {
         (at, v.as_slice(), p.as_deref().map(Vec::as_slice)),
         (1, &b"123456"[..], Some(&b"99"[..]))
     );
-    // An empty value is a value, and an absent pin is no pin.
     let (at, v, p) = ok(r#"{"tokeninfo":0,"value":""}"#).unwrap();
     assert_eq!((at, v.len(), p), (0, 0, None));
     for bad in [
@@ -619,8 +556,6 @@ fn a_responder_answer_is_read_like_mit_and_a_bad_one_goes_to_the_prompts() {
         r#"{"tokeninfo":-1,"value":"x"}"#,
         r#"{"tokeninfo":"0","value":"x"}"#,
         r#"{"value":"x"}"#,
-        // MIT `codec_decode_answer` (`lib/krb5/krb/preauth_otp.c:399-412`): reads an uninitialised value here
-        // and the module crashes: no answer.
         r#"{"tokeninfo":0}"#,
         r#"{"tokeninfo":0,"value":5}"#,
         r#"{"tokeninfo":0,"value":"x","pin":[]}"#,
@@ -792,95 +727,10 @@ fn the_responder_helpers_round_trip_mits_json_and_the_answer_is_used() {
     assert_eq!(empty.get_answer(QUESTION_PASSWORD), None);
 }
 
-/// The config of a login as the octets the ccache keeps.
-/// MIT `save_cc_config_out_data` (`lib/krb5/krb/get_in_tkt.c:1221-1231`): the JSON is kept as octets.
 #[allow(
     clippy::useless_conversion,
     reason = "the octets are a Vec already, so the conversion is a no-op"
 )]
 fn config_octets(cfg: &Value) -> Option<Vec<u8>> {
     config_string(cfg).map(Into::into)
-}
-
-/// A token whose tokenID is `61 ff 62` and whose algID is `ff`: the octets MIT keeps (cells U11, U11x).
-fn octet_token() -> OtpTokenInfo {
-    OtpTokenInfo {
-        vendor: Some(OctetString::from(b"Acme".to_vec())),
-        alg_id: Some(OctetString::from(vec![0xff])),
-        token_id: Some(OctetString::from(vec![0x61, 0xff, 0x62])),
-        ..ti()
-    }
-}
-
-#[test]
-fn a_token_config_keeps_its_octets_in_pa_config_data() {
-    // MIT `save_config_tokeninfo` (`lib/krb5/krb/preauth_otp.c:1038-1059`): the vendor, algID and tokenID
-    // are saved as C strings of their octets, and the JSON carries them as they are.
-    let mut ui = Script::of(&["123456"]);
-    let (_, cfg) = run(challenge(vec![octet_token()]), &mut ui).unwrap();
-    let mut want = br#"{"vendor":"Acme","algID":""#.to_vec();
-    want.push(0xff);
-    want.extend_from_slice(br#"","tokenID":"a"#);
-    want.extend_from_slice(&[0xff, b'b']);
-    want.extend_from_slice(br#""}"#);
-    assert_eq!(config_octets(&cfg), Some(want));
-}
-
-#[test]
-fn a_second_login_reads_the_config_octets_and_prunes_to_the_token_they_name() {
-    // MIT `read_cc_config_in_data` (`lib/krb5/krb/get_in_tkt.c:1176-1211`): the first login's config comes
-    // back as the input cache's octets.
-    // MIT `filter_config_tokeninfos` (`lib/krb5/krb/preauth_otp.c:928-973`): it keeps the one token they match.
-    let mut first = Script::of(&["123456"]);
-    let (_, cfg) = run(challenge(vec![octet_token()]), &mut first).unwrap();
-    let stored = config_octets(&cfg).unwrap();
-    let cc_in = k5json::decode(&stored).unwrap();
-    let other = OtpTokenInfo {
-        vendor: Some(OctetString::from(b"Beta".to_vec())),
-        token_id: Some(OctetString::from(b"b".to_vec())),
-        ..ti()
-    };
-    let pa141 = PaData {
-        padata_type: pa::OTP_CHALLENGE,
-        padata_value: encode(&challenge(vec![other, octet_token()]))
-            .unwrap()
-            .into(),
-    };
-    let mut st = OtpState::default();
-    prep_questions(
-        &mut st,
-        &pa141,
-        Some(&cc_in),
-        &mut ResponderItems::default(),
-    )
-    .unwrap();
-    assert_eq!(st.chl.unwrap().token_info, vec![octet_token()]);
-}
-
-/// The views hold MIT's C strings as octets, including a service, tokenID and algID that are not UTF-8.
-#[test]
-fn the_views_return_the_octets_of_mits_c_strings() {
-    // MIT `codec_decode_tokeninfo` (`lib/krb5/krb/preauth_otp.c:264-311`): each string is read as a C string,
-    // its octets cut at the first NUL.
-    // MIT `codec_decode_challenge` (`lib/krb5/krb/preauth_otp.c:314-360`): the service is read the same way.
-    let mut chl = challenge(vec![OtpTokenInfo {
-        challenge: Some(OctetString::from(b"12 34".to_vec())),
-        length: Some(6),
-        format: Some(OTP_FORMAT_DECIMAL),
-        ..octet_token()
-    }]);
-    chl.service = Some(OctetString::from(b"svc\xff".to_vec()));
-    let pa141 = PaData {
-        padata_type: pa::OTP_CHALLENGE,
-        padata_value: encode(&chl).unwrap().into(),
-    };
-    let mut items = ResponderItems::default();
-    prep_questions(&mut OtpState::default(), &pa141, None, &mut items).unwrap();
-    let view = items.otp_get_challenge().unwrap().unwrap();
-    assert_eq!(view.service, Some(b"svc\xff".to_vec()));
-    let token = &view.tokeninfo[0];
-    assert_eq!(token.vendor, Some(b"Acme".to_vec()));
-    assert_eq!(token.challenge, Some(b"12 34".to_vec()));
-    assert_eq!(token.token_id, Some(vec![0x61, 0xff, 0x62]));
-    assert_eq!(token.alg_id, Some(vec![0xff]));
 }

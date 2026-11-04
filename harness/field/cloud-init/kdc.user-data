@@ -29,6 +29,7 @@ packages:
   - chrony
   - qemu-guest-agent
   - tcpdump
+  - strace
   - jq
   - bind-utils
   - tar

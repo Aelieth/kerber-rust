@@ -1,63 +1,39 @@
-//! AD-KDCIssued (RFC 4120 §5.2.6.2) and AD-CAMMAC (RFC 7751; MIT
-//! `cammac.asn1`).
-//!
-//! AD-KDCIssued's `ad-checksum` is a keyed checksum over the DER of
-//! `elements` with key usage 19, and its `i-realm` and `i-sname` are
-//! absent when the issuer is the KDC itself. A CAMMAC verifier's `mac` is
-//! a checksum over the DER of the CAMMAC `elements` with key usage 64.
-
 use rasn::prelude::*;
 
 use crate::{AuthorizationData, Checksum, PrincipalName, Realm};
 
-/// AD-KDCIssued ::= SEQUENCE { ad-checksum, i-realm, i-sname, elements }
-/// (`rfc4120#section-5.2.6.2`).
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct AdKdcIssued {
-    /// `ad-checksum [0]`: keyed checksum over the DER of `elements`, under the ticket session key (key usage 19).
     #[rasn(tag(explicit(0)))]
     pub ad_checksum: Checksum,
-    /// `i-realm [1]` OPTIONAL: realm of the issuing principal, when it is not the KDC itself.
     #[rasn(tag(explicit(1)))]
     pub i_realm: Option<Realm>,
-    /// `i-sname [2]` OPTIONAL: the issuing principal, when it is not the KDC itself.
     #[rasn(tag(explicit(2)))]
     pub i_sname: Option<PrincipalName>,
-    /// `elements [3]`: the KDC-issued authorization data the checksum protects.
     #[rasn(tag(explicit(3)))]
     pub elements: AuthorizationData,
 }
 
-/// Verifier-MAC ::= SEQUENCE { identifier, kvno, enctype, mac }
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct VerifierMac {
-    /// `identifier [0]` OPTIONAL: the principal whose key made `mac`; absent when the position implies it (`kdc-verifier` = the TGS key, `svc-verifier` = the service key).
     #[rasn(tag(explicit(0)))]
     pub identifier: Option<PrincipalName>,
-    /// `kvno [1]` OPTIONAL: version of that key.
     #[rasn(tag(explicit(1)))]
     pub kvno: Option<u32>,
-    /// `enctype [2]` OPTIONAL: encryption type of that key.
     #[rasn(tag(explicit(2)))]
     pub enctype: Option<i32>,
-    /// `mac [3]`: checksum over the CAMMAC `elements` (key usage 64).
     #[rasn(tag(explicit(3)))]
     pub mac: Checksum,
 }
 
-/// AD-CAMMAC ::= SEQUENCE { elements, kdc-verifier, svc-verifier, other-verifiers }
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct Cammac {
-    /// `elements [0]`: the authorization data the verifiers vouch for.
     #[rasn(tag(explicit(0)))]
     pub elements: AuthorizationData,
-    /// `kdc-verifier [1]` OPTIONAL: MAC under the local TGS key, for the KDC's own later checks.
     #[rasn(tag(explicit(1)))]
     pub kdc_verifier: Option<VerifierMac>,
-    /// `svc-verifier [2]` OPTIONAL: MAC under the ticket's service key, for the application server.
     #[rasn(tag(explicit(2)))]
     pub svc_verifier: Option<VerifierMac>,
-    /// `other-verifiers [3]` OPTIONAL: further MACs (RFC 7751 §4), each naming its key in `identifier`.
     #[rasn(tag(explicit(3)))]
     pub other_verifiers: Option<SequenceOf<VerifierMac>>,
 }

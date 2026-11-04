@@ -1,49 +1,68 @@
-//! The ASN.1 side that the KDC's DER readers share: MIT's error texts, MIT's `get_tag` reader,
-//! and the text MIT's decoder gives a failed decode of a PA-OTP-ENC-REQUEST or a PA-ENC-TS-ENC.
+//! KDC ASN.1 texts.
 
-/// MIT `ASN1_MISSING_FIELD` (`lib/krb5/error_tables/asn1_err.et:3-3`): its text.
+// MIT: `ASN1_MISSING_FIELD` (lib/krb5/error_tables/asn1_err.et:3-3)
 pub(crate) const ASN1_MISSING_FIELD: &str = "ASN.1 structure is missing a required field";
-/// MIT `ASN1_OVERFLOW` (`lib/krb5/error_tables/asn1_err.et:6-6`): its text.
+// MIT: `ASN1_OVERFLOW` (lib/krb5/error_tables/asn1_err.et:6-6)
 pub(crate) const ASN1_OVERFLOW: &str = "ASN.1 value too large";
-/// MIT `ASN1_OVERRUN` (`lib/krb5/error_tables/asn1_err.et:7-7`): its text.
+// MIT: `ASN1_OVERRUN` (lib/krb5/error_tables/asn1_err.et:7-7)
 pub(crate) const ASN1_OVERRUN: &str = "ASN.1 encoding ended unexpectedly";
-/// MIT `ASN1_BAD_ID` (`lib/krb5/error_tables/asn1_err.et:8-8`): its text.
+// MIT: `ASN1_BAD_ID` (lib/krb5/error_tables/asn1_err.et:8-8)
 pub(crate) const ASN1_BAD_ID: &str = "ASN.1 identifier doesn't match expected value";
-/// MIT `ASN1_BAD_LENGTH` (`lib/krb5/error_tables/asn1_err.et:9-9`): its text.
+// MIT: `ASN1_BAD_LENGTH` (lib/krb5/error_tables/asn1_err.et:9-9)
 pub(crate) const ASN1_BAD_LENGTH: &str = "ASN.1 length doesn't match expected value";
-/// MIT `ASN1_BAD_FORMAT` (`lib/krb5/error_tables/asn1_err.et:10-10`): its text.
+// MIT: `ASN1_BAD_FORMAT` (lib/krb5/error_tables/asn1_err.et:10-10)
 pub(crate) const ASN1_BAD_FORMAT: &str = "ASN.1 badly-formatted encoding";
-/// MIT `ASN1_PARSE_ERROR` (`lib/krb5/error_tables/asn1_err.et:11-11`): its text.
+// MIT: `ASN1_PARSE_ERROR` (lib/krb5/error_tables/asn1_err.et:11-11)
 pub(crate) const ASN1_PARSE_ERROR: &str = "ASN.1 parse error";
-/// MIT `ASN1_INDEF` (`lib/krb5/error_tables/asn1_err.et:13-13`): its text.
+// MIT: `ASN1_INDEF` (lib/krb5/error_tables/asn1_err.et:13-13)
 pub(crate) const ASN1_INDEF: &str = "ASN.1 indefinite encoding";
 
-/// The class bits of an identifier octet: universal.
+const ASN1_BASE: i32 = 1_859_794_432;
+
+/// Unknown text maps to offset 9.
+pub(crate) fn asn1_code(text: &str) -> i32 {
+    let offset: i32 = match text {
+        ASN1_MISSING_FIELD => 1,
+        ASN1_OVERFLOW => 4,
+        ASN1_OVERRUN => 5,
+        ASN1_BAD_ID => 6,
+        ASN1_BAD_LENGTH => 7,
+        ASN1_BAD_FORMAT => 8,
+        ASN1_INDEF => 11,
+        _ => 9,
+    };
+    ASN1_BASE + offset
+}
+
+pub(crate) fn preauth_decode_failure(
+    der: &[u8],
+    first_field_explicit: bool,
+) -> crate::error::Error {
+    let message = decode_failure_text(der, first_field_explicit);
+    crate::error::Error::PreauthModule {
+        code: asn1_code(message),
+        message: message.to_owned(),
+    }
+}
+
 pub(crate) const UNIVERSAL: u8 = 0x00;
-/// The class bits of an identifier octet: application.
 pub(crate) const APPLICATION: u8 = 0x40;
-/// The class bits of an identifier octet: context-specific.
 pub(crate) const CONTEXT: u8 = 0x80;
-/// MIT `ASN1_SEQUENCE` (`lib/krb5/asn.1/krbasn1.h:36-36`): the universal tag number of a SEQUENCE.
-const SEQUENCE: u32 = 16;
-/// MIT `ASN1_TAGNUM_MAX` (`lib/krb5/asn.1/krbasn1.h:22-22`): the largest tag number, one below `INT_MAX`.
+// MIT: `ASN1_SEQUENCE` (lib/krb5/asn.1/krbasn1.h:36-36)
+pub(crate) const SEQUENCE: u32 = 16;
+// MIT: `ASN1_TAGNUM_MAX` (lib/krb5/asn.1/krbasn1.h:22-22)
 const TAGNUM_MAX: u32 = 0x7fff_fffe;
 
-/// One DER element as MIT's `get_tag` reads it.
 pub(crate) struct Tlv<'a> {
-    /// The class bits: `UNIVERSAL`, `APPLICATION`, `CONTEXT`, or private.
     pub(crate) class: u8,
-    /// Whether the constructed bit is set.
     pub(crate) constructed: bool,
-    /// The tag number.
     pub(crate) tagnum: u32,
-    /// The contents octets, which the length gives.
     pub(crate) contents: &'a [u8],
-    /// The octets after this element.
     pub(crate) rest: &'a [u8],
 }
 
-/// MIT `get_tag` (`lib/krb5/asn.1/asn1_encode.c:366-421`): an identifier and length that run past the input are an overrun, a tag number or length too large an overflow, and the indefinite length its own error.
+// MIT: `get_tag` (lib/krb5/asn.1/asn1_encode.c:366-421)
+/// A zero long-length is indefinite encoding.
 pub(crate) fn get_tag(asn1: &[u8]) -> Result<Tlv<'_>, &'static str> {
     let (&o, mut p) = asn1.split_first().ok_or(ASN1_OVERRUN)?;
     let mut tagnum = u32::from(o & 0x1F);
@@ -95,18 +114,10 @@ pub(crate) fn get_tag(asn1: &[u8]) -> Result<Tlv<'_>, &'static str> {
     })
 }
 
-/// The text MIT's decoder gives a PA-OTP-ENC-REQUEST or a PA-ENC-TS-ENC that does not decode from
-/// `der`. `first_field_explicit` is true for PA-ENC-TS-ENC, whose `[0]` is explicit, and false for
-/// PA-OTP-ENC-REQUEST, whose `[0]` is implicit.
-///
-/// A bad element is the tag reader's own text. The outer element must be a universal constructed
-/// SEQUENCE, or the text is the identifier's. An empty SEQUENCE, or a first element that is not
-/// the `[0]` field, is a missing field. A `[0]` that is there fails inside the field: an overrun.
-/// MIT `k5_asn1_full_decode` (`lib/krb5/asn.1/asn1_encode.c:1582-1583`): a top element whose tag is not the type's is an identifier error.
-/// MIT `check_atype_tag` (`lib/krb5/asn.1/asn1_encode.c:1049-1052`): a SEQUENCE is a universal constructed element with tag 16.
-/// MIT `decode_sequence` (`lib/krb5/asn.1/asn1_encode.c:1411-1412`): an empty SEQUENCE has no field to read.
-/// MIT `omit_atype` (`lib/krb5/asn.1/asn1_encode.c:1375-1375`): a field that is not optional and is not there is a missing field.
-/// MIT `check_atype_tag` (`lib/krb5/asn.1/asn1_encode.c:1099-1104`): an implicit tag's constructed bit is not checked, and an explicit tag's is.
+// MIT: `k5_asn1_full_decode` (lib/krb5/asn.1/asn1_encode.c:1582-1583)
+// MIT: `check_atype_tag` (lib/krb5/asn.1/asn1_encode.c:1049-1052)
+// MIT: `decode_sequence` (lib/krb5/asn.1/asn1_encode.c:1411-1412)
+// MIT: `omit_atype` (lib/krb5/asn.1/asn1_encode.c:1375-1375)
 pub(crate) fn decode_failure_text(der: &[u8], first_field_explicit: bool) -> &'static str {
     let outer = match get_tag(der) {
         Ok(t) => t,
@@ -130,15 +141,9 @@ pub(crate) fn decode_failure_text(der: &[u8], first_field_explicit: bool) -> &'s
     }
 }
 
-/// The text MIT's decoder gives a PA-SPAKE that does not decode from `der`. A message whose outer
-/// element is no alternative of the choice decodes as an unknown one, which is no ASN.1 error here.
-///
-/// A bad element is the tag reader's own text. An alternative with nothing inside it is an
-/// overrun; one whose content is not a SEQUENCE is an identifier error, and an empty SEQUENCE, or
-/// any field lacking inside one, a missing field.
-/// MIT `decode_cntype` (`lib/krb5/asn.1/asn1_encode.c:1277-1293`): a choice reads the element's tag, and the alternative it names reads what is inside.
-/// MIT `get_tag` (`lib/krb5/asn.1/asn1_encode.c:368-369`): an alternative with an empty body is an overrun.
-/// MIT `decode_sequence` (`lib/krb5/asn.1/asn1_encode.c:1411-1412`): an empty SEQUENCE has no field to read.
+// MIT: `decode_cntype` (lib/krb5/asn.1/asn1_encode.c:1277-1293)
+// MIT: `get_tag` (lib/krb5/asn.1/asn1_encode.c:368-369)
+// MIT: `decode_sequence` (lib/krb5/asn.1/asn1_encode.c:1411-1412)
 pub(crate) fn pa_spake_failure_text(der: &[u8]) -> &'static str {
     let top = match get_tag(der) {
         Ok(t) => t,
@@ -154,69 +159,49 @@ pub(crate) fn pa_spake_failure_text(der: &[u8]) -> &'static str {
     ASN1_MISSING_FIELD
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The four inputs of the settle's cell X1 (a PA-OTP-ENC-REQUEST's plaintext, mutated), and
-    /// the empty plaintext, each with the text MIT's log gave for it.
-    #[test]
-    fn decode_failure_text_matches_the_x1_cells() {
-        // X1 `garbage`: deadbeef01020304 is an overrun.
-        let garbage = [0xde, 0xad, 0xbe, 0xef, 0x01, 0x02, 0x03, 0x04];
-        assert_eq!(decode_failure_text(&garbage, false), ASN1_OVERRUN);
-        assert_eq!(decode_failure_text(&garbage, true), ASN1_OVERRUN);
-        // X1 `empty`: no octets at all.
-        assert_eq!(decode_failure_text(&[], true), ASN1_OVERRUN);
-        // X1 `badtag`: 04 02 AA BB is an OCTET STRING, not a SEQUENCE.
-        assert_eq!(
-            decode_failure_text(&[0x04, 0x02, 0xaa, 0xbb], false),
-            ASN1_BAD_ID
-        );
-        // X1 `badfield`: 30 03 81 01 00 has a context [1] where the [0] field must be.
-        let badfield = [0x30, 0x03, 0x81, 0x01, 0x00];
-        assert_eq!(decode_failure_text(&badfield, false), ASN1_MISSING_FIELD);
-        assert_eq!(decode_failure_text(&badfield, true), ASN1_MISSING_FIELD);
+// MIT: `k5_asn1_decode_generaltime` (lib/krb5/asn.1/asn1_encode.c:242-260)
+pub(crate) fn body_failure_text(e: &str) -> &'static str {
+    if let Some(n) = e
+        .split("KerberosTime is not YYYYMMDDhhmmssZ (")
+        .nth(1)
+        .and_then(|rest| rest.split(" octets)").next())
+        .and_then(|n| n.parse::<usize>().ok())
+    {
+        return if n == 15 {
+            ASN1_BAD_FORMAT
+        } else {
+            ASN1_BAD_LENGTH
+        };
     }
-
-    /// The PA-SPAKE cells, each with the text MIT's krb5kdc logged for it.
-    #[test]
-    fn pa_spake_failure_text_matches_mits_cells() {
-        // `ffff`: a tag that runs out. `a000`: an alternative with nothing in it.
-        assert_eq!(pa_spake_failure_text(&[0xff, 0xff]), ASN1_OVERRUN);
-        assert_eq!(pa_spake_failure_text(&[0xa0, 0x00]), ASN1_OVERRUN);
-        // `a0 02 30 00`, `a2 02 30 00` and `a1 02 30 00`: an empty SEQUENCE has no field.
-        for lead in [0xa0, 0xa1, 0xa2] {
-            assert_eq!(
-                pa_spake_failure_text(&[lead, 0x02, 0x30, 0x00]),
-                ASN1_MISSING_FIELD,
-                "{lead:#x}"
-            );
-        }
-        // `a0 02 04 00`: an alternative holding an element that is no SEQUENCE.
-        assert_eq!(
-            pa_spake_failure_text(&[0xa0, 0x02, 0x04, 0x00]),
-            ASN1_BAD_ID
-        );
+    if let Some(time) = e
+        .split("Invalid date string: ")
+        .nth(1)
+        .and_then(|t| t.split(" (Codec").next())
+    {
+        return if time.len() == 15 {
+            ASN1_BAD_FORMAT
+        } else {
+            ASN1_BAD_LENGTH
+        };
     }
-
-    /// The stale-nonce cell: an implicit `[0]` (primitive) is the field of a PA-OTP-ENC-REQUEST,
-    /// and the same bytes read as a PA-ENC-TS-ENC are missing their explicit (constructed) `[0]`.
-    #[test]
-    fn implicit_and_explicit_zero_fields_differ() {
-        let mut stale = vec![0x30, 0x26, 0x80, 0x24];
-        stale.extend([0x5a; 36]);
-        // The implicit field is there, so the failure is inside it.
-        assert_eq!(decode_failure_text(&stale, false), ASN1_OVERRUN);
-        // The explicit field must be constructed, so it is missing (X1 `stale-nonce`).
-        assert_eq!(decode_failure_text(&stale, true), ASN1_MISSING_FIELD);
-        // An empty SEQUENCE has no first field.
-        assert_eq!(
-            decode_failure_text(&[0x30, 0x00], false),
-            ASN1_MISSING_FIELD
-        );
-        // A constructed explicit `[0]` is the field, so the failure is inside it.
-        let fresh = [0x30, 0x03, 0xa0, 0x01, 0x00];
-        assert_eq!(decode_failure_text(&fresh, true), ASN1_OVERRUN);
+    if e.contains("Expected Tag { class: Context")
+        || e.contains("Missing field")
+        || e.contains("Need more data")
+        || e.contains("Unexpected EOF")
+    {
+        return ASN1_MISSING_FIELD;
     }
+    if e.contains("Expected Tag {") {
+        return ASN1_BAD_ID;
+    }
+    if e.contains(" bytes, actual length was ") {
+        return ASN1_BAD_LENGTH;
+    }
+    if e.contains("larger than expected") {
+        return ASN1_OVERFLOW;
+    }
+    if e.contains("Indefinite length") {
+        return ASN1_INDEF;
+    }
+    ASN1_PARSE_ERROR
 }

@@ -1,11 +1,9 @@
 //! Fail-red fixture for the shipped differential compare path.
 
-use crate::diff::{compare_krb_error, compare_preauth_e_data, compare_stable_rep};
-use krb5_asn1::{decode, encode};
+use crate::diff::{compare_krb_error, compare_stable_rep};
 use krb5_types::{
-    EncKdcRepPart, EncTicketPart, EncryptedData, EncryptionKey, EtypeInfo2, EtypeInfo2Entry,
-    KdcRep, KerberosTime, KrbError, MethodData, Microseconds, PaData, PrincipalName, Ticket,
-    TicketFlags, TransitedEncoding, TypedData, TypedDataList, err, flag_bit, pa,
+    EncKdcRepPart, EncTicketPart, EncryptedData, EncryptionKey, KdcRep, KerberosTime, KrbError,
+    Microseconds, PrincipalName, Ticket, TicketFlags, TransitedEncoding, err, flag_bit,
 };
 
 fn sample_error(code: i32, stime_off: i64, text: &str) -> KrbError {
@@ -133,190 +131,6 @@ fn success_volatile_only_passes_cname_mismatch_fails() {
     );
 }
 
-fn method_edata(etypes: &[i32]) -> Vec<u8> {
-    let info: EtypeInfo2 = etypes
-        .iter()
-        .map(|&etype| EtypeInfo2Entry {
-            etype,
-            salt: None,
-            s2kparams: None,
-        })
-        .collect();
-    let info_der = encode(&info).expect("ETYPE-INFO2");
-    let md: MethodData = vec![
-        PaData {
-            padata_type: pa::FX_FAST,
-            padata_value: vec![].into(),
-        },
-        PaData {
-            padata_type: pa::ENC_TIMESTAMP,
-            padata_value: vec![].into(),
-        },
-        PaData {
-            padata_type: pa::ETYPE_INFO2,
-            padata_value: info_der.into(),
-        },
-        PaData {
-            padata_type: pa::FX_COOKIE,
-            padata_value: b"MIT".to_vec().into(),
-        },
-    ];
-    encode(&md).expect("METHOD-DATA")
-}
-
-fn method_edata_hw(etypes: &[i32]) -> Vec<u8> {
-    let info: EtypeInfo2 = etypes
-        .iter()
-        .map(|&etype| EtypeInfo2Entry {
-            etype,
-            salt: None,
-            s2kparams: None,
-        })
-        .collect();
-    let info_der = encode(&info).expect("ETYPE-INFO2");
-    let md: MethodData = vec![
-        PaData {
-            padata_type: pa::FX_FAST,
-            padata_value: vec![].into(),
-        },
-        PaData {
-            padata_type: pa::ETYPE_INFO2,
-            padata_value: info_der.into(),
-        },
-        PaData {
-            padata_type: pa::FX_COOKIE,
-            padata_value: b"MIT".to_vec().into(),
-        },
-    ];
-    encode(&md).expect("METHOD-DATA")
-}
-
-fn method_edata_no_cookie(etypes: &[i32]) -> Vec<u8> {
-    let info: EtypeInfo2 = etypes
-        .iter()
-        .map(|&etype| EtypeInfo2Entry {
-            etype,
-            salt: None,
-            s2kparams: None,
-        })
-        .collect();
-    let info_der = encode(&info).expect("ETYPE-INFO2");
-    let md: MethodData = vec![
-        PaData {
-            padata_type: pa::FX_FAST,
-            padata_value: vec![].into(),
-        },
-        PaData {
-            padata_type: pa::ETYPE_INFO2,
-            padata_value: info_der.into(),
-        },
-    ];
-    encode(&md).expect("METHOD-DATA")
-}
-
-#[test]
-fn etype_info2_requires_exact_etype_set() {
-    // MIT's hint (get_preauth_hint_list) and Rust's both list one entry for
-    // the selected client key, so the etype sets must be equal.
-    let one = method_edata(&[18]);
-    compare_preauth_e_data(Some(&one), Some(&one)).expect("equal etype sets pass");
-
-    // Rust listing every key (a superset) fails.
-    let rust_super = method_edata(&[17, 18, 19, 20]);
-    let mit_one = method_edata(&[18]);
-    let err = compare_preauth_e_data(Some(&rust_super), Some(&mit_one))
-        .expect_err("a Rust etype superset must now fail");
-    assert!(
-        err.0.contains("ETYPE-INFO2"),
-        "shipped compare must name the etype mismatch: {}",
-        err.0
-    );
-
-    // MIT etype outside the Rust set still fails.
-    let rust_one = method_edata(&[18]);
-    let mit_extra = method_edata(&[18, 23]);
-    compare_preauth_e_data(Some(&rust_one), Some(&mit_extra))
-        .expect_err("MIT etype outside the Rust set must fail");
-
-    let hw = method_edata_hw(&[18]);
-    compare_preauth_e_data(Some(&hw), Some(&hw)).expect("hw_only both omit ENC_TIMESTAMP");
-    compare_preauth_e_data(Some(&one), Some(&hw))
-        .expect_err("ENC_TIMESTAMP present on only one side");
-}
-
-#[test]
-fn preauth_edata_requires_fx_cookie_and_fx_fast() {
-    let with = method_edata_hw(&[18]);
-    compare_preauth_e_data(Some(&with), Some(&with)).expect("[136, 19, 133] both legs");
-    let wrapped: MethodData = vec![PaData {
-        padata_type: pa::FX_FAST,
-        padata_value: vec![].into(),
-    }];
-    let wrapped = encode(&wrapped).expect("FAST-wrapped METHOD-DATA");
-    compare_preauth_e_data(Some(&wrapped), Some(&wrapped))
-        .expect("FAST-wrapped outer 25 is [136] only");
-    let no_cookie = method_edata_no_cookie(&[18]);
-    let err = compare_preauth_e_data(Some(&with), Some(&no_cookie))
-        .expect_err("as-hw-preauth without 133 must fail");
-    assert!(
-        err.0.contains("133")
-            || err.0.contains(&pa::FX_COOKIE.to_string())
-            || err.0.contains("multiset"),
-        "compare must name the missing cookie: {}",
-        err.0
-    );
-}
-
-#[test]
-fn preauth_edata_type_multiset_rejects_extra_spake() {
-    let base = method_edata(&[18]);
-    let mut with_spake: MethodData = decode(&base).expect("METHOD-DATA");
-    with_spake.push(PaData {
-        padata_type: pa::SPAKE,
-        padata_value: vec![].into(),
-    });
-    let with = encode(&with_spake).expect("METHOD-DATA");
-    let err = compare_preauth_e_data(Some(&with), Some(&base))
-        .expect_err("SPAKE on only one leg must fail the multiset");
-    assert!(
-        err.0.contains("multiset"),
-        "compare must name the type multiset: {}",
-        err.0
-    );
-    compare_preauth_e_data(Some(&with), Some(&with)).expect("identical multisets pass");
-}
-
-#[test]
-fn preauth_edata_order_is_not_compared() {
-    let a = method_edata(&[18]);
-    let mut mb: MethodData = decode(&a).expect("METHOD-DATA");
-    mb.reverse();
-    let b = encode(&mb).expect("METHOD-DATA");
-    compare_preauth_e_data(Some(&a), Some(&b)).expect("order is item 15, multiset matches");
-}
-
-#[test]
-fn typed_edata_types_must_match() {
-    let td_a: TypedDataList = vec![
-        TypedData {
-            data_type: pa::TD_DH_PARAMETERS,
-            data_value: vec![1, 2, 3].into(),
-        },
-        TypedData {
-            data_type: pa::FX_COOKIE,
-            data_value: b"MIT".to_vec().into(),
-        },
-    ];
-    let td_b = td_a.clone();
-    let a = encode(&td_a).expect("TYPED-DATA");
-    let b = encode(&td_b).expect("TYPED-DATA");
-    compare_preauth_e_data(Some(&a), Some(&b)).expect("typed [109, 133] both legs");
-    let mut td_miss = td_a;
-    td_miss.pop();
-    let miss = encode(&td_miss).expect("TYPED-DATA");
-    compare_preauth_e_data(Some(&a), Some(&miss)).expect_err("typed multiset must match");
-}
-
 #[test]
 fn krb_error_crealm_cname_presence_is_compared() {
     let mut rust = sample_error(err::GENERIC, 0, "UNKNOWN_REASON");
@@ -335,8 +149,7 @@ fn krb_error_crealm_cname_presence_is_compared() {
 fn ticket_flag_bit_differences_fail_red() {
     let (r_rep, r_enc, r_tkt) = sample_parts("user", 0xaa, 0);
 
-    // The enc-pa-rep bit (== CANONICALIZE bit 15) is compared: MIT sets it on
-    // every ticket, so a divergence must fail red.
+    // The enc-pa-rep bit (== CANONICALIZE bit 15) is compared: MIT sets it on every ticket, so a divergence must fail red.
     let (m_rep, mut m_enc, mut m_tkt) = sample_parts("user", 0xbb, 11);
     m_enc.flags = m_enc.flags.with_bit(flag_bit::ENC_PA_REP, true);
     m_tkt.flags = m_tkt.flags.with_bit(flag_bit::ENC_PA_REP, true);

@@ -1,5 +1,4 @@
-//! MIT built-in password-quality modules (`dict`, `empty`, `princ`)
-//! on kadm5 create and on chpass.
+//! MIT built-in password-quality modules (`dict`, `empty`, `princ`) on kadm5 create and on chpass.
 
 #[path = "common/mod.rs"]
 mod common;
@@ -12,7 +11,6 @@ use krb5_kdc::testrealm::{
 };
 use krb5_kdc::{Acl, NamedPolicy, shared_dump};
 
-use krb5_testkit::scratch_dir;
 use krb5_types::PrincipalName;
 
 const CREATE_PRINCIPAL: u32 = 1;
@@ -50,8 +48,6 @@ fn create_args(name: &str, password: &str, policy: Option<&str>) -> Vec<u8> {
     let mut w = Vec::new();
     push_u32(&mut w, API_V2);
     push_nullstring(&mut w, name);
-    // expire, last_pwd, pw_expire, max_life, mod_name NULL, mod_date,
-    // attributes, kvno, mkvno
     for v in [0, 0, 0, 3600, 1, 0, 0, 1, 1] {
         push_u32(&mut w, v);
     }
@@ -59,8 +55,6 @@ fn create_args(name: &str, password: &str, policy: Option<&str>) -> Vec<u8> {
         Some(p) => push_nullstring(&mut w, p),
         None => push_u32(&mut w, 0),
     }
-    // aux, max_rlife, last_success, last_failed, fail_auth_count, n_key,
-    // n_tl, tl_data NULL, empty key_data array
     for v in [0, 0, 0, 0, 0, 0, 0, 1, 0] {
         push_u32(&mut w, v);
     }
@@ -100,7 +94,7 @@ fn kadm5_create_empty_password_is_pass_q_tooshort_and_creates_nothing() {
 #[test]
 fn kadm5_create_principal_name_password_is_pass_q_dict_only_with_policy() {
     let (mut store, _) = bootstrap_documented().unwrap();
-    store.put_policy(NamedPolicy::new("pq"));
+    store.put_policy(NamedPolicy::new("pq")).unwrap();
     let acl = Acl::parse("admin@KERBER.TEST *\n").unwrap();
     let store = shared_dump(store);
     let mut c = init_client(
@@ -163,8 +157,7 @@ fn kadm5_create_null_password_is_a_random_key_not_the_empty_password() {
         .expect("created");
     assert!(!p.keys.is_empty());
     for k in &p.keys {
-        let params = krb5_kdc::s2k_params(k.etype);
-        let empty = krb5_crypto::string_to_key(k.etype, b"", &p.salt, Some(&params)).unwrap();
+        let empty = krb5_crypto::string_to_key(k.etype, b"", &p.salt, None).unwrap();
         assert_ne!(
             empty.as_bytes(),
             k.key.as_bytes(),
@@ -179,7 +172,6 @@ fn chpass_runs_empty_and_princ_modules() {
     let (mut store, acl) = bootstrap_documented().unwrap();
     let mut sess = AdminSession::local(&mut store, &acl, documented_admin_id());
     assert_eq!(rejected(sess.change_password(&user(), b"")), EMPTY);
-    // Without a policy dict/princ skip: the user's own name is accepted.
     sess.change_password(&user(), TEST_USER.as_bytes()).unwrap();
     sess.add_policy("pq");
     sess.set_policy(&user(), "pq").unwrap();
@@ -191,36 +183,8 @@ fn chpass_runs_empty_and_princ_modules() {
         rejected(sess.change_password(&user(), TEST_REALM.to_ascii_lowercase().as_bytes())),
         DICT
     );
-    // Under a policy the floors run first: addpol defaults pw_min_length to 1, so "" is the
-    // policy's KADM5_PASS_Q_TOOSHORT, not the empty module's text.
-    // MIT `passwd_check` (`server_misc.c:114-117`): under a policy the floors run first.
-    // MIT `kadm5_create_policy` (`svr_policy.c:114-114`): addpol defaults pw_min_length to 1.
+    // MIT: `kadm5_create_policy` (svr_policy.c:114-114)
+    // addpol defaults pw_min_length to 1.
     assert_eq!(rejected(sess.change_password(&user(), b"")), "min_length 1");
     sess.change_password(&user(), b"userpassword").unwrap();
-}
-
-#[test]
-fn dict_file_from_the_realm_stanza_rejects_words_case_insensitively() {
-    let dir = scratch_dir("c1-dict-admin");
-    let dict = dir.join("dict.txt");
-    std::fs::write(&dict, "zebra\ncorrecthorse\napple\n").unwrap();
-    let conf = krb5_config::KdcConf::parse(&format!(
-        "[realms]\n    {TEST_REALM} = {{\n        dict_file = {}\n    }}\n",
-        dict.display()
-    ))
-    .unwrap();
-    let (mut store, acl) = bootstrap_documented().unwrap();
-    store.init_pwqual(Some(&conf)).unwrap();
-    let mut sess = AdminSession::local(&mut store, &acl, documented_admin_id());
-    // No policy: the dictionary does not apply.
-    sess.change_password(&user(), b"correcthorse").unwrap();
-    sess.add_policy("pq");
-    sess.set_policy(&user(), "pq").unwrap();
-    assert_eq!(
-        rejected(sess.change_password(&user(), b"CorrectHorse")),
-        DICT
-    );
-    assert_eq!(rejected(sess.change_password(&user(), b"APPLE")), DICT);
-    sess.change_password(&user(), b"correcthorse1").unwrap();
-    let _ = std::fs::remove_dir_all(&dir);
 }

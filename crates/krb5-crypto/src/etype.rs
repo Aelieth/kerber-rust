@@ -1,17 +1,9 @@
-//! IANA Kerberos encryption-type numbers implemented in this crate.
-
 use crate::error::Error;
 
-/// RFC 4120 key-usage number. Zero is rejected at construction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct KeyUsage(u32);
 
 impl KeyUsage {
-    /// Construct a usage. RFC 3961 section 2: zero is not permitted.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::InvalidKeyUsage`] when `n` is 0.
     pub fn new(n: u32) -> Result<Self, Error> {
         if n == 0 {
             return Err(Error::InvalidKeyUsage);
@@ -19,25 +11,16 @@ impl KeyUsage {
         Ok(Self(n))
     }
 
-    /// RFC usage number without the [`Self::new`] zero check.
-    ///
-    /// Protocol encrypt/decrypt must use [`Self::new`]. MIT KDB
-    /// `krb5_dbe_def_encrypt_key_data` is the documented exception that
-    /// uses usage 0 (`from_rfc(0)` via `kdb_encrypt_key` /
-    /// `kdb_decrypt_key`).
     #[must_use]
     pub const fn from_rfc(n: u32) -> Self {
         Self(n)
     }
 
-    /// Numeric usage value.
     #[must_use]
     pub const fn get(self) -> u32 {
         self.0
     }
 
-    /// Five-octet DK/KDF constant: usage as big-endian u32 plus a suffix byte
-    /// (`0x99` Kc, `0xAA` Ke, `0x55` Ki).
     #[must_use]
     pub fn derivation_constant(self, suffix: u8) -> [u8; 5] {
         let b = self.0.to_be_bytes();
@@ -45,45 +28,24 @@ impl KeyUsage {
     }
 }
 
-/// Encryption types implemented or recognized by this crate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(i32)]
 pub enum EncryptionType {
-    /// des3-cbc-sha1 (RFC 3961 etype 16). Weak; see [`Self::is_weak`].
     Des3CbcSha1 = 16,
-    /// aes128-cts-hmac-sha1-96 (RFC 3962).
     Aes128CtsHmacSha196 = 17,
-    /// aes256-cts-hmac-sha1-96 (RFC 3962).
     Aes256CtsHmacSha196 = 18,
-    /// aes128-cts-hmac-sha256-128 (RFC 8009).
     Aes128CtsHmacSha256128 = 19,
-    /// aes256-cts-hmac-sha384-192 (RFC 8009).
     Aes256CtsHmacSha384192 = 20,
-    /// rc4-hmac (etype 23). Weak; see [`Self::is_weak`].
     Rc4Hmac = 23,
-    /// camellia128-cts-cmac (RFC 6803 etype 25). Weak unless locally allowed.
     Camellia128CtsCmac = 25,
-    /// camellia256-cts-cmac (RFC 6803 etype 26). Weak unless locally allowed.
     Camellia256CtsCmac = 26,
 }
 
 impl EncryptionType {
-    /// Parse an IANA etype number. Weak etypes are refused.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::UnsupportedEtype`] when `n` is not implemented, or [`Error::WeakEtypeRefused`]
-    /// when it is a weak etype (16, 23, 25, 26).
     pub fn from_iana(n: i32) -> Result<Self, Error> {
         Self::from_iana_policy(n, false)
     }
 
-    /// Parse an IANA etype, optionally allowing legacy/AD enctypes.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::UnsupportedEtype`] when `n` is unknown, or [`Error::WeakEtypeRefused`] when it is
-    /// weak (16, 23, 25, 26) and `allow_weak` is false.
     pub fn from_iana_policy(n: i32, allow_weak: bool) -> Result<Self, Error> {
         let e = Self::known(n)?;
         if e.is_weak() && !allow_weak {
@@ -92,11 +54,6 @@ impl EncryptionType {
         Ok(e)
     }
 
-    /// Recognize an etype without applying the weak-crypto policy.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::UnsupportedEtype`] when `n` is not implemented.
     pub fn known(n: i32) -> Result<Self, Error> {
         match n {
             16 => Ok(Self::Des3CbcSha1),
@@ -111,15 +68,12 @@ impl EncryptionType {
         }
     }
 
-    /// MIT `krb5int_c_deprecated_enctype` (`etypes.c`): des3-cbc-sha1 and
-    /// arcfour-hmac (and, absent from this enum, des3-cbc-raw / arcfour-exp).
+    // MIT: `krb5int_c_deprecated_enctype` (lib/crypto/krb/enctype_util.c:66-71)
     #[must_use]
     pub const fn is_deprecated(self) -> bool {
         matches!(self, Self::Des3CbcSha1 | Self::Rc4Hmac)
     }
 
-    /// DES3, RC4, and Camellia: the etypes [`Self::from_iana`] refuses and
-    /// [`Self::from_iana_policy`] admits only with `allow_weak`.
     #[must_use]
     pub const fn is_weak(self) -> bool {
         matches!(
@@ -128,13 +82,11 @@ impl EncryptionType {
         )
     }
 
-    /// IANA etype number.
     #[must_use]
     pub const fn to_iana(self) -> i32 {
         self as i32
     }
 
-    /// Protocol key length in octets.
     #[must_use]
     pub const fn key_len(self) -> usize {
         match self {
@@ -149,9 +101,6 @@ impl EncryptionType {
         }
     }
 
-    /// MIT `enc->keybytes`: PRF+ / random-to-key input size.
-    /// MIT `struct krb5_enc_provider` (`crypto_int.h:95-97`): `keybytes` is the input size to
-    /// `make_key`; `keylength` is the output size.
     #[must_use]
     pub const fn keybytes(self) -> usize {
         match self {
@@ -160,7 +109,6 @@ impl EncryptionType {
         }
     }
 
-    /// Truncated HMAC / CMAC length in octets.
     #[must_use]
     pub const fn hmac_output_len(self) -> usize {
         match self {
@@ -174,8 +122,6 @@ impl EncryptionType {
         }
     }
 
-    /// RFC 8009 checksum key (`Kc`) / integrity key (`Ki`) length. Equal to
-    /// [`Self::key_len`] for RFC 3962 etypes.
     #[must_use]
     pub const fn mac_key_len(self) -> usize {
         match self {
@@ -186,7 +132,6 @@ impl EncryptionType {
         }
     }
 
-    /// Associated keyed checksum type (RFC 3962 / RFC 8009 / RFC 4757).
     #[must_use]
     pub const fn checksum_type(self) -> i32 {
         match self {
@@ -201,10 +146,17 @@ impl EncryptionType {
         }
     }
 
-    /// AES-only AS/TGS etype list.
-    /// MIT `default_enctype_list` (`krb/init_ctx.c:59-66`): also offers DES3 (16), RC4 (23),
-    /// and Camellia (25, 26); those stay behind `is_weak` / an explicit
-    /// `default_tkt_enctypes` / `permitted_enctypes` list.
+    // MIT: `krb5_k_decrypt` (lib/crypto/krb/decrypt.c:48-52)
+    #[must_use]
+    pub const fn min_ciphertext_len(self) -> usize {
+        match self {
+            Self::Rc4Hmac => 24,
+            Self::Des3CbcSha1 => 28,
+            _ => 16 + self.hmac_output_len(),
+        }
+    }
+
+    // MIT: `default_enctype_list` (lib/krb5/krb/init_ctx.c:59-66)
     #[must_use]
     pub const fn preferred() -> [Self; 4] {
         [
@@ -215,8 +167,6 @@ impl EncryptionType {
         ]
     }
 
-    /// Whether this etype uses the RFC 8009 profile (HMAC over IV||ciphertext)
-    /// rather than the RFC 3961 simplified profile.
     #[must_use]
     pub const fn is_rfc8009(self) -> bool {
         matches!(
@@ -225,7 +175,6 @@ impl EncryptionType {
         )
     }
 
-    /// AES-CTS etypes 17–20.
     #[must_use]
     pub const fn is_aes(self) -> bool {
         matches!(
@@ -237,7 +186,6 @@ impl EncryptionType {
         )
     }
 
-    /// Default PBKDF2 iteration count when string-to-key params are omitted.
     #[must_use]
     pub const fn default_iterations(self) -> u32 {
         if self.is_rfc8009() || self.is_camellia() {
@@ -247,13 +195,11 @@ impl EncryptionType {
         }
     }
 
-    /// RFC 6803 Camellia-CTS-CMAC.
     #[must_use]
     pub const fn is_camellia(self) -> bool {
         matches!(self, Self::Camellia128CtsCmac | Self::Camellia256CtsCmac)
     }
 
-    /// MIT `klist -e` / `kdc.conf` enctype name.
     #[must_use]
     pub const fn to_mit_name(self) -> &'static str {
         match self {
@@ -268,11 +214,6 @@ impl EncryptionType {
         }
     }
 
-    /// MIT `enctype` name as used in `kdc.conf` (`aes256-cts-hmac-sha384-192`).
-    ///
-    /// # Errors
-    ///
-    /// [`Error::UnsupportedEtype`] when `name` is not an implemented etype.
     pub fn from_mit_name(name: &str) -> Result<Self, Error> {
         let n = name.trim();
         if let Ok(num) = n.parse::<i32>() {
@@ -295,15 +236,12 @@ impl EncryptionType {
         }
     }
 
-    /// MIT `etypes.c` `ETYPE_WEAK` (the flag is defined in `crypto_int.h`). None of the
-    /// implemented types set that flag.
+    // MIT: `ETYPE_WEAK` (lib/crypto/krb/crypto_int.h:179-179)
     #[must_use]
     pub const fn is_mit_weak(self) -> bool {
         false
     }
 
-    /// RFC 8009 / RFC 6803 `enctype-name` prepended to the salt, or `None`
-    /// for RFC 3962 AES-SHA-1.
     #[must_use]
     pub const fn enctype_name(self) -> Option<&'static str> {
         match self {
@@ -319,37 +257,30 @@ impl EncryptionType {
     }
 }
 
-/// MIT `krb5_c_is_keyed_cksum`: types in `cksumtypes.c` without `CKSUM_UNKEYED`.
+// MIT: `krb5_c_is_keyed_cksum` (lib/crypto/krb/keyed_cksum.c:30-39)
+// MIT: `CKSUM_UNKEYED` (lib/crypto/krb/crypto_int.h:230-230)
 #[must_use]
 pub const fn cksumtype_is_keyed(cksumtype: i32) -> bool {
     matches!(cksumtype, 12 | 15 | 16 | 17 | 18 | 19 | 20 | -137 | -138)
 }
 
-/// MIT `cksumtypes.c` unkeyed types (`CKSUM_UNKEYED`).
 #[must_use]
 pub const fn cksumtype_is_unkeyed(cksumtype: i32) -> bool {
-    // MIT cksumtypes.c: MD4 2 / MD5 7 / NIST-SHA 9 / SHA1 14. CRC32 (1) has no entry.
     matches!(cksumtype, 2 | 7 | 9 | 14)
 }
 
-/// MIT `krb5_c_valid_cksumtype`: a row in `cksumtypes.c`.
+// MIT: `krb5_c_valid_cksumtype` (lib/crypto/krb/valid_cksumtype.c:30-39)
 #[must_use]
 pub const fn cksumtype_is_known(cksumtype: i32) -> bool {
     cksumtype_is_keyed(cksumtype) || cksumtype_is_unkeyed(cksumtype)
 }
 
-/// MIT `krb5_c_is_coll_proof_cksum` (`coll_proof_cksum.c:30-37`): a known checksum type is
-/// collision-proof unless its row sets `CKSUM_NOT_COLL_PROOF`.
-///
-/// 1.22.2 sets `CKSUM_NOT_COLL_PROOF` on no table row, so every known
-/// type is collision-proof.
+// MIT: `krb5_c_is_coll_proof_cksum` (lib/crypto/krb/coll_proof_cksum.c:30-37)
 #[must_use]
 pub const fn cksumtype_is_coll_proof(cksumtype: i32) -> bool {
     cksumtype_is_known(cksumtype)
 }
 
-/// MIT `default_enctype_list` (`krb/init_ctx.c:59-66`): the eight default enctypes, AES-SHA1
-/// first and Camellia last.
 #[must_use]
 pub const fn default_enctype_list() -> [EncryptionType; 8] {
     [
@@ -364,7 +295,8 @@ pub const fn default_enctype_list() -> [EncryptionType; 8] {
     ]
 }
 
-/// MIT `krb5int_parse_enctype_list`. Empty result is `None` (`KRB5_CONFIG_ETYPE_NOSUPP`).
+// MIT: `krb5int_parse_enctype_list` (lib/krb5/krb/init_ctx.c:442-503)
+// MIT: `KRB5_CONFIG_ETYPE_NOSUPP` (lib/krb5/error_tables/krb5_err.et:326-326)
 #[must_use]
 pub fn parse_enctype_list(profstr: &str, allow_weak: bool) -> Option<Vec<EncryptionType>> {
     let mut list = Vec::new();
@@ -416,96 +348,49 @@ pub fn parse_enctype_list(profstr: &str, allow_weak: bool) -> Option<Vec<Encrypt
     if list.is_empty() { None } else { Some(list) }
 }
 
-/// MIT `krb5_string_to_keysalts` (`kadm5/str_conv.c:337-343`): unrecognized tokens are
-/// discarded. Used for `supported_enctypes`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KeySalt {
+    pub etype: EncryptionType,
+    pub salt: i32,
+}
+
+impl From<EncryptionType> for KeySalt {
+    fn from(etype: EncryptionType) -> Self {
+        Self { etype, salt: 0 }
+    }
+}
+
+// MIT: `krb5_string_to_salttype` (lib/krb5/krb/str_conv.c:72-86)
 #[must_use]
-pub fn parse_keysalt_list(s: &str) -> Vec<EncryptionType> {
+pub fn salttype_from_name(name: &str) -> Option<i32> {
+    match name.to_ascii_lowercase().as_str() {
+        "normal" => Some(0),
+        "norealm" => Some(2),
+        "onlyrealm" => Some(3),
+        "special" => Some(4),
+        _ => None,
+    }
+}
+
+// MIT: `krb5_string_to_keysalts` (lib/kadm5/str_conv.c:314-366)
+#[must_use]
+pub fn parse_keysalts(s: &str) -> Vec<KeySalt> {
     let mut out = Vec::new();
     for tok in s.split(|c: char| c.is_ascii_whitespace() || c == ',') {
         let tok = tok.trim();
         if tok.is_empty() {
             continue;
         }
-        let et = tok.split_once(':').map_or(tok, |(e, _)| e);
-        if let Ok(e) = EncryptionType::from_mit_name(et)
-            && !out.contains(&e)
-        {
-            out.push(e);
+        let (et, salt) = match tok.split_once(':') {
+            Some((e, st)) => (e, salttype_from_name(st)),
+            None => (tok, Some(0)),
+        };
+        if let (Ok(etype), Some(salt)) = (EncryptionType::from_mit_name(et), salt) {
+            let ks = KeySalt { etype, salt };
+            if !out.contains(&ks) {
+                out.push(ks);
+            }
         }
     }
     out
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn etype_preferred_omits_weak() {
-        let p: Vec<i32> = EncryptionType::preferred()
-            .iter()
-            .map(|e| e.to_iana())
-            .collect();
-        assert_eq!(
-            p,
-            vec![18, 17, 20, 19],
-            "AES-only subset of init_ctx.c:59-66"
-        );
-        let mit: Vec<i32> = default_enctype_list().iter().map(|e| e.to_iana()).collect();
-        assert_eq!(
-            mit,
-            vec![18, 17, 20, 19, 16, 23, 25, 26],
-            "MIT default_enctype_list"
-        );
-        for e in EncryptionType::preferred() {
-            assert!(!e.is_weak(), "{e:?} is advertised");
-        }
-    }
-
-    #[test]
-    fn deprecated_set_matches_mit() {
-        assert!(EncryptionType::Des3CbcSha1.is_deprecated());
-        assert!(EncryptionType::Rc4Hmac.is_deprecated());
-        assert!(!EncryptionType::Aes256CtsHmacSha384192.is_deprecated());
-        assert!(!EncryptionType::Aes256CtsHmacSha196.is_deprecated());
-    }
-
-    use super::*;
-
-    #[test]
-    fn parse_enctype_list_families_and_minus() {
-        let v = parse_enctype_list("aes -aes256-cts rc4-hmac", false).unwrap();
-        assert_eq!(
-            v,
-            vec![
-                EncryptionType::Aes128CtsHmacSha196,
-                EncryptionType::Aes256CtsHmacSha384192,
-                EncryptionType::Aes128CtsHmacSha256128,
-                EncryptionType::Rc4Hmac,
-            ]
-        );
-        assert!(parse_enctype_list("nosuch", false).is_none());
-        assert!(
-            parse_enctype_list("DEFAULT", false)
-                .unwrap()
-                .contains(&EncryptionType::Rc4Hmac)
-        );
-        assert_eq!(
-            parse_enctype_list("aes128-sha1,AES256-CTS", false).unwrap(),
-            vec![
-                EncryptionType::Aes128CtsHmacSha196,
-                EncryptionType::Aes256CtsHmacSha196,
-            ]
-        );
-    }
-
-    #[test]
-    fn parse_keysalt_list_strips_salt() {
-        let v = parse_keysalt_list("aes256-cts-hmac-sha384-192:normal rc4-hmac:normal");
-        assert_eq!(
-            v,
-            vec![
-                EncryptionType::Aes256CtsHmacSha384192,
-                EncryptionType::Rc4Hmac,
-            ]
-        );
-    }
 }

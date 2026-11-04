@@ -7,8 +7,7 @@ FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Throwaway test creds for a synthetic, ephemeral DC (like the MIT harness's
-# masterpassword/userpassword). Overridable at build; canonical values are in the
-# gitignored working/samba-lab-accounts.md.
+# masterpassword/userpassword). Overridable at build.
 ARG SAMBA_REALM=AD.KERBER.TEST
 ARG SAMBA_DOMAIN=ADKERBER
 ARG SAMBA_ADMIN_PASSWORD=Samba-Admin-Kerber-2026!

@@ -1,7 +1,7 @@
-# client1.kerber.test: Fedora Kinoite 43, the satomlin fleet's client type.
+# client1.kerber.test: Fedora Kinoite 43, the reference client fleet's client type.
 # Unattended install from the Kinoite 43 ISO's embedded ostree repo. The
 # ostreesetup line is the ISO's own interactive-defaults.ks payload, so the
-# result is the system a person gets from that ISO. The satomlin-kit twin
+# result is the system a person gets from that ISO. The reference client kit's twin
 # later layers its packages with rpm-ostree.
 #
 # lab.sh renders this template to ~/kerber-lab/seeds/client1/ks.cfg (outside

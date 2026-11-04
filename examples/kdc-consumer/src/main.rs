@@ -1,8 +1,3 @@
-//! In-repo consumer of `krb5-kdc` issue, keytab export, and AP-REQ verify.
-//!
-//! This binary does not bind a socket. It calls the shipped issue and verify
-//! paths and prints the actual return values.
-
 use krb5_asn1::{decode, encode};
 use krb5_client::Keytab;
 use krb5_crypto::{KeyUsage, decrypt};

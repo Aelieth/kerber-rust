@@ -49,7 +49,7 @@ zeroize.workspace = true
 # --disable-transited-check, --body-realm, --renew and --renew-ticket, a KDC host before the
 # services, and S4U2Self for a service other than the cache's own; and, through
 # krb5-config/test-hooks, KRB5_PASSWORD and KRB5_NEW_PASSWORD (docs/testing.md lists them).
-test-hooks = ["dep:tracing-subscriber", "krb5-config/test-hooks", "krb5-protocol/test-hooks"]
+test-hooks = ["dep:tracing-subscriber", "krb5-config/test-hooks", "krb5-protocol/test-hooks", "krb5-kdc/test-hooks", "krb5-testkit/test-hooks"]
 
 [lints]
 workspace = true
@@ -57,3 +57,11 @@ workspace = true
 [dev-dependencies]
 krb5-kdc.workspace = true
 krb5-testkit.workspace = true
+
+[[test]]
+name = "key_exp_order"
+required-features = ["test-hooks"]
+
+[[test]]
+name = "kinit_otp"
+required-features = ["test-hooks"]

@@ -1,5 +1,3 @@
-//! AS-REQ / TGS-REQ / PA-ENC-TIMESTAMP builders (used by tests, KDC, client).
-
 use krb5_asn1::encode;
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, checksum, encrypt};
 use krb5_types::{
@@ -14,11 +12,6 @@ fn realm_string(realm: &str) -> Result<krb5_types::Realm, Error> {
     krb5_types::try_ascii(realm).map_err(|e| Error::ReplyMismatch(e.to_string()))
 }
 
-/// AS-REQ for `cname@realm` with optional padata.
-///
-/// # Errors
-///
-/// [`Error::ReplyMismatch`] when `realm` is not a GeneralString.
 pub fn as_req(
     cname: PrincipalName,
     realm: &str,
@@ -39,11 +32,6 @@ pub fn as_req(
     )
 }
 
-/// AS-REQ with an explicit `sname` and etype list.
-///
-/// # Errors
-///
-/// [`Error::ReplyMismatch`] when `realm` is not a GeneralString.
 pub fn as_req_sname(
     cname: PrincipalName,
     realm: &str,
@@ -76,25 +64,13 @@ pub fn as_req_sname(
     }))
 }
 
-/// PA-ENC-TIMESTAMP encrypted with the client long-term key (usage 1), at the time now and its
-/// microseconds.
-/// MIT `encts_process` (`lib/krb5/krb/preauth_encts.c:87-89`): the time and its microseconds as `get_preauth_time` gives them.
-///
-/// # Errors
-///
-/// [`Error::Asn1`] when the timestamp or its EncryptedData does not encode, and
-/// [`Error::Crypto`] when encrypting it under `key` fails.
+/// Encrypted under the long-term key, key usage 1.
+// MIT: `encts_process` (lib/krb5/krb/preauth_encts.c:87-89)
 pub fn pa_enc_timestamp(key: &ProtocolKey) -> Result<PaData, Error> {
     let (now, usec) = crate::auth_con::us_timeofday();
     pa_enc_timestamp_usec(key, &now, usec)
 }
 
-/// PA-ENC-TIMESTAMP with an explicit client time, its microseconds those of `now`.
-///
-/// # Errors
-///
-/// [`Error::Asn1`] when the timestamp or its EncryptedData does not encode, and
-/// [`Error::Crypto`] when encrypting it under `key` fails.
 pub fn pa_enc_timestamp_at(key: &ProtocolKey, now: &KerberosTime) -> Result<PaData, Error> {
     pa_enc_timestamp_usec(
         key,
@@ -103,8 +79,7 @@ pub fn pa_enc_timestamp_at(key: &ProtocolKey, now: &KerberosTime) -> Result<PaDa
     )
 }
 
-/// PA-ENC-TIMESTAMP at `now` and `usec`; MIT encodes `pausec` only when it is not zero.
-/// MIT `pa_enc_ts_1` (`lib/krb5/asn.1/asn1_k_encode.c:935-935`): `pausec` is an `opt_int32`, omitted when 0.
+// MIT: `pa_enc_ts_1` (lib/krb5/asn.1/asn1_k_encode.c:935-935)
 fn pa_enc_timestamp_usec(
     key: &ProtocolKey,
     now: &KerberosTime,
@@ -128,13 +103,6 @@ fn pa_enc_timestamp_usec(
     })
 }
 
-/// TGS-REQ with PA-TGS-REQ (AP-REQ wrapping `ticket`).
-///
-/// # Errors
-///
-/// [`Error::ReplyMismatch`] when `realm` or `crealm` is not a GeneralString, [`Error::Asn1`] when
-/// the body, the authenticator, or the AP-REQ does not encode, and [`Error::Crypto`] when the
-/// checksum or the authenticator encryption under `session` fails.
 pub fn tgs_req(
     ticket: Ticket,
     session: &ProtocolKey,
@@ -164,55 +132,31 @@ pub fn tgs_req(
         enc_authorization_data: None,
         till: None,
         subkey: None,
+        time_offset: 0,
     })
 }
 
-/// Inputs of a TGS-REQ.
-///
-/// MIT `k5_make_tgs_req` (`lib/krb5/krb/send_tgs.c:119-119`): takes the same values
-/// positionally. This is the parameter struct for [`tgs_req_ex`], not a wire type.
+// MIT: `k5_make_tgs_req` (lib/krb5/krb/send_tgs.c:119-119)
 pub struct TgsReqParams<'a> {
-    /// Header ticket.
     pub ticket: Ticket,
-    /// Key that checksums the body and encrypts the authenticator.
     pub session: &'a ProtocolKey,
-    /// Client realm.
     pub crealm: &'a str,
-    /// Client name.
     pub cname: &'a PrincipalName,
-    /// Server name. Owned because the body stores it.
     pub sname: PrincipalName,
-    /// Server realm.
     pub realm: &'a str,
-    /// Request nonce.
     pub nonce: u32,
-    /// KDC options copied onto the body.
     pub kdc_options: KdcOptions,
-    /// Additional tickets, when the caller has them.
     pub additional_tickets: Option<Vec<Ticket>>,
-    /// Padata appended after the PA-TGS-REQ.
     pub extra_padata: Vec<PaData>,
-    /// Offered encryption types.
     pub etypes: Vec<i32>,
-    /// Request addresses. `None` omits them.
     pub addresses: Option<HostAddresses>,
-    /// Postdated `from`. `None` omits it.
     pub from: Option<KerberosTime>,
-    /// Encrypted authorization data. `None` omits it.
     pub enc_authorization_data: Option<EncryptedData>,
-    /// Explicit end time. `None` is ten hours from now.
     pub till: Option<KerberosTime>,
-    /// Authenticator subkey. `None` omits it.
     pub subkey: Option<&'a ProtocolKey>,
+    pub time_offset: i64,
 }
 
-/// TGS-REQ with explicit KDC options, tickets, padata, addresses, and times.
-///
-/// # Errors
-///
-/// [`Error::ReplyMismatch`] when `realm` or `crealm` is not a GeneralString, [`Error::Asn1`] when
-/// the body, the authenticator, or the AP-REQ does not encode, and [`Error::Crypto`] when the
-/// checksum or the authenticator encryption under `session` fails.
 pub fn tgs_req_ex(p: TgsReqParams<'_>) -> Result<TgsReq, Error> {
     let TgsReqParams {
         ticket,
@@ -231,6 +175,7 @@ pub fn tgs_req_ex(p: TgsReqParams<'_>) -> Result<TgsReq, Error> {
         enc_authorization_data,
         till,
         subkey,
+        time_offset,
     } = p;
 
     let till = till.unwrap_or_else(|| {
@@ -255,8 +200,8 @@ pub fn tgs_req_ex(p: TgsReqParams<'_>) -> Result<TgsReq, Error> {
     let body_der = encode(&body)?;
     let cksum_usage = KeyUsage::new(ku::TGS_REQ_AUTH_CKSUM)?;
     let mic = checksum(session, cksum_usage, &body_der)?;
-    // MIT `tgs_construct_ap_req` (`lib/krb5/krb/send_tgs.c:82-82`): the authenticator's time and microseconds, from `krb5_us_timeofday`.
-    let (now, usec) = crate::auth_con::us_timeofday();
+    // MIT: `tgs_construct_ap_req` (lib/krb5/krb/send_tgs.c:82-82)
+    let (now, usec) = crate::ap_req::stamped(time_offset);
     let authenticator = Authenticator {
         authenticator_vno: Authenticator::VNO,
         crealm: krb5_types::try_ascii(crealm).map_err(|e| Error::ReplyMismatch(e.to_string()))?,

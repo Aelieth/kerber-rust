@@ -1,0 +1,12 @@
+# harness/field/scenarios/install.expect: where install.sh's rust leg is known to differ from its MIT leg, by
+# check name (the observations of checks.tsv). The comparison of the two legs grades a listed check KNOWN;
+# anything else that differs is a finding. Each line names the hand record that shows the difference and what
+# would remove it.
+#
+# install.sh's shared surface -- kdb5_util create, the bootstrap and populated getprinc blocks, the five
+# svc/setup ACL variants and their refusal texts, the kadm5 calls from client2 -- is at full parity: f-L2-rust's
+# getprinc-compare shows every principal byte-identical to the MIT realm (f-L2-mit-realm), and the ACL and
+# refusal texts are MIT's own, reproduced line for line. The doc-install, install-check, strings and SELinux
+# checks run on the rust leg only (the MIT leg installs nothing to check), so compare.py does not grade them.
+# There is no known divergence to list; the first cross-leg run calibrates this file.
+# check	known difference (rust leg vs MIT)	record	removed by

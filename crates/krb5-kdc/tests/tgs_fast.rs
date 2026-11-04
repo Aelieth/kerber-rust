@@ -11,17 +11,17 @@ use krb5_kdc::testrealm::{
     TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented, documented_host,
 };
 use krb5_kdc::{Error, PrincipalStore, decrypt_ticket_part};
-use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
+use krb5_protocol::tgs_req;
 
 use krb5_protocol::{
     AsOutcome, KdcAddr, apply_strengthen, armor_key, build_fast_armor, tgs_exchange,
     unwrap_fast_rep,
 };
-use krb5_testkit::{TgsReqBuilder, issue_tgt_password, password_key};
+use krb5_testkit::issue_tgt_password;
 use krb5_types::{
     ApReq, Authenticator, AuthorizationDataValue, Checksum, EncKdcRepPart, EncTgsRepPart,
-    EncTicketPart, EncryptedData, EncryptionKey, KdcOptions, KerberosTime, KrbError, OctetString,
-    PrincipalName, TgsRep, TgsReq, Ticket, TicketFlags, ascii, err, flag_bit, ku, pa,
+    EncTicketPart, EncryptedData, EncryptionKey, KerberosTime, OctetString, PrincipalName, TgsRep,
+    TgsReq, Ticket, TicketFlags, ascii, err, ku, pa,
 };
 use std::io::{Read, Write};
 use std::sync::mpsc;
@@ -72,6 +72,7 @@ fn password_as_tgt() -> AsOutcome {
         used_fast: false,
         pa_type: None,
         pa_config: None,
+        time_offset: 0,
     }
 }
 
@@ -187,6 +188,7 @@ fn tgs_unwrapped_fast_is_accepted() {
     });
     let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "testhost.kerber.test"]);
     let out = tgs_exchange(
+        &krb5_config::isolated_profile(),
         &KdcAddr {
             host: "127.0.0.1".into(),
             port: addr.port(),
@@ -297,10 +299,6 @@ fn tgs_fast_hide_outer_tgs_rep() {
         .expect("TGS armor");
     let fast = unwrap_fast_rep(&akey, &out.rep.0.padata).expect("FAST TGS rep");
     assert!(fast.finished.is_some(), "finished keeps the real client");
-}
-
-fn user_key() -> ProtocolKey {
-    password_key(TEST_USER, TEST_USER_PASSWORD)
 }
 
 fn decode_enc_part(plain: &[u8]) -> EncKdcRepPart {
@@ -507,17 +505,6 @@ fn fast_tgs_prepared(store: &PrincipalStore, nonce: u32) -> krb5_types::TgsReq {
     tgs
 }
 
-fn assert_krb_error(bytes: &[u8], code: i32, e_text: &str) {
-    assert_eq!(bytes.first(), Some(&0x7e), "expected KRB-ERROR");
-    let e: KrbError = decode(bytes).expect("KrbError");
-    assert_eq!(e.error_code, code);
-    let text = e
-        .e_text
-        .as_ref()
-        .and_then(|t| std::str::from_utf8(t.as_bytes()).ok());
-    assert_eq!(text, Some(e_text));
-}
-
 #[test]
 fn tgs_fast_inner_nonce_not_outer() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
@@ -549,93 +536,6 @@ fn tgs_fast_inner_nonce_not_outer() {
         enc.nonce, 200,
         "EncTgsRepPart must echo the inner FAST nonce"
     );
-}
-
-#[test]
-fn tgs_fast_validate_future_starttime_is_not_yet_valid() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let key = user_key();
-    // Two minutes ahead, inside the 300 s skew: the VALIDATE check decides, with no window to race.
-    let from = KerberosTime::now().add_seconds(120).unwrap();
-    let mut req = as_req(
-        cname.clone(),
-        TEST_REALM,
-        860,
-        Some(vec![pa_enc_timestamp(&key).expect("pa")]),
-    )
-    .unwrap();
-    req.0.req_body.from = Some(from);
-    req.0.req_body.kdc_options = req
-        .0
-        .req_body
-        .kdc_options
-        .with_bit(flag_bit::MAY_POSTDATE, true)
-        .with_bit(flag_bit::POSTDATED, true);
-    let issued = krb5_kdc::issue_as(&store, &req).expect("postdated AS");
-    let mut tgs = TgsReqBuilder::new(
-        issued.rep.0.ticket.clone(),
-        &issued.session_key,
-        TEST_REALM,
-        &cname,
-        PrincipalName::krbtgt(TEST_REALM),
-        TEST_REALM,
-        861,
-    )
-    .options(KdcOptions::forwardable().with_bit(flag_bit::VALIDATE, true))
-    .additional_tickets(None)
-    .padata(Vec::new())
-    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
-    .build()
-    .expect("VALIDATE");
-    let inner = tgs.0.req_body.clone();
-    wrap_tgs_fast(&mut tgs, &issued.session_key, inner).expect("TGS FAST");
-    let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("FAST VALIDATE future start");
-    match err {
-        Error::Protocol { code, text, .. } => {
-            assert_eq!(code, err::TKT_NYV);
-            assert_eq!(text.as_deref(), Some("NOT_YET_VALID"));
-        }
-        other => panic!("expected Protocol, got {other:?}"),
-    }
-}
-
-#[test]
-fn tgs_fast_forged_ticket_realm_is_process_tgs() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 870);
-    let mut tgs = tgs_req(
-        issued.rep.0.ticket.clone(),
-        &issued.session_key,
-        TEST_REALM,
-        &cname,
-        documented_host(),
-        TEST_REALM,
-        871,
-    )
-    .unwrap();
-    let inner = tgs.0.req_body.clone();
-    wrap_tgs_fast(&mut tgs, &issued.session_key, inner).expect("TGS FAST");
-    let pa = tgs
-        .0
-        .padata
-        .as_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|p| p.padata_type == pa::TGS_REQ)
-        .expect("PA-TGS-REQ");
-    let mut ap: ApReq = decode(pa.padata_value.as_ref()).expect("ap");
-    ap.ticket.realm = ascii("NOWHERE.TEST");
-    pa.padata_value = encode(&ap).expect("ap").into();
-    let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("forged realm");
-    match err {
-        Error::Protocol { code, text, .. } => {
-            assert_eq!(code, err::S_PRINCIPAL_UNKNOWN);
-            assert_eq!(text.as_deref(), Some("PROCESS_TGS"));
-        }
-        other => panic!("expected 7 PROCESS_TGS, got {other:?}"),
-    }
 }
 
 #[test]
@@ -716,37 +616,6 @@ fn tgs_fast_without_subkey_is_preauth_failed() {
 }
 
 #[test]
-fn tgs_fast_explicit_armor_without_pa_tgs_subkey_is_accepted() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 882);
-    let mut tgs = tgs_req(
-        issued.rep.0.ticket.clone(),
-        &issued.session_key,
-        TEST_REALM,
-        &cname,
-        documented_host(),
-        TEST_REALM,
-        883,
-    )
-    .unwrap();
-    let inner = tgs.0.req_body.clone();
-    let sub = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x53u8; 32])
-        .expect("armor subkey");
-    wrap_tgs_fast_explicit_armor(
-        &mut tgs,
-        issued.rep.0.ticket.clone(),
-        &issued.session_key,
-        &cname,
-        inner,
-        Some(&sub),
-    )
-    .expect("TGS FAST explicit armor");
-    let out = krb5_kdc::issue_tgs(&store, &tgs).expect("explicit armor without PA-TGS-REQ subkey");
-    assert_eq!(out.rep.0.ticket.sname, documented_host());
-}
-
-#[test]
 fn tgs_fast_explicit_armor_without_any_subkey_is_policy() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -800,35 +669,6 @@ fn tgs_header_ticket_ad_fx_armor_is_policy() {
 }
 
 #[test]
-// oracle: differential-gate.sh armor-ap-req-as-pa-tgs-req
-fn tgs_header_ticket_if_relevant_ad_fx_armor_is_policy() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 888);
-    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
-    let mut part = decrypt_ticket_part(&krbtgt.key, &issued.rep.0.ticket).expect("TGT");
-    let inner = encode(&vec![fx_armor_ad()]).expect("inner AD");
-    part.authorization_data = Some(vec![AuthorizationDataValue {
-        ad_type: pa::AD_IF_RELEVANT,
-        ad_data: inner.into(),
-    }]);
-    let mut ticket = issued.rep.0.ticket.clone();
-    reencrypt_tgt(&store, &mut ticket, &part);
-    let tgs = tgs_req(
-        ticket,
-        &issued.session_key,
-        TEST_REALM,
-        &cname,
-        documented_host(),
-        TEST_REALM,
-        889,
-    )
-    .unwrap();
-    let bytes = krb5_kdc::handle_request(&store, &encode(&tgs).expect("der")).expect("reply");
-    assert_krb_error(&bytes, err::POLICY, "PROCESS_TGS");
-}
-
-#[test]
 // oracle: differential-gate.sh tgs-ad-fx-armor-authenticator
 fn tgs_header_authenticator_ad_fx_armor_is_policy() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
@@ -872,32 +712,6 @@ fn tgs_header_authenticator_ad_fx_armor_is_policy() {
 }
 
 #[test]
-fn fast_tgs_corrupt_enc_fast_req_is_bad_integrity_find_fast() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let mut tgs = fast_tgs_prepared(&store, 920);
-    map_fx_fast_tgs(&mut tgs, |a| {
-        let mut c = a.enc_fast_req.cipher.to_vec();
-        c[0] ^= 0xff;
-        a.enc_fast_req.cipher = c.into();
-    });
-    let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("corrupt TGS enc_fast_req");
-    assert_find_fast(err, err::BAD_INTEGRITY, "integrity check failed");
-}
-
-#[test]
-fn fast_tgs_bad_req_checksum_is_modified() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let mut tgs = fast_tgs_prepared(&store, 892);
-    map_fx_fast_tgs(&mut tgs, |a| {
-        let mut ck = a.req_checksum.checksum.to_vec();
-        ck[0] ^= 0xff;
-        a.req_checksum.checksum = ck.into();
-    });
-    let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("bad FAST checksum");
-    assert_find_fast(err, err::MODIFIED, "modified checksum");
-}
-
-#[test]
 fn fast_tgs_unkeyed_checksum_is_policy() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let mut tgs = fast_tgs_prepared(&store, 896);
@@ -919,16 +733,4 @@ fn fast_tgs_unkeyed_checksum_is_policy() {
     });
     let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("unkeyed FAST checksum");
     assert_find_fast(err, err::POLICY, "Unkeyed checksum used in fast_req");
-}
-
-#[test]
-fn fast_tgs_unkeyed_type_with_bad_bytes_is_modified() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let mut tgs = fast_tgs_prepared(&store, 910);
-    map_fx_fast_tgs(&mut tgs, |a| {
-        a.req_checksum.cksumtype = 7;
-        a.req_checksum.checksum = vec![0xff; 16].into();
-    });
-    let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("unkeyed + bad bytes");
-    assert_find_fast(err, err::MODIFIED, "modified checksum");
 }

@@ -1,7 +1,3 @@
-//! Mint a sendauth AP-REQ whose ticket endtime is in the past.
-//!
-//! Usage: `kprop-expired-apreq KEYTAB SNAME REALM` — DER on stdout.
-
 use std::io::Write;
 
 use krb5_protocol::Keytab;

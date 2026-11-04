@@ -11,7 +11,7 @@ OUT ?=
 GATE ?=
 QUALITY ?=
 
-.PHONY: safety fmt clippy test doc shellcheck policy harness stop-harness rust-kdc gate snapshot checkpoint budget
+.PHONY: safety fmt clippy test doc shellcheck policy harness stop-harness rust-kdc gate
 
 safety: fmt clippy test policy
 
@@ -31,9 +31,9 @@ doc:
 
 shellcheck:
 	@if command -v shellcheck >/dev/null 2>&1; then \
-	  shellcheck -S style scripts/*.sh scripts/lib/*.sh harness/*.sh harness/prod/*.sh dist/*.sh harness/field/*.sh harness/field/lib/*.sh harness/field/scenarios/*.sh; \
+	  shellcheck -S style scripts/*.sh scripts/lib/*.sh harness/*.sh dist/*.sh harness/field/*.sh harness/field/lib/*.sh harness/field/scenarios/*.sh; \
 	else \
-	  docker run --rm -v "$(ROOT):/mnt:ro" koalaman/shellcheck:v0.11.0 -S style scripts/*.sh scripts/lib/*.sh harness/*.sh harness/prod/*.sh dist/*.sh harness/field/*.sh harness/field/lib/*.sh harness/field/scenarios/*.sh; \
+	  docker run --rm -v "$(ROOT):/mnt:ro" koalaman/shellcheck:v0.11.0 -S style scripts/*.sh scripts/lib/*.sh harness/*.sh dist/*.sh harness/field/*.sh harness/field/lib/*.sh harness/field/scenarios/*.sh; \
 	fi
 
 policy:
@@ -53,27 +53,16 @@ gate:
 	@g="$(GATE)"; g=$${g%.sh}; case "$$g" in *-gate) ;; *) g="$$g-gate" ;; esac; \
 	  ./scripts/$$g.sh
 
-snapshot:
-	@if [ -z "$(OUT)" ]; then echo "usage: make snapshot OUT=dir [QUALITY=1]"; exit 2; fi
-	./scripts/hygiene-snapshot.sh $(if $(QUALITY),--quality,) $(OUT)
-
-checkpoint:
-	@if [ -z "$(OUT)" ]; then echo "usage: make checkpoint OUT=dir"; exit 2; fi
-	./scripts/checkpoint.sh --out $(OUT)
-
-budget:
-	python3 scripts/ci-status.py --budget-report -n 15 --jobs
-	python3 scripts/ci-status.py --check-budget -n 5 --workflow ci
-
 # One field run on the lab: the ref's `git archive`, never this working tree, driven through the real
 # products on the lab VMs; records under ~/kerber-lab/runs (harness/field/README.md, "Scenarios").
 PROFILE ?= nightly
-REF ?= f-functional
+REF ?=
 ONLY ?=
+LEG ?=
 
 .PHONY: field
 field:
-	$(ROOT)/harness/field/run.sh --profile $(PROFILE) --ref $(REF) $(if $(ONLY),--only $(ONLY))
+	$(ROOT)/harness/field/run.sh --profile $(PROFILE) $(if $(REF),--ref $(REF)) $(if $(ONLY),--only $(ONLY)) $(if $(LEG),--leg $(LEG))
 
 # The product as Fedora's krb5-server and krb5-workstation lay out MIT's (docs/install.md;
 # dist/install.sh does the copying and keeps the manifest uninstall reads). `make build` is the

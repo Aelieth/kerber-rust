@@ -148,7 +148,8 @@ fn accept_noncanonical_seq_integer_body() {
 
 #[test]
 fn build_krb_safe_signs_the_full_dummy_not_the_body_alone() {
-    // MIT `create_krbsafe` (`mk_safe.c:68-80`): checksums the full KRB-SAFE with a zero checksum
+    // MIT: `create_krbsafe` (mk_safe.c:68-80)
+    // checksums the full KRB-SAFE with a zero checksum
     // spliced, the verifier's primary branch; a body-only MAC is accepted only via the RFC 1510
     // fallback.
     let key = session();

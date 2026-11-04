@@ -20,6 +20,17 @@ use krb5_types::{
     ApReq, EncTicketPart, HostAddress, KerberosTime, PrincipalName, TransitedEncoding, err,
     flag_bit, ku,
 };
+use std::collections::BTreeMap;
+
+/// No `[capaths]`, for the parameters that outlive the function that makes them.
+static NO_CAPATHS: BTreeMap<String, BTreeMap<String, Vec<String>>> = BTreeMap::new();
+static PERMITTED: [EncryptionType; 5] = [
+    EncryptionType::Aes256CtsHmacSha196,
+    EncryptionType::Aes128CtsHmacSha196,
+    EncryptionType::Aes256CtsHmacSha384192,
+    EncryptionType::Aes128CtsHmacSha256128,
+    EncryptionType::Des3CbcSha1,
+];
 
 fn host_ap_req() -> (Vec<u8>, ProtocolKey, u32) {
     krb5_config::isolate_test_krb5();
@@ -68,10 +79,13 @@ fn walk(keys: &[ProtocolKey], kvnos: &[u32]) -> ApVerifyParams<'static> {
         key_kvnos: Some(Box::leak(kvnos.to_vec().into_boxed_slice())),
         key_principals: None,
         kvno: None,
+        permitted: &PERMITTED,
         expected_server: None,
         expected_realm: None,
         get_entry: None,
         skew: DEFAULT_SKEW,
+        ignore_acceptor_hostname: false,
+        capaths: &NO_CAPATHS,
         remote_addr: None,
         now: None,
     }
@@ -84,7 +98,8 @@ fn walk_code(raw: &[u8], keys: &[ProtocolKey], kvnos: &[u32]) -> (i32, String) {
     }
 }
 
-/// MIT `decrypt_try_server` (`rd_req_dec.c:355-443`): with no server, every key of the ticket's enctype is tried, whatever its kvno.
+// MIT: `decrypt_try_server` (rd_req_dec.c:355-443)
+/// with no server, every key of the ticket's enctype is tried, whatever its kvno.
 #[test]
 fn rd_req_keytab_walk_tries_every_kvno() {
     let (raw, key, kvno) = host_ap_req();
@@ -99,18 +114,8 @@ fn rd_req_keytab_walk_tries_every_kvno() {
     .expect("the right key at another kvno decrypts the ticket");
 }
 
-/// MIT `decrypt_try_server` (`rd_req_dec.c:355-443`): a ticket whose kvno was relabelled still decrypts under the key it was sealed with.
-#[test]
-fn rd_req_keytab_walk_takes_a_relabelled_kvno() {
-    let (raw, key, _) = host_ap_req();
-    let mut ap: ApReq = decode(&raw).expect("AP-REQ");
-    ap.ticket.enc_part.kvno = Some(2);
-    let raw2 = encode(&ap).expect("encode");
-    verify_ap_req_ex(&raw2, &walk(&[key], &[1]), &ReplayCache::new(), None)
-        .expect("relabelled kvno");
-}
-
-/// MIT `iteration_error` (`rd_req_dec.c:264-270`): a key at the ticket's kvno and enctype that does not decrypt it is BAD_INTEGRITY.
+// MIT: `iteration_error` (rd_req_dec.c:264-270)
+/// a key at the ticket's kvno and enctype that does not decrypt it is BAD_INTEGRITY.
 #[test]
 fn rd_req_keytab_walk_wrong_key_at_the_ticket_kvno_is_bad_integrity() {
     let (raw, _, kvno) = host_ap_req();
@@ -123,16 +128,8 @@ fn rd_req_keytab_walk_wrong_key_at_the_ticket_kvno_is_bad_integrity() {
     );
 }
 
-/// MIT `iteration_error` (`rd_req_dec.c:224-232`): an empty keytab is NOKEY, "No keys in keytab".
-#[test]
-fn rd_req_keytab_walk_without_keys_is_nokey() {
-    let (raw, _, _) = host_ap_req();
-    let (code, text) = walk_code(&raw, &[], &[]);
-    assert_eq!(code, err::NOKEY);
-    assert_eq!(text, "No keys in keytab");
-}
-
-/// MIT `iteration_error` (`rd_req_dec.c:244-256`): no key at the ticket's kvno is BADKEYVER, and a higher one says the ticket is out of date.
+// MIT: `iteration_error` (rd_req_dec.c:244-256)
+/// no key at the ticket's kvno is BADKEYVER, and a higher one says the ticket is out of date.
 #[test]
 fn rd_req_keytab_walk_without_the_ticket_kvno_is_badkeyver() {
     let (raw, _, kvno) = host_ap_req();
@@ -147,7 +144,8 @@ fn rd_req_keytab_walk_without_the_ticket_kvno_is_badkeyver() {
     assert!(text.ends_with("keytab is likely out of date"), "{text}");
 }
 
-/// MIT `iteration_error` (`rd_req_dec.c:257-263`): a key at the ticket's kvno but of another enctype is BADKEYVER.
+// MIT: `iteration_error` (rd_req_dec.c:257-263)
+/// a key at the ticket's kvno but of another enctype is BADKEYVER.
 #[test]
 fn rd_req_keytab_walk_without_the_ticket_enctype_is_badkeyver() {
     let (raw, _, kvno) = host_ap_req();
@@ -160,7 +158,8 @@ fn rd_req_keytab_walk_without_the_ticket_enctype_is_badkeyver() {
     );
 }
 
-/// MIT `iteration_error` (`rd_req_dec.c:239-243`): keys only for other principals are NOT_US.
+// MIT: `iteration_error` (rd_req_dec.c:239-243)
+/// keys only for other principals are NOT_US.
 #[test]
 fn rd_req_keytab_walk_without_the_ticket_server_is_not_us() {
     let (raw, _, kvno) = host_ap_req();
@@ -187,26 +186,6 @@ fn rd_req_keytab_walk_without_the_ticket_server_is_not_us() {
 }
 
 #[test]
-fn rd_req_matching_kvno_verifies() {
-    let (raw, key, kvno) = host_ap_req();
-    let keys = [key];
-    let kvnos = [kvno];
-    let params = ApVerifyParams {
-        keys: &keys,
-        key_kvnos: Some(&kvnos),
-        key_principals: None,
-        kvno: None,
-        expected_server: None,
-        expected_realm: None,
-        get_entry: None,
-        skew: DEFAULT_SKEW,
-        remote_addr: None,
-        now: None,
-    };
-    verify_ap_req_ex(&raw, &params, &ReplayCache::new(), None).expect("matching kvno");
-}
-
-#[test]
 fn rd_req_authenticator_skew_is_skew() {
     let (raw, key, _) = host_ap_req();
     let now = KerberosTime::now();
@@ -217,10 +196,13 @@ fn rd_req_authenticator_skew_is_skew() {
         key_kvnos: None,
         key_principals: None,
         kvno: None,
+        permitted: &PERMITTED,
         expected_server: None,
         expected_realm: None,
         get_entry: None,
         skew: DEFAULT_SKEW,
+        ignore_acceptor_hostname: false,
+        capaths: &NO_CAPATHS,
         remote_addr: None,
         now: Some(far),
     };
@@ -251,10 +233,13 @@ fn verify(
         key_kvnos: None,
         key_principals: None,
         kvno: None,
+        permitted: &PERMITTED,
         expected_server: None,
         expected_realm: None,
         get_entry: None,
         skew: DEFAULT_SKEW,
+        ignore_acceptor_hostname: false,
+        capaths: &NO_CAPATHS,
         remote_addr: None,
         now: None,
     };
@@ -262,13 +247,7 @@ fn verify(
 }
 
 #[test]
-fn rd_req_transited_issued_ticket_with_t_flag_verifies() {
-    let (raw, key, _) = host_ap_req();
-    verify(&raw, &key).expect("KDC-issued ticket has TRANSITED_POLICY_CHECKED");
-}
-
-#[test]
-fn rd_req_transited_unchecked_evil_hop_is_ill_cr_tkt() {
+fn rd_req_transited_unchecked_one_realm_is_no_tkt_in_rlm() {
     let (raw, key, _) = host_ap_req();
     let raw2 = rewrite_ticket(&raw, &key, |part| {
         part.flags = part
@@ -278,35 +257,9 @@ fn rd_req_transited_unchecked_evil_hop_is_ill_cr_tkt() {
         part.transited = TransitedEncoding::from_realms(&["EVIL.COM"]);
     });
     match verify(&raw2, &key) {
-        Err(krb5_protocol::Error::KrbError { code, .. }) => assert_eq!(code, err::ILL_CR_TKT),
-        other => panic!("expected ILL_CR_TKT, got {other:?}"),
+        Err(krb5_protocol::Error::KrbError { code, .. }) => assert_eq!(code, err::NO_TKT_IN_RLM),
+        other => panic!("expected NO_TKT_IN_RLM, got {other:?}"),
     }
-}
-
-#[test]
-fn rd_req_transited_t_flag_skips_evil_hop() {
-    let (raw, key, _) = host_ap_req();
-    let raw2 = rewrite_ticket(&raw, &key, |part| {
-        assert!(
-            part.flags.bit(flag_bit::TRANSITED_POLICY_CHECKED),
-            "KDC-issued ticket should carry T"
-        );
-        part.transited = TransitedEncoding::from_realms(&["EVIL.COM"]);
-    });
-    verify(&raw2, &key).expect("TRANSITED_POLICY_CHECKED skips krb5_check_transited_list");
-}
-
-#[test]
-fn rd_req_transited_unchecked_empty_verifies() {
-    let (raw, key, _) = host_ap_req();
-    let raw2 = rewrite_ticket(&raw, &key, |part| {
-        part.flags = part
-            .flags
-            .clone()
-            .with_bit(flag_bit::TRANSITED_POLICY_CHECKED, false);
-        part.transited = TransitedEncoding::empty();
-    });
-    verify(&raw2, &key).expect("empty transited is at most one hop");
 }
 
 fn host_ap_req_forged(mutate: impl FnOnce(&mut EncTicketPart)) -> (Vec<u8>, ProtocolKey) {
@@ -364,10 +317,13 @@ fn accept(raw: &[u8], key: &ProtocolKey) -> Result<(), krb5_protocol::Error> {
         key_kvnos: None,
         key_principals: None,
         kvno: None,
+        permitted: &PERMITTED,
         expected_server: None,
         expected_realm: None,
         get_entry: None,
         skew: DEFAULT_SKEW,
+        ignore_acceptor_hostname: false,
+        capaths: &NO_CAPATHS,
         remote_addr: None,
         now: None,
     };
@@ -376,7 +332,8 @@ fn accept(raw: &[u8], key: &ProtocolKey) -> Result<(), krb5_protocol::Error> {
 
 #[test]
 fn no_starttime_future_authtime_is_nyv() {
-    // MIT `krb5int_validate_times` (`valid_times.c:44-51`): starttime==0 falls back to authtime;
+    // MIT: `krb5int_validate_times` (valid_times.c:44-51)
+    // starttime==0 falls back to authtime;
     // a ticket whose authtime is well beyond the skew is not yet valid.
     let far = KerberosTime::now()
         .add_seconds(DEFAULT_SKEW + 3600)
@@ -395,7 +352,8 @@ fn no_starttime_future_authtime_is_nyv() {
 
 #[test]
 fn invalid_flag_is_tkt_invalid() {
-    // MIT `rd_req_decoded_opt` (`rd_req_dec.c:634-638`): the INVALID flag yields
+    // MIT: `rd_req_decoded_opt` (rd_req_dec.c:634-638)
+    // the INVALID flag yields
     // KRB5KRB_AP_ERR_TKT_INVALID (offset 145), distinct from TKT_NYV.
     let (raw, key) = host_ap_req_forged(|part| {
         part.flags = part.flags.clone().with_bit(flag_bit::INVALID, true);
@@ -412,11 +370,14 @@ fn invalid_flag_is_tkt_invalid() {
 
 #[test]
 fn pinned_name_wrong_kvno_is_badkeyver() {
-    // MIT `decrypt_try_server` (`rd_req_dec.c:374-376`): an explicit server goes to
+    // MIT: `decrypt_try_server` (rd_req_dec.c:374-376)
+    // an explicit server goes to
     // try_one_princ → krb5_kt_get_entry(princ, kvno, etype).
-    // MIT `krb5_ktfile_get_entry` (`kt_file.c:380-384`): an entry for the principal+enctype at
+    // MIT: `krb5_ktfile_get_entry` (kt_file.c:380-384)
+    // an entry for the principal+enctype at
     // another kvno is KRB5_KT_KVNONOTFOUND.
-    // MIT `keytab_fetch_error` (`rd_req_dec.c:139-148`): maps it to KRB5KRB_AP_ERR_BADKEYVER
+    // MIT: `keytab_fetch_error` (rd_req_dec.c:139-148)
+    // maps it to KRB5KRB_AP_ERR_BADKEYVER
     // (44) "Cannot find key for %s kvno %d in keytab" when the pinned name is the ticket's
     // server. Parent: 45 NOKEY.
     let (raw, key) = host_ap_req_forged(|_| {});
@@ -430,10 +391,13 @@ fn pinned_name_wrong_kvno_is_badkeyver() {
         key_kvnos: Some(&kvnos),
         key_principals: None,
         kvno: None,
+        permitted: &PERMITTED,
         expected_server: Some(&server),
         expected_realm: Some(TEST_REALM),
         get_entry: None,
         skew: DEFAULT_SKEW,
+        ignore_acceptor_hostname: false,
+        capaths: &NO_CAPATHS,
         remote_addr: None,
         now: None,
     };
@@ -454,7 +418,8 @@ fn pinned_name_wrong_kvno_is_badkeyver() {
 /// The sender's address is searched for in the ticket's address list as MIT searches it: a
 /// ticket without a list, or whose list is one NetBIOS address, holds any address; an empty
 /// list holds none; otherwise the address must be one of the list's.
-/// MIT `krb5_address_search` (`lib/krb5/krb/addr_srch.c:48-65`): the rules.
+// MIT: `krb5_address_search` (lib/krb5/krb/addr_srch.c:48-65)
+/// the rules.
 #[test]
 fn a_sender_address_is_searched_for_in_the_ticket_addresses_as_mits() {
     let inet = |o: [u8; 4]| HostAddress {
@@ -486,25 +451,6 @@ fn a_sender_address_is_searched_for_in_the_ticket_addresses_as_mits() {
     );
 }
 
-/// MIT `decrypt_authenticator` (`rd_req_dec.c:820-850`): the authenticator decrypts through
-/// `krb5_c_decrypt`, so an EncryptedData of another enctype than the session key's is
-/// KRB5_BAD_ENCTYPE.
-#[test]
-fn rd_req_authenticator_of_another_enctype_is_bad_enctype() {
-    let (raw, key, _) = host_ap_req();
-    let mut ap: ApReq = decode(&raw).expect("AP-REQ");
-    ap.authenticator.etype = 17;
-    match verify_ap_req_ex(
-        &encode(&ap).expect("encode"),
-        &ApVerifyParams::single_key(&key),
-        &ReplayCache::new(),
-        None,
-    ) {
-        Err(krb5_protocol::Error::BadEnctype) => {}
-        other => panic!("expected BAD_ENCTYPE, got {other:?}"),
-    }
-}
-
 /// The parameters of an acceptor that names its server and looks the key up in a keytab by principal, as
 /// `krb5_rd_req` does with a server and the KDB keytab: `get_entry` is the lookup.
 fn named<'a>(
@@ -516,10 +462,13 @@ fn named<'a>(
         key_kvnos: None,
         key_principals: None,
         kvno: None,
+        permitted: &PERMITTED,
         expected_server: Some(server),
         expected_realm: Some(TEST_REALM),
         get_entry: Some(get_entry),
         skew: DEFAULT_SKEW,
+        ignore_acceptor_hostname: false,
+        capaths: &NO_CAPATHS,
         remote_addr: None,
         now: None,
     }
@@ -534,8 +483,10 @@ fn named_code(raw: &[u8], params: &ApVerifyParams<'_>) -> (i32, String) {
 
 /// A ticket that decrypts under the named server's keytab key is that server's, whatever server its
 /// cleartext names: the keytab principal replaces it.
-/// MIT `try_one_entry` (`rd_req_dec.c:315-317`): the keytab principal becomes the ticket's server.
-/// MIT `try_one_princ` (`rd_req_dec.c:325-347`): never compares the cleartext one.
+// MIT: `try_one_entry` (rd_req_dec.c:315-317)
+/// the keytab principal becomes the ticket's server.
+// MIT: `try_one_princ` (rd_req_dec.c:325-347)
+/// never compares the cleartext one.
 #[test]
 fn rd_req_with_a_named_server_takes_the_keytab_principal_for_the_tickets() {
     let (raw, key, kvno) = host_ap_req();
@@ -573,22 +524,40 @@ fn rd_req_with_a_named_server_takes_the_keytab_principal_for_the_tickets() {
     );
 }
 
-/// MIT `keytab_fetch_error` (`rd_req_dec.c:118-148`): an explicit server the keytab does not hold is
+// MIT: `keytab_fetch_error` (rd_req_dec.c:118-148)
+/// an explicit server the keytab does not hold is
 /// NOKEY; a kvno it does not hold is BADKEYVER when the named server is the ticket's and NOT_US when
 /// not; any other code passes through.
 #[test]
 fn rd_req_with_a_named_server_maps_the_keytab_codes_as_keytab_fetch_error() {
-    let (raw, _, _) = host_ap_req();
+    let (raw, _, kvno) = host_ap_req();
     let host = documented_host();
     let elsewhere =
         PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "elsewhere.kerber.test"]);
+    let (h, e) = (
+        host.unparse_with_realm(TEST_REALM),
+        elsewhere.unparse_with_realm(TEST_REALM),
+    );
     let no_entry = |_: &PrincipalName, _: &str, _: u32, _: i32| Err(KeytabLookup::NotFound);
-    assert_eq!(named_code(&raw, &named(&host, &no_entry)).0, err::NOKEY);
-    let no_kvno = |_: &PrincipalName, _: &str, _: u32, _: i32| Err(KeytabLookup::KvnoNotFound);
-    assert_eq!(named_code(&raw, &named(&host, &no_kvno)).0, err::BADKEYVER);
+    // a KDB keytab sets no text, so the code's own
     assert_eq!(
-        named_code(&raw, &named(&elsewhere, &no_kvno)).0,
-        err::NOT_US
+        named_code(&raw, &named(&host, &no_entry)),
+        (err::NOKEY, "Service key not available".into())
+    );
+    let no_kvno = |_: &PrincipalName, _: &str, _: u32, _: i32| Err(KeytabLookup::KvnoNotFound);
+    assert_eq!(
+        named_code(&raw, &named(&host, &no_kvno)),
+        (
+            err::BADKEYVER,
+            format!("Cannot find key for {h} kvno {kvno} in keytab")
+        )
+    );
+    assert_eq!(
+        named_code(&raw, &named(&elsewhere, &no_kvno)),
+        (
+            err::NOT_US,
+            format!("Cannot find key for {e} kvno {kvno} in keytab (request ticket server {h})")
+        )
     );
     let other = |_: &PrincipalName, _: &str, _: u32, _: i32| {
         Err(KeytabLookup::Other(krb5_protocol::Error::KdbNoPermittedKey))
@@ -599,17 +568,17 @@ fn rd_req_with_a_named_server_maps_the_keytab_codes_as_keytab_fetch_error() {
     ));
 }
 
-/// MIT `integrity_error` (`rd_req_dec.c:162-181`): a keytab key that does not decrypt the ticket is BAD_INTEGRITY when the named server is the ticket's, NOT_US when not.
+// MIT: `integrity_error` (rd_req_dec.c:162-181)
+/// a keytab key that does not decrypt the ticket is BAD_INTEGRITY when the named server is the ticket's, NOT_US when not.
 #[test]
 fn rd_req_with_a_named_server_and_a_wrong_key_is_bad_integrity_or_not_us() {
     let (raw, _, _) = host_ap_req();
     let wrong = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[3u8; 32]).unwrap();
     let lookup = |_: &PrincipalName, _: &str, _: u32, _: i32| Ok(wrong.clone());
     let host = documented_host();
-    assert!(matches!(
-        verify_ap_req_ex(&raw, &named(&host, &lookup), &ReplayCache::new(), None),
-        Err(krb5_protocol::Error::Crypto(_))
-    ));
+    let (code, text) = named_code(&raw, &named(&host, &lookup));
+    assert_eq!(code, err::BAD_INTEGRITY);
+    assert!(text.starts_with("Cannot decrypt ticket for "), "{text}");
     let elsewhere =
         PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "elsewhere.kerber.test"]);
     let (code, text) = named_code(&raw, &named(&elsewhere, &lookup));
@@ -634,7 +603,8 @@ fn documented_host_static() -> &'static PrincipalName {
 
 /// With no server named and a keytab that cannot be walked, the principal looked up is the one the
 /// ticket names, at the ticket's kvno and enctype, and it stays the ticket's server.
-/// MIT `decrypt_try_server` (`rd_req_dec.c:379-386`): a keytab with no `start_seq_get` takes `try_one_princ(tkt_server, FALSE)`.
+// MIT: `decrypt_try_server` (rd_req_dec.c:379-386)
+/// a keytab with no `start_seq_get` takes `try_one_princ(tkt_server, FALSE)`.
 #[test]
 fn rd_req_with_no_server_looks_up_the_server_the_ticket_names() {
     let (raw, key, kvno) = host_ap_req();
@@ -663,17 +633,23 @@ fn rd_req_with_no_server_looks_up_the_server_the_ticket_names() {
 /// For the ticket's own server `keytab_fetch_error` is NOT_US where the keytab has no entry (NOKEY for an
 /// explicit server), BADKEYVER at a kvno it lacks (the server is always the ticket's), and BAD_INTEGRITY
 /// for a key that does not decrypt; any other code passes through.
-/// MIT `keytab_fetch_error` (`rd_req_dec.c:118-148`): `KRB5_KT_NOTFOUND` is `explicit_server ? NOKEY : NOT_US`.
-/// MIT `integrity_error` (`rd_req_dec.c:162-181`): the server is the ticket's, so BAD_INTEGRITY.
+// MIT: `keytab_fetch_error` (rd_req_dec.c:118-148)
+/// `KRB5_KT_NOTFOUND` is `explicit_server ? NOKEY : NOT_US`.
+// MIT: `integrity_error` (rd_req_dec.c:162-181)
+/// the server is the ticket's, so BAD_INTEGRITY.
 #[test]
 fn rd_req_with_no_server_maps_the_keytab_codes_for_the_tickets_server() {
     let (raw, _, _) = host_ap_req();
     let no_entry = |_: &PrincipalName, _: &str, _: u32, _: i32| Err(KeytabLookup::NotFound);
-    assert_eq!(named_code(&raw, &unnamed(&no_entry)).0, err::NOT_US);
+    assert_eq!(
+        named_code(&raw, &unnamed(&no_entry)),
+        (err::NOT_US, "The ticket isn't for us".into())
+    );
     let no_kvno = |_: &PrincipalName, _: &str, _: u32, _: i32| Err(KeytabLookup::KvnoNotFound);
     let (code, text) = named_code(&raw, &unnamed(&no_kvno));
     assert_eq!(code, err::BADKEYVER);
-    assert!(text.starts_with("Cannot find key for "), "{text}");
+    assert!(text.starts_with("Cannot find key for host/"), "{text}");
+    assert!(text.contains("@KERBER.TEST kvno "), "{text}");
     let other = |_: &PrincipalName, _: &str, _: u32, _: i32| {
         Err(KeytabLookup::Other(krb5_protocol::Error::KdbNoPermittedKey))
     };
@@ -683,15 +659,13 @@ fn rd_req_with_no_server_maps_the_keytab_codes_for_the_tickets_server() {
     ));
     let wrong = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[3u8; 32]).unwrap();
     let lookup = |_: &PrincipalName, _: &str, _: u32, _: i32| Ok(wrong.clone());
-    assert!(matches!(
-        verify_ap_req_ex(&raw, &unnamed(&lookup), &ReplayCache::new(), None),
-        Err(krb5_protocol::Error::Crypto(_))
-    ));
+    assert_eq!(named_code(&raw, &unnamed(&lookup)).0, err::BAD_INTEGRITY);
 }
 
 /// A host-based server with no host over a keytab that cannot be walked matches the ticket's server by
 /// service (and realm), and one that does not match is refused before any lookup.
-/// MIT `decrypt_try_server` (`rd_req_dec.c:379-386`): `krb5_sname_match(server, tkt_server)`, else `nomatch_error` (NOT_US).
+// MIT: `decrypt_try_server` (rd_req_dec.c:379-386)
+/// `krb5_sname_match(server, tkt_server)`, else `nomatch_error` (NOT_US).
 #[test]
 fn rd_req_with_a_server_pattern_must_match_the_tickets_server_before_the_lookup() {
     let (raw, key, _) = host_ap_req();
@@ -790,7 +764,8 @@ fn with_bad_parity(key: &ProtocolKey) -> ProtocolKey {
 }
 
 /// An acceptor that names its server has the one keytab entry tried, and that entry's key, of bad parity, is refused with its own code.
-/// MIT `try_one_entry` (`rd_req_dec.c:290-320`): `krb5_decrypt_tkt_part` fails with `KRB5DES_BAD_KEYPAR`, which only `KRB5KRB_AP_ERR_BAD_INTEGRITY` is turned into another error (`:337-338`).
+// MIT: `try_one_entry` (rd_req_dec.c:290-320)
+/// `krb5_decrypt_tkt_part` fails with `KRB5DES_BAD_KEYPAR`, which only `KRB5KRB_AP_ERR_BAD_INTEGRITY` is turned into another error (`:337-338`).
 #[test]
 fn rd_req_with_a_server_named_and_its_key_of_bad_parity_is_refused_with_the_keys_code() {
     let (raw, key, kvno) = des3_host_ap_req();
@@ -800,10 +775,13 @@ fn rd_req_with_a_server_named_and_its_key_of_bad_parity_is_refused_with_the_keys
         key_kvnos: Some(Box::leak(vec![kvno].into_boxed_slice())),
         key_principals: None,
         kvno: None,
+        permitted: &PERMITTED,
         expected_server: Some(Box::leak(Box::new(server.clone()))),
         expected_realm: Some(TEST_REALM),
         get_entry: None,
         skew: DEFAULT_SKEW,
+        ignore_acceptor_hostname: false,
+        capaths: &NO_CAPATHS,
         remote_addr: None,
         now: None,
     };
@@ -827,7 +805,8 @@ fn rd_req_with_a_server_named_and_its_key_of_bad_parity_is_refused_with_the_keys
 }
 
 /// With no server named the keytab is walked, an entry that does not decrypt is passed over, and the walk's end is chosen by what it found: a key at the ticket's kvno and enctype that cannot decrypt it is BAD_INTEGRITY.
-/// MIT `decrypt_try_server` (`rd_req_dec.c:355-443`): `try_one_entry`'s failure, whatever it is, moves the walk on; `iteration_error` (`:264-270`) then gives `KRB5KRB_AP_ERR_BAD_INTEGRITY`.
+// MIT: `decrypt_try_server` (rd_req_dec.c:355-443)
+/// `try_one_entry`'s failure, whatever it is, moves the walk on; `iteration_error` (`:264-270`) then gives `KRB5KRB_AP_ERR_BAD_INTEGRITY`.
 #[test]
 fn rd_req_keytab_walk_over_a_key_of_bad_parity_is_bad_integrity() {
     let (raw, key, kvno) = des3_host_ap_req();

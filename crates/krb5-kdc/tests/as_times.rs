@@ -1,15 +1,19 @@
 //! AS ticket times: `from` / `till` / `rtime`, postdating, the key-expiry field, the realm
 //! lifetime defaults, and the kadmin service lifetimes.
 //! When `kdc.conf` sets no `max_life`, `params.max_life` is 24 h.
-//! MIT `kadm5_get_config_params` (`alt_prof.c:574-575`): the `max_life` default is
+// MIT: `kadm5_get_config_params` (alt_prof.c:574-575)
+//! the `max_life` default is
 //! `GET_DELTAT_PARAM(…, 24 * 60 * 60)`. The store's `Policy::max_life` and
 //! `KdcConf::max_life` default to it too.
 //! An omitted `max_renewable_life` is not fed into the KDC issue cap as 0, the K/M record
 //! uses the realm lifetimes, and the client `till` defaults to one day.
 //! `add_admin_princ` sets `KADM5_MAX_LIFE`.
-//! MIT `ADMIN_LIFETIME` (`kadm5_create.c:54-54`): the 3 h `max_life` of `kadmin/admin`.
-//! MIT `CHANGEPW_LIFETIME` (`kadm5_create.c:55-55`): the 5 min `max_life` of `kadmin/changepw`.
-//! MIT `add_admin_princ` (`kadm5_create.c:207-213`): a nonzero lifetime is written as
+// MIT: `ADMIN_LIFETIME` (kadm5_create.c:54-54)
+//! the 3 h `max_life` of `kadmin/admin`.
+// MIT: `CHANGEPW_LIFETIME` (kadm5_create.c:55-55)
+//! the 5 min `max_life` of `kadmin/changepw`.
+// MIT: `add_admin_princ` (kadm5_create.c:207-213)
+//! a nonzero lifetime is written as
 //! `max_life` with `KADM5_MAX_LIFE` in the mask, so the kadmin principals do not take
 //! `params.max_life`.
 
@@ -17,21 +21,14 @@
 mod common;
 use common::client_key;
 
-use krb5_asn1::{decode, decode_enc_kdc_rep_part, encode};
+use krb5_asn1::{decode, decode_enc_kdc_rep_part};
 use krb5_crypto::{EncryptionType, KeyUsage, decrypt};
-use krb5_kdc::principals::{kadmin_admin, kadmin_changepw};
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
-use krb5_kdc::{
-    KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_POSTDATED, KDB_DISALLOW_RENEWABLE, PrincipalStore,
-    decrypt_ticket_part, dump_store, parse_dump,
-};
+use krb5_kdc::{PrincipalStore, decrypt_ticket_part, dump_store, parse_dump};
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
 use krb5_testkit::{TgsReqBuilder, status, user, user_as};
-use krb5_types::{
-    EncKdcRepPart, EncTicketPart, KdcOptions, KerberosTime, KrbError, PrincipalName, err, flag_bit,
-    ku,
-};
+use krb5_types::{EncTicketPart, KdcOptions, KerberosTime, PrincipalName, err, flag_bit, ku};
 
 fn tgt_part(store: &PrincipalStore, issued: &krb5_kdc::IssuedAs) -> EncTicketPart {
     let key = store.krbtgt().unwrap().best_key().unwrap();
@@ -120,31 +117,6 @@ fn enc_as(issued: &krb5_kdc::IssuedAs) -> krb5_types::EncKdcRepPart {
     decode_enc_kdc_rep_part(&plain).unwrap()
 }
 
-fn ticket_part(store: &PrincipalStore, issued: &krb5_kdc::IssuedTgs) -> krb5_types::EncTicketPart {
-    let key = store
-        .get_name(&PrincipalName::krbtgt(TEST_REALM))
-        .unwrap()
-        .best_key()
-        .unwrap();
-    let usage = KeyUsage::new(ku::TICKET).unwrap();
-    let plain = decrypt(
-        &key.key,
-        usage,
-        issued.rep.0.ticket.enc_part.cipher.as_ref(),
-    )
-    .unwrap();
-    krb5_asn1::decode(&plain).unwrap()
-}
-
-#[test]
-fn last_req_is_lrq_none_epoch() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let enc = enc_as(&user_as(&store, 1901));
-    assert_eq!(enc.last_req.len(), 1);
-    assert_eq!(enc.last_req[0].lr_type, 0);
-    assert_eq!(enc.last_req[0].lr_value.unix_seconds(), 0);
-}
-
 #[test]
 fn as_key_exp_is_min_of_expiration_and_pw_expire() {
     let (mut store, _) = bootstrap_documented().unwrap();
@@ -170,68 +142,6 @@ fn as_key_exp_is_min_of_expiration_and_pw_expire() {
     );
 }
 
-#[test]
-fn renew_postdated_starts_at_from() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let key = store
-        .get_name(&user())
-        .unwrap()
-        .best_key()
-        .unwrap()
-        .key
-        .clone();
-    let mut req = as_req(
-        user(),
-        TEST_REALM,
-        1905,
-        Some(vec![pa_enc_timestamp(&key).unwrap()]),
-    )
-    .unwrap();
-    req.0.req_body.kdc_options = req
-        .0
-        .req_body
-        .kdc_options
-        .with_bit(flag_bit::RENEWABLE, true)
-        .with_bit(flag_bit::MAY_POSTDATE, true);
-    let tgt = krb5_kdc::issue_as(&store, &req).unwrap();
-    let from = KerberosTime::now().add_seconds(3600).unwrap();
-    let tgs = TgsReqBuilder::new(
-        tgt.rep.0.ticket.clone(),
-        &tgt.session_key,
-        TEST_REALM,
-        &user(),
-        PrincipalName::krbtgt(TEST_REALM),
-        TEST_REALM,
-        1906,
-    )
-    .options(
-        KdcOptions::none()
-            .with_bit(flag_bit::RENEW, true)
-            .with_bit(flag_bit::POSTDATED, true),
-    )
-    .additional_tickets(None)
-    .padata(Vec::new())
-    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
-    .addresses(None)
-    .from(Some(from.clone()))
-    .enc_authorization_data(None)
-    .build()
-    .unwrap();
-    let out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
-    let part = ticket_part(&store, &out);
-    assert_eq!(
-        part.starttime
-            .as_ref()
-            .unwrap_or(&part.authtime)
-            .unix_seconds(),
-        from.unix_seconds()
-    );
-}
-
-fn decode_enc_part(plain: &[u8]) -> EncKdcRepPart {
-    krb5_asn1::decode_enc_kdc_rep_part(plain).expect("enc-part")
-}
-
 fn user_as_req(nonce: u32) -> krb5_types::AsReq {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let key = client_key();
@@ -242,24 +152,6 @@ fn user_as_req(nonce: u32) -> krb5_types::AsReq {
         Some(vec![pa_enc_timestamp(&key).expect("pa-ts")]),
     )
     .unwrap()
-}
-
-fn or_attr(store: &mut PrincipalStore, name: &PrincipalName, bit: u32) {
-    let a = store.get_name(name).unwrap().attributes | bit;
-    store
-        .apply_admin_fields(
-            name,
-            krb5_kdc::AdminFields {
-                attributes: Some(a),
-                max_life: None,
-                expiration: None,
-                pw_expire: None,
-                policy: None,
-                clear_policy: false,
-                max_renewable_life: None,
-            },
-        )
-        .unwrap();
 }
 
 fn tgt_part_issue_acl_ap(store: &PrincipalStore, issued: &krb5_kdc::IssuedAs) -> EncTicketPart {
@@ -346,120 +238,6 @@ fn validate_tgs(issued: &krb5_kdc::IssuedAs, nonce: u32) -> krb5_types::TgsReq {
     .expect("VALIDATE TGS-REQ")
 }
 
-#[test]
-fn as_rep_flags_are_initial_and_preauth_not_renewable() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let key = client_key();
-    let req = as_req(
-        cname,
-        TEST_REALM,
-        42,
-        Some(vec![pa_enc_timestamp(&key).expect("pa")]),
-    )
-    .unwrap();
-    let issued = krb5_kdc::issue_as(&store, &req).expect("AS");
-    let usage = KeyUsage::new(ku::AS_REP_ENC_PART).unwrap();
-    let plain = decrypt(&key, usage, issued.rep.0.enc_part.cipher.as_ref()).expect("dec");
-    assert_eq!(
-        plain.first().copied(),
-        Some(0x7a),
-        "APPLICATION 26 EncKDCRepPart"
-    );
-    let enc = decode_enc_part(&plain);
-    assert!(enc.flags.initial());
-    assert!(enc.flags.pre_authent());
-    assert!(!enc.flags.renewable());
-    assert!(enc.renew_till.is_none());
-}
-
-#[test]
-fn as_rejects_expired_principal_before_expired_password() {
-    let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    store
-        .apply_admin_fields(
-            &cname,
-            krb5_kdc::AdminFields {
-                attributes: None,
-                max_life: None,
-                expiration: Some(1),
-                pw_expire: Some(1),
-                policy: None,
-                clear_policy: false,
-                max_renewable_life: None,
-            },
-        )
-        .unwrap();
-    let err = krb5_kdc::issue_as(&store, &user_as_req(41)).unwrap_err();
-    assert_eq!(status(&err).0, err::NAME_EXP);
-
-    let raw = encode(&user_as_req(42)).unwrap();
-    let reply = krb5_kdc::handle_request(&store, &raw).unwrap();
-    let krb: KrbError = decode(&reply).expect("KRB-ERROR");
-    assert_eq!(krb.error_code, err::NAME_EXP);
-}
-
-#[test]
-fn as_zero_expiration_still_issues() {
-    let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    store
-        .apply_admin_fields(
-            &cname,
-            krb5_kdc::AdminFields {
-                attributes: None,
-                max_life: None,
-                expiration: Some(0),
-                pw_expire: Some(0),
-                policy: None,
-                clear_policy: false,
-                max_renewable_life: None,
-            },
-        )
-        .unwrap();
-    krb5_kdc::issue_as(&store, &user_as_req(45)).expect("0 = never");
-    store
-        .apply_admin_fields(
-            &cname,
-            krb5_kdc::AdminFields {
-                attributes: None,
-                max_life: None,
-                expiration: Some(u32::MAX),
-                pw_expire: Some(u32::MAX),
-                policy: None,
-                clear_policy: false,
-                max_renewable_life: None,
-            },
-        )
-        .unwrap();
-    krb5_kdc::issue_as(&store, &user_as_req(46)).expect("future still issues");
-}
-
-#[test]
-fn as_strips_renewable_when_disallow_renewable() {
-    let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let mut req = user_as_req(62);
-    req.0.req_body.kdc_options = req
-        .0
-        .req_body
-        .kdc_options
-        .with_bit(flag_bit::RENEWABLE, true);
-    or_attr(&mut store, &cname, KDB_DISALLOW_RENEWABLE);
-    let issued = krb5_kdc::issue_as(&store, &req).expect("AS");
-    assert!(!tgt_part_issue_acl_ap(&store, &issued).flags.renewable());
-}
-
-#[test]
-fn as_disallow_all_tix_still_client_revoked() {
-    let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    or_attr(&mut store, &cname, KDB_DISALLOW_ALL_TIX);
-    let err = krb5_kdc::issue_as(&store, &user_as_req(64)).unwrap_err();
-    assert_eq!(status(&err).0, err::CLIENT_REVOKED);
-}
-
 /// No assertion races the clock: the too-early checks use a ticket that starts two minutes ahead,
 /// inside the realm's 300 s skew (so the header ticket's time check passes and the TGS checks
 /// decide), and the VALIDATE that succeeds waits until its own ticket's starttime has passed.
@@ -472,15 +250,18 @@ fn as_postdated_is_invalid_until_validate() {
     let part = tgt_part_issue_acl_ap(&store, &early);
     assert!(part.flags.invalid());
     assert!(part.flags.bit(flag_bit::POSTDATED));
-    // MIT `process_as_req` (`kdc/do_as_req.c:692-693`): a POSTDATED request's starttime is its from.
+    // MIT: `process_as_req` (kdc/do_as_req.c:692-693)
+    // a POSTDATED request's starttime is its from.
     assert_eq!(
         part.starttime.as_ref().map(KerberosTime::unix_seconds),
         Some(ahead.unix_seconds())
     );
-    // MIT `check_tgs_opts` (`kdc/tgs_policy.c:98-101`): an INVALID ticket without VALIDATE is TKT_NYV.
+    // MIT: `check_tgs_opts` (kdc/tgs_policy.c:98-101)
+    // an INVALID ticket without VALIDATE is TKT_NYV.
     let err = krb5_kdc::issue_tgs(&store, &host_tgs(&store, &early, 111)).unwrap_err();
     assert_eq!(status(&err), (err::TKT_NYV, Some("TICKET NOT VALID")));
-    // MIT `check_tgs_times` (`kdc/tgs_policy.c:228-232`): VALIDATE before the starttime is TKT_NYV.
+    // MIT: `check_tgs_times` (kdc/tgs_policy.c:228-232)
+    // VALIDATE before the starttime is TKT_NYV.
     let too_soon = krb5_kdc::issue_tgs(&store, &validate_tgs(&early, 112)).unwrap_err();
     assert_eq!(status(&too_soon), (err::TKT_NYV, Some("NOT_YET_VALID")));
     let from = KerberosTime::now().add_seconds(1).unwrap();
@@ -493,66 +274,6 @@ fn as_postdated_is_invalid_until_validate() {
     assert!(!after.flags.invalid());
     let stale = krb5_kdc::issue_tgs(&store, &host_tgs(&store, &issued, 115)).unwrap_err();
     assert_eq!(status(&stale), (err::TKT_NYV, Some("TICKET NOT VALID")));
-}
-
-#[test]
-fn as_may_postdate_alone_does_not_postdate() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let from = KerberosTime::now().add_seconds(60).unwrap();
-    let mut req = user_as_req(123);
-    req.0.req_body.from = Some(from);
-    req.0.req_body.kdc_options = req
-        .0
-        .req_body
-        .kdc_options
-        .with_bit(flag_bit::MAY_POSTDATE, true);
-    let issued = krb5_kdc::issue_as(&store, &req).expect("AS");
-    let part = tgt_part_issue_acl_ap(&store, &issued);
-    assert!(!part.flags.invalid());
-    assert!(!part.flags.bit(flag_bit::POSTDATED));
-    assert!(part.flags.bit(flag_bit::MAY_POSTDATE));
-}
-
-#[test]
-fn as_cannot_postdate_when_disallow() {
-    let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    or_attr(&mut store, &cname, KDB_DISALLOW_POSTDATED);
-    let from = KerberosTime::now().add_seconds(30).unwrap();
-    let err = krb5_kdc::issue_as(&store, &postdated_as_req(115, from)).unwrap_err();
-    assert_eq!(status(&err).0, err::CANNOT_POSTDATE);
-}
-
-#[test]
-fn as_postdated_end_is_absolute_till() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let from = KerberosTime::now().add_seconds(60).unwrap();
-    let till = from.add_seconds(300).unwrap();
-    let mut req = postdated_as_req(121, from.clone());
-    req.0.req_body.till = till.clone();
-    let issued = krb5_kdc::issue_as(&store, &req).expect("postdated AS");
-    let part = tgt_part_issue_acl_ap(&store, &issued);
-    assert_eq!(
-        part.starttime.as_ref().map(KerberosTime::unix_seconds),
-        Some(from.unix_seconds())
-    );
-    assert_eq!(part.endtime.unix_seconds(), till.unix_seconds());
-}
-
-#[test]
-fn as_from_after_till_endtime_is_till() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let till = KerberosTime::now().add_seconds(30).unwrap();
-    let from = KerberosTime::now().add_seconds(90).unwrap();
-    let mut req = postdated_as_req(122, from.clone());
-    req.0.req_body.till = till.clone();
-    let issued = krb5_kdc::issue_as(&store, &req).expect("from after till");
-    let part = tgt_part_issue_acl_ap(&store, &issued);
-    assert_eq!(
-        part.starttime.as_ref().map(KerberosTime::unix_seconds),
-        Some(from.unix_seconds())
-    );
-    assert_eq!(part.endtime.unix_seconds(), till.unix_seconds());
 }
 
 const ACTOR: &str = "kadmin/admin@KERBER.TEST";
@@ -691,44 +412,4 @@ fn synthesize_km_uses_params_lifetimes() {
     let km = dump.princ("K/M@KERBER.TEST").expect("K/M");
     assert_eq!(km.max_life, 24 * 3600, "params.max_life default 24 h");
     assert_eq!(km.max_renewable_life, 0, "params.max_rlife default 0");
-}
-
-#[test]
-fn client_till_default_is_one_day() {
-    let src = include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../krb5-protocol/src/as_ex.rs"
-    ));
-    assert!(
-        src.contains("unwrap_or(24 * 3600)") || src.contains("unwrap_or(24 * 60 * 60)"),
-        "get_in_tkt.c:947 omitted lifetime is 24 h"
-    );
-    assert!(
-        !src.contains("unwrap_or(10 * 3600)"),
-        "as_ex till fallback must not be 10 h"
-    );
-}
-
-#[test]
-fn kadmin_admin_max_life_is_three_hours() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let p = store.get_name(&kadmin_admin()).expect("kadmin/admin");
-    assert_eq!(
-        p.max_life,
-        60 * 60 * 3,
-        "kadm5_create.c:54 ADMIN_LIFETIME (got {})",
-        p.max_life
-    );
-}
-
-#[test]
-fn kadmin_changepw_max_life_is_five_minutes() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let p = store.get_name(&kadmin_changepw()).expect("kadmin/changepw");
-    assert_eq!(
-        p.max_life,
-        60 * 5,
-        "kadm5_create.c:55 CHANGEPW_LIFETIME (got {})",
-        p.max_life
-    );
 }

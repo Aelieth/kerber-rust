@@ -14,7 +14,16 @@ static gss_OID_desc oid_spnego = { 6, (void *)"\x2b\x06\x01\x05\x05\x02" };
 #include <unistd.h>
 
 static void die_gss(const char *what, OM_uint32 maj, OM_uint32 min) {
+    OM_uint32 mctx = 0, mj, mn;
+    gss_buffer_desc msg = GSS_C_EMPTY_BUFFER;
     fprintf(stderr, "%s: maj=%u min=%u\n", what, maj, min);
+    do {
+        mj = gss_display_status(&mn, min, GSS_C_MECH_CODE, GSS_C_NO_OID, &mctx, &msg);
+        if (msg.length) {
+            fprintf(stderr, "  mech: %.*s\n", (int)msg.length, (char *)msg.value);
+        }
+        gss_release_buffer(&mn, &msg);
+    } while (mctx && mj == GSS_S_COMPLETE);
     exit(1);
 }
 
@@ -59,6 +68,7 @@ int main(int argc, char **argv) {
     int want_iov = 0;
     int want_sign = 0;
     int want_dce = 0;
+    int want_mutual = 1;
     gss_OID mech = (gss_OID)gss_mech_krb5;
     if (argc >= 7) {
         if (strcmp(argv[6], "deleg") == 0) {
@@ -73,6 +83,11 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[6], "dce") == 0) {
             want_dce = 1;
             want_iov = 1;
+        } else if (strcmp(argv[6], "nomutual") == 0) {
+            want_mutual = 0;
+        } else if (strcmp(argv[6], "spnego-nomutual") == 0) {
+            mech = &oid_spnego;
+            want_mutual = 0;
         }
     }
 
@@ -119,7 +134,7 @@ int main(int argc, char **argv) {
             &ctx,
             target,
             mech,
-            GSS_C_MUTUAL_FLAG | GSS_C_CONF_FLAG | GSS_C_INTEG_FLAG
+            (want_mutual ? GSS_C_MUTUAL_FLAG : 0) | GSS_C_CONF_FLAG | GSS_C_INTEG_FLAG
                 | (want_deleg ? GSS_C_DELEG_FLAG : 0)
                 | (want_dce ? GSS_C_DCE_STYLE : 0),
             0,

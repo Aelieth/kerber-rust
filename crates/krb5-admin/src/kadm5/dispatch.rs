@@ -1,11 +1,7 @@
-//! The kadm5 procedure switch (`kadmin/server/server_stubs.c`): one arm per
-//! procedure, the store path (`reload_if_stale` before every read and
-//! mutation), the `KADM5_AUTH_*` code each procedure denies with, and the
-//! `Error` -> `kadm_err.et` mapping behind `generic_ret`.
-
-use krb5_kdc::{Acl, KDB_LOCKDOWN_KEYS, SharedDump as SharedStore};
+use krb5_kdc::{KDB_LOCKDOWN_KEYS, SharedDump as SharedStore};
 use krb5_types::PrincipalName;
 
+use super::auth_plugin::Kadm5AuthConfig;
 use super::codes::{
     API_V2, CHPASS_PRINCIPAL, CHPASS_PRINCIPAL3, CHRAND_PRINCIPAL, CHRAND_PRINCIPAL3, CREATE_ALIAS,
     CREATE_POLICY, CREATE_PRINCIPAL, CREATE_PRINCIPAL3, DELETE_POLICY, DELETE_PRINCIPAL, EINVAL,
@@ -17,25 +13,27 @@ use super::codes::{
     KADM5_BAD_TL_TYPE, KADM5_DUP, KADM5_FAIL_AUTH_COUNT, KADM5_FAILURE, KADM5_KVNO, KADM5_MAX_LIFE,
     KADM5_MAX_RLIFE, KADM5_PASS_Q_CLASS, KADM5_PASS_Q_DICT, KADM5_PASS_Q_TOOSHORT,
     KADM5_PASS_REUSE, KADM5_PASS_TOOSOON, KADM5_POLICY, KADM5_POLICY_ALLOWED_KEYSALTS,
-    KADM5_POLICY_CLR, KADM5_PRINC_EXPIRE_TIME, KADM5_PW_EXPIRATION, KADM5_PW_MAX_LIFE,
-    KADM5_PW_MIN_LIFE, KADM5_SETKEY_BAD_KVNO, KADM5_TL_DATA, KADM5_UNK_POLICY, KADM5_UNK_PRINC,
-    KRB5_KDB_ALIAS_UNSUPPORTED, KRB5_KDB_CANTLOCK_DB, MODIFY_POLICY, MODIFY_PRINCIPAL, OSA_ADB_DUP,
-    OSA_ADB_NOENT, PURGEKEYS, RENAME_PRINCIPAL, SET_STRING, SETKEY_PRINCIPAL, SETKEY_PRINCIPAL3,
-    SETKEY_PRINCIPAL4,
+    KADM5_POLICY_CLR, KADM5_PRINC_EXPIRE_TIME, KADM5_PROTECT_PRINCIPAL, KADM5_PW_EXPIRATION,
+    KADM5_PW_MAX_LIFE, KADM5_PW_MIN_LIFE, KADM5_SETKEY_BAD_KVNO, KADM5_SETKEY_DUP_ENCTYPES,
+    KADM5_SETKEY3_ETYPE_MISMATCH, KADM5_TL_DATA, KADM5_UNK_POLICY, KADM5_UNK_PRINC,
+    KRB5_KDB_ALIAS_UNSUPPORTED, KRB5_KDB_BAD_SALTTYPE, KRB5_KDB_CANTLOCK_DB, MODIFY_POLICY,
+    MODIFY_PRINCIPAL, OSA_ADB_DUP, OSA_ADB_NOENT, PURGEKEYS, RENAME_PRINCIPAL, SET_STRING,
+    SETKEY_PRINCIPAL, SETKEY_PRINCIPAL3, SETKEY_PRINCIPAL4,
 };
 use super::glob::{glob_pattern_ok, policies_matching, principals_matching};
 use super::iprop::dispatch_iprop;
+use super::log::Caller;
 use super::policy::{
     apply_policy_floors, encode_policy, encode_pols, merge_policy, parse_gpols, parse_policy_arg,
     parse_policy_name, policy_floor_err, policy_mask_err, policy_name_err,
     validate_allowed_keysalts,
 };
 use super::principal::{
-    ChpassArgs, clamp_self_keepold, create_princ_mask_err, db_args_code, encode_chrand,
+    ChpassArgs, SetkeyArgs, clamp_self_keepold, create_princ_mask_err, db_args_code, encode_chrand,
     encode_extract_keys, encode_gprinc, encode_gprincs, encode_gstrings,
     impose_request_restrictions, modify_princ_mask_err, parse_alias, parse_chpass, parse_chrand,
     parse_create, parse_extract, parse_get, parse_gprincs, parse_gstrings, parse_ks, parse_modify,
-    parse_one_princ, parse_purgekeys, parse_rename, parse_setkey, parse_sstring, unix_now,
+    parse_one_princ, parse_purgekeys, parse_rename, parse_setkey, parse_sstring,
 };
 use super::rpc::RpcCtx;
 use super::xdr::XdrW;
@@ -43,14 +41,19 @@ use crate::Error;
 
 pub(super) fn kadm5_or_iprop(
     ctx: RpcCtx<'_>,
-    actor: &str,
+    who: &Caller<'_>,
     proc: u32,
     args: &[u8],
     initial: bool,
     changepw: bool,
     iprop: bool,
 ) -> Result<Vec<u8>, Error> {
-    let RpcCtx { store, acl, .. } = ctx;
+    let RpcCtx {
+        store,
+        authcfg,
+        iprop_resync,
+        ..
+    } = ctx;
     if proc == 0 {
         return Ok(Vec::new());
     }
@@ -61,16 +64,11 @@ pub(super) fn kadm5_or_iprop(
         ) {
             return Err(Error::ProcUnavail);
         }
-        return Ok(dispatch_iprop(store, acl, actor, proc, args));
+        return dispatch_iprop(store, authcfg, iprop_resync, who, proc, args);
     }
-    dispatch_kadm5_ticket(store, acl, actor, proc, args, initial, changepw)
+    dispatch_kadm5_ticket(store, authcfg, who.client, proc, args, initial, changepw)
 }
 
-/// The store, read again first when another process (kadmin.local, kdb5_util) changed the
-/// database since kadmind read it, holding the database's lock shared; every kadm5 read and
-/// change goes through it, so a list sees new principals. kadmind's own store lock is taken
-/// first and kept by the caller, so its threads go one at a time and none waits on another's
-/// database lock.
 fn write_store(
     store: &SharedStore,
     proc: u32,
@@ -85,10 +83,18 @@ fn write_store(
     Ok(g)
 }
 
-/// One change, whole, under the database's exclusive lock: the database is read again, `f`
-/// runs, and the database is written once and its age moved; a change `f` refuses or fails
-/// leaves the database and the store as they were. The error is the reply.
-/// MIT `kdb_put_entry` (`lib/kadm5/srv/server_kdb.c:364-405`): each kadm5 change ends in one put, which locks the database exclusively.
+fn read_store(
+    store: &SharedStore,
+    proc: u32,
+    api: u32,
+) -> Result<std::sync::RwLockReadGuard<'_, krb5_kdc::PrincipalStore>, Vec<u8>> {
+    let (g, read) = krb5_kdc::read_fresh(store);
+    read.map_err(|e| generic_ret(api, store_code(proc, &e)))?;
+    Ok(g)
+}
+
+/// Refused or failed: database unchanged.
+// MIT: `kdb_put_entry` (lib/kadm5/srv/server_kdb.c:364-405)
 fn commit<T>(
     g: &mut krb5_kdc::PrincipalStore,
     proc: u32,
@@ -102,13 +108,10 @@ fn commit<T>(
     }
 }
 
-/// The reply to a [`commit`] with nothing to return.
 fn done(changed: Result<(), Vec<u8>>, api: u32) -> Vec<u8> {
     changed.map_or_else(|rep| rep, |()| generic_ret(api, 0))
 }
 
-/// One policy write under the database's exclusive lock, whose `f` looks at the policy again
-/// there and answers with MIT's locked code when another writer got there first; the reply.
 fn commit_policy(
     g: &mut krb5_kdc::PrincipalStore,
     proc: u32,
@@ -123,11 +126,7 @@ fn commit_policy(
     }
 }
 
-/// The kadm5 code of a database the store could not lock, read or write: KRB5_KDB_CANTLOCK_DB
-/// for a lock that may not be taken (a read-only lock file, a missing policy lock file), else
-/// the system's errno, as MIT's library returns it.
-/// MIT `ctx_lock` (`plugins/kdb/db2/kdb_db2.c:441-463`): a lock that may not be taken is KRB5_KDB_CANTLOCK_DB, a database that does not reopen is its errno.
-fn store_code(proc: u32, e: &krb5_kdc::Error) -> u32 {
+pub(super) fn store_code(proc: u32, e: &krb5_kdc::Error) -> u32 {
     let errno = |n: nix::errno::Errno| u32::try_from(n as i32).unwrap_or(KADM5_FAILURE);
     match e {
         krb5_kdc::Error::Db { text, .. }
@@ -165,6 +164,10 @@ fn changepw_not_self(changepw: bool, actor: &str, name: &PrincipalName, realm: &
     changepw && !is_self(actor, name, realm)
 }
 
+fn is_self_id(actor: &str, cid: &str) -> bool {
+    parse_actor(cid).is_some_and(|(n, r)| is_self(actor, &n, &r))
+}
+
 pub(super) fn store_realm(store: &SharedStore) -> String {
     store
         .read()
@@ -181,24 +184,23 @@ fn req_realm(prealm: &str, store_realm: &str) -> String {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-hooks"))]
 pub(super) fn dispatch_kadm5(
     store: &SharedStore,
-    acl: &Acl,
+    acl: &krb5_kdc::Acl,
     actor: &str,
     proc: u32,
     args: &[u8],
 ) -> Result<Vec<u8>, Error> {
-    dispatch_kadm5_ticket(store, acl, actor, proc, args, true, false)
+    let authcfg = Kadm5AuthConfig::from_acl(acl.clone());
+    dispatch_kadm5_ticket(store, &authcfg, actor, proc, args, true, false)
 }
 
-/// MIT `modify_principal_2_svc` (`server_stubs.c:630-644`): an ACL denial or a lockdown clear
-/// is AUTH_MODIFY before the entry is written.
-/// A missing principal on get or modify is reported unknown before that ACL check, and a
-/// changepw ticket is accepted only for a self get or a self key change.
+// MIT: `modify_principal_2_svc` (server_stubs.c:630-644)
+/// Denial: AUTH_MODIFY, before the write.
 pub(super) fn dispatch_kadm5_ticket(
     store: &SharedStore,
-    acl: &Acl,
+    authcfg: &Kadm5AuthConfig,
     actor: &str,
     proc: u32,
     args: &[u8],
@@ -206,6 +208,7 @@ pub(super) fn dispatch_kadm5_ticket(
     changepw: bool,
 ) -> Result<Vec<u8>, Error> {
     let realm = store_realm(store);
+    let stack = authcfg.stack();
     match proc {
         INIT => Ok(generic_ret(API_V2, 0)),
         GET_PRIVS => {
@@ -216,44 +219,39 @@ pub(super) fn dispatch_kadm5_ticket(
             Ok(w.b)
         }
         GET_PRINCIPAL => {
-            let (name, prealm, _mask) = parse_get(args)?;
+            let (name, prealm, mask) = parse_get(args)?;
             let req = req_realm(&prealm, &realm);
-            let g = match write_store(store, proc, API_V2) {
+            let g = match read_store(store, proc, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
             match g.get_in_realm(&name, &req) {
                 None => Ok(generic_ret(API_V2, KADM5_UNK_PRINC)),
                 Some(p) => {
-                    let tid = acl_id(&name, &req);
                     if changepw_not_self(changepw, actor, &name, &req)
-                        || (acl
-                            .check(actor, krb5_kdc::AdminOp::Inquire, Some(&tid))
-                            .is_err()
-                            && !is_self(actor, &name, &req))
+                        || !stack.getprinc(actor, &p.id())
                     {
                         return Ok(generic_ret(API_V2, KADM5_AUTH_GET));
                     }
-                    tracing::info!(
+                    tracing::debug!(
                         event = krb5_log::events::ADMIN,
                         component = "krb5-admin",
                         outcome = "ok",
                         detail = "getprinc",
                         principal = p.id(),
                     );
-                    // MIT `kadm5_get_principal` (`lib/kadm5/srv/svr_principal.c:773-774`): the entry comes from the KDB, which gives it the lockout attributes the KDC recorded.
                     let mut p = p.clone();
                     g.merge_lockout(&mut p);
-                    Ok(encode_gprinc(&p))
+                    Ok(encode_gprinc(&p, mask))
                 }
             }
         }
         GET_PRINCS => {
-            if changepw || acl.check(actor, krb5_kdc::AdminOp::List, None).is_err() {
+            if changepw || !stack.listprincs(actor) {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_LIST));
             }
             let expr = parse_gprincs(args)?;
-            let g = match write_store(store, proc, API_V2) {
+            let g = match read_store(store, proc, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
@@ -266,11 +264,7 @@ pub(super) fn dispatch_kadm5_ticket(
         DELETE_PRINCIPAL => {
             let (name, prealm) = parse_one_princ(args)?;
             let req = req_realm(&prealm, &realm);
-            if changepw
-                || acl
-                    .check(actor, krb5_kdc::AdminOp::Delete, Some(&acl_id(&name, &req)))
-                    .is_err()
-            {
+            if changepw || !stack.delprinc(actor, &acl_id(&name, &req)) {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_DELETE));
             }
             let mut g = match write_store(store, proc, API_V2) {
@@ -282,8 +276,7 @@ pub(super) fn dispatch_kadm5_ticket(
             {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_DELETE));
             }
-            // MIT `delete_principal_2_svc` (`kadmin/server/server_stubs.c:586-595`): a missing
-            // principal fails the lockdown lookup before the delete locks the database.
+            // MIT: `delete_principal_2_svc` (kadmin/server/server_stubs.c:586-595)
             if g.get_in_realm(&name, &req).is_none() {
                 return Ok(generic_ret(API_V2, KADM5_UNK_PRINC));
             }
@@ -293,34 +286,22 @@ pub(super) fn dispatch_kadm5_ticket(
         MODIFY_PRINCIPAL => {
             let (name, prealm, mask, fields) = parse_modify(args)?;
             let req = req_realm(&prealm, &realm);
-            let tid = acl_id(&name, &req);
             let mut g = match write_store(store, proc, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
-            // stub_setup rec_out, then ACL, then check_lockdown, then mask.
-            // MIT `stub_setup` (`server_stubs.c:296-301`): with rec_out it fetches the
-            // entry, so an unknown principal fails before the ACL check.
-            // MIT `modify_principal_2_svc` (`server_stubs.c:621-638`): stub_setup with
-            // rec_out, then the ACL check, then check_lockdown.
-            if g.get_in_realm(&name, &req).is_none() {
+            // MIT: `stub_setup` (server_stubs.c:296-301)
+            // Auth target: the canonical name.
+            // MIT: `modify_principal_2_svc` (kadmin/server/server_stubs.c)
+            let Some(cid) = g.get_in_realm(&name, &req).map(krb5_kdc::Principal::id) else {
                 return Ok(generic_ret(API_V2, KADM5_UNK_PRINC));
-            }
-            if changepw
-                || acl
-                    .check(actor, krb5_kdc::AdminOp::Modify, Some(&tid))
-                    .is_err()
-            {
+            };
+            let (authorized, rss) = stack.modprinc(actor, &cid);
+            if changepw || !authorized {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_MODIFY));
             }
-            // stub_auth_restrict → auth_restrict → impose_restrictions on the request.
-            // MIT `impose_restrictions` (`auth.c:205-265`): the ACL line's restrictions
-            // rewrite the request's fields and mask.
-            // MIT `auth_restrict` (`auth.c:267-272`): takes the request's entry and mask,
-            // which it may rewrite.
-            // MIT `modify_principal_2_svc` (`server_stubs.c:630-638`): stub_auth_restrict
-            // runs before check_lockdown and the library's mask validation.
-            let (mask, fields) = impose_request_restrictions(acl, actor, &tid, mask, fields);
+            // MIT: `auth_restrict` (kadmin/server/auth.c:267-304)
+            let (mask, fields) = impose_request_restrictions(&rss, mask, fields);
             if mask & KADM5_ATTRIBUTES != 0
                 && fields.attributes & KDB_LOCKDOWN_KEYS == 0
                 && g.get_in_realm(&name, &req)
@@ -354,7 +335,6 @@ pub(super) fn dispatch_kadm5_ticket(
             } else {
                 None
             };
-            // MIT `kadm5_modify_principal` (`lib/kadm5/srv/svr_principal.c:601-689`): the fields are set on the entry, then one put writes it.
             let changed = commit(&mut g, proc, API_V2, |s| {
                 s.apply_admin_fields_in(
                     &name,
@@ -371,13 +351,13 @@ pub(super) fn dispatch_kadm5_ticket(
                     actor,
                 )?;
                 if mask & KADM5_KVNO != 0 {
-                    s.set_kvno_in(&name, &req, fields.kvno)?;
+                    s.set_kvno_in(&name, &req, fields.kvno, actor)?;
                 }
                 if mask & KADM5_TL_DATA != 0 {
-                    s.merge_tl_data_in(&name, &req, &fields.tl_data)?;
+                    s.merge_tl_data_in(&name, &req, &fields.tl_data, actor)?;
                 }
                 if mask & KADM5_FAIL_AUTH_COUNT != 0 {
-                    s.clear_fail_auth_count_in(&name, &req)?;
+                    s.clear_fail_auth_count_in(&name, &req, actor)?;
                 }
                 Ok(())
             });
@@ -390,27 +370,13 @@ pub(super) fn dispatch_kadm5_ticket(
             };
             let req = req_realm(&c.prealm, &realm);
             let tid = acl_id(&c.name, &req);
-            if changepw
-                || acl
-                    .check(actor, krb5_kdc::AdminOp::Create, Some(&tid))
-                    .is_err()
-            {
+            // MIT: `create_principal_2_svc` (kadmin/server/server_stubs.c)
+            let (authorized, rss) = stack.addprinc(actor, &tid);
+            if changepw || !authorized {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_ADD));
             }
-            // stub_auth_restrict: the ACL line's restrictions rewrite the request before
-            // kadm5_create_principal_3 validates the mask, loads the policy and runs
-            // passwd_check — so a `-policy P` restriction is enforced by P's floors and
-            // the quality modules.
-            // MIT `create_principal_2_svc` (`server_stubs.c:478-478`): stub_auth_restrict
-            // rewrites the request before kadm5_create_principal.
-            // MIT `create_principal3_2_svc` (`server_stubs.c:519-519`): stub_auth_restrict
-            // rewrites the request before kadm5_create_principal_3.
-            // MIT `impose_restrictions` (`auth.c:205-265`): the restrictions rewrite the
-            // request's fields and mask.
-            // MIT `auth_restrict` (`auth.c:267-272`): takes the request's entry and mask,
-            // which it may rewrite.
-            if let Some(rs) = acl.restrictions(actor, Some(&tid)) {
-                rs.impose(&mut c.ent, unix_now());
+            for rs in &rss {
+                rs.impose(&mut c.ent, krb5_types::unix_now());
             }
             if let Some(code) =
                 create_princ_mask_err(c.ent.mask, c.ent.policy.as_deref(), c.n_key_data)
@@ -423,22 +389,72 @@ pub(super) fn dispatch_kadm5_ticket(
             if c.ent.mask & KADM5_TL_DATA != 0 && db_args_code(&c.tl_data).is_some() {
                 return Ok(generic_ret(API_V2, EINVAL));
             }
+            let refused =
+                |e: krb5_kdc::Error| generic_ret(API_V2, kadm5_code(proc, &Error::from(e)));
+            let planned = match c.pass.as_deref() {
+                Some(pass) => {
+                    let (g, read) = krb5_kdc::read_fresh(store);
+                    match read {
+                        Err(_) => None,
+                        Ok(()) if g.get_in_realm(&c.name, &req).is_some() => {
+                            return Ok(generic_ret(API_V2, KADM5_DUP));
+                        }
+                        Ok(()) => {
+                            match g.plan_create_password(&c.name, &req, pass, &c.ks, &c.ent) {
+                                Ok(plan) => Some(plan),
+                                Err(e) => return Ok(refused(e)),
+                            }
+                        }
+                    }
+                }
+                None => None,
+            };
+            let prepared = match planned.map(krb5_kdc::CreatePlan::derive) {
+                None => None,
+                Some(Ok(p)) => Some(p),
+                Some(Err(e)) => return Ok(refused(e)),
+            };
             let mut g = match write_store(store, proc, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
-            // MIT `kadm5_create_principal_3` (`lib/kadm5/srv/svr_principal.c:338-345`): an
-            // existing principal is KADM5_DUP before the put locks the database.
             if g.get_in_realm(&c.name, &req).is_some() {
                 return Ok(generic_ret(API_V2, KADM5_DUP));
             }
-            // NULL password: random key (`krb5_dbe_crk`), no quality check.
-            // `-nokey` (KADM5_KEY_DATA) also lands here — MIT would create a
-            // keyless entry (ledger deviation).
+            if let Some(p) = prepared {
+                let created = commit(&mut g, proc, API_V2, |s| {
+                    if !s.create_prepared(p, actor)? {
+                        return Ok(false);
+                    }
+                    if c.ent.mask & KADM5_TL_DATA != 0 {
+                        s.merge_tl_data_in(&c.name, &req, &c.tl_data, actor)?;
+                    }
+                    Ok(true)
+                });
+                match created {
+                    Ok(true) => return Ok(generic_ret(API_V2, 0)),
+                    Ok(false) => {}
+                    Err(rep) => return Ok(rep),
+                }
+                if g.get_in_realm(&c.name, &req).is_some() {
+                    return Ok(generic_ret(API_V2, KADM5_DUP));
+                }
+            }
+            // NULL password: random key, no quality check.
             let changed = commit(&mut g, proc, API_V2, |s| {
-                s.create_principal_3_in(&c.name, &req, c.pass.as_deref(), &c.ks, &c.ent, actor)?;
+                s.create_principal_3_in(
+                    &c.name,
+                    &req,
+                    match c.pass.as_deref() {
+                        Some(p) => krb5_kdc::CreateKeys::Password(p),
+                        None => krb5_kdc::CreateKeys::Random,
+                    },
+                    &c.ks,
+                    &c.ent,
+                    actor,
+                )?;
                 if c.ent.mask & KADM5_TL_DATA != 0 {
-                    s.merge_tl_data_in(&c.name, &req, &c.tl_data)?;
+                    s.merge_tl_data_in(&c.name, &req, &c.tl_data, actor)?;
                 }
                 Ok(())
             });
@@ -448,14 +464,11 @@ pub(super) fn dispatch_kadm5_ticket(
             let (old, old_realm, new, new_realm) = parse_rename(args)?;
             let old_req = req_realm(&old_realm, &realm);
             let new_req = req_realm(&new_realm, &realm);
-            // MIT `rename_principal_2_svc` (`server_stubs.c:700-712`): ACL (AUTH_INSUFFICIENT)
-            // then lockdown (AUTH_DELETE).
-            // MIT `acl_renprinc` (`auth_acl.c:638-648`): delete on src and add on dest without
-            // restrictions.
-            if changepw
-                || acl
-                    .check_rename(actor, &acl_id(&old, &old_req), &acl_id(&new, &new_req))
-                    .is_err()
+            // MIT: `rename_principal_2_svc` (server_stubs.c:700-712)
+            // ACL (AUTH_INSUFFICIENT), then lockdown.
+            // MIT: `acl_renprinc` (auth_acl.c:638-648)
+            // ACL: delete on src, add on dest, no restrictions.
+            if changepw || !stack.renprinc(actor, &acl_id(&old, &old_req), &acl_id(&new, &new_req))
             {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_INSUFFICIENT));
             }
@@ -468,9 +481,7 @@ pub(super) fn dispatch_kadm5_ticket(
             {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_DELETE));
             }
-            // MIT `kadm5_rename_principal` (`lib/kadm5/srv/svr_principal.c:715-719`): an existing
-            // target is KADM5_DUP, as a missing source fails the stub's lockdown lookup, before
-            // the rename locks the database.
+            // MIT: `kadm5_rename_principal` (lib/kadm5/srv/svr_principal.c:715-719)
             if g.get_in_realm(&old, &old_req).is_none() {
                 return Ok(generic_ret(API_V2, KADM5_UNK_PRINC));
             }
@@ -494,37 +505,64 @@ pub(super) fn dispatch_kadm5_ticket(
                 Err(rep) => return rep,
             };
             let req = req_realm(&prealm, &realm);
+            // MIT: `chpass_principal_2_svc` (kadmin/server/server_stubs.c)
+            let checks = |g: &krb5_kdc::PrincipalStore| -> Result<u32, Vec<u8>> {
+                let (cid, lockdown) = match g.get_in_realm(&name, &req) {
+                    None => return Err(generic_ret(API_V2, KADM5_UNK_PRINC)),
+                    Some(p) => (p.id(), p.attributes & KDB_LOCKDOWN_KEYS != 0),
+                };
+                if lockdown {
+                    return Err(generic_ret(API_V2, KADM5_AUTH_CHANGEPW));
+                }
+                let self_change = is_self_id(actor, &cid);
+                if (changepw && !self_change) || !stack.cpw(actor, &cid) {
+                    return Err(generic_ret(API_V2, KADM5_AUTH_CHANGEPW));
+                }
+                if self_change && !initial {
+                    return Err(generic_ret(API_V2, KADM5_AUTH_INITIAL));
+                }
+                if self_change && let Err(e) = g.check_min_life_in(&name, &req) {
+                    return Err(generic_ret(API_V2, kadm5_code(proc, &Error::from(e))));
+                }
+                Ok(clamp_self_keepold(self_change, keepold))
+            };
+            let refused =
+                |e: krb5_kdc::Error| generic_ret(API_V2, kadm5_code(proc, &Error::from(e)));
+            let planned = {
+                let (g, read) = krb5_kdc::read_fresh(store);
+                if read.is_ok() {
+                    let n = match checks(&g) {
+                        Ok(n) => n,
+                        Err(rep) => return Ok(rep),
+                    };
+                    match g.plan_password(&name, &req, &pass, &ks) {
+                        Ok(plan) => plan.map(|plan| (n, plan)),
+                        Err(e) => return Ok(refused(e)),
+                    }
+                } else {
+                    None
+                }
+            };
+            let prepared = match planned.map(|(n, plan)| plan.derive().map(|p| (n, p))) {
+                None => None,
+                Some(Ok(v)) => Some(v),
+                Some(Err(e)) => return Ok(refused(e)),
+            };
             let mut g = match write_store(store, proc, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
-            let lockdown = match g.get_in_realm(&name, &req) {
-                None => return Ok(generic_ret(API_V2, KADM5_UNK_PRINC)),
-                Some(p) => p.attributes & KDB_LOCKDOWN_KEYS != 0,
+            if let Some((n, p)) = prepared {
+                match commit(&mut g, proc, API_V2, |s| s.apply_password(p, n, actor)) {
+                    Ok(true) => return Ok(generic_ret(API_V2, 0)),
+                    Ok(false) => {}
+                    Err(rep) => return Ok(rep),
+                }
+            }
+            let n = match checks(&g) {
+                Ok(n) => n,
+                Err(rep) => return Ok(rep),
             };
-            if lockdown {
-                return Ok(generic_ret(API_V2, KADM5_AUTH_CHANGEPW));
-            }
-            let self_change = is_self(actor, &name, &req);
-            if !self_change
-                && (changepw
-                    || acl
-                        .check(
-                            actor,
-                            krb5_kdc::AdminOp::ChangePassword,
-                            Some(&acl_id(&name, &req)),
-                        )
-                        .is_err())
-            {
-                return Ok(generic_ret(API_V2, KADM5_AUTH_CHANGEPW));
-            }
-            if self_change && !initial {
-                return Ok(generic_ret(API_V2, KADM5_AUTH_INITIAL));
-            }
-            if self_change && let Err(e) = g.check_min_life_in(&name, &req) {
-                return Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e))));
-            }
-            let n = clamp_self_keepold(self_change, keepold);
             let changed = commit(&mut g, proc, API_V2, |s| {
                 s.set_password_etypes_keepold_n_in(&name, &req, &pass, n, actor, &ks)
             });
@@ -532,7 +570,7 @@ pub(super) fn dispatch_kadm5_ticket(
         }
         CREATE_POLICY => {
             let (api, mut pol, mask) = parse_policy_arg(args)?;
-            if changepw || acl.check(actor, krb5_kdc::AdminOp::Create, None).is_err() {
+            if changepw || !stack.addpol(actor, &pol.name) {
                 return Ok(generic_ret(api, KADM5_AUTH_ADD));
             }
             if let Some(code) = policy_mask_err(mask, true) {
@@ -566,29 +604,28 @@ pub(super) fn dispatch_kadm5_ticket(
                 return Ok(generic_ret(api, code));
             }
             apply_policy_floors(&mut pol, mask);
-            // MIT `osa_adb_create_policy` (`plugins/kdb/db2/adb_policy.c:59-72`): under the exclusive lock, a policy there already is OSA_ADB_DUP.
+            // MIT: `osa_adb_create_policy` (plugins/kdb/db2/adb_policy.c:59-72)
             Ok(commit_policy(&mut g, proc, api, |s| {
                 if s.policies().contains_key(&pol.name) {
                     return Ok(Err(OSA_ADB_DUP));
                 }
-                s.put_policy_and_save(pol).map(Ok)
+                s.put_policy(pol).map(Ok)
             }))
         }
         DELETE_POLICY => {
             let (api, name) = parse_policy_name(args)?;
-            if changepw || acl.check(actor, krb5_kdc::AdminOp::Delete, None).is_err() {
+            if changepw || !stack.delpol(actor, &name) {
                 return Ok(generic_ret(api, KADM5_AUTH_DELETE));
             }
             let mut g = match write_store(store, proc, api) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
-            // MIT `kadm5_delete_policy` (`lib/kadm5/srv/svr_policy.c:197-199`): a missing policy
-            // is KADM5_UNK_POLICY before the delete locks the database.
+            // MIT: `kadm5_delete_policy` (lib/kadm5/srv/svr_policy.c:197-199)
             if !g.policies().contains_key(&name) {
                 return Ok(generic_ret(api, KADM5_UNK_POLICY));
             }
-            // MIT `osa_adb_destroy_policy` (`plugins/kdb/db2/adb_policy.c:132-145`): under the exclusive lock, a policy gone since is OSA_ADB_NOENT.
+            // MIT: `osa_adb_destroy_policy` (plugins/kdb/db2/adb_policy.c:132-145)
             Ok(commit_policy(&mut g, proc, api, |s| {
                 match s.delete_policy(&name) {
                     Ok(()) => Ok(Ok(())),
@@ -599,7 +636,7 @@ pub(super) fn dispatch_kadm5_ticket(
         }
         MODIFY_POLICY => {
             let (api, rec, mask) = parse_policy_arg(args)?;
-            if changepw || acl.check(actor, krb5_kdc::AdminOp::Modify, None).is_err() {
+            if changepw || !stack.modpol(actor, &rec.name) {
                 return Ok(generic_ret(api, KADM5_AUTH_MODIFY));
             }
             if let Some(code) = policy_name_err(&rec.name) {
@@ -624,24 +661,26 @@ pub(super) fn dispatch_kadm5_ticket(
             if let Some(code) = policy_floor_err(&merged, mask) {
                 return Ok(generic_ret(api, code));
             }
-            // MIT `osa_adb_put_policy` (`plugins/kdb/db2/adb_policy.c:263-276`): under the exclusive lock, a policy gone since the look is OSA_ADB_NOENT; one there takes the record merged at the look.
+            // MIT: `osa_adb_put_policy` (plugins/kdb/db2/adb_policy.c:263-276)
             Ok(commit_policy(&mut g, proc, api, |s| {
                 if !s.policies().contains_key(&merged.name) {
                     return Ok(Err(OSA_ADB_NOENT));
                 }
-                s.put_policy_and_save(merged).map(Ok)
+                s.put_policy(merged).map(Ok)
             }))
         }
         GET_POLICY => {
             let (api, name) = parse_policy_name(args)?;
-            let g = match write_store(store, proc, api) {
+            let g = match read_store(store, proc, api) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
+            // Own policy: caller's realm.
+            // MIT: `get_policy_2_svc` (kadmin/server/server_stubs.c)
             let own_pol = parse_actor(actor)
-                .and_then(|(n, _)| g.get_name(&n).and_then(|p| p.pw_policy.clone()));
-            if (changepw || acl.check(actor, krb5_kdc::AdminOp::Inquire, None).is_err())
-                && own_pol.as_deref() != Some(name.as_str())
+                .and_then(|(n, r)| g.get_in_realm(&n, &r).and_then(|p| p.pw_policy.clone()));
+            if (changepw && own_pol.as_deref() != Some(name.as_str()))
+                || !stack.getpol(actor, &name, own_pol.as_deref())
             {
                 return Ok(generic_ret(api, KADM5_AUTH_GET));
             }
@@ -652,10 +691,10 @@ pub(super) fn dispatch_kadm5_ticket(
         }
         GET_POLS => {
             let (api, expr) = parse_gpols(args);
-            if changepw || acl.check(actor, krb5_kdc::AdminOp::List, None).is_err() {
+            if changepw || !stack.listpols(actor) {
                 return Ok(generic_ret(api, KADM5_AUTH_LIST));
             }
-            let g = match write_store(store, proc, api) {
+            let g = match read_store(store, proc, api) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
@@ -676,20 +715,12 @@ pub(super) fn dispatch_kadm5_ticket(
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
-            if g.get_in_realm(&name, &req).is_none() {
+            // MIT: `chrand_principal_2_svc` (kadmin/server/server_stubs.c)
+            let Some(cid) = g.get_in_realm(&name, &req).map(krb5_kdc::Principal::id) else {
                 return Ok(generic_ret(API_V2, KADM5_UNK_PRINC));
-            }
-            let self_change = is_self(actor, &name, &req);
-            if changepw_not_self(changepw, actor, &name, &req)
-                || (acl
-                    .check(
-                        actor,
-                        krb5_kdc::AdminOp::ChangePassword,
-                        Some(&acl_id(&name, &req)),
-                    )
-                    .is_err()
-                    && !self_change)
-            {
+            };
+            let self_change = is_self_id(actor, &cid);
+            if (changepw && !self_change) || !stack.chrand(actor, &cid) {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_CHANGEPW));
             }
             if self_change && !initial {
@@ -714,28 +745,20 @@ pub(super) fn dispatch_kadm5_ticket(
         EXTRACT_KEYS => {
             let (api, name, prealm, kvno) = parse_extract(args)?;
             let req = req_realm(&prealm, &realm);
-            let g = match write_store(store, proc, api) {
+            let g = match read_store(store, proc, api) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
             let Some(p) = g.get_in_realm(&name, &req) else {
                 return Ok(generic_ret(api, KADM5_UNK_PRINC));
             };
-            if changepw
-                || acl
-                    .check(
-                        actor,
-                        krb5_kdc::AdminOp::Extract,
-                        Some(&acl_id(&name, &req)),
-                    )
-                    .is_err()
-            {
+            if changepw || !stack.extract(actor, &p.id()) {
                 return Ok(generic_ret(api, KADM5_AUTH_EXTRACT));
             }
             if p.attributes & KDB_LOCKDOWN_KEYS != 0 {
                 return Ok(generic_ret(api, KADM5_AUTH_EXTRACT));
             }
-            tracing::info!(
+            tracing::debug!(
                 event = krb5_log::events::ADMIN,
                 component = "krb5-admin",
                 outcome = "ok",
@@ -751,22 +774,17 @@ pub(super) fn dispatch_kadm5_ticket(
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
-            if g.get_in_realm(&name, &req).is_none() {
+            let Some(cid) = g.get_in_realm(&name, &req).map(krb5_kdc::Principal::id) else {
                 return Ok(generic_ret(api, KADM5_UNK_PRINC));
-            }
-            if changepw
-                || (acl
-                    .check(actor, krb5_kdc::AdminOp::Modify, Some(&acl_id(&name, &req)))
-                    .is_err()
-                    && !is_self(actor, &name, &req))
-            {
+            };
+            if changepw || !stack.purgekeys(actor, &cid) {
                 return Ok(generic_ret(api, KADM5_AUTH_MODIFY));
             }
             match commit(&mut g, proc, api, |s| {
                 s.purgekeys_in(&name, &req, keepkvno, actor)
             }) {
                 Ok(()) => {
-                    tracing::info!(
+                    tracing::debug!(
                         event = krb5_log::events::ADMIN,
                         component = "krb5-admin",
                         outcome = "ok",
@@ -778,27 +796,33 @@ pub(super) fn dispatch_kadm5_ticket(
             }
         }
         SETKEY_PRINCIPAL | SETKEY_PRINCIPAL3 | SETKEY_PRINCIPAL4 => {
-            let (api, name, prealm, keys, keepold) = parse_setkey(args, proc)?;
+            let SetkeyArgs {
+                api,
+                princ: name,
+                prealm,
+                mut keys,
+                keepold,
+                ks,
+            } = parse_setkey(args, proc)?;
             let req = req_realm(&prealm, &realm);
             let mut g = match write_store(store, proc, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
-            if g.get_in_realm(&name, &req).is_none() {
+            let Some(cid) = g.get_in_realm(&name, &req).map(krb5_kdc::Principal::id) else {
                 return Ok(generic_ret(api, KADM5_UNK_PRINC));
-            }
+            };
             let lockdown = g
                 .get_in_realm(&name, &req)
                 .is_some_and(|p| p.attributes & KDB_LOCKDOWN_KEYS != 0);
             if lockdown {
                 return Ok(generic_ret(api, KADM5_AUTH_SETKEY));
             }
-            if changepw
-                || acl
-                    .check(actor, krb5_kdc::AdminOp::SetKey, Some(&acl_id(&name, &req)))
-                    .is_err()
-            {
+            if changepw || !stack.setkey(actor, &cid) {
                 return Ok(generic_ret(api, KADM5_AUTH_SETKEY));
+            }
+            if !setkey3_tuples(&mut keys, &ks) {
+                return Ok(generic_ret(api, KADM5_SETKEY3_ETYPE_MISMATCH));
             }
             let n = clamp_self_keepold(is_self(actor, &name, &req), keepold);
             let changed = commit(&mut g, proc, api, |s| {
@@ -809,23 +833,14 @@ pub(super) fn dispatch_kadm5_ticket(
         GET_STRINGS => {
             let (api, name, prealm) = parse_gstrings(args)?;
             let req = req_realm(&prealm, &realm);
-            let g = match write_store(store, proc, api) {
+            let g = match read_store(store, proc, api) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
-            if g.get_in_realm(&name, &req).is_none() {
+            let Some(cid) = g.get_in_realm(&name, &req).map(krb5_kdc::Principal::id) else {
                 return Ok(generic_ret(api, KADM5_UNK_PRINC));
-            }
-            if changepw
-                || (acl
-                    .check(
-                        actor,
-                        krb5_kdc::AdminOp::Inquire,
-                        Some(&acl_id(&name, &req)),
-                    )
-                    .is_err()
-                    && !is_self(actor, &name, &req))
-            {
+            };
+            if changepw || !stack.getstrs(actor, &cid) {
                 return Ok(generic_ret(api, KADM5_AUTH_GET));
             }
             match g.get_strings_in(&name, &req) {
@@ -840,14 +855,10 @@ pub(super) fn dispatch_kadm5_ticket(
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
-            if g.get_in_realm(&name, &req).is_none() {
+            let Some(cid) = g.get_in_realm(&name, &req).map(krb5_kdc::Principal::id) else {
                 return Ok(generic_ret(api, KADM5_UNK_PRINC));
-            }
-            if changepw
-                || acl
-                    .check(actor, krb5_kdc::AdminOp::Modify, Some(&acl_id(&name, &req)))
-                    .is_err()
-            {
+            };
+            if changepw || !stack.setstr(actor, &cid) {
                 return Ok(generic_ret(api, KADM5_AUTH_MODIFY));
             }
             if key.is_empty() {
@@ -862,16 +873,14 @@ pub(super) fn dispatch_kadm5_ticket(
             let (alias, alias_realm, target, target_realm) = parse_alias(args)?;
             let alias_req = req_realm(&alias_realm, &realm);
             let target_req = req_realm(&target_realm, &realm);
-            // MIT `create_alias_2_svc` (`server_stubs.c:1727-1758`): CHANGEPW deny,
-            // acl_addalias, no lockdown check.
+            // MIT: `create_alias_2_svc` (server_stubs.c:1727-1758)
+            // No lockdown check, as MIT.
             if changepw
-                || acl
-                    .check_addalias(
-                        actor,
-                        &acl_id(&alias, &alias_req),
-                        &acl_id(&target, &target_req),
-                    )
-                    .is_err()
+                || !stack.addalias(
+                    actor,
+                    &acl_id(&alias, &alias_req),
+                    &acl_id(&target, &target_req),
+                )
             {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_INSUFFICIENT));
             }
@@ -888,14 +897,6 @@ pub(super) fn dispatch_kadm5_ticket(
     }
 }
 
-/// The `KADM5_AUTH_*` code a stub denies with (`server_stubs.c`, the
-/// `ret->code = KADM5_AUTH_…` of each `*_2_svc`): ADD for the creates
-/// (`:480,521,1268`), DELETE for the deletes (`:582,1311`), MODIFY for
-/// modify/purgekeys/set_string/modify_policy (`:633,1515,1594,1352`),
-/// INSUFFICIENT for rename and create_alias (`:702,1743`), GET for the gets
-/// (`:772,1400,1553`), LIST for the lists (`:816,1445`), CHANGEPW for
-/// chpass/chrand (`:860,915,1150,1210`), SETKEY for setkey (`:971,1023,1077`),
-/// EXTRACT for get_principal_keys (`:1691`).
 pub(super) fn auth_code_for(proc: u32) -> u32 {
     match proc {
         CREATE_PRINCIPAL | CREATE_PRINCIPAL3 | CREATE_POLICY => KADM5_AUTH_ADD,
@@ -912,15 +913,30 @@ pub(super) fn auth_code_for(proc: u32) -> u32 {
     }
 }
 
-/// kadm5 return code for a store error surfacing from the `proc` stub. A
-/// store-level `AclDenied` takes the stub's own `KADM5_AUTH_*`; no in-tree
-/// store path returns it today, because each arm checks the ACL inline.
+/// AclDenied: the stub's KADM5_AUTH_*.
+// MIT: `kadm5_setkey_principal_3` (lib/kadm5/srv/svr_principal.c:1519-1556)
+fn setkey3_tuples(keys: &mut [krb5_kdc::KeyEntry], ks: &[(i32, i32)]) -> bool {
+    if ks.is_empty() {
+        return true;
+    }
+    if ks.len() != keys.len() || keys.iter().zip(ks).any(|(k, t)| k.etype.to_iana() != t.0) {
+        return false;
+    }
+    for (k, &(_, salt_type)) in keys.iter_mut().zip(ks) {
+        if salt_type > 0 {
+            k.salt_type = Some(salt_type);
+            k.kdb_salt = Some(Vec::new());
+        }
+    }
+    true
+}
+
 pub(super) fn kadm5_code(proc: u32, e: &Error) -> u32 {
     let s = match e {
         Error::AclDenied | Error::KpropUnauthorized(_) => return auth_code_for(proc),
         Error::NotFound => return KADM5_UNK_PRINC,
         Error::PassTooSoon { .. } => return KADM5_PASS_TOOSOON,
-        Error::GarbageArgs | Error::ProcUnavail => return KADM5_FAILURE,
+        Error::GarbageArgs | Error::ProcUnavail | Error::Reported => return KADM5_FAILURE,
         Error::PasswordPolicy(s) | Error::Inner(s) => s.as_str(),
     };
     if s.starts_with("Unsupported argument") || s == "Invalid argument" {
@@ -936,14 +952,20 @@ pub(super) fn kadm5_code(proc: u32, e: &Error) -> u32 {
         KADM5_PASS_REUSE
     } else if s.contains("setkey kvno") {
         KADM5_SETKEY_BAD_KVNO
+    } else if s == "Multiple values for single or folded enctype" {
+        KADM5_SETKEY_DUP_ENCTYPES
     } else if s == "Invalid key/salt tuples" {
         KADM5_BAD_KEYSALTS
+    } else if s == "Cannot change protected principal" {
+        KADM5_PROTECT_PRINCIPAL
     } else if s.contains("principal exists") {
         KADM5_DUP
     } else if s == "Alias target must be within the same realm" {
         KADM5_ALIAS_REALM
     } else if s == "Operation unsupported on alias principal name" {
         KRB5_KDB_ALIAS_UNSUPPORTED
+    } else if s == "Unsupported salt type" {
+        KRB5_KDB_BAD_SALTTYPE
     } else {
         KADM5_FAILURE
     }
