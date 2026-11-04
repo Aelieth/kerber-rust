@@ -32,6 +32,9 @@ Gateway, DHCP and DNS are on `192.168.177.1` (libvirt's dnsmasq).
 | `deb13.kerber.test` | `.33` | `kerber-deb13` | Debian 13 | 2 / 3 GiB / 30 GB | lagging peer (krb5 1.21.3). Started with the field VMs. Not built from the Fedora image |
 | `rocky10.kerber.test` | `.34` | `kerber-rocky10` | Rocky Linux 10 | 2 / 3 GiB / 20 GB | closeout and the 1.2.0 final only. `lab.sh up` does not start it; `lab.sh up rocky10` does |
 
+Field runs use Fedora 44 snapshots (`f44-base` and the ones the scenario table names), whatever the
+table's image was built from.
+
 - **DHCP:** static leases by MAC (`network-kerber-lab.xml`, the table in
   `lab.sh`). Other machines get `.100`–`.199`.
 - **DNS:** forward and reverse records for every name above. `kerber.test` is
@@ -152,17 +155,17 @@ clients on client2) and keeps their logs, one line per check. It is a harness,
 not a gate: no ci-policy judge, ledger row or CI job runs it.
 
 ```sh
-make field PROFILE=nightly REF=plan-12               # every scenario of the profile
-make field PROFILE=nightly REF=plan-12 ONLY=upgrade  # one of them
-harness/field/run.sh --profile nightly --ref plan-12 --only upgrade   # the same, without make
-harness/field/run.sh ad-trust --ref plan-12 --leg both   # the real AD DC: upgrade, then ad-trust
-harness/field/run.sh --profile weekly --ref plan-12 --only upgrade,kpasswd --leg both   # 464's cells, on demand
-harness/field/run.sh --profile weekly --ref plan-12 --only upgrade,kdc-profile --leg both   # kdc.conf's cells, on demand
-harness/field/run.sh --profile weekly --ref plan-12 --only upgrade,kdb-writes --leg both   # the store's write cells, on demand
-harness/field/run.sh --profile weekly --ref plan-12 --only upgrade,pkinit --leg both   # PKINIT's cells (the L6 certificates), on demand
-harness/field/run.sh --profile weekly --ref plan-12 --only upgrade,replica --leg both   # the replica cells (lab.sh up kdc2 first), on demand
-harness/field/run.sh --profile weekly --ref plan-12 --only upgrade,rollback --leg both   # "Going back to MIT", on demand (leaves kdc on MIT)
-harness/field/run.sh --profile kill-loop --ref plan-12   # SW-3's kill loop (lab.sh up kdc2 first), on demand: upgrade, then kill-loop
+make field PROFILE=nightly REF=main               # every scenario of the profile
+make field PROFILE=nightly REF=main ONLY=upgrade  # one of them
+harness/field/run.sh --profile nightly --ref main --only upgrade   # the same, without make
+harness/field/run.sh ad-trust --ref main --leg both   # the real AD DC: upgrade, then ad-trust
+harness/field/run.sh --profile weekly --ref main --only upgrade,kpasswd --leg both   # 464's cells, on demand
+harness/field/run.sh --profile weekly --ref main --only upgrade,kdc-profile --leg both   # kdc.conf's cells, on demand
+harness/field/run.sh --profile weekly --ref main --only upgrade,kdb-writes --leg both   # the store's write cells, on demand
+harness/field/run.sh --profile weekly --ref main --only upgrade,pkinit --leg both   # PKINIT's cells (the L6 certificates), on demand
+harness/field/run.sh --profile weekly --ref main --only upgrade,replica --leg both   # the replica cells (lab.sh up kdc2 first), on demand
+harness/field/run.sh --profile weekly --ref main --only upgrade,rollback --leg both   # "Going back to MIT", on demand (leaves kdc on MIT)
+harness/field/run.sh --profile kill-loop --ref main   # the kill loop (lab.sh up kdc2 first), on demand: upgrade, then kill-loop
 ```
 
 - **Options:**
@@ -200,7 +203,7 @@ harness/field/run.sh --profile kill-loop --ref plan-12   # SW-3's kill loop (lab
     of that check and counts both on the `post.host.tmp` line. Those trees are
     CLI scratch for this user, written whether or not that CLI is driving the
     run. The browser's top-level Chromium names (`.org.chromium.Chromium.*`,
-    `org.chromium.Chromium.*`, `scoped_dir*`) are left out too, and counted
+    `org.chromium.Chromium.*`, `scoped_dir*`) and GIMP's (`gimp-*`) are left out too, and counted
     and listed on that line. Any other new path still fails the guard.
 - **Limits:** a scenario has `FIELD_SCENARIO_TIMEOUT` seconds (default 1800),
   and each of its commands `FIELD_CMD_TIMEOUT` (default 900), cut to what is
@@ -239,7 +242,7 @@ harness/field/run.sh --profile kill-loop --ref plan-12   # SW-3's kill loop (lab
   `flock -n ~/kerber-lab/state/lab.lock bash` (held while that shell runs).
 - **Never:** a snapshot created or deleted, a git ref written, the AD DC touched,
   but for `ad-trust`'s changes #1-#4 and #7 (`lib/ad.sh`), each undone in the
-  same run (Phil's standing OK, 2026-10-16).
+  same run (a standing OK, 2026-10-16).
 
 `lib/`, shared by `run.sh` and the scenarios:
 
@@ -247,6 +250,10 @@ harness/field/run.sh --profile kill-loop --ref plan-12   # SW-3's kill loop (lab
 | --- | --- |
 | `rec.sh` | The recorder: `run` / `runin` (a VM command, stdin for secrets), `host` / `hostin`, `limited` (any other command, under the same time limit), `once` / `twice` / `chpw` (secrets for stdin), `check` / `checklast` (graded lines of `checks.tsv`), `observe` / `observelast` (INFO lines), `kdcmark` / `kdcsince` (kdc's daemon logs; the mark is a check, and no line is read without one), `capstart` / `capstop` (captures), `waitsync`, `finish` |
 | `redact.py` | The record filter: every value under `~/kerber-lab/secrets` and in `~/adlab/env`, trace key prefixes, `encrypted <hex>`, the encrypted-timestamp and SPAKE trace values, OIDC codes, SPNEGO tokens, cookies, PEM keys |
+| `compare.py` | Grades a scenario's two legs by check: `DIVERGED`, `REGRESSION`, `ORACLE-FAIL`, `KNOWN` or `NOT-RUN`. A plain string compare of each check's text. |
+| `al1-start-probe.sh` | `kadmind-start`'s cells: one start of kadmind against a profile that injects a failure. |
+| `client-opens.sh`, `profile-opens.sh` | `kdc-profile`'s cells: how often each program opens each profile file. |
+| `embed-otp-guest.py`, `embed-otp-stub.py` | `embed-otp`'s driver on the kdc VM, and the RADIUS stub for its MIT leg. |
 | `scan-secrets.py` | Every one of those values in every file of a run, in UTF-8 and UTF-16-LE (keytab keys raw and as hex); a planted control first; a hit fails the run |
 | `pcap-keep.sh` | A capture's copy without any AS exchange (IP fragments of other messages kept), checked to hold no AS message |
 | `strings-check.sh` | R1's strings check of the test-only names on a VM, by file or by install manifest (every program it lists, none skipped); `--control` must go red |
@@ -284,16 +291,17 @@ harness/field/run.sh --profile kill-loop --ref plan-12   # SW-3's kill loop (lab
 | `klldap-swap` | nightly, weekly | mit, rust | klldap (not reset; the leg cleans its own artifacts) | f-F3-mit (mit leg), f-F3 (rust leg) | about 4 min (mit) and 8 min (rust) with BuildKit's cache warm; much longer cold (see below) |
 | `kdc-profile` | weekly; on demand with `--only upgrade,kdc-profile` for a change to how kdc.conf is read | mit, rust | client2: `mit-kit-fc44` / `rust-ssh-f44` (reset); kdc as `upgrade` left it, its kdc.conf restored after each cell | none: the CF cells' first record | about 6 / 6 min |
 | `kdb-writes` | weekly; on demand with `--only upgrade,kdb-writes` for a change to how the store writes | mit, rust | client2: `mit-kit-fc44` / `rust-ssh-f44` (reset); kdc as `upgrade` left it, its scratch principals and policies removed at the end | none: the SW cells' first record | about 1 / 1 min |
-| `ticket-flags` | weekly, after `kdb-writes` and before `client-tools`; on demand with `--only upgrade,ticket-flags` | mit, rust | client2: `mit-kit-fc44` / `rust-ssh-f44` (reset); kdc as `upgrade` left it; scratch principals and policies removed; `kadmin/changepw`'s PWCHANGE flag restored | none: the TF cells' first record | first run not yet timed |
-| `client-tools` | weekly, after `ticket-flags` and before `pkinit`; on demand with `--only upgrade,client-tools` | mit, rust | client2: `mit-kit-fc44` / `rust-ssh-f44` (reset); kdc as `upgrade` left it; in the rust leg kdc's build of our client programs is piped to client2's `~/ct/bin`; scratch principals removed | none: the CT cells' first record | first run not yet timed |
+| `ticket-flags` | weekly, after `kdb-writes` and before `client-tools`; on demand with `--only upgrade,ticket-flags` | mit, rust | client2: `mit-kit-fc44` / `rust-ssh-f44` (reset); kdc as `upgrade` left it; scratch principals and policies removed; `kadmin/changepw`'s PWCHANGE flag restored | none: the TF cells' first record | about 2 / 2 min |
+| `client-tools` | weekly, after `ticket-flags` and before `pkinit`; on demand with `--only upgrade,client-tools` | mit, rust | client2: `mit-kit-fc44` / `rust-ssh-f44` (reset); kdc as `upgrade` left it; in the rust leg kdc's build of our client programs is piped to client2's `~/ct/bin`; scratch principals removed | none: the CT cells' first record | about 1 / 2 min |
 | `pkinit` | weekly; on demand with `--only upgrade,pkinit` for a change to PKINIT | mit, rust | client2: `$PK_SNAPSHOT_CLIENT2` when set (reset), else as it stands; kdc as `upgrade` left it, the L6 certificates made on it for the run (`lib/l6-certs.sh`) and client2's piped there, its kdc.conf restored after | none: the PK cells' first record | about 2 / 2 min |
 | `kpasswd` | weekly, last but `replica` and `install` (on a leg that allows it, it changes krbtgt's and kadmin/changepw's keys); on demand with `--only upgrade,kpasswd` for a change to kpasswd or chpass | mit, rust | client2: `mit-kit-fc44` / `rust-ssh-f44` (reset); kdc as `upgrade` left it | none: the KH cells' first record | about 2 / 2 min |
-| `rollback` | weekly, last but `replica` and `install` (it leaves kdc on MIT, and `replica` resets it); on demand with `--only upgrade,rollback` | mit, rust | kdc as `upgrade` left it, on MIT afterwards; client2: `mit-kit-fc44` / `rust-ssh-f44` as the run left it | none: SW-2's export bar, docs/install.md "Going back to MIT" | about 1 / 3 min (estimate; the rust leg's dnf install from the mirrors) |
+| `rollback` | weekly, last but `replica` and `install` (it leaves kdc on MIT, and `replica` resets it); on demand with `--only upgrade,rollback` | mit, rust | kdc as `upgrade` left it, on MIT afterwards; client2: `mit-kit-fc44` / `rust-ssh-f44` as the run left it | none: docs/install.md "Going back to MIT" | under 1 / under 1 min |
 | `replica` | weekly, last but `install`: kdc is reset to the MIT primary; on demand with `--only upgrade,replica`, and `FIELD_REPLICA_BAKED=1 --only replica --leg rust` for the parent's baked programs | mit, rust | kdc: `f4-mit-f44` in both legs (reset); kdc2: `f4-mit-f44` / `rust-replica-f44` (up for the preflight, reset at the start and the end, then parked); client2: `mit-kit-fc44` (reset) | none: the REP cells' first record | about 6 / 7 min |
-| `install` | weekly, last: it resets kdc to its pristine `f44-base` snapshot and builds a realm from scratch | mit, rust | kdc: `f44-base` in both legs (reset to the pre-realm snapshot; the rust leg installs the ref from `docs/install.md`, the MIT leg Fedora's `krb5-server`); client2: `mit-kit-fc44` / `rust-ssh-f44` (reset) | f-L2-mit-realm; f-L2-rust (R1 install, L2 realm) | about 3 / 7 min (estimate; the rust build about 2) |
-| `kill-loop` | none: `run.sh --profile kill-loop` (upgrade, then kill-loop), the 1.2 cut's crash proof (plan-SW, SW-3) | rust (MIT is the judge) | kdc as `upgrade` left it, its kl principals and stale `.principal.tmp-*` removed at the end; kdc2: `f4-mit-f44` in the rust leg (up for the preflight, reset at the start and the end, then parked) | none: SW-3's first record | about 10 min (estimate) |
+| `embed-otp` | none, and in no profile, so `run.sh` cannot select it: it runs by hand, once its binaries are placed (its header) | rust (MIT 1.22.2 first, as the oracle) | kdc: `$MIT_SNAPSHOT_KDC` (reset) | none | not timed |
+| `install` | weekly, last: it resets kdc to its pristine `f44-base` snapshot and builds a realm from scratch | mit, rust | kdc: `f44-base` in both legs (reset to the pre-realm snapshot; the rust leg installs the ref from `docs/install.md`, the MIT leg Fedora's `krb5-server`); client2: `mit-kit-fc44` / `rust-ssh-f44` (reset) | f-L2-mit-realm; f-L2-rust (R1 install, L2 realm) | about 1 / 4 min |
+| `kill-loop` | none: `run.sh --profile kill-loop` (upgrade, then kill-loop), the 1.2 cut's crash proof | rust (MIT is the judge) | kdc as `upgrade` left it, its kl principals and stale `.principal.tmp-*` removed at the end; kdc2: `f4-mit-f44` in the rust leg (up for the preflight, reset at the start and the end, then parked) | none: its first record | about 5 min |
 
-With `--leg both`, the four take 15 to 16 minutes (2026-10-02, every VM reset by the run).
+With `--leg both`, the six nightly scenarios take about 20 minutes, and the weekly 16 about 70 (2026-11-03, every VM reset by the run).
 
 **The MIT baselines** are the Fedora 44 disks a leg resets to. kdc `f4-mit-f44`
 is the MIT realm and boots serving. client1 `mit-sudo-fc44` is the kit-joined
@@ -506,8 +514,7 @@ would remove it.
   zero), SPAKE with `preferred_preauth_types = 151`, the preauth cascade, the enctypes
   nothing configures, `kvno -U -P`, and no `ticket_lifetime` with and without `-r 12h`;
   kpasswd refused by a minimum-length policy; MIT's `krb5_cc_remove_cred`
-  (`lib/cc-remove.py`) on a cache ours wrote. The rows run with `LC_ALL=C`, since MIT's klist dates
-  follow the locale and ours print the C locale's; one INFO pair records the session's own
+  (`lib/cc-remove.py`) on a cache ours wrote. The rows run with `LC_ALL=C`, so the dates read alike; one INFO pair records the session's own
   locale. Scratch principals are removed at the end.
 - **`kpasswd.sh`** (KH, client2 against kdc's 464; `lib/setpw.py` drives MIT's
   libkrb5): admin/admin sets a fresh principal's password (0, kvno + 1); an
@@ -635,15 +642,14 @@ pin (`--no-optional-locks`), never a copy of the checkout's working tree.
 
 ## Cadence
 
-The field suite is dispatched by hand -- by a person or the director -- never by
-a timer (see the end of this section). Every command names the branch with
-`REF`; for v1.2.0 that is `plan-12`.
+The field suite is dispatched by hand, never by a timer (see the end of this
+section). Every command names the branch or tag with `REF`: `main`, or a tag such
+as `v1.2.0`.
 
-- **Nightly** (`make field PROFILE=nightly LEG=both REF=plan-12`, about 30 min),
+- **Nightly** (`make field PROFILE=nightly LEG=both REF=main`, about 20 min),
   at each package landing, the MIT leg first so a regression shows against the
   parent build the same day.
-- **Weekly** (`make field PROFILE=weekly LEG=both REF=plan-12`, about 1.3 to
-  1.5 h), once a calendar week and again before a release re-pass.
+- **Weekly** (`make field PROFILE=weekly LEG=both REF=main`, about 1.2 h), once a calendar week and again before a release re-pass.
 
 Which scenarios a profile runs is `run.sh`'s `PROFILES` and the Scenarios table's
 Profiles column; `install` runs last, as it resets kdc. Any passing MIT leg, in
@@ -770,8 +776,8 @@ to a network defined before it joined the table (`net-update`, no restart).
 
 ## Isolation
 
-- **Host:** the lab never touches the host's `/etc/krb5.conf` (realm
-  `TESTLABBY.LOCAL`), the libvirt `default` network, other VMs, or host
+- **Host:** the lab never touches `/etc/krb5.conf` (realm `TESTLABBY.LOCAL`) or, from a
+  distrobox, `/run/host/etc/krb5.conf`, the libvirt `default` network, other VMs, or host
   networking. libvirt's own firewall rules for `virbr-kerber` are the only
   host-side network change.
 - **Secrets:** none enter git or field records.

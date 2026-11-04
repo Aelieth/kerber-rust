@@ -13,8 +13,7 @@ job; **nightly**, a scheduled workflow (a red is a red, but a push does not
 wait for it). **stub** and **wrapper** (lane —) are in no workflow: a stub
 needs an absent peer, a wrapper runs other gates locally.
 
-Oracles: **MIT** 1.22.2 (the equality bar), **Samba** 4 AD, **Heimdal** 7.8
-(secondary), or **none** (Rust against Rust: it proves behaviour, not
+Oracles: **MIT** 1.22.2 (the equality bar), **Samba** 4 AD, or **none** (Rust against Rust: it proves behaviour, not
 parity). An MIT program a gate compiles in the MIT image is linked by `krb5-config`
 (`mit_oracle_cc`) and prints the `libkrb5` it loads, `krb5-1.22.2-final`, before
 its first use; any other brand is red.
@@ -30,8 +29,8 @@ clients with MIT's client tools; over the AD trust, Windows SSPI accepted a
 user of the realm (SMB, LDAP) and, as a SPNEGO client, reached Apache
 `mod_auth_gssapi`. Not run: the Rust tools on a cache gssproxy writes,
 `krb5-gss` against SSPI, the kit with the Rust client tools against MIT's
-KDC, and SHA-2 enctypes over NFS. Against our KDC the Rust client tools ran beside MIT's and
-fail the kit's keytab check (no `klist -k`; [install.md](install.md) lists what is missing).
+KDC, and SHA-2 enctypes over NFS. Against our KDC the Rust client tools ran beside MIT's in the field's
+`client-tools` scenario; [install.md](install.md) lists what is not yet a drop-in.
 
 
 Rows: [OTP](gates-otp.md).
@@ -45,9 +44,9 @@ Rows: [OTP](gates-otp.md).
 | `scripts/client-gate.sh` | MIT | `ci:mit-smoke` | fail-red | Rust `krb5-kinit` vs MIT `krb5kdc`: MIT `klist` of the Rust ccache names `user@KERBER.TEST` + `host/testhost.kerber.test`; Rust `klist -f -e` matches MIT flags/etype; `krb5-kvno` service ticket; `kdestroy` then MIT `klist` has no cache; symlink kdestroy refused (target intact); default ccache `/tmp/krb5cc_<uid>`; Rust `kvno` rewrite keeps MIT `klist -C` `config:`; `kinit -kt`; MIT and Rust `klist -s` agree |
 | scripts/config-include-gate.sh | MIT | `nightly:moving` | nightly | MIT vs Rust `kinit`/`kvno` on `include`/`includedir` + `KRB5_CONFIG`: dotted `10.conf` drop-in; A:B first-wins `default_realm`; missing include fails both sides |
 | scripts/cross-kdc-gate.sh | MIT | `nightly:moving` | nightly | one identical dump; MIT `krb5kdc` :88 and Rust KDC :8888: a TGT issued by either KDC is accepted by the other's TGS (`kvno` both ways); the TGT enc-part etype (`klist -e`) is the same on both KDCs; with no AD data (no `domain_sid`) the AS TGT's, the TGS and AS service tickets' and S4U2Self's PAC is MIT's buffer for buffer (`pac_layout`), the AS tickets are MIT's size, and one MIT TGT renewed by each KDC keeps the same PAC bytes; a cross-realm S4U2Self (`kvno -I`) both ways with OTHER.TEST, an MIT db2 realm: for its user either KDC's last hop gives MIT's PAC, and for a KERBER.TEST user MIT's last hop takes either KDC's referral |
-| `scripts/differential-gate.sh` | MIT | `ci:mit-smoke` | fail-red | same AS/TGS bytes to Rust and MIT on one dump (diffsend encodes each case once): stable-rep / error-code compare; diffsend rc 0 and all 123 cases `"outcome":"ok"` (`DIFFSEND_RATCHET=123`; any mismatch is red); a `"whitelist"` key is red |
+| `scripts/differential-gate.sh` | MIT | `ci:mit-smoke` | fail-red | same AS/TGS bytes to Rust and MIT on one dump (diffsend encodes each case once): stable-rep / error-code compare; diffsend rc 0 and all 212 cases `"outcome":"ok"` (`DIFFSEND_RATCHET=212`; any mismatch is red); a `"whitelist"` key is red |
 | `scripts/getprivs-gate.sh` | MIT | `nightly:moving` | nightly | MIT `kadmin getprivs` vs Rust kadmind ACL: the admin (`*`) and an actor whose ACL is `i` alone both print `INQUIRE` (or `GET`), `ADD` and `MODIFY`; the `i` actor's `cpw -randkey` is refused as AUTH_CHANGEPW (`change-password`), not AUTH_GET |
-| scripts/gss-gate.sh | MIT | `nightly:moving` | nightly | MIT `libgssapi_krb5` initiator vs `krb5-gss-accept`: unwrap of `hello-from-mit-gss`; `GSS_C_DELEG_FLAG` both directions names `user@KERBER.TEST`; MIT SPNEGO handshake (`gss-accept spnego mic ok`, `gss-accept spnego peer mic ok`); MIT `gss_wrap_iov` unwraps on the Rust acceptor (with `SIGN_ONLY` through Rust `unwrap_iov`); Rust `wrap_iov` / MIT `gss_unwrap_iov`; MIT DCE `wrap_iov` → Rust and → MIT unwrap; inquire lifetime > 0; replayed AP-REQ is 34 on both (MIT KRB-ERROR 34 `Request is a replay`; Rust `accept_sec_context: KRB-ERROR 34: Request is a replay`); a ticket from `OTHER.TEST` listing `KERBER.TEST`, the server's realm, as transited is refused on both, MIT first (`Illegal cross-realm ticket`); a replayed AP-REQ's error token, with and without mutual, bare and in SPNEGO, is MIT's on both (`gss-reply.py`), eight crafted AP-REQs (`rd-sweep gss-errtok`) get MIT's reply on both, and the one claiming CHANNEL_BOUND without bindings MIT's context flags, and the Rust initiator reads MIT's error token as MIT's initiator does; direction/filler/EC mutations rejected on both acceptors |
+| scripts/gss-gate.sh | MIT | `nightly:moving` | nightly | MIT `libgssapi_krb5` initiator vs `krb5-gss-accept`: unwrap of `hello-from-mit-gss`; `GSS_C_DELEG_FLAG` both directions names `user@KERBER.TEST`; MIT SPNEGO handshake (`gss-accept spnego mic ok`, `gss-accept spnego peer mic ok`); MIT `gss_wrap_iov` unwraps on the Rust acceptor (with `SIGN_ONLY` through Rust `unwrap_iov`); Rust `wrap_iov` / MIT `gss_unwrap_iov`; MIT DCE `wrap_iov` → Rust and → MIT unwrap; inquire lifetime > 0; replayed AP-REQ is 34 on both (MIT KRB-ERROR 34 `Request is a replay`; Rust `accept_sec_context: KRB-ERROR 34: Request is a replay`); a ticket from `OTHER.TEST` listing `KERBER.TEST`, the server's realm, as transited is refused on both, MIT first (`Illegal cross-realm ticket`); a replayed AP-REQ's error token, with and without mutual, bare and in SPNEGO, is MIT's on both (`gss-reply.py`), nine crafted AP-REQs (`rd-sweep gss-errtok`) get MIT's reply on both, and the one claiming CHANNEL_BOUND without bindings MIT's context flags, and the Rust initiator reads MIT's error token as MIT's initiator does; direction/filler/EC mutations rejected on both acceptors |
 | scripts/history-mit-gate.sh | MIT | `nightly:moving` | nightly | MIT `kadmin.local` history-window on a MIT KDB: history=1 allows A→B→A; history=2 rejects B after A→B→C |
 | `scripts/iprop-gate.sh` | MIT | `nightly:moving` | nightly | MIT's kadmind, then ours, on a full resync: a legacy request's `iprop` dump, and after an outside `kadmin.local` write a replica's `ipropx 1` dump that MIT `kpropd -A` loads with the write, with `.dump_ok`, `.last_prop` and `kprop -f` of it; MIT `kpropd -A` GET_UPDATES + `krb5-iprop-pull` vs MIT kadmind: MIT `kinit extra` after master restart + serial-delta (no extra FULL_RESYNC); MIT `kinit extra2` on Rust replica whose dump holds the `setstr` value and whose `extra2` keeps the flags, lifetimes and expirations the setstr update did not carry; extra2 PAC RID ≠ 1000 (the replica's `domain_sid` makes the RID AD data) |
 | scripts/kadmin-both-gate.sh | MIT | `nightly:moving` | nightly | both kadminds side by side: `listprincs`/`listpols` glob lists and `getprinc` records (keys, lifetimes) equal between the Rust kadmind and MIT kadmind |
@@ -169,20 +168,20 @@ not check (a unit test, or "not asserted").
   The `preauth (…) verify failure:` lines of the two KDC logs are equal.
   Compare lives behind `krb5-protocol` feature `diff`
   (`diffsend.rs` and the unit fixture); `diff` is
-  a default feature, so it is on the default public API. **TGS vehicle:**
+  off by default, and `krb5-tools` turns it on. **TGS vehicle:**
   `tgs-success` mints a PAC-less TGT with the exported krbtgt key (etype
   20, empty `tr-type` 1). PAC-bearing cases mint a diffsend-signed PAC TGT
   (for example `tgs-pac-request-false`); no case verifies the re-signed
   PAC checksums of an issued ticket. **Transited flag:** the full
   flag-word compare holds `TRANSITED_POLICY_CHECKED` (bit 12) to MIT's in
   `as-success` and `tgs-success`.
-- `ticket-flags.sh` `TF.expire.kinit`, `TF.pw.kinit`, `TF.pw.changepw`,
+- Field scenario `harness/field/scenarios/ticket-flags.sh`: `TF.expire.kinit`, `TF.pw.kinit`, `TF.pw.changepw`,
   `TF.tgs.pw.kvno`, `TF.tgs.acct.kvno`, `TF.need.kinit`, `TF.need.changepw` —
   MIT `kinit` NAME_EXP vs KEY_EXPIRED; `kinit -S kadmin/changepw` on a
   password-expired client; TGS `kvno` after client `-pwexpire`/`-expire`
   still succeeds; `modprinc +needchange` is `KEY_EXPIRED` unless the server
   is `PWCHANGE_SERVICE`.
-- `ticket-flags.sh` `TF.flags.revoke`, `TF.flags.fwd.bits`,
+- Field scenario `harness/field/scenarios/ticket-flags.sh`: `TF.flags.revoke`, `TF.flags.fwd.bits`,
   `TF.flags.deleg.bits`, `TF.flags.svr.kvno`, `TF.flags.tgt.kvno`,
   `TF.flags.hw.kinit`, `TF.flags.hw.none` — MIT `modprinc` DISALLOW_*/OK_AS_DELEGATE/
   REQUIRES_HW_AUTH then `kinit`/`kvno`/`klist -f`; the hw principal gets no ticket.
@@ -209,12 +208,13 @@ not check (a unit test, or "not asserted").
   by MIT's acceptor, then by ours (`Illegal cross-realm ticket`). A replayed
   AP-REQ gets MIT's KRB-ERROR token (0x0300) from both acceptors when it asked for
   mutual, none when it did not, and a SPNEGO reject carrying it; the Rust initiator
-  reads MIT's error token as MIT's initiator does. Eight crafted AP-REQs
+  reads MIT's error token as MIT's initiator does. Nine crafted AP-REQs
   (`rd-sweep gss-errtok`) get the same reply from both acceptors: six refused
   after the checksum's flags (a bad delegation id with and without the mutual
   flag, FINISHED, a second AD-AP-OPTIONS, a raw AP-REQ without DCE and a framed
   one with it), a bad non-0x8003 checksum, and a checksum claiming
-  CHANNEL_BOUND without bindings, whose context reports MIT's flags. No cell replays a
+  CHANNEL_BOUND without bindings, whose context reports MIT's flags, and a day-old delegated
+  KRB-CRED that both acceptors take, with MIT's flags. No cell replays a
   token across an acceptor restart: MIT `dfl` file persistence across process restart is
   deferred (the ledger's `srv_rcache.c; rc_file2.c` row). MIT `gss_wrap_iov`
   (HEADER|DATA|PADDING|TRAILER, and with `SIGN_ONLY`) must unwrap on the
@@ -362,12 +362,12 @@ not check (a unit test, or "not asserted").
   KDC log must contain `rfc8636 sha256 kdf`. It also refuses MIT `kinit`
   with `other.pem` (SAN ≠ `user`) and greps the Rust KDC log for
   `pkinit client san`.
-- `ticket-flags.sh` `TF.pol.short`, `TF.pol.list`, `TF.class.five`,
+- Field scenario `harness/field/scenarios/ticket-flags.sh`: `TF.pol.short`, `TF.pol.list`, `TF.class.five`,
   `TF.hist.allow`, `TF.pol.locked`, `TF.dur.open`, `TF.int.open` —
   MIT `kadmin` addpol/modpol/getpol/listpols/`cpw`/delpol; too-short and
   reuse; `-minclasses 5`; history-N; `maxfailure 2` then revoked;
   lockout duration and the failure-count interval.
-- `ticket-flags.sh` `TF.post.kinit`, `TF.post.nyv`, `TF.post.validate`,
+- Field scenario `harness/field/scenarios/ticket-flags.sh`: `TF.post.kinit`, `TF.post.nyv`, `TF.post.validate`,
   `TF.post.life.delta`, `TF.post.deny` — MIT `kinit -s` is INVALID (`i`);
   `kvno` is not yet valid; `kinit -v` then works; a five-minute life ends
   300 s after the start; `-allow_postdated` is ineligible for postdating.
@@ -385,7 +385,7 @@ not check (a unit test, or "not asserted").
   the Rust kpropd (same file, re-read per connection) and die unless kprop's
   verdict and the `Rejected connection from unauthorized principal` count
   agree (`kpropd.c:1298-1348`).
-- `ticket-flags.sh` `TF.renew.delta`, `TF.renew.until`, `TF.renew.moved`,
+- Field scenario `harness/field/scenarios/ticket-flags.sh`: `TF.renew.delta`, `TF.renew.until`, `TF.renew.moved`,
   `TF.renew.strip.bits`, `TF.renew.strip.until`, `TF.flags.prox.allow`, `TF.renew.zero.delta`,
   `TF.renew.day.delta`, `TF.renew.none.log`, `TF.z71.delta` — four-term
   renew; `kinit -R` keeps renew-until and moves the end; `-allow_renewable`
@@ -475,7 +475,7 @@ not check (a unit test, or "not asserted").
   `samba-tool domain trust create` (fail with images present is `exit 1`);
   both-direction `kvno`; reverse Rust service PAC LOGON_INFO SID/RID equals
   live Samba-A `kbruser` `objectSid`. Missing images `exit 2`.
-- `ticket-flags.sh` `TF.sha2.krbtgt`, `TF.sha2.host` — MIT `kinit`/`kvno`
+- Field scenario `harness/field/scenarios/ticket-flags.sh`: `TF.sha2.krbtgt`, `TF.sha2.host` — MIT `kinit`/`kvno`
   with only etype 20. The krbtgt session key and the host ticket key are
   `aes256-cts-hmac-sha384-192`. The TGT ticket key stays the long-term
   sha1 key.

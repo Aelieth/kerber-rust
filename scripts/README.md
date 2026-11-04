@@ -31,6 +31,12 @@ MIT 1.22.2 and Samba peers; [`docs/gates.md`](../docs/gates.md) lists what each 
 | `lib/otp-fastdump.py` | Reads the shim's lines and prints the inner padata types, the PA-OTP-REQUEST and PA-OTP-CHALLENGE bytes (ciphertext and nonce masked) and the nonces. |
 | `lib/otp-totp.py` | RFC 6238 TOTP from the standard library: the current code, a code that is none of the five nearest, and the RFC's own vectors. |
 | `lib/openssl-seclevel0.cnf` | The OpenSSL 3 configuration the PKINIT gates load. |
+| `lib/ccache-offset.py` | Shows or sets a FILE ccache v4 header's KDC time offset. |
+| `lib/gss-reply.py` | Sends a GSS token to an acceptor and prints its reply on one line. |
+| `lib/pkinit-rsa-certs.sh`, `lib/pkinit-ec-certs.sh`, `lib/pkinit-kdc-certs.sh`, `lib/pkinit-noskid.sh` | Make the PKINIT gates' certificates: RSA, EC on a named curve, KDC certificates MIT's SAN and EKU checks tell apart, and a CA with no SKID. |
+| `lib/pkinit-manycert.py` | One AS-REQ whose CMS carries many same-named certificates. |
+| `lib/reply-etype-kdc.py` | A fake UDP KDC whose replies carry a chosen enctype, s2k count or nonce. |
+| `lib/trickle-kdc.py` | A fake TCP KDC that answers with a bad reply. |
 
 ## `oracle/` — MIT programs the gates build inside the container
 

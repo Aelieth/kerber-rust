@@ -1,6 +1,6 @@
 # Gates — OTP preauth
 
-The rows of the two OTP gates, which never stood in [gates.md](gates.md) (its 60 KiB is full). Both run MIT `kinit -T`
+The rows of the two OTP gates, which never stood in [gates.md](gates.md). Both run MIT `kinit -T`
 and the Rust `kinit` (copied into the container as `kinit`, so its messages carry MIT's name) cell for cell: the
 first against MIT's KDC and its `otp` module, the second against the Rust KDC's.
 

@@ -16,7 +16,9 @@ Clippy runs twice: `--all-features`, then with no features, both
 line under `crates/*/src` and `crates/*/tests`: `//`, `///`, `//!`, and
 each line of a `/* */`, `/** */` or `/*! */` block. A MIT anchor has the
 R1 form ([CONTRIBUTING.md § Code comments](../CONTRIBUTING.md#code-comments)),
-with a path ending in `.c`, `.h`, `.hin`, `.et`, `.x` or `.y`. A pointer
+with a path ending in `.c`, `.h`, `.hin`, `.et`, `.x` or `.y`. The usual
+form is the one-line ``// MIT: `symbol` (path:a-b)``, at most 100 columns, which
+the 3% share does not count. A pointer
 `MIT <symbol>; see docs/parity/<file>.md` is also legal when that file
 exists and names the symbol. A
 mention, ``MIT `X` `` with no range, is legal, and so is a rangeless
@@ -88,7 +90,7 @@ compares a completed SHA, or the last N runs, against that file. A run cannot
 measure itself. No workflow runs that check on a schedule.
 
 - **Tier 1** — per-push blocking (`.github/workflows/ci.yml`): `test` 360,
-  `doc` 90, `release` 180, `fuzz` 120, `shellcheck` 150, `msrv` 150,
+  `doc` 118, `release` 210, `fuzz` 120, `shellcheck` 150, `msrv` 150,
   `audit` 260, `mit-smoke` 150. Combined wall ≤ `[push].run_wall` (360 s).
 - **Tier 2** — none. No per-push job is `continue-on-error`.
 - **Tier 3** — scheduled: `nightly.yml` (`oracles`, `moving`, `fuzz`,
@@ -109,7 +111,7 @@ The toolchain, lld, and `rust-cache` steps are one composite,
 | --- | --- |
 | `test` | `python3 scripts/ci-policy.py`, `cargo fmt --all -- --check`, `cargo clippy -D warnings` with `--all-features` and with none, `cargo nextest run --workspace --profile ci` with the test-hooks features, then doctests |
 | `release` | `cargo nextest run --workspace --profile ci-nofeatures --locked` |
-| `doc` | `cargo doc --workspace --no-deps` under `RUSTDOCFLAGS=-D warnings` |
+| `doc` | `cargo doc --workspace --no-deps` under `RUSTDOCFLAGS=-D warnings`; `krb5-embed-realm-example` builds with no `daemon` feature |
 | `fuzz` | `cargo check --locked --manifest-path fuzz/Cargo.toml --bins` |
 | `shellcheck` | `shellcheck -S style` on `scripts/*.sh`, `scripts/lib/*.sh`, `harness/*.sh`, `dist/*.sh`, `harness/field/*.sh`, `harness/field/lib/*.sh`, and `harness/field/scenarios/*.sh`. ShellCheck is v0.11.0, checked by sha256. `.shellcheckrc` sets `external-sources=true` and disables `SC2329` |
 | `msrv` | `cargo build --workspace --all-targets --locked` on Rust 1.95, with the test-hooks features and without |
@@ -128,14 +130,14 @@ The toolchain, lld, and `rust-cache` steps are one composite,
 | Job | Runs |
 | --- | --- |
 | `oracles` | `asn1-decode-oracle-gate.sh`, `rd-priv-oracle-gate.sh` |
-| `fuzz` | six smokes, 60 s each, rss limit 2048 MiB: `der_decode`, `gss_token`, `pkinit_cms`, `spake_point`, `oakley_dh`, `transited` |
+| `fuzz` | six smokes, 60 s each, rss limit 2048 MiB: `der_decode`, `gss_token`, `pkinit_cms`, `spake_point`, `oakley_dh`, `transited`. The other three targets, `otp_req_decode`, `keytab_ccache` and `pac_ndr`, are only built, per push |
 | `anchors` | `python3 scripts/ci-policy.py` with `KERBER_MIT_SRC` set to the pinned MIT 1.22.2 tree |
 | `test-release` | `cargo nextest run --workspace --release --profile ci` with the test-hooks features. Tags and manual runs |
 | `msrv-test` | `cargo test --workspace --locked` on Rust 1.95 with the test-hooks features. Tags and manual runs |
 
 A gate in `moving` is deleted in the commit whose production cell passes. At the release cut, `moving` holds only the gates still waiting on a cell, and the `oracles` stay nightly.
 
-`peers.yml` (cron `12 6 * * *`, and manual) runs Samba AD: `samba-ad-gate`, `ad-windows-gate`, `ad-s4u-gate`, `samba-pac-verify-gate`, `samba-pac-l2-gate`, `samba-crossrealm-gate`, `samba-realtrust-gate`. Per-gate detail is in [gates.md](gates.md).
+`peers.yml` (cron `12 6 * * *`, and manual) runs Samba AD: `samba-ad-gate`, `ad-windows-gate`, `ad-s4u-gate`, `samba-pac-verify-gate`, `samba-pac-l2-gate`, `samba-crossrealm-gate`, `samba-realtrust-gate`. Per-gate detail is in [gates.md](gates.md). **Known gap:** when the job has no MIT image, every gate exits 2 and the job stays green with none run. That is what it did on the 1.2 tree, so for 1.2.0 the seven ran by hand on that tree, and all passed. The job's fix is planned for 1.2.1.
 
 
 ## MIT 1.22.2 harness
@@ -191,7 +193,8 @@ binds `0.0.0.0`.
 
 ```bash
 ./scripts/run-rust-kdc.sh
-# or: cargo run -p krb5-kdc --bin krb5-kdc -- 127.0.0.1:8888
+# or: KRB5_TEST_USER_PASSWORD=userpassword KRB5_TEST_ADMIN_PASSWORD=adminpassword \
+#     cargo run -p krb5-kdc --bin krb5-kdc --features krb5-kdc/test-hooks -- --test-realm 127.0.0.1:8888
 ./scripts/kdc-gate.sh    # MIT 1.22.2 kinit + kvno against the Rust KDC
 ```
 
@@ -211,7 +214,7 @@ carries the client tools); `krb5-kdc/test-hooks` turns on `krb5-config/test-hook
 and `krb5-protocol/test-hooks` for every binary of that build, and `krb5-admin/test-hooks`
 turns on `krb5-gss/test-hooks`. Only such a build reads these inputs or builds the test
 programs (`krb5-tools`', `krb5-gss`'s, `krb5-iprop-pull`): a release build has neither, as
-MIT's tools read none of these inputs. CI's test job and `make test` then run the
+MIT's tools read none of these inputs. `make test` and CI's `release` job then run the
 workspace's tests once more without features
 (`cargo nextest run --workspace --profile ci-nofeatures --locked`, its junit beside the first
 run's), so the release-only units

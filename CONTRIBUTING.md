@@ -21,9 +21,9 @@ on the design there so you do not build a large PR that cannot land.
 A good PR has:
 
 - A title of the form `tag: Imperative sentence`, at most 72 characters.
-  The tag is the crate or area touched: `crypto`, `asn1`, `types`,
-  `config`, `log`, `protocol`, `client`, `kdc`, `gss`, `admin`, or
-  `test`, `docs`, `ci`, `tool`, `harness`, `examples`. A change that spans
+  The tag is the crate or area touched: a crate's short name (`kdc`,
+  `client`, `admin`, `protocol`, `gss`, `crypto`, `config`, …), or `field`,
+  `gates`, `scripts`, `harness`, `ci`, `docs`, `deps`, `examples`, `tools`. A change that spans
   two takes both (`admin/kdc:`). See [Commit Message
   Guidelines](https://gist.github.com/robertpainsi/b632364184e70900af4ab688decf6f53)
   for the imperative mood.
@@ -58,14 +58,15 @@ We use [GitHub Flow](https://docs.github.com/en/get-started/using-git/github-flo
 Comments explain non-obvious intent, invariants, security considerations,
 and protocol subtleties. Do not restate the obvious. A doc comment is one
 line, and only where the name cannot say it. Comments are at most 3% of
-the code, and doc comments count. Tests are at most 10% of the code.
+the code, and doc comments count. The target for tests is 10% of the code; CI holds a ratchet,
+30.841% of lines today, that only falls.
 
-**R1.** A MIT citation is one line, a pointer:
-`// MIT <symbol>; see docs/parity/<file>.md`.
-The file exists and names the symbol. The ranged anchor
-``MIT `<symbol>` (`<path>:<a>-<b>`): <guarantee>`` stays legal until the
-pointers replace it. A mention without a range is not a citation and is
-legal.
+**R1.** A MIT citation is one line, at most 100 columns:
+``// MIT: `symbol` (path:a-b)``. The range is optional; without one, the symbol is
+defined somewhere in that file. A pointer
+`// MIT <symbol>; see docs/parity/<file>.md` is legal when the file exists and names
+the symbol, and so is the older ranged anchor. A mention without a range is not a
+citation and is legal.
 
 **R2.** State the invariant, not the steps: an ordering, a fail-closed
 rule, a key-material rule, an attacker-relevant subtlety, or a deliberate
@@ -80,13 +81,13 @@ paths. A deferred parity gap gets a ledger row and at most a one-line
 pointer.
 
 `check_mit_anchor_form` and `check_mit_anchor_truth` in
-`scripts/ci-policy.py` keep R1 true, and `check_no_process_history`
+`scripts/ci_policy/comments.py`, run by `scripts/ci-policy.py`, keep R1 true, and `check_no_process_history`
 keeps R3 true. See [docs/testing.md](docs/testing.md).
 
 ## Local checks
 
-The `test` job in CI is `make safety` (fmt, clippy, nextest,
-`ci-policy.py`) plus CI-only extras (nextest `--no-run`, junit).
+`make safety` (fmt, clippy, nextest, `ci-policy.py`) covers CI's `test`
+and `release` jobs; CI adds doctests, nextest `--no-run` and junit.
 `make doc` and `make shellcheck` are the sibling `doc` and
 `shellcheck` jobs. Do not run `cargo test --workspace`
 — CI forbids it on per-push; nextest is the runner. Linking needs `lld`
@@ -97,7 +98,7 @@ The `test` job in CI is `make safety` (fmt, clippy, nextest,
 make safety
 ```
 
-The six per-push jobs are in [docs/testing.md](docs/testing.md).
+The eight per-push jobs are in [docs/testing.md](docs/testing.md).
 Job walls live in `ci-budget.toml`.
 
 Live MIT oracles (when Docker is available): `make harness` then
@@ -105,11 +106,8 @@ Live MIT oracles (when Docker is available): `make harness` then
 container down.
 
 Gate scripts write host files only under `KERBER_SCRATCH` (their default
-is `/tmp/…`; point it at a directory you own). A live MIT settle runs
-through `scripts/lib/settle.sh <name> -- <command…>` so its output is
-stamped ([docs/testing.md](docs/testing.md)). `working/` is gitignored:
-plans and evidence live there, named `<kind>-<topic>-<MMDD-HHMM>.md`, and
-no tracked file cites them.
+is `$TMPDIR` or `/var/tmp`, under `kerber-<gate>`; point it at a directory you
+own).
 
 Never add C FFI. `unsafe` is forbidden unless a future exception is
 audited, minimized, and documented in the PR.

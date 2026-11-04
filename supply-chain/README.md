@@ -22,11 +22,11 @@ delta is reviewed in that file.
 
 **`curve25519-dalek` 5.0.0** (SPAKE edwards25519) has no importable
 safe-to-deploy audit (Google's is `ub-risk-1`, for 4.0.0), so it, its
-build-time `curve25519-dalek-derive` and the never-built `fiat-crypto`
-backend are exempt with notes. Its build dependencies `rustc_version`
+build-time `curve25519-dalek-derive` are exempt with notes. `fiat-crypto` 0.3.0
+is built, as the P-384 constant-time field, and is exempt too. Its build dependencies `rustc_version`
 0.4.1 and `semver` 1.0.28 are vetted by imported Mozilla and Bytecode
 Alliance audits; `deny.toml` pins its feature set.
 
-Local audit: `rasn-derive` 0.28.14 (`audits.toml`; 0.27.0 kept). Remaining
+Local audit: `rasn-derive` 0.28.14 (`audits.toml`). Remaining
 third-party crates are honest exemptions; the list is smaller than a blank
 `cargo vet init`.
