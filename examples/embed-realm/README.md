@@ -11,7 +11,7 @@ An embedder that already holds the store does this:
 ```rust
 let shared = shared_dump(store);
 let kdc_store: SharedStore = shared.clone(); // one lock
-let listeners = Listeners::bind(&listen, Services::DAEMON, None)?; // kpasswd 464, kadm5 749
+let listeners = Listeners::bind(&listen, Services::DAEMON, None, &TracingAdmin)?; // kpasswd 464, kadm5 749
 let mut kadmind = Kadmind::new(shared, config)?; // applies the profile, then GSS names
 let stop = Shutdown::new();
 let flag = stop.stop_flag();
@@ -31,7 +31,7 @@ It reads the same profile the daemon reads. Point it at a realm's `kdc.conf` and
 
 ```sh
 KRB5_KDC_PROFILE=examples/configs/kdc.conf KRB5_CONFIG=examples/configs/krb5.conf \
-    cargo run -p krb5-embed-realm-example
+    cargo run -p krb5-embed-realm-example --bin krb5-embed-realm
 ```
 
 Each start opens the database the profile names, or creates it when the file is missing.

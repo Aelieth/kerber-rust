@@ -3,7 +3,7 @@
 kerber-rust installs and runs the way Fedora's MIT `krb5-server` package does: the same
 command names (`krb5kdc`, `kadmind`, `kadmin.local`, `kdb5_util`, `kprop`, `kpropd`), the same
 systemd units, sysconfig, tmpfiles.d and logrotate files, and the same `/var/kerberos/krb5kdc`
-directory. This page takes a Fedora 43 host with SELinux enforcing from nothing to a realm that
+directory. This page takes a Fedora 44 host with SELinux enforcing from nothing to a realm that
 clients use with MIT's own tools. Run each command as written, as an ordinary user with `sudo`.
 The realm's names are set once, at the start of [A realm](#a-realm).
 
@@ -47,19 +47,20 @@ never part of `make install`; on Fedora keep the package's tools. `kinit`, `klis
 `kdestroy` and `kswitch` take MIT 1.22.2's options, print its texts and exit codes, and pick
 caches as MIT's do in `FILE:`, `DIR:` and `KCM:` collections (`klist -k`, `-l` and `-A`,
 `kdestroy -A`, `kswitch -p`, a new cache for a second principal); the reference client kit's keytab
-checks run on them as on MIT's. They are **not yet a drop-in** for MIT's in these:
+checks run on them as on MIT's. `KCM:` ran beside MIT's on Fedora 44 with `sssd-kcm` 2.13.1, against
+MIT's KDC. They are **not yet a drop-in** for MIT's in these:
 - `kvno -S` qualifies a short host and does not ask DNS.
 - `kvno -F` is not a release flag until it is settled against an MIT KDC with certificate
   mapping; MIT's asks for S4U2Self by the user's certificate.
-- `klist` prints dates as the C locale does, where MIT's follow the locale, and an error not yet
-  compared with MIT's tools may read differently from MIT's text.
+- An error `klist` prints that has not yet been compared with MIT's tools may read differently from
+  MIT's text.
 - `ktutil` `rkt` takes a filesystem path, where MIT's takes a keytab name; `addent` rejects `-s`
   and `-f`, and refuses a `-key` whose length is not the enctype's; a `!` line is passed over.
 - `kinit -k` with no principal asks for `host/<host name>` in the default realm, where MIT's asks
   for the host's canonical name.
 - With no enctypes in `krb5.conf` the default list is the four AES types; MIT's also has DES3, RC4
   and Camellia, so the two agree only where `krb5.conf` or Fedora's crypto-policies sets the list.
-- Of `kinit -X`'s attributes only `X509_user_identity` and `X509_anchors` act (one anchors file);
+- Of `kinit -X`'s attributes only `X509_user_identity` and `X509_anchors` act;
   the rest, `disable_freshness` among them, are accepted and ignored.
 
 Scripts that need one of these need MIT's `krb5-workstation`. With the default `PREFIX`,
@@ -227,8 +228,8 @@ REQUESTER_SID). A presented PAC that carries LOGON_INFO, such as an AD user's ov
 that shape in any realm.
 
 The KDC's TCP listeners default to a `listen` backlog of 128. MIT's default is 5; set
-`kdc_tcp_listen_backlog = 5` under `[kdcdefaults]` for that behaviour. After a write the
-accept stall is 0.271, 0.265 and 0.319 ms. At backlog 5,
+`kdc_tcp_listen_backlog = 5` under `[kdcdefaults]` for that behaviour. On an earlier 1.2 build
+the accept stall after a write was 0.271, 0.265 and 0.319 ms. At backlog 5,
 idle bursts wait, as on MIT's KDC: 19, 46 and 67 of 500 at 10, 1,000 and 5,000 principals.
 With 128, none waited a second, on MIT's KDC or on kerber-rust.
 
@@ -407,7 +408,7 @@ A token's `type` names the verifier (`DEFAULT` without one), `username` is what 
 
 - `strip_realm` (a boolean) is true for a section: the verifier is told `alice`, not `alice@EXAMPLE.COM`. A type with no section, and a realm with no `[otp]`, keep the realm, as MIT's built-in `DEFAULT` does.
 - `indicator`, repeated for more than one, is an authentication indicator the ticket carries when a token of the type is accepted, unless the token lists its own.
-- `timeout` and `retries` are read and unused: the verifier runs in the KDC.
+- `timeout` (5 s by default) is the verifier's deadline: no answer by then is a counted error 24. `retries` is read and unused.
 - `server` and `secret` are refused. A section with either, a `strip_realm` that is no boolean, or a `timeout` or `retries` that is no integer, leaves the OTP module out: the KDC starts and logs `preauth otp failed to initialize:` and the reason. A comment on a value's line is part of the value.
 
 The KDC reads `[otp]` once, as it starts; SIGHUP only reopens the log.
@@ -460,8 +461,8 @@ MIT's (`doc/admin/pkinit.rst`):
 
 A client needs the CA as `pkinit_anchors` in the realm's `krb5.conf` stanza. kerber-rust's kinit
 takes `FILE:`, `DIR:` and `ENV:` identities (`X509_user_identity`, else `pkinit_identities` in
-order) and picks the certificate by `pkinit_cert_match`, as MIT's does; its keys are P-256 EC or
-RSA, and only the first anchor is used. Anonymous PKINIT
+order) and picks the certificate by `pkinit_cert_match`, as MIT's does. Its keys are those under
+Keys above, and every `pkinit_anchors` value counts. Anonymous PKINIT
 (`kinit -n`) uses the same KDC identity.
 
 ### Replica KDCs
@@ -785,7 +786,7 @@ sudo make uninstall PREFIX=/usr
 
 Run it in the checkout, with the `PREFIX` you installed with. It reads the manifest that
 `make install` and `make install-clients` wrote, `$(PREFIX)/share/kerber-rust/install-manifest`:
-it stops and disables `krb5kdc` and `kadmin` when their unit files are still the ones install
+it stops and disables `krb5kdc`, `kadmin` and `kprop` when their unit files are still the ones install
 wrote, removes each listed file whose SHA-256 is unchanged, keeps one that changed since or that
 a package owns, then removes the manifest and reloads systemd. Without a manifest it removes
 nothing. It keeps every config file and all of `/var/kerberos/krb5kdc`: the database with its
@@ -801,7 +802,7 @@ update log and lock files, the stash, `kdc.conf` and `kadm5.acl`.
 - SPAKE groups P-384 and P-521 (MIT's OpenSSL groups). `edwards25519`, the group Fedora's
   `krb5.conf` names and its `kdc.conf` challenges with, and P-256 work as MIT's.
 - RADIUS-backed OTP preauthentication (OTP works through an embedder's verifier: [OTP preauth](#otp-preauth)), PKINIT
-  with RSA keys, `PKCS11:` or `PKCS12:` identities, or revocation lists ([PKINIT](#pkinit)), master key rollover
+  with `PKCS11:` or `PKCS12:` identities or revocation lists ([PKINIT](#pkinit)), master key rollover
   (`kdb5_util add_mkey` and the other `*_mkey` commands), `kproplog`, `sclient` / `sserver`, and
   plugin modules (plugins are Rust traits: [plugins.md](plugins.md)).
 - `KEYRING:` credential caches in the tools `make install-clients` installs. `KCM:` (Fedora's
