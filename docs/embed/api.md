@@ -6,6 +6,8 @@ default build carries the daemon runtime (`daemon`, on by default) and not the t
 fixtures (`test-hooks`, off), so an embedder takes `krb5-kdc` and `krb5-admin` with
 `default-features = false`.
 
+This page is as of v1.2.0.
+
 ## One store and its locking
 
 `shared_dump` returns a `SharedDump` (`Arc<RwLock<PrincipalStore>>`). Cloning it
