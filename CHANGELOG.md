@@ -16,6 +16,15 @@ any other `###` heading.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-04
+
+The **1.2** line is *embed-ready*: the KDC and kadmind also run as libraries over
+one store, a principal change appends instead of rewriting the database, and PKINIT,
+OTP and iprop replicas landed, compared with MIT 1.22.2. The frozen tree ran the weekly
+suite and seven nightly-profile runs back to back, with no failure. The tagged source
+differs from it by the version, the docs and test scripts, so its binaries differ from
+those runs' by the version bump alone.
+
 ### Security
 
 - **kdc.** Decrypted long-term keys wiped on drop; debug output shows lengths, not key bytes.
@@ -100,13 +109,9 @@ any other `###` heading.
 
 - **ccache.** Resolving a `DIR:` name makes its missing directory (0700), `primary` file, as MIT.
 - **client.** AS reply's KDC time offset replaces armor cache's, as MIT.
-- **form.** tools, config, types, crypto, client, log, cli, asn1, brainpool: comments ≤3% of code chars.
-- **form.** In those nine crates, safety, wire or MIT-quirk fact keeps its line.
-- **form.** protocol, admin: comments ≤3% of code chars; safety, wire or MIT-quirk fact keeps its line.
-- **form.** kdc, gss, testkit: comments ≤3% of code chars.
-- **form.** In those three crates, safety, wire or MIT-quirk fact keeps its line.
+- **form.** Each crate's comments ≤3% of code chars; safety, wire or MIT-quirk fact keeps its line.
 - **examples.** krb5-embed-realm serves KDC, kadmind from one store; one Shutdown stops both.
-- **kdc.** A write at 5,000 principals is 0.80–0.86× MIT, flat as realm grows.
+- **kdc.** A write at 5,000 principals is 0.79–1.00× MIT; the sync in its lock stays flat.
 - **kdc.** A principal change appends, flushes once, no rename; crash leaves it unread.
 - **kdc.** iprop write syncs only DB in its lock, then log, header, as MIT.
 - **admin.** Password keys derive outside DB lock, as MIT.
@@ -114,9 +119,7 @@ any other `###` heading.
 - **kdc.** Non-OTP: same module again is no-op; another of that name is added.
 - **kdc.** `unregister` drops one named module; new store copies process default.
 - **kdc.** Global register after open is logged at error, applies only to later stores.
-
 - **examples.** krb5-embed-realm installs tracing subscriber at info.
-
 - **kdc.** One info record per request: `kdc.issue` or `admin` for stream, MIT's line for log.
 - **kdc.** Json loads only when `enable_only` names it.
 - **kdc.** Library events log at debug; serve loops take log sink; undirected klog goes to tracing.
@@ -195,6 +198,7 @@ any other `###` heading.
 - **gss.** A version-1 token, as 1.1 exported, is refused.
 - **examples.** `examples/otp-kdc` folds into `examples/embed-realm`; binary stays `krb5-otp-kdc`.
 - **admin.** kpropd prints MIT's `ready`.
+- **docs.** README rewritten; NOTICE fixed; docs checked for stale claims, commands, links.
 
 ### Tests and CI
 
@@ -217,18 +221,12 @@ any other `###` heading.
 - **ci.** Differential gate sends trailing element, mistyped digestAlgorithms OID.
 - **ci.** cargo-audit 0.22.2 runs `--deny warnings`, files no issues.
 - **ci.** ci-policy fails crate comment share above 3.000%, test share (lines) above its cap.
-- **ci.** `[Unreleased]` is capped at 25,000 bytes; released sections are frozen.
-- **ci.** Docs are capped at 100 KiB.
+- **ci.** `[Unreleased]` is capped at 25,000 bytes, released sections frozen; docs at 100 KiB.
 - **ci.** Per-push, nightly, peers run `ubuntu-26.04`; upload-artifact 7.0.2; fuzz check `--locked`.
 - **ci.** `nightly` label runs `oracles`, `moving`, `fuzz`, `anchors`; `schedule`, `workflow_dispatch` stay.
-- **ci.** Unit tests outside keep list are gone.
-- **ci.** Kept: log's two symlink-open tests, cli's wiped-buffer line, asn1's four DER-strict tests.
-- **ci.** Kept: crypto's known answers, parity proofs, tools' decode-sweep, testkit's helpers.
-- **ci.** Kept: proofs config, client, gss rows still name.
-- **ci.** des3 PKINIT reply-key test stays as that row's only proof.
+- **ci.** Unit tests outside keep list are gone: known answers, parity proofs, DER-strict tests stay.
 - **ci.** `gate-common`, three smoke gates match by grep's status.
-- **ci.** Exact row with no status may cite removed test when proof says since removed.
-- **ci.** Parity row may name field scenario's checks as proof; scenario must exist and record them.
+- **ci.** Parity row may cite removed test (says since removed) or field scenario's recorded checks.
 - **parity.** Five client-library rows, three more keep historic MIT proof.
 - **parity.** capaths gate proves closer hop: its first TGS at A asks for `krbtgt/C.TEST`.
 - **ci.** `missing_docs` allowed; MIT cite may be one `docs/parity/` pointer; ranged anchor stays.
@@ -241,6 +239,8 @@ any other `###` heading.
 - **ci.** Budget workflow gone; `ci-budget.toml` holds eight job walls, `run_wall`.
 - **ci.** ktutil nightly gate gone; field client-tools' keytab rows check all it did, MIT first.
 - **ci.** ccache, two client-differential nightly gates, two probes gone; client-tools, pkinit cover.
+- **ci.** Heimdal, KCM, prod, resilience gates gone; 1.2 has no run against Heimdal.
+- **ci.** FAST, PKINIT gates stop their test KDCs.
 
 ### Fixed
 - **kdc.** A KDC request locks once; lockout reads skip it while rows check.
@@ -262,7 +262,6 @@ any other `###` heading.
 - **kdc.** Lockout side file is read per principal, written per changed field, not whole per op.
 - **kdc/client.** RFC 8636's partyVInfo is AS-REQ's server as sent, as MIT's, not `krbtgt`.
 - **kdc/client.** MIT's kpasswd could not decrypt our `kadmin/changepw` reply; now it can.
-
 - **client.** Each expired-password kinit request (`kadmin/changepw`, last) gets new FAST armor, as MIT.
 - **kdc.** Whole write removes stale `.principal.tmp-*` under exclusive lock, as MIT's next load.
 - **client.** AS failure prints MIT's table text for skew, mismatched reply, error 60.
@@ -4613,6 +4612,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
   v2 export, AP-REQ verify, UDP/TCP 88 listener. Gate:
   `scripts/kdc-gate.sh` (MIT `kinit` + `kvno` against the Rust KDC).
 
-[Unreleased]: https://github.com/Aelieth/kerber-rust/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/Aelieth/kerber-rust/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/Aelieth/kerber-rust/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/Aelieth/kerber-rust/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/Aelieth/kerber-rust/releases/tag/v1.0.0
