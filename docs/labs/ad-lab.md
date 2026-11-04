@@ -15,15 +15,15 @@ keys, pcaps, FILE ccaches, and passwords stay in operator-held
 
 | Item | Value |
 | --- | --- |
-| DC host | `TEST-SERVER` |
-| DC FQDN | `test-server.ad.kerber.test` |
-| DC IP | `10.10.38.38/24` |
+| DC host | a Windows Server VM on the lab's LAN |
+| DC FQDN | `<dc>.ad.kerber.test` |
+| DC IP | `AD_DC` in `harness/field/lab.sh` |
 | DNS domain | `ad.kerber.test` |
 | Kerberos realm | `AD.KERBER.TEST` |
 | NetBIOS | `ADKERBER` |
 | Functional level | Windows Server 2016 (`WinThreshold`) |
 | PAC | Fully patched DC: type-16 ticket signature and 2022 extended KDC signature (CVE-2022-37967) |
-| Client | `alien` at `10.10.44.154` (Fedora). SSSD-joined to a **separate** home realm that must not be disturbed. |
+| Client | the lab's Fedora workstation, on that LAN. SSSD-joined to a **separate** home realm that must not be disturbed. |
 | Reachability | By IP. No DNS delegation on the client. |
 | Enctypes | AES-SHA1 (18/17). AD does not issue RFC 8009 SHA-2 etypes. |
 
@@ -42,7 +42,7 @@ Passwords and `svc.keytab` are operator-held. Never commit them.
 
 | Path | What |
 | --- | --- |
-| `~/adlab/ad-krb5.conf` | Standalone client profile (`default_realm=AD.KERBER.TEST`, `kdc=10.10.38.38`, DNS lookups off) |
+| `~/adlab/ad-krb5.conf` | Standalone client profile (`default_realm=AD.KERBER.TEST`, `kdc=` the DC's address, DNS lookups off) |
 | `~/adlab/ad.ccache` | FILE cache for `kbruser` |
 | `~/adlab/svc.keytab` | Service key (secret) |
 | `~/adlab/ad-krb.pcap` | Wire capture of AS+TGS including the PAC-bearing service ticket |
@@ -76,10 +76,10 @@ start; omit the env var and you will hit the home realm.
 ## Cross-realm trust
 
 The DC has a bidirectional MIT realm trust `KERBER.TEST` (`netdom
-/twoway`, `ksetup /addkdc` → `10.10.44.154`). Isolated
-`~/adlab/ad-krb5.conf` lists `KERBER.TEST` at `10.10.44.154:8888`
-(rootless distrobox cannot bind host `:88`; TESTLABBY stays on
-`aurora.testlabby.local`).
+/twoway`, `ksetup /addkdc` → the workstation's address). Isolated
+`~/adlab/ad-krb5.conf` lists `KERBER.TEST` at the workstation's address, port 8888
+(rootless distrobox cannot bind host `:88`; the workstation's home realm
+keeps its own KDC).
 
 `scripts/samba-realtrust-gate.sh` runs the trust both directions (two Samba
 DCs and a real `samba-tool domain trust create`, nightly in `peers.yml`); no

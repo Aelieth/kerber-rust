@@ -37,8 +37,8 @@ Gateway, DHCP and DNS are on `192.168.177.1` (libvirt's dnsmasq).
 - **DNS:** forward and reverse records for every name above. `kerber.test` is
   local only, so unknown names get NXDOMAIN and nothing leaks upstream.
   Everything else is forwarded upstream.
-- **AD:** `ad.kerber.test` is forwarded to the AD test DC `10.10.38.38`, so the
-  VMs resolve `test-server.ad.kerber.test` (F2-AD). The realm is `KERBER.TEST`.
+- **AD:** `ad.kerber.test` is forwarded to the AD test DC (`AD_DC` in `lab.sh`), so the
+  VMs resolve the DC's name (F2-AD). The realm is `KERBER.TEST`.
 - **Own name:** a VM's own name resolves locally (systemd-resolved /
   nss-myhostname), not through DNS. In `getaddrinfo` order the answer is the
   IPv6 link-local address, then the lab address, and on kdc then the LAN
@@ -50,7 +50,7 @@ Gateway, DHCP and DNS are on `192.168.177.1` (libvirt's dnsmasq).
 `kdc` has a second NIC: macvtap in bridge mode on the host's wired NIC (the
 lowest-metric wired default route; override with `KERBER_LAB_LAN_IF`). It
 takes a DHCP address from the user's real LAN. Its only job is to let the AD
-DC (`10.10.38.38`) reach the KDC, and RA3's SPNEGO target, which runs on kdc.
+DC reach the KDC, and RA3's SPNEGO target, which runs on kdc.
 
 `/usr/local/sbin/kerber-lab-lan-nic` confines the NIC. The kdc user-data's
 `bootcmd` writes the script and runs it once. That stage runs before sshd
@@ -58,14 +58,14 @@ starts, so nothing listens on the LAN unfiltered.
 
 - **Inbound filter:** nftables table `inet kerber_lab_lan`, on that NIC only.
   - It accepts established/related traffic, DHCP replies (`udp sport 67 dport
-    68`, so the lease renews), and `10.10.38.38` to tcp/udp 88 and tcp 80.
+    68`, so the lease renews), and the DC's address to tcp/udp 88 and tcp 80.
   - It drops everything else from the LAN, including 22, 464, 749 and ICMP.
   - The lab NIC and loopback are not filtered.
   - `kerber-lab-lan-filter.service` loads `/etc/nftables/kerber-lab-lan.nft`
     before `network-pre.target` on every boot, including after a `reset`.
 - **Routes and DNS:** the NIC carries no default route, no DHCP routes, no
   DNS and no IPv6 (`never-default`, `ignore-auto-routes`, `ignore-auto-dns`,
-  `ipv6.method disabled`). Traffic to `10.10.0.0/16` leaves through it
+  `ipv6.method disabled`). Traffic to the LAN's range leaves through it
   on-link. Everything else, internet included, goes through the lab NAT.
 - **Check it:**
   - `lab.sh check kdc` asserts the table and its unit.
@@ -280,7 +280,7 @@ harness/field/run.sh --profile kill-loop --ref plan-12   # SW-3's kill loop (lab
 | `services` | nightly, weekly | mit, rust | services: `f4-mit-f44` / `services-rust-f44` (reset); kdc as `upgrade` left it | f-S2-services; f-S2-rust | about 2 / 2 min |
 | `nfs-client` | nightly, weekly | mit, rust | client2: `mit-kit-fc44` / `rust-ssh-f44`, services: `f4-mit-f44` / `services-rust-f44` (both reset); kdc as `upgrade` left it | f-R4-mit + f-R5-mit; f-R4 + f-R5 (client2's legs) | about 1.5 / 1.5 min |
 | `sssd-login` | nightly, weekly | mit, rust | client1: `mit-sudo-fc44` / `rust-nfs-sso-f44`, services: `f4-mit-f44` / `services-rust-f44` (both reset); kdc as `upgrade` left it | f-R2-mit; f-R2 (headless) | about 2 / 2 min |
-| `ad-trust` | none: `run.sh ad-trust` | mit, rust | client2: `mit-kit-fc44` / `rust-ssh-f44` (reset); kdc as `upgrade` left it; the AD DC TEST-SERVER (WinRM; its changes undone in the run) | f-RA-mit; f-RA, f-FULL-r2 `hand/ra` | about 2 / 2 min (the hand legs: 117 / 112 s) |
+| `ad-trust` | none: `run.sh ad-trust` | mit, rust | client2: `mit-kit-fc44` / `rust-ssh-f44` (reset); kdc as `upgrade` left it; the AD DC (WinRM; its changes undone in the run) | f-RA-mit; f-RA, f-FULL-r2 `hand/ra` | about 2 / 2 min (the hand legs: 117 / 112 s) |
 | `klldap-swap` | nightly, weekly | mit, rust | klldap (not reset; the leg cleans its own artifacts) | f-F3-mit (mit leg), f-F3 (rust leg) | about 4 min (mit) and 8 min (rust) with BuildKit's cache warm; much longer cold (see below) |
 | `kdc-profile` | weekly; on demand with `--only upgrade,kdc-profile` for a change to how kdc.conf is read | mit, rust | client2: `mit-kit-fc44` / `rust-ssh-f44` (reset); kdc as `upgrade` left it, its kdc.conf restored after each cell | none: the CF cells' first record | about 6 / 6 min |
 | `kdb-writes` | weekly; on demand with `--only upgrade,kdb-writes` for a change to how the store writes | mit, rust | client2: `mit-kit-fc44` / `rust-ssh-f44` (reset); kdc as `upgrade` left it, its scratch principals and policies removed at the end | none: the SW cells' first record | about 1 / 1 min |
