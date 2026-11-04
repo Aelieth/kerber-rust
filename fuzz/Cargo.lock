@@ -573,7 +573,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-asn1"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "krb5-log",
  "krb5-types",
@@ -583,7 +583,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-brainpool"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "ecdsa",
  "elliptic-curve",
@@ -594,7 +594,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-config"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "getrandom 0.2.17",
  "krb5-types",
@@ -604,7 +604,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-crypto"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "aes",
  "camellia",
@@ -640,7 +640,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-gss"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "getrandom 0.2.17",
  "krb5-asn1",
@@ -654,7 +654,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-log"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "chrono",
  "getrandom 0.2.17",
@@ -666,7 +666,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-protocol"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "bytes",
  "getrandom 0.2.17",
@@ -685,7 +685,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-types"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "bp256",
  "bp384",
