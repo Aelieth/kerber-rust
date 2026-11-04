@@ -19,7 +19,7 @@ parity). An MIT program a gate compiles in the MIT image is linked by `krb5-conf
 (`mit_oracle_cc`) and prints the `libkrb5` it loads, `krb5-1.22.2-final`, before
 its first use; any other brand is red.
 
-No gate drives SSSD's `krb5_child`, gssproxy, NFS, the satomlin kit or
+No gate drives SSSD's `krb5_child`, gssproxy, NFS, the reference client kit or
 Windows SSPI. They ran in the KVM field lab
 ([`harness/field/README.md`](../harness/field/README.md)), against MIT's
 KDC first and then against ours: `krb5_child` logged in, renewed a TGT

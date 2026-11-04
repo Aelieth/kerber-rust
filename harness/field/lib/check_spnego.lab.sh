@@ -1,6 +1,6 @@
 # shellcheck shell=bash
-# check_spnego.lab.sh — the satomlin kit's lib/satomlin-common.sh (kit commit e9f3325): its helper block
-# and check_spnego(), VERBATIM; only the four SSO constants carry the lab's values (field runner S2).
+# check_spnego.lab.sh — the reference client kit's common library (kit commit e9f3325): its helper block
+# and check_spnego(), VERBATIM but for that file's name in one warning; only the four SSO constants carry the lab's values (field runner S2).
 GREEN='\033[1;32m'; YELLOW='\033[1;33m'; RED='\033[1;31m'; NC='\033[0m'
 print_ok()   { echo -e "${GREEN}[OK]${NC} $1"; }
 print_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
@@ -31,7 +31,7 @@ check_spnego() {
       printf '%s' "$hdr" | grep -qi '^www-authenticate: *negotiate' \
         || { print_fail "Keycloak answered 401 with no Negotiate challenge — the Kerberos execution is gone from its browser flow (runbook §5)"; return 1; } ;;
     400)
-      print_warn "Keycloak rejected the probe client (HTTP 400) — SSO_PROBE_CLIENT / SSO_PROBE_REDIRECT in lib/satomlin-common.sh no longer match its registration; SPNEGO itself is UNTESTED"
+      print_warn "Keycloak rejected the probe client (HTTP 400) — SSO_PROBE_CLIENT / SSO_PROBE_REDIRECT in the kit's common library no longer match its registration; SPNEGO itself is UNTESTED"
       return 0 ;;
     *)
       print_fail "Keycloak did not challenge (HTTP ${code:-none}) — expected 401 + WWW-Authenticate: Negotiate"; return 1 ;;

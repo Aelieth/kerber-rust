@@ -24,7 +24,7 @@ Gateway, DHCP and DNS are on `192.168.177.1` (libvirt's dnsmasq).
 | `kdc.kerber.test` | `.10` + a LAN NIC | `kerber-kdc` | Fedora 43 Cloud | 2 / 2 GiB / 20 GB | MIT `krb5-server` (oracle), then kerber-rust |
 | `services.kerber.test` | `.11` | `kerber-services` | Fedora 43 Cloud | 4 / 6 GiB / 40 GB | rootful podman: Ganesha NFS, Keycloak, lldap |
 | `kdc2.kerber.test` | `.12` | `kerber-kdc2` | Fedora 44 Cloud | 2 / 2 GiB / 20 GB | replica. Defined by hand (L22). `up` does not start it; `up kdc2` does. `rebuild kdc2` is refused. A bare `reset kdc2` uses `f44-base` |
-| `client1.kerber.test` | `.21` | `kerber-client1` | Fedora Kinoite 43 | 4 / 6 GiB / 40 GB | the fleet's client type (satomlin-kit twin), SPICE desktop |
+| `client1.kerber.test` | `.21` | `kerber-client1` | Fedora Kinoite 43 | 4 / 6 GiB / 40 GB | the fleet's client type (the reference client kit's twin), SPICE desktop |
 | `client2.kerber.test` | `.22` | `kerber-client2` | Fedora 43 Cloud | 2 / 3 GiB / 20 GB | sshd target, second NFS client, headless checks |
 | `klldap.kerber.test` | `.30` | `kerber-klldap` | Fedora 43 Cloud | 2 / 3 GiB / 30 GB | rootful Docker (`moby-engine`): KLLDAP with its own KDC (F3) |
 | `mitd3.kerber.test` | `.31` | `kerber-mitd3` | Fedora 43 Cloud | 4 / 4 GiB / 20 GB | upstream MIT krb5 1.22.2 built from the release tarball: the des3 oracle (B22) |
@@ -493,7 +493,7 @@ would remove it.
   policies are removed at the end, and `kadmin/changepw`'s
   password-changing-service flag is restored, also when the scenario stops early.
 - **`client-tools.sh`** (CT, client2's kinit, klist, kvno, kdestroy, ktutil, kswitch and kpasswd:
-  MIT's, and in the rust leg ours from kdc's build, run by path): the satomlin kit's calls
+  MIT's, and in the rust leg ours from kdc's build, run by path): the reference client kit's calls
   on FILE: caches and on the default `FILE:/tmp/krb5cc_%{uid}`, `kinit -k -t` with `-c` and
   with `KRB5CCNAME`, `klist -k` as the kit parses it. Each request kinit and kvno send goes
   through `lib/kdc-req-proxy.py` on client2 (request shapes only), and ours are

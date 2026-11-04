@@ -55,7 +55,7 @@ section "1. kdc as upgrade.sh left it; services at the leg's baseline, serving; 
 kdcis
 resetvm services
 servicesready
-check probe.kit.check_spnego '^4b3cc84fab60d6234e023172ee05a3bc4bc5d30b539405c70d1ed6fb32c82489  -$' host \
+check probe.kit.check_spnego '^56b950c453d87cc865ae60f1b2d71426024ff491e1fc7c2fd64ec16cc875b02e  -$' host \
     "tail -n +2 $(printf '%q' "$FIELD_LIB/check_spnego.lab.sh") | sha256sum"
 ktcheck services /var/data/nvme-raid/AppData/nfs-klldap-host/keytab/krb5.keytab nfs
 ktcheck services /var/lib/keycloak/keytab/keycloak-http.keytab http

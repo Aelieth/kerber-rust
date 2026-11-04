@@ -122,7 +122,7 @@ The embed surface — one shared store and its `change()` lock, bootstrap and
   kerber-rust resolves), or accept the duplicate generation in a co-build. A
   KLLDAP-repo change; kerber-rust only reads KLLDAP here.
 - `kdc.template.conf` sets no `max_renewable_life`, so new principals get 0 and
-  tickets are not renewable (the satomlin fleet fixes each user by hand with
+  tickets are not renewable (the reference client fleet fixes each user by hand with
   `modprinc -maxrenewlife`). MIT and kerber-rust agree on that default; the
   template should set `max_renewable_life = 7d`.
 - KLLDAP's container gate phases name MIT process names (`krb5kdc`,

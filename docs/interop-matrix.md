@@ -24,7 +24,7 @@ from that tree by one test-only change, the version, the docs and the CHANGELOG.
 
 | Consumer | What ran against both realms | Repeats as |
 | --- | --- | --- |
-| SSSD on Fedora (`krb5_child`; the satomlin kit) | password login into a FILE cache, renewal at an sssd restart, `passwd` through kpasswd, `-allow_tix` refused, the kit's own validation | `sssd-login` |
+| SSSD on Fedora (`krb5_child`; the reference client kit) | password login into a FILE cache, renewal at an sssd restart, `passwd` through kpasswd, `-allow_tix` refused, the kit's own validation | `sssd-login` |
 | NFS 4.2 to NFS-Ganesha through rpc.gssd | `sec=krb5i` and `krb5p` mounts by the machine credential, a user's writes and reads, root squashed, a ticketless user refused (the kit's gssproxy, in the path, served no credential under either KDC) | `services`, `nfs-client` |
 | Keycloak (Java JGSS) SPNEGO | `401 Negotiate`, then `302` with `code=` and a mutual token | `services`, `nfs-client` |
 | OpenSSH `gssapi-with-mic` | sshd GSSAPI from one client to another, short name and FQDN | by hand |

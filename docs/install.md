@@ -46,7 +46,7 @@ non-forking `kpropd` (see [Replica KDCs](#replica-kdcs)). The rules are the pack
 never part of `make install`; on Fedora keep the package's tools. `kinit`, `klist`, `kvno`,
 `kdestroy` and `kswitch` take MIT 1.22.2's options, print its texts and exit codes, and pick
 caches as MIT's do in `FILE:`, `DIR:` and `KCM:` collections (`klist -k`, `-l` and `-A`,
-`kdestroy -A`, `kswitch -p`, a new cache for a second principal); the satomlin kit's keytab
+`kdestroy -A`, `kswitch -p`, a new cache for a second principal); the reference client kit's keytab
 checks run on them as on MIT's. They are **not yet a drop-in** for MIT's in these:
 - `kvno -S` qualifies a short host and does not ask DNS.
 - `kvno -F` is not a release flag until it is settled against an MIT KDC with certificate

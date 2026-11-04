@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # harness/field/scenarios/client-tools.sh --leg mit|rust: the client programs on client2 against the leg's KDC as
-# upgrade.sh left it, called as the satomlin kit's clients call them: kinit with the password on stdin and
+# upgrade.sh left it, called as the reference client kit's clients call them: kinit with the password on stdin and
 # kinit -k -t into FILE: caches (the default FILE:/tmp/krb5cc_%{uid} too), klist and klist -s, kvno, kdestroy,
 # klist -k as the kit parses it; then DIR: collections with kswitch, ktutil, and the refusals. The mit leg runs
 # MIT's (krb5-workstation), the oracle: each row grades MIT 1.22.2's own text and exit code. In the rust leg
