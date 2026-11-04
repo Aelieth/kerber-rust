@@ -63,7 +63,7 @@ host/svc.ad.kerber.test`) for the S4U work. Names mirror
 days and the passwords are set once, when the image is built: without the flag
 a local image older than that fails every `kinit` with "Password expired".
 
-## Provisioning recipe (target — finalized in `harness/samba/`)
+## Provisioning recipe
 
 Run once inside the image build/entrypoint (throwaway `<...>` passwords come from
 the untracked operator file / build env):

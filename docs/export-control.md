@@ -2,8 +2,8 @@
 
 This tree is cryptographic software: a Kerberos V5 implementation with
 AES-CTS-HMAC (IANA 17–20), RFC 3961 3DES, Camellia-CTS-CMAC, RC4-HMAC,
-HMAC, PBKDF2, Oakley MODP Diffie–Hellman, ECDH P-256, and SPAKE (edwards25519,
-P-256). It is
+HMAC, PBKDF2, Oakley MODP Diffie–Hellman, RSA signatures, ECDSA and ECDH on the NIST curves,
+secp256k1 and Brainpool, and SPAKE (edwards25519, P-256). It is
 not a toy or a documentation-only stub.
 
 ## Classification (honest, not a determination)
@@ -25,4 +25,4 @@ they are required to file, and the laws of their own jurisdiction.
 The product is **Apache-2.0 OR MIT** (`LICENSE`, `LICENSE-APACHE`,
 `LICENSE-MIT`; `workspace.package.license`). Third-party crates are
 gated by `deny.toml` (`cargo deny` in CI): MIT, Apache-2.0,
-BSD-2-Clause, BSD-3-Clause, ISC, Unicode-3.0, Zlib. See `NOTICE`.
+BSD-3-Clause and Unicode-3.0. See `NOTICE`.

@@ -4,15 +4,15 @@ kerber-rust is a Cargo workspace of small crates. A crate depends only on
 crates in the layers below it:
 
 ```
-tools     krb5-tools (gate tools)       examples/consumer, examples/kdc-consumer
+tools     krb5-tools (gate tools)       examples/consumer, examples/kdc-consumer, examples/embed-realm
 daemons   krb5-admin
 roles     krb5-kdc     krb5-client     krb5-gss     (krb5-testkit: test helpers)
 wire      krb5-protocol
 codecs    krb5-asn1    krb5-crypto     krb5-config
-base      krb5-types   krb5-log        krb5-cli
+base      krb5-types   krb5-log        krb5-cli     krb5-brainpool
 ```
 
-`krb5-admin` uses `krb5-kdc` and `krb5-gss`; `krb5-kdc`, `krb5-client` and
+`krb5-admin` uses `krb5-kdc`, `krb5-gss` and `krb5-client`; `krb5-kdc`, `krb5-client` and
 `krb5-gss` sit on `krb5-protocol`, which uses the three codec crates;
 `krb5-asn1` uses `krb5-types` and `krb5-log`, `krb5-crypto` uses `krb5-log`,
 and `krb5-config` uses `krb5-types`. The tools' command lines and password
@@ -42,17 +42,18 @@ TCP fallback), plus MIT keytab and FILE ccache, so the KDC does not depend
 on the client crate. UDP uses
 `send_to`/`recv_from` and ignores off-path source addresses. Reply
 compare (`diff`) masks KRB-ERROR times/`e_text` and nulls AS/TGS
-volatiles so `scripts/differential-gate.sh` can fail red on an
-un-whitelisted MIT divergence.
+volatiles so `scripts/differential-gate.sh` can fail red on any
+MIT divergence.
 
-**`krb5-client`** is `kinit` and the user CLIs over MIT FILE ccache v4 and
-keytab v2 (the password comes from env or stdin, never argv).
+**`krb5-client`** is `kinit` and the user CLIs over MIT's FILE, DIR, MEMORY and KCM caches and
+keytab v2 (the password comes from the prompt or stdin, never argv or, in a release build, the
+environment).
 
 **`krb5-kdc`** issues AS/TGS from an in-memory store. The at-rest file
 is MIT dump version 7 (stash still holds the master key; SID/RID in
 `TL_KERBER_SID`), with each principal change appended and flushed until its replaced records outnumber its
 principals (256 at least) and the next write rewrites it. Readers take a change whole or not at all, so a change
-a crash cut short is not read. Legacy KDB3 ciphertext still loads for one release.
+a crash cut short is not read. Legacy KDB3 ciphertext still loads.
 `krb5-kdb` is MIT's `kdb5_util` (create, stash, dump, load, destroy). `key_data` uses KDB usage 0
 with a cleartext `int16_LE` length prefix; protocol `KeyUsage::new(0)`
 stays rejected. The KDC serves a `SharedStore` (`Arc<RwLock<dyn Store>>`); kadmind and kpasswd
@@ -70,7 +71,7 @@ net-server loop on its main thread, one thread: at most 45 TCP streams
 (`MAX_TCP_WORKERS`), the one that started first evicted past that, and
 no stream timeout, as MIT's. `krb5-kadmind` serves kpasswd and kadm5
 from the same loop: one cap of 45 over its streams and RPC connections,
-and each read of a kadm5 record waits at most 35 s, as MIT's.
+and it assembles each kadm5 record without blocking and closes one stalled past 35 s.
 As MIT's daemons, `krb5-kdc` and `krb5-kadmind` stop on SIGINT,
 SIGTERM or SIGQUIT and reopen their log files on SIGHUP. In a
 `test-hooks` build, `--test-realm`
@@ -94,8 +95,8 @@ windowed replay cache. Production `wrap` emits RRC=0 (MIT 1.22.2);
 `wrap_iov` is AES/RFC 8009 only. SSPI peer proof remains
 environment-dependent.
 
-**`krb5-admin`** is an ACL-enforced session plus listeners: version-1
-AP-REQ framing (library tests) and `krb5-kadmind` ONC RPC program 2112
+**`krb5-admin`** is an ACL-enforced session plus listeners:
+`krb5-kadmind` ONC RPC program 2112
 / AUTH_GSSAPI flavor 300001 on TCP 749, RFC 3244 kpasswd on UDP/TCP
 464 (`kadmin/changepw`, MIT `kpasswd` gated by
 `scripts/kpasswd-rust-gate.sh`), `krb5-kpropd` on 754 wrapping MIT dump
@@ -105,7 +106,7 @@ MIT `kprop` then MIT `kinit` is gated by `scripts/kprop-gate.sh`.
 MIT `kinit` is `scripts/kprop-reverse-gate.sh`: kprop, as MIT's, opens no database.
 MIT 1.22.2 `kadmin` add/get/list/mod/chrand/del is gated by
 `scripts/kadmin-rust-gate.sh` and `scripts/kadmin-mit-gate.sh`. Named policies and lockout:
-`ticket-flags.sh`. Iprop serial/ulog and `kpropd -A`:
+`harness/field/scenarios/ticket-flags.sh`. Iprop serial/ulog and `kpropd -A`:
 `scripts/iprop-gate.sh`. Extension points: [`plugins.md`](plugins.md)
 (traits, not dlopen). The database is locked between
 processes as MIT's db2 module locks it (`dblock.rs`): `principal.ok` and
@@ -151,9 +152,9 @@ dev-dependency only).
 ## Security invariants
 
 - Key usage 0 is rejected (RFC 3961 §2).
-- PBKDF2 iteration count 0 (RFC 3962 = 2^32) is rejected locally to
-  avoid a cheap DoS; this is a documented limitation versus a strict
-  reading of the RFC.
+- A PBKDF2 iteration count of 0 (RFC 3962 = 2^32) is rejected locally to
+  avoid a cheap DoS, a documented limitation versus a strict reading of the
+  RFC. So are a count below the enctype's default and one of 2^24 or more, as MIT's.
 - Decrypt discards plaintext when the truncated HMAC does not match.
 - No `unsafe` in this workspace (`forbid(unsafe_code)`).
 - No C FFI.

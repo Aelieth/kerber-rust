@@ -52,9 +52,9 @@ both the gate's own reads neither stock file.
 
 | Field | Required | Meaning |
 | --- | --- | --- |
-| `event` | yes | Stable name. From Rust: a `krb5_log::events` constant (`crypto.encrypt`, `asn1.decode`, `kdc.issue`, `admin`, …; every constant there is emitted somewhere). From the harness containers: `harness.start`, `harness.kdc.ready`, `harness.kinit`, `heimdal.start`, `samba.start` (see below) |
+| `event` | yes | Stable name. From Rust: a `krb5_log::events` constant (`crypto.encrypt`, `asn1.decode`, `kdc.issue`, `admin`, …; every constant there is emitted somewhere). From the harness containers: `harness.start`, `harness.kdc.ready`, `harness.kinit`, `samba.start` (see below) |
 | `correlation_id` | yes | 32 hex chars; one ID per *exchange* (crypto/ASN.1 inherit the parent via `enter_correlation`; they do not mint a new ID per op). The harness containers echo the `CORRELATION_ID` they were started with (`none` when unset) |
-| `component` | yes | Rust: `krb5-crypto`, `krb5-asn1`, `krb5-protocol`, `krb5-kdc`, `krb5-admin`, or `krb5-client`. Harness: `harness` (the MIT KDC container), `heimdal-harness`, `samba-harness` |
+| `component` | yes | Rust: `krb5-crypto`, `krb5-asn1`, `krb5-protocol`, `krb5-kdc`, `krb5-admin`, or `krb5-client`. Harness: `harness` (the MIT KDC container), `samba-harness` |
 | `outcome` | yes | `ok`, `error`, or `krb-error`; the KDC's dispatch adds `retransmit` and `discard`, and the `admin` event `done` and `unauthorized` |
 | `duration_us` | crypto/asn1 | Wall time of the operation |
 | `etype` | crypto | IANA encryption-type number |
@@ -92,7 +92,7 @@ and must leave `event` unchanged.
 
 ## Harness log lines
 
-The three container entrypoints under `harness/` are shell, not
+The two container entrypoints under `harness/` are shell, not
 `tracing`; each writes its lines with `printf` to stdout (`docker
 logs`), one JSON object per line with the same `event` /
 `correlation_id` / `component` / `outcome` core plus `realm`. Their
@@ -103,10 +103,9 @@ names are declared here and nowhere in Rust:
 | `harness` | `harness.start` | `kdc_port` | `harness/entrypoint.sh`, before the KDB is created |
 | `harness` | `harness.kdc.ready` | `kdc_port`; `error` on `outcome=error` | once `krb5kdc` listens on 88, or after the wait times out |
 | `harness` | `harness.kinit` | `principal` | after the in-container `kinit`; `outcome` `ok` or `error` |
-| `heimdal-harness` | `heimdal.start` | `kdc` (the KDC binary path) | harness/heimdal/entrypoint.sh, before `exec` of the KDC |
 | `samba-harness` | `samba.start` | — | `harness/samba/entrypoint.sh`, before `exec samba` (the domain is provisioned in the image) |
 
-Gate scripts depend on two of these by exact string:
+Gate scripts depend on one of these by exact string:
 `scripts/lib/gate-common.sh`, `scripts/run-harness.sh` and
 scripts/kadmin-mit-gate.sh waits for
 `"event":"harness.kinit"` with `"outcome":"ok"` (and fails on
@@ -134,9 +133,9 @@ the status word and `outcome=krb-error`. Unexpected transit-path errors
 are `tracing` **error** (`kdc_log.c:201-206` `LOG_ERR`).
 
 The KDC's dispatch logs its own `kdc.issue` lines: a reply resent
-from the lookaside cache at `info` with `outcome=retransmit`, and a
+from the lookaside cache at `debug` with `outcome=retransmit`, and a
 duplicate that arrives while the first copy is being processed at
-`info` with `outcome=discard`. A request that panics is answered with
+`debug` with `outcome=discard`. A request that panics is answered with
 nothing and logged `event=kdc.transport` at **error**.
 
 A kdcauthdata module that returns an error logs
@@ -178,8 +177,8 @@ when `[plugins] audit` `enable_only` names `json`, with MIT
 `stage`, `tkt_out_id`, `req_id`, `fromport`, `fromaddr`, …).
 `tkt_out_id` is SHA-256 of `ticket.enc_part.ciphertext` as 64
 uppercase hex digits. `req_id` is 31 alphanumeric characters
-(MIT `REQID_LEN` including NUL). `KRB5_KDC_AUDIT=test` appends
-the same JSON to `KRB5_KDC_AUDIT_LOG` (default `au.log`).
+(MIT `REQID_LEN` including NUL). In a `test-hooks` build only,
+`KRB5_KDC_AUDIT=test` appends the same JSON to `KRB5_KDC_AUDIT_LOG` (default `au.log`).
 Each store keeps its own audit modules. A new store copies the
 process default, and a module registered on one store is not on
 another.
@@ -264,8 +263,8 @@ nothing, still create it, as MIT's do. `KRB5_TRACE=/dev/stderr` puts
 the lines on standard error; nothing else goes there or to standard
 output. A program the kernel marks secure (setuid, setgid or file
 capabilities) ignores the variable, as MIT's `secure_getenv` does.
-`krb5kdc` and `kadmind` do not read `KRB5_TRACE`, where MIT's do
-through `krb5_init_context`. `kprop` traces as MIT's does (its AS
+`kadmind` does not read `KRB5_TRACE`, and `krb5kdc` reads it only for PKINIT's
+lines, where MIT's read it through `krb5_init_context`. `kprop` traces as MIT's does (its AS
 exchange, the authenticator it sends and the AP-REP `kpropd` answers
 with), opening the file at start-up. `krb5-iprop-pull` traces its client
 half (the AS and TGS requests for the iprop service) and opens the file
@@ -279,8 +278,8 @@ encrypted challenge, SPAKE, FAST, and PKINIT's generic lines), the TGS requests 
 referrals and S4U, the cache and keytab lookups and stores, and the
 kpasswd exchange. Where our flow differs from MIT's, the lines show
 ours: under FAST, when the KDC offers SPAKE, MIT's `kinit` tries SPAKE
-before the encrypted challenge and ours sends the challenge. PKINIT's own lines
-(`pkinit_trace.h`) are not traced.
+before the encrypted challenge and ours sends the challenge. PKINIT's lines
+(`pkinit_trace.h`) are traced by `kinit` and the KDC.
 
 A key prints as its enctype and the first two bytes of its SHA-1
 (`aes256-sha2/4149`), as MIT prints it. No line carries key, password
@@ -295,11 +294,10 @@ check that the wire does not (`docs/mit-deviations.md`).
 ## Logs as metrics
 
 Every issue and crypto/ASN.1 event already carries `duration_us` and
-`outcome`. An aggregator (log shipper, `analyze-kdc-slo.py`, the
-stress/soak gates) derives counts, rates, and p99 from those fields.
-**In-process counters, a metrics crate, and Prometheus are deferred**
-past 1.0; they are not 1.0-blocking. Do not add them unless the
-project later opts in.
+`outcome`. An aggregator (log shipper, `analyze-kdc-slo.py`)
+derives counts, rates, and p99 from those fields.
+**In-process counters, a metrics crate and Prometheus are not provided.**
+Do not add them unless the project later opts in.
 
 ## Example (JSON subscriber)
 

@@ -4,7 +4,7 @@ Goal: kerber-rust becomes the pure-Rust KDC inside
 [KLLDAP](https://github.com/Aelieth/klldap) (AGPL-3.0-only), replacing
 the `lldap-kerberos` FFI wrapper (klldap's `kerberos` crate) around system MIT
 Kerberos. This document records what is aligned today, how KLLDAP's seam
-maps onto kerber-rust's API, and what the embed itself still has to build.
+maps onto kerber-rust's API, and where the embed API is.
 
 Ground truth is the KLLDAP repository,
 [`Aelieth/klldap`](https://github.com/Aelieth/klldap), at **0.7.6**; the local
@@ -18,7 +18,7 @@ kerber-rust stays Apache-2.0 OR MIT; `publish = false`.
 | --- | --- | --- |
 | edition | 2024 | 2024 |
 | MSRV (`rust-version`) | 1.95 | 1.95.0 |
-| CI `msrv` job | `cargo build --workspace --all-targets --locked` on 1.95; the tests run on 1.95 in `full-test.yml`'s `msrv-test` | (klldap's own CI) |
+| CI `msrv` job | `cargo build --workspace --all-targets --locked` on 1.95; the tests run on 1.95 in `nightly.yml`'s `msrv-test` | (klldap's own CI) |
 | async | sync (no tokio) | tokio; the embed runs the KDC's loop on a thread of its own |
 | `unsafe` | product `forbid(unsafe_code)` | its `kerberos` crate's `src/ffi.rs` only (the FFI this replaces) |
 
@@ -36,7 +36,7 @@ P-384 needs `--cfg p384_backend="fiat"` in klldap's own build too (its `.cargo/c
 reach an embedder, and without the cfg kerber-rust refuses P-384 rather than use p384's default
 field, which is not constant-time.
 
-`rasn` is a normal `0.28` requirement (resolved **0.28.14**). MIT golden DER
+`rasn` is pinned at **0.28.14** with a vendored patch an embedder must carry. MIT golden DER
 (`crates/krb5-protocol/tests/golden_traces.rs`) still byte-matches
 checked-in `tests/traces/mit-*.der`. Dual `getrandom` 0.2/0.4 remains
 via `rasn-derive-impl` → `uuid` (proc-macro only).
@@ -110,7 +110,7 @@ KLLDAP 0.7.6's catalog (its domain-handlers policies module, `POLICY_ITEM_CATALO
 
 `[plugins] kdcpolicy` and `[plugins] audit` select those embedder modules by name. Register a kdcpolicy or audit module on the store, or before the store is opened. A global register after open applies only to stores opened later, and the KDC logs that at error. The audit name `json` loads only when `enable_only` lists it. KLLDAP's `[logging]` templates stay the kdc.conf lines already in `kerberos/kdc.template.conf` (`kdc_ports = 750,88` and the enctype list).
 
-## What the embed still has to build
+## The embed API
 
 The embed surface — one shared store and its `change()` lock, bootstrap and
 `open_or_create`, kadmind as a library, and the `kadm5_hook` and `kadm5_auth` interfaces — is in

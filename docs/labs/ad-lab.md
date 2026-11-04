@@ -5,8 +5,8 @@ Active Directory oracle. **This file contains no secrets.** Service
 keys, pcaps, FILE ccaches, and passwords stay in operator-held
 `~/adlab/` only (never `tests/traces/ad/`).
 
-> **Live successor:** this Windows DC was the *capture* source and has been
-> torn down. The **live** AD oracle going forward is a containerized Samba 4 AD
+> **Live successor:** this Windows DC was the *capture* source. It is kept shut off, and it
+> last ran on 2026-10-26, for the `ad-trust` scenario. The **live** AD oracle in CI is a containerized Samba 4 AD
 > DC serving the **same realm** `AD.KERBER.TEST` with the same account names —
 > see [`samba-lab.md`](samba-lab.md). Its domain SID differs from the captured
 > `tests/traces/pac-kbruser.ndr` by design (reconciled in the PAC-verify and cross-realm gates).

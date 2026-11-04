@@ -1,6 +1,6 @@
 # Labs
 
-The live interop labs behind the Samba, AD and KCM gates, and what each one
+The live interop labs behind the Samba and AD gates, the KCM record, and what each one
 decided. Every lab runs in containers or an `~/adlab` environment sandbox; none
 touches the host `/etc/krb5.conf` or SSSD.
 

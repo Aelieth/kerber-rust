@@ -3,9 +3,9 @@
 Oracle: MIT Kerberos **1.22.2** source SHA `3243ffbc…af13`
 (`https://github.com/krb5/krb5/tree/krb5-1.22.2-final`) plus the live
 image `kerber-rust-mit-kdc:1.22.2`. The source is verified with
-`sha256sum -c` in CI: the `ledger-mit` job fetches the tarball and checks
+`sha256sum -c` in CI: the `anchors` job in `nightly.yml` fetches the tarball and checks
 that SHA, as `harness/Dockerfile` does.
-Heimdal/Samba are regression, not the equality bar. Isolation: host
+Samba is regression, not the equality bar. Isolation: host
 `/etc/krb5.conf` stays `TESTLABBY.LOCAL`.
 
 The ledger began as a sweep of the KDC, with corrections applied from
@@ -133,7 +133,7 @@ wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 
 Counts:
 **608** = A1 133 + A2 94 + A3 122 + A4 69 + A5 36 + B1 154.
-exact 476 · stricter-documented 24 · deviation 39 ·
+exact 477 · stricter-documented 24 · deviation 38 ·
 absent 3 · deferred 66.
 
 When the ledger was split into these files, the one-file A4 (153 rows,
@@ -152,8 +152,8 @@ Annotation rule: an `exact` row whose proof is unit-only carries
 state is reachable only by forged PDUs / faulted stores, so no live
 differential cell can exist); rows without it name a live gate cell or
 `diffsend` case. The per-row sweep that adds the annotation to every
-unit-only `exact` row has not been done. The one
-`absent` row is the user's stated non-goal `gss_wrap_size_limit`.
+unit-only `exact` row has not been done. The three
+`absent` rows include the stated non-goal `gss_wrap_size_limit`.
 
 Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
 A2 10 (9 report rows + the `kdc_util.c:144-191` split) + A3 10 = 28
@@ -240,7 +240,7 @@ AS lockout last; TGS `GET_LOCAL_TGT` before times; `HEADER_PAC` before
 (52 is dead at MIT's default 65536). `no PA-TGS-REQ` 16. `last_req` /
 `key_expiration`. The `starttime == authtime` omission. The CANONICALIZE
 canonical sname. `CANTLOCK_DB` 29 (exact by pass-through on the AS and TGS
-lookups; no lockable KDB in tree — the unit fakes the backend).
+lookups; the unit fakes the backend).
 `select_session_keytype`.
 
 ### 9. e_text and the differential compare (parity)

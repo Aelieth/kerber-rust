@@ -2,9 +2,9 @@
 
 An embedder links `krb5-kdc` and `krb5-admin` as libraries and drives the KDC
 and kadmind in its own process. This page is the whole surface it needs. A
-default build carries neither the daemon runtime (behind the `daemon` feature,
-on for the binaries) nor the test fixtures (behind `test-hooks`), so an embedder
-takes `krb5-kdc` and `krb5-admin` with `default-features = false`.
+default build carries the daemon runtime (`daemon`, on by default) and not the test
+fixtures (`test-hooks`, off), so an embedder takes `krb5-kdc` and `krb5-admin` with
+`default-features = false`.
 
 ## One store and its locking
 
@@ -38,7 +38,7 @@ reuses that master and kvno. A database with no lock file is refused, as an open
 `open_or_create(paths, profile, admin) -> Result<(PrincipalStore, Bootstrapped),
 Error>` does that whole open-or-create — a present database is opened, a stash with no
 database resumes its master and kvno, else a new random master — then
-`bootstrap_realm_into` and `create_database`. An embedder gets BA's crash-safe
+`bootstrap_realm_into` and `create_database`. An embedder gets the crash-safe
 resume without copying the example's lines; `examples/embed-realm` calls it.
 
 ## Config by `ProfileSet`
@@ -60,7 +60,7 @@ the built-ins, as MIT loads its modules beside them; empty lists keep
 `register_pwqual` and `register_kadm5_hook`. Remote MIT `kadmin` on 749 is that
 loop on a thread beside the KDC's, or `krb5-kadmind` run beside the embedder.
 
-`kadmind::ServeLimits` caps what one kadmind loop takes on. `max_connections`
+`krb5_admin::ServeLimits` caps what one kadmind loop takes on. `max_connections`
 (45) and `max_request` (1 MiB) are MIT's defaults. `idle_timeout` and
 `per_ip_conns` are `None` by default, as MIT keeps neither; set them to shed an
 idle RPC connection or to refuse a new one past a per-source-IP count. A record
@@ -75,8 +75,8 @@ not under the guard. The directory need not register one.
 
 `kadm5_auth` is the admin-authorization interface: an embedder's `Kadm5Auth` module
 goes in `KadmindConfig.auth_modules` or is chosen by `[plugins] kadm5_auth`, and the
-built-in `acl` and `self` modules answer each verb alongside it. One module returning
-0 authorizes, `KRB5_PLUGIN_NO_HANDLE` abstains, any other code denies at once, and the
+built-in `acl` and `self` modules answer each verb alongside it. A module returns
+`Decision::Allow`, `Abstain` or `Deny`; `Deny` refuses at once, and the
 allowing module supplies the restrictions (`docs/parity/a4-kadmin.md`).
 
 ## OTP and require-MFA
@@ -137,8 +137,8 @@ The embed-safe serve calls take sockets the caller already bound:
 So bind the privileged ports first — `bind_udp_listeners(addrs)` and
 `bind_tcp_listeners(addrs)` (or `bind_tcp_listeners_with_backlog`), which may run
 while the process still has the privilege to bind below 1024 — then serve on them.
-`serve`, `serve_all`, and `serve_daemon` instead install SIGTERM / SIGINT handlers
-and are behind the `daemon` feature, so they are not the embed path.
+`serve` and `serve_all` instead install SIGTERM / SIGINT handlers, and `serve_daemon` takes
+the caller's. All three are behind the `daemon` feature, so they are not the embed path.
 
 `Shutdown::new()` with `Shutdown::stop_flag()` is the `AtomicBool` that
 `serve_all_until` polls; one `Shutdown` stops the KDC loop and `Kadmind::serve`
