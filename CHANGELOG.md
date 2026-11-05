@@ -32,6 +32,7 @@ any other `###` heading.
 - **crypto.** `prf_plus` fails past 255 blocks, as MIT's `krb5_c_prfplus`; it repeated block 255.
 - **fuzz.** Targets decode with the vendored rasn the product ships, not crates.io's.
 - **client.** kpasswd refuses a reply whose receiver address isn't the request's sender, as MIT.
+- **gss.** Unwrap rotates RRC left and wrap right, as MIT, so Windows' sealed tokens unwrap.
 
 ### Removed
 
