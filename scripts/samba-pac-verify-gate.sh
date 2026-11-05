@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # L1 (+ L2 if kcrypto ships): Samba IDL decode of a Rust-issued PAC.
 # Co-located Rust KDC on 127.0.0.1:8888 inside samba-ad-dc. Isolation:
-# docker exec only; host /etc/krb5.conf stays TESTLABBY.LOCAL.
+# docker exec only; host /etc/krb5.conf stays untouched.
 # Missing image/docker: exit 2. Dummy SID or missing buffers: exit 1.
 set -euo pipefail
 

@@ -503,6 +503,49 @@ def check_release_clean(root: pathlib.Path | None = None) -> None:
     print("release-clean: no work dir, merge leftover, work-area path or note id")
 
 
+# A lab's own addresses are keys in its field.env, outside the tree; field.env.example shows them.
+_D = r"\\{0,2}\."  # a dot, or a regex-escaped one
+_PRIVATE_V4 = re.compile(
+    rf"(?<![\d.])(?:10{_D}\d{{1,3}}|172{_D}(?:1[6-9]|2\d|3[01])|192{_D}168)"
+    rf"{_D}\d{{1,3}}{_D}\d{{1,3}}(?!\d|{_D}\d)"
+)
+_PRIVATE_V4_SCOPE = ("harness/", "docs/", "scripts/", ".github/")
+_PRIVATE_V4_ALLOW = frozenset({
+    "harness/field/field.env.example",
+    "scripts/oracle/rd-priv-oracle.c",
+})
+
+
+def _private_v4_lines(text: str) -> list[int]:
+    return [n for n, line in enumerate(text.splitlines(), 1) if _PRIVATE_V4.search(line)]
+
+
+def check_private_addresses(root: pathlib.Path | None = None) -> None:
+    """No RFC 1918 address in harness/, docs/, scripts/ or .github/ outside the named files.
+    Findings name the file and line, never the address."""
+    root = ROOT if root is None else root
+    listed = subprocess.run(
+        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        cwd=root, capture_output=True, text=True, check=False,
+    )
+    if listed.returncode != 0:
+        _die(f"git ls-files: {(listed.stderr or listed.stdout).strip()[-200:]}")
+    bad = []
+    for rel in sorted(set(filter(None, listed.stdout.split("\0")))):
+        if not rel.startswith(_PRIVATE_V4_SCOPE) or rel in _PRIVATE_V4_ALLOW:
+            continue
+        if rel.startswith("scripts/ci_policy/selftest/"):
+            continue
+        try:
+            text = (root / rel).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        bad += [f"{rel}:{n}" for n in _private_v4_lines(text)]
+    if bad:
+        _die(f"{len(bad)} private address(es) outside field.env: " + "; ".join(bad[:8]))
+    print("private-addresses: none outside field.env.example and the named files")
+
+
 # rscount.py's rule. The four names are the out-of-line test files that rule misses.
 _RATIO_OUTLINE = frozenset({"armor_flow.rs", "a2_r17_reply.rs", "mit_pac_golden.rs", "diff_compare.rs"})
 _RATIO_TEST_ATTR = re.compile(r"^\s*#\[cfg\((test|all\(test.*|any\(test.*)\)\]")

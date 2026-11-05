@@ -5,7 +5,7 @@ Date: 2026-09-01. Oracle: Fedora 43 `sssd-kcm` 2.12.0-3.fc43 (digest
 krb5-libs 1.22.2-4.fc43) plus Fedora 42 compat `sssd-kcm` 2.11.1-2.fc42
 (digest `sha256:e78cd1a688cd079c23864f289a89a49a3f4ad66d817864e325e1d058310ee95c`).
 KDC: MIT Kerberos 1.22.2 harness (`KERBER.TEST`). Isolation: host
-`/etc/krb5.conf` stayed `TESTLABBY.LOCAL`.
+`/etc/krb5.conf` stayed untouched.
 
 ## Opcode pin (running daemon, not rpm)
 

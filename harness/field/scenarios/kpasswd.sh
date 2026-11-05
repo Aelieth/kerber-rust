@@ -30,6 +30,8 @@ esac
 . "$FIELD_LIB/leg.sh"
 legset ALICE ALICE_TEMP ADMIN
 R=${REALM//./\\.}
+LN=${FIELD_LAB_NET:?FIELD_LAB_NET is not set in field.env}
+LNe=${LN//./\\.}
 DB=/var/kerberos/krb5kdc
 cleanup() {
     timeout -k 5 60 "$LAB" ssh kdc -- "findmnt -n $DB > /dev/null && sudo umount $DB; [ -e $DB/principal.kh ] && sudo mv $DB/principal.kh $DB/principal; true" < /dev/null > /dev/null 2>&1
@@ -133,6 +135,6 @@ ours KH.1.text '^text: Unauthorized request$' '^text: .*'
 kv "krbtgt/$REALM"
 ours KH.1.kvno "^Key: vno $K0, " '^Key: vno [0-9]+'
 kdcsince lockdown 'setpw request'
-ours KH.1.log "setpw request from 192\\.168\\.177\\.22 by admin/admin@$R for admin/admin@$R: Operation requires \`\`change-password'' privilege\$" 'setpw request .*'
+ours KH.1.log "setpw request from $LNe\\.22 by admin/admin@$R for admin/admin@$R: Operation requires \`\`change-password'' privilege\$" 'setpw request .*'
 
 finish

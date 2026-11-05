@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""dc-ps.py <script.ps1>: run a PowerShell script on the AD DC (TEST-SERVER, 10.10.38.38) over WinRM.
+"""dc-ps.py <script.ps1>: run a PowerShell script on the AD DC ($FIELD_AD_DC_NAME, $FIELD_AD_DC) over WinRM.
 
-http://10.10.38.38:5985/wsman, NTLM with message encryption, as ADKERBER\\<AD_KRBADMIN_USER>. The account and the
+http://$FIELD_AD_DC:5985/wsman, NTLM with message encryption, as ADKERBER\\<AD_KRBADMIN_USER>. The account and the
 other AD secrets come from $FIELD_ADLAB_ENV (default ~/adlab/env) and are never printed: a script names one as
 @@PSQ:NAME@@, filled in at send time as a PowerShell single-quoted string, and every AD_* value is redacted from
 the output. A long script goes up in chunks to %TEMP%, runs with -File and is deleted.
@@ -13,7 +13,8 @@ import uuid
 
 import winrm
 
-DC = "http://10.10.38.38:5985/wsman"
+DC_IP = os.environ.get("FIELD_AD_DC") or sys.exit("dc-ps.py: FIELD_AD_DC is not set in field.env")
+DC = "http://%s:5985/wsman" % DC_IP
 ENV = os.environ.get("FIELD_ADLAB_ENV") or os.path.expanduser("~/adlab/env")
 
 

@@ -9,7 +9,7 @@
 # 10) is for a closeout and the final only. kdc2 (Fedora 44, .12) is the
 # replica, defined by hand. `up` and `up all` do not start ub26, rocky10,
 # or kdc2; name them. They sit on the NAT network kerber-lab
-# (192.168.177.0/24, DNS domain kerber.test). kdc also has a LAN NIC
+# ($FIELD_LAB_NET.0/24, DNS domain kerber.test). kdc also has a LAN NIC
 # (macvtap) so the AD test DC can reach it. See harness/field/README.md.
 #
 # Runs on the host, or in a distrobox where virsh is not on PATH. In that
@@ -55,6 +55,18 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LAB_HOME="${KERBER_LAB_HOME:-$HOME/kerber-lab}"
+# The lab's own values (FIELD_LAB_NET, FIELD_AD_DC, ...), as run.sh reads them.
+if [ -f "$LAB_HOME/field.env" ]; then
+    if [ "$(stat -c %a "$LAB_HOME/field.env")" != 600 ]; then
+        echo "[lab] ERROR: $LAB_HOME/field.env must be mode 0600" >&2
+        exit 1
+    fi
+    set -a
+    # shellcheck source=field.env.example
+    . "$LAB_HOME/field.env"
+    set +a
+fi
+: "${FIELD_LAB_NET:?[lab] ERROR: set FIELD_LAB_NET (first three octets of the lab network) in $LAB_HOME/field.env}"
 LAB_LOCK=$LAB_HOME/state/lab.lock
 URI=qemu:///system
 NET=kerber-lab
@@ -64,7 +76,7 @@ DNS_DOMAIN=kerber.test
 SSH_KEY="$LAB_HOME/ssh/lab_ed25519"
 KNOWN_HOSTS="$LAB_HOME/ssh/known_hosts"
 PASSWD_FILE="$LAB_HOME/secrets/lab-console-password"
-AD_DC=10.10.38.38
+AD_DC=${FIELD_AD_DC:-}
 
 # Fedora 43 media, checked against Fedora's signed CHECKSUM files.
 REL=43-1.6
@@ -85,7 +97,7 @@ UBUNTU_IMG=ubuntu-26.04-server-cloudimg-amd64.img
 UBUNTU_SHA256=8800651811af9a85465ad1d552add729947bb16488dddb4a9b5305a3d97332b2
 UBUNTU_VOL=ubuntu-26.04-cloud.img
 
-# The VM table. The MACs must match network-kerber-lab.xml, except kdc2:
+# The VM table. The MACs must match network-kerber-lab.xml.in, except kdc2:
 # its DHCP host is already on the live network, and this script does not
 # edit that XML and does not net-update a dns-host for it.
 ALL_VMS=(kdc services client1 client2 klldap mitd3 ub26 deb13 rocky10 kdc2)
@@ -93,10 +105,10 @@ declare -A KIND=([kdc]=cloud [services]=cloud [client1]=kinoite [client2]=cloud 
 declare -A CPUS=([kdc]=2 [services]=4 [client1]=4 [client2]=2 [klldap]=2 [mitd3]=4 [ub26]=4 [deb13]=2 [rocky10]=2 [kdc2]=2)
 declare -A MEM=([kdc]=2048 [services]=6144 [client1]=6144 [client2]=3072 [klldap]=3072 [mitd3]=4096 [ub26]=8192 [deb13]=3072 [rocky10]=3072 [kdc2]=2048)
 declare -A DISK=([kdc]=20 [services]=40 [client1]=40 [client2]=20 [klldap]=30 [mitd3]=20 [ub26]=60 [deb13]=30 [rocky10]=20 [kdc2]=20)
-declare -A IP=([kdc]=192.168.177.10 [services]=192.168.177.11 [client1]=192.168.177.21
-               [client2]=192.168.177.22 [klldap]=192.168.177.30 [mitd3]=192.168.177.31
-               [ub26]=192.168.177.32 [deb13]=192.168.177.33 [rocky10]=192.168.177.34
-               [kdc2]=192.168.177.12)
+declare -A IP=([kdc]=$FIELD_LAB_NET.10 [services]=$FIELD_LAB_NET.11 [client1]=$FIELD_LAB_NET.21
+               [client2]=$FIELD_LAB_NET.22 [klldap]=$FIELD_LAB_NET.30 [mitd3]=$FIELD_LAB_NET.31
+               [ub26]=$FIELD_LAB_NET.32 [deb13]=$FIELD_LAB_NET.33 [rocky10]=$FIELD_LAB_NET.34
+               [kdc2]=$FIELD_LAB_NET.12)
 declare -A MAC=([kdc]=52:54:00:4b:52:0a [services]=52:54:00:4b:52:0b
                 [client1]=52:54:00:4b:52:15 [client2]=52:54:00:4b:52:16
                 [klldap]=52:54:00:4b:52:1e [mitd3]=52:54:00:4b:52:1f
@@ -238,7 +250,8 @@ ensure_lab_home() {
 ensure_net() {
     if ! vsh net-info "$NET" >/dev/null 2>&1; then
         say "defining network $NET"
-        vsh net-define "$HERE/network-kerber-lab.xml" >/dev/null
+        render "$HERE/network-kerber-lab.xml.in" "$LAB_HOME/state/network-kerber-lab.xml"
+        vsh net-define "$LAB_HOME/state/network-kerber-lab.xml" >/dev/null
     fi
     vsh net-autostart "$NET" >/dev/null
     # (No 'grep -q' in pipelines: with pipefail its early exit fails the pipe.)
@@ -260,7 +273,7 @@ ensure_net_hosts() {
     xml=$(vsh net-dumpxml "$NET")
     for vm in "${ALL_VMS[@]}"; do
         # kdc2's DHCP host is already on the live network. Do not add a
-        # dns-host for it, and do not edit network-kerber-lab.xml.
+        # dns-host for it, and do not edit network-kerber-lab.xml.in.
         [ "${KIND[$vm]}" = replica ] && continue
         case $xml in
             *"mac='${MAC[$vm]}'"*) ;;
@@ -382,13 +395,17 @@ lan_if() {
 
 # render <template> <out> <vm>: fill in the placeholders; the result stays in $LAB_HOME.
 render() {
-    local tpl=$1 out=$2 vm=$3 pub hash
+    local tpl=$1 out=$2 vm=${3:-} pub hash mac=
+    [ -z "$vm" ] || mac=${MAC[$vm]}
     pub=$(cat "$SSH_KEY.pub")
     hash=$(cat "$PASSWD_FILE.sha512")
+    if grep -q '@AD_DC@' "$tpl"; then : "${FIELD_AD_DC:?[lab] ERROR: set FIELD_AD_DC in $LAB_HOME/field.env}"; fi
     (
         umask 077
+        mkdir -p "$(dirname "$out")"
         sed -e "s|@SSH_PUBKEY@|$pub|g" -e "s|@LAB_PASSWD_HASH@|$hash|g" \
-            -e "s|@LAN_MAC@|$KDC_LAN_MAC|g" -e "s|@LAB_MAC@|${MAC[$vm]}|g" "$tpl" > "$out"
+            -e "s|@LAN_MAC@|$KDC_LAN_MAC|g" -e "s|@LAB_MAC@|$mac|g" \
+            -e "s|@LAB_NET@|$FIELD_LAB_NET|g" -e "s|@AD_DC@|${FIELD_AD_DC:-}|g" "$tpl" > "$out"
     )
     if grep -Eq '@[A-Z_]+@' "$out"; then die "unfilled placeholder in $out"; fi
 }
@@ -847,14 +864,15 @@ check_vm() {
             if [ -n "$out" ]; then pass "LAN NIC address $out"; else fail "LAN NIC has no address"; fi
         fi
         # The inbound filter on the LAN NIC (kerber-lab-lan-nic, kdc.user-data).
+        : "${FIELD_AD_DC:?[lab] ERROR: set FIELD_AD_DC in $LAB_HOME/field.env}"
         out=$(lssh kdc "systemctl is-enabled kerber-lab-lan-filter.service; sudo nft list table inet kerber_lab_lan" 2>/dev/null || true)
         case $out in
-            enabled*'iifname "'*'" jump lan_in'*'udp sport 67 udp dport 68'*'ip saddr 10.10.38.38 tcp dport 88'*'ip saddr 10.10.38.38 udp dport 88'*'ip saddr 10.10.38.38 tcp dport 80'*'drop comment'*)
+            enabled*'iifname "'*'" jump lan_in'*'udp sport 67 udp dport 68'*"ip saddr $AD_DC tcp dport 88"*"ip saddr $AD_DC udp dport 88"*"ip saddr $AD_DC tcp dport 80"*'drop comment'*)
                 pass "LAN inbound filter loaded on $(printf '%s\n' "$out" | sed -n 's/.*iifname "\([^"]*\)".*/\1/p'): established, DHCP replies, $AD_DC -> tcp/udp 88 + tcp 80; rest dropped" ;;
             *) fail "LAN inbound filter (kerber-lab-lan-filter / table inet kerber_lab_lan) missing or changed" ;;
         esac
         out=$(lssh kdc "ip -4 route show default" 2>/dev/null | paste -sd';' -)
-        case $out in *192.168.177.1*) pass "default route on the lab NIC: $out" ;; *) fail "default route: $out" ;; esac
+        case $out in *"$FIELD_LAB_NET.1"*) pass "default route on the lab NIC: $out" ;; *) fail "default route: $out" ;; esac
         if [ "$LAB_ONLY" = 0 ]; then
             if lssh kdc "timeout 3 bash -c '</dev/tcp/$AD_DC/88'" 2>/dev/null; then
                 pass "AD DC $AD_DC:88 reachable (route: $(lssh kdc "ip -4 route get $AD_DC" 2>/dev/null | awk 'NR == 1'))"

@@ -18,7 +18,7 @@ step "probe container"
 echo "hostname=$(cat /proc/sys/kernel/hostname)"; grep PRETTY_NAME /etc/os-release; uname -r
 # The probe IS services in its client role, so its own name must not resolve to itself
 # (podman's /etc/hosts entry and glibc's myhostname both answer with the probe's address);
-# the run passes --add-host services.kerber.test:192.168.177.11, the name's DNS answer.
+# the run passes --add-host services.kerber.test:<services address>, the name's DNS answer.
 getent ahostsv4 "$SERVER" | head -1; getent ahostsv4 kdc.kerber.test | head -1
 rpm -q nfs-utils gssproxy krb5-workstation | tr '\n' ' '; echo
 ip -4 -o addr show scope global | awk '{print $2, $4}'

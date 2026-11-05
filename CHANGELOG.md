@@ -16,6 +16,11 @@ any other `###` heading.
 
 ## [Unreleased]
 
+### Tests and CI
+
+- **field.** Lab addresses, AD DC, LLDAP base DN are `field.env` keys; `lab.sh` reads it too.
+- **ci.** ci-policy fails on RFC 1918 addresses in `harness/`, `docs/`, `scripts/`, `.github/`.
+
 ## [1.2.0] - 2026-11-04
 
 The **1.2** line is *embed-ready*: the KDC and kadmind also run as libraries over

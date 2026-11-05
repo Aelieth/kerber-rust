@@ -4,7 +4,7 @@ The implementations this port is checked against and what is kept from
 them. The gates that content-assert against each one, where they run and
 what they assert are in [gates.md](gates.md) (its Oracle column).
 Timing/replay: [`security.md`](security.md). Isolation: never edit host
-`/etc/krb5.conf` (`TESTLABBY.LOCAL`).
+`/etc/krb5.conf`.
 
 - **MIT 1.22.2** is the primary oracle and the equality bar: live MIT
   clients, KDCs, kadmind, kpropd and libraries against the Rust side, in

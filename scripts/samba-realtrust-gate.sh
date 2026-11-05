@@ -2,7 +2,7 @@
 # D2: two Samba AD DCs, real samba-tool domain trust create, Rust bridged
 # with the TDO keys, both-direction kvno, reverse PAC SID == live Samba-A
 # kbruser. Isolation: docker exec / KRB5_CONFIG; host /etc/krb5.conf stays
-# TESTLABBY.LOCAL. Trust-create fail with images present is exit 1.
+# untouched. Trust-create fail with images present is exit 1.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

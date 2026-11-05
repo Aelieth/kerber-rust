@@ -16,8 +16,8 @@ Kerberos build is `mitd3` ([below](#mitd3-upstream-mit-with-des3)).
 
 ## Address plan
 
-Network `kerber-lab`: NAT on `192.168.177.0/24`, bridge `virbr-kerber`.
-Gateway, DHCP and DNS are on `192.168.177.1` (libvirt's dnsmasq).
+Network `kerber-lab`: NAT on `$FIELD_LAB_NET.0/24`, bridge `virbr-kerber`.
+Gateway, DHCP and DNS are on `$FIELD_LAB_NET.1` (libvirt's dnsmasq).
 
 | Name | Address | libvirt domain | OS | vCPU / RAM / disk | Role |
 | --- | --- | --- | --- | --- | --- |
@@ -35,17 +35,17 @@ Gateway, DHCP and DNS are on `192.168.177.1` (libvirt's dnsmasq).
 Field runs use Fedora 44 snapshots (`f44-base` and the ones the scenario table names), whatever the
 table's image was built from.
 
-- **DHCP:** static leases by MAC (`network-kerber-lab.xml`, the table in
+- **DHCP:** static leases by MAC (`network-kerber-lab.xml.in`, the table in
   `lab.sh`). Other machines get `.100`–`.199`.
 - **DNS:** forward and reverse records for every name above. `kerber.test` is
   local only, so unknown names get NXDOMAIN and nothing leaks upstream.
   Everything else is forwarded upstream.
-- **AD:** `ad.kerber.test` is forwarded to the AD test DC (`AD_DC` in `lab.sh`), so the
+- **AD:** `ad.kerber.test` is forwarded to the AD test DC (`FIELD_AD_DC`), so the
   VMs resolve the DC's name (F2-AD). The realm is `KERBER.TEST`.
 - **Own name:** a VM's own name resolves locally (systemd-resolved /
   nss-myhostname), not through DNS. In `getaddrinfo` order the answer is the
   IPv6 link-local address, then the lab address, and on kdc then the LAN
-  address (on klldap, Docker's `172.17.0.1`). This is stock Fedora. A client
+  address (on klldap, Docker's default bridge gateway). This is stock Fedora. A client
   running on kdc itself tries `fe80::…%2` first.
 
 ### kdc's LAN NIC (macvtap)
@@ -80,7 +80,7 @@ starts, so nothing listens on the LAN unfiltered.
 - **Verified from the DC** with WinRM `Test-NetConnection` (2026-10-01).
 
 - **Host to kdc:** by design, macvtap does not carry traffic between the host
-  and its own guest. Reach kdc from the host at `192.168.177.10`.
+  and its own guest. Reach kdc from the host at `$FIELD_LAB_NET.10`.
 - **LAN address:** `lab.sh ip kdc lan` reads it from the guest agent.
 - **Lab subnet:** the other VMs are not reachable from the LAN. kdc is the only
   VM exposed to it, which is why RA3's SPNEGO target runs on kdc (tcp 80).
@@ -108,7 +108,7 @@ harness/field/lab.sh check              # ssh, DNS + reverse, time sync, interne
 harness/field/lab.sh check --lab-only kdc   # the same without what reaches past the lab: internet, LAN address, AD DC
 harness/field/lab.sh ssh kdc            # shell as 'lab' (passwordless sudo)
 harness/field/lab.sh ssh client2 -- sudo dnf -y install krb5-workstation
-harness/field/lab.sh ip kdc             # 192.168.177.10   (ip kdc lan: the LAN address)
+harness/field/lab.sh ip kdc             # $FIELD_LAB_NET.10   (ip kdc lan: the LAN address)
 harness/field/lab.sh snapshot kdc mit-oracle   # offline snapshot (shut down, snapshot, start)
 harness/field/lab.sh reset all          # kdc, services, client1, client2, klldap to 'f44-base'; mitd3 stays on 'mit-d3'; deb13 stays on 'base'; kdc2 is not selected
 harness/field/lab.sh reset all base     # name base to take those VMs, and mitd3, to 'base' too
@@ -349,7 +349,7 @@ MIT's port 88 at 5 (the rust leg expects 128). The package versions are recorded
     with the KDC's and kadmind's log lines;
   - bob's kpasswd there over UDP 464 (kdc refuses client2's TCP 464 for that one
     exchange) and back over TCP, with kadmind's two `chpw request from
-    192.168.177.22 for bob@KERBER.TEST: success` lines;
+    $FIELD_LAB_NET.22 for bob@KERBER.TEST: success` lines;
   - `kinit` on kdc against `::1` over UDP and TCP, and against `127.0.0.2` (a
     UDP reply leaves from the address its request was sent to).
 - It records, not grades: the AS and TGS sizes, the preauth types offered, the
@@ -776,7 +776,7 @@ to a network defined before it joined the table (`net-update`, no restart).
 
 ## Isolation
 
-- **Host:** the lab never touches `/etc/krb5.conf` (realm `TESTLABBY.LOCAL`) or, from a
+- **Host:** the lab never touches `/etc/krb5.conf` or, from a
   distrobox, `/run/host/etc/krb5.conf`, the libvirt `default` network, other VMs, or host
   networking. libvirt's own firewall rules for `virbr-kerber` are the only
   host-side network change.

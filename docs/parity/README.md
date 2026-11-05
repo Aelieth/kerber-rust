@@ -6,7 +6,7 @@ image `kerber-rust-mit-kdc:1.22.2`. The source is verified with
 `sha256sum -c` in CI: the `anchors` job in `nightly.yml` fetches the tarball and checks
 that SHA, as `harness/Dockerfile` does.
 Samba is regression, not the equality bar. Isolation: host
-`/etc/krb5.conf` stays `TESTLABBY.LOCAL`.
+`/etc/krb5.conf` stays untouched.
 
 The ledger began as a sweep of the KDC, with corrections applied from
 the three verification reports (one per section A1–A3).

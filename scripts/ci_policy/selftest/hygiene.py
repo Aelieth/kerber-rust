@@ -10,7 +10,7 @@ import tempfile
 from ..common import _scratch_root
 from ..golden import check_golden_dump_unique_keys
 from ..hygiene import (
-    _blank_rust, _cfg_test_ranges, _char_totals, _mit_cite_bad, _mit_cite_ok,
+    _blank_rust, _cfg_test_ranges, _char_totals, _mit_cite_bad, _mit_cite_ok, _private_v4_lines,
     check_autotests_registered, check_isolate_test_krb5, check_mit_cites,
     check_no_test_temp_dir, check_python_compiles,
 )
@@ -247,6 +247,10 @@ def _self_test_hygiene() -> None:
         + _princ_line("nosvr@KERBER.TEST", "ba")
     )
     _must_die(check_golden_dump_unique_keys, dump_missing)
+    # RFC 1918 addresses are found by line; documentation, loopback and public ones are not.
+    assert _private_v4_lines("a 10.1.2.3 b\n172.16.0.1\n172.32.0.1\n192.168.1.1:88\n") == [1, 2, 4]
+    assert _private_v4_lines("192.0.2.38 127.0.0.1 110.1.2.3 10.1.2.3.4 8.8.8.8\n") == []
+    assert _private_v4_lines("x\nfrom 192\\.168\\.1\\.22 by\n'10\\\\.0\\\\.0\\\\.1'\n") == [2, 3]
     # Every scripts/**/*.py compiles.
     check_python_compiles({"a.py": "x = 1\n"})
     _must_die_msg("1 Python file(s) do not compile", check_python_compiles, {"a.py": "x = 1\n", "b.py": "def f(:\n"})

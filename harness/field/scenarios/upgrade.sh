@@ -22,6 +22,8 @@ esac
 . "$HERE/../baseline.env"
 # shellcheck source=../lib/leg.sh
 . "$FIELD_LIB/leg.sh"
+LN=${FIELD_LAB_NET:?FIELD_LAB_NET is not set in field.env}
+LNe=${LN//./\\.}
 T0=$(date +%s)
 SS="'( sport = :88 or sport = :464 or sport = :749 )'"
 # listencheck: kdc's listeners, the set MIT's own daemons open (its leg grades the same socket check):
@@ -199,17 +201,17 @@ kdcmark clients
 for p in udp:dgram tcp:stream; do
     pass=${p%%:*} tr=${p#*:} cfg=$U
     if [ "$pass" = tcp ]; then cfg=$T; fi
-    check "client2.$pass.kinit" "^answers: $tr 192\.168\.177\.10:88\$" runin client2 "alice's password ($ALICE)" "$cfg ~/field/ktrace.sh $pass-kinit kinit alice && klist -f" < <(once "$ALICE")
+    check "client2.$pass.kinit" "^answers: $tr $LNe\.10:88\$" runin client2 "alice's password ($ALICE)" "$cfg ~/field/ktrace.sh $pass-kinit kinit alice && klist -f" < <(once "$ALICE")
     if [ "$pass" = udp ]; then
         observelast obs.as.preauth 'Processing preauth types: .*'
         observelast obs.as.rep.bytes 'Received answer \([0-9]+ bytes\)' 2
     fi
-    check "client2.$pass.kvno" "^answers: $tr 192\.168\.177\.10:88\$" run client2 "$cfg ~/field/ktrace.sh $pass-kvno kvno host/client2.kerber.test"
+    check "client2.$pass.kvno" "^answers: $tr $LNe\.10:88\$" run client2 "$cfg ~/field/ktrace.sh $pass-kvno kvno host/client2.kerber.test"
     if [ "$pass" = udp ]; then
         observelast obs.tgs.req.bytes 'Sending request \([0-9]+ bytes\)'
         observelast obs.tgs.rep.bytes 'Received answer \([0-9]+ bytes\)'
     fi
-    check "client2.$pass.kadmin" "^answers: $tr 192\.168\.177\.10:88\$" runin client2 "admin/admin's password ($ADMIN)" "$cfg ~/field/ktrace.sh $pass-kadmin kadmin -p admin/admin -q listprincs" < <(once "$ADMIN")
+    check "client2.$pass.kadmin" "^answers: $tr $LNe\.10:88\$" runin client2 "admin/admin's password ($ADMIN)" "$cfg ~/field/ktrace.sh $pass-kadmin kadmin -p admin/admin -q listprincs" < <(once "$ADMIN")
     checklast "client2.$pass.kadmin.list" "^alice@$R\$"
     if [ "$pass" = udp ]; then
         observelast obs.kadmin.aprep 'Read AP-REP, time [0-9.]+, subkey [^,]+, seqnum [0-9]+'
@@ -217,23 +219,23 @@ for p in udp:dgram tcp:stream; do
 done
 
 section "7. bob's kpasswd there over UDP 464 (kdc refuses client2's TCP 464 for that exchange) and back over TCP"
-check kpasswd.refuse.tcp rc run kdc "sudo nft add table inet field_tmp && sudo nft add chain inet field_tmp input '{ type filter hook input priority filter - 1; policy accept; }' && sudo nft add rule inet field_tmp input ip saddr 192.168.177.22 tcp dport 464 counter reject with tcp reset && sudo nft list table inet field_tmp"
-check client2.kpasswd.udp '^answers: dgram 192\.168\.177\.10:464 dgram 192\.168\.177\.10:88$' runin client2 "bob's password, then $BOBT twice" "$U ~/field/ktrace.sh udp-kpasswd kpasswd bob" < <(chpw "$BOB" "$BOBT")
+check kpasswd.refuse.tcp rc run kdc "sudo nft add table inet field_tmp && sudo nft add chain inet field_tmp input '{ type filter hook input priority filter - 1; policy accept; }' && sudo nft add rule inet field_tmp input ip saddr $LN.22 tcp dport 464 counter reject with tcp reset && sudo nft list table inet field_tmp"
+check client2.kpasswd.udp "^answers: dgram $LNe\.10:464 dgram $LNe\.10:88\$" runin client2 "bob's password, then $BOBT twice" "$U ~/field/ktrace.sh udp-kpasswd kpasswd bob" < <(chpw "$BOB" "$BOBT")
 checklast client2.kpasswd.udp.changed '^Password changed\.$'
 observelast obs.kpasswd.aprep 'Read AP-REP, time [0-9.]+, subkey [^,]+, seqnum [0-9]+'
 check kpasswd.refuse.removed rc run kdc "sudo nft list table inet field_tmp; sudo nft delete table inet field_tmp && sudo nft list tables"
-check client2.kpasswd.tcp '^answers: stream 192\.168\.177\.10:464 stream 192\.168\.177\.10:88$' runin client2 "$BOBT, then bob's password twice" "$T ~/field/ktrace.sh tcp-kpasswd kpasswd bob" < <(chpw "$BOBT" "$BOB")
+check client2.kpasswd.tcp "^answers: stream $LNe\.10:464 stream $LNe\.10:88\$" runin client2 "$BOBT, then bob's password twice" "$T ~/field/ktrace.sh tcp-kpasswd kpasswd bob" < <(chpw "$BOBT" "$BOB")
 checklast client2.kpasswd.tcp.changed '^Password changed\.$'
 check client2.kinit.bob rc runin client2 "bob's password ($BOB)" "export KRB5CCNAME=FILE:\$HOME/field/bob.cc; kinit bob && klist && kdestroy" < <(once "$BOB")
-kdcsince clients '192\.168\.177\.22|chpw'
-n=$(grep -c "chpw request from 192\.168\.177\.22 for bob@$R: success\$" "$LAST_OUT" || true)
+kdcsince clients "$LNe\\.22|chpw"
+n=$(grep -c "chpw request from $LNe\.22 for bob@$R: success\$" "$LAST_OUT" || true)
 res=FAIL
 if [ "$LAST_RC" = 0 ] && [ "$n" = 2 ]; then res=PASS; fi
-_checkrow log.kadmind.chpw "$res" "2 chpw success lines" "$LAST_RC" "chpw request from 192.168.177.22 for bob@$R: success, $n lines"
-checklast log.kdc.as.preauth "AS_REQ \\(2 etypes \\{$ET\\}\\) 192\\.168\\.177\\.22: NEEDED_PREAUTH: alice@$R for krbtgt/$R@$R, Additional pre-authentication required\$"
-checklast log.kdc.as.issue "AS_REQ \\(2 etypes \\{$ET\\}\\) 192\\.168\\.177\\.22: ISSUE: authtime [0-9]+, etypes \\{$E3\\}, alice@$R for krbtgt/$R@$R\$"
-checklast log.kdc.tgs.issue "TGS_REQ \\(2 etypes \\{$ET\\}\\) 192\\.168\\.177\\.22: ISSUE: authtime [0-9]+, etypes \\{$E3\\}, alice@$R for host/client2\\.kerber\\.test@$R\$"
-checklast log.kadmind.kadm5_init "Request: kadm5_init, admin/admin@$R, success, client=admin/admin@$R, service=kadmin/admin@$R, addr=192\\.168\\.177\\.22, vers=4, flavor=6\$"
+_checkrow log.kadmind.chpw "$res" "2 chpw success lines" "$LAST_RC" "chpw request from $LN.22 for bob@$R: success, $n lines"
+checklast log.kdc.as.preauth "AS_REQ \\(2 etypes \\{$ET\\}\\) $LNe\\.22: NEEDED_PREAUTH: alice@$R for krbtgt/$R@$R, Additional pre-authentication required\$"
+checklast log.kdc.as.issue "AS_REQ \\(2 etypes \\{$ET\\}\\) $LNe\\.22: ISSUE: authtime [0-9]+, etypes \\{$E3\\}, alice@$R for krbtgt/$R@$R\$"
+checklast log.kdc.tgs.issue "TGS_REQ \\(2 etypes \\{$ET\\}\\) $LNe\\.22: ISSUE: authtime [0-9]+, etypes \\{$E3\\}, alice@$R for host/client2\\.kerber\\.test@$R\$"
+checklast log.kadmind.kadm5_init "Request: kadm5_init, admin/admin@$R, success, client=admin/admin@$R, service=kadmin/admin@$R, addr=$LNe\\.22, vers=4, flavor=6\$"
 
 section "8. kdc itself: MIT kinit on ::1 over UDP and TCP, and on 127.0.0.2 (a UDP reply leaves from the request's address)"
 KC="[libdefaults]\n default_realm = $R\n"

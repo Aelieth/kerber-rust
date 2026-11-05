@@ -26,12 +26,14 @@ esac
 . "$HERE/../baseline.env"
 # shellcheck source=../lib/leg.sh
 . "$FIELD_LIB/leg.sh"
+LN=${FIELD_LAB_NET:?FIELD_LAB_NET is not set in field.env}
+LNe=${LN//./\\.}
 legset ALICE
 T0=$(date +%s)
 TAG=f4$LEG
 R=${REALM//./\\.}
 I3='etypes \{rep=aes256-cts-hmac-sha1-96\(18\), tkt=aes256-cts-hmac-sha1-96\(18\), ses=aes256-cts-hmac-sha1-96\(18\)\}'
-E2='\(2 etypes \{aes256-cts-hmac-sha1-96\(18\), aes128-cts-hmac-sha1-96\(17\)\}\) 192\.168\.177\.22: ISSUE: authtime [0-9]+, '
+E2='\(2 etypes \{aes256-cts-hmac-sha1-96\(18\), aes128-cts-hmac-sha1-96\(17\)\}\) '"$LNe"'\.22: ISSUE: authtime [0-9]+, '
 URL='https://services.kerber.test/realms/kerber.test/protocol/openid-connect/auth?client_id=nextcloud&response_type=code&scope=openid&redirect_uri=https%3A%2F%2Fnextcloud.kerber.test%2Fapps%2Fuser_oidc%2Fcode'
 CURL="curl -sS --connect-timeout 5 --max-time 15"
 AL="sudo -u alice -H" BO="sudo -u bob -H"
@@ -63,7 +65,7 @@ checklast boot.revive 'klldap-nfs-revive: 3 nfs automount\(s\), none failed$'
 section "2. R4 PROOF 1: root touches the automount points; the machine credential mounts them; root is squashed"
 kdcmark r4
 W0=$(date +%s)
-capstart client2 r4 'host 192.168.177.10 or host 192.168.177.11'
+capstart client2 r4 "host $LN.10 or host $LN.11"
 check root.media '^ls /mnt/media rc=0$' run client2 "sudo ls -la /mnt/media > /dev/null; echo \"ls /mnt/media rc=\$?\"; sudo ls -la /mnt/data; echo \"ls /mnt/data rc=\$?\"; findmnt -t nfs4 -o TARGET,SOURCE,FSTYPE,OPTIONS; grep -E '^device services|sec:' /proc/self/mountstats"
 checklast root.data '^ls /mnt/data rc=0$'
 checklast root.krb5i '^/mnt/media +services\.kerber\.test:/media +nfs4 +.*vers=4\.2,.*sec=krb5i'
@@ -124,12 +126,12 @@ checklast r5.302 '^HTTP/1\.1 302 Found$'
 checklast r5.code '^[Ll]ocation: https://nextcloud\.kerber\.test/apps/user_oidc/code\?.*code=<REDACTED:oidc-code>$'
 checklast r5.mutual '^[Ww][Ww][Ww]-[Aa]uthenticate: Negotiate <REDACTED:[a-z-]+>$'
 tktcheck r5.http.ticket '^HTTP/services\.kerber\.test@' 'flags FRAT$'
-check r5.events '^count: LOGIN alice nextcloud 192\.168\.177\.22 = [1-9][0-9]*$' hostin "Keycloak's keyadmin password ($LAB_SECRET_KEYCLOAK_ADMIN)" \
+check r5.events "^count: LOGIN alice nextcloud $LNe\\.22 = [1-9][0-9]*\$" hostin "Keycloak's keyadmin password ($LAB_SECRET_KEYCLOAK_ADMIN)" \
     "bash $(printf '%q' "$FIELD_LIB/kc-events.sh") $W0" < "$SECRETS/$LAB_SECRET_KEYCLOAK_ADMIN"
 capstop client2 r4
 
 section "6. the KDC's lines for client2; SELinux on client2 over the window"
-kdcsince r4 '192\.168\.177\.22'
+kdcsince r4 "$LNe\\.22"
 checklast log.as.machine "AS_REQ $E2$I3, host/client2\\.kerber\\.test@$R for krbtgt/$R@$R\$"
 checklast log.as.alice "AS_REQ $E2$I3, alice@$R for krbtgt/$R@$R\$"
 checklast log.tgs.nfs.alice "TGS_REQ $E2$I3, alice@$R for nfs/services\\.kerber\\.test@$R\$"
