@@ -1,5 +1,7 @@
 //! Password checks and a password change.
 
+use std::sync::PoisonError;
+
 use krb5_crypto::{EncryptionType, KeySalt, ProtocolKey, parse_keysalts, string_to_key};
 use krb5_log::klog::{self, Severity};
 use krb5_types::PrincipalName;
@@ -15,6 +17,7 @@ use super::{PrincipalStore, unix_now_u32};
 use crate::acl::{Acl, AdminOp};
 use crate::error::Error;
 use crate::kdb_dump::TL_LAST_PWD_CHANGE;
+use crate::listen::{SharedDump, read_fresh};
 
 pub const S2K_ITERS: u32 = 4096;
 
@@ -213,6 +216,42 @@ impl PasswordPlan {
         )?;
         Ok(PreparedPassword { plan: self, keys })
     }
+}
+
+/// Derives keys unlocked so KDC reads don't wait.
+// MIT: `kadm5_chpass_principal_3` (lib/kadm5/srv/svr_principal.c:1290-1355)
+#[expect(clippy::too_many_arguments, reason = "the chpass inputs")]
+pub fn change_password_shared(
+    store: &SharedDump,
+    name: &PrincipalName,
+    princ_realm: &str,
+    password: &[u8],
+    keepold: u32,
+    actor: &str,
+    etypes: &[KeySalt],
+    checks: impl Fn(&PrincipalStore) -> Result<(), Error>,
+) -> Result<(), Error> {
+    let planned = {
+        let (g, read) = read_fresh(store);
+        match read {
+            Err(_) => Ok(None),
+            Ok(()) => {
+                checks(&g).and_then(|()| g.plan_password(name, princ_realm, password, etypes))
+            }
+        }
+    };
+    let prepared = planned.and_then(|plan| plan.map(PasswordPlan::derive).transpose());
+    let mut g = store.write().unwrap_or_else(PoisonError::into_inner);
+    g.reload_if_stale()?;
+    if let Some(p) = prepared?
+        && g.change(|s| s.apply_password(p, keepold, actor))??
+    {
+        return Ok(());
+    }
+    checks(&g)?;
+    g.change(|s| {
+        s.set_password_etypes_keepold_n_in(name, princ_realm, password, keepold, actor, etypes)
+    })?
 }
 
 /// A new field fails to build here until it is compared.

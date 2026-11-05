@@ -1,4 +1,6 @@
-//! Realm principal records and the kadm5 create, modify, rename, and delete path.
+//! Principal records and kadm5's create, modify, rename and delete.
+
+use std::sync::PoisonError;
 
 use krb5_crypto::{EncryptionType, KeySalt};
 use krb5_types::PrincipalName;
@@ -14,6 +16,7 @@ use crate::kdb_dump::{
     TL_ALIAS_TARGET, TL_DB_ARGS, TL_KADM_DATA, TL_KERBER_HIST, TL_KERBER_POLICY,
     TL_LAST_ADMIN_UNLOCK, TL_LAST_PWD_CHANGE, TL_MOD_PRINC, TL_STRING_ATTRS,
 };
+use crate::listen::{SharedDump, read_fresh};
 use crate::lockout::{Lockout, LockoutUpdate};
 use crate::osa::{INITIAL_HIST_KVNO, KADM5_POLICY, OsaKeyData, OsaPrincEnt};
 
@@ -366,6 +369,36 @@ impl CreatePlan {
     }
 }
 
+/// As `change_password_shared`, for a create.
+// MIT: `kadm5_create_principal_3` (lib/kadm5/srv/svr_principal.c:460-504)
+pub fn create_password_shared(
+    store: &SharedDump,
+    name: &PrincipalName,
+    princ_realm: &str,
+    password: &[u8],
+    etypes: &[KeySalt],
+    ent: &AdminEnt,
+    actor: &str,
+) -> Result<(), Error> {
+    let planned = {
+        let (g, read) = read_fresh(store);
+        match read {
+            Err(_) => None,
+            Ok(()) => Some(g.plan_create_password(name, princ_realm, password, etypes, ent)?),
+        }
+    };
+    let prepared = planned.map(CreatePlan::derive).transpose()?;
+    let mut g = store.write().unwrap_or_else(PoisonError::into_inner);
+    g.reload_if_stale()?;
+    if let Some(p) = prepared
+        && g.change(|s| s.create_prepared(p, actor))??
+    {
+        return Ok(());
+    }
+    let keys = CreateKeys::Password(password);
+    g.change(|s| s.create_principal_3_in(name, princ_realm, keys, etypes, ent, actor))?
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AdminEnt {
     pub mask: u32,
@@ -564,7 +597,6 @@ impl PrincipalStore {
     }
 
     #[doc(hidden)]
-    /// Memory only; use `record_s4u_to` for a store.
     pub fn allow_s4u_from(&mut self, name: &PrincipalName, from: &str) {
         let id = crate::kdb::lookup_principal_id(name, &self.realm);
         let qualified = qualify_s4u_from(from, &self.realm);

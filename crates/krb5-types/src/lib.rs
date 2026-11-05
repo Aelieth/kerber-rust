@@ -7,6 +7,8 @@ use rasn::prelude::*;
 
 pub use rasn::types::{BitString, GeneralizedTime, OctetString};
 
+const _: () = rasn::KERBER_RUST_NEEDS_THIS_PATCH;
+
 pub mod cammac;
 mod constants;
 pub mod consts;

@@ -27,6 +27,7 @@ use krb5_config::{KadmindListen, KdcPaths, LogSpecs, ProfileSet};
 use krb5_log::klog::{self, Severity, os_error_text};
 
 mod auth_modules;
+mod write_load;
 
 /// The name used when `argv[0]` has none.
 const DEFAULT_PROGNAME: &str = "krb5-embed-realm";
@@ -61,7 +62,10 @@ struct Allow {
 }
 
 enum Job {
-    Serve { bootstrap_only: bool },
+    Serve {
+        bootstrap_only: bool,
+        write_load: Option<write_load::WriteLoad>,
+    },
     Trust(Trust),
     Allow(Allow),
 }
@@ -97,7 +101,7 @@ fn main() {
         );
     });
     let mut store = open_or_create(&progname, &paths, &profile);
-    match job {
+    let load = match job {
         Job::Trust(trust) => {
             store
                 .apply_profile(&profile)
@@ -116,14 +120,16 @@ fn main() {
         }
         Job::Serve {
             bootstrap_only: true,
+            ..
         } => {
             klog::close();
             return;
         }
         Job::Serve {
             bootstrap_only: false,
-        } => {}
-    }
+            write_load,
+        } => write_load,
+    };
     let shared = krb5_kdc::shared_dump(store);
     let kdc_store: krb5_kdc::SharedStore = shared.clone();
     let (kdc_udp, kdc_tcp, kdc_limits) = bind_kdc(&progname, &profile);
@@ -150,6 +156,7 @@ fn main() {
         hooks: Vec::new(),
         iprop: None,
     };
+    let load_store = shared.clone();
     let mut kadmind = Kadmind::new(shared, cfg)
         .unwrap_or_else(|e| cannot_start(&progname, &format!("{e} while initializing")));
 
@@ -185,6 +192,10 @@ fn main() {
         served
     });
 
+    let writes = load.map(|load| {
+        write_load::start(&load_store, &realm, &load, &flagged)
+            .unwrap_or_else(|e| cannot_start(&progname, &e))
+    });
     // "starting" is MIT kadmind's line just before it serves, and our daemon's too.
     klog::syslog(Severity::Info, "starting");
     eprintln!(
@@ -195,6 +206,9 @@ fn main() {
     let Ok(kdc_served) = kdc.join() else {
         cannot_start(&progname, "kdc loop stopped while serving");
     };
+    if let Some(writes) = writes {
+        writes.finish(&progname);
+    }
     match (served, kdc_served) {
         (Ok(_summary), Ok(())) => {
             klog::syslog(Severity::Info, "shutting down");
@@ -210,6 +224,7 @@ fn main() {
 
 fn parse_args(progname: &str, argv: &[String]) -> Job {
     let mut bootstrap_only = false;
+    let mut write_load = None;
     let mut realm = None;
     let mut key_file = None;
     let mut kvno = None;
@@ -219,6 +234,16 @@ fn parse_args(progname: &str, argv: &[String]) -> Job {
     while i < argv.len() {
         match argv[i].as_str() {
             "--bootstrap-only" => bootstrap_only = true,
+            "--write-load" => {
+                i += 1;
+                let text = need_arg(progname, argv, i, "--write-load");
+                write_load = Some(write_load::parse(&text).unwrap_or_else(|| {
+                    cannot_start(
+                        progname,
+                        "--write-load wants N,MS: 1 to 64 writers, a period in ms",
+                    );
+                }));
+            }
             "--create-trust" => {
                 i += 1;
                 realm = Some(need_arg(progname, argv, i, "--create-trust"));
@@ -261,10 +286,17 @@ fn parse_args(progname: &str, argv: &[String]) -> Job {
         (None, None) => None,
         _ => usage(progname),
     };
-    match (bootstrap_only, trust, allow) {
-        (false, Some(trust), None) => Job::Trust(trust),
-        (false, None, Some(allow)) => Job::Allow(allow),
-        (_, None, None) => Job::Serve { bootstrap_only },
+    match (bootstrap_only, trust, allow, write_load) {
+        (false, Some(trust), None, None) => Job::Trust(trust),
+        (false, None, Some(allow), None) => Job::Allow(allow),
+        (true, None, None, None) => Job::Serve {
+            bootstrap_only,
+            write_load: None,
+        },
+        (false, None, None, write_load) => Job::Serve {
+            bootstrap_only,
+            write_load,
+        },
         _ => usage(progname),
     }
 }
@@ -277,7 +309,7 @@ fn need_arg(progname: &str, argv: &[String], i: usize, flag: &str) -> String {
 
 fn usage(progname: &str) -> ! {
     eprintln!(
-        "usage: {progname} [--bootstrap-only]\n       \
+        "usage: {progname} [--bootstrap-only | --write-load N,MS]\n       \
          {progname} --create-trust REALM --key-file FILE [--kvno N]\n       \
          {progname} --allow-to-delegate SERVICE TARGET"
     );

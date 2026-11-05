@@ -16,13 +16,21 @@ any other `###` heading.
 
 ## [Unreleased]
 
+### Added
+
+- **kdc.** `change_password_shared`, `create_password_shared` derive keys unlocked; kpasswd uses one.
+- **examples.** `embed-realm --write-load N,MS`: N writers through the helper, to time `kinit`.
+
 ### Changed
 
 - **brainpool.** Denies `unwrap`, `expect`, `panic` outside tests, as the other library crates do.
+- **kdc.** `Bootstrapped`, `MasterKey` are `#[non_exhaustive]`; a later field or variant won't break.
+- **types.** A build on crates.io's rasn fails on `KERBER_RUST_NEEDS_THIS_PATCH`, not decoding unlike MIT.
 
 ### Fixed
 
 - **crypto.** `prf_plus` fails past 255 blocks, as MIT's `krb5_c_prfplus`; it repeated block 255.
+- **fuzz.** Targets decode with the vendored rasn the product ships, not crates.io's.
 
 ### Removed
 

@@ -4,8 +4,8 @@ This is rasn 0.28.14 as crates.io publishes it. The crate is `rasn-0.28.14.crate
 `0d1b71dd951343df0fe30b11bca09518f3aba8e5bd0ece4564adbc2dabd875fa`, the checksum `Cargo.lock` held;
 it was cut from upstream commit `398c530c`.
 
-Only `src/ber/de.rs`, `src/ber/enc.rs` and `src/types/strings/general.rs` differ, and this file is
-new. The workspace takes the crate through `[patch.crates-io]` in the root `Cargo.toml`.
+Only `src/ber/de.rs`, `src/ber/enc.rs`, `src/types/strings/general.rs` and `src/lib.rs` differ, and
+this file is new. The workspace takes the crate through `[patch.crates-io]` in the root `Cargo.toml`.
 cargo-vet audits it as crates.io's 0.28.14 (`[policy.rasn] audit-as-crates-io = true` in
 `supply-chain/config.toml`), so this file and its diff are the review of the delta:
 
@@ -54,3 +54,9 @@ Each change is marked `kerber-rust:` in the source.
   bits encode as an int32 (`src/ber/enc.rs`). In kerber-rust a `u32` is always such a field: a kvno,
   a nonce or a cusec. Sequence numbers, which MIT reads differently (`decode_seqno`), go through
   `krb5-types`'s own `WireSeqNumber`.
+
+## kerber-rust: the marker
+
+`src/lib.rs` adds `KERBER_RUST_NEEDS_THIS_PATCH`, a hidden unit constant that `krb5-types` names. A
+build that takes crates.io's rasn instead of this copy fails to compile on that name, where it would
+otherwise build and decode unlike MIT.

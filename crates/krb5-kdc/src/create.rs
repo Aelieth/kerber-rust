@@ -205,6 +205,7 @@ fn stamp_kadm5_create_tl(store: &mut PrincipalStore, name: &PrincipalName, mkvno
     store.debug_insert(p);
 }
 
+#[non_exhaustive]
 pub enum MasterKey {
     Random { etype: Option<EncryptionType> },
     Password(Zeroizing<Vec<u8>>),
@@ -237,6 +238,7 @@ pub struct RealmSpec<'a> {
     pub admin: Option<AdminSpec>,
 }
 
+#[non_exhaustive]
 pub struct Bootstrapped {
     pub master: ProtocolKey,
     pub kvno: u16,

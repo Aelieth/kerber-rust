@@ -19,6 +19,9 @@ krb5-types = { path = "../crates/krb5-types" }
 [workspace]
 members = ["."]
 
+[patch.crates-io]
+rasn = { path = "../vendor/rasn" }
+
 [[bin]]
 name = "der_decode"
 path = "fuzz_targets/der_decode.rs"

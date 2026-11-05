@@ -49,6 +49,10 @@ pub use self::{
 /// Compiler for ASN.1 Notation to Rust code.
 pub use rasn_compiler as compiler;
 
+// kerber-rust: krb5-types names this, so a build on crates.io's rasn fails on it (PATCHES.md).
+#[doc(hidden)]
+pub const KERBER_RUST_NEEDS_THIS_PATCH: () = ();
+
 /// A prelude containing the codec traits and all types defined in the [`types`]
 /// module.
 pub mod prelude {
