@@ -556,7 +556,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-admin"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "bytes",
  "chrono",
@@ -582,7 +582,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-asn1"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "krb5-log",
  "krb5-types",
@@ -592,7 +592,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-brainpool"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "ecdsa",
  "elliptic-curve",
@@ -603,7 +603,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-cli"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "nix",
  "thiserror",
@@ -612,7 +612,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-client"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "chrono",
  "krb5-asn1",
@@ -632,7 +632,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-config"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "getrandom 0.2.17",
  "krb5-testkit",
@@ -643,7 +643,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-consumer"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "krb5-asn1",
  "krb5-crypto",
@@ -653,7 +653,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-crypto"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "aes",
  "camellia",
@@ -678,7 +678,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-embed-realm-example"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "hmac",
  "krb5-admin",
@@ -697,7 +697,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-gss"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "getrandom 0.2.17",
  "krb5-asn1",
@@ -714,7 +714,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-kdc"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "getrandom 0.2.17",
  "krb5-asn1",
@@ -737,7 +737,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-kdc-consumer"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "krb5-asn1",
  "krb5-client",
@@ -750,7 +750,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-log"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "chrono",
  "getrandom 0.2.17",
@@ -763,7 +763,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-protocol"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "bytes",
  "getrandom 0.2.17",
@@ -784,7 +784,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-testkit"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "krb5-asn1",
  "krb5-crypto",
@@ -795,7 +795,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-tools"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "krb5-admin",
  "krb5-asn1",
@@ -811,7 +811,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-types"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "bp256",
  "bp384",
