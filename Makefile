@@ -64,32 +64,46 @@ LEG ?=
 field:
 	$(ROOT)/harness/field/run.sh --profile $(PROFILE) $(if $(REF),--ref $(REF)) $(if $(ONLY),--only $(ONLY)) $(if $(LEG),--leg $(LEG))
 
-# The product as Fedora's krb5-server and krb5-workstation lay out MIT's (docs/install.md;
-# dist/install.sh does the copying and keeps the manifest uninstall reads). `make build` is the
-# release build with no features, so no test hooks: run it as yourself, then `sudo make install`,
-# which never compiles, nor does any install goal run as root. KDCDIR is the programs'
-# compiled-in KDC directory (KERBER_KDC_DIR at build time); it does not follow PREFIX.
+# The product as the family's MIT packages lay out MIT's (docs/install.md; dist/install.sh does
+# the copying and keeps the manifest uninstall reads). FAMILY is rpm (Fedora, Rocky) or deb
+# (Debian, Ubuntu), read from /etc/os-release unless given. `make build` is the release build
+# with no features, so no test hooks: run it as yourself, then `sudo make install`, which never
+# compiles, nor does any install goal run as root. KDCDIR, KDCDATADIR and DEFCKTNAME are compiled
+# in (KERBER_KDC_DIR, KERBER_KDC_DATA_DIR and KERBER_DEFCKTNAME at build time); they do not follow
+# PREFIX.
+FAMILY ?= $(shell . /etc/os-release 2>/dev/null; case " $$ID $$ID_LIKE " in \
+	(*" debian "*) echo deb ;; (*" fedora "* | *" rhel "*) echo rpm ;; esac)
+deb = $(filter deb,$(FAMILY))
 PREFIX ?= /usr/local
 DESTDIR ?=
 BINDIR ?= $(PREFIX)/bin
 SBINDIR ?= $(PREFIX)/sbin
 DATADIR ?= $(PREFIX)/share
 SYSCONFDIR ?= /etc
-SYSCONFIGDIR ?= $(SYSCONFDIR)/sysconfig
+SYSCONFIGDIR ?= $(SYSCONFDIR)/$(if $(deb),default,sysconfig)
 LOGROTATEDIR ?= $(SYSCONFDIR)/logrotate.d
 UNITDIR ?= $(PREFIX)/lib/systemd/system
 TMPFILESDIR ?= $(PREFIX)/lib/tmpfiles.d
-KDCDIR ?= $(or $(KERBER_KDC_DIR),/var/kerberos/krb5kdc)
+KDCDIR ?= $(or $(KERBER_KDC_DIR),$(if $(deb),/etc/krb5kdc,/var/kerberos/krb5kdc))
+KDCDATADIR ?= $(or $(KERBER_KDC_DATA_DIR),$(if $(deb),/var/lib/krb5kdc,$(KDCDIR)))
+RPM_DEFCKTNAME := FILE:/var/kerberos/krb5/user/%{euid}/client.keytab
+DEFCKTNAME ?= $(or $(KERBER_DEFCKTNAME),$(if $(deb),FILE:/etc/krb5/user/%{euid}/client.keytab,$(RPM_DEFCKTNAME)))
 CARGO ?= cargo
 CARGO_TARGET_DIR ?= $(ROOT)/target
-# One stamp per KDC directory, so a build for another directory is a new build.
-BUILD_STAMP := $(CARGO_TARGET_DIR)/release/.make-build$(subst /,-,$(KDCDIR))
+# The compiled-in paths that differ from Fedora's, as the build's environment.
+BUILD_ENV = $(if $(filter-out /var/kerberos/krb5kdc,$(KDCDIR)),KERBER_KDC_DIR='$(KDCDIR)' )$\
+	$(if $(filter-out $(KDCDIR),$(KDCDATADIR)),KERBER_KDC_DATA_DIR='$(KDCDATADIR)' )$\
+	$(if $(filter-out $(RPM_DEFCKTNAME),$(DEFCKTNAME)),KERBER_DEFCKTNAME='$(DEFCKTNAME)' )
+# One stamp per set of compiled-in paths, so a build for other paths is a new build.
+BUILD_STAMP := $(CARGO_TARGET_DIR)/release/.make-build-$(shell printf '%s\n' \
+	'$(KDCDIR) $(KDCDATADIR) $(DEFCKTNAME)' | cksum | cut -d' ' -f1)
 BUILD_INPUTS := $(ROOT)/Cargo.toml $(ROOT)/Cargo.lock $(ROOT)/rust-toolchain.toml \
 	$(ROOT)/.cargo/config.toml $(shell find '$(ROOT)/crates' -name '*.rs' -o -name Cargo.toml)
 INSTALLER = RELEASE='$(CARGO_TARGET_DIR)/release' DIST='$(ROOT)/dist' DESTDIR='$(DESTDIR)' \
 	BINDIR='$(BINDIR)' SBINDIR='$(SBINDIR)' SYSCONFIGDIR='$(SYSCONFIGDIR)' \
 	LOGROTATEDIR='$(LOGROTATEDIR)' UNITDIR='$(UNITDIR)' TMPFILESDIR='$(TMPFILESDIR)' \
-	KDCDIR='$(KDCDIR)' MANIFEST='$(DATADIR)/kerber-rust/install-manifest' sh '$(ROOT)/dist/install.sh'
+	KDCDIR='$(KDCDIR)' KDCDATADIR='$(KDCDATADIR)' FAMILY='$(FAMILY)' \
+	MANIFEST='$(DATADIR)/kerber-rust/install-manifest' sh '$(ROOT)/dist/install.sh'
 
 .PHONY: build install install-clients uninstall
 
@@ -104,7 +118,7 @@ $(BUILD_STAMP): $(BUILD_INPUTS)
 	  echo "make: the release build is missing or older than the sources: run 'make build' first (an install goal does not compile as root)" >&2; \
 	  exit 1; \
 	fi
-	$(if $(filter-out /var/kerberos/krb5kdc,$(KDCDIR)),KERBER_KDC_DIR='$(KDCDIR)') $(CARGO) build --release --locked \
+	$(BUILD_ENV)$(CARGO) build --release --locked \
 	  --target-dir '$(CARGO_TARGET_DIR)' -p krb5-kdc -p krb5-admin -p krb5-client
 	@rm -f '$(CARGO_TARGET_DIR)'/release/.make-build-*
 	@touch '$@'

@@ -555,7 +555,7 @@ pub fn default_kdc_profile() -> PathBuf {
 // `database_name` when kdc.conf has none.
 #[must_use]
 pub fn default_kdb_file() -> PathBuf {
-    Path::new(KDC_DIR).join("principal")
+    Path::new(KDC_DATA_DIR).join("principal")
 }
 
 // MIT: `DEFAULT_KADM5_ACL_FILE` (osconf.hin:106-106)
@@ -576,13 +576,13 @@ pub fn default_kpropd_acl() -> PathBuf {
 // kprop: when `-f` names none.
 #[must_use]
 pub fn default_kprop_file() -> PathBuf {
-    Path::new(KDC_DIR).join("replica_datatrans")
+    Path::new(KDC_DATA_DIR).join("replica_datatrans")
 }
 
 // MIT: `KPROPD_DEFAULT_FILE` (osconf.hin:128-128)
 #[must_use]
 pub fn default_kpropd_file() -> PathBuf {
-    Path::new(KDC_DIR).join("from_master")
+    Path::new(KDC_DATA_DIR).join("from_master")
 }
 
 // MIT: `krb5_def_store_mkey_list` (lib/kdb/kdb_default.c)
@@ -793,3 +793,8 @@ impl KdcPaths {
         })
     }
 }
+
+pub const KDC_DATA_DIR: &str = match option_env!("KERBER_KDC_DATA_DIR") {
+    Some(dir) => dir,
+    None => KDC_DIR,
+};

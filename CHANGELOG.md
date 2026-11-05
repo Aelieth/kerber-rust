@@ -20,6 +20,8 @@ any other `###` heading.
 
 - **kdc.** `change_password_shared`, `create_password_shared` derive keys unlocked; kpasswd uses one.
 - **examples.** `embed-realm --write-load N,MS`: N writers through the helper, to time `kinit`.
+- **install.** `make install` lays out Debian, Ubuntu as MIT's `krb5-kdc`, `krb5-admin-server`, `krb5-kpropd`.
+- **config.** `KERBER_KDC_DATA_DIR`, `KERBER_DEFCKTNAME` build Debian's database, client keytab defaults.
 
 ### Changed
 

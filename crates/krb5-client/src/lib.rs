@@ -111,7 +111,7 @@ pub fn init_context() -> Result<ClientContext, Krb5Error> {
 }
 
 pub const DEFKTNAME: &str = "FILE:/etc/krb5.keytab";
-pub const DEFCKTNAME: &str = "FILE:/var/kerberos/krb5/user/%{euid}/client.keytab";
+pub const DEFCKTNAME: &str = defcktname();
 
 // MIT: `kt_default_name` (ktdefname.c:35-57)
 #[must_use]
@@ -1705,3 +1705,10 @@ fn resolve_kdc(profile: &Krb5Conf, realm: &str, argv: &KdcAddr) -> Result<KdcAdd
 
 #[cfg(all(test, feature = "test-hooks"))]
 mod armor_flow;
+
+const fn defcktname() -> &'static str {
+    match option_env!("KERBER_DEFCKTNAME") {
+        Some(name) => name,
+        None => "FILE:/var/kerberos/krb5/user/%{euid}/client.keytab",
+    }
+}
