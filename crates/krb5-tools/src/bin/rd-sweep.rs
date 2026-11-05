@@ -1120,7 +1120,7 @@ fn ka_cases(client: &str, services: &[KaService]) -> Result<Vec<(String, Vec<u8>
     let now = KerberosTime::now();
     let mut out = Vec::new();
     for svc in services {
-        let name = svc.name.unparse();
+        let name = svc.name.unparse_lossy();
         let authenticator = der!(&pristine_authenticator(&svc.realm, client, &now))?;
         let ticket = |sname: &PrincipalName, srealm: &str, kvno: Option<u32>, k: usize| {
             let (etype, _, ref key) = *svc.keys.get(k).ok_or("no such key")?;
@@ -1189,7 +1189,7 @@ fn ka_cases(client: &str, services: &[KaService]) -> Result<Vec<(String, Vec<u8>
                 .filter(|o| o.name.name_string != svc.name.name_string)
             {
                 out.push((
-                    format!("{name}/as={}", other.name.unparse()),
+                    format!("{name}/as={}", other.name.unparse_lossy()),
                     ticket(&other.name, &other.realm, first, 0)?,
                 ));
             }
@@ -1430,7 +1430,7 @@ fn service_spec(keytab: &str, service: &str, crealm: Option<&str>) -> Result<Tic
     let services = ka_services(&kt);
     let svc = services
         .iter()
-        .find(|s| s.name.unparse() == service)
+        .find(|s| s.name.unparse_lossy() == service)
         .ok_or_else(|| format!("no keytab entry for {service}"))?;
     let (etype, kvno, ref skey) = *svc.keys.first().ok_or("no key")?;
     Ok(TicketSpec {
@@ -1613,7 +1613,7 @@ fn kadmind_init(addr: &str, keytab: &str, client: &str, opts: &[String]) -> Resu
     let services = ka_services(&kt);
     let svc = services
         .iter()
-        .find(|s| s.name.unparse() == service)
+        .find(|s| s.name.unparse_lossy() == service)
         .ok_or_else(|| format!("no keytab entry for {service}"))?;
     let (etype, kvno, ref skey) = *svc
         .keys

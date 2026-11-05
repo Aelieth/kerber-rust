@@ -21,7 +21,7 @@ fn main() {
     let ent = kt
         .entries
         .iter()
-        .find(|e| e.name.components_joined() == host.components_joined())
+        .find(|e| e.name.components_joined_lossy() == host.components_joined_lossy())
         .unwrap_or_else(|| {
             eprintln!("kprop-expired-apreq: no {sname} in {kt_path}");
             std::process::exit(1);

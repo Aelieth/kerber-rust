@@ -392,7 +392,7 @@ fn kprop_asks_for_the_replicas_name_as_mits_in_tkt_service_parses_it() {
     let out = r.kprop(&["-s", s(&r.keytab), "-P", &port, "-f", s(&dump), "127.0.0.1"]);
     let sname = kpropd.join().expect("fake kpropd");
     assert_eq!(sname.name_type, PrincipalName::NT_PRINCIPAL);
-    assert_eq!(sname.components_joined(), "host/127.0.0.1");
+    assert_eq!(sname.components_joined_lossy(), "host/127.0.0.1");
     assert_eq!(out.status.code(), Some(1), "{}", text(&out.stderr));
     let _ = std::fs::remove_dir_all(&r.dir);
 }

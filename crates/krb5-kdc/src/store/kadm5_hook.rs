@@ -494,7 +494,7 @@ mod tests {
     }
 
     fn kvno(store: &PrincipalStore, name: &PrincipalName) -> u32 {
-        let id = crate::kdb::lookup_principal_id(name, store.realm());
+        let id = crate::kdb::lookup_principal_id(name, store.realm()).expect("utf-8 name");
         store
             .get(&id)
             .expect("principal")

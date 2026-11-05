@@ -158,7 +158,7 @@ fn sign_reply_pac_inner(
                 identity.rid,
             ),
         };
-        let owned = cname.components_joined();
+        let owned = cname.components_joined_lossy();
         let info_name = s4u_client_info.unwrap_or(owned.as_str());
         krb5_types::pac::Pac::built(
             0,
@@ -381,11 +381,11 @@ fn zeroed_signature(cksumtype: i32) -> Result<Vec<u8>, Error> {
 // MIT: `insert_client_info` (pac_sign.c:52-59)
 fn client_info_name(name: &PrincipalName, realm: Option<&str>) -> String {
     match realm {
-        None => name.unparse_no_realm(),
+        None => name.unparse_no_realm_lossy(),
         Some(r) if name.name_type == PrincipalName::NT_ENTERPRISE => {
-            format!("{}@{r}", name.components_joined())
+            format!("{}@{r}", name.components_joined_lossy())
         }
-        Some(r) => name.unparse_with_realm(r),
+        Some(r) => name.unparse_with_realm_lossy(r),
     }
 }
 
@@ -651,7 +651,7 @@ fn pac_client_matches(pac: &krb5_types::pac::Pac, enc_tkt: &EncTicketPart) -> bo
     pac_client_info_eq(
         pac,
         enc_tkt.authtime.unix_seconds(),
-        &enc_tkt.cname.components_joined(),
+        &enc_tkt.cname.components_joined_lossy(),
         None,
     )
 }
@@ -844,10 +844,17 @@ fn s4u_from_userid(
     id: &krb5_types::s4u::S4uUserId,
     x509: Option<krb5_types::s4u::PaS4uX509User>,
 ) -> Result<S4u2Self, Error> {
-    let realm = utf8(&id.realm).to_owned();
     let user = id.user.clone().unwrap_or_else(|| {
         PrincipalName::new(PrincipalName::NT_UNKNOWN, std::iter::empty::<&str>())
     });
+    let realm = std::str::from_utf8(id.realm.as_bytes()).ok();
+    let Some(realm) = realm.filter(|_| user.try_unparse().is_some()) else {
+        return Err(proto(
+            err::C_PRINCIPAL_UNKNOWN,
+            status::UNKNOWN_S4U2SELF_PRINCIPAL,
+        ));
+    };
+    let realm = realm.to_owned();
     let has_cert = id.subject_cert.as_ref().is_some_and(|c| !c.is_empty());
     let mut local = None;
     if realm == store.realm() {
@@ -984,15 +991,22 @@ pub(crate) fn verify_deleg_pac(
         return false;
     };
     if let Some(server) = target
-        && di.proxy_target != server.components_joined()
+        && server
+            .try_components_joined()
+            .is_none_or(|s| di.proxy_target != s)
     {
         return false;
     }
     let Some(last) = di.transited_services.last() else {
         return false;
     };
-    let crealm = std::str::from_utf8(enc_tkt.crealm.as_bytes()).unwrap_or("");
-    *last == enc_tkt.cname.unparse_with_realm(crealm)
+    let Ok(crealm) = std::str::from_utf8(enc_tkt.crealm.as_bytes()) else {
+        return false;
+    };
+    enc_tkt
+        .cname
+        .try_unparse_with_realm(crealm)
+        .is_some_and(|c| *last == c)
 }
 
 // MIT: `get_pac_princ_with_realm` (kdc_util.c:653-670)
@@ -1042,7 +1056,7 @@ pub(crate) fn check_tgs_s4u2proxy(
     if !pac_client_info_eq(
         &header_parsed,
         header.authtime.unix_seconds(),
-        &header.cname.components_joined(),
+        &header.cname.components_joined_lossy(),
         None,
     ) {
         return Err(proto(err::BADOPTION, status::S4U2PROXY_HEADER_PAC));
@@ -1081,7 +1095,7 @@ pub(crate) fn check_tgs_s4u2proxy(
         if !pac_client_info_eq(
             &st_parsed,
             st.part.authtime.unix_seconds(),
-            &st.part.cname.components_joined(),
+            &st.part.cname.components_joined_lossy(),
             None,
         ) {
             return Err(proto(err::BADOPTION, status::S4U2PROXY_LOCAL_STKT_PAC));
@@ -1207,7 +1221,7 @@ fn delegation_info_for(
             transited_services: Vec::new(),
         },
     };
-    di.proxy_target = proxy_target.components_joined();
+    di.proxy_target = proxy_target.components_joined_lossy();
     di.transited_services.push(transited.to_owned());
     Ok(krb5_types::pac::delegation_info_buffer(&di))
 }

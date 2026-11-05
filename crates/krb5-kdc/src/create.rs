@@ -55,7 +55,7 @@ pub fn create_realm_db(
         store.apply_kdc_conf(c)?;
     }
     for row in realm_rows(&store, master, mkvno)? {
-        store.debug_insert(row);
+        store.debug_insert(row)?;
     }
     Ok(store)
 }
@@ -140,7 +140,7 @@ pub fn add_admin_principals(store: &mut PrincipalStore, mkvno: u16) -> Result<()
             &ent,
             &caller,
         )?;
-        stamp_kadm5_create_tl(store, &name, mkvno);
+        stamp_kadm5_create_tl(store, &name, mkvno)?;
     }
     Ok(())
 }
@@ -185,9 +185,13 @@ fn tl(ty: i32, contents: Vec<u8>) -> TlData {
 
 // MIT: `kadm5_create_principal_3` (lib/kadm5/srv/svr_principal.c:475-478)
 // MIT: `kadm5_create_principal_3` (lib/kadm5/srv/svr_principal.c:490-501)
-fn stamp_kadm5_create_tl(store: &mut PrincipalStore, name: &PrincipalName, mkvno: u16) {
+fn stamp_kadm5_create_tl(
+    store: &mut PrincipalStore,
+    name: &PrincipalName,
+    mkvno: u16,
+) -> Result<(), Error> {
     let Some(mut p) = store.get_name(name).cloned() else {
-        return;
+        return Ok(());
     };
     let mod_princ = p.tl_data.iter().find(|t| t.ty == TL_MOD_PRINC).cloned();
     let last_pwd = p
@@ -202,7 +206,7 @@ fn stamp_kadm5_create_tl(store: &mut PrincipalStore, name: &PrincipalName, mkvno
     p.tl_data.push(tl(TL_MKVNO, mkvno.to_le_bytes().to_vec()));
     p.tl_data.extend(last_pwd);
     p.mkvno = mkvno;
-    store.debug_insert(p);
+    store.debug_insert(p)
 }
 
 #[non_exhaustive]
@@ -284,7 +288,7 @@ fn fill_realm(
             continue;
         }
         created.push(row.id());
-        store.debug_insert(row);
+        store.debug_insert(row)?;
         wrote_rows = true;
     }
     if wrote_rows && store.db_path().is_some() {
@@ -295,7 +299,7 @@ fn fill_realm(
         crate::principals::kadmin_changepw(),
     ] {
         if store.get_name(&name).is_none() {
-            created.push(crate::kdb::lookup_principal_id(&name, spec.realm));
+            created.push(crate::kdb::principal_id(&name, spec.realm)?);
         }
     }
     add_admin_principals(store, kvno)?;
@@ -304,7 +308,7 @@ fn fill_realm(
         Some(admin) => {
             if store.get_name(&admin.name).is_none() {
                 create_bootstrap_admin(store, spec.realm, admin)?;
-                created.push(crate::kdb::lookup_principal_id(&admin.name, spec.realm));
+                created.push(crate::kdb::principal_id(&admin.name, spec.realm)?);
             }
             Some(admin_keytab(store, admin)?)
         }

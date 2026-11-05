@@ -412,9 +412,11 @@ pub struct AdminEnt {
 }
 
 impl Principal {
+    // Inserts key by RecordKey; this fallback is for hand-built records.
     #[must_use]
     pub fn id(&self) -> String {
         crate::kdb::lookup_principal_id(&self.name, &self.realm)
+            .unwrap_or_else(|| self.name.unparse_with_realm_lossy(&self.realm))
     }
 
     #[must_use]
@@ -578,7 +580,7 @@ impl PrincipalStore {
             let principal = self.map.get(id).ok_or(Error::NotFound)?;
             (principal.name.clone(), principal.realm.clone())
         };
-        if realm == self.realm && name.components_joined() == "K/M" {
+        if realm == self.realm && name.components_joined_lossy() == "K/M" {
             return Err(Error::InvalidArgument(
                 "Cannot change protected principal".into(),
             ));
@@ -598,7 +600,9 @@ impl PrincipalStore {
 
     #[doc(hidden)]
     pub fn allow_s4u_from(&mut self, name: &PrincipalName, from: &str) {
-        let id = crate::kdb::lookup_principal_id(name, &self.realm);
+        let Some(id) = crate::kdb::lookup_principal_id(name, &self.realm) else {
+            return;
+        };
         let qualified = qualify_s4u_from(from, &self.realm);
         if let Some(p) = self.map.get_mut(&id) {
             p.s4u_allowed_from.push(qualified);
@@ -608,7 +612,9 @@ impl PrincipalStore {
     #[doc(hidden)]
     /// Memory only; use `record_s4u_to` for a store.
     pub fn allow_s4u_to(&mut self, name: &PrincipalName, to: &str) {
-        let id = crate::kdb::lookup_principal_id(name, &self.realm);
+        let Some(id) = crate::kdb::lookup_principal_id(name, &self.realm) else {
+            return;
+        };
         if let Some(p) = self.map.get_mut(&id) {
             p.s4u_allowed_to.push(to.to_owned());
         }
@@ -621,7 +627,7 @@ impl PrincipalStore {
         actor: &str,
     ) -> Result<(), Error> {
         self.inside_change()?;
-        let id = crate::kdb::lookup_principal_id(name, &self.realm);
+        let id = crate::kdb::principal_id(name, &self.realm)?;
         let snap = {
             let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
             if p.s4u_allowed_to.iter().any(|have| have == to) {
@@ -636,7 +642,9 @@ impl PrincipalStore {
     }
 
     pub fn clear_s4u_to(&mut self, name: &PrincipalName) {
-        let id = crate::kdb::lookup_principal_id(name, &self.realm);
+        let Some(id) = crate::kdb::lookup_principal_id(name, &self.realm) else {
+            return;
+        };
         if let Some(p) = self.map.get_mut(&id) {
             p.s4u_allowed_to.clear();
         }
@@ -673,8 +681,8 @@ impl PrincipalStore {
         password: &[u8],
         etypes: &[KeySalt],
     ) -> Result<(), Error> {
-        let id = crate::kdb::lookup_principal_id(name, princ_realm);
-        acl.check(actor, AdminOp::Create, Some(&id))?;
+        acl_check(acl, actor, AdminOp::Create, name, princ_realm)?;
+        let id = crate::kdb::new_principal_id(name, princ_realm)?;
         self.insert_new_password(name, princ_realm, password, etypes, actor)?;
         if let Some(rs) = acl.restrictions(actor, Some(&id)) {
             self.apply_acl_restrictions(&id, rs)?;
@@ -819,7 +827,7 @@ impl PrincipalStore {
         etypes: &[KeySalt],
         ent: &AdminEnt,
     ) -> Result<CreateInputs, Error> {
-        let id = crate::kdb::lookup_principal_id(name, princ_realm);
+        let id = crate::kdb::new_principal_id(name, princ_realm)?;
         if self.get(&id).is_some() {
             return Err(Error::AlreadyExists);
         }
@@ -974,8 +982,8 @@ impl PrincipalStore {
         etypes: &[KeySalt],
     ) -> Result<(), Error> {
         self.inside_change()?;
-        let id = crate::kdb::lookup_principal_id(name, &self.realm);
-        acl.check(actor, AdminOp::Create, Some(&id))?;
+        acl_check(acl, actor, AdminOp::Create, name, &self.realm)?;
+        let id = crate::kdb::new_principal_id(name, &self.realm)?;
         if self.get(&id).is_some() {
             return Err(Error::AlreadyExists);
         }
@@ -1005,8 +1013,8 @@ impl PrincipalStore {
         policy: Option<&str>,
     ) -> Result<(), Error> {
         let realm = self.realm.clone();
-        let id = crate::kdb::lookup_principal_id(name, &realm);
-        acl.check(actor, AdminOp::Create, Some(&id))?;
+        acl_check(acl, actor, AdminOp::Create, name, &realm)?;
+        let id = crate::kdb::new_principal_id(name, &realm)?;
         let mut ent = AdminEnt::default();
         if let Some(p) = policy {
             ent.mask |= kadm5_mask::POLICY;
@@ -1162,13 +1170,13 @@ impl PrincipalStore {
         name: &PrincipalName,
         princ_realm: &str,
     ) -> Result<(), Error> {
-        let id = crate::kdb::lookup_principal_id(name, princ_realm);
-        acl.check(actor, AdminOp::Delete, Some(&id))?;
+        acl_check(acl, actor, AdminOp::Delete, name, princ_realm)?;
+        let id = crate::kdb::principal_id(name, princ_realm)?;
         self.remove_id_inner(&id)
     }
 
     pub fn remove_in(&mut self, name: &PrincipalName, princ_realm: &str) -> Result<(), Error> {
-        self.remove_id_inner(&crate::kdb::lookup_principal_id(name, princ_realm))
+        self.remove_id_inner(&crate::kdb::principal_id(name, princ_realm)?)
     }
 
     /// A rename keeps the RID and does not reallocate it.
@@ -1192,9 +1200,17 @@ impl PrincipalStore {
         new: &PrincipalName,
         new_realm: &str,
     ) -> Result<(), Error> {
-        let old_id = crate::kdb::lookup_principal_id(old, old_realm);
-        let new_id = crate::kdb::lookup_principal_id(new, new_realm);
-        acl.check_rename(actor, &old_id, &new_id)?;
+        match (
+            crate::kdb::lookup_principal_id(old, old_realm),
+            crate::kdb::lookup_principal_id(new, new_realm),
+        ) {
+            (Some(o), Some(n)) => acl.check_rename(actor, &o, &n)?,
+            _ => acl.check_rename_name(
+                actor,
+                (old, old_realm.as_bytes()),
+                (new, new_realm.as_bytes()),
+            )?,
+        }
         self.rename_unchecked(old, old_realm, new, new_realm, actor)
     }
 
@@ -1208,9 +1224,9 @@ impl PrincipalStore {
         actor: &str,
     ) -> Result<(), Error> {
         self.inside_change()?;
-        let old_id = crate::kdb::lookup_principal_id(old, old_realm);
-        let new_id = crate::kdb::lookup_principal_id(new, new_realm);
-        if self.get(&new_id).is_some() {
+        let old_id = crate::kdb::principal_id(old, old_realm)?;
+        let new_key = super::iprop_ulog::RecordKey::for_name(new, new_realm)?;
+        if self.get(new_key.as_str()).is_some() {
             return Err(Error::AlreadyExists);
         }
         if self
@@ -1239,12 +1255,12 @@ impl PrincipalStore {
         new_realm.clone_into(&mut p.realm);
         self.rename_lockout_in_file(&old_id, &p);
         // MIT: `krb5_db_def_rename_principal` (lib/kdb/kdb_default.c:537-545)
-        self.note_ulog(p.id(), false, Some(p.clone()));
+        self.note_ulog(new_key.as_str().to_owned(), false, Some(p.clone()));
         self.note_ulog(old_id, true, None);
         // MIT: `kadm5_rename_principal` (lib/kadm5/srv/svr_principal.c:730-737)
         stamp_admin_tl(&mut p, false, actor);
-        self.note_ulog(p.id(), false, Some(p.clone()));
-        self.map.insert(p.id(), p);
+        self.note_ulog(new_key.as_str().to_owned(), false, Some(p.clone()));
+        self.map.put_record(new_key, p);
         self.save_if_configured()?;
         self.postcommit(super::kadm5_hook::Post::Rename {
             old: old.clone(),
@@ -1566,14 +1582,17 @@ impl PrincipalStore {
     }
 
     #[cfg(feature = "test-hooks")]
-    fn lockout_id(&self, name: &PrincipalName) -> String {
-        let id = crate::kdb::lookup_principal_id(name, &self.realm);
-        self.resolve_id(&id).unwrap_or(id)
+    fn lockout_id(&self, name: &PrincipalName) -> Option<String> {
+        let id = crate::kdb::lookup_principal_id(name, &self.realm)?;
+        Some(self.resolve_id(&id).unwrap_or(id))
     }
 
     #[cfg(feature = "test-hooks")]
     pub fn record_as_outcome(&self, name: &PrincipalName, ok: bool) {
-        let Some(mut p) = self.map.get(&self.lockout_id(name)).cloned() else {
+        let Some(mut p) = self
+            .lockout_id(name)
+            .and_then(|id| self.map.get(&id).cloned())
+        else {
             return;
         };
         self.merge_lockout(&mut p);
@@ -1586,16 +1605,33 @@ impl PrincipalStore {
     }
 
     pub(crate) fn put_principal(&mut self, mut p: Principal) -> Result<(), Error> {
+        let key = super::iprop_ulog::RecordKey::of(&p)?;
         strip_db_args(&mut p.tl_data)?;
         self.settle_rid(&mut p);
-        if p.name.components_joined() != "K/M"
-            && self.rid_owner(p.rid).is_some_and(|owner| owner != p.id())
+        if p.name.components_joined_lossy() != "K/M"
+            && self
+                .rid_owner(p.rid)
+                .is_some_and(|owner| owner != key.as_str())
         {
             return Err(Error::InvalidArgument("duplicate RID".into()));
         }
-        let id = p.id();
-        self.note_ulog(id.clone(), false, Some(p.clone()));
-        self.map.insert(id, p);
+        let id = key.as_str().to_owned();
+        self.note_ulog(id, false, Some(p.clone()));
+        self.map.put_record(key, p);
         Ok(())
+    }
+}
+
+// MIT: `acl_check` (kadmin/server/auth_acl.c)
+fn acl_check(
+    acl: &Acl,
+    actor: &str,
+    op: AdminOp,
+    name: &PrincipalName,
+    realm: &str,
+) -> Result<(), Error> {
+    match crate::kdb::lookup_principal_id(name, realm) {
+        Some(id) => acl.check(actor, op, Some(&id)),
+        None => acl.check_name(actor, op, name, realm.as_bytes()),
     }
 }

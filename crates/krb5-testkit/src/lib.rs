@@ -314,7 +314,7 @@ pub fn attach_pac(key: &ProtocolKey, part: &mut EncTicketPart, info_name: &str) 
     part.authorization_data = Some(wrap_win2k_pac(&[0]).unwrap());
     let der = ticket_checksum_der(part).unwrap();
     let ident = PacIdentity {
-        sam: part.cname.components_joined(),
+        sam: part.cname.components_joined_lossy(),
         realm: String::new(),
         domain_sid: RpcSid::nt_domain(1, 2, 3),
         rid: 1,
@@ -381,7 +381,7 @@ pub fn err_of_cname(bytes: &[u8]) -> (i32, String, Option<String>) {
         .and_then(|t| std::str::from_utf8(t.as_bytes()).ok())
         .unwrap_or("")
         .to_owned();
-    let cname = e.cname.as_ref().map(PrincipalName::components_joined);
+    let cname = e.cname.as_ref().map(PrincipalName::components_joined_lossy);
     (e.error_code, text, cname)
 }
 

@@ -279,7 +279,7 @@ fn s4u2proxy_missing_local_tgt_is_get_local_tgt() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
-    store.allow_s4u_to(&user, &documented_host().components_joined());
+    store.allow_s4u_to(&user, &documented_host().components_joined_lossy());
     let admin_tgt = issue_tgt_password(&store, TEST_ADMIN, TEST_ADMIN_PASSWORD, 731);
     let evidence_tgs = krb5_protocol::tgs_req(
         admin_tgt.rep.0.ticket.clone(),

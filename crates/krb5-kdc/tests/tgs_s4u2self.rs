@@ -62,7 +62,7 @@ fn s4u2self_x509_issues_and_replies_130() {
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
     let pa = pa_s4u_x509_user(&tgt.session_key, admin, TEST_REALM, 7131).unwrap();
     let out = krb5_kdc::issue_tgs(&store, &s4u_self(&tgt, vec![pa], 7131)).unwrap();
-    assert_eq!(out.rep.0.cname.components_joined(), TEST_ADMIN);
+    assert_eq!(out.rep.0.cname.components_joined_lossy(), TEST_ADMIN);
     assert!(
         out.rep
             .0
@@ -84,7 +84,7 @@ fn foreign_pac_client() {
     let tgt = host_tgt(&store, 17040);
     let local = store.krbtgt().unwrap().best_key().unwrap().key.clone();
     let mut part = decrypt_ticket_part(&local, &tgt.rep.0.ticket).unwrap();
-    attach_pac(&ir, &mut part, &documented_host().components_joined());
+    attach_pac(&ir, &mut part, &documented_host().components_joined_lossy());
     let header = reseal_incoming(&ir, &tgt, &part);
     let alice = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["alice"]);
     let pa = pa_for_user(&tgt.session_key, alice, FOREIGN).unwrap();
@@ -203,7 +203,7 @@ fn attach_client_info_pac_capaths(key: &ProtocolKey, part: &mut EncTicketPart, i
     part.authorization_data = Some(wrap_win2k_pac(&[0]).expect("ph"));
     let der = ticket_checksum_der(part).expect("der");
     let ident = PacIdentity {
-        sam: part.cname.components_joined(),
+        sam: part.cname.components_joined_lossy(),
         realm: String::new(),
         domain_sid: RpcSid::nt_domain(1, 2, 3),
         rid: 1,
@@ -338,7 +338,7 @@ fn attach_foreign_logon_pac(
     part.authorization_data = Some(wrap_win2k_pac(&[0]).expect("ph"));
     let der = ticket_checksum_der(part).expect("der");
     let ident = PacIdentity {
-        sam: part.cname.components_joined(),
+        sam: part.cname.components_joined_lossy(),
         realm: String::new(),
         domain_sid: domain.clone(),
         rid,
@@ -412,7 +412,7 @@ fn final_hop(ad_identity: bool, logon: HeaderLogon) -> Result<Pac, Error> {
     let issued = krb5_kdc::issue_tgs(&c, &req)?;
     let host_key = c.get_name(&host_c).unwrap().best_key().unwrap().key.clone();
     let part = decrypt_ticket_part(&host_key, &issued.rep.0.ticket).expect("enc");
-    assert_eq!(part.cname.components_joined(), TEST_ADMIN);
+    assert_eq!(part.cname.components_joined_lossy(), TEST_ADMIN);
     Ok(Pac::parse(&pac_from_ticket_part(&part).expect("PAC")).expect("parse"))
 }
 

@@ -13,7 +13,7 @@ pub fn check_transited(
     if part.flags.bit(flag_bit::TRANSITED_POLICY_CHECKED) || raw.first().is_none_or(|b| *b == 0) {
         return Ok(());
     }
-    let crealm = String::from_utf8_lossy(part.crealm.as_bytes());
+    let crealm = std::str::from_utf8(part.crealm.as_bytes()).map_err(|_| err::ILL_CR_TKT)?;
     if crealm == "WELLKNOWN:ANONYMOUS" {
         return Ok(());
     }
@@ -22,9 +22,9 @@ pub fn check_transited(
     }
     let hops = part
         .transited
-        .realms_for(&crealm, srealm)
+        .realms_for(crealm, srealm)
         .map_err(|_| err::ILL_CR_TKT)?;
-    if transit_allowed(capaths, &crealm, srealm, &hops) {
+    if transit_allowed(capaths, crealm, srealm, &hops) {
         Ok(())
     } else {
         Err(err::ILL_CR_TKT)

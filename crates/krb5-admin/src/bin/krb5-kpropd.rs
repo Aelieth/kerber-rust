@@ -512,8 +512,13 @@ fn kpropd_paths(realm: Option<&str>) -> Result<krb5_config::KdcPaths, krb5_confi
 /// Only a trailing newline is stripped; CR, leading space, and `#` stay.
 /// A missing file refuses every peer.
 fn kpropd_acl(path: &Path) -> Option<Vec<String>> {
-    let text = String::from_utf8_lossy(&std::fs::read(path).ok()?).into_owned();
-    Some(text.split('\n').map(str::to_owned).collect())
+    let bytes = std::fs::read(path).ok()?;
+    let lines = bytes.split(|b| *b == b'\n');
+    Some(
+        lines
+            .filter_map(|l| std::str::from_utf8(l).ok().map(str::to_owned))
+            .collect(),
+    )
 }
 
 fn host_keys(

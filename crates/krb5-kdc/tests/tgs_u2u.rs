@@ -92,7 +92,7 @@ fn u2u_host_tgt_issues_kvno_zero() {
     let out = krb5_kdc::issue_tgs(&store, &req).unwrap();
     assert!(out.rep.0.ticket.enc_part.kvno.is_none());
     let part = decrypt_ticket_part(&extra.session_key, &out.rep.0.ticket).unwrap();
-    assert_eq!(part.cname.components_joined(), TEST_USER);
+    assert_eq!(part.cname.components_joined_lossy(), TEST_USER);
 }
 
 fn u2u(store: &PrincipalStore, second: krb5_types::Ticket) -> krb5_kdc::Error {

@@ -92,7 +92,9 @@ not under the guard. The directory need not register one.
 goes in `KadmindConfig.auth_modules` or is chosen by `[plugins] kadm5_auth`, and the
 built-in `acl` and `self` modules answer each verb alongside it. A module returns
 `Decision::Allow`, `Abstain` or `Deny`; `Deny` refuses at once, and the
-allowing module supplies the restrictions (`docs/parity/a4-kadmin.md`).
+allowing module supplies the restrictions (`docs/parity/a4-kadmin.md`). A target
+whose name isn't UTF-8 is decided by the built-in `acl` and `self` modules
+alone, by its bytes; other modules aren't asked.
 
 ## OTP and require-MFA
 

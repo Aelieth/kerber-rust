@@ -223,7 +223,7 @@ fn allowed_preauth_type(
 ) -> Option<i32> {
     let value = in_ccache?
         .0
-        .get_config(Some(&server.unparse_with_realm(realm)), "pa_type")?;
+        .get_config(Some(&server.unparse_with_realm_lossy(realm)), "pa_type")?;
     let text = String::from_utf8_lossy(value);
     let t = text.trim_start_matches(|c: char| c.is_ascii_whitespace() || c == '\u{000b}');
     let digits = t.strip_prefix(['+', '-']).unwrap_or(t);
@@ -240,9 +240,10 @@ fn pa_config_in(
     server: &krb5_types::PrincipalName,
     realm: &str,
 ) -> Option<Vec<u8>> {
-    let value = in_ccache?
-        .0
-        .get_config(Some(&server.unparse_with_realm(realm)), "pa_config_data")?;
+    let value = in_ccache?.0.get_config(
+        Some(&server.unparse_with_realm_lossy(realm)),
+        "pa_config_data",
+    )?;
     Some(value.to_vec())
 }
 
@@ -907,7 +908,7 @@ fn cache_has_fast_avail(cc: &FileCcache, realm: &str) -> bool {
     let Ok(tgs) = creds::tgs_of(realm) else {
         return false;
     };
-    let tgs = tgs.unparse_with_realm(realm);
+    let tgs = tgs.unparse_with_realm_lossy(realm);
     cc.creds.iter().any(|c| {
         c.is_config()
             && c.server.1.name_string.len() == 3
@@ -1184,7 +1185,7 @@ impl<'c> Leg<'c> {
                         code: krb5_protocol::trace::KRB5_KT_NOTFOUND,
                         text: format!(
                             "No key table entry found for {}",
-                            cname.unparse_with_realm(&realm)
+                            cname.unparse_with_realm_lossy(&realm)
                         ),
                     }),
             ),
@@ -1221,7 +1222,7 @@ fn follow_referrals<'c>(
     let realm0 = leg.realm.clone();
     let mut restart = None;
     for _ in 0..MAX_IN_TKT_LOOPS {
-        password.client = cname.unparse_with_realm(&leg.realm);
+        password.client = cname.unparse_with_realm_lossy(&leg.realm);
         let out = {
             // MIT: `restart_init_creds_loop` (lib/krb5/krb/get_in_tkt.c:823-844)
             let server = match ask.sname.cloned() {
@@ -1373,7 +1374,7 @@ fn kinit_inner(
                         Code::Other,
                         format!(
                             "Keytab contains no suitable keys for {}",
-                            cname.unparse_with_realm(&realm_s)
+                            cname.unparse_with_realm_lossy(&realm_s)
                         ),
                     )
                 })?;
@@ -1589,7 +1590,7 @@ fn kinit_inner(
         cache.set_deltatime(off);
     }
     let tgt_realm = String::from_utf8_lossy(as_out.ticket.realm.as_bytes()).into_owned();
-    let tgt_server = as_out.ticket.sname.unparse_with_realm(&tgt_realm);
+    let tgt_server = as_out.ticket.sname.unparse_with_realm_lossy(&tgt_realm);
     record_preauth_config(
         &mut cache,
         &tgt_server,

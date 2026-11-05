@@ -280,7 +280,7 @@ fn as_cant_find_client_key_is_etype_nosupp() {
     p.keys
         .retain(|k| k.etype == EncryptionType::Aes256CtsHmacSha384192);
     p.attributes &= !KDB_REQUIRES_PRE_AUTH;
-    store.debug_insert(p);
+    store.debug_insert(p).expect("utf-8 name");
     let req = as_req_sname_etype(&user, 18).unwrap();
     let err = crate::issue_as(&store, &req).unwrap_err();
     match err {
@@ -300,7 +300,7 @@ fn as_no_server_key_is_finding_server_key() {
     let krbtgt = PrincipalName::krbtgt(crate::testrealm::TEST_REALM);
     let mut p = store.get_name(&krbtgt).unwrap().clone();
     p.keys.clear();
-    store.debug_insert(p);
+    store.debug_insert(p).expect("utf-8 name");
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::testrealm::TEST_USER]);
     let key = {
         let u = store.get_name(&user).unwrap();
@@ -356,7 +356,7 @@ fn last_admin_unlock_skips_failcount_lockout() {
         ty: TL_LAST_ADMIN_UNLOCK,
         contents: 200u32.to_le_bytes().to_vec(),
     });
-    store.debug_insert(p);
+    store.debug_insert(p).expect("utf-8 name");
     let key = store
         .get_name(&user)
         .unwrap()
@@ -382,7 +382,7 @@ fn as_missing_krbtgt_is_get_local_tgt() {
     let krbtgt = PrincipalName::krbtgt(crate::testrealm::TEST_REALM);
     let mut p = store.get_name(&krbtgt).unwrap().clone();
     p.keys.clear();
-    store.debug_insert(p);
+    store.debug_insert(p).expect("utf-8 name");
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::testrealm::TEST_USER]);
     let host = crate::testrealm::documented_host();
     let key = store

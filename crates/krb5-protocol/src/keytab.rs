@@ -548,7 +548,7 @@ fn parse_unparsed_meta(body: &[u8], ver: u16) -> Result<UnparsedMeta, io::Error>
         kvno,
         format!(
             "{}@{}",
-            name.components_joined(),
+            name.components_joined_lossy(),
             String::from_utf8_lossy(realm_s.as_bytes())
         ),
         timestamp,
@@ -916,7 +916,7 @@ mod tests {
         assert_eq!(e.kvno, 300);
         assert_eq!(e.timestamp, 1_700_000_000);
         assert_eq!(e.realm.as_bytes(), b"KERBER.TEST");
-        assert_eq!(e.name.components_joined(), "user");
+        assert_eq!(e.name.components_joined_lossy(), "user");
         assert_eq!(e.name.name_type, PrincipalName::NT_UNKNOWN);
         assert_eq!(
             kt.entries[1].kvno, 44,

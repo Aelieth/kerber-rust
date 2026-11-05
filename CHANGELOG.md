@@ -39,6 +39,11 @@ any other `###` heading.
 - **types.** PKINIT `cms_verify`, `cms_verify_full`, `cms_unwrap`, `cms_extract_unsigned`: no caller.
 - **field.** `lib/raw-tgs.py`: no caller.
 
+### Security
+
+- **kdc.** A principal name or realm that isn't UTF-8 is refused, not merged with others via U+FFFD.
+- **admin.** A `kadm5.acl` line that isn't UTF-8 is a syntax error, not read as U+FFFD.
+
 ### Tests and CI
 
 - **field.** Lab addresses, AD DC, LLDAP base DN are `field.env` keys; `lab.sh` reads it too.

@@ -30,6 +30,30 @@ enum Undo {
     Lost,
 }
 
+pub(crate) struct RecordKey(String);
+
+impl RecordKey {
+    pub(crate) fn of(p: &Principal) -> Result<Self, crate::error::Error> {
+        Self::for_name(&p.name, &p.realm)
+    }
+
+    pub(crate) fn for_name(
+        name: &krb5_types::PrincipalName,
+        realm: &str,
+    ) -> Result<Self, crate::error::Error> {
+        crate::kdb::new_principal_id(name, realm).map(Self)
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub(crate) fn into_string(self) -> String {
+        self.0
+    }
+}
+
 impl PrincipalMap {
     pub(crate) fn get(&self, id: &str) -> Option<&Principal> {
         self.map.get(id)
@@ -56,11 +80,11 @@ impl PrincipalMap {
         self.map.get_mut(id)
     }
 
-    pub(crate) fn insert(&mut self, id: String, p: Principal) -> Option<Principal> {
+    pub(crate) fn put_record(&mut self, key: RecordKey, p: Principal) -> Option<Principal> {
+        let id = key.0;
         self.keep(&id);
-        let key = id.clone();
-        let old = self.map.insert(id, p);
-        self.reindex(&key, old.as_ref());
+        let old = self.map.insert(id.clone(), p);
+        self.reindex(&id, old.as_ref());
         old
     }
 
@@ -97,7 +121,7 @@ impl PrincipalMap {
     fn reindex(&mut self, id: &str, old: Option<&Principal>) {
         self.forget(id, old);
         if let Some(p) = self.map.get(id)
-            && p.name.components_joined() != "K/M"
+            && p.name.components_joined_lossy() != "K/M"
             && p.rid != 0
         {
             self.rids.insert(p.rid, id.to_owned());
@@ -117,11 +141,11 @@ impl PrincipalMap {
         self.map.values_mut()
     }
 
-    pub(crate) fn insert_unlogged(&mut self, id: String, p: Principal) {
+    pub(crate) fn put_record_unlogged(&mut self, key: RecordKey, p: Principal) {
         self.lose_undo();
-        let key = id.clone();
-        let old = self.map.insert(id, p);
-        self.reindex(&key, old.as_ref());
+        let id = key.0;
+        let old = self.map.insert(id.clone(), p);
+        self.reindex(&id, old.as_ref());
     }
 
     pub(crate) fn get_mut_unlogged(&mut self, id: &str) -> Option<&mut Principal> {
@@ -385,17 +409,20 @@ impl PrincipalStore {
             }
             let id = krb5_types::principal_from_unparsed(&u.name, "").map_or_else(
                 |_| u.name.clone(),
-                |(name, realm)| crate::kdb::lookup_principal_id(&name, &realm),
+                |(name, realm)| {
+                    crate::kdb::lookup_principal_id(&name, &realm).unwrap_or_else(|| u.name.clone())
+                },
             );
             if u.deleted {
                 self.map.remove_unlogged(&id);
             } else if !u.vals.is_empty() {
                 let put = conv_2dbentry(self.map.get(&id), &u.name, &u.vals, true).and_then(|e| {
                     let mut e = self.assign_iprop_rid(e);
-                    strip_db_args(&mut e.tl_data).map(|()| e)
+                    strip_db_args(&mut e.tl_data)?;
+                    RecordKey::of(&e).map(|key| (key, e))
                 });
                 match put {
-                    Ok(entry) => self.map.insert_unlogged(entry.id(), entry),
+                    Ok((key, entry)) => self.map.put_record_unlogged(key, entry),
                     Err(e) => {
                         if let Some(u) = self.ulog() {
                             let _ = u.init_header();

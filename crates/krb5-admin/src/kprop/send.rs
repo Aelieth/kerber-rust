@@ -190,7 +190,7 @@ pub fn kprop_get_tickets(
         ctx,
         realm,
         &client,
-        &server.unparse_no_realm(),
+        &server.unparse_no_realm_lossy(),
         keytab,
         false,
     )

@@ -501,7 +501,7 @@ impl PrincipalStore {
         princ_realm: &str,
         etypes: &[KeySalt],
     ) -> Result<ChpassInputs, Error> {
-        if princ_realm == self.realm && name.components_joined() == "kadmin/history" {
+        if princ_realm == self.realm && name.components_joined_lossy() == "kadmin/history" {
             return Err(Error::InvalidArgument(
                 "Cannot change protected principal".into(),
             ));
@@ -643,7 +643,7 @@ impl PrincipalStore {
         name: &PrincipalName,
         password: &[u8],
     ) -> Result<(), Error> {
-        let id = crate::kdb::lookup_principal_id(name, &self.realm);
+        let id = crate::kdb::principal_id(name, &self.realm)?;
         acl.check(actor, AdminOp::ChangePassword, Some(&id))?;
         self.set_password_keepold_n_in(name, &self.realm.clone(), password, 0, actor)
     }

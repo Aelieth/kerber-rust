@@ -664,8 +664,8 @@ fn check_reply_server(
     if !(requested.is_krbtgt() && ticket.is_krbtgt()) {
         return Err(Error::ReplyMismatch(format!(
             "TGS-REP sname mismatch requested={} ticket={}",
-            requested.components_joined(),
-            ticket.components_joined()
+            requested.components_joined_lossy(),
+            ticket.components_joined_lossy()
         )));
     }
     Ok(())
@@ -1071,7 +1071,7 @@ fn tgs_round_trip(
             Some(t) if e.error_code == krb5_types::err::S_PRINCIPAL_UNKNOWN && !t.is_empty() => {
                 let server = e
                     .sname
-                    .unparse_with_realm(&String::from_utf8_lossy(e.realm.as_bytes()));
+                    .unparse_with_realm_lossy(&String::from_utf8_lossy(e.realm.as_bytes()));
                 Some(format!("Server {server} not found in Kerberos database"))
             }
             text => text,

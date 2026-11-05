@@ -279,7 +279,7 @@ fn armor_rd_req(
         .ok()
         .filter(|r| *r == store.realm())
         .ok_or_else(not_us)?;
-    let tsname = ticket.sname.unparse_with_realm(realm);
+    let tsname = ticket.sname.unparse_with_realm_lossy(realm);
     let p = store
         .fetch_name(&ticket.sname)
         .map_err(|e| generic(e.to_string()))?;
@@ -498,7 +498,7 @@ fn derive_cookie_key(
     client: &PrincipalName,
     realm: &str,
 ) -> Result<ProtocolKey, Error> {
-    let princ = client.unparse_with_realm(realm);
+    let princ = client.unparse_with_realm_lossy(realm);
     let mut seed = Vec::with_capacity(6 + princ.len());
     seed.extend_from_slice(b"COOKIE");
     seed.extend_from_slice(princ.as_bytes());
@@ -954,7 +954,8 @@ fn match_client(
     };
     let read = |n: &PrincipalName, r: &str| -> (Vec<u8>, Vec<Vec<u8>>) {
         if n.name_type == PrincipalName::NT_ENTERPRISE
-            && let Ok(p) = krb5_types::parse_name_ex(&n.unparse_no_realm(), r, false)
+            && let Some(text) = n.try_unparse_no_realm()
+            && let Ok(p) = krb5_types::parse_name_ex(&text, r, false)
         {
             let comps = p.components.into_iter().map(String::into_bytes).collect();
             return (p.realm.into_bytes(), comps);
@@ -967,7 +968,9 @@ fn match_client(
     {
         return true;
     }
-    let id = crate::kdb::lookup_principal_id(name, realm);
+    let Some(id) = crate::kdb::lookup_principal_id(name, realm) else {
+        return false;
+    };
     store
         .fetch(&id)
         .ok()
@@ -1011,7 +1014,7 @@ fn check_log_freshness(
     realm: &str,
     valid: bool,
 ) -> Result<(), Error> {
-    let name = req_client.unparse_with_realm(realm);
+    let name = req_client.unparse_with_realm_lossy(realm);
     if store.policy().pkinit_require_freshness && !valid {
         klog::syslog(
             Severity::Info,

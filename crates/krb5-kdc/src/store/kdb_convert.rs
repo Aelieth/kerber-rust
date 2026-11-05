@@ -404,7 +404,7 @@ pub fn conv_2dbentry(
         && let Some((n, r)) = mod_princ
     {
         let mut contents = mod_time.to_le_bytes().to_vec();
-        contents.extend_from_slice(crate::kdb::lookup_principal_id(n, r).as_bytes());
+        contents.extend_from_slice(crate::kdb::new_principal_id(n, r)?.as_bytes());
         contents.push(0);
         update_tl_data(
             &mut ent.tl_data,

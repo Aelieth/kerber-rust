@@ -335,22 +335,22 @@ pub fn require_client_pkinit_san(
     if san_realm != realm {
         return Err("pkinit client san");
     }
-    if parts != pkinit_cname_parts(cname) {
+    if pkinit_cname_parts(cname).as_ref() != Some(&parts) {
         return Err("pkinit client san");
     }
     Ok(())
 }
 
-fn pkinit_cname_parts(cname: &crate::PrincipalName) -> Vec<String> {
+fn pkinit_cname_parts(cname: &crate::PrincipalName) -> Option<Vec<String>> {
     if cname.name_type == crate::PrincipalName::NT_ENTERPRISE {
-        let raw = cname.components_joined();
+        let raw = cname.try_components_joined()?;
         let user = raw.rsplit_once('@').map_or(raw.as_str(), |(u, _)| u);
-        return vec![user.to_string()];
+        return Some(vec![user.to_string()]);
     }
     cname
         .name_string
         .iter()
-        .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
+        .map(|s| std::str::from_utf8(s.as_bytes()).ok().map(str::to_owned))
         .collect()
 }
 

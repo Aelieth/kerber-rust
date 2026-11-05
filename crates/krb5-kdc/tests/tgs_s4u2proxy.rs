@@ -93,7 +93,7 @@ fn attach_stkt_pac(
     part.authorization_data = Some(wrap_win2k_pac(&[0]).unwrap());
     let der = ticket_checksum_der(part).unwrap();
     let ident = PacIdentity {
-        sam: part.cname.components_joined(),
+        sam: part.cname.components_joined_lossy(),
         realm: String::new(),
         domain_sid: RpcSid::nt_domain(1, 2, 3),
         rid: 1,
@@ -117,7 +117,7 @@ fn attach_stkt_pac(
 
 fn attach_deleg_pac(key: &ProtocolKey, part: &mut EncTicketPart, info_name: &str, transited: &str) {
     let di = krb5_types::pac::S4uDelegationInfo {
-        proxy_target: documented_host().unparse(),
+        proxy_target: documented_host().unparse_lossy(),
         transited_services: vec![transited.to_owned()],
     };
     let stub = Pac::built(
@@ -137,7 +137,7 @@ fn attach_deleg_pac(key: &ProtocolKey, part: &mut EncTicketPart, info_name: &str
     part.authorization_data = Some(wrap_win2k_pac(&[0]).unwrap());
     let der = ticket_checksum_der(part).unwrap();
     let ident = PacIdentity {
-        sam: part.cname.components_joined(),
+        sam: part.cname.components_joined_lossy(),
         realm: String::new(),
         domain_sid: RpcSid::nt_domain(1, 2, 3),
         rid: 1,
@@ -167,7 +167,7 @@ fn cross_store() -> (PrincipalStore, ProtocolKey) {
         .unwrap();
     store.allow_s4u_from(
         &documented_host(),
-        &documented_host().unparse_with_realm(FOREIGN),
+        &documented_host().unparse_with_realm_lossy(FOREIGN),
     );
     (store, ir)
 }
@@ -183,7 +183,7 @@ fn foreign_host_header(
     part.cname = documented_host();
     part.crealm = krb5_types::try_ascii(FOREIGN).unwrap();
     part.flags = part.flags.with_bit(flag_bit::FORWARDABLE, true);
-    attach_pac(ir, &mut part, &documented_host().components_joined());
+    attach_pac(ir, &mut part, &documented_host().components_joined_lossy());
     (reseal_incoming(ir, &tgt, &part), tgt.session_key)
 }
 
@@ -200,7 +200,7 @@ fn cross_evidence(
     part.cname = documented_host();
     part.crealm = krb5_types::try_ascii(crealm).unwrap();
     part.flags = part.flags.with_bit(flag_bit::FORWARDABLE, true);
-    let hop = documented_host().unparse_with_realm(crealm);
+    let hop = documented_host().unparse_with_realm_lossy(crealm);
     attach_deleg_pac(ir, &mut part, info_name, &hop);
     reseal_incoming(ir, &tgt, &part)
 }
@@ -233,7 +233,7 @@ fn proxy_cross(
 fn local_s4u2proxy_client_info_omits_realm() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
-    store.allow_s4u_to(&user, &documented_host().components_joined());
+    store.allow_s4u_to(&user, &documented_host().components_joined_lossy());
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
     let admin_tgt = {
         let key = store
@@ -316,14 +316,14 @@ fn local_s4u2proxy_client_info_omits_realm() {
         .best_key()
         .unwrap();
     let part = decrypt_ticket_part(&hostk.key, &out.rep.0.ticket).unwrap();
-    assert_eq!(part.cname.components_joined(), TEST_ADMIN);
+    assert_eq!(part.cname.components_joined_lossy(), TEST_ADMIN);
     let pac = Pac::parse(&pac_from_ticket_part(&part).unwrap()).unwrap();
     let (_, name) =
         parse_client_info(pac.unique_buffer(PAC_CLIENT_INFO).unwrap().unwrap()).unwrap();
     assert!(!name.contains('@'), "{name}");
     let di =
         parse_delegation_info(pac.unique_buffer(PAC_DELEGATION_INFO).unwrap().unwrap()).unwrap();
-    assert_eq!(di.proxy_target, documented_host().unparse());
+    assert_eq!(di.proxy_target, documented_host().unparse_lossy());
 }
 
 #[test]
@@ -394,7 +394,7 @@ fn cross_issues_pac_client_and_realm() {
         .best_key()
         .unwrap();
     let part = decrypt_ticket_part(&hostk.key, &out.rep.0.ticket).unwrap();
-    assert_eq!(part.cname.components_joined(), SUBJECT);
+    assert_eq!(part.cname.components_joined_lossy(), SUBJECT);
     assert_eq!(
         std::str::from_utf8(part.crealm.as_bytes()).unwrap(),
         SUBJECT_REALM
@@ -405,7 +405,7 @@ fn cross_issues_pac_client_and_realm() {
     assert_eq!(name, SUBJECT);
     let di =
         parse_delegation_info(pac.unique_buffer(PAC_DELEGATION_INFO).unwrap().unwrap()).unwrap();
-    assert_eq!(di.proxy_target, documented_host().unparse());
+    assert_eq!(di.proxy_target, documented_host().unparse_lossy());
 }
 
 fn extra_host() -> PrincipalName {
@@ -420,7 +420,7 @@ fn attach_deleg_pac_a2_r22(
     dest: &PrincipalName,
 ) {
     let di = krb5_types::pac::S4uDelegationInfo {
-        proxy_target: dest.unparse(),
+        proxy_target: dest.unparse_lossy(),
         transited_services: vec![transited.to_owned()],
     };
     let stub = Pac::built(
@@ -440,7 +440,7 @@ fn attach_deleg_pac_a2_r22(
     part.authorization_data = Some(wrap_win2k_pac(&[0]).unwrap());
     let der = ticket_checksum_der(part).unwrap();
     let ident = PacIdentity {
-        sam: part.cname.components_joined(),
+        sam: part.cname.components_joined_lossy(),
         realm: String::new(),
         domain_sid: RpcSid::nt_domain(1, 2, 3),
         rid: 1,
@@ -469,7 +469,7 @@ fn foreign_header(store: &PrincipalStore, ir: &ProtocolKey, nonce: u32) -> (Tick
     part.cname = documented_host();
     part.crealm = krb5_types::try_ascii(FOREIGN).unwrap();
     part.flags = part.flags.with_bit(flag_bit::FORWARDABLE, true);
-    attach_pac(ir, &mut part, &documented_host().components_joined());
+    attach_pac(ir, &mut part, &documented_host().components_joined_lossy());
     (reseal_incoming(ir, &tgt, &part), tgt.session_key)
 }
 
@@ -480,7 +480,7 @@ fn foreign_evidence(store: &PrincipalStore, ir: &ProtocolKey, nonce: u32) -> Tic
     part.cname = documented_host();
     part.crealm = krb5_types::try_ascii(FOREIGN).unwrap();
     part.flags = part.flags.with_bit(flag_bit::FORWARDABLE, true);
-    let hop = documented_host().unparse_with_realm(FOREIGN);
+    let hop = documented_host().unparse_with_realm_lossy(FOREIGN);
     attach_deleg_pac_a2_r22(
         ir,
         &mut part,
@@ -531,7 +531,7 @@ fn store_with_ir() -> (PrincipalStore, ProtocolKey) {
 #[test]
 fn foreign_impersonator_vs_local_grant_is_not_allowed() {
     let (mut store, ir) = store_with_ir();
-    store.allow_s4u_from(&extra_host(), &documented_host().components_joined());
+    store.allow_s4u_from(&extra_host(), &documented_host().components_joined_lossy());
     let (header, session) = foreign_header(&store, &ir, 22000);
     let ev = foreign_evidence(&store, &ir, 22010);
     let (c, text) = expect_status(
@@ -585,7 +585,7 @@ fn s4u2proxy_local_stkt_pac_mismatch_is_badoption() {
         &ukey.key,
         &krbtgt.key,
         &mut part,
-        &documented_host().components_joined(),
+        &documented_host().components_joined_lossy(),
     );
     let tkt = reseal(&ev, &part, &ukey.key);
     let req = proxy_req(&store, tkt, documented_host(), cname_addl(), 8212);

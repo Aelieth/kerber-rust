@@ -214,7 +214,7 @@ mod tests {
         let mut p = store.get_name(&user).unwrap().clone();
         p.attributes = attrs;
         state.set_on(&mut p);
-        store.debug_insert(p.clone());
+        store.debug_insert(p.clone()).expect("utf-8 name");
         (store, p)
     }
 
@@ -304,7 +304,7 @@ mod tests {
         };
         let (mut store, mut p) = realm(policy(3, 0, 0), KDB_REQUIRES_PRE_AUTH, state);
         with_unlock(&mut p, 950);
-        store.debug_insert(p.clone());
+        store.debug_insert(p.clone()).expect("utf-8 name");
         assert!(lockout_check_policy(&store, &p, 1000).is_ok());
         audit(&store, &p, 1000, err::PREAUTH_FAILED);
         let after = now(&store, &p);

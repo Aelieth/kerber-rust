@@ -455,8 +455,8 @@ fn check_tgs_req<'a>(
             .map_err(|_| proto(err::ILL_CR_TKT, status::ADD_TO_TRANSITED_LIST))?;
     }
     // MIT: `check_tgs_req` (kdc/do_tgs_req.c:924-939)
-    let cprinc = enc_tkt.cname.unparse_with_realm(header_crealm);
-    let sprinc = sname.unparse_with_realm(req_realm.as_str());
+    let cprinc = enc_tkt.cname.unparse_with_realm_lossy(header_crealm);
+    let sprinc = sname.unparse_with_realm_lossy(req_realm.as_str());
     let transit_checked = if skip_transited {
         krb5_log::klog::syslog(krb5_log::klog::Severity::Info, "not checking transit path");
         false
@@ -819,7 +819,7 @@ fn tgs_issue_ticket(
     // MIT: `update_delegation_info` (kdc_authdata.c:410-422)
     let delegation_hop = if s4u2proxy && !is_crossrealm {
         stkt.as_ref()
-            .map(|st| st.server.name.unparse_with_realm(&st.server.realm))
+            .map(|st| st.server.name.unparse_with_realm_lossy(&st.server.realm))
     } else {
         None
     };
@@ -833,11 +833,11 @@ fn tgs_issue_ticket(
     let s4u_client_info = if s4u2self || s4u2proxy {
         Some(if is_referral {
             match &s4u_subject {
-                Some((n, r)) => format!("{}@{r}", n.components_joined()),
-                None => ticket_cname.components_joined(),
+                Some((n, r)) => format!("{}@{r}", n.components_joined_lossy()),
+                None => ticket_cname.components_joined_lossy(),
             }
         } else {
-            ticket_cname.components_joined()
+            ticket_cname.components_joined_lossy()
         })
     } else {
         None
@@ -1029,8 +1029,10 @@ fn decrypt_2ndtkt(
         return Ok(None);
     };
     let stkt_realm = utf8_realm(&extra.realm)?;
-    let server = store
-        .fetch(&lookup_principal_id(&extra.sname, stkt_realm))?
+    let server = lookup_principal_id(&extra.sname, stkt_realm)
+        .map(|id| store.fetch(&id))
+        .transpose()?
+        .flatten()
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::SECOND_TKT_SERVER))?;
     if attr(&server, KDB_DISALLOW_ALL_TIX) || attr(&server, KDB_DISALLOW_SVR) {
         return Err(proto(err::S_PRINCIPAL_UNKNOWN, status::SECOND_TKT_SERVER));
@@ -1104,23 +1106,25 @@ fn is_referral_req(store: &dyn PrincipalRead, body: &KdcReqBody, sname: &Princip
     {
         return false;
     }
-    let stype = sname
+    let Some(stype) = sname
         .name_string
         .first()
-        .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
-        .unwrap_or_default();
+        .and_then(|s| std::str::from_utf8(s.as_bytes()).ok())
+    else {
+        return false;
+    };
     let hostbased = store.policy().host_based_services.as_str();
     let no_ref = store.policy().no_host_referral.as_str();
     match sname.name_type {
         PrincipalName::NT_UNKNOWN => {
-            if !in_list(hostbased, &stype) && !in_list(hostbased, "*") {
+            if !in_list(hostbased, stype) && !in_list(hostbased, "*") {
                 return false;
             }
         }
         PrincipalName::NT_SRV_HST | PrincipalName::NT_SRV_INST => {}
         _ => return false,
     }
-    !in_list(no_ref, &stype) && !in_list(no_ref, "*")
+    !in_list(no_ref, stype) && !in_list(no_ref, "*")
 }
 
 // MIT: `find_referral_tgs` (do_tgs_req.c:483-523)
@@ -1136,12 +1140,14 @@ fn find_referral_tgs(
     let host = sname
         .name_string
         .get(1)
-        .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
-        .unwrap_or_default();
-    if !host.contains('.') || krb5_config::is_numeric_address(&host) {
+        .and_then(|s| std::str::from_utf8(s.as_bytes()).ok());
+    let Some(host) = host else {
+        return Err(proto(err::S_PRINCIPAL_UNKNOWN, status::LOOKING_UP_SERVER));
+    };
+    if !host.contains('.') || krb5_config::is_numeric_address(host) {
         return Err(proto(err::S_PRINCIPAL_UNKNOWN, status::LOOKING_UP_SERVER));
     }
-    let Some(other) = store.policy().realm_for_host(&host) else {
+    let Some(other) = store.policy().realm_for_host(host) else {
         return Err(proto(err::S_PRINCIPAL_UNKNOWN, status::LOOKING_UP_SERVER));
     };
     if other.is_empty() || other == req_realm {
@@ -1161,9 +1167,11 @@ fn find_alternate_tgs(
     let far = princ
         .name_string
         .get(1)
-        .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
-        .unwrap_or_default();
-    let hops = krb5_types::transited::walk_realm_tree(&store.policy().capaths, store.realm(), &far);
+        .and_then(|s| std::str::from_utf8(s.as_bytes()).ok());
+    let Some(far) = far else {
+        return Err(proto(err::S_PRINCIPAL_UNKNOWN, status::UNKNOWN_SERVER));
+    };
+    let hops = krb5_types::transited::walk_realm_tree(&store.policy().capaths, store.realm(), far);
     for inst in hops.iter().skip(1).rev() {
         let Ok(hop) = PrincipalName::try_new(PrincipalName::NT_SRV_INST, ["krbtgt", inst.as_str()])
         else {

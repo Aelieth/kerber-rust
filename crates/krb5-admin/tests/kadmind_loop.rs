@@ -113,7 +113,7 @@ fn a_kpasswd_length_past_the_buffer_is_mits_field_toolong() {
     c.read_exact(&mut body).unwrap();
     let e: KrbError = decode(&body).unwrap();
     assert_eq!(e.error_code, err::FIELD_TOOLONG);
-    assert_eq!(e.sname.unparse(), "kadmin/changepw");
+    assert_eq!(e.sname.unparse_lossy(), "kadmin/changepw");
     assert_eq!(std::str::from_utf8(e.realm.as_bytes()).unwrap(), TEST_REALM);
     assert!(e.cname.is_none() && e.e_text.is_none() && e.e_data.is_none());
     assert!(closed(&mut c), "then the stream closes");

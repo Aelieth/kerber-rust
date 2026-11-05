@@ -1207,7 +1207,8 @@ fn interrealm_issue_key_is_not_the_peer_accept_key() {
     let incoming_id = krb5_kdc::lookup_principal_id(
         &PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", TEST_REALM]),
         "AD.KERBER.TEST",
-    );
+    )
+    .expect("utf-8 name");
     let incoming = store.get(&incoming_id).expect("incoming trust");
     assert_eq!(incoming.realm, "AD.KERBER.TEST");
     assert!(

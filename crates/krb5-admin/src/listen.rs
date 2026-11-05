@@ -14,7 +14,6 @@ use krb5_protocol::{
 };
 use krb5_types::{
     ChangePasswdData, HostAddress, KerberosTime, KrbError, Microseconds, PrincipalName, err,
-    principal_compare,
 };
 use zeroize::Zeroize;
 
@@ -439,15 +438,16 @@ pub(crate) fn handle_kpasswd_from(
         body.extend_from_slice(b"Failed decrypting request");
         return reply.result(&store_realm, &body);
     };
-    let ticket_crealm = String::from_utf8_lossy(ok.ticket_part.crealm.as_bytes()).into_owned();
-    let (targ, targ_realm, newpass) = if ver == RFC3244_VERSION {
+    let crealm_bytes = ok.ticket_part.crealm.as_bytes();
+    let ticket_crealm = String::from_utf8_lossy(crealm_bytes).into_owned();
+    let (targ, targ_realm_bytes, newpass) = if ver == RFC3244_VERSION {
         let decoded = decode::<ChangePasswdData>(&user_data);
         wipe_secret(user_data);
         if let Ok(cpw) = decoded {
             // MIT: `decode_krb5_setpw_req` (lib/krb5/asn.1/asn1_k_encode.c:1253-1276)
             // No target is MALFORMED: never the caller's own password.
             let name = cpw.targname;
-            let realm = String::from_utf8_lossy(cpw.targrealm.as_bytes()).into_owned();
+            let realm = cpw.targrealm.as_bytes().to_vec();
             let newpass = cpw.newpasswd.to_vec();
             wipe_octets(cpw.newpasswd);
             (name, realm, newpass)
@@ -460,28 +460,45 @@ pub(crate) fn handle_kpasswd_from(
     } else {
         (
             ok.ticket_part.cname.clone(),
-            ticket_crealm.clone(),
+            crealm_bytes.to_vec(),
             user_data,
         )
     };
-    let client = ok.ticket_part.cname.unparse_with_realm(&ticket_crealm);
-    let target_unparsed = targ.unparse_with_realm(&targ_realm);
+    let targ_realm = String::from_utf8_lossy(&targ_realm_bytes).into_owned();
+    let cname = &ok.ticket_part.cname;
+    let client_strict = std::str::from_utf8(crealm_bytes)
+        .ok()
+        .and_then(|cr| cname.try_unparse_with_realm(cr));
+    let target_strict = std::str::from_utf8(&targ_realm_bytes)
+        .ok()
+        .and_then(|tr| targ.try_unparse_with_realm(tr));
+    let client = client_strict
+        .clone()
+        .unwrap_or_else(|| cname.unparse_with_realm_lossy(&ticket_crealm));
+    let target_unparsed = target_strict
+        .clone()
+        .unwrap_or_else(|| targ.unparse_with_realm_lossy(&targ_realm));
     // MIT: `schpw_util_wrapper` (misc.c:33-54)
     // Compare, INITIAL, auth(CPW), then the DB.
-    let self_change = principal_compare(&targ, &targ_realm, &ok.ticket_part.cname, &ticket_crealm);
+    let self_change = crealm_bytes == targ_realm_bytes.as_slice() && cname.components_eq(&targ);
+    let authorized = match (&client_strict, &target_strict) {
+        (Some(c), Some(t)) => authcfg.stack().cpw(c, t),
+        (Some(c), None) => authcfg.stack().cpw_name(c, &targ, &targ_realm_bytes),
+        (None, _) => self_change && authcfg.stack().self_on(),
+    };
     let (code, text, log_err) = if self_change && !ok.ticket_part.flags.initial() {
         (
             7u16,
             "Ticket must be derived from a password".to_owned(),
             "Operation requires initial ticket".to_owned(),
         )
-    } else if !authcfg.stack().cpw(&client, &target_unparsed) {
+    } else if !authorized {
         (
             5u16,
             "Unauthorized request".to_owned(),
             "Operation requires ``change-password'' privilege".to_owned(),
         )
-    } else if targ_realm != store_realm {
+    } else if targ_realm_bytes != store_realm.as_bytes() {
         (
             2u16,
             UNK_PRINC_PRIV.to_owned(),

@@ -385,12 +385,17 @@ fn decode_keydata_raw(r: &mut XdrIn<'_>) -> Result<Vec<OsaKeyData>, XdrError> {
 }
 
 fn decode_princ(r: &mut XdrIn<'_>) -> Result<(PrincipalName, String), XdrError> {
-    let realm = String::from_utf8_lossy(r.opaque()?).into_owned();
+    let utf8 = |b: &[u8]| {
+        std::str::from_utf8(b)
+            .map(str::to_owned)
+            .map_err(|_| XdrError::Invalid(crate::kdb::NOT_UTF8.into()))
+    };
+    let realm = utf8(r.opaque()?)?;
     let n = r.count(8)?;
     let mut comps = Vec::with_capacity(n);
     for _ in 0..n {
         let _magic = r.u32()?;
-        comps.push(String::from_utf8_lossy(r.opaque()?).into_owned());
+        comps.push(utf8(r.opaque()?)?);
     }
     let ntype = r.u32()?.cast_signed();
     let refs: Vec<&str> = comps.iter().map(String::as_str).collect();

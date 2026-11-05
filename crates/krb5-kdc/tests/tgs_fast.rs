@@ -290,7 +290,10 @@ fn tgs_fast_hide_outer_tgs_rep() {
     let subkey =
         wrap_tgs_fast_opts(&mut tgs, &issued.session_key, inner_body, opts).expect("TGS FAST");
     let out = krb5_kdc::issue_tgs(&store, &tgs).expect("TGS");
-    assert_eq!(out.rep.0.cname.components_joined(), "WELLKNOWN/ANONYMOUS");
+    assert_eq!(
+        out.rep.0.cname.components_joined_lossy(),
+        "WELLKNOWN/ANONYMOUS"
+    );
     assert_eq!(
         String::from_utf8_lossy(out.rep.0.crealm.as_bytes()),
         "WELLKNOWN:ANONYMOUS"

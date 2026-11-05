@@ -193,7 +193,7 @@ pub(super) fn kadm5_prime_arg(proc: u32, args: &[u8], client: &str) -> String {
         | PURGEKEYS | GET_STRINGS | SET_STRING | EXTRACT_KEYS | RENAME_PRINCIPAL | CREATE_ALIAS => {
             r.principal_realm().map_or_else(
                 |_| client.to_owned(),
-                |(p, realm)| p.unparse_with_realm(&realm),
+                |(p, realm)| p.unparse_with_realm_lossy(&realm),
             )
         }
         CREATE_POLICY | DELETE_POLICY | MODIFY_POLICY | GET_POLICY => r
@@ -216,8 +216,8 @@ fn rename_targets(args: &[u8]) -> Option<(String, String)> {
     let (src, src_realm) = r.principal_realm().ok()?;
     let (dst, dst_realm) = r.principal_realm().ok()?;
     Some((
-        src.unparse_with_realm(&src_realm),
-        dst.unparse_with_realm(&dst_realm),
+        src.unparse_with_realm_lossy(&src_realm),
+        dst.unparse_with_realm_lossy(&dst_realm),
     ))
 }
 
@@ -295,7 +295,7 @@ pub(super) fn kadm5_log_lines(
 
 pub(super) fn kadm5_service_name(ctx: &GssContext) -> String {
     match (&ctx.acceptor, &ctx.ticket_realm) {
-        (Some(a), Some(r)) => a.unparse_with_realm(r),
+        (Some(a), Some(r)) => a.unparse_with_realm_lossy(r),
         _ => String::new(),
     }
 }

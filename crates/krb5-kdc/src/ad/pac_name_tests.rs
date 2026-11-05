@@ -129,12 +129,12 @@ fn rbcd_client(name: &str) -> Result<(PrincipalName, String), Error> {
 fn rbcd_pac_client_splits_components_as_mit_parses_them() {
     let (princ, realm) = rbcd_client("a/b@R").unwrap();
     assert_eq!(princ.name_type, PrincipalName::NT_MS_PRINCIPAL);
-    assert_eq!(princ.components_joined(), "a/b");
+    assert_eq!(princ.components_joined_lossy(), "a/b");
     assert_eq!(princ.name_string.len(), 2);
     assert_eq!(realm, "R");
     let (unescaped, _) = rbcd_client(r"a\/b@R").unwrap();
     assert_eq!(unescaped.name_string.len(), 1);
-    assert_eq!(unescaped.components_joined(), "a/b");
+    assert_eq!(unescaped.components_joined_lossy(), "a/b");
 }
 
 #[test]
@@ -142,7 +142,7 @@ fn rbcd_pac_client_parses_an_enterprise_name() {
     let (princ, realm) = rbcd_client("a@b@R").unwrap();
     assert_eq!(princ.name_type, PrincipalName::NT_MS_PRINCIPAL);
     assert_eq!(princ.name_string.len(), 1);
-    assert_eq!(princ.components_joined(), "a@b");
+    assert_eq!(princ.components_joined_lossy(), "a@b");
     assert_eq!(realm, "R");
 }
 

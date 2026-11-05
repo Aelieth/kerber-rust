@@ -29,6 +29,8 @@ use krb5_types::pac::RpcSid;
 use crate::dblock::{DbLock, DbLockHold, DbLockMode};
 use crate::error::Error;
 use crate::persist::{DbStamp, Freshness, PersistError};
+#[cfg(any(test, feature = "test-hooks"))]
+pub(crate) use iprop_ulog::RecordKey;
 use iprop_ulog::{LogContext, LogNote, PrincipalMap};
 use kadm5_hook::Post;
 #[cfg(any(test, feature = "test-hooks"))]
@@ -269,8 +271,7 @@ impl PrincipalStore {
         if let Some(a) = self.ahead.take()
             && self.db_stamp.as_ref() == Some(&a.base)
         {
-            self.apply_appended(a);
-            return Ok(());
+            return self.apply_appended(a);
         }
         let Some(db) = self.db_path().map(std::path::Path::to_path_buf) else {
             return Ok(());
@@ -298,8 +299,7 @@ impl PrincipalStore {
         let Some(a) = self.prepare_appended(lock, db) else {
             return false;
         };
-        self.apply_appended(a);
-        true
+        self.apply_appended(a).is_ok()
     }
 
     /// `K/M` and `kadmin/history` are not password changes.
@@ -336,19 +336,20 @@ impl PrincipalStore {
         Some(ReadAhead { base, taken, stamp })
     }
 
-    fn apply_appended(&mut self, a: ReadAhead) {
+    fn apply_appended(&mut self, a: ReadAhead) -> Result<(), Error> {
         let mut ids = Vec::with_capacity(a.taken.len());
         for op in a.taken {
             match op {
                 Ok(p) => {
                     ids.push(p.id());
-                    self.debug_insert(p);
+                    self.debug_insert(p)?;
                 }
                 Err(id) => self.debug_remove(&id),
             }
         }
         self.resolve_history_of(&ids);
         self.db_stamp = a.stamp;
+        Ok(())
     }
 
     pub(crate) fn journal_key(&self) -> Option<krb5_crypto::ProtocolKey> {
@@ -777,7 +778,7 @@ impl PrincipalStore {
 
     #[must_use]
     pub fn get_in_realm(&self, name: &PrincipalName, princ_realm: &str) -> Option<&Principal> {
-        self.get(&crate::kdb::lookup_principal_id(name, princ_realm))
+        self.get(&crate::kdb::lookup_principal_id(name, princ_realm)?)
     }
 
     #[must_use]
@@ -791,9 +792,11 @@ impl PrincipalStore {
         self.map.values()
     }
 
-    pub(crate) fn debug_insert(&mut self, mut p: Principal) {
+    pub(crate) fn debug_insert(&mut self, mut p: Principal) -> Result<(), Error> {
+        let key = iprop_ulog::RecordKey::of(&p)?;
         self.settle_rid(&mut p);
-        self.map.insert_unlogged(p.id(), p);
+        self.map.put_record_unlogged(key, p);
+        Ok(())
     }
 
     pub(crate) fn principal_by_id(&self, id: &str) -> Option<&Principal> {

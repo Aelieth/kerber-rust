@@ -99,7 +99,7 @@ pub(crate) fn serve_start_diagnostics(store: &dyn PrincipalRead, registry_empty:
             tracing::warn!(
                 target: "kdc.otp",
                 "principal {} has an otp attribute but not +requires_preauth; OTP is never demanded",
-                p.name.unparse_with_realm(store.realm())
+                p.name.unparse_with_realm_lossy(store.realm())
             );
         }
     }
@@ -231,8 +231,8 @@ pub(crate) fn decode_tokens(
             let ty = types.find(type_name).ok_or(())?;
             let username = match item.member("username") {
                 Some(Value::String(s)) => s.clone(),
-                _ if ty.strip_realm => name.unparse_no_realm().into_bytes(),
-                _ => name.unparse_with_realm(realm).into_bytes(),
+                _ if ty.strip_realm => name.unparse_no_realm_lossy().into_bytes(),
+                _ => name.unparse_with_realm_lossy(realm).into_bytes(),
             };
             let indicators = match item.member("indicators") {
                 None => None,
@@ -352,7 +352,7 @@ fn otp_verify(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, OtpFail> 
             E_EINVAL,
             &format!(
                 "Can't decode otp config string for principal '{}'",
-                rock.client.name.unparse_with_realm(realm)
+                rock.client.name.unparse_with_realm_lossy(realm)
             ),
         );
         return Err(fail(24, E_EINVAL));
@@ -360,7 +360,7 @@ fn otp_verify(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, OtpFail> 
     let otp_value: &[u8] = req.otp_value.as_ref().map_or(&[][..], AsRef::as_ref);
     let runtime = rock.store.otp_runtime();
     let pool = runtime.map(crate::plugins::OtpRuntime::pool);
-    let principal_label = rock.client.name.unparse_with_realm(realm);
+    let principal_label = rock.client.name.unparse_with_realm_lossy(realm);
     let peer = request_peer();
     let mut resume = take_otp_resume();
     for (i, tok) in tokens.iter().enumerate() {

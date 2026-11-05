@@ -73,7 +73,8 @@ pub use kadm5_params::{kadm5_params_missing, realm_kadm5_params_missing};
 #[cfg(any(test, feature = "test-hooks"))]
 pub use kdb::MemoryStore;
 pub use kdb::{
-    KdcEnv, PrincipalRead, PrincipalWrite, Store, StoreLifecycle, lookup_principal_id, open_store,
+    KdcEnv, NOT_UTF8, PrincipalRead, PrincipalWrite, Store, StoreLifecycle, lookup_principal_id,
+    open_store,
 };
 pub use kdb_dump::{
     DumpError, DumpFile, DumpKeyData, DumpKeySlot, DumpOkStage, DumpPrincipal, IpropHeaderError,

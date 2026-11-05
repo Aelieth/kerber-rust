@@ -145,8 +145,8 @@ pub(super) fn store_code(proc: u32, e: &krb5_kdc::Error) -> u32 {
     }
 }
 
-fn acl_id(name: &PrincipalName, realm: &str) -> String {
-    name.unparse_with_realm(realm)
+fn acl_id(name: &PrincipalName, realm: &str) -> Option<String> {
+    name.try_unparse_with_realm(realm)
 }
 
 fn parse_actor(actor: &str) -> Option<(PrincipalName, String)> {
@@ -264,7 +264,7 @@ pub(super) fn dispatch_kadm5_ticket(
         DELETE_PRINCIPAL => {
             let (name, prealm) = parse_one_princ(args)?;
             let req = req_realm(&prealm, &realm);
-            if changepw || !stack.delprinc(actor, &acl_id(&name, &req)) {
+            if changepw || !acl_id(&name, &req).is_some_and(|t| stack.delprinc(actor, &t)) {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_DELETE));
             }
             let mut g = match write_store(store, proc, API_V2) {
@@ -369,9 +369,9 @@ pub(super) fn dispatch_kadm5_ticket(
                 Err(rep) => return rep,
             };
             let req = req_realm(&c.prealm, &realm);
-            let tid = acl_id(&c.name, &req);
             // MIT: `create_principal_2_svc` (kadmin/server/server_stubs.c)
-            let (authorized, rss) = stack.addprinc(actor, &tid);
+            let (authorized, rss) = acl_id(&c.name, &req)
+                .map_or((false, Vec::new()), |tid| stack.addprinc(actor, &tid));
             if changepw || !authorized {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_ADD));
             }
@@ -468,8 +468,8 @@ pub(super) fn dispatch_kadm5_ticket(
             // ACL (AUTH_INSUFFICIENT), then lockdown.
             // MIT: `acl_renprinc` (auth_acl.c:638-648)
             // ACL: delete on src, add on dest, no restrictions.
-            if changepw || !stack.renprinc(actor, &acl_id(&old, &old_req), &acl_id(&new, &new_req))
-            {
+            let ids = acl_id(&old, &old_req).zip(acl_id(&new, &new_req));
+            if changepw || !ids.is_some_and(|(o, n)| stack.renprinc(actor, &o, &n)) {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_INSUFFICIENT));
             }
             let mut g = match write_store(store, proc, API_V2) {
@@ -875,13 +875,8 @@ pub(super) fn dispatch_kadm5_ticket(
             let target_req = req_realm(&target_realm, &realm);
             // MIT: `create_alias_2_svc` (server_stubs.c:1727-1758)
             // No lockdown check, as MIT.
-            if changepw
-                || !stack.addalias(
-                    actor,
-                    &acl_id(&alias, &alias_req),
-                    &acl_id(&target, &target_req),
-                )
-            {
+            let ids = acl_id(&alias, &alias_req).zip(acl_id(&target, &target_req));
+            if changepw || !ids.is_some_and(|(a, t)| stack.addalias(actor, &a, &t)) {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_INSUFFICIENT));
             }
             let mut g = match write_store(store, proc, API_V2) {

@@ -225,7 +225,7 @@ impl DumpFile {
             }
             let (princ, sid) = p.into_principal(mkey)?;
             if princ.rid != 0
-                && princ.name.components_joined() != "K/M"
+                && princ.name.components_joined_lossy() != "K/M"
                 && let Some(owner) = seen_rid.insert(princ.rid, princ.id())
             {
                 return Err(DumpError::Format(format!(
@@ -241,7 +241,7 @@ impl DumpFile {
             } else if domain.is_none() {
                 domain = sid;
             }
-            store.debug_insert(princ);
+            store.debug_insert(princ)?;
         }
         for line in &self.policies {
             store.load_policy(parse_policy_rest(line));
@@ -351,7 +351,7 @@ impl DumpPrincipal {
                 kdb_salt,
             });
         }
-        if name.components_joined() == "K/M"
+        if name.components_joined_lossy() == "K/M"
             && let Some(first) = keys.first()
             && first.key.as_bytes().ct_eq(mkey.as_bytes()).unwrap_u8() != 1
         {
@@ -716,12 +716,14 @@ fn write_dump_nra(
     let mut princs: Vec<&Principal> = store.debug_principals().collect();
     princs.sort_by_key(|p| {
         (
-            p.name.components_joined() != "K/M",
-            p.name.components_joined(),
+            p.name.components_joined_lossy() != "K/M",
+            p.name.components_joined_lossy(),
         )
     });
     let mut out = format!("kdb5_util load_dump version {KDB_DUMP_VERSION}\n");
-    let has_km = princs.iter().any(|p| p.name.components_joined() == "K/M");
+    let has_km = princs
+        .iter()
+        .any(|p| p.name.components_joined_lossy() == "K/M");
     if !has_km {
         let km = synthesize_km(
             store.realm(),
@@ -1344,14 +1346,14 @@ fn write_princ_record(
             &p.realm,
             krb5_types::unix_now(),
             p.mkvno,
-            p.name.components_joined() == "K/M",
+            p.name.components_joined_lossy() == "K/M",
         )
     } else {
         p.tl_data.clone()
     };
     tl.retain(|t| t.ty != TL_DB_ARGS && t.ty != TL_KERBER_SERIAL);
     merge_sid_tl(&mut tl, store.domain_sid(), p.rid);
-    let is_km = p.name.components_joined() == "K/M" && p.realm == store.realm();
+    let is_km = p.name.components_joined_lossy() == "K/M" && p.realm == store.realm();
     merge_rid_hwm(&mut tl, store.next_rid(), is_km);
     merge_s4u_tl(&mut tl, p);
     merge_kadm_tl(&mut tl, p);

@@ -22,7 +22,7 @@ pub fn princ_eq(a: &Princ, b: &Princ) -> bool {
 
 #[must_use]
 pub fn unparse(p: &Princ) -> String {
-    p.1.unparse_with_realm(&realm_str(&p.0))
+    p.1.unparse_with_realm_lossy(&realm_str(&p.0))
 }
 
 fn realm_str(r: &Realm) -> String {
@@ -704,7 +704,7 @@ fn identify_realm(
             Err(e) => {
                 return Err(Krb5Error::from_as(
                     &e,
-                    &client.unparse_with_realm(&realm),
+                    &client.unparse_with_realm_lossy(&realm),
                     &realm,
                 ));
             }

@@ -24,7 +24,7 @@ impl PrincipalStore {
         foreign_realm: &str,
         password: &[u8],
     ) -> Result<(), Error> {
-        let (out_name, out_id, in_name, in_id) = self.trust_ids(foreign_realm);
+        let (out_name, out_id, in_name, in_id) = self.trust_ids(foreign_realm)?;
         let make_in = !self.map.contains_key(&in_id);
         self.allow_trust(acl, actor, &out_id, &in_id, make_in)?;
         let realm = self.realm.clone();
@@ -59,7 +59,7 @@ impl PrincipalStore {
         key: ProtocolKey,
         kvno: Option<u32>,
     ) -> Result<(), Error> {
-        let (out_name, out_id, in_name, in_id) = self.trust_ids(foreign_realm);
+        let (out_name, out_id, in_name, in_id) = self.trust_ids(foreign_realm)?;
         let make_in = !self.map.contains_key(&in_id);
         self.allow_trust(acl, actor, &out_id, &in_id, make_in)?;
         let kvno = asked_kvno(kvno)?;
@@ -125,7 +125,7 @@ impl PrincipalStore {
     ) -> Result<(), Error> {
         self.inside_change()?;
         let name = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", self.realm.as_str()]);
-        let id = crate::kdb::lookup_principal_id(&name, foreign_realm);
+        let id = crate::kdb::new_principal_id(&name, foreign_realm)?;
         if let Some(p) = self.map.get(&id) {
             acl.check(actor, AdminOp::SetKey, Some(&id))?;
             if p.attributes & KDB_LOCKDOWN_KEYS != 0 {
@@ -155,13 +155,16 @@ impl PrincipalStore {
         self.impose_trust(acl, actor, &id)
     }
 
-    fn trust_ids(&self, foreign_realm: &str) -> (PrincipalName, String, PrincipalName, String) {
+    fn trust_ids(
+        &self,
+        foreign_realm: &str,
+    ) -> Result<(PrincipalName, String, PrincipalName, String), Error> {
         let out_name = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", foreign_realm]);
-        let out_id = crate::kdb::lookup_principal_id(&out_name, &self.realm);
+        let out_id = crate::kdb::new_principal_id(&out_name, &self.realm)?;
         let in_name =
             PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", self.realm.as_str()]);
-        let in_id = crate::kdb::lookup_principal_id(&in_name, foreign_realm);
-        (out_name, out_id, in_name, in_id)
+        let in_id = crate::kdb::new_principal_id(&in_name, foreign_realm)?;
+        Ok((out_name, out_id, in_name, in_id))
     }
 
     fn allow_trust(

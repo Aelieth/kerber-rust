@@ -1248,7 +1248,7 @@ fn serialize_plain(store: &PrincipalStore) -> Vec<u8> {
     let n = u32::try_from(store_debug_count(store)).unwrap_or(0);
     out.extend_from_slice(&n.to_be_bytes());
     for p in store_iter(store) {
-        put_str(&mut out, &p.name.unparse());
+        put_str(&mut out, &p.name.unparse_lossy());
         out.extend_from_slice(&p.name.name_type.to_be_bytes());
         put_bytes(&mut out, &p.salt);
         out.push(u8::from(p.requires_preauth()));
@@ -1324,7 +1324,7 @@ fn parse_plain(plain: &[u8], v2: bool, v3: bool) -> Result<PrincipalStore, Persi
                 pw_expire,
             },
         );
-        store_insert(&mut store, p);
+        store_insert(&mut store, p)?;
         let _ = S2K_ITERS;
     }
     if i + 4 <= plain.len() && &plain[i..i + 4] == b"SID1" {
@@ -1356,8 +1356,10 @@ fn store_iter(store: &PrincipalStore) -> impl Iterator<Item = &Principal> {
     store.debug_principals()
 }
 
-fn store_insert(store: &mut PrincipalStore, p: Principal) {
-    store.debug_insert(p);
+fn store_insert(store: &mut PrincipalStore, p: Principal) -> Result<(), PersistError> {
+    store
+        .debug_insert(p)
+        .map_err(|e| PersistError::Format(e.to_string()))
 }
 
 fn put_str(out: &mut Vec<u8>, s: &str) {

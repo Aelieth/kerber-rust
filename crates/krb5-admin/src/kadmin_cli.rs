@@ -110,7 +110,7 @@ impl Handle {
 
     /// `K/M@realm`, which `kadm5` refuses to delete.
     pub(crate) fn is_master(&self, name: &PrincipalName, realm: &str) -> bool {
-        realm == self.realm && name.components_joined() == "K/M"
+        realm == self.realm && name.components_joined_lossy() == "K/M"
     }
 }
 
@@ -447,7 +447,7 @@ fn ccache_principal(cc: &krb5_config::CcSpec, profile: &krb5_config::Krb5Conf) -
         krb5_config::CcSpec::Memory(_) => return None,
     };
     let (realm, name) = parsed.primary;
-    Some(name.unparse_with_realm(&String::from_utf8_lossy(realm.as_bytes())))
+    Some(name.unparse_with_realm_lossy(&String::from_utf8_lossy(realm.as_bytes())))
 }
 
 fn unescaped(s: &str, c: u8) -> Option<usize> {
@@ -565,7 +565,7 @@ fn kadm5_init(
         return Err((open.load_text(krb5_kdc::PersistError::Lock(e)), false));
     }
     let caller = krb5_types::principal_from_unparsed(princstr, realm)
-        .map(|(n, r)| n.unparse_with_realm(&r))
+        .map(|(n, r)| n.unparse_with_realm_lossy(&r))
         .map_err(|_| (texts::MALFORMED.to_owned(), false))?;
     if o.mkey_from_kbd {
         let pw = io

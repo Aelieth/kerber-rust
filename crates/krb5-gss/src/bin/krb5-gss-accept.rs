@@ -75,7 +75,7 @@ fn main() {
     eprintln!(
         "gss-accept keytab entries={} principal={}",
         service_keys.len(),
-        ent.name.components_joined()
+        ent.name.components_joined_lossy()
     );
 
     let listener = TcpListener::bind(&listen).unwrap_or_else(|e| {

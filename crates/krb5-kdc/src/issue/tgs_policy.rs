@@ -31,7 +31,7 @@ pub(super) fn check_tgs_u2u(
     }
     let crealm = utf8_realm(&st.part.crealm)?;
     let id = lookup_principal_id(&st.part.cname, crealm);
-    let Some(client) = store.fetch(&id)? else {
+    let Some(client) = id.map(|id| store.fetch(&id)).transpose()?.flatten() else {
         return Err(proto(err::SERVER_NOMATCH, status::SECOND_TKT_MISMATCH));
     };
     if client.name != dest.name || client.realm != dest.realm {
@@ -152,7 +152,12 @@ pub(super) fn check_tgs_s4u2self(
         .map_err(|_| proto(err::BADOPTION, status::S4U2SELF_LOCAL_PAC_CLIENT))?;
     let authtime = enc_tkt.authtime.unix_seconds();
     if let Some(ref client) = s4u.local {
-        if !pac_client_info_eq(&parsed, authtime, &enc_tkt.cname.components_joined(), None) {
+        if !pac_client_info_eq(
+            &parsed,
+            authtime,
+            &enc_tkt.cname.components_joined_lossy(),
+            None,
+        ) {
             return Err(proto(err::BADOPTION, status::S4U2SELF_LOCAL_PAC_CLIENT));
         }
         let empty = crate::store::Principal::from_keys(
@@ -171,7 +176,7 @@ pub(super) fn check_tgs_s4u2self(
     } else if !pac_client_info_eq(
         &parsed,
         authtime,
-        &s4u.user.components_joined(),
+        &s4u.user.components_joined_lossy(),
         Some(&s4u.realm),
     ) {
         return Err(proto(err::BADOPTION, status::S4U2SELF_FOREIGN_PAC_CLIENT));

@@ -177,7 +177,7 @@ pub(crate) fn addprinc(s: &mut Session<'_>, argv: &[String]) {
     let Some((name, realm)) = a.name.clone() else {
         return;
     };
-    let canon = name.unparse_with_realm(&realm);
+    let canon = name.unparse_with_realm_lossy(&realm);
     if a.mask & mask::POLICY != 0 {
         let policy = a.policy.clone().unwrap_or_default();
         if !s.io.script_mode && !policy_exists(s, &policy) {
@@ -331,7 +331,7 @@ pub(crate) fn modprinc(s: &mut Session<'_>, argv: &[String]) {
             return;
         }
     };
-    let canon = name.unparse_with_realm(&realm);
+    let canon = name.unparse_with_realm_lossy(&realm);
     let old =
         s.h.refresh()
             .map_err(|e| texts::princ_text(&e))
@@ -442,7 +442,7 @@ pub(crate) fn delprinc(s: &mut Session<'_>, argv: &[String]) {
             return;
         }
     };
-    let canon = name.unparse_with_realm(&realm);
+    let canon = name.unparse_with_realm_lossy(&realm);
     if argc == 2 && !s.io.script_mode {
         s.io.print(&format!(
             "Are you sure you want to delete the principal \"{canon}\"? (yes/no): "
@@ -503,8 +503,8 @@ pub(crate) fn renprinc(s: &mut Session<'_>, argv: &[String]) {
             return;
         }
     };
-    let ocanon = old.unparse_with_realm(&old_realm);
-    let ncanon = new.unparse_with_realm(&new_realm);
+    let ocanon = old.unparse_with_realm_lossy(&old_realm);
+    let ncanon = new.unparse_with_realm_lossy(&new_realm);
     if argc == 3 && !s.io.script_mode {
         s.io.print(&format!(
             "Are you sure you want to rename the principal \"{ocanon}\" to \"{ncanon}\"? \
@@ -563,8 +563,8 @@ pub(crate) fn addalias(s: &mut Session<'_>, argv: &[String]) {
             return;
         }
     };
-    let acanon = alias.unparse_with_realm(&arealm);
-    let tcanon = target.unparse_with_realm(&trealm);
+    let acanon = alias.unparse_with_realm_lossy(&arealm);
+    let tcanon = target.unparse_with_realm_lossy(&trealm);
     let done =
         s.h.mutate(|st, caller| st.create_alias_in(&alias, &arealm, &target, &trealm, caller));
     if let Err(e) = done {
@@ -645,7 +645,7 @@ pub(crate) fn cpw(s: &mut Session<'_>, argv: &[String]) {
             return;
         }
     };
-    let canon = name.unparse_with_realm(&realm);
+    let canon = name.unparse_with_realm_lossy(&realm);
     let keep = u32::from(keepold);
     if pwarg.is_none() && randkey {
         let done = s.h.mutate(|st, caller| {
@@ -710,7 +710,7 @@ pub(crate) fn getprinc(s: &mut Session<'_>, argv: &[String]) {
             return;
         }
     };
-    let canon = name.unparse_with_realm(&realm);
+    let canon = name.unparse_with_realm_lossy(&realm);
     let found =
         s.h.refresh()
             .map_err(|e| texts::princ_text(&e))
@@ -808,7 +808,7 @@ pub(crate) fn purgekeys(s: &mut Session<'_>, argv: &[String]) {
             return;
         }
     };
-    let canon = name.unparse_with_realm(&realm);
+    let canon = name.unparse_with_realm_lossy(&realm);
     let done =
         s.h.mutate(|st, caller| st.purgekeys_in(&name, &realm, keepkvno, caller));
     if let Err(e) = done {
@@ -839,7 +839,7 @@ pub(crate) fn getstrings(s: &mut Session<'_>, argv: &[String]) {
             return;
         }
     };
-    let canon = name.unparse_with_realm(&realm);
+    let canon = name.unparse_with_realm_lossy(&realm);
     let got =
         s.h.refresh()
             .and_then(|()| s.h.store.get_strings_in(&name, &realm));
@@ -887,7 +887,7 @@ fn set_or_del(s: &mut Session<'_>, pname: &str, key: &str, value: Option<&str>, 
             return;
         }
     };
-    let canon = name.unparse_with_realm(&realm);
+    let canon = name.unparse_with_realm_lossy(&realm);
     let done =
         s.h.mutate(|st, caller| st.set_string_in(&name, &realm, key, value, caller));
     match (done, value) {

@@ -1131,7 +1131,7 @@ fn base_state(
 fn decrypt_issued(store: &dyn PrincipalRead, ticket: &Ticket) -> Option<EncTicketPart> {
     let realm = realm_str(&ticket.realm);
     let princ = store
-        .fetch(&lookup_principal_id(&ticket.sname, &realm))
+        .fetch(&lookup_principal_id(&ticket.sname, &realm)?)
         .ok()
         .flatten()?;
     ticket_key(&princ, ticket.enc_part.etype, store.policy())
@@ -1186,7 +1186,10 @@ fn header_enc_part(store: &dyn PrincipalRead, req: &TgsReq) -> Option<EncTicketP
 }
 
 fn tgs_client_name(store: &dyn PrincipalRead, req: &TgsReq, rep: &TgsRep, realm: &str) -> String {
-    let reply = rep.0.cname.unparse_with_realm(&realm_str(&rep.0.crealm));
+    let reply = rep
+        .0
+        .cname
+        .unparse_with_realm_lossy(&realm_str(&rep.0.crealm));
     if !reply.contains("WELLKNOWN/ANONYMOUS") {
         return reply;
     }
@@ -1205,7 +1208,7 @@ fn tgs_error_client(store: &dyn PrincipalRead, req: &TgsReq, realm: &str) -> Str
     } else {
         crealm.as_str()
     };
-    part.cname.unparse_with_realm(realm)
+    part.cname.unparse_with_realm_lossy(realm)
 }
 
 fn tgs_s4u_kind(req: &TgsReq) -> Option<(&'static str, String)> {
@@ -1234,14 +1237,14 @@ fn s4u_user_unparse(padata: &[krb5_types::PaData]) -> String {
             && let Ok(fu) = decode::<krb5_types::s4u::PaForUser>(p.padata_value.as_ref())
         {
             let realm = realm_str(&fu.user_realm);
-            return fu.user_name.unparse_with_realm(&realm);
+            return fu.user_name.unparse_with_realm_lossy(&realm);
         }
     }
     "<unknown>".into()
 }
 
 fn opt_unparse(name: Option<&PrincipalName>, realm: &str, fallback: &str) -> String {
-    name.map_or_else(|| fallback.into(), |n| n.unparse_with_realm(realm))
+    name.map_or_else(|| fallback.into(), |n| n.unparse_with_realm_lossy(realm))
 }
 
 fn format_from(sender: Option<&HostAddress>) -> String {

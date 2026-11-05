@@ -124,7 +124,7 @@ pub fn kpropd_do_iprop(cfg: &KpropdIprop<'_>, wake: &IpropWake) -> i32 {
         log.com_err(None, "while trying to construct host service principal");
         return done();
     };
-    let client_name = format!("{}@{}", client.unparse_no_realm(), cfg.realm);
+    let client_name = format!("{}@{}", client.unparse_no_realm_lossy(), cfg.realm);
     let ulog = match Ulog::map(&cfg.params.logfile, cfg.params.ulogsize) {
         Ok(u) => u,
         Err(e) => {

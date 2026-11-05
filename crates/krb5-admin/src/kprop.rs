@@ -328,8 +328,14 @@ fn recvauth_with<S: Read + Write + PeerAddr>(
         write_message(stream, &der).map_err(|e| Error::Inner(e.to_string()))?;
     }
     let local_seq = ac.local_seq();
-    let crealm = String::from_utf8_lossy(ok.authenticator.crealm.as_bytes());
-    let client = ok.authenticator.cname.unparse_with_realm(&crealm);
+    let strict = std::str::from_utf8(ok.authenticator.crealm.as_bytes())
+        .ok()
+        .and_then(|cr| ok.authenticator.cname.try_unparse_with_realm(cr));
+    let Some(client) = strict else {
+        let crealm = String::from_utf8_lossy(ok.authenticator.crealm.as_bytes());
+        let shown = ok.authenticator.cname.unparse_with_realm_lossy(&crealm);
+        return Err(Error::KpropUnauthorized(shown));
+    };
     let auth = KpropAuth {
         session,
         local_seq,
@@ -1214,7 +1220,7 @@ fn doit(
     log.debug(&format!("Connection from {host}"));
     // MIT: `kerberos_authenticate` (kprop/kpropd.c:1185-1295)
     if let Some(server) = expected_server.filter(|_| load.debug) {
-        let server = server.unparse_with_realm(expected_realm.unwrap_or_default());
+        let server = server.unparse_with_realm_lossy(expected_realm.unwrap_or_default());
         eprintln!(
             "krb5_recvauth({}, kprop5_01, {server}, ...)",
             stream.as_raw_fd()
@@ -1523,7 +1529,7 @@ mod tests {
             let profile = kdc_profile().profile;
             for host in ["kdc2", "KDC2"] {
                 match kpropd_server_name_for(host, &profile) {
-                    Ok(name) => println!("{host}=[{}]", name.components_joined()),
+                    Ok(name) => println!("{host}=[{}]", name.components_joined_lossy()),
                     Err(e) => println!("{host}=error {e}"),
                 }
             }

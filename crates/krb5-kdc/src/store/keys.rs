@@ -200,7 +200,7 @@ impl PrincipalStore {
         actor: &str,
         name: &PrincipalName,
     ) -> Result<Keytab, Error> {
-        let id = crate::kdb::lookup_principal_id(name, &self.realm);
+        let id = crate::kdb::principal_id(name, &self.realm)?;
         acl.check(actor, AdminOp::Ktadd, Some(&id))?;
         let p = self.get_name(name).ok_or(Error::NotFound)?;
         if p.attributes & KDB_LOCKDOWN_KEYS != 0 {
@@ -240,9 +240,10 @@ impl PrincipalStore {
             })();
             // No database: a failed rotate puts the old keys back.
             if done.is_err() && rotate && !persisted {
-                let id = snap.id();
-                s.note_ulog(id.clone(), false, Some(snap.clone()));
-                s.map.insert(id, snap);
+                if let Ok(key) = super::iprop_ulog::RecordKey::of(&snap) {
+                    s.note_ulog(key.as_str().to_owned(), false, Some(snap.clone()));
+                    s.map.put_record(key, snap);
+                }
                 let _ = s.log_pending();
             }
             done
@@ -300,7 +301,8 @@ impl PrincipalStore {
         actor: &str,
     ) -> Result<Vec<KeyEntry>, Error> {
         self.inside_change()?;
-        let history = princ_realm == self.realm && name.components_joined() == "kadmin/history";
+        let history =
+            princ_realm == self.realm && name.components_joined_lossy() == "kadmin/history";
         if history && keepold > 0 {
             return Err(Error::InvalidArgument(
                 "Cannot change protected principal".into(),
@@ -429,7 +431,7 @@ impl PrincipalStore {
         if keys.is_empty() {
             return Err(Error::InvalidArgument("Invalid argument".into()));
         }
-        if princ_realm == self.realm && name.components_joined() == "kadmin/history" {
+        if princ_realm == self.realm && name.components_joined_lossy() == "kadmin/history" {
             return Err(Error::InvalidArgument(
                 "Cannot change protected principal".into(),
             ));

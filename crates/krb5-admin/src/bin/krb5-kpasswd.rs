@@ -286,7 +286,7 @@ fn client(
     }
     if let Some((realm, name)) = cached {
         let realm = String::from_utf8_lossy(realm.as_bytes()).into_owned();
-        let display = name.unparse_with_realm(&realm);
+        let display = name.unparse_with_realm_lossy(&realm);
         let client = Client {
             name,
             realm,
@@ -306,7 +306,7 @@ fn client(
 
 fn parse_client(name: &str, conf: &Krb5Conf) -> Result<Client, String> {
     let (name, realm) = parse_principal(&with_default_realm(name, conf)?)?;
-    let display = name.unparse_with_realm(&realm);
+    let display = name.unparse_with_realm_lossy(&realm);
     Ok(Client {
         name,
         realm,

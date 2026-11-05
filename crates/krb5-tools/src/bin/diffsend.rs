@@ -123,7 +123,7 @@ fn expect_error_no_edata(cfg: &Cfg, case: &str, req: &[u8], code: i32) -> Result
     if re.e_data.is_some() || me.e_data.is_some() {
         return Err(format!("{case}: e_data present"));
     }
-    let cn = |e: &KrbError| e.cname.as_ref().map(PrincipalName::components_joined);
+    let cn = |e: &KrbError| e.cname.as_ref().map(PrincipalName::components_joined_lossy);
     let cr = |e: &KrbError| {
         e.crealm
             .as_ref()
@@ -156,7 +156,10 @@ fn expect_hidden_client_error(cfg: &Cfg, case: &str, req: &[u8], code: i32) -> R
         let der = std::fs::read(cfg.out.join(format!("{case}.{leg}.der")))
             .map_err(|e| format!("{case} {leg} der: {e}"))?;
         let err: KrbError = decode(&der).map_err(|e| format!("{case} {leg} decode: {e}"))?;
-        let cn = err.cname.as_ref().map(PrincipalName::components_joined);
+        let cn = err
+            .cname
+            .as_ref()
+            .map(PrincipalName::components_joined_lossy);
         let cr = err
             .crealm
             .as_ref()
@@ -245,7 +248,7 @@ fn expect_hidden_tgs_rep(cfg: &Cfg, case: &str, req: &[u8]) -> Result<(), String
             ));
         }
         let rep: TgsRep = decode(raw).map_err(|e| format!("{case} {leg}: {e}"))?;
-        let cn = rep.0.cname.components_joined();
+        let cn = rep.0.cname.components_joined_lossy();
         let cr = String::from_utf8_lossy(rep.0.crealm.as_bytes());
         if cn != "WELLKNOWN/ANONYMOUS" || cr != "WELLKNOWN:ANONYMOUS" {
             return Err(format!(
@@ -299,7 +302,7 @@ fn expect_error_client(
     let rust_text = et(&re);
     compare_krb_error(&re, &me).map_err(|e| format!("{case}: {e}"))?;
     if check_client {
-        let cn = |e: &KrbError| e.cname.as_ref().map(PrincipalName::components_joined);
+        let cn = |e: &KrbError| e.cname.as_ref().map(PrincipalName::components_joined_lossy);
         let cr = |e: &KrbError| {
             e.crealm
                 .as_ref()
@@ -446,9 +449,9 @@ fn expect_tgs_rep(cfg: &Cfg, case: &str, req: &[u8]) -> Result<(), String> {
         let TgsRep(rep) = decode(raw).map_err(|e| format!("{case} {leg}: {e}"))?;
         Ok([
             String::from_utf8_lossy(rep.crealm.as_bytes()).into_owned(),
-            rep.cname.components_joined(),
+            rep.cname.components_joined_lossy(),
             String::from_utf8_lossy(rep.ticket.realm.as_bytes()).into_owned(),
-            rep.ticket.sname.components_joined(),
+            rep.ticket.sname.components_joined_lossy(),
             rep.cname.name_type.to_string(),
             rep.ticket.sname.name_type.to_string(),
         ])
@@ -999,7 +1002,7 @@ fn mint_signed_header_ex(
             enc_tkt_der: &der,
             is_service_tkt: !sname.is_krbtgt(),
         },
-        &dummy_ident(&pac_cname.components_joined(), realm),
+        &dummy_ident(&pac_cname.components_joined_lossy(), realm),
         None,
     )
     .map_err(|e| e.to_string())?;
@@ -1074,7 +1077,7 @@ fn mint_signed_stkt(
             enc_tkt_der: &der,
             is_service_tkt: true,
         },
-        &dummy_ident(&pac_cname.components_joined(), realm),
+        &dummy_ident(&pac_cname.components_joined_lossy(), realm),
         None,
     )
     .map_err(|e| e.to_string())?;
@@ -5369,7 +5372,7 @@ fn run() -> Result<(), String> {
     let want_hier = "krbtgt/SUB.KERBER.TEST";
     for (leg, raw) in [("rust", hr.as_slice()), ("mit", hm.as_slice())] {
         let TgsRep(rep) = decode::<TgsRep>(raw).map_err(|e| e.to_string())?;
-        let ticket_sname = rep.ticket.sname.components_joined();
+        let ticket_sname = rep.ticket.sname.components_joined_lossy();
         if ticket_sname != want_hier {
             return Err(format!(
                 "tgs-alternate-tgs-hierarchical {leg} ticket.sname={ticket_sname} want {want_hier}"
@@ -5379,7 +5382,7 @@ fn run() -> Result<(), String> {
         let plain = decrypt(&sess, usage, rep.enc_part.cipher.as_ref())
             .map_err(|e| format!("tgs-alternate-tgs-hierarchical {leg} enc-part: {e}"))?;
         let enc = decode_enc_kdc_rep(&plain).map_err(|e| e.to_string())?;
-        let enc_sname = enc.sname.components_joined();
+        let enc_sname = enc.sname.components_joined_lossy();
         if enc_sname != want_hier {
             return Err(format!(
                 "tgs-alternate-tgs-hierarchical {leg} enc.sname={enc_sname} want {want_hier}"
@@ -6760,7 +6763,7 @@ fn fa_cases(
             .ok_or_else(|| format!("fa-fast-hide-client-rep {leg}: no finished"))?;
         let real = format!(
             "{}@{}",
-            fin.cname.components_joined(),
+            fin.cname.components_joined_lossy(),
             String::from_utf8_lossy(fin.crealm.as_bytes())
         );
         if real != "user@KERBER.TEST" {
@@ -6770,7 +6773,7 @@ fn fa_cases(
         }
         outer.push(format!(
             "{}@{}",
-            rep.0.cname.components_joined(),
+            rep.0.cname.components_joined_lossy(),
             String::from_utf8_lossy(rep.0.crealm.as_bytes())
         ));
     }

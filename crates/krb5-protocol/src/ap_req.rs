@@ -507,13 +507,13 @@ fn decrypt_for_server(
     {
         let server = params
             .expected_server
-            .map(|s| s.unparse_with_realm(params.expected_realm.unwrap_or_default()))
+            .map(|s| s.unparse_with_realm_lossy(params.expected_realm.unwrap_or_default()))
             .unwrap_or_default();
         return Err(Error::KrbError {
             code: err::NOT_US,
             text: Some(format!(
                 "Server principal {server} does not match request ticket server {}",
-                ap.ticket.sname.unparse_with_realm(&tkt_realm)
+                ap.ticket.sname.unparse_with_realm_lossy(&tkt_realm)
             )),
         });
     }
@@ -579,7 +579,7 @@ fn decrypt_for_server(
         let named = lookup || params.expected_server.is_some();
         // MIT: `keytab_fetch_error` (rd_req_dec.c:137-155)
         if found_wrong_kvno && !tried_any && named {
-            let sname = name.unparse_with_realm(&realm);
+            let sname = name.unparse_with_realm_lossy(&realm);
             let want = want_kvno.unwrap_or(0);
             return Err(if same_princ {
                 Error::KrbError {
@@ -591,7 +591,7 @@ fn decrypt_for_server(
                     code: err::NOT_US,
                     text: Some(format!(
                         "Cannot find key for {sname} kvno {want} in keytab (request ticket server {})",
-                        ap.ticket.sname.unparse_with_realm(&tkt_realm)
+                        ap.ticket.sname.unparse_with_realm_lossy(&tkt_realm)
                     )),
                 }
             });
@@ -611,7 +611,7 @@ fn decrypt_for_server(
                 } else {
                     format!(
                         "No key table entry found for {}",
-                        name.unparse_with_realm(&realm)
+                        name.unparse_with_realm_lossy(&realm)
                     )
                 }),
             });
@@ -629,8 +629,8 @@ fn decrypt_for_server(
                 },
                 text: Some(format!(
                     "Cannot decrypt ticket for {} using keytab key for {}",
-                    ap.ticket.sname.unparse_with_realm(&tkt_realm),
-                    name.unparse_with_realm(&realm)
+                    ap.ticket.sname.unparse_with_realm_lossy(&tkt_realm),
+                    name.unparse_with_realm_lossy(&realm)
                 )),
             });
         }
@@ -663,12 +663,13 @@ fn decrypt_by_keytab_walk(
     let mut walk = KeytabWalk::default();
     for (i, key) in params.keys.iter().enumerate() {
         // No-principal slot: the ticket server's; the caller holds its keys.
-        let (ename, erealm) = params
-            .key_principals
-            .and_then(|p| p.get(i))
-            .map_or((&ap.ticket.sname, tkt_realm.clone()), |(n, r)| {
-                (n, String::from_utf8_lossy(r.as_bytes()).into_owned())
-            });
+        let (ename, erealm) = match params.key_principals.and_then(|p| p.get(i)) {
+            None => (&ap.ticket.sname, tkt_realm.clone()),
+            Some((n, r)) => match std::str::from_utf8(r.as_bytes()) {
+                Ok(r) => (n, r.to_owned()),
+                Err(_) => continue,
+            },
+        };
         let is_tkt_server = principal_compare(ename, &erealm, &ap.ticket.sname, &tkt_realm);
         if !sname_match(
             params.expected_server,
@@ -730,10 +731,10 @@ fn iteration_error(
     tkt_kvno: u32,
     walk: &KeytabWalk,
 ) -> Error {
-    let tsname = ap.ticket.sname.unparse_with_realm(tkt_realm);
+    let tsname = ap.ticket.sname.unparse_with_realm_lossy(tkt_realm);
     let sname = params
         .expected_server
-        .map(|s| s.unparse_with_realm(params.expected_realm.unwrap_or_default()));
+        .map(|s| s.unparse_with_realm_lossy(params.expected_realm.unwrap_or_default()));
     let etype = ap.ticket.enc_part.etype;
     let encname =
         crate::trace::enctype_shortest_name(etype).map_or_else(|| etype.to_string(), str::to_owned);
@@ -800,6 +801,14 @@ fn verify_inner(
         return Err(Error::TruncatedReply);
     }
     let ap: ApReq = decode(raw)?;
+    if ap.ticket.sname.try_unparse().is_none()
+        || std::str::from_utf8(ap.ticket.realm.as_bytes()).is_err()
+    {
+        return Err(Error::KrbError {
+            code: err::NOT_US,
+            text: Some(PrincipalName::NOT_UTF8.into()),
+        });
+    }
     let ignore_host = params.ignore_acceptor_hostname;
     let tkt_usage = KeyUsage::new(ku::TICKET)?;
     let explicit = !is_matching(params.expected_server, params.expected_realm, ignore_host);
