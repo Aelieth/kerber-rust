@@ -654,9 +654,8 @@ if [ "$rc" -eq 0 ]; then
     echo "Rust kinit --fast must fail when PA-FX-FAST is stripped from the FAST error" >&2
     exit 1
 fi
-# The Rust kinit renders the fatal outer error as `KRB-ERROR 25` (MIT's
-# "Additional pre-authentication required" is code 25).
-echo "$RUST_Z12_STRIP" | grep -q 'KRB-ERROR 25' || {
+# The Rust kinit prints the table text of code 25, as MIT's does (krb5-kinit.rs:83).
+echo "$RUST_Z12_STRIP" | grep -q 'Additional pre-authentication required while getting initial credentials' || {
     echo "Rust kinit --fast must stop with the outer 25: $RUST_Z12_STRIP" >&2
     exit 1
 }

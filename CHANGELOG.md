@@ -16,10 +16,27 @@ any other `###` heading.
 
 ## [Unreleased]
 
+### Changed
+
+- **brainpool.** Denies `unwrap`, `expect`, `panic` outside tests, as the other library crates do.
+
+### Fixed
+
+- **crypto.** `prf_plus` fails past 255 blocks, as MIT's `krb5_c_prfplus`; it repeated block 255.
+
+### Removed
+
+- **types.** PKINIT `cms_verify`, `cms_verify_full`, `cms_unwrap`, `cms_extract_unsigned`: no caller.
+- **field.** `lib/raw-tgs.py`: no caller.
+
 ### Tests and CI
 
 - **field.** Lab addresses, AD DC, LLDAP base DN are `field.env` keys; `lab.sh` reads it too.
 - **ci.** ci-policy fails on RFC 1918 addresses in `harness/`, `docs/`, `scripts/`, `.github/`.
+- **fuzz.** Nightly runs all nine targets; `pkinit_cms` drives `cms_signeddata_verify`.
+- **ci.** shellcheck covers `harness/field/p18/*.sh`; `ci-status.py` knows `ci`, `peers`, `nightly`.
+- **ci.** FAST gate's stripped-25 leg greps kinit's message, as MIT's leg does, not a log line.
+- **ci.** Samba image drops `samba-testsuite`; the l2 gate vendors `kcrypto.py`.
 
 ## [1.2.0] - 2026-11-04
 

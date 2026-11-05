@@ -913,7 +913,6 @@ pub(super) fn auth_code_for(proc: u32) -> u32 {
     }
 }
 
-/// AclDenied: the stub's KADM5_AUTH_*.
 // MIT: `kadm5_setkey_principal_3` (lib/kadm5/srv/svr_principal.c:1519-1556)
 fn setkey3_tuples(keys: &mut [krb5_kdc::KeyEntry], ks: &[(i32, i32)]) -> bool {
     if ks.is_empty() {

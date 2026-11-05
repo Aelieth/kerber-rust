@@ -11,7 +11,7 @@ public for a public repository; job logs are not); `GITHUB_TOKEN` in the
 environment is sent when present. Exit status is 0 when the newest listed run of the selected
 workflow succeeded, 1 when it failed, 2 when it is still running or unknown.
 
-`--save SHA` writes `<workflow>-<sha>.txt` (`ci-<sha>.txt`, `fuzz-<sha>.txt`) only
+`--save SHA` writes `<workflow>-<sha>.txt` (`ci-<sha>.txt`, `nightly-<sha>.txt`) only
 from a **completed**, non-rate-limited run whose every job step carries its
 `started_at` / `completed_at` (GitHub stamps steps minutes after the run
 completes; retries with backoff capped at 60 s for at least 15 minutes; exits 2
@@ -56,10 +56,7 @@ API = "https://api.github.com"
 WORKFLOW_FILES = {
     "ci": "ci.yml",
     "peers": "peers.yml",
-    "soak": "soak.yml",
-    "fuzz": "fuzz.yml",
-    "kcm-opcode": "kcm-opcode.yml",
-    "full-test": "full-test.yml",
+    "nightly": "nightly.yml",
 }
 
 
@@ -380,7 +377,7 @@ def unstamped_steps(jobs: list[dict]) -> int:
 
 
 def save_name(workflow: str, sha: str) -> str:
-    """`<workflow>-<sha7>.txt`: `ci` → `ci-<sha>.txt`, `fuzz` or `fuzz.yml` → `fuzz-<sha>.txt`."""
+    """`<workflow>-<sha7>.txt`: `ci` → `ci-<sha>.txt`, `nightly` or `nightly.yml` → `nightly-<sha>.txt`."""
     stem = re.sub(r"[^a-z0-9-]+", "-", pathlib.Path(workflow).stem.lower()).strip("-") or "ci"
     return f"{stem}-{sha[:7]}.txt"
 

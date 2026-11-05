@@ -116,7 +116,7 @@ criteria = "safe-to-deploy"
 [[exemptions.ctutils]]
 version = "0.4.5"
 criteria = "safe-to-deploy"
-notes = "A RustCrypto constant-time utility, compiled through crypto-bigint, digest and sec1 on secret paths; exempted pending a cargo-vet audit at the 1.2 supply-chain pass."
+notes = "A RustCrypto constant-time utility, compiled through crypto-bigint, digest and sec1 on secret paths; exempted, unaudited."
 
 [[exemptions.curve25519-dalek]]
 version = "5.0.0"
@@ -167,7 +167,7 @@ criteria = "safe-to-deploy"
 [[exemptions.fiat-crypto]]
 version = "0.3.0"
 criteria = "safe-to-deploy"
-notes = "Compiled as the p384 constant-time field (p384_backend = \"fiat\", .cargo/config.toml) on the PKINIT P-384 path; exempted pending a cargo-vet audit at the 1.2 supply-chain pass."
+notes = "Compiled as the p384 constant-time field (p384_backend = \"fiat\", .cargo/config.toml) on the PKINIT P-384 path; exempted, unaudited."
 
 [[exemptions.find-msvc-tools]]
 version = "0.1.10"
