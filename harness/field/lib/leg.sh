@@ -54,10 +54,10 @@ resetvm() {
 kdcis() {
     if [ "$LEG" = mit ]; then
         check kdc.leg '^kdc: MIT krb5-server-[0-9].*, binaries as packaged, no kerber-rust install$' run kdc \
-            "systemctl is-active krb5kdc kadmin | paste -sd' ' -; sudo rpm -V krb5-server krb5-libs | grep -E ' /usr/(s?bin|lib64)/'; [ ! -e /usr/share/kerber-rust/install-manifest ] && ! sudo rpm -V krb5-server | grep -qE '^..5.* /usr/sbin/(krb5kdc|kadmind)\$' && echo \"kdc: MIT \$(rpm -q krb5-server), binaries as packaged, no kerber-rust install\""
+            "systemctl is-active $UNIT_KDC $UNIT_ADMIN | paste -sd' ' -; sudo rpm -V krb5-server krb5-libs | grep -E ' /usr/(s?bin|lib64)/'; [ ! -e /usr/share/kerber-rust/install-manifest ] && ! sudo rpm -V krb5-server | grep -qE '^..5.* /usr/sbin/(krb5kdc|kadmind)\$' && echo \"kdc: MIT \$(rpm -q krb5-server), binaries as packaged, no kerber-rust install\""
     else
         check kdc.leg '^kdc: kerber-rust, [1-9][0-9]* files as installed$' run kdc \
-            "systemctl is-active krb5kdc kadmin | paste -sd' ' -; sudo sha256sum -c --quiet /usr/share/kerber-rust/install-manifest && echo \"kdc: kerber-rust, \$(wc -l < /usr/share/kerber-rust/install-manifest) files as installed\""
+            "systemctl is-active $UNIT_KDC $UNIT_ADMIN | paste -sd' ' -; sudo sha256sum -c --quiet /usr/share/kerber-rust/install-manifest && echo \"kdc: kerber-rust, \$(wc -l < /usr/share/kerber-rust/install-manifest) files as installed\""
         check kdc.ref '^programs: [1-9][0-9]* in the manifest, each identical to the build$' \
             runin kdc "lib/install-check.sh" "sh -s -- ~/kerber-rust-${FIELD_SHA:0:12}" < "$FIELD_LIB/install-check.sh"
     fi

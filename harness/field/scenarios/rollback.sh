@@ -59,7 +59,7 @@ check RB.ops.deleted '"rbdel@' host "grep -E 'does not exist' $(printf '%q' "$ST
 
 if [ "$LEG" = rust ]; then
     section "RB.back: docs/install.md \"Going back to MIT\", its block as written, in the ref's checkout"
-    observe RB.back.dir 'principal[.a-z]*' run kdc "sudo ls -la /var/kerberos/krb5kdc"
+    observe RB.back.dir 'principal[.a-z]*' run kdc "sudo ls -la $KDCDATADIR"
     tar -xOf "$FIELD_TREE_TAR" "$CO/docs/install.md" > "$STATE/install.md"
     check doc.back.blocks 'line:1' host "python3 -B $(printf '%q' "$DOCB") count $(printf '%q' "$STATE/install.md") '### Going back to MIT'"
     check doc.back.script rc host "python3 -B $(printf '%q' "$DOCB") script $(printf '%q' "$STATE/install.md") '### Going back to MIT' 1 --session '. \"\$HOME/.cargo/env\"' --session 'cd ~/$CO' > $(printf '%q' "$STATE/back.sh")"
@@ -82,11 +82,11 @@ if [ "$LEG" = rust ]; then
 else
     section "RB.back: the oracle's own round trip, MIT's kdb5_util dump and load of the realm"
     check RB.back.dump rc run kdc "sudo install -d -m 0700 $W && sudo kdb5_util dump $W/mit.dump"
-    check RB.back.load rc run kdc "sudo systemctl stop krb5kdc kadmin && sudo kdb5_util load $W/mit.dump && sudo systemctl start krb5kdc kadmin"
+    check RB.back.load rc run kdc "sudo systemctl stop $UNIT_KDC $UNIT_ADMIN && sudo kdb5_util load $W/mit.dump && sudo systemctl start $UNIT_KDC $UNIT_ADMIN"
 fi
 
 section "RB.mit: MIT's KDC serves the realm, its getprinc lines as before, and MIT's kinit gets alice a TGT"
-check RB.mit.kdc '^kdc: MIT krb5-server-[0-9].*, binaries as packaged, active active$' run kdc "sudo rpm -V krb5-server | grep -E ' /usr/sbin/'; ! sudo rpm -V krb5-server | grep -qE '^..5.* /usr/sbin/(krb5kdc|kadmind|kdb5_util|kadmin\\.local)\$' && echo \"kdc: MIT \$(rpm -q krb5-server), binaries as packaged, \$(systemctl is-active krb5kdc kadmin | paste -sd' ' -)\""
+check RB.mit.kdc '^kdc: MIT krb5-server-[0-9].*, binaries as packaged, active active$' run kdc "sudo rpm -V krb5-server | grep -E ' /usr/sbin/'; ! sudo rpm -V krb5-server | grep -qE '^..5.* /usr/sbin/(krb5kdc|kadmind|kdb5_util|kadmin\\.local)\$' && echo \"kdc: MIT \$(rpm -q krb5-server), binaries as packaged, \$(systemctl is-active $UNIT_KDC $UNIT_ADMIN | paste -sd' ' -)\""
 fields after
 sides RB.mit.fields before "$STATE/before" after "$STATE/after" \
     && check RB.mit.fields '^fields equal$' host "diff $(printf '%q' "$STATE/before") $(printf '%q' "$STATE/after") && echo 'fields equal'"

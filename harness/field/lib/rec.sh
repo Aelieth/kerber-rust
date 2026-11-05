@@ -33,6 +33,8 @@
 
 FIELD_LIB=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 FIELD_DIR=$(dirname "$FIELD_LIB")
+# shellcheck source=family.sh
+. "$FIELD_LIB/family.sh" || exit 1
 LAB=${LAB:-$FIELD_DIR/lab.sh}
 LABQ=$(printf '%q' "$LAB")
 export LABQ

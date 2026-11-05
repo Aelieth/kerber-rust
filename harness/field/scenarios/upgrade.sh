@@ -47,12 +47,12 @@ if [ "$LEG" = mit ]; then
     section "upgrade --leg mit: kdc reset to $MIT_SNAPSHOT_KDC, the stock MIT realm $REALM (the oracle); the ref under test is not installed"
     resetvm kdc
     kdcis
-    check mit.active '^active active$' run kdc "systemctl is-active krb5kdc kadmin | paste -sd' ' -"
+    check mit.active '^active active$' run kdc "systemctl is-active $UNIT_KDC $UNIT_ADMIN | paste -sd' ' -"
     listencheck
     check mit.logs.label "$LOGS_OK" run kdc "$LOGS"
     observe obs.mit.packages 'krb5-server-[^ ]+' run kdc "rpm -q krb5-server krb5-libs krb5-workstation | paste -sd' ' -; uname -r"
     MIN=$(( ($(date +%s) - T0) / 60 + 2 ))
-    host "COLLECT_MINUTES=$MIN $LABQ collect kdc $(printf '%q' "$REC_DIR/collect") /etc/krb5.conf /var/kerberos/krb5kdc/kdc.conf /var/kerberos/krb5kdc/kadm5.acl"
+    host "COLLECT_MINUTES=$MIN $LABQ collect kdc $(printf '%q' "$REC_DIR/collect") /etc/krb5.conf $KDCDIR/kdc.conf $KDCDIR/kadm5.acl"
     if [ -f "$REC_DIR/collect/kdc/journal.txt" ]; then _redact < "$REC_DIR/collect/kdc/journal.txt" > "$STATE/j" && mv "$STATE/j" "$REC_DIR/collect/kdc/journal.txt"; fi
     finish
     exit
@@ -119,7 +119,7 @@ check reset.kdc rc host "$LABQ reset kdc $RUST_SNAPSHOT_KDC"
 check reset.client2 rc host "$LABQ reset client2 $RUST_SNAPSHOT_CLIENT2"
 waitsync kdc
 waitsync client2
-run kdc "getenforce; systemctl is-active krb5kdc kadmin | paste -sd' ' -; sudo sha256sum /usr/sbin/krb5kdc /usr/sbin/kadmind; sudo grep -c _listen /var/kerberos/krb5kdc/kdc.conf; ls ~"
+run kdc "getenforce; systemctl is-active $UNIT_KDC $UNIT_ADMIN | paste -sd' ' -; sudo sha256sum /usr/sbin/krb5kdc /usr/sbin/kadmind; sudo grep -c _listen $KDCDIR/kdc.conf; ls ~"
 check realm.before.listprincs "^alice@$R\$" run kdc "sudo kadmin.local -q listprincs"
 cp "$LAST_OUT" "$STATE/listprincs.before"
 check realm.before.alice "^Principal: alice@$R\$" run kdc "sudo kadmin.local -q 'getprinc alice'"
@@ -148,7 +148,7 @@ docrun upgrade-1 '^sudo grep .*_listen'
 li=$(awk -F'\t' '$4 ~ /^sudo grep .*_listen/ { print $1; exit }' "$STATE/upgrade-1.results")
 mapfile -t EDIT < <(python3 -B "$DOCB" output "$STATE/upgrade-1.out" "${li:-0}" | all6 | sort -rn)
 if [ "${#EDIT[@]}" -gt 0 ]; then
-    run kdc "sudo sed -i $(printf -- '-e %sd ' "${EDIT[@]}")/var/kerberos/krb5kdc/kdc.conf; echo \"sed: rc=\$?\"; sudo grep -nE $LISTEN /var/kerberos/krb5kdc/kdc.conf; true"
+    run kdc "sudo sed -i $(printf -- '-e %sd ' "${EDIT[@]}")$KDCDIR/kdc.conf; echo \"sed: rc=\$?\"; sudo grep -nE $LISTEN $KDCDIR/kdc.conf; true"
     left=$(all6 "$LAST_OUT" | wc -l)
     res=FAIL
     if grep -qx 'sed: rc=0' "$LAST_OUT" && [ "$left" = 0 ]; then res=PASS; fi
@@ -174,10 +174,12 @@ checklast log.kadmind.starting 'kadmind\[[0-9]+\]\(info\): starting$'
 observelast obs.log.loaded '\(info\): Loaded.*'
 AVC="getenforce; d=\$(sudo ausearch --input-logs -m AVC,USER_AVC,SELINUX_ERR -ts $WSTART 2>&1); r=\$?; [ \"\$r\" = 1 ] || printf '%s\n' \"\$d\"; c=\$(sudo ausearch --input-logs -m USER_CMD -ts $WSTART 2>/dev/null | grep -c '^type=USER_CMD'); printf 'denials: %s (ausearch rc=%s); USER_CMD control: %s records\n' \"\$(printf '%s\n' \"\$d\" | tail -n 1)\" \"\$r\" \"\$c\""
 AVC_OK='^denials: <no matches> \(ausearch rc=1\); USER_CMD control: [1-9][0-9]* records$'
-check selinux.avc "$AVC_OK" run kdc "$AVC; ps -eZ | grep -E 'krb5kdc|kadmind'"
-checklast selinux.enforcing '^Enforcing$'
-checklast selinux.krb5kdc_t ':krb5kdc_t:s0 +[0-9]+ .* krb5kdc$'
-checklast selinux.kadmind_t ':kadmind_t:s0 +[0-9]+ .* kadmind$'
+if [ "$MAC" = selinux ]; then
+    check selinux.avc "$AVC_OK" run kdc "$AVC; ps -eZ | grep -E 'krb5kdc|kadmind'"
+    checklast selinux.enforcing '^Enforcing$'
+    checklast selinux.krb5kdc_t ':krb5kdc_t:s0 +[0-9]+ .* krb5kdc$'
+    checklast selinux.kadmind_t ':kadmind_t:s0 +[0-9]+ .* kadmind$'
+fi
 check realm.after.listprincs "^alice@$R\$" run kdc "sudo kadmin.local -q listprincs"
 cp "$LAST_OUT" "$STATE/listprincs.after"
 check realm.after.alice "^Principal: alice@$R\$" run kdc "sudo kadmin.local -q 'getprinc alice'"
@@ -189,7 +191,7 @@ sides realm.alice.same before "$STATE/alice.before" after "$STATE/alice.after" \
 check strings.control rc runin kdc "lib/strings-check.sh" "sh -s -- --control" < "$FIELD_LIB/strings-check.sh"
 check strings.manifest '^programs in /usr/share/kerber-rust/install-manifest: [1-9][0-9]*, all [1-9][0-9]* checked$' \
     runin kdc "lib/strings-check.sh" "sh -s -- --manifest /usr/share/kerber-rust/install-manifest" < "$FIELD_LIB/strings-check.sh"
-RSS="printf 'krb5kdc %s KiB, kadmind %s KiB\n' \"\$(ps -o rss= -C krb5kdc | head -n 1 | tr -d ' ')\" \"\$(ps -o rss= -C kadmind | head -n 1 | tr -d ' ')\"; systemctl show -p MemoryCurrent krb5kdc kadmin"
+RSS="printf 'krb5kdc %s KiB, kadmind %s KiB\n' \"\$(ps -o rss= -C krb5kdc | head -n 1 | tr -d ' ')\" \"\$(ps -o rss= -C kadmind | head -n 1 | tr -d ' ')\"; systemctl show -p MemoryCurrent $UNIT_KDC $UNIT_ADMIN"
 observe obs.rss.start 'krb5kdc [0-9]+ KiB, kadmind [0-9]+ KiB' run kdc "$RSS"
 
 section "6. MIT clients on client2 (IPv4): kinit, kvno and remote kadmin over UDP, then over TCP"
@@ -249,9 +251,9 @@ capstop kdc upgrade
 section "9. leaving the VMs: client2's caches and scratch removed; kdc keeps the ref's install and ~/$CO; AVC over the whole window"
 run client2 "for c in ~/field/*.cc; do [ -e \"\$c\" ] && KRB5CCNAME=FILE:\$c kdestroy; done; rm -rf ~/field; ls -a ~"
 run kdc "rm -rf ~/field; ls ~; sudo nft list tables; systemctl list-units --all 'field-*' --no-legend | wc -l"
-check selinux.avc.end "$AVC_OK" run kdc "$AVC"
+[ "$MAC" != selinux ] || check selinux.avc.end "$AVC_OK" run kdc "$AVC"
 MIN=$(( ($(date +%s) - T0) / 60 + 2 ))
-host "COLLECT_MINUTES=$MIN $LABQ collect kdc $(printf '%q' "$REC_DIR/collect") /var/log/krb5kdc.log /var/log/kadmind.log /etc/krb5.conf /etc/krb5.conf.d /var/kerberos/krb5kdc/kdc.conf /var/kerberos/krb5kdc/kadm5.acl /usr/share/kerber-rust/install-manifest /usr/lib/systemd/system/krb5kdc.service /usr/lib/systemd/system/kadmin.service /etc/sysconfig/krb5kdc /etc/sysconfig/kadmin && COLLECT_MINUTES=$MIN $LABQ collect client2 $(printf '%q' "$REC_DIR/collect") /etc/krb5.conf /etc/krb5.conf.d"
+host "COLLECT_MINUTES=$MIN $LABQ collect kdc $(printf '%q' "$REC_DIR/collect") /var/log/krb5kdc.log /var/log/kadmind.log /etc/krb5.conf /etc/krb5.conf.d $KDCDIR/kdc.conf $KDCDIR/kadm5.acl /usr/share/kerber-rust/install-manifest /usr/lib/systemd/system/$UNIT_KDC.service /usr/lib/systemd/system/$UNIT_ADMIN.service $ENVDIR/$UNIT_KDC $ENVDIR/$UNIT_ADMIN && COLLECT_MINUTES=$MIN $LABQ collect client2 $(printf '%q' "$REC_DIR/collect") /etc/krb5.conf /etc/krb5.conf.d"
 for j in "$REC_DIR"/collect/*/journal.txt; do
     [ -f "$j" ] && _redact < "$j" > "$j.r" && mv "$j.r" "$j"
 done

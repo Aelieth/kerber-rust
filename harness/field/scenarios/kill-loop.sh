@@ -28,7 +28,7 @@ esac
 . "$FIELD_LIB/leg.sh"
 W=/var/tmp/kl
 cleanup() {
-    timeout -k 5 300 "$LAB" ssh kdc -- "for p in \$(sudo kadmin.local -q listprincs 2>/dev/null | grep -E '^kl[0-9]{3}@'); do sudo kadmin.local -q \"delprinc -force \$p\" > /dev/null 2>&1; done; sudo find /var/kerberos/krb5kdc -maxdepth 1 -name '.principal.tmp-*' -delete; sudo rm -rf $W ~/kill-loop.py; true" < /dev/null > /dev/null 2>&1
+    timeout -k 5 300 "$LAB" ssh kdc -- "for p in \$(sudo kadmin.local -q listprincs 2>/dev/null | grep -E '^kl[0-9]{3}@'); do sudo kadmin.local -q \"delprinc -force \$p\" > /dev/null 2>&1; done; sudo find $KDCDATADIR -maxdepth 1 -name '.principal.tmp-*' -delete; sudo rm -rf $W ~/kill-loop.py; true" < /dev/null > /dev/null 2>&1
     timeout -k 5 300 "$LAB" reset kdc2 "$MIT_SNAPSHOT_KDC2" < /dev/null > /dev/null 2>&1
     timeout -k 5 60 "$LAB" down kdc2 < /dev/null > /dev/null 2>&1
 }
@@ -43,7 +43,7 @@ check reset.kdc2 rc host "$LABQ reset kdc2 $MIT_SNAPSHOT_KDC2"
 waitsync kdc2
 check kdc2.mit '^kdc2: MIT krb5-server-[0-9].*, binaries as packaged, python 3' run kdc2 \
     "sudo rpm -V krb5-server krb5-libs | grep -E ' /usr/(s?bin|lib64)/'; ! sudo rpm -V krb5-server | grep -qE '^..5.* /usr/sbin/(kdb5_util|kadmin\\.local)\$' && echo \"kdc2: MIT \$(rpm -q krb5-server), binaries as packaged, \$(python3 -V | tr P p)\""
-check kdc2.stash '^stash copied$' host "$LABQ ssh kdc -- 'sudo cat /var/kerberos/krb5kdc/.k5.$REALM' | $LABQ ssh kdc2 -- 'sudo install -d -m 0700 $W && sudo install -m 0600 /dev/stdin $W/stash && echo stash copied'"
+check kdc2.stash '^stash copied$' host "$LABQ ssh kdc -- 'sudo cat $KDCDIR/.k5.$REALM' | $LABQ ssh kdc2 -- 'sudo install -d -m 0700 $W && sudo install -m 0600 /dev/stdin $W/stash && echo stash copied'"
 for vm in kdc kdc2; do
     check "$vm.driver" rc runin "$vm" "lib/kill-loop.py" "cat > ~/kill-loop.py" < "$FIELD_LIB/kill-loop.py"
 done
@@ -64,7 +64,7 @@ observelast KL.database '^the database after a kill: .*'
 observelast KL.doubt '^in doubt: .*'
 observelast KL.stale '^stale temp files: .*'
 N=$(sed -n 's/^dumps: \([0-9][0-9]*\) .*/\1/p' "$LAST_OUT")
-check KL.daemons '^krb5kdc active, kadmin active$' run kdc "printf 'krb5kdc %s, kadmin %s\\n' \$(systemctl is-active krb5kdc kadmin)"
+check KL.daemons '^krb5kdc active, kadmin active$' run kdc "printf 'krb5kdc %s, kadmin %s\\n' \$(systemctl is-active $UNIT_KDC $UNIT_ADMIN)"
 
 section "KL.mit: each dump through MIT's kdb5_util load, then MIT's listprincs and getprinc, on kdc2"
 check KL.copy "^dumps on kdc2: ${N:-none}\$" host "$LABQ ssh kdc -- 'sudo tar -C $W -c dumps expect.jsonl base.txt' | $LABQ ssh kdc2 -- 'sudo tar -C $W -x && echo \"dumps on kdc2: \$(sudo find $W/dumps -name \"*.dump\" | wc -l)\"'"

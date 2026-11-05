@@ -32,7 +32,7 @@ legset ADMIN ALICE BOB MASTER
 DOCB=$FIELD_LIB/docblocks.py
 CO=kerber-rust-${FIELD_SHA:0:12}
 CARGO_ENV=". \"\$HOME/.cargo/env\""
-KD=/var/kerberos/krb5kdc
+KD=$KDCDIR
 cleanup() {
     timeout -k 5 60 "$LAB" ssh client2 -- "for c in ~/field/*.cc; do [ -e \"\$c\" ] && KRB5CCNAME=FILE:\$c kdestroy; done; rm -rf ~/field; true" < /dev/null > /dev/null 2>&1
     timeout -k 5 60 "$LAB" ssh kdc -- 'rm -rf ~/field; true' < /dev/null > /dev/null 2>&1
@@ -73,11 +73,11 @@ $R = {
      max_renewable_life = 7d
 EOF
     printf '     supported_enctypes = aes256-cts-hmac-sha1-96:normal aes128-cts-hmac-sha1-96:normal\n}\n' >> "$STATE/kdc.conf"
-    check conf.kdc rc hostin kdc.conf "$LABQ ssh kdc -- 'sudo install -d -m 0755 $KD && sudo tee $KD/kdc.conf >/dev/null && sudo restorecon $KD/kdc.conf'" < "$STATE/kdc.conf"
+    check conf.kdc rc hostin kdc.conf "$LABQ ssh kdc -- 'sudo install -d -m 0755 $KD && sudo tee $KD/kdc.conf >/dev/null && sudo $RESTORECON $KD/kdc.conf'" < "$STATE/kdc.conf"
     printf '[libdefaults]\n    default_realm = %s\n    dns_lookup_kdc = false\n\n[realms]\n    %s = {\n        kdc = %s\n        admin_server = %s\n        kpasswd_server = %s\n    }\n\n[domain_realm]\n    .%s = %s\n    %s = %s\n' "$R" "$R" "$KDC_HOST" "$KDC_HOST" "$KDC_HOST" "$DOMAIN" "$R" "$DOMAIN" "$R" > "$STATE/krb5.conf"
-    check conf.krb5 rc hostin krb5.conf "$LABQ ssh kdc -- 'sudo tee /etc/krb5.conf >/dev/null && sudo restorecon /etc/krb5.conf'" < "$STATE/krb5.conf"
+    check conf.krb5 rc hostin krb5.conf "$LABQ ssh kdc -- 'sudo tee /etc/krb5.conf >/dev/null && sudo $RESTORECON /etc/krb5.conf'" < "$STATE/krb5.conf"
     # The settled aci ACL, written before kadmind starts (admin/admin has all; svc/setup has aci on host/* nfs/*).
-    check conf.acl rc hostin kadm5.acl "$LABQ ssh kdc -- 'sudo tee $KD/kadm5.acl >/dev/null && sudo restorecon $KD/kadm5.acl'" \
+    check conf.acl rc hostin kadm5.acl "$LABQ ssh kdc -- 'sudo tee $KD/kadm5.acl >/dev/null && sudo $RESTORECON $KD/kadm5.acl'" \
         <<< "$(printf 'admin/admin@%s\t*\nsvc/setup@%s\taci\thost/*@%s\nsvc/setup@%s\taci\tnfs/*@%s\n' "$R" "$R" "$R" "$R" "$R")"
 }
 # gp_capture <tag> <principal>...: each principal's getprinc block, graded by name and cp'd for the record.
@@ -128,7 +128,7 @@ realm_and_population() {
     kdcconf "$1"
     check db.create "master key name 'K/M@$R" runin kdc "master pw" "sudo kdb5_util create -s -r $R 2>&1" < <(twice "$MASTER")
     gp_capture boot K/M "krbtgt/$R" kadmin/admin kadmin/changepw
-    check kdc.start '^active active$' run kdc "sudo restorecon -Rv $KD >/dev/null 2>&1; sudo systemctl enable --now krb5kdc kadmin && systemctl is-active krb5kdc kadmin | paste -sd' ' -"
+    check kdc.start '^active active$' run kdc "sudo $RESTORECON -Rv $KD >/dev/null 2>&1; sudo systemctl enable --now $UNIT_KDC $UNIT_ADMIN && systemctl is-active $UNIT_KDC $UNIT_ADMIN | paste -sd' ' -"
     make_principals
     stage_svc_keytab
     gp_capture pop admin/admin svc/setup alice bob "krbtgt/$R"
@@ -166,8 +166,10 @@ else
     check strings.control rc runin kdc "lib/strings-check.sh" "sh -s -- --control" < "$FIELD_LIB/strings-check.sh"
     check strings.manifest '^programs in /usr/share/kerber-rust/install-manifest: [1-9][0-9]*, all [1-9][0-9]* checked$' runin kdc "lib/strings-check.sh" "sh -s -- --manifest /usr/share/kerber-rust/install-manifest" < "$FIELD_LIB/strings-check.sh"
     AVC="getenforce; d=\$(sudo ausearch --input-logs -m AVC,USER_AVC,SELINUX_ERR -ts $WSTART 2>&1); r=\$?; [ \"\$r\" = 1 ] || printf '%s\n' \"\$d\"; c=\$(sudo ausearch --input-logs -m USER_CMD -ts $WSTART 2>/dev/null | grep -c '^type=USER_CMD'); printf 'denials: %s (ausearch rc=%s); USER_CMD control: %s records\n' \"\$(printf '%s\n' \"\$d\" | tail -n 1)\" \"\$r\" \"\$c\""
-    check selinux.avc '^denials: <no matches> \(ausearch rc=1\); USER_CMD control: [1-9][0-9]* records$' run kdc "$AVC"
-    checklast selinux.enforcing '^Enforcing$'
+    if [ "$MAC" = selinux ]; then
+        check selinux.avc '^denials: <no matches> \(ausearch rc=1\); USER_CMD control: [1-9][0-9]* records$' run kdc "$AVC"
+        checklast selinux.enforcing '^Enforcing$'
+    fi
 fi
 MIN=$(( ($(date +%s) - T0) / 60 + 2 ))
 host "COLLECT_MINUTES=$MIN $LABQ collect kdc $(printf '%q' "$REC_DIR/collect") /var/log/krb5kdc.log /var/log/kadmind.log /etc/krb5.conf $KD/kdc.conf $KD/kadm5.acl && COLLECT_MINUTES=$MIN $LABQ collect client2 $(printf '%q' "$REC_DIR/collect") /etc/krb5.conf"

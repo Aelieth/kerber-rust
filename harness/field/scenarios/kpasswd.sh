@@ -32,7 +32,7 @@ legset ALICE ALICE_TEMP ADMIN
 R=${REALM//./\\.}
 LN=${FIELD_LAB_NET:?FIELD_LAB_NET is not set in field.env}
 LNe=${LN//./\\.}
-DB=/var/kerberos/krb5kdc
+DB=$KDCDATADIR
 cleanup() {
     timeout -k 5 60 "$LAB" ssh kdc -- "findmnt -n $DB > /dev/null && sudo umount $DB; [ -e $DB/principal.kh ] && sudo mv $DB/principal.kh $DB/principal; true" < /dev/null > /dev/null 2>&1
     timeout -k 5 60 "$LAB" ssh client2 -- 'rm -rf ~/kh; true' < /dev/null > /dev/null 2>&1

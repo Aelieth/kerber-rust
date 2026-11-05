@@ -36,7 +36,7 @@ trap 'exit 129' HUP
 R=$REALM
 section "kadmind-start --leg $LEG: foreground start-up failures on kdc, realm $R (the service stays up, holding 464 and 749)"
 kdcis
-check kadmin.active '^active$' run kdc "systemctl is-active kadmin"
+check kadmin.active '^active$' run kdc "systemctl is-active $UNIT_ADMIN"
 hostin "lib/al1-start-probe.sh" "$LABQ ssh kdc -- 'rm -f ~/field/al1-start-probe.sh && install -d -m 0700 ~/field && cat > ~/field/al1-start-probe.sh && chmod 0755 ~/field/al1-start-probe.sh'" < "$FIELD_LIB/al1-start-probe.sh"
 
 section "A1b: an unreadable dict_file stops kadmind in the foreground, before the network"

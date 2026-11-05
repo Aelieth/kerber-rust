@@ -49,7 +49,7 @@ corecount() { runin kdc "count a secret's raw occurrences in the core" 'grep -o 
 
 section "secrets-gcore --leg $LEG: kadmind core after a kpasswd change and a kadmin cpw on kdc, realm $REALM"
 kdcis
-check kadmin.active '^active$' run kdc "systemctl is-active kadmin"
+check kadmin.active '^active$' run kdc "systemctl is-active $UNIT_ADMIN"
 resetvm client2
 run client2 "rm -rf ~/sr1; mkdir -m 0700 ~/sr1"
 check client2.setpw rc runin client2 "lib/setpw.py" "cat > ~/sr1/setpw.py" < "$FIELD_LIB/setpw.py"

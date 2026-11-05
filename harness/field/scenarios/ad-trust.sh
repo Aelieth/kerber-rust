@@ -212,7 +212,7 @@ checklast out.dc-4769-alice "  4769  user=alice@KERBER\\.TEST  domain=KERBER\\.T
 section "SB.ad-spnego (RA3): the DC (ADKERBER\\krbadmin) as the SPNEGO client of Apache mod_auth_gssapi on kdc, over kdc's LAN address (#2-#4)"
 runin kdc "lib/ad/ra3-gssapi.conf" 'sudo install -m 0644 /dev/stdin /etc/httpd/conf.d/ra3-gssapi.conf' < "$FIELD_LIB/ad/ra3-gssapi.conf"
 runin kdc "lib/ad/whoami.cgi" 'sudo install -m 0755 /dev/stdin /var/www/cgi-bin/whoami' < "$FIELD_LIB/ad/whoami.cgi"
-check spnego.httpd '^Syntax OK$' run kdc 'sudo restorecon /etc/httpd/conf.d/ra3-gssapi.conf /var/www/cgi-bin/whoami; sudo apachectl configtest 2>&1 && sudo systemctl restart httpd && systemctl is-active httpd'
+check spnego.httpd '^Syntax OK$' run kdc 'sudo '"$RESTORECON"' /etc/httpd/conf.d/ra3-gssapi.conf /var/www/cgi-bin/whoami; sudo apachectl configtest 2>&1 && sudo systemctl restart httpd && systemctl is-active httpd'
 check spnego.curl "^REMOTE_USER=user@$R\$" run client2 "$RAENV; export KRB5CCNAME=FILE:\$HOME/ra/user3.cc; curl -sS --negotiate -u : http://kdc.kerber.test/cgi-bin/whoami; curl -sS -o /dev/null -D - http://kdc.kerber.test/cgi-bin/whoami | grep -iE '^(HTTP|www-authenticate)'"
 checklast spnego.unauth-401 '^HTTP/1\.1 401 Unauthorized'
 checklast spnego.www-auth '^WWW-Authenticate: Negotiate'
