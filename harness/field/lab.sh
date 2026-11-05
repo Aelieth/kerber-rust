@@ -42,6 +42,9 @@
 #   ssh <vm> [--] [cmd...]  ssh to the VM as 'lab' with the lab key
 #   ip <vm> [lan]           print the VM's lab address, or kdc's LAN address
 #   status                  network, pool, VMs, addresses, snapshots
+#   takeover <vm>           (DS) <vm> answers as kdc.kerber.test: the network's record
+#                           moves to its address, live only; kdc must be shut off
+#   release                 put kdc.kerber.test back on kdc's address
 #   check [--lab-only] [vm...]
 #                           ssh, DNS + reverse DNS, time sync, internet; kdc's LAN
 #                           NIC, its inbound filter, routes and the AD DC's port 88;
@@ -55,6 +58,8 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LAB_HOME="${KERBER_LAB_HOME:-$HOME/kerber-lab}"
+# FIELD_ROLE_KDC=<vm> (environment only, never field.env): commands that name kdc act on <vm>.
+ROLE_KDC=${FIELD_ROLE_KDC-}
 # The lab's own values (FIELD_LAB_NET, FIELD_AD_DC, ...), as run.sh reads them.
 if [ -f "$LAB_HOME/field.env" ]; then
     if [ "$(stat -c %a "$LAB_HOME/field.env")" != 600 ]; then
@@ -136,6 +141,7 @@ xo() {
 }
 
 dom() { printf 'kerber-%s' "$1"; }
+role() { if [ "$1" = kdc ] && [ -n "$ROLE_KDC" ]; then printf '%s' "$ROLE_KDC"; else printf '%s' "$1"; fi; }
 known_vm() { [ -n "${KIND[$1]:-}" ] || die "unknown VM '$1' (one of: ${ALL_VMS[*]})"; }
 # Exists, or return 1 when the domain is missing. Any other failure exits.
 dom_exists() {
@@ -892,10 +898,76 @@ cmd_check() {
         shift
         say "check --lab-only: no internet fetch, no LAN address, no AD DC probe"
     fi
+    check_kdc_name || rc=1
     select_vms "$@"
     vms=("${SEL[@]}")
     for vm in "${vms[@]}"; do check_vm "$vm" || rc=1; done
     return $rc
+}
+
+# DS: another VM answers as kdc.kerber.test while kdc is shut off. The state file is written
+# before the network changes and removed after they are undone, so release always knows.
+TAKEOVER=$LAB_HOME/state/takeover
+KDC_NAME=kdc.$DNS_DOMAIN
+
+# HOSTNAME...: the live network's addresses whose record holds each name, comma-joined.
+dns_ips() {
+    vsh net-dumpxml "$NET" | awk -v n="<hostname>$1</hostname>" '
+        /<host ip=/ { match($0, /ip=.[0-9.]+/); ip = substr($0, RSTART + 4, RLENGTH - 4) }
+        index($0, n) { print ip }' | sort -u | paste -sd, -
+}
+
+check_kdc_name() {
+    local who=kdc got
+    [ -e "$TAKEOVER" ] && who=$(cat "$TAKEOVER")
+    got=$(dns_ips "$KDC_NAME")
+    if [ "$got" = "${IP[$who]}" ]; then
+        printf 'lab:\n  PASS %s -> %s (%s)\n' "$KDC_NAME" "$got" "$who"
+    else
+        printf 'lab:\n  FAIL %s -> %s, expected %s (%s)\n' "$KDC_NAME" "${got:-nothing}" "${IP[$who]}" "$who"
+        return 1
+    fi
+}
+
+host_xml() {
+    local ip=$1 n
+    shift
+    printf "<host ip='%s'>" "$ip"
+    for n in "$@"; do printf '<hostname>%s</hostname>' "$n"; done
+    printf '</host>'
+}
+
+cmd_takeover() {
+    [ $# -eq 1 ] || die "usage: lab.sh takeover <vm>"
+    local vm=$1
+    known_vm "$vm"
+    [ "$vm" != kdc ] || die "takeover: kdc already holds $KDC_NAME"
+    [ ! -e "$TAKEOVER" ] || die "takeover: $(cat "$TAKEOVER") holds $KDC_NAME; release first"
+    [ "$(dom_state kdc)" != running ] || die "takeover: kdc is running; shut it off first"
+    mkdir -p "${TAKEOVER%/*}"
+    printf '%s\n' "$vm" > "$TAKEOVER"
+    vsh net-update "$NET" delete dns-host "$(host_xml "${IP[kdc]}" "$KDC_NAME")" --live >/dev/null
+    vsh net-update "$NET" delete dns-host "$(host_xml "${IP[$vm]}" "$vm.$DNS_DOMAIN")" --live >/dev/null
+    vsh net-update "$NET" add dns-host "$(host_xml "${IP[$vm]}" "$KDC_NAME" "$vm.$DNS_DOMAIN")" --live >/dev/null
+    say "$KDC_NAME -> ${IP[$vm]} ($vm), live only; release puts it back"
+}
+
+cmd_release() {
+    [ -e "$TAKEOVER" ] || { say "no takeover to release"; return 0; }
+    local vm
+    vm=$(cat "$TAKEOVER")
+    known_vm "$vm"
+    vsh net-update "$NET" delete dns-host "$(host_xml "${IP[$vm]}" "$KDC_NAME" "$vm.$DNS_DOMAIN")" --live >/dev/null || true
+    case ",$(dns_ips "$vm.$DNS_DOMAIN")," in
+        *",${IP[$vm]},"*) ;;
+        *) vsh net-update "$NET" add dns-host "$(host_xml "${IP[$vm]}" "$vm.$DNS_DOMAIN")" --live >/dev/null ;;
+    esac
+    case ",$(dns_ips "$KDC_NAME")," in
+        *",${IP[kdc]},"*) ;;
+        *) vsh net-update "$NET" add dns-host "$(host_xml "${IP[kdc]}" "$KDC_NAME")" --live >/dev/null ;;
+    esac
+    rm -f "$TAKEOVER"
+    say "$KDC_NAME -> ${IP[kdc]} (kdc)"
 }
 
 cmd_collect() {
@@ -937,7 +1009,15 @@ main() {
     local cmd=${1:-}
     [ $# -gt 0 ] && shift
     case $cmd in
-        up|down|destroy|rebuild|reset|snapshot) hold_lab_lock ;;
+        up|down|destroy|rebuild|reset|snapshot|takeover|release) hold_lab_lock ;;
+    esac
+    # A role names its VM for the commands a scenario uses; destroy and rebuild take real names.
+    case $cmd in
+        up|down|check)
+            local a mapped=()
+            for a in "$@"; do mapped+=("$(role "$a")"); done
+            set -- "${mapped[@]}" ;;
+        reset|snapshot|ssh|ip|collect) [ $# -gt 0 ] && set -- "$(role "$1")" "${@:2}" ;;
     esac
     case $cmd in
         up) cmd_up "$@" ;;
@@ -950,6 +1030,8 @@ main() {
         ip) cmd_ip "$@" ;;
         status) cmd_status ;;
         check) cmd_check "$@" ;;
+        takeover) cmd_takeover "$@" ;;
+        release) cmd_release ;;
         collect) cmd_collect "$@" ;;
         -h|--help|help|'') usage ;;
         *) usage >&2; die "unknown command '$cmd'" ;;

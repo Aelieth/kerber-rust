@@ -116,6 +116,8 @@ harness/field/lab.sh reset kdc mit-oracle
 harness/field/lab.sh collect kdc ~/kerber-lab/runs/hand-r1 /var/log/krb5kdc.log /etc/krb5.conf
 harness/field/lab.sh down               # shut the VMs down (the network stays up)
 harness/field/lab.sh rebuild kdc --yes  # one VM from scratch (after a template change). kdc2 is refused
+harness/field/lab.sh takeover deb13     # DS: deb13 answers as kdc.kerber.test (live record; kdc must be shut off)
+harness/field/lab.sh release            # kdc.kerber.test back on kdc; `check` fails while a move is left over
 harness/field/lab.sh destroy --yes      # remove the VMs, volumes, pool and network
 ```
 
@@ -189,6 +191,10 @@ harness/field/run.sh --profile kill-loop --ref main   # the kill loop (lab.sh up
     exits 1 before it makes a run directory; it only makes `~/kerber-lab/runs`
     and the lock file when they are missing.
   - every snapshot `baseline.env` names must exist;
+  - with `FIELD_ROLE_KDC=<vm>` in the environment (DS; never `field.env`), the
+    `kdc` role is that VM: `lab.sh` sends `kdc` there, its snapshots are checked
+    there, and `pre.takeover` moves `kdc.kerber.test` to it. Postflight's
+    `post.release` moves it back, also on an early exit;
   - `lab.sh check --lab-only` of the VMs the selected scenarios use: ssh, DNS
     and reverse DNS, time sync, kdc's LAN filter. It never fetches from the
     internet, needs no LAN address and never probes the AD DC, so an outage
