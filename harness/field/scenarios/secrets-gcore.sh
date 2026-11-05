@@ -9,6 +9,7 @@
 # no more copies of each password than MIT did (the rust leg reads the mit leg's counts from the sibling
 # record). The passwords are drawn here per run and reach the VMs only on stdin, never on a command line
 # or in the record.
+# Fedora only (DS): KDC logic the family doesn't touch
 # vms: kdc client2
 # legs: mit rust
 set -uo pipefail

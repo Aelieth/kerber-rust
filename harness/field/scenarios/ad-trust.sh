@@ -11,6 +11,7 @@
 #   and with -UseDefaultCredentials (#7, a scheduled task).
 # The DC changes (#1-#4 and #7, lib/ad.sh) are undone in the same run, also on an early exit, and a run starts only
 # from lib/ad/baseline.txt (after undoing a killed run's leftovers). Run it as `harness/field/run.sh ad-trust`.
+# Fedora only (DS): the embed, the DC or by hand
 # vms: kdc client2
 # legs: mit rust
 set -uo pipefail

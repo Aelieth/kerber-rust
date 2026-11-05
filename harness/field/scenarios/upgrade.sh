@@ -7,6 +7,7 @@
 # --leg mit (minimal; the fuller MIT comparison is F4d's): kdc reset to the MIT baseline, the stock Fedora
 # krb5-server realm the other scenarios' MIT legs run against: its binaries as packaged, krb5kdc and kadmin active
 # and listening, the package versions recorded.
+# Fedora only (DS): Fedora's RPM upgrade path
 # vms: kdc client2
 # legs: mit rust
 set -uo pipefail

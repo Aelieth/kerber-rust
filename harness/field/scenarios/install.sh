@@ -141,26 +141,27 @@ realm_and_population() {
 
 if [ "$LEG" = mit ]; then
     section "install --leg mit: a fresh Fedora krb5-server realm $R on kdc's f44-base snapshot (the oracle), with L2's population"
-    check reset.kdc rc host "$LABQ reset kdc f44-base"
+    check reset.kdc rc host "$LABQ reset kdc $KDC_BASE_SNAPSHOT"
     check reset.client2 rc host "$LABQ reset client2 $MIT_SNAPSHOT_CLIENT2"
     waitsync kdc; waitsync client2
-    check mit.install '^krb5-server-' run kdc "sudo dnf install -y krb5-server krb5-workstation > /dev/null 2>&1; rpm -q krb5-server"
+    check mit.install "^$SERVER_PKG-" run kdc "sudo $PKG_INSTALL $MIT_SERVER_PKGS $MIT_CLIENT_PKG > /dev/null 2>&1; $PKG_QUERY $SERVER_PKG"
     realm_and_population mit
 else
     section "install --leg rust: a fresh kerber-rust install from docs/install.md on kdc's f44-base snapshot, with L2's population"
-    check reset.kdc rc host "$LABQ reset kdc f44-base"
+    check reset.kdc rc host "$LABQ reset kdc $KDC_BASE_SNAPSHOT"
     check reset.client2 rc host "$LABQ reset client2 $RUST_SNAPSHOT_CLIENT2"
     waitsync kdc; waitsync client2
     WSTART=$(limited "$LAB" ssh kdc -- 'date "+%m/%d/%Y %H:%M:%S"' < /dev/null)
     note "SELinux window start on kdc's clock, local time (ausearch -ts): ${WSTART:-<none: the AVC check fails>}"
     check tree.kdc rc hostin "the ref's archive (tar)" "$LABQ ssh kdc -- 'rm -rf ~/$CO && tar -x -C ~ && find ~/$CO -type f | wc -l'" < "$FIELD_TREE_TAR"
     if [ -n "${INSTALL_DOC:-}" ]; then cp "$INSTALL_DOC" "$STATE/install.md"; note "INSTALL_DOC override (negative control): $INSTALL_DOC"; else tar -xOf "$FIELD_TREE_TAR" "$CO/docs/install.md" > "$STATE/install.md"; fi
-    docscript prereq "$STATE/install.md" '## Prerequisites' 1
+    docscript prereq "$STATE/install.md" "$DOC_PREREQ" 1
     docrun prereq
     docscript build "$STATE/install.md" '## Build' 1 --drop '^git clone ' --drop '^cd kerber-rust$' --session "$CARGO_ENV" --session "cd ~/$CO"
     docrun build
-    docscript replace "$STATE/install.md" '### Replacing krb5-server' 1 --session "$CARGO_ENV" --session "cd ~/$CO"
+    docscript replace "$STATE/install.md" "$DOC_REPLACE" 1 --session "$CARGO_ENV" --session "cd ~/$CO"
     docrun replace
+    if [ -n "$DOC_KRB5CONF" ]; then docscript krb5conf "$STATE/install.md" "$DOC_KRB5CONF" 1; docrun krb5conf; fi
     check install.programs '^programs: [1-9][0-9]* in the manifest, each identical to the build$' runin kdc "lib/install-check.sh" "sh -s -- ~/$CO" < "$FIELD_LIB/install-check.sh"
     realm_and_population rust
     check strings.control rc runin kdc "lib/strings-check.sh" "sh -s -- --control" < "$FIELD_LIB/strings-check.sh"

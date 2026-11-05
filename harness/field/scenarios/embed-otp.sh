@@ -30,6 +30,7 @@
 # $EMBED_OTP_BINS on the host; `bins.present` grades their presence. TODO(field build-integration): preflight
 # should build them from FIELD_SHA; until then an operator places them and runs it by hand (in no profile).
 #
+# Fedora only (DS): the embed, the DC or by hand
 # vms: kdc
 # legs: rust
 set -uo pipefail

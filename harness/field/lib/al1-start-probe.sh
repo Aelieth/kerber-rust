@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# al1-start-probe.sh <realm> <dict|port>: run /usr/sbin/kadmind -nofork once against a throwaway profile
+# al1-start-probe.sh <realm> <dict|port> [kdc dir]: run /usr/sbin/kadmind -nofork once against a throwaway profile
 # that injects one start-up failure, and print a structured record. Run as root on the kdc VM, against
 # the realm the leg's upgrade left; it leaves nothing behind. Used by scenarios/kadmind-start.sh (cells
 # A1b and A1c), MIT first then kerber-rust: the same binary path, whichever the leg installed.
@@ -13,10 +13,11 @@
 set -u
 realm=${1:?realm} mode=${2:?mode: dict or port}
 kadmind=/usr/sbin/kadmind
-src=/var/kerberos/krb5kdc/kdc.conf
+kdir=${3:-/var/kerberos/krb5kdc}
+src=$kdir/kdc.conf
 # The throwaway profile lives beside the real kdc.conf so its SELinux label (krb5kdc_conf_t) lets kadmind
 # read it; /tmp would be denied in enforcing mode.
-d=$(mktemp -d /var/kerberos/krb5kdc/al1-start.XXXXXX) || exit 2
+d=$(mktemp -d "$kdir"/al1-start.XXXXXX) || exit 2
 trap 'rm -rf "$d"' EXIT
 pid=$d/kadmind.pid
 drop=

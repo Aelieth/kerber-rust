@@ -10,6 +10,7 @@
 #   RB.mit: MIT's KDC serves the realm, its getprinc lines equal those before, and MIT's kinit from client2 gets alice
 #           a TGT.
 # Graded on both legs, MIT's first. Each leg leaves kdc on MIT; replica, next in weekly, resets it.
+# Fedora only (DS): Fedora's RPM upgrade path
 # vms: kdc client2
 # legs: mit rust
 set -uo pipefail

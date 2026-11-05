@@ -10,6 +10,7 @@
 # Also graded: services' three keytabs equal the KDC's keys; the KDC's ISSUE lines for nfs/ and HTTP/. Recorded, not
 # graded: the probes' TGS transport and PREAUTH_REQUIRED padata (services.expect). Not checked here: S2's decode of
 # the RPCSEC_GSS INIT replies and call counts (no full pcap decoding). Run by run.sh (REC_DIR, TMPDIR, FIELD_SHA).
+# Fedora only (DS): client side; CM covers the families
 # vms: services kdc
 # legs: mit rust
 set -uo pipefail

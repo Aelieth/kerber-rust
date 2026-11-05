@@ -11,6 +11,7 @@
 #   The KDC's lines for client2; no SELinux denial on client2 but the kit's known id_resolver one (R4 kit finding 2).
 # Not here: R4 PROOF 3 (ticket expiry, a clock window), the wire decodes, client1's legs (GUI). Recorded, not graded
 # (nfs-client.expect): alice's AS preauth types and AS-REP size. Run by run.sh (REC_DIR, TMPDIR, FIELD_SHA).
+# Fedora only (DS): client side; CM covers the families
 # vms: client2 services kdc
 # legs: mit rust
 set -uo pipefail

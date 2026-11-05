@@ -23,6 +23,7 @@
 # locale, so the rows run with LC_ALL=C; ours follow it too, krb5-klist.rs:40); lib/krb5/krb/get_in_tkt.c (:718-722,
 # :936-947, restart_init_creds_loop :780-848); lib/krb5/krb/fast.c (:172-224); clients/kpasswd/kpasswd.c;
 # lib/krb5/ccache/cc_file.c (fcc_remove_cred).
+# Fedora only (DS): client side; CM covers the families
 # vms: kdc client2
 # legs: mit rust
 set -uo pipefail

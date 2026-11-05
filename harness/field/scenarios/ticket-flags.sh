@@ -25,6 +25,7 @@
 #   etype-20 key. krbtgt is not re-keyed: session_enctypes allows etype 20
 #   (kdc_util.c:1054-1076) and cleanup deletes the attribute. The TGT ticket
 #   key stays the long-term sha1 key.
+# Fedora only (DS): KDC logic the family doesn't touch
 # vms: kdc client2
 # legs: mit rust
 set -uo pipefail

@@ -41,6 +41,7 @@ section "kill-loop --leg rust: kadmin.local killed on kdc, every kill judged by 
 kdcis
 check reset.kdc2 rc host "$LABQ reset kdc2 $MIT_SNAPSHOT_KDC2"
 waitsync kdc2
+# kdc2 is a Fedora VM in every family's lab, so its MIT check stays rpm.
 check kdc2.mit '^kdc2: MIT krb5-server-[0-9].*, binaries as packaged, python 3' run kdc2 \
     "sudo rpm -V krb5-server krb5-libs | grep -E ' /usr/(s?bin|lib64)/'; ! sudo rpm -V krb5-server | grep -qE '^..5.* /usr/sbin/(kdb5_util|kadmin\\.local)\$' && echo \"kdc2: MIT \$(rpm -q krb5-server), binaries as packaged, \$(python3 -V | tr P p)\""
 check kdc2.stash '^stash copied$' host "$LABQ ssh kdc -- 'sudo cat $KDCDIR/.k5.$REALM' | $LABQ ssh kdc2 -- 'sudo install -d -m 0700 $W && sudo install -m 0600 /dev/stdin $W/stash && echo stash copied'"
@@ -53,8 +54,11 @@ if awk -F'\t' '$2 == "FAIL"' "$CHECKS" | grep -q .; then
     exit 1
 fi
 
+# The Debian KDC keeps kdc.conf and the database in different directories.
+KLD=
+[ "$KDC_FAMILY" = rpm ] || KLD="--kdcdir $KDCDIR --datadir $KDCDATADIR"
 section "KL.loop: the ops and their kills on kdc, kerber-rust's kadmin.local and kdb5_util"
-check KL.unexpected '^unexpected: 0$' run kdc "sudo rm -rf $W && sudo install -d -m 0700 $W && sudo python3 -u ~/kill-loop.py drive --realm $REALM --dir $W"
+check KL.unexpected '^unexpected: 0$' run kdc "sudo rm -rf $W && sudo install -d -m 0700 $W && sudo python3 -u ~/kill-loop.py drive --realm $REALM --dir $W${KLD:+ $KLD}"
 checklast KL.ops '^ops: [1-9][0-9]{3,} attempted'
 checklast KL.kills '^kills: ([2-9][0-9]{2}|[1-9][0-9]{3,})$'
 checklast KL.compaction '^compaction kills: ([5-9][0-9]|[1-9][0-9]{2,}) '

@@ -26,7 +26,7 @@ esac
 
 # On any exit: no throwaway profile left in the KDC config dir, no probe script on kdc.
 cleanup() {
-    timeout -k 5 60 "$LAB" ssh kdc -- 'sudo rm -rf /var/kerberos/krb5kdc/al1-start.* ~/field/al1-start-probe.sh; true' < /dev/null > /dev/null 2>&1
+    timeout -k 5 60 "$LAB" ssh kdc -- "sudo rm -rf $KDCDIR/al1-start.* ~/field/al1-start-probe.sh; true" < /dev/null > /dev/null 2>&1
 }
 trap cleanup EXIT
 trap 'exit 130' INT
@@ -34,6 +34,8 @@ trap 'exit 143' TERM
 trap 'exit 129' HUP
 
 R=$REALM
+PD=
+[ "$KDC_FAMILY" = rpm ] || PD=" $KDCDIR"
 section "kadmind-start --leg $LEG: foreground start-up failures on kdc, realm $R (the service stays up, holding 464 and 749)"
 kdcis
 check kadmin.active '^active$' run kdc "systemctl is-active $UNIT_ADMIN"
@@ -41,7 +43,7 @@ hostin "lib/al1-start-probe.sh" "$LABQ ssh kdc -- 'rm -f ~/field/al1-start-probe
 
 section "A1b: an unreadable dict_file stops kadmind in the foreground, before the network"
 kdcmark a1b
-run kdc "sudo bash ~/field/al1-start-probe.sh $(printf '%q' "$R") dict"
+run kdc "sudo bash ~/field/al1-start-probe.sh $(printf '%q' "$R") dict$PD"
 checklast a1b.rc '^rc=1$'
 checklast a1b.stderr.abort '^stderr-abort: [1-9]'
 checklast a1b.stderr.noneterr '^stderr-neterr: 0$'
@@ -52,7 +54,7 @@ checklast a1b.log 'while initializing, aborting'
 
 section "A1c: port 749 already in use stops kadmind after 'Error setting up network', nothing on stderr"
 kdcmark a1c
-run kdc "sudo bash ~/field/al1-start-probe.sh $(printf '%q' "$R") port"
+run kdc "sudo bash ~/field/al1-start-probe.sh $(printf '%q' "$R") port$PD"
 checklast a1c.rc '^rc=1$'
 checklast a1c.stderr.noneterr '^stderr-neterr: 0$'
 checklast a1c.stderr.noabort '^stderr-abort: 0$'

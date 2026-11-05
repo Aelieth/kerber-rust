@@ -13,6 +13,7 @@
 #   PROOF 6: the kit's own --validate as alice: "[OK] Validation passed (core checks)."
 # Every realm and directory change is undone, also on an early exit. Never SDDM or other GUI, never the kit join.
 # Recorded, not graded (sssd-login.expect): the cache's size. Run by run.sh (REC_DIR, TMPDIR, FIELD_SHA).
+# Fedora only (DS): client side; CM covers the families
 # vms: client1 services kdc
 # legs: mit rust
 set -uo pipefail

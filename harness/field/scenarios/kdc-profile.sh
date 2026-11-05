@@ -57,6 +57,8 @@ legset ALICE ALICE_TEMP ADMIN
 R=${REALM//./\\.}
 KC=$KDCDIR/kdc.conf
 SC=$ENVDIR/$UNIT_ADMIN
+PD=
+[ "$KDC_FAMILY" = rpm ] || PD=" $KDCDIR"
 CF="export KRB5_CONFIG=\$HOME/cf/krb5.conf"
 cleanup() {
     timeout -k 5 60 "$LAB" ssh kdc -- "sudo rm -f /etc/krb5-rep2a.conf; [ -e $SC.cf ] && sudo mv $SC.cf $SC; [ -e $KC.cf ] && sudo mv $KC.cf $KC && sudo systemctl reset-failed $UNIT_KDC $UNIT_ADMIN && sudo systemctl restart $UNIT_KDC $UNIT_ADMIN; for p in cfskew cfpw; do sudo kadmin.local -q \"delprinc -force \$p\"; done; sudo rm -f $KC.inc; sudo pkill -x strace; true" < /dev/null > /dev/null 2>&1
@@ -105,7 +107,7 @@ etkinit() {
 # admwith <check> <text appended to kdc.conf> [kadmind options] [another sysconfig line]: the original kdc.conf plus
 # that text, KADMIND_ARGS set to the options, kadmin restarted; then the TCP ports kadmind listens on.
 admwith() {
-    check "$1" '^kadmin: active$' run kdc "sudo cp -p $KC.cf $KC && printf '%b' '$2' | sudo tee -a $KC > /dev/null && { echo 'KADMIND_ARGS=${3:-}'; [ -z '${4:-}' ] || echo '${4:-}'; } | sudo tee $SC > /dev/null && sudo systemctl reset-failed $UNIT_KDC $UNIT_ADMIN && sudo systemctl restart $UNIT_ADMIN; for i in \$(seq 1 40); do sudo ss -Hltnp | grep -q '\"kadmind\"' && break; sleep 0.25; done; sleep 1; echo \"kadmin: \$(systemctl is-active $UNIT_ADMIN)\"; echo \"tcp ports: \$(sudo ss -Hltnp | grep '\"kadmind\"' | awk '{print \$4}' | sed 's/.*://' | sort -un | paste -sd' ')\""
+    check "$1" '^kadmin: active$' run kdc "sudo cp -p $KC.cf $KC && printf '%b' '$2' | sudo tee -a $KC > /dev/null && { echo '$ARGS_ADMIN=${3:-}'; [ -z '${4:-}' ] || echo '${4:-}'; } | sudo tee $SC > /dev/null && sudo systemctl reset-failed $UNIT_KDC $UNIT_ADMIN && sudo systemctl restart $UNIT_ADMIN; for i in \$(seq 1 40); do sudo ss -Hltnp | grep -q '\"kadmind\"' && break; sleep 0.25; done; sleep 1; echo \"kadmin: \$(systemctl is-active $UNIT_ADMIN)\"; echo \"tcp ports: \$(sudo ss -Hltnp | grep '\"kadmind\"' | awk '{print \$4}' | sed 's/.*://' | sort -un | paste -sd' ')\""
 }
 # ipropconf <port>: kdc.conf text turning iprop on at that port, with [logging] debug for MIT's debug lines.
 ipropconf() {
@@ -184,7 +186,7 @@ etkinit CF.h.empty aes256-cts-hmac-sha1-96 '^kinit rc=1$'
 observelast obs.CF.h.empty 'kinit: .*'
 
 section "REP2a iprop_port = kadmind's 749: the iprop listener is not added, so iprop is not served there (MIT and ours)"
-check REP2a.sysconfig '^KADMIND_ARGS=' run kdc "sudo cp -p $SC $SC.cf && cat $SC"
+check REP2a.sysconfig "^$ARGS_ADMIN=" run kdc "sudo cp -p $SC $SC.cf && cat $SC"
 kdcmark rep2a749
 admwith REP2a.749.kadmin "$(ipropconf 749)"
 checklast REP2a.749.ports '^tcp ports: 464 749$'
@@ -266,14 +268,14 @@ daemon() {
 }
 
 section "CF.e0 kadmind takes a kpasswd change and a kadmin session without opening krb5.conf or kdc.conf (MIT and ours)"
-check CF.e0.strace '^strace-[0-9]' run kdc "rpm -q strace > /dev/null 2>&1 || sudo dnf -y -q install strace > /dev/null 2>&1; rpm -q strace"
+check CF.e0.strace '^strace-[0-9]' run kdc "$PKG_QUERY strace > /dev/null 2>&1 || sudo $PKG_INSTALL_Q strace > /dev/null 2>&1; $PKG_QUERY strace"
 opens kadmind "\$(systemctl show -p MainPID --value $UNIT_ADMIN)"
 check CF.e0.kpasswd '^Password changed\.$' runin client2 "cfpw's password ($ALICE), then alice-changed's twice ($ALICE_TEMP)" "kpasswd cfpw 2>&1" < <(chpw "$ALICE" "$ALICE_TEMP")
 check CF.e0.kadmin "^Principal: cfpw@$R\$" runin client2 "admin/admin's password ($ADMIN)" "kadmin -p admin/admin -q 'getprinc cfpw' 2>&1" < <(once "$ADMIN")
 opened kadmind
 
 section "CF.e0 a second kpropd takes one kprop without opening krb5.conf or kdc.conf (MIT and ours)"
-check CF.e0.kpropd.start '^kpropd [0-9]+ listening on 7754$' runin kdc "lib/profile-opens.sh" "sudo sh -s -- kpropd-start $LEG $REALM" < "$FIELD_LIB/profile-opens.sh"
+check CF.e0.kpropd.start '^kpropd [0-9]+ listening on 7754$' runin kdc "lib/profile-opens.sh" "sudo sh -s -- kpropd-start $LEG $REALM$PD" < "$FIELD_LIB/profile-opens.sh"
 opens kpropd "\$(cat /var/tmp/cf-e0/kpropd.pid)"
 check CF.e0.kprop 'SUCCEEDED$' run kdc "sudo kprop -r $REALM -f /var/tmp/cf-e0/dump -P 7754 -s /var/tmp/cf-e0/kt \$(hostname -f) 2>&1"
 check CF.e0.kpropd.loaded '^loaded$' run kdc "for i in \$(seq 1 40); do sudo test -e /var/tmp/cf-e0/replica/principal && break; sleep 0.25; done; sleep 1; sudo test -e /var/tmp/cf-e0/replica/principal && echo loaded"

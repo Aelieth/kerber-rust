@@ -17,6 +17,7 @@
 # Inputs (field.env): FIELD_KLLDAP_REPO + FIELD_KLLDAP_PIN (`git archive` of the pin, never the working tree),
 # FIELD_KLLDAP_FIXTURE, FIELD_LLDAP_CLI. Run by run.sh (REC_DIR, TMPDIR, FIELD_RUN, FIELD_TREE_TAR, FIELD_SHA,
 # FIELD_REF, FIELD_DEADLINE).
+# Fedora only (DS): the embed, the DC or by hand
 # vms: klldap
 # legs: mit rust
 set -uo pipefail
