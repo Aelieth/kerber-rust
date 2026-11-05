@@ -31,9 +31,9 @@ doc:
 
 shellcheck:
 	@if command -v shellcheck >/dev/null 2>&1; then \
-	  shellcheck -S style scripts/*.sh scripts/lib/*.sh harness/*.sh dist/*.sh harness/field/*.sh harness/field/lib/*.sh harness/field/scenarios/*.sh harness/field/p18/*.sh; \
+	  shellcheck -S style scripts/*.sh scripts/lib/*.sh harness/*.sh dist/*.sh harness/field/*.sh harness/field/lib/*.sh harness/field/scenarios/*.sh harness/field/p18/*.sh harness/hand/*.sh harness/hand/lib/*.sh; \
 	else \
-	  docker run --rm -v "$(ROOT):/mnt:ro" koalaman/shellcheck:v0.11.0 -S style scripts/*.sh scripts/lib/*.sh harness/*.sh dist/*.sh harness/field/*.sh harness/field/lib/*.sh harness/field/scenarios/*.sh harness/field/p18/*.sh; \
+	  docker run --rm -v "$(ROOT):/mnt:ro" koalaman/shellcheck:v0.11.0 -S style scripts/*.sh scripts/lib/*.sh harness/*.sh dist/*.sh harness/field/*.sh harness/field/lib/*.sh harness/field/scenarios/*.sh harness/field/p18/*.sh harness/hand/*.sh harness/hand/lib/*.sh; \
 	fi
 
 policy:

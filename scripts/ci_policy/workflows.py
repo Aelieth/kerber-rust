@@ -219,6 +219,7 @@ _USES_PINNED = re.compile(r"^\s*(?:-\s+)?uses:\s*(\S+)(.*)$")
 SHELLCHECK_CMD = (
     "shellcheck -S style scripts/*.sh scripts/lib/*.sh harness/*.sh dist/*.sh"
     " harness/field/*.sh harness/field/lib/*.sh harness/field/scenarios/*.sh harness/field/p18/*.sh"
+    " harness/hand/*.sh harness/hand/lib/*.sh"
 )
 
 
