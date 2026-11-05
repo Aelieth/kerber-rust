@@ -16,13 +16,20 @@ case $KDC_FAMILY in
         ENVDIR=/etc/default MAC=none RESTORECON=true
         ARGS_ADMIN=DAEMON_ARGS
         SERVER_PKG=krb5-kdc MIT_SERVER_PKGS='krb5-kdc krb5-admin-server krb5-kpropd' MIT_CLIENT_PKG=krb5-user
-        PKG_VERIFY='dpkg --verify' PKG_HAS='dpkg -s' PKG_INSTALL='env DEBIAN_FRONTEND=noninteractive apt-get install -y'
-        PKG_INSTALL_Q='env DEBIAN_FRONTEND=noninteractive apt-get install -y -q'
+        PKG_VERIFY='dpkg --verify' PKG_HAS='dpkg -s'
         LIBDIR_RE=lib/x86_64-linux-gnu
         DOC_PREREQ='### Debian and Ubuntu' DOC_REPLACE='### Replacing krb5-kdc on Debian and Ubuntu'
         DOC_KRB5CONF='### krb5.conf on Debian and Ubuntu'
+        # Each runs as one command under sudo, the lists refreshed first; a query of a package not
+        # installed prints nothing and fails, as rpm -q does.
+        read -r PKG_INSTALL <<'EOF'
+sh -c 'apt-get update -q && DEBIAN_FRONTEND=noninteractive apt-get install -y "$@"' sh
+EOF
+        read -r PKG_INSTALL_Q <<'EOF'
+sh -c 'apt-get update -q && DEBIAN_FRONTEND=noninteractive apt-get install -y -q "$@"' sh
+EOF
         read -r PKG_QUERY <<'EOF'
-dpkg-query -W -f='${Package}-${Version}\n'
+sh -c 'dpkg -s "$1" > /dev/null 2>&1 && dpkg-query -W -f="\${Package}-\${Version}\n" "$1"' sh
 EOF
         # The library packages, by the files the VM has (expanded there, not here).
         read -r MIT_VERIFY_PKGS <<'EOF'

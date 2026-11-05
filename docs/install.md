@@ -104,6 +104,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --defaul
 ### Debian and Ubuntu
 
 ```sh
+sudo apt-get update
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y git gcc make lld curl krb5-user wamerican
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none --profile minimal
 . "$HOME/.cargo/env"
