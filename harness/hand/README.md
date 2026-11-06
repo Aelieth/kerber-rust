@@ -6,8 +6,8 @@ Environment (each driver takes the 40-hex sha of the build under test as `$1`):
 - `HAND_WT`: the kerber-rust checkout the leg runs against (`$HAND_WT/harness/field/lab.sh` is the lab, `$HAND_WT/target-rp/release` the ship; `HAND_SHIP` overrides it).
 - `HAND_REC`: the record dir; each leg writes under `$HAND_REC/<sha>/`; `lib/ship-guard.sh` reads `$HAND_REC/<sha>/step1/ship.sha256`.
 - `$KERBER_LAB_HOME/field.env` (default `~/kerber-lab`, mode 0600) is sourced by `lib/env.sh`; `require_env NAME...` stops on an empty name.
-- `FIELD_LAB_NET` (field.env): the lab network, for the legs that start the embed example on klldap.
-- `krb5-embed-realm`, built from `examples/embed-realm` into the ship dir, for `rp-ss.sh`, `rp-al-a45.sh` and `rp-ba.sh`.
+- `FIELD_LAB_NET` (field.env): the lab network, for the legs that start the embed example on klldap (`rp-az.sh` too).
+- `krb5-embed-realm`, built from `examples/embed-realm` into the ship dir, for `rp-ss.sh`, `rp-al-a45.sh`, `rp-ba.sh`, `rp-az.sh`, `rp-tr.sh`, `rp-tr-cell2.sh` and `rp-sc.sh`.
 - Passwords a leg generates go to a private `mktemp -d` under `TMPDIR`, never the record, and are removed on exit.
 
 Drivers:
@@ -24,5 +24,11 @@ Drivers:
 - `rp-wr-mit.sh`, `rp-wr-ours.sh`: WR, the MIT and our legs, each on a fresh snapshot.
 - `rp-wr-chain.sh`: WR, MIT first; ours only after a clean MIT end.
 - `rp-ba.sh`: BA on klldap, MIT first.
+- `rp-az.sh`: AZ: kadmin ACL cells, MIT first, then the doc upgrade, then embed cells 2-4 on klldap.
+- `rp-tr.sh`, `rp-tr-cell2.sh`: TR: trust cells (MIT kadmin.local, embed realm, kinit/kvno legs); cell 2 reads the profiles `rp-tr.sh` saved.
+- `rp-sc.sh`: SC: MIT first on the kdc, then the upgrade, then ours (tl-data, S4U, RID cells).
+- `rp-fz.sh`: FZ: a raw TGS-REQ with a non-ASCII service name, MIT first, then the upgrade.
+- `rp-bg.sh`: BG: GSS sequence-number rig and the channel-binding cells in a private namespace, no VM.
+- `rp-bd.sh`: BD: des3 SPAKE legs on the mitd3 VM, MIT KDC first, then ours.
 - `lib/`: `env.sh`, `ship-guard.sh` (re-hashes the 13 ship binaries).
-- `lib/*.py`: the guest and client helpers the legs copy onto the VMs.
+- `lib/`: also the guest and client helpers the legs copy onto the VMs (`*.py`, `*.c`) and the `bg-ns.sh`/`bg-seq.sh` namespace scripts.

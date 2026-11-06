@@ -15,8 +15,7 @@ LAB=$WT/harness/field/lab.sh
 REF=$PHASEC_SHA
 LOG=$REC/driver.log
 SEC=$(mktemp -d "${TMPDIR:-/var/tmp}/hand-sec.XXXXXX")  # outside the record
-mkdir -p "$SEC"
-chmod 700 "$SEC"
+trap 'rm -rf "$SEC"' EXIT
 mkdir -p "$(dirname "$LOG")"
 exec > >(tee -a "$LOG") 2>&1
 echo "==== $(date -u +%FT%TZ) ss3 pid $$ ===="

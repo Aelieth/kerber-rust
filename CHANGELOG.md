@@ -39,7 +39,6 @@ any other `###` heading.
 ### Removed
 
 - **types.** PKINIT `cms_verify`, `cms_verify_full`, `cms_unwrap`, `cms_extract_unsigned`: no caller.
-- **field.** `lib/raw-tgs.py`: no caller.
 
 ### Security
 
@@ -54,6 +53,7 @@ any other `###` heading.
 - **ci.** shellcheck covers `harness/field/p18/*.sh`; `ci-status.py` knows `ci`, `peers`, `nightly`.
 - **ci.** FAST gate's stripped-25 leg greps kinit's message, as MIT's leg does, not a log line.
 - **ci.** Samba image drops `samba-testsuite`; the l2 gate vendors `kcrypto.py`.
+- **hand.** The release proof's hand legs run from `harness/hand/`; FZ's `raw-tgs.py` moved there.
 
 ## [1.2.0] - 2026-11-04
 
