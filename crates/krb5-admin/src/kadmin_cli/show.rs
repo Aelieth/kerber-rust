@@ -29,11 +29,17 @@ fn kvno(p: &Principal) -> u32 {
         .unwrap_or(0)
 }
 
+// MIT: `krb5_enctype_to_name` (lib/crypto/krb/enctype_util.c:137-143)
 // MIT: `krb5int_enctypes_list` (lib/crypto/krb/etypes.c:37-75)
-fn legacy_enctype_name(etype: i32) -> Option<&'static str> {
+fn legacy_enctype_name(etype: i32) -> Option<(&'static str, &'static str)> {
     match etype {
-        6 => Some("des3-cbc-raw"),
-        24 => Some("arcfour-hmac-exp"),
+        1 => Some(("UNSUPPORTED:", "des-cbc-crc")),
+        2 => Some(("UNSUPPORTED:", "des-cbc-md4")),
+        3 => Some(("UNSUPPORTED:", "des-cbc-md5")),
+        4 => Some(("UNSUPPORTED:", "des-cbc-raw")),
+        8 => Some(("UNSUPPORTED:", "des-hmac-sha1")),
+        6 => Some(("DEPRECATED:", "des3-cbc-raw")),
+        24 => Some(("DEPRECATED:", "arcfour-hmac-exp")),
         _ => None,
     }
 }
@@ -55,7 +61,7 @@ fn slot_fields(slot: krb5_kdc::KeySlot<'_>) -> Option<(u32, u32, i32, i32, Strin
             let et = o.slots.first().map_or(0, |s| s.0);
             let name = legacy_enctype_name(et).map_or_else(
                 || format!("UNSUPPORTED:<Encryption type 0x{et:x}>"),
-                |n| format!("DEPRECATED:{n}"),
+                |(prefix, n)| format!("{prefix}{n}"),
             );
             let salt = o.slots.get(1).map_or(0, |s| s.0);
             Some((u32::try_from(o.ver).unwrap_or(1), o.kvno, et, salt, name))

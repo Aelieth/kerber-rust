@@ -54,11 +54,13 @@ impl KeySlot<'_> {
     }
 }
 
+// MIT: `krb5_dbe_sort_key_data` (lib/kdb/kdb5.c:2788-2803)
 pub(crate) fn merge_slots<'a>(keys: &'a [KeyEntry], opaque: &'a [OpaqueKey]) -> Vec<KeySlot<'a>> {
     let mut slots: Vec<KeySlot<'a>> = keys.iter().map(KeySlot::Usable).collect();
     for o in opaque {
         slots.insert(o.at.min(slots.len()), KeySlot::Opaque(o));
     }
+    slots.sort_by_key(|s| std::cmp::Reverse(s.kvno()));
     slots
 }
 
@@ -206,10 +208,15 @@ pub(super) fn next_kvno(p: &Principal) -> u32 {
 }
 
 // MIT: `rekey` (lib/kdb/kdb_cpw.c:381-385)
-pub(super) fn keep_old_keys(p: &mut Principal, old: Vec<KeyEntry>, keepold: u32) {
+pub(super) fn keep_old_keys(
+    p: &mut Principal,
+    old: Vec<KeyEntry>,
+    keepold: u32,
+    mkey: Option<&ProtocolKey>,
+) -> Result<(), Error> {
     if keepold == 0 {
         p.opaque_keys.clear();
-        return;
+        return Ok(());
     }
     let added = p.keys.len();
     p.keys.extend(old);
@@ -219,6 +226,30 @@ pub(super) fn keep_old_keys(p: &mut Principal, old: Vec<KeyEntry>, keepold: u32)
     if keepold > 1 {
         cap_key_versions(p, keepold);
     }
+    for o in &p.opaque_keys {
+        open_wrap(mkey, o.slots.first().map_or(&[][..], |s| &s.1))?;
+    }
+    Ok(())
+}
+
+// MIT: `preserve_one_old_key` (lib/kdb/kdb_cpw.c:86-114)
+// MIT: `krb5_dbe_def_decrypt_key_data` (lib/kdb/decrypt_key.c:74-99)
+fn open_wrap(mkey: Option<&ProtocolKey>, c: &[u8]) -> Result<(), Error> {
+    let Some(mkey) = mkey else {
+        return Err(Error::Crypto("Stored master key is corrupted".into()));
+    };
+    if c.len() < 2 || i16::from_le_bytes([c[0], c[1]]) < 0 {
+        return Err(Error::Crypto("Key size in database is invalid".into()));
+    }
+    let text = match krb5_crypto::kdb_decrypt_key(mkey, c) {
+        Ok(_) => return Ok(()),
+        Err(krb5_crypto::Error::InvalidKeyLength) => "Cryptosystem internal error",
+        Err(krb5_crypto::Error::CiphertextTooShort) => {
+            "Message size is incompatible with encryption type"
+        }
+        Err(_) => "Decrypt integrity check failed",
+    };
+    Err(Error::Crypto(text.into()))
 }
 
 pub(super) fn cap_key_versions(p: &mut Principal, n: u32) {
@@ -419,10 +450,11 @@ impl PrincipalStore {
             None,
             &use_etypes,
         )?;
+        let mkey = (keepold > 0).then(|| self.iprop_master_key()).flatten();
         {
             let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
             let old = std::mem::replace(&mut p.keys, new_keys.clone());
-            keep_old_keys(p, old, keepold);
+            keep_old_keys(p, old, keepold, mkey.as_ref())?;
             // MIT: `kadm5_randkey_principal_3` (lib/kadm5/srv/svr_principal.c:1452-1475)
             p.attributes &= !KDB_REQUIRES_PWCHANGE;
             p.fail_auth_count = 0;
@@ -556,13 +588,14 @@ impl PrincipalStore {
                 ));
             }
         }
+        let mkey = (keepold > 0).then(|| self.iprop_master_key()).flatten();
         {
             let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
             for k in &mut keys {
                 k.kvno = kvno;
             }
             let old = std::mem::replace(&mut p.keys, keys);
-            keep_old_keys(p, old, keepold);
+            keep_old_keys(p, old, keepold, mkey.as_ref())?;
             p.attributes &= !KDB_REQUIRES_PWCHANGE;
             p.fail_auth_count = 0;
             stamp_admin_tl(p, true, actor);

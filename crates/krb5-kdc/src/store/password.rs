@@ -620,13 +620,14 @@ impl PrincipalStore {
         keepold: u32,
         actor: &str,
     ) -> Result<(), Error> {
+        let mkey = (keepold > 0).then(|| self.iprop_master_key()).flatten();
         let p = self.map.get_mut(id).ok_or(Error::NotFound)?;
         let old = std::mem::replace(&mut p.keys, new_keys);
         if let Some((nhist, (hist_kvno, hist_key))) = history {
             record_history(p, &old, nhist, hist_kvno, &hist_key)?;
             refresh_kadm_tl(p);
         }
-        keep_old_keys(p, old, keepold);
+        keep_old_keys(p, old, keepold, mkey.as_ref())?;
         p.attributes &= !KDB_REQUIRES_PWCHANGE;
         p.fail_auth_count = 0;
         stamp_admin_tl(p, true, actor);
