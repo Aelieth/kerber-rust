@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # harness/field/run.sh: one field run on the lab (harness/field/README.md, "Field runs" and "Scenarios").
 #
-#   run.sh --profile nightly|weekly|kill-loop --ref <git ref> [--only <scenario,...>] [--leg mit|rust|both]
+#   run.sh --profile nightly|weekly|kill-loop|load|load-long --ref <git ref> [--only <scenario,...>] [--leg mit|rust|both]
 #   run.sh ad-trust --ref <git ref> [--leg mit|rust|both]   (upgrade, then the real AD DC: scenarios/ad-trust.sh)
+#   run.sh --grade-logs <run dir>   (the log grader over a finished run: lib/log-grade.py; a weekly's postflight)
 #
 # The tree under test is `git archive <ref>` of the repository run.sh lives in (read-only, GIT_OPTIONAL_LOCKS=0;
 # FIELD_REPO in field.env names another), never a working tree. Each selected scenario's leg drives the real
@@ -33,12 +34,16 @@ KEEP=30
 # The scenarios of each profile, in order; upgrade is first: it puts the leg's KDC on kdc (MIT's baseline, or the ref
 # under test), and the other scenarios use the kdc it left.
 declare -A PROFILES=([nightly]="upgrade kadmind-start services nfs-client sssd-login klldap-swap" [weekly]="upgrade kadmind-start secrets-gcore services nfs-client sssd-login klldap-swap kdc-profile kdb-writes ticket-flags client-tools pkinit kpasswd rollback replica install"
-    [ad-trust]="upgrade ad-trust" [kill-loop]="upgrade kill-loop")
+    [ad-trust]="upgrade ad-trust" [kill-loop]="upgrade kill-loop" [load]="upgrade load" [load-long]="upgrade load")
 
 die() { printf 'run.sh: %s\n' "$*" >&2; exit 1; }
-usage() { sed -n '4,5p' "${BASH_SOURCE[0]}" | sed 's/^# *//'; }
+usage() { sed -n '4,6p' "${BASH_SOURCE[0]}" | sed 's/^# *//'; }
 PROFILE='' REF='' ONLY='' LEG=rust
 # The AD DC scenario changes the DC (and undoes it), so it runs only in this one form.
+if [ "${1:-}" = --grade-logs ]; then
+    [ $# -eq 2 ] || die "--grade-logs needs one run dir"
+    exec python3 -B "$HERE/lib/log-grade.py" "$2"
+fi
 if [ "${1:-}" = ad-trust ]; then PROFILE=ad-trust; shift; fi
 while [ $# -gt 0 ]; do
     case $1 in
@@ -119,6 +124,33 @@ REC_DIR=$RUN/guards
 DONE=0 STOP='' SCEN='' RESULT=FAIL ALL_PASS=1 GUARDS_OK=0
 declare -a ROWS=()
 
+# leglogs <record dir> <start>: kdc's daemon logs and its Kerberos units' journal since <start>, with the window and
+# kdc's UTC offset, for lib/log-grade.py. Best effort: a scenario's result never depends on it.
+leglogs() {
+    local d=$1/logs vm=${ROLE_KDC:-kdc} f o h
+    mkdir -p "$d"
+    for f in krb5kdc kadmind; do
+        read -r o h < <(sed -n "s/^$f \([0-9][0-9]*\) \([0-9a-f]\{64\}\)$/\1 \2/p" "$d/offsets" 2> /dev/null)
+        # From the mark on; a log shorter than its mark, or with another head, is a reset kdc's: whole.
+        timeout 120 "$LAB" ssh "$vm" -- "o=${o:-0}; f=/var/log/$f.log; s=\$(sudo stat -c %s \$f); \
+            [ \"\$s\" -ge \$o ] && [ \"\$(sudo head -c \$(( o < 4096 ? o : 4096 )) \$f | sha256sum | cut -c1-64)\" = \
+            '${h:-none}' ] || o=0; echo \"from \$o of \$s\" >&2; sudo tail -c +\$((o + 1)) \$f" > "$d/$f.log" \
+            2>> "$d/offsets" < /dev/null || true
+    done
+    timeout 120 "$LAB" ssh "$vm" -- "sudo journalctl -u 'krb5*' -u 'kadmin*' --since @$2 -o short-iso-precise --no-pager" \
+        > "$d/units.txt" 2> /dev/null < /dev/null || true
+    printf '%s %s %s\n' "$2" "$(date +%s)" "$(timeout 60 "$LAB" ssh "$vm" -- 'date +%z' 2> /dev/null < /dev/null)" > "$d/window"
+}
+
+# logmark <record dir>: each daemon log's size and the hash of its head up to 4 KiB, before the scenario.
+logmark() {
+    mkdir -p "$1/logs"
+    # shellcheck disable=SC2016 # expanded on kdc
+    timeout 60 "$LAB" ssh "${ROLE_KDC:-kdc}" -- 'for f in krb5kdc kadmind; do s=$(sudo stat -c %s /var/log/$f.log \
+        2> /dev/null || echo 0); echo "$f $s $(sudo head -c $(( s < 4096 ? s : 4096 )) /var/log/$f.log 2> /dev/null \
+        | sha256sum | cut -c1-64)"; done' > "$1/logs/offsets" 2> /dev/null < /dev/null || true
+}
+
 # postflight: the guards that hold whatever happened before them.
 postflight() {
     local mark=$RUN/tmp/.start left='' grok_excl claude_excl desktop_left b
@@ -147,6 +179,9 @@ postflight() {
     find /tmp -xdev "${prune[@]}" -user "$(id -un)" -newer "$mark" -print > "$RUN/guards/host-tmp.txt" 2>/dev/null || true
     printf 'new in /tmp: %s%s\n' "$(grep -c . "$RUN/guards/host-tmp.txt" || true)" "$left" >> "$RUN/guards/host-tmp.txt"
     check post.host.tmp '^new in /tmp: 0(;|$)' host "cat $(printf '%q' "$RUN/guards/host-tmp.txt")"
+    if [ "$PROFILE" = weekly ] && [ "${#LEGS[@]}" = 2 ]; then
+        check post.log.grade '^log-grade: PASS$' host "python3 -B $(printf '%q' "$FIELD_LIB/log-grade.py") $(printf '%q' "$RUN")"
+    fi
     check post.secret.scan rc host "python3 -B $(printf '%q' "$FIELD_LIB/scan-secrets.py") $(printf '%q' "$RUN")"
     GUARDS_OK=1
     if awk -F'\t' '$2 == "FAIL"' "$CHECKS" | grep -q .; then GUARDS_OK=0; fi
@@ -184,7 +219,7 @@ wrapup() {
         if [ "$i" -lt $(( ${#ids[@]} - KEEP )) ] && [ "${results[$i]}" = PASS ]; then drop+=("${ids[$i]}"); fi
     done
     for id in "${drop[@]}"; do
-        [[ $id =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}-(nightly|weekly|ad-trust|kill-loop)$ ]] || continue
+        [[ $id =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}-(nightly|weekly|ad-trust|kill-loop|load|load-long)$ ]] || continue
         rm -rf -- "${RUNS:?}/$id"
         awk -F'\t' -v id="$id" '$1 != id' "$RUNS/index.tsv" > "$RUNS/index.tsv.new" && mv "$RUNS/index.tsv.new" "$RUNS/index.tsv"
     done
@@ -304,6 +339,7 @@ for leg in "${LEGS[@]}"; do
         declared=$(sed -n 's/^# field-limit scenario=\([0-9][0-9]*\)$/\1/p' "$HERE/scenarios/$sc.sh")
         if [ -n "$declared" ]; then this_limit=$declared; fi
         say "== $sc --leg $leg"
+        logmark "$dir"
         t=$(date +%s)
         rc=0
         REC_DIR=$dir TMPDIR=$RUN/tmp/$sc-$leg FIELD_RUN=$RUN FIELD_TREE_TAR=$RUN/tmp/tree.tar FIELD_SHA=$SHA \
@@ -317,6 +353,7 @@ for leg in "${LEGS[@]}"; do
             kill -0 "$SCEN" 2>/dev/null || break
         done
         SCEN=''
+        leglogs "$dir" "$t"
         res=$(cut -d' ' -f1 "$dir/result" 2>/dev/null || true)
         npass=0 nfail=0 ninfo=0
         if [ -f "$dir/checks.tsv" ]; then read -r npass nfail ninfo < <(_lastcounts "$dir/checks.tsv"); fi

@@ -168,10 +168,13 @@ harness/field/run.sh --profile weekly --ref main --only upgrade,pkinit --leg bot
 harness/field/run.sh --profile weekly --ref main --only upgrade,replica --leg both   # the replica cells (lab.sh up kdc2 first), on demand
 harness/field/run.sh --profile weekly --ref main --only upgrade,rollback --leg both   # "Going back to MIT", on demand (leaves kdc on MIT)
 harness/field/run.sh --profile kill-loop --ref main   # the kill loop (lab.sh up kdc2 first), on demand: upgrade, then kill-loop
+harness/field/run.sh --profile load --ref main --leg both   # 600 s of load per leg (FIELD_LOADGEN: the ref's loadgen)
+harness/field/run.sh --profile load-long --ref main --leg both   # the burn-in's load: 3600 s per leg
+harness/field/run.sh --grade-logs ~/kerber-lab/runs/<run>   # the log grader over a finished run
 ```
 
 - **Options:**
-  - `--profile nightly|weekly|kill-loop` picks the scenarios, in the order of the table
+  - `--profile nightly|weekly|kill-loop|load|load-long` picks the scenarios, in the order of the table
     under [Scenarios](#scenarios);
   - `--only a,b` runs some of them;
   - `--leg mit|rust|both` picks the realm (default `rust`). `both` runs one
@@ -233,7 +236,18 @@ harness/field/run.sh --profile kill-loop --ref main   # the kill loop (lab.sh up
     - `checks.tsv`: one line per check (name, PASS / FAIL / INFO, expectation,
       exit status, what was seen, its line in `record.txt`);
     - `result`, `collect/` (journald and the non-secret files) and `pcap/` (a
-      capture without the AS exchanges).
+      capture without the AS exchanges);
+    - `logs/`: what kdc's `krb5kdc.log` and `kadmind.log` gained during the scenario
+      (`offsets` holds the marks; a reset kdc's log is copied whole), its Kerberos
+      units' journal since it began (`units.txt`) and `window`, saved by `run.sh`
+      after each leg.
+  - `log-grade/`: on a weekly with both legs, the postflight's `post.log.grade`
+    runs `lib/log-grade.py` over the `logs/` (MIT's leg first): no panic in any
+    line, each `kdc.issue` JSON event with a `correlation_id` (on the weekly only,
+    the rust leg's `upgrade` adds `json = STDERR` to kdc.conf; MIT ignores it;
+    `install` and `replica` reset kdc, so their windows have none), and each
+    `(Error)` line of ours matched, as a class, by MIT's in the same scenario or
+    by `lib/log-grade.allow`.
   - `runs/index.tsv` has one line per run. The last 30 runs and every failed one
     are kept.
   - The run's `TMPDIR` is its own `tmp/`, with the ref's archive and any raw
@@ -261,6 +275,7 @@ harness/field/run.sh --profile kill-loop --ref main   # the kill loop (lab.sh up
 | `client-opens.sh`, `profile-opens.sh` | `kdc-profile`'s cells: how often each program opens each profile file. |
 | `embed-otp-guest.py`, `embed-otp-stub.py` | `embed-otp`'s driver on the kdc VM, and the RADIUS stub for its MIT leg. |
 | `scan-secrets.py` | Every one of those values in every file of a run, in UTF-8 and UTF-16-LE (keytab keys raw and as hex); a planted control first; a hit fails the run |
+| `log-grade.py` | The log grader over a finished run's `logs/` (`run.sh --grade-logs`, a weekly's postflight): no panic in any line, no unread line holding an error, each `kdc.issue` correlated (counted per scenario), each `(Error)` line of ours in MIT's same scenario as a class, or in `log-grade.allow` (`prog`, ERE, reason, tab-separated; none yet); MIT's leg first |
 | `pcap-keep.sh` | A capture's copy without any AS exchange (IP fragments of other messages kept), checked to hold no AS message |
 | `strings-check.sh` | R1's strings check of the test-only names on a VM, by file or by install manifest (every program it lists, none skipped); `--control` must go red |
 | `install-check.sh` | On a VM after `make install`: every program the install manifest lists is byte-identical to the checkout's build (`cmp`, the names paired by its `dist/install.sh`) |
@@ -306,6 +321,7 @@ harness/field/run.sh --profile kill-loop --ref main   # the kill loop (lab.sh up
 | `embed-otp` | none, and in no profile, so `run.sh` cannot select it: it runs by hand, once its binaries are placed (its header) | rust (MIT 1.22.2 first, as the oracle) | kdc: `$MIT_SNAPSHOT_KDC` (reset) | none | not timed |
 | `install` | weekly, last: it resets kdc to its pristine `f44-base` snapshot and builds a realm from scratch | mit, rust | kdc: `f44-base` in both legs (reset to the pre-realm snapshot; the rust leg installs the ref from `docs/install.md`, the MIT leg Fedora's `krb5-server`); client2: `mit-kit-fc44` / `rust-ssh-f44` (reset) | f-L2-mit-realm; f-L2-rust (R1 install, L2 realm) | about 1 / 4 min |
 | `kill-loop` | none: `run.sh --profile kill-loop` (upgrade, then kill-loop), the 1.2 cut's crash proof | rust (MIT is the judge) | kdc as `upgrade` left it, its kl principals and stale `.principal.tmp-*` removed at the end; kdc2: `f4-mit-f44` in the rust leg (up for the preflight, reset at the start and the end, then parked) | none: its first record | about 5 min |
+| `load` | `load` (600 s per leg) and `load-long` (3600 s, the burn-in's) | mit, rust | kdc as `upgrade` left it, its lt principals removed at the end; client2: as the leg's snapshot (reset) | none: the LD cells' first record | about 12 / 12 min (`load`), 62 / 62 (`load-long`) |
 
 With `--leg both`, the six nightly scenarios take about 20 minutes, and the weekly 16 about 70 (2026-11-03, every VM reset by the run).
 
@@ -533,6 +549,13 @@ would remove it.
   both, ours answers 5 with the kvno kept. MIT's answers to those three are INFO
   lines (`scenarios/kpasswd.expect`); the rest are graded on both legs. The
   database is unmounted and moved back, also when the scenario stops early.
+- **`load.sh`** (LD, the same input on both legs): `loadgen` (`FIELD_LOADGEN`, the ref's `target/release/loadgen`)
+  runs AS + TGS from client2 with `FIELD_LOAD_WORKERS` (8) workers for the profile's seconds, while one MIT
+  `kadmin` session adds `lt-NNNNN` at `FIELD_LOAD_WRITES` (2) per second and MIT `kinit` + `kvno` sample before,
+  mid-load and after. Graded: `err=0`, every add acknowledged and listed, no restart, both daemons active, no
+  panic in their journal; the KDC's `RssAnon` every 5 s up to the load's end (within 30 s), bounded on the rust
+  leg (last <= first * 1.5 + 33 MiB, slope <= 0.05 MiB/s from 300 s, which must settle from 1200 s of load) and
+  recorded on MIT's (`load.expect`).
 - **`replica.sh`** (REP legs 1 and 2: an MIT primary on kdc, the leg's replica on
   kdc2): iprop is turned on in kdc's realm for the run, on port 754 (on 749 MIT's
   kadmind keeps only its own program, and Fedora's SELinux lets kadmind bind
