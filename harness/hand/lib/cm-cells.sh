@@ -294,6 +294,14 @@ tgt_of() {
         t && /Flags:/ { f = $0; sub(/.*Flags: /, "", f); print s "|" e "|" u "|" f; exit }
     ' "$1"
 }
+# A pty capture as plain lines: terminal escapes (OSC, CSI) and carriage returns removed.
+ptytext() {
+    python3 -c 'import re, sys
+t = open(sys.argv[1], "rb").read().decode("utf-8", "replace")
+t = re.sub(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)", "", t)
+t = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", t)
+sys.stdout.write(t.replace("\r", ""))' "$1"
+}
 life_min() { echo $(( ($(date -d "$2" +%s) - $(date -d "$1" +%s) + 30) / 60 )); }
 c8() {
     local u=cmu-$TAG pid i got=no renewed=no t0 now s0 e0 u0 f0 s1 e1 u1 f1 cur
@@ -318,11 +326,13 @@ c8() {
     pid=$!
     got=no
     for i in $(seq 1 60); do
-        grep -q '^SU_OK' "$OUT/$CACHE/cell8.pty" 2> /dev/null && { got=yes; break; }
+        ptytext "$OUT/$CACHE/cell8.pty" > "$OUT/$CACHE/cell8.txt" 2> /dev/null
+        grep -qx 'SU_OK' "$OUT/$CACHE/cell8.txt" && { got=yes; break; }
         sleep 1
     done
     mark LOGIN "$got"
-    mark SU_CC "$(sed -n 's/^SU_CC=\([A-Z]*\).*/\1/p' "$OUT/$CACHE/cell8.pty" | head -n 1)"
+    ptytext "$OUT/$CACHE/cell8.pty" > "$OUT/$CACHE/cell8.txt" 2> /dev/null
+    mark SU_CC "$(sed -n 's/^SU_CC=\([A-Z]*\)$/\1/p' "$OUT/$CACHE/cell8.txt" | head -n 1)"
     t0=$(date +%s)
     user_klist > "$F/c8.0" 2>&1
     IFS='|' read -r s0 e0 u0 f0 <<< "$(tgt_of "$F/c8.0")"
