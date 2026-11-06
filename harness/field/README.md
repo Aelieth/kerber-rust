@@ -200,6 +200,9 @@ harness/field/run.sh --grade-logs ~/kerber-lab/runs/<run>   # the log grader ove
     exits 1 before it makes a run directory; it only makes `~/kerber-lab/runs`
     and the lock file when they are missing.
   - every snapshot `baseline.env` names must exist;
+  - no `lab.sh takeover` state file is left (`pre.takeover.left`, every run): a
+    run killed past its postflight leaves a role's name on a distro VM, which a
+    Fedora run would then test;
   - with `FIELD_ROLE_KDC=<vm>` in the environment (DS; never `field.env`), the
     `kdc` role is that VM: `lab.sh` sends `kdc` there, its snapshots are checked
     there, and `pre.takeover` moves `kdc.kerber.test` to it. Postflight's

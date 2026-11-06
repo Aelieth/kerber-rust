@@ -10,11 +10,11 @@
 # products on the lab and leaves its record in ~/kerber-lab/runs/<UTC>-<sha12>-<profile>/<scenario>/<leg>/.
 # --leg both runs one leg at a time, MIT's first (the oracle), each against the kdc its upgrade leg left.
 #
-# Preflight: ~/kerber-lab/state/lab.lock taken (when it is held, run.sh exits 1 before it makes a run
-# directory); every snapshot baseline.env names exists; `lab.sh check --lab-only` of the VMs the selected
-# scenarios use (ssh, DNS, time sync: no internet, LAN or AD DC probe); the sha256 of /etc/krb5.conf, and from
-# a distrobox of the host's own. Postflight, also after a stop or an interruption: those sums unchanged, nothing
-# new in the host's /tmp owned by the user (/tmp/claude-<uid>, /tmp/grok-file-lock-<uid> and the desktop's
+# Preflight: ~/kerber-lab/state/lab.lock taken (when it is held, run.sh exits 1 before it makes a run directory);
+# every snapshot baseline.env names exists; no `lab.sh takeover` left over; `lab.sh check --lab-only` of the VMs the
+# selected scenarios use (ssh, DNS, time sync: no internet, LAN or AD DC probe); the sha256 of /etc/krb5.conf, and
+# from a distrobox of the host's own. Postflight, also after a stop or an interruption: those sums unchanged,
+# nothing new in the host's /tmp owned by the user (/tmp/claude-<uid>, /tmp/grok-file-lock-<uid> and the desktop's
 # top-level Chromium and GIMP scratch names left out, counted), the secret scan of the whole run with its planted
 # control first.
 # Any failure fails the run. A scenario that did not run is NOT-RUN, never green. Exit 0 only when every
@@ -173,6 +173,11 @@ logmark() {
         | sha256sum | cut -c1-64)"; done' > "$1/logs/offsets" 2> /dev/null < /dev/null || true
 }
 
+# takeovers_left <row>: no `lab.sh takeover` state file is left.
+takeovers_left() {
+    check "$1" '^takeovers left: 0$' host "printf 'takeovers left: %s\n' \"\$(ls \
+        $(printf '%q' "$LAB_HOME")/state/takeover* 2> /dev/null | wc -l)\""
+}
 # postflight: the guards that hold whatever happened before them.
 postflight() {
     local mark=$RUN/tmp/.start left='' grok_excl claude_excl desktop_left b
@@ -180,10 +185,7 @@ postflight() {
     section "postflight"
     if [ -n "$ROLE_KDC" ]; then check post.release rc host "$LABQ release"; fi
     if [ -n "$ROLE_KDC2" ]; then check post.release.kdc2 rc host "$LABQ release kdc2"; fi
-    if [ -n "$ROLE_KDC$ROLE_KDC2" ]; then
-        check post.takeover.left '^takeovers left: 0$' host "printf 'takeovers left: %s\n' \"\$(ls \
-            $(printf '%q' "$LAB_HOME")/state/takeover* 2> /dev/null | wc -l)\""
-    fi
+    if [ -n "$ROLE_KDC$ROLE_KDC2" ]; then takeovers_left post.takeover.left; fi
     krb5_sums > "$RUN/guards/krb5.conf.end"
     sides post.krb5.conf start "$RUN/guards/krb5.conf.start" end "$RUN/guards/krb5.conf.end" \
         && check post.krb5.conf rc host "diff $(printf '%q' "$RUN/guards/krb5.conf.start") $(printf '%q' "$RUN/guards/krb5.conf.end") && echo unchanged: && cat $(printf '%q' "$RUN/guards/krb5.conf.end")"
@@ -325,6 +327,8 @@ if [ -n "$ROLE_KDC" ]; then
         _checkrow pre.snapshot.KDC_BASE_SNAPSHOT FAIL present 1 "$ROLE_KDC has no snapshot $KDC_BASE_SNAPSHOT"
     fi
 fi
+# A run killed past its postflight leaves a role's name on a distro VM.
+takeovers_left pre.takeover.left
 if [ -n "$ROLE_KDC2" ]; then
     check pre.takeover.kdc2 rc host "$LABQ takeover $(printf '%q' "$ROLE_KDC2") kdc2"
 fi
