@@ -37,8 +37,8 @@ say "library acceptor: the VM's MIT answers the sweep"
 ./rd-sweep cases > cases.tsv || { echo "STAGE_ABORT rd-sweep cases"; exit 2; }
 KRB5RCACHETYPE=none ./rd-priv-oracle < cases.tsv > "acc-$STAGE$SUF.tsv"
 n=$(wc -l < "acc-$STAGE$SUF.tsv"); z=$(grep -c "${TAB}0\$" "acc-$STAGE$SUF.tsv"); p=$(grep -c "/pristine${TAB}0\$" "acc-$STAGE$SUF.tsv")
-echo "acceptor rows=$n accepts=$z pristine_ok=$p (want 646 69 3)"
-[ "$n" = 646 ] && [ "$z" = 69 ] && [ "$p" = 3 ] || echo "ACCEPTOR_ASSERT_FAIL"
+echo "acceptor rows=$n accepts=$z pristine_ok=$p (want 652 75 3)"
+[ "$n" = 652 ] && [ "$z" = 75 ] && [ "$p" = 3 ] || echo "ACCEPTOR_ASSERT_FAIL"
 if [ "$STAGE" = rust ]; then
     ./rd-sweep judge cases.tsv "acc-$STAGE$SUF.tsv" > "judge$SUF.txt"; echo "judge_rc=$?"; tail -1 "judge$SUF.txt"
 fi

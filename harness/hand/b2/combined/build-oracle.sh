@@ -1,7 +1,7 @@
 #!/bin/bash
 # build-oracle.sh SRC OUTDIR: rd-priv-oracle, RA r4's library acceptor (MIT's krb5_rd_req / rd_priv / rd_safe in a C program), built from the tree's scripts/oracle/rd-priv-oracle.c against
 # the host's libkrb5. The host (the rust-dev distrobox) is Fedora 43 with krb5-devel and krb5-libs 1.22.2-4.fc43, the lab VMs' own MIT, so the program runs on the VMs: RA r4 built it in
-# a Fedora 43 container for the same reason. No docker. The VM-side checks are the driver's (ldd finds every library; the acceptor's 646 / 69 / 3 rows).
+# a Fedora 43 container for the same reason. No docker. The VM-side checks are the driver's (ldd finds every library; the acceptor's 652 / 75 / 3 rows).
 # Writes OUTDIR/rd-priv-oracle, build.txt (the toolchain and the libraries it linked) and oracle-sha256.txt.
 set -eu
 SRC=${1:?source file}

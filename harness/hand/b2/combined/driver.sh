@@ -790,7 +790,7 @@ ra_stage() {   # ra_stage mit|rust: the RA r4 driver's stage(): stage.sh as root
     verdict "RA.$st.stage-rc" "$([ "$rc" = 0 ] && echo PASS || echo FAIL)" "stage.sh exit status" 0 "$rc" || return 1
     expect "RA.$st.no-abort-token" "$f2" 'STAGE_ABORT|ACCEPTOR_ASSERT_FAIL|SANITY_FAIL' 0
     expect "RA.$st.principal-and-key" "$f2" '^Entry for principal kadmin/changepw with kvno [0-9]+, encryption type .* added to keytab'
-    expect "RA.$st.acceptor-rows" "$f2" '^acceptor rows=646 accepts=69 pristine_ok=3 \(want 646 69 3\)$'
+    expect "RA.$st.acceptor-rows" "$f2" '^acceptor rows=652 accepts=75 pristine_ok=3 \(want 652 75 3\)$'
     expect "RA.$st.sanity" "$f2" '^SANITY_OK$'
     ra_getf_all "$st"
 }
@@ -800,7 +800,7 @@ ra_getf_all() {   # ra_getf_all mit|rust: the outcome files off the VM
     if [ "$st" = rust ]; then
         ra_getf judge.txt judge.txt || verdict "RA.rust.pull-judge.txt" FAIL "outcome file pulled" 1 0
         expect "RA.rust.judge-rc" "$OUT/ra/stage-rust.log" '^judge_rc=0$'
-        expect "RA.rust.judge-0-parts" "$OUT/ra/stage-rust.log" '^0 of 646 cases part from MIT$'
+        expect "RA.rust.judge-0-parts" "$OUT/ra/stage-rust.log" '^0 of 652 cases part from MIT$'
     fi
 }
 
@@ -1144,7 +1144,7 @@ package_summary() {   # SUMMARY.txt: the checks per package and the cells behind
             { g = grp($1); n[g " " $2]++; seen[g] = 1 }
             END { for (g in seen) printf "%-58s %5d PASS %4d FAIL %5d INFO\n", substr(g, 3), n[g " PASS"], n[g " FAIL"], n[g " INFO"] }' "$OUT/results.tsv" | sort
         echo "# cells compared MIT against ours"
-        echo "RA r4: $ra_cells wire cells (449 + 449 + 467 + 467 expected: udp, tcp, udp-setpw, tcp-setpw) and $ra_acc library-acceptor rows (646 expected), in each stage"
+        echo "RA r4: $ra_cells wire cells (449 + 449 + 467 + 467 expected: udp, tcp, udp-setpw, tcp-setpw) and $ra_acc library-acceptor rows (652 expected), in each stage"
         echo "KA:    $ka_cells refused-key cell lines and $ka_sess session steps in the MIT stage's sessions (${#KA_CLIENTS[@]} clients)"
         echo "OTP:   $otp_cells login cells (32 expected: C1-C4 x 2 clients x 2 kinits x 2 stages) and $otp_armor armor cells (8 expected); parity rows: $(grep -c '^PARITY\.' "$OUT/results.tsv" | tr -d '\n') (PASS $(awk -F'\t' '$1 ~ /^PARITY\./ && $2 == "PASS"' "$OUT/results.tsv" | wc -l))"
     } > "$OUT/SUMMARY.txt"

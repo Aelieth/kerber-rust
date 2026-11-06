@@ -170,11 +170,12 @@ harness/field/run.sh --profile weekly --ref main --only upgrade,rollback --leg b
 harness/field/run.sh --profile kill-loop --ref main   # the kill loop (lab.sh up kdc2 first), on demand: upgrade, then kill-loop
 harness/field/run.sh --profile load --ref main --leg both   # 600 s of load per leg (FIELD_LOADGEN: the ref's loadgen)
 harness/field/run.sh --profile load-long --ref main --leg both   # the burn-in's load: 3600 s per leg
+harness/field/run.sh --profile lt --ref main --leg both   # restart, kdc-hostile, otp-default, rd-safe (lab.sh up kdc2 first; FIELD_RDSWEEP)
 harness/field/run.sh --grade-logs ~/kerber-lab/runs/<run>   # the log grader over a finished run
 ```
 
 - **Options:**
-  - `--profile nightly|weekly|kill-loop|load|load-long` picks the scenarios, in the order of the table
+  - `--profile nightly|weekly|kill-loop|load|load-long|lt` picks the scenarios, in the order of the table
     under [Scenarios](#scenarios);
   - `--only a,b` runs some of them;
   - `--leg mit|rust|both` picks the realm (default `rust`). `both` runs one
@@ -286,6 +287,7 @@ harness/field/run.sh --grade-logs ~/kerber-lab/runs/<run>   # the log grader ove
 | `acl-variant.sh` | The `svc/setup` ACL-settle helper (promoted from the L2 hand record): `acl_variant <letters> <tag>` writes `kadm5.acl` giving `svc/setup` those letters on `host/*` and `nfs/*`, restarts kadmind, then grades the `addprinc` and `ktadd` from client2 against the outcome the letters dictate (MIT's refusal texts); both legs run it |
 | `kt-vs-kdc.py` | A keytab's newest kvno and enctypes (`klist -k -e`) against the KDC's `getprinc` |
 | `kt-records.py` | `client-tools`' keytab helper on client2: a v2 keytab with an unknown enctype, and two keytabs compared record by record with the timestamps zeroed (it never prints a key) |
+| `kdc-hostile.py` | `kdc-hostile`'s sender on client2 (python3 on stdin): one hostile input per cell at the KDC's port 88, the same bytes on both legs, and one outcome line (`reply krb-error N`, `silence`, `close`, then for TCP whether the stream stayed open) |
 | `kdc-req-proxy.py` | A UDP/TCP proxy in front of a KDC on client2 for `client-tools` and `ad-trust`: it writes each request's shape (padata types and order, options, enctypes, sname) as a JSON line and compares two runs flow by flow (`--compare`). It never prints a key |
 | `kdc-rewrite-proxy.py` | A UDP/TCP man-in-the-middle in front of a KDC: it rewrites replies (`as-rep-cname`, `strip-fx-fast`; `scripts/mit-fast-kdc-gate.sh`), or answers a named realm's AS-REQ itself with a client referral (`refer`; `client-tools`' CR cells). It logs each request's realm and each reply's error code, never a key |
 | `rpc-probe.py` | One ONC RPC call over TCP and its answer on one line (the accept_stat or auth_stat, or none): procedure 0 under AUTH_NONE by default; `--proc`, `--flavor`, `--cred` and `--verf-len` shape the call, and `--then` makes a second one on the same connection (`kdc-profile`, `kdb-writes` KR) |
@@ -322,6 +324,10 @@ harness/field/run.sh --grade-logs ~/kerber-lab/runs/<run>   # the log grader ove
 | `install` | weekly, last: it resets kdc to its pristine `f44-base` snapshot and builds a realm from scratch | mit, rust | kdc: `f44-base` in both legs (reset to the pre-realm snapshot; the rust leg installs the ref from `docs/install.md`, the MIT leg Fedora's `krb5-server`); client2: `mit-kit-fc44` / `rust-ssh-f44` (reset) | f-L2-mit-realm; f-L2-rust (R1 install, L2 realm) | about 1 / 4 min |
 | `kill-loop` | none: `run.sh --profile kill-loop` (upgrade, then kill-loop), the 1.2 cut's crash proof | rust (MIT is the judge) | kdc as `upgrade` left it, its kl principals and stale `.principal.tmp-*` removed at the end; kdc2: `f4-mit-f44` in the rust leg (up for the preflight, reset at the start and the end, then parked) | none: its first record | about 5 min |
 | `load` | `load` (600 s per leg) and `load-long` (3600 s, the burn-in's) | mit, rust | kdc as `upgrade` left it, its lt principals removed at the end; client2: as the leg's snapshot (reset) | none: the LD cells' first record | about 12 / 12 min (`load`), 62 / 62 (`load-long`) |
+| `restart` | `lt` | mit, rust | kdc as `upgrade` left it, its daemons SIGKILLed and started again, the rw principal removed at the end; kdc2: `f4-mit-f44` (reset at the start and the end, then parked); client2: reset | none: its first record | about 4 / 4 min |
+| `kdc-hostile` | `lt` | mit, rust | kdc as `upgrade` left it; client2: reset | none: its first record | about 3 / 3 min |
+| `otp-default` | `lt` | mit, rust | kdc as `upgrade` left it, otpdef and otparm removed at the end; client2: reset | none: its first record | about 2 / 2 min |
+| `rd-safe` | `lt` | mit, rust (no KDC is asked: the same cases on both) | client2: reset | none: its first record | about 1 / 1 min |
 
 With `--leg both`, the six nightly scenarios take about 20 minutes, and the weekly 16 about 70 (2026-11-03, every VM reset by the run).
 
@@ -556,6 +562,26 @@ would remove it.
   panic in their journal; the KDC's `RssAnon` every 5 s up to the load's end (within 30 s), bounded on the rust
   leg (last <= first * 1.5 + 33 MiB, slope <= 0.05 MiB/s from 300 s, which must settle from 1200 s of load) and
   recorded on MIT's (`load.expect`).
+- **`restart.sh`** (RW): MIT `kadmin` from client2 adds `rw-<hex>` (a generated password, on stdin only); after
+  the acknowledgment both daemons' main processes are SIGKILLed and started again (new pids, 88 and 749
+  listening); MIT `kinit` with that password; kdc's own `kdb5_util dump` loads into MIT's on kdc2, whose
+  `getprinc` finds the principal.
+- **`kdc-hostile.sh`** (KH, `lib/kdc-hostile.py` from client2): eight cells at port 88, MIT's
+  `net-server.c` the oracle: K1a/K1b a TCP length past the 1 MiB - 4 cap, K2 the length's high bit, K3 46
+  idle connections then a request (MIT keeps 45), K4a/K4b UDP garbage and a cut AS-REQ, K5a 20000 PA-DATA,
+  K5b a req-body longer than its frame. Each cell must be sent; its outcome (a reset included) and its log lines
+  are INFO rows compared with MIT's; after each, the same KDC process, active, no restart, RssAnon grown under 64 MiB,
+  and a normal MIT `kinit`.
+- **`otp-default.sh`** (OD): otpdef with `otp = "[]"` (one DEFAULT token) and no `[otp]` stanza, so MIT's
+  DEFAULT type is `KDC_RUN_DIR/DEFAULT.socket`, where nothing listens. MIT `kinit -T` (armor: a keytab
+  `kinit` of otparm), pinned to the otp module, must offer PA-OTP-CHALLENGE, answer it and be refused, not time
+  out, with none of the otp module's earlier stages logged (so the request reached the DEFAULT server); the offer,
+  the module's result, the errors, the time (bucketed) and the log lines are compared with MIT's.
+- **`rd-safe.sh`** (RS): `rd-sweep cases` (`FIELD_RDSWEEP`, built with `--features krb5-admin/test-hooks`)
+  on client2, answered by MIT's `krb5_rd_req`/`rd_priv`/`rd_safe` (`scripts/oracle/rd-priv-oracle.c`,
+  built on the host from the ref against Fedora 43's krb5-devel 1.22.2) first, then by ours (`rd-sweep
+  judge`), with the nightly gate container's libdefaults. MIT must take the pristine cases and KRB-SAFE-BODY's
+  seq-number with a needless leading 00 octet; ours must answer every case as MIT does.
 - **`replica.sh`** (REP legs 1 and 2: an MIT primary on kdc, the leg's replica on
   kdc2): iprop is turned on in kdc's realm for the run, on port 754 (on 749 MIT's
   kadmind keeps only its own program, and Fedora's SELinux lets kadmind bind

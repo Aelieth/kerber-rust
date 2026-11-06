@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # harness/field/run.sh: one field run on the lab (harness/field/README.md, "Field runs" and "Scenarios").
 #
-#   run.sh --profile nightly|weekly|kill-loop|load|load-long --ref <git ref> [--only <scenario,...>] [--leg mit|rust|both]
+#   run.sh --profile nightly|weekly|kill-loop|load|load-long|lt --ref <git ref> [--only <scenario,...>] [--leg mit|rust|both]
 #   run.sh ad-trust --ref <git ref> [--leg mit|rust|both]   (upgrade, then the real AD DC: scenarios/ad-trust.sh)
 #   run.sh --grade-logs <run dir>   (the log grader over a finished run: lib/log-grade.py; a weekly's postflight)
 #
@@ -34,7 +34,8 @@ KEEP=30
 # The scenarios of each profile, in order; upgrade is first: it puts the leg's KDC on kdc (MIT's baseline, or the ref
 # under test), and the other scenarios use the kdc it left.
 declare -A PROFILES=([nightly]="upgrade kadmind-start services nfs-client sssd-login klldap-swap" [weekly]="upgrade kadmind-start secrets-gcore services nfs-client sssd-login klldap-swap kdc-profile kdb-writes ticket-flags client-tools pkinit kpasswd rollback replica install"
-    [ad-trust]="upgrade ad-trust" [kill-loop]="upgrade kill-loop" [load]="upgrade load" [load-long]="upgrade load")
+    [ad-trust]="upgrade ad-trust" [kill-loop]="upgrade kill-loop" [load]="upgrade load" [load-long]="upgrade load"
+    [lt]="upgrade restart kdc-hostile otp-default rd-safe")
 
 die() { printf 'run.sh: %s\n' "$*" >&2; exit 1; }
 usage() { sed -n '4,6p' "${BASH_SOURCE[0]}" | sed 's/^# *//'; }
@@ -219,7 +220,7 @@ wrapup() {
         if [ "$i" -lt $(( ${#ids[@]} - KEEP )) ] && [ "${results[$i]}" = PASS ]; then drop+=("${ids[$i]}"); fi
     done
     for id in "${drop[@]}"; do
-        [[ $id =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}-(nightly|weekly|ad-trust|kill-loop|load|load-long)$ ]] || continue
+        [[ $id =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}-(nightly|weekly|ad-trust|kill-loop|load|load-long|lt)$ ]] || continue
         rm -rf -- "${RUNS:?}/$id"
         awk -F'\t' -v id="$id" '$1 != id' "$RUNS/index.tsv" > "$RUNS/index.tsv.new" && mv "$RUNS/index.tsv.new" "$RUNS/index.tsv"
     done
