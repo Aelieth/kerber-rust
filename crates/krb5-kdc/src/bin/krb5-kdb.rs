@@ -878,7 +878,10 @@ fn dump(util: &mut Util, args: &[String]) -> u8 {
     }) {
         Ok(d) => d,
         Err(why) => {
-            util.com_err(&why, &format!("performing {} dump", version_name(version)));
+            util.com_err(
+                &why,
+                &format!("performing {} dump", version_name(version, iprop)),
+            );
             return util.failed();
         }
     };
@@ -944,9 +947,9 @@ fn current_dump_sno_in_ulog(util: &Util, file: &Path) -> bool {
 }
 
 // MIT: `parse_iprop_header` (kadmin/dbutil/dump.c:1089-1101)
-fn iprop_header_last(util: &Util, line: &str) -> Option<UlogLast> {
+fn iprop_header_last(util: &Util, line: &str) -> Option<(Iprop, UlogLast)> {
     match krb5_kdc::parse_iprop_header(line) {
-        Ok((_, last)) => Some(last),
+        Ok((x1, last)) => Some((if x1 { Iprop::X1 } else { Iprop::V0 }, last)),
         Err(IpropHeaderError::UnknownVersion(v)) => {
             err_line(&format!(
                 "{}: Unknown iprop dump version {v}",
@@ -1018,11 +1021,14 @@ fn name_matches(util: &Util, name: &str, patterns: &[String]) -> bool {
 
 // MIT: `r1_8_version` (kadmin/dbutil/dump.c:1026-1035)
 // MIT: `r1_11_version` (kadmin/dbutil/dump.c:1036-1045)
-fn version_name(version: u32) -> &'static str {
-    if version == KDB_DUMP_VERSION {
-        "Kerberos version 5 release 1.11"
-    } else {
-        "Kerberos version 5 release 1.8"
+// MIT: `iprop_version` (kadmin/dbutil/dump.c:1046-1055)
+// MIT: `ipropx_1_version` (kadmin/dbutil/dump.c:1056-1065)
+fn version_name(version: u32, iprop: Option<Iprop>) -> &'static str {
+    match iprop {
+        Some(Iprop::V0) => "Kerberos iprop version",
+        Some(Iprop::X1) => "Kerberos iprop extensible version",
+        None if version == KDB_DUMP_VERSION => "Kerberos version 5 release 1.11",
+        None => "Kerberos version 5 release 1.8",
     }
 }
 
@@ -1074,15 +1080,16 @@ fn load(util: &mut Util, args: &[String]) -> u8 {
         };
         util.ulog = Some(log);
     }
-    let iprop_last = if iprop_load && !update {
+    let (iprop, iprop_last) = if iprop_load && !update {
         let line = bytes.split(|&b| b == b'\n').next().unwrap_or_default();
-        match iprop_header_last(util, &String::from_utf8_lossy(line)) {
-            Some(last) => Some(last),
-            None => return 1,
-        }
+        let Some((iprop, last)) = iprop_header_last(util, &String::from_utf8_lossy(line)) else {
+            return 1;
+        };
+        (Some(iprop), Some(last))
     } else {
-        None
+        (iprop_load.then_some(Iprop::V0), None)
     };
+    let name = version_name(version, iprop);
     if let Some(arg) = &util.db_args.unsupported {
         let context = if update {
             "while opening database"
@@ -1101,13 +1108,13 @@ fn load(util: &mut Util, args: &[String]) -> u8 {
         None
     };
     let Ok(text) = String::from_utf8(bytes) else {
-        restore_failed(util, file, version, "line 1: dump is not UTF-8");
+        restore_failed(util, file, name, "line 1: dump is not UTF-8");
         return 1;
     };
     let dump = match parse_dump(&text) {
         Ok(d) => d,
         Err(e) => {
-            restore_failed(util, file, version, &dump_error_text(&e));
+            restore_failed(util, file, name, &dump_error_text(&e));
             return 1;
         }
     };
@@ -1120,7 +1127,7 @@ fn load(util: &mut Util, args: &[String]) -> u8 {
     let loaded = match load_dump_with_key(&text, &key) {
         Ok(s) => s,
         Err(e) => {
-            restore_failed(util, file, version, &dump_error_text(&e));
+            restore_failed(util, file, name, &dump_error_text(&e));
             return 1;
         }
     };
@@ -1433,7 +1440,7 @@ fn dump_error_text(e: &DumpError) -> String {
 
 // MIT: `restore_dump` (kadmin/dbutil/dump.c:1364-1379)
 // MIT: `load_db` (kadmin/dbutil/dump.c:1540-1543)
-fn restore_failed(util: &Util, file: &str, version: u32, why: &str) {
+fn restore_failed(util: &Util, file: &str, name: &str, why: &str) {
     let progname = &util.progname;
     let (line, detail) = why
         .strip_prefix("line ")
@@ -1447,10 +1454,7 @@ fn restore_failed(util: &Util, file: &str, version: u32, why: &str) {
         }
         None => err_line(&format!("{progname}: {detail}")),
     }
-    err_line(&format!(
-        "{progname}: {} restore failed",
-        version_name(version)
-    ));
+    err_line(&format!("{progname}: {name} restore failed"));
 }
 
 fn load_master_key(util: &mut Util, dump: &DumpFile) -> Option<(ProtocolKey, bool)> {
