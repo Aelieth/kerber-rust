@@ -220,7 +220,7 @@ SHELLCHECK_CMD = (
     "shellcheck -S style scripts/*.sh scripts/lib/*.sh harness/*.sh dist/*.sh"
     " harness/field/*.sh harness/field/lib/*.sh harness/field/scenarios/*.sh harness/field/p18/*.sh"
     " harness/hand/*.sh harness/hand/lib/*.sh harness/hand/b2/*/*.sh harness/hand/b2/*/*/*.sh"
-    " harness/hand/r3/*.sh harness/hand/r3/*/*.sh"
+    " harness/hand/r3/*.sh harness/hand/r3/*/*.sh harness/hand/t7/*.sh"
 )
 
 

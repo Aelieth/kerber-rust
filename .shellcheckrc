@@ -1,6 +1,6 @@
 # shellcheck -S style over scripts/*.sh scripts/lib/*.sh harness/*.sh dist/*.sh,
 # run from the repo root (the CI shellcheck job, make shellcheck, the hygiene inventory); the CI job and
-# make shellcheck also cover harness/field/*.sh harness/field/lib/*.sh harness/field/scenarios/*.sh harness/field/p18/*.sh harness/hand/*.sh harness/hand/lib/*.sh harness/hand/b2/*/*.sh harness/hand/b2/*/*/*.sh harness/hand/r3/*.sh harness/hand/r3/*/*.sh.
+# make shellcheck also cover harness/field/*.sh harness/field/lib/*.sh harness/field/scenarios/*.sh harness/field/p18/*.sh harness/hand/*.sh harness/hand/lib/*.sh harness/hand/b2/*/*.sh harness/hand/b2/*/*/*.sh harness/hand/r3/*.sh harness/hand/r3/*/*.sh harness/hand/t7/*.sh.
 # Sourced files are followed, so `. "$ROOT/scripts/lib/gate-common.sh"` needs no
 # per-site directive; SCRIPTDIR/.. is the root for `$ROOT/...` paths.
 external-sources=true

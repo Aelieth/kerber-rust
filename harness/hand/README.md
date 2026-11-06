@@ -7,6 +7,9 @@ Environment (each driver takes the 40-hex sha of the build under test as `$1`):
 - `HAND_REC`: the record dir; each leg writes under `$HAND_REC/<sha>/`; `lib/ship-guard.sh` reads `$HAND_REC/<sha>/step1/ship.sha256`.
 - `$KERBER_LAB_HOME/field.env` (default `~/kerber-lab`, mode 0600) is sourced by `lib/env.sh`; `require_env NAME...` stops on an empty name.
 - `FIELD_LAB_NET` (field.env): the lab network, for the legs that start the embed example on klldap (`rp-az.sh` too).
+- `HAND_REPO` (`rp-step1-equal.sh`): the main checkout the driver adds `HAND_WT` from as a detached worktree when `HAND_WT` has no `.git`.
+- `HAND_STEP1_BASE` (`rp-step1-equal.sh`): the 40-hex sha whose `step1/ship.sha256` (and `extra.sha256`, if any) under `HAND_REC` the build must equal.
+- `HAND_RELEASE_TAG`, `HAND_RELEASE_TREE` (`rp-final-clone.sh`; the tag also `rp-final-clients.sh`): the release under test, e.g. `v1.2.1` and its tree.
 - `HAND_BASELINE_DIR` (`rp-b2.sh`): the last graded B2 record's `b2/results.tsv` and `combined/results.tsv`; the grade compares against them.
 - `HAND_FIXTURE_DIR` (`rp-b2.sh`): the throwaway D3.TEST realm's dumps, stashes, keytabs and passwords, from the FULL-r2 record's `helpers/`; mode 0700, checked against `b2/shared/d3-fixtures.sha256`. Never the lab realm's keys, and never in git.
 - `FIELD_KIT_DIR` (`rp-r3.sh`): the lab copy of the reference client kit (one `*-remote-setup.sh` plus `lib/`); it stays out of the tree.
@@ -33,6 +36,13 @@ Drivers:
 - `rp-fz.sh`: FZ: a raw TGS-REQ with a non-ASCII service name, MIT first, then the upgrade.
 - `rp-bg.sh`: BG: GSS sequence-number rig and the channel-binding cells in a private namespace, no VM.
 - `rp-bd.sh`: BD: des3 SPAKE legs on the mitd3 VM, MIT KDC first, then ours.
+- `rp-kill.sh`: upgrade then the kill-loop profile, rust leg.
+- `rp-final-clone.sh`: the README's `git clone` block run on a reset kdc VM at the tag commit, with the guest HEAD, tree and tag checked.
+- `rp-step1-equal.sh`: step 1, a fresh `make build` of the commit; the 13 ship binaries must equal `HAND_STEP1_BASE`'s `step1/ship.sha256`; writes `step1/ship.sha256` for `lib/ship-guard.sh`.
+- `rp-final-clients.sh`: fresh-client leg: rocky10 and deb13 cells against the MIT KDC, then the move onto the same VM and the same cells against ours, masked-diff.
+- `rp-weekly.sh`, `rp-weekly-services.sh`, `rp-tf.sh`, `rp-nightly.sh`, `rp-rep.sh`: the profile launchers (weekly; upgrade then services; ticket-flags then klldap-swap; nightly N; upgrade then replica).
+- `rp-sr.sh`: SR: password counts in a gcore of kadmind after kpasswd and remote cpw, MIT first, then the upgrade, then ours.
+- `t7/`: T-7, the constant-time measurement; `t7/run.sh` builds it from the checkout and runs it on the host (`t7/README.md`).
 - `rp-b2.sh`: B2, the combined driver then the full B2 hold; `B2_LAUNCH=1` runs the lab, `B2_HOLD_ONLY=1` skips the combined driver.
   Optional for `rp-b2.sh`: `KP_RPM` (a local MIT krb5-server rpm; unset = install from the repository) and `D3_BASESHIP` (an unfixed build's programs; unset = the wire cell is NOT-RUN).
 - `rp-r3.sh`: R3, sshd GSSAPI client1 to client2; `R3_LAUNCH=1` runs the lab.

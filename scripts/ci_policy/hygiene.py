@@ -679,12 +679,12 @@ def _ratio_totals(root: pathlib.Path) -> tuple[dict[str, int], dict[str, dict[st
     """rscount.py's totals, with the four missed modules counted as test code."""
     tot = {"code": 0, "comment": 0, "blank": 0, "test_code": 0, "test_comment": 0}
     per: dict[str, dict[str, int]] = {}
-    # fiat-crypto's generated field code is not ours to count, as vendor/ is not.
-    fiat = root / "crates" / "krb5-brainpool" / "src" / "fiat"
+    # fiat-crypto's generated field code is not ours to count, as vendor/ is not; T-7 is a tool.
+    skip = {root / "crates" / "krb5-brainpool" / "src" / "fiat", root / "harness" / "hand" / "t7"}
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [
             d for d in dirnames
-            if d not in ("target", ".git", "vendor") and pathlib.Path(dirpath) / d != fiat
+            if d not in ("target", ".git", "vendor") and pathlib.Path(dirpath) / d not in skip
         ]
         for name in filenames:
             if not name.endswith(".rs"):
@@ -710,6 +710,7 @@ _MIT_CITE_RE = re.compile(
     r"^\s*// MIT: `[A-Za-z_]\w*`( \+ `[A-Za-z_]\w*`)* \([\w./-]+(:\d+(-\d+)?)?\)$"
 )
 _FIAT_REL = "crates/krb5-brainpool/src/fiat/"
+_T7_REL = "harness/hand/t7/"
 
 
 def _mit_cite_ok(line: str) -> bool:
@@ -784,7 +785,8 @@ def _char_totals(root: pathlib.Path) -> tuple[dict[str, int], dict[str, dict[str
     Code characters are the line with its indentation and any trailing `//` comment removed.
     An inline `/* */` on a code line stays in the code count.
     Comment characters are the comment text including its marker, without the indentation.
-    `crates/krb5-brainpool/src/fiat/` is skipped. Test lines use the same marking as the line ratio.
+    `crates/krb5-brainpool/src/fiat/` and `harness/hand/t7/` are skipped. Test lines use the same
+    marking as the line ratio.
     """
     tot = {"code": 0, "comment": 0, "exempt": 0}
     per: dict[str, dict[str, int]] = {}
@@ -796,7 +798,7 @@ def _char_totals(root: pathlib.Path) -> tuple[dict[str, int], dict[str, dict[str
                 continue
             path = pathlib.Path(dirpath) / name
             rel = path.relative_to(root).as_posix()
-            if rel.startswith(_FIAT_REL):
+            if rel.startswith((_FIAT_REL, _T7_REL)):
                 continue
             text = path.read_text(encoding="utf-8", errors="replace")
             lines, kinds = _ratio_scan(text)
