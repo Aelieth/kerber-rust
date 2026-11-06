@@ -1,0 +1,10 @@
+RA.cmp.udp.aplen-zero	368e126f	50	frame/aplen-zero on UDP is DROP (Invalid message type); MIT answers ERR:60:3. docs/mit-deviations.md row 50, stricter, landed after FULL-r2.
+RA.cmp.tcp.aplen-zero	368e126f	50	frame/aplen-zero on TCP is DROP (Invalid message type); MIT answers ERR:60:3. docs/mit-deviations.md row 50, stricter, landed after FULL-r2.
+PARITY.trace.MC1.client1	PENDING	pending	client1 MIT trace may omit Resolving hostname; classify from the locator capture. Does not stop the leg.
+PARITY.trace.MC2.client1	PENDING	pending	client1 MIT trace may omit Resolving hostname; classify from the locator capture. Does not stop the leg.
+PARITY.trace.MC3.client1	PENDING	pending	client1 MIT trace may omit Resolving hostname; classify from the locator capture. Does not stop the leg.
+PARITY.trace.MC4.client1	PENDING	pending	client1 MIT trace may omit Resolving hostname; classify from the locator capture. Does not stop the leg.
+PARITY.trace.OC1.client1	PENDING	pending	client1 MIT trace may omit Resolving hostname; classify from the locator capture. Does not stop the leg.
+PARITY.trace.OC2.client1	PENDING	pending	client1 MIT trace may omit Resolving hostname; classify from the locator capture. Does not stop the leg.
+PARITY.trace.OC3.client1	PENDING	pending	client1 MIT trace may omit Resolving hostname; classify from the locator capture. Does not stop the leg.
+PARITY.trace.OC4.client1	PENDING	pending	client1 MIT trace may omit Resolving hostname; classify from the locator capture. Does not stop the leg.

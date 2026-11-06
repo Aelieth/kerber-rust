@@ -7,6 +7,9 @@ Environment (each driver takes the 40-hex sha of the build under test as `$1`):
 - `HAND_REC`: the record dir; each leg writes under `$HAND_REC/<sha>/`; `lib/ship-guard.sh` reads `$HAND_REC/<sha>/step1/ship.sha256`.
 - `$KERBER_LAB_HOME/field.env` (default `~/kerber-lab`, mode 0600) is sourced by `lib/env.sh`; `require_env NAME...` stops on an empty name.
 - `FIELD_LAB_NET` (field.env): the lab network, for the legs that start the embed example on klldap (`rp-az.sh` too).
+- `HAND_BASELINE_DIR` (`rp-b2.sh`): the last graded B2 record's `b2/results.tsv` and `combined/results.tsv`; the grade compares against them.
+- `HAND_FIXTURE_DIR` (`rp-b2.sh`): the throwaway D3.TEST realm's dumps, stashes, keytabs and passwords, from the FULL-r2 record's `helpers/`; mode 0700, checked against `b2/shared/d3-fixtures.sha256`. Never the lab realm's keys, and never in git.
+- `FIELD_KIT_DIR` (`rp-r3.sh`): the lab copy of the reference client kit (one `*-remote-setup.sh` plus `lib/`); it stays out of the tree.
 - `krb5-embed-realm`, built from `examples/embed-realm` into the ship dir, for `rp-ss.sh`, `rp-al-a45.sh`, `rp-ba.sh`, `rp-az.sh`, `rp-tr.sh`, `rp-tr-cell2.sh` and `rp-sc.sh`.
 - Passwords a leg generates go to a private `mktemp -d` under `TMPDIR`, never the record, and are removed on exit.
 
@@ -30,5 +33,10 @@ Drivers:
 - `rp-fz.sh`: FZ: a raw TGS-REQ with a non-ASCII service name, MIT first, then the upgrade.
 - `rp-bg.sh`: BG: GSS sequence-number rig and the channel-binding cells in a private namespace, no VM.
 - `rp-bd.sh`: BD: des3 SPAKE legs on the mitd3 VM, MIT KDC first, then ours.
-- `lib/`: `env.sh`, `ship-guard.sh` (re-hashes the 13 ship binaries).
+- `rp-b2.sh`: B2, the combined driver then the full B2 hold; `B2_LAUNCH=1` runs the lab, `B2_HOLD_ONLY=1` skips the combined driver.
+  Optional for `rp-b2.sh`: `KP_RPM` (a local MIT krb5-server rpm; unset = install from the repository) and `D3_BASESHIP` (an unfixed build's programs; unset = the wire cell is NOT-RUN).
+- `rp-r3.sh`: R3, sshd GSSAPI client1 to client2; `R3_LAUNCH=1` runs the lab.
+- `b2/`: `shared/` (the hold's driver, modules and VM helpers; `helpers/SHA256SUMS` is checked before the lock), `combined/` (the combined driver and its OTP, RA, KA cells), `fix-p8/` (the P8 field check).
+- `r3/`: the R3 driver `hc.sh`, `cells/r3.sh`, `vmctl.sh`, `install-ours.sh`, `parity.py`, `pcapdecode.sh`.
+- `lib/`: `env.sh`, `ship-guard.sh` (re-hashes the 13 ship binaries), `compare-legs.py` and `expected-diff.txt` (the B2 grade), `p16a-leg.sh` (the combined driver's dictionary leg).
 - `lib/`: also the guest and client helpers the legs copy onto the VMs (`*.py`, `*.c`) and the `bg-ns.sh`/`bg-seq.sh` namespace scripts.
