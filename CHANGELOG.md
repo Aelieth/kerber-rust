@@ -35,6 +35,7 @@ any other `###` heading.
 - **fuzz.** Targets decode with the vendored rasn the product ships, not crates.io's.
 - **client.** kpasswd refuses a reply whose receiver address isn't the request's sender, as MIT.
 - **gss.** Unwrap rotates RRC left and wrap right, as MIT, so Windows' sealed tokens unwrap.
+- **kpropd.** A failed replay resets the ulog header, so the next poll asks for a full resync, as MIT.
 
 ### Removed
 

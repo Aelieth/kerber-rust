@@ -401,8 +401,15 @@ fn ulog_replay(
     };
     let updates = incr
         .updates(s.iprop_master_key().as_ref())
-        .map_err(|e| e.to_string())?;
-    s.change(|s| s.apply_updates(&updates))
-        .and_then(|applied| applied)
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string());
+    let replayed = updates.and_then(|updates| {
+        s.change(|s| s.apply_updates(&updates))
+            .and_then(|applied| applied)
+            .map_err(|e| e.to_string())
+    });
+    // MIT: `ulog_replay` (lib/kdb/kdb_log.c:474-476)
+    if replayed.is_err() {
+        s.reset_ulog_header();
+    }
+    replayed
 }

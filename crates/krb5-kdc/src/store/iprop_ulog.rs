@@ -397,11 +397,25 @@ impl PrincipalStore {
         self.ulog().ok_or(UlogError::Error)?.get_entries(last)
     }
 
+    // MIT: `ulog_replay` (lib/kdb/kdb_log.c:474-476)
+    pub fn apply_updates(&mut self, updates: &[IpropUpdate]) -> Result<(), Error> {
+        let applied = self.replay_updates(updates);
+        if applied.is_err() {
+            self.reset_ulog_header();
+        }
+        applied
+    }
+
+    pub fn reset_ulog_header(&self) {
+        if let Some(u) = self.ulog() {
+            let _ = u.init_header();
+        }
+    }
+
     // MIT: `ulog_replay` (lib/kdb/kdb_log.c:423-454)
     // MIT: `krb5int_put_principal_no_log` (lib/kdb/kdb5.c:970-975)
     // MIT: `ulog_replay` (lib/kdb/kdb_log.c:423-425)
-    // MIT: `ulog_replay` (lib/kdb/kdb_log.c:474-476)
-    pub fn apply_updates(&mut self, updates: &[IpropUpdate]) -> Result<(), Error> {
+    fn replay_updates(&mut self, updates: &[IpropUpdate]) -> Result<(), Error> {
         self.inside_change()?;
         for u in updates {
             if !u.commit {
@@ -416,20 +430,13 @@ impl PrincipalStore {
             if u.deleted {
                 self.map.remove_unlogged(&id);
             } else if !u.vals.is_empty() {
-                let put = conv_2dbentry(self.map.get(&id), &u.name, &u.vals, true).and_then(|e| {
-                    let mut e = self.assign_iprop_rid(e);
-                    strip_db_args(&mut e.tl_data)?;
-                    RecordKey::of(&e).map(|key| (key, e))
-                });
-                match put {
-                    Ok((key, entry)) => self.map.put_record_unlogged(key, entry),
-                    Err(e) => {
-                        if let Some(u) = self.ulog() {
-                            let _ = u.init_header();
-                        }
-                        return Err(e);
-                    }
-                }
+                let (key, entry) = conv_2dbentry(self.map.get(&id), &u.name, &u.vals, true)
+                    .and_then(|e| {
+                        let mut e = self.assign_iprop_rid(e);
+                        strip_db_args(&mut e.tl_data)?;
+                        RecordKey::of(&e).map(|key| (key, e))
+                    })?;
+                self.map.put_record_unlogged(key, entry);
             }
             if !u.raw.is_empty() {
                 self.push_note(LogNote::Replay(u.raw.clone()));
