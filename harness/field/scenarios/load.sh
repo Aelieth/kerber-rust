@@ -262,12 +262,12 @@ rssawk > "$STATE/rss.awk"
 check LD.rss.series '^rss: n=[1-9][0-9]* span=' host "awk -f $(printf '%q' "$STATE/rss.awk") $(printf '%q' \
     "$STATE/rss.series")"
 cp "$LAST_OUT" "$STATE/rss.sum"
-check LD.rss.span '^rss span: last sample -?[0-9]+ s before the load end, within 30$' host "l=\$(awk 'NF == 2 \
-    { t = \$1 } END { print t + 0 }' $(printf '%q' "$STATE/rss.series")); d=\$(( ${LEND:-0} - l )); \
-    echo \"rss span: last sample \$d s before the load end, within 30\"; [ ${LEND:-0} -gt 0 ] && [ \$d -le 30 ]"
 observelast LD.rss.first 'first=[0-9.]+'
 observelast LD.rss.last 'last=[0-9.]+'
 observelast LD.rss.max 'max=[0-9.]+'
+check LD.rss.span '^rss span: last sample -?[0-9]+ s before the load end, within 30$' host "l=\$(awk 'NF == 2 \
+    { t = \$1 } END { print t + 0 }' $(printf '%q' "$STATE/rss.series")); d=\$(( ${LEND:-0} - l )); \
+    echo \"rss span: last sample \$d s before the load end, within 30\"; [ ${LEND:-0} -gt 0 ] && [ \$d -le 30 ]"
 rssrow LD.rss.cap 'cap ' 1
 rssrow LD.rss.slope 'slope ' 1
 
