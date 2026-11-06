@@ -132,6 +132,10 @@ pub(super) const KRB5_KDB_ALIAS_UNSUPPORTED: u32 = 2_514_958_894;
 pub(super) const KRB5_KDB_CANTLOCK_DB: u32 = 2_514_958_872;
 // MIT: `KRB5_KDB_BAD_SALTTYPE` (lib/krb5/error_tables/kdb5_err.et:69-69)
 pub(super) const KRB5_KDB_BAD_SALTTYPE: u32 = 2_514_958_875;
+// MIT: `KRB5_KDB_INUSE` (lib/krb5/error_tables/kdb5_err.et:33-33)
+pub(super) const KRB5_KDB_INUSE: u32 = 2_514_958_849;
+// MIT: `KADM5_XDR_FAILURE` (lib/kadm5/kadm_err.et:62-62)
+pub(super) const KADM5_XDR_FAILURE: u32 = 43_787_575;
 // MIT: `KRB5_KDB_INVALIDKEYSIZE` (lib/krb5/error_tables/kdb5_err.et:57-57)
 // MIT: `KRB5_KDB_BADSTORED_MKEY` (lib/krb5/error_tables/kdb5_err.et:59-59)
 // MIT: `KRB5KRB_AP_ERR_BAD_INTEGRITY` (lib/krb5/error_tables/krb5_err.et:74-74)

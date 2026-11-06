@@ -426,7 +426,7 @@ impl PrincipalStore {
                 "Cannot change protected principal".into(),
             ));
         }
-        let id = self.canonical_id(name, princ_realm)?;
+        let id = self.adb_id(name, princ_realm)?;
         let existing = self.map.get(&id).ok_or(Error::NotFound)?;
         let kvno = next_kvno(existing);
         let allowed = existing
@@ -507,7 +507,7 @@ impl PrincipalStore {
         actor: &str,
     ) -> Result<(), Error> {
         self.inside_change()?;
-        let id = self.canonical_id(name, princ_realm)?;
+        let id = self.adb_id(name, princ_realm)?;
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
         // MIT: `kadm5_purgekeys` (lib/kadm5/srv/svr_principal.c:1958-1985)
         let keep = if keepkvno <= 0 {
@@ -555,7 +555,7 @@ impl PrincipalStore {
         if keys.iter().any(|k| k.kvno != want) {
             return Err(Error::Crypto("setkey kvno".into()));
         }
-        let id = self.canonical_id(name, princ_realm)?;
+        let id = self.adb_id(name, princ_realm)?;
         let p = self.map.get(&id).ok_or(Error::NotFound)?;
         let kvno = if want == 0 {
             next_kvno(p)

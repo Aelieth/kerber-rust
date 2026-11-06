@@ -258,7 +258,8 @@ fn create(
     pass: Option<&[u8]>,
 ) -> Result<(), Error> {
     if let Some(arg) = a.db_args.first() {
-        if st.get_in_realm(name, realm).is_some() {
+        if let Some(p) = st.get_in_realm(name, realm) {
+            p.check_kadm_data()?;
             return Err(Error::AlreadyExists);
         }
         if let Some(pw) = pass {
@@ -336,10 +337,10 @@ pub(crate) fn modprinc(s: &mut Session<'_>, argv: &[String]) {
         s.h.refresh()
             .map_err(|e| texts::princ_text(&e))
             .and_then(|()| {
-                s.h.store
-                    .get_in_realm(&name, &realm)
-                    .map(|p| (p.attributes, p.pw_policy.is_some()))
-                    .ok_or_else(|| texts::UNK_PRINC.to_owned())
+                let p = s.h.store.get_in_realm(&name, &realm);
+                let p = p.ok_or_else(|| texts::UNK_PRINC.to_owned())?;
+                p.check_kadm_data().map_err(|e| texts::princ_text(&e))?;
+                Ok((p.attributes, p.pw_policy.is_some()))
             });
     let (attributes, had_policy) = match old {
         Ok(v) => v,
@@ -715,10 +716,10 @@ pub(crate) fn getprinc(s: &mut Session<'_>, argv: &[String]) {
         s.h.refresh()
             .map_err(|e| texts::princ_text(&e))
             .and_then(|()| {
-                s.h.store
-                    .get_in_realm(&name, &realm)
-                    .cloned()
-                    .ok_or_else(|| texts::UNK_PRINC.to_owned())
+                let p = s.h.store.get_in_realm(&name, &realm);
+                let p = p.ok_or_else(|| texts::UNK_PRINC.to_owned())?;
+                p.check_kadm_data().map_err(|e| texts::princ_text(&e))?;
+                Ok(p.clone())
             });
     let mut p = match found {
         Ok(p) => p,

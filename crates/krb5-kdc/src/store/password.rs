@@ -340,6 +340,7 @@ impl PrincipalStore {
         let p = self
             .get_in_realm(name, princ_realm)
             .ok_or(Error::NotFound)?;
+        p.check_kadm_data()?;
         if p.attributes & KDB_REQUIRES_PWCHANGE != 0 {
             return Ok(());
         }
@@ -508,8 +509,7 @@ impl PrincipalStore {
                 "Cannot change protected principal".into(),
             ));
         }
-        let id = self.canonical_id(name, princ_realm)?;
-        self.map.get(&id).ok_or(Error::NotFound)?;
+        let id = self.adb_id(name, princ_realm)?;
         let policy = self.bound_policy(&id).cloned();
         let keysalts = apply_keysalt_policy(
             policy.as_ref().and_then(|p| p.allowed_keysalts.as_deref()),

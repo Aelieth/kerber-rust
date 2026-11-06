@@ -561,6 +561,12 @@ pub(crate) fn handle_kpasswd_from(
                 UNK_PRINC_PRIV.to_owned(),
                 "Principal does not exist".to_owned(),
             ),
+            // MIT: `check_min_life` (kadmin/server/misc.c:75-78)
+            Err(krb5_kdc::Error::Db { text, .. })
+                if self_change && text == krb5_kdc::XDR_FAILURE =>
+            {
+                (2, String::new(), text)
+            }
             Err(e) => (
                 2,
                 format!(

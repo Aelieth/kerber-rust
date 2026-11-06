@@ -7,8 +7,8 @@ use super::codes::{
     EXTRACT_KEYS, GET_POLICY, GET_POLS, GET_PRINCIPAL, GET_PRINCS, GET_PRIVS, GET_STRINGS,
     GSS_S_BAD_BINDINGS, GSS_S_DEFECTIVE_TOKEN, INIT, KADM5_AUTH_DELETE, KADM5_FAILURE,
     KADM5_UNK_PRINC, KEY_DATA_ERRORS, KRB5_KDB_ALIAS_UNSUPPORTED, KRB5_KDB_BAD_SALTTYPE,
-    KRB5_KDB_CANTLOCK_DB, MODIFY_POLICY, MODIFY_PRINCIPAL, PURGEKEYS, RENAME_PRINCIPAL, SET_STRING,
-    SETKEY_PRINCIPAL, SETKEY_PRINCIPAL3, SETKEY_PRINCIPAL4,
+    KRB5_KDB_CANTLOCK_DB, KRB5_KDB_INUSE, MODIFY_POLICY, MODIFY_PRINCIPAL, PURGEKEYS,
+    RENAME_PRINCIPAL, SET_STRING, SETKEY_PRINCIPAL, SETKEY_PRINCIPAL3, SETKEY_PRINCIPAL4,
 };
 use super::dispatch::auth_code_for;
 use super::xdr::XdrR;
@@ -135,6 +135,7 @@ pub(super) fn kadm5_error_text(code: u32) -> String {
     match code {
         KRB5_KDB_CANTLOCK_DB => "Insufficient access to lock database".to_owned(),
         KRB5_KDB_BAD_SALTTYPE => "Unsupported salt type".to_owned(),
+        KRB5_KDB_INUSE => krb5_kdc::KDB_INUSE.to_owned(),
         KRB5_KDB_ALIAS_UNSUPPORTED => "Operation unsupported on alias principal name".to_owned(),
         EINVAL => "Invalid argument".to_owned(),
         c if let Some(&(text, _)) = KEY_DATA_ERRORS.iter().find(|(_, k)| *k == c) => {

@@ -93,14 +93,18 @@ pub(crate) fn last_admin_unlock(p: &Principal) -> u32 {
 }
 
 // MIT: `lookup_lockout_policy` (plugins/kdb/db2/lockout.c:40-89)
-fn lookup_lockout_policy<S: PrincipalRead + ?Sized>(store: &S, p: &Principal) -> (u32, u32, u32) {
-    store.named_policy_for(p).map_or((0, 0, 0), |pol| {
+fn lookup_lockout_policy<S: PrincipalRead + ?Sized>(
+    store: &S,
+    p: &Principal,
+) -> Result<(u32, u32, u32), Error> {
+    p.check_kadm_data()?;
+    Ok(store.named_policy_for(p).map_or((0, 0, 0), |pol| {
         (
             pol.max_fail,
             pol.pw_failcnt_interval,
             pol.pw_lockout_duration,
         )
-    })
+    }))
 }
 
 // MIT: `locked_check_p` (plugins/kdb/db2/lockout.c:92-113)
@@ -127,7 +131,10 @@ pub(crate) fn lockout_check_policy<S: PrincipalRead + ?Sized>(
     if store.policy().disable_lockout {
         return Ok(());
     }
-    let (max_fail, _, lockout_duration) = lookup_lockout_policy(store, p);
+    // MIT: `finish_process_as_req` (kdc/do_as_req.c:346-347)
+    let (max_fail, _, lockout_duration) = lookup_lockout_policy(store, p).map_err(|e| {
+        crate::preauth::proto_d(err::GENERIC, status::UNKNOWN_REASON, e.to_string())
+    })?;
     if locked_check_p(stamp, max_fail, lockout_duration, p) {
         return Err(crate::preauth::proto(
             err::CLIENT_REVOKED,
@@ -158,7 +165,10 @@ pub fn lockout_audit<S: PrincipalRead + ?Sized>(store: &S, p: &Principal, stamp:
     let (max_fail, failcnt_interval, lockout_duration) = if policy.disable_lockout {
         (0, 0, 0)
     } else {
-        lookup_lockout_policy(store, p)
+        let Ok(found) = lookup_lockout_policy(store, p) else {
+            return;
+        };
+        found
     };
     if locked_check_p(stamp, max_fail, lockout_duration, p) {
         return;

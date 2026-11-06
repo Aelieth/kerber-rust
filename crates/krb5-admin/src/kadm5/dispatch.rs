@@ -16,9 +16,10 @@ use super::codes::{
     KADM5_POLICY_CLR, KADM5_PRINC_EXPIRE_TIME, KADM5_PROTECT_PRINCIPAL, KADM5_PW_EXPIRATION,
     KADM5_PW_MAX_LIFE, KADM5_PW_MIN_LIFE, KADM5_SETKEY_BAD_KVNO, KADM5_SETKEY_DUP_ENCTYPES,
     KADM5_SETKEY3_ETYPE_MISMATCH, KADM5_TL_DATA, KADM5_UNK_POLICY, KADM5_UNK_PRINC,
-    KEY_DATA_ERRORS, KRB5_KDB_ALIAS_UNSUPPORTED, KRB5_KDB_BAD_SALTTYPE, KRB5_KDB_CANTLOCK_DB,
-    MODIFY_POLICY, MODIFY_PRINCIPAL, OSA_ADB_DUP, OSA_ADB_NOENT, PURGEKEYS, RENAME_PRINCIPAL,
-    SET_STRING, SETKEY_PRINCIPAL, SETKEY_PRINCIPAL3, SETKEY_PRINCIPAL4,
+    KADM5_XDR_FAILURE, KEY_DATA_ERRORS, KRB5_KDB_ALIAS_UNSUPPORTED, KRB5_KDB_BAD_SALTTYPE,
+    KRB5_KDB_CANTLOCK_DB, KRB5_KDB_INUSE, MODIFY_POLICY, MODIFY_PRINCIPAL, OSA_ADB_DUP,
+    OSA_ADB_NOENT, PURGEKEYS, RENAME_PRINCIPAL, SET_STRING, SETKEY_PRINCIPAL, SETKEY_PRINCIPAL3,
+    SETKEY_PRINCIPAL4,
 };
 use super::glob::{glob_pattern_ok, policies_matching, principals_matching};
 use super::iprop::dispatch_iprop;
@@ -112,6 +113,22 @@ fn done(changed: Result<(), Vec<u8>>, api: u32) -> Vec<u8> {
     changed.map_or_else(|rep| rep, |()| generic_ret(api, 0))
 }
 
+// MIT: `stub_setup` (kadmin/server/server_stubs.c:296-301)
+fn xdr_refused(p: &krb5_kdc::Principal, api: u32) -> Option<Vec<u8>> {
+    p.check_kadm_data()
+        .is_err()
+        .then(|| generic_ret(api, KADM5_XDR_FAILURE))
+}
+
+// MIT: `kadm5_create_principal_3` (lib/kadm5/srv/svr_principal.c:338-347)
+fn dup_code(p: &krb5_kdc::Principal) -> u32 {
+    if p.check_kadm_data().is_ok() {
+        KADM5_DUP
+    } else {
+        KADM5_XDR_FAILURE
+    }
+}
+
 fn commit_policy(
     g: &mut krb5_kdc::PrincipalStore,
     proc: u32,
@@ -134,6 +151,7 @@ pub(super) fn store_code(proc: u32, e: &krb5_kdc::Error) -> u32 {
         {
             KRB5_KDB_CANTLOCK_DB
         }
+        krb5_kdc::Error::Db { text, .. } if text == krb5_kdc::XDR_FAILURE => KADM5_XDR_FAILURE,
         krb5_kdc::Error::Db { kind, .. } => match kind {
             std::io::ErrorKind::PermissionDenied => errno(nix::errno::Errno::EACCES),
             std::io::ErrorKind::ReadOnlyFilesystem => errno(nix::errno::Errno::EROFS),
@@ -227,6 +245,7 @@ pub(super) fn dispatch_kadm5_ticket(
             };
             match g.get_in_realm(&name, &req) {
                 None => Ok(generic_ret(API_V2, KADM5_UNK_PRINC)),
+                Some(p) if let Some(rep) = xdr_refused(p, API_V2) => Ok(rep),
                 Some(p) => {
                     if changepw_not_self(changepw, actor, &name, &req)
                         || !stack.getprinc(actor, &p.id())
@@ -271,6 +290,13 @@ pub(super) fn dispatch_kadm5_ticket(
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
+            // MIT: `check_lockdown_by_princ` (kadmin/server/server_stubs.c:551-562)
+            if let Some(rep) = g
+                .get_in_realm(&name, &req)
+                .and_then(|p| xdr_refused(p, API_V2))
+            {
+                return Ok(rep);
+            }
             if g.get_in_realm(&name, &req)
                 .is_some_and(|p| p.attributes & KDB_LOCKDOWN_KEYS != 0)
             {
@@ -293,9 +319,13 @@ pub(super) fn dispatch_kadm5_ticket(
             // MIT: `stub_setup` (server_stubs.c:296-301)
             // Auth target: the canonical name.
             // MIT: `modify_principal_2_svc` (kadmin/server/server_stubs.c)
-            let Some(cid) = g.get_in_realm(&name, &req).map(krb5_kdc::Principal::id) else {
+            let Some(target) = g.get_in_realm(&name, &req) else {
                 return Ok(generic_ret(API_V2, KADM5_UNK_PRINC));
             };
+            if let Some(rep) = xdr_refused(target, API_V2) {
+                return Ok(rep);
+            }
+            let cid = target.id();
             let (authorized, rss) = stack.modprinc(actor, &cid);
             if changepw || !authorized {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_MODIFY));
@@ -396,8 +426,8 @@ pub(super) fn dispatch_kadm5_ticket(
                     let (g, read) = krb5_kdc::read_fresh(store);
                     match read {
                         Err(_) => None,
-                        Ok(()) if g.get_in_realm(&c.name, &req).is_some() => {
-                            return Ok(generic_ret(API_V2, KADM5_DUP));
+                        Ok(()) if let Some(p) = g.get_in_realm(&c.name, &req) => {
+                            return Ok(generic_ret(API_V2, dup_code(p)));
                         }
                         Ok(()) => {
                             match g.plan_create_password(&c.name, &req, pass, &c.ks, &c.ent) {
@@ -418,8 +448,8 @@ pub(super) fn dispatch_kadm5_ticket(
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
-            if g.get_in_realm(&c.name, &req).is_some() {
-                return Ok(generic_ret(API_V2, KADM5_DUP));
+            if let Some(p) = g.get_in_realm(&c.name, &req) {
+                return Ok(generic_ret(API_V2, dup_code(p)));
             }
             if let Some(p) = prepared {
                 let created = commit(&mut g, proc, API_V2, |s| {
@@ -436,8 +466,8 @@ pub(super) fn dispatch_kadm5_ticket(
                     Ok(false) => {}
                     Err(rep) => return Ok(rep),
                 }
-                if g.get_in_realm(&c.name, &req).is_some() {
-                    return Ok(generic_ret(API_V2, KADM5_DUP));
+                if let Some(p) = g.get_in_realm(&c.name, &req) {
+                    return Ok(generic_ret(API_V2, dup_code(p)));
                 }
             }
             // NULL password: random key, no quality check.
@@ -476,6 +506,13 @@ pub(super) fn dispatch_kadm5_ticket(
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
+            // MIT: `check_lockdown_by_princ` (kadmin/server/server_stubs.c:551-562)
+            if let Some(rep) = g
+                .get_in_realm(&old, &old_req)
+                .and_then(|p| xdr_refused(p, API_V2))
+            {
+                return Ok(rep);
+            }
             if g.get_in_realm(&old, &old_req)
                 .is_some_and(|p| p.attributes & KDB_LOCKDOWN_KEYS != 0)
             {
@@ -485,7 +522,9 @@ pub(super) fn dispatch_kadm5_ticket(
             if g.get_in_realm(&old, &old_req).is_none() {
                 return Ok(generic_ret(API_V2, KADM5_UNK_PRINC));
             }
-            if g.get_in_realm(&new, &new_req).is_some() {
+            if g.get_in_realm(&new, &new_req)
+                .is_some_and(|t| t.check_kadm_data().is_ok())
+            {
                 return Ok(generic_ret(API_V2, KADM5_DUP));
             }
             let changed = commit(&mut g, proc, API_V2, |s| {
@@ -509,6 +548,7 @@ pub(super) fn dispatch_kadm5_ticket(
             let checks = |g: &krb5_kdc::PrincipalStore| -> Result<u32, Vec<u8>> {
                 let (cid, lockdown) = match g.get_in_realm(&name, &req) {
                     None => return Err(generic_ret(API_V2, KADM5_UNK_PRINC)),
+                    Some(p) if let Some(rep) = xdr_refused(p, API_V2) => return Err(rep),
                     Some(p) => (p.id(), p.attributes & KDB_LOCKDOWN_KEYS != 0),
                 };
                 if lockdown {
@@ -716,9 +756,13 @@ pub(super) fn dispatch_kadm5_ticket(
                 Err(rep) => return Ok(rep),
             };
             // MIT: `chrand_principal_2_svc` (kadmin/server/server_stubs.c)
-            let Some(cid) = g.get_in_realm(&name, &req).map(krb5_kdc::Principal::id) else {
+            let Some(target) = g.get_in_realm(&name, &req) else {
                 return Ok(generic_ret(API_V2, KADM5_UNK_PRINC));
             };
+            if let Some(rep) = xdr_refused(target, API_V2) {
+                return Ok(rep);
+            }
+            let cid = target.id();
             let self_change = is_self_id(actor, &cid);
             if (changepw && !self_change) || !stack.chrand(actor, &cid) {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_CHANGEPW));
@@ -752,6 +796,9 @@ pub(super) fn dispatch_kadm5_ticket(
             let Some(p) = g.get_in_realm(&name, &req) else {
                 return Ok(generic_ret(api, KADM5_UNK_PRINC));
             };
+            if let Some(rep) = xdr_refused(p, api) {
+                return Ok(rep);
+            }
             if changepw || !stack.extract(actor, &p.id()) {
                 return Ok(generic_ret(api, KADM5_AUTH_EXTRACT));
             }
@@ -774,9 +821,13 @@ pub(super) fn dispatch_kadm5_ticket(
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
-            let Some(cid) = g.get_in_realm(&name, &req).map(krb5_kdc::Principal::id) else {
+            let Some(target) = g.get_in_realm(&name, &req) else {
                 return Ok(generic_ret(api, KADM5_UNK_PRINC));
             };
+            if let Some(rep) = xdr_refused(target, api) {
+                return Ok(rep);
+            }
+            let cid = target.id();
             if changepw || !stack.purgekeys(actor, &cid) {
                 return Ok(generic_ret(api, KADM5_AUTH_MODIFY));
             }
@@ -809,9 +860,13 @@ pub(super) fn dispatch_kadm5_ticket(
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
-            let Some(cid) = g.get_in_realm(&name, &req).map(krb5_kdc::Principal::id) else {
+            let Some(target) = g.get_in_realm(&name, &req) else {
                 return Ok(generic_ret(api, KADM5_UNK_PRINC));
             };
+            if let Some(rep) = xdr_refused(target, api) {
+                return Ok(rep);
+            }
+            let cid = target.id();
             let lockdown = g
                 .get_in_realm(&name, &req)
                 .is_some_and(|p| p.attributes & KDB_LOCKDOWN_KEYS != 0);
@@ -837,9 +892,13 @@ pub(super) fn dispatch_kadm5_ticket(
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
-            let Some(cid) = g.get_in_realm(&name, &req).map(krb5_kdc::Principal::id) else {
+            let Some(target) = g.get_in_realm(&name, &req) else {
                 return Ok(generic_ret(api, KADM5_UNK_PRINC));
             };
+            if let Some(rep) = xdr_refused(target, api) {
+                return Ok(rep);
+            }
+            let cid = target.id();
             if changepw || !stack.getstrs(actor, &cid) {
                 return Ok(generic_ret(api, KADM5_AUTH_GET));
             }
@@ -855,9 +914,13 @@ pub(super) fn dispatch_kadm5_ticket(
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
-            let Some(cid) = g.get_in_realm(&name, &req).map(krb5_kdc::Principal::id) else {
+            let Some(target) = g.get_in_realm(&name, &req) else {
                 return Ok(generic_ret(api, KADM5_UNK_PRINC));
             };
+            if let Some(rep) = xdr_refused(target, api) {
+                return Ok(rep);
+            }
+            let cid = target.id();
             if changepw || !stack.setstr(actor, &cid) {
                 return Ok(generic_ret(api, KADM5_AUTH_MODIFY));
             }
@@ -958,6 +1021,10 @@ pub(super) fn kadm5_code(proc: u32, e: &Error) -> u32 {
         KADM5_ALIAS_REALM
     } else if s == "Operation unsupported on alias principal name" {
         KRB5_KDB_ALIAS_UNSUPPORTED
+    } else if s == krb5_kdc::XDR_FAILURE {
+        KADM5_XDR_FAILURE
+    } else if s == krb5_kdc::KDB_INUSE {
+        KRB5_KDB_INUSE
     } else if s == "Unsupported salt type" {
         KRB5_KDB_BAD_SALTTYPE
     } else if let Some(&(_, code)) = s

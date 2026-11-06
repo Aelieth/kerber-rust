@@ -73,6 +73,13 @@ impl<'a> Xdr<'a> {
         Ok(u32::from_be_bytes([s[0], s[1], s[2], s[3]]))
     }
 
+    // MIT: `xdr_krb5_int16` (lib/kadm5/kadm_rpc_xdr.c:183-195)
+    // MIT: `xdr_krb5_ui_2` (lib/kadm5/kadm_rpc_xdr.c:205-217)
+    fn ui2(&mut self) -> Result<u16, OsaError> {
+        let [_, _, hi, lo] = self.u32()?.to_be_bytes();
+        Ok(u16::from_be_bytes([hi, lo]))
+    }
+
     fn bytes(&mut self) -> Result<&'a [u8], OsaError> {
         let n = self.u32()? as usize;
         let end = self.i.checked_add(n).ok_or(OsaError::Xdr("length"))?;
@@ -89,6 +96,7 @@ impl<'a> Xdr<'a> {
 
     /// A zero size is no policy.
     /// A policy's size counts its trailing NUL.
+    // MIT: `xdr_nullstring` (lib/kadm5/kadm_rpc_xdr.c:42-89)
     fn nullstring(&mut self) -> Result<Option<String>, OsaError> {
         let s = self.bytes()?;
         match s.split_last() {
@@ -118,16 +126,20 @@ fn put_i16(out: &mut Vec<u8>, v: i16) {
 }
 
 impl OsaKeyData {
+    // MIT: `xdr_krb5_key_data` (lib/kadm5/srv/adb_xdr.c:17-53)
     fn decode(x: &mut Xdr<'_>) -> Result<Self, OsaError> {
-        let ver = u16::try_from(x.u32()?).map_err(|_| OsaError::Xdr("key_data_ver"))?;
-        let kvno = u16::try_from(x.u32()?).map_err(|_| OsaError::Xdr("key_data_kvno"))?;
-        let t0 = i16::try_from(x.u32()?.cast_signed()).map_err(|_| OsaError::Xdr("type"))?;
-        let t1 = i16::try_from(x.u32()?.cast_signed()).map_err(|_| OsaError::Xdr("type"))?;
-        let l0 = x.u32()? as usize;
-        let l1 = x.u32()? as usize;
+        let ver = x.ui2()?;
+        let kvno = x.ui2()?;
+        let t0 = x.ui2()?.cast_signed();
+        let t1 = x.ui2()?.cast_signed();
+        let l0 = usize::from(x.ui2()?);
+        let l1 = usize::from(x.ui2()?);
         let c0 = x.bytes()?.to_vec();
+        if c0.len() != l0 {
+            return Err(OsaError::Xdr("key_data_length"));
+        }
         let c1 = x.bytes()?.to_vec();
-        if c0.len() != l0 || c1.len() != l1 {
+        if c1.len() != l1 {
             return Err(OsaError::Xdr("key_data_length"));
         }
         Ok(Self {
@@ -139,7 +151,7 @@ impl OsaKeyData {
     }
 
     fn encode(&self, out: &mut Vec<u8>) {
-        put_u32(out, u32::from(self.ver));
+        put_i16(out, self.ver.cast_signed());
         put_u32(out, u32::from(self.kvno));
         put_i16(out, self.types[0]);
         put_i16(out, self.types[1]);
@@ -205,9 +217,11 @@ impl OsaPrincEnt {
         out
     }
 
+    // MIT: `kdb_get_entry` (lib/kadm5/srv/server_kdb.c:283-295)
     pub fn from_tl(tl: &[TlData]) -> Result<Option<Self>, OsaError> {
         tl.iter()
             .find(|t| t.ty == TL_KADM_DATA)
+            .filter(|t| !t.contents.is_empty())
             .map(|t| Self::decode(&t.contents))
             .transpose()
     }

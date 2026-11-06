@@ -27,6 +27,16 @@ impl PrincipalStore {
             .ok_or(Error::NotFound)
     }
 
+    // MIT: `kdb_get_entry` (lib/kadm5/srv/server_kdb.c:257-307)
+    pub(super) fn adb_id(&self, name: &PrincipalName, princ_realm: &str) -> Result<String, Error> {
+        let id = self.canonical_id(name, princ_realm)?;
+        self.map
+            .get(&id)
+            .ok_or(Error::NotFound)?
+            .check_kadm_data()?;
+        Ok(id)
+    }
+
     // MIT: `kadm5_create_alias` (svr_principal.c:2051-2087)
     /// An absent target is fine; the alias must not resolve.
     pub fn create_alias_in(

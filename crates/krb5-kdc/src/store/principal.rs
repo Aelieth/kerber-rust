@@ -415,7 +415,22 @@ pub struct AdminEnt {
     pub policy: Option<String>,
 }
 
+// MIT: `KADM5_XDR_FAILURE` (lib/kadm5/kadm_err.et:62-62)
+pub const XDR_FAILURE: &str = "XDR encoding error";
+// MIT: `KRB5_KDB_INUSE` (lib/krb5/error_tables/kdb5_err.et:33-33)
+pub const KDB_INUSE: &str = "Entry already exists in database";
+
 impl Principal {
+    // MIT: `kdb_get_entry` (lib/kadm5/srv/server_kdb.c:297-303)
+    pub fn check_kadm_data(&self) -> Result<(), Error> {
+        OsaPrincEnt::from_tl(&self.tl_data)
+            .map(drop)
+            .map_err(|_| Error::Db {
+                kind: std::io::ErrorKind::InvalidData,
+                text: XDR_FAILURE.to_owned(),
+            })
+    }
+
     // Inserts key by RecordKey; this fallback is for hand-built records.
     #[must_use]
     pub fn id(&self) -> String {
@@ -832,7 +847,9 @@ impl PrincipalStore {
         ent: &AdminEnt,
     ) -> Result<CreateInputs, Error> {
         let id = crate::kdb::new_principal_id(name, princ_realm)?;
-        if self.get(&id).is_some() {
+        // MIT: `kadm5_create_principal_3` (lib/kadm5/srv/svr_principal.c:338-347)
+        if let Some(p) = self.get(&id) {
+            p.check_kadm_data()?;
             return Err(Error::AlreadyExists);
         }
         let policy_name = (ent.mask & kadm5_mask::POLICY != 0)
@@ -1068,7 +1085,7 @@ impl PrincipalStore {
         actor: &str,
     ) -> Result<(), Error> {
         self.inside_change()?;
-        let id = self.canonical_id(name, princ_realm)?;
+        let id = self.adb_id(name, princ_realm)?;
         let now = unix_now_u32();
         {
             let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
@@ -1095,7 +1112,7 @@ impl PrincipalStore {
         actor: &str,
     ) -> Result<(), Error> {
         self.inside_change()?;
-        let id = self.canonical_id(name, princ_realm)?;
+        let id = self.adb_id(name, princ_realm)?;
         {
             let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
             p.fail_auth_count = 0;
@@ -1121,7 +1138,7 @@ impl PrincipalStore {
         if kvno > 65535 {
             return Err(Error::InvalidArgument("invalid kvno".into()));
         }
-        let id = self.canonical_id(name, princ_realm)?;
+        let id = self.adb_id(name, princ_realm)?;
         {
             let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
             for k in &mut p.keys {
@@ -1141,7 +1158,7 @@ impl PrincipalStore {
         tls: &[TlData],
         actor: &str,
     ) -> Result<(), Error> {
-        let id = self.canonical_id(name, princ_realm)?;
+        let id = self.adb_id(name, princ_realm)?;
         let mut p = self.map.get(&id).ok_or(Error::NotFound)?.clone();
         for tl in tls {
             if tl.ty != TL_DB_ARGS {
@@ -1230,18 +1247,25 @@ impl PrincipalStore {
         self.inside_change()?;
         let old_id = crate::kdb::principal_id(old, old_realm)?;
         let new_key = super::iprop_ulog::RecordKey::for_name(new, new_realm)?;
-        if self.get(new_key.as_str()).is_some() {
+        let target = self.get(new_key.as_str());
+        // MIT: `kadm5_rename_principal` (lib/kadm5/srv/svr_principal.c:716-719)
+        if target.is_some_and(|t| t.check_kadm_data().is_ok()) {
             return Err(Error::AlreadyExists);
         }
-        if self
-            .map
-            .get(&old_id)
-            .ok_or(Error::NotFound)?
-            .alias_target()
-            .is_some()
-        {
+        let target_held = target.is_some();
+        let source = self.map.get(&old_id).ok_or(Error::NotFound)?;
+        if source.alias_target().is_some() {
             return Err(Error::AliasUnsupported);
         }
+        // MIT: `krb5_db_rename_principal` (lib/kdb/kdb5.c:1085-1089)
+        if target_held {
+            return Err(Error::Db {
+                kind: std::io::ErrorKind::AlreadyExists,
+                text: KDB_INUSE.to_owned(),
+            });
+        }
+        // MIT: `check_lockdown_by_princ` (kadmin/server/server_stubs.c:551-562)
+        source.check_kadm_data()?;
         super::kadm5_hook::hook_rename(
             self,
             super::kadm5_hook::HookStage::Precommit,
@@ -1334,7 +1358,7 @@ impl PrincipalStore {
             clear_policy,
             max_renewable_life,
         } = fields;
-        let id = self.canonical_id(name, princ_realm)?;
+        let id = self.adb_id(name, princ_realm)?;
         let mut mask = 0u32;
         if attributes.is_some() {
             mask |= kadm5_mask::ATTRIBUTES;
@@ -1498,7 +1522,7 @@ impl PrincipalStore {
         actor: &str,
     ) -> Result<(), Error> {
         self.inside_change()?;
-        let id = self.canonical_id(name, princ_realm)?;
+        let id = self.adb_id(name, princ_realm)?;
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
         p.string_attrs.retain(|(k, _)| k != key);
         if let Some(v) = value {

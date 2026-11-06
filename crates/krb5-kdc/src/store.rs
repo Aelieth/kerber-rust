@@ -851,8 +851,8 @@ pub use password::{
 pub use policy::{NamedPolicy, Policy, SpakeKdc};
 pub(crate) use principal::PrincipalFields;
 pub use principal::{
-    AdminEnt, AdminFields, CreateKeys, CreatePlan, KadmData, PreparedCreate, Principal,
-    PrincipalBuilder, TlData, create_password_shared, strip_db_args,
+    AdminEnt, AdminFields, CreateKeys, CreatePlan, KDB_INUSE, KadmData, PreparedCreate, Principal,
+    PrincipalBuilder, TlData, XDR_FAILURE, create_password_shared, strip_db_args,
 };
 pub(crate) use principal::{db_args_put_error, refresh_kadm_tl};
 pub use pwqual::{Pwqual, clear_thread_pwqual, register_pwqual, set_thread_pwqual};
