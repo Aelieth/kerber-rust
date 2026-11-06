@@ -153,7 +153,7 @@ lab ssh client2 -- 'python3 /var/tmp/wr/wr.py remote cpw wrk /var/tmp/wr/wrk-new
 lab ssh client2 -- 'python3 /var/tmp/wr/wr.py remote add wrremote /var/tmp/wr/wrremote /var/tmp/wr/admin'
 lab ssh client2 -- 'python3 /var/tmp/wr/wr.py kpasswd wrpw /var/tmp/wr/wrpw /var/tmp/wr/wrpw-new'
 echo "BEGIN_AFTER_WRITES:$(lab ssh kdc -- 'sudo grep -c "^begin$" /var/kerberos/krb5kdc/principal || true' | tr -d '\r' | awk 'NF{p=$0} END{print p}')"
-echo "DECRYPT_COUNT:$(lab ssh kdc -- 'sudo grep -c "stash master key did not decrypt dump key_data" /var/log/krb5kdc.log 2>/dev/null || true' | tr -d '\r' | awk 'NF{p=$0} END{print p+0}')"
+echo "DECRYPT_COUNT:$(lab ssh kdc -- 'sudo grep -cE "stash master key did not decrypt dump key_data|Cannot open DB2 database|while storing |Unable to decrypt latest master key" /var/log/krb5kdc.log 2>/dev/null || true' | tr -d '\r' | awk 'NF{p=$0} END{print p+0}')"
 echo "==== WR.4 ===="
 check_read() {
     local tag="$1" line

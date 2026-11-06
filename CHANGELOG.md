@@ -37,6 +37,7 @@ any other `###` heading.
 - **gss.** Unwrap rotates RRC left and wrap right, as MIT, so Windows' sealed tokens unwrap.
 - **kpropd.** A failed replay resets the ulog header, so the next poll asks for a full resync, as MIT.
 - **kdc.** A renewal at the second of `renew_till` is granted, as MIT; it was refused.
+- **kdc.** A dump that won't load names its record and error, as MIT; it blamed the stash key.
 
 ### Removed
 

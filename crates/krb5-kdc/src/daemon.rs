@@ -104,7 +104,8 @@ fn open_prepared(db: &Path, key: &krb5_crypto::ProtocolKey) -> Result<PrincipalS
 }
 
 // MIT: `krb5_def_fetch_mkey_list` (lib/kdb/kdb_default.c:454-458)
-const BAD_MASTER_KEY: &str = "Unable to decrypt latest master key with the provided master key";
+pub(crate) const BAD_MASTER_KEY: &str =
+    "Unable to decrypt latest master key with the provided master key";
 
 // MIT: `init_realm` (kdc/main.c:393-396)
 #[must_use]

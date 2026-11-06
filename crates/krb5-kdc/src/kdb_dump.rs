@@ -223,7 +223,13 @@ impl DumpFile {
             if is_km {
                 hwm = rid_hwm_of(&p.tl_data);
             }
-            let (princ, sid) = p.into_principal(mkey)?;
+            let name = p.name.clone();
+            // MIT: `process_k5beta7_princ` (kadmin/dbutil/dump.c:775-777)
+            let (princ, sid) = p.into_principal(mkey).map_err(|e| match e {
+                DumpError::Format(s) => DumpError::Format(format!("{s} while storing {name}")),
+                DumpError::Crypto(s) => DumpError::Crypto(format!("{s} while storing {name}")),
+                e @ DumpError::Io(_) => e,
+            })?;
             if princ.rid != 0
                 && princ.name.components_joined_lossy() != "K/M"
                 && let Some(owner) = seen_rid.insert(princ.rid, princ.id())
@@ -326,10 +332,7 @@ impl DumpPrincipal {
         let mut keys = Vec::new();
         for kd in &self.keys {
             if kd.slots.is_empty() {
-                return Err(DumpError::Format(format!(
-                    "{}: key_data with no slots",
-                    self.name
-                )));
+                return Err(DumpError::Format("key_data with no slots".into()));
             }
             let key_slot = &kd.slots[0];
             let etype =
@@ -362,8 +365,8 @@ impl DumpPrincipal {
         let salt = salt_of_keys(&keys, &name, &realm);
         let mkvno = mkvno_from_tl(&self.tl_data);
         let (sid, rid) = parse_sid_tl(&self.tl_data)?;
-        let osa = OsaPrincEnt::from_tl(&self.tl_data)
-            .map_err(|e| DumpError::Format(format!("{}: {e}", self.name)))?;
+        let osa =
+            OsaPrincEnt::from_tl(&self.tl_data).map_err(|e| DumpError::Format(e.to_string()))?;
         let pw_policy = osa
             .as_ref()
             .and_then(|o| o.bound_policy().map(str::to_owned))

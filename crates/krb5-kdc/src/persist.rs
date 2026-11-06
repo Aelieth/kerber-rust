@@ -1105,23 +1105,24 @@ fn stash_keytab_bytes(
     Ok(Keytab::single(realm_a, name, 1, master.clone()).to_bytes())
 }
 
+// MIT: `krb5_def_fetch_mkey_list` (lib/kdb/kdb_default.c:431-437)
 pub fn load_dump_with_stash(text: &str, stash: &[u8]) -> Result<PrincipalStore, PersistError> {
-    if let Some(mkey) = stash_keytab_key(stash)
-        && let Ok(store) = load_dump_mkey(text, &mkey)
-    {
-        return Ok(store);
+    let dump = crate::kdb_dump::parse_dump(text)?;
+    let mut keys = stash_keytab_key(stash).into_iter().chain(
+        stash_etypes()
+            .into_iter()
+            .filter_map(|etype| ProtocolKey::from_bytes(etype, stash).ok()),
+    );
+    let km = dump
+        .realm()
+        .ok()
+        .and_then(|r| dump.princ(&format!("K/M@{r}")));
+    let mkey = match km {
+        Some(km) => keys.find(|k| km.opens_with(k)),
+        None => keys.next(),
     }
-    for etype in stash_etypes() {
-        let Ok(mkey) = ProtocolKey::from_bytes(etype, stash) else {
-            continue;
-        };
-        if let Ok(store) = load_dump_mkey(text, &mkey) {
-            return Ok(store);
-        }
-    }
-    Err(PersistError::Crypto(
-        "stash master key did not decrypt dump key_data".into(),
-    ))
+    .ok_or_else(|| PersistError::Crypto(crate::daemon::BAD_MASTER_KEY.into()))?;
+    Ok(dump.into_store(&mkey)?)
 }
 
 fn load_kdb_blob(
