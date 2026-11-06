@@ -189,15 +189,31 @@ observelast() {
 }
 observe() { local name=$1 ere=$2; shift 2; "$@"; observelast "$name" "$ere"; }
 
-# kdcmark <name>: the current length of kdc's two daemon logs (read-only), graded as check mark.<name>.
+# kdcmark <name>: the current length of kdc's two daemon logs (read-only), graded as check mark.<name>; with
+# LOGSRC=journal, the journal's cursor.
 kdcmark() {
+    if [ "$LOGSRC" = journal ]; then
+        check "mark.$1" '^marks: cursor s=' run kdc "printf 'marks: cursor %s\n' \"\$(sudo journalctl -n 1 -q -o cat --show-cursor | sed -n 's/^-- cursor: //p')\""
+        sed -n 's/^marks: cursor \(s=[^ ]*\)$/\1/p' "$LAST_OUT" > "$STATE/mark.$1"
+        return
+    fi
     check "mark.$1" '^marks: [0-9]+ [0-9]+$' run kdc "printf 'marks: %s %s\n' \"\$(sudo sh -c 'wc -l < /var/log/krb5kdc.log')\" \"\$(sudo sh -c 'wc -l < /var/log/kadmind.log')\""
     sed -n 's/^marks: \([0-9][0-9]*\) \([0-9][0-9]*\)$/\1 \2/p' "$LAST_OUT" > "$STATE/mark.$1"
 }
 # kdcsince <name> [ERE]: the lines both logs gained since that mark that match ERE, minus "closing down fd".
 # Without a valid mark it records a failed command and reads nothing, so no check after it passes on old lines.
 kdcsince() {
-    local k='' a='' pat=${2:-.}
+    local k='' a='' pat=${2:-.} c=''
+    if [ "$LOGSRC" = journal ]; then
+        read -r c < "$STATE/mark.$1" 2>/dev/null || true
+        case $c in
+            s=*) ;;
+            *) host "echo 'kdcsince $1: no valid journal cursor, so no log line is read'; exit 1"; return 0 ;;
+        esac
+        # Each unit's journal after the mark, as MIT's FILE lines (lib/journal-lines.py, sent on stdin).
+        runin kdc "lib/journal-lines.py" "f=\$(mktemp); cat > \"\$f\"; for u in $UNIT_KDC $UNIT_ADMIN; do [ \$u = $UNIT_KDC ] || echo '--- kadmind.log'; sudo journalctl -q -u \$u --after-cursor $(printf '%q' "$c") -o json --no-pager | python3 \"\$f\" --utc-offset \$(date +%z) | grep -v 'closing down fd' | grep -E $(printf '%q' "$pat"); done; rm -f \"\$f\"; true" < "$FIELD_LIB/journal-lines.py"
+        return 0
+    fi
     read -r k a < "$STATE/mark.$1" 2>/dev/null || true
     case "$k:$a" in
         *[!0-9:]* | :* | *:)

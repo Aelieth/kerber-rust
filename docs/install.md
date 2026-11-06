@@ -862,6 +862,42 @@ done
 sudo systemctl start krb5kdc kadmin
 ```
 
+## Upgrading kerber-rust on Debian and Ubuntu
+
+The steps above, with Debian's names: the units are `krb5-kdc` and `krb5-admin-server`, the
+database and its lock files are in `/var/lib/krb5kdc`, `kdc.conf` and the stash (`stash`, as
+`key_stash_file` names it) in `/etc/krb5kdc`, and there is no SELinux label to set. Stop the
+daemons and install, and move a realm kept elsewhere only if there is one:
+
+```sh
+REALM=EXAMPLE.COM
+PREFIX=/usr                         # the PREFIX you installed with
+OLD=                                # where the realm was kept, if not /var/lib/krb5kdc
+sudo systemctl stop krb5-kdc krb5-admin-server
+sudo make install PREFIX="$PREFIX"
+if [ -n "$OLD" ]; then
+    for f in principal principal.ulog; do
+        if sudo test -e "$OLD/$f"; then sudo mv "$OLD/$f" /var/lib/krb5kdc/; fi
+    done
+    if sudo test -e "$OLD/.k5.$REALM"; then sudo mv "$OLD/.k5.$REALM" /etc/krb5kdc/stash; fi
+fi
+sudo grep -nE '^[[:space:]]*(kdc_listen|kdc_tcp_listen|kadmind_listen|kpasswd_listen)[[:space:]]*=' \
+    /etc/krb5kdc/kdc.conf
+```
+
+Edit an all-IPv6 listen entry as above. Then make the lock files and `principal.lockout` where
+they are missing, and start:
+
+```sh
+DB=/var/lib/krb5kdc/principal       # kdc.conf's database_name, if the stanza names one
+for f in "$DB.ok" "$DB.kadm5.lock" "$DB.lockout"; do
+    if sudo test ! -e "$f"; then
+        sudo install -m 0600 -o "$(sudo stat -c %u "$DB")" -g "$(sudo stat -c %g "$DB")" /dev/null "$f"
+    fi
+done
+sudo systemctl start krb5-kdc krb5-admin-server
+```
+
 ## Logs
 
 - The daemons log to `/var/log/krb5kdc.log` and `/var/log/kadmind.log`, in MIT's line format.

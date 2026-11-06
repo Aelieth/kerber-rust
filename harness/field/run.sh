@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # harness/field/run.sh: one field run on the lab (harness/field/README.md, "Field runs" and "Scenarios").
 #
-#   run.sh --profile nightly|weekly|kill-loop|load|load-long|lt --ref <git ref> [--only <scenario,...>] [--leg mit|rust|both]
+#   run.sh --profile nightly|weekly|kill-loop|load|load-long|lt|ds --ref <git ref> [--only <scenario,...>] [--leg mit|rust|both]
 #   run.sh ad-trust --ref <git ref> [--leg mit|rust|both]   (upgrade, then the real AD DC: scenarios/ad-trust.sh)
 #   run.sh --grade-logs <run dir>   (the log grader over a finished run: lib/log-grade.py; a weekly's postflight)
 #
@@ -35,7 +35,8 @@ KEEP=30
 # under test), and the other scenarios use the kdc it left.
 declare -A PROFILES=([nightly]="upgrade kadmind-start services nfs-client sssd-login klldap-swap" [weekly]="upgrade kadmind-start secrets-gcore services nfs-client sssd-login klldap-swap kdc-profile kdb-writes ticket-flags client-tools pkinit kpasswd rollback replica install"
     [ad-trust]="upgrade ad-trust" [kill-loop]="upgrade kill-loop" [load]="upgrade load" [load-long]="upgrade load"
-    [lt]="upgrade restart kdc-hostile otp-default rd-safe")
+    [lt]="upgrade restart kdc-hostile otp-default rd-safe"
+    [ds]="upgrade kadmind-start kdc-profile kdb-writes pkinit kpasswd replica install")
 
 die() { printf 'run.sh: %s\n' "$*" >&2; exit 1; }
 usage() { sed -n '4,6p' "${BASH_SOURCE[0]}" | sed 's/^# *//'; }
@@ -128,9 +129,22 @@ declare -a ROWS=()
 # leglogs <record dir> <start>: kdc's daemon logs and its Kerberos units' journal since <start>, with the window and
 # kdc's UTC offset, for lib/log-grade.py. Best effort: a scenario's result never depends on it.
 leglogs() {
-    local d=$1/logs vm=${ROLE_KDC:-kdc} f o h
+    local d=$1/logs vm=${ROLE_KDC:-kdc} f o h c off u
     mkdir -p "$d"
+    if [ "$LOGSRC" = journal ]; then
+        # Each unit's journal after the mark (or whole, past a reset), as MIT's FILE lines.
+        off=$(timeout 60 "$LAB" ssh "$vm" -- 'date +%z' 2> /dev/null < /dev/null)
+        c=$(sed -n 's/^cursor \(s=[^ ]*\)$/\1/p' "$d/offsets" 2> /dev/null)
+        for f in krb5kdc:"$UNIT_KDC" kadmind:"$UNIT_ADMIN"; do
+            u=${f#*:}
+            timeout 120 "$LAB" ssh "$vm" -- "sudo journalctl -q -u $u --after-cursor $(printf '%q' "${c:-none}") \
+                -o json --no-pager 2> /dev/null || sudo journalctl -q -u $u -o json --no-pager" 2>> "$d/offsets" \
+                < /dev/null | python3 -B "$HERE/lib/journal-lines.py" --utc-offset "${off:-+0000}" \
+                > "$d/${f%%:*}.log" 2>> "$d/offsets"
+        done
+    fi
     for f in krb5kdc kadmind; do
+        [ "$LOGSRC" = file ] || break
         read -r o h < <(sed -n "s/^$f \([0-9][0-9]*\) \([0-9a-f]\{64\}\)$/\1 \2/p" "$d/offsets" 2> /dev/null)
         # From the mark on; a log shorter than its mark, or with another head, is a reset kdc's: whole.
         timeout 120 "$LAB" ssh "$vm" -- "o=${o:-0}; f=/var/log/$f.log; s=\$(sudo stat -c %s \$f); \
@@ -146,6 +160,11 @@ leglogs() {
 # logmark <record dir>: each daemon log's size and the hash of its head up to 4 KiB, before the scenario.
 logmark() {
     mkdir -p "$1/logs"
+    if [ "$LOGSRC" = journal ]; then
+        timeout 60 "$LAB" ssh "${ROLE_KDC:-kdc}" -- "sudo journalctl -n 1 -q -o cat --show-cursor | \
+            sed -n 's/^-- cursor: /cursor /p'" > "$1/logs/offsets" 2> /dev/null < /dev/null || true
+        return 0
+    fi
     # shellcheck disable=SC2016 # expanded on kdc
     timeout 60 "$LAB" ssh "${ROLE_KDC:-kdc}" -- 'for f in krb5kdc kadmind; do s=$(sudo stat -c %s /var/log/$f.log \
         2> /dev/null || echo 0); echo "$f $s $(sudo head -c $(( s < 4096 ? s : 4096 )) /var/log/$f.log 2> /dev/null \
@@ -220,7 +239,7 @@ wrapup() {
         if [ "$i" -lt $(( ${#ids[@]} - KEEP )) ] && [ "${results[$i]}" = PASS ]; then drop+=("${ids[$i]}"); fi
     done
     for id in "${drop[@]}"; do
-        [[ $id =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}-(nightly|weekly|ad-trust|kill-loop|load|load-long|lt)$ ]] || continue
+        [[ $id =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}-(nightly|weekly|ad-trust|kill-loop|load|load-long|lt|ds)$ ]] || continue
         rm -rf -- "${RUNS:?}/$id"
         awk -F'\t' -v id="$id" '$1 != id' "$RUNS/index.tsv" > "$RUNS/index.tsv.new" && mv "$RUNS/index.tsv.new" "$RUNS/index.tsv"
     done
@@ -289,6 +308,15 @@ for var in "${SNAPVARS[@]}"; do
     fi
 done
 [ "${#SNAPVARS[@]}" -gt 0 ] || _checkrow pre.snapshot FAIL present 1 "baseline.env names no snapshot"
+# DS: install resets the role VM to KDC_BASE_SNAPSHOT.
+if [ -n "$ROLE_KDC" ]; then
+    if awk -v vm="$ROLE_KDC" -v s="$KDC_BASE_SNAPSHOT" '$1 == vm { n = split($NF, a, ","); for (i = 1; i <= n; i++)
+            if (a[i] == s) f = 1 } END { exit !f }' "$STATE/status"; then
+        _checkrow pre.snapshot.KDC_BASE_SNAPSHOT PASS present 0 "$ROLE_KDC has snapshot $KDC_BASE_SNAPSHOT"
+    else
+        _checkrow pre.snapshot.KDC_BASE_SNAPSHOT FAIL present 1 "$ROLE_KDC has no snapshot $KDC_BASE_SNAPSHOT"
+    fi
+fi
 if [ -n "$ROLE_KDC" ]; then
     check pre.takeover rc host "$LABQ takeover $(printf '%q' "$ROLE_KDC")"
 fi

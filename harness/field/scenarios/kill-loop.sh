@@ -44,7 +44,7 @@ waitsync kdc2
 # kdc2 is a Fedora VM in every family's lab, so its MIT check stays rpm.
 check kdc2.mit '^kdc2: MIT krb5-server-[0-9].*, binaries as packaged, python 3' run kdc2 \
     "sudo rpm -V krb5-server krb5-libs | grep -E ' /usr/(s?bin|lib64)/'; ! sudo rpm -V krb5-server | grep -qE '^..5.* /usr/sbin/(kdb5_util|kadmin\\.local)\$' && echo \"kdc2: MIT \$(rpm -q krb5-server), binaries as packaged, \$(python3 -V | tr P p)\""
-check kdc2.stash '^stash copied$' host "$LABQ ssh kdc -- 'sudo cat $KDCDIR/.k5.$REALM' | $LABQ ssh kdc2 -- 'sudo install -d -m 0700 $W && sudo install -m 0600 /dev/stdin $W/stash && echo stash copied'"
+check kdc2.stash '^stash copied$' host "$LABQ ssh kdc -- $(printf '%q' "REALM=$REALM; $STASH_SH; sudo cat \"\$stash\"") | $LABQ ssh kdc2 -- 'sudo install -d -m 0700 $W && sudo install -m 0600 /dev/stdin $W/stash && echo stash copied'"
 for vm in kdc kdc2; do
     check "$vm.driver" rc runin "$vm" "lib/kill-loop.py" "cat > ~/kill-loop.py" < "$FIELD_LIB/kill-loop.py"
 done
