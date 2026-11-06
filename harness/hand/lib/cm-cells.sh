@@ -310,6 +310,7 @@ c8() {
     sudo systemctl stop sssd sssd-kcm.socket sssd-kcm.service > /dev/null 2>&1
     sudo find /var/lib/sss/db /var/lib/sss/mc /var/lib/sss/secrets -type f -delete 2> /dev/null
     sudo rm -f "/tmp/krb5cc_$UID8"
+    sudo truncate -c -s 0 /var/log/sssd/krb5_child.log /var/log/sssd/sssd_kerber.log /var/log/sssd/sssd_kcm.log
     to "$F/c8.check" sudo sssctl config-check
     mark SSSD_CONFIG_CHECK "$?"
     sudo systemctl start sssd-kcm.socket sssd

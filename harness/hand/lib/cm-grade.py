@@ -43,7 +43,15 @@ def read(rec, leg, tag, cache, n):
 
 
 def mask(text):
-    text = "".join(ln for ln in text.splitlines(True) if not ln.startswith("INFO_"))
+    kept = []
+    for ln in text.splitlines(True):
+        if ln.startswith("INFO_"):
+            # The guest's mark() writes a blank line before each marker; it goes with its INFO_ line.
+            if kept and kept[-1].strip() == "":
+                kept.pop()
+            continue
+        kept.append(ln)
+    text = "".join(kept)
     for p in TIMES:
         text = p.sub("<TIME>", text)
     return KCM_NAME.sub(r"KCM:\1:<N>", text)
