@@ -25,9 +25,17 @@ which derive the keys under no lock and then take the write guard for the `chang
 derive while the caller holds the guard, so every KDC read waits on the string-to-key;
 use them only on a store nothing else is reading. `set_status` on a missing principal
 is `NotFound`, and the caller decides what that means. A kadm5 hook or a plugin
-runs after the write with the lock released, must not take the store's write guard,
-and must not re-enter the store. A create's postcommit hook runs even on a failed
-change, as MIT's does.
+must not take the store's write guard or re-enter the store: a hook runs after the
+write and the database file's lock, but still under the caller's write guard and
+before kadmind replies. A create's postcommit hook runs even on a failed change, as
+MIT's does.
+
+With `persist_paths`, `change()` writes the database file before it returns, so a
+write kadmind acknowledges is on disk, as with MIT's db2. A host that keeps the realm
+in its own database has no seam for that yet: a hook can only queue the host's
+commit, so a crash between kadmind's reply and that commit loses an acknowledged
+write, and policy writes and the KDC's lockout counters call no hook. Use
+`persist_paths` until such a seam exists.
 
 ## Bootstrap
 
@@ -87,7 +95,8 @@ these are set to.
 
 `kadm5_hook` ([`Kadm5Hook`](../../crates/krb5-kdc/src/store/kadm5_hook.rs)) lets an
 embedder register a module with `register_kadm5_hook`; it runs after the write,
-not under the guard. The directory need not register one.
+still under the caller's write guard and before kadmind replies. The directory need
+not register one.
 
 `kadm5_auth` is the admin-authorization interface: an embedder's `Kadm5Auth` module
 goes in `KadmindConfig.auth_modules` or is chosen by `[plugins] kadm5_auth`, and the
@@ -113,6 +122,11 @@ and none on krbtgt (which would refuse the keytab login that gets the FAST armor
   count) — KDC-wide and strongest, but custom;
 - **(c)** a keyless principal — no long-term key, so no password to fall back to,
   simplest but with no password path at all.
+
+`OtpVerifier::verify` runs on four shared `otp-verify` threads with a queue of 64.
+The KDC answers at the request's deadline and fails closed, but a verifier still
+running keeps its thread, so `verify` should return by `req.deadline` itself (for
+example, by setting its socket timeouts from it).
 
 ## Logging and plugin sets
 
