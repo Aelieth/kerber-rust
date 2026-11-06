@@ -264,6 +264,8 @@ fn check_tgs_req<'a>(
         header_pac,
         mut server,
     } = g;
+    // MIT: `check_tgs_req` (kdc/do_tgs_req.c:868)
+    let now = KerberosTime::now();
     check_tgs_constraints_skeleton(
         body,
         &ap.ticket.sname,
@@ -273,6 +275,7 @@ fn check_tgs_req<'a>(
         req_realm.as_str(),
         renew,
         validate,
+        &now,
     )?;
     let header_client = store.fetch_name(&enc_tkt.cname)?;
     let mut s4u_local = None;
@@ -524,7 +527,7 @@ fn check_tgs_req<'a>(
         tkt_etype,
         transited,
     };
-    tgs_flags_times_policy(store, body, c)
+    tgs_flags_times_policy(store, body, c, &now)
 }
 
 // MIT: `check_tgs_req` (do_tgs_req.c:905-905)
@@ -536,6 +539,7 @@ fn tgs_flags_times_policy<'a>(
     store: &dyn PrincipalRead,
     body: &KdcReqBody,
     c: TgsChecked<'a>,
+    now: &KerberosTime,
 ) -> Result<TgsTimes<'a>, Error> {
     let TgsChecked {
         tgs_padata,
@@ -570,7 +574,6 @@ fn tgs_flags_times_policy<'a>(
         transited,
     } = c;
     let session = random_key(session_etype)?;
-    let now = KerberosTime::now();
     let subject_cname = stkt.as_ref().map_or(&enc_tkt.cname, |s| &s.part.cname);
     let subject_crealm = if let Some(st) = stkt.as_ref() {
         utf8_realm(&st.part.crealm)?
@@ -704,7 +707,7 @@ fn tgs_flags_times_policy<'a>(
         &server,
         &enc_tkt,
         &auth_indicators,
-        &now,
+        now,
         &mut end,
         &mut ticket_renew_till,
     )?;

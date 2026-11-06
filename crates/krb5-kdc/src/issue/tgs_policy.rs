@@ -60,6 +60,7 @@ pub(super) fn check_tgs_constraints_skeleton(
     req_realm: &str,
     renew: bool,
     validate: bool,
+    now: &KerberosTime,
 ) -> Result<(), Error> {
     if body.kdc_options.bit(flag_bit::FORWARDED) && !enc_tkt.flags.bit(flag_bit::FORWARDABLE) {
         return Err(proto(err::BADOPTION, status::TGT_NOT_FORWARDABLE));
@@ -82,16 +83,15 @@ pub(super) fn check_tgs_constraints_skeleton(
         return Err(proto(err::TKT_NYV, status::TICKET_NOT_VALID));
     }
     if validate {
-        let now = KerberosTime::now();
         let start = enc_tkt.starttime.as_ref().unwrap_or(&enc_tkt.authtime);
         if now.delta_seconds(start) < 0 {
             return Err(proto(err::TKT_NYV, status::NOT_YET_VALID));
         }
     }
+    // MIT: `check_tgs_times` (kdc/tgs_policy.c:239-240)
     if renew {
-        let now = KerberosTime::now();
         match &enc_tkt.renew_till {
-            Some(till) if till.unix_seconds() <= now.unix_seconds() => {
+            Some(till) if till.unix_seconds() < now.unix_seconds() => {
                 return Err(proto(err::TKT_EXPIRED, status::TKT_EXPIRED));
             }
             None => return Err(proto(err::TKT_EXPIRED, status::TKT_EXPIRED)),
