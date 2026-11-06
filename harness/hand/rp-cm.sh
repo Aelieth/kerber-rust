@@ -1,11 +1,13 @@
 #!/bin/bash
-# CM, the client matrix. Argument: the landed sha.
-# Stock MIT clients and SSSD on client2 (Fedora 44), rocky10, deb13 and ub26
-# against the lab KDC: MIT's leg, then ours. Each leg resets kdc to
+# CM, the client matrix. Arguments: the landed sha, then the suite, cm (the
+# default) or hm:
+#   cm  stock MIT clients and SSSD on client2 (Fedora 44), rocky10, deb13 and
+#       ub26; cells 1-8 under FILE: and KCM:, cell 9 once per client
+#   hm  Debian 13's Heimdal client tools on deb13; cells 1-5 under FILE:
+# Against the lab KDC: MIT's leg, then ours. Each leg resets kdc to
 # MIT_SNAPSHOT_KDC and runs the same setup with MIT's kadmin.local, so both
 # KDCs serve the same database; ours' leg then moves the realm by the README
-# route. Cells 1-8 run per client under FILE: and KCM:, cell 9 once per
-# client (lib/cm-cells.sh); lib/cm-grade.py grades ours against MIT.
+# route. lib/cm-cells.sh runs the cells; lib/cm-grade.py grades ours against MIT.
 # Does not fetch, and installs only the clients' stock packages, before the
 # first leg.
 set -u
@@ -26,9 +28,15 @@ export TMPDIR
 
 SHA=${1:?landed sha}
 printf '%s\n' "$SHA" | grep -Eq '^[0-9a-f]{40}$' || { echo "CM_STOP sha"; exit 2; }
+SUITE=${2:-cm}
+case $SUITE in
+    cm) TAGS=(f44 rocky deb ub) PREP_MODE=prep RUN_MODE=run ;;
+    hm) TAGS=(hm) PREP_MODE=prep-hm RUN_MODE=run-hm ;;
+    *) echo "CM_STOP suite"; exit 2 ;;
+esac
 
 WT=$HAND_WT
-REC=$HAND_REC/$SHA/cm
+REC=$HAND_REC/$SHA/$SUITE
 LAB=$WT/harness/field/lab.sh
 HERE=$(dirname "$LAB")
 DOC=$WT/harness/field/lib/docblocks.py
@@ -41,7 +49,6 @@ TREE_TAR=$TMPDIR/kr-cm-tree.tar
 CAP_MIB=$((32 * 1024))
 GUEST_TMO=1800
 REALM=KERBER.TEST
-TAGS=(f44 rocky deb ub)
 H_USE='## Download, install and use'
 H_MOVE='## Move an MIT realm over'
 
@@ -72,7 +79,7 @@ vm_for() {
     case $1 in
         f44) echo client2 ;;
         rocky) echo rocky10 ;;
-        deb) echo deb13 ;;
+        deb | hm) echo deb13 ;;
         ub) echo ub26 ;;
     esac
 }
@@ -80,10 +87,12 @@ snap_for() {
     case $1 in
         f44) echo f44-base ;;
         rocky) echo client ;;
-        deb) echo krb5 ;;
+        deb | hm) echo krb5 ;;
         ub) echo base ;;
     esac
 }
+VMS=(kdc)
+for t in "${TAGS[@]}"; do VMS+=("$(vm_for "$t")"); done
 
 vsh() {
     if command -v virsh >/dev/null 2>&1; then
@@ -295,7 +304,7 @@ prep_client() {
     local tag=$1 vm
     vm=$(vm_for "$tag")
     stage "$vm" || { echo "STAGE_FAIL:$tag" > "$REC/prep-$tag.status"; return; }
-    timeout -k 30 "$GUEST_TMO" "$LAB" ssh "$vm" -- "bash ~/field/cm-cells.sh prep $tag" < /dev/null > "$REC/prep-$tag.out" 2>&1
+    timeout -k 30 "$GUEST_TMO" "$LAB" ssh "$vm" -- "bash ~/field/cm-cells.sh $PREP_MODE $tag" < /dev/null > "$REC/prep-$tag.out" 2>&1
     if grep -qx "PREP_OK:$tag" "$REC/prep-$tag.out"; then
         echo "PREP:$tag:ok" > "$REC/prep-$tag.status"
     else
@@ -310,9 +319,9 @@ kdc_setup() {
     echo "SETUP_RC:$leg:$?"
     n=$(sed -n 's/^SETUP_CREATED://p' "$REC/$leg/setup.out")
     echo "SETUP_CREATED:$leg:${n:-none}"
-    [ "${n:-0}" = 45 ] || return 1
+    [ "${n:-0}" = $((1 + 11 * ${#TAGS[@]})) ] || return 1
     grep -qx "host/cm.kerber.test@$REALM" "$REC/$leg/setup.out" || return 1
-    grep -qx 'KEYTABS:4' "$REC/$leg/setup.out" || return 1
+    grep -qx "KEYTABS:${#TAGS[@]}" "$REC/$leg/setup.out" || return 1
     for t in "${TAGS[@]}"; do
         "$LAB" ssh kdc -- "cat ~/field/cm-kt/$t.keytab" < /dev/null > "$SEC/kt-$t.keytab" 2> /dev/null || return 1
         [ -s "$SEC/kt-$t.keytab" ] || return 1
@@ -329,7 +338,7 @@ run_client() {
     dir=$REC/$leg/$tag
     mkdir -p "$dir"
     secrets_for "pw-$tag|cmu-$tag|k9-$tag|(chpw|chpw2|exp|pwexp|pwexp2|lock|wrong)-$tag-|admin" |
-        timeout -k 30 "$GUEST_TMO" "$LAB" ssh "$vm" -- "bash ~/field/cm-cells.sh run $leg $tag" > "$dir/run.out" 2>&1
+        timeout -k 30 "$GUEST_TMO" "$LAB" ssh "$vm" -- "bash ~/field/cm-cells.sh $RUN_MODE $leg $tag" > "$dir/run.out" 2>&1
     rc=$?
     timeout -k 30 300 "$LAB" ssh "$vm" -- 'tar -C ~/field/out -cf - .' < /dev/null | tar -x -C "$dir"
     echo "RUN_RC:$leg:$tag:$rc:${PIPESTATUS[0]}:${PIPESTATUS[1]}" > "$dir/host.status"
@@ -394,6 +403,7 @@ if [ "$(git -C "$WT" rev-parse HEAD)" != "$SHA" ]; then
     git -C "$WT" checkout --detach "$SHA" || stop checkout
 fi
 got=$(git -C "$WT" rev-parse HEAD)
+echo "SUITE:$SUITE"
 echo "HEAD:$got"
 echo "TREE:$(git -C "$WT" rev-parse 'HEAD^{tree}')"
 [ "$got" = "$SHA" ] || stop head
@@ -422,8 +432,8 @@ for name in kdc services client1 client2 klldap mitd3 ub26 deb13 rocky10 kdc2 wi
     st=$(domstate "$dom")
     echo "VM $name $st"
     add=no
-    case $name in
-        kdc | client2 | rocky10 | deb13 | ub26) add=yes ;;
+    case " ${VMS[*]} " in
+        *" $name "*) add=yes ;;
     esac
     [ "$st" = running ] && add=yes
     [ "$add" = yes ] || continue
@@ -448,7 +458,7 @@ reset_vm kdc "$MIT_SNAPSHOT_KDC" || stop "reset kdc"
 for t in "${TAGS[@]}"; do
     reset_vm "$(vm_for "$t")" "$(snap_for "$t")" || stop "reset $t"
 done
-for vm in kdc client2 rocky10 deb13 ub26; do
+for vm in "${VMS[@]}"; do
     wait_ntp "$vm" || stop "ntp $vm"
 done
 
@@ -475,7 +485,7 @@ for leg in mit ours; do
         move || fail "MOVE_FAIL"
         prove_ours || fail "OURS_PROVE:no"
     fi
-    for vm in kdc client2 rocky10 deb13 ub26; do
+    for vm in "${VMS[@]}"; do
         wait_ntp "$vm" || stop "ntp $vm"
     done
     run_leg "$leg" || fail "RUN_FAIL:$leg"

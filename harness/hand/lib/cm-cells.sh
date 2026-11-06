@@ -3,6 +3,8 @@
 #   prep <tag>               client: stock packages, the local user, PAM, facts
 #   kdc-setup <tag>...       kdc: MIT kadmin.local makes the CM principals
 #   run <leg> <tag>          client: cells 1-8 under FILE: then KCM:, then cell 9
+#   prep-hm <tag>            deb13: Debian's heimdal-clients, facts
+#   run-hm <leg> <tag>       deb13: Heimdal's cells 1-5 under FILE:
 # kdc-setup and run read "name<TAB>password" lines on stdin into ~/field/sec,
 # which is shredded on exit. Cell output goes to ~/field/out/<cache>/cell<n>.out
 # and .rc; lines starting INFO_ are recorded but not graded.
@@ -38,6 +40,25 @@ family() {
         debian | ubuntu) echo deb ;;
         *) echo "unknown-$id" ;;
     esac
+}
+
+realm_conf() {
+    cat > "$F/realm.conf" << 'CFG'
+[libdefaults]
+    default_realm = KERBER.TEST
+    dns_lookup_kdc = false
+
+[realms]
+    KERBER.TEST = {
+        kdc = kdc.kerber.test
+        admin_server = kdc.kerber.test
+        kpasswd_server = kdc.kerber.test
+    }
+
+[domain_realm]
+    .kerber.test = KERBER.TEST
+    kerber.test = KERBER.TEST
+CFG
 }
 
 prep() {
@@ -89,24 +110,30 @@ prep() {
     fi
     sudo systemctl enable --now sssd-kcm.socket > /dev/null 2>&1 || return 1
     echo "KCM_SOCKET:$(systemctl is-active sssd-kcm.socket)"
-    cat > "$F/realm.conf" << 'CFG'
-[libdefaults]
-    default_realm = KERBER.TEST
-    dns_lookup_kdc = false
-
-[realms]
-    KERBER.TEST = {
-        kdc = kdc.kerber.test
-        admin_server = kdc.kerber.test
-        kpasswd_server = kdc.kerber.test
-    }
-
-[domain_realm]
-    .kerber.test = KERBER.TEST
-    kerber.test = KERBER.TEST
-CFG
+    realm_conf
     echo '==== ccache default ===='
     (unset KRB5CCNAME KRB5_CONFIG; klist 2>&1 | head -n 1)
+    echo "PREP_OK:$tag"
+}
+
+prep_hm() {
+    local tag=$1 rc t
+    echo "FAMILY:$(family)"
+    echo '==== os-release ===='
+    cat /etc/os-release
+    to "$F/update.out" sudo DEBIAN_FRONTEND=noninteractive apt-get update -q
+    to "$F/install.out" sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q heimdal-clients python3
+    rc=$?
+    echo "INSTALL_RC:$rc"
+    [ "$rc" = 0 ] || return 1
+    echo '==== packages ===='
+    dpkg-query -W heimdal-clients libkrb5-26-heimdal krb5-user util-linux python3
+    for t in kinit.heimdal klist.heimdal kpasswd.heimdal kdestroy.heimdal kgetcred; do
+        command -v "$t" > /dev/null || { echo "NO_TOOL:$t"; return 1; }
+        echo "TOOL:$(command -v "$t")"
+    done
+    echo "HEIMDAL_VERSION:$(kinit.heimdal --version 2>&1 | head -n 1)"
+    realm_conf
     echo "PREP_OK:$tag"
 }
 
@@ -152,6 +179,7 @@ cellenv() {
     case $1 in
         file) export KRB5CCNAME=FILE:$F/cm-file.cc ;;
         kcm) export KRB5CCNAME=KCM: ;;
+        hm) export KRB5CCNAME=FILE:$F/hm.cc ;;
     esac
 }
 fresh() { kdestroy -A > /dev/null 2>&1 || kdestroy > /dev/null 2>&1 || true; }
@@ -383,10 +411,82 @@ c9() {
     return "$rc"
 }
 
+# Heimdal's cells. klist -v's KDC time offset is the clock, so it is recorded only.
+hklist() {
+    local rc
+    klist.heimdal -v > "$F/hk.out" 2>&1
+    rc=$?
+    sed -E 's/^( *KDC time offset:)/INFO_\1/' "$F/hk.out"
+    return "$rc"
+}
+hfresh() { kdestroy.heimdal > /dev/null 2>&1 || true; }
+hkinit() { sec "$1" | kinit.heimdal --password-file=STDIN "$2"; }
+h1() {
+    local rc
+    hfresh
+    hkinit "pw-$TAG" "cm-$TAG"
+    rc=$?
+    mark KINIT_RC "$rc"
+    [ "$rc" = 0 ] || return "$rc"
+    hklist
+}
+h2() {
+    local rc
+    hfresh
+    kinit.heimdal -k -t "FILE:$F/cm.keytab" "cm-$TAG-kt"
+    rc=$?
+    mark KINIT_KT_RC "$rc"
+    [ "$rc" = 0 ] || return "$rc"
+    hklist
+}
+h3() {
+    local rc
+    hfresh
+    hkinit "pw-$TAG" "cm-$TAG"
+    mark KINIT_RC "$?"
+    kgetcred "host/cm.kerber.test@$REALM"
+    rc=$?
+    mark KGETCRED_RC "$rc"
+    hklist
+    return "$rc"
+}
+h4() {
+    local p=cm-$TAG-file-chpw rc
+    hfresh
+    hkinit "chpw-$TAG-file" "$p"
+    rc=$?
+    mark KINIT1_RC "$rc"
+    [ "$rc" = 0 ] || return "$rc"
+    # Heimdal reads these passwords from /dev/tty, so kpasswd runs on a pty.
+    { sec "chpw-$TAG-file"; sec "chpw2-$TAG-file"; } | python3 "$F/ptydrive.py" --secrets 2 --timeout 60 \
+        --rule 'Verify password - New password:=1' --rule 'New password:=1' --rule 'Password:=0' \
+        -- kpasswd.heimdal --admin-principal="$p" > "$OUT/$CACHE/cell4.pty" 2>&1
+    rc=$?
+    ptytext "$OUT/$CACHE/cell4.pty"
+    mark KPASSWD_RC "$rc"
+    [ "$rc" = 0 ] || return "$rc"
+    hfresh
+    hkinit "chpw2-$TAG-file" "$p"
+    rc=$?
+    mark KINIT2_RC "$rc"
+    hklist
+    return "$rc"
+}
+h5() {
+    local rc
+    hfresh
+    hkinit "wrong-$TAG-file" "cm-$TAG"
+    mark KINIT_WRONG_RC "$?"
+    printf 'x\n' | kinit.heimdal --password-file=STDIN "nobody-$TAG"
+    rc=$?
+    mark KINIT_UNKNOWN_RC "$rc"
+    return "$rc"
+}
+
 cell() {
-    local n=$1 rc
+    local n=$1 fn=${2:-c$1} rc
     mkdir -p "$OUT/$CACHE"
-    "c$n" > "$OUT/$CACHE/cell$n.out" 2>&1
+    "$fn" > "$OUT/$CACHE/cell$n.out" 2>&1
     rc=$?
     echo "$rc" > "$OUT/$CACHE/cell$n.rc"
     echo "CELL_RC:$CACHE:$n:$rc"
@@ -408,6 +508,19 @@ run() {
     (cellenv file && cell 9)
     echo "RUN_DONE:$LEG:$TAG"
 }
+run_hm() {
+    local n
+    LEG=$1 TAG=$2
+    rm -rf "$OUT"
+    mkdir -p "$OUT"
+    echo "RUN:$LEG:$TAG"
+    CACHE=hm
+    (
+        cellenv hm
+        for n in 1 2 3 4 5; do cell "$n" "h$n"; done
+    )
+    echo "RUN_DONE:$LEG:$TAG"
+}
 
 mode=${1:-}
 shift || true
@@ -415,5 +528,7 @@ case $mode in
     prep) prep "$@" ;;
     kdc-setup) take_secrets && kdc_setup "$@" ;;
     run) take_secrets && run "$@" ;;
-    *) echo "usage: cm-cells.sh prep|kdc-setup|run ..." >&2; exit 2 ;;
+    prep-hm) prep_hm "$@" ;;
+    run-hm) take_secrets && run_hm "$@" ;;
+    *) echo "usage: cm-cells.sh prep|kdc-setup|run|prep-hm|run-hm ..." >&2; exit 2 ;;
 esac

@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """cm-grade.py: CM's grade, over the record rp-cm.sh writes (REC/<leg>/<tag>/<cache>/cell<n>.{out,rc}).
 
-  cm-grade.py oracle REC TAG...   MIT's leg shows what MIT's tools print for each cell; exit 1 if not
+  cm-grade.py oracle REC TAG...   MIT's leg shows what the client's tools print for each cell; exit 1 if not
   cm-grade.py grade REC TAG...    ours against MIT per (tag, cache, cell): rc and text with times masked;
                                   both legs renew in cell 8; exit 1 on any difference
   cm-grade.py scan REC TSV        no generated password (TSV: name TAB value) in any file under REC
 
-Lines starting INFO_ are recorded, not graded. Cross-distro differences on MIT's leg print as CM_VERSION
+The tag hm is HM's suite: Heimdal's cells 1-5 under FILE:, no renewals. Lines starting INFO_ are recorded, not
+graded. Cross-distro differences on MIT's leg print as CM_VERSION
 (information, not graded). Prints names and counts, never a password.
 """
 import difflib
@@ -22,11 +23,18 @@ TIMES = [
     re.compile(r"\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}"),
     re.compile(r"[A-Z][a-z]{2} [A-Z][a-z]{2}\s+\d{1,2} \d{2}:\d{2}:\d{2}(?: [A-Z]{2,5})? \d{4}"),
 ]
+# Heimdal's klist prints ctime + 4, 20 characters (kuser/klist.c:40-64); only hm rows use it.
+HM_TIME = re.compile(r"[A-Z][a-z]{2} [ \d]\d \d{2}:\d{2}:\d{2} \d{4}")
+HM = "hm"
 KCM_NAME = re.compile(r"KCM:(\d+):\d+")
 TAGGED = re.compile(r"\b(cmu?)-(f44|rocky|deb|ub)\b")
 
 
-def cells():
+def cells(tag):
+    if tag == HM:
+        for n in range(1, 6):
+            yield HM, n
+        return
     for cache in CACHES:
         for n in range(1, 9):
             yield cache, n
@@ -42,7 +50,7 @@ def read(rec, leg, tag, cache, n):
     return rc.read_text().strip(), out.read_text(errors="replace")
 
 
-def mask(text):
+def mask(text, tag):
     kept = []
     for ln in text.splitlines(True):
         if ln.startswith("INFO_"):
@@ -54,6 +62,8 @@ def mask(text):
     text = "".join(kept)
     for p in TIMES:
         text = p.sub("<TIME>", text)
+    if tag == HM:
+        text = HM_TIME.sub("<TIME>", text)
     return KCM_NAME.sub(r"KCM:\1:<N>", text)
 
 
@@ -61,8 +71,53 @@ def lines_matching(text, rx):
     return len(re.findall(rx, text, re.M))
 
 
+def expect_hm(n):
+    """HM's cells on MIT's leg; each string cites its Heimdal printer (Debian's heimdal 7.8.0, patches applied)."""
+    q = re.escape(f"@{REALM}")
+    if n == 1:
+        # Heimdal: `print_tickets` (kuser/klist.c:262-263)
+        # Heimdal: `print_cred_verbose` (kuser/klist.c:155)
+        # Heimdal: `print_cred_verbose` (kuser/klist.c:171-180)
+        # Heimdal: `print_cred_verbose` (kuser/klist.c:212)
+        return "0", [
+            (rf"^ *Principal: cm-hm{q}$", 1),
+            (rf"^Server: krbtgt/KERBER\.TEST{q}$", 1),
+            (r"^Ticket etype: aes256-cts-hmac-sha1-96, kvno \d+$", 1),
+            (r"^Ticket flags: ", 1),
+        ]
+    if n == 2:
+        # Heimdal: `print_tickets` (kuser/klist.c:262-263)
+        return "0", [(rf"^ *Principal: cm-hm-kt{q}$", 1)]
+    if n == 3:
+        # Heimdal: `print_cred_verbose` (kuser/klist.c:155)
+        return "0", [(rf"^Server: host/cm\.kerber\.test{q}$", 1), (r"^KGETCRED_RC:0$", 1)]
+    if n == 4:
+        # Heimdal: `krb5_get_init_creds_password` (lib/krb5/init_creds_pw.c:2696)
+        # Heimdal: `change_password` (kpasswd/kpasswd.c:74)
+        # Heimdal: `UI_UTIL_read_pw_string` (lib/hcrypto/ui.c:203)
+        # Heimdal: `change_password` (kpasswd/kpasswd.c:105)
+        return "0", [
+            (rf"cm-hm-file-chpw{q}'s Password: ", 1),
+            (r"New password: ", 2),
+            (r"Verify password - New password: ", 1),
+            (r"Success( : [^\n]*)?$", 1),
+            (r"^KINIT2_RC:0$", 1),
+        ]
+    # Heimdal: `get_new_tickets` (kuser/kinit.c:729)
+    # Heimdal: `get_new_tickets` (kuser/kinit.c:738)
+    # Heimdal: `krb5_error_from_rd_error` (lib/krb5/rd_error.c:77-80)
+    # MIT: `process_as_req` (kdc/do_as_req.c:582)
+    # MIT: `prepare_error_as` (kdc/do_as_req.c:808)
+    return "1", [
+        (r"^kinit\.heimdal: Password incorrect$", 1),
+        (r"^kinit\.heimdal: krb5_get_init_creds: CLIENT_NOT_FOUND$", 1),
+    ]
+
+
 def expect(tag, cache, n):
     """(rc, [(regex, count or None for at least once)]) for MIT's leg; each string cites its MIT printer."""
+    if tag == HM:
+        return expect_hm(n)
     p = f"cm-{tag}"
     q = re.escape(f"@{REALM}")
     c = f"cm-{tag}-{cache}"
@@ -119,7 +174,7 @@ def expect(tag, cache, n):
 def oracle(rec, tags):
     bad = 0
     for tag in tags:
-        for cache, n in cells():
+        for cache, n in cells(tag):
             rc, text = read(rec, "mit", tag, cache, n)
             want_rc, pats = expect(tag, cache, n)
             why = []
@@ -143,7 +198,7 @@ def grade(rec, tags):
     rows = differ = 0
     renew_ok = True
     for tag in tags:
-        for cache, n in cells():
+        for cache, n in cells(tag):
             rows += 1
             a = read(rec, "mit", tag, cache, n)
             b = read(rec, "ours", tag, cache, n)
@@ -151,7 +206,7 @@ def grade(rec, tags):
                 differ += 1
                 print("CM_ROW %s %s %d missing" % (tag, cache, n))
                 continue
-            ma, mb = mask(a[1]), mask(b[1])
+            ma, mb = mask(a[1], tag), mask(b[1], tag)
             if a[0] == b[0] and ma == mb:
                 print("CM_ROW %s %s %d equal" % (tag, cache, n))
                 continue
@@ -160,22 +215,25 @@ def grade(rec, tags):
             (rec / f"diff-{tag}-{cache}-cell{n}.txt").write_text("".join(difflib.unified_diff(
                 ma.splitlines(True), mb.splitlines(True),
                 fromfile=f"mit/{tag}/{cache}/cell{n}", tofile=f"ours/{tag}/{cache}/cell{n}")))
+        if tag == HM:
+            continue
         for cache in CACHES:
             for leg in ("mit", "ours"):
                 _, text = read(rec, leg, tag, cache, 8)
                 ok = text is not None and lines_matching(text, r"^RENEWED:yes$") == 1
                 renew_ok = renew_ok and ok
                 print("CM_RENEW %s %s %s %s" % (leg, tag, cache, "yes" if ok else "no"))
-    for cache, n in cells():
+    clients = [t for t in tags if t != HM]
+    for cache, n in cells(clients[0]) if clients else ():
         seen = {}
-        for tag in tags:
+        for tag in clients:
             _, text = read(rec, "mit", tag, cache, n)
             if text is not None:
-                seen.setdefault(TAGGED.sub(r"\1-<T>", mask(text)), []).append(tag)
+                seen.setdefault(TAGGED.sub(r"\1-<T>", mask(text, tag)), []).append(tag)
         if len(seen) > 1:
             print("CM_VERSION %s %d %s" % (cache, n, " / ".join(",".join(v) for v in seen.values())))
     print("CM_ROWS %d equal %d differ %d" % (rows, rows - differ, differ))
-    ok = differ == 0 and renew_ok and rows == 17 * len(tags)
+    ok = differ == 0 and renew_ok and rows == sum(len(list(cells(t))) for t in tags)
     print("CM_GRADE:%s" % ("yes" if ok else "no"))
     return 0 if ok else 1
 
