@@ -34,11 +34,12 @@ cp -a "$SRC_SCRIPTS/hc.sh" "$SRC_SCRIPTS/vmctl.sh" "$SRC_SCRIPTS/install-ours.sh
 cp -a "$SRC_SCRIPTS/cells" "$SRC_SCRIPTS/lib" "$COPY/"
 
 # Ship list hc.sh checks: hashes of this tree's release build.
-PROGS=(krb5-kdc krb5-kadmind krb5-kadmin-local krb5-kdb krb5-kprop krb5-kpropd krb5-otp-kdc)
+PROGS=(krb5-kdc krb5-kadmind krb5-kadmin-local krb5-kdb krb5-kprop krb5-kpropd)
+for p in "${PROGS[@]}"; do [ -x "$SHIP/$p" ] || { echo "R3_STOP ship $p"; exit 2; }; done
 (
   cd "$SHIP" || exit 2
   sha256sum "${PROGS[@]}"
-) > "$COPY/ship-sha256.txt"
+) > "$COPY/ship-sha256.txt" || { echo "rp-r3.sh: a ship program is missing from $SHIP" >&2; exit 2; }
 printf 'tree %s commit %s built %s; default features, --release --locked\n' "$TREE" "$COMMIT" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$COPY/ship-source.txt"
 
 echo "COPY_HC $(sha256sum "$COPY/hc.sh" | awk '{print $1}')"
@@ -60,10 +61,9 @@ if [ "${R3_LAUNCH:-0}" != 1 ]; then
   exit 0
 fi
 
-# Launch. services is the VM that is up; down it, then the driver refuses any of the four still running.
+# Launch. hc.sh checks its inputs, takes the locks, downs services, then refuses any of the four still running.
 exec 9>&-
 cd "$WT" || exit 2
-timeout 180 "$LAB" down services >> "$BASE/r3-launch.log" 2>&1 || { echo "rp-r3.sh: lab down services failed" >&2; exit 2; }
 export REPO=$WT
 export HCD=$BASE
 export HC=$COPY

@@ -38,7 +38,7 @@ HARD_STOP_EPOCH=${HARD_STOP_EPOCH:-}                   # optional wall-clock sto
 CELL_S=${CELL_S:-600}                                # one cell script's budget: its commands are cut to what is left (rec.sh FIELD_DEADLINE)
 STOP_AFTER=${STOP_AFTER:-}
 RESTSNAP_LEG=f4-mit
-SERVER_PROGS=(krb5-kdc krb5-kadmind krb5-kadmin-local krb5-kdb krb5-kprop krb5-kpropd krb5-otp-kdc)
+SERVER_PROGS=(krb5-kdc krb5-kadmind krb5-kadmin-local krb5-kdb krb5-kprop krb5-kpropd)
 VMS=(kdc services client2 client1)
 declare -A REST_SNAP=([kdc]=f4-mit [services]=services-rust-f44 [client2]=rust-ssh [client1]=f4-mit)
 PKG_VERSION_RX='1\.22\.2-[0-9]+\.fc43'
@@ -424,6 +424,9 @@ python3 -B -c 'import winrm' 2> /dev/null || { echo "hc.sh: python3 has no winrm
 
 # ================================================================ L0 lock, pre-status
 take_lock
+# services is up between holds; it goes down only once every input above has passed.
+note "+ lab.sh down services"
+timeout 180 "$LAB" down services >> "$LOG" 2>&1 || fail "lab.sh down services"
 "$LAB" status > "$OUT/pre-status.txt" 2>> "$LOG" 9>&- || fail "lab.sh status"
 cat "$OUT/pre-status.txt" >> "$LOG"
 for v in "${VMS[@]}"; do
@@ -494,7 +497,7 @@ timeout 900 "$LAB" ssh kdc -- "sudo bash $VMD/install-ours.sh" > "$OUT/install.t
 cat "$OUT/install.txt" >> "$LOG"
 note "INSTALL rc=$irc"
 [ "$irc" = 0 ] || fail "install rc=$irc"
-want=$(awk '{ n = $2; sub(/^krb5-kdc$/, "krb5kdc", n); sub(/^krb5-kadmind$/, "kadmind", n); sub(/^krb5-kadmin-local$/, "kadmin.local", n); sub(/^krb5-kdb$/, "kdb5_util", n); sub(/^krb5-kprop$/, "kprop", n); sub(/^krb5-kpropd$/, "kpropd", n); if ($2 != "krb5-otp-kdc") print $1, n }' "$OUT/ship-server.sha256" | sort)
+want=$(awk '{ n = $2; sub(/^krb5-kdc$/, "krb5kdc", n); sub(/^krb5-kadmind$/, "kadmind", n); sub(/^krb5-kadmin-local$/, "kadmin.local", n); sub(/^krb5-kdb$/, "kdb5_util", n); sub(/^krb5-kprop$/, "kprop", n); sub(/^krb5-kpropd$/, "kpropd", n); print $1, n }' "$OUT/ship-server.sha256" | sort)
 got=$(awk 'length($1) == 64 && $2 ~ /^\/usr\/sbin\// { n = $2; sub(/^\/usr\/sbin\//, "", n); print $1, n }' "$OUT/install.txt" | sort)
 [ -n "$want" ] && [ "$want" = "$got" ] || { echo "$want" > "$OUT/want-sha.txt"; echo "$got" > "$OUT/got-sha.txt"; fail "installed daemons differ from the ship build (want-sha.txt got-sha.txt)"; }
 note "installed /usr/sbin programs equal the ship build sha256"
