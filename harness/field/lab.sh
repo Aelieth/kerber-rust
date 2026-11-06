@@ -830,7 +830,8 @@ cmd_status() {
 
 # check_vm <vm>: the F0 acceptance checks for one VM; prints PASS/FAIL lines.
 check_vm() {
-    local vm=$1 fails=0 other out
+    local vm=$1 fails=0 other out want rev holder=
+    [ -e "$TAKEOVER" ] && holder=$(cat "$TAKEOVER")
     pass() { printf '  PASS %s\n' "$*"; }
     fail() { printf '  FAIL %s\n' "$*"; fails=$((fails + 1)); }
     printf '%s (%s):\n' "$vm" "${IP[$vm]}"
@@ -839,19 +840,24 @@ check_vm() {
     out=$(lssh "$vm" 'hostname -f; cat /etc/os-release | grep -E "^(VARIANT_ID|VERSION_ID)="' 2>/dev/null | paste -sd' ' -)
     pass "hostname/os: $out"
     for other in kdc services client1 client2 klldap mitd3; do
-        if [ "$vm" = "$other" ]; then
+        if [ "$vm" = "$other" ] || { [ "$other" = kdc ] && [ "$vm" = "$holder" ]; }; then
             # The VM's own name is answered locally (nss-myhostname / resolved) with
             # its own addresses, in getaddrinfo order: any local address is right.
             out=$(lssh "$vm" "getent ahosts $other.$DNS_DOMAIN" 2>/dev/null | awk '!seen[$1]++ { print $1 }' | paste -sd' ' -)
             if [ -n "$out" ]; then pass "resolves itself $other.$DNS_DOMAIN -> $out"; else fail "resolves itself $other.$DNS_DOMAIN"; fi
             continue
         fi
+        want=${IP[$other]} rev=$other.$DNS_DOMAIN
+        # During a takeover the holder's record lists kdc's name first; kdc's own address has none.
+        if [ -n "$holder" ] && { [ "$other" = kdc ] || [ "$other" = "$holder" ]; }; then
+            want=${IP[$holder]} rev=$KDC_NAME
+        fi
         out=$(lssh "$vm" "getent hosts $other.$DNS_DOMAIN" 2>/dev/null | awk 'NR == 1 { print $1 }')
-        if [ "$out" = "${IP[$other]}" ]; then pass "resolves $other.$DNS_DOMAIN -> $out"
-        else fail "resolves $other.$DNS_DOMAIN (got '${out}', want ${IP[$other]})"; fi
-        out=$(lssh "$vm" "getent hosts ${IP[$other]}" 2>/dev/null | awk 'NR == 1 { print $2 }')
-        if [ "$out" = "$other.$DNS_DOMAIN" ]; then pass "reverse ${IP[$other]} -> $out"
-        else fail "reverse ${IP[$other]} (got '${out}', want $other.$DNS_DOMAIN)"; fi
+        if [ "$out" = "$want" ]; then pass "resolves $other.$DNS_DOMAIN -> $out"
+        else fail "resolves $other.$DNS_DOMAIN (got '${out}', want $want)"; fi
+        out=$(lssh "$vm" "getent hosts $want" 2>/dev/null | awk 'NR == 1 { print $2 }')
+        if [ "$out" = "$rev" ]; then pass "reverse $want -> $out"
+        else fail "reverse $want (got '${out}', want $rev)"; fi
     done
     # A VM that just booted gets up to a minute to sync before this counts as a failure.
     out=$(lssh "$vm" "chronyc -n waitsync 12 0 0 5 >/dev/null 2>&1; timedatectl show -p NTPSynchronized --value; chronyc -n tracking | sed -n 's/^Leap status *: //p; s/^System time *: //p'" 2>/dev/null | paste -sd' ' -)
