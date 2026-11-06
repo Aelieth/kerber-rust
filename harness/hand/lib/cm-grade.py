@@ -68,7 +68,7 @@ def expect(tag, cache, n):
         return "0", [(rf"^Default principal: {p}-kt{q}$", None)]
     if n == 3:
         # MIT: `kvno` (clients/kvno/kvno.c:381)
-        return "0", [(rf"^host/kdc\.kerber\.test{q}: kvno = \d+$", 1)]
+        return "0", [(rf"^host/cm\.kerber\.test{q}: kvno = \d+$", 1)]
     if n == 4:
         # MIT: `show_credential` (clients/klist/klist.c:737)
         return "0", [(r"renew until ", None), (r"^RENEW_TILL_KEPT:yes$", 1)]

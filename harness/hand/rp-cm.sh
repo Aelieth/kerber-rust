@@ -310,8 +310,8 @@ kdc_setup() {
     echo "SETUP_RC:$leg:$?"
     n=$(sed -n 's/^SETUP_CREATED://p' "$REC/$leg/setup.out")
     echo "SETUP_CREATED:$leg:${n:-none}"
-    [ "${n:-0}" = 44 ] || return 1
-    grep -qx "host/kdc.kerber.test@$REALM" "$REC/$leg/setup.out" || return 1
+    [ "${n:-0}" = 45 ] || return 1
+    grep -qx "host/cm.kerber.test@$REALM" "$REC/$leg/setup.out" || return 1
     grep -qx 'KEYTABS:4' "$REC/$leg/setup.out" || return 1
     for t in "${TAGS[@]}"; do
         "$LAB" ssh kdc -- "cat ~/field/cm-kt/$t.keytab" < /dev/null > "$SEC/kt-$t.keytab" 2> /dev/null || return 1

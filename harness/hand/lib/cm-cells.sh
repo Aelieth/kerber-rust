@@ -116,6 +116,7 @@ kdc_setup() {
     mkdir -p "$F/cm-kt"
     {
     kq "addpol -maxfailure 3 -failurecountinterval 0 -lockoutduration 0 cmlock" < /dev/null
+    kq "addprinc -randkey host/cm.kerber.test" < /dev/null
     for t in "$@"; do
         pw2 "pw-$t" | kq "addprinc +requires_preauth -maxrenewlife \"1 hour\" cm-$t"
         pw2 "kt-$t" | kq "addprinc +requires_preauth cm-$t-kt"
@@ -135,8 +136,8 @@ kdc_setup() {
     echo "SETUP_CREATED:$n"
     echo '==== listprincs cm* ===='
     kq 'listprincs cm*' < /dev/null 2>&1 | grep -v '^Authenticating'
-    echo '==== host principal ===='
-    kq 'listprincs host/kdc.kerber.test' < /dev/null 2>&1 | grep -x "host/kdc.kerber.test@$REALM"
+    echo '==== kvno service ===='
+    kq 'listprincs host/cm.kerber.test' < /dev/null 2>&1 | grep -x "host/cm.kerber.test@$REALM"
     echo '==== getpol cmlock ===='
     kq 'getpol cmlock' < /dev/null 2>&1
     echo '==== getprinc krbtgt ===='
@@ -180,7 +181,7 @@ c3() {
     fresh
     sec "pw-$TAG" | kinit "$p"
     mark KINIT_RC "$?"
-    kvno "host/kdc.kerber.test@$REALM"
+    kvno "host/cm.kerber.test@$REALM"
     rc=$?
     mark KVNO_RC "$rc"
     klist -e
