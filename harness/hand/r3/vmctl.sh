@@ -15,9 +15,6 @@
 #   klog-size | klog-since N   the KDC log: its size, and the bytes after the first N
 #   stublog-size | stublog-since N
 #   avc-mark | avc SINCE       the VM's clock as HH:MM:SS; AVC / USER_AVC records since SINCE (ausearch -ts), or "no AVC"
-#   embed-start                stop the service KDC, run the example embedder in the background as the realm's KDC
-#   embed-restart              stop the embedder, run it again (a new process, kdc.conf read afresh); log lines from BEFORE the stop
-#   embed-stop                 stop the embedder
 #   kcell KINIT ARMOR|- CC SVC one kinit login of otpuser (KINIT is MIT's /usr/bin/kinit or ours under $D/ours), the stdin of this call is exactly what the
 #                              kinit reads on its own stdin (zero bytes = end of file at the first prompt); stdout, stderr and the KRB5_TRACE file are three
 #                              separate files, printed under fixed "== " headings with the exit status first; then, when a ccache was written, MIT's klist -C and
@@ -30,7 +27,6 @@ KDCDIR=${VMCTL_KDCDIR:-/var/kerberos/krb5kdc}
 KDCCONF=${VMCTL_KDCCONF:-$KDCDIR/kdc.conf}
 KLOG=${VMCTL_KLOG:-/var/log/krb5kdc.log}
 RUNDIR=${VMCTL_RUNDIR:-/run/krb5kdc}
-PORT=${VMCTL_PORT:-88}
 KT=${VMCTL_KT:-/etc/krb5.keytab}
 KRB5CONF=${VMCTL_KRB5CONF:-/etc/krb5.conf}
 KRB5CONFD=${VMCTL_KRB5CONFD:-/etc/krb5.conf.d}
@@ -78,23 +74,6 @@ stop_pid() {
         done
     fi
     rm -f "$pidf"
-}
-
-# the embedder: its seeds file is $D/totp.seeds, its stderr line "krb5-otp-kdc: starting..." comes after "commencing operation"
-embed_run() {
-    : > "$D/embed.out"
-    start_detached "$D/embed.pid" "$D/embed.out" env KERBER_EXAMPLE_TOTP_SEEDS="$D/totp.seeds" "$D/krb5-otp-kdc" || { echo "embedder: no pid"; return 1; }
-    wait_for 15 "$D/embed.out" 'starting' || { cat "$D/embed.out"; return 1; }
-    sleep 1
-}
-embed_report() {   # embed_report N: what a started embedder shows, then the log lines from byte N
-    echo "embedder pid $(cat "$D/embed.pid")"
-    ps -o pid,user,label,args -p "$(cat "$D/embed.pid")"
-    ss -H -lntup "sport = :$PORT" | sed 's/users:.*pid=\([0-9]*\).*/pid=\1/'
-    echo "== embed.out"; cat "$D/embed.out"
-    echo
-    echo "# KDC log lines added by this cell ($KLOG on kdc)"
-    tail -c +$(($1 + 1)) "$KLOG" 2>/dev/null
 }
 
 restart_svc() {
@@ -201,26 +180,6 @@ avc)
     echo "auditd: $(systemctl is-active auditd 2>&1); selinux: $(getenforce 2>&1)"
     out=$(ausearch -m AVC,USER_AVC -ts "$since" 2>&1)
     if printf '%s' "$out" | grep -q 'type=AVC\|type=USER_AVC'; then printf '%s\n' "$out"; else echo "no AVC since $since ($(printf '%s' "$out" | head -1))"; fi
-    ;;
-embed-start)
-    systemctl stop krb5kdc
-    sleep 1
-    echo "krb5kdc.service: $(systemctl is-active krb5kdc)"
-    n=$(klog_bytes)
-    embed_run || exit 1
-    embed_report "$n"
-    ;;
-embed-restart)
-    n=$(klog_bytes)
-    stop_pid "$D/embed.pid" 10
-    echo "previous embedder stopped"
-    embed_run || exit 1
-    embed_report "$n"
-    ;;
-embed-stop)
-    stop_pid "$D/embed.pid" 10
-    echo "embedder stopped"
-    tail -n 3 "$KLOG" 2>/dev/null
     ;;
 kcell)
     # kcell KINIT ARMOR|- CC SVC: see the header. The kinit runs as root (the armor ccache and the host keytab are root's); nothing of the stdin is printed.

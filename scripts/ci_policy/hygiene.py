@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import os
 import pathlib
@@ -544,6 +545,22 @@ def check_private_addresses(root: pathlib.Path | None = None) -> None:
     if bad:
         _die(f"{len(bad)} private address(es) outside field.env: " + "; ".join(bad[:8]))
     print("private-addresses: none outside field.env.example and the named files")
+
+
+def check_hand_pins(root: pathlib.Path | None = None) -> None:
+    """Each SHA256SUMS under harness/ matches the files beside it, as the legs check."""
+    root = ROOT if root is None else root
+    sums = sorted((root / "harness").rglob("SHA256SUMS"))
+    bad = []
+    for f in sums:
+        for n, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+            want, _, name = line.partition("  ")
+            path = f.parent / name
+            if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != want:
+                bad.append(f"{f.relative_to(root)}:{n} {name}")
+    if bad:
+        _die(f"{len(bad)} hand-leg pin(s) differ from their file: " + "; ".join(bad[:8]))
+    print(f"hand-pins: {len(sums)} SHA256SUMS file(s) match their files")
 
 
 # rscount.py's rule. The four names are the out-of-line test files that rule misses.

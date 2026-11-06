@@ -12,7 +12,7 @@ Environment (each driver takes the 40-hex sha of the build under test as `$1`):
 - `HAND_RELEASE_TAG`, `HAND_RELEASE_TREE` (`rp-final-clone.sh`; the tag also `rp-final-clients.sh`): the release under test, e.g. `v1.2.1` and its tree.
 - `HAND_BASELINE_DIR` (`rp-b2.sh`): the last graded B2 record's `b2/results.tsv` and `combined/results.tsv`; the grade compares against them.
 - `HAND_FIXTURE_DIR` (`rp-b2.sh`): the throwaway D3.TEST realm's dumps, stashes, keytabs and passwords, from the FULL-r2 record's `helpers/`; mode 0700, checked against `b2/shared/d3-fixtures.sha256`. Never the lab realm's keys, and never in git.
-- `FIELD_KIT_DIR` (`rp-r3.sh`): the lab copy of the reference client kit (one `*-remote-setup.sh` plus `lib/`); it stays out of the tree.
+- `FIELD_KIT_DIR` (`rp-r3.sh`): the lab copy of the reference client kit (one `*-remote-setup.sh` plus `lib/`), its files at 0644 as the kit ships them (R3 hashes them as the ssh user); it stays out of the tree.
 - `krb5-embed-realm`, built from `examples/embed-realm` into the ship dir, for `rp-ss.sh`, `rp-al-a45.sh`, `rp-ba.sh`, `rp-az.sh`, `rp-tr.sh`, `rp-tr-cell2.sh` and `rp-sc.sh`.
 - Passwords a leg generates go to a private `mktemp -d` under `TMPDIR`, never the record, and are removed on exit.
 
