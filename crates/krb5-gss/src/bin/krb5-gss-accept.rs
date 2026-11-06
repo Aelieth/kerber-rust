@@ -6,7 +6,7 @@
 )]
 
 use std::io::{Read, Write};
-use std::net::TcpListener;
+use std::net::{TcpListener, TcpStream};
 use std::time::Duration;
 
 use krb5_gss::{ChannelBindings, GssContext, IovBuf, IovType};
@@ -26,6 +26,8 @@ fn main() {
     let mut assoc = Vec::new();
     let mut bindings = None::<ChannelBindings>;
     let mut accept_only = false;
+    let mut verify_mic = false;
+    let mut reply = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -49,12 +51,14 @@ fn main() {
                 }
             }
             "--accept-only" => accept_only = true,
+            "--verify-mic" => verify_mic = true,
+            "--reply" => reply = true,
             _ => {}
         }
     }
     let Some(kt_path) = keytab else {
         eprintln!(
-            "usage: krb5-gss-accept --keytab PATH [--listen HOST:PORT] [--channel-bindings DATA] [--accept-only]"
+            "usage: krb5-gss-accept --keytab PATH [--listen HOST:PORT] [--channel-bindings DATA] [--accept-only] [--verify-mic] [--reply]"
         );
         std::process::exit(2);
     };
@@ -214,6 +218,18 @@ fn main() {
             eprintln!("write AP-REP: {e}");
             continue;
         }
+        if verify_mic {
+            match read_mic(&mut stream, &mut ctx) {
+                Ok(msg) => println!(
+                    "gss-accept verify_mic ok msg={}",
+                    String::from_utf8_lossy(&msg)
+                ),
+                Err(e) => {
+                    eprintln!("verify_mic: {e}");
+                    continue;
+                }
+            }
+        }
         let mut nwrap = 0u32;
         loop {
             let wrap = match read_token(&mut stream) {
@@ -245,8 +261,34 @@ fn main() {
             println!("gss-accept unwrap ok bytes={}", plain.len());
             println!("gss-accept plaintext={}", String::from_utf8_lossy(&plain));
             nwrap = nwrap.saturating_add(1);
+            if reply {
+                if let Err(e) = send_reply(&mut stream, &mut ctx) {
+                    eprintln!("reply: {e}");
+                    break;
+                }
+                println!("gss-accept reply sent");
+            }
         }
     }
+}
+
+fn read_mic(
+    s: &mut TcpStream,
+    ctx: &mut GssContext,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let msg = read_token(s)?;
+    let mic = read_token(s)?;
+    ctx.verify_mic(&msg, &mic)?;
+    Ok(msg)
+}
+
+fn send_reply(s: &mut TcpStream, ctx: &mut GssContext) -> Result<(), Box<dyn std::error::Error>> {
+    let text = b"hello-from-acceptor";
+    let wrapped = ctx.wrap(text)?;
+    let mic = ctx.get_mic(text)?;
+    write_token(s, &wrapped)?;
+    write_token(s, &mic)?;
+    Ok(())
 }
 
 fn unwrap_iov_token(
