@@ -4,6 +4,9 @@
 # over an existing name:
 #   base  ds-base-<vm>     base, the hostname kdc.kerber.test, the dictionary install.sh's kdc.conf names; no krb5
 #   mit   mit-oracle-<vm>  the distro's MIT KDC (mit-server-<vm>, RC R1) holding f4-mit-f44's realm
+#   rep   mit-replica-<vm>, rust-replica-<vm> on the same-family replica <vm>r (or $4), from its mit-server-<vm>:
+#                          the hostname kdc2, Debian's krb5-kpropd, MIT's units off and no realm, as kdc2's f4-mit-f44;
+#                          then MIT's server packages removed, as rust-replica-f44
 #   rust  rust-base-<vm>   kerber-rust at RUST_PIN (a3a9e051, the oldest sha whose install both families proved),
 #                          replacing mit-server-<vm>'s MIT by that sha's own docs/install.md blocks, as MD's smoke did,
 #                          and holding rust-field-p12-f44's realm, so `upgrade` steps a real version gap
@@ -22,6 +25,8 @@ require_env HAND_WT HAND_REC
 SHA=${1:-}
 VM=${2:-}
 PHASES=${3:-base,mit,rust}
+RVM=${4:-${VM}r}
+HN=kdc
 case $VM in
     deb13)
         FAM=deb PREREQ='### Debian and Ubuntu' START=2 KDCCONF='### kdc.conf and kadm5.acl on Debian and Ubuntu'
@@ -234,23 +239,30 @@ kinit_through() {
 }
 
 # The hostname kdc, as Fedora's kdc has (MIT logs gethostname(), logger.c:506-512), kept by cloud-init across
-# boots; `hostname -f` gives kdc.kerber.test (Debian's 127.0.1.1 line, else the lab's DNS).
+# boots; `hostname -f` gives kdc.kerber.test: on Debian its 127.0.1.1 line, added when the image has none (else NSS's
+# myhostname answers the bare name) and kept from cloud-init; on Rocky the lab's DNS.
 set_hostname() {
-    on "$VM" "sudo hostnamectl set-hostname kdc && { [ ! -d /etc/cloud/cloud.cfg.d ] || echo \
-        'preserve_hostname: true' | sudo tee /etc/cloud/cloud.cfg.d/99-ds-hostname.cfg > /dev/null; } && \
-        { ! grep -q '^127\.0\.1\.1[[:space:]]' /etc/hosts || sudo sed -i \
-        's/^127\.0\.1\.1[[:space:]].*/127.0.1.1 kdc.kerber.test kdc/' /etc/hosts; }" > "$REC/$PH/hostname.out" 2>&1 ||
+    local line="127.0.1.1 $HN.kerber.test $HN" ci='preserve_hostname: true' add=''
+    if [ "$FAM" = deb ]; then
+        ci="$ci\nmanage_etc_hosts: false"
+        add="else echo '$line' | sudo tee -a /etc/hosts > /dev/null; "
+    fi
+    on "$VM" "sudo hostnamectl set-hostname $HN && { [ ! -d /etc/cloud/cloud.cfg.d ] || printf \
+        '$ci\n' | sudo tee /etc/cloud/cloud.cfg.d/99-ds-hostname.cfg > /dev/null; } && \
+        if grep -q '^127\.0\.1\.1[[:space:]]' /etc/hosts; then sudo sed -i \
+        's/^127\.0\.1\.1[[:space:]].*/$line/' /etc/hosts; ${add}fi" > "$REC/$PH/hostname.out" 2>&1 ||
         bad "$PH:set-hostname"
 }
 pkgs() {
     # shellcheck disable=SC2086 # the package lists split into words
     on "$VM" "sudo $PKG_INSTALL $*" > "$REC/$PH/pkgs.out" 2>&1 || bad "$PH:packages"
-    versions "$*"
+    versions "$*" before
 }
-# versions <packages>: each one's version in the record, and the krb5 packages the VM has (L2).
+# versions <packages> <before|after>: each one's version and the krb5 packages the VM has (L2), labelled by when:
+# before the phase changes the VM's packages, or after.
 versions() {
-    on "$VM" "for p in $1; do sudo $PKG_QUERY \$p; done; $PKG_LIST" > "$REC/$PH/pkg-versions.out" 2>&1
-    sed 's/^/PKG:'"$PH"':/' "$REC/$PH/pkg-versions.out"
+    on "$VM" "for p in $1; do sudo $PKG_QUERY \$p; done; $PKG_LIST" > "$REC/$PH/pkg-versions-$2.out" 2>&1
+    sed "s/^/PKG:$PH:$2:/" "$REC/$PH/pkg-versions-$2.out"
 }
 # reboot_check <units: yes|no>: down, up, then the hostname and, if asked, both units.
 reboot_check() {
@@ -260,7 +272,7 @@ reboot_check() {
     wait_ntp "$VM" > /dev/null || bad "$PH:ntp-after-reboot"
     h=$(on "$VM" "echo \"\$(hostname) \$(hostname -f)\"" 2> /dev/null)
     echo "HOSTNAME:$PH:$h"
-    [ "$h" = 'kdc kdc.kerber.test' ] || bad "$PH:hostname:$h"
+    [ "$h" = "$HN $HN.kerber.test" ] || bad "$PH:hostname:$h"
     if [ "$1" = yes ]; then
         if units "$VM" "$UNIT_KDC" "$UNIT_ADMIN"; then echo "UNITS:$PH:active"; else bad "$PH:units-after-reboot"; fi
     fi
@@ -310,7 +322,7 @@ phase_mit() {
     realm "$VM" "$KDCDIR" tgt
     real src; real tgt
     same listprincs; same getprinc.alice; same getprinc.krbtgt; same mkt
-    versions "$MIT_SERVER_PKGS $MIT_CLIENT_PKG"
+    versions "$MIT_SERVER_PKGS $MIT_CLIENT_PKG" after
     kinit_through "$MIT_SNAPSHOT_CLIENT2" "$MIT_SECRET_ALICE"
     reboot_check yes
     snap "mit-oracle-$VM"
@@ -350,10 +362,50 @@ phase_rust() {
     realm "$VM" "$KDCDIR" tgt
     real src; real tgt
     same listprincs; same getprinc.alice; same getprinc.krbtgt; same mkt
-    versions "$MIT_CLIENT_PKG"
+    versions "$MIT_CLIENT_PKG" after
     kinit_through "$RUST_SNAPSHOT_CLIENT2" "$RUST_SECRET_ALICE"
     reboot_check yes
     snap "rust-base-$VM"
+}
+
+# replica_state <kpropd present|absent>: kpropd as the snapshot should have it, no realm, and nothing on 88 or 754
+# (MIT's units off: replica.sh runs kpropd itself).
+replica_state() {
+    local want=$1 got
+    got=$(on "$VM" "if [ -x /usr/sbin/kpropd ]; then echo present; else echo absent; fi; \
+        if sudo test -e $KDCDATADIR/principal; then echo realm; else echo no-realm; fi; \
+        sudo ss -Hlntu 'sport = :88 or sport = :754' | wc -l" 2> /dev/null | paste -sd' ' -)
+    echo "REPLICA:$PH:$VM:$got"
+    [ "$got" = "$want no-realm 0" ] || bad "$PH:replica-state:$got"
+}
+
+# The same-family replica: mit-replica-<vm> as kdc2's f4-mit-f44, then rust-replica-<vm> as rust-replica-f44.
+phase_rep() {
+    local d=$VM units
+    PH=rep
+    mkdir -p "$REC/$PH"
+    VM=$RVM HN=kdc2
+    boot "$VM" "mit-server-$d" || { bad "$PH:boot"; VM=$d HN=kdc; return; }
+    set_hostname
+    case $FAM in
+        deb) pkgs krb5-kpropd; units='krb5-kdc krb5-admin-server krb5-kpropd' ;;
+        *) versions "$MIT_SERVER_PKGS" before; units='krb5kdc kadmin kprop' ;;
+    esac
+    on "$VM" "sudo systemctl disable --now $units" > "$REC/$PH/units-off.out" 2>&1 || bad "$PH:units-off"
+    reboot_check no
+    replica_state present
+    snap "mit-replica-$d" || { VM=$d HN=kdc; return; }
+    snapped=''
+    boot "$VM" "mit-replica-$d" || { bad "$PH:boot-replica"; VM=$d HN=kdc; return; }
+    case $FAM in
+        deb) on "$VM" "sudo apt-get remove -y krb5-kdc krb5-admin-server krb5-kpropd" ;;
+        *) on "$VM" "sudo dnf remove -y --setopt=clean_requirements_on_remove=False krb5-server" ;;
+    esac > "$REC/$PH/remove.out" 2>&1 || bad "$PH:remove"
+    reboot_check no
+    replica_state absent
+    versions "$MIT_CLIENT_PKG" after
+    snap "rust-replica-$d"
+    VM=$d HN=kdc
 }
 
 # Before anything changes: the checkout, the VMs and snapshots, the names to make, and the RAM.
@@ -367,10 +419,17 @@ for need in "kdc f4-mit-f44" "kdc rust-field-p12-f44" "$VM base" "$VM mit-server
 done
 case ${TMPDIR:-} in '' | /tmp | /tmp/*) stop "TMPDIR is unset or under /tmp" ;; esac
 [ ! -e "$LAB_HOME/state/takeover" ] || stop "a takeover is held ($(cat "$LAB_HOME/state/takeover"))"
-for v in kdc "$VM" client2; do
+IFS=, read -r -a PH_LIST <<< "$PHASES"
+VMS_USED="kdc $VM client2"
+case ",$PHASES," in
+    *,rep,*)
+        VMS_USED="$VMS_USED $RVM"
+        [ "$(domstate "$RVM")" != missing ] || stop "no VM $RVM"
+        has_snap "$RVM" "mit-server-$VM" || stop "no snapshot mit-server-$VM on $RVM" ;;
+esac
+for v in $VMS_USED; do
     [ "$(domstate "$v")" = 'shut off' ] || stop "$v is not shut off ($(domstate "$v")): the lab is in use"
 done
-IFS=, read -r -a PH_LIST <<< "$PHASES"
 [ "$(printf '%s\n' "${PH_LIST[@]}" | sort | uniq -d)" = '' ] || stop "a phase named twice: $PHASES"
 for p in "${PH_LIST[@]}"; do
     case $p in
@@ -381,11 +440,12 @@ for p in "${PH_LIST[@]}"; do
         base) has_snap "$VM" "ds-base-$VM" && stop "ds-base-$VM exists" ;;
         mit) has_snap "$VM" "mit-oracle-$VM" && stop "mit-oracle-$VM exists" ;;
         rust) has_snap "$VM" "rust-base-$VM" && stop "rust-base-$VM exists" ;;
+        rep) for t in "mit-replica-$VM" "rust-replica-$VM"; do has_snap "$RVM" "$t" && stop "$t exists on $RVM"; done ;;
         *) stop "phase $p" ;;
     esac
 done
 sum=0
-for name in kdc client2 "$VM" klldap; do
+for name in $VMS_USED klldap; do
     st=$(domstate "$name")
     [ "$name" = klldap ] && [ "$st" != running ] && continue
     kb=$(vsh dominfo "kerber-$name" | awk '/Max memory:/ { print $3 }')
@@ -394,7 +454,7 @@ for name in kdc client2 "$VM" klldap; do
 done
 echo "RAM_SUM_MIB $sum CAP_MIB $CAP_MIB"
 [ "$sum" -le "$CAP_MIB" ] || stop "ram $sum"
-echo "DSB_VM:$VM:$FAM DSB_SHA:$SHA DSB_PHASES:$PHASES"
+echo "DSB_VM:$VM:$FAM DSB_SHA:$SHA DSB_PHASES:$PHASES DSB_REPLICA:$RVM"
 
 for p in "${PH_LIST[@]}"; do
     snapped=''

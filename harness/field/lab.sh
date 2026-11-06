@@ -42,9 +42,9 @@
 #   ssh <vm> [--] [cmd...]  ssh to the VM as 'lab' with the lab key
 #   ip <vm> [lan]           print the VM's lab address, or kdc's LAN address
 #   status                  network, pool, VMs, addresses, snapshots
-#   takeover <vm>           (DS) <vm> answers as kdc.kerber.test: the network's record
-#                           moves to its address, live only; kdc must be shut off
-#   release                 put kdc.kerber.test back on kdc's address
+#   takeover <vm> [kdc2]    (DS) <vm> answers as kdc.kerber.test (or kdc2.kerber.test): the network's record
+#                           moves to its address, live only; kdc (kdc2) must be shut off
+#   release [kdc2]          put kdc.kerber.test (or kdc2.kerber.test) back on kdc's (kdc2's) address
 #   check [--lab-only] [vm...]
 #                           ssh, DNS + reverse DNS, time sync, internet; kdc's LAN
 #                           NIC, its inbound filter, routes and the AD DC's port 88;
@@ -60,6 +60,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LAB_HOME="${KERBER_LAB_HOME:-$HOME/kerber-lab}"
 # FIELD_ROLE_KDC=<vm> (environment only, never field.env): commands that name kdc act on <vm>.
 ROLE_KDC=${FIELD_ROLE_KDC-}
+# FIELD_ROLE_KDC2=<vm> (DS's same-family replica, environment only): commands that name kdc2 act on <vm>.
+ROLE_KDC2=${FIELD_ROLE_KDC2-}
 # The lab's own values (FIELD_LAB_NET, FIELD_AD_DC, ...), as run.sh reads them.
 if [ -f "$LAB_HOME/field.env" ]; then
     if [ "$(stat -c %a "$LAB_HOME/field.env")" != 600 ]; then
@@ -102,23 +104,23 @@ UBUNTU_IMG=ubuntu-26.04-server-cloudimg-amd64.img
 UBUNTU_SHA256=8800651811af9a85465ad1d552add729947bb16488dddb4a9b5305a3d97332b2
 UBUNTU_VOL=ubuntu-26.04-cloud.img
 
-# The VM table. The MACs must match network-kerber-lab.xml.in, except kdc2:
-# its DHCP host is already on the live network, and this script does not
-# edit that XML and does not net-update a dns-host for it.
-ALL_VMS=(kdc services client1 client2 klldap mitd3 ub26 deb13 rocky10 kdc2)
-declare -A KIND=([kdc]=cloud [services]=cloud [client1]=kinoite [client2]=cloud [klldap]=cloud [mitd3]=cloud [ub26]=ubuntu [deb13]=debian [rocky10]=rocky [kdc2]=replica)
-declare -A CPUS=([kdc]=2 [services]=4 [client1]=4 [client2]=2 [klldap]=2 [mitd3]=4 [ub26]=4 [deb13]=2 [rocky10]=2 [kdc2]=2)
-declare -A MEM=([kdc]=2048 [services]=6144 [client1]=6144 [client2]=3072 [klldap]=3072 [mitd3]=4096 [ub26]=8192 [deb13]=3072 [rocky10]=3072 [kdc2]=2048)
-declare -A DISK=([kdc]=20 [services]=40 [client1]=40 [client2]=20 [klldap]=30 [mitd3]=20 [ub26]=60 [deb13]=30 [rocky10]=20 [kdc2]=20)
+# The VM table. The MACs must match network-kerber-lab.xml.in, except kdc2 and DS's
+# same-family replicas deb13r and rocky10r: their DHCP hosts are on the live network,
+# made by hand, and this script does not edit that XML or net-update a dns-host for them.
+ALL_VMS=(kdc services client1 client2 klldap mitd3 ub26 deb13 rocky10 kdc2 deb13r rocky10r)
+declare -A KIND=([kdc]=cloud [services]=cloud [client1]=kinoite [client2]=cloud [klldap]=cloud [mitd3]=cloud [ub26]=ubuntu [deb13]=debian [rocky10]=rocky [kdc2]=replica [deb13r]=replica [rocky10r]=replica)
+declare -A CPUS=([kdc]=2 [services]=4 [client1]=4 [client2]=2 [klldap]=2 [mitd3]=4 [ub26]=4 [deb13]=2 [rocky10]=2 [kdc2]=2 [deb13r]=2 [rocky10r]=2)
+declare -A MEM=([kdc]=2048 [services]=6144 [client1]=6144 [client2]=3072 [klldap]=3072 [mitd3]=4096 [ub26]=8192 [deb13]=3072 [rocky10]=3072 [kdc2]=2048 [deb13r]=3072 [rocky10r]=3072)
+declare -A DISK=([kdc]=20 [services]=40 [client1]=40 [client2]=20 [klldap]=30 [mitd3]=20 [ub26]=60 [deb13]=30 [rocky10]=20 [kdc2]=20 [deb13r]=30 [rocky10r]=20)
 declare -A IP=([kdc]=$FIELD_LAB_NET.10 [services]=$FIELD_LAB_NET.11 [client1]=$FIELD_LAB_NET.21
                [client2]=$FIELD_LAB_NET.22 [klldap]=$FIELD_LAB_NET.30 [mitd3]=$FIELD_LAB_NET.31
                [ub26]=$FIELD_LAB_NET.32 [deb13]=$FIELD_LAB_NET.33 [rocky10]=$FIELD_LAB_NET.34
-               [kdc2]=$FIELD_LAB_NET.12)
+               [kdc2]=$FIELD_LAB_NET.12 [deb13r]=$FIELD_LAB_NET.36 [rocky10r]=$FIELD_LAB_NET.37)
 declare -A MAC=([kdc]=52:54:00:4b:52:0a [services]=52:54:00:4b:52:0b
                 [client1]=52:54:00:4b:52:15 [client2]=52:54:00:4b:52:16
                 [klldap]=52:54:00:4b:52:1e [mitd3]=52:54:00:4b:52:1f
                 [ub26]=52:54:00:4b:52:20 [deb13]=52:54:00:4b:52:21 [rocky10]=52:54:00:4b:52:22
-                [kdc2]=52:54:00:4b:52:0c)
+                [kdc2]=52:54:00:4b:52:0c [deb13r]=52:54:00:4b:52:23 [rocky10r]=52:54:00:4b:52:24)
 KDC_LAN_MAC=52:54:00:4b:4c:0a
 
 say()  { printf '[lab] %s\n' "$*"; }
@@ -141,7 +143,11 @@ xo() {
 }
 
 dom() { printf 'kerber-%s' "$1"; }
-role() { if [ "$1" = kdc ] && [ -n "$ROLE_KDC" ]; then printf '%s' "$ROLE_KDC"; else printf '%s' "$1"; fi; }
+role() {
+    if [ "$1" = kdc ] && [ -n "$ROLE_KDC" ]; then printf '%s' "$ROLE_KDC"
+    elif [ "$1" = kdc2 ] && [ -n "$ROLE_KDC2" ]; then printf '%s' "$ROLE_KDC2"
+    else printf '%s' "$1"; fi
+}
 known_vm() { [ -n "${KIND[$1]:-}" ] || die "unknown VM '$1' (one of: ${ALL_VMS[*]})"; }
 # Exists, or return 1 when the domain is missing. Any other failure exits.
 dom_exists() {
@@ -943,37 +949,50 @@ host_xml() {
     printf '</host>'
 }
 
+# takeover_role <kdc|kdc2>: the role's state file (TK_FILE) and name (TK_NAME); kdc's are TAKEOVER and KDC_NAME.
+takeover_role() {
+    case $1 in
+        kdc) TK_FILE=$TAKEOVER ;;
+        kdc2) TK_FILE=$TAKEOVER-kdc2 ;;
+        *) die "takeover and release take the role kdc or kdc2, not '$1'" ;;
+    esac
+    TK_NAME=$1.$DNS_DOMAIN
+}
+
 cmd_takeover() {
-    [ $# -eq 1 ] || die "usage: lab.sh takeover <vm>"
-    local vm=$1
+    [ $# -eq 1 ] || [ $# -eq 2 ] || die "usage: lab.sh takeover <vm> [kdc|kdc2]"
+    local vm=$1 r=${2:-kdc}
+    takeover_role "$r"
     known_vm "$vm"
-    [ "$vm" != kdc ] || die "takeover: kdc already holds $KDC_NAME"
-    [ ! -e "$TAKEOVER" ] || die "takeover: $(cat "$TAKEOVER") holds $KDC_NAME; release first"
-    [ "$(dom_state kdc)" != running ] || die "takeover: kdc is running; shut it off first"
-    mkdir -p "${TAKEOVER%/*}"
-    printf '%s\n' "$vm" > "$TAKEOVER"
-    vsh net-update "$NET" delete dns-host "$(host_xml "${IP[kdc]}" "$KDC_NAME")" --live >/dev/null
+    [ "$vm" != "$r" ] || die "takeover: $r already holds $TK_NAME"
+    [ ! -e "$TK_FILE" ] || die "takeover: $(cat "$TK_FILE") holds $TK_NAME; release first"
+    [ "$(dom_state "$r")" != running ] || die "takeover: $r is running; shut it off first"
+    mkdir -p "${TK_FILE%/*}"
+    printf '%s\n' "$vm" > "$TK_FILE"
+    vsh net-update "$NET" delete dns-host "$(host_xml "${IP[$r]}" "$TK_NAME")" --live >/dev/null
     vsh net-update "$NET" delete dns-host "$(host_xml "${IP[$vm]}" "$vm.$DNS_DOMAIN")" --live >/dev/null
-    vsh net-update "$NET" add dns-host "$(host_xml "${IP[$vm]}" "$KDC_NAME" "$vm.$DNS_DOMAIN")" --live >/dev/null
-    say "$KDC_NAME -> ${IP[$vm]} ($vm), live only; release puts it back"
+    vsh net-update "$NET" add dns-host "$(host_xml "${IP[$vm]}" "$TK_NAME" "$vm.$DNS_DOMAIN")" --live >/dev/null
+    say "$TK_NAME -> ${IP[$vm]} ($vm), live only; release puts it back"
 }
 
 cmd_release() {
-    [ -e "$TAKEOVER" ] || { say "no takeover to release"; return 0; }
-    local vm
-    vm=$(cat "$TAKEOVER")
+    [ $# -le 1 ] || die "usage: lab.sh release [kdc|kdc2]"
+    local vm r=${1:-kdc}
+    takeover_role "$r"
+    [ -e "$TK_FILE" ] || { say "no takeover to release"; return 0; }
+    vm=$(cat "$TK_FILE")
     known_vm "$vm"
-    vsh net-update "$NET" delete dns-host "$(host_xml "${IP[$vm]}" "$KDC_NAME" "$vm.$DNS_DOMAIN")" --live >/dev/null || true
+    vsh net-update "$NET" delete dns-host "$(host_xml "${IP[$vm]}" "$TK_NAME" "$vm.$DNS_DOMAIN")" --live >/dev/null || true
     case ",$(dns_ips "$vm.$DNS_DOMAIN")," in
         *",${IP[$vm]},"*) ;;
         *) vsh net-update "$NET" add dns-host "$(host_xml "${IP[$vm]}" "$vm.$DNS_DOMAIN")" --live >/dev/null ;;
     esac
-    case ",$(dns_ips "$KDC_NAME")," in
-        *",${IP[kdc]},"*) ;;
-        *) vsh net-update "$NET" add dns-host "$(host_xml "${IP[kdc]}" "$KDC_NAME")" --live >/dev/null ;;
+    case ",$(dns_ips "$TK_NAME")," in
+        *",${IP[$r]},"*) ;;
+        *) vsh net-update "$NET" add dns-host "$(host_xml "${IP[$r]}" "$TK_NAME")" --live >/dev/null ;;
     esac
-    rm -f "$TAKEOVER"
-    say "$KDC_NAME -> ${IP[kdc]} (kdc)"
+    rm -f "$TK_FILE"
+    say "$TK_NAME -> ${IP[$r]} ($r)"
 }
 
 cmd_collect() {
@@ -1037,7 +1056,7 @@ main() {
         status) cmd_status ;;
         check) cmd_check "$@" ;;
         takeover) cmd_takeover "$@" ;;
-        release) cmd_release ;;
+        release) cmd_release "$@" ;;
         collect) cmd_collect "$@" ;;
         -h|--help|help|'') usage ;;
         *) usage >&2; die "unknown command '$cmd'" ;;

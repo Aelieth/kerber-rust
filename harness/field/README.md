@@ -24,6 +24,9 @@ Gateway, DHCP and DNS are on `$FIELD_LAB_NET.1` (libvirt's dnsmasq).
 | `kdc.kerber.test` | `.10` + a LAN NIC | `kerber-kdc` | Fedora 43 Cloud | 2 / 2 GiB / 20 GB | MIT `krb5-server` (oracle), then kerber-rust |
 | `services.kerber.test` | `.11` | `kerber-services` | Fedora 43 Cloud | 4 / 6 GiB / 40 GB | rootful podman: Ganesha NFS, Keycloak, lldap |
 | `kdc2.kerber.test` | `.12` | `kerber-kdc2` | Fedora 44 Cloud | 2 / 2 GiB / 20 GB | replica. Defined by hand (L22). `up` does not start it; `up kdc2` does. `rebuild kdc2` is refused. A bare `reset kdc2` uses `f44-base` |
+| `deb13r.kerber.test` | `.36` | `kerber-deb13r` | Debian 13 | 2 / 3 GiB / 30 GB | DS's same-family replica, as kdc2. Defined by hand: a `virt-clone` of `kerber-deb13` at `mit-server-deb13` (MAC `52:54:00:4b:52:23`), snapshotted at once as `mit-server-deb13`, with a DHCP host and DNS record made by `net-update … --config --live`. `harness/hand/ds-baselines.sh <sha> deb13 rep` makes `mit-replica-deb13` and `rust-replica-deb13` |
+| `rocky10r.kerber.test` | `.37` | `kerber-rocky10r` | Rocky 10 | 2 / 3 GiB / 20 GB | the same for Rocky 10 (MAC `52:54:00:4b:52:24`, from `mit-server-rocky10`) |
+| (none in the table) | `.35` | `kerber-win` | Windows 11 | 8 GiB | defined by hand (plan-WIN); `lab.sh` does not know it, so read `virsh net-dumpxml kerber-lab` for the addresses in use, not this table |
 | `client1.kerber.test` | `.21` | `kerber-client1` | Fedora Kinoite 43 | 4 / 6 GiB / 40 GB | the fleet's client type (the reference client kit's twin), SPICE desktop |
 | `client2.kerber.test` | `.22` | `kerber-client2` | Fedora 43 Cloud | 2 / 3 GiB / 20 GB | sshd target, second NFS client, headless checks |
 | `klldap.kerber.test` | `.30` | `kerber-klldap` | Fedora 43 Cloud | 2 / 3 GiB / 30 GB | rootful Docker (`moby-engine`): KLLDAP with its own KDC (F3) |
@@ -172,7 +175,7 @@ harness/field/run.sh --profile load --ref main --leg both   # 600 s of load per 
 harness/field/run.sh --profile load-long --ref main --leg both   # the burn-in's load: 3600 s per leg
 harness/field/run.sh --profile lt --ref main --leg both   # restart, kdc-hostile, otp-default, rd-safe (lab.sh up kdc2 first; FIELD_RDSWEEP)
 harness/field/run.sh --grade-logs ~/kerber-lab/runs/<run>   # the log grader over a finished run
-(. harness/field/ds/deb13.env && harness/field/run.sh --profile ds --ref main --leg both)   # DS on Debian 13 (rocky10.env: Rocky 10)
+(. harness/field/ds/deb13.env && . harness/field/ds/deb13r.env && harness/field/run.sh --profile ds --ref main --leg both)   # DS on Debian 13 (rocky10*.env: Rocky 10): deb13 and deb13r up, kdc and kdc2 shut off
 (. harness/field/ds/deb13.env && harness/field/run.sh --profile kill-loop --ref main)   # DS's kill loop there
 ```
 
@@ -207,6 +210,11 @@ harness/field/run.sh --grade-logs ~/kerber-lab/runs/<run>   # the log grader ove
     read-only), rendered as MIT's FILE lines by `lib/journal-lines.py`, so the
     log rows read the same. `ds/<vm>.env` sets both, and the three snapshots
     `harness/hand/ds-baselines.sh` makes;
+  - with `FIELD_ROLE_KDC2=<vm>` too (DS's `ds/<vm>r.env`), the `kdc2` role is that
+    same-family replica, as `kdc`'s is: `lab.sh` maps `kdc2`, its snapshots are
+    checked there, and `pre.takeover.kdc2` moves `kdc2.kerber.test` to it until
+    `post.release.kdc2`. The postflight fails if either takeover file is left.
+    `replica` stops at setup when kdc moved without kdc2;
   - `lab.sh check --lab-only` of the VMs the selected scenarios use: ssh, DNS
     and reverse DNS, time sync, kdc's LAN filter. It never fetches from the
     internet, needs no LAN address and never probes the AD DC, so an outage

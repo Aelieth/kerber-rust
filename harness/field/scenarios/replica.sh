@@ -73,6 +73,13 @@ cleanup() {
     timeout -k 5 300 "$LAB" reset kdc2 "$KDC2_SNAP" < /dev/null > /dev/null 2>&1
     timeout -k 5 60 "$LAB" down kdc2 < /dev/null > /dev/null 2>&1
 }
+# DS: a kdc of another family needs a kdc2 of that family too (FIELD_ROLE_KDC2); the lab's own kdc2 is Fedora.
+if [ -n "${FIELD_ROLE_KDC:-}" ] && [ -z "${FIELD_ROLE_KDC2:-}" ]; then
+    _checkrow setup.kdc2.family FAIL "FIELD_ROLE_KDC2 set with FIELD_ROLE_KDC" 1 \
+        "kdc is $FIELD_ROLE_KDC and kdc2 is Fedora's: no replica of kdc's family; the leg stops here"
+    finish
+    exit 1
+fi
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -132,7 +139,11 @@ fi
 # replica's update log, which this port keeps in MIT's format.
 if [ "$LEG" = rust ]; then
     check kproplog.copied '^kproplog copied$' host "$LABQ ssh kdc -- 'cat /usr/sbin/kproplog' | $LABQ ssh kdc2 -- 'mkdir -p ~/rep-bin && install -m 0755 /dev/stdin ~/rep-bin/kproplog && echo kproplog copied'"
-    check kproplog.ldd '^kproplog: each library found$' run kdc2 "cd ~/rep-bin && if ldd kproplog | grep -q 'not found'; then { rpm -q cpio > /dev/null || sudo dnf -y -q install cpio > /dev/null 2>&1; }; rm -rf krb5-server-*.rpm usr && dnf download -q krb5-server > /dev/null 2>&1 && rpm2cpio krb5-server-*.rpm | cpio -id --quiet '*/kproplog' && install -m 0755 usr/*/kproplog kproplog && echo 'kproplog: unpacked from the fc44 rpm'; fi; ldd kproplog | grep -E 'libkadm5|libkdb5|not found'; ldd kproplog | grep -q 'not found' || echo 'kproplog: each library found'"
+    if [ "$KDC_FAMILY" = deb ]; then
+        check kproplog.ldd '^kproplog: each library found$' run kdc2 "cd ~/rep-bin && ldd kproplog | grep -E 'libkadm5|libkdb5|not found'; ldd kproplog | grep -q 'not found' || echo 'kproplog: each library found'"
+    else
+        check kproplog.ldd '^kproplog: each library found$' run kdc2 "cd ~/rep-bin && if ldd kproplog | grep -q 'not found'; then { rpm -q cpio > /dev/null || sudo dnf -y -q install cpio > /dev/null 2>&1; }; rm -rf krb5-server-*.rpm usr && dnf download -q krb5-server > /dev/null 2>&1 && rpm2cpio krb5-server-*.rpm | cpio -id --quiet '*/kproplog' && install -m 0755 usr/*/kproplog kproplog && echo 'kproplog: unpacked from the fc44 rpm'; fi; ldd kproplog | grep -E 'libkadm5|libkdb5|not found'; ldd kproplog | grep -q 'not found' || echo 'kproplog: each library found'"
+    fi
     KPL="sudo ~/rep-bin/kproplog"
 else
     KPL="sudo kproplog"
@@ -155,7 +166,7 @@ check primary.kt.kprop 'added to keytab' run kdc "sudo kadmin.local -q 'getprinc
 
 section "the replica: kdc2's keytab, the primary's stash, kdc.conf, krb5.conf, kpropd.acl, then kpropd"
 check replica.keytab '^keytab copied$' host "$LABQ ssh kdc -- 'sudo cat $W/kdc2.keytab' | $LABQ ssh kdc2 -- 'sudo install -m 0600 /dev/stdin /etc/krb5.keytab && sudo $RESTORECON /etc/krb5.keytab && echo keytab copied'"
-check replica.stash '^stash copied$' host "$LABQ ssh kdc -- 'sudo cat $KDCDIR/.k5.$REALM' | $LABQ ssh kdc2 -- 'sudo install -m 0600 /dev/stdin $KDCDIR/.k5.$REALM && sudo $RESTORECON $KDCDIR/.k5.$REALM && echo stash copied'"
+check replica.stash '^stash copied$' host "$LABQ ssh kdc -- $(printf '%q' "REALM=$REALM; $STASH_SH; sudo cat \"\$stash\"") | $LABQ ssh kdc2 -- 'sudo install -m 0600 /dev/stdin $KDCDIR/.k5.$REALM && sudo $RESTORECON $KDCDIR/.k5.$REALM && echo stash copied'"
 check replica.conf "^        iprop_port = $IPORT\$" run kdc2 "printf '[kdcdefaults]\\n    kdc_ports = 88\\n    kdc_tcp_ports = 88\\n\\n[realms]\\n    %s = {\\n        iprop_enable = true\\n        iprop_port = $IPORT\\n        iprop_replica_poll = 10s\\n    }\\n' $REALM | sudo tee $KC > /dev/null && printf '[libdefaults]\\n    default_realm = %s\\n    dns_lookup_kdc = false\\n\\n[realms]\\n    %s = {\\n        kdc = kdc.kerber.test\\n        admin_server = kdc.kerber.test\\n    }\\n' $REALM $REALM | sudo tee /etc/krb5.conf > /dev/null && echo 'host/kdc.kerber.test@$REALM' | sudo tee $KDCDIR/kpropd.acl > /dev/null && sudo cat $KC"
 # The log belongs to the ssh user, whose shell opens it for kpropd's output.
 check replica.kpropd '^kpropd listening on 754$' run kdc2 "sudo mkdir -p $W && sudo install -m 0644 -o \$(id -un) /dev/null $W/kpropd.log && $KPROPD for i in \$(seq 1 40); do ss -Hltn 'sport = :754' | grep -q . && break; sleep 0.25; done; ss -Hltn 'sport = :754' | grep -q . && echo 'kpropd listening on 754'"

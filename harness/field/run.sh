@@ -84,6 +84,7 @@ for s in "${SEL[@]}"; do [ -f "$HERE/scenarios/$s.sh" ] || die "missing scenario
 FIELD_ENV=$LAB_HOME/field.env
 # FIELD_ROLE_KDC=<vm> (DS: <vm> takes over kdc.kerber.test) comes from the environment only.
 ROLE_KDC=${FIELD_ROLE_KDC-}
+ROLE_KDC2=${FIELD_ROLE_KDC2-}
 if [ -f "$FIELD_ENV" ]; then
     [ "$(stat -c %a "$FIELD_ENV")" = 600 ] || die "$FIELD_ENV must be mode 0600"
     set -a
@@ -92,6 +93,7 @@ if [ -f "$FIELD_ENV" ]; then
     set +a
 fi
 if [ -n "$ROLE_KDC" ]; then export FIELD_ROLE_KDC=$ROLE_KDC; else unset FIELD_ROLE_KDC; fi
+if [ -n "$ROLE_KDC2" ]; then export FIELD_ROLE_KDC2=$ROLE_KDC2; else unset FIELD_ROLE_KDC2; fi
 SCEN_LIMIT=${FIELD_SCENARIO_TIMEOUT:-1800}
 REPO=${FIELD_REPO:-$(cd "$HERE/../.." && pwd)}
 SHA=$(GIT_OPTIONAL_LOCKS=0 git -C "$REPO" rev-parse --verify --quiet "$REF^{commit}") \
@@ -177,6 +179,11 @@ postflight() {
     local -a prune names desktop_excl
     section "postflight"
     if [ -n "$ROLE_KDC" ]; then check post.release rc host "$LABQ release"; fi
+    if [ -n "$ROLE_KDC2" ]; then check post.release.kdc2 rc host "$LABQ release kdc2"; fi
+    if [ -n "$ROLE_KDC$ROLE_KDC2" ]; then
+        check post.takeover.left '^takeovers left: 0$' host "printf 'takeovers left: %s\n' \"\$(ls \
+            $(printf '%q' "$LAB_HOME")/state/takeover* 2> /dev/null | wc -l)\""
+    fi
     krb5_sums > "$RUN/guards/krb5.conf.end"
     sides post.krb5.conf start "$RUN/guards/krb5.conf.start" end "$RUN/guards/krb5.conf.end" \
         && check post.krb5.conf rc host "diff $(printf '%q' "$RUN/guards/krb5.conf.start") $(printf '%q' "$RUN/guards/krb5.conf.end") && echo unchanged: && cat $(printf '%q' "$RUN/guards/krb5.conf.end")"
@@ -299,6 +306,7 @@ for var in "${SNAPVARS[@]}"; do
     vm=${var#*_SNAPSHOT_}
     vm=${vm,,}
     if [ "$vm" = kdc ] && [ -n "$ROLE_KDC" ]; then vm=$ROLE_KDC; fi
+    if [ "$vm" = kdc2 ] && [ -n "$ROLE_KDC2" ]; then vm=$ROLE_KDC2; fi
     snap=${!var}
     if awk -v vm="$vm" -v s="$snap" '$1 == vm { n = split($NF, a, ","); for (i = 1; i <= n; i++) if (a[i] == s) f = 1 }
             END { exit !f }' "$STATE/status"; then
@@ -316,6 +324,9 @@ if [ -n "$ROLE_KDC" ]; then
     else
         _checkrow pre.snapshot.KDC_BASE_SNAPSHOT FAIL present 1 "$ROLE_KDC has no snapshot $KDC_BASE_SNAPSHOT"
     fi
+fi
+if [ -n "$ROLE_KDC2" ]; then
+    check pre.takeover.kdc2 rc host "$LABQ takeover $(printf '%q' "$ROLE_KDC2") kdc2"
 fi
 if [ -n "$ROLE_KDC" ]; then
     check pre.takeover rc host "$LABQ takeover $(printf '%q' "$ROLE_KDC")"
