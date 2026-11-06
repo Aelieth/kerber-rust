@@ -126,7 +126,12 @@ and none on krbtgt (which would refuse the keytab login that gets the FAST armor
 `OtpVerifier::verify` runs on four shared `otp-verify` threads with a queue of 64.
 The KDC answers at the request's deadline and fails closed, but a verifier still
 running keeps its thread, so `verify` should return by `req.deadline` itself (for
-example, by setting its socket timeouts from it).
+example, by setting its socket timeouts from it). `verify` runs on a plain thread
+with no async runtime: an async verifier brings its own (a runtime `Handle`) and
+builds its futures, timers included, inside that runtime's `block_on`. The four
+workers bound OTP logins at about four per check-duration (a 1 s check allows
+about 4 a second), and once 64 are queued, a login fails with preauth failed
+(`OTP verifier queue full`).
 
 ## Logging and plugin sets
 
