@@ -843,7 +843,7 @@ pub use kdb_convert::{
     IpropUpdate, KdbeVal, ULOG_ADD_ATTRS, attr_bit, conv_2dbentry, conv_2logentry,
 };
 pub(crate) use kdb_convert::{encode_string_attrs, update_tl_data};
-pub use keys::{KeyEntry, KeyLookup, KtkdbError, ktkdb_get_entry, random_key};
+pub use keys::{KeyEntry, KeyLookup, KeySlot, KtkdbError, OpaqueKey, ktkdb_get_entry, random_key};
 pub use password::{
     PWQUAL_DICT, PWQUAL_EMPTY, PWQUAL_PRINC, PasswordPlan, PreparedPassword, S2K_ITERS,
     apply_keysalt_policy, change_password_shared,

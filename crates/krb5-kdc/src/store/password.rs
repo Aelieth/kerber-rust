@@ -10,7 +10,7 @@ use zeroize::Zeroizing;
 
 use super::flags::KDB_REQUIRES_PWCHANGE;
 use super::history::record_history;
-use super::keys::{KeyEntry, cap_key_versions, next_kvno};
+use super::keys::{KeyEntry, keep_old_keys, next_kvno};
 use super::policy::NamedPolicy;
 use super::principal::{Principal, TlData, default_mod_actor, refresh_kadm_tl, stamp_admin_tl};
 use super::{PrincipalStore, unix_now_u32};
@@ -261,6 +261,7 @@ fn same_record(a: &Principal, b: &Principal) -> bool {
         realm,
         keys,
         key_history,
+        opaque_keys,
         salt,
         max_life,
         pw_expire,
@@ -283,6 +284,7 @@ fn same_record(a: &Principal, b: &Principal) -> bool {
     } = a;
     same_keys(keys, &b.keys)
         && same_keys(key_history, &b.key_history)
+        && *opaque_keys == b.opaque_keys
         && *name == b.name
         && *realm == b.realm
         && *salt == b.salt
@@ -528,7 +530,7 @@ impl PrincipalStore {
         self.check_password_quality_in(&inputs.name, &inputs.realm, password, &mut syslog_note)?;
         let record = self.map.get(&inputs.id).ok_or(Error::NotFound)?.clone();
         Ok(PasswordPlan {
-            kvno: next_kvno(&record.keys),
+            kvno: next_kvno(&record),
             inputs,
             record,
             password: Zeroizing::new(password.to_vec()),
@@ -624,12 +626,7 @@ impl PrincipalStore {
             record_history(p, &old, nhist, hist_kvno, &hist_key)?;
             refresh_kadm_tl(p);
         }
-        if keepold > 0 {
-            p.keys.extend(old);
-            if keepold > 1 {
-                cap_key_versions(&mut p.keys, keepold);
-            }
-        }
+        keep_old_keys(p, old, keepold);
         p.attributes &= !KDB_REQUIRES_PWCHANGE;
         p.fail_auth_count = 0;
         stamp_admin_tl(p, true, actor);

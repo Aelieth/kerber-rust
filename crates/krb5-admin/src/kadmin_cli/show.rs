@@ -20,7 +20,48 @@ fn mod_name(p: &Principal) -> String {
 }
 
 fn kvno(p: &Principal) -> u32 {
-    p.keys.iter().map(|k| k.kvno).max().unwrap_or(0)
+    let opaque = p.opaque_keys.iter().map(|o| o.kvno);
+    p.keys
+        .iter()
+        .map(|k| k.kvno)
+        .chain(opaque)
+        .max()
+        .unwrap_or(0)
+}
+
+// MIT: `krb5int_enctypes_list` (lib/crypto/krb/etypes.c:37-75)
+fn legacy_enctype_name(etype: i32) -> Option<&'static str> {
+    match etype {
+        6 => Some("des3-cbc-raw"),
+        24 => Some("arcfour-hmac-exp"),
+        _ => None,
+    }
+}
+
+// MIT: `kadmin_getprinc` (kadmin/cli/kadmin.c:1505-1525)
+fn slot_fields(slot: krb5_kdc::KeySlot<'_>) -> Option<(u32, u32, i32, i32, String)> {
+    match slot {
+        krb5_kdc::KeySlot::Usable(k) => {
+            let deprecated = if k.etype.is_deprecated() {
+                "DEPRECATED:"
+            } else {
+                ""
+            };
+            let name = format!("{deprecated}{}", k.etype.to_mit_name());
+            let salt = k.salt_type.unwrap_or(0);
+            Some((key_ver(k), k.kvno, k.etype.to_iana(), salt, name))
+        }
+        krb5_kdc::KeySlot::Opaque(o) => {
+            let et = o.slots.first().map_or(0, |s| s.0);
+            let name = legacy_enctype_name(et).map_or_else(
+                || format!("UNSUPPORTED:<Encryption type 0x{et:x}>"),
+                |n| format!("DEPRECATED:{n}"),
+            );
+            let salt = o.slots.get(1).map_or(0, |s| s.0);
+            Some((u32::try_from(o.ver).unwrap_or(1), o.kvno, et, salt, name))
+        }
+        _ => None,
+    }
 }
 
 fn key_ver(k: &krb5_kdc::KeyEntry) -> u32 {
@@ -67,23 +108,15 @@ pub(crate) fn principal(p: &Principal, policy_missing: bool) -> String {
     );
     let _ = writeln!(o, "Last failed authentication: {}", never(p.last_failed));
     let _ = writeln!(o, "Failed password attempts: {}", p.fail_auth_count);
-    let _ = writeln!(o, "Number of keys: {}", p.keys.len());
-    for k in &p.keys {
-        let deprecated = if k.etype.is_deprecated() {
-            "DEPRECATED:"
+    let slots = p.key_slots();
+    let _ = writeln!(o, "Number of keys: {}", slots.len());
+    for (ver, kvno, _, st, name) in slots.into_iter().filter_map(slot_fields) {
+        let salt = if ver > 1 && st != 0 {
+            format!(":{}", salttype_name(st))
         } else {
-            ""
+            String::new()
         };
-        let salt = match k.salt_type {
-            Some(t) if key_ver(k) > 1 && t != 0 => format!(":{}", salttype_name(t)),
-            _ => String::new(),
-        };
-        let _ = writeln!(
-            o,
-            "Key: vno {}, {deprecated}{}{salt}",
-            k.kvno,
-            k.etype.to_mit_name()
-        );
+        let _ = writeln!(o, "Key: vno {kvno}, {name}{salt}");
     }
     let _ = writeln!(o, "MKey: vno {}", p.mkvno);
     let _ = writeln!(o, "Attributes:{}", flags_to_string(p.attributes));
@@ -117,21 +150,11 @@ pub(crate) fn principal_terse(p: &Principal) -> String {
         p.last_success.cast_signed(),
         p.last_failed.cast_signed(),
         p.fail_auth_count,
-        p.keys.len()
+        p.keys.len() + p.opaque_keys.len()
     );
-    for k in &p.keys {
-        let _ = write!(
-            o,
-            "\t{}\t{}\t{}\t{}",
-            key_ver(k),
-            k.kvno,
-            k.etype.to_iana(),
-            if key_ver(k) > 1 {
-                k.salt_type.unwrap_or(0)
-            } else {
-                0
-            }
-        );
+    for (ver, kvno, et, st, _) in p.key_slots().into_iter().filter_map(slot_fields) {
+        let st = if ver > 1 { st } else { 0 };
+        let _ = write!(o, "\t{ver}\t{kvno}\t{et}\t{st}");
     }
     o.push('\n');
     o

@@ -16,8 +16,8 @@ use crate::error::Error as KdcError;
 use crate::mkey::{MASTER_NAME, default_master_etype, master_key_from_password};
 use crate::osa::OsaPrincEnt;
 use crate::store::{
-    IPROP_NIL, IPROP_OK, KDB_DISALLOW_ALL_TIX, KDB_LOCKDOWN_KEYS, KadmData, KeyEntry, NamedPolicy,
-    Principal, PrincipalStore, TlData,
+    IPROP_NIL, IPROP_OK, KDB_DISALLOW_ALL_TIX, KDB_LOCKDOWN_KEYS, KadmData, KeyEntry, KeySlot,
+    NamedPolicy, OpaqueKey, Principal, PrincipalStore, TlData,
 };
 use crate::ulog::UlogLast;
 
@@ -330,13 +330,26 @@ impl DumpPrincipal {
     ) -> Result<(Principal, Option<RpcSid>), DumpError> {
         let (name, realm) = parse_unparsed(&self.name)?;
         let mut keys = Vec::new();
-        for kd in &self.keys {
+        let mut opaque_keys = Vec::new();
+        for (at, kd) in self.keys.iter().enumerate() {
             if kd.slots.is_empty() {
                 return Err(DumpError::Format("key_data with no slots".into()));
             }
             let key_slot = &kd.slots[0];
-            let etype =
-                EncryptionType::known(key_slot.ty).map_err(|e| DumpError::Crypto(e.to_string()))?;
+            // MIT: `krb5_dbe_def_search_enctype` (lib/kdb/kdb_default.c:81-85)
+            let Ok(etype) = EncryptionType::known(key_slot.ty) else {
+                opaque_keys.push(OpaqueKey {
+                    ver: kd.ver,
+                    kvno: kd.kvno,
+                    slots: kd
+                        .slots
+                        .iter()
+                        .map(|s| (s.ty, s.contents.clone()))
+                        .collect(),
+                    at,
+                });
+                continue;
+            };
             let raw = kdb_decrypt_key(mkey, &key_slot.contents)?;
             let key = ProtocolKey::from_bytes(etype, &raw)
                 .map_err(|e| DumpError::Crypto(e.to_string()))?;
@@ -365,8 +378,8 @@ impl DumpPrincipal {
         let salt = salt_of_keys(&keys, &name, &realm);
         let mkvno = mkvno_from_tl(&self.tl_data);
         let (sid, rid) = parse_sid_tl(&self.tl_data)?;
-        let osa =
-            OsaPrincEnt::from_tl(&self.tl_data).map_err(|e| DumpError::Format(e.to_string()))?;
+        // MIT: `process_k5beta7_princ` (kadmin/dbutil/dump.c:715-721)
+        let osa = OsaPrincEnt::from_tl(&self.tl_data).ok().flatten();
         let pw_policy = osa
             .as_ref()
             .and_then(|o| o.bound_policy().map(str::to_owned))
@@ -387,6 +400,7 @@ impl DumpPrincipal {
                 realm,
                 keys,
                 key_history,
+                opaque_keys,
                 salt,
                 max_life: u64::from(self.max_life),
                 pw_expire: self.pw_expiration,
@@ -1275,7 +1289,23 @@ pub(crate) fn salt_of_keys(keys: &[KeyEntry], name: &PrincipalName, realm: &str)
 // MIT: `krb5_dbe_compute_salt` (lib/kdb/kdb5.c:2345-2388)
 #[must_use]
 pub fn key_salt(key: &KeyEntry, name: &PrincipalName, realm: &str) -> Vec<u8> {
-    match key.salt_type.unwrap_or(SALTTYPE_NORMAL) {
+    slot_salt(key.salt_type, key.kdb_salt.as_deref(), name, realm)
+}
+
+fn opaque_salt(o: &OpaqueKey) -> (Option<i32>, Option<&[u8]>) {
+    match o.slots.get(1) {
+        Some((ty, salt)) if o.ver >= 2 => (Some(*ty), Some(salt.as_slice())),
+        _ => (None, None),
+    }
+}
+
+fn slot_salt(
+    salt_type: Option<i32>,
+    kdb_salt: Option<&[u8]>,
+    name: &PrincipalName,
+    realm: &str,
+) -> Vec<u8> {
+    match salt_type.unwrap_or(SALTTYPE_NORMAL) {
         SALTTYPE_NOREALM => {
             let mut salt = Vec::new();
             for part in &name.name_string {
@@ -1284,7 +1314,7 @@ pub fn key_salt(key: &KeyEntry, name: &PrincipalName, realm: &str) -> Vec<u8> {
             salt
         }
         SALTTYPE_ONLYREALM => realm.as_bytes().to_vec(),
-        SALTTYPE_SPECIAL => key.kdb_salt.clone().unwrap_or_default(),
+        SALTTYPE_SPECIAL => kdb_salt.map(<[u8]>::to_vec).unwrap_or_default(),
         _ => name.default_salt(realm),
     }
 }
@@ -1298,13 +1328,22 @@ fn known_salt(salt_type: Option<i32>) -> bool {
 
 // MIT: `krb5_dbe_specialize_salt` (lib/kdb/kdb5.c:2391-2419)
 pub(crate) fn specialize_salts(p: &mut Principal) -> Result<(), KdcError> {
-    if p.keys.iter().any(|k| !known_salt(k.salt_type)) {
+    if p.keys.iter().any(|k| !known_salt(k.salt_type))
+        || p.opaque_keys.iter().any(|o| !known_salt(opaque_salt(o).0))
+    {
         return Err(KdcError::InvalidArgument("Unsupported salt type".into()));
     }
     for k in &mut p.keys {
         let salt = key_salt(k, &p.name, &p.realm);
         k.salt_type = Some(SALTTYPE_SPECIAL);
         k.kdb_salt = Some(salt);
+    }
+    for o in &mut p.opaque_keys {
+        let (ty, kdb) = opaque_salt(o);
+        let salt = slot_salt(ty, kdb, &p.name, &p.realm);
+        o.slots.truncate(1);
+        o.slots.push((SALTTYPE_SPECIAL, salt));
+        o.ver = 2;
     }
     p.salt = p
         .keys
@@ -1365,7 +1404,23 @@ fn write_princ_record(
         merge_hist_tl(&mut tl, &p.key_history, mkey)?;
     }
     let mut keys = Vec::new();
-    for k in &p.keys {
+    for slot in p.key_slots() {
+        let k = match slot {
+            KeySlot::Usable(k) => k,
+            // MIT: `k5beta7_common` (kadmin/dbutil/dump.c:351-361)
+            KeySlot::Opaque(o) => {
+                let slots = o.slots.iter().map(|(ty, c)| DumpKeySlot {
+                    ty: *ty,
+                    contents: c.clone(),
+                });
+                keys.push(DumpKeyData {
+                    ver: o.ver,
+                    kvno: o.kvno,
+                    slots: slots.collect(),
+                });
+                continue;
+            }
+        };
         let enc = kdb_encrypt_key(mkey, k.key.as_bytes())?;
         let mut slots = vec![DumpKeySlot {
             ty: k.etype.to_iana(),

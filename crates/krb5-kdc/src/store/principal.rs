@@ -6,7 +6,7 @@ use krb5_crypto::{EncryptionType, KeySalt};
 use krb5_types::PrincipalName;
 
 use super::flags::{KDB_DISALLOW_ALL_TIX, KDB_REQUIRES_PRE_AUTH, KDB_V1_BASE_LENGTH};
-use super::keys::{KeyEntry, KeyLookup, random_keys};
+use super::keys::{KeyEntry, KeyLookup, OpaqueKey, random_keys};
 use super::password::{apply_keysalt_policy, c_password, keys_from_password};
 use super::policy::NamedPolicy;
 use super::{PrincipalStore, kadm5_mask, unix_now_u32};
@@ -104,11 +104,13 @@ impl KadmData {
 
 /// Unix seconds, 0 never; max_life 0: no limit; renewable life 0: no renewal.
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct Principal {
     pub name: PrincipalName,
     pub realm: String,
     pub keys: Vec<KeyEntry>,
     pub key_history: Vec<KeyEntry>,
+    pub opaque_keys: Vec<OpaqueKey>,
     pub salt: Vec<u8>,
     pub max_life: u64,
     pub pw_expire: u32,
@@ -137,6 +139,7 @@ impl std::fmt::Debug for Principal {
             .field("realm", &self.realm)
             .field("keys", &self.keys.len())
             .field("key_history", &self.key_history.len())
+            .field("opaque_keys", &self.opaque_keys.len())
             .field("salt", &self.salt.len())
             .field("max_life", &self.max_life)
             .field("pw_expire", &self.pw_expire)
@@ -221,6 +224,7 @@ impl Principal {
             realm,
             keys,
             key_history: Vec::new(),
+            opaque_keys: Vec::new(),
             salt,
             max_life,
             pw_expire,

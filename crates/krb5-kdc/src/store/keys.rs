@@ -27,6 +27,48 @@ pub struct KeyEntry {
     pub kdb_salt: Option<Vec<u8>>,
 }
 
+// MIT: `process_k5beta7_princ` (kadmin/dbutil/dump.c:729-766)
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct OpaqueKey {
+    pub ver: i32,
+    pub kvno: u32,
+    pub slots: Vec<(i32, Vec<u8>)>,
+    pub at: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub enum KeySlot<'a> {
+    Usable(&'a KeyEntry),
+    Opaque(&'a OpaqueKey),
+}
+
+impl KeySlot<'_> {
+    #[must_use]
+    pub fn kvno(&self) -> u32 {
+        match self {
+            Self::Usable(k) => k.kvno,
+            Self::Opaque(o) => o.kvno,
+        }
+    }
+}
+
+pub(crate) fn merge_slots<'a>(keys: &'a [KeyEntry], opaque: &'a [OpaqueKey]) -> Vec<KeySlot<'a>> {
+    let mut slots: Vec<KeySlot<'a>> = keys.iter().map(KeySlot::Usable).collect();
+    for o in opaque {
+        slots.insert(o.at.min(slots.len()), KeySlot::Opaque(o));
+    }
+    slots
+}
+
+impl Principal {
+    #[must_use]
+    pub fn key_slots(&self) -> Vec<KeySlot<'_>> {
+        merge_slots(&self.keys, &self.opaque_keys)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KeyLookup {
     NoMatchingKey,
@@ -143,22 +185,61 @@ impl KeyEntry {
     }
 }
 
+fn kvnos(p: &Principal) -> impl Iterator<Item = u32> + '_ {
+    let opaque = p.opaque_keys.iter().map(|o| o.kvno);
+    p.keys.iter().map(|k| k.kvno).chain(opaque)
+}
+
 // MIT: `rekey` (lib/kdb/kdb_cpw.c:355-362)
-pub(super) fn next_kvno(keys: &[KeyEntry]) -> u32 {
-    match keys.iter().map(|k| k.kvno).max() {
+pub(super) fn next_kvno(p: &Principal) -> u32 {
+    match kvnos(p).max() {
         Some(n) if n >= 65535 => 1,
         Some(n) => n + 1,
         None => 1,
     }
 }
 
-pub(super) fn cap_key_versions(keys: &mut Vec<KeyEntry>, n: u32) {
-    let mut kvnos: Vec<u32> = keys.iter().map(|k| k.kvno).collect();
-    kvnos.sort_unstable();
-    kvnos.dedup();
-    kvnos.reverse();
-    let keep: std::collections::HashSet<u32> = kvnos.into_iter().take(n as usize).collect();
-    keys.retain(|k| keep.contains(&k.kvno));
+// MIT: `rekey` (lib/kdb/kdb_cpw.c:381-385)
+pub(super) fn keep_old_keys(p: &mut Principal, old: Vec<KeyEntry>, keepold: u32) {
+    if keepold == 0 {
+        p.opaque_keys.clear();
+        return;
+    }
+    let added = p.keys.len();
+    p.keys.extend(old);
+    for o in &mut p.opaque_keys {
+        o.at += added;
+    }
+    if keepold > 1 {
+        cap_key_versions(p, keepold);
+    }
+}
+
+pub(super) fn cap_key_versions(p: &mut Principal, n: u32) {
+    let mut all: Vec<u32> = kvnos(p).collect();
+    all.sort_unstable();
+    all.dedup();
+    all.reverse();
+    let keep: std::collections::HashSet<u32> = all.into_iter().take(n as usize).collect();
+    retain_slots(p, |kvno| keep.contains(&kvno));
+}
+
+fn retain_slots(p: &mut Principal, keep: impl Fn(u32) -> bool) {
+    let mut slots: Vec<Result<KeyEntry, OpaqueKey>> =
+        std::mem::take(&mut p.keys).into_iter().map(Ok).collect();
+    for o in std::mem::take(&mut p.opaque_keys) {
+        slots.insert(o.at.min(slots.len()), Err(o));
+    }
+    slots.retain(|s| keep(s.as_ref().map_or_else(|o| o.kvno, |k| k.kvno)));
+    for (at, s) in slots.into_iter().enumerate() {
+        match s {
+            Ok(k) => p.keys.push(k),
+            Err(mut o) => {
+                o.at = at;
+                p.opaque_keys.push(o);
+            }
+        }
+    }
 }
 
 // MIT: `krb5_c_make_random_key` (lib/crypto/krb/make_random_key.c:31-76)
@@ -310,7 +391,7 @@ impl PrincipalStore {
         }
         let id = self.canonical_id(name, princ_realm)?;
         let existing = self.map.get(&id).ok_or(Error::NotFound)?;
-        let kvno = next_kvno(&existing.keys);
+        let kvno = next_kvno(existing);
         let allowed = existing
             .pw_policy
             .as_ref()
@@ -335,12 +416,7 @@ impl PrincipalStore {
         {
             let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
             let old = std::mem::replace(&mut p.keys, new_keys.clone());
-            if keepold > 0 {
-                p.keys.extend(old);
-                if keepold > 1 {
-                    cap_key_versions(&mut p.keys, keepold);
-                }
-            }
+            keep_old_keys(p, old, keepold);
             // MIT: `kadm5_randkey_principal_3` (lib/kadm5/srv/svr_principal.c:1452-1475)
             p.attributes &= !KDB_REQUIRES_PWCHANGE;
             p.fail_auth_count = 0;
@@ -395,12 +471,13 @@ impl PrincipalStore {
         self.inside_change()?;
         let id = self.canonical_id(name, princ_realm)?;
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
+        // MIT: `kadm5_purgekeys` (lib/kadm5/srv/svr_principal.c:1958-1985)
         let keep = if keepkvno <= 0 {
-            p.keys.iter().map(|k| k.kvno).max().unwrap_or(0)
+            kvnos(p).max().unwrap_or(0)
         } else {
             u32::try_from(keepkvno).unwrap_or(u32::MAX)
         };
-        p.keys.retain(|k| k.kvno >= keep);
+        retain_slots(p, |kvno| kvno >= keep);
         stamp_admin_tl(p, false, actor);
         let snap = p.clone();
         self.note_ulog(id, false, Some(snap));
@@ -443,8 +520,8 @@ impl PrincipalStore {
         let id = self.canonical_id(name, princ_realm)?;
         let p = self.map.get(&id).ok_or(Error::NotFound)?;
         let kvno = if want == 0 {
-            next_kvno(&p.keys)
-        } else if want > 65535 || keepold > 0 && p.keys.iter().any(|k| k.kvno == want) {
+            next_kvno(p)
+        } else if want > 65535 || keepold > 0 && kvnos(p).any(|k| k == want) {
             return Err(Error::Crypto("setkey kvno".into()));
         } else {
             want
@@ -478,15 +555,8 @@ impl PrincipalStore {
             for k in &mut keys {
                 k.kvno = kvno;
             }
-            if keepold > 0 {
-                let old = std::mem::replace(&mut p.keys, keys);
-                p.keys.extend(old);
-                if keepold > 1 {
-                    cap_key_versions(&mut p.keys, keepold);
-                }
-            } else {
-                p.keys = keys;
-            }
+            let old = std::mem::replace(&mut p.keys, keys);
+            keep_old_keys(p, old, keepold);
             p.attributes &= !KDB_REQUIRES_PWCHANGE;
             p.fail_auth_count = 0;
             stamp_admin_tl(p, true, actor);

@@ -133,7 +133,7 @@ wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 
 Counts:
 **608** = A1 133 + A2 94 + A3 122 + A4 69 + A5 36 + B1 154.
-exact 477 · stricter-documented 24 · deviation 38 ·
+exact 477 · stricter-documented 23 · deviation 39 ·
 absent 3 · deferred 66.
 
 When the ledger was split into these files, the one-file A4 (153 rows,

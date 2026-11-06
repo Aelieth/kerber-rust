@@ -40,6 +40,7 @@ any other `###` heading.
 - **kdc.** A renewal at the second of `renew_till` is granted, as MIT; it was refused.
 - **kdc.** A dump that won't load names its record and error, as MIT; it blamed the stash key.
 - **kdc, kpropd.** An error reply that fails to encode isn't sent and is logged, as MIT; it went out empty.
+- **kdc.** A dump or iprop update keeps unsupported key slots and bad KADM_DATA, as MIT; it was refused.
 
 ### Removed
 

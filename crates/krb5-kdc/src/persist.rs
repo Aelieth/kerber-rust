@@ -1070,6 +1070,12 @@ pub fn save_store_legacy_kdb3(
     db_path: &Path,
     stash_path: &Path,
 ) -> Result<(), PersistError> {
+    if let Some(p) = store_iter(store).find(|p| !p.opaque_keys.is_empty()) {
+        let id = p.id();
+        return Err(PersistError::Format(format!(
+            "{id}: an unsupported key slot"
+        )));
+    }
     let master = if stash_path.exists() {
         load_stash_etype(stash_path, EncryptionType::Aes256CtsHmacSha196)?
     } else {

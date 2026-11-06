@@ -42,8 +42,9 @@ current key, for the caller to write.
 
 After bootstrap, keep no master key: drop `Bootstrapped.master`, and don't read the
 stash, parse a dump, or use `PrincipalStore::persist_paths` yourself; the store does
-all three. Back the stash and the database up together. `Bootstrapped` and
-`MasterKey` are `#[non_exhaustive]`, so a later field or variant doesn't break a build.
+all three. Back the stash and the database up together. `Bootstrapped`, `MasterKey`,
+`Principal`, `OpaqueKey` and `KeySlot` are `#[non_exhaustive]`, so a later field or variant
+doesn't break a build: build a `Principal` with `PrincipalBuilder`.
 
 `create_database` writes the stash (a temp file renamed into place, mode 0600),
 then both lock files, then the database by renaming a finished temp file into
