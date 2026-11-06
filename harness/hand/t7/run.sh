@@ -45,7 +45,7 @@ run() { # label count samples ops...
 }
 
 {
-    printf 'start %s host=%s cpus=%s dry=%s\n' "$(date -u +%FT%TZ)" "$(hostname)" \
+    printf 'start %s host=%s cpus=%s dry=%s\n' "$(date -u +%FT%TZ)" "$(hostname -s)" \
         "$(taskset -pc $$ 2>/dev/null | sed 's/.*: //')" "${T7_DRY:-0}"
     printf 'commit %s dirty=%s\n' "$(git -C "$HERE" rev-parse HEAD)" \
         "$(git -C "$HERE" status --porcelain --untracked-files=no | grep -q . && echo yes || echo no)"

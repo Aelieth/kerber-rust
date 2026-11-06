@@ -773,17 +773,17 @@ const OPS: &[OpDef] = &[
     #[cfg(feature = "pk")]
     op("ecdsa-secp256k1", Kind::Ecdsa(pk::K256)),
     #[cfg(feature = "pk")]
-    op("ecdsa-bp256r1", Kind::Ecdsa(pk::BP256R1)),
+    report_only("ecdsa-bp256r1", Kind::Ecdsa(pk::BP256R1)),
     #[cfg(feature = "pk")]
-    op("ecdsa-bp256t1", Kind::Ecdsa(pk::BP256T1)),
+    report_only("ecdsa-bp256t1", Kind::Ecdsa(pk::BP256T1)),
     #[cfg(feature = "pk")]
-    op("ecdsa-bp384r1", Kind::Ecdsa(pk::BP384R1)),
+    report_only("ecdsa-bp384r1", Kind::Ecdsa(pk::BP384R1)),
     #[cfg(feature = "pk")]
-    op("ecdsa-bp384t1", Kind::Ecdsa(pk::BP384T1)),
+    report_only("ecdsa-bp384t1", Kind::Ecdsa(pk::BP384T1)),
     #[cfg(feature = "pk")]
-    op("ecdsa-bp512r1", Kind::Ecdsa(pk::BP512R1)),
+    report_only("ecdsa-bp512r1", Kind::Ecdsa(pk::BP512R1)),
     #[cfg(feature = "pk")]
-    op("ecdsa-bp512t1", Kind::Ecdsa(pk::BP512T1)),
+    report_only("ecdsa-bp512t1", Kind::Ecdsa(pk::BP512T1)),
     #[cfg(feature = "pk")]
     op("ecdsa-bp256r1-k", Kind::EcdsaK(pk::BP256R1)),
     #[cfg(feature = "pk")]

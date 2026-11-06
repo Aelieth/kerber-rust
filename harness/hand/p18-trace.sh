@@ -1,12 +1,12 @@
 #!/bin/bash
 # One iprop-on N=10 kadmind strace, MIT then ours (the build under test).
-# strace -f from exec. Run as root on klldap. Does not reseed beyond session.sh.
+# strace -f from exec. Run as root on klldap, after lib/p18-stage.sh.
 set -u
 set -o pipefail
 B=/srv/p18
 P=${PREFIX_DIR}/sbin
 export KRB5_CONFIG=$B/krb5.conf KRB5_KDC_PROFILE=$B/kdc.conf
-cp -a "$B/kdc-iprop.conf" "$B/kdc.conf"
+cp -a "$B/kdc-iprop.conf" "$B/kdc.conf"; cmp -s "$B/kdc.conf" "$B/kdc-iprop.conf" || { echo "KDC_CONF_DIFF on"; exit 3; }
 
 load_and_hash() {
     local name="$1" p="$2" wk="$3" wa="$4"
@@ -88,7 +88,7 @@ EOF
 run() {
     local leg="$1" tag="$2"
     echo "BEGIN $tag"
-    cp -a "$B/kdc-iprop.conf" "$B/kdc.conf"
+    cp -a "$B/kdc-iprop.conf" "$B/kdc.conf"; cmp -s "$B/kdc.conf" "$B/kdc-iprop.conf" || { echo "KDC_CONF_DIFF on"; exit 3; }
     if ! bash /var/tmp/p18/session.sh "$leg" 10 "$tag" 30 - none; then
         echo "SESSION_RC:1 $tag"
         exit 2

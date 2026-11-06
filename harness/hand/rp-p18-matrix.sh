@@ -17,16 +17,18 @@ echo "REC:$REC"
 echo "COMMIT:$PHASEC_SHA"
 echo "TREE:$(git -C "$WT" rev-parse 'HEAD^{tree}')"
 echo "MATRIX_START $(TZ=America/Chicago date '+%H:%M:%S')"
-lab ssh klldap -- "sudo -n test -f /srv/p18/seed/N10.dump && sudo -n test -f /srv/p18/seed/N1000.dump && sudo -n test -f /srv/p18/seed/N5000.dump && sudo -n test -x /var/tmp/p18/session.sh && sudo -n test -x /var/tmp/p18/probe-session.sh && sudo -n test -x /opt/p18-${PHASEC_SHA:0:12}/sbin/krb5kdc && echo SEEDS_OK"
-echo "SEED_RC:$?"
+bash "$HDIR/lib/p18-stage.sh" "$WT" || exit 2
+lab ssh klldap -- "sudo -n test -x /opt/p18-${PHASEC_SHA:0:12}/sbin/krb5kdc" \
+    || { echo "P18_STOP missing /opt/p18-${PHASEC_SHA:0:12}: run rp-p18-go.sh first"; exit 2; }
+bash "$HDIR/lib/p18-quiet.sh" "$WT"
 lab ssh klldap -- "sudo -n PREFIX=/opt/p18-${PHASEC_SHA:0:12} bash -s" << 'EOS'
 set -u
 B=/srv/p18
 EAT=$(ls -1 /usr/lib64/libeatmydata.so* | head -1)
 echo "EAT:$EAT"
 test -f "$EAT" || { echo "no eatmydata"; exit 2; }
-off() { cp -a "$B/kdc-off.conf" "$B/kdc.conf"; }
-on() { cp -a "$B/kdc-iprop.conf" "$B/kdc.conf"; }
+off() { cp -a "$B/kdc-off.conf" "$B/kdc.conf"; cmp -s "$B/kdc.conf" "$B/kdc-off.conf" || { echo "KDC_CONF_DIFF off"; exit 3; }; }
+on() { cp -a "$B/kdc-iprop.conf" "$B/kdc.conf"; cmp -s "$B/kdc.conf" "$B/kdc-iprop.conf" || { echo "KDC_CONF_DIFF on"; exit 3; }; }
 run() {
     local leg="$1" n="$2" tag="$3" kenv="$4" trace="$5" script="$6"
     echo "BEGIN $tag"

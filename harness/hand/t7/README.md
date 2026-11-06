@@ -50,6 +50,9 @@ counts), `--crosscheck` (the port of dudect-bencher 0.7.0's statistics against t
 - `instructions`: equal means at |t| < 4.5, the fixed class's spread quoted.
 - `cycles`: the same-seed dudect over 3 seeds; a residual under 0.1% is report-only.
 - DES3, RC4 and Camellia are `report-only`: printed, never judged.
+- So are the six whole-op brainpool signing ops, `ecdsa-bp{256,384,512}{r1,t1}`: RFC 6979 redraws k
+  at or above n on about a third of draws on a brainpool order. Their `-k` rows time the arithmetic
+  alone and are judged.
 
 ## Output
 

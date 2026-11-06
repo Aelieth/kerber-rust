@@ -19,6 +19,7 @@ Environment (each driver takes the 40-hex sha of the build under test as `$1`):
 Drivers:
 - `rp-plw-mit.sh`: power-loss, MIT replica: a kill control, then 20 virsh-destroy cycles with iprop.
 - `rp-plw-rust.sh`: the same power-loss cell with our kdb/kpropd/kadmin.local streamed onto the replica.
+- The p18 legs run in order: `rp-p18-go.sh` first, then `rp-p18-diag.sh` or `rp-p18-matrix.sh`. Each calls `lib/p18-stage.sh`, which stages on klldap only what is absent: MIT 1.22.2's packages, `strace` and `libeatmydata`; `harness/field/p18/`'s layout (`vm-setup.sh`), seeds (`seed.sh`) and session scripts; and, for go, `docs/install.md`'s prerequisites. It prints `P18_STAGED` and the hash of each script it sent. A new seed is a new P18.TEST realm. Diag and the matrix print `P18_QUIET` (klldap's running containers and `dnf-makecache.timer`), which they leave as they are.
 - `rp-p18-diag.sh`: write speed, one cell (N=10, iprop on, 5 rounds, MIT first).
 - `rp-p18-matrix.sh`: write speed, the untraced MIT-vs-ours grade (N=10/1000/5000, 3 reps).
 - `rp-p18-go.sh`: installs the build under /opt on the klldap VM, then runs `p18-trace.sh`.

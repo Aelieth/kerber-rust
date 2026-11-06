@@ -1,6 +1,6 @@
 #!/bin/bash
-# One cell: N=10, iprop on, 5 rounds, MIT first.
-# Not a regrade. Does not reseed. Does not reset klldap.
+# One cell: N=10, iprop on, 5 rounds, MIT first. Not a regrade. Does not reset klldap.
+# Run after rp-p18-go.sh. lib/p18-stage.sh stages what is absent; a new seed is a new P18.TEST realm.
 set -u
 PHASEC_SHA=${1:?phasec sha}
 HDIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -18,12 +18,13 @@ echo "REC:$REC"
 echo "COMMIT:$PHASEC_SHA"
 echo "TREE:$(git -C "$WT" rev-parse 'HEAD^{tree}')"
 echo "DIAG_START $(TZ=America/Chicago date '+%H:%M:%S')"
-lab ssh klldap -- "sudo -n test -f /srv/p18/seed/N10.dump && sudo -n test -f /srv/p18/kdc-iprop.conf && sudo -n test -x /var/tmp/p18/session.sh && sudo -n test -x /opt/p18-${PHASEC_SHA:0:12}/sbin/krb5kdc && echo SEEDS_OK"
-echo "SEED_RC:$?"
+bash "$HDIR/lib/p18-stage.sh" "$WT" || exit 2
+lab ssh klldap -- "sudo -n test -x /opt/p18-${PHASEC_SHA:0:12}/sbin/krb5kdc" \
+    || { echo "P18_STOP missing /opt/p18-${PHASEC_SHA:0:12}: run rp-p18-go.sh first"; exit 2; }
+bash "$HDIR/lib/p18-quiet.sh" "$WT"
 lab ssh klldap -- "sudo -n PREFIX=/opt/p18-${PHASEC_SHA:0:12} bash -s" << 'EOS'
 set -u
 B=/srv/p18
-off() { cp -a "$B/kdc-off.conf" "$B/kdc.conf"; }
 on() { cp -a "$B/kdc-iprop.conf" "$B/kdc.conf"; }
 run() {
     local leg="$1" n="$2" tag="$3" kenv="$4" trace="$5" script="$6"

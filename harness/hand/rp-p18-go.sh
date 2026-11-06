@@ -1,6 +1,7 @@
 #!/bin/bash
 # Installs the build under test under /opt (docs/install.md), then the MIT-first iprop kadmind strace.
-# Does not reseed /srv/p18. Leaves /usr/local and the older guest trees alone.
+# lib/p18-stage.sh --build stages what is absent, the toolchain from docs/install.md's prerequisites
+# included; a new seed is a new P18.TEST realm. Leaves /usr/local and the older guest trees alone.
 set -u
 PHASEC_SHA=${1:?phasec sha}
 HDIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -18,10 +19,7 @@ echo "GO_START $(TZ=America/Chicago date '+%H:%M:%S')"
 echo "COMMIT:$(git -C "$WT" rev-parse HEAD)"
 echo "TREE:$(git -C "$WT" rev-parse 'HEAD^{tree}')"
 
-lab ssh klldap -- 'sudo -n test -f /srv/p18/seed/N10.dump && sudo -n test -x /var/tmp/p18/session.sh && echo SEEDS_OK'
-seed_rc=$?
-echo "SEED_RC:$seed_rc"
-if [ "$seed_rc" != 0 ]; then
+if ! bash "$HDIR/lib/p18-stage.sh" "$WT" --build; then
     echo "GO_END $(TZ=America/Chicago date '+%H:%M:%S')"
     exit 1
 fi
