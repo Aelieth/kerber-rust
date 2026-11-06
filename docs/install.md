@@ -145,14 +145,14 @@ In the checkout built as in [Build](#build), replace krb5-server (the usual case
 ### Replacing krb5-server
 
 ```sh
-sudo dnf remove -y --no-autoremove krb5-server
+sudo dnf remove -y --setopt=clean_requirements_on_remove=False krb5-server
 sudo make install PREFIX=/usr
 ```
 
-When krb5-server is not installed, dnf says so and nothing changes. `--no-autoremove` keeps the
-packages krb5-server pulled in; `krb5-workstation` and `krb5-libs` stay, and with them `kadmin`
-and `libkadm5clnt`. If this host already runs an MIT realm, follow
-[Upgrading an MIT realm](#upgrading-an-mit-realm) instead.
+When krb5-server is not installed, dnf says so and nothing changes. The option keeps the packages
+krb5-server pulled in; `krb5-workstation` and `krb5-libs` stay, and with them `kadmin` and
+`libkadm5clnt`. Fedora's dnf5 and Rocky's dnf 4 both take it. If this host already runs an MIT
+realm, follow [Upgrading an MIT realm](#upgrading-an-mit-realm) instead.
 
 ### Replacing krb5-server on Rocky Linux
 
@@ -639,7 +639,7 @@ realm:
 ```sh
 sudo systemctl stop krb5kdc kadmin
 sudo kdb5_util dump /var/kerberos/krb5kdc/mit-realm.dump
-sudo dnf remove -y --no-autoremove krb5-server
+sudo dnf remove -y --setopt=clean_requirements_on_remove=False krb5-server
 ```
 
 The dump is MIT's version 7 text: every principal and policy, with the keys still encrypted in

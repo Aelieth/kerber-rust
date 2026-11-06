@@ -48,7 +48,7 @@ case $FAMILY in
         ENVFILES='krb5kdc kadmin kprop'
         CONFMODE=0600
         DIRMODE=0755
-        REMOVE='sudo dnf remove --no-autoremove krb5-server'
+        REMOVE='sudo dnf remove --setopt=clean_requirements_on_remove=False krb5-server'
         ;;
     deb)
         UNITS='krb5-kdc krb5-admin-server krb5-kpropd'
