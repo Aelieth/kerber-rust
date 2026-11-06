@@ -129,15 +129,30 @@ wait_ntp() {
     return 1
 }
 on() { "$LAB" ssh "$1" -- "$2" < /dev/null; }
-# units <vm> <kdc unit> <admin unit>: both active within 60 s.
+# units <vm> <kdc unit> <admin unit>: both active within 60 s. Each answer goes to the phase's units.out; a miss
+# adds the units' status and boot journal, kpropd's with them.
 units() {
-    local i=0
+    local i=0 got
     while [ "$i" -lt 30 ]; do
-        [ "$(on "$1" "systemctl is-active $2 $3 | paste -sd' ' -" 2> /dev/null)" = 'active active' ] && return 0
+        got=$(on "$1" "systemctl is-active $2 $3 | paste -sd' ' -" 2> /dev/null)
+        echo "is-active $2 $3: $got" >> "$REC/$PH/units.out"
+        [ "$got" = 'active active' ] && return 0
         sleep 2
         i=$((i + 1))
     done
+    echo "UNITS:$PH:$got"
+    on "$1" "systemctl is-enabled $2 $3 $UNIT_KPROP; sudo systemctl status --no-pager $2 $3 $UNIT_KPROP; \
+        sudo journalctl -b --no-pager -u $2 -u $3 -u $UNIT_KPROP" > "$REC/$PH/units-miss.out" 2>&1
     return 1
+}
+# kpropd_off: Debian's krb5-kpropd is enabled on install and conflicts with krb5-admin-server, so a boot starts only
+# one; a primary keeps it off, as Fedora's kprop is.
+kpropd_off() {
+    [ "$FAM" = deb ] || return 0
+    on "$VM" "if systemctl cat $UNIT_KPROP > /dev/null 2>&1; then sudo systemctl disable --now $UNIT_KPROP; fi; \
+        echo \"kpropd: \$(systemctl is-enabled $UNIT_KPROP 2> /dev/null) \$(systemctl is-active $UNIT_KPROP)\"" \
+        > "$REC/$PH/kpropd-off.out" 2>&1 || bad "$PH:kpropd-off"
+    echo "KPROPD:$PH:$(tail -n 1 "$REC/$PH/kpropd-off.out")"
 }
 
 # doc <vm> <name> <heading> <n> [docblocks options]: block n of a docs/install.md section, run on the VM as the
@@ -313,6 +328,7 @@ phase_mit() {
     set_hostname
     # shellcheck disable=SC2086
     pkgs $BASE_PKGS $MIT_PKGS
+    kpropd_off
     if [ "$FAM" = deb ]; then doc "$VM" krb5conf-deb "$DOC_KRB5CONF" 1 || return; fi
     doc "$VM" krb5conf '### krb5.conf' 1 "${REALM_VARS[@]}" || return
     doc "$VM" kdcconf "$KDCCONF" 1 "${REALM_VARS[@]}" || return
@@ -337,6 +353,7 @@ phase_rust() {
     set_hostname
     # shellcheck disable=SC2086
     pkgs $BASE_PKGS
+    kpropd_off
     DOCS=$REC/$PH/install.md
     GIT_OPTIONAL_LOCKS=0 git -C "$WT" show "$RUST_PIN:docs/install.md" > "$DOCS" || { bad "$PH:pin-docs"; return; }
     echo "PIN:$PH:$RUST_PIN"
