@@ -135,7 +135,7 @@ pub use store::{
     AT_PW_HIST, AT_PW_HIST_KVNO, AT_PW_LAST_CHANGE, AT_PW_POLICY, AT_PW_POLICY_SWITCH, AT_TL_DATA,
     IncrLayout, IpropRole, IpropUpdate, KdbeVal, KeyWrap, LoggedWrite, PreparedLog, ULOG_ADD_ATTRS,
     UlogTime, XdrError, attr_bit, conv_2dbentry, conv_2logentry, decode_incr_update,
-    decode_kdbe_bytes, encode_incr_update, encode_kdbe, walk_incr_update,
+    decode_kdbe_bytes, encode_incr_update, encode_kdbe, skip_incr_update, walk_incr_update,
 };
 pub use store::{
     AdminEnt, AdminFields, CreateKeys, CreatePlan, HookStage, IPROP_ERROR, IPROP_FULL_RESYNC,

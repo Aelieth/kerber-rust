@@ -460,15 +460,15 @@ impl IpropClient {
         let mut args = XdrW::default();
         encode_kdb_last(&mut args, last);
         let body = self.call(IPROP_GET_UPDATES, &args.b)?;
-        let (status, sno, seconds, useconds, updates) =
-            decode_incr_result(&body, None).map_err(|_| RpcFailure::CantDecodeRes)?;
+        let (status, sno, seconds, useconds, count) =
+            frame_incr_result(&body).map_err(|_| RpcFailure::CantDecodeRes)?;
         Ok(IncrReply {
             status,
             last: UlogLast {
                 sno,
                 time: UlogTime { seconds, useconds },
             },
-            count: updates.len(),
+            count,
             body,
         })
     }
@@ -630,6 +630,20 @@ fn unwrap_results(ctx: &mut GssContext, sealed: &[u8], seq: u32) -> Option<Vec<u
     let (plain, conf) = ctx.unwrap_conf(&wrapped).ok()?;
     let (got, results) = plain.split_first_chunk::<4>()?;
     (conf && u32::from_be_bytes(*got) == seq).then(|| results.to_vec())
+}
+
+// MIT: `xdr_kdb_incr_result_t` (lib/kdb/iprop_xdr.c:321-332)
+fn frame_incr_result(b: &[u8]) -> Result<(u32, u32, u32, u32, usize), Error> {
+    let mut r = XdrR::new(b);
+    let last = r.u32()?;
+    let sec = r.u32()?;
+    let usec = r.u32()?;
+    let n = r.u32()? as usize;
+    for _ in 0..n {
+        r.i += krb5_kdc::skip_incr_update(r.rest()).map_err(|_| Error::GarbageArgs)?;
+    }
+    let status = r.u32()?;
+    Ok((status, last, sec, usec, n))
 }
 
 pub(super) fn decode_incr_result(

@@ -299,9 +299,24 @@ fn skip_princ(r: &mut XdrIn<'_>) -> Result<(), XdrError> {
 /// Types past 31 set no attribute bit.
 pub fn walk_incr_update(b: &[u8]) -> Result<IncrLayout, XdrError> {
     let mut r = XdrIn::new(b);
-    let name = std::str::from_utf8(r.opaque()?)
+    let (name, mut layout) = walk_update(&mut r)?;
+    std::str::from_utf8(name)
         .map_err(|_| XdrError::Invalid("update name is not UTF-8".into()))?
-        .to_owned();
+        .clone_into(&mut layout.name);
+    if layout.len != b.len() {
+        return Err(XdrError::Invalid("bytes past the update".into()));
+    }
+    Ok(layout)
+}
+
+// MIT: `xdr_kdb_incr_update_t` (lib/kdb/iprop_xdr.c:263-285)
+pub fn skip_incr_update(b: &[u8]) -> Result<usize, XdrError> {
+    let mut r = XdrIn::new(b);
+    walk_update(&mut r).map(|(_, layout)| layout.len)
+}
+
+fn walk_update<'a>(r: &mut XdrIn<'a>) -> Result<(&'a [u8], IncrLayout), XdrError> {
+    let name = r.opaque()?;
     let sno = r.u32()?;
     let time = UlogTime {
         seconds: r.u32()?,
@@ -318,11 +333,11 @@ pub fn walk_incr_update(b: &[u8]) -> Result<IncrLayout, XdrError> {
             | AT_PW_LAST_CHANGE | AT_PW_POLICY_SWITCH | AT_PW_HIST_KVNO => {
                 r.u32()?;
             }
-            AT_PRINC | AT_MOD_PRINC => skip_princ(&mut r)?,
+            AT_PRINC | AT_MOD_PRINC => skip_princ(r)?,
             AT_KEYDATA => {
                 let n = r.count(16)?;
                 for _ in 0..n {
-                    skip_key(&mut r)?;
+                    skip_key(r)?;
                 }
             }
             AT_TL_DATA => {
@@ -337,7 +352,7 @@ pub fn walk_incr_update(b: &[u8]) -> Result<IncrLayout, XdrError> {
                 for _ in 0..n {
                     let k = r.count(16)?;
                     for _ in 0..k {
-                        skip_key(&mut r)?;
+                        skip_key(r)?;
                     }
                 }
             }
@@ -354,11 +369,8 @@ pub fn walk_incr_update(b: &[u8]) -> Result<IncrLayout, XdrError> {
         r.opaque()?;
     }
     r.opaque()?;
-    if r.at != b.len() {
-        return Err(XdrError::Invalid("bytes past the update".into()));
-    }
-    Ok(IncrLayout {
-        name,
+    let layout = IncrLayout {
+        name: String::new(),
         sno,
         time,
         deleted,
@@ -367,7 +379,8 @@ pub fn walk_incr_update(b: &[u8]) -> Result<IncrLayout, XdrError> {
         attrs,
         nvals,
         len: r.at,
-    })
+    };
+    Ok((name, layout))
 }
 
 fn decode_keydata_raw(r: &mut XdrIn<'_>) -> Result<Vec<OsaKeyData>, XdrError> {
@@ -559,7 +572,9 @@ pub fn decode_incr_update(
     mkey: Option<&ProtocolKey>,
 ) -> Result<(IpropUpdate, usize), XdrError> {
     let mut r = XdrIn::new(b);
-    let name = String::from_utf8_lossy(r.opaque()?).into_owned();
+    let name = std::str::from_utf8(r.opaque()?)
+        .map_err(|_| XdrError::Invalid(crate::kdb::NOT_UTF8.into()))?
+        .to_owned();
     let sno = r.u32()?;
     let time = r.u32()?;
     let _usec = r.u32()?;
