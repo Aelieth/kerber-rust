@@ -129,7 +129,8 @@ fn audit_id_failure(store: &dyn PrincipalRead, raw: &[u8], e: getrandom::Error) 
     );
     match raw.first() {
         // MIT: `prepare_error_tgs` (kdc/do_tgs_req.c:182)
-        Some(&0x6c) => Processed::Reply(super::kdc_error_bytes(store, err::GENERIC)),
+        Some(&0x6c) => super::kdc_error_bytes(store, err::GENERIC)
+            .map_or(Processed::Refused("audit id unavailable"), Processed::Reply),
         // MIT: `process_packet_response` (lib/apputils/net-server.c:1096-1104)
         _ => Processed::Refused("audit id unavailable"),
     }
@@ -526,9 +527,19 @@ impl KdcDispatch {
         match done {
             // Oversized UDP reply, resend included: this realm's response-too-big.
             Done::Reply(bytes) if !is_tcp && bytes.len() > self.max_dgram_reply_size => {
-                Reply::Send(plain_store(&self.store, |s| {
+                match plain_store(&self.store, |s| {
                     super::kdc_error_bytes(s, err::RESPONSE_TOO_BIG)
-                }))
+                }) {
+                    Ok(b) => Reply::Send(b),
+                    // MIT: `finish_dispatch` (kdc/dispatch.c:58-62)
+                    Err(e) => {
+                        krb5_log::klog::syslog(
+                            Severity::Err,
+                            &format!("error constructing KRB_ERR_RESPONSE_TOO_BIG error: {e}"),
+                        );
+                        Reply::Failed(e.to_string())
+                    }
+                }
             }
             Done::Reply(bytes) => Reply::Send(bytes),
             Done::Failed { text, .. } => Reply::Failed(text),
@@ -623,9 +634,10 @@ impl Dispatch for KdcDispatch {
 
     // MIT: `make_toolong_error` (kdc/kdc_util.c:1882-1913)
     fn make_toolong_error(&mut self) -> Result<Vec<u8>, String> {
-        Ok(plain_store(&self.store, |s| {
+        plain_store(&self.store, |s| {
             super::kdc_error_bytes(s, err::FIELD_TOOLONG)
-        }))
+        })
+        .map_err(|e| e.to_string())
     }
 }
 

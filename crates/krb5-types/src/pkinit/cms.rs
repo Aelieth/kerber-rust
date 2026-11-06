@@ -971,7 +971,7 @@ fn cert_key_id(cert: &[u8]) -> Option<Vec<u8>> {
 
 // MIT: `create_identifiers_from_stack` (plugins/preauth/pkinit/pkinit_crypto_openssl.c:5223-5316)
 #[must_use]
-pub fn encode_td_certifiers(certs: &[&[u8]]) -> Vec<u8> {
+pub fn encode_td_certifiers(certs: &[&[u8]]) -> Option<Vec<u8>> {
     let ids: Vec<super::ExternalPrincipalIdentifier> = certs
         .iter()
         .map(|cert| {
@@ -985,7 +985,7 @@ pub fn encode_td_certifiers(certs: &[&[u8]]) -> Vec<u8> {
             }
         })
         .collect();
-    rasn::der::encode(&ids).unwrap_or_default()
+    rasn::der::encode(&ids).ok()
 }
 
 fn der_next(input: &[u8]) -> Result<(u8, &[u8], &[u8]), &'static str> {

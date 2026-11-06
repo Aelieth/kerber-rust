@@ -50,6 +50,16 @@ pub fn is_iprop_dump(dump: &[u8]) -> bool {
 }
 
 // MIT: `krb5_write_message` (lib/krb5/os/write_msg.c:73-76)
+// MIT: `send_error` (kprop/kpropd.c:1503-1506)
+fn send_error_reply<S: Write>(stream: &mut S, der: Option<Vec<u8>>) {
+    match der {
+        Some(der) => {
+            let _ = write_message(stream, &der);
+        }
+        None => klog::syslog(Severity::Err, "cannot encode the KRB-ERROR for kprop"),
+    }
+}
+
 fn write_message<S: Write>(stream: &mut S, data: &[u8]) -> io::Result<()> {
     krb5_protocol::write_messages(stream, &[data])
 }
@@ -280,7 +290,7 @@ fn recvauth_with<S: Read + Write + PeerAddr>(
                 (&chosen[..], None, None)
             }
             Err((der, text)) => {
-                let _ = write_message(stream, &der);
+                send_error_reply(stream, der);
                 return Err(Error::Inner(text));
             }
         },
@@ -312,7 +322,7 @@ fn recvauth_with<S: Read + Write + PeerAddr>(
         Ok(v) => v,
         Err(e) => {
             let der = kprop_rd_req_error(&ap_raw, &e, expected_realm, expected_server);
-            let _ = write_message(stream, &der);
+            send_error_reply(stream, der);
             return Err(Error::Inner(e.to_string()));
         }
     };
@@ -552,7 +562,7 @@ fn kprop_rd_req_error(
     e: &krb5_protocol::Error,
     realm: Option<&str>,
     server: Option<&PrincipalName>,
-) -> Vec<u8> {
+) -> Option<Vec<u8>> {
     let (code, text) = recvauth_error_fields(raw, e);
     kprop_krb_error(code, &text, realm, server)
 }
@@ -562,13 +572,13 @@ fn kprop_krb_error(
     text: &str,
     realm: Option<&str>,
     server: Option<&PrincipalName>,
-) -> Vec<u8> {
+) -> Option<Vec<u8>> {
     let realm_s = realm.unwrap_or("????");
     let realm_ks = match krb5_types::try_ascii(realm_s) {
         Ok(r) => r,
         Err(_) => match krb5_types::try_ascii("INVALID") {
             Ok(r) => r,
-            Err(_) => return Vec::new(),
+            Err(_) => return None,
         },
     };
     let sname = server.cloned().unwrap_or_else(kpropd_error_server);
@@ -588,7 +598,7 @@ fn kprop_krb_error(
         e_text: e_text_with_nul(text),
         e_data: None,
     };
-    encode(&pdu).unwrap_or_default()
+    encode(&pdu).ok()
 }
 
 // MIT: `krb5_rd_req` (lib/krb5/krb/rd_req.c:56-84)
@@ -604,7 +614,7 @@ fn kpropd_ticket_key(
     server: Option<&PrincipalName>,
     realm: Option<&str>,
     conf: &AcceptorConfig,
-) -> Result<ProtocolKey, (Vec<u8>, String)> {
+) -> Result<ProtocolKey, (Option<Vec<u8>>, String)> {
     let refuse = |code: i32| {
         let text = recvauth_protocol_text(code);
         (kprop_krb_error(code, &text, realm, server), text)

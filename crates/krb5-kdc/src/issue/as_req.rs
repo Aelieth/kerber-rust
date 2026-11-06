@@ -15,7 +15,8 @@ use super::kdc_util::{
     utf8_realm, validate_as_request,
 };
 use super::reply::{
-    MintTicket, TicketPac, enc_rep_part, encode_enc_kdc_rep_part, mint_ticket, return_enc_padata,
+    MintTicket, TicketPac, enc_rep_part, encode_enc_kdc_rep_part, mint_ticket, no_reply,
+    return_enc_padata,
 };
 use crate::ad::{authind_add, check_indicators, handle_authdata};
 use crate::error::Error;
@@ -442,17 +443,19 @@ fn finish_preauth(
         ));
     }
     if attr(&client, KDB_REQUIRES_HW_AUTH) && !hw_preauth {
+        let hints = preauth_hint_edata(
+            store,
+            &client,
+            ckey,
+            &body.etype,
+            armor,
+            work_padata.as_deref(),
+        )
+        .map_err(no_reply)?;
         return Err(Error::Protocol {
             code: err::PREAUTH_REQUIRED,
             text: Some(status::NEEDED_HW_PREAUTH.to_owned()),
-            e_data: Some(preauth_hint_edata(
-                store,
-                &client,
-                ckey,
-                &body.etype,
-                armor,
-                work_padata.as_deref(),
-            )),
+            e_data: Some(hints),
             detail: None,
         });
     }
@@ -912,7 +915,7 @@ fn preauth_hint_edata(
     requested: &[i32],
     armor: Option<&ProtocolKey>,
     request_padata: Option<&[PaData]>,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, Error> {
     let hint =
         crate::plugins::advertise_preauth(store, client, armor, requested, ckey.map(|k| &k.key));
     let mut method: MethodData = hint.padata;
@@ -945,7 +948,7 @@ fn preauth_hint_edata(
             padata_value: c.into(),
         });
     }
-    encode(&method).unwrap_or_default()
+    Ok(encode(&method)?)
 }
 
 fn preauth_required(
@@ -956,8 +959,9 @@ fn preauth_required(
     armor: Option<&ProtocolKey>,
     request_padata: Option<&[PaData]>,
 ) -> Error {
-    Error::PreauthRequired {
-        e_data: preauth_hint_edata(store, client, ckey, requested, armor, request_padata),
+    match preauth_hint_edata(store, client, ckey, requested, armor, request_padata) {
+        Ok(e_data) => Error::PreauthRequired { e_data },
+        Err(e) => no_reply(e),
     }
 }
 
@@ -978,19 +982,17 @@ fn attach_preauth_hint(
             text,
             e_data: None,
             detail,
-        } if code == err::PREAUTH_FAILED || code == err::PREAUTH_EXPIRED => Error::Protocol {
-            code: err::PREAUTH_FAILED,
-            text,
-            e_data: Some(preauth_hint_edata(
-                store,
-                client,
-                ckey,
-                requested,
-                armor,
-                request_padata,
-            )),
-            detail,
-        },
+        } if code == err::PREAUTH_FAILED || code == err::PREAUTH_EXPIRED => {
+            match preauth_hint_edata(store, client, ckey, requested, armor, request_padata) {
+                Ok(hints) => Error::Protocol {
+                    code: err::PREAUTH_FAILED,
+                    text,
+                    e_data: Some(hints),
+                    detail,
+                },
+                Err(e) => no_reply(e),
+            }
+        }
         other => other,
     }
 }

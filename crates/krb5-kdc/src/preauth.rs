@@ -833,13 +833,16 @@ fn cms_fault(
                         .collect(),
                 )
             };
-            let e_data = (!certs.is_empty()).then(|| {
-                let method = vec![PaData {
-                    padata_type: td,
-                    padata_value: krb5_types::pkinit::encode_td_certifiers(&certs).into(),
-                }];
-                encode_typed(&with_fx_cookie(store, Some(cname), method))
-            });
+            let e_data = (!certs.is_empty())
+                .then(|| krb5_types::pkinit::encode_td_certifiers(&certs))
+                .flatten()
+                .and_then(|v| {
+                    let method = vec![PaData {
+                        padata_type: td,
+                        padata_value: v.into(),
+                    }];
+                    encode_typed(&with_fx_cookie(store, Some(cname), method))
+                });
             Error::Protocol {
                 code,
                 text: Some(status::PREAUTH_FAILED.to_owned()),
@@ -1090,14 +1093,25 @@ fn dh_params_not_accepted(
         padata_value: krb5_types::pkinit::encode_td_dh_parameters(min_bits).into(),
     }];
     method = with_fx_cookie(store, Some(client), method);
-    proto_e(
-        err::DH_KEY_PARAMETERS_NOT_ACCEPTED,
-        crate::status::PREAUTH_FAILED,
-        encode_typed(&method),
+    // MIT: `pkinit_server_verify_padata` (plugins/preauth/pkinit/pkinit_srv.c:607-612)
+    encode_typed(&method).map_or_else(
+        || {
+            proto(
+                err::DH_KEY_PARAMETERS_NOT_ACCEPTED,
+                crate::status::PREAUTH_FAILED,
+            )
+        },
+        |ed| {
+            proto_e(
+                err::DH_KEY_PARAMETERS_NOT_ACCEPTED,
+                crate::status::PREAUTH_FAILED,
+                ed,
+            )
+        },
     )
 }
 
-pub(crate) fn encode_typed(method: &MethodData) -> Vec<u8> {
+pub(crate) fn encode_typed(method: &MethodData) -> Option<Vec<u8>> {
     let td: TypedDataList = method
         .iter()
         .map(|p| TypedData {
@@ -1105,7 +1119,7 @@ pub(crate) fn encode_typed(method: &MethodData) -> Vec<u8> {
             data_value: p.padata_value.clone(),
         })
         .collect();
-    encode(&td).unwrap_or_default()
+    encode(&td).ok()
 }
 
 pub(crate) fn decode_edata_padata(ed: &[u8]) -> MethodData {
@@ -1180,7 +1194,7 @@ pub(crate) fn prepare_as_edata(
         if method.len() == n {
             return ed.to_vec();
         }
-        return encode_typed(&method);
+        return encode_typed(&method).unwrap_or_else(|| ed.to_vec());
     }
     ed.to_vec()
 }
