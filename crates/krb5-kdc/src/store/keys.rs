@@ -67,6 +67,12 @@ impl Principal {
     pub fn key_slots(&self) -> Vec<KeySlot<'_>> {
         merge_slots(&self.keys, &self.opaque_keys)
     }
+
+    // MIT: `krb5_db_get_principal` (lib/kdb/kdb5.c:838-840)
+    #[must_use]
+    pub fn top_kvno(&self) -> Option<u32> {
+        kvnos(self).max()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

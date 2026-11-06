@@ -143,7 +143,7 @@ impl TotpVerifier {
     fn password_ok(req: &OtpVerifyRequest, password: &[u8]) -> bool {
         // Only the current (highest-kvno) keys, each with its own salt: an old password kept by
         // `cpw -keepold` must not pass.
-        let Some(max_kvno) = req.principal.keys.iter().map(|k| k.kvno).max() else {
+        let Some(max_kvno) = req.principal.top_kvno() else {
             return false;
         };
         req.principal

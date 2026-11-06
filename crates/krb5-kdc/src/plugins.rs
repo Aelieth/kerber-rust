@@ -396,7 +396,7 @@ impl KdcPreauth for EncTsMod {
         // MIT: `filter_preauth_error` (kdc_preauth.c:1092-1133)
         // A code off the pass-through list becomes 24.
         let policy = store.policy();
-        let top = client.keys.iter().map(|k| k.kvno).max();
+        let top = client.top_kvno();
         let Some(pa_et) = krb5_crypto::EncryptionType::known(enc.etype)
             .ok()
             .filter(|et| policy.etype_permitted(*et))

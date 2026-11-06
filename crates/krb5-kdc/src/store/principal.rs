@@ -443,8 +443,7 @@ impl Principal {
 
     #[must_use]
     pub fn first_current_key(&self) -> Option<&KeyEntry> {
-        let kvno = self.keys.iter().map(|k| k.kvno).max()?;
-        self.first_key_at_kvno(kvno)
+        self.first_key_at_kvno(self.top_kvno()?)
     }
 
     #[must_use]
@@ -464,11 +463,12 @@ impl Principal {
         {
             return Err(KeyLookup::NoPermittedKey);
         }
-        let Some(top) = self.keys.iter().map(|k| k.kvno).max() else {
+        let Some(top) = self.top_kvno() else {
             return Err(KeyLookup::NoMatchingKey);
         };
         let kvno = if kvno == 0 { top } else { kvno };
-        let mut saw_non_permitted = false;
+        let mut saw_non_permitted =
+            etype.is_none() && self.opaque_keys.iter().any(|o| o.kvno == kvno);
         for k in &self.keys {
             if k.kvno != kvno || etype.is_some_and(|e| k.etype != e) {
                 continue;

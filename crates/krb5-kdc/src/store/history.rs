@@ -62,7 +62,8 @@ pub(super) fn record_history(
     if nhist <= 1 {
         return Ok(());
     }
-    let top = old.iter().map(|k| k.kvno).max().unwrap_or(0);
+    let opaque = p.opaque_keys.iter().map(|o| o.kvno);
+    let top = old.iter().map(|k| k.kvno).chain(opaque).max().unwrap_or(0);
     let recent: Vec<KeyEntry> = old.iter().filter(|k| k.kvno == top).cloned().collect();
     if recent.is_empty() {
         return Ok(());
@@ -94,7 +95,8 @@ impl PrincipalStore {
     #[must_use]
     pub fn history_key(&self) -> Option<(u32, ProtocolKey)> {
         let p = self.get_name(&crate::principals::kadmin_history())?;
-        let k = p.keys.iter().max_by_key(|k| k.kvno)?;
+        let top = p.top_kvno()?;
+        let k = p.keys.iter().find(|k| k.kvno == top)?;
         Some((k.kvno, k.key.clone()))
     }
 
