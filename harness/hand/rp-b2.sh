@@ -1,5 +1,5 @@
 #!/bin/bash
-# rp-b2.sh: B2, the combined driver and the full B2 hold. Prep copies b2/ (the driver trees, fixes included) and lib/ into the record.
+# rp-b2.sh: B2, the combined driver and the full B2 hold. Prep copies b2/ (the driver trees, fixes included), lib/ and field's lib/log-since.sh into the record.
 # The lab runs only when B2_LAUNCH=1. A plain run stops after prep.
 # Needs HAND_WT (the checkout), HAND_REC (record dir), HAND_BASELINE_DIR (the last graded B2 record: b2/results.tsv, combined/results.tsv),
 # HAND_FIXTURE_DIR (D3.TEST's dumps, stashes, keytabs and passwords, 0700, equal to b2/shared/d3-fixtures.sha256), FIELD_LAB_NET (field.env).
@@ -46,7 +46,7 @@ REDS=(
 
 case $SCRATCH in "$HAND_REC"/*) ;; *) echo "rp-b2.sh: scratch is not under HAND_REC" >&2; exit 2 ;; esac
 require_dirs "$WT" "$HDIR/b2/shared" "$HDIR/b2/combined" "$HDIR/b2/fix-p8"
-require_files "$BASE_B2" "$BASE_CB" "$WT/harness/field/lab.sh" "$HDIR/lib/compare-legs.py" \
+require_files "$BASE_B2" "$BASE_CB" "$WT/harness/field/lab.sh" "$WT/harness/field/lib/log-since.sh" "$HDIR/lib/compare-legs.py" \
     "$HDIR/lib/expected-diff.txt" "$HDIR/lib/p16a-leg.sh"
 got=$(git -C "$WT" rev-parse HEAD)
 [ "$got" = "$COMMIT" ] || { echo "rp-b2.sh: $WT is $got, not $COMMIT" >&2; exit 2; }
@@ -60,6 +60,8 @@ prep() {
     cp -a "$HDIR/b2/combined" "$COPY/combined"
     cp -a "$HDIR/b2/fix-p8" "$COPY/fix-p8"
     cp -a "$HDIR/lib/compare-legs.py" "$HDIR/lib/expected-diff.txt" "$COPY/"
+    cp -a "$WT/harness/field/lib/log-since.sh" "$COPY/b2/otp/"
+    cp -a "$WT/harness/field/lib/log-since.sh" "$COPY/combined/otp/"
     bash -n "$COPY/b2/mod/d3.sh"
     bash -n "$COPY/b2/driver-b2.sh"
     bash -n "$COPY/b2/helpers/kp-vm.sh"

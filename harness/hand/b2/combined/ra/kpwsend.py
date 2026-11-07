@@ -16,6 +16,7 @@ stdout, one line per frame: `id<TAB>proto<TAB>wire<TAB>log`
 Nothing is compared here; a second run against the other daemon is compared by the caller.
 """
 import argparse
+import glob
 import os
 import re
 import socket
@@ -119,18 +120,31 @@ def exchange_tcp(host, port, frame, timeout):
 
 def log_size(path):
     try:
-        return os.path.getsize(path)
+        st = os.stat(path)
+        return st.st_size, st.st_ino
     except OSError:
-        return 0
+        return 0, 0
 
 
-def log_since(path, size):
+def log_since(path, mark):
+    # Across logrotate's rename: the rotated file holding the marked inode from the mark, then the new file whole.
+    size, ino = mark
+    data = b""
     try:
+        if ino and os.stat(path).st_ino != ino:
+            for g in glob.glob(path + "-*") + glob.glob(path + ".*"):
+                if os.stat(g).st_ino == ino:
+                    with open(g, "rb") as f:
+                        f.seek(size)
+                        data = f.read()
+                    break
+            size = 0
         with open(path, "rb") as f:
             f.seek(size)
-            lines = f.read().decode("latin-1").splitlines()
+            data += f.read()
     except OSError:
         return []
+    lines = data.decode("latin-1").splitlines()
     out = []
     for ln in lines:
         m = PREFIX.match(ln)

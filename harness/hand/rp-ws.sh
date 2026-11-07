@@ -31,6 +31,7 @@ HERE=$(dirname "$LAB")
 DOC=$WT/harness/field/lib/docblocks.py
 SCAN=$WT/harness/field/lib/scan-secrets.py
 PTY=$WT/harness/field/lib/ptydrive.py
+LOGSINCE=$WT/harness/field/lib/log-since.sh
 CELLS=$HDIR/lib/cm-cells.sh
 GRADE=$HDIR/lib/cm-grade.py
 AGENT=$HDIR/lib/win-agent.py
@@ -236,10 +237,12 @@ reset_both() {
     wait_ntp services || stop "ntp services"
 }
 
-# Both KDCs log to these files on Fedora (as the field harness's marks read them).
-kdc_marks() { "$LAB" ssh kdc -- 'sudo wc -l /var/log/krb5kdc.log /var/log/kadmind.log' < /dev/null | awk 'NR <= 2 { printf "%s ", $1 }'; }
+# Both KDCs log to these files on Fedora; the marks and reads survive a logrotate (lib/log-since.sh).
+kdc_marks() {
+    "$LAB" ssh kdc -- "g=\$(mktemp); cat > \"\$g\"; for f in krb5kdc kadmind; do sudo sh \"\$g\" mark /var/log/\$f.log; done | paste -sd' ' -; rm -f \"\$g\"" < "$LOGSINCE"
+}
 kdc_log() {
-    "$LAB" ssh kdc -- "sudo tail -n +$(($2 + 1)) /var/log/krb5kdc.log; echo '--- kadmind.log'; sudo tail -n +$(($3 + 1)) /var/log/kadmind.log" < /dev/null 2>&1 | grep -v 'closing down fd' > "$REC/$1/win/kdc.log"
+    "$LAB" ssh kdc -- "g=\$(mktemp); cat > \"\$g\"; sudo sh \"\$g\" since $2 /var/log/krb5kdc.log; echo '--- kadmind.log'; sudo sh \"\$g\" since $3 /var/log/kadmind.log; rm -f \"\$g\"" < "$LOGSINCE" 2>&1 | grep -v 'closing down fd' > "$REC/$1/win/kdc.log"
 }
 
 # The cells, in the design's order, L1 last; each cell's own principal, so no cached ticket is reused.
@@ -280,7 +283,7 @@ gate_extra() {
     [ -n "${MIT_SNAPSHOT_SERVICES:-}" ] || stop "MIT_SNAPSHOT_SERVICES"
     require_files "$SECRETS/${LAB_CA:-}" "$SECRETS/${MIT_SECRET_ALICE:-}"
 }
-host_gates "$CELLS" "$GRADE" "$PTY" "$HDIR/lib/cm-host.sh" "$AGENT" "$PS1" "$WGRADE" "$MITSRV" "$PROBE"
+host_gates "$CELLS" "$GRADE" "$PTY" "$HDIR/lib/cm-host.sh" "$AGENT" "$PS1" "$WGRADE" "$MITSRV" "$PROBE" "$LOGSINCE"
 KC_URL=$(sed -n "s/^URL='\(.*\)'$/\1/p" "$PROBE")
 [ -n "$KC_URL" ] || stop "keycloak url"
 vsh snapshot-list "$WIN" --name 2> /dev/null | grep -qx "$WIN_SNAP" || stop "no $WIN_SNAP"

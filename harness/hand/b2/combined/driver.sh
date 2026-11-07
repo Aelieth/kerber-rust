@@ -680,6 +680,7 @@ l1_vm() {   # l1_vm VM: reset to f4-mit, check, the helper pushed, the facts and
     [ "$crc" = 0 ] || fail "lab.sh check --lab-only $v rc=$crc"
     vmlog "$v" "install -d -m 0700 $VMD" || fail "no ssh to $v"
     push "$v" "$SCRIPTS/otp/vmctl.sh" "$VMD/vmctl.sh" 755 || fail "push vmctl.sh to $v"
+    push "$v" "$SCRIPTS/otp/log-since.sh" "$VMD/log-since.sh" 755 || fail "push log-since.sh to $v"
     if [ "$v" != kdc ]; then push_ours "$v" || fail "push our kinit and klist to $v"; fi
     ost=$(vm "$v" "if [ -e /run/ostree-booted ]; then echo yes; else echo no; fi" 2>> "$LOG" | tr -d '[:space:]')
     [ "$ost" = yes ] || ost=no
@@ -1359,7 +1360,7 @@ host_tmp_snapshot > "$OUT/host-tmp-before.txt"
 : > "$OUT/results.tsv"
 
 # ---- before any lock or VM: the inputs, the scripts, the record directory
-for f in otp/vmctl.sh otp/install-ours.sh otp/totp.py otp/radius_stub.py otp/norm.py otp/parity.sh ra/stage.sh ra/kpwsend.py ra/frames-nokey.tsv ra/cmp.py ka/stage.sh ka/session.sh ka/norm.py build-oracle.sh; do
+for f in otp/vmctl.sh otp/log-since.sh otp/install-ours.sh otp/totp.py otp/radius_stub.py otp/norm.py otp/parity.sh ra/stage.sh ra/kpwsend.py ra/frames-nokey.tsv ra/cmp.py ka/stage.sh ka/session.sh ka/norm.py build-oracle.sh; do
     [ -e "$SCRIPTS/$f" ] || { echo "driver.sh: $SCRIPTS/$f is missing" >&2; exit 2; }
 done
 [ -x "$LAB" ] || { echo "driver.sh: $LAB is not executable" >&2; exit 2; }

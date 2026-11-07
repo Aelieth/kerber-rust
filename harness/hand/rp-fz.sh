@@ -152,7 +152,7 @@ kdc_marks() {
 set +e
 when=$1
 if [ -f /var/log/krb5kdc.log ]; then
-    n=$(grep -cF "request panic isolated" /var/log/krb5kdc.log || true)
+    n=$(cat /var/log/krb5kdc.log-* /var/log/krb5kdc.log.* /var/log/krb5kdc.log 2>/dev/null | grep -cF "request panic isolated" || true)
 else
     n=0
     echo "PANIC_LOG:missing"

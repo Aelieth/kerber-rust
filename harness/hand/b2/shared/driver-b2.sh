@@ -445,6 +445,7 @@ l1_vm() {   # l1_vm VM: reset to f4-mit, check, the helper pushed, the facts and
     [ "$crc" = 0 ] || fail "lab.sh check --lab-only $v rc=$crc"
     vmlog "$v" "install -d -m 0700 $VMD" || fail "no ssh to $v"
     push "$v" "$SCRIPTS/otp/vmctl.sh" "$VMD/vmctl.sh" 755 || fail "push vmctl.sh to $v"
+    push "$v" "$SCRIPTS/otp/log-since.sh" "$VMD/log-since.sh" 755 || fail "push log-since.sh to $v"
     push "$v" "$SCRIPTS/b2ctl.sh" "$VMD/b2ctl.sh" 755 || fail "push b2ctl.sh to $v"
     if [ "$v" != kdc ]; then push_ours "$v" || fail "push our client programs to $v"; fi
     ost=$(vm "$v" "if [ -e /run/ostree-booted ]; then echo yes; else echo no; fi" 2>> "$LOG" | tr -d '[:space:]')
@@ -955,7 +956,7 @@ if [ "${1:-}" = --check-modules ]; then
 fi
 
 # ---- before any lock or VM: the inputs, the scripts, the modules, the record directory
-for f in otp/vmctl.sh otp/install-ours.sh b2ctl.sh; do
+for f in otp/vmctl.sh otp/log-since.sh otp/install-ours.sh b2ctl.sh; do
     [ -e "$SCRIPTS/$f" ] || { echo "driver-b2.sh: $SCRIPTS/$f is missing" >&2; exit 2; }
 done
 [ -x "$LAB" ] || { echo "driver-b2.sh: $LAB is not executable" >&2; exit 2; }
@@ -982,7 +983,7 @@ if [ -n "$(find "$REC" -maxdepth 1 -type f 2>/dev/null | head -1)" ]; then echo 
     echo "# the sha256 of every program of the ship build (SHIP=$SHIP); the VMs' copies are compared with these"
     cat "$W/ship-sha256.txt"
     echo "# the B2 scripts: this file, the helper scripts, the modules, the helpers"
-    ( cd "$SCRIPTS" && mapfile -t hf < <(find helpers -type f 2>/dev/null | LC_ALL=C sort) && sha256sum "$(basename "${BASH_SOURCE[0]}")" otp/vmctl.sh otp/install-ours.sh b2ctl.sh mod/*.sh "${hf[@]}" )
+    ( cd "$SCRIPTS" && mapfile -t hf < <(find helpers -type f 2>/dev/null | LC_ALL=C sort) && sha256sum "$(basename "${BASH_SOURCE[0]}")" otp/vmctl.sh otp/log-since.sh otp/install-ours.sh b2ctl.sh mod/*.sh "${hf[@]}" )
 } > "$OUT/inputs-sha256.txt"
 result L0.modules INFO "the modules that run, in order" - "${#B2_MODS[@]}" "${B2_MODS[*]:-none}"
 for e in "${B2_NOTRUN[@]}"; do m=${e%%:*}; result "${m^^}.not-run" INFO "module not run" - 0 "NOT-RUN: ${e#*:}"; note "NOT-RUN module $m: ${e#*:}"; done

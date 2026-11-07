@@ -47,7 +47,7 @@ H="host/tfhost.${REALM,,}"
 NH="host/tfnorenew.${REALM,,}"
 KA="kadmin -p admin/admin@$REALM -q"
 cleanup() {
-    timeout -k 5 60 "$LAB" ssh kdc -- "sudo kadmin.local -q 'delstr krbtgt/$REALM session_enctypes' >/dev/null 2>&1; sudo kadmin.local -q 'modprinc +password_changing_service kadmin/changepw' >/dev/null 2>&1; for p in tfuser tfpol tfclass tfhist tfdur tfint tfmin tfsha tffast $H $NH; do sudo kadmin.local -q \"delprinc -force \$p\" >/dev/null 2>&1; done; for p in tflock tfclass5 tfhistn tfdurpol tfintpol tflife tffastpol; do sudo kadmin.local -q \"delpol -force \$p\" >/dev/null 2>&1; done; if [ -f $KDCDIR/kdc.conf.tf ]; then sudo kadmin.local -q 'modprinc -maxrenewlife 7d krbtgt/$REALM' >/dev/null 2>&1; sudo mv $KDCDIR/kdc.conf.tf $KDCDIR/kdc.conf && sudo systemctl restart $UNIT_KDC; fi; sudo rm -rf ~/tf-mit /var/tmp/tf-hist.dump /var/tmp/tf-log.sz; true" < /dev/null > /dev/null 2>&1
+    timeout -k 5 60 "$LAB" ssh kdc -- "sudo kadmin.local -q 'delstr krbtgt/$REALM session_enctypes' >/dev/null 2>&1; sudo kadmin.local -q 'modprinc +password_changing_service kadmin/changepw' >/dev/null 2>&1; for p in tfuser tfpol tfclass tfhist tfdur tfint tfmin tfsha tffast $H $NH; do sudo kadmin.local -q \"delprinc -force \$p\" >/dev/null 2>&1; done; for p in tflock tfclass5 tfhistn tfdurpol tfintpol tflife tffastpol; do sudo kadmin.local -q \"delpol -force \$p\" >/dev/null 2>&1; done; if [ -f $KDCDIR/kdc.conf.tf ]; then sudo kadmin.local -q 'modprinc -maxrenewlife 7d krbtgt/$REALM' >/dev/null 2>&1; sudo mv $KDCDIR/kdc.conf.tf $KDCDIR/kdc.conf && sudo systemctl restart $UNIT_KDC; fi; sudo rm -rf ~/tf-mit /var/tmp/tf-hist.dump; true" < /dev/null > /dev/null 2>&1
     timeout -k 5 60 "$LAB" ssh client2 -- 'rm -rf ~/tf; true' < /dev/null > /dev/null 2>&1
 }
 trap cleanup EXIT
@@ -91,7 +91,7 @@ section "ticket-flags --leg $LEG: expire, flags, renew, postdate, policy, sha2 o
 kdcis
 resetvm client2
 run client2 "rm -rf ~/tf; mkdir -m 0700 ~/tf"
-run kdc "for p in tfuser tfpol tfclass tfhist tfdur tfint tfmin tfsha tffast $H $NH; do sudo kadmin.local -q \"delprinc -force \$p\" >/dev/null 2>&1; done; for p in tflock tfclass5 tfhistn tfdurpol tfintpol tflife tffastpol; do sudo kadmin.local -q \"delpol -force \$p\" >/dev/null 2>&1; done; if [ -f $KDCDIR/kdc.conf.tf ]; then sudo kadmin.local -q 'modprinc -maxrenewlife 7d krbtgt/$REALM' >/dev/null 2>&1; sudo mv $KDCDIR/kdc.conf.tf $KDCDIR/kdc.conf && sudo systemctl restart $UNIT_KDC; fi; sudo rm -rf ~/tf-mit /var/tmp/tf-hist.dump /var/tmp/tf-log.sz; true"
+run kdc "for p in tfuser tfpol tfclass tfhist tfdur tfint tfmin tfsha tffast $H $NH; do sudo kadmin.local -q \"delprinc -force \$p\" >/dev/null 2>&1; done; for p in tflock tfclass5 tfhistn tfdurpol tfintpol tflife tffastpol; do sudo kadmin.local -q \"delpol -force \$p\" >/dev/null 2>&1; done; if [ -f $KDCDIR/kdc.conf.tf ]; then sudo kadmin.local -q 'modprinc -maxrenewlife 7d krbtgt/$REALM' >/dev/null 2>&1; sudo mv $KDCDIR/kdc.conf.tf $KDCDIR/kdc.conf && sudo systemctl restart $UNIT_KDC; fi; sudo rm -rf ~/tf-mit /var/tmp/tf-hist.dump; true"
 check setup.tfuser "^Principal \"tfuser@$R\" created\\.\$" runin kdc "alice's password ($ALICE), twice" "sudo kadmin.local -q 'addprinc tfuser' 2>&1" < <(twice "$ALICE")
 check setup.tfhost "^Principal \"$H@$R\" created\\.\$" run kdc "sudo kadmin.local -q 'addprinc -randkey $H' 2>&1"
 
@@ -189,9 +189,10 @@ check TF.u2u.host rc run client2 "kinit -k -t \$HOME/tf/host.kt -c FILE:\$HOME/t
 kin TF.u2u.user '^Default principal: tfuser@'"$R"'$' u2 tfuser "alice's password ($ALICE)" < <(once "$ALICE")
 check TF.u2u.kvno "$H@$R: kvno = " run client2 "kvno -c FILE:\$HOME/tf/u2.cc --u2u FILE:\$HOME/tf/host.cc $H"
 kadm TF.u2u.dup.set "^Principal \"$H@$R\" modified\\.\$" "modprinc -allow_dup_skey $H"
-check TF.u2u.dup.mark rc run kdc "sudo stat -c %s /var/log/krb5kdc.log > /var/tmp/tf-log.sz"
+kdcmark TF.u2u.dup
 check TF.u2u.dup 'KDC policy rejects request' run client2 "kvno -c FILE:\$HOME/tf/u2.cc --u2u FILE:\$HOME/tf/host.cc $H 2>&1; true"
-check TF.u2u.dup.log 'DUP_SKEY DISALLOWED' run kdc "sudo tail -c +\$(( \$(cat /var/tmp/tf-log.sz) + 1 )) /var/log/krb5kdc.log; sudo rm -f /var/tmp/tf-log.sz"
+kdcsince TF.u2u.dup 'DUP_SKEY DISALLOWED'
+checklast TF.u2u.dup.log 'DUP_SKEY DISALLOWED'
 kadm TF.u2u.dup.clear "^Principal \"$H@$R\" modified\\.\$" "modprinc +allow_dup_skey $H"
 
 
@@ -279,18 +280,20 @@ section "TF.renew a renewable TGT against DISALLOW_RENEWABLE is POLICY (tgs_poli
 check TF.renew.none.set "^Principal \"$NH@$R\" created\\.\$" run kdc "sudo kadmin.local -q 'addprinc -randkey $NH' 2>&1"
 kadm TF.renew.none.flag "^Principal \"$NH@$R\" modified\\.\$" "modprinc -allow_renewable $NH"
 kin TF.renew.none.kinit 'Flags:.*R' rn tfuser "alice's password ($ALICE)" -r 7d < <(once "$ALICE")
-check TF.renew.none.mark rc run kdc "sudo stat -c %s /var/log/krb5kdc.log > /var/tmp/tf-log.sz"
+kdcmark TF.renew.none
 check TF.renew.none.kvno 'KDC policy rejects request' run client2 "kvno -c FILE:\$HOME/tf/rn.cc $NH 2>&1; true"
-check TF.renew.none.log 'NON-RENEWABLE TICKET' run kdc "sudo tail -c +\$(( \$(cat /var/tmp/tf-log.sz) + 1 )) /var/log/krb5kdc.log; sudo rm -f /var/tmp/tf-log.sz"
+kdcsince TF.renew.none 'NON-RENEWABLE TICKET'
+checklast TF.renew.none.log 'NON-RENEWABLE TICKET'
 
 section "TF.renew a TGT without preauth has no A, and the host kvno logs NO PREAUTH (tgs_policy.c)"
 kadm TF.preauth.off "^Principal \"tfuser@$R\" modified\\.\$" 'modprinc -requires_preauth tfuser'
 kadm TF.preauth.host "^Principal \"$H@$R\" modified\\.\$" "modprinc +requires_preauth $H"
-check TF.preauth.mark rc run kdc "sudo stat -c %s /var/log/krb5kdc.log > /var/tmp/tf-log.sz"
+kdcmark TF.preauth
 kin TF.preauth.kinit '^Default principal: tfuser@'"$R"'$' na tfuser "alice's password ($ALICE)" < <(once "$ALICE")
 checklast TF.preauth.bits 'Flags: [^A]*$'
 check TF.preauth.kvno 'KDC returned error string: NO PREAUTH' run client2 "kvno -c FILE:\$HOME/tf/na.cc $H 2>&1; true"
-check TF.preauth.log 'NO PREAUTH' run kdc "sudo tail -c +\$(( \$(cat /var/tmp/tf-log.sz) + 1 )) /var/log/krb5kdc.log; sudo rm -f /var/tmp/tf-log.sz"
+kdcsince TF.preauth 'NO PREAUTH'
+checklast TF.preauth.log 'NO PREAUTH'
 kadm TF.preauth.on "^Principal \"tfuser@$R\" modified\\.\$" 'modprinc +requires_preauth tfuser'
 
 section "TF.renew omitted max_renewable_life is a seven-day realm cap (kdc/main.c)"

@@ -224,8 +224,8 @@ checklast spnego.dc-tcp88 "^tcp 88 : TcpTestSucceeded=True RemoteAddress=$L "
 checklast spnego.dc-tcp80 "^tcp 80 : TcpTestSucceeded=True RemoteAddress=$L "
 T3=$(date +%s)
 kdcmark spnego
-run kdc "sudo sh -c 'wc -l < /var/log/httpd/ra3_access.log 2> /dev/null || echo 0'"
-AM=$(grep -m1 -E '^[0-9]+$' "$LAST_OUT" || echo 0)
+runin kdc "lib/log-since.sh" "f=\$(mktemp); cat > \"\$f\"; sudo sh \"\$f\" mark /var/log/httpd/ra3_access.log; rm -f \"\$f\"" < "$FIELD_LIB/log-since.sh"
+AM=$(grep -m1 -E "^$MARK_RE\$" "$LAST_OUT" || echo none)
 capstart kdc spnego "host $DCIP"
 check spnego.cred '^REMOTE_USER=krbadmin@AD\.KERBER\.TEST$' dc iwr
 checklast spnego.cred-200 '^HTTP 200$'
@@ -237,7 +237,7 @@ checklast spnego.task-removed 'task still present: False +output file still pres
 capstop kdc spnego
 T4=$(date +%s)
 adundo
-run kdc "sudo tail -n +$((AM + 1)) /var/log/httpd/ra3_access.log"
+runin kdc "lib/log-since.sh" "f=\$(mktemp); cat > \"\$f\"; sudo sh \"\$f\" since $AM /var/log/httpd/ra3_access.log; r=\$?; rm -f \"\$f\"; exit \$r" < "$FIELD_LIB/log-since.sh"
 checklast spnego.apache-200 "^$DCIPe - krbadmin@$AR \\[.*\\] \"GET /cgi-bin/whoami HTTP/1\\.1\" 200 "
 kdcsince spnego "krbadmin@$AR"
 checklast spnego.kdc-issue "TGS_REQ .* $DCIPe: ISSUE: authtime [0-9]+, $I3, krbadmin@$AR for HTTP/kdc\\.kerber\\.test@$R\$"

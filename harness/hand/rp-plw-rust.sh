@@ -578,7 +578,7 @@ PY
         echo "DUMP_AFTER $cyc"
         labn ssh kdc -- 'stat -c "%y %s %n" /var/kerberos/krb5kdc/replica_datatrans /var/kerberos/krb5kdc/replica_datatrans.dump_ok 2>&1 || true; echo ----; sudo head -n 1 /var/kerberos/krb5kdc/replica_datatrans 2>/dev/null || echo DUMP_ABSENT'
     fi
-    refuse=$(labn ssh kdc -- 'if sudo grep -F -q "more recent than" /var/log/kadmind.log; then echo REFUSED; else echo NONE; fi')
+    refuse=$(labn ssh kdc -- 'if sudo sh -c "cat /var/log/kadmind.log-* /var/log/kadmind.log.* /var/log/kadmind.log 2>/dev/null" | grep -F -q "more recent than"; then echo REFUSED; else echo NONE; fi')
     echo "DUMP_REFUSE $cyc $refuse"
     if [ "$refuse" != NONE ]; then
         echo "CYCLE_STOP dump-ok $cyc"

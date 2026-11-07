@@ -8,7 +8,7 @@
 #                               kadmin.local and from ours; a principal, a policy or a password change a module left behind is named in the diff
 #   rebaseline                  make the VM's current config sums (and on the kdc the current realm fingerprint) the ones `state` compares with: the shell calls it after a module's boundary row went red,
 #                               so that the NEXT module is not blamed for what this one left
-#   alog-size | alog-since N    the kadmind log (/var/log/kadmind.log): its size, and the bytes after the first N
+#   alog-size | alog-since M    the kadmind log (/var/log/kadmind.log): its mark, and the bytes after it, through a logrotate
 #   kdcconf-save TAG            keep kdc.conf as $D/kdc.conf.TAG
 #   kdcconf-restore TAG         put the kept kdc.conf back (in place: the same inode, so the label and the mode stay); TAG "pristine" is the file snapshot-conf kept
 # The paths are the Fedora VM's; VMCTL_* override them for the rehearsals on the host (the same variables as vmctl.sh, plus VMCTL_ALOG).
@@ -17,6 +17,7 @@ D=${VMCTL_D:-/var/tmp/otp3}
 KDCDIR=${VMCTL_KDCDIR:-/var/kerberos/krb5kdc}
 KDCCONF=${VMCTL_KDCCONF:-$KDCDIR/kdc.conf}
 ALOG=${VMCTL_ALOG:-/var/log/kadmind.log}
+LOGSINCE=${VMCTL_LOGSINCE:-$(dirname "$0")/log-since.sh}   # pushed beside this script
 KRB5CONF=${VMCTL_KRB5CONF:-/etc/krb5.conf}
 KRB5CONFD=${VMCTL_KRB5CONFD:-/etc/krb5.conf.d}
 P=$D/pristine
@@ -103,8 +104,8 @@ rebaseline)
     [ -f "$KDCCONF" ] && realm_fp > "$P/realm.txt"
     echo "REBASELINED $(wc -l < "$P/sums") files$([ -s "$P/realm.txt" ] && echo ", realm $(sha256sum < "$P/realm.txt" | cut -c1-16)")"
     ;;
-alog-size)   { wc -c < "$ALOG"; } 2>/dev/null || echo 0 ;;
-alog-since)  tail -c +$((${1:?N} + 1)) "$ALOG" 2>/dev/null ;;
+alog-size)   sh "$LOGSINCE" mark "$ALOG" ;;
+alog-since)  sh "$LOGSINCE" since "${1:?mark}" "$ALOG" c ;;
 kdcconf-save)
     tag=${1:?tag}
     cp -p "$KDCCONF" "$D/kdc.conf.$tag" || exit 1

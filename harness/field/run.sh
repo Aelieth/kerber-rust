@@ -131,7 +131,7 @@ declare -a ROWS=()
 # leglogs <record dir> <start>: kdc's daemon logs and its Kerberos units' journal since <start>, with the window and
 # kdc's UTC offset, for lib/log-grade.py. Best effort: a scenario's result never depends on it.
 leglogs() {
-    local d=$1/logs vm=${ROLE_KDC:-kdc} f o h c off u
+    local d=$1/logs vm=${ROLE_KDC:-kdc} f o c off u
     mkdir -p "$d"
     if [ "$LOGSRC" = journal ]; then
         # Each daemon's journal after the mark (or whole, past a reset), by unit or syslog name, as MIT's FILE lines.
@@ -148,19 +148,17 @@ leglogs() {
     fi
     for f in krb5kdc kadmind; do
         [ "$LOGSRC" = file ] || break
-        read -r o h < <(sed -n "s/^$f \([0-9][0-9]*\) \([0-9a-f]\{64\}\)$/\1 \2/p" "$d/offsets" 2> /dev/null)
-        # From the mark on; a log shorter than its mark, or with another head, is a reset kdc's: whole.
-        timeout 120 "$LAB" ssh "$vm" -- "o=${o:-0}; f=/var/log/$f.log; s=\$(sudo stat -c %s \$f); \
-            [ \"\$s\" -ge \$o ] && [ \"\$(sudo head -c \$(( o < 4096 ? o : 4096 )) \$f | sha256sum | cut -c1-64)\" = \
-            '${h:-none}' ] || o=0; echo \"from \$o of \$s\" >&2; sudo tail -c +\$((o + 1)) \$f" > "$d/$f.log" \
-            2>> "$d/offsets" < /dev/null || true
+        o=$(sed -n "s/^$f \([0-9]*:[0-9]*:[0-9]*:[0-9a-f-]*\)$/\1/p" "$d/offsets" 2> /dev/null)
+        # From the mark on, through a rotated file (lib/log-since.sh); a reset kdc's log, or no mark: whole.
+        timeout 120 "$LAB" ssh "$vm" -- "g=\$(mktemp); cat > \"\$g\"; sudo sh \"\$g\" since ${o:-0:0:0:-} /var/log/$f.log n \
+            whole; rm -f \"\$g\"" < "$HERE/lib/log-since.sh" > "$d/$f.log" 2>> "$d/offsets" || true
     done
     timeout 120 "$LAB" ssh "$vm" -- "sudo journalctl -u 'krb5*' -u 'kadmin*' --since @$2 -o short-iso-precise --no-pager" \
         > "$d/units.txt" 2> /dev/null < /dev/null || true
     printf '%s %s %s\n' "$2" "$(date +%s)" "$(timeout 60 "$LAB" ssh "$vm" -- 'date +%z' 2> /dev/null < /dev/null)" > "$d/window"
 }
 
-# logmark <record dir>: each daemon log's size and the hash of its head up to 4 KiB, before the scenario.
+# logmark <record dir>: each daemon log's mark (lib/log-since.sh), before the scenario.
 logmark() {
     mkdir -p "$1/logs"
     if [ "$LOGSRC" = journal ]; then
@@ -169,9 +167,9 @@ logmark() {
         return 0
     fi
     # shellcheck disable=SC2016 # expanded on kdc
-    timeout 60 "$LAB" ssh "${ROLE_KDC:-kdc}" -- 'for f in krb5kdc kadmind; do s=$(sudo stat -c %s /var/log/$f.log \
-        2> /dev/null || echo 0); echo "$f $s $(sudo head -c $(( s < 4096 ? s : 4096 )) /var/log/$f.log 2> /dev/null \
-        | sha256sum | cut -c1-64)"; done' > "$1/logs/offsets" 2> /dev/null < /dev/null || true
+    timeout 60 "$LAB" ssh "${ROLE_KDC:-kdc}" -- 'g=$(mktemp); cat > "$g"; for f in krb5kdc kadmind; do \
+        echo "$f $(sudo sh "$g" mark /var/log/$f.log)"; done; rm -f "$g"' < "$HERE/lib/log-since.sh" \
+        > "$1/logs/offsets" 2> /dev/null || true
 }
 
 # takeovers_left <row>: no `lab.sh takeover` state file is left.

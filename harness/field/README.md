@@ -258,7 +258,8 @@ harness/field/run.sh --grade-logs ~/kerber-lab/runs/<run>   # the log grader ove
     - `result`, `collect/` (journald and the non-secret files) and `pcap/` (a
       capture without the AS exchanges);
     - `logs/`: what kdc's `krb5kdc.log` and `kadmind.log` gained during the scenario
-      (`offsets` holds the marks; a reset kdc's log is copied whole), its Kerberos
+      (`offsets` holds `lib/log-since.sh`'s marks; a log logrotate renamed is read from the
+      rotated file, then the new one; a reset kdc's log is copied whole), its Kerberos
       units' journal since it began (`units.txt`) and `window`, saved by `run.sh`
       after each leg.
   - `log-grade/`: on a weekly with both legs, the postflight's `post.log.grade`
@@ -296,6 +297,7 @@ harness/field/run.sh --grade-logs ~/kerber-lab/runs/<run>   # the log grader ove
 | `embed-otp-guest.py`, `embed-otp-stub.py` | `embed-otp`'s driver on the kdc VM, and the RADIUS stub for its MIT leg. |
 | `scan-secrets.py` | Every one of those values in every file of a run, in UTF-8 and UTF-16-LE (keytab keys raw and as hex); a planted control first; a hit fails the run |
 | `journal-lines.py` | `journalctl -o json` records as MIT's FILE log lines (`Mon DD HH:MM:SS host prog[pid](severity): message`, MIT's severity names; `logger.c:58-66`, `:584-616`, `:661-672`), for `LOGSRC=journal` (Debian's family) |
+| `log-since.sh` | A log's mark (lines, bytes, inode, the head's sha256) and its text since the mark, through logrotate's rename; a mark no file holds fails the read. `rec.sh`'s `kdcmark`/`kdcsince`, `run.sh`'s log collector and the scenarios' own log marks send it to the VM on stdin |
 | `log-grade.py` | The log grader over a finished run's `logs/` (`run.sh --grade-logs`, a weekly's postflight): no panic in any line, no unread line holding an error, each `kdc.issue` correlated (counted per scenario), each `(Error)` line of ours in MIT's same scenario as a class, or in `log-grade.allow` (`prog`, ERE, reason, tab-separated; none yet); MIT's leg first |
 | `pcap-keep.sh` | A capture's copy without any AS exchange (IP fragments of other messages kept), checked to hold no AS message |
 | `strings-check.sh` | R1's strings check of the test-only names on a VM, by file or by install manifest (every program it lists, none skipped); `--control` must go red |

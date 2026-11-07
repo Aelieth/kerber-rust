@@ -116,15 +116,9 @@ ipropconf() {
 }
 # added <check> <mark> <ERE>: the "Address already added to server" lines kadmind.log gained since kdcmark <mark>.
 added() {
-    local k='' a=''
-    if [ "$LOGSRC" = journal ]; then
-        kdcsince "$2" 'Address already added to server'
-        cp "$LAST_OUT" "$STATE/added.$2"
-        check "$1" "$3" host "printf 'already added: %s\n' \"\$(sed -n '/^--- kadmind.log\$/,\$p' $(printf '%q' "$STATE/added.$2") | grep -c 'Address already added to server')\""
-        return
-    fi
-    read -r k a 2> /dev/null < "$STATE/mark.$2" || true
-    check "$1" "$3" run kdc "printf 'already added: %s\n' \"\$(sudo tail -n +$(( ${a:-0} + 1 )) /var/log/kadmind.log | grep -c 'Address already added to server')\""
+    kdcsince "$2" 'Address already added to server'
+    cp "$LAST_OUT" "$STATE/added.$2"
+    check "$1" "$3" host "if grep -q -E 'no valid (log mark|journal cursor)|^LOG_SINCE .*: no ' $(printf '%q' "$STATE/added.$2"); then echo 'already added: unread'; else printf 'already added: %s\n' \"\$(sed -n '/^--- kadmind.log\$/,\$p' $(printf '%q' "$STATE/added.$2") | grep -c 'Address already added to server')\"; fi"
 }
 # probe <check> <port> <program> <version> <ERE>: kdc's RPC call of procedure 0 under AUTH_NONE to kadmind there.
 probe() {

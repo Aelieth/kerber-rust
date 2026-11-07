@@ -12,7 +12,7 @@
 #   svc-stop                   systemctl stop krb5kdc
 #   addprinc                   addprinc +requires_preauth otpuser; stdin: the lab password
 #   kadm                       kadmin.local -q "<stdin line>" (so that quoting never crosses ssh)
-#   klog-size | klog-since N   the KDC log: its size, and the bytes after the first N
+#   klog-size | klog-since M   the KDC log: its mark, and the bytes after it, through a logrotate (log-since.sh)
 #   stublog-size | stublog-since N
 #   avc-mark | avc SINCE       the VM's clock as HH:MM:SS; AVC / USER_AVC records since SINCE (ausearch -ts), or "no AVC"
 #   embed-start                stop the service KDC, run the example embedder in the background as the realm's KDC
@@ -29,6 +29,7 @@ D=${VMCTL_D:-/var/tmp/otp3}
 KDCDIR=${VMCTL_KDCDIR:-/var/kerberos/krb5kdc}
 KDCCONF=${VMCTL_KDCCONF:-$KDCDIR/kdc.conf}
 KLOG=${VMCTL_KLOG:-/var/log/krb5kdc.log}
+LOGSINCE=${VMCTL_LOGSINCE:-$(dirname "$0")/log-since.sh}   # pushed beside this script
 RUNDIR=${VMCTL_RUNDIR:-/run/krb5kdc}
 PORT=${VMCTL_PORT:-88}
 KT=${VMCTL_KT:-/etc/krb5.keytab}
@@ -45,7 +46,8 @@ wait_for() {   # wait_for SECONDS FILE PATTERN
     done
 }
 
-klog_bytes() { { wc -c < "$KLOG"; } 2>/dev/null || echo 0; }
+klog_mark() { sh "$LOGSINCE" mark "$KLOG"; }
+klog_since() { sh "$LOGSINCE" since "$1" "$KLOG" c; }
 
 # start_detached PIDFILE OUTFILE CMD...: a new session, stdin /dev/null, stdout and stderr to OUTFILE. The pid file holds the pid of the
 # command itself (the shell writes its own pid, then execs): `$!` can name the setsid wrapper instead when setsid forks.
@@ -87,28 +89,28 @@ embed_run() {
     wait_for 15 "$D/embed.out" 'starting' || { cat "$D/embed.out"; return 1; }
     sleep 1
 }
-embed_report() {   # embed_report N: what a started embedder shows, then the log lines from byte N
+embed_report() {   # embed_report M: what a started embedder shows, then the log lines since mark M
     echo "embedder pid $(cat "$D/embed.pid")"
     ps -o pid,user,label,args -p "$(cat "$D/embed.pid")"
     ss -H -lntup "sport = :$PORT" | sed 's/users:.*pid=\([0-9]*\).*/pid=\1/'
     echo "== embed.out"; cat "$D/embed.out"
     echo
     echo "# KDC log lines added by this cell ($KLOG on kdc)"
-    tail -c +$(($1 + 1)) "$KLOG" 2>/dev/null
+    klog_since "$1"
 }
 
 restart_svc() {
     local n
-    n=$(klog_bytes)
+    n=$(klog_mark)
     systemctl restart krb5kdc
     for _ in $(seq 40); do
-        tail -c +$((n + 1)) "$KLOG" 2>/dev/null | grep -q 'commencing operation' && break
+        klog_since "$n" 2>/dev/null | grep -q 'commencing operation' && break
         sleep 0.5
     done
     echo "krb5kdc.service: $(systemctl is-active krb5kdc)"
     echo
     echo "# KDC log lines added by this cell ($KLOG on kdc)"
-    tail -c +$((n + 1)) "$KLOG" 2>/dev/null
+    klog_since "$n"
 }
 
 case $sub in
@@ -191,8 +193,8 @@ kadm)
     IFS= read -r CMD
     kadmin.local -q "$CMD"
     ;;
-klog-size)   klog_bytes ;;
-klog-since)  tail -c +$((${1:?N} + 1)) "$KLOG" 2>/dev/null ;;
+klog-size)   klog_mark ;;
+klog-since)  klog_since "${1:?mark}" ;;
 stublog-size)  { wc -c < "$D/stub.log"; } 2>/dev/null || echo 0 ;;
 stublog-since) tail -c +$((${1:?N} + 1)) "$D/stub.log" 2>/dev/null ;;
 avc-mark) date +%T ;;
@@ -206,12 +208,12 @@ embed-start)
     systemctl stop krb5kdc
     sleep 1
     echo "krb5kdc.service: $(systemctl is-active krb5kdc)"
-    n=$(klog_bytes)
+    n=$(klog_mark)
     embed_run || exit 1
     embed_report "$n"
     ;;
 embed-restart)
-    n=$(klog_bytes)
+    n=$(klog_mark)
     stop_pid "$D/embed.pid" 10
     echo "previous embedder stopped"
     embed_run || exit 1
