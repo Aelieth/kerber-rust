@@ -88,7 +88,7 @@ kerber-rust's `PrincipalStore`, so the directory stays the writer; its mutating 
 | `KerberosSync` | kerber-rust (`krb5_kdc::PrincipalStore` unless named) | Note |
 | --- | --- | --- |
 | `ready` | the embedded listener's own state | KLLDAP probes TCP to the KDC port today |
-| `sync_principal` (chpass, else create) | `change_password_shared`; on `NotFound`, `create_password_shared`, and on its `AlreadyExists` (a race) the change again | `user@REALM`, keys per `supported_enctypes`; both derive under no lock, so KDC reads don't wait |
+| `sync_principal` (chpass, else create) | `change_password_shared`; on `NotFound`, `create_password_shared`, and on its `AlreadyExists` (a race) the change again | `user@REALM`, keys per `supported_enctypes`; both derive under no lock, so KDC reads don't wait, except in the two cases [`api.md`](api.md#one-store-and-its-locking) names |
 | `delete_principal` (missing is Ok) | `remove_in` | the ACL-gated `delete` is for kadmind |
 | `set_principal_enabled` | `set_status` (sets / clears `KDB_DISALLOW_ALL_TIX`) | it also writes `pw_expire`: pass the current value, and the directory's admin as the actor. A missing principal is `NotFound`; the adapter decides |
 | `export_keytab_for_keycloak` | `insert_new_randkey` when missing, then `ktadd_local` (store `ktadd_local_atomic`): with `rotate` set it re-randomizes the principal's keys before extracting, `-norandkey` extracts the current keys, and the rotation persists only after the write succeeds; or `chrand_etypes_keepold_in` with chosen enctypes such as aes256 + aes128 then `Keytab::write_file` | a rotating export moves the kvno each time; `-norandkey` does not |

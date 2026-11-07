@@ -7,7 +7,7 @@ needs. A default build carries the daemon runtime (`daemon`, on by default) and 
 the test fixtures (`test-hooks`, off), so an embedder takes `krb5-kdc` and
 `krb5-admin` with `default-features = false`.
 
-This page is as of v1.2.0.
+This page is as of v1.2.1.
 
 ## One store and its locking
 
@@ -21,6 +21,12 @@ anything. KLLDAP's seam writes (`remove_in`, `set_status`) run inside `change()`
 `put_policy` / `delete_policy` commit themselves. On a shared store, a password
 change or a create goes through `change_password_shared` or `create_password_shared`,
 which derive the keys under no lock and then take the write guard for the `change()`.
+They derive under the guard instead when a policy is bound and `kadmin/history` has no
+key yet, or when another write changed the principal between the derive and the guard;
+the password-quality checks run under the read guard. Measured in the lab on a 4-vCPU
+VM with the writers in the KDC's process: paced to MIT's own write rate, `kinit`'s p99
+was 38 ms, where MIT's KDC under its `kadmin` writers gave 95 ms; unpaced, at about 52
+writes a second (twice that rate), it was 849 ms (p50 236 ms). Pace or batch a bulk sync.
 `set_password`, `create_principal_3_in`, `change_password_staged` and `AdminSession`
 derive while the caller holds the guard, so every KDC read waits on the string-to-key;
 use them only on a store nothing else is reading. `set_status` on a missing principal
@@ -53,6 +59,10 @@ stash, parse a dump, or use `PrincipalStore::persist_paths` yourself; the store 
 all three. Back the stash and the database up together. `Bootstrapped`, `MasterKey`,
 `Principal`, `OpaqueKey` and `KeySlot` are `#[non_exhaustive]`, so a later field or variant
 doesn't break a build: build a `Principal` with `PrincipalBuilder`.
+`Principal::key_slots()` returns every key slot as a `KeySlot`: `Usable(&KeyEntry)`, or
+`Opaque(&OpaqueKey)` for an enctype this build can't use, which is kept wrapped and
+written back, as MIT keeps it. `Principal::keys_in_order()` returns the usable keys
+alone. Both are in MIT's fetch order: kvno descending, stable.
 
 `create_database` writes the stash (a temp file renamed into place, mode 0600),
 then both lock files, then the database by renaming a finished temp file into
