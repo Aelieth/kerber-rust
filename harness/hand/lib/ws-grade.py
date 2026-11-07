@@ -45,7 +45,7 @@ def klist(lines):
 
     for raw in lines:
         line = raw.strip()
-        if not line or line.startswith("Current LogonId") or line.startswith("TimeSkew") or line.startswith("exitcode"):
+        if not line or line.startswith(("Current LogonId", "Targeted LogonId", "TimeSkew", "exitcode")):
             continue
         label = line.split(":", 1)[0].strip()
         if label in TIMED:
@@ -105,11 +105,12 @@ def rows(d):
     r["P2"] = []
     for c in ("wrong", "pwexp", "exp"):
         r["P2"] += [c + " " + x for x in picked(read(d, "p2-%s.txt" % c), TICKET)]
-    r["R1c"] = picked(read(d, "r1c-set.txt"), ("exitcode",)) + picked(read(d, "r1c.txt"), TICKET) + picked(read(d, "r1c-del.txt"), ("exitcode",))
+    r["R1c"] = picked(read(d, "r1c-set.txt"), ("ETYPE_POLICY:",)) + picked(read(d, "r1c.txt"), TICKET)
+    r["R1c"] += picked(read(d, "r1c-unset.txt"), ("ETYPE_POLICY:",))
     k1 = read(d, "k1.txt")
     r["K1"] = picked(k1, ("CREATE:", "WAIT:", "HTTP_")) + klist(k1[next((i for i, ln in enumerate(k1) if ln.startswith("==KLIST")), len(k1)):])
     l1 = read(d, "l1.txt")
-    r["L1"] = picked(l1, ("CREATE:", "WAIT:")) + klist([ln for ln in l1 if not ln.startswith(("CREATE:", "WAIT:", "PS_DONE"))])
+    r["L1"] = picked(l1, ("LOGON:",)) + klist([ln for ln in l1 if not ln.startswith(("LOGON:", "PS_DONE"))])
     r["KDC"] = kdc(read(d, "kdc.log"))
     return r
 
@@ -156,13 +157,20 @@ def oracle(rec):
     # R1c's status isn't settled on paper (BAD_ENCRYPTION_TYPE do_as_req.c:646, or a preauth one): any refusal.
     r1 = code(r["R1c"])
     kt = [ln for ln in kd if " cm-win-kt@KERBER.TEST for " in ln]
-    t["R1c"] = r1 not in (SEC_E_OK, SEC_I_CONTINUE_NEEDED, "none") and r["R1c"].count("exitcode 0") == 2 \
+    # The client's Kerberos encryption types, RC4 only (Learn: "Network security: Configure encryption types
+    # allowed for Kerberos").
+    t["R1c"] = r1 not in (SEC_E_OK, SEC_I_CONTINUE_NEEDED, "none") and has(r["R1c"], "ETYPE_POLICY:4") and has(r["R1c"], "ETYPE_POLICY:none") \
         and bool(kt) and not any(": ISSUE: " in ln for ln in kt)
     # Keycloak's 302 with code=, as services.sh grades it; HttpWebRequest's default credentials.
     k = r["K1"]
     t["K1"] = has(k, "CREATE:True") and has(k, "HTTP_STATUS:302") and has(k, "HTTP_CODE:yes") and has(k, "Server: HTTP/services.kerber.test @ KERBER.TEST")
+    # LogonUserW's result, then that session's tickets by klist -li (W32 nf-winbase-logonuserw; CMD klist), and
+    # the KDC's TGS ISSUE for the machine, which Windows checks against $MACHINE.ACC.
     lo = r["L1"]
-    t["L1"] = has(lo, "CREATE:True") and has(lo, "Client: cm-win @ KERBER.TEST") and has(lo, "Server: krbtgt/KERBER.TEST @ KERBER.TEST")
+    host = next((ln.split(":", 1)[1].strip().lower() for ln in read(d, "info.txt") if ln.startswith("WIN_HOST:")), "?")
+    mach = "cm-win@KERBER.TEST for host/%s.kerber.test@KERBER.TEST" % host
+    t["L1"] = has(lo, "LOGON:True") and has(lo, "Client: cm-win @ KERBER.TEST") and has(lo, "Server: krbtgt/KERBER.TEST @ KERBER.TEST") \
+        and any(": ISSUE: " in ln and mach in ln for ln in r["KDC"])
     t["KDC"] = has(kd, "ISSUE") and has(kd, "cm-win@KERBER.TEST for krbtgt/KERBER.TEST@KERBER.TEST") and has(kd, "for host/cm.kerber.test@KERBER.TEST")
     for c in CELLS:
         print("ORACLE:%s:%s" % (c, "ok" if t[c] else "fail"))

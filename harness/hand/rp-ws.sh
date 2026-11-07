@@ -91,6 +91,11 @@ wexec() {
     grep -qx 'exitcode 0' "$out"
 }
 
+# wksetup OUT ARG...: ksetup exits 0 even when it fails, so its "Failed" line counts.
+wksetup() {
+    wexec "$@" && ! grep -q '^Failed ' "$1"
+}
+
 # wps OUT MODE ARG...: ws-cells.ps1 in that mode; rc 0 when it reached PS_DONE.
 wps() {
     local out=$1
@@ -200,20 +205,23 @@ win_cycle() {
 
 win_setup() {
     local leg=$1 d=$REC/$1/win
-    wexec "$d/ksetup-realm.txt" ksetup /setrealm "$REALM" || return 1
-    wexec "$d/ksetup-kdc.txt" ksetup /addkdc "$REALM" kdc.kerber.test || return 1
-    wexec "$d/ksetup-kpasswd.txt" ksetup /addkpasswd "$REALM" kdc.kerber.test || return 1
-    wexec "$d/ksetup-map.txt" ksetup /mapuser "cm-win@$REALM" winuser || return 1
+    wksetup "$d/ksetup-realm.txt" ksetup /setrealm "$REALM" || return 1
+    wksetup "$d/ksetup-kdc.txt" ksetup /addkdc "$REALM" kdc.kerber.test || return 1
+    wksetup "$d/ksetup-kpasswd.txt" ksetup /addkpasswd "$REALM" kdc.kerber.test || return 1
+    wksetup "$d/ksetup-map.txt" ksetup /mapuser "cm-win@$REALM" winuser || return 1
     wps "$d/suffix.txt" suffix "${REALM,,}" || return 1
     wput "$WTMP\\ws-m.pw" mach-win || return 1
     wps "$d/machinepw.txt" machinepw "$WTMP\\ws-m.pw" || return 1
     grep -qx 'LSA_STORE:0x00000000' "$d/machinepw.txt" || return 1
     wa write "$WTMP\\ws-ca.crt" < "$SECRETS/$LAB_CA" | grep -qx WROTE || return 1
     wps "$d/ca.txt" ca "$WTMP\\ws-ca.crt" || return 1
-    win_cycle "$leg" || return 1
-    # The cells' copy goes in after the cycle, as R4's did.
-    wa write "$WTMP\\ws.ps1" < "$PS1" | grep -qx WROTE || return 1
+    win_restart "$leg" || return 1
     wexec "$d/w1-ksetup.txt" ksetup
+}
+
+# A power cycle, then ws.ps1 again: the cells' copy goes in after the cycle, as R4's did.
+win_restart() {
+    win_cycle "$1" && wa write "$WTMP\\ws.ps1" < "$PS1" | grep -qx WROTE
 }
 
 reset_both() {
@@ -230,6 +238,7 @@ kdc_log() {
 }
 
 # The cells, in the design's order, L1 last; each cell's own principal, so no cached ticket is reused.
+# R1c's RC4-only policy is set and removed, each with a restart.
 cells() {
     local leg=$1 d=$REC/$1/win kind marks
     read -r -a marks < <(kdc_marks)
@@ -247,10 +256,12 @@ cells() {
     wput "$WTMP\\ws-1.pw" wrong-win-kcm && wps "$d/p2-wrong.txt" ticket "$SVC" cm-win-kcm-chpw "$REALM" "$WTMP\\ws-1.pw"
     wput "$WTMP\\ws-1.pw" pwexp-win-file && wps "$d/p2-pwexp.txt" ticket "$SVC" cm-win-file-pwexp "$REALM" "$WTMP\\ws-1.pw"
     wput "$WTMP\\ws-1.pw" exp-win-file && wps "$d/p2-exp.txt" ticket "$SVC" cm-win-file-exp "$REALM" "$WTMP\\ws-1.pw"
-    wexec "$d/r1c-set.txt" ksetup /setenctypeattr "$REALM" RC4-HMAC-MD5
-    wput "$WTMP\\ws-1.pw" kt-win && wps "$d/r1c.txt" ticket "$SVC" cm-win-kt "$REALM" "$WTMP\\ws-1.pw"
-    wexec "$d/r1c-del.txt" ksetup /delenctypeattr "$REALM"
     wput "$WTMP\\ws-1.pw" alice && wps "$d/k1.txt" k1 "$KC_URL" alice "$REALM" "$WTMP\\ws-1.pw"
+    wps "$d/r1c-set.txt" etype 4
+    win_restart "$leg:r1c" || return 1
+    wput "$WTMP\\ws-1.pw" kt-win && wps "$d/r1c.txt" ticket "$SVC" cm-win-kt "$REALM" "$WTMP\\ws-1.pw"
+    wps "$d/r1c-unset.txt" etype none
+    win_restart "$leg:l1" || return 1
     wput "$WTMP\\ws-1.pw" pw-win && wps "$d/l1.txt" logon cm-win "$REALM" "$WTMP\\ws-1.pw"
     kdc_log "$leg" "${marks[0]}" "${marks[1]}"
     echo "CELLS_DONE:$leg"

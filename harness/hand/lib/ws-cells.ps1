@@ -121,6 +121,21 @@ public static class WsNative {
     static extern bool GetExitCodeProcess(IntPtr h, out uint code);
     [DllImport("kernel32.dll", SetLastError = true)]
     static extern bool CloseHandle(IntPtr h);
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    static extern bool LogonUser(string user, string domain, string password, int logonType, int provider,
+        out IntPtr token);
+    [DllImport("advapi32.dll", SetLastError = true)]
+    static extern bool GetTokenInformation(IntPtr token, int infoClass, out TokenStatistics info, int length,
+        out int returned);
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct Luid { public uint LowPart; public int HighPart; }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct TokenStatistics {
+        public Luid TokenId; public Luid AuthenticationId; public long ExpirationTime;
+        public int TokenType; public int ImpersonationLevel; public int DynamicCharged; public int DynamicAvailable;
+        public int GroupCount; public int PrivilegeCount; public Luid ModifiedId;
+    }
 
     const int ISC_REQ = 0x0001001E;
     const int SEC_I_CONTINUE_NEEDED = 0x00090312;
@@ -430,13 +445,13 @@ public static class WsNative {
         return said;
     }
 
-    // flags: 1 LOGON_WITH_PROFILE, 2 LOGON_NETCREDENTIALS_ONLY (nf-winbase-createprocesswithlogonw).
-    public static List<string> Launch(string user, string domain, string pw, int flags, string cmd, int waitMs) {
+    // LOGON_NETCREDENTIALS_ONLY (2): the caller's token, these credentials on the network (nf-winbase-createprocesswithlogonw).
+    public static List<string> Launch(string user, string domain, string pw, string cmd, int waitMs) {
         said = new List<string>();
         StartupInfo si = new StartupInfo();
         si.cb = Marshal.SizeOf(typeof(StartupInfo));
         ProcessInformation pi;
-        bool ok = CreateProcessWithLogonW(user, domain, pw, flags, null, cmd, 0, IntPtr.Zero, null, ref si, out pi);
+        bool ok = CreateProcessWithLogonW(user, domain, pw, 2, null, cmd, 0, IntPtr.Zero, null, ref si, out pi);
         Say("CREATE:" + ok + " LAST:" + Marshal.GetLastWin32Error());
         if (ok) {
             uint wait = WaitForSingleObject(pi.process, (uint)waitMs), code;
@@ -444,6 +459,40 @@ public static class WsNative {
             CloseHandle(pi.process);
             CloseHandle(pi.thread);
             Say("WAIT:" + wait + " EXIT:" + code);
+        }
+        return said;
+    }
+
+    // L1: the realm logon itself (LOGON32_LOGON_INTERACTIVE 2, LOGON32_PROVIDER_DEFAULT 0; nf-winbase-logonuserw),
+    // then that session's tickets by its LUID (TokenStatistics 10, nf-securitybaseapi-gettokeninformation;
+    // ns-winnt-token_statistics; klist -li), read while the token keeps the session alive.
+    public static List<string> Logon(string user, string domain, string pw) {
+        said = new List<string>();
+        IntPtr tok;
+        bool ok = LogonUser(user, domain, pw, 2, 0, out tok);
+        Say("LOGON:" + ok + " LAST:" + (ok ? 0 : Marshal.GetLastWin32Error()));
+        if (!ok) return said;
+        try {
+            TokenStatistics st;
+            int got;
+            if (!GetTokenInformation(tok, 10, out st, Marshal.SizeOf(typeof(TokenStatistics)), out got)) {
+                Say("LOGON_LUID:none LAST:" + Marshal.GetLastWin32Error());
+                return said;
+            }
+            string args = "-li 0x" + st.AuthenticationId.LowPart.ToString("x");
+            if (st.AuthenticationId.HighPart != 0) args += " -lh 0x" + st.AuthenticationId.HighPart.ToString("x");
+            System.Diagnostics.ProcessStartInfo psi = new System.Diagnostics.ProcessStartInfo("klist.exe", args);
+            psi.UseShellExecute = false;
+            psi.RedirectStandardOutput = true;
+            psi.RedirectStandardError = true;
+            using (System.Diagnostics.Process klist = System.Diagnostics.Process.Start(psi)) {
+                string text = klist.StandardOutput.ReadToEnd() + klist.StandardError.ReadToEnd();
+                klist.WaitForExit();
+                Say("==KLIST_SESSION");
+                foreach (string line in text.Split('\n')) Say(line.TrimEnd('\r'));
+            }
+        } finally {
+            CloseHandle(tok);
         }
         return said;
     }
@@ -525,7 +574,7 @@ switch ($Mode) {
             ">>$out echo ==KLIST_TGT`r`nklist tgt >>$out 2>&1`r`n" +
             ">>$out echo ==KLIST_DONE`r`n"
         [IO.File]::WriteAllText("$T\ws-run.cmd", $cmd)
-        [WsNative]::Launch($user, $realm, $pw, 2, "`"C:\Windows\System32\cmd.exe`" /c $T\ws-run.cmd", 120000)
+        [WsNative]::Launch($user, $realm, $pw, "`"C:\Windows\System32\cmd.exe`" /c $T\ws-run.cmd", 120000)
         $pw = $null
         Show $out
     }
@@ -550,7 +599,7 @@ switch ($Mode) {
         $out = "$T\ws-k1.txt"
         Remove-Item -LiteralPath $out -Force -ErrorAction SilentlyContinue
         [IO.File]::WriteAllText("$T\ws-k1.url", $url)
-        [WsNative]::Launch($user, $realm, $pw, 2, "`"$ps`" -NoProfile -ExecutionPolicy Bypass -File $T\ws.ps1 k1-inner", 120000)
+        [WsNative]::Launch($user, $realm, $pw, "`"$ps`" -NoProfile -ExecutionPolicy Bypass -File $T\ws.ps1 k1-inner", 120000)
         $pw = $null
         Show $out
     }
@@ -564,11 +613,21 @@ switch ($Mode) {
     "logon" {
         $user, $realm, $pwFile = $args
         $pw = (Take $pwFile)[0]
-        $out = "$T\ws-l1.txt"
-        Remove-Item -LiteralPath $out -Force -ErrorAction SilentlyContinue
-        [WsNative]::Launch($user, $realm, $pw, 1, "`"C:\Windows\System32\cmd.exe`" /c klist >$out 2>&1", 120000)
+        [WsNative]::Logon($user, $realm, $pw)
         $pw = $null
-        Show $out
+    }
+    "etype" {
+        # R1c: the client's Kerberos encryption types (Learn: "Network security: Configure encryption types
+        # allowed for Kerberos"); 4 is RC4-HMAC-MD5 only, "none" removes the value.
+        $key = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\Kerberos\Parameters"
+        if (-not (Test-Path $key)) { New-Item -Path $key | Out-Null }
+        if ($args[0] -eq "none") {
+            Remove-ItemProperty -Path $key -Name SupportedEncryptionTypes -ErrorAction SilentlyContinue
+        } else {
+            Set-ItemProperty -Path $key -Name SupportedEncryptionTypes -Value ([int]$args[0]) -Type DWord
+        }
+        $v = (Get-ItemProperty -Path $key).SupportedEncryptionTypes
+        Write-Output ("ETYPE_POLICY:" + $(if ($null -eq $v) { "none" } else { $v }))
     }
     default { Write-Output "MODE_UNKNOWN:$Mode"; exit 2 }
 }
