@@ -62,12 +62,7 @@ parity ledger and the parity decisions that are not deviations are in
 
 ## Open gaps
 
-Two checks MIT makes are not made here. Each is a fix to make, not a deliberate deviation.
-
-| Gap | MIT | Rust | Ledger |
-| --- | --- | --- | --- |
-| A kpasswd reply's receiver address | a KRB-PRIV carrying an `r_address` other than the client's local address is `KRB5KRB_AP_ERR_BADADDR` (`k5_privsafe_check_addrs`, `privsafe.c:355-364`) | `get_clear_result` (`crates/krb5-protocol/src/chpw.rs`) checks the key and the sequence number, not the addresses. Making such a reply takes the session subkey | `rd_priv.c:77-78` ([B1](parity/b1-client.md)) |
-| A `kadm5.acl` name that is not UTF-8 | a line's names and the caller's compare as bytes (`match_data`, `auth_acl.c:445-467`) | `Acl` (`crates/krb5-kdc/src/acl.rs`) reads such bytes as U+FFFD and the caller's name unparses the same way, so two names differing only in those bytes match. It takes a non-UTF-8 name in the ACL, and a ticket naming a caller like it | `auth_acl.c:102-153` ([A4](parity/a4-kadmin.md)) |
+None. The two that 1.2.0 listed are closed: a kpasswd reply's receiver address is checked as MIT's `k5_privsafe_check_addrs` checks it (`privsafe.c:355-364`), and a `kadm5.acl` line (not a comment) whose names are not UTF-8 is a syntax error, stricter than MIT, which compares the bytes (`auth_acl.c:445-467`).
 
 The other known differences laxer than MIT 1.22.2 are deliberate rows in [mit-deviations.md](mit-deviations.md), or ledger `deviation` rows that decide no security check. SPNEGO's is the one such row with a check in it: MIT's acceptor requires a MIC when the chosen mechanism is not the initiator's first, to catch a rewritten list, and this acceptor takes only krb5, so there is nothing to catch ([B1 GSS](parity/b1-gss.md)).
 

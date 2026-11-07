@@ -342,7 +342,7 @@ impl DumpPrincipal {
                 return Err(DumpError::Format("key_data with no slots".into()));
             }
             let key_slot = &kd.slots[0];
-            // MIT: `krb5_dbe_def_search_enctype` (lib/kdb/kdb_default.c:81-85)
+            // MIT: `krb5_dbe_def_search_enctype` (lib/kdb/kdb_default.c:86-90)
             let Ok(etype) = EncryptionType::known(key_slot.ty) else {
                 opaque_keys.push(OpaqueKey {
                     ver: kd.ver,
