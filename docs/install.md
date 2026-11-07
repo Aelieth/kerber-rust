@@ -397,6 +397,10 @@ a save keeps the label of the file it replaces. `restorecon` changes nothing the
 is there for the directory, for files made by hand, and for a realm an earlier release saved
 ([Upgrading kerber-rust](#upgrading-kerber-rust)).
 
+**Memory.** The KDC holds the whole database in memory, where MIT's KDC reads principals from its db2
+files. In the lab that was about 1.25 KiB of the KDC's resident memory per principal, up to about 7,000
+principals, rising in steps as its table grows. Size the host from the realm's principal count.
+
 ### Start
 
 ```sh
@@ -469,6 +473,39 @@ it lists, in that order. `module` is not read. `sam2` is not
 implemented, so an `enable_only` that names only it leaves no module.
 This is separate from `[realms] disable_encrypted_timestamp`, which leaves
 the module loaded and fails that one mechanism; the others still run.
+
+### Windows clients
+
+A Windows machine outside an Active Directory domain uses the realm through `ksetup`, as Microsoft
+documents for an MIT realm. Windows 11 was tested this way, against MIT 1.22.2 first. Two steps differ
+from what a domain would need:
+
+- **The machine's principal carries `+no_auth_data_required`.** This KDC, like MIT 1.20 and later, puts
+  a PAC in each service ticket, and a machine with no domain controller cannot check one: without the
+  flag it refuses its users' logons (event 7, `0xC000005E`).
+- **An interactive logon needs a local account** behind `ksetup /mapuser`, in the `Users` group.
+
+On the KDC, with a password you choose for the machine:
+
+```sh
+sudo kadmin.local -q "addprinc +no_auth_data_required host/winpc.example.com"
+```
+
+On the Windows machine, as an administrator, set its primary DNS suffix to `example.com`, run these,
+then restart it:
+
+```powershell
+ksetup /setrealm EXAMPLE.COM
+ksetup /addkdc EXAMPLE.COM kdc.example.com
+ksetup /addkpasswd EXAMPLE.COM kdc.example.com
+ksetup /setcomputerpassword <the machine principal's password>
+New-LocalUser -Name alice -Password (Read-Host -AsSecureString)
+Add-LocalGroupMember -Name Users -Member alice
+ksetup /mapuser alice@EXAMPLE.COM alice
+```
+
+The lab stored the machine password in the secret `ksetup /setcomputerpassword` writes
+(`$MACHINE.ACC`) directly. A domain-joined logon, SSPI as a server and Windows OpenSSH were not tested.
 
 ### OTP preauth
 
@@ -567,8 +604,10 @@ the host a replica. On Debian and Ubuntu the unit is `krb5-kpropd` (Debian's, `k
 `kpropd.acl` is in `/etc/krb5kdc`; kprop's dump is `/var/lib/krb5kdc/replica_datatrans`, and the
 one kpropd receives `/var/lib/krb5kdc/from_master`.
 
-On the **replica**, with the realm's `krb5.conf` and `kdc.conf` in place and the KDC directory made
-(as under [The database](#the-database)) but no database yet:
+On the **replica**, with the realm's `krb5.conf` and `kdc.conf` in place, the KDC directory made
+(as under [The database](#the-database)) but no database yet, and the primary's stash copied over as
+MIT's guide copies it (`.k5.EXAMPLE.COM`, mode 0600; `/etc/krb5kdc/stash` on Debian and Ubuntu):
+`kdb5_util load` opens the realm's keys, so without the stash the first sync fails.
 
 ```sh
 sudo kadmin -p admin/admin -q "ktadd host/replica.example.com"   # this host's key, default keytab

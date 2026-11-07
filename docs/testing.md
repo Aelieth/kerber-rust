@@ -130,7 +130,7 @@ The toolchain, lld, and `rust-cache` steps are one composite,
 | Job | Runs |
 | --- | --- |
 | `oracles` | `asn1-decode-oracle-gate.sh`, `rd-priv-oracle-gate.sh` |
-| `fuzz` | six smokes, 60 s each, rss limit 2048 MiB: `der_decode`, `gss_token`, `pkinit_cms`, `spake_point`, `oakley_dh`, `transited`. The other three targets, `otp_req_decode`, `keytab_ccache` and `pac_ndr`, are only built, per push |
+| `fuzz` | nine smokes, one per target, 60 s each, rss limit 2048 MiB: `der_decode`, `gss_token`, `pkinit_cms`, `spake_point`, `oakley_dh`, `transited`, `otp_req_decode`, `keytab_ccache` and `pac_ndr` |
 | `anchors` | `python3 scripts/ci-policy.py` with `KERBER_MIT_SRC` set to the pinned MIT 1.22.2 tree |
 | `test-release` | `cargo nextest run --workspace --release --profile ci` with the test-hooks features. Tags and manual runs |
 | `msrv-test` | `cargo test --workspace --locked` on Rust 1.95 with the test-hooks features. Tags and manual runs |
@@ -175,6 +175,29 @@ Golden traces under `tests/traces/mit-*.der` are decoded and
 field-diffed in `crates/krb5-protocol/tests/golden_traces.rs` (unit CI).
 Reply goldens are MIT-KDC bytes from `client-gate.sh`. Do not commit
 `/working`.
+
+## The field lab
+
+The field suite runs each scenario against MIT first on KVM lab machines, then against kerber-rust the
+same way, and compares the two check by check. [harness/field](../harness/field/README.md) builds the
+lab and runs it; `harness/field/run.sh --profile <name>` picks the scenarios:
+
+| Profile | Scenarios |
+| --- | --- |
+| `nightly`, `weekly` | the Fedora suite: 6 scenarios, and 16 |
+| `ds` | the server scenarios on Debian 13 or Rocky Linux 10, against that distribution's MIT (`harness/field/ds/<vm>.env`) |
+| `kill-loop` | kills during writes, each result loaded by MIT's `kdb5_util` |
+| `load`, `load-long` | 600 s and 3,600 s of load per leg |
+| `lt` | restarts, hostile input to the KDC, the OTP default and `rd_safe` |
+
+The AD trust runs alone, as `run.sh ad-trust`. The drivers in [harness/hand](../harness/hand/README.md)
+cover what the field suite does not:
+
+- `rp-cm.sh`: MIT's client tools and SSSD on Fedora 44, Rocky Linux 10, Debian 13 and Ubuntu 26.04,
+  with `FILE:` and `KCM:` caches, against MIT's KDC and then ours. `rp-cm.sh <sha> hm` runs Debian 13's
+  Heimdal client tools the same way.
+- `rp-ws.sh`: Windows 11's own Kerberos and SSPI, joined to the realm with `ksetup`.
+- `ds-baselines.sh`: the Debian 13 and Rocky Linux 10 snapshots the `ds` profile starts from.
 
 ## Rust KDC test realm
 
