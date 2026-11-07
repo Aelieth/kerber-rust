@@ -128,7 +128,7 @@ REC_DIR=$RUN/guards
 DONE=0 STOP='' SCEN='' RESULT=FAIL ALL_PASS=1 GUARDS_OK=0
 declare -a ROWS=()
 
-# kdc's logs the record keeps per scenario: the daemons' and, on the weekly, ours' JSON stream (upgrade.sh).
+# kdc's logs the record keeps per scenario: the daemons' and, where [logging] json names it, ours' JSON stream.
 LEGLOGS='krb5kdc.log kadmind.log krb5kdc.log.json'
 # leglogs <record dir> <start>: kdc's daemon logs and its Kerberos units' journal since <start>, with the window and
 # kdc's UTC offset, for lib/log-grade.py. Best effort: a scenario's result never depends on it.
@@ -155,6 +155,9 @@ leglogs() {
         timeout 120 "$LAB" ssh "$vm" -- "g=\$(mktemp); cat > \"\$g\"; sudo sh \"\$g\" since ${o:-0:0:0:-} /var/log/$f n \
             whole; rm -f \"\$g\"" < "$HERE/lib/log-since.sh" > "$d/$f" 2>> "$d/offsets" || true
     done
+    # The leg's [logging] json relation, kdc.conf's then krb5.conf's (none: not configured), for log-grade.py.
+    timeout 60 "$LAB" ssh "$vm" -- "sudo cat $KDCDIR/kdc.conf /etc/krb5.conf 2> /dev/null | grep -E '^[[:space:]]*json[[:space:]]*='" \
+        > "$d/json.conf" 2> /dev/null < /dev/null || true
     timeout 120 "$LAB" ssh "$vm" -- "sudo journalctl -u 'krb5*' -u 'kadmin*' --since @$2 -o short-iso-precise --no-pager" \
         > "$d/units.txt" 2> /dev/null < /dev/null || true
     printf '%s %s %s\n' "$2" "$(date +%s)" "$(timeout 60 "$LAB" ssh "$vm" -- 'date +%z' 2> /dev/null < /dev/null)" > "$d/window"

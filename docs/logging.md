@@ -24,7 +24,8 @@ carries can open it: a new file in `/var/log` takes its creator's type
 (`krb5kdc_log_t`, `kadmind_log_t`), and the others may only append
 (`allow daemon logfile:file { append getattr ioctl lock }`, no `open`).
 For the KDC's stream, create `/var/log/krb5kdc.log.json` first and
-`restorecon` it; kadmind then runs without its stream.
+`restorecon` it; kadmind then runs without its stream, and each start
+of kadmind logs one AVC denial for that open.
 MIT does not read the relation, so a kdc.conf
 shared with MIT may carry it (settled live beside MIT 1.22.2's
 `krb5kdc` and `kadmind`). Each program filters the stream with its own

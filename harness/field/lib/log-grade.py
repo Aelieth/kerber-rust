@@ -2,14 +2,15 @@
 """log-grade.py <run dir>: the log grader over a field run's records (goal.txt's log analysis), MIT's leg first.
 
 run.sh leaves, after each scenario's leg, <scenario>/<leg>/logs/: kdc's krb5kdc.log and kadmind.log, ours' JSON
-events (krb5kdc.log.json, `json = FILE:` from upgrade), its Kerberos units' journal since the scenario began
-(units.txt), and window
+events where configured (krb5kdc.log.json; json.conf holds the leg's [logging] json relation, empty when none), its
+Kerberos units' journal since the scenario began (units.txt), and window
 (start, end, kdc's UTC offset). A daemon log line counts for the scenario its time falls in. Checks, written to
 <run>/log-grade/{checks.tsv,record.txt,result}:
   LG.records       each leg left daemon log lines;
   LG.panic         no panic in any raw line of ours' daemon logs or units' journal;
   LG.unread        no unmatched daemon line or unparsed JSON line of ours holds panic or an error level;
-  LG.correlated    at least one kdc.issue event, each with a correlation_id (per line; docs/logging.md);
+  LG.correlated    where ours' leg configures [logging] json: at least one kdc.issue event, each with a
+                   correlation_id (per line; docs/logging.md); INFO "not configured" otherwise;
   LG.errors        every (Error) or worse line of ours matches, masked (addresses, principals, hex, numbers),
                    one of MIT's in the same scenario or an allow rule (log-grade.allow: prog<TAB>ERE<TAB>reason).
 Exit 0 when every check passes, 1 otherwise, 2 on a usage error.
@@ -112,6 +113,17 @@ def json_events(units):
     return out, bad
 
 
+def json_configured(run, leg):
+    """Whether any window of the leg recorded a [logging] json relation (logs/json.conf, from run.sh)."""
+    for d, *_ in windows(run, leg):
+        try:
+            if os.path.getsize(os.path.join(d, "json.conf")) > 0:
+                return True
+        except OSError:
+            pass
+    return False
+
+
 def field(ev, key):
     """An event's key, under tracing's "fields" (the daemons' JSON) or at the top (the harness's own lines)."""
     return (ev.get("fields") or {}).get(key, ev.get(key))
@@ -180,8 +192,11 @@ def grade(run):
         return v if isinstance(v, str) and v and v != "none" else None
 
     bare = [e for _, e in issues if cid(e) is None]
-    row("LG.correlated", issues and not bare, "kdc.issue events >= 1, each with a correlation_id",
-        f"{len(issues)} kdc.issue, {len(bare)} without a correlation_id")
+    if json_configured(run, "rust"):
+        row("LG.correlated", issues and not bare, "kdc.issue events >= 1, each with a correlation_id",
+            f"{len(issues)} kdc.issue, {len(bare)} without a correlation_id")
+    else:
+        info("LG.correlated", f"JSON not configured on ours' leg ({len(issues)} kdc.issue)")
     rec += ["uncorrelated: " + json.dumps(e) for e in bare]
     for sc in sorted({s for s, *_ in ours} | {s for s, _ in units}):
         info(f"LG.issues.{sc}", f"{sum(1 for s, _ in issues if s == sc)} kdc.issue events")

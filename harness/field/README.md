@@ -264,11 +264,10 @@ harness/field/run.sh --grade-logs ~/kerber-lab/runs/<run>   # the log grader ove
       after each leg.
   - `log-grade/`: on a weekly with both legs, the postflight's `post.log.grade`
     runs `lib/log-grade.py` over the `logs/` (MIT's leg first): no panic in any
-    line, each `kdc.issue` JSON event with a `correlation_id` (on the weekly only,
-    the rust leg's `upgrade` adds `json = FILE:/var/log/krb5kdc.log.json` to
-    kdc.conf, made first so it has the KDC's SELinux log type; MIT ignores it; the
-    record keeps it per window as `logs/krb5kdc.log.json`; `install` and `replica`
-    reset kdc, so their windows have none), and each
+    line, each `kdc.issue` JSON event with a `correlation_id` where ours' leg
+    configures `[logging] json` (the record keeps the relation as `logs/json.conf`
+    and a file stream as `logs/krb5kdc.log.json`; the profiles run the README's
+    config, which has none, so it is INFO "not configured"), and each
     `(Error)` line of ours matched, as a class, by MIT's in the same scenario or
     by `lib/log-grade.allow`.
   - `runs/index.tsv` has one line per run. The last 30 runs and every failed one
