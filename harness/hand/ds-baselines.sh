@@ -256,19 +256,16 @@ kinit_through() {
 }
 
 # The hostname kdc, as Fedora's kdc has (MIT logs gethostname(), logger.c:506-512), kept by cloud-init across
-# boots; `hostname -f` gives kdc.kerber.test: on Debian its 127.0.1.1 line, added when the image has none (else NSS's
-# myhostname answers the bare name) and kept from cloud-init; on Rocky the lab's DNS.
+# boots; `hostname -f` gives kdc.kerber.test from its 127.0.1.1 line, added when the image has none (else NSS's
+# myhostname answers the bare name) and kept from cloud-init. Debian's installer writes that line; Rocky's doesn't,
+# but kdc2.kerber.test is only Fedora kdc2's DHCP name, which the lab's DNS answers only while that VM holds a lease.
 set_hostname() {
-    local line="127.0.1.1 $HN.kerber.test $HN" ci='preserve_hostname: true' add=''
-    if [ "$FAM" = deb ]; then
-        ci="$ci\nmanage_etc_hosts: false"
-        add="else echo '$line' | sudo tee -a /etc/hosts > /dev/null; "
-    fi
+    local line="127.0.1.1 $HN.kerber.test $HN"
     on "$VM" "sudo hostnamectl set-hostname $HN && { [ ! -d /etc/cloud/cloud.cfg.d ] || printf \
-        '$ci\n' | sudo tee /etc/cloud/cloud.cfg.d/99-ds-hostname.cfg > /dev/null; } && \
-        if grep -q '^127\.0\.1\.1[[:space:]]' /etc/hosts; then sudo sed -i \
-        's/^127\.0\.1\.1[[:space:]].*/$line/' /etc/hosts; ${add}fi" > "$REC/$PH/hostname.out" 2>&1 ||
-        bad "$PH:set-hostname"
+        'preserve_hostname: true\nmanage_etc_hosts: false\n' | sudo tee /etc/cloud/cloud.cfg.d/99-ds-hostname.cfg \
+        > /dev/null; } && if grep -q '^127\.0\.1\.1[[:space:]]' /etc/hosts; then sudo sed -i \
+        's/^127\.0\.1\.1[[:space:]].*/$line/' /etc/hosts; else echo '$line' | sudo tee -a /etc/hosts > /dev/null; fi" \
+        > "$REC/$PH/hostname.out" 2>&1 || bad "$PH:set-hostname"
 }
 pkgs() {
     # shellcheck disable=SC2086 # the package lists split into words
