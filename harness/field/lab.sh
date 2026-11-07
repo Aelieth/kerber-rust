@@ -837,7 +837,7 @@ cmd_status() {
 # check_vm <vm>: the F0 acceptance checks for one VM; prints PASS/FAIL lines.
 check_vm() {
     local vm=$1 fails=0 other out want rev holder=
-    [ -e "$TAKEOVER" ] && holder=$(cat "$TAKEOVER")
+    [ ! -e "$TAKEOVER" ] || read -r holder _ < "$TAKEOVER"
     pass() { printf '  PASS %s\n' "$*"; }
     fail() { printf '  FAIL %s\n' "$*"; fails=$((fails + 1)); }
     printf '%s (%s):\n' "$vm" "${IP[$vm]}"
@@ -917,8 +917,9 @@ cmd_check() {
     return $rc
 }
 
-# DS: another VM answers as kdc.kerber.test while kdc is shut off. The state file is written
-# before the network changes and removed after they are undone, so release always knows.
+# DS: another VM answers as kdc.kerber.test while kdc is shut off. The state file (`<vm> <own>`, own 1 when the
+# role's name had a dns-host; kdc2's is its DHCP host only, which a dns-host outranks even while its lease lives)
+# is written before the network changes and removed after they are undone, so release always knows.
 TAKEOVER=$LAB_HOME/state/takeover
 KDC_NAME=kdc.$DNS_DOMAIN
 
@@ -931,7 +932,7 @@ dns_ips() {
 
 check_kdc_name() {
     local who=kdc got
-    [ -e "$TAKEOVER" ] && who=$(cat "$TAKEOVER")
+    [ ! -e "$TAKEOVER" ] || read -r who _ < "$TAKEOVER"
     got=$(dns_ips "$KDC_NAME")
     if [ "$got" = "${IP[$who]}" ]; then
         printf 'lab:\n  PASS %s -> %s (%s)\n' "$KDC_NAME" "$got" "$who"
@@ -965,11 +966,18 @@ cmd_takeover() {
     takeover_role "$r"
     known_vm "$vm"
     [ "$vm" != "$r" ] || die "takeover: $r already holds $TK_NAME"
-    [ ! -e "$TK_FILE" ] || die "takeover: $(cat "$TK_FILE") holds $TK_NAME; release first"
+    [ ! -e "$TK_FILE" ] || die "takeover: $(cut -d' ' -f1 "$TK_FILE") holds $TK_NAME; release first"
     [ "$(dom_state "$r")" != running ] || die "takeover: $r is running; shut it off first"
+    local own=0 at
+    at=$(dns_ips "$TK_NAME")
+    case ",$at," in
+        *",${IP[$r]},"*) own=1 ;;
+        ,,) ;;
+        *) die "takeover: $TK_NAME has a dns-host at $at, not ${IP[$r]}" ;;
+    esac
     mkdir -p "${TK_FILE%/*}"
-    printf '%s\n' "$vm" > "$TK_FILE"
-    vsh net-update "$NET" delete dns-host "$(host_xml "${IP[$r]}" "$TK_NAME")" --live >/dev/null
+    printf '%s %s\n' "$vm" "$own" > "$TK_FILE"
+    [ "$own" = 0 ] || vsh net-update "$NET" delete dns-host "$(host_xml "${IP[$r]}" "$TK_NAME")" --live >/dev/null
     vsh net-update "$NET" delete dns-host "$(host_xml "${IP[$vm]}" "$vm.$DNS_DOMAIN")" --live >/dev/null
     vsh net-update "$NET" add dns-host "$(host_xml "${IP[$vm]}" "$TK_NAME" "$vm.$DNS_DOMAIN")" --live >/dev/null
     say "$TK_NAME -> ${IP[$vm]} ($vm), live only; release puts it back"
@@ -977,17 +985,17 @@ cmd_takeover() {
 
 cmd_release() {
     [ $# -le 1 ] || die "usage: lab.sh release [kdc|kdc2]"
-    local vm r=${1:-kdc}
+    local vm own r=${1:-kdc}
     takeover_role "$r"
     [ -e "$TK_FILE" ] || { say "no takeover to release"; return 0; }
-    vm=$(cat "$TK_FILE")
+    read -r vm own < "$TK_FILE"
     known_vm "$vm"
     vsh net-update "$NET" delete dns-host "$(host_xml "${IP[$vm]}" "$TK_NAME" "$vm.$DNS_DOMAIN")" --live >/dev/null || true
     case ",$(dns_ips "$vm.$DNS_DOMAIN")," in
         *",${IP[$vm]},"*) ;;
         *) vsh net-update "$NET" add dns-host "$(host_xml "${IP[$vm]}" "$vm.$DNS_DOMAIN")" --live >/dev/null ;;
     esac
-    case ",$(dns_ips "$TK_NAME")," in
+    [ "${own:-1}" = 0 ] || case ",$(dns_ips "$TK_NAME")," in
         *",${IP[$r]},"*) ;;
         *) vsh net-update "$NET" add dns-host "$(host_xml "${IP[$r]}" "$TK_NAME")" --live >/dev/null ;;
     esac
