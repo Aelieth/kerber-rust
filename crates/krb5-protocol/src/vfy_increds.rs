@@ -6,7 +6,7 @@ use krb5_types::{
     EncKdcRepPart, EncryptionKey, KerberosTime, PrincipalName, Realm, Ticket, TicketFlags,
 };
 
-use krb5_config::Krb5Conf;
+use krb5_config::{CanonPrinc, Krb5Conf};
 
 use crate::acceptor_conf::AcceptorConfig;
 use crate::ap_req::{
@@ -130,8 +130,28 @@ fn get_vfy_cred(
             return Err(refused(krb5_types::err::TKT_EXPIRED));
         }
         let tgt = cred_as_outcome(creds, &session, ticket);
-        let realm_s = String::from_utf8_lossy(realm.as_bytes()).into_owned();
-        let tgs = tgs_exchange(profile, kdc, &tgt, name.clone(), &realm_s)?;
+        // MIT: `krb5_tkt_creds_step` (lib/krb5/krb/get_creds.c:1293-1305)
+        let princ = (realm.clone(), name.clone());
+        let mut last = refused(krb5_types::err::S_PRINCIPAL_UNKNOWN);
+        let mut tgs = None;
+        for (crealm, cname) in CanonPrinc::new(profile, &princ) {
+            let realm_s = String::from_utf8_lossy(crealm.as_bytes()).into_owned();
+            match tgs_exchange(profile, kdc, &tgt, cname, &realm_s) {
+                Err(
+                    e @ Error::KrbError {
+                        code: krb5_types::err::S_PRINCIPAL_UNKNOWN,
+                        ..
+                    },
+                ) => {
+                    last = e;
+                }
+                got => {
+                    tgs = Some(got?);
+                    break;
+                }
+            }
+        }
+        let tgs = tgs.ok_or(last)?;
         let times = (&tgs.enc_part).into();
         (tgs.ticket, tgs.session_key, tgt.crealm, tgt.cname, times)
     };
@@ -139,6 +159,40 @@ fn get_vfy_cred(
     validate_times(&times, &now, i64::from(profile.clockskew))?;
     let ap = build_ap_req_in(ticket, &session, &crealm, &cname, Some(profile))?;
     let raw = encode(&ap)?;
+    // MIT: `decrypt_ticket` (lib/krb5/krb/rd_req_dec.c:454-470)
+    let princ = (realm.clone(), name.clone());
+    let wildcard = matches!(name.name_string.as_slice(), [_, host]
+        if name.name_type == PrincipalName::NT_SRV_HST
+            && (host.as_bytes().is_empty() || conf.ignore_acceptor_hostname));
+    let mut iter = CanonPrinc::new(profile, &princ);
+    iter.no_hostrealm = true;
+    let names: Vec<_> = if wildcard {
+        vec![princ.clone()]
+    } else {
+        iter.collect()
+    };
+    let mut last = refused(krb5_types::err::NOKEY);
+    for (_, name) in &names {
+        match rd_req_as(&raw, realm, name, keytab, conf) {
+            Err(
+                e @ Error::KrbError {
+                    code: krb5_types::err::NOKEY,
+                    ..
+                },
+            ) => last = e,
+            got => return got,
+        }
+    }
+    Err(last)
+}
+
+fn rd_req_as(
+    raw: &[u8],
+    realm: &Realm,
+    name: &PrincipalName,
+    keytab: &Keytab,
+    conf: &AcceptorConfig,
+) -> Result<(), Error> {
     let matched: Vec<_> = keytab
         .entries
         .iter()
@@ -164,7 +218,7 @@ fn get_vfy_cred(
         remote_addr: None,
         now: None,
     };
-    verify_ap_req_ex(&raw, &params, &ReplayCache::new(), None)?;
+    verify_ap_req_ex(raw, &params, &ReplayCache::new(), None)?;
     Ok(())
 }
 

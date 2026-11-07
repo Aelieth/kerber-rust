@@ -27,6 +27,10 @@ is built, as the P-384 constant-time field, and is exempt too. Its build depende
 0.4.1 and `semver` 1.0.28 are vetted by imported Mozilla and Bytecode
 Alliance audits; `deny.toml` pins its feature set.
 
-Local audit: `rasn-derive` 0.28.14 (`audits.toml`). Remaining
+Local audits: `rasn-derive` 0.28.14 and `dns-lookup` 4.0.2 (`audits.toml`;
+the notes name dns-lookup's canonical-name unwrap, which the caller contains).
+**`socket2` 0.6.5**, dns-lookup's one new dependency, is trusted by its
+publisher, Thomas de Zeeuw, as the Mozilla and Bytecode Alliance sets trust
+him; `imports.lock` holds that publisher record. Remaining
 third-party crates are honest exemptions; the list is smaller than a blank
 `cargo vet init`.

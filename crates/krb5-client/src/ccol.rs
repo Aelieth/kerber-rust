@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use krb5_config::{CcSpec, ClientContext};
+use krb5_config::{CanonPrinc, CcSpec, ClientContext};
 
 use crate::creds::{Princ, princ_eq};
 use crate::errmsg::{Code, Krb5Error};
@@ -213,9 +213,14 @@ pub fn cache_match(
     default: &CcSpec,
     princ: &Princ,
 ) -> Result<Cache, Krb5Error> {
-    let found = collection(ctx, default)?
-        .into_iter()
-        .find(|c| c.principal(ctx).is_ok_and(|p| princ_eq(&p, princ)));
+    let caches = collection(ctx, default)?;
+    let mut iter = CanonPrinc::new(&ctx.profile, princ);
+    iter.subst_defrealm = true;
+    let found = iter.find_map(|c| {
+        let mut held = caches.iter();
+        held.find(|cache| cache.principal(ctx).is_ok_and(|p| princ_eq(&p, &c)))
+            .cloned()
+    });
     crate::trace::cache_match(princ, found.is_some());
     found.ok_or_else(|| Krb5Error::of(Code::CcNotfound))
 }

@@ -1,51 +1,61 @@
+use std::panic::{AssertUnwindSafe, catch_unwind};
+
+use dns_lookup::{AddrInfoHints, getaddrinfo, getnameinfo};
 use krb5_types::{NameError, PrincipalName, Realm, try_ascii};
+use nix::libc::{AI_CANONNAME, NI_NAMEREQD};
 
 use super::{CanonHost, Krb5Conf};
 
 const RESOLV_CONF: &str = "/etc/resolv.conf";
 
 // MIT: `krb5_sname_to_principal` (lib/krb5/os/sn2princ.c:347-352)
-#[must_use]
-pub fn this_host() -> String {
+fn this_host() -> String {
     nix::unistd::gethostname()
         .map(|h| h.to_string_lossy().into_owned())
         .unwrap_or_default()
 }
 
-#[must_use]
-pub fn expand_hostname(host: &str, conf: &Krb5Conf) -> String {
-    expand_hostname_no_dns(host, conf.qualify_shortname.as_deref(), primary_domain)
-}
-
-#[must_use]
-pub fn local_host_name(conf: &Krb5Conf) -> String {
-    expand_hostname(&this_host(), conf)
-}
-
-// MIT: `expand_hostname` (lib/krb5/os/sn2princ.c:121-144)
-// No DNS: qualify a short name; lowercase, drop dot.
-// MIT: `qualify_shortname` (lib/krb5/os/sn2princ.c)
-#[must_use]
-pub fn expand_hostname_no_dns(
-    host: &str,
-    qualify_shortname: Option<&str>,
-    primary_domain: impl FnOnce() -> Option<String>,
-) -> String {
-    let mut name = host.to_owned();
-    if !host.contains('.') {
-        let domain = match qualify_shortname {
-            Some(d) => Some(d.to_owned()),
-            None => primary_domain(),
-        };
-        if let Some(d) = domain.filter(|d| !d.is_empty()) {
-            name = format!("{host}.{d}");
-        }
-    }
+// MIT: `expand_hostname` (lib/krb5/os/sn2princ.c:89-154)
+// Non-UTF-8 canonname panics: no name.
+fn expand_hostname(host: &str, conf: &Krb5Conf, use_dns: bool) -> String {
+    let dns = use_dns
+        .then(|| {
+            catch_unwind(AssertUnwindSafe(|| dns_name(host, conf.rdns)))
+                .ok()
+                .flatten()
+        })
+        .flatten();
+    let mut name = dns.unwrap_or_else(|| qualify_shortname(host, conf));
     name.make_ascii_lowercase();
     if name.ends_with('.') {
         name.pop();
     }
     name
+}
+
+fn dns_name(host: &str, rdns: bool) -> Option<String> {
+    let hints = AddrInfoHints {
+        flags: AI_CANONNAME,
+        ..AddrInfoHints::default()
+    };
+    let first = getaddrinfo(Some(host), None, Some(hints))
+        .ok()?
+        .next()?
+        .ok()?;
+    let reverse = rdns.then(|| getnameinfo(&first.sockaddr, NI_NAMEREQD).ok());
+    reverse.flatten().map(|(name, _)| name).or(first.canonname)
+}
+
+// MIT: `qualify_shortname` (lib/krb5/os/sn2princ.c:60-86)
+fn qualify_shortname(host: &str, conf: &Krb5Conf) -> String {
+    if host.contains('.') {
+        return host.to_owned();
+    }
+    let domain = conf.qualify_shortname.clone().or_else(primary_domain);
+    match domain.filter(|d| !d.is_empty()) {
+        Some(d) => format!("{host}.{d}"),
+        None => host.to_owned(),
+    }
 }
 
 pub type HostPrinc = (Realm, PrincipalName);
@@ -86,7 +96,7 @@ pub fn sname_to_principal(
         return Ok(princ);
     }
     let iter = CanonPrinc::new(conf, &princ);
-    let (host, combined) = iter.expand();
+    let (host, combined) = iter.expand(conf.dns_canonicalize_hostname == CanonHost::True);
     iter.with_host(&host, &combined)
 }
 
@@ -139,7 +149,7 @@ impl<'a> CanonPrinc<'a> {
         if self.step > 2 {
             return Ok(None);
         }
-        let (host, combined) = self.expand();
+        let (host, combined) = self.expand(self.step == 2);
         if self.canonhost.as_deref() == Some(combined.as_str()) {
             return Ok(None);
         }
@@ -149,14 +159,14 @@ impl<'a> CanonPrinc<'a> {
     }
 
     // MIT: `canonicalize_princ` (lib/krb5/os/sn2princ.c:195-221)
-    fn expand(&self) -> (String, String) {
+    fn expand(&self, use_dns: bool) -> (String, String) {
         let host = match self.princ.1.name_string.as_slice() {
             [_, host] => String::from_utf8_lossy(host.as_bytes()).into_owned(),
             _ => String::new(),
         };
         let (name, trailer) = split_trailer(&host);
         let expanded = if self.princ.1.name_type == PrincipalName::NT_SRV_HST {
-            expand_hostname(name, self.conf)
+            expand_hostname(name, self.conf, use_dns)
         } else {
             name.to_owned()
         };
@@ -189,6 +199,17 @@ impl<'a> CanonPrinc<'a> {
             .as_deref()
             .ok_or(SnameError::NoDefaultRealm)?;
         Ok(try_ascii(realm)?)
+    }
+}
+
+impl Iterator for CanonPrinc<'_> {
+    type Item = HostPrinc;
+
+    fn next(&mut self) -> Option<HostPrinc> {
+        self.next_candidate().unwrap_or_else(|_| {
+            self.step = u32::MAX;
+            None
+        })
     }
 }
 

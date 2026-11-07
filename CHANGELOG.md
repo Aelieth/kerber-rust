@@ -25,6 +25,7 @@ any other `###` heading.
 
 ### Changed
 
+- **config.** Host names canonicalize through DNS, as MIT: kprop, kpropd, kinit -k, kadmin.local -k, TGS.
 - **brainpool.** Denies `unwrap`, `expect`, `panic` outside tests, as the other library crates do.
 - **kdc.** `Bootstrapped`, `MasterKey` are `#[non_exhaustive]`; a later field or variant won't break.
 - **types.** A build on crates.io's rasn fails on `KERBER_RUST_NEEDS_THIS_PATCH`, not decoding unlike MIT.

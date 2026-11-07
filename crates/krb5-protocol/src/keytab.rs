@@ -802,6 +802,23 @@ pub fn keytab_init_creds_keys(
     }
 }
 
+pub type InitCredsKeys = (krb5_config::HostPrinc, Vec<ProtocolKey>, Vec<i32>);
+
+// MIT: `krb5_init_creds_set_keytab` (gic_keytab.c:183-203)
+#[must_use]
+pub fn keytab_init_creds_client(
+    kt: &Keytab,
+    conf: &krb5_config::Krb5Conf,
+    client: &krb5_config::HostPrinc,
+) -> Option<InitCredsKeys> {
+    let mut iter = krb5_config::CanonPrinc::new(conf, client);
+    iter.subst_defrealm = true;
+    iter.find_map(|c| {
+        let realm = String::from_utf8_lossy(c.0.as_bytes()).into_owned();
+        keytab_init_creds_keys(kt, &c.1, &realm).map(|(keys, etypes)| (c, keys, etypes))
+    })
+}
+
 // MIT: `sort_enctypes` (gic_keytab.c:149-174)
 pub fn sort_etypes_keytab_first(req: &mut [i32], keytab: &[i32]) {
     let mut front = Vec::with_capacity(req.len());

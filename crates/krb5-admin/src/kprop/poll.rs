@@ -117,10 +117,12 @@ pub fn kpropd_do_iprop(cfg: &KpropdIprop<'_>, wake: &IpropWake) -> i32 {
         t => t,
     };
     let conf = &cfg.ctx.profile;
-    let me = krb5_config::local_host_name(conf);
-    let Ok(client) =
-        PrincipalName::try_new(PrincipalName::NT_SRV_HST, [KIPROP_SVC_NAME, me.as_str()])
-    else {
+    let Ok((_, client)) = krb5_config::sname_to_principal(
+        conf,
+        None,
+        Some(KIPROP_SVC_NAME),
+        PrincipalName::NT_SRV_HST,
+    ) else {
         log.com_err(None, "while trying to construct host service principal");
         return done();
     };

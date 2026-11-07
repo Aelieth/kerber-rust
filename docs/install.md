@@ -612,9 +612,8 @@ directory), `-P` (else 754, on every address), `-A` (the primary, else `admin_se
 `-D` and `-S` (`-D` and `-S` are no-ops: it never detaches and is always standalone), `-f` (else
 `from_master` in the KDC directory), `-F` (`kdb5_util load -d`), `-p` (else the `kdb5_util`
 beside `kpropd`) and `--pid-file`; not MIT's `-x`. It accepts a ticket for its own
-`host/<this host>` only, the name formed **without DNS** (a short name gains `qualify_shortname`,
-else the resolver's first search domain, lowercased): MIT's DNS canonicalization is not ported,
-so the keytab entry and `kprop`'s target must be that name.
+`host/<this host>` only, the name formed as MIT's (`dns_canonicalize_hostname`, `rdns`,
+`qualify_shortname`), so the keytab entry and `kprop`'s target must be that name.
 
 ## Upgrading an MIT realm
 
@@ -934,9 +933,6 @@ and `/var/lib/krb5kdc`.
 
 - MIT's database files (db2, LMDB) and the LDAP backend. The database is MIT's dump format, so an
   MIT realm moves over with dump and load.
-- MIT's DNS canonicalization for a replica's name (`dns_canonicalize_hostname = true`, its default,
-  and the second step of `fallback`): a replica's `host/` name is formed without DNS ([Replica
-  KDCs](#replica-kdcs)).
 - SPAKE groups P-384 and P-521 (MIT's OpenSSL groups). `edwards25519`, the group Fedora's
   `krb5.conf` names and its `kdc.conf` challenges with, and P-256 work as MIT's.
 - RADIUS-backed OTP preauthentication (OTP works through an embedder's verifier: [OTP preauth](#otp-preauth)), PKINIT

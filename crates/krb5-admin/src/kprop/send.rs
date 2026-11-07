@@ -179,12 +179,13 @@ pub fn kprop_get_tickets(
 ) -> Result<KpropCreds, KpropError> {
     krb5_types::try_ascii(realm)
         .map_err(|_| KpropError::new(None, "while setting client principal name"))?;
-    let conf = &ctx.profile;
-    let me = krb5_config::local_host_name(conf);
-    let client = PrincipalName::try_new(PrincipalName::NT_SRV_HST, ["host", me.as_str()])
-        .map_err(|_| KpropError::new(None, "while setting client principal name"))?;
-    let replica = krb5_config::expand_hostname(replica_host, conf);
-    let server = PrincipalName::try_new(PrincipalName::NT_SRV_HST, ["host", replica.as_str()])
+    let host = |h| {
+        krb5_config::sname_to_principal(&ctx.profile, h, Some("host"), PrincipalName::NT_SRV_HST)
+            .map(|(_, name)| name)
+    };
+    let client =
+        host(None).map_err(|_| KpropError::new(None, "while setting client principal name"))?;
+    let server = host(Some(replica_host))
         .map_err(|_| KpropError::new(None, "while setting server principal name"))?;
     init_creds_keytab(
         ctx,
@@ -218,6 +219,7 @@ pub(crate) fn init_creds_keytab(
     })?;
     // MIT: `krb5_init_creds_set_service` (lib/krb5/krb/get_in_tkt.c:1055-1071)
     trace::init_creds(trace::Princ::new(client, realm.as_bytes()));
+    let mut client = client.clone();
     let mut ticket = init_creds_ticket_opts(conf, realm)?;
     if unforwardable {
         ticket.forwardable = false;
@@ -239,14 +241,21 @@ pub(crate) fn init_creds_keytab(
             (Vec::new(), Vec::new(), Some(failure))
         }
         Some(Ok(bytes)) => {
-            let Some((keys, kt_etypes)) = Keytab::parse(&bytes)
-                .ok()
-                .and_then(|kt| krb5_protocol::keytab_init_creds_keys(&kt, client, realm))
+            let Ok(kt) = Keytab::parse(&bytes) else {
+                return Err(KpropError::code(KT_NOTFOUND, GETTING_CREDS));
+            };
+            let wanted = (
+                krb5_types::try_ascii(realm).unwrap_or_default(),
+                client.clone(),
+            );
+            let Some(((_, found), keys, kt_etypes)) =
+                krb5_protocol::keytab_init_creds_client(&kt, conf, &wanted)
             else {
                 return Err(KpropError::code(KT_NOTFOUND, GETTING_CREDS));
             };
+            client = found;
             trace::init_creds_keytab_lookup(
-                trace::Princ::new(client, realm.as_bytes()),
+                trace::Princ::new(&client, realm.as_bytes()),
                 &kt_etypes,
             );
             (keys, kt_etypes, None)
