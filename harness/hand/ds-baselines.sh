@@ -6,7 +6,8 @@
 #   mit   mit-oracle-<vm>  the distro's MIT KDC (mit-server-<vm>, RC R1) holding f4-mit-f44's realm
 #   rep   mit-replica-<vm>, rust-replica-<vm> on the same-family replica <vm>r (or $4), from its mit-server-<vm>:
 #                          the hostname kdc2, Debian's krb5-kpropd, MIT's units off and no realm, as kdc2's f4-mit-f44;
-#                          then MIT's server packages removed, as rust-replica-f44
+#                          then MIT's server packages removed and kerber-rust at RUST_PIN installed by install.md's
+#                          blocks, its units off and no realm, as rust-replica-f44
 #   rust  rust-base-<vm>   kerber-rust at RUST_PIN (a3a9e051, the oldest sha whose install both families proved),
 #                          replacing mit-server-<vm>'s MIT by that sha's own docs/install.md blocks, as MD's smoke did,
 #                          and holding rust-field-p12-f44's realm, so `upgrade` steps a real version gap
@@ -345,8 +346,34 @@ phase_mit() {
     snap "mit-oracle-$VM"
 }
 
-phase_rust() {
+# pin_install: kerber-rust at RUST_PIN on $VM by that sha's install.md blocks: the prerequisites, the build, and
+# the replacement of MIT's server packages (`make install`).
+pin_install() {
     local rcs
+    DOCS=$REC/$PH/install.md
+    GIT_OPTIONAL_LOCKS=0 git -C "$WT" show "$RUST_PIN:docs/install.md" > "$DOCS" || { bad "$PH:pin-docs"; return 1; }
+    echo "PIN:$PH:$RUST_PIN"
+    GIT_OPTIONAL_LOCKS=0 git -C "$WT" archive --format=tar --prefix="$CO/" "$RUST_PIN" |
+        "$LAB" ssh "$VM" -- "rm -rf ~/$CO && tar -x -C ~ && find ~/$CO -type f | wc -l" > "$REC/$PH/tree.out" 2>&1
+    rcs="${PIPESTATUS[0]} ${PIPESTATUS[1]}"
+    echo "TREE:$PH:rc=$rcs:files=$(head -n 1 "$REC/$PH/tree.out")"
+    [ "$rcs" = '0 0' ] || { bad "$PH:tree:$rcs"; return 1; }
+    doc "$VM" prereq "$PREREQ" 1 || return 1
+    doc "$VM" build '## Build' 1 --drop '^git clone ' --drop '^cd kerber-rust$' --session "$CARGO_ENV" \
+        --session "cd ~/$CO" || return 1
+    doc "$VM" replace "$DOC_REPLACE" 1 --session "$CARGO_ENV" --session "cd ~/$CO" || return 1
+}
+
+# install_check: install-check.sh's programs line, and the install manifest's sums.
+install_check() {
+    "$LAB" ssh "$VM" -- "sh -s -- ~/$CO" < "$HERE/lib/install-check.sh" > "$REC/$PH/install-check.out" 2>&1 ||
+        bad "$PH:install-check"
+    on "$VM" 'sudo sha256sum -c --quiet /usr/share/kerber-rust/install-manifest && echo manifest: ok' \
+        > "$REC/$PH/manifest.out" 2>&1 || bad "$PH:manifest"
+    echo "MANIFEST:$PH:$(tail -n 1 "$REC/$PH/manifest.out")"
+}
+
+phase_rust() {
     PH=rust
     mkdir -p "$REC/$PH"
     source_realm rust-field-p12-f44 || return
@@ -355,28 +382,14 @@ phase_rust() {
     # shellcheck disable=SC2086
     pkgs $BASE_PKGS
     kpropd_off
-    DOCS=$REC/$PH/install.md
-    GIT_OPTIONAL_LOCKS=0 git -C "$WT" show "$RUST_PIN:docs/install.md" > "$DOCS" || { bad "$PH:pin-docs"; return; }
-    echo "PIN:$PH:$RUST_PIN"
-    GIT_OPTIONAL_LOCKS=0 git -C "$WT" archive --format=tar --prefix="$CO/" "$RUST_PIN" |
-        "$LAB" ssh "$VM" -- "rm -rf ~/$CO && tar -x -C ~ && find ~/$CO -type f | wc -l" > "$REC/$PH/tree.out" 2>&1
-    rcs="${PIPESTATUS[0]} ${PIPESTATUS[1]}"
-    echo "TREE:$PH:rc=$rcs:files=$(head -n 1 "$REC/$PH/tree.out")"
-    [ "$rcs" = '0 0' ] || { bad "$PH:tree:$rcs"; return; }
-    doc "$VM" prereq "$PREREQ" 1 || return
-    doc "$VM" build '## Build' 1 --drop '^git clone ' --drop '^cd kerber-rust$' --session "$CARGO_ENV" \
-        --session "cd ~/$CO" || return
-    doc "$VM" replace "$DOC_REPLACE" 1 --session "$CARGO_ENV" --session "cd ~/$CO" || return
+    pin_install || return
     if [ "$FAM" = deb ]; then doc "$VM" krb5conf-deb "$DOC_KRB5CONF" 1 || return; fi
     doc "$VM" krb5conf '### krb5.conf' 1 "${REALM_VARS[@]}" || return
     doc "$VM" kdcconf "$KDCCONF" 1 "${REALM_VARS[@]}" || return
-    "$LAB" ssh "$VM" -- "sh -s -- ~/$CO" < "$HERE/lib/install-check.sh" > "$REC/$PH/install-check.out" 2>&1 ||
-        bad "$PH:install-check"
     move || return
     doc "$VM" start '### Start' "$START" || return
     units "$VM" "$UNIT_KDC" "$UNIT_ADMIN" || bad "$PH:units"
-    on "$VM" 'sudo sha256sum -c --quiet /usr/share/kerber-rust/install-manifest && echo manifest: ok' \
-        > "$REC/$PH/manifest.out" 2>&1 || bad "$PH:manifest"
+    install_check
     realm "$VM" "$KDCDIR" tgt
     real src; real tgt
     same listprincs; same getprinc.alice; same getprinc.krbtgt; same mkt
@@ -421,9 +434,43 @@ phase_rep() {
     esac > "$REC/$PH/remove.out" 2>&1 || bad "$PH:remove"
     reboot_check no
     replica_state absent
+    mit_gone
     versions "$MIT_CLIENT_PKG" after
+    pin_install || { VM=$d HN=kdc; return; }
+    install_check
+    rust_units_off
+    reboot_check no
+    replica_state present
     snap "rust-replica-$d"
     VM=$d HN=kdc
+}
+
+# mit_gone: none of MIT's server packages installed (a removed deb may stay listed as rc, its config kept).
+mit_gone() {
+    local got
+    case $FAM in
+        deb) got=$(on "$VM" "for p in $MIT_SERVER_PKGS; do printf '%s=%s ' \$p \"\$(dpkg-query -W \
+            -f='\${db:Status-Abbrev}' \$p 2> /dev/null | cut -c1-2)\"; done") ;;
+        *) got=$(on "$VM" "for p in $MIT_SERVER_PKGS; do printf '%s=%s ' \$p \"\$(rpm -q \$p > /dev/null 2>&1 && \
+            echo ii)\"; done") ;;
+    esac
+    echo "MITGONE:$PH:$got"
+    case " $got" in *=ii*) bad "$PH:mit-installed:$got" ;; esac
+}
+
+# rust_units_off: kerber-rust's three units disabled and inactive, as MIT's are on mit-replica (replica.sh runs
+# kpropd itself and starts the KDC in REP.1), and its KDC unit there for that start.
+rust_units_off() {
+    local want got u
+    on "$VM" "sudo systemctl disable --now $UNIT_KDC $UNIT_ADMIN $UNIT_KPROP" > "$REC/$PH/rust-units-off.out" 2>&1 ||
+        bad "$PH:rust-units-off"
+    got=$(on "$VM" "for u in $UNIT_KDC $UNIT_ADMIN $UNIT_KPROP; do printf '%s=%s/%s ' \$u \
+        \"\$(systemctl is-enabled \$u 2>&1)\" \"\$(systemctl is-active \$u 2>&1)\"; done; \
+        systemctl cat $UNIT_KDC > /dev/null 2>&1 && echo kdc-unit")
+    echo "RUSTUNITS:$PH:$got"
+    want=''
+    for u in $UNIT_KDC $UNIT_ADMIN $UNIT_KPROP; do want="$want$u=disabled/inactive "; done
+    [ "$got" = "${want}kdc-unit" ] || bad "$PH:rust-units:$got"
 }
 
 # Before anything changes: the checkout, the VMs and snapshots, the names to make, and the RAM.

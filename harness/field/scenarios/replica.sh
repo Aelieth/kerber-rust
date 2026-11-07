@@ -256,10 +256,14 @@ rep3 principal "sudo kadmin.local -q 'getprinc repc' 2>&1 | grep -qx 'Policy: re
 section "REP.6 lockout counts stay on each KDC: kdc2's failures are kept, and kdc's are not sent"
 check REP.6.addprinc "^Principal \"replk@$R\" created\\.\$" runin kdc "alice's password ($ALICE), twice" "sudo kadmin.local -q 'addprinc +requires_preauth replk' 2>&1" < <(twice "$ALICE")
 replicated REP.6.replicated replk "^Principal: replk@$R\$"
+# The KDC's refusal, as MIT's kinit prints it (kinit.c:787-790): a KDC that does not answer fails differently.
+REFUSED='^kinit: Password incorrect while getting initial credentials$'
 for n in 1 2; do
-    check "REP.6.kdc2.fail$n" '^kinit rc=1$' run client2 "echo not-the-password | KRB5_CONFIG=\$HOME/rep/krb5.conf kinit -c FILE:\$HOME/rep/l.cc replk > /dev/null 2>&1; echo \"kinit rc=\$?\""
+    check "REP.6.kdc2.fail$n" '^kinit rc=1$' run client2 "echo not-the-password | KRB5_CONFIG=\$HOME/rep/krb5.conf kinit -c FILE:\$HOME/rep/l.cc replk 2>&1 > /dev/null; echo \"kinit rc=\$?\""
+    checklast "REP.6.kdc2.fail$n.refused" "$REFUSED"
 done
-check REP.6.kdc.fail '^kinit rc=1$' run client2 "echo not-the-password | kinit -c FILE:\$HOME/rep/l.cc replk > /dev/null 2>&1; echo \"kinit rc=\$?\""
+check REP.6.kdc.fail '^kinit rc=1$' run client2 "echo not-the-password | kinit -c FILE:\$HOME/rep/l.cc replk 2>&1 > /dev/null; echo \"kinit rc=\$?\""
+checklast REP.6.kdc.fail.refused "$REFUSED"
 kadm 'modprinc -maxlife "5 hours" replk'
 replicated REP.6.maxlife replk '^Maximum ticket life: 0 days 05:00:00$'
 check REP.6.kdc2.count '^Failed password attempts: 2$' run kdc2 "sudo kadmin.local -q 'getprinc replk' 2>&1 | grep '^Failed password attempts'"
