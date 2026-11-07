@@ -90,6 +90,7 @@ any other `###` heading.
 - **hand.** An empty compare or secret, or a failed scan, reset or parity run now fails its leg.
 - **field.** Log marks read across a logrotate's rename; a mark no file holds fails the read, not passes.
 - **field.** The log grader reads JSON as tracing nests it, where configured; two deviations allowed.
+- **ci.** The KDC gate checks each kdc.issue JSON event carries a correlation_id, with an AS and a TGS ISSUE.
 - **hand.** B2's and R3's installs pass install.sh what make install passes, and stop first on a missing one.
 
 ## [1.2.0] - 2026-11-04
