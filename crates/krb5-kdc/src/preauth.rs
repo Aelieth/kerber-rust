@@ -745,7 +745,7 @@ pub(crate) fn process_pkinit(
     })?;
     let info = krb5_types::pkinit::encode_kdc_dh_key_info(kp.public(), nonce);
     let certs = kdc.own_chain().map_err(|message| Error::PreauthModule {
-        code: err::PREAUTH_FAILED,
+        code: otp::ENOENT,
         message,
     })?;
     let wrapped_pub = krb5_types::pkinit::cms_sign_chain(
@@ -926,8 +926,9 @@ fn authorize_cert(
                     outcome = "denied",
                     error = %e
                 );
+                // MIT: `pkinit_client_cert_match` (plugins/preauth/pkinit/pkinit_matching.c:729)
                 return Err(Error::PreauthModule {
-                    code: err::PREAUTH_FAILED,
+                    code: otp::EINVAL,
                     message: e.to_string(),
                 });
             }

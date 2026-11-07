@@ -43,6 +43,7 @@ any other `###` heading.
 - **kdb.** A failed iprop dump or load names the iprop format, as MIT; it said release 1.11.
 - **kdc, kpropd.** An error reply that fails to encode isn't sent and is logged, as MIT; it went out empty.
 - **kdc.** A dump or iprop update keeps unsupported key slots and bad KADM_DATA, as MIT; it was refused.
+- **kdc.** An OTP refusal logs `Preauthentication failed` as MIT, with no per-attempt Error line.
 
 ### Removed
 
