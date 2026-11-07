@@ -620,7 +620,7 @@ switch ($Mode) {
         # R1c: the client's Kerberos encryption types (Learn: "Network security: Configure encryption types
         # allowed for Kerberos"); 4 is RC4-HMAC-MD5 only, "none" removes the value.
         $key = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\Kerberos\Parameters"
-        if (-not (Test-Path $key)) { New-Item -Path $key | Out-Null }
+        if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }
         if ($args[0] -eq "none") {
             Remove-ItemProperty -Path $key -Name SupportedEncryptionTypes -ErrorAction SilentlyContinue
         } else {
@@ -628,6 +628,34 @@ switch ($Mode) {
         }
         $v = (Get-ItemProperty -Path $key).SupportedEncryptionTypes
         Write-Output ("ETYPE_POLICY:" + $(if ($null -eq $v) { "none" } else { $v }))
+    }
+    "diag" {
+        # L1's record only (Learn: "Enable Kerberos event logging"; "auditpol set"; "Audit Logon", 4625).
+        $key = "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\Kerberos\Parameters"
+        if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }
+        Set-ItemProperty -Path $key -Name LogLevel -Value 1 -Type DWord
+        Write-Output ("KERBEROS_LOGLEVEL:" + (Get-ItemProperty -Path $key).LogLevel)
+        $a = & auditpol.exe /set /subcategory:"Logon" /failure:enable
+        Write-Output ("AUDITPOL_LOGON:" + $LASTEXITCODE + " " + ($a -join " "))
+    }
+    "events" {
+        $since = (Get-Date).AddMinutes(-[int]$args[0])
+        # Kerberos at any level, any provider at Critical, Error or Warning (Netlogon, LsaSrv).
+        Write-Output "==SYSTEM_EVENTS"
+        $k = @(Get-WinEvent -FilterHashtable @{ LogName = "System"; StartTime = $since } -ErrorAction SilentlyContinue |
+            Where-Object { $_.ProviderName -match "Kerberos" -or ($_.Level -ge 1 -and $_.Level -le 3) })
+        if ($k.Count -eq 0) { Write-Output "SYSTEM_EVENT:none" }
+        $k | ForEach-Object { "SYSTEM_EVENT:" + $_.ProviderName + " " + $_.Id + " " + $_.Level + " " + ($_.Message -replace "\s+", " ") }
+        Write-Output "==LOGON_FAILURES"
+        $f = @(Get-WinEvent -FilterHashtable @{ LogName = "Security"; Id = 4625; StartTime = $since } -ErrorAction SilentlyContinue)
+        if ($f.Count -eq 0) { Write-Output "LOGON_FAILURE:none" }
+        $names = "Status", "SubStatus", "LogonType", "LogonProcessName", "AuthenticationPackageName", "TargetUserName",
+            "TargetDomainName"
+        foreach ($e in $f) {
+            $v = @{}
+            foreach ($d in ([xml]$e.ToXml()).Event.EventData.Data) { $v[$d.Name] = $d.'#text' }
+            Write-Output ("LOGON_FAILURE:" + (($names | ForEach-Object { " $_=" + $v[$_] }) -join ""))
+        }
     }
     default { Write-Output "MODE_UNKNOWN:$Mode"; exit 2 }
 }

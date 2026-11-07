@@ -238,7 +238,7 @@ kdc_log() {
 }
 
 # The cells, in the design's order, L1 last; each cell's own principal, so no cached ticket is reused.
-# R1c's RC4-only policy is set and removed, each with a restart.
+# R1c's RC4-only policy is set and removed, each with a restart. L1's events are recorded, not graded.
 cells() {
     local leg=$1 d=$REC/$1/win kind marks
     read -r -a marks < <(kdc_marks)
@@ -261,8 +261,10 @@ cells() {
     win_restart "$leg:r1c" || return 1
     wput "$WTMP\\ws-1.pw" kt-win && wps "$d/r1c.txt" ticket "$SVC" cm-win-kt "$REALM" "$WTMP\\ws-1.pw"
     wps "$d/r1c-unset.txt" etype none
+    wps "$d/l1-diag.txt" diag
     win_restart "$leg:l1" || return 1
     wput "$WTMP\\ws-1.pw" pw-win && wps "$d/l1.txt" logon cm-win "$REALM" "$WTMP\\ws-1.pw"
+    grep -q '^LOGON:True' "$d/l1.txt" || wps "$d/l1-events.txt" events 2
     kdc_log "$leg" "${marks[0]}" "${marks[1]}"
     echo "CELLS_DONE:$leg"
 }
