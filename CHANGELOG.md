@@ -18,7 +18,7 @@ any other `###` heading.
 
 ### Added
 
-- **kdc.** `change_password_shared`, `create_password_shared` derive keys unlocked; kpasswd uses one.
+- **kdc.** kpasswd, `change_password_shared`, `create_password_shared` derive keys unlocked when safe.
 - **examples.** `embed-realm --write-load N,MS`: N writers through the helper, to time `kinit`.
 - **install.** `make install` lays out Debian, Ubuntu as MIT's `krb5-kdc`, `krb5-admin-server`, `krb5-kpropd`.
 - **config.** `KERBER_KDC_DATA_DIR`, `KERBER_DEFCKTNAME` build Debian's database, client keytab defaults.
@@ -55,6 +55,11 @@ any other `###` heading.
 - **kadmind.** `addprinc -nokey` stores no key and its kvno reads 0, as MIT; it made a random key.
 - **kadmind.** A failed target fetch logs no Request line, and a failed rename source Unauthorized, as MIT.
 - **kdc.** A self `cpw -keepold` across the kvno wrap keeps the new keys, as MIT; it kept the oldest.
+- **kdc.** A key change that fails part-way leaves the entry as it was, as MIT; an in-memory store kept half.
+- **kdc.** The current kvno counts every key slot, as MIT; an unsupported top slot let AS serve an older key.
+- **kadmin.** getprinc lists key slots by kvno, descending, and names single-DES types, as MIT.
+- **kdc.** `cpw -keepold` fails on a kept slot the master key can't open, as MIT; it kept the slot.
+- **kdc, kadmin.** A principal with undecodable KADM_DATA fails the AS lockout check and kadm5, as MIT.
 
 ### Removed
 
@@ -74,6 +79,12 @@ any other `###` heading.
 - **ci.** FAST gate's stripped-25 leg greps kinit's message, as MIT's leg does, not a log line.
 - **ci.** Samba image drops `samba-testsuite`; the l2 gate vendors `kcrypto.py`.
 - **hand.** The release proof's hand legs run from `harness/hand/`; FZ's `raw-tgs.py` moved there.
+- **field.** `ds` runs the server scenarios on Debian 13, Rocky 10 beside their MIT 1.21.3, with a replica.
+- **field.** `load`, `load-long`: requests and writes on each KDC for 600 s, 3,600 s, realm size held.
+- **field.** `lt`: a restart round trip, hostile input on port 88, the OTP default, `rd_safe`, MIT first.
+- **hand.** `rp-cm.sh`: MIT clients, SSSD on 4 distros, Heimdal's tools; `rp-ws.sh`: Windows 11's client.
+- **ci.** The peers job fails unless all seven Samba gates ran and passed; it went green with none run.
+- **gss.** Both GSS test acceptors can check a MIC and send a wrapped reply, for the Windows cells.
 
 ## [1.2.0] - 2026-11-04
 
