@@ -210,8 +210,9 @@ kdcsince() {
             s=*) ;;
             *) host "echo 'kdcsince $1: no valid journal cursor, so no log line is read'; exit 1"; return 0 ;;
         esac
-        # Each unit's journal after the mark, as MIT's FILE lines (lib/journal-lines.py, sent on stdin).
-        runin kdc "lib/journal-lines.py" "f=\$(mktemp); cat > \"\$f\"; for u in $UNIT_KDC $UNIT_ADMIN; do [ \$u = $UNIT_KDC ] || echo '--- kadmind.log'; sudo journalctl -q -u \$u --after-cursor $(printf '%q' "$c") -o json --no-pager | python3 \"\$f\" --utc-offset \$(date +%z) | grep -v 'closing down fd' | grep -E $(printf '%q' "$pat"); done; rm -f \"\$f\"; true" < "$FIELD_LIB/journal-lines.py"
+        # Each daemon's journal after the mark, by its unit or its syslog name (a hand-run one, as its FILE log
+        # would have it), as MIT's FILE lines (lib/journal-lines.py, sent on stdin).
+        runin kdc "lib/journal-lines.py" "f=\$(mktemp); cat > \"\$f\"; for u in $UNIT_KDC:krb5kdc $UNIT_ADMIN:kadmind; do [ \${u#*:} = krb5kdc ] || echo '--- kadmind.log'; sudo journalctl -q _SYSTEMD_UNIT=\${u%%:*}.service + SYSLOG_IDENTIFIER=\${u#*:} --after-cursor $(printf '%q' "$c") -o json --no-pager | python3 \"\$f\" --utc-offset \$(date +%z) | grep -v 'closing down fd' | grep -E $(printf '%q' "$pat"); done; rm -f \"\$f\"; true" < "$FIELD_LIB/journal-lines.py"
         return 0
     fi
     read -r k a < "$STATE/mark.$1" 2>/dev/null || true

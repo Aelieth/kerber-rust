@@ -61,7 +61,8 @@ PD=
 [ "$KDC_FAMILY" = rpm ] || PD=" $KDCDIR"
 CF="export KRB5_CONFIG=\$HOME/cf/krb5.conf"
 cleanup() {
-    timeout -k 5 60 "$LAB" ssh kdc -- "sudo rm -f /etc/krb5-rep2a.conf; [ -e $SC.cf ] && sudo mv $SC.cf $SC; [ -e $KC.cf ] && sudo mv $KC.cf $KC && sudo systemctl reset-failed $UNIT_KDC $UNIT_ADMIN && sudo systemctl restart $UNIT_KDC $UNIT_ADMIN; for p in cfskew cfpw; do sudo kadmin.local -q \"delprinc -force \$p\"; done; sudo rm -f $KC.inc; sudo pkill -x strace; true" < /dev/null > /dev/null 2>&1
+    timeout -k 5 60 "$LAB" ssh kdc -- "sudo rm -f /etc/krb5-rep2a.conf; [ -e $SC.cf ] && sudo mv $SC.cf $SC; [ ! -e \
+        $SC.absent ] || sudo rm -f $SC $SC.absent; [ -e $KC.cf ] && sudo mv $KC.cf $KC && sudo systemctl reset-failed $UNIT_KDC $UNIT_ADMIN && sudo systemctl restart $UNIT_KDC $UNIT_ADMIN; for p in cfskew cfpw; do sudo kadmin.local -q \"delprinc -force \$p\"; done; sudo rm -f $KC.inc; sudo pkill -x strace; true" < /dev/null > /dev/null 2>&1
     timeout -k 5 60 "$LAB" ssh kdc -- "sudo sh -s -- kpropd-stop $REALM" < "$FIELD_LIB/profile-opens.sh" > /dev/null 2>&1
     timeout -k 5 60 "$LAB" ssh kdc -- "sudo sh -s -- teardown" < "$FIELD_LIB/client-opens.sh" > /dev/null 2>&1
     timeout -k 5 60 "$LAB" ssh kdc -- "sudo pkill -x strace; sudo systemctl reset-failed $UNIT_KDC $UNIT_ADMIN; sudo systemctl start $UNIT_KDC $UNIT_ADMIN" < /dev/null > /dev/null 2>&1
@@ -192,7 +193,9 @@ etkinit CF.h.empty aes256-cts-hmac-sha1-96 '^kinit rc=1$'
 observelast obs.CF.h.empty 'kinit: .*'
 
 section "REP2a iprop_port = kadmind's 749: the iprop listener is not added, so iprop is not served there (MIT and ours)"
-check REP2a.sysconfig "^$ARGS_ADMIN=" run kdc "sudo cp -p $SC $SC.cf && cat $SC"
+# Debian ships no $SC (its unit reads it optionally): .absent marks one the cells create, so the restore removes it.
+check REP2a.sysconfig "^$ARGS_ADMIN=" run kdc "if [ -e $SC ]; then sudo cp -p $SC $SC.cf && cat $SC; else sudo touch \
+    $SC.absent && echo '$ARGS_ADMIN= (no $SC)'; fi"
 kdcmark rep2a749
 admwith REP2a.749.kadmin "$(ipropconf 749)"
 checklast REP2a.749.ports '^tcp ports: 464 749$'
@@ -244,7 +247,7 @@ runin kdc "lib/rpc-probe.py" "python3 - 127.0.0.1 754 2112 2" < "$FIELD_LIB/rpc-
 portfact kadm5-754
 
 section "kdc.conf restored"
-check kdc.conf.restored '^restored, krb5kdc and kadmin active$' run kdc "sudo rm -f /etc/krb5-rep2a.conf && sudo mv $KC.cf $KC && sudo mv $SC.cf $SC && sudo systemctl reset-failed $UNIT_KDC $UNIT_ADMIN && sudo systemctl restart $UNIT_KDC $UNIT_ADMIN && systemctl is-active $UNIT_KDC $UNIT_ADMIN > /dev/null && ! sudo grep -qE '^[[:space:]]*clockskew|DUMMY\\.TEST' $KC && echo 'restored, krb5kdc and kadmin active' || sudo systemctl status $UNIT_KDC $UNIT_ADMIN --no-pager -n 12"
+check kdc.conf.restored '^restored, krb5kdc and kadmin active$' run kdc "sudo rm -f /etc/krb5-rep2a.conf && sudo mv $KC.cf $KC && { if [ -e $SC.absent ]; then sudo rm -f $SC $SC.absent; else sudo mv $SC.cf $SC; fi; } && sudo systemctl reset-failed $UNIT_KDC $UNIT_ADMIN && sudo systemctl restart $UNIT_KDC $UNIT_ADMIN && systemctl is-active $UNIT_KDC $UNIT_ADMIN > /dev/null && ! sudo grep -qE '^[[:space:]]*clockskew|DUMMY\\.TEST' $KC && echo 'restored, krb5kdc and kadmin active' || sudo systemctl status $UNIT_KDC $UNIT_ADMIN --no-pager -n 12"
 
 # opens <name> <pid expression>: strace attached to the daemon that pid names.
 opens() {

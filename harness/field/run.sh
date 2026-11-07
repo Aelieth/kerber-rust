@@ -134,13 +134,14 @@ leglogs() {
     local d=$1/logs vm=${ROLE_KDC:-kdc} f o h c off u
     mkdir -p "$d"
     if [ "$LOGSRC" = journal ]; then
-        # Each unit's journal after the mark (or whole, past a reset), as MIT's FILE lines.
+        # Each daemon's journal after the mark (or whole, past a reset), by unit or syslog name, as MIT's FILE lines.
         off=$(timeout 60 "$LAB" ssh "$vm" -- 'date +%z' 2> /dev/null < /dev/null)
         c=$(sed -n 's/^cursor \(s=[^ ]*\)$/\1/p' "$d/offsets" 2> /dev/null)
         for f in krb5kdc:"$UNIT_KDC" kadmind:"$UNIT_ADMIN"; do
             u=${f#*:}
-            timeout 120 "$LAB" ssh "$vm" -- "sudo journalctl -q -u $u --after-cursor $(printf '%q' "${c:-none}") \
-                -o json --no-pager 2> /dev/null || sudo journalctl -q -u $u -o json --no-pager" 2>> "$d/offsets" \
+            u="_SYSTEMD_UNIT=$u.service + SYSLOG_IDENTIFIER=${f%%:*}"
+            timeout 120 "$LAB" ssh "$vm" -- "sudo journalctl -q $u --after-cursor $(printf '%q' "${c:-none}") \
+                -o json --no-pager 2> /dev/null || sudo journalctl -q $u -o json --no-pager" 2>> "$d/offsets" \
                 < /dev/null | python3 -B "$HERE/lib/journal-lines.py" --utc-offset "${off:-+0000}" \
                 > "$d/${f%%:*}.log" 2>> "$d/offsets"
         done

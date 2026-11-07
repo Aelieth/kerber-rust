@@ -79,7 +79,8 @@
 #          failure" once per fault, MIT = ours; unset, the cell is skipped (the code 80 is MIT = ours in the CI
 #          differential; 3.0 logs "verification failure" for these seven, so the reason is lab-only);
 #   PK.dh: the KDC's realm has pkinit_dh_min_bits = 4096 and client2's kinit 2048 (~/pk/dh.conf first): the KDC
-#          refuses its 2048-bit DH with 65 and its groups, and kinit tries again with P-384 and gets a TGT;
+#          refuses its 2048-bit DH with 65 and its groups, and kinit tries again with P-384 and gets a TGT (a 1.21
+#          KDC has no EC groups, 1.22.2 pkinit_crypto_openssl.c:1485, so 4096-bit DH: MIT's leg on a 1.21 distro);
 #   PK.dh1024: client2's kinit at pkinit_dh_min_bits = 1024 (~/pk/dh1024.conf first): MIT's kinit fails to make its
 #          1024-bit request on client2 and, with no password, ends with rc 1 (its pkinit module line, any KDC error
 #          and the KDC's lines recorded); ours sends it: the KDC's realm at 1024 takes its 1024-bit DH for a TGT; at
@@ -108,6 +109,11 @@ esac
 # shellcheck source=../lib/leg.sh
 . "$FIELD_LIB/leg.sh"
 R=${REALM//./\\.}
+# The MIT version this leg's KDC is held to: MIT's leg the distro's, ours always 1.22.
+KV=1.22
+[ "$LEG" != mit ] || KV=$MIT_VERSION
+DHG=P-384
+[ "$KV" != 1.21 ] || DHG='4096-bit DH'
 KC=$KDCDIR/kdc.conf
 D=${PK_KDC_DIR:-$KDCDIR/pkinit}
 C=${PK_CLIENT_DIR:-/home/lab/pkinit}
@@ -581,9 +587,9 @@ for k in mit ${OURS:+ours}; do
     checklast "PK.dh.$k.first" '^PKINIT using 2048-bit DH key exchange group$'
     checklast "PK.dh.$k.refused" '^Key parameters not accepted$'
     checklast "PK.dh.$k.input" '^Preauth tryagain input types \(16\): 109, PA-FX-COOKIE \(133\)$'
-    checklast "PK.dh.$k.chosen" '^PKINIT accepting KDC key exchange group preference P-384$'
+    checklast "PK.dh.$k.chosen" "^PKINIT accepting KDC key exchange group preference $DHG\$"
     checklast "PK.dh.$k.again" '^PKINIT client trying again with KDC-provided parameters$'
-    checklast "PK.dh.$k.second" '^PKINIT using P-384 key exchange group$'
+    checklast "PK.dh.$k.second" "^PKINIT using $DHG key exchange group\$"
     checklast "PK.dh.$k.tryagain" '^Preauth module pkinit \(16\) tryagain returned: 0/Success$'
 done
 

@@ -188,7 +188,7 @@ check install.manifest '^manifest: [1-9][0-9]* files as installed$' \
 listencheck
 [ "$MAC" != selinux ] || check install.logs.label "$LOGS_OK" run kdc "$LOGS"
 kdcsince up 'setting up network|V6ONLY|set up [0-9]+ sockets|commencing operation|starting|Loaded|\((Error|error|err|warning)\)'
-checklast log.kdc.sockets 'krb5kdc\[[0-9]+\]\(info\): set up 4 sockets$'
+checklast log.kdc.sockets "krb5kdc\\[[0-9]+\\]\\(info\\): set up $KDC_SOCKETS sockets\$"
 checklast log.kdc.commencing 'krb5kdc\[[0-9]+\]\(info\): commencing operation$'
 checklast log.kadmind.sockets 'kadmind\[[0-9]+\]\(info\): set up 6 sockets$'
 checklast log.kadmind.starting 'kadmind\[[0-9]+\]\(info\): starting$'
@@ -242,6 +242,8 @@ for p in udp:dgram tcp:stream; do
 done
 
 section "7. bob's kpasswd there over UDP 464 (kdc refuses client2's TCP 464 for that exchange) and back over TCP"
+check kdc.nft '^nftables-' run kdc "$PKG_QUERY nftables > /dev/null 2>&1 || sudo $PKG_INSTALL_Q nftables > /dev/null 2>&1; \
+    $PKG_QUERY nftables"
 check kpasswd.refuse.tcp rc run kdc "sudo nft add table inet field_tmp && sudo nft add chain inet field_tmp input '{ type filter hook input priority filter - 1; policy accept; }' && sudo nft add rule inet field_tmp input ip saddr $LN.22 tcp dport 464 counter reject with tcp reset && sudo nft list table inet field_tmp"
 check client2.kpasswd.udp "^answers: dgram $KIPe:464 dgram $KIPe:88\$" runin client2 "bob's password, then $BOBT twice" "$U ~/field/ktrace.sh udp-kpasswd kpasswd bob" < <(chpw "$BOB" "$BOBT")
 checklast client2.kpasswd.udp.changed '^Password changed\.$'
@@ -263,7 +265,8 @@ checklast log.kadmind.kadm5_init "Request: kadm5_init, admin/admin@$R, success, 
 section "8. kdc itself: MIT kinit on ::1 over UDP and TCP, and on 127.0.0.2 (a UDP reply leaves from the request's address)"
 KC="[libdefaults]\n default_realm = $R\n"
 run kdc "printf '${KC}[realms]\n $R = {\n  kdc = [::1]\n }\n' > ~/field/v6-udp.conf; printf '$KC udp_preference_limit = 1\n[realms]\n $R = {\n  kdc = [::1]\n }\n' > ~/field/v6-tcp.conf; printf '${KC}[realms]\n $R = {\n  kdc = 127.0.0.2\n }\n' > ~/field/lo2.conf; head -n 20 ~/field/v6-udp.conf ~/field/v6-tcp.conf ~/field/lo2.conf"
-for k in 'v6-udp:dgram \[::1\]' 'v6-tcp:stream \[::1\]' 'lo2:dgram 127\.0\.0\.2'; do
+# The kdc VM's own kinit traces IPv6 as [::1] from 1.22 (os/addr.c:105), as ::1 before (1.21.3 os/trace.c:266).
+for k in 'v6-udp:dgram \[?::1\]?' 'v6-tcp:stream \[?::1\]?' 'lo2:dgram 127\.0\.0\.2'; do
     check "kdc.${k%%:*}.kinit" "^answers: ${k#*:}:88\$" runin kdc "alice's password ($ALICE)" "KRB5_CONFIG=\$HOME/field/${k%%:*}.conf ~/field/ktrace.sh ${k%%:*} kinit -c MEMORY:field alice" < <(once "$ALICE")
 done
 observe obs.rss.end 'krb5kdc [0-9]+ KiB, kadmind [0-9]+ KiB' run kdc "$RSS"
