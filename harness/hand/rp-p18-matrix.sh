@@ -8,6 +8,8 @@ require_env HAND_WT HAND_REC
 WT=$HAND_WT
 REC=$HAND_REC/$PHASEC_SHA/p18
 bash "$HDIR/lib/ship-guard.sh" "$PHASEC_SHA" "$REC" || exit $?
+got=$(git -C "$WT" rev-parse HEAD)
+[ "$got" = "$PHASEC_SHA" ] || { echo "P18_STOP head $got, not $PHASEC_SHA"; exit 2; }
 exec 9>&-
 LAB=$WT/harness/field/lab.sh
 lab() { bash "$LAB" "$@"; }
@@ -22,7 +24,7 @@ bash "$HDIR/lib/p18-stage.sh" "$WT" || exit 2
 lab ssh klldap -- "sudo -n test -x /opt/p18-${PHASEC_SHA:0:12}/sbin/krb5kdc" \
     || { echo "P18_STOP missing /opt/p18-${PHASEC_SHA:0:12}: run rp-p18-go.sh first"; exit 2; }
 bash "$HDIR/lib/p18-quiet.sh" "$WT"
-lab ssh klldap -- "sudo -n PREFIX=/opt/p18-${PHASEC_SHA:0:12} bash -s" << 'EOS'
+lab ssh klldap -- "sudo -n PREFIX=/opt/p18-${PHASEC_SHA:0:12} bash -s" << 'EOS' | tee "$REC/matrix.out"
 set -u
 B=/srv/p18
 EAT=$(ls -1 /usr/lib64/libeatmydata.so* | head -1)
@@ -57,11 +59,16 @@ for rep in 1 2 3; do
 done
 echo "MATRIX_DONE"
 EOS
-echo "MATRIX_RC:$?"
+matrix_rc=${PIPESTATUS[0]}
+echo "MATRIX_RC:$matrix_rc"
+sessions=$(grep -c '^SESSION_RC:0 ' "$REC/matrix.out" || true)
+echo "SESSIONS_OK:$sessions of 72"
 echo "==== pull ===="
 lab ssh klldap -- "sudo -n PREFIX=/opt/p18-${PHASEC_SHA:0:12} bash -s" << 'EOS' > "$REC/out.tar"
 cd /srv/p18/out
 tar -cf - p872-N*
 EOS
-echo "PULL_RC:$?"
+pull_rc=$?
+echo "PULL_RC:$pull_rc"
 echo "MATRIX_END $(TZ=America/Chicago date '+%H:%M:%S')"
+[ "$matrix_rc" = 0 ] && [ "$sessions" = 72 ] && [ "$pull_rc" = 0 ] || { echo "MATRIX_FAIL"; exit 1; }

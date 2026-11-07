@@ -212,6 +212,11 @@ for _ in $(seq 1 50); do
     sleep 0.2
 done
 echo "KILL_ACK:$ok"
+if [ "$ok" != 1 ]; then
+    echo "KILL_STOP no-ack"
+    kill "$wpid" 2>/dev/null || true
+    exit 1
+fi
 # pkill -x kadmin.local leaves the guest loop running, so the dump
 # races the next op. One signal stops the loop and the op in flight.
 # The [K] keeps this command from matching itself.

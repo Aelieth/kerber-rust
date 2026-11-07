@@ -314,6 +314,11 @@ for _ in $(seq 1 50); do
     sleep 0.2
 done
 echo "KILL_ACK:$ok"
+if [ "$ok" != 1 ]; then
+    echo "KILL_STOP no-ack"
+    kill "$wpid" 2>/dev/null || true
+    exit 1
+fi
 # pkill -x kadmin.local leaves the guest loop running, so the dump
 # races the next op. One signal stops the loop and the op in flight.
 # The [K] keeps this command from matching itself.
@@ -358,7 +363,7 @@ for line in princs.splitlines():
 plw_names = {n for n in names if n.startswith("plwK-")}
 behind = sorted(p for p in db if p not in names)
 ahead = sorted(n for op, n in ops if op == "Add" and n.startswith("plwK-") and n not in db)
-if bad or state is None:
+if bad or state is None or not db:
     print("KILL_MISS db")
     sys.exit(1)
 if state == "Unstable":
@@ -578,12 +583,20 @@ PY
         echo "DUMP_AFTER $cyc"
         labn ssh kdc -- 'stat -c "%y %s %n" /var/kerberos/krb5kdc/replica_datatrans /var/kerberos/krb5kdc/replica_datatrans.dump_ok 2>&1 || true; echo ----; sudo head -n 1 /var/kerberos/krb5kdc/replica_datatrans 2>/dev/null || echo DUMP_ABSENT'
     fi
-    refuse=$(labn ssh kdc -- 'if sudo sh -c "cat /var/log/kadmind.log-* /var/log/kadmind.log.* /var/log/kadmind.log 2>/dev/null" | grep -F -q "more recent than"; then echo REFUSED; else echo NONE; fi')
-    echo "DUMP_REFUSE $cyc $refuse"
-    if [ "$refuse" != NONE ]; then
-        echo "CYCLE_STOP dump-ok $cyc"
-        exit 1
+    klog=$(labn ssh kdc -- 'sudo sh -c "cat /var/log/kadmind.log-* /var/log/kadmind.log.* /var/log/kadmind.log 2>/dev/null"')
+    if [ -z "$klog" ]; then
+        refuse=NOLOG
+    elif printf '%s\n' "$klog" | grep -F -q "more recent than"; then
+        refuse=REFUSED
+    else
+        refuse=NONE
     fi
+    echo "DUMP_REFUSE $cyc $refuse"
+    case $refuse in
+        NONE) ;;
+        NOLOG) echo "CYCLE_STOP kadmind-log $cyc"; exit 1 ;;
+        *) echo "CYCLE_STOP dump-ok $cyc"; exit 1 ;;
+    esac
     if [ "$heal" = 1 ] && [ "$matched_s" != 1 ]; then
         echo "CYCLE_STOP step-A-serial $cyc"
         exit 1
@@ -732,6 +745,9 @@ def plw(text):
             out.add(line.split("@", 1)[0])
     return out
 a, b = plw(after), plw(k2body)
+if not a or "----" not in k2txt:
+    print("CYCLE_STOP %d lists-not-read" % cyc)
+    sys.exit(1)
 only_a = sorted(p for p in (a - b) if in_scope(p))
 only_b = sorted(p for p in (b - a) if in_scope(p))
 gap = sorted((a - b) | (b - a))

@@ -153,11 +153,14 @@ set +e
 when=$1
 if [ -f /var/log/krb5kdc.log ]; then
     n=$(cat /var/log/krb5kdc.log-* /var/log/krb5kdc.log.* /var/log/krb5kdc.log 2>/dev/null | grep -cF "request panic isolated" || true)
+    t=$(cat /var/log/krb5kdc.log-* /var/log/krb5kdc.log.* /var/log/krb5kdc.log 2>/dev/null | grep -F "TGS_REQ" | grep -cF "for krbtgt/é@KERBER.TEST" || true)
 else
     n=0
+    t=0
     echo "PANIC_LOG:missing"
 fi
 echo "PANIC_${when}:$n"
+echo "TGS_${when}:$t"
 if [ "$when" = "BEFORE" ]; then
     date -u '+%Y-%m-%d %H:%M:%S' > /var/tmp/fz-mark
     echo "MARK:$(cat /var/tmp/fz-mark)"
@@ -345,22 +348,26 @@ def show(tag, text):
     journal = one(text, "PANIC_JOURNAL")
     unit = one(text, "UNIT_AFTER")
     port = one(text, "PORT88_AFTER")
+    t0, t1 = one(text, "TGS_BEFORE"), one(text, "TGS_AFTER")
+    window = t0.isdigit() and t1.isdigit() and int(t1) > int(t0)
     print(
         f"{tag} code={code} result={result} hex={hx} "
         f"kinit={k1} kinit_after={k2} raw={raw} "
         f"panic_before={before} panic_after={after} panic_journal={journal} "
-        f"unit={unit} port={port}"
+        f"unit={unit} port={port} tgs_before={t0} tgs_after={t1}"
     )
-    return code, result, hx, k1, k2, raw, before, after, journal, unit, port
+    if not window:
+        print(f"{tag} window not read")
+    return code, result, hx, k1, k2, raw, before, after, journal, unit, port, window
 
 def client_ok(code, result, hx, k1, k2, raw):
     return code == "7" and result == "error" and hx == "c3a9" and k1 == "0" and k2 == "0" and raw == "0"
 
 mit = show("MIT", body("mit"))
 ours = show("OURS", body("ours"))
-mit_ok = client_ok(*mit[:6])
+mit_ok = client_ok(*mit[:6]) and mit[11]
 ours_client = client_ok(*ours[:6])
-panic_ok = ours[6] != "missing" and ours[6] == ours[7] and ours[8] == "0"
+panic_ok = ours[11] and ours[6] != "missing" and ours[6] == ours[7] and ours[8] == "0"
 up_ok = ours[9] == "active" and ours[10] == "up"
 print("FZ_MIT:" + ("yes" if mit_ok else "no"))
 print("FZ_OURS:" + ("yes" if ours_client and panic_ok and up_ok else "no"))

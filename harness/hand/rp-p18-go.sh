@@ -10,6 +10,8 @@ require_env HAND_WT HAND_REC
 WT=$HAND_WT
 REC=$HAND_REC/$PHASEC_SHA/p18-go
 bash "$HDIR/lib/ship-guard.sh" "$PHASEC_SHA" "$REC" || exit $?
+got=$(git -C "$WT" rev-parse HEAD)
+[ "$got" = "$PHASEC_SHA" ] || { echo "P18_STOP head $got, not $PHASEC_SHA"; exit 2; }
 exec 9>&-
 LAB=$WT/harness/field/lab.sh
 lab() { bash "$LAB" "$@"; }
