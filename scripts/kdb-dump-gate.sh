@@ -502,6 +502,33 @@ diff <(echo "$RUST_ETYPES") <(echo "$MIT_ETYPES")
 echo "MIT_keyord" # MIT_keyord
 echo "RUST_keyord" # RUST_keyord
 
+echo "==== a record that fails to store: MIT's kdb5_util load, then ours (dump.c:775-777, 1371-1375) ===="
+docker exec "$NAME" kdb5_util dump /tmp/b3.dump
+# user@'s record gains a db_args tl_data (0x7fff, "test=1\0"), which krb5_db_put_principal refuses.
+docker exec "$NAME" python3 -c '
+import sys
+out, hit = [], 0
+for line in open("/tmp/b3.dump"):
+    f = line.rstrip("\n").split("\t")
+    if f[0] == "princ" and f[6] == "user@KERBER.TEST":
+        f[3] = str(int(f[3]) + 1)
+        f[15:15] = ["32767", "7", "746573743d3100"]
+        hit += 1
+        line = "\t".join(f) + "\n"
+    out.append(line)
+open("/tmp/b3-dbargs.dump", "w").writelines(out)
+sys.exit(0 if hit == 1 else 1)' || die "MIT's dump has no user@KERBER.TEST"
+# Up to "restore failed": MIT's cleanup of its own temporary db2 database may add a line after it.
+b3_lines() { grep -v '^[A-Z][a-z][a-z] [0-9]' | sed -E 's/^(kdb5_util|krb5-kdb): //; /restore failed$/q'; }
+MIT_B3="$(docker exec "$NAME" kdb5_util load /tmp/b3-dbargs.dump 2>&1 | b3_lines || true)"
+RUST_B3="$(docker exec -e KRB5_MASTER_PASSWORD=masterpassword -e KRB5_KDC_DB=/tmp/b3rust \
+    -e KRB5_KDC_STASH=/tmp/b3rust.stash "$NAME" /tmp/krb5-kdb load /tmp/b3-dbargs.dump 2>&1 | b3_lines || true)"
+printf 'mit  %s\n' "$MIT_B3"
+printf 'rust %s\n' "$RUST_B3"
+grep -qx 'error processing line [0-9]* of /tmp/b3-dbargs.dump' <<<"$MIT_B3" \
+    || die "MIT's kdb5_util did not name the record's line"
+[ "$MIT_B3" = "$RUST_B3" ] || die "a store failure's lines differ between MIT's kdb5_util load and ours"
+
 echo "==== kdb5_util stash, MIT first: over a 0640 stash, key typed, wrong key ===="
 # MIT `kdb5_stash` (kdb5_stash.c:65-137): a new 0600 file, the stashed or typed key.
 docker exec "$NAME" sh -c 'mkdir -p /tmp/rkdb && ln -sf /tmp/krb5-kdb /tmp/rkdb/kdb5_util'

@@ -1108,13 +1108,14 @@ fn load(util: &mut Util, args: &[String]) -> u8 {
         None
     };
     let Ok(text) = String::from_utf8(bytes) else {
-        restore_failed(util, file, name, "line 1: dump is not UTF-8");
+        let e = DumpError::Format("line 1: dump is not UTF-8".into());
+        restore_failed(util, file, name, &e);
         return 1;
     };
     let dump = match parse_dump(&text) {
         Ok(d) => d,
         Err(e) => {
-            restore_failed(util, file, name, &dump_error_text(&e));
+            restore_failed(util, file, name, &e);
             return 1;
         }
     };
@@ -1127,7 +1128,7 @@ fn load(util: &mut Util, args: &[String]) -> u8 {
     let loaded = match load_dump_with_key(&text, &key) {
         Ok(s) => s,
         Err(e) => {
-            restore_failed(util, file, name, &dump_error_text(&e));
+            restore_failed(util, file, name, &e);
             return 1;
         }
     };
@@ -1433,26 +1434,33 @@ fn dump_version(
 
 fn dump_error_text(e: &DumpError) -> String {
     match e {
-        DumpError::Format(s) | DumpError::Crypto(s) => s.clone(),
+        DumpError::Format(s) | DumpError::Crypto(s) | DumpError::Store { text: s, .. } => s.clone(),
         DumpError::Io(io) => strerror(io),
     }
 }
 
 // MIT: `restore_dump` (kadmin/dbutil/dump.c:1364-1379)
 // MIT: `load_db` (kadmin/dbutil/dump.c:1540-1543)
-fn restore_failed(util: &Util, file: &str, name: &str, why: &str) {
+fn restore_failed(util: &Util, file: &str, name: &str, e: &DumpError) {
     let progname = &util.progname;
+    let why = dump_error_text(e);
     let (line, detail) = why
         .strip_prefix("line ")
         .and_then(|rest| rest.split_once(": "))
         .and_then(|(n, d)| n.parse::<usize>().ok().map(|n| (n, d)))
-        .map_or((None, why), |(n, d)| (Some(n), d));
-    match line {
-        Some(n) => {
+        .map_or((None, why.as_str()), |(n, d)| (Some(n), d));
+    match (e, line) {
+        (DumpError::Store { line, .. }, _) => {
+            err_line(&format!("{progname}: {why}"));
+            err_line(&format!(
+                "{progname}: error processing line {line} of {file}"
+            ));
+        }
+        (_, Some(n)) => {
             err_line(&format!("{file}({n}): {detail}"));
             err_line(&format!("{progname}: error processing line {n} of {file}"));
         }
-        None => err_line(&format!("{progname}: {detail}")),
+        (_, None) => err_line(&format!("{progname}: {detail}")),
     }
     err_line(&format!("{progname}: {name} restore failed"));
 }

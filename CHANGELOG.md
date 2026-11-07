@@ -43,6 +43,7 @@ any other `###` heading.
 - **admin.** kpasswd and kprop refuse an empty realm at locate, as MIT; kprop keeps the keytab's realm.
 - **kdc.** A renewal at the second of `renew_till` is granted, as MIT; it was refused.
 - **kdc.** A dump that won't load names its record and error, as MIT; it blamed the stash key.
+- **kdb.** A record that fails to store also names its dump line, as MIT's `kdb5_util load`.
 - **kdb.** A failed iprop dump or load names the iprop format, as MIT; it said release 1.11.
 - **kdc, kpropd.** An error reply that fails to encode isn't sent and is logged, as MIT; it went out empty.
 - **kdc.** A dump or iprop update keeps unsupported key slots and bad KADM_DATA, as MIT; it was refused.

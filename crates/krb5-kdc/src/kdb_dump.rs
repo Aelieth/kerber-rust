@@ -79,6 +79,8 @@ pub enum DumpError {
     Crypto(String),
     #[error("dump io: {0}")]
     Io(#[from] std::io::Error),
+    #[error("dump store: {text}")]
+    Store { line: usize, text: String },
 }
 
 impl From<KdcError> for DumpError {
@@ -119,6 +121,7 @@ pub struct DumpPrincipal {
     pub tl_data: Vec<TlData>,
     pub keys: Vec<DumpKeyData>,
     pub e_data: Vec<u8>,
+    pub(crate) line: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -206,7 +209,8 @@ impl DumpFile {
     pub(crate) fn into_store(self, mkey: &ProtocolKey) -> Result<PrincipalStore, DumpError> {
         for p in &self.princs {
             if let Some(e) = crate::store::db_args_put_error(&p.tl_data) {
-                return Err(DumpError::Format(format!("{e} while storing {}", p.name)));
+                let text = format!("{e} while storing {}", p.name);
+                return Err(DumpError::Store { line: p.line, text });
             }
         }
         let realm = self.realm()?.to_owned();
@@ -223,12 +227,14 @@ impl DumpFile {
             if is_km {
                 hwm = rid_hwm_of(&p.tl_data);
             }
-            let name = p.name.clone();
+            let (name, line) = (p.name.clone(), p.line);
             // MIT: `process_k5beta7_princ` (kadmin/dbutil/dump.c:775-777)
             let (princ, sid) = p.into_principal(mkey).map_err(|e| match e {
-                DumpError::Format(s) => DumpError::Format(format!("{s} while storing {name}")),
-                DumpError::Crypto(s) => DumpError::Crypto(format!("{s} while storing {name}")),
-                e @ DumpError::Io(_) => e,
+                DumpError::Format(s) | DumpError::Crypto(s) => DumpError::Store {
+                    line,
+                    text: format!("{s} while storing {name}"),
+                },
+                e => e,
             })?;
             if princ.rid != 0
                 && princ.name.components_joined_lossy() != "K/M"
@@ -1174,6 +1180,7 @@ fn parse_princ_line(rest: &str, lineno: usize) -> Result<DumpPrincipal, DumpErro
         tl_data,
         keys,
         e_data,
+        line: lineno,
     })
 }
 

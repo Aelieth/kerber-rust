@@ -70,7 +70,8 @@ impl From<crate::kdb_dump::DumpError> for PersistError {
         match e {
             crate::kdb_dump::DumpError::Io(e) => Self::Io(e),
             crate::kdb_dump::DumpError::Crypto(s) => Self::Crypto(s),
-            crate::kdb_dump::DumpError::Format(s) => Self::Format(s),
+            crate::kdb_dump::DumpError::Format(s)
+            | crate::kdb_dump::DumpError::Store { text: s, .. } => Self::Format(s),
         }
     }
 }
