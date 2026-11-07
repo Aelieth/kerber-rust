@@ -169,7 +169,10 @@ check replica.keytab '^keytab copied$' host "$LABQ ssh kdc -- 'sudo cat $W/kdc2.
 check replica.stash '^stash copied$' host "$LABQ ssh kdc -- $(printf '%q' "REALM=$REALM; $STASH_SH; sudo cat \"\$stash\"") | $LABQ ssh kdc2 -- 'sudo install -m 0600 /dev/stdin $KDCDIR/.k5.$REALM && sudo $RESTORECON $KDCDIR/.k5.$REALM && echo stash copied'"
 check replica.conf "^        iprop_port = $IPORT\$" run kdc2 "printf '[kdcdefaults]\\n    kdc_ports = 88\\n    kdc_tcp_ports = 88\\n\\n[realms]\\n    %s = {\\n        iprop_enable = true\\n        iprop_port = $IPORT\\n        iprop_replica_poll = 10s\\n    }\\n' $REALM | sudo tee $KC > /dev/null && printf '[libdefaults]\\n    default_realm = %s\\n    dns_lookup_kdc = false\\n\\n[realms]\\n    %s = {\\n        kdc = kdc.kerber.test\\n        admin_server = kdc.kerber.test\\n    }\\n' $REALM $REALM | sudo tee /etc/krb5.conf > /dev/null && echo 'host/kdc.kerber.test@$REALM' | sudo tee $KDCDIR/kpropd.acl > /dev/null && sudo cat $KC"
 # The log belongs to the ssh user, whose shell opens it for kpropd's output.
-check replica.kpropd '^kpropd listening on 754$' run kdc2 "sudo mkdir -p $W && sudo install -m 0644 -o \$(id -un) /dev/null $W/kpropd.log && $KPROPD for i in \$(seq 1 40); do ss -Hltn 'sport = :754' | grep -q . && break; sleep 0.25; done; ss -Hltn 'sport = :754' | grep -q . && echo 'kpropd listening on 754'"
+# The database directory, as the install makes it (docs/install.md, 0700): a removed MIT package can take it along,
+# and kpropd makes the ulog file there, not the directory (MIT's ulog_map, kdb_log.c:515).
+check replica.kpropd '^kpropd listening on 754$' run kdc2 "sudo mkdir -p $W && { [ -d $KDCDATADIR ] || sudo install -d -m 0700 \
+    $KDCDATADIR; } && sudo install -m 0644 -o \$(id -un) /dev/null $W/kpropd.log && $KPROPD for i in \$(seq 1 40); do ss -Hltn 'sport = :754' | grep -q . && break; sleep 0.25; done; ss -Hltn 'sport = :754' | grep -q . && echo 'kpropd listening on 754'"
 if [ "$LEG" = rust ] && [ "$BAKED" = 0 ]; then
     KH=$(awk '$2 == "krb5-kpropd" { print $1 }' "$STATE/build.sums")
     check build.running "^running kpropd: ${KH:-none}\$" run kdc2 "echo \"running kpropd: \$(sudo sha256sum /proc/\$(pgrep -xo kpropd)/exe | cut -d' ' -f1)\""
