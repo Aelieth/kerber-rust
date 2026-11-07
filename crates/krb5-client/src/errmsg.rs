@@ -30,6 +30,7 @@ pub enum Code {
     TktInvalid,
     KdcUnreach,
     RealmUnknown,
+    RealmCantResolve,
     ParseMalformed,
     NoDefRealm,
     Profile(krb5_config::ProfileError),
@@ -319,6 +320,8 @@ fn code_text(code: Code) -> &'static str {
         Code::KdcUnreach => "Cannot contact any KDC for requested realm",
         // MIT: `KRB5_REALM_UNKNOWN` (lib/krb5/error_tables/krb5_err.et:209-209)
         Code::RealmUnknown => "Cannot find KDC for requested realm",
+        // MIT: `KRB5_REALM_CANT_RESOLVE` (lib/krb5/error_tables/krb5_err.et:305-305)
+        Code::RealmCantResolve => "Cannot resolve network address for KDC in requested realm",
         // MIT: `KRB5_PARSE_MALFORMED` (krb5_err.et:181-181)
         Code::ParseMalformed => "Malformed representation of principal",
         // MIT: `KRB5_CONFIG_NODEFREALM` (krb5_err.et:310-310)
