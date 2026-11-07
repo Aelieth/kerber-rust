@@ -1225,7 +1225,7 @@ fn doit(
     if let Err(e) = setsockopt(&*stream, sockopt::KeepAlive, &true) {
         log.com_err(Some(e.desc()), "while attempting setsockopt (SO_KEEPALIVE)");
     }
-    if let Some(host) = krb5_config::name_of_addr(peer.ip()) {
+    if let Some(host) = krb5_config::name_of_addr(peer) {
         klog::syslog(Severity::Info, &format!("Connection from {host}"));
         log.debug(&format!("Connection from {host}"));
     }

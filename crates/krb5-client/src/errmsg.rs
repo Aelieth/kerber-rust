@@ -97,6 +97,9 @@ impl Krb5Error {
             // MIT: `krb5_ktfileint_open` (lib/krb5/keytab/kt_file.c:730-808)
             krb5_protocol::Error::Keytab { code: 2, text } => Self::new(Code::Enoent, text.clone()),
             krb5_protocol::Error::InvalidArgument => Self::of(Code::Einval),
+            krb5_protocol::Error::RealmCantResolve => {
+                Self::new(Code::RealmCantResolve, e.to_string())
+            }
             krb5_protocol::Error::Io { .. } => Self::new(
                 Code::KdcUnreach,
                 format!("Cannot contact any KDC for realm '{realm}'"),

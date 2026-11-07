@@ -1,4 +1,4 @@
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use dns_lookup::{AddrInfoHints, LookupErrorKind, getaddrinfo, getnameinfo};
@@ -49,9 +49,8 @@ fn dns_name(host: &str, rdns: bool) -> Option<String> {
 
 // MIT: `doit` (kprop/kpropd.c:491-520)
 #[must_use]
-pub fn name_of_addr(ip: IpAddr) -> Option<String> {
+pub fn name_of_addr(sa: SocketAddr) -> Option<String> {
     const INET6_ADDRSTRLEN: usize = 46;
-    let sa = SocketAddr::new(ip, 0);
     let name = match catch_unwind(|| getnameinfo(&sa, 0)) {
         Ok(Ok((name, _))) => name,
         Ok(Err(e)) if !matches!(e.kind(), LookupErrorKind::IO) => return None,
@@ -116,7 +115,6 @@ pub fn sname_to_principal(
 }
 
 // MIT: `k5_canonprinc` (lib/krb5/os/sn2princ.c:279-285)
-// Two-part host name only: one candidate.
 #[derive(Debug)]
 pub struct CanonPrinc<'a> {
     conf: &'a Krb5Conf,

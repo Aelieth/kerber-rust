@@ -821,6 +821,7 @@ fn kdc_for_realm(profile: &Krb5Conf, realm: &str, fallback: &KdcAddr) -> Result<
     let found = match profile.kdcs_for_traced(realm, &mut crate::trace::dns_srv) {
         Ok(list) => list,
         Err(krb5_config::Error::InvalidArgument) => return Err(Error::InvalidArgument),
+        Err(krb5_config::Error::RealmCantResolve) => return Err(Error::RealmCantResolve),
         Err(_) => Vec::new(),
     };
     let Some(ep) = found.first() else {

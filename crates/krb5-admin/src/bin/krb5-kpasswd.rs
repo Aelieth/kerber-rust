@@ -16,7 +16,7 @@ use krb5_config::{CcSpec, ClientContext, Endpoint, Krb5Conf};
 use krb5_protocol::{
     AsOutcome, AsRequest, AsTicketOpts, Error, FileCcache, KPASSWD_SUCCESS, KdcAddr, as_exchange,
     as_exchange_defer_fast, as_exchange_prompted, as_exchange_prompted_defer_fast,
-    change_password_result, format_chpw_failure, parse_principal, set_password,
+    change_password_result, format_chpw_failure, set_password,
 };
 use krb5_types::PrincipalName;
 use zeroize::Zeroizing;
@@ -74,6 +74,11 @@ fn run<R: BufRead, W: Write>(
         Ok(list) if !list.is_empty() => list,
         Err(krb5_config::Error::InvalidArgument) => {
             eprintln!("{prog}: Invalid argument getting initial ticket");
+            return 1;
+        }
+        Err(krb5_config::Error::RealmCantResolve) => {
+            let text = "Cannot resolve network address for KDC in requested realm";
+            eprintln!("{prog}: {text} getting initial ticket");
             return 1;
         }
         _ => {
@@ -280,7 +285,7 @@ fn client(
         spec,
     });
     if let Some(name) = pname {
-        return parse_client(name, conf)
+        return parse_client(name, ctx)
             .map(|c| (c, armor))
             .map_err(|e| format!("{prog}: {e} parsing client name"));
     }
@@ -299,32 +304,22 @@ fn client(
         .ok()
         .flatten()
         .ok_or_else(|| "Unable to identify user from password file".to_owned())?;
-    parse_client(&user.name, conf)
+    parse_client(&user.name, ctx)
         .map(|c| (c, armor))
         .map_err(|e| format!("{prog}: {e} when parsing name {}", user.name))
 }
 
-fn parse_client(name: &str, conf: &Krb5Conf) -> Result<Client, String> {
-    let (name, realm) = parse_principal(&with_default_realm(name, conf)?)?;
+// MIT: `krb5_parse_name_flags` (lib/krb5/krb/parse.c:198-211)
+fn parse_client(name: &str, ctx: &ClientContext) -> Result<Client, String> {
+    let (realm, name) =
+        krb5_client::creds::parse_name(ctx, name, false).map_err(|e| e.to_string())?;
+    let realm = String::from_utf8_lossy(realm.as_bytes()).into_owned();
     let display = name.unparse_with_realm_lossy(&realm);
     Ok(Client {
         name,
         realm,
         display,
     })
-}
-
-// MIT: `krb5_parse_name_flags` (krb/parse.c:198-211)
-fn with_default_realm(name: &str, conf: &Krb5Conf) -> Result<String, String> {
-    let parsed = krb5_types::parse_name_ex(name, "", false).map_err(|e| e.to_string())?;
-    if parsed.has_realm {
-        return Ok(name.to_owned());
-    }
-    let realm = conf
-        .default_realm
-        .as_deref()
-        .ok_or_else(|| krb5_config::Error::NoDefaultRealm.to_string())?;
-    Ok(format!("{name}@{realm}"))
 }
 
 // MIT: `kcm_resolve` (cc_kcm.c:750-759)
@@ -415,7 +410,8 @@ fn set_password_target() -> Result<Option<(PrincipalName, String)>, String> {
         std::env::var("KRB5_KPASSWD_TARGET")
             .ok()
             .map(|raw| {
-                parse_principal(&raw).map_err(|e| format!("{e} parsing KRB5_KPASSWD_TARGET"))
+                krb5_protocol::parse_principal(&raw)
+                    .map_err(|e| format!("{e} parsing KRB5_KPASSWD_TARGET"))
             })
             .transpose()
     }

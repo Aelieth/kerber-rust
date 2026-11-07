@@ -311,13 +311,12 @@ fn ranked<'a>(
 
 // MIT: `k5_locate_server` (locate_kdc.c:853-878)
 pub fn kdc_for_realm(profile: &Krb5Conf, realm: &str) -> Result<KdcAddr, Krb5Error> {
-    if realm.is_empty() {
-        let text = "Cannot find KDC for invalid realm name \"\"";
-        return Err(Krb5Error::new(Code::RealmCantResolve, text.to_owned()));
-    }
     let found = match profile.kdcs_for_traced(realm, &mut crate::trace::dns_srv) {
         Ok(list) => list,
         Err(krb5_config::Error::InvalidArgument) => return Err(Krb5Error::of(Code::Einval)),
+        Err(e @ krb5_config::Error::RealmCantResolve) => {
+            return Err(Krb5Error::new(Code::RealmCantResolve, e.to_string()));
+        }
         Err(_) => Vec::new(),
     };
     let Some(ep) = found.first() else {

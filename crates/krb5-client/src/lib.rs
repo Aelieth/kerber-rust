@@ -1698,6 +1698,9 @@ fn resolve_kdc(profile: &Krb5Conf, realm: &str, argv: &KdcAddr) -> Result<KdcAdd
     let found = match profile.kdcs_for_traced(realm, &mut crate::trace::dns_srv) {
         Ok(list) => list,
         Err(krb5_config::Error::InvalidArgument) => return Err(Krb5Error::of(Code::Einval)),
+        Err(e @ krb5_config::Error::RealmCantResolve) => {
+            return Err(Krb5Error::new(Code::RealmCantResolve, e.to_string()));
+        }
         Err(_) => Vec::new(),
     };
     let Some(ep) = found.first() else {

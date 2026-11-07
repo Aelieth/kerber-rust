@@ -52,6 +52,9 @@ pub enum Error {
     // MIT: `KRB5_CONFIG_NODEFREALM` (krb5_err.et:310-310)
     #[error("Configuration file does not specify default realm")]
     NoDefaultRealm,
+    // MIT: `k5_locate_server` (lib/krb5/os/locate_kdc.c:861-865)
+    #[error("Cannot find KDC for invalid realm name \"\"")]
+    RealmCantResolve,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

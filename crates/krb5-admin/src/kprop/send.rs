@@ -36,6 +36,7 @@ const fn krb5_code(n: i64) -> i64 {
 
 const PARSE_MALFORMED_TEXT: &str = "Malformed representation of principal";
 const REALM_UNKNOWN: i64 = krb5_code(154);
+const REALM_CANT_RESOLVE: i64 = krb5_code(220);
 const MUTUAL_FAILED: i64 = krb5_code(158);
 const KT_NOTFOUND: i64 = krb5_code(181);
 const SENDAUTH_BADAUTHVERS: i64 = krb5_code(204);
@@ -220,6 +221,7 @@ pub(crate) fn init_creds_keytab(
     // MIT: `krb5_init_creds_set_service` (lib/krb5/krb/get_in_tkt.c:1055-1071)
     trace::init_creds(trace::Princ::new(client, realm.as_bytes()));
     let mut client = client.clone();
+    let mut client_realm = realm.to_owned();
     let mut ticket = init_creds_ticket_opts(conf, realm)?;
     if unforwardable {
         ticket.forwardable = false;
@@ -249,10 +251,11 @@ pub(crate) fn init_creds_keytab(
                 client.clone(),
             );
             match krb5_protocol::keytab_init_creds_client(&kt, conf, &wanted) {
-                Ok(Some(((_, found), keys, kt_etypes))) => {
+                Ok(Some(((found_realm, found), keys, kt_etypes))) => {
                     client = found;
+                    client_realm = String::from_utf8_lossy(found_realm.as_bytes()).into_owned();
                     trace::init_creds_keytab_lookup(
-                        trace::Princ::new(&client, realm.as_bytes()),
+                        trace::Princ::new(&client, client_realm.as_bytes()),
                         &kt_etypes,
                     );
                     (keys, kt_etypes, None)
@@ -267,6 +270,8 @@ pub(crate) fn init_creds_keytab(
         }
         None => return Err(KpropError::code(KT_NOTFOUND, GETTING_CREDS)),
     };
+    // MIT: `restart_init_creds_loop` (lib/krb5/krb/get_in_tkt.c:823-825)
+    let realm = client_realm.as_str();
     let found = match conf.kdcs_for_traced(realm, &mut krb5_protocol::trace::dns_srv) {
         Ok(list) => list,
         Err(krb5_config::Error::InvalidArgument) => {
@@ -274,6 +279,9 @@ pub(crate) fn init_creds_keytab(
                 i64::from(nix::errno::Errno::EINVAL as i32),
                 GETTING_CREDS,
             ));
+        }
+        Err(krb5_config::Error::RealmCantResolve) => {
+            return Err(KpropError::code(REALM_CANT_RESOLVE, GETTING_CREDS));
         }
         Err(_) => Vec::new(),
     };
