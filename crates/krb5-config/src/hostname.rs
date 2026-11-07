@@ -1,8 +1,9 @@
+use std::net::{IpAddr, SocketAddr};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use dns_lookup::{AddrInfoHints, getaddrinfo, getnameinfo};
+use dns_lookup::{AddrInfoHints, LookupErrorKind, getaddrinfo, getnameinfo};
 use krb5_types::{NameError, PrincipalName, Realm, try_ascii};
-use nix::libc::{AI_CANONNAME, NI_NAMEREQD};
+use nix::libc::{AI_CANONNAME, NI_NAMEREQD, NI_NUMERICHOST};
 
 use super::{CanonHost, Krb5Conf};
 
@@ -44,6 +45,20 @@ fn dns_name(host: &str, rdns: bool) -> Option<String> {
         .ok()?;
     let reverse = rdns.then(|| getnameinfo(&first.sockaddr, NI_NAMEREQD).ok());
     reverse.flatten().map(|(name, _)| name).or(first.canonname)
+}
+
+// MIT: `doit` (kprop/kpropd.c:491-520)
+#[must_use]
+pub fn name_of_addr(ip: IpAddr) -> Option<String> {
+    const INET6_ADDRSTRLEN: usize = 46;
+    let sa = SocketAddr::new(ip, 0);
+    let name = match catch_unwind(|| getnameinfo(&sa, 0)) {
+        Ok(Ok((name, _))) => name,
+        Ok(Err(e)) if !matches!(e.kind(), LookupErrorKind::IO) => return None,
+        // Not UTF-8.
+        _ => getnameinfo(&sa, NI_NUMERICHOST).ok()?.0,
+    };
+    (name.len() <= INET6_ADDRSTRLEN).then_some(name)
 }
 
 // MIT: `qualify_shortname` (lib/krb5/os/sn2princ.c:60-86)

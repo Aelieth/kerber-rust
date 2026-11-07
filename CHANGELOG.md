@@ -39,6 +39,7 @@ any other `###` heading.
 - **gss.** Unwrap rotates RRC left and wrap right, as MIT, so Windows' sealed tokens unwrap.
 - **kpropd.** A failed replay resets the ulog header, so the next poll asks for a full resync, as MIT.
 - **kpropd.** A non-UTF-8 name in an update now fails its replay and asks for a full resync.
+- **kpropd.** Names its peer by getnameinfo, as MIT; an IPv4 peer was looked up in ip6.arpa.
 - **kdc.** A renewal at the second of `renew_till` is granted, as MIT; it was refused.
 - **kdc.** A dump that won't load names its record and error, as MIT; it blamed the stash key.
 - **kdb.** A failed iprop dump or load names the iprop format, as MIT; it said release 1.11.

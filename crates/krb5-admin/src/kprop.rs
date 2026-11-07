@@ -1225,9 +1225,10 @@ fn doit(
     if let Err(e) = setsockopt(&*stream, sockopt::KeepAlive, &true) {
         log.com_err(Some(e.desc()), "while attempting setsockopt (SO_KEEPALIVE)");
     }
-    let host = krb5_config::name_of_addr(peer.ip());
-    klog::syslog(Severity::Info, &format!("Connection from {host}"));
-    log.debug(&format!("Connection from {host}"));
+    if let Some(host) = krb5_config::name_of_addr(peer.ip()) {
+        klog::syslog(Severity::Info, &format!("Connection from {host}"));
+        log.debug(&format!("Connection from {host}"));
+    }
     // MIT: `kerberos_authenticate` (kprop/kpropd.c:1185-1295)
     if let Some(server) = expected_server.filter(|_| load.debug) {
         let server = server.unparse_with_realm_lossy(expected_realm.unwrap_or_default());

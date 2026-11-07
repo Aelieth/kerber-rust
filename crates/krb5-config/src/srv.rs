@@ -1,9 +1,7 @@
 // MIT: `dns_locate_server_srv` (lib/krb5/os/locate_kdc.c:756-797)
 // MIT: `krb5int_make_srv_query_realm` (lib/krb5/os/dnssrv.c:258-347)
 // MIT: `krb5int_dns_init` (lib/krb5/os/dnsglue.c:120-194)
-// `res_ninit` then `res_nsearch`.
 
-use std::fmt::Write as _;
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, UdpSocket};
 use std::time::{Duration, Instant};
@@ -11,7 +9,6 @@ use std::time::{Duration, Instant};
 use super::{Endpoint, Error};
 
 const DNS_SRV: u16 = 33;
-const DNS_PTR: u16 = 12;
 const DNS_IN: u16 = 1;
 const MAX_NS: usize = 3;
 const MAX_SEARCH: usize = 6;
@@ -538,50 +535,6 @@ fn parse_srv(msg: &[u8]) -> Vec<(String, u16, u16, u16)> {
             )
         })
         .collect()
-}
-
-// MIT: `doit` (kprop/kpropd.c:516-520)
-#[must_use]
-pub fn name_of_addr(ip: IpAddr) -> String {
-    hosts_name(
-        &std::fs::read_to_string("/etc/hosts").unwrap_or_default(),
-        ip,
-    )
-    .or_else(|| {
-        let msg = query(&reverse_name(ip), DNS_PTR, &load_resolv()).ok()?;
-        let (i, _) = answers(&msg, DNS_PTR).into_iter().next()?;
-        decode_name(&msg, i)
-    })
-    .unwrap_or_else(|| ip.to_string())
-}
-
-fn hosts_name(hosts: &str, ip: IpAddr) -> Option<String> {
-    let v4_mapped = |a: IpAddr| match a {
-        IpAddr::V4(v4) => IpAddr::V6(v4.to_ipv6_mapped()),
-        IpAddr::V6(_) => a,
-    };
-    hosts.lines().find_map(|line| {
-        let mut fields = line.split('#').next()?.split_whitespace();
-        let addr: IpAddr = fields.next()?.parse().ok()?;
-        (addr == ip || v4_mapped(addr) == ip).then(|| fields.next().map(str::to_owned))?
-    })
-}
-
-fn reverse_name(ip: IpAddr) -> String {
-    match ip {
-        IpAddr::V4(v4) => {
-            let [a, b, c, d] = v4.octets();
-            format!("{d}.{c}.{b}.{a}.in-addr.arpa")
-        }
-        IpAddr::V6(v6) => {
-            let mut name = String::new();
-            for b in v6.octets().iter().rev() {
-                let _ = write!(name, "{:x}.{:x}.", b & 0xf, b >> 4);
-            }
-            name.push_str("ip6.arpa");
-            name
-        }
-    }
 }
 
 fn encode_qname(name: &str) -> Result<Vec<u8>, Error> {

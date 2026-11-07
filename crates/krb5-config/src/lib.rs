@@ -402,7 +402,7 @@ pub use context::ClientContext;
 pub use files::ReadOnce;
 pub use hostname::{
     CanonPrinc, HostPrinc, SnameError, fallback_host_realm, fallback_host_realm_traced,
-    sname_to_principal,
+    name_of_addr, sname_to_principal,
 };
 pub use iprop_params::{DEF_ULOGENTRIES, IpropParams, KadmindListen, MISSING_CONF_PARAMS};
 pub use kdcconf::{
@@ -423,5 +423,5 @@ pub use profile::{
     load_krb5_conf, load_krb5_conf_paths, parse_deltat, split_krb5_config_paths,
 };
 pub use profile_set::ProfileSet;
-pub use srv::{DnsSrv, lookup_srv_kdc, name_of_addr};
+pub use srv::{DnsSrv, lookup_srv_kdc};
 pub use testenv::{isolate_test_krb5, isolated_profile, set_test_kdc_profile, set_test_krb5_paths};
