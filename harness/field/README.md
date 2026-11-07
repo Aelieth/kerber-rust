@@ -577,11 +577,12 @@ would remove it.
   database is unmounted and moved back, also when the scenario stops early.
 - **`load.sh`** (LD, the same input on both legs): `loadgen` (`FIELD_LOADGEN`, the ref's `target/release/loadgen`)
   runs AS + TGS from client2 with `FIELD_LOAD_WORKERS` (8) workers for the profile's seconds, while one MIT
-  `kadmin` session adds `lt-NNNNN` at `FIELD_LOAD_WRITES` (2) per second and MIT `kinit` + `kvno` sample before,
-  mid-load and after. Graded: `err=0`, every add acknowledged and listed, no restart, both daemons active, no
-  panic in their journal; the KDC's `RssAnon` every 5 s up to the load's end (within 30 s), bounded on the rust
-  leg (last <= first * 1.5 + 33 MiB, slope <= 0.05 MiB/s from 300 s, which must settle from 1200 s of load) and
-  recorded on MIT's (`load.expect`).
+  `kadmin` session keeps a pool of 200 `lt-NNNNN` (adds up to 200, then deletes the oldest and adds the next, so the
+  realm keeps its size) at `FIELD_LOAD_WRITES` (2) commands per second and MIT `kinit` + `kvno` sample before,
+  mid-load and after. Graded: `err=0`, every add and delete acknowledged, the last 200 adds listed, no restart, both
+  daemons active, no panic in their journal; the KDC's `RssAnon` every 5 s up to the load's end (within 30 s),
+  bounded on the rust leg (last <= first * 1.5 + 33 MiB, slope <= 0.05 MiB/s from 300 s, which must settle from
+  1200 s of load) and recorded on MIT's (`load.expect`).
 - **`restart.sh`** (RW): MIT `kadmin` from client2 adds `rw-<hex>` (a generated password, on stdin only); after
   the acknowledgment both daemons' main processes are SIGKILLed and started again (new pids, 88 and 749
   listening); MIT `kinit` with that password; kdc's own `kdb5_util dump` loads into MIT's on kdc2, whose

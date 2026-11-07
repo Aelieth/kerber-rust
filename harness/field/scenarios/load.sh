@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # harness/field/scenarios/load.sh --leg mit|rust: the leg's KDC as upgrade.sh left it on kdc, under load for
 # FIELD_LOAD_SECONDS (default 600; 3600 when the run id ends in -load-long) from client2: loadgen (FIELD_LOADGEN, the
-# ref's release build, on both legs) kinit + TGS at FIELD_LOAD_WORKERS workers, MIT kadmin adding lt-NNNNN principals
-# at FIELD_LOAD_WRITES per second through one session, MIT kinit + kvno before, mid-load and after, and the KDC's
-# anonymous RSS every 5 s. Graded: no loadgen error, every add acknowledged and listed, no restart, both daemons
+# ref's release build, on both legs) kinit + TGS at FIELD_LOAD_WORKERS workers, MIT kadmin keeping a pool of POOL
+# lt-NNNNN principals (adds up to it, then deletes the oldest and adds the next, so the realm keeps its size and the
+# RSS gates see leaks, not data) at FIELD_LOAD_WRITES commands per second through one session, MIT kinit + kvno
+# before, mid-load and after, and the KDC's anonymous RSS every 5 s. Graded: no loadgen error, every add and delete
+# acknowledged, the last POOL adds listed, no restart, both daemons
 # active, no panic in the journal, the RSS series reaching the load's end; the rust leg's RSS bounded (cap, and the
 # slope, which must settle when the load runs 1200 s or more). The MIT leg is the oracle: its RSS is INFO.
 # vms: kdc client2
@@ -30,6 +32,7 @@ case $FIELD_RUN in
 esac
 WORKERS=${FIELD_LOAD_WORKERS:-8}
 WRITES=${FIELD_LOAD_WRITES:-2}
+POOL=200
 for v in "$SECS" "$WORKERS" "$WRITES"; do
     [[ $v =~ ^[1-9][0-9]*$ ]] || { note "FIELD_LOAD_SECONDS, _WORKERS and _WRITES must be positive integers"; exit 1; }
 done
@@ -69,7 +72,8 @@ export KRB5_PASSWORD TMPDIR="$D/tmp" KERBER_LOAD_WORKERS="$1" KERBER_LOAD_SECOND
 echo $? > "$D/load.rc"
 EOF
 }
-# client2: the paced writer, args: seconds writes-per-second admin-principal; stdin's first line is the password.
+# client2: the paced writer, args: seconds commands-per-second admin-principal pool; stdin's first line is the
+# password.
 writersh() {
     cat <<'EOF'
 #!/bin/bash
@@ -80,12 +84,18 @@ gap=$(awk -v w="$2" 'BEGIN { printf "%.4f", 1 / w }')
 {
     printf '%s\n' "$pw"
     n=0
+    d=0
     while [ "$SECONDS" -lt "$1" ]; do
+        if [ "$n" -ge "$4" ]; then
+            d=$((d + 1))
+            printf 'delprinc -force lt-%05d\n' "$d"
+            sleep "$gap"
+        fi
         n=$((n + 1))
         printf 'addprinc -randkey lt-%05d\n' "$n"
         sleep "$gap"
     done
-    echo "$n" > "$D/attempted"
+    echo "$n $d" > "$D/attempted"
 } | kadmin -p "$3" > "$D/writer.out" 2> "$D/writer.err"
 echo $? > "$D/writer.rc"
 EOF
@@ -164,7 +174,7 @@ restarts() {
         show -p NRestarts --value $UNIT_ADMIN)"
 }
 
-section "load --leg $LEG: $SECS s of $WORKERS loadgen workers and $WRITES kadmin adds/s on the $LEG KDC, RSS sampled"
+section "load --leg $LEG: $SECS s, $WORKERS loadgen workers, $WRITES kadmin writes/s (pool $POOL), RSS sampled"
 observe LD.input.seconds 'seconds=[0-9]+' host "echo seconds=$SECS"
 observe LD.input.workers 'workers=[0-9]+' host "echo workers=$WORKERS"
 observe LD.input.writes 'writes_per_s=[0-9]+' host "echo writes_per_s=$WRITES"
@@ -207,8 +217,8 @@ check load.start '^started: loadgen$' runin client2 "alice's password ($ALICE)" 
     "IFS= read -r p; printf '%s\n' \"\$p\" | setsid bash $WC/load.sh $WORKERS $SECS $KH alice@$REALM $SVC > \
         /dev/null 2>&1 & sleep 2; kill -0 \"\$(cat $WC/load.pid)\" && echo 'started: loadgen'" < <(once "$ALICE")
 check writer.start '^started: writer$' runin client2 "admin/admin's password ($ADMIN)" \
-    "IFS= read -r p; printf '%s\n' \"\$p\" | setsid bash $WC/writer.sh $SECS $WRITES admin/admin@$REALM > /dev/null \
-        2>&1 & sleep 2; kill -0 \"\$(cat $WC/writer.pid)\" && echo 'started: writer'" < <(once "$ADMIN")
+    "IFS= read -r p; printf '%s\n' \"\$p\" | setsid bash $WC/writer.sh $SECS $WRITES admin/admin@$REALM $POOL > \
+        /dev/null 2>&1 & sleep 2; kill -0 \"\$(cat $WC/writer.pid)\" && echo 'started: writer'" < <(once "$ADMIN")
 T0=$(date +%s)
 MID=0
 while :; do
@@ -243,12 +253,17 @@ check LD.load.err '^ok=[0-9]+ err=0 ' run client2 "cat $WC/load.out $WC/load.err
     \"loadgen rc=\$rc\"; [ \"\$rc\" = 0 ]"
 checklast LD.load.ok '^ok=(1[6-9]|[2-9][0-9]|[0-9]{3,}) '
 observelast LD.load.throughput 'throughput=[0-9.]+'
-check LD.writes.acked '^writes: acked=([1-9][0-9]*) attempted=\1$' run client2 "printf \
-    'writes: acked=%s attempted=%s\n' \"\$(grep -oE 'Principal \"lt-[0-9]{5,}@$R\" created\\.' $WC/writer.out | wc \
-    -l)\" \"\$(cat $WC/attempted 2> /dev/null)\"; [ \"\$(cat $WC/writer.rc 2> /dev/null)\" = 0 ]"
-ACKED=$(sed -n 's/^writes: acked=\([0-9][0-9]*\) .*/\1/p' "$LAST_OUT")
-check LD.writes.list "^lt-principals: ${ACKED:-none}\$" runin client2 "admin/admin's password ($ADMIN)" \
-    "$KA -q 'listprincs lt-*' 2>&1 | grep -cE '^lt-[0-9]{5,}@$R\$' | sed 's/^/lt-principals: /'" < <(once "$ADMIN")
+check LD.writes.acked '^writes: acked=([1-9][0-9]*) attempted=\1 \(adds [1-9][0-9]*, deletes [0-9]+\)$' run client2 \
+    "read -r a d < $WC/attempted; printf 'writes: acked=%s attempted=%s (adds %s, deletes %s)\n' \"\$(grep -oE \
+    'Principal \"lt-[0-9]{5,}@$R\" (created|deleted)\\.' $WC/writer.out | wc -l)\" \$((a + d)) \"\$a\" \"\$d\"; \
+    [ \"\$(cat $WC/writer.rc 2> /dev/null)\" = 0 ]"
+ADDS=$(sed -n 's/^writes: .* (adds \([0-9][0-9]*\), .*/\1/p' "$LAST_OUT")
+KEEP=$(( ${ADDS:-0} < POOL ? ${ADDS:-0} : POOL ))
+check LD.writes.list "^lt-principals: $KEEP, the last $KEEP added\$" runin client2 "admin/admin's password ($ADMIN)" \
+    "$KA -q 'listprincs lt-*' 2>&1 | grep -E '^lt-[0-9]{5,}@$R\$' | LC_ALL=C sort > $WC/lt.got; awk -v a=$((${ADDS:-0} \
+    - KEEP + 1)) -v z=${ADDS:-0} 'BEGIN { for (i = a; i <= z; i++) printf \"lt-%05d@$REALM\\n\", i }' | LC_ALL=C sort > \
+    $WC/lt.want; printf 'lt-principals: %s, %s\n' \"\$(wc -l < $WC/lt.got)\" \"\$(cmp -s $WC/lt.got $WC/lt.want && \
+    echo 'the last $KEEP added' || echo 'not the last $KEEP added')\"" < <(once "$ADMIN")
 check LD.restarts "line:$RB" restarts
 check LD.active '^active active$' run kdc "systemctl is-active $UNIT_KDC $UNIT_ADMIN | paste -sd' ' -"
 check LD.panic '^panic lines: 0 \(journal readable: [1-9][0-9]* lines\)$' run kdc "j() { sudo journalctl -u \
