@@ -30,7 +30,7 @@ HN=kdc
 case $VM in
     deb13)
         FAM=deb PREREQ='### Debian and Ubuntu' START=2 KDCCONF='### kdc.conf and kadm5.acl on Debian and Ubuntu'
-        BASE_PKGS='wamerican python3 strace openssl' MIT_PKGS='krb5-kpropd krb5-pkinit' ;;
+        BASE_PKGS='wamerican python3 strace openssl nftables' MIT_PKGS='krb5-kpropd krb5-pkinit' ;;
     rocky10)
         FAM=rpm PREREQ='### Rocky Linux' START=1 KDCCONF='### kdc.conf and kadm5.acl'
         BASE_PKGS='words python3 strace openssl' MIT_PKGS='krb5-pkinit' ;;
@@ -58,8 +58,9 @@ CAP_MIB=$((32 * 1024))
 FIELD_KDC_FAMILY=$FAM
 case $FAM in
     deb)
-        PKG_LIST="dpkg-query -W -f='\${Package}-\${Version}\n' 'krb5-*' 'libkrb5*' 'libkadm5*' 'libkdb5*' 2> /dev/null"
-        PKG_LIST="$PKG_LIST | grep -v -- '-\$'" ;;
+        # State first: a removed package stays listed, as rc (its config kept).
+        PKG_LIST="dpkg-query -W -f='\${db:Status-Abbrev}\${Package}-\${Version}\n'"
+        PKG_LIST="$PKG_LIST 'krb5-*' 'libkrb5*' 'libkadm5*' 'libkdb5*' 2> /dev/null | awk 'NF == 2 && \$2 !~ /-\$/'" ;;
     *) PKG_LIST="rpm -qa 'krb5*' | LC_ALL=C sort" ;;
 esac
 # shellcheck source=../field/lib/family.sh

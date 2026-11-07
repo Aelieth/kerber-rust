@@ -104,7 +104,12 @@ kself KA.deny.addpol "^(Password for [^:]*: )?add_policy: Operation requires \`\
 kself KA.deny.listpols "^(Password for [^:]*: )?get_policies: Operation requires \`\`list'' privilege while retrieving list\\.\$" Ct-self-0 'listpols'
 kself KA.deny.delpol "^(Password for [^:]*: )?delete_policy:: Operation requires \`\`delete'' privilege while deleting policy \"swpol\"\$" Ct-self-0 'delpol -force swpol'
 
-section "KA.keep: cpw -keepold keeps every key version for admin/admin, and MAX_SELF_KEEPOLD (5, the new one included) when ctself changes its own (server_stubs.c:383-399, kdb_cpw.c:116-137)"
+section "KA.keep: cpw -keepold keeps every key version for admin/admin, and MAX_SELF_KEEPOLD (5, the new one included) when ctself changes its own (1.22.2 server_stubs.c:22, :392-400, kdb_cpw.c:118-135; 1.21 keeps all, kdb_cpw.c:412-415)"
+# The MIT version this leg's kadmind is held to: MIT's leg the distro's, ours always 1.22.
+KV=1.22
+[ "$LEG" != mit ] || KV=$MIT_VERSION
+KEEP_SELF='5 \(3 to 7\)'
+[ "$KV" != 1.21 ] || KEEP_SELF='7 \(1 to 7\)'
 for i in 1 2 3 4 5 6; do
     kadm "KA.keep.admin.$i" "^Key for \"ctkeep@$R\" randomized\\.\$" 'cpw -randkey -keepold ctkeep'
 done
@@ -112,7 +117,7 @@ check KA.keep.admin '^kvnos: 7 \(1 to 7\)$' run kdc "v=\$(sudo kadmin.local -q '
 for i in 1 2 3 4 5 6; do
     kself "KA.keep.self.$i" "^Password for \"ctself@$R\" changed\\.\$" "Ct-self-$((i - 1))" "cpw -keepold -pw Ct-self-$i ctself"
 done
-check KA.keep.self '^kvnos: 5 \(3 to 7\)$' run kdc "v=\$(sudo kadmin.local -q 'getprinc ctself' | sed -n 's/^Key: vno \\([0-9]*\\),.*/\\1/p' | sort -un); echo \"kvnos: \$(printf '%s\\n' \"\$v\" | grep -c .) (\$(printf '%s\\n' \"\$v\" | head -n 1) to \$(printf '%s\\n' \"\$v\" | tail -n 1))\""
+check KA.keep.self "^kvnos: $KEEP_SELF\$" run kdc "v=\$(sudo kadmin.local -q 'getprinc ctself' | sed -n 's/^Key: vno \\([0-9]*\\),.*/\\1/p' | sort -un); echo \"kvnos: \$(printf '%s\\n' \"\$v\" | grep -c .) (\$(printf '%s\\n' \"\$v\" | head -n 1) to \$(printf '%s\\n' \"\$v\" | tail -n 1))\""
 
 section "KA.date: kadmin.local's dates and intervals (kadmin.c parse_date and parse_interval :157-195, getdate.y), on ctdate, as getprinc reads them back"
 # dates <check> <option> <getprinc field> <form>...: on kdc, kadmin.local (the leg's own parser) sets <option> on ctdate to

@@ -242,8 +242,7 @@ for p in udp:dgram tcp:stream; do
 done
 
 section "7. bob's kpasswd there over UDP 464 (kdc refuses client2's TCP 464 for that exchange) and back over TCP"
-check kdc.nft '^nftables-' run kdc "$PKG_QUERY nftables > /dev/null 2>&1 || sudo $PKG_INSTALL_Q nftables > /dev/null 2>&1; \
-    $PKG_QUERY nftables"
+check kdc.nft '^nftables-' run kdc "$PKG_QUERY nftables"
 check kpasswd.refuse.tcp rc run kdc "sudo nft add table inet field_tmp && sudo nft add chain inet field_tmp input '{ type filter hook input priority filter - 1; policy accept; }' && sudo nft add rule inet field_tmp input ip saddr $LN.22 tcp dport 464 counter reject with tcp reset && sudo nft list table inet field_tmp"
 check client2.kpasswd.udp "^answers: dgram $KIPe:464 dgram $KIPe:88\$" runin client2 "bob's password, then $BOBT twice" "$U ~/field/ktrace.sh udp-kpasswd kpasswd bob" < <(chpw "$BOB" "$BOBT")
 checklast client2.kpasswd.udp.changed '^Password changed\.$'

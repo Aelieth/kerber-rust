@@ -33,8 +33,16 @@ R=${REALM//./\\.}
 LN=${FIELD_LAB_NET:?FIELD_LAB_NET is not set in field.env}
 LNe=${LN//./\\.}
 DB=$KDCDATADIR
+# KH.6's mounts are made in kadmind's own mount namespace: a sandboxed unit (Debian's) has one a host mount never
+# reaches; on Fedora it is the host's.
+NS="sudo nsenter -t \$(systemctl show -p MainPID --value $UNIT_ADMIN) -m"
+# The mounts at $DB there: KH.6 adds one layer and undoes only that one (n0 recorded before its bind).
+KHN="findmnt -n -o TARGET -M $DB | wc -l"
 cleanup() {
-    timeout -k 5 60 "$LAB" ssh kdc -- "findmnt -n $DB > /dev/null && sudo umount $DB; [ -e $DB/principal.kh ] && sudo mv $DB/principal.kh $DB/principal; true" < /dev/null > /dev/null 2>&1
+    local n0 um=''
+    n0=$(cat "$STATE/kh6.n0" 2> /dev/null)
+    [ -z "$n0" ] || um="$NS sh -c '[ \$($KHN) = $((n0 + 1)) ] && umount $DB'; "
+    timeout -k 5 60 "$LAB" ssh kdc -- "${um}[ -e $DB/principal.kh ] && sudo mv $DB/principal.kh $DB/principal; true" < /dev/null > /dev/null 2>&1
     timeout -k 5 60 "$LAB" ssh client2 -- 'rm -rf ~/kh; true' < /dev/null > /dev/null 2>&1
 }
 trap cleanup EXIT
@@ -92,14 +100,20 @@ check KH.5.result '^result: 0 \(Success\)$' sp kh5 khuser "alice-changed's passw
 checklast KH.5.ticket "^ticket: kadmin/changepw@$R, initial\$"
 check KH.5.kinit "^Default principal: khuser@$R\$" kc khnul khuser "alice-changed's password ($ALICE_TEMP)" < <(once "$ALICE_TEMP")
 
-section "KH.6 the database cannot be written: $DB bound read-only on kdc; khuser sets its own password (MIT's text; ours the same, no path)"
+section "KH.6 the database cannot be written: $DB bound read-only in kadmind's mount namespace; khuser sets its own password (MIT's text; ours the same, no path)"
 check KH.6.setup "^Password for \"khuser@$R\" changed\\.\$" runin kdc "alice's password ($ALICE), twice" "sudo kadmin.local -q 'cpw khuser' 2>&1" < <(twice "$ALICE")
 check kinit.khuser6 "^Default principal: khuser@$R\$" kc kh6 khuser "alice's password ($ALICE)" -S kadmin/changepw < <(once "$ALICE")
-check KH.6.ro '^ro,' run kdc "findmnt -n $DB && exit 1; sudo mount --bind $DB $DB && sudo mount -o remount,ro,bind $DB && findmnt -no OPTIONS $DB"
+check KH.6.ro '^ro,' run kdc "$NS sh -c 'n0=\$($KHN); echo n0=\$n0; mount --bind $DB $DB && mount -o remount,ro,bind $DB; \
+    n1=\$($KHN); echo n1=\$n1; [ \$n1 = \$((n0 + 1)) ] && findmnt -no OPTIONS $DB | tail -n 1'"
+sed -n 's/^n0=\([0-9][0-9]*\)$/\1/p' "$LAST_OUT" > "$STATE/kh6.n0"
+N0=$(cat "$STATE/kh6.n0")
 check KH.6.result '^result: 2 \(Server error\)$' sp kh6 khuser "alice-changed's password ($ALICE_TEMP)" < <(once "$ALICE_TEMP")
 checklast KH.6.text '^text: Password not changed\.\\nRead-only file system while trying to change password\.\\n$'
 checklast KH.6.no-path '^text: [^/]*$'
-check KH.6.rw '^not a mount$' run kdc "sudo umount $DB; findmnt -n $DB || echo 'not a mount'"
+UM=''
+[ -z "$N0" ] || UM="[ \$($KHN) = $((N0 + 1)) ] && umount $DB; "
+check KH.6.rw '^(not a mount|rw,.*)$' run kdc "$NS sh -c '${UM}n=\$($KHN); if [ \$n != ${N0:-none} ]; then \
+    echo count \$n, want ${N0:-none}; elif [ \$n = 0 ]; then echo not a mount; else findmnt -no OPTIONS $DB | tail -n 1; fi'"
 
 section "KH.6 the database is gone: $DB/principal moved aside; khuser sets its own password (MIT's answer: the AP-REQ is not read; ours the same)"
 check kinit.khuser6b "^Default principal: khuser@$R\$" kc kh6b khuser "alice's password ($ALICE)" -S kadmin/changepw < <(once "$ALICE")
