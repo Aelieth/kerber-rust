@@ -89,6 +89,7 @@ any other `###` heading.
 - **hand.** Step 1 records its extras even when the 13 differ; TR cell 2 checks its embed binary against it.
 - **hand.** An empty compare or secret, or a failed scan, reset or parity run now fails its leg.
 - **field.** Log marks read across a logrotate's rename; a mark no file holds fails the read, not passes.
+- **field.** The log grader reads ours' JSON from a file, nested as tracing writes it; two deviations allowed.
 
 ## [1.2.0] - 2026-11-04
 

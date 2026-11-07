@@ -128,6 +128,8 @@ REC_DIR=$RUN/guards
 DONE=0 STOP='' SCEN='' RESULT=FAIL ALL_PASS=1 GUARDS_OK=0
 declare -a ROWS=()
 
+# kdc's logs the record keeps per scenario: the daemons' and, on the weekly, ours' JSON stream (upgrade.sh).
+LEGLOGS='krb5kdc.log kadmind.log krb5kdc.log.json'
 # leglogs <record dir> <start>: kdc's daemon logs and its Kerberos units' journal since <start>, with the window and
 # kdc's UTC offset, for lib/log-grade.py. Best effort: a scenario's result never depends on it.
 leglogs() {
@@ -146,19 +148,19 @@ leglogs() {
                 > "$d/${f%%:*}.log" 2>> "$d/offsets"
         done
     fi
-    for f in krb5kdc kadmind; do
+    for f in $LEGLOGS; do
         [ "$LOGSRC" = file ] || break
         o=$(sed -n "s/^$f \([0-9]*:[0-9]*:[0-9]*:[0-9a-f-]*\)$/\1/p" "$d/offsets" 2> /dev/null)
         # From the mark on, through a rotated file (lib/log-since.sh); a reset kdc's log, or no mark: whole.
-        timeout 120 "$LAB" ssh "$vm" -- "g=\$(mktemp); cat > \"\$g\"; sudo sh \"\$g\" since ${o:-0:0:0:-} /var/log/$f.log n \
-            whole; rm -f \"\$g\"" < "$HERE/lib/log-since.sh" > "$d/$f.log" 2>> "$d/offsets" || true
+        timeout 120 "$LAB" ssh "$vm" -- "g=\$(mktemp); cat > \"\$g\"; sudo sh \"\$g\" since ${o:-0:0:0:-} /var/log/$f n \
+            whole; rm -f \"\$g\"" < "$HERE/lib/log-since.sh" > "$d/$f" 2>> "$d/offsets" || true
     done
     timeout 120 "$LAB" ssh "$vm" -- "sudo journalctl -u 'krb5*' -u 'kadmin*' --since @$2 -o short-iso-precise --no-pager" \
         > "$d/units.txt" 2> /dev/null < /dev/null || true
     printf '%s %s %s\n' "$2" "$(date +%s)" "$(timeout 60 "$LAB" ssh "$vm" -- 'date +%z' 2> /dev/null < /dev/null)" > "$d/window"
 }
 
-# logmark <record dir>: each daemon log's mark (lib/log-since.sh), before the scenario.
+# logmark <record dir>: each LEGLOGS log's mark (lib/log-since.sh), before the scenario.
 logmark() {
     mkdir -p "$1/logs"
     if [ "$LOGSRC" = journal ]; then
@@ -166,9 +168,8 @@ logmark() {
             sed -n 's/^-- cursor: /cursor /p'" > "$1/logs/offsets" 2> /dev/null < /dev/null || true
         return 0
     fi
-    # shellcheck disable=SC2016 # expanded on kdc
-    timeout 60 "$LAB" ssh "${ROLE_KDC:-kdc}" -- 'g=$(mktemp); cat > "$g"; for f in krb5kdc kadmind; do \
-        echo "$f $(sudo sh "$g" mark /var/log/$f.log)"; done; rm -f "$g"' < "$HERE/lib/log-since.sh" \
+    timeout 60 "$LAB" ssh "${ROLE_KDC:-kdc}" -- "g=\$(mktemp); cat > \"\$g\"; for f in $LEGLOGS; do \
+        echo \"\$f \$(sudo sh \"\$g\" mark /var/log/\$f)\"; done; rm -f \"\$g\"" < "$HERE/lib/log-since.sh" \
         > "$1/logs/offsets" 2> /dev/null || true
 }
 

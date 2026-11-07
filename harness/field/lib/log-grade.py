@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """log-grade.py <run dir>: the log grader over a field run's records (goal.txt's log analysis), MIT's leg first.
 
-run.sh leaves, after each scenario's leg, <scenario>/<leg>/logs/: kdc's krb5kdc.log and kadmind.log, its Kerberos
-units' journal since the scenario began (units.txt; ours' JSON events, `json = STDERR` from upgrade), and window
+run.sh leaves, after each scenario's leg, <scenario>/<leg>/logs/: kdc's krb5kdc.log and kadmind.log, ours' JSON
+events (krb5kdc.log.json, `json = FILE:` from upgrade), its Kerberos units' journal since the scenario began
+(units.txt), and window
 (start, end, kdc's UTC offset). A daemon log line counts for the scenario its time falls in. Checks, written to
 <run>/log-grade/{checks.tsv,record.txt,result}:
   LG.records       each leg left daemon log lines;
@@ -60,7 +61,8 @@ def stamp(mon, day, hms, year, tz, t0):
 
 def leg_lines(run, leg):
     """(rows, units, raws, loose): daemon rows (scenario, prog, level, message, raw) inside a window, once;
-    units' (scenario, line)s; every raw daemon line; the daemon lines that match no log format."""
+    the units' journal and JSON file (scenario, line)s; every raw daemon line; the daemon lines that match no log
+    format."""
     seen, rows, units, raws, loose = set(), [], [], [], []
     for d, t0, t1, tz in windows(run, leg):
         sc = os.path.basename(os.path.dirname(os.path.dirname(d)))
@@ -83,20 +85,21 @@ def leg_lines(run, leg):
                     continue
                 seen.add(raw)
                 rows.append((sc, g.group(4), g.group(5).lower(), g.group(6), raw))
-        try:
-            with open(os.path.join(d, "units.txt"), encoding="utf-8", errors="replace") as f:
-                units += [(sc, raw.rstrip("\n")) for raw in f]
-        except OSError:
-            pass
+        for name in ("units.txt", "krb5kdc.log.json"):
+            try:
+                with open(os.path.join(d, name), encoding="utf-8", errors="replace") as f:
+                    units += [(sc, raw.rstrip("\n")) for raw in f]
+            except OSError:
+                pass
     return rows, units, raws, loose
 
 
 def json_events(units):
-    """(scenario, event) for each JSON event in the units' journal lines; the lines that do not parse."""
+    """(scenario, event) for each JSON event, a journal line's or the JSON file's own; the lines that do not parse."""
     out, bad = [], []
     for sc, raw in units:
-        i = raw.find("]: {")
-        if i < 0:
+        i = -3 if raw.startswith("{") else raw.find("]: {")
+        if i == -1:
             continue
         try:
             ev = json.loads(raw[i + 3:])
@@ -107,6 +110,11 @@ def json_events(units):
         else:
             bad.append(raw)
     return out, bad
+
+
+def field(ev, key):
+    """An event's key, under tracing's "fields" (the daemons' JSON) or at the top (the harness's own lines)."""
+    return (ev.get("fields") or {}).get(key, ev.get(key))
 
 
 def allow_rules():
@@ -153,7 +161,7 @@ def grade(run):
     events, bad = json_events(units)
     panics = [raw for raw in raws + [u for _, u in units] if re.search(r"panic", raw, re.I)]
     panics += [json.dumps(e) for _, e in events
-               if e.get("event") == "kdc.transport" and not re.search(r"panic", json.dumps(e), re.I)]
+               if field(e, "event") == "kdc.transport" and not re.search(r"panic", json.dumps(e), re.I)]
     row("LG.panic", not panics, "no panic in ours' daemon logs, journal or JSON events", f"{len(panics)} panic lines")
     rec += [f"panic: {p}" for p in panics]
 
@@ -164,10 +172,11 @@ def grade(run):
         f"{len(unread)} such lines")
     rec += [f"unread: {u}" for u in unread]
 
-    issues = [(sc, e) for sc, e in events if e.get("event") == "kdc.issue" and e.get("outcome") in ("ok", "krb-error")]
+    issues = [(sc, e) for sc, e in events
+              if field(e, "event") == "kdc.issue" and field(e, "outcome") in ("ok", "krb-error")]
 
     def cid(e):
-        v = e.get("correlation_id") or (e.get("fields") or {}).get("correlation_id")
+        v = field(e, "correlation_id")
         return v if isinstance(v, str) and v and v != "none" else None
 
     bare = [e for _, e in issues if cid(e) is None]

@@ -170,11 +170,12 @@ if [ "${#EDIT[@]}" -gt 0 ]; then
 else
     note "the listing printed no all-IPv6 listen entry: nothing to edit (kdc.conf keeps MIT's wildcards)"
 fi
-# The weekly's log grader reads ours' JSON events from the journal; MIT ignores the relation. Other profiles keep the
-# README's config, so a load leg's input is MIT's.
+# The weekly's log grader reads ours' JSON events from this file (a detached daemon has no stderr); MIT ignores the
+# relation. Made and relabelled first, so it has the KDC's log type, not kadmind's. Other profiles keep the README's
+# config, so a load leg's input is MIT's.
 case ${FIELD_RUN:-} in
     *-weekly)
-        run kdc "sudo grep -q '^ *json *= *STDERR' $KDCDIR/kdc.conf || printf '\n[logging]\n    json = STDERR\n' | sudo tee -a $KDCDIR/kdc.conf > /dev/null; sudo grep -c '^ *json *= *STDERR' $KDCDIR/kdc.conf"
+        run kdc "j=/var/log/krb5kdc.log.json; [ -e \$j ] || sudo install -m 0640 /dev/null \$j; sudo restorecon \$j; sudo grep -q '^ *json *= *FILE:' $KDCDIR/kdc.conf || printf '\n[logging]\n    json = FILE:%s\n' \$j | sudo tee -a $KDCDIR/kdc.conf > /dev/null; sudo grep -c '^ *json *= *FILE:/var/log/krb5kdc\.log\.json\$' $KDCDIR/kdc.conf"
         grep -qx 1 "$LAST_OUT" || { finish; exit 1; } ;;
 esac
 capstart kdc upgrade '(port 88 or port 464 or port 749) or (ip[6:2] & 0x1fff != 0)'
