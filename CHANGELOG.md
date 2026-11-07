@@ -53,6 +53,7 @@ any other `###` heading.
 - **kdc.** A TGS request with more than one fault is refused for the one MIT's check order reaches first.
 - **kadmind.** `addprinc -nokey` stores no key and its kvno reads 0, as MIT; it made a random key.
 - **kadmind.** A failed target fetch logs no Request line, and a failed rename source Unauthorized, as MIT.
+- **kdc.** A self `cpw -keepold` across the kvno wrap keeps the new keys, as MIT; it kept the oldest.
 
 ### Removed
 

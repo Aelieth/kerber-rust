@@ -10,7 +10,7 @@ use zeroize::Zeroizing;
 
 use super::flags::KDB_REQUIRES_PWCHANGE;
 use super::history::record_history;
-use super::keys::{KeyEntry, keep_old_keys, next_kvno};
+use super::keys::{KeyEntry, next_kvno, with_old_keys};
 use super::policy::NamedPolicy;
 use super::principal::{Principal, TlData, default_mod_actor, refresh_kadm_tl, stamp_admin_tl};
 use super::{PrincipalStore, unix_now_u32};
@@ -622,15 +622,18 @@ impl PrincipalStore {
     ) -> Result<(), Error> {
         let mkey = (keepold > 0).then(|| self.iprop_master_key()).flatten();
         let p = self.map.get_mut(id).ok_or(Error::NotFound)?;
-        let old = std::mem::replace(&mut p.keys, new_keys);
+        let mut next = p.clone();
+        let (keys, opaque_keys) = with_old_keys(p, new_keys, keepold, mkey.as_ref())?;
+        let old = std::mem::replace(&mut next.keys, keys);
         if let Some((nhist, (hist_kvno, hist_key))) = history {
-            record_history(p, &old, nhist, hist_kvno, &hist_key)?;
-            refresh_kadm_tl(p);
+            record_history(&mut next, &old, nhist, hist_kvno, &hist_key)?;
+            refresh_kadm_tl(&mut next);
         }
-        keep_old_keys(p, old, keepold, mkey.as_ref())?;
-        p.attributes &= !KDB_REQUIRES_PWCHANGE;
-        p.fail_auth_count = 0;
-        stamp_admin_tl(p, true, actor);
+        next.opaque_keys = opaque_keys;
+        next.attributes &= !KDB_REQUIRES_PWCHANGE;
+        next.fail_auth_count = 0;
+        stamp_admin_tl(&mut next, true, actor);
+        *p = next;
         Ok(())
     }
 

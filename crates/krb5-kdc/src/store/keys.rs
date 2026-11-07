@@ -28,13 +28,25 @@ pub struct KeyEntry {
 }
 
 // MIT: `process_k5beta7_princ` (kadmin/dbutil/dump.c:729-766)
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct OpaqueKey {
     pub ver: i32,
     pub kvno: u32,
     pub slots: Vec<(i32, Vec<u8>)>,
     pub at: usize,
+}
+
+impl std::fmt::Debug for OpaqueKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let slots: Vec<(i32, usize)> = self.slots.iter().map(|(t, b)| (*t, b.len())).collect();
+        f.debug_struct("OpaqueKey")
+            .field("ver", &self.ver)
+            .field("kvno", &self.kvno)
+            .field("slots", &slots)
+            .field("at", &self.at)
+            .finish()
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -68,6 +80,16 @@ impl Principal {
     #[must_use]
     pub fn key_slots(&self) -> Vec<KeySlot<'_>> {
         merge_slots(&self.keys, &self.opaque_keys)
+    }
+
+    // MIT: `kadm5_get_principal_keys` (lib/kadm5/srv/svr_principal.c:1775-1776)
+    #[must_use]
+    pub fn keys_in_order(&self) -> Vec<&KeyEntry> {
+        let usable = |s| match s {
+            KeySlot::Usable(k) => Some(k),
+            KeySlot::Opaque(_) => None,
+        };
+        self.key_slots().into_iter().filter_map(usable).collect()
     }
 
     // MIT: `krb5_db_get_principal` (lib/kdb/kdb5.c:838-840)
@@ -208,28 +230,40 @@ pub(super) fn next_kvno(p: &Principal) -> u32 {
 }
 
 // MIT: `rekey` (lib/kdb/kdb_cpw.c:381-385)
-pub(super) fn keep_old_keys(
-    p: &mut Principal,
-    old: Vec<KeyEntry>,
+// MIT: `preserve_old_keys` (lib/kdb/kdb_cpw.c:118-145)
+pub(super) fn with_old_keys(
+    p: &Principal,
+    new: Vec<KeyEntry>,
     keepold: u32,
     mkey: Option<&ProtocolKey>,
-) -> Result<(), Error> {
+) -> Result<(Vec<KeyEntry>, Vec<OpaqueKey>), Error> {
+    let (mut keys, mut opaque) = (new, Vec::new());
     if keepold == 0 {
-        p.opaque_keys.clear();
-        return Ok(());
+        return Ok((keys, opaque));
     }
-    let added = p.keys.len();
-    p.keys.extend(old);
-    for o in &mut p.opaque_keys {
-        o.at += added;
+    let (mut last, mut changes) = (0, 0);
+    for (i, slot) in p.key_slots().into_iter().enumerate() {
+        let kvno = slot.kvno();
+        if keepold > 1 {
+            if i > 0 && kvno != last {
+                changes += 1;
+            }
+            if changes >= keepold - 1 {
+                break;
+            }
+            last = kvno;
+        }
+        match slot {
+            KeySlot::Usable(k) => keys.push(k.clone()),
+            KeySlot::Opaque(o) => {
+                open_wrap(mkey, o.slots.first().map_or(&[][..], |s| &s.1))?;
+                let mut o = o.clone();
+                o.at = keys.len() + opaque.len();
+                opaque.push(o);
+            }
+        }
     }
-    if keepold > 1 {
-        cap_key_versions(p, keepold);
-    }
-    for o in &p.opaque_keys {
-        open_wrap(mkey, o.slots.first().map_or(&[][..], |s| &s.1))?;
-    }
-    Ok(())
+    Ok((keys, opaque))
 }
 
 // MIT: `preserve_one_old_key` (lib/kdb/kdb_cpw.c:86-114)
@@ -250,15 +284,6 @@ fn open_wrap(mkey: Option<&ProtocolKey>, c: &[u8]) -> Result<(), Error> {
         Err(_) => "Decrypt integrity check failed",
     };
     Err(Error::Crypto(text.into()))
-}
-
-pub(super) fn cap_key_versions(p: &mut Principal, n: u32) {
-    let mut all: Vec<u32> = kvnos(p).collect();
-    all.sort_unstable();
-    all.dedup();
-    all.reverse();
-    let keep: std::collections::HashSet<u32> = all.into_iter().take(n as usize).collect();
-    retain_slots(p, |kvno| keep.contains(&kvno));
 }
 
 fn retain_slots(p: &mut Principal, keep: impl Fn(u32) -> bool) {
@@ -376,8 +401,8 @@ impl PrincipalStore {
         let realm =
             krb5_types::try_ascii(&p.realm).map_err(|_| Error::Crypto("non-ascii realm".into()))?;
         let entries = p
-            .keys
-            .iter()
+            .keys_in_order()
+            .into_iter()
             .map(|key| KeytabEntry {
                 realm: realm.clone(),
                 name: p.name.clone(),
@@ -453,8 +478,7 @@ impl PrincipalStore {
         let mkey = (keepold > 0).then(|| self.iprop_master_key()).flatten();
         {
             let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
-            let old = std::mem::replace(&mut p.keys, new_keys.clone());
-            keep_old_keys(p, old, keepold, mkey.as_ref())?;
+            (p.keys, p.opaque_keys) = with_old_keys(p, new_keys.clone(), keepold, mkey.as_ref())?;
             // MIT: `kadm5_randkey_principal_3` (lib/kadm5/srv/svr_principal.c:1452-1475)
             p.attributes &= !KDB_REQUIRES_PWCHANGE;
             p.fail_auth_count = 0;
@@ -594,8 +618,7 @@ impl PrincipalStore {
             for k in &mut keys {
                 k.kvno = kvno;
             }
-            let old = std::mem::replace(&mut p.keys, keys);
-            keep_old_keys(p, old, keepold, mkey.as_ref())?;
+            (p.keys, p.opaque_keys) = with_old_keys(p, keys, keepold, mkey.as_ref())?;
             p.attributes &= !KDB_REQUIRES_PWCHANGE;
             p.fail_auth_count = 0;
             stamp_admin_tl(p, true, actor);

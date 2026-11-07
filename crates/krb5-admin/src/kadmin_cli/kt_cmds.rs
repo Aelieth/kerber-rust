@@ -244,7 +244,7 @@ fn add_principal(s: &mut Session<'_>, kt: &Kt, opts: &AddOpts, princ_str: &str) 
                     .get_in_realm(&name, &realm)
                     .ok_or(Error::NotFound)?;
             p.check_kadm_data()?;
-            Ok(p.keys.clone())
+            Ok(p.keys_in_order().into_iter().cloned().collect())
         })
     } else {
         s.h.mutate(|st, caller| {

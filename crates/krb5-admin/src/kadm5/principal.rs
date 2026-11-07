@@ -590,8 +590,8 @@ pub(super) fn encode_chrand(keys: &[krb5_kdc::KeyEntry]) -> Vec<u8> {
 /// Keys (kvno 0: all), a wiped buffer.
 pub(super) fn encode_extract_keys(api: u32, p: &krb5_kdc::Principal, kvno: u32) -> Vec<u8> {
     let keys: Vec<&krb5_kdc::KeyEntry> = p
-        .keys
-        .iter()
+        .keys_in_order()
+        .into_iter()
         .filter(|k| kvno == 0 || k.kvno == kvno)
         .collect();
     let salt = |k: &krb5_kdc::KeyEntry| k.kdb_salt.as_deref().unwrap_or(p.salt.as_slice()).len();

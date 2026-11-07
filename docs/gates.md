@@ -291,8 +291,9 @@ not check (a unit test, or "not asserted").
   `kadmin-mit-gate.sh` is the MIT-kadmind side of the RPC, lockdown,
   alias/glob, ACL and policy cells; `kadmin-both-gate.sh` diffs the two
   kadminds' `listprincs`/`listpols` glob lists and `getprinc` shapes
-  (`z1u`, `Key:` lines, `Maximum ticket life`), an `addprinc -nokey` entry's kvno, and
-  the kadmind lines for an entry whose KADM_DATA won't decode.
+  (`z1u`, `Key:` lines, `Maximum ticket life`), an `addprinc -nokey` entry's kvno,
+  the kadmind lines for an entry whose KADM_DATA won't decode, and the kvnos a self
+  `cpw -keepold` keeps across the 65535 wrap.
 - `scripts/kdb-dump-gate.sh` — MIT 1.22.2 dump/load both directions. Half A:
   `krb5-kdb load` of MIT's `kdb5_util dump` of
   `tests/traces/kdb/mit-dump-v7.txt` (taken after an MIT `alias a1 user`
