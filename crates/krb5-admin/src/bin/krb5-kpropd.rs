@@ -31,7 +31,6 @@ use nix::sys::socket::{
 
 use krb5_config::ProfileSet;
 use krb5_protocol::{AcceptorConfig, ReplayCache};
-use krb5_types::PrincipalName;
 
 const MAX_HANDLERS: usize = 64;
 static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
@@ -189,8 +188,7 @@ fn main() {
                         eprintln!("Full propagation timed out");
                     }
                     if let Some((_, left)) = &turn
-                        && let Some(keys) =
-                            host_keys(&progname, keytab.as_deref(), &server, &kdc_context)
+                        && let Some(keys) = host_keys(&progname, keytab.as_deref(), &kdc_context)
                     {
                         kpropd_handle_conn(
                             &mut stream,
@@ -524,10 +522,9 @@ fn kpropd_acl(path: &Path) -> Option<Vec<String>> {
 fn host_keys(
     progname: &str,
     keytab: Option<&str>,
-    server: &PrincipalName,
     ctx: &krb5_config::ClientContext,
 ) -> Option<KpropdKeys> {
-    match kpropd_keytab_keys(keytab, Some(server), ctx) {
+    match kpropd_keytab_keys(keytab, ctx) {
         Ok(keys) => Some(keys),
         Err(e) => {
             eprintln!("{progname}: Error in krb5_kt_resolve: {e}");

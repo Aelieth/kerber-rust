@@ -521,25 +521,7 @@ pub fn kpropd_server_name_for(
 pub enum KpropdLookup {
     #[default]
     Server,
-    Names(Vec<PrincipalName>),
-}
-
-// MIT: `decrypt_ticket` (lib/krb5/krb/rd_req_dec.c:451-452)
-fn kpropd_lookup(server: &PrincipalName, profile: &krb5_config::Krb5Conf) -> KpropdLookup {
-    let Ok(realm) = krb5_types::try_ascii("") else {
-        return KpropdLookup::Names(Vec::new());
-    };
-    let princ = (realm, server.clone());
-    let mut iter = krb5_config::CanonPrinc::new(profile, &princ);
-    iter.no_hostrealm = true;
-    kpropd_lookup_name(server, iter.map(|(_, name)| name).collect())
-}
-
-fn kpropd_lookup_name(server: &PrincipalName, names: Vec<PrincipalName>) -> KpropdLookup {
-    match names.as_slice() {
-        [one] if one == server => KpropdLookup::Server,
-        _ => KpropdLookup::Names(names),
-    }
+    Canon(Box<krb5_config::Krb5Conf>),
 }
 
 fn kpropd_error_server() -> PrincipalName {
@@ -616,22 +598,25 @@ fn kpropd_ticket_key(
     if let Some(KpropdKeytabError::Resolve(text)) = &kt.error {
         return Err(generic(text));
     }
-    let names: Vec<_> = match (server, &kt.lookup) {
-        (Some(_), KpropdLookup::Names(names)) => names.iter().map(Some).collect(),
-        _ => vec![server],
-    };
-    let mut last = Refused::Code(err::NOKEY);
-    for name in names {
-        match kpropd_try_server(&ap.ticket, kt, name, realm, conf) {
-            Ok(key) => return Ok(key),
-            Err(Refused::Code(err::NOKEY)) => {}
-            Err(e) => {
-                last = e;
-                break;
+    let try_name =
+        |name: Option<&PrincipalName>| kpropd_try_server(&ap.ticket, kt, name, realm, conf);
+    let out = match (server, &kt.lookup) {
+        (Some(s), KpropdLookup::Canon(profile)) => {
+            let princ = (krb5_types::try_ascii("").unwrap_or_default(), s.clone());
+            let mut iter = krb5_config::CanonPrinc::new(profile, &princ);
+            iter.no_hostrealm = true;
+            let mut last = Err(Refused::Code(err::NOKEY));
+            for (_, name) in iter {
+                last = try_name(Some(&name));
+                if !matches!(last, Err(Refused::Code(err::NOKEY))) {
+                    break;
+                }
             }
+            last
         }
-    }
-    Err(match last {
+        _ => try_name(server),
+    };
+    out.map_err(|last| match last {
         Refused::Code(code) => refuse(code),
         Refused::Text(text) => generic(&text),
         Refused::Rd(e) => (kprop_rd_req_error(raw, &e, realm, server), e.to_string()),
@@ -648,7 +633,6 @@ enum Refused {
 // MIT: `try_one_princ` (lib/krb5/krb/rd_req_dec.c:335-346)
 // MIT: `keytab_fetch_error` (lib/krb5/krb/rd_req_dec.c:126-148)
 // MIT: `integrity_error` (lib/krb5/krb/rd_req_dec.c:173-174)
-/// No entry is NOKEY. Own server: missing kvno BADKEYVER, bad decrypt BAD_INTEGRITY; else NOT_US.
 fn kpropd_try_server(
     ticket: &Ticket,
     kt: &KpropdKeys,
@@ -1081,13 +1065,13 @@ pub enum KpropdKeytabError {
 // MIT: `krb5_ktfileint_open` (lib/krb5/keytab/kt_file.c:785-804)
 pub fn kpropd_keytab_keys(
     keytab: Option<&str>,
-    server: Option<&PrincipalName>,
     ctx: &krb5_config::ClientContext,
 ) -> Result<KpropdKeys, &'static str> {
     let profile = &ctx.profile;
-    let lookup = match server {
-        Some(s) if !profile.ignore_acceptor_hostname => kpropd_lookup(s, profile),
-        _ => KpropdLookup::Server,
+    let lookup = if profile.ignore_acceptor_hostname {
+        KpropdLookup::Server
+    } else {
+        KpropdLookup::Canon(Box::new(profile.clone()))
     };
     let empty = KpropdKeys {
         ignore_acceptor_hostname: profile.ignore_acceptor_hostname,
@@ -1980,65 +1964,42 @@ mod tests {
 
     #[test]
     fn kpropd_looks_its_entry_up_under_the_name_fallback_expands() {
-        let raw = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "KDC2"]);
-        let want = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "kdc2.kerber.test"]);
-        assert_eq!(
-            kpropd_lookup_name(&raw, vec![want.clone()]),
-            KpropdLookup::Names(vec![want.clone()])
-        );
-        assert_eq!(
-            kpropd_lookup_name(&raw, vec![raw.clone()]),
-            KpropdLookup::Server
-        );
-        assert_eq!(
-            kpropd_lookup_name(&raw, Vec::new()),
-            KpropdLookup::Names(Vec::new()),
-            "a name this port cannot hold"
-        );
-        let fallback =
-            krb5_config::Krb5Conf::parse("[libdefaults]\n dns_canonicalize_hostname = fallback\n")
-                .unwrap();
-        let plain = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["host", "KDC2"]);
-        assert_eq!(kpropd_lookup(&plain, &fallback), KpropdLookup::Server);
-        let empty = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", ""]);
-        assert_eq!(kpropd_lookup(&empty, &fallback), KpropdLookup::Server);
-        let host = krb5_kdc::testrealm::documented_host();
-        let e = kpropd_with_keytab(
-            |_, _| KpropdKeys {
-                lookup: KpropdLookup::Names(vec![raw.clone(), host.clone()]),
-                ..keytab(Vec::new(), false)
-            },
-            &raw,
-        )
-        .unwrap();
-        assert_eq!(e.error_code, err::NOKEY);
-        assert_eq!(
-            e.sname, raw,
-            "the KRB-ERROR names the principal as kpropd made it"
-        );
-        assert_eq!(
+        let profile = |q: &str| {
+            let text = format!(
+                "[libdefaults]\n dns_canonicalize_hostname = fallback\n qualify_shortname = {q}\n"
+            );
+            KpropdLookup::Canon(Box::new(krb5_config::Krb5Conf::parse(&text).unwrap()))
+        };
+        let with = |q: &'static str, server: &PrincipalName| {
             kpropd_with_keytab(
                 |keys, _| KpropdKeys {
-                    lookup: KpropdLookup::Names(vec![raw.clone(), host.clone()]),
+                    lookup: profile(q),
                     ..keytab(host_entries(keys), false)
                 },
-                &raw,
-            ),
+                server,
+            )
+        };
+        let raw = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "TESTHOST"]);
+        assert_eq!(
+            with("kerber.test", &raw),
             None,
-            "the entry of the expanded name takes the ticket"
+            "the name without DNS takes the ticket"
         );
-        let e = kpropd_with_keytab(
-            |keys, _| KpropdKeys {
-                lookup: KpropdLookup::Names(Vec::new()),
-                ..keytab(host_entries(keys), false)
-            },
-            &raw,
-        )
-        .unwrap();
+        let local = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "LOCALHOST"]);
+        let e = with("kerber.test", &local).unwrap();
+        assert_eq!(e.error_code, err::NOKEY, "no name of it in the keytab");
+        assert_eq!(
+            e.sname, local,
+            "the KRB-ERROR names the principal as kpropd made it"
+        );
+        let e = with("\u{e9}.test", &raw).unwrap();
+        assert_eq!(e.error_code, err::NOKEY, "a name this port cannot hold");
+        let plain = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["host", "TESTHOST"]);
+        let e = with("kerber.test", &plain).unwrap();
         assert_eq!(
             e.error_code,
             err::NOKEY,
-            "an expanded name no entry can have"
+            "a name not host-based is taken as is"
         );
     }
 

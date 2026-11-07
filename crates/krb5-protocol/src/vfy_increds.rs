@@ -164,16 +164,14 @@ fn get_vfy_cred(
     let wildcard = matches!(name.name_string.as_slice(), [_, host]
         if name.name_type == PrincipalName::NT_SRV_HST
             && (host.as_bytes().is_empty() || conf.ignore_acceptor_hostname));
+    if wildcard {
+        return rd_req_as(&raw, realm, name, keytab, conf);
+    }
     let mut iter = CanonPrinc::new(profile, &princ);
     iter.no_hostrealm = true;
-    let names: Vec<_> = if wildcard {
-        vec![princ.clone()]
-    } else {
-        iter.collect()
-    };
     let mut last = refused(krb5_types::err::NOKEY);
-    for (_, name) in &names {
-        match rd_req_as(&raw, realm, name, keytab, conf) {
+    for (_, name) in iter {
+        match rd_req_as(&raw, realm, &name, keytab, conf) {
             Err(
                 e @ Error::KrbError {
                     code: krb5_types::err::NOKEY,
@@ -200,6 +198,10 @@ fn rd_req_as(
             e.realm.as_bytes() == realm.as_bytes() && e.name.name_string == name.name_string
         })
         .collect();
+    // MIT: `keytab_fetch_error` (lib/krb5/krb/rd_req_dec.c:131-135)
+    if matched.is_empty() {
+        return Err(refused(krb5_types::err::NOKEY));
+    }
     let keys: Vec<ProtocolKey> = matched.iter().map(|e| e.key.clone()).collect();
     let kvnos: Vec<u32> = matched.iter().map(|e| e.kvno).collect();
     let realm_s = String::from_utf8_lossy(realm.as_bytes()).into_owned();
