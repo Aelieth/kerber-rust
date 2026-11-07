@@ -50,7 +50,6 @@ REALM=KERBER.TEST
 H_USE='## Download, install and use'
 H_MOVE='## Move an MIT realm over'
 
-
 vm_for() {
     case $1 in
         f44) echo client2 ;;
@@ -70,20 +69,7 @@ snap_for() {
 VMS=(kdc)
 for t in "${TAGS[@]}"; do VMS+=("$(vm_for "$t")"); done
 
-
 trap 'rm -f "$TREE_TAR"; park; drop_sec' EXIT
-
-
-
-
-
-
-
-
-
-
-
-
 
 push_keytabs() {
     local t
@@ -106,7 +92,6 @@ prep_client() {
         echo "PREP:$tag:fail" > "$REC/prep-$tag.status"
     fi
 }
-
 
 run_client() {
     local leg=$1 tag=$2 vm dir rc
@@ -131,7 +116,6 @@ run_leg() {
         grep -qx "RUN_DONE:$leg:$t" "$REC/$leg/$t/run.out" || return 1
     done
 }
-
 
 # --- gates that do not touch a VM ---
 host_gates "$CELLS" "$GRADE" "$PTY" "$HDIR/lib/cm-host.sh"
