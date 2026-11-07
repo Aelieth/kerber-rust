@@ -140,6 +140,11 @@ ADDHINT="$(rust_kadmin_local \
     "$NAME" -- -q 'addprinc -randkey -e aes128-cts-hmac-sha1-96:normal +requires_preauth hintu')"
 echo "$ADDHINT"
 grep -q 'created' <<<"$ADDHINT" || die "rust addprinc hintu failed"
+for q in 'addprinc -randkey tgslog' 'addprinc -randkey host/tgslog.kerber.test' \
+    'alias svcalias host/testhost.kerber.test'; do
+    kadmin_q_ok rust_kadmin_local -e KRB5_KDC_DB=/tmp/rust.db -e KRB5_KDC_STASH=/tmp/rust.stash \
+        -e KRB5_MASTER_PASSWORD=masterpassword "$NAME" -- -q "$q"
+done
 
 # Pin P-256 on the container profile before either KDC starts. Dump load
 # does not carry groups; rust apply_libdefaults reads this like MIT kdc.conf.
@@ -149,6 +154,8 @@ p = Path("/etc/krb5.conf")
 t = p.read_text()
 if "spake_preauth_groups" not in t:
     t = t.replace("[libdefaults]", "[libdefaults]\n    spake_preauth_groups = P-256", 1)
+if ".other.test = OTHER.TEST" not in t:
+    t += "\n[domain_realm]\n    .other.test = OTHER.TEST\n"
 p.write_text(t)
 k = Path("/etc/krb5kdc/kdc.conf")
 kt = k.read_text(); kt = kt.replace("[kdcdefaults]", "[kdcdefaults]\n    pkinit_identity = FILE:/tmp/pkinit/kdc.pem\n    pkinit_anchors = FILE:/tmp/pkinit/ca.pem\n    pkinit_dh_min_bits = P-256", 1) if "pkinit_identity" not in kt else kt
@@ -212,6 +219,10 @@ kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'setstr expiredsvc require_auth pkini
 MITHINT="$(mit_kadmin_local "$NAME" -- -q 'addprinc -randkey -e aes128-cts-hmac-sha1-96:normal +requires_preauth hintu')"
 echo "$MITHINT"
 grep -qi 'created' <<<"$MITHINT" || die "MIT addprinc hintu failed"
+for q in 'addprinc -randkey tgslog' 'addprinc -randkey host/tgslog.kerber.test' \
+    'alias svcalias host/testhost.kerber.test'; do
+    kadmin_q_ok mit_kadmin_local "$NAME" -- -q "$q"
+done
 docker exec "$NAME" sh -c ': >/tmp/mit-kdc.log'
 docker exec -d "$NAME" sh -c 'krb5kdc -n >/tmp/mit-kdc.log 2>&1'
 wait_log "$NAME" /tmp/mit-kdc.log "setting up network" || die "MIT krb5kdc did not start"
@@ -364,12 +375,24 @@ S4U_RUST="$(s4u_tgs_lines "$OUT/rust-kdc.log")"
 }
 grep -A1 -F ': 2ND_TKT_SERVER: authtime 0,  host/testhost.kerber.test@KERBER.TEST for host/testhost.kerber.test@KERBER.TEST, No matching key in entry having a permitted enctype' <<<"$S4U_MIT" |
     grep -qxF '... PROTOCOL-TRANSITION s4u-client=user@KERBER.TEST' || die "no S4U2Self line with authtime 0 after its second ticket fails"
+# MIT `log_tgs_req` names t->sprinc, the entry found (do_tgs_req.c:676), and the inner body's ktypes:
+# tgs-log-referral, tgs-log-alias and tgs-log-fast-inner, MIT's three lines against ours.
+tgslog_lines() {
+    { grep -v '^{' "$1" | grep -E ': TGS_REQ .* tgslog@KERBER\.TEST for ' || true; } |
+        sed -E 's/^.*: (TGS_REQ )/\1/; s/authtime [1-9][0-9]*/authtime N/'
+}
+TL_MIT="$(tgslog_lines "$OUT/mit-kdc.log")"
+TL_RUST="$(tgslog_lines "$OUT/rust-kdc.log")"
+printf 'mit  %s\n' "$TL_MIT"
+printf 'rust %s\n' "$TL_RUST"
+[ "$(grep -c . <<<"$TL_MIT")" = 3 ] || die "MIT's KDC did not log the three tgslog requests"
+[ "$TL_RUST" = "$TL_MIT" ] || die "the Rust KDC's TGS lines for tgslog are not MIT's"
 # W1-Z Z3.3: the ratchet is checked against the distinct cases diffsend
 # actually emitted, not the literal its summary line claims (a stale
 # "cases":N in diffsend.rs would otherwise pass). History: A'-3 R32 102 ·
 # A'-4 item 16 105 · item 17 106 · item 18 107 · W1-B F4 109 · W1-Z Z1.3 110 · Z6.2 111 ·
 # as-locked-out 112 · RA 123 · a1-tgs 128 · replay 129 · nopost 130 · s4u-client 132 · fast-cksum 133 · explicit-armor 134 · armor-no-tgs-subkey 135 · armor-no-subkey 136 · reserved-option 137 · service-expired 138 · service-locked 139 · B17 cms 149 · B17b structure 151 · FAST armor 178 · FAST checksums 188 · transit hop 189 · local transit 190 · FAST replies 192 · FAST flips 196 · armor authdata 209 · TGS decode 212 · TGS check order 216.
-DIFFSEND_RATCHET=216
+DIFFSEND_RATCHET=219
 CASES_SEEN="$(grep -o '"case":"[^"]*","outcome":"ok"' <<<"$DIFF" | sort -u | wc -l | tr -d ' ')"
 [ "$CASES_SEEN" = "$DIFFSEND_RATCHET" ] || die "diffsend emitted $CASES_SEEN distinct ok cases; the ratchet is $DIFFSEND_RATCHET"
 grep -q "\"outcome\":\"ok\",\"cases\":$DIFFSEND_RATCHET}" <<<"$DIFF" || die "diffsend summary line does not claim $DIFFSEND_RATCHET cases"
@@ -562,6 +585,9 @@ grep -q '"case":"tgs-order-s4u2self-cksum-renew","outcome":"ok","error_code":41,
 grep -q '"case":"tgs-order-proxy-no-stkt-renew","outcome":"ok","error_code":60,"e_text":"UNKNOWN_REASON","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-order-proxy-no-stkt-renew not code 60 e_text UNKNOWN_REASON on both legs"
 grep -q '"case":"tgs-order-u2u-stkt-unknown-bit","outcome":"ok","error_code":60,"e_text":"2ND_TKT_SERVER","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-order-u2u-stkt-unknown-bit not code 60 e_text 2ND_TKT_SERVER on both legs"
 grep -q '"case":"tgs-order-s4u2self-bad-stkt","outcome":"ok","error_code":60,"e_text":"2ND_TKT_SERVER","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-order-s4u2self-bad-stkt not code 60 e_text 2ND_TKT_SERVER on both legs"
+grep -q '"case":"tgs-log-referral","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d"' <<<"$DIFF" || die "tgs-log-referral not TGS-REP on both legs"
+grep -q '"case":"tgs-log-alias","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d"' <<<"$DIFF" || die "tgs-log-alias not TGS-REP on both legs"
+grep -q '"case":"tgs-log-fast-inner","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","hidden":true' <<<"$DIFF" || die "tgs-log-fast-inner not hidden TGS-REP on both legs"
 grep -q '"case":"pa-s4u-x509-user-truncated","outcome":"ok","error_code":60,"e_text":"DECODE_PA_S4U_X509_USER","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "pa-s4u-x509-user-truncated not code 60 e_text DECODE_PA_S4U_X509_USER on both legs"
 grep -q '"case":"s4u2self-krbtgt-other","outcome":"ok","error_code":36,"e_text":"INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "s4u2self-krbtgt-other not code 36 e_text INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH on both legs"
 grep -q '"case":"tgs-locked-pac-mismatch","outcome":"ok","error_code":13,"e_text":"HEADER_PAC","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-locked-pac-mismatch not code 13 e_text HEADER_PAC on both legs"

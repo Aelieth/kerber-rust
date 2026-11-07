@@ -47,6 +47,7 @@ any other `###` heading.
 - **kdb.** A failed iprop dump or load names the iprop format, as MIT; it said release 1.11.
 - **kdc, kpropd.** An error reply that fails to encode isn't sent and is logged, as MIT; it went out empty.
 - **kdc.** A dump or iprop update keeps unsupported key slots and bad KADM_DATA, as MIT; it was refused.
+- **kdc.** The TGS log names the server entry found and the inner request's ktypes, as MIT.
 - **kdc.** An OTP refusal logs `Preauthentication failed` as MIT, with no per-attempt Error line.
 - **kdc.** TGS log lines carry MIT's authtime, session etype and S4U client; S4U and U2U audits fire as MIT's.
 - **kdc.** A TGS request with more than one fault is refused for the one MIT's check order reaches first.

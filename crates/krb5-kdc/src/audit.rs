@@ -406,7 +406,18 @@ pub(crate) struct TgsFacts {
     pub(crate) ses: Option<i32>,
     pub(crate) stage: i32,
     pub(crate) au_status: Option<String>,
+    pub(crate) sprinc: Option<String>,
+    ktypes: Option<String>,
     events: Vec<(&'static str, bool, i32, Option<String>)>,
+}
+
+// MIT: `gather_tgs_req_info` (kdc/do_tgs_req.c:640-641)
+pub(crate) fn note_tgs_body(body: &krb5_types::KdcReqBody) {
+    let realm = realm_str(&body.realm);
+    note_tgs(|f| {
+        f.sprinc = Some(opt_unparse(body.sname.as_ref(), &realm, "<unknown server>"));
+        f.ktypes = Some(ktypes2str(&body.etype));
+    });
 }
 
 impl TgsFacts {
@@ -875,11 +886,17 @@ fn tgs_success(
     let body = &req.0.req_body;
     let realm = realm_str(&body.realm);
     let client = tgs_error_client(store, req, &realm);
-    let server = opt_unparse(body.sname.as_ref(), &realm, "<unknown server>");
+    let server = facts
+        .sprinc
+        .clone()
+        .unwrap_or_else(|| opt_unparse(body.sname.as_ref(), &realm, "<unknown server>"));
     let ticket = &rep.0.ticket;
     let authtime = facts.authtime;
     let etypes = rep_etypes2str(rep.0.enc_part.etype, Some(ticket.enc_part.etype), facts.ses);
-    let req_etypes = ktypes2str(&body.etype);
+    let req_etypes = facts
+        .ktypes
+        .clone()
+        .unwrap_or_else(|| ktypes2str(&body.etype));
     let from = format_from(sender);
     let s4u = tgs_s4u_line(&facts);
     emit_issue(
@@ -942,8 +959,14 @@ fn tgs_failure(
     let body = &req.0.req_body;
     let realm = realm_str(&body.realm);
     let client = tgs_error_client(store, req, &realm);
-    let server = opt_unparse(body.sname.as_ref(), &realm, "<unknown server>");
-    let req_etypes = ktypes2str(&body.etype);
+    let server = facts
+        .sprinc
+        .clone()
+        .unwrap_or_else(|| opt_unparse(body.sname.as_ref(), &realm, "<unknown server>"));
+    let req_etypes = facts
+        .ktypes
+        .clone()
+        .unwrap_or_else(|| ktypes2str(&body.etype));
     let from = format_from(sender);
     let status = if e_text.is_empty() {
         status::UNKNOWN_REASON

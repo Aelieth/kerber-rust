@@ -3250,6 +3250,82 @@ fn run() -> Result<(), String> {
         )?,
         err::GENERIC,
     )?;
+    // MIT: `gather_tgs_req_info` (kdc/do_tgs_req.c:612-676)
+    let tgslog = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["tgslog"]);
+    let log_req = |sname: PrincipalName, kdc_options: KdcOptions, ets: Vec<i32>, nonce: u32| {
+        tgs_req_ex(TgsReqParams {
+            ticket: mint_signed_header(
+                tkt_key,
+                tkt_kvno,
+                &tgslog,
+                realm,
+                &krbtgt_sname,
+                &sess,
+                window10.clone(),
+                host_flags.clone(),
+                &tgslog,
+                false,
+                None,
+            )?,
+            session: &sess,
+            crealm: realm,
+            cname: &tgslog,
+            sname,
+            realm,
+            nonce,
+            kdc_options,
+            additional_tickets: None,
+            extra_padata: Vec::new(),
+            etypes: ets,
+            addresses: None,
+            from: None,
+            enc_authorization_data: None,
+            till: None,
+            subkey: None,
+            time_offset: 0,
+        })
+        .map_err(|e| e.to_string())
+    };
+    let referral = log_req(
+        PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "x.other.test"]),
+        KdcOptions::forwardable().with_bit(flag_bit::CANONICALIZE, true),
+        etypes.clone(),
+        0x1000_033c,
+    )?;
+    expect_tgs_rep(
+        &cfg,
+        "tgs-log-referral",
+        &encode(&referral).map_err(|e| e.to_string())?,
+    )?;
+    let alias = log_req(
+        PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["svcalias"]),
+        KdcOptions::forwardable(),
+        etypes.clone(),
+        0x1000_033d,
+    )?;
+    expect_tgs_rep(
+        &cfg,
+        "tgs-log-alias",
+        &encode(&alias).map_err(|e| e.to_string())?,
+    )?;
+    let inner = log_req(
+        PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "tgslog.kerber.test"]),
+        KdcOptions::forwardable(),
+        etypes.clone(),
+        0x1000_033e,
+    )?;
+    let mut fast_inner = log_req(
+        host.clone(),
+        KdcOptions::forwardable(),
+        vec![EncryptionType::Aes128CtsHmacSha196.to_iana()],
+        0x1000_033e,
+    )?;
+    wrap_tgs_fast_hide(&mut fast_inner, &sess, inner.0.req_body)?;
+    expect_hidden_tgs_rep(
+        &cfg,
+        "tgs-log-fast-inner",
+        &encode(&fast_inner).map_err(|e| e.to_string())?,
+    )?;
     expect_error(
         &cfg,
         "pa-s4u-x509-user-truncated",
@@ -5565,7 +5641,7 @@ fn run() -> Result<(), String> {
     ra_cases(&cfg, realm, &user, &host)?;
     fa_cases(&cfg, realm, &user, &host)?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":216}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":219}}"#);
     Ok(())
 }
 
