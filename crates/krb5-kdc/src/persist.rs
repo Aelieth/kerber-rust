@@ -535,7 +535,9 @@ pub fn save_store_with_master(
     how: DbWrite,
 ) -> Result<(), PersistError> {
     if how == DbWrite::Fresh {
-        return Ok(load_store_full(store, db_path, master, false, None)?);
+        let text = write_dump(store, master)?;
+        let lockout = crate::lockout::store_records(store);
+        return Ok(load_text_full(db_path, &text, &lockout, false, None)?);
     }
     let (lock, made) = WriteLock::take(store, db_path)?;
     check_writable(db_path, how)?;
@@ -815,7 +817,8 @@ impl FullLoad {
         merge_lockout: bool,
         log: Option<LoadLog<'_>>,
     ) -> Result<(), LoadError> {
-        let text = write_dump(store, master).map_err(|e| LoadError::Create(e.into()))?;
+        let text = crate::kdb_dump::write_dump_loaded(store, master)
+            .map_err(|e| LoadError::Create(e.into()))?;
         let lockout = crate::lockout::store_records(store);
         self.finish(&text, &lockout, merge_lockout, log)
     }
@@ -1123,7 +1126,8 @@ pub fn load_dump_with_stash(text: &str, stash: &[u8]) -> Result<PrincipalStore, 
     let km = dump
         .realm()
         .ok()
-        .and_then(|r| dump.princ(&format!("K/M@{r}")));
+        .and_then(|r| dump.princ(&format!("K/M@{r}")))
+        .filter(|km| !km.keys.is_empty());
     let mkey = match km {
         Some(km) => keys.find(|k| km.opens_with(k)),
         None => keys.next(),

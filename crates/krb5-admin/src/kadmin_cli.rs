@@ -579,6 +579,9 @@ fn kadm5_init(
         ));
     }
     let mut store = open.load().map_err(|e| (e, false))?;
+    if !krb5_kdc::has_master_record(&store) {
+        return Err((krb5_kdc::NO_MASTER_KEY.to_owned(), false));
+    }
     store
         .init_pwqual(open.conf.as_ref())
         .map_err(|e| (texts::strerror(&e), false))?;

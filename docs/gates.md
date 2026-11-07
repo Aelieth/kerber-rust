@@ -307,6 +307,8 @@ not check (a unit test, or "not asserted").
   `kinit` + `klist`, never a Rust-vs-Rust round-trip. Golden dump:
   `tests/traces/kdb/mit-dump-v7.txt` (MIT 1.22.2 default is version **7**).
   A record that fails to store (a db_args tl_data) gives MIT's three `load` lines on both.
+  A database without `K/M`, or with a keyless one, loads and then gives MIT's refusal from
+  `kdb5_util dump`, `kadmin.local`, kadmind and the KDC.
 - `scripts/kdc-gate.sh` — copies the Rust `krb5-kdc` binary into a MIT
   1.22.2 container (`shell_container`; its audit cell later runs MIT
   `krb5kdc` there), binds 127.0.0.1:88 (fallback 8888), and runs MIT

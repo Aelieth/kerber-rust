@@ -725,7 +725,15 @@ pub(crate) fn dump_store_etype(
 }
 
 pub(crate) fn write_dump(store: &PrincipalStore, mkey: &ProtocolKey) -> Result<String, DumpError> {
-    write_dump_nra(store, mkey, false)
+    write_dump_nra(store, mkey, false, true)
+}
+
+// MIT: `process_k5beta7_princ` (kadmin/dbutil/dump.c:774-778)
+pub(crate) fn write_dump_loaded(
+    store: &PrincipalStore,
+    mkey: &ProtocolKey,
+) -> Result<String, DumpError> {
+    write_dump_nra(store, mkey, false, false)
 }
 
 // MIT: `k5beta7_common` (kadmin/dbutil/dump.c:342-344)
@@ -734,6 +742,7 @@ fn write_dump_nra(
     store: &PrincipalStore,
     mkey: &ProtocolKey,
     omit_nra: bool,
+    synth_km: bool,
 ) -> Result<String, DumpError> {
     let now = krb5_types::unix_now();
     let mut princs: Vec<&Principal> = store.debug_principals().collect();
@@ -747,7 +756,7 @@ fn write_dump_nra(
     let has_km = princs
         .iter()
         .any(|p| p.name.components_joined_lossy() == "K/M");
-    if !has_km {
+    if synth_km && !has_km {
         let km = synthesize_km(
             store.realm(),
             mkey,
@@ -916,7 +925,10 @@ pub fn dump_store_iprop(
         .and_then(|km| km.keys.first())
         .map_or_else(default_master_etype, |k| k.etype);
     let mkey = master_key_from_password(store.realm(), master_password, etype)?;
-    Ok(iprop_header(last, &write_dump_nra(store, &mkey, true)?))
+    Ok(iprop_header(
+        last,
+        &write_dump_nra(store, &mkey, true, true)?,
+    ))
 }
 
 pub fn dump_store_iprop_with_key(
@@ -924,7 +936,10 @@ pub fn dump_store_iprop_with_key(
     mkey: &ProtocolKey,
     last: UlogLast,
 ) -> Result<String, DumpError> {
-    Ok(iprop_header(last, &write_dump_nra(store, mkey, true)?))
+    Ok(iprop_header(
+        last,
+        &write_dump_nra(store, mkey, true, true)?,
+    ))
 }
 
 // MIT: `ipropx_resync` (kadmin/server/ipropd_svc.c:343-344)
@@ -954,7 +969,7 @@ fn iprop_dump_text(
         .journal_key()
         .ok_or_else(|| DumpError::Crypto("no master key for the iprop dump".to_owned()))?;
     let last = store.ulog_last().unwrap_or_default();
-    let text = write_dump_nra(store, &mkey, true)?;
+    let text = write_dump_nra(store, &mkey, true, true)?;
     Ok(Some(if vers == 0 {
         iprop_v0(last, &text)
     } else {

@@ -723,6 +723,12 @@ fn fetch_mkey(util: &mut Util, realm: &str, km: &DumpPrincipal) -> Result<Option
             }
         }
     };
+    if km.keys.is_empty() {
+        util.com_err(krb5_kdc::NO_MASTER_KEY, "while getting master key list");
+        util.com_err0("Warning: proceeding without master key list");
+        util.failed();
+        return Ok(None);
+    }
     if !km.opens_with(&key) {
         util.com_err(BAD_MASTER_KEY, "while getting master key list");
         util.com_err0("Warning: proceeding without master key list");
@@ -1467,7 +1473,9 @@ fn restore_failed(util: &Util, file: &str, name: &str, e: &DumpError) {
 
 fn load_master_key(util: &mut Util, dump: &DumpFile) -> Option<(ProtocolKey, bool)> {
     let realm = dump.realm().map(str::to_owned).unwrap_or_default();
-    let km = dump.princ(&format!("K/M@{realm}"));
+    let km = dump
+        .princ(&format!("K/M@{realm}"))
+        .filter(|km| !km.keys.is_empty());
     let opens = |k: &ProtocolKey| km.is_none_or(|km| km.opens_with(k));
     let etype = dump.master_etype().or(util.etype);
     let derive = |pw: &[u8]| etype.and_then(|e| master_key_from_password(&realm, pw, e).ok());

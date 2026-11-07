@@ -10,7 +10,7 @@ cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
 . "$ROOT/scripts/lib/kadmin-q.sh"
-need_bins krb5-kdc krb5-kdb krb5-kadmin-local
+need_bins krb5-kdc krb5-kdb krb5-kadmin-local krb5-kadmind
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-kdb-dump-gate"
@@ -31,6 +31,7 @@ shell_container
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdb" "$NAME":/tmp/krb5-kdb
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kadmin-local" "$NAME":/tmp/krb5-kadmin-local
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kadmind" "$NAME":/tmp/krb5-kadmind
 docker cp "$GOLDEN" "$NAME":/tmp/mit.dump
 echo "==== golden dump nosvr/hwuser keys are MIT-derived, not clones of user/pwprau ===="
 if ! python3 - "$ROOT/scripts/ci-policy.py" <<'PY'
@@ -83,7 +84,7 @@ then
     echo "nosvr/hwuser keys clone user/pwprau or golden has TL 32767" >&2
     exit 1
 fi
-docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kdb /tmp/krb5-kadmin-local
+docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kdb /tmp/krb5-kadmin-local /tmp/krb5-kadmind
 rust_local() {
     rust_kadmin_local -e KRB5_MASTER_PASSWORD=masterpassword -e KRB5_KDC_DB=/tmp/principal -e KRB5_KDC_STASH=/tmp/stash \
         "$NAME" -- -q "$1" 2>&1
@@ -529,6 +530,59 @@ grep -qx 'error processing line [0-9]* of /tmp/b3-dbargs.dump' <<<"$MIT_B3" \
     || die "MIT's kdb5_util did not name the record's line"
 [ "$MIT_B3" = "$RUST_B3" ] || die "a store failure's lines differ between MIT's kdb5_util load and ours"
 
+echo "==== a database without K/M, or with a keyless K/M: MIT's tools, then ours (kdb_default.c:414-424) ===="
+docker exec "$NAME" kdb5_util dump /tmp/bl13.dump
+# Two edits of MIT's dump: K/M's record removed, and K/M's key_data removed.
+docker exec "$NAME" python3 -c '
+src = open("/tmp/bl13.dump").read().splitlines(True)
+def km(f):
+    return f[0] == "princ" and f[6] == "K/M@KERBER.TEST"
+nokm = [l for l in src if not km(l.split("\t"))]
+keyless = []
+for l in src:
+    f = l.rstrip("\n").split("\t")
+    if km(f):
+        i = j = 15 + 3 * int(f[3])
+        for _ in range(int(f[4])):
+            j += 2 + 3 * int(f[j])
+        f = f[:i] + f[j:]
+        f[4] = "0"
+        l = "\t".join(f) + "\n"
+    keyless.append(l)
+open("/tmp/bl13-nokm.dump", "w").writelines(nokm)
+open("/tmp/bl13-keyless.dump", "w").writelines(keyless)'
+bl13_lines() {
+    { grep -v -e '^[A-Z][a-z][a-z] [0-9]' -e 'No dictionary' -e '^Authenticating' || true; } |
+        sed -E 's/^(kdb5_util|krb5-kdb|kadmin\.local|krb5-kadmin-local|kadmind|krb5-kadmind|krb5kdc|krb5-kdc)(\[[0-9]+\])?(\(Error\))?: //'
+}
+bl13_leg() {
+    local leg=$1 d=$2 dir="/tmp/bl13-$1-$2"
+    docker exec "$NAME" sh -c "rm -rf $dir && mkdir -p $dir"
+    if [ "$leg" = mit ]; then
+        echo "load: $(docker exec "$NAME" kdb5_util -d "$dir/principal" load "/tmp/bl13-$d.dump" 2>&1 | bl13_lines)"
+        echo "dump: $(docker exec "$NAME" kdb5_util -d "$dir/principal" dump /tmp/bl13-out.dump 2>&1 | bl13_lines | tr '\n' '|')"
+        echo "kadmin.local: $(docker exec "$NAME" kadmin.local -d "$dir/principal" -q 'getprinc user' 2>&1 | bl13_lines | tr '\n' '|')"
+        echo "kadmind: $(docker exec "$NAME" timeout 5 kadmind -nofork -x "dbname=$dir/principal" -p 7749 2>&1 | bl13_lines | sort -u | tr '\n' '|')"
+        echo "krb5kdc: $(docker exec "$NAME" timeout 5 krb5kdc -n -d "$dir/principal" -p 7088 2>&1 | bl13_lines | sort -u | tr '\n' '|')"
+    else
+        local env=(-e KRB5_MASTER_PASSWORD=masterpassword -e "KRB5_KDC_DB=$dir/principal" -e KRB5_KDC_STASH=/tmp/stash)
+        echo "load: $(docker exec "${env[@]}" "$NAME" /tmp/krb5-kdb load "/tmp/bl13-$d.dump" 2>&1 | bl13_lines)"
+        echo "dump: $(docker exec "${env[@]}" "$NAME" /tmp/krb5-kdb dump /tmp/bl13-out.dump 2>&1 | bl13_lines | tr '\n' '|')"
+        echo "kadmin.local: $(docker exec "${env[@]}" "$NAME" /tmp/krb5-kadmin-local -q 'getprinc user' 2>&1 | bl13_lines | tr '\n' '|')"
+        echo "kadmind: $(docker exec "${env[@]}" "$NAME" timeout 5 /tmp/krb5-kadmind 127.0.0.1:7749 2>&1 | bl13_lines | sort -u | tr '\n' '|')"
+        echo "krb5kdc: $(docker exec "${env[@]}" "$NAME" timeout 5 /tmp/krb5-kdc 127.0.0.1:7088 2>&1 | bl13_lines | sort -u | tr '\n' '|')"
+    fi
+}
+for d in nokm keyless; do
+    bl13_leg mit "$d" > "$SCRATCH/bl13-mit-$d.txt"
+    bl13_leg rust "$d" > "$SCRATCH/bl13-rust-$d.txt"
+    sed "s/^/mit  $d /" "$SCRATCH/bl13-mit-$d.txt"
+    sed "s/^/rust $d /" "$SCRATCH/bl13-rust-$d.txt"
+    grep -q 'Cannot find master key record in database' "$SCRATCH/bl13-mit-$d.txt" ||
+        die "MIT's tools did not refuse the $d database"
+    diff "$SCRATCH/bl13-mit-$d.txt" "$SCRATCH/bl13-rust-$d.txt" ||
+        die "the $d database: MIT's tools and ours differ"
+done
 echo "==== kdb5_util stash, MIT first: over a 0640 stash, key typed, wrong key ===="
 # MIT `kdb5_stash` (kdb5_stash.c:65-137): a new 0600 file, the stashed or typed key.
 docker exec "$NAME" sh -c 'mkdir -p /tmp/rkdb && ln -sf /tmp/krb5-kdb /tmp/rkdb/kdb5_util'

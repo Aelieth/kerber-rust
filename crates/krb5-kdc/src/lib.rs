@@ -54,9 +54,9 @@ pub use create::{
     open_or_create, realm_rows,
 };
 pub use daemon::{
-    OpenFailure, Shutdown, copy_persist_master, database_path, kadmind_mkey_from_kbd,
-    manual_master_key, mkey_log_context, names_relative_database, open_database,
-    open_database_with_key, open_database_with_password,
+    NO_MASTER_KEY, OpenFailure, Shutdown, copy_persist_master, database_path, has_master_record,
+    kadmind_mkey_from_kbd, manual_master_key, mkey_log_context, names_relative_database,
+    open_database, open_database_with_key, open_database_with_password,
 };
 #[cfg(feature = "daemon")]
 pub use daemon::{Signals, detach, json_log_filter, write_pid_file};
