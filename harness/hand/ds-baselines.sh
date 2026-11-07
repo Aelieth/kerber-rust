@@ -54,6 +54,9 @@ CO=kerber-rust-${RUST_PIN:0:12}
 CARGO_ENV=". \"\$HOME/.cargo/env\""
 REALM_VARS=(--session "REALM=$REALM" --session 'DOMAIN=kerber.test' --session 'KDC_HOST=kdc.kerber.test')
 CAP_MIB=$((32 * 1024))
+require_bins "$LAB"
+require_files "$HERE/baseline.env" "$HERE/lib/family.sh" "$HERE/lib/install-check.sh" "$DOCB" "$DOCS" "$SCAN"
+git -C "$WT" cat-file -e "$RUST_PIN^{commit}" || { echo "DSB_STOP no $RUST_PIN"; exit 2; }
 # shellcheck source=../field/baseline.env
 . "$HERE/baseline.env"
 FIELD_KDC_FAMILY=$FAM
@@ -473,6 +476,9 @@ rust_units_off() {
 # Before anything changes: the checkout, the VMs and snapshots, the names to make, and the RAM.
 [ "$(git -C "$WT" rev-parse HEAD 2> /dev/null)" = "$SHA" ] || stop "HAND_WT is not at $SHA"
 mkdir -p "$REC" && chmod 700 "$REC"
+IFS=, read -r -a PH_LIST <<< "$PHASES"
+case ",$PHASES," in *,mit,*) require_files "$SECRETS/$MIT_SECRET_ALICE" ;; esac
+case ",$PHASES," in *,rust,*) require_files "$SECRETS/$RUST_SECRET_ALICE" ;; esac
 for need in "kdc f4-mit-f44" "kdc rust-field-p12-f44" "$VM base" "$VM mit-server-$VM" \
     "client2 $MIT_SNAPSHOT_CLIENT2" "client2 $RUST_SNAPSHOT_CLIENT2"; do
     read -r nvm nsnap <<< "$need"
@@ -481,7 +487,6 @@ for need in "kdc f4-mit-f44" "kdc rust-field-p12-f44" "$VM base" "$VM mit-server
 done
 case ${TMPDIR:-} in '' | /tmp | /tmp/*) stop "TMPDIR is unset or under /tmp" ;; esac
 [ ! -e "$LAB_HOME/state/takeover" ] || stop "a takeover is held ($(cat "$LAB_HOME/state/takeover"))"
-IFS=, read -r -a PH_LIST <<< "$PHASES"
 VMS_USED="kdc $VM client2"
 case ",$PHASES," in
     *,rep,*)
@@ -494,10 +499,6 @@ for v in $VMS_USED; do
 done
 [ "$(printf '%s\n' "${PH_LIST[@]}" | sort | uniq -d)" = '' ] || stop "a phase named twice: $PHASES"
 for p in "${PH_LIST[@]}"; do
-    case $p in
-        mit) [ -r "$SECRETS/$MIT_SECRET_ALICE" ] || stop "no readable secret file for MIT_SECRET_ALICE" ;;
-        rust) [ -r "$SECRETS/$RUST_SECRET_ALICE" ] || stop "no readable secret file for RUST_SECRET_ALICE" ;;
-    esac
     case $p in
         base) has_snap "$VM" "ds-base-$VM" && stop "ds-base-$VM exists" ;;
         mit) has_snap "$VM" "mit-oracle-$VM" && stop "mit-oracle-$VM exists" ;;

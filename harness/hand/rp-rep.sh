@@ -16,6 +16,8 @@ echo $$ > "$REC/driver.pid"
 got=$(git -C "$WT" rev-parse HEAD)
 echo "HEAD:$got"
 [ "$got" = "$PHASEC_SHA" ] || { echo "REP_STOP head"; exit 2; }
+require_bins "$FIELD/run.sh"
+require_files "$FIELD/lab.sh"
 cd "$FIELD" || exit 2
 ./run.sh --profile weekly --only upgrade,replica --ref "$PHASEC_SHA" --leg both
 echo "REP_RC:$?"

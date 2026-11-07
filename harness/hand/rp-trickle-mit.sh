@@ -14,6 +14,8 @@ LAB=$WT/harness/field/lab.sh
 mkdir -p "$REC"
 echo "REC:$REC"
 lab() { bash "$LAB" "$@"; }
+require_files "$LAB" "$HDIR/lib/al3-trickle.py" "$HDIR/lib/rp-trickle-guest.py" \
+    "$LAB_HOME/secrets/mit-realm.admin-admin.password" "$LAB_HOME/secrets/mit-realm.bob.password"
 HERE=$(dirname "$LAB")
 if command -v virsh >/dev/null 2>&1; then
     vsh() { virsh -c qemu:///system "$@"; }

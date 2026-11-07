@@ -14,6 +14,8 @@ LAB=$WT/harness/field/lab.sh
 mkdir -p "$REC"
 echo "REC:$REC"
 lab() { bash "$LAB" "$@"; }
+SECRET=$LAB_HOME/secrets/mit-realm.bob.password
+require_files "$LAB" "$SECRET"
 HERE=$(dirname "$LAB")
 if command -v virsh >/dev/null 2>&1; then
     vsh() { virsh -c qemu:///system "$@"; }
@@ -22,12 +24,6 @@ else
 fi
 echo "KDC_BEFORE:$(vsh snapshot-current kerber-kdc --name 2>/dev/null || echo unknown)"
 echo "C2_BEFORE:$(vsh snapshot-current kerber-client2 --name 2>/dev/null || echo unknown)"
-SECRET=$LAB_HOME/secrets/mit-realm.bob.password
-if [ ! -f "$SECRET" ]; then
-    echo "NO_SECRET"
-    echo "A2_END"
-    exit 1
-fi
 kdc_now=$(vsh snapshot-current kerber-kdc --name 2>/dev/null || true)
 c2_now=$(vsh snapshot-current kerber-client2 --name 2>/dev/null || true)
 if [ "$kdc_now" = "f4-mit-f44" ] && [ "$c2_now" = "mit-kit-fc44" ]; then

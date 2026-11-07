@@ -32,6 +32,8 @@ touched=0
 start_snap=
 lab() { bash "$LAB" "$@"; }
 stop() { echo "SC_STOP $*"; exit 2; }
+require_bins "$BIN"
+require_files "$LAB" "$TL_SRC" "$ADMIN_PW"
 scrub() {
     python3 -c 'import sys,re; t=sys.stdin.read(); sys.stdout.write(re.sub(r"(?<!\S)[0-9a-fA-F]{32,}(?!\S)","[redacted-hex]",t))'
 }
@@ -291,8 +293,6 @@ echo "KINIT:dave:after-unlock:$?"
 rm -f /tmp/sc-cc
 EOS
 echo "==== cell 4 compile ===="
-[ -f "$TL_SRC" ] || stop "tl source missing"
-[ -f "$ADMIN_PW" ] || stop "admin pw file missing"
 lab ssh kdc -- 'command -v gcc >/dev/null || sudo -n dnf install -y gcc krb5-devel'
 lab ssh kdc -- 'cat > /var/tmp/sc/sc1-tl.c && gcc -O2 -o /var/tmp/sc/sc1-tl /var/tmp/sc/sc1-tl.c -lkadm5clnt_mit -lkrb5 && echo TL_COMPILE_OK' < "$TL_SRC"
 echo "TL_COMPILE_RC:$?"

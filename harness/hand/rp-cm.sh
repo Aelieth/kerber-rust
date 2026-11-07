@@ -123,6 +123,7 @@ host_gates "$CELLS" "$GRADE" "$PTY" "$HDIR/lib/cm-host.sh"
 mkdir -p "$REC/move" "$REC/mit" "$REC/ours"
 chmod 700 "$REC"
 make_secrets
+check_secrets
 
 echo "==== resets ===="
 reset_vm kdc "$MIT_SNAPSHOT_KDC" || stop "reset kdc"

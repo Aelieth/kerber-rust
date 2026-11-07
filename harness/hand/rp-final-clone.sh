@@ -43,6 +43,8 @@ trap 'down_vm; rm -rf "$SEC"' EXIT
 
 [ -e "$REC" ] && { echo "CLONE_STOP exists $REC"; exit 2; }
 git -C "$WT" cat-file -e "$SHA^{commit}" || { echo "CLONE_STOP no-object"; exit 2; }
+require_bins "$LAB"
+require_files "$DOC" "$SCAN"
 exec 8>>"$HAND"
 if ! flock -n 8; then
     echo "CLONE_STOP hand-flock"
@@ -163,7 +165,9 @@ else
 fi
 
 python3 -B "$SCAN" "$REC" > "$REC/secret-scan.out" 2>&1
-echo "SECRET_SCAN:$?"
+scan_rc=$?
+echo "SECRET_SCAN:$scan_rc"
+[ "$scan_rc" = 0 ] || clone_pass=no
 
 echo "CLONE_PASS:$clone_pass"
 echo "CLONE_DONE"

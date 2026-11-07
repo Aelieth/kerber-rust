@@ -529,7 +529,8 @@ expect L5.kdc.no-avc-whole-hold "$OUT/L5-kdc-avc-whole-hold.txt" 'no AVC'
 } > "$OUT/NOT-RUN.txt"
 cat "$OUT/NOT-RUN.txt" >> "$LOG"
 note "L6 parity per cell, MIT vs ours"
-python3 -B "$HC/parity.py" "$OUT" r3 > "$OUT/PARITY.txt" 2>> "$LOG"; note "PARITY rc=$?"
+python3 -B "$HC/parity.py" "$OUT" r3 > "$OUT/PARITY.txt" 2>> "$LOG"; prc=$?; note "PARITY rc=$prc"
+[ "$prc" = 0 ] || { LEG_RC=1; REASON="$REASON; parity.py failed"; }
 head -n 60 "$OUT/PARITY.txt" >> "$LOG"
 
 # ================================================================ L7 (the EXIT trap restores, publishes and scans)

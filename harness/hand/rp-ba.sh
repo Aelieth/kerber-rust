@@ -13,6 +13,8 @@ echo $$ > "$REC/driver.pid"
 exec 9>&-
 LAB=$WT/harness/field/lab.sh
 BIN=${HAND_SHIP:-$WT/target-rp/release}/krb5-embed-realm
+require_bins "$BIN"
+require_files "$LAB" "$HDIR/lib/ba2-client.py"
 SEC=$(mktemp -d "${TMPDIR:-/var/tmp}/hand-sec.XXXXXX")  # outside the record
 mkdir -p "$REC" "$SEC"
 chmod 700 "$SEC"
@@ -210,7 +212,9 @@ def rows(path):
 mit = rows(Path("$REC/mit-getprinc.txt"))
 ours = rows(Path("$REC/ours-getprinc.txt"))
 print("FIELD_ROWS", len(mit), len(ours))
-if mit == ours:
+if not mit or not ours:
+    print("FIELDS_EMPTY")
+elif mit == ours:
     print("FIELDS_EQUAL")
 else:
     print("FIELDS_DIFFER")
@@ -260,7 +264,7 @@ rec = Path("$REC")
 def kv(path):
     return [ln for ln in Path(path).read_text(errors="replace").splitlines() if " keys kvno " in ln]
 a, b = kv(rec/"ours-getprinc.txt"), kv(rec/"ours-getprinc2.txt")
-print("KVNO_SAME" if a == b else "KVNO_CHANGED")
+print("KVNO_EMPTY" if not a or not b else "KVNO_SAME" if a == b else "KVNO_CHANGED")
 for ln in a:
     if ln not in b:
         print("KVNO_BEFORE", ln[:160])

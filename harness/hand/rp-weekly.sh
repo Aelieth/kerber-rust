@@ -15,6 +15,8 @@ echo $$ > "$REC/driver.pid"
 got=$(git -C "$WT" rev-parse HEAD)
 echo "HEAD:$got"
 [ "$got" = "$PHASEC_SHA" ] || { echo "WEEKLY_STOP head"; exit 2; }
+require_bins "$WT/harness/field/run.sh"
+require_files "$WT/Makefile" "$WT/harness/field/lab.sh"
 cd "$WT" || exit 2
 make field PROFILE=weekly LEG=both REF="$PHASEC_SHA"
 echo "WEEKLY_RC:$?"

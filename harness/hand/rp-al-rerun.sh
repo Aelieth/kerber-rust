@@ -15,6 +15,9 @@ LAB=$WT/harness/field/lab.sh
 TAR=$REC/tree.tar
 CO=kerber-rust-${PHASEC_SHA:0:12}
 SECRET=$LAB_HOME/secrets/rust-realm.bob.password
+require_files "$LAB" "$SECRET" "$LAB_HOME/secrets/rust-realm.admin-admin.password" \
+    "$LAB_HOME/secrets/rust-realm.alice.password" "$HDIR/lib/al3-trickle.py" "$HDIR/lib/rp-trickle-guest.py" \
+    "$HDIR/lib/rp-decrypt-guest.py"
 SEC=$(mktemp -d "${TMPDIR:-/var/tmp}/hand-sec.XXXXXX")  # outside the record
 mkdir -p "$REC" "$SEC"
 chmod 700 "$SEC"

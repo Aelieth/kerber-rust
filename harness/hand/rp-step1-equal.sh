@@ -2,12 +2,12 @@
 # Step 1, the opposite test. One argument: the commit to build (make build in HAND_WT).
 # KDCDIR and KERBER_KDC_DIR stay unset.
 # The 13 are compared to HAND_STEP1_BASE's step1/ship.sha256. STEP1_EQUAL:yes prints
-# only when all 13 are byte-equal. A differing name prints and the script stops.
+# only when all 13 are byte-equal. A differing name prints, and the script stops after the extras.
 # Before make build, target-rp is moved to target-rp-<base sha12>.
 # If that name exists, stop. Nothing is deleted. The fresh build uses the
 # same path. COMPILING must be greater than 0.
-# The three extra builds are recorded as information, against the base's extra.sha256. They do not change
-# STEP1_EQUAL. A missing extra binary stops so the record is not silent.
+# The three extra builds are recorded either way, as information, against the base's extra.sha256. They
+# do not change STEP1_EQUAL. A missing extra binary stops so the record is not silent.
 # target-accept and target-pac stay incremental. The embed build writes into
 # the fresh target-rp after the 13 are hashed.
 # Record: $HAND_REC/<sha>/step1. This does not start the lab.
@@ -85,21 +85,14 @@ while read -r oldhash name; do
     newhash=$(awk -v n="$name" '$2==n {print $1}' "$REC/ship.sha256")
     if [ -z "$newhash" ]; then
         echo "MISSING $name"
-        echo "STEP1_EQUAL:no"
-        exit 2
-    fi
-    if [ "$newhash" = "$oldhash" ]; then
+        equal=no
+    elif [ "$newhash" = "$oldhash" ]; then
         echo "EQUAL $name"
     else
         echo "DIFFER $name"
         equal=no
     fi
 done < "$BASE"
-if [ "$equal" != yes ]; then
-    echo "STEP1_EQUAL:no"
-    exit 2
-fi
-echo "STEP1_EQUAL:yes"
 if CARGO_TERM_COLOR=never cargo build --release --locked --manifest-path "$WT/Cargo.toml" -p krb5-embed-realm-example --bin krb5-embed-realm --target-dir "$WT/target-rp"; then
     echo "EMBED_BUILD_RC:0"
 else
@@ -141,4 +134,6 @@ extra() {
 extra krb5-embed-realm "$rel/krb5-embed-realm"
 extra krb5-gss-accept "$WT/target-accept/release/krb5-gss-accept"
 extra krb5-pac-extract "$WT/target-pac/release/krb5-pac-extract"
+echo "STEP1_EQUAL:$equal"
+[ "$equal" = yes ] || exit 2
 echo "STEP1_END"

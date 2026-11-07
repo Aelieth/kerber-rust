@@ -38,6 +38,8 @@ SEQ=$HDIR/lib/bg-seq.sh
 INIT_C=$HDIR/lib/gss-seq-init.c
 ACC_C=$HDIR/lib/gss-seq-acceptor.c
 SUMMARY=$HDIR/lib/gss-seq-summary.py
+require_files "$NS" "$SEQ" "$INIT_C" "$ACC_C" "$SUMMARY"
+require_bins /usr/bin/kinit /usr/bin/kvno /usr/bin/klist
 stop() { echo "BG_STOP $*"; exit 2; }
 scan_secrets() {
     python3 - "$NS" "$SEQ" << 'PY'

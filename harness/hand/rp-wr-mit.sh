@@ -21,6 +21,8 @@ mkdir -p "$REC"
 echo "REC:$REC"
 lab() { bash "$LAB" "$@"; }
 [ "$(git -C "$WT" rev-parse HEAD)" = "$PHASEC_SHA" ] || { echo "WT not at the build under test"; echo "WR_MIT_END"; exit 2; }
+require_files "$LAB" "$HDIR/lib/wr.py" "$LAB_HOME/secrets/mit-realm.alice.password" \
+    "$LAB_HOME/secrets/mit-realm.bob.password" "$LAB_HOME/secrets/mit-realm.admin-admin.password"
 echo "COMMIT:$PHASEC_SHA"
 echo "TREE:$(git -C "$WT" rev-parse 'HEAD^{tree}')"
 fail=0

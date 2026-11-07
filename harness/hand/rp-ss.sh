@@ -34,11 +34,8 @@ if [ "$got" != "$REF" ]; then
     exit 1
 fi
 BIN=${HAND_SHIP:-$WT/target-rp/release}/krb5-embed-realm
-if [ ! -x "$BIN" ]; then
-    echo "MISSING embed"
-    echo "FINAL: SS3_ABORT"
-    exit 1
-fi
+require_bins "$BIN"
+require_files "$LAB" "$HDIR/lib/ss3-client.py"
 sha256sum "$BIN"
 python3 - <<'PY'
 import os, pathlib, secrets

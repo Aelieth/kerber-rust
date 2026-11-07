@@ -16,6 +16,7 @@ HERE=$(dirname "$LAB")
 lab() { bash "$LAB" "$@"; }
 # ssh reads the caller's stdin. The cycle loop's stdin is the delay list.
 labn() { bash "$LAB" "$@" </dev/null; }
+require_files "$LAB"
 if command -v virsh >/dev/null 2>&1; then
     vsh() { virsh -q -c qemu:///system "$@"; }
 elif command -v distrobox-host-exec >/dev/null 2>&1; then
@@ -100,8 +101,8 @@ fi
 lab ssh kdc2 -- 'mkdir -p ~/plw-bin && cd ~/plw-bin && { rpm -q cpio > /dev/null || sudo dnf -y -q install cpio > /dev/null 2>&1; } && rm -rf krb5-server-*.rpm usr && dnf download -q krb5-server > /dev/null 2>&1 && rpm2cpio krb5-server-*.rpm | cpio -id --quiet "*/kproplog" && install -m 0755 usr/*/kproplog kproplog'
 lab ssh kdc2 -- 'cat ~/plw-bin/kproplog' | lab ssh kdc -- 'mkdir -p ~/plw-bin && cat > ~/plw-bin/kproplog && chmod 755 ~/plw-bin/kproplog'
 for vm in kdc kdc2; do
-    if labn ssh "$vm" -- 'ldd /home/lab/plw-bin/kproplog | grep -q "not found"'; then
-        echo "KPROPLOG_LDD $vm"
+    if ! labn ssh "$vm" -- 'test -x /home/lab/plw-bin/kproplog && ! ldd /home/lab/plw-bin/kproplog | grep -q "not found"'; then
+        echo "KPROPLOG_BAD $vm"
         exit 1
     fi
     echo "KPROPLOG_OK $vm"

@@ -91,8 +91,7 @@ trap 'cleanup; rm -rf "$SEC"' EXIT
 mkdir -p "$REC"
 echo "REC:hand-sr-$(date -u +%Y%m%dT%H%M%SZ)"
 echo "TREE:$(git -C "$WT" rev-parse HEAD)"
-[ -f "$SETPW" ] || stop "setpw.py missing"
-[ -f "$ADMIN_PW" ] || stop "admin pw file missing"
+require_files "$LAB" "$SETPW" "$ADMIN_PW"
 cp "$ADMIN_PW" "$SEC/secret-admin"
 chmod 600 "$SEC/secret-admin"
 start_snap=$(snap_current kerber-kdc | tr -d '\r')
@@ -115,6 +114,7 @@ draw() {
     local dest=$1
     python3 -c 'import secrets; print(secrets.token_urlsafe(18))' > "$dest"
     chmod 600 "$dest"
+    [ -s "$dest" ] || stop "no secret drawn"
 }
 
 cell() {

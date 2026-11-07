@@ -233,6 +233,11 @@ Path(sys.argv[1]).write_text("".join("%s\t%s\n" % (n, secrets.token_urlsafe(18))
 PY
     printf 'admin\t%s\n' "$(< "$SECRETS/$MIT_SECRET_ADMIN")" >> "$SEC/all.tsv"
 }
+# Every name in $SEC/all.tsv has a password.
+check_secrets() {
+    [ -s "$SEC/all.tsv" ] || stop "no secrets"
+    awk -F '\t' 'NF != 2 || $2 == "" { bad = 1 } END { exit bad }' "$SEC/all.tsv" || stop "empty secret"
+}
 
 secrets_for() { grep -E "^($1)" "$SEC/all.tsv"; }
 
@@ -296,9 +301,7 @@ move() {
 host_gates() {
     local f got sum name dom st add kb mib
     [ -e "$REC" ] && stop "exists $REC"
-    for f in "$@" "$DOC" "$SCAN"; do
-        [ -f "$f" ] || stop "missing $f"
-    done
+    require_files "$@" "$DOC" "$SCAN"
     if ! git -C "$WT" diff --quiet --ignore-submodules -- || ! git -C "$WT" diff --cached --quiet --ignore-submodules --; then
         stop dirty
     fi
@@ -310,16 +313,19 @@ host_gates() {
     echo "HEAD:$got"
     echo "TREE:$(git -C "$WT" rev-parse 'HEAD^{tree}')"
     [ "$got" = "$SHA" ] || stop head
+    require_bins "$LAB"
+    require_files "$WT/README.md" "$WT/harness/field/baseline.env"
     # shellcheck source=../../field/baseline.env
     . "$WT/harness/field/baseline.env"
     echo "SNAP_KDC:${MIT_SNAPSHOT_KDC:-}"
     [ "${MIT_REALM:-}" = "$REALM" ] || stop "MIT_REALM"
     [ -n "${MIT_SNAPSHOT_KDC:-}" ] || stop "MIT_SNAPSHOT_KDC"
-    [ -f "$SECRETS/${MIT_SECRET_ADMIN:-}" ] || stop "secret-file admin"
+    require_files "$SECRETS/${MIT_SECRET_ADMIN:-}"
     echo "SECRET_FILE:admin:${MIT_SECRET_ADMIN}"
     for f in "$@"; do
         echo "SCRIPT_SHA:$(basename "$f"):$(sha256sum "$f" | awk '{print $1}')"
     done
+    if declare -F gate_extra > /dev/null; then gate_extra; fi
 
     exec 8>>"$LAB_HOME/state/lab.lock"
     if ! flock -n 8; then

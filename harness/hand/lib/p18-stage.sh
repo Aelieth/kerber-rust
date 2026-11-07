@@ -5,6 +5,7 @@
 # Prints P18_STAGED:yes|no, and P18_SENT <script> <sha256> for each script it ran or copied.
 # A new seed is a new P18.TEST realm (seed.sh draws its passwords in its own pipe).
 set -u
+. "$(dirname "${BASH_SOURCE[0]}")/env.sh"
 WT=${1:?checkout}
 BUILD=${2:-}
 LAB=$WT/harness/field/lab.sh
@@ -36,6 +37,8 @@ need() {
     grep -vx P18_CHECKED <<< "$out" || true
 }
 
+require_files "$LAB" "$P/vm-setup.sh" "$P/seed.sh" "$P/session.sh" "$P/probe-session.sh"
+[ "$BUILD" != --build ] || require_files "$DOC" "$WT/docs/install.md"
 lab ssh klldap -- true > /dev/null 2>&1 || { echo "P18_STOP klldap ssh"; exit 2; }
 if ! lab ssh klldap -- "rpm -q $PKGS" > /dev/null 2>&1; then
     if ! dnf_out=$(lab ssh klldap -- "sudo -n dnf -y -q install $PKGS" 2>&1); then

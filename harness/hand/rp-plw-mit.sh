@@ -16,6 +16,7 @@ HERE=$(dirname "$LAB")
 lab() { bash "$LAB" "$@"; }
 # ssh reads the caller's stdin. The cycle loop's stdin is the delay list.
 labn() { bash "$LAB" "$@" </dev/null; }
+require_files "$LAB"
 if command -v virsh >/dev/null 2>&1; then
     vsh() { virsh -q -c qemu:///system "$@"; }
 elif command -v distrobox-host-exec >/dev/null 2>&1; then

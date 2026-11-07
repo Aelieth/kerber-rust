@@ -7,6 +7,7 @@ HDIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 require_env HAND_WT HAND_REC
 REC=$HAND_REC/$PHASEC_SHA/wr
 bash "$HDIR/lib/ship-guard.sh" "$PHASEC_SHA" "$REC" || exit $?
+require_files "$HDIR/rp-wr-mit.sh" "$HDIR/rp-wr-ours.sh"
 exec 9>&-
 DIR=$REC
 mkdir -p "$DIR"

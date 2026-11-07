@@ -21,11 +21,8 @@ echo "REC:$REC"
 echo "TREE:$PHASEC_SHA write-tree:$(git -C "$WT" rev-parse 'HEAD^{tree}')"
 echo "BIN_DIR:$(dirname "$BIN")"
 lab() { bash "$LAB" "$@"; }
-if [ ! -x "$BIN" ]; then
-    echo "MISSING_BIN"
-    echo "AL_A45_END"
-    exit 1
-fi
+require_bins "$BIN"
+require_files "$LAB" "$HDIR/lib/ss3-client.py" "$HDIR/lib/al3-trickle.py" "$HDIR/lib/rp-trickle-guest.py"
 sha256sum "$BIN"
 python3 - << 'PY'
 import os, pathlib, secrets

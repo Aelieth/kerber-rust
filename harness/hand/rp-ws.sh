@@ -275,10 +275,12 @@ cells() {
 }
 
 # --- gates that do not touch a VM ---
+# host_gates runs this after baseline.env, before any VM call.
+gate_extra() {
+    [ -n "${MIT_SNAPSHOT_SERVICES:-}" ] || stop "MIT_SNAPSHOT_SERVICES"
+    require_files "$SECRETS/${LAB_CA:-}" "$SECRETS/${MIT_SECRET_ALICE:-}"
+}
 host_gates "$CELLS" "$GRADE" "$PTY" "$HDIR/lib/cm-host.sh" "$AGENT" "$PS1" "$WGRADE" "$MITSRV" "$PROBE"
-[ -n "${MIT_SNAPSHOT_SERVICES:-}" ] || stop "MIT_SNAPSHOT_SERVICES"
-[ -f "$SECRETS/${LAB_CA:-}" ] || stop "lab CA"
-[ -f "$SECRETS/${MIT_SECRET_ALICE:-}" ] || stop "secret-file alice"
 KC_URL=$(sed -n "s/^URL='\(.*\)'$/\1/p" "$PROBE")
 [ -n "$KC_URL" ] || stop "keycloak url"
 vsh snapshot-list "$WIN" --name 2> /dev/null | grep -qx "$WIN_SNAP" || stop "no $WIN_SNAP"
@@ -298,6 +300,7 @@ make_secrets
     printf 'win-local\t%s\n' "$(python3 -c 'import secrets; print(secrets.token_urlsafe(18) + "Zz9-")')"
     printf 'alice\t%s\n' "$(< "$SECRETS/$MIT_SECRET_ALICE")"
 } >> "$SEC/all.tsv"
+check_secrets
 
 echo "==== resets ===="
 reset_both

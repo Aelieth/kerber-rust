@@ -22,6 +22,14 @@ COMMIT=$PHASEC_SHA
 LAB=$WT/harness/field/lab.sh
 REC=$HAND_REC/$PHASEC_SHA/r3
 bash "$HDIR/lib/ship-guard.sh" "$PHASEC_SHA" "$REC" || exit $?
+require_bins "$LAB"
+require_files "$SRC_SCRIPTS/hc.sh" "$SRC_SCRIPTS/vmctl.sh" "$SRC_SCRIPTS/install-ours.sh" "$SRC_SCRIPTS/parity.py" \
+    "$SRC_SCRIPTS/pcapdecode.sh" "$SRC_SCRIPTS/cells/r3.sh" "$SRC_SCRIPTS/lib/cellfns.sh" "$SRC_SCRIPTS/lib/undef-check.sh"
+require_dirs "$FIELD_KIT_DIR"
+kit=("$FIELD_KIT_DIR"/*-remote-setup.sh)
+[ "${#kit[@]}" = 1 ] || { echo "R3_STOP FIELD_KIT_DIR holds no single *-remote-setup.sh"; exit 2; }
+kn=$(basename "${kit[0]}" -remote-setup.sh)
+require_files "${kit[0]}" "$FIELD_KIT_DIR/lib/$kn-apps.sh" "$FIELD_KIT_DIR/lib/$kn-browsers.sh" "$FIELD_KIT_DIR/lib/$kn-common.sh"
 BASE=$HAND_REC/$PHASEC_SHA/r3-base
 TMP=${TMPDIR_R3:-$BASE/r3-tmp}
 LOCK=/var/tmp/kr-lab.lock
@@ -48,7 +56,7 @@ bash -n "$COPY/hc.sh" || exit 2
 bash -n "$COPY/cells/r3.sh" || exit 2
 bash -n "$COPY/lib/cellfns.sh" || exit 2
 bash -n "$COPY/lib/undef-check.sh" || exit 2
-python3 -m py_compile "$COPY/parity.py"
+python3 -m py_compile "$COPY/parity.py" || exit 2
 
 HCSRC=$WT TMPDIR=$TMP bash "$COPY/lib/undef-check.sh" "$COPY/cells/r3.sh" "$COPY/lib/cellfns.sh" || exit 2
 

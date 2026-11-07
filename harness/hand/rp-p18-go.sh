@@ -13,6 +13,7 @@ bash "$HDIR/lib/ship-guard.sh" "$PHASEC_SHA" "$REC" || exit $?
 exec 9>&-
 LAB=$WT/harness/field/lab.sh
 lab() { bash "$LAB" "$@"; }
+require_files "$LAB" "$HDIR/lib/p18-stage.sh" "$HDIR/p18-trace.sh"
 mkdir -p "$REC"
 echo $$ > "$REC/driver.pid"
 echo "GO_START $(TZ=America/Chicago date '+%H:%M:%S')"

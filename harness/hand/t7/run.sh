@@ -67,3 +67,4 @@ run() { # label count samples ops...
 printf 'end %s\n' "$(date -u +%FT%TZ)" >> "$OUT/summary.txt"
 grep -h '^op=' "$OUT"/*.log > "$OUT/verdicts.txt"
 echo "results: $OUT"
+[ -s "$OUT/verdicts.txt" ] || { echo "T7_STOP no verdicts"; exit 1; }

@@ -36,7 +36,8 @@ lab() { bash "$LAB" "$@"; }
 stop() { echo "TR_STOP $*"; exit 2; }
 [ "$(git -C "$WT" rev-parse HEAD)" = "$SHA" ] || stop "WT not at the build under test"
 [ "$(git -C "$WT" rev-parse 'HEAD^{tree}')" = "$TREE" ] || stop "tree is not HEAD's"
-[ -x "$BIN" ] || stop "embed binary missing"
+require_bins "$BIN"
+require_files "$LAB" "$HDIR/lib/cc-one.c"
 mkdir -p "$REC"
 echo "REC:hand-tr-$(date -u +%Y%m%dT%H%M%SZ)"
 bin_sha=$(sha256sum "$BIN" | awk 'NR==1 {print $1}')

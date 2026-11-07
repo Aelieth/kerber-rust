@@ -42,6 +42,7 @@ MITD3_MIB=4096
 touched=0
 lab() { bash "$LAB" "$@"; }
 stop() { echo "BD_STOP $*"; exit 2; }
+require_files "$LAB"
 lock_on() {
     exec 8>>"$LAB_HOME/state/lab.lock"
     flock -n 8 || { echo LOCK_BUSY; exit 1; }

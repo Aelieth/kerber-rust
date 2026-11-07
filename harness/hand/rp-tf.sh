@@ -15,10 +15,14 @@ echo $$ > "$REC/driver.pid"
 got=$(git -C "$WT" rev-parse HEAD)
 echo "HEAD:$got"
 [ "$got" = "$PHASEC_SHA" ] || { echo "TF_STOP head"; exit 2; }
+require_bins "$FIELD/run.sh"
+require_files "$FIELD/lab.sh"
 cd "$FIELD" || exit 2
 stdbuf -oL ./run.sh --profile weekly --only upgrade,ticket-flags --ref "$PHASEC_SHA" --leg both > "$REC/ticket-flags.log" 2>&1
 echo "TF_RC:$?" | tee -a "$REC/ticket-flags.log"
 bash "$FIELD/lab.sh" reset klldap f44-docker
-echo "RESET_RC:$?"
+rc=$?
+echo "RESET_RC:$rc"
+[ "$rc" = 0 ] || { echo "TF_STOP reset klldap"; exit 2; }
 stdbuf -oL ./run.sh --profile weekly --only klldap-swap --ref "$PHASEC_SHA" --leg both > "$REC/klldap-swap.log" 2>&1
 echo "KL_RC:$?" | tee -a "$REC/klldap-swap.log"

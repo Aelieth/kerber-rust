@@ -14,6 +14,7 @@ LAB=$WT/harness/field/lab.sh
 mkdir -p "$REC"
 echo "REC:$REC"
 lab() { bash "$LAB" "$@"; }
+require_files "$LAB"
 echo "==== reset MIT ===="
 lab reset kdc f4-mit-f44
 echo "RESET_KDC:$?"

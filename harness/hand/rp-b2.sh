@@ -45,7 +45,9 @@ REDS=(
 )
 
 case $SCRATCH in "$HAND_REC"/*) ;; *) echo "rp-b2.sh: scratch is not under HAND_REC" >&2; exit 2 ;; esac
-[ -d "$WT" ] && [ -f "$BASE_B2" ] && [ -f "$BASE_CB" ] || { echo "rp-b2.sh: tree or baseline missing" >&2; exit 2; }
+require_dirs "$WT" "$HDIR/b2/shared" "$HDIR/b2/combined" "$HDIR/b2/fix-p8"
+require_files "$BASE_B2" "$BASE_CB" "$WT/harness/field/lab.sh" "$HDIR/lib/compare-legs.py" \
+    "$HDIR/lib/expected-diff.txt" "$HDIR/lib/p16a-leg.sh"
 got=$(git -C "$WT" rev-parse HEAD)
 [ "$got" = "$COMMIT" ] || { echo "rp-b2.sh: $WT is $got, not $COMMIT" >&2; exit 2; }
 got=$(git -C "$WT" rev-parse 'HEAD^{tree}')

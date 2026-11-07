@@ -24,6 +24,8 @@ mkdir -p "$REC"
 echo "REC:$REC"
 lab() { bash "$LAB" "$@"; }
 [ "$(git -C "$WT" rev-parse HEAD)" = "$PHASEC_SHA" ] || { echo "WT not at the build under test"; echo "WR_OURS_END"; exit 2; }
+require_files "$LAB" "$HDIR/lib/wr.py" "$LAB_HOME/secrets/rust-realm.alice.password" \
+    "$LAB_HOME/secrets/rust-realm.bob.password" "$LAB_HOME/secrets/rust-realm.admin-admin.password"
 fail=0
 note_fail() { echo "FAIL $*"; fail=1; }
 python3 - << 'PY'
@@ -111,8 +113,8 @@ expect_ok() {
 echo "==== upgrade ===="
 echo "COMMIT:$PHASEC_SHA"
 echo "TREE:$(git -C "$WT" rev-parse 'HEAD^{tree}')"
-if [ ! -f "$TAR" ]; then
-    git -C "$WT" archive --format=tar --prefix="${CO}/" "$PHASEC_SHA" > "$TAR"
+if [ ! -s "$TAR" ]; then
+    git -C "$WT" archive --format=tar --prefix="${CO}/" "$PHASEC_SHA" > "$TAR" || rm -f "$TAR"
 fi
 lab ssh kdc -- "rm -rf ~/$CO && mkdir -p ~/$CO && tar -x -C ~" < "$TAR"
 echo "UPLOAD_RC:$?"

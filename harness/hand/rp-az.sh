@@ -18,6 +18,7 @@ echo $$ > "$REC/driver.pid"
 LAB=$WT/harness/field/lab.sh
 CO=kerber-rust-${PHASEC_SHA:0:12}
 TAR=$REC/az-tree.tar
+BIN=${HAND_SHIP:-$WT/target-rp/release}/krb5-embed-realm
 mkdir -p "$REC"
 echo "REC:$REC"
 echo "COMMIT:$PHASEC_SHA"
@@ -25,6 +26,8 @@ echo "TREE:$(git -C "$WT" rev-parse 'HEAD^{tree}')"
 lab() { bash "$LAB" "$@"; }
 stop() { echo "AZ_STOP $*"; echo "AZ_END"; exit 2; }
 [ "$(git -C "$WT" rev-parse HEAD)" = "$PHASEC_SHA" ] || stop "WT not at the build under test"
+require_bins "$BIN"
+require_files "$LAB" "$HDIR/lib/az-kdc.py" "$HDIR/lib/az-cells.py" "$HDIR/lib/az-client.py"
 
 python3 - << 'PY'
 import os, pathlib, secrets
@@ -181,8 +184,8 @@ echo "==== ours reset and upgrade ===="
 lab reset kdc rust-field-p12-f44
 echo "RESET_OURS:$?"
 stage_kdc
-if [ ! -f "$TAR" ]; then
-    git -C "$WT" archive --format=tar --prefix="${CO}/" "$PHASEC_SHA" > "$TAR"
+if [ ! -s "$TAR" ]; then
+    git -C "$WT" archive --format=tar --prefix="${CO}/" "$PHASEC_SHA" > "$TAR" || rm -f "$TAR"
 fi
 lab ssh kdc -- "rm -rf ~/$CO && mkdir -p ~/$CO && tar -x -C ~" < "$TAR"
 echo "UPLOAD_RC:$?"
@@ -247,7 +250,7 @@ echo "==== klldap embed ===="
 lab reset klldap f44-base
 echo "RESET_KLLDAP:$?"
 lab ssh klldap -- 'rm -rf /var/tmp/az && mkdir -p /var/tmp/az && chmod 700 /var/tmp/az'
-lab ssh klldap -- 'cat > /var/tmp/az/krb5-embed-realm && chmod 755 /var/tmp/az/krb5-embed-realm' < "$WT/target-rp/release/krb5-embed-realm"
+lab ssh klldap -- 'cat > /var/tmp/az/krb5-embed-realm && chmod 755 /var/tmp/az/krb5-embed-realm' < "$BIN"
 lab ssh klldap -- 'sudo -n install -m 755 /var/tmp/az/krb5-embed-realm /usr/local/bin/krb5-embed-realm && sha256sum /usr/local/bin/krb5-embed-realm'
 lab ssh klldap -- 'sudo -n mkdir -p /var/kerberos/krb5kdc && sudo -n tar -C /var/kerberos/krb5kdc -xf - && sudo -n chmod 600 /var/kerberos/krb5kdc/principal.kadm5.lock' < "$SEC/az-db.tar"
 lab ssh klldap -- 'sudo -n tee /var/kerberos/krb5kdc/kdc.conf >/dev/null && sudo -n chmod 600 /var/kerberos/krb5kdc/kdc.conf' < "$SEC/az-kdc.conf.orig"
@@ -356,7 +359,7 @@ sudo -n bash -c "if [ -s /var/tmp/az/embed.pid ]; then kill \$(cat /var/tmp/az/e
 EOS
 )
 lab ssh klldap -- "$rcmd"
-sha256sum "$WT/target-rp/release/krb5-embed-realm"
+sha256sum "$BIN"
 echo "CELL6: not run. MIT makes kadmin/* DISALLOW_TGT_BASED, so no stock MIT client reaches kadmind cross-realm."
 echo "AZ_PASS"
 echo "AZ_END"

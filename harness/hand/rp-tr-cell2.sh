@@ -15,7 +15,7 @@ PHASEC_SHA=${1:?phasec sha}
 REL=${HAND_SHIP:-$WT/target-rp/release}
 BIN=$REL/krb5-embed-realm
 KDB=$REL/krb5-kdb
-EXPECT=1e826967debbeb0f7d2b27bcf2c5ccd822b89f46e926240012e5f66ba734ffd1
+EXTRA=$HAND_REC/$PHASEC_SHA/step1/extra.sha256
 export REC
 SRC=$HAND_REC/$PHASEC_SHA/hand-tr
 REC=$HAND_REC/$PHASEC_SHA/hand-tr-cell2
@@ -29,12 +29,12 @@ exec > >(tee -a "$LOG") 2>&1
 touched=0
 lab() { bash "$LAB" "$@"; }
 stop() { echo "CELL2_STOP $*"; exit 2; }
-[ -x "$BIN" ] || stop "embed binary missing"
-[ -x "$KDB" ] || stop "krb5-kdb missing"
-[ -f "$SRC/tr-mit-kdc.conf" ] || stop "saved mit profile missing"
-[ -f "$SRC/tr-ours-kdc.conf" ] || stop "saved ours profile missing"
+require_bins "$BIN" "$KDB"
+require_files "$LAB" "$EXTRA" "$SRC/tr-mit-kdc.conf" "$SRC/tr-ours-kdc.conf"
+# The embed binary must be the one step 1 built for this sha.
+EXPECT=$(awk '$1 == "EXTRA" && $2 == "krb5-embed-realm" { print $3 }' "$EXTRA")
 got=$(sha256sum "$BIN" | awk 'NR==1 {print $1}')
-[ "$got" = "$EXPECT" ] || stop "embed sha is $got"
+[ -n "$EXPECT" ] && [ "$got" = "$EXPECT" ] || stop "embed sha is $got, step 1 has ${EXPECT:-none}"
 kdb_sha=$(sha256sum "$KDB" | awk 'NR==1 {print $1}')
 mkdir -p "$REC"
 echo "REC:hand-tr-cell2-$(date -u +%Y%m%dT%H%M%SZ)"

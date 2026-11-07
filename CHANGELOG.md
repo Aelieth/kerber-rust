@@ -85,6 +85,9 @@ any other `###` heading.
 - **hand.** `rp-cm.sh`: MIT clients, SSSD on 4 distros, Heimdal's tools; `rp-ws.sh`: Windows 11's client.
 - **ci.** The peers job fails unless all seven Samba gates ran and passed; it went green with none run.
 - **gss.** Both GSS test acceptors can check a MIC and send a wrapped reply, for the Windows cells.
+- **hand.** Hand drivers stop before the lab when a program or input they read is missing.
+- **hand.** Step 1 records its extras even when the 13 differ; TR cell 2 checks its embed binary against it.
+- **hand.** An empty compare or secret, or a failed scan, reset or parity run now fails its leg.
 
 ## [1.2.0] - 2026-11-04
 
