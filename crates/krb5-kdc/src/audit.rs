@@ -18,6 +18,8 @@ use crate::store::Principal;
 
 pub const AUTHN_REQ_CL: i32 = 1;
 pub const SRVC_PRINC: i32 = 2;
+pub const VALIDATE_POL: i32 = 3;
+pub const ISSUE_TKT: i32 = 4;
 pub const ENCR_REP: i32 = 5;
 
 /// 32 with the C NUL, so the printable id is 31.
@@ -197,31 +199,6 @@ pub fn kdc_error_message(code: i32) -> String {
         _ => return format!("KRB5 error code {code}"),
     };
     text.to_owned()
-}
-
-// MIT: `gather_tgs_req_info` (kdc/do_tgs_req.c:727-754)
-/// Early TGS failure logs authtime 0: subject ticket not open yet.
-fn tgs_failed_before_authtime(status: &str) -> bool {
-    matches!(
-        status,
-        status::PROCESS_TGS
-            | status::FIND_FAST
-            | status::NULL_SERVER
-            | status::GET_LOCAL_TGT
-            | status::HEADER_PAC
-            | status::LOOKING_UP_SERVER
-            | status::UNKNOWN_SERVER
-            | status::DECODE_PA_FOR_USER
-            | status::DECODE_PA_S4U_X509_USER
-            | status::INVALID_S4U2SELF_CHECKSUM
-            | status::INVALID_S4U2SELF_REQUEST
-            | status::LOOKING_UP_S4U2SELF_PRINCIPAL
-            | status::UNKNOWN_S4U2SELF_PRINCIPAL
-            | status::SECOND_TKT_SERVER
-            | status::SECOND_TKT_DECRYPT
-            | status::SECOND_TKT_PAC
-            | status::RBCD_PAC_PRINC
-    )
 }
 
 enum MitOutcome<'a> {
@@ -427,8 +404,25 @@ pub(crate) struct TgsFacts {
     pub(crate) s4u_client: Option<String>,
     pub(crate) authtime: u32,
     pub(crate) ses: Option<i32>,
-    pub(crate) s4u2self_ok: Option<bool>,
-    pub(crate) s4u2proxy_refused: bool,
+    pub(crate) stage: i32,
+    pub(crate) au_status: Option<String>,
+    events: Vec<(&'static str, bool, i32, Option<String>)>,
+}
+
+impl TgsFacts {
+    // MIT: `kau_s4u2self` (kdc/kdc_audit.c:300-305)
+    pub(crate) fn event(&mut self, name: &'static str, success: bool) {
+        let stage = self.stage.max(AUTHN_REQ_CL);
+        self.events
+            .push((name, success, stage, self.au_status.clone()));
+    }
+}
+
+pub(crate) fn error_status(e: &crate::error::Error) -> Option<String> {
+    match e {
+        crate::error::Error::Protocol { text, .. } => text.clone(),
+        _ => None,
+    }
 }
 
 pub(crate) fn note_tgs(f: impl FnOnce(&mut TgsFacts)) {
@@ -621,16 +615,6 @@ fn seed_tgs_req(store: &dyn PrincipalRead, req: &TgsReq, sender: Option<&HostAdd
     state.stage = AUTHN_REQ_CL;
     state.tkt_in_id = tgs_header_tkt_id(req);
     each_audit(store, |module| module.tgs_req(true, &state));
-}
-
-fn tgs_fail_stage(e_text: &str) -> i32 {
-    match e_text {
-        status::LOOKING_UP_SERVER
-        | status::UNKNOWN_SERVER
-        | status::SERVER_NOT_FOUND
-        | status::NULL_SERVER => SRVC_PRINC,
-        _ => AUTHN_REQ_CL,
-    }
 }
 
 // MIT: `armor_ap_request` (kdc/fast_util.c:57-58)
@@ -897,7 +881,7 @@ fn tgs_success(
     let etypes = rep_etypes2str(rep.0.enc_part.etype, Some(ticket.enc_part.etype), facts.ses);
     let req_etypes = ktypes2str(&body.etype);
     let from = format_from(sender);
-    let s4u = tgs_s4u_line(req, &facts);
+    let s4u = tgs_s4u_line(&facts);
     emit_issue(
         "TGS_REQ",
         &req_etypes,
@@ -939,17 +923,7 @@ fn tgs_success(
     } else {
         2
     };
-    // MIT: `tgs_issue_ticket` (do_tgs_req.c:1056-1058)
-    // MIT: `tgs_issue_ticket` (do_tgs_req.c:1123-1124)
-    let u2u = body.kdc_options.bit(flag_bit::ENC_TKT_IN_SKEY);
-    tgs_s4u_events(
-        store,
-        &state,
-        &facts,
-        true,
-        u2u,
-        facts.constrained_delegation,
-    );
+    tgs_s4u_events(store, &state, &facts, facts.constrained_delegation);
     each_audit(store, |audit| audit.tgs_req(true, &state));
     clear_req_id();
 }
@@ -977,8 +951,7 @@ fn tgs_failure(
         e_text
     };
     let nomatch = code == err::SERVER_NOMATCH;
-    let early = tgs_failed_before_authtime(status);
-    let authtime = if early { 0 } else { facts.authtime };
+    let authtime = facts.authtime;
     emit_issue(
         "TGS_REQ",
         &req_etypes,
@@ -997,9 +970,7 @@ fn tgs_failure(
         },
         duration_us,
     );
-    let s4u = (!early || status == status::RBCD_PAC_PRINC)
-        .then(|| tgs_s4u_line(req, &facts))
-        .flatten();
+    let s4u = tgs_s4u_line(&facts);
     klog_tgs_req(
         &req_etypes,
         &from,
@@ -1014,10 +985,10 @@ fn tgs_failure(
         s4u.as_ref().map(|(k, c)| (*k, c.as_str())),
     );
     let mut state = base_state("TGS_REQ", body, sender);
-    state.stage = tgs_fail_stage(status);
+    state.stage = facts.stage.max(AUTHN_REQ_CL);
     state.status = Some(status.to_string());
     state.tkt_in_id = tgs_header_tkt_id(req);
-    tgs_s4u_events(store, &state, &facts, false, false, facts.s4u2proxy_refused);
+    tgs_s4u_events(store, &state, &facts, false);
     each_audit(store, |audit| audit.tgs_req(false, &state));
     clear_req_id();
 }
@@ -1194,61 +1165,43 @@ fn tgs_error_client(store: &dyn PrincipalRead, req: &TgsReq, realm: &str) -> Str
 }
 
 // MIT: `log_tgs_req` (kdc/kdc_log.c:153-160)
-fn tgs_s4u_line(req: &TgsReq, facts: &TgsFacts) -> Option<(&'static str, String)> {
-    if facts.protocol_transition {
-        let padata = req.0.padata.as_deref().unwrap_or_default();
-        let client = facts
+fn tgs_s4u_line(facts: &TgsFacts) -> Option<(&'static str, String)> {
+    let kind = if facts.protocol_transition {
+        "PROTOCOL-TRANSITION"
+    } else if facts.constrained_delegation {
+        "CONSTRAINED-DELEGATION"
+    } else {
+        return None;
+    };
+    Some((
+        kind,
+        facts
             .s4u_client
             .clone()
-            .unwrap_or_else(|| s4u_user_unparse(padata));
-        return Some(("PROTOCOL-TRANSITION", client));
-    }
-    facts.constrained_delegation.then(|| {
-        let client = facts
-            .s4u_client
-            .clone()
-            .unwrap_or_else(|| "<unknown>".into());
-        ("CONSTRAINED-DELEGATION", client)
-    })
+            .unwrap_or_else(|| "<unknown>".into()),
+    ))
 }
 
-// MIT: `gather_tgs_req_info` (kdc/do_tgs_req.c:697-702)
-fn tgs_s4u_events(
-    store: &dyn PrincipalRead,
-    state: &AuditState,
-    facts: &TgsFacts,
-    success: bool,
-    u2u: bool,
-    proxy: bool,
-) {
+// MIT: `tgs_issue_ticket` (kdc/do_tgs_req.c:1123-1124)
+fn tgs_s4u_events(store: &dyn PrincipalRead, state: &AuditState, facts: &TgsFacts, proxy: bool) {
     each_audit(store, |audit| {
-        let event = |name| {
+        for (name, success, stage, status) in &facts.events {
             let mut s4u_state = state.clone();
             s4u_state.event_name = name;
-            s4u_state
-        };
-        if let Some(ok) = facts.s4u2self_ok {
-            audit.s4u2self(ok, &event("S4U2SELF"));
-        }
-        if u2u {
-            audit.u2u(true, &event("U2U"));
+            s4u_state.stage = *stage;
+            s4u_state.status.clone_from(status);
+            match *name {
+                "S4U2SELF" => audit.s4u2self(*success, &s4u_state),
+                "U2U" => audit.u2u(*success, &s4u_state),
+                _ => audit.s4u2proxy(*success, &s4u_state),
+            }
         }
         if proxy {
-            audit.s4u2proxy(success, &event("S4U2PROXY"));
+            let mut s4u_state = state.clone();
+            s4u_state.event_name = "S4U2PROXY";
+            audit.s4u2proxy(true, &s4u_state);
         }
     });
-}
-
-fn s4u_user_unparse(padata: &[krb5_types::PaData]) -> String {
-    for p in padata {
-        if p.padata_type == pa::FOR_USER
-            && let Ok(fu) = decode::<krb5_types::s4u::PaForUser>(p.padata_value.as_ref())
-        {
-            let realm = realm_str(&fu.user_realm);
-            return fu.user_name.unparse_with_realm_lossy(&realm);
-        }
-    }
-    "<unknown>".into()
 }
 
 fn opt_unparse(name: Option<&PrincipalName>, realm: &str, fallback: &str) -> String {
@@ -1331,7 +1284,11 @@ impl AuditState {
         if let Some(addr) = &self.cl_addr {
             j.raw("fromaddr", &addr_json(addr));
         }
-        j.opt_str("kdc_status", self.status.as_deref());
+        // MIT: `kau_j_tgs_s4u2self` (plugins/audit/kdc_j_encode.c:292-294)
+        let s4u = matches!(self.event_name, "S4U2SELF" | "S4U2PROXY" | "U2U");
+        if !(s4u && success) {
+            j.opt_str("kdc_status", self.status.as_deref());
+        }
         if let Some(c) = &self.req_client {
             j.raw(
                 "req.client",

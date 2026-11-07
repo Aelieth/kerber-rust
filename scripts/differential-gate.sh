@@ -350,12 +350,26 @@ for want in \
     "$PT, Requested protocol version not supported"; do
     grep -qxF "$want" <<<"$PT_MIT" || die "no PROCESS_TGS line: $want"
 done
+# MIT `log_tgs_req` (`kdc/kdc_log.c:153-160`): every S4U line and the TGS line before it, as MIT's,
+# one for one and in order; a failure before `gather_tgs_req_info` sets authtime (`:759`) logs 0.
+s4u_tgs_lines() {
+    grep -v '^{' "$1" | grep -B1 -E ': \.\.\. (PROTOCOL-TRANSITION|CONSTRAINED-DELEGATION) ' |
+        grep -v '^--$' | sed -E 's/^.*: (TGS_REQ |\.\.\. )/\1/; s/authtime [1-9][0-9]*/authtime N/'
+}
+S4U_MIT="$(s4u_tgs_lines "$OUT/mit-kdc.log")"
+S4U_RUST="$(s4u_tgs_lines "$OUT/rust-kdc.log")"
+[ -n "$S4U_MIT" ] && [ "$S4U_RUST" = "$S4U_MIT" ] || {
+    diff <(echo "$S4U_MIT") <(echo "$S4U_RUST") >&2 || true
+    die "the Rust KDC's S4U TGS lines are not MIT's"
+}
+grep -A1 -F ': 2ND_TKT_SERVER: authtime 0,  host/testhost.kerber.test@KERBER.TEST for host/testhost.kerber.test@KERBER.TEST, No matching key in entry having a permitted enctype' <<<"$S4U_MIT" |
+    grep -qxF '... PROTOCOL-TRANSITION s4u-client=user@KERBER.TEST' || die "no S4U2Self line with authtime 0 after its second ticket fails"
 # W1-Z Z3.3: the ratchet is checked against the distinct cases diffsend
 # actually emitted, not the literal its summary line claims (a stale
 # "cases":N in diffsend.rs would otherwise pass). History: A'-3 R32 102 ·
 # A'-4 item 16 105 · item 17 106 · item 18 107 · W1-B F4 109 · W1-Z Z1.3 110 · Z6.2 111 ·
-# as-locked-out 112 · RA 123 · a1-tgs 128 · replay 129 · nopost 130 · s4u-client 132 · fast-cksum 133 · explicit-armor 134 · armor-no-tgs-subkey 135 · armor-no-subkey 136 · reserved-option 137 · service-expired 138 · service-locked 139 · B17 cms 149 · B17b structure 151 · FAST armor 178 · FAST checksums 188 · transit hop 189 · local transit 190 · FAST replies 192 · FAST flips 196 · armor authdata 209 · TGS decode 212.
-DIFFSEND_RATCHET=212
+# as-locked-out 112 · RA 123 · a1-tgs 128 · replay 129 · nopost 130 · s4u-client 132 · fast-cksum 133 · explicit-armor 134 · armor-no-tgs-subkey 135 · armor-no-subkey 136 · reserved-option 137 · service-expired 138 · service-locked 139 · B17 cms 149 · B17b structure 151 · FAST armor 178 · FAST checksums 188 · transit hop 189 · local transit 190 · FAST replies 192 · FAST flips 196 · armor authdata 209 · TGS decode 212 · TGS check order 216.
+DIFFSEND_RATCHET=216
 CASES_SEEN="$(grep -o '"case":"[^"]*","outcome":"ok"' <<<"$DIFF" | sort -u | wc -l | tr -d ' ')"
 [ "$CASES_SEEN" = "$DIFFSEND_RATCHET" ] || die "diffsend emitted $CASES_SEEN distinct ok cases; the ratchet is $DIFFSEND_RATCHET"
 grep -q "\"outcome\":\"ok\",\"cases\":$DIFFSEND_RATCHET}" <<<"$DIFF" || die "diffsend summary line does not claim $DIFFSEND_RATCHET cases"
@@ -544,6 +558,10 @@ grep -q '"case":"tgs-addr-mismatch","outcome":"ok","error_code":38,"e_text":"PRO
 grep -q '"case":"tgs-forwarded-addresses","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d"' <<<"$DIFF" || die "tgs-forwarded-addresses not TGS-REP on both legs"
 grep -q '"case":"u2u-2nd-ticket-foreign-realm","outcome":"ok","error_code":7,"e_text":"2ND_TKT_SERVER","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "u2u-2nd-ticket-foreign-realm not code 7 e_text 2ND_TKT_SERVER on both legs"
 grep -q '"case":"s4u2self-renew-options","outcome":"ok","error_code":13,"e_text":"INVALID S4U2SELF OPTIONS","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "s4u2self-renew-options not code 13 e_text INVALID S4U2SELF OPTIONS on both legs"
+grep -q '"case":"tgs-order-s4u2self-cksum-renew","outcome":"ok","error_code":41,"e_text":"INVALID_S4U2SELF_CHECKSUM","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-order-s4u2self-cksum-renew not code 41 e_text INVALID_S4U2SELF_CHECKSUM on both legs"
+grep -q '"case":"tgs-order-proxy-no-stkt-renew","outcome":"ok","error_code":60,"e_text":"UNKNOWN_REASON","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-order-proxy-no-stkt-renew not code 60 e_text UNKNOWN_REASON on both legs"
+grep -q '"case":"tgs-order-u2u-stkt-unknown-bit","outcome":"ok","error_code":60,"e_text":"2ND_TKT_SERVER","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-order-u2u-stkt-unknown-bit not code 60 e_text 2ND_TKT_SERVER on both legs"
+grep -q '"case":"tgs-order-s4u2self-bad-stkt","outcome":"ok","error_code":60,"e_text":"2ND_TKT_SERVER","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-order-s4u2self-bad-stkt not code 60 e_text 2ND_TKT_SERVER on both legs"
 grep -q '"case":"pa-s4u-x509-user-truncated","outcome":"ok","error_code":60,"e_text":"DECODE_PA_S4U_X509_USER","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "pa-s4u-x509-user-truncated not code 60 e_text DECODE_PA_S4U_X509_USER on both legs"
 grep -q '"case":"s4u2self-krbtgt-other","outcome":"ok","error_code":36,"e_text":"INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "s4u2self-krbtgt-other not code 36 e_text INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH on both legs"
 grep -q '"case":"tgs-locked-pac-mismatch","outcome":"ok","error_code":13,"e_text":"HEADER_PAC","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-locked-pac-mismatch not code 13 e_text HEADER_PAC on both legs"

@@ -3151,6 +3151,105 @@ fn run() -> Result<(), String> {
         .map_err(|e| e.to_string())?,
         err::BADOPTION,
     )?;
+
+    // MIT: `gather_tgs_req_info` (do_tgs_req.c:592-807)
+    let order_req = |kdc_options: KdcOptions,
+                     extra_padata: Vec<PaData>,
+                     additional_tickets: Option<Vec<Ticket>>,
+                     nonce: u32|
+     -> Result<Vec<u8>, String> {
+        encode(
+            &tgs_req_ex(TgsReqParams {
+                ticket: host_hdr(&host, false)?,
+                session: &sess,
+                crealm: realm,
+                cname: &host,
+                sname: host.clone(),
+                realm,
+                nonce,
+                kdc_options,
+                additional_tickets,
+                extra_padata,
+                etypes: etypes.clone(),
+                addresses: None,
+                from: None,
+                enc_authorization_data: None,
+                till: None,
+                subkey: None,
+                time_offset: 0,
+            })
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())
+    };
+    let mut bad_for_user = pa_for_user(&sess, user.clone(), realm).map_err(|e| e.to_string())?;
+    let mut for_user: krb5_types::s4u::PaForUser =
+        decode(bad_for_user.padata_value.as_ref()).map_err(|e| e.to_string())?;
+    let mut ck = for_user.cksum.checksum.to_vec();
+    if let Some(b) = ck.first_mut() {
+        *b ^= 0xff;
+    }
+    for_user.cksum.checksum = ck.into();
+    bad_for_user.padata_value = encode(&for_user).map_err(|e| e.to_string())?.into();
+    expect_error(
+        &cfg,
+        "tgs-order-s4u2self-cksum-renew",
+        &order_req(
+            KdcOptions::forwardable().with_bit(flag_bit::RENEW, true),
+            vec![bad_for_user],
+            None,
+            0x1000_0338,
+        )?,
+        err::MODIFIED,
+    )?;
+    expect_error(
+        &cfg,
+        "tgs-order-proxy-no-stkt-renew",
+        &order_req(
+            KdcOptions::forwardable()
+                .with_bit(flag_bit::CNAME_IN_ADDL_TKT, true)
+                .with_bit(flag_bit::RENEW, true),
+            vec![],
+            None,
+            0x1000_0339,
+        )?,
+        err::GENERIC,
+    )?;
+    let mut bad_stkt = mint_tgt(
+        tkt_key,
+        tkt_kvno,
+        &host,
+        realm,
+        &krbtgt_sname,
+        &sess,
+        window10.clone(),
+        TicketFlags::initial_preauth(),
+    )?;
+    bad_stkt.enc_part.etype = 99;
+    expect_error(
+        &cfg,
+        "tgs-order-u2u-stkt-unknown-bit",
+        &order_req(
+            KdcOptions::forwardable()
+                .with_bit(flag_bit::ENC_TKT_IN_SKEY, true)
+                .with_bit(17, true),
+            vec![],
+            Some(vec![bad_stkt.clone()]),
+            0x1000_033a,
+        )?,
+        err::GENERIC,
+    )?;
+    expect_error(
+        &cfg,
+        "tgs-order-s4u2self-bad-stkt",
+        &order_req(
+            KdcOptions::forwardable().with_bit(flag_bit::ENC_TKT_IN_SKEY, true),
+            vec![pa_for_user(&sess, user.clone(), realm).map_err(|e| e.to_string())?],
+            Some(vec![bad_stkt]),
+            0x1000_033b,
+        )?,
+        err::GENERIC,
+    )?;
     expect_error(
         &cfg,
         "pa-s4u-x509-user-truncated",
@@ -5466,7 +5565,7 @@ fn run() -> Result<(), String> {
     ra_cases(&cfg, realm, &user, &host)?;
     fa_cases(&cfg, realm, &user, &host)?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":212}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":216}}"#);
     Ok(())
 }
 

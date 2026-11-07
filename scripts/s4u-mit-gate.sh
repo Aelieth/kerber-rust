@@ -516,8 +516,8 @@ same_tgs_log() {
     echo "TGS_LOG:$1:equal"
 }
 
-# The TGS audit events in order (kau_*), MIT's test module against ours' TestAudit. AS is kdc-gate.sh's: the
-# two test realms differ in preauth.
+# The TGS audit events in order (kau_*) with their stage and status, MIT's test module against ours'
+# TestAudit. AS is kdc-gate.sh's: the two test realms differ in preauth.
 audit_events() {
     docker exec "$NAME" cat "$1" | python3 -c '
 import json, sys
@@ -526,7 +526,8 @@ for line in sys.stdin:
     if line.startswith("{"):
         r = json.loads(line)
         if r.get("event_name") in ("TGS_REQ", "S4U2SELF", "S4U2PROXY", "U2U"):
-            print(r.get("event_name"), "ok" if r.get("event_success") in (True, 1) else "fail")
+            ok = "ok" if r.get("event_success") in (True, 1) else "fail"
+            print(r.get("event_name"), ok, r.get("stage"), r.get("kdc_status", "-"))
 '
 }
 
