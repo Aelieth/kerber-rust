@@ -598,12 +598,21 @@ fn keytab_client(
     let Some(kt) = read.and_then(|bytes| Keytab::parse(&bytes).ok()) else {
         return Ok(me.clone());
     };
-    krb5_protocol::keytab_init_creds_client(&kt, conf, me)
-        .map(|(found, _, _)| found)
-        .ok_or_else(|| {
+    match krb5_protocol::keytab_init_creds_client(&kt, conf, me) {
+        Ok(Some((found, _, _))) => Ok(found),
+        Ok(None) => {
             let text = format!("Keytab contains no suitable keys for {name}");
-            Krb5Error::new(Code::Other, text)
-        })
+            Err(Krb5Error::new(Code::Other, text))
+        }
+        Err(e) => {
+            let failure = krb5_protocol::KeytabFailure::from_sname(&e);
+            krb5_protocol::trace::init_creds_keytab_lookup_failed(
+                failure.code,
+                Some(&failure.text),
+            );
+            Ok(me.clone())
+        }
+    }
 }
 
 fn in_tkt_service(opts: &KinitArgs) -> Option<&str> {

@@ -240,11 +240,14 @@ pub fn store(ctx: &ClientContext, spec: &CcSpec, cred: &CcacheCred) {
     }
 }
 
-pub fn cache_match(client: &Princ, found: bool) {
+pub fn cache_match(client: &Princ, found: Result<bool, &krb5_config::SnameError>) {
     if !trace::enabled() {
         return;
     }
-    if found {
+    if let Err(e) = found {
+        let failure = krb5_protocol::KeytabFailure::from_sname(e);
+        trace::cc_cache_match(princ(client), failure.code, Some(&failure.text));
+    } else if found == Ok(true) {
         trace::cc_cache_match(princ(client), 0, None);
     } else {
         let msg = format!(

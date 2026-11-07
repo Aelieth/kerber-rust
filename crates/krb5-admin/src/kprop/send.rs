@@ -248,17 +248,22 @@ pub(crate) fn init_creds_keytab(
                 krb5_types::try_ascii(realm).unwrap_or_default(),
                 client.clone(),
             );
-            let Some(((_, found), keys, kt_etypes)) =
-                krb5_protocol::keytab_init_creds_client(&kt, conf, &wanted)
-            else {
-                return Err(KpropError::code(KT_NOTFOUND, GETTING_CREDS));
-            };
-            client = found;
-            trace::init_creds_keytab_lookup(
-                trace::Princ::new(&client, realm.as_bytes()),
-                &kt_etypes,
-            );
-            (keys, kt_etypes, None)
+            match krb5_protocol::keytab_init_creds_client(&kt, conf, &wanted) {
+                Ok(Some(((_, found), keys, kt_etypes))) => {
+                    client = found;
+                    trace::init_creds_keytab_lookup(
+                        trace::Princ::new(&client, realm.as_bytes()),
+                        &kt_etypes,
+                    );
+                    (keys, kt_etypes, None)
+                }
+                Ok(None) => return Err(KpropError::code(KT_NOTFOUND, GETTING_CREDS)),
+                Err(e) => {
+                    let failure = krb5_protocol::KeytabFailure::from_sname(&e);
+                    trace::init_creds_keytab_lookup_failed(failure.code, Some(&failure.text));
+                    (Vec::new(), Vec::new(), Some(failure))
+                }
+            }
         }
         None => return Err(KpropError::code(KT_NOTFOUND, GETTING_CREDS)),
     };

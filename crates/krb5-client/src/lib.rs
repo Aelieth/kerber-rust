@@ -1357,23 +1357,33 @@ fn kinit_inner(
             Ok(bytes) => {
                 let parsed = Keytab::parse(&bytes)?;
                 // MIT: `krb5_init_creds_set_keytab` (lib/krb5/krb/gic_keytab.c:191-224)
-                let ((found_realm, found), keys, kt_etypes) =
-                    krb5_protocol::keytab_init_creds_client(&parsed, &ctx.profile, me).ok_or_else(
-                        || {
-                            let name = cname.unparse_with_realm_lossy(&realm_s);
-                            let text = format!("Keytab contains no suitable keys for {name}");
-                            Krb5Error::new(Code::Other, text)
-                        },
-                    )?;
-                cname = found;
-                realm_s = String::from_utf8_lossy(found_realm.as_bytes()).into_owned();
-                krb5_protocol::trace::init_creds_keytab_lookup(
-                    krb5_protocol::trace::Princ::new(&cname, realm_s.as_bytes()),
-                    &kt_etypes,
-                );
-                krb5_protocol::sort_etypes_keytab_first(&mut etypes, &kt_etypes);
-                kt = Some(parsed);
-                Some(keys)
+                match krb5_protocol::keytab_init_creds_client(&parsed, &ctx.profile, me) {
+                    Ok(Some(((found_realm, found), keys, kt_etypes))) => {
+                        cname = found;
+                        realm_s = String::from_utf8_lossy(found_realm.as_bytes()).into_owned();
+                        krb5_protocol::trace::init_creds_keytab_lookup(
+                            krb5_protocol::trace::Princ::new(&cname, realm_s.as_bytes()),
+                            &kt_etypes,
+                        );
+                        krb5_protocol::sort_etypes_keytab_first(&mut etypes, &kt_etypes);
+                        kt = Some(parsed);
+                        Some(keys)
+                    }
+                    Ok(None) => {
+                        let name = cname.unparse_with_realm_lossy(&realm_s);
+                        let text = format!("Keytab contains no suitable keys for {name}");
+                        return Err(Krb5Error::new(Code::Other, text).into());
+                    }
+                    Err(e) => {
+                        let failure = KeytabFailure::from_sname(&e);
+                        krb5_protocol::trace::init_creds_keytab_lookup_failed(
+                            failure.code,
+                            Some(&failure.text),
+                        );
+                        keytab_failure = Some(failure);
+                        None
+                    }
+                }
             }
         }
     } else {
