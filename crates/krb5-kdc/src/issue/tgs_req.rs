@@ -189,14 +189,25 @@ fn gather_tgs_req_info<'a>(
     tgs_fast: Option<&'a FastOk>,
     header: HeaderTgt,
 ) -> Result<TgsGather<'a>, Error> {
-    if body.kdc_options.unsupported_bits() != 0 {
-        return Err(proto(err::BADOPTION, status::UNKNOWN_REASON));
-    }
     let tgs_padata = if let Some(f) = tgs_fast {
         Some(f.inner_padata.as_slice())
     } else {
         req.0.padata.as_deref()
     };
+    // MIT: `gather_tgs_req_info` (do_tgs_req.c:706-708)
+    // MIT: `gather_tgs_req_info` (do_tgs_req.c:729-730)
+    // MIT: `gather_tgs_req_info` (do_tgs_req.c:759)
+    crate::audit::note_tgs(|f| {
+        f.protocol_transition = tgs_padata.is_some_and(|p| {
+            p.iter()
+                .any(|d| d.padata_type == pa::FOR_USER || d.padata_type == pa::FOR_X509_USER)
+        });
+        f.constrained_delegation = body.kdc_options.bit(flag_bit::CNAME_IN_ADDL_TKT);
+        f.authtime = header.enc_tkt.authtime.unix_seconds();
+    });
+    if body.kdc_options.unsupported_bits() != 0 {
+        return Err(proto(err::BADOPTION, status::UNKNOWN_REASON));
+    }
     let HeaderTgt {
         ap,
         enc_tkt,
@@ -289,13 +300,23 @@ fn check_tgs_req<'a>(
     let mut s4u_subject: Option<(PrincipalName, String)> = None;
     let mut subject_authtime = enc_tkt.authtime.clone();
     let mut subject_pac = header_pac.clone();
-    if let Some(s4u) = process_s4u2self_req(
+    let s4u2self_req = process_s4u2self_req(
         store,
         &tgt_session,
         authenticator.subkey.as_ref(),
         tgs_padata,
         body.nonce,
-    )? {
+    );
+    // MIT: `gather_tgs_req_info` (do_tgs_req.c:697-708)
+    crate::audit::note_tgs(|f| {
+        if let Ok(Some(s4u)) = &s4u2self_req {
+            f.s4u_client = Some(s4u.user.unparse_with_realm_lossy(&s4u.realm));
+        }
+        if !matches!(s4u2self_req, Ok(None)) {
+            f.s4u2self_ok = Some(s4u2self_req.is_ok());
+        }
+    });
+    if let Some(s4u) = s4u2self_req? {
         let header_cross = utf8_realm(&ap.ticket.realm)? != store.realm();
         let is_referral = tgs_issuing_referral(&sname, req_realm.as_str(), &server);
         let is_self = utf8_realm(&enc_tkt.crealm)? == store.realm()
@@ -347,17 +368,32 @@ fn check_tgs_req<'a>(
             return Err(proto(err::GENERIC, status::UNKNOWN_REASON));
         };
         if is_crossrealm {
-            let pac = st
+            // MIT: `gather_tgs_req_info` (do_tgs_req.c:737-743)
+            let rbcd = st
                 .pac
                 .as_deref()
-                .ok_or_else(|| proto(err::BADOPTION, status::RBCD_PAC_PRINC))?;
-            let (cname, crealm) = rbcd_pac_client(pac)?;
+                .ok_or_else(|| proto(err::BADOPTION, status::RBCD_PAC_PRINC))
+                .and_then(rbcd_pac_client);
+            let (cname, crealm) =
+                rbcd.inspect_err(|_| crate::audit::note_tgs(|f| f.s4u2proxy_refused = true))?;
             s4u_subject = Some((cname.clone(), crealm.clone()));
             if !is_referral {
                 ticket_cname = cname;
                 ticket_crealm = crealm;
             }
         }
+        // MIT: `gather_tgs_req_info` (do_tgs_req.c:744-759)
+        crate::audit::note_tgs(|f| {
+            f.s4u_client = Some(s4u_subject.as_ref().map_or_else(
+                || {
+                    st.part
+                        .cname
+                        .unparse_with_realm_lossy(utf8_realm(&st.part.crealm).unwrap_or_default())
+                },
+                |(n, r)| n.unparse_with_realm_lossy(r),
+            ));
+            f.authtime = st.part.authtime.unix_seconds();
+        });
         check_tgs_s4u2proxy(
             store,
             body,
@@ -386,7 +422,15 @@ fn check_tgs_req<'a>(
         evidence_logon = carried_logon(store, &ap, header_pac.as_deref())?;
     }
     // MIT: `check_tgs_req` (do_tgs_req.c:872-882)
-    check_tgs_policy_flags(&server, body, ap.ticket.sname.is_krbtgt(), &enc_tkt)?;
+    // MIT: `check_tgs_req` (do_tgs_req.c:883-891)
+    let proxy_refused = |e| {
+        if s4u2proxy {
+            crate::audit::note_tgs(|f| f.s4u2proxy_refused = true);
+        }
+        e
+    };
+    check_tgs_policy_flags(&server, body, ap.ticket.sname.is_krbtgt(), &enc_tkt)
+        .map_err(proxy_refused)?;
     let local_tgt_key = local_tgt
         .as_ref()
         .and_then(|t| store.policy().first_current_key(t).ok())
@@ -415,9 +459,10 @@ fn check_tgs_req<'a>(
             &server,
             is_crossrealm,
             is_referral,
-        )?;
+        )
+        .map_err(proxy_refused)?;
     }
-    check_anon(store, &enc_tkt.cname, &server.name)?;
+    check_anon(store, &enc_tkt.cname, &server.name).map_err(proxy_refused)?;
     let skip_transited = body.kdc_options.bit(flag_bit::DISABLE_TRANSITED_CHECK);
     let u2u = if body.kdc_options.bit(flag_bit::ENC_TKT_IN_SKEY) {
         let st = stkt
@@ -574,6 +619,8 @@ fn tgs_flags_times_policy<'a>(
         transited,
     } = c;
     let session = random_key(session_etype)?;
+    // MIT: `rep_etypes2str` (kdc/kdc_util.c:1219-1226)
+    crate::audit::note_tgs(|f| f.ses = Some(session_etype.to_iana()));
     let subject_cname = stkt.as_ref().map_or(&enc_tkt.cname, |s| &s.part.cname);
     let subject_crealm = if let Some(st) = stkt.as_ref() {
         utf8_realm(&st.part.crealm)?

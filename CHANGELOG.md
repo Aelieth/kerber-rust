@@ -44,6 +44,7 @@ any other `###` heading.
 - **kdc, kpropd.** An error reply that fails to encode isn't sent and is logged, as MIT; it went out empty.
 - **kdc.** A dump or iprop update keeps unsupported key slots and bad KADM_DATA, as MIT; it was refused.
 - **kdc.** An OTP refusal logs `Preauthentication failed` as MIT, with no per-attempt Error line.
+- **kdc.** TGS log lines and audit events for U2U and S4U carry MIT's authtime, session etype and S4U client.
 
 ### Removed
 

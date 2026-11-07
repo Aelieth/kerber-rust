@@ -497,6 +497,52 @@ echo "$KLIST_BM" | grep -q 'host/testhost.kerber.test'
 echo "$KLIST_BM" | grep -qE 'Addresses: [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+'
 echo "MIT_kinit_a_both_legs"
 
+# The KDCs' TGS lines and their S4U lines (kdc_log.c:117-164), the prefix and nonzero authtimes cut: MIT's
+# and ours' must match, ses= and the s4u-client included.
+tgs_log_rows() {
+    printf '%s\n' "$1" | grep -E 'TGS_REQ |: \.\.\. ' | sed -E 's/^.*(TGS_REQ |\.\.\. )/\1/; s/authtime [1-9][0-9]*/authtime N/' | sort
+}
+
+same_tgs_log() {
+    local mit rust
+    mit="$(tgs_log_rows "$2")"
+    rust="$(tgs_log_rows "$3")"
+    printf '%s\n' "$mit"
+    if [ -z "$mit" ] || [ "$mit" != "$rust" ]; then
+        echo "TGS_LOG:$1:differ"
+        diff <(printf '%s\n' "$mit") <(printf '%s\n' "$rust") || true
+        return 1
+    fi
+    echo "TGS_LOG:$1:equal"
+}
+
+# The TGS audit events in order (kau_*), MIT's test module against ours' TestAudit. AS is kdc-gate.sh's: the
+# two test realms differ in preauth.
+audit_events() {
+    docker exec "$NAME" cat "$1" | python3 -c '
+import json, sys
+for line in sys.stdin:
+    line = line.strip()
+    if line.startswith("{"):
+        r = json.loads(line)
+        if r.get("event_name") in ("TGS_REQ", "S4U2SELF", "S4U2PROXY", "U2U"):
+            print(r.get("event_name"), "ok" if r.get("event_success") in (True, 1) else "fail")
+'
+}
+
+same_audit() {
+    local mit rust
+    mit="$(audit_events "$2")"
+    rust="$(audit_events "$3")"
+    printf '%s\n' "$mit"
+    if [ -z "$mit" ] || [ "$mit" != "$rust" ]; then
+        echo "AUDIT:$1:differ"
+        diff <(printf '%s\n' "$mit") <(printf '%s\n' "$rust") || true
+        return 1
+    fi
+    echo "AUDIT:$1:equal"
+}
+
 echo "==== MIT test-KDB kvno -U user -P (classic S4U2Proxy happy) ===="
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-pac-extract" "$NAME":/tmp/krb5-pac-extract
 docker exec "$NAME" chmod +x /tmp/krb5-pac-extract
@@ -520,10 +566,10 @@ docker exec "$NAME" sh -c 'cat >/tmp/test-kdc.conf <<EOF
             }
             host/testhost.kerber.test = {
                 flags = +ok-to-auth-as-delegate
-                keys = aes256-cts
+                keys = aes256-sha2 aes256-cts
             }
             host/rbcd.kerber.test = {
-                keys = aes256-cts
+                keys = aes256-sha2 aes256-cts
             }
         }
         delegation = {
@@ -535,6 +581,10 @@ docker exec "$NAME" sh -c 'cat >/tmp/test-kdc.conf <<EOF
     }
 [logging]
     kdc = FILE:/tmp/mit-test.log
+[plugins]
+    audit = {
+        module = test:/usr/lib/krb5/plugins/audit/k5audit_test.so
+    }
 EOF
 cat >/tmp/test-krb5.conf <<EOF
 [libdefaults]
@@ -555,7 +605,7 @@ kadmin_q_ok mit_kadmin_local -e KRB5_CONFIG=/tmp/test-krb5.conf -e KRB5_KDC_PROF
     "$NAME" -- -r KERBER.TEST -q \
     'ktadd -norandkey -k /tmp/test-host.kt host/testhost.kerber.test'
 docker exec -d -e KRB5_CONFIG=/tmp/test-krb5.conf -e KRB5_KDC_PROFILE=/tmp/test-kdc.conf \
-    "$NAME" sh -c 'krb5kdc -n -P /tmp/mit-test.pid >/tmp/mit-test-stdout.log 2>&1'
+    "$NAME" sh -c 'mkdir -p /tmp/au-s4u && cd /tmp/au-s4u && krb5kdc -n -P /tmp/mit-test.pid >/tmp/mit-test-stdout.log 2>&1'
 ok=0
 for _ in $(seq 1 80); do
     if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',8890),0.2)" 2>/dev/null; then
@@ -612,6 +662,7 @@ docker exec -d \
     -e KRB5_TEST_S4U_TO=host/testhost.kerber.test \
     -e KRB5_TEST_EXTRA_HOST=rbcd.kerber.test \
     -e KRB5_TEST_S4U_FROM=host/testhost.kerber.test@KERBER.TEST \
+    -e KRB5_KDC_AUDIT=test -e KRB5_KDC_AUDIT_LOG=/tmp/au-s4u-rust.log \
     "$NAME" sh -c '/tmp/krb5-kdc --test-realm --export-keytab /tmp/host-r18.keytab 127.0.0.1:8888 >/tmp/kdc-r18.log 2>&1'
 ok=0
 for _ in $(seq 1 80); do
@@ -685,6 +736,15 @@ echo "$RUST_RBCD" | grep -q 'proxy_target=host/rbcd.kerber.test'
 echo "$RUST_RBCD" | grep -q 'transited_services=host/testhost.kerber.test@KERBER.TEST'
 echo "MIT_testkdb_s4u2proxy_rbcd"
 echo "explicit_rbcd_grant=host/testhost.kerber.test@KERBER.TEST"
+
+echo "==== kvno --u2u to itself (MIT test-KDB, then Rust) ===="
+docker exec -e KRB5_CONFIG=/tmp/test-krb5.conf -e KRB5CCNAME=FILE:/tmp/krb5cc_mit_testkdb \
+    "$NAME" kvno --u2u /tmp/krb5cc_mit_testkdb host/testhost.kerber.test
+docker exec -e KRB5_CONFIG=/tmp/s4u-r18.conf -e KRB5CCNAME=FILE:/tmp/krb5cc_rust_s4u2p \
+    "$NAME" kvno --u2u /tmp/krb5cc_rust_s4u2p host/testhost.kerber.test
+same_tgs_log "s4u2self-s4u2proxy-rbcd-u2u" "$(docker exec "$NAME" cat /tmp/mit-test.log)" \
+    "$(docker exec "$NAME" cat /tmp/kdc-r18.log)"
+same_audit "s4u2self-s4u2proxy-rbcd-u2u" /tmp/au-s4u/au.log /tmp/au-s4u-rust.log
 
 echo "==== MIT db2 kvno -U user -P (no delegation hook) ===="
 docker exec "$MITNAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
@@ -793,10 +853,10 @@ docker exec "$NAME" sh -c 'cat >/tmp/test-norbcd-kdc.conf <<EOF
             }
             host/testhost.kerber.test = {
                 flags = +ok-to-auth-as-delegate
-                keys = aes256-cts
+                keys = aes256-sha2 aes256-cts
             }
             host/rbcd.kerber.test = {
-                keys = aes256-cts
+                keys = aes256-sha2 aes256-cts
             }
         }
         delegation = {
@@ -805,6 +865,10 @@ docker exec "$NAME" sh -c 'cat >/tmp/test-norbcd-kdc.conf <<EOF
     }
 [logging]
     kdc = FILE:/tmp/mit-norbcd.log
+[plugins]
+    audit = {
+        module = test:/usr/lib/krb5/plugins/audit/k5audit_test.so
+    }
 EOF
 cat >/tmp/test-norbcd-krb5.conf <<EOF
 [libdefaults]
@@ -823,7 +887,7 @@ cat >/tmp/test-norbcd-krb5.conf <<EOF
 EOF'
 docker exec -d -e KRB5_CONFIG=/tmp/test-norbcd-krb5.conf \
     -e KRB5_KDC_PROFILE=/tmp/test-norbcd-kdc.conf \
-    "$NAME" sh -c 'krb5kdc -n -P /tmp/mit-norbcd.pid >/tmp/mit-norbcd-stdout.log 2>&1'
+    "$NAME" sh -c 'mkdir -p /tmp/au-norbcd && cd /tmp/au-norbcd && krb5kdc -n -P /tmp/mit-norbcd.pid >/tmp/mit-norbcd-stdout.log 2>&1'
 ok=0
 for _ in $(seq 1 80); do
     if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',8891),0.2)" 2>/dev/null; then
@@ -875,6 +939,7 @@ docker exec -d \
     -e KRB5_EXPORT_KEYTAB=/tmp/host-r22b.keytab \
     -e KRB5_EXPORT_KEYTAB_EXTRA=/tmp/host-r22b-rbcd.keytab \
     -e KRB5_TEST_EXTRA_HOST=rbcd.kerber.test \
+    -e KRB5_KDC_AUDIT=test -e KRB5_KDC_AUDIT_LOG=/tmp/au-norbcd-rust.log \
     "$NAME" sh -c '/tmp/krb5-kdc --test-realm --export-keytab /tmp/host-r22b.keytab 127.0.0.1:8888 >/tmp/kdc-r22-norbcd.log 2>&1'
 ok=0
 for _ in $(seq 1 80); do
@@ -906,6 +971,8 @@ echo "$RUST_NORBCD" | grep -qiE "KDC can't fulfill requested option"
 RUST_NORBCD_LOG="$(docker exec "$NAME" sh -c "tail -n +$((n + 1)) /tmp/kdc-r22-norbcd.log")"
 echo "$RUST_NORBCD_LOG"
 echo "$RUST_NORBCD_LOG" | grep -F 'NOT_ALLOWED_TO_DELEGATE'
+same_tgs_log "rbcd-refused" "$NORBCD_LOG" "$RUST_NORBCD_LOG"
+same_audit "rbcd-refused" /tmp/au-norbcd/au.log /tmp/au-norbcd-rust.log
 echo "MIT_testkdb_s4u2proxy_rbcd_deny"
 
 s4u_user_life() {
