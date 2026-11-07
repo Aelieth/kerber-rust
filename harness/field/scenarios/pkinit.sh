@@ -113,7 +113,7 @@ R=${REALM//./\\.}
 KV=1.22
 [ "$LEG" != mit ] || KV=$MIT_VERSION
 DHG=P-384
-[ "$KV" != 1.21 ] || DHG='4096-bit DH'
+[ "$KV" != 1.21 ] || [ "${FIELD_MIT_PKINIT_EC:-no}" = yes ] || DHG='4096-bit DH'
 KC=$KDCDIR/kdc.conf
 D=${PK_KDC_DIR:-$KDCDIR/pkinit}
 C=${PK_CLIENT_DIR:-/home/lab/pkinit}

@@ -31,10 +31,10 @@ HN=kdc
 case $VM in
     deb13)
         FAM=deb PREREQ='### Debian and Ubuntu' START=2 KDCCONF='### kdc.conf and kadm5.acl on Debian and Ubuntu'
-        BASE_PKGS='wamerican python3 strace openssl nftables' MIT_PKGS='krb5-kpropd krb5-pkinit' ;;
+        BASE_PKGS='wamerican python3 strace openssl nftables tcpdump' MIT_PKGS='krb5-kpropd krb5-pkinit' ;;
     rocky10)
         FAM=rpm PREREQ='### Rocky Linux' START=1 KDCCONF='### kdc.conf and kadm5.acl'
-        BASE_PKGS='words python3 strace openssl' MIT_PKGS='krb5-pkinit' ;;
+        BASE_PKGS='words python3 strace openssl nftables tcpdump' MIT_PKGS='krb5-pkinit' ;;
     *) echo "DSB_STOP vm: deb13 or rocky10"; exit 2 ;;
 esac
 printf '%s\n' "$SHA" | grep -Eq '^[0-9a-f]{40}$' || { echo "DSB_STOP sha"; exit 2; }
