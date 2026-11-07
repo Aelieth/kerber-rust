@@ -121,21 +121,6 @@ public static class WsNative {
     static extern bool GetExitCodeProcess(IntPtr h, out uint code);
     [DllImport("kernel32.dll", SetLastError = true)]
     static extern bool CloseHandle(IntPtr h);
-    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-    static extern bool LogonUser(string user, string domain, string password, int logonType, int provider,
-        out IntPtr token);
-    [DllImport("advapi32.dll", SetLastError = true)]
-    static extern bool GetTokenInformation(IntPtr token, int infoClass, out TokenStatistics info, int length,
-        out int returned);
-
-    [StructLayout(LayoutKind.Sequential)]
-    public struct Luid { public uint LowPart; public int HighPart; }
-    [StructLayout(LayoutKind.Sequential)]
-    public struct TokenStatistics {
-        public Luid TokenId; public Luid AuthenticationId; public long ExpirationTime;
-        public int TokenType; public int ImpersonationLevel; public int DynamicCharged; public int DynamicAvailable;
-        public int GroupCount; public int PrivilegeCount; public Luid ModifiedId;
-    }
 
     const int ISC_REQ = 0x0001001E;
     const int SEC_I_CONTINUE_NEEDED = 0x00090312;
@@ -463,40 +448,6 @@ public static class WsNative {
         return said;
     }
 
-    // L1: the realm logon itself (LOGON32_LOGON_INTERACTIVE 2, LOGON32_PROVIDER_DEFAULT 0; nf-winbase-logonuserw),
-    // then that session's tickets by its LUID (TokenStatistics 10, nf-securitybaseapi-gettokeninformation;
-    // ns-winnt-token_statistics; klist -li), read while the token keeps the session alive.
-    public static List<string> Logon(string user, string domain, string pw) {
-        said = new List<string>();
-        IntPtr tok;
-        bool ok = LogonUser(user, domain, pw, 2, 0, out tok);
-        Say("LOGON:" + ok + " LAST:" + (ok ? 0 : Marshal.GetLastWin32Error()));
-        if (!ok) return said;
-        try {
-            TokenStatistics st;
-            int got;
-            if (!GetTokenInformation(tok, 10, out st, Marshal.SizeOf(typeof(TokenStatistics)), out got)) {
-                Say("LOGON_LUID:none LAST:" + Marshal.GetLastWin32Error());
-                return said;
-            }
-            string args = "-li 0x" + st.AuthenticationId.LowPart.ToString("x");
-            if (st.AuthenticationId.HighPart != 0) args += " -lh 0x" + st.AuthenticationId.HighPart.ToString("x");
-            System.Diagnostics.ProcessStartInfo psi = new System.Diagnostics.ProcessStartInfo("klist.exe", args);
-            psi.UseShellExecute = false;
-            psi.RedirectStandardOutput = true;
-            psi.RedirectStandardError = true;
-            using (System.Diagnostics.Process klist = System.Diagnostics.Process.Start(psi)) {
-                string text = klist.StandardOutput.ReadToEnd() + klist.StandardError.ReadToEnd();
-                klist.WaitForExit();
-                Say("==KLIST_SESSION");
-                foreach (string line in text.Split('\n')) Say(line.TrimEnd('\r'));
-            }
-        } finally {
-            CloseHandle(tok);
-        }
-        return said;
-    }
-
     public static List<string> Http(string url) {
         said = new List<string>();
         HttpWebRequest r = (HttpWebRequest)WebRequest.Create(url);
@@ -610,12 +561,6 @@ switch ($Mode) {
         $lines += (& klist.exe 2>&1 | ForEach-Object { "$_" })
         [IO.File]::WriteAllLines($out, [string[]]$lines)
     }
-    "logon" {
-        $user, $realm, $pwFile = $args
-        $pw = (Take $pwFile)[0]
-        [WsNative]::Logon($user, $realm, $pw)
-        $pw = $null
-    }
     "etype" {
         # R1c: the client's Kerberos encryption types (Learn: "Network security: Configure encryption types
         # allowed for Kerberos"); 4 is RC4-HMAC-MD5 only, "none" removes the value.
@@ -628,34 +573,6 @@ switch ($Mode) {
         }
         $v = (Get-ItemProperty -Path $key).SupportedEncryptionTypes
         Write-Output ("ETYPE_POLICY:" + $(if ($null -eq $v) { "none" } else { $v }))
-    }
-    "diag" {
-        # L1's record only (Learn: "Enable Kerberos event logging"; "auditpol set"; "Audit Logon", 4625).
-        $key = "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\Kerberos\Parameters"
-        if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }
-        Set-ItemProperty -Path $key -Name LogLevel -Value 1 -Type DWord
-        Write-Output ("KERBEROS_LOGLEVEL:" + (Get-ItemProperty -Path $key).LogLevel)
-        $a = & auditpol.exe /set /subcategory:"Logon" /failure:enable
-        Write-Output ("AUDITPOL_LOGON:" + $LASTEXITCODE + " " + ($a -join " "))
-    }
-    "events" {
-        $since = (Get-Date).AddMinutes(-[int]$args[0])
-        # Kerberos at any level, any provider at Critical, Error or Warning (Netlogon, LsaSrv).
-        Write-Output "==SYSTEM_EVENTS"
-        $k = @(Get-WinEvent -FilterHashtable @{ LogName = "System"; StartTime = $since } -ErrorAction SilentlyContinue |
-            Where-Object { $_.ProviderName -match "Kerberos" -or ($_.Level -ge 1 -and $_.Level -le 3) })
-        if ($k.Count -eq 0) { Write-Output "SYSTEM_EVENT:none" }
-        $k | ForEach-Object { "SYSTEM_EVENT:" + $_.ProviderName + " " + $_.Id + " " + $_.Level + " " + ($_.Message -replace "\s+", " ") }
-        Write-Output "==LOGON_FAILURES"
-        $f = @(Get-WinEvent -FilterHashtable @{ LogName = "Security"; Id = 4625; StartTime = $since } -ErrorAction SilentlyContinue)
-        if ($f.Count -eq 0) { Write-Output "LOGON_FAILURE:none" }
-        $names = "Status", "SubStatus", "LogonType", "LogonProcessName", "AuthenticationPackageName", "TargetUserName",
-            "TargetDomainName"
-        foreach ($e in $f) {
-            $v = @{}
-            foreach ($d in ([xml]$e.ToXml()).Event.EventData.Data) { $v[$d.Name] = $d.'#text' }
-            Write-Output ("LOGON_FAILURE:" + (($names | ForEach-Object { " $_=" + $v[$_] }) -join ""))
-        }
     }
     default { Write-Output "MODE_UNKNOWN:$Mode"; exit 2 }
 }

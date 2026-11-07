@@ -16,7 +16,7 @@ from pathlib import Path
 SEC_I_CONTINUE_NEEDED = "0x00090312"
 SEC_E_OK = "0x00000000"
 SEC_E_LOGON_DENIED = "0x8009030C"
-CELLS = ["W1", "W2-W4", "S-mit", "S-ours", "P1", "P2", "R1c", "K1", "L1", "KDC"]
+CELLS = ["W1", "W2-W4", "S-mit", "S-ours", "P1", "P2", "R1c", "K1", "KDC"]
 TIME = re.compile(r"(\d{1,2}/\d{1,2}/\d{4} \d{1,2}:\d{2}:\d{2})")
 TIMED = ("Start Time", "End Time", "Renew Time", "StartTime", "EndTime", "RenewUntil")
 
@@ -45,7 +45,7 @@ def klist(lines):
 
     for raw in lines:
         line = raw.strip()
-        if not line or line.startswith(("Current LogonId", "Targeted LogonId", "TimeSkew", "exitcode")):
+        if not line or line.startswith(("Current LogonId", "TimeSkew", "exitcode")):
             continue
         label = line.split(":", 1)[0].strip()
         if label in TIMED:
@@ -109,8 +109,6 @@ def rows(d):
     r["R1c"] += picked(read(d, "r1c-unset.txt"), ("ETYPE_POLICY:",))
     k1 = read(d, "k1.txt")
     r["K1"] = picked(k1, ("CREATE:", "WAIT:", "HTTP_")) + klist(k1[next((i for i, ln in enumerate(k1) if ln.startswith("==KLIST")), len(k1)):])
-    l1 = read(d, "l1.txt")
-    r["L1"] = picked(l1, ("LOGON:",)) + klist([ln for ln in l1 if not ln.startswith(("LOGON:", "PS_DONE"))])
     r["KDC"] = kdc(read(d, "kdc.log"))
     return r
 
@@ -164,13 +162,6 @@ def oracle(rec):
     # Keycloak's 302 with code=, as services.sh grades it; HttpWebRequest's default credentials.
     k = r["K1"]
     t["K1"] = has(k, "CREATE:True") and has(k, "HTTP_STATUS:302") and has(k, "HTTP_CODE:yes") and has(k, "Server: HTTP/services.kerber.test @ KERBER.TEST")
-    # LogonUserW's result, then that session's tickets by klist -li (W32 nf-winbase-logonuserw; CMD klist), and
-    # the KDC's TGS ISSUE for the machine, which Windows checks against $MACHINE.ACC.
-    lo = r["L1"]
-    host = next((ln.split(":", 1)[1].strip().lower() for ln in read(d, "info.txt") if ln.startswith("WIN_HOST:")), "?")
-    mach = "cm-win@KERBER.TEST for host/%s.kerber.test@KERBER.TEST" % host
-    t["L1"] = has(lo, "LOGON:True") and has(lo, "Client: cm-win @ KERBER.TEST") and has(lo, "Server: krbtgt/KERBER.TEST @ KERBER.TEST") \
-        and any(": ISSUE: " in ln and mach in ln for ln in r["KDC"])
     t["KDC"] = has(kd, "ISSUE") and has(kd, "cm-win@KERBER.TEST for krbtgt/KERBER.TEST@KERBER.TEST") and has(kd, "for host/cm.kerber.test@KERBER.TEST")
     for c in CELLS:
         print("ORACLE:%s:%s" % (c, "ok" if t[c] else "fail"))

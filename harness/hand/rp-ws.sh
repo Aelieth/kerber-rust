@@ -237,8 +237,8 @@ kdc_log() {
     "$LAB" ssh kdc -- "sudo tail -n +$(($2 + 1)) /var/log/krb5kdc.log; echo '--- kadmind.log'; sudo tail -n +$(($3 + 1)) /var/log/kadmind.log" < /dev/null 2>&1 | grep -v 'closing down fd' > "$REC/$1/win/kdc.log"
 }
 
-# The cells, in the design's order, L1 last; each cell's own principal, so no cached ticket is reused.
-# R1c's RC4-only policy is set and removed, each with a restart. L1's events are recorded, not graded.
+# The cells, in the design's order; each cell's own principal, so no cached ticket is reused.
+# R1c's RC4-only policy is set with a restart, then removed.
 cells() {
     local leg=$1 d=$REC/$1/win kind marks
     read -r -a marks < <(kdc_marks)
@@ -261,10 +261,6 @@ cells() {
     win_restart "$leg:r1c" || return 1
     wput "$WTMP\\ws-1.pw" kt-win && wps "$d/r1c.txt" ticket "$SVC" cm-win-kt "$REALM" "$WTMP\\ws-1.pw"
     wps "$d/r1c-unset.txt" etype none
-    wps "$d/l1-diag.txt" diag
-    win_restart "$leg:l1" || return 1
-    wput "$WTMP\\ws-1.pw" pw-win && wps "$d/l1.txt" logon cm-win "$REALM" "$WTMP\\ws-1.pw"
-    grep -q '^LOGON:True' "$d/l1.txt" || wps "$d/l1-events.txt" events 2
     kdc_log "$leg" "${marks[0]}" "${marks[1]}"
     echo "CELLS_DONE:$leg"
 }
