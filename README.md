@@ -75,7 +75,7 @@ It keeps its database in MIT's dump format, so a realm can move to it and back.
   Keep `krb5-workstation` if a script depends on one of those differences.
 - **Some behaviour differs from MIT on purpose.** Most of those differences refuse something MIT
   accepts, such as a principal name that is not UTF-8.
-  [Not yet matched](docs/interop-matrix.md#not-yet-matched-in-12) lists what an operator could see, and
+  [Not yet matched](docs/interop-matrix.md#not-yet-matched-in-121) lists what an operator could see, and
   [the deviations file](docs/mit-deviations.md) has every deliberate one.
 - **Its dependencies are not all audited or free of `unsafe`.** RustCrypto, curve25519-dalek, getrandom
   and nix contain `unsafe`, and `cargo vet` reports RP-FILL crates fully audited and RP-FILL exempted.
