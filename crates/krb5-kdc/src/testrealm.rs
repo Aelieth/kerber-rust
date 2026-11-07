@@ -51,7 +51,7 @@ pub fn map_memory_ulog(
             .get_raw(&format!("K/M@{realm}"))
             .cloned()
             .ok_or(Error::NotFound)?;
-        store.debug_insert(km);
+        store.debug_insert(km)?;
     }
     let ulog = crate::Ulog::memory(entries).map_err(|e| Error::Db {
         kind: std::io::ErrorKind::Other,

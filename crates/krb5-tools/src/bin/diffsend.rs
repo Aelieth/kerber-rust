@@ -123,7 +123,7 @@ fn expect_error_no_edata(cfg: &Cfg, case: &str, req: &[u8], code: i32) -> Result
     if re.e_data.is_some() || me.e_data.is_some() {
         return Err(format!("{case}: e_data present"));
     }
-    let cn = |e: &KrbError| e.cname.as_ref().map(PrincipalName::components_joined);
+    let cn = |e: &KrbError| e.cname.as_ref().map(PrincipalName::components_joined_lossy);
     let cr = |e: &KrbError| {
         e.crealm
             .as_ref()
@@ -156,7 +156,10 @@ fn expect_hidden_client_error(cfg: &Cfg, case: &str, req: &[u8], code: i32) -> R
         let der = std::fs::read(cfg.out.join(format!("{case}.{leg}.der")))
             .map_err(|e| format!("{case} {leg} der: {e}"))?;
         let err: KrbError = decode(&der).map_err(|e| format!("{case} {leg} decode: {e}"))?;
-        let cn = err.cname.as_ref().map(PrincipalName::components_joined);
+        let cn = err
+            .cname
+            .as_ref()
+            .map(PrincipalName::components_joined_lossy);
         let cr = err
             .crealm
             .as_ref()
@@ -245,7 +248,7 @@ fn expect_hidden_tgs_rep(cfg: &Cfg, case: &str, req: &[u8]) -> Result<(), String
             ));
         }
         let rep: TgsRep = decode(raw).map_err(|e| format!("{case} {leg}: {e}"))?;
-        let cn = rep.0.cname.components_joined();
+        let cn = rep.0.cname.components_joined_lossy();
         let cr = String::from_utf8_lossy(rep.0.crealm.as_bytes());
         if cn != "WELLKNOWN/ANONYMOUS" || cr != "WELLKNOWN:ANONYMOUS" {
             return Err(format!(
@@ -299,7 +302,7 @@ fn expect_error_client(
     let rust_text = et(&re);
     compare_krb_error(&re, &me).map_err(|e| format!("{case}: {e}"))?;
     if check_client {
-        let cn = |e: &KrbError| e.cname.as_ref().map(PrincipalName::components_joined);
+        let cn = |e: &KrbError| e.cname.as_ref().map(PrincipalName::components_joined_lossy);
         let cr = |e: &KrbError| {
             e.crealm
                 .as_ref()
@@ -446,9 +449,9 @@ fn expect_tgs_rep(cfg: &Cfg, case: &str, req: &[u8]) -> Result<(), String> {
         let TgsRep(rep) = decode(raw).map_err(|e| format!("{case} {leg}: {e}"))?;
         Ok([
             String::from_utf8_lossy(rep.crealm.as_bytes()).into_owned(),
-            rep.cname.components_joined(),
+            rep.cname.components_joined_lossy(),
             String::from_utf8_lossy(rep.ticket.realm.as_bytes()).into_owned(),
-            rep.ticket.sname.components_joined(),
+            rep.ticket.sname.components_joined_lossy(),
             rep.cname.name_type.to_string(),
             rep.ticket.sname.name_type.to_string(),
         ])
@@ -999,7 +1002,7 @@ fn mint_signed_header_ex(
             enc_tkt_der: &der,
             is_service_tkt: !sname.is_krbtgt(),
         },
-        &dummy_ident(&pac_cname.components_joined(), realm),
+        &dummy_ident(&pac_cname.components_joined_lossy(), realm),
         None,
     )
     .map_err(|e| e.to_string())?;
@@ -1074,7 +1077,7 @@ fn mint_signed_stkt(
             enc_tkt_der: &der,
             is_service_tkt: true,
         },
-        &dummy_ident(&pac_cname.components_joined(), realm),
+        &dummy_ident(&pac_cname.components_joined_lossy(), realm),
         None,
     )
     .map_err(|e| e.to_string())?;
@@ -3147,6 +3150,105 @@ fn run() -> Result<(), String> {
         )
         .map_err(|e| e.to_string())?,
         err::BADOPTION,
+    )?;
+
+    // MIT: `gather_tgs_req_info` (do_tgs_req.c:592-807)
+    let order_req = |kdc_options: KdcOptions,
+                     extra_padata: Vec<PaData>,
+                     additional_tickets: Option<Vec<Ticket>>,
+                     nonce: u32|
+     -> Result<Vec<u8>, String> {
+        encode(
+            &tgs_req_ex(TgsReqParams {
+                ticket: host_hdr(&host, false)?,
+                session: &sess,
+                crealm: realm,
+                cname: &host,
+                sname: host.clone(),
+                realm,
+                nonce,
+                kdc_options,
+                additional_tickets,
+                extra_padata,
+                etypes: etypes.clone(),
+                addresses: None,
+                from: None,
+                enc_authorization_data: None,
+                till: None,
+                subkey: None,
+                time_offset: 0,
+            })
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())
+    };
+    let mut bad_for_user = pa_for_user(&sess, user.clone(), realm).map_err(|e| e.to_string())?;
+    let mut for_user: krb5_types::s4u::PaForUser =
+        decode(bad_for_user.padata_value.as_ref()).map_err(|e| e.to_string())?;
+    let mut ck = for_user.cksum.checksum.to_vec();
+    if let Some(b) = ck.first_mut() {
+        *b ^= 0xff;
+    }
+    for_user.cksum.checksum = ck.into();
+    bad_for_user.padata_value = encode(&for_user).map_err(|e| e.to_string())?.into();
+    expect_error(
+        &cfg,
+        "tgs-order-s4u2self-cksum-renew",
+        &order_req(
+            KdcOptions::forwardable().with_bit(flag_bit::RENEW, true),
+            vec![bad_for_user],
+            None,
+            0x1000_0338,
+        )?,
+        err::MODIFIED,
+    )?;
+    expect_error(
+        &cfg,
+        "tgs-order-proxy-no-stkt-renew",
+        &order_req(
+            KdcOptions::forwardable()
+                .with_bit(flag_bit::CNAME_IN_ADDL_TKT, true)
+                .with_bit(flag_bit::RENEW, true),
+            vec![],
+            None,
+            0x1000_0339,
+        )?,
+        err::GENERIC,
+    )?;
+    let mut bad_stkt = mint_tgt(
+        tkt_key,
+        tkt_kvno,
+        &host,
+        realm,
+        &krbtgt_sname,
+        &sess,
+        window10.clone(),
+        TicketFlags::initial_preauth(),
+    )?;
+    bad_stkt.enc_part.etype = 99;
+    expect_error(
+        &cfg,
+        "tgs-order-u2u-stkt-unknown-bit",
+        &order_req(
+            KdcOptions::forwardable()
+                .with_bit(flag_bit::ENC_TKT_IN_SKEY, true)
+                .with_bit(17, true),
+            vec![],
+            Some(vec![bad_stkt.clone()]),
+            0x1000_033a,
+        )?,
+        err::GENERIC,
+    )?;
+    expect_error(
+        &cfg,
+        "tgs-order-s4u2self-bad-stkt",
+        &order_req(
+            KdcOptions::forwardable().with_bit(flag_bit::ENC_TKT_IN_SKEY, true),
+            vec![pa_for_user(&sess, user.clone(), realm).map_err(|e| e.to_string())?],
+            Some(vec![bad_stkt]),
+            0x1000_033b,
+        )?,
+        err::GENERIC,
     )?;
     expect_error(
         &cfg,
@@ -5369,7 +5471,7 @@ fn run() -> Result<(), String> {
     let want_hier = "krbtgt/SUB.KERBER.TEST";
     for (leg, raw) in [("rust", hr.as_slice()), ("mit", hm.as_slice())] {
         let TgsRep(rep) = decode::<TgsRep>(raw).map_err(|e| e.to_string())?;
-        let ticket_sname = rep.ticket.sname.components_joined();
+        let ticket_sname = rep.ticket.sname.components_joined_lossy();
         if ticket_sname != want_hier {
             return Err(format!(
                 "tgs-alternate-tgs-hierarchical {leg} ticket.sname={ticket_sname} want {want_hier}"
@@ -5379,7 +5481,7 @@ fn run() -> Result<(), String> {
         let plain = decrypt(&sess, usage, rep.enc_part.cipher.as_ref())
             .map_err(|e| format!("tgs-alternate-tgs-hierarchical {leg} enc-part: {e}"))?;
         let enc = decode_enc_kdc_rep(&plain).map_err(|e| e.to_string())?;
-        let enc_sname = enc.sname.components_joined();
+        let enc_sname = enc.sname.components_joined_lossy();
         if enc_sname != want_hier {
             return Err(format!(
                 "tgs-alternate-tgs-hierarchical {leg} enc.sname={enc_sname} want {want_hier}"
@@ -5463,7 +5565,7 @@ fn run() -> Result<(), String> {
     ra_cases(&cfg, realm, &user, &host)?;
     fa_cases(&cfg, realm, &user, &host)?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":212}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":216}}"#);
     Ok(())
 }
 
@@ -6760,7 +6862,7 @@ fn fa_cases(
             .ok_or_else(|| format!("fa-fast-hide-client-rep {leg}: no finished"))?;
         let real = format!(
             "{}@{}",
-            fin.cname.components_joined(),
+            fin.cname.components_joined_lossy(),
             String::from_utf8_lossy(fin.crealm.as_bytes())
         );
         if real != "user@KERBER.TEST" {
@@ -6770,7 +6872,7 @@ fn fa_cases(
         }
         outer.push(format!(
             "{}@{}",
-            rep.0.cname.components_joined(),
+            rep.0.cname.components_joined_lossy(),
             String::from_utf8_lossy(rep.0.crealm.as_bytes())
         ));
     }

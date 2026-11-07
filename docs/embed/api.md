@@ -1,10 +1,11 @@
 # Embed API
 
-An embedder links `krb5-kdc` and `krb5-admin` as libraries and drives the KDC
-and kadmind in its own process. This page is the whole surface it needs. A
-default build carries the daemon runtime (`daemon`, on by default) and not the test
-fixtures (`test-hooks`, off), so an embedder takes `krb5-kdc` and `krb5-admin` with
-`default-features = false`.
+An embedder links `krb5-kdc` and `krb5-admin` as libraries, with `krb5-config`,
+`krb5-types`, `krb5-crypto` and `krb5-log` for the profile, names, keys and log, and
+drives the KDC and kadmind in its own process. This page is the whole surface it
+needs. A default build carries the daemon runtime (`daemon`, on by default) and not
+the test fixtures (`test-hooks`, off), so an embedder takes `krb5-kdc` and
+`krb5-admin` with `default-features = false`.
 
 This page is as of v1.2.0.
 
@@ -16,11 +17,25 @@ into a `SharedStore` (`Arc<RwLock<dyn Store>>`) — `let kdc: SharedStore = dump
 either is what the next AS, TGS, or admin read sees, with no file round trip.
 
 Every store mutator refuses outside `PrincipalStore::change()` before it touches
-anything. KLLDAP's seam writes (`set_password`, `create_principal_3_in`,
-`remove_in`, `set_status`) run inside `change()`; `put_policy` / `delete_policy`
-commit themselves. A kadm5 hook or a plugin runs after the write with the lock
-released, must not take the store's write guard, and must not re-enter the store.
-A create's postcommit hook runs even on a failed change, as MIT's does.
+anything. KLLDAP's seam writes (`remove_in`, `set_status`) run inside `change()`;
+`put_policy` / `delete_policy` commit themselves. On a shared store, a password
+change or a create goes through `change_password_shared` or `create_password_shared`,
+which derive the keys under no lock and then take the write guard for the `change()`.
+`set_password`, `create_principal_3_in`, `change_password_staged` and `AdminSession`
+derive while the caller holds the guard, so every KDC read waits on the string-to-key;
+use them only on a store nothing else is reading. `set_status` on a missing principal
+is `NotFound`, and the caller decides what that means. A kadm5 hook or a plugin
+must not take the store's write guard or re-enter the store: a hook runs after the
+write and the database file's lock, but still under the caller's write guard and
+before kadmind replies. A create's postcommit hook runs even on a failed change, as
+MIT's does.
+
+With `persist_paths`, `change()` writes the database file before it returns, so a
+write kadmind acknowledges is on disk, as with MIT's db2. A host that keeps the realm
+in its own database has no seam for that yet: a hook can only queue the host's
+commit, so a crash between kadmind's reply and that commit loses an acknowledged
+write, and policy writes and the KDC's lockout counters call no hook. Use
+`persist_paths` until such a seam exists.
 
 ## Bootstrap
 
@@ -30,7 +45,14 @@ are missing, and does not rotate a key that is already there. An existing realm
 stamps each new row with the active K/M kvno (`TL_ACTKVNO`, else the newest key).
 A new realm uses `RealmSpec.mkvno`; `kdb5_util create` and `embed-realm` use 1.
 `Bootstrapped.kvno` is that kvno. The admin requires pre-auth unless `AdminSpec`
-says otherwise. The keytab comes back on `Bootstrapped` for the caller to write.
+says otherwise. The admin keytab comes back on `Bootstrapped` on every open, with the
+current key, for the caller to write.
+
+After bootstrap, keep no master key: drop `Bootstrapped.master`, and don't read the
+stash, parse a dump, or use `PrincipalStore::persist_paths` yourself; the store does
+all three. Back the stash and the database up together. `Bootstrapped`, `MasterKey`,
+`Principal`, `OpaqueKey` and `KeySlot` are `#[non_exhaustive]`, so a later field or variant
+doesn't break a build: build a `Principal` with `PrincipalBuilder`.
 
 `create_database` writes the stash (a temp file renamed into place, mode 0600),
 then both lock files, then the database by renaming a finished temp file into
@@ -73,13 +95,16 @@ these are set to.
 
 `kadm5_hook` ([`Kadm5Hook`](../../crates/krb5-kdc/src/store/kadm5_hook.rs)) lets an
 embedder register a module with `register_kadm5_hook`; it runs after the write,
-not under the guard. The directory need not register one.
+still under the caller's write guard and before kadmind replies. The directory need
+not register one.
 
 `kadm5_auth` is the admin-authorization interface: an embedder's `Kadm5Auth` module
 goes in `KadmindConfig.auth_modules` or is chosen by `[plugins] kadm5_auth`, and the
 built-in `acl` and `self` modules answer each verb alongside it. A module returns
 `Decision::Allow`, `Abstain` or `Deny`; `Deny` refuses at once, and the
-allowing module supplies the restrictions (`docs/parity/a4-kadmin.md`).
+allowing module supplies the restrictions (`docs/parity/a4-kadmin.md`). A target
+whose name isn't UTF-8 is decided by the built-in `acl` and `self` modules
+alone, by its bytes; other modules aren't asked.
 
 ## OTP and require-MFA
 
@@ -97,6 +122,16 @@ and none on krbtgt (which would refuse the keytab login that gets the FAST armor
   count) — KDC-wide and strongest, but custom;
 - **(c)** a keyless principal — no long-term key, so no password to fall back to,
   simplest but with no password path at all.
+
+`OtpVerifier::verify` runs on four shared `otp-verify` threads with a queue of 64.
+The KDC answers at the request's deadline and fails closed, but a verifier still
+running keeps its thread, so `verify` should return by `req.deadline` itself (for
+example, by setting its socket timeouts from it). `verify` runs on a plain thread
+with no async runtime: an async verifier brings its own (a runtime `Handle`) and
+builds its futures, timers included, inside that runtime's `block_on`. The four
+workers bound OTP logins at about four per check-duration (a 1 s check allows
+about 4 a second), and once 64 are queued, a login fails with preauth failed
+(`OTP verifier queue full`).
 
 ## Logging and plugin sets
 
@@ -122,7 +157,15 @@ The build pins a vendored `rasn`: `rasn = "=0.28.14"` with `[patch.crates-io]
 rasn = { path = "vendor/rasn" }`. The patch makes the BER decoder fail a message
 whose OPTIONAL explicit field or SEQUENCE OF element is present but does not
 decode, and decode as MIT 1.22.2 does (`vendor/rasn/PATCHES.md` has the diff). An
-embedder's workspace must carry the same patch, or its DER diverges from MIT's.
+embedder's workspace must carry the same patch, from this repository at the tag its
+`krb5-*` crates come from:
+
+```toml
+[patch.crates-io]
+rasn = { git = "https://github.com/Aelieth/kerber-rust", tag = "v1.2.1" }
+```
+
+Without it, `krb5-types` fails to compile on `rasn::KERBER_RUST_NEEDS_THIS_PATCH`.
 
 Keep `panic = "unwind"` (the default). The serve loop and the plugin and OTP
 paths `catch_unwind` each request and each plugin call, turning a panic into a

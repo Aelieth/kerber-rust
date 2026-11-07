@@ -106,7 +106,7 @@ pub(super) fn extract_delegated(
     let name = info
         .pname
         .as_ref()
-        .map_or_else(String::new, |n| n.unparse_with_realm(&realm));
+        .map_or_else(String::new, |n| n.unparse_with_realm_lossy(&realm));
     #[cfg(feature = "test-hooks")]
     hooks::write_deleg_ccache(&part.0, &part.1)?;
     Ok(Some(name))

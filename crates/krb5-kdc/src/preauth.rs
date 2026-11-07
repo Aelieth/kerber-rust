@@ -279,7 +279,7 @@ fn armor_rd_req(
         .ok()
         .filter(|r| *r == store.realm())
         .ok_or_else(not_us)?;
-    let tsname = ticket.sname.unparse_with_realm(realm);
+    let tsname = ticket.sname.unparse_with_realm_lossy(realm);
     let p = store
         .fetch_name(&ticket.sname)
         .map_err(|e| generic(e.to_string()))?;
@@ -498,7 +498,7 @@ fn derive_cookie_key(
     client: &PrincipalName,
     realm: &str,
 ) -> Result<ProtocolKey, Error> {
-    let princ = client.unparse_with_realm(realm);
+    let princ = client.unparse_with_realm_lossy(realm);
     let mut seed = Vec::with_capacity(6 + princ.len());
     seed.extend_from_slice(b"COOKIE");
     seed.extend_from_slice(princ.as_bytes());
@@ -745,7 +745,7 @@ pub(crate) fn process_pkinit(
     })?;
     let info = krb5_types::pkinit::encode_kdc_dh_key_info(kp.public(), nonce);
     let certs = kdc.own_chain().map_err(|message| Error::PreauthModule {
-        code: err::PREAUTH_FAILED,
+        code: otp::ENOENT,
         message,
     })?;
     let wrapped_pub = krb5_types::pkinit::cms_sign_chain(
@@ -833,13 +833,16 @@ fn cms_fault(
                         .collect(),
                 )
             };
-            let e_data = (!certs.is_empty()).then(|| {
-                let method = vec![PaData {
-                    padata_type: td,
-                    padata_value: krb5_types::pkinit::encode_td_certifiers(&certs).into(),
-                }];
-                encode_typed(&with_fx_cookie(store, Some(cname), method))
-            });
+            let e_data = (!certs.is_empty())
+                .then(|| krb5_types::pkinit::encode_td_certifiers(&certs))
+                .flatten()
+                .and_then(|v| {
+                    let method = vec![PaData {
+                        padata_type: td,
+                        padata_value: v.into(),
+                    }];
+                    encode_typed(&with_fx_cookie(store, Some(cname), method))
+                });
             Error::Protocol {
                 code,
                 text: Some(status::PREAUTH_FAILED.to_owned()),
@@ -923,8 +926,9 @@ fn authorize_cert(
                     outcome = "denied",
                     error = %e
                 );
+                // MIT: `pkinit_client_cert_match` (plugins/preauth/pkinit/pkinit_matching.c:729)
                 return Err(Error::PreauthModule {
-                    code: err::PREAUTH_FAILED,
+                    code: otp::EINVAL,
                     message: e.to_string(),
                 });
             }
@@ -954,7 +958,8 @@ fn match_client(
     };
     let read = |n: &PrincipalName, r: &str| -> (Vec<u8>, Vec<Vec<u8>>) {
         if n.name_type == PrincipalName::NT_ENTERPRISE
-            && let Ok(p) = krb5_types::parse_name_ex(&n.unparse_no_realm(), r, false)
+            && let Some(text) = n.try_unparse_no_realm()
+            && let Ok(p) = krb5_types::parse_name_ex(&text, r, false)
         {
             let comps = p.components.into_iter().map(String::into_bytes).collect();
             return (p.realm.into_bytes(), comps);
@@ -967,7 +972,9 @@ fn match_client(
     {
         return true;
     }
-    let id = crate::kdb::lookup_principal_id(name, realm);
+    let Some(id) = crate::kdb::lookup_principal_id(name, realm) else {
+        return false;
+    };
     store
         .fetch(&id)
         .ok()
@@ -1011,7 +1018,7 @@ fn check_log_freshness(
     realm: &str,
     valid: bool,
 ) -> Result<(), Error> {
-    let name = req_client.unparse_with_realm(realm);
+    let name = req_client.unparse_with_realm_lossy(realm);
     if store.policy().pkinit_require_freshness && !valid {
         klog::syslog(
             Severity::Info,
@@ -1087,14 +1094,25 @@ fn dh_params_not_accepted(
         padata_value: krb5_types::pkinit::encode_td_dh_parameters(min_bits).into(),
     }];
     method = with_fx_cookie(store, Some(client), method);
-    proto_e(
-        err::DH_KEY_PARAMETERS_NOT_ACCEPTED,
-        crate::status::PREAUTH_FAILED,
-        encode_typed(&method),
+    // MIT: `pkinit_server_verify_padata` (plugins/preauth/pkinit/pkinit_srv.c:607-612)
+    encode_typed(&method).map_or_else(
+        || {
+            proto(
+                err::DH_KEY_PARAMETERS_NOT_ACCEPTED,
+                crate::status::PREAUTH_FAILED,
+            )
+        },
+        |ed| {
+            proto_e(
+                err::DH_KEY_PARAMETERS_NOT_ACCEPTED,
+                crate::status::PREAUTH_FAILED,
+                ed,
+            )
+        },
     )
 }
 
-pub(crate) fn encode_typed(method: &MethodData) -> Vec<u8> {
+pub(crate) fn encode_typed(method: &MethodData) -> Option<Vec<u8>> {
     let td: TypedDataList = method
         .iter()
         .map(|p| TypedData {
@@ -1102,7 +1120,7 @@ pub(crate) fn encode_typed(method: &MethodData) -> Vec<u8> {
             data_value: p.padata_value.clone(),
         })
         .collect();
-    encode(&td).unwrap_or_default()
+    encode(&td).ok()
 }
 
 pub(crate) fn decode_edata_padata(ed: &[u8]) -> MethodData {
@@ -1177,7 +1195,7 @@ pub(crate) fn prepare_as_edata(
         if method.len() == n {
             return ed.to_vec();
         }
-        return encode_typed(&method);
+        return encode_typed(&method).unwrap_or_else(|| ed.to_vec());
     }
     ed.to_vec()
 }

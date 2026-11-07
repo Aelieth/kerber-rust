@@ -111,7 +111,7 @@ pub fn init_context() -> Result<ClientContext, Krb5Error> {
 }
 
 pub const DEFKTNAME: &str = "FILE:/etc/krb5.keytab";
-pub const DEFCKTNAME: &str = "FILE:/var/kerberos/krb5/user/%{euid}/client.keytab";
+pub const DEFCKTNAME: &str = defcktname();
 
 // MIT: `kt_default_name` (ktdefname.c:35-57)
 #[must_use]
@@ -223,7 +223,7 @@ fn allowed_preauth_type(
 ) -> Option<i32> {
     let value = in_ccache?
         .0
-        .get_config(Some(&server.unparse_with_realm(realm)), "pa_type")?;
+        .get_config(Some(&server.unparse_with_realm_lossy(realm)), "pa_type")?;
     let text = String::from_utf8_lossy(value);
     let t = text.trim_start_matches(|c: char| c.is_ascii_whitespace() || c == '\u{000b}');
     let digits = t.strip_prefix(['+', '-']).unwrap_or(t);
@@ -240,9 +240,10 @@ fn pa_config_in(
     server: &krb5_types::PrincipalName,
     realm: &str,
 ) -> Option<Vec<u8>> {
-    let value = in_ccache?
-        .0
-        .get_config(Some(&server.unparse_with_realm(realm)), "pa_config_data")?;
+    let value = in_ccache?.0.get_config(
+        Some(&server.unparse_with_realm_lossy(realm)),
+        "pa_config_data",
+    )?;
     Some(value.to_vec())
 }
 
@@ -907,7 +908,7 @@ fn cache_has_fast_avail(cc: &FileCcache, realm: &str) -> bool {
     let Ok(tgs) = creds::tgs_of(realm) else {
         return false;
     };
-    let tgs = tgs.unparse_with_realm(realm);
+    let tgs = tgs.unparse_with_realm_lossy(realm);
     cc.creds.iter().any(|c| {
         c.is_config()
             && c.server.1.name_string.len() == 3
@@ -1184,7 +1185,7 @@ impl<'c> Leg<'c> {
                         code: krb5_protocol::trace::KRB5_KT_NOTFOUND,
                         text: format!(
                             "No key table entry found for {}",
-                            cname.unparse_with_realm(&realm)
+                            cname.unparse_with_realm_lossy(&realm)
                         ),
                     }),
             ),
@@ -1221,7 +1222,7 @@ fn follow_referrals<'c>(
     let realm0 = leg.realm.clone();
     let mut restart = None;
     for _ in 0..MAX_IN_TKT_LOOPS {
-        password.client = cname.unparse_with_realm(&leg.realm);
+        password.client = cname.unparse_with_realm_lossy(&leg.realm);
         let out = {
             // MIT: `restart_init_creds_loop` (lib/krb5/krb/get_in_tkt.c:823-844)
             let server = match ask.sname.cloned() {
@@ -1336,21 +1337,11 @@ fn kinit_inner(
     password: &mut LazyPassword<'_>,
     params: &KinitParams<'_>,
 ) -> Result<(KinitResult, FileCcache), Box<dyn std::error::Error + Send + Sync>> {
-    let cname = me.1.clone();
-    let realm_s = String::from_utf8_lossy(me.0.as_bytes()).into_owned();
+    let mut cname = me.1.clone();
+    let mut realm_s = String::from_utf8_lossy(me.0.as_bytes()).into_owned();
     trace::init_creds(&cname, &realm_s, params.in_tkt_service);
     // MIT: `krb5_init_creds_init` (lib/krb5/krb/get_in_tkt.c:974-981)
     let mut etypes = krb5_protocol::conf_etypes(&ctx.profile, false)?;
-    let resolved = resolve_kdc(&ctx.profile, &realm_s, kdc)?;
-    let armor = initial_armor(
-        ctx,
-        params.armor_ccache,
-        &realm_s,
-        params.in_tkt_service.is_some(),
-    )?;
-    let pkinit = client_pkinit(ctx, params, &realm_s)?;
-    let mut ticket = params.ticket.clone();
-    ticket.anonymous |= params.anonymous;
     let mut keytab_failure: Option<KeytabFailure> = None;
     let mut kt = None;
     let keytab_keys = if let Some(ktpath) = params.keytab {
@@ -1365,30 +1356,49 @@ fn kinit_inner(
             }
             Ok(bytes) => {
                 let parsed = Keytab::parse(&bytes)?;
-                let (keys, kt_etypes) = krb5_protocol::keytab_init_creds_keys(
-                    &parsed, &cname, &realm_s,
-                )
-                .ok_or_else(|| {
-                    Krb5Error::new(
-                        Code::Other,
-                        format!(
-                            "Keytab contains no suitable keys for {}",
-                            cname.unparse_with_realm(&realm_s)
-                        ),
-                    )
-                })?;
-                krb5_protocol::trace::init_creds_keytab_lookup(
-                    krb5_protocol::trace::Princ::new(&cname, realm_s.as_bytes()),
-                    &kt_etypes,
-                );
-                krb5_protocol::sort_etypes_keytab_first(&mut etypes, &kt_etypes);
-                kt = Some(parsed);
-                Some(keys)
+                // MIT: `krb5_init_creds_set_keytab` (lib/krb5/krb/gic_keytab.c:191-224)
+                match krb5_protocol::keytab_init_creds_client(&parsed, &ctx.profile, me) {
+                    Ok(Some(((found_realm, found), keys, kt_etypes))) => {
+                        cname = found;
+                        realm_s = String::from_utf8_lossy(found_realm.as_bytes()).into_owned();
+                        krb5_protocol::trace::init_creds_keytab_lookup(
+                            krb5_protocol::trace::Princ::new(&cname, realm_s.as_bytes()),
+                            &kt_etypes,
+                        );
+                        krb5_protocol::sort_etypes_keytab_first(&mut etypes, &kt_etypes);
+                        kt = Some(parsed);
+                        Some(keys)
+                    }
+                    Ok(None) => {
+                        let name = cname.unparse_with_realm_lossy(&realm_s);
+                        let text = format!("Keytab contains no suitable keys for {name}");
+                        return Err(Krb5Error::new(Code::Other, text).into());
+                    }
+                    Err(e) => {
+                        let failure = KeytabFailure::from_sname(&e);
+                        krb5_protocol::trace::init_creds_keytab_lookup_failed(
+                            failure.code,
+                            Some(&failure.text),
+                        );
+                        keytab_failure = Some(failure);
+                        None
+                    }
+                }
             }
         }
     } else {
         None
     };
+    let resolved = resolve_kdc(&ctx.profile, &realm_s, kdc)?;
+    let armor = initial_armor(
+        ctx,
+        params.armor_ccache,
+        &realm_s,
+        params.in_tkt_service.is_some(),
+    )?;
+    let pkinit = client_pkinit(ctx, params, &realm_s)?;
+    let mut ticket = params.ticket.clone();
+    ticket.anonymous |= params.anonymous;
     // MIT: `build_in_tkt_name` (get_in_tkt.c:473-512)
     // An initial-ticket service takes the client's realm, whatever realm its name gives.
     let in_tkt_sname = match params.in_tkt_service {
@@ -1589,7 +1599,7 @@ fn kinit_inner(
         cache.set_deltatime(off);
     }
     let tgt_realm = String::from_utf8_lossy(as_out.ticket.realm.as_bytes()).into_owned();
-    let tgt_server = as_out.ticket.sname.unparse_with_realm(&tgt_realm);
+    let tgt_server = as_out.ticket.sname.unparse_with_realm_lossy(&tgt_realm);
     record_preauth_config(
         &mut cache,
         &tgt_server,
@@ -1688,6 +1698,9 @@ fn resolve_kdc(profile: &Krb5Conf, realm: &str, argv: &KdcAddr) -> Result<KdcAdd
     let found = match profile.kdcs_for_traced(realm, &mut crate::trace::dns_srv) {
         Ok(list) => list,
         Err(krb5_config::Error::InvalidArgument) => return Err(Krb5Error::of(Code::Einval)),
+        Err(e @ krb5_config::Error::RealmCantResolve) => {
+            return Err(Krb5Error::new(Code::RealmCantResolve, e.to_string()));
+        }
         Err(_) => Vec::new(),
     };
     let Some(ep) = found.first() else {
@@ -1704,3 +1717,10 @@ fn resolve_kdc(profile: &Krb5Conf, realm: &str, argv: &KdcAddr) -> Result<KdcAdd
 
 #[cfg(all(test, feature = "test-hooks"))]
 mod armor_flow;
+
+const fn defcktname() -> &'static str {
+    match option_env!("KERBER_DEFCKTNAME") {
+        Some(name) => name,
+        None => "FILE:/var/kerberos/krb5/user/%{euid}/client.keytab",
+    }
+}

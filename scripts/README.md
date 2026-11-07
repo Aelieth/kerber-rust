@@ -18,7 +18,7 @@ MIT 1.22.2 and Samba peers; [`docs/gates.md`](../docs/gates.md) lists what each 
 | `lib/boot-shell.sh` | CI job preamble: one shared shell container with the gate bins. |
 | `lib/boot-stock-mit.sh` | CI job preamble: one stock MIT KDC the later steps attach to. |
 | `lib/build-bins.sh` | One cargo build of the bins the gates need; gates call `need_bins`, never cargo. |
-| `lib/run-peer-step.sh` | The peers workflow's wrapper: exit 2 (oracle unavailable) is not a job failure. |
+| `lib/run-peer-step.sh` | The peers workflow's wrapper: a gate that did not run (exit 2) fails, as a failure does. |
 | `lib/junit-annotate.py` | Turns nextest junit failures into GitHub annotations. |
 | `lib/analyze-kdc-slo.py` | Aggregates KDC JSON logs: p99 latency, throughput, error rate, panics. |
 | `lib/bulk-dump.py` | Copies a kdb5_util dump and appends principal records so a kprop transfer spans more than one KRB-PRIV block. |

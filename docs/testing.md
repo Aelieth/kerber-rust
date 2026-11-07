@@ -112,8 +112,8 @@ The toolchain, lld, and `rust-cache` steps are one composite,
 | `test` | `python3 scripts/ci-policy.py`, `cargo fmt --all -- --check`, `cargo clippy -D warnings` with `--all-features` and with none, `cargo nextest run --workspace --profile ci` with the test-hooks features, then doctests |
 | `release` | `cargo nextest run --workspace --profile ci-nofeatures --locked` |
 | `doc` | `cargo doc --workspace --no-deps` under `RUSTDOCFLAGS=-D warnings`; `krb5-embed-realm-example` builds with no `daemon` feature |
-| `fuzz` | `cargo check --locked --manifest-path fuzz/Cargo.toml --bins` |
-| `shellcheck` | `shellcheck -S style` on `scripts/*.sh`, `scripts/lib/*.sh`, `harness/*.sh`, `dist/*.sh`, `harness/field/*.sh`, `harness/field/lib/*.sh`, and `harness/field/scenarios/*.sh`. ShellCheck is v0.11.0, checked by sha256. `.shellcheckrc` sets `external-sources=true` and disables `SC2329` |
+| `fuzz` | `cargo check --locked --manifest-path fuzz/Cargo.toml --bins`, then the same for `harness/hand/t7/Cargo.toml` (T-7's timing harness) |
+| `shellcheck` | `shellcheck -S style` on `scripts/*.sh`, `scripts/lib/*.sh`, `harness/*.sh`, `dist/*.sh`, `harness/field/*.sh`, `harness/field/lib/*.sh`, `harness/field/scenarios/*.sh`, `harness/field/p18/*.sh`, `harness/hand/*.sh`, `harness/hand/lib/*.sh`, `harness/hand/b2/*/*.sh`, `harness/hand/b2/*/*/*.sh`, `harness/hand/r3/*.sh`, `harness/hand/r3/*/*.sh`, and `harness/hand/t7/*.sh`. ShellCheck is v0.11.0, checked by sha256. `.shellcheckrc` sets `external-sources=true` and disables `SC2329` |
 | `msrv` | `cargo build --workspace --all-targets --locked` on Rust 1.95, with the test-hooks features and without |
 | `audit` | `cargo audit --deny warnings` (cargo-audit 0.22.2), `cargo deny`, `cargo vet --locked` (cargo-vet 0.10.0) |
 | `mit-smoke` | `run-harness.sh`, `client-gate.sh`, then a stock MIT KDC and `kdc-gate.sh`, `differential-gate.sh` |

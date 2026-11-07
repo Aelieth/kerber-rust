@@ -11,6 +11,9 @@ pub enum Error {
     // MIT: `k5_locate_server` (lib/krb5/os/locate_kdc.c:871-876)
     #[error("Cannot find KDC for realm")]
     RealmUnknown,
+    // MIT: `k5_locate_server` (lib/krb5/os/locate_kdc.c:861-865)
+    #[error("Cannot find KDC for invalid realm name \"\"")]
+    RealmCantResolve,
     // MIT: `locate_srv_conf_1` (lib/krb5/os/locate_kdc.c:319-320)
     #[error("Invalid argument")]
     InvalidArgument,
@@ -132,6 +135,7 @@ impl Clone for Error {
                 text: text.clone(),
             },
             Self::RealmUnknown => Self::RealmUnknown,
+            Self::RealmCantResolve => Self::RealmCantResolve,
             Self::InvalidArgument => Self::InvalidArgument,
             Self::BadBoolean => Self::BadBoolean,
             Self::UnexpectedPdu => Self::UnexpectedPdu,

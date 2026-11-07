@@ -132,7 +132,7 @@ fn anonymous_pkinit_issues_kx() {
     ]);
     let issued = krb5_kdc::issue_as(&store, &req).expect("anonymous PKINIT");
     assert_eq!(
-        issued.rep.0.cname.components_joined(),
+        issued.rep.0.cname.components_joined_lossy(),
         "WELLKNOWN/ANONYMOUS"
     );
     assert_eq!(

@@ -1,0 +1,11 @@
+# harness/field/scenarios/load.expect: where load.sh's rust leg is known to differ from MIT's, by check name (the INFO
+# observations of checks.tsv). The comparison of the two legs grades a listed check KNOWN; anything else that differs
+# is a finding. Each line names the hand record that shows the difference and what would remove it.
+# check	known difference (rust leg vs MIT)	record	removed by
+LD.rss.base	daemon RSS before the load: krb5kdc about 27 MiB where MIT's is about 5 MiB	upgrade.expect obs.rss.start; none: the LD cells' first record	P16 (investigation)
+LD.rss.first	as LD.rss.base, the series' first sample	as LD.rss.base	P16 (investigation)
+LD.rss.last	RSS at the end of the load; the rust leg's is bounded by LD.rss.cap, MIT's is recorded only	as LD.rss.base	P16 (investigation)
+LD.rss.max	as LD.rss.last, the series' largest sample	as LD.rss.base	P16 (investigation)
+LD.rss.cap	graded on the rust leg only (last <= first * 1.5 + 33 MiB); an INFO row on MIT's	none: the LD cells' first record	a bound on MIT's too, if MIT's RSS is wanted graded
+LD.rss.slope	graded on the rust leg only (<= 0.05 MiB/s from 300 s, when that window spans 300 s); an INFO row on MIT's	none: the LD cells' first record	a bound on MIT's too, if MIT's RSS is wanted graded
+LD.load.throughput	loadgen's kinit + TGS per second differs between the KDCs (a measurement, not a result)	none: the LD cells' first record	nothing: the number is recorded for the trend

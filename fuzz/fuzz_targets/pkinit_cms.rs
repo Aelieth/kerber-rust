@@ -5,5 +5,10 @@ fuzz_target!(|data: &[u8]| {
     let _ = krb5_types::pkinit::parse_pa_pk_as_req_cms(data);
     let _ = krb5_types::pkinit::parse_authpack(data);
     let _ = krb5_types::pkinit::decode_spki(data);
-    let _ = krb5_types::pkinit::cms_unwrap(data);
+    let _ = krb5_types::pkinit::cms_signeddata_verify(
+        data,
+        &[],
+        &[],
+        krb5_types::pkinit::CmsSigner::Client,
+    );
 });

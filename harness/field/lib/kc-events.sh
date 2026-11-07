@@ -3,11 +3,12 @@
 # API from the host (R5-MIT's kc-events.sh without its absolute paths). stdin is the master realm's keyadmin password
 # (secrets/s2/keycloak-keyadmin.password); the bearer token goes through a pipe into curl's `-H @-`. Neither touches
 # argv or disk. TLS is verified against the lab CA. Prints one line per event, oldest first (time, type, user,
-# client, ipAddress, error), then one count line per kind:  count: LOGIN alice nextcloud 192.168.177.22 = 3
+# client, ipAddress, error), then one count line per kind:  count: LOGIN alice nextcloud <client2 address> = 3
 set -euo pipefail
 SINCE=${1:?usage: kc-events.sh <since, epoch seconds>}
 CA=${KERBER_LAB_HOME:-$HOME/kerber-lab}/secrets/ldap/lab-ca.crt
-C=(curl -sS --max-time 20 --resolve services.kerber.test:443:192.168.177.11 --cacert "$CA")
+LN=${FIELD_LAB_NET:?FIELD_LAB_NET is not set in field.env}
+C=(curl -sS --max-time 20 --resolve "services.kerber.test:443:$LN.11" --cacert "$CA")
 tr -d '\n' \
     | "${C[@]}" -d grant_type=password -d client_id=admin-cli -d username=keyadmin --data-urlencode password@- \
         https://services.kerber.test/realms/master/protocol/openid-connect/token \

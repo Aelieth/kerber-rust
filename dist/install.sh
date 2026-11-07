@@ -1,8 +1,9 @@
 #!/bin/sh
 # What `make install`, `make install-clients` and `make uninstall` run: the release programs
-# under MIT's command names, laid out as Fedora's krb5-server and krb5-workstation packages lay
-# out MIT's (docs/install.md). It never builds; the Makefile passes every path, and no path may
-# contain white space.
+# under MIT's command names, laid out as the family's own MIT packages lay out MIT's: FAMILY=rpm
+# as Fedora's and Rocky's krb5-server, FAMILY=deb as Debian's and Ubuntu's krb5-kdc,
+# krb5-admin-server and krb5-kpropd (docs/install.md). It never builds; the Makefile passes every
+# path, and no path may contain white space.
 #
 #   sh dist/install.sh install | install-clients | uninstall
 #
@@ -24,6 +25,7 @@ case $action in
 esac
 : "${RELEASE:?}" "${DIST:?}" "${BINDIR:?}" "${SBINDIR:?}" "${SYSCONFIGDIR:?}"
 : "${LOGROTATEDIR:?}" "${UNITDIR:?}" "${TMPFILESDIR:?}" "${KDCDIR:?}" "${MANIFEST:?}"
+: "${KDCDATADIR:?}" "${FAMILY?}"
 DESTDIR=${DESTDIR-}
 # A DESTDIR that resolves to / is the live system, and gets the live system's checks.
 if [ -n "$DESTDIR" ] && [ "$(realpath -m -- "$DESTDIR")" = / ]; then
@@ -33,10 +35,40 @@ fi
 # The cargo binary, then the MIT name it is installed under.
 KDC_PROGS='krb5-kdc:krb5kdc krb5-kadmind:kadmind krb5-kadmin-local:kadmin.local krb5-kdb:kdb5_util krb5-kprop:kprop krb5-kpropd:kpropd'
 CLIENT_PROGS='krb5-kinit:kinit krb5-klist:klist krb5-kdestroy:kdestroy krb5-kswitch:kswitch krb5-kvno:kvno krb5-kpasswd:kpasswd krb5-ktutil:ktutil'
-# Fedora's kprop.service runs MIT's kpropd as a forking daemon; krb5-kpropd never detaches, so our
-# kprop.service is Type=simple (the one deviation; docs/mit-deviations.md). It is otherwise Fedora's, with
-# /etc/sysconfig/kprop, and starts only where a kpropd.acl marks the host a replica.
-UNITS='krb5kdc kadmin kprop'
+# The family's units, environment files and modes, as its MIT packages have them.
+# rpm: Fedora's kprop.service runs MIT's kpropd as a forking daemon; krb5-kpropd never detaches, so
+# our kprop.service is Type=simple (the one deviation; docs/mit-deviations.md).
+# deb: Debian ships no environment file but the one debconf writes, no tmpfiles or logrotate
+# entry and no [logging]; its kdc.conf and kadm5.acl are 0644 and its two KDC directories 0700.
+case $FAMILY in
+    rpm)
+        UNITS='krb5kdc kadmin kprop'
+        UNITSRC=$DIST/systemd
+        KDCSRC=$DIST/krb5kdc
+        ENVFILES='krb5kdc kadmin kprop'
+        CONFMODE=0600
+        DIRMODE=0755
+        REMOVE='sudo dnf remove --setopt=clean_requirements_on_remove=False krb5-server'
+        ;;
+    deb)
+        UNITS='krb5-kdc krb5-admin-server krb5-kpropd'
+        UNITSRC=$DIST/deb/systemd
+        KDCSRC=$DIST/deb/krb5kdc
+        ENVFILES=
+        CONFMODE=0644
+        DIRMODE=0700
+        PACKAGES='krb5-kdc, krb5-admin-server, krb5-kpropd'
+        REMOVE='sudo apt-get remove krb5-kdc krb5-admin-server krb5-kpropd'
+        ;;
+    *)
+        # The client programs' layout is the same on every family.
+        if [ "$action" != install-clients ]; then
+            printf 'make %s: FAMILY is "%s": set FAMILY=rpm (Fedora, Rocky) or FAMILY=deb (Debian, Ubuntu)\n' \
+                "$action" "$FAMILY" >&2
+            exit 2
+        fi
+        ;;
+esac
 TMPFILE=$TMPFILESDIR/krb5-krb5kdc.conf
 
 say() { printf '%s\n' "$*"; }
@@ -84,8 +116,13 @@ $1
 EOF
     [ -z "$owned" ] && return 0
     if [ "$action" = install ]; then
-        hint="Remove the package first (MIT's krb5-server: sudo dnf remove --no-autoremove krb5-server),
+        if [ "$FAMILY" = rpm ]; then
+            hint="Remove the package first (MIT's krb5-server: $REMOVE),
 or install beside it with another PREFIX, e.g. PREFIX=/usr/local (docs/install.md)."
+        else
+            hint="Remove the packages first (MIT's $PACKAGES: $REMOVE),
+or install beside them with another PREFIX, e.g. PREFIX=/usr/local (docs/install.md)."
+        fi
     else
         hint="install-clients is for hosts without these client tools: keep the package's,
 or install beside them with another PREFIX, e.g. PREFIX=/usr/local (docs/install.md)."
@@ -107,12 +144,13 @@ put() {
     say "installed $3"
 }
 
-# MODE SOURCE DEST: SOURCE with the @SBINDIR@, @SYSCONFIGDIR@ and @KDCDIR@ paths filled in.
+# MODE SOURCE DEST: SOURCE with the @SBINDIR@, @SYSCONFIGDIR@, @KDCDIR@ and @KDCDATADIR@ paths
+# filled in.
 render() {
     mkdir -p "$DESTDIR$(dirname "$3")"
     rm -f "$DESTDIR$3"
     (umask 077 && sed -e "s|@SBINDIR@|$SBINDIR|g" -e "s|@SYSCONFIGDIR@|$SYSCONFIGDIR|g" \
-        -e "s|@KDCDIR@|$KDCDIR|g" "$2" >"$DESTDIR$3")
+        -e "s|@KDCDIR@|$KDCDIR|g" -e "s|@KDCDATADIR@|$KDCDATADIR|g" "$2" >"$DESTDIR$3")
     chmod "$1" "$DESTDIR$3"
     label "$3"
     say "installed $3"
@@ -190,40 +228,51 @@ install_programs() {
     done
 }
 
+# DIR: a KDC directory at the family's mode, made when missing (never in the manifest).
+kdcdir() {
+    if [ ! -d "$DESTDIR$1" ]; then
+        mkdir -p "$DESTDIR$(dirname "$1")"
+        install -d -m "$DIRMODE" "$DESTDIR$1"
+        label "$1"
+        say "installed $1/"
+    fi
+}
+
 do_install() {
     units=
     for u in $UNITS; do
         units="$units$UNITDIR/$u.service
 "
     done
+    [ "$FAMILY" = rpm ] && units="$units$TMPFILE"
     refuse_owned "$(dests "$KDC_PROGS" "$SBINDIR")
-$units$TMPFILE"
+$units"
     need_programs "$KDC_PROGS"
     install_programs "$KDC_PROGS" "$SBINDIR"
     for u in $UNITS; do
-        render 0644 "$DIST/systemd/$u.service.in" "$UNITDIR/$u.service"
+        render 0644 "$UNITSRC/$u.service.in" "$UNITDIR/$u.service"
         record "$UNITDIR/$u.service"
     done
-    put 0644 "$DIST/tmpfiles.d/krb5-krb5kdc.conf" "$TMPFILE"
-    record "$TMPFILE"
-    for s in krb5kdc kadmin kprop; do
+    if [ "$FAMILY" = rpm ]; then
+        put 0644 "$DIST/tmpfiles.d/krb5-krb5kdc.conf" "$TMPFILE"
+        record "$TMPFILE"
+    fi
+    for s in $ENVFILES; do
         config 0644 "$DIST/sysconfig/$s" "$SYSCONFIGDIR/$s"
     done
-    for l in krb5kdc kadmind; do
-        config 0644 "$DIST/logrotate.d/$l" "$LOGROTATEDIR/$l"
-    done
-    logfile /var/log/krb5kdc.log
-    logfile /var/log/kadmind.log
-    if [ ! -d "$DESTDIR$KDCDIR" ]; then
-        mkdir -p "$DESTDIR$(dirname "$KDCDIR")"
-        install -d -m 0755 "$DESTDIR$KDCDIR"
-        label "$KDCDIR"
-        say "installed $KDCDIR/"
+    if [ "$FAMILY" = rpm ]; then
+        for l in krb5kdc kadmind; do
+            config 0644 "$DIST/logrotate.d/$l" "$LOGROTATEDIR/$l"
+        done
+        logfile /var/log/krb5kdc.log
+        logfile /var/log/kadmind.log
     fi
-    config 0600 "$DIST/krb5kdc/kdc.conf.in" "$KDCDIR/kdc.conf" render
-    config 0600 "$DIST/krb5kdc/kadm5.acl" "$KDCDIR/kadm5.acl"
+    kdcdir "$KDCDIR"
+    kdcdir "$KDCDATADIR"
+    config "$CONFMODE" "$KDCSRC/kdc.conf.in" "$KDCDIR/kdc.conf" render
+    config "$CONFMODE" "$KDCSRC/kadm5.acl" "$KDCDIR/kadm5.acl"
     save_manifest
-    if live && command -v systemd-tmpfiles >/dev/null 2>&1; then
+    if [ "$FAMILY" = rpm ] && live && command -v systemd-tmpfiles >/dev/null 2>&1; then
         systemd-tmpfiles --create "$TMPFILE" || say "systemd-tmpfiles --create $TMPFILE failed"
     fi
     if systemd_running; then
@@ -285,7 +334,11 @@ do_uninstall() {
     if systemd_running; then
         systemctl daemon-reload || say "systemctl daemon-reload failed"
     fi
-    say "left in place: $KDCDIR (the database, stash, kdc.conf and kadm5.acl), $SYSCONFIGDIR/{krb5kdc,kadmin,kprop} $LOGROTATEDIR/{krb5kdc,kadmind} and /var/log/{krb5kdc,kadmind}.log"
+    if [ "$FAMILY" = rpm ]; then
+        say "left in place: $KDCDIR (the database, stash, kdc.conf and kadm5.acl), $SYSCONFIGDIR/{krb5kdc,kadmin,kprop} $LOGROTATEDIR/{krb5kdc,kadmind} and /var/log/{krb5kdc,kadmind}.log"
+    else
+        say "left in place: $KDCDIR (kdc.conf, kadm5.acl and the stash) and $KDCDATADIR (the database)"
+    fi
 }
 
 case $action in

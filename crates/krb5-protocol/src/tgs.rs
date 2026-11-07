@@ -664,8 +664,8 @@ fn check_reply_server(
     if !(requested.is_krbtgt() && ticket.is_krbtgt()) {
         return Err(Error::ReplyMismatch(format!(
             "TGS-REP sname mismatch requested={} ticket={}",
-            requested.components_joined(),
-            ticket.components_joined()
+            requested.components_joined_lossy(),
+            ticket.components_joined_lossy()
         )));
     }
     Ok(())
@@ -821,6 +821,7 @@ fn kdc_for_realm(profile: &Krb5Conf, realm: &str, fallback: &KdcAddr) -> Result<
     let found = match profile.kdcs_for_traced(realm, &mut crate::trace::dns_srv) {
         Ok(list) => list,
         Err(krb5_config::Error::InvalidArgument) => return Err(Error::InvalidArgument),
+        Err(krb5_config::Error::RealmCantResolve) => return Err(Error::RealmCantResolve),
         Err(_) => Vec::new(),
     };
     let Some(ep) = found.first() else {
@@ -1071,7 +1072,7 @@ fn tgs_round_trip(
             Some(t) if e.error_code == krb5_types::err::S_PRINCIPAL_UNKNOWN && !t.is_empty() => {
                 let server = e
                     .sname
-                    .unparse_with_realm(&String::from_utf8_lossy(e.realm.as_bytes()));
+                    .unparse_with_realm_lossy(&String::from_utf8_lossy(e.realm.as_bytes()));
                 Some(format!("Server {server} not found in Kerberos database"))
             }
             text => text,

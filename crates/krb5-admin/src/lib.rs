@@ -239,8 +239,12 @@ impl<'a> AdminSession<'a> {
             .and_then(|done| done)
     }
 
-    fn target_id(&self, name: &PrincipalName) -> String {
-        name.unparse_with_realm(self.store.realm())
+    fn check_target(&self, op: AdminOp, name: &PrincipalName) -> Result<(), krb5_kdc::Error> {
+        let realm = self.store.realm();
+        match name.try_unparse_with_realm(realm) {
+            Some(tid) => self.acl.check(&self.actor, op, Some(&tid)),
+            None => self.acl.check_name(&self.actor, op, name, realm.as_bytes()),
+        }
     }
 
     pub fn create_password(&mut self, name: &PrincipalName, password: &[u8]) -> Result<(), Error> {
@@ -308,9 +312,7 @@ impl<'a> AdminSession<'a> {
         keepold: bool,
     ) -> Result<(), Error> {
         self.reload()?;
-        let tid = self.target_id(name);
-        self.acl
-            .check(&self.actor, AdminOp::ChangePassword, Some(&tid))
+        self.check_target(AdminOp::ChangePassword, name)
             .map_err(Error::from)?;
         self.change(|s, _, actor| s.chrand_etypes_keepold(name, etypes, u32::from(keepold), actor))
             .map(|_| ())
@@ -367,13 +369,10 @@ impl<'a> AdminSession<'a> {
         write: impl FnOnce(&Keytab) -> Result<(), String>,
     ) -> Result<Keytab, Error> {
         self.reload()?;
-        let tid = self.target_id(name);
-        self.acl
-            .check(&self.actor, AdminOp::Ktadd, Some(&tid))
+        self.check_target(AdminOp::Ktadd, name)
             .map_err(Error::from)?;
         if rotate {
-            self.acl
-                .check(&self.actor, AdminOp::ChangePassword, Some(&tid))
+            self.check_target(AdminOp::ChangePassword, name)
                 .map_err(Error::from)?;
         }
         self.store
@@ -404,9 +403,7 @@ impl<'a> AdminSession<'a> {
             self.store.check_min_life(name).map_err(Error::from)?;
         }
         if !self_change {
-            let tid = self.target_id(name);
-            self.acl
-                .check(&self.actor, AdminOp::ChangePassword, Some(&tid))
+            self.check_target(AdminOp::ChangePassword, name)
                 .map_err(Error::from)?;
         }
         let realm = self.store.realm().to_owned();
@@ -452,9 +449,7 @@ impl<'a> AdminSession<'a> {
         expiration: u32,
     ) -> Result<(), Error> {
         self.reload()?;
-        let tid = self.target_id(name);
-        self.acl
-            .check(&self.actor, AdminOp::Modify, Some(&tid))
+        self.check_target(AdminOp::Modify, name)
             .map_err(Error::from)?;
         let realm = self.store.realm().to_owned();
         self.change(|s, _, actor| {
@@ -478,9 +473,7 @@ impl<'a> AdminSession<'a> {
 
     pub fn admin_unlock(&mut self, name: &PrincipalName) -> Result<(), Error> {
         self.reload()?;
-        let tid = self.target_id(name);
-        self.acl
-            .check(&self.actor, AdminOp::Modify, Some(&tid))
+        self.check_target(AdminOp::Modify, name)
             .map_err(Error::from)?;
         let realm = self.store.realm().to_owned();
         self.change(|s, _, actor| s.admin_unlock_in(name, &realm, actor))
@@ -494,13 +487,11 @@ impl<'a> AdminSession<'a> {
         max_renewable_life: Option<u64>,
     ) -> Result<(), Error> {
         self.reload()?;
-        let tid = self.target_id(name);
-        self.acl
-            .check(&self.actor, AdminOp::Modify, Some(&tid))
+        self.check_target(AdminOp::Modify, name)
             .map_err(Error::from)?;
         let realm = self.store.realm().to_owned();
         let acl = self.acl;
-        let restrictions = acl.restrictions(&self.actor, Some(&tid));
+        let restrictions = target_restrictions(acl, &self.actor, name, &realm);
         self.change(|s, _, actor| {
             s.apply_admin_fields_in(
                 name,
@@ -526,13 +517,11 @@ impl<'a> AdminSession<'a> {
 
     pub fn set_policy(&mut self, name: &PrincipalName, policy: &str) -> Result<(), Error> {
         self.reload()?;
-        let tid = self.target_id(name);
-        self.acl
-            .check(&self.actor, AdminOp::Modify, Some(&tid))
+        self.check_target(AdminOp::Modify, name)
             .map_err(Error::from)?;
         let realm = self.store.realm().to_owned();
         let acl = self.acl;
-        let restrictions = acl.restrictions(&self.actor, Some(&tid));
+        let restrictions = target_restrictions(acl, &self.actor, name, &realm);
         self.change(|s, _, actor| {
             s.apply_admin_fields_in(
                 name,
@@ -624,5 +613,17 @@ impl<'a> AdminSession<'a> {
 
     pub fn string_attrs(&self, name: &PrincipalName) -> Result<Vec<(String, String)>, Error> {
         self.store.get_strings(name).map_err(Error::from)
+    }
+}
+
+fn target_restrictions<'x>(
+    acl: &'x krb5_kdc::Acl,
+    actor: &str,
+    name: &PrincipalName,
+    realm: &str,
+) -> Option<&'x krb5_kdc::Restrictions> {
+    match name.try_unparse_with_realm(realm) {
+        Some(tid) => acl.restrictions(actor, Some(&tid)),
+        None => acl.restrictions_name(actor, name, realm.as_bytes()),
     }
 }

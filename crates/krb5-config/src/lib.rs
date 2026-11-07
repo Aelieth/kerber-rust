@@ -52,6 +52,9 @@ pub enum Error {
     // MIT: `KRB5_CONFIG_NODEFREALM` (krb5_err.et:310-310)
     #[error("Configuration file does not specify default realm")]
     NoDefaultRealm,
+    // MIT: `k5_locate_server` (lib/krb5/os/locate_kdc.c:861-865)
+    #[error("Cannot find KDC for invalid realm name \"\"")]
+    RealmCantResolve,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -401,9 +404,8 @@ pub use ccname::{
 pub use context::ClientContext;
 pub use files::ReadOnce;
 pub use hostname::{
-    CanonPrinc, HostPrinc, SnameError, expand_hostname, expand_hostname_no_dns,
-    fallback_host_realm, fallback_host_realm_traced, local_host_name, sname_to_principal,
-    this_host,
+    CanonPrinc, HostPrinc, SnameError, fallback_host_realm, fallback_host_realm_traced,
+    name_of_addr, sname_to_principal,
 };
 pub use iprop_params::{DEF_ULOGENTRIES, IpropParams, KadmindListen, MISSING_CONF_PARAMS};
 pub use kdcconf::{
@@ -424,5 +426,5 @@ pub use profile::{
     load_krb5_conf, load_krb5_conf_paths, parse_deltat, split_krb5_config_paths,
 };
 pub use profile_set::ProfileSet;
-pub use srv::{DnsSrv, lookup_srv_kdc, name_of_addr};
+pub use srv::{DnsSrv, lookup_srv_kdc};
 pub use testenv::{isolate_test_krb5, isolated_profile, set_test_kdc_profile, set_test_krb5_paths};

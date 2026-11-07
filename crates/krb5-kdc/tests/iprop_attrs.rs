@@ -171,7 +171,7 @@ fn an_update_sends_the_listed_attributes_in_mits_shapes() {
     );
     let record = store.get_name(&name).unwrap();
     let modifier = vals.iter().find_map(|v| match v {
-        KdbeVal::ModPrinc(n, r) => Some(krb5_kdc::lookup_principal_id(n, r)),
+        KdbeVal::ModPrinc(n, r) => krb5_kdc::lookup_principal_id(n, r),
         _ => None,
     });
     assert_eq!(modifier, tl_mod_princ_name(&record.tl_data));

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # harness/field/scenarios/klldap-swap.sh --leg mit|rust: KLLDAP on the klldap VM's docker (F4g; it ran on
-# alien's docker before). As the hand records f-F3-mit (--leg mit: KLLDAP's image as it is, MIT krb5-server
+# the workstation's docker before). As the hand records f-F3-mit (--leg mit: KLLDAP's image as it is, MIT krb5-server
 # inside) and f-F3 (--leg rust: krb5-server swapped for the ref's build) ran it. Each leg, every docker step
 # on the VM through `run klldap`: the image by KLLDAP's `make test` recipe; its live-KDC FFI lane
 # (gate/kdc-sandbox.sh + cargo test -p lldap-kerberos -- --ignored) on the two MIT client libraries F3-MIT
@@ -10,13 +10,14 @@
 # install DESTDIR), checks the staged programs (strings, glibc floor), applies F3's one Dockerfile hunk and
 # migrates the fixture's KDC by docs/install.md "In a container". It compares with the MIT leg: this run's,
 # else runs/mit-latest; with neither, or with an empty file on either side, each comparison fails.
-# Nothing builds or runs in alien's docker: the inputs are pushed to the VM over the lab key, every docker
-# command runs through `run klldap`, and a postflight asserts alien's `docker ps -a` and image digests are
+# Nothing builds or runs in the workstation's docker: the inputs are pushed to the VM over the lab key, every docker
+# command runs through `run klldap`, and a postflight asserts the workstation's `docker ps -a` and image digests are
 # unchanged. The VM keeps the run's scratch under /var/tmp/kf-<id>-<leg> (removed at the end) and a persistent
 # cargo cache under /var/tmp/kf-cache; the leg's VM containers, volumes, network and image tags are removed too.
 # Inputs (field.env): FIELD_KLLDAP_REPO + FIELD_KLLDAP_PIN (`git archive` of the pin, never the working tree),
 # FIELD_KLLDAP_FIXTURE, FIELD_LLDAP_CLI. Run by run.sh (REC_DIR, TMPDIR, FIELD_RUN, FIELD_TREE_TAR, FIELD_SHA,
 # FIELD_REF, FIELD_DEADLINE).
+# Fedora only (DS): the embed, the DC or by hand
 # vms: klldap
 # legs: mit rust
 set -uo pipefail
@@ -34,13 +35,13 @@ DOCB=$FIELD_LIB/docblocks.py
 REPO=${FIELD_KLLDAP_REPO:-} PIN=${FIELD_KLLDAP_PIN:-} FIX=${FIELD_KLLDAP_FIXTURE:-} CLI=${FIELD_LLDAP_CLI:-}
 ID=$(basename "$FIELD_RUN" | tr '[:upper:]' '[:lower:]')
 N=kerber-field-$ID-$LEG          # this leg's images ($N:<what>), containers, volumes and network, on the klldap VM
-T=$TMPDIR                        # alien's run scratch: the records, and the inputs generated here before being pushed
+T=$TMPDIR                        # run scratch: the records, and the inputs generated here before being pushed
 VT=/var/tmp/kf-$ID-$LEG          # this leg's scratch on the klldap VM: the source, the staging, docker volumes, gate results
 VCACHE=/var/tmp/kf-cache         # rustup + cargo homes on the VM, kept across runs
 VTS=$VT-secrets                  # this leg's injected secrets: a sibling dir OUTSIDE the mounted VT (boot --env-file, the gate's admin password)
 SRC=$VT/klldap CO=kerber-rust-${FIELD_SHA:0:12}
-BASEDN=dc=testlabby,dc=local     # the fixture's base DN (f-F3-mit record, step 2b)
-VM=klldap                        # the Docker-host VM (192.168.177.30); every docker command runs here
+BASEDN=${FIELD_KLLDAP_BASEDN:?FIELD_KLLDAP_BASEDN is not set in field.env}   # the fixture's base DN
+VM=klldap                        # the Docker-host VM (the klldap VM's lab address); every docker command runs here
 DK="nice -n 10 docker"           # the CLI niced; the builds and lanes run niced inside, capped at $CPUS CPUs
 CPUS=4                           # the klldap VM's vCPUs
 KEYSEED_FAILS='[FAIL] 80-migration-boot: force-reset boot failed for another reason (see force-reset.log)
@@ -60,15 +61,15 @@ vrun() {
 }
 # vpush <what> <local file>: pipe a local file to the VM on stdin; the remote command places it. hostin records.
 vpush() { local what=$1 lf=$2 rcmd=$3; hostin "$what" "$LABQ ssh $VM -- $(q "$rcmd")" < "$lf"; }
-# aliendocker: alien's docker as a stable projection -- images by repo:tag/id/digest, containers by
+# hostdocker: the workstation's docker as a stable projection -- images by repo:tag/id/digest, containers by
 # id/name/image/created time, sorted. Read-only (ps, images); the run never builds or runs a container here.
-aliendocker() {
+hostdocker() {
     { docker image ls --digests --format '{{.Repository}}:{{.Tag}} {{.ID}} {{.Digest}}'
       docker ps -a --format '{{.ID}} {{.Names}} {{.Image}} {{.CreatedAt}}'; } 2>/dev/null | LC_ALL=C sort
 }
 
 # On any exit: this leg's containers, network, volumes and image tags on the VM, and its VM scratch (VT),
-# removed (VCACHE is kept). Nothing on alien's docker is touched.
+# removed (VCACHE is kept). Nothing on the workstation's docker is touched.
 cleanup() {
     timeout -k 5 300 "$LAB" ssh "$VM" -- "docker ps -aq --filter name=$N- | xargs -r docker rm -f; docker network ls -q --filter name=$N- | xargs -r docker network rm; docker volume ls -q --filter name=$N- | xargs -r docker volume rm; docker images --format '{{.Repository}}:{{.Tag}}' $N | xargs -r docker rmi; sudo rm -rf $(q "$VT") $(q "$VTS")" < /dev/null > /dev/null 2>&1
 }
@@ -77,7 +78,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
 
-# The leg's helper (generated on alien; pushed to the VM for keyseed/hunk/sockets, run on alien for secrets):
+# The leg's helper (generated on the workstation; pushed to the VM for keyseed/hunk/sockets, run on the workstation for secrets):
 # per-leg secrets, the fresh key_seed, F3's Dockerfile hunk, the listening sockets.
 cat > "$T/klldap-swap.py" <<'EOF'
 import difflib, ipaddress, os, re, secrets, shutil, sys
@@ -221,7 +222,7 @@ for l in sys.stdin: print(\"%.3f %s\" % (time.time(), l), end=\"\", flush=True)'
     RID=$(sed -nE 's/^[0-9.]+ KLLDAP gate: .* run=([0-9]+-[0-9]+-[0-9]+)$/\1/p' "$log" | head -n 1)
     check "gate.$1.left" '^left: 0 containers, 0 volumes, 0 networks$' run "$VM" "[ -n '$RID' ] || { echo 'no gate run id in its log'; exit 1; }; docker version --format '{{.Server.Version}}' > /dev/null && printf 'left: %s containers, %s volumes, %s networks\n' \"\$(docker ps -aq --filter name=$RID | wc -l)\" \"\$(docker volume ls -q --filter name=$RID | wc -l)\" \"\$(docker network ls -q --filter name=$RID | wc -l)\""
 }
-# cmpref <name> <file>: this leg's <file> against the reference MIT leg's (docker bridge addresses masked). On alien.
+# cmpref <name> <file>: this leg's <file> against the reference MIT leg's (docker bridge addresses masked). On the workstation.
 # A missing or empty side fails and names that leg: diff would call two empty files identical.
 cmpref() {
     local mitf='' mitlab="MIT $2"
@@ -235,9 +236,9 @@ cmpref() {
 }
 
 section "klldap-swap --leg $LEG: KLLDAP ${PIN:-<no pin>} on the klldap VM's docker$([ "$LEG" = rust ] && echo ", krb5-server swapped for ref $FIELD_REF = $FIELD_SHA")"
-section "0. the VM: alien's docker state is recorded (read-only), the leg's stale artifacts are pre-cleaned, VT is made"
-check alien.docker.before '^alien docker: [0-9]+ images, [0-9]+ containers$' host "printf 'alien docker: %s images, %s containers\n' \"\$(docker image ls -q | sort -u | wc -l)\" \"\$(docker ps -aq | wc -l)\""
-aliendocker > "$T/alien-docker.before"
+section "0. the VM: the workstation's docker state is recorded (read-only), the leg's stale artifacts are pre-cleaned, VT is made"
+check workstation.docker.before '^workstation docker: [0-9]+ images, [0-9]+ containers$' host "printf 'workstation docker: %s images, %s containers\n' \"\$(docker image ls -q | sort -u | wc -l)\" \"\$(docker ps -aq | wc -l)\""
+hostdocker > "$T/workstation-docker.before"
 check vm.preclean '^pre-clean: done$' run "$VM" "docker version --format '{{.Server.Version}}' > /dev/null && docker ps -aq --filter name=$N- | xargs -r docker rm -f && docker network ls -q --filter name=$N- | xargs -r docker network rm && docker volume ls -q --filter name=$N- | xargs -r docker volume rm && docker images --format '{{.Repository}}:{{.Tag}}' $N | xargs -r docker rmi && sudo rm -rf $(q "$VT") $(q "$VTS") && mkdir -p $(q "$VT") $(q "$VCACHE") && mkdir -m 0700 -p $(q "$VTS") && echo 'pre-clean: done'"
 # Under SELinux the VM's containers (container_t) cannot use tmp_t: VT and VCACHE get container_file_t, as -v's :z would
 # give them, so the lanes, the build, the doc's blocks and the gate's own mounts (its phase 80 copies with cp -a, which
@@ -408,10 +409,10 @@ if [ "$LEG" = rust ]; then
     cmpref gate.table gate-table.txt
 fi
 
-section "12. postflight: alien's docker is unchanged (nothing built or ran there), the VM's leg artifacts go, and no injected secret reached an image layer or VT"
-aliendocker > "$T/alien-docker.after"
-check alien.docker.unchanged '^alien docker: unchanged$' host "diff $(q "$T/alien-docker.before") $(q "$T/alien-docker.after") > $(q "$T/alien-docker.diff") && echo 'alien docker: unchanged' || { echo 'alien docker CHANGED:'; cat $(q "$T/alien-docker.diff"); exit 1; }"
-check alien.docker.control '^control: the check reds on an altered before$' host "head -n -1 $(q "$T/alien-docker.before") > $(q "$T/alien-docker.altered") 2>/dev/null; if diff -q $(q "$T/alien-docker.altered") $(q "$T/alien-docker.after") > /dev/null 2>&1; then echo 'control: a dropped line did not change the diff -- the check is blind'; exit 1; else echo 'control: the check reds on an altered before'; fi"
+section "12. postflight: the workstation's docker is unchanged (nothing built or ran there), the VM's leg artifacts go, and no injected secret reached an image layer or VT"
+hostdocker > "$T/workstation-docker.after"
+check workstation.docker.unchanged '^workstation docker: unchanged$' host "diff $(q "$T/workstation-docker.before") $(q "$T/workstation-docker.after") > $(q "$T/workstation-docker.diff") && echo 'workstation docker: unchanged' || { echo 'workstation docker CHANGED:'; cat $(q "$T/workstation-docker.diff"); exit 1; }"
+check workstation.docker.control '^control: the check reds on an altered before$' host "head -n -1 $(q "$T/workstation-docker.before") > $(q "$T/workstation-docker.altered") 2>/dev/null; if diff -q $(q "$T/workstation-docker.altered") $(q "$T/workstation-docker.after") > /dev/null 2>&1; then echo 'control: a dropped line did not change the diff -- the check is blind'; exit 1; else echo 'control: the check reds on an altered before'; fi"
 # every built image's history into the records, so the secrets.leg scan below reads it for a secret baked into a layer
 run "$VM" "for t in \$(docker images --format '{{.Repository}}:{{.Tag}}' $N | sort -u); do echo \"=== \$t ===\"; docker history --no-trunc \"\$t\" 2>&1; done"
 cp "$LAST_OUT" "$REC_DIR/logs/image-history.log"

@@ -9,7 +9,7 @@ use super::kdb_convert::{
     AT_PW_HIST, AT_PW_HIST_KVNO, AT_PW_LAST_CHANGE, AT_PW_POLICY, AT_PW_POLICY_SWITCH, AT_TL_DATA,
     IpropUpdate, KdbeVal,
 };
-use super::keys::KeyEntry;
+use super::keys::{KeyEntry, KeySlot, OpaqueKey, merge_slots};
 use super::principal::TlData;
 use crate::osa::OsaKeyData;
 
@@ -111,9 +111,30 @@ impl<'a> XdrIn<'a> {
 
 // MIT: `xdr_kdbe_key_t` (lib/kdb/iprop_xdr.c:75-90)
 // MIT: `ulog_conv_2logentry` (lib/kdb/kdb_convert.c:415-462)
-fn encode_keydata<E>(w: &mut XdrOut, keys: &[KeyEntry], wrap: &KeyWrap<'_, E>) -> Result<(), E> {
-    w.count(keys.len());
-    for k in keys {
+fn encode_keydata<E>(
+    w: &mut XdrOut,
+    keys: &[KeyEntry],
+    opaque: &[OpaqueKey],
+    wrap: &KeyWrap<'_, E>,
+) -> Result<(), E> {
+    w.count(keys.len() + opaque.len());
+    for slot in merge_slots(keys, opaque) {
+        let k = match slot {
+            KeySlot::Usable(k) => k,
+            KeySlot::Opaque(o) => {
+                w.u32(o.ver.cast_unsigned());
+                w.u32(o.kvno);
+                w.count(o.slots.len());
+                for (ty, _) in &o.slots {
+                    w.u32(ty.cast_unsigned());
+                }
+                w.count(o.slots.len());
+                for (_, c) in &o.slots {
+                    w.opaque(c);
+                }
+                continue;
+            }
+        };
         let enc = wrap(k.key.as_bytes())?;
         let etype = u32::try_from(k.etype.to_iana()).unwrap_or(0);
         if let (Some(salt_type), Some(salt)) = (k.salt_type, k.kdb_salt.as_ref()) {
@@ -191,7 +212,7 @@ pub fn encode_kdbe<E>(vals: &[KdbeVal], wrap: &KeyWrap<'_, E>) -> Result<Vec<u8>
             KdbeVal::Princ(name, realm) | KdbeVal::ModPrinc(name, realm) => {
                 encode_princ(&mut w, name, realm);
             }
-            KdbeVal::KeyData(keys) => encode_keydata(&mut w, keys, wrap)?,
+            KdbeVal::KeyData(keys, opaque) => encode_keydata(&mut w, keys, opaque, wrap)?,
             KdbeVal::TlData(tl) => {
                 w.count(tl.len());
                 for t in tl {
@@ -278,9 +299,24 @@ fn skip_princ(r: &mut XdrIn<'_>) -> Result<(), XdrError> {
 /// Types past 31 set no attribute bit.
 pub fn walk_incr_update(b: &[u8]) -> Result<IncrLayout, XdrError> {
     let mut r = XdrIn::new(b);
-    let name = std::str::from_utf8(r.opaque()?)
+    let (name, mut layout) = walk_update(&mut r)?;
+    std::str::from_utf8(name)
         .map_err(|_| XdrError::Invalid("update name is not UTF-8".into()))?
-        .to_owned();
+        .clone_into(&mut layout.name);
+    if layout.len != b.len() {
+        return Err(XdrError::Invalid("bytes past the update".into()));
+    }
+    Ok(layout)
+}
+
+// MIT: `xdr_kdb_incr_update_t` (lib/kdb/iprop_xdr.c:263-285)
+pub fn skip_incr_update(b: &[u8]) -> Result<usize, XdrError> {
+    let mut r = XdrIn::new(b);
+    walk_update(&mut r).map(|(_, layout)| layout.len)
+}
+
+fn walk_update<'a>(r: &mut XdrIn<'a>) -> Result<(&'a [u8], IncrLayout), XdrError> {
+    let name = r.opaque()?;
     let sno = r.u32()?;
     let time = UlogTime {
         seconds: r.u32()?,
@@ -297,11 +333,11 @@ pub fn walk_incr_update(b: &[u8]) -> Result<IncrLayout, XdrError> {
             | AT_PW_LAST_CHANGE | AT_PW_POLICY_SWITCH | AT_PW_HIST_KVNO => {
                 r.u32()?;
             }
-            AT_PRINC | AT_MOD_PRINC => skip_princ(&mut r)?,
+            AT_PRINC | AT_MOD_PRINC => skip_princ(r)?,
             AT_KEYDATA => {
                 let n = r.count(16)?;
                 for _ in 0..n {
-                    skip_key(&mut r)?;
+                    skip_key(r)?;
                 }
             }
             AT_TL_DATA => {
@@ -316,7 +352,7 @@ pub fn walk_incr_update(b: &[u8]) -> Result<IncrLayout, XdrError> {
                 for _ in 0..n {
                     let k = r.count(16)?;
                     for _ in 0..k {
-                        skip_key(&mut r)?;
+                        skip_key(r)?;
                     }
                 }
             }
@@ -333,11 +369,8 @@ pub fn walk_incr_update(b: &[u8]) -> Result<IncrLayout, XdrError> {
         r.opaque()?;
     }
     r.opaque()?;
-    if r.at != b.len() {
-        return Err(XdrError::Invalid("bytes past the update".into()));
-    }
-    Ok(IncrLayout {
-        name,
+    let layout = IncrLayout {
+        name: String::new(),
         sno,
         time,
         deleted,
@@ -346,7 +379,8 @@ pub fn walk_incr_update(b: &[u8]) -> Result<IncrLayout, XdrError> {
         attrs,
         nvals,
         len: r.at,
-    })
+    };
+    Ok((name, layout))
 }
 
 fn decode_keydata_raw(r: &mut XdrIn<'_>) -> Result<Vec<OsaKeyData>, XdrError> {
@@ -385,12 +419,17 @@ fn decode_keydata_raw(r: &mut XdrIn<'_>) -> Result<Vec<OsaKeyData>, XdrError> {
 }
 
 fn decode_princ(r: &mut XdrIn<'_>) -> Result<(PrincipalName, String), XdrError> {
-    let realm = String::from_utf8_lossy(r.opaque()?).into_owned();
+    let utf8 = |b: &[u8]| {
+        std::str::from_utf8(b)
+            .map(str::to_owned)
+            .map_err(|_| XdrError::Invalid(crate::kdb::NOT_UTF8.into()))
+    };
+    let realm = utf8(r.opaque()?)?;
     let n = r.count(8)?;
     let mut comps = Vec::with_capacity(n);
     for _ in 0..n {
         let _magic = r.u32()?;
-        comps.push(String::from_utf8_lossy(r.opaque()?).into_owned());
+        comps.push(utf8(r.opaque()?)?);
     }
     let ntype = r.u32()?.cast_signed();
     let refs: Vec<&str> = comps.iter().map(String::as_str).collect();
@@ -406,10 +445,11 @@ fn decode_princ(r: &mut XdrIn<'_>) -> Result<(PrincipalName, String), XdrError> 
 fn decode_keydata(
     r: &mut XdrIn<'_>,
     mkey: Option<&ProtocolKey>,
-) -> Result<Vec<KeyEntry>, XdrError> {
+) -> Result<(Vec<KeyEntry>, Vec<OpaqueKey>), XdrError> {
     let n = r.count(16)?;
     let mut keys = Vec::with_capacity(n);
-    for _ in 0..n {
+    let mut opaque = Vec::new();
+    for at in 0..n {
         let ver = r.u32()?;
         let kvno = r.u32()?;
         let n_enc = r.count(4)?;
@@ -432,6 +472,12 @@ fn decode_keydata(
             continue;
         };
         let Ok(etype) = EncryptionType::from_iana(et).or_else(|_| EncryptionType::known(et)) else {
+            opaque.push(OpaqueKey {
+                ver: ver.cast_signed(),
+                kvno,
+                slots: enctypes.into_iter().zip(contents).collect(),
+                at,
+            });
             continue;
         };
         let Some(raw_enc) = contents.first() else {
@@ -458,7 +504,7 @@ fn decode_keydata(
             kdb_salt,
         });
     }
-    Ok(keys)
+    Ok((keys, opaque))
 }
 
 pub(crate) fn decode_kdbe(
@@ -482,7 +528,10 @@ pub(crate) fn decode_kdbe(
                 let (name, realm) = decode_princ(r)?;
                 KdbeVal::Princ(name, realm)
             }
-            AT_KEYDATA => KdbeVal::KeyData(decode_keydata(r, mkey)?),
+            AT_KEYDATA => {
+                let (keys, opaque) = decode_keydata(r, mkey)?;
+                KdbeVal::KeyData(keys, opaque)
+            }
             AT_TL_DATA => {
                 let nt = r.count(8)?;
                 let mut tl = Vec::with_capacity(nt);
@@ -523,7 +572,9 @@ pub fn decode_incr_update(
     mkey: Option<&ProtocolKey>,
 ) -> Result<(IpropUpdate, usize), XdrError> {
     let mut r = XdrIn::new(b);
-    let name = String::from_utf8_lossy(r.opaque()?).into_owned();
+    let name = std::str::from_utf8(r.opaque()?)
+        .map_err(|_| XdrError::Invalid(crate::kdb::NOT_UTF8.into()))?
+        .to_owned();
     let sno = r.u32()?;
     let time = r.u32()?;
     let _usec = r.u32()?;

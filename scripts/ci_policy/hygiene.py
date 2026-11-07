@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import os
 import pathlib
@@ -503,6 +504,65 @@ def check_release_clean(root: pathlib.Path | None = None) -> None:
     print("release-clean: no work dir, merge leftover, work-area path or note id")
 
 
+# A lab's own addresses are keys in its field.env, outside the tree; field.env.example shows them.
+_D = r"\\{0,2}\."  # a dot, or a regex-escaped one
+_PRIVATE_V4 = re.compile(
+    rf"(?<![\d.])(?:10{_D}\d{{1,3}}|172{_D}(?:1[6-9]|2\d|3[01])|192{_D}168)"
+    rf"{_D}\d{{1,3}}{_D}\d{{1,3}}(?!\d|{_D}\d)"
+)
+_PRIVATE_V4_SCOPE = ("harness/", "docs/", "scripts/", ".github/")
+_PRIVATE_V4_ALLOW = frozenset({
+    "harness/field/field.env.example",
+    "scripts/oracle/rd-priv-oracle.c",
+})
+
+
+def _private_v4_lines(text: str) -> list[int]:
+    return [n for n, line in enumerate(text.splitlines(), 1) if _PRIVATE_V4.search(line)]
+
+
+def check_private_addresses(root: pathlib.Path | None = None) -> None:
+    """No RFC 1918 address in harness/, docs/, scripts/ or .github/ outside the named files.
+    Findings name the file and line, never the address."""
+    root = ROOT if root is None else root
+    listed = subprocess.run(
+        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        cwd=root, capture_output=True, text=True, check=False,
+    )
+    if listed.returncode != 0:
+        _die(f"git ls-files: {(listed.stderr or listed.stdout).strip()[-200:]}")
+    bad = []
+    for rel in sorted(set(filter(None, listed.stdout.split("\0")))):
+        if not rel.startswith(_PRIVATE_V4_SCOPE) or rel in _PRIVATE_V4_ALLOW:
+            continue
+        if rel.startswith("scripts/ci_policy/selftest/"):
+            continue
+        try:
+            text = (root / rel).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        bad += [f"{rel}:{n}" for n in _private_v4_lines(text)]
+    if bad:
+        _die(f"{len(bad)} private address(es) outside field.env: " + "; ".join(bad[:8]))
+    print("private-addresses: none outside field.env.example and the named files")
+
+
+def check_hand_pins(root: pathlib.Path | None = None) -> None:
+    """Each SHA256SUMS under harness/ matches the files beside it, as the legs check."""
+    root = ROOT if root is None else root
+    sums = sorted((root / "harness").rglob("SHA256SUMS"))
+    bad = []
+    for f in sums:
+        for n, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+            want, _, name = line.partition("  ")
+            path = f.parent / name
+            if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != want:
+                bad.append(f"{f.relative_to(root)}:{n} {name}")
+    if bad:
+        _die(f"{len(bad)} hand-leg pin(s) differ from their file: " + "; ".join(bad[:8]))
+    print(f"hand-pins: {len(sums)} SHA256SUMS file(s) match their files")
+
+
 # rscount.py's rule. The four names are the out-of-line test files that rule misses.
 _RATIO_OUTLINE = frozenset({"armor_flow.rs", "a2_r17_reply.rs", "mit_pac_golden.rs", "diff_compare.rs"})
 _RATIO_TEST_ATTR = re.compile(r"^\s*#\[cfg\((test|all\(test.*|any\(test.*)\)\]")
@@ -636,12 +696,12 @@ def _ratio_totals(root: pathlib.Path) -> tuple[dict[str, int], dict[str, dict[st
     """rscount.py's totals, with the four missed modules counted as test code."""
     tot = {"code": 0, "comment": 0, "blank": 0, "test_code": 0, "test_comment": 0}
     per: dict[str, dict[str, int]] = {}
-    # fiat-crypto's generated field code is not ours to count, as vendor/ is not.
-    fiat = root / "crates" / "krb5-brainpool" / "src" / "fiat"
+    # fiat-crypto's generated field code is not ours to count, as vendor/ is not; T-7 is a tool.
+    skip = {root / "crates" / "krb5-brainpool" / "src" / "fiat", root / "harness" / "hand" / "t7"}
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [
             d for d in dirnames
-            if d not in ("target", ".git", "vendor") and pathlib.Path(dirpath) / d != fiat
+            if d not in ("target", ".git", "vendor") and pathlib.Path(dirpath) / d not in skip
         ]
         for name in filenames:
             if not name.endswith(".rs"):
@@ -667,6 +727,7 @@ _MIT_CITE_RE = re.compile(
     r"^\s*// MIT: `[A-Za-z_]\w*`( \+ `[A-Za-z_]\w*`)* \([\w./-]+(:\d+(-\d+)?)?\)$"
 )
 _FIAT_REL = "crates/krb5-brainpool/src/fiat/"
+_T7_REL = "harness/hand/t7/"
 
 
 def _mit_cite_ok(line: str) -> bool:
@@ -741,7 +802,8 @@ def _char_totals(root: pathlib.Path) -> tuple[dict[str, int], dict[str, dict[str
     Code characters are the line with its indentation and any trailing `//` comment removed.
     An inline `/* */` on a code line stays in the code count.
     Comment characters are the comment text including its marker, without the indentation.
-    `crates/krb5-brainpool/src/fiat/` is skipped. Test lines use the same marking as the line ratio.
+    `crates/krb5-brainpool/src/fiat/` and `harness/hand/t7/` are skipped. Test lines use the same
+    marking as the line ratio.
     """
     tot = {"code": 0, "comment": 0, "exempt": 0}
     per: dict[str, dict[str, int]] = {}
@@ -753,7 +815,7 @@ def _char_totals(root: pathlib.Path) -> tuple[dict[str, int], dict[str, dict[str
                 continue
             path = pathlib.Path(dirpath) / name
             rel = path.relative_to(root).as_posix()
-            if rel.startswith(_FIAT_REL):
+            if rel.startswith((_FIAT_REL, _T7_REL)):
                 continue
             text = path.read_text(encoding="utf-8", errors="replace")
             lines, kinds = _ratio_scan(text)

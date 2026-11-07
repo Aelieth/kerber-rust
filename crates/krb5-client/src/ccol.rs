@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use krb5_config::{CcSpec, ClientContext};
+use krb5_config::{CanonPrinc, CcSpec, ClientContext};
 
 use crate::creds::{Princ, princ_eq};
 use crate::errmsg::{Code, Krb5Error};
@@ -213,11 +213,24 @@ pub fn cache_match(
     default: &CcSpec,
     princ: &Princ,
 ) -> Result<Cache, Krb5Error> {
-    let found = collection(ctx, default)?
-        .into_iter()
-        .find(|c| c.principal(ctx).is_ok_and(|p| princ_eq(&p, princ)));
-    crate::trace::cache_match(princ, found.is_some());
-    found.ok_or_else(|| Krb5Error::of(Code::CcNotfound))
+    let caches = collection(ctx, default)?;
+    let mut iter = CanonPrinc::new(&ctx.profile, princ);
+    iter.subst_defrealm = true;
+    let found = (|| {
+        while let Some(c) = iter.next_candidate()? {
+            let mut held = caches.iter();
+            if let Some(cache) = held.find(|h| h.principal(ctx).is_ok_and(|p| princ_eq(&p, &c))) {
+                return Ok(Some(cache.clone()));
+            }
+        }
+        Ok(None)
+    })();
+    crate::trace::cache_match(princ, found.as_ref().map(Option::is_some));
+    match found {
+        Ok(Some(cache)) => Ok(cache),
+        Ok(None) => Err(Krb5Error::of(Code::CcNotfound)),
+        Err(e) => Err(Krb5Error::from_sname(&e)),
+    }
 }
 
 // MIT: `krb5_cc_new_unique` (ccbase.c:289-307)

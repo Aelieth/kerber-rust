@@ -51,6 +51,11 @@ checked against the realm's ACL before either principal is written.
 `--allow-to-delegate host/svc HTTP/target@REALM` adds that target, in MIT's principal string form,
 to the service's allowed-to list, writes it, and stops. The service has to already be in the realm.
 
+`--write-load N,MS` serves as usual while N threads change the passwords of `writeload/0` to
+`writeload/<N-1>` (created if missing) through `change_password_shared`, each starting a write
+every MS milliseconds, or back to back at 0. It is a load for timing `kinit` under writes, as MIT
+`kadmin cpw` loops give MIT's KDC. On stop it prints `write-load writers= writes= failed= ms=`.
+
 ## Authorization modules
 
 It registers two example `kadm5_auth` modules in [`auth_modules.rs`](src/auth_modules.rs) through

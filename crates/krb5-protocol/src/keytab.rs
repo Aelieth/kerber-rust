@@ -548,7 +548,7 @@ fn parse_unparsed_meta(body: &[u8], ver: u16) -> Result<UnparsedMeta, io::Error>
         kvno,
         format!(
             "{}@{}",
-            name.components_joined(),
+            name.components_joined_lossy(),
             String::from_utf8_lossy(realm_s.as_bytes())
         ),
         timestamp,
@@ -748,6 +748,20 @@ impl KeytabFailure {
     }
 
     #[must_use]
+    pub fn from_sname(e: &krb5_config::SnameError) -> Self {
+        let n = match e {
+            krb5_config::SnameError::UnsupportedNameType => 218,
+            krb5_config::SnameError::NoDefaultRealm => 224,
+            krb5_config::SnameError::Name(_) => 134,
+        };
+        let code = crate::trace::ERROR_TABLE_BASE_KRB5 + n;
+        Self {
+            code,
+            text: crate::trace::error_message(code),
+        }
+    }
+
+    #[must_use]
     pub fn bad_version() -> Self {
         let code = crate::trace::ERROR_TABLE_BASE_KRB5 + 213;
         Self {
@@ -800,6 +814,25 @@ pub fn keytab_init_creds_keys(
     } else {
         Some((keys, etypes))
     }
+}
+
+pub type InitCredsKeys = (krb5_config::HostPrinc, Vec<ProtocolKey>, Vec<i32>);
+
+// MIT: `krb5_init_creds_set_keytab` (gic_keytab.c:183-203)
+pub fn keytab_init_creds_client(
+    kt: &Keytab,
+    conf: &krb5_config::Krb5Conf,
+    client: &krb5_config::HostPrinc,
+) -> Result<Option<InitCredsKeys>, krb5_config::SnameError> {
+    let mut iter = krb5_config::CanonPrinc::new(conf, client);
+    iter.subst_defrealm = true;
+    while let Some(c) = iter.next_candidate()? {
+        let realm = String::from_utf8_lossy(c.0.as_bytes()).into_owned();
+        if let Some((keys, etypes)) = keytab_init_creds_keys(kt, &c.1, &realm) {
+            return Ok(Some((c, keys, etypes)));
+        }
+    }
+    Ok(None)
 }
 
 // MIT: `sort_enctypes` (gic_keytab.c:149-174)
@@ -916,7 +949,7 @@ mod tests {
         assert_eq!(e.kvno, 300);
         assert_eq!(e.timestamp, 1_700_000_000);
         assert_eq!(e.realm.as_bytes(), b"KERBER.TEST");
-        assert_eq!(e.name.components_joined(), "user");
+        assert_eq!(e.name.components_joined_lossy(), "user");
         assert_eq!(e.name.name_type, PrincipalName::NT_UNKNOWN);
         assert_eq!(
             kt.entries[1].kvno, 44,

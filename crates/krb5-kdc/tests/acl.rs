@@ -59,7 +59,10 @@ fn export_keytab_local_bypasses_lockdown() {
         .export_keytab_local(&tgt)
         .expect("local --export-krbtgt-keytab");
     assert!(!kt.entries.is_empty());
-    assert_eq!(kt.entries[0].name.components_joined(), "krbtgt/KERBER.TEST");
+    assert_eq!(
+        kt.entries[0].name.components_joined_lossy(),
+        "krbtgt/KERBER.TEST"
+    );
 }
 
 #[test]

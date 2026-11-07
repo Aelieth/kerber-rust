@@ -70,7 +70,7 @@ fn user() -> PrincipalName {
 fn s4u2proxy_carries_mits_pac() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
-    store.allow_s4u_to(&user(), &documented_host().components_joined());
+    store.allow_s4u_to(&user(), &documented_host().components_joined_lossy());
     let admin_tgt = issue_tgt_password(&store, TEST_ADMIN, TEST_ADMIN_PASSWORD, 9851);
     let evidence_req = tgs_req(
         admin_tgt.rep.0.ticket.clone(),
@@ -123,9 +123,9 @@ fn s4u2proxy_carries_mits_pac() {
     );
     let parsed = Pac::parse(&pac).unwrap();
     let di = parse_delegation_info(parsed.buffer(PAC_DELEGATION_INFO).unwrap()).unwrap();
-    assert_eq!(di.proxy_target, documented_host().components_joined());
+    assert_eq!(di.proxy_target, documented_host().components_joined_lossy());
     assert_eq!(
         di.transited_services,
-        [user().unparse_with_realm(TEST_REALM)]
+        [user().unparse_with_realm_lossy(TEST_REALM)]
     );
 }

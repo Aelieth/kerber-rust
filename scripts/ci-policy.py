@@ -3,7 +3,7 @@
 
 Reads the workflow YAML, the Makefile pins, the doc cites, and the
 MIT parity ledger. MIT-anchor truth waits for KERBER_MIT_SRC, which
-the ledger-mit job sets.
+the anchors job sets.
 """
 
 from __future__ import annotations

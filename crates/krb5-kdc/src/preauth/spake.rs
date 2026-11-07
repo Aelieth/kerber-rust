@@ -11,7 +11,7 @@ use krb5_types::spake::{
 use krb5_types::{MethodData, PaData, err, ku, pa};
 use zeroize::Zeroizing;
 
-use super::otp::{E_BAD_ENCTYPE, E_BAD_MSIZE, E_EINVAL};
+use super::otp::{E_BAD_ENCTYPE, E_BAD_MSIZE, E_EINVAL, EINVAL, KRB5_BAD_ENCTYPE, KRB5_BAD_MSIZE};
 use super::{find_pa, make_cookie, open_cookie, proto};
 use crate::asn1_text::{decode_failure_text, pa_spake_failure_text};
 use crate::error::Error;
@@ -33,12 +33,6 @@ const ENCTYPE_UNKNOWN: i32 = 0x01ff;
 fn failed() -> Error {
     proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED)
 }
-
-const EINVAL: i32 = 22;
-// MIT: `KRB5_BAD_ENCTYPE` (krb5_err.et)
-const KRB5_BAD_ENCTYPE: i32 = -1_765_328_196;
-// MIT: `KRB5_BAD_MSIZE` (krb5_err.et)
-const KRB5_BAD_MSIZE: i32 = -1_765_328_194;
 
 fn library_failure(message: &str) -> Error {
     let code = if message == E_EINVAL {

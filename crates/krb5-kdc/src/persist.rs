@@ -1070,6 +1070,12 @@ pub fn save_store_legacy_kdb3(
     db_path: &Path,
     stash_path: &Path,
 ) -> Result<(), PersistError> {
+    if let Some(p) = store_iter(store).find(|p| !p.opaque_keys.is_empty()) {
+        let id = p.id();
+        return Err(PersistError::Format(format!(
+            "{id}: an unsupported key slot"
+        )));
+    }
     let master = if stash_path.exists() {
         load_stash_etype(stash_path, EncryptionType::Aes256CtsHmacSha196)?
     } else {
@@ -1105,23 +1111,24 @@ fn stash_keytab_bytes(
     Ok(Keytab::single(realm_a, name, 1, master.clone()).to_bytes())
 }
 
+// MIT: `krb5_def_fetch_mkey_list` (lib/kdb/kdb_default.c:431-437)
 pub fn load_dump_with_stash(text: &str, stash: &[u8]) -> Result<PrincipalStore, PersistError> {
-    if let Some(mkey) = stash_keytab_key(stash)
-        && let Ok(store) = load_dump_mkey(text, &mkey)
-    {
-        return Ok(store);
+    let dump = crate::kdb_dump::parse_dump(text)?;
+    let mut keys = stash_keytab_key(stash).into_iter().chain(
+        stash_etypes()
+            .into_iter()
+            .filter_map(|etype| ProtocolKey::from_bytes(etype, stash).ok()),
+    );
+    let km = dump
+        .realm()
+        .ok()
+        .and_then(|r| dump.princ(&format!("K/M@{r}")));
+    let mkey = match km {
+        Some(km) => keys.find(|k| km.opens_with(k)),
+        None => keys.next(),
     }
-    for etype in stash_etypes() {
-        let Ok(mkey) = ProtocolKey::from_bytes(etype, stash) else {
-            continue;
-        };
-        if let Ok(store) = load_dump_mkey(text, &mkey) {
-            return Ok(store);
-        }
-    }
-    Err(PersistError::Crypto(
-        "stash master key did not decrypt dump key_data".into(),
-    ))
+    .ok_or_else(|| PersistError::Crypto(crate::daemon::BAD_MASTER_KEY.into()))?;
+    Ok(dump.into_store(&mkey)?)
 }
 
 fn load_kdb_blob(
@@ -1248,7 +1255,7 @@ fn serialize_plain(store: &PrincipalStore) -> Vec<u8> {
     let n = u32::try_from(store_debug_count(store)).unwrap_or(0);
     out.extend_from_slice(&n.to_be_bytes());
     for p in store_iter(store) {
-        put_str(&mut out, &p.name.unparse());
+        put_str(&mut out, &p.name.unparse_lossy());
         out.extend_from_slice(&p.name.name_type.to_be_bytes());
         put_bytes(&mut out, &p.salt);
         out.push(u8::from(p.requires_preauth()));
@@ -1324,7 +1331,7 @@ fn parse_plain(plain: &[u8], v2: bool, v3: bool) -> Result<PrincipalStore, Persi
                 pw_expire,
             },
         );
-        store_insert(&mut store, p);
+        store_insert(&mut store, p)?;
         let _ = S2K_ITERS;
     }
     if i + 4 <= plain.len() && &plain[i..i + 4] == b"SID1" {
@@ -1356,8 +1363,10 @@ fn store_iter(store: &PrincipalStore) -> impl Iterator<Item = &Principal> {
     store.debug_principals()
 }
 
-fn store_insert(store: &mut PrincipalStore, p: Principal) {
-    store.debug_insert(p);
+fn store_insert(store: &mut PrincipalStore, p: Principal) -> Result<(), PersistError> {
+    store
+        .debug_insert(p)
+        .map_err(|e| PersistError::Format(e.to_string()))
 }
 
 fn put_str(out: &mut Vec<u8>, s: &str) {

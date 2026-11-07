@@ -447,7 +447,7 @@ fn format_list(
             KeytabSlot::Entry(e) => (
                 e.kvno,
                 e.name
-                    .unparse_with_realm(&String::from_utf8_lossy(e.realm.as_bytes())),
+                    .unparse_with_realm_lossy(&String::from_utf8_lossy(e.realm.as_bytes())),
                 e.timestamp,
                 Some(e.key.etype().to_mit_name()),
                 Some(e.key.as_bytes()),
@@ -601,7 +601,7 @@ fn addent(
         .map_err(|e| fail(&e))?;
     // MIT: `KRB5_BAD_ENCTYPE` (lib/krb5/error_tables/krb5_err.et:254-254)
     let etype = EncryptionType::from_mit_name(enctype).map_err(|_| fail(&"Bad encryption type"))?;
-    let full = name.unparse_with_realm(&realm);
+    let full = name.unparse_with_realm_lossy(&realm);
     let key = if use_key == 1 {
         let _ = write!(out, "Key for {full} (hex): ");
         if io::stdout().is_terminal() {

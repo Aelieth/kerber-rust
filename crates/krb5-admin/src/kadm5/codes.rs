@@ -132,6 +132,25 @@ pub(super) const KRB5_KDB_ALIAS_UNSUPPORTED: u32 = 2_514_958_894;
 pub(super) const KRB5_KDB_CANTLOCK_DB: u32 = 2_514_958_872;
 // MIT: `KRB5_KDB_BAD_SALTTYPE` (lib/krb5/error_tables/kdb5_err.et:69-69)
 pub(super) const KRB5_KDB_BAD_SALTTYPE: u32 = 2_514_958_875;
+// MIT: `KRB5_KDB_INUSE` (lib/krb5/error_tables/kdb5_err.et:33-33)
+pub(super) const KRB5_KDB_INUSE: u32 = 2_514_958_849;
+// MIT: `KADM5_XDR_FAILURE` (lib/kadm5/kadm_err.et:62-62)
+pub(super) const KADM5_XDR_FAILURE: u32 = 43_787_575;
+// MIT: `KRB5_KDB_INVALIDKEYSIZE` (lib/krb5/error_tables/kdb5_err.et:57-57)
+// MIT: `KRB5_KDB_BADSTORED_MKEY` (lib/krb5/error_tables/kdb5_err.et:59-59)
+// MIT: `KRB5KRB_AP_ERR_BAD_INTEGRITY` (lib/krb5/error_tables/krb5_err.et:74-74)
+// MIT: `KRB5_CRYPTO_INTERNAL` (lib/krb5/error_tables/krb5_err.et:241-241)
+// MIT: `KRB5_BAD_MSIZE` (lib/krb5/error_tables/krb5_err.et:256-256)
+pub(super) const KEY_DATA_ERRORS: [(&str, u32); 5] = [
+    ("Key size in database is invalid", 2_514_958_866),
+    ("Stored master key is corrupted", 2_514_958_868),
+    ("Decrypt integrity check failed", 2_529_638_943),
+    ("Cryptosystem internal error", 2_529_639_090),
+    (
+        "Message size is incompatible with encryption type",
+        2_529_639_102,
+    ),
+];
 pub(super) const KADM5_AUTH_GET: u32 = 43_787_521;
 pub(super) const KADM5_AUTH_LIST: u32 = 43_787_564;
 pub(super) const KADM5_AUTH_INITIAL: u32 = 43_787_582;

@@ -472,7 +472,7 @@ fn do_keytab(ctx: &ClientContext, prog: &str, args: &KlistArgs, name: Option<&st
             KeytabSlot::Entry(e) => (
                 e.kvno,
                 e.name
-                    .unparse_with_realm(&String::from_utf8_lossy(e.realm.as_bytes())),
+                    .unparse_with_realm_lossy(&String::from_utf8_lossy(e.realm.as_bytes())),
                 e.timestamp,
                 e.key.etype().to_iana(),
                 args.keys.then(|| e.key.as_bytes()),

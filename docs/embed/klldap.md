@@ -83,14 +83,14 @@ container's non-loopback address.
 KLLDAP reaches its KDC through the `KerberosSync` trait
 (klldap's `domain-handlers` crate, `src/kerberos.rs`), registered with
 `set_kerberos_backend`; errors are `String`. The embed implements it over
-kerber-rust's `PrincipalStore`, so the directory stays the writer; its mutating seam calls run inside `PrincipalStore::change` (see [`api.md`](api.md)):
+kerber-rust's `PrincipalStore`, so the directory stays the writer; its mutating seam calls run inside `PrincipalStore::change`, and the two password helpers take the store's lock themselves (see [`api.md`](api.md)):
 
 | `KerberosSync` | kerber-rust (`krb5_kdc::PrincipalStore` unless named) | Note |
 | --- | --- | --- |
 | `ready` | the embedded listener's own state | KLLDAP probes TCP to the KDC port today |
-| `sync_principal` (chpass, else create) | `set_password`; `create_principal_3_in` for a new user | `user@REALM`, keys per `supported_enctypes` |
+| `sync_principal` (chpass, else create) | `change_password_shared`; on `NotFound`, `create_password_shared`, and on its `AlreadyExists` (a race) the change again | `user@REALM`, keys per `supported_enctypes`; both derive under no lock, so KDC reads don't wait |
 | `delete_principal` (missing is Ok) | `remove_in` | the ACL-gated `delete` is for kadmind |
-| `set_principal_enabled` | `set_status` (sets / clears `KDB_DISALLOW_ALL_TIX`) | it also writes `pw_expire`: pass the current value, and the directory's admin as the actor |
+| `set_principal_enabled` | `set_status` (sets / clears `KDB_DISALLOW_ALL_TIX`) | it also writes `pw_expire`: pass the current value, and the directory's admin as the actor. A missing principal is `NotFound`; the adapter decides |
 | `export_keytab_for_keycloak` | `insert_new_randkey` when missing, then `ktadd_local` (store `ktadd_local_atomic`): with `rotate` set it re-randomizes the principal's keys before extracting, `-norandkey` extracts the current keys, and the rotation persists only after the write succeeds; or `chrand_etypes_keepold_in` with chosen enctypes such as aes256 + aes128 then `Keytab::write_file` | a rotating export moves the kvno each time; `-norandkey` does not |
 | persistence | `load_store` / `save_store` (dump-v7 text + a stash in MIT keytab form) | an existing KLLDAP volume is MIT db2: migrate once with MIT `kdb5_util dump`, then `krb5-kdb load` |
 | the KDC | `bind_udp_listeners` / `bind_tcp_listeners` on `KdcConf::kdc_udp_listeners` / `kdc_tcp_listeners`, then `serve_all_until` with the embedder's shutdown flag | not `serve` / `serve_all`: those install SIGTERM / SIGINT handlers; `serve_all_until` runs MIT's one loop on the thread that calls it. Register on that store, or before open; a module registered on the process default after open is not on that store |

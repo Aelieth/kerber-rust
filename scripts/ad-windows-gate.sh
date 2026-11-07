@@ -22,7 +22,7 @@ SVC="${SAMBA_AD_SVC:-host/svc.ad.kerber.test}"
 
 {
     echo "KRB5_CONFIG=in-container"
-    echo "host /etc/krb5.conf must stay TESTLABBY.LOCAL"
+    echo "host /etc/krb5.conf must stay untouched"
     echo "oracle=samba-ad-dc realm=$REALM user=$USER"
     grep default_realm /etc/krb5.conf 2>/dev/null | head -2 || true
 } | tee "$LOG"

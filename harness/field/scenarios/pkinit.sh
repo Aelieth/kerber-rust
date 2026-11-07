@@ -79,7 +79,8 @@
 #          failure" once per fault, MIT = ours; unset, the cell is skipped (the code 80 is MIT = ours in the CI
 #          differential; 3.0 logs "verification failure" for these seven, so the reason is lab-only);
 #   PK.dh: the KDC's realm has pkinit_dh_min_bits = 4096 and client2's kinit 2048 (~/pk/dh.conf first): the KDC
-#          refuses its 2048-bit DH with 65 and its groups, and kinit tries again with P-384 and gets a TGT;
+#          refuses its 2048-bit DH with 65 and its groups, and kinit tries again with P-384 and gets a TGT (a 1.21
+#          KDC has no EC groups, 1.22.2 pkinit_crypto_openssl.c:1485, so 4096-bit DH: MIT's leg on a 1.21 distro);
 #   PK.dh1024: client2's kinit at pkinit_dh_min_bits = 1024 (~/pk/dh1024.conf first): MIT's kinit fails to make its
 #          1024-bit request on client2 and, with no password, ends with rc 1 (its pkinit module line, any KDC error
 #          and the KDC's lines recorded); ours sends it: the KDC's realm at 1024 takes its 1024-bit DH for a TGT; at
@@ -108,19 +109,24 @@ esac
 # shellcheck source=../lib/leg.sh
 . "$FIELD_LIB/leg.sh"
 R=${REALM//./\\.}
-KC=/var/kerberos/krb5kdc/kdc.conf
-D=${PK_KDC_DIR:-/var/kerberos/krb5kdc/pkinit}
+# The MIT version this leg's KDC is held to: MIT's leg the distro's, ours always 1.22.
+KV=1.22
+[ "$LEG" != mit ] || KV=$MIT_VERSION
+DHG=P-384
+[ "$KV" != 1.21 ] || [ "${FIELD_MIT_PKINIT_EC:-no}" = yes ] || DHG='4096-bit DH'
+KC=$KDCDIR/kdc.conf
+D=${PK_KDC_DIR:-$KDCDIR/pkinit}
 C=${PK_CLIENT_DIR:-/home/lab/pkinit}
-BIG=/var/kerberos/krb5kdc/pkbig
-EC=/var/kerberos/krb5kdc/pkec
-KDCC=/var/kerberos/krb5kdc/pkkdc
+BIG=$KDCDIR/pkbig
+EC=$KDCDIR/pkec
+KDCC=$KDCDIR/pkkdc
 legset ALICE ALICE_TEMP
 ANON=0
 PREAUTH=0
 DBMATCH=0
 CHPW=0
 cleanup() {
-    timeout -k 5 60 "$LAB" ssh kdc -- "[ -e $KC.pk ] && sudo mv $KC.pk $KC && sudo systemctl reset-failed krb5kdc && sudo systemctl restart krb5kdc; [ $ANON = 1 ] && sudo kadmin.local -q 'delprinc -force WELLKNOWN/ANONYMOUS'; [ $PREAUTH = 1 ] && sudo kadmin.local -q 'modprinc -requires_preauth alice'; [ $DBMATCH = 1 ] && sudo kadmin.local -q 'delstr alice pkinit_cert_match'; [ $CHPW = 1 ] && sudo kadmin.local -q 'delprinc -force pkexp'; sudo rm -rf $BIG $EC $KDCC; rm -rf ~/pkb17; true" < /dev/null > /dev/null 2>&1
+    timeout -k 5 60 "$LAB" ssh kdc -- "[ -e $KC.pk ] && sudo mv $KC.pk $KC && sudo systemctl reset-failed $UNIT_KDC && sudo systemctl restart $UNIT_KDC; [ $ANON = 1 ] && sudo kadmin.local -q 'delprinc -force WELLKNOWN/ANONYMOUS'; [ $PREAUTH = 1 ] && sudo kadmin.local -q 'modprinc -requires_preauth alice'; [ $DBMATCH = 1 ] && sudo kadmin.local -q 'delstr alice pkinit_cert_match'; [ $CHPW = 1 ] && sudo kadmin.local -q 'delprinc -force pkexp'; sudo rm -rf $BIG $EC $KDCC; rm -rf ~/pkb17; true" < /dev/null > /dev/null 2>&1
     # shellcheck disable=SC2016 # the pid file is client2's
     timeout -k 5 60 "$LAB" ssh client2 -- '[ -f ~/pk/px/pid ] && kill "$(cat ~/pk/px/pid)"; rm -rf ~/pk; true' < /dev/null > /dev/null 2>&1
 }
@@ -132,7 +138,7 @@ trap 'exit 129' HUP
 # marked before the restart, so the startup lines are the ones after the mark.
 pkkdc() {
     kdcmark "$1"
-    check "$1" '^krb5kdc: active, 88 listening$' run kdc "sudo cp -p $KC.pk $KC && printf '%b' '$2' | sudo tee -a $KC > /dev/null && sudo systemctl reset-failed krb5kdc && sudo systemctl restart krb5kdc && for i in \$(seq 1 40); do ss -Hlun 'sport = :88' | grep -q . && break; sleep 0.25; done; sudo tail -n 8 $KC; echo \"krb5kdc: \$(systemctl is-active krb5kdc), 88 \$(ss -Hlun 'sport = :88' | grep -q . && echo listening)\""
+    check "$1" '^krb5kdc: active, 88 listening$' run kdc "sudo cp -p $KC.pk $KC && printf '%b' '$2' | sudo tee -a $KC > /dev/null && sudo systemctl reset-failed $UNIT_KDC && sudo systemctl restart $UNIT_KDC && for i in \$(seq 1 40); do ss -Hlun 'sport = :88' | grep -q . && break; sleep 0.25; done; sudo tail -n 8 $KC; echo \"krb5kdc: \$(systemctl is-active $UNIT_KDC), 88 \$(ss -Hlun 'sport = :88' | grep -q . && echo listening)\""
 }
 # certkinit <check> <kinit> <ERE> [<identity>]: alice's kinit from client2 with a certificate of hers (alice, or the name
 # given) and client2's anchors, stdin empty (no password to fall back on), then the ticket cache listed.
@@ -158,7 +164,7 @@ check l6.copy rc host "$LABQ ssh kdc -- 'sudo tar -C $D/client2 -cf - .' | $LABQ
 # MIT's KDC takes PKINIT from krb5-pkinit's plugin; ours has it built in.
 KP=
 [ "$LEG" = mit ] && KP='krb5-pkinit, '
-check l6.kdc "^kdc: ${KP}CA and KDC P-256, RSA KDC identity\$" run kdc "${KP:+rpm -q krb5-pkinit > /dev/null && }for f in cacert.pem kdc.pem kdc-rsa.pem rsa-cacert.pem; do sudo openssl x509 -in $D/\$f -noout -subject || exit 1; done && sudo test -r $D/kdc.key && sudo test -r $D/kdc-rsa.key && sudo openssl x509 -in $D/kdc.pem -noout -text | grep -qE 'ASN1 OID: prime256v1' && sudo openssl x509 -in $D/kdc-rsa.pem -noout -text | grep -qE 'Public Key Algorithm: rsaEncryption' && echo 'kdc: ${KP}CA and KDC P-256, RSA KDC identity'"
+check l6.kdc "^kdc: ${KP}CA and KDC P-256, RSA KDC identity\$" run kdc "${KP:+$PKG_HAS krb5-pkinit > /dev/null && }for f in cacert.pem kdc.pem kdc-rsa.pem rsa-cacert.pem; do sudo openssl x509 -in $D/\$f -noout -subject || exit 1; done && sudo test -r $D/kdc.key && sudo test -r $D/kdc-rsa.key && sudo openssl x509 -in $D/kdc.pem -noout -text | grep -qE 'ASN1 OID: prime256v1' && sudo openssl x509 -in $D/kdc-rsa.pem -noout -text | grep -qE 'Public Key Algorithm: rsaEncryption' && echo 'kdc: ${KP}CA and KDC P-256, RSA KDC identity'"
 check l6.client2 '^client2: krb5-pkinit, alice P-256$' run client2 "rpm -q krb5-pkinit > /dev/null && for f in cacert alice alice-wrongsan alice-unknownca unknown-cacert alice-rsa rsa-cacert alice-noeku; do openssl x509 -in $C/\$f.pem -noout -subject || exit 1; done && test -r $C/alice.key && test -r $C/alice-wrongsan.key && test -r $C/alice-unknownca.key && test -r $C/alice-rsa.key && test -r $C/alice-noeku.key && openssl x509 -in $C/alice.pem -noout -text | grep -qE 'ASN1 OID: prime256v1' && echo 'client2: krb5-pkinit, alice P-256'"
 OURS=
 OURSPW=
@@ -581,9 +587,9 @@ for k in mit ${OURS:+ours}; do
     checklast "PK.dh.$k.first" '^PKINIT using 2048-bit DH key exchange group$'
     checklast "PK.dh.$k.refused" '^Key parameters not accepted$'
     checklast "PK.dh.$k.input" '^Preauth tryagain input types \(16\): 109, PA-FX-COOKIE \(133\)$'
-    checklast "PK.dh.$k.chosen" '^PKINIT accepting KDC key exchange group preference P-384$'
+    checklast "PK.dh.$k.chosen" "^PKINIT accepting KDC key exchange group preference $DHG\$"
     checklast "PK.dh.$k.again" '^PKINIT client trying again with KDC-provided parameters$'
-    checklast "PK.dh.$k.second" '^PKINIT using P-384 key exchange group$'
+    checklast "PK.dh.$k.second" "^PKINIT using $DHG key exchange group\$"
     checklast "PK.dh.$k.tryagain" '^Preauth module pkinit \(16\) tryagain returned: 0/Success$'
 done
 
@@ -678,7 +684,7 @@ for v in othersan dns dns_serverauth dns_noku; do
 done
 
 section "kdc.conf restored"
-check kdc.conf.restored '^restored, krb5kdc active$' run kdc "sudo mv $KC.pk $KC && sudo systemctl reset-failed krb5kdc && sudo systemctl restart krb5kdc && systemctl is-active krb5kdc > /dev/null && ! sudo grep -qE '^[[:space:]]*pkinit_identity' $KC && echo 'restored, krb5kdc active'"
+check kdc.conf.restored '^restored, krb5kdc active$' run kdc "sudo mv $KC.pk $KC && sudo systemctl reset-failed $UNIT_KDC && sudo systemctl restart $UNIT_KDC && systemctl is-active $UNIT_KDC > /dev/null && ! sudo grep -qE '^[[:space:]]*pkinit_identity' $KC && echo 'restored, krb5kdc active'"
 if [ "$PREAUTH" = 1 ]; then
     check restore.alice.preauth "^Principal \"alice@$R\" modified\\.\$" run kdc "sudo kadmin.local -q 'modprinc -requires_preauth alice' 2>&1"
     PREAUTH=0

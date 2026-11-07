@@ -1,13 +1,22 @@
 # Installing kerber-rust
 
-kerber-rust installs and runs the way Fedora's MIT `krb5-server` package does: the same
-command names (`krb5kdc`, `kadmind`, `kadmin.local`, `kdb5_util`, `kprop`, `kpropd`), the same
-systemd units, sysconfig, tmpfiles.d and logrotate files, and the same `/var/kerberos/krb5kdc`
-directory. This page takes a Fedora 44 host with SELinux enforcing from nothing to a realm that
-clients use with MIT's own tools. Run each command as written, as an ordinary user with `sudo`.
+kerber-rust installs and runs the way the distribution's MIT KDC packages do: the same
+command names (`krb5kdc`, `kadmind`, `kadmin.local`, `kdb5_util`, `kprop`, `kpropd`) and the same
+systemd units and config files. Two families: Fedora and Rocky Linux (`krb5-server`: sysconfig,
+tmpfiles.d and logrotate files, `/var/kerberos/krb5kdc`) and Debian and Ubuntu (`krb5-kdc`,
+`krb5-admin-server`, `krb5-kpropd`: `/etc/krb5kdc` and `/var/lib/krb5kdc`); `make install` reads
+the family from `/etc/os-release`. This page takes a Fedora 44 host with SELinux enforcing from
+nothing to a realm that clients use with MIT's own tools; Rocky and Debian-family differences are
+marked where they arise. Run each command as written, as an ordinary user with `sudo`.
 The realm's names are set once, at the start of [A realm](#a-realm).
 
 ## What `make install` installs
+
+The table is the Fedora and Rocky layout. On Debian and Ubuntu (`FAMILY=deb`) `make install`
+installs the programs, Debian's three units (`krb5-kdc.service`, `krb5-admin-server.service`,
+`krb5-kpropd.service`) and the manifest, and no tmpfiles, sysconfig or logrotate file. The KDC
+directory is `/etc/krb5kdc` (0700; `kdc.conf` and `kadm5.acl` 0644, from Debian's templates) and
+the database directory is `/var/lib/krb5kdc` (0700).
 
 | Path (with `PREFIX=/usr`) | Mode | What |
 | --- | --- | --- |
@@ -81,6 +90,30 @@ MIT's client side (`kinit`, `kadmin`, the `libkadm5clnt` library). The checks be
 it stays installed. `logrotate` rotates the daemons' logs and `words` is `kdc.conf`'s
 `dict_file`: Fedora's krb5-server requires both, and a fresh Fedora has neither.
 
+### Rocky Linux
+
+Rocky 10 has no `rustup` package, in no repository (CRB and EPEL included), so rustup comes from
+its own installer. The rest is in the default repositories.
+
+```sh
+sudo dnf install -y git gcc make lld krb5-workstation logrotate words
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none --profile minimal
+. "$HOME/.cargo/env"
+```
+
+### Debian and Ubuntu
+
+```sh
+sudo apt-get update
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y git gcc make lld curl krb5-user wamerican
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none --profile minimal
+. "$HOME/.cargo/env"
+```
+
+`krb5-user` is MIT's client side (`kinit`, `kadmin`), and `wamerican` is the words list. rustup
+comes from its own installer here too, as on Rocky. `noninteractive` skips debconf's realm
+question; [krb5.conf on Debian and Ubuntu](#krb5conf-on-debian-and-ubuntu) sets the realm.
+
 ## Build
 
 ```sh
@@ -97,7 +130,9 @@ environment, and the gates' own options (`kinit --spake`, `kvno --body-realm` an
 them. Run it as yourself.
 `sudo make install` installs that build and never compiles (sudo would not find your toolchain),
 and no install goal compiles as root: it stops if the build is missing or the sources are newer.
-Build on the distribution you install on: the programs link against its C library.
+Build on the distribution you install on: the programs link against its C library. The build
+differs by family only in its compiled-in paths (`KERBER_KDC_DIR`, `KERBER_KDC_DATA_DIR`,
+`KERBER_DEFCKTNAME`), which `make build` takes from `FAMILY` ([Make variables](#make-variables)).
 `.cargo/config.toml` also sets `--cfg p384_backend="fiat"`, the constant-time field of the
 `p384` crate. A `RUSTFLAGS` of your own replaces the file's flags, so carry that one too:
 without it the build has no P-384 (keys, certificates and the key-exchange group are refused),
@@ -110,13 +145,29 @@ In the checkout built as in [Build](#build), replace krb5-server (the usual case
 ### Replacing krb5-server
 
 ```sh
-sudo dnf remove -y --no-autoremove krb5-server
+sudo dnf remove -y --setopt=clean_requirements_on_remove=False krb5-server
 sudo make install PREFIX=/usr
 ```
 
-When krb5-server is not installed, dnf says so and nothing changes. `--no-autoremove` keeps the
-packages krb5-server pulled in; `krb5-workstation` and `krb5-libs` stay, and with them `kadmin`
-and `libkadm5clnt`. If this host already runs an MIT realm, follow
+When krb5-server is not installed, dnf says so and nothing changes. The option keeps the packages
+krb5-server pulled in; `krb5-workstation` and `krb5-libs` stay, and with them `kadmin` and
+`libkadm5clnt`. Fedora's dnf5 and Rocky's dnf 4 both take it. If this host already runs an MIT
+realm, follow [Upgrading an MIT realm](#upgrading-an-mit-realm) instead.
+
+### Replacing krb5-server on Rocky Linux
+
+Run the block under [Replacing krb5-server](#replacing-krb5-server) as written.
+
+### Replacing krb5-kdc on Debian and Ubuntu
+
+```sh
+sudo apt-get remove -y krb5-kdc krb5-admin-server krb5-kpropd
+sudo make install PREFIX=/usr
+```
+
+`apt-get remove` keeps the packages' conffiles, and `make install` keeps an existing `kdc.conf`
+and `kadm5.acl`, so an edited pair carries over. `krb5-user` stays. The units are `krb5-kdc`,
+`krb5-admin-server` and `krb5-kpropd`. If this host already runs an MIT realm, follow
 [Upgrading an MIT realm](#upgrading-an-mit-realm) instead.
 
 ### Beside krb5-server
@@ -128,6 +179,7 @@ sudo make install PREFIX=/usr/local
 - systemd reads `/usr/local/lib/systemd/system` before `/usr/lib/systemd/system`, so
   `krb5kdc.service` and `kadmin.service` start kerber-rust's programs from now on
   (`systemctl cat krb5kdc` names the unit file in use), until `make uninstall PREFIX=/usr/local`.
+  On Debian and Ubuntu the units are `krb5-kdc.service` and `krb5-admin-server.service`.
 - `/usr/local/sbin` comes before `/usr/sbin` in root's `PATH` and in sudo's `secure_path`, so
   `sudo kdb5_util` and `sudo kadmin.local` run kerber-rust's too. MIT's stay in `/usr/sbin`.
 - Both read the same `/etc/sysconfig` files, `kdc.conf` and `kadm5.acl`, and listen on the same
@@ -138,6 +190,9 @@ sudo make install PREFIX=/usr/local
   (`unconfined_service_t`), not in MIT's `krb5kdc_t` and `kadmind_t`.
 
 ### SELinux
+
+This applies to the RPM family, Fedora and Rocky (SELinux enforcing, the same labels). Debian
+and Ubuntu have no SELinux, and Ubuntu's AppArmor has no krb5 profile.
 
 `make install` labels what it wrote. With `PREFIX=/usr` the daemons get MIT's types:
 
@@ -163,7 +218,7 @@ fi
 ```
 
 firewalld's services are `kerberos` (88 UDP and TCP), `kpasswd` (464 UDP and TCP) and `kadmin`
-(749 TCP).
+(749 TCP). Rocky is the same. Debian and Ubuntu run no firewall by default.
 
 ## A realm
 
@@ -198,7 +253,20 @@ EOF
 ```
 
 Fedora's `[logging]` stays in `/etc/krb5.conf`. It sends the daemons' logs to
-`/var/log/krb5kdc.log` and `/var/log/kadmind.log`.
+`/var/log/krb5kdc.log` and `/var/log/kadmind.log`. Debian's has no `[logging]`, so its daemons
+log to the journal.
+
+### krb5.conf on Debian and Ubuntu
+
+Debian's `/etc/krb5.conf` belongs to krb5-config, and debconf may have set a `default_realm` in
+it. This puts the include on its first line, so the realm file's values are read first, as MIT
+takes the first value. Then run the block above.
+
+```sh
+sudo mkdir -p /etc/krb5.conf.d
+head -n 1 /etc/krb5.conf | grep -qx 'includedir /etc/krb5.conf.d/' ||
+    sudo sed -i '1i includedir /etc/krb5.conf.d/' /etc/krb5.conf
+```
 
 ### kdc.conf and kadm5.acl
 
@@ -207,6 +275,16 @@ sudo sed -i "s/^EXAMPLE\.COM = {/$REALM = {/" /var/kerberos/krb5kdc/kdc.conf
 sudo sed -i "s/@EXAMPLE\.COM/@$REALM/" /var/kerberos/krb5kdc/kadm5.acl
 sudo sed -i '/default_principal_flags = +preauth/a\     max_renewable_life = 7d' /var/kerberos/krb5kdc/kdc.conf
 sudo cat /var/kerberos/krb5kdc/kadm5.acl
+```
+
+### kdc.conf and kadm5.acl on Debian and Ubuntu
+
+The files are in `/etc/krb5kdc`. Debian's template already sets `max_renewable_life = 7d`, and its
+`kadm5.acl` has the administrator line commented out.
+
+```sh
+sudo sed -i "s/^\( *\)EXAMPLE\.COM = {/\1$REALM = {/" /etc/krb5kdc/kdc.conf
+echo "*/admin@$REALM *" | sudo tee -a /etc/krb5kdc/kadm5.acl
 ```
 
 The first line renames the realm's stanza in `kdc.conf` (the file's opening comment still names
@@ -276,6 +354,12 @@ krb5.conf apply after this file. `module` is not read.
 
 ### The database
 
+On Debian and Ubuntu the database is `/var/lib/krb5kdc/principal` and the stash
+`/etc/krb5kdc/stash`; the rest of this page's `/var/kerberos/krb5kdc` paths are those two
+directories there (the database, its lock and update-log files and `replica_datatrans` in
+`/var/lib/krb5kdc`; `kdc.conf`, `kadm5.acl`, `kpropd.acl` and the stash in `/etc/krb5kdc`), and
+`restorecon` is skipped.
+
 ```sh
 sudo kdb5_util create -s
 ```
@@ -321,9 +405,17 @@ systemctl status krb5kdc kadmin --no-pager
 sudo ss -lntup | grep -E 'krb5kdc|kadmind'
 ```
 
-As MIT's do, `krb5kdc` listens on 88 (UDP and TCP), and `kadmind` on 464 (kpasswd, UDP and
-TCP) and 749 (kadmin, TCP), on every address: `ss` shows each port twice, on `0.0.0.0` and on
-`[::]`, and a UDP reply leaves from the address its request was sent to.
+On Debian and Ubuntu the units are `krb5-kdc` and `krb5-admin-server`:
+
+```sh
+sudo systemctl enable --now krb5-kdc krb5-admin-server
+systemctl status krb5-kdc krb5-admin-server --no-pager
+```
+
+As MIT's do, `krb5kdc` listens on 88 (UDP and TCP; Debian's `kdc.conf` adds 750), and `kadmind`
+on 464 (kpasswd, UDP and TCP) and 749 (kadmin, TCP), on every address: `ss` shows each port
+twice, on `0.0.0.0` and on `[::]`, and a UDP reply leaves from the address its request was sent
+to.
 
 ### The first administrator and a user
 
@@ -471,7 +563,9 @@ A replica runs `krb5kdc` from a read-only copy of the realm that the primary pus
 `kprop` (a full dump) and, with `iprop_enable`, keeps current incrementally. kerber-rust installs
 `kprop.service` for this: Fedora's own unit, but `Type=simple`, since `kpropd` never detaches where
 MIT's forks. It starts only where its `AssertPathExists` on the KDC directory's `kpropd.acl` marks
-the host a replica.
+the host a replica. On Debian and Ubuntu the unit is `krb5-kpropd` (Debian's, `kpropd -D`) and
+`kpropd.acl` is in `/etc/krb5kdc`; kprop's dump is `/var/lib/krb5kdc/replica_datatrans`, and the
+one kpropd receives `/var/lib/krb5kdc/from_master`.
 
 On the **replica**, with the realm's `krb5.conf` and `kdc.conf` in place and the KDC directory made
 (as under [The database](#the-database)) but no database yet:
@@ -518,11 +612,14 @@ directory), `-P` (else 754, on every address), `-A` (the primary, else `admin_se
 `-D` and `-S` (`-D` and `-S` are no-ops: it never detaches and is always standalone), `-f` (else
 `from_master` in the KDC directory), `-F` (`kdb5_util load -d`), `-p` (else the `kdb5_util`
 beside `kpropd`) and `--pid-file`; not MIT's `-x`. It accepts a ticket for its own
-`host/<this host>` only, the name formed **without DNS** (a short name gains `qualify_shortname`,
-else the resolver's first search domain, lowercased): MIT's DNS canonicalization is not ported,
-so the keytab entry and `kprop`'s target must be that name.
+`host/<this host>` only, the name formed as MIT's (`dns_canonicalize_hostname`, `rdns`,
+`qualify_shortname`), so the keytab entry and `kprop`'s target must be that name.
 
 ## Upgrading an MIT realm
+
+The commands below are Fedora's. On Debian and Ubuntu read `/var/kerberos/krb5kdc` as
+`/var/lib/krb5kdc` for the database, dump and update log and `/etc/krb5kdc` for `kdc.conf`,
+`kadm5.acl` and the stash, the units as `krb5-kdc krb5-admin-server`, and skip `restorecon`.
 
 kerber-rust does not read MIT's db2 database. A realm moves over the way MIT moves one between
 its own database types: MIT's `kdb5_util dump`, then kerber-rust's `kdb5_util load`. Until then
@@ -541,7 +638,7 @@ realm:
 ```sh
 sudo systemctl stop krb5kdc kadmin
 sudo kdb5_util dump /var/kerberos/krb5kdc/mit-realm.dump
-sudo dnf remove -y --no-autoremove krb5-server
+sudo dnf remove -y --setopt=clean_requirements_on_remove=False krb5-server
 ```
 
 The dump is MIT's version 7 text: every principal and policy, with the keys still encrypted in
@@ -764,6 +861,42 @@ done
 sudo systemctl start krb5kdc kadmin
 ```
 
+## Upgrading kerber-rust on Debian and Ubuntu
+
+The steps above, with Debian's names: the units are `krb5-kdc` and `krb5-admin-server`, the
+database and its lock files are in `/var/lib/krb5kdc`, `kdc.conf` and the stash (`stash`, as
+`key_stash_file` names it) in `/etc/krb5kdc`, and there is no SELinux label to set. Stop the
+daemons and install, and move a realm kept elsewhere only if there is one:
+
+```sh
+REALM=EXAMPLE.COM
+PREFIX=/usr                         # the PREFIX you installed with
+OLD=                                # where the realm was kept, if not /var/lib/krb5kdc
+sudo systemctl stop krb5-kdc krb5-admin-server
+sudo make install PREFIX="$PREFIX"
+if [ -n "$OLD" ]; then
+    for f in principal principal.ulog; do
+        if sudo test -e "$OLD/$f"; then sudo mv "$OLD/$f" /var/lib/krb5kdc/; fi
+    done
+    if sudo test -e "$OLD/.k5.$REALM"; then sudo mv "$OLD/.k5.$REALM" /etc/krb5kdc/stash; fi
+fi
+sudo grep -nE '^[[:space:]]*(kdc_listen|kdc_tcp_listen|kadmind_listen|kpasswd_listen)[[:space:]]*=' \
+    /etc/krb5kdc/kdc.conf
+```
+
+Edit an all-IPv6 listen entry as above. Then make the lock files and `principal.lockout` where
+they are missing, and start:
+
+```sh
+DB=/var/lib/krb5kdc/principal       # kdc.conf's database_name, if the stanza names one
+for f in "$DB.ok" "$DB.kadm5.lock" "$DB.lockout"; do
+    if sudo test ! -e "$f"; then
+        sudo install -m 0600 -o "$(sudo stat -c %u "$DB")" -g "$(sudo stat -c %g "$DB")" /dev/null "$f"
+    fi
+done
+sudo systemctl start krb5-kdc krb5-admin-server
+```
+
 ## Logs
 
 - The daemons log to `/var/log/krb5kdc.log` and `/var/log/kadmind.log`, in MIT's line format.
@@ -773,10 +906,12 @@ sudo systemctl start krb5kdc kadmin
 - logrotate (one of the [prerequisites](#prerequisites)) rotates both monthly. Its
   `systemctl reload` sends SIGHUP, and the daemon reopens its log.
 - `journalctl -u krb5kdc -u kadmin` holds only the start and stop lines, as it does for MIT.
+- On Debian and Ubuntu there is no `[logging]` and no logrotate file: the daemons log to the
+  journal (`journalctl -u krb5-kdc -u krb5-admin-server`).
 - In the foreground (`sudo krb5kdc -n`, `sudo kadmind -nofork`) the daemons print what MIT
   prints. `json = STDOUT` (or `STDERR`, `FILE:path`) in kdc.conf's `[logging]`, a relation MIT
   does not read, adds the structured JSON log ([logging.md](logging.md)).
-- `sudo ausearch -m AVC -ts recent` shows any SELinux denial.
+- `sudo ausearch -m AVC -ts recent` shows any SELinux denial (RPM family).
 
 ## Uninstall
 
@@ -790,15 +925,14 @@ it stops and disables `krb5kdc`, `kadmin` and `kprop` when their unit files are 
 wrote, removes each listed file whose SHA-256 is unchanged, keeps one that changed since or that
 a package owns, then removes the manifest and reloads systemd. Without a manifest it removes
 nothing. It keeps every config file and all of `/var/kerberos/krb5kdc`: the database with its
-update log and lock files, the stash, `kdc.conf` and `kadm5.acl`.
+update log and lock files, the stash, `kdc.conf` and `kadm5.acl`. On Debian and Ubuntu the units
+are `krb5-kdc`, `krb5-admin-server` and `krb5-kpropd`, and the kept directories are `/etc/krb5kdc`
+and `/var/lib/krb5kdc`.
 
 ## Not supported
 
 - MIT's database files (db2, LMDB) and the LDAP backend. The database is MIT's dump format, so an
   MIT realm moves over with dump and load.
-- MIT's DNS canonicalization for a replica's name (`dns_canonicalize_hostname = true`, its default,
-  and the second step of `fallback`): a replica's `host/` name is formed without DNS ([Replica
-  KDCs](#replica-kdcs)).
 - SPAKE groups P-384 and P-521 (MIT's OpenSSL groups). `edwards25519`, the group Fedora's
   `krb5.conf` names and its `kdc.conf` challenges with, and P-256 work as MIT's.
 - RADIUS-backed OTP preauthentication (OTP works through an embedder's verifier: [OTP preauth](#otp-preauth)), PKINIT
@@ -826,7 +960,10 @@ update log and lock files, the stash, `kdc.conf` and `kadm5.acl`.
 | `UNITDIR` | `$(PREFIX)/lib/systemd/system` | The units |
 | `TMPFILESDIR` | `$(PREFIX)/lib/tmpfiles.d` | `krb5-krb5kdc.conf` |
 | `SYSCONFDIR` | `/etc` | The base of the next two |
-| `SYSCONFIGDIR` | `$(SYSCONFDIR)/sysconfig` | The units' `EnvironmentFile` |
+| `SYSCONFIGDIR` | `$(SYSCONFDIR)/sysconfig` (`deb`: `$(SYSCONFDIR)/default`) | The units' `EnvironmentFile` |
 | `LOGROTATEDIR` | `$(SYSCONFDIR)/logrotate.d` | The logrotate files |
-| `KERBER_KDC_DIR` | `/var/kerberos/krb5kdc` | The programs' compiled-in KDC directory; it does not follow `PREFIX`. Give it to `make build` and `make install` alike |
+| `FAMILY` | from `/etc/os-release` | `rpm` (Fedora, Rocky) or `deb` (Debian, Ubuntu): which units, config files and directories `make install` installs |
+| `KERBER_KDC_DIR` | `/var/kerberos/krb5kdc` (`deb`: `/etc/krb5kdc`) | The programs' compiled-in KDC directory; it does not follow `PREFIX`. Give it to `make build` and `make install` alike |
+| `KERBER_KDC_DATA_DIR` | `KERBER_KDC_DIR` (`deb`: `/var/lib/krb5kdc`) | The compiled-in database directory (`database_name`, `replica_datatrans`, `from_master`); same rule as `KERBER_KDC_DIR` |
+| `KERBER_DEFCKTNAME` | `FILE:/var/kerberos/krb5/user/%{euid}/client.keytab` (`deb`: `FILE:/etc/krb5/user/%{euid}/client.keytab`) | The compiled-in default client keytab; same rule |
 | `CARGO`, `CARGO_TARGET_DIR` | `cargo`, `target/` | The build. sudo drops an exported `CARGO_TARGET_DIR`: give it to `make build` and `sudo make install` alike |

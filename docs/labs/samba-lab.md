@@ -140,7 +140,7 @@ SID/RID is the live Samba-A `kbruser` `objectSid`.
 
 The gate runs **entirely inside the container** (`docker exec`, container-local
 `/tmp/samba-krb5.conf`, `FILE:` ccache), so it never reads or writes host
-`/etc/krb5.conf` (which stays `TESTLABBY.LOCAL`), host SSSD, or the host default
+`/etc/krb5.conf`, host SSSD, or the host default
 ccache. Do not publish Samba's ports to the host, do not `realm join` / `adcli
 join`, and do not point host tools at this DC. Any *host-side* interaction (rare)
 must use a `~/adlab`-style isolated `KRB5_CONFIG` / `KRB5CCNAME` / `KRB5_KTNAME`.

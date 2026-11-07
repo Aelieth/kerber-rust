@@ -37,7 +37,7 @@ packages:
   - nftables
 bootcmd:
   # The LAN NIC (macvtap) sits on the user's real LAN. It exists only so the AD
-  # DC (10.10.38.38) can reach this KDC and RA3's SPNEGO target on tcp 80
+  # DC (@AD_DC@) can reach this KDC and RA3's SPNEGO target on tcp 80
   # (F2-AD). bootcmd runs in cloud-init's
   # network stage, which is ordered before sshd.service, so the NIC is confined
   # before anything listens. The script runs once per instance (it relies on
@@ -107,7 +107,7 @@ bootcmd:
     SCRIPT
     chmod 0755 /usr/local/sbin/kerber-lab-lan-nic
     if [ ! -e /var/lib/kerber-lab-lan-nic.done ]; then
-      /usr/local/sbin/kerber-lab-lan-nic "@LAN_MAC@" 10.10.38.38 && touch /var/lib/kerber-lab-lan-nic.done
+      /usr/local/sbin/kerber-lab-lan-nic "@LAN_MAC@" @AD_DC@ && touch /var/lib/kerber-lab-lan-nic.done
     fi
 runcmd:
   - [systemctl, enable, --now, chronyd.service, qemu-guest-agent.service]

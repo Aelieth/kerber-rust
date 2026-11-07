@@ -50,12 +50,17 @@ fn realm_with(tag: &str, requires_preauth: bool, libdefaults: &str) -> Realm {
         &conf,
         format!(
             "[libdefaults]\n    default_realm = {TEST_REALM}\n    qualify_shortname = kerber.test\n    \
+             dns_canonicalize_hostname = false\n    \
              dns_lookup_kdc = false\n    dns_lookup_realm = false\n{libdefaults}\
              [realms]\n    {TEST_REALM} = {{\n        kdc = 127.0.0.1:{port}\n    }}\n"
         ),
     )
     .unwrap();
-    let me = krb5_config::local_host_name(&krb5_config::Krb5Conf::load_file(&conf).unwrap());
+    let profile = krb5_config::Krb5Conf::load_file(&conf).unwrap();
+    let (_, me) =
+        krb5_config::sname_to_principal(&profile, None, Some("host"), PrincipalName::NT_SRV_HST)
+            .unwrap();
+    let me = String::from_utf8_lossy(me.name_string[1].as_bytes()).into_owned();
     let (mut store, acl) = bootstrap_documented().unwrap();
     let actor = documented_admin_id();
     for name in [me.as_str(), "127.0.0.1", "other.kerber.test"] {
@@ -392,7 +397,7 @@ fn kprop_asks_for_the_replicas_name_as_mits_in_tkt_service_parses_it() {
     let out = r.kprop(&["-s", s(&r.keytab), "-P", &port, "-f", s(&dump), "127.0.0.1"]);
     let sname = kpropd.join().expect("fake kpropd");
     assert_eq!(sname.name_type, PrincipalName::NT_PRINCIPAL);
-    assert_eq!(sname.components_joined(), "host/127.0.0.1");
+    assert_eq!(sname.components_joined_lossy(), "host/127.0.0.1");
     assert_eq!(out.status.code(), Some(1), "{}", text(&out.stderr));
     let _ = std::fs::remove_dir_all(&r.dir);
 }

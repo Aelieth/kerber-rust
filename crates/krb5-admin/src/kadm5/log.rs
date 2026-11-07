@@ -6,9 +6,9 @@ use super::codes::{
     CREATE_POLICY, CREATE_PRINCIPAL, CREATE_PRINCIPAL3, DELETE_POLICY, DELETE_PRINCIPAL, EINVAL,
     EXTRACT_KEYS, GET_POLICY, GET_POLS, GET_PRINCIPAL, GET_PRINCS, GET_PRIVS, GET_STRINGS,
     GSS_S_BAD_BINDINGS, GSS_S_DEFECTIVE_TOKEN, INIT, KADM5_AUTH_DELETE, KADM5_FAILURE,
-    KADM5_UNK_PRINC, KRB5_KDB_ALIAS_UNSUPPORTED, KRB5_KDB_BAD_SALTTYPE, KRB5_KDB_CANTLOCK_DB,
-    MODIFY_POLICY, MODIFY_PRINCIPAL, PURGEKEYS, RENAME_PRINCIPAL, SET_STRING, SETKEY_PRINCIPAL,
-    SETKEY_PRINCIPAL3, SETKEY_PRINCIPAL4,
+    KADM5_UNK_PRINC, KEY_DATA_ERRORS, KRB5_KDB_ALIAS_UNSUPPORTED, KRB5_KDB_BAD_SALTTYPE,
+    KRB5_KDB_CANTLOCK_DB, KRB5_KDB_INUSE, MODIFY_POLICY, MODIFY_PRINCIPAL, PURGEKEYS,
+    RENAME_PRINCIPAL, SET_STRING, SETKEY_PRINCIPAL, SETKEY_PRINCIPAL3, SETKEY_PRINCIPAL4,
 };
 use super::dispatch::auth_code_for;
 use super::xdr::XdrR;
@@ -135,8 +135,12 @@ pub(super) fn kadm5_error_text(code: u32) -> String {
     match code {
         KRB5_KDB_CANTLOCK_DB => "Insufficient access to lock database".to_owned(),
         KRB5_KDB_BAD_SALTTYPE => "Unsupported salt type".to_owned(),
+        KRB5_KDB_INUSE => krb5_kdc::KDB_INUSE.to_owned(),
         KRB5_KDB_ALIAS_UNSUPPORTED => "Operation unsupported on alias principal name".to_owned(),
         EINVAL => "Invalid argument".to_owned(),
+        c if let Some(&(text, _)) = KEY_DATA_ERRORS.iter().find(|(_, k)| *k == c) => {
+            text.to_owned()
+        }
         c if c < 4096 => i32::try_from(c).map_or_else(
             |_| format!("Unknown code {c}"),
             |n| klog::os_error_text(&std::io::Error::from_raw_os_error(n)),
@@ -193,7 +197,7 @@ pub(super) fn kadm5_prime_arg(proc: u32, args: &[u8], client: &str) -> String {
         | PURGEKEYS | GET_STRINGS | SET_STRING | EXTRACT_KEYS | RENAME_PRINCIPAL | CREATE_ALIAS => {
             r.principal_realm().map_or_else(
                 |_| client.to_owned(),
-                |(p, realm)| p.unparse_with_realm(&realm),
+                |(p, realm)| p.unparse_with_realm_lossy(&realm),
             )
         }
         CREATE_POLICY | DELETE_POLICY | MODIFY_POLICY | GET_POLICY => r
@@ -216,8 +220,8 @@ fn rename_targets(args: &[u8]) -> Option<(String, String)> {
     let (src, src_realm) = r.principal_realm().ok()?;
     let (dst, dst_realm) = r.principal_realm().ok()?;
     Some((
-        src.unparse_with_realm(&src_realm),
-        dst.unparse_with_realm(&dst_realm),
+        src.unparse_with_realm_lossy(&src_realm),
+        dst.unparse_with_realm_lossy(&dst_realm),
     ))
 }
 
@@ -295,7 +299,7 @@ pub(super) fn kadm5_log_lines(
 
 pub(super) fn kadm5_service_name(ctx: &GssContext) -> String {
     match (&ctx.acceptor, &ctx.ticket_realm) {
-        (Some(a), Some(r)) => a.unparse_with_realm(r),
+        (Some(a), Some(r)) => a.unparse_with_realm_lossy(r),
         _ => String::new(),
     }
 }

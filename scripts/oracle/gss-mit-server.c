@@ -1,4 +1,6 @@
 /* MIT libgssapi_krb5 acceptor: print delegated name from GSS_C_DELEG_FLAG.
+ * GSS_VERIFY_MIC: a message and its MIC come before the wrap token.
+ * GSS_REPLY: answer the unwrap with a wrapped reply and the reply's MIC.
  * Out-of-process only; not linked into the Rust product.
  */
 #include <gssapi/gssapi.h>
@@ -257,6 +259,19 @@ int main(int argc, char **argv) {
         continue;
     }
 
+    if (getenv("GSS_VERIFY_MIC")) {
+        gss_buffer_desc msg, mic;
+        recv_token(fd, &msg);
+        recv_token(fd, &mic);
+        maj = gss_verify_mic(&min, ctx, &msg, &mic, NULL);
+        if (maj != GSS_S_COMPLETE) {
+            die_gss("verify_mic", maj, min);
+        }
+        fprintf(stderr, "mit-gss verify_mic ok %.*s\n", (int)msg.length, (char *)msg.value);
+        free(msg.value);
+        free(mic.value);
+    }
+
     recv_token(fd, &in);
     int conf = 0;
     if (ret_flags & GSS_C_DCE_STYLE) {
@@ -286,6 +301,23 @@ int main(int argc, char **argv) {
         fprintf(stderr, "mit-gss unwrap bytes=%zu\n", iov[1].buffer.length);
         gss_release_iov_buffer(&min, iov, 2);
         free(in.value);
+    }
+    if (getenv("GSS_REPLY")) {
+        gss_buffer_desc rb = { strlen("hello-from-acceptor"), (void *)"hello-from-acceptor" };
+        gss_buffer_desc wtok = GSS_C_EMPTY_BUFFER, mtok = GSS_C_EMPTY_BUFFER;
+        maj = gss_wrap(&min, ctx, 1, GSS_C_QOP_DEFAULT, &rb, &conf, &wtok);
+        if (maj != GSS_S_COMPLETE) {
+            die_gss("wrap", maj, min);
+        }
+        maj = gss_get_mic(&min, ctx, GSS_C_QOP_DEFAULT, &rb, &mtok);
+        if (maj != GSS_S_COMPLETE) {
+            die_gss("get_mic", maj, min);
+        }
+        send_token(fd, &wtok);
+        send_token(fd, &mtok);
+        fprintf(stderr, "mit-gss reply sent conf=%d\n", conf);
+        gss_release_buffer(&min, &wtok);
+        gss_release_buffer(&min, &mtok);
     }
     gss_delete_sec_context(&min, &ctx, GSS_C_NO_BUFFER);
     if (src != GSS_C_NO_NAME) {

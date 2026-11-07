@@ -296,7 +296,11 @@ fn main() {
     };
     #[cfg(feature = "test-hooks")]
     let store = if memory {
-        shared_store(krb5_kdc::MemoryStore::from_dump(&store))
+        let copied = krb5_kdc::MemoryStore::from_dump(&store).unwrap_or_else(|e| {
+            eprintln!("{progname}: {e} while initializing");
+            std::process::exit(1);
+        });
+        shared_store(copied)
     } else {
         shared_store(store)
     };

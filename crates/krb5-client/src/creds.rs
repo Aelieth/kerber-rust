@@ -22,7 +22,7 @@ pub fn princ_eq(a: &Princ, b: &Princ) -> bool {
 
 #[must_use]
 pub fn unparse(p: &Princ) -> String {
-    p.1.unparse_with_realm(&realm_str(&p.0))
+    p.1.unparse_with_realm_lossy(&realm_str(&p.0))
 }
 
 fn realm_str(r: &Realm) -> String {
@@ -314,6 +314,9 @@ pub fn kdc_for_realm(profile: &Krb5Conf, realm: &str) -> Result<KdcAddr, Krb5Err
     let found = match profile.kdcs_for_traced(realm, &mut crate::trace::dns_srv) {
         Ok(list) => list,
         Err(krb5_config::Error::InvalidArgument) => return Err(Krb5Error::of(Code::Einval)),
+        Err(e @ krb5_config::Error::RealmCantResolve) => {
+            return Err(Krb5Error::new(Code::RealmCantResolve, e.to_string()));
+        }
         Err(_) => Vec::new(),
     };
     let Some(ep) = found.first() else {
@@ -704,7 +707,7 @@ fn identify_realm(
             Err(e) => {
                 return Err(Krb5Error::from_as(
                     &e,
-                    &client.unparse_with_realm(&realm),
+                    &client.unparse_with_realm_lossy(&realm),
                     &realm,
                 ));
             }
@@ -754,15 +757,27 @@ pub fn get_credentials_for_proxy(
             let tgt = outcome_from_presented(cache, &presented)?;
             let ticket: Ticket =
                 decode(&evidence.ticket).map_err(|e| Krb5Error::new(Code::Other, e.to_string()))?;
-            let out = tgs_s4u2proxy(
-                &cache.ctx.profile,
-                &kdc,
-                &tgt,
-                server.1.clone(),
-                &hop,
-                ticket,
-            )
-            .map_err(|e| Krb5Error::from_tgs(&e, &hop))?;
+            // MIT: `k5_get_proxy_cred_from_kdc` (lib/krb5/krb/s4u_creds.c:1163-1175)
+            let mut candidates = CanonPrinc::new(&cache.ctx.profile, server);
+            candidates.no_hostrealm = true;
+            let unknown = krb5_types::err::S_PRINCIPAL_UNKNOWN;
+            let mut last =
+                Krb5Error::new(Code::Kdc(unknown), crate::errmsg::kdc_error_text(unknown));
+            let out = loop {
+                let Some((_, name)) = candidates
+                    .next_candidate()
+                    .map_err(|e| Krb5Error::from_sname(&e))?
+                else {
+                    return Err(last);
+                };
+                let profile = &cache.ctx.profile;
+                match tgs_s4u2proxy(profile, &kdc, &tgt, name, &hop, ticket.clone())
+                    .map_err(|e| Krb5Error::from_tgs(&e, &hop))
+                {
+                    Err(e) if e.code == Code::Kdc(unknown) => last = e,
+                    got => break got?,
+                }
+            };
             let mut cred = cred_from_tgs(&(out.crealm.clone(), out.cname.clone()), &out)?;
             cred.server = server.clone();
             cred.second_ticket.clone_from(&evidence.ticket);

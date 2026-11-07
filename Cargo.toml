@@ -21,7 +21,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.2.0"
+version = "1.2.1"
 edition = "2024"
 rust-version = "1.95"
 license = "Apache-2.0 OR MIT"
@@ -58,6 +58,7 @@ crypto-bigint = { version = "0.7", default-features = false, features = ["zeroiz
 # crates; 4.1 would add cpufeatures 0.2. No `alloc`: no multiscalar API is used.
 curve25519-dalek = { version = "5.0.0", default-features = false, features = ["precomputed-tables", "zeroize"] }
 des = { version = "0.9", features = ["zeroize"] }
+dns-lookup = "4.0.2"
 getrandom = "0.2"
 hmac = { version = "0.13", features = ["zeroize"] }
 md-5 = { version = "0.11", features = ["zeroize"] }

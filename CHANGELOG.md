@@ -16,6 +16,59 @@ any other `###` heading.
 
 ## [Unreleased]
 
+### Added
+
+- **kdc.** `change_password_shared`, `create_password_shared` derive keys unlocked; kpasswd uses one.
+- **examples.** `embed-realm --write-load N,MS`: N writers through the helper, to time `kinit`.
+- **install.** `make install` lays out Debian, Ubuntu as MIT's `krb5-kdc`, `krb5-admin-server`, `krb5-kpropd`.
+- **config.** `KERBER_KDC_DATA_DIR`, `KERBER_DEFCKTNAME` build Debian's database, client keytab defaults.
+
+### Changed
+
+- **config.** Host names canonicalize through DNS, as MIT: kprop, kpropd, kinit -k, kadmin.local -k, TGS.
+- **brainpool.** Denies `unwrap`, `expect`, `panic` outside tests, as the other library crates do.
+- **kdc.** `Bootstrapped`, `MasterKey` are `#[non_exhaustive]`; a later field or variant won't break.
+- **types.** A build on crates.io's rasn fails on `KERBER_RUST_NEEDS_THIS_PATCH`, not decoding unlike MIT.
+
+### Fixed
+
+- **install.** The dnf remove line works on Rocky's dnf 4 as well as dnf5.
+- **crypto.** `prf_plus` fails past 255 blocks, as MIT's `krb5_c_prfplus`; it repeated block 255.
+- **fuzz.** Targets decode with the vendored rasn the product ships, not crates.io's.
+- **client.** kpasswd refuses a reply whose receiver address isn't the request's sender, as MIT.
+- **gss.** Unwrap rotates RRC left and wrap right, as MIT, so Windows' sealed tokens unwrap.
+- **kpropd.** A failed replay resets the ulog header, so the next poll asks for a full resync, as MIT.
+- **kpropd.** A non-UTF-8 name in an update now fails its replay and asks for a full resync.
+- **kpropd.** Names its peer by getnameinfo, as MIT; an IPv4 peer was looked up in ip6.arpa.
+- **admin.** kpasswd and kprop refuse an empty realm at locate, as MIT; kprop keeps the keytab's realm.
+- **kdc.** A renewal at the second of `renew_till` is granted, as MIT; it was refused.
+- **kdc.** A dump that won't load names its record and error, as MIT; it blamed the stash key.
+- **kdb.** A failed iprop dump or load names the iprop format, as MIT; it said release 1.11.
+- **kdc, kpropd.** An error reply that fails to encode isn't sent and is logged, as MIT; it went out empty.
+- **kdc.** A dump or iprop update keeps unsupported key slots and bad KADM_DATA, as MIT; it was refused.
+- **kdc.** An OTP refusal logs `Preauthentication failed` as MIT, with no per-attempt Error line.
+- **kdc.** TGS log lines carry MIT's authtime, session etype and S4U client; S4U and U2U audits fire as MIT's.
+- **kdc.** A TGS request with more than one fault is refused for the one MIT's check order reaches first.
+
+### Removed
+
+- **types.** PKINIT `cms_verify`, `cms_verify_full`, `cms_unwrap`, `cms_extract_unsigned`: no caller.
+
+### Security
+
+- **kdc.** A principal name or realm that isn't UTF-8 is refused, not merged with others via U+FFFD.
+- **admin.** A `kadm5.acl` line that isn't UTF-8 is a syntax error, not read as U+FFFD.
+
+### Tests and CI
+
+- **field.** Lab addresses, AD DC, LLDAP base DN are `field.env` keys; `lab.sh` reads it too.
+- **ci.** ci-policy fails on RFC 1918 addresses in `harness/`, `docs/`, `scripts/`, `.github/`.
+- **fuzz.** Nightly runs all nine targets; `pkinit_cms` drives `cms_signeddata_verify`.
+- **ci.** shellcheck covers `harness/field/p18/*.sh`; `ci-status.py` knows `ci`, `peers`, `nightly`.
+- **ci.** FAST gate's stripped-25 leg greps kinit's message, as MIT's leg does, not a log line.
+- **ci.** Samba image drops `samba-testsuite`; the l2 gate vendors `kcrypto.py`.
+- **hand.** The release proof's hand legs run from `harness/hand/`; FZ's `raw-tgs.py` moved there.
+
 ## [1.2.0] - 2026-11-04
 
 The **1.2** line is *embed-ready*: the KDC and kadmind also run as libraries over

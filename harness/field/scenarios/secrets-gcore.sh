@@ -9,6 +9,7 @@
 # no more copies of each password than MIT did (the rust leg reads the mit leg's counts from the sibling
 # record). The passwords are drawn here per run and reach the VMs only on stdin, never on a command line
 # or in the record.
+# Fedora only (DS): KDC logic the family doesn't touch
 # vms: kdc client2
 # legs: mit rust
 set -uo pipefail
@@ -49,7 +50,7 @@ corecount() { runin kdc "count a secret's raw occurrences in the core" 'grep -o 
 
 section "secrets-gcore --leg $LEG: kadmind core after a kpasswd change and a kadmin cpw on kdc, realm $REALM"
 kdcis
-check kadmin.active '^active$' run kdc "systemctl is-active kadmin"
+check kadmin.active '^active$' run kdc "systemctl is-active $UNIT_ADMIN"
 resetvm client2
 run client2 "rm -rf ~/sr1; mkdir -m 0700 ~/sr1"
 check client2.setpw rc runin client2 "lib/setpw.py" "cat > ~/sr1/setpw.py" < "$FIELD_LIB/setpw.py"

@@ -23,20 +23,28 @@ use crate::store::{
 
 #[must_use]
 /// An enterprise suffix matches the realm byte for byte.
-pub fn lookup_principal_id(name: &PrincipalName, realm: &str) -> String {
+pub fn lookup_principal_id(name: &PrincipalName, realm: &str) -> Option<String> {
     if name.name_type == PrincipalName::NT_ENTERPRISE {
-        let raw = name.components_joined();
+        let raw = name.try_components_joined()?;
         if let Some((user, suffix)) = raw.rsplit_once('@')
             && !user.is_empty()
+            && suffix == realm
         {
-            if suffix == realm {
-                return format!("{user}@{realm}");
-            }
-            return krb5_types::unparse_name(std::slice::from_ref(&raw), realm);
+            return Some(format!("{user}@{realm}"));
         }
-        return krb5_types::unparse_name(std::slice::from_ref(&raw), realm);
+        return Some(krb5_types::unparse_name(std::slice::from_ref(&raw), realm));
     }
-    name.unparse_with_realm(realm)
+    name.try_unparse_with_realm(realm)
+}
+
+pub const NOT_UTF8: &str = PrincipalName::NOT_UTF8;
+
+pub(crate) fn principal_id(name: &PrincipalName, realm: &str) -> Result<String, Error> {
+    lookup_principal_id(name, realm).ok_or(Error::NotFound)
+}
+
+pub(crate) fn new_principal_id(name: &PrincipalName, realm: &str) -> Result<String, Error> {
+    lookup_principal_id(name, realm).ok_or_else(|| Error::InvalidArgument(NOT_UTF8.into()))
 }
 
 // MIT: `krb5_db_get_principal` (kdb5.c:800-840)
@@ -55,7 +63,7 @@ pub fn resolve_alias_id<'a>(
             return None;
         }
         let (name, target_realm) = krb5_types::principal_from_unparsed(&target, realm).ok()?;
-        id = lookup_principal_id(&name, &target_realm);
+        id = lookup_principal_id(&name, &target_realm)?;
         p = lookup(&id)?;
     }
     Some(id)
@@ -89,7 +97,10 @@ pub trait PrincipalRead: Send + Sync {
     fn env(&self) -> &KdcEnv;
     fn fetch(&self, id: &str) -> Result<Option<Principal>, Error>;
     fn fetch_name(&self, name: &PrincipalName) -> Result<Option<Principal>, Error> {
-        self.fetch(&lookup_principal_id(name, self.realm()))
+        let Some(id) = lookup_principal_id(name, self.realm()) else {
+            return Ok(None);
+        };
+        self.fetch(&id)
     }
     fn fetch_krbtgt(&self) -> Result<Option<Principal>, Error> {
         self.fetch_name(&PrincipalName::krbtgt(self.realm()))
@@ -159,7 +170,9 @@ pub trait PrincipalRead: Send + Sync {
         client_realm: &str,
     ) -> bool {
         let _ = self;
-        let from = client.unparse_with_realm(client_realm);
+        let Some(from) = client.try_unparse_with_realm(client_realm) else {
+            return false;
+        };
         resource.s4u_allowed_from.iter().any(|n| n == &from)
     }
     fn pac_identity(&self, name: &PrincipalName, crealm: &str) -> PacIdentity {
@@ -171,7 +184,7 @@ pub trait PrincipalRead: Send + Sync {
                 if p.rid == 0 { RID_FIRST_USER } else { p.rid }
             });
         PacIdentity {
-            sam: name.components_joined(),
+            sam: name.components_joined_lossy(),
             realm: crealm.to_owned(),
             domain_sid: self.domain_sid().clone(),
             rid,
@@ -297,8 +310,7 @@ impl MemoryStore {
         }
     }
 
-    #[must_use]
-    pub fn from_dump(store: &PrincipalStore) -> Self {
+    pub fn from_dump(store: &PrincipalStore) -> Result<Self, Error> {
         let mut m = Self::new(store.realm());
         m.policy = store.policy().clone();
         m.domain_sid = store.domain_sid().clone();
@@ -306,9 +318,15 @@ impl MemoryStore {
         m.policies.clone_from(store.policies());
         m.env = store.env().clone();
         for p in store.debug_principals() {
-            m.map.insert(p.id(), p.clone());
+            m.put_record(p.clone())?;
         }
-        m
+        Ok(m)
+    }
+
+    fn put_record(&mut self, p: Principal) -> Result<(), Error> {
+        let key = crate::store::RecordKey::of(&p)?;
+        self.map.insert(key.into_string(), p);
+        Ok(())
     }
 
     #[must_use]
@@ -390,8 +408,7 @@ impl PrincipalRead for MemoryStore {
 impl PrincipalWrite for MemoryStore {
     fn put_principal(&mut self, mut p: Principal) -> Result<(), Error> {
         strip_db_args(&mut p.tl_data)?;
-        self.map.insert(p.id(), p);
-        Ok(())
+        self.put_record(p)
     }
     fn remove_id(&mut self, id: &str) -> Result<(), Error> {
         self.map.remove(id).ok_or(Error::NotFound)?;

@@ -197,19 +197,24 @@ fn main() -> ExitCode {
             .creds
             .iter()
             .filter(|cred| {
-                !cred.is_config() && cred.server.1.components_joined().starts_with("host/")
+                !cred.is_config() && cred.server.1.components_joined_lossy().starts_with("host/")
             })
             .collect();
         let tgt_creds: Vec<_> = cc
             .creds
             .iter()
             .filter(|cred| {
-                !cred.is_config() && cred.server.1.components_joined().starts_with("krbtgt/")
+                !cred.is_config()
+                    && cred
+                        .server
+                        .1
+                        .components_joined_lossy()
+                        .starts_with("krbtgt/")
             })
             .collect();
         let named = server_sel.as_deref().and_then(|want| {
             cc.creds.iter().find(|cred| {
-                let name = cred.server.1.components_joined();
+                let name = cred.server.1.components_joined_lossy();
                 let realm = std::str::from_utf8(cred.server.0.as_bytes()).unwrap_or("");
                 !cred.is_config() && (name == want || format!("{name}@{realm}") == want)
             })
@@ -233,7 +238,10 @@ fn main() -> ExitCode {
             );
             return ExitCode::from(1);
         };
-        (Some(cred.server.1.components_joined()), cred.ticket.clone())
+        (
+            Some(cred.server.1.components_joined_lossy()),
+            cred.ticket.clone(),
+        )
     };
     let ticket: Ticket = match decode(&ticket_der) {
         Ok(t) => t,
@@ -242,7 +250,7 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let sname = sname.unwrap_or_else(|| ticket.sname.components_joined());
+    let sname = sname.unwrap_or_else(|| ticket.sname.components_joined_lossy());
     for ent in &kt.entries {
         let Ok(plain) = decrypt(&ent.key, usage, ticket.enc_part.cipher.as_ref()) else {
             continue;
@@ -343,7 +351,7 @@ fn main() -> ExitCode {
                         };
                         println!(
                             "ticket_client={}@{}",
-                            part.cname.components_joined(),
+                            part.cname.components_joined_lossy(),
                             String::from_utf8_lossy(part.crealm.as_bytes())
                         );
                         println!("client_info_name={name}");
@@ -488,7 +496,12 @@ fn local_tgt_key(kt: &Keytab, cc: &FileCcache) -> Option<ProtocolKey> {
         if cred.is_config() {
             continue;
         }
-        if !cred.server.1.components_joined().starts_with("krbtgt/") {
+        if !cred
+            .server
+            .1
+            .components_joined_lossy()
+            .starts_with("krbtgt/")
+        {
             continue;
         }
         let ticket: Ticket = decode(&cred.ticket).ok()?;
@@ -534,7 +547,7 @@ fn dump_keytab(args: &[String]) -> ExitCode {
             "KEY {} {} {} {}",
             e.key.etype().to_iana(),
             hex_bytes(e.key.as_bytes()),
-            e.name.components_joined(),
+            e.name.components_joined_lossy(),
             e.kvno
         );
     }

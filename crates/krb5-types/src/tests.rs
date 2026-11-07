@@ -1,9 +1,5 @@
 use super::*;
 
-fn p256_key(k: [u8; 32]) -> crate::pkinit::IdentityKey {
-    crate::pkinit::IdentityKey::P256(zeroize::Zeroizing::new(k))
-}
-
 fn te(contents: &[u8]) -> TransitedEncoding {
     TransitedEncoding {
         tr_type: 1,
@@ -127,66 +123,6 @@ fn transited_mit_transit_tests_vectors() {
     assert_eq!(
         got("XYZZY.ATHENA.MIT.EDU", "XYZZY.CS.CMU.EDU", b",EDU,"),
         set(&["EDU", "MIT.EDU", "ATHENA.MIT.EDU", "CMU.EDU", "CS.CMU.EDU"])
-    );
-}
-
-#[test]
-fn pkinit_cms_path_validation() {
-    let ca = pkinit::PkinitCa::generate().expect("CA");
-    let inner = b"path-validation";
-    let wrapped = pkinit::cms_wrap(inner, &ca).expect("wrap");
-    assert_eq!(
-        pkinit::cms_verify(&wrapped, &ca.ca_cert).expect("in-window chain"),
-        inner
-    );
-
-    let (expired, ekey) = ca
-        .client_identity_window("user@KERBER.TEST", b"200101000000Z", b"210101000000Z")
-        .expect("expired");
-    let cms = pkinit::cms_sign_leaf(inner, &expired, &p256_key(ekey), pkinit::ECONTENT_AUTHDATA)
-        .expect("expired cms");
-    assert_eq!(
-        pkinit::cms_verify(&cms, &ca.ca_cert).expect_err("expired"),
-        "cms expired"
-    );
-
-    let (ee, ek) = pkinit::PkinitCa::self_signed_end_entity().expect("ee");
-    let cms = pkinit::cms_sign_leaf(inner, &ee, &p256_key(ek), pkinit::ECONTENT_AUTHDATA)
-        .expect("ee cms");
-    assert_eq!(
-        pkinit::cms_verify(&cms, &ee).expect_err("non-CA anchor"),
-        "cms ca"
-    );
-
-    let (wrong, wkey) = ca
-        .client_identity_wrong_issuer("user@KERBER.TEST")
-        .expect("wrong issuer");
-    let cms = pkinit::cms_sign_leaf(inner, &wrong, &p256_key(wkey), pkinit::ECONTENT_AUTHDATA)
-        .expect("wrong cms");
-    assert_eq!(
-        pkinit::cms_verify(&cms, &ca.ca_cert).expect_err("DN mismatch"),
-        "cms chain"
-    );
-
-    let expired_ca =
-        pkinit::PkinitCa::generate_window(b"200101000000Z", b"210101000000Z").expect("expired CA");
-    let cms = expired_ca.sign_cms(inner, "user").expect("expired ca cms");
-    assert_eq!(
-        pkinit::cms_verify(&cms, &expired_ca.ca_cert).expect_err("expired CA"),
-        "cms ca expired"
-    );
-
-    let noku = pkinit::PkinitCa::generate_no_key_cert_sign().expect("no ku");
-    let cms = noku.sign_cms(inner, "user").expect("no ku cms");
-    assert_eq!(
-        pkinit::cms_verify(&cms, &noku.ca_cert).expect_err("no keyCertSign"),
-        "cms ca ku"
-    );
-    let absent = pkinit::PkinitCa::generate_absent_key_usage().expect("absent ku");
-    let cms = absent.sign_cms(inner, "user").expect("absent ku cms");
-    assert_eq!(
-        pkinit::cms_verify(&cms, &absent.ca_cert).expect("RFC 5280 absent KU"),
-        inner
     );
 }
 

@@ -44,18 +44,12 @@ pub(super) fn sign_usage(initiator: bool) -> KeyUsage {
     })
 }
 
-fn rotate_rrc(cipher: &[u8], rrc: u16) -> Vec<u8> {
-    if cipher.is_empty() {
-        return cipher.to_vec();
+// MIT: `rotate_left` (lib/gssapi/krb5/unwrap.c:256-269)
+fn rotate_left(cipher: &[u8], rrc: u16) -> Vec<u8> {
+    let mut out = cipher.to_vec();
+    if !out.is_empty() {
+        out.rotate_left(usize::from(rrc) % cipher.len());
     }
-    let n = usize::from(rrc) % cipher.len();
-    if n == 0 {
-        return cipher.to_vec();
-    }
-    let split = cipher.len() - n;
-    let mut out = Vec::with_capacity(cipher.len());
-    out.extend_from_slice(&cipher[split..]);
-    out.extend_from_slice(&cipher[..split]);
     out
 }
 
@@ -69,14 +63,8 @@ fn apply_send_rrc(tok: &mut [u8], rrc: u16) -> Result<(), Error> {
         return Ok(());
     }
     let n = usize::from(rrc) % clen;
-    if n == 0 {
-        return Ok(());
-    }
-    let cipher = tok[16..].to_vec();
-    let mut rotated = Vec::with_capacity(cipher.len());
-    rotated.extend_from_slice(&cipher[n..]);
-    rotated.extend_from_slice(&cipher[..n]);
-    tok[16..].copy_from_slice(&rotated);
+    // MIT: `gss_krb5int_make_seal_token_v3` (lib/gssapi/krb5/k5sealv3.c:178-183)
+    tok[16..].rotate_right(n);
     Ok(())
 }
 
@@ -223,7 +211,7 @@ impl GssContext {
         ));
         let rrc = u16::from_be_bytes(header[6..8].try_into().map_err(|_| Error::Truncated)?);
         let seq = u64::from_be_bytes(header[8..16].try_into().map_err(|_| Error::Truncated)?);
-        let payload = rotate_rrc(&inner[16..], rrc);
+        let payload = rotate_left(&inner[16..], rrc);
         let usage = seal_usage(!self.initiator);
         let key = self.recv_key(flags);
         let conf = flags & FLAG_SEALED != 0;

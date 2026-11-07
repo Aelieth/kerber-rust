@@ -2,7 +2,7 @@ use krb5_asn1::{decode, encode};
 use krb5_types::{AsReq, HostAddress, KdcReqBody, MethodData, PaData, TgsReq, err, pa};
 
 use super::kdc_util::{kdc_req_body_der, process_tgs_header};
-use super::reply::encode_krb_error;
+use super::reply::{encode_krb_error, no_reply};
 use super::tgs_req::extract_pa_tgs;
 use crate::error::Error;
 use crate::kdb::PrincipalRead;
@@ -83,7 +83,10 @@ pub(super) fn wrap_as_fast(
     let (code, text, inner_ed, as_preauth, detail) = match err {
         Error::PreauthRequired { e_data } => {
             let method = decode::<MethodData>(&e_data).unwrap_or_default();
-            let inner = encode(&method).unwrap_or_default();
+            let inner = match encode(&method) {
+                Ok(b) => b,
+                Err(e) => return no_reply(e),
+            };
             (err::PREAUTH_REQUIRED, None, inner, Some(method), None)
         }
         Error::Protocol {
@@ -117,7 +120,10 @@ pub(super) fn wrap_as_fast(
     let mut padata = as_preauth.unwrap_or_else(|| decode_edata_padata(&inner_ed));
     padata = with_fx_cookie(store, body.cname.as_ref(), padata);
     // MIT: `kdc_fast_handle_error` (fast_util.c:384-386)
-    let inner_err = encode_krb_error(store, code, text.as_deref(), None, Some(body), false);
+    let inner_err = match encode_krb_error(store, code, text.as_deref(), None, Some(body), false) {
+        Ok(b) => b,
+        Err(e) => return no_reply(e),
+    };
     padata.push(PaData {
         padata_type: pa::FX_ERROR,
         padata_value: inner_err.into(),
@@ -136,8 +142,8 @@ pub(super) fn wrap_as_fast(
                     }
                 }
             }
-            Err(e) => e.into(),
+            Err(e) => no_reply(e),
         },
-        Err(e) => e,
+        Err(e) => no_reply(e),
     }
 }

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # L2: Samba kcrypto validates Rust PAC checksums 6/7/16/19.
-# Isolation: docker exec; host /etc/krb5.conf stays TESTLABBY.LOCAL.
+# Isolation: docker exec; host /etc/krb5.conf stays untouched.
 # Missing image/kcrypto: exit 2. Mismatch or corrupt-MAC pass: exit 1.
 set -euo pipefail
 

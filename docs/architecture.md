@@ -127,7 +127,8 @@ KDC-side tool finds kdc.conf and the database through `KdcPaths`, as MIT's
 `database_name` / `key_stash_file` / `acl_file` / `master_key_type` come from
 the realm's own stanza (the named realm, else `default_realm`; with neither
 the tool stops as MIT's does), else MIT's defaults under `KDC_DIR`
-(`/var/kerberos/krb5kdc`, set at build time by `KERBER_KDC_DIR`); only a
+(`/var/kerberos/krb5kdc`, set at build time by `KERBER_KDC_DIR`; the database's by
+`KERBER_KDC_DATA_DIR`, by default the same); only a
 `test-hooks` build puts the gates' `KRB5_KDC_CONF` / `KRB5_KDC_DB` /
 `KRB5_KDC_STASH` / `KRB5_ACL_FILE` / `KRB5_MASTER_ETYPE` on top. The KDC also
 takes ticket policy, `db_library` and listen ports from that file. A client

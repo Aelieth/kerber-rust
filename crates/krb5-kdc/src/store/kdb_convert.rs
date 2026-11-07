@@ -2,7 +2,7 @@
 
 use krb5_types::PrincipalName;
 
-use super::keys::KeyEntry;
+use super::keys::{KeyEntry, OpaqueKey};
 use super::principal::{KadmData, Principal, TlData};
 use crate::error::Error;
 use crate::kdb_dump::{
@@ -52,7 +52,7 @@ pub enum KdbeVal {
     LastFailed(u32),
     FailAuthCount(u32),
     Princ(PrincipalName, String),
-    KeyData(Vec<KeyEntry>),
+    KeyData(Vec<KeyEntry>, Vec<OpaqueKey>),
     TlData(Vec<TlData>),
     Len(u32),
     ModPrinc(PrincipalName, String),
@@ -79,7 +79,7 @@ impl KdbeVal {
             Self::LastFailed(_) => AT_LAST_FAILED,
             Self::FailAuthCount(_) => AT_FAIL_AUTH_COUNT,
             Self::Princ(..) => AT_PRINC,
-            Self::KeyData(_) => AT_KEYDATA,
+            Self::KeyData(..) => AT_KEYDATA,
             Self::TlData(_) => AT_TL_DATA,
             Self::Len(_) => AT_LEN,
             Self::ModPrinc(..) => AT_MOD_PRINC,
@@ -198,13 +198,9 @@ pub(crate) fn find_changed_attrs(current: &Principal, new: &Principal, exclude_n
     if princ_listed(current, new) {
         attrs |= attr_bit(AT_PRINC);
     }
-    if current.keys.len() != new.keys.len()
-        || current
-            .keys
-            .iter()
-            .zip(&new.keys)
-            .any(|(c, n)| c.kvno != n.kvno)
-    {
+    // MIT: `find_changed_attrs` (lib/kdb/kdb_convert.c:103-113)
+    let (cur, next) = (current.key_slots(), new.key_slots());
+    if cur.len() != next.len() || cur.iter().zip(&next).any(|(c, n)| c.kvno() != n.kvno()) {
         attrs |= attr_bit(AT_KEYDATA);
     }
     if mit_tl(current) != mit_tl(new) {
@@ -286,7 +282,7 @@ pub fn conv_2logentry(p: &Principal, attrs: u32) -> Vec<KdbeVal> {
                     out.push(KdbeVal::Princ(p.name.clone(), p.realm.clone()));
                 }
             }
-            AT_KEYDATA => out.push(KdbeVal::KeyData(p.keys.clone())),
+            AT_KEYDATA => out.push(KdbeVal::KeyData(p.keys.clone(), p.opaque_keys.clone())),
             AT_TL_DATA => {
                 let tl = mit_tl(p);
                 out.push(KdbeVal::PwLastChange(last_pwd_change(&tl)));
@@ -318,6 +314,7 @@ fn empty_entry(name: &str) -> Result<Principal, Error> {
         realm,
         keys: Vec::new(),
         key_history: Vec::new(),
+        opaque_keys: Vec::new(),
         max_life: 0,
         pw_expire: 0,
         attributes: 0,
@@ -376,7 +373,10 @@ pub fn conv_2dbentry(
                 ent.name = n.clone();
                 ent.realm.clone_from(r);
             }
-            KdbeVal::KeyData(keys) => ent.keys.clone_from(keys),
+            KdbeVal::KeyData(keys, opaque) => {
+                ent.keys.clone_from(keys);
+                ent.opaque_keys.clone_from(opaque);
+            }
             KdbeVal::TlData(tl) => {
                 ent.s4u_allowed_to = nul_tl_names(tl, TL_CONSTRAINED_DELEGATION);
                 ent.tl_data.retain(|t| t.ty != TL_CONSTRAINED_DELEGATION);
@@ -404,7 +404,7 @@ pub fn conv_2dbentry(
         && let Some((n, r)) = mod_princ
     {
         let mut contents = mod_time.to_le_bytes().to_vec();
-        contents.extend_from_slice(crate::kdb::lookup_principal_id(n, r).as_bytes());
+        contents.extend_from_slice(crate::kdb::new_principal_id(n, r)?.as_bytes());
         contents.push(0);
         update_tl_data(
             &mut ent.tl_data,
@@ -418,7 +418,7 @@ pub fn conv_2dbentry(
         vals.iter()
             .any(|v| matches!(v, KdbeVal::TlData(tl) if tl.iter().any(|t| t.ty == ty)))
     };
-    let rekeyed = vals.iter().any(|v| matches!(v, KdbeVal::KeyData(_)));
+    let rekeyed = vals.iter().any(|v| matches!(v, KdbeVal::KeyData(..)));
     if rekeyed || renamed || existing.is_none() {
         ent.salt = salt_of_keys(&ent.keys, &ent.name, &ent.realm);
     }
@@ -426,7 +426,7 @@ pub fn conv_2dbentry(
         ent.string_attrs = attrs_from_tl(&ent.tl_data);
     }
     if carried(TL_KADM_DATA) {
-        let osa = OsaPrincEnt::from_tl(&ent.tl_data).map_err(|e| Error::Crypto(e.to_string()))?;
+        let osa = OsaPrincEnt::from_tl(&ent.tl_data).ok().flatten();
         ent.pw_policy = osa
             .as_ref()
             .and_then(|o| o.bound_policy().map(str::to_owned));

@@ -55,14 +55,17 @@ esac
 . "$FIELD_LIB/leg.sh"
 legset ALICE ALICE_TEMP ADMIN
 R=${REALM//./\\.}
-KC=/var/kerberos/krb5kdc/kdc.conf
-SC=/etc/sysconfig/kadmin
+KC=$KDCDIR/kdc.conf
+SC=$ENVDIR/$UNIT_ADMIN
+PD=
+[ "$KDC_FAMILY" = rpm ] || PD=" $KDCDIR"
 CF="export KRB5_CONFIG=\$HOME/cf/krb5.conf"
 cleanup() {
-    timeout -k 5 60 "$LAB" ssh kdc -- "sudo rm -f /etc/krb5-rep2a.conf; [ -e $SC.cf ] && sudo mv $SC.cf $SC; [ -e $KC.cf ] && sudo mv $KC.cf $KC && sudo systemctl reset-failed krb5kdc kadmin && sudo systemctl restart krb5kdc kadmin; for p in cfskew cfpw; do sudo kadmin.local -q \"delprinc -force \$p\"; done; sudo rm -f $KC.inc; sudo pkill -x strace; true" < /dev/null > /dev/null 2>&1
+    timeout -k 5 60 "$LAB" ssh kdc -- "sudo rm -f /etc/krb5-rep2a.conf; [ -e $SC.cf ] && sudo mv $SC.cf $SC; [ ! -e \
+        $SC.absent ] || sudo rm -f $SC $SC.absent; [ -e $KC.cf ] && sudo mv $KC.cf $KC && sudo systemctl reset-failed $UNIT_KDC $UNIT_ADMIN && sudo systemctl restart $UNIT_KDC $UNIT_ADMIN; for p in cfskew cfpw; do sudo kadmin.local -q \"delprinc -force \$p\"; done; sudo rm -f $KC.inc; sudo pkill -x strace; true" < /dev/null > /dev/null 2>&1
     timeout -k 5 60 "$LAB" ssh kdc -- "sudo sh -s -- kpropd-stop $REALM" < "$FIELD_LIB/profile-opens.sh" > /dev/null 2>&1
     timeout -k 5 60 "$LAB" ssh kdc -- "sudo sh -s -- teardown" < "$FIELD_LIB/client-opens.sh" > /dev/null 2>&1
-    timeout -k 5 60 "$LAB" ssh kdc -- "sudo pkill -x strace; sudo systemctl reset-failed krb5kdc kadmin; sudo systemctl start krb5kdc kadmin" < /dev/null > /dev/null 2>&1
+    timeout -k 5 60 "$LAB" ssh kdc -- "sudo pkill -x strace; sudo systemctl reset-failed $UNIT_KDC $UNIT_ADMIN; sudo systemctl start $UNIT_KDC $UNIT_ADMIN" < /dev/null > /dev/null 2>&1
     timeout -k 5 60 "$LAB" ssh client2 -- 'sudo systemctl start chronyd; rm -rf ~/cf; true' < /dev/null > /dev/null 2>&1
 }
 trap cleanup EXIT
@@ -73,7 +76,7 @@ trap 'exit 129' HUP
 kdcwith() {
     local expect='^krb5kdc: active, 88 listening$'
     [ -n "${3:-}" ] && expect=$3
-    check "$1" "$expect" run kdc "sudo cp -p $KC.cf $KC && printf '%b' '$2' | sudo tee -a $KC > /dev/null && sudo systemctl reset-failed krb5kdc kadmin && sudo systemctl restart krb5kdc && for i in \$(seq 1 40); do ss -Hlun 'sport = :88' | grep -q . && break; sleep 0.25; done; sudo tail -n 6 $KC; echo \"krb5kdc: \$(systemctl is-active krb5kdc), 88 \$(ss -Hlun 'sport = :88' | grep -q . && echo listening)\"; if [ \"\$(systemctl is-active krb5kdc)\" != active ]; then sudo systemctl status krb5kdc --no-pager -n 12 || true; fi"
+    check "$1" "$expect" run kdc "sudo cp -p $KC.cf $KC && printf '%b' '$2' | sudo tee -a $KC > /dev/null && sudo systemctl reset-failed $UNIT_KDC $UNIT_ADMIN && sudo systemctl restart $UNIT_KDC && for i in \$(seq 1 40); do ss -Hlun 'sport = :88' | grep -q . && break; sleep 0.25; done; sudo tail -n 6 $KC; echo \"krb5kdc: \$(systemctl is-active $UNIT_KDC), 88 \$(ss -Hlun 'sport = :88' | grep -q . && echo listening)\"; if [ \"\$(systemctl is-active $UNIT_KDC)\" != active ]; then sudo systemctl status $UNIT_KDC --no-pager -n 12 || true; fi"
 }
 # skewed <check> <seconds> <ERE>: client2's clock moved ahead by that much (chronyd stopped), cfskew's kinit through
 # the copy of krb5.conf with its trace's preauth and KDC error lines after it, then chronyd started again to step it
@@ -87,7 +90,7 @@ skewed() {
 }
 # admrestart <check>: kadmin restarted on kdc.conf as it now is.
 admrestart() {
-    check "$1" '^kadmin: active, 464 listening$' run kdc "sudo systemctl reset-failed krb5kdc kadmin && sudo systemctl restart kadmin && for i in \$(seq 1 40); do ss -Hlun 'sport = :464' | grep -q . && break; sleep 0.25; done; echo \"kadmin: \$(systemctl is-active kadmin), 464 \$(ss -Hlun 'sport = :464' | grep -q . && echo listening)\"; if [ \"\$(systemctl is-active kadmin)\" != active ]; then sudo systemctl status kadmin --no-pager -n 12; fi"
+    check "$1" '^kadmin: active, 464 listening$' run kdc "sudo systemctl reset-failed $UNIT_KDC $UNIT_ADMIN && sudo systemctl restart $UNIT_ADMIN && for i in \$(seq 1 40); do ss -Hlun 'sport = :464' | grep -q . && break; sleep 0.25; done; echo \"kadmin: \$(systemctl is-active $UNIT_ADMIN), 464 \$(ss -Hlun 'sport = :464' | grep -q . && echo listening)\"; if [ \"\$(systemctl is-active $UNIT_ADMIN)\" != active ]; then sudo systemctl status $UNIT_ADMIN --no-pager -n 12; fi"
 }
 # kpwskewed <check> <seconds> <ERE>: client2's clock moved ahead by that much, cfpw's kpasswd through the copy of
 # krb5.conf (the old password, then the new one twice), then chronyd started again to step the clock back.
@@ -105,7 +108,7 @@ etkinit() {
 # admwith <check> <text appended to kdc.conf> [kadmind options] [another sysconfig line]: the original kdc.conf plus
 # that text, KADMIND_ARGS set to the options, kadmin restarted; then the TCP ports kadmind listens on.
 admwith() {
-    check "$1" '^kadmin: active$' run kdc "sudo cp -p $KC.cf $KC && printf '%b' '$2' | sudo tee -a $KC > /dev/null && { echo 'KADMIND_ARGS=${3:-}'; [ -z '${4:-}' ] || echo '${4:-}'; } | sudo tee $SC > /dev/null && sudo systemctl reset-failed krb5kdc kadmin && sudo systemctl restart kadmin; for i in \$(seq 1 40); do sudo ss -Hltnp | grep -q '\"kadmind\"' && break; sleep 0.25; done; sleep 1; echo \"kadmin: \$(systemctl is-active kadmin)\"; echo \"tcp ports: \$(sudo ss -Hltnp | grep '\"kadmind\"' | awk '{print \$4}' | sed 's/.*://' | sort -un | paste -sd' ')\""
+    check "$1" '^kadmin: active$' run kdc "sudo cp -p $KC.cf $KC && printf '%b' '$2' | sudo tee -a $KC > /dev/null && { echo '$ARGS_ADMIN=${3:-}'; [ -z '${4:-}' ] || echo '${4:-}'; } | sudo tee $SC > /dev/null && sudo systemctl reset-failed $UNIT_KDC $UNIT_ADMIN && sudo systemctl restart $UNIT_ADMIN; for i in \$(seq 1 40); do sudo ss -Hltnp | grep -q '\"kadmind\"' && break; sleep 0.25; done; sleep 1; echo \"kadmin: \$(systemctl is-active $UNIT_ADMIN)\"; echo \"tcp ports: \$(sudo ss -Hltnp | grep '\"kadmind\"' | awk '{print \$4}' | sed 's/.*://' | sort -un | paste -sd' ')\""
 }
 # ipropconf <port>: kdc.conf text turning iprop on at that port, with [logging] debug for MIT's debug lines.
 ipropconf() {
@@ -114,6 +117,12 @@ ipropconf() {
 # added <check> <mark> <ERE>: the "Address already added to server" lines kadmind.log gained since kdcmark <mark>.
 added() {
     local k='' a=''
+    if [ "$LOGSRC" = journal ]; then
+        kdcsince "$2" 'Address already added to server'
+        cp "$LAST_OUT" "$STATE/added.$2"
+        check "$1" "$3" host "printf 'already added: %s\n' \"\$(sed -n '/^--- kadmind.log\$/,\$p' $(printf '%q' "$STATE/added.$2") | grep -c 'Address already added to server')\""
+        return
+    fi
     read -r k a 2> /dev/null < "$STATE/mark.$2" || true
     check "$1" "$3" run kdc "printf 'already added: %s\n' \"\$(sudo tail -n +$(( ${a:-0} + 1 )) /var/log/kadmind.log | grep -c 'Address already added to server')\""
 }
@@ -184,7 +193,9 @@ etkinit CF.h.empty aes256-cts-hmac-sha1-96 '^kinit rc=1$'
 observelast obs.CF.h.empty 'kinit: .*'
 
 section "REP2a iprop_port = kadmind's 749: the iprop listener is not added, so iprop is not served there (MIT and ours)"
-check REP2a.sysconfig '^KADMIND_ARGS=' run kdc "sudo cp -p $SC $SC.cf && cat $SC"
+# Debian ships no $SC (its unit reads it optionally): .absent marks one the cells create, so the restore removes it.
+check REP2a.sysconfig "^$ARGS_ADMIN=" run kdc "if [ -e $SC ]; then sudo cp -p $SC $SC.cf && cat $SC; else sudo touch \
+    $SC.absent && echo '$ARGS_ADMIN= (no $SC)'; fi"
 kdcmark rep2a749
 admwith REP2a.749.kadmin "$(ipropconf 749)"
 checklast REP2a.749.ports '^tcp ports: 464 749$'
@@ -236,7 +247,7 @@ runin kdc "lib/rpc-probe.py" "python3 - 127.0.0.1 754 2112 2" < "$FIELD_LIB/rpc-
 portfact kadm5-754
 
 section "kdc.conf restored"
-check kdc.conf.restored '^restored, krb5kdc and kadmin active$' run kdc "sudo rm -f /etc/krb5-rep2a.conf && sudo mv $KC.cf $KC && sudo mv $SC.cf $SC && sudo systemctl reset-failed krb5kdc kadmin && sudo systemctl restart krb5kdc kadmin && systemctl is-active krb5kdc kadmin > /dev/null && ! sudo grep -qE '^[[:space:]]*clockskew|DUMMY\\.TEST' $KC && echo 'restored, krb5kdc and kadmin active' || sudo systemctl status krb5kdc kadmin --no-pager -n 12"
+check kdc.conf.restored '^restored, krb5kdc and kadmin active$' run kdc "sudo rm -f /etc/krb5-rep2a.conf && sudo mv $KC.cf $KC && { if [ -e $SC.absent ]; then sudo rm -f $SC $SC.absent; else sudo mv $SC.cf $SC; fi; } && sudo systemctl reset-failed $UNIT_KDC $UNIT_ADMIN && sudo systemctl restart $UNIT_KDC $UNIT_ADMIN && systemctl is-active $UNIT_KDC $UNIT_ADMIN > /dev/null && ! sudo grep -qE '^[[:space:]]*clockskew|DUMMY\\.TEST' $KC && echo 'restored, krb5kdc and kadmin active' || sudo systemctl status $UNIT_KDC $UNIT_ADMIN --no-pager -n 12"
 
 # opens <name> <pid expression>: strace attached to the daemon that pid names.
 opens() {
@@ -266,14 +277,14 @@ daemon() {
 }
 
 section "CF.e0 kadmind takes a kpasswd change and a kadmin session without opening krb5.conf or kdc.conf (MIT and ours)"
-check CF.e0.strace '^strace-[0-9]' run kdc "rpm -q strace > /dev/null 2>&1 || sudo dnf -y -q install strace > /dev/null 2>&1; rpm -q strace"
-opens kadmind "\$(systemctl show -p MainPID --value kadmin)"
+check CF.e0.strace '^strace-[0-9]' run kdc "$PKG_QUERY strace > /dev/null 2>&1 || sudo $PKG_INSTALL_Q strace > /dev/null 2>&1; $PKG_QUERY strace"
+opens kadmind "\$(systemctl show -p MainPID --value $UNIT_ADMIN)"
 check CF.e0.kpasswd '^Password changed\.$' runin client2 "cfpw's password ($ALICE), then alice-changed's twice ($ALICE_TEMP)" "kpasswd cfpw 2>&1" < <(chpw "$ALICE" "$ALICE_TEMP")
 check CF.e0.kadmin "^Principal: cfpw@$R\$" runin client2 "admin/admin's password ($ADMIN)" "kadmin -p admin/admin -q 'getprinc cfpw' 2>&1" < <(once "$ADMIN")
 opened kadmind
 
 section "CF.e0 a second kpropd takes one kprop without opening krb5.conf or kdc.conf (MIT and ours)"
-check CF.e0.kpropd.start '^kpropd [0-9]+ listening on 7754$' runin kdc "lib/profile-opens.sh" "sudo sh -s -- kpropd-start $LEG $REALM" < "$FIELD_LIB/profile-opens.sh"
+check CF.e0.kpropd.start '^kpropd [0-9]+ listening on 7754$' runin kdc "lib/profile-opens.sh" "sudo sh -s -- kpropd-start $LEG $REALM$PD" < "$FIELD_LIB/profile-opens.sh"
 opens kpropd "\$(cat /var/tmp/cf-e0/kpropd.pid)"
 check CF.e0.kprop 'SUCCEEDED$' run kdc "sudo kprop -r $REALM -f /var/tmp/cf-e0/dump -P 7754 -s /var/tmp/cf-e0/kt \$(hostname -f) 2>&1"
 check CF.e0.kpropd.loaded '^loaded$' run kdc "for i in \$(seq 1 40); do sudo test -e /var/tmp/cf-e0/replica/principal && break; sleep 0.25; done; sleep 1; sudo test -e /var/tmp/cf-e0/replica/principal && echo loaded"
@@ -297,8 +308,8 @@ client kdestroy "${BIN}kdestroy -c FILE:/var/tmp/cf-4/cc"
 client ktutil "sh -c 'printf \"rkt /var/tmp/cf-4/cf4.kt\\nlist\\nquit\\n\" | '${BIN}ktutil"
 client kadmin.local "/usr/sbin/kadmin.local -q 'getprinc cf4'"
 client kdb5_util "/usr/sbin/kdb5_util dump /var/tmp/cf-4/dump"
-daemon krb5kdc krb5kdc /usr/sbin/krb5kdc -n
-daemon kadmind kadmin /usr/sbin/kadmind -nofork
+daemon krb5kdc "$UNIT_KDC" /usr/sbin/krb5kdc -n
+daemon kadmind "$UNIT_ADMIN" /usr/sbin/kadmind -nofork
 daemon kpropd - /usr/sbin/kpropd -D -P 7754 -r "$REALM"
 check CF.4.teardown '^cf4 removed$' runin kdc "lib/client-opens.sh" "sudo sh -s -- teardown" < "$FIELD_LIB/client-opens.sh"
 finish

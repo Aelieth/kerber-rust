@@ -307,8 +307,11 @@ fn change_or_set_via(
     };
     // MIT: `kpasswd_sendto_msg_callback` (lib/krb5/os/changepw.c:108-195)
     // The KRB-PRIV sender is this connection's local address; no receiver.
-    let mut build =
-        |sender: &HostAddress| kpasswd_request(&sub, &ap_der, &priv_plain, version, sender);
+    let mut sent_from = None;
+    let mut build = |sender: &HostAddress| {
+        sent_from = Some(sender.clone());
+        kpasswd_request(&sub, &ap_der, &priv_plain, version, sender)
+    };
     let rep = send(&mut build)?;
     let (ap_rep, priv_rep, from_error) = parse_kpasswd_rep(&rep)?;
     let (code, data) = if from_error {
@@ -320,6 +323,7 @@ fn change_or_set_via(
             &as_out.session_key,
             &authenticator,
             &sub,
+            sent_from.as_ref(),
         )?;
         let (code, rest) = parse_chpw_rep(&user, false)?;
         (code, rest.to_vec())
@@ -391,11 +395,14 @@ fn get_clear_result(
     session: &ProtocolKey,
     authenticator: &Authenticator,
     subkey: &ProtocolKey,
+    local: Option<&HostAddress>,
 ) -> Result<Vec<u8>, Error> {
     let rep_part = verify_ap_rep(ap_rep, session, authenticator)?;
     // MIT: `krb5_rd_rep` (lib/krb5/krb/rd_rep.c:130-130)
     let mut remote = RemoteSeq::new(rep_part.seq_number.unwrap_or(0));
     let part = read_krb_priv(subkey, priv_rep)?;
+    // MIT: `read_krbpriv` (lib/krb5/krb/rd_priv.c:77-80)
+    crate::safe_priv::check_privsafe_addrs(&part.s_address, part.r_address.as_ref(), None, local)?;
     if !remote.check(part.seq_number.unwrap_or(0)) {
         return Err(Error::KrbError {
             code: err::BADORDER,

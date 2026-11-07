@@ -119,6 +119,8 @@ jobs:
       - uses: ./.github/actions/rust-preamble
       - name: fuzz crate
         run: cargo check --locked --manifest-path fuzz/Cargo.toml --bins
+      - name: T-7 timing harness
+        run: cargo check --locked --manifest-path harness/hand/t7/Cargo.toml
 
   shellcheck:
     runs-on: ubuntu-26.04
@@ -143,7 +145,7 @@ jobs:
       - name: shellcheck -S style (zero inline disables; .shellcheckrc follows sources)
         run: |
           shellcheck --version
-          shellcheck -S style scripts/*.sh scripts/lib/*.sh harness/*.sh dist/*.sh harness/field/*.sh harness/field/lib/*.sh harness/field/scenarios/*.sh
+          shellcheck -S style scripts/*.sh scripts/lib/*.sh harness/*.sh dist/*.sh harness/field/*.sh harness/field/lib/*.sh harness/field/scenarios/*.sh harness/field/p18/*.sh harness/hand/*.sh harness/hand/lib/*.sh harness/hand/b2/*/*.sh harness/hand/b2/*/*/*.sh harness/hand/r3/*.sh harness/hand/r3/*/*.sh harness/hand/t7/*.sh
 
   msrv:
     runs-on: ubuntu-26.04

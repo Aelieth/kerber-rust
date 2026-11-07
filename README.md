@@ -154,7 +154,7 @@ make build
 **2. Install it:**
 
 ```sh
-sudo dnf remove -y --no-autoremove krb5-server
+sudo dnf remove -y --setopt=clean_requirements_on_remove=False krb5-server
 sudo make install PREFIX=/usr
 ```
 
@@ -214,7 +214,7 @@ installed:
 ```sh
 sudo systemctl stop krb5kdc kadmin
 sudo kdb5_util dump /var/kerberos/krb5kdc/mit-realm.dump
-sudo dnf remove -y --no-autoremove krb5-server
+sudo dnf remove -y --setopt=clean_requirements_on_remove=False krb5-server
 for f in /var/kerberos/krb5kdc/kdc.conf /var/kerberos/krb5kdc/kadm5.acl /etc/sysconfig/krb5kdc \
          /etc/sysconfig/kadmin /etc/sysconfig/kprop /etc/logrotate.d/krb5kdc /etc/logrotate.d/kadmind; do
     if [ -e $f.rpmsave ]; then sudo mv $f.rpmsave $f; fi

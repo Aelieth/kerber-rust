@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # L3: Samba KDC validates a Rust referral PAC, and Rust accepts a Samba PAC.
 # Shared-trust-password variant (CI-reproducible). Isolation: docker exec;
-# host /etc/krb5.conf stays TESTLABBY.LOCAL.
+# host /etc/krb5.conf stays untouched.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

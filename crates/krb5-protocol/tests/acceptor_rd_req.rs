@@ -535,8 +535,8 @@ fn rd_req_with_a_named_server_maps_the_keytab_codes_as_keytab_fetch_error() {
     let elsewhere =
         PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "elsewhere.kerber.test"]);
     let (h, e) = (
-        host.unparse_with_realm(TEST_REALM),
-        elsewhere.unparse_with_realm(TEST_REALM),
+        host.unparse_with_realm_lossy(TEST_REALM),
+        elsewhere.unparse_with_realm_lossy(TEST_REALM),
     );
     let no_entry = |_: &PrincipalName, _: &str, _: u32, _: i32| Err(KeytabLookup::NotFound);
     // a KDB keytab sets no text, so the code's own

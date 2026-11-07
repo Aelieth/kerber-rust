@@ -433,7 +433,9 @@ impl GssContext {
                     !pre_cfx(sub_etype),
                 ),
                 initiator: true,
-                client: Some(cname.unparse_with_realm(&String::from_utf8_lossy(crealm.as_bytes()))),
+                client: Some(
+                    cname.unparse_with_realm_lossy(&String::from_utf8_lossy(crealm.as_bytes())),
+                ),
                 delegated: None,
                 spnego_mech_list: None,
                 lifetime_end: 0,
@@ -648,9 +650,18 @@ impl GssContext {
             (e.into(), code)
         })?;
         ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE);
-        let crealm = String::from_utf8_lossy(ok.ticket_part.crealm.as_bytes()).into_owned();
-        let client = ok.authenticator.cname.unparse_with_realm(&crealm);
-        let srealm = String::from_utf8_lossy(ok.srealm.as_bytes()).into_owned();
+        let names = std::str::from_utf8(ok.ticket_part.crealm.as_bytes())
+            .ok()
+            .and_then(|cr| {
+                let client = ok.authenticator.cname.try_unparse_with_realm(cr)?;
+                Some((
+                    client,
+                    std::str::from_utf8(ok.srealm.as_bytes()).ok()?.to_owned(),
+                ))
+            });
+        let Some((client, srealm)) = names else {
+            return Err(generic(Error::Inner(PrincipalName::NOT_UTF8.into())));
+        };
         let key_of = |k: &EncryptionKey| {
             EncryptionType::from_iana(k.keytype)
                 .or_else(|_| EncryptionType::known(k.keytype))

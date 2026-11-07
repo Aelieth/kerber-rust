@@ -16,7 +16,7 @@ use krb5_protocol::{
 };
 use krb5_types::{
     ApReq, EncTicketPart, EncryptedData, EncryptionKey, HostAddress, KerberosTime, KrbError,
-    NameError, PrincipalName, Ticket, TicketFlags, TransitedEncoding, err, ku,
+    PrincipalName, Ticket, TicketFlags, TransitedEncoding, err, ku,
 };
 use nix::sys::socket::{setsockopt, sockopt};
 
@@ -50,6 +50,16 @@ pub fn is_iprop_dump(dump: &[u8]) -> bool {
 }
 
 // MIT: `krb5_write_message` (lib/krb5/os/write_msg.c:73-76)
+// MIT: `send_error` (kprop/kpropd.c:1503-1506)
+fn send_error_reply<S: Write>(stream: &mut S, der: Option<Vec<u8>>) {
+    match der {
+        Some(der) => {
+            let _ = write_message(stream, &der);
+        }
+        None => klog::syslog(Severity::Err, "cannot encode the KRB-ERROR for kprop"),
+    }
+}
+
 fn write_message<S: Write>(stream: &mut S, data: &[u8]) -> io::Result<()> {
     krb5_protocol::write_messages(stream, &[data])
 }
@@ -280,7 +290,7 @@ fn recvauth_with<S: Read + Write + PeerAddr>(
                 (&chosen[..], None, None)
             }
             Err((der, text)) => {
-                let _ = write_message(stream, &der);
+                send_error_reply(stream, der);
                 return Err(Error::Inner(text));
             }
         },
@@ -312,7 +322,7 @@ fn recvauth_with<S: Read + Write + PeerAddr>(
         Ok(v) => v,
         Err(e) => {
             let der = kprop_rd_req_error(&ap_raw, &e, expected_realm, expected_server);
-            let _ = write_message(stream, &der);
+            send_error_reply(stream, der);
             return Err(Error::Inner(e.to_string()));
         }
     };
@@ -328,8 +338,14 @@ fn recvauth_with<S: Read + Write + PeerAddr>(
         write_message(stream, &der).map_err(|e| Error::Inner(e.to_string()))?;
     }
     let local_seq = ac.local_seq();
-    let crealm = String::from_utf8_lossy(ok.authenticator.crealm.as_bytes());
-    let client = ok.authenticator.cname.unparse_with_realm(&crealm);
+    let strict = std::str::from_utf8(ok.authenticator.crealm.as_bytes())
+        .ok()
+        .and_then(|cr| ok.authenticator.cname.try_unparse_with_realm(cr));
+    let Some(client) = strict else {
+        let crealm = String::from_utf8_lossy(ok.authenticator.crealm.as_bytes());
+        let shown = ok.authenticator.cname.unparse_with_realm_lossy(&crealm);
+        return Err(Error::KpropUnauthorized(shown));
+    };
     let auth = KpropAuth {
         session,
         local_seq,
@@ -486,55 +502,26 @@ fn e_text_with_nul(text: &str) -> Option<krb5_types::KerberosString> {
     krb5_types::kerberos_string_from_bytes(&bytes).ok()
 }
 
-pub fn kpropd_server_name(profile: &krb5_config::Krb5Conf) -> Result<PrincipalName, NameError> {
-    kpropd_server_name_for(&krb5_config::this_host(), profile)
+pub fn kpropd_server_name(
+    profile: &krb5_config::Krb5Conf,
+) -> Result<PrincipalName, krb5_config::SnameError> {
+    kpropd_server_name_for(None, profile)
 }
 
 // MIT: `sn2princ_realm` (kprop/kprop_util.c:33-55)
-// MIT: `krb5_sname_to_principal` (lib/krb5/os/sn2princ.c:365-376)
-/// `fallback` keeps the name; lookup expands it when the ticket arrives.
 pub fn kpropd_server_name_for(
-    host: &str,
+    host: Option<&str>,
     profile: &krb5_config::Krb5Conf,
-) -> Result<PrincipalName, NameError> {
-    let host = if profile.dns_canonicalize_hostname == krb5_config::CanonHost::Fallback {
-        host.to_owned()
-    } else {
-        krb5_config::expand_hostname(host, profile)
-    };
-    PrincipalName::try_new(PrincipalName::NT_SRV_HST, ["host", host.as_str()])
+) -> Result<PrincipalName, krb5_config::SnameError> {
+    krb5_config::sname_to_principal(profile, host, Some("host"), PrincipalName::NT_SRV_HST)
+        .map(|(_, name)| name)
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum KpropdLookup {
     #[default]
     Server,
-    Name(PrincipalName),
-    Unnamed,
-}
-
-// MIT: `k5_canonprinc` (lib/krb5/os/sn2princ.c:281-307)
-fn kpropd_lookup_name(
-    server: &PrincipalName,
-    fallback: bool,
-    expand: impl FnOnce(&str) -> String,
-) -> KpropdLookup {
-    match server.name_string.as_slice() {
-        [service, host]
-            if fallback
-                && server.name_type == PrincipalName::NT_SRV_HST
-                && !host.as_bytes().is_empty() =>
-        {
-            let host = expand(&String::from_utf8_lossy(host.as_bytes()));
-            let service = String::from_utf8_lossy(service.as_bytes()).into_owned();
-            match PrincipalName::try_new(PrincipalName::NT_SRV_HST, [service, host]) {
-                Ok(name) if name == *server => KpropdLookup::Server,
-                Ok(name) => KpropdLookup::Name(name),
-                Err(_) => KpropdLookup::Unnamed,
-            }
-        }
-        _ => KpropdLookup::Server,
-    }
+    Canon(Box<krb5_config::Krb5Conf>),
 }
 
 fn kpropd_error_server() -> PrincipalName {
@@ -546,7 +533,7 @@ fn kprop_rd_req_error(
     e: &krb5_protocol::Error,
     realm: Option<&str>,
     server: Option<&PrincipalName>,
-) -> Vec<u8> {
+) -> Option<Vec<u8>> {
     let (code, text) = recvauth_error_fields(raw, e);
     kprop_krb_error(code, &text, realm, server)
 }
@@ -556,13 +543,13 @@ fn kprop_krb_error(
     text: &str,
     realm: Option<&str>,
     server: Option<&PrincipalName>,
-) -> Vec<u8> {
+) -> Option<Vec<u8>> {
     let realm_s = realm.unwrap_or("????");
     let realm_ks = match krb5_types::try_ascii(realm_s) {
         Ok(r) => r,
         Err(_) => match krb5_types::try_ascii("INVALID") {
             Ok(r) => r,
-            Err(_) => return Vec::new(),
+            Err(_) => return None,
         },
     };
     let sname = server.cloned().unwrap_or_else(kpropd_error_server);
@@ -582,23 +569,18 @@ fn kprop_krb_error(
         e_text: e_text_with_nul(text),
         e_data: None,
     };
-    encode(&pdu).unwrap_or_default()
+    encode(&pdu).ok()
 }
 
 // MIT: `krb5_rd_req` (lib/krb5/krb/rd_req.c:56-84)
-// MIT: `decrypt_ticket` (lib/krb5/krb/rd_req_dec.c:454-456)
-// MIT: `decrypt_try_server` (lib/krb5/krb/rd_req_dec.c:373-377)
-// MIT: `try_one_princ` (lib/krb5/krb/rd_req_dec.c:335-346)
-// MIT: `keytab_fetch_error` (lib/krb5/krb/rd_req_dec.c:126-148)
-// MIT: `integrity_error` (lib/krb5/krb/rd_req_dec.c:173-174)
-/// No entry is NOKEY. Own server: missing kvno BADKEYVER, bad decrypt BAD_INTEGRITY; else NOT_US.
+// MIT: `decrypt_ticket` (lib/krb5/krb/rd_req_dec.c:454-470)
 fn kpropd_ticket_key(
     raw: &[u8],
     kt: &KpropdKeys,
     server: Option<&PrincipalName>,
     realm: Option<&str>,
     conf: &AcceptorConfig,
-) -> Result<ProtocolKey, (Vec<u8>, String)> {
+) -> Result<ProtocolKey, (Option<Vec<u8>>, String)> {
     let refuse = |code: i32| {
         let text = recvauth_protocol_text(code);
         (kprop_krb_error(code, &text, realm, server), text)
@@ -616,10 +598,51 @@ fn kpropd_ticket_key(
     if let Some(KpropdKeytabError::Resolve(text)) = &kt.error {
         return Err(generic(text));
     }
+    let try_name =
+        |name: Option<&PrincipalName>| kpropd_try_server(&ap.ticket, kt, name, realm, conf);
+    let out = match (server, &kt.lookup) {
+        (Some(s), KpropdLookup::Canon(profile)) => {
+            let princ = (krb5_types::try_ascii("").unwrap_or_default(), s.clone());
+            let mut iter = krb5_config::CanonPrinc::new(profile, &princ);
+            iter.no_hostrealm = true;
+            let mut last = Err(Refused::Code(err::NOKEY));
+            for (_, name) in iter {
+                last = try_name(Some(&name));
+                if !matches!(last, Err(Refused::Code(err::NOKEY))) {
+                    break;
+                }
+            }
+            last
+        }
+        _ => try_name(server),
+    };
+    out.map_err(|last| match last {
+        Refused::Code(code) => refuse(code),
+        Refused::Text(text) => generic(&text),
+        Refused::Rd(e) => (kprop_rd_req_error(raw, &e, realm, server), e.to_string()),
+    })
+}
+
+enum Refused {
+    Code(i32),
+    Text(String),
+    Rd(krb5_protocol::Error),
+}
+
+// MIT: `decrypt_try_server` (lib/krb5/krb/rd_req_dec.c:373-377)
+// MIT: `try_one_princ` (lib/krb5/krb/rd_req_dec.c:335-346)
+// MIT: `keytab_fetch_error` (lib/krb5/krb/rd_req_dec.c:126-148)
+// MIT: `integrity_error` (lib/krb5/krb/rd_req_dec.c:173-174)
+fn kpropd_try_server(
+    ticket: &Ticket,
+    kt: &KpropdKeys,
+    server: Option<&PrincipalName>,
+    realm: Option<&str>,
+    conf: &AcceptorConfig,
+) -> Result<ProtocolKey, Refused> {
     // MIT: `krb5_is_permitted_enctype` (lib/krb5/krb/init_ctx.c:603-605)
     // A permitted list that can't be read permits nothing.
     let permitted = conf.permitted().unwrap_or_default();
-    let ticket = &ap.ticket;
     let realm_b = realm.unwrap_or_default().as_bytes();
     let (tkt_kvno, tkt_etype) = (ticket.enc_part.kvno.unwrap_or(0), ticket.enc_part.etype);
     let is_tkt_server = |name: &PrincipalName, name_realm: &[u8]| {
@@ -635,33 +658,26 @@ fn kpropd_ticket_key(
     });
     if let Some(KpropdKeytabError::Read(text)) = &kt.error {
         if explicit.is_none() {
-            return Err(refuse(err::NOKEY));
+            return Err(Refused::Code(err::NOKEY));
         }
-        return Err(generic(text));
+        return Err(Refused::Text(text.clone()));
     }
     if let Some(name) = explicit {
-        let name = match &kt.lookup {
-            KpropdLookup::Server => name,
-            KpropdLookup::Name(canonical) => canonical,
-            KpropdLookup::Unnamed => return Err(refuse(err::NOKEY)),
-        };
         let own = is_tkt_server(name, realm_b);
         let entry = match kt_get_entry(&kt.entries, name, realm_b, tkt_kvno, tkt_etype) {
             KtGet::Found(e) => e,
-            KtGet::KvnoNotFound if own => return Err(refuse(err::BADKEYVER)),
-            KtGet::KvnoNotFound => return Err(refuse(err::NOT_US)),
-            KtGet::NotFound => return Err(refuse(err::NOKEY)),
+            KtGet::KvnoNotFound if own => return Err(Refused::Code(err::BADKEYVER)),
+            KtGet::KvnoNotFound => return Err(Refused::Code(err::NOT_US)),
+            KtGet::NotFound => return Err(Refused::Code(err::NOKEY)),
         };
         return match decrypt_ticket_part(&entry.key, ticket, permitted) {
             Ok(()) => Ok(entry.key.clone()),
-            Err(TicketPart::Integrity) if own => Err(refuse(err::BAD_INTEGRITY)),
-            Err(TicketPart::Integrity) => Err(refuse(err::NOT_US)),
-            Err(TicketPart::Size) => {
-                Err(generic("Message size is incompatible with encryption type"))
-            }
-            Err(TicketPart::Other(e)) => {
-                Err((kprop_rd_req_error(raw, &e, realm, server), e.to_string()))
-            }
+            Err(TicketPart::Integrity) if own => Err(Refused::Code(err::BAD_INTEGRITY)),
+            Err(TicketPart::Integrity) => Err(Refused::Code(err::NOT_US)),
+            Err(TicketPart::Size) => Err(Refused::Text(
+                "Message size is incompatible with encryption type".to_owned(),
+            )),
+            Err(TicketPart::Other(e)) => Err(Refused::Rd(e)),
         };
     }
     let (mut mismatch, mut matched, mut tkt_server, mut kvno, mut enctype) =
@@ -691,7 +707,7 @@ fn kpropd_ticket_key(
         }
     }
     // MIT: `iteration_error` (lib/krb5/krb/rd_req_dec.c:222-270)
-    Err(refuse(if !matched {
+    Err(Refused::Code(if !matched {
         err::NOKEY
     } else if mismatch || !tkt_server {
         err::NOT_US
@@ -1049,14 +1065,14 @@ pub enum KpropdKeytabError {
 // MIT: `krb5_ktfileint_open` (lib/krb5/keytab/kt_file.c:785-804)
 pub fn kpropd_keytab_keys(
     keytab: Option<&str>,
-    server: Option<&PrincipalName>,
     ctx: &krb5_config::ClientContext,
 ) -> Result<KpropdKeys, &'static str> {
     let profile = &ctx.profile;
-    let fallback = profile.dns_canonicalize_hostname == krb5_config::CanonHost::Fallback;
-    let lookup = server.map_or(KpropdLookup::Server, |s| {
-        kpropd_lookup_name(s, fallback, |h| krb5_config::expand_hostname(h, profile))
-    });
+    let lookup = if profile.ignore_acceptor_hostname {
+        KpropdLookup::Server
+    } else {
+        KpropdLookup::Canon(Box::new(profile.clone()))
+    };
     let empty = KpropdKeys {
         ignore_acceptor_hostname: profile.ignore_acceptor_hostname,
         lookup,
@@ -1209,12 +1225,13 @@ fn doit(
     if let Err(e) = setsockopt(&*stream, sockopt::KeepAlive, &true) {
         log.com_err(Some(e.desc()), "while attempting setsockopt (SO_KEEPALIVE)");
     }
-    let host = krb5_config::name_of_addr(peer.ip());
-    klog::syslog(Severity::Info, &format!("Connection from {host}"));
-    log.debug(&format!("Connection from {host}"));
+    if let Some(host) = krb5_config::name_of_addr(peer) {
+        klog::syslog(Severity::Info, &format!("Connection from {host}"));
+        log.debug(&format!("Connection from {host}"));
+    }
     // MIT: `kerberos_authenticate` (kprop/kpropd.c:1185-1295)
     if let Some(server) = expected_server.filter(|_| load.debug) {
-        let server = server.unparse_with_realm(expected_realm.unwrap_or_default());
+        let server = server.unparse_with_realm_lossy(expected_realm.unwrap_or_default());
         eprintln!(
             "krb5_recvauth({}, kprop5_01, {server}, ...)",
             stream.as_raw_fd()
@@ -1522,8 +1539,8 @@ mod tests {
         if std::env::var_os("KERBER_KPROPD_NAME_CHILD").is_some() {
             let profile = kdc_profile().profile;
             for host in ["kdc2", "KDC2"] {
-                match kpropd_server_name_for(host, &profile) {
-                    Ok(name) => println!("{host}=[{}]", name.components_joined()),
+                match kpropd_server_name_for(Some(host), &profile) {
+                    Ok(name) => println!("{host}=[{}]", name.components_joined_lossy()),
                     Err(e) => println!("{host}=error {e}"),
                 }
             }
@@ -1543,12 +1560,17 @@ mod tests {
         );
         std::fs::write(&kdc_q, "[libdefaults]\n    qualify_shortname = kdc.test\n").unwrap();
         std::fs::write(&kdc_plain, "[kdcdefaults]\n").unwrap();
+        let no_dns = "    dns_canonicalize_hostname = false\n";
         std::fs::write(
             &krb5_q,
-            "[libdefaults]\n    qualify_shortname = KRB5.test\n",
+            format!("[libdefaults]\n    qualify_shortname = KRB5.test\n{no_dns}"),
         )
         .unwrap();
-        std::fs::write(&krb5_plain, "[libdefaults]\n    default_realm = R.TEST\n").unwrap();
+        std::fs::write(
+            &krb5_plain,
+            format!("[libdefaults]\n    default_realm = R.TEST\n{no_dns}"),
+        )
+        .unwrap();
         let krb5_fallback = dir.join("krb5-fallback.conf");
         std::fs::write(
             &krb5_fallback,
@@ -1943,70 +1965,42 @@ mod tests {
 
     #[test]
     fn kpropd_looks_its_entry_up_under_the_name_fallback_expands() {
-        let raw = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "KDC2"]);
-        let expand = |h: &str| format!("{}.kerber.test", h.to_ascii_lowercase());
-        let want = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "kdc2.kerber.test"]);
-        assert_eq!(
-            kpropd_lookup_name(&raw, true, expand),
-            KpropdLookup::Name(want)
-        );
-        assert_eq!(
-            kpropd_lookup_name(&raw, false, expand),
-            KpropdLookup::Server
-        );
-        let plain = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["host", "KDC2"]);
-        assert_eq!(
-            kpropd_lookup_name(&plain, true, expand),
-            KpropdLookup::Server
-        );
-        let empty = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", ""]);
-        assert_eq!(
-            kpropd_lookup_name(&empty, true, expand),
-            KpropdLookup::Server
-        );
-        let accented = |h: &str| format!("{h}.\u{e9}.test");
-        assert_eq!(
-            kpropd_lookup_name(&raw, true, accented),
-            KpropdLookup::Unnamed,
-            "a name this port cannot hold"
-        );
-        let host = krb5_kdc::testrealm::documented_host();
-        let e = kpropd_with_keytab(
-            |_, _| KpropdKeys {
-                lookup: KpropdLookup::Name(host.clone()),
-                ..keytab(Vec::new(), false)
-            },
-            &raw,
-        )
-        .unwrap();
-        assert_eq!(e.error_code, err::NOKEY);
-        assert_eq!(
-            e.sname, raw,
-            "the KRB-ERROR names the principal as kpropd made it"
-        );
-        assert_eq!(
+        let profile = |q: &str| {
+            let text = format!(
+                "[libdefaults]\n dns_canonicalize_hostname = fallback\n qualify_shortname = {q}\n"
+            );
+            KpropdLookup::Canon(Box::new(krb5_config::Krb5Conf::parse(&text).unwrap()))
+        };
+        let with = |q: &'static str, server: &PrincipalName| {
             kpropd_with_keytab(
                 |keys, _| KpropdKeys {
-                    lookup: KpropdLookup::Name(host.clone()),
+                    lookup: profile(q),
                     ..keytab(host_entries(keys), false)
                 },
-                &raw,
-            ),
+                server,
+            )
+        };
+        let raw = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "TESTHOST"]);
+        assert_eq!(
+            with("kerber.test", &raw),
             None,
-            "the entry of the expanded name takes the ticket"
+            "the name without DNS takes the ticket"
         );
-        let e = kpropd_with_keytab(
-            |keys, _| KpropdKeys {
-                lookup: KpropdLookup::Unnamed,
-                ..keytab(host_entries(keys), false)
-            },
-            &raw,
-        )
-        .unwrap();
+        let local = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "LOCALHOST"]);
+        let e = with("kerber.test", &local).unwrap();
+        assert_eq!(e.error_code, err::NOKEY, "no name of it in the keytab");
+        assert_eq!(
+            e.sname, local,
+            "the KRB-ERROR names the principal as kpropd made it"
+        );
+        let e = with("\u{e9}.test", &raw).unwrap();
+        assert_eq!(e.error_code, err::NOKEY, "a name this port cannot hold");
+        let plain = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["host", "TESTHOST"]);
+        let e = with("kerber.test", &plain).unwrap();
         assert_eq!(
             e.error_code,
             err::NOKEY,
-            "an expanded name no entry can have"
+            "a name not host-based is taken as is"
         );
     }
 
@@ -2172,7 +2166,8 @@ mod tests {
         use krb5_kdc::testrealm::TEST_REALM;
 
         let (host_keys, _, _) = kprop_ticket();
-        let own = kpropd_server_name(&krb5_config::Krb5Conf::new()).unwrap();
+        let no_dns = "[libdefaults]\n dns_canonicalize_hostname = false\n";
+        let own = kpropd_server_name(&krb5_config::Krb5Conf::parse(no_dns).unwrap()).unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let join = thread::spawn(move || {

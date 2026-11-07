@@ -204,7 +204,8 @@ pub(crate) fn decrypt_presented_tgt(
     tkt_etype: EncryptionType,
 ) -> Result<(EncTicketPart, ProtocolKey, Vec<u8>, Principal), Error> {
     let ticket_realm = utf8_realm(&ap.ticket.realm)?;
-    let princ = store.fetch(&lookup_principal_id(&ap.ticket.sname, ticket_realm))?;
+    let id = lookup_principal_id(&ap.ticket.sname, ticket_realm);
+    let princ = id.map(|id| store.fetch(&id)).transpose()?.flatten();
     let Some(p) = princ else {
         return Err(proto(err::S_PRINCIPAL_UNKNOWN, status::PROCESS_TGS));
     };
@@ -227,6 +228,12 @@ pub(crate) fn decrypt_presented_tgt(
                 if store.policy().etype_permitted(tkt_etype) {
                     match decrypt_enc_data(&key, usage, ap.ticket.enc_part.etype, cipher) {
                         Ok(plain) => match decode::<EncTicketPart>(&plain) {
+                            Ok(part)
+                                if part.cname.try_unparse().is_none()
+                                    || std::str::from_utf8(part.crealm.as_bytes()).is_err() =>
+                            {
+                                return Err(proto(err::C_PRINCIPAL_UNKNOWN, status::PROCESS_TGS));
+                            }
                             Ok(part) => return Ok((part, key, plain, p.clone())),
                             Err(e) => tgs_decode_refusal(&plain, 3, &e),
                         },
