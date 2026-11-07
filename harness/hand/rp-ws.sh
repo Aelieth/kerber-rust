@@ -135,12 +135,12 @@ win_revert() {
 }
 
 # kdc_setup's hook, on kdc with MIT's kadmin.local before any move: the acceptors' keytab and the
-# guest's machine principal (its password on stdin).
+# guest's machine principal (its password on stdin; no PAC, which a workgroup machine can't validate).
 push_keytabs() {
     local d=$REC/$1
     "$LAB" ssh kdc -- "install -d -m 0700 /var/tmp/ws && sudo kadmin.local -q 'ktadd -k /var/tmp/ws/svc.keytab -norandkey $SVC' && sudo chown lab:lab /var/tmp/ws/svc.keytab" < /dev/null > "$d/svc-keytab.out" 2>&1 || return 1
     grep -q 'added to keytab' "$d/svc-keytab.out" || return 1
-    { value mach-win; value mach-win; } | "$LAB" ssh kdc -- "sudo kadmin.local -q 'addprinc $MACH'" > "$d/machine.out" 2>&1 || return 1
+    { value mach-win; value mach-win; } | "$LAB" ssh kdc -- "sudo kadmin.local -q 'addprinc +no_auth_data_required $MACH'" > "$d/machine.out" 2>&1 || return 1
     grep -q "Principal \"$MACH@$REALM\" created" "$d/machine.out"
 }
 
