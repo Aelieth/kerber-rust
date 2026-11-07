@@ -53,3 +53,4 @@ Drivers:
 - `r3/`: the R3 driver `hc.sh`, `cells/r3.sh`, `vmctl.sh`, `install-ours.sh`, `parity.py`, `pcapdecode.sh`.
 - `lib/`: `env.sh`, `ship-guard.sh` (re-hashes the 13 ship binaries), `compare-legs.py` and `expected-diff.txt` (the B2 grade), `p16a-leg.sh` (the combined driver's dictionary leg).
 - `lib/`: also the guest and client helpers the legs copy onto the VMs (`*.py`, `*.c`) and the `bg-ns.sh`/`bg-seq.sh` namespace scripts.
+- `lib/install-env.sh`: what `make install PREFIX=/usr` passes `dist/install.sh` on Fedora, for B2's and R3's `install-ours.sh` (staged beside it on the VM); it stops before any change if `install.sh` needs a variable it doesn't set.

@@ -1360,7 +1360,7 @@ host_tmp_snapshot > "$OUT/host-tmp-before.txt"
 : > "$OUT/results.tsv"
 
 # ---- before any lock or VM: the inputs, the scripts, the record directory
-for f in otp/vmctl.sh otp/log-since.sh otp/install-ours.sh otp/totp.py otp/radius_stub.py otp/norm.py otp/parity.sh ra/stage.sh ra/kpwsend.py ra/frames-nokey.tsv ra/cmp.py ka/stage.sh ka/session.sh ka/norm.py build-oracle.sh; do
+for f in otp/vmctl.sh otp/log-since.sh otp/install-ours.sh otp/install-env.sh otp/totp.py otp/radius_stub.py otp/norm.py otp/parity.sh ra/stage.sh ra/kpwsend.py ra/frames-nokey.tsv ra/cmp.py ka/stage.sh ka/session.sh ka/norm.py build-oracle.sh; do
     [ -e "$SCRIPTS/$f" ] || { echo "driver.sh: $SCRIPTS/$f is missing" >&2; exit 2; }
 done
 [ -x "$LAB" ] || { echo "driver.sh: $LAB is not executable" >&2; exit 2; }
@@ -1435,6 +1435,7 @@ note "TOTP clock offset used (the kdc's clock minus the host's, only when over 3
 note "L2 pushes: the ship build's server programs and dist/ (sha256 both sides), the OTP helpers, the RA r4 and KA inputs"
 push kdc "$SCRIPTS/otp/radius_stub.py" "$VMD/radius_stub.py" 644 || fail "push radius_stub.py"
 push kdc "$SCRIPTS/otp/install-ours.sh" "$VMD/install-ours.sh" 755 || fail "push install-ours.sh"
+push kdc "$SCRIPTS/otp/install-env.sh" "$VMD/install-env.sh" 644 || fail "push install-env.sh"
 TARLIST=(); for f in "${SERVER_PROGS[@]}"; do TARLIST+=("release/$f"); done
 tar -C "$W/ship" -cf - "${TARLIST[@]}" dist | vm kdc "install -d -m 0700 $VMD/ship && tar -C $VMD/ship -xf -" >> "$LOG" 2>&1 || fail "push the ship tar"
 vm kdc "cd $VMD/ship/release && sha256sum ${SERVER_PROGS[*]}" > "$OUT/ship-on-vm.sha256" 2>> "$LOG"

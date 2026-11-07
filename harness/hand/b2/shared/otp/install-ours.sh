@@ -3,6 +3,9 @@
 # `make install PREFIX=/usr` (so no `dnf install make`), and with the docs' modprinc +requires_preauth step after the load. Inputs: /var/tmp/otp3/ship/{release,dist}. Prints INSTALL_START / INSTALL_DONE.
 set -eu
 D=/var/tmp/otp3; SHIP=$D/ship; KDCDIR=/var/kerberos/krb5kdc
+# shellcheck source=../../../lib/install-env.sh # staged beside this script on the VM
+. "$(dirname "$0")/install-env.sh"
+install_check "$SHIP"   # before any change on the VM
 echo "INSTALL_START $(date -u +%FT%TZ)"
 echo "MIT before: $(rpm -q krb5-server krb5-libs | tr '\n' ' ')"
 systemctl stop krb5kdc kadmin
@@ -12,9 +15,7 @@ dnf remove -y --no-autoremove krb5-server
 for f in "$KDCDIR/kdc.conf" "$KDCDIR/kadm5.acl" /etc/sysconfig/krb5kdc /etc/sysconfig/kadmin /etc/logrotate.d/krb5kdc /etc/logrotate.d/kadmind; do
     if [ -e "$f.rpmsave" ]; then mv "$f.rpmsave" "$f"; echo "RESTORED:$f"; fi
 done
-env RELEASE="$SHIP/release" DIST="$SHIP/dist" DESTDIR= BINDIR=/usr/bin SBINDIR=/usr/sbin SYSCONFIGDIR=/etc/sysconfig \
-    LOGROTATEDIR=/etc/logrotate.d UNITDIR=/usr/lib/systemd/system TMPFILESDIR=/usr/lib/tmpfiles.d KDCDIR="$KDCDIR" \
-    MANIFEST=/usr/share/kerber-rust/install-manifest sh "$SHIP/dist/install.sh" install
+install_run "$SHIP" install
 mkdir -p "$KDCDIR/mit-db2"
 for f in principal principal.kadm5 principal.ulog; do
     if [ -e "$KDCDIR/$f" ]; then mv "$KDCDIR/$f" "$KDCDIR/mit-db2/"; fi

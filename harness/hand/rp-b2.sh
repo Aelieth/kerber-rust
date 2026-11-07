@@ -46,8 +46,8 @@ REDS=(
 
 case $SCRATCH in "$HAND_REC"/*) ;; *) echo "rp-b2.sh: scratch is not under HAND_REC" >&2; exit 2 ;; esac
 require_dirs "$WT" "$HDIR/b2/shared" "$HDIR/b2/combined" "$HDIR/b2/fix-p8"
-require_files "$BASE_B2" "$BASE_CB" "$WT/harness/field/lab.sh" "$WT/harness/field/lib/log-since.sh" "$HDIR/lib/compare-legs.py" \
-    "$HDIR/lib/expected-diff.txt" "$HDIR/lib/p16a-leg.sh"
+require_files "$BASE_B2" "$BASE_CB" "$WT/harness/field/lab.sh" "$WT/harness/field/lib/log-since.sh" \
+    "$HDIR/lib/compare-legs.py" "$HDIR/lib/install-env.sh" "$HDIR/lib/expected-diff.txt" "$HDIR/lib/p16a-leg.sh"
 got=$(git -C "$WT" rev-parse HEAD)
 [ "$got" = "$COMMIT" ] || { echo "rp-b2.sh: $WT is $got, not $COMMIT" >&2; exit 2; }
 got=$(git -C "$WT" rev-parse 'HEAD^{tree}')
@@ -62,6 +62,8 @@ prep() {
     cp -a "$HDIR/lib/compare-legs.py" "$HDIR/lib/expected-diff.txt" "$COPY/"
     cp -a "$WT/harness/field/lib/log-since.sh" "$COPY/b2/otp/"
     cp -a "$WT/harness/field/lib/log-since.sh" "$COPY/combined/otp/"
+    cp -a "$HDIR/lib/install-env.sh" "$COPY/b2/otp/"
+    cp -a "$HDIR/lib/install-env.sh" "$COPY/combined/otp/"
     bash -n "$COPY/b2/mod/d3.sh"
     bash -n "$COPY/b2/driver-b2.sh"
     bash -n "$COPY/b2/helpers/kp-vm.sh"

@@ -409,7 +409,7 @@ krb5_sums > "$OUT/krb5.conf.start" 2>/dev/null
 note "RERUN_START (R3 only) tree $TREE (commit $COMMIT); driver sha256 $(sha256sum "$0" | cut -c1-16); lab.sh sha256 $(sha256sum "$LAB" | cut -c1-16)"
 [ -x "$LAB" ] || { echo "hc.sh: $LAB is not executable" >&2; exit 2; }
 source_check || exit 2   # before the lab lock: a missing helper stops the hold with no lab step taken
-for f in hc.sh vmctl.sh install-ours.sh parity.py cells/r3.sh lib/cellfns.sh lib/undef-check.sh; do [ -e "$HC/$f" ] || { echo "hc.sh: $HC/$f is missing" >&2; exit 2; }; done
+for f in hc.sh vmctl.sh install-ours.sh install-env.sh parity.py cells/r3.sh lib/cellfns.sh lib/undef-check.sh; do [ -e "$HC/$f" ] || { echo "hc.sh: $HC/$f is missing" >&2; exit 2; }; done
 [ -d "$SRC/harness/field/lib" ] && [ -d "$SRC/dist" ] && [ -f "$SRC/docs/install.md" ] || { echo "hc.sh: $SRC is not an extraction of the tree" >&2; exit 2; }
 for p in "${SERVER_PROGS[@]}"; do [ -x "$SHIP/$p" ] || { echo "hc.sh: $SHIP/$p is missing or not executable" >&2; exit 2; }; done
 ( cd "$SHIP" && sha256sum -c --quiet "$SHIPSHA" ) > "$OUT/ship-verify.txt" 2>&1 || { echo "hc.sh: the ship copy does not match $SHIPSHA (ship-verify.txt)" >&2; cat "$OUT/ship-verify.txt" >&2; exit 2; }
@@ -470,6 +470,7 @@ cat "$OUT/clock-skew.txt" >> "$LOG"
 # ================================================================ L2 pushes
 note "L2 pushes: the ship build's server programs and dist/ (sha256 both sides), install-ours.sh"
 push kdc "$HC/install-ours.sh" "$VMD/install-ours.sh" 755 || fail "push install-ours.sh"
+push kdc "$HC/install-env.sh" "$VMD/install-env.sh" 644 || fail "push install-env.sh"
 chmod -R u+w "$TMPDIR/shiptar" 2> /dev/null; rm -rf "$TMPDIR/shiptar"   # never a leftover of an earlier run
 mkdir -p "$TMPDIR/shiptar/release" || fail "mkdir the ship staging dir"
 for p in "${SERVER_PROGS[@]}"; do cp -p "$SHIP/$p" "$TMPDIR/shiptar/release/$p" || fail "stage $p from the frozen ship copy"; done

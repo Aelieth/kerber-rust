@@ -23,7 +23,7 @@ LAB=$WT/harness/field/lab.sh
 REC=$HAND_REC/$PHASEC_SHA/r3
 bash "$HDIR/lib/ship-guard.sh" "$PHASEC_SHA" "$REC" || exit $?
 require_bins "$LAB"
-require_files "$SRC_SCRIPTS/hc.sh" "$SRC_SCRIPTS/vmctl.sh" "$SRC_SCRIPTS/install-ours.sh" "$SRC_SCRIPTS/parity.py" \
+require_files "$SRC_SCRIPTS/hc.sh" "$SRC_SCRIPTS/vmctl.sh" "$SRC_SCRIPTS/install-ours.sh" "$HDIR/lib/install-env.sh" "$SRC_SCRIPTS/parity.py" \
     "$SRC_SCRIPTS/pcapdecode.sh" "$SRC_SCRIPTS/cells/r3.sh" "$SRC_SCRIPTS/lib/cellfns.sh" "$SRC_SCRIPTS/lib/undef-check.sh"
 require_dirs "$FIELD_KIT_DIR"
 kit=("$FIELD_KIT_DIR"/*-remote-setup.sh)
@@ -37,8 +37,8 @@ HANDLOCK=$LAB_HOME/state/lab.lock
 
 case $(realpath -m "$TMP") in /tmp|/tmp/*) echo "rp-r3.sh: TMP is under /tmp" >&2; exit 2 ;; esac
 mkdir -p "$COPY" "$TMP"
-rm -rf "${COPY:?}/hc.sh" "${COPY:?}/vmctl.sh" "${COPY:?}/install-ours.sh" "${COPY:?}/parity.py" "${COPY:?}/cells" "${COPY:?}/lib"
-cp -a "$SRC_SCRIPTS/hc.sh" "$SRC_SCRIPTS/vmctl.sh" "$SRC_SCRIPTS/install-ours.sh" "$SRC_SCRIPTS/parity.py" "$COPY/"
+rm -rf "${COPY:?}/hc.sh" "${COPY:?}/vmctl.sh" "${COPY:?}/install-ours.sh" "${COPY:?}/install-env.sh" "${COPY:?}/parity.py" "${COPY:?}/cells" "${COPY:?}/lib"
+cp -a "$SRC_SCRIPTS/hc.sh" "$SRC_SCRIPTS/vmctl.sh" "$SRC_SCRIPTS/install-ours.sh" "$HDIR/lib/install-env.sh" "$SRC_SCRIPTS/parity.py" "$COPY/"
 cp -a "$SRC_SCRIPTS/cells" "$SRC_SCRIPTS/lib" "$COPY/"
 
 # Ship list hc.sh checks: hashes of this tree's release build.
