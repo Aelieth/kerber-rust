@@ -411,10 +411,11 @@ c9() {
     return "$rc"
 }
 
-# Heimdal's cells. klist -v's KDC time offset is the clock, so it is recorded only.
+# Heimdal's cells. Debian's klist.heimdal is heimtools, which takes its command first (heimtools.c:
+# command_alias); klist -v's KDC time offset is the clock, so it is recorded only.
 hklist() {
     local rc
-    klist.heimdal -v > "$F/hk.out" 2>&1
+    klist.heimdal klist -v > "$F/hk.out" 2>&1
     rc=$?
     sed -E 's/^( *KDC time offset:)/INFO_\1/' "$F/hk.out"
     return "$rc"
