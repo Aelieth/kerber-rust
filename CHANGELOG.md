@@ -50,6 +50,8 @@ any other `###` heading.
 - **kdc.** An OTP refusal logs `Preauthentication failed` as MIT, with no per-attempt Error line.
 - **kdc.** TGS log lines carry MIT's authtime, session etype and S4U client; S4U and U2U audits fire as MIT's.
 - **kdc.** A TGS request with more than one fault is refused for the one MIT's check order reaches first.
+- **kadmind.** `addprinc -nokey` stores no key and its kvno reads 0, as MIT; it made a random key.
+- **kadmind.** A failed target fetch logs no Request line, and a failed rename source Unauthorized, as MIT.
 
 ### Removed
 

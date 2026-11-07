@@ -485,7 +485,7 @@ fn encode_principal_ent(w: &mut XdrW, p: &krb5_kdc::Principal, mask: u32) {
         .map(|k| k.kvno)
         .chain(opaque)
         .max()
-        .unwrap_or(1);
+        .unwrap_or(0);
     w.u32(kvno);
     w.u32(u32::from(p.mkvno));
     match p.pw_policy.as_deref() {

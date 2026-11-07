@@ -270,12 +270,10 @@ fn create(
     let ent = admin_ent(a);
     let keys = match pass {
         Some(p) => krb5_kdc::CreateKeys::Password(p),
+        None if a.nokey => krb5_kdc::CreateKeys::Explicit(&[]),
         None => krb5_kdc::CreateKeys::Random,
     };
     st.create_principal_3_in(name, realm, keys, &a.keysalts, &ent, caller)?;
-    if a.nokey {
-        st.purgekeys_in(name, realm, i32::MAX, caller)?;
-    }
     Ok(())
 }
 

@@ -10,8 +10,8 @@ use super::codes::{
     KADM5_ATTRIBUTES, KADM5_AUTH_ADD, KADM5_AUTH_CHANGEPW, KADM5_AUTH_DELETE, KADM5_AUTH_EXTRACT,
     KADM5_AUTH_GET, KADM5_AUTH_INITIAL, KADM5_AUTH_INSUFFICIENT, KADM5_AUTH_LIST,
     KADM5_AUTH_MODIFY, KADM5_AUTH_SETKEY, KADM5_BAD_KEYSALTS, KADM5_BAD_SERVER_PARAMS,
-    KADM5_BAD_TL_TYPE, KADM5_DUP, KADM5_FAIL_AUTH_COUNT, KADM5_FAILURE, KADM5_KVNO, KADM5_MAX_LIFE,
-    KADM5_MAX_RLIFE, KADM5_PASS_Q_CLASS, KADM5_PASS_Q_DICT, KADM5_PASS_Q_TOOSHORT,
+    KADM5_BAD_TL_TYPE, KADM5_DUP, KADM5_FAIL_AUTH_COUNT, KADM5_FAILURE, KADM5_KEY_DATA, KADM5_KVNO,
+    KADM5_MAX_LIFE, KADM5_MAX_RLIFE, KADM5_PASS_Q_CLASS, KADM5_PASS_Q_DICT, KADM5_PASS_Q_TOOSHORT,
     KADM5_PASS_REUSE, KADM5_PASS_TOOSOON, KADM5_POLICY, KADM5_POLICY_ALLOWED_KEYSALTS,
     KADM5_POLICY_CLR, KADM5_PRINC_EXPIRE_TIME, KADM5_PROTECT_PRINCIPAL, KADM5_PW_EXPIRATION,
     KADM5_PW_MAX_LIFE, KADM5_PW_MIN_LIFE, KADM5_SETKEY_BAD_KVNO, KADM5_SETKEY_DUP_ENCTYPES,
@@ -23,7 +23,7 @@ use super::codes::{
 };
 use super::glob::{glob_pattern_ok, policies_matching, principals_matching};
 use super::iprop::dispatch_iprop;
-use super::log::Caller;
+use super::log::{Caller, clear_prefetch, prefetch_failed};
 use super::policy::{
     apply_policy_floors, encode_policy, encode_pols, merge_policy, parse_gpols, parse_policy_arg,
     parse_policy_name, policy_floor_err, policy_mask_err, policy_name_err,
@@ -118,6 +118,19 @@ fn xdr_refused(p: &krb5_kdc::Principal, api: u32) -> Option<Vec<u8>> {
     p.check_kadm_data()
         .is_err()
         .then(|| generic_ret(api, KADM5_XDR_FAILURE))
+}
+
+// MIT: `stub_setup` (kadmin/server/server_stubs.c:296-301)
+fn prefetch<'g>(
+    g: &'g krb5_kdc::PrincipalStore,
+    name: &PrincipalName,
+    req: &str,
+    api: u32,
+) -> Result<&'g krb5_kdc::Principal, Vec<u8>> {
+    let Some(p) = g.get_in_realm(name, req) else {
+        return Err(prefetch_failed(generic_ret(api, KADM5_UNK_PRINC)));
+    };
+    xdr_refused(p, api).map_or(Ok(p), |rep| Err(prefetch_failed(rep)))
 }
 
 // MIT: `kadm5_create_principal_3` (lib/kadm5/srv/svr_principal.c:338-347)
@@ -225,6 +238,7 @@ pub(super) fn dispatch_kadm5_ticket(
     initial: bool,
     changepw: bool,
 ) -> Result<Vec<u8>, Error> {
+    clear_prefetch();
     let realm = store_realm(store);
     let stack = authcfg.stack();
     match proc {
@@ -241,29 +255,25 @@ pub(super) fn dispatch_kadm5_ticket(
             let req = req_realm(&prealm, &realm);
             let g = match read_store(store, proc, API_V2) {
                 Ok(g) => g,
+                Err(rep) => return Ok(prefetch_failed(rep)),
+            };
+            let p = match prefetch(&g, &name, &req, API_V2) {
+                Ok(p) => p,
                 Err(rep) => return Ok(rep),
             };
-            match g.get_in_realm(&name, &req) {
-                None => Ok(generic_ret(API_V2, KADM5_UNK_PRINC)),
-                Some(p) if let Some(rep) = xdr_refused(p, API_V2) => Ok(rep),
-                Some(p) => {
-                    if changepw_not_self(changepw, actor, &name, &req)
-                        || !stack.getprinc(actor, &p.id())
-                    {
-                        return Ok(generic_ret(API_V2, KADM5_AUTH_GET));
-                    }
-                    tracing::debug!(
-                        event = krb5_log::events::ADMIN,
-                        component = "krb5-admin",
-                        outcome = "ok",
-                        detail = "getprinc",
-                        principal = p.id(),
-                    );
-                    let mut p = p.clone();
-                    g.merge_lockout(&mut p);
-                    Ok(encode_gprinc(&p, mask))
-                }
+            if changepw_not_self(changepw, actor, &name, &req) || !stack.getprinc(actor, &p.id()) {
+                return Ok(generic_ret(API_V2, KADM5_AUTH_GET));
             }
+            tracing::debug!(
+                event = krb5_log::events::ADMIN,
+                component = "krb5-admin",
+                outcome = "ok",
+                detail = "getprinc",
+                principal = p.id(),
+            );
+            let mut p = p.clone();
+            g.merge_lockout(&mut p);
+            Ok(encode_gprinc(&p, mask))
         }
         GET_PRINCS => {
             if changepw || !stack.listprincs(actor) {
@@ -314,17 +324,14 @@ pub(super) fn dispatch_kadm5_ticket(
             let req = req_realm(&prealm, &realm);
             let mut g = match write_store(store, proc, API_V2) {
                 Ok(g) => g,
-                Err(rep) => return Ok(rep),
+                Err(rep) => return Ok(prefetch_failed(rep)),
             };
-            // MIT: `stub_setup` (server_stubs.c:296-301)
             // Auth target: the canonical name.
             // MIT: `modify_principal_2_svc` (kadmin/server/server_stubs.c)
-            let Some(target) = g.get_in_realm(&name, &req) else {
-                return Ok(generic_ret(API_V2, KADM5_UNK_PRINC));
+            let target = match prefetch(&g, &name, &req, API_V2) {
+                Ok(p) => p,
+                Err(rep) => return Ok(rep),
             };
-            if let Some(rep) = xdr_refused(target, API_V2) {
-                return Ok(rep);
-            }
             let cid = target.id();
             let (authorized, rss) = stack.modprinc(actor, &cid);
             if changepw || !authorized {
@@ -470,13 +477,16 @@ pub(super) fn dispatch_kadm5_ticket(
                     return Ok(generic_ret(API_V2, dup_code(p)));
                 }
             }
-            // NULL password: random key, no quality check.
             let changed = commit(&mut g, proc, API_V2, |s| {
                 s.create_principal_3_in(
                     &c.name,
                     &req,
                     match c.pass.as_deref() {
                         Some(p) => krb5_kdc::CreateKeys::Password(p),
+                        // MIT: `kadm5_create_principal_3` (lib/kadm5/srv/svr_principal.c:456-458)
+                        None if c.ent.mask & KADM5_KEY_DATA != 0 => {
+                            krb5_kdc::CreateKeys::Explicit(&[])
+                        }
                         None => krb5_kdc::CreateKeys::Random,
                     },
                     &c.ks,
@@ -504,23 +514,15 @@ pub(super) fn dispatch_kadm5_ticket(
             }
             let mut g = match write_store(store, proc, API_V2) {
                 Ok(g) => g,
-                Err(rep) => return Ok(rep),
+                Err(rep) => return Ok(prefetch_failed(rep)),
             };
             // MIT: `check_lockdown_by_princ` (kadmin/server/server_stubs.c:551-562)
-            if let Some(rep) = g
-                .get_in_realm(&old, &old_req)
-                .and_then(|p| xdr_refused(p, API_V2))
-            {
-                return Ok(rep);
-            }
-            if g.get_in_realm(&old, &old_req)
-                .is_some_and(|p| p.attributes & KDB_LOCKDOWN_KEYS != 0)
-            {
+            let src = match prefetch(&g, &old, &old_req, API_V2) {
+                Ok(p) => p,
+                Err(rep) => return Ok(rep),
+            };
+            if src.attributes & KDB_LOCKDOWN_KEYS != 0 {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_DELETE));
-            }
-            // MIT: `kadm5_rename_principal` (lib/kadm5/srv/svr_principal.c:715-719)
-            if g.get_in_realm(&old, &old_req).is_none() {
-                return Ok(generic_ret(API_V2, KADM5_UNK_PRINC));
             }
             if g.get_in_realm(&new, &new_req)
                 .is_some_and(|t| t.check_kadm_data().is_ok())
@@ -546,11 +548,8 @@ pub(super) fn dispatch_kadm5_ticket(
             let req = req_realm(&prealm, &realm);
             // MIT: `chpass_principal_2_svc` (kadmin/server/server_stubs.c)
             let checks = |g: &krb5_kdc::PrincipalStore| -> Result<u32, Vec<u8>> {
-                let (cid, lockdown) = match g.get_in_realm(&name, &req) {
-                    None => return Err(generic_ret(API_V2, KADM5_UNK_PRINC)),
-                    Some(p) if let Some(rep) = xdr_refused(p, API_V2) => return Err(rep),
-                    Some(p) => (p.id(), p.attributes & KDB_LOCKDOWN_KEYS != 0),
-                };
+                let p = prefetch(g, &name, &req, API_V2)?;
+                let (cid, lockdown) = (p.id(), p.attributes & KDB_LOCKDOWN_KEYS != 0);
                 if lockdown {
                     return Err(generic_ret(API_V2, KADM5_AUTH_CHANGEPW));
                 }
@@ -568,6 +567,7 @@ pub(super) fn dispatch_kadm5_ticket(
             };
             let refused =
                 |e: krb5_kdc::Error| generic_ret(API_V2, kadm5_code(proc, &Error::from(e)));
+            let mut prefetched = false;
             let planned = {
                 let (g, read) = krb5_kdc::read_fresh(store);
                 if read.is_ok() {
@@ -575,6 +575,7 @@ pub(super) fn dispatch_kadm5_ticket(
                         Ok(n) => n,
                         Err(rep) => return Ok(rep),
                     };
+                    prefetched = true;
                     match g.plan_password(&name, &req, &pass, &ks) {
                         Ok(plan) => plan.map(|plan| (n, plan)),
                         Err(e) => return Ok(refused(e)),
@@ -590,7 +591,8 @@ pub(super) fn dispatch_kadm5_ticket(
             };
             let mut g = match write_store(store, proc, API_V2) {
                 Ok(g) => g,
-                Err(rep) => return Ok(rep),
+                Err(rep) if prefetched => return Ok(rep),
+                Err(rep) => return Ok(prefetch_failed(rep)),
             };
             if let Some((n, p)) = prepared {
                 match commit(&mut g, proc, API_V2, |s| s.apply_password(p, n, actor)) {
@@ -753,15 +755,13 @@ pub(super) fn dispatch_kadm5_ticket(
             let req = req_realm(&prealm, &realm);
             let mut g = match write_store(store, proc, API_V2) {
                 Ok(g) => g,
-                Err(rep) => return Ok(rep),
+                Err(rep) => return Ok(prefetch_failed(rep)),
             };
             // MIT: `chrand_principal_2_svc` (kadmin/server/server_stubs.c)
-            let Some(target) = g.get_in_realm(&name, &req) else {
-                return Ok(generic_ret(API_V2, KADM5_UNK_PRINC));
+            let target = match prefetch(&g, &name, &req, API_V2) {
+                Ok(p) => p,
+                Err(rep) => return Ok(rep),
             };
-            if let Some(rep) = xdr_refused(target, API_V2) {
-                return Ok(rep);
-            }
             let cid = target.id();
             let self_change = is_self_id(actor, &cid);
             if (changepw && !self_change) || !stack.chrand(actor, &cid) {
@@ -791,14 +791,12 @@ pub(super) fn dispatch_kadm5_ticket(
             let req = req_realm(&prealm, &realm);
             let g = match read_store(store, proc, api) {
                 Ok(g) => g,
+                Err(rep) => return Ok(prefetch_failed(rep)),
+            };
+            let p = match prefetch(&g, &name, &req, api) {
+                Ok(p) => p,
                 Err(rep) => return Ok(rep),
             };
-            let Some(p) = g.get_in_realm(&name, &req) else {
-                return Ok(generic_ret(api, KADM5_UNK_PRINC));
-            };
-            if let Some(rep) = xdr_refused(p, api) {
-                return Ok(rep);
-            }
             if changepw || !stack.extract(actor, &p.id()) {
                 return Ok(generic_ret(api, KADM5_AUTH_EXTRACT));
             }
@@ -819,14 +817,12 @@ pub(super) fn dispatch_kadm5_ticket(
             let req = req_realm(&prealm, &realm);
             let mut g = match write_store(store, proc, API_V2) {
                 Ok(g) => g,
+                Err(rep) => return Ok(prefetch_failed(rep)),
+            };
+            let target = match prefetch(&g, &name, &req, api) {
+                Ok(p) => p,
                 Err(rep) => return Ok(rep),
             };
-            let Some(target) = g.get_in_realm(&name, &req) else {
-                return Ok(generic_ret(api, KADM5_UNK_PRINC));
-            };
-            if let Some(rep) = xdr_refused(target, api) {
-                return Ok(rep);
-            }
             let cid = target.id();
             if changepw || !stack.purgekeys(actor, &cid) {
                 return Ok(generic_ret(api, KADM5_AUTH_MODIFY));
@@ -858,14 +854,12 @@ pub(super) fn dispatch_kadm5_ticket(
             let req = req_realm(&prealm, &realm);
             let mut g = match write_store(store, proc, API_V2) {
                 Ok(g) => g,
+                Err(rep) => return Ok(prefetch_failed(rep)),
+            };
+            let target = match prefetch(&g, &name, &req, api) {
+                Ok(p) => p,
                 Err(rep) => return Ok(rep),
             };
-            let Some(target) = g.get_in_realm(&name, &req) else {
-                return Ok(generic_ret(api, KADM5_UNK_PRINC));
-            };
-            if let Some(rep) = xdr_refused(target, api) {
-                return Ok(rep);
-            }
             let cid = target.id();
             let lockdown = g
                 .get_in_realm(&name, &req)
@@ -890,14 +884,12 @@ pub(super) fn dispatch_kadm5_ticket(
             let req = req_realm(&prealm, &realm);
             let g = match read_store(store, proc, api) {
                 Ok(g) => g,
+                Err(rep) => return Ok(prefetch_failed(rep)),
+            };
+            let target = match prefetch(&g, &name, &req, api) {
+                Ok(p) => p,
                 Err(rep) => return Ok(rep),
             };
-            let Some(target) = g.get_in_realm(&name, &req) else {
-                return Ok(generic_ret(api, KADM5_UNK_PRINC));
-            };
-            if let Some(rep) = xdr_refused(target, api) {
-                return Ok(rep);
-            }
             let cid = target.id();
             if changepw || !stack.getstrs(actor, &cid) {
                 return Ok(generic_ret(api, KADM5_AUTH_GET));
@@ -912,14 +904,12 @@ pub(super) fn dispatch_kadm5_ticket(
             let req = req_realm(&prealm, &realm);
             let mut g = match write_store(store, proc, API_V2) {
                 Ok(g) => g,
+                Err(rep) => return Ok(prefetch_failed(rep)),
+            };
+            let target = match prefetch(&g, &name, &req, api) {
+                Ok(p) => p,
                 Err(rep) => return Ok(rep),
             };
-            let Some(target) = g.get_in_realm(&name, &req) else {
-                return Ok(generic_ret(api, KADM5_UNK_PRINC));
-            };
-            if let Some(rep) = xdr_refused(target, api) {
-                return Ok(rep);
-            }
             let cid = target.id();
             if changepw || !stack.setstr(actor, &cid) {
                 return Ok(generic_ret(api, KADM5_AUTH_MODIFY));
