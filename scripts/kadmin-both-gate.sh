@@ -1055,6 +1055,94 @@ echo "mit  z8str modifier=$MSTRMOD"
 echo "MIT_z8_setstr_stamps_caller"
 echo "RUST_z8_setstr_stamps_caller"
 
+
+echo "==== a failed prefetch and a keyless kvno: MIT's kadmind, then ours (server_stubs.c:296-301, 700-723; svr_principal.c:827-830) ===="
+b1_leg() {
+    local ctn=$1 conf=$2 leg=$3
+    kadm() { mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p admin/admin -w adminpassword -q "$1" 2>&1 || true; }
+    kadm 'addprinc -nokey b1nk' | grep -F 'Principal "b1nk@KERBER.TEST" created.'
+    kadm 'getprinc -terse b1nk' | awk -F'\t' '$1 == "\"b1nk@KERBER.TEST\"" { print "kvno=" $9 }' \
+        > "$SCRATCH/b1nk-$leg.txt"
+    kadm 'addprinc -randkey b1bad' | grep -F 'Principal "b1bad@KERBER.TEST" created.'
+    if [ "$leg" = mit ]; then
+        docker exec "$ctn" kdb5_util dump /tmp/b1.dump
+    else
+        docker exec -e KRB5_KDC_DB=/tmp/principal -e KRB5_KDC_STASH=/tmp/stash \
+            -e KRB5_MASTER_PASSWORD=masterpassword "$ctn" /tmp/krb5-kdb dump /tmp/b1.dump
+    fi
+    # b1bad's KADM_DATA (tl_data 3; ours writes none for this entry) becomes one byte, which no
+    # osa_princ_ent decodes.
+    docker exec "$ctn" python3 -c '
+import sys
+p = "/tmp/b1.dump"
+out, hit = [], 0
+for line in open(p):
+    f = line.rstrip("\n").split("\t")
+    if f[0] == "princ" and f[6] == "b1bad@KERBER.TEST":
+        tls = [15 + 3 * k for k in range(int(f[3]))]
+        kadm = [i for i in tls if f[i] == "3"]
+        if kadm:
+            f[kadm[0] + 1], f[kadm[0] + 2] = "1", "ff"
+        else:
+            f[3] = str(int(f[3]) + 1)
+            f[15:15] = ["3", "1", "ff"]
+        hit += 1
+        line = "\t".join(f) + "\n"
+    out.append(line)
+open(p, "w").writelines(out)
+sys.exit(0 if hit == 1 else 1)' || die "$leg: no b1bad in its dump"
+    if [ "$leg" = mit ]; then
+        docker exec "$ctn" kdb5_util load /tmp/b1.dump
+    else
+        docker exec -e KRB5_KDC_DB=/tmp/principal -e KRB5_KDC_STASH=/tmp/stash \
+            -e KRB5_MASTER_PASSWORD=masterpassword "$ctn" /tmp/krb5-kdb load /tmp/b1.dump
+    fi
+    z66_restart "$ctn" "$leg"
+    kadm 'getprinc b1bad' | sed "s/^/$leg getprinc b1bad: /"
+    kadm 'renprinc -force b1bad b1bad2' | sed "s/^/$leg renprinc b1bad: /"
+    docker exec "$ctn" cat /tmp/kadmind-z66.log | grep -E 'kadm5_(get|rename)_principal, b1bad@' \
+        | sed -E 's/^.*(Unauthorized request: |Request: )/\1/; s/addr=.*$/addr=A/' > "$SCRATCH/b1log-$leg.txt" || true
+    sed "s/^/$leg kadmind: /" "$SCRATCH/b1log-$leg.txt"
+}
+b1_leg "$NAME_MIT" /etc/krb5.conf mit
+b1_leg "$NAME" /tmp/kadmin-krb5.conf rust
+echo 'kvno=0' | diff - "$SCRATCH/b1nk-mit.txt"
+diff "$SCRATCH/b1nk-mit.txt" "$SCRATCH/b1nk-rust.txt" || die "getprinc -terse b1nk: the kvno differs between MIT's kadmind and ours"
+grep -qx 'Unauthorized request: kadm5_rename_principal, b1bad@KERBER.TEST to b1bad2@KERBER.TEST, .*addr=A' \
+    "$SCRATCH/b1log-mit.txt" || die "MIT's kadmind did not log the refused rename as the oracle expects"
+diff "$SCRATCH/b1log-mit.txt" "$SCRATCH/b1log-rust.txt" || die "kadmind's lines for b1bad differ between MIT's kadmind and ours"
+echo "MIT_b1_prefetch_log"
+echo "RUST_b1_prefetch_log"
+echo "==== a self change with -keepold across the kvno wrap: MIT's kadmind, then ours (kdb_cpw.c:118-145, 355-362; server_stubs.c:385-400) ===="
+b2_leg() {
+    local ctn=$1 conf=$2 leg=$3 i
+    adm() { mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p admin/admin -w adminpassword -q "$1" 2>&1 || true; }
+    adm 'addprinc -pw b2pw0 b2self' | grep -F 'Principal "b2self@KERBER.TEST" created.'
+    adm 'modprinc -kvno 65530 b2self' | grep -F 'Principal "b2self@KERBER.TEST" modified.'
+    # A self change with -keepold keeps up to five key versions (clamp_self_keepold).
+    for i in 1 2 3 4 5 6; do
+        mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p b2self -w "b2pw$((i - 1))" \
+            -q "cpw -keepold -pw b2pw$i b2self" 2>&1 | grep -F 'Password for "b2self@KERBER.TEST" changed.'
+    done
+    { adm 'getprinc b2self' | sed -n 's/^Key: vno \([0-9]*\),.*/\1/p' | uniq | tr '\n' ' '; echo; } \
+        > "$SCRATCH/b2-$leg.txt"
+    docker exec "$ctn" rm -f /tmp/b2.kt
+    if [ "$leg" = mit ]; then
+        mit_kadmin_local "$ctn" -- -q 'ktadd -k /tmp/b2.kt -norandkey b2self' 2>&1 | grep -F 'added to keytab'
+    else
+        rust_kadmin_local -e KRB5_KDC_DB=/tmp/principal -e KRB5_KDC_STASH=/tmp/stash "$ctn" \
+            -- -q 'ktadd -k /tmp/b2.kt -norandkey b2self' 2>&1 | grep -F 'added to keytab'
+    fi
+    { docker exec "$ctn" klist -k /tmp/b2.kt | awk '$2 == "b2self@KERBER.TEST" { print $1 }' | uniq |
+        tr '\n' ' '; echo; } >> "$SCRATCH/b2-$leg.txt"
+    sed "s/^/$leg b2self kvnos: /" "$SCRATCH/b2-$leg.txt"
+}
+b2_leg "$NAME_MIT" /etc/krb5.conf mit
+b2_leg "$NAME" /tmp/kadmin-krb5.conf rust
+grep -qw 1 "$SCRATCH/b2-mit.txt" || die "MIT's kadmind dropped the new kvno 1 at the wrap"
+diff "$SCRATCH/b2-mit.txt" "$SCRATCH/b2-rust.txt" || die "b2self's kvnos after the wrap differ between MIT's kadmind and ours"
+echo "MIT_b2_keepold_wrap"
+echo "RUST_b2_keepold_wrap"
 log "kadmin.gate" "ok" ',"principal":"extra@KERBER.TEST","op":"addprinc+cpw+get+list+mod+chrand+norandkey+lockdown+purgekeys+setstr+renprinc+del+alias"'
 exit 0
 

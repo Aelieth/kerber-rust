@@ -25,6 +25,7 @@
 #   etype-20 key. krbtgt is not re-keyed: session_enctypes allows etype 20
 #   (kdc_util.c:1054-1076) and cleanup deletes the attribute. The TGT ticket
 #   key stays the long-term sha1 key.
+# Fedora only (DS): KDC logic the family doesn't touch
 # vms: kdc client2
 # legs: mit rust
 set -uo pipefail
@@ -46,7 +47,7 @@ H="host/tfhost.${REALM,,}"
 NH="host/tfnorenew.${REALM,,}"
 KA="kadmin -p admin/admin@$REALM -q"
 cleanup() {
-    timeout -k 5 60 "$LAB" ssh kdc -- "sudo kadmin.local -q 'delstr krbtgt/$REALM session_enctypes' >/dev/null 2>&1; sudo kadmin.local -q 'modprinc +password_changing_service kadmin/changepw' >/dev/null 2>&1; for p in tfuser tfpol tfclass tfhist tfdur tfint tfmin tfsha tffast $H $NH; do sudo kadmin.local -q \"delprinc -force \$p\" >/dev/null 2>&1; done; for p in tflock tfclass5 tfhistn tfdurpol tfintpol tflife tffastpol; do sudo kadmin.local -q \"delpol -force \$p\" >/dev/null 2>&1; done; if [ -f /var/kerberos/krb5kdc/kdc.conf.tf ]; then sudo kadmin.local -q 'modprinc -maxrenewlife 7d krbtgt/$REALM' >/dev/null 2>&1; sudo mv /var/kerberos/krb5kdc/kdc.conf.tf /var/kerberos/krb5kdc/kdc.conf && sudo systemctl restart krb5kdc; fi; sudo rm -rf ~/tf-mit /var/tmp/tf-hist.dump /var/tmp/tf-log.sz; true" < /dev/null > /dev/null 2>&1
+    timeout -k 5 60 "$LAB" ssh kdc -- "sudo kadmin.local -q 'delstr krbtgt/$REALM session_enctypes' >/dev/null 2>&1; sudo kadmin.local -q 'modprinc +password_changing_service kadmin/changepw' >/dev/null 2>&1; for p in tfuser tfpol tfclass tfhist tfdur tfint tfmin tfsha tffast $H $NH; do sudo kadmin.local -q \"delprinc -force \$p\" >/dev/null 2>&1; done; for p in tflock tfclass5 tfhistn tfdurpol tfintpol tflife tffastpol; do sudo kadmin.local -q \"delpol -force \$p\" >/dev/null 2>&1; done; if [ -f $KDCDIR/kdc.conf.tf ]; then sudo kadmin.local -q 'modprinc -maxrenewlife 7d krbtgt/$REALM' >/dev/null 2>&1; sudo mv $KDCDIR/kdc.conf.tf $KDCDIR/kdc.conf && sudo systemctl restart $UNIT_KDC; fi; sudo rm -rf ~/tf-mit /var/tmp/tf-hist.dump; true" < /dev/null > /dev/null 2>&1
     timeout -k 5 60 "$LAB" ssh client2 -- 'rm -rf ~/tf; true' < /dev/null > /dev/null 2>&1
 }
 trap cleanup EXIT
@@ -90,7 +91,7 @@ section "ticket-flags --leg $LEG: expire, flags, renew, postdate, policy, sha2 o
 kdcis
 resetvm client2
 run client2 "rm -rf ~/tf; mkdir -m 0700 ~/tf"
-run kdc "for p in tfuser tfpol tfclass tfhist tfdur tfint tfmin tfsha tffast $H $NH; do sudo kadmin.local -q \"delprinc -force \$p\" >/dev/null 2>&1; done; for p in tflock tfclass5 tfhistn tfdurpol tfintpol tflife tffastpol; do sudo kadmin.local -q \"delpol -force \$p\" >/dev/null 2>&1; done; if [ -f /var/kerberos/krb5kdc/kdc.conf.tf ]; then sudo kadmin.local -q 'modprinc -maxrenewlife 7d krbtgt/$REALM' >/dev/null 2>&1; sudo mv /var/kerberos/krb5kdc/kdc.conf.tf /var/kerberos/krb5kdc/kdc.conf && sudo systemctl restart krb5kdc; fi; sudo rm -rf ~/tf-mit /var/tmp/tf-hist.dump /var/tmp/tf-log.sz; true"
+run kdc "for p in tfuser tfpol tfclass tfhist tfdur tfint tfmin tfsha tffast $H $NH; do sudo kadmin.local -q \"delprinc -force \$p\" >/dev/null 2>&1; done; for p in tflock tfclass5 tfhistn tfdurpol tfintpol tflife tffastpol; do sudo kadmin.local -q \"delpol -force \$p\" >/dev/null 2>&1; done; if [ -f $KDCDIR/kdc.conf.tf ]; then sudo kadmin.local -q 'modprinc -maxrenewlife 7d krbtgt/$REALM' >/dev/null 2>&1; sudo mv $KDCDIR/kdc.conf.tf $KDCDIR/kdc.conf && sudo systemctl restart $UNIT_KDC; fi; sudo rm -rf ~/tf-mit /var/tmp/tf-hist.dump; true"
 check setup.tfuser "^Principal \"tfuser@$R\" created\\.\$" runin kdc "alice's password ($ALICE), twice" "sudo kadmin.local -q 'addprinc tfuser' 2>&1" < <(twice "$ALICE")
 check setup.tfhost "^Principal \"$H@$R\" created\\.\$" run kdc "sudo kadmin.local -q 'addprinc -randkey $H' 2>&1"
 
@@ -188,9 +189,10 @@ check TF.u2u.host rc run client2 "kinit -k -t \$HOME/tf/host.kt -c FILE:\$HOME/t
 kin TF.u2u.user '^Default principal: tfuser@'"$R"'$' u2 tfuser "alice's password ($ALICE)" < <(once "$ALICE")
 check TF.u2u.kvno "$H@$R: kvno = " run client2 "kvno -c FILE:\$HOME/tf/u2.cc --u2u FILE:\$HOME/tf/host.cc $H"
 kadm TF.u2u.dup.set "^Principal \"$H@$R\" modified\\.\$" "modprinc -allow_dup_skey $H"
-check TF.u2u.dup.mark rc run kdc "sudo stat -c %s /var/log/krb5kdc.log > /var/tmp/tf-log.sz"
+kdcmark TF.u2u.dup
 check TF.u2u.dup 'KDC policy rejects request' run client2 "kvno -c FILE:\$HOME/tf/u2.cc --u2u FILE:\$HOME/tf/host.cc $H 2>&1; true"
-check TF.u2u.dup.log 'DUP_SKEY DISALLOWED' run kdc "sudo tail -c +\$(( \$(cat /var/tmp/tf-log.sz) + 1 )) /var/log/krb5kdc.log; sudo rm -f /var/tmp/tf-log.sz"
+kdcsince TF.u2u.dup 'DUP_SKEY DISALLOWED'
+checklast TF.u2u.dup.log 'DUP_SKEY DISALLOWED'
 kadm TF.u2u.dup.clear "^Principal \"$H@$R\" modified\\.\$" "modprinc +allow_dup_skey $H"
 
 
@@ -278,24 +280,26 @@ section "TF.renew a renewable TGT against DISALLOW_RENEWABLE is POLICY (tgs_poli
 check TF.renew.none.set "^Principal \"$NH@$R\" created\\.\$" run kdc "sudo kadmin.local -q 'addprinc -randkey $NH' 2>&1"
 kadm TF.renew.none.flag "^Principal \"$NH@$R\" modified\\.\$" "modprinc -allow_renewable $NH"
 kin TF.renew.none.kinit 'Flags:.*R' rn tfuser "alice's password ($ALICE)" -r 7d < <(once "$ALICE")
-check TF.renew.none.mark rc run kdc "sudo stat -c %s /var/log/krb5kdc.log > /var/tmp/tf-log.sz"
+kdcmark TF.renew.none
 check TF.renew.none.kvno 'KDC policy rejects request' run client2 "kvno -c FILE:\$HOME/tf/rn.cc $NH 2>&1; true"
-check TF.renew.none.log 'NON-RENEWABLE TICKET' run kdc "sudo tail -c +\$(( \$(cat /var/tmp/tf-log.sz) + 1 )) /var/log/krb5kdc.log; sudo rm -f /var/tmp/tf-log.sz"
+kdcsince TF.renew.none 'NON-RENEWABLE TICKET'
+checklast TF.renew.none.log 'NON-RENEWABLE TICKET'
 
 section "TF.renew a TGT without preauth has no A, and the host kvno logs NO PREAUTH (tgs_policy.c)"
 kadm TF.preauth.off "^Principal \"tfuser@$R\" modified\\.\$" 'modprinc -requires_preauth tfuser'
 kadm TF.preauth.host "^Principal \"$H@$R\" modified\\.\$" "modprinc +requires_preauth $H"
-check TF.preauth.mark rc run kdc "sudo stat -c %s /var/log/krb5kdc.log > /var/tmp/tf-log.sz"
+kdcmark TF.preauth
 kin TF.preauth.kinit '^Default principal: tfuser@'"$R"'$' na tfuser "alice's password ($ALICE)" < <(once "$ALICE")
 checklast TF.preauth.bits 'Flags: [^A]*$'
 check TF.preauth.kvno 'KDC returned error string: NO PREAUTH' run client2 "kvno -c FILE:\$HOME/tf/na.cc $H 2>&1; true"
-check TF.preauth.log 'NO PREAUTH' run kdc "sudo tail -c +\$(( \$(cat /var/tmp/tf-log.sz) + 1 )) /var/log/krb5kdc.log; sudo rm -f /var/tmp/tf-log.sz"
+kdcsince TF.preauth 'NO PREAUTH'
+checklast TF.preauth.log 'NO PREAUTH'
 kadm TF.preauth.on "^Principal \"tfuser@$R\" modified\\.\$" 'modprinc +requires_preauth tfuser'
 
 section "TF.renew omitted max_renewable_life is a seven-day realm cap (kdc/main.c)"
 check TF.z71.before 'Maximum renewable life: 7 days' run kdc "sudo kadmin.local -q 'getprinc krbtgt/$REALM' 2>&1"
-check TF.z71.save '^saved$' run kdc "sudo cp -p /var/kerberos/krb5kdc/kdc.conf /var/kerberos/krb5kdc/kdc.conf.tf && echo saved"
-check TF.z71.conf '^edited, krb5kdc active$' run kdc "sudo sed -i -E '/^[[:space:]]*max_renewable_life[[:space:]]*=/d; s/^([[:space:]]*)max_life[[:space:]]*=.*/\\1max_life = 1h/' /var/kerberos/krb5kdc/kdc.conf && ! sudo grep -E '^[[:space:]]*max_renewable_life[[:space:]]*=' /var/kerberos/krb5kdc/kdc.conf && sudo grep -q 'max_life = 1h' /var/kerberos/krb5kdc/kdc.conf && sudo systemctl restart krb5kdc && systemctl is-active krb5kdc >/dev/null && echo 'edited, krb5kdc active'"
+check TF.z71.save '^saved$' run kdc "sudo cp -p $KDCDIR/kdc.conf $KDCDIR/kdc.conf.tf && echo saved"
+check TF.z71.conf '^edited, krb5kdc active$' run kdc "sudo sed -i -E '/^[[:space:]]*max_renewable_life[[:space:]]*=/d; s/^([[:space:]]*)max_life[[:space:]]*=.*/\\1max_life = 1h/' $KDCDIR/kdc.conf && ! sudo grep -E '^[[:space:]]*max_renewable_life[[:space:]]*=' $KDCDIR/kdc.conf && sudo grep -q 'max_life = 1h' $KDCDIR/kdc.conf && sudo systemctl restart $UNIT_KDC && systemctl is-active $UNIT_KDC >/dev/null && echo 'edited, krb5kdc active'"
 kadm TF.z71.user "^Principal \"tfuser@$R\" modified\\.\$" 'modprinc -maxrenewlife "10 days" tfuser'
 kadm TF.z71.tgt "^Principal \"krbtgt/$R@$R\" modified\\.\$" 'modprinc -maxrenewlife "10 days" krbtgt/'"$REALM"
 kin TF.z71.kinit 'Flags:.*R' z71 tfuser "alice's password ($ALICE)" -l 1h -r 8d < <(once "$ALICE")
@@ -310,7 +314,7 @@ fi
 check TF.z71.delta '^z71_delta: (59[0-9]{4}|6[01][0-9]{4})$' host "cat $(printf '%q' "$STATE/z71delta.txt")"
 kadm TF.z71.user.back "^Principal \"tfuser@$R\" modified\\.\$" 'modprinc -maxrenewlife "7 days" tfuser'
 kadm TF.z71.tgt.back "^Principal \"krbtgt/$R@$R\" modified\\.\$" 'modprinc -maxrenewlife 7d krbtgt/'"$REALM"
-check TF.z71.restore '^restored, krb5kdc active$' run kdc "sudo mv /var/kerberos/krb5kdc/kdc.conf.tf /var/kerberos/krb5kdc/kdc.conf && sudo systemctl restart krb5kdc && systemctl is-active krb5kdc >/dev/null && sudo grep -q 'max_renewable_life' /var/kerberos/krb5kdc/kdc.conf && echo 'restored, krb5kdc active'"
+check TF.z71.restore '^restored, krb5kdc active$' run kdc "sudo mv $KDCDIR/kdc.conf.tf $KDCDIR/kdc.conf && sudo systemctl restart $UNIT_KDC && systemctl is-active $UNIT_KDC >/dev/null && sudo grep -q 'max_renewable_life' $KDCDIR/kdc.conf && echo 'restored, krb5kdc active'"
 
 section "TF.postdate kinit -s is INVALID, kvno is not yet valid, kinit -v then works"
 START=$(run client2 "date -u -d '+20 seconds' '+%Y%m%d%H%M%S'" >/dev/null; tail -n 1 "$LAST_OUT")

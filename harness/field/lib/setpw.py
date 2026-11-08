@@ -13,6 +13,7 @@ and the server's text (newlines and other controls escaped). Exit 0 when a resul
 """
 import argparse
 import ctypes as C
+import os
 import socket
 import sys
 
@@ -99,7 +100,7 @@ def main():
     ok(K.krb5_init_context(C.byref(CTX)), "krb5_init_context")
     cc, client, server, target = P(), P(), P(), C.POINTER(Principal)()
     ok(K.krb5_cc_resolve(CTX, a.c.encode(), C.byref(cc)), "krb5_cc_resolve")
-    ok(K.krb5_parse_name(CTX, a.t.encode(), C.byref(target)), "krb5_parse_name")
+    ok(K.krb5_parse_name(CTX, os.fsencode(a.t), C.byref(target)), "krb5_parse_name")
     realm = target.contents.realm.bytes().decode()
     ok(K.krb5_cc_get_principal(CTX, cc, C.byref(client)), "krb5_cc_get_principal")
     ok(K.krb5_parse_name(CTX, f"kadmin/changepw@{realm}".encode(), C.byref(server)), "krb5_parse_name")

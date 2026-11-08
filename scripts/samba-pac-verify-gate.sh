@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# L1 (+ L2 if kcrypto ships): Samba IDL decode of a Rust-issued PAC.
+# L1: Samba IDL decode of a Rust-issued PAC.
 # Co-located Rust KDC on 127.0.0.1:8888 inside samba-ad-dc. Isolation:
-# docker exec only; host /etc/krb5.conf stays TESTLABBY.LOCAL.
+# docker exec only; host /etc/krb5.conf stays untouched.
 # Missing image/docker: exit 2. Dummy SID or missing buffers: exit 1.
 set -euo pipefail
 
@@ -154,12 +154,5 @@ if [ "$d1_rc" -eq 0 ] || echo "$D1" | grep -q L1_OK; then
 fi
 echo "$D1" | grep -q L1_DUMMY
 
-L2="deferred-to-l3"
-set +e
-if docker exec "$NAME" python3 -c 'import samba.tests.krb5.kcrypto' >/dev/null 2>&1; then
-    L2="kcrypto-present-unwired"
-fi
-set -e
-
-log "samba.pac.verify" "ok" ",\"l1\":\"ok\",\"l2\":\"${L2}\",\"dump\":\"rust-issued\""
+log "samba.pac.verify" "ok" ",\"l1\":\"ok\",\"dump\":\"rust-issued\""
 exit 0

@@ -117,14 +117,16 @@ pub fn kpropd_do_iprop(cfg: &KpropdIprop<'_>, wake: &IpropWake) -> i32 {
         t => t,
     };
     let conf = &cfg.ctx.profile;
-    let me = krb5_config::local_host_name(conf);
-    let Ok(client) =
-        PrincipalName::try_new(PrincipalName::NT_SRV_HST, [KIPROP_SVC_NAME, me.as_str()])
-    else {
+    let Ok((_, client)) = krb5_config::sname_to_principal(
+        conf,
+        None,
+        Some(KIPROP_SVC_NAME),
+        PrincipalName::NT_SRV_HST,
+    ) else {
         log.com_err(None, "while trying to construct host service principal");
         return done();
     };
-    let client_name = format!("{}@{}", client.unparse_no_realm(), cfg.realm);
+    let client_name = format!("{}@{}", client.unparse_no_realm_lossy(), cfg.realm);
     let ulog = match Ulog::map(&cfg.params.logfile, cfg.params.ulogsize) {
         Ok(u) => u,
         Err(e) => {
@@ -401,8 +403,15 @@ fn ulog_replay(
     };
     let updates = incr
         .updates(s.iprop_master_key().as_ref())
-        .map_err(|e| e.to_string())?;
-    s.change(|s| s.apply_updates(&updates))
-        .and_then(|applied| applied)
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string());
+    let replayed = updates.and_then(|updates| {
+        s.change(|s| s.apply_updates(&updates))
+            .and_then(|applied| applied)
+            .map_err(|e| e.to_string())
+    });
+    // MIT: `ulog_replay` (lib/kdb/kdb_log.c:474-476)
+    if replayed.is_err() {
+        s.reset_ulog_header();
+    }
+    replayed
 }

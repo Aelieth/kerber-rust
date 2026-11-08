@@ -18,7 +18,15 @@ MIT's daemons print none, and in the foreground (`krb5kdc -n`,
 `kadmind -nofork`) ours print what MIT prints: `krb5kdc: starting...`
 or `kadmind: starting...` on standard error. `STDOUT` and `STDERR`
 apply in the foreground only, since a detached daemon has neither;
-`FILE:` applies in both. MIT does not read the relation, so a kdc.conf
+`FILE:` applies in both. The three read the one path, and under Fedora
+43's targeted SELinux policy only the daemon whose log type the file
+carries can open it: a new file in `/var/log` takes its creator's type
+(`krb5kdc_log_t`, `kadmind_log_t`), and the others may only append
+(`allow daemon logfile:file { append getattr ioctl lock }`, no `open`).
+For the KDC's stream, create `/var/log/krb5kdc.log.json` first and
+`restorecon` it; kadmind then runs without its stream, and each start
+of kadmind logs one AVC denial for that open.
+MIT does not read the relation, so a kdc.conf
 shared with MIT may carry it (settled live beside MIT 1.22.2's
 `krb5kdc` and `kadmind`). Each program filters the stream with its own
 filter: `warn,krb5_kdc=info,krb5_admin=info` for `krb5kdc`, `kadmind` and

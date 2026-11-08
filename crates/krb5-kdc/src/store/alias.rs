@@ -23,8 +23,18 @@ impl PrincipalStore {
         name: &PrincipalName,
         princ_realm: &str,
     ) -> Result<String, Error> {
-        self.resolve_id(&crate::kdb::lookup_principal_id(name, princ_realm))
+        self.resolve_id(&crate::kdb::principal_id(name, princ_realm)?)
             .ok_or(Error::NotFound)
+    }
+
+    // MIT: `kdb_get_entry` (lib/kadm5/srv/server_kdb.c:257-307)
+    pub(super) fn adb_id(&self, name: &PrincipalName, princ_realm: &str) -> Result<String, Error> {
+        let id = self.canonical_id(name, princ_realm)?;
+        self.map
+            .get(&id)
+            .ok_or(Error::NotFound)?
+            .check_kadm_data()?;
+        Ok(id)
     }
 
     // MIT: `kadm5_create_alias` (svr_principal.c:2051-2087)
@@ -41,7 +51,10 @@ impl PrincipalStore {
         if alias_realm != target_realm {
             return Err(Error::AliasRealm);
         }
-        let id = crate::kdb::lookup_principal_id(alias, alias_realm);
+        let id = crate::kdb::new_principal_id(alias, alias_realm)?;
+        let target_text = target
+            .try_unparse_with_realm(target_realm)
+            .ok_or_else(|| Error::InvalidArgument(crate::kdb::NOT_UTF8.into()))?;
         if self.get(&id).is_some() {
             return Err(Error::AlreadyExists);
         }
@@ -74,15 +87,16 @@ impl PrincipalStore {
                 contents: empty_kadm_data(),
             },
         );
-        let mut contents = target.unparse_with_realm(target_realm).into_bytes();
+        let mut contents = target_text.into_bytes();
         contents.push(0);
         // MIT: `krb5_dbe_make_alias_entry` (lib/kdb/kdb5.c:2826-2870)
         p.tl_data.push(TlData {
             ty: TL_ALIAS_TARGET,
             contents,
         });
+        let key = super::iprop_ulog::RecordKey::of(&p)?;
         self.note_ulog(id.clone(), false, Some(p.clone()));
-        self.map.insert(id, p);
+        self.map.put_record(key, p);
         self.save_if_configured()?;
         self.postcommit(super::kadm5_hook::Post::Alias {
             alias: alias.clone(),

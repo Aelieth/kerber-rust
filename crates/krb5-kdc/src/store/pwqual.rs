@@ -188,7 +188,7 @@ pub(super) fn run(
     note: &mut dyn FnMut(Severity, &str),
 ) -> Result<(), Error> {
     let dict = store.pwqual_dict.as_deref();
-    let princ = name.unparse_with_realm(princ_realm);
+    let princ = name.unparse_with_realm_lossy(princ_realm);
     for module in selected(store) {
         let result = if module.checks_dictionary() {
             dict_check(password, policy_name, dict)

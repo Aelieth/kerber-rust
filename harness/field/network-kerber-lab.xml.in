@@ -1,0 +1,74 @@
+<!--
+  kerber-lab: the F0 field-lab network (harness/field/README.md).
+
+  NAT to the internet on @LAB_NET@.0/24 (rendered by lab.sh). libvirt's dnsmasq serves DHCP
+  with static leases and the DNS domain kerber.test. The domain is local
+  only (never forwarded upstream) and has forward and reverse records.
+  The klldap address is reserved for the F3 VM, the mitd3 address for the VM
+  that carries upstream MIT krb5 (the des3 oracle, B22). deb13 is the Debian
+  13 peer. rocky10 is the Rocky Linux 10 VM for a closeout and the final.
+
+  ad.kerber.test is forwarded to the AD test DC on the LAN (F2-AD), so lab
+  VMs can resolve the DC by name. The more specific forwarder
+  wins over the local kerber.test domain in dnsmasq.
+
+  The MACs here must match the VM table in lab.sh.
+  lab.sh up defines this network, and adds the entries of a VM that joined
+  the table after the network was defined (net-update). By hand:
+  virsh -c qemu:///system net-define <this file, rendered>
+-->
+<network>
+  <name>kerber-lab</name>
+  <forward mode='nat'>
+    <nat>
+      <port start='1024' end='65535'/>
+    </nat>
+  </forward>
+  <bridge name='virbr-kerber' stp='on' delay='0'/>
+  <mac address='52:54:00:4b:52:01'/>
+  <domain name='kerber.test' localOnly='yes'/>
+  <dns>
+    <forwarder domain='ad.kerber.test' addr='@AD_DC@'/>
+    <host ip='@LAB_NET@.10'>
+      <hostname>kdc.kerber.test</hostname>
+    </host>
+    <host ip='@LAB_NET@.11'>
+      <hostname>services.kerber.test</hostname>
+    </host>
+    <host ip='@LAB_NET@.21'>
+      <hostname>client1.kerber.test</hostname>
+    </host>
+    <host ip='@LAB_NET@.22'>
+      <hostname>client2.kerber.test</hostname>
+    </host>
+    <host ip='@LAB_NET@.30'>
+      <hostname>klldap.kerber.test</hostname>
+    </host>
+    <host ip='@LAB_NET@.31'>
+      <hostname>mitd3.kerber.test</hostname>
+    </host>
+    <host ip='@LAB_NET@.32'>
+      <hostname>ub26.kerber.test</hostname>
+    </host>
+    <host ip='@LAB_NET@.33'>
+      <hostname>deb13.kerber.test</hostname>
+    </host>
+    <host ip='@LAB_NET@.34'>
+      <hostname>rocky10.kerber.test</hostname>
+    </host>
+  </dns>
+  <ip address='@LAB_NET@.1' netmask='255.255.255.0'>
+    <dhcp>
+      <range start='@LAB_NET@.100' end='@LAB_NET@.199'/>
+      <host mac='52:54:00:4b:52:0a' name='kdc' ip='@LAB_NET@.10'/>
+      <host mac='52:54:00:4b:52:0b' name='services' ip='@LAB_NET@.11'/>
+      <host mac='52:54:00:4b:52:15' name='client1' ip='@LAB_NET@.21'/>
+      <host mac='52:54:00:4b:52:16' name='client2' ip='@LAB_NET@.22'/>
+      <host mac='52:54:00:4b:52:1e' name='klldap' ip='@LAB_NET@.30'/>
+      <host mac='52:54:00:4b:52:1f' name='mitd3' ip='@LAB_NET@.31'/>
+      <host mac='52:54:00:4b:52:20' name='ub26' ip='@LAB_NET@.32'/>
+      <host mac='52:54:00:4b:52:21' name='deb13' ip='@LAB_NET@.33'/>
+      <host mac='52:54:00:4b:52:22' name='rocky10' ip='@LAB_NET@.34'/>
+    </dhcp>
+  </ip>
+</network>

@@ -13,6 +13,7 @@
 #   PROOF 6: the kit's own --validate as alice: "[OK] Validation passed (core checks)."
 # Every realm and directory change is undone, also on an early exit. Never SDDM or other GUI, never the kit join.
 # Recorded, not graded (sssd-login.expect): the cache's size. Run by run.sh (REC_DIR, TMPDIR, FIELD_SHA).
+# Fedora only (DS): client side; CM covers the families
 # vms: client1 services kdc
 # legs: mit rust
 set -uo pipefail
@@ -31,8 +32,10 @@ esac
 legset ALICE ALICE_TEMP ADMIN
 T0=$(date +%s)
 R=${REALM//./\\.}
+LN=${FIELD_LAB_NET:?FIELD_LAB_NET is not set in field.env}
+LNe=${LN//./\\.}
 I3='etypes \{rep=aes256-cts-hmac-sha1-96\(18\), tkt=aes256-cts-hmac-sha1-96\(18\), ses=aes256-cts-hmac-sha1-96\(18\)\}'
-E2='\(2 etypes \{aes256-cts-hmac-sha1-96\(18\), aes128-cts-hmac-sha1-96\(17\)\}\) 192\.168\.177\.21: '
+E2='\(2 etypes \{aes256-cts-hmac-sha1-96\(18\), aes128-cts-hmac-sha1-96\(17\)\}\) '"$LNe"'\.21: '
 PT="\$HOME/field/ptydrive.py"
 PAM="$PT --secrets 1 --timeout 60 --rule Password:=0 -- sudo pamtester -v login alice"
 PW="$PT --secrets 2 --timeout 120 --rule 'Current Password:=0' --rule '(Retype|Reenter) new password:=1' --rule 'New password:=1' --rule 'Password:=0' -- su --pty - alice -c 'passwd; echo passwd-rc=\$?'"
@@ -73,7 +76,7 @@ observelast obs.ccache.bytes 'user_tmp_t:s0 [0-9]+'
 checklast login.pam_sss 'pam_sss\(login:auth\): authentication success; .*user=alice$'
 tktcheck login.tgt '^krbtgt/' ': 86(399|400) s life, 60(4799|4800) s renewable, flags FRIA$'
 TILL0=$(awk '/renew until/ { sub(/,$/, "", $4); print $3, $4; exit }' "$LAST_OUT")
-kdcsince login "192\\.168\\.177\\.21: .*alice@$R"
+kdcsince login "$LNe\\.21: .*alice@$R"
 checklast log.login.preauth "AS_REQ ${E2}NEEDED_PREAUTH: alice@$R for krbtgt/$R@$R, Additional pre-authentication required\$"
 checklast log.login.issue "AS_REQ ${E2}ISSUE: authtime [0-9]+, $I3, alice@$R for krbtgt/$R@$R\$"
 AUTH=$(grep -E "AS_REQ .*ISSUE: authtime [0-9]+, .*alice@$R for krbtgt/" "$LAST_OUT" | tail -n 1 | sed -E 's/.*ISSUE: authtime ([0-9]+),.*/\1/')
@@ -87,7 +90,7 @@ tktcheck renew.tgt '^krbtgt/' ': 86(399|400) s life, [0-9]+ s renewable, flags F
 TILL1=$(awk '/renew until/ { sub(/,$/, "", $4); print $3, $4; exit }' "$LAST_OUT")
 res=FAIL; if [ -n "$TILL0" ] && [ "$TILL0" = "$TILL1" ]; then res=PASS; fi
 _checkrow renew.till "$res" "renew-until kept" "$LAST_RC" "login: $TILL0 renewed: $TILL1"
-kdcsince renew "192\\.168\\.177\\.21: .*alice@$R"
+kdcsince renew "$LNe\\.21: .*alice@$R"
 checklast log.renew "TGS_REQ ${E2}ISSUE: authtime ${AUTH:-none}, $I3, alice@$R for krbtgt/$R@$R\$"
 kadm renew.restore 'modprinc -maxlife "1 day" alice'
 if [ "$LAST_RC" = 0 ]; then CHANGED=${CHANGED/ maxlife/}; fi
@@ -99,8 +102,8 @@ check chpw.passwd '^passwd: password updated successfully$' runin client1 "alice
 checklast chpw.rc '^passwd-rc=0'
 check chpw.new '^pamtester: successfully authenticated$' runin client1 "$ALICE_TEMP (the new one)" "$PAM authenticate; echo \"pamtester rc=\$?\"" < <(once "$ALICE_TEMP")
 check chpw.old '^pamtester: Authentication failure$' runin client1 "$ALICE (the old one)" "$PAM authenticate; echo \"pamtester rc=\$?\"" < <(once "$ALICE")
-kdcsince chpw "chpw|192\\.168\\.177\\.21: .*alice@$R"
-checklast log.chpw "chpw request from 192\\.168\\.177\\.21 for alice@$R: success\$"
+kdcsince chpw "chpw|$LNe\\.21: .*alice@$R"
+checklast log.chpw "chpw request from $LNe\\.21 for alice@$R: success\$"
 checklast log.oldpw "AS_REQ ${E2}PREAUTH_FAILED: alice@$R for krbtgt/$R@$R"
 check chpw.restore '^passwd: password updated successfully$' runin client1 "$ALICE_TEMP, then $ALICE" "$PW" < <(once "$ALICE_TEMP" "$ALICE")
 check chpw.restored '^kinit rc=0$' runin client1 "$ALICE (restored)" "$KINIT > /dev/null; echo \"kinit rc=\$?\"" < <(once "$ALICE")
@@ -114,7 +117,7 @@ check revoke.attr '^Attributes: DISALLOW_ALL_TIX REQUIRES_PRE_AUTH$' runin clien
 check revoke.pamtester '^pamtester: Authentication failure$' runin client1 "alice's password ($ALICE)" "$PAM authenticate; echo \"pamtester rc=\$?\"" < <(once "$ALICE")
 check revoke.kinit "^kinit: Client's credentials have been revoked while getting initial credentials\$" runin client1 "alice's password ($ALICE)" "$KINIT 2>&1; echo \"kinit rc=\$?\"" < <(once "$ALICE")
 check revoke.pam_sss 'pam_sss\(login:auth\): received for user alice: 6 \(Permission denied\)$' run client1 "sudo journalctl --since -2min --no-pager -o cat | grep -E 'pam_sss\\(login:auth\\)' | tail -n 4"
-kdcsince revoke "192\\.168\\.177\\.21: .*alice@$R"
+kdcsince revoke "$LNe\\.21: .*alice@$R"
 checklast log.revoked "AS_REQ ${E2}CLIENT LOCKED OUT: alice@$R for krbtgt/$R@$R, Client's credentials have been revoked\$"
 kadm revoke.unset 'modprinc +allow_tix alice'
 check revoke.restored '^pamtester: successfully authenticated$' runin client1 "alice's password ($ALICE)" "$PAM authenticate; echo \"pamtester rc=\$?\"" < <(once "$ALICE")

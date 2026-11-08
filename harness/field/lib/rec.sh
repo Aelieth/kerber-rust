@@ -32,7 +32,11 @@
 #   name, PASS / FAIL / INFO, expect, rc, observed (the matching line, or what was seen), record.txt line.
 
 FIELD_LIB=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# A lib/log-since.sh mark: lines:bytes:inode:sha256 of the head.
+MARK_RE='[0-9]+:[0-9]+:[0-9]+:[0-9a-f]{64}'
 FIELD_DIR=$(dirname "$FIELD_LIB")
+# shellcheck source=family.sh
+. "$FIELD_LIB/family.sh" || exit 1
 LAB=${LAB:-$FIELD_DIR/lab.sh}
 LABQ=$(printf '%q' "$LAB")
 export LABQ
@@ -187,29 +191,46 @@ observelast() {
 }
 observe() { local name=$1 ere=$2; shift 2; "$@"; observelast "$name" "$ere"; }
 
-# kdcmark <name>: the current length of kdc's two daemon logs (read-only), graded as check mark.<name>.
+# kdcmark <name>: kdc's two daemon logs' marks (lib/log-since.sh, read-only), graded as check mark.<name>; with
+# LOGSRC=journal, the journal's cursor.
 kdcmark() {
-    check "mark.$1" '^marks: [0-9]+ [0-9]+$' run kdc "printf 'marks: %s %s\n' \"\$(sudo sh -c 'wc -l < /var/log/krb5kdc.log')\" \"\$(sudo sh -c 'wc -l < /var/log/kadmind.log')\""
-    sed -n 's/^marks: \([0-9][0-9]*\) \([0-9][0-9]*\)$/\1 \2/p' "$LAST_OUT" > "$STATE/mark.$1"
+    if [ "$LOGSRC" = journal ]; then
+        check "mark.$1" '^marks: cursor s=' run kdc "printf 'marks: cursor %s\n' \"\$(sudo journalctl -n 1 -q -o cat --show-cursor | sed -n 's/^-- cursor: //p')\""
+        sed -n 's/^marks: cursor \(s=[^ ]*\)$/\1/p' "$LAST_OUT" > "$STATE/mark.$1"
+        return
+    fi
+    check "mark.$1" "^marks: $MARK_RE $MARK_RE\$" runin kdc "lib/log-since.sh" "f=\$(mktemp); cat > \"\$f\"; printf 'marks: %s %s\\n' \"\$(sudo sh \"\$f\" mark /var/log/krb5kdc.log)\" \"\$(sudo sh \"\$f\" mark /var/log/kadmind.log)\"; rm -f \"\$f\"" < "$FIELD_LIB/log-since.sh"
+    sed -n -E "s/^marks: ($MARK_RE) ($MARK_RE)\$/\\1 \\2/p" "$LAST_OUT" > "$STATE/mark.$1"
 }
-# kdcsince <name> [ERE]: the lines both logs gained since that mark that match ERE, minus "closing down fd".
-# Without a valid mark it records a failed command and reads nothing, so no check after it passes on old lines.
+# kdcsince <name> [ERE]: the lines both logs gained since that mark that match ERE, minus "closing down fd", across a
+# logrotate in between. Without a valid mark, or with no file holding it, no log line is read and the command fails,
+# so no check after it passes on old lines or on none.
 kdcsince() {
-    local k='' a='' pat=${2:-.}
+    local k='' a='' pat=${2:-.} c=''
+    if [ "$LOGSRC" = journal ]; then
+        read -r c < "$STATE/mark.$1" 2>/dev/null || true
+        case $c in
+            s=*) ;;
+            *) host "echo 'kdcsince $1: no valid journal cursor, so no log line is read'; exit 1"; return 0 ;;
+        esac
+        # Each daemon's journal after the mark, by its unit or its syslog name (a hand-run one, as its FILE log
+        # would have it), as MIT's FILE lines (lib/journal-lines.py, sent on stdin).
+        runin kdc "lib/journal-lines.py" "f=\$(mktemp); cat > \"\$f\"; for u in $UNIT_KDC:krb5kdc $UNIT_ADMIN:kadmind; do [ \${u#*:} = krb5kdc ] || echo '--- kadmind.log'; sudo journalctl -q _SYSTEMD_UNIT=\${u%%:*}.service + SYSLOG_IDENTIFIER=\${u#*:} --after-cursor $(printf '%q' "$c") -o json --no-pager | python3 \"\$f\" --utc-offset \$(date +%z) | grep -v 'closing down fd' | grep -E $(printf '%q' "$pat"); done; rm -f \"\$f\"; true" < "$FIELD_LIB/journal-lines.py"
+        return 0
+    fi
     read -r k a < "$STATE/mark.$1" 2>/dev/null || true
-    case "$k:$a" in
-        *[!0-9:]* | :* | *:)
-            host "echo 'kdcsince $1: no valid log mark, so no log line is read'; exit 1"
-            return 0 ;;
-    esac
-    run kdc "sudo tail -n +$((k + 1)) /var/log/krb5kdc.log | grep -v 'closing down fd' | grep -E $(printf '%q' "$pat"); echo '--- kadmind.log'; sudo tail -n +$((a + 1)) /var/log/kadmind.log | grep -v 'closing down fd' | grep -E $(printf '%q' "$pat"); true"
+    if ! [[ $k =~ ^$MARK_RE$ && $a =~ ^$MARK_RE$ ]]; then
+        host "echo 'kdcsince $1: no valid log mark, so no log line is read'; exit 1"
+        return 0
+    fi
+    runin kdc "lib/log-since.sh" "f=\$(mktemp); cat > \"\$f\"; r=0; sudo sh \"\$f\" since $k /var/log/krb5kdc.log > \"\$f.k\" || r=1; sudo sh \"\$f\" since $a /var/log/kadmind.log > \"\$f.a\" || r=1; grep -v 'closing down fd' \"\$f.k\" | grep -E $(printf '%q' "$pat"); echo '--- kadmind.log'; grep -v 'closing down fd' \"\$f.a\" | grep -E $(printf '%q' "$pat"); rm -f \"\$f\" \"\$f.k\" \"\$f.a\"; exit \$r" < "$FIELD_LIB/log-since.sh"
 }
 
 # capstart <vm> <name> <bpf filter>: tcpdump on every interface of <vm>, as a transient unit writing the VM's
 # /var/tmp/field-<name>.pcap (the filter should keep IP fragments: a port filter alone drops them). --immediate-mode:
 # without it, a stop in the same second loses what is still in the kernel's TPACKET_V3 block.
 capstart() {
-    run "$1" "sudo systemd-run --unit=field-pcap-$2 --collect tcpdump -i any -s0 -U --immediate-mode -w /var/tmp/field-$2.pcap $(printf '%q' "$3"); sleep 2; systemctl is-active field-pcap-$2"
+    check "pcap.$2.start" '^active$' run "$1" "sudo systemd-run --unit=field-pcap-$2 --collect tcpdump -i any -s0 -U --immediate-mode -w /var/tmp/field-$2.pcap $(printf '%q' "$3"); sleep 2; systemctl is-active field-pcap-$2"
 }
 # capstop <vm> <name>: stop it; the raw capture comes to $STATE and is deleted on the VM; the record keeps
 # pcap/<name>.pcap without AS exchanges (+ .txt, pcap-keep.sh); the raw copy is deleted (check pcap.<name>).

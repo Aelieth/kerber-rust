@@ -231,8 +231,8 @@ fn as_canonicalize_issues_the_krbtgt_under_the_canonical_db_name() {
     // CANONICALIZE: ticket server AND enc-part server become the canonical name.
     let canon = issue(true, 61);
     assert_eq!(
-        canon.rep.0.ticket.sname.components_joined(),
-        canonical.components_joined(),
+        canon.rep.0.ticket.sname.components_joined_lossy(),
+        canonical.components_joined_lossy(),
         "ticket server canonicalized"
     );
     let usage = KeyUsage::new(ku::AS_REP_ENC_PART).unwrap();
@@ -243,15 +243,15 @@ fn as_canonicalize_issues_the_krbtgt_under_the_canonical_db_name() {
     )
     .expect("enc");
     assert_eq!(
-        decode_enc_part(&plain).sname.components_joined(),
-        canonical.components_joined(),
+        decode_enc_part(&plain).sname.components_joined_lossy(),
+        canonical.components_joined_lossy(),
         "enc-part server follows the ticket (do_as_req.c:243)"
     );
     // Without CANONICALIZE the requested alias name is kept.
     let kept = issue(false, 62);
     assert_eq!(
-        kept.rep.0.ticket.sname.components_joined(),
-        short.components_joined(),
+        kept.rep.0.ticket.sname.components_joined_lossy(),
+        short.components_joined_lossy(),
         "requested alias name kept without CANONICALIZE"
     );
 }

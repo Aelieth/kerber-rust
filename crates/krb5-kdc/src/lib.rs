@@ -54,9 +54,9 @@ pub use create::{
     open_or_create, realm_rows,
 };
 pub use daemon::{
-    OpenFailure, Shutdown, copy_persist_master, database_path, kadmind_mkey_from_kbd,
-    manual_master_key, mkey_log_context, names_relative_database, open_database,
-    open_database_with_key, open_database_with_password,
+    NO_MASTER_KEY, OpenFailure, Shutdown, copy_persist_master, database_path, has_master_record,
+    kadmind_mkey_from_kbd, manual_master_key, mkey_log_context, names_relative_database,
+    open_database, open_database_with_key, open_database_with_password,
 };
 #[cfg(feature = "daemon")]
 pub use daemon::{Signals, detach, json_log_filter, write_pid_file};
@@ -73,7 +73,8 @@ pub use kadm5_params::{kadm5_params_missing, realm_kadm5_params_missing};
 #[cfg(any(test, feature = "test-hooks"))]
 pub use kdb::MemoryStore;
 pub use kdb::{
-    KdcEnv, PrincipalRead, PrincipalWrite, Store, StoreLifecycle, lookup_principal_id, open_store,
+    KdcEnv, NOT_UTF8, PrincipalRead, PrincipalWrite, Store, StoreLifecycle, lookup_principal_id,
+    open_store,
 };
 pub use kdb_dump::{
     DumpError, DumpFile, DumpKeyData, DumpKeySlot, DumpOkStage, DumpPrincipal, IpropHeaderError,
@@ -134,21 +135,21 @@ pub use store::{
     AT_PW_HIST, AT_PW_HIST_KVNO, AT_PW_LAST_CHANGE, AT_PW_POLICY, AT_PW_POLICY_SWITCH, AT_TL_DATA,
     IncrLayout, IpropRole, IpropUpdate, KdbeVal, KeyWrap, LoggedWrite, PreparedLog, ULOG_ADD_ATTRS,
     UlogTime, XdrError, attr_bit, conv_2dbentry, conv_2logentry, decode_incr_update,
-    decode_kdbe_bytes, encode_incr_update, encode_kdbe, walk_incr_update,
+    decode_kdbe_bytes, encode_incr_update, encode_kdbe, skip_incr_update, walk_incr_update,
 };
 pub use store::{
     AdminEnt, AdminFields, CreateKeys, CreatePlan, HookStage, IPROP_ERROR, IPROP_FULL_RESYNC,
     IPROP_NIL, IPROP_OK, IPROP_PERM_DENIED, KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_DUP_SKEY,
     KDB_DISALLOW_FORWARDABLE, KDB_DISALLOW_POSTDATED, KDB_DISALLOW_RENEWABLE, KDB_DISALLOW_SVR,
-    KDB_DISALLOW_TGT_BASED, KDB_LOCKDOWN_KEYS, KDB_NO_AUTH_DATA_REQUIRED, KDB_OK_AS_DELEGATE,
-    KDB_OK_TO_AUTH_AS_DELEGATE, KDB_PWCHANGE_SERVICE, KDB_REQUIRES_HW_AUTH, KDB_REQUIRES_PRE_AUTH,
-    KDB_REQUIRES_PWCHANGE, KDB_V1_BASE_LENGTH, Kadm5Hook, KadmData, KeyEntry, KeyLookup,
-    KtkdbError, MAX_ALIAS_DEPTH, NamedPolicy, PWQUAL_DICT, PWQUAL_EMPTY, PWQUAL_PRINC,
-    PasswordPlan, Policy, PreparedCreate, PreparedPassword, Principal, PrincipalBuilder,
-    PrincipalStore, Pwqual, RID_FIRST_USER, RID_KRBTGT, S2K_ITERS, SpakeKdc, TlData,
-    apply_keysalt_policy, clear_thread_kadm5_hook, clear_thread_pwqual, kadm5_mask,
-    ktkdb_get_entry, random_key, register_kadm5_hook, register_pwqual, set_thread_kadm5_hook,
-    set_thread_pwqual, strip_db_args,
+    KDB_DISALLOW_TGT_BASED, KDB_INUSE, KDB_LOCKDOWN_KEYS, KDB_NO_AUTH_DATA_REQUIRED,
+    KDB_OK_AS_DELEGATE, KDB_OK_TO_AUTH_AS_DELEGATE, KDB_PWCHANGE_SERVICE, KDB_REQUIRES_HW_AUTH,
+    KDB_REQUIRES_PRE_AUTH, KDB_REQUIRES_PWCHANGE, KDB_V1_BASE_LENGTH, Kadm5Hook, KadmData,
+    KeyEntry, KeyLookup, KeySlot, KtkdbError, MAX_ALIAS_DEPTH, NamedPolicy, OpaqueKey, PWQUAL_DICT,
+    PWQUAL_EMPTY, PWQUAL_PRINC, PasswordPlan, Policy, PreparedCreate, PreparedPassword, Principal,
+    PrincipalBuilder, PrincipalStore, Pwqual, RID_FIRST_USER, RID_KRBTGT, S2K_ITERS, SpakeKdc,
+    TlData, XDR_FAILURE, apply_keysalt_policy, change_password_shared, clear_thread_kadm5_hook,
+    clear_thread_pwqual, create_password_shared, kadm5_mask, ktkdb_get_entry, random_key,
+    register_kadm5_hook, register_pwqual, set_thread_kadm5_hook, set_thread_pwqual, strip_db_args,
 };
 #[cfg(any(test, feature = "test-hooks"))]
 pub use ulog::UlogEntry;

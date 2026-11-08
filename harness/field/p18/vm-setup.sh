@@ -1,6 +1,7 @@
 #!/bin/bash
 # P18 vm-setup.sh (klldap VM, root; `sudo bash -s`): the scratch realm's layout, plus
-# /srv/p18/kdc-iprop.conf (the same kdc.conf with iprop_enable) for the iprop-on runs.
+# /srv/p18/kdc-iprop.conf (the same kdc.conf with iprop_enable) for the iprop-on runs and
+# /srv/p18/kdc-off.conf (kdc.conf as written) to restore it.
 # One krb5.conf and one kdc.conf serve both legs byte for byte: the KDC directory is the same
 # path for MIT's daemons and ours, and only one leg runs at a time. The kdc.conf is KLLDAP's
 # field kdc.conf (f-F3 vm-swap leg-ii configs/klldap/kdc.conf: aes256 master key, aes256:normal
@@ -44,8 +45,9 @@ cat > $B/kdc.conf <<'EOF'
     admin_server = FILE:/srv/p18/run/kdc/kadmind.log
 EOF
 sed 's|^        supported_enctypes = aes256-cts-hmac-sha1-96:normal$|&\n        iprop_enable = true\n        iprop_port = 18751|' $B/kdc.conf > $B/kdc-iprop.conf
+cp $B/kdc.conf $B/kdc-off.conf
 printf 'admin/admin@P18.TEST *\n' > $B/kadm5.acl
-chmod 0600 $B/kdc.conf $B/kdc-iprop.conf $B/kadm5.acl
+chmod 0600 $B/kdc.conf $B/kdc-iprop.conf $B/kdc-off.conf $B/kadm5.acl
 ls -la $B
 echo "--- krb5.conf"; cat $B/krb5.conf
 echo "--- kdc.conf"; cat $B/kdc.conf

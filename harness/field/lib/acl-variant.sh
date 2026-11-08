@@ -12,7 +12,7 @@ acl_variant() {
     local L=$1 T=$2 p pf ere
     section "acl.$L: svc/setup '$L' on host/* and nfs/* (target $T)"
     check "acl.$L.kadmin" '^active$' runin kdc "kadm5.acl $L" \
-        "sudo tee /var/kerberos/krb5kdc/kadm5.acl >/dev/null && sudo systemctl restart kadmin && systemctl is-active kadmin" \
+        "sudo tee $KDCDIR/kadm5.acl >/dev/null && sudo systemctl restart $UNIT_ADMIN && systemctl is-active $UNIT_ADMIN" \
         <<< "$(printf 'admin/admin@%s\t*\nsvc/setup@%s\t%s\thost/*@%s\nsvc/setup@%s\t%s\tnfs/*@%s\n' "$R" "$R" "$L" "$R" "$R" "$L" "$R")"
     local K="kadmin -p svc/setup@$R -k -t \$HOME/field/svc-setup.keytab -s $KDC_HOST"
     for p in host nfs; do

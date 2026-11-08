@@ -11,12 +11,12 @@ and services.
 [![unsafe forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg)](Cargo.toml)
 [![interop MIT 1.22.2 · AD](https://img.shields.io/badge/interop-MIT%201.22.2%20%C2%B7%20AD-brightgreen.svg)](docs/interop-matrix.md)
 
-**It is for you if** you run a Kerberos realm on Fedora and want the KDC in a memory-safe language
-without changing your clients, or you are building a product that needs a KDC as a library. **It is not
-for you if** you need a C library, an LDAP database backend, RADIUS one-time codes or several realms in
-one KDC process: see [Limitations](#limitations).
+**It is for you if** you run a Kerberos realm on Fedora, Rocky Linux or Debian and want the KDC in a
+memory-safe language without changing your clients, or you are building a product that needs a KDC as a
+library. **It is not for you if** you need a C library, an LDAP database backend, RADIUS one-time codes or
+several realms in one KDC process: see [Limitations](#limitations).
 
-This is version **1.2.0**. You build it from source; it is not on crates.io and there is no package.
+This is version **1.2.1**. You build it from source; it is not on crates.io and there is no package.
 
 [Why it exists](#why-it-exists) · [What it can do](#what-it-can-do) · [Limitations](#limitations) ·
 [How it was tested](#how-it-was-tested) · [Download, install and use](#download-install-and-use) ·
@@ -43,7 +43,7 @@ Two things shaped it:
 
 | You want to | What you get |
 | --- | --- |
-| **Run a realm** | `krb5kdc` over UDP and TCP, with Fedora's systemd units, SELinux types and `/var/kerberos/krb5kdc` layout |
+| **Run a realm** | `krb5kdc` over UDP and TCP, laid out as the distribution's MIT packages are: Fedora's and Rocky's systemd units, SELinux types and `/var/kerberos/krb5kdc`, or Debian's and Ubuntu's `krb5-kdc`, `krb5-admin-server` and `krb5-kpropd` units, `/etc/krb5kdc` and `/var/lib/krb5kdc` |
 | **Manage it** | `kadmind` for MIT's `kadmin`, plus `kadmin.local`, `kdb5_util`, password changes on port 464, policies and lockout |
 | **Log people in** | passwords (encrypted timestamp, encrypted challenge, SPAKE), FAST, certificates (PKINIT with RSA or elliptic-curve keys), and one-time codes through a verifier you supply |
 | **Keep replicas** | `kprop` and `kpropd`, full dumps in both directions with MIT, and incremental propagation (iprop) |
@@ -58,12 +58,13 @@ It keeps its database in MIT's dump format, so a realm can move to it and back.
 
 - **It is the server side, not a C library.** There is no C API. Programs linked against MIT's
   `libkrb5` and `libgssapi`, such as sshd and SSSD, keep using those libraries.
-- **Not tested against Heimdal in 1.2.** Heimdal was tested in both directions through v1.1.0, and that
-  test was retired during 1.2.
-- **`KCM:` caches have one test,** on one setup: Fedora 44 with `sssd-kcm` 2.13.1, against MIT's KDC. It is
-  not in the field suite, and it says nothing about other distributions.
-- **Fedora, as far as the tests go,** but for one scenario that builds these programs in KLLDAP's
-  AlmaLinux 10 image. The install steps and the lab are Fedora.
+- **Heimdal: its client tools only.** Debian 13's Heimdal 7.8 `kinit`, `klist`, `kgetcred` and `kpasswd`
+  get the same results from this KDC as from MIT 1.22.2's, error texts included. Heimdal's KDC,
+  cross-realm with it and its `kcm` were not tested.
+- **Tested on these distributions only.** The server on Fedora 44, Debian 13 and Rocky Linux 10, and in
+  KLLDAP's AlmaLinux 10 image; MIT's client tools and SSSD, with `FILE:` and `KCM:` caches, on Fedora 44,
+  Rocky Linux 10, Debian 13 and Ubuntu 26.04. Ubuntu's server layout is Debian's, but no server test ran
+  on Ubuntu.
 - **One realm per KDC process.**
 - **Not supported:** MIT's db2, LMDB and LDAP database backends; RADIUS-backed OTP; SPAKE groups P-384
   and P-521; `PKCS11:` and `PKCS12:` PKINIT identities and revocation lists; master key rollover;
@@ -73,12 +74,16 @@ It keeps its database in MIT's dump format, so a realm can move to it and back.
 - **Its own client tools are not yet a drop-in** for MIT's: [what differs](docs/install.md#what-make-install-installs).
   Keep `krb5-workstation` if a script depends on one of those differences.
 - **Some behaviour differs from MIT on purpose.** Most of those differences refuse something MIT
-  accepts. [Not yet matched](docs/interop-matrix.md#not-yet-matched-in-12) lists what an operator
-  could see, and [the deviations file](docs/mit-deviations.md) has every deliberate one.
+  accepts, such as a principal name that is not UTF-8.
+  [Not yet matched](docs/interop-matrix.md#not-yet-matched-in-121) lists what an operator could see, and
+  [the deviations file](docs/mit-deviations.md) has every deliberate one.
 - **Its dependencies are not all audited or free of `unsafe`.** RustCrypto, curve25519-dalek, getrandom
-  and nix contain `unsafe`, and `cargo vet` reports 16 crates fully audited and 134 exempted.
-- **Windows SSPI has no test of its own.** Over the AD trust, on an earlier 1.2 build, Windows accepted
-  this realm's users and acted as a SPNEGO client in the lab.
+  and nix contain `unsafe`, and `cargo vet` reports 18 crates fully audited and 134 exempted.
+- **Windows: a workgroup machine joined with `ksetup`.** Windows 11's own Kerberos and SSPI get the same
+  results from this KDC as from MIT 1.22.2's: tickets, `klist`, signing and sealing, `kpasswd`, error
+  texts, RC4 refused, SPNEGO to Keycloak and an interactive logon as a realm user
+  ([Windows clients](docs/install.md#windows-clients)). A domain-joined logon, SSPI as a server and
+  Windows OpenSSH were not tested.
 
 ## How it was tested
 
@@ -86,49 +91,48 @@ The rule is simple: a feature counts as done only when it works against real MIT
 A Rust program talking to itself never counts.
 
 **MIT goes first.** Each scenario in the field suite runs on lab virtual machines against a stock
-Fedora MIT 1.22.2 realm, then runs the same way against kerber-rust, and the two results are compared
-check by check. A *check* is one thing the harness looks at after a step, such as a command's exit code
-or output, a log line or a file's contents. It passes or fails, or it is only recorded (informational).
+MIT realm, then runs the same way against kerber-rust, and the two results are compared check by check.
+On Fedora that MIT is 1.22.2; on Debian 13 and Rocky Linux 10 it is the distribution's own, 1.21.3, and
+its checks are graded as that version behaves. A *check* is one thing the harness looks at after a step,
+such as a command's exit code or output, a log line or a file's contents. It passes or fails, or it is
+only recorded (informational).
 
-The weekly suite, the burn-in, the `KCM:` and Samba tests, CI and the secret scan ran on commit `bac2ce01`.
-The rest ran on its parent `04be5862`, which builds the same program bytes: `bac2ce01` changed only two
-test-harness files.
+The runs below used `c9421ed1` (the tagged release differs from it only in documentation), or an earlier 1.2.1 commit with no product change since that the run covers.
 
 | Test | What it does | Result |
 | --- | --- | --- |
-| Weekly field suite | 16 scenarios, on MIT and on kerber-rust: real clients and services, install, upgrade, going back to MIT, replicas | 3,044 checks passed, 0 failed (172 informational) |
-| Burn-in | the nightly field profile, 6 scenarios on both, 7 times in a row with the code frozen | every run 563 passed, 0 failed (38 informational), and the results of every run matched |
+| Weekly field suite | 16 scenarios, on MIT and on kerber-rust: real clients and services, install, upgrade, going back to MIT, replicas | 3,036 checks passed, 0 failed (172 informational) |
+| Burn-in | the nightly field profile, 6 scenarios on both, 7 times in a row with the code frozen | every run 569 passed, 0 failed (38 informational), and the results of every run matched |
+| Debian 13 and Rocky Linux 10 | the server scenarios on each, against that distribution's MIT: install, upgrade, `kadmind`, the KDC's settings, database writes, PKINIT, `kpasswd` and a replica | all 8 scenarios passed on each, on MIT and on kerber-rust; our replica 69 passed, 0 failed |
+| Clients on four distributions | MIT's client tools and SSSD on Fedora 44, Rocky Linux 10, Debian 13 and Ubuntu 26.04, with `FILE:` and `KCM:` caches: passwords, keytabs, `kvno`, renewal, `kpasswd`, expiry, lockout, an SSSD login and remote `kadmin` | 68 of 68 results the same as MIT's |
+| Heimdal's clients | Debian 13's Heimdal 7.8 `kinit`, `klist`, `kgetcred`, `kpasswd` and an error text | 5 of 5 results the same as MIT's |
+| Windows 11 | its own Kerberos and SSPI, joined with `ksetup`: tickets and `klist`, signing and sealing with MIT's and our GSS acceptor, `kpasswd`, error texts, RC4 refused, SPNEGO to Keycloak and an interactive logon | 10 of 10 results the same as MIT's |
+| Load | requests and writes on MIT and on kerber-rust, for an hour each | 0 errors (461,882 requests on kerber-rust, 104,191 on MIT); kerber-rust's memory flat, 0.9 to 14.9 MiB |
 | The 1.1 regression set | the checks that proved the 1.1 release, run again | 8,198 passed, 0 failed |
 | OpenSSH by hand | sshd GSSAPI login from one client to another | 52 passed, 0 failed |
-| `KCM:` caches by hand | MIT's tools, then ours: `kinit`, `klist`, `kvno`, `kswitch`, `kinit -R`, `kdestroy`, each reading the other's caches | 20 of 22 steps identical; the other 2 differ only in the program's name, because ours ran as `krb5-klist` |
-| Samba AD by hand | 7 tests with live Samba 4 domain controllers. 4 use our KDC, in a debug build: Samba decodes its PAC, checks its checksums and rejects corrupted ones, takes its referrals both ways, and returns the right SID over a real `samba-tool` trust. The other 3 exercise only Samba's own tools, and our client tools are in none of them | 7 of 7 passed |
-| Crashes | 218 kills during writes, 50 of them during a database rewrite, each result loaded by MIT's `kdb5_util` | no damaged change; MIT loaded all 220 dumps |
-| Power loss | 20 forced power-offs during writes, with a replica | none of the 38 acknowledged writes was lost |
-| Write speed | beside MIT at 5,000 principals | 0.79 to 1.00 times MIT's median time per write |
+| Samba AD (CI's `peers` job) | 7 tests with live Samba 4 domain controllers. 4 use our KDC, in a debug build: Samba decodes its PAC, checks its checksums and rejects corrupted ones, takes its referrals both ways, and returns the right SID over a real `samba-tool` trust. The other 3 exercise only Samba's own tools, and our client tools are in none of them | 7 of 7 passed |
+| Active Directory trust | a Windows Server domain controller in a two-way trust with this realm, MIT first: tickets across the trust both ways, an AD user's `kinit -E` by its UPN, FAST armor from an AD ticket, an AD user's sshd login, this realm's users at the DC's SMB and LDAP, and the DC as a SPNEGO client | not run in this release's pass; it last ran on an earlier 1.2 build: 83 checks on MIT and 97 on kerber-rust, 0 failed |
+| Crashes | kills during writes on Fedora, Debian 13 and Rocky Linux 10, each result loaded by MIT's `kdb5_util` | 669 kills (221 on Fedora, 228 on Debian 13, 220 on Rocky Linux 10); no damaged change, and MIT loaded all 675 dumps |
+| Power loss | forced power-offs during writes, with a replica | 20 power-offs; none of the 25 acknowledged writes was lost |
 | CI | every push | 8 of 8 jobs |
-| Secret scan | the source, the test harness and 72,629 test record files | 0 findings (168 known-safe hits reviewed and allowlisted) |
+| Secret scan | the source, the test harness and the test records | 0 findings in 34,834 files |
 
 Real software that ran against both MIT and kerber-rust, in those scenarios:
 
-- **SSSD** on Fedora: login, renewal at a restart and `passwd`.
+- **SSSD** on Fedora: login, renewal at a restart and `passwd`; on Rocky Linux 10, Debian 13 and Ubuntu
+  26.04: login and renewal.
 - **NFS 4.2** to NFS-Ganesha with `sec=krb5i` and `krb5p`, through `rpc.gssd`.
-- **Keycloak** SPNEGO, from Java.
+- **Keycloak** SPNEGO, from Java and from Windows.
+- **Windows 11**'s own Kerberos and SSPI.
 - **KLLDAP** with `krb5-server` swapped for kerber-rust.
-- **MIT's own** `kinit`, `klist`, `kvno`, `kadmin`, `kpasswd` and `kprop`.
+- **MIT's own** `kinit`, `klist`, `kvno`, `kadmin`, `kpasswd` and `kprop`, and Heimdal's client tools.
 
-Four things to know when you read those numbers:
+Things to know when you read those numbers:
 
-- **The burn-in ran back to back,** not a night apart. It shows seven clean runs in a row, not a week of
-  uptime.
-- **The tagged binaries are not the exact bytes those runs used.** The version number feeds into the
-  compiled symbol names, so setting it to 1.2.0 changed the bytes. The tagged source differs from the
-  tested source by the version, the docs and the test scripts. No program code changed.
-- **The real Active Directory trust was not part of the final run.** It last ran on an earlier 1.2 build
-  (83 checks on MIT and 97 on kerber-rust, 0 failed).
-- **Two scheduled CI workflows did not prove this code on their own.** `peers.yml` skipped its seven Samba
-  tests, because its job had no MIT image, and stayed green. They were run by hand instead, and the job's
-  fix is planned for 1.2.1. `nightly.yml` had one red job, because two test scripts left test KDCs running
-  and the tests after them failed. Those scripts are fixed in the tag.
+- **The tagged binaries are the tested bytes.** The version was set to 1.2.1 before the runs above.
+- **`peers.yml` fails unless all seven Samba tests ran.** In 1.2.0 its job skipped them and stayed green.
+- **The seven burn-in runs ran back to back,** not a night apart. The hour of load passed every check; one guard
+  on the run tripped on a file another tool wrote to `/tmp` during it, and the run was accepted on review.
 
 The details are in the [interop matrix](docs/interop-matrix.md), the [parity
 ledger](docs/parity/README.md), which grades MIT's functions one row per check, and the [field
@@ -137,7 +141,10 @@ harness](harness/field/README.md), which you can run yourself.
 ## Download, install and use
 
 These steps are for Fedora 44, as an ordinary user with `sudo`. They replace `krb5-server`, so if this host
-already runs an MIT realm, go to [Move an MIT realm over](#move-an-mit-realm-over) instead.
+already runs an MIT realm, go to [Move an MIT realm over](#move-an-mit-realm-over) instead. On Rocky Linux,
+Debian or Ubuntu, [docs/install.md](docs/install.md) has each step for that distribution, from the
+prerequisites on: [Rocky Linux](docs/install.md#rocky-linux),
+[Debian and Ubuntu](docs/install.md#debian-and-ubuntu).
 
 **1. Get the tools and the code, and build it:**
 
@@ -145,7 +152,7 @@ already runs an MIT realm, go to [Move an MIT realm over](#move-an-mit-realm-ove
 sudo dnf install -y git gcc make lld rustup krb5-workstation logrotate words
 rustup-init -y --default-toolchain none --profile minimal
 . "$HOME/.cargo/env"
-git clone --branch v1.2.0 https://github.com/Aelieth/kerber-rust.git
+git clone --branch v1.2.1 https://github.com/Aelieth/kerber-rust.git
 cd kerber-rust
 rustup toolchain install
 make build
@@ -154,7 +161,7 @@ make build
 **2. Install it:**
 
 ```sh
-sudo dnf remove -y --no-autoremove krb5-server
+sudo dnf remove -y --setopt=clean_requirements_on_remove=False krb5-server
 sudo make install PREFIX=/usr
 ```
 
@@ -202,6 +209,10 @@ You should see a `krbtgt` ticket for your realm. From here,
 [docs/install.md](docs/install.md) is the whole guide: the firewall, keying client hosts, certificates,
 one-time codes, replicas, installing beside `krb5-server`, containers and uninstalling.
 
+**Building on it as a library?** Your workspace needs a `[patch.crates-io]` entry that takes `rasn` from
+this repository at the release's tag, or `krb5-types` does not compile: see
+[the `rasn` patch](docs/embed/api.md#the-rasn-patch-and-panic--unwind).
+
 ## Move an MIT realm over
 
 kerber-rust does not read MIT's db2 database, so a realm moves the way MIT moves one between its own
@@ -214,7 +225,7 @@ installed:
 ```sh
 sudo systemctl stop krb5kdc kadmin
 sudo kdb5_util dump /var/kerberos/krb5kdc/mit-realm.dump
-sudo dnf remove -y --no-autoremove krb5-server
+sudo dnf remove -y --setopt=clean_requirements_on_remove=False krb5-server
 for f in /var/kerberos/krb5kdc/kdc.conf /var/kerberos/krb5kdc/kadm5.acl /etc/sysconfig/krb5kdc \
          /etc/sysconfig/kadmin /etc/sysconfig/kprop /etc/logrotate.d/krb5kdc /etc/logrotate.d/kadmind; do
     if [ -e $f.rpmsave ]; then sudo mv $f.rpmsave $f; fi

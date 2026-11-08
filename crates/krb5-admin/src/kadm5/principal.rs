@@ -478,7 +478,14 @@ fn encode_principal_ent(w: &mut XdrW, p: &krb5_kdc::Principal, mask: u32) {
     w.nullstring(Some(&mod_name));
     w.u32(tl_u32(&p.tl_data, TL_MOD_PRINC).unwrap_or(0));
     w.u32(p.attributes);
-    let kvno = p.keys.iter().map(|k| k.kvno).max().unwrap_or(1);
+    let opaque = p.opaque_keys.iter().map(|o| o.kvno);
+    let kvno = p
+        .keys
+        .iter()
+        .map(|k| k.kvno)
+        .chain(opaque)
+        .max()
+        .unwrap_or(0);
     w.u32(kvno);
     w.u32(u32::from(p.mkvno));
     match p.pw_policy.as_deref() {
@@ -495,7 +502,7 @@ fn encode_principal_ent(w: &mut XdrW, p: &krb5_kdc::Principal, mask: u32) {
     w.u32(p.last_success);
     w.u32(p.last_failed);
     w.u32(p.fail_auth_count);
-    let n_key = u32::try_from(p.keys.len()).unwrap_or(0);
+    let n_key = u32::try_from(p.keys.len() + p.opaque_keys.len()).unwrap_or(0);
     // MIT: `kadm5_get_principal` (lib/kadm5/srv/svr_principal.c:848-866)
     let all_tl = p.tl_with_s4u();
     let tl: Vec<_> = if mask & KADM5_TL_DATA == 0 {
@@ -524,13 +531,27 @@ fn encode_principal_ent(w: &mut XdrW, p: &krb5_kdc::Principal, mask: u32) {
         w.u32(0);
     }
     w.u32(n_key);
-    for k in &p.keys {
-        let ver = if k.salt_type.is_some() { 2 } else { 1 };
+    for slot in p.key_slots() {
+        let (ver, kvno, etype, salt) = match slot {
+            krb5_kdc::KeySlot::Usable(k) => (
+                if k.salt_type.is_some() { 2 } else { 1 },
+                k.kvno,
+                k.etype.to_iana(),
+                k.salt_type.unwrap_or(0),
+            ),
+            krb5_kdc::KeySlot::Opaque(o) => (
+                u32::try_from(o.ver).unwrap_or(1),
+                o.kvno,
+                o.slots.first().map_or(0, |s| s.0),
+                o.slots.get(1).map_or(0, |s| s.0),
+            ),
+            _ => continue,
+        };
         w.u32(ver);
-        w.u32(k.kvno);
-        w.u32(u32::try_from(k.etype.to_iana()).unwrap_or(0));
+        w.u32(kvno);
+        w.u32(u32::try_from(etype).unwrap_or(0));
         if ver > 1 {
-            w.u32(u32::try_from(k.salt_type.unwrap_or(0)).unwrap_or(0));
+            w.u32(u32::try_from(salt).unwrap_or(0));
         }
     }
 }
@@ -569,8 +590,8 @@ pub(super) fn encode_chrand(keys: &[krb5_kdc::KeyEntry]) -> Vec<u8> {
 /// Keys (kvno 0: all), a wiped buffer.
 pub(super) fn encode_extract_keys(api: u32, p: &krb5_kdc::Principal, kvno: u32) -> Vec<u8> {
     let keys: Vec<&krb5_kdc::KeyEntry> = p
-        .keys
-        .iter()
+        .keys_in_order()
+        .into_iter()
         .filter(|k| kvno == 0 || k.kvno == kvno)
         .collect();
     let salt = |k: &krb5_kdc::KeyEntry| k.kdb_salt.as_deref().unwrap_or(p.salt.as_slice()).len();

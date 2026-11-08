@@ -1,0 +1,21 @@
+# kerber-rust: Debian krb5-admin-server's krb5-admin-server.service, with make install's paths.
+[Unit]
+Description=Kerberos 5 Admin Server
+
+
+[Service]
+Type=simple
+ExecStart=@SBINDIR@/kadmind -nofork $DAEMON_ARGS
+EnvironmentFile=-@SYSCONFIGDIR@/krb5-admin-server
+InaccessibleDirectories=-/etc/ssh -/etc/ssl/private  /root
+ReadOnlyDirectories=/
+ReadWriteDirectories=-/var/tmp /tmp @KDCDATADIR@ -/var/run /run
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+Restart=on-abnormal
+ProtectProc=invisible
+PrivateDevices=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+
+[Install]
+WantedBy=multi-user.target

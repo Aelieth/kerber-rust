@@ -152,6 +152,9 @@ impl Krb5Conf {
         realm: &str,
         trace: &mut dyn FnMut(DnsSrv),
     ) -> Result<Vec<Endpoint>, Error> {
+        if realm.is_empty() {
+            return Err(Error::RealmCantResolve);
+        }
         if self.kdc_host_invalid.contains(realm) {
             return Err(Error::InvalidArgument);
         }
@@ -176,6 +179,9 @@ impl Krb5Conf {
         realm: &str,
         trace: &mut dyn FnMut(DnsSrv),
     ) -> Result<Vec<Endpoint>, Error> {
+        if realm.is_empty() {
+            return Err(Error::RealmCantResolve);
+        }
         if self.kpasswd_host_invalid.contains(realm) {
             return Err(Error::InvalidArgument);
         }

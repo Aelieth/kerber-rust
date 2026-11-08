@@ -110,7 +110,7 @@ impl Handle {
 
     /// `K/M@realm`, which `kadm5` refuses to delete.
     pub(crate) fn is_master(&self, name: &PrincipalName, realm: &str) -> bool {
-        realm == self.realm && name.components_joined() == "K/M"
+        realm == self.realm && name.components_joined_lossy() == "K/M"
     }
 }
 
@@ -344,13 +344,12 @@ fn startup(argv: &[String], io: &mut Io) -> Option<Startup> {
     let cc = ccache.as_ref();
     let princstr = match o.princstr.clone() {
         Some(p) => p,
-        None => default_princstr(&o, &realm, cc, krb5_conf.as_ref(), &kdc_ctx.profile, user)
-            .or_else(|| {
-                io.error(&format!(
-                    "{WHOAMI}: unable to figure out a principal name\n"
-                ));
-                None
-            })?,
+        None => default_princstr(&o, &realm, cc, &kdc_ctx.profile, user).or_else(|| {
+            io.error(&format!(
+                "{WHOAMI}: unable to figure out a principal name\n"
+            ));
+            None
+        })?,
     };
     klog_init(&krb5_config::LogSpecs::load("admin_server"));
     if o.ccache_name.is_some() {
@@ -447,7 +446,7 @@ fn ccache_principal(cc: &krb5_config::CcSpec, profile: &krb5_config::Krb5Conf) -
         krb5_config::CcSpec::Memory(_) => return None,
     };
     let (realm, name) = parsed.primary;
-    Some(name.unparse_with_realm(&String::from_utf8_lossy(realm.as_bytes())))
+    Some(name.unparse_with_realm_lossy(&String::from_utf8_lossy(realm.as_bytes())))
 }
 
 fn unescaped(s: &str, c: u8) -> Option<usize> {
@@ -459,7 +458,6 @@ fn default_princstr(
     o: &Opts,
     realm: &str,
     ccache: Option<&krb5_config::CcSpec>,
-    conf: Option<&krb5_config::Krb5Conf>,
     profile: &krb5_config::Krb5Conf,
     user: Option<std::ffi::OsString>,
 ) -> Option<String> {
@@ -473,7 +471,7 @@ fn default_princstr(
         return Some(p.clone());
     }
     if o.use_keytab {
-        return Some(host_princstr(conf));
+        return host_princstr(profile);
     }
     if let Some(canon) = cc_princ {
         let (primary, prealm) = match unescaped(&canon, b'@').filter(|&i| i > 0) {
@@ -496,14 +494,12 @@ fn default_princstr(
     Some(format!("{}/admin@{realm}", pw.name))
 }
 
-fn host_princstr(conf: Option<&krb5_config::Krb5Conf>) -> String {
-    let host = std::fs::read_to_string("/proc/sys/kernel/hostname")
-        .map(|h| h.trim().to_ascii_lowercase())
-        .unwrap_or_default();
-    let realm = conf
-        .and_then(|c| krb5_config::host_to_realm(&c.domain_realm, &host))
-        .unwrap_or_default();
-    format!("host/{host}@{realm}")
+// MIT: `kadmin_startup` (kadmin/cli/kadmin.c:474-486)
+fn host_princstr(profile: &krb5_config::Krb5Conf) -> Option<String> {
+    let (realm, name) =
+        krb5_config::sname_to_principal(profile, None, Some("host"), PrincipalName::NT_SRV_HST)
+            .ok()?;
+    Some(name.unparse_with_realm_lossy(&String::from_utf8_lossy(realm.as_bytes())))
 }
 
 // MIT: `krb5_klog_init` (lib/kadm5/logger.c:232-522)
@@ -565,7 +561,7 @@ fn kadm5_init(
         return Err((open.load_text(krb5_kdc::PersistError::Lock(e)), false));
     }
     let caller = krb5_types::principal_from_unparsed(princstr, realm)
-        .map(|(n, r)| n.unparse_with_realm(&r))
+        .map(|(n, r)| n.unparse_with_realm_lossy(&r))
         .map_err(|_| (texts::MALFORMED.to_owned(), false))?;
     if o.mkey_from_kbd {
         let pw = io
@@ -583,6 +579,9 @@ fn kadm5_init(
         ));
     }
     let mut store = open.load().map_err(|e| (e, false))?;
+    if !krb5_kdc::has_master_record(&store) {
+        return Err((krb5_kdc::NO_MASTER_KEY.to_owned(), false));
+    }
     store
         .init_pwqual(open.conf.as_ref())
         .map_err(|e| (texts::strerror(&e), false))?;

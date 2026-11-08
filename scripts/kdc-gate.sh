@@ -115,6 +115,12 @@ grep -q 'host/testhost.kerber.test' <<<"$RUSTLOG" # RUST_issue_tgs
 grep -F 'tkt=' <<<"$RUSTLOG"
 grep -F 'ses=' <<<"$RUSTLOG"
 
+echo "==== rust KDC JSON stream: kdc.issue with a correlation_id, for the kinit and the kvno ===="
+# json_log_on put json = STDOUT in the stock configs, and the KDC's stdout is /tmp/kdc.log (docs/logging.md).
+python3 -I "$ROOT/scripts/lib/kdc-json-check.py" 'AS_REQ:client=user@KERBER.TEST' \
+    'TGS_REQ:server=host/testhost.kerber.test@KERBER.TEST' <<<"$RUSTLOG" \
+    || die "kdc.issue JSON events with a correlation_id missing from /tmp/kdc.log"
+
 echo "==== MIT kinit -a then kvno via 127.0.0.1 is BADADDR ===="
 docker exec "$NAME" kdestroy -A >/dev/null 2>&1 || true
 if ! docker exec -e KRB5_TRACE=/dev/stderr "$NAME" sh -c 'printf "userpassword\n" | kinit -a user@KERBER.TEST'; then

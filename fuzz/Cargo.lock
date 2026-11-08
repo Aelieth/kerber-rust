@@ -329,6 +329,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "dns-lookup"
+version = "4.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "263c0ccfc6b3b6a93e959edad4f985779e76c0b36dbb2e13e3d27c690974adf1"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "socket2",
+ "windows-sys",
+]
+
+[[package]]
 name = "ecdsa"
 version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -573,7 +585,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-asn1"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "krb5-log",
  "krb5-types",
@@ -583,7 +595,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-brainpool"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "ecdsa",
  "elliptic-curve",
@@ -594,8 +606,9 @@ dependencies = [
 
 [[package]]
 name = "krb5-config"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
+ "dns-lookup",
  "getrandom 0.2.17",
  "krb5-types",
  "nix",
@@ -604,7 +617,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-crypto"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "aes",
  "camellia",
@@ -640,7 +653,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-gss"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "getrandom 0.2.17",
  "krb5-asn1",
@@ -654,7 +667,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-log"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "chrono",
  "getrandom 0.2.17",
@@ -666,7 +679,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-protocol"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "bytes",
  "getrandom 0.2.17",
@@ -685,7 +698,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-types"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "bp256",
  "bp384",
@@ -976,8 +989,6 @@ checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
 [[package]]
 name = "rasn"
 version = "0.28.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d1b71dd951343df0fe30b11bca09518f3aba8e5bd0ece4564adbc2dabd875fa"
 dependencies = [
  "bitvec",
  "bitvec-nom2",
@@ -1210,6 +1221,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "socket2"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
+dependencies = [
+ "libc",
+ "windows-sys",
 ]
 
 [[package]]

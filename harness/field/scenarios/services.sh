@@ -10,6 +10,7 @@
 # Also graded: services' three keytabs equal the KDC's keys; the KDC's ISSUE lines for nfs/ and HTTP/. Recorded, not
 # graded: the probes' TGS transport and PREAUTH_REQUIRED padata (services.expect). Not checked here: S2's decode of
 # the RPCSEC_GSS INIT replies and call counts (no full pcap decoding). Run by run.sh (REC_DIR, TMPDIR, FIELD_SHA).
+# Fedora only (DS): client side; CM covers the families
 # vms: services kdc
 # legs: mit rust
 set -uo pipefail
@@ -25,6 +26,8 @@ esac
 . "$HERE/../baseline.env"
 # shellcheck source=../lib/leg.sh
 . "$FIELD_LIB/leg.sh"
+LN=${FIELD_LAB_NET:?FIELD_LAB_NET is not set in field.env}
+LNe=${LN//./\\.}
 legset ALICE
 T0=$(date +%s)
 TAG=f4$LEG
@@ -67,7 +70,7 @@ kdcmark s2
 W0=$(date +%s)
 capstart services s2 '(port 88) or (ip[6:2] & 0x1fff != 0)'
 check nfs.probe '^PROBE STAMP=[0-9]{8}T[0-9]{6}Z$' hostin "alice's password ($ALICE), the file prefix, then lib/nfs-probe.sh" \
-    "$LABQ ssh services -- '$PODMAN --privileged --name s2-nfs-probe --hostname services.kerber.test --add-host services.kerber.test:192.168.177.11 -v /var/lib/s2-probe/krb5.keytab:/etc/krb5.keytab:ro localhost/s2-nfs-probe:f43 bash -s'" < <(probein nfs)
+    "$LABQ ssh services -- '$PODMAN --privileged --name s2-nfs-probe --hostname services.kerber.test --add-host services.kerber.test:$LN.11 -v /var/lib/s2-probe/krb5.keytab:/etc/krb5.keytab:ro localhost/s2-nfs-probe:f43 bash -s'" < <(probein nfs)
 checklast nfs.kinit.host '^kinit -k rc=0$'
 checklast nfs.kinit.alice '^kinit alice rc=0$'
 checklast nfs.mount.users '^mount /users krb5p rc=0$'
@@ -105,10 +108,10 @@ checklast spnego.ticket "Ticket server: HTTP/services\\.kerber\\.test@$R\$"
 capstop services s2
 
 section "4. the KDC's lines for the probes (from services' address), Keycloak's events, what the capture shows"
-kdcsince s2 '192\.168\.177\.11'
-checklast log.tgs.nfs.host "TGS_REQ \\([0-9]+ etypes \\{[^}]*\\}\\) 192\\.168\\.177\\.11: ISSUE: authtime [0-9]+, $I3, host/services\\.kerber\\.test@$R for nfs/services\\.kerber\\.test@$R\$"
-checklast log.tgs.nfs.alice "TGS_REQ \\([0-9]+ etypes \\{[^}]*\\}\\) 192\\.168\\.177\\.11: ISSUE: authtime [0-9]+, $I3, alice@$R for nfs/services\\.kerber\\.test@$R\$"
-checklast log.tgs.http.alice "TGS_REQ \\([0-9]+ etypes \\{[^}]*\\}\\) 192\\.168\\.177\\.11: ISSUE: authtime [0-9]+, $I3, alice@$R for HTTP/services\\.kerber\\.test@$R\$"
+kdcsince s2 "$LNe\\.11"
+checklast log.tgs.nfs.host "TGS_REQ \\([0-9]+ etypes \\{[^}]*\\}\\) $LNe\\.11: ISSUE: authtime [0-9]+, $I3, host/services\\.kerber\\.test@$R for nfs/services\\.kerber\\.test@$R\$"
+checklast log.tgs.nfs.alice "TGS_REQ \\([0-9]+ etypes \\{[^}]*\\}\\) $LNe\\.11: ISSUE: authtime [0-9]+, $I3, alice@$R for nfs/services\\.kerber\\.test@$R\$"
+checklast log.tgs.http.alice "TGS_REQ \\([0-9]+ etypes \\{[^}]*\\}\\) $LNe\\.11: ISSUE: authtime [0-9]+, $I3, alice@$R for HTTP/services\\.kerber\\.test@$R\$"
 check kc.events '^count: LOGIN alice nextcloud [0-9.]+ = [1-9][0-9]*$' hostin "Keycloak's keyadmin password ($LAB_SECRET_KEYCLOAK_ADMIN)" \
     "bash $(printf '%q' "$FIELD_LIB/kc-events.sh") $W0" < "$SECRETS/$LAB_SECRET_KEYCLOAK_ADMIN"
 P=$(printf '%q' "$REC_DIR/pcap/s2.pcap")

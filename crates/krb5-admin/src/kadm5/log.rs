@@ -1,3 +1,5 @@
+use std::cell::Cell;
+
 use krb5_gss::GssContext;
 use krb5_log::klog::{self, Severity};
 
@@ -6,9 +8,9 @@ use super::codes::{
     CREATE_POLICY, CREATE_PRINCIPAL, CREATE_PRINCIPAL3, DELETE_POLICY, DELETE_PRINCIPAL, EINVAL,
     EXTRACT_KEYS, GET_POLICY, GET_POLS, GET_PRINCIPAL, GET_PRINCS, GET_PRIVS, GET_STRINGS,
     GSS_S_BAD_BINDINGS, GSS_S_DEFECTIVE_TOKEN, INIT, KADM5_AUTH_DELETE, KADM5_FAILURE,
-    KADM5_UNK_PRINC, KRB5_KDB_ALIAS_UNSUPPORTED, KRB5_KDB_BAD_SALTTYPE, KRB5_KDB_CANTLOCK_DB,
-    MODIFY_POLICY, MODIFY_PRINCIPAL, PURGEKEYS, RENAME_PRINCIPAL, SET_STRING, SETKEY_PRINCIPAL,
-    SETKEY_PRINCIPAL3, SETKEY_PRINCIPAL4,
+    KEY_DATA_ERRORS, KRB5_KDB_ALIAS_UNSUPPORTED, KRB5_KDB_BAD_SALTTYPE, KRB5_KDB_CANTLOCK_DB,
+    KRB5_KDB_INUSE, MODIFY_POLICY, MODIFY_PRINCIPAL, PURGEKEYS, RENAME_PRINCIPAL, SET_STRING,
+    SETKEY_PRINCIPAL, SETKEY_PRINCIPAL3, SETKEY_PRINCIPAL4,
 };
 use super::dispatch::auth_code_for;
 use super::xdr::XdrR;
@@ -39,23 +41,18 @@ pub(super) fn kadm5_op_name(proc: u32) -> Option<&'static str> {
     })
 }
 
-fn fetches_principal_first(proc: u32) -> bool {
-    matches!(
-        proc,
-        MODIFY_PRINCIPAL
-            | GET_PRINCIPAL
-            | CHPASS_PRINCIPAL
-            | CHPASS_PRINCIPAL3
-            | CHRAND_PRINCIPAL
-            | CHRAND_PRINCIPAL3
-            | SETKEY_PRINCIPAL
-            | SETKEY_PRINCIPAL3
-            | SETKEY_PRINCIPAL4
-            | PURGEKEYS
-            | GET_STRINGS
-            | SET_STRING
-            | EXTRACT_KEYS
-    )
+thread_local! {
+    static PREFETCH_FAILED: Cell<bool> = const { Cell::new(false) };
+}
+
+// MIT: `stub_setup` (kadmin/server/server_stubs.c:296-301)
+pub(super) fn prefetch_failed(reply: Vec<u8>) -> Vec<u8> {
+    PREFETCH_FAILED.set(true);
+    reply
+}
+
+pub(super) fn clear_prefetch() {
+    PREFETCH_FAILED.set(false);
 }
 
 /// MIT texts; strerror for an errno.
@@ -135,8 +132,12 @@ pub(super) fn kadm5_error_text(code: u32) -> String {
     match code {
         KRB5_KDB_CANTLOCK_DB => "Insufficient access to lock database".to_owned(),
         KRB5_KDB_BAD_SALTTYPE => "Unsupported salt type".to_owned(),
+        KRB5_KDB_INUSE => krb5_kdc::KDB_INUSE.to_owned(),
         KRB5_KDB_ALIAS_UNSUPPORTED => "Operation unsupported on alias principal name".to_owned(),
         EINVAL => "Invalid argument".to_owned(),
+        c if let Some(&(text, _)) = KEY_DATA_ERRORS.iter().find(|(_, k)| *k == c) => {
+            text.to_owned()
+        }
         c if c < 4096 => i32::try_from(c).map_or_else(
             |_| format!("Unknown code {c}"),
             |n| klog::os_error_text(&std::io::Error::from_raw_os_error(n)),
@@ -193,7 +194,7 @@ pub(super) fn kadm5_prime_arg(proc: u32, args: &[u8], client: &str) -> String {
         | PURGEKEYS | GET_STRINGS | SET_STRING | EXTRACT_KEYS | RENAME_PRINCIPAL | CREATE_ALIAS => {
             r.principal_realm().map_or_else(
                 |_| client.to_owned(),
-                |(p, realm)| p.unparse_with_realm(&realm),
+                |(p, realm)| p.unparse_with_realm_lossy(&realm),
             )
         }
         CREATE_POLICY | DELETE_POLICY | MODIFY_POLICY | GET_POLICY => r
@@ -216,8 +217,8 @@ fn rename_targets(args: &[u8]) -> Option<(String, String)> {
     let (src, src_realm) = r.principal_realm().ok()?;
     let (dst, dst_realm) = r.principal_realm().ok()?;
     Some((
-        src.unparse_with_realm(&src_realm),
-        dst.unparse_with_realm(&dst_realm),
+        src.unparse_with_realm_lossy(&src_realm),
+        dst.unparse_with_realm_lossy(&dst_realm),
     ))
 }
 
@@ -238,6 +239,7 @@ pub(super) fn kadm5_log_lines(
     args: &[u8],
     who: &Caller<'_>,
     reply: &[u8],
+    prefetch: bool,
 ) -> Vec<String> {
     let code = reply
         .get(4..8)
@@ -257,7 +259,7 @@ pub(super) fn kadm5_log_lines(
     let Some(op) = kadm5_op_name(proc) else {
         return Vec::new();
     };
-    if fetches_principal_first(proc) && code == KADM5_UNK_PRINC {
+    if prefetch && proc != RENAME_PRINCIPAL {
         return Vec::new();
     }
     let denied = code == auth_code_for(proc);
@@ -270,13 +272,12 @@ pub(super) fn kadm5_log_lines(
         let (src, dst) = rename_targets(args).unwrap_or_default();
         let (src, dst) = (trunc_name(&src), trunc_name(&dst));
         // MIT: `rename_principal_2_svc` (kadmin/server/server_stubs.c:700-723)
-        // A denial, the source's lockdown and a missing source all log Unauthorized.
         let refused = denied || code == KADM5_AUTH_DELETE;
         let mut lines = Vec::new();
         if refused {
             lines.push(format!("Unauthorized request: {op}, {src}, {tail}"));
         }
-        if refused || code == KADM5_UNK_PRINC {
+        if refused || prefetch {
             lines.push(format!(
                 "Unauthorized request: {op}, {src} to {dst}, {tail}"
             ));
@@ -295,13 +296,14 @@ pub(super) fn kadm5_log_lines(
 
 pub(super) fn kadm5_service_name(ctx: &GssContext) -> String {
     match (&ctx.acceptor, &ctx.ticket_realm) {
-        (Some(a), Some(r)) => a.unparse_with_realm(r),
+        (Some(a), Some(r)) => a.unparse_with_realm_lossy(r),
         _ => String::new(),
     }
 }
 
 pub(super) fn kadm5_log_op(proc: u32, args: &[u8], who: &Caller<'_>, reply: &[u8]) {
-    for line in kadm5_log_lines(proc, args, who, reply) {
+    let prefetch = PREFETCH_FAILED.replace(false);
+    for line in kadm5_log_lines(proc, args, who, reply, prefetch) {
         emit(&line);
     }
 }

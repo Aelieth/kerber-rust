@@ -20,7 +20,7 @@ _ANCHOR_EXT = r"(?:c|hin|h|et|x|y)"
 # The one anchor form (R1): MIT `symbol` (`path.ext:a-b`): guarantee. The
 # symbol is a C function, or the type (`struct x`, `union x`, `enum x`),
 # macro, table or error-table entry a non-function anchor names; the truth
-# check (ledger-mit job) proves that the range lies inside that definition.
+# check (anchors job) proves that the range lies inside that definition.
 _ANCHOR_HEAD = re.compile(
     r"MIT `((?:(?:struct|union|enum) )?[A-Za-z_][A-Za-z0-9_]*)` "
     r"\(`([A-Za-z0-9_./+-]+\." + _ANCHOR_EXT + r"):(\d+)-(\d+)`\)"
@@ -613,7 +613,7 @@ def check_mit_anchor_truth(
     *,
     allow: int | None = None,
 ) -> None:
-    """Every anchor's range lies inside the named MIT definition (ledger-mit job).
+    """Every anchor's range lies inside the named MIT definition (anchors job).
 
     Lists every violation. Advisory while `allow` equals the live count.
     """
@@ -622,7 +622,7 @@ def check_mit_anchor_truth(
         if not env:
             print(
                 "ci-policy: KERBER_MIT_SRC unset — skipping check_mit_anchor_truth "
-                "(ledger-mit job sets it)",
+                "(anchors job sets it)",
                 file=sys.stderr,
             )
             return

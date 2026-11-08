@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
 # harness/field/run.sh: one field run on the lab (harness/field/README.md, "Field runs" and "Scenarios").
 #
-#   run.sh --profile nightly|weekly|kill-loop --ref <git ref> [--only <scenario,...>] [--leg mit|rust|both]
+#   run.sh --profile nightly|weekly|kill-loop|load|load-long|lt|ds --ref <git ref> [--only <scenario,...>] [--leg mit|rust|both]
 #   run.sh ad-trust --ref <git ref> [--leg mit|rust|both]   (upgrade, then the real AD DC: scenarios/ad-trust.sh)
+#   run.sh --grade-logs <run dir>   (the log grader over a finished run: lib/log-grade.py; a weekly's postflight)
 #
 # The tree under test is `git archive <ref>` of the repository run.sh lives in (read-only, GIT_OPTIONAL_LOCKS=0;
 # FIELD_REPO in field.env names another), never a working tree. Each selected scenario's leg drives the real
 # products on the lab and leaves its record in ~/kerber-lab/runs/<UTC>-<sha12>-<profile>/<scenario>/<leg>/.
 # --leg both runs one leg at a time, MIT's first (the oracle), each against the kdc its upgrade leg left.
 #
-# Preflight: ~/kerber-lab/state/lab.lock taken (when it is held, run.sh exits 1 before it makes a run
-# directory); every snapshot baseline.env names exists; `lab.sh check --lab-only` of the VMs the selected
-# scenarios use (ssh, DNS, time sync: no internet, LAN or AD DC probe); the sha256 of /etc/krb5.conf, and from
-# a distrobox of the host's own. Postflight, also after a stop or an interruption: those sums unchanged, nothing
-# new in the host's /tmp owned by the user (/tmp/claude-<uid>, /tmp/grok-file-lock-<uid> and the desktop's
+# Preflight: ~/kerber-lab/state/lab.lock taken (when it is held, run.sh exits 1 before it makes a run directory);
+# every snapshot baseline.env names exists; no `lab.sh takeover` left over; `lab.sh check --lab-only` of the VMs the
+# selected scenarios use (ssh, DNS, time sync: no internet, LAN or AD DC probe); the sha256 of /etc/krb5.conf, and
+# from a distrobox of the host's own. Postflight, also after a stop or an interruption: those sums unchanged,
+# nothing new in the host's /tmp owned by the user (/tmp/claude-<uid>, /tmp/grok-file-lock-<uid> and the desktop's
 # top-level Chromium and GIMP scratch names left out, counted), the secret scan of the whole run with its planted
 # control first.
 # Any failure fails the run. A scenario that did not run is NOT-RUN, never green. Exit 0 only when every
@@ -33,12 +34,18 @@ KEEP=30
 # The scenarios of each profile, in order; upgrade is first: it puts the leg's KDC on kdc (MIT's baseline, or the ref
 # under test), and the other scenarios use the kdc it left.
 declare -A PROFILES=([nightly]="upgrade kadmind-start services nfs-client sssd-login klldap-swap" [weekly]="upgrade kadmind-start secrets-gcore services nfs-client sssd-login klldap-swap kdc-profile kdb-writes ticket-flags client-tools pkinit kpasswd rollback replica install"
-    [ad-trust]="upgrade ad-trust" [kill-loop]="upgrade kill-loop")
+    [ad-trust]="upgrade ad-trust" [kill-loop]="upgrade kill-loop" [load]="upgrade load" [load-long]="upgrade load"
+    [lt]="upgrade restart kdc-hostile otp-default rd-safe"
+    [ds]="upgrade kadmind-start kdc-profile kdb-writes pkinit kpasswd replica install")
 
 die() { printf 'run.sh: %s\n' "$*" >&2; exit 1; }
-usage() { sed -n '4,5p' "${BASH_SOURCE[0]}" | sed 's/^# *//'; }
+usage() { sed -n '4,6p' "${BASH_SOURCE[0]}" | sed 's/^# *//'; }
 PROFILE='' REF='' ONLY='' LEG=rust
 # The AD DC scenario changes the DC (and undoes it), so it runs only in this one form.
+if [ "${1:-}" = --grade-logs ]; then
+    [ $# -eq 2 ] || die "--grade-logs needs one run dir"
+    exec python3 -B "$HERE/lib/log-grade.py" "$2"
+fi
 if [ "${1:-}" = ad-trust ]; then PROFILE=ad-trust; shift; fi
 while [ $# -gt 0 ]; do
     case $1 in
@@ -75,6 +82,9 @@ fi
 for s in "${SEL[@]}"; do [ -f "$HERE/scenarios/$s.sh" ] || die "missing scenarios/$s.sh"; done
 
 FIELD_ENV=$LAB_HOME/field.env
+# FIELD_ROLE_KDC=<vm> (DS: <vm> takes over kdc.kerber.test) comes from the environment only.
+ROLE_KDC=${FIELD_ROLE_KDC-}
+ROLE_KDC2=${FIELD_ROLE_KDC2-}
 if [ -f "$FIELD_ENV" ]; then
     [ "$(stat -c %a "$FIELD_ENV")" = 600 ] || die "$FIELD_ENV must be mode 0600"
     set -a
@@ -82,6 +92,8 @@ if [ -f "$FIELD_ENV" ]; then
     . "$FIELD_ENV"
     set +a
 fi
+if [ -n "$ROLE_KDC" ]; then export FIELD_ROLE_KDC=$ROLE_KDC; else unset FIELD_ROLE_KDC; fi
+if [ -n "$ROLE_KDC2" ]; then export FIELD_ROLE_KDC2=$ROLE_KDC2; else unset FIELD_ROLE_KDC2; fi
 SCEN_LIMIT=${FIELD_SCENARIO_TIMEOUT:-1800}
 REPO=${FIELD_REPO:-$(cd "$HERE/../.." && pwd)}
 SHA=$(GIT_OPTIONAL_LOCKS=0 git -C "$REPO" rev-parse --verify --quiet "$REF^{commit}") \
@@ -116,11 +128,67 @@ REC_DIR=$RUN/guards
 DONE=0 STOP='' SCEN='' RESULT=FAIL ALL_PASS=1 GUARDS_OK=0
 declare -a ROWS=()
 
+# kdc's logs the record keeps per scenario: the daemons' and, where [logging] json names it, ours' JSON stream.
+LEGLOGS='krb5kdc.log kadmind.log krb5kdc.log.json'
+# leglogs <record dir> <start>: kdc's daemon logs and its Kerberos units' journal since <start>, with the window and
+# kdc's UTC offset, for lib/log-grade.py. Best effort: a scenario's result never depends on it.
+leglogs() {
+    local d=$1/logs vm=${ROLE_KDC:-kdc} f o c off u
+    mkdir -p "$d"
+    if [ "$LOGSRC" = journal ]; then
+        # Each daemon's journal after the mark (or whole, past a reset), by unit or syslog name, as MIT's FILE lines.
+        off=$(timeout 60 "$LAB" ssh "$vm" -- 'date +%z' 2> /dev/null < /dev/null)
+        c=$(sed -n 's/^cursor \(s=[^ ]*\)$/\1/p' "$d/offsets" 2> /dev/null)
+        for f in krb5kdc:"$UNIT_KDC" kadmind:"$UNIT_ADMIN"; do
+            u=${f#*:}
+            u="_SYSTEMD_UNIT=$u.service + SYSLOG_IDENTIFIER=${f%%:*}"
+            timeout 120 "$LAB" ssh "$vm" -- "sudo journalctl -q $u --after-cursor $(printf '%q' "${c:-none}") \
+                -o json --no-pager 2> /dev/null || sudo journalctl -q $u -o json --no-pager" 2>> "$d/offsets" \
+                < /dev/null | python3 -B "$HERE/lib/journal-lines.py" --utc-offset "${off:-+0000}" \
+                > "$d/${f%%:*}.log" 2>> "$d/offsets"
+        done
+    fi
+    for f in $LEGLOGS; do
+        [ "$LOGSRC" = file ] || break
+        o=$(sed -n "s/^$f \([0-9]*:[0-9]*:[0-9]*:[0-9a-f-]*\)$/\1/p" "$d/offsets" 2> /dev/null)
+        # From the mark on, through a rotated file (lib/log-since.sh); a reset kdc's log, or no mark: whole.
+        timeout 120 "$LAB" ssh "$vm" -- "g=\$(mktemp); cat > \"\$g\"; sudo sh \"\$g\" since ${o:-0:0:0:-} /var/log/$f n \
+            whole; rm -f \"\$g\"" < "$HERE/lib/log-since.sh" > "$d/$f" 2>> "$d/offsets" || true
+    done
+    # The leg's [logging] json relation, kdc.conf's then krb5.conf's (none: not configured), for log-grade.py.
+    timeout 60 "$LAB" ssh "$vm" -- "sudo cat $KDCDIR/kdc.conf /etc/krb5.conf 2> /dev/null | grep -E '^[[:space:]]*json[[:space:]]*='" \
+        > "$d/json.conf" 2> /dev/null < /dev/null || true
+    timeout 120 "$LAB" ssh "$vm" -- "sudo journalctl -u 'krb5*' -u 'kadmin*' --since @$2 -o short-iso-precise --no-pager" \
+        > "$d/units.txt" 2> /dev/null < /dev/null || true
+    printf '%s %s %s\n' "$2" "$(date +%s)" "$(timeout 60 "$LAB" ssh "$vm" -- 'date +%z' 2> /dev/null < /dev/null)" > "$d/window"
+}
+
+# logmark <record dir>: each LEGLOGS log's mark (lib/log-since.sh), before the scenario.
+logmark() {
+    mkdir -p "$1/logs"
+    if [ "$LOGSRC" = journal ]; then
+        timeout 60 "$LAB" ssh "${ROLE_KDC:-kdc}" -- "sudo journalctl -n 1 -q -o cat --show-cursor | \
+            sed -n 's/^-- cursor: /cursor /p'" > "$1/logs/offsets" 2> /dev/null < /dev/null || true
+        return 0
+    fi
+    timeout 60 "$LAB" ssh "${ROLE_KDC:-kdc}" -- "g=\$(mktemp); cat > \"\$g\"; for f in $LEGLOGS; do \
+        echo \"\$f \$(sudo sh \"\$g\" mark /var/log/\$f)\"; done; rm -f \"\$g\"" < "$HERE/lib/log-since.sh" \
+        > "$1/logs/offsets" 2> /dev/null || true
+}
+
+# takeovers_left <row>: no `lab.sh takeover` state file is left.
+takeovers_left() {
+    check "$1" '^takeovers left: 0$' host "printf 'takeovers left: %s\n' \"\$(ls \
+        $(printf '%q' "$LAB_HOME")/state/takeover* 2> /dev/null | wc -l)\""
+}
 # postflight: the guards that hold whatever happened before them.
 postflight() {
     local mark=$RUN/tmp/.start left='' grok_excl claude_excl desktop_left b
     local -a prune names desktop_excl
     section "postflight"
+    if [ -n "$ROLE_KDC" ]; then check post.release rc host "$LABQ release"; fi
+    if [ -n "$ROLE_KDC2" ]; then check post.release.kdc2 rc host "$LABQ release kdc2"; fi
+    if [ -n "$ROLE_KDC$ROLE_KDC2" ]; then takeovers_left post.takeover.left; fi
     krb5_sums > "$RUN/guards/krb5.conf.end"
     sides post.krb5.conf start "$RUN/guards/krb5.conf.start" end "$RUN/guards/krb5.conf.end" \
         && check post.krb5.conf rc host "diff $(printf '%q' "$RUN/guards/krb5.conf.start") $(printf '%q' "$RUN/guards/krb5.conf.end") && echo unchanged: && cat $(printf '%q' "$RUN/guards/krb5.conf.end")"
@@ -143,6 +211,9 @@ postflight() {
     find /tmp -xdev "${prune[@]}" -user "$(id -un)" -newer "$mark" -print > "$RUN/guards/host-tmp.txt" 2>/dev/null || true
     printf 'new in /tmp: %s%s\n' "$(grep -c . "$RUN/guards/host-tmp.txt" || true)" "$left" >> "$RUN/guards/host-tmp.txt"
     check post.host.tmp '^new in /tmp: 0(;|$)' host "cat $(printf '%q' "$RUN/guards/host-tmp.txt")"
+    if [ "$PROFILE" = weekly ] && [ "${#LEGS[@]}" = 2 ]; then
+        check post.log.grade '^log-grade: PASS$' host "python3 -B $(printf '%q' "$FIELD_LIB/log-grade.py") $(printf '%q' "$RUN")"
+    fi
     check post.secret.scan rc host "python3 -B $(printf '%q' "$FIELD_LIB/scan-secrets.py") $(printf '%q' "$RUN")"
     GUARDS_OK=1
     if awk -F'\t' '$2 == "FAIL"' "$CHECKS" | grep -q .; then GUARDS_OK=0; fi
@@ -180,7 +251,7 @@ wrapup() {
         if [ "$i" -lt $(( ${#ids[@]} - KEEP )) ] && [ "${results[$i]}" = PASS ]; then drop+=("${ids[$i]}"); fi
     done
     for id in "${drop[@]}"; do
-        [[ $id =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}-(nightly|weekly|ad-trust|kill-loop)$ ]] || continue
+        [[ $id =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}-(nightly|weekly|ad-trust|kill-loop|load|load-long|lt|ds)$ ]] || continue
         rm -rf -- "${RUNS:?}/$id"
         awk -F'\t' -v id="$id" '$1 != id' "$RUNS/index.tsv" > "$RUNS/index.tsv.new" && mv "$RUNS/index.tsv.new" "$RUNS/index.tsv"
     done
@@ -239,6 +310,8 @@ mapfile -t SNAPVARS < <(compgen -v | grep -E '^(RUST|MIT)_SNAPSHOT_' || true)
 for var in "${SNAPVARS[@]}"; do
     vm=${var#*_SNAPSHOT_}
     vm=${vm,,}
+    if [ "$vm" = kdc ] && [ -n "$ROLE_KDC" ]; then vm=$ROLE_KDC; fi
+    if [ "$vm" = kdc2 ] && [ -n "$ROLE_KDC2" ]; then vm=$ROLE_KDC2; fi
     snap=${!var}
     if awk -v vm="$vm" -v s="$snap" '$1 == vm { n = split($NF, a, ","); for (i = 1; i <= n; i++) if (a[i] == s) f = 1 }
             END { exit !f }' "$STATE/status"; then
@@ -248,6 +321,23 @@ for var in "${SNAPVARS[@]}"; do
     fi
 done
 [ "${#SNAPVARS[@]}" -gt 0 ] || _checkrow pre.snapshot FAIL present 1 "baseline.env names no snapshot"
+# DS: install resets the role VM to KDC_BASE_SNAPSHOT.
+if [ -n "$ROLE_KDC" ]; then
+    if awk -v vm="$ROLE_KDC" -v s="$KDC_BASE_SNAPSHOT" '$1 == vm { n = split($NF, a, ","); for (i = 1; i <= n; i++)
+            if (a[i] == s) f = 1 } END { exit !f }' "$STATE/status"; then
+        _checkrow pre.snapshot.KDC_BASE_SNAPSHOT PASS present 0 "$ROLE_KDC has snapshot $KDC_BASE_SNAPSHOT"
+    else
+        _checkrow pre.snapshot.KDC_BASE_SNAPSHOT FAIL present 1 "$ROLE_KDC has no snapshot $KDC_BASE_SNAPSHOT"
+    fi
+fi
+# A run killed past its postflight leaves a role's name on a distro VM.
+takeovers_left pre.takeover.left
+if [ -n "$ROLE_KDC2" ]; then
+    check pre.takeover.kdc2 rc host "$LABQ takeover $(printf '%q' "$ROLE_KDC2") kdc2"
+fi
+if [ -n "$ROLE_KDC" ]; then
+    check pre.takeover rc host "$LABQ takeover $(printf '%q' "$ROLE_KDC")"
+fi
 VMS=()
 for s in "${SEL[@]}"; do
     read -r -a vms <<< "$(sed -n 's/^# vms: //p' "$HERE/scenarios/$s.sh")"
@@ -296,6 +386,7 @@ for leg in "${LEGS[@]}"; do
         declared=$(sed -n 's/^# field-limit scenario=\([0-9][0-9]*\)$/\1/p' "$HERE/scenarios/$sc.sh")
         if [ -n "$declared" ]; then this_limit=$declared; fi
         say "== $sc --leg $leg"
+        logmark "$dir"
         t=$(date +%s)
         rc=0
         REC_DIR=$dir TMPDIR=$RUN/tmp/$sc-$leg FIELD_RUN=$RUN FIELD_TREE_TAR=$RUN/tmp/tree.tar FIELD_SHA=$SHA \
@@ -309,6 +400,7 @@ for leg in "${LEGS[@]}"; do
             kill -0 "$SCEN" 2>/dev/null || break
         done
         SCEN=''
+        leglogs "$dir" "$t"
         res=$(cut -d' ' -f1 "$dir/result" 2>/dev/null || true)
         npass=0 nfail=0 ninfo=0
         if [ -f "$dir/checks.tsv" ]; then read -r npass nfail ninfo < <(_lastcounts "$dir/checks.tsv"); fi

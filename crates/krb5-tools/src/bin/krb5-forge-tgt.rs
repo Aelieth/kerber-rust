@@ -264,7 +264,7 @@ fn main() -> ExitCode {
         if cred.is_config() || cred.is_removed() {
             continue;
         }
-        if cred.server.1.components_joined() != tgt_sname {
+        if cred.server.1.components_joined_lossy() != tgt_sname {
             continue;
         }
         let mut ticket: Ticket = match decode(&cred.ticket) {
@@ -406,7 +406,7 @@ fn claim_realm_keep_cipher(
         if cred.is_config() || cred.is_removed() {
             continue;
         }
-        if cred.server.1.components_joined() != tgt_sname {
+        if cred.server.1.components_joined_lossy() != tgt_sname {
             continue;
         }
         let mut ticket: Ticket = match decode(&cred.ticket) {
@@ -466,7 +466,7 @@ fn alias_tgt(cc_path: &str, out_path: &str, tgt_sname: &str, alias: &str) -> Exi
         if cred.is_config() || cred.is_removed() {
             continue;
         }
-        if cred.server.1.components_joined() == tgt_sname {
+        if cred.server.1.components_joined_lossy() == tgt_sname {
             let mut c = cred.clone();
             c.server = (arealm_ks.clone(), aname.clone());
             kept = Some(c);

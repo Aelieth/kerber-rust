@@ -108,8 +108,8 @@ pub use kcm::{
     kcm_store_keep_default, kcm_switch,
 };
 pub use keytab::{
-    Keytab, KeytabEntry, KeytabFailure, KeytabSlot, add_to_keytab_file, keytab_init_creds_keys,
-    read_keytab_file, sort_etypes_keytab_first,
+    InitCredsKeys, Keytab, KeytabEntry, KeytabFailure, KeytabSlot, add_to_keytab_file,
+    keytab_init_creds_client, keytab_init_creds_keys, read_keytab_file, sort_etypes_keytab_first,
 };
 #[cfg(target_os = "linux")]
 pub use krb5_log::selabel::create_labeled;

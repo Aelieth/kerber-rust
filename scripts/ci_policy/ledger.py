@@ -79,6 +79,13 @@ DIFFSEND_CASES = frozenset(
         "tgs-forwarded-addresses",
         "u2u-2nd-ticket-foreign-realm",
         "s4u2self-renew-options",
+    "tgs-order-s4u2self-cksum-renew",
+    "tgs-order-proxy-no-stkt-renew",
+    "tgs-order-u2u-stkt-unknown-bit",
+    "tgs-order-s4u2self-bad-stkt",
+    "tgs-log-referral",
+    "tgs-log-alias",
+    "tgs-log-fast-inner",
         "pa-s4u-x509-user-truncated",
         "s4u2self-krbtgt-other",
         "tgs-locked-pac-mismatch",
@@ -969,7 +976,7 @@ def check_ledger_mit_cites(
             # R2-T8: don't skip the MIT-anchor verification silently.
             print(
                 "ci-policy: KERBER_MIT_SRC unset — skipping MIT-anchor "
-                "verification (ledger-mit job sets it)",
+                "verification (anchors job sets it)",
                 file=sys.stderr,
             )
             return

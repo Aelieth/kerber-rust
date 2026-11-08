@@ -396,7 +396,7 @@ impl KdcPreauth for EncTsMod {
         // MIT: `filter_preauth_error` (kdc_preauth.c:1092-1133)
         // A code off the pass-through list becomes 24.
         let policy = store.policy();
-        let top = client.keys.iter().map(|k| k.kvno).max();
+        let top = client.top_kvno();
         let Some(pa_et) = krb5_crypto::EncryptionType::known(enc.etype)
             .ok()
             .filter(|et| policy.etype_permitted(*et))
@@ -850,25 +850,6 @@ fn one_shot_verify(req: OtpVerifyRequest, verifier: Arc<dyn OtpVerifier>) -> Rec
             let _ = tx.send(verdict);
         });
     rx
-}
-
-static OTP_LAST_REFUSAL_LOG: Mutex<Option<Instant>> = Mutex::new(None);
-
-pub(crate) fn otp_log_refusal(msg: &str) {
-    let now = Instant::now();
-    let mut last = OTP_LAST_REFUSAL_LOG
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let fire = match *last {
-        Some(t) => now.duration_since(t) >= Duration::from_secs(1),
-        None => true,
-    };
-    if fire {
-        *last = Some(now);
-        drop(last);
-        klog::syslog(Severity::Err, msg);
-        tracing::error!(target: "kdc.otp", "{}", msg);
-    }
 }
 
 pub(crate) fn sanitize_otp_error(text: &str) -> String {

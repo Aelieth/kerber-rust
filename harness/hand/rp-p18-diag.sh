@@ -1,0 +1,66 @@
+#!/bin/bash
+# One cell: N=10, iprop on, 5 rounds, MIT first. Not a regrade. Does not reset klldap.
+# Run after rp-p18-go.sh. lib/p18-stage.sh stages what is absent; a new seed is a new P18.TEST realm.
+set -u
+PHASEC_SHA=${1:?phasec sha}
+HDIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+. "$HDIR/lib/env.sh"
+require_env HAND_WT HAND_REC
+WT=$HAND_WT
+REC=$HAND_REC/$PHASEC_SHA/p18-diag
+bash "$HDIR/lib/ship-guard.sh" "$PHASEC_SHA" "$REC" || exit $?
+exec 9>&-
+LAB=$WT/harness/field/lab.sh
+lab() { bash "$LAB" "$@"; }
+require_files "$LAB" "$HDIR/lib/p18-stage.sh" "$HDIR/lib/p18-quiet.sh"
+mkdir -p "$REC"
+echo $$ > "$REC/driver.pid"
+echo "REC:$REC"
+echo "COMMIT:$PHASEC_SHA"
+echo "TREE:$(git -C "$WT" rev-parse 'HEAD^{tree}')"
+echo "DIAG_START $(TZ=America/Chicago date '+%H:%M:%S')"
+bash "$HDIR/lib/p18-stage.sh" "$WT" || exit 2
+lab ssh klldap -- "sudo -n test -x /opt/p18-${PHASEC_SHA:0:12}/sbin/krb5kdc" \
+    || { echo "P18_STOP missing /opt/p18-${PHASEC_SHA:0:12}: run rp-p18-go.sh first"; exit 2; }
+bash "$HDIR/lib/p18-quiet.sh" "$WT"
+lab ssh klldap -- "sudo -n PREFIX=/opt/p18-${PHASEC_SHA:0:12} bash -s" << 'EOS'
+set -u
+B=/srv/p18
+on() { cp -a "$B/kdc-iprop.conf" "$B/kdc.conf"; }
+run() {
+    local leg="$1" n="$2" tag="$3" kenv="$4" trace="$5" script="$6"
+    echo "BEGIN $tag"
+    if ! bash "/var/tmp/p18/$script" "$leg" "$n" "$tag" 30 "$kenv" "$trace"; then
+        echo "SESSION_RC:1 $tag"
+        exit 2
+    fi
+    echo "SESSION_RC:0 $tag"
+}
+iprop_on() {
+    on
+    if ! cmp -s "$B/kdc.conf" "$B/kdc-iprop.conf"; then
+        echo "IPROP_CONF_DIFF"
+        exit 3
+    fi
+    echo "IPROP_CONF:match $(sha256sum "$B/kdc.conf" | awk '{print $1}')"
+}
+for i in 1 2 3 4 5; do
+  for leg in "mit:/usr/sbin" "ours:$PREFIX/sbin"; do
+    name=${leg%%:*}
+    iprop_on
+    run "$leg" 10 "p872d-N10-${name}-iprop-io-${i}" - io session.sh
+    iprop_on
+    run "$leg" 10 "p872d-N10-${name}-iprop-${i}" - none session.sh
+  done
+  echo "ROUND_DONE $i"
+done
+echo "DIAG_DONE"
+EOS
+echo "DIAG_RC:$?"
+echo "==== pull ===="
+lab ssh klldap -- "sudo -n bash -s" << 'EOS' > "$REC/out.tar"
+cd /srv/p18/out
+tar -cf - p872d-N10-*
+EOS
+echo "PULL_RC:$?"
+echo "DIAG_END $(TZ=America/Chicago date '+%H:%M:%S')"

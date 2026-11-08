@@ -74,7 +74,7 @@ impl PrincipalStore {
             if p.rid == 0 { RID_FIRST_USER } else { p.rid }
         });
         PacIdentity {
-            sam: name.components_joined(),
+            sam: name.components_joined_lossy(),
             realm: crealm.to_owned(),
             domain_sid: self.domain_sid.clone(),
             rid,
@@ -95,7 +95,7 @@ impl PrincipalStore {
     fn alloc_rid(&mut self, name: &PrincipalName) -> u32 {
         if name.name_type == PrincipalName::NT_PRINCIPAL
             && name
-                .components_joined()
+                .components_joined_lossy()
                 .eq_ignore_ascii_case("Administrator")
             && self.rid_owner(RID_ADMINISTRATOR).is_none()
         {

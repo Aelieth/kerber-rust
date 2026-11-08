@@ -7,6 +7,7 @@
 # --leg mit (minimal; the fuller MIT comparison is F4d's): kdc reset to the MIT baseline, the stock Fedora
 # krb5-server realm the other scenarios' MIT legs run against: its binaries as packaged, krb5kdc and kadmin active
 # and listening, the package versions recorded.
+# Every family (DS): the family's "Upgrading kerber-rust" section (DOC_UPGRADE), at kdc's address (the role VM's).
 # vms: kdc client2
 # legs: mit rust
 set -uo pipefail
@@ -22,6 +23,10 @@ esac
 . "$HERE/../baseline.env"
 # shellcheck source=../lib/leg.sh
 . "$FIELD_LIB/leg.sh"
+LN=${FIELD_LAB_NET:?FIELD_LAB_NET is not set in field.env}
+LNe=${LN//./\\.}
+KIP=$("$LAB" ip kdc)
+KIPe=${KIP//./\\.}
 T0=$(date +%s)
 SS="'( sport = :88 or sport = :464 or sport = :749 )'"
 # listencheck: kdc's listeners, the set MIT's own daemons open (its leg grades the same socket check):
@@ -29,6 +34,13 @@ SS="'( sport = :88 or sport = :464 or sport = :749 )'"
 # at 5 and RPC at 2. Port 88 is MIT's 5 on the mit leg and kerber-rust's default 128 on the rust leg.
 listencheck() {
     local b88
+    # Debian's kdc.conf adds 750 (its template), and MIT 1.21.3's TCP list is 88 alone (osconf.hin:99-100,
+    # kdc/main.c:660-665): there the legs' socket rows are recorded, MIT first, and compared.
+    if [ "$KDC_FAMILY" = deb ]; then
+        observe listen.sockets 'sockets: .*' run kdc "sudo ss -H -lntup $SS; printf 'sockets: %s\n' \"\$(sudo ss -H -lntu $SS | awk '{ print \$1, \$5 }' | LC_ALL=C sort | paste -sd' ' -)\"; printf 'backlog: %s\n' \"\$(sudo ss -H -lntu $SS | awk '\$1 == \"tcp\" { n = split(\$5, a, \":\"); print a[n] \"=\" \$4 }' | LC_ALL=C sort -u | paste -sd' ' -)\""
+        observelast listen.backlog 'backlog: .*'
+        return
+    fi
     if [ "$LEG" = rust ]; then
         b88=128
     else
@@ -45,12 +57,16 @@ if [ "$LEG" = mit ]; then
     section "upgrade --leg mit: kdc reset to $MIT_SNAPSHOT_KDC, the stock MIT realm $REALM (the oracle); the ref under test is not installed"
     resetvm kdc
     kdcis
-    check mit.active '^active active$' run kdc "systemctl is-active krb5kdc kadmin | paste -sd' ' -"
+    check mit.active '^active active$' run kdc "systemctl is-active $UNIT_KDC $UNIT_ADMIN | paste -sd' ' -"
     listencheck
-    check mit.logs.label "$LOGS_OK" run kdc "$LOGS"
-    observe obs.mit.packages 'krb5-server-[^ ]+' run kdc "rpm -q krb5-server krb5-libs krb5-workstation | paste -sd' ' -; uname -r"
+    if [ "$MAC" = selinux ]; then check mit.logs.label "$LOGS_OK" run kdc "$LOGS"; fi
+    if [ "$KDC_FAMILY" = deb ]; then
+        observe obs.mit.packages "$SERVER_PKG-[^ ]+" run kdc "for p in $MIT_SERVER_PKGS $MIT_CLIENT_PKG; do $PKG_QUERY \$p; done | paste -sd' ' -; uname -r"
+    else
+        observe obs.mit.packages 'krb5-server-[^ ]+' run kdc "rpm -q krb5-server krb5-libs krb5-workstation | paste -sd' ' -; uname -r"
+    fi
     MIN=$(( ($(date +%s) - T0) / 60 + 2 ))
-    host "COLLECT_MINUTES=$MIN $LABQ collect kdc $(printf '%q' "$REC_DIR/collect") /etc/krb5.conf /var/kerberos/krb5kdc/kdc.conf /var/kerberos/krb5kdc/kadm5.acl"
+    host "COLLECT_MINUTES=$MIN $LABQ collect kdc $(printf '%q' "$REC_DIR/collect") /etc/krb5.conf $KDCDIR/kdc.conf $KDCDIR/kadm5.acl"
     if [ -f "$REC_DIR/collect/kdc/journal.txt" ]; then _redact < "$REC_DIR/collect/kdc/journal.txt" > "$STATE/j" && mv "$STATE/j" "$REC_DIR/collect/kdc/journal.txt"; fi
     finish
     exit
@@ -117,7 +133,7 @@ check reset.kdc rc host "$LABQ reset kdc $RUST_SNAPSHOT_KDC"
 check reset.client2 rc host "$LABQ reset client2 $RUST_SNAPSHOT_CLIENT2"
 waitsync kdc
 waitsync client2
-run kdc "getenforce; systemctl is-active krb5kdc kadmin | paste -sd' ' -; sudo sha256sum /usr/sbin/krb5kdc /usr/sbin/kadmind; sudo grep -c _listen /var/kerberos/krb5kdc/kdc.conf; ls ~"
+run kdc "$([ "$MAC" != selinux ] || echo 'getenforce; ')systemctl is-active $UNIT_KDC $UNIT_ADMIN | paste -sd' ' -; sudo sha256sum /usr/sbin/krb5kdc /usr/sbin/kadmind; sudo grep -c _listen $KDCDIR/kdc.conf; ls ~"
 check realm.before.listprincs "^alice@$R\$" run kdc "sudo kadmin.local -q listprincs"
 cp "$LAST_OUT" "$STATE/listprincs.before"
 check realm.before.alice "^Principal: alice@$R\$" run kdc "sudo kadmin.local -q 'getprinc alice'"
@@ -133,10 +149,10 @@ docscript build "$STATE/install.md" '## Build' 1 --drop '^git clone ' --drop '^c
 docrun build
 
 section "4. Upgrading kerber-rust: block 1, the listen-entry edit the doc asks for, block 2"
-check doc.upgrade.blocks 'line:2' host "python3 -B $(printf '%q' "$DOCB") count $(printf '%q' "$STATE/install.md") '## Upgrading kerber-rust'"
-docscript upgrade-1 "$STATE/install.md" '## Upgrading kerber-rust' 1 --set "REALM=$R" --set PREFIX=/usr --set OLD= \
+check doc.upgrade.blocks 'line:2' host "python3 -B $(printf '%q' "$DOCB") count $(printf '%q' "$STATE/install.md") $(printf '%q' "$DOC_UPGRADE")"
+docscript upgrade-1 "$STATE/install.md" "$DOC_UPGRADE" 1 --set "REALM=$R" --set PREFIX=/usr --set OLD= \
     --session "$CARGO_ENV" --session "cd ~/$CO"
-docscript upgrade-2 "$STATE/install.md" '## Upgrading kerber-rust' 2 \
+docscript upgrade-2 "$STATE/install.md" "$DOC_UPGRADE" 2 \
     --session "$CARGO_ENV" --session "cd ~/$CO" --session "REALM=$R PREFIX=/usr OLD="
 # ausearch -ts reads local time: the window start is kdc's own clock in its local time (kdc runs UTC).
 WSTART=$(limited "$LAB" ssh kdc -- 'date "+%m/%d/%Y %H:%M:%S"' < /dev/null)
@@ -146,7 +162,7 @@ docrun upgrade-1 '^sudo grep .*_listen'
 li=$(awk -F'\t' '$4 ~ /^sudo grep .*_listen/ { print $1; exit }' "$STATE/upgrade-1.results")
 mapfile -t EDIT < <(python3 -B "$DOCB" output "$STATE/upgrade-1.out" "${li:-0}" | all6 | sort -rn)
 if [ "${#EDIT[@]}" -gt 0 ]; then
-    run kdc "sudo sed -i $(printf -- '-e %sd ' "${EDIT[@]}")/var/kerberos/krb5kdc/kdc.conf; echo \"sed: rc=\$?\"; sudo grep -nE $LISTEN /var/kerberos/krb5kdc/kdc.conf; true"
+    run kdc "sudo sed -i $(printf -- '-e %sd ' "${EDIT[@]}")$KDCDIR/kdc.conf; echo \"sed: rc=\$?\"; sudo grep -nE $LISTEN $KDCDIR/kdc.conf; true"
     left=$(all6 "$LAST_OUT" | wc -l)
     res=FAIL
     if grep -qx 'sed: rc=0' "$LAST_OUT" && [ "$left" = 0 ]; then res=PASS; fi
@@ -163,19 +179,21 @@ check install.programs '^programs: [1-9][0-9]* in the manifest, each identical t
 check install.manifest '^manifest: [1-9][0-9]* files as installed$' \
     run kdc "sudo sha256sum -c /usr/share/kerber-rust/install-manifest && echo \"manifest: \$(wc -l < /usr/share/kerber-rust/install-manifest) files as installed\""
 listencheck
-check install.logs.label "$LOGS_OK" run kdc "$LOGS"
+[ "$MAC" != selinux ] || check install.logs.label "$LOGS_OK" run kdc "$LOGS"
 kdcsince up 'setting up network|V6ONLY|set up [0-9]+ sockets|commencing operation|starting|Loaded|\((Error|error|err|warning)\)'
-checklast log.kdc.sockets 'krb5kdc\[[0-9]+\]\(info\): set up 4 sockets$'
+checklast log.kdc.sockets "krb5kdc\\[[0-9]+\\]\\(info\\): set up $KDC_SOCKETS sockets\$"
 checklast log.kdc.commencing 'krb5kdc\[[0-9]+\]\(info\): commencing operation$'
 checklast log.kadmind.sockets 'kadmind\[[0-9]+\]\(info\): set up 6 sockets$'
 checklast log.kadmind.starting 'kadmind\[[0-9]+\]\(info\): starting$'
 observelast obs.log.loaded '\(info\): Loaded.*'
 AVC="getenforce; d=\$(sudo ausearch --input-logs -m AVC,USER_AVC,SELINUX_ERR -ts $WSTART 2>&1); r=\$?; [ \"\$r\" = 1 ] || printf '%s\n' \"\$d\"; c=\$(sudo ausearch --input-logs -m USER_CMD -ts $WSTART 2>/dev/null | grep -c '^type=USER_CMD'); printf 'denials: %s (ausearch rc=%s); USER_CMD control: %s records\n' \"\$(printf '%s\n' \"\$d\" | tail -n 1)\" \"\$r\" \"\$c\""
 AVC_OK='^denials: <no matches> \(ausearch rc=1\); USER_CMD control: [1-9][0-9]* records$'
-check selinux.avc "$AVC_OK" run kdc "$AVC; ps -eZ | grep -E 'krb5kdc|kadmind'"
-checklast selinux.enforcing '^Enforcing$'
-checklast selinux.krb5kdc_t ':krb5kdc_t:s0 +[0-9]+ .* krb5kdc$'
-checklast selinux.kadmind_t ':kadmind_t:s0 +[0-9]+ .* kadmind$'
+if [ "$MAC" = selinux ]; then
+    check selinux.avc "$AVC_OK" run kdc "$AVC; ps -eZ | grep -E 'krb5kdc|kadmind'"
+    checklast selinux.enforcing '^Enforcing$'
+    checklast selinux.krb5kdc_t ':krb5kdc_t:s0 +[0-9]+ .* krb5kdc$'
+    checklast selinux.kadmind_t ':kadmind_t:s0 +[0-9]+ .* kadmind$'
+fi
 check realm.after.listprincs "^alice@$R\$" run kdc "sudo kadmin.local -q listprincs"
 cp "$LAST_OUT" "$STATE/listprincs.after"
 check realm.after.alice "^Principal: alice@$R\$" run kdc "sudo kadmin.local -q 'getprinc alice'"
@@ -187,7 +205,7 @@ sides realm.alice.same before "$STATE/alice.before" after "$STATE/alice.after" \
 check strings.control rc runin kdc "lib/strings-check.sh" "sh -s -- --control" < "$FIELD_LIB/strings-check.sh"
 check strings.manifest '^programs in /usr/share/kerber-rust/install-manifest: [1-9][0-9]*, all [1-9][0-9]* checked$' \
     runin kdc "lib/strings-check.sh" "sh -s -- --manifest /usr/share/kerber-rust/install-manifest" < "$FIELD_LIB/strings-check.sh"
-RSS="printf 'krb5kdc %s KiB, kadmind %s KiB\n' \"\$(ps -o rss= -C krb5kdc | head -n 1 | tr -d ' ')\" \"\$(ps -o rss= -C kadmind | head -n 1 | tr -d ' ')\"; systemctl show -p MemoryCurrent krb5kdc kadmin"
+RSS="printf 'krb5kdc %s KiB, kadmind %s KiB\n' \"\$(ps -o rss= -C krb5kdc | head -n 1 | tr -d ' ')\" \"\$(ps -o rss= -C kadmind | head -n 1 | tr -d ' ')\"; systemctl show -p MemoryCurrent $UNIT_KDC $UNIT_ADMIN"
 observe obs.rss.start 'krb5kdc [0-9]+ KiB, kadmind [0-9]+ KiB' run kdc "$RSS"
 
 section "6. MIT clients on client2 (IPv4): kinit, kvno and remote kadmin over UDP, then over TCP"
@@ -199,17 +217,17 @@ kdcmark clients
 for p in udp:dgram tcp:stream; do
     pass=${p%%:*} tr=${p#*:} cfg=$U
     if [ "$pass" = tcp ]; then cfg=$T; fi
-    check "client2.$pass.kinit" "^answers: $tr 192\.168\.177\.10:88\$" runin client2 "alice's password ($ALICE)" "$cfg ~/field/ktrace.sh $pass-kinit kinit alice && klist -f" < <(once "$ALICE")
+    check "client2.$pass.kinit" "^answers: $tr $KIPe:88\$" runin client2 "alice's password ($ALICE)" "$cfg ~/field/ktrace.sh $pass-kinit kinit alice && klist -f" < <(once "$ALICE")
     if [ "$pass" = udp ]; then
         observelast obs.as.preauth 'Processing preauth types: .*'
         observelast obs.as.rep.bytes 'Received answer \([0-9]+ bytes\)' 2
     fi
-    check "client2.$pass.kvno" "^answers: $tr 192\.168\.177\.10:88\$" run client2 "$cfg ~/field/ktrace.sh $pass-kvno kvno host/client2.kerber.test"
+    check "client2.$pass.kvno" "^answers: $tr $KIPe:88\$" run client2 "$cfg ~/field/ktrace.sh $pass-kvno kvno host/client2.kerber.test"
     if [ "$pass" = udp ]; then
         observelast obs.tgs.req.bytes 'Sending request \([0-9]+ bytes\)'
         observelast obs.tgs.rep.bytes 'Received answer \([0-9]+ bytes\)'
     fi
-    check "client2.$pass.kadmin" "^answers: $tr 192\.168\.177\.10:88\$" runin client2 "admin/admin's password ($ADMIN)" "$cfg ~/field/ktrace.sh $pass-kadmin kadmin -p admin/admin -q listprincs" < <(once "$ADMIN")
+    check "client2.$pass.kadmin" "^answers: $tr $KIPe:88\$" runin client2 "admin/admin's password ($ADMIN)" "$cfg ~/field/ktrace.sh $pass-kadmin kadmin -p admin/admin -q listprincs" < <(once "$ADMIN")
     checklast "client2.$pass.kadmin.list" "^alice@$R\$"
     if [ "$pass" = udp ]; then
         observelast obs.kadmin.aprep 'Read AP-REP, time [0-9.]+, subkey [^,]+, seqnum [0-9]+'
@@ -217,28 +235,30 @@ for p in udp:dgram tcp:stream; do
 done
 
 section "7. bob's kpasswd there over UDP 464 (kdc refuses client2's TCP 464 for that exchange) and back over TCP"
-check kpasswd.refuse.tcp rc run kdc "sudo nft add table inet field_tmp && sudo nft add chain inet field_tmp input '{ type filter hook input priority filter - 1; policy accept; }' && sudo nft add rule inet field_tmp input ip saddr 192.168.177.22 tcp dport 464 counter reject with tcp reset && sudo nft list table inet field_tmp"
-check client2.kpasswd.udp '^answers: dgram 192\.168\.177\.10:464 dgram 192\.168\.177\.10:88$' runin client2 "bob's password, then $BOBT twice" "$U ~/field/ktrace.sh udp-kpasswd kpasswd bob" < <(chpw "$BOB" "$BOBT")
+check kdc.nft '^nftables-' run kdc "$PKG_QUERY nftables"
+check kpasswd.refuse.tcp rc run kdc "sudo nft add table inet field_tmp && sudo nft add chain inet field_tmp input '{ type filter hook input priority filter - 1; policy accept; }' && sudo nft add rule inet field_tmp input ip saddr $LN.22 tcp dport 464 counter reject with tcp reset && sudo nft list table inet field_tmp"
+check client2.kpasswd.udp "^answers: dgram $KIPe:464 dgram $KIPe:88\$" runin client2 "bob's password, then $BOBT twice" "$U ~/field/ktrace.sh udp-kpasswd kpasswd bob" < <(chpw "$BOB" "$BOBT")
 checklast client2.kpasswd.udp.changed '^Password changed\.$'
 observelast obs.kpasswd.aprep 'Read AP-REP, time [0-9.]+, subkey [^,]+, seqnum [0-9]+'
 check kpasswd.refuse.removed rc run kdc "sudo nft list table inet field_tmp; sudo nft delete table inet field_tmp && sudo nft list tables"
-check client2.kpasswd.tcp '^answers: stream 192\.168\.177\.10:464 stream 192\.168\.177\.10:88$' runin client2 "$BOBT, then bob's password twice" "$T ~/field/ktrace.sh tcp-kpasswd kpasswd bob" < <(chpw "$BOBT" "$BOB")
+check client2.kpasswd.tcp "^answers: stream $KIPe:464 stream $KIPe:88\$" runin client2 "$BOBT, then bob's password twice" "$T ~/field/ktrace.sh tcp-kpasswd kpasswd bob" < <(chpw "$BOBT" "$BOB")
 checklast client2.kpasswd.tcp.changed '^Password changed\.$'
 check client2.kinit.bob rc runin client2 "bob's password ($BOB)" "export KRB5CCNAME=FILE:\$HOME/field/bob.cc; kinit bob && klist && kdestroy" < <(once "$BOB")
-kdcsince clients '192\.168\.177\.22|chpw'
-n=$(grep -c "chpw request from 192\.168\.177\.22 for bob@$R: success\$" "$LAST_OUT" || true)
+kdcsince clients "$LNe\\.22|chpw"
+n=$(grep -c "chpw request from $LNe\.22 for bob@$R: success\$" "$LAST_OUT" || true)
 res=FAIL
 if [ "$LAST_RC" = 0 ] && [ "$n" = 2 ]; then res=PASS; fi
-_checkrow log.kadmind.chpw "$res" "2 chpw success lines" "$LAST_RC" "chpw request from 192.168.177.22 for bob@$R: success, $n lines"
-checklast log.kdc.as.preauth "AS_REQ \\(2 etypes \\{$ET\\}\\) 192\\.168\\.177\\.22: NEEDED_PREAUTH: alice@$R for krbtgt/$R@$R, Additional pre-authentication required\$"
-checklast log.kdc.as.issue "AS_REQ \\(2 etypes \\{$ET\\}\\) 192\\.168\\.177\\.22: ISSUE: authtime [0-9]+, etypes \\{$E3\\}, alice@$R for krbtgt/$R@$R\$"
-checklast log.kdc.tgs.issue "TGS_REQ \\(2 etypes \\{$ET\\}\\) 192\\.168\\.177\\.22: ISSUE: authtime [0-9]+, etypes \\{$E3\\}, alice@$R for host/client2\\.kerber\\.test@$R\$"
-checklast log.kadmind.kadm5_init "Request: kadm5_init, admin/admin@$R, success, client=admin/admin@$R, service=kadmin/admin@$R, addr=192\\.168\\.177\\.22, vers=4, flavor=6\$"
+_checkrow log.kadmind.chpw "$res" "2 chpw success lines" "$LAST_RC" "chpw request from $LN.22 for bob@$R: success, $n lines"
+checklast log.kdc.as.preauth "AS_REQ \\(2 etypes \\{$ET\\}\\) $LNe\\.22: NEEDED_PREAUTH: alice@$R for krbtgt/$R@$R, Additional pre-authentication required\$"
+checklast log.kdc.as.issue "AS_REQ \\(2 etypes \\{$ET\\}\\) $LNe\\.22: ISSUE: authtime [0-9]+, etypes \\{$E3\\}, alice@$R for krbtgt/$R@$R\$"
+checklast log.kdc.tgs.issue "TGS_REQ \\(2 etypes \\{$ET\\}\\) $LNe\\.22: ISSUE: authtime [0-9]+, etypes \\{$E3\\}, alice@$R for host/client2\\.kerber\\.test@$R\$"
+checklast log.kadmind.kadm5_init "Request: kadm5_init, admin/admin@$R, success, client=admin/admin@$R, service=kadmin/admin@$R, addr=$LNe\\.22, vers=4, flavor=6\$"
 
 section "8. kdc itself: MIT kinit on ::1 over UDP and TCP, and on 127.0.0.2 (a UDP reply leaves from the request's address)"
 KC="[libdefaults]\n default_realm = $R\n"
 run kdc "printf '${KC}[realms]\n $R = {\n  kdc = [::1]\n }\n' > ~/field/v6-udp.conf; printf '$KC udp_preference_limit = 1\n[realms]\n $R = {\n  kdc = [::1]\n }\n' > ~/field/v6-tcp.conf; printf '${KC}[realms]\n $R = {\n  kdc = 127.0.0.2\n }\n' > ~/field/lo2.conf; head -n 20 ~/field/v6-udp.conf ~/field/v6-tcp.conf ~/field/lo2.conf"
-for k in 'v6-udp:dgram \[::1\]' 'v6-tcp:stream \[::1\]' 'lo2:dgram 127\.0\.0\.2'; do
+# The kdc VM's own kinit traces IPv6 as [::1] from 1.22 (os/addr.c:105), as ::1 before (1.21.3 os/trace.c:266).
+for k in 'v6-udp:dgram \[?::1\]?' 'v6-tcp:stream \[?::1\]?' 'lo2:dgram 127\.0\.0\.2'; do
     check "kdc.${k%%:*}.kinit" "^answers: ${k#*:}:88\$" runin kdc "alice's password ($ALICE)" "KRB5_CONFIG=\$HOME/field/${k%%:*}.conf ~/field/ktrace.sh ${k%%:*} kinit -c MEMORY:field alice" < <(once "$ALICE")
 done
 observe obs.rss.end 'krb5kdc [0-9]+ KiB, kadmind [0-9]+ KiB' run kdc "$RSS"
@@ -247,9 +267,9 @@ capstop kdc upgrade
 section "9. leaving the VMs: client2's caches and scratch removed; kdc keeps the ref's install and ~/$CO; AVC over the whole window"
 run client2 "for c in ~/field/*.cc; do [ -e \"\$c\" ] && KRB5CCNAME=FILE:\$c kdestroy; done; rm -rf ~/field; ls -a ~"
 run kdc "rm -rf ~/field; ls ~; sudo nft list tables; systemctl list-units --all 'field-*' --no-legend | wc -l"
-check selinux.avc.end "$AVC_OK" run kdc "$AVC"
+[ "$MAC" != selinux ] || check selinux.avc.end "$AVC_OK" run kdc "$AVC"
 MIN=$(( ($(date +%s) - T0) / 60 + 2 ))
-host "COLLECT_MINUTES=$MIN $LABQ collect kdc $(printf '%q' "$REC_DIR/collect") /var/log/krb5kdc.log /var/log/kadmind.log /etc/krb5.conf /etc/krb5.conf.d /var/kerberos/krb5kdc/kdc.conf /var/kerberos/krb5kdc/kadm5.acl /usr/share/kerber-rust/install-manifest /usr/lib/systemd/system/krb5kdc.service /usr/lib/systemd/system/kadmin.service /etc/sysconfig/krb5kdc /etc/sysconfig/kadmin && COLLECT_MINUTES=$MIN $LABQ collect client2 $(printf '%q' "$REC_DIR/collect") /etc/krb5.conf /etc/krb5.conf.d"
+host "COLLECT_MINUTES=$MIN $LABQ collect kdc $(printf '%q' "$REC_DIR/collect") /var/log/krb5kdc.log /var/log/kadmind.log /etc/krb5.conf /etc/krb5.conf.d $KDCDIR/kdc.conf $KDCDIR/kadm5.acl /usr/share/kerber-rust/install-manifest /usr/lib/systemd/system/$UNIT_KDC.service /usr/lib/systemd/system/$UNIT_ADMIN.service $ENVDIR/$UNIT_KDC $ENVDIR/$UNIT_ADMIN && COLLECT_MINUTES=$MIN $LABQ collect client2 $(printf '%q' "$REC_DIR/collect") /etc/krb5.conf /etc/krb5.conf.d"
 for j in "$REC_DIR"/collect/*/journal.txt; do
     [ -f "$j" ] && _redact < "$j" > "$j.r" && mv "$j.r" "$j"
 done

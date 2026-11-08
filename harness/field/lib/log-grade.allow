@@ -1,0 +1,3 @@
+# prog	ERE	reason (tab-separated; an empty prog matches any program; an empty ERE is an error)
+kadmind	^Invalid message type - while dispatching \(udp\)$	KH.4: kpasswd drops a reply or error sent back to it, where MIT answers (CVE-2002-2443); mit-deviations.md, "A kpasswd reply or error sent to kpasswd"
+krb5kdc	^preauth pkinit failed to initialize: PKINIT initialization failed: Cannot use key file .*: only P-224, P-256, P-384	PK.bp320: a brainpool P320 KDC identity is refused and the KDC serves without PKINIT; mit-deviations.md, "PKINIT keys: brainpool P320 (r1 and t1); RSA over 16384 bits"

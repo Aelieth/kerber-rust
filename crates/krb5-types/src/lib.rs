@@ -7,6 +7,8 @@ use rasn::prelude::*;
 
 pub use rasn::types::{BitString, GeneralizedTime, OctetString};
 
+const _: () = rasn::KERBER_RUST_NEEDS_THIS_PATCH;
+
 pub mod cammac;
 mod constants;
 pub mod consts;
@@ -352,31 +354,58 @@ impl PrincipalName {
         self.name_string == other.name_string
     }
 
+    pub const NOT_UTF8: &'static str = "Principal name is not UTF-8";
+
     #[must_use]
-    pub fn components_joined(&self) -> String {
+    pub fn try_components_joined(&self) -> Option<String> {
+        Some(self.try_component_strings()?.join("/"))
+    }
+
+    #[must_use]
+    pub fn components_joined_lossy(&self) -> String {
+        self.component_strings_lossy().join("/")
+    }
+
+    #[must_use]
+    pub fn try_unparse(&self) -> Option<String> {
+        Some(crate::unparse_components(&self.try_component_strings()?))
+    }
+
+    #[must_use]
+    pub fn unparse_lossy(&self) -> String {
+        crate::unparse_components(&self.component_strings_lossy())
+    }
+
+    #[must_use]
+    pub fn try_unparse_with_realm(&self, realm: &str) -> Option<String> {
+        Some(crate::unparse_name(&self.try_component_strings()?, realm))
+    }
+
+    #[must_use]
+    pub fn unparse_with_realm_lossy(&self, realm: &str) -> String {
+        crate::unparse_name(&self.component_strings_lossy(), realm)
+    }
+
+    #[must_use]
+    pub fn try_unparse_no_realm(&self) -> Option<String> {
+        Some(crate::unparse_components_no_realm(
+            &self.try_component_strings()?,
+        ))
+    }
+
+    #[must_use]
+    pub fn unparse_no_realm_lossy(&self) -> String {
+        crate::unparse_components_no_realm(&self.component_strings_lossy())
+    }
+
+    fn try_component_strings(&self) -> Option<Vec<String>> {
         self.name_string
             .iter()
-            .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
-            .collect::<Vec<_>>()
-            .join("/")
+            .map(|s| std::str::from_utf8(s.as_bytes()).ok().map(str::to_owned))
+            .collect()
     }
 
-    #[must_use]
-    pub fn unparse(&self) -> String {
-        crate::unparse_components(&self.component_strings())
-    }
-
-    #[must_use]
-    pub fn unparse_with_realm(&self, realm: &str) -> String {
-        crate::unparse_name(&self.component_strings(), realm)
-    }
-
-    #[must_use]
-    pub fn unparse_no_realm(&self) -> String {
-        crate::unparse_components_no_realm(&self.component_strings())
-    }
-
-    fn component_strings(&self) -> Vec<String> {
+    fn component_strings_lossy(&self) -> Vec<String> {
         self.name_string
             .iter()
             .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())

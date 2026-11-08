@@ -1,5 +1,7 @@
 //! Password checks and a password change.
 
+use std::sync::PoisonError;
+
 use krb5_crypto::{EncryptionType, KeySalt, ProtocolKey, parse_keysalts, string_to_key};
 use krb5_log::klog::{self, Severity};
 use krb5_types::PrincipalName;
@@ -8,13 +10,14 @@ use zeroize::Zeroizing;
 
 use super::flags::KDB_REQUIRES_PWCHANGE;
 use super::history::record_history;
-use super::keys::{KeyEntry, cap_key_versions, next_kvno};
+use super::keys::{KeyEntry, next_kvno, with_old_keys};
 use super::policy::NamedPolicy;
 use super::principal::{Principal, TlData, default_mod_actor, refresh_kadm_tl, stamp_admin_tl};
 use super::{PrincipalStore, unix_now_u32};
 use crate::acl::{Acl, AdminOp};
 use crate::error::Error;
 use crate::kdb_dump::TL_LAST_PWD_CHANGE;
+use crate::listen::{SharedDump, read_fresh};
 
 pub const S2K_ITERS: u32 = 4096;
 
@@ -215,6 +218,42 @@ impl PasswordPlan {
     }
 }
 
+/// Derives keys unlocked so KDC reads don't wait.
+// MIT: `kadm5_chpass_principal_3` (lib/kadm5/srv/svr_principal.c:1290-1355)
+#[expect(clippy::too_many_arguments, reason = "the chpass inputs")]
+pub fn change_password_shared(
+    store: &SharedDump,
+    name: &PrincipalName,
+    princ_realm: &str,
+    password: &[u8],
+    keepold: u32,
+    actor: &str,
+    etypes: &[KeySalt],
+    checks: impl Fn(&PrincipalStore) -> Result<(), Error>,
+) -> Result<(), Error> {
+    let planned = {
+        let (g, read) = read_fresh(store);
+        match read {
+            Err(_) => Ok(None),
+            Ok(()) => {
+                checks(&g).and_then(|()| g.plan_password(name, princ_realm, password, etypes))
+            }
+        }
+    };
+    let prepared = planned.and_then(|plan| plan.map(PasswordPlan::derive).transpose());
+    let mut g = store.write().unwrap_or_else(PoisonError::into_inner);
+    g.reload_if_stale()?;
+    if let Some(p) = prepared?
+        && g.change(|s| s.apply_password(p, keepold, actor))??
+    {
+        return Ok(());
+    }
+    checks(&g)?;
+    g.change(|s| {
+        s.set_password_etypes_keepold_n_in(name, princ_realm, password, keepold, actor, etypes)
+    })?
+}
+
 /// A new field fails to build here until it is compared.
 fn same_record(a: &Principal, b: &Principal) -> bool {
     let Principal {
@@ -222,6 +261,7 @@ fn same_record(a: &Principal, b: &Principal) -> bool {
         realm,
         keys,
         key_history,
+        opaque_keys,
         salt,
         max_life,
         pw_expire,
@@ -244,6 +284,7 @@ fn same_record(a: &Principal, b: &Principal) -> bool {
     } = a;
     same_keys(keys, &b.keys)
         && same_keys(key_history, &b.key_history)
+        && *opaque_keys == b.opaque_keys
         && *name == b.name
         && *realm == b.realm
         && *salt == b.salt
@@ -299,6 +340,7 @@ impl PrincipalStore {
         let p = self
             .get_in_realm(name, princ_realm)
             .ok_or(Error::NotFound)?;
+        p.check_kadm_data()?;
         if p.attributes & KDB_REQUIRES_PWCHANGE != 0 {
             return Ok(());
         }
@@ -462,13 +504,12 @@ impl PrincipalStore {
         princ_realm: &str,
         etypes: &[KeySalt],
     ) -> Result<ChpassInputs, Error> {
-        if princ_realm == self.realm && name.components_joined() == "kadmin/history" {
+        if princ_realm == self.realm && name.components_joined_lossy() == "kadmin/history" {
             return Err(Error::InvalidArgument(
                 "Cannot change protected principal".into(),
             ));
         }
-        let id = self.canonical_id(name, princ_realm)?;
-        self.map.get(&id).ok_or(Error::NotFound)?;
+        let id = self.adb_id(name, princ_realm)?;
         let policy = self.bound_policy(&id).cloned();
         let keysalts = apply_keysalt_policy(
             policy.as_ref().and_then(|p| p.allowed_keysalts.as_deref()),
@@ -489,7 +530,7 @@ impl PrincipalStore {
         self.check_password_quality_in(&inputs.name, &inputs.realm, password, &mut syslog_note)?;
         let record = self.map.get(&inputs.id).ok_or(Error::NotFound)?.clone();
         Ok(PasswordPlan {
-            kvno: next_kvno(&record.keys),
+            kvno: next_kvno(&record),
             inputs,
             record,
             password: Zeroizing::new(password.to_vec()),
@@ -579,21 +620,20 @@ impl PrincipalStore {
         keepold: u32,
         actor: &str,
     ) -> Result<(), Error> {
+        let mkey = (keepold > 0).then(|| self.iprop_master_key()).flatten();
         let p = self.map.get_mut(id).ok_or(Error::NotFound)?;
-        let old = std::mem::replace(&mut p.keys, new_keys);
+        let mut next = p.clone();
+        let (keys, opaque_keys) = with_old_keys(p, new_keys, keepold, mkey.as_ref())?;
+        let old = std::mem::replace(&mut next.keys, keys);
         if let Some((nhist, (hist_kvno, hist_key))) = history {
-            record_history(p, &old, nhist, hist_kvno, &hist_key)?;
-            refresh_kadm_tl(p);
+            record_history(&mut next, &old, nhist, hist_kvno, &hist_key)?;
+            refresh_kadm_tl(&mut next);
         }
-        if keepold > 0 {
-            p.keys.extend(old);
-            if keepold > 1 {
-                cap_key_versions(&mut p.keys, keepold);
-            }
-        }
-        p.attributes &= !KDB_REQUIRES_PWCHANGE;
-        p.fail_auth_count = 0;
-        stamp_admin_tl(p, true, actor);
+        next.opaque_keys = opaque_keys;
+        next.attributes &= !KDB_REQUIRES_PWCHANGE;
+        next.fail_auth_count = 0;
+        stamp_admin_tl(&mut next, true, actor);
+        *p = next;
         Ok(())
     }
 
@@ -604,7 +644,7 @@ impl PrincipalStore {
         name: &PrincipalName,
         password: &[u8],
     ) -> Result<(), Error> {
-        let id = crate::kdb::lookup_principal_id(name, &self.realm);
+        let id = crate::kdb::principal_id(name, &self.realm)?;
         acl.check(actor, AdminOp::ChangePassword, Some(&id))?;
         self.set_password_keepold_n_in(name, &self.realm.clone(), password, 0, actor)
     }

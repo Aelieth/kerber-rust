@@ -18,6 +18,8 @@ use crate::store::Principal;
 
 pub const AUTHN_REQ_CL: i32 = 1;
 pub const SRVC_PRINC: i32 = 2;
+pub const VALIDATE_POL: i32 = 3;
+pub const ISSUE_TKT: i32 = 4;
 pub const ENCR_REP: i32 = 5;
 
 /// 32 with the C NUL, so the printable id is 31.
@@ -197,31 +199,6 @@ pub fn kdc_error_message(code: i32) -> String {
         _ => return format!("KRB5 error code {code}"),
     };
     text.to_owned()
-}
-
-// MIT: `gather_tgs_req_info` (kdc/do_tgs_req.c:727-754)
-/// Early TGS failure logs authtime 0: subject ticket not open yet.
-fn tgs_failed_before_authtime(status: &str) -> bool {
-    matches!(
-        status,
-        status::PROCESS_TGS
-            | status::FIND_FAST
-            | status::NULL_SERVER
-            | status::GET_LOCAL_TGT
-            | status::HEADER_PAC
-            | status::LOOKING_UP_SERVER
-            | status::UNKNOWN_SERVER
-            | status::DECODE_PA_FOR_USER
-            | status::DECODE_PA_S4U_X509_USER
-            | status::INVALID_S4U2SELF_CHECKSUM
-            | status::INVALID_S4U2SELF_REQUEST
-            | status::LOOKING_UP_S4U2SELF_PRINCIPAL
-            | status::UNKNOWN_S4U2SELF_PRINCIPAL
-            | status::SECOND_TKT_SERVER
-            | status::SECOND_TKT_DECRYPT
-            | status::SECOND_TKT_PAC
-            | status::RBCD_PAC_PRINC
-    )
 }
 
 enum MitOutcome<'a> {
@@ -416,6 +393,55 @@ thread_local! {
     static CL_PORT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
     static CUR_REQ_ID: std::cell::RefCell<Option<String>> =
         const { std::cell::RefCell::new(None) };
+    static TGS_FACTS: std::cell::RefCell<TgsFacts> = std::cell::RefCell::default();
+}
+
+// MIT: `gather_tgs_req_info` (kdc/do_tgs_req.c:592-807)
+#[derive(Default)]
+pub(crate) struct TgsFacts {
+    pub(crate) protocol_transition: bool,
+    pub(crate) constrained_delegation: bool,
+    pub(crate) s4u_client: Option<String>,
+    pub(crate) authtime: u32,
+    pub(crate) ses: Option<i32>,
+    pub(crate) stage: i32,
+    pub(crate) au_status: Option<String>,
+    pub(crate) sprinc: Option<String>,
+    ktypes: Option<String>,
+    events: Vec<(&'static str, bool, i32, Option<String>)>,
+}
+
+// MIT: `gather_tgs_req_info` (kdc/do_tgs_req.c:640-641)
+pub(crate) fn note_tgs_body(body: &krb5_types::KdcReqBody) {
+    let realm = realm_str(&body.realm);
+    note_tgs(|f| {
+        f.sprinc = Some(opt_unparse(body.sname.as_ref(), &realm, "<unknown server>"));
+        f.ktypes = Some(ktypes2str(&body.etype));
+    });
+}
+
+impl TgsFacts {
+    // MIT: `kau_s4u2self` (kdc/kdc_audit.c:300-305)
+    pub(crate) fn event(&mut self, name: &'static str, success: bool) {
+        let stage = self.stage.max(AUTHN_REQ_CL);
+        self.events
+            .push((name, success, stage, self.au_status.clone()));
+    }
+}
+
+pub(crate) fn error_status(e: &crate::error::Error) -> Option<String> {
+    match e {
+        crate::error::Error::Protocol { text, .. } => text.clone(),
+        _ => None,
+    }
+}
+
+pub(crate) fn note_tgs(f: impl FnOnce(&mut TgsFacts)) {
+    TGS_FACTS.with(|t| f(&mut t.borrow_mut()));
+}
+
+fn take_tgs_facts() -> TgsFacts {
+    TGS_FACTS.with(|t| std::mem::take(&mut *t.borrow_mut()))
 }
 
 #[doc(hidden)]
@@ -568,11 +594,13 @@ fn current_req_id() -> String {
 
 fn clear_req_id() {
     CUR_REQ_ID.with(|c| *c.borrow_mut() = None);
+    TGS_FACTS.with(|t| *t.borrow_mut() = TgsFacts::default());
 }
 
 // MIT: `kau_init_kdc_req` (kdc/kdc_audit.c:200-202)
 pub fn begin_request() -> Result<ReqIdGuard, getrandom::Error> {
     let id = new_req_id()?;
+    clear_req_id();
     CUR_REQ_ID.with(|c| *c.borrow_mut() = Some(id));
     Ok(ReqIdGuard)
 }
@@ -598,16 +626,6 @@ fn seed_tgs_req(store: &dyn PrincipalRead, req: &TgsReq, sender: Option<&HostAdd
     state.stage = AUTHN_REQ_CL;
     state.tkt_in_id = tgs_header_tkt_id(req);
     each_audit(store, |module| module.tgs_req(true, &state));
-}
-
-fn tgs_fail_stage(e_text: &str) -> i32 {
-    match e_text {
-        status::LOOKING_UP_SERVER
-        | status::UNKNOWN_SERVER
-        | status::SERVER_NOT_FOUND
-        | status::NULL_SERVER => SRVC_PRINC,
-        _ => AUTHN_REQ_CL,
-    }
 }
 
 // MIT: `armor_ap_request` (kdc/fast_util.c:57-58)
@@ -863,19 +881,24 @@ fn tgs_success(
     let Ok(rep) = decode::<TgsRep>(bytes) else {
         return;
     };
+    let facts = take_tgs_facts();
     seed_tgs_req(store, req, sender);
     let body = &req.0.req_body;
     let realm = realm_str(&body.realm);
-    let client = tgs_client_name(store, req, &rep, &realm);
-    let server = opt_unparse(body.sname.as_ref(), &realm, "<unknown server>");
+    let client = tgs_error_client(store, req, &realm);
+    let server = facts
+        .sprinc
+        .clone()
+        .unwrap_or_else(|| opt_unparse(body.sname.as_ref(), &realm, "<unknown server>"));
     let ticket = &rep.0.ticket;
-    let part = decrypt_issued(store, ticket);
-    let ses = part.as_ref().map(|p| p.key.keytype);
-    let authtime = part.as_ref().map_or(0, |p| p.authtime.unix_seconds());
-    let etypes = rep_etypes2str(rep.0.enc_part.etype, Some(ticket.enc_part.etype), ses);
-    let req_etypes = ktypes2str(&body.etype);
+    let authtime = facts.authtime;
+    let etypes = rep_etypes2str(rep.0.enc_part.etype, Some(ticket.enc_part.etype), facts.ses);
+    let req_etypes = facts
+        .ktypes
+        .clone()
+        .unwrap_or_else(|| ktypes2str(&body.etype));
     let from = format_from(sender);
-    let s4u = tgs_s4u_kind(req);
+    let s4u = tgs_s4u_line(&facts);
     emit_issue(
         "TGS_REQ",
         &req_etypes,
@@ -917,24 +940,7 @@ fn tgs_success(
     } else {
         2
     };
-    each_audit(store, |audit| match s4u.as_ref().map(|(k, _)| *k) {
-        Some("PROTOCOL-TRANSITION") => {
-            let mut s4u_state = state.clone();
-            s4u_state.event_name = "S4U2SELF";
-            audit.s4u2self(true, &s4u_state);
-        }
-        Some("CONSTRAINED-DELEGATION") => {
-            let mut s4u_state = state.clone();
-            s4u_state.event_name = "S4U2PROXY";
-            audit.s4u2proxy(true, &s4u_state);
-        }
-        _ if body.kdc_options.bit(flag_bit::ENC_TKT_IN_SKEY) => {
-            let mut s4u_state = state.clone();
-            s4u_state.event_name = "U2U";
-            audit.u2u(true, &s4u_state);
-        }
-        _ => {}
-    });
+    tgs_s4u_events(store, &state, &facts, facts.constrained_delegation);
     each_audit(store, |audit| audit.tgs_req(true, &state));
     clear_req_id();
 }
@@ -948,12 +954,19 @@ fn tgs_failure(
     emsg: &str,
     duration_us: u64,
 ) {
+    let facts = take_tgs_facts();
     seed_tgs_req(store, req, sender);
     let body = &req.0.req_body;
     let realm = realm_str(&body.realm);
     let client = tgs_error_client(store, req, &realm);
-    let server = opt_unparse(body.sname.as_ref(), &realm, "<unknown server>");
-    let req_etypes = ktypes2str(&body.etype);
+    let server = facts
+        .sprinc
+        .clone()
+        .unwrap_or_else(|| opt_unparse(body.sname.as_ref(), &realm, "<unknown server>"));
+    let req_etypes = facts
+        .ktypes
+        .clone()
+        .unwrap_or_else(|| ktypes2str(&body.etype));
     let from = format_from(sender);
     let status = if e_text.is_empty() {
         status::UNKNOWN_REASON
@@ -961,7 +974,7 @@ fn tgs_failure(
         e_text
     };
     let nomatch = code == err::SERVER_NOMATCH;
-    let authtime = tgs_header_authtime(store, req);
+    let authtime = facts.authtime;
     emit_issue(
         "TGS_REQ",
         &req_etypes,
@@ -980,17 +993,14 @@ fn tgs_failure(
         },
         duration_us,
     );
-    let early = tgs_failed_before_authtime(status);
-    let s4u = (!early || status == status::RBCD_PAC_PRINC)
-        .then(|| tgs_s4u_kind(req))
-        .flatten();
+    let s4u = tgs_s4u_line(&facts);
     klog_tgs_req(
         &req_etypes,
         &from,
         &MitOutcome::Fail {
             status,
             code,
-            authtime: if early { 0 } else { authtime },
+            authtime,
             emsg,
         },
         &client,
@@ -998,29 +1008,10 @@ fn tgs_failure(
         s4u.as_ref().map(|(k, c)| (*k, c.as_str())),
     );
     let mut state = base_state("TGS_REQ", body, sender);
-    state.stage = tgs_fail_stage(status);
+    state.stage = facts.stage.max(AUTHN_REQ_CL);
     state.status = Some(status.to_string());
     state.tkt_in_id = tgs_header_tkt_id(req);
-    each_audit(store, |audit| {
-        match tgs_s4u_kind(req).as_ref().map(|(k, _)| *k) {
-            Some("PROTOCOL-TRANSITION") => {
-                let mut s4u_state = state.clone();
-                s4u_state.event_name = "S4U2SELF";
-                audit.s4u2self(false, &s4u_state);
-            }
-            Some("CONSTRAINED-DELEGATION") => {
-                let mut s4u_state = state.clone();
-                s4u_state.event_name = "S4U2PROXY";
-                audit.s4u2proxy(false, &s4u_state);
-            }
-            _ if body.kdc_options.bit(flag_bit::ENC_TKT_IN_SKEY) => {
-                let mut s4u_state = state.clone();
-                s4u_state.event_name = "U2U";
-                audit.u2u(false, &s4u_state);
-            }
-            _ => {}
-        }
-    });
+    tgs_s4u_events(store, &state, &facts, false);
     each_audit(store, |audit| audit.tgs_req(false, &state));
     clear_req_id();
 }
@@ -1131,7 +1122,7 @@ fn base_state(
 fn decrypt_issued(store: &dyn PrincipalRead, ticket: &Ticket) -> Option<EncTicketPart> {
     let realm = realm_str(&ticket.realm);
     let princ = store
-        .fetch(&lookup_principal_id(&ticket.sname, &realm))
+        .fetch(&lookup_principal_id(&ticket.sname, &realm)?)
         .ok()
         .flatten()?;
     ticket_key(&princ, ticket.enc_part.etype, store.policy())
@@ -1161,10 +1152,6 @@ fn tgs_header_tkt_id(req: &TgsReq) -> Option<String> {
     Some(make_tkt_id(ap.ticket.enc_part.cipher.as_ref()))
 }
 
-fn tgs_header_authtime(store: &dyn PrincipalRead, req: &TgsReq) -> u32 {
-    header_enc_part(store, req).map_or(0, |p| p.authtime.unix_seconds())
-}
-
 // MIT: `kdc_get_server_key` (kdc/kdc_util.c:377-379)
 /// Header ticket opens under its own server key, cross-realm krbtgt included.
 fn header_enc_part(store: &dyn PrincipalRead, req: &TgsReq) -> Option<EncTicketPart> {
@@ -1185,14 +1172,6 @@ fn header_enc_part(store: &dyn PrincipalRead, req: &TgsReq) -> Option<EncTicketP
         .map(|(part, _, _, _)| part)
 }
 
-fn tgs_client_name(store: &dyn PrincipalRead, req: &TgsReq, rep: &TgsRep, realm: &str) -> String {
-    let reply = rep.0.cname.unparse_with_realm(&realm_str(&rep.0.crealm));
-    if !reply.contains("WELLKNOWN/ANONYMOUS") {
-        return reply;
-    }
-    tgs_error_client(store, req, realm)
-}
-
 fn tgs_error_client(store: &dyn PrincipalRead, req: &TgsReq, realm: &str) -> String {
     let Some(part) = header_enc_part(store, req) else {
         return "<unknown client>".into();
@@ -1205,43 +1184,51 @@ fn tgs_error_client(store: &dyn PrincipalRead, req: &TgsReq, realm: &str) -> Str
     } else {
         crealm.as_str()
     };
-    part.cname.unparse_with_realm(realm)
+    part.cname.unparse_with_realm_lossy(realm)
 }
 
-fn tgs_s4u_kind(req: &TgsReq) -> Option<(&'static str, String)> {
-    let padata = req.0.padata.as_deref()?;
-    let has_for_user = padata.iter().any(|p| p.padata_type == pa::FOR_USER);
-    let has_x509 = padata.iter().any(|p| p.padata_type == pa::FOR_X509_USER);
-    if has_for_user || has_x509 {
-        return Some(("PROTOCOL-TRANSITION", s4u_user_unparse(padata)));
-    }
-    if padata.iter().any(|p| p.padata_type == pa::PAC_OPTIONS)
-        && req
-            .0
-            .req_body
-            .additional_tickets
-            .as_ref()
-            .is_some_and(|t| !t.is_empty())
-    {
-        return Some(("CONSTRAINED-DELEGATION", "<unknown>".into()));
-    }
-    None
+// MIT: `log_tgs_req` (kdc/kdc_log.c:153-160)
+fn tgs_s4u_line(facts: &TgsFacts) -> Option<(&'static str, String)> {
+    let kind = if facts.protocol_transition {
+        "PROTOCOL-TRANSITION"
+    } else if facts.constrained_delegation {
+        "CONSTRAINED-DELEGATION"
+    } else {
+        return None;
+    };
+    Some((
+        kind,
+        facts
+            .s4u_client
+            .clone()
+            .unwrap_or_else(|| "<unknown>".into()),
+    ))
 }
 
-fn s4u_user_unparse(padata: &[krb5_types::PaData]) -> String {
-    for p in padata {
-        if p.padata_type == pa::FOR_USER
-            && let Ok(fu) = decode::<krb5_types::s4u::PaForUser>(p.padata_value.as_ref())
-        {
-            let realm = realm_str(&fu.user_realm);
-            return fu.user_name.unparse_with_realm(&realm);
+// MIT: `tgs_issue_ticket` (kdc/do_tgs_req.c:1123-1124)
+fn tgs_s4u_events(store: &dyn PrincipalRead, state: &AuditState, facts: &TgsFacts, proxy: bool) {
+    each_audit(store, |audit| {
+        for (name, success, stage, status) in &facts.events {
+            let mut s4u_state = state.clone();
+            s4u_state.event_name = name;
+            s4u_state.stage = *stage;
+            s4u_state.status.clone_from(status);
+            match *name {
+                "S4U2SELF" => audit.s4u2self(*success, &s4u_state),
+                "U2U" => audit.u2u(*success, &s4u_state),
+                _ => audit.s4u2proxy(*success, &s4u_state),
+            }
         }
-    }
-    "<unknown>".into()
+        if proxy {
+            let mut s4u_state = state.clone();
+            s4u_state.event_name = "S4U2PROXY";
+            audit.s4u2proxy(true, &s4u_state);
+        }
+    });
 }
 
 fn opt_unparse(name: Option<&PrincipalName>, realm: &str, fallback: &str) -> String {
-    name.map_or_else(|| fallback.into(), |n| n.unparse_with_realm(realm))
+    name.map_or_else(|| fallback.into(), |n| n.unparse_with_realm_lossy(realm))
 }
 
 fn format_from(sender: Option<&HostAddress>) -> String {
@@ -1320,7 +1307,11 @@ impl AuditState {
         if let Some(addr) = &self.cl_addr {
             j.raw("fromaddr", &addr_json(addr));
         }
-        j.opt_str("kdc_status", self.status.as_deref());
+        // MIT: `kau_j_tgs_s4u2self` (plugins/audit/kdc_j_encode.c:292-294)
+        let s4u = matches!(self.event_name, "S4U2SELF" | "S4U2PROXY" | "U2U");
+        if !(s4u && success) {
+            j.opt_str("kdc_status", self.status.as_deref());
+        }
         if let Some(c) = &self.req_client {
             j.raw(
                 "req.client",

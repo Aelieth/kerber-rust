@@ -112,8 +112,8 @@ The toolchain, lld, and `rust-cache` steps are one composite,
 | `test` | `python3 scripts/ci-policy.py`, `cargo fmt --all -- --check`, `cargo clippy -D warnings` with `--all-features` and with none, `cargo nextest run --workspace --profile ci` with the test-hooks features, then doctests |
 | `release` | `cargo nextest run --workspace --profile ci-nofeatures --locked` |
 | `doc` | `cargo doc --workspace --no-deps` under `RUSTDOCFLAGS=-D warnings`; `krb5-embed-realm-example` builds with no `daemon` feature |
-| `fuzz` | `cargo check --locked --manifest-path fuzz/Cargo.toml --bins` |
-| `shellcheck` | `shellcheck -S style` on `scripts/*.sh`, `scripts/lib/*.sh`, `harness/*.sh`, `dist/*.sh`, `harness/field/*.sh`, `harness/field/lib/*.sh`, and `harness/field/scenarios/*.sh`. ShellCheck is v0.11.0, checked by sha256. `.shellcheckrc` sets `external-sources=true` and disables `SC2329` |
+| `fuzz` | `cargo check --locked --manifest-path fuzz/Cargo.toml --bins`, then the same for `harness/hand/t7/Cargo.toml` (T-7's timing harness) |
+| `shellcheck` | `shellcheck -S style` on `scripts/*.sh`, `scripts/lib/*.sh`, `harness/*.sh`, `dist/*.sh`, `harness/field/*.sh`, `harness/field/lib/*.sh`, `harness/field/scenarios/*.sh`, `harness/field/p18/*.sh`, `harness/hand/*.sh`, `harness/hand/lib/*.sh`, `harness/hand/b2/*/*.sh`, `harness/hand/b2/*/*/*.sh`, `harness/hand/r3/*.sh`, `harness/hand/r3/*/*.sh`, and `harness/hand/t7/*.sh`. ShellCheck is v0.11.0, checked by sha256. `.shellcheckrc` sets `external-sources=true` and disables `SC2329` |
 | `msrv` | `cargo build --workspace --all-targets --locked` on Rust 1.95, with the test-hooks features and without |
 | `audit` | `cargo audit --deny warnings` (cargo-audit 0.22.2), `cargo deny`, `cargo vet --locked` (cargo-vet 0.10.0) |
 | `mit-smoke` | `run-harness.sh`, `client-gate.sh`, then a stock MIT KDC and `kdc-gate.sh`, `differential-gate.sh` |
@@ -130,14 +130,14 @@ The toolchain, lld, and `rust-cache` steps are one composite,
 | Job | Runs |
 | --- | --- |
 | `oracles` | `asn1-decode-oracle-gate.sh`, `rd-priv-oracle-gate.sh` |
-| `fuzz` | six smokes, 60 s each, rss limit 2048 MiB: `der_decode`, `gss_token`, `pkinit_cms`, `spake_point`, `oakley_dh`, `transited`. The other three targets, `otp_req_decode`, `keytab_ccache` and `pac_ndr`, are only built, per push |
+| `fuzz` | nine smokes, one per target, 60 s each, rss limit 2048 MiB: `der_decode`, `gss_token`, `pkinit_cms`, `spake_point`, `oakley_dh`, `transited`, `otp_req_decode`, `keytab_ccache` and `pac_ndr` |
 | `anchors` | `python3 scripts/ci-policy.py` with `KERBER_MIT_SRC` set to the pinned MIT 1.22.2 tree |
 | `test-release` | `cargo nextest run --workspace --release --profile ci` with the test-hooks features. Tags and manual runs |
 | `msrv-test` | `cargo test --workspace --locked` on Rust 1.95 with the test-hooks features. Tags and manual runs |
 
 A gate in `moving` is deleted in the commit whose production cell passes. At the release cut, `moving` holds only the gates still waiting on a cell, and the `oracles` stay nightly.
 
-`peers.yml` (cron `12 6 * * *`, and manual) runs Samba AD: `samba-ad-gate`, `ad-windows-gate`, `ad-s4u-gate`, `samba-pac-verify-gate`, `samba-pac-l2-gate`, `samba-crossrealm-gate`, `samba-realtrust-gate`. Per-gate detail is in [gates.md](gates.md). **Known gap:** when the job has no MIT image, every gate exits 2 and the job stays green with none run. That is what it did on the 1.2 tree, so for 1.2.0 the seven ran by hand on that tree, and all passed. The job's fix is planned for 1.2.1.
+`peers.yml` (cron `12 6 * * *`, and manual) runs Samba AD: `samba-ad-gate`, `ad-windows-gate`, `ad-s4u-gate`, `samba-pac-verify-gate`, `samba-pac-l2-gate`, `samba-crossrealm-gate`, `samba-realtrust-gate`. Per-gate detail is in [gates.md](gates.md). Its tally step fails the job unless all seven ran and passed. In 1.2.0 a missing MIT image let every gate exit 2 and the job stay green with none run; 1.2.1 closed that.
 
 
 ## MIT 1.22.2 harness
@@ -175,6 +175,29 @@ Golden traces under `tests/traces/mit-*.der` are decoded and
 field-diffed in `crates/krb5-protocol/tests/golden_traces.rs` (unit CI).
 Reply goldens are MIT-KDC bytes from `client-gate.sh`. Do not commit
 `/working`.
+
+## The field lab
+
+The field suite runs each scenario against MIT first on KVM lab machines, then against kerber-rust the
+same way, and compares the two check by check. [harness/field](../harness/field/README.md) builds the
+lab and runs it; `harness/field/run.sh --profile <name>` picks the scenarios:
+
+| Profile | Scenarios |
+| --- | --- |
+| `nightly`, `weekly` | the Fedora suite: 6 scenarios, and 16 |
+| `ds` | the server scenarios on Debian 13 or Rocky Linux 10, against that distribution's MIT (`harness/field/ds/<vm>.env`) |
+| `kill-loop` | kills during writes, each result loaded by MIT's `kdb5_util` |
+| `load`, `load-long` | 600 s and 3,600 s of load per leg |
+| `lt` | restarts, hostile input to the KDC, the OTP default and `rd_safe` |
+
+The AD trust runs alone, as `run.sh ad-trust`. The drivers in [harness/hand](../harness/hand/README.md)
+cover what the field suite does not:
+
+- `rp-cm.sh`: MIT's client tools and SSSD on Fedora 44, Rocky Linux 10, Debian 13 and Ubuntu 26.04,
+  with `FILE:` and `KCM:` caches, against MIT's KDC and then ours. `rp-cm.sh <sha> hm` runs Debian 13's
+  Heimdal client tools the same way.
+- `rp-ws.sh`: Windows 11's own Kerberos and SSPI, joined to the realm with `ksetup`.
+- `ds-baselines.sh`: the Debian 13 and Rocky Linux 10 snapshots the `ds` profile starts from.
 
 ## Rust KDC test realm
 

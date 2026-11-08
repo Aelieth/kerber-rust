@@ -56,7 +56,9 @@ pub fn open_database(
         )));
     }
     let lib = paths.conf.as_ref().and_then(|c| c.db_library.as_deref());
-    open_store(lib, &db, &paths.key_stash_file).map_err(|e| OpenFailure::Database(e.to_string()))
+    open_store(lib, &db, &paths.key_stash_file)
+        .map_err(|e| OpenFailure::Database(e.to_string()))
+        .and_then(with_master_record)
 }
 
 fn prepare_database(
@@ -92,7 +94,7 @@ fn refuse_other_mkey(mkey_name: &str) -> Result<(), OpenFailure> {
 
 fn open_prepared(db: &Path, key: &krb5_crypto::ProtocolKey) -> Result<PrincipalStore, OpenFailure> {
     match crate::load_store_with_master(db, key) {
-        Ok(store) => Ok(store),
+        Ok(store) => with_master_record(store),
         Err(crate::PersistError::Crypto(s)) if s == "integrity check failed" => {
             Err(OpenFailure::MasterKey(BAD_MASTER_KEY.into()))
         }
@@ -104,12 +106,35 @@ fn open_prepared(db: &Path, key: &krb5_crypto::ProtocolKey) -> Result<PrincipalS
 }
 
 // MIT: `krb5_def_fetch_mkey_list` (lib/kdb/kdb_default.c:454-458)
-const BAD_MASTER_KEY: &str = "Unable to decrypt latest master key with the provided master key";
+pub(crate) const BAD_MASTER_KEY: &str =
+    "Unable to decrypt latest master key with the provided master key";
+
+// MIT: `krb5_def_fetch_mkey_list` (lib/kdb/kdb_default.c:414-424)
+pub const NO_MASTER_KEY: &str = "Cannot find master key record in database";
+
+fn with_master_record(store: PrincipalStore) -> Result<PrincipalStore, OpenFailure> {
+    if has_master_record(&store) {
+        Ok(store)
+    } else {
+        Err(OpenFailure::MasterKey(NO_MASTER_KEY.into()))
+    }
+}
+
+#[must_use]
+pub fn has_master_record(store: &PrincipalStore) -> bool {
+    let km = krb5_types::PrincipalName::new(
+        krb5_types::PrincipalName::NT_PRINCIPAL,
+        crate::mkey::MASTER_NAME,
+    );
+    store
+        .get_name(&km)
+        .is_some_and(|p| !p.key_slots().is_empty())
+}
 
 // MIT: `init_realm` (kdc/main.c:393-396)
 #[must_use]
 pub fn mkey_log_context(error: &str, realm: &str, mkey_name: &str) -> String {
-    if error == BAD_MASTER_KEY {
+    if error == BAD_MASTER_KEY || error == NO_MASTER_KEY {
         format!("while fetching master keys list for realm {realm}")
     } else {
         format!("while fetching master key {mkey_name} for realm {realm}")

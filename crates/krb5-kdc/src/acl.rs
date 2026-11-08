@@ -224,7 +224,14 @@ impl Acl {
     ) -> Result<Self, AclSyntaxError> {
         let mut entries = Vec::new();
         for (lineno, line) in acl_lines(bytes) {
-            match parse_line(&String::from_utf8_lossy(&line), default_realm, fname) {
+            let Ok(text) = std::str::from_utf8(&line) else {
+                return Err(AclSyntaxError {
+                    lineno,
+                    line,
+                    message: None,
+                });
+            };
+            match parse_line(text, default_realm, fname) {
                 Ok(entry) => entries.push(entry),
                 Err(message) => {
                     return Err(AclSyntaxError {
@@ -264,20 +271,33 @@ impl Acl {
     // MIT: `acl_check` (kadmin/server/auth_acl.c)
     #[must_use]
     pub fn allows(&self, actor: &str, op: AdminOp, target: Option<&str>) -> bool {
-        let Some(e) = self.find(actor, target) else {
-            return false;
-        };
-        match op {
-            AdminOp::Create => e.add,
-            AdminOp::Delete => e.delete,
-            AdminOp::Inquire => e.inquire,
-            AdminOp::Ktadd | AdminOp::Extract => e.extract,
-            AdminOp::ChangePassword => e.changepw,
-            AdminOp::Modify => e.modify,
-            AdminOp::SetKey => e.setkey,
-            AdminOp::List => e.list,
-            AdminOp::Propagate => e.propagate,
-        }
+        self.find(actor, target).is_some_and(|e| op_allowed(e, op))
+    }
+
+    /// A target that isn't UTF-8, matched by its bytes.
+    #[must_use]
+    pub fn allows_name(
+        &self,
+        actor: &str,
+        op: AdminOp,
+        target: &krb5_types::PrincipalName,
+        realm: &[u8],
+    ) -> bool {
+        let pat = PrincPat::of_name(target, realm);
+        self.find_pat(actor, Some(&pat))
+            .is_some_and(|e| op_allowed(e, op))
+    }
+
+    #[must_use]
+    pub fn restrictions_name(
+        &self,
+        actor: &str,
+        target: &krb5_types::PrincipalName,
+        realm: &[u8],
+    ) -> Option<&Restrictions> {
+        let pat = PrincPat::of_name(target, realm);
+        self.find_pat(actor, Some(&pat))
+            .and_then(|e| e.restrictions.as_ref())
     }
 
     pub fn check(&self, actor: &str, op: AdminOp, target: Option<&str>) -> Result<(), Error> {
@@ -292,6 +312,33 @@ impl Acl {
             return Ok(());
         }
         deny(actor, op)
+    }
+
+    pub fn check_name(
+        &self,
+        actor: &str,
+        op: AdminOp,
+        target: &krb5_types::PrincipalName,
+        realm: &[u8],
+    ) -> Result<(), Error> {
+        if self.allows_name(actor, op, target, realm) {
+            return Ok(());
+        }
+        deny(actor, op)
+    }
+
+    pub fn check_rename_name(
+        &self,
+        actor: &str,
+        (src, src_realm): (&krb5_types::PrincipalName, &[u8]),
+        (dest, dest_realm): (&krb5_types::PrincipalName, &[u8]),
+    ) -> Result<(), Error> {
+        self.check_name(actor, AdminOp::Delete, src, src_realm)?;
+        self.check_name(actor, AdminOp::Create, dest, dest_realm)?;
+        if self.restrictions_name(actor, dest, dest_realm).is_some() {
+            return deny(actor, AdminOp::Create);
+        }
+        Ok(())
     }
 
     // MIT: `acl_renprinc` (auth_acl.c:638-648)
@@ -328,8 +375,12 @@ impl Acl {
     }
 
     fn find(&self, actor: &str, target: Option<&str>) -> Option<&AclEntry> {
-        let actor_pat = parse_princ_pat(actor).ok()?;
         let target_pat = target.and_then(|t| parse_princ_pat(t).ok());
+        self.find_pat(actor, target_pat.as_ref())
+    }
+
+    fn find_pat(&self, actor: &str, target_pat: Option<&PrincPat>) -> Option<&AclEntry> {
+        let actor_pat = parse_princ_pat(actor).ok()?;
         for e in &self.entries {
             let mut ws = WildState::default();
             if let Some(ref client) = e.client
@@ -338,7 +389,7 @@ impl Acl {
                 continue;
             }
             if let Some(ref tpat) = e.target {
-                let Some(ref actual) = target_pat else {
+                let Some(actual) = target_pat else {
                     continue;
                 };
                 if !match_princ(tpat, actual, true, Some(&mut ws)) {
@@ -348,6 +399,20 @@ impl Acl {
             return Some(e);
         }
         None
+    }
+}
+
+fn op_allowed(e: &AclEntry, op: AdminOp) -> bool {
+    match op {
+        AdminOp::Create => e.add,
+        AdminOp::Delete => e.delete,
+        AdminOp::Inquire => e.inquire,
+        AdminOp::Ktadd | AdminOp::Extract => e.extract,
+        AdminOp::ChangePassword => e.changepw,
+        AdminOp::Modify => e.modify,
+        AdminOp::SetKey => e.setkey,
+        AdminOp::List => e.list,
+        AdminOp::Propagate => e.propagate,
     }
 }
 
@@ -382,13 +447,26 @@ const ACL_WS: [char; 7] = [' ', '\t', '\n', '\u{000c}', '\u{000b}', '\r', ','];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PrincPat {
-    components: Vec<String>,
-    realm: String,
+    components: Vec<Vec<u8>>,
+    realm: Vec<u8>,
+}
+
+impl PrincPat {
+    fn of_name(name: &krb5_types::PrincipalName, realm: &[u8]) -> Self {
+        Self {
+            components: name
+                .name_string
+                .iter()
+                .map(|c| c.as_bytes().to_vec())
+                .collect(),
+            realm: realm.to_vec(),
+        }
+    }
 }
 
 #[derive(Default)]
 struct WildState {
-    backref: Vec<String>,
+    backref: Vec<Vec<u8>>,
 }
 
 // MIT: `get_line` (auth_acl.c:102-153)
@@ -556,7 +634,10 @@ fn parse_princ_pat_in(s: &str, default_realm: &str) -> Result<PrincPat, Error> {
     }
     let (components, realm) = krb5_types::parse_name(s, default_realm)
         .map_err(|_| Error::AclParse(format!("Cannot parse principal '{s}'")))?;
-    Ok(PrincPat { components, realm })
+    Ok(PrincPat {
+        components: components.into_iter().map(String::into_bytes).collect(),
+        realm: realm.into_bytes(),
+    })
 }
 
 fn parse_restrictions(str: &str) -> Result<Restrictions, Error> {
@@ -735,22 +816,25 @@ fn parse_deltat(s: &str) -> Option<u64> {
 }
 
 /// * matches one whole component; *N is that component of the client.
-fn match_data(pat: &str, actual: &str, targetflag: bool, ws: Option<&mut WildState>) -> bool {
-    if pat == "*" {
+// MIT: `match_data` (kadmin/server/auth_acl.c:444-467)
+fn match_data(pat: &[u8], actual: &[u8], targetflag: bool, ws: Option<&mut WildState>) -> bool {
+    if pat == b"*" {
         if let Some(ws) = ws
             && !targetflag
             && ws.backref.len() < 9
         {
-            ws.backref.push(actual.to_owned());
+            ws.backref.push(actual.to_vec());
         }
         return true;
     }
-    if targetflag && let Some(ws) = ws {
-        let b = pat.as_bytes();
-        if b.len() == 2 && b[0] == b'*' && (b'1'..=b'9').contains(&b[1]) {
-            let n = usize::from(b[1] - b'1');
-            return ws.backref.get(n).is_some_and(|s| s == actual);
-        }
+    if targetflag
+        && let Some(ws) = ws
+        && pat.len() == 2
+        && pat[0] == b'*'
+        && (b'1'..=b'9').contains(&pat[1])
+    {
+        let n = usize::from(pat[1] - b'1');
+        return ws.backref.get(n).is_some_and(|s| s == actual);
     }
     pat == actual
 }

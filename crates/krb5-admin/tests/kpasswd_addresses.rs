@@ -100,7 +100,13 @@ fn as_requests(seen: &Seen) -> Vec<(String, Option<Vec<HostAddress>>)> {
         .iter()
         .filter_map(|raw| krb5_asn1::decode::<AsReq>(raw).ok())
         .map(|req| {
-            let sname = req.0.req_body.sname.as_ref().unwrap().components_joined();
+            let sname = req
+                .0
+                .req_body
+                .sname
+                .as_ref()
+                .unwrap()
+                .components_joined_lossy();
             (sname, req.0.req_body.addresses.clone())
         })
         .collect()

@@ -179,7 +179,7 @@ fn main() {
     }
     eprintln!(
         "krb5-iprop-pull: client {} keys {}",
-        ent.name.components_joined(),
+        ent.name.components_joined_lossy(),
         keys.len()
     );
     let kdc_host = std::env::var("KRB5_KDC").unwrap_or_else(|_| "127.0.0.1".into());

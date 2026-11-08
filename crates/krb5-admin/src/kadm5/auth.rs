@@ -790,31 +790,31 @@ pub fn changepw_acceptor(ctx: &GssContext, store_realm: &str) -> bool {
     )
 }
 
-fn acceptor_parts(n: &PrincipalName) -> Vec<String> {
+fn acceptor_parts(n: &PrincipalName) -> Vec<&[u8]> {
     n.name_string
         .iter()
-        .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
+        .map(krb5_types::KerberosString::as_bytes)
         .collect()
 }
 
 pub(super) fn kadm5_changepw_ok(n: &PrincipalName) -> bool {
     let p = acceptor_parts(n);
-    p.len() == 2 && p[0] == "kadmin" && p[1] == "changepw"
+    p.len() == 2 && p[0] == b"kadmin" && p[1] == b"changepw"
 }
 
 pub(super) fn kadm5_auth_gssapi_ok(n: &PrincipalName) -> bool {
     let p = acceptor_parts(n);
-    p.len() == 2 && p[0] == "kadmin" && (p[1] == "admin" || p[1] == "changepw")
+    p.len() == 2 && p[0] == b"kadmin" && (p[1] == b"admin" || p[1] == b"changepw")
 }
 
 pub(super) fn kadm5_rpcsec_ok(n: &PrincipalName) -> bool {
     let p = acceptor_parts(n);
-    p.len() == 2 && p[0] == "kadmin" && p[1] != "history"
+    p.len() == 2 && p[0] == b"kadmin" && p[1] != b"history"
 }
 
 pub(super) fn iprop_rpcsec_ok(n: &PrincipalName) -> bool {
     let p = acceptor_parts(n);
-    p.len() == 2 && p[0] == "kiprop"
+    p.len() == 2 && p[0] == b"kiprop"
 }
 
 #[must_use]

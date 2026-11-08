@@ -237,11 +237,14 @@ fn add_principal(s: &mut Session<'_>, kt: &Kt, opts: &AddOpts, princ_str: &str) 
         }
     };
     let keys = if opts.norandkey {
+        // MIT: `kadm5_get_principal_keys` (lib/kadm5/srv/svr_principal.c:1775-1776)
         s.h.refresh().and_then(|()| {
-            s.h.store
-                .get_in_realm(&name, &realm)
-                .map(|p| p.keys.clone())
-                .ok_or(Error::NotFound)
+            let p =
+                s.h.store
+                    .get_in_realm(&name, &realm)
+                    .ok_or(Error::NotFound)?;
+            p.check_kadm_data()?;
+            Ok(p.keys_in_order().into_iter().cloned().collect())
         })
     } else {
         s.h.mutate(|st, caller| {

@@ -1,8 +1,20 @@
 
 # cargo-vet audits file
 
+[[audits.dns-lookup]]
+who = "Aelieth"
+criteria = "safe-to-deploy"
+version = "4.0.2"
+notes = "Safe wrappers over libc getaddrinfo, getnameinfo, gethostname: CString inputs, zeroed hints, the addrinfo list freed in Drop, fixed 1024-byte name buffers read with CStr. No network or file access of its own. AddrInfo::from_ptr unwraps ai_canonname as UTF-8 (addrinfo.rs:145-150), so a canonical name that is not UTF-8 panics; the caller contains that with catch_unwind and counts it as no name."
+
 [[audits.rasn-derive]]
-who = "Aelieth <shaiaelieth@gmail.com>"
+who = "Aelieth"
 criteria = "safe-to-deploy"
 version = "0.28.14"
 notes = "Thin proc-macro facade: parse DeriveInput, forward to rasn-derive-impl, convert syn errors to compile_error. No unsafe."
+
+[[trusted.socket2]]
+criteria = "safe-to-deploy"
+user-id = 6025 # Thomas de Zeeuw (Thomasdezeeuw)
+start = "2020-09-09"
+end = "2027-11-07"

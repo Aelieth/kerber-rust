@@ -15,6 +15,9 @@
 ADENV=${FIELD_ADLAB_ENV:-$HOME/adlab/env}
 WINRM_PY=${FIELD_WINRM_PY:-python3}
 ADLOG=$STATE/ad.changed
+: "${FIELD_AD_DC_NAME:?FIELD_AD_DC_NAME is not set in field.env}"
+ADKDC=${FIELD_AD_BASE_KDC:?FIELD_AD_BASE_KDC is not set in field.env}   # KERBER.TEST's KdcNames on the DC at baseline
+ADBASE=$STATE/baseline.txt       # lib/ad/baseline.txt rendered with ADKDC
 DCSKEW=0
 : >> "$ADLOG"
 mkdir -p "$REC_DIR/dc"
@@ -28,7 +31,7 @@ dc() {
     shift
     cp "$FIELD_LIB/ad/$name.ps1" "$f"
     for kv in "$@"; do sed -i "s|@@${kv%%=*}@@|${kv#*=}|g" "$f"; done
-    head="[$(date -u +%T)] DC TEST-SERVER\$ dc-ps.py $name.ps1   # its text:"$'\n'"$(sed 's/^/    | /' "$f")"
+    head="[$(date -u +%T)] DC ${FIELD_AD_DC_NAME^^}\$ dc-ps.py $name.ps1   # its text:"$'\n'"$(sed 's/^/    | /' "$f")"
     limited "$WINRM_PY" -B "$FIELD_LIB/dc-ps.py" "$f" > "$STATE/out.raw" 2>&1 < /dev/null || rc=$?
     case $rc in 124 | 137) printf '(exit %s: stopped by the time limit, or past the deadline)\n' "$rc" >> "$STATE/out.raw" ;; esac
     _record "$head" "$STATE/out.raw" "$rc"
@@ -56,14 +59,15 @@ adstate() {
 
 adbaseline() {
     local res=FAIL seen
+    sed "s|@@AD_BASE_KDC@@|$ADKDC|g" "$FIELD_LIB/ad/baseline.txt" > "$ADBASE"
     adstate before
-    if [ "$LAST_RC" = 0 ] && [ -s "$STATE/ad.before" ] && ! diff -q "$FIELD_LIB/ad/baseline.txt" "$STATE/ad.before" > /dev/null; then
+    if [ "$LAST_RC" = 0 ] && [ -s "$STATE/ad.before" ] && ! diff -q "$ADBASE" "$STATE/ad.before" > /dev/null; then
         note "the DC is not at lib/ad/baseline.txt; the leftovers of a killed run are undone, nothing else is touched"
         printf 'leftovers\n' >> "$ADLOG"
         adundo
         adstate before
     fi
-    seen=$(diff "$FIELD_LIB/ad/baseline.txt" "$STATE/ad.before" | grep '^[<>]' | tr '\n' ' ')
+    seen=$(diff "$ADBASE" "$STATE/ad.before" | grep '^[<>]' | tr '\n' ' ')
     if [ "$LAST_RC" = 0 ] && [ -z "$seen" ]; then res=PASS; fi
     _checkrow dc.baseline "$res" "= lib/ad/baseline.txt" "$LAST_RC" "${seen:-identical}"
 }
@@ -77,7 +81,7 @@ adapply() {
 
 adundo() {
     [ -s "$ADLOG" ] || return 0
-    check ad.undo '^undone$' dc undo KDC_LAN="${KDC_LAN:-none}"
+    check ad.undo '^undone$' dc undo KDC_LAN="${KDC_LAN:-none}" AD_BASE_KDC="$ADKDC"
     if [ "$LAST_RC" = 0 ] && grep -qx undone "$LAST_OUT"; then : > "$ADLOG"; fi
 }
 

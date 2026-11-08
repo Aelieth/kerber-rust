@@ -755,8 +755,6 @@ impl Ulog {
     }
 
     // MIT: `ulog_get_entries` (lib/kdb/kdb_log.c:580-649)
-    // MIT: `ulog_get_entries` (lib/kdb/kdb_log.c:580-649)
-    // MIT: `ulog_get_entries` (lib/kdb/kdb_log.c:601-604)
     /// Exclusive lock to reset; MIT uses the shared lock.
     /// A slot without the next serial is an error; MIT would send it.
     pub fn get_entries(&self, last: UlogLast) -> Result<UlogUpdates, UlogError> {

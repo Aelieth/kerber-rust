@@ -6,7 +6,7 @@ image `kerber-rust-mit-kdc:1.22.2`. The source is verified with
 `sha256sum -c` in CI: the `anchors` job in `nightly.yml` fetches the tarball and checks
 that SHA, as `harness/Dockerfile` does.
 Samba is regression, not the equality bar. Isolation: host
-`/etc/krb5.conf` stays `TESTLABBY.LOCAL`.
+`/etc/krb5.conf` stays untouched.
 
 The ledger began as a sweep of the KDC, with corrections applied from
 the three verification reports (one per section A1–A3).
@@ -72,7 +72,7 @@ is `proposed`. The listed live `diffsend` cases are `garbage-pdu`,
 `s4u2proxy-local-stkt-pac`, `u2u-no-2nd-tkt`, `u2u-2nd-ticket-not-tgs`,
 `u2u-2nd-ticket-mismatch`, `u2u-2nd-ticket-bad-pac`, `u2u-bad-etype`,
 `u2u-success`, `tgs-addr-mismatch`, `tgs-forwarded-addresses`,
-`u2u-2nd-ticket-foreign-realm`, `s4u2self-renew-options`,
+`u2u-2nd-ticket-foreign-realm`, `s4u2self-renew-options`, `tgs-order-s4u2self-cksum-renew`, `tgs-order-proxy-no-stkt-renew`, `tgs-order-u2u-stkt-unknown-bit`, `tgs-order-s4u2self-bad-stkt`, `tgs-log-referral`, `tgs-log-alias`, `tgs-log-fast-inner`,
 `pa-s4u-x509-user-truncated`, `s4u2self-krbtgt-other`,
 `tgs-locked-pac-mismatch`, `u2u-dup-skey-tgt-based`,
 `tgs-expired-addr-mismatch`, `tgs-expired-badmatch`,
@@ -132,8 +132,8 @@ wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
 Counts:
-**608** = A1 133 + A2 94 + A3 122 + A4 69 + A5 36 + B1 154.
-exact 477 · stricter-documented 24 · deviation 38 ·
+**609** = A1 133 + A2 94 + A3 122 + A4 70 + A5 36 + B1 154.
+exact 480 · stricter-documented 23 · deviation 37 ·
 absent 3 · deferred 66.
 
 When the ledger was split into these files, the one-file A4 (153 rows,

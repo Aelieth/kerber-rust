@@ -417,7 +417,7 @@ fn spake_expired_cookie_is_preauth_failed() {
         .find(|p| p.padata_type == pa::FX_COOKIE)
         .expect("cookie");
     let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
-    let princ = cname.unparse_with_realm(TEST_REALM);
+    let princ = cname.unparse_with_realm_lossy(TEST_REALM);
     let mut seed = b"COOKIE".to_vec();
     seed.extend_from_slice(princ.as_bytes());
     let rnd = prf_plus(&krbtgt.key, &seed, krbtgt.key.etype().key_len()).expect("prf+");

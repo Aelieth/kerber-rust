@@ -60,12 +60,12 @@ fn main() {
     let tgt = cc
         .creds
         .iter()
-        .find(|c| !c.is_config() && c.server.1.components_joined().starts_with("krbtgt/"));
+        .find(|c| !c.is_config() && c.server.1.components_joined_lossy().starts_with("krbtgt/"));
     let svc = cc.creds.iter().find(|c| {
         !c.is_config()
             && c.server
                 .1
-                .components_joined()
+                .components_joined_lossy()
                 .starts_with(&format!("host/{host_name}"))
     });
     let (Some(tgt), Some(svc)) = (tgt, svc) else {

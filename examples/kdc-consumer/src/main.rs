@@ -72,8 +72,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("user={TEST_USER}@{TEST_REALM}");
     println!("password_len={}", TEST_USER_PASSWORD.len());
     println!("tgt_usage={}", tkt_usage.get());
-    println!("tgt_client={}", tgt_part.cname.components_joined());
-    println!("host_ticket_client={}", svc_part.cname.components_joined());
+    println!("tgt_client={}", tgt_part.cname.components_joined_lossy());
+    println!(
+        "host_ticket_client={}",
+        svc_part.cname.components_joined_lossy()
+    );
     println!("keytab_entries={}", parsed.entries.len());
     println!("keytab_v2={}", kt_bytes[0] == 0x05 && kt_bytes[1] == 0x02);
     println!("ap_ok=true");
@@ -141,7 +144,7 @@ mod tests {
         )
         .unwrap();
         let tgt: EncTicketPart = decode(&tkt_plain).unwrap();
-        assert_eq!(tgt.cname.components_joined(), TEST_USER);
+        assert_eq!(tgt.cname.components_joined_lossy(), TEST_USER);
 
         let tgs = tgs_req(
             as_out.rep.0.ticket.clone(),
@@ -163,7 +166,7 @@ mod tests {
         )
         .unwrap();
         let svc: EncTicketPart = decode(&svc_plain).unwrap();
-        assert_eq!(svc.cname.components_joined(), TEST_USER);
+        assert_eq!(svc.cname.components_joined_lossy(), TEST_USER);
 
         let kt = store
             .export_keytab(&acl, &documented_admin_id(), &documented_host())
@@ -176,7 +179,7 @@ mod tests {
         assert!(
             parsed.entries[0]
                 .name
-                .components_joined()
+                .components_joined_lossy()
                 .contains(TEST_HOST)
         );
 

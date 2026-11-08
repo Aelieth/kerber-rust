@@ -17,7 +17,10 @@ use krb5_testkit::user;
 use krb5_types::{
     MethodData, PaData, PrincipalName, err, pa,
     pkinit::kdc_req_body_checksum,
-    pkinit::{ECONTENT_AUTHDATA, PaPkAsReq, cms_sign_leaf, cms_verify, parse_pa_pk_as_req_cms},
+    pkinit::{
+        CmsSigner, ECONTENT_AUTHDATA, PaPkAsReq, cms_sign_leaf, cms_signeddata_verify,
+        parse_pa_pk_as_req_cms,
+    },
 };
 
 fn tlv(tag: u8, body: &[u8]) -> Vec<u8> {
@@ -120,7 +123,10 @@ fn stale_freshness_req(ca: &krb5_types::pkinit::PkinitCa) -> krb5_types::AsReq {
     let ck = krb5_types::pkinit::kdc_req_body_checksum(&body);
     let honest = pa_pk_as_req(&kp.public, ca, Some(&ck)).expect("PA-PK-AS-REQ");
     let cms0 = parse_pa_pk_as_req_cms(honest.padata_value.as_ref()).expect("cms");
-    let inner = cms_verify(&cms0, &ca.ca_cert).expect("AuthPack");
+    let anchors = [ca.ca_cert.clone()];
+    let inner = cms_signeddata_verify(&cms0, &anchors, &[], CmsSigner::Client)
+        .expect("AuthPack")
+        .e_content;
     let mut stale = 0u32.wrapping_sub(601).to_be_bytes().to_vec();
     stale.extend_from_slice(&1u32.to_be_bytes());
     stale.extend_from_slice(&[0u8; 12]);
@@ -213,7 +219,10 @@ fn pkinit_signed_content_type_mismatch_is_refused() {
         .and_then(|v| v.first())
         .expect("pa");
     let cms = krb5_types::pkinit::parse_pa_pk_as_req_cms(pa.padata_value.as_ref()).expect("cms");
-    let inner = krb5_types::pkinit::cms_verify(&cms, &ca.ca_cert).expect("inner");
+    let anchors = [ca.ca_cert.clone()];
+    let inner = cms_signeddata_verify(&cms, &anchors, &[], CmsSigner::Client)
+        .expect("inner")
+        .e_content;
     let (cert, key) = ca
         .client_identity_for("user@KERBER.TEST")
         .expect("client id");

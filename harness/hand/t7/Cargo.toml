@@ -1,0 +1,44 @@
+# Constant-time timing harness for krb5-crypto and the PKINIT code of krb5-types (T-7). A
+# measurement tool, not a test: its own workspace, like fuzz/, outside the main one. See README.md.
+
+[package]
+name = "timing"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+krb5-crypto = { path = "../../../crates/krb5-crypto" }
+krb5-types = { path = "../../../crates/krb5-types", optional = true }
+# The ECDSA ops time these crates' signing directly, as krb5-types' p*_sign calls it, without DER.
+p224 = { version = "=0.14.0-rc.15", features = ["ecdsa"], optional = true }
+p256 = { version = "0.14", features = ["ecdsa"], optional = true }
+p384 = { version = "0.14", features = ["ecdsa"], optional = true }
+k256 = { version = "0.14", features = ["ecdsa"], optional = true }
+# The brainpool ops: bp256 and bp384 as the tree pins them, and the tree's own P512 crate. ecdsa
+# for its generic SigningKey.
+bp256 = { version = "=0.14.0", default-features = false, features = ["arithmetic", "ecdsa", "sha256"], optional = true }
+bp384 = { version = "=0.14.0", default-features = false, features = ["arithmetic", "ecdsa", "sha384"], optional = true }
+krb5-brainpool = { path = "../../../crates/krb5-brainpool", optional = true }
+ecdsa = { version = "0.17", default-features = false, features = ["algorithm"], optional = true }
+# The cb-* ops time the RSA private op's crypto-bigint primitives directly (the tree's 0.7.5).
+crypto-bigint = { version = "0.7", default-features = false, features = ["zeroize"], optional = true }
+dudect-bencher = "0.7"
+# perf_event_open and read(2) for `--count` (cycles, instructions, branches).
+libc = "0.2"
+
+[features]
+# The PKINIT ops (RSA, MODP and EC key exchange, ECDSA) use krb5_types::pkinit::{RsaKey, KxKey,
+# KxGroup, IdentityKey}; --no-default-features leaves the krb5-crypto ops only.
+default = ["pk"]
+pk = ["dep:krb5-types", "dep:p224", "dep:p256", "dep:p384", "dep:k256", "dep:crypto-bigint", "dep:bp256", "dep:bp384", "dep:krb5-brainpool", "dep:ecdsa"]
+
+# The tree takes rasn from vendor/rasn (its own [patch.crates-io]): the same here, so the decoder
+# timed is the one that ships.
+[patch.crates-io]
+rasn = { path = "../../../vendor/rasn" }
+
+# No [profile.release]: the tree sets none, so cargo's default release profile is what its own
+# binaries are built with, and what is timed here.

@@ -29,6 +29,8 @@ use krb5_types::pac::RpcSid;
 use crate::dblock::{DbLock, DbLockHold, DbLockMode};
 use crate::error::Error;
 use crate::persist::{DbStamp, Freshness, PersistError};
+#[cfg(any(test, feature = "test-hooks"))]
+pub(crate) use iprop_ulog::RecordKey;
 use iprop_ulog::{LogContext, LogNote, PrincipalMap};
 use kadm5_hook::Post;
 #[cfg(any(test, feature = "test-hooks"))]
@@ -269,8 +271,7 @@ impl PrincipalStore {
         if let Some(a) = self.ahead.take()
             && self.db_stamp.as_ref() == Some(&a.base)
         {
-            self.apply_appended(a);
-            return Ok(());
+            return self.apply_appended(a);
         }
         let Some(db) = self.db_path().map(std::path::Path::to_path_buf) else {
             return Ok(());
@@ -298,8 +299,7 @@ impl PrincipalStore {
         let Some(a) = self.prepare_appended(lock, db) else {
             return false;
         };
-        self.apply_appended(a);
-        true
+        self.apply_appended(a).is_ok()
     }
 
     /// `K/M` and `kadmin/history` are not password changes.
@@ -336,19 +336,20 @@ impl PrincipalStore {
         Some(ReadAhead { base, taken, stamp })
     }
 
-    fn apply_appended(&mut self, a: ReadAhead) {
+    fn apply_appended(&mut self, a: ReadAhead) -> Result<(), Error> {
         let mut ids = Vec::with_capacity(a.taken.len());
         for op in a.taken {
             match op {
                 Ok(p) => {
                     ids.push(p.id());
-                    self.debug_insert(p);
+                    self.debug_insert(p)?;
                 }
                 Err(id) => self.debug_remove(&id),
             }
         }
         self.resolve_history_of(&ids);
         self.db_stamp = a.stamp;
+        Ok(())
     }
 
     pub(crate) fn journal_key(&self) -> Option<krb5_crypto::ProtocolKey> {
@@ -777,7 +778,7 @@ impl PrincipalStore {
 
     #[must_use]
     pub fn get_in_realm(&self, name: &PrincipalName, princ_realm: &str) -> Option<&Principal> {
-        self.get(&crate::kdb::lookup_principal_id(name, princ_realm))
+        self.get(&crate::kdb::lookup_principal_id(name, princ_realm)?)
     }
 
     #[must_use]
@@ -791,9 +792,11 @@ impl PrincipalStore {
         self.map.values()
     }
 
-    pub(crate) fn debug_insert(&mut self, mut p: Principal) {
+    pub(crate) fn debug_insert(&mut self, mut p: Principal) -> Result<(), Error> {
+        let key = iprop_ulog::RecordKey::of(&p)?;
         self.settle_rid(&mut p);
-        self.map.insert_unlogged(p.id(), p);
+        self.map.put_record_unlogged(key, p);
+        Ok(())
     }
 
     pub(crate) fn principal_by_id(&self, id: &str) -> Option<&Principal> {
@@ -828,7 +831,7 @@ pub use iprop_ulog::{
 };
 pub use iprop_xdr::{
     IncrLayout, KeyWrap, UlogTime, XdrError, decode_incr_update, decode_kdbe_bytes,
-    encode_incr_update, encode_kdbe, walk_incr_update,
+    encode_incr_update, encode_kdbe, skip_incr_update, walk_incr_update,
 };
 pub use kadm5_hook::{
     HookStage, Kadm5Hook, clear_thread_kadm5_hook, register_kadm5_hook, set_thread_kadm5_hook,
@@ -840,16 +843,16 @@ pub use kdb_convert::{
     IpropUpdate, KdbeVal, ULOG_ADD_ATTRS, attr_bit, conv_2dbentry, conv_2logentry,
 };
 pub(crate) use kdb_convert::{encode_string_attrs, update_tl_data};
-pub use keys::{KeyEntry, KeyLookup, KtkdbError, ktkdb_get_entry, random_key};
+pub use keys::{KeyEntry, KeyLookup, KeySlot, KtkdbError, OpaqueKey, ktkdb_get_entry, random_key};
 pub use password::{
     PWQUAL_DICT, PWQUAL_EMPTY, PWQUAL_PRINC, PasswordPlan, PreparedPassword, S2K_ITERS,
-    apply_keysalt_policy,
+    apply_keysalt_policy, change_password_shared,
 };
 pub use policy::{NamedPolicy, Policy, SpakeKdc};
 pub(crate) use principal::PrincipalFields;
 pub use principal::{
-    AdminEnt, AdminFields, CreateKeys, CreatePlan, KadmData, PreparedCreate, Principal,
-    PrincipalBuilder, TlData, strip_db_args,
+    AdminEnt, AdminFields, CreateKeys, CreatePlan, KDB_INUSE, KadmData, PreparedCreate, Principal,
+    PrincipalBuilder, TlData, XDR_FAILURE, create_password_shared, strip_db_args,
 };
 pub(crate) use principal::{db_args_put_error, refresh_kadm_tl};
 pub use pwqual::{Pwqual, clear_thread_pwqual, register_pwqual, set_thread_pwqual};

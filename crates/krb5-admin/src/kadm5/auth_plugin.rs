@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use krb5_config::PluginRelations;
 use krb5_kdc::{Acl, AdminOp, Restrictions};
-use krb5_types::{principal_compare, principal_from_unparsed};
+use krb5_types::{PrincipalName, principal_compare, principal_from_unparsed};
 
 /// Allow=0, Abstain=`KRB5_PLUGIN_NO_HANDLE`, else Deny; Deny stops the stack.
 // MIT: `kadm5_auth_addprinc_fn` (include/krb5/kadm5_auth_plugin.h)
@@ -224,6 +224,8 @@ impl Kadm5Auth for SelfModule {
 
 pub struct AuthStack {
     modules: Vec<Arc<dyn Kadm5Auth>>,
+    acl: Option<Arc<Acl>>,
+    self_on: bool,
 }
 
 impl AuthStack {
@@ -341,6 +343,26 @@ impl AuthStack {
     pub fn addalias(&self, client: &str, alias: &str, target: &str) -> bool {
         self.combine(|m| m.addalias(client, alias, target))
     }
+
+    pub(crate) fn self_on(&self) -> bool {
+        self.self_on
+    }
+
+    /// Non-UTF-8 target: only `acl` and `self`, by bytes.
+    #[must_use]
+    pub fn cpw_name(&self, client: &str, target: &PrincipalName, realm: &[u8]) -> bool {
+        let op = AdminOp::ChangePassword;
+        self.acl
+            .as_ref()
+            .is_some_and(|a| a.allows_name(client, op, target, realm))
+            || (self.self_on && same_bytes(client, target, realm))
+    }
+}
+
+// MIT: `self_compare` (kadmin/server/auth_self.c)
+fn same_bytes(client: &str, target: &PrincipalName, realm: &[u8]) -> bool {
+    principal_from_unparsed(client, "")
+        .is_ok_and(|(n, r)| r.as_bytes() == realm && n.name_string == target.name_string)
 }
 
 pub struct Kadm5AuthConfig {
@@ -353,10 +375,12 @@ impl Kadm5AuthConfig {
     #[must_use]
     pub fn build(acl: Acl, extra: &[Arc<dyn Kadm5Auth>], relations: &PluginRelations) -> Self {
         let acl = Arc::new(acl);
+        let acl_mod: Arc<dyn Kadm5Auth> = Arc::new(AclModule(Arc::clone(&acl)));
+        let self_mod: Arc<dyn Kadm5Auth> = Arc::new(SelfModule);
         // MIT: `make_full_list` (lib/krb5/krb/plugin.c:223-235)
         let mut candidates: Vec<Arc<dyn Kadm5Auth>> = extra.to_vec();
-        candidates.push(Arc::new(AclModule(Arc::clone(&acl))));
-        candidates.push(Arc::new(SelfModule));
+        candidates.push(Arc::clone(&acl_mod));
+        candidates.push(Arc::clone(&self_mod));
         let names: Vec<&str> = candidates.iter().map(|m| m.name()).collect();
         let kept = krb5_config::filter_plugin_modules(relations, &names);
         let mut left = candidates;
@@ -366,8 +390,14 @@ impl Kadm5AuthConfig {
                 modules.push(left.remove(index));
             }
         }
+        let kept = |b: &Arc<dyn Kadm5Auth>| modules.iter().any(|m| Arc::ptr_eq(m, b));
+        let (acl_on, self_on) = (kept(&acl_mod), kept(&self_mod));
         Self {
-            stack: AuthStack { modules },
+            stack: AuthStack {
+                modules,
+                acl: acl_on.then_some(acl),
+                self_on,
+            },
         }
     }
 

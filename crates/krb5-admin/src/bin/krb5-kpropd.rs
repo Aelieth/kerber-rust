@@ -31,7 +31,6 @@ use nix::sys::socket::{
 
 use krb5_config::ProfileSet;
 use krb5_protocol::{AcceptorConfig, ReplayCache};
-use krb5_types::PrincipalName;
 
 const MAX_HANDLERS: usize = 64;
 static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
@@ -189,8 +188,7 @@ fn main() {
                         eprintln!("Full propagation timed out");
                     }
                     if let Some((_, left)) = &turn
-                        && let Some(keys) =
-                            host_keys(&progname, keytab.as_deref(), &server, &kdc_context)
+                        && let Some(keys) = host_keys(&progname, keytab.as_deref(), &kdc_context)
                     {
                         kpropd_handle_conn(
                             &mut stream,
@@ -512,17 +510,21 @@ fn kpropd_paths(realm: Option<&str>) -> Result<krb5_config::KdcPaths, krb5_confi
 /// Only a trailing newline is stripped; CR, leading space, and `#` stay.
 /// A missing file refuses every peer.
 fn kpropd_acl(path: &Path) -> Option<Vec<String>> {
-    let text = String::from_utf8_lossy(&std::fs::read(path).ok()?).into_owned();
-    Some(text.split('\n').map(str::to_owned).collect())
+    let bytes = std::fs::read(path).ok()?;
+    let lines = bytes.split(|b| *b == b'\n');
+    Some(
+        lines
+            .filter_map(|l| std::str::from_utf8(l).ok().map(str::to_owned))
+            .collect(),
+    )
 }
 
 fn host_keys(
     progname: &str,
     keytab: Option<&str>,
-    server: &PrincipalName,
     ctx: &krb5_config::ClientContext,
 ) -> Option<KpropdKeys> {
-    match kpropd_keytab_keys(keytab, Some(server), ctx) {
+    match kpropd_keytab_keys(keytab, ctx) {
         Ok(keys) => Some(keys),
         Err(e) => {
             eprintln!("{progname}: Error in krb5_kt_resolve: {e}");

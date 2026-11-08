@@ -7,13 +7,12 @@
 #                               executed a program ("exec: <pid>": kpropd's kdb5_util load, which is not the daemon)
 #                               and each krb5.conf or kdc.conf open by the daemon itself, then
 #                               "<name> live: N accept/recv lines" and "<name> profile opens: N"
-#   kpropd-start <leg> <realm>  a second kpropd on port 7754 with its own kdc.conf, database, keytab and ACL; a dump
+#   kpropd-start <leg> <realm> [kdc dir]  a second kpropd on port 7754 with its own kdc.conf, database, keytab and ACL; a dump
 #                               of the realm in $D/dump for kprop; prints "kpropd <pid> listening on 7754"
 #   kpropd-stop <realm>         that kpropd stopped and $D removed, with host/<this host> if it was made here
 # shellcheck shell=sh
 set -u
 D=/var/tmp/cf-e0
-KC=/var/kerberos/krb5kdc/kdc.conf
 cmd=$1
 shift
 case $cmd in
@@ -50,7 +49,8 @@ detach)
     ' "$D/$name.trace"
     ;;
 kpropd-start)
-    realm=$2
+    realm=$2 kdir=${3:-/var/kerberos/krb5kdc}
+    KC=$kdir/kdc.conf
     fqdn=$(hostname -f)
     princ="host/$fqdn@$realm"
     mkdir -p "$D/replica"
@@ -61,7 +61,7 @@ kpropd-start)
     echo "$princ" > "$D/kpropd.acl"
     stash=$(awk -F= '/^[[:space:]]*key_stash_file[[:space:]]*=/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' "$KC")
     printf '[realms]\n    %s = {\n        database_name = %s/replica/principal\n        key_stash_file = %s\n    }\n' \
-        "$realm" "$D" "${stash:-/var/kerberos/krb5kdc/.k5.$realm}" > "$D/kdc.conf"
+        "$realm" "$D" "${stash:-$kdir/.k5.$realm}" > "$D/kdc.conf"
     kdb5_util dump "$D/dump"
     set -- -D -P 7754 -r "$realm" -s "$D/kt" -a "$D/kpropd.acl" -f "$D/from_primary"
     KRB5_KDC_PROFILE=$D/kdc.conf nohup /usr/sbin/kpropd "$@" > "$D/kpropd.out" 2>&1 < /dev/null &

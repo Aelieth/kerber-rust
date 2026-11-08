@@ -18,7 +18,7 @@ if ($b.Length -gt 824) {
 }
 $kdcs = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\Kerberos\Domains\KERBER.TEST').KdcNames
 foreach ($k in ($ip, '@@KDC_LAN@@' | Select-Object -Unique)) {
-    if ($k -and $k -ne '10.10.44.154' -and $kdcs -contains $k) { ksetup /delkdc KERBER.TEST $k | Out-Null; "#3 undone ($k)" }
+    if ($k -and $k -ne '@@AD_BASE_KDC@@' -and $kdcs -contains $k) { ksetup /delkdc KERBER.TEST $k | Out-Null; "#3 undone ($k)" }
 }
 if (Test-Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\Kerberos\HostToRealm\KERBER.TEST') {
     ksetup /delhosttorealmmap kdc.kerber.test KERBER.TEST | Out-Null; '#4 undone'

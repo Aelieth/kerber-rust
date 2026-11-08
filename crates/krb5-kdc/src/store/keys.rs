@@ -27,6 +27,78 @@ pub struct KeyEntry {
     pub kdb_salt: Option<Vec<u8>>,
 }
 
+// MIT: `process_k5beta7_princ` (kadmin/dbutil/dump.c:729-766)
+#[derive(Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct OpaqueKey {
+    pub ver: i32,
+    pub kvno: u32,
+    pub slots: Vec<(i32, Vec<u8>)>,
+    pub at: usize,
+}
+
+impl std::fmt::Debug for OpaqueKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let slots: Vec<(i32, usize)> = self.slots.iter().map(|(t, b)| (*t, b.len())).collect();
+        f.debug_struct("OpaqueKey")
+            .field("ver", &self.ver)
+            .field("kvno", &self.kvno)
+            .field("slots", &slots)
+            .field("at", &self.at)
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub enum KeySlot<'a> {
+    Usable(&'a KeyEntry),
+    Opaque(&'a OpaqueKey),
+}
+
+impl KeySlot<'_> {
+    #[must_use]
+    pub fn kvno(&self) -> u32 {
+        match self {
+            Self::Usable(k) => k.kvno,
+            Self::Opaque(o) => o.kvno,
+        }
+    }
+}
+
+// MIT: `krb5_dbe_sort_key_data` (lib/kdb/kdb5.c:2788-2803)
+pub(crate) fn merge_slots<'a>(keys: &'a [KeyEntry], opaque: &'a [OpaqueKey]) -> Vec<KeySlot<'a>> {
+    let mut slots: Vec<KeySlot<'a>> = keys.iter().map(KeySlot::Usable).collect();
+    for o in opaque {
+        slots.insert(o.at.min(slots.len()), KeySlot::Opaque(o));
+    }
+    slots.sort_by_key(|s| std::cmp::Reverse(s.kvno()));
+    slots
+}
+
+impl Principal {
+    #[must_use]
+    pub fn key_slots(&self) -> Vec<KeySlot<'_>> {
+        merge_slots(&self.keys, &self.opaque_keys)
+    }
+
+    // MIT: `kadm5_get_principal_keys` (lib/kadm5/srv/svr_principal.c:1775-1776)
+    #[must_use]
+    pub fn keys_in_order(&self) -> Vec<&KeyEntry> {
+        let usable = |s| match s {
+            KeySlot::Usable(k) => Some(k),
+            KeySlot::Opaque(_) => None,
+        };
+        self.key_slots().into_iter().filter_map(usable).collect()
+    }
+
+    // MIT: `krb5_db_get_principal` (lib/kdb/kdb5.c:838-840)
+    #[must_use]
+    pub fn top_kvno(&self) -> Option<u32> {
+        kvnos(self).max()
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KeyLookup {
     NoMatchingKey,
@@ -143,22 +215,93 @@ impl KeyEntry {
     }
 }
 
+fn kvnos(p: &Principal) -> impl Iterator<Item = u32> + '_ {
+    let opaque = p.opaque_keys.iter().map(|o| o.kvno);
+    p.keys.iter().map(|k| k.kvno).chain(opaque)
+}
+
 // MIT: `rekey` (lib/kdb/kdb_cpw.c:355-362)
-pub(super) fn next_kvno(keys: &[KeyEntry]) -> u32 {
-    match keys.iter().map(|k| k.kvno).max() {
+pub(super) fn next_kvno(p: &Principal) -> u32 {
+    match kvnos(p).max() {
         Some(n) if n >= 65535 => 1,
         Some(n) => n + 1,
         None => 1,
     }
 }
 
-pub(super) fn cap_key_versions(keys: &mut Vec<KeyEntry>, n: u32) {
-    let mut kvnos: Vec<u32> = keys.iter().map(|k| k.kvno).collect();
-    kvnos.sort_unstable();
-    kvnos.dedup();
-    kvnos.reverse();
-    let keep: std::collections::HashSet<u32> = kvnos.into_iter().take(n as usize).collect();
-    keys.retain(|k| keep.contains(&k.kvno));
+// MIT: `rekey` (lib/kdb/kdb_cpw.c:381-385)
+// MIT: `preserve_old_keys` (lib/kdb/kdb_cpw.c:118-145)
+pub(super) fn with_old_keys(
+    p: &Principal,
+    new: Vec<KeyEntry>,
+    keepold: u32,
+    mkey: Option<&ProtocolKey>,
+) -> Result<(Vec<KeyEntry>, Vec<OpaqueKey>), Error> {
+    let (mut keys, mut opaque) = (new, Vec::new());
+    if keepold == 0 {
+        return Ok((keys, opaque));
+    }
+    let (mut last, mut changes) = (0, 0);
+    for (i, slot) in p.key_slots().into_iter().enumerate() {
+        let kvno = slot.kvno();
+        if keepold > 1 {
+            if i > 0 && kvno != last {
+                changes += 1;
+            }
+            if changes >= keepold - 1 {
+                break;
+            }
+            last = kvno;
+        }
+        match slot {
+            KeySlot::Usable(k) => keys.push(k.clone()),
+            KeySlot::Opaque(o) => {
+                open_wrap(mkey, o.slots.first().map_or(&[][..], |s| &s.1))?;
+                let mut o = o.clone();
+                o.at = keys.len() + opaque.len();
+                opaque.push(o);
+            }
+        }
+    }
+    Ok((keys, opaque))
+}
+
+// MIT: `preserve_one_old_key` (lib/kdb/kdb_cpw.c:86-114)
+// MIT: `krb5_dbe_def_decrypt_key_data` (lib/kdb/decrypt_key.c:74-99)
+fn open_wrap(mkey: Option<&ProtocolKey>, c: &[u8]) -> Result<(), Error> {
+    let Some(mkey) = mkey else {
+        return Err(Error::Crypto("Stored master key is corrupted".into()));
+    };
+    if c.len() < 2 || i16::from_le_bytes([c[0], c[1]]) < 0 {
+        return Err(Error::Crypto("Key size in database is invalid".into()));
+    }
+    let text = match krb5_crypto::kdb_decrypt_key(mkey, c) {
+        Ok(_) => return Ok(()),
+        Err(krb5_crypto::Error::InvalidKeyLength) => "Cryptosystem internal error",
+        Err(krb5_crypto::Error::CiphertextTooShort) => {
+            "Message size is incompatible with encryption type"
+        }
+        Err(_) => "Decrypt integrity check failed",
+    };
+    Err(Error::Crypto(text.into()))
+}
+
+fn retain_slots(p: &mut Principal, keep: impl Fn(u32) -> bool) {
+    let mut slots: Vec<Result<KeyEntry, OpaqueKey>> =
+        std::mem::take(&mut p.keys).into_iter().map(Ok).collect();
+    for o in std::mem::take(&mut p.opaque_keys) {
+        slots.insert(o.at.min(slots.len()), Err(o));
+    }
+    slots.retain(|s| keep(s.as_ref().map_or_else(|o| o.kvno, |k| k.kvno)));
+    for (at, s) in slots.into_iter().enumerate() {
+        match s {
+            Ok(k) => p.keys.push(k),
+            Err(mut o) => {
+                o.at = at;
+                p.opaque_keys.push(o);
+            }
+        }
+    }
 }
 
 // MIT: `krb5_c_make_random_key` (lib/crypto/krb/make_random_key.c:31-76)
@@ -200,7 +343,7 @@ impl PrincipalStore {
         actor: &str,
         name: &PrincipalName,
     ) -> Result<Keytab, Error> {
-        let id = crate::kdb::lookup_principal_id(name, &self.realm);
+        let id = crate::kdb::principal_id(name, &self.realm)?;
         acl.check(actor, AdminOp::Ktadd, Some(&id))?;
         let p = self.get_name(name).ok_or(Error::NotFound)?;
         if p.attributes & KDB_LOCKDOWN_KEYS != 0 {
@@ -240,9 +383,10 @@ impl PrincipalStore {
             })();
             // No database: a failed rotate puts the old keys back.
             if done.is_err() && rotate && !persisted {
-                let id = snap.id();
-                s.note_ulog(id.clone(), false, Some(snap.clone()));
-                s.map.insert(id, snap);
+                if let Ok(key) = super::iprop_ulog::RecordKey::of(&snap) {
+                    s.note_ulog(key.as_str().to_owned(), false, Some(snap.clone()));
+                    s.map.put_record(key, snap);
+                }
                 let _ = s.log_pending();
             }
             done
@@ -257,8 +401,8 @@ impl PrincipalStore {
         let realm =
             krb5_types::try_ascii(&p.realm).map_err(|_| Error::Crypto("non-ascii realm".into()))?;
         let entries = p
-            .keys
-            .iter()
+            .keys_in_order()
+            .into_iter()
             .map(|key| KeytabEntry {
                 realm: realm.clone(),
                 name: p.name.clone(),
@@ -300,15 +444,16 @@ impl PrincipalStore {
         actor: &str,
     ) -> Result<Vec<KeyEntry>, Error> {
         self.inside_change()?;
-        let history = princ_realm == self.realm && name.components_joined() == "kadmin/history";
+        let history =
+            princ_realm == self.realm && name.components_joined_lossy() == "kadmin/history";
         if history && keepold > 0 {
             return Err(Error::InvalidArgument(
                 "Cannot change protected principal".into(),
             ));
         }
-        let id = self.canonical_id(name, princ_realm)?;
+        let id = self.adb_id(name, princ_realm)?;
         let existing = self.map.get(&id).ok_or(Error::NotFound)?;
-        let kvno = next_kvno(&existing.keys);
+        let kvno = next_kvno(existing);
         let allowed = existing
             .pw_policy
             .as_ref()
@@ -330,15 +475,10 @@ impl PrincipalStore {
             None,
             &use_etypes,
         )?;
+        let mkey = (keepold > 0).then(|| self.iprop_master_key()).flatten();
         {
             let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
-            let old = std::mem::replace(&mut p.keys, new_keys.clone());
-            if keepold > 0 {
-                p.keys.extend(old);
-                if keepold > 1 {
-                    cap_key_versions(&mut p.keys, keepold);
-                }
-            }
+            (p.keys, p.opaque_keys) = with_old_keys(p, new_keys.clone(), keepold, mkey.as_ref())?;
             // MIT: `kadm5_randkey_principal_3` (lib/kadm5/srv/svr_principal.c:1452-1475)
             p.attributes &= !KDB_REQUIRES_PWCHANGE;
             p.fail_auth_count = 0;
@@ -391,14 +531,15 @@ impl PrincipalStore {
         actor: &str,
     ) -> Result<(), Error> {
         self.inside_change()?;
-        let id = self.canonical_id(name, princ_realm)?;
+        let id = self.adb_id(name, princ_realm)?;
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
+        // MIT: `kadm5_purgekeys` (lib/kadm5/srv/svr_principal.c:1958-1985)
         let keep = if keepkvno <= 0 {
-            p.keys.iter().map(|k| k.kvno).max().unwrap_or(0)
+            kvnos(p).max().unwrap_or(0)
         } else {
             u32::try_from(keepkvno).unwrap_or(u32::MAX)
         };
-        p.keys.retain(|k| k.kvno >= keep);
+        retain_slots(p, |kvno| kvno >= keep);
         stamp_admin_tl(p, false, actor);
         let snap = p.clone();
         self.note_ulog(id, false, Some(snap));
@@ -429,7 +570,7 @@ impl PrincipalStore {
         if keys.is_empty() {
             return Err(Error::InvalidArgument("Invalid argument".into()));
         }
-        if princ_realm == self.realm && name.components_joined() == "kadmin/history" {
+        if princ_realm == self.realm && name.components_joined_lossy() == "kadmin/history" {
             return Err(Error::InvalidArgument(
                 "Cannot change protected principal".into(),
             ));
@@ -438,11 +579,11 @@ impl PrincipalStore {
         if keys.iter().any(|k| k.kvno != want) {
             return Err(Error::Crypto("setkey kvno".into()));
         }
-        let id = self.canonical_id(name, princ_realm)?;
+        let id = self.adb_id(name, princ_realm)?;
         let p = self.map.get(&id).ok_or(Error::NotFound)?;
         let kvno = if want == 0 {
-            next_kvno(&p.keys)
-        } else if want > 65535 || keepold > 0 && p.keys.iter().any(|k| k.kvno == want) {
+            next_kvno(p)
+        } else if want > 65535 || keepold > 0 && kvnos(p).any(|k| k == want) {
             return Err(Error::Crypto("setkey kvno".into()));
         } else {
             want
@@ -471,20 +612,13 @@ impl PrincipalStore {
                 ));
             }
         }
+        let mkey = (keepold > 0).then(|| self.iprop_master_key()).flatten();
         {
             let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
             for k in &mut keys {
                 k.kvno = kvno;
             }
-            if keepold > 0 {
-                let old = std::mem::replace(&mut p.keys, keys);
-                p.keys.extend(old);
-                if keepold > 1 {
-                    cap_key_versions(&mut p.keys, keepold);
-                }
-            } else {
-                p.keys = keys;
-            }
+            (p.keys, p.opaque_keys) = with_old_keys(p, keys, keepold, mkey.as_ref())?;
             p.attributes &= !KDB_REQUIRES_PWCHANGE;
             p.fail_auth_count = 0;
             stamp_admin_tl(p, true, actor);

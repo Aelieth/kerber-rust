@@ -12,7 +12,7 @@ logs. Unit tests alone do not promote a stage.
 | 4 | Higher-level client, GSS-API/SPNEGO (RFC 4121) | **In tree** (`krb5-gss` wrap/unwrap/MIC, SPNEGO framing; MIT GSS is out-of-process) |
 | 5 | KDC core (AS+TGS) + database backend, bidirectional interop | **In tree** (in-memory + dump-v7 at-rest; KDB3 still loads; MIT `kdb5_util` dump/load; ACL; AP-REQ; gates: `kdc-gate.sh`, `kdb-dump-gate.sh`). MIT `kinit` both directions is the database oracle. |
 | 6 | Admin tools, plugins, propagation, remaining parity | **In tree** (1.0: kadmind AUTH_GSSAPI, kpasswd, full-dump kprop both ways). **Era III Tier 1:** KDB traits + registries ([`plugins.md`](plugins.md), not dlopen); named policies (`harness/field/scenarios/ticket-flags.sh`); iprop serial/ulog (`iprop-gate.sh`). |
-| 7–8 | Hardening, stress, chaos, adversarial, observability, final gates | **In tree (1.0); the stress, chaos and soak gates were retired in the 1.2 line.** MIT-oracle gates exist for AS/TGS, FAST TGS `kvno`, GSS wrap, PKINIT `kinit`, SPAKE `kinit` (`pa_type` 151 / group 2), two-realm `kvno`, and SHA-2 `kinit`/`kvno`. Golden MIT DER is byte-diffed; published crypto KATs; 9 cargo-fuzz targets; panic-deny lints (`unwrap_used` / `expect_used` / `panic`) on twelve of the fourteen crates (not the test-only `krb5-testkit` or `krb5-brainpool`) and every binary but the three harness-only `krb5-tools` probes (`diffsend`, `kprop-expired-apreq`, `loadgen`) (the gap on `krb5-admin`, `krb5-asn1` and `krb5-log` closed at zero code cost). AD PAC NDR is golden-gated. Differential-vs-MIT is `scripts/differential-gate.sh` (same AS/TGS bytes to Rust and MIT 1.22.2 on one dump). Inventory: [`interop-matrix.md`](interop-matrix.md). Live SSPI remains environment-dependent. |
+| 7–8 | Hardening, stress, chaos, adversarial, observability, final gates | **In tree (1.0); the stress, chaos and soak gates were retired in the 1.2 line.** MIT-oracle gates exist for AS/TGS, FAST TGS `kvno`, GSS wrap, PKINIT `kinit`, SPAKE `kinit` (`pa_type` 151 / group 2), two-realm `kvno`, and SHA-2 `kinit`/`kvno`. Golden MIT DER is byte-diffed; published crypto KATs; 9 cargo-fuzz targets; panic-deny lints (`unwrap_used` / `expect_used` / `panic`) on thirteen of the fourteen crates (not the test-only `krb5-testkit`) and every binary but the three harness-only `krb5-tools` probes (`diffsend`, `kprop-expired-apreq`, `loadgen`) (the gap on `krb5-admin`, `krb5-asn1` and `krb5-log` closed at zero code cost). AD PAC NDR is golden-gated. Differential-vs-MIT is `scripts/differential-gate.sh` (same AS/TGS bytes to Rust and MIT 1.22.2 on one dump). Inventory: [`interop-matrix.md`](interop-matrix.md). Live SSPI remains environment-dependent. |
 
 Stage 2 production-gate of a *Rust client* is Stage 3. This repository
 currently gates crypto/ASN.1 on known-answer tests, malformed-input
@@ -82,7 +82,8 @@ Rust→MIT, additive to the in-process dump/send tests). **kadmind** MIT-gates a
 (`kpasswd-rust-gate` / `kpasswd-mit-gate`, `kdb-dump-gate`,
 `kprop-gate`, `kprop-reverse-gate`, `iprop-gate`), `mit-extra` (the
 cross-realm / SPAKE / FAST / PKINIT client gates) and `mit-extra-2`
-(`s4u-mit-gate`, the client differential); [`gates.md`](gates.md) has one
+(`knobs-gate`, `config-include-gate`, `s4u-mit-gate`, `capaths-transit-gate`, `otp-gate`,
+`rust-kinit-otp-gate`); [`gates.md`](gates.md) has one
 row per gate with its job and lane. The seven Samba/AD
 gates — `samba-ad-gate`, `ad-windows-gate`, `ad-s4u-gate`,
 `samba-pac-verify-gate`, `samba-pac-l2-gate`, `samba-crossrealm-gate`,
@@ -152,5 +153,6 @@ policies + lockout (`harness/field/scenarios/ticket-flags.sh`), iprop serial/ulo
 ## Releases
 
 1.1.0 shipped on 2026-10-14. 1.2.0 made the KDC and kadmind embeddable and returned the tree to
-form; the [CHANGELOG](../CHANGELOG.md) and the [README](../README.md) say what changed and how it
-was tested.
+form. 1.2.1 shipped on 2026-11-08: it readies the KDC and kadmind for KLLDAP's embedding and runs the
+field tests on Debian 13, Rocky Linux 10, four client distributions and Windows 11. The
+[CHANGELOG](../CHANGELOG.md) and the [README](../README.md) say what changed and how it was tested.

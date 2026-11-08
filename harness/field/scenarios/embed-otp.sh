@@ -27,10 +27,10 @@
 #
 # The example binaries are built release from FIELD_SHA (krb5-otp-kdc and krb5-otp-kdc-chaos from
 # krb5-embed-realm-example, the latter --features chaos; krb5-kdb from krb5-kdc) and left under
-# $EMBED_OTP_BINS on the host; `bins.present` grades their presence. TODO(field build-integration): the
-# field preflight should build them from FIELD_SHA, so a profile can select this scenario; until then it is
-# run only when an operator has placed the binaries there.
+# $EMBED_OTP_BINS on the host; `bins.present` grades their presence. TODO(field build-integration): preflight
+# should build them from FIELD_SHA; until then an operator places them and runs it by hand (in no profile).
 #
+# Fedora only (DS): the embed, the DC or by hand
 # vms: kdc
 # legs: rust
 set -uo pipefail
@@ -55,7 +55,7 @@ OTP_TOTP=$HERE/../../../scripts/lib/otp-totp.py
 # straggler of our own binaries (never the system krb5kdc) when the scenario exits.
 cleanup() {
     timeout -k 5 120 "$LAB" ssh kdc -- \
-        "sudo pkill -f embed-otp-guest.py; sudo pkill -x krb5-otp-kdc; sudo pkill -x krb5-otp-kdc-chaos; sudo pkill -f embed-otp-stub.py; sudo rm -rf /var/tmp/ov3 $GBINS; true" \
+        "sudo pkill -f 'embed-otp-[g]uest.py'; sudo pkill -x krb5-otp-kdc; sudo pkill -x krb5-otp-kdc-ch; sudo pkill -f 'embed-otp-[s]tub.py'; sudo rm -rf /var/tmp/ov3 $GBINS; true" \
         < /dev/null > /dev/null 2>&1
 }
 trap cleanup EXIT

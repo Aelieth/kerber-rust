@@ -1801,7 +1801,7 @@ fn salt_cname(cname: &PrincipalName) -> PrincipalName {
     if cname.name_type != PrincipalName::NT_ENTERPRISE {
         return cname.clone();
     }
-    let raw = cname.components_joined();
+    let raw = cname.components_joined_lossy();
     let user = match raw.rsplit_once('@') {
         Some((u, _)) if !u.is_empty() => u,
         _ => raw.as_str(),

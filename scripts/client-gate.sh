@@ -7,7 +7,7 @@ cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
 . "$ROOT/scripts/lib/kadmin-q.sh"
-need_bins krb5-kinit krb5-klist krb5-kdestroy krb5-kvno
+need_bins krb5-kinit krb5-klist krb5-kdestroy krb5-kvno krb5-kpasswd krb5-kprop
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
 NAME="kerber-rust-mit-kdc"
@@ -209,6 +209,33 @@ docker exec "$NAME" sed 's/^/  s4kc1 stderr| /' /tmp/s4kc1.err
 docker exec "$NAME" sh -c "printf 'Password expired.  You must change it now.\\nkrb5-kinit: Cannot contact any KDC for requested realm while getting initial credentials\\n' | cmp -s - /tmp/s4kc1.err" \
     || die "C1 stderr differs from MIT's (banner, then Cannot contact any KDC for requested realm)"
 echo "RUST_kinit_keyexp_banner_chpw_refused"
+
+echo "==== C2 an empty realm: kinit, kpasswd, kprop, MIT's line then ours ===="
+# MIT's k5_locate_server refuses it for every caller (locate_kdc.c:861-865). kinit's com_err hook
+# prints the extended text, kpasswd and kprop the table text; kprop reaches it with no default realm.
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kpasswd" "$NAME":/tmp/krb5-kpasswd
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kprop" "$NAME":/tmp/krb5-kprop
+docker exec "$NAME" chmod +x /tmp/krb5-kpasswd /tmp/krb5-kprop
+docker exec "$NAME" sh -c 'printf "[libdefaults]\n    dns_lookup_kdc = false\n[realms]\n    KERBER.TEST = {\n        kdc = 127.0.0.1\n    }\n" >/tmp/krb5-nodef.conf'
+empty_realm() { # empty_realm CASE WANT MIT_CMD RUST_CMD: the last stderr line, the program name cut
+    local mit rust
+    mit="$(docker exec "$NAME" sh -c "$3" 2>&1 | lf_lines | sed '/^$/d' | tail -n 1 | sed -E 's/^[^:]+: //' || true)"
+    rust="$(docker exec "$NAME" sh -c "$4" 2>&1 | lf_lines | sed '/^$/d' | tail -n 1 | sed -E 's/^[^:]+: //' || true)"
+    echo "MIT_empty_realm_$1: $mit"
+    echo "RUST_empty_realm_$1: $rust"
+    case "$mit" in *"$2"*) ;; *) die "C2 $1: MIT's line is not the refusal: $mit" ;; esac
+    [ "$mit" = "$rust" ] || die "C2 $1: ours differs from MIT's"
+}
+CANT="Cannot resolve network address for KDC in requested realm"
+# kpasswd reads the default ccache first, and an earlier step left an invalid one there.
+NOCC="KRB5CCNAME=FILE:/tmp/cc_c2_none"
+empty_realm kinit 'invalid realm name ""' "printf 'pw\n' | kinit -c /tmp/cc_c2 user@" \
+    "printf 'pw\n' | /tmp/krb5-kinit -c /tmp/cc_c2 user@"
+empty_realm kpasswd "$CANT" "printf 'pw\n' | $NOCC kpasswd user@" \
+    "printf 'pw\n' | $NOCC /tmp/krb5-kpasswd user@"
+KPROP_C2="-r '' -s /tmp/kt-none -f /tmp/nodump replica"
+empty_realm kprop "$CANT" "KRB5_CONFIG=/tmp/krb5-nodef.conf kprop $KPROP_C2" \
+    "KRB5_CONFIG=/tmp/krb5-nodef.conf /tmp/krb5-kprop $KPROP_C2"
 
 log "client.gate" "ok" ',"principal":"user@KERBER.TEST"'
 exit 0

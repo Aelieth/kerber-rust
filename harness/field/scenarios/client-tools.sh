@@ -20,9 +20,10 @@
 # (:207-219), kadmin/ktutil/ktutil.c (:217-269); lib/krb5/os/prompter.c (the prompt on stdout, the reply from
 # stdin with no tty); lib/krb5/krb/gic_pwd.c (:240-253, the expired-password change); lib/krb5/ccache/cc_file.c
 # (:117-123, the "(filename: ...)" messages); lib/krb5/krb/str_conv.c (:224-245: klist's dates follow the
-# locale, so the rows run with LC_ALL=C; ours print the C locale's); lib/krb5/krb/get_in_tkt.c (:718-722,
+# locale, so the rows run with LC_ALL=C; ours follow it too, krb5-klist.rs:40); lib/krb5/krb/get_in_tkt.c (:718-722,
 # :936-947, restart_init_creds_loop :780-848); lib/krb5/krb/fast.c (:172-224); clients/kpasswd/kpasswd.c;
 # lib/krb5/ccache/cc_file.c (fcc_remove_cred).
+# Fedora only (DS): client side; CM covers the families
 # vms: kdc client2
 # legs: mit rust
 set -uo pipefail
@@ -436,7 +437,7 @@ for s in CT.err.client CT.err.svc CT.err.kt CT.err.klist-k CT.err.cctype CT.err.
 done
 rcof CT.err.kdestroy 0
 
-section "CT.locale: klist in the session's own locale (INFO): MIT's dates follow it, ours print the C locale's (docs/install.md lists it)"
+section "CT.locale: klist in the session's own locale (INFO): both follow it; other locales drift (docs/mit-deviations.md, LC_TIME)"
 for k in mit $OURS; do
     observe "obs.CT.locale.$k" 'Valid starting +Expires +Service principal' run client2 "$(E "$k") unset LC_ALL; \$B/kinit -k -t \$HOME/ct/svc.keytab -c FILE:\$HOME/ct/$k-loc.cc $SVC@$REALM && \$B/klist -c FILE:\$HOME/ct/$k-loc.cc"
 done

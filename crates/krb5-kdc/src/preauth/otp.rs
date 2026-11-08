@@ -12,14 +12,13 @@ use zeroize::Zeroizing;
 
 use super::find_pa;
 use crate::ad::authind_add;
-use crate::asn1_text::decode_failure_text;
+use crate::asn1_text::{asn1_code, decode_failure_text};
 use crate::error::Error;
 use crate::kdb::PrincipalRead;
 use crate::plugins::{
     OtpOutcome, OtpTokenFields, OtpVerdict, OtpVerifyRequest, ParkedOtp, PreauthAction,
-    PreauthHint, PreauthRock, bounded_verify, find_otp_verifier, kdc_otp_event, otp_log_refusal,
-    otp_park_enabled, otp_verifier_names, request_peer, sanitize_otp_error, set_otp_park,
-    take_otp_resume,
+    PreauthHint, PreauthRock, bounded_verify, find_otp_verifier, kdc_otp_event, otp_park_enabled,
+    otp_verifier_names, request_peer, sanitize_otp_error, set_otp_park, take_otp_resume,
 };
 use crate::store::{Principal, unix_now_u32};
 
@@ -99,15 +98,17 @@ pub(crate) fn serve_start_diagnostics(store: &dyn PrincipalRead, registry_empty:
             tracing::warn!(
                 target: "kdc.otp",
                 "principal {} has an otp attribute but not +requires_preauth; OTP is never demanded",
-                p.name.unparse_with_realm(store.realm())
+                p.name.unparse_with_realm_lossy(store.realm())
             );
         }
     }
     if registry_empty && otp_users > 0 {
-        crate::plugins::otp_log_refusal(&format!(
+        let msg = format!(
             "the otp preauth module is loaded and {otp_users} principal(s) have an otp attribute, \
              but no OTP verifier is registered; those logins will be refused"
-        ));
+        );
+        klog::syslog(klog::Severity::Err, &msg);
+        tracing::error!(target: "kdc.otp", "{}", msg);
     }
 }
 
@@ -135,6 +136,16 @@ const E_ASN1: &str = "ASN.1 identifier doesn't match expected value";
 pub(crate) const E_BAD_ENCTYPE: &str = "Bad encryption type";
 pub(crate) const E_BAD_MSIZE: &str = "Message size is incompatible with encryption type";
 const E_MSG_SIZE: &str = "Message too long";
+pub(crate) const EINVAL: i32 = 22;
+pub(crate) const ENOENT: i32 = 2;
+const EIO: i32 = 5;
+const EAGAIN: i32 = 11;
+const EMSGSIZE: i32 = 90;
+const ETIMEDOUT: i32 = 110;
+// MIT: `KRB5_BAD_ENCTYPE` (krb5_err.et)
+pub(crate) const KRB5_BAD_ENCTYPE: i32 = -1_765_328_196;
+// MIT: `KRB5_BAD_MSIZE` (krb5_err.et)
+pub(crate) const KRB5_BAD_MSIZE: i32 = -1_765_328_194;
 // MIT: `MAX_ATTRSIZE` (lib/krad/internal.h:49-49)
 // MIT: `attributes` (lib/krad/attr.c:62-62)
 const MAX_USER_NAME: usize = 253;
@@ -152,6 +163,10 @@ fn fail(code: i32, emsg: &str) -> OtpFail {
         code,
         emsg: emsg.to_owned(),
     }
+}
+
+fn decode_fail(emsg: &str) -> OtpFail {
+    fail(asn1_code(emsg), emsg)
 }
 
 // MIT: `kr_attr_valid` (lib/krad/attr.c:252-261)
@@ -231,8 +246,8 @@ pub(crate) fn decode_tokens(
             let ty = types.find(type_name).ok_or(())?;
             let username = match item.member("username") {
                 Some(Value::String(s)) => s.clone(),
-                _ if ty.strip_realm => name.unparse_no_realm().into_bytes(),
-                _ => name.unparse_with_realm(realm).into_bytes(),
+                _ if ty.strip_realm => name.unparse_no_realm_lossy().into_bytes(),
+                _ => name.unparse_with_realm_lossy(realm).into_bytes(),
             };
             let indicators = match item.member("indicators") {
                 None => None,
@@ -263,7 +278,7 @@ fn indicator(v: &Value) -> Result<String, ()> {
 // MIT: `nonce_verify` (plugins/preauth/otp/main.c:91-101)
 fn nonce_verify(armor_len: usize, plain: &[u8], skew: i64) -> Result<(), OtpFail> {
     let er: PaOtpEncRequest =
-        decode(plain).map_err(|_| fail(24, decode_failure_text(plain, false)))?;
+        decode(plain).map_err(|_| decode_fail(decode_failure_text(plain, false)))?;
     let n: &[u8] = er.nonce.as_ref();
     // Any other nonce length passes, with no clock check.
     if n.len() != armor_len + 4 {
@@ -278,7 +293,8 @@ fn nonce_verify(armor_len: usize, plain: &[u8], skew: i64) -> Result<(), OtpFail
 
 // MIT: `timestamp_verify` (plugins/preauth/otp/main.c:117-123)
 fn timestamp_verify(plain: &[u8], skew: i64) -> Result<(), OtpFail> {
-    let ts: PaEncTsEnc = decode(plain).map_err(|_| fail(24, decode_failure_text(plain, true)))?;
+    let ts: PaEncTsEnc =
+        decode(plain).map_err(|_| decode_fail(decode_failure_text(plain, true)))?;
     if within_skew(ts.patimestamp.unix_seconds(), skew) {
         Ok(())
     } else {
@@ -311,9 +327,10 @@ fn otp_verify(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, OtpFail> 
     };
     let req: PaOtpRequest = decode(raw).map_err(|_| {
         com_err(E_ASN1, "Unable to decode OTP request");
-        fail(24, E_ASN1)
+        decode_fail(E_ASN1)
     })?;
-    let usage = KeyUsage::new(ku::PA_OTP_REQUEST).map_err(|_| fail(24, E_GENERIC))?;
+    let usage =
+        KeyUsage::new(ku::PA_OTP_REQUEST).map_err(|_| fail(KRB5_PREAUTH_FAILED, E_GENERIC))?;
     let plain = decrypt_enc_data(
         armor,
         usage,
@@ -323,9 +340,9 @@ fn otp_verify(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, OtpFail> 
     .map_err(|e| {
         let (code, emsg) = match e {
             krb5_crypto::Error::Integrity => (err::BAD_INTEGRITY, E_INTEGRITY),
-            krb5_crypto::Error::BadEnctype(_) => (24, E_BAD_ENCTYPE),
-            krb5_crypto::Error::CiphertextTooShort => (24, E_BAD_MSIZE),
-            _ => (24, E_GENERIC),
+            krb5_crypto::Error::BadEnctype(_) => (KRB5_BAD_ENCTYPE, E_BAD_ENCTYPE),
+            krb5_crypto::Error::CiphertextTooShort => (KRB5_BAD_MSIZE, E_BAD_MSIZE),
+            _ => (KRB5_PREAUTH_FAILED, E_GENERIC),
         };
         com_err(emsg, "Unable to decrypt encData in PA-OTP-REQUEST");
         com_err(emsg, "Unable to decrypt nonce");
@@ -339,7 +356,7 @@ fn otp_verify(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, OtpFail> 
         return Err(e);
     }
     let Some(config) = otp_attr(rock.client) else {
-        return Err(fail(24, E_GENERIC));
+        return Err(fail(KRB5_PREAUTH_FAILED, E_GENERIC));
     };
     let realm = rock.store.realm();
     let Ok(tokens) = decode_tokens(
@@ -352,15 +369,15 @@ fn otp_verify(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, OtpFail> 
             E_EINVAL,
             &format!(
                 "Can't decode otp config string for principal '{}'",
-                rock.client.name.unparse_with_realm(realm)
+                rock.client.name.unparse_with_realm_lossy(realm)
             ),
         );
-        return Err(fail(24, E_EINVAL));
+        return Err(fail(EINVAL, E_EINVAL));
     };
     let otp_value: &[u8] = req.otp_value.as_ref().map_or(&[][..], AsRef::as_ref);
     let runtime = rock.store.otp_runtime();
     let pool = runtime.map(crate::plugins::OtpRuntime::pool);
-    let principal_label = rock.client.name.unparse_with_realm(realm);
+    let principal_label = rock.client.name.unparse_with_realm_lossy(realm);
     let peer = request_peer();
     let mut resume = take_otp_resume();
     for (i, tok) in tokens.iter().enumerate() {
@@ -368,28 +385,22 @@ fn otp_verify(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, OtpFail> 
         if resume.as_ref().is_some_and(|r| i < r.token_index) {
             continue;
         }
-        // A bad length fails before a verifier runs.
         if !attr_sizes_ok(&tok.username, otp_value) {
-            return Err(fail(24, E_MSG_SIZE));
+            return Err(fail(EMSGSIZE, E_MSG_SIZE));
         }
         let verifier = match runtime {
             Some(rt) => rt.find(&tok.ty.name),
             None => find_otp_verifier(rock.store.policy(), &tok.ty.name),
         };
         let Some(verifier) = verifier else {
-            otp_log_refusal(&format!(
-                "no OTP verifier registered for token type '{}'",
-                tok.ty.name
-            ));
             return Err(fail(
-                24,
+                ENOENT,
                 &format!(
                     "No OTP verifier registered for token type '{}'",
                     tok.ty.name
                 ),
             ));
         };
-        let vname = verifier.name();
         // MIT: `request_send` (plugins/preauth/otp/otp_state.c:661)
         let timeout_ms = match u64::try_from(tok.ty.timeout_ms) {
             Ok(ms) if ms > 0 => ms,
@@ -402,7 +413,7 @@ fn otp_verify(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, OtpFail> 
         let outcome = if let Some(r) = resume.take_if(|r| i == r.token_index) {
             // Bind the verdict to its token: a reload between park and resume could reorder tokens.
             if r.token_type != tok.ty.name || r.username != tok.username {
-                return Err(fail(24, "OTP token set changed during verify"));
+                return Err(fail(EAGAIN, "OTP token set changed during verify"));
             }
             started = r.started;
             r.outcome
@@ -468,24 +479,15 @@ fn otp_verify(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, OtpFail> 
             }
             OtpOutcome::Verdict(OtpVerdict::Error(text)) => {
                 kdc_otp_event(&principal_label, &tok.ty.name, "error", duration_us);
-                let text = sanitize_otp_error(&text);
-                otp_log_refusal(&format!(
-                    "OTP verifier '{vname}' errored for {principal_label}: {text}"
-                ));
-                return Err(fail(24, &text));
+                return Err(fail(EIO, &sanitize_otp_error(&text)));
             }
             OtpOutcome::TimedOut => {
                 kdc_otp_event(&principal_label, &tok.ty.name, "timeout", duration_us);
-                otp_log_refusal(&format!(
-                    "OTP verifier '{vname}' did not answer in {} ms (deadline {timeout_ms}) for {principal_label}",
-                    duration_us / 1000
-                ));
-                return Err(fail(24, "OTP verifier timed out"));
+                return Err(fail(ETIMEDOUT, "OTP verifier timed out"));
             }
             OtpOutcome::QueueFull => {
                 kdc_otp_event(&principal_label, &tok.ty.name, "queue_full", duration_us);
-                otp_log_refusal(&format!("OTP verifier queue full for {principal_label}"));
-                return Err(fail(24, "OTP verifier queue full"));
+                return Err(fail(EAGAIN, "OTP verifier queue full"));
             }
         }
     }

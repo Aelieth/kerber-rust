@@ -48,9 +48,8 @@ file` writes its pid file.
 `krb5.conf`, parsed by `crates/krb5-config/src/profile.rs`: every
 `[libdefaults]` key here (`parse_libdefaults`), the realm's `kdc`
 (`parse_realm_line`, then `Krb5Conf::kdcs_for`), and `[domain_realm]`
-(`host_to_realm`). Two keys are parsed but no Rust tool uses them yet; they stay
-for MIT clients: `dns_lookup_realm` and `rdns` (MIT `krb5_get_host_realm`,
-`krb5_sname_to_principal`).
+(`host_to_realm`). `dns_lookup_realm` is parsed but no Rust tool uses it yet; it stays for MIT
+clients (MIT `krb5_get_host_realm`). `rdns` is used, as MIT's `krb5_sname_to_principal` uses it.
 
 `kadm5.acl` lines are `<principal> <operations> [<target> [<restrictions>]]`,
 read by `crates/krb5-kdc/src/acl.rs` as MIT's `auth_acl.c` reads them; `*` and

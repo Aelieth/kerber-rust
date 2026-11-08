@@ -281,19 +281,10 @@ fn client_keytab_principal(ctx: &ClientContext) -> Result<Princ, (Krb5Error, &'s
         })
 }
 
+// MIT: `k5_begin` (clients/kinit/kinit.c:499-507)
 fn default_host_principal(ctx: &ClientContext) -> Result<Princ, Krb5Error> {
-    let host = nix::unistd::gethostname()
-        .map(|h| h.to_string_lossy().to_ascii_lowercase())
-        .unwrap_or_default();
-    let realm = ctx
-        .profile
-        .realm_for_host(&host)
-        .map(str::to_owned)
-        .or_else(|| default_realm(ctx))
-        .unwrap_or_default();
-    let host = PrincipalName::try_new(PrincipalName::NT_SRV_HST, ["host", host.as_str()])
-        .map_err(|_| Krb5Error::of(Code::ParseMalformed))?;
-    Ok((realm_of(&realm)?, host))
+    krb5_config::sname_to_principal(&ctx.profile, None, None, PrincipalName::NT_SRV_HST)
+        .map_err(|e| Krb5Error::from_sname(&e))
 }
 
 // MIT: `get_name_from_os` (kinit.c:47-54)
@@ -529,14 +520,20 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
         krb5_protocol::trace::init_creds_service(s);
     }
     krb5_client::trace::skip_next_init_creds();
+    // MIT: `krb5_init_creds_set_keytab` (lib/krb5/krb/gic_keytab.c:191-224)
+    let me = keytab_client(keytab.as_deref(), conf, &k5.me, &k5.name).map_err(Failure::Error)?;
+    let (name, realm) = (
+        unparse(&me),
+        String::from_utf8_lossy(me.0.as_bytes()).into_owned(),
+    );
     let addr = kdc(&k5.ctx, opts, &realm).map_err(Failure::Error)?;
     let spec = &k5.out_spec;
     let result = match given {
-        Some(mut p) => kinit_with_princ(&k5.ctx, &addr, &k5.me, &mut p, spec, &params),
+        Some(mut p) => kinit_with_princ(&k5.ctx, &addr, &me, &mut p, spec, &params),
         None if pw_auth => {
-            kinit_prompted_princ(&k5.ctx, &addr, &k5.me, &mut read_password, spec, &params)
+            kinit_prompted_princ(&k5.ctx, &addr, &me, &mut read_password, spec, &params)
         }
-        None => kinit_with_princ(&k5.ctx, &addr, &k5.me, &mut [], spec, &params),
+        None => kinit_with_princ(&k5.ctx, &addr, &me, &mut [], spec, &params),
     };
     if let Some(mut n) = new_password {
         n.zeroize();
@@ -562,7 +559,7 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
                 Some(krb5_types::err::PREAUTH_FAILED) if prompted.get() => {
                     Err(Failure::PasswordIncorrect)
                 }
-                _ => Err(Failure::Error(init_error(e.as_ref(), k5, &realm))),
+                _ => Err(Failure::Error(init_error(e.as_ref(), &name, &realm))),
             }
         }
     }
@@ -570,14 +567,14 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
 
 fn init_error(
     e: &(dyn std::error::Error + Send + Sync + 'static),
-    k5: &K5,
+    name: &str,
     realm: &str,
 ) -> Krb5Error {
     if let Some(k) = e.downcast_ref::<Krb5Error>() {
         return k.clone();
     }
     if let Some(p) = e.downcast_ref::<krb5_protocol::Error>() {
-        return Krb5Error::from_as(p, &k5.name, realm);
+        return Krb5Error::from_as(p, name, realm);
     }
     Krb5Error::new(Code::Other, e.to_string())
 }
@@ -589,6 +586,33 @@ fn kdc(ctx: &ClientContext, opts: &KinitArgs, realm: &str) -> Result<KdcAddr, Kr
     }
     let _ = opts;
     kdc_for_realm(&ctx.profile, realm)
+}
+
+fn keytab_client(
+    path: Option<&Path>,
+    conf: &krb5_config::Krb5Conf,
+    me: &Princ,
+    name: &str,
+) -> Result<Princ, Krb5Error> {
+    let read = path.and_then(|p| krb5_protocol::read_keytab_file(p).ok());
+    let Some(kt) = read.and_then(|bytes| Keytab::parse(&bytes).ok()) else {
+        return Ok(me.clone());
+    };
+    match krb5_protocol::keytab_init_creds_client(&kt, conf, me) {
+        Ok(Some((found, _, _))) => Ok(found),
+        Ok(None) => {
+            let text = format!("Keytab contains no suitable keys for {name}");
+            Err(Krb5Error::new(Code::Other, text))
+        }
+        Err(e) => {
+            let failure = krb5_protocol::KeytabFailure::from_sname(&e);
+            krb5_protocol::trace::init_creds_keytab_lookup_failed(
+                failure.code,
+                Some(&failure.text),
+            );
+            Ok(me.clone())
+        }
+    }
 }
 
 fn in_tkt_service(opts: &KinitArgs) -> Option<&str> {

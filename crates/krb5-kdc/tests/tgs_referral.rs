@@ -115,13 +115,13 @@ fn host_fqdn_canonicalize_issues_referral() {
     .expect("TGS-REQ");
     let out = krb5_kdc::issue_tgs(&store, &tgs).expect("host referral");
     assert_eq!(
-        out.rep.0.ticket.sname.components_joined(),
+        out.rep.0.ticket.sname.components_joined_lossy(),
         "krbtgt/OTHER.TEST"
     );
     let usage = KeyUsage::new(ku::TGS_REP_ENC_PART).unwrap();
     let plain = decrypt(&tgt.session_key, usage, out.rep.0.enc_part.cipher.as_ref()).expect("enc");
     let enc = krb5_asn1::decode_enc_kdc_rep_part(&plain).expect("EncTgsRepPart");
-    assert_eq!(enc.sname.components_joined(), "krbtgt/OTHER.TEST");
+    assert_eq!(enc.sname.components_joined_lossy(), "krbtgt/OTHER.TEST");
 }
 
 #[test]
@@ -174,7 +174,7 @@ fn s4u2self_case2(ad_identity: bool) -> (krb5_kdc::IssuedTgs, krb5_crypto::Proto
     let foreign_host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "svc.other.test"]);
     part.cname = foreign_host.clone();
     part.crealm = krb5_types::try_ascii("OTHER.TEST").unwrap();
-    attach_pac(&ir, &mut part, &foreign_host.components_joined());
+    attach_pac(&ir, &mut part, &foreign_host.components_joined_lossy());
     let header = reseal_incoming(&ir, &tgt, &part);
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let pa = pa_for_user(&tgt.session_key, user, TEST_REALM).unwrap();
@@ -346,7 +346,7 @@ fn s4u2proxy_referral_with_rbcd_issues() {
     .unwrap();
     let out = krb5_kdc::issue_tgs(&store, &tgs).expect("S4U2Proxy referral");
     assert_eq!(
-        out.rep.0.ticket.sname.components_joined(),
+        out.rep.0.ticket.sname.components_joined_lossy(),
         "krbtgt/OTHER.TEST"
     );
     // MIT: `gather_tgs_req_info` (do_tgs_req.c:756-759)
@@ -356,8 +356,8 @@ fn s4u2proxy_referral_with_rbcd_issues() {
     // the client checks that a
     // referral's client matches its TGT client.
     assert_eq!(
-        out.rep.0.cname.components_joined(),
-        host.components_joined()
+        out.rep.0.cname.components_joined_lossy(),
+        host.components_joined_lossy()
     );
     // MIT: `handle_pac` (kdc_authdata.c:534-539)
     // S4U referral PAC client info is the
@@ -396,7 +396,10 @@ fn hier_common_zero_issues_org_hop() {
     )
     .expect("TGS-REQ");
     let out = krb5_kdc::issue_tgs(&store, &tgs).expect("common-zero alternate TGS");
-    assert_eq!(out.rep.0.ticket.sname.components_joined(), "krbtgt/ORG");
+    assert_eq!(
+        out.rep.0.ticket.sname.components_joined_lossy(),
+        "krbtgt/ORG"
+    );
 }
 
 #[test]
@@ -468,7 +471,7 @@ fn explicit_cross_tgs_keeps_request_name_type() {
     let out = krb5_kdc::issue_tgs(&store, &tgs).expect("explicit cross TGS");
     assert_eq!(out.rep.0.ticket.sname.name_type, PrincipalName::NT_UNKNOWN);
     assert_eq!(
-        out.rep.0.ticket.sname.components_joined(),
+        out.rep.0.ticket.sname.components_joined_lossy(),
         "krbtgt/OTHER.TEST"
     );
 }

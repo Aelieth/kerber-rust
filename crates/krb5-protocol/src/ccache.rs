@@ -158,7 +158,7 @@ impl FileCcache {
     pub fn format_principal(realm: &Realm, name: &PrincipalName) -> String {
         format!(
             "{}@{}",
-            name.components_joined(),
+            name.components_joined_lossy(),
             String::from_utf8_lossy(realm.as_bytes())
         )
     }

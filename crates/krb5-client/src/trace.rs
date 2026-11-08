@@ -90,7 +90,7 @@ pub fn fast_armor(ctx: &ClientContext, cc: &crate::ArmorCcache, realm: &str) {
     let Some((_, tgs)) = static_tgt(realm) else {
         return;
     };
-    let tgs_name = tgs.unparse_with_realm(realm);
+    let tgs_name = tgs.unparse_with_realm_lossy(realm);
     let avail = cache.cc.creds.iter().find(|c| {
         c.is_config()
             && c.server.1.name_string.len() == 3
@@ -240,11 +240,14 @@ pub fn store(ctx: &ClientContext, spec: &CcSpec, cred: &CcacheCred) {
     }
 }
 
-pub fn cache_match(client: &Princ, found: bool) {
+pub fn cache_match(client: &Princ, found: Result<bool, &krb5_config::SnameError>) {
     if !trace::enabled() {
         return;
     }
-    if found {
+    if let Err(e) = found {
+        let failure = krb5_protocol::KeytabFailure::from_sname(e);
+        trace::cc_cache_match(princ(client), failure.code, Some(&failure.text));
+    } else if found == Ok(true) {
         trace::cc_cache_match(princ(client), 0, None);
     } else {
         let msg = format!(

@@ -21,8 +21,7 @@ use crate::preauth::{find_pa, prepare_as_edata, proto_d};
 use crate::status;
 use crate::store::Principal;
 
-#[must_use]
-pub(crate) fn kdc_error_bytes(store: &dyn PrincipalRead, code: i32) -> Vec<u8> {
+pub(crate) fn kdc_error_bytes(store: &dyn PrincipalRead, code: i32) -> Result<Vec<u8>, Error> {
     encode_krb_error(store, code, None, None, None, false)
 }
 
@@ -52,7 +51,7 @@ pub(super) fn as_reply(
                 )),
                 body,
                 hide,
-            ),
+            )?,
             None,
         )),
         Err(Error::Protocol {
@@ -75,7 +74,7 @@ pub(super) fn as_reply(
                     e_data.map(|ed| prepare_as_edata(store, req.0.req_body.cname.as_ref(), &ed)),
                     body,
                     hide,
-                ),
+                )?,
                 detail.filter(|s| !s.is_empty()),
             ))
         }
@@ -87,7 +86,7 @@ pub(super) fn as_reply(
                 None,
                 body,
                 hide,
-            ),
+            )?,
             Some(d).filter(|s| !s.is_empty()),
         )),
         Err(Error::Asn1(d)) => Ok((
@@ -98,7 +97,7 @@ pub(super) fn as_reply(
                 None,
                 body,
                 hide,
-            ),
+            )?,
             Some(d).filter(|s| !s.is_empty()),
         )),
         // MIT: `finish_process_as_req` (do_as_req.c:346-347)
@@ -110,7 +109,7 @@ pub(super) fn as_reply(
                 None,
                 body,
                 hide,
-            ),
+            )?,
             Some(e.to_string()).filter(|s| !s.is_empty()),
         )),
     }
@@ -135,12 +134,17 @@ pub(super) fn tgs_reply(
     match issue_tgs_from(store, req, Some(raw), sender) {
         Ok(issued) => Ok((encode(&issued.rep)?, None)),
         Err(Error::Protocol {
+            text: Some(t),
+            detail,
+            ..
+        }) if t == NO_REPLY => Ok((Vec::new(), detail)),
+        Err(Error::Protocol {
             code,
             text,
             e_data,
             detail,
         }) => Ok((
-            encode_krb_error(store, code, text.as_deref(), e_data, body, hide),
+            encode_krb_error(store, code, text.as_deref(), e_data, body, hide)?,
             detail.filter(|s| !s.is_empty()),
         )),
         Err(Error::Crypto(d)) => Ok((
@@ -151,7 +155,7 @@ pub(super) fn tgs_reply(
                 None,
                 body,
                 hide,
-            ),
+            )?,
             Some(d).filter(|s| !s.is_empty()),
         )),
         Err(Error::Asn1(d)) => Ok((
@@ -162,7 +166,7 @@ pub(super) fn tgs_reply(
                 None,
                 body,
                 hide,
-            ),
+            )?,
             Some(d).filter(|s| !s.is_empty()),
         )),
         Err(e) => Ok((
@@ -173,7 +177,7 @@ pub(super) fn tgs_reply(
                 None,
                 body,
                 hide,
-            ),
+            )?,
             Some(e.to_string()).filter(|s| !s.is_empty()),
         )),
     }
@@ -437,6 +441,19 @@ pub(super) fn krb_error_log_fields(bytes: &[u8]) -> (i32, String) {
     }
 }
 
+pub(super) const NO_REPLY: &str = "no reply";
+
+// MIT: `prepare_error_as` (kdc/do_as_req.c:812-838)
+// MIT: `prepare_error_tgs` (kdc/do_tgs_req.c:225-231)
+pub(super) fn no_reply(cause: impl std::fmt::Display) -> Error {
+    Error::Protocol {
+        code: err::DISCARD,
+        text: Some(NO_REPLY.to_owned()),
+        e_data: None,
+        detail: Some(cause.to_string()),
+    }
+}
+
 // MIT: `prepare_error_as` (do_as_req.c:831-832)
 pub(super) fn encode_krb_error(
     store: &dyn PrincipalRead,
@@ -445,7 +462,7 @@ pub(super) fn encode_krb_error(
     e_data: Option<Vec<u8>>,
     body: Option<&krb5_types::KdcReqBody>,
     hide_client: bool,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, Error> {
     let realm_s = body
         .and_then(|b| std::str::from_utf8(b.realm.as_bytes()).ok())
         .map(str::to_owned)
@@ -455,7 +472,7 @@ pub(super) fn encode_krb_error(
         Ok(r) => r,
         Err(_) => match krb5_types::try_ascii(status::TICKET_NOT_VALID) {
             Ok(r) => r,
-            Err(_) => return Vec::new(),
+            Err(e) => return Err(Error::Asn1(e.to_string())),
         },
     };
     let sname = if let Some(n) = body.and_then(|b| b.sname.clone()) {
@@ -469,7 +486,7 @@ pub(super) fn encode_krb_error(
                     ["krbtgt", status::TICKET_NOT_VALID],
                 ) {
                     Ok(n) => n,
-                    Err(_) => return Vec::new(),
+                    Err(e) => return Err(Error::Asn1(e.to_string())),
                 }
             }
         }
@@ -502,5 +519,5 @@ pub(super) fn encode_krb_error(
         e_text: text.and_then(|t| krb5_types::try_ascii(t).ok()),
         e_data: e_data.map(Into::into),
     };
-    encode(&pdu).unwrap_or_default()
+    Ok(encode(&pdu)?)
 }

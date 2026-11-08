@@ -4,32 +4,31 @@ The implementations this port is checked against and what is kept from
 them. The gates that content-assert against each one, where they run and
 what they assert are in [gates.md](gates.md) (its Oracle column).
 Timing/replay: [`security.md`](security.md). Isolation: never edit host
-`/etc/krb5.conf` (`TESTLABBY.LOCAL`).
+`/etc/krb5.conf`.
 
 - **MIT 1.22.2** is the primary oracle and the equality bar: live MIT
   clients, KDCs, kadmind, kpropd and libraries against the Rust side, in
-  both directions where a direction exists.
-- **Samba 4 AD** (`AD.KERBER.TEST`) checks the PAC, S4U and trusts. On 1.2 its seven gates ran by hand on tree
-  `dabe43ab`, all passing, because the `peers` workflow ran none of them (see "Did not run").
+  both directions where a direction exists. On Debian 13 and Rocky Linux 10 the server scenarios run against
+  the distribution's own MIT, 1.21.3, and are graded as 1.21 behaves: its kadmind starts beside a taken
+  port, a self password change keeps every old key, and Rocky's build offers PKINIT's elliptic-curve groups.
+- **Samba 4 AD** (`AD.KERBER.TEST`) checks the PAC, S4U and trusts, in seven gates that `peers.yml` runs and
+  fails unless all seven ran.
   - `samba-ad`, `ad-windows` and `ad-s4u` use only Samba's own tools: they show the oracle works, not our code.
   - `samba-pac-verify`, `samba-pac-l2`, `samba-crossrealm` and `samba-realtrust` use our KDC's debug, test-hooks
     build: Samba decodes its PAC, checks its checksums and rejects corrupted ones, takes its referral PACs both
     ways over a shared trust password, and returns the right reverse SID over a real `samba-tool` trust.
   - Our client tools are in none of the seven.
-- **Heimdal 7.8** was a secondary oracle in both directions through v1.1.0. Its gate was retired in the
-  1.2 line, and 1.2 has not been run against it.
+- **Heimdal 7.8**'s client tools on Debian 13 ran against MIT's KDC and then ours (below). Heimdal's KDC,
+  cross-realm with it and its `kcm` have not been run since v1.1.0.
 
 ## Field consumers
 
 Production use is the proof. Each consumer below ran against a kerber-rust realm brought up by
 [install.md](install.md), beside the same scenario against a stock Fedora MIT 1.22.2 realm in the same lab
 (libvirt VMs on one host), MIT first. The scenarios in the last column repeat through `make field`
-([harness/field](../harness/field/README.md)). The full pass of the 1.2 line ran on tree `637ea964` with no
-product failure in any leg. Tree `dabe43ab` changes two harness files and builds the same programs byte for byte;
-it ran the weekly suite and then seven runs of the nightly profile in a row, back to back, with no
-failure. The cut's source differs from that tree by the version, the docs, the CHANGELOG, NOTICE and test scripts.
-The version feeds the crates' symbol hashes, so the tagged binaries are not the bytes those runs used; they differ by the version
-bump alone.
+([harness/field](../harness/field/README.md)), or by the hand drivers ([harness/hand](../harness/hand/README.md)).
+The release pass of 1.2.1 ran on tree `3e019309` (commit `c9421ed1`), with no product failure in any leg.
+A row that names a commit gives the run that proved it while 1.2.1 was built.
 
 | Consumer | What ran against both realms | Repeats as |
 | --- | --- | --- |
@@ -47,12 +46,18 @@ bump alone.
 | An iprop replica of an MIT primary | this port's `kpropd` and `krb5kdc` on the replica, beside MIT's | `replica` |
 | Going back to MIT | install.md's section as written, the principals as kerber-rust kept them | `rollback` |
 | A fresh install | install.md's blocks on a pristine VM, then a realm from scratch | `install` |
+| MIT's client tools and SSSD on Fedora 44, Rocky Linux 10, Debian 13 and Ubuntu 26.04 | `FILE:` and `KCM:` caches: `kinit` by password and keytab, `kvno`, renewal, `kpasswd`, expiry and password expiry, lockout and unlock, an SSSD login with renewal, remote `kadmin`; the realm moved from MIT's KDC to ours on the same VM, its principals the same. At `4b01721d`, 68 rows equal and 16 SSSD renewals | `rp-cm.sh` (by hand) |
+| Heimdal 7.8's client tools on Debian 13 | `kinit`, `klist`, `kgetcred` and `kpasswd` on a `FILE:` cache, and the texts for a wrong password and an unknown principal. At `2bdcedc3`, 5 rows equal | `rp-cm.sh <sha> hm` (by hand) |
+| Windows 11's own Kerberos and SSPI, a workgroup machine joined with `ksetup` | realm mapping; AS and TGS and `klist`'s fields; SSPI sign and seal against MIT's GSS acceptor and ours; a password change; the wrong-password and expired-password texts; RC4 refused; SPNEGO to Keycloak; an interactive logon as a realm user. The machine's principal needs `+no_auth_data_required` ([install.md](install.md#windows-clients)). At `0f633715`, 10 rows equal | `rp-ws.sh` (by hand) |
+| Our KDC, kadmind and replica on Debian 13 and Rocky Linux 10, beside the distribution's MIT | install, upgrade, kadmind's start, the KDC's settings, database writes, PKINIT, `kpasswd` and a replica. Every scenario passed on both legs: Debian 13 at `514f7b96`, Rocky Linux 10 at `0f633715` | `ds` (`harness/field/ds/<vm>.env`) |
+| Load | requests and writes on each KDC for 600 s and for 3,600 s: no request failed (467,184 on ours in the hour). Ours' memory follows the realm's size, about 1.25 KiB per principal, and is flat with the size held (`9947d735`, `cbf91e16`) | `load`, `load-long` |
+| Restarts, hostile input, the OTP default, `rd_safe` | a write, a kill and a relaunch keep the write and its dump; the KDC's replies to hostile input equal MIT's, its memory stays flat, and `kinit` works after each cell; `rd_safe` answers as MIT's; the OTP default's refusal and log lines equal MIT's but for the documented info text (`cbf91e16`) | `lt` |
 | `sssd-kcm` 2.13.1 on Fedora 44, against MIT's KDC | our `kinit`, `klist`, `kvno`, `kdestroy` and `kswitch` beside MIT's on `KCM:` collections, each reading the other's caches; identical but for the program's name in one error | by hand |
 | `krb5-embed-realm`, the KDC and kadmind over one store | a realm beside MIT's: the same 40 principal fields but `admin/admin`'s `REQUIRES_PRE_AUTH`, `kinit`, `addprinc`, restarts that keep the keys, 50 crash cells | by hand |
 
 ### Write cost
 
-Measured beside MIT 1.22.2, MIT first, at 10, 1,000 and 5,000 principals, on the tree of the full pass. At 5,000 a
+Measured beside MIT 1.22.2, MIT first, at 10, 1,000 and 5,000 principals, on 1.2's full-pass tree `637ea964`. At 5,000 a
 password create is 0.84 times MIT's median, a random-key create 1.00 times and a password change 0.95 times; no
 operation at any size is above 1.08 times MIT. With the update log on, none is above 1.004 times MIT. Ours at 5,000
 over ours at 10 is 1.145, 1.035 and 1.159 for those three. That spread is the lab VM's CPU, which moved the
@@ -64,9 +69,11 @@ A burst after idle at 10 principals read 1.51 times MIT (1.01 on the tree before
 tree the accept stall after a write was 0.271, 0.265 and 0.319 ms. A run of 218 kills, 50 of them during a rewrite,
 left no torn change, and MIT loaded all 220 dumps (`kill-loop`). Twenty forced power-offs during writes left the
 update log consistent 19 times and stable but behind once, where MIT's baseline was 12 consistent, 4 behind and
-4 reset, and none of the 38 acknowledged writes was missing on the primary or the replica.
+4 reset, and none of the 38 acknowledged writes was missing on the primary or the replica. In 1.2.1 the kill loop
+ran on Debian 13 and Rocky Linux 10 too, at `0f633715`: 228 and 220 kills, no unexpected result, and MIT's
+`kdb5_util` matched and loaded all 230 and 222 dumps.
 
-### Not yet matched in 1.2
+### Not yet matched in 1.2.1
 
 - **Client messages and logs.** None changes an outcome.
   - The KDC's AS_REQ line for a wrong encrypted-challenge password ends `Preauthentication failed`, where MIT's ends
@@ -80,22 +87,19 @@ update log consistent 19 times and stable but behind once, where MIT's baseline 
   cache entry whose principal or realm is not ASCII.
 - **Not supported:** what [install.md](install.md) lists under "Not supported", and the client tools' remaining
   differences it lists.
-- **Did not run in the 1.2 pass:**
-  - `ad-trust` on the final tree: the AD legs last ran on an earlier 1.2 tree, with no failure on either leg;
-  - `peers.yml`'s seven gates in CI: on tree `dabe43ab` the job's MIT image was missing, so each exited 2 and the
-    job stayed green with none run. They ran by hand on that tree instead (see the Samba line above), and the job's
-    fix is planned for 1.2.1;
-  - `moving (mit-extra)` in `nightly.yml` on tree `dabe43ab`, the workflow's one red job: two gate scripts left test
-    KDCs running, and the gates after them failed. The cut's tree stops them;
-  - Heimdal: its gate was retired in the 1.2 line, and no scenario replaces it;
-  - the GSS initiator's exact `+1` after a wrap is not measured. Its repeats and stale numbers are, against MIT, in
-    the `replica` leg;
+- **Corrupt records.** MIT's `getprinc` refuses a principal whose `LAST_PWD_CHANGE`, `MOD_PRINC` or `MKVNO` data is
+  corrupt (`Database record is incomplete or corrupted`); ours prints the entry. Only a damaged database reaches it.
+- **Not run:**
+  - Heimdal's KDC, cross-realm with it and its `kcm`;
+  - Windows: a domain-joined logon, SSPI as a server, and Windows OpenSSH;
+  - a server on Ubuntu (its layout is Debian's);
+  - the GSS initiator's exact `+1` after a wrap. Its repeats and stale numbers are, against MIT, in the `replica` leg;
   - cells dropped by decision: one GSS clock-skew cell, a "+1 h" cell and a 330-second delay pair (behind a switch,
     off);
   - a global IPv6 on the KDC;
   - hand legs: a desktop-login case that needs SDDM driven directly, `-UseDefaultCredentials` toward the Windows DC
-    (it needs a change to the AD, and the `-Credential` leg did run), and a remote journal read that needs a
-    sudo password.
+    (it needs a change to the AD), and a remote journal read that needs a sudo password;
+  - in the release pass: the Active Directory trust, which last ran on an earlier 1.2 build.
 
 ## Supply-chain (not an interop oracle)
 
@@ -147,12 +151,12 @@ implementation oracle. The Rust-only gates (Oracle `none`) are in
 | --- | --- | --- |
 | golden MIT DER + crypto KATs | in-repo fixtures, not a live peer | test |
 | 9 cargo-fuzz targets | `nightly.yml` smoke, not an interop peer | fuzz |
-| cargo-vet exemptions | 134 exempt (121 at 1.1, 114 at 1.0), 16 fully audited; not a full local audit of every crate | documented |
+| cargo-vet exemptions | 134 exempt (134 at 1.2.0, 121 at 1.1, 114 at 1.0), 18 fully audited; not a full local audit of every crate | documented |
 | in-process metrics counters | deferred; logs-as-metrics only (`logging.md`) | n/a |
 
 MSRV 1.95 `cargo build --workspace --all-targets --locked` is the `msrv`
 job; `cargo test --workspace --locked` on 1.95 is `nightly.yml`'s
 `msrv-test`. Edition 2024; `rasn` 0.28.14 vendored with MIT's decode rules, goldens
 and the decode sweep are the DER net. `publish = false` stays;
-this matrix is the 1.2 claim, not crates.io. KLLDAP alignment:
+this matrix is the 1.2.1 claim, not crates.io. KLLDAP alignment:
 [`embed/klldap.md`](embed/klldap.md).

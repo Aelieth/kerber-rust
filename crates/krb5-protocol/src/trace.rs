@@ -152,7 +152,7 @@ impl<'a> Princ<'a> {
     #[must_use]
     pub fn unparse(&self) -> String {
         self.name
-            .unparse_with_realm(&String::from_utf8_lossy(self.realm))
+            .unparse_with_realm_lossy(&String::from_utf8_lossy(self.realm))
     }
 }
 

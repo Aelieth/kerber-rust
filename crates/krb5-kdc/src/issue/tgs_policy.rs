@@ -31,7 +31,7 @@ pub(super) fn check_tgs_u2u(
     }
     let crealm = utf8_realm(&st.part.crealm)?;
     let id = lookup_principal_id(&st.part.cname, crealm);
-    let Some(client) = store.fetch(&id)? else {
+    let Some(client) = id.map(|id| store.fetch(&id)).transpose()?.flatten() else {
         return Err(proto(err::SERVER_NOMATCH, status::SECOND_TKT_MISMATCH));
     };
     if client.name != dest.name || client.realm != dest.realm {
@@ -60,6 +60,7 @@ pub(super) fn check_tgs_constraints_skeleton(
     req_realm: &str,
     renew: bool,
     validate: bool,
+    now: &KerberosTime,
 ) -> Result<(), Error> {
     if body.kdc_options.bit(flag_bit::FORWARDED) && !enc_tkt.flags.bit(flag_bit::FORWARDABLE) {
         return Err(proto(err::BADOPTION, status::TGT_NOT_FORWARDABLE));
@@ -82,16 +83,15 @@ pub(super) fn check_tgs_constraints_skeleton(
         return Err(proto(err::TKT_NYV, status::TICKET_NOT_VALID));
     }
     if validate {
-        let now = KerberosTime::now();
         let start = enc_tkt.starttime.as_ref().unwrap_or(&enc_tkt.authtime);
         if now.delta_seconds(start) < 0 {
             return Err(proto(err::TKT_NYV, status::NOT_YET_VALID));
         }
     }
+    // MIT: `check_tgs_times` (kdc/tgs_policy.c:239-240)
     if renew {
-        let now = KerberosTime::now();
         match &enc_tkt.renew_till {
-            Some(till) if till.unix_seconds() <= now.unix_seconds() => {
+            Some(till) if till.unix_seconds() < now.unix_seconds() => {
                 return Err(proto(err::TKT_EXPIRED, status::TKT_EXPIRED));
             }
             None => return Err(proto(err::TKT_EXPIRED, status::TKT_EXPIRED)),
@@ -152,7 +152,12 @@ pub(super) fn check_tgs_s4u2self(
         .map_err(|_| proto(err::BADOPTION, status::S4U2SELF_LOCAL_PAC_CLIENT))?;
     let authtime = enc_tkt.authtime.unix_seconds();
     if let Some(ref client) = s4u.local {
-        if !pac_client_info_eq(&parsed, authtime, &enc_tkt.cname.components_joined(), None) {
+        if !pac_client_info_eq(
+            &parsed,
+            authtime,
+            &enc_tkt.cname.components_joined_lossy(),
+            None,
+        ) {
             return Err(proto(err::BADOPTION, status::S4U2SELF_LOCAL_PAC_CLIENT));
         }
         let empty = crate::store::Principal::from_keys(
@@ -171,7 +176,7 @@ pub(super) fn check_tgs_s4u2self(
     } else if !pac_client_info_eq(
         &parsed,
         authtime,
-        &s4u.user.components_joined(),
+        &s4u.user.components_joined_lossy(),
         Some(&s4u.realm),
     ) {
         return Err(proto(err::BADOPTION, status::S4U2SELF_FOREIGN_PAC_CLIENT));

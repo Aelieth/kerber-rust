@@ -135,64 +135,6 @@ pub(super) fn p521_sign(secret: &[u8; 66], message: &[u8]) -> Option<Vec<u8>> {
     None
 }
 
-fn p256_verify(public: &[u8], message: &[u8], der_sig: &[u8]) -> bool {
-    use p256::ecdsa::signature::Verifier;
-    use p256::ecdsa::{Signature, VerifyingKey};
-    let Ok(vk) = VerifyingKey::from_sec1_bytes(public) else {
-        return false;
-    };
-    let Ok(sig) = Signature::from_der(der_sig) else {
-        return false;
-    };
-    vk.verify(message, &sig).is_ok()
-}
-
-fn spki_uncompressed(cert: &[u8]) -> Option<Vec<u8>> {
-    let (t, body, _) = take_tlv(cert)?;
-    if t != 0x30 {
-        return None;
-    }
-    let (t, tbs, _) = take_tlv(body)?;
-    if t != 0x30 {
-        return None;
-    }
-    let mut cur = tbs;
-    if cur.first() == Some(&0xa0) {
-        cur = take_tlv(cur)?.2;
-    }
-    cur = take_tlv(cur)?.2;
-    cur = take_tlv(cur)?.2;
-    cur = take_tlv(cur)?.2;
-    cur = take_tlv(cur)?.2;
-    cur = take_tlv(cur)?.2;
-    let (t, spki, _) = take_tlv(cur)?;
-    if t != 0x30 {
-        return None;
-    }
-    let (_, _, rest) = take_tlv(spki)?;
-    let (t, bit, _) = take_tlv(rest)?;
-    if t != 0x03 {
-        return None;
-    }
-    let pt = if bit.first() == Some(&0) {
-        bit.get(1..)?
-    } else {
-        bit
-    };
-    if pt.first() == Some(&0x04) && pt.len() == 65 {
-        return Some(pt.to_vec());
-    }
-    decompress_p256(pt)
-}
-
-fn decompress_p256(pt: &[u8]) -> Option<Vec<u8>> {
-    use p256::elliptic_curve::sec1::{FromSec1Point, ToSec1Point};
-    use p256::{AffinePoint, Sec1Point};
-    let ep = Sec1Point::from_bytes(pt).ok()?;
-    let aff = Option::<AffinePoint>::from(AffinePoint::from_sec1_point(&ep))?;
-    Some(aff.to_sec1_point(false).as_bytes().to_vec())
-}
-
 /// Encoded by hand so the Certificate SET uses IMPLICIT `[0]` (RFC 5652).
 #[must_use]
 #[expect(
@@ -384,133 +326,6 @@ pub fn cms_wrap_unsigned(e_content: &[u8]) -> Vec<u8> {
     tlv(0x30, &[oid, tlv(0xa0, &tlv(0x04, e_content))].concat())
 }
 
-#[must_use]
-pub fn cms_extract_unsigned(der: &[u8]) -> Option<Vec<u8>> {
-    if let Some((tag, body, _)) = take_tlv(der)
-        && tag == 0x30
-        && let Some((t, oid, rest)) = take_tlv(body)
-        && t == 0x06
-        && oid == ECONTENT_AUTHDATA
-        && let Some((t, expl, _)) = take_tlv(rest)
-        && t == 0xa0
-        && let Some((t, oct, _)) = take_tlv(expl)
-        && t == 0x04
-    {
-        return Some(oct.to_vec());
-    }
-    if let Ok(ci) = rasn::der::decode::<CmsContentInfo>(der)
-        && ci.content.signer_infos.is_empty()
-        && let Some(ec) = ci.content.encap_content_info.e_content
-    {
-        return Some(ec.to_vec());
-    }
-    unsigned_signeddata_econtent(der)
-}
-
-// MIT: `cms_signeddata_verify` (pkinit_crypto_openssl.c:2052-2063)
-// A SignedData with no SignerInfo is the anonymous case; its content has no signature check.
-fn unsigned_signeddata_econtent(der: &[u8]) -> Option<Vec<u8>> {
-    let (tag, ci, _) = take_tlv(der)?;
-    if tag != 0x30 {
-        return None;
-    }
-    let (_, _, rest) = take_tlv(ci)?;
-    let (t, sd_wrap, _) = take_tlv(rest)?;
-    if t != 0xa0 {
-        return None;
-    }
-    let (t, sd, _) = take_tlv(sd_wrap)?;
-    if t != 0x30 {
-        return None;
-    }
-    let mut cur = sd;
-    cur = take_tlv(cur)?.2;
-    cur = take_tlv(cur)?.2;
-    let (t, encap, rest) = take_tlv(cur)?;
-    if t != 0x30 {
-        return None;
-    }
-    let (t, _, after_oid) = take_tlv(encap)?;
-    if t != 0x06 {
-        return None;
-    }
-    let (t, expl, _) = take_tlv(after_oid)?;
-    if t != 0xa0 {
-        return None;
-    }
-    let (t, oct, _) = take_tlv(expl)?;
-    if t != 0x04 {
-        return None;
-    }
-    let signers = if rest.first() == Some(&0xa0) {
-        take_tlv(rest)?.2
-    } else {
-        rest
-    };
-    let (t, sbody, _) = take_tlv(signers)?;
-    if t != 0x31 || !sbody.is_empty() {
-        return None;
-    }
-    Some(oct.to_vec())
-}
-
-/// This does **not** authenticate the content. PKINIT must call
-#[must_use]
-pub fn cms_unwrap(der: &[u8]) -> Vec<u8> {
-    if let Ok(ci) = rasn::der::decode::<CmsContentInfo>(der)
-        && let Some(ec) = ci.content.encap_content_info.e_content
-    {
-        return ec.to_vec();
-    }
-    if let Ok(p) = cms_parts(der) {
-        return p.e_content;
-    }
-    der.to_vec()
-}
-
-#[derive(Clone, Debug)]
-pub struct CmsVerified {
-    pub e_content: Vec<u8>,
-    pub cert: Vec<u8>,
-    pub e_content_type: Vec<u8>,
-}
-
-pub fn cms_verify(der: &[u8], trust_anchor: &[u8]) -> Result<Vec<u8>, &'static str> {
-    Ok(cms_verify_full(der, trust_anchor)?.e_content)
-}
-
-pub fn cms_verify_full(der: &[u8], trust_anchor: &[u8]) -> Result<CmsVerified, &'static str> {
-    let p = cms_parts(der)?;
-    cert_path_ok(&p.cert, trust_anchor)?;
-    signer_verified(p)
-}
-
-fn signer_verified(p: CmsParts) -> Result<CmsVerified, &'static str> {
-    let public = spki_uncompressed(&p.cert).ok_or("cms spki")?;
-    // RFC 5652 §5.3: signedAttrs MUST be present when eContentType ≠ id-data.
-    let sa = p.signed_attrs.as_ref().ok_or("cms signedAttrs")?;
-    let mut set = sa.clone();
-    if set.first() == Some(&0xa0) {
-        set[0] = 0x31;
-    }
-    if !p256_verify(&public, &set, &p.signature) {
-        return Err("cms ecdsa attrs");
-    }
-    let expect = sha256_bytes(&p.e_content);
-    if !signed_attrs_digest_ok(sa, &expect) {
-        return Err("cms message-digest");
-    }
-    let ct = signed_attrs_content_type(sa).ok_or("cms content-type")?;
-    if ct != p.e_content_type {
-        return Err("cms content-type");
-    }
-    Ok(CmsVerified {
-        e_content: p.e_content,
-        cert: p.cert,
-        e_content_type: p.e_content_type,
-    })
-}
-
 pub fn require_client_pkinit_san(
     cert: &[u8],
     cname: &crate::PrincipalName,
@@ -520,22 +335,22 @@ pub fn require_client_pkinit_san(
     if san_realm != realm {
         return Err("pkinit client san");
     }
-    if parts != pkinit_cname_parts(cname) {
+    if pkinit_cname_parts(cname).as_ref() != Some(&parts) {
         return Err("pkinit client san");
     }
     Ok(())
 }
 
-fn pkinit_cname_parts(cname: &crate::PrincipalName) -> Vec<String> {
+fn pkinit_cname_parts(cname: &crate::PrincipalName) -> Option<Vec<String>> {
     if cname.name_type == crate::PrincipalName::NT_ENTERPRISE {
-        let raw = cname.components_joined();
+        let raw = cname.try_components_joined()?;
         let user = raw.rsplit_once('@').map_or(raw.as_str(), |(u, _)| u);
-        return vec![user.to_string()];
+        return Some(vec![user.to_string()]);
     }
     cname
         .name_string
         .iter()
-        .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
+        .map(|s| std::str::from_utf8(s.as_bytes()).ok().map(str::to_owned))
         .collect()
 }
 
@@ -587,61 +402,6 @@ fn signed_attrs_content_type(sattrs: &[u8]) -> Option<Vec<u8>> {
     } else {
         Some(set)
     }
-}
-
-fn cert_tbs_sig(cert: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
-    let (tag, body, _) = take_tlv(cert)?;
-    if tag != 0x30 {
-        return None;
-    }
-    let (t, tbs_body, rest) = take_tlv(body)?;
-    let tbs = tlv(t, tbs_body);
-    let (_, _, rest) = take_tlv(rest)?;
-    let (t, sig_bit, _) = take_tlv(rest)?;
-    if t != 0x03 {
-        return None;
-    }
-    let sig = if sig_bit.first() == Some(&0) {
-        sig_bit.get(1..)?.to_vec()
-    } else {
-        sig_bit.to_vec()
-    };
-    Some((tbs, sig))
-}
-
-fn cert_path_ok(leaf: &[u8], ca: &[u8]) -> Result<(), &'static str> {
-    let ca_pub = spki_uncompressed(ca).ok_or("cms ca spki")?;
-    let (tbs, sig) = cert_tbs_sig(leaf).ok_or("cms leaf")?;
-    if !p256_verify(&ca_pub, &tbs, &sig) {
-        return Err("cms trust");
-    }
-    if !cert_basic_constraints_ca(ca) {
-        return Err("cms ca");
-    }
-    if !cert_key_cert_sign_ok(ca) {
-        return Err("cms ca ku");
-    }
-    let iss = cert_name_der(leaf, true).ok_or("cms issuer")?;
-    let sub = cert_name_der(ca, false).ok_or("cms subject")?;
-    if iss != sub {
-        return Err("cms chain");
-    }
-    let now = chrono::Utc::now();
-    let (nb, na) = cert_time_window(leaf).ok_or("cms validity")?;
-    if now < nb {
-        return Err("cms notyet");
-    }
-    if now > na {
-        return Err("cms expired");
-    }
-    let (ca_nb, ca_na) = cert_time_window(ca).ok_or("cms ca validity")?;
-    if now < ca_nb {
-        return Err("cms ca notyet");
-    }
-    if now > ca_na {
-        return Err("cms ca expired");
-    }
-    Ok(())
 }
 
 const OID_RSA: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01];
@@ -1211,7 +971,7 @@ fn cert_key_id(cert: &[u8]) -> Option<Vec<u8>> {
 
 // MIT: `create_identifiers_from_stack` (plugins/preauth/pkinit/pkinit_crypto_openssl.c:5223-5316)
 #[must_use]
-pub fn encode_td_certifiers(certs: &[&[u8]]) -> Vec<u8> {
+pub fn encode_td_certifiers(certs: &[&[u8]]) -> Option<Vec<u8>> {
     let ids: Vec<super::ExternalPrincipalIdentifier> = certs
         .iter()
         .map(|cert| {
@@ -1225,7 +985,7 @@ pub fn encode_td_certifiers(certs: &[&[u8]]) -> Vec<u8> {
             }
         })
         .collect();
-    rasn::der::encode(&ids).unwrap_or_default()
+    rasn::der::encode(&ids).ok()
 }
 
 fn der_next(input: &[u8]) -> Result<(u8, &[u8], &[u8]), &'static str> {
@@ -2131,97 +1891,6 @@ fn parse_x509_time(tag: u8, body: &[u8]) -> Option<chrono::DateTime<chrono::Utc>
             .and_hms_opt(hour, min, sec)?
             .and_utc(),
     )
-}
-
-struct CmsParts {
-    e_content: Vec<u8>,
-    cert: Vec<u8>,
-    signature: Vec<u8>,
-    signed_attrs: Option<Vec<u8>>,
-    e_content_type: Vec<u8>,
-}
-
-fn cms_parts(der: &[u8]) -> Result<CmsParts, &'static str> {
-    let (tag, ci, _) = take_tlv(der).ok_or("cms")?;
-    if tag != 0x30 {
-        return Err("cms");
-    }
-    // Only id-signedData, as MIT.
-    let (tag, oid, rest) = take_tlv(ci).ok_or("cms oid")?;
-    if tag != 0x06 || oid != OID_SIGNED_DATA {
-        return Err("cms content-type");
-    }
-    let (t, sd_wrap, _) = take_tlv(rest).ok_or("cms sd")?;
-    if t != 0xa0 {
-        return Err("cms sd tag");
-    }
-    let (t, sd, _) = take_tlv(sd_wrap).ok_or("cms sd seq")?;
-    if t != 0x30 {
-        return Err("cms sd seq");
-    }
-    let mut cur = sd;
-    let _ = take_tlv(cur).ok_or("ver")?;
-    cur = take_tlv(cur).ok_or("ver")?.2;
-    cur = take_tlv(cur).ok_or("digests")?.2;
-    let (t, encap, rest) = take_tlv(cur).ok_or("encap")?;
-    if t != 0x30 {
-        return Err("encap");
-    }
-    let (t, ct, after_oid) = take_tlv(encap).ok_or("eContentType")?;
-    if t != 0x06 {
-        return Err("eContentType");
-    }
-    let e_content_type = ct.to_vec();
-    let (t, expl, _) = take_tlv(after_oid).ok_or("eContent")?;
-    if t != 0xa0 {
-        return Err("eContent tag");
-    }
-    let (t, oct, _) = take_tlv(expl).ok_or("eContent oct")?;
-    if t != 0x04 {
-        return Err("eContent oct");
-    }
-    let e_content = oct.to_vec();
-    let (t, cert_set, rest) = take_tlv(rest).ok_or("certs")?;
-    if t != 0xa0 {
-        return Err("certs tag");
-    }
-    let cert = if cert_set.first() == Some(&0x30) {
-        let (tt, body, _) = take_tlv(cert_set).ok_or("cert")?;
-        tlv(tt, body)
-    } else {
-        cert_set.to_vec()
-    };
-    let (t, signers, _) = take_tlv(rest).ok_or("signers")?;
-    if t != 0x31 {
-        return Err("signers");
-    }
-    let (t, signer, _) = take_tlv(signers).ok_or("signer")?;
-    if t != 0x30 {
-        return Err("signer seq");
-    }
-    let mut s = signer;
-    s = take_tlv(s).ok_or("sver")?.2;
-    s = take_tlv(s).ok_or("sid")?.2;
-    s = take_tlv(s).ok_or("dalg")?.2;
-    let signed_attrs = if s.first() == Some(&0xa0) {
-        let (t, body, rest) = take_tlv(s).ok_or("sattr")?;
-        s = rest;
-        Some(tlv(t, body))
-    } else {
-        None
-    };
-    s = take_tlv(s).ok_or("salg")?.2;
-    let (t, sig, _) = take_tlv(s).ok_or("sig")?;
-    if t != 0x04 {
-        return Err("sig oct");
-    }
-    Ok(CmsParts {
-        e_content,
-        cert,
-        signature: sig.to_vec(),
-        signed_attrs,
-        e_content_type,
-    })
 }
 
 #[cfg(any(test, feature = "test-ca"))]

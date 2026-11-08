@@ -89,13 +89,14 @@ def pick(rng, model, i):
 
 
 def drive(a):
-    db = os.path.join(a.kdcdir, "principal")
+    datadir = a.datadir or a.kdcdir
+    db = os.path.join(datadir, "principal")
     kadmin, kdb = os.path.join(a.bin, "kadmin.local"), os.path.join(a.bin, "kdb5_util")
     os.makedirs(os.path.join(a.dir, "dumps"), mode=0o700, exist_ok=True)
     rng = random.Random(a.seed)
 
     def temps():
-        return {n for n in os.listdir(a.kdcdir) if n.startswith(".principal.tmp-")}
+        return {n for n in os.listdir(datadir) if n.startswith(".principal.tmp-")}
 
     def moved(st0):
         st = os.stat(db)
@@ -205,7 +206,7 @@ def drive(a):
         c["kills"] += 1
         modes[why] += 1
         storm += why == "compaction"
-        left = bool(seen) and os.path.exists(os.path.join(a.kdcdir, seen))
+        left = bool(seen) and os.path.exists(os.path.join(datadir, seen))
         c["left"] += left
         stale = stale or left
         where = ("replaced" if replaced else "grown" if st1.st_size > st0.st_size
@@ -313,6 +314,7 @@ def main():
     ap.add_argument("--realm", required=True)
     ap.add_argument("--dir", required=True)
     ap.add_argument("--kdcdir", default="/var/kerberos/krb5kdc")
+    ap.add_argument("--datadir", default="")
     ap.add_argument("--bin", default="/usr/sbin")
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--ops", type=int, default=1000)

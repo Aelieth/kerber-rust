@@ -16,36 +16,39 @@ Kerberos build is `mitd3` ([below](#mitd3-upstream-mit-with-des3)).
 
 ## Address plan
 
-Network `kerber-lab`: NAT on `192.168.177.0/24`, bridge `virbr-kerber`.
-Gateway, DHCP and DNS are on `192.168.177.1` (libvirt's dnsmasq).
+Network `kerber-lab`: NAT on `$FIELD_LAB_NET.0/24`, bridge `virbr-kerber`.
+Gateway, DHCP and DNS are on `$FIELD_LAB_NET.1` (libvirt's dnsmasq).
 
 | Name | Address | libvirt domain | OS | vCPU / RAM / disk | Role |
 | --- | --- | --- | --- | --- | --- |
 | `kdc.kerber.test` | `.10` + a LAN NIC | `kerber-kdc` | Fedora 43 Cloud | 2 / 2 GiB / 20 GB | MIT `krb5-server` (oracle), then kerber-rust |
 | `services.kerber.test` | `.11` | `kerber-services` | Fedora 43 Cloud | 4 / 6 GiB / 40 GB | rootful podman: Ganesha NFS, Keycloak, lldap |
 | `kdc2.kerber.test` | `.12` | `kerber-kdc2` | Fedora 44 Cloud | 2 / 2 GiB / 20 GB | replica. Defined by hand (L22). `up` does not start it; `up kdc2` does. `rebuild kdc2` is refused. A bare `reset kdc2` uses `f44-base` |
+| `deb13r.kerber.test` | `.36` | `kerber-deb13r` | Debian 13 | 2 / 3 GiB / 30 GB | DS's same-family replica, as kdc2. Defined by hand: a `virt-clone` of `kerber-deb13` at `mit-server-deb13` (MAC `52:54:00:4b:52:24`), with a DHCP host and DNS record made by `net-update … --config --live`. A clone keeps the source's cloud-init network file, pinned to the source's MAC, and its machine-id and ssh host keys, so before its snapshot it gets its own: with `deb13` off, one boot on `deb13`'s MAC (`virsh detach-interface`/`attach-interface --config`), where `/etc/netplan/50-cloud-init.yaml`'s MAC is rewritten to its own, `/etc/machine-id` is made anew (`systemd-machine-id-setup`) and `ssh-keygen -A` makes new host keys; then its own MAC back, one boot showing its lease at `.36` and ssh, and the snapshot `mit-server-deb13`. `harness/hand/ds-baselines.sh <sha> deb13 rep` makes `mit-replica-deb13` and `rust-replica-deb13` |
+| `rocky10r.kerber.test` | `.37` | `kerber-rocky10r` | Rocky 10 | 2 / 3 GiB / 20 GB | the same for Rocky 10 (MAC `52:54:00:4b:52:25`, from `mit-server-rocky10`; the pinned MAC is `mac-address=`, in upper case, in `/etc/NetworkManager/system-connections/cloud-init-lab.nmconnection`) |
+| (none in the table) | `.35` | `kerber-win` | Windows 11 | 8 GiB | defined by hand (plan-WIN; MAC `52:54:00:4b:52:23`); `lab.sh` does not know it, so read `virsh net-dumpxml kerber-lab` for the addresses in use, not this table |
 | `client1.kerber.test` | `.21` | `kerber-client1` | Fedora Kinoite 43 | 4 / 6 GiB / 40 GB | the fleet's client type (the reference client kit's twin), SPICE desktop |
 | `client2.kerber.test` | `.22` | `kerber-client2` | Fedora 43 Cloud | 2 / 3 GiB / 20 GB | sshd target, second NFS client, headless checks |
 | `klldap.kerber.test` | `.30` | `kerber-klldap` | Fedora 43 Cloud | 2 / 3 GiB / 30 GB | rootful Docker (`moby-engine`): KLLDAP with its own KDC (F3) |
 | `mitd3.kerber.test` | `.31` | `kerber-mitd3` | Fedora 43 Cloud | 4 / 4 GiB / 20 GB | upstream MIT krb5 1.22.2 built from the release tarball: the des3 oracle (B22) |
 | `ub26.kerber.test` | `.32` | `kerber-ub26` | Ubuntu 26.04 Cloud | 4 / 8 GiB / 60 GB | CI mirror. `lab.sh up` does not start it; `lab.sh up ub26` does. Parked unless that run is under way |
 | `deb13.kerber.test` | `.33` | `kerber-deb13` | Debian 13 | 2 / 3 GiB / 30 GB | lagging peer (krb5 1.21.3). Started with the field VMs. Not built from the Fedora image |
-| `rocky10.kerber.test` | `.34` | `kerber-rocky10` | Rocky Linux 10 | 2 / 3 GiB / 20 GB | closeout and the 1.2.0 final only. `lab.sh up` does not start it; `lab.sh up rocky10` does |
+| `rocky10.kerber.test` | `.34` | `kerber-rocky10` | Rocky Linux 10 | 2 / 3 GiB / 20 GB | release passes and on demand. `lab.sh up` does not start it; `lab.sh up rocky10` does |
 
 Field runs use Fedora 44 snapshots (`f44-base` and the ones the scenario table names), whatever the
 table's image was built from.
 
-- **DHCP:** static leases by MAC (`network-kerber-lab.xml`, the table in
+- **DHCP:** static leases by MAC (`network-kerber-lab.xml.in`, the table in
   `lab.sh`). Other machines get `.100`–`.199`.
 - **DNS:** forward and reverse records for every name above. `kerber.test` is
   local only, so unknown names get NXDOMAIN and nothing leaks upstream.
   Everything else is forwarded upstream.
-- **AD:** `ad.kerber.test` is forwarded to the AD test DC (`AD_DC` in `lab.sh`), so the
+- **AD:** `ad.kerber.test` is forwarded to the AD test DC (`FIELD_AD_DC`), so the
   VMs resolve the DC's name (F2-AD). The realm is `KERBER.TEST`.
 - **Own name:** a VM's own name resolves locally (systemd-resolved /
   nss-myhostname), not through DNS. In `getaddrinfo` order the answer is the
   IPv6 link-local address, then the lab address, and on kdc then the LAN
-  address (on klldap, Docker's `172.17.0.1`). This is stock Fedora. A client
+  address (on klldap, Docker's default bridge gateway). This is stock Fedora. A client
   running on kdc itself tries `fe80::…%2` first.
 
 ### kdc's LAN NIC (macvtap)
@@ -80,7 +83,7 @@ starts, so nothing listens on the LAN unfiltered.
 - **Verified from the DC** with WinRM `Test-NetConnection` (2026-10-01).
 
 - **Host to kdc:** by design, macvtap does not carry traffic between the host
-  and its own guest. Reach kdc from the host at `192.168.177.10`.
+  and its own guest. Reach kdc from the host at `$FIELD_LAB_NET.10`.
 - **LAN address:** `lab.sh ip kdc lan` reads it from the guest agent.
 - **Lab subnet:** the other VMs are not reachable from the LAN. kdc is the only
   VM exposed to it, which is why RA3's SPNEGO target runs on kdc (tcp 80).
@@ -108,7 +111,7 @@ harness/field/lab.sh check              # ssh, DNS + reverse, time sync, interne
 harness/field/lab.sh check --lab-only kdc   # the same without what reaches past the lab: internet, LAN address, AD DC
 harness/field/lab.sh ssh kdc            # shell as 'lab' (passwordless sudo)
 harness/field/lab.sh ssh client2 -- sudo dnf -y install krb5-workstation
-harness/field/lab.sh ip kdc             # 192.168.177.10   (ip kdc lan: the LAN address)
+harness/field/lab.sh ip kdc             # $FIELD_LAB_NET.10   (ip kdc lan: the LAN address)
 harness/field/lab.sh snapshot kdc mit-oracle   # offline snapshot (shut down, snapshot, start)
 harness/field/lab.sh reset all          # kdc, services, client1, client2, klldap to 'f44-base'; mitd3 stays on 'mit-d3'; deb13 stays on 'base'; kdc2 is not selected
 harness/field/lab.sh reset all base     # name base to take those VMs, and mitd3, to 'base' too
@@ -116,6 +119,8 @@ harness/field/lab.sh reset kdc mit-oracle
 harness/field/lab.sh collect kdc ~/kerber-lab/runs/hand-r1 /var/log/krb5kdc.log /etc/krb5.conf
 harness/field/lab.sh down               # shut the VMs down (the network stays up)
 harness/field/lab.sh rebuild kdc --yes  # one VM from scratch (after a template change). kdc2 is refused
+harness/field/lab.sh takeover deb13     # DS: deb13 answers as kdc.kerber.test (live record; kdc must be shut off)
+harness/field/lab.sh release            # kdc.kerber.test back on kdc; `check` fails while a move is left over
 harness/field/lab.sh destroy --yes      # remove the VMs, volumes, pool and network
 ```
 
@@ -166,10 +171,16 @@ harness/field/run.sh --profile weekly --ref main --only upgrade,pkinit --leg bot
 harness/field/run.sh --profile weekly --ref main --only upgrade,replica --leg both   # the replica cells (lab.sh up kdc2 first), on demand
 harness/field/run.sh --profile weekly --ref main --only upgrade,rollback --leg both   # "Going back to MIT", on demand (leaves kdc on MIT)
 harness/field/run.sh --profile kill-loop --ref main   # the kill loop (lab.sh up kdc2 first), on demand: upgrade, then kill-loop
+harness/field/run.sh --profile load --ref main --leg both   # 600 s of load per leg (FIELD_LOADGEN: the ref's loadgen)
+harness/field/run.sh --profile load-long --ref main --leg both   # the burn-in's load: 3600 s per leg
+harness/field/run.sh --profile lt --ref main --leg both   # restart, kdc-hostile, otp-default, rd-safe (lab.sh up kdc2 first; FIELD_RDSWEEP)
+harness/field/run.sh --grade-logs ~/kerber-lab/runs/<run>   # the log grader over a finished run
+(. harness/field/ds/deb13.env && . harness/field/ds/deb13r.env && harness/field/run.sh --profile ds --ref main --leg both)   # DS on Debian 13 (rocky10*.env: Rocky 10): deb13 and deb13r up, kdc and kdc2 shut off
+(. harness/field/ds/deb13.env && harness/field/run.sh --profile kill-loop --ref main)   # DS's kill loop there
 ```
 
 - **Options:**
-  - `--profile nightly|weekly|kill-loop` picks the scenarios, in the order of the table
+  - `--profile nightly|weekly|kill-loop|load|load-long|lt|ds` picks the scenarios, in the order of the table
     under [Scenarios](#scenarios);
   - `--only a,b` runs some of them;
   - `--leg mit|rust|both` picks the realm (default `rust`). `both` runs one
@@ -189,6 +200,24 @@ harness/field/run.sh --profile kill-loop --ref main   # the kill loop (lab.sh up
     exits 1 before it makes a run directory; it only makes `~/kerber-lab/runs`
     and the lock file when they are missing.
   - every snapshot `baseline.env` names must exist;
+  - no `lab.sh takeover` state file is left (`pre.takeover.left`, every run): a
+    run killed past its postflight leaves a role's name on a distro VM, which a
+    Fedora run would then test;
+  - with `FIELD_ROLE_KDC=<vm>` in the environment (DS; never `field.env`), the
+    `kdc` role is that VM: `lab.sh` sends `kdc` there, its snapshots are checked
+    there, and `pre.takeover` moves `kdc.kerber.test` to it. Postflight's
+    `post.release` moves it back, also on an early exit;
+  - `FIELD_KDC_FAMILY` (`rpm`, `rocky` or `deb`; `lib/family.sh`) names that VM's
+    paths, units, packages and docs headings. `rpm` and `rocky` read the daemons'
+    `/var/log` files; `deb` reads the journal (Debian's units keep `/var/log`
+    read-only), rendered as MIT's FILE lines by `lib/journal-lines.py`, so the
+    log rows read the same. `ds/<vm>.env` sets both, and the three snapshots
+    `harness/hand/ds-baselines.sh` makes;
+  - with `FIELD_ROLE_KDC2=<vm>` too (DS's `ds/<vm>r.env`), the `kdc2` role is that
+    same-family replica, as `kdc`'s is: `lab.sh` maps `kdc2`, its snapshots are
+    checked there, and `pre.takeover.kdc2` moves `kdc2.kerber.test` to it until
+    `post.release.kdc2`. The postflight fails if either takeover file is left.
+    `replica` stops at setup when kdc moved without kdc2;
   - `lab.sh check --lab-only` of the VMs the selected scenarios use: ssh, DNS
     and reverse DNS, time sync, kdc's LAN filter. It never fetches from the
     internet, needs no LAN address and never probes the AD DC, so an outage
@@ -227,7 +256,20 @@ harness/field/run.sh --profile kill-loop --ref main   # the kill loop (lab.sh up
     - `checks.tsv`: one line per check (name, PASS / FAIL / INFO, expectation,
       exit status, what was seen, its line in `record.txt`);
     - `result`, `collect/` (journald and the non-secret files) and `pcap/` (a
-      capture without the AS exchanges).
+      capture without the AS exchanges);
+    - `logs/`: what kdc's `krb5kdc.log` and `kadmind.log` gained during the scenario
+      (`offsets` holds `lib/log-since.sh`'s marks; a log logrotate renamed is read from the
+      rotated file, then the new one; a reset kdc's log is copied whole), its Kerberos
+      units' journal since it began (`units.txt`) and `window`, saved by `run.sh`
+      after each leg.
+  - `log-grade/`: on a weekly with both legs, the postflight's `post.log.grade`
+    runs `lib/log-grade.py` over the `logs/` (MIT's leg first): no panic in any
+    line, each `kdc.issue` JSON event with a `correlation_id` where ours' leg
+    configures `[logging] json` (the record keeps the relation as `logs/json.conf`
+    and a file stream as `logs/krb5kdc.log.json`; the profiles run the README's
+    config, which has none, so it is INFO "not configured"), and each
+    `(Error)` line of ours matched, as a class, by MIT's in the same scenario or
+    by `lib/log-grade.allow`.
   - `runs/index.tsv` has one line per run. The last 30 runs and every failed one
     are kept.
   - The run's `TMPDIR` is its own `tmp/`, with the ref's archive and any raw
@@ -255,6 +297,9 @@ harness/field/run.sh --profile kill-loop --ref main   # the kill loop (lab.sh up
 | `client-opens.sh`, `profile-opens.sh` | `kdc-profile`'s cells: how often each program opens each profile file. |
 | `embed-otp-guest.py`, `embed-otp-stub.py` | `embed-otp`'s driver on the kdc VM, and the RADIUS stub for its MIT leg. |
 | `scan-secrets.py` | Every one of those values in every file of a run, in UTF-8 and UTF-16-LE (keytab keys raw and as hex); a planted control first; a hit fails the run |
+| `journal-lines.py` | `journalctl -o json` records as MIT's FILE log lines (`Mon DD HH:MM:SS host prog[pid](severity): message`, MIT's severity names; `logger.c:58-66`, `:584-616`, `:661-672`), for `LOGSRC=journal` (Debian's family) |
+| `log-since.sh` | A log's mark (lines, bytes, inode, the head's sha256) and its text since the mark, through logrotate's rename; a mark no file holds fails the read. `rec.sh`'s `kdcmark`/`kdcsince`, `run.sh`'s log collector and the scenarios' own log marks send it to the VM on stdin |
+| `log-grade.py` | The log grader over a finished run's `logs/` (`run.sh --grade-logs`, a weekly's postflight): no panic in any line, no unread line holding an error, each `kdc.issue` correlated (counted per scenario), each `(Error)` line of ours in MIT's same scenario as a class, or in `log-grade.allow` (`prog`, ERE, reason, tab-separated; none yet); MIT's leg first |
 | `pcap-keep.sh` | A capture's copy without any AS exchange (IP fragments of other messages kept), checked to hold no AS message |
 | `strings-check.sh` | R1's strings check of the test-only names on a VM, by file or by install manifest (every program it lists, none skipped); `--control` must go red |
 | `install-check.sh` | On a VM after `make install`: every program the install manifest lists is byte-identical to the checkout's build (`cmp`, the names paired by its `dist/install.sh`) |
@@ -265,6 +310,7 @@ harness/field/run.sh --profile kill-loop --ref main   # the kill loop (lab.sh up
 | `acl-variant.sh` | The `svc/setup` ACL-settle helper (promoted from the L2 hand record): `acl_variant <letters> <tag>` writes `kadm5.acl` giving `svc/setup` those letters on `host/*` and `nfs/*`, restarts kadmind, then grades the `addprinc` and `ktadd` from client2 against the outcome the letters dictate (MIT's refusal texts); both legs run it |
 | `kt-vs-kdc.py` | A keytab's newest kvno and enctypes (`klist -k -e`) against the KDC's `getprinc` |
 | `kt-records.py` | `client-tools`' keytab helper on client2: a v2 keytab with an unknown enctype, and two keytabs compared record by record with the timestamps zeroed (it never prints a key) |
+| `kdc-hostile.py` | `kdc-hostile`'s sender on client2 (python3 on stdin): one hostile input per cell at the KDC's port 88, the same bytes on both legs, and one outcome line (`reply krb-error N`, `silence`, `close`, then for TCP whether the stream stayed open) |
 | `kdc-req-proxy.py` | A UDP/TCP proxy in front of a KDC on client2 for `client-tools` and `ad-trust`: it writes each request's shape (padata types and order, options, enctypes, sname) as a JSON line and compares two runs flow by flow (`--compare`). It never prints a key |
 | `kdc-rewrite-proxy.py` | A UDP/TCP man-in-the-middle in front of a KDC: it rewrites replies (`as-rep-cname`, `strip-fx-fast`; `scripts/mit-fast-kdc-gate.sh`), or answers a named realm's AS-REQ itself with a client referral (`refer`; `client-tools`' CR cells). It logs each request's realm and each reply's error code, never a key |
 | `rpc-probe.py` | One ONC RPC call over TCP and its answer on one line (the accept_stat or auth_stat, or none): procedure 0 under AUTH_NONE by default; `--proc`, `--flavor`, `--cred` and `--verf-len` shape the call, and `--then` makes a second one on the same connection (`kdc-profile`, `kdb-writes` KR) |
@@ -281,25 +327,30 @@ harness/field/run.sh --profile kill-loop --ref main   # the kill loop (lab.sh up
 
 | Scenario | Profiles | Legs | VMs: baseline snapshot (MIT / rust) | Reference hand records (MIT; rust) | Duration (MIT / rust) |
 | --- | --- | --- | --- | --- | --- |
-| `upgrade` | nightly, weekly | mit, rust | kdc: `f4-mit-f44` / `rust-field-p12-f44` (reset; the rust leg leaves it on the ref's install); client2: `rust-ssh-f44` (rust leg, reset) | f-UP1 | under 1 / about 3.5 min (the build about 2) |
-| `kadmind-start` | nightly, weekly | mit, rust | kdc as `upgrade` left it (the running kadmind holds 464/749, which cell A1c needs) | f-AL1-start | under 1 / under 1 min |
+| `upgrade` | nightly, weekly; `ds` on DS's distro VM | mit, rust | kdc: `f4-mit-f44` / `rust-field-p12-f44` (reset; the rust leg leaves it on the ref's install); client2: `rust-ssh-f44` (rust leg, reset) | f-UP1 | under 1 / about 3.5 min (the build about 2) |
+| `kadmind-start` | nightly, weekly; `ds` on DS's distro VM | mit, rust | kdc as `upgrade` left it (the running kadmind holds 464/749, which cell A1c needs) | f-AL1-start | under 1 / under 1 min |
 | `secrets-gcore` | weekly, after `kadmind-start` (kdc as `upgrade` left it, before any scenario restarts kadmind or changes the realm's keys); on demand with `--only upgrade,secrets-gcore` | mit, rust | kdc as `upgrade` left it (gdb installed when missing; `sruser` deleted at the end); client2: `mit-kit-fc44` / `rust-ssh-f44` (reset) | none: SR-1's first record | about 1 / 1 min |
 | `services` | nightly, weekly | mit, rust | services: `f4-mit-f44` / `services-rust-f44` (reset); kdc as `upgrade` left it | f-S2-services; f-S2-rust | about 2 / 2 min |
 | `nfs-client` | nightly, weekly | mit, rust | client2: `mit-kit-fc44` / `rust-ssh-f44`, services: `f4-mit-f44` / `services-rust-f44` (both reset); kdc as `upgrade` left it | f-R4-mit + f-R5-mit; f-R4 + f-R5 (client2's legs) | about 1.5 / 1.5 min |
 | `sssd-login` | nightly, weekly | mit, rust | client1: `mit-sudo-fc44` / `rust-nfs-sso-f44`, services: `f4-mit-f44` / `services-rust-f44` (both reset); kdc as `upgrade` left it | f-R2-mit; f-R2 (headless) | about 2 / 2 min |
 | `ad-trust` | none: `run.sh ad-trust` | mit, rust | client2: `mit-kit-fc44` / `rust-ssh-f44` (reset); kdc as `upgrade` left it; the AD DC (WinRM; its changes undone in the run) | f-RA-mit; f-RA, f-FULL-r2 `hand/ra` | about 2 / 2 min (the hand legs: 117 / 112 s) |
 | `klldap-swap` | nightly, weekly | mit, rust | klldap (not reset; the leg cleans its own artifacts) | f-F3-mit (mit leg), f-F3 (rust leg) | about 4 min (mit) and 8 min (rust) with BuildKit's cache warm; much longer cold (see below) |
-| `kdc-profile` | weekly; on demand with `--only upgrade,kdc-profile` for a change to how kdc.conf is read | mit, rust | client2: `mit-kit-fc44` / `rust-ssh-f44` (reset); kdc as `upgrade` left it, its kdc.conf restored after each cell | none: the CF cells' first record | about 6 / 6 min |
-| `kdb-writes` | weekly; on demand with `--only upgrade,kdb-writes` for a change to how the store writes | mit, rust | client2: `mit-kit-fc44` / `rust-ssh-f44` (reset); kdc as `upgrade` left it, its scratch principals and policies removed at the end | none: the SW cells' first record | about 1 / 1 min |
+| `kdc-profile` | weekly; on demand with `--only upgrade,kdc-profile` for a change to how kdc.conf is read; `ds` on DS's distro VM | mit, rust | client2: `mit-kit-fc44` / `rust-ssh-f44` (reset); kdc as `upgrade` left it, its kdc.conf restored after each cell | none: the CF cells' first record | about 6 / 6 min |
+| `kdb-writes` | weekly; on demand with `--only upgrade,kdb-writes` for a change to how the store writes; `ds` on DS's distro VM | mit, rust | client2: `mit-kit-fc44` / `rust-ssh-f44` (reset); kdc as `upgrade` left it, its scratch principals and policies removed at the end | none: the SW cells' first record | about 1 / 1 min |
 | `ticket-flags` | weekly, after `kdb-writes` and before `client-tools`; on demand with `--only upgrade,ticket-flags` | mit, rust | client2: `mit-kit-fc44` / `rust-ssh-f44` (reset); kdc as `upgrade` left it; scratch principals and policies removed; `kadmin/changepw`'s PWCHANGE flag restored | none: the TF cells' first record | about 2 / 2 min |
 | `client-tools` | weekly, after `ticket-flags` and before `pkinit`; on demand with `--only upgrade,client-tools` | mit, rust | client2: `mit-kit-fc44` / `rust-ssh-f44` (reset); kdc as `upgrade` left it; in the rust leg kdc's build of our client programs is piped to client2's `~/ct/bin`; scratch principals removed | none: the CT cells' first record | about 1 / 2 min |
-| `pkinit` | weekly; on demand with `--only upgrade,pkinit` for a change to PKINIT | mit, rust | client2: `$PK_SNAPSHOT_CLIENT2` when set (reset), else as it stands; kdc as `upgrade` left it, the L6 certificates made on it for the run (`lib/l6-certs.sh`) and client2's piped there, its kdc.conf restored after | none: the PK cells' first record | about 2 / 2 min |
-| `kpasswd` | weekly, last but `replica` and `install` (on a leg that allows it, it changes krbtgt's and kadmin/changepw's keys); on demand with `--only upgrade,kpasswd` for a change to kpasswd or chpass | mit, rust | client2: `mit-kit-fc44` / `rust-ssh-f44` (reset); kdc as `upgrade` left it | none: the KH cells' first record | about 2 / 2 min |
+| `pkinit` | weekly; on demand with `--only upgrade,pkinit` for a change to PKINIT; `ds` on DS's distro VM | mit, rust | client2: `$PK_SNAPSHOT_CLIENT2` when set (reset), else as it stands; kdc as `upgrade` left it, the L6 certificates made on it for the run (`lib/l6-certs.sh`) and client2's piped there, its kdc.conf restored after | none: the PK cells' first record | about 2 / 2 min |
+| `kpasswd` | weekly, last but `replica` and `install` (on a leg that allows it, it changes krbtgt's and kadmin/changepw's keys); on demand with `--only upgrade,kpasswd` for a change to kpasswd or chpass; `ds` on DS's distro VM | mit, rust | client2: `mit-kit-fc44` / `rust-ssh-f44` (reset); kdc as `upgrade` left it | none: the KH cells' first record | about 2 / 2 min |
 | `rollback` | weekly, last but `replica` and `install` (it leaves kdc on MIT, and `replica` resets it); on demand with `--only upgrade,rollback` | mit, rust | kdc as `upgrade` left it, on MIT afterwards; client2: `mit-kit-fc44` / `rust-ssh-f44` as the run left it | none: docs/install.md "Going back to MIT" | under 1 / under 1 min |
-| `replica` | weekly, last but `install`: kdc is reset to the MIT primary; on demand with `--only upgrade,replica`, and `FIELD_REPLICA_BAKED=1 --only replica --leg rust` for the parent's baked programs | mit, rust | kdc: `f4-mit-f44` in both legs (reset); kdc2: `f4-mit-f44` / `rust-replica-f44` (up for the preflight, reset at the start and the end, then parked); client2: `mit-kit-fc44` (reset) | none: the REP cells' first record | about 6 / 7 min |
+| `replica` | weekly, last but `install`: kdc is reset to the MIT primary; on demand with `--only upgrade,replica`, and `FIELD_REPLICA_BAKED=1 --only replica --leg rust` for the parent's baked programs; `ds` on DS's distro VM | mit, rust | kdc: `f4-mit-f44` in both legs (reset); kdc2: `f4-mit-f44` / `rust-replica-f44` (up for the preflight, reset at the start and the end, then parked); client2: `mit-kit-fc44` (reset) | none: the REP cells' first record | about 6 / 7 min |
 | `embed-otp` | none, and in no profile, so `run.sh` cannot select it: it runs by hand, once its binaries are placed (its header) | rust (MIT 1.22.2 first, as the oracle) | kdc: `$MIT_SNAPSHOT_KDC` (reset) | none | not timed |
-| `install` | weekly, last: it resets kdc to its pristine `f44-base` snapshot and builds a realm from scratch | mit, rust | kdc: `f44-base` in both legs (reset to the pre-realm snapshot; the rust leg installs the ref from `docs/install.md`, the MIT leg Fedora's `krb5-server`); client2: `mit-kit-fc44` / `rust-ssh-f44` (reset) | f-L2-mit-realm; f-L2-rust (R1 install, L2 realm) | about 1 / 4 min |
-| `kill-loop` | none: `run.sh --profile kill-loop` (upgrade, then kill-loop), the 1.2 cut's crash proof | rust (MIT is the judge) | kdc as `upgrade` left it, its kl principals and stale `.principal.tmp-*` removed at the end; kdc2: `f4-mit-f44` in the rust leg (up for the preflight, reset at the start and the end, then parked) | none: its first record | about 5 min |
+| `install` | weekly, last: it resets kdc to its pristine `f44-base` snapshot and builds a realm from scratch; `ds` on DS's distro VM | mit, rust | kdc: `f44-base` in both legs (reset to the pre-realm snapshot; the rust leg installs the ref from `docs/install.md`, the MIT leg Fedora's `krb5-server`); client2: `mit-kit-fc44` / `rust-ssh-f44` (reset) | f-L2-mit-realm; f-L2-rust (R1 install, L2 realm) | about 1 / 4 min |
+| `kill-loop` | none: `run.sh --profile kill-loop` (upgrade, then kill-loop), the 1.2 cut's crash proof; on DS's distro VM with `ds/<vm>.env` | rust (MIT is the judge) | kdc as `upgrade` left it, its kl principals and stale `.principal.tmp-*` removed at the end; kdc2: `f4-mit-f44` in the rust leg (up for the preflight, reset at the start and the end, then parked) | none: its first record | about 5 min |
+| `load` | `load` (600 s per leg) and `load-long` (3600 s, the burn-in's) | mit, rust | kdc as `upgrade` left it, its lt principals removed at the end; client2: as the leg's snapshot (reset) | none: the LD cells' first record | about 12 / 12 min (`load`), 62 / 62 (`load-long`) |
+| `restart` | `lt` | mit, rust | kdc as `upgrade` left it, its daemons SIGKILLed and started again, the rw principal removed at the end; kdc2: `f4-mit-f44` (reset at the start and the end, then parked); client2: reset | none: its first record | about 4 / 4 min |
+| `kdc-hostile` | `lt` | mit, rust | kdc as `upgrade` left it; client2: reset | none: its first record | about 3 / 3 min |
+| `otp-default` | `lt` | mit, rust | kdc as `upgrade` left it, otpdef and otparm removed at the end; client2: reset | none: its first record | about 2 / 2 min |
+| `rd-safe` | `lt` | mit, rust (no KDC is asked: the same cases on both) | client2: reset | none: its first record | about 1 / 1 min |
 
 With `--leg both`, the six nightly scenarios take about 20 minutes, and the weekly 16 about 70 (2026-11-03, every VM reset by the run).
 
@@ -349,7 +400,7 @@ MIT's port 88 at 5 (the rust leg expects 128). The package versions are recorded
     with the KDC's and kadmind's log lines;
   - bob's kpasswd there over UDP 464 (kdc refuses client2's TCP 464 for that one
     exchange) and back over TCP, with kadmind's two `chpw request from
-    192.168.177.22 for bob@KERBER.TEST: success` lines;
+    $FIELD_LAB_NET.22 for bob@KERBER.TEST: success` lines;
   - `kinit` on kdc against `::1` over UDP and TCP, and against `127.0.0.2` (a
     UDP reply leaves from the address its request was sent to).
 - It records, not grades: the AS and TGS sizes, the preauth types offered, the
@@ -527,6 +578,34 @@ would remove it.
   both, ours answers 5 with the kvno kept. MIT's answers to those three are INFO
   lines (`scenarios/kpasswd.expect`); the rest are graded on both legs. The
   database is unmounted and moved back, also when the scenario stops early.
+- **`load.sh`** (LD, the same input on both legs): `loadgen` (`FIELD_LOADGEN`, the ref's `target/release/loadgen`, built with `--features krb5-kdc/test-hooks`)
+  runs AS + TGS from client2 with `FIELD_LOAD_WORKERS` (8) workers for the profile's seconds, while one MIT
+  `kadmin` session keeps a pool of 200 `lt-NNNNN` (adds up to 200, then deletes the oldest and adds the next, so the
+  realm keeps its size) at `FIELD_LOAD_WRITES` (2) commands per second and MIT `kinit` + `kvno` sample before,
+  mid-load and after. Graded: `err=0`, every add and delete acknowledged, the last 200 adds listed, no restart, both
+  daemons active, no panic in their journal; the KDC's `RssAnon` every 5 s up to the load's end (within 30 s),
+  bounded on the rust leg (last <= first * 1.5 + 33 MiB, slope <= 0.05 MiB/s from 300 s, which must settle from
+  1200 s of load) and recorded on MIT's (`load.expect`).
+- **`restart.sh`** (RW): MIT `kadmin` from client2 adds `rw-<hex>` (a generated password, on stdin only); after
+  the acknowledgment both daemons' main processes are SIGKILLed and started again (new pids, 88 and 749
+  listening); MIT `kinit` with that password; kdc's own `kdb5_util dump` loads into MIT's on kdc2, whose
+  `getprinc` finds the principal.
+- **`kdc-hostile.sh`** (KH, `lib/kdc-hostile.py` from client2): eight cells at port 88, MIT's
+  `net-server.c` the oracle: K1a/K1b a TCP length past the 1 MiB - 4 cap, K2 the length's high bit, K3 46
+  idle connections then a request (MIT keeps 45), K4a/K4b UDP garbage and a cut AS-REQ, K5a 20000 PA-DATA,
+  K5b a req-body longer than its frame. Each cell must be sent; its outcome (a reset included) and its log lines
+  are INFO rows compared with MIT's; after each, the same KDC process, active, no restart, RssAnon grown under 64 MiB,
+  and a normal MIT `kinit`.
+- **`otp-default.sh`** (OD): otpdef with `otp = "[]"` (one DEFAULT token) and no `[otp]` stanza, so MIT's
+  DEFAULT type is `KDC_RUN_DIR/DEFAULT.socket`, where nothing listens. MIT `kinit -T` (armor: a keytab
+  `kinit` of otparm), pinned to the otp module, must offer PA-OTP-CHALLENGE, answer it and be refused, not time
+  out, with none of the otp module's earlier stages logged (so the request reached the DEFAULT server); the offer,
+  the module's result, the errors, the time (bucketed) and the log lines are compared with MIT's.
+- **`rd-safe.sh`** (RS): `rd-sweep cases` (`FIELD_RDSWEEP`, built with `--features krb5-admin/test-hooks`)
+  on client2, answered by MIT's `krb5_rd_req`/`rd_priv`/`rd_safe` (`scripts/oracle/rd-priv-oracle.c`,
+  built on the host from the ref against Fedora 43's krb5-devel 1.22.2) first, then by ours (`rd-sweep
+  judge`), with the nightly gate container's libdefaults. MIT must take the pristine cases and KRB-SAFE-BODY's
+  seq-number with a needless leading 00 octet; ours must answer every case as MIT does.
 - **`replica.sh`** (REP legs 1 and 2: an MIT primary on kdc, the leg's replica on
   kdc2): iprop is turned on in kdc's realm for the run, on port 754 (on 749 MIT's
   kadmind keeps only its own program, and Fedora's SELinux lets kadmind bind
@@ -646,10 +725,10 @@ The field suite is dispatched by hand, never by a timer (see the end of this
 section). Every command names the branch or tag with `REF`: `main`, or a tag such
 as `v1.2.0`.
 
-- **Nightly** (`make field PROFILE=nightly LEG=both REF=main`, about 20 min),
+- **Nightly** (`make field PROFILE=nightly LEG=both REF=main`, about 30 min),
   at each package landing, the MIT leg first so a regression shows against the
   parent build the same day.
-- **Weekly** (`make field PROFILE=weekly LEG=both REF=main`, about 1.2 h), once a calendar week and again before a release re-pass.
+- **Weekly** (`make field PROFILE=weekly LEG=both REF=main`, about 1.6 h), once a calendar week and again before a release re-pass.
 
 Which scenarios a profile runs is `run.sh`'s `PROFILES` and the Scenarios table's
 Profiles column; `install` runs last, as it resets kdc. Any passing MIT leg, in
@@ -776,7 +855,7 @@ to a network defined before it joined the table (`net-update`, no restart).
 
 ## Isolation
 
-- **Host:** the lab never touches `/etc/krb5.conf` (realm `TESTLABBY.LOCAL`) or, from a
+- **Host:** the lab never touches `/etc/krb5.conf` or, from a
   distrobox, `/run/host/etc/krb5.conf`, the libvirt `default` network, other VMs, or host
   networking. libvirt's own firewall rules for `virbr-kerber` are the only
   host-side network change.
