@@ -406,12 +406,17 @@ chk_armor() {   # chk_armor LABEL FILE
 }
 
 chk_clean() {   # chk_clean LABEL FILE KIND: nothing the record filter masks is in the client's part (it would mean the kinit printed the lab password, a code or the seed), no TOTP code of this leg is
-    # anywhere in the cell's file, and (ours) no "ok ..." line and no JSON log line: the shipped program prints only what MIT's does
-    local l=$1 f=$2 kind=$3 n
+    # a token anywhere in the cell's file (never inside a number, a "secs.usecs" stamp or a hex run), and (ours) no "ok ..." line and no JSON log line: the shipped program prints only what MIT's does
+    local l=$1 f=$2 kind=$3 n hits
     expect_part "$l.no-secret-marker" "$f" client '<REDACTED:' 0
-    n=$(grep -c -F -f "$SECD/totp.codes" "$f" 2>/dev/null || true)
-    if [ "${n:-0}" = 0 ]; then result "$l.no-totp-code" PASS "no TOTP code of this leg in the cell's file" 0 0; else result "$l.no-totp-code" FAIL "no TOTP code of this leg in the cell's file" 0 "$n"; NFAIL=$((NFAIL + 1)); fi
-    note "CHECK $([ "${n:-0}" = 0 ] && echo PASS || echo FAIL) $l.no-totp-code (TOTP codes of this leg in $(basename "$f"): ${n:-0})"
+    hits=$(grep -n -E -f <(sed -E 's/.*/(^|[^0-9A-Za-z_.])&([^0-9A-Za-z_]|$)/' "$SECD/totp.codes") "$f" 2>/dev/null || true)
+    n=$(printf '%s' "$hits" | grep -c '^' || true)
+    [ -s "$f" ] || n="no cell file"
+    if [ "$n" = 0 ]; then result "$l.no-totp-code" PASS "no TOTP code of this leg in the cell's file" 0 0; else result "$l.no-totp-code" FAIL "no TOTP code of this leg in the cell's file" 0 "$n"; NFAIL=$((NFAIL + 1)); fi
+    note "CHECK $([ "$n" = 0 ] && echo PASS || echo FAIL) $l.no-totp-code (TOTP codes of this leg in $(basename "$f"): $n)"
+    # A hit names its line with every digit masked, never the code.
+    [ -z "$hits" ] || printf '%s\n' "$hits" | awk '{ i = index($0, ":"); s = substr($0, i + 1); gsub(/[0-9]/, "N", s); print substr($0, 1, i - 1) ": " s }' \
+        | while IFS= read -r m; do note "NO_TOTP_HIT $l line $m"; done
     if [ "$kind" = ours ]; then
         expect_part "$l.no-ok-line" "$f" client '^ok( |$)' 0
         expect_part "$l.no-json-line" "$f" client '^\{"' 0

@@ -95,6 +95,7 @@ any other `###` heading.
 - **ci.** The KDC gate checks each kdc.issue JSON event carries a correlation_id, with an AS and a TGS ISSUE.
 - **hand.** B2's and R3's installs pass install.sh what make install passes, and stop first on a missing one.
 - **hand.** The README names the legs' VM preconditions and expected MIT differences; embed kills now match.
+- **hand.** B2's TOTP leak check counts a code only as a token, not inside a number or stamp; hits log masked.
 
 ## [1.2.0] - 2026-11-04
 
