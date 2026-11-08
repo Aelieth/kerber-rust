@@ -92,7 +92,7 @@ cleanup() {
         lab ssh klldap -- 'cat /var/tmp/tr/key 2>/dev/null || true' > "$SEC/secret-key"
         lab ssh klldap -- 'cat /var/tmp/tr/client-pw 2>/dev/null || true' > "$SEC/secret-client"
         chmod 600 "$SEC/secret-master" "$SEC/secret-key" "$SEC/secret-client" || true
-        lab ssh klldap -- 'sudo pkill -9 krb5-embed-realm || true; sudo pkill -9 krb5kdc || true; sudo pkill -9 kadmind || true; sudo rm -rf /var/kerberos/tr-mit /var/kerberos/tr-ours /var/tmp/tr' || true
+        lab ssh klldap -- 'sudo pkill -9 -x krb5-embed-real || true; sudo pkill -9 krb5kdc || true; sudo pkill -9 kadmind || true; sudo rm -rf /var/kerberos/tr-mit /var/kerberos/tr-ours /var/tmp/tr' || true
         lock_off
         lab reset klldap f44-docker || true
         echo "RESTORE_KLLDAP:$?"
@@ -340,7 +340,7 @@ fi
 if grep -q '^BIN_MISSING:' "$REC/klldap-bins.txt"; then
     stop "klldap mit binary missing"
 fi
-lab ssh klldap -- 'sudo systemctl stop krb5kdc kadmin 2>/dev/null || true; sudo systemctl mask krb5kdc kadmin 2>/dev/null || true; sudo pkill -9 krb5kdc || true; sudo pkill -9 kadmind || true; sudo pkill -9 krb5-embed-realm || true; echo SERVICES_HELD'
+lab ssh klldap -- 'sudo systemctl stop krb5kdc kadmin 2>/dev/null || true; sudo systemctl mask krb5kdc kadmin 2>/dev/null || true; sudo pkill -9 krb5kdc || true; sudo pkill -9 kadmind || true; sudo pkill -9 -x krb5-embed-real || true; echo SERVICES_HELD'
 lab ssh klldap -- 'sudo rm -rf /var/tmp/tr /var/kerberos/tr-mit /var/kerberos/tr-ours && sudo mkdir -p /var/tmp/tr /var/kerberos/tr-mit /var/kerberos/tr-ours && sudo chown lab:lab /var/tmp/tr && sudo chmod 700 /var/tmp/tr'
 lab ssh klldap -- 'python3 -' << 'PY'
 import pathlib, secrets
@@ -484,12 +484,7 @@ print("SANITY_DROPPED:key lines and number of keys")
 show("TR_SANITY", fields(cell1, True), fields(got.get("/var/kerberos/tr-mit krbtgt/OTHER.TEST", []), True))
 PY
 echo "==== cell 3 ===="
-if lab status | grep -E 'kerber-win|ad-dc|mit-trust' | grep -q running; then
-    echo "CELL3_PAIR_UP"
-    echo "CELL3_REASON:a trust VM is up; this leg is still the embed pair"
-else
-    echo "CELL3_REASON:no AD trust pair; the plan's fallback"
-fi
+echo "CELL3_REASON:the embed pair; this leg runs no AD trust pair"
 add_client() {
     lab ssh klldap -- "sudo -n python3 - '$1'" << 'PY'
 import pathlib, subprocess, sys
@@ -706,7 +701,7 @@ print("A4_SUMMARY pass=%d fail=%d" % (len(pas), len(fail)))
 sys.exit(0 if len(rows) == 8 and not fail else 1)
 PY
 a4_rc=$?
-lab ssh klldap -- 'sudo pkill -9 krb5-embed-realm || true; sudo pkill -9 krb5kdc || true'
+lab ssh klldap -- 'sudo pkill -9 -x krb5-embed-real || true; sudo pkill -9 krb5kdc || true'
 for tag in mit ours; do
     echo "==== klist $tag ===="
     lab ssh klldap -- "sudo cat /var/tmp/tr/klist-$tag.txt 2>/dev/null || echo KLIST_ABSENT" | tee "$REC/klist-$tag.txt"

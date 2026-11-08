@@ -55,7 +55,7 @@ OTP_TOTP=$HERE/../../../scripts/lib/otp-totp.py
 # straggler of our own binaries (never the system krb5kdc) when the scenario exits.
 cleanup() {
     timeout -k 5 120 "$LAB" ssh kdc -- \
-        "sudo pkill -f embed-otp-guest.py; sudo pkill -x krb5-otp-kdc; sudo pkill -x krb5-otp-kdc-chaos; sudo pkill -f embed-otp-stub.py; sudo rm -rf /var/tmp/ov3 $GBINS; true" \
+        "sudo pkill -f 'embed-otp-[g]uest.py'; sudo pkill -x krb5-otp-kdc; sudo pkill -x krb5-otp-kdc-ch; sudo pkill -f 'embed-otp-[s]tub.py'; sudo rm -rf /var/tmp/ov3 $GBINS; true" \
         < /dev/null > /dev/null 2>&1
 }
 trap cleanup EXIT

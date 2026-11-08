@@ -94,6 +94,7 @@ any other `###` heading.
 - **field.** The log grader reads JSON as tracing nests it, where configured; two deviations allowed.
 - **ci.** The KDC gate checks each kdc.issue JSON event carries a correlation_id, with an AS and a TGS ISSUE.
 - **hand.** B2's and R3's installs pass install.sh what make install passes, and stop first on a missing one.
+- **hand.** The README names the legs' VM preconditions and expected MIT differences; embed kills now match.
 
 ## [1.2.0] - 2026-11-04
 

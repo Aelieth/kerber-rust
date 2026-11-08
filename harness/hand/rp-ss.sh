@@ -69,7 +69,7 @@ print(f"SECRET_SCAN_HITS:{hit}")
 PY
     rm -f "$SEC/ss3-admin.keytab"
     rm -rf "$SEC"
-    lab ssh klldap -- 'sudo pkill -TERM -f /var/tmp/ss3/krb5-embed-realm || true; sudo pkill -9 krb5kdc || true; sudo pkill -9 kadmind || true' || true
+    lab ssh klldap -- 'sudo pkill -TERM -f "/var/tmp/ss3/[k]rb5-embed-realm" || true; sudo pkill -9 krb5kdc || true; sudo pkill -9 kadmind || true' || true
     lab ssh client2 -- 'rm -rf /var/tmp/ss3' || true
     echo "==== restore ===="
     lab down klldap client2

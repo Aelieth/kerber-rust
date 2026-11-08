@@ -28,7 +28,7 @@ cleanup_pw() {
     rm -f "$SEC/ba-master" "$SEC/ba-mit.keytab" "$SEC/ba-ours.keytab"
     rm -rf "$SEC"
     lab ssh client2 -- 'rm -rf /var/tmp/ba' >/dev/null 2>&1 || true
-    lab ssh klldap -- 'sudo pkill -9 krb5kdc || true; sudo pkill -9 kadmind || true; sudo pkill -9 krb5-embed-realm || true; rm -rf /var/tmp/ba' >/dev/null 2>&1 || true
+    lab ssh klldap -- 'sudo pkill -9 krb5kdc || true; sudo pkill -9 kadmind || true; sudo pkill -9 -x krb5-embed-real || true; rm -rf /var/tmp/ba' >/dev/null 2>&1 || true
     lab reset klldap f44-docker
     echo "RESTORE_KLLDAP:$?"
     lab down klldap || true
