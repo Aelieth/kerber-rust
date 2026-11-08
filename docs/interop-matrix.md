@@ -27,7 +27,7 @@ Production use is the proof. Each consumer below ran against a kerber-rust realm
 [install.md](install.md), beside the same scenario against a stock Fedora MIT 1.22.2 realm in the same lab
 (libvirt VMs on one host), MIT first. The scenarios in the last column repeat through `make field`
 ([harness/field](../harness/field/README.md)), or by the hand drivers ([harness/hand](../harness/hand/README.md)).
-The release pass of 1.2.1 ran on tree RP-FILL, with RP-FILL product failures in any leg.
+The release pass of 1.2.1 ran on tree `3e019309` (commit `c9421ed1`), with no product failure in any leg.
 A row that names a commit gives the run that proved it while 1.2.1 was built.
 
 | Consumer | What ran against both realms | Repeats as |
@@ -99,7 +99,7 @@ ran on Debian 13 and Rocky Linux 10 too, at `0f633715`: 228 and 220 kills, no un
   - a global IPv6 on the KDC;
   - hand legs: a desktop-login case that needs SDDM driven directly, `-UseDefaultCredentials` toward the Windows DC
     (it needs a change to the AD), and a remote journal read that needs a sudo password;
-  - in the release pass: RP-FILL.
+  - in the release pass: the Active Directory trust, which last ran on an earlier 1.2 build.
 
 ## Supply-chain (not an interop oracle)
 
@@ -151,7 +151,7 @@ implementation oracle. The Rust-only gates (Oracle `none`) are in
 | --- | --- | --- |
 | golden MIT DER + crypto KATs | in-repo fixtures, not a live peer | test |
 | 9 cargo-fuzz targets | `nightly.yml` smoke, not an interop peer | fuzz |
-| cargo-vet exemptions | RP-FILL exempt (134 at 1.2.0, 121 at 1.1, 114 at 1.0), RP-FILL fully audited; not a full local audit of every crate | documented |
+| cargo-vet exemptions | 134 exempt (134 at 1.2.0, 121 at 1.1, 114 at 1.0), 18 fully audited; not a full local audit of every crate | documented |
 | in-process metrics counters | deferred; logs-as-metrics only (`logging.md`) | n/a |
 
 MSRV 1.95 `cargo build --workspace --all-targets --locked` is the `msrv`

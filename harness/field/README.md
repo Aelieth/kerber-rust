@@ -33,7 +33,7 @@ Gateway, DHCP and DNS are on `$FIELD_LAB_NET.1` (libvirt's dnsmasq).
 | `mitd3.kerber.test` | `.31` | `kerber-mitd3` | Fedora 43 Cloud | 4 / 4 GiB / 20 GB | upstream MIT krb5 1.22.2 built from the release tarball: the des3 oracle (B22) |
 | `ub26.kerber.test` | `.32` | `kerber-ub26` | Ubuntu 26.04 Cloud | 4 / 8 GiB / 60 GB | CI mirror. `lab.sh up` does not start it; `lab.sh up ub26` does. Parked unless that run is under way |
 | `deb13.kerber.test` | `.33` | `kerber-deb13` | Debian 13 | 2 / 3 GiB / 30 GB | lagging peer (krb5 1.21.3). Started with the field VMs. Not built from the Fedora image |
-| `rocky10.kerber.test` | `.34` | `kerber-rocky10` | Rocky Linux 10 | 2 / 3 GiB / 20 GB | closeout and the 1.2.0 final only. `lab.sh up` does not start it; `lab.sh up rocky10` does |
+| `rocky10.kerber.test` | `.34` | `kerber-rocky10` | Rocky Linux 10 | 2 / 3 GiB / 20 GB | release passes and on demand. `lab.sh up` does not start it; `lab.sh up rocky10` does |
 
 Field runs use Fedora 44 snapshots (`f44-base` and the ones the scenario table names), whatever the
 table's image was built from.
@@ -578,7 +578,7 @@ would remove it.
   both, ours answers 5 with the kvno kept. MIT's answers to those three are INFO
   lines (`scenarios/kpasswd.expect`); the rest are graded on both legs. The
   database is unmounted and moved back, also when the scenario stops early.
-- **`load.sh`** (LD, the same input on both legs): `loadgen` (`FIELD_LOADGEN`, the ref's `target/release/loadgen`)
+- **`load.sh`** (LD, the same input on both legs): `loadgen` (`FIELD_LOADGEN`, the ref's `target/release/loadgen`, built with `--features krb5-kdc/test-hooks`)
   runs AS + TGS from client2 with `FIELD_LOAD_WORKERS` (8) workers for the profile's seconds, while one MIT
   `kadmin` session keeps a pool of 200 `lt-NNNNN` (adds up to 200, then deletes the oldest and adds the next, so the
   realm keeps its size) at `FIELD_LOAD_WRITES` (2) commands per second and MIT `kinit` + `kvno` sample before,
@@ -725,10 +725,10 @@ The field suite is dispatched by hand, never by a timer (see the end of this
 section). Every command names the branch or tag with `REF`: `main`, or a tag such
 as `v1.2.0`.
 
-- **Nightly** (`make field PROFILE=nightly LEG=both REF=main`, about 20 min),
+- **Nightly** (`make field PROFILE=nightly LEG=both REF=main`, about 30 min),
   at each package landing, the MIT leg first so a regression shows against the
   parent build the same day.
-- **Weekly** (`make field PROFILE=weekly LEG=both REF=main`, about 1.2 h), once a calendar week and again before a release re-pass.
+- **Weekly** (`make field PROFILE=weekly LEG=both REF=main`, about 1.6 h), once a calendar week and again before a release re-pass.
 
 Which scenarios a profile runs is `run.sh`'s `PROFILES` and the Scenarios table's
 Profiles column; `install` runs last, as it resets kdc. Any passing MIT leg, in

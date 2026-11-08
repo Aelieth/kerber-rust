@@ -78,7 +78,7 @@ It keeps its database in MIT's dump format, so a realm can move to it and back.
   [Not yet matched](docs/interop-matrix.md#not-yet-matched-in-121) lists what an operator could see, and
   [the deviations file](docs/mit-deviations.md) has every deliberate one.
 - **Its dependencies are not all audited or free of `unsafe`.** RustCrypto, curve25519-dalek, getrandom
-  and nix contain `unsafe`, and `cargo vet` reports RP-FILL crates fully audited and RP-FILL exempted.
+  and nix contain `unsafe`, and `cargo vet` reports 18 crates fully audited and 134 exempted.
 - **Windows: a workgroup machine joined with `ksetup`.** Windows 11's own Kerberos and SSPI get the same
   results from this KDC as from MIT 1.22.2's: tickets, `klist`, signing and sealing, `kpasswd`, error
   texts, RC4 refused, SPNEGO to Keycloak and an interactive logon as a realm user
@@ -97,26 +97,25 @@ its checks are graded as that version behaves. A *check* is one thing the harnes
 such as a command's exit code or output, a log line or a file's contents. It passes or fails, or it is
 only recorded (informational).
 
-Every run below used commit RP-FILL.
+The runs below used `c9421ed1` (the tagged release differs from it only in documentation), or an earlier 1.2.1 commit with no product change since that the run covers.
 
 | Test | What it does | Result |
 | --- | --- | --- |
-| Weekly field suite | RP-FILL scenarios, on MIT and on kerber-rust: real clients and services, install, upgrade, going back to MIT, replicas | RP-FILL |
-| Burn-in | the nightly field profile, on both, RP-FILL times in a row with the code frozen | RP-FILL |
-| Debian 13 and Rocky Linux 10 | the server scenarios on each, against that distribution's MIT: install, upgrade, `kadmind`, the KDC's settings, database writes, PKINIT, `kpasswd` and a replica | RP-FILL |
-| Clients on four distributions | MIT's client tools and SSSD on Fedora 44, Rocky Linux 10, Debian 13 and Ubuntu 26.04, with `FILE:` and `KCM:` caches: passwords, keytabs, `kvno`, renewal, `kpasswd`, expiry, lockout, an SSSD login and remote `kadmin` | RP-FILL |
-| Heimdal's clients | Debian 13's Heimdal 7.8 `kinit`, `klist`, `kgetcred`, `kpasswd` and an error text | RP-FILL |
-| Windows 11 | its own Kerberos and SSPI, joined with `ksetup`: tickets and `klist`, signing and sealing with MIT's and our GSS acceptor, `kpasswd`, error texts, RC4 refused, SPNEGO to Keycloak and an interactive logon | RP-FILL |
-| Load | requests and writes on MIT and on kerber-rust, for RP-FILL | RP-FILL |
-| The 1.1 regression set | the checks that proved the 1.1 release, run again | RP-FILL |
-| OpenSSH by hand | sshd GSSAPI login from one client to another | RP-FILL |
-| Samba AD by hand | RP-FILL tests with live Samba 4 domain controllers. RP-FILL use our KDC, in a debug build: Samba decodes its PAC, checks its checksums and rejects corrupted ones, takes its referrals both ways, and returns the right SID over a real `samba-tool` trust. The other RP-FILL exercise only Samba's own tools, and our client tools are in none of them | RP-FILL |
-| Active Directory trust | a Windows Server domain controller in a two-way trust with this realm, MIT first: tickets across the trust both ways, an AD user's `kinit -E` by its UPN, FAST armor from an AD ticket, an AD user's sshd login, this realm's users at the DC's SMB and LDAP, and the DC as a SPNEGO client | RP-FILL |
-| Crashes | kills during writes on Fedora, Debian 13 and Rocky Linux 10, each result loaded by MIT's `kdb5_util` | RP-FILL |
-| Power loss | forced power-offs during writes, with a replica | RP-FILL |
-| Write speed | beside MIT at RP-FILL principals | RP-FILL |
-| CI | every push | RP-FILL |
-| Secret scan | the source, the test harness and the test records | RP-FILL |
+| Weekly field suite | 16 scenarios, on MIT and on kerber-rust: real clients and services, install, upgrade, going back to MIT, replicas | 3,036 checks passed, 0 failed (172 informational) |
+| Burn-in | the nightly field profile, 6 scenarios on both, 7 times in a row with the code frozen | every run 569 passed, 0 failed (38 informational), and the results of every run matched |
+| Debian 13 and Rocky Linux 10 | the server scenarios on each, against that distribution's MIT: install, upgrade, `kadmind`, the KDC's settings, database writes, PKINIT, `kpasswd` and a replica | all 8 scenarios passed on each, on MIT and on kerber-rust; our replica 69 passed, 0 failed |
+| Clients on four distributions | MIT's client tools and SSSD on Fedora 44, Rocky Linux 10, Debian 13 and Ubuntu 26.04, with `FILE:` and `KCM:` caches: passwords, keytabs, `kvno`, renewal, `kpasswd`, expiry, lockout, an SSSD login and remote `kadmin` | 68 of 68 results the same as MIT's |
+| Heimdal's clients | Debian 13's Heimdal 7.8 `kinit`, `klist`, `kgetcred`, `kpasswd` and an error text | 5 of 5 results the same as MIT's |
+| Windows 11 | its own Kerberos and SSPI, joined with `ksetup`: tickets and `klist`, signing and sealing with MIT's and our GSS acceptor, `kpasswd`, error texts, RC4 refused, SPNEGO to Keycloak and an interactive logon | 10 of 10 results the same as MIT's |
+| Load | requests and writes on MIT and on kerber-rust, for an hour each | 0 errors (461,882 requests on kerber-rust, 104,191 on MIT); kerber-rust's memory flat, 0.9 to 14.9 MiB |
+| The 1.1 regression set | the checks that proved the 1.1 release, run again | 8,198 passed, 0 failed |
+| OpenSSH by hand | sshd GSSAPI login from one client to another | 52 passed, 0 failed |
+| Samba AD (CI's `peers` job) | 7 tests with live Samba 4 domain controllers. 4 use our KDC, in a debug build: Samba decodes its PAC, checks its checksums and rejects corrupted ones, takes its referrals both ways, and returns the right SID over a real `samba-tool` trust. The other 3 exercise only Samba's own tools, and our client tools are in none of them | 7 of 7 passed |
+| Active Directory trust | a Windows Server domain controller in a two-way trust with this realm, MIT first: tickets across the trust both ways, an AD user's `kinit -E` by its UPN, FAST armor from an AD ticket, an AD user's sshd login, this realm's users at the DC's SMB and LDAP, and the DC as a SPNEGO client | not run in this release's pass; it last ran on an earlier 1.2 build: 83 checks on MIT and 97 on kerber-rust, 0 failed |
+| Crashes | kills during writes on Fedora, Debian 13 and Rocky Linux 10, each result loaded by MIT's `kdb5_util` | 669 kills (221 on Fedora, 228 on Debian 13, 220 on Rocky Linux 10); no damaged change, and MIT loaded all 675 dumps |
+| Power loss | forced power-offs during writes, with a replica | 20 power-offs; none of the 25 acknowledged writes was lost |
+| CI | every push | 8 of 8 jobs |
+| Secret scan | the source, the test harness and the test records | 0 findings in 34,834 files |
 
 Real software that ran against both MIT and kerber-rust, in those scenarios:
 
@@ -132,7 +131,8 @@ Things to know when you read those numbers:
 
 - **The tagged binaries are the tested bytes.** The version was set to 1.2.1 before the runs above.
 - **`peers.yml` fails unless all seven Samba tests ran.** In 1.2.0 its job skipped them and stayed green.
-- RP-FILL
+- **The seven burn-in runs ran back to back,** not a night apart. The hour of load passed every check; one guard
+  on the run tripped on a file another tool wrote to `/tmp` during it, and the run was accepted on review.
 
 The details are in the [interop matrix](docs/interop-matrix.md), the [parity
 ledger](docs/parity/README.md), which grades MIT's functions one row per check, and the [field

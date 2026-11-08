@@ -137,7 +137,7 @@ The toolchain, lld, and `rust-cache` steps are one composite,
 
 A gate in `moving` is deleted in the commit whose production cell passes. At the release cut, `moving` holds only the gates still waiting on a cell, and the `oracles` stay nightly.
 
-`peers.yml` (cron `12 6 * * *`, and manual) runs Samba AD: `samba-ad-gate`, `ad-windows-gate`, `ad-s4u-gate`, `samba-pac-verify-gate`, `samba-pac-l2-gate`, `samba-crossrealm-gate`, `samba-realtrust-gate`. Per-gate detail is in [gates.md](gates.md). **Known gap:** when the job has no MIT image, every gate exits 2 and the job stays green with none run. That is what it did on the 1.2 tree, so for 1.2.0 the seven ran by hand on that tree, and all passed. The job's fix is planned for 1.2.1.
+`peers.yml` (cron `12 6 * * *`, and manual) runs Samba AD: `samba-ad-gate`, `ad-windows-gate`, `ad-s4u-gate`, `samba-pac-verify-gate`, `samba-pac-l2-gate`, `samba-crossrealm-gate`, `samba-realtrust-gate`. Per-gate detail is in [gates.md](gates.md). Its tally step fails the job unless all seven ran and passed. In 1.2.0 a missing MIT image let every gate exit 2 and the job stay green with none run; 1.2.1 closed that.
 
 
 ## MIT 1.22.2 harness
