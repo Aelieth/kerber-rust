@@ -89,6 +89,7 @@ any other `###` heading.
 - **hand.** Step 1 records its extras even when the 13 differ; TR cell 2 checks its embed binary against it.
 - **hand.** An empty compare or secret, or a failed scan, reset or parity run now fails its leg.
 - **hand.** p18, power-loss and FZ legs fail on a missing or empty input, not pass on nothing.
+- **hand.** Power-loss legs sync their setup, and stop when a power cut lost it.
 - **field.** Log marks read across a logrotate's rename; a mark no file holds fails the read, not passes.
 - **field.** The log grader reads JSON as tracing nests it, where configured; two deviations allowed.
 - **ci.** The KDC gate checks each kdc.issue JSON event carries a correlation_id, with an AS and a TGS ISSUE.

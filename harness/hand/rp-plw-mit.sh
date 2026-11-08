@@ -25,6 +25,12 @@ else
     echo "NO_VIRSH"
     exit 1
 fi
+# Prints only: VMs an early exit leaves up are the evidence.
+left_running() {
+    [ -n "${PLW_DONE:-}" ] && return
+    echo "LEFT_RUNNING $(vsh list --name 2>/dev/null | sed -n 's/^kerber-\(kdc2\?\)$/\1/p' | paste -sd' ' -)"
+}
+trap left_running EXIT
 mkdir -p "$REC/cycles"
 echo $$ > "$REC/driver.pid"
 echo "PLW_START $(TZ=America/Chicago date '+%H:%M:%S')"
@@ -95,6 +101,7 @@ fi
 sudo systemctl disable krb5kdc kadmin
 sudo systemctl restart krb5kdc kadmin
 echo "UNITS $(systemctl is-enabled krb5kdc) $(systemctl is-active krb5kdc) $(systemctl is-enabled kadmin) $(systemctl is-active kadmin)"
+sync
 EOS
 primary_rc=$?
 echo "PRIMARY_RC:$primary_rc"
@@ -142,6 +149,7 @@ for i in $(seq 1 40); do
     sleep 0.25
 done
 ss -Hltn 'sport = :754' | grep -q . && echo KPROPD_LISTEN
+sync
 EOS
 echo "REPLICA_RC:$?"
 
@@ -194,6 +202,24 @@ sudo systemctl start krb5kdc kadmin; echo STARTED $(systemctl is-active krb5kdc)
 EOS
 )
     labn ssh kdc -- "$start_cmd"
+}
+
+# The setup's kdc edits are plain writes; a power cut can drop them.
+setup_cmd=$(cat << 'EOS'
+s=no; a=no; t=no
+sudo grep -q '^# plw-iprop$' /var/kerberos/krb5kdc/kdc.conf && s=yes
+sudo grep -q '^kiprop/kdc2' /var/kerberos/krb5kdc/kadm5.acl && a=yes
+sudo klist -k /etc/krb5.keytab 2>/dev/null | grep -q 'host/kdc.kerber.test@' && t=yes
+echo "SETUP stanza=$s acl=$a keytab=$t units=$(systemctl is-enabled krb5kdc kadmin | paste -sd, -)"
+EOS
+)
+setup_kept() {
+    local got
+    got=$(labn ssh kdc -- "$setup_cmd")
+    echo "$got $1"
+    [ "$got" = "SETUP stanza=yes acl=yes keytab=yes units=disabled,disabled" ] && return 0
+    echo "SETUP_LOST $1 ${got#SETUP }"
+    return 1
 }
 
 # Kill control. SIGKILL of kadmin.local. No virsh.
@@ -269,6 +295,9 @@ while read -r delay; do
     echo "UP:$?"
     if ! wait_ssh; then
         echo "BOOT_FAIL $cyc"
+        exit 1
+    fi
+    if ! setup_kept "$cyc"; then
         exit 1
     fi
     dump_state "$cyc"
@@ -419,4 +448,5 @@ lab reset kdc2 f4-mit-f44
 echo "RESET_KDC2_END:$?"
 lab down kdc2
 echo "DOWN_KDC2:$?"
+PLW_DONE=1
 echo "PLW_END $(TZ=America/Chicago date '+%H:%M:%S')"
