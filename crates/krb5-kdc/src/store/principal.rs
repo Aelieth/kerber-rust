@@ -1600,6 +1600,25 @@ impl PrincipalStore {
     }
 
     #[must_use]
+    pub fn locked_now(&self, p: &Principal, now: u32) -> bool {
+        let mut q = p.clone();
+        self.merge_lockout(&mut q);
+        crate::lockout::is_locked(self, &q, now)
+    }
+
+    #[must_use]
+    pub fn lockouts(&self, now: u32) -> Vec<(String, Lockout, bool)> {
+        let mut ids = self.ids();
+        ids.retain(|id| self.map.get(id).is_some_and(|p| p.alias_target().is_none()));
+        ids.into_iter()
+            .filter_map(|id| {
+                let p = self.map.get(&id)?;
+                Some((id, self.lockout_of(p), self.locked_now(p, now)))
+            })
+            .collect()
+    }
+
+    #[must_use]
     pub fn fail_auth_of(&self, p: &Principal) -> u32 {
         self.lockout_of(p).fail_auth_count
     }

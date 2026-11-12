@@ -623,15 +623,23 @@ pub(crate) fn check_host_file(path: &Path) -> Result<(), crate::Error> {
 
 /// Never truncates.
 pub fn create_lockout_file(path: &Path) -> Result<(), crate::Error> {
-    if path.symlink_metadata().is_ok() {
-        return check_host_file(path);
+    let unwritable = |e: &io::Error| crate::Error::LockoutUnreadable {
+        path: path.to_path_buf(),
+        text: klog::os_error_text(e),
+    };
+    let created = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(OFlag::O_NOFOLLOW.bits())
+        .open(path);
+    match created {
+        Ok(file) => file
+            .write_all_at(&render(&[]), 0)
+            .map_err(|e| unwritable(&e)),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => check_host_file(path),
+        Err(e) => Err(unwritable(&e)),
     }
-    krb5_protocol::write_secret_file(path, &render(&[])).map_err(|e| {
-        crate::Error::LockoutUnreadable {
-            path: path.to_path_buf(),
-            text: klog::os_error_text(&e),
-        }
-    })
 }
 
 #[derive(Debug, Default)]

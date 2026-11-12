@@ -138,12 +138,19 @@ pub(crate) fn lockout_check_policy<S: PrincipalRead + ?Sized>(
         crate::preauth::proto_d(err::GENERIC, status::UNKNOWN_REASON, e.to_string())
     })?;
     if locked_check_p(stamp, max_fail, lockout_duration, p) {
+        crate::audit::mark_lockout(crate::audit::LockoutMark::Locked);
         return Err(crate::preauth::proto(
             err::CLIENT_REVOKED,
             status::LOCKED_OUT,
         ));
     }
     Ok(())
+}
+
+pub(crate) fn is_locked<S: PrincipalRead + ?Sized>(store: &S, p: &Principal, stamp: u32) -> bool {
+    !store.policy().disable_lockout
+        && lookup_lockout_policy(store, p)
+            .is_ok_and(|(max_fail, _, duration)| locked_check_p(stamp, max_fail, duration, p))
 }
 
 pub(crate) fn as_outcome<T>(out: &Result<T, Error>) -> i32 {
@@ -187,6 +194,14 @@ pub fn lockout_audit<S: PrincipalRead + ?Sized>(store: &S, p: &Principal, stamp:
             update.zero_fail_count = true;
         }
         update.set_last_failure = true;
+        let base = if update.zero_fail_count {
+            0
+        } else {
+            p.fail_auth_count
+        };
+        if max_fail != 0 && base.saturating_add(1) >= max_fail {
+            crate::audit::mark_lockout(crate::audit::LockoutMark::Crossed);
+        }
     }
     if !update.is_empty() {
         store.update_lockout(p, stamp, update);

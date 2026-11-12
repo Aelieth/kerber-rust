@@ -41,7 +41,7 @@ pub use ad::{
     sign_reply_pac, ticket_checksum_der, verify_pac, verify_pac_signatures, wrap_win2k_pac,
 };
 pub use audit::{
-    AUTHN_REQ_CL, AuditState, ENCR_REP, JsonAudit, KdcAudit, REQID_LEN, SRVC_PRINC,
+    AUTHN_REQ_CL, AuditState, ENCR_REP, JsonAudit, KdcAudit, LockoutMark, REQID_LEN, SRVC_PRINC,
     audit_kdc_start, audit_kdc_stop, current_audit, enctype_name, ktypes2str, make_tkt_id,
     new_req_id, register_audit, rep_etypes2str, set_audit,
 };
