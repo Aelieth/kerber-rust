@@ -606,6 +606,32 @@ pub(crate) fn journal_batch(
     Ok(format!("{JOURNAL_BEGIN}\n{body}{JOURNAL_END}{crc:08x}\n"))
 }
 
+pub(crate) fn princ_record(
+    store: &PrincipalStore,
+    p: &Principal,
+    mkey: &ProtocolKey,
+) -> Result<String, DumpError> {
+    let mut out = String::new();
+    write_princ_record(&mut out, p, mkey, store, true)?;
+    Ok(out)
+}
+
+pub(crate) fn parse_princ_record(line: &str) -> Result<DumpPrincipal, DumpError> {
+    line.strip_suffix('\n')
+        .and_then(|l| l.strip_prefix("princ\t"))
+        .ok_or_else(|| DumpError::Format("not one princ record".to_owned()))
+        .and_then(|rest| parse_princ_line(rest, 1))
+}
+
+pub(crate) fn policy_record(pol: &NamedPolicy) -> String {
+    format!("{}\n", policy_line(pol))
+}
+
+pub(crate) fn parse_policy_record(line: &str) -> Option<NamedPolicy> {
+    let rest = line.strip_suffix('\n')?.strip_prefix("policy\t")?;
+    Some(parse_policy_rest(rest))
+}
+
 pub(crate) enum JournalOp {
     Put(Box<DumpPrincipal>),
     Del(String),
