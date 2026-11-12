@@ -1,3 +1,5 @@
+pub mod conformance;
+
 use std::collections::BTreeMap;
 use std::sync::{Mutex, PoisonError};
 

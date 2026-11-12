@@ -403,6 +403,37 @@ pub fn create_password_shared(
     g.change(|s| s.create_principal_3_in(name, princ_realm, keys, etypes, ent, actor))?
 }
 
+#[expect(clippy::too_many_arguments, reason = "the create inputs")]
+pub fn create_password_shared_committing(
+    store: &SharedDump,
+    name: &PrincipalName,
+    princ_realm: &str,
+    password: &[u8],
+    etypes: &[KeySalt],
+    ent: &AdminEnt,
+    actor: &str,
+    commit: impl FnOnce(crate::host::RealmBatch) -> Result<(), crate::host::KerberosStoreError>,
+) -> Result<(), Error> {
+    let planned = {
+        let (g, read) = read_fresh(store);
+        match read {
+            Err(_) => None,
+            Ok(()) => Some(g.plan_create_password(name, princ_realm, password, etypes, ent)?),
+        }
+    };
+    let prepared = planned.map(CreatePlan::derive).transpose()?;
+    let mut g = store.write().unwrap_or_else(PoisonError::into_inner);
+    g.change_committing(commit, |s| {
+        if let Some(p) = prepared
+            && s.create_prepared(p, actor)?
+        {
+            return Ok(());
+        }
+        let keys = CreateKeys::Password(password);
+        s.create_principal_3_in(name, princ_realm, keys, etypes, ent, actor)
+    })?
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AdminEnt {
     pub mask: u32,

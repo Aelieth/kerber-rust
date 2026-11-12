@@ -254,6 +254,42 @@ pub fn change_password_shared(
     })?
 }
 
+/// `change_password_shared` with the host's commit; `commit` runs once.
+#[expect(clippy::too_many_arguments, reason = "the chpass inputs")]
+pub fn change_password_shared_committing(
+    store: &SharedDump,
+    name: &PrincipalName,
+    princ_realm: &str,
+    password: &[u8],
+    keepold: u32,
+    actor: &str,
+    etypes: &[KeySalt],
+    checks: impl Fn(&PrincipalStore) -> Result<(), Error>,
+    commit: impl FnOnce(crate::host::RealmBatch) -> Result<(), crate::host::KerberosStoreError>,
+) -> Result<(), Error> {
+    let planned = {
+        let (g, read) = read_fresh(store);
+        match read {
+            Err(_) => Ok(None),
+            Ok(()) => {
+                checks(&g).and_then(|()| g.plan_password(name, princ_realm, password, etypes))
+            }
+        }
+    };
+    let prepared = planned.and_then(|plan| plan.map(PasswordPlan::derive).transpose());
+    let mut g = store.write().unwrap_or_else(PoisonError::into_inner);
+    let prepared = prepared?;
+    g.change_committing(commit, |s| {
+        if let Some(p) = prepared
+            && s.apply_password(p, keepold, actor)?
+        {
+            return Ok(());
+        }
+        checks(s)?;
+        s.set_password_etypes_keepold_n_in(name, princ_realm, password, keepold, actor, etypes)
+    })?
+}
+
 /// A new field fails to build here until it is compared.
 fn same_record(a: &Principal, b: &Principal) -> bool {
     let Principal {
