@@ -547,6 +547,88 @@ pub fn open_or_create(
     Ok((store, boot))
 }
 
+/// Ignores `database_name` and `key_stash_file`: `host_paths` names the only two files.
+pub fn open_or_create_host(
+    paths: &KdcPaths,
+    profile: &ProfileSet,
+    admin: Option<AdminSpec>,
+    host: std::sync::Arc<dyn crate::host::KerberosStore>,
+    host_paths: &crate::host::HostPaths,
+) -> Result<(PrincipalStore, Bootstrapped), Error> {
+    let Some(realm) = paths.realm.as_deref() else {
+        return Err(Error::InvalidArgument("no default realm".to_owned()));
+    };
+    let loaded = host.load().map_err(Error::Host)?;
+    let stash = &host_paths.stash;
+    let fresh = loaded.realm.is_none() && loaded.principals.is_empty();
+    let (mut store, master, mkvno) = match (fresh, stash.exists()) {
+        (true, true) => {
+            return Err(Error::StashWithoutHostRealm {
+                stash: stash.clone(),
+            });
+        }
+        (false, false) => {
+            return Err(Error::HostRecordsWithoutStash {
+                stash: stash.clone(),
+                records: loaded.principals.len(),
+            });
+        }
+        (true, false) => (
+            PrincipalStore::try_new(realm)?,
+            MasterKey::Random { etype: None },
+            1,
+        ),
+        (false, true) => {
+            crate::lockout::check_host_file(&host_paths.lockout)?;
+            let (key, kvno) = crate::persist::read_stashed_master(stash).map_err(|e| db_err(&e))?;
+            let mkvno = u16::try_from(kvno)
+                .map_err(|_| Error::InvalidArgument("master kvno does not fit".to_owned()))?;
+            let seal = crate::host::SealKey {
+                kvno,
+                key: key.clone(),
+            };
+            let store = PrincipalStore::from_host_rows(realm, &loaded, &seal)?;
+            (store, MasterKey::Key(key), mkvno)
+        }
+    };
+    let boot = bootstrap_realm_into(
+        &mut store,
+        master,
+        &RealmSpec {
+            realm,
+            profile,
+            mkvno,
+            admin,
+        },
+    )?;
+    let seal = crate::host::SealKey {
+        kvno: u32::from(boot.kvno),
+        key: boot.master.clone(),
+    };
+    if fresh {
+        crate::persist::write_stash(stash, realm, &boot.master, u32::from(boot.kvno))?;
+        crate::lockout::create_lockout_file(&host_paths.lockout)?;
+    }
+    if fresh || !boot.created.is_empty() {
+        let ids = if fresh {
+            store.ids()
+        } else {
+            boot.created.clone()
+        };
+        let committed = store
+            .host_rows(&ids, fresh, &seal)
+            .and_then(|batch| host.commit(batch).map_err(Error::Host));
+        if let Err(e) = committed {
+            if fresh {
+                let _ = std::fs::remove_file(stash);
+            }
+            return Err(e);
+        }
+    }
+    store.attach_host(host, seal, host_paths.lockout.clone());
+    Ok((store, boot))
+}
+
 fn open_failure(f: crate::daemon::OpenFailure) -> Error {
     match f {
         crate::daemon::OpenFailure::Database(e) | crate::daemon::OpenFailure::MasterKey(e) => {

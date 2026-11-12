@@ -600,6 +600,40 @@ fn record(
     side.put(id, update.apply(base, stamp))
 }
 
+// MIT: `klmdb_open` (plugins/kdb/lmdb/kdb_lmdb.c:546-561)
+pub(crate) fn check_host_file(path: &Path) -> Result<(), crate::Error> {
+    let unreadable = |e: &io::Error| crate::Error::LockoutUnreadable {
+        path: path.to_path_buf(),
+        text: klog::os_error_text(e),
+    };
+    match SideFile::open(path) {
+        Ok(None) => Err(crate::Error::LockoutMissing {
+            path: path.to_path_buf(),
+        }),
+        Err(e) => Err(unreadable(&e)),
+        Ok(Some(side)) if !side.writable => Err(unreadable(&io::Error::from(
+            io::ErrorKind::PermissionDenied,
+        ))),
+        Ok(Some(side)) if side.ix.foreign => Err(crate::Error::LockoutForeign {
+            path: path.to_path_buf(),
+        }),
+        Ok(Some(_)) => Ok(()),
+    }
+}
+
+/// Never truncates.
+pub fn create_lockout_file(path: &Path) -> Result<(), crate::Error> {
+    if path.symlink_metadata().is_ok() {
+        return check_host_file(path);
+    }
+    krb5_protocol::write_secret_file(path, &render(&[])).map_err(|e| {
+        crate::Error::LockoutUnreadable {
+            path: path.to_path_buf(),
+            text: klog::os_error_text(&e),
+        }
+    })
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct LockoutState {
     inner: Mutex<Inner>,
@@ -611,13 +645,17 @@ struct Inner {
     overlay: HashMap<String, Lockout>,
     told_absent: bool,
     told_unwritable: bool,
+    host: Option<PathBuf>,
 }
 
 impl Inner {
     fn side(&mut self, db: &Path) -> Option<&mut SideFile> {
-        let path = lockout_path(db);
+        self.side_at(&lockout_path(db))
+    }
+
+    fn side_at(&mut self, path: &Path) -> Option<&mut SideFile> {
         if self.side.as_ref().is_none_or(|s| s.path != path) {
-            self.side = SideFile::open(&path).ok().flatten();
+            self.side = SideFile::open(path).ok().flatten();
             if self
                 .side
                 .as_ref()
@@ -628,6 +666,11 @@ impl Inner {
         }
         let fresh = self.side.as_mut()?.refresh().unwrap_or(false);
         if !fresh {
+            if let Some(gone) = self.side.take().filter(|_| self.host.is_some()) {
+                for (id, (_, l)) in gone.ix.records {
+                    self.overlay.entry(id).or_insert(l);
+                }
+            }
             self.side = None;
         }
         self.side.as_mut().filter(|s| !s.ix.foreign)
@@ -681,6 +724,15 @@ impl LockoutState {
     ) -> Lockout {
         let mut inner = self.inner();
         let id = p.id();
+        if let Some(path) = inner.host.clone() {
+            let stored = inner.side_at(&path).and_then(|s| s.get(&id).ok().flatten());
+            return inner
+                .overlay
+                .get(&id)
+                .copied()
+                .or(stored)
+                .unwrap_or_else(|| Lockout::of(p));
+        }
         let mut stored = None;
         let mut writable = false;
         let peeked = db.zip(lock).and_then(|(db, _)| {
@@ -717,6 +769,11 @@ impl LockoutState {
         update: LockoutUpdate,
     ) {
         let id = p.id();
+        let host = self.inner().host.clone();
+        if let Some(path) = host {
+            self.update_host(&path, p, stamp, update);
+            return;
+        }
         let held = db
             .zip(lock)
             .map(|(db, lock)| (db, lock.hold(DbLockMode::Exclusive)));
@@ -793,6 +850,23 @@ impl LockoutState {
         let new_id = new.id();
         let mut inner = self.inner();
         let overlaid = inner.overlay.remove(old_id).or(Some(kept));
+        if let Some(path) = inner.host.clone() {
+            let moved = match inner.side_at(&path) {
+                Some(side) if side.writable => {
+                    let v = side.get(old_id).ok().flatten().or(overlaid);
+                    v.is_none_or(|v| {
+                        side.put(&new_id, v)
+                            .and_then(|()| side.delete(old_id))
+                            .is_ok()
+                    })
+                }
+                _ => false,
+            };
+            if !moved && let Some(v) = overlaid {
+                inner.overlay.insert(new_id, v);
+            }
+            return;
+        }
         let held = db
             .zip(lock)
             .map(|(db, lock)| (db, lock.hold(DbLockMode::Exclusive)));
@@ -814,6 +888,58 @@ impl LockoutState {
         }
         if let Some(v) = overlaid {
             inner.overlay.insert(new_id, v);
+        }
+    }
+
+    pub(crate) fn set_host_file(&self, path: PathBuf) {
+        self.inner().host = Some(path);
+    }
+
+    /// A vanished host file keeps counting in memory.
+    fn update_host(&self, path: &Path, p: &Principal, stamp: u32, update: LockoutUpdate) {
+        let id = p.id();
+        let mut inner = self.inner();
+        let written = match inner.side_at(path) {
+            Some(side) if side.writable => record(side, &id, p, stamp, update),
+            Some(_) => Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Permission denied",
+            )),
+            None => Err(io::Error::new(io::ErrorKind::NotFound, "missing")),
+        };
+        match written {
+            Ok(()) => {
+                inner.overlay.remove(&id);
+                return;
+            }
+            Err(e) => {
+                let msg = format!(
+                    "{}: {e}: lockout counts are kept in memory until a restart",
+                    path.display()
+                );
+                Inner::tell_once(&mut inner.told_absent, &msg);
+            }
+        }
+        let base = inner
+            .overlay
+            .get(&id)
+            .copied()
+            .unwrap_or_else(|| Lockout::of(p));
+        inner.overlay.insert(id, update.apply(base, stamp));
+    }
+
+    pub(crate) fn drop_host_rows(&self, ids: &[String]) {
+        let mut inner = self.inner();
+        for id in ids {
+            inner.overlay.remove(id);
+        }
+        let Some(path) = inner.host.clone() else {
+            return;
+        };
+        if let Some(side) = inner.side_at(&path).filter(|s| s.writable) {
+            for id in ids {
+                let _ = side.delete(id);
+            }
         }
     }
 

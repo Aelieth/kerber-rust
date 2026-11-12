@@ -52,7 +52,7 @@ pub use create::seed_test_principals;
 pub use create::{
     AdminSpec, Bootstrapped, MasterKey, RealmSpec, StashTarget, add_admin_principals,
     bootstrap_realm_into, create_database, create_realm, create_realm_db, kdc_conf_for_realm,
-    open_or_create, realm_rows,
+    open_or_create, open_or_create_host, realm_rows,
 };
 pub use daemon::{
     NO_MASTER_KEY, OpenFailure, Shutdown, copy_persist_master, database_path, has_master_record,
@@ -98,7 +98,8 @@ pub use listen::{
 #[cfg(feature = "daemon")]
 pub use listen::{serve, serve_all, serve_daemon};
 pub use lockout::{
-    Lockout, LockoutUpdate, SUFFIX_LOCKOUT, lockout_path, lockout_records, merge_lockout_file,
+    Lockout, LockoutUpdate, SUFFIX_LOCKOUT, create_lockout_file, lockout_path, lockout_records,
+    merge_lockout_file,
 };
 pub use mkey::{default_master_etype, master_etype, master_key_from_password, string_to_enctype};
 pub use osa::{

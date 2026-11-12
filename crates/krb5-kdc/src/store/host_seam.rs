@@ -103,6 +103,68 @@ impl PrincipalStore {
         Ok(())
     }
 
+    #[must_use]
+    pub fn host_seal_key(&self) -> Option<SealKey> {
+        let km = self.get(&format!("K/M@{}", self.realm))?;
+        let k = km.keys.first()?;
+        Some(SealKey {
+            kvno: k.kvno,
+            key: k.key.clone(),
+        })
+    }
+
+    pub fn host_full_batch(&self) -> Result<RealmBatch, Error> {
+        let seal = self
+            .host_seal_key()
+            .ok_or_else(|| Error::InvalidArgument("no K/M in the store".to_owned()))?;
+        self.host_rows(&self.ids(), true, &seal)
+    }
+
+    pub(crate) fn host_rows(
+        &self,
+        ids: &[String],
+        with_policies: bool,
+        seal: &SealKey,
+    ) -> Result<RealmBatch, Error> {
+        let mut batch = RealmBatch::default();
+        for id in ids {
+            if let Some(p) = self.map.get(id) {
+                batch.upsert_principals.push(principal_row(self, p, seal)?);
+            }
+        }
+        if with_policies {
+            let mut names: Vec<&String> = self.policies.keys().collect();
+            names.sort();
+            for name in names {
+                batch
+                    .put_policies
+                    .push(policy_row(&self.policies[name], &self.realm, seal)?);
+            }
+        }
+        batch.realm = Some(realm_state(
+            &self.realm,
+            &self.domain_sid,
+            self.next_rid,
+            seal,
+        )?);
+        Ok(batch)
+    }
+
+    pub(crate) fn attach_host(
+        &mut self,
+        host: Arc<dyn KerberosStore>,
+        seal: SealKey,
+        lockout: std::path::PathBuf,
+    ) {
+        self.lockout.set_host_file(lockout);
+        self.host = Some(HostSeam {
+            store: host,
+            seal,
+            reload_due: false,
+            before: None,
+        });
+    }
+
     fn reload_or_mark(&mut self) {
         if self.reload_from_host().is_err()
             && let Some(h) = self.host.as_mut()
@@ -155,7 +217,7 @@ impl PrincipalStore {
                 return Ok(Err(e));
             }
         };
-        let batch = match self.host_batch(&before) {
+        let (batch, gone) = match self.host_batch(&before) {
             Ok(b) => b,
             Err(e) => {
                 self.host_undo(before);
@@ -170,6 +232,7 @@ impl PrincipalStore {
         match committed {
             Ok(()) => {
                 self.map.end_change();
+                self.lockout.drop_host_rows(&gone);
                 self.pending
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -189,7 +252,7 @@ impl PrincipalStore {
     // MIT: `create_hist` (lib/kadm5/srv/server_kdb.c:141-164)
     pub(super) fn host_commit_through(&mut self) -> Result<(), Error> {
         let before = self.set_host_before(None).ok_or_else(journal_lost)?;
-        let committed = self.host_batch(&before).and_then(|b| {
+        let committed = self.host_batch(&before).and_then(|(b, _)| {
             if b.is_empty() {
                 Ok(())
             } else {
@@ -230,17 +293,20 @@ impl PrincipalStore {
         std::mem::replace(&mut h.before, before)
     }
 
-    fn host_batch(&self, before: &Before) -> Result<RealmBatch, Error> {
+    fn host_batch(&self, before: &Before) -> Result<(RealmBatch, Vec<String>), Error> {
         let seal = &self
             .host
             .as_ref()
             .ok_or_else(|| Error::InvalidArgument("no host store".to_owned()))?
             .seal;
         let mut batch = RealmBatch::default();
+        let mut gone = Vec::new();
         for id in self.map.touched().ok_or_else(journal_lost)? {
-            match self.map.get(&id) {
-                Some(p) => batch.upsert_principals.push(principal_row(self, p, seal)?),
-                None => batch.delete_principals.push(row_name(&id, &self.realm)),
+            if let Some(p) = self.map.get(&id) {
+                batch.upsert_principals.push(principal_row(self, p, seal)?);
+            } else {
+                batch.delete_principals.push(row_name(&id, &self.realm));
+                gone.push(id);
             }
         }
         let mut names: Vec<&String> = self.policies.keys().collect();
@@ -251,14 +317,14 @@ impl PrincipalStore {
                 batch.put_policies.push(policy_row(pol, &self.realm, seal)?);
             }
         }
-        let mut gone: Vec<String> = before
+        let mut dropped: Vec<String> = before
             .policies
             .keys()
             .filter(|n| !self.policies.contains_key(*n))
             .cloned()
             .collect();
-        gone.sort();
-        batch.delete_policies = gone;
+        dropped.sort();
+        batch.delete_policies = dropped;
         if before.next_rid != self.next_rid || before.domain_sid != self.domain_sid {
             batch.realm = Some(realm_state(
                 &self.realm,
@@ -267,6 +333,6 @@ impl PrincipalStore {
                 seal,
             )?);
         }
-        Ok(batch)
+        Ok((batch, gone))
     }
 }

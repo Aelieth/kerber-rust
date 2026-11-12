@@ -207,6 +207,12 @@ impl std::fmt::Display for RecordError {
 
 impl std::error::Error for RecordError {}
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HostPaths {
+    pub stash: std::path::PathBuf,
+    pub lockout: std::path::PathBuf,
+}
+
 #[derive(Clone, Debug)]
 pub struct SealKey {
     pub kvno: u32,
