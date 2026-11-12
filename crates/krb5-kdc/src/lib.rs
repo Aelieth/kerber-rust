@@ -13,6 +13,7 @@ mod daemon;
 mod dblock;
 mod der;
 mod error;
+pub mod host;
 mod issue;
 mod kadm5_params;
 mod kdb;
