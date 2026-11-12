@@ -3,6 +3,7 @@
 mod alias;
 mod flags;
 mod history;
+mod host_seam;
 mod iprop_ulog;
 pub(crate) mod iprop_xdr;
 mod kadm5_hook;
@@ -84,6 +85,7 @@ pub struct PrincipalStore {
     saves_held: bool,
     post: Option<Vec<Post>>,
     otp_runtime: Option<Arc<crate::plugins::OtpRuntime>>,
+    host: Option<host_seam::HostSeam>,
 }
 
 #[derive(Debug, Default)]
@@ -166,6 +168,9 @@ impl Drop for HeldSaves<'_> {
         self.0.saves_held = false;
         if std::thread::panicking() {
             self.0.db_stamp = None;
+            if let Some(h) = self.0.host.as_mut() {
+                h.reload_due = true;
+            }
         }
     }
 }
@@ -185,6 +190,7 @@ impl Drop for PostQueue<'_> {
     }
 }
 
+#[derive(Clone)]
 struct Before {
     policies: HashMap<String, NamedPolicy>,
     next_rid: u32,
@@ -251,6 +257,7 @@ impl PrincipalStore {
             saves_held: false,
             post: None,
             otp_runtime: None,
+            host: None,
         })
     }
 
@@ -392,11 +399,16 @@ impl PrincipalStore {
                 other => other,
             },
         })?;
-        loaded.policy = std::mem::take(&mut self.policy);
-        loaded.pwqual_dict = self.pwqual_dict.take();
-        if loaded.policy.ad_identity {
+        if self.policy.ad_identity {
             loaded.domain_sid.clone_from(&self.domain_sid);
         }
+        self.adopt(loaded);
+        Ok(())
+    }
+
+    fn adopt(&mut self, mut loaded: Self) {
+        loaded.policy = std::mem::take(&mut self.policy);
+        loaded.pwqual_dict = self.pwqual_dict.take();
         loaded.lockout = Arc::clone(&self.lockout);
         loaded.env = std::mem::take(&mut self.env);
         loaded.log = self.log.take();
@@ -404,8 +416,8 @@ impl PrincipalStore {
         loaded.saves_held = self.saves_held;
         loaded.post = self.post.take();
         loaded.otp_runtime = self.otp_runtime.take();
+        loaded.host = self.host.take();
         *self = loaded;
-        Ok(())
     }
 
     pub(crate) fn db_path(&self) -> Option<&std::path::Path> {
@@ -470,15 +482,18 @@ impl PrincipalStore {
     /// A store with a database refuses a save outside `change`.
     fn save_if_configured(&self) -> Result<(), Error> {
         self.changed.0.store(true, Ordering::Relaxed);
-        if self.db_path().is_none() {
+        if self.db_path().is_none() && self.host.is_none() {
             return self.log_pending();
         }
         self.inside_change()
     }
 
     /// A put that must stick is written before the change can roll it back.
-    fn save_through(&self) -> Result<(), Error> {
+    fn save_through(&mut self) -> Result<(), Error> {
         self.inside_change()?;
+        if self.host.is_some() {
+            return self.host_commit_through();
+        }
         self.wrote_through.0.store(true, Ordering::Relaxed);
         self.logged_write(|| self.write_database())
     }
@@ -495,6 +510,10 @@ impl PrincipalStore {
                     "{}: a change outside the database's exclusive lock",
                     db.display()
                 ),
+            }),
+            None if self.host.is_some() && !self.saves_held => Err(Error::Db {
+                kind: std::io::ErrorKind::Other,
+                text: "a change outside the host store's commit".to_owned(),
             }),
             _ => Ok(()),
         }
@@ -523,8 +542,15 @@ impl PrincipalStore {
         if self.post.is_some() {
             return Ok(f(self));
         }
+        self.posted(|s| s.change_locked(f))
+    }
+
+    fn posted<T, E>(
+        &mut self,
+        inner: impl FnOnce(&mut Self) -> Result<Result<T, E>, Error>,
+    ) -> Result<Result<T, E>, Error> {
         let queue = PostQueue::new(self);
-        let out = queue.0.change_locked(f);
+        let out = inner(&mut *queue.0);
         let calls = queue.0.post.take().unwrap_or_default();
         drop(queue);
         let committed = matches!(out, Ok(Ok(_)));
@@ -550,6 +576,9 @@ impl PrincipalStore {
     ) -> Result<Result<T, E>, Error> {
         if self.saves_held {
             return Ok(f(self));
+        }
+        if self.host.is_some() {
+            return self.change_host(None::<host_seam::NoCommit>, f);
         }
         let Some(db) = self.db_path().map(std::path::Path::to_path_buf) else {
             return Ok(f(self));

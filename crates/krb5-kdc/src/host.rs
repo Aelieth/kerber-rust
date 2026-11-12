@@ -306,11 +306,9 @@ fn opened<'r>(
 }
 
 /// The local realm's names drop `@REALM`; a row name with an unescaped `@` keeps its realm.
-fn row_name(id: &str, princ_realm: &str, realm: &str) -> String {
-    match id.strip_suffix(&format!("@{realm}")) {
-        Some(short) if princ_realm == realm => short.to_owned(),
-        _ => id.to_owned(),
-    }
+pub(crate) fn row_name(id: &str, realm: &str) -> String {
+    id.strip_suffix(&format!("@{realm}"))
+        .map_or_else(|| id.to_owned(), str::to_owned)
 }
 
 fn full_name(row: &str, realm: &str) -> String {
@@ -345,7 +343,7 @@ pub fn principal_row(
         .and_then(|t| crate::kdb_dump::tl_mod_princ(&t.contents))
         .map_or_else(krb5_types::unix_now, |(at, _)| at);
     Ok(PrincipalRow {
-        name: row_name(&id, &p.realm, realm),
+        name: row_name(&id, realm),
         record: sealed(k, Kind::Principal, realm, &id, body.as_bytes())?,
         has_keys: !p.keys.is_empty() || !p.opaque_keys.is_empty(),
         disabled: attributes & KDB_DISALLOW_ALL_TIX != 0,

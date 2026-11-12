@@ -788,10 +788,11 @@ impl LockoutState {
         lock: Option<&Arc<DbLock>>,
         old_id: &str,
         new: &Principal,
+        kept: Lockout,
     ) {
         let new_id = new.id();
         let mut inner = self.inner();
-        let overlaid = inner.overlay.remove(old_id);
+        let overlaid = inner.overlay.remove(old_id).or(Some(kept));
         let held = db
             .zip(lock)
             .map(|(db, lock)| (db, lock.hold(DbLockMode::Exclusive)));

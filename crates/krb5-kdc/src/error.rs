@@ -46,6 +46,8 @@ pub enum Error {
         code: i32,
         message: String,
     },
+    Host(crate::host::KerberosStoreError),
+    Record(crate::host::RecordError),
 }
 
 impl fmt::Display for Error {
@@ -80,6 +82,8 @@ impl fmt::Display for Error {
             Self::UnexpectedPdu => write!(f, "unexpected PDU"),
             Self::PreauthRequired { .. } => write!(f, "preauth required"),
             Self::PreauthModule { message, .. } => write!(f, "{message}"),
+            Self::Host(e) => write!(f, "{e}"),
+            Self::Record(e) => write!(f, "{e}"),
         }
     }
 }
