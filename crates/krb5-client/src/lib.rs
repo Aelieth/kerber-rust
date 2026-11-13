@@ -1325,7 +1325,13 @@ fn client_pkinit(
             }),
             pk => ClientPkinit::Ready(pk),
         },
-        (true, true) => return Err("anonymous PKINIT requires pkinit_anchors".into()),
+        // MIT: `pkinit_client_process` (plugins/preauth/pkinit/pkinit_clnt.c:957-961)
+        (true, true) => ClientPkinit::Failed(PkinitFailure {
+            code: krb5_protocol::trace::ERROR_TABLE_BASE_KRB5 + 210,
+            text: "No pkinit_anchors supplied".into(),
+            no_identity: false,
+            prompted: false,
+        }),
         (_, false) => load_pkinit(&identities, anchors, &pool, &rules, opts)?,
     })
 }
