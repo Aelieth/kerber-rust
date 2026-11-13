@@ -862,7 +862,7 @@ fn s4u_from_userid(
             return Err(proto(err::GENERIC, status::LOOKING_UP_S4U2SELF_PRINCIPAL));
         }
         let mut p = store
-            .fetch_name(&user)?
+            .fetch_client(&user)?
             .ok_or_else(|| proto(err::C_PRINCIPAL_UNKNOWN, status::UNKNOWN_S4U2SELF_PRINCIPAL))?;
         p.pw_expire = 0;
         p.attributes &= !crate::store::KDB_REQUIRES_PWCHANGE;
@@ -1114,7 +1114,7 @@ fn non_tgt_or_u2u(body: &krb5_types::KdcReqBody) -> bool {
 
 fn is_client_db_alias(store: &dyn PrincipalRead, entry: &Principal, princ: &PrincipalName) -> bool {
     store
-        .fetch_name(princ)
+        .fetch_client(princ)
         .ok()
         .flatten()
         .is_some_and(|p| p.name == entry.name && p.realm == entry.realm)

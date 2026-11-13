@@ -972,11 +972,12 @@ fn match_client(
     {
         return true;
     }
-    let Some(id) = crate::kdb::lookup_principal_id(name, realm) else {
-        return false;
+    let found = if realm == store.realm() {
+        store.fetch_client(name)
+    } else {
+        crate::kdb::lookup_principal_id(name, realm).map_or(Ok(None), |id| store.fetch(&id))
     };
-    store
-        .fetch(&id)
+    found
         .ok()
         .flatten()
         .is_some_and(|entry| (entry.realm.as_bytes().to_vec(), parts(&entry.name)) == own)

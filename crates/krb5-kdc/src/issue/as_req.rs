@@ -43,11 +43,11 @@ pub struct IssuedAs {
 
 // MIT: `process_as_req` (do_as_req.c:577-607)
 fn lookup_as_princ(
-    store: &dyn PrincipalRead,
     name: &PrincipalName,
     looking_up: &'static str,
+    fetch: impl FnOnce(&PrincipalName) -> Result<Option<crate::store::Principal>, Error>,
 ) -> Result<Option<crate::store::Principal>, Error> {
-    match store.fetch_name(name) {
+    match fetch(name) {
         Ok(v) => Ok(v),
         Err(e) => {
             let (code, detail) = match e {
@@ -195,8 +195,10 @@ fn lookup_client(
         .cname
         .clone()
         .ok_or_else(|| proto(err::C_PRINCIPAL_UNKNOWN, status::NULL_CLIENT))?;
-    let client = lookup_as_princ(store, &req_cname, status::LOOKING_UP_CLIENT)?
-        .ok_or_else(|| proto(err::C_PRINCIPAL_UNKNOWN, status::CLIENT_NOT_FOUND))?;
+    let client = lookup_as_princ(&req_cname, status::LOOKING_UP_CLIENT, |n| {
+        store.fetch_client(n)
+    })?
+    .ok_or_else(|| proto(err::C_PRINCIPAL_UNKNOWN, status::CLIENT_NOT_FOUND))?;
     *audited = Some(audit_entry(&client, body, &req_cname));
     // MIT: `process_as_req` (kdc/do_as_req.c:681-688)
     let cname = if body.kdc_options.bit(flag_bit::CANONICALIZE) {
@@ -208,7 +210,7 @@ fn lookup_client(
         .sname
         .clone()
         .unwrap_or_else(|| PrincipalName::krbtgt(store.realm()));
-    let server = lookup_as_princ(store, &sname, status::LOOKING_UP_SERVER)?
+    let server = lookup_as_princ(&sname, status::LOOKING_UP_SERVER, |n| store.fetch_name(n))?
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::SERVER_NOT_FOUND))?;
     let local_tgt = get_local_tgt(store, &server)?;
     // MIT: `process_as_req` (do_as_req.c:630-630)

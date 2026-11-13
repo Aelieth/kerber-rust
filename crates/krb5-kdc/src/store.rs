@@ -417,7 +417,31 @@ impl PrincipalStore {
         loaded.post = self.post.take();
         loaded.otp_runtime = self.otp_runtime.take();
         loaded.host = self.host.take();
+        if self.map.folding() {
+            loaded.map.set_fold(Some(&loaded.realm));
+        }
         *self = loaded;
+    }
+
+    /// One-part local client lookups ignore ASCII case; twins match none.
+    pub fn set_client_case_fold(&mut self, on: bool) {
+        let realm = self.realm.clone();
+        self.map.set_fold(on.then_some(realm.as_str()));
+    }
+
+    #[must_use]
+    pub fn client_case_twins(&self) -> Vec<Vec<String>> {
+        self.map.fold_twins()
+    }
+
+    pub(crate) fn fold_client(&self, name: &PrincipalName) -> Option<Principal> {
+        let id = crate::kdb::lookup_principal_id(name, &self.realm)?;
+        let user = id.strip_suffix(&format!("@{}", self.realm))?;
+        if user.contains(['/', '@', '\\']) {
+            return None;
+        }
+        let found = self.map.folded(&user.to_ascii_lowercase())?;
+        self.get(found).cloned()
     }
 
     pub(crate) fn db_path(&self) -> Option<&std::path::Path> {

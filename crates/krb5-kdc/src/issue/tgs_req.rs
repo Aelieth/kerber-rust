@@ -550,7 +550,7 @@ fn tgs_flags_times_policy<'a>(
     } else if attr(&server, KDB_NO_AUTH_DATA_REQUIRED) {
         None
     } else if subject_crealm == store.realm() {
-        store.fetch_name(subject_cname).ok().flatten()
+        store.fetch_client(subject_cname).ok().flatten()
     } else {
         None
     };
@@ -1232,12 +1232,13 @@ fn is_client_db_alias(
     server: &Principal,
     enc_tkt: &EncTicketPart,
 ) -> bool {
-    let id = utf8_realm(&enc_tkt.crealm)
-        .ok()
-        .and_then(|realm| crate::kdb::lookup_principal_id(&enc_tkt.cname, realm));
-    id.is_some_and(|id| {
-        matches!(store.fetch(&id), Ok(Some(e)) if e.realm == server.realm && e.name == server.name)
-    })
+    let entry = match utf8_realm(&enc_tkt.crealm) {
+        Ok(realm) if realm == store.realm() => store.fetch_client(&enc_tkt.cname),
+        Ok(realm) => crate::kdb::lookup_principal_id(&enc_tkt.cname, realm)
+            .map_or(Ok(None), |id| store.fetch(&id)),
+        Err(_) => Ok(None),
+    };
+    matches!(entry, Ok(Some(e)) if e.realm == server.realm && e.name == server.name)
 }
 
 // MIT: `search_sprinc` (do_tgs_req.c:541-581)
