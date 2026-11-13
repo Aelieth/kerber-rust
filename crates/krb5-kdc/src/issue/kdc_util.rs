@@ -12,17 +12,24 @@ use krb5_types::{
 
 use super::as_req::is_anonymous_principal;
 use crate::ad::find_authdata;
-use crate::asn1_text::{APPLICATION, body_failure_text};
+use crate::asn1_text::{APPLICATION, SEQUENCE, UNIVERSAL, body_failure_text};
 use crate::der::take_der;
 use crate::error::Error;
 use crate::kdb::{PrincipalRead, lookup_principal_id};
-use crate::preauth::{asn1_outer_text, bad_pvno, proto, proto_d};
+use crate::preauth::{asn1_outer_text, bad_pvno, proto, proto_d, verify_checksum_text};
 use crate::status;
 use crate::store::{
     KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_FORWARDABLE, KDB_DISALLOW_POSTDATED, KDB_DISALLOW_PROXIABLE,
     KDB_DISALLOW_RENEWABLE, KDB_DISALLOW_SVR, KDB_NO_AUTH_DATA_REQUIRED, KDB_OK_AS_DELEGATE,
-    KDB_OK_TO_AUTH_AS_DELEGATE, KDB_PWCHANGE_SERVICE, KDB_REQUIRES_PWCHANGE, Principal,
+    KDB_OK_TO_AUTH_AS_DELEGATE, KDB_PWCHANGE_SERVICE, KDB_REQUIRES_PWCHANGE, KeyLookup, Principal,
 };
+
+// MIT: `KRB5_KDB_NOENTRY` (lib/krb5/error_tables/kdb5_err.et:38-38)
+pub(crate) const E_KDB_NOENTRY: &str = "No such entry in the database";
+// MIT: `KRB5_BADMSGTYPE` (lib/krb5/error_tables/krb5_err.et:187-187)
+pub(super) const E_BADMSGTYPE: &str = "Invalid message type specified for encoding";
+// MIT: `KRB5_NOPERM_ETYPE` (lib/krb5/error_tables/krb5_err.et:325-325)
+const E_NOPERM_ETYPE: &str = "Encryption type not permitted";
 
 pub(super) struct HeaderTgt {
     pub(super) ap: krb5_types::ApReq,
@@ -98,7 +105,15 @@ pub(super) fn process_tgs_header(
         enc_tkt.key.keytype,
         &store.policy().permitted_list(),
     )
-    .map_err(|_| proto(err::GENERIC, status::PROCESS_TGS))?;
+    .map_err(|e| {
+        let text = match e {
+            krb5_protocol::Error::Asn1(t) => krb5_protocol::etype_list_der(&authenticator)
+                .and_then(|d| asn1_outer_text(&d, UNIVERSAL, SEQUENCE))
+                .map_or(t, str::to_owned),
+            e => e.to_string(),
+        };
+        proto_d(err::GENERIC, status::PROCESS_TGS, text)
+    })?;
     // MIT: `kdc_process_tgs_req` (kdc_util.c:217-229)
     // Armor-only is refused after acceptance, before the checksum.
     let fx = find_authdata(
@@ -133,7 +148,7 @@ pub(super) fn process_tgs_header(
         )
         .map_err(|e| match e {
             krb5_crypto::Error::UnsupportedChecksum(_) | krb5_crypto::Error::BadChecksumSize => {
-                proto(err::GENERIC, status::PROCESS_TGS)
+                proto_d(err::GENERIC, status::PROCESS_TGS, verify_checksum_text(&e))
             }
             _ => proto(err::BAD_INTEGRITY, status::PROCESS_TGS),
         })?;
@@ -245,7 +260,7 @@ pub(crate) fn decrypt_presented_tgt(
                         Err(_) => proto(err::BAD_INTEGRITY, status::PROCESS_TGS),
                     }
                 } else {
-                    proto(err::GENERIC, status::PROCESS_TGS)
+                    proto_d(err::GENERIC, status::PROCESS_TGS, E_NOPERM_ETYPE)
                 }
             }
             Err(e) => e,
@@ -265,23 +280,26 @@ pub(super) fn find_server_key(
     search_enctype: Option<EncryptionType>,
     kvno: u32,
 ) -> Result<(ProtocolKey, u32), Error> {
-    let key = if kvno == 0 {
+    let refused = |e: KeyLookup| proto_d(err::GENERIC, status::PROCESS_TGS, e.message());
+    let k = if kvno == 0 {
         let mut kvnos: Vec<u32> = p.keys.iter().map(|k| k.kvno).collect();
         kvnos.sort_unstable_by(|a, b| b.cmp(a));
         kvnos.dedup();
         kvnos
             .into_iter()
             .find_map(|v| policy.find_enctype(p, search_enctype, v).ok())
+            .ok_or_else(|| {
+                let top = policy.find_enctype(p, search_enctype, 0).err();
+                top.unwrap_or(KeyLookup::NoMatchingKey)
+            })
     } else {
-        policy.find_enctype(p, search_enctype, kvno).ok()
-    };
-    let Some(k) = key else {
-        return Err(proto(err::GENERIC, status::PROCESS_TGS));
-    };
+        policy.find_enctype(p, search_enctype, kvno)
+    }
+    .map_err(refused)?;
     if let Some(want) = search_enctype
         && want != k.etype
     {
-        return Err(proto(err::GENERIC, status::PROCESS_TGS));
+        return Err(refused(KeyLookup::NoPermittedKey));
     }
     Ok((k.key.clone(), k.kvno))
 }

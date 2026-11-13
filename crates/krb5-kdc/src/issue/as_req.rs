@@ -10,9 +10,9 @@ use krb5_types::{
 
 use super::fast_util::{fast_hides_client, wrap_as_fast};
 use super::kdc_util::{
-    attr, enctype_requires_etype_info_2, get_ticket_flags, include_pac_for_reply,
-    kdc_get_ticket_endtime, kdc_get_ticket_renewtime, kdc_req_body_der, ks, select_session_keytype,
-    utf8_realm, validate_as_request,
+    E_BADMSGTYPE, E_KDB_NOENTRY, attr, enctype_requires_etype_info_2, get_ticket_flags,
+    include_pac_for_reply, kdc_get_ticket_endtime, kdc_get_ticket_renewtime, kdc_req_body_der, ks,
+    select_session_keytype, utf8_realm, validate_as_request,
 };
 use super::reply::{
     MintTicket, TicketPac, enc_rep_part, encode_enc_kdc_rep_part, mint_ticket, no_reply,
@@ -84,7 +84,11 @@ pub(super) fn issue_as_from(
         &encoded_fast_body
     };
     if req.0.msg_type != krb5_types::KdcReq::MSG_AS_REQ {
-        return Err(proto(err::GENERIC, status::VALIDATE_MESSAGE_TYPE));
+        return Err(proto_d(
+            err::GENERIC,
+            status::VALIDATE_MESSAGE_TYPE,
+            E_BADMSGTYPE,
+        ));
     }
     let fast = unwrap_fast(store, req, fast_body)?;
     let inner_owned: Option<KdcReqBody> = match fast.as_ref() {
@@ -247,7 +251,7 @@ fn get_local_tgt(store: &dyn PrincipalRead, server: &Principal) -> Result<Princi
     } else {
         store
             .fetch_krbtgt()?
-            .ok_or_else(|| proto(err::GENERIC, status::GET_LOCAL_TGT))?
+            .ok_or_else(|| proto_d(err::GENERIC, status::GET_LOCAL_TGT, E_KDB_NOENTRY))?
     };
     store
         .policy()
@@ -589,7 +593,7 @@ fn finish_process_as_req(
     let krbtgt_key = store
         .policy()
         .first_current_key(&krbtgt_p)
-        .map_err(|_| proto(err::GENERIC, status::GET_LOCAL_TGT))?;
+        .map_err(|e| proto_d(err::GENERIC, status::GET_LOCAL_TGT, e.message()))?;
     let pac_kdc = crate::ad::pac_privsvr_key(
         &server,
         if sname.is_krbtgt_for(store.realm()) {

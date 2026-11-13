@@ -11,9 +11,10 @@ use krb5_types::{
 use super::as_req::{ANONYMOUS_REALM, anonymous_principal_name};
 use super::fast_util::{fast_hides_client, wrap_as_fast};
 use super::kdc_util::{
-    HeaderTgt, attr, check_anon, decrypt_presented_tgt, find_server_key, get_ticket_flags,
-    include_pac_for_reply, kdc_get_ticket_endtime, kdc_get_ticket_renewtime, kdc_req_body_der, ks,
-    process_tgs_header, s4u2self_forwardable, select_session_keytype, utf8_realm,
+    E_BADMSGTYPE, E_KDB_NOENTRY, HeaderTgt, attr, check_anon, decrypt_presented_tgt,
+    find_server_key, get_ticket_flags, include_pac_for_reply, kdc_get_ticket_endtime,
+    kdc_get_ticket_renewtime, kdc_req_body_der, ks, process_tgs_header, s4u2self_forwardable,
+    select_session_keytype, utf8_realm,
 };
 use super::reply::{
     MintTicket, TicketPac, enc_rep_part, encode_enc_kdc_rep_part, mint_ticket, return_enc_padata,
@@ -34,7 +35,8 @@ use crate::preauth::{
 };
 use crate::status;
 use crate::store::{
-    KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_SVR, KDB_NO_AUTH_DATA_REQUIRED, Principal, random_key,
+    KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_SVR, KDB_NO_AUTH_DATA_REQUIRED, KeyLookup, Principal,
+    random_key,
 };
 
 #[derive(Debug)]
@@ -62,7 +64,7 @@ pub(super) fn issue_tgs_from(
         &encoded_body
     };
     if req.0.msg_type != krb5_types::KdcReq::MSG_TGS_REQ {
-        return Err(proto(err::GENERIC, status::UNKNOWN_REASON));
+        return Err(proto_d(err::GENERIC, status::UNKNOWN_REASON, E_BADMSGTYPE));
     }
     let pa_tgs = extract_pa_tgs(req.0.padata.as_deref())
         .ok_or_else(|| proto(err::PADATA_TYPE_NOSUPP, status::PROCESS_TGS))?;
@@ -210,7 +212,7 @@ fn gather_tgs_req_info<'a>(
     let req_realm = utf8_realm(&body.realm)?.to_owned();
     // A foreign request realm is 60, before the server lookup.
     if req_realm != store.realm() {
-        return Err(proto(err::GENERIC, status::GET_LOCAL_TGT));
+        return Err(proto_d(err::GENERIC, status::GET_LOCAL_TGT, E_KDB_NOENTRY));
     }
     let header_pac = crate::ad::get_verified_pac(
         store.policy(),
@@ -303,10 +305,14 @@ fn check_tgs_req<'a>(
         s4u_subject = Some((s4u.user.clone(), s4u.realm.clone()));
     }
     let local_tgt = store.fetch_krbtgt()?;
-    let local_tgt_key = local_tgt
-        .as_ref()
-        .and_then(|t| store.policy().first_current_key(t).ok())
-        .ok_or_else(|| proto(err::GENERIC, status::GET_LOCAL_TGT))?;
+    let local_tgt_key = match local_tgt.as_ref() {
+        Some(t) => store
+            .policy()
+            .first_current_key(t)
+            .map_err(KeyLookup::message),
+        None => Err(E_KDB_NOENTRY),
+    }
+    .map_err(|text| proto_d(err::GENERIC, status::GET_LOCAL_TGT, text))?;
     let stkt = decrypt_2ndtkt(store, req, local_tgt.as_ref())?;
     if body.kdc_options.bit(flag_bit::CNAME_IN_ADDL_TKT) {
         // MIT: `gather_tgs_req_info` (do_tgs_req.c:729-733)
@@ -357,7 +363,7 @@ fn check_tgs_req<'a>(
         let subject = stkt.as_ref().map_or(&enc_tkt, |s| &s.part);
         let tgt = local_tgt
             .as_ref()
-            .ok_or_else(|| proto(err::GENERIC, status::GET_LOCAL_TGT))?;
+            .ok_or_else(|| proto_d(err::GENERIC, status::GET_LOCAL_TGT, E_KDB_NOENTRY))?;
         auth_indicators = get_auth_indicators(store.policy(), subject, tgt, &local_tgt_key.key)?;
     }
     let mut transited = enc_tkt.transited.clone();
@@ -821,11 +827,11 @@ fn tgs_issue_ticket(
     } = t;
     let krbtgt_p = store
         .fetch_krbtgt()?
-        .ok_or_else(|| proto(err::GENERIC, status::GET_LOCAL_TGT))?;
+        .ok_or_else(|| proto_d(err::GENERIC, status::GET_LOCAL_TGT, E_KDB_NOENTRY))?;
     let krbtgt_key = store
         .policy()
         .first_current_key(&krbtgt_p)
-        .map_err(|_| proto(err::GENERIC, status::GET_LOCAL_TGT))?;
+        .map_err(|e| proto_d(err::GENERIC, status::GET_LOCAL_TGT, e.message()))?;
     let include_pac = include_pac_for_reply(
         store,
         &server,
@@ -1103,7 +1109,7 @@ fn decrypt_2ndtkt(
         return Ok(Some(SecondTicket { part, server, pac }));
     }
     let Some(tgt) = local_tgt else {
-        return Err(proto(err::GENERIC, status::GET_LOCAL_TGT));
+        return Err(proto_d(err::GENERIC, status::GET_LOCAL_TGT, E_KDB_NOENTRY));
     };
     let pac = crate::ad::get_verified_pac(store.policy(), &part, &key, &server, Some(tgt))
         .map_err(|e| with_status(e, status::SECOND_TKT_PAC))?;
