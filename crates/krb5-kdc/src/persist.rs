@@ -409,6 +409,7 @@ pub fn read_db_locked(db: &Path) -> Result<Vec<u8>, PersistError> {
 pub fn read_db_and_lockout_locked(
     db: &Path,
 ) -> Result<(Vec<u8>, std::collections::HashMap<String, crate::Lockout>), PersistError> {
+    check_lockout_file(db)?;
     let lock = Arc::new(DbLock::open(db)?);
     let _held = lock.hold(DbLockMode::Shared)?;
     Ok((fs::read(db)?, crate::lockout::lockout_records(db)))
