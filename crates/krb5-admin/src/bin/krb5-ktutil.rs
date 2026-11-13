@@ -315,11 +315,16 @@ fn read_kt(
     let [cmd, path] = argv else {
         return Err(format!("{}: must specify keytab to read", argv[0]).into_bytes());
     };
-    let other = krb5_protocol::read_secret_file(Path::new(path))
+    let failed = |text: String| format!("{cmd}: {text} while reading keytab \"{path}\"");
+    // MIT: `ktutil_read_keytab` (kadmin/ktutil/ktutil_funcs.c:263-331)
+    let file = match krb5_client::kt_resolve(path) {
+        Ok(krb5_client::KeytabName::File(file)) => file,
+        Ok(krb5_client::KeytabName::Memory(_)) => return Ok(Flow::Next),
+        Err(e) => return Err(failed(e.message).into_bytes()),
+    };
+    let other = krb5_protocol::read_secret_file(&file)
         .and_then(|bytes| Keytab::parse(&bytes))
-        .map_err(|e| {
-            format!("{cmd}: {} while reading keytab \"{path}\"", strerror(&e)).into_bytes()
-        })?;
+        .map_err(|e| failed(strerror(&e)).into_bytes())?;
     kt.merge(other);
     Ok(Flow::Next)
 }

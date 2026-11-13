@@ -70,7 +70,7 @@ It keeps its database in MIT's dump format, so a realm can move to it and back.
   and P-521; `PKCS11:` and `PKCS12:` PKINIT identities and revocation lists; master key rollover;
   `kproplog`, `sclient` and `sserver`; loadable plugin modules. [The full list](docs/install.md#not-supported).
 - **Not planned:** SAM-2, IAKERB, kdcproxy (MS-KKDCP), FIPS mode, `KEYRING:` and MSLSA caches, `ksu` and
-  `.k5login`, `kpropd` under inetd, and `gss_wrap_size_limit`.
+  `.k5login`, and `kpropd` under inetd.
 - **Its own client tools are not yet a drop-in** for MIT's: [what differs](docs/install.md#what-make-install-installs).
   Keep `krb5-workstation` if a script depends on one of those differences.
 - **Some behaviour differs from MIT on purpose.** Most of those differences refuse something MIT

@@ -7,7 +7,30 @@ needs. A default build carries the daemon runtime (`daemon`, on by default) and 
 the test fixtures (`test-hooks`, off), so an embedder takes `krb5-kdc` and
 `krb5-admin` with `default-features = false`.
 
-This page is as of v1.2.1.
+This page is as of v1.2.2.
+
+## New in 1.2.2
+
+Additions only; no existing signature changed.
+
+- **Host store** (`krb5_kdc::host`): the `KerberosStore` trait (`load`, and `commit` of a
+  `RealmBatch`), its row types, `HostPaths`, `SealKey`, `RecordError`, `MemoryRealm` (an
+  in-memory host) and `conformance::run` (the checks a host must pass); `open_or_create_host`;
+  `PrincipalStore::open_host`, `change_committing`, `reload_from_host`, `host_full_batch` and
+  `host_seal_key`; `create_password_shared_committing` and `change_password_shared_committing`.
+- **Lockout:** `create_lockout_file`; `PrincipalStore::locked_now` and `lockouts`;
+  `AuditState.lockout` (`LockoutMark::Crossed` or `Locked`).
+- **Client case folding:** `PrincipalStore::set_client_case_fold` and `client_case_twins`;
+  `PrincipalRead::fetch_client`, a provided method that is exact unless the store folds.
+- `GssContext::wrap_size_limit` in `krb5-gss`.
+- The `krb5-s2k` crate: AES `string_to_key` and `string_to_key_iter` with no clock, RNG or
+  std, for wasm32.
+- The `krb5-kadmin` binary (installed as `kadmin`), `krb5_admin::kadmin_main` and
+  `krb5_config::expand_hostname_conf`.
+
+An exhaustive `match` on `krb5_kdc::Error` meets new variants (`Host`, `Record`,
+`HostRecordsWithoutStash`, `StashWithoutHostRealm`, `LockoutMissing`, `LockoutUnreadable`,
+`LockoutForeign`), and an `AuditState` literal needs the new `lockout` field.
 
 ## One store and its locking
 
@@ -38,10 +61,16 @@ MIT's does.
 
 With `persist_paths`, `change()` writes the database file before it returns, so a
 write kadmind acknowledges is on disk, as with MIT's db2. A host that keeps the realm
-in its own database has no seam for that yet: a hook can only queue the host's
-commit, so a crash between kadmind's reply and that commit loses an acknowledged
-write, and policy writes and the KDC's lockout counters call no hook. Use
-`persist_paths` until such a seam exists.
+in its own database opens it with `open_or_create_host` (or `PrincipalStore::open_host`):
+each change, policy writes included, is committed through its `KerberosStore::commit`
+before it returns, so kadmind acknowledges only what the host has stored, and a refused
+or failed commit leaves the store as it was. kadmind reports `Refused` as
+`KRB5_KDB_CONSTRAINT_VIOLATION`, `Failed` as `KRB5_KDB_ACCESS_ERROR` and `NotReady` as
+`KRB5_KDB_DBNOTINITED`. The commit runs under the store's write guard, so every KDC
+lookup waits while it does: a host's `commit` and `load` must return within a few
+seconds even when its database is unreachable, with `Failed` or `NotReady`, rather than
+wait out a long connection timeout. The lockout counters stay out of the host, in the
+side file at `HostPaths.lockout`.
 
 ## Bootstrap
 
@@ -114,7 +143,9 @@ built-in `acl` and `self` modules answer each verb alongside it. A module return
 `Decision::Allow`, `Abstain` or `Deny`; `Deny` refuses at once, and the
 allowing module supplies the restrictions (`docs/parity/a4-kadmin.md`). A target
 whose name isn't UTF-8 is decided by the built-in `acl` and `self` modules
-alone, by its bytes; other modules aren't asked.
+alone, by its bytes; other modules aren't asked. kadmind may ask a module under the
+store's read or write guard, since it looks the target up first, as MIT resolves
+aliases first: a module must not call back into the store, and should return quickly.
 
 ## OTP and require-MFA
 
@@ -172,7 +203,7 @@ embedder's workspace must carry the same patch, from this repository at the tag 
 
 ```toml
 [patch.crates-io]
-rasn = { git = "https://github.com/Aelieth/kerber-rust", tag = "v1.2.1" }
+rasn = { git = "https://github.com/Aelieth/kerber-rust", tag = "v1.2.2" }
 ```
 
 Without it, `krb5-types` fails to compile on `rasn::KERBER_RUST_NEEDS_THIS_PATCH`.
