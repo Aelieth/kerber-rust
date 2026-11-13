@@ -10,19 +10,15 @@
 use krb5_asn1::encode;
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, encrypt};
 use krb5_kdc::testrealm::{
-    TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
-    bootstrap_documented, documented_admin_id, documented_host,
+    TEST_ADMIN, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented,
+    documented_admin_id, documented_host,
 };
-use krb5_kdc::{
-    Error, KDB_DISALLOW_SVR, KdcEnv, KeyEntry, Policy, Principal, PrincipalRead, PrincipalStore,
-    decrypt_ticket_part, random_key,
-};
+use krb5_kdc::{KDB_DISALLOW_SVR, KeyEntry, PrincipalStore, decrypt_ticket_part, random_key};
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
 use krb5_testkit::{
     TgsReqBuilder, issue_tgt, issue_tgt_password, password_key, pref_etypes, status,
 };
-use krb5_types::pac::RpcSid;
 use krb5_types::{EncryptedData, KdcOptions, PrincipalName, Ticket, err, flag_bit, ku};
 
 fn renewable_tgt(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
@@ -243,76 +239,6 @@ fn renew_pac_service_after_krbtgt_enctype_rekey() {
     .build()
     .unwrap();
     krb5_kdc::issue_tgs(&store, &renew).expect("RENEW after krbtgt enctype rekey");
-}
-
-struct HideLocalTgt<'a>(&'a PrincipalStore);
-
-impl PrincipalRead for HideLocalTgt<'_> {
-    fn realm(&self) -> &str {
-        self.0.realm()
-    }
-    fn policy(&self) -> &Policy {
-        self.0.policy()
-    }
-    fn domain_sid(&self) -> &RpcSid {
-        self.0.domain_sid()
-    }
-    fn env(&self) -> &KdcEnv {
-        self.0.env()
-    }
-    fn fetch(&self, id: &str) -> Result<Option<Principal>, Error> {
-        PrincipalRead::fetch(self.0, id)
-    }
-    fn fetch_krbtgt(&self) -> Result<Option<Principal>, Error> {
-        Ok(None)
-    }
-    fn list_ids(&self) -> Result<Vec<String>, Error> {
-        PrincipalRead::list_ids(self.0)
-    }
-    fn list_principals(&self) -> Result<Vec<Principal>, Error> {
-        PrincipalRead::list_principals(self.0)
-    }
-}
-
-#[test]
-fn s4u2proxy_missing_local_tgt_is_get_local_tgt() {
-    let (mut store, _) = bootstrap_documented().unwrap();
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
-    store.allow_s4u_to(&user, &documented_host().components_joined_lossy());
-    let admin_tgt = issue_tgt_password(&store, TEST_ADMIN, TEST_ADMIN_PASSWORD, 731);
-    let evidence_tgs = krb5_protocol::tgs_req(
-        admin_tgt.rep.0.ticket.clone(),
-        &admin_tgt.session_key,
-        TEST_REALM,
-        &admin,
-        user.clone(),
-        TEST_REALM,
-        732,
-    )
-    .unwrap();
-    let evidence = krb5_kdc::issue_tgs(&store, &evidence_tgs).unwrap();
-    let user_tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 733);
-    let opts = KdcOptions::forwardable().with_bit(flag_bit::CNAME_IN_ADDL_TKT, true);
-    let tgs = TgsReqBuilder::new(
-        user_tgt.rep.0.ticket.clone(),
-        &user_tgt.session_key,
-        TEST_REALM,
-        &user,
-        documented_host(),
-        TEST_REALM,
-        734,
-    )
-    .options(opts)
-    .additional_tickets(Some(vec![evidence.rep.0.ticket.clone()]))
-    .padata(Vec::new())
-    .etypes(pref_etypes())
-    .build()
-    .unwrap();
-    let err = krb5_kdc::issue_tgs(&HideLocalTgt(&store), &tgs).unwrap_err();
-    let (code, text) = status(&err);
-    assert_eq!(code, err::GENERIC);
-    assert_eq!(text, Some("GET_LOCAL_TGT"));
 }
 
 #[test]

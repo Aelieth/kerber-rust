@@ -21,13 +21,39 @@ use crate::status;
 use crate::store::{
     KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_FORWARDABLE, KDB_DISALLOW_POSTDATED, KDB_DISALLOW_PROXIABLE,
     KDB_DISALLOW_RENEWABLE, KDB_DISALLOW_SVR, KDB_NO_AUTH_DATA_REQUIRED, KDB_OK_AS_DELEGATE,
-    KDB_OK_TO_AUTH_AS_DELEGATE, KDB_PWCHANGE_SERVICE, KDB_REQUIRES_PWCHANGE, KeyLookup, Principal,
+    KDB_OK_TO_AUTH_AS_DELEGATE, KDB_PWCHANGE_SERVICE, KDB_REQUIRES_PWCHANGE, KeyEntry, KeyLookup,
+    Principal,
 };
 
 // MIT: `KRB5_KDB_NOENTRY` (lib/krb5/error_tables/kdb5_err.et:38-38)
-pub(crate) const E_KDB_NOENTRY: &str = "No such entry in the database";
+pub(super) const E_KDB_NOENTRY: &str = "No such entry in the database";
 // MIT: `KRB5_BADMSGTYPE` (lib/krb5/error_tables/krb5_err.et:187-187)
 pub(super) const E_BADMSGTYPE: &str = "Invalid message type specified for encoding";
+
+pub(super) struct LocalTgt {
+    pub(super) entry: Principal,
+    pub(super) key: KeyEntry,
+}
+
+// MIT: `get_local_tgt` (kdc/kdc_util.c:486-520)
+pub(super) fn get_local_tgt(
+    store: &dyn PrincipalRead,
+    candidate: &Principal,
+) -> Result<LocalTgt, Error> {
+    let entry = if candidate.name.is_krbtgt_for(store.realm()) && candidate.realm == store.realm() {
+        candidate.clone()
+    } else {
+        store
+            .fetch_krbtgt()?
+            .ok_or_else(|| proto_d(err::GENERIC, status::GET_LOCAL_TGT, E_KDB_NOENTRY))?
+    };
+    let key = store
+        .policy()
+        .first_current_key(&entry)
+        .map_err(|e| proto_d(err::GENERIC, status::GET_LOCAL_TGT, e.message()))?
+        .clone();
+    Ok(LocalTgt { entry, key })
+}
 // MIT: `KRB5_NOPERM_ETYPE` (lib/krb5/error_tables/krb5_err.et:325-325)
 const E_NOPERM_ETYPE: &str = "Encryption type not permitted";
 

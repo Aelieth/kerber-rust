@@ -10,7 +10,7 @@ use krb5_types::{
 
 use super::fast_util::{fast_hides_client, wrap_as_fast};
 use super::kdc_util::{
-    E_BADMSGTYPE, E_KDB_NOENTRY, attr, enctype_requires_etype_info_2, get_ticket_flags,
+    E_BADMSGTYPE, LocalTgt, attr, enctype_requires_etype_info_2, get_local_tgt, get_ticket_flags,
     include_pac_for_reply, kdc_get_ticket_endtime, kdc_get_ticket_renewtime, kdc_req_body_der, ks,
     select_session_keytype, utf8_realm, validate_as_request,
 };
@@ -113,7 +113,7 @@ struct AsLookup {
     work_padata: Option<Vec<PaData>>,
     req_cname: PrincipalName,
     ckey: Option<KeyEntry>,
-    local_tgt: Principal,
+    local_tgt: LocalTgt,
 }
 
 struct AsPreauth {
@@ -131,7 +131,7 @@ struct AsPreauth {
     reply_key_replaced: bool,
     auth_indicators: Vec<String>,
     anonymous_as: bool,
-    local_tgt: Principal,
+    local_tgt: LocalTgt,
 }
 
 // MIT: `finish_process_as_req` (kdc/do_as_req.c:340-365)
@@ -241,23 +241,6 @@ fn lookup_client(
         ckey,
         local_tgt,
     })
-}
-
-// MIT: `process_as_req` (kdc/do_as_req.c:618-624)
-// MIT: `get_local_tgt` (kdc/kdc_util.c:486-520)
-fn get_local_tgt(store: &dyn PrincipalRead, server: &Principal) -> Result<Principal, Error> {
-    let tgt = if server.name.is_krbtgt_for(store.realm()) && server.realm == store.realm() {
-        server.clone()
-    } else {
-        store
-            .fetch_krbtgt()?
-            .ok_or_else(|| proto_d(err::GENERIC, status::GET_LOCAL_TGT, E_KDB_NOENTRY))?
-    };
-    store
-        .policy()
-        .first_current_key(&tgt)
-        .map_err(|e| proto_d(err::GENERIC, status::GET_LOCAL_TGT, e.message()))?;
-    Ok(tgt)
 }
 
 // MIT: `finish_preauth` (do_as_req.c:434-466)
@@ -531,7 +514,10 @@ fn finish_process_as_req(
         reply_key_replaced,
         auth_indicators,
         anonymous_as,
-        local_tgt: krbtgt_p,
+        local_tgt: LocalTgt {
+            entry: krbtgt_p,
+            key: krbtgt_key,
+        },
     } = pre;
     let skey = store
         .policy()
@@ -590,18 +576,6 @@ fn finish_process_as_req(
         true,
         flags.bit(flag_bit::ANONYMOUS),
     );
-    let krbtgt_key = store
-        .policy()
-        .first_current_key(&krbtgt_p)
-        .map_err(|e| proto_d(err::GENERIC, status::GET_LOCAL_TGT, e.message()))?;
-    let pac_kdc = crate::ad::pac_privsvr_key(
-        &server,
-        if sname.is_krbtgt_for(store.realm()) {
-            &skey.key
-        } else {
-            &krbtgt_key.key
-        },
-    )?;
     // MIT: `process_as_req` (do_as_req.c:660-666)
     // MIT: `finish_process_as_req` (do_as_req.c:243-243)
     // Canonicalized krbtgt uses the database name, for a short-realm alias.
@@ -643,7 +617,12 @@ fn finish_process_as_req(
         authtime: &now,
         endtime: &end,
         flags: flags.clone(),
-        kdc_key: &pac_kdc,
+        server: &server,
+        privsvr_tgt_key: if sname.is_krbtgt_for(store.realm()) {
+            &skey.key
+        } else {
+            &krbtgt_key.key
+        },
         transited: TransitedEncoding::empty(),
         renew_till: ticket_renew_till.clone(),
         store,

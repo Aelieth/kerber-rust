@@ -94,6 +94,7 @@ pub enum PacError {
     Integrity,
     MissingBuffer,
     Malformed,
+    Range,
 }
 
 impl std::fmt::Display for PacError {
@@ -103,6 +104,7 @@ impl std::fmt::Display for PacError {
             Self::Integrity => write!(f, "PAC integrity check failed"),
             Self::MissingBuffer => write!(f, "PAC missing required buffer"),
             Self::Malformed => write!(f, "PAC malformed"),
+            Self::Range => write!(f, "PAC count out of range"),
         }
     }
 }
@@ -417,8 +419,9 @@ pub fn parse_delegation_info(data: &[u8]) -> Result<S4uDelegationInfo, PacError>
     skip_u32(data, &mut i)?;
     let proxy_target = dec_wchar(data, &mut i)?;
     let n = read_u32(data, &mut i)? as usize;
+    // MIT: `ndr_dec_delegation_info` (kdc/ndr.c:197-201)
     if n > data.len() / 8 {
-        return Err(PacError::Malformed);
+        return Err(PacError::Range);
     }
     i = i.checked_add(8 * n).ok_or(PacError::Truncated)?;
     let mut transited_services = Vec::with_capacity(n);
@@ -462,7 +465,12 @@ fn enc_wchar(utf8: &str) -> Vec<u8> {
 fn dec_wchar(data: &[u8], i: &mut usize) -> Result<String, PacError> {
     let _max = read_u32(data, i)?;
     let _off = read_u32(data, i)?;
-    let actual = read_u32(data, i)? as usize;
+    let actual = read_u32(data, i)?;
+    // MIT: `dec_wchar_pointer` (kdc/ndr.c:76-78)
+    if actual > u32::MAX / 2 {
+        return Err(PacError::Range);
+    }
+    let actual = actual as usize;
     let nbytes = actual.checked_mul(2).ok_or(PacError::Truncated)?;
     let end = i.checked_add(nbytes).ok_or(PacError::Truncated)?;
     if end > data.len() {

@@ -16,17 +16,16 @@ use krb5_types::{
     EncryptionKey, PaData, PrincipalName, Ticket, err, ku, pa,
 };
 
-use crate::asn1_text::{SEQUENCE, UNIVERSAL};
+use crate::asn1_text::{ASN1_PARSE_ERROR, SEQUENCE, UNIVERSAL, asn1_text_code};
 use crate::error::Error;
-use crate::issue::E_KDB_NOENTRY;
 use crate::kdb::PrincipalRead;
 use crate::plugins::authdata_modules;
 use crate::preauth::{
-    E_BAD_ENCTYPE, E_BAD_MSIZE, E_EINVAL, E_ENOENT, asn1_refusal, find_pa, pac_parse_text, proto,
-    proto_d, verify_checksum_text,
+    E_BAD_ENCTYPE, E_BAD_MSIZE, E_EINVAL, E_ENOENT, E_ERANGE, asn1_refusal, find_pa,
+    pac_parse_text, proto, proto_d, verify_checksum_text,
 };
 use crate::status;
-use crate::store::Principal;
+use crate::store::{KeyEntry, Principal};
 use krb5_protocol::trace::ERROR_TABLE_BASE_KRB5;
 
 pub fn wrap_win2k_pac(pac_bytes: &[u8]) -> Result<krb5_types::AuthorizationData, Error> {
@@ -426,13 +425,8 @@ pub fn verify_pac_signatures(
     enc_tkt_der: Option<&[u8]>,
     is_service_tkt: bool,
 ) -> Result<(), Error> {
-    let pac = krb5_types::pac::Pac::parse(pac_bytes).map_err(|e| {
-        proto_d(
-            err::BAD_INTEGRITY,
-            status::HEADER_PAC,
-            format!("PAC parse: {e}"),
-        )
-    })?;
+    let pac = krb5_types::pac::Pac::parse(pac_bytes)
+        .map_err(|e| proto_d(err::GENERIC, status::HEADER_PAC, pac_parse_text(&e)))?;
     if let (Some(kdc), Some(der), true) = (kdc, enc_tkt_der, is_service_tkt) {
         let buf = pac.ticket_checksum().map_err(|e| map_pac_err(&e))?;
         verify_pac_sig(kdc, der, buf, PAC_TICKET_CHECKSUM)?;
@@ -447,6 +441,7 @@ fn map_pac_err(e: &krb5_types::pac::PacError) -> Error {
         krb5_types::pac::PacError::MissingBuffer => E_ENOENT,
         krb5_types::pac::PacError::Truncated => E_BAD_MSIZE,
         krb5_types::pac::PacError::Malformed => E_EINVAL,
+        krb5_types::pac::PacError::Range => E_ERANGE,
     };
     proto_d(err::GENERIC, status::HEADER_PAC, text)
 }
@@ -542,7 +537,8 @@ pub(crate) fn get_verified_pac(
     part: &EncTicketPart,
     ticket_key: &ProtocolKey,
     header_server: &Principal,
-    local_tgt: Option<&Principal>,
+    tgt: &Principal,
+    tgt_key: &KeyEntry,
 ) -> Result<Option<Vec<u8>>, Error> {
     let Some(pac) = pac_from_ticket_part(part) else {
         return Ok(None);
@@ -552,22 +548,13 @@ pub(crate) fn get_verified_pac(
             .map_err(wire_unsupported_pac_cksum)?;
         return Ok(Some(pac));
     }
-    let Some(tgt) = local_tgt else {
-        return Err(proto_d(err::GENERIC, status::HEADER_PAC, E_KDB_NOENTRY));
-    };
-    let cur = policy
-        .first_current_key(tgt)
-        .map_err(|e| proto_d(err::GENERIC, status::HEADER_PAC, e.message()))?;
     let der = ticket_checksum_der(part)?;
-    let first = try_verify_pac(&pac, ticket_key, header_server, &cur.key, &der);
+    let first = try_verify_pac(&pac, ticket_key, header_server, &tgt_key.key, &der);
     if !pac_verify_retryable(&first) {
         first?;
         return Ok(Some(pac));
     }
-    let mut kvno = tgt
-        .first_current_key()
-        .map_or(0, |k| k.kvno)
-        .saturating_sub(1);
+    let mut kvno = tgt_key.kvno.saturating_sub(1);
     let mut tries = 2u32;
     while tries > 0 && kvno > 0 {
         let Some(old) = policy.find_enctype(tgt, None, kvno).ok().or_else(|| {
@@ -634,16 +621,32 @@ pub(crate) fn pac_privsvr_key(
     else {
         return Ok(tgt_key.clone());
     };
+    // MIT: `krb5_string_to_enctype` (lib/crypto/krb/enctype_util.c:88-113)
     // MIT: `pac_privsvr_key` (kdc_util.c:545-549)
-    let et = EncryptionType::from_mit_name(val).map_err(|_| {
-        let text = format!("Invalid pac_privsvr_enctype value {val}");
-        proto_d(err::GENERIC, status::HEADER_PAC, text)
-    })?;
+    let et = Some(val.as_str())
+        .filter(|v| v.trim() == *v && v.parse::<i32>().is_err())
+        .and_then(|v| EncryptionType::from_mit_name(v).ok())
+        .ok_or_else(|| {
+            let text = format!("{PRIVSVR_BAD_VALUE}{val}");
+            proto_d(err::GENERIC, status::HEADER_PAC, text)
+        })?;
     if tgt_key.etype() == et {
         return Ok(tgt_key.clone());
     }
+    // MIT: `krb5_c_derive_prfplus` (lib/crypto/krb/cf2.c:94-95)
     derive_prfplus_enctype(tgt_key, b"pac_privsvr", et)
-        .map_err(|_| proto(err::GENERIC, status::HEADER_PAC))
+        .map_err(|_| proto_d(err::ETYPE_NOSUPP, status::HEADER_PAC, E_BAD_ENCTYPE))
+}
+
+const PRIVSVR_BAD_VALUE: &str = "Invalid pac_privsvr_enctype value ";
+
+// MIT: `handle_pac` (kdc_authdata.c:559-561)
+pub(crate) fn issue_privsvr_key(
+    server: &Principal,
+    tgt_key: &ProtocolKey,
+) -> Result<ProtocolKey, Error> {
+    pac_privsvr_key(server, tgt_key)
+        .map_err(|e| with_status(wire_unsupported_pac_cksum(e), status::HANDLE_AUTHDATA))
 }
 
 // MIT: `check_normal_tgs_pac` (tgs_policy.c:601-624)
@@ -821,17 +824,25 @@ fn process_s4u_x509_user(
         return Err(proto(err::MODIFIED, status::INVALID_S4U2SELF_CHECKSUM));
     }
     let usage = KeyUsage::new(ku::PA_S4U_X509_USER_REQUEST)?;
-    let mut ok = false;
-    if let Some(scratch) = userid_der_from_pa(raw) {
-        ok = verify_checksum_keyed(
-            &key,
-            usage,
-            scratch,
-            req.cksum.cksumtype,
-            req.cksum.checksum.as_ref(),
+    // MIT: `verify_s4u_x509_user_checksum` (kdc_util.c:1369-1381)
+    let scratch = userid_der_from_pa(raw).ok_or_else(|| {
+        proto_d(
+            err::GENERIC,
+            status::INVALID_S4U2SELF_CHECKSUM,
+            ASN1_PARSE_ERROR,
         )
-        .is_ok();
-    }
+    })?;
+    let ok = match verify_checksum_keyed(
+        &key,
+        usage,
+        scratch,
+        req.cksum.cksumtype,
+        req.cksum.checksum.as_ref(),
+    ) {
+        Ok(()) => true,
+        Err(krb5_crypto::Error::Integrity) => false,
+        Err(e) => return Err(map_s4u_cksum(&e)),
+    };
     if !ok {
         let data = encode(&req.user_id)?;
         verify_checksum_keyed(
@@ -1246,8 +1257,10 @@ fn delegation_info_for(
         None => None,
     };
     let mut di = match found {
-        Some(buf) => krb5_types::pac::parse_delegation_info(buf)
-            .map_err(|_| handle_authdata_error(E_EINVAL))?,
+        Some(buf) => krb5_types::pac::parse_delegation_info(buf).map_err(|e| {
+            let range = e == krb5_types::pac::PacError::Range;
+            handle_authdata_error(if range { E_ERANGE } else { E_EINVAL })
+        })?,
         None => krb5_types::pac::S4uDelegationInfo {
             proxy_target: String::new(),
             transited_services: Vec::new(),
@@ -1330,8 +1343,9 @@ pub(crate) fn authdata_failed(kind: &str, e: Error) -> Error {
             Error::Protocol {
                 code,
                 text: Some(t),
+                detail,
                 ..
-            } if t == status::HANDLE_AUTHDATA => (ERROR_TABLE_BASE_KRB5 + i64::from(*code), e),
+            } if t == status::HANDLE_AUTHDATA => (authdata_code(*code, detail.as_deref()), e),
             _ => return e,
         },
     };
@@ -1340,6 +1354,20 @@ pub(crate) fn authdata_failed(kind: &str, e: Error) -> Error {
         &format!("{kind} : handle_authdata ({code})"),
     );
     e
+}
+
+// MIT: `tgs_issue_ticket` (kdc/do_tgs_req.c:1044-1048)
+// MIT: `finish_process_as_req` (kdc/do_as_req.c:277-281)
+fn authdata_code(code: i32, detail: Option<&str>) -> i64 {
+    match detail {
+        Some(E_EINVAL) => 22,
+        Some(E_ENOENT) => 2,
+        Some(E_ERANGE) => 34,
+        Some(t) if t.starts_with(PRIVSVR_BAD_VALUE) => 22,
+        Some(E_BAD_ENCTYPE) => ERROR_TABLE_BASE_KRB5 + i64::from(err::BAD_ENCTYPE),
+        Some(t) => asn1_text_code(t).map_or(ERROR_TABLE_BASE_KRB5 + i64::from(code), i64::from),
+        None => ERROR_TABLE_BASE_KRB5 + i64::from(code),
+    }
 }
 
 fn map_ad_fail(e: Error) -> Error {

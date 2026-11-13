@@ -18,6 +18,6 @@ pub(crate) use dispatch::KdcDispatch;
 #[cfg(test)]
 pub(crate) use dispatch::ThreadSlots;
 pub use dispatch::{handle_request, handle_request_from};
-pub(crate) use kdc_util::{E_KDB_NOENTRY, decrypt_presented_tgt};
+pub(crate) use kdc_util::decrypt_presented_tgt;
 pub(crate) use reply::kdc_error_bytes;
 pub use tgs_req::{IssuedTgs, issue_tgs, tgs_header_is_crossrealm};

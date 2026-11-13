@@ -197,7 +197,8 @@ pub(super) struct MintTicket<'a> {
     pub authtime: &'a KerberosTime,
     pub endtime: &'a KerberosTime,
     pub flags: TicketFlags,
-    pub kdc_key: &'a ProtocolKey,
+    pub server: &'a Principal,
+    pub privsvr_tgt_key: &'a ProtocolKey,
     pub transited: TransitedEncoding,
     pub renew_till: Option<KerberosTime>,
     pub store: &'a dyn PrincipalRead,
@@ -236,7 +237,8 @@ pub(super) fn mint_ticket(p: MintTicket<'_>) -> Result<Ticket, Error> {
         authtime,
         endtime,
         flags,
-        kdc_key,
+        server,
+        privsvr_tgt_key,
         transited,
         renew_till,
         store,
@@ -276,6 +278,8 @@ pub(super) fn mint_ticket(p: MintTicket<'_>) -> Result<Ticket, Error> {
         .map_err(|e| authdata_failed(kind, e))?;
     }
     if let Some(pac) = pac {
+        let kdc_key = crate::ad::issue_privsvr_key(server, privsvr_tgt_key)
+            .map_err(|e| authdata_failed(kind, e))?;
         // MIT: `krb5_kdc_sign_ticket` (pac_sign.c:389-398)
         let placeholder = wrap_win2k_pac(&[0])?;
         let mut checksum_ad = extra.clone();
@@ -284,7 +288,7 @@ pub(super) fn mint_ticket(p: MintTicket<'_>) -> Result<Ticket, Error> {
         let checksum_der = encode(&part)?;
         let ticket = crate::ad::PacTicket {
             server: service_key,
-            kdc: kdc_key,
+            kdc: &kdc_key,
             enc_tkt_der: &checksum_der,
             is_service_tkt: crate::ad::should_have_ticket_signature(sname),
         };
