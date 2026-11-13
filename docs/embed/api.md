@@ -61,16 +61,51 @@ MIT's does.
 
 With `persist_paths`, `change()` writes the database file before it returns, so a
 write kadmind acknowledges is on disk, as with MIT's db2. A host that keeps the realm
-in its own database opens it with `open_or_create_host` (or `PrincipalStore::open_host`):
-each change, policy writes included, is committed through its `KerberosStore::commit`
-before it returns, so kadmind acknowledges only what the host has stored, and a refused
-or failed commit leaves the store as it was. kadmind reports `Refused` as
-`KRB5_KDB_CONSTRAINT_VIOLATION`, `Failed` as `KRB5_KDB_ACCESS_ERROR` and `NotReady` as
-`KRB5_KDB_DBNOTINITED`. The commit runs under the store's write guard, so every KDC
-lookup waits while it does: a host's `commit` and `load` must return within a few
-seconds even when its database is unreachable, with `Failed` or `NotReady`, rather than
-wait out a long connection timeout. The lockout counters stay out of the host, in the
-side file at `HostPaths.lockout`.
+in its own database uses host mode, below.
+
+## Host mode
+
+A host implements `host::KerberosStore` (`load`, and `commit` of a `RealmBatch`) and
+opens the realm with `open_or_create_host`. The stash and the lockout file come from
+`HostPaths`; kdc.conf's `database_name` and `key_stash_file` are not used.
+
+- **First boot** (no rows in the host, no stash): the realm is created, the stash
+  written and the lockout file created, then every row is committed. If that commit
+  fails, `open_or_create_host` removes only the stash it just wrote. **A later boot**
+  requires the lockout file, loads the rows and opens each record's seal with the
+  stash's key; principals the bootstrap adds are committed.
+- **A migrated realm:** `load_dump_with_stash`, commit `host_full_batch()`,
+  `create_lockout_file` (before or after the commit), then `open_or_create_host`, with
+  that stash at `HostPaths.stash`.
+- **`create_lockout_file`** is an exclusive create at 0600 that never truncates. An
+  empty file is valid, with counts from zero; an unreadable or foreign one is refused.
+- **Boot errors.** `HostRecordsWithoutStash`, rows but no stash: restore the stash
+  that sealed them. `StashWithoutHostRealm`, a stash but an empty host: restore the
+  host's database, or import the dump again beside the stash. `LockoutMissing`,
+  `LockoutUnreadable`, `LockoutForeign`, a later boot whose file is missing, unreadable
+  or another file's: restore it, or let `create_lockout_file` make an empty one.
+  `Host(..)` is `load`'s or `commit`'s own error. `Record(..)` is a row that won't
+  open: the wrong key, a swapped name or a tampered body.
+- **Changes:** `change()` commits each change's rows, policies included, before it
+  returns; a refused or failed commit leaves the store as it was, and kadmind reports
+  `Refused`, `Failed`, `NotReady` as `KRB5_KDB_CONSTRAINT_VIOLATION`,
+  `KRB5_KDB_ACCESS_ERROR`, `KRB5_KDB_DBNOTINITED`. `change_committing` and the two
+  `_committing` password helpers replace that commit with the caller's closure (run
+  even for an empty batch), only to commit the host's own rows in the same transaction.
+  The first password change under a history policy commits `kadmin/history` through
+  `commit` partway through the change, ahead of any closure, as MIT's `create_hist`
+  writes it first.
+- **Fail fast:** the commit runs under the store's write guard, so KDC lookups wait on
+  it: `commit` and `load` must return within seconds when the database is unreachable,
+  with `Failed` or `NotReady`. Lockout counters stay in the side file, never the host
+  (power cuts: `security.md`'s lockout row).
+- **After `Failed` or `NotReady`** the store reloads from the host by itself, at once,
+  or at the start of the next change while the host is down. Call `reload_from_host`
+  only when the host's rows change outside the store (a restore, the host's own import)
+  and lookups must see them before the next write.
+- **Audit:** `AuditState.lockout` is set on AS requests only: `Crossed` on the failure
+  that reaches the limit, `Locked` on a refusal while locked.
+- Run `host::conformance::run` in the host's tests.
 
 ## Bootstrap
 
@@ -102,7 +137,9 @@ reuses that master and kvno. A database with no lock file is refused, as an open
 Error>` does that whole open-or-create — a present database is opened, a stash with no
 database resumes its master and kvno, else a new random master — then
 `bootstrap_realm_into` and `create_database`. An embedder gets the crash-safe
-resume without copying the example's lines; `examples/embed-realm` calls it.
+resume without copying the example's lines; `examples/embed-realm` calls it. In host
+mode, `open_or_create_host` takes the place of `open_or_create` and `create_database`,
+and a stash with no realm is refused rather than resumed (above).
 
 ## Config by `ProfileSet`
 
@@ -247,4 +284,6 @@ The KDC loop and `Kadmind::serve` run on the thread that calls them; the crates
 are synchronous and start no runtime of their own. A tokio embedder runs each on
 a thread of its own and calls `block_on` only from such a loop thread, never from
 a runtime worker, which it would block. No store or plugin re-entry: a plugin or a
-kadm5 hook must not take the store's write guard or call back into the store.
+kadm5 hook must not take the store's write guard or call back into the store. A
+host's `commit` and `load` run on the thread that calls the open, `change()` or
+`Kadmind::serve`, so a tokio host makes those calls off a runtime worker too.
