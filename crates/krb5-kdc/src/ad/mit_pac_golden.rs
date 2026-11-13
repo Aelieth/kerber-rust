@@ -171,7 +171,13 @@ fn ours(
         enc_tkt_der: &der,
         is_service_tkt: should_have_ticket_signature(sname),
     };
-    mit_ticket_pac(req, &mit.cname, mit.authtime.unix_seconds(), &ticket).unwrap()
+    mit_ticket_pac(
+        req,
+        &mit.cname,
+        mit.authtime.unix_seconds(),
+        &PacSigner::of(&ticket),
+    )
+    .unwrap()
 }
 
 fn kinds(pac: &[u8]) -> Vec<u32> {

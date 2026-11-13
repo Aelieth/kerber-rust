@@ -48,6 +48,41 @@ pub struct PacTicket<'a> {
     pub is_service_tkt: bool,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum KdcKey<'a> {
+    Ready(&'a ProtocolKey),
+    Privsvr(&'a Principal, &'a ProtocolKey),
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct PacSigner<'a> {
+    pub(crate) server: &'a ProtocolKey,
+    pub(crate) kdc: KdcKey<'a>,
+    pub(crate) enc_tkt_der: &'a [u8],
+    pub(crate) is_service_tkt: bool,
+}
+
+impl<'a> PacSigner<'a> {
+    fn of(t: &PacTicket<'a>) -> Self {
+        Self {
+            server: t.server,
+            kdc: KdcKey::Ready(t.kdc),
+            enc_tkt_der: t.enc_tkt_der,
+            is_service_tkt: t.is_service_tkt,
+        }
+    }
+
+    // MIT: `handle_pac` (kdc_authdata.c:559-561)
+    fn kdc_key(&self) -> Result<std::borrow::Cow<'a, ProtocolKey>, Error> {
+        match self.kdc {
+            KdcKey::Ready(k) => Ok(std::borrow::Cow::Borrowed(k)),
+            KdcKey::Privsvr(server, tgt_key) => {
+                issue_privsvr_key(server, tgt_key).map(std::borrow::Cow::Owned)
+            }
+        }
+    }
+}
+
 fn is_pac_signature(kind: u32) -> bool {
     matches!(
         kind,
@@ -68,7 +103,7 @@ pub fn sign_pac(
 pub(crate) fn sign_reply_pac_s4u(
     cname: &PrincipalName,
     authtime: u32,
-    ticket: &PacTicket<'_>,
+    signer: &PacSigner<'_>,
     identity: &krb5_types::pac::PacIdentity,
     logon_override: Option<&[u8]>,
     subject_pac: Option<&[u8]>,
@@ -77,7 +112,7 @@ pub(crate) fn sign_reply_pac_s4u(
     sign_reply_pac_inner(
         cname,
         authtime,
-        ticket,
+        signer,
         identity,
         logon_override,
         subject_pac,
@@ -96,7 +131,7 @@ pub fn sign_reply_pac(
     sign_reply_pac_inner(
         cname,
         authtime,
-        ticket,
+        &PacSigner::of(ticket),
         identity,
         logon_override,
         subject_pac,
@@ -109,22 +144,20 @@ pub fn sign_reply_pac(
 fn sign_reply_pac_inner(
     cname: &PrincipalName,
     authtime: u32,
-    ticket: &PacTicket<'_>,
+    signer: &PacSigner<'_>,
     identity: &krb5_types::pac::PacIdentity,
     logon_override: Option<&[u8]>,
     subject_pac: Option<&[u8]>,
     s4u_client_info: Option<&str>,
 ) -> Result<Vec<u8>, Error> {
-    let PacTicket {
+    let PacSigner {
         server,
-        kdc,
         enc_tkt_der,
         is_service_tkt,
-    } = *ticket;
+        ..
+    } = *signer;
     let server_type = server.etype().checksum_type();
-    let kdc_type = kdc.etype().checksum_type();
     let server_zeros = vec![0u8; server.etype().hmac_output_len()];
-    let kdc_zeros = vec![0u8; kdc.etype().hmac_output_len()];
     let mut pac = if let Some(raw) = subject_pac {
         let parsed = krb5_types::pac::Pac::parse(raw).map_err(|e| map_pac_err(&e))?;
         let mut buffers: Vec<krb5_types::pac::PacBuffer> = parsed
@@ -187,6 +220,10 @@ fn sign_reply_pac_inner(
             ],
         )
     };
+    let kdc = signer.kdc_key()?;
+    let kdc = kdc.as_ref();
+    let kdc_type = kdc.etype().checksum_type();
+    let kdc_zeros = vec![0u8; kdc.etype().hmac_output_len()];
     if is_service_tkt {
         pac.buffers.push(krb5_types::pac::PacBuffer::new(
             krb5_types::pac::PAC_TICKET_CHECKSUM,
@@ -297,7 +334,7 @@ pub(crate) fn mit_ticket_pac(
     req: &HandlePac<'_>,
     client: &PrincipalName,
     authtime: u32,
-    ticket: &PacTicket<'_>,
+    signer: &PacSigner<'_>,
 ) -> Result<Vec<u8>, Error> {
     let subject = req
         .subject
@@ -331,12 +368,14 @@ pub(crate) fn mit_ticket_pac(
         buffers.push(PacBuffer::new(PAC_CLIENT_INFO, info.to_vec()));
         None
     };
-    let PacTicket {
+    let PacSigner {
         server,
-        kdc,
         enc_tkt_der,
         is_service_tkt,
-    } = *ticket;
+        ..
+    } = *signer;
+    let kdc = signer.kdc_key()?;
+    let kdc = kdc.as_ref();
     let usage = KeyUsage::new(ku::KERB_NON_KERB_CKSUM_SALT)?;
     let server_type = server.etype().checksum_type();
     let kdc_type = kdc.etype().checksum_type();
@@ -1339,14 +1378,17 @@ pub(crate) fn authdata_failed(kind: &str, e: Error) -> Error {
             code,
             proto_d(err::GENERIC, status::HANDLE_AUTHDATA, e.to_string()),
         ),
-        None => match &e {
+        None => match e {
             Error::Protocol {
-                code,
-                text: Some(t),
-                detail,
-                ..
-            } if t == status::HANDLE_AUTHDATA => (authdata_code(*code, detail.as_deref()), e),
-            _ => return e,
+                code, ref detail, ..
+            } => (
+                authdata_code(code, detail.as_deref()),
+                with_status(e, status::HANDLE_AUTHDATA),
+            ),
+            other => (
+                ERROR_TABLE_BASE_KRB5 + i64::from(err::GENERIC),
+                proto_d(err::GENERIC, status::HANDLE_AUTHDATA, other.to_string()),
+            ),
         },
     };
     krb5_log::klog::syslog(
