@@ -1,5 +1,6 @@
 //! MIT's `kadmin/cli` and its `ss` loop.
 
+mod backend;
 mod kt_cmds;
 mod pol_cmds;
 mod princ_cmds;
@@ -13,13 +14,15 @@ pub use ss::parse as ss_parse;
 use std::io::{self, IsTerminal as _, Write as _};
 use std::path::{Path, PathBuf};
 
-use krb5_kdc::{Error, PrincipalStore};
+use krb5_kdc::PrincipalStore;
 use krb5_types::PrincipalName;
+
+use backend::{Kadm5Api, LocalBackend};
 
 pub(crate) use kt_cmds::keytab_file_of;
 pub(crate) use stdio::{Io, LineRead, Stdout};
 
-pub(crate) const WHOAMI: &str = "kadmin.local";
+const KADMIN_LOCAL: &str = "kadmin.local";
 
 // MIT: `kadmin_startup` (kadmin.c:288-607)
 const OPTSTRING: &str = "+x:r:p:knq:w:d:s:mc:t:e:ON";
@@ -31,6 +34,7 @@ pub fn kadmin_local_main() -> i32 {
     let stdout = io::stdout();
     let line = stdout.is_terminal();
     let mut io = Io {
+        prog: KADMIN_LOCAL,
         out: Stdout::new(Box::new(stdout), line),
         err: Box::new(io::stderr()),
         input: Box::new(krb5_cli::Stdin::unbuffered()),
@@ -48,6 +52,7 @@ pub fn kadmin_local_main() -> i32 {
 }
 
 fn utf8_args(args: impl Iterator<Item = std::ffi::OsString>, io: &mut Io) -> Option<Vec<String>> {
+    let whoami = io.prog;
     let mut argv = Vec::new();
     for (i, arg) in args.enumerate() {
         match arg.into_string() {
@@ -55,7 +60,7 @@ fn utf8_args(args: impl Iterator<Item = std::ffi::OsString>, io: &mut Io) -> Opt
             Err(a) if i == 0 => argv.push(a.to_string_lossy().into_owned()),
             Err(_) => {
                 io.error(&format!(
-                    "{WHOAMI}: argument {i} is not valid UTF-8; nothing was run\n"
+                    "{whoami}: argument {i} is not valid UTF-8; nothing was run\n"
                 ));
                 return None;
             }
@@ -65,9 +70,8 @@ fn utf8_args(args: impl Iterator<Item = std::ffi::OsString>, io: &mut Io) -> Opt
 }
 
 pub(crate) struct Handle {
-    pub(crate) store: PrincipalStore,
+    pub(crate) backend: Box<dyn Kadm5Api>,
     pub(crate) realm: String,
-    pub(crate) caller: String,
     pub(crate) ctx: krb5_config::ClientContext,
 }
 
@@ -92,20 +96,6 @@ impl Handle {
     // MIT: `kadmin_parse_name` (kadmin.c:202-225)
     pub(crate) fn parse_name(&self, spec: &str) -> Result<(PrincipalName, String), &'static str> {
         krb5_types::principal_from_unparsed(spec, &self.realm).map_err(|_| texts::MALFORMED)
-    }
-
-    pub(crate) fn refresh(&mut self) -> Result<(), Error> {
-        self.store.reload_if_stale()
-    }
-
-    /// One change under the database's exclusive lock, written once; a failure reads
-    /// the store back.
-    pub(crate) fn mutate<T>(
-        &mut self,
-        f: impl FnOnce(&mut PrincipalStore, &str) -> Result<T, Error>,
-    ) -> Result<T, Error> {
-        let caller = self.caller.clone();
-        self.store.change(|st| f(st, &caller))?
     }
 
     /// `K/M@realm`, which `kadm5` refuses to delete.
@@ -218,7 +208,7 @@ pub(crate) fn run(argv: &[String], io: &mut Io) -> i32 {
 // MIT: `quit` (kadmin.c:610-633)
 fn quit(s: &mut Session<'_>, ccache: bool) -> bool {
     if s.locked {
-        if let Err(e) = s.h.store.unlock_database() {
+        if let Err(e) = s.h.backend.unlock() {
             s.io.com_err(
                 "quit",
                 Some(&texts::princ_text(&e)),
@@ -248,11 +238,11 @@ struct Opts {
     keysalts: Vec<krb5_crypto::KeySalt>,
 }
 
-fn getopt_prog(argv0: &str) -> &str {
-    if Path::new(argv0).file_name().and_then(|n| n.to_str()) == Some(WHOAMI) {
+fn getopt_prog<'a>(argv0: &'a str, prog: &'a str) -> &'a str {
+    if Path::new(argv0).file_name().and_then(|n| n.to_str()) == Some(prog) {
         argv0
     } else {
-        WHOAMI
+        prog
     }
 }
 
@@ -261,16 +251,17 @@ fn getopt_prog(argv0: &str) -> &str {
     reason = "kadmin.local's start: MIT kadmin_startup reads its context once"
 )]
 fn startup(argv: &[String], io: &mut Io) -> Option<Startup> {
+    let whoami = io.prog;
     if let Err(e) = krb5_config::init_kdc_profile() {
         io.com_err(
-            WHOAMI,
+            whoami,
             Some(&e.init_text()),
             "while initializing krb5 library",
         );
         return None;
     }
-    let usage = |io: &mut Io| io.error(&texts::startup_usage(WHOAMI));
-    let prog = getopt_prog(argv.first().map_or("", String::as_str));
+    let usage = |io: &mut Io| io.error(&texts::startup_usage(whoami));
+    let prog = getopt_prog(argv.first().map_or("", String::as_str), whoami);
     let (opts, args) = match krb5_cli::getopt(argv.get(1..).unwrap_or_default(), OPTSTRING, &[]) {
         Ok(v) => v,
         Err(msg) => {
@@ -307,7 +298,7 @@ fn startup(argv: &[String], io: &mut Io) -> Option<Startup> {
     }
     if o.query.is_some() && !args.is_empty() {
         io.error(&format!(
-            "{WHOAMI}: -q is exclusive with command-line query"
+            "{whoami}: -q is exclusive with command-line query"
         ));
         usage(io);
         return None;
@@ -319,7 +310,7 @@ fn startup(argv: &[String], io: &mut Io) -> Option<Startup> {
         .clone()
         .or_else(|| krb5_conf.as_ref().and_then(|c| c.default_realm.clone()))
     else {
-        io.error(&format!("{WHOAMI}: unable to get default realm\n"));
+        io.error(&format!("{whoami}: unable to get default realm\n"));
         return None;
     };
     let mut kdc_paths = vec![krb5_config::kdc_conf_path()];
@@ -336,7 +327,7 @@ fn startup(argv: &[String], io: &mut Io) -> Option<Startup> {
                 || "while opening default credentials cache".to_owned(),
                 |n| format!("while opening credentials cache {n}"),
             );
-            io.com_err(WHOAMI, Some(&msg), &what);
+            io.com_err(whoami, Some(&msg), &what);
             return None;
         }
     };
@@ -346,12 +337,12 @@ fn startup(argv: &[String], io: &mut Io) -> Option<Startup> {
         Some(p) => p,
         None => default_princstr(&o, &realm, cc, &kdc_ctx.profile, user).or_else(|| {
             io.error(&format!(
-                "{WHOAMI}: unable to figure out a principal name\n"
+                "{whoami}: unable to figure out a principal name\n"
             ));
             None
         })?,
     };
-    klog_init(&krb5_config::LogSpecs::load("admin_server"));
+    klog_init(whoami, &krb5_config::LogSpecs::load("admin_server"));
     if o.ccache_name.is_some() {
         io.info(&format!(
             "Authenticating as principal {princstr} with existing credentials.\n"
@@ -378,9 +369,9 @@ fn startup(argv: &[String], io: &mut Io) -> Option<Startup> {
         Ok(h) => h,
         Err((msg, bad_params)) => {
             io.com_err(
-                WHOAMI,
+                whoami,
                 Some(&msg),
-                &format!("while initializing {WHOAMI} interface"),
+                &format!("while initializing {whoami} interface"),
             );
             if bad_params {
                 usage(io);
@@ -390,12 +381,11 @@ fn startup(argv: &[String], io: &mut Io) -> Option<Startup> {
     };
     // MIT: `kadm5_init_iprop` (lib/kadm5/srv/server_init.c:347-361)
     if iprop.enabled
-        && let Err(e) =
-            handle
-                .store
-                .map_ulog(&iprop.logfile, iprop.ulogsize, krb5_kdc::IpropRole::Primary)
+        && let Err(e) = handle
+            .backend
+            .map_update_log(&iprop.logfile, iprop.ulogsize)
     {
-        io.com_err(WHOAMI, Some(&e.to_string()), "while mapping update log");
+        io.com_err(io.prog, Some(&e), "while mapping update log");
         return None;
     }
     Some(Startup {
@@ -503,8 +493,8 @@ fn host_princstr(profile: &krb5_config::Krb5Conf) -> Option<String> {
 }
 
 // MIT: `krb5_klog_init` (lib/kadm5/logger.c:232-522)
-fn klog_init(specs: &krb5_config::LogSpecs) {
-    krb5_log::klog::init(WHOAMI, &specs.specs, specs.debug);
+fn klog_init(prog: &str, specs: &krb5_config::LogSpecs) {
+    krb5_log::klog::init(prog, &specs.specs, specs.debug);
 }
 
 /// The `com_err` text, and whether usage prints.
@@ -587,9 +577,8 @@ fn kadm5_init(
         .map_err(|e| (texts::strerror(&e), false))?;
     Ok((
         Handle {
-            store,
+            backend: Box::new(LocalBackend::new(store, caller)),
             realm: realm.to_owned(),
-            caller,
             ctx,
         },
         iprop,

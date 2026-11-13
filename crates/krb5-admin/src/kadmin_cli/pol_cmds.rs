@@ -2,8 +2,6 @@
 
 use std::fmt::Write as _;
 
-use krb5_kdc::Error;
-
 use super::{Session, atoi, texts};
 use crate::{PolicyArgs, getdate};
 
@@ -81,12 +79,7 @@ pub(crate) fn addpol(s: &mut Session<'_>, argv: &[String]) {
         return;
     };
     let name = a.args.name.clone();
-    let done = s.h.mutate(|st, _| {
-        let exists = st.policies().contains_key(&a.args.name);
-        let pol = crate::kadm5::create_policy_local(exists, &a.args)
-            .map_err(|t| Error::InvalidArgument(t.to_owned()))?;
-        st.put_policy(pol)
-    });
+    let done = s.h.backend.create_policy(&a.args);
     if let Err(e) = done {
         s.io.com_err(
             "add_policy",
@@ -103,19 +96,7 @@ pub(crate) fn modpol(s: &mut Session<'_>, argv: &[String]) {
         return;
     };
     let name = a.args.name.clone();
-    let done = s.h.mutate(|st, _| {
-        let existing = st
-            .policies()
-            .get(&a.args.name)
-            .cloned()
-            .ok_or(Error::NotFound)?;
-        let mut pol = crate::kadm5::modify_policy_local(&existing, &a.args)
-            .map_err(|t| Error::InvalidArgument(t.to_owned()))?;
-        if a.clear_keysalts {
-            pol.allowed_keysalts = None;
-        }
-        st.put_policy(pol)
-    });
+    let done = s.h.backend.modify_policy(&a.args, a.clear_keysalts);
     if let Err(e) = done {
         s.io.com_err(
             "modify_policy",
@@ -151,7 +132,8 @@ pub(crate) fn delpol(s: &mut Session<'_>, argv: &[String]) {
     let done = if name.is_empty() {
         Err("Illegal policy name".to_owned())
     } else {
-        s.h.mutate(|st, _| st.delete_policy(&name))
+        s.h.backend
+            .delete_policy(&name)
             .map_err(|e| texts::policy_text(&e))
     };
     if let Err(msg) = done {
@@ -170,22 +152,12 @@ pub(crate) fn getpol(s: &mut Session<'_>, argv: &[String]) {
         return;
     }
     let name = &argv[argc - 1];
-    let found =
-        s.h.refresh()
-            .map_err(|e| texts::policy_text(&e))
-            .and_then(|()| {
-                s.h.store
-                    .policies()
-                    .get(name)
-                    .cloned()
-                    .ok_or_else(|| texts::UNK_POLICY.to_owned())
-            });
-    let p = match found {
+    let p = match s.h.backend.get_policy(name) {
         Ok(p) => p,
-        Err(msg) => {
+        Err(e) => {
             s.io.com_err(
                 "get_policy",
-                Some(&msg),
+                Some(&texts::policy_text(&e)),
                 &format!("while retrieving policy \"{name}\"."),
             );
             return;
@@ -259,16 +231,19 @@ pub(crate) fn getpols(s: &mut Session<'_>, argv: &[String]) {
         );
         return;
     }
-    if let Err(e) = s.h.refresh() {
-        s.io.com_err(
-            "get_policies",
-            Some(&texts::policy_text(&e)),
-            "while retrieving list.",
-        );
-        return;
-    }
+    let names = match s.h.backend.list_policies(expr) {
+        Ok(names) => names,
+        Err(e) => {
+            s.io.com_err(
+                "get_policies",
+                Some(&texts::policy_text(&e)),
+                "while retrieving list.",
+            );
+            return;
+        }
+    };
     let mut out = String::new();
-    for n in crate::kadm5::policies_matching(&s.h.store, expr) {
+    for n in names {
         out.push_str(&n);
         out.push('\n');
     }

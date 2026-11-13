@@ -57,6 +57,7 @@ impl Write for Stdout {
 }
 
 pub(crate) struct Io {
+    pub(crate) prog: &'static str,
     pub(crate) out: Stdout,
     pub(crate) err: Box<dyn Write>,
     pub(crate) input: Box<dyn io::BufRead>,

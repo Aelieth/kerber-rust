@@ -2,27 +2,13 @@
 
 use std::fmt::Write as _;
 
-use krb5_kdc::{AdminEnt, AdminFields, Error, PrincipalStore, PrincipalWrite as _};
+use krb5_kdc::{AdminEnt, Error};
 use krb5_types::PrincipalName;
 use zeroize::Zeroizing;
 
-use super::{Handle, Session, string_to_keysalts, texts};
+use super::backend::{ModPrincipal, NewPrincipal, mask};
+use super::{Session, string_to_keysalts, texts};
 use crate::getdate;
-
-mod mask {
-    pub(super) const PRINCIPAL: u32 = 0x0000_0001;
-    pub(super) const PRINC_EXPIRE_TIME: u32 = 0x0000_0002;
-    pub(super) const PW_EXPIRATION: u32 = 0x0000_0004;
-    pub(super) const ATTRIBUTES: u32 = 0x0000_0010;
-    pub(super) const MAX_LIFE: u32 = 0x0000_0020;
-    pub(super) const KVNO: u32 = 0x0000_0100;
-    pub(super) const POLICY: u32 = 0x0000_0800;
-    pub(super) const POLICY_CLR: u32 = 0x0000_1000;
-    pub(super) const MAX_RLIFE: u32 = 0x0000_2000;
-    pub(super) const FAIL_AUTH_COUNT: u32 = 0x0001_0000;
-    pub(super) const KEY_DATA: u32 = 0x0002_0000;
-    pub(super) const TL_DATA: u32 = 0x0004_0000;
-}
 
 #[derive(Default)]
 struct PrincArgs {
@@ -164,8 +150,7 @@ fn usage(s: &mut Session<'_>, lines: &[&str]) {
 
 // MIT: `policy_exists` (kadmin.c:277-285)
 fn policy_exists(s: &mut Session<'_>, name: &str) -> bool {
-    let _ = s.h.refresh();
-    s.h.store.policies().contains_key(name)
+    s.h.backend.policy_exists(name)
 }
 
 // MIT: `kadmin_addprinc` (kadmin.c:1242-1362)
@@ -223,19 +208,15 @@ pub(crate) fn addprinc(s: &mut Session<'_>, argv: &[String]) {
         }
     };
     a.mask |= mask::PRINCIPAL;
-    let done = match pass.as_deref() {
-        Some(pw) if a.db_args.is_empty() => create_staged(&mut s.h, &a, &name, &realm, pw),
-        _ => s.h.mutate(|st, caller| {
-            create(
-                st,
-                caller,
-                &a,
-                &name,
-                &realm,
-                pass.as_ref().map(|p| p.as_slice()),
-            )
-        }),
-    };
+    let done = s.h.backend.create_principal(&NewPrincipal {
+        name: &name,
+        realm: &realm,
+        ent: admin_ent(&a),
+        keysalts: &a.keysalts,
+        db_args: &a.db_args,
+        nokey: a.nokey,
+        pass: pass.as_deref().map(Vec::as_slice),
+    });
     if let Err(e) = done {
         s.io.com_err(
             "add_principal",
@@ -245,57 +226,6 @@ pub(crate) fn addprinc(s: &mut Session<'_>, argv: &[String]) {
         return;
     }
     s.io.info(&format!("Principal \"{canon}\" created.\n"));
-}
-
-/// `-nokey` leaves the entry keyless; a db2 argument is refused only after the
-/// existence and password checks, as MIT orders them.
-fn create(
-    st: &mut PrincipalStore,
-    caller: &str,
-    a: &PrincArgs,
-    name: &PrincipalName,
-    realm: &str,
-    pass: Option<&[u8]>,
-) -> Result<(), Error> {
-    if let Some(arg) = a.db_args.first() {
-        if let Some(p) = st.get_in_realm(name, realm) {
-            p.check_kadm_data()?;
-            return Err(Error::AlreadyExists);
-        }
-        if let Some(pw) = pass {
-            st.check_new_password(name, a.policy.as_deref(), pw)?;
-        }
-        return Err(db2_put_refused(arg));
-    }
-    let ent = admin_ent(a);
-    let keys = match pass {
-        Some(p) => krb5_kdc::CreateKeys::Password(p),
-        None if a.nokey => krb5_kdc::CreateKeys::Explicit(&[]),
-        None => krb5_kdc::CreateKeys::Random,
-    };
-    st.create_principal_3_in(name, realm, keys, &a.keysalts, &ent, caller)?;
-    Ok(())
-}
-
-/// The keys are derived before the database's lock is taken, as MIT's create.
-fn create_staged(
-    h: &mut Handle,
-    a: &PrincArgs,
-    name: &PrincipalName,
-    realm: &str,
-    pw: &[u8],
-) -> Result<(), Error> {
-    if h.refresh().is_ok() {
-        let ent = admin_ent(a);
-        let prepared = h
-            .store
-            .plan_create_password(name, realm, pw, &a.keysalts, &ent)?
-            .derive()?;
-        if h.mutate(|st, caller| st.create_prepared(prepared, caller))? {
-            return Ok(());
-        }
-    }
-    h.mutate(|st, caller| create(st, caller, a, name, realm, Some(pw)))
 }
 
 fn admin_ent(a: &PrincArgs) -> AdminEnt {
@@ -309,11 +239,6 @@ fn admin_ent(a: &PrincArgs) -> AdminEnt {
         kvno: a.kvno,
         policy: a.policy.clone(),
     }
-}
-
-// MIT: `krb5_db2_put_principal` (kdb_db2.c:812-822)
-fn db2_put_refused(arg: &str) -> Error {
-    Error::InvalidArgument(format!("Unsupported argument \"{arg}\" for db2"))
 }
 
 // MIT: `kadmin_modprinc` (kadmin.c:1365-1435)
@@ -332,14 +257,10 @@ pub(crate) fn modprinc(s: &mut Session<'_>, argv: &[String]) {
     };
     let canon = name.unparse_with_realm_lossy(&realm);
     let old =
-        s.h.refresh()
-            .map_err(|e| texts::princ_text(&e))
-            .and_then(|()| {
-                let p = s.h.store.get_in_realm(&name, &realm);
-                let p = p.ok_or_else(|| texts::UNK_PRINC.to_owned())?;
-                p.check_kadm_data().map_err(|e| texts::princ_text(&e))?;
-                Ok((p.attributes, p.pw_policy.is_some()))
-            });
+        s.h.backend
+            .get_principal(&name, &realm)
+            .map(|p| (p.attributes, p.pw_policy.is_some()))
+            .map_err(|e| texts::princ_text(&e));
     let (attributes, had_policy) = match old {
         Ok(v) => v,
         Err(msg) => {
@@ -364,8 +285,14 @@ pub(crate) fn modprinc(s: &mut Session<'_>, argv: &[String]) {
         }
     }
     if a.mask != 0 {
-        let done =
-            s.h.mutate(|st, caller| modify(st, caller, &a, &name, &realm, had_policy));
+        let done = s.h.backend.modify_principal(&ModPrincipal {
+            name: &name,
+            realm: &realm,
+            ent: admin_ent(&a),
+            db_args: &a.db_args,
+            unlock: a.unlock,
+            had_policy,
+        });
         if let Err(e) = done {
             s.io.com_err(
                 "modify_principal",
@@ -376,51 +303,6 @@ pub(crate) fn modprinc(s: &mut Session<'_>, argv: &[String]) {
         }
     }
     s.io.info(&format!("Principal \"{canon}\" modified.\n"));
-}
-
-fn modify(
-    st: &mut PrincipalStore,
-    caller: &str,
-    a: &PrincArgs,
-    name: &PrincipalName,
-    realm: &str,
-    had_policy: bool,
-) -> Result<(), Error> {
-    let mut entry = st
-        .get_in_realm(name, realm)
-        .cloned()
-        .ok_or(Error::NotFound)?;
-    if let Some(arg) = a.db_args.first() {
-        return Err(db2_put_refused(arg));
-    }
-    if a.mask & mask::KVNO != 0 {
-        for k in &mut entry.keys {
-            k.kvno = a.kvno & 0xffff;
-        }
-        st.put_principal(entry)?;
-    }
-    if a.unlock {
-        st.admin_unlock_in(name, realm, caller)?;
-    }
-    let set = |bit: u32| a.mask & bit != 0;
-    st.apply_admin_fields_in(
-        name,
-        realm,
-        AdminFields {
-            attributes: set(mask::ATTRIBUTES).then_some(a.attributes),
-            max_life: set(mask::MAX_LIFE).then_some(u64::from(a.max_life)),
-            expiration: set(mask::PRINC_EXPIRE_TIME).then_some(a.princ_expire_time),
-            pw_expire: set(mask::PW_EXPIRATION).then_some(a.pw_expiration),
-            policy: if set(mask::POLICY) {
-                a.policy.clone()
-            } else {
-                None
-            },
-            clear_policy: set(mask::POLICY_CLR) && had_policy,
-            max_renewable_life: set(mask::MAX_RLIFE).then_some(u64::from(a.max_rlife)),
-        },
-        caller,
-    )
 }
 
 // MIT: `kadmin_delprinc` (kadmin.c:666-711)
@@ -458,7 +340,8 @@ pub(crate) fn delprinc(s: &mut Session<'_>, argv: &[String]) {
     let done = if s.h.is_master(&name, &realm) {
         Err(texts::PROTECT_PRINCIPAL.to_owned())
     } else {
-        s.h.mutate(|st, _| st.remove_in(&name, &realm))
+        s.h.backend
+            .delete_principal(&name, &realm)
             .map_err(|e| texts::princ_text(&e))
     };
     if let Err(msg) = done {
@@ -519,7 +402,8 @@ pub(crate) fn renprinc(s: &mut Session<'_>, argv: &[String]) {
         }
     }
     let done =
-        s.h.mutate(|st, caller| st.rename_unchecked(&old, &old_realm, &new, &new_realm, caller));
+        s.h.backend
+            .rename_principal(&old, &old_realm, &new, &new_realm);
     if let Err(e) = done {
         let msg = match e {
             Error::NotFound => texts::NOENTRY.to_owned(),
@@ -564,8 +448,7 @@ pub(crate) fn addalias(s: &mut Session<'_>, argv: &[String]) {
     };
     let acanon = alias.unparse_with_realm_lossy(&arealm);
     let tcanon = target.unparse_with_realm_lossy(&trealm);
-    let done =
-        s.h.mutate(|st, caller| st.create_alias_in(&alias, &arealm, &target, &trealm, caller));
+    let done = s.h.backend.create_alias(&alias, &arealm, &target, &trealm);
     if let Err(e) = done {
         s.io.com_err(
             "add_alias",
@@ -647,10 +530,10 @@ pub(crate) fn cpw(s: &mut Session<'_>, argv: &[String]) {
     let canon = name.unparse_with_realm_lossy(&realm);
     let keep = u32::from(keepold);
     if pwarg.is_none() && randkey {
-        let done = s.h.mutate(|st, caller| {
-            st.chrand_etypes_keepold_in(&name, &realm, &keysalts, keep, caller)
-                .map(|_| ())
-        });
+        let done =
+            s.h.backend
+                .randomize_key(&name, &realm, &keysalts, keep)
+                .map(|_| ());
         if let Err(e) = done {
             s.io.com_err(
                 "change_password",
@@ -679,11 +562,9 @@ pub(crate) fn cpw(s: &mut Session<'_>, argv: &[String]) {
             }
         },
     };
-    let caller = s.h.caller.clone();
     let done =
-        s.h.store
-            .change_password_staged(&name, &realm, &pw, keep, &caller, &keysalts)
-            .and_then(|r| r);
+        s.h.backend
+            .change_password(&name, &realm, &pw, keep, &keysalts);
     if let Err(e) = done {
         s.io.com_err(
             "change_password",
@@ -710,31 +591,22 @@ pub(crate) fn getprinc(s: &mut Session<'_>, argv: &[String]) {
         }
     };
     let canon = name.unparse_with_realm_lossy(&realm);
-    let found =
-        s.h.refresh()
-            .map_err(|e| texts::princ_text(&e))
-            .and_then(|()| {
-                let p = s.h.store.get_in_realm(&name, &realm);
-                let p = p.ok_or_else(|| texts::UNK_PRINC.to_owned())?;
-                p.check_kadm_data().map_err(|e| texts::princ_text(&e))?;
-                Ok(p.clone())
-            });
-    let mut p = match found {
+    let mut p = match s.h.backend.get_principal(&name, &realm) {
         Ok(p) => p,
-        Err(msg) => {
+        Err(e) => {
             s.io.com_err(
                 "get_principal",
-                Some(&msg),
+                Some(&texts::princ_text(&e)),
                 &format!("while retrieving \"{canon}\"."),
             );
             return;
         }
     };
-    s.h.store.merge_lockout(&mut p);
+    s.h.backend.merge_lockout(&mut p);
     let policy_missing = p
         .pw_policy
         .as_deref()
-        .is_some_and(|pol| !s.h.store.policies().contains_key(pol));
+        .is_some_and(|pol| !s.h.backend.has_policy(pol));
     let text = if argc == 2 {
         super::show::principal(&p, policy_missing)
     } else {
@@ -761,16 +633,19 @@ pub(crate) fn getprincs(s: &mut Session<'_>, argv: &[String]) {
         );
         return;
     }
-    if let Err(e) = s.h.refresh() {
-        s.io.com_err(
-            "get_principals",
-            Some(&texts::princ_text(&e)),
-            "while retrieving list.",
-        );
-        return;
-    }
+    let ids = match s.h.backend.list_principals(expr) {
+        Ok(ids) => ids,
+        Err(e) => {
+            s.io.com_err(
+                "get_principals",
+                Some(&texts::princ_text(&e)),
+                "while retrieving list.",
+            );
+            return;
+        }
+    };
     let mut out = String::new();
-    for id in crate::kadm5::principals_matching(&s.h.store, expr) {
+    for id in ids {
         out.push_str(&id);
         out.push('\n');
     }
@@ -808,8 +683,7 @@ pub(crate) fn purgekeys(s: &mut Session<'_>, argv: &[String]) {
         }
     };
     let canon = name.unparse_with_realm_lossy(&realm);
-    let done =
-        s.h.mutate(|st, caller| st.purgekeys_in(&name, &realm, keepkvno, caller));
+    let done = s.h.backend.purge_keys(&name, &realm, keepkvno);
     if let Err(e) = done {
         s.io.com_err(
             "purgekeys",
@@ -839,10 +713,7 @@ pub(crate) fn getstrings(s: &mut Session<'_>, argv: &[String]) {
         }
     };
     let canon = name.unparse_with_realm_lossy(&realm);
-    let got =
-        s.h.refresh()
-            .and_then(|()| s.h.store.get_strings_in(&name, &realm));
-    match got {
+    match s.h.backend.get_strings(&name, &realm) {
         Ok(strings) if strings.is_empty() => s.io.print("(No string attributes.)\n"),
         Ok(strings) => {
             let mut out = String::new();
@@ -887,8 +758,7 @@ fn set_or_del(s: &mut Session<'_>, pname: &str, key: &str, value: Option<&str>, 
         }
     };
     let canon = name.unparse_with_realm_lossy(&realm);
-    let done =
-        s.h.mutate(|st, caller| st.set_string_in(&name, &realm, key, value, caller));
+    let done = s.h.backend.set_string(&name, &realm, key, value);
     match (done, value) {
         (Err(e), Some(_)) => s.io.com_err(
             prog,
@@ -915,7 +785,7 @@ pub(crate) fn lock(s: &mut Session<'_>, _argv: &[String]) {
     if s.locked {
         return;
     }
-    if let Err(e) = s.h.store.lock_database() {
+    if let Err(e) = s.h.backend.lock() {
         s.io.com_err("lock", Some(&texts::princ_text(&e)), "");
         return;
     }
@@ -927,7 +797,7 @@ pub(crate) fn unlock(s: &mut Session<'_>, _argv: &[String]) {
     if !s.locked {
         return;
     }
-    if let Err(e) = s.h.store.unlock_database() {
+    if let Err(e) = s.h.backend.unlock() {
         s.io.com_err("unlock", Some(&texts::princ_text(&e)), "");
         return;
     }

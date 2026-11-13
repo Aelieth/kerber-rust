@@ -8,7 +8,7 @@ use krb5_kdc::Error;
 use krb5_protocol::{Keytab, KeytabEntry};
 use krb5_types::PrincipalName;
 
-use super::{Session, WHOAMI, string_to_keysalts, texts};
+use super::{Session, string_to_keysalts, texts};
 
 struct Kt {
     name: String,
@@ -94,7 +94,7 @@ fn process_keytab(s: &mut Session<'_>, keytab_str: Option<&str>) -> Option<Kt> {
         return match resolved {
             Ok(kt) => Some(kt),
             Err(msg) => {
-                s.io.com_err(WHOAMI, Some(msg), "while opening default keytab");
+                s.io.com_err(s.io.prog, Some(msg), "while opening default keytab");
                 None
             }
         };
@@ -110,7 +110,11 @@ fn process_keytab(s: &mut Session<'_>, keytab_str: Option<&str>) -> Option<Kt> {
             name,
         }),
         Err(msg) => {
-            s.io.com_err(WHOAMI, Some(msg), &format!("while resolving keytab {name}"));
+            s.io.com_err(
+                s.io.prog,
+                Some(msg),
+                &format!("while resolving keytab {name}"),
+            );
             None
         }
     }
@@ -193,7 +197,7 @@ pub(crate) fn ktadd(s: &mut Session<'_>, argv: &[String]) {
             }
             Err(msg) => {
                 s.io.com_err(
-                    WHOAMI,
+                    s.io.prog,
                     Some(&msg),
                     &format!("while expanding expression \"{pattern}\"."),
                 );
@@ -207,14 +211,9 @@ fn expand(s: &mut Session<'_>, pattern: &str) -> Result<Vec<String>, String> {
     if !crate::glob_pattern_ok(pattern) {
         return Err("Invalid argument".to_owned());
     }
-    s.h.refresh().map_err(|e| texts::princ_text(&e))?;
-    let pat = crate::kadm5::glob_expand(pattern, true);
-    Ok(s.h
-        .store
-        .ids()
-        .into_iter()
-        .filter(|id| crate::kadm5::glob_is_match(pat.as_bytes(), id.as_bytes()))
-        .collect())
+    s.h.backend
+        .match_principals(pattern)
+        .map_err(|e| texts::princ_text(&e))
 }
 
 struct AddOpts {
@@ -225,11 +224,12 @@ struct AddOpts {
 
 // MIT: `add_principal` (kadmin/cli/keytab.c:299-358)
 fn add_principal(s: &mut Session<'_>, kt: &Kt, opts: &AddOpts, princ_str: &str) {
+    let prog = s.io.prog;
     let (name, realm) = match s.h.parse_name(princ_str) {
         Ok(n) => n,
         Err(msg) => {
             s.io.com_err(
-                WHOAMI,
+                s.io.prog,
                 Some(msg),
                 &format!("while parsing -add principal name {princ_str}"),
             );
@@ -237,31 +237,19 @@ fn add_principal(s: &mut Session<'_>, kt: &Kt, opts: &AddOpts, princ_str: &str) 
         }
     };
     let keys = if opts.norandkey {
-        // MIT: `kadm5_get_principal_keys` (lib/kadm5/srv/svr_principal.c:1775-1776)
-        s.h.refresh().and_then(|()| {
-            let p =
-                s.h.store
-                    .get_in_realm(&name, &realm)
-                    .ok_or(Error::NotFound)?;
-            p.check_kadm_data()?;
-            Ok(p.keys_in_order().into_iter().cloned().collect())
-        })
+        s.h.backend.get_principal_keys(&name, &realm)
     } else {
-        s.h.mutate(|st, caller| {
-            st.chrand_etypes_keepold_in(&name, &realm, &opts.keysalts, 0, caller)
-        })
+        s.h.backend.randomize_key(&name, &realm, &opts.keysalts, 0)
     };
     let keys = match keys {
         Ok(k) => k,
         Err(Error::NotFound) => {
-            s.io.eprint(&format!(
-                "{WHOAMI}: Principal {princ_str} does not exist.\n"
-            ));
+            s.io.eprint(&format!("{prog}: Principal {princ_str} does not exist.\n"));
             return;
         }
         Err(e) => {
             s.io.com_err(
-                WHOAMI,
+                s.io.prog,
                 Some(&texts::princ_text(&e)),
                 &format!("while changing {princ_str}'s key"),
             );
@@ -272,7 +260,7 @@ fn add_principal(s: &mut Session<'_>, kt: &Kt, opts: &AddOpts, princ_str: &str) 
         return;
     }
     if let Err(msg) = add_entries(kt, &name, &realm, &keys) {
-        s.io.com_err(WHOAMI, Some(&msg), "while adding key to keytab");
+        s.io.com_err(s.io.prog, Some(&msg), "while adding key to keytab");
         return;
     }
     if !opts.quiet {
@@ -375,11 +363,12 @@ fn remove_principal(
     princ_str: &str,
     kvno_str: Option<&str>,
 ) {
+    let prog = s.io.prog;
     let (name, realm) = match s.h.parse_name(princ_str) {
         Ok(n) => n,
         Err(msg) => {
             s.io.com_err(
-                WHOAMI,
+                s.io.prog,
                 Some(msg),
                 &format!("while parsing principal name {princ_str}"),
             );
@@ -394,7 +383,7 @@ fn remove_principal(
     };
     let Some(path) = &kt.path else {
         s.io.eprint(&format!(
-            "{WHOAMI}: No entry for principal {princ_str} exists in keytab {}\n",
+            "{prog}: No entry for principal {princ_str} exists in keytab {}\n",
             kt.name
         ));
         return;
@@ -404,7 +393,7 @@ fn remove_principal(
             Ok(t) => t,
             Err(e) => {
                 s.io.com_err(
-                    WHOAMI,
+                    s.io.prog,
                     Some(&texts::strerror(&e)),
                     "while retrieving highest kvno from keytab",
                 );
@@ -412,12 +401,12 @@ fn remove_principal(
             }
         },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            s.io.eprint(&format!("{WHOAMI}: Keytab {} does not exist.\n", kt.name));
+            s.io.eprint(&format!("{prog}: Keytab {} does not exist.\n", kt.name));
             return;
         }
         Err(e) => {
             s.io.com_err(
-                WHOAMI,
+                s.io.prog,
                 Some(&texts::strerror(&e)),
                 "while retrieving highest kvno from keytab",
             );
@@ -441,11 +430,11 @@ fn remove_principal(
     let Some(highest) = highest else {
         let text = match mode {
             Mode::Spec(k) => format!(
-                "{WHOAMI}: No entry for principal {princ_str} with kvno {k} exists in keytab {}\n",
+                "{prog}: No entry for principal {princ_str} with kvno {k} exists in keytab {}\n",
                 kt.name
             ),
             _ => format!(
-                "{WHOAMI}: No entry for principal {princ_str} exists in keytab {}\n",
+                "{prog}: No entry for principal {princ_str} exists in keytab {}\n",
                 kt.name
             ),
         };
@@ -456,7 +445,7 @@ fn remove_principal(
         Mode::Spec(k) => {
             if !tab.entries.iter().any(|e| matches(e) && e.kvno == k) {
                 s.io.com_err(
-                    WHOAMI,
+                    s.io.prog,
                     Some("Key version number for principal in key table is incorrect"),
                     "while retrieving highest kvno from keytab",
                 );
@@ -483,7 +472,7 @@ fn remove_principal(
     if removed.is_empty() {
         if mode == Mode::Old {
             s.io.eprint(&format!(
-                "{WHOAMI}: There is only one entry for principal {princ_str} in keytab {}\n",
+                "{prog}: There is only one entry for principal {princ_str} in keytab {}\n",
                 kt.name
             ));
         }
@@ -498,7 +487,7 @@ fn remove_principal(
     tab.entries.retain(|e| !take(e));
     if let Err(e) = tab.write_file(path) {
         s.io.com_err(
-            WHOAMI,
+            s.io.prog,
             Some(&texts::strerror(&e)),
             "while deleting entry from keytab",
         );
