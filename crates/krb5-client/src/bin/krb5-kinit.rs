@@ -304,7 +304,7 @@ fn k5_kinit(prog: &str, opts: &KinitArgs, k5: &K5) -> bool {
     };
     let result = match opts.action {
         KinitAction::Renew | KinitAction::Validate => valrenew(prog, opts, k5),
-        KinitAction::InitPw | KinitAction::InitKt => init(opts, k5),
+        KinitAction::InitPw | KinitAction::InitKt => init(prog, opts, k5),
     };
     match result {
         Ok(()) => {}
@@ -379,7 +379,7 @@ fn armor_ccache_spec(name: &str) -> Result<CcSpec, Krb5Error> {
 }
 
 #[expect(clippy::too_many_lines, reason = "one MIT function, kept whole")]
-fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
+fn init(prog: &str, opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
     let realm = String::from_utf8_lossy(k5.me.0.as_bytes()).into_owned();
     let conf = &k5.ctx.profile;
     let mut ticket = AsTicketOpts {
@@ -404,7 +404,7 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
             Ok(list) => ticket.addresses = Some(list),
             Err(e) => {
                 eprintln!(
-                    "kinit: {} getting local addresses",
+                    "{prog}: {} getting local addresses",
                     Krb5Error::from_local_addresses(&e)
                 );
                 return Err(Failure::Reported);
@@ -431,7 +431,7 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
                 )));
             }
             Err(e) => {
-                eprintln!("kinit: {e} resolving keytab {name}");
+                eprintln!("{prog}: {e} resolving keytab {name}");
                 return Err(Failure::Reported);
             }
         }
@@ -446,7 +446,8 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
         if pkinit && attr == "X509_user_identity" {
             if identity {
                 eprintln!(
-                    "kinit: Preauth module pkinit: X509_user_identity can not be given twice\n while setting '{attr}'='{value}'"
+                    "{prog}: Preauth module pkinit: X509_user_identity can not be given twice\n \
+                     while setting '{attr}'='{value}'"
                 );
                 return Err(Failure::Reported);
             }
