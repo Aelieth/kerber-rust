@@ -259,7 +259,7 @@ pub(crate) fn modprinc(s: &mut Session<'_>, argv: &[String]) {
     let old =
         s.h.backend
             .get_principal(&name, &realm)
-            .map(|p| (p.attributes, p.pw_policy.is_some()))
+            .map(|p| (p.attributes(), p.policy().is_some()))
             .map_err(|e| texts::princ_text(&e));
     let (attributes, had_policy) = match old {
         Ok(v) => v,
@@ -603,10 +603,7 @@ pub(crate) fn getprinc(s: &mut Session<'_>, argv: &[String]) {
         }
     };
     s.h.backend.merge_lockout(&mut p);
-    let policy_missing = p
-        .pw_policy
-        .as_deref()
-        .is_some_and(|pol| !s.h.backend.has_policy(pol));
+    let policy_missing = p.policy().is_some_and(|pol| !s.h.backend.has_policy(pol));
     let text = if argc == 2 {
         super::show::principal(&p, policy_missing)
     } else {
@@ -653,13 +650,32 @@ pub(crate) fn getprincs(s: &mut Session<'_>, argv: &[String]) {
 }
 
 // MIT: `kadmin_getprivs` (kadmin.c:1847-1869)
-/// `kadmin.local` holds every privilege; `kadm5.acl` decides for kadmind.
 pub(crate) fn getprivs(s: &mut Session<'_>, argv: &[String]) {
+    const PRIVS: [&str; 4] = ["INQUIRE", "ADD", "MODIFY", "DELETE"];
     if argv.len() != 1 {
         s.io.error("usage: get_privs\n");
         return;
     }
-    s.io.print("current privileges: INQUIRE ADD MODIFY DELETE\n");
+    let plist = match s.h.backend.get_privs() {
+        Ok(p) => p,
+        Err(e) => {
+            s.io.com_err(
+                "get_privs",
+                Some(&texts::princ_text(&e)),
+                "while retrieving privileges",
+            );
+            return;
+        }
+    };
+    let mut out = "current privileges:".to_owned();
+    for (i, name) in PRIVS.iter().enumerate() {
+        if plist & (1 << i) != 0 {
+            out.push(' ');
+            out.push_str(name);
+        }
+    }
+    out.push('\n');
+    s.io.print(&out);
 }
 
 // MIT: `kadmin_purgekeys` (kadmin.c:1872-1921)

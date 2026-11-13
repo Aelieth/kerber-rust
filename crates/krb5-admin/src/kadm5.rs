@@ -1,6 +1,8 @@
 mod acceptor;
 mod auth;
 pub(crate) mod auth_plugin;
+mod client_conn;
+mod client_xdr;
 mod codes;
 mod dispatch;
 mod glob;
@@ -19,6 +21,7 @@ pub use auth::{
     changepw_acceptor, check_auth_gssapi_names, check_iprop_rpcsec_auth, check_rpcsec_auth,
 };
 pub use auth_plugin::{Decision, Kadm5Auth, Kadm5AuthConfig};
+pub(crate) use client_conn::{AdminTicket, Kadm5Client, PrincView};
 pub(crate) use codes::{
     KADM5_BAD_PASSWORD, KADM5_CANT_RESOLVE, KADM5_GSS_ERROR, KADM5_MISSING_KRB5_CONF_PARAMS,
     KADM5_RPC_ERROR, KADM5_SECURE_PRINC_MISSING,
@@ -26,6 +29,7 @@ pub(crate) use codes::{
 pub use glob::glob_pattern_ok;
 pub(crate) use glob::{glob_expand, glob_is_match, policies_matching, principals_matching};
 pub use iprop::{IncrReply, IpropClient, IpropResync, RpcFailure};
+pub(crate) use log::kadm5_error_text;
 pub(crate) use policy::{create_policy_local, modify_policy_local};
 pub(crate) use rpc::Kadm5Conn;
 #[cfg(feature = "test-hooks")]

@@ -105,7 +105,11 @@ impl Rig {
     }
 
     fn store(&self) -> &PrincipalStore {
-        self.h.as_ref().unwrap().backend.local_store()
+        let backend: &dyn std::any::Any = &*self.h.as_ref().unwrap().backend;
+        backend
+            .downcast_ref::<LocalBackend>()
+            .unwrap()
+            .local_store()
     }
 }
 

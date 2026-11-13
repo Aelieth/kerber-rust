@@ -4,6 +4,8 @@ use std::fmt::Write as _;
 
 use krb5_kdc::Principal;
 
+use super::backend::PrincRec;
+
 fn tl_u32(p: &Principal, ty: i32) -> u32 {
     p.tl_data
         .iter()
@@ -78,7 +80,118 @@ fn key_ver(k: &krb5_kdc::KeyEntry) -> u32 {
     }
 }
 
-pub(crate) fn principal(p: &Principal, policy_missing: bool) -> String {
+struct KeyLine {
+    ver: u32,
+    kvno: u32,
+    etype: i32,
+    salt: i32,
+    name: String,
+}
+
+struct View {
+    id: String,
+    expiration: u32,
+    last_pwd_change: u32,
+    pw_expire: u32,
+    max_life: u64,
+    max_renewable_life: u64,
+    mod_date: u32,
+    mod_name: String,
+    last_success: u32,
+    last_failed: u32,
+    fail_auth_count: u32,
+    nkeys: usize,
+    nkeys_terse: usize,
+    keys: Vec<KeyLine>,
+    mkvno: u32,
+    attributes: u32,
+    kvno: u32,
+    policy: Option<String>,
+}
+
+fn wire_key_name(et: i32) -> String {
+    if let Ok(e) = krb5_crypto::EncryptionType::from_iana(et) {
+        let deprecated = if e.is_deprecated() { "DEPRECATED:" } else { "" };
+        return format!("{deprecated}{}", e.to_mit_name());
+    }
+    legacy_enctype_name(et).map_or_else(
+        || format!("UNSUPPORTED:<Encryption type 0x{et:x}>"),
+        |(prefix, n)| format!("{prefix}{n}"),
+    )
+}
+
+fn view(rec: &PrincRec) -> View {
+    match rec {
+        PrincRec::Local(p) => {
+            let slots = p.key_slots();
+            let nkeys = slots.len();
+            let keys = slots
+                .into_iter()
+                .filter_map(slot_fields)
+                .map(|(ver, kvno, etype, salt, name)| KeyLine {
+                    ver,
+                    kvno,
+                    etype,
+                    salt,
+                    name,
+                })
+                .collect();
+            View {
+                id: p.id(),
+                expiration: p.expiration,
+                last_pwd_change: tl_u32(p, TL_LAST_PWD_CHANGE),
+                pw_expire: p.pw_expire,
+                max_life: p.max_life,
+                max_renewable_life: p.max_renewable_life,
+                mod_date: tl_u32(p, TL_MOD_PRINC),
+                mod_name: mod_name(p),
+                last_success: p.last_success,
+                last_failed: p.last_failed,
+                fail_auth_count: p.fail_auth_count,
+                nkeys,
+                nkeys_terse: p.keys.len() + p.opaque_keys.len(),
+                keys,
+                mkvno: u32::from(p.mkvno),
+                attributes: p.attributes,
+                kvno: kvno(p),
+                policy: p.pw_policy.clone(),
+            }
+        }
+        PrincRec::Wire(w) => View {
+            id: w.principal.clone(),
+            expiration: w.princ_expire_time,
+            last_pwd_change: w.last_pwd_change,
+            pw_expire: w.pw_expiration,
+            max_life: u64::from(w.max_life),
+            max_renewable_life: u64::from(w.max_renewable_life),
+            mod_date: w.mod_date,
+            mod_name: w.mod_name.clone().unwrap_or_else(|| "(null)".to_owned()),
+            last_success: w.last_success,
+            last_failed: w.last_failed,
+            fail_auth_count: w.fail_auth_count,
+            nkeys: w.key_data.len(),
+            nkeys_terse: w.key_data.len(),
+            keys: w
+                .key_data
+                .iter()
+                .map(|k| KeyLine {
+                    ver: u32::try_from(k.ver).unwrap_or(0),
+                    kvno: k.kvno,
+                    etype: k.enctype,
+                    salt: k.salttype,
+                    name: wire_key_name(k.enctype),
+                })
+                .collect(),
+            mkvno: w.mkvno,
+            attributes: w.attributes,
+            kvno: w.kvno,
+            policy: w.policy.clone(),
+        },
+    }
+}
+
+pub(crate) fn principal(rec: &PrincRec, policy_missing: bool) -> String {
+    let p = view(rec);
     let never = |t: u32| {
         if t == 0 {
             "[never]".to_owned()
@@ -87,13 +200,9 @@ pub(crate) fn principal(p: &Principal, policy_missing: bool) -> String {
         }
     };
     let mut o = String::new();
-    let _ = writeln!(o, "Principal: {}", p.id());
+    let _ = writeln!(o, "Principal: {}", p.id);
     let _ = writeln!(o, "Expiration date: {}", never(p.expiration));
-    let _ = writeln!(
-        o,
-        "Last password change: {}",
-        never(tl_u32(p, TL_LAST_PWD_CHANGE))
-    );
+    let _ = writeln!(o, "Last password change: {}", never(p.last_pwd_change));
     let _ = writeln!(o, "Password expiration date: {}", never(p.pw_expire));
     let _ = writeln!(o, "Maximum ticket life: {}", strdur(p.max_life));
     let _ = writeln!(
@@ -101,12 +210,7 @@ pub(crate) fn principal(p: &Principal, policy_missing: bool) -> String {
         "Maximum renewable life: {}",
         strdur(p.max_renewable_life)
     );
-    let _ = writeln!(
-        o,
-        "Last modified: {} ({})",
-        strdate(tl_u32(p, TL_MOD_PRINC)),
-        mod_name(p)
-    );
+    let _ = writeln!(o, "Last modified: {} ({})", strdate(p.mod_date), p.mod_name);
     let _ = writeln!(
         o,
         "Last successful authentication: {}",
@@ -114,19 +218,18 @@ pub(crate) fn principal(p: &Principal, policy_missing: bool) -> String {
     );
     let _ = writeln!(o, "Last failed authentication: {}", never(p.last_failed));
     let _ = writeln!(o, "Failed password attempts: {}", p.fail_auth_count);
-    let slots = p.key_slots();
-    let _ = writeln!(o, "Number of keys: {}", slots.len());
-    for (ver, kvno, _, st, name) in slots.into_iter().filter_map(slot_fields) {
-        let salt = if ver > 1 && st != 0 {
-            format!(":{}", salttype_name(st))
+    let _ = writeln!(o, "Number of keys: {}", p.nkeys);
+    for k in &p.keys {
+        let salt = if k.ver > 1 && k.salt != 0 {
+            format!(":{}", salttype_name(k.salt))
         } else {
             String::new()
         };
-        let _ = writeln!(o, "Key: vno {kvno}, {name}{salt}");
+        let _ = writeln!(o, "Key: vno {}, {}{salt}", k.kvno, k.name);
     }
     let _ = writeln!(o, "MKey: vno {}", p.mkvno);
     let _ = writeln!(o, "Attributes:{}", flags_to_string(p.attributes));
-    match p.pw_policy.as_deref() {
+    match p.policy.as_deref() {
         Some(pol) if policy_missing => {
             let _ = writeln!(o, "Policy: {pol} [does not exist]");
         }
@@ -138,29 +241,30 @@ pub(crate) fn principal(p: &Principal, policy_missing: bool) -> String {
     o
 }
 
-pub(crate) fn principal_terse(p: &Principal) -> String {
+pub(crate) fn principal_terse(rec: &PrincRec) -> String {
+    let p = view(rec);
     let mut o = format!(
         "\"{}\"\t{}\t{}\t{}\t{}\t\"{}\"\t{}\t{}\t{}\t{}\t\"{}\"\t{}\t{}\t{}\t{}\t{}",
-        p.id(),
+        p.id,
         p.expiration.cast_signed(),
-        tl_u32(p, TL_LAST_PWD_CHANGE).cast_signed(),
+        p.last_pwd_change.cast_signed(),
         p.pw_expire.cast_signed(),
         p.max_life,
-        mod_name(p),
-        tl_u32(p, TL_MOD_PRINC).cast_signed(),
+        p.mod_name,
+        p.mod_date.cast_signed(),
         p.attributes.cast_signed(),
-        kvno(p),
+        p.kvno,
         p.mkvno,
-        p.pw_policy.as_deref().unwrap_or("[none]"),
+        p.policy.as_deref().unwrap_or("[none]"),
         p.max_renewable_life,
         p.last_success.cast_signed(),
         p.last_failed.cast_signed(),
         p.fail_auth_count,
-        p.keys.len() + p.opaque_keys.len()
+        p.nkeys_terse
     );
-    for (ver, kvno, et, st, _) in p.key_slots().into_iter().filter_map(slot_fields) {
-        let st = if ver > 1 { st } else { 0 };
-        let _ = write!(o, "\t{ver}\t{kvno}\t{et}\t{st}");
+    for k in &p.keys {
+        let st = if k.ver > 1 { k.salt } else { 0 };
+        let _ = write!(o, "\t{}\t{}\t{}\t{st}", k.ver, k.kvno, k.etype);
     }
     o.push('\n');
     o

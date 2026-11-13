@@ -56,7 +56,7 @@ pub(super) fn clear_prefetch() {
 }
 
 /// MIT texts; strerror for an errno.
-pub(super) fn kadm5_error_text(code: u32) -> String {
+pub(crate) fn kadm5_error_text(code: u32) -> String {
     const OVK: [&str; 64] = [
         "Operation failed for unspecified reason",
         "Operation requires ``get'' privilege",

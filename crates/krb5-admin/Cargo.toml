@@ -54,6 +54,10 @@ name = "krb5-ktutil"
 path = "src/bin/krb5-ktutil.rs"
 
 [[bin]]
+name = "krb5-kadmin"
+path = "src/bin/krb5-kadmin.rs"
+
+[[bin]]
 name = "krb5-kadmin-local"
 path = "src/bin/krb5-kadmin-local.rs"
 

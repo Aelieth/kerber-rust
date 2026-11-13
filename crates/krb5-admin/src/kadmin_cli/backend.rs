@@ -5,6 +5,7 @@ use krb5_kdc::{AdminEnt, AdminFields, Error, KeyEntry, NamedPolicy, Principal, P
 use krb5_types::PrincipalName;
 
 use crate::PolicyArgs;
+use crate::kadm5::PrincView;
 
 pub(super) mod mask {
     pub(crate) const PRINCIPAL: u32 = 0x0000_0001;
@@ -41,10 +42,10 @@ pub(crate) struct ModPrincipal<'a> {
 }
 
 /// What `kadmin` asks of the database; MIT's `kadm5` API.
-pub(crate) trait Kadm5Api {
+pub(crate) trait Kadm5Api: std::any::Any {
     fn refresh(&mut self) -> Result<(), Error>;
-    fn get_principal(&mut self, name: &PrincipalName, realm: &str) -> Result<Principal, Error>;
-    fn merge_lockout(&self, p: &mut Principal);
+    fn get_principal(&mut self, name: &PrincipalName, realm: &str) -> Result<PrincRec, Error>;
+    fn merge_lockout(&self, p: &mut PrincRec);
     fn list_principals(&mut self, expr: Option<&str>) -> Result<Vec<String>, Error>;
     fn match_principals(&mut self, pattern: &str) -> Result<Vec<String>, Error>;
     fn create_principal(&mut self, req: &NewPrincipal<'_>) -> Result<(), Error>;
@@ -99,7 +100,7 @@ pub(crate) trait Kadm5Api {
         value: Option<&str>,
     ) -> Result<(), Error>;
     fn policy_exists(&mut self, name: &str) -> bool;
-    fn has_policy(&self, name: &str) -> bool;
+    fn has_policy(&mut self, name: &str) -> bool;
     fn get_policy(&mut self, name: &str) -> Result<NamedPolicy, Error>;
     fn list_policies(&mut self, expr: Option<&str>) -> Result<Vec<String>, Error>;
     fn create_policy(&mut self, args: &PolicyArgs) -> Result<(), Error>;
@@ -108,8 +109,28 @@ pub(crate) trait Kadm5Api {
     fn map_update_log(&mut self, path: &std::path::Path, entries: u32) -> Result<(), String>;
     fn lock(&mut self) -> Result<(), Error>;
     fn unlock(&mut self) -> Result<(), Error>;
-    #[cfg(all(test, feature = "test-hooks"))]
-    fn local_store(&self) -> &PrincipalStore;
+    fn get_privs(&mut self) -> Result<u32, Error>;
+}
+
+pub(crate) enum PrincRec {
+    Local(Box<Principal>),
+    Wire(PrincView),
+}
+
+impl PrincRec {
+    pub(crate) fn attributes(&self) -> u32 {
+        match self {
+            Self::Local(p) => p.attributes,
+            Self::Wire(w) => w.attributes,
+        }
+    }
+
+    pub(crate) fn policy(&self) -> Option<&str> {
+        match self {
+            Self::Local(p) => p.pw_policy.as_deref(),
+            Self::Wire(w) => w.policy.as_deref(),
+        }
+    }
 }
 
 pub(crate) struct LocalBackend {
@@ -223,18 +244,20 @@ impl Kadm5Api for LocalBackend {
         self.store.reload_if_stale()
     }
 
-    fn get_principal(&mut self, name: &PrincipalName, realm: &str) -> Result<Principal, Error> {
+    fn get_principal(&mut self, name: &PrincipalName, realm: &str) -> Result<PrincRec, Error> {
         self.refresh()?;
         let p = self
             .store
             .get_in_realm(name, realm)
             .ok_or(Error::NotFound)?;
         p.check_kadm_data()?;
-        Ok(p.clone())
+        Ok(PrincRec::Local(Box::new(p.clone())))
     }
 
-    fn merge_lockout(&self, p: &mut Principal) {
-        self.store.merge_lockout(p);
+    fn merge_lockout(&self, p: &mut PrincRec) {
+        if let PrincRec::Local(p) = p {
+            self.store.merge_lockout(p);
+        }
     }
 
     fn list_principals(&mut self, expr: Option<&str>) -> Result<Vec<String>, Error> {
@@ -365,7 +388,7 @@ impl Kadm5Api for LocalBackend {
         self.has_policy(name)
     }
 
-    fn has_policy(&self, name: &str) -> bool {
+    fn has_policy(&mut self, name: &str) -> bool {
         self.store.policies().contains_key(name)
     }
 
@@ -426,8 +449,15 @@ impl Kadm5Api for LocalBackend {
         self.store.unlock_database()
     }
 
-    #[cfg(all(test, feature = "test-hooks"))]
-    fn local_store(&self) -> &PrincipalStore {
+    // MIT: `kadm5_get_privs` (lib/kadm5/srv/server_misc.c:147-158)
+    fn get_privs(&mut self) -> Result<u32, Error> {
+        Ok(u32::MAX)
+    }
+}
+
+#[cfg(all(test, feature = "test-hooks"))]
+impl LocalBackend {
+    pub(super) fn local_store(&self) -> &PrincipalStore {
         &self.store
     }
 }
