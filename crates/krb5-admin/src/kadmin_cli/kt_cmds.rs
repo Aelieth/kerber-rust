@@ -239,7 +239,7 @@ fn add_principal(s: &mut Session<'_>, kt: &Kt, opts: &AddOpts, princ_str: &str) 
     let keys = if opts.norandkey {
         s.h.backend.get_principal_keys(&name, &realm)
     } else {
-        s.h.backend.randomize_key(&name, &realm, &opts.keysalts, 0)
+        s.h.backend.fetch_new_keys(&name, &realm, &opts.keysalts)
     };
     let keys = match keys {
         Ok(k) => k,

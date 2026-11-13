@@ -7,22 +7,23 @@ use krb5_client::{
     mit_error_code,
 };
 use krb5_config::{CcSpec, ClientContext, Krb5Conf};
-use krb5_kdc::{Error, KeyEntry, NamedPolicy};
+use krb5_kdc::{AdminEnt, Error, KeyEntry, NamedPolicy, TL_DB_ARGS, TL_LAST_ADMIN_UNLOCK};
 use krb5_protocol::AsOutcome;
 use krb5_types::PrincipalName;
 use zeroize::Zeroizing;
 
-use super::backend::{Kadm5Api, ModPrincipal, NewPrincipal, PrincRec};
+use super::backend::{Kadm5Api, ModPrincipal, NewPrincipal, PrincRec, mask};
 use super::stdio::Io;
 use super::texts;
 use crate::PolicyArgs;
 use crate::kadm5::{
-    AdminTicket, KADM5_BAD_PASSWORD, KADM5_MISSING_KRB5_CONF_PARAMS, KADM5_SECURE_PRINC_MISSING,
-    Kadm5Client, kadm5_error_text,
+    AdminTicket, AuthFlavours, KADM5_BAD_PASSWORD, KADM5_MISSING_KRB5_CONF_PARAMS,
+    KADM5_SECURE_PRINC_MISSING, KADM5_UNK_PRINC, Kadm5Client, PrincView, TlView, kadm5_error_text,
 };
 
 /// `KADM5_PRINCIPAL_NORMAL_MASK | KADM5_KEY_DATA`
 const GET_MASK: u32 = 0x0043_ffff;
+const NORMAL_MASK: u32 = 0x0041_ffff;
 const ADMIN_SERVICE: &str = "kadmin/admin";
 const KDC_S_PRINCIPAL_UNKNOWN: i32 = krb5_types::err::S_PRINCIPAL_UNKNOWN;
 
@@ -38,6 +39,7 @@ pub(super) struct Connect<'a> {
     pub(super) princstr: &'a str,
     pub(super) auth: Auth<'a>,
     pub(super) admin_server: Option<&'a str>,
+    pub(super) flavours: AuthFlavours,
 }
 
 #[derive(PartialEq)]
@@ -104,7 +106,10 @@ fn get_init_creds(
     let ctx = ClientContext::new(conf.clone());
     let first = acquire(io, c, &ctx, ADMIN_SERVICE);
     let result = match first {
-        Err(f) if matches!(f.kind, Kind::PrincipalUnknown | Kind::CcNotFound) => {
+        Err(f)
+            if matches!(f.kind, Kind::PrincipalUnknown | Kind::CcNotFound)
+                && !c.flavours.old_auth_gssapi =>
+        {
             let svc = format!("kadmin/{}", krb5_config::expand_hostname_conf(host, conf));
             acquire(io, c, &ctx, &svc)
         }
@@ -288,7 +293,7 @@ impl RemoteBackend {
         let ticket = get_init_creds(io, c, conf, &host)?;
         let port =
             u16::try_from(port).map_err(|_| kadm5_error_text(crate::kadm5::KADM5_RPC_ERROR))?;
-        Kadm5Client::open(&host, port, &ticket)
+        Kadm5Client::open(&host, port, &ticket, c.flavours)
             .map(|client| Self { client })
             .map_err(kadm5_error_text)
     }
@@ -303,8 +308,60 @@ fn wire(code: u32) -> Error {
     }
 }
 
-fn unsupported() -> Error {
-    Error::InvalidArgument("Operation not supported".to_owned())
+fn wire_key(code: u32) -> Error {
+    if code == KADM5_UNK_PRINC {
+        Error::NotFound
+    } else {
+        wire(code)
+    }
+}
+
+fn keysalt_pairs(ks: &[krb5_crypto::KeySalt]) -> Vec<(i32, i32)> {
+    ks.iter().map(|k| (k.etype.to_iana(), k.salt)).collect()
+}
+
+fn key_entry(enctype: i32, key: &[u8], kvno: u32) -> Result<KeyEntry, Error> {
+    let crypto = |e: krb5_crypto::Error| Error::Crypto(e.to_string());
+    let etype = krb5_crypto::EncryptionType::known(enctype).map_err(crypto)?;
+    let key = krb5_crypto::ProtocolKey::from_bytes(etype, key).map_err(crypto)?;
+    Ok(KeyEntry::new(etype, key, kvno))
+}
+
+fn princ_rec(name: &str, ent: &AdminEnt, db_args: &[String], unlock: bool) -> PrincView {
+    let mut tl_data = Vec::new();
+    if ent.mask & mask::TL_DATA != 0 {
+        for arg in db_args {
+            let mut contents = arg.as_bytes().to_vec();
+            contents.push(0);
+            tl_data.push(TlView {
+                ty: TL_DB_ARGS,
+                contents,
+            });
+        }
+        if unlock {
+            let now = krb5_types::KerberosTime::now().unix_seconds();
+            tl_data.push(TlView {
+                ty: TL_LAST_ADMIN_UNLOCK,
+                contents: now.to_le_bytes().to_vec(),
+            });
+        }
+    }
+    PrincView {
+        principal: name.to_owned(),
+        princ_expire_time: ent.princ_expire_time,
+        pw_expiration: ent.pw_expiration,
+        max_life: ent.max_life,
+        attributes: ent.attributes,
+        kvno: ent.kvno,
+        policy: if ent.mask & mask::POLICY != 0 {
+            ent.policy.clone()
+        } else {
+            None
+        },
+        max_renewable_life: ent.max_renewable_life,
+        tl_data,
+        ..PrincView::default()
+    }
 }
 
 fn full_name(name: &PrincipalName, realm: &str) -> String {
@@ -333,65 +390,132 @@ impl Kadm5Api for RemoteBackend {
         self.client.get_principals(Some(pattern)).map_err(wire)
     }
 
-    fn create_principal(&mut self, _: &NewPrincipal<'_>) -> Result<(), Error> {
-        Err(unsupported())
+    fn create_principal(&mut self, r: &NewPrincipal<'_>) -> Result<(), Error> {
+        let rec = princ_rec(&full_name(r.name, r.realm), &r.ent, r.db_args, r.unlock);
+        self.client
+            .create_principal(&rec, r.ent.mask, &keysalt_pairs(r.keysalts), r.pass)
+            .map_err(wire)
     }
 
-    fn modify_principal(&mut self, _: &ModPrincipal<'_>) -> Result<(), Error> {
-        Err(unsupported())
+    fn modify_principal(&mut self, r: &ModPrincipal<'_>) -> Result<(), Error> {
+        let rec = princ_rec(&full_name(r.name, r.realm), &r.ent, r.db_args, r.unlock);
+        self.client.modify_principal(&rec, r.ent.mask).map_err(wire)
     }
 
-    fn delete_principal(&mut self, _: &PrincipalName, _: &str) -> Result<(), Error> {
-        Err(unsupported())
+    fn delete_principal(&mut self, name: &PrincipalName, realm: &str) -> Result<(), Error> {
+        self.client
+            .delete_principal(&full_name(name, realm))
+            .map_err(wire)
     }
 
     fn rename_principal(
         &mut self,
-        _: &PrincipalName,
-        _: &str,
-        _: &PrincipalName,
-        _: &str,
+        old: &PrincipalName,
+        old_realm: &str,
+        new: &PrincipalName,
+        new_realm: &str,
     ) -> Result<(), Error> {
-        Err(unsupported())
+        self.client
+            .rename_principal(&full_name(old, old_realm), &full_name(new, new_realm))
+            .map_err(wire)
     }
 
     fn create_alias(
         &mut self,
-        _: &PrincipalName,
-        _: &str,
-        _: &PrincipalName,
-        _: &str,
+        alias: &PrincipalName,
+        alias_realm: &str,
+        target: &PrincipalName,
+        target_realm: &str,
     ) -> Result<(), Error> {
-        Err(unsupported())
+        self.client
+            .create_alias(
+                &full_name(alias, alias_realm),
+                &full_name(target, target_realm),
+            )
+            .map_err(wire)
     }
 
     fn change_password(
         &mut self,
-        _: &PrincipalName,
-        _: &str,
-        _: &[u8],
-        _: u32,
-        _: &[krb5_crypto::KeySalt],
+        name: &PrincipalName,
+        realm: &str,
+        pw: &[u8],
+        keepold: u32,
+        keysalts: &[krb5_crypto::KeySalt],
     ) -> Result<(), Error> {
-        Err(unsupported())
+        self.client
+            .chpass(
+                &full_name(name, realm),
+                pw,
+                keepold != 0,
+                &keysalt_pairs(keysalts),
+            )
+            .map_err(wire)
     }
 
     fn randomize_key(
         &mut self,
-        _: &PrincipalName,
-        _: &str,
-        _: &[krb5_crypto::KeySalt],
-        _: u32,
+        name: &PrincipalName,
+        realm: &str,
+        keysalts: &[krb5_crypto::KeySalt],
+        keepold: u32,
+    ) -> Result<(), Error> {
+        self.client
+            .randkey(
+                &full_name(name, realm),
+                keepold != 0,
+                &keysalt_pairs(keysalts),
+            )
+            .map(|_| ())
+            .map_err(wire)
+    }
+
+    // MIT: `fetch_new_keys` (kadmin/cli/keytab.c:248-296)
+    fn fetch_new_keys(
+        &mut self,
+        name: &PrincipalName,
+        realm: &str,
+        keysalts: &[krb5_crypto::KeySalt],
     ) -> Result<Vec<KeyEntry>, Error> {
-        Err(unsupported())
+        let full = full_name(name, realm);
+        let keys = self
+            .client
+            .randkey(&full, false, &keysalt_pairs(keysalts))
+            .map_err(wire_key)?;
+        let kvno = self
+            .client
+            .get_principal(&full, NORMAL_MASK)
+            .map_err(wire_key)?
+            .kvno;
+        keys.iter()
+            .map(|k| key_entry(k.enctype, &k.key, kvno))
+            .collect()
     }
 
-    fn get_principal_keys(&mut self, _: &PrincipalName, _: &str) -> Result<Vec<KeyEntry>, Error> {
-        Err(unsupported())
+    // MIT: `kadm5_get_principal_keys` (lib/kadm5/clnt/client_principal.c:504-528)
+    fn get_principal_keys(
+        &mut self,
+        name: &PrincipalName,
+        realm: &str,
+    ) -> Result<Vec<KeyEntry>, Error> {
+        let keys = self
+            .client
+            .extract_keys(&full_name(name, realm))
+            .map_err(wire_key)?;
+        keys.iter()
+            .map(|k| key_entry(k.enctype, &k.key, k.kvno))
+            .collect()
     }
 
-    fn purge_keys(&mut self, _: &PrincipalName, _: &str, _: i32) -> Result<(), Error> {
-        Err(unsupported())
+    fn purge_keys(
+        &mut self,
+        name: &PrincipalName,
+        realm: &str,
+        keepkvno: i32,
+    ) -> Result<(), Error> {
+        self.client
+            .purge_keys(&full_name(name, realm), keepkvno)
+            .map_err(wire)
     }
 
     fn get_strings(
@@ -406,12 +530,14 @@ impl Kadm5Api for RemoteBackend {
 
     fn set_string(
         &mut self,
-        _: &PrincipalName,
-        _: &str,
-        _: &str,
-        _: Option<&str>,
+        name: &PrincipalName,
+        realm: &str,
+        key: &str,
+        value: Option<&str>,
     ) -> Result<(), Error> {
-        Err(unsupported())
+        self.client
+            .set_string(&full_name(name, realm), key, value)
+            .map_err(wire)
     }
 
     fn policy_exists(&mut self, name: &str) -> bool {
@@ -442,16 +568,18 @@ impl Kadm5Api for RemoteBackend {
         self.client.get_policies(expr).map_err(wire)
     }
 
-    fn create_policy(&mut self, _: &PolicyArgs) -> Result<(), Error> {
-        Err(unsupported())
+    fn create_policy(&mut self, args: &PolicyArgs) -> Result<(), Error> {
+        self.client.create_policy(args, false).map_err(wire)
     }
 
-    fn modify_policy(&mut self, _: &PolicyArgs, _: bool) -> Result<(), Error> {
-        Err(unsupported())
+    fn modify_policy(&mut self, args: &PolicyArgs, clear_keysalts: bool) -> Result<(), Error> {
+        self.client
+            .modify_policy(args, clear_keysalts)
+            .map_err(wire)
     }
 
-    fn delete_policy(&mut self, _: &str) -> Result<(), Error> {
-        Err(unsupported())
+    fn delete_policy(&mut self, name: &str) -> Result<(), Error> {
+        self.client.delete_policy(name).map_err(wire)
     }
 
     fn map_update_log(&mut self, _: &std::path::Path, _: u32) -> Result<(), String> {

@@ -115,11 +115,6 @@ impl Handle {
     pub(crate) fn parse_name(&self, spec: &str) -> Result<(PrincipalName, String), &'static str> {
         krb5_types::principal_from_unparsed(spec, &self.realm).map_err(|_| texts::MALFORMED)
     }
-
-    /// `K/M@realm`, which `kadm5` refuses to delete.
-    pub(crate) fn is_master(&self, name: &PrincipalName, realm: &str) -> bool {
-        realm == self.realm && name.components_joined_lossy() == "K/M"
-    }
 }
 
 impl Open {
@@ -256,6 +251,8 @@ struct Opts {
     keysalts: Vec<krb5_crypto::KeySalt>,
     admin_server: Option<String>,
     password: Option<String>,
+    old_auth_gssapi: bool,
+    no_fallback: bool,
 }
 
 fn getopt_prog<'a>(argv0: &'a str, prog: &'a str) -> &'a str {
@@ -310,6 +307,8 @@ fn startup(argv: &[String], io: &mut Io, mode: Mode) -> Option<Startup> {
             's' => o.admin_server = Some(arg),
             'w' => o.password = Some(arg),
             'm' => o.mkey_from_kbd = true,
+            'O' => o.old_auth_gssapi = true,
+            'N' => o.no_fallback = true,
             'e' => o.keysalts = string_to_keysalts(&arg, &[',', ' ', '\t']),
             _ => {}
         }
@@ -556,6 +555,10 @@ fn client_init(
         princstr,
         auth,
         admin_server: o.admin_server.as_deref(),
+        flavours: crate::kadm5::AuthFlavours {
+            old_auth_gssapi: o.old_auth_gssapi,
+            no_fallback: o.no_fallback,
+        },
     };
     let backend = remote::RemoteBackend::connect(io, &connect, &conf).map_err(|e| (e, false))?;
     let iprop = krb5_config::IpropParams::for_realm(Some(&conf), realm, Path::new(""));

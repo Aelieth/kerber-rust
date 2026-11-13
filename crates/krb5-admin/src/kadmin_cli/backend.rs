@@ -29,6 +29,7 @@ pub(crate) struct NewPrincipal<'a> {
     pub(crate) keysalts: &'a [krb5_crypto::KeySalt],
     pub(crate) db_args: &'a [String],
     pub(crate) nokey: bool,
+    pub(crate) unlock: bool,
     pub(crate) pass: Option<&'a [u8]>,
 }
 
@@ -79,6 +80,12 @@ pub(crate) trait Kadm5Api: std::any::Any {
         realm: &str,
         keysalts: &[krb5_crypto::KeySalt],
         keepold: u32,
+    ) -> Result<(), Error>;
+    fn fetch_new_keys(
+        &mut self,
+        name: &PrincipalName,
+        realm: &str,
+        keysalts: &[krb5_crypto::KeySalt],
     ) -> Result<Vec<KeyEntry>, Error>;
     fn get_principal_keys(
         &mut self,
@@ -151,6 +158,18 @@ impl LocalBackend {
     ) -> Result<T, Error> {
         let caller = self.caller.clone();
         self.store.change(|st| f(st, &caller))?
+    }
+
+    fn chrand(
+        &mut self,
+        name: &PrincipalName,
+        realm: &str,
+        keysalts: &[krb5_crypto::KeySalt],
+        keepold: u32,
+    ) -> Result<Vec<KeyEntry>, Error> {
+        self.mutate(|st, caller| {
+            st.chrand_etypes_keepold_in(name, realm, keysalts, keepold, caller)
+        })
     }
 
     /// The keys are derived before the database's lock is taken, as MIT's create.
@@ -287,7 +306,13 @@ impl Kadm5Api for LocalBackend {
         self.mutate(|st, caller| modify(st, caller, r))
     }
 
+    /// `K/M@realm` is refused here; over the network the server decides.
     fn delete_principal(&mut self, name: &PrincipalName, realm: &str) -> Result<(), Error> {
+        if realm == self.store.realm() && name.components_joined_lossy() == "K/M" {
+            return Err(Error::InvalidArgument(
+                super::texts::PROTECT_PRINCIPAL.to_owned(),
+            ));
+        }
         self.mutate(|st, _| st.remove_in(name, realm))
     }
 
@@ -333,10 +358,17 @@ impl Kadm5Api for LocalBackend {
         realm: &str,
         keysalts: &[krb5_crypto::KeySalt],
         keepold: u32,
+    ) -> Result<(), Error> {
+        self.chrand(name, realm, keysalts, keepold).map(|_| ())
+    }
+
+    fn fetch_new_keys(
+        &mut self,
+        name: &PrincipalName,
+        realm: &str,
+        keysalts: &[krb5_crypto::KeySalt],
     ) -> Result<Vec<KeyEntry>, Error> {
-        self.mutate(|st, caller| {
-            st.chrand_etypes_keepold_in(name, realm, keysalts, keepold, caller)
-        })
+        self.chrand(name, realm, keysalts, 0)
     }
 
     // MIT: `kadm5_get_principal_keys` (lib/kadm5/srv/svr_principal.c:1775-1776)

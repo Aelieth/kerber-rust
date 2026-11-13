@@ -1,6 +1,7 @@
 mod acceptor;
 mod auth;
 pub(crate) mod auth_plugin;
+mod client_agss;
 mod client_conn;
 mod client_xdr;
 mod codes;
@@ -21,10 +22,10 @@ pub use auth::{
     changepw_acceptor, check_auth_gssapi_names, check_iprop_rpcsec_auth, check_rpcsec_auth,
 };
 pub use auth_plugin::{Decision, Kadm5Auth, Kadm5AuthConfig};
-pub(crate) use client_conn::{AdminTicket, Kadm5Client, PrincView};
+pub(crate) use client_conn::{AdminTicket, AuthFlavours, Kadm5Client, PrincView, TlView};
 pub(crate) use codes::{
-    KADM5_BAD_PASSWORD, KADM5_CANT_RESOLVE, KADM5_GSS_ERROR, KADM5_MISSING_KRB5_CONF_PARAMS,
-    KADM5_RPC_ERROR, KADM5_SECURE_PRINC_MISSING,
+    EINVAL, KADM5_BAD_PASSWORD, KADM5_CANT_RESOLVE, KADM5_GSS_ERROR,
+    KADM5_MISSING_KRB5_CONF_PARAMS, KADM5_RPC_ERROR, KADM5_SECURE_PRINC_MISSING, KADM5_UNK_PRINC,
 };
 pub use glob::glob_pattern_ok;
 pub(crate) use glob::{glob_expand, glob_is_match, policies_matching, principals_matching};

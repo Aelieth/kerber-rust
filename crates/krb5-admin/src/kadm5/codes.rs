@@ -90,7 +90,7 @@ pub(super) const SET_STRING: u32 = 24;
 pub(super) const EXTRACT_KEYS: u32 = 26;
 pub(super) const CREATE_ALIAS: u32 = 27;
 
-pub(super) const KADM5_UNK_PRINC: u32 = 43_787_532;
+pub(crate) const KADM5_UNK_PRINC: u32 = 43_787_532;
 pub(super) const KADM5_UNK_POLICY: u32 = 43_787_533;
 pub(super) const KADM5_BAD_MASK: u32 = 43_787_534;
 pub(super) const KADM5_BAD_CLASS: u32 = 43_787_535;
@@ -245,4 +245,4 @@ pub(super) const API_V4: u32 = 0x1234_5704;
 
 // MIT: `glob_to_regexp` (svr_iters.c:61-62)
 /// Trailing `\`.
-pub(super) const EINVAL: u32 = 22;
+pub(crate) const EINVAL: u32 = 22;

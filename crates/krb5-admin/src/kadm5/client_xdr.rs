@@ -1,4 +1,3 @@
-#![expect(dead_code, reason = "the write commands' encoders, not called yet")]
 use zeroize::Zeroizing;
 
 use super::xdr::{XdrR, XdrW, xdr_tl_type};
@@ -68,13 +67,10 @@ pub(crate) struct ExtractedKey {
     pub(crate) kvno: u32,
     pub(crate) enctype: i32,
     pub(crate) key: Zeroizing<Vec<u8>>,
-    pub(crate) salttype: i32,
-    pub(crate) salt: Vec<u8>,
 }
 
 #[derive(Debug)]
 pub(crate) struct Reply<T> {
-    pub(crate) api: u32,
     pub(crate) code: u32,
     pub(crate) body: Option<T>,
 }
@@ -391,10 +387,10 @@ fn reply<T>(
     body: impl FnOnce(&mut XdrR<'_>) -> Result<T, Error>,
 ) -> Result<Reply<T>, Error> {
     let mut r = XdrR::new(b);
-    let api = r.u32()?;
+    let _api = r.u32()?;
     let code = r.u32()?;
     let body = if code == 0 { Some(body(&mut r)?) } else { None };
-    Ok(Reply { api, code, body })
+    Ok(Reply { code, body })
 }
 
 // MIT: `xdr_generic_ret` (kadm_rpc_xdr.c:590-600)
@@ -487,14 +483,9 @@ pub(crate) fn decode_extract_keys(b: &[u8]) -> Result<Reply<Vec<ExtractedKey>>, 
             let kvno = r.u32()?;
             let enctype = r.u32()?.cast_signed();
             let key = Zeroizing::new(r.opaque()?);
-            let salttype = xdr_tl_type(r.u32()?);
-            keys.push(ExtractedKey {
-                kvno,
-                enctype,
-                key,
-                salttype,
-                salt: r.opaque()?,
-            });
+            let _salttype = r.u32()?;
+            let _salt = r.opaque()?;
+            keys.push(ExtractedKey { kvno, enctype, key });
         }
         Ok(keys)
     })

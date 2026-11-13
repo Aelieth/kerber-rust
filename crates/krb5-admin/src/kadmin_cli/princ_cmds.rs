@@ -2,13 +2,14 @@
 
 use std::fmt::Write as _;
 
-use krb5_kdc::{AdminEnt, Error};
+use krb5_kdc::{AdminEnt, Error, KDB_DISALLOW_ALL_TIX};
 use krb5_types::PrincipalName;
 use zeroize::Zeroizing;
 
 use super::backend::{ModPrincipal, NewPrincipal, mask};
 use super::{Session, string_to_keysalts, texts};
 use crate::getdate;
+use crate::kadm5::EINVAL;
 
 #[derive(Default)]
 struct PrincArgs {
@@ -208,15 +209,14 @@ pub(crate) fn addprinc(s: &mut Session<'_>, argv: &[String]) {
         }
     };
     a.mask |= mask::PRINCIPAL;
-    let done = s.h.backend.create_principal(&NewPrincipal {
-        name: &name,
-        realm: &realm,
-        ent: admin_ent(&a),
-        keysalts: &a.keysalts,
-        db_args: &a.db_args,
-        nokey: a.nokey,
-        pass: pass.as_deref().map(Vec::as_slice),
-    });
+    let mut done = create(s, &name, &realm, &a, pass.as_deref().map(Vec::as_slice));
+    let old_style = a.randkey
+        && matches!(&done, Err(Error::Protocol { code, .. }) if *code == EINVAL.cast_signed());
+    if old_style {
+        a.attributes |= KDB_DISALLOW_ALL_TIX;
+        a.mask |= mask::ATTRIBUTES;
+        done = create(s, &name, &realm, &a, Some(dummy_password().as_slice()));
+    }
     if let Err(e) = done {
         s.io.com_err(
             "add_principal",
@@ -225,7 +225,74 @@ pub(crate) fn addprinc(s: &mut Session<'_>, argv: &[String]) {
         );
         return;
     }
+    if old_style && !finish_old_randkey(s, &name, &realm, &a, &canon) {
+        return;
+    }
     s.io.info(&format!("Principal \"{canon}\" created.\n"));
+}
+
+fn create(
+    s: &mut Session<'_>,
+    name: &PrincipalName,
+    realm: &str,
+    a: &PrincArgs,
+    pass: Option<&[u8]>,
+) -> Result<(), Error> {
+    s.h.backend.create_principal(&NewPrincipal {
+        name,
+        realm,
+        ent: admin_ent(a),
+        keysalts: &a.keysalts,
+        db_args: &a.db_args,
+        nokey: a.nokey,
+        unlock: a.unlock,
+        pass,
+    })
+}
+
+// MIT: `prepare_dummy_password` (kadmin.c:1230-1239)
+fn dummy_password() -> Vec<u8> {
+    let mut buf = b"6F a[".to_vec();
+    buf.extend((buf.len()..255).map(|i| b'a' + u8::try_from(i % 26).unwrap_or(0)));
+    buf
+}
+
+/// A server without randkey creation: randomize, then re-enable tickets.
+fn finish_old_randkey(
+    s: &mut Session<'_>,
+    name: &PrincipalName,
+    realm: &str,
+    a: &PrincArgs,
+    canon: &str,
+) -> bool {
+    if let Err(e) = s.h.backend.randomize_key(name, realm, &a.keysalts, 0) {
+        s.io.com_err(
+            "add_principal",
+            Some(&texts::princ_text(&e)),
+            &format!("while randomizing key for \"{canon}\"."),
+        );
+        return false;
+    }
+    let mut ent = admin_ent(a);
+    ent.mask = mask::ATTRIBUTES;
+    ent.attributes &= !KDB_DISALLOW_ALL_TIX;
+    let done = s.h.backend.modify_principal(&ModPrincipal {
+        name,
+        realm,
+        ent,
+        db_args: &[],
+        unlock: false,
+        had_policy: false,
+    });
+    if let Err(e) = done {
+        s.io.com_err(
+            "add_principal",
+            Some(&texts::princ_text(&e)),
+            &format!("while clearing DISALLOW_ALL_TIX for \"{canon}\"."),
+        );
+        return false;
+    }
+    true
 }
 
 fn admin_ent(a: &PrincArgs) -> AdminEnt {
@@ -337,13 +404,10 @@ pub(crate) fn delprinc(s: &mut Session<'_>, argv: &[String]) {
             return;
         }
     }
-    let done = if s.h.is_master(&name, &realm) {
-        Err(texts::PROTECT_PRINCIPAL.to_owned())
-    } else {
+    let done =
         s.h.backend
             .delete_principal(&name, &realm)
-            .map_err(|e| texts::princ_text(&e))
-    };
+            .map_err(|e| texts::princ_text(&e));
     if let Err(msg) = done {
         s.io.com_err(
             "delete_principal",
@@ -530,10 +594,7 @@ pub(crate) fn cpw(s: &mut Session<'_>, argv: &[String]) {
     let canon = name.unparse_with_realm_lossy(&realm);
     let keep = u32::from(keepold);
     if pwarg.is_none() && randkey {
-        let done =
-            s.h.backend
-                .randomize_key(&name, &realm, &keysalts, keep)
-                .map(|_| ());
+        let done = s.h.backend.randomize_key(&name, &realm, &keysalts, keep);
         if let Err(e) = done {
             s.io.com_err(
                 "change_password",

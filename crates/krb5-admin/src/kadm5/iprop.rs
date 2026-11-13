@@ -21,7 +21,7 @@ use super::codes::{
     GSS_S_CONTINUE_NEEDED, IPROP_FULL_RESYNC, IPROP_FULL_RESYNC_EXT, IPROP_GET_UPDATES, IPROP_NULL,
     IPROP_PROG, IPROP_VERS, MSG_ACCEPTED, MSG_CALL, MSG_DENIED, MSG_REPLY, PROC_UNAVAIL,
     PROG_MISMATCH, PROG_UNAVAIL, REJECT_AUTH_ERROR, REJECT_RPC_MISMATCH, RPC_VERSION,
-    RPCSEC_GSS_VERS, RPG_DATA, RPG_INIT, SUCCESS, SYSTEM_ERR,
+    RPCSEC_GSS_VERS, RPG_DATA, RPG_DESTROY, RPG_INIT, SUCCESS, SYSTEM_ERR,
 };
 use super::log::{Caller, iprop_log_resync, iprop_log_unauth, iprop_log_updates};
 use super::rpc::{read_record, rpc_call_bytes, write_record};
@@ -309,7 +309,7 @@ fn recv_failure(e: &io::Error) -> RpcFailure {
     }
 }
 
-enum ReplyStat {
+pub(super) enum ReplyStat {
     Success { verf: Vec<u8>, results: usize },
     Failed(RpcFailure),
 }
@@ -353,7 +353,7 @@ fn read_reply(rec: &[u8]) -> Option<(u32, ReplyStat)> {
 }
 
 // MIT: `clnttcp_call` (lib/rpc/clnt_tcp.c:246-352)
-fn exchange(
+pub(super) fn exchange(
     stream: &mut TcpStream,
     xid: u32,
     rec: &[u8],
@@ -533,7 +533,8 @@ impl IpropClient {
             self.xid = self.xid.wrapping_add(1);
             let prog = (self.prog, self.vers);
             let seq = (xid, self.seq);
-            let rec = rpcsec_data_call(&mut self.ctx, &self.handle, prog, seq, proc, args)
+            let procs = (RPG_DATA, proc);
+            let rec = rpcsec_data_call(&mut self.ctx, &self.handle, prog, seq, procs, args)
                 .ok_or(RpcFailure::CantEncodeArgs)?;
             match exchange(&mut self.stream, xid, &rec)? {
                 (reply, ReplyStat::Success { verf, results }) => {
@@ -550,6 +551,19 @@ impl IpropClient {
                     self.refreshes += 1;
                 }
             }
+        }
+    }
+
+    // MIT: `authgss_destroy_context` (lib/rpc/auth_gss.c:544-574)
+    pub(super) fn destroy(&mut self) {
+        self.seq = self.seq.wrapping_add(1);
+        let xid = self.xid;
+        let prog = (self.prog, self.vers);
+        let seq = (xid, self.seq);
+        let procs = (RPG_DESTROY, 0);
+        if let Some(rec) = rpcsec_data_call(&mut self.ctx, &self.handle, prog, seq, procs, &[]) {
+            let _ = self.stream.set_read_timeout(Some(Duration::from_secs(1)));
+            let _ = exchange(&mut self.stream, xid, &rec);
         }
     }
 }
@@ -619,12 +633,12 @@ fn rpcsec_data_call(
     handle: &[u8],
     (prog, vers): (u32, u32),
     (xid, seq): (u32, u32),
-    proc: u32,
+    (gc_proc, proc): (u32, u32),
     args: &[u8],
 ) -> Option<Vec<u8>> {
     let mut cred = XdrW::default();
     cred.u32(RPCSEC_GSS_VERS);
-    cred.u32(RPG_DATA);
+    cred.u32(gc_proc);
     cred.u32(seq);
     cred.u32(GSS_PRIVACY);
     cred.opaque(handle);
