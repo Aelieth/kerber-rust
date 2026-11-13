@@ -332,6 +332,7 @@ pub trait KdcAudit: Send + Sync {
 }
 
 #[derive(Clone, Debug, Default)]
+#[non_exhaustive]
 pub struct AuditState {
     pub event_name: &'static str,
     pub stage: i32,

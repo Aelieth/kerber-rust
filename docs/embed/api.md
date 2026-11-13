@@ -30,9 +30,12 @@ Additions only; no existing signature changed.
 - The `krb5-kadmin` binary (installed as `kadmin`), `krb5_admin::kadmin_main` and
   `krb5_config::expand_hostname_conf`.
 
-An exhaustive `match` on `krb5_kdc::Error` meets new variants (`Host`, `Record`,
-`HostRecordsWithoutStash`, `StashWithoutHostRealm`, `LockoutMissing`, `LockoutUnreadable`,
-`LockoutForeign`), and an `AuditState` literal needs the new `lockout` field.
+`krb5_kdc::Error` gains variants (`Host`, `Record`, `HostRecordsWithoutStash`,
+`StashWithoutHostRealm`, `LockoutMissing`, `LockoutUnreadable`, `LockoutForeign`), and
+`AuditState` the `lockout` field, and `krb5_types::pac::PacError` gains `Range`. All three are
+now `#[non_exhaustive]`, so a later one doesn't break a build: a `match` on `Error` or
+`PacError` needs a `_` arm, and an `AuditState` is made with `AuditState::default()` and then
+its fields are set.
 
 ## One store and its locking
 

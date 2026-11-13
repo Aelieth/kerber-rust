@@ -3,6 +3,7 @@
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Error {
     Crypto(String),
     // MIT: `krb5_k_decrypt` (lib/crypto/krb/decrypt.c:45-46)

@@ -440,8 +440,8 @@ fn map_pac_err(e: &krb5_types::pac::PacError) -> Error {
         krb5_types::pac::PacError::Integrity => return proto(err::MODIFIED, status::HEADER_PAC),
         krb5_types::pac::PacError::MissingBuffer => E_ENOENT,
         krb5_types::pac::PacError::Truncated => E_BAD_MSIZE,
-        krb5_types::pac::PacError::Malformed => E_EINVAL,
         krb5_types::pac::PacError::Range => E_ERANGE,
+        _ => E_EINVAL,
     };
     proto_d(err::GENERIC, status::HEADER_PAC, text)
 }

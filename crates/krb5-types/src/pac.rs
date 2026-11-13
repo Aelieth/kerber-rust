@@ -89,6 +89,7 @@ pub struct Pac {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PacError {
     Truncated,
     Integrity,
