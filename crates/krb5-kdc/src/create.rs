@@ -667,12 +667,18 @@ fn commit_store(store: &PrincipalStore, db: &Path, master: &ProtocolKey) -> Resu
         clear_temp(&tmp);
         return Err(Error::InvalidArgument("database already exists".into()));
     }
-    if let Err(err) = std::fs::rename(&tmp, db) {
+    let side = crate::lockout_path(db);
+    if let Err(err) = std::fs::rename(crate::lockout_path(&tmp), &side) {
         clear_temp(&tmp);
         return Err(db_err(&err));
     }
-    let _ = std::fs::rename(crate::lockout_path(&tmp), crate::lockout_path(db));
+    if let Err(err) = std::fs::rename(&tmp, db) {
+        let _ = std::fs::remove_file(&side);
+        clear_temp(&tmp);
+        return Err(db_err(&err));
+    }
     clear_temp_locks(&tmp);
+    let _ = crate::lockout::sync_parent(db);
     Ok(())
 }
 

@@ -432,16 +432,13 @@ fn make_beside(db: &Path, records: &[(String, Lockout)]) -> io::Result<()> {
     krb5_protocol::write_secret_file_like(&path, db, &render(records)).map_err(|e| named(&path, &e))
 }
 
-fn db_writable(db: &Path) -> bool {
-    OpenOptions::new().read(true).write(true).open(db).is_ok()
+pub(crate) fn sync_parent(path: &Path) -> io::Result<()> {
+    let dir = path.parent().filter(|d| !d.as_os_str().is_empty());
+    File::open(dir.unwrap_or_else(|| Path::new(".")))?.sync_all()
 }
 
-pub(crate) fn ensure_lockout_file(db: &Path) {
-    let path = lockout_path(db);
-    if path.symlink_metadata().is_ok() || !db_writable(db) {
-        return;
-    }
-    let _ = make_beside(db, &[]);
+fn db_writable(db: &Path) -> bool {
+    OpenOptions::new().read(true).write(true).open(db).is_ok()
 }
 
 fn open_for_writing(db: &Path) -> io::Result<Option<SideFile>> {
@@ -636,6 +633,8 @@ pub fn create_lockout_file(path: &Path) -> Result<(), crate::Error> {
     match created {
         Ok(file) => file
             .write_all_at(&render(&[]), 0)
+            .and_then(|()| file.sync_all())
+            .and_then(|()| sync_parent(path))
             .map_err(|e| unwritable(&e)),
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => check_host_file(path),
         Err(e) => Err(unwritable(&e)),

@@ -305,9 +305,22 @@ pub fn check_openable(db: &Path) -> Result<(), PersistError> {
 // MIT: `krb5_db2_open` (plugins/kdb/db2/kdb_db2.c:1194-1198)
 pub fn load_store(db_path: &Path, stash_path: &Path) -> Result<PrincipalStore, PersistError> {
     check_openable(db_path)?;
+    check_lockout_file(db_path)?;
     let lock = Arc::new(DbLock::open(db_path)?);
     let _held = lock.hold(DbLockMode::Shared)?;
     read_store(db_path, stash_path, &lock)
+}
+
+// MIT: `klmdb_open` (plugins/kdb/lmdb/kdb_lmdb.c:546-561)
+fn check_lockout_file(db: &Path) -> Result<(), PersistError> {
+    let path = crate::lockout_path(db);
+    match path.symlink_metadata() {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let text = crate::Error::LockoutMissing { path }.to_string();
+            Err(PersistError::Io(std::io::Error::new(e.kind(), text)))
+        }
+        _ => Ok(()),
+    }
 }
 
 // MIT: `open_db_and_mkey` (kadmin/dbutil/kdb5_util.c:378-401)
@@ -335,7 +348,6 @@ pub(crate) fn read_store(
         _ => load_dump_with_stash(dump_text(&blob)?, &stash)?,
     };
     crate::lockout::merge_lockout_file(&mut store, db_path);
-    crate::lockout::ensure_lockout_file(db_path);
     store.persist_paths = Some((db_path.to_path_buf(), stash_path.to_path_buf()));
     store.db_stamp = stamp_read(&mut store, lock, db_path, &blob);
     store.dblock = Some(Arc::clone(lock));
@@ -363,6 +375,7 @@ pub fn load_store_with_master(
     master: &ProtocolKey,
 ) -> Result<PrincipalStore, PersistError> {
     check_openable(db_path)?;
+    check_lockout_file(db_path)?;
     let lock = Arc::new(DbLock::open(db_path)?);
     let _held = lock.hold(DbLockMode::Shared)?;
     read_store_with_master(db_path, master, &lock)
@@ -383,7 +396,6 @@ pub(crate) fn read_store_with_master(
     }
     let mut store = crate::kdb_dump::load_dump_with_key(dump_text(&blob)?, master)?;
     crate::lockout::merge_lockout_file(&mut store, db_path);
-    crate::lockout::ensure_lockout_file(db_path);
     store.db_stamp = stamp_read(&mut store, lock, db_path, &blob);
     store.dblock = Some(Arc::clone(lock));
     store.persist_master = Some((db_path.to_path_buf(), master.clone()));
