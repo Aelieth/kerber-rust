@@ -36,9 +36,10 @@ default = ["pk"]
 pk = ["dep:krb5-types", "dep:p224", "dep:p256", "dep:p384", "dep:k256", "dep:crypto-bigint", "dep:bp256", "dep:bp384", "dep:krb5-brainpool", "dep:ecdsa"]
 
 # The tree takes rasn from vendor/rasn (its own [patch.crates-io]): the same here, so the decoder
-# timed is the one that ships.
+# timed is the one that ships. dudect-bencher comes from vendor/ without its clap macros.
 [patch.crates-io]
 rasn = { path = "../../../vendor/rasn" }
+dudect-bencher = { path = "../../../vendor/dudect-bencher" }
 
 # No [profile.release]: the tree sets none, so cargo's default release profile is what its own
 # binaries are built with, and what is timed here.
