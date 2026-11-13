@@ -627,6 +627,7 @@ dependencies = [
  "getrandom 0.2.17",
  "hmac",
  "krb5-log",
+ "krb5-s2k",
  "md-5",
  "md4",
  "p256",
@@ -693,6 +694,18 @@ dependencies = [
  "subtle",
  "thiserror",
  "tracing",
+ "zeroize",
+]
+
+[[package]]
+name = "krb5-s2k"
+version = "1.2.2"
+dependencies = [
+ "aes",
+ "hmac",
+ "pbkdf2",
+ "sha1",
+ "sha2",
  "zeroize",
 ]
 

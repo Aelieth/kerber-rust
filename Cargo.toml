@@ -4,6 +4,7 @@ members = [
     "crates/krb5-log",
     "crates/krb5-cli",
     "crates/krb5-crypto",
+    "crates/krb5-s2k",
     "crates/krb5-types",
     "crates/krb5-brainpool",
     "crates/krb5-asn1",
@@ -34,6 +35,7 @@ publish = false
 krb5-log = { path = "crates/krb5-log" }
 krb5-cli = { path = "crates/krb5-cli" }
 krb5-crypto = { path = "crates/krb5-crypto" }
+krb5-s2k = { path = "crates/krb5-s2k" }
 krb5-types = { path = "crates/krb5-types" }
 krb5-brainpool = { path = "crates/krb5-brainpool" }
 krb5-asn1 = { path = "crates/krb5-asn1" }

@@ -10,7 +10,6 @@ mod derive;
 mod error;
 mod etype;
 mod key;
-mod nfold;
 mod ops;
 mod prf;
 mod spake;

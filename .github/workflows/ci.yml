@@ -38,6 +38,11 @@ jobs:
         # The release configuration, as `make build` makes it: code under
         # `cfg(not(feature = "test-hooks"))` is linted only here.
         run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+      - name: krb5-s2k builds for wasm32
+        # No clock, no RNG, no std: a browser derives the keys from the password.
+        run: cargo build -p krb5-s2k --target wasm32-unknown-unknown --locked
       - name: Install cargo-nextest
         uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2.87.14
         with:

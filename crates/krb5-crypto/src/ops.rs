@@ -2,11 +2,10 @@ use std::time::Instant;
 
 use pbkdf2::pbkdf2_hmac;
 use sha1::Sha1;
-use sha2::{Sha256, Sha384};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::cts::{self, BLOCK};
-use crate::derive::{self, derive_usage_keys, hmac_truncated, mac_verify};
+use crate::derive::{derive_usage_keys, hmac_truncated, mac_verify};
 use crate::error::Error;
 use crate::etype::{EncryptionType, KeyUsage};
 use crate::key::ProtocolKey;
@@ -91,44 +90,9 @@ fn string_to_key_inner(
         return crate::weak::des3_string_to_key(password, salt);
     }
     let iter = parse_iterations(etype, params)?;
-    let key_len = etype.key_len();
-    let mut tkey = Wiped(vec![0u8; key_len]);
-
-    if etype.is_rfc8009() {
-        let mut saltp = Vec::new();
-        saltp.extend_from_slice(
-            etype
-                .enctype_name()
-                .ok_or(Error::UnsupportedEtype(etype.to_iana()))?
-                .as_bytes(),
-        );
-        saltp.push(0x00);
-        saltp.extend_from_slice(salt);
-        match etype {
-            EncryptionType::Aes128CtsHmacSha256128 => {
-                pbkdf2_hmac::<Sha256>(password, &saltp, iter, &mut tkey);
-            }
-            EncryptionType::Aes256CtsHmacSha384192 => {
-                pbkdf2_hmac::<Sha384>(password, &saltp, iter, &mut tkey);
-            }
-            EncryptionType::Aes128CtsHmacSha196
-            | EncryptionType::Aes256CtsHmacSha196
-            | EncryptionType::Des3CbcSha1
-            | EncryptionType::Rc4Hmac
-            | EncryptionType::Camellia128CtsCmac
-            | EncryptionType::Camellia256CtsCmac => {
-                return Err(Error::UnsupportedEtype(etype.to_iana()));
-            }
-        }
-        let base = Wiped(derive::kdf_hmac_sha2(
-            etype,
-            &tkey,
-            b"kerberos",
-            None,
-            derive::bits_u32(key_len),
-        )?);
-        ProtocolKey::from_bytes(etype, &base)
-    } else if etype.is_camellia() {
+    if etype.is_camellia() {
+        let key_len = etype.key_len();
+        let mut tkey = Wiped(vec![0u8; key_len]);
         let mut saltp = Vec::new();
         saltp.extend_from_slice(
             etype
@@ -140,12 +104,10 @@ fn string_to_key_inner(
         saltp.extend_from_slice(salt);
         pbkdf2_hmac::<Sha1>(password, &saltp, iter, &mut tkey);
         let base = Wiped(crate::weak::dk_camellia(&tkey, b"kerberos")?);
-        ProtocolKey::from_bytes(etype, &base)
-    } else {
-        pbkdf2_hmac::<Sha1>(password, salt, iter, &mut tkey);
-        let base = Wiped(derive::dk_rfc3961(&tkey, b"kerberos")?);
-        ProtocolKey::from_bytes(etype, &base)
+        return ProtocolKey::from_bytes(etype, &base);
     }
+    let base = krb5_s2k::string_to_key_iter(etype.to_iana(), password, salt, iter)?;
+    ProtocolKey::from_bytes(etype, &base)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -188,7 +150,7 @@ pub fn kdb_decrypt_key(mkey: &ProtocolKey, ciphertext: &[u8]) -> Result<Zeroizin
     let key_len = usize::from(u16::from_le_bytes([ciphertext[0], ciphertext[1]]));
     let mut plain = Zeroizing::new(decrypt(mkey, KeyUsage::from_rfc(0), &ciphertext[2..])?);
     // MIT: `krb5_dbe_def_decrypt_key_data` (lib/kdb/decrypt_key.c:80-106)
-    // the stored length is an int16 and the plaintext may be longer (padding), never shorter.
+    // the stored length is an int16; padded plaintext may be longer, never shorter.
     if key_len > 0x7fff || plain.len() < key_len {
         return Err(Error::InvalidKeyLength);
     }
@@ -754,7 +716,6 @@ mod tests {
     use md5::{Digest, Md5};
 
     // MIT: `krb5_dbe_def_decrypt_key_data` (lib/kdb/decrypt_key.c:80-106)
-    // a padded plaintext is cut to the stored length; a short one, or a negative int16, is refused.
     // No supported master and key enctype pair pads, so no live MIT cell reaches this.
     #[test]
     fn kdb_key_plaintext_may_be_padded_but_not_short() {

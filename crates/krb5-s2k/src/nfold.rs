@@ -1,8 +1,13 @@
 // MIT: `krb5int_nfold` (lib/crypto/krb/nfold.c:46-117)
 
-pub fn nfold(input: &[u8], out_len: usize) -> Result<Vec<u8>, crate::error::Error> {
+use alloc::vec;
+use alloc::vec::Vec;
+
+use crate::error::S2kError;
+
+pub fn nfold(input: &[u8], out_len: usize) -> Result<Vec<u8>, S2kError> {
     if input.is_empty() || out_len == 0 {
-        return Err(crate::error::Error::InvalidParams);
+        return Err(S2kError::BadParams);
     }
     let inbits = input.len();
     let outbits = out_len;
@@ -52,6 +57,8 @@ pub fn nfold(input: &[u8], out_len: usize) -> Result<Vec<u8>, crate::error::Erro
 #[cfg(test)]
 mod tests {
     use super::nfold;
+    use alloc::string::String;
+    use alloc::vec::Vec;
 
     fn hex(s: &str) -> Vec<u8> {
         let s: String = s.chars().filter(|c| !c.is_whitespace()).collect();
