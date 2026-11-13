@@ -675,7 +675,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-brainpool"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "ecdsa",
  "elliptic-curve",
@@ -686,7 +686,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-crypto"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "aes",
  "camellia",
@@ -696,6 +696,7 @@ dependencies = [
  "getrandom 0.2.17",
  "hmac",
  "krb5-log",
+ "krb5-s2k",
  "md-5",
  "md4",
  "p256",
@@ -710,7 +711,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-log"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "chrono",
  "getrandom 0.2.17",
@@ -721,8 +722,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "krb5-s2k"
+version = "1.2.2"
+dependencies = [
+ "aes",
+ "hmac",
+ "pbkdf2",
+ "sha1",
+ "sha2",
+ "zeroize",
+]
+
+[[package]]
 name = "krb5-types"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "bp256",
  "bp384",
@@ -1159,9 +1172,9 @@ dependencies = [
 
 [[package]]
 name = "rustix"
-version = "1.1.4"
+version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6fe4565b9518b83ef4f91bb47ce29620ca828bd32cb7e408f0062e9930ba190"
+checksum = "e5e76742e5294153d4dde1207dbec5bdd81eef6fabdc0d2118babadabfd858aa"
 dependencies = [
  "bitflags 2.13.1",
  "errno",
