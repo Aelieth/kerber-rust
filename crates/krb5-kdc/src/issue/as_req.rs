@@ -109,6 +109,7 @@ struct AsLookup {
     work_padata: Option<Vec<PaData>>,
     req_cname: PrincipalName,
     ckey: Option<KeyEntry>,
+    local_tgt: Principal,
 }
 
 struct AsPreauth {
@@ -126,6 +127,7 @@ struct AsPreauth {
     reply_key_replaced: bool,
     auth_indicators: Vec<String>,
     anonymous_as: bool,
+    local_tgt: Principal,
 }
 
 // MIT: `finish_process_as_req` (kdc/do_as_req.c:340-365)
@@ -196,9 +198,8 @@ fn lookup_client(
     let client = lookup_as_princ(store, &req_cname, status::LOOKING_UP_CLIENT)?
         .ok_or_else(|| proto(err::C_PRINCIPAL_UNKNOWN, status::CLIENT_NOT_FOUND))?;
     *audited = Some(audit_entry(&client, body, &req_cname));
-    let cname = if req_cname.name_type == PrincipalName::NT_ENTERPRISE
-        || body.kdc_options.bit(flag_bit::CANONICALIZE)
-    {
+    // MIT: `process_as_req` (kdc/do_as_req.c:681-688)
+    let cname = if body.kdc_options.bit(flag_bit::CANONICALIZE) {
         client.name.clone()
     } else {
         req_cname.clone()
@@ -209,6 +210,7 @@ fn lookup_client(
         .unwrap_or_else(|| PrincipalName::krbtgt(store.realm()));
     let server = lookup_as_princ(store, &sname, status::LOOKING_UP_SERVER)?
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::SERVER_NOT_FOUND))?;
+    let local_tgt = get_local_tgt(store, &server)?;
     // MIT: `process_as_req` (do_as_req.c:630-630)
     validate_as_request(store, &client, &server, body, kdc_time)?;
     let session_etype = select_session_keytype(&server, &body.etype, store.policy())?;
@@ -231,7 +233,25 @@ fn lookup_client(
         work_padata,
         req_cname,
         ckey,
+        local_tgt,
     })
+}
+
+// MIT: `process_as_req` (kdc/do_as_req.c:618-624)
+// MIT: `get_local_tgt` (kdc/kdc_util.c:486-520)
+fn get_local_tgt(store: &dyn PrincipalRead, server: &Principal) -> Result<Principal, Error> {
+    let tgt = if server.name.is_krbtgt_for(store.realm()) && server.realm == store.realm() {
+        server.clone()
+    } else {
+        store
+            .fetch_krbtgt()?
+            .ok_or_else(|| proto(err::GENERIC, status::GET_LOCAL_TGT))?
+    };
+    store
+        .policy()
+        .first_current_key(&tgt)
+        .map_err(|e| proto_d(err::GENERIC, status::GET_LOCAL_TGT, e.message()))?;
+    Ok(tgt)
 }
 
 // MIT: `finish_preauth` (do_as_req.c:434-466)
@@ -254,6 +274,7 @@ fn finish_preauth(
         work_padata,
         req_cname,
         ckey: ckey_owned,
+        local_tgt,
     } = lookup;
     let ckey = ckey_owned.as_ref();
     let armor = fast.map(|f| &f.armor_key);
@@ -474,6 +495,7 @@ fn finish_preauth(
         reply_key_replaced,
         auth_indicators,
         anonymous_as,
+        local_tgt,
     })
 }
 
@@ -503,6 +525,7 @@ fn finish_process_as_req(
         reply_key_replaced,
         auth_indicators,
         anonymous_as,
+        local_tgt: krbtgt_p,
     } = pre;
     let skey = store
         .policy()
@@ -561,9 +584,6 @@ fn finish_process_as_req(
         true,
         flags.bit(flag_bit::ANONYMOUS),
     );
-    let krbtgt_p = store
-        .fetch_krbtgt()?
-        .ok_or_else(|| proto(err::GENERIC, status::GET_LOCAL_TGT))?;
     let krbtgt_key = store
         .policy()
         .first_current_key(&krbtgt_p)

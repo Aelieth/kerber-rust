@@ -297,10 +297,9 @@ fn as_no_server_key_is_finding_server_key() {
     use krb5_protocol::{as_req, pa_enc_timestamp};
     use krb5_types::err;
     let (mut store, _) = crate::testrealm::bootstrap_documented().unwrap();
-    let krbtgt = PrincipalName::krbtgt(crate::testrealm::TEST_REALM);
-    let mut p = store.get_name(&krbtgt).unwrap().clone();
-    p.keys.clear();
-    store.debug_insert(p).expect("utf-8 name");
+    let svc = PrincipalName::new(PrincipalName::NT_SRV_HST, ["svc", "keyless"]);
+    let keyless = crate::store::PrincipalBuilder::new(svc.clone(), crate::testrealm::TEST_REALM);
+    store.debug_insert(keyless.build()).expect("utf-8 name");
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::testrealm::TEST_USER]);
     let key = {
         let u = store.get_name(&user).unwrap();
@@ -309,13 +308,14 @@ fn as_no_server_key_is_finding_server_key() {
             .key
             .clone()
     };
-    let req = as_req(
+    let mut req = as_req(
         user,
         crate::testrealm::TEST_REALM,
         501,
         Some(vec![pa_enc_timestamp(&key).unwrap()]),
     )
     .unwrap();
+    req.0.req_body.sname = Some(svc);
     let err = crate::issue_as(&store, &req).unwrap_err();
     match err {
         Error::Protocol { code, text, .. } => {
