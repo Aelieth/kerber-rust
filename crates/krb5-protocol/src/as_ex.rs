@@ -33,7 +33,7 @@ pub(crate) use fast::fast_error_material;
 pub use fast::set_service_restart;
 use fast::{ask_gak_question, ask_responder, continue_fast};
 pub use otp::{OtpChallengeView, OtpTokenView};
-use password::{ModuleFail, PasswordCell};
+use password::{ModuleFail, PasswordCell, as_key_password};
 pub use responder::{QUESTION_OTP, QUESTION_PASSWORD, Responder, ResponderItems};
 use spake::{
     SpakeEnd, client_groups, continue_spake, refuse_spake_combo, refuse_spake_skip, spake_forced,
@@ -576,7 +576,7 @@ fn finish_as_rep_keys(
             &rep.0.cname,
             &rep.0.crealm,
         );
-        let key = string_to_key(etype, &password, &salt, params.as_deref())?;
+        let key = as_key_password(etype, &password, &salt, params.as_deref())?;
         trace::init_creds_as_key_gak((&key).into());
         return finish_as_rep(
             req.profile,
@@ -674,7 +674,7 @@ fn long_term_as_key(
         return Ok(key);
     }
     let password = pw.get().map_err(ModuleFail::unwrapped)?;
-    let key = string_to_key(etype, &password, salt, params)?;
+    let key = as_key_password(etype, &password, salt, params)?;
     trace::init_creds_as_key_gak((&key).into());
     Ok(key)
 }
@@ -902,7 +902,7 @@ fn continue_preauth(
     let client_key = match pick_key(keys, Some(etype)) {
         Some(key) => key,
         None => match pw.get() {
-            Ok(password) => match string_to_key(etype, &password, &salt, params.as_deref()) {
+            Ok(password) => match as_key_password(etype, &password, &salt, params.as_deref()) {
                 Err(krb5_crypto::Error::BadS2kParams) => {
                     return Ok(Err(ModuleFail::key_refused(Error::BadS2kParams)));
                 }

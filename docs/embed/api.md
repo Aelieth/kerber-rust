@@ -24,7 +24,9 @@ Additions only; no existing signature changed.
   `PrincipalRead::fetch_client`, a provided method that is exact unless the store folds.
 - `GssContext::wrap_size_limit` in `krb5-gss`.
 - The `krb5-s2k` crate: AES `string_to_key` and `string_to_key_iter` with no clock, RNG or
-  std, for wasm32.
+  std, for wasm32. `string_to_key` takes params as MIT's
+  `krb5_c_string_to_key_with_params` does: `None` is the default count, and an empty
+  block is refused, so pass `None` for an absent or empty `s2kparams`.
 - The `krb5-kadmin` binary (installed as `kadmin`), `krb5_admin::kadmin_main` and
   `krb5_config::expand_hostname_conf`.
 

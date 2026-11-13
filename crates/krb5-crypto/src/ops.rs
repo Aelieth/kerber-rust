@@ -16,7 +16,7 @@ const MAX_ITERATIONS: u32 = 0x100_0000;
 // MIT: `pbkdf2_string_to_key` (lib/crypto/krb/s2k_pbkdf2.c:122-141)
 fn parse_iterations(etype: EncryptionType, params: Option<&[u8]>) -> Result<u32, Error> {
     let n = match params {
-        None | Some([]) => etype.default_iterations(),
+        None => etype.default_iterations(),
         Some(p) => {
             let n = u32::from_be_bytes(p.try_into().map_err(|_| Error::BadS2kParams)?);
             if n == 0 || (n < etype.default_iterations() && !weak_iterations()) {
@@ -81,7 +81,7 @@ fn string_to_key_inner(
 ) -> Result<ProtocolKey, Error> {
     // MIT: `krb5int_arcfour_string_to_key` (lib/crypto/krb/s2k_rc4.c:17-18)
     if etype == EncryptionType::Rc4Hmac {
-        if params.is_some_and(|p| !p.is_empty()) {
+        if params.is_some() {
             return Err(Error::BadS2kParams);
         }
         return crate::weak::rc4_string_to_key(password);

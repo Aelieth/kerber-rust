@@ -33,7 +33,7 @@ pub fn string_to_key(
 ) -> Result<Zeroizing<Vec<u8>>, S2kError> {
     let default = default_iterations(enctype)?;
     let iterations = match params {
-        None | Some([]) => default,
+        None => default,
         Some(p) => {
             let n = u32::from_be_bytes(p.try_into().map_err(|_| S2kError::BadParams)?);
             if n < default {

@@ -2,14 +2,14 @@ use krb5_asn1::{decode, encode};
 use krb5_config::Krb5Conf;
 use krb5_crypto::{
     EncryptionType, ProtocolKey, SPAKE_DEFAULT_GROUPS_CLIENT, SpakeGroup, spake_group_words,
-    spake_parse_groups, string_to_key,
+    spake_parse_groups,
 };
 use krb5_types::spake::{PaSpake, SF_NONE, SpakeChallenge};
 use krb5_types::{KrbError, PaData, err, pa};
 
 use super::clock::Clock;
 use super::fast::ask_responder;
-use super::password::{CANTREADPWD, ModuleFail, PasswordCell};
+use super::password::{CANTREADPWD, ModuleFail, PasswordCell, as_key_password};
 use super::{
     AsOutcome, AsRequest, KdcMsg, S2kMaterial, allowed_padata, build_as_req_from,
     conf_preferred_preauth_types_for, error_has_salt, fallback_s2k, find_pa, finish_as_rep,
@@ -135,7 +135,7 @@ fn process_challenge(
     let ikey = match pick_key(keys, Some(etype)) {
         Some(key) => key,
         None => match pw.get() {
-            Ok(password) => match string_to_key(etype, &password, &salt, params.as_deref()) {
+            Ok(password) => match as_key_password(etype, &password, &salt, params.as_deref()) {
                 Err(krb5_crypto::Error::BadS2kParams) => {
                     return Ok(Round::Failed(ModuleFail::key_refused(Error::BadS2kParams)));
                 }
@@ -275,7 +275,7 @@ impl FastSpake {
             return Ok(key);
         }
         let password = pw.get().map_err(ModuleFail::unwrapped)?;
-        Ok(string_to_key(etype, &password, &salt, params.as_deref())?)
+        Ok(as_key_password(etype, &password, &salt, params.as_deref())?)
     }
 
     /// Challenge response sent: fallback disabled.
