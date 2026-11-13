@@ -130,6 +130,14 @@ pub struct Principal {
     pub pw_policy: Option<String>,
     pub kadm: KadmData,
     pub string_attrs: Vec<(String, String)>,
+    pub(crate) loaded_ct: Vec<LoadedCt>,
+}
+
+#[derive(Clone)]
+pub(crate) struct LoadedCt {
+    pub(crate) kvno: u32,
+    pub(crate) etype: i32,
+    pub(crate) ct: Vec<u8>,
 }
 
 impl std::fmt::Debug for Principal {
@@ -159,6 +167,7 @@ impl std::fmt::Debug for Principal {
             .field("pw_policy", &self.pw_policy)
             .field("kadm", &self.kadm)
             .field("string_attrs", &self.string_attrs)
+            .field("loaded_ct", &self.loaded_ct.len())
             .finish()
     }
 }
@@ -244,6 +253,7 @@ impl Principal {
             pw_policy: None,
             kadm: KadmData::default(),
             string_attrs: Vec::new(),
+            loaded_ct: Vec::new(),
         }
     }
 }

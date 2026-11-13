@@ -17,7 +17,7 @@ use crate::mkey::{MASTER_NAME, default_master_etype, master_key_from_password};
 use crate::osa::OsaPrincEnt;
 use crate::store::{
     IPROP_NIL, IPROP_OK, KDB_DISALLOW_ALL_TIX, KDB_LOCKDOWN_KEYS, KadmData, KeyEntry, KeySlot,
-    NamedPolicy, OpaqueKey, Principal, PrincipalStore, TlData,
+    LoadedCt, NamedPolicy, OpaqueKey, Principal, PrincipalStore, TlData,
 };
 use crate::ulog::UlogLast;
 
@@ -337,6 +337,7 @@ impl DumpPrincipal {
         let (name, realm) = parse_unparsed(&self.name)?;
         let mut keys = Vec::new();
         let mut opaque_keys = Vec::new();
+        let mut loaded_ct = Vec::new();
         for (at, kd) in self.keys.iter().enumerate() {
             if kd.slots.is_empty() {
                 return Err(DumpError::Format("key_data with no slots".into()));
@@ -371,6 +372,11 @@ impl DumpPrincipal {
                 kvno: kd.kvno,
                 salt_type,
                 kdb_salt,
+            });
+            loaded_ct.push(LoadedCt {
+                kvno: kd.kvno,
+                etype: key_slot.ty,
+                ct: key_slot.contents.clone(),
             });
         }
         if name.components_joined_lossy() == "K/M"
@@ -426,10 +432,22 @@ impl DumpPrincipal {
                 pw_policy,
                 kadm,
                 string_attrs,
+                loaded_ct,
             },
             sid,
         ))
     }
+}
+
+fn loaded_ct<'p>(p: &'p Principal, k: &KeyEntry, mkey: &ProtocolKey) -> Option<&'p [u8]> {
+    let same = |ct: &[u8]| {
+        kdb_decrypt_key(mkey, ct).is_ok_and(|raw| bool::from(raw.ct_eq(k.key.as_bytes())))
+    };
+    p.loaded_ct
+        .iter()
+        .filter(|c| c.kvno == k.kvno && c.etype == k.etype.to_iana())
+        .find(|c| same(&c.ct))
+        .map(|c| c.ct.as_slice())
 }
 
 // MIT: `restore_dump` (kadmin/dbutil/dump.c:1364-1379)
@@ -1469,7 +1487,11 @@ fn write_princ_record(
                 continue;
             }
         };
-        let enc = kdb_encrypt_key(mkey, k.key.as_bytes())?;
+        // MIT: `k5beta7_common` (kadmin/dbutil/dump.c:351-361)
+        let enc = match loaded_ct(p, k, mkey) {
+            Some(ct) => ct.to_vec(),
+            None => kdb_encrypt_key(mkey, k.key.as_bytes())?,
+        };
         let mut slots = vec![DumpKeySlot {
             ty: k.etype.to_iana(),
             contents: enc,

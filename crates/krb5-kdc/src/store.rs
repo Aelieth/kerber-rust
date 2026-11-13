@@ -908,6 +908,6 @@ pub use principal::{
     PrincipalBuilder, TlData, XDR_FAILURE, create_password_shared,
     create_password_shared_committing, strip_db_args,
 };
-pub(crate) use principal::{db_args_put_error, refresh_kadm_tl};
+pub(crate) use principal::{LoadedCt, db_args_put_error, refresh_kadm_tl};
 pub use pwqual::{Pwqual, clear_thread_pwqual, register_pwqual, set_thread_pwqual};
 pub use rid::{RID_FIRST_USER, RID_KRBTGT};

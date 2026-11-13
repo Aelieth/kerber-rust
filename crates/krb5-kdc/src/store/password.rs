@@ -317,6 +317,7 @@ fn same_record(a: &Principal, b: &Principal) -> bool {
         pw_policy,
         kadm,
         string_attrs,
+        loaded_ct: _,
     } = a;
     same_keys(keys, &b.keys)
         && same_keys(key_history, &b.key_history)
