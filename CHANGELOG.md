@@ -16,7 +16,7 @@ any other `###` heading.
 
 ## [Unreleased]
 
-## [1.2.2] - RP-FILL
+## [1.2.2] - 2026-11-14
 
 ### Added
 

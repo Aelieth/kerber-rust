@@ -106,7 +106,7 @@ machines and in CI, with MIT 1.22.2 first in each comparison:
 | Remote `kadmin` | MIT's and our `kadmin` against MIT's `kadmind` and ours: every read, write and command-line form | the same as MIT's in every case: 32 rows against each `kadmind`, 43 reads, 121 writes and 188 forms |
 | Active Directory trust | the scenario in 1.2.1's table below | 84 checks passed on MIT and 98 on kerber-rust, 0 failed |
 | Samba AD (CI's `peers` job) | the 7 tests in 1.2.1's table below | 7 of 7 passed |
-| KLLDAP's acceptance | KLLDAP running this KDC and `kadmind` with its realm in SQLite or PostgreSQL | RP-FILL. Its power-cut row: 40 power cuts, and none of the 40 acknowledged writes was lost |
+| KLLDAP's acceptance | KLLDAP running this KDC and `kadmind` with its realm in SQLite or PostgreSQL | Passed on v1.2.2-rc.3, whose code this release ships unchanged: 9 of 9 acceptance rows. Its power-cut row: 40 power cuts on SQLite and PostgreSQL, in a container and as a host install, and none of the 40 acknowledged writes was lost. |
 
 1.2.1's runs, below, stand for the areas 1.2.2 did not change. They used `c9421ed1` (1.2.1's tagged
 release differs from it only in documentation), or an earlier 1.2.1 commit with no product change since
