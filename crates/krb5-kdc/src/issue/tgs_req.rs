@@ -898,7 +898,10 @@ fn tgs_issue_ticket(
         sname.clone()
     };
     let updated_pac = match (ad_data, delegation_hop.as_deref(), subject_pac.as_deref()) {
-        (true, Some(hop), Some(raw)) => Some(update_delegation_info(raw, &sname, hop)?),
+        (true, Some(hop), Some(raw)) => Some(
+            update_delegation_info(raw, &sname, hop)
+                .map_err(|e| crate::ad::authdata_failed("TGS_REQ", e))?,
+        ),
         _ => None,
     };
     let pac = if !include_pac {

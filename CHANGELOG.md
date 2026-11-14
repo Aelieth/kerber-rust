@@ -55,6 +55,7 @@ any other `###` heading.
 - **kdc.** An AS request with PA-S4U-X509-USER for an X.500 client is LOOKING_UP_CLIENT, 60, as MIT.
 - **admin.** `kadmin -n` prompts for the anonymous principal's password when PKINIT can't run, as MIT.
 - **tools.** Error lines from tools MIT runs without a com_err hook end in CRLF, as MIT's default.
+- **kdc.** A failed DELEGATION_INFO update logs MIT's `handle_authdata (N)` line.
 
 ### Tests and CI
 
