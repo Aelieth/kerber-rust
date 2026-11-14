@@ -499,7 +499,8 @@ errtok_reset
 docker exec -d -e KRB5_KTNAME=/etc/krb5kdc/testhost.keytab -e GSS_CHANNEL_BINDINGS=tls-b "$NAME" \
     sh -c '/tmp/gss-mit-server /etc/krb5kdc/testhost.keytab 127.0.0.1 4463 >/tmp/gss-mit-errinit2.log 2>&1'
 require_log "$NAME" /tmp/gss-mit-errinit2.log listening "gss-mit-server listening on 4463"
-RUST_INIT="$(docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
+# stderr joins stdout in the container: docker exec carries the two apart and may split a line.
+RUST_INIT="$(docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" sh -c 'exec "$@" 2>&1' sh \
     /tmp/krb5-gss-init --ccache /tmp/krb5cc_harness --host testhost.kerber.test \
     --ip 127.0.0.1 --port 4463 --channel-bindings tls-a 2>&1 || true)"
 echo "$RUST_INIT"
