@@ -52,6 +52,7 @@ any other `###` heading.
 - **client.** kinit names itself by its program name in every message.
 - **admin.** kpropd's start and accept errors use argv[0] and go to syslog unless `-d`, as MIT's com_err.
 - **kdc.** An AS request with PA-S4U-X509-USER for an X.500 client is LOOKING_UP_CLIENT, 60, as MIT.
+- **admin.** `kadmin -n` prompts for the anonymous principal's password when PKINIT can't run, as MIT.
 
 ### Tests and CI
 

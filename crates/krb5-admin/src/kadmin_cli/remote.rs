@@ -221,7 +221,8 @@ fn from_kdc(
         Auth::Password(Some(pw)) => {
             kinit_with_princ(ctx, &kdc, &me, &mut pw.as_bytes().to_vec(), &spec, &params)
         }
-        Auth::Password(None) => {
+        // MIT: `gic_iter` (lib/kadm5/clnt/client_init.c:468-473)
+        Auth::Password(None) | Auth::Anonymous => {
             let mut read = |client: &str| -> Result<Zeroizing<Vec<u8>>, Krb5Error> {
                 io.read_password(&format!("Password for {client}"), None)
                     .map_err(|e| {
