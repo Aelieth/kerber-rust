@@ -75,7 +75,7 @@ It keeps its database in MIT's dump format, so a realm can move to it and back.
   Keep `krb5-workstation` if a script depends on one of those differences.
 - **Some behaviour differs from MIT on purpose.** Most of those differences refuse something MIT
   accepts, such as a principal name that is not UTF-8.
-  [Not yet matched](docs/interop-matrix.md#not-yet-matched-in-121) lists what an operator could see, and
+  [Not yet matched](docs/interop-matrix.md#not-yet-matched-in-122) lists what an operator could see, and
   [the deviations file](docs/mit-deviations.md) has every deliberate one.
 - **Its dependencies are not all audited or free of `unsafe`.** RustCrypto, curve25519-dalek, getrandom
   and nix contain `unsafe`, and `cargo vet` reports 18 crates fully audited and 134 exempted.
@@ -97,7 +97,20 @@ its checks are graded as that version behaves. A *check* is one thing the harnes
 such as a command's exit code or output, a log line or a file's contents. It passes or fails, or it is
 only recorded (informational).
 
-The runs below used `c9421ed1` (the tagged release differs from it only in documentation), or an earlier 1.2.1 commit with no product change since that the run covers.
+**1.2.2's runs.** The 1.2.2 code ran this release's test list once, whole, in containers, on the lab
+machines and in CI, with MIT 1.22.2 first in each comparison:
+
+| Test | What it does | Result |
+| --- | --- | --- |
+| The release's test list | each 1.2.2 change beside MIT 1.22.2: the embedding store's conformance on SQLite and PostgreSQL, a kill after an acknowledged write, a failed commit, tampered records, the MIT dump round trip, lockout across restarts, kills and power cuts, an iprop replica, the PAC and S4U fixes, anonymous PKINIT's texts, GSS wrap sizes and string-to-key vectors | every test passed. Of five differences from MIT found on the way, four were fixed and one is kept as a stricter refusal ([the deviations file](docs/mit-deviations.md)) |
+| Remote `kadmin` | MIT's and our `kadmin` against MIT's `kadmind` and ours: every read, write and command-line form | the same as MIT's in every case: 32 rows against each `kadmind`, 43 reads, 121 writes and 188 forms |
+| Active Directory trust | the scenario in 1.2.1's table below | 84 checks passed on MIT and 98 on kerber-rust, 0 failed |
+| Samba AD (CI's `peers` job) | the 7 tests in 1.2.1's table below | 7 of 7 passed |
+| KLLDAP's acceptance | KLLDAP running this KDC and `kadmind` with its realm in SQLite or PostgreSQL | RP-FILL. Its power-cut row: 40 power cuts, and none of the 40 acknowledged writes was lost |
+
+1.2.1's runs, below, stand for the areas 1.2.2 did not change. They used `c9421ed1` (1.2.1's tagged
+release differs from it only in documentation), or an earlier 1.2.1 commit with no product change since
+that the run covers.
 
 | Test | What it does | Result |
 | --- | --- | --- |
@@ -111,7 +124,7 @@ The runs below used `c9421ed1` (the tagged release differs from it only in docum
 | The 1.1 regression set | the checks that proved the 1.1 release, run again | 8,198 passed, 0 failed |
 | OpenSSH by hand | sshd GSSAPI login from one client to another | 52 passed, 0 failed |
 | Samba AD (CI's `peers` job) | 7 tests with live Samba 4 domain controllers. 4 use our KDC, in a debug build: Samba decodes its PAC, checks its checksums and rejects corrupted ones, takes its referrals both ways, and returns the right SID over a real `samba-tool` trust. The other 3 exercise only Samba's own tools, and our client tools are in none of them | 7 of 7 passed |
-| Active Directory trust | a Windows Server domain controller in a two-way trust with this realm, MIT first: tickets across the trust both ways, an AD user's `kinit -E` by its UPN, FAST armor from an AD ticket, an AD user's sshd login, this realm's users at the DC's SMB and LDAP, and the DC as a SPNEGO client | not run in this release's pass; it last ran on an earlier 1.2 build: 83 checks on MIT and 97 on kerber-rust, 0 failed |
+| Active Directory trust | a Windows Server domain controller in a two-way trust with this realm, MIT first: tickets across the trust both ways, an AD user's `kinit -E` by its UPN, FAST armor from an AD ticket, an AD user's sshd login, this realm's users at the DC's SMB and LDAP, and the DC as a SPNEGO client | not run in 1.2.1's pass; it last ran on an earlier 1.2 build: 83 checks on MIT and 97 on kerber-rust, 0 failed |
 | Crashes | kills during writes on Fedora, Debian 13 and Rocky Linux 10, each result loaded by MIT's `kdb5_util` | 669 kills (221 on Fedora, 228 on Debian 13, 220 on Rocky Linux 10); no damaged change, and MIT loaded all 675 dumps |
 | Power loss | forced power-offs during writes, with a replica | 20 power-offs; none of the 25 acknowledged writes was lost |
 | CI | every push | 8 of 8 jobs |
@@ -129,7 +142,9 @@ Real software that ran against both MIT and kerber-rust, in those scenarios:
 
 Things to know when you read those numbers:
 
-- **The tagged binaries are the tested bytes.** The version was set to 1.2.1 before the runs above.
+- **The version was set to 1.2.2 before 1.2.2's runs.** Tests run on the release candidate used the
+  binaries of the code this tag carries; tests carried from an earlier candidate rest on a check of the code
+  changed between the two.
 - **`peers.yml` fails unless all seven Samba tests ran.** In 1.2.0 its job skipped them and stayed green.
 - **The seven burn-in runs ran back to back,** not a night apart. The hour of load passed every check; one guard
   on the run tripped on a file another tool wrote to `/tmp` during it, and the run was accepted on review.

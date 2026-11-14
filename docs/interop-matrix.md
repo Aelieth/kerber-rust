@@ -73,7 +73,7 @@ update log consistent 19 times and stable but behind once, where MIT's baseline 
 ran on Debian 13 and Rocky Linux 10 too, at `0f633715`: 228 and 220 kills, no unexpected result, and MIT's
 `kdb5_util` matched and loaded all 230 and 222 dumps.
 
-### Not yet matched in 1.2.1
+### Not yet matched in 1.2.2
 
 - **Client messages and logs.** None changes an outcome.
   - The KDC's AS_REQ line for a wrong encrypted-challenge password ends `Preauthentication failed`, where MIT's ends
@@ -98,8 +98,7 @@ ran on Debian 13 and Rocky Linux 10 too, at `0f633715`: 228 and 220 kills, no un
     off);
   - a global IPv6 on the KDC;
   - hand legs: a desktop-login case that needs SDDM driven directly, `-UseDefaultCredentials` toward the Windows DC
-    (it needs a change to the AD), and a remote journal read that needs a sudo password;
-  - in the release pass: the Active Directory trust, which last ran on an earlier 1.2 build.
+    (it needs a change to the AD), and a remote journal read that needs a sudo password.
 
 ## Supply-chain (not an interop oracle)
 

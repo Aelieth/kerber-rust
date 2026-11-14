@@ -16,6 +16,8 @@ any other `###` heading.
 
 ## [Unreleased]
 
+## [1.2.2] - RP-FILL
+
 ### Added
 
 - **kdc.** Host store: `KerberosStore`, sealed records, `open_or_create_host`; each change commits first.
@@ -4742,7 +4744,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
   v2 export, AP-REQ verify, UDP/TCP 88 listener. Gate:
   `scripts/kdc-gate.sh` (MIT `kinit` + `kvno` against the Rust KDC).
 
-[Unreleased]: https://github.com/Aelieth/kerber-rust/compare/v1.2.1...HEAD
+[Unreleased]: https://github.com/Aelieth/kerber-rust/compare/v1.2.2...HEAD
+[1.2.2]: https://github.com/Aelieth/kerber-rust/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/Aelieth/kerber-rust/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/Aelieth/kerber-rust/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/Aelieth/kerber-rust/compare/v1.0.0...v1.1.0
