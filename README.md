@@ -16,7 +16,7 @@ memory-safe language without changing your clients, or you are building a produc
 library. **It is not for you if** you need a C library, an LDAP database backend, RADIUS one-time codes or
 several realms in one KDC process: see [Limitations](#limitations).
 
-This is version **1.2.1**. You build it from source; it is not on crates.io and there is no package.
+This is version **1.2.2**. You build it from source; it is not on crates.io and there is no package.
 
 [Why it exists](#why-it-exists) · [What it can do](#what-it-can-do) · [Limitations](#limitations) ·
 [How it was tested](#how-it-was-tested) · [Download, install and use](#download-install-and-use) ·
@@ -152,7 +152,7 @@ prerequisites on: [Rocky Linux](docs/install.md#rocky-linux),
 sudo dnf install -y git gcc make lld rustup krb5-workstation logrotate words
 rustup-init -y --default-toolchain none --profile minimal
 . "$HOME/.cargo/env"
-git clone --branch v1.2.1 https://github.com/Aelieth/kerber-rust.git
+git clone --branch v1.2.2 https://github.com/Aelieth/kerber-rust.git
 cd kerber-rust
 rustup toolchain install
 make build

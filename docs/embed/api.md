@@ -22,7 +22,8 @@ Additions only; no existing signature changed.
   `AuditState.lockout` (`LockoutMark::Crossed` or `Locked`).
 - **Client case folding:** `PrincipalStore::set_client_case_fold` and `client_case_twins`;
   `PrincipalRead::fetch_client`, a provided method that is exact unless the store folds.
-- `GssContext::wrap_size_limit` in `krb5-gss`.
+- `GssContext::wrap_size_limit` in `krb5-gss`; `etype_list_der` in `krb5-protocol`;
+  `anonymous_client` in `krb5-client`.
 - The `krb5-s2k` crate: AES `string_to_key` and `string_to_key_iter` with no clock, RNG or
   std, for wasm32. `string_to_key` takes params as MIT's
   `krb5_c_string_to_key_with_params` does: `None` is the default count, and an empty
