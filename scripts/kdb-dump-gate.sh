@@ -557,20 +557,22 @@ bl13_lines() {
 }
 bl13_leg() {
     local leg=$1 d=$2 dir="/tmp/bl13-$1-$2"
+    # Merge stderr in the container: docker exec carries the two apart, reordering them mid-line.
+    local merge=(sh -c 'exec "$@" 2>&1' sh)
     docker exec "$NAME" sh -c "rm -rf $dir && mkdir -p $dir"
     if [ "$leg" = mit ]; then
-        echo "load: $(docker exec "$NAME" kdb5_util -d "$dir/principal" load "/tmp/bl13-$d.dump" 2>&1 | bl13_lines)"
-        echo "dump: $(docker exec "$NAME" kdb5_util -d "$dir/principal" dump /tmp/bl13-out.dump 2>&1 | bl13_lines | tr '\n' '|')"
-        echo "kadmin.local: $(docker exec "$NAME" kadmin.local -d "$dir/principal" -q 'getprinc user' 2>&1 | bl13_lines | tr '\n' '|')"
-        echo "kadmind: $(docker exec "$NAME" timeout 5 kadmind -nofork -x "dbname=$dir/principal" -p 7749 2>&1 | bl13_lines | sort -u | tr '\n' '|')"
-        echo "krb5kdc: $(docker exec "$NAME" timeout 5 krb5kdc -n -d "$dir/principal" -p 7088 2>&1 | bl13_lines | sort -u | tr '\n' '|')"
+        echo "load: $(docker exec "$NAME" "${merge[@]}" kdb5_util -d "$dir/principal" load "/tmp/bl13-$d.dump" 2>&1 | bl13_lines)"
+        echo "dump: $(docker exec "$NAME" "${merge[@]}" kdb5_util -d "$dir/principal" dump /tmp/bl13-out.dump 2>&1 | bl13_lines | tr '\n' '|')"
+        echo "kadmin.local: $(docker exec "$NAME" "${merge[@]}" kadmin.local -d "$dir/principal" -q 'getprinc user' 2>&1 | bl13_lines | tr '\n' '|')"
+        echo "kadmind: $(docker exec "$NAME" "${merge[@]}" timeout 5 kadmind -nofork -x "dbname=$dir/principal" -p 7749 2>&1 | bl13_lines | sort -u | tr '\n' '|')"
+        echo "krb5kdc: $(docker exec "$NAME" "${merge[@]}" timeout 5 krb5kdc -n -d "$dir/principal" -p 7088 2>&1 | bl13_lines | sort -u | tr '\n' '|')"
     else
         local env=(-e KRB5_MASTER_PASSWORD=masterpassword -e "KRB5_KDC_DB=$dir/principal" -e KRB5_KDC_STASH=/tmp/stash)
-        echo "load: $(docker exec "${env[@]}" "$NAME" /tmp/krb5-kdb load "/tmp/bl13-$d.dump" 2>&1 | bl13_lines)"
-        echo "dump: $(docker exec "${env[@]}" "$NAME" /tmp/krb5-kdb dump /tmp/bl13-out.dump 2>&1 | bl13_lines | tr '\n' '|')"
-        echo "kadmin.local: $(docker exec "${env[@]}" "$NAME" /tmp/krb5-kadmin-local -q 'getprinc user' 2>&1 | bl13_lines | tr '\n' '|')"
-        echo "kadmind: $(docker exec "${env[@]}" "$NAME" timeout 5 /tmp/krb5-kadmind 127.0.0.1:7749 2>&1 | bl13_lines | sort -u | tr '\n' '|')"
-        echo "krb5kdc: $(docker exec "${env[@]}" "$NAME" timeout 5 /tmp/krb5-kdc 127.0.0.1:7088 2>&1 | bl13_lines | sort -u | tr '\n' '|')"
+        echo "load: $(docker exec "${env[@]}" "$NAME" "${merge[@]}" /tmp/krb5-kdb load "/tmp/bl13-$d.dump" 2>&1 | bl13_lines)"
+        echo "dump: $(docker exec "${env[@]}" "$NAME" "${merge[@]}" /tmp/krb5-kdb dump /tmp/bl13-out.dump 2>&1 | bl13_lines | tr '\n' '|')"
+        echo "kadmin.local: $(docker exec "${env[@]}" "$NAME" "${merge[@]}" /tmp/krb5-kadmin-local -q 'getprinc user' 2>&1 | bl13_lines | tr '\n' '|')"
+        echo "kadmind: $(docker exec "${env[@]}" "$NAME" "${merge[@]}" timeout 5 /tmp/krb5-kadmind 127.0.0.1:7749 2>&1 | bl13_lines | sort -u | tr '\n' '|')"
+        echo "krb5kdc: $(docker exec "${env[@]}" "$NAME" "${merge[@]}" timeout 5 /tmp/krb5-kdc 127.0.0.1:7088 2>&1 | bl13_lines | sort -u | tr '\n' '|')"
     fi
 }
 for d in nokm keyless; do
