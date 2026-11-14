@@ -18,7 +18,7 @@ use super::reply::{
     MintTicket, TicketPac, enc_rep_part, encode_enc_kdc_rep_part, mint_ticket, no_reply,
     return_enc_padata,
 };
-use crate::ad::{authind_add, check_indicators, handle_authdata};
+use crate::ad::{E_PLUGIN_OP_NOTSUPP, authind_add, check_indicators, handle_authdata};
 use crate::error::Error;
 use crate::kdb::PrincipalRead;
 use crate::plugins::{
@@ -199,6 +199,17 @@ fn lookup_client(
         .cname
         .clone()
         .ok_or_else(|| proto(err::C_PRINCIPAL_UNKNOWN, status::NULL_CLIENT))?;
+    let padata = fast.map_or(req.0.padata.as_deref(), |f| Some(f.inner_padata.as_slice()));
+    if req_cname.name_type == PrincipalName::NT_X500_PRINCIPAL
+        && find_pa(padata, pa::FOR_X509_USER).is_some_and(|cert| !cert.is_empty())
+    {
+        // MIT: `krb5_db_get_s4u_x509_principal` (lib/kdb/kdb5.c:2754-2755)
+        return Err(proto_d(
+            err::GENERIC,
+            status::LOOKING_UP_CLIENT,
+            E_PLUGIN_OP_NOTSUPP,
+        ));
+    }
     let client = lookup_as_princ(&req_cname, status::LOOKING_UP_CLIENT, |n| {
         store.fetch_client(n)
     })?

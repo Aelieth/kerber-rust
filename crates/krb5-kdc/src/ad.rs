@@ -437,7 +437,7 @@ fn client_info_name(name: &PrincipalName, realm: Option<&str>) -> String {
 }
 
 // MIT: `KRB5_PLUGIN_OP_NOTSUPP` (lib/krb5/error_tables/krb5_err.et:347-347)
-const E_PLUGIN_OP_NOTSUPP: &str = "Plugin does not support the operation";
+pub(crate) const E_PLUGIN_OP_NOTSUPP: &str = "Plugin does not support the operation";
 
 fn asn1_failure(der: &[u8], e: &krb5_asn1::Error, status: &'static str) -> Error {
     let (code, text) = asn1_refusal(der, UNIVERSAL, SEQUENCE, e);

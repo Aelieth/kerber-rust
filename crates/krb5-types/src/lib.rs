@@ -305,6 +305,7 @@ impl PrincipalName {
     pub const NT_PRINCIPAL: i32 = 1;
     pub const NT_SRV_INST: i32 = 2;
     pub const NT_SRV_HST: i32 = 3;
+    pub const NT_X500_PRINCIPAL: i32 = 6;
     pub const NT_ENTERPRISE: i32 = 10;
     pub const NT_WELLKNOWN: i32 = 11;
     pub const NT_MS_PRINCIPAL: i32 = -128;

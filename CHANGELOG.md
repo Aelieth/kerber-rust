@@ -26,6 +26,7 @@ any other `###` heading.
 - **s2k.** `krb5-s2k`: AES string-to-key with no clock, RNG or std, for wasm32.
 - **admin.** `kadmin`, the network client: read and write commands, AUTH_GSSAPI, `-n`, `-O`, `-N`.
 - **protocol.** `etype_list_der`, the authenticator's RFC 4537 list as sent.
+- **types.** `PrincipalName::NT_X500_PRINCIPAL`.
 
 ### Changed
 
@@ -50,6 +51,7 @@ any other `###` heading.
 - **s2k.** An empty `s2kparams` block is refused by the library, as MIT's.
 - **client.** kinit names itself by its program name in every message.
 - **admin.** kpropd's start and accept errors use argv[0] and go to syslog unless `-d`, as MIT's com_err.
+- **kdc.** An AS request with PA-S4U-X509-USER for an X.500 client is LOOKING_UP_CLIENT, 60, as MIT.
 
 ### Tests and CI
 
