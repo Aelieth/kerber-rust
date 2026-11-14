@@ -457,7 +457,7 @@ fn init(prog: &str, opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
             eprintln!("PA Option {attr} = {value}");
         }
     }
-    let pw_auth = !(opts.keytab || opts.anonymous);
+    let pw_auth = !opts.keytab;
     let given = if pw_auth { env_password() } else { None };
     // MIT: `kinit_prompter` (clients/kinit/kinit.c:622-636)
     // A password prompt, or a password given, makes a failure "Password incorrect".
@@ -523,6 +523,10 @@ fn init(prog: &str, opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
     krb5_client::trace::skip_next_init_creds();
     // MIT: `krb5_init_creds_set_keytab` (lib/krb5/krb/gic_keytab.c:191-224)
     let me = keytab_client(keytab.as_deref(), conf, &k5.me, &k5.name).map_err(Failure::Error)?;
+    let me = (
+        me.0.clone(),
+        krb5_client::anonymous_client(opts.anonymous, &me.1),
+    );
     let (name, realm) = (
         unparse(&me),
         String::from_utf8_lossy(me.0.as_bytes()).into_owned(),

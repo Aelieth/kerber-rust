@@ -374,7 +374,6 @@ fn as_exchange_inner(
         );
     }
     // MIT: `k5_init_preauth_context` (lib/krb5/krb/preauth2.c:133-146)
-    // Anonymous has no mechanism after PKINIT.
     if crate::clpreauth::loaded(req.profile, "pkinit")
         && (matches!(req.pkinit, Some(Pkinit::Client(_))) || req.ticket.anonymous)
     {
@@ -436,9 +435,6 @@ fn as_exchange_inner(
             }
             PkinitEnd::Walk(hint) => *hint,
         };
-        if req.ticket.anonymous {
-            return Err(preauth_failed());
-        }
         let mut pw = PasswordCell::new(
             prompt,
             req.password,
@@ -446,9 +442,6 @@ fn as_exchange_inner(
         )
         .with_unreadable_keytab(unreadable);
         return continue_from_hint(req, keys, &etypes, &hint, &clock, &mut pw);
-    }
-    if req.ticket.anonymous {
-        return Err(preauth_failed());
     }
     let first = build_as_req_from(req, nonce, &bound, None, &etypes)?;
     let wire = encode(&first)?;
