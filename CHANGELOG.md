@@ -27,6 +27,7 @@ any other `###` heading.
 - **admin.** `kadmin`, the network client: read and write commands, AUTH_GSSAPI, `-n`, `-O`, `-N`.
 - **protocol.** `etype_list_der`, the authenticator's RFC 4537 list as sent.
 - **types.** `PrincipalName::NT_X500_PRINCIPAL`.
+- **cli.** `com_errln!`, a line with the CRLF of MIT's default com_err proc.
 
 ### Changed
 
@@ -53,6 +54,7 @@ any other `###` heading.
 - **admin.** kpropd's start and accept errors use argv[0] and go to syslog unless `-d`, as MIT's com_err.
 - **kdc.** An AS request with PA-S4U-X509-USER for an X.500 client is LOOKING_UP_CLIENT, 60, as MIT.
 - **admin.** `kadmin -n` prompts for the anonymous principal's password when PKINIT can't run, as MIT.
+- **tools.** Error lines from tools MIT runs without a com_err hook end in CRLF, as MIT's default.
 
 ### Tests and CI
 

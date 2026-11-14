@@ -27,7 +27,7 @@ fn main() {
     let argv: Vec<String> = std::env::args().collect();
     let profile = krb5_config::init_profile().unwrap_or_else(|e| {
         let prog = argv.first().map_or(WHOAMI, String::as_str);
-        eprintln!("{prog}: {} while initializing krb5", e.init_text());
+        krb5_cli::com_errln!("{prog}: {} while initializing krb5", e.init_text());
         std::process::exit(1);
     });
     krb5_protocol::trace::init();
@@ -252,7 +252,7 @@ fn execute_line(
     let Ok(text) = std::str::from_utf8(trimmed) else {
         return not_utf8(trimmed);
     };
-    let argv = krb5_admin::ss_parse(text).map_err(|msg| format!("{WHOAMI}: {msg}").into_bytes())?;
+    let argv = krb5_admin::ss_parse(text).map_err(|msg| com_err(format!("{WHOAMI}: {msg}")))?;
     let Some(name) = argv.first() else {
         return Ok(Flow::Next);
     };
@@ -265,6 +265,13 @@ fn execute_line(
     }
 }
 
+// MIT: `default_com_err_proc` (util/et/com_err.c:78-92)
+fn com_err(text: String) -> Vec<u8> {
+    let mut line = text.into_bytes();
+    line.push(b'\r');
+    line
+}
+
 fn unknown_request(trimmed: &[u8]) -> Vec<u8> {
     let word = trimmed
         .split(|&b| b == b' ' || b == b'\t')
@@ -272,7 +279,7 @@ fn unknown_request(trimmed: &[u8]) -> Vec<u8> {
         .unwrap_or_default();
     let mut text = format!("{WHOAMI}: Unknown request \"").into_bytes();
     text.extend_from_slice(word);
-    text.extend_from_slice(b"\".  Type \"?\" for a request list.");
+    text.extend_from_slice(b"\".  Type \"?\" for a request list.\r");
     text
 }
 
@@ -320,11 +327,11 @@ fn read_kt(
     let file = match krb5_client::kt_resolve(path) {
         Ok(krb5_client::KeytabName::File(file)) => file,
         Ok(krb5_client::KeytabName::Memory(_)) => return Ok(Flow::Next),
-        Err(e) => return Err(failed(e.message).into_bytes()),
+        Err(e) => return Err(com_err(failed(e.message))),
     };
     let other = krb5_protocol::read_secret_file(&file)
         .and_then(|bytes| Keytab::parse(&bytes))
-        .map_err(|e| failed(strerror(&e)).into_bytes())?;
+        .map_err(|e| com_err(failed(strerror(&e))))?;
     kt.merge(other);
     Ok(Flow::Next)
 }
@@ -353,7 +360,10 @@ fn write_kt(
     };
     // MIT: `ktutil_write_keytab` (kadmin/ktutil/ktutil_funcs.c:336-358)
     kt.add_to_file(Path::new(path)).map_err(|e| {
-        format!("{cmd}: {} while writing keytab \"{path}\"", strerror(&e)).into_bytes()
+        com_err(format!(
+            "{cmd}: {} while writing keytab \"{path}\"",
+            strerror(&e)
+        ))
     })?;
     Ok(Flow::Next)
 }
@@ -397,7 +407,7 @@ fn delete_entry(
     usize::try_from(n)
         .ok()
         .and_then(|slot| kt.remove_slot(slot).ok())
-        .ok_or_else(|| format!("{cmd}: Invalid argument while deleting entry {n}").into_bytes())?;
+        .ok_or_else(|| com_err(format!("{cmd}: Invalid argument while deleting entry {n}")))?;
     Ok(Flow::Next)
 }
 
@@ -424,7 +434,7 @@ fn list(
     let (text, failed) = format_list(kt, show_time, show_enctype, show_keys);
     let _ = out.write_all(text.as_bytes());
     match failed {
-        Some(why) => Err(format!("{}: {why}", argv[0]).into_bytes()),
+        Some(why) => Err(com_err(format!("{}: {why}", argv[0]))),
         None => Ok(Flow::Next),
     }
 }
@@ -599,7 +609,7 @@ fn addent(
     let Some(enctype) = enctype else {
         return Err("enctype must be specified if not using -f".into());
     };
-    let fail = |e: &dyn std::fmt::Display| format!("{cmd}: {e} while adding new entry");
+    let fail = |e: &dyn std::fmt::Display| format!("{cmd}: {e} while adding new entry\r");
     // MIT: `ktutil_add` (kadmin/ktutil/ktutil_funcs.c:159-172)
     let (name, realm) = with_default_realm(spec, profile)
         .and_then(|spec| parse_principal(&spec))
@@ -764,14 +774,14 @@ mod tests {
         assert_eq!(
             run(&mut more, format!("wkt {}", junk.display())),
             Some(format!(
-                "wkt: Unsupported key table format version number while writing keytab \"{}\"",
+                "wkt: Unsupported key table format version number while writing keytab \"{}\"\r",
                 junk.display()
             ))
         );
         assert_eq!(
             run(&mut more, format!("rkt {}", junk.display())),
             Some(format!(
-                "rkt: Unsupported key table format version number while reading keytab \"{}\"",
+                "rkt: Unsupported key table format version number while reading keytab \"{}\"\r",
                 junk.display()
             ))
         );
