@@ -33,7 +33,7 @@ fn a_profile_krb5_init_context_refuses_is_mit_s_line() {
         assert_eq!(out.status.code(), Some(1));
         assert_eq!(
             String::from_utf8_lossy(&out.stderr),
-            format!("{exe}: {text} initializing kerberos library\n")
+            format!("{exe}: {text} initializing kerberos library\r\n")
         );
     }
     let _ = std::fs::remove_dir_all(dir);

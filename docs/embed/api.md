@@ -7,7 +7,36 @@ needs. A default build carries the daemon runtime (`daemon`, on by default) and 
 the test fixtures (`test-hooks`, off), so an embedder takes `krb5-kdc` and
 `krb5-admin` with `default-features = false`.
 
-This page is as of v1.2.1.
+This page is as of v1.2.2.
+
+## New in 1.2.2
+
+Additions only; no existing signature changed.
+
+- **Host store** (`krb5_kdc::host`): the `KerberosStore` trait (`load`, and `commit` of a
+  `RealmBatch`), its row types, `HostPaths`, `SealKey`, `RecordError`, `MemoryRealm` (an
+  in-memory host) and `conformance::run` (the checks a host must pass); `open_or_create_host`;
+  `PrincipalStore::open_host`, `change_committing`, `reload_from_host`, `host_full_batch` and
+  `host_seal_key`; `create_password_shared_committing` and `change_password_shared_committing`.
+- **Lockout:** `create_lockout_file` and `check_lockout_file`; `PrincipalStore::locked_now` and
+  `lockouts`; `AuditState.lockout` (`LockoutMark::Crossed` or `Locked`).
+- **Client case folding:** `PrincipalStore::set_client_case_fold` and `client_case_twins`;
+  `PrincipalRead::fetch_client`, a provided method that is exact unless the store folds.
+- `GssContext::wrap_size_limit` in `krb5-gss`; `etype_list_der` in `krb5-protocol`;
+  `anonymous_client` in `krb5-client`.
+- The `krb5-s2k` crate: AES `string_to_key` and `string_to_key_iter` with no clock, RNG or
+  std, for wasm32. `string_to_key` takes params as MIT's
+  `krb5_c_string_to_key_with_params` does: `None` is the default count, and an empty
+  block is refused, so pass `None` for an absent or empty `s2kparams`.
+- The `krb5-kadmin` binary (installed as `kadmin`), `krb5_admin::kadmin_main` and
+  `krb5_config::expand_hostname_conf`.
+
+`krb5_kdc::Error` gains variants (`Host`, `Record`, `HostRecordsWithoutStash`,
+`StashWithoutHostRealm`, `LockoutMissing`, `LockoutUnreadable`, `LockoutForeign`), and
+`AuditState` the `lockout` field, and `krb5_types::pac::PacError` gains `Range`. All three are
+now `#[non_exhaustive]`, so a later one doesn't break a build: a `match` on `Error` or
+`PacError` needs a `_` arm, and an `AuditState` is made with `AuditState::default()` and then
+its fields are set.
 
 ## One store and its locking
 
@@ -38,10 +67,51 @@ MIT's does.
 
 With `persist_paths`, `change()` writes the database file before it returns, so a
 write kadmind acknowledges is on disk, as with MIT's db2. A host that keeps the realm
-in its own database has no seam for that yet: a hook can only queue the host's
-commit, so a crash between kadmind's reply and that commit loses an acknowledged
-write, and policy writes and the KDC's lockout counters call no hook. Use
-`persist_paths` until such a seam exists.
+in its own database uses host mode, below.
+
+## Host mode
+
+A host implements `host::KerberosStore` (`load`, and `commit` of a `RealmBatch`) and
+opens the realm with `open_or_create_host`. The stash and the lockout file come from
+`HostPaths`; kdc.conf's `database_name` and `key_stash_file` are not used.
+
+- **First boot** (no rows in the host, no stash): the realm is created, the stash
+  written and the lockout file created, then every row is committed. If that commit
+  fails, `open_or_create_host` removes only the stash it just wrote. **A later boot**
+  requires the lockout file, loads the rows and opens each record's seal with the
+  stash's key; principals the bootstrap adds are committed.
+- **A migrated realm:** `load_dump_with_stash`, commit `host_full_batch()`,
+  `create_lockout_file` (before or after the commit), then `open_or_create_host`, with
+  that stash at `HostPaths.stash`.
+- **`create_lockout_file`** is an exclusive create at 0600 that never truncates. An
+  empty file is valid, with counts from zero; an unreadable or foreign one is refused.
+- **Boot errors.** `HostRecordsWithoutStash`, rows but no stash: restore the stash
+  that sealed them. `StashWithoutHostRealm`, a stash but an empty host: restore the
+  host's database, or import the dump again beside the stash. `LockoutMissing`,
+  `LockoutUnreadable`, `LockoutForeign`, a later boot whose file is missing, unreadable
+  or another file's: restore it, or let `create_lockout_file` make an empty one.
+  `Host(..)` is `load`'s or `commit`'s own error. `Record(..)` is a row that won't
+  open: the wrong key, a swapped name or a tampered body.
+- **Changes:** `change()` commits each change's rows, policies included, before it
+  returns; a refused or failed commit leaves the store as it was, and kadmind reports
+  `Refused`, `Failed`, `NotReady` as `KRB5_KDB_CONSTRAINT_VIOLATION`,
+  `KRB5_KDB_ACCESS_ERROR`, `KRB5_KDB_DBNOTINITED`. `change_committing` and the two
+  `_committing` password helpers replace that commit with the caller's closure (run
+  even for an empty batch), only to commit the host's own rows in the same transaction.
+  The first password change under a history policy commits `kadmin/history` through
+  `commit` partway through the change, ahead of any closure, as MIT's `create_hist`
+  writes it first.
+- **Fail fast:** the commit runs under the store's write guard, so KDC lookups wait on
+  it: `commit` and `load` must return within seconds when the database is unreachable,
+  with `Failed` or `NotReady`. Lockout counters stay in the side file, never the host
+  (power cuts: `security.md`'s lockout row).
+- **After `Failed` or `NotReady`** the store reloads from the host by itself, at once,
+  or at the start of the next change while the host is down. Call `reload_from_host`
+  only when the host's rows change outside the store (a restore, the host's own import)
+  and lookups must see them before the next write.
+- **Audit:** `AuditState.lockout` is set on AS requests only: `Crossed` on the failure
+  that reaches the limit, `Locked` on a refusal while locked.
+- Run `host::conformance::run` in the host's tests.
 
 ## Bootstrap
 
@@ -73,7 +143,9 @@ reuses that master and kvno. A database with no lock file is refused, as an open
 Error>` does that whole open-or-create — a present database is opened, a stash with no
 database resumes its master and kvno, else a new random master — then
 `bootstrap_realm_into` and `create_database`. An embedder gets the crash-safe
-resume without copying the example's lines; `examples/embed-realm` calls it.
+resume without copying the example's lines; `examples/embed-realm` calls it. In host
+mode, `open_or_create_host` takes the place of `open_or_create` and `create_database`,
+and a stash with no realm is refused rather than resumed (above).
 
 ## Config by `ProfileSet`
 
@@ -114,7 +186,9 @@ built-in `acl` and `self` modules answer each verb alongside it. A module return
 `Decision::Allow`, `Abstain` or `Deny`; `Deny` refuses at once, and the
 allowing module supplies the restrictions (`docs/parity/a4-kadmin.md`). A target
 whose name isn't UTF-8 is decided by the built-in `acl` and `self` modules
-alone, by its bytes; other modules aren't asked.
+alone, by its bytes; other modules aren't asked. kadmind may ask a module under the
+store's read or write guard, since it looks the target up first, as MIT resolves
+aliases first: a module must not call back into the store, and should return quickly.
 
 ## OTP and require-MFA
 
@@ -172,7 +246,7 @@ embedder's workspace must carry the same patch, from this repository at the tag 
 
 ```toml
 [patch.crates-io]
-rasn = { git = "https://github.com/Aelieth/kerber-rust", tag = "v1.2.1" }
+rasn = { git = "https://github.com/Aelieth/kerber-rust", tag = "v1.2.2" }
 ```
 
 Without it, `krb5-types` fails to compile on `rasn::KERBER_RUST_NEEDS_THIS_PATCH`.
@@ -216,4 +290,6 @@ The KDC loop and `Kadmind::serve` run on the thread that calls them; the crates
 are synchronous and start no runtime of their own. A tokio embedder runs each on
 a thread of its own and calls `block_on` only from such a loop thread, never from
 a runtime worker, which it would block. No store or plugin re-entry: a plugin or a
-kadm5 hook must not take the store's write guard or call back into the store.
+kadm5 hook must not take the store's write guard or call back into the store. A
+host's `commit` and `load` run on the thread that calls the open, `change()` or
+`Kadmind::serve`, so a tokio host makes those calls off a runtime worker too.

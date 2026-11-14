@@ -5,7 +5,7 @@ use krb5_config::Krb5Conf;
 use super::clock::Clock;
 use super::ec::{EC_MODULE, client_challenge, reply_code};
 use super::otp::{self, OTP_MODULE, OtpState};
-use super::password::{ModuleFail, PasswordCell};
+use super::password::{ModuleFail, PasswordCell, as_key_password};
 use super::responder::{QUESTION_PASSWORD, ResponderItems};
 use super::spake::{FastRound, trace_round};
 use super::{
@@ -24,7 +24,7 @@ use crate::preauth::{
 };
 use crate::trace;
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};
+use krb5_crypto::{EncryptionType, ProtocolKey};
 use krb5_types::k5json::{self, Value};
 use krb5_types::pkinit::{KxGroup, KxKey};
 use krb5_types::{
@@ -295,7 +295,7 @@ fn fast_key_mechanism(
     let client_key = match pick_key(keys, Some(etype)) {
         Some(key) => key,
         None => match pw.get() {
-            Ok(password) => match string_to_key(etype, &password, &salt, params.as_deref()) {
+            Ok(password) => match as_key_password(etype, &password, &salt, params.as_deref()) {
                 Err(krb5_crypto::Error::BadS2kParams) => {
                     let f = ModuleFail::key_refused(Error::BadS2kParams);
                     f.trace(name, mech);
@@ -932,7 +932,7 @@ fn fast_base_key(
         key
     } else {
         let password = pw.get().map_err(ModuleFail::unwrapped)?;
-        string_to_key(etype, &password, &salt, params.as_deref())?
+        as_key_password(etype, &password, &salt, params.as_deref())?
     };
     if gak_found(keys, &key, etype) {
         trace::init_creds_as_key_gak((&key).into());

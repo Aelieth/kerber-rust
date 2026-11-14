@@ -119,7 +119,7 @@ impl RpcPeer {
 
 // MIT: `rendezvous_request` (lib/rpc/svc_tcp.c:280-307)
 /// IPv6 flow info is read where IPv4 octets lie.
-fn sockaddr_in_addr(a: &SocketAddr) -> [u8; 4] {
+pub(super) fn sockaddr_in_addr(a: &SocketAddr) -> [u8; 4] {
     match a {
         SocketAddr::V4(v4) => v4.ip().octets(),
         SocketAddr::V6(v6) => v6.flowinfo().to_ne_bytes(),

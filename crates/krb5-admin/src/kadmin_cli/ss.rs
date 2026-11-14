@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 use std::io::Write as _;
 
-use super::{Io, LineRead, Session, WHOAMI, kt_cmds, pol_cmds, princ_cmds};
+use super::{Io, LineRead, Session, kt_cmds, pol_cmds, princ_cmds};
 
 type Verb = fn(&mut Session<'_>, &[String]);
 
@@ -148,7 +148,8 @@ fn quit_request(s: &mut Session<'_>, _argv: &[String]) {
 // MIT: `ss_page_stdin` (pager.c:69-110)
 /// Past the buffer, as MIT's pager writes it; no pager runs.
 fn list_requests(s: &mut Session<'_>, _argv: &[String]) {
-    let mut text = format!("Available {WHOAMI} requests:\n\n");
+    let prog = s.io.prog;
+    let mut text = format!("Available {prog} requests:\n\n");
     for r in REQUESTS {
         let names = r.names.join(", ");
         if names.len() > 23 {
@@ -196,7 +197,7 @@ pub(crate) fn execute_line(s: &mut Session<'_>, line: &str) -> Option<Unrun> {
     let mut argv = match parse(trimmed) {
         Ok(argv) => argv,
         Err(msg) => {
-            s.io.com_err(WHOAMI, None, msg);
+            s.io.com_err(s.io.prog, None, msg);
             return None;
         }
     };
@@ -211,7 +212,7 @@ pub(crate) fn execute_line(s: &mut Session<'_>, line: &str) -> Option<Unrun> {
 
 // MIT: `ss_perror` (error.c:66-69)
 pub(crate) fn perror(io: &mut Io, code: &str, shown: &str) {
-    io.com_err(WHOAMI, Some(code), shown);
+    io.com_err(io.prog, Some(code), shown);
 }
 
 pub(crate) const COMMAND_NOT_FOUND: &str = "Command not found";
@@ -260,6 +261,7 @@ pub fn parse(line: &str) -> Result<Vec<String>, &'static str> {
 /// Until `quit` or end of input; `SIGINT` re-prompts, a running request finishes
 /// first.
 pub(crate) fn listen(s: &mut Session<'_>) {
+    let prog = s.io.prog;
     let _sigint = krb5_cli::SignalCatch::new(&[krb5_cli::Signal::SIGINT]);
     s.abort = false;
     while !s.abort {
@@ -271,7 +273,7 @@ pub(crate) fn listen(s: &mut Session<'_>) {
             if s.io.tty_in {
                 krb5_cli::line_mode();
             }
-            s.io.print(&format!("{WHOAMI}:  "));
+            s.io.print(&format!("{prog}:  "));
             let _ = s.io.out.flush();
             s.io.read_line()
         };
@@ -302,7 +304,8 @@ pub(crate) fn listen(s: &mut Session<'_>) {
 }
 
 fn unknown_request(io: &mut Io, word: &[u8]) {
-    let mut text = format!("{WHOAMI}: Unknown request \"").into_bytes();
+    let prog = io.prog;
+    let mut text = format!("{prog}: Unknown request \"").into_bytes();
     text.extend_from_slice(word);
     text.extend_from_slice(b"\".  Type \"?\" for a request list.\n");
     io.eprint_bytes(&text);
@@ -310,6 +313,7 @@ fn unknown_request(io: &mut Io, word: &[u8]) {
 
 /// Non-UTF-8 names are refused; an unknown request is echoed byte for byte.
 fn not_utf8(s: &mut Session<'_>, raw: &[u8]) {
+    let prog = s.io.prog;
     let bytes: String = raw.iter().copied().map(char::from).collect();
     let trimmed = bytes.trim_start_matches([' ', '\t']);
     if trimmed.starts_with('!') {
@@ -318,7 +322,7 @@ fn not_utf8(s: &mut Session<'_>, raw: &[u8]) {
     let argv = match parse(trimmed) {
         Ok(argv) => argv,
         Err(msg) => {
-            s.io.com_err(WHOAMI, None, msg);
+            s.io.com_err(s.io.prog, None, msg);
             return;
         }
     };
@@ -327,7 +331,7 @@ fn not_utf8(s: &mut Session<'_>, raw: &[u8]) {
     };
     if REQUESTS.iter().any(|r| r.names.contains(&first.as_str())) {
         s.io.error(&format!(
-            "{WHOAMI}: Request line is not valid UTF-8; it was not run.\n"
+            "{prog}: Request line is not valid UTF-8; it was not run.\n"
         ));
         return;
     }

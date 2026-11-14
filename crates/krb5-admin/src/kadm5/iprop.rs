@@ -21,7 +21,7 @@ use super::codes::{
     GSS_S_CONTINUE_NEEDED, IPROP_FULL_RESYNC, IPROP_FULL_RESYNC_EXT, IPROP_GET_UPDATES, IPROP_NULL,
     IPROP_PROG, IPROP_VERS, MSG_ACCEPTED, MSG_CALL, MSG_DENIED, MSG_REPLY, PROC_UNAVAIL,
     PROG_MISMATCH, PROG_UNAVAIL, REJECT_AUTH_ERROR, REJECT_RPC_MISMATCH, RPC_VERSION,
-    RPCSEC_GSS_VERS, RPG_DATA, RPG_INIT, SUCCESS, SYSTEM_ERR,
+    RPCSEC_GSS_VERS, RPG_DATA, RPG_DESTROY, RPG_INIT, SUCCESS, SYSTEM_ERR,
 };
 use super::log::{Caller, iprop_log_resync, iprop_log_unauth, iprop_log_updates};
 use super::rpc::{read_record, rpc_call_bytes, write_record};
@@ -309,7 +309,7 @@ fn recv_failure(e: &io::Error) -> RpcFailure {
     }
 }
 
-enum ReplyStat {
+pub(super) enum ReplyStat {
     Success { verf: Vec<u8>, results: usize },
     Failed(RpcFailure),
 }
@@ -353,7 +353,7 @@ fn read_reply(rec: &[u8]) -> Option<(u32, ReplyStat)> {
 }
 
 // MIT: `clnttcp_call` (lib/rpc/clnt_tcp.c:246-352)
-fn exchange(
+pub(super) fn exchange(
     stream: &mut TcpStream,
     xid: u32,
     rec: &[u8],
@@ -386,6 +386,8 @@ impl IncrReply {
 
 pub struct IpropClient {
     stream: TcpStream,
+    prog: u32,
+    vers: u32,
     ctx: GssContext,
     handle: Vec<u8>,
     xid: u32,
@@ -409,7 +411,27 @@ impl IpropClient {
     /// Handle on `stream`: RPCSEC_GSS with privacy.
     // MIT: `rpc_auth` (lib/kadm5/clnt/client_init.c:645-683)
     pub fn establish(
+        stream: TcpStream,
+        ticket: Ticket,
+        session: &ProtocolKey,
+        crealm: &krb5_types::Realm,
+        cname: &PrincipalName,
+        times: &krb5_protocol::TicketTimes,
+    ) -> Result<Self, Error> {
+        Self::establish_for(
+            stream,
+            (IPROP_PROG, IPROP_VERS),
+            ticket,
+            session,
+            crealm,
+            cname,
+            times,
+        )
+    }
+
+    pub(super) fn establish_for(
         mut stream: TcpStream,
+        (prog, vers): (u32, u32),
         ticket: Ticket,
         session: &ProtocolKey,
         crealm: &krb5_types::Realm,
@@ -433,9 +455,18 @@ impl IpropClient {
         )
         .map_err(|e| Error::Inner(e.to_string()))?;
         let mut xid = 1u32;
-        let handle = rpcsec_init(&mut stream, &mut ctx, session, &token, &mut xid)?;
+        let handle = rpcsec_init(
+            &mut stream,
+            (prog, vers),
+            &mut ctx,
+            session,
+            &token,
+            &mut xid,
+        )?;
         Ok(Self {
             stream,
+            prog,
+            vers,
             ctx,
             handle,
             xid,
@@ -494,13 +525,16 @@ impl IpropClient {
     // MIT: `authgss_marshal` (lib/rpc/auth_gss.c:281-340)
     // MIT: `authgss_validate` (lib/rpc/auth_gss.c:343-392)
     // MIT: `authgss_refresh` (lib/rpc/auth_gss.c:395-525)
-    fn call(&mut self, proc: u32, args: &[u8]) -> Result<Vec<u8>, RpcFailure> {
+    pub(super) fn call(&mut self, proc: u32, args: &[u8]) -> Result<Vec<u8>, RpcFailure> {
         let mut refreshes = 2;
         loop {
             self.seq = self.seq.wrapping_add(1);
             let xid = self.xid;
             self.xid = self.xid.wrapping_add(1);
-            let rec = rpcsec_data_call(&mut self.ctx, &self.handle, xid, self.seq, proc, args)
+            let prog = (self.prog, self.vers);
+            let seq = (xid, self.seq);
+            let procs = (RPG_DATA, proc);
+            let rec = rpcsec_data_call(&mut self.ctx, &self.handle, prog, seq, procs, args)
                 .ok_or(RpcFailure::CantEncodeArgs)?;
             match exchange(&mut self.stream, xid, &rec)? {
                 (reply, ReplyStat::Success { verf, results }) => {
@@ -519,10 +553,24 @@ impl IpropClient {
             }
         }
     }
+
+    // MIT: `authgss_destroy_context` (lib/rpc/auth_gss.c:544-574)
+    pub(super) fn destroy(&mut self) {
+        self.seq = self.seq.wrapping_add(1);
+        let xid = self.xid;
+        let prog = (self.prog, self.vers);
+        let seq = (xid, self.seq);
+        let procs = (RPG_DESTROY, 0);
+        if let Some(rec) = rpcsec_data_call(&mut self.ctx, &self.handle, prog, seq, procs, &[]) {
+            let _ = self.stream.set_read_timeout(Some(Duration::from_secs(1)));
+            let _ = exchange(&mut self.stream, xid, &rec);
+        }
+    }
 }
 
 fn rpcsec_init(
     stream: &mut TcpStream,
+    (prog, vers): (u32, u32),
     ctx: &mut GssContext,
     ticket_session: &ProtocolKey,
     token: &[u8],
@@ -544,8 +592,8 @@ fn rpcsec_init(
         let rec = rpc_call_bytes(
             super::rpc::RpcCallId {
                 xid: id,
-                prog: IPROP_PROG,
-                vers: IPROP_VERS,
+                prog,
+                vers,
                 proc: IPROP_NULL,
             },
             FLAVOR_GSS,
@@ -583,14 +631,14 @@ fn rpcsec_init(
 fn rpcsec_data_call(
     ctx: &mut GssContext,
     handle: &[u8],
-    xid: u32,
-    seq: u32,
-    proc: u32,
+    (prog, vers): (u32, u32),
+    (xid, seq): (u32, u32),
+    (gc_proc, proc): (u32, u32),
     args: &[u8],
 ) -> Option<Vec<u8>> {
     let mut cred = XdrW::default();
     cred.u32(RPCSEC_GSS_VERS);
-    cred.u32(RPG_DATA);
+    cred.u32(gc_proc);
     cred.u32(seq);
     cred.u32(GSS_PRIVACY);
     cred.opaque(handle);
@@ -598,8 +646,8 @@ fn rpcsec_data_call(
     header.u32(xid);
     header.u32(MSG_CALL);
     header.u32(RPC_VERSION);
-    header.u32(IPROP_PROG);
-    header.u32(IPROP_VERS);
+    header.u32(prog);
+    header.u32(vers);
     header.u32(proc);
     header.u32(FLAVOR_GSS);
     header.opaque(&cred.b);
@@ -613,8 +661,8 @@ fn rpcsec_data_call(
     Some(rpc_call_bytes(
         super::rpc::RpcCallId {
             xid,
-            prog: IPROP_PROG,
-            vers: IPROP_VERS,
+            prog,
+            vers,
             proc,
         },
         FLAVOR_GSS,

@@ -31,15 +31,13 @@ fn main() {
         .collect();
     let progname = argv.first().cloned().unwrap_or_else(|| "kprop".to_owned());
     let conf = krb5_config::init_profile().unwrap_or_else(|e| {
-        eprintln!("{progname}: {} while initializing krb5", e.init_text());
+        krb5_cli::com_errln!("{progname}: {} while initializing krb5", e.init_text());
         exit(1);
     });
     krb5_protocol::trace::init();
     let args = parse_args(&progname, argv.get(1..).unwrap_or_default(), &conf);
     let fail = |e: &KpropError| -> ! {
-        for line in e.lines(&progname) {
-            eprintln!("{line}");
-        }
+        report(&progname, e.lines(&progname));
         exit(1);
     };
     let ctx = krb5_config::ClientContext::new(conf);
@@ -59,17 +57,25 @@ fn main() {
         fail(&e);
     }
     if let Err(e) = kprop_update_last_prop_file(&args.replica_host, &args.file) {
-        for line in e.lines(&progname) {
-            eprintln!("{line}");
-        }
+        report(&progname, e.lines(&progname));
     }
     println!("Database propagation to {}: SUCCEEDED", args.replica_host);
     if let Err(e) = dump.close() {
-        for line in e.lines(&progname) {
+        report(&progname, e.lines(&progname));
+    }
+    exit(0);
+}
+
+// MIT: `kerberos_authenticate` (kprop/kprop.c:306-320)
+fn report(progname: &str, lines: Vec<String>) {
+    let ours = format!("{progname}: ");
+    for line in lines {
+        if line.starts_with(&ours) {
+            krb5_cli::com_errln!("{line}");
+        } else {
             eprintln!("{line}");
         }
     }
-    exit(0);
 }
 
 fn parse_args(progname: &str, args: &[String], conf: &krb5_config::Krb5Conf) -> Args {
@@ -98,7 +104,7 @@ fn parse_args(progname: &str, args: &[String], conf: &krb5_config::Krb5Conf) -> 
     let realm = realm
         .or_else(|| conf.default_realm.clone())
         .unwrap_or_else(|| {
-            eprintln!("{progname}: while getting default realm");
+            krb5_cli::com_errln!("{progname}: while getting default realm");
             exit(1);
         });
     Args {

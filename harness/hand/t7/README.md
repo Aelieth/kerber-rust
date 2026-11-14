@@ -11,7 +11,7 @@ PKINIT ops.
 | file | what |
 |---|---|
 | `run.sh` | builds `timing` from this checkout into a temporary target dir, then runs every pass |
-| `Cargo.toml` | binary package `timing`, its own `[workspace]` like `fuzz/`; path deps on `crates/`, `rasn` patched to `vendor/rasn` as the tree does |
+| `Cargo.toml` | binary package `timing`, its own `[workspace]` like `fuzz/`; path deps on `crates/`, `rasn` patched to `vendor/rasn` as the tree does, `dudect-bencher` to `vendor/dudect-bencher` (no `clap`; its PATCHES.md) |
 | `Cargo.lock` | the tree's lock plus `dudect-bencher` and its deps, so the timed crypto crates are the versions that ship |
 | `src/main.rs` | the harness |
 

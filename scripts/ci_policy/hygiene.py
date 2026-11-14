@@ -898,3 +898,34 @@ def check_form_ratios(root: pathlib.Path | None = None) -> None:
         _die("comment share above 3.000%: " + ", ".join(over))
     if float(test_share[:-1]) > _TEST_SHARE_CAP:
         _die(f"test share (lines) above {_TEST_SHARE_CAP:.3f}%: {test_share}")
+
+
+def check_lock_versions(root: pathlib.Path | None = None) -> None:
+    """Every committed Cargo.lock outside vendor/ pins the workspace's crates at Cargo.toml's
+    version, so a `--locked` build of fuzz/ or the T-7 harness never fails after a bump."""
+    root = ROOT if root is None else root
+    toml = (root / "Cargo.toml").read_text(encoding="utf-8")
+    found = re.search(r'(?ms)^\[workspace\.package\]\n(?:[^\[].*\n)*?version = "([^"]+)"', toml)
+    if not found:
+        _die("Cargo.toml: no [workspace.package] version")
+    want = found.group(1)
+    listed = subprocess.run(
+        ["git", "ls-files", "-z", "--", "*Cargo.lock"],
+        cwd=root, capture_output=True, text=True, check=False,
+    )
+    if listed.returncode != 0:
+        _die(f"git ls-files: {(listed.stderr or listed.stdout).strip()[-200:]}")
+    listed_paths = filter(None, listed.stdout.split("\0"))
+    locks = sorted(p for p in listed_paths if not p.startswith("vendor/"))
+    # A path package has no source line: in the root lock, the workspace's own crates.
+    path_pkg = re.compile(r'(?m)^name = "([^"]+)"\nversion = "([^"]+)"\n(?!source)')
+    root_lock = (root / "Cargo.lock").read_text(encoding="utf-8")
+    members = {n for n, _ in path_pkg.findall(root_lock) if n.startswith("krb5-")}
+    bad = []
+    for rel in locks:
+        for name, version in path_pkg.findall((root / rel).read_text(encoding="utf-8")):
+            if name in members and version != want:
+                bad.append(f"{rel}: {name} {version}")
+    if bad:
+        _die(f"{len(bad)} lock pin(s) differ from workspace version {want}: " + "; ".join(bad[:8]))
+    print(f"lock-versions: {len(locks)} lock(s) pin the workspace crates at {want}")

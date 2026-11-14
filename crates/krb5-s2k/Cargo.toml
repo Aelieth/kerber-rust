@@ -1,0 +1,20 @@
+[package]
+name = "krb5-s2k"
+description = "AES string-to-key (RFC 3962, RFC 8009) with no clock, no RNG and no std, for wasm32"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+aes.workspace = true
+hmac.workspace = true
+pbkdf2.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+zeroize.workspace = true
+
+[lints]
+workspace = true

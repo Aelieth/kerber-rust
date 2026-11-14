@@ -16,34 +16,39 @@ fn a_refused_profile_stops_the_tool_with_its_mit_line() {
         "[libdefaults]\n    kcm_socket =\n    default_realm = X.TEST\n",
     )
     .expect("krb5.conf");
-    let tools: &[(&str, &[&str], &str)] = &[
+    let tools: &[(&str, &[&str], &str, &str)] = &[
         (
             env!("CARGO_BIN_EXE_krb5-kadmind"),
             &["-nofork"][..],
             "while initializing context, aborting",
+            "\n",
         ),
         (
             env!("CARGO_BIN_EXE_krb5-kadmin-local"),
             &["-q", "listprincs"][..],
             "while initializing krb5 library",
+            "\n",
         ),
         (
             env!("CARGO_BIN_EXE_krb5-kprop"),
             &["replica.x.test"][..],
             "while initializing krb5",
+            "\r\n",
         ),
         (
             env!("CARGO_BIN_EXE_krb5-kpropd"),
             &["-S"][..],
             "while initializing krb5",
+            "\r\n",
         ),
         (
             env!("CARGO_BIN_EXE_krb5-ktutil"),
             &[][..],
             "while initializing krb5",
+            "\r\n",
         ),
     ];
-    for &(exe, args, context) in tools {
+    for &(exe, args, context, end) in tools {
         let out = Command::new(exe)
             .args(args)
             .env("KRB5_CONFIG", &conf)
@@ -67,7 +72,7 @@ fn a_refused_profile_stops_the_tool_with_its_mit_line() {
         };
         assert_eq!(
             err,
-            format!("{name}: Improper format of Kerberos configuration file {context}\n"),
+            format!("{name}: Improper format of Kerberos configuration file {context}{end}"),
             "{exe}"
         );
     }

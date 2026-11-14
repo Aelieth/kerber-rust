@@ -259,7 +259,7 @@ pub(crate) fn des3_string_to_key(password: &[u8], salt: &[u8]) -> Result<Protoco
     if seed.is_empty() {
         seed.push(0);
     }
-    let raw21 = Wiped(crate::nfold::nfold(&seed, 21)?);
+    let raw21 = Wiped(krb5_s2k::nfold(&seed, 21)?);
     let raw = Zeroizing::new(des3_random_to_key(&raw21));
     let dk = Wiped(dk_des3(&*raw, b"kerberos")?);
     ProtocolKey::from_bytes(EncryptionType::Des3CbcSha1, &dk)
@@ -301,7 +301,7 @@ fn fixup_key_parity(key: &mut [u8; 8]) {
 }
 
 pub(crate) fn dk_des3(key: &[u8], constant: &[u8]) -> Result<Vec<u8>, Error> {
-    let folded = crate::nfold::nfold(constant, DES_BLOCK)?;
+    let folded = krb5_s2k::nfold(constant, DES_BLOCK)?;
     let mut block = [0u8; DES_BLOCK];
     block.copy_from_slice(&folded);
     let mut dr = Wiped(Vec::with_capacity(24));

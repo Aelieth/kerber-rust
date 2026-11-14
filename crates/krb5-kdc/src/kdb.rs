@@ -105,6 +105,9 @@ pub trait PrincipalRead: Send + Sync {
     fn fetch_krbtgt(&self) -> Result<Option<Principal>, Error> {
         self.fetch_name(&PrincipalName::krbtgt(self.realm()))
     }
+    fn fetch_client(&self, name: &PrincipalName) -> Result<Option<Principal>, Error> {
+        self.fetch_name(name)
+    }
     fn list_ids(&self) -> Result<Vec<String>, Error>;
     fn list_principals(&self) -> Result<Vec<Principal>, Error>;
     fn pkinit(&self) -> Option<&crate::pkinit::PkinitKdc> {
@@ -233,6 +236,9 @@ impl<T: PrincipalRead + ?Sized> PrincipalRead for std::sync::Arc<T> {
     }
     fn fetch(&self, id: &str) -> Result<Option<Principal>, Error> {
         (**self).fetch(id)
+    }
+    fn fetch_client(&self, name: &PrincipalName) -> Result<Option<Principal>, Error> {
+        (**self).fetch_client(name)
     }
     fn list_ids(&self) -> Result<Vec<String>, Error> {
         (**self).list_ids()
@@ -450,6 +456,16 @@ impl PrincipalRead for PrincipalStore {
     }
     fn fetch_name(&self, name: &PrincipalName) -> Result<Option<Principal>, Error> {
         Ok(self.get_name(name).cloned().map(|mut p| {
+            self.merge_lockout(&mut p);
+            p
+        }))
+    }
+    fn fetch_client(&self, name: &PrincipalName) -> Result<Option<Principal>, Error> {
+        let found = self
+            .get_name(name)
+            .cloned()
+            .or_else(|| self.fold_client(name));
+        Ok(found.map(|mut p| {
             self.merge_lockout(&mut p);
             p
         }))

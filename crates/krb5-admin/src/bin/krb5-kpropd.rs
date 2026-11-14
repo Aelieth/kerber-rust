@@ -44,7 +44,7 @@ fn main() {
     let profile_read = krb5_config::ReadOnce::start();
     if let Err(e) = krb5_config::init_kdc_profile() {
         let argv0 = argv.first().map_or("kpropd", String::as_str);
-        eprintln!("{argv0}: {} while initializing krb5", e.init_text());
+        krb5_cli::com_errln!("{argv0}: {} while initializing krb5", e.init_text());
         std::process::exit(1);
     }
     if let Some(json) =
@@ -76,26 +76,24 @@ fn main() {
     klog::init("kpropd", &["SYSLOG:INFO:DAEMON".to_owned()], false);
     let paths = kpropd_paths(realm_opt.as_deref()).unwrap_or_else(|e| {
         if matches!(e, krb5_config::Error::NoDefaultRealm) {
-            eprintln!("krb5-kpropd: {e} Unable to get default realm");
+            com_err(&argv0, debug, &format!("{e} Unable to get default realm"));
         } else {
-            eprintln!("krb5-kpropd: {e}");
+            com_err(&argv0, debug, &e.to_string());
         }
         std::process::exit(1);
     });
     let realm = paths.realm.clone().unwrap_or_default();
     let profile = ProfileSet::from_env_files(&paths).unwrap_or_else(|e| {
         let argv0 = argv.first().map_or("kpropd", String::as_str);
-        eprintln!("{argv0}: {} while initializing krb5", e.init_text());
+        krb5_cli::com_errln!("{argv0}: {} while initializing krb5", e.init_text());
         std::process::exit(1);
     });
     let conf = Arc::new(AcceptorConfig::from_profile(&profile));
     let kdc_context = Arc::new(krb5_config::ClientContext::new(profile.kdc_context));
     let (db, stash) = (paths.database_name, paths.key_stash_file);
     let server = kpropd_server_name(&kdc_context.profile).unwrap_or_else(|_| {
-        let argv0 = argv.first().map_or("kpropd", String::as_str);
-        eprintln!(
-            "{argv0}: Illegal character in component name while trying to construct my service name"
-        );
+        let text = "Illegal character in component name while trying to construct my service name";
+        com_err(&argv0, debug, text);
         std::process::exit(1);
     });
     let iprop = krb5_config::IpropParams::load(&realm, &db);
@@ -103,7 +101,7 @@ fn main() {
     if iprop.enabled
         && let Err(e) = krb5_kdc::Ulog::map(&iprop.logfile, iprop.ulogsize)
     {
-        eprintln!("{progname}: {e} Unable to map log!");
+        com_err(&argv0, debug, &format!("{e} Unable to map log!\n"));
         std::process::exit(1);
     }
     // Applies with iprop off too.
@@ -111,7 +109,7 @@ fn main() {
         std::time::Duration::from_secs(u64::try_from(iprop.resync_timeout).unwrap_or(0));
     let iprop = iprop.enabled.then_some(iprop);
     let addr = listen_addr(&progname, address.as_deref(), port.as_deref());
-    let listener = standalone_listener(&progname, addr);
+    let listener = standalone_listener(&argv0, debug, addr);
     listener.set_nonblocking(true).ok();
     // MIT: `main` (kprop/kpropd.c:274-289)
     println!("ready");
@@ -239,10 +237,21 @@ fn main() {
                 thread::sleep(Duration::from_millis(20));
             }
             Err(e) => {
-                eprintln!("krb5-kpropd: accept: {e}");
+                let text = format!("{} while accepting connection", os_error_text(&e));
+                com_err(&argv0, debug, &text);
                 break;
             }
         }
+    }
+}
+
+// MIT: `kpropd_com_err_proc` (kprop/kpropd.c:1030-1040)
+fn com_err(argv0: &str, debug: bool, text: &str) {
+    let line = format!("{argv0}: {text}");
+    if debug {
+        krb5_cli::com_errln!("{line}");
+    } else {
+        klog::syslog(Severity::Err, &line);
     }
 }
 
@@ -387,12 +396,10 @@ fn configured_families() -> (bool, bool) {
     (v4, v6)
 }
 
-fn standalone_listener(progname: &str, addr: SocketAddr) -> TcpListener {
+fn standalone_listener(argv0: &str, debug: bool, addr: SocketAddr) -> TcpListener {
     let report = |e: nix::Error, what: &str| {
-        eprintln!(
-            "{progname}: {} {what}",
-            os_error_text(&std::io::Error::from(e))
-        );
+        let text = os_error_text(&std::io::Error::from(e));
+        com_err(argv0, debug, &format!("{text} {what}"));
     };
     let fatal = |e: nix::Error, what: &str| -> ! {
         report(e, what);
@@ -469,12 +476,12 @@ fn start_iprop(poll: Poll) -> Arc<IpropWake> {
             std::process::exit(0);
         }
         let line = format!(
-            "{}: {} do_iprop failed.",
+            "{}: {} do_iprop failed.\n",
             poll.argv0,
             os_error_text(&io::Error::from_raw_os_error(1))
         );
         if poll.debug {
-            eprintln!("{line}");
+            krb5_cli::com_errln!("{line}");
         } else {
             klog::syslog(Severity::Err, &line);
         }

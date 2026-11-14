@@ -404,8 +404,8 @@ pub use ccname::{
 pub use context::ClientContext;
 pub use files::ReadOnce;
 pub use hostname::{
-    CanonPrinc, HostPrinc, SnameError, fallback_host_realm, fallback_host_realm_traced,
-    name_of_addr, sname_to_principal,
+    CanonPrinc, HostPrinc, SnameError, expand_hostname_conf, fallback_host_realm,
+    fallback_host_realm_traced, name_of_addr, sname_to_principal,
 };
 pub use iprop_params::{DEF_ULOGENTRIES, IpropParams, KadmindListen, MISSING_CONF_PARAMS};
 pub use kdcconf::{

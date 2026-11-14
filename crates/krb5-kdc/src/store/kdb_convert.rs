@@ -333,6 +333,7 @@ fn empty_entry(name: &str) -> Result<Principal, Error> {
         pw_policy: None,
         kadm: KadmData::default(),
         string_attrs: Vec::new(),
+        loaded_ct: Vec::new(),
     })
 }
 

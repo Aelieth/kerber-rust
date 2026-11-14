@@ -79,7 +79,7 @@ fn mit_pac_refuses_a_subject_with_a_doubled_delegation_info() {
         ..HandlePac::default()
     };
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
-    expect_handle_authdata(mit_ticket_pac(&req, &user, 1, &ticket));
+    expect_handle_authdata(mit_ticket_pac(&req, &user, 1, &PacSigner::of(&ticket)));
 }
 
 #[test]

@@ -249,7 +249,7 @@ fn kprop_refuses_a_dump_without_a_mark_no_older_than_itself() {
     assert_eq!(
         text(&out.stderr),
         format!(
-            "{KPROP}: No such file or directory while trying to open {}\n",
+            "{KPROP}: No such file or directory while trying to open {}\r\n",
             s(&missing)
         )
     );
@@ -259,7 +259,7 @@ fn kprop_refuses_a_dump_without_a_mark_no_older_than_itself() {
     assert_eq!(
         text(&out.stderr),
         format!(
-            "{KPROP}: No such file or directory while trying to stat {}\n",
+            "{KPROP}: No such file or directory while trying to stat {}\r\n",
             s(&ok_of(&dump))
         )
     );
@@ -276,7 +276,7 @@ fn kprop_refuses_a_dump_without_a_mark_no_older_than_itself() {
     assert_eq!(
         text(&out.stderr),
         format!(
-            "{KPROP}: '{}' more recent than '{}'.\n",
+            "{KPROP}: '{}' more recent than '{}'.\r\n",
             s(&dump),
             s(&ok_of(&dump))
         )
@@ -296,7 +296,7 @@ fn kprop_refuses_a_locked_dump() {
         .unwrap();
     let guard = krb5_kdc::lock_file_exclusive(&held).unwrap();
     let out = r.kprop(&["-s", s(&r.keytab), "-P", "9", "-f", s(&dump), "127.0.0.1"]);
-    assert_eq!(text(&out.stderr), format!("{KPROP}: database locked\n"));
+    assert_eq!(text(&out.stderr), format!("{KPROP}: database locked\r\n"));
     assert_eq!(out.status.code(), Some(1));
     drop(guard);
     let _ = std::fs::remove_dir_all(&r.dir);
@@ -317,7 +317,7 @@ fn kprop_names_a_failure_as_mits_com_err() {
     ]);
     assert_eq!(
         text(&out.stderr),
-        format!("{KPROP}: Key table entry not found while getting initial credentials\n\n")
+        format!("{KPROP}: Key table entry not found while getting initial credentials\n\r\n")
     );
     assert_eq!(out.status.code(), Some(1));
     let out = r.kprop(&[
@@ -332,7 +332,7 @@ fn kprop_names_a_failure_as_mits_com_err() {
     assert_eq!(
         text(&out.stderr),
         format!(
-            "{KPROP}: Server not found in Kerberos database while getting initial credentials\n\n"
+            "{KPROP}: Server not found in Kerberos database while getting initial credentials\n\r\n"
         )
     );
     let closed = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -341,7 +341,7 @@ fn kprop_names_a_failure_as_mits_com_err() {
     let out = r.kprop(&["-s", s(&r.keytab), "-P", &port, "-f", s(&dump), "127.0.0.1"]);
     assert_eq!(
         text(&out.stderr),
-        format!("{KPROP}: Connection refused while connecting to server\n")
+        format!("{KPROP}: Connection refused while connecting to server\r\n")
     );
     assert_eq!(out.status.code(), Some(1));
     let _ = std::fs::remove_dir_all(&r.dir);
@@ -429,7 +429,7 @@ fn kprop_with_an_unreadable_keytab_makes_the_request_and_fails_the_reply_that_ne
         );
         assert_eq!(
             text(&out.stderr),
-            format!("{KPROP}: {message} while getting initial credentials\n\n"),
+            format!("{KPROP}: {message} while getting initial credentials\n\r\n"),
             "{}",
             keytab.display()
         );
@@ -471,7 +471,7 @@ fn kprop_with_an_unreadable_keytab_fails_the_preauth_module_that_wants_its_key()
         assert_eq!(
             text(&out.stderr),
             format!(
-                "{KPROP}: Generic preauthentication failure while getting initial credentials\n\n"
+                "{KPROP}: Generic preauthentication failure while getting initial credentials\n\r\n"
             ),
             "{}",
             keytab.display()
@@ -504,7 +504,7 @@ fn kprop_with_an_unreadable_keytab_reports_the_kdcs_refusal_of_spakes_support() 
         );
         assert_eq!(
             text(&out.stderr),
-            format!("{KPROP}: Preauthentication failed while getting initial credentials\n\n"),
+            format!("{KPROP}: Preauthentication failed while getting initial credentials\n\r\n"),
             "{}",
             keytab.display()
         );

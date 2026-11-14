@@ -648,6 +648,7 @@ fn open_db_and_mkey(util: &mut Util) -> Result<OpenDb, u8> {
 fn read_db_text(util: &Util, db: &Path) -> Result<(String, HashMap<String, Lockout>), String> {
     let cannot_open = |why: &str| format!("Cannot open DB2 database '{}': {why}", db.display());
     krb5_kdc::check_openable(db).map_err(|e| open_text(db, &e))?;
+    krb5_kdc::check_lockout_file(db, util.paths.conf.as_ref()).map_err(|e| open_text(db, &e))?;
     let (bytes, lockout) = krb5_kdc::read_db_and_lockout_locked(db).map_err(|e| match e {
         PersistError::Lock(lock) => lock.to_string(),
         other => open_text(db, &other),

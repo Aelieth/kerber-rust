@@ -49,6 +49,7 @@ impl Rig {
         let out = Capture::default();
         let err = Capture::default();
         let io = Io {
+            prog: "kadmin.local",
             out: Stdout::new(Box::new(out.clone()), false),
             err: Box::new(err.clone()),
             input: Box::new(io::Cursor::new(input.to_vec())),
@@ -58,9 +59,8 @@ impl Rig {
             interrupted: false,
         };
         let h = Handle {
-            store,
+            backend: Box::new(LocalBackend::new(store, format!("root/admin@{TEST_REALM}"))),
             realm: TEST_REALM.to_owned(),
-            caller: format!("root/admin@{TEST_REALM}"),
             ctx: krb5_config::ClientContext::default(),
         };
         Self {
@@ -105,7 +105,11 @@ impl Rig {
     }
 
     fn store(&self) -> &PrincipalStore {
-        &self.h.as_ref().unwrap().store
+        let backend: &dyn std::any::Any = &*self.h.as_ref().unwrap().backend;
+        backend
+            .downcast_ref::<LocalBackend>()
+            .unwrap()
+            .local_store()
     }
 }
 

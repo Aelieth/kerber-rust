@@ -34,7 +34,7 @@ fi
 
 # The cargo binary, then the MIT name it is installed under.
 KDC_PROGS='krb5-kdc:krb5kdc krb5-kadmind:kadmind krb5-kadmin-local:kadmin.local krb5-kdb:kdb5_util krb5-kprop:kprop krb5-kpropd:kpropd'
-CLIENT_PROGS='krb5-kinit:kinit krb5-klist:klist krb5-kdestroy:kdestroy krb5-kswitch:kswitch krb5-kvno:kvno krb5-kpasswd:kpasswd krb5-ktutil:ktutil'
+CLIENT_PROGS='krb5-kadmin:kadmin krb5-kinit:kinit krb5-klist:klist krb5-kdestroy:kdestroy krb5-kswitch:kswitch krb5-kvno:kvno krb5-kpasswd:kpasswd krb5-ktutil:ktutil'
 # The family's units, environment files and modes, as its MIT packages have them.
 # rpm: Fedora's kprop.service runs MIT's kpropd as a forking daemon; krb5-kpropd never detaches, so
 # our kprop.service is Type=simple (the one deviation; docs/mit-deviations.md).

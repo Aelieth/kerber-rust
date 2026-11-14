@@ -16,8 +16,9 @@ use super::codes::{
     KADM5_POLICY_CLR, KADM5_PRINC_EXPIRE_TIME, KADM5_PROTECT_PRINCIPAL, KADM5_PW_EXPIRATION,
     KADM5_PW_MAX_LIFE, KADM5_PW_MIN_LIFE, KADM5_SETKEY_BAD_KVNO, KADM5_SETKEY_DUP_ENCTYPES,
     KADM5_SETKEY3_ETYPE_MISMATCH, KADM5_TL_DATA, KADM5_UNK_POLICY, KADM5_UNK_PRINC,
-    KADM5_XDR_FAILURE, KEY_DATA_ERRORS, KRB5_KDB_ALIAS_UNSUPPORTED, KRB5_KDB_BAD_SALTTYPE,
-    KRB5_KDB_CANTLOCK_DB, KRB5_KDB_INUSE, MODIFY_POLICY, MODIFY_PRINCIPAL, OSA_ADB_DUP,
+    KADM5_XDR_FAILURE, KEY_DATA_ERRORS, KRB5_KDB_ACCESS_ERROR, KRB5_KDB_ALIAS_UNSUPPORTED,
+    KRB5_KDB_BAD_SALTTYPE, KRB5_KDB_CANTLOCK_DB, KRB5_KDB_CONSTRAINT_VIOLATION,
+    KRB5_KDB_DBNOTINITED, KRB5_KDB_INUSE, MODIFY_POLICY, MODIFY_PRINCIPAL, OSA_ADB_DUP,
     OSA_ADB_NOENT, PURGEKEYS, RENAME_PRINCIPAL, SET_STRING, SETKEY_PRINCIPAL, SETKEY_PRINCIPAL3,
     SETKEY_PRINCIPAL4,
 };
@@ -104,7 +105,7 @@ fn commit<T>(
 ) -> Result<T, Vec<u8>> {
     match g.change(f) {
         Ok(Ok(v)) => Ok(v),
-        Ok(Err(e)) => Err(generic_ret(api, kadm5_code(proc, &Error::from(e)))),
+        Ok(Err(e)) => Err(generic_ret(api, inner_code(proc, e))),
         Err(e) => Err(generic_ret(api, store_code(proc, &e))),
     }
 }
@@ -151,8 +152,15 @@ fn commit_policy(
     match g.change(f) {
         Ok(Ok(Ok(()))) => generic_ret(api, 0),
         Ok(Ok(Err(code))) => generic_ret(api, code),
-        Ok(Err(e)) => generic_ret(api, kadm5_code(proc, &Error::from(e))),
+        Ok(Err(e)) => generic_ret(api, inner_code(proc, e)),
         Err(e) => generic_ret(api, store_code(proc, &e)),
+    }
+}
+
+fn inner_code(proc: u32, e: krb5_kdc::Error) -> u32 {
+    match e {
+        krb5_kdc::Error::Host(_) | krb5_kdc::Error::Record(_) => store_code(proc, &e),
+        e => kadm5_code(proc, &Error::from(e)),
     }
 }
 
@@ -165,6 +173,15 @@ pub(super) fn store_code(proc: u32, e: &krb5_kdc::Error) -> u32 {
             KRB5_KDB_CANTLOCK_DB
         }
         krb5_kdc::Error::Db { text, .. } if text == krb5_kdc::XDR_FAILURE => KADM5_XDR_FAILURE,
+        // MIT: `translate_ldap_error` (plugins/kdb/ldap/libkdb_ldap/ldap_err.c:131-150)
+        krb5_kdc::Error::Host(krb5_kdc::host::KerberosStoreError::Refused(_)) => {
+            KRB5_KDB_CONSTRAINT_VIOLATION
+        }
+        krb5_kdc::Error::Host(krb5_kdc::host::KerberosStoreError::Failed(_))
+        | krb5_kdc::Error::Record(_) => KRB5_KDB_ACCESS_ERROR,
+        krb5_kdc::Error::Host(krb5_kdc::host::KerberosStoreError::NotReady(_)) => {
+            KRB5_KDB_DBNOTINITED
+        }
         krb5_kdc::Error::Db { kind, .. } => match kind {
             std::io::ErrorKind::PermissionDenied => errno(nix::errno::Errno::EACCES),
             std::io::ErrorKind::ReadOnlyFilesystem => errno(nix::errno::Errno::EROFS),

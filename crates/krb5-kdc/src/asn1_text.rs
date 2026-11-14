@@ -21,6 +21,10 @@ const ASN1_BASE: i32 = 1_859_794_432;
 
 /// Unknown text maps to offset 9.
 pub(crate) fn asn1_code(text: &str) -> i32 {
+    asn1_text_code(text).unwrap_or(ASN1_BASE + 9)
+}
+
+pub(crate) fn asn1_text_code(text: &str) -> Option<i32> {
     let offset: i32 = match text {
         ASN1_MISSING_FIELD => 1,
         ASN1_OVERFLOW => 4,
@@ -28,10 +32,11 @@ pub(crate) fn asn1_code(text: &str) -> i32 {
         ASN1_BAD_ID => 6,
         ASN1_BAD_LENGTH => 7,
         ASN1_BAD_FORMAT => 8,
+        ASN1_PARSE_ERROR => 9,
         ASN1_INDEF => 11,
-        _ => 9,
+        _ => return None,
     };
-    ASN1_BASE + offset
+    Some(ASN1_BASE + offset)
 }
 
 pub(crate) fn preauth_decode_failure(

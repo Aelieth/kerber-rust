@@ -20,6 +20,37 @@ pub(crate) struct PrincipalMap {
     logged: HashMap<String, Option<Principal>>,
     records_log: bool,
     undo: Undo,
+    fold: Option<FoldIndex>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct FoldIndex {
+    realm: String,
+    ids: HashMap<String, Vec<String>>,
+}
+
+impl FoldIndex {
+    fn key(&self, p: &Principal) -> Option<String> {
+        (p.realm == self.realm && p.name.name_string.len() == 1)
+            .then(|| p.name.components_joined_lossy().to_ascii_lowercase())
+    }
+
+    fn add(&mut self, id: &str, p: &Principal) {
+        if let Some(k) = self.key(p) {
+            self.ids.entry(k).or_default().push(id.to_owned());
+        }
+    }
+
+    fn drop_id(&mut self, id: &str, p: &Principal) {
+        if let Some(k) = self.key(p)
+            && let Some(v) = self.ids.get_mut(&k)
+        {
+            v.retain(|have| have != id);
+            if v.is_empty() {
+                self.ids.remove(&k);
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -120,21 +151,63 @@ impl PrincipalMap {
 
     fn reindex(&mut self, id: &str, old: Option<&Principal>) {
         self.forget(id, old);
-        if let Some(p) = self.map.get(id)
-            && p.name.components_joined_lossy() != "K/M"
-            && p.rid != 0
-        {
-            self.rids.insert(p.rid, id.to_owned());
+        if let Some(p) = self.map.get(id) {
+            if p.name.components_joined_lossy() != "K/M" && p.rid != 0 {
+                self.rids.insert(p.rid, id.to_owned());
+            }
+            if let Some(fold) = self.fold.as_mut() {
+                fold.add(id, p);
+            }
         }
     }
 
     fn forget(&mut self, id: &str, old: Option<&Principal>) {
-        if let Some(p) = old
-            && p.rid != 0
-            && self.rids.get(&p.rid).is_some_and(|o| o == id)
-        {
+        let Some(p) = old else {
+            return;
+        };
+        if p.rid != 0 && self.rids.get(&p.rid).is_some_and(|o| o == id) {
             self.rids.remove(&p.rid);
         }
+        if let Some(fold) = self.fold.as_mut() {
+            fold.drop_id(id, p);
+        }
+    }
+
+    pub(crate) fn set_fold(&mut self, realm: Option<&str>) {
+        self.fold = realm.map(|realm| {
+            let mut fold = FoldIndex {
+                realm: realm.to_owned(),
+                ids: HashMap::new(),
+            };
+            for (id, p) in &self.map {
+                fold.add(id, p);
+            }
+            fold
+        });
+    }
+
+    pub(crate) fn folding(&self) -> bool {
+        self.fold.is_some()
+    }
+
+    pub(crate) fn folded(&self, key: &str) -> Option<&str> {
+        match self.fold.as_ref()?.ids.get(key)?.as_slice() {
+            [one] => Some(one.as_str()),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn fold_twins(&self) -> Vec<Vec<String>> {
+        let Some(fold) = &self.fold else {
+            return Vec::new();
+        };
+        let mut twins: Vec<Vec<String>> =
+            fold.ids.values().filter(|v| v.len() > 1).cloned().collect();
+        for t in &mut twins {
+            t.sort();
+        }
+        twins.sort();
+        twins
     }
 
     pub(crate) fn values_mut(&mut self) -> impl Iterator<Item = &mut Principal> {

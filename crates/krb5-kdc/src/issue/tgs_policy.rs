@@ -30,8 +30,15 @@ pub(super) fn check_tgs_u2u(
         return Err(proto(err::POLICY, status::SECOND_TKT_NOT_TGS));
     }
     let crealm = utf8_realm(&st.part.crealm)?;
-    let id = lookup_principal_id(&st.part.cname, crealm);
-    let Some(client) = id.map(|id| store.fetch(&id)).transpose()?.flatten() else {
+    let found = if crealm == store.realm() {
+        store.fetch_client(&st.part.cname)?
+    } else {
+        lookup_principal_id(&st.part.cname, crealm)
+            .map(|id| store.fetch(&id))
+            .transpose()?
+            .flatten()
+    };
+    let Some(client) = found else {
         return Err(proto(err::SERVER_NOMATCH, status::SECOND_TKT_MISMATCH));
     };
     if client.name != dest.name || client.realm != dest.realm {

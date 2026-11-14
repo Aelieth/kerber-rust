@@ -134,7 +134,7 @@ wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 Counts:
 **609** = A1 133 + A2 94 + A3 122 + A4 70 + A5 36 + B1 154.
 exact 480 · stricter-documented 23 · deviation 37 ·
-absent 3 · deferred 66.
+absent 2 · deferred 67.
 
 When the ledger was split into these files, the one-file A4 (153 rows,
 kadm5 plus the client library) was re-cut by subject: A4 58, A5 25 and
@@ -152,8 +152,7 @@ Annotation rule: an `exact` row whose proof is unit-only carries
 state is reachable only by forged PDUs / faulted stores, so no live
 differential cell can exist); rows without it name a live gate cell or
 `diffsend` case. The per-row sweep that adds the annotation to every
-unit-only `exact` row has not been done. The three
-`absent` rows include the stated non-goal `gss_wrap_size_limit`.
+unit-only `exact` row has not been done. Two rows are `absent`.
 
 Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
 A2 10 (9 report rows + the `kdc_util.c:144-191` split) + A3 10 = 28

@@ -16,13 +16,17 @@ use krb5_types::{
     EncryptionKey, PaData, PrincipalName, Ticket, err, ku, pa,
 };
 
-use crate::asn1_text::{SEQUENCE, UNIVERSAL};
+use crate::asn1_text::{ASN1_PARSE_ERROR, SEQUENCE, UNIVERSAL, asn1_text_code};
 use crate::error::Error;
 use crate::kdb::PrincipalRead;
 use crate::plugins::authdata_modules;
-use crate::preauth::{asn1_refusal, find_pa, proto, proto_d};
+use crate::preauth::{
+    E_BAD_ENCTYPE, E_BAD_MSIZE, E_EINVAL, E_ENOENT, E_ERANGE, asn1_refusal, find_pa,
+    pac_parse_text, proto, proto_d, verify_checksum_text,
+};
 use crate::status;
-use crate::store::Principal;
+use crate::store::{KeyEntry, Principal};
+use krb5_protocol::trace::ERROR_TABLE_BASE_KRB5;
 
 pub fn wrap_win2k_pac(pac_bytes: &[u8]) -> Result<krb5_types::AuthorizationData, Error> {
     let inner = vec![AuthorizationDataValue {
@@ -42,6 +46,41 @@ pub struct PacTicket<'a> {
     pub kdc: &'a ProtocolKey,
     pub enc_tkt_der: &'a [u8],
     pub is_service_tkt: bool,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum KdcKey<'a> {
+    Ready(&'a ProtocolKey),
+    Privsvr(&'a Principal, &'a ProtocolKey),
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct PacSigner<'a> {
+    pub(crate) server: &'a ProtocolKey,
+    pub(crate) kdc: KdcKey<'a>,
+    pub(crate) enc_tkt_der: &'a [u8],
+    pub(crate) is_service_tkt: bool,
+}
+
+impl<'a> PacSigner<'a> {
+    fn of(t: &PacTicket<'a>) -> Self {
+        Self {
+            server: t.server,
+            kdc: KdcKey::Ready(t.kdc),
+            enc_tkt_der: t.enc_tkt_der,
+            is_service_tkt: t.is_service_tkt,
+        }
+    }
+
+    // MIT: `handle_pac` (kdc_authdata.c:559-561)
+    fn kdc_key(&self) -> Result<std::borrow::Cow<'a, ProtocolKey>, Error> {
+        match self.kdc {
+            KdcKey::Ready(k) => Ok(std::borrow::Cow::Borrowed(k)),
+            KdcKey::Privsvr(server, tgt_key) => {
+                issue_privsvr_key(server, tgt_key).map(std::borrow::Cow::Owned)
+            }
+        }
+    }
 }
 
 fn is_pac_signature(kind: u32) -> bool {
@@ -64,7 +103,7 @@ pub fn sign_pac(
 pub(crate) fn sign_reply_pac_s4u(
     cname: &PrincipalName,
     authtime: u32,
-    ticket: &PacTicket<'_>,
+    signer: &PacSigner<'_>,
     identity: &krb5_types::pac::PacIdentity,
     logon_override: Option<&[u8]>,
     subject_pac: Option<&[u8]>,
@@ -73,7 +112,7 @@ pub(crate) fn sign_reply_pac_s4u(
     sign_reply_pac_inner(
         cname,
         authtime,
-        ticket,
+        signer,
         identity,
         logon_override,
         subject_pac,
@@ -92,7 +131,7 @@ pub fn sign_reply_pac(
     sign_reply_pac_inner(
         cname,
         authtime,
-        ticket,
+        &PacSigner::of(ticket),
         identity,
         logon_override,
         subject_pac,
@@ -105,22 +144,20 @@ pub fn sign_reply_pac(
 fn sign_reply_pac_inner(
     cname: &PrincipalName,
     authtime: u32,
-    ticket: &PacTicket<'_>,
+    signer: &PacSigner<'_>,
     identity: &krb5_types::pac::PacIdentity,
     logon_override: Option<&[u8]>,
     subject_pac: Option<&[u8]>,
     s4u_client_info: Option<&str>,
 ) -> Result<Vec<u8>, Error> {
-    let PacTicket {
+    let PacSigner {
         server,
-        kdc,
         enc_tkt_der,
         is_service_tkt,
-    } = *ticket;
+        ..
+    } = *signer;
     let server_type = server.etype().checksum_type();
-    let kdc_type = kdc.etype().checksum_type();
     let server_zeros = vec![0u8; server.etype().hmac_output_len()];
-    let kdc_zeros = vec![0u8; kdc.etype().hmac_output_len()];
     let mut pac = if let Some(raw) = subject_pac {
         let parsed = krb5_types::pac::Pac::parse(raw).map_err(|e| map_pac_err(&e))?;
         let mut buffers: Vec<krb5_types::pac::PacBuffer> = parsed
@@ -183,6 +220,10 @@ fn sign_reply_pac_inner(
             ],
         )
     };
+    let kdc = signer.kdc_key()?;
+    let kdc = kdc.as_ref();
+    let kdc_type = kdc.etype().checksum_type();
+    let kdc_zeros = vec![0u8; kdc.etype().hmac_output_len()];
     if is_service_tkt {
         pac.buffers.push(krb5_types::pac::PacBuffer::new(
             krb5_types::pac::PAC_TICKET_CHECKSUM,
@@ -293,11 +334,11 @@ pub(crate) fn mit_ticket_pac(
     req: &HandlePac<'_>,
     client: &PrincipalName,
     authtime: u32,
-    ticket: &PacTicket<'_>,
+    signer: &PacSigner<'_>,
 ) -> Result<Vec<u8>, Error> {
     let subject = req
         .subject
-        .map(|raw| Pac::parse(raw).map_err(|_| handle_authdata_error()))
+        .map(|raw| Pac::parse(raw).map_err(|e| handle_authdata_error(pac_parse_text(&e))))
         .transpose()?;
     let mut buffers = Vec::new();
     if let Some((target, transited)) = req.delegation {
@@ -306,29 +347,35 @@ pub(crate) fn mit_ticket_pac(
     } else if let Some(s) = &subject
         && let Some(di) = s
             .unique_buffer(PAC_DELEGATION_INFO)
-            .map_err(|_| handle_authdata_error())?
+            .map_err(|_| handle_authdata_error(E_EINVAL))?
     {
         buffers.push(PacBuffer::new(PAC_DELEGATION_INFO, di.to_vec()));
     }
     let client_name = if req.s4u && req.issuing_referral {
-        let (name, realm) = req.altcprinc.ok_or_else(handle_authdata_error)?;
+        let (name, realm) = req
+            .altcprinc
+            .ok_or_else(|| proto(err::GENERIC, status::HANDLE_AUTHDATA))?;
         Some(client_info_name(name, Some(realm)))
     } else if subject.is_none() || req.s4u {
         Some(client_info_name(client, None))
     } else {
-        let info = subject
-            .as_ref()
-            .and_then(|s| s.unique_buffer(PAC_CLIENT_INFO).ok().flatten())
-            .ok_or_else(handle_authdata_error)?;
+        // MIT: `copy_pac_buffer` (kdc_authdata.c:442-453)
+        let info = match subject.as_ref().map(|s| s.unique_buffer(PAC_CLIENT_INFO)) {
+            Some(Ok(Some(info))) => info,
+            Some(Err(_)) => return Err(handle_authdata_error(E_EINVAL)),
+            _ => return Err(handle_authdata_error(E_ENOENT)),
+        };
         buffers.push(PacBuffer::new(PAC_CLIENT_INFO, info.to_vec()));
         None
     };
-    let PacTicket {
+    let PacSigner {
         server,
-        kdc,
         enc_tkt_der,
         is_service_tkt,
-    } = *ticket;
+        ..
+    } = *signer;
+    let kdc = signer.kdc_key()?;
+    let kdc = kdc.as_ref();
     let usage = KeyUsage::new(ku::KERB_NON_KERB_CKSUM_SALT)?;
     let server_type = server.etype().checksum_type();
     let kdc_type = kdc.etype().checksum_type();
@@ -389,8 +436,16 @@ fn client_info_name(name: &PrincipalName, realm: Option<&str>) -> String {
     }
 }
 
-fn handle_authdata_error() -> Error {
-    proto(err::GENERIC, status::HANDLE_AUTHDATA)
+// MIT: `KRB5_PLUGIN_OP_NOTSUPP` (lib/krb5/error_tables/krb5_err.et:347-347)
+pub(crate) const E_PLUGIN_OP_NOTSUPP: &str = "Plugin does not support the operation";
+
+fn asn1_failure(der: &[u8], e: &krb5_asn1::Error, status: &'static str) -> Error {
+    let (code, text) = asn1_refusal(der, UNIVERSAL, SEQUENCE, e);
+    proto_d(code, status, text)
+}
+
+fn handle_authdata_error(text: &str) -> Error {
+    proto_d(err::GENERIC, status::HANDLE_AUTHDATA, text)
 }
 
 pub fn verify_pac(
@@ -409,13 +464,8 @@ pub fn verify_pac_signatures(
     enc_tkt_der: Option<&[u8]>,
     is_service_tkt: bool,
 ) -> Result<(), Error> {
-    let pac = krb5_types::pac::Pac::parse(pac_bytes).map_err(|e| {
-        proto_d(
-            err::BAD_INTEGRITY,
-            status::HEADER_PAC,
-            format!("PAC parse: {e}"),
-        )
-    })?;
+    let pac = krb5_types::pac::Pac::parse(pac_bytes)
+        .map_err(|e| proto_d(err::GENERIC, status::HEADER_PAC, pac_parse_text(&e)))?;
     if let (Some(kdc), Some(der), true) = (kdc, enc_tkt_der, is_service_tkt) {
         let buf = pac.ticket_checksum().map_err(|e| map_pac_err(&e))?;
         verify_pac_sig(kdc, der, buf, PAC_TICKET_CHECKSUM)?;
@@ -423,14 +473,16 @@ pub fn verify_pac_signatures(
     verify_pac_checksums(&pac, server, kdc, is_service_tkt)
 }
 
+// MIT: `zero_signature` (lib/krb5/krb/pac.c:462-470)
 fn map_pac_err(e: &krb5_types::pac::PacError) -> Error {
-    match e {
-        krb5_types::pac::PacError::MissingBuffer | krb5_types::pac::PacError::Truncated => {
-            proto(err::GENERIC, status::HEADER_PAC)
-        }
-        krb5_types::pac::PacError::Integrity => proto(err::MODIFIED, status::HEADER_PAC),
-        krb5_types::pac::PacError::Malformed => proto(err::GENERIC, status::HEADER_PAC),
-    }
+    let text = match e {
+        krb5_types::pac::PacError::Integrity => return proto(err::MODIFIED, status::HEADER_PAC),
+        krb5_types::pac::PacError::MissingBuffer => E_ENOENT,
+        krb5_types::pac::PacError::Truncated => E_BAD_MSIZE,
+        krb5_types::pac::PacError::Range => E_ERANGE,
+        _ => E_EINVAL,
+    };
+    proto_d(err::GENERIC, status::HEADER_PAC, text)
 }
 
 fn verify_pac_checksums(
@@ -458,9 +510,9 @@ fn verify_pac_checksums(
     let server_buf = pac
         .server_checksum()
         .map_err(|e| map_pac_err(&e))?
-        .ok_or_else(|| proto(err::GENERIC, status::HEADER_PAC))?;
+        .ok_or_else(|| proto_d(err::GENERIC, status::HEADER_PAC, E_ENOENT))?;
     if server_buf.len() < 4 {
-        return Err(proto(err::GENERIC, status::HEADER_PAC));
+        return Err(proto_d(err::GENERIC, status::HEADER_PAC, E_BAD_MSIZE));
     }
     let kdc_sig = pac.kdc_checksum().map_err(|e| map_pac_err(&e))?;
     last = verify_pac_sig(kdc, &server_buf[4..], kdc_sig, PAC_PRIVSVR_CHECKSUM).map(|_| ());
@@ -475,10 +527,10 @@ fn verify_pac_sig<'a>(
     buffer_type: u32,
 ) -> Result<&'a [u8], Error> {
     let Some(buf) = buf else {
-        return Err(proto(err::GENERIC, status::HEADER_PAC));
+        return Err(proto_d(err::GENERIC, status::HEADER_PAC, E_ENOENT));
     };
     if buf.len() < 4 {
-        return Err(proto(err::GENERIC, status::HEADER_PAC));
+        return Err(proto_d(err::GENERIC, status::HEADER_PAC, E_BAD_MSIZE));
     }
     let cksumtype = i32::from_le_bytes(
         buf[0..4]
@@ -495,14 +547,16 @@ fn verify_pac_sig<'a>(
         return Err(proto(err::GENERIC, status::HEADER_PAC));
     };
     if want > buf.len() - 4 {
-        return Err(proto(err::GENERIC, status::HEADER_PAC));
+        return Err(proto_d(err::GENERIC, status::HEADER_PAC, E_BAD_MSIZE));
     }
     let mac = &buf[4..4 + want];
     let usage = KeyUsage::new(ku::KERB_NON_KERB_CKSUM_SALT)?;
     verify_checksum_type(key, usage, data, cksumtype, mac).map_err(|e| match e {
         krb5_crypto::Error::Integrity => proto(err::MODIFIED, status::HEADER_PAC),
-        krb5_crypto::Error::UnsupportedChecksum(_) => proto(err::ETYPE_NOSUPP, status::HEADER_PAC),
-        _ => proto(err::GENERIC, status::HEADER_PAC),
+        krb5_crypto::Error::UnsupportedChecksum(_) => {
+            proto_d(err::ETYPE_NOSUPP, status::HEADER_PAC, E_BAD_ENCTYPE)
+        }
+        _ => proto_d(err::GENERIC, status::HEADER_PAC, verify_checksum_text(&e)),
     })?;
     Ok(mac)
 }
@@ -522,7 +576,8 @@ pub(crate) fn get_verified_pac(
     part: &EncTicketPart,
     ticket_key: &ProtocolKey,
     header_server: &Principal,
-    local_tgt: Option<&Principal>,
+    tgt: &Principal,
+    tgt_key: &KeyEntry,
 ) -> Result<Option<Vec<u8>>, Error> {
     let Some(pac) = pac_from_ticket_part(part) else {
         return Ok(None);
@@ -532,22 +587,13 @@ pub(crate) fn get_verified_pac(
             .map_err(wire_unsupported_pac_cksum)?;
         return Ok(Some(pac));
     }
-    let Some(tgt) = local_tgt else {
-        return Err(proto(err::GENERIC, status::HEADER_PAC));
-    };
-    let Ok(cur) = policy.first_current_key(tgt) else {
-        return Err(proto(err::GENERIC, status::HEADER_PAC));
-    };
     let der = ticket_checksum_der(part)?;
-    let first = try_verify_pac(&pac, ticket_key, header_server, &cur.key, &der);
+    let first = try_verify_pac(&pac, ticket_key, header_server, &tgt_key.key, &der);
     if !pac_verify_retryable(&first) {
         first?;
         return Ok(Some(pac));
     }
-    let mut kvno = tgt
-        .first_current_key()
-        .map_or(0, |k| k.kvno)
-        .saturating_sub(1);
+    let mut kvno = tgt_key.kvno.saturating_sub(1);
     let mut tries = 2u32;
     while tries > 0 && kvno > 0 {
         let Some(old) = policy.find_enctype(tgt, None, kvno).ok().or_else(|| {
@@ -614,13 +660,32 @@ pub(crate) fn pac_privsvr_key(
     else {
         return Ok(tgt_key.clone());
     };
-    let et =
-        EncryptionType::from_mit_name(val).map_err(|_| proto(err::GENERIC, status::HEADER_PAC))?;
+    // MIT: `krb5_string_to_enctype` (lib/crypto/krb/enctype_util.c:88-113)
+    // MIT: `pac_privsvr_key` (kdc_util.c:545-549)
+    let et = Some(val.as_str())
+        .filter(|v| v.trim() == *v && v.parse::<i32>().is_err())
+        .and_then(|v| EncryptionType::from_mit_name(v).ok())
+        .ok_or_else(|| {
+            let text = format!("{PRIVSVR_BAD_VALUE}{val}");
+            proto_d(err::GENERIC, status::HEADER_PAC, text)
+        })?;
     if tgt_key.etype() == et {
         return Ok(tgt_key.clone());
     }
+    // MIT: `krb5_c_derive_prfplus` (lib/crypto/krb/cf2.c:94-95)
     derive_prfplus_enctype(tgt_key, b"pac_privsvr", et)
-        .map_err(|_| proto(err::GENERIC, status::HEADER_PAC))
+        .map_err(|_| proto_d(err::ETYPE_NOSUPP, status::HEADER_PAC, E_BAD_ENCTYPE))
+}
+
+const PRIVSVR_BAD_VALUE: &str = "Invalid pac_privsvr_enctype value ";
+
+// MIT: `handle_pac` (kdc_authdata.c:559-561)
+pub(crate) fn issue_privsvr_key(
+    server: &Principal,
+    tgt_key: &ProtocolKey,
+) -> Result<ProtocolKey, Error> {
+    pac_privsvr_key(server, tgt_key)
+        .map_err(|e| with_status(wire_unsupported_pac_cksum(e), status::HANDLE_AUTHDATA))
 }
 
 // MIT: `check_normal_tgs_pac` (tgs_policy.c:601-624)
@@ -745,7 +810,7 @@ pub(crate) fn process_s4u2self_req(
     }
     if let Some(raw) = find_pa(padata, pa::FOR_USER) {
         let pa: krb5_types::s4u::PaForUser =
-            decode(raw).map_err(|_| proto(err::GENERIC, status::DECODE_PA_FOR_USER))?;
+            decode(raw).map_err(|e| asn1_failure(raw, &e, status::DECODE_PA_FOR_USER))?;
         verify_for_user_checksum(tgt_session, &pa)?;
         let id = krb5_types::s4u::S4uUserId {
             nonce: 0,
@@ -789,7 +854,7 @@ fn process_s4u_x509_user(
     nonce: u32,
 ) -> Result<krb5_types::s4u::PaS4uX509User, Error> {
     let req: krb5_types::s4u::PaS4uX509User =
-        decode(raw).map_err(|_| proto(err::GENERIC, status::DECODE_PA_S4U_X509_USER))?;
+        decode(raw).map_err(|e| asn1_failure(raw, &e, status::DECODE_PA_S4U_X509_USER))?;
     let key = x509_cksum_key(tgt_session, tgs_subkey)?;
     if etype_requires_info2(key.etype()) && !cksumtype_is_keyed(req.cksum.cksumtype) {
         return Err(proto(err::INAPP_CKSUM, status::INVALID_S4U2SELF_CHECKSUM));
@@ -798,17 +863,25 @@ fn process_s4u_x509_user(
         return Err(proto(err::MODIFIED, status::INVALID_S4U2SELF_CHECKSUM));
     }
     let usage = KeyUsage::new(ku::PA_S4U_X509_USER_REQUEST)?;
-    let mut ok = false;
-    if let Some(scratch) = userid_der_from_pa(raw) {
-        ok = verify_checksum_keyed(
-            &key,
-            usage,
-            scratch,
-            req.cksum.cksumtype,
-            req.cksum.checksum.as_ref(),
+    // MIT: `verify_s4u_x509_user_checksum` (kdc_util.c:1369-1381)
+    let scratch = userid_der_from_pa(raw).ok_or_else(|| {
+        proto_d(
+            err::GENERIC,
+            status::INVALID_S4U2SELF_CHECKSUM,
+            ASN1_PARSE_ERROR,
         )
-        .is_ok();
-    }
+    })?;
+    let ok = match verify_checksum_keyed(
+        &key,
+        usage,
+        scratch,
+        req.cksum.cksumtype,
+        req.cksum.checksum.as_ref(),
+    ) {
+        Ok(()) => true,
+        Err(krb5_crypto::Error::Integrity) => false,
+        Err(e) => return Err(map_s4u_cksum(&e)),
+    };
     if !ok {
         let data = encode(&req.user_id)?;
         verify_checksum_keyed(
@@ -858,11 +931,17 @@ fn s4u_from_userid(
     let has_cert = id.subject_cert.as_ref().is_some_and(|c| !c.is_empty());
     let mut local = None;
     if realm == store.realm() {
+        // MIT: `krb5_db_get_s4u_x509_principal` (lib/kdb/kdb5.c:2754-2755)
         if has_cert {
-            return Err(proto(err::GENERIC, status::LOOKING_UP_S4U2SELF_PRINCIPAL));
+            let text = E_PLUGIN_OP_NOTSUPP;
+            return Err(proto_d(
+                err::GENERIC,
+                status::LOOKING_UP_S4U2SELF_PRINCIPAL,
+                text,
+            ));
         }
         let mut p = store
-            .fetch_name(&user)?
+            .fetch_client(&user)?
             .ok_or_else(|| proto(err::C_PRINCIPAL_UNKNOWN, status::UNKNOWN_S4U2SELF_PRINCIPAL))?;
         p.pw_expire = 0;
         p.attributes &= !crate::store::KDB_REQUIRES_PWCHANGE;
@@ -882,7 +961,11 @@ fn map_s4u_cksum(e: &krb5_crypto::Error) -> Error {
             proto(err::INAPP_CKSUM, status::INVALID_S4U2SELF_CHECKSUM)
         }
         krb5_crypto::Error::Integrity => proto(err::MODIFIED, status::INVALID_S4U2SELF_CHECKSUM),
-        _ => proto(err::GENERIC, status::INVALID_S4U2SELF_CHECKSUM),
+        _ => proto_d(
+            err::GENERIC,
+            status::INVALID_S4U2SELF_CHECKSUM,
+            verify_checksum_text(e),
+        ),
     }
 }
 
@@ -1114,7 +1197,7 @@ fn non_tgt_or_u2u(body: &krb5_types::KdcReqBody) -> bool {
 
 fn is_client_db_alias(store: &dyn PrincipalRead, entry: &Principal, princ: &PrincipalName) -> bool {
     store
-        .fetch_name(princ)
+        .fetch_client(princ)
         .ok()
         .flatten()
         .is_some_and(|p| p.name == entry.name && p.realm == entry.realm)
@@ -1209,13 +1292,14 @@ fn delegation_info_for(
     let found = match subject {
         Some(s) => s
             .unique_buffer(PAC_DELEGATION_INFO)
-            .map_err(|_| handle_authdata_error())?,
+            .map_err(|_| handle_authdata_error(E_EINVAL))?,
         None => None,
     };
     let mut di = match found {
-        Some(buf) => {
-            krb5_types::pac::parse_delegation_info(buf).map_err(|_| handle_authdata_error())?
-        }
+        Some(buf) => krb5_types::pac::parse_delegation_info(buf).map_err(|e| {
+            let range = e == krb5_types::pac::PacError::Range;
+            handle_authdata_error(if range { E_ERANGE } else { E_EINVAL })
+        })?,
         None => krb5_types::pac::S4uDelegationInfo {
             proxy_target: String::new(),
             transited_services: Vec::new(),
@@ -1294,13 +1378,17 @@ pub(crate) fn authdata_failed(kind: &str, e: Error) -> Error {
             code,
             proto_d(err::GENERIC, status::HANDLE_AUTHDATA, e.to_string()),
         ),
-        None => match &e {
+        None => match e {
             Error::Protocol {
-                code,
-                text: Some(t),
-                ..
-            } if t == status::HANDLE_AUTHDATA => (ERROR_TABLE_BASE_KRB5 + i64::from(*code), e),
-            _ => return e,
+                code, ref detail, ..
+            } => (
+                authdata_code(code, detail.as_deref()),
+                with_status(e, status::HANDLE_AUTHDATA),
+            ),
+            other => (
+                ERROR_TABLE_BASE_KRB5 + i64::from(err::GENERIC),
+                proto_d(err::GENERIC, status::HANDLE_AUTHDATA, other.to_string()),
+            ),
         },
     };
     krb5_log::klog::syslog(
@@ -1310,7 +1398,19 @@ pub(crate) fn authdata_failed(kind: &str, e: Error) -> Error {
     e
 }
 
-const ERROR_TABLE_BASE_KRB5: i64 = -1_765_328_384;
+// MIT: `tgs_issue_ticket` (kdc/do_tgs_req.c:1044-1048)
+// MIT: `finish_process_as_req` (kdc/do_as_req.c:277-281)
+fn authdata_code(code: i32, detail: Option<&str>) -> i64 {
+    match detail {
+        Some(E_EINVAL) => 22,
+        Some(E_ENOENT) => 2,
+        Some(E_ERANGE) => 34,
+        Some(t) if t.starts_with(PRIVSVR_BAD_VALUE) => 22,
+        Some(E_BAD_ENCTYPE) => ERROR_TABLE_BASE_KRB5 + i64::from(err::BAD_ENCTYPE),
+        Some(t) => asn1_text_code(t).map_or(ERROR_TABLE_BASE_KRB5 + i64::from(code), i64::from),
+        None => ERROR_TABLE_BASE_KRB5 + i64::from(code),
+    }
+}
 
 fn map_ad_fail(e: Error) -> Error {
     match e {
@@ -1332,7 +1432,8 @@ fn copy_request_authdata(
     let sub_usage = KeyUsage::new(ku::TGS_REQ_AD_SUBKEY)?;
     let plain = decrypt_enc_data(session, sess_usage, enc.etype, enc.cipher.as_ref())
         .or_else(|_| decrypt_enc_data(client_key, sub_usage, enc.etype, enc.cipher.as_ref()))?;
-    let ad: AuthorizationData = decode(&plain)?;
+    let ad: AuthorizationData =
+        decode(&plain).map_err(|e| asn1_failure(&plain, &e, status::HANDLE_AUTHDATA))?;
     if has_mandatory_for_kdc(&ad) {
         return Err(proto(err::POLICY, status::HANDLE_AUTHDATA));
     }
@@ -1633,8 +1734,9 @@ pub(crate) fn get_auth_indicators(
         .map_err(|(code, text)| proto_d(code, status::GET_AUTH_INDICATORS, text))?;
     let mut indicators = Vec::new();
     for el in cammacs {
-        let cammac: Cammac = decode(el.ad_data.as_ref())
-            .map_err(|_| proto(err::GENERIC, status::GET_AUTH_INDICATORS))?;
+        let raw = el.ad_data.as_ref();
+        let cammac: Cammac =
+            decode(raw).map_err(|e| asn1_failure(raw, &e, status::GET_AUTH_INDICATORS))?;
         if cammac_check_kdcver(policy, &cammac, enc_tkt, local_tgt, local_tgt_key) {
             authind_extract(&cammac.elements, &mut indicators)
                 .map_err(|e| with_status(e, status::GET_AUTH_INDICATORS))?;

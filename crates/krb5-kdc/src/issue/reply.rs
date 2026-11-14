@@ -197,7 +197,8 @@ pub(super) struct MintTicket<'a> {
     pub authtime: &'a KerberosTime,
     pub endtime: &'a KerberosTime,
     pub flags: TicketFlags,
-    pub kdc_key: &'a ProtocolKey,
+    pub server: &'a Principal,
+    pub privsvr_tgt_key: &'a ProtocolKey,
     pub transited: TransitedEncoding,
     pub renew_till: Option<KerberosTime>,
     pub store: &'a dyn PrincipalRead,
@@ -236,7 +237,8 @@ pub(super) fn mint_ticket(p: MintTicket<'_>) -> Result<Ticket, Error> {
         authtime,
         endtime,
         flags,
-        kdc_key,
+        server,
+        privsvr_tgt_key,
         transited,
         renew_till,
         store,
@@ -276,61 +278,63 @@ pub(super) fn mint_ticket(p: MintTicket<'_>) -> Result<Ticket, Error> {
         .map_err(|e| authdata_failed(kind, e))?;
     }
     if let Some(pac) = pac {
-        // MIT: `krb5_kdc_sign_ticket` (pac_sign.c:389-398)
-        let placeholder = wrap_win2k_pac(&[0])?;
-        let mut checksum_ad = extra.clone();
-        checksum_ad.splice(0..0, placeholder);
-        part.authorization_data = Some(checksum_ad);
-        let checksum_der = encode(&part)?;
-        let ticket = crate::ad::PacTicket {
-            server: service_key,
-            kdc: kdc_key,
-            enc_tkt_der: &checksum_der,
-            is_service_tkt: crate::ad::should_have_ticket_signature(sname),
-        };
-        let pac = match pac {
-            TicketPac::Mit(req) => {
-                crate::ad::mit_ticket_pac(&req, cname, authtime.unix_seconds(), &ticket)
-                    .map_err(|e| authdata_failed(kind, e))?
-            }
-            TicketPac::Ad {
-                logon_override,
-                subject_pac,
-                s4u_client_info,
-                identity,
-            } => {
-                let ident = if let Some(b) = logon_override {
-                    let v = parse_kerb_validation_info(b).map_err(|e| {
-                        proto_d(
-                            err::BAD_INTEGRITY,
-                            status::HANDLE_AUTHDATA,
-                            format!("PAC logon: {e}"),
-                        )
-                    })?;
-                    PacIdentity {
-                        sam: v.effective_name.value.clone(),
-                        realm: crealm.to_owned(),
-                        domain_sid: v.logon_domain_id.clone(),
-                        rid: v.user_id,
-                    }
-                } else if let Some((name, realm)) = identity {
-                    store.pac_identity(name, realm)
-                } else {
-                    store.pac_identity(cname, crealm)
-                };
-                crate::ad::sign_reply_pac_s4u(
-                    cname,
-                    authtime.unix_seconds(),
-                    &ticket,
-                    &ident,
+        let signed = (|| {
+            // MIT: `krb5_kdc_sign_ticket` (pac_sign.c:389-398)
+            let placeholder = wrap_win2k_pac(&[0])?;
+            let mut checksum_ad = extra.clone();
+            checksum_ad.splice(0..0, placeholder);
+            part.authorization_data = Some(checksum_ad);
+            let checksum_der = encode(&part)?;
+            let signer = crate::ad::PacSigner {
+                server: service_key,
+                kdc: crate::ad::KdcKey::Privsvr(server, privsvr_tgt_key),
+                enc_tkt_der: &checksum_der,
+                is_service_tkt: crate::ad::should_have_ticket_signature(sname),
+            };
+            let pac = match pac {
+                TicketPac::Mit(req) => {
+                    crate::ad::mit_ticket_pac(&req, cname, authtime.unix_seconds(), &signer)?
+                }
+                TicketPac::Ad {
                     logon_override,
                     subject_pac,
                     s4u_client_info,
-                )
-                .map_err(|e| authdata_failed(kind, e))?
-            }
-        };
-        let mut signed = wrap_win2k_pac(&pac)?;
+                    identity,
+                } => {
+                    let ident = if let Some(b) = logon_override {
+                        let v = parse_kerb_validation_info(b).map_err(|e| {
+                            proto_d(
+                                err::BAD_INTEGRITY,
+                                status::HANDLE_AUTHDATA,
+                                format!("PAC logon: {e}"),
+                            )
+                        })?;
+                        PacIdentity {
+                            sam: v.effective_name.value.clone(),
+                            realm: crealm.to_owned(),
+                            domain_sid: v.logon_domain_id.clone(),
+                            rid: v.user_id,
+                        }
+                    } else if let Some((name, realm)) = identity {
+                        store.pac_identity(name, realm)
+                    } else {
+                        store.pac_identity(cname, crealm)
+                    };
+                    crate::ad::sign_reply_pac_s4u(
+                        cname,
+                        authtime.unix_seconds(),
+                        &signer,
+                        &ident,
+                        logon_override,
+                        subject_pac,
+                        s4u_client_info,
+                    )?
+                }
+            };
+            wrap_win2k_pac(&pac)
+        })()
+        .map_err(|e| authdata_failed(kind, e))?;
+        let mut signed = signed;
         signed.extend(extra);
         part.authorization_data = Some(signed);
     } else if !extra.is_empty() {

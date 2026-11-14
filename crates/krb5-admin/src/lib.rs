@@ -26,7 +26,7 @@ pub use kadm5::{
     check_auth_gssapi_names, check_iprop_rpcsec_auth, check_rpcsec_auth, glob_pattern_ok,
     kadm5_handle_rpc, kdb_rd_req,
 };
-pub use kadmin_cli::{kadmin_local_main, ss_parse};
+pub use kadmin_cli::{kadmin_local_main, kadmin_main, ss_parse};
 #[cfg(feature = "daemon")]
 pub use kadmind::serve_kadmind;
 pub use kadmind::{

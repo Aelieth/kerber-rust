@@ -1,36 +1,19 @@
 use hmac::{Hmac, KeyInit, Mac};
+use krb5_s2k::Sha2Kdf;
 use sha1::Sha1;
 use sha2::{Sha256, Sha384};
 use subtle::ConstantTimeEq;
 use zeroize::Zeroize;
 
-use crate::cts::{self, BLOCK};
 use crate::error::Error;
 use crate::etype::EncryptionType;
-use crate::nfold::nfold;
 use crate::wipe::wipe;
 
 pub(crate) fn bits_u32(nbytes: usize) -> u32 {
     u32::try_from(nbytes.saturating_mul(8)).unwrap_or(u32::MAX)
 }
 
-pub(crate) fn dk_rfc3961(key: &[u8], constant: &[u8]) -> Result<Vec<u8>, Error> {
-    let k = key.len();
-    let folded = if constant.len() == BLOCK {
-        constant.to_vec()
-    } else {
-        nfold(constant, BLOCK)?
-    };
-    let mut block = [0u8; BLOCK];
-    block.copy_from_slice(&folded);
-    let mut out = Vec::with_capacity(k);
-    while out.len() < k {
-        block = cts::encrypt_block(key, &block)?;
-        let need = (k - out.len()).min(BLOCK);
-        out.extend_from_slice(&block[..need]);
-    }
-    Ok(out)
-}
+pub(crate) use krb5_s2k::dk_rfc3961;
 
 pub(crate) fn kdf_hmac_sha2(
     etype: EncryptionType,
@@ -39,22 +22,12 @@ pub(crate) fn kdf_hmac_sha2(
     context: Option<&[u8]>,
     k_bits: u32,
 ) -> Result<Vec<u8>, Error> {
-    let k_len = (k_bits / 8) as usize;
-    let mut msg = Vec::with_capacity(4 + label.len() + 1 + context.map_or(0, <[u8]>::len) + 4);
-    msg.extend_from_slice(&1u32.to_be_bytes());
-    msg.extend_from_slice(label);
-    msg.push(0x00);
-    if let Some(ctx) = context {
-        msg.extend_from_slice(ctx);
-    }
-    msg.extend_from_slice(&k_bits.to_be_bytes());
-
-    let mut mac = hmac_digest(etype, key, &msg)?;
-    if mac.len() > k_len {
-        mac[k_len..].zeroize();
-        mac.truncate(k_len);
-    }
-    Ok(mac)
+    let hash = match etype {
+        EncryptionType::Aes128CtsHmacSha256128 => Sha2Kdf::Sha256,
+        EncryptionType::Aes256CtsHmacSha384192 => Sha2Kdf::Sha384,
+        _ => return Err(Error::UnsupportedEtype(etype.to_iana())),
+    };
+    Ok(krb5_s2k::kdf_hmac_sha2(hash, key, label, context, k_bits)?)
 }
 
 pub(crate) fn hmac_digest(
