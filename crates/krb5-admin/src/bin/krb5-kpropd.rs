@@ -76,9 +76,9 @@ fn main() {
     klog::init("kpropd", &["SYSLOG:INFO:DAEMON".to_owned()], false);
     let paths = kpropd_paths(realm_opt.as_deref()).unwrap_or_else(|e| {
         if matches!(e, krb5_config::Error::NoDefaultRealm) {
-            eprintln!("krb5-kpropd: {e} Unable to get default realm");
+            com_err(&argv0, debug, &format!("{e} Unable to get default realm"));
         } else {
-            eprintln!("krb5-kpropd: {e}");
+            com_err(&argv0, debug, &e.to_string());
         }
         std::process::exit(1);
     });
@@ -239,10 +239,21 @@ fn main() {
                 thread::sleep(Duration::from_millis(20));
             }
             Err(e) => {
-                eprintln!("krb5-kpropd: accept: {e}");
+                let text = format!("{} while accepting connection", os_error_text(&e));
+                com_err(&argv0, debug, &text);
                 break;
             }
         }
+    }
+}
+
+// MIT: `kpropd_com_err_proc` (kprop/kpropd.c:1030-1040)
+fn com_err(argv0: &str, debug: bool, text: &str) {
+    let line = format!("{argv0}: {text}");
+    if debug {
+        eprintln!("{line}");
+    } else {
+        klog::syslog(Severity::Err, &line);
     }
 }
 
