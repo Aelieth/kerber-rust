@@ -92,6 +92,7 @@ fn common_text(e: &Error) -> String {
         Error::PassTooSoon { .. } => "Current password's minimum life has not expired".to_owned(),
         Error::BadKeysalts => "Invalid key/salt tuples".to_owned(),
         Error::AclDenied => "Insufficient authorization for operation".to_owned(),
+        Error::Protocol { text: Some(t), .. } => t.clone(),
         Error::Crypto(s) | Error::Asn1(s) => s.clone(),
         other => other.to_string(),
     }

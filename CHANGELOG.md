@@ -16,6 +16,55 @@ any other `###` heading.
 
 ## [Unreleased]
 
+## [1.2.2] - RP-FILL
+
+### Added
+
+- **kdc.** Host store: `KerberosStore`, sealed records, `open_or_create_host`; each change commits first.
+- **kdc.** `host::conformance::run` and `MemoryRealm`; host errors read as MIT's KDB codes in kadm5.
+- **kdc.** `AuditState.lockout` marks a lockout; `locked_now`, `lockouts` read the state per principal.
+- **kdc.** `set_client_case_fold`: one-part client names match ignoring ASCII case, when asked.
+- **gss.** `GssContext::wrap_size_limit`.
+- **s2k.** `krb5-s2k`: AES string-to-key with no clock, RNG or std, for wasm32.
+- **admin.** `kadmin`, the network client: read and write commands, AUTH_GSSAPI, `-n`, `-O`, `-N`.
+- **protocol.** `etype_list_der`, the authenticator's RFC 4537 list as sent.
+- **types.** `PrincipalName::NT_X500_PRINCIPAL`.
+- **cli.** `com_errln!`, a line with the CRLF of MIT's default com_err proc.
+
+### Changed
+
+- **kdc.** A start or dump without the lockout file refuses while tracking is on, as MIT's LMDB.
+- **kdc.** Upgrading: a file-mode realm that never got `<db>.lockout` needs `touch <db>.lockout` first.
+- **kdc.** A new lockout file and its directory are synced once at creation; MIT leaves it unsynced.
+- **kdc.** A loaded key keeps its stored ciphertext until it changes: load, then dump, gives MIT's bytes.
+- **kdc/types.** `Error`, `AuditState`, `PacError` are `#[non_exhaustive]`.
+- **client.** `kinit -n`, `kadmin -n` send without `pkinit_anchors` and report the KDC's answer, as MIT.
+- **client.** `kinit -n @R` asks as WELLKNOWN/ANONYMOUS@R; without PKINIT it tries other preauth, as MIT.
+
+### Fixed
+
+- **kdc.** The failure log names MIT's internal cause, e.g. "No matching key in entry", not a stock text.
+- **kdc.** AS reads the local TGT key before validation and preauth, as MIT; TGS before the header PAC.
+- **kdc.** The AS reply keeps the requested client name unless CANONICALIZE, as MIT.
+- **kdc.** A PAC that won't parse is 60 with EINVAL/ERANGE, as MIT, not 31.
+- **kdc.** `pac_privsvr_enctype` takes enctype names only; its key is derived only for a PAC, at signing.
+- **kdc.** PAC build and sign errors are HANDLE_AUTHDATA with MIT's `handle_authdata (%d)` line.
+- **kdc.** DELEGATION_INFO's two range checks give ERANGE; a missing S4U X.509 user-id is ASN1_PARSE_ERROR.
+- **admin.** ktutil's `rkt` resolves its argument as a keytab name, as MIT: FILE:, WRFILE:, MEMORY:.
+- **s2k.** An empty `s2kparams` block is refused by the library, as MIT's.
+- **client.** kinit names itself by its program name in every message.
+- **admin.** kpropd's start and accept errors use argv[0] and go to syslog unless `-d`, as MIT's com_err.
+- **kdc.** An AS request with PA-S4U-X509-USER for an X.500 client is LOOKING_UP_CLIENT, 60, as MIT.
+- **admin.** `kadmin -n` prompts for the anonymous principal's password when PKINIT can't run, as MIT.
+- **tools.** Error lines from tools MIT runs without a com_err hook end in CRLF, as MIT's default.
+- **kdc.** A failed DELEGATION_INFO update logs MIT's `handle_authdata (N)` line.
+
+### Tests and CI
+
+- **ci.** cargo audit covers every committed lock; dudect-bencher is vendored without clap for T-7.
+- **ci.** ci-policy checks each lock pins the workspace crates at the workspace's version.
+- **ci.** rustix 1.1.6 (RUSTSEC-2026-0486); `scripts/bump-version.sh` moves the version into every lock.
+
 ## [1.2.1] - 2026-11-08
 
 ### Added
@@ -4695,7 +4744,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
   v2 export, AP-REQ verify, UDP/TCP 88 listener. Gate:
   `scripts/kdc-gate.sh` (MIT `kinit` + `kvno` against the Rust KDC).
 
-[Unreleased]: https://github.com/Aelieth/kerber-rust/compare/v1.2.1...HEAD
+[Unreleased]: https://github.com/Aelieth/kerber-rust/compare/v1.2.2...HEAD
+[1.2.2]: https://github.com/Aelieth/kerber-rust/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/Aelieth/kerber-rust/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/Aelieth/kerber-rust/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/Aelieth/kerber-rust/compare/v1.0.0...v1.1.0

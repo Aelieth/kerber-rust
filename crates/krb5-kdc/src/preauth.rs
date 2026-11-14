@@ -27,7 +27,7 @@ use crate::error::Error;
 use crate::kdb::PrincipalRead;
 use crate::status;
 use crate::store::{KeyLookup, KtkdbError, Principal, ktkdb_get_entry};
-use otp::{E_BAD_ENCTYPE, E_BAD_MSIZE, E_EINVAL};
+pub(crate) use otp::{E_BAD_ENCTYPE, E_BAD_MSIZE, E_EINVAL};
 
 /// After armor, inner_body and inner_padata are the request; MIT frees the outer.
 pub(crate) struct FastOk {
@@ -195,6 +195,25 @@ fn verify_fast_req_checksum(
 
 fn crypto_refusal(e: &krb5_crypto::Error) -> (i32, String) {
     krb5_protocol::decrypt_code(e).map_or_else(|| (err::GENERIC, e.to_string()), mit_refusal)
+}
+
+// MIT: `krb5_k_verify_checksum` (lib/crypto/krb/verify_checksum.c:30-80)
+pub(crate) fn verify_checksum_text(e: &krb5_crypto::Error) -> String {
+    let code = match e {
+        krb5_crypto::Error::UnsupportedChecksum(_) => err::BAD_ENCTYPE,
+        krb5_crypto::Error::BadChecksumSize => err::BAD_MSIZE,
+        e => krb5_protocol::decrypt_code(e).unwrap_or(err::CRYPTO_INTERNAL),
+    };
+    error_message(ERROR_TABLE_BASE_KRB5 + i64::from(code))
+}
+
+// MIT: `krb5_pac_parse` (lib/krb5/krb/pac.c:263-337)
+pub(crate) fn pac_parse_text(e: &krb5_types::pac::PacError) -> &'static str {
+    if *e == krb5_types::pac::PacError::Malformed {
+        E_EINVAL
+    } else {
+        E_ERANGE
+    }
 }
 
 fn mit_refusal(code: i32) -> (i32, String) {
@@ -370,7 +389,8 @@ fn armor_rd_req(
     Ok((ticket.sname.clone(), session, authenticator.subkey))
 }
 
-const E_ERANGE: &str = "Numerical result out of range";
+pub(crate) const E_ERANGE: &str = "Numerical result out of range";
+pub(crate) const E_ENOENT: &str = "No such file or directory";
 
 // MIT: `krb5int_authdata_verify` (lib/krb5/krb/authdata.c:610-725)
 fn armor_authdata_verify(
@@ -408,13 +428,8 @@ fn armor_authdata_verify(
     }
     // MIT: `mspac_import_authdata` (lib/krb5/krb/pac.c:774-796)
     if let Some(pac) = find_authdata(ad, None, pa::AD_WIN2K_PAC)?.first() {
-        krb5_types::pac::Pac::parse(pac.ad_data.as_ref()).map_err(|e| {
-            let einval = e == krb5_types::pac::PacError::Malformed;
-            (
-                err::GENERIC,
-                if einval { E_EINVAL } else { E_ERANGE }.to_owned(),
-            )
-        })?;
+        krb5_types::pac::Pac::parse(pac.ad_data.as_ref())
+            .map_err(|e| (err::GENERIC, pac_parse_text(&e).to_owned()))?;
     }
     // MIT: `authind_import_authdata` (lib/krb5/krb/ai_authdata.c:73-98)
     for el in find_authdata(Some(&verified), None, pa::AD_AUTH_INDICATOR)? {
@@ -972,11 +987,12 @@ fn match_client(
     {
         return true;
     }
-    let Some(id) = crate::kdb::lookup_principal_id(name, realm) else {
-        return false;
+    let found = if realm == store.realm() {
+        store.fetch_client(name)
+    } else {
+        crate::kdb::lookup_principal_id(name, realm).map_or(Ok(None), |id| store.fetch(&id))
     };
-    store
-        .fetch(&id)
+    found
         .ok()
         .flatten()
         .is_some_and(|entry| (entry.realm.as_bytes().to_vec(), parts(&entry.name)) == own)

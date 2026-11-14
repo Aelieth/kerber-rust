@@ -307,7 +307,32 @@ pub fn load_store(db_path: &Path, stash_path: &Path) -> Result<PrincipalStore, P
     check_openable(db_path)?;
     let lock = Arc::new(DbLock::open(db_path)?);
     let _held = lock.hold(DbLockMode::Shared)?;
-    read_store(db_path, stash_path, &lock)
+    let store = read_store(db_path, stash_path, &lock)?;
+    check_realm_lockout_file(db_path, store.realm())?;
+    Ok(store)
+}
+
+// MIT: `klmdb_open` (plugins/kdb/lmdb/kdb_lmdb.c:546-561)
+pub fn check_lockout_file(
+    db: &Path,
+    conf: Option<&krb5_config::KdcConf>,
+) -> Result<(), PersistError> {
+    if conf.is_some_and(|c| c.disable_lockout && c.disable_last_success) {
+        return Ok(());
+    }
+    let path = crate::lockout_path(db);
+    match path.symlink_metadata() {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let text = crate::Error::LockoutMissing { path }.to_string();
+            Err(PersistError::Io(std::io::Error::new(e.kind(), text)))
+        }
+        _ => Ok(()),
+    }
+}
+
+fn check_realm_lockout_file(db: &Path, realm: &str) -> Result<(), PersistError> {
+    let paths = krb5_config::KdcPaths::resolve(Some(realm)).ok();
+    check_lockout_file(db, paths.as_ref().and_then(|p| p.conf.as_ref()))
 }
 
 // MIT: `open_db_and_mkey` (kadmin/dbutil/kdb5_util.c:378-401)
@@ -335,7 +360,6 @@ pub(crate) fn read_store(
         _ => load_dump_with_stash(dump_text(&blob)?, &stash)?,
     };
     crate::lockout::merge_lockout_file(&mut store, db_path);
-    crate::lockout::ensure_lockout_file(db_path);
     store.persist_paths = Some((db_path.to_path_buf(), stash_path.to_path_buf()));
     store.db_stamp = stamp_read(&mut store, lock, db_path, &blob);
     store.dblock = Some(Arc::clone(lock));
@@ -365,7 +389,9 @@ pub fn load_store_with_master(
     check_openable(db_path)?;
     let lock = Arc::new(DbLock::open(db_path)?);
     let _held = lock.hold(DbLockMode::Shared)?;
-    read_store_with_master(db_path, master, &lock)
+    let store = read_store_with_master(db_path, master, &lock)?;
+    check_realm_lockout_file(db_path, store.realm())?;
+    Ok(store)
 }
 
 pub(crate) fn read_store_with_master(
@@ -383,7 +409,6 @@ pub(crate) fn read_store_with_master(
     }
     let mut store = crate::kdb_dump::load_dump_with_key(dump_text(&blob)?, master)?;
     crate::lockout::merge_lockout_file(&mut store, db_path);
-    crate::lockout::ensure_lockout_file(db_path);
     store.db_stamp = stamp_read(&mut store, lock, db_path, &blob);
     store.dblock = Some(Arc::clone(lock));
     store.persist_master = Some((db_path.to_path_buf(), master.clone()));

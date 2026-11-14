@@ -7,6 +7,7 @@ use super::responder::Responder;
 use crate::error::Error;
 use crate::keytab::KeytabFailure;
 use crate::trace::{self, ERROR_TABLE_BASE_KRB5};
+use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};
 
 // MIT: `KRB5_LIBOS_CANTREADPWD` (krb5_err.et)
 pub(super) const CANTREADPWD: i64 = ERROR_TABLE_BASE_KRB5 + 130;
@@ -113,6 +114,16 @@ impl ModuleFail {
     pub(super) fn trace(&self, name: &str, patype: i32) {
         trace::preauth_process(name, patype, true, self.code, Some(&self.text));
     }
+}
+
+// MIT: `krb5_get_as_key_password` (lib/krb5/krb/gic_pwd.c:108-109)
+pub(super) fn as_key_password(
+    etype: EncryptionType,
+    password: &[u8],
+    salt: &[u8],
+    params: Option<&[u8]>,
+) -> Result<ProtocolKey, krb5_crypto::Error> {
+    string_to_key(etype, password, salt, params.filter(|p| !p.is_empty()))
 }
 
 struct NoPrompt;

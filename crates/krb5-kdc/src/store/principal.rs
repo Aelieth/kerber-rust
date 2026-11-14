@@ -130,6 +130,14 @@ pub struct Principal {
     pub pw_policy: Option<String>,
     pub kadm: KadmData,
     pub string_attrs: Vec<(String, String)>,
+    pub(crate) loaded_ct: Vec<LoadedCt>,
+}
+
+#[derive(Clone)]
+pub(crate) struct LoadedCt {
+    pub(crate) kvno: u32,
+    pub(crate) etype: i32,
+    pub(crate) ct: Vec<u8>,
 }
 
 impl std::fmt::Debug for Principal {
@@ -159,6 +167,7 @@ impl std::fmt::Debug for Principal {
             .field("pw_policy", &self.pw_policy)
             .field("kadm", &self.kadm)
             .field("string_attrs", &self.string_attrs)
+            .field("loaded_ct", &self.loaded_ct.len())
             .finish()
     }
 }
@@ -244,6 +253,7 @@ impl Principal {
             pw_policy: None,
             kadm: KadmData::default(),
             string_attrs: Vec::new(),
+            loaded_ct: Vec::new(),
         }
     }
 }
@@ -401,6 +411,37 @@ pub fn create_password_shared(
     }
     let keys = CreateKeys::Password(password);
     g.change(|s| s.create_principal_3_in(name, princ_realm, keys, etypes, ent, actor))?
+}
+
+#[expect(clippy::too_many_arguments, reason = "the create inputs")]
+pub fn create_password_shared_committing(
+    store: &SharedDump,
+    name: &PrincipalName,
+    princ_realm: &str,
+    password: &[u8],
+    etypes: &[KeySalt],
+    ent: &AdminEnt,
+    actor: &str,
+    commit: impl FnOnce(crate::host::RealmBatch) -> Result<(), crate::host::KerberosStoreError>,
+) -> Result<(), Error> {
+    let planned = {
+        let (g, read) = read_fresh(store);
+        match read {
+            Err(_) => None,
+            Ok(()) => Some(g.plan_create_password(name, princ_realm, password, etypes, ent)?),
+        }
+    };
+    let prepared = planned.map(CreatePlan::derive).transpose()?;
+    let mut g = store.write().unwrap_or_else(PoisonError::into_inner);
+    g.change_committing(commit, |s| {
+        if let Some(p) = prepared
+            && s.create_prepared(p, actor)?
+        {
+            return Ok(());
+        }
+        let keys = CreateKeys::Password(password);
+        s.create_principal_3_in(name, princ_realm, keys, etypes, ent, actor)
+    })?
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -1279,9 +1320,10 @@ impl PrincipalStore {
             crate::kdb_dump::specialize_salts(p)?;
         }
         let mut p = self.map.remove(&old_id).ok_or(Error::NotFound)?;
+        let kept = self.lockout_of(&p);
         p.name = new.clone();
         new_realm.clone_into(&mut p.realm);
-        self.rename_lockout_in_file(&old_id, &p);
+        self.rename_lockout_in_file(&old_id, &p, kept);
         // MIT: `krb5_db_def_rename_principal` (lib/kdb/kdb_default.c:537-545)
         self.note_ulog(new_key.as_str().to_owned(), false, Some(p.clone()));
         self.note_ulog(old_id, true, None);
@@ -1568,6 +1610,25 @@ impl PrincipalStore {
     }
 
     #[must_use]
+    pub fn locked_now(&self, p: &Principal, now: u32) -> bool {
+        let mut q = p.clone();
+        self.merge_lockout(&mut q);
+        crate::lockout::is_locked(self, &q, now)
+    }
+
+    #[must_use]
+    pub fn lockouts(&self, now: u32) -> Vec<(String, Lockout, bool)> {
+        let mut ids = self.ids();
+        ids.retain(|id| self.map.get(id).is_some_and(|p| p.alias_target().is_none()));
+        ids.into_iter()
+            .filter_map(|id| {
+                let p = self.map.get(&id)?;
+                Some((id, self.lockout_of(p), self.locked_now(p, now)))
+            })
+            .collect()
+    }
+
+    #[must_use]
     pub fn fail_auth_of(&self, p: &Principal) -> u32 {
         self.lockout_of(p).fail_auth_count
     }
@@ -1593,7 +1654,15 @@ impl PrincipalStore {
             .update(self.db_path(), self.dblock.as_ref(), p, stamp, update);
     }
 
-    pub(crate) fn zero_fail_count_in_file(&self, p: &Principal, stamp: u32) {
+    // MIT: `klmdb_put_principal` (plugins/kdb/lmdb/kdb_lmdb.c:776-800)
+    pub(crate) fn zero_fail_count_in_file(&mut self, p: &Principal, stamp: u32) {
+        self.postcommit(super::kadm5_hook::Post::ZeroFailCount {
+            principal: Box::new(p.clone()),
+            stamp,
+        });
+    }
+
+    pub(super) fn zero_fail_count_now(&self, p: &Principal, stamp: u32) {
         self.update_lockout(
             p,
             stamp,
@@ -1604,9 +1673,17 @@ impl PrincipalStore {
         );
     }
 
-    pub(crate) fn rename_lockout_in_file(&self, old_id: &str, new: &Principal) {
+    pub(crate) fn rename_lockout_in_file(&mut self, old_id: &str, new: &Principal, kept: Lockout) {
+        self.postcommit(super::kadm5_hook::Post::MoveLockout {
+            old_id: old_id.to_owned(),
+            principal: Box::new(new.clone()),
+            kept,
+        });
+    }
+
+    pub(super) fn move_lockout_now(&self, old_id: &str, new: &Principal, kept: Lockout) {
         self.lockout
-            .rename_row(self.db_path(), self.dblock.as_ref(), old_id, new);
+            .rename_row(self.db_path(), self.dblock.as_ref(), old_id, new, kept);
     }
 
     #[cfg(feature = "test-hooks")]

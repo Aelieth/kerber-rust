@@ -56,3 +56,13 @@ impl fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+impl From<krb5_s2k::S2kError> for Error {
+    fn from(e: krb5_s2k::S2kError) -> Self {
+        match e {
+            krb5_s2k::S2kError::UnsupportedEtype(n) => Self::UnsupportedEtype(n),
+            krb5_s2k::S2kError::BadParams => Self::BadS2kParams,
+            krb5_s2k::S2kError::InvalidKeyLength => Self::InvalidKeyLength,
+        }
+    }
+}

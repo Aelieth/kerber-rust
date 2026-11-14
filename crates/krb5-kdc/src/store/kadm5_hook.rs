@@ -276,6 +276,15 @@ pub(crate) enum Post {
         target: PrincipalName,
         target_realm: String,
     },
+    ZeroFailCount {
+        principal: Box<super::Principal>,
+        stamp: u32,
+    },
+    MoveLockout {
+        old_id: String,
+        principal: Box<super::Principal>,
+        kept: crate::lockout::Lockout,
+    },
 }
 
 impl Post {
@@ -330,6 +339,18 @@ impl Post {
                 target,
                 target_realm,
             } => hook_alias(store, stage, alias, alias_realm, target, target_realm),
+            Self::ZeroFailCount { principal, stamp } => {
+                store.zero_fail_count_now(principal, *stamp);
+                Ok(())
+            }
+            Self::MoveLockout {
+                old_id,
+                principal,
+                kept,
+            } => {
+                store.move_lockout_now(old_id, principal, *kept);
+                Ok(())
+            }
         };
     }
 }
@@ -343,6 +364,8 @@ impl std::fmt::Debug for Post {
             Self::Rename { .. } => "rename",
             Self::Remove { .. } => "remove",
             Self::Alias { .. } => "alias",
+            Self::ZeroFailCount { .. } => "zero fail count",
+            Self::MoveLockout { .. } => "move lockout",
         })
     }
 }

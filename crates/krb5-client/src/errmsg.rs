@@ -6,7 +6,7 @@ use std::path::Path;
 #[macro_export]
 macro_rules! com_err {
     ($prog:expr, $err:expr, $($ctx:tt)*) => {{
-        eprintln!("{}: {} {}", $prog, $err.table_text(), format_args!($($ctx)*));
+        eprintln!("{}: {} {}\r", $prog, $err.table_text(), format_args!($($ctx)*));
     }};
 }
 

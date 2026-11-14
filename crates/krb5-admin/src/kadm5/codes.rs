@@ -90,7 +90,7 @@ pub(super) const SET_STRING: u32 = 24;
 pub(super) const EXTRACT_KEYS: u32 = 26;
 pub(super) const CREATE_ALIAS: u32 = 27;
 
-pub(super) const KADM5_UNK_PRINC: u32 = 43_787_532;
+pub(crate) const KADM5_UNK_PRINC: u32 = 43_787_532;
 pub(super) const KADM5_UNK_POLICY: u32 = 43_787_533;
 pub(super) const KADM5_BAD_MASK: u32 = 43_787_534;
 pub(super) const KADM5_BAD_CLASS: u32 = 43_787_535;
@@ -110,6 +110,7 @@ pub(super) const KADM5_FAILURE: u32 = 43_787_520;
 pub(crate) const KADM5_RPC_ERROR: u32 = KADM5_FAILURE + 8;
 pub(crate) const KADM5_BAD_PASSWORD: u32 = KADM5_FAILURE + 29;
 pub(super) const KADM5_PROTECT_PRINCIPAL: u32 = KADM5_FAILURE + 30;
+pub(super) const KADM5_NEW_SERVER_API_VERSION: u32 = KADM5_FAILURE + 39;
 pub(crate) const KADM5_SECURE_PRINC_MISSING: u32 = KADM5_FAILURE + 40;
 pub(crate) const KADM5_GSS_ERROR: u32 = KADM5_FAILURE + 46;
 pub(crate) const KADM5_MISSING_KRB5_CONF_PARAMS: u32 = KADM5_FAILURE + 54;
@@ -130,6 +131,12 @@ pub(super) const KRB5_KDB_ALIAS_UNSUPPORTED: u32 = 2_514_958_894;
 /// -1780008424: "Insufficient access to lock database".
 // MIT: `KRB5_KDB_CANTLOCK_DB` (lib/krb5/error_tables/kdb5_err.et:64-64)
 pub(super) const KRB5_KDB_CANTLOCK_DB: u32 = 2_514_958_872;
+// MIT: `KRB5_KDB_DBNOTINITED` (lib/krb5/error_tables/kdb5_err.et:50-50)
+pub(super) const KRB5_KDB_DBNOTINITED: u32 = 2_514_958_861;
+// MIT: `KRB5_KDB_ACCESS_ERROR` (lib/krb5/error_tables/kdb5_err.et:78-78)
+pub(super) const KRB5_KDB_ACCESS_ERROR: u32 = 2_514_958_884;
+// MIT: `KRB5_KDB_CONSTRAINT_VIOLATION` (lib/krb5/error_tables/kdb5_err.et:80-80)
+pub(super) const KRB5_KDB_CONSTRAINT_VIOLATION: u32 = 2_514_958_886;
 // MIT: `KRB5_KDB_BAD_SALTTYPE` (lib/krb5/error_tables/kdb5_err.et:69-69)
 pub(super) const KRB5_KDB_BAD_SALTTYPE: u32 = 2_514_958_875;
 // MIT: `KRB5_KDB_INUSE` (lib/krb5/error_tables/kdb5_err.et:33-33)
@@ -238,4 +245,4 @@ pub(super) const API_V4: u32 = 0x1234_5704;
 
 // MIT: `glob_to_regexp` (svr_iters.c:61-62)
 /// Trailing `\`.
-pub(super) const EINVAL: u32 = 22;
+pub(crate) const EINVAL: u32 = 22;

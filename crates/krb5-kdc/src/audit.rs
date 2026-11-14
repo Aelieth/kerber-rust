@@ -332,6 +332,7 @@ pub trait KdcAudit: Send + Sync {
 }
 
 #[derive(Clone, Debug, Default)]
+#[non_exhaustive]
 pub struct AuditState {
     pub event_name: &'static str,
     pub stage: i32,
@@ -349,6 +350,13 @@ pub struct AuditState {
     pub avail_etypes: Vec<i32>,
     pub tkt_renewed: i32,
     pub tkt_validated: i32,
+    pub lockout: Option<LockoutMark>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LockoutMark {
+    Crossed,
+    Locked,
 }
 
 pub struct JsonAudit;
@@ -394,6 +402,16 @@ thread_local! {
     static CUR_REQ_ID: std::cell::RefCell<Option<String>> =
         const { std::cell::RefCell::new(None) };
     static TGS_FACTS: std::cell::RefCell<TgsFacts> = std::cell::RefCell::default();
+    static LOCKOUT_MARK: std::cell::Cell<Option<LockoutMark>> =
+        const { std::cell::Cell::new(None) };
+}
+
+pub(crate) fn mark_lockout(mark: LockoutMark) {
+    LOCKOUT_MARK.with(|m| m.set(Some(mark)));
+}
+
+pub(crate) fn take_lockout_mark() -> Option<LockoutMark> {
+    LOCKOUT_MARK.with(std::cell::Cell::take)
 }
 
 // MIT: `gather_tgs_req_info` (kdc/do_tgs_req.c:592-807)
@@ -595,6 +613,7 @@ fn current_req_id() -> String {
 fn clear_req_id() {
     CUR_REQ_ID.with(|c| *c.borrow_mut() = None);
     TGS_FACTS.with(|t| *t.borrow_mut() = TgsFacts::default());
+    take_lockout_mark();
 }
 
 // MIT: `kau_init_kdc_req` (kdc/kdc_audit.c:200-202)
@@ -804,6 +823,7 @@ fn as_success(
     );
     let mut state = base_state("AS_REQ", body, sender);
     state.stage = ENCR_REP;
+    state.lockout = take_lockout_mark();
     state.tkt_out_id = Some(make_tkt_id(ticket.enc_part.cipher.as_ref()));
     each_audit(store, |module| module.as_req(true, &state));
     clear_req_id();
@@ -867,6 +887,7 @@ fn as_failure(
     let mut state = base_state("AS_REQ", body, sender);
     state.stage = AUTHN_REQ_CL;
     state.status = Some(status.to_string());
+    state.lockout = take_lockout_mark();
     each_audit(store, |module| module.as_req(code == 0, &state));
     clear_req_id();
 }
@@ -1116,6 +1137,7 @@ fn base_state(
         avail_etypes: body.etype.iter().copied().filter(|e| *e > 0).collect(),
         tkt_renewed: 0,
         tkt_validated: 0,
+        lockout: None,
     }
 }
 

@@ -13,6 +13,7 @@ mod daemon;
 mod dblock;
 mod der;
 mod error;
+pub mod host;
 mod issue;
 mod kadm5_params;
 mod kdb;
@@ -40,7 +41,7 @@ pub use ad::{
     sign_reply_pac, ticket_checksum_der, verify_pac, verify_pac_signatures, wrap_win2k_pac,
 };
 pub use audit::{
-    AUTHN_REQ_CL, AuditState, ENCR_REP, JsonAudit, KdcAudit, REQID_LEN, SRVC_PRINC,
+    AUTHN_REQ_CL, AuditState, ENCR_REP, JsonAudit, KdcAudit, LockoutMark, REQID_LEN, SRVC_PRINC,
     audit_kdc_start, audit_kdc_stop, current_audit, enctype_name, ktypes2str, make_tkt_id,
     new_req_id, register_audit, rep_etypes2str, set_audit,
 };
@@ -51,7 +52,7 @@ pub use create::seed_test_principals;
 pub use create::{
     AdminSpec, Bootstrapped, MasterKey, RealmSpec, StashTarget, add_admin_principals,
     bootstrap_realm_into, create_database, create_realm, create_realm_db, kdc_conf_for_realm,
-    open_or_create, realm_rows,
+    open_or_create, open_or_create_host, realm_rows,
 };
 pub use daemon::{
     NO_MASTER_KEY, OpenFailure, Shutdown, copy_persist_master, database_path, has_master_record,
@@ -97,7 +98,8 @@ pub use listen::{
 #[cfg(feature = "daemon")]
 pub use listen::{serve, serve_all, serve_daemon};
 pub use lockout::{
-    Lockout, LockoutUpdate, SUFFIX_LOCKOUT, lockout_path, lockout_records, merge_lockout_file,
+    Lockout, LockoutUpdate, SUFFIX_LOCKOUT, create_lockout_file, lockout_path, lockout_records,
+    merge_lockout_file,
 };
 pub use mkey::{default_master_etype, master_etype, master_key_from_password, string_to_enctype};
 pub use osa::{
@@ -106,10 +108,11 @@ pub use osa::{
 };
 pub use persist::{
     CreateError, DbUpdate, DbWrite, FullLoad, LoadError, LoadLog, PersistError, Unopenable,
-    check_database, check_openable, create_store, load_dump_with_stash, load_store,
-    load_store_full, load_store_with_master, load_text_full, read_db_and_lockout_locked,
-    read_db_locked, read_stash, read_stashed_master, save_dump_text, save_store, save_store_fresh,
-    save_store_legacy_kdb3, save_store_with_master, stash_keys, write_stash,
+    check_database, check_lockout_file, check_openable, create_store, load_dump_with_stash,
+    load_store, load_store_full, load_store_with_master, load_text_full,
+    read_db_and_lockout_locked, read_db_locked, read_stash, read_stashed_master, save_dump_text,
+    save_store, save_store_fresh, save_store_legacy_kdb3, save_store_with_master, stash_keys,
+    write_stash,
 };
 pub use pkinit::PkinitKdc;
 #[doc(hidden)]
@@ -147,9 +150,11 @@ pub use store::{
     KeyEntry, KeyLookup, KeySlot, KtkdbError, MAX_ALIAS_DEPTH, NamedPolicy, OpaqueKey, PWQUAL_DICT,
     PWQUAL_EMPTY, PWQUAL_PRINC, PasswordPlan, Policy, PreparedCreate, PreparedPassword, Principal,
     PrincipalBuilder, PrincipalStore, Pwqual, RID_FIRST_USER, RID_KRBTGT, S2K_ITERS, SpakeKdc,
-    TlData, XDR_FAILURE, apply_keysalt_policy, change_password_shared, clear_thread_kadm5_hook,
-    clear_thread_pwqual, create_password_shared, kadm5_mask, ktkdb_get_entry, random_key,
-    register_kadm5_hook, register_pwqual, set_thread_kadm5_hook, set_thread_pwqual, strip_db_args,
+    TlData, XDR_FAILURE, apply_keysalt_policy, change_password_shared,
+    change_password_shared_committing, clear_thread_kadm5_hook, clear_thread_pwqual,
+    create_password_shared, create_password_shared_committing, kadm5_mask, ktkdb_get_entry,
+    random_key, register_kadm5_hook, register_pwqual, set_thread_kadm5_hook, set_thread_pwqual,
+    strip_db_args,
 };
 #[cfg(any(test, feature = "test-hooks"))]
 pub use ulog::UlogEntry;

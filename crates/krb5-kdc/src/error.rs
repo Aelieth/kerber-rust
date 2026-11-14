@@ -3,6 +3,7 @@
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Error {
     Crypto(String),
     // MIT: `krb5_k_decrypt` (lib/crypto/krb/decrypt.c:45-46)
@@ -46,6 +47,25 @@ pub enum Error {
         code: i32,
         message: String,
     },
+    Host(crate::host::KerberosStoreError),
+    Record(crate::host::RecordError),
+    HostRecordsWithoutStash {
+        stash: std::path::PathBuf,
+        records: usize,
+    },
+    StashWithoutHostRealm {
+        stash: std::path::PathBuf,
+    },
+    LockoutMissing {
+        path: std::path::PathBuf,
+    },
+    LockoutUnreadable {
+        path: std::path::PathBuf,
+        text: String,
+    },
+    LockoutForeign {
+        path: std::path::PathBuf,
+    },
 }
 
 impl fmt::Display for Error {
@@ -80,6 +100,23 @@ impl fmt::Display for Error {
             Self::UnexpectedPdu => write!(f, "unexpected PDU"),
             Self::PreauthRequired { .. } => write!(f, "preauth required"),
             Self::PreauthModule { message, .. } => write!(f, "{message}"),
+            Self::Host(e) => write!(f, "{e}"),
+            Self::Record(e) => write!(f, "{e}"),
+            Self::HostRecordsWithoutStash { stash, records } => write!(
+                f,
+                "{}: no stash for a realm of {records} principals",
+                stash.display()
+            ),
+            Self::StashWithoutHostRealm { stash } => write!(
+                f,
+                "{}: a stash for no realm in the host store",
+                stash.display()
+            ),
+            Self::LockoutMissing { path } => write!(f, "{}: lockout file missing", path.display()),
+            Self::LockoutUnreadable { path, text } => write!(f, "{}: {text}", path.display()),
+            Self::LockoutForeign { path } => {
+                write!(f, "{}: not a lockout file", path.display())
+            }
         }
     }
 }

@@ -209,6 +209,12 @@ impl GssContext {
         }
     }
 
+    // MIT: `krb5_gss_wrap_size_limit` (lib/gssapi/krb5/wrap_size_limit.c:98-150)
+    pub fn wrap_size_limit(&self, conf: bool, req_output: usize) -> Result<usize, Error> {
+        let (header, padding, trailer) = self.wrap_iov_length(conf)?;
+        Ok(req_output.saturating_sub(header + padding + trailer))
+    }
+
     // MIT: `kg_seal` (k5seal.c:318-320)
     fn wrap_iov_sealed(&mut self, iov: &mut [IovBuf<'_>]) -> Result<(), Error> {
         let (key, extra) = self.send_key();

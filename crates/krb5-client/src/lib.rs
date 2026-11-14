@@ -1325,9 +1325,34 @@ fn client_pkinit(
             }),
             pk => ClientPkinit::Ready(pk),
         },
-        (true, true) => return Err("anonymous PKINIT requires pkinit_anchors".into()),
+        // MIT: `pkinit_client_process` (plugins/preauth/pkinit/pkinit_clnt.c:957-961)
+        (true, true) => ClientPkinit::Failed(PkinitFailure {
+            code: krb5_protocol::trace::ERROR_TABLE_BASE_KRB5 + 210,
+            text: "No pkinit_anchors supplied".into(),
+            no_identity: false,
+            prompted: false,
+        }),
         (_, false) => load_pkinit(&identities, anchors, &pool, &rules, opts)?,
     })
+}
+
+// MIT: `krb5_init_creds_init` (lib/krb5/krb/get_in_tkt.c:1017-1036)
+#[must_use]
+pub fn anonymous_client(
+    anonymous: bool,
+    cname: &krb5_types::PrincipalName,
+) -> krb5_types::PrincipalName {
+    if anonymous
+        && cname.name_string.len() <= 1
+        && cname.name_string.iter().all(|c| c.as_bytes().is_empty())
+    {
+        krb5_types::PrincipalName::new(
+            krb5_types::PrincipalName::NT_WELLKNOWN,
+            ["WELLKNOWN", "ANONYMOUS"],
+        )
+    } else {
+        cname.clone()
+    }
 }
 
 fn kinit_inner(
@@ -1337,7 +1362,7 @@ fn kinit_inner(
     password: &mut LazyPassword<'_>,
     params: &KinitParams<'_>,
 ) -> Result<(KinitResult, FileCcache), Box<dyn std::error::Error + Send + Sync>> {
-    let mut cname = me.1.clone();
+    let mut cname = anonymous_client(params.anonymous, &me.1);
     let mut realm_s = String::from_utf8_lossy(me.0.as_bytes()).into_owned();
     trace::init_creds(&cname, &realm_s, params.in_tkt_service);
     // MIT: `krb5_init_creds_init` (lib/krb5/krb/get_in_tkt.c:974-981)

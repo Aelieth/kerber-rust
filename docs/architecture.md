@@ -9,14 +9,15 @@ daemons   krb5-admin
 roles     krb5-kdc     krb5-client     krb5-gss     (krb5-testkit: test helpers)
 wire      krb5-protocol
 codecs    krb5-asn1    krb5-crypto     krb5-config
-base      krb5-types   krb5-log        krb5-cli     krb5-brainpool
+base      krb5-types   krb5-log        krb5-cli     krb5-brainpool   krb5-s2k
 ```
 
 `krb5-admin` uses `krb5-kdc`, `krb5-gss` and `krb5-client`; `krb5-kdc`, `krb5-client` and
 `krb5-gss` sit on `krb5-protocol`, which uses the three codec crates;
-`krb5-asn1` uses `krb5-types` and `krb5-log`, `krb5-crypto` uses `krb5-log`,
-and `krb5-config` uses `krb5-types`. The tools' command lines and password
-prompts come from `krb5-cli`, which depends on no other crate here.
+`krb5-asn1` uses `krb5-types` and `krb5-log`, `krb5-crypto` uses `krb5-log`
+and `krb5-s2k`, and `krb5-config` uses `krb5-types`. The tools' command
+lines and password prompts come from `krb5-cli`, which depends on no other
+crate here.
 
 ## Crate responsibilities
 
@@ -28,6 +29,9 @@ tests, and the harness installer do.
 sockets, no ASN.1. Long-term keys (`ProtocolKey`) zeroize on drop.
 HMAC comparison is constant-time (`subtle`). Random confounders come
 from the OS CSPRNG (`getrandom`).
+
+**`krb5-s2k`** is AES string-to-key (RFC 3962, RFC 8009) with no clock,
+no RNG and no std, so a browser (wasm32) derives a user's keys itself.
 
 **`krb5-types`** holds RFC 4120 owned values with rasn derives. Tagging
 is EXPLICIT, matching the RFC. This crate is the protocol vocabulary;

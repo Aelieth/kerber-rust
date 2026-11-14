@@ -557,10 +557,14 @@ pub fn local_host_address(local: Option<IpAddr>) -> HostAddress {
 // MIT: `decode_etype_list` (lib/krb5/krb/rd_req_dec.c:906-976)
 /// Undecodable container skipped; bad list fails the request.
 fn decode_etype_list(a: &Authenticator) -> Result<Option<Vec<i32>>, Error> {
-    let Some(ad) = &a.authorization_data else {
-        return Ok(None);
-    };
-    for el in ad {
+    Ok(etype_list_der(a)
+        .map(|d| decode::<Vec<i32>>(&d))
+        .transpose()?)
+}
+
+#[must_use]
+pub fn etype_list_der(a: &Authenticator) -> Option<Vec<u8>> {
+    for el in a.authorization_data.as_deref()? {
         let found = match el.ad_type {
             pa::AD_IF_RELEVANT => {
                 let Ok(inner) = decode::<AuthorizationData>(el.ad_data.as_ref()) else {
@@ -574,10 +578,10 @@ fn decode_etype_list(a: &Authenticator) -> Result<Option<Vec<i32>>, Error> {
             _ => None,
         };
         if let Some(e) = found {
-            return Ok(Some(decode::<Vec<i32>>(e.ad_data.as_ref())?));
+            return Some(e.ad_data.as_ref().to_vec());
         }
     }
-    Ok(None)
+    None
 }
 
 // MIT: `negotiate_etype` (lib/krb5/krb/rd_req_dec.c:854-904)
@@ -589,9 +593,9 @@ fn negotiate_etype(
 ) -> Result<EncryptionType, Error> {
     for &d in desired.get(mandatory..).unwrap_or_default() {
         if !permitted.iter().any(|p| p.to_iana() == d) {
-            return Err(Error::NopermEtype(EncryptionType::known(d).map_or_else(
-                |_| NOPERM_ETYPE.to_owned(),
-                |e| format!("Encryption type {} not permitted", e.to_mit_name()),
+            return Err(Error::NopermEtype(enctype_name(d).map_or_else(
+                || NOPERM_ETYPE.to_owned(),
+                |n| format!("Encryption type {n} not permitted"),
             )));
         }
     }
@@ -604,6 +608,16 @@ fn negotiate_etype(
 
 // MIT: `KRB5_NOPERM_ETYPE` (krb5_err.et:325-325)
 const NOPERM_ETYPE: &str = "Encryption type not permitted";
+
+// MIT: `krb5_enctype_to_name` (lib/crypto/krb/enctype_util.c:129-160)
+fn enctype_name(e: i32) -> Option<&'static str> {
+    match (EncryptionType::known(e), e) {
+        (Ok(et), _) => Some(et.to_mit_name()),
+        (_, 6) => Some("des3-cbc-raw"),
+        (_, 24) => Some("arcfour-hmac-exp"),
+        _ => crate::trace::enctype_shortest_name(e),
+    }
+}
 
 fn protocol_key(k: &EncryptionKey) -> Result<ProtocolKey, Error> {
     let etype = EncryptionType::known(k.keytype)?;

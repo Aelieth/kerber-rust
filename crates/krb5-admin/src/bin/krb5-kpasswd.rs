@@ -48,7 +48,7 @@ fn run<R: BufRead, W: Write>(
     let ctx = match krb5_config::ClientContext::from_env() {
         Ok(ctx) => ctx,
         Err(e) => {
-            eprintln!("{prog}: {} initializing kerberos library", e.init_text());
+            krb5_cli::com_errln!("{prog}: {} initializing kerberos library", e.init_text());
             return 1;
         }
     };
@@ -58,7 +58,7 @@ fn run<R: BufRead, W: Write>(
     let (client, armor_cc) = match client(prog, pname, &ctx) {
         Ok(client) => client,
         Err(line) => {
-            eprintln!("{line}");
+            krb5_cli::com_errln!("{line}");
             return 1;
         }
     };
@@ -73,16 +73,18 @@ fn run<R: BufRead, W: Write>(
     let list = match conf.kdcs_for_traced(&client.realm, &mut krb5_protocol::trace::dns_srv) {
         Ok(list) if !list.is_empty() => list,
         Err(krb5_config::Error::InvalidArgument) => {
-            eprintln!("{prog}: Invalid argument getting initial ticket");
+            krb5_cli::com_errln!("{prog}: Invalid argument getting initial ticket");
             return 1;
         }
         Err(krb5_config::Error::RealmCantResolve) => {
             let text = "Cannot resolve network address for KDC in requested realm";
-            eprintln!("{prog}: {text} getting initial ticket");
+            krb5_cli::com_errln!("{prog}: {text} getting initial ticket");
             return 1;
         }
         _ => {
-            eprintln!("{prog}: Cannot find KDC for requested realm getting initial ticket");
+            krb5_cli::com_errln!(
+                "{prog}: Cannot find KDC for requested realm getting initial ticket"
+            );
             return 1;
         }
     };
@@ -109,14 +111,14 @@ fn run<R: BufRead, W: Write>(
                 Error::Io { message, .. } => message.clone(),
                 other => other.to_string(),
             };
-            eprintln!("{prog}: {text} getting initial ticket");
+            krb5_cli::com_errln!("{prog}: {text} getting initial ticket");
             return 1;
         }
     };
     let pkinit = match krb5_client::profile_pkinit(conf, &client.realm) {
         Ok(pkinit) => pkinit,
         Err(e) => {
-            eprintln!("{prog}: {e} getting initial ticket");
+            krb5_cli::com_errln!("{prog}: {e} getting initial ticket");
             return 1;
         }
     };
@@ -179,7 +181,7 @@ fn run<R: BufRead, W: Write>(
             let text = e
                 .downcast_ref::<krb5_client::errmsg::Krb5Error>()
                 .map_or_else(|| e.to_string(), krb5_client::errmsg::Krb5Error::table_text);
-            eprintln!("{prog}: {text} getting initial ticket");
+            krb5_cli::com_errln!("{prog}: {text} getting initial ticket");
             return 1;
         }
     };
@@ -195,7 +197,7 @@ fn run<R: BufRead, W: Write>(
                 ..
             },
         ) => {
-            eprintln!("{prog}: Password incorrect while getting initial ticket");
+            krb5_cli::com_errln!("{prog}: Password incorrect while getting initial ticket");
             return 1;
         }
         Err(e) => {
@@ -204,7 +206,7 @@ fn run<R: BufRead, W: Write>(
                 (Some(why), Error::File(_)) => why.to_string(),
                 (_, e) => krb5_client::errmsg::Krb5Error::from_as(e, "", "").table_text(),
             };
-            eprintln!("{prog}: {text} getting initial ticket");
+            krb5_cli::com_errln!("{prog}: {text} getting initial ticket");
             return 1;
         }
     };
@@ -213,7 +215,7 @@ fn run<R: BufRead, W: Write>(
         None => match prompter.password("Enter new password", Some("Enter it again")) {
             Ok(pw) => pw,
             Err(e) => {
-                eprintln!("{prog}: {e} while reading password");
+                krb5_cli::com_errln!("{prog}: {e} while reading password");
                 return 1;
             }
         },
@@ -222,12 +224,12 @@ fn run<R: BufRead, W: Write>(
         match conf.locate_kpasswd_traced(&client.realm, &mut krb5_protocol::trace::dns_srv) {
             Ok(list) => list,
             Err(e) => {
-                eprintln!("{prog}: {e} changing password");
+                krb5_cli::com_errln!("{prog}: {e} changing password");
                 return 1;
             }
         };
     if servers.is_empty() {
-        eprintln!("{prog}: Cannot find KDC for requested realm changing password");
+        krb5_cli::com_errln!("{prog}: Cannot find KDC for requested realm changing password");
         return 1;
     }
     // MIT: `change_set_password` (changepw.c:256-265)
@@ -249,18 +251,20 @@ fn run<R: BufRead, W: Write>(
             2
         }
         Err(Error::Io { .. }) => {
-            eprintln!("{prog}: Cannot contact any KDC for requested realm changing password");
+            krb5_cli::com_errln!(
+                "{prog}: Cannot contact any KDC for requested realm changing password"
+            );
             1
         }
         // MIT: `get_clear_result` (lib/krb5/krb/chpw.c:106-192)
         // A reply that fails its length, AP-REP or result checks.
         Err(Error::ReplyMismatch(m)) if m.starts_with("kpasswd ") && m != "kpasswd AP-REP" => {
-            eprintln!("{prog}: Message stream modified changing password");
+            krb5_cli::com_errln!("{prog}: Message stream modified changing password");
             1
         }
         Err(e) => {
             let text = krb5_client::errmsg::Krb5Error::from_protocol(&e, &client.realm);
-            eprintln!("{prog}: {text} changing password");
+            krb5_cli::com_errln!("{prog}: {text} changing password");
             1
         }
     }
@@ -300,10 +304,13 @@ fn client(
         return Ok((client, armor));
     }
     // MIT: `get_name_from_passwd_file` (kpasswd.c:19-37)
-    let user = nix::unistd::User::from_uid(nix::unistd::Uid::current())
+    let Some(user) = nix::unistd::User::from_uid(nix::unistd::Uid::current())
         .ok()
         .flatten()
-        .ok_or_else(|| "Unable to identify user from password file".to_owned())?;
+    else {
+        eprintln!("Unable to identify user from password file");
+        std::process::exit(1);
+    };
     parse_client(&user.name, ctx)
         .map(|c| (c, armor))
         .map_err(|e| format!("{prog}: {e} when parsing name {}", user.name))

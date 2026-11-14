@@ -34,6 +34,16 @@ fn expand_hostname(host: &str, conf: &Krb5Conf, use_dns: bool) -> String {
     name
 }
 
+// MIT: `krb5_expand_hostname` (lib/krb5/os/sn2princ.c:156-163)
+#[must_use]
+pub fn expand_hostname_conf(host: &str, conf: &Krb5Conf) -> String {
+    expand_hostname(
+        host,
+        conf,
+        conf.dns_canonicalize_hostname == CanonHost::True,
+    )
+}
+
 fn dns_name(host: &str, rdns: bool) -> Option<String> {
     let hints = AddrInfoHints {
         flags: AI_CANONNAME,

@@ -85,7 +85,7 @@ impl Log<'_> {
             None => format!("{}: {msg}", self.progname),
         };
         if self.debug {
-            eprintln!("{line}");
+            krb5_cli::com_errln!("{line}");
         } else {
             klog::syslog(Severity::Err, &line);
         }

@@ -50,23 +50,20 @@ non-forking `kpropd` (see [Replica KDCs](#replica-kdcs)). The rules are the pack
   the old programs. With `DESTDIR` set to a staging tree it does none of these and checks no
   package; a `DESTDIR` that resolves to `/` is the live system.
 
-`make install-clients` installs the client tools `kinit`, `klist`, `kdestroy`, `kswitch`,
+`make install-clients` installs the client tools `kadmin`, `kinit`, `klist`, `kdestroy`, `kswitch`,
 `kvno`, `kpasswd` and `ktutil` into `BINDIR`, for hosts without MIT's `krb5-workstation`. It is
 never part of `make install`; on Fedora keep the package's tools. `kinit`, `klist`, `kvno`,
-`kdestroy` and `kswitch` take MIT 1.22.2's options, print its texts and exit codes, and pick
-caches as MIT's do in `FILE:`, `DIR:` and `KCM:` collections (`klist -k`, `-l` and `-A`,
-`kdestroy -A`, `kswitch -p`, a new cache for a second principal); the reference client kit's keytab
-checks run on them as on MIT's. `KCM:` ran beside MIT's on Fedora 44 with `sssd-kcm` 2.13.1, against
-MIT's KDC. They are **not yet a drop-in** for MIT's in these:
-- `kvno -S` qualifies a short host and does not ask DNS.
+`kdestroy` and `kswitch` take MIT 1.22.2's options, print its texts and exit codes, and pick caches
+as MIT's do in `FILE:`, `DIR:` and `KCM:` collections (`klist -k`, `-l` and `-A`, `kdestroy -A`,
+`kswitch -p`, a new cache for a second principal); the reference client kit's keytab checks run on
+them as on MIT's. `KCM:` ran beside MIT's on Fedora 44 with `sssd-kcm` 2.13.1, against MIT's KDC.
+They are **not yet a drop-in** for MIT's in these:
 - `kvno -F` is not a release flag until it is settled against an MIT KDC with certificate
   mapping; MIT's asks for S4U2Self by the user's certificate.
 - An error `klist` prints that has not yet been compared with MIT's tools may read differently from
   MIT's text.
-- `ktutil` `rkt` takes a filesystem path, where MIT's takes a keytab name; `addent` rejects `-s`
-  and `-f`, and refuses a `-key` whose length is not the enctype's; a `!` line is passed over.
-- `kinit -k` with no principal asks for `host/<host name>` in the default realm, where MIT's asks
-  for the host's canonical name.
+- `ktutil` `addent` rejects `-s` and `-f`, and refuses a `-key` whose length is not the
+  enctype's; a `!` line is passed over.
 - With no enctypes in `krb5.conf` the default list is the four AES types; MIT's also has DES3, RC4
   and Camellia, so the two agree only where `krb5.conf` or Fedora's crypto-policies sets the list.
 - Of `kinit -X`'s attributes only `X509_user_identity` and `X509_anchors` act;
@@ -850,10 +847,11 @@ release made, six things changed:
   texts (`kadmin.local: No such file or directory while initializing kadmin.local interface`).
   Make them once, owned as the database is and labelled, while the daemons are stopped.
 - The KDC records lockout counts and last logins in `<database_name>.lockout`, which
-  `kdb5_util create` and `load` make; the KDC makes it when it can open the database read-write,
-  and Fedora's policy does not let it create files in its directory. Without the file lockout
-  counting is off, and the KDC says so once in its log. Make it once, empty, owned as the
-  database is and labelled, as the lock files below: the KDC fills it, and nothing else changes.
+  `kdb5_util create` and `load` make. Unless `disable_lockout` and `disable_last_success` are
+  both set, a realm without it doesn't open: the KDC, kadmind, kadmin.local and `kdb5_util dump`
+  refuse with `<path>: lockout file missing`, as MIT's LMDB module refuses a missing lockout
+  database. Make it once, empty, owned as the database is and labelled, as the lock files
+  below: an empty file is zero counts, and the KDC fills it.
 - The update log is MIT's: kept only with `iprop_enable` (which, as MIT's, needs `iprop_port`),
   one entry appended per change. Without iprop an earlier release's `principal.ulog` is no
   longer read or written and may be removed; with iprop the first program that maps it starts

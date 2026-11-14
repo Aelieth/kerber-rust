@@ -2,6 +2,14 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+// MIT: `default_com_err_proc` (util/et/com_err.c:78-92)
+#[macro_export]
+macro_rules! com_errln {
+    ($($arg:tt)*) => {
+        eprintln!("{}\r", format_args!($($arg)*))
+    };
+}
+
 mod args;
 mod getopt;
 mod prompt;

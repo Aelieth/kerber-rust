@@ -115,7 +115,7 @@ The toolchain, lld, and `rust-cache` steps are one composite,
 | `fuzz` | `cargo check --locked --manifest-path fuzz/Cargo.toml --bins`, then the same for `harness/hand/t7/Cargo.toml` (T-7's timing harness) |
 | `shellcheck` | `shellcheck -S style` on `scripts/*.sh`, `scripts/lib/*.sh`, `harness/*.sh`, `dist/*.sh`, `harness/field/*.sh`, `harness/field/lib/*.sh`, `harness/field/scenarios/*.sh`, `harness/field/p18/*.sh`, `harness/hand/*.sh`, `harness/hand/lib/*.sh`, `harness/hand/b2/*/*.sh`, `harness/hand/b2/*/*/*.sh`, `harness/hand/r3/*.sh`, `harness/hand/r3/*/*.sh`, and `harness/hand/t7/*.sh`. ShellCheck is v0.11.0, checked by sha256. `.shellcheckrc` sets `external-sources=true` and disables `SC2329` |
 | `msrv` | `cargo build --workspace --all-targets --locked` on Rust 1.95, with the test-hooks features and without |
-| `audit` | `cargo audit --deny warnings` (cargo-audit 0.22.2), `cargo deny`, `cargo vet --locked` (cargo-vet 0.10.0) |
+| `audit` | `cargo audit --deny warnings` on every committed lock outside `vendor/` (cargo-audit 0.22.2), `cargo deny`, `cargo vet --locked` (cargo-vet 0.10.0) |
 | `mit-smoke` | `run-harness.sh`, `client-gate.sh`, then a stock MIT KDC and `kdc-gate.sh`, `differential-gate.sh` |
 
 `nightly.yml` (cron `17 4 * * *`, manual, the `nightly` label on a pull request, and `v*` tags) runs four jobs on the schedule and the label. `moving` is one job, `fail-fast: false`, four groups. Each group is its own runner: it loads the MIT image, boots a shell and a stock MIT KDC, and runs only its gates. A gate step runs when its group matches and the job has not been cancelled. Cleanup is `if: always()`.

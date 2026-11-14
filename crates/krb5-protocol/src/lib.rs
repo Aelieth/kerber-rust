@@ -68,7 +68,7 @@ pub use as_ex::{
 pub use auth_con::set_test_seq_random;
 pub use auth_con::{
     AUTH_CONTEXT_DO_SEQUENCE, AUTH_CONTEXT_DO_TIME, AUTH_CONTEXT_USE_SUBKEY, AcceptorAuthContext,
-    RemoteSeq, check_ticket_etype, generate_seq_number, local_host_address,
+    RemoteSeq, check_ticket_etype, etype_list_der, generate_seq_number, local_host_address,
     negotiate_ap_req_etypes, us_timeofday,
 };
 pub use builders::{
