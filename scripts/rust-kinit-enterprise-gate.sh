@@ -12,15 +12,14 @@ IMAGE="kerber-rust-mit-kdc:1.22.2"
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
 
-assert_canonical() {
-    local klist="$1"
-    echo "$klist"
-    echo "$klist" | grep -q 'Default principal: user@KERBER.TEST'
-    if echo "$klist" | grep -q 'Default principal: user@KERBER.TEST@KERBER.TEST'; then
-        log "enterprise.gate" "error" ',"error":"enterprise string leaked as cname"'
+# MIT process_as_req (do_as_req.c:681-687): the reply keeps the requested client name unless
+# the request asks to canonicalize (kinit -C), then the KDC's; the realm is always the KDC's.
+assert_cname() {
+    echo "$1"
+    echo "$1" | grep -qxF "Default principal: $2" || {
+        log "enterprise.gate" "error" ',"error":"reply client name differs from the MIT rule"'
         exit 1
-    fi
-    echo "$klist" | grep -q 'user@KERBER.TEST'
+    }
 }
 
 if ! command -v docker >/dev/null 2>&1; then
@@ -147,7 +146,20 @@ if [ "$rc" -ne 0 ]; then
     log "enterprise.gate" "error" ',"error":"mit kinit -E vs rust failed","rc":'"$rc"
     exit 1
 fi
-assert_canonical "$KLIST"
+assert_cname "$KLIST" 'user\@KERBER.TEST@KERBER.TEST'
+echo "==== MIT kinit -E -C vs Rust KDC ===="
+set +e
+docker exec -e KRB5_TRACE=/dev/stderr "$NAME" \
+    sh -c 'printf "%s\n" userpassword | kinit -E -C user@KERBER.TEST'
+rc=$?
+set -e
+KLIST="$(docker exec "$NAME" klist 2>/dev/null || true)"
+if [ "$rc" -ne 0 ]; then
+    docker exec "$NAME" cat /tmp/kdc.log 2>/dev/null || true
+    log "enterprise.gate" "error" ',"error":"mit kinit -E -C vs rust failed","rc":'"$rc"
+    exit 1
+fi
+assert_cname "$KLIST" 'user@KERBER.TEST'
 echo "==== MIT kinit -E mixed-case UPN vs Rust KDC (must fail) ===="
 set +e
 MIXOUT="$(docker exec -e KRB5_TRACE=/dev/stderr "$NAME" \

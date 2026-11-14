@@ -436,12 +436,13 @@ for c in "tri:Invalid argument" "bool:Invalid boolean value" \
     prof="/tmp/kdc-${c%%:*}.conf"
     text="${c#*:}"
     mit="$(docker exec -e KRB5_KDC_PROFILE="$prof" "$SHORT" sh -c \
-        'timeout 3 kpropd -S -d -s /tmp/kdc2.keytab -P 1756 2>&1; echo "rc=$?"' | tr -d '\r')"
+        'timeout 3 kpropd -S -d -s /tmp/kdc2.keytab -P 1756 2>&1; echo "rc=$?"')"
     rust="$(docker exec -e KRB5_KDC_PROFILE="$prof" "$SHORT" sh -c \
         'timeout 3 /tmp/krb5-kpropd -s /tmp/kdc2.keytab 0.0.0.0:756 2>&1; echo "rc=$?"')"
     echo "$prof: MIT [$mit] Rust [$rust]"
     if [ -n "$text" ]; then
-        want="$text while initializing krb5"
+        # parse_args (kpropd.c:1057-1062) reports it before any com_err hook: default proc, \r\n.
+        want="$text while initializing krb5"$'\r'
         { echo "$mit" | grep -qxF "kpropd: $want" && echo "$mit" | grep -qx 'rc=1'; } \
             || die "MIT kpropd did not stop on $prof"
         { echo "$rust" | grep -qxF "/tmp/krb5-kpropd: $want" && echo "$rust" | grep -qx 'rc=1'; } \
