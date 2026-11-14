@@ -18,8 +18,8 @@ Additions only; no existing signature changed.
   in-memory host) and `conformance::run` (the checks a host must pass); `open_or_create_host`;
   `PrincipalStore::open_host`, `change_committing`, `reload_from_host`, `host_full_batch` and
   `host_seal_key`; `create_password_shared_committing` and `change_password_shared_committing`.
-- **Lockout:** `create_lockout_file`; `PrincipalStore::locked_now` and `lockouts`;
-  `AuditState.lockout` (`LockoutMark::Crossed` or `Locked`).
+- **Lockout:** `create_lockout_file` and `check_lockout_file`; `PrincipalStore::locked_now` and
+  `lockouts`; `AuditState.lockout` (`LockoutMark::Crossed` or `Locked`).
 - **Client case folding:** `PrincipalStore::set_client_case_fold` and `client_case_twins`;
   `PrincipalRead::fetch_client`, a provided method that is exact unless the store folds.
 - `GssContext::wrap_size_limit` in `krb5-gss`; `etype_list_der` in `krb5-protocol`;

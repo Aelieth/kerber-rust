@@ -108,10 +108,11 @@ pub use osa::{
 };
 pub use persist::{
     CreateError, DbUpdate, DbWrite, FullLoad, LoadError, LoadLog, PersistError, Unopenable,
-    check_database, check_openable, create_store, load_dump_with_stash, load_store,
-    load_store_full, load_store_with_master, load_text_full, read_db_and_lockout_locked,
-    read_db_locked, read_stash, read_stashed_master, save_dump_text, save_store, save_store_fresh,
-    save_store_legacy_kdb3, save_store_with_master, stash_keys, write_stash,
+    check_database, check_lockout_file, check_openable, create_store, load_dump_with_stash,
+    load_store, load_store_full, load_store_with_master, load_text_full,
+    read_db_and_lockout_locked, read_db_locked, read_stash, read_stashed_master, save_dump_text,
+    save_store, save_store_fresh, save_store_legacy_kdb3, save_store_with_master, stash_keys,
+    write_stash,
 };
 pub use pkinit::PkinitKdc;
 #[doc(hidden)]

@@ -29,7 +29,7 @@ any other `###` heading.
 
 ### Changed
 
-- **kdc.** A start or dump without the lockout side file refuses, as MIT's LMDB; an empty file is zero counts.
+- **kdc.** A start or dump without the lockout file refuses while tracking is on, as MIT's LMDB.
 - **kdc.** Upgrading: a file-mode realm that never got `<db>.lockout` needs `touch <db>.lockout` first.
 - **kdc.** A new lockout file and its directory are synced once at creation; MIT leaves it unsynced.
 - **kdc.** A loaded key keeps its stored ciphertext until it changes: load, then dump, gives MIT's bytes.

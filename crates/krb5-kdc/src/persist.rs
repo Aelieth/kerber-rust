@@ -305,14 +305,21 @@ pub fn check_openable(db: &Path) -> Result<(), PersistError> {
 // MIT: `krb5_db2_open` (plugins/kdb/db2/kdb_db2.c:1194-1198)
 pub fn load_store(db_path: &Path, stash_path: &Path) -> Result<PrincipalStore, PersistError> {
     check_openable(db_path)?;
-    check_lockout_file(db_path)?;
     let lock = Arc::new(DbLock::open(db_path)?);
     let _held = lock.hold(DbLockMode::Shared)?;
-    read_store(db_path, stash_path, &lock)
+    let store = read_store(db_path, stash_path, &lock)?;
+    check_realm_lockout_file(db_path, store.realm())?;
+    Ok(store)
 }
 
 // MIT: `klmdb_open` (plugins/kdb/lmdb/kdb_lmdb.c:546-561)
-fn check_lockout_file(db: &Path) -> Result<(), PersistError> {
+pub fn check_lockout_file(
+    db: &Path,
+    conf: Option<&krb5_config::KdcConf>,
+) -> Result<(), PersistError> {
+    if conf.is_some_and(|c| c.disable_lockout && c.disable_last_success) {
+        return Ok(());
+    }
     let path = crate::lockout_path(db);
     match path.symlink_metadata() {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -321,6 +328,11 @@ fn check_lockout_file(db: &Path) -> Result<(), PersistError> {
         }
         _ => Ok(()),
     }
+}
+
+fn check_realm_lockout_file(db: &Path, realm: &str) -> Result<(), PersistError> {
+    let paths = krb5_config::KdcPaths::resolve(Some(realm)).ok();
+    check_lockout_file(db, paths.as_ref().and_then(|p| p.conf.as_ref()))
 }
 
 // MIT: `open_db_and_mkey` (kadmin/dbutil/kdb5_util.c:378-401)
@@ -375,10 +387,11 @@ pub fn load_store_with_master(
     master: &ProtocolKey,
 ) -> Result<PrincipalStore, PersistError> {
     check_openable(db_path)?;
-    check_lockout_file(db_path)?;
     let lock = Arc::new(DbLock::open(db_path)?);
     let _held = lock.hold(DbLockMode::Shared)?;
-    read_store_with_master(db_path, master, &lock)
+    let store = read_store_with_master(db_path, master, &lock)?;
+    check_realm_lockout_file(db_path, store.realm())?;
+    Ok(store)
 }
 
 pub(crate) fn read_store_with_master(
@@ -409,7 +422,6 @@ pub fn read_db_locked(db: &Path) -> Result<Vec<u8>, PersistError> {
 pub fn read_db_and_lockout_locked(
     db: &Path,
 ) -> Result<(Vec<u8>, std::collections::HashMap<String, crate::Lockout>), PersistError> {
-    check_lockout_file(db)?;
     let lock = Arc::new(DbLock::open(db)?);
     let _held = lock.hold(DbLockMode::Shared)?;
     Ok((fs::read(db)?, crate::lockout::lockout_records(db)))

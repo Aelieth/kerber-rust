@@ -847,9 +847,10 @@ release made, six things changed:
   texts (`kadmin.local: No such file or directory while initializing kadmin.local interface`).
   Make them once, owned as the database is and labelled, while the daemons are stopped.
 - The KDC records lockout counts and last logins in `<database_name>.lockout`, which
-  `kdb5_util create` and `load` make. A realm without it doesn't open: the KDC, kadmind and
-  kadmin.local refuse with `<path>: lockout file missing`, as MIT's LMDB module refuses a missing
-  lockout database. Make it once, empty, owned as the database is and labelled, as the lock files
+  `kdb5_util create` and `load` make. Unless `disable_lockout` and `disable_last_success` are
+  both set, a realm without it doesn't open: the KDC, kadmind, kadmin.local and `kdb5_util dump`
+  refuse with `<path>: lockout file missing`, as MIT's LMDB module refuses a missing lockout
+  database. Make it once, empty, owned as the database is and labelled, as the lock files
   below: an empty file is zero counts, and the KDC fills it.
 - The update log is MIT's: kept only with `iprop_enable` (which, as MIT's, needs `iprop_port`),
   one entry appended per change. Without iprop an earlier release's `principal.ulog` is no
