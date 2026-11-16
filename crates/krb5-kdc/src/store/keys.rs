@@ -346,7 +346,7 @@ impl PrincipalStore {
         let id = crate::kdb::principal_id(name, &self.realm)?;
         acl.check(actor, AdminOp::Ktadd, Some(&id))?;
         let p = self.get_name(name).ok_or(Error::NotFound)?;
-        if p.attributes & KDB_LOCKDOWN_KEYS != 0 {
+        if p.attributes & KDB_LOCKDOWN_KEYS != 0 || p.host_owned() {
             return Err(Error::AclDenied);
         }
         Self::keytab_from(p)

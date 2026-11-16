@@ -221,7 +221,7 @@ fn db2_put_refused(arg: &str) -> Error {
     Error::InvalidArgument(format!("Unsupported argument \"{arg}\" for db2"))
 }
 
-// MIT: `kadmin_modprinc` (kadmin/cli/kadmin.c:1030-1041)
+// MIT: `unlock_princ` (kadmin/cli/kadmin.c:1027-1041)
 fn modify(st: &mut PrincipalStore, caller: &str, r: &ModPrincipal<'_>) -> Result<(), Error> {
     let (name, realm, a) = (r.name, r.realm, &r.ent);
     st.get_in_realm(name, realm).ok_or(Error::NotFound)?;

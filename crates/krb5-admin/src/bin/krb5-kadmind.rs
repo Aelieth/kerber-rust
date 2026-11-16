@@ -510,7 +510,7 @@ mod test_hook {
 
     struct Logged;
 
-    // MIT: `log_call` (plugins/kadm5_hook/test/main.c:40-54)
+    // The lines MIT's kadm5_hook test module prints, for the oracle to compare.
     fn log_call(function: &str, stage: HookStage, princ: &PrincipalName, realm: &str) {
         let stage = match stage {
             HookStage::Precommit => "precommit",

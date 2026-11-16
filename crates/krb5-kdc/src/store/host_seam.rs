@@ -87,7 +87,7 @@ impl PrincipalStore {
         }
         if let Some(state) = &loaded.realm {
             let (sid, next_rid) = open_realm_state(state, realm, seal).map_err(Error::Record)?;
-            store.set_domain_sid(sid);
+            store.put_domain_sid(sid);
             store.raise_next_rid(next_rid);
         }
         Ok(store)
@@ -117,6 +117,21 @@ impl PrincipalStore {
             kvno: k.kvno,
             key: k.key.clone(),
         })
+    }
+
+    #[must_use]
+    pub fn has_host(&self) -> bool {
+        self.host.is_some()
+    }
+
+    /// A host owns its rows: iprop and dump loads would bypass it.
+    pub(crate) fn refuse_bulk_ingest(&self) -> Result<(), Error> {
+        if self.host.is_some() {
+            return Err(Error::InvalidArgument(
+                "bulk loads are not taken into a host store".to_owned(),
+            ));
+        }
+        Ok(())
     }
 
     /// The record a write would act on, resolved through an alias.

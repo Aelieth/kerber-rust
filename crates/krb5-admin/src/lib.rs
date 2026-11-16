@@ -11,8 +11,11 @@ mod kadmind;
 mod kprop;
 mod listen;
 
+#[cfg(any(test, feature = "test-hooks"))]
 use krb5_kdc::{Acl, AdminOp, PrincipalStore};
+#[cfg(any(test, feature = "test-hooks"))]
 use krb5_protocol::Keytab;
+#[cfg(any(test, feature = "test-hooks"))]
 use krb5_types::PrincipalName;
 use thiserror::Error;
 
@@ -208,13 +211,14 @@ impl From<krb5_kdc::Error> for Error {
     }
 }
 
-#[doc(hidden)]
+#[cfg(any(test, feature = "test-hooks"))]
 pub struct AdminSession<'a> {
     store: &'a mut PrincipalStore,
     acl: &'a Acl,
     actor: String,
 }
 
+#[cfg(any(test, feature = "test-hooks"))]
 impl<'a> AdminSession<'a> {
     #[must_use]
     pub fn local(store: &'a mut PrincipalStore, acl: &'a Acl, actor: impl Into<String>) -> Self {
@@ -343,6 +347,9 @@ impl<'a> AdminSession<'a> {
         target_realm: &str,
     ) -> Result<(), Error> {
         self.reload()?;
+        // MIT: `acl_addalias` (kadmin/server/auth_acl.c)
+        self.check_target(AdminOp::Create, alias)?;
+        self.check_target(AdminOp::Modify, target)?;
         self.change(|s, _, actor| {
             s.create_alias_in(alias, alias_realm, target, target_realm, actor)
         })
@@ -553,6 +560,7 @@ impl<'a> AdminSession<'a> {
     }
 
     pub fn add_policy_ent(&mut self, a: &PolicyArgs) -> Result<(), Error> {
+        self.acl.check(&self.actor, AdminOp::Create, None)?;
         let _ = self.reload();
         let exists = self.store.policies().contains_key(&a.name);
         let pol =
@@ -563,6 +571,7 @@ impl<'a> AdminSession<'a> {
 
     // MIT: `kadm5_modify_policy` (svr_policy.c:292-322)
     pub fn modify_policy_ent(&mut self, a: &PolicyArgs) -> Result<(), Error> {
+        self.acl.check(&self.actor, AdminOp::Modify, None)?;
         let _ = self.reload();
         let existing = self
             .store
@@ -577,6 +586,7 @@ impl<'a> AdminSession<'a> {
     }
 
     pub fn delete_policy(&mut self, name: &str) -> Result<(), Error> {
+        self.acl.check(&self.actor, AdminOp::Delete, None)?;
         let _ = self.reload();
         self.change(|s, _, _| s.delete_policy(name))
             .map_err(Error::from)
@@ -616,6 +626,7 @@ impl<'a> AdminSession<'a> {
     }
 }
 
+#[cfg(any(test, feature = "test-hooks"))]
 fn target_restrictions<'x>(
     acl: &'x krb5_kdc::Acl,
     actor: &str,

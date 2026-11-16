@@ -301,6 +301,11 @@ impl PrincipalStore {
                     "kdc.conf domain_sid is not valid SDDL: {s}"
                 )));
             };
+            if self.host.is_some() && sid != self.domain_sid {
+                return Err(Error::InvalidArgument(format!(
+                    "kdc.conf domain_sid {s} is not the host realm's"
+                )));
+            }
             self.domain_sid = sid;
         }
         self.policy.ad_identity = conf.domain_sid.is_some();

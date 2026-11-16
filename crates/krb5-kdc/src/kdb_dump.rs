@@ -262,7 +262,7 @@ impl DumpFile {
         }
         store.resolve_history_all();
         if let Some(sid) = domain {
-            store.set_domain_sid(sid);
+            store.put_domain_sid(sid);
         }
         if let Some(next) = hwm {
             store.raise_next_rid(next);
@@ -701,6 +701,7 @@ pub fn update_store(
     loaded: &PrincipalStore,
     order: &[&str],
 ) -> Result<(), KdcError> {
+    store.refuse_bulk_ingest()?;
     let mut put = std::collections::HashSet::new();
     for name in order {
         if let Some(p) = loaded.get_raw(name)

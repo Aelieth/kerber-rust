@@ -484,6 +484,7 @@ impl PrincipalStore {
 
     // MIT: `ulog_replay` (lib/kdb/kdb_log.c:474-476)
     pub fn apply_updates(&mut self, updates: &[IpropUpdate]) -> Result<(), Error> {
+        self.refuse_bulk_ingest()?;
         let applied = self.replay_updates(updates);
         if applied.is_err() {
             self.reset_ulog_header();

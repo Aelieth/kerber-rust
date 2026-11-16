@@ -1372,7 +1372,7 @@ fn parse_plain(plain: &[u8], v2: bool, v3: bool) -> Result<PrincipalStore, Persi
                 "SID1 trailer is not valid SDDL: {sddl}"
             )));
         };
-        store.set_domain_sid(sid);
+        store.put_domain_sid(sid);
         let next = take_u32(plain, &mut i)?;
         let nrid = take_u32(plain, &mut i)?;
         for _ in 0..nrid {

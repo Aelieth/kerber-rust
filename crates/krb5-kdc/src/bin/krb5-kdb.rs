@@ -1150,7 +1150,10 @@ fn load(util: &mut Util, args: &[String]) -> u8 {
             Ok(Some(current)) => current,
             Ok(None) => {
                 let mut empty = PrincipalStore::new(loaded.realm());
-                empty.set_domain_sid(loaded.domain_sid().clone());
+                if let Err(e) = empty.set_domain_sid(loaded.domain_sid().clone()) {
+                    util.com_err(&e.to_string(), "while opening database");
+                    return 1;
+                }
                 empty
             }
             Err(e) => {

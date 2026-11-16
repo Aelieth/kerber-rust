@@ -27,7 +27,7 @@ type NewStore<'a> = &'a dyn Fn() -> Arc<dyn KerberosStore>;
 type Check = fn(NewStore<'_>) -> Result<(), String>;
 
 pub fn run(new_store: NewStore<'_>) -> Vec<Row> {
-    let rows: [(&'static str, Check); 16] = [
+    let rows: [(&'static str, Check); 18] = [
         ("a realm round-trips", round_trip),
         (
             "a refused, failed or not-ready commit restores memory",
@@ -71,6 +71,11 @@ pub fn run(new_store: NewStore<'_>) -> Vec<Row> {
             host_mark,
         ),
         ("no lockout field is in a row's mask", no_lockout_bits),
+        (
+            "bulk loads and an outside SID change are refused",
+            bulk_refused,
+        ),
+        ("a dumped realm imports into an empty host", empty_import),
     ];
     rows.into_iter()
         .map(|(name, row)| Row {
@@ -699,5 +704,47 @@ fn no_lockout_bits(new_store: NewStore<'_>) -> Result<(), String> {
     ensure(
         mask & (m::FAIL_AUTH_COUNT | m::LAST_SUCCESS | m::LAST_FAILED) == 0,
         &format!("an unlock's row mask {mask:#x} has a lockout bit"),
+    )
+}
+
+fn bulk_refused(new_store: NewStore<'_>) -> Result<(), String> {
+    let (mut store, _) = fresh(new_store())?;
+    ensure(
+        store.apply_updates(&[]).is_err(),
+        "iprop updates were taken into a host store",
+    )?;
+    let other = PrincipalStore::try_new(REALM).map_err(fail)?;
+    ensure(
+        crate::kdb_dump::update_store(&mut store, &other, &[]).is_err(),
+        "a dump load was taken into a host store",
+    )?;
+    let sid = store.domain_sid().clone();
+    ensure(
+        store.set_domain_sid(sid).is_err(),
+        "the domain SID was set outside a change",
+    )
+}
+
+fn empty_import(new_store: NewStore<'_>) -> Result<(), String> {
+    let mut built = PrincipalStore::try_new(REALM).map_err(fail)?;
+    let profile = ProfileSet::from_structs(REALM, Krb5Conf::default(), None);
+    let spec = RealmSpec {
+        realm: REALM,
+        profile: &profile,
+        mkvno: 1,
+        admin: None,
+    };
+    bootstrap_realm_into(&mut built, MasterKey::Random { etype: None }, &spec).map_err(fail)?;
+    add(&mut built, "conformance/one").map_err(fail)?;
+    let seal = built.host_seal_key().ok_or("no master key")?;
+    let text = crate::kdb_dump::dump_store_with_key(&built, &seal.key).map_err(fail)?;
+    let loaded = crate::kdb_dump::load_dump_with_key(&text, &seal.key).map_err(fail)?;
+    let host = new_store();
+    host.commit_change(loaded.host_full_change().map_err(fail)?)
+        .map_err(fail)?;
+    let opened = PrincipalStore::open_host(host, REALM, seal).map_err(fail)?;
+    ensure(
+        opened.ids() == built.ids(),
+        "the imported realm has other principals",
     )
 }

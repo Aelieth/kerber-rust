@@ -265,3 +265,32 @@ fn modifys_prepare_sees_the_acl_restricted_mask() {
     assert_eq!(prepared.len(), 1);
     assert_eq!(prepared[0].3, Some(KADM5_ATTRIBUTES | KADM5_MAX_LIFE));
 }
+
+#[test]
+fn a_marked_principals_keys_are_not_read_out() {
+    let (store, host, _, actor) = hosted();
+    let acl = krb5_kdc::Acl::parse(&format!("{actor} *e\n")).unwrap();
+    let extract = || {
+        let out = dispatch_kadm5(
+            &store,
+            &acl,
+            &actor,
+            EXTRACT_KEYS,
+            &extract_args(TEST_USER, 0),
+        );
+        ret_code(&out.unwrap())
+    };
+    assert_eq!(extract(), 0);
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let committer = Arc::clone(&host);
+    store
+        .write()
+        .unwrap()
+        .change_committing(
+            |c| committer.commit_change(c),
+            |s| s.set_host_owned_in(&user, TEST_REALM, true),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(extract(), KADM5_AUTH_EXTRACT);
+}

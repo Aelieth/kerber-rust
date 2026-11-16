@@ -1004,7 +1004,7 @@ pub(super) fn dispatch_kadm5_ticket(
                 Ok(keys) => {
                     let hide = g
                         .get_in_realm(&name, &req)
-                        .is_some_and(|p| p.attributes & KDB_LOCKDOWN_KEYS != 0);
+                        .is_some_and(|p| p.attributes & KDB_LOCKDOWN_KEYS != 0 || p.host_owned());
                     Ok(encode_chrand(if hide { &[] } else { &keys }))
                 }
                 Err(rep) => Ok(rep),
@@ -1024,7 +1024,7 @@ pub(super) fn dispatch_kadm5_ticket(
             if changepw || !stack.extract(actor, &p.id()) {
                 return Ok(generic_ret(api, KADM5_AUTH_EXTRACT));
             }
-            if p.attributes & KDB_LOCKDOWN_KEYS != 0 {
+            if p.attributes & KDB_LOCKDOWN_KEYS != 0 || p.host_owned() {
                 return Ok(generic_ret(api, KADM5_AUTH_EXTRACT));
             }
             tracing::debug!(

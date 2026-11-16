@@ -21,6 +21,7 @@ use crate::listen::{SharedDump, read_fresh};
 use crate::lockout::{Lockout, LockoutUpdate};
 use crate::osa::{INITIAL_HIST_KVNO, KADM5_POLICY, OsaKeyData, OsaPrincEnt};
 
+#[cfg(any(test, feature = "test-hooks"))]
 fn qualify_s4u_from(from: &str, local_realm: &str) -> String {
     if from.contains('@') {
         from.to_owned()
@@ -685,7 +686,7 @@ impl PrincipalStore {
         Ok(())
     }
 
-    #[doc(hidden)]
+    #[cfg(any(test, feature = "test-hooks"))]
     pub fn allow_s4u_from(&mut self, name: &PrincipalName, from: &str) {
         let Some(id) = crate::kdb::lookup_principal_id(name, &self.realm) else {
             return;
@@ -696,7 +697,7 @@ impl PrincipalStore {
         }
     }
 
-    #[doc(hidden)]
+    #[cfg(any(test, feature = "test-hooks"))]
     /// Memory only; use `record_s4u_to` for a store.
     pub fn allow_s4u_to(&mut self, name: &PrincipalName, to: &str) {
         let Some(id) = crate::kdb::lookup_principal_id(name, &self.realm) else {
@@ -726,15 +727,6 @@ impl PrincipalStore {
         };
         self.note_ulog(id, false, Some(snap));
         self.save_if_configured()
-    }
-
-    pub fn clear_s4u_to(&mut self, name: &PrincipalName) {
-        let Some(id) = crate::kdb::lookup_principal_id(name, &self.realm) else {
-            return;
-        };
-        if let Some(p) = self.map.get_mut(&id) {
-            p.s4u_allowed_to.clear();
-        }
     }
 
     pub fn create_password(
