@@ -90,6 +90,10 @@ name = "as_preauth"
 required-features = ["test-hooks"]
 
 [[test]]
+name = "host_admission"
+required-features = ["test-hooks"]
+
+[[test]]
 name = "as_spake"
 required-features = ["test-hooks"]
 

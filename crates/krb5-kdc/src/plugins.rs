@@ -916,6 +916,7 @@ pub struct PluginSet {
     audits: Vec<Arc<dyn crate::audit::KdcAudit>>,
     authdata: Vec<Arc<dyn KdcAuthdata>>,
     otp: Vec<Arc<dyn OtpVerifier>>,
+    admission: Option<Arc<dyn crate::admission::HostAdmission>>,
 }
 
 impl std::fmt::Debug for PluginSet {
@@ -940,7 +941,18 @@ impl PluginSet {
             audits: Vec::new(),
             authdata: Vec::new(),
             otp: Vec::new(),
+            admission: None,
         }
+    }
+
+    /// Asked at AS and TGS for principals that carry the host's mark.
+    pub fn set_host_admission(&mut self, module: Arc<dyn crate::admission::HostAdmission>) {
+        self.admission = Some(module);
+    }
+
+    #[must_use]
+    pub fn host_admission(&self) -> Option<Arc<dyn crate::admission::HostAdmission>> {
+        self.admission.clone()
     }
 
     pub(crate) fn snapshot() -> Self {
@@ -1303,6 +1315,7 @@ pub(crate) fn finish_verify_padata(module: &str, e: Error) -> Error {
     if is_return_padata(&e) {
         return e;
     }
+    crate::admission::note_preauth_failure(module, &e);
     log_verify_failure(module, &verify_failure_text(&e));
     filter_preauth_error(e)
 }

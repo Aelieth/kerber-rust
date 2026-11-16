@@ -6,6 +6,7 @@
 
 mod acl;
 mod ad;
+pub mod admission;
 mod asn1_text;
 mod audit;
 mod create;

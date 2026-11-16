@@ -179,7 +179,8 @@ pub(super) fn check_tgs_s4u2self(
                 pw_expire: 0,
             },
         );
-        validate_as_request(store, client, &empty, body, crate::store::unix_now_u32())?;
+        let now = crate::store::unix_now_u32();
+        validate_as_request(store, (client, &s4u.user), &empty, body, now, true)?;
     } else if !pac_client_info_eq(
         &parsed,
         authtime,

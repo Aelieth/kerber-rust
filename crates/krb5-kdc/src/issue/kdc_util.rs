@@ -551,10 +551,11 @@ pub(super) fn attr(p: &Principal, bit: u32) -> bool {
 /// A 0 time is never; principal expiry is checked first.
 pub(super) fn validate_as_request(
     store: &dyn PrincipalRead,
-    client: &Principal,
+    (client, requested): (&Principal, &PrincipalName),
     server: &Principal,
     body: &krb5_types::KdcReqBody,
     now: u32,
+    s4u2self: bool,
 ) -> Result<(), Error> {
     // MIT: `validate_as_request` (kdc_util.c:727-727)
     // Only TGS-only options are rejected; other reserved bits pass.
@@ -595,7 +596,7 @@ pub(super) fn validate_as_request(
         .unwrap_or_else(|| PrincipalName::krbtgt(store.realm()));
     check_anon(store, &client.name, &req_server)?;
     // MIT: `validate_as_request` (kdc/kdc_util.c:800-803)
-    crate::lockout::lockout_check_policy(store, client, now)
+    crate::admission::check_as_policy(store, client, requested, server, body, now, s4u2self)
 }
 
 // MIT: `get_ticket_flags` (kdc_util.c:849-850)

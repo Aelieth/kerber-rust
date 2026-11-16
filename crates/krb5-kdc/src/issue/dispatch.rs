@@ -42,7 +42,9 @@ pub fn handle_request_from(
     raw: &[u8],
     sender: Option<&HostAddress>,
 ) -> Result<Vec<u8>, Error> {
-    match process_logged(store, raw, sender)? {
+    let out = process_logged(store, raw, sender);
+    crate::admission::deliver_notices();
+    match out? {
         Processed::Reply(bytes) => Ok(bytes),
         Processed::Refused(_) => Ok(Vec::new()),
     }
@@ -493,6 +495,11 @@ impl KdcDispatch {
             assert!(!panics, "a request set to panic");
             read_store(store, |s| process(s, request, &sender))
         }));
+        if run.is_ok() {
+            crate::admission::deliver_notices();
+        } else {
+            crate::admission::drop_notices();
+        }
         crate::plugins::set_request_peer(None);
         run.ok()
     }
