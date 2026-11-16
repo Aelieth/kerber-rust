@@ -78,18 +78,8 @@ pub(super) fn as_reply(
                 detail.filter(|s| !s.is_empty()),
             ))
         }
-        Err(Error::Crypto(d)) => Ok((
-            encode_krb_error(
-                store,
-                err::PREAUTH_FAILED,
-                Some(status::PREAUTH_FAILED),
-                None,
-                body,
-                hide,
-            )?,
-            Some(d).filter(|s| !s.is_empty()),
-        )),
-        Err(Error::Asn1(d)) => Ok((
+        // MIT: `errcode_to_protocol` (kdc/kdc_util.c:692-698)
+        Err(Error::Crypto(d) | Error::Asn1(d)) => Ok((
             encode_krb_error(
                 store,
                 err::GENERIC,
