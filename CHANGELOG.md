@@ -16,6 +16,28 @@ any other `###` heading.
 
 ## [Unreleased]
 
+### Added
+
+- **kdc.** `HostAdmission`: `check_as` before preauth, `as_notice` after the guard, `check_tgs`.
+- **kdc.** Host mark, TL 0x004B: `set_host_owned_in`; marked client with no module gets 18, logged once.
+- **kdc.** `KerberosStore::prepare` runs outside every lock; `Denied { kadm5_code, text }` reaches the client.
+- **admin.** kadmind with `test-hooks` loads a hook module that prints MIT's test hook lines.
+- **kdc.** `conformance::run_own`: the host rows over a host's own commit path.
+
+### Changed
+
+- **kdc.** `commit` is now `commit_change(HostChange)`: intent, caller, rows with masks, `prepared`.
+- **admin.** kadmind and kpasswd declare writes with `change_as`; kpasswd maps `Denied` as MIT's switch.
+- **kdc.** Host stores refuse bulk loads and iprop; a marked principal's keys are not read out.
+- **kdc.** Host mode: `kadmin/history` joins the caller's change, so a refused change leaves none.
+- **kdc.** A host store's panic in a change or its commit restores the image from the journal.
+
+### Fixed
+
+- **kdc.** An AS raw crypto failure is sent as 60, as MIT's `errcode_to_protocol`.
+- **kadm5.** Hooks fire as MIT: history create and chpass, modify's mask once, canonical names.
+- **kadm5.** Precommit runs just before the put, a veto restores the row; bootstrap postcommit follows save.
+
 ## [1.2.2] - 2026-11-14
 
 ### Added

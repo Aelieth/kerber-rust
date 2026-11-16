@@ -7,15 +7,24 @@ needs. A default build carries the daemon runtime (`daemon`, on by default) and 
 the test fixtures (`test-hooks`, off), so an embedder takes `krb5-kdc` and
 `krb5-admin` with `default-features = false`.
 
-This page is as of v1.2.2.
+This page is as of v1.2.3. The host's side of the contract is in [host-contract.md](host-contract.md).
+
+## New in 1.2.3
+
+`KerberosStore::commit` is replaced by `commit_change(HostChange)` (breaking) and gains
+`prepare`. New in `krb5_kdc`: `host::{WriteIntent, Operation, Caller, RowChange, HostChange,
+HostPrepared, TargetPeek, Denial}`, `KerberosStoreError::Denied`, `PrincipalStore::{change_as,
+defer_postcommit, target_peek, has_host, set_host_owned_in, host_full_change}`,
+`Principal::host_owned`, and the `HostAdmission` trait with `PluginSet::set_host_admission`.
+Details: [host-contract.md](host-contract.md).
 
 ## New in 1.2.2
 
 Additions only; no existing signature changed.
 
-- **Host store** (`krb5_kdc::host`): the `KerberosStore` trait (`load`, and `commit` of a
-  `RealmBatch`), its row types, `HostPaths`, `SealKey`, `RecordError`, `MemoryRealm` (an
-  in-memory host) and `conformance::run` (the checks a host must pass); `open_or_create_host`;
+- **Host store** (`krb5_kdc::host`): the `KerberosStore` trait (`load`, `commit_change` of a
+  `HostChange`, and `prepare`), its row types, `HostPaths`, `SealKey`, `RecordError`, `MemoryRealm` (an
+  in-memory host) and `conformance::run` or `run_own` (the checks a host must pass); `open_or_create_host`;
   `PrincipalStore::open_host`, `change_committing`, `reload_from_host`, `host_full_batch` and
   `host_seal_key`; `create_password_shared_committing` and `change_password_shared_committing`.
 - **Lockout:** `create_lockout_file` and `check_lockout_file`; `PrincipalStore::locked_now` and
@@ -71,8 +80,8 @@ in its own database uses host mode, below.
 
 ## Host mode
 
-A host implements `host::KerberosStore` (`load`, and `commit` of a `RealmBatch`) and
-opens the realm with `open_or_create_host`. The stash and the lockout file come from
+A host implements `host::KerberosStore` (`load`, `commit_change` of a `HostChange`, and
+`prepare`) and opens the realm with `open_or_create_host`. The stash and the lockout file come from
 `HostPaths`; kdc.conf's `database_name` and `key_stash_file` are not used.
 
 - **First boot** (no rows in the host, no stash): the realm is created, the stash
@@ -80,7 +89,7 @@ opens the realm with `open_or_create_host`. The stash and the lockout file come 
   fails, `open_or_create_host` removes only the stash it just wrote. **A later boot**
   requires the lockout file, loads the rows and opens each record's seal with the
   stash's key; principals the bootstrap adds are committed.
-- **A migrated realm:** `load_dump_with_stash`, commit `host_full_batch()`,
+- **A migrated realm:** `load_dump_with_stash`, commit `host_full_change()` to the empty host,
   `create_lockout_file` (before or after the commit), then `open_or_create_host`, with
   that stash at `HostPaths.stash`.
 - **`create_lockout_file`** is an exclusive create at 0600 that never truncates. An
@@ -90,19 +99,28 @@ opens the realm with `open_or_create_host`. The stash and the lockout file come 
   host's database, or import the dump again beside the stash. `LockoutMissing`,
   `LockoutUnreadable`, `LockoutForeign`, a later boot whose file is missing, unreadable
   or another file's: restore it, or let `create_lockout_file` make an empty one.
-  `Host(..)` is `load`'s or `commit`'s own error. `Record(..)` is a row that won't
+  `Host(..)` is `load`'s or `commit_change`'s own error. `Record(..)` is a row that won't
   open: the wrong key, a swapped name or a tampered body.
 - **Changes:** `change()` commits each change's rows, policies included, before it
   returns; a refused or failed commit leaves the store as it was, and kadmind reports
   `Refused`, `Failed`, `NotReady` as `KRB5_KDB_CONSTRAINT_VIOLATION`,
-  `KRB5_KDB_ACCESS_ERROR`, `KRB5_KDB_DBNOTINITED`. `change_committing` and the two
-  `_committing` password helpers replace that commit with the caller's closure (run
-  even for an empty batch), only to commit the host's own rows in the same transaction.
-  The first password change under a history policy commits `kadmin/history` through
-  `commit` partway through the change, ahead of any closure, as MIT's `create_hist`
-  writes it first.
+  `KRB5_KDB_ACCESS_ERROR`, `KRB5_KDB_DBNOTINITED`. A host may also answer
+  `KerberosStoreError::Denied { kadm5_code, text }`: the image is restored with no
+  reload and the client gets that code. `commit_change` gets a `HostChange`: the
+  `WriteIntent` (operation, caller, names, client mask, password), one `RowChange` per
+  touched row with a kadm5 mask and the mark, what `prepare` returned, and the batch.
+  `change_as` declares an intent; a write that declares none arrives as `Unspecified`.
+  kadmind and kpasswd call `prepare` for every declared write, outside every lock.
+  `change_committing` and the two `_committing` password helpers replace the commit with
+  the caller's closure, which gets the same `HostChange` as `Embedded` and is always
+  called; they commit the host's own rows in one transaction. A change that touched no
+  row does not otherwise reach the host. The host marks the principals it owns with
+  `set_host_owned_in` (TL type 0x004B) and may install a `HostAdmission` module with
+  `PluginSet::set_host_admission` for their logins and ticket requests. In host mode
+  the first password change under a history policy keeps `kadmin/history` in the same
+  change, so a refused change leaves none.
 - **Fail fast:** the commit runs under the store's write guard, so KDC lookups wait on
-  it: `commit` and `load` must return within seconds when the database is unreachable,
+  it: `commit_change` and `load` must return within seconds when the database is unreachable,
   with `Failed` or `NotReady`. Lockout counters stay in the side file, never the host
   (power cuts: `security.md`'s lockout row).
 - **After `Failed` or `NotReady`** the store reloads from the host by itself, at once,
@@ -111,7 +129,8 @@ opens the realm with `open_or_create_host`. The stash and the lockout file come 
   and lookups must see them before the next write.
 - **Audit:** `AuditState.lockout` is set on AS requests only: `Crossed` on the failure
   that reaches the limit, `Locked` on a refusal while locked.
-- Run `host::conformance::run` in the host's tests.
+- Run `host::conformance::run` in the host's tests, or `run_own` when your own changes (the
+  bootstrap, `change_committing`'s closure) take another path than `commit_change`.
 
 ## Bootstrap
 
@@ -291,5 +310,5 @@ are synchronous and start no runtime of their own. A tokio embedder runs each on
 a thread of its own and calls `block_on` only from such a loop thread, never from
 a runtime worker, which it would block. No store or plugin re-entry: a plugin or a
 kadm5 hook must not take the store's write guard or call back into the store. A
-host's `commit` and `load` run on the thread that calls the open, `change()` or
+host's `commit_change`, `prepare` and `load` run on the thread that calls the open, `change()` or
 `Kadmind::serve`, so a tokio host makes those calls off a runtime worker too.
