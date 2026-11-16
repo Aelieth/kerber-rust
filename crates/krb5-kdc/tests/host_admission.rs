@@ -17,6 +17,7 @@ use krb5_types::{KdcOptions, KrbError, PrincipalName, err, flag_bit};
 #[derive(Default)]
 struct Host {
     refuse_as: AtomicBool,
+    refuse_text: Mutex<Option<String>>,
     refuse_tgs: AtomicBool,
     notices: Mutex<Vec<AsNotice>>,
     tgs: Mutex<Vec<(TgsKind, bool)>>,
@@ -27,7 +28,7 @@ impl HostAdmission for Host {
         if self.refuse_as.load(Ordering::SeqCst) {
             return Err(KdcRefusal {
                 code: err::CLIENT_REVOKED,
-                e_text: None,
+                e_text: self.refuse_text.lock().unwrap().clone(),
             });
         }
         Ok(())
@@ -108,11 +109,15 @@ fn marked_with(
     store
 }
 
-fn as_code(store: &PrincipalStore, nonce: u32, password: Option<&[u8]>) -> i32 {
+fn as_error(store: &PrincipalStore, nonce: u32, password: Option<&[u8]>) -> Option<KrbError> {
     let padata = password.map(|pw| vec![pa_enc_timestamp(&password_key(TEST_USER, pw)).unwrap()]);
     let raw = encode(&as_req(user(), TEST_REALM, nonce, padata).unwrap()).unwrap();
     let reply = krb5_kdc::handle_request(store, &raw).unwrap();
-    decode::<KrbError>(&reply).map_or(0, |e| e.error_code)
+    decode::<KrbError>(&reply).ok()
+}
+
+fn as_code(store: &PrincipalStore, nonce: u32, password: Option<&[u8]>) -> i32 {
+    as_error(store, nonce, password).map_or(0, |e| e.error_code)
 }
 
 #[test]
@@ -132,6 +137,16 @@ fn the_as_verdict_comes_before_preauth_and_reveals_nothing() {
             .iter()
             .all(|(reason, _, _)| *reason == AsReason::HostRefused)
     );
+    let e_text = |pw: &[u8]| as_error(&store, 4, Some(pw)).and_then(|e| e.e_text);
+    assert_eq!(e_text(TEST_USER_PASSWORD), None);
+    assert_eq!(e_text(b"wrong"), None);
+    *module.refuse_text.lock().unwrap() = Some("outside your hours".to_owned());
+    let text = |pw: &[u8]| e_text(pw).map(|t| String::from_utf8_lossy(t.as_bytes()).into_owned());
+    assert_eq!(
+        text(TEST_USER_PASSWORD).as_deref(),
+        Some("outside your hours")
+    );
+    assert_eq!(text(b"wrong").as_deref(), Some("outside your hours"));
 }
 
 struct Deny;

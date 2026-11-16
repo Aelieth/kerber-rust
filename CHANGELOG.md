@@ -35,6 +35,7 @@ any other `###` heading.
 ### Fixed
 
 - **kdc.** An AS raw crypto failure is sent as 60, as MIT's `errcode_to_protocol`.
+- **kdc.** A reply padata step's failure carries `KDC_RETURN_PADATA` as its e-text, as MIT's.
 - **kadm5.** Hooks fire as MIT: history create and chpass, modify's mask once, canonical names.
 - **kadm5.** Precommit runs just before the put, a veto restores the row; bootstrap postcommit follows save.
 

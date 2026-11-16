@@ -465,7 +465,10 @@ fn finish_preauth(
             Ok(()) => {
                 crate::admission::note_preauth_ok(Some(Mechanism::EncChallenge));
                 skip_timestamp = true;
-                extra_padata.push(kdc_encrypted_challenge(&f.armor_key, &ckey.key)?);
+                extra_padata.push(
+                    kdc_encrypted_challenge(&f.armor_key, &ckey.key)
+                        .map_err(return_padata_failed)?,
+                );
                 if let Some(ai) = store.policy().encrypted_challenge_indicator.as_deref() {
                     authind_add(&mut auth_indicators, ai);
                 }
@@ -562,7 +565,9 @@ fn finish_process_as_req(
     let mut session = random_key(session_etype)?;
     if anonymous_as {
         extra_padata.push(pa_pkinit_kx(&as_rep_key, &session)?);
-        session = krb_fx_cf2(&session, &as_rep_key, b"PKINIT", b"KEYEXCHANGE")?;
+        // MIT: `return_pkinit_kx` (plugins/preauth/pkinit/pkinit_srv.c:647-651)
+        session = krb_fx_cf2(&session, &as_rep_key, b"PKINIT", b"KEYEXCHANGE")
+            .map_err(|e| return_padata_failed(Error::from(e)))?;
     }
     // MIT: `process_as_req` (kdc/do_as_req.c:672-672)
     let now = KerberosTime::from_unix_seconds(kdc_time);
@@ -850,6 +855,20 @@ pub(crate) fn extract_enc_timestamp(padata: Option<&[PaData]>) -> Option<&OctetS
 // MIT: `kdcpreauth_encrypted_challenge_initvt` (kdc/kdc_preauth_ec.c:219-219)
 const EC_MODULE: &str = "encrypted_challenge";
 
+// MIT: `finish_process_as_req` (kdc/do_as_req.c:252-256)
+/// A reply padata step's failure goes out with that step's status.
+fn return_padata_failed(e: Error) -> Error {
+    match e {
+        Error::Protocol { code, detail, .. } => Error::Protocol {
+            code,
+            text: Some(status::KDC_RETURN_PADATA.to_owned()),
+            e_data: None,
+            detail,
+        },
+        other => proto_d(err::GENERIC, status::KDC_RETURN_PADATA, other.to_string()),
+    }
+}
+
 const ENOENT: i32 = 2;
 
 fn asn1_failure(der: &[u8], first_field_explicit: bool) -> Error {
@@ -1057,4 +1076,19 @@ fn pa_pkinit_kx(reply_key: &ProtocolKey, contrib: &ProtocolKey) -> Result<PaData
         padata_type: pa::PKINIT_KX,
         padata_value: encode(&enc)?.into(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_return_padata_failure_carries_its_steps_status() {
+        let out = return_padata_failed(Error::Crypto("encrypt failed".into()));
+        assert!(matches!(
+            out,
+            Error::Protocol { code: err::GENERIC, text: Some(ref t), .. }
+                if t == status::KDC_RETURN_PADATA
+        ));
+    }
 }
