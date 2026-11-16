@@ -466,15 +466,8 @@ impl PrincipalStore {
         }
         let new_keys = random_keys(&use_ks, kvno)?;
         let use_etypes: Vec<EncryptionType> = new_keys.iter().map(|k| k.etype).collect();
-        super::kadm5_hook::hook_chpass(
-            self,
-            super::kadm5_hook::HookStage::Precommit,
-            name,
-            princ_realm,
-            keepold,
-            None,
-            &use_etypes,
-        )?;
+        let saved = existing.clone();
+        let (cname, crealm) = (saved.name.clone(), saved.realm.clone());
         let mkey = (keepold > 0).then(|| self.iprop_master_key()).flatten();
         {
             let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
@@ -485,6 +478,17 @@ impl PrincipalStore {
             stamp_admin_tl(p, true, actor);
         }
         self.apply_pw_max_life_in(name, princ_realm)?;
+        self.precommit_or_restore(&id, saved, |s| {
+            super::kadm5_hook::hook_chpass(
+                s,
+                super::kadm5_hook::HookStage::Precommit,
+                &cname,
+                &crealm,
+                keepold,
+                None,
+                &use_etypes,
+            )
+        })?;
         let snap = self.map.get(&id).cloned();
         if let Some(p) = &snap {
             self.zero_fail_count_in_file(p, crate::store::unix_now_u32());
@@ -497,8 +501,8 @@ impl PrincipalStore {
         }
         self.save_if_configured()?;
         self.postcommit(super::kadm5_hook::Post::Chpass {
-            princ: name.clone(),
-            realm: princ_realm.to_owned(),
+            princ: cname,
+            realm: crealm,
             keepold,
             password: None,
             etypes: use_etypes,

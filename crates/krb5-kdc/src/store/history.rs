@@ -2,9 +2,10 @@
 
 use krb5_crypto::ProtocolKey;
 
-use super::PrincipalStore;
+use super::kadm5_hook::{HookStage, Post, hook_chpass, hook_create};
 use super::keys::{KeyEntry, random_key};
 use super::principal::{Principal, refresh_kadm_tl, stamp_admin_tl};
+use super::{PrincipalStore, kadm5_mask};
 use crate::error::Error;
 use crate::osa::{INITIAL_HIST_KVNO, OsaKeyData, OsaPrincEnt};
 
@@ -133,14 +134,51 @@ impl PrincipalStore {
         refresh_kadm_tl(&mut p);
         stamp_admin_tl(&mut p, true, actor);
         let id = p.id();
+        let (name, realm) = (p.name.clone(), p.realm.clone());
+        // MIT: `create_hist` (lib/kadm5/srv/server_kdb.c:141-164)
+        let mask = kadm5_mask::PRINCIPAL | kadm5_mask::MAX_LIFE | kadm5_mask::ATTRIBUTES;
+        hook_create(
+            self,
+            HookStage::Precommit,
+            &name,
+            &realm,
+            mask,
+            None,
+            &[etype],
+        )?;
         self.put_principal(p)?;
+        self.save_through()?;
+        self.post_after_save(Post::Create {
+            princ: name.clone(),
+            realm: realm.clone(),
+            mask,
+            password: None,
+            etypes: vec![etype],
+        });
+        hook_chpass(self, HookStage::Precommit, &name, &realm, 0, None, &[etype])?;
         let key = random_key(etype)?;
         let mut p = self.map.get(&id).cloned().ok_or(Error::NotFound)?;
         p.keys = vec![KeyEntry::new(etype, key.clone(), INITIAL_HIST_KVNO)];
         stamp_admin_tl(&mut p, true, actor);
         self.put_principal(p)?;
         self.save_through()?;
+        self.post_after_save(Post::Chpass {
+            princ: name,
+            realm,
+            keepold: 0,
+            password: None,
+            etypes: vec![etype],
+        });
         Ok((INITIAL_HIST_KVNO, key))
+    }
+
+    /// A file store's put is already on disk; a host's commits with the change.
+    fn post_after_save(&mut self, call: Post) {
+        if self.host.is_some() {
+            self.postcommit(call);
+        } else {
+            call.run(self);
+        }
     }
 
     pub(crate) fn resolve_history_all(&mut self) {

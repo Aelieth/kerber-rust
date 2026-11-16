@@ -597,20 +597,24 @@ impl PrincipalStore {
             None => None,
         };
         let etypes: Vec<EncryptionType> = keysalts.iter().map(|ks| ks.etype).collect();
-        super::kadm5_hook::hook_chpass(
-            self,
-            super::kadm5_hook::HookStage::Precommit,
-            &name,
-            &realm,
-            keepold,
-            Some(password.as_slice()),
-            &etypes,
-        )?;
+        let saved = self.map.get(&id).cloned().ok_or(Error::NotFound)?;
+        let (cname, crealm) = (saved.name.clone(), saved.realm.clone());
         self.replace_password_keys(&id, keys, history, keepold, actor)?;
         if let Some(p) = self.map.get_mut(&id) {
             p.salt = crate::kdb_dump::salt_of_keys(&p.keys, &p.name, &p.realm);
         }
         self.apply_pw_max_life_in(&name, &realm)?;
+        self.precommit_or_restore(&id, saved, |s| {
+            super::kadm5_hook::hook_chpass(
+                s,
+                super::kadm5_hook::HookStage::Precommit,
+                &cname,
+                &crealm,
+                keepold,
+                Some(password.as_slice()),
+                &etypes,
+            )
+        })?;
         let snap = self.map.get(&id).cloned();
         if let Some(p) = &snap {
             self.zero_fail_count_in_file(p, unix_now_u32());
@@ -618,8 +622,8 @@ impl PrincipalStore {
         self.note_ulog(id, false, snap);
         self.save_if_configured()?;
         self.postcommit(super::kadm5_hook::Post::Chpass {
-            princ: name,
-            realm,
+            princ: cname,
+            realm: crealm,
             keepold,
             password: Some(password),
             etypes,

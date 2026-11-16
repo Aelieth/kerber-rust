@@ -633,13 +633,20 @@ pub struct AdminFields {
     pub max_renewable_life: Option<u64>,
 }
 
+/// One kadm5 modify: `mask` is the client's, as the modify hook sees it.
+#[derive(Clone, Default)]
+pub struct ModifyPrincipal {
+    pub mask: u32,
+    pub fields: AdminFields,
+    pub kvno: Option<u32>,
+    pub tl_data: Vec<TlData>,
+    pub zero_fail_count: bool,
+}
+
 impl PrincipalStore {
     pub(crate) fn remove_id_inner(&mut self, id: &str) -> Result<(), Error> {
         self.inside_change()?;
-        let (name, realm) = {
-            let principal = self.map.get(id).ok_or(Error::NotFound)?;
-            (principal.name.clone(), principal.realm.clone())
-        };
+        let (name, realm) = self.record_name(id)?;
         if realm == self.realm && name.components_joined_lossy() == "K/M" {
             return Err(Error::InvalidArgument(
                 "Cannot change protected principal".into(),
@@ -1390,7 +1397,117 @@ impl PrincipalStore {
         fields: AdminFields,
         actor: &str,
     ) -> Result<(), Error> {
+        let mut mask = 0u32;
+        if fields.attributes.is_some() {
+            mask |= kadm5_mask::ATTRIBUTES;
+        }
+        if fields.max_life.is_some() {
+            mask |= kadm5_mask::MAX_LIFE;
+        }
+        if fields.expiration.is_some() {
+            mask |= kadm5_mask::PRINC_EXPIRE_TIME;
+        }
+        if fields.pw_expire.is_some() {
+            mask |= kadm5_mask::PW_EXPIRATION;
+        }
+        if fields.clear_policy {
+            mask |= kadm5_mask::POLICY_CLR;
+        } else if fields.policy.is_some() {
+            mask |= kadm5_mask::POLICY;
+        }
+        if fields.max_renewable_life.is_some() {
+            mask |= kadm5_mask::MAX_RLIFE;
+        }
+        self.modify_principal_in(
+            name,
+            princ_realm,
+            ModifyPrincipal {
+                mask,
+                fields,
+                ..ModifyPrincipal::default()
+            },
+            actor,
+        )
+    }
+
+    // MIT: `kadm5_modify_principal` (lib/kadm5/srv/svr_principal.c:552-690)
+    pub fn modify_principal_in(
+        &mut self,
+        name: &PrincipalName,
+        princ_realm: &str,
+        m: ModifyPrincipal,
+        actor: &str,
+    ) -> Result<(), Error> {
         self.inside_change()?;
+        let id = self.adb_id(name, princ_realm)?;
+        let saved = self.map.get(&id).cloned().ok_or(Error::NotFound)?;
+        let (cname, crealm) = (saved.name.clone(), saved.realm.clone());
+        self.apply_admin_fields_at(&id, name, princ_realm, m.fields, actor)?;
+        if let Some(kvno) = m.kvno {
+            self.set_kvno_in(name, princ_realm, kvno, actor)?;
+        }
+        if !m.tl_data.is_empty() {
+            self.merge_tl_data_in(name, princ_realm, &m.tl_data, actor)?;
+        }
+        if m.zero_fail_count {
+            let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
+            p.fail_auth_count = 0;
+            stamp_admin_tl(p, false, actor);
+        }
+        self.precommit_or_restore(&id, saved, |s| {
+            super::kadm5_hook::hook_modify(
+                s,
+                super::kadm5_hook::HookStage::Precommit,
+                &cname,
+                &crealm,
+                m.mask,
+            )
+        })?;
+        if m.zero_fail_count {
+            let snap = self.map.get(&id).cloned();
+            if let Some(p) = &snap {
+                self.zero_fail_count_in_file(p, unix_now_u32());
+            }
+            self.note_ulog(id, false, snap);
+            self.save_if_configured()?;
+        }
+        self.postcommit(super::kadm5_hook::Post::Modify {
+            princ: cname,
+            realm: crealm,
+            mask: m.mask,
+        });
+        Ok(())
+    }
+
+    /// MIT's precommit runs after the edits, right before the put; a veto puts the row back.
+    pub(super) fn precommit_or_restore(
+        &mut self,
+        id: &str,
+        saved: Principal,
+        hook: impl FnOnce(&Self) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        let vetoed = hook(self);
+        if vetoed.is_err()
+            && let Some(p) = self.map.get_mut(id)
+        {
+            *p = saved;
+        }
+        vetoed
+    }
+
+    pub(super) fn record_name(&self, id: &str) -> Result<(PrincipalName, String), Error> {
+        let p = self.map.get(id).ok_or(Error::NotFound)?;
+        Ok((p.name.clone(), p.realm.clone()))
+    }
+
+    fn apply_admin_fields_at(
+        &mut self,
+        id: &str,
+        name: &PrincipalName,
+        princ_realm: &str,
+        fields: AdminFields,
+        actor: &str,
+    ) -> Result<(), Error> {
         let AdminFields {
             attributes,
             max_life,
@@ -1400,38 +1517,9 @@ impl PrincipalStore {
             clear_policy,
             max_renewable_life,
         } = fields;
-        let id = self.adb_id(name, princ_realm)?;
-        let mut mask = 0u32;
-        if attributes.is_some() {
-            mask |= kadm5_mask::ATTRIBUTES;
-        }
-        if max_life.is_some() {
-            mask |= kadm5_mask::MAX_LIFE;
-        }
-        if expiration.is_some() {
-            mask |= kadm5_mask::PRINC_EXPIRE_TIME;
-        }
-        if pw_expire.is_some() {
-            mask |= kadm5_mask::PW_EXPIRATION;
-        }
-        if clear_policy {
-            mask |= kadm5_mask::POLICY_CLR;
-        } else if policy.is_some() {
-            mask |= kadm5_mask::POLICY;
-        }
-        if max_renewable_life.is_some() {
-            mask |= kadm5_mask::MAX_RLIFE;
-        }
-        super::kadm5_hook::hook_modify(
-            self,
-            super::kadm5_hook::HookStage::Precommit,
-            name,
-            princ_realm,
-            mask,
-        )?;
         let apply_max = policy.is_some() && !clear_policy && pw_expire.is_none();
         {
-            let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
+            let p = self.map.get_mut(id).ok_or(Error::NotFound)?;
             if let Some(a) = attributes {
                 p.attributes = a;
             }
@@ -1460,15 +1548,9 @@ impl PrincipalStore {
         if apply_max {
             self.apply_pw_max_life_in(name, princ_realm)?;
         }
-        let snap = self.map.get(&id).cloned();
-        self.note_ulog(id, false, snap);
-        self.save_if_configured()?;
-        self.postcommit(super::kadm5_hook::Post::Modify {
-            princ: name.clone(),
-            realm: princ_realm.to_owned(),
-            mask,
-        });
-        Ok(())
+        let snap = self.map.get(id).cloned();
+        self.note_ulog(id.to_owned(), false, snap);
+        self.save_if_configured()
     }
 
     pub fn impose_acl_restrictions(

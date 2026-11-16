@@ -389,31 +389,27 @@ pub(super) fn dispatch_kadm5_ticket(
             } else {
                 None
             };
+            let modify = krb5_kdc::ModifyPrincipal {
+                mask,
+                fields: krb5_kdc::AdminFields {
+                    attributes,
+                    max_life,
+                    expiration,
+                    pw_expire,
+                    policy,
+                    clear_policy,
+                    max_renewable_life,
+                },
+                kvno: (mask & KADM5_KVNO != 0).then_some(fields.kvno),
+                tl_data: if mask & KADM5_TL_DATA != 0 {
+                    fields.tl_data
+                } else {
+                    Vec::new()
+                },
+                zero_fail_count: mask & KADM5_FAIL_AUTH_COUNT != 0,
+            };
             let changed = commit(&mut g, proc, API_V2, |s| {
-                s.apply_admin_fields_in(
-                    &name,
-                    &req,
-                    krb5_kdc::AdminFields {
-                        attributes,
-                        max_life,
-                        expiration,
-                        pw_expire,
-                        policy,
-                        clear_policy,
-                        max_renewable_life,
-                    },
-                    actor,
-                )?;
-                if mask & KADM5_KVNO != 0 {
-                    s.set_kvno_in(&name, &req, fields.kvno, actor)?;
-                }
-                if mask & KADM5_TL_DATA != 0 {
-                    s.merge_tl_data_in(&name, &req, &fields.tl_data, actor)?;
-                }
-                if mask & KADM5_FAIL_AUTH_COUNT != 0 {
-                    s.clear_fail_auth_count_in(&name, &req, actor)?;
-                }
-                Ok(())
+                s.modify_principal_in(&name, &req, modify, actor)
             });
             Ok(done(changed, API_V2))
         }

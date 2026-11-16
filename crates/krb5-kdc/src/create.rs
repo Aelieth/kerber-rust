@@ -591,40 +591,44 @@ pub fn open_or_create_host(
             (store, MasterKey::Key(key), mkvno)
         }
     };
-    let boot = bootstrap_realm_into(
-        &mut store,
-        master,
-        &RealmSpec {
-            realm,
-            profile,
-            mkvno,
-            admin,
-        },
-    )?;
-    let seal = crate::host::SealKey {
-        kvno: u32::from(boot.kvno),
-        key: boot.master.clone(),
-    };
-    if fresh {
-        crate::persist::write_stash(stash, realm, &boot.master, u32::from(boot.kvno))?;
-        crate::lockout::create_lockout_file(&host_paths.lockout)?;
-    }
-    if fresh || !boot.created.is_empty() {
-        let ids = if fresh {
-            store.ids()
-        } else {
-            boot.created.clone()
+    // MIT: `kadm5_create_principal_3` (lib/kadm5/srv/svr_principal.c:504-508)
+    let (boot, seal) = store.defer_postcommit(|store| {
+        let boot = bootstrap_realm_into(
+            store,
+            master,
+            &RealmSpec {
+                realm,
+                profile,
+                mkvno,
+                admin,
+            },
+        )?;
+        let seal = crate::host::SealKey {
+            kvno: u32::from(boot.kvno),
+            key: boot.master.clone(),
         };
-        let committed = store
-            .host_rows(&ids, fresh, &seal)
-            .and_then(|batch| host.commit(batch).map_err(Error::Host));
-        if let Err(e) = committed {
-            if fresh {
-                let _ = std::fs::remove_file(stash);
-            }
-            return Err(e);
+        if fresh {
+            crate::persist::write_stash(stash, realm, &boot.master, u32::from(boot.kvno))?;
+            crate::lockout::create_lockout_file(&host_paths.lockout)?;
         }
-    }
+        if fresh || !boot.created.is_empty() {
+            let ids = if fresh {
+                store.ids()
+            } else {
+                boot.created.clone()
+            };
+            let committed = store
+                .host_rows(&ids, fresh, &seal)
+                .and_then(|batch| host.commit(batch).map_err(Error::Host));
+            if let Err(e) = committed {
+                if fresh {
+                    let _ = std::fs::remove_file(stash);
+                }
+                return Err(e);
+            }
+        }
+        Ok((boot, seal))
+    })?;
     store.attach_host(host, seal, host_paths.lockout.clone());
     Ok((store, boot))
 }

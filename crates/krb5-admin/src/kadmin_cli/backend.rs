@@ -1,7 +1,9 @@
 //! The store calls of the command layer, at `kadm5` granularity.
 
-use krb5_kdc::PrincipalWrite as _;
-use krb5_kdc::{AdminEnt, AdminFields, Error, KeyEntry, NamedPolicy, Principal, PrincipalStore};
+use krb5_kdc::{
+    AdminEnt, AdminFields, Error, KeyEntry, ModifyPrincipal, NamedPolicy, Principal,
+    PrincipalStore, TlData,
+};
 use krb5_types::PrincipalName;
 
 use crate::PolicyArgs;
@@ -219,40 +221,43 @@ fn db2_put_refused(arg: &str) -> Error {
     Error::InvalidArgument(format!("Unsupported argument \"{arg}\" for db2"))
 }
 
+// MIT: `kadmin_modprinc` (kadmin/cli/kadmin.c:1030-1041)
 fn modify(st: &mut PrincipalStore, caller: &str, r: &ModPrincipal<'_>) -> Result<(), Error> {
     let (name, realm, a) = (r.name, r.realm, &r.ent);
-    let mut entry = st
-        .get_in_realm(name, realm)
-        .cloned()
-        .ok_or(Error::NotFound)?;
+    st.get_in_realm(name, realm).ok_or(Error::NotFound)?;
     if let Some(arg) = r.db_args.first() {
         return Err(db2_put_refused(arg));
     }
-    if a.mask & mask::KVNO != 0 {
-        for k in &mut entry.keys {
-            k.kvno = a.kvno & 0xffff;
-        }
-        st.put_principal(entry)?;
-    }
-    if r.unlock {
-        st.admin_unlock_in(name, realm, caller)?;
-    }
     let set = |bit: u32| a.mask & bit != 0;
-    st.apply_admin_fields_in(
+    let tl_data = if r.unlock {
+        vec![TlData {
+            ty: krb5_kdc::TL_LAST_ADMIN_UNLOCK,
+            contents: krb5_types::unix_now().to_le_bytes().to_vec(),
+        }]
+    } else {
+        Vec::new()
+    };
+    st.modify_principal_in(
         name,
         realm,
-        AdminFields {
-            attributes: set(mask::ATTRIBUTES).then_some(a.attributes),
-            max_life: set(mask::MAX_LIFE).then_some(u64::from(a.max_life)),
-            expiration: set(mask::PRINC_EXPIRE_TIME).then_some(a.princ_expire_time),
-            pw_expire: set(mask::PW_EXPIRATION).then_some(a.pw_expiration),
-            policy: if set(mask::POLICY) {
-                a.policy.clone()
-            } else {
-                None
+        ModifyPrincipal {
+            mask: a.mask,
+            fields: AdminFields {
+                attributes: set(mask::ATTRIBUTES).then_some(a.attributes),
+                max_life: set(mask::MAX_LIFE).then_some(u64::from(a.max_life)),
+                expiration: set(mask::PRINC_EXPIRE_TIME).then_some(a.princ_expire_time),
+                pw_expire: set(mask::PW_EXPIRATION).then_some(a.pw_expiration),
+                policy: if set(mask::POLICY) {
+                    a.policy.clone()
+                } else {
+                    None
+                },
+                clear_policy: set(mask::POLICY_CLR) && r.had_policy,
+                max_renewable_life: set(mask::MAX_RLIFE).then_some(u64::from(a.max_renewable_life)),
             },
-            clear_policy: set(mask::POLICY_CLR) && r.had_policy,
-            max_renewable_life: set(mask::MAX_RLIFE).then_some(u64::from(a.max_renewable_life)),
+            kvno: set(mask::KVNO).then_some(a.kvno & 0xffff),
+            tl_data,
+            zero_fail_count: r.unlock,
         },
         caller,
     )

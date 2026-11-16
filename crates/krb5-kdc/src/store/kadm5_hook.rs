@@ -384,6 +384,7 @@ mod tests {
         fail_pre: bool,
         fail_post: bool,
         hits: Mutex<Vec<String>>,
+        named: Mutex<Vec<String>>,
     }
 
     impl Rec {
@@ -393,7 +394,29 @@ mod tests {
                 fail_pre,
                 fail_post,
                 hits: Mutex::new(Vec::new()),
+                named: Mutex::new(Vec::new()),
             })
+        }
+
+        fn name_call(&self, op: &str, stage: HookStage, princ: &PrincipalName, realm: &str) {
+            let which = match stage {
+                HookStage::Precommit => "pre",
+                HookStage::Postcommit => "post",
+            };
+            self.named
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(format!(
+                    "{op}:{which}:{}",
+                    princ.unparse_with_realm_lossy(realm)
+                ));
+        }
+
+        fn named(&self) -> Vec<String> {
+            self.named
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
         }
 
         fn note(&self, op: &str, stage: HookStage, extra: &str) -> Result<(), Error> {
@@ -435,12 +458,13 @@ mod tests {
         fn chpass(
             &self,
             stage: HookStage,
-            _princ: &PrincipalName,
-            _realm: &str,
+            princ: &PrincipalName,
+            realm: &str,
             _keepold: u32,
             password: Option<&[u8]>,
             _etypes: &[EncryptionType],
         ) -> Result<(), Error> {
+            self.name_call("chpass", stage, princ, realm);
             let extra = if password.is_none() { "none" } else { "pw" };
             self.note("chpass", stage, extra)
         }
@@ -448,22 +472,24 @@ mod tests {
         fn create(
             &self,
             stage: HookStage,
-            _princ: &PrincipalName,
-            _realm: &str,
+            princ: &PrincipalName,
+            realm: &str,
             _mask: u32,
             _password: Option<&[u8]>,
             _etypes: &[EncryptionType],
         ) -> Result<(), Error> {
+            self.name_call("create", stage, princ, realm);
             self.note("create", stage, "")
         }
 
         fn modify(
             &self,
             stage: HookStage,
-            _princ: &PrincipalName,
-            _realm: &str,
-            _mask: u32,
+            princ: &PrincipalName,
+            realm: &str,
+            mask: u32,
         ) -> Result<(), Error> {
+            self.name_call(&format!("modify:{mask:#x}"), stage, princ, realm);
             self.note("modify", stage, "")
         }
 
@@ -587,6 +613,277 @@ mod tests {
                 "chpass:post:pw",
                 "chpass:pre:none",
                 "chpass:post:none",
+            ]
+        );
+    }
+
+    fn name_at(princ: &str) -> String {
+        format!("{princ}@{}", crate::testrealm::TEST_REALM)
+    }
+
+    #[test]
+    fn history_creation_fires_mits_create_then_randkey_hooks() {
+        let (mut store, _) = crate::testrealm::bootstrap_documented().expect("realm");
+        store
+            .put_policy(crate::store::NamedPolicy {
+                history: 2,
+                ..crate::store::NamedPolicy::new("hist")
+            })
+            .expect("policy");
+        store
+            .set_principal_policy(&user(), Some("hist".into()))
+            .expect("bind");
+        assert!(store.history_key().is_none());
+        let module = Rec::new("yes", false, false);
+        let _guard = install(&module);
+        store
+            .set_password(&user(), b"another-password")
+            .expect("chpass");
+        let (hist, me) = (name_at("kadmin/history"), name_at(TEST_USER));
+        assert_eq!(
+            module.named(),
+            [
+                format!("create:pre:{hist}"),
+                format!("create:post:{hist}"),
+                format!("chpass:pre:{hist}"),
+                format!("chpass:post:{hist}"),
+                format!("chpass:pre:{me}"),
+                format!("chpass:post:{me}"),
+            ]
+        );
+    }
+
+    #[test]
+    fn modify_hook_gets_the_clients_mask() {
+        use crate::store::{ModifyPrincipal, TlData, kadm5_mask};
+        let (mut store, _) = crate::testrealm::bootstrap_documented().expect("realm");
+        let module = Rec::new("yes", false, false);
+        let _guard = install(&module);
+        let realm = crate::testrealm::TEST_REALM;
+        let unlock = TlData {
+            ty: crate::kdb_dump::TL_LAST_ADMIN_UNLOCK,
+            contents: 7u32.to_le_bytes().to_vec(),
+        };
+        for m in [
+            ModifyPrincipal {
+                mask: kadm5_mask::KVNO,
+                kvno: Some(9),
+                ..ModifyPrincipal::default()
+            },
+            ModifyPrincipal {
+                mask: kadm5_mask::TL_DATA,
+                tl_data: vec![unlock.clone()],
+                ..ModifyPrincipal::default()
+            },
+            ModifyPrincipal {
+                mask: kadm5_mask::FAIL_AUTH_COUNT | kadm5_mask::TL_DATA,
+                tl_data: vec![unlock.clone()],
+                zero_fail_count: true,
+                ..ModifyPrincipal::default()
+            },
+        ] {
+            store
+                .modify_principal_in(&user(), realm, m, "admin/admin")
+                .expect("modify");
+        }
+        let me = name_at(TEST_USER);
+        assert_eq!(
+            module.named(),
+            [
+                format!("modify:0x100:pre:{me}"),
+                format!("modify:0x100:post:{me}"),
+                format!("modify:0x40000:pre:{me}"),
+                format!("modify:0x40000:post:{me}"),
+                format!("modify:0x50000:pre:{me}"),
+                format!("modify:0x50000:post:{me}"),
+            ]
+        );
+        assert_eq!(kvno(&store, &user()), 9);
+    }
+
+    #[test]
+    fn hooks_name_the_canonical_principal_not_the_alias() {
+        use crate::store::{AdminFields, ModifyPrincipal, kadm5_mask};
+        let (mut store, _) = crate::testrealm::bootstrap_documented().expect("realm");
+        let realm = crate::testrealm::TEST_REALM;
+        let alias = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["nick"]);
+        store
+            .create_alias_in(&alias, realm, &user(), realm, "admin/admin")
+            .expect("alias");
+        let module = Rec::new("yes", false, false);
+        let _guard = install(&module);
+        store
+            .set_password_keepold_n_in(&alias, realm, b"another-password", 0, "admin/admin")
+            .expect("chpass");
+        store
+            .chrand_etypes_keepold_in(&alias, realm, &[], 0, "admin/admin")
+            .expect("randkey");
+        store
+            .modify_principal_in(
+                &alias,
+                realm,
+                ModifyPrincipal {
+                    mask: kadm5_mask::MAX_LIFE,
+                    fields: AdminFields {
+                        max_life: Some(3600),
+                        ..AdminFields::default()
+                    },
+                    ..ModifyPrincipal::default()
+                },
+                "admin/admin",
+            )
+            .expect("modify");
+        let me = name_at(TEST_USER);
+        assert_eq!(
+            module.named(),
+            [
+                format!("chpass:pre:{me}"),
+                format!("chpass:post:{me}"),
+                format!("chpass:pre:{me}"),
+                format!("chpass:post:{me}"),
+                format!("modify:0x20:pre:{me}"),
+                format!("modify:0x20:post:{me}"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_modify_that_fails_after_its_edits_fires_no_hook() {
+        use crate::store::{ModifyPrincipal, kadm5_mask};
+        let (mut store, _) = crate::testrealm::bootstrap_documented().expect("realm");
+        let module = Rec::new("yes", false, false);
+        let _guard = install(&module);
+        let out = store.modify_principal_in(
+            &user(),
+            crate::testrealm::TEST_REALM,
+            ModifyPrincipal {
+                mask: kadm5_mask::KVNO,
+                kvno: Some(70_000),
+                ..ModifyPrincipal::default()
+            },
+            "admin/admin",
+        );
+        assert!(out.is_err());
+        assert_eq!(module.named(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_precommit_veto_leaves_the_row_as_it_was() {
+        use crate::store::{AdminFields, ModifyPrincipal, kadm5_mask};
+        let (mut store, _) = crate::testrealm::bootstrap_documented().expect("realm");
+        let realm = crate::testrealm::TEST_REALM;
+        let id = format!("{TEST_USER}@{realm}");
+        let was = store.get(&id).cloned().expect("user");
+        let module = Rec::new("no", true, false);
+        let _guard = install(&module);
+        let vetoed = store.modify_principal_in(
+            &user(),
+            realm,
+            ModifyPrincipal {
+                mask: kadm5_mask::MAX_LIFE | kadm5_mask::KVNO,
+                fields: AdminFields {
+                    max_life: Some(60),
+                    ..AdminFields::default()
+                },
+                kvno: Some(9),
+                ..ModifyPrincipal::default()
+            },
+            "admin/admin",
+        );
+        assert!(vetoed.is_err());
+        assert!(
+            store
+                .chrand_etypes_keepold_in(&user(), realm, &[], 0, "admin/admin")
+                .is_err()
+        );
+        let now = store.get(&id).expect("user");
+        assert_eq!(
+            (now.max_life, now.top_kvno(), &now.tl_data),
+            (was.max_life, was.top_kvno(), &was.tl_data)
+        );
+    }
+
+    struct Ordered(Arc<Mutex<Vec<String>>>, crate::host::MemoryRealm);
+
+    impl Ordered {
+        fn push(&self, what: String) {
+            self.0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(what);
+        }
+    }
+
+    impl crate::host::KerberosStore for Ordered {
+        fn load(&self) -> Result<crate::host::LoadedRealm, crate::host::KerberosStoreError> {
+            self.1.load()
+        }
+        fn commit(
+            &self,
+            batch: crate::host::RealmBatch,
+        ) -> Result<(), crate::host::KerberosStoreError> {
+            self.push("host:commit".to_owned());
+            self.1.commit(batch)
+        }
+    }
+
+    impl Kadm5Hook for Ordered {
+        fn name(&self) -> &'static str {
+            "ordered"
+        }
+        fn create(
+            &self,
+            stage: HookStage,
+            princ: &PrincipalName,
+            realm: &str,
+            _mask: u32,
+            _password: Option<&[u8]>,
+            _etypes: &[EncryptionType],
+        ) -> Result<(), Error> {
+            if stage == HookStage::Postcommit {
+                self.push(format!("post:{}", princ.unparse_with_realm_lossy(realm)));
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn host_bootstrap_runs_create_postcommit_after_the_host_commit() {
+        let realm = "M4.TEST";
+        let dir = krb5_testkit::scratch_dir("kadm5-hook-m4");
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let host = Arc::new(Ordered(
+            Arc::clone(&log),
+            crate::host::MemoryRealm::default(),
+        ));
+        set_thread_kadm5_hook(vec![Arc::clone(&host) as Arc<dyn Kadm5Hook>]);
+        let _clear = ClearThread;
+        let paths = krb5_config::KdcPaths {
+            profile: dir.join("kdc.conf"),
+            conf: None,
+            realm: Some(realm.to_owned()),
+            database_name: dir.join("principal"),
+            key_stash_file: dir.join("stash"),
+            acl_file: None,
+            master_key_type: None,
+        };
+        let profile =
+            krb5_config::ProfileSet::from_structs(realm, krb5_config::Krb5Conf::new(), None);
+        let host_paths = crate::host::HostPaths {
+            stash: dir.join("host.stash"),
+            lockout: dir.join("host.lockout"),
+        };
+        crate::open_or_create_host(&paths, &profile, None, host, &host_paths).expect("realm");
+        let seen = log
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        assert_eq!(
+            seen,
+            [
+                "host:commit".to_owned(),
+                format!("post:kadmin/admin@{realm}"),
+                format!("post:kadmin/changepw@{realm}"),
             ]
         );
     }

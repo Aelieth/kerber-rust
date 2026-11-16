@@ -57,7 +57,9 @@ pub mod kadm5_mask {
     pub const POLICY: u32 = 0x0000_0800;
     pub const POLICY_CLR: u32 = 0x0000_1000;
     pub const MAX_RLIFE: u32 = 0x0000_2000;
+    pub const FAIL_AUTH_COUNT: u32 = 0x0001_0000;
     pub const KEY_DATA: u32 = 0x0002_0000;
+    pub const TL_DATA: u32 = 0x0004_0000;
 }
 
 #[derive(Clone, Debug)]
@@ -573,13 +575,29 @@ impl PrincipalStore {
         &mut self,
         inner: impl FnOnce(&mut Self) -> Result<Result<T, E>, Error>,
     ) -> Result<Result<T, E>, Error> {
+        match self.defer_postcommit(|s| match inner(s) {
+            Ok(Ok(v)) => Ok(v),
+            failed => Err(failed),
+        }) {
+            Ok(v) => Ok(Ok(v)),
+            Err(failed) => failed,
+        }
+    }
+
+    /// Kadm5 postcommit calls made inside `f` run once it returns `Ok`.
+    pub fn defer_postcommit<T, E>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> Result<T, E>,
+    ) -> Result<T, E> {
+        if self.post.is_some() {
+            return f(self);
+        }
         let queue = PostQueue::new(self);
-        let out = inner(&mut *queue.0);
+        let out = f(&mut *queue.0);
         let calls = queue.0.post.take().unwrap_or_default();
         drop(queue);
-        let committed = matches!(out, Ok(Ok(_)));
         for call in calls {
-            if committed || call.always() {
+            if out.is_ok() || call.always() {
                 call.run(self);
             }
         }
@@ -904,8 +922,8 @@ pub use password::{
 pub use policy::{NamedPolicy, Policy, SpakeKdc};
 pub(crate) use principal::PrincipalFields;
 pub use principal::{
-    AdminEnt, AdminFields, CreateKeys, CreatePlan, KDB_INUSE, KadmData, PreparedCreate, Principal,
-    PrincipalBuilder, TlData, XDR_FAILURE, create_password_shared,
+    AdminEnt, AdminFields, CreateKeys, CreatePlan, KDB_INUSE, KadmData, ModifyPrincipal,
+    PreparedCreate, Principal, PrincipalBuilder, TlData, XDR_FAILURE, create_password_shared,
     create_password_shared_committing, strip_db_args,
 };
 pub(crate) use principal::{LoadedCt, db_args_put_error, refresh_kadm_tl};
