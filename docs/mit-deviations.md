@@ -163,7 +163,7 @@ to restate.
 | `kadmin.local` request line that is not UTF-8 | stricter-documented | `util/ss/parse.c:60-150` ([A4](parity/a4-kadmin.md)) |
 | `kadmin.local` dates in summer time | deviation | `kadmin.c:155-197`; `getdate.y:1-900` ([A4](parity/a4-kadmin.md)) |
 | kadm5 `ks_tuple` salt types | exact | `svr_principal.c:444-447` `apply_keysalt_policy` ([A4](parity/a4-kadmin.md)) |
-| kadmind reserved TL types | exact; deviation (multi-put) | `svr_principal.c:310-333,565-588,650-682` ([A4](parity/a4-kadmin.md)) |
+| kadmind reserved TL types | exact; deviation (multi-put); stricter (own types) | `svr_principal.c:310-333,565-588,650-682` ([A4](parity/a4-kadmin.md)) |
 | TGS cross-TGS header PAC (`check_normal_tgs_pac`) | exact | `tgs_policy.c:622` ([A1](parity/a1-tgs.md)) |
 | Acceptor transited re-check (`rd_req_dec.c:590-610`) | exact | `rd_req_dec.c:590-610` ([B1](parity/b1-client.md)) |
 | Acceptor `sname_match` (`sname_match.c:30-57`) | exact | `sname_match.c:30-57` ([B1](parity/b1-client.md)) |

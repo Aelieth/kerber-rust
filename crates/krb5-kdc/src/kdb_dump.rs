@@ -63,6 +63,12 @@ pub(crate) const TL_KERBER_POLICY: i32 = 0x4B02;
 pub const TL_KERBER_SERIAL: i32 = 0x4B03;
 pub const TL_KERBER_HIST: i32 = 0x4B04;
 pub const TL_KERBER_RID_HWM: i32 = 0x4B05;
+
+/// kerber-rust's own record types, 0x4B01-0x4B05: no kadm5 client sets or reads them.
+#[must_use]
+pub fn tl_kerber_private(ty: i32) -> bool {
+    (TL_KERBER_SID..=TL_KERBER_RID_HWM).contains(&ty)
+}
 // MIT: `KRB5_TL_CONSTRAINED_DELEGATION_ACL` (include/kdb.h:271)
 pub const TL_CONSTRAINED_DELEGATION: i32 = 0x0400;
 pub const TL_KERBER_S4U_FROM: i32 = 0x4B06;

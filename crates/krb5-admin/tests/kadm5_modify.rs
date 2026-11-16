@@ -32,6 +32,8 @@ const KADM5_KEY_DATA: u32 = 0x0002_0000;
 
 const EINVAL: u32 = 22;
 
+const KADM5_BAD_TL_TYPE: u32 = 43_787_567;
+
 fn modify_args_r12_kadm5_order(
     princ: &str,
     max_life: u32,
@@ -161,4 +163,41 @@ fn create_key_data_mask_with_one_key_is_bad_mask() {
         g.get_name(&PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["r12key"]))
             .is_none()
     );
+}
+
+#[test]
+fn kerber_rusts_own_tl_types_are_refused_and_s4u_from_is_not() {
+    let (store, _) = bootstrap_documented().unwrap();
+    let acl = Acl::parse("admin@KERBER.TEST *\n").unwrap();
+    let store = shared_dump(store);
+    let mut c = admin_client(&store, &acl);
+    let user = format!("{TEST_USER}@{TEST_REALM}");
+    for ty in 0x4B01..=0x4B06u32 {
+        let want = if ty == 0x4B06 { 0 } else { KADM5_BAD_TL_TYPE };
+        let modify = modify_args_r12_kadm5_order(&user, 60, &[(ty, b"f1")], KADM5_TL_DATA);
+        let (stat, body) = data_call(&mut c, &store, &acl, MODIFY_PRINCIPAL, &modify);
+        assert_eq!((stat, ret_code(&body)), (SUCCESS, want), "modify {ty:#x}");
+        let name = format!("f1/{ty:x}@{TEST_REALM}");
+        let mut create = modify_args_r12_kadm5_order(
+            &name,
+            3600,
+            &[(ty, b"f1")],
+            KADM5_PRINCIPAL | KADM5_TL_DATA,
+        );
+        push_nullstring(&mut create, "f1-password");
+        let (stat, body) = data_call(&mut c, &store, &acl, CREATE_PRINCIPAL, &create);
+        assert_eq!((stat, ret_code(&body)), (SUCCESS, want), "create {ty:#x}");
+        let g = store
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(g.get(&name).is_some(), ty == 0x4B06, "{name}");
+        let written = |id: &str| {
+            g.get(id).is_some_and(|p| {
+                p.tl_data
+                    .iter()
+                    .any(|t| t.ty == i32::try_from(ty).unwrap() && t.contents == b"f1")
+            })
+        };
+        assert!(ty == 0x4B06 || !written(&user), "{ty:#x} written");
+    }
 }

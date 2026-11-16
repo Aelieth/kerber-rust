@@ -155,6 +155,11 @@ impl Who<'_> {
     }
 }
 
+/// MIT's types below 256, and kerber-rust's own (stricter: MIT has none).
+fn reserved_tl(ty: i32) -> bool {
+    ty < 256 || krb5_kdc::tl_kerber_private(ty)
+}
+
 fn named(name: &PrincipalName, realm: &str) -> String {
     name.unparse_with_realm_lossy(realm)
 }
@@ -442,7 +447,7 @@ pub(super) fn dispatch_kadm5_ticket(
                 if let Some(code) = modify_princ_mask_err(mask, fields.policy.as_deref()) {
                     return Err(generic_ret(API_V2, code));
                 }
-                if mask & KADM5_TL_DATA != 0 && fields.tl_data.iter().any(|t| t.ty < 256) {
+                if mask & KADM5_TL_DATA != 0 && fields.tl_data.iter().any(|t| reserved_tl(t.ty)) {
                     return Err(generic_ret(API_V2, KADM5_BAD_TL_TYPE));
                 }
                 if mask & KADM5_FAIL_AUTH_COUNT != 0 && fields.fail_auth_count != 0 {
@@ -538,7 +543,7 @@ pub(super) fn dispatch_kadm5_ticket(
             {
                 return Ok(generic_ret(API_V2, code));
             }
-            if c.ent.mask & KADM5_TL_DATA != 0 && c.tl_data.iter().any(|t| t.ty < 256) {
+            if c.ent.mask & KADM5_TL_DATA != 0 && c.tl_data.iter().any(|t| reserved_tl(t.ty)) {
                 return Ok(generic_ret(API_V2, KADM5_BAD_TL_TYPE));
             }
             if c.ent.mask & KADM5_TL_DATA != 0 && db_args_code(&c.tl_data).is_some() {

@@ -38,6 +38,7 @@ any other `###` heading.
 - **kdc.** A reply padata step's failure carries `KDC_RETURN_PADATA` as its e-text, as MIT's.
 - **kadm5.** Hooks fire as MIT: history create and chpass, modify's mask once, canonical names.
 - **kadm5.** Precommit runs just before the put, a veto restores the row; bootstrap postcommit follows save.
+- **kadm5.** kadmind refuses tl-data 0x4B01-0x4B05 (kerber-rust's own) on create and modify; GET hides them.
 
 ## [1.2.2] - 2026-11-14
 
