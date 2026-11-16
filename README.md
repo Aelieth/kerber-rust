@@ -34,10 +34,13 @@ Two things shaped it:
 - **It has to be a real replacement.** A new KDC is no use if every client and script has to change,
   so MIT 1.22.2 is the bar: the same commands, files and network behaviour, down to the log lines and
   error texts wherever they have been compared.
-- **It has to fit inside other software.** The goal is to become the KDC inside
-  [KLLDAP](https://github.com/Aelieth/klldap), replacing a wrapper around system MIT Kerberos. So the
-  KDC and `kadmind` also run as Rust libraries ([docs/embed](docs/embed/README.md)). That embedding
-  is the next step: today KLLDAP runs with `krb5-server` swapped for these programs.
+- **It has to fit inside other software.** kerber-rust is the KDC inside
+  [KLLDAP](https://github.com/Aelieth/klldap). Since KLLDAP 0.8.0 its KDC and `kadmind` run in
+  KLLDAP's process as Rust libraries ([docs/embed](docs/embed/README.md)), and the realm lives in
+  KLLDAP's own database. From 1.2.3 the host can own a directory user's principal: through the
+  [host contract](docs/embed/host-contract.md) it sees every write to that principal before it
+  commits, can change the password and the keys in one database transaction, and decides lockout
+  and admission at kinit.
 
 ## What it can do
 
@@ -137,7 +140,8 @@ Real software that ran against both MIT and kerber-rust, in those scenarios:
 - **NFS 4.2** to NFS-Ganesha with `sec=krb5i` and `krb5p`, through `rpc.gssd`.
 - **Keycloak** SPNEGO, from Java and from Windows.
 - **Windows 11**'s own Kerberos and SSPI.
-- **KLLDAP** with `krb5-server` swapped for kerber-rust.
+- **KLLDAP 0.8.0**, embedding kerber-rust 1.2.2: its acceptance record (gates on SQLite and
+  PostgreSQL, the MySQL and MariaDB lanes, power cuts).
 - **MIT's own** `kinit`, `klist`, `kvno`, `kadmin`, `kpasswd` and `kprop`, and Heimdal's client tools.
 
 Things to know when you read those numbers:
