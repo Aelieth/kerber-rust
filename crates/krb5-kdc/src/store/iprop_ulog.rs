@@ -259,12 +259,24 @@ impl PrincipalMap {
     }
 
     pub(crate) fn touched(&self) -> Option<Vec<String>> {
+        Some(
+            self.touched_before()?
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect(),
+        )
+    }
+
+    pub(crate) fn touched_before(&self) -> Option<Vec<(String, Option<Principal>)>> {
         let Undo::On(before) = &self.undo else {
             return None;
         };
-        let mut ids: Vec<String> = before.keys().cloned().collect();
-        ids.sort();
-        Some(ids)
+        let mut rows: Vec<(String, Option<Principal>)> = before
+            .iter()
+            .map(|(id, p)| (id.clone(), p.clone()))
+            .collect();
+        rows.sort_by(|a, b| a.0.cmp(&b.0));
+        Some(rows)
     }
 
     pub(crate) fn end_change(&mut self) {

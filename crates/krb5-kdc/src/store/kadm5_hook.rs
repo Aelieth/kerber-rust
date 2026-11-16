@@ -818,12 +818,12 @@ mod tests {
         fn load(&self) -> Result<crate::host::LoadedRealm, crate::host::KerberosStoreError> {
             self.1.load()
         }
-        fn commit(
+        fn commit_change(
             &self,
-            batch: crate::host::RealmBatch,
+            change: crate::host::HostChange,
         ) -> Result<(), crate::host::KerberosStoreError> {
             self.push("host:commit".to_owned());
-            self.1.commit(batch)
+            self.1.commit(change.batch)
         }
     }
 

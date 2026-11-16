@@ -7,7 +7,8 @@ use krb5_config::{Krb5Conf, ProfileSet};
 use krb5_types::PrincipalName;
 
 use super::{
-    KerberosStore, KerberosStoreError, LoadedRealm, PrincipalRow, RealmBatch, SealKey, open_policy,
+    Caller, HostChange, KerberosStore, KerberosStoreError, LoadedRealm, Operation, PrincipalRow,
+    RealmBatch, SealKey, WriteIntent, open_policy,
 };
 use crate::create::{MasterKey, RealmSpec, bootstrap_realm_into};
 use crate::error::Error;
@@ -26,7 +27,7 @@ type NewStore<'a> = &'a dyn Fn() -> Arc<dyn KerberosStore>;
 type Check = fn(NewStore<'_>) -> Result<(), String>;
 
 pub fn run(new_store: NewStore<'_>) -> Vec<Row> {
-    let rows: [(&'static str, Check); 11] = [
+    let rows: [(&'static str, Check); 16] = [
         ("a realm round-trips", round_trip),
         (
             "a refused, failed or not-ready commit restores memory",
@@ -53,6 +54,23 @@ pub fn run(new_store: NewStore<'_>) -> Vec<Row> {
             "a refused change leaves no kadmin/history",
             history_rolls_back,
         ),
+        (
+            "a commit carries each touched row with its mask",
+            rows_and_masks,
+        ),
+        (
+            "a declared intent reaches the host; a change of nothing does not",
+            declared_intent,
+        ),
+        (
+            "a denied commit restores memory without a reload",
+            denied_restores,
+        ),
+        (
+            "the host mark is set only in a change and survives a reload",
+            host_mark,
+        ),
+        ("no lockout field is in a row's mask", no_lockout_bits),
     ];
     rows.into_iter()
         .map(|(name, row)| Row {
@@ -85,7 +103,7 @@ fn fresh(host: Arc<dyn KerberosStore>) -> Result<(PrincipalStore, SealKey), Stri
     };
     bootstrap_realm_into(&mut built, MasterKey::Random { etype: None }, &spec).map_err(fail)?;
     let seal = built.host_seal_key().ok_or("no master key")?;
-    host.commit(built.host_full_batch().map_err(fail)?)
+    host.commit_change(built.host_full_change().map_err(fail)?)
         .map_err(fail)?;
     let store = PrincipalStore::open_host(host, REALM, seal.clone()).map_err(fail)?;
     Ok((store, seal))
@@ -111,12 +129,17 @@ enum Fault {
     NotReady,
     CommitThenFail,
     Panic,
+    Deny,
 }
+
+/// What a commit said: the operation, then each row's id, mask and mark.
+type Seen = (Operation, Caller, Vec<(String, u32, bool)>);
 
 struct Faulty {
     inner: Arc<dyn KerberosStore>,
     next: Mutex<Option<Fault>>,
     commits: Mutex<Vec<Vec<String>>>,
+    seen: Mutex<Vec<Seen>>,
 }
 
 impl Faulty {
@@ -130,7 +153,7 @@ impl KerberosStore for Faulty {
         self.inner.load()
     }
 
-    fn commit(&self, batch: RealmBatch) -> Result<(), KerberosStoreError> {
+    fn commit_change(&self, change: HostChange) -> Result<(), KerberosStoreError> {
         let fault = self
             .next
             .lock()
@@ -140,19 +163,36 @@ impl KerberosStore for Faulty {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(
-                batch
+                change
+                    .batch
                     .upsert_principals
                     .iter()
                     .map(|p| p.name.clone())
                     .collect(),
             );
+        self.seen
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((
+                change.intent.operation,
+                change.intent.caller.clone(),
+                change
+                    .rows
+                    .iter()
+                    .map(|r| (r.id.clone(), r.mask, r.host_owned))
+                    .collect(),
+            ));
         match fault {
-            None => self.inner.commit(batch),
+            None => self.inner.commit_change(change),
+            Some(Fault::Deny) => Err(KerberosStoreError::Denied(super::Denial {
+                kadm5_code: DENIED_CODE,
+                text: "conformance".to_owned(),
+            })),
             Some(Fault::Refuse) => Err(KerberosStoreError::Refused("conformance".to_owned())),
             Some(Fault::Fail) => Err(KerberosStoreError::Failed("conformance".to_owned())),
             Some(Fault::NotReady) => Err(KerberosStoreError::NotReady("conformance".to_owned())),
             Some(Fault::CommitThenFail) => {
-                self.inner.commit(batch)?;
+                self.inner.commit_change(change)?;
                 Err(KerberosStoreError::Failed("conformance".to_owned()))
             }
             #[expect(clippy::panic, reason = "the row arms the store's panic guard")]
@@ -161,7 +201,13 @@ impl KerberosStore for Faulty {
     }
 }
 
+const DENIED_CODE: u32 = 43_787_522;
+
 impl Faulty {
+    fn seen(&self) -> Vec<Seen> {
+        std::mem::take(&mut *self.seen.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+
     fn commits(&self) -> Vec<Vec<String>> {
         std::mem::take(&mut *self.commits.lock().unwrap_or_else(PoisonError::into_inner))
     }
@@ -172,6 +218,7 @@ fn faulty(new_store: NewStore<'_>) -> Arc<Faulty> {
         inner: new_store(),
         next: Mutex::new(None),
         commits: Mutex::new(Vec::new()),
+        seen: Mutex::new(Vec::new()),
     })
 }
 
@@ -333,7 +380,13 @@ fn broken_seals(new_store: NewStore<'_>) -> Result<(), String> {
             };
             batch.upsert_principals.push(plain_row(&p.name, record));
         }
-        host.commit(batch).map_err(fail)?;
+        host.commit_change(HostChange {
+            intent: WriteIntent::new(Operation::Bootstrap, Caller::Embedder),
+            rows: Vec::new(),
+            prepared: None,
+            batch,
+        })
+        .map_err(fail)?;
         let opened = PrincipalStore::open_host(host, REALM, seal.clone());
         ensure(
             matches!(opened, Err(Error::Record(_))),
@@ -363,9 +416,13 @@ fn commits_once(new_store: NewStore<'_>) -> Result<(), String> {
     let host = new_store();
     let (mut store, _) = fresh(host)?;
     let calls = AtomicUsize::new(0);
-    let count = |b: RealmBatch| {
+    let count = |c: HostChange| {
         calls.fetch_add(1, Ordering::SeqCst);
-        ensure(b.is_empty(), "a change of nothing sent rows").map_err(KerberosStoreError::Failed)
+        ensure(
+            c.batch.is_empty() && c.rows.is_empty() && c.intent.operation == Operation::Embedded,
+            "a change of nothing sent rows",
+        )
+        .map_err(KerberosStoreError::Failed)
     };
     store
         .change_committing(count, |_| Ok::<(), Error>(()))
@@ -375,7 +432,7 @@ fn commits_once(new_store: NewStore<'_>) -> Result<(), String> {
         calls.load(Ordering::SeqCst) == 1,
         "commit was not called once",
     )?;
-    let never = |_: RealmBatch| -> Result<(), KerberosStoreError> {
+    let never = |_: HostChange| -> Result<(), KerberosStoreError> {
         Err(KerberosStoreError::Failed(
             "called after a failed change".to_owned(),
         ))
@@ -480,5 +537,167 @@ fn history_rolls_back(new_store: NewStore<'_>) -> Result<(), String> {
         store.get("kadmin/history@CONFORMANCE.TEST").is_none()
             && !host_has(host.as_ref(), "kadmin/history")?,
         "a refused change left kadmin/history",
+    )
+}
+
+fn the_row(seen: &[Seen], id: &str) -> Option<(u32, bool)> {
+    let (_, _, rows) = seen.last()?;
+    rows.iter()
+        .find(|(rid, _, _)| rid == id)
+        .map(|(_, mask, owned)| (*mask, *owned))
+}
+
+fn rows_and_masks(new_store: NewStore<'_>) -> Result<(), String> {
+    use crate::store::kadm5_mask as m;
+    let host = faulty(new_store);
+    let (mut store, _) = fresh(host.clone())?;
+    host.seen();
+    add(&mut store, "conformance/one").map_err(fail)?;
+    let one = "conformance/one@CONFORMANCE.TEST";
+    let seen = host.seen();
+    ensure(
+        seen.last().is_some_and(|s| s.0 == Operation::Unspecified),
+        "an undeclared change did not say Unspecified",
+    )?;
+    ensure(
+        the_row(&seen, one).is_some_and(|(mask, _)| mask == m::PRINCIPAL),
+        "a create's row is not PRINCIPAL",
+    )?;
+    store
+        .change(|s| {
+            s.apply_admin_fields_in(
+                &name("conformance/one"),
+                REALM,
+                crate::store::AdminFields {
+                    max_life: Some(4321),
+                    ..crate::store::AdminFields::default()
+                },
+                ACTOR,
+            )
+        })
+        .map_err(fail)?
+        .map_err(fail)?;
+    let mask = the_row(&host.seen(), one).ok_or("no row for a modify")?.0;
+    ensure(
+        mask & m::MAX_LIFE != 0 && mask & !(m::MAX_LIFE | m::MOD_TIME | m::MOD_NAME) == 0,
+        &format!("a max-life modify showed mask {mask:#x}"),
+    )?;
+    store
+        .change(|s| s.remove_in(&name("conformance/one"), REALM))
+        .map_err(fail)?
+        .map_err(fail)?;
+    ensure(
+        the_row(&host.seen(), one).is_some_and(|(mask, _)| mask == m::PRINCIPAL),
+        "a delete's row is not PRINCIPAL",
+    )
+}
+
+fn declared_intent(new_store: NewStore<'_>) -> Result<(), String> {
+    let host = faulty(new_store);
+    let (mut store, _) = fresh(host.clone())?;
+    host.seen();
+    let caller = Caller::Local {
+        principal: ACTOR.to_owned(),
+    };
+    store
+        .change_as(
+            WriteIntent::new(Operation::Create, caller.clone()),
+            None,
+            |s| s.insert_new_randkey(&name("conformance/one"), REALM, &[], ACTOR),
+        )
+        .map_err(fail)?
+        .map_err(fail)?;
+    ensure(
+        host.seen()
+            .last()
+            .is_some_and(|s| s.0 == Operation::Create && s.1 == caller),
+        "the declared operation and caller did not reach the host",
+    )?;
+    store
+        .change_as(WriteIntent::new(Operation::Modify, caller), None, |_| {
+            Ok::<(), Error>(())
+        })
+        .map_err(fail)?
+        .map_err(fail)?;
+    ensure(
+        host.seen().is_empty(),
+        "a change that touched nothing reached the host",
+    )
+}
+
+fn denied_restores(new_store: NewStore<'_>) -> Result<(), String> {
+    let host = faulty(new_store);
+    let (mut store, _) = fresh(host.clone())?;
+    host.arm(Fault::Deny);
+    let out = add(&mut store, "conformance/one");
+    ensure(
+        matches!(
+            out,
+            Err(Error::Host(KerberosStoreError::Denied(super::Denial { kadm5_code, .. })))
+                if kadm5_code == DENIED_CODE
+        ),
+        "a denial did not come back with its code",
+    )?;
+    ensure(
+        store.get("conformance/one@CONFORMANCE.TEST").is_none(),
+        "memory kept a denied change",
+    )?;
+    add(&mut store, "conformance/two").map_err(fail)?;
+    ensure(
+        host_has(host.as_ref(), "conformance/two")?,
+        "the next commit was lost",
+    )
+}
+
+fn host_mark(new_store: NewStore<'_>) -> Result<(), String> {
+    let host = faulty(new_store);
+    let (mut store, seal) = fresh(host.clone())?;
+    let who = name("conformance/one");
+    ensure(
+        store.set_host_owned_in(&who, REALM, true).is_err(),
+        "the mark was set outside a change",
+    )?;
+    let committer = Arc::clone(&host);
+    store
+        .change_committing(
+            |c| committer.commit_change(c),
+            |s| {
+                s.insert_new_randkey(&who, REALM, &[], ACTOR)?;
+                s.set_host_owned_in(&who, REALM, true)
+            },
+        )
+        .map_err(fail)?
+        .map_err(fail)?;
+    let seen = host.seen();
+    ensure(
+        seen.last().is_some_and(|s| s.0 == Operation::Embedded)
+            && the_row(&seen, "conformance/one@CONFORMANCE.TEST").is_some_and(|(_, o)| o),
+        "the host's change did not show the mark",
+    )?;
+    let again = PrincipalStore::open_host(host, REALM, seal).map_err(fail)?;
+    ensure(
+        again
+            .get("conformance/one@CONFORMANCE.TEST")
+            .is_some_and(crate::store::Principal::host_owned),
+        "the mark did not survive a reload",
+    )
+}
+
+fn no_lockout_bits(new_store: NewStore<'_>) -> Result<(), String> {
+    use crate::store::kadm5_mask as m;
+    let host = faulty(new_store);
+    let (mut store, _) = fresh(host.clone())?;
+    add(&mut store, "conformance/one").map_err(fail)?;
+    host.seen();
+    store
+        .change(|s| s.clear_fail_auth_count_in(&name("conformance/one"), REALM, ACTOR))
+        .map_err(fail)?
+        .map_err(fail)?;
+    let mask = the_row(&host.seen(), "conformance/one@CONFORMANCE.TEST")
+        .ok_or("an unlock sent no row")?
+        .0;
+    ensure(
+        mask & (m::FAIL_AUTH_COUNT | m::LAST_SUCCESS | m::LAST_FAILED) == 0,
+        &format!("an unlock's row mask {mask:#x} has a lockout bit"),
     )
 }

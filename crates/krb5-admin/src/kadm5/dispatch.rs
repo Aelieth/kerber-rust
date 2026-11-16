@@ -177,6 +177,7 @@ pub(super) fn store_code(proc: u32, e: &krb5_kdc::Error) -> u32 {
         krb5_kdc::Error::Host(krb5_kdc::host::KerberosStoreError::Refused(_)) => {
             KRB5_KDB_CONSTRAINT_VIOLATION
         }
+        krb5_kdc::Error::Host(krb5_kdc::host::KerberosStoreError::Denied(d)) => d.kadm5_code,
         krb5_kdc::Error::Host(krb5_kdc::host::KerberosStoreError::Failed(_))
         | krb5_kdc::Error::Record(_) => KRB5_KDB_ACCESS_ERROR,
         krb5_kdc::Error::Host(krb5_kdc::host::KerberosStoreError::NotReady(_)) => {

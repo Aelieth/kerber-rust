@@ -51,12 +51,19 @@ pub mod kadm5_mask {
     pub const PRINCIPAL: u32 = 0x0000_0001;
     pub const PRINC_EXPIRE_TIME: u32 = 0x0000_0002;
     pub const PW_EXPIRATION: u32 = 0x0000_0004;
+    pub const LAST_PWD_CHANGE: u32 = 0x0000_0008;
     pub const ATTRIBUTES: u32 = 0x0000_0010;
     pub const MAX_LIFE: u32 = 0x0000_0020;
+    pub const MOD_TIME: u32 = 0x0000_0040;
+    pub const MOD_NAME: u32 = 0x0000_0080;
     pub const KVNO: u32 = 0x0000_0100;
+    pub const MKVNO: u32 = 0x0000_0200;
+    pub const AUX_ATTRIBUTES: u32 = 0x0000_0400;
     pub const POLICY: u32 = 0x0000_0800;
     pub const POLICY_CLR: u32 = 0x0000_1000;
     pub const MAX_RLIFE: u32 = 0x0000_2000;
+    pub const LAST_SUCCESS: u32 = 0x0000_4000;
+    pub const LAST_FAILED: u32 = 0x0000_8000;
     pub const FAIL_AUTH_COUNT: u32 = 0x0001_0000;
     pub const KEY_DATA: u32 = 0x0002_0000;
     pub const TL_DATA: u32 = 0x0004_0000;
@@ -569,7 +576,20 @@ impl PrincipalStore {
         if self.post.is_some() {
             return Ok(f(self));
         }
-        self.posted(|s| s.change_locked(f))
+        self.posted(|s| s.change_locked(None, f))
+    }
+
+    /// `change` that tells a host store what the write is and who asked for it.
+    pub fn change_as<T, E>(
+        &mut self,
+        intent: crate::host::WriteIntent,
+        prepared: Option<crate::host::HostPrepared>,
+        f: impl FnOnce(&mut Self) -> Result<T, E>,
+    ) -> Result<Result<T, E>, Error> {
+        if self.post.is_some() {
+            return Ok(f(self));
+        }
+        self.posted(|s| s.change_locked(Some((intent, prepared)), f))
     }
 
     fn posted<T, E>(
@@ -615,13 +635,14 @@ impl PrincipalStore {
 
     fn change_locked<T, E>(
         &mut self,
+        declared: host_seam::Declared,
         f: impl FnOnce(&mut Self) -> Result<T, E>,
     ) -> Result<Result<T, E>, Error> {
         if self.saves_held {
             return Ok(f(self));
         }
         if self.host.is_some() {
-            return self.change_host(None::<host_seam::NoCommit>, f);
+            return self.change_host(None::<host_seam::NoCommit>, declared, f);
         }
         let Some(db) = self.db_path().map(std::path::Path::to_path_buf) else {
             return Ok(f(self));

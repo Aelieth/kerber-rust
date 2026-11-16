@@ -265,7 +265,7 @@ pub fn change_password_shared_committing(
     actor: &str,
     etypes: &[KeySalt],
     checks: impl Fn(&PrincipalStore) -> Result<(), Error>,
-    commit: impl FnOnce(crate::host::RealmBatch) -> Result<(), crate::host::KerberosStoreError>,
+    commit: impl FnOnce(crate::host::HostChange) -> Result<(), crate::host::KerberosStoreError>,
 ) -> Result<(), Error> {
     let planned = {
         let (g, read) = read_fresh(store);
@@ -345,7 +345,7 @@ fn same_record(a: &Principal, b: &Principal) -> bool {
         && *string_attrs == b.string_attrs
 }
 
-fn same_keys(a: &[KeyEntry], b: &[KeyEntry]) -> bool {
+pub(super) fn same_keys(a: &[KeyEntry], b: &[KeyEntry]) -> bool {
     a.len() == b.len()
         && a.iter().zip(b).all(|(x, y)| {
             let KeyEntry {

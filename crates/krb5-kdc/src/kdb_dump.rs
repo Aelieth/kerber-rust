@@ -66,6 +66,8 @@ pub const TL_KERBER_RID_HWM: i32 = 0x4B05;
 // MIT: `KRB5_TL_CONSTRAINED_DELEGATION_ACL` (include/kdb.h:271)
 pub const TL_CONSTRAINED_DELEGATION: i32 = 0x0400;
 pub const TL_KERBER_S4U_FROM: i32 = 0x4B06;
+/// Below 256, so kadmin can neither set nor read it.
+pub const TL_KERBER_HOST_OWNED: i32 = 0x004B;
 pub const SALTTYPE_NORMAL: i32 = 0;
 pub(crate) const SALTTYPE_NOREALM: i32 = 2;
 pub(crate) const SALTTYPE_ONLYREALM: i32 = 3;

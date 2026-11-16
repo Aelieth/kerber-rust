@@ -618,8 +618,8 @@ pub fn open_or_create_host(
                 boot.created.clone()
             };
             let committed = store
-                .host_rows(&ids, fresh, &seal)
-                .and_then(|batch| host.commit(batch).map_err(Error::Host));
+                .host_bootstrap_change(&ids, fresh, &seal)
+                .and_then(|change| host.commit_change(change).map_err(Error::Host));
             if let Err(e) = committed {
                 if fresh {
                     let _ = std::fs::remove_file(stash);

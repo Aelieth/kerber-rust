@@ -183,6 +183,13 @@ pub(crate) struct PrincipalFields {
 
 impl Principal {
     #[must_use]
+    pub fn host_owned(&self) -> bool {
+        self.tl_data
+            .iter()
+            .any(|t| t.ty == crate::kdb_dump::TL_KERBER_HOST_OWNED)
+    }
+
+    #[must_use]
     pub fn tl_with_s4u(&self) -> Vec<TlData> {
         let mut tl = self.tl_data.clone();
         crate::kdb_dump::merge_s4u_tl(&mut tl, self);
@@ -422,7 +429,7 @@ pub fn create_password_shared_committing(
     etypes: &[KeySalt],
     ent: &AdminEnt,
     actor: &str,
-    commit: impl FnOnce(crate::host::RealmBatch) -> Result<(), crate::host::KerberosStoreError>,
+    commit: impl FnOnce(crate::host::HostChange) -> Result<(), crate::host::KerberosStoreError>,
 ) -> Result<(), Error> {
     let planned = {
         let (g, read) = read_fresh(store);

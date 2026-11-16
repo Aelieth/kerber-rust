@@ -5,6 +5,7 @@ use std::sync::{Mutex, PoisonError};
 
 use krb5_crypto::{KeyUsage, ProtocolKey};
 use krb5_types::pac::RpcSid;
+use zeroize::Zeroizing;
 
 use crate::error::Error;
 use crate::kdb_dump::DumpPrincipal;
@@ -70,11 +71,19 @@ impl RealmBatch {
     }
 }
 
+/// A kadmin client is sent only the code; a kpasswd client also gets the text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Denial {
+    pub kadm5_code: u32,
+    pub text: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum KerberosStoreError {
     NotReady(String),
     Failed(String),
     Refused(String),
+    Denied(Denial),
 }
 
 impl std::fmt::Display for KerberosStoreError {
@@ -83,16 +92,141 @@ impl std::fmt::Display for KerberosStoreError {
             Self::NotReady(why) => write!(f, "Kerberos store not ready: {why}"),
             Self::Failed(why) => write!(f, "Kerberos store failed: {why}"),
             Self::Refused(why) => write!(f, "Kerberos store refused the change: {why}"),
+            Self::Denied(d) => write!(f, "Kerberos store denied the change: {}", d.text),
         }
     }
 }
 
 impl std::error::Error for KerberosStoreError {}
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Operation {
+    Create,
+    Delete,
+    Rename,
+    Modify,
+    ChangePassword,
+    Randkey,
+    SetKey,
+    PurgeKeys,
+    SetString,
+    CreateAlias,
+    CreatePolicy,
+    ModifyPolicy,
+    DeletePolicy,
+    Bootstrap,
+    /// The host's own change, through `change_committing`.
+    Embedded,
+    Unspecified,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Caller {
+    Kadmind {
+        client: String,
+        initial: bool,
+        changepw_service: bool,
+        self_service: bool,
+    },
+    Kpasswd {
+        client: String,
+        initial: bool,
+        self_service: bool,
+    },
+    /// kadmin.local's `-p`, or kdb5_util.
+    Local {
+        principal: String,
+    },
+    Embedder,
+}
+
+#[derive(Clone)]
+pub struct WriteIntent {
+    pub operation: Operation,
+    pub caller: Caller,
+    /// As sent, with the realm; a rename or an alias gives two.
+    pub requested: Vec<String>,
+    pub client_mask: Option<u32>,
+    pub keepold: Option<u32>,
+    pub password: Option<Zeroizing<Vec<u8>>>,
+}
+
+impl WriteIntent {
+    #[must_use]
+    pub fn new(operation: Operation, caller: Caller) -> Self {
+        Self {
+            operation,
+            caller,
+            requested: Vec::new(),
+            client_mask: None,
+            keepold: None,
+            password: None,
+        }
+    }
+}
+
+impl std::fmt::Debug for WriteIntent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WriteIntent")
+            .field("operation", &self.operation)
+            .field("caller", &self.caller)
+            .field("requested", &self.requested)
+            .field("client_mask", &self.client_mask)
+            .field("keepold", &self.keepold)
+            .field("password", &self.password.as_ref().map(|_| "<set>"))
+            .finish()
+    }
+}
+
+/// `mask` leaves out the lockout fields: the map's copy can lag the lockout file.
+#[derive(Clone, Debug)]
+pub struct RowChange {
+    pub id: String,
+    pub before: Option<Principal>,
+    pub after: Option<Principal>,
+    pub mask: u32,
+    pub host_owned: bool,
+}
+
+pub type HostPrepared = Box<dyn std::any::Any + Send>;
+
+pub struct HostChange {
+    pub intent: WriteIntent,
+    pub rows: Vec<RowChange>,
+    pub prepared: Option<HostPrepared>,
+    pub batch: RealmBatch,
+}
+
+impl std::fmt::Debug for HostChange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HostChange")
+            .field("intent", &self.intent)
+            .field("rows", &self.rows)
+            .field("prepared", &self.prepared.is_some())
+            .field("batch", &self.batch)
+            .finish()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TargetPeek {
+    pub id: String,
+    pub host_owned: bool,
+}
+
 /// Blocking calls.
 pub trait KerberosStore: Send + Sync {
     fn load(&self) -> Result<LoadedRealm, KerberosStoreError>;
-    fn commit(&self, batch: RealmBatch) -> Result<(), KerberosStoreError>;
+    /// Every change the host did not start itself, and the bootstrap.
+    fn commit_change(&self, change: HostChange) -> Result<(), KerberosStoreError>;
+    /// Outside every lock, before a declared write; may refuse.
+    fn prepare(
+        &self,
+        _intent: &WriteIntent,
+        _target: Option<&TargetPeek>,
+    ) -> Result<Option<HostPrepared>, KerberosStoreError> {
+        Ok(None)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -106,6 +240,10 @@ struct Held {
 }
 
 impl KerberosStore for MemoryRealm {
+    fn commit_change(&self, change: HostChange) -> Result<(), KerberosStoreError> {
+        self.commit(change.batch)
+    }
+
     fn load(&self) -> Result<LoadedRealm, KerberosStoreError> {
         let held = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         let Some(h) = held.as_ref() else {
@@ -131,8 +269,10 @@ impl KerberosStore for MemoryRealm {
             realm: Some(h.realm.clone()),
         })
     }
+}
 
-    fn commit(&self, batch: RealmBatch) -> Result<(), KerberosStoreError> {
+impl MemoryRealm {
+    pub fn commit(&self, batch: RealmBatch) -> Result<(), KerberosStoreError> {
         let mut held = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         let RealmBatch {
             upsert_principals,
