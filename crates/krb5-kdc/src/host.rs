@@ -89,7 +89,7 @@ impl std::fmt::Display for KerberosStoreError {
 
 impl std::error::Error for KerberosStoreError {}
 
-/// Blocking calls; `commit` may also run mid-change, before `change_committing`'s closure.
+/// Blocking calls.
 pub trait KerberosStore: Send + Sync {
     fn load(&self) -> Result<LoadedRealm, KerberosStoreError>;
     fn commit(&self, batch: RealmBatch) -> Result<(), KerberosStoreError>;

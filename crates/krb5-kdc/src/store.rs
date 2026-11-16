@@ -515,10 +515,11 @@ impl PrincipalStore {
     }
 
     /// A put that must stick is written before the change can roll it back.
+    /// A host's rows stay in the change and commit with it.
     fn save_through(&mut self) -> Result<(), Error> {
         self.inside_change()?;
         if self.host.is_some() {
-            return self.host_commit_through();
+            return Ok(());
         }
         self.wrote_through.0.store(true, Ordering::Relaxed);
         self.logged_write(|| self.write_database())

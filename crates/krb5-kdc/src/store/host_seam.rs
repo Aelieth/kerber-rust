@@ -1,3 +1,4 @@
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -204,17 +205,21 @@ impl PrincipalStore {
         self.set_host_before(Some(before));
         let done = {
             let inside = HeldSaves::new(self);
-            f(&mut *inside.0)
+            catch_unwind(AssertUnwindSafe(|| f(&mut *inside.0)))
         };
         let before = self.set_host_before(None).ok_or_else(journal_lost)?;
         let value = match done {
-            Ok(v) => v,
-            Err(e) => {
+            Ok(Ok(v)) => v,
+            Ok(Err(e)) => {
                 self.host_undo(before);
                 if self.host.as_ref().is_some_and(|h| h.reload_due) {
                     self.reload_or_mark();
                 }
                 return Ok(Err(e));
+            }
+            Err(panic) => {
+                self.host_undo(before);
+                resume_unwind(panic);
             }
         };
         let (batch, gone) = match self.host_batch(&before) {
@@ -224,11 +229,17 @@ impl PrincipalStore {
                 return Err(e);
             }
         };
-        let committed = match commit {
+        let host = self.host_store()?;
+        let committed = catch_unwind(AssertUnwindSafe(|| match commit {
             Some(c) => c(batch),
             None if batch.is_empty() => Ok(()),
-            None => self.host_store()?.commit(batch),
-        };
+            None => host.commit(batch),
+        }))
+        .unwrap_or_else(|_| {
+            Err(KerberosStoreError::Failed(
+                "the host's commit panicked".to_owned(),
+            ))
+        });
         match committed {
             Ok(()) => {
                 self.map.end_change();
@@ -247,32 +258,6 @@ impl PrincipalStore {
                 Err(Error::Host(e))
             }
         }
-    }
-
-    // MIT: `create_hist` (lib/kadm5/srv/server_kdb.c:141-164)
-    pub(super) fn host_commit_through(&mut self) -> Result<(), Error> {
-        let before = self.set_host_before(None).ok_or_else(journal_lost)?;
-        let committed = self.host_batch(&before).and_then(|(b, _)| {
-            if b.is_empty() {
-                Ok(())
-            } else {
-                self.host_store()?.commit(b).map_err(Error::Host)
-            }
-        });
-        if let Err(e) = committed {
-            if !matches!(e, Error::Host(KerberosStoreError::Refused(_)))
-                && let Some(h) = self.host.as_mut()
-            {
-                h.reload_due = true;
-            }
-            self.set_host_before(Some(before));
-            return Err(e);
-        }
-        self.map.end_change();
-        self.map.begin_change();
-        let rebased = Before::of(self);
-        self.set_host_before(Some(rebased));
-        Ok(())
     }
 
     fn host_undo(&mut self, before: Before) {

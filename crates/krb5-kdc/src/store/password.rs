@@ -443,7 +443,7 @@ impl PrincipalStore {
     ) -> Result<(), Error> {
         self.inside_change()?;
         let inputs = self.chpass_inputs(name, princ_realm, etypes)?;
-        // A refused password still leaves kadmin/history.
+        // A refused password still leaves a file store's kadmin/history.
         if inputs.policy.is_some() {
             self.ensure_history_principal(actor)?;
         }

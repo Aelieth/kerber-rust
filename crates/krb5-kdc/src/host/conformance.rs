@@ -26,7 +26,7 @@ type NewStore<'a> = &'a dyn Fn() -> Arc<dyn KerberosStore>;
 type Check = fn(NewStore<'_>) -> Result<(), String>;
 
 pub fn run(new_store: NewStore<'_>) -> Vec<Row> {
-    let rows: [(&'static str, Check); 8] = [
+    let rows: [(&'static str, Check); 11] = [
         ("a realm round-trips", round_trip),
         (
             "a refused, failed or not-ready commit restores memory",
@@ -41,6 +41,18 @@ pub fn run(new_store: NewStore<'_>) -> Vec<Row> {
         ("a broken seal is refused", broken_seals),
         ("change_committing commits once", commits_once),
         ("a mutator outside a change is refused", outside_change),
+        (
+            "a panic in the commit or the change restores memory",
+            panics_restore,
+        ),
+        (
+            "kadmin/history commits with the change that made it",
+            history_in_the_change,
+        ),
+        (
+            "a refused change leaves no kadmin/history",
+            history_rolls_back,
+        ),
     ];
     rows.into_iter()
         .map(|(name, row)| Row {
@@ -98,11 +110,13 @@ enum Fault {
     Fail,
     NotReady,
     CommitThenFail,
+    Panic,
 }
 
 struct Faulty {
     inner: Arc<dyn KerberosStore>,
     next: Mutex<Option<Fault>>,
+    commits: Mutex<Vec<Vec<String>>>,
 }
 
 impl Faulty {
@@ -122,6 +136,16 @@ impl KerberosStore for Faulty {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .take();
+        self.commits
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(
+                batch
+                    .upsert_principals
+                    .iter()
+                    .map(|p| p.name.clone())
+                    .collect(),
+            );
         match fault {
             None => self.inner.commit(batch),
             Some(Fault::Refuse) => Err(KerberosStoreError::Refused("conformance".to_owned())),
@@ -131,7 +155,15 @@ impl KerberosStore for Faulty {
                 self.inner.commit(batch)?;
                 Err(KerberosStoreError::Failed("conformance".to_owned()))
             }
+            #[expect(clippy::panic, reason = "the row arms the store's panic guard")]
+            Some(Fault::Panic) => panic!("conformance: the host's commit panics"),
         }
+    }
+}
+
+impl Faulty {
+    fn commits(&self) -> Vec<Vec<String>> {
+        std::mem::take(&mut *self.commits.lock().unwrap_or_else(PoisonError::into_inner))
     }
 }
 
@@ -139,6 +171,7 @@ fn faulty(new_store: NewStore<'_>) -> Arc<Faulty> {
     Arc::new(Faulty {
         inner: new_store(),
         next: Mutex::new(None),
+        commits: Mutex::new(Vec::new()),
     })
 }
 
@@ -361,5 +394,91 @@ fn outside_change(new_store: NewStore<'_>) -> Result<(), String> {
     ensure(
         store.get("conformance/one@CONFORMANCE.TEST").is_none(),
         "memory kept it",
+    )
+}
+
+#[expect(clippy::panic, reason = "the row arms the store's panic guard")]
+fn panics_restore(new_store: NewStore<'_>) -> Result<(), String> {
+    let host = faulty(new_store);
+    let (mut store, _) = fresh(host.clone())?;
+    host.arm(Fault::Panic);
+    ensure(
+        matches!(
+            add(&mut store, "conformance/one"),
+            Err(Error::Host(KerberosStoreError::Failed(_)))
+        ),
+        "a panic in the commit was not a failed commit",
+    )?;
+    ensure(
+        store.get("conformance/one@CONFORMANCE.TEST").is_none(),
+        "memory kept a change whose commit panicked",
+    )?;
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        store.change(|s| -> Result<(), Error> {
+            s.insert_new_randkey(&name("conformance/two"), REALM, &[], ACTOR)?;
+            panic!("conformance: the change panics")
+        })
+    }));
+    ensure(panicked.is_err(), "the change's panic was swallowed")?;
+    ensure(
+        store.get("conformance/two@CONFORMANCE.TEST").is_none(),
+        "memory kept a change that panicked",
+    )?;
+    add(&mut store, "conformance/three").map_err(fail)?;
+    ensure(
+        host_has(host.as_ref(), "conformance/three")?
+            && !host_has(host.as_ref(), "conformance/two")?,
+        "the host is not what memory says",
+    )
+}
+
+fn with_history_policy(store: &mut PrincipalStore, who: &str) -> Result<(), String> {
+    let mut pol = NamedPolicy::new("conformance");
+    pol.history = 2;
+    store.put_policy(pol).map_err(fail)?;
+    add(store, who).map_err(fail)?;
+    store
+        .change(|s| {
+            s.set_principal_policy_in(&name(who), REALM, Some("conformance".to_owned()), ACTOR)
+        })
+        .map_err(fail)?
+        .map_err(fail)
+}
+
+fn set_password(store: &mut PrincipalStore, who: &str) -> Result<(), Error> {
+    store.change(|s| s.set_password_keepold_n_in(&name(who), REALM, b"conformance-pw", 0, ACTOR))?
+}
+
+fn history_in_the_change(new_store: NewStore<'_>) -> Result<(), String> {
+    let host = faulty(new_store);
+    let (mut store, _) = fresh(host.clone())?;
+    with_history_policy(&mut store, "conformance/one")?;
+    host.commits();
+    set_password(&mut store, "conformance/one").map_err(fail)?;
+    let commits = host.commits();
+    ensure(
+        commits.len() == 1,
+        "the password change took more than one commit",
+    )?;
+    ensure(
+        commits[0].iter().any(|n| n == "kadmin/history")
+            && commits[0].iter().any(|n| n == "conformance/one"),
+        "kadmin/history and the password were not in one commit",
+    )
+}
+
+fn history_rolls_back(new_store: NewStore<'_>) -> Result<(), String> {
+    let host = faulty(new_store);
+    let (mut store, _) = fresh(host.clone())?;
+    with_history_policy(&mut store, "conformance/one")?;
+    host.arm(Fault::Refuse);
+    ensure(
+        set_password(&mut store, "conformance/one").is_err(),
+        "a refused change was acknowledged",
+    )?;
+    ensure(
+        store.get("kadmin/history@CONFORMANCE.TEST").is_none()
+            && !host_has(host.as_ref(), "kadmin/history")?,
+        "a refused change left kadmin/history",
     )
 }
