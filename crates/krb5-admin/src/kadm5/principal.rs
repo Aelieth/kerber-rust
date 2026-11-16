@@ -351,6 +351,7 @@ pub(super) fn parse_chrand(
     Ok((princ, prealm, keepold, ks))
 }
 
+#[derive(Clone)]
 pub(super) struct ModFields {
     pub(super) expire: u32,
     pub(super) pw_expire: u32,

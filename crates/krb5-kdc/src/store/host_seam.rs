@@ -6,8 +6,8 @@ use super::{Before, HeldSaves, Principal, PrincipalStore, kadm5_mask};
 use crate::error::Error;
 use crate::host::{
     Caller, HostChange, HostPrepared, KerberosStore, KerberosStoreError, LoadedRealm, Operation,
-    RealmBatch, RowChange, SealKey, WriteIntent, open_policy, open_principal, open_realm_state,
-    policy_row, principal_row, realm_state, row_name,
+    RealmBatch, RowChange, SealKey, TargetPeek, WriteIntent, open_policy, open_principal,
+    open_realm_state, policy_row, principal_row, realm_state, row_name,
 };
 use crate::kdb_dump::{
     DumpFile, KDB_DUMP_VERSION, TL_KADM_DATA, TL_KERBER_HOST_OWNED, TL_LAST_PWD_CHANGE,
@@ -117,6 +117,18 @@ impl PrincipalStore {
             kvno: k.kvno,
             key: k.key.clone(),
         })
+    }
+
+    /// The record a write would act on, resolved through an alias.
+    #[must_use]
+    pub fn target_peek(
+        &self,
+        name: &krb5_types::PrincipalName,
+        princ_realm: &str,
+    ) -> Option<TargetPeek> {
+        let id = self.canonical_id(name, princ_realm).ok()?;
+        let host_owned = self.map.get(&id)?.host_owned();
+        Some(TargetPeek { id, host_owned })
     }
 
     /// The host's ownership mark; only inside a change on a host store.
@@ -511,4 +523,27 @@ fn row_mask(a: &Principal, b: &Principal) -> u32 {
                 || *string_attrs != b.string_attrs,
             m::TL_DATA,
         )
+}
+
+/// Outside every lock: peek at the target, build the intent, and ask the host to prepare.
+pub fn declare_shared(
+    store: &crate::listen::SharedDump,
+    target: Option<(&krb5_types::PrincipalName, &str)>,
+    make: impl FnOnce(Option<&TargetPeek>) -> WriteIntent,
+) -> Result<(WriteIntent, Option<HostPrepared>), Error> {
+    let (host, peek) = {
+        let (g, _) = crate::listen::read_fresh(store);
+        let host = g.host.as_ref().map(|h| Arc::clone(&h.store));
+        let peek = host
+            .as_ref()
+            .and(target)
+            .and_then(|(n, r)| g.target_peek(n, r));
+        (host, peek)
+    };
+    let intent = make(peek.as_ref());
+    let prepared = match host {
+        Some(h) => h.prepare(&intent, peek.as_ref()).map_err(Error::Host)?,
+        None => None,
+    };
+    Ok((intent, prepared))
 }

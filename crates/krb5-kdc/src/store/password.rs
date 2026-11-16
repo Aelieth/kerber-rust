@@ -16,6 +16,7 @@ use super::principal::{Principal, TlData, default_mod_actor, refresh_kadm_tl, st
 use super::{PrincipalStore, unix_now_u32};
 use crate::acl::{Acl, AdminOp};
 use crate::error::Error;
+use crate::host::{Caller, Operation, WriteIntent};
 use crate::kdb_dump::TL_LAST_PWD_CHANGE;
 use crate::listen::{SharedDump, read_fresh};
 
@@ -231,25 +232,65 @@ pub fn change_password_shared(
     etypes: &[KeySalt],
     checks: impl Fn(&PrincipalStore) -> Result<(), Error>,
 ) -> Result<(), Error> {
-    let planned = {
+    let mut intent = WriteIntent::new(Operation::ChangePassword, Caller::Embedder);
+    intent.keepold = Some(keepold);
+    intent.password = Some(Zeroizing::new(password.to_vec()));
+    change_password_shared_as(
+        store,
+        intent,
+        (name, princ_realm),
+        password,
+        keepold,
+        actor,
+        etypes,
+        checks,
+    )
+}
+
+/// `change_password_shared` for a caller the host should know: the host prepares before the lock.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the chpass inputs and the caller"
+)]
+pub fn change_password_shared_as(
+    store: &SharedDump,
+    intent: WriteIntent,
+    (name, princ_realm): (&PrincipalName, &str),
+    password: &[u8],
+    keepold: u32,
+    actor: &str,
+    etypes: &[KeySalt],
+    checks: impl Fn(&PrincipalStore) -> Result<(), Error>,
+) -> Result<(), Error> {
+    let (checked, planned) = {
         let (g, read) = read_fresh(store);
         match read {
-            Err(_) => Ok(None),
-            Ok(()) => {
-                checks(&g).and_then(|()| g.plan_password(name, princ_realm, password, etypes))
-            }
+            Err(_) => (false, Ok(None)),
+            Ok(()) => (
+                true,
+                checks(&g).and_then(|()| g.plan_password(name, princ_realm, password, etypes)),
+            ),
         }
     };
-    let prepared = planned.and_then(|plan| plan.map(PasswordPlan::derive).transpose());
+    let prepared = planned.and_then(|plan| plan.map(PasswordPlan::derive).transpose())?;
+    // The host prepares only for a change whose checks have passed.
+    let (intent, token) = if checked {
+        crate::declare_shared(store, Some((name, princ_realm)), |_| intent)?
+    } else {
+        (intent, None)
+    };
+    let mut token = Some(token);
     let mut g = store.write().unwrap_or_else(PoisonError::into_inner);
     g.reload_if_stale()?;
-    if let Some(p) = prepared?
-        && g.change(|s| s.apply_password(p, keepold, actor))??
+    if let Some(p) = prepared
+        && g.change_as(intent.clone(), token.take().flatten(), |s| {
+            s.apply_password(p, keepold, actor)
+        })??
     {
         return Ok(());
     }
     checks(&g)?;
-    g.change(|s| {
+    g.change_as(intent, token.take().flatten(), |s| {
         s.set_password_etypes_keepold_n_in(name, princ_realm, password, keepold, actor, etypes)
     })?
 }

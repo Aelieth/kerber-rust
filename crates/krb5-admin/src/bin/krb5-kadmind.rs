@@ -265,6 +265,9 @@ fn main() {
         auth_modules: Vec::new(),
         log: std::sync::Arc::new(krb5_admin::KlogAdmin),
         pwqual: Vec::new(),
+        #[cfg(feature = "test-hooks")]
+        hooks: test_hook::modules(),
+        #[cfg(not(feature = "test-hooks"))]
         hooks: Vec::new(),
         iprop: iprop_cfg,
     };
@@ -486,4 +489,80 @@ fn load_acl(progname: &str, acl_file: Option<&Path>, realm: &str) -> Acl {
         }
         std::process::exit(1);
     })
+}
+
+/// MIT's `plugins/kadm5_hook/test` module, for the hook oracle cell; off unless asked for.
+#[cfg(feature = "test-hooks")]
+mod test_hook {
+    use std::sync::Arc;
+
+    use krb5_crypto::EncryptionType;
+    use krb5_kdc::{Error, HookStage, Kadm5Hook};
+    use krb5_types::PrincipalName;
+
+    pub(super) fn modules() -> Vec<Arc<dyn Kadm5Hook>> {
+        if std::env::var_os("KERBER_TEST_KADM5_HOOK").is_some() {
+            vec![Arc::new(Logged)]
+        } else {
+            Vec::new()
+        }
+    }
+
+    struct Logged;
+
+    // MIT: `log_call` (plugins/kadm5_hook/test/main.c:40-54)
+    fn log_call(function: &str, stage: HookStage, princ: &PrincipalName, realm: &str) {
+        let stage = match stage {
+            HookStage::Precommit => "precommit",
+            HookStage::Postcommit => "postcommit",
+        };
+        println!(
+            "{function}: stage {stage} principal {}",
+            princ.unparse_with_realm_lossy(realm)
+        );
+    }
+
+    impl Kadm5Hook for Logged {
+        fn name(&self) -> &'static str {
+            "test"
+        }
+
+        fn chpass(
+            &self,
+            stage: HookStage,
+            princ: &PrincipalName,
+            realm: &str,
+            _keepold: u32,
+            _password: Option<&[u8]>,
+            _etypes: &[EncryptionType],
+        ) -> Result<(), Error> {
+            log_call("chpass", stage, princ, realm);
+            Ok(())
+        }
+
+        fn create(
+            &self,
+            stage: HookStage,
+            princ: &PrincipalName,
+            realm: &str,
+            _mask: u32,
+            _password: Option<&[u8]>,
+            _etypes: &[EncryptionType],
+        ) -> Result<(), Error> {
+            log_call("create", stage, princ, realm);
+            Ok(())
+        }
+
+        fn rename(
+            &self,
+            stage: HookStage,
+            old: &PrincipalName,
+            old_realm: &str,
+            _new: &PrincipalName,
+            _new_realm: &str,
+        ) -> Result<(), Error> {
+            log_call("rename", stage, old, old_realm);
+            Ok(())
+        }
+    }
 }

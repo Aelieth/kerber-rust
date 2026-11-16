@@ -12,6 +12,7 @@ use super::policy::NamedPolicy;
 use super::{PrincipalStore, kadm5_mask, unix_now_u32};
 use crate::acl::{Acl, AdminOp, Restrictions};
 use crate::error::Error;
+use crate::host::{Caller, Operation, WriteIntent};
 use crate::kdb_dump::{
     TL_ALIAS_TARGET, TL_DB_ARGS, TL_KADM_DATA, TL_KERBER_HIST, TL_KERBER_POLICY,
     TL_LAST_ADMIN_UNLOCK, TL_LAST_PWD_CHANGE, TL_MOD_PRINC, TL_STRING_ATTRS,
@@ -409,15 +410,27 @@ pub fn create_password_shared(
         }
     };
     let prepared = planned.map(CreatePlan::derive).transpose()?;
+    let (intent, token) = crate::declare_shared(store, Some((name, princ_realm)), |_| {
+        let mut intent = WriteIntent::new(Operation::Create, Caller::Embedder);
+        intent.requested = vec![name.unparse_with_realm_lossy(princ_realm)];
+        intent.client_mask = Some(ent.mask);
+        intent.password = Some(zeroize::Zeroizing::new(password.to_vec()));
+        intent
+    })?;
+    let mut token = Some(token);
     let mut g = store.write().unwrap_or_else(PoisonError::into_inner);
     g.reload_if_stale()?;
     if let Some(p) = prepared
-        && g.change(|s| s.create_prepared(p, actor))??
+        && g.change_as(intent.clone(), token.take().flatten(), |s| {
+            s.create_prepared(p, actor)
+        })??
     {
         return Ok(());
     }
     let keys = CreateKeys::Password(password);
-    g.change(|s| s.create_principal_3_in(name, princ_realm, keys, etypes, ent, actor))?
+    g.change_as(intent, token.take().flatten(), |s| {
+        s.create_principal_3_in(name, princ_realm, keys, etypes, ent, actor)
+    })?
 }
 
 #[expect(clippy::too_many_arguments, reason = "the create inputs")]

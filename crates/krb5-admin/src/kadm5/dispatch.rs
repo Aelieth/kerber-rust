@@ -1,3 +1,4 @@
+use krb5_kdc::host::{Caller as HostCaller, HostPrepared, Operation, WriteIntent};
 use krb5_kdc::{KDB_LOCKDOWN_KEYS, SharedDump as SharedStore};
 use krb5_types::PrincipalName;
 
@@ -95,15 +96,79 @@ fn read_store(
     Ok(g)
 }
 
+type Declared = (WriteIntent, Option<HostPrepared>);
+
+struct Who<'a> {
+    store: &'a SharedStore,
+    actor: &'a str,
+    initial: bool,
+    changepw: bool,
+}
+
+impl Who<'_> {
+    /// Outside the store's lock: the host's `prepare`, and the intent its commit carries.
+    fn declare(
+        &self,
+        proc: u32,
+        api: u32,
+        operation: Operation,
+        target: Option<(&PrincipalName, &str)>,
+        requested: Vec<String>,
+        fill: impl FnOnce(&mut WriteIntent),
+    ) -> Result<Declared, Vec<u8>> {
+        krb5_kdc::declare_shared(self.store, target, |peek| {
+            let mut intent = WriteIntent::new(
+                operation,
+                HostCaller::Kadmind {
+                    client: self.actor.to_owned(),
+                    initial: self.initial,
+                    changepw_service: self.changepw,
+                    self_service: peek.is_some_and(|p| is_self_id(self.actor, &p.id)),
+                },
+            );
+            intent.requested = requested;
+            fill(&mut intent);
+            intent
+        })
+        .map_err(|e| generic_ret(api, store_code(proc, &e)))
+    }
+
+    /// The checks could not run before the lock: no `prepare`; the commit still decides.
+    fn unprepared(
+        &self,
+        operation: Operation,
+        (name, realm): (&PrincipalName, &str),
+        fill: impl FnOnce(&mut WriteIntent),
+    ) -> Declared {
+        let mut intent = WriteIntent::new(
+            operation,
+            HostCaller::Kadmind {
+                client: self.actor.to_owned(),
+                initial: self.initial,
+                changepw_service: self.changepw,
+                self_service: is_self(self.actor, name, realm),
+            },
+        );
+        intent.requested = vec![named(name, realm)];
+        fill(&mut intent);
+        (intent, None)
+    }
+}
+
+fn named(name: &PrincipalName, realm: &str) -> String {
+    name.unparse_with_realm_lossy(realm)
+}
+
 /// Refused or failed: database unchanged.
 // MIT: `kdb_put_entry` (lib/kadm5/srv/server_kdb.c:364-405)
 fn commit<T>(
     g: &mut krb5_kdc::PrincipalStore,
     proc: u32,
     api: u32,
+    (intent, prepared): Declared,
     f: impl FnOnce(&mut krb5_kdc::PrincipalStore) -> Result<T, krb5_kdc::Error>,
 ) -> Result<T, Vec<u8>> {
-    match g.change(f) {
+    match g.change_as(intent, prepared, f) {
         Ok(Ok(v)) => Ok(v),
         Ok(Err(e)) => Err(generic_ret(api, inner_code(proc, e))),
         Err(e) => Err(generic_ret(api, store_code(proc, &e))),
@@ -147,9 +212,10 @@ fn commit_policy(
     g: &mut krb5_kdc::PrincipalStore,
     proc: u32,
     api: u32,
+    (intent, prepared): Declared,
     f: impl FnOnce(&mut krb5_kdc::PrincipalStore) -> Result<Result<(), u32>, krb5_kdc::Error>,
 ) -> Vec<u8> {
-    match g.change(f) {
+    match g.change_as(intent, prepared, f) {
         Ok(Ok(Ok(()))) => generic_ret(api, 0),
         Ok(Ok(Err(code))) => generic_ret(api, code),
         Ok(Err(e)) => generic_ret(api, inner_code(proc, e)),
@@ -259,6 +325,12 @@ pub(super) fn dispatch_kadm5_ticket(
     clear_prefetch();
     let realm = store_realm(store);
     let stack = authcfg.stack();
+    let who = Who {
+        store,
+        actor,
+        initial,
+        changepw,
+    };
     match proc {
         INIT => Ok(generic_ret(API_V2, 0)),
         GET_PRIVS => {
@@ -314,6 +386,17 @@ pub(super) fn dispatch_kadm5_ticket(
             if changepw || !acl_id(&name, &req).is_some_and(|t| stack.delprinc(actor, &t)) {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_DELETE));
             }
+            let declared = match who.declare(
+                proc,
+                API_V2,
+                Operation::Delete,
+                Some((&name, &req)),
+                vec![named(&name, &req)],
+                |_| {},
+            ) {
+                Ok(d) => d,
+                Err(rep) => return Ok(rep),
+            };
             let mut g = match write_store(store, proc, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
@@ -334,48 +417,68 @@ pub(super) fn dispatch_kadm5_ticket(
             if g.get_in_realm(&name, &req).is_none() {
                 return Ok(generic_ret(API_V2, KADM5_UNK_PRINC));
             }
-            let changed = commit(&mut g, proc, API_V2, |s| s.remove_in(&name, &req));
+            let changed = commit(&mut g, proc, API_V2, declared, |s| s.remove_in(&name, &req));
             Ok(done(changed, API_V2))
         }
         MODIFY_PRINCIPAL => {
             let (name, prealm, mask, fields) = parse_modify(args)?;
             let req = req_realm(&prealm, &realm);
+            // MIT: `modify_principal_2_svc` (kadmin/server/server_stubs.c)
+            let checks = |g: &krb5_kdc::PrincipalStore| -> Result<_, Vec<u8>> {
+                let cid = prefetch(g, &name, &req, API_V2)?.id();
+                let (authorized, rss) = stack.modprinc(actor, &cid);
+                if changepw || !authorized {
+                    return Err(generic_ret(API_V2, KADM5_AUTH_MODIFY));
+                }
+                // MIT: `auth_restrict` (kadmin/server/auth.c:267-304)
+                let (mask, fields) = impose_request_restrictions(&rss, mask, fields.clone());
+                if mask & KADM5_ATTRIBUTES != 0
+                    && fields.attributes & KDB_LOCKDOWN_KEYS == 0
+                    && g.get_in_realm(&name, &req)
+                        .is_some_and(|p| p.attributes & KDB_LOCKDOWN_KEYS != 0)
+                {
+                    return Err(generic_ret(API_V2, KADM5_AUTH_MODIFY));
+                }
+                if let Some(code) = modify_princ_mask_err(mask, fields.policy.as_deref()) {
+                    return Err(generic_ret(API_V2, code));
+                }
+                if mask & KADM5_TL_DATA != 0 && fields.tl_data.iter().any(|t| t.ty < 256) {
+                    return Err(generic_ret(API_V2, KADM5_BAD_TL_TYPE));
+                }
+                if mask & KADM5_FAIL_AUTH_COUNT != 0 && fields.fail_auth_count != 0 {
+                    return Err(generic_ret(API_V2, KADM5_BAD_SERVER_PARAMS));
+                }
+                if mask & KADM5_TL_DATA != 0 && db_args_code(&fields.tl_data).is_some() {
+                    return Err(generic_ret(API_V2, EINVAL));
+                }
+                Ok((mask, fields))
+            };
+            let restricted = match read_store(store, proc, API_V2) {
+                Ok(g) => match checks(&g) {
+                    Ok((mask, _)) => mask,
+                    Err(rep) => return Ok(rep),
+                },
+                Err(rep) => return Ok(prefetch_failed(rep)),
+            };
+            let mut declared = match who.declare(
+                proc,
+                API_V2,
+                Operation::Modify,
+                Some((&name, &req)),
+                vec![named(&name, &req)],
+                |i| i.client_mask = Some(restricted),
+            ) {
+                Ok(d) => d,
+                Err(rep) => return Ok(prefetch_failed(rep)),
+            };
             let mut g = match write_store(store, proc, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(prefetch_failed(rep)),
             };
-            // Auth target: the canonical name.
-            // MIT: `modify_principal_2_svc` (kadmin/server/server_stubs.c)
-            let target = match prefetch(&g, &name, &req, API_V2) {
-                Ok(p) => p,
+            let (mask, fields) = match checks(&g) {
+                Ok(v) => v,
                 Err(rep) => return Ok(rep),
             };
-            let cid = target.id();
-            let (authorized, rss) = stack.modprinc(actor, &cid);
-            if changepw || !authorized {
-                return Ok(generic_ret(API_V2, KADM5_AUTH_MODIFY));
-            }
-            // MIT: `auth_restrict` (kadmin/server/auth.c:267-304)
-            let (mask, fields) = impose_request_restrictions(&rss, mask, fields);
-            if mask & KADM5_ATTRIBUTES != 0
-                && fields.attributes & KDB_LOCKDOWN_KEYS == 0
-                && g.get_in_realm(&name, &req)
-                    .is_some_and(|p| p.attributes & KDB_LOCKDOWN_KEYS != 0)
-            {
-                return Ok(generic_ret(API_V2, KADM5_AUTH_MODIFY));
-            }
-            if let Some(code) = modify_princ_mask_err(mask, fields.policy.as_deref()) {
-                return Ok(generic_ret(API_V2, code));
-            }
-            if mask & KADM5_TL_DATA != 0 && fields.tl_data.iter().any(|t| t.ty < 256) {
-                return Ok(generic_ret(API_V2, KADM5_BAD_TL_TYPE));
-            }
-            if mask & KADM5_FAIL_AUTH_COUNT != 0 && fields.fail_auth_count != 0 {
-                return Ok(generic_ret(API_V2, KADM5_BAD_SERVER_PARAMS));
-            }
-            if mask & KADM5_TL_DATA != 0 && db_args_code(&fields.tl_data).is_some() {
-                return Ok(generic_ret(API_V2, EINVAL));
-            }
             let attributes = (mask & KADM5_ATTRIBUTES != 0).then_some(fields.attributes);
             let max_life = (mask & KADM5_MAX_LIFE != 0).then_some(u64::from(fields.max_life));
             let max_renewable_life =
@@ -409,7 +512,8 @@ pub(super) fn dispatch_kadm5_ticket(
                 },
                 zero_fail_count: mask & KADM5_FAIL_AUTH_COUNT != 0,
             };
-            let changed = commit(&mut g, proc, API_V2, |s| {
+            declared.0.client_mask = Some(mask);
+            let changed = commit(&mut g, proc, API_V2, declared, |s| {
                 s.modify_principal_in(&name, &req, modify, actor)
             });
             Ok(done(changed, API_V2))
@@ -465,6 +569,21 @@ pub(super) fn dispatch_kadm5_ticket(
                 Some(Ok(p)) => Some(p),
                 Some(Err(e)) => return Ok(refused(e)),
             };
+            let (intent, token) = match who.declare(
+                proc,
+                API_V2,
+                Operation::Create,
+                Some((&c.name, &req)),
+                vec![named(&c.name, &req)],
+                |i| {
+                    i.client_mask = Some(c.ent.mask);
+                    i.password.clone_from(&c.pass);
+                },
+            ) {
+                Ok(d) => d,
+                Err(rep) => return Ok(rep),
+            };
+            let mut token = Some(token);
             let mut g = match write_store(store, proc, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
@@ -473,7 +592,8 @@ pub(super) fn dispatch_kadm5_ticket(
                 return Ok(generic_ret(API_V2, dup_code(p)));
             }
             if let Some(p) = prepared {
-                let created = commit(&mut g, proc, API_V2, |s| {
+                let declared = (intent.clone(), token.take().flatten());
+                let created = commit(&mut g, proc, API_V2, declared, |s| {
                     if !s.create_prepared(p, actor)? {
                         return Ok(false);
                     }
@@ -491,7 +611,8 @@ pub(super) fn dispatch_kadm5_ticket(
                     return Ok(generic_ret(API_V2, dup_code(p)));
                 }
             }
-            let changed = commit(&mut g, proc, API_V2, |s| {
+            let declared = (intent, token.take().flatten());
+            let changed = commit(&mut g, proc, API_V2, declared, |s| {
                 s.create_principal_3_in(
                     &c.name,
                     &req,
@@ -526,6 +647,17 @@ pub(super) fn dispatch_kadm5_ticket(
             if changepw || !ids.is_some_and(|(o, n)| stack.renprinc(actor, &o, &n)) {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_INSUFFICIENT));
             }
+            let declared = match who.declare(
+                proc,
+                API_V2,
+                Operation::Rename,
+                Some((&old, &old_req)),
+                vec![named(&old, &old_req), named(&new, &new_req)],
+                |_| {},
+            ) {
+                Ok(d) => d,
+                Err(rep) => return Ok(prefetch_failed(rep)),
+            };
             let mut g = match write_store(store, proc, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(prefetch_failed(rep)),
@@ -543,7 +675,7 @@ pub(super) fn dispatch_kadm5_ticket(
             {
                 return Ok(generic_ret(API_V2, KADM5_DUP));
             }
-            let changed = commit(&mut g, proc, API_V2, |s| {
+            let changed = commit(&mut g, proc, API_V2, declared, |s| {
                 s.rename_unchecked(&old, &old_req, &new, &new_req, actor)
             });
             Ok(done(changed, API_V2))
@@ -603,13 +735,36 @@ pub(super) fn dispatch_kadm5_ticket(
                 Some(Ok(v)) => Some(v),
                 Some(Err(e)) => return Ok(refused(e)),
             };
+            let fill = |i: &mut WriteIntent| {
+                i.keepold = Some(u32::from(keepold));
+                i.password = Some(pass.clone());
+            };
+            let (intent, token) = if prefetched {
+                match who.declare(
+                    proc,
+                    API_V2,
+                    Operation::ChangePassword,
+                    Some((&name, &req)),
+                    vec![named(&name, &req)],
+                    fill,
+                ) {
+                    Ok(d) => d,
+                    Err(rep) => return Ok(rep),
+                }
+            } else {
+                who.unprepared(Operation::ChangePassword, (&name, &req), fill)
+            };
+            let mut token = Some(token);
             let mut g = match write_store(store, proc, API_V2) {
                 Ok(g) => g,
                 Err(rep) if prefetched => return Ok(rep),
                 Err(rep) => return Ok(prefetch_failed(rep)),
             };
             if let Some((n, p)) = prepared {
-                match commit(&mut g, proc, API_V2, |s| s.apply_password(p, n, actor)) {
+                let declared = (intent.clone(), token.take().flatten());
+                match commit(&mut g, proc, API_V2, declared, |s| {
+                    s.apply_password(p, n, actor)
+                }) {
                     Ok(true) => return Ok(generic_ret(API_V2, 0)),
                     Ok(false) => {}
                     Err(rep) => return Ok(rep),
@@ -619,7 +774,8 @@ pub(super) fn dispatch_kadm5_ticket(
                 Ok(n) => n,
                 Err(rep) => return Ok(rep),
             };
-            let changed = commit(&mut g, proc, API_V2, |s| {
+            let declared = (intent, token.take().flatten());
+            let changed = commit(&mut g, proc, API_V2, declared, |s| {
                 s.set_password_etypes_keepold_n_in(&name, &req, &pass, n, actor, &ks)
             });
             Ok(done(changed, API_V2))
@@ -637,6 +793,17 @@ pub(super) fn dispatch_kadm5_ticket(
             {
                 return Ok(generic_ret(api, code));
             }
+            let declared = match who.declare(
+                proc,
+                api,
+                Operation::CreatePolicy,
+                None,
+                vec![pol.name.clone()],
+                |_| {},
+            ) {
+                Ok(d) => d,
+                Err(rep) => return Ok(rep),
+            };
             let mut g = match write_store(store, proc, api) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
@@ -661,7 +828,7 @@ pub(super) fn dispatch_kadm5_ticket(
             }
             apply_policy_floors(&mut pol, mask);
             // MIT: `osa_adb_create_policy` (plugins/kdb/db2/adb_policy.c:59-72)
-            Ok(commit_policy(&mut g, proc, api, |s| {
+            Ok(commit_policy(&mut g, proc, api, declared, |s| {
                 if s.policies().contains_key(&pol.name) {
                     return Ok(Err(OSA_ADB_DUP));
                 }
@@ -673,6 +840,17 @@ pub(super) fn dispatch_kadm5_ticket(
             if changepw || !stack.delpol(actor, &name) {
                 return Ok(generic_ret(api, KADM5_AUTH_DELETE));
             }
+            let declared = match who.declare(
+                proc,
+                api,
+                Operation::DeletePolicy,
+                None,
+                vec![name.clone()],
+                |_| {},
+            ) {
+                Ok(d) => d,
+                Err(rep) => return Ok(rep),
+            };
             let mut g = match write_store(store, proc, api) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
@@ -682,7 +860,7 @@ pub(super) fn dispatch_kadm5_ticket(
                 return Ok(generic_ret(api, KADM5_UNK_POLICY));
             }
             // MIT: `osa_adb_destroy_policy` (plugins/kdb/db2/adb_policy.c:132-145)
-            Ok(commit_policy(&mut g, proc, api, |s| {
+            Ok(commit_policy(&mut g, proc, api, declared, |s| {
                 match s.delete_policy(&name) {
                     Ok(()) => Ok(Ok(())),
                     Err(krb5_kdc::Error::NotFound) => Ok(Err(OSA_ADB_NOENT)),
@@ -706,6 +884,17 @@ pub(super) fn dispatch_kadm5_ticket(
             {
                 return Ok(generic_ret(api, code));
             }
+            let declared = match who.declare(
+                proc,
+                api,
+                Operation::ModifyPolicy,
+                None,
+                vec![rec.name.clone()],
+                |_| {},
+            ) {
+                Ok(d) => d,
+                Err(rep) => return Ok(rep),
+            };
             let mut g = match write_store(store, proc, api) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
@@ -718,7 +907,7 @@ pub(super) fn dispatch_kadm5_ticket(
                 return Ok(generic_ret(api, code));
             }
             // MIT: `osa_adb_put_policy` (plugins/kdb/db2/adb_policy.c:263-276)
-            Ok(commit_policy(&mut g, proc, api, |s| {
+            Ok(commit_policy(&mut g, proc, api, declared, |s| {
                 if !s.policies().contains_key(&merged.name) {
                     return Ok(Err(OSA_ADB_NOENT));
                 }
@@ -767,28 +956,49 @@ pub(super) fn dispatch_kadm5_ticket(
                     Err(rep) => return rep,
                 };
             let req = req_realm(&prealm, &realm);
+            // MIT: `chrand_principal_2_svc` (kadmin/server/server_stubs.c)
+            let checks = |g: &krb5_kdc::PrincipalStore| -> Result<u32, Vec<u8>> {
+                let cid = prefetch(g, &name, &req, API_V2)?.id();
+                let self_change = is_self_id(actor, &cid);
+                if (changepw && !self_change) || !stack.chrand(actor, &cid) {
+                    return Err(generic_ret(API_V2, KADM5_AUTH_CHANGEPW));
+                }
+                if self_change && !initial {
+                    return Err(generic_ret(API_V2, KADM5_AUTH_INITIAL));
+                }
+                if self_change && let Err(e) = g.check_min_life_in(&name, &req) {
+                    return Err(generic_ret(API_V2, kadm5_code(proc, &Error::from(e))));
+                }
+                Ok(clamp_self_keepold(self_change, keepold))
+            };
+            match read_store(store, proc, API_V2) {
+                Ok(g) => {
+                    if let Err(rep) = checks(&g) {
+                        return Ok(rep);
+                    }
+                }
+                Err(rep) => return Ok(prefetch_failed(rep)),
+            }
+            let declared = match who.declare(
+                proc,
+                API_V2,
+                Operation::Randkey,
+                Some((&name, &req)),
+                vec![named(&name, &req)],
+                |i| i.keepold = Some(u32::from(keepold)),
+            ) {
+                Ok(d) => d,
+                Err(rep) => return Ok(prefetch_failed(rep)),
+            };
             let mut g = match write_store(store, proc, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(prefetch_failed(rep)),
             };
-            // MIT: `chrand_principal_2_svc` (kadmin/server/server_stubs.c)
-            let target = match prefetch(&g, &name, &req, API_V2) {
-                Ok(p) => p,
+            let n = match checks(&g) {
+                Ok(n) => n,
                 Err(rep) => return Ok(rep),
             };
-            let cid = target.id();
-            let self_change = is_self_id(actor, &cid);
-            if (changepw && !self_change) || !stack.chrand(actor, &cid) {
-                return Ok(generic_ret(API_V2, KADM5_AUTH_CHANGEPW));
-            }
-            if self_change && !initial {
-                return Ok(generic_ret(API_V2, KADM5_AUTH_INITIAL));
-            }
-            if self_change && let Err(e) = g.check_min_life_in(&name, &req) {
-                return Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e))));
-            }
-            let n = clamp_self_keepold(self_change, keepold);
-            match commit(&mut g, proc, API_V2, |s| {
+            match commit(&mut g, proc, API_V2, declared, |s| {
                 s.chrand_etypes_keepold_in(&name, &req, &ks, n, actor)
             }) {
                 Ok(keys) => {
@@ -829,19 +1039,40 @@ pub(super) fn dispatch_kadm5_ticket(
         PURGEKEYS => {
             let (api, name, prealm, keepkvno) = parse_purgekeys(args)?;
             let req = req_realm(&prealm, &realm);
+            let checks = |g: &krb5_kdc::PrincipalStore| -> Result<(), Vec<u8>> {
+                let cid = prefetch(g, &name, &req, api)?.id();
+                if changepw || !stack.purgekeys(actor, &cid) {
+                    return Err(generic_ret(api, KADM5_AUTH_MODIFY));
+                }
+                Ok(())
+            };
+            match read_store(store, proc, API_V2) {
+                Ok(g) => {
+                    if let Err(rep) = checks(&g) {
+                        return Ok(rep);
+                    }
+                }
+                Err(rep) => return Ok(prefetch_failed(rep)),
+            }
+            let declared = match who.declare(
+                proc,
+                api,
+                Operation::PurgeKeys,
+                Some((&name, &req)),
+                vec![named(&name, &req)],
+                |_| {},
+            ) {
+                Ok(d) => d,
+                Err(rep) => return Ok(prefetch_failed(rep)),
+            };
             let mut g = match write_store(store, proc, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(prefetch_failed(rep)),
             };
-            let target = match prefetch(&g, &name, &req, api) {
-                Ok(p) => p,
-                Err(rep) => return Ok(rep),
-            };
-            let cid = target.id();
-            if changepw || !stack.purgekeys(actor, &cid) {
-                return Ok(generic_ret(api, KADM5_AUTH_MODIFY));
+            if let Err(rep) = checks(&g) {
+                return Ok(rep);
             }
-            match commit(&mut g, proc, api, |s| {
+            match commit(&mut g, proc, api, declared, |s| {
                 s.purgekeys_in(&name, &req, keepkvno, actor)
             }) {
                 Ok(()) => {
@@ -866,29 +1097,47 @@ pub(super) fn dispatch_kadm5_ticket(
                 ks,
             } = parse_setkey(args, proc)?;
             let req = req_realm(&prealm, &realm);
+            let checks = |g: &krb5_kdc::PrincipalStore| -> Result<(), Vec<u8>> {
+                let target = prefetch(g, &name, &req, api)?;
+                if target.attributes & KDB_LOCKDOWN_KEYS != 0 {
+                    return Err(generic_ret(api, KADM5_AUTH_SETKEY));
+                }
+                if changepw || !stack.setkey(actor, &target.id()) {
+                    return Err(generic_ret(api, KADM5_AUTH_SETKEY));
+                }
+                Ok(())
+            };
+            match read_store(store, proc, API_V2) {
+                Ok(g) => {
+                    if let Err(rep) = checks(&g) {
+                        return Ok(rep);
+                    }
+                }
+                Err(rep) => return Ok(prefetch_failed(rep)),
+            }
+            let declared = match who.declare(
+                proc,
+                api,
+                Operation::SetKey,
+                Some((&name, &req)),
+                vec![named(&name, &req)],
+                |i| i.keepold = Some(u32::from(keepold)),
+            ) {
+                Ok(d) => d,
+                Err(rep) => return Ok(prefetch_failed(rep)),
+            };
             let mut g = match write_store(store, proc, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(prefetch_failed(rep)),
             };
-            let target = match prefetch(&g, &name, &req, api) {
-                Ok(p) => p,
-                Err(rep) => return Ok(rep),
-            };
-            let cid = target.id();
-            let lockdown = g
-                .get_in_realm(&name, &req)
-                .is_some_and(|p| p.attributes & KDB_LOCKDOWN_KEYS != 0);
-            if lockdown {
-                return Ok(generic_ret(api, KADM5_AUTH_SETKEY));
-            }
-            if changepw || !stack.setkey(actor, &cid) {
-                return Ok(generic_ret(api, KADM5_AUTH_SETKEY));
+            if let Err(rep) = checks(&g) {
+                return Ok(rep);
             }
             if !setkey3_tuples(&mut keys, &ks) {
                 return Ok(generic_ret(api, KADM5_SETKEY3_ETYPE_MISMATCH));
             }
             let n = clamp_self_keepold(is_self(actor, &name, &req), keepold);
-            let changed = commit(&mut g, proc, api, |s| {
+            let changed = commit(&mut g, proc, api, declared, |s| {
                 s.set_keys_in(&name, &req, keys, n, actor)
             });
             Ok(done(changed, api))
@@ -916,22 +1165,43 @@ pub(super) fn dispatch_kadm5_ticket(
         SET_STRING => {
             let (api, name, prealm, key, value) = parse_sstring(args)?;
             let req = req_realm(&prealm, &realm);
+            let checks = |g: &krb5_kdc::PrincipalStore| -> Result<(), Vec<u8>> {
+                let cid = prefetch(g, &name, &req, api)?.id();
+                if changepw || !stack.setstr(actor, &cid) {
+                    return Err(generic_ret(api, KADM5_AUTH_MODIFY));
+                }
+                if key.is_empty() {
+                    return Err(generic_ret(api, KADM5_FAILURE));
+                }
+                Ok(())
+            };
+            match read_store(store, proc, API_V2) {
+                Ok(g) => {
+                    if let Err(rep) = checks(&g) {
+                        return Ok(rep);
+                    }
+                }
+                Err(rep) => return Ok(prefetch_failed(rep)),
+            }
+            let declared = match who.declare(
+                proc,
+                api,
+                Operation::SetString,
+                Some((&name, &req)),
+                vec![named(&name, &req)],
+                |_| {},
+            ) {
+                Ok(d) => d,
+                Err(rep) => return Ok(prefetch_failed(rep)),
+            };
             let mut g = match write_store(store, proc, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(prefetch_failed(rep)),
             };
-            let target = match prefetch(&g, &name, &req, api) {
-                Ok(p) => p,
-                Err(rep) => return Ok(rep),
-            };
-            let cid = target.id();
-            if changepw || !stack.setstr(actor, &cid) {
-                return Ok(generic_ret(api, KADM5_AUTH_MODIFY));
+            if let Err(rep) = checks(&g) {
+                return Ok(rep);
             }
-            if key.is_empty() {
-                return Ok(generic_ret(api, KADM5_FAILURE));
-            }
-            let changed = commit(&mut g, proc, api, |s| {
+            let changed = commit(&mut g, proc, api, declared, |s| {
                 s.set_string_in(&name, &req, &key, value.as_deref(), actor)
             });
             Ok(done(changed, api))
@@ -946,11 +1216,22 @@ pub(super) fn dispatch_kadm5_ticket(
             if changepw || !ids.is_some_and(|(a, t)| stack.addalias(actor, &a, &t)) {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_INSUFFICIENT));
             }
+            let declared = match who.declare(
+                proc,
+                API_V2,
+                Operation::CreateAlias,
+                Some((&target, &target_req)),
+                vec![named(&alias, &alias_req), named(&target, &target_req)],
+                |_| {},
+            ) {
+                Ok(d) => d,
+                Err(rep) => return Ok(rep),
+            };
             let mut g = match write_store(store, proc, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
-            let changed = commit(&mut g, proc, API_V2, |s| {
+            let changed = commit(&mut g, proc, API_V2, declared, |s| {
                 s.create_alias_in(&alias, &alias_req, &target, &target_req, actor)
             });
             Ok(done(changed, API_V2))

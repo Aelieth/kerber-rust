@@ -4,6 +4,7 @@ mod alias;
 mod flags;
 mod history;
 mod host_seam;
+pub use host_seam::declare_shared;
 mod iprop_ulog;
 pub(crate) mod iprop_xdr;
 mod kadm5_hook;
@@ -939,7 +940,8 @@ pub(crate) use kdb_convert::{encode_string_attrs, update_tl_data};
 pub use keys::{KeyEntry, KeyLookup, KeySlot, KtkdbError, OpaqueKey, ktkdb_get_entry, random_key};
 pub use password::{
     PWQUAL_DICT, PWQUAL_EMPTY, PWQUAL_PRINC, PasswordPlan, PreparedPassword, S2K_ITERS,
-    apply_keysalt_policy, change_password_shared, change_password_shared_committing,
+    apply_keysalt_policy, change_password_shared, change_password_shared_as,
+    change_password_shared_committing,
 };
 pub use policy::{NamedPolicy, Policy, SpakeKdc};
 pub(crate) use principal::PrincipalFields;

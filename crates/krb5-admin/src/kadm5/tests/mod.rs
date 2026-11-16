@@ -690,6 +690,7 @@ mod changepw;
 mod framing;
 mod getprinc;
 mod glob;
+mod host;
 mod iprop;
 mod iprop_mit;
 mod keysalt;

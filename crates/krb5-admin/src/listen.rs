@@ -521,10 +521,21 @@ pub(crate) fn handle_kpasswd_from(
             }
             Ok(())
         };
-        let changed = krb5_kdc::change_password_shared(
+        let mut intent = krb5_kdc::host::WriteIntent::new(
+            krb5_kdc::host::Operation::ChangePassword,
+            krb5_kdc::host::Caller::Kpasswd {
+                client: client.clone(),
+                initial: ok.ticket_part.flags.initial(),
+                self_service: self_change,
+            },
+        );
+        intent.requested = vec![target_unparsed.clone()];
+        intent.keepold = Some(0);
+        intent.password = Some(zeroize::Zeroizing::new(newpass.clone()));
+        let changed = krb5_kdc::change_password_shared_as(
             store,
-            &targ,
-            &targ_realm,
+            intent,
+            (&targ, &targ_realm),
             &newpass,
             0,
             &stamp,
@@ -532,6 +543,11 @@ pub(crate) fn handle_kpasswd_from(
             checks,
         );
         match changed {
+            Err(krb5_kdc::Error::Host(krb5_kdc::host::KerberosStoreError::Denied(d))) => (
+                crate::kadm5::kpasswd_result(d.kadm5_code),
+                d.text.clone(),
+                format!("denied by the Kerberos store: {}", d.text),
+            ),
             Ok(()) => (0u16, String::new(), "success".to_owned()),
             Err(krb5_kdc::Error::PasswordPolicy(msg)) => {
                 // MIT: `_kadm5_chpass_principal_util` (lib/kadm5/chpass_util.c:158-183)
