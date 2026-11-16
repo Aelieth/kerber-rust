@@ -48,7 +48,7 @@ pub trait KerberosStore: Send + Sync {
 
 | Operation | `TargetPeek` | The other name, in `intent.requested` |
 |---|---|---|
-| Create | `None` (a `Some` means kadmind answers DUP first) | the new name as sent |
+| Create | normally `None`; `Some` for an existing name on a randkey or keyless create, or after a stale read; DUP still comes under the lock, so answer `Ok(None)` | the new name as sent |
 | Rename | `Some` for the source | the destination |
 | CreateAlias | `Some` for the alias target (`None` if missing, as MIT allows) | the alias name |
 | Any other | `Some` for the resolved target, or `None` | the name as sent |

@@ -86,34 +86,7 @@ fn getprinc_hides_kerber_rusts_own_tl_types() {
         .change(|s| s.merge_tl_data_in(&user, "KERBER.TEST", &tls, "test"))
         .unwrap()
         .unwrap();
-    let mut w = XdrW::default();
-    w.u32(API_V2);
-    w.nullstring(Some("user@KERBER.TEST"));
-    w.u32(u32::MAX);
-    let out = dispatch_kadm5(&store, &acl, &actor, GET_PRINCIPAL, &w.b).unwrap();
-    assert_eq!(ret_code(&out), 0);
-    let mut r = XdrR::new(&out);
-    r.u32().unwrap();
-    r.u32().unwrap();
-    r.nullstring().unwrap();
-    for _ in 0..5 {
-        r.u32().unwrap();
-    }
-    r.nullstring().unwrap();
-    for _ in 0..4 {
-        r.u32().unwrap();
-    }
-    r.nullstring().unwrap();
-    for _ in 0..7 {
-        r.u32().unwrap();
-    }
-    let mut types = Vec::new();
-    if r.u32().unwrap() == 0 {
-        while r.u32().unwrap() != 0 {
-            types.push(r.u32().unwrap());
-            r.opaque().unwrap();
-        }
-    }
+    let types = get_tl_types(&store, &acl, &actor, "user@KERBER.TEST");
     assert!(types.contains(&0x0700), "{types:x?}");
     assert!(
         !types.iter().any(|&t| (0x4B01..=0x4B05).contains(&t)),

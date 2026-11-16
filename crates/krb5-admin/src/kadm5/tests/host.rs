@@ -11,8 +11,16 @@ use krb5_kdc::{PrincipalStore, SharedDump};
 
 use super::*;
 
-/// What one commit said: the operation, the caller, the client's mask, a password or not.
-type Seen = (Operation, Caller, Option<u32>, bool);
+/// What one commit said: the operation, the caller, the client's mask, a password or not, the
+/// rows' ids, and the names requested.
+type Seen = (
+    Operation,
+    Caller,
+    Option<u32>,
+    bool,
+    Vec<String>,
+    Vec<String>,
+);
 
 /// What one prepare saw: the operation, a password or not, the lock free, the client's mask.
 type Prepared = (Operation, bool, bool, Option<u32>);
@@ -47,6 +55,8 @@ impl KerberosStore for TestHost {
                 i.caller.clone(),
                 i.client_mask,
                 i.password.is_some(),
+                change.rows.iter().map(|r| r.id.clone()).collect(),
+                i.requested.clone(),
             ));
         if let Some(code) = *self.deny.lock().unwrap_or_else(PoisonError::into_inner) {
             return Err(KerberosStoreError::Denied(Denial {
@@ -119,7 +129,7 @@ fn hosted() -> (SharedDump, Arc<TestHost>, krb5_kdc::Acl, String) {
 #[test]
 fn every_kadmind_write_reaches_the_host_with_its_intent() {
     let (store, host, acl, actor) = hosted();
-    let calls: [(u32, Vec<u8>, Operation); 5] = [
+    let calls: [(u32, Vec<u8>, Operation); 7] = [
         (
             CHPASS_PRINCIPAL,
             chpass_args(TEST_USER, "another-password"),
@@ -137,6 +147,16 @@ fn every_kadmind_write_reaches_the_host_with_its_intent() {
             Operation::SetKey,
         ),
         (
+            SETKEY_PRINCIPAL3,
+            setkey3_args(TEST_USER, 17, &[8; 16]),
+            Operation::SetKey,
+        ),
+        (
+            SETKEY_PRINCIPAL4,
+            setkey4_args(TEST_USER, false, 9, 17, &[9; 16], 0, &[]),
+            Operation::SetKey,
+        ),
+        (
             CREATE_PRINCIPAL,
             create_rec("fresh", "fresh-password"),
             Operation::Create,
@@ -144,11 +164,17 @@ fn every_kadmind_write_reaches_the_host_with_its_intent() {
     ];
     for (proc, args, op) in calls {
         let out = dispatch_kadm5(&store, &acl, &actor, proc, &args).unwrap();
-        assert_eq!(ret_code(&out), 0, "{op:?}");
+        assert_eq!(ret_code(&out), 0, "{op:?} proc {proc}");
         let seen = host.seen();
         assert_eq!(seen.len(), 1, "{op:?} committed {} times", seen.len());
-        let (got, caller, mask, password) = &seen[0];
+        let (got, caller, mask, password, rows, _) = &seen[0];
         assert_eq!(got, &op);
+        let target = if op == Operation::Create {
+            format!("fresh@{TEST_REALM}")
+        } else {
+            format!("{TEST_USER}@{TEST_REALM}")
+        };
+        assert!(rows.contains(&target), "{op:?} proc {proc}: {rows:?}");
         assert!(
             matches!(caller, Caller::Kadmind { client, .. } if *client == actor),
             "{op:?}: {caller:?}"
@@ -163,7 +189,7 @@ fn every_kadmind_write_reaches_the_host_with_its_intent() {
         }
     }
     let prepared = std::mem::take(&mut *host.prepared.lock().unwrap());
-    assert_eq!(prepared.len(), 5);
+    assert_eq!(prepared.len(), 7);
     assert!(
         prepared.iter().all(|(_, _, unlocked, _)| *unlocked),
         "prepare ran under the store's lock: {prepared:?}"
@@ -293,4 +319,41 @@ fn a_marked_principals_keys_are_not_read_out() {
         .unwrap()
         .unwrap();
     assert_eq!(extract(), KADM5_AUTH_EXTRACT);
+}
+
+#[test]
+fn create_alias_declares_the_alias_and_its_target() {
+    let (store, host, acl, actor) = hosted();
+    let mut w = XdrW::default();
+    w.u32(API_V2);
+    w.nullstring(Some("nick@KERBER.TEST"));
+    w.nullstring(Some("user@KERBER.TEST"));
+    let out = dispatch_kadm5(&store, &acl, &actor, CREATE_ALIAS, &w.b).unwrap();
+    assert_eq!(ret_code(&out), 0);
+    let seen = host.seen();
+    assert_eq!(seen.len(), 1);
+    let (op, _, _, _, rows, requested) = &seen[0];
+    assert_eq!(*op, Operation::CreateAlias);
+    assert_eq!(requested, &["nick@KERBER.TEST", "user@KERBER.TEST"]);
+    assert!(rows.contains(&"nick@KERBER.TEST".to_owned()), "{rows:?}");
+}
+
+#[test]
+fn get_never_returns_the_host_mark() {
+    let (store, host, acl, actor) = hosted();
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let committer = Arc::clone(&host);
+    store
+        .write()
+        .unwrap()
+        .change_committing(
+            |c| committer.commit_change(c),
+            |s| s.set_host_owned_in(&user, TEST_REALM, true),
+        )
+        .unwrap()
+        .unwrap();
+    let id = format!("{TEST_USER}@{TEST_REALM}");
+    assert!(store.read().unwrap().get(&id).unwrap().host_owned());
+    let types = get_tl_types(&store, &acl, &actor, &id);
+    assert!(!types.contains(&0x004B), "{types:x?}");
 }
