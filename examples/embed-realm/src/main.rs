@@ -27,6 +27,8 @@ use krb5_config::{KadmindListen, KdcPaths, LogSpecs, ProfileSet};
 use krb5_log::klog::{self, Severity, os_error_text};
 
 mod auth_modules;
+#[cfg(feature = "test-hooks")]
+mod host_harness;
 mod write_load;
 
 /// The name used when `argv[0]` has none.
@@ -100,6 +102,15 @@ fn main() {
             &format!("{} while initializing context", e.init_text()),
         );
     });
+    #[cfg(feature = "test-hooks")]
+    let (mut store, harness) = match host_harness::open(&paths, &profile) {
+        Some(opened) => {
+            let (store, h) = opened.unwrap_or_else(|e| cannot_start(&progname, &e));
+            (store, Some(h))
+        }
+        None => (open_or_create(&progname, &paths, &profile), None),
+    };
+    #[cfg(not(feature = "test-hooks"))]
     let mut store = open_or_create(&progname, &paths, &profile);
     let load = match job {
         Job::Trust(trust) => {
@@ -131,6 +142,10 @@ fn main() {
         } => write_load,
     };
     let shared = krb5_kdc::shared_dump(store);
+    #[cfg(feature = "test-hooks")]
+    if let Some(h) = harness {
+        h.attach(&shared);
+    }
     let kdc_store: krb5_kdc::SharedStore = shared.clone();
     let (kdc_udp, kdc_tcp, kdc_limits) = bind_kdc(&progname, &profile);
 

@@ -21,6 +21,8 @@ path = "src/bin/krb5-otp-kdc.rs"
 [features]
 # Lab-only fault injection for cells V9 and V10; never built by build-bins.sh or CI.
 chaos = []
+# Lab-only: `KERBER_TEST_HOST_DIR` serves the realm on a scripted host store (src/host_harness.rs).
+test-hooks = []
 
 [dependencies]
 hmac.workspace = true
@@ -32,6 +34,7 @@ krb5-log.workspace = true
 krb5-protocol.workspace = true
 krb5-types.workspace = true
 sha1.workspace = true
+sha2.workspace = true
 signal-hook.workspace = true
 subtle.workspace = true
 tracing-subscriber.workspace = true

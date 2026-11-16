@@ -703,6 +703,7 @@ dependencies = [
  "krb5-protocol",
  "krb5-types",
  "sha1",
+ "sha2",
  "signal-hook",
  "subtle",
  "tracing-subscriber",

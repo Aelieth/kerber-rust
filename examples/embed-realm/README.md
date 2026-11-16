@@ -98,3 +98,18 @@ so it is no oracle.
 The `chaos` cargo feature is off by default and is never built by `build-bins.sh` or CI. Built with
 `--features chaos`, a token username of `chaos:hang`, `chaos:slow:<ms>`, `chaos:panic` or
 `chaos:error` drives the verifier, for lab cells V9 and V10 only.
+
+The `test-hooks` cargo feature is off by default and is not in the ship binaries. Built with
+`--features test-hooks` and run with `KERBER_TEST_HOST_DIR` set, `krb5-embed-realm` serves a fresh
+realm on a scripted in-memory host store, for the lab's real-client cells:
+- **Marked users.** The host answers as a directory would: a password change of eight characters
+  or more and an unlock are carried out; every other write is refused with the kadm5 code listed in
+  `src/host_harness.rs`. Every other principal behaves as with MIT.
+- **Admission.** A stub module refuses with 18 the names listed in `locked`, one per line, with an
+  optional tab and e-text. With `KERBER_TEST_HOST_NO_MODULE` set, no module is installed.
+- **Control.** Lines `mark NAME`, `unmark NAME` and `delete NAME` written to `ctl` run as the
+  host's own change.
+- **Output.** Every prepare, commit, verdict, check and notice is appended to `events.log`. The
+  admin keytab is written to `admin.keytab`.
+
+All of these files are in `$KERBER_TEST_HOST_DIR`.
