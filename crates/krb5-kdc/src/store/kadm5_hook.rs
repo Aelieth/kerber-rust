@@ -702,7 +702,7 @@ mod tests {
     }
 
     #[test]
-    fn hooks_name_the_canonical_principal_not_the_alias() {
+    fn hooks_name_the_principal_as_requested_even_an_alias() {
         use crate::store::{AdminFields, ModifyPrincipal, kadm5_mask};
         let (mut store, _) = crate::testrealm::bootstrap_documented().expect("realm");
         let realm = crate::testrealm::TEST_REALM;
@@ -733,7 +733,7 @@ mod tests {
                 "admin/admin",
             )
             .expect("modify");
-        let me = name_at(TEST_USER);
+        let me = name_at("nick");
         assert_eq!(
             module.named(),
             [

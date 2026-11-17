@@ -1481,7 +1481,6 @@ impl PrincipalStore {
         self.inside_change()?;
         let id = self.adb_id(name, princ_realm)?;
         let saved = self.map.get(&id).cloned().ok_or(Error::NotFound)?;
-        let (cname, crealm) = (saved.name.clone(), saved.realm.clone());
         self.apply_admin_fields_at(&id, name, princ_realm, m.fields, actor)?;
         if let Some(kvno) = m.kvno {
             self.set_kvno_in(name, princ_realm, kvno, actor)?;
@@ -1498,8 +1497,8 @@ impl PrincipalStore {
             super::kadm5_hook::hook_modify(
                 s,
                 super::kadm5_hook::HookStage::Precommit,
-                &cname,
-                &crealm,
+                name,
+                princ_realm,
                 m.mask,
             )
         })?;
@@ -1512,8 +1511,8 @@ impl PrincipalStore {
             self.save_if_configured()?;
         }
         self.postcommit(super::kadm5_hook::Post::Modify {
-            princ: cname,
-            realm: crealm,
+            princ: name.clone(),
+            realm: princ_realm.to_owned(),
             mask: m.mask,
         });
         Ok(())

@@ -204,6 +204,13 @@ fn prefetch<'g>(
     xdr_refused(p, api).map_or(Ok(p), |rep| Err(prefetch_failed(rep)))
 }
 
+/// The target's own name: MIT's stubs pass `rec.principal`, so a hook never sees an alias.
+type Canon = (PrincipalName, String);
+
+fn canon(p: &krb5_kdc::Principal) -> Canon {
+    (p.name.clone(), p.realm.clone())
+}
+
 // MIT: `kadm5_create_principal_3` (lib/kadm5/srv/svr_principal.c:338-347)
 fn dup_code(p: &krb5_kdc::Principal) -> u32 {
     if p.check_kadm_data().is_ok() {
@@ -430,7 +437,8 @@ pub(super) fn dispatch_kadm5_ticket(
             let req = req_realm(&prealm, &realm);
             // MIT: `modify_principal_2_svc` (kadmin/server/server_stubs.c)
             let checks = |g: &krb5_kdc::PrincipalStore| -> Result<_, Vec<u8>> {
-                let cid = prefetch(g, &name, &req, API_V2)?.id();
+                let p = prefetch(g, &name, &req, API_V2)?;
+                let (cid, target) = (p.id(), canon(p));
                 let (authorized, rss) = stack.modprinc(actor, &cid);
                 if changepw || !authorized {
                     return Err(generic_ret(API_V2, KADM5_AUTH_MODIFY));
@@ -456,11 +464,11 @@ pub(super) fn dispatch_kadm5_ticket(
                 if mask & KADM5_TL_DATA != 0 && db_args_code(&fields.tl_data).is_some() {
                     return Err(generic_ret(API_V2, EINVAL));
                 }
-                Ok((mask, fields))
+                Ok((mask, fields, target))
             };
             let restricted = match read_store(store, proc, API_V2) {
                 Ok(g) => match checks(&g) {
-                    Ok((mask, _)) => mask,
+                    Ok((mask, _, _)) => mask,
                     Err(rep) => return Ok(rep),
                 },
                 Err(rep) => return Ok(prefetch_failed(rep)),
@@ -480,7 +488,7 @@ pub(super) fn dispatch_kadm5_ticket(
                 Ok(g) => g,
                 Err(rep) => return Ok(prefetch_failed(rep)),
             };
-            let (mask, fields) = match checks(&g) {
+            let (mask, fields, (tname, trealm)) = match checks(&g) {
                 Ok(v) => v,
                 Err(rep) => return Ok(rep),
             };
@@ -519,7 +527,7 @@ pub(super) fn dispatch_kadm5_ticket(
             };
             declared.0.client_mask = Some(mask);
             let changed = commit(&mut g, proc, API_V2, declared, |s| {
-                s.modify_principal_in(&name, &req, modify, actor)
+                s.modify_principal_in(&tname, &trealm, modify, actor)
             });
             Ok(done(changed, API_V2))
         }
@@ -698,9 +706,10 @@ pub(super) fn dispatch_kadm5_ticket(
             };
             let req = req_realm(&prealm, &realm);
             // MIT: `chpass_principal_2_svc` (kadmin/server/server_stubs.c)
-            let checks = |g: &krb5_kdc::PrincipalStore| -> Result<u32, Vec<u8>> {
+            let checks = |g: &krb5_kdc::PrincipalStore| -> Result<(u32, Canon), Vec<u8>> {
                 let p = prefetch(g, &name, &req, API_V2)?;
                 let (cid, lockdown) = (p.id(), p.attributes & KDB_LOCKDOWN_KEYS != 0);
+                let target = canon(p);
                 if lockdown {
                     return Err(generic_ret(API_V2, KADM5_AUTH_CHANGEPW));
                 }
@@ -714,7 +723,7 @@ pub(super) fn dispatch_kadm5_ticket(
                 if self_change && let Err(e) = g.check_min_life_in(&name, &req) {
                     return Err(generic_ret(API_V2, kadm5_code(proc, &Error::from(e))));
                 }
-                Ok(clamp_self_keepold(self_change, keepold))
+                Ok((clamp_self_keepold(self_change, keepold), target))
             };
             let refused =
                 |e: krb5_kdc::Error| generic_ret(API_V2, kadm5_code(proc, &Error::from(e)));
@@ -722,12 +731,12 @@ pub(super) fn dispatch_kadm5_ticket(
             let planned = {
                 let (g, read) = krb5_kdc::read_fresh(store);
                 if read.is_ok() {
-                    let n = match checks(&g) {
-                        Ok(n) => n,
+                    let (n, (tname, trealm)) = match checks(&g) {
+                        Ok(v) => v,
                         Err(rep) => return Ok(rep),
                     };
                     prefetched = true;
-                    match g.plan_password(&name, &req, &pass, &ks) {
+                    match g.plan_password(&tname, &trealm, &pass, &ks) {
                         Ok(plan) => plan.map(|plan| (n, plan)),
                         Err(e) => return Ok(refused(e)),
                     }
@@ -775,13 +784,13 @@ pub(super) fn dispatch_kadm5_ticket(
                     Err(rep) => return Ok(rep),
                 }
             }
-            let n = match checks(&g) {
-                Ok(n) => n,
+            let (n, (tname, trealm)) = match checks(&g) {
+                Ok(v) => v,
                 Err(rep) => return Ok(rep),
             };
             let declared = (intent, token.take().flatten());
             let changed = commit(&mut g, proc, API_V2, declared, |s| {
-                s.set_password_etypes_keepold_n_in(&name, &req, &pass, n, actor, &ks)
+                s.set_password_etypes_keepold_n_in(&tname, &trealm, &pass, n, actor, &ks)
             });
             Ok(done(changed, API_V2))
         }
@@ -962,8 +971,9 @@ pub(super) fn dispatch_kadm5_ticket(
                 };
             let req = req_realm(&prealm, &realm);
             // MIT: `chrand_principal_2_svc` (kadmin/server/server_stubs.c)
-            let checks = |g: &krb5_kdc::PrincipalStore| -> Result<u32, Vec<u8>> {
-                let cid = prefetch(g, &name, &req, API_V2)?.id();
+            let checks = |g: &krb5_kdc::PrincipalStore| -> Result<(u32, Canon), Vec<u8>> {
+                let p = prefetch(g, &name, &req, API_V2)?;
+                let (cid, target) = (p.id(), canon(p));
                 let self_change = is_self_id(actor, &cid);
                 if (changepw && !self_change) || !stack.chrand(actor, &cid) {
                     return Err(generic_ret(API_V2, KADM5_AUTH_CHANGEPW));
@@ -974,7 +984,7 @@ pub(super) fn dispatch_kadm5_ticket(
                 if self_change && let Err(e) = g.check_min_life_in(&name, &req) {
                     return Err(generic_ret(API_V2, kadm5_code(proc, &Error::from(e))));
                 }
-                Ok(clamp_self_keepold(self_change, keepold))
+                Ok((clamp_self_keepold(self_change, keepold), target))
             };
             match read_store(store, proc, API_V2) {
                 Ok(g) => {
@@ -999,12 +1009,12 @@ pub(super) fn dispatch_kadm5_ticket(
                 Ok(g) => g,
                 Err(rep) => return Ok(prefetch_failed(rep)),
             };
-            let n = match checks(&g) {
-                Ok(n) => n,
+            let (n, (tname, trealm)) = match checks(&g) {
+                Ok(v) => v,
                 Err(rep) => return Ok(rep),
             };
             match commit(&mut g, proc, API_V2, declared, |s| {
-                s.chrand_etypes_keepold_in(&name, &req, &ks, n, actor)
+                s.chrand_etypes_keepold_in(&tname, &trealm, &ks, n, actor)
             }) {
                 Ok(keys) => {
                     let hide = g

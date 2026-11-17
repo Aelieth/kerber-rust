@@ -467,7 +467,6 @@ impl PrincipalStore {
         let new_keys = random_keys(&use_ks, kvno)?;
         let use_etypes: Vec<EncryptionType> = new_keys.iter().map(|k| k.etype).collect();
         let saved = existing.clone();
-        let (cname, crealm) = (saved.name.clone(), saved.realm.clone());
         let mkey = (keepold > 0).then(|| self.iprop_master_key()).flatten();
         {
             let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
@@ -482,8 +481,8 @@ impl PrincipalStore {
             super::kadm5_hook::hook_chpass(
                 s,
                 super::kadm5_hook::HookStage::Precommit,
-                &cname,
-                &crealm,
+                name,
+                princ_realm,
                 keepold,
                 None,
                 &use_etypes,
@@ -501,8 +500,8 @@ impl PrincipalStore {
         }
         self.save_if_configured()?;
         self.postcommit(super::kadm5_hook::Post::Chpass {
-            princ: cname,
-            realm: crealm,
+            princ: name.clone(),
+            realm: princ_realm.to_owned(),
             keepold,
             password: None,
             etypes: use_etypes,

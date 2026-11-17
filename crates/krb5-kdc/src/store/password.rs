@@ -676,7 +676,6 @@ impl PrincipalStore {
         };
         let etypes: Vec<EncryptionType> = keysalts.iter().map(|ks| ks.etype).collect();
         let saved = self.map.get(&id).cloned().ok_or(Error::NotFound)?;
-        let (cname, crealm) = (saved.name.clone(), saved.realm.clone());
         self.replace_password_keys(&id, keys, history, keepold, actor)?;
         if let Some(p) = self.map.get_mut(&id) {
             p.salt = crate::kdb_dump::salt_of_keys(&p.keys, &p.name, &p.realm);
@@ -686,8 +685,8 @@ impl PrincipalStore {
             super::kadm5_hook::hook_chpass(
                 s,
                 super::kadm5_hook::HookStage::Precommit,
-                &cname,
-                &crealm,
+                &name,
+                &realm,
                 keepold,
                 Some(password.as_slice()),
                 &etypes,
@@ -700,8 +699,8 @@ impl PrincipalStore {
         self.note_ulog(id, false, snap);
         self.save_if_configured()?;
         self.postcommit(super::kadm5_hook::Post::Chpass {
-            princ: cname,
-            realm: crealm,
+            princ: name,
+            realm,
             keepold,
             password: Some(password),
             etypes,
