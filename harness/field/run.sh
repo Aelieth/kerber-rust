@@ -297,7 +297,7 @@ say "record: $RUN"
 # ---------------------------------------------------------------- preflight
 section "preflight: ref $REF = $SHA, profile $PROFILE, legs ${LEGS[*]}, scenarios ${SEL[*]}"
 note "lock: $LOCK held by this run (flock); TMPDIR $TMPDIR; limits: scenario ${SCEN_LIMIT}s, command ${FIELD_CMD_TIMEOUT}s"
-host "cd $(printf '%q' "$HERE") && sha256sum lab.sh run.sh baseline.env lib/* scenarios/*"
+host "cd $(printf '%q' "$HERE") && sha256sum lab.sh run.sh baseline.env \$(find lib scenarios -type f | LC_ALL=C sort)"
 RQ=$(printf '%q' "$REPO")
 TQ=$(printf '%q' "$TMPDIR/tree.tar")
 check pre.tree rc host "GIT_OPTIONAL_LOCKS=0 git -C $RQ archive --format=tar --prefix=kerber-rust-$SHA12/ $SHA > $TQ"
