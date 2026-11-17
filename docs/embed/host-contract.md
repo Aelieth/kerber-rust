@@ -39,6 +39,9 @@ pub trait KerberosStore: Send + Sync {
   gets the same `HostChange`, with operation `Embedded`, and is always called. kerber-rust
   builds `Embedded` only there, so it never sends one to `commit_change`; only a `change_as`
   of your own with `Embedded` could.
+- `change_password_shared_committing_then` and `create_password_shared_committing_then` run your
+  `edit` once in that change, after the keys or the create. What `edit` writes wins: to keep the
+  policy's `pw_expire`, read it inside `edit` and pass it to `set_status`.
 - `change_as(intent, prepared, f)` is how a caller declares a write; kadmind and kpasswd use it.
 - kadmind, kpasswd and the `*_shared` helpers call `prepare` before each write, outside every
   lock. A `change_as` of your own does not.

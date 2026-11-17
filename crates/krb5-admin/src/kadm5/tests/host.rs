@@ -357,3 +357,152 @@ fn get_never_returns_the_host_mark() {
     let types = get_tl_types(&store, &acl, &actor, &id);
     assert!(!types.contains(&0x004B), "{types:x?}");
 }
+
+#[test]
+fn a_committing_change_and_its_edit_are_one_row() {
+    let (store, _, _, actor) = hosted();
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let mut got = Vec::new();
+    krb5_kdc::change_password_shared_committing_then(
+        &store,
+        &user,
+        TEST_REALM,
+        b"a new password",
+        0,
+        &actor,
+        &[],
+        |_| Ok(()),
+        |c| {
+            got.push(c);
+            Ok(())
+        },
+        |s| s.set_status(&user, true, 1_900_000_000, &actor),
+    )
+    .unwrap();
+    let [c] = got.as_slice() else {
+        panic!("{} commits", got.len())
+    };
+    assert_eq!(c.intent.operation, Operation::Embedded);
+    let [row] = c.rows.as_slice() else {
+        panic!("{} rows", c.rows.len())
+    };
+    let (before, after) = (row.before.as_ref().unwrap(), row.after.as_ref().unwrap());
+    assert!(after.top_kvno() > before.top_kvno());
+    assert_ne!(after.attributes & krb5_kdc::KDB_DISALLOW_ALL_TIX, 0);
+    let both = krb5_kdc::kadm5_mask::KEY_DATA | krb5_kdc::kadm5_mask::ATTRIBUTES;
+    assert_eq!(row.mask & both, both, "{:#x}", row.mask);
+}
+
+#[test]
+fn on_the_fallback_the_edit_runs_once_and_its_expiry_wins() {
+    let (store, _, _, actor) = hosted();
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    {
+        let mut g = store.write().unwrap();
+        let mut pol = krb5_kdc::NamedPolicy::new("expiring");
+        pol.pw_max_life = 3600;
+        g.put_policy(pol).unwrap();
+        // With a policy and no history key, the plan waits for the lock.
+        g.change(|s| s.set_principal_policy(&user, Some("expiring".to_owned())))
+            .unwrap()
+            .unwrap();
+    }
+    let (mut got, mut runs) = (Vec::new(), 0);
+    krb5_kdc::change_password_shared_committing_then(
+        &store,
+        &user,
+        TEST_REALM,
+        b"a new password",
+        0,
+        &actor,
+        &[],
+        |_| Ok(()),
+        |c| {
+            got.push(c);
+            Ok(())
+        },
+        |s| {
+            runs += 1;
+            s.set_status(&user, true, 7, &actor)
+        },
+    )
+    .unwrap();
+    assert_eq!(runs, 1);
+    let g = store.read().unwrap();
+    assert!(g.history_key().is_some(), "the full setter ran");
+    let [c] = got.as_slice() else {
+        panic!("{} commits", got.len())
+    };
+    let id = format!("{TEST_USER}@{TEST_REALM}");
+    let row = c.rows.iter().find(|r| r.id == id).unwrap();
+    let after = row.after.as_ref().unwrap();
+    assert_ne!(after.attributes & krb5_kdc::KDB_DISALLOW_ALL_TIX, 0);
+    assert_eq!(after.pw_expire, 7);
+}
+
+#[test]
+fn a_failed_edit_commits_nothing() {
+    let (store, _, _, actor) = hosted();
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let id = format!("{TEST_USER}@{TEST_REALM}");
+    let was = store.read().unwrap().get(&id).cloned().unwrap();
+    let mut called = false;
+    let r = krb5_kdc::change_password_shared_committing_then(
+        &store,
+        &user,
+        TEST_REALM,
+        b"a new password",
+        0,
+        &actor,
+        &[],
+        |_| Ok(()),
+        |_| {
+            called = true;
+            Ok(())
+        },
+        |s| {
+            s.set_status(&user, true, 7, &actor)?;
+            Err(krb5_kdc::Error::NotFound)
+        },
+    );
+    assert!(matches!(r, Err(krb5_kdc::Error::NotFound)), "{r:?}");
+    assert!(!called);
+    let now = store.read().unwrap().get(&id).cloned().unwrap();
+    assert_eq!(now.top_kvno(), was.top_kvno());
+    assert_eq!(now.attributes, was.attributes);
+}
+
+#[test]
+fn a_committing_create_takes_the_status_and_the_mark() {
+    let (store, _, _, actor) = hosted();
+    let new = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["hosted"]);
+    let mut got = Vec::new();
+    krb5_kdc::create_password_shared_committing_then(
+        &store,
+        &new,
+        TEST_REALM,
+        b"a new password",
+        &[],
+        &krb5_kdc::AdminEnt::default(),
+        &actor,
+        |c| {
+            got.push(c);
+            Ok(())
+        },
+        |s| {
+            s.set_status(&new, true, 0, &actor)?;
+            s.set_host_owned_in(&new, TEST_REALM, true)
+        },
+    )
+    .unwrap();
+    let [c] = got.as_slice() else {
+        panic!("{} commits", got.len())
+    };
+    let [row] = c.rows.as_slice() else {
+        panic!("{} rows", c.rows.len())
+    };
+    assert!(row.before.is_none() && row.host_owned);
+    let after = row.after.as_ref().unwrap();
+    assert!(after.host_owned());
+    assert_ne!(after.attributes & krb5_kdc::KDB_DISALLOW_ALL_TIX, 0);
+}

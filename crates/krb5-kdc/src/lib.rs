@@ -154,9 +154,11 @@ pub use store::{
     PreparedPassword, Principal, PrincipalBuilder, PrincipalStore, Pwqual, RID_FIRST_USER,
     RID_KRBTGT, S2K_ITERS, SpakeKdc, TlData, XDR_FAILURE, apply_keysalt_policy,
     change_password_shared, change_password_shared_as, change_password_shared_committing,
-    clear_thread_kadm5_hook, clear_thread_pwqual, create_password_shared,
-    create_password_shared_committing, declare_shared, kadm5_mask, ktkdb_get_entry, random_key,
-    register_kadm5_hook, register_pwqual, set_thread_kadm5_hook, set_thread_pwqual, strip_db_args,
+    change_password_shared_committing_then, clear_thread_kadm5_hook, clear_thread_pwqual,
+    create_password_shared, create_password_shared_committing,
+    create_password_shared_committing_then, declare_shared, kadm5_mask, ktkdb_get_entry,
+    random_key, register_kadm5_hook, register_pwqual, set_thread_kadm5_hook, set_thread_pwqual,
+    strip_db_args,
 };
 #[cfg(any(test, feature = "test-hooks"))]
 pub use ulog::UlogEntry;

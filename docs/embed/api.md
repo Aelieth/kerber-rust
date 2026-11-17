@@ -15,7 +15,9 @@ This page is as of v1.2.3. The host's side of the contract is in [host-contract.
 `prepare`. New in `krb5_kdc`: `host::{WriteIntent, Operation, Caller, RowChange, HostChange,
 HostPrepared, TargetPeek, Denial}`, `KerberosStoreError::Denied`, `PrincipalStore::{change_as,
 defer_postcommit, target_peek, has_host, set_host_owned_in, host_full_change}`,
-`Principal::host_owned`, and the `HostAdmission` trait with `PluginSet::set_host_admission`.
+`Principal::host_owned`, the `HostAdmission` trait with `PluginSet::set_host_admission`, and
+`change_password_shared_committing_then` and `create_password_shared_committing_then`, which run
+the host's `edit` once in the same change, after the keys or the create.
 Details: [host-contract.md](host-contract.md).
 
 ## New in 1.2.2

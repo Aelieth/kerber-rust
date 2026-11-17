@@ -445,6 +445,32 @@ pub fn create_password_shared_committing(
     actor: &str,
     commit: impl FnOnce(crate::host::HostChange) -> Result<(), crate::host::KerberosStoreError>,
 ) -> Result<(), Error> {
+    create_password_shared_committing_then(
+        store,
+        name,
+        princ_realm,
+        password,
+        etypes,
+        ent,
+        actor,
+        commit,
+        |_| Ok(()),
+    )
+}
+
+/// `edit` runs once, in the change, after the create.
+#[expect(clippy::too_many_arguments, reason = "the create inputs and the edit")]
+pub fn create_password_shared_committing_then(
+    store: &SharedDump,
+    name: &PrincipalName,
+    princ_realm: &str,
+    password: &[u8],
+    etypes: &[KeySalt],
+    ent: &AdminEnt,
+    actor: &str,
+    commit: impl FnOnce(crate::host::HostChange) -> Result<(), crate::host::KerberosStoreError>,
+    edit: impl FnOnce(&mut PrincipalStore) -> Result<(), Error>,
+) -> Result<(), Error> {
     let planned = {
         let (g, read) = read_fresh(store);
         match read {
@@ -455,13 +481,15 @@ pub fn create_password_shared_committing(
     let prepared = planned.map(CreatePlan::derive).transpose()?;
     let mut g = store.write().unwrap_or_else(PoisonError::into_inner);
     g.change_committing(commit, |s| {
-        if let Some(p) = prepared
-            && s.create_prepared(p, actor)?
-        {
-            return Ok(());
+        let created = match prepared {
+            Some(p) => s.create_prepared(p, actor)?,
+            None => false,
+        };
+        if !created {
+            let keys = CreateKeys::Password(password);
+            s.create_principal_3_in(name, princ_realm, keys, etypes, ent, actor)?;
         }
-        let keys = CreateKeys::Password(password);
-        s.create_principal_3_in(name, princ_realm, keys, etypes, ent, actor)
+        edit(s)
     })?
 }
 

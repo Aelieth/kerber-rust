@@ -308,6 +308,34 @@ pub fn change_password_shared_committing(
     checks: impl Fn(&PrincipalStore) -> Result<(), Error>,
     commit: impl FnOnce(crate::host::HostChange) -> Result<(), crate::host::KerberosStoreError>,
 ) -> Result<(), Error> {
+    change_password_shared_committing_then(
+        store,
+        name,
+        princ_realm,
+        password,
+        keepold,
+        actor,
+        etypes,
+        checks,
+        commit,
+        |_| Ok(()),
+    )
+}
+
+/// `edit` runs once, in the change, after the keys.
+#[expect(clippy::too_many_arguments, reason = "the chpass inputs and the edit")]
+pub fn change_password_shared_committing_then(
+    store: &SharedDump,
+    name: &PrincipalName,
+    princ_realm: &str,
+    password: &[u8],
+    keepold: u32,
+    actor: &str,
+    etypes: &[KeySalt],
+    checks: impl Fn(&PrincipalStore) -> Result<(), Error>,
+    commit: impl FnOnce(crate::host::HostChange) -> Result<(), crate::host::KerberosStoreError>,
+    edit: impl FnOnce(&mut PrincipalStore) -> Result<(), Error>,
+) -> Result<(), Error> {
     let planned = {
         let (g, read) = read_fresh(store);
         match read {
@@ -321,13 +349,22 @@ pub fn change_password_shared_committing(
     let mut g = store.write().unwrap_or_else(PoisonError::into_inner);
     let prepared = prepared?;
     g.change_committing(commit, |s| {
-        if let Some(p) = prepared
-            && s.apply_password(p, keepold, actor)?
-        {
-            return Ok(());
+        let applied = match prepared {
+            Some(p) => s.apply_password(p, keepold, actor)?,
+            None => false,
+        };
+        if !applied {
+            checks(s)?;
+            s.set_password_etypes_keepold_n_in(
+                name,
+                princ_realm,
+                password,
+                keepold,
+                actor,
+                etypes,
+            )?;
         }
-        checks(s)?;
-        s.set_password_etypes_keepold_n_in(name, princ_realm, password, keepold, actor, etypes)
+        edit(s)
     })?
 }
 

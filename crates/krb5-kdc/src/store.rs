@@ -941,14 +941,14 @@ pub use keys::{KeyEntry, KeyLookup, KeySlot, KtkdbError, OpaqueKey, ktkdb_get_en
 pub use password::{
     PWQUAL_DICT, PWQUAL_EMPTY, PWQUAL_PRINC, PasswordPlan, PreparedPassword, S2K_ITERS,
     apply_keysalt_policy, change_password_shared, change_password_shared_as,
-    change_password_shared_committing,
+    change_password_shared_committing, change_password_shared_committing_then,
 };
 pub use policy::{NamedPolicy, Policy, SpakeKdc};
 pub(crate) use principal::PrincipalFields;
 pub use principal::{
     AdminEnt, AdminFields, CreateKeys, CreatePlan, KDB_INUSE, KadmData, ModifyPrincipal,
     PreparedCreate, Principal, PrincipalBuilder, TlData, XDR_FAILURE, create_password_shared,
-    create_password_shared_committing, strip_db_args,
+    create_password_shared_committing, create_password_shared_committing_then, strip_db_args,
 };
 pub(crate) use principal::{LoadedCt, db_args_put_error, refresh_kadm_tl};
 pub use pwqual::{Pwqual, clear_thread_pwqual, register_pwqual, set_thread_pwqual};
