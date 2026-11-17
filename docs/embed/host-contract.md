@@ -83,7 +83,8 @@ commit; `rows[..].host_owned` in the commit is the authority.
 Rules for the rows:
 
 - `mask` leaves out FAIL_AUTH_COUNT, LAST_SUCCESS and LAST_FAILED. The map's copy can lag the
-  lockout file. An unlock arrives as Modify with FAIL_AUTH_COUNT in `intent.client_mask`.
+  lockout file. An unlock arrives as Modify with FAIL_AUTH_COUNT in `intent.client_mask`; MIT's
+  kadmin client also sets TL_DATA, with one TL_LAST_ADMIN_UNLOCK (0x0700) entry, the unlock time.
   A key change zeroes the count by definition. For marked rows the counter is yours.
 - A declared change that touched no row does not reach `commit_change`, whatever its intent.
   The exception is your own `change_committing`, whose closure is always called (as `Embedded`).
