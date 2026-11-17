@@ -295,14 +295,6 @@ fn is_self_id(actor: &str, cid: &str) -> bool {
     parse_actor(cid).is_some_and(|(n, r)| is_self(actor, &n, &r))
 }
 
-pub(super) fn store_realm(store: &SharedStore) -> String {
-    store
-        .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .realm()
-        .to_owned()
-}
-
 fn req_realm(prealm: &str, default: &str) -> String {
     if prealm.is_empty() {
         default.to_owned()
@@ -312,14 +304,14 @@ fn req_realm(prealm: &str, default: &str) -> String {
 }
 
 // MIT: `xdr_krb5_principal` (lib/kadm5/kadm_rpc_xdr.c:1089-1095)
-fn default_realm(store: &SharedStore, served: &str) -> String {
+pub(super) fn default_realm(store: &SharedStore) -> String {
     let g = store
         .read()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     g.policy
         .default_realm
         .clone()
-        .unwrap_or_else(|| served.to_owned())
+        .unwrap_or_else(|| g.realm().to_owned())
 }
 
 #[cfg(all(test, feature = "test-hooks"))]
@@ -346,8 +338,7 @@ pub(super) fn dispatch_kadm5_ticket(
     changepw: bool,
 ) -> Result<Vec<u8>, Error> {
     clear_prefetch();
-    let realm = store_realm(store);
-    let defrealm = default_realm(store, &realm);
+    let defrealm = default_realm(store);
     let stack = authcfg.stack();
     let who = Who {
         store,
