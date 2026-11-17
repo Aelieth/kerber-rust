@@ -24,6 +24,7 @@ any other `###` heading.
 - **admin.** kadmind with `test-hooks` loads a hook module that prints MIT's test hook lines.
 - **kdc.** `conformance::run_own`: the host rows over a host's own commit path.
 - **kdc.** `change_password_shared_committing_then`, `create_..._then`: `checks`, then `edit` in one change.
+- **kdc.** `load_dump_with_stash_path`: a migration load that reads the stash file itself.
 
 ### Changed
 

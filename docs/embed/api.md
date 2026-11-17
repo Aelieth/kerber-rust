@@ -18,7 +18,8 @@ defer_postcommit, target_peek, has_host, set_host_owned_in, host_full_change}`,
 `Principal::host_owned`, the `HostAdmission` trait with `PluginSet::set_host_admission`, and
 `change_password_shared_committing_then` and `create_password_shared_committing_then`, which run
 the host's `edit` once in the same change, after the keys or the create, and its `checks` before
-the plan and again under the lock.
+the plan and again under the lock; and `load_dump_with_stash_path`, which reads the stash from its
+file so the host never holds the master key.
 Details: [host-contract.md](host-contract.md).
 
 ## New in 1.2.2
@@ -92,7 +93,8 @@ A host implements `host::KerberosStore` (`load`, `commit_change` of a `HostChang
   fails, `open_or_create_host` removes only the stash it just wrote. **A later boot**
   requires the lockout file, loads the rows and opens each record's seal with the
   stash's key; principals the bootstrap adds are committed.
-- **A migrated realm:** `load_dump_with_stash`, commit `host_full_change()` to the empty host,
+- **A migrated realm:** `load_dump_with_stash_path` (or `load_dump_with_stash` with the stash's
+  bytes), commit `host_full_change()` to the empty host,
   `create_lockout_file` (before or after the commit), then `open_or_create_host`, with
   that stash at `HostPaths.stash`.
 - **`create_lockout_file`** is an exclusive create at 0600 that never truncates. An

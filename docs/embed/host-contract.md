@@ -126,7 +126,8 @@ Never UNK_PRINC. A `Denied` from `prepare` carries the same codes; no lock was t
    withholds the new keys, and `export_keytab` refuses. Writes stay your verdict.
 4. Bulk ingest is refused on a host store: iprop replay (`apply_updates`) and the `load -update`
    merge (`update_store`), and the iprop service answers PERM_DENIED. The empty-store import
-   path still works: `parse_dump` or `load_dump_with_key` / `load_dump_with_stash`, then commit
+   path still works: `parse_dump`, `load_dump_with_stash_path`, `load_dump_with_key` or
+   `load_dump_with_stash`, then commit
    `host_full_change()` to an empty host.
 5. `kadmin/history`: in host mode a change you refuse also rolls back the history principal it
    created. MIT commits it at once (`lib/kadm5/srv/server_kdb.c:141-164`), so this is a deviation.

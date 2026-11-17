@@ -1161,6 +1161,13 @@ pub fn load_dump_with_stash(text: &str, stash: &[u8]) -> Result<PrincipalStore, 
     Ok(dump.into_store(&mkey)?)
 }
 
+pub fn load_dump_with_stash_path(
+    text: &str,
+    stash_path: &Path,
+) -> Result<PrincipalStore, PersistError> {
+    load_dump_with_stash(text, &krb5_protocol::read_stash_file(stash_path)?)
+}
+
 fn load_kdb_blob(
     blob: &[u8],
     version: KdbVersion,
