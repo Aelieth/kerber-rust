@@ -16,7 +16,7 @@ memory-safe language without changing your clients, or you are building a produc
 library. **It is not for you if** you need a C library, an LDAP database backend, RADIUS one-time codes or
 several realms in one KDC process: see [Limitations](#limitations).
 
-This is version **1.2.2**. You build it from source; it is not on crates.io and there is no package.
+This is version **1.2.3**. You build it from source; it is not on crates.io and there is no package.
 
 [Why it exists](#why-it-exists) · [What it can do](#what-it-can-do) · [Limitations](#limitations) ·
 [How it was tested](#how-it-was-tested) · [Download, install and use](#download-install-and-use) ·
@@ -78,7 +78,7 @@ It keeps its database in MIT's dump format, so a realm can move to it and back.
   Keep `krb5-workstation` if a script depends on one of those differences.
 - **Some behaviour differs from MIT on purpose.** Most of those differences refuse something MIT
   accepts, such as a principal name that is not UTF-8.
-  [Not yet matched](docs/interop-matrix.md#not-yet-matched-in-122) lists what an operator could see, and
+  [Not yet matched](docs/interop-matrix.md#not-yet-matched-in-123) lists what an operator could see, and
   [the deviations file](docs/mit-deviations.md) has every deliberate one.
 - **Its dependencies are not all audited or free of `unsafe`.** RustCrypto, curve25519-dalek, getrandom
   and nix contain `unsafe`, and `cargo vet` reports 18 crates fully audited and 134 exempted.
@@ -99,6 +99,12 @@ On Fedora that MIT is 1.22.2; on Debian 13 and Rocky Linux 10 it is the distribu
 its checks are graded as that version behaves. A *check* is one thing the harness looks at after a step,
 such as a command's exit code or output, a log line or a file's contents. It passes or fails, or it is
 only recorded (informational).
+
+**1.2.3's runs.** The 1.2.3 code runs this release's whole test list once, on the tagged commit,
+with MIT 1.22.2 first in each comparison: the 1.2.2 list in containers, on the lab machines (power
+cuts, the upgrade, an iprop replica) and in CI's `peers` job, plus the host contract's rows, and
+KLLDAP's acceptance on the same commit. The results record, docs/results/1.2.3.md, is added after
+the tag.
 
 **1.2.2's runs.** The 1.2.2 code ran this release's test list once, whole, in containers, on the lab
 machines and in CI, with MIT 1.22.2 first in each comparison:
@@ -171,7 +177,7 @@ prerequisites on: [Rocky Linux](docs/install.md#rocky-linux),
 sudo dnf install -y git gcc make lld rustup krb5-workstation logrotate words
 rustup-init -y --default-toolchain none --profile minimal
 . "$HOME/.cargo/env"
-git clone --branch v1.2.2 https://github.com/Aelieth/kerber-rust.git
+git clone --branch v1.2.3 https://github.com/Aelieth/kerber-rust.git
 cd kerber-rust
 rustup toolchain install
 make build

@@ -20,6 +20,8 @@ defer_postcommit, target_peek, has_host, set_host_owned_in, host_full_change}`,
 the host's `edit` once in the same change, after the keys or the create, and its `checks` before
 the plan and again under the lock; `load_dump_with_stash_path`, which reads the stash from its
 file so the host never holds the master key; and `Error::BootstrapMarkerWithoutStash`.
+`Policy::default_realm`, from `[libdefaults] default_realm`, names the realm of a kadm5 principal
+sent without one (MIT's rule); with none set it is the served realm.
 Details: [host-contract.md](host-contract.md).
 
 ## New in 1.2.2
@@ -180,6 +182,8 @@ and a stash with no realm is refused rather than resumed (above).
 the `Krb5Conf` and an optional `KdcConf` (`kdc: Option<KdcConf>`). `store.apply_profile(&profile)` then gives
 the store the realm's ticket lifetimes, flags, and enctypes. Apply it before
 serving (the example applies it before `--create-trust` and `--allow-to-delegate`).
+For PKINIT, call `store.init_pkinit(&profile)` after `apply_profile`, as the
+daemon does; it returns the failure to log, if any. The example calls it.
 
 ## kadmind and kpasswd
 
@@ -273,7 +277,7 @@ embedder's workspace must carry the same patch, from this repository at the tag 
 
 ```toml
 [patch.crates-io]
-rasn = { git = "https://github.com/Aelieth/kerber-rust", tag = "v1.2.2" }
+rasn = { git = "https://github.com/Aelieth/kerber-rust", tag = "v1.2.3" }
 ```
 
 Without it, `krb5-types` fails to compile on `rasn::KERBER_RUST_NEEDS_THIS_PATCH`.

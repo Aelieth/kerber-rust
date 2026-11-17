@@ -72,6 +72,9 @@ commit; `rows[..].host_owned` in the commit is the authority.
     `Kpasswd { client, initial, self_service }`, `Local { principal }` (kadmin.local `-p`,
     kdb5_util) or `Embedder`.
   - `requested`: the names as sent, with the realm; a rename or alias gives two.
+  - A name sent without a realm takes the profile's `[libdefaults] default_realm`, as MIT, else
+    the served realm. A host that builds its profile in memory sets `default_realm` itself, or a
+    bare name resolves to the process krb5.conf's realm.
   - `client_mask`: kadmind's request mask, after ACL restrictions.
   - `keepold`, and `password` (a `Zeroizing` copy) for create-with-password, chpass and
     kpasswd.
@@ -155,8 +158,9 @@ pub struct KdcRefusal { pub code: i32, pub e_text: Option<String> } // 18 CLIENT
 
 Register with `store.policy.plugins.set_host_admission(Arc<dyn HostAdmission>)` (the
 `PluginSet`, per store, kept across reloads). It applies only to marked principals. **A marked
-principal with no module installed is refused with KDC error 18** and the KDC logs it once per
-process. There is no fallback to MIT's lockout. Install the module before any listener starts.
+principal with no module installed is refused with KDC error 18** and e-text `LOCKED_OUT` (as
+MIT's lockout refusal), and the KDC logs it once per process. There is no fallback to MIT's
+lockout. Install the module before any listener starts.
 
 ### 3.1 `check_as`: the verdict, before preauthentication
 

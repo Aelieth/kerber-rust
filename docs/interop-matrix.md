@@ -73,7 +73,7 @@ update log consistent 19 times and stable but behind once, where MIT's baseline 
 ran on Debian 13 and Rocky Linux 10 too, at `0f633715`: 228 and 220 kills, no unexpected result, and MIT's
 `kdb5_util` matched and loaded all 230 and 222 dumps.
 
-### Not yet matched in 1.2.2
+### Not yet matched in 1.2.3
 
 - **Client messages and logs.** None changes an outcome.
   - The KDC's AS_REQ line for a wrong encrypted-challenge password ends `Preauthentication failed`, where MIT's ends
@@ -89,6 +89,8 @@ ran on Debian 13 and Rocky Linux 10 too, at `0f633715`: 228 and 220 kills, no un
   differences it lists.
 - **Corrupt records.** MIT's `getprinc` refuses a principal whose `LAST_PWD_CHANGE`, `MOD_PRINC` or `MKVNO` data is
   corrupt (`Database record is incomplete or corrupted`); ours prints the entry. Only a damaged database reaches it.
+- **kadm5 with no default realm.** A name sent without a realm: MIT's kadmind fails the call (RPC error); ours uses
+  the served realm.
 - **Not run:**
   - Heimdal's KDC, cross-realm with it and its `kcm`;
   - Windows: a domain-joined logon, SSPI as a server, and Windows OpenSSH;
