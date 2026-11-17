@@ -298,26 +298,60 @@ impl PrincipalStore {
             let inside = HeldSaves::new(self);
             catch_unwind(AssertUnwindSafe(|| f(&mut *inside.0)))
         };
-        let before = self.set_host_before(None).ok_or_else(journal_lost)?;
+        let mut committed = false;
+        let tail = catch_unwind(AssertUnwindSafe(|| {
+            self.host_finish(done, commit, declared, &mut committed)
+        }));
+        match tail {
+            Ok(Ok(out)) => out,
+            Ok(Err(panic)) => resume_unwind(panic),
+            Err(panic) => {
+                if committed {
+                    self.set_host_before(None);
+                    self.map.end_change();
+                } else {
+                    self.undo_parked();
+                }
+                resume_unwind(panic);
+            }
+        }
+    }
+
+    fn host_finish<T, E, C>(
+        &mut self,
+        done: std::thread::Result<Result<T, E>>,
+        commit: Option<C>,
+        declared: Declared,
+        committed: &mut bool,
+    ) -> std::thread::Result<Result<Result<T, E>, Error>>
+    where
+        C: FnOnce(HostChange) -> Result<(), KerberosStoreError>,
+    {
         let value = match done {
             Ok(Ok(v)) => v,
             Ok(Err(e)) => {
-                self.host_undo(before);
+                self.undo_parked();
                 if self.host.as_ref().is_some_and(|h| h.reload_due) {
                     self.reload_or_mark();
                 }
-                return Ok(Err(e));
+                return Ok(Ok(Err(e)));
             }
             Err(panic) => {
-                self.host_undo(before);
-                resume_unwind(panic);
+                self.undo_parked();
+                return Err(panic);
             }
         };
-        let (batch, gone, rows) = match self.host_batch(&before) {
+        let batch = self
+            .host
+            .as_ref()
+            .and_then(|h| h.before.as_ref())
+            .ok_or_else(journal_lost)
+            .and_then(|before| self.host_batch(before));
+        let (batch, gone, rows) = match batch {
             Ok(b) => b,
             Err(e) => {
-                self.host_undo(before);
-                return Err(e);
+                self.undo_parked();
+                return Ok(Err(e));
             }
         };
         let skip = rows.is_empty() && batch.is_empty();
@@ -333,8 +367,14 @@ impl PrincipalStore {
             prepared,
             batch,
         };
-        let host = self.host_store()?;
-        let committed = catch_unwind(AssertUnwindSafe(|| match commit {
+        let host = match self.host_store() {
+            Ok(h) => h,
+            Err(e) => {
+                self.undo_parked();
+                return Ok(Err(e));
+            }
+        };
+        let outcome = catch_unwind(AssertUnwindSafe(|| match commit {
             Some(c) => c(change),
             None if skip => Ok(()),
             None => host.commit_change(change),
@@ -344,26 +384,35 @@ impl PrincipalStore {
                 "the host's commit panicked".to_owned(),
             ))
         });
-        match committed {
+        match outcome {
             Ok(()) => {
+                *committed = true;
+                self.set_host_before(None);
                 self.map.end_change();
                 self.lockout.drop_host_rows(&gone);
                 self.pending
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .clear();
-                Ok(Ok(value))
+                Ok(Ok(Ok(value)))
             }
             Err(e) => {
-                self.host_undo(before);
+                self.undo_parked();
                 if !matches!(
                     e,
                     KerberosStoreError::Refused(_) | KerberosStoreError::Denied(_)
                 ) {
                     self.reload_or_mark();
                 }
-                Err(Error::Host(e))
+                Ok(Err(Error::Host(e)))
             }
+        }
+    }
+
+    fn undo_parked(&mut self) {
+        match self.set_host_before(None) {
+            Some(before) => self.host_undo(before),
+            None => self.reload_or_mark(),
         }
     }
 

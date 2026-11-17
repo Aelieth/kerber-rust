@@ -22,6 +22,7 @@ mod transit;
 mod tests;
 
 use std::collections::HashMap;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -176,12 +177,6 @@ impl<'a> HeldSaves<'a> {
 impl Drop for HeldSaves<'_> {
     fn drop(&mut self) {
         self.0.saves_held = false;
-        if std::thread::panicking() {
-            self.0.db_stamp = None;
-            if let Some(h) = self.0.host.as_mut() {
-                h.reload_due = true;
-            }
-        }
     }
 }
 
@@ -658,70 +653,77 @@ impl PrincipalStore {
         self.wrote_through.0.store(false, Ordering::Relaxed);
         let before = Before::of(self);
         self.map.begin_change();
-        let done = {
-            let inside = HeldSaves::new(self);
-            f(&mut *inside.0)
-        };
         let log = self.log.clone();
-        let mut staged = None;
-        let out = match done {
-            Ok(v) if self.changed.0.load(Ordering::Relaxed) => {
-                let append = self.append_plan(&before);
-                let mut appended = 0;
-                let written = self
-                    .prepare_log()
-                    .map_err(LoggedWrite::Before)
-                    .and_then(|p| {
-                        self.write_staged(log.as_deref(), p, || match &append {
-                            Some((ids, _, _)) if ids.is_empty() => Ok(()),
-                            Some((ids, master, at)) => {
-                                appended =
-                                    crate::persist::append_change(self, &db, master, *at, ids)?;
-                                lock.update_age();
-                                Ok(())
-                            }
-                            None => self.write_database().map_err(Error::from),
-                        })
-                    });
-                match written {
-                    Ok(batch) => {
-                        staged = batch;
-                        self.map.end_change();
-                        self.db_stamp = match (&append, &self.db_stamp) {
-                            (Some((ids, _, at)), Some(s)) => DbStamp::holding(
-                                &lock,
-                                &db,
-                                s.records + u64::try_from(ids.len()).unwrap_or_default(),
-                                at + appended,
-                            ),
-                            _ => DbStamp::now(&lock, &db, self.map.len_u64()),
-                        };
-                        tracing::debug!(
-                            event = krb5_log::events::ADMIN,
-                            component = "krb5-kdc",
-                            outcome = "ok",
-                            detail = "saved store",
-                            db = %db.display(),
-                        );
-                        Ok(Ok(v))
+        let ran = catch_unwind(AssertUnwindSafe(|| {
+            let done = {
+                let inside = HeldSaves::new(self);
+                f(&mut *inside.0)
+            };
+            let mut staged = None;
+            let out = match done {
+                Ok(v) if self.changed.0.load(Ordering::Relaxed) => {
+                    let append = self.append_plan(&before);
+                    let mut appended = 0;
+                    let written = self
+                        .prepare_log()
+                        .map_err(LoggedWrite::Before)
+                        .and_then(|p| {
+                            self.write_staged(log.as_deref(), p, || match &append {
+                                Some((ids, _, _)) if ids.is_empty() => Ok(()),
+                                Some((ids, master, at)) => {
+                                    appended =
+                                        crate::persist::append_change(self, &db, master, *at, ids)?;
+                                    lock.update_age();
+                                    Ok(())
+                                }
+                                None => self.write_database().map_err(Error::from),
+                            })
+                        });
+                    match written {
+                        Ok(batch) => {
+                            staged = batch;
+                            self.map.end_change();
+                            self.db_stamp = match (&append, &self.db_stamp) {
+                                (Some((ids, _, at)), Some(s)) => DbStamp::holding(
+                                    &lock,
+                                    &db,
+                                    s.records + u64::try_from(ids.len()).unwrap_or_default(),
+                                    at + appended,
+                                ),
+                                _ => DbStamp::now(&lock, &db, self.map.len_u64()),
+                            };
+                            tracing::debug!(
+                                event = krb5_log::events::ADMIN,
+                                component = "krb5-kdc",
+                                outcome = "ok",
+                                detail = "saved store",
+                                db = %db.display(),
+                            );
+                            Ok(Ok(v))
+                        }
+                        Err(e) => {
+                            self.read_back(&lock);
+                            Err(e.into_error())
+                        }
                     }
-                    Err(e) => {
+                }
+                Ok(v) => {
+                    self.map.end_change();
+                    Ok(Ok(v))
+                }
+                Err(e) => {
+                    if self.wrote_through.0.load(Ordering::Relaxed) || !before.restore(self) {
                         self.read_back(&lock);
-                        Err(e.into_error())
                     }
+                    Ok(Err(e))
                 }
-            }
-            Ok(v) => {
-                self.map.end_change();
-                Ok(Ok(v))
-            }
-            Err(e) => {
-                if self.wrote_through.0.load(Ordering::Relaxed) || !before.restore(self) {
-                    self.read_back(&lock);
-                }
-                Ok(Err(e))
-            }
-        };
+            };
+            (out, staged)
+        }));
+        let (out, staged) = ran.unwrap_or_else(|panic| {
+            self.db_stamp = None;
+            resume_unwind(panic)
+        });
         drop(held);
         // MIT: `krb5_db_put_principal` (lib/kdb/kdb5.c:1002-1007)
         iprop_ulog::finish_staged(staged)?;
