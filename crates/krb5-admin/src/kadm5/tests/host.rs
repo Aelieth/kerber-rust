@@ -485,6 +485,7 @@ fn a_committing_create_takes_the_status_and_the_mark() {
         &[],
         &krb5_kdc::AdminEnt::default(),
         &actor,
+        |_| Ok(()),
         |c| {
             got.push(c);
             Ok(())
@@ -505,4 +506,50 @@ fn a_committing_create_takes_the_status_and_the_mark() {
     let after = row.after.as_ref().unwrap();
     assert!(after.host_owned());
     assert_ne!(after.attributes & krb5_kdc::KDB_DISALLOW_ALL_TIX, 0);
+}
+
+#[test]
+fn a_committing_creates_checks_hold_under_the_lock() {
+    let (store, _, _, actor) = hosted();
+    let new = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["hosted"]);
+    let ghost = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["ghost"]);
+    let id = format!("hosted@{TEST_REALM}");
+    // The host's first answer predates the dangling alias that appears before the lock.
+    store
+        .write()
+        .unwrap()
+        .change(|s| s.create_alias_in(&new, TEST_REALM, &ghost, TEST_REALM, &actor))
+        .unwrap()
+        .unwrap();
+    let (calls, mut committed) = (std::cell::Cell::new(0), false);
+    let r = krb5_kdc::create_password_shared_committing_then(
+        &store,
+        &new,
+        TEST_REALM,
+        b"a new password",
+        &[],
+        &krb5_kdc::AdminEnt::default(),
+        &actor,
+        |s| {
+            calls.set(calls.get() + 1);
+            let alias = s.get_raw(&id).is_some_and(|p| p.alias_target().is_some());
+            if calls.get() > 1 && alias {
+                return Err(krb5_kdc::Error::InvalidArgument("an alias".to_owned()));
+            }
+            Ok(())
+        },
+        |_| {
+            committed = true;
+            Ok(())
+        },
+        |_| Ok(()),
+    );
+    assert!(
+        matches!(r, Err(krb5_kdc::Error::InvalidArgument(_))),
+        "{r:?}"
+    );
+    assert_eq!(calls.get(), 2);
+    assert!(!committed);
+    let left = store.read().unwrap().get_raw(&id).cloned().unwrap();
+    assert_eq!(left.alias_target().as_deref(), Some("ghost@KERBER.TEST"));
 }

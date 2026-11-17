@@ -23,7 +23,7 @@ any other `###` heading.
 - **kdc.** `KerberosStore::prepare` runs outside every lock; `Denied { kadm5_code, text }` reaches the client.
 - **admin.** kadmind with `test-hooks` loads a hook module that prints MIT's test hook lines.
 - **kdc.** `conformance::run_own`: the host rows over a host's own commit path.
-- **kdc.** `change_password_shared_committing_then`, `create_..._then`: an `edit` in the same change.
+- **kdc.** `change_password_shared_committing_then`, `create_..._then`: `checks`, then `edit` in one change.
 
 ### Changed
 

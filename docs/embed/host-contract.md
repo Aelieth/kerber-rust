@@ -41,7 +41,8 @@ pub trait KerberosStore: Send + Sync {
   of your own with `Embedded` could.
 - `change_password_shared_committing_then` and `create_password_shared_committing_then` run your
   `edit` once in that change, after the keys or the create. What `edit` writes wins: to keep the
-  policy's `pw_expire`, read it inside `edit` and pass it to `set_status`.
+  policy's `pw_expire`, read it inside `edit` and pass it to `set_status`. Your `checks` run again
+  under the lock, the create's right before the create, so a rule of yours holds there.
 - `change_as(intent, prepared, f)` is how a caller declares a write; kadmind and kpasswd use it.
 - kadmind, kpasswd and the `*_shared` helpers call `prepare` before each write, outside every
   lock. A `change_as` of your own does not.

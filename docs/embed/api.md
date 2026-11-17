@@ -17,7 +17,8 @@ HostPrepared, TargetPeek, Denial}`, `KerberosStoreError::Denied`, `PrincipalStor
 defer_postcommit, target_peek, has_host, set_host_owned_in, host_full_change}`,
 `Principal::host_owned`, the `HostAdmission` trait with `PluginSet::set_host_admission`, and
 `change_password_shared_committing_then` and `create_password_shared_committing_then`, which run
-the host's `edit` once in the same change, after the keys or the create.
+the host's `edit` once in the same change, after the keys or the create, and its `checks` before
+the plan and again under the lock.
 Details: [host-contract.md](host-contract.md).
 
 ## New in 1.2.2
