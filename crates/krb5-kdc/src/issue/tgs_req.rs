@@ -546,11 +546,10 @@ fn tgs_flags_times_policy<'a>(
         tkt_client_realm,
         local_tgt,
     } = c;
-    let subject_cname = stkt.as_ref().map_or(&enc_tkt.cname, |s| &s.part.cname);
-    let subject_crealm = if let Some(st) = stkt.as_ref() {
-        utf8_realm(&st.part.crealm)?
-    } else {
-        utf8_realm(&enc_tkt.crealm)?
+    let (subject_cname, subject_crealm) = match (&s4u_subject, stkt.as_ref()) {
+        (Some((user, realm)), _) if s4u2self => (user, realm.as_str()),
+        (_, Some(st)) => (&st.part.cname, utf8_realm(&st.part.crealm)?),
+        (_, None) => (&enc_tkt.cname, utf8_realm(&enc_tkt.crealm)?),
     };
     let s4u_user_local = s4u_local.is_some();
     let tgs_client = if s4u2self {

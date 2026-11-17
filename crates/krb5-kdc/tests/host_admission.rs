@@ -8,7 +8,9 @@ use krb5_kdc::admission::{
     AsNotice, AsQuestion, AsReason, HostAdmission, KdcRefusal, Mechanism, TgsKind, TgsQuestion,
 };
 use krb5_kdc::host::{KerberosStore, MemoryRealm};
-use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented};
+use krb5_kdc::testrealm::{
+    TEST_ADMIN, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented,
+};
 use krb5_kdc::{Error, KdcPolicy, PolicyAdjustment, Principal, PrincipalRead, PrincipalStore};
 use krb5_protocol::{as_req, pa_enc_timestamp};
 use krb5_testkit::{TgsReqBuilder, password_key, user};
@@ -21,6 +23,8 @@ struct Host {
     refuse_tgs: AtomicBool,
     notices: Mutex<Vec<AsNotice>>,
     tgs: Mutex<Vec<(TgsKind, bool)>>,
+    subjects: Mutex<Vec<(TgsKind, String, Option<String>)>>,
+    deny_subject: Mutex<Option<String>>,
 }
 
 impl HostAdmission for Host {
@@ -40,7 +44,14 @@ impl HostAdmission for Host {
 
     fn check_tgs(&self, q: &TgsQuestion<'_>) -> Result<(), KdcRefusal> {
         self.tgs.lock().unwrap().push((q.kind, q.client.is_some()));
-        if self.refuse_tgs.load(Ordering::SeqCst) {
+        let client = q.client.map(Principal::id);
+        let subject = q.subject.components_joined_lossy();
+        let denied = self.deny_subject.lock().unwrap().as_ref() == Some(&subject);
+        self.subjects
+            .lock()
+            .unwrap()
+            .push((q.kind, subject, client));
+        if denied || self.refuse_tgs.load(Ordering::SeqCst) {
             return Err(KdcRefusal {
                 code: err::CLIENT_REVOKED,
                 e_text: None,
@@ -285,4 +296,52 @@ fn with_its_module_gone_a_marked_client_gets_no_service_ticket() {
     let issued = krb5_testkit::issue_tgt_renewable(&store, TEST_USER, 9, true);
     store.policy.plugins = bare;
     assert_eq!(tgs_code(&store, &issued, service), err::CLIENT_REVOKED);
+}
+
+#[test]
+fn an_s4u2self_check_names_the_user_not_the_service() {
+    let module = Arc::new(Host::default());
+    let store = marked(Some(Arc::clone(&module)));
+    let tgt = krb5_testkit::host_tgt(&store, 7301);
+    let pa = krb5_protocol::pa_for_user(&tgt.session_key, user(), TEST_REALM).unwrap();
+    krb5_kdc::issue_tgs(&store, &krb5_testkit::s4u_self(&tgt, vec![pa], 7302)).unwrap();
+    assert_eq!(
+        *module.subjects.lock().unwrap(),
+        [(
+            TgsKind::S4u2Self,
+            TEST_USER.to_owned(),
+            Some(format!("{TEST_USER}@{TEST_REALM}"))
+        )]
+    );
+}
+
+#[test]
+fn the_host_decides_an_s4u2self_on_the_user_not_the_service() {
+    let module = Arc::new(Host::default());
+    *module.deny_subject.lock().unwrap() = Some(TEST_USER.to_owned());
+    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
+    let store = marked_with(Some(Arc::clone(&module)), |s| {
+        s.set_host_owned_in(&admin, TEST_REALM, true)
+    });
+    let tgt = krb5_testkit::host_tgt(&store, 7321);
+    let pa = krb5_protocol::pa_for_user(&tgt.session_key, user(), TEST_REALM).unwrap();
+    let out = krb5_kdc::issue_tgs(&store, &krb5_testkit::s4u_self(&tgt, vec![pa], 7322));
+    let code = krb5_testkit::expect_status(out.expect_err("issued")).0;
+    assert_eq!(code, err::CLIENT_REVOKED);
+    let allowed = krb5_testkit::s4u_admin(&tgt, 7323, KdcOptions::forwardable());
+    krb5_kdc::issue_tgs(&store, &allowed).unwrap();
+    let asked: Vec<_> = module
+        .subjects
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(k, s, _)| (*k, s.clone()))
+        .collect();
+    assert_eq!(
+        asked,
+        [
+            (TgsKind::S4u2Self, TEST_USER.to_owned()),
+            (TgsKind::S4u2Self, TEST_ADMIN.to_owned())
+        ]
+    );
 }
