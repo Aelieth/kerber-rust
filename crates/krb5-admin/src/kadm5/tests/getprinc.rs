@@ -93,3 +93,14 @@ fn getprinc_hides_kerber_rusts_own_tl_types() {
         "{types:x?}"
     );
 }
+
+#[test]
+fn an_unqualified_name_takes_the_configured_default_realm() {
+    let (store, acl, actor) = setup();
+    let args = getprinc_args("user");
+    let out = dispatch_kadm5(&store, &acl, &actor, GET_PRINCIPAL, &args).unwrap();
+    assert_eq!(ret_code(&out), 0);
+    store.write().unwrap().policy.default_realm = Some("OTHER.TEST".to_owned());
+    let out = dispatch_kadm5(&store, &acl, &actor, GET_PRINCIPAL, &args).unwrap();
+    assert_eq!(ret_code(&out), KADM5_UNK_PRINC);
+}

@@ -303,12 +303,23 @@ pub(super) fn store_realm(store: &SharedStore) -> String {
         .to_owned()
 }
 
-fn req_realm(prealm: &str, store_realm: &str) -> String {
+fn req_realm(prealm: &str, default: &str) -> String {
     if prealm.is_empty() {
-        store_realm.to_owned()
+        default.to_owned()
     } else {
         prealm.to_owned()
     }
+}
+
+// MIT: `xdr_krb5_principal` (lib/kadm5/kadm_rpc_xdr.c:1089-1095)
+fn default_realm(store: &SharedStore, served: &str) -> String {
+    let g = store
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    g.policy
+        .default_realm
+        .clone()
+        .unwrap_or_else(|| served.to_owned())
 }
 
 #[cfg(all(test, feature = "test-hooks"))]
@@ -336,6 +347,7 @@ pub(super) fn dispatch_kadm5_ticket(
 ) -> Result<Vec<u8>, Error> {
     clear_prefetch();
     let realm = store_realm(store);
+    let defrealm = default_realm(store, &realm);
     let stack = authcfg.stack();
     let who = Who {
         store,
@@ -354,7 +366,7 @@ pub(super) fn dispatch_kadm5_ticket(
         }
         GET_PRINCIPAL => {
             let (name, prealm, mask) = parse_get(args)?;
-            let req = req_realm(&prealm, &realm);
+            let req = req_realm(&prealm, &defrealm);
             let g = match read_store(store, proc, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(prefetch_failed(rep)),
@@ -394,7 +406,7 @@ pub(super) fn dispatch_kadm5_ticket(
         }
         DELETE_PRINCIPAL => {
             let (name, prealm) = parse_one_princ(args)?;
-            let req = req_realm(&prealm, &realm);
+            let req = req_realm(&prealm, &defrealm);
             if changepw || !acl_id(&name, &req).is_some_and(|t| stack.delprinc(actor, &t)) {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_DELETE));
             }
@@ -434,7 +446,7 @@ pub(super) fn dispatch_kadm5_ticket(
         }
         MODIFY_PRINCIPAL => {
             let (name, prealm, mask, fields) = parse_modify(args)?;
-            let req = req_realm(&prealm, &realm);
+            let req = req_realm(&prealm, &defrealm);
             // MIT: `modify_principal_2_svc` (kadmin/server/server_stubs.c)
             let checks = |g: &krb5_kdc::PrincipalStore| -> Result<_, Vec<u8>> {
                 let p = prefetch(g, &name, &req, API_V2)?;
@@ -536,7 +548,7 @@ pub(super) fn dispatch_kadm5_ticket(
                 Ok(c) => c,
                 Err(rep) => return rep,
             };
-            let req = req_realm(&c.prealm, &realm);
+            let req = req_realm(&c.prealm, &defrealm);
             // MIT: `create_principal_2_svc` (kadmin/server/server_stubs.c)
             let (authorized, rss) = acl_id(&c.name, &req)
                 .map_or((false, Vec::new()), |tid| stack.addprinc(actor, &tid));
@@ -650,8 +662,8 @@ pub(super) fn dispatch_kadm5_ticket(
         }
         RENAME_PRINCIPAL => {
             let (old, old_realm, new, new_realm) = parse_rename(args)?;
-            let old_req = req_realm(&old_realm, &realm);
-            let new_req = req_realm(&new_realm, &realm);
+            let old_req = req_realm(&old_realm, &defrealm);
+            let new_req = req_realm(&new_realm, &defrealm);
             // MIT: `rename_principal_2_svc` (server_stubs.c:700-712)
             // ACL (AUTH_INSUFFICIENT), then lockdown.
             // MIT: `acl_renprinc` (auth_acl.c:638-648)
@@ -704,7 +716,7 @@ pub(super) fn dispatch_kadm5_ticket(
                 Ok(v) => v,
                 Err(rep) => return rep,
             };
-            let req = req_realm(&prealm, &realm);
+            let req = req_realm(&prealm, &defrealm);
             // MIT: `chpass_principal_2_svc` (kadmin/server/server_stubs.c)
             let checks = |g: &krb5_kdc::PrincipalStore| -> Result<(u32, Canon), Vec<u8>> {
                 let p = prefetch(g, &name, &req, API_V2)?;
@@ -969,7 +981,7 @@ pub(super) fn dispatch_kadm5_ticket(
                     Ok(v) => v,
                     Err(rep) => return rep,
                 };
-            let req = req_realm(&prealm, &realm);
+            let req = req_realm(&prealm, &defrealm);
             // MIT: `chrand_principal_2_svc` (kadmin/server/server_stubs.c)
             let checks = |g: &krb5_kdc::PrincipalStore| -> Result<(u32, Canon), Vec<u8>> {
                 let p = prefetch(g, &name, &req, API_V2)?;
@@ -1027,7 +1039,7 @@ pub(super) fn dispatch_kadm5_ticket(
         }
         EXTRACT_KEYS => {
             let (api, name, prealm, kvno) = parse_extract(args)?;
-            let req = req_realm(&prealm, &realm);
+            let req = req_realm(&prealm, &defrealm);
             let g = match read_store(store, proc, api) {
                 Ok(g) => g,
                 Err(rep) => return Ok(prefetch_failed(rep)),
@@ -1053,7 +1065,7 @@ pub(super) fn dispatch_kadm5_ticket(
         }
         PURGEKEYS => {
             let (api, name, prealm, keepkvno) = parse_purgekeys(args)?;
-            let req = req_realm(&prealm, &realm);
+            let req = req_realm(&prealm, &defrealm);
             let checks = |g: &krb5_kdc::PrincipalStore| -> Result<(), Vec<u8>> {
                 let cid = prefetch(g, &name, &req, api)?.id();
                 if changepw || !stack.purgekeys(actor, &cid) {
@@ -1111,7 +1123,7 @@ pub(super) fn dispatch_kadm5_ticket(
                 keepold,
                 ks,
             } = parse_setkey(args, proc)?;
-            let req = req_realm(&prealm, &realm);
+            let req = req_realm(&prealm, &defrealm);
             let checks = |g: &krb5_kdc::PrincipalStore| -> Result<(), Vec<u8>> {
                 let target = prefetch(g, &name, &req, api)?;
                 if target.attributes & KDB_LOCKDOWN_KEYS != 0 {
@@ -1159,7 +1171,7 @@ pub(super) fn dispatch_kadm5_ticket(
         }
         GET_STRINGS => {
             let (api, name, prealm) = parse_gstrings(args)?;
-            let req = req_realm(&prealm, &realm);
+            let req = req_realm(&prealm, &defrealm);
             let g = match read_store(store, proc, api) {
                 Ok(g) => g,
                 Err(rep) => return Ok(prefetch_failed(rep)),
@@ -1179,7 +1191,7 @@ pub(super) fn dispatch_kadm5_ticket(
         }
         SET_STRING => {
             let (api, name, prealm, key, value) = parse_sstring(args)?;
-            let req = req_realm(&prealm, &realm);
+            let req = req_realm(&prealm, &defrealm);
             let checks = |g: &krb5_kdc::PrincipalStore| -> Result<(), Vec<u8>> {
                 let cid = prefetch(g, &name, &req, api)?.id();
                 if changepw || !stack.setstr(actor, &cid) {
@@ -1223,8 +1235,8 @@ pub(super) fn dispatch_kadm5_ticket(
         }
         CREATE_ALIAS => {
             let (alias, alias_realm, target, target_realm) = parse_alias(args)?;
-            let alias_req = req_realm(&alias_realm, &realm);
-            let target_req = req_realm(&target_realm, &realm);
+            let alias_req = req_realm(&alias_realm, &defrealm);
+            let target_req = req_realm(&target_realm, &defrealm);
             // MIT: `create_alias_2_svc` (server_stubs.c:1727-1758)
             // No lockdown check, as MIT.
             let ids = acl_id(&alias, &alias_req).zip(acl_id(&target, &target_req));
