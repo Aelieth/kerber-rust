@@ -6,8 +6,8 @@ use krb5_types::pac::{PacIdentity, parse_kerb_validation_info};
 use krb5_types::s4u::PaPacOptions;
 use krb5_types::{
     AsReq, AuthorizationData, EncKdcRepPart, EncTgsRepPart, EncTicketPart, EncryptedData,
-    HostAddress, HostAddresses, KerberosTime, KrbError, LastReqValue, Microseconds, PaData,
-    PrincipalName, TgsReq, Ticket, TicketFlags, TransitedEncoding, err, ku, pa,
+    HostAddress, HostAddresses, KerberosTime, KrbError, LastReqValue, PaData, PrincipalName,
+    TgsReq, Ticket, TicketFlags, TransitedEncoding, err, ku, pa,
 };
 
 use super::as_req::{ANONYMOUS_REALM, anonymous_principal_name, issue_as_from};
@@ -494,13 +494,18 @@ pub(super) fn encode_krb_error(
         cname = Some(anonymous_principal_name());
         crealm = ks(ANONYMOUS_REALM).ok();
     }
+    // MIT: `prepare_error_as` (do_as_req.c:801-801)
+    // MIT: `prepare_error_tgs` (do_tgs_req.c:196-196)
+    // MIT: `make_too_big_error` (dispatch.c:188-188)
+    // MIT: `make_toolong_error` (kdc_util.c:1889-1890)
+    let (stime, susec) = krb5_protocol::us_timeofday();
     let pdu = KrbError {
         pvno: KrbError::PVNO,
         msg_type: KrbError::MSG_TYPE,
         ctime: None,
         cusec: None,
-        stime: KerberosTime::now(),
-        susec: Microseconds::ZERO,
+        stime,
+        susec,
         // MIT: `prepare_error_as` (do_as_req.c:804-804)
         // MIT: `prepare_error_tgs` (do_tgs_req.c:199-199)
         // A code outside 0 to 128 goes out as 60.

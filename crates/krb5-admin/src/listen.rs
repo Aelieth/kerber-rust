@@ -112,7 +112,12 @@ fn frame_kpasswd_rep(ap_rep: &[u8], priv_der: &[u8]) -> Vec<u8> {
     out
 }
 
-fn changepw_krb_error(realm: &str, code: i32, e_data: Option<Vec<u8>>) -> Result<Vec<u8>, Error> {
+fn changepw_krb_error(
+    realm: &str,
+    code: i32,
+    e_data: Option<Vec<u8>>,
+    (stime, susec): (KerberosTime, Microseconds),
+) -> Result<Vec<u8>, Error> {
     let realm_s = krb5_types::try_ascii(realm).map_err(|e| Error::Inner(e.to_string()))?;
     let sname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["kadmin", "changepw"]);
     let pdu = KrbError {
@@ -120,8 +125,8 @@ fn changepw_krb_error(realm: &str, code: i32, e_data: Option<Vec<u8>>) -> Result
         msg_type: KrbError::MSG_TYPE,
         ctime: None,
         cusec: None,
-        stime: KerberosTime::now(),
-        susec: Microseconds::ZERO,
+        stime,
+        susec,
         error_code: code,
         crealm: None,
         cname: None,
@@ -142,13 +147,19 @@ fn kpasswd_chpwfail_error(realm: &str, result: u16, text: &str) -> Result<Vec<u8
 fn kpasswd_krb_error(realm: &str, e_data: Vec<u8>) -> Result<Vec<u8>, Error> {
     // MIT: `process_chpw_request` (schpw.c:273-345)
     // `krb5_timeofday` leaves `ret` 0, so the subtraction wraps past KRB_ERR_MAX: 60.
-    let der = changepw_krb_error(realm, err::GENERIC, Some(e_data))?;
+    let now = (KerberosTime::now(), Microseconds::ZERO);
+    let der = changepw_krb_error(realm, err::GENERIC, Some(e_data), now)?;
     Ok(frame_kpasswd_rep(&[], &der))
 }
 
 // MIT: `make_toolong_error` (kadmin/server/misc.c:139-161)
 pub(crate) fn kpasswd_toolong_error(realm: &str) -> Result<Vec<u8>, Error> {
-    changepw_krb_error(realm, err::FIELD_TOOLONG, None)
+    changepw_krb_error(
+        realm,
+        err::FIELD_TOOLONG,
+        None,
+        krb5_protocol::us_timeofday(),
+    )
 }
 
 struct KpasswdReply {
