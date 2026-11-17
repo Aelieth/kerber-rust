@@ -386,13 +386,22 @@ impl Harness {
         });
     }
 
-    /// `mark NAME`, `unmark NAME` or `delete NAME`, as the host's own change.
+    /// `mark NAME`, `unmark NAME`, `delete NAME` or `delegate SERVICE TARGET`, as the host's own change.
     fn command(&self, shared: &SharedDump, line: &str) -> Result<(), String> {
-        let (verb, who) = line
-            .split_once(' ')
-            .ok_or("usage: mark|unmark|delete NAME")?;
-        let (parts, realm) =
-            krb5_types::parse_name(who.trim(), &self.realm).map_err(|e| e.to_string())?;
+        let usage = "usage: mark|unmark|delete NAME, delegate SERVICE TARGET";
+        let (verb, rest) = line.split_once(' ').ok_or(usage)?;
+        let (who, target) = match verb {
+            "delegate" => {
+                let (who, target) = rest.trim().split_once(' ').ok_or(usage)?;
+                (who, Some(target.trim()))
+            }
+            _ => (rest.trim(), None),
+        };
+        let (parts, realm) = krb5_types::parse_name(who, &self.realm).map_err(|e| e.to_string())?;
+        if target.is_some() && realm != self.realm {
+            return Err("service is in another realm".to_owned());
+        }
+        let actor = format!("admin/admin@{}", self.realm);
         let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, parts);
         let id = name.unparse_with_realm_lossy(&realm).to_lowercase();
         let host = Arc::clone(&self.host);
@@ -400,10 +409,11 @@ impl Harness {
         let done = g
             .change_committing(
                 |c| host.own(c),
-                |s| match verb {
-                    "mark" => s.set_host_owned_in(&name, &realm, true),
-                    "unmark" => s.set_host_owned_in(&name, &realm, false),
-                    "delete" => s.remove_in(&name, &realm),
+                |s| match (verb, target) {
+                    ("mark", None) => s.set_host_owned_in(&name, &realm, true),
+                    ("unmark", None) => s.set_host_owned_in(&name, &realm, false),
+                    ("delete", None) => s.remove_in(&name, &realm),
+                    ("delegate", Some(to)) => s.record_s4u_to(&name, to, &actor),
                     _ => Err(krb5_kdc::Error::InvalidArgument(format!(
                         "no command {verb}"
                     ))),
@@ -416,10 +426,14 @@ impl Harness {
             .directory
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        if verb == "mark" {
-            dir.insert(id);
-        } else {
-            dir.remove(&id);
+        match verb {
+            "mark" => {
+                dir.insert(id);
+            }
+            "unmark" | "delete" => {
+                dir.remove(&id);
+            }
+            _ => {}
         }
         Ok(())
     }
