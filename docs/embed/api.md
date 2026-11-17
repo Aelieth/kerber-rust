@@ -18,8 +18,8 @@ defer_postcommit, target_peek, has_host, set_host_owned_in, host_full_change}`,
 `Principal::host_owned`, the `HostAdmission` trait with `PluginSet::set_host_admission`, and
 `change_password_shared_committing_then` and `create_password_shared_committing_then`, which run
 the host's `edit` once in the same change, after the keys or the create, and its `checks` before
-the plan and again under the lock; and `load_dump_with_stash_path`, which reads the stash from its
-file so the host never holds the master key.
+the plan and again under the lock; `load_dump_with_stash_path`, which reads the stash from its
+file so the host never holds the master key; and `Error::BootstrapMarkerWithoutStash`.
 Details: [host-contract.md](host-contract.md).
 
 ## New in 1.2.2
@@ -90,7 +90,8 @@ A host implements `host::KerberosStore` (`load`, `commit_change` of a `HostChang
 
 - **First boot** (no rows in the host, no stash): the realm is created, the stash
   written and the lockout file created, then every row is committed. If that commit
-  fails, `open_or_create_host` removes only the stash it just wrote. **A later boot**
+  fails, the stash stays, marked by `<stash>.bootstrap`: the next start retries with that key
+  if the host is still empty, or opens if the commit landed. **A later boot**
   requires the lockout file, loads the rows and opens each record's seal with the
   stash's key; principals the bootstrap adds are committed.
 - **A migrated realm:** `load_dump_with_stash_path` (or `load_dump_with_stash` with the stash's
@@ -101,7 +102,9 @@ A host implements `host::KerberosStore` (`load`, `commit_change` of a `HostChang
   empty file is valid, with counts from zero; an unreadable or foreign one is refused.
 - **Boot errors.** `HostRecordsWithoutStash`, rows but no stash: restore the stash
   that sealed them. `StashWithoutHostRealm`, a stash but an empty host: restore the
-  host's database, or import the dump again beside the stash. `LockoutMissing`,
+  host's database, or import the dump again beside the stash. `BootstrapMarkerWithoutStash`,
+  a first start's marker with its stash gone: restore the stash; only for a realm that never
+  started, remove the marker so the next start bootstraps. `LockoutMissing`,
   `LockoutUnreadable`, `LockoutForeign`, a later boot whose file is missing, unreadable
   or another file's: restore it, or let `create_lockout_file` make an empty one.
   `Host(..)` is `load`'s or `commit_change`'s own error. `Record(..)` is a row that won't

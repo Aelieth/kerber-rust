@@ -35,6 +35,8 @@ pub trait KerberosStore: Send + Sync {
 
 - `commit_change` replaces the 1.2.2 `commit(RealmBatch)`. It gets every change you did not
   start, and the realm bootstrap.
+- A first commit whose outcome you can't tell may answer `Failed`: kerber-rust keeps the stash
+  and reads your rows at the next start to see whether it landed.
 - Your own changes go through `PrincipalStore::change_committing(closure, f)`. The closure
   gets the same `HostChange`, with operation `Embedded`, and is always called. kerber-rust
   builds `Embedded` only there, so it never sends one to `commit_change`; only a `change_as`

@@ -36,6 +36,7 @@ any other `###` heading.
 
 ### Fixed
 
+- **kdc.** A host's failed first commit keeps its stash, marked; the next start retries with it or opens.
 - **kdc.** An AS raw crypto failure is sent as 60, as MIT's `errcode_to_protocol`.
 - **kdc.** A reply padata step's failure carries `KDC_RETURN_PADATA` as its e-text, as MIT's.
 - **kadm5.** Hooks fire as MIT: history create and chpass, modify's mask once; kadmind names alias targets.
